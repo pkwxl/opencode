@@ -19,7 +19,8 @@ for (let i = 1; i < args.length; i++) {
 const directory = resolve(positional[0] ?? ".")
 
 if (command === "run") {
-  const code = await runAll(directory, { agent: flags.get("agent"), server: flags.get("server") })
+  const verbose = flags.get("verbose") === "true" || flags.has("--verbose")
+  const code = await runAll(directory, { agent: flags.get("agent"), server: flags.get("server"), verbose })
   process.exit(code)
 }
 
@@ -49,7 +50,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir]
-  opencode-auto run [dir] [--agent <name>] [--server <url>]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose <true|false>]
   opencode-auto status [dir]
 
 退出码: 0 全部完成,1 用法/环境错误,2 阻塞等待人工介入`)

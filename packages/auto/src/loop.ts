@@ -5,7 +5,7 @@ import { ensure } from "./server"
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
 // for a human to fill `answer` in PLAN.md and re-run.
-export async function runAll(directory: string, opts: { agent?: string; server?: string }): Promise<number> {
+export async function runAll(directory: string, opts: { agent?: string; server?: string; verbose?: boolean }): Promise<number> {
   const path = join(directory, "PLAN.md")
   if (!(await Bun.file(path).exists())) {
     console.error(`未找到计划文件: ${path}`)
@@ -27,7 +27,7 @@ export async function runAll(directory: string, opts: { agent?: string; server?:
         return 2
       }
       console.log(`▶ ${task.id}: ${task.title}(第 ${task.attempts + 1} 次尝试)`)
-      const outcome = await runTask(server.client, plan, task, { directory, agent: opts.agent })
+      const outcome = await runTask(server.client, plan, task, { directory, agent: opts.agent, verbose: opts.verbose })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
         console.log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)

@@ -18,7 +18,7 @@ export async function runTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
-  opts: { directory: string; agent?: string },
+  opts: { directory: string; agent?: string; verbose?: boolean },
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
 
@@ -27,7 +27,7 @@ export async function runTask(
   const sessionID = session.data.id
 
   const events = await client.event.subscribe()
-  const watching = watch(client, sessionID, events.stream)
+  const watching = watch(client, sessionID, events.stream, opts.verbose)
 
   const prompt = await client.session.prompt({
     sessionID,
@@ -46,19 +46,18 @@ async function watch(
   client: OpencodeClient,
   sessionID: string,
   stream: AsyncIterable<unknown>,
+  verbose?: boolean,
 ): Promise<Watch> {
   let lastText = ""
   let error = ""
-  let hasStarted = false
   for await (const raw of stream) {
     const event = raw as import("@opencode-ai/sdk/v2").Event
-    if (!hasStarted && event.type === "message.part.updated") {
-      console.log("开始执行任务...")
-      hasStarted = true
-    }
     if (event.type === "message.part.updated") {
       const part = event.properties.part
-      if (part.sessionID === sessionID && part.type === "text" && part.time?.end) lastText = part.text
+      if (part.sessionID === sessionID && part.type === "text" && part.time?.end) {
+        lastText = part.text
+        if (verbose) console.log(part.text)
+      }
     }
     if (event.type === "question.asked") {
       const asked = event.properties
