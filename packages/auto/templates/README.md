@@ -3,7 +3,9 @@
 把本目录的三个文件复制到目标项目根目录:
 
 - `PLAN.md` — 实施计划,driver 的状态源。每个任务一个 `## T-NNN:` 段,状态标记
-  `[pending|in_progress|blocked|done]`,`verify` 字段声明完成后的外部校验命令。
+  `[pending|in_progress|blocked|done]`,`verify` 字段描述验收标准(可以是自然语言),
+  由 agent 自行解释执行;执行通过会把实际命令写入 `verified` 字段作为高可信完成记录,
+  并勾选任务正文中对应的验证检查项(`- [ ]` → `- [x]`),driver 不再外部复跑,仅以 `[done]` 标记为准。
 - `opencode.json` — 权限白名单:安全的只读/构建/测试命令自动放行,其余 bash 命令
   升级为人工审批(触发阻塞流程)。
 - `.opencode/agent/auto.md` — 非交互执行 agent 契约。
@@ -18,10 +20,15 @@ OPENCODE_AUTO_SERVER=http://127.0.0.1:4096 opencode-auto run <dir> --agent auto
 
 ## 人工介入流程
 
-1. driver 遇阻(question 工具 / 权限审批 / verify 失败 / 未标记完成就结束)会自动停机,
+1. driver 遇阻(权限相关 question / 权限审批 / 会话错误重试耗尽 / 未标记完成就结束)会自动停机,
    退出码为 2,问题写入 `PLAN.md` 对应任务的 `question` 字段。
-2. 人工排查后,把解答写入该任务的 `answer` 字段。
-3. 重新运行 `opencode-auto run <dir>`,driver 会为该任务开启全新会话并携带问答历史继续。
+   非权限的 question 会被 driver 自动答复("你根据情况来自主决策如何做即可,...")并继续执行;
+   只有就同一问题再次询问时才会停机等待人工介入。
+2. 阻塞的问题不是提问,而是需要在会话外处理的事务(如放行权限、修复环境)。
+   人工排查处理后**无需填写 `answer` 字段**,直接重新运行即可,driver 会为该任务开启
+   全新会话并告知 agent 问题已在会话外解决、不要重问。
+   (可选:如需给 agent 补充说明,仍可填写 `answer` 字段,会一并注入上下文。)
+3. 重新运行 `opencode-auto run <dir>`,driver 会为该任务开启全新会话并携带历史继续。
 4. 全部任务标记 `[done]` 后,driver 退出码为 0。
 
 查看进度:`opencode-auto status <dir>`

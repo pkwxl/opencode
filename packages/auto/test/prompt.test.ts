@@ -36,6 +36,24 @@ describe("render", () => {
     expect(text).toContain("question 工具")
     expect(text).toContain("`bun test`")
     expect(text).toContain("[done]")
+    expect(text).toContain("勾选任务正文中对应的验证检查项")
+    expect(text).toContain("未实际完成的项不得勾选")
+  })
+
+  test("有问题但无解答时提示已在会话外解决、不要重问", () => {
+    const blocked = parse(
+      "PLAN.md",
+      `## T-001: 写文件 [blocked]
+  - question: "是否允许放行写权限?"
+  - attempts: 1
+正文。
+`,
+    )
+    const text = render(blocked, blocked.tasks[0]!)
+    expect(text).toContain("是否允许放行写权限?")
+    expect(text).toContain("会话外处理完毕")
+    expect(text).toContain("不要再就同一问题调用 question 工具")
+    expect(text).not.toContain("已获解答")
   })
 
   test("无问答历史时不含阻塞段落", () => {

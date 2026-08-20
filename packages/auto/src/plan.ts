@@ -9,6 +9,7 @@ export type Task = {
   title: string
   status: Status
   verify?: string
+  verified?: string
   question?: string
   answer?: string
   attempts: number
@@ -63,6 +64,7 @@ export function parse(path: string, text: string): Plan {
       title: title!.trim(),
       status: status as Status,
       verify: fields.get("verify"),
+      verified: fields.get("verified"),
       question: fields.get("question"),
       answer: fields.get("answer"),
       attempts: Number(fields.get("attempts") ?? 0),

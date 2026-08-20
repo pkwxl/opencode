@@ -4,6 +4,10 @@ import { render } from "./prompt"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string }
 
+// Non-permission questions get this fixed autonomous reply instead of blocking;
+// only a repeated question on the same issue escalates to human intervention.
+const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
+
 type Watch = {
   blocked?: Outcome & { type: "blocked" }
   error?: string
@@ -11,17 +15,38 @@ type Watch = {
 }
 
 // Runs one task in a fresh session. Returns "completed" only when the agent
-// marked the task [done] in PLAN.md AND the external verify command passed;
-// everything else (question tool, permission escalation, session error,
-// idle without [done]) converges to "blocked" with a human-readable problem.
+// marked the task [done] in PLAN.md; verify is interpreted and executed by
+// the agent itself, never re-run by the driver.
+// Non-permission questions are auto-replied with AUTO_ANSWER; blocking only
+// happens on permission questions, a repeated question on the same issue,
+// session error, or idle without [done].
+// Transient provider failures (session.error, e.g. malformed reasoning
+// content from a gateway) are retried in a fresh session before blocking.
 export async function runTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
-  opts: { directory: string; agent?: string; verbose?: boolean },
+  opts: { agent?: string; verbose?: boolean },
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
+  for (let i = 1; ; i++) {
+    const outcome = await attempt(client, plan, task, opts)
+    const transient = outcome.type === "blocked" && outcome.question.startsWith("会话错误:")
+    if (!transient) return outcome
+    if (i === RETRIES) return { type: "blocked", question: `${outcome.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
+    console.log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${outcome.question}`)
+  }
+}
 
+// Session errors get this many fresh-session attempts before blocking.
+const RETRIES = 3
+
+async function attempt(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: { agent?: string; verbose?: boolean },
+): Promise<Outcome> {
   const session = await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
   if (session.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
   const sessionID = session.data.id
@@ -39,7 +64,7 @@ export async function runTask(
   const result = await watching
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
-  return verify(plan.path, task.id, opts.directory, result.lastText)
+  return confirmDone(plan.path, task.id, result.lastText)
 }
 
 async function watch(
@@ -50,6 +75,7 @@ async function watch(
 ): Promise<Watch> {
   let lastText = ""
   let error = ""
+  const autoAnswered: string[] = []
   for await (const raw of stream) {
     const event = raw as import("@opencode-ai/sdk/v2").Event
     if (event.type === "message.part.updated") {
@@ -62,10 +88,24 @@ async function watch(
     if (event.type === "question.asked") {
       const asked = event.properties
       if (asked.sessionID !== sessionID) continue
+      const text = asked.questions.map((q) => q.question).join("\n")
+      const permission = /权限|permission/i.test(text)
+      const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
+      if (!permission && !repeated) {
+        autoAnswered.push(text)
+        console.log(`❓ 收到非权限提问,自动答复:\n${text}\n→ ${AUTO_ANSWER}`)
+        await client.question
+          .reply({ requestID: asked.id, answers: asked.questions.map(() => [AUTO_ANSWER]) })
+          .catch(() => {})
+        continue
+      }
       await client.question.reject({ requestID: asked.id }).catch(() => {})
       await client.session.abort({ sessionID }).catch(() => {})
       return {
-        blocked: { type: "blocked", question: asked.questions.map((q) => q.question).join("\n") },
+        blocked: {
+          type: "blocked",
+          question: permission ? text : `自动答复后仍就同一问题再次询问,需人工在会话外处理后重新运行:\n${text}`,
+        },
         lastText,
       }
     }
@@ -103,9 +143,11 @@ async function watch(
   return { lastText, error }
 }
 
-// Trust nothing the agent claims: re-read PLAN.md from disk for the [done]
-// marker, then run the task's verify command outside the session.
-async function verify(path: string, id: string, directory: string, lastText: string): Promise<Outcome> {
+// Completion is whatever the agent claims: re-read PLAN.md from disk for the
+// [done] marker only. verify is interpreted and executed by the agent itself;
+// a passing run is recorded in the task's `verified` field (high-confidence
+// completion) and is never required or re-executed by the driver.
+async function confirmDone(path: string, id: string, lastText: string): Promise<Outcome> {
   const fresh = await load(path)
   const task = fresh.tasks.find((t) => t.id === id)
   if (task?.status !== "done") {
@@ -115,18 +157,14 @@ async function verify(path: string, id: string, directory: string, lastText: str
       question: `会话结束但任务未标记 [done](隐性阻塞)。Agent 最后的输出:\n${tail}`,
     }
   }
-  if (!task.verify) return { type: "completed" }
-  const proc = Bun.spawn(["sh", "-c", task.verify], { cwd: directory, stdout: "pipe", stderr: "pipe" })
-  const [code, stdout, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ])
-  if (code !== 0) {
-    return {
-      type: "blocked",
-      question: `verify 命令失败(退出码 ${code}): ${task.verify}\n${stdout}\n${stderr}`,
-    }
-  }
   return { type: "completed" }
+}
+
+// Two questions count as the same issue when their normalized texts match or
+// one contains the other (the agent may rephrase a question it already asked).
+function sameIssue(a: string, b: string): boolean {
+  const normalize = (s: string) => s.replace(/\s+/g, "").toLowerCase()
+  const x = normalize(a)
+  const y = normalize(b)
+  return x === y || x.includes(y) || y.includes(x)
 }
