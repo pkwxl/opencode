@@ -92,6 +92,8 @@ verify 由 agent 自行解释执行，driver 不再外部复跑。通过后才�
 `src/loop.ts`：启动时扫描 PLAN.md，取第一个非 done 任务：pending → 下发；
 blocked → 不要求 answer，直接开新会话续跑（attempts+1），prompt 告知 agent 问题已在
 会话外解决、不要重问；有可选 answer 时注入问答历史。串行推进直到全部 done（退出码 0）。
+任务完成时显示本次用时；`--verbose` 时每行输出带当前时间，并每 10 秒按文件修改
+时间戳列出上次检查以来有变更的文件（跳过 node_modules 与 .git），便于观察进展。
 
 ## T-008: 目标项目模板与 Agent 契约 [done]
   - verify: bun test

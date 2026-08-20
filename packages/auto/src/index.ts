@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path"
+import { setVerbose } from "./log"
 import { load } from "./plan"
 import { runAll } from "./loop"
 
@@ -20,6 +21,7 @@ const directory = resolve(positional[0] ?? ".")
 
 if (command === "run") {
   const verbose = flags.get("verbose") === "true" || flags.has("--verbose")
+  setVerbose(verbose)
   const waitAnswer = parseWaitAnswer(flags.get("wait-answer"))
   if (waitAnswer === null) {
     console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")

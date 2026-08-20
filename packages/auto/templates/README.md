@@ -18,6 +18,8 @@ opencode-auto run <dir> --agent auto
 OPENCODE_AUTO_SERVER=http://127.0.0.1:4096 opencode-auto run <dir> --agent auto
 # 非权限提问时等待人工在命令行作答,超时(分钟,1-60,默认 1)后自动答复:
 opencode-auto run <dir> --agent auto --wait-answer 5
+# verbose: 每行输出带当前时间,并每 10 秒列出上次检查以来有变更的文件,便于观察进展:
+opencode-auto run <dir> --agent auto --verbose true
 ```
 
 ## 人工介入流程

@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { log } from "./log"
 import { begin, load, type Plan, type Task } from "./plan"
 import { render } from "./prompt"
 
@@ -38,8 +39,7 @@ export async function runTask(
     const transient = outcome.type === "blocked" && outcome.question.startsWith("会话错误:")
     if (!transient) return outcome
     if (i === RETRIES) return { type: "blocked", question: `${outcome.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
-    console.log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${outcome.question}`)
-  }
+    log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${outcome.question}`)  }
 }
 
 // Session errors get this many fresh-session attempts before blocking.
@@ -88,7 +88,7 @@ async function watch(
       const part = event.properties.part
       if (part.sessionID === sessionID && part.type === "text" && part.time?.end) {
         lastText = part.text
-        if (verbose) console.log(part.text)
+        if (verbose) log(part.text)
       }
     }
     if (event.type === "question.asked") {
@@ -99,10 +99,10 @@ async function watch(
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
       if (!permission && !repeated) {
         autoAnswered.push(text)
-        console.log(`❓ 收到非权限提问:\n${text}`)
+        log(`❓ 收到非权限提问:\n${text}`)
         const human = waitAnswer > 0 ? await askHuman(waitAnswer) : undefined
         const reply = human ?? AUTO_ANSWER
-        console.log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
+        log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
         await client.question
           .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
           .catch(() => {})
