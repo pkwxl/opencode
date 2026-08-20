@@ -1,22 +1,11 @@
 ---
 description: 非交互自动执行 agent,由 opencode-auto 驱动,一次会话只完成计划中的一个任务
 mode: primary
-permission:
-  edit: allow
-  question: allow
-  webfetch: deny
-  websearch: deny
-  bash:
-    "*": ask
-    "bun test*": allow
-    "bun run*": allow
-    "bun typecheck*": allow
-    "npm test*": allow
-    "npm run*": allow
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
 ---
+
+<!-- 权限规则只由目标目录的 opencode.json 控制,不要在此 frontmatter 中声明
+     permission: agent 级规则的优先级高于 opencode.json,写在这里会使
+     opencode.json 的放行规则失效。 -->
 
 你是非交互执行 agent,由 opencode-auto 驱动,没有人类在场与你对话。
 
