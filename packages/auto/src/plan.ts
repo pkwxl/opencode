@@ -79,10 +79,18 @@ export function next(plan: Plan): Task | undefined {
   return plan.tasks.find((task) => task.status !== "done")
 }
 
+// Extracts "- [ ]" / "- [x]" checklist items (subtasks) from a task body.
+export function subtasks(body: string): { text: string; done: boolean }[] {
+  return body.split("\n").flatMap((line) => {
+    const match = /^\s*- \[( |x|X)\]\s*(.*)$/.exec(line)
+    return match ? [{ text: match[2]!.trim(), done: match[1]!.toLowerCase() === "x" }] : []
+  })
+}
+
 // Counts "- [ ]" / "- [x]" checklist items (subtasks) in a task body.
 export function countSubtasks(body: string): { done: number; total: number } {
-  const items = body.match(/^\s*- \[(?: |x|X)\]/gm) ?? []
-  return { done: items.filter((item) => /x/i.test(item)).length, total: items.length }
+  const items = subtasks(body)
+  return { done: items.filter((item) => item.done).length, total: items.length }
 }
 
 export async function begin(path: string, id: string) {

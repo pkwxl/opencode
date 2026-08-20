@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { parse } from "../src/plan"
-import { render } from "../src/prompt"
+import { render, renderSubtask, renderWrapup } from "../src/prompt"
 
 const plan = parse(
   "PLAN.md",
@@ -68,5 +68,28 @@ describe("render", () => {
     expect(on).toContain("子任务级别的变动历史追踪")
     const off = render(plan, task)
     expect(off).not.toContain("子任务级别的变动历史追踪")
+  })
+
+  test("--new-session-subtask 子任务会话只做一项子任务并不做收尾", () => {
+    const text = renderSubtask(plan, task, "编写迁移脚本的 schema 部分")
+    expect(text).toContain("编写迁移脚本的 schema 部分")
+    expect(text).toContain("严格只完成这一个子任务")
+    expect(text).toContain("改为 `- [x]`")
+    expect(text).toContain("不要运行 verify、不要把任务标记为 [done]、不要更新 docs/")
+    expect(text).toContain("T-002: 实现迁移")
+    expect(text).not.toContain("git 提交全部未提交改动")
+    const committed = renderSubtask(plan, task, "编写迁移脚本的 schema 部分", { commitSubtask: true })
+    expect(committed).toContain("git 提交全部未提交改动,实现子任务级别的变动历史追踪")
+    expect(committed).toContain("find . -name .git")
+  })
+
+  test("--new-session-subtask 收尾会话只执行完成契约", () => {
+    const text = renderWrapup(plan, task)
+    expect(text).toContain("全部子任务已在之前的会话中逐一完成并勾选,不要重做")
+    expect(text).toContain("`bun test`")
+    expect(text).toContain("verified")
+    expect(text).toContain("[done]")
+    expect(text).toContain("git 提交全部未提交改动")
+    expect(text).not.toContain("每完成并勾选一项子任务检查项")
   })
 })

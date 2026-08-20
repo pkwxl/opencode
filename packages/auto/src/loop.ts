@@ -10,7 +10,14 @@ import { ensure } from "./server"
 // task needs no `answer`: re-running resumes it directly.
 export async function runAll(
   directory: string,
-  opts: { agent?: string; server?: string; verbose?: boolean; waitAnswer?: number; commitSubtask?: boolean },
+  opts: {
+    agent?: string
+    server?: string
+    verbose?: boolean
+    waitAnswer?: number
+    commitSubtask?: boolean
+    newSessionSubtask?: boolean
+  },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
   if (!(await Bun.file(path).exists())) {
@@ -39,6 +46,7 @@ export async function runAll(
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
         commitSubtask: opts.commitSubtask,
+        newSessionSubtask: opts.newSessionSubtask,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)

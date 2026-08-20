@@ -1,8 +1,8 @@
 import { createInterface } from "node:readline/promises"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { log } from "./log"
-import { begin, load, type Plan, type Task } from "./plan"
-import { render } from "./prompt"
+import { begin, load, subtasks, type Plan, type Task } from "./plan"
+import { render, renderSubtask, renderWrapup } from "./prompt"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string }
 
@@ -11,7 +11,13 @@ export type Outcome = { type: "completed" } | { type: "blocked"; question: strin
 // on the same issue escalates to human intervention.
 const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
 
-type Opts = { agent?: string; verbose?: boolean; waitAnswer?: number; commitSubtask?: boolean }
+type Opts = {
+  agent?: string
+  verbose?: boolean
+  waitAnswer?: number
+  commitSubtask?: boolean
+  newSessionSubtask?: boolean
+}
 
 type Watch = {
   blocked?: Outcome & { type: "blocked" }
@@ -19,14 +25,17 @@ type Watch = {
   lastText: string
 }
 
-// Runs one task in a fresh session. Returns "completed" only when the agent
-// marked the task [done] in PLAN.md; verify is interpreted and executed by
-// the agent itself, never re-run by the driver.
-// Non-permission questions are auto-replied with AUTO_ANSWER; blocking only
-// happens on permission questions, a repeated question on the same issue,
-// session error, or idle without [done].
-// Transient provider failures (session.error, e.g. malformed reasoning
-// content from a gateway) are retried in a fresh session before blocking.
+type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "blocked" })
+
+// Runs one task. Default: a single fresh session executes the whole task and
+// "completed" requires the [done] marker in PLAN.md; verify is interpreted
+// and executed by the agent itself, never re-run by the driver.
+// --new-session-subtask runs strictly one fresh session per subtask checkbox
+// (bounding each session's context size), confirms each by its ticked
+// checkbox, then runs a final wrap-up session for verify/[done]/docs/commit.
+// A task without checkboxes falls back to a single session.
+// Blocking happens on permission questions, a repeated question on the same
+// issue, session error, or idle without the expected disk state.
 export async function runTask(
   client: OpencodeClient,
   plan: Plan,
@@ -34,12 +43,38 @@ export async function runTask(
   opts: Opts,
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
+  const items = opts.newSessionSubtask ? subtasks(task.body) : []
+  if (!items.length) {
+    const result = await runSession(client, task, render(plan, task, opts), opts)
+    return result.type === "blocked" ? result : confirmDone(plan.path, task.id, result.lastText)
+  }
+  for (const item of items) {
+    if (item.done) continue
+    const result = await runSession(client, task, renderSubtask(plan, task, item.text, opts), opts)
+    if (result.type === "blocked") return result
+    const blocked = await confirmTick(plan.path, task.id, item.text, result.lastText)
+    if (blocked) return blocked
+  }
+  const result = await runSession(client, task, renderWrapup(plan, task), opts)
+  return result.type === "blocked" ? result : confirmDone(plan.path, task.id, result.lastText)
+}
+
+// Runs one prompt in a fresh session. Transient provider failures
+// (session.error, e.g. malformed reasoning content from a gateway) are
+// retried in a fresh session before blocking.
+async function runSession(
+  client: OpencodeClient,
+  task: Task,
+  promptText: string,
+  opts: Opts,
+): Promise<SessionResult> {
   for (let i = 1; ; i++) {
-    const outcome = await attempt(client, plan, task, opts)
-    const transient = outcome.type === "blocked" && outcome.question.startsWith("会话错误:")
-    if (!transient) return outcome
-    if (i === RETRIES) return { type: "blocked", question: `${outcome.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
-    log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${outcome.question}`)  }
+    const result = await attempt(client, task, promptText, opts)
+    const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
+    if (!transient) return result
+    if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
+    log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${result.question}`)
+  }
 }
 
 // Session errors get this many fresh-session attempts before blocking.
@@ -47,10 +82,10 @@ const RETRIES = 3
 
 async function attempt(
   client: OpencodeClient,
-  plan: Plan,
   task: Task,
+  promptText: string,
   opts: Opts,
-): Promise<Outcome> {
+): Promise<SessionResult> {
   const session = await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
   if (session.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
   const sessionID = session.data.id
@@ -61,14 +96,14 @@ async function attempt(
   const prompt = await client.session.prompt({
     sessionID,
     agent: opts.agent,
-    parts: [{ type: "text", text: render(plan, task, { commitSubtask: opts.commitSubtask }) }],
+    parts: [{ type: "text", text: promptText }],
   })
   if (prompt.error) return { type: "blocked", question: `下发任务失败: ${JSON.stringify(prompt.error)}` }
 
   const result = await watching
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
-  return confirmDone(plan.path, task.id, result.lastText)
+  return { type: "idle", lastText: result.lastText }
 }
 
 async function watch(
@@ -167,6 +202,20 @@ async function confirmDone(path: string, id: string, lastText: string): Promise<
     }
   }
   return { type: "completed" }
+}
+
+// After a subtask's dedicated session, trust nothing the agent claims:
+// re-read PLAN.md and require that subtask's checkbox to be ticked.
+async function confirmTick(path: string, id: string, text: string, lastText: string): Promise<Outcome | undefined> {
+  const fresh = await load(path)
+  const body = fresh.tasks.find((t) => t.id === id)?.body
+  const ticked = body !== undefined && subtasks(body).some((item) => item.text === text && item.done)
+  if (ticked) return undefined
+  const tail = lastText.trim().slice(-2000) || "(无输出)"
+  return {
+    type: "blocked",
+    question: `子任务会话结束但对应检查项未勾选(隐性阻塞): "${text}"。Agent 最后的输出:\n${tail}`,
+  }
 }
 
 // Two questions count as the same issue when their normalized texts match or

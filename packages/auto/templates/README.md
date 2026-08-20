@@ -23,6 +23,10 @@ opencode-auto run <dir> --agent auto --verbose true
 # commit-subtask: 要求 agent 每完成并勾选一项子任务(- [x])即提交一次(含嵌套 .git 子仓库),
 # 实现子任务级别的变动历史追踪;同时每 30 秒输出子任务进度与预计剩余用时(线性估算,精度受检查频度限制):
 opencode-auto run <dir> --agent auto --commit-subtask
+# new-session-subtask: 严格按一个子任务一次全新会话执行(任务正文需用 - [ ] 检查项列出子任务),
+# 控制单次会话的最大上下文大小;每个子任务会话结束以其检查项勾选为准,
+# 全部子任务完成后再开一个收尾会话统一执行 verify、标 [done]、更新 docs、提交剩余改动:
+opencode-auto run <dir> --agent auto --new-session-subtask
 ```
 
 ## 人工介入流程

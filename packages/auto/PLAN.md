@@ -72,6 +72,11 @@ driver 状态机：`pending → in_progress → done | blocked`；`blocked` → 
 （含之前会话中断遗留的改动，不限于本次会话修改的文件；含独立 .git 的子目录通常被父仓库
 ignore，需按文件系统主动查找并先提交子仓库，父提交信息中记录其路径与 SHA）），
 创建新 session，发送 prompt，消费 `GET /event` 事件流直到 session idle / question.asked / error。
+`--new-session-subtask` 时改为严格按一个子任务一次全新会话执行：driver 从任务正文提取
+`- [ ]` 检查项，逐项开新会话（prompt 只含该子任务，要求勾选对应检查项后立即结束，
+不做 verify/标 done/docs），会话结束后 driver 重读 PLAN.md 确认该检查项已勾选（未勾选
+按隐性 blocked 处理）；全部子任务完成后再开一个收尾会话统一执行完成契约；无检查项的
+任务回退为单会话。以此控制任务完成过程中单次会话的最大上下文大小。
 
 ## T-005: 阻塞流程（显式 + 隐性） [done]
   - verify: bun test

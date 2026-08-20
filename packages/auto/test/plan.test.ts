@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { begin, block, countSubtasks, load, next, parse, setStatus } from "../src/plan"
+import { begin, block, countSubtasks, load, next, parse, setStatus, subtasks } from "../src/plan"
 
 const SAMPLE = `# 示例计划
 
@@ -65,6 +65,14 @@ describe("parse", () => {
   test("countSubtasks 统计正文中的检查项", () => {
     expect(countSubtasks("步骤:\n- [x] 甲\n- [ ] 乙\n  - [X] 丙\n- 普通列表\n")).toEqual({ done: 2, total: 3 })
     expect(countSubtasks("没有检查项")).toEqual({ done: 0, total: 0 })
+  })
+
+  test("subtasks 提取检查项文本与勾选状态", () => {
+    expect(subtasks("- [x] 甲 done\n- [ ] 乙 pending\n- 普通列表\n")).toEqual([
+      { text: "甲 done", done: true },
+      { text: "乙 pending", done: false },
+    ])
+    expect(subtasks("没有检查项")).toEqual([])
   })
 })
 
