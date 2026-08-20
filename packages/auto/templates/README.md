@@ -20,6 +20,9 @@ OPENCODE_AUTO_SERVER=http://127.0.0.1:4096 opencode-auto run <dir> --agent auto
 opencode-auto run <dir> --agent auto --wait-answer 5
 # verbose: 每行输出带当前时间,并每 10 秒列出上次检查以来有变更的文件,便于观察进展:
 opencode-auto run <dir> --agent auto --verbose true
+# commit-subtask: 要求 agent 每完成并勾选一项子任务(- [x])即提交一次(含嵌套 .git 子仓库),
+# 实现子任务级别的变动历史追踪;同时每 30 秒输出子任务进度与预计剩余用时(线性估算,精度受检查频度限制):
+opencode-auto run <dir> --agent auto --commit-subtask
 ```
 
 ## 人工介入流程

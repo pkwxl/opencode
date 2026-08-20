@@ -1,8 +1,9 @@
 import type { Plan, Task } from "./plan"
 
 // Rebuilds full context for a fresh session: completed tasks, the current
-// task body, prior Q&A history, and the completion contract.
-export function render(plan: Plan, task: Task): string {
+// task body, prior Q&A history, and the completion contract. commitSubtask
+// (--commit-subtask) additionally requires a git commit per subtask checkbox.
+export function render(plan: Plan, task: Task, opts: { commitSubtask?: boolean } = {}): string {
   const done = plan.tasks.filter((t) => t.status === "done")
   const sections = [
     "你正在按一份实施计划执行其中的一项任务。完整计划位于当前目录的 PLAN.md,先读它了解全貌。",
@@ -31,7 +32,12 @@ export function render(plan: Plan, task: Task): string {
       验证执行通过时,把实际命令写入 PLAN.md 该任务的 verified 字段,作为高可信完成记录;
       未执行或未通过则不写 verified,不影响标记 [done];
       验证通过后必须勾选任务正文中对应的验证检查项(把验证相关的 \`- [ ]\` 改为 \`- [x]\`),
-      其余检查项也按实际完成情况勾选;未实际完成的项不得勾选;
+      其余检查项也按实际完成情况勾选;未实际完成的项不得勾选;${
+        opts.commitSubtask
+          ? `\n      每完成并勾选一项子任务检查项,立即按 d 的提交规则完成一次 git 提交(含嵌套 .git
+        子仓库),实现子任务级别的变动历史追踪;d 步再提交剩余全部改动;`
+          : ""
+      }
    b. 编辑 PLAN.md,把 ${task.id} 的状态标记改为 [done];
    c. 更新 docs/ 中受本任务影响的文档;
    d. git 提交全部未提交改动(不仅限于本次会话修改的文件——之前的会话可能因中断

@@ -94,6 +94,10 @@ blocked → 不要求 answer，直接开新会话续跑（attempts+1），prompt
 会话外解决、不要重问；有可选 answer 时注入问答历史。串行推进直到全部 done（退出码 0）。
 任务完成时显示本次用时；`--verbose` 时每行输出带当前时间，并每 10 秒按文件修改
 时间戳列出上次检查以来有变更的文件（跳过 node_modules 与 .git），便于观察进展。
+`--commit-subtask` 时 prompt 要求 agent 每完成并勾选一项子任务检查项即按提交规则
+提交一次（含嵌套 .git 子仓库），实现子任务级别的变动历史追踪；driver 同时每 30 秒
+重读 PLAN.md 输出当前任务的子任务进度（done/total）、已用时与预计剩余用时（按已完成
+子任务线性投影，精度受检查频度限制）。
 
 ## T-008: 目标项目模板与 Agent 契约 [done]
   - verify: bun test

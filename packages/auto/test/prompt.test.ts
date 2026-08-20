@@ -61,4 +61,12 @@ describe("render", () => {
     expect(text).not.toContain("已获解答")
     expect(text).toContain("运行项目自身的测试/检查")
   })
+
+  test("--commit-subtask 启用时注入子任务级提交要求", () => {
+    const on = render(plan, task, { commitSubtask: true })
+    expect(on).toContain("每完成并勾选一项子任务检查项")
+    expect(on).toContain("子任务级别的变动历史追踪")
+    const off = render(plan, task)
+    expect(off).not.toContain("子任务级别的变动历史追踪")
+  })
 })

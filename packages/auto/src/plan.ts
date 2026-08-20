@@ -79,6 +79,12 @@ export function next(plan: Plan): Task | undefined {
   return plan.tasks.find((task) => task.status !== "done")
 }
 
+// Counts "- [ ]" / "- [x]" checklist items (subtasks) in a task body.
+export function countSubtasks(body: string): { done: number; total: number } {
+  const items = body.match(/^\s*- \[(?: |x|X)\]/gm) ?? []
+  return { done: items.filter((item) => /x/i.test(item)).length, total: items.length }
+}
+
 export async function begin(path: string, id: string) {
   const plan = await load(path)
   const task = require(plan, id)

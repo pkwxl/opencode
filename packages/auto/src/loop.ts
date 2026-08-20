@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { log } from "./log"
-import { block, load, next } from "./plan"
+import { block, countSubtasks, load, next } from "./plan"
 import { runTask } from "./runner"
 import { ensure } from "./server"
 
@@ -10,7 +10,7 @@ import { ensure } from "./server"
 // task needs no `answer`: re-running resumes it directly.
 export async function runAll(
   directory: string,
-  opts: { agent?: string; server?: string; verbose?: boolean; waitAnswer?: number },
+  opts: { agent?: string; server?: string; verbose?: boolean; waitAnswer?: number; commitSubtask?: boolean },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
   if (!(await Bun.file(path).exists())) {
@@ -19,6 +19,7 @@ export async function runAll(
   }
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
+  const progress = opts.commitSubtask ? trackSubtasks(path) : undefined
   const server = await ensure(directory, opts.server)
   try {
     for (;;) {
@@ -33,7 +34,12 @@ export async function runAll(
       }
       log(`▶ ${task.id}: ${task.title}(第 ${task.attempts + 1} 次尝试)`)
       const start = Date.now()
-      const outcome = await runTask(server.client, plan, task, { agent: opts.agent, verbose: opts.verbose, waitAnswer: opts.waitAnswer })
+      const outcome = await runTask(server.client, plan, task, {
+        agent: opts.agent,
+        verbose: opts.verbose,
+        waitAnswer: opts.waitAnswer,
+        commitSubtask: opts.commitSubtask,
+      })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
         log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
@@ -43,6 +49,7 @@ export async function runAll(
     }
   } finally {
     watcher?.close()
+    progress?.close()
     server.close()
   }
 }
@@ -68,6 +75,26 @@ async function modifiedSince(directory: string, since: number): Promise<string[]
     .filter((path) => !path.includes("/node_modules/") && !path.includes("/.git/"))
   const stats = await Promise.all(files.map(async (path) => ({ path, mtime: (await stat(path)).mtimeMs })))
   return stats.filter((entry) => entry.mtime > since).map((entry) => relative(directory, entry.path)).sort()
+}
+
+// --commit-subtask mode: every 30s re-read PLAN.md, report the current task's
+// subtask checkbox progress and a remaining-time estimate. The estimate is a
+// simple linear projection from completed items, so its precision is bounded
+// by this check interval.
+function trackSubtasks(path: string) {
+  let current = { id: "", since: 0 }
+  const timer = setInterval(async () => {
+    const plan = await load(path).catch(() => undefined)
+    const task = plan && (plan.tasks.find((t) => t.status === "in_progress") ?? next(plan))
+    if (!task) return
+    if (task.id !== current.id) current = { id: task.id, since: Date.now() }
+    const { done, total } = countSubtasks(task.body)
+    if (!total) return
+    const elapsed = Date.now() - current.since
+    const estimate = done ? formatDuration((elapsed / done) * (total - done)) : "未知(尚无已完成的子任务)"
+    log(`  ⏳ ${task.id} 子任务进度 ${done}/${total},已用时 ${formatDuration(elapsed)},预计剩余 ${estimate}`)
+  }, 30_000)
+  return { close: () => clearInterval(timer) }
 }
 
 function formatDuration(ms: number): string {

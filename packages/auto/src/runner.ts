@@ -11,7 +11,7 @@ export type Outcome = { type: "completed" } | { type: "blocked"; question: strin
 // on the same issue escalates to human intervention.
 const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
 
-type Opts = { agent?: string; verbose?: boolean; waitAnswer?: number }
+type Opts = { agent?: string; verbose?: boolean; waitAnswer?: number; commitSubtask?: boolean }
 
 type Watch = {
   blocked?: Outcome & { type: "blocked" }
@@ -61,7 +61,7 @@ async function attempt(
   const prompt = await client.session.prompt({
     sessionID,
     agent: opts.agent,
-    parts: [{ type: "text", text: render(plan, task) }],
+    parts: [{ type: "text", text: render(plan, task, { commitSubtask: opts.commitSubtask }) }],
   })
   if (prompt.error) return { type: "blocked", question: `下发任务失败: ${JSON.stringify(prompt.error)}` }
 

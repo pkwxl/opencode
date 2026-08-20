@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { begin, block, load, next, parse, setStatus } from "../src/plan"
+import { begin, block, countSubtasks, load, next, parse, setStatus } from "../src/plan"
 
 const SAMPLE = `# 示例计划
 
@@ -60,6 +60,11 @@ describe("parse", () => {
 
   test("重复 ID 报错", () => {
     expect(() => parse("p", "## T-001: a [pending]\n## T-001: b [pending]\n")).toThrow("duplicate task id")
+  })
+
+  test("countSubtasks 统计正文中的检查项", () => {
+    expect(countSubtasks("步骤:\n- [x] 甲\n- [ ] 乙\n  - [X] 丙\n- 普通列表\n")).toEqual({ done: 2, total: 3 })
+    expect(countSubtasks("没有检查项")).toEqual({ done: 0, total: 0 })
   })
 })
 
