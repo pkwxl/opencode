@@ -1,12 +1,16 @@
+import { createInterface } from "node:readline/promises"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { begin, load, type Plan, type Task } from "./plan"
 import { render } from "./prompt"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string }
 
-// Non-permission questions get this fixed autonomous reply instead of blocking;
-// only a repeated question on the same issue escalates to human intervention.
+// Non-permission questions get this fixed autonomous reply when no human
+// answers in time (or --wait-answer was not given); only a repeated question
+// on the same issue escalates to human intervention.
 const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
+
+type Opts = { agent?: string; verbose?: boolean; waitAnswer?: number }
 
 type Watch = {
   blocked?: Outcome & { type: "blocked" }
@@ -26,7 +30,7 @@ export async function runTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
-  opts: { agent?: string; verbose?: boolean },
+  opts: Opts,
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
   for (let i = 1; ; i++) {
@@ -45,14 +49,14 @@ async function attempt(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
-  opts: { agent?: string; verbose?: boolean },
+  opts: Opts,
 ): Promise<Outcome> {
   const session = await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
   if (session.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
   const sessionID = session.data.id
 
   const events = await client.event.subscribe()
-  const watching = watch(client, sessionID, events.stream, opts.verbose)
+  const watching = watch(client, sessionID, events.stream, opts)
 
   const prompt = await client.session.prompt({
     sessionID,
@@ -71,8 +75,10 @@ async function watch(
   client: OpencodeClient,
   sessionID: string,
   stream: AsyncIterable<unknown>,
-  verbose?: boolean,
+  opts: Opts,
 ): Promise<Watch> {
+  const verbose = opts.verbose
+  const waitAnswer = opts.waitAnswer ?? 0
   let lastText = ""
   let error = ""
   const autoAnswered: string[] = []
@@ -93,9 +99,12 @@ async function watch(
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
       if (!permission && !repeated) {
         autoAnswered.push(text)
-        console.log(`❓ 收到非权限提问,自动答复:\n${text}\n→ ${AUTO_ANSWER}`)
+        console.log(`❓ 收到非权限提问:\n${text}`)
+        const human = waitAnswer > 0 ? await askHuman(waitAnswer) : undefined
+        const reply = human ?? AUTO_ANSWER
+        console.log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
         await client.question
-          .reply({ requestID: asked.id, answers: asked.questions.map(() => [AUTO_ANSWER]) })
+          .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
           .catch(() => {})
         continue
       }
@@ -167,4 +176,24 @@ function sameIssue(a: string, b: string): boolean {
   const x = normalize(a)
   const y = normalize(b)
   return x === y || x.includes(y) || y.includes(x)
+}
+
+// Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
+// undefined on timeout or empty input, in which case the caller falls back to
+// AUTO_ANSWER.
+async function askHuman(minutes: number): Promise<string | undefined> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const answer = await Promise.race([
+      rl.question(`请在 ${minutes} 分钟内输入回答(回车确认,超时将自动答复): `),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), minutes * 60_000)
+      }),
+    ])
+    return answer?.trim() || undefined
+  } finally {
+    clearTimeout(timer)
+    rl.close()
+  }
 }

@@ -16,6 +16,8 @@
 opencode-auto run <dir> --agent auto
 # 或连接已有的常驻 server:
 OPENCODE_AUTO_SERVER=http://127.0.0.1:4096 opencode-auto run <dir> --agent auto
+# 非权限提问时等待人工在命令行作答,超时(分钟,1-60,默认 1)后自动答复:
+opencode-auto run <dir> --agent auto --wait-answer 5
 ```
 
 ## 人工介入流程
@@ -24,6 +26,8 @@ OPENCODE_AUTO_SERVER=http://127.0.0.1:4096 opencode-auto run <dir> --agent auto
    退出码为 2,问题写入 `PLAN.md` 对应任务的 `question` 字段。
    非权限的 question 会被 driver 自动答复("你根据情况来自主决策如何做即可,...")并继续执行;
    只有就同一问题再次询问时才会停机等待人工介入。
+   若运行时带 `--wait-answer [1-60]`(不带值默认 1 分钟),非权限提问会先在命令行等待
+   人工输入回答(回车确认),超时无响应才自动答复;不带此选项则总是立即自动答复。
 2. 阻塞的问题不是提问,而是需要在会话外处理的事务(如放行权限、修复环境)。
    人工排查处理后**无需填写 `answer` 字段**,直接重新运行即可,driver 会为该任务开启
    全新会话并告知 agent 问题已在会话外解决、不要重问。

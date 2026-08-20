@@ -20,8 +20,23 @@ const directory = resolve(positional[0] ?? ".")
 
 if (command === "run") {
   const verbose = flags.get("verbose") === "true" || flags.has("--verbose")
-  const code = await runAll(directory, { agent: flags.get("agent"), server: flags.get("server"), verbose })
+  const waitAnswer = parseWaitAnswer(flags.get("wait-answer"))
+  if (waitAnswer === null) {
+    console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")
+    process.exit(1)
+  }
+  const code = await runAll(directory, { agent: flags.get("agent"), server: flags.get("server"), verbose, waitAnswer })
   process.exit(code)
+}
+
+// --wait-answer 缺省(无此选项)= 0,总是立即自动答复;裸选项 = 默认 1 分钟;
+// 返回 null 表示取值非法。
+function parseWaitAnswer(raw: string | undefined): number | null {
+  if (raw === undefined) return 0
+  if (raw === "") return 1
+  const minutes = Number(raw)
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) return null
+  return minutes
 }
 
 if (command === "init") {
@@ -50,7 +65,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose <true|false>]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose <true|false>] [--wait-answer [1-60]]
   opencode-auto status [dir]
 
 退出码: 0 全部完成,1 用法/环境错误,2 阻塞等待人工介入`)
