@@ -10,7 +10,7 @@
     "webfetch": "deny",
     "websearch": "deny",
     "bash": {
-      "*": "ask",
+      "*": "allow",
       "bun test*": "allow",
       "bun run*": "allow",
       "bun typecheck*": "allow",
@@ -19,8 +19,7 @@
       "npm run*": "allow",
       "git status*": "allow",
       "git diff*": "allow",
-      "git log*": "allow",
-      "ls *": "allow"
+      "git log*": "allow"
     }
   }
 }

@@ -49,8 +49,13 @@ async function watch(
 ): Promise<Watch> {
   let lastText = ""
   let error = ""
+  let hasStarted = false
   for await (const raw of stream) {
     const event = raw as import("@opencode-ai/sdk/v2").Event
+    if (!hasStarted && event.type === "message.part.updated") {
+      console.log("开始执行任务...")
+      hasStarted = true
+    }
     if (event.type === "message.part.updated") {
       const part = event.properties.part
       if (part.sessionID === sessionID && part.type === "text" && part.time?.end) lastText = part.text
