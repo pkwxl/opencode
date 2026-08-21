@@ -3,6 +3,9 @@ import { resolve } from "node:path"
 import { setVerbose } from "./log"
 import { load } from "./plan"
 import { runAll } from "./loop"
+import templatePlan from "../templates/PLAN.md" with { type: "file" }
+import templateConfig from "../templates/opencode.json" with { type: "file" }
+import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 const args = process.argv.slice(2)
 const command = args[0]
@@ -51,14 +54,19 @@ function parseWaitAnswer(raw: string | undefined): number | null {
 }
 
 if (command === "init") {
-  const templates = new URL("../templates/", import.meta.url)
-  for (const file of ["PLAN.md", "opencode.json", ".opencode/agent/auto.md"]) {
+  // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。
+  const templates: Record<string, string> = {
+    "PLAN.md": templatePlan,
+    "opencode.json": templateConfig,
+    ".opencode/agent/auto.md": templateAgent,
+  }
+  for (const [file, source] of Object.entries(templates)) {
     const target = resolve(directory, file)
     if (await Bun.file(target).exists()) {
       console.log(`跳过已存在: ${file}`)
       continue
     }
-    await Bun.write(target, await Bun.file(new URL(file, templates)).text())
+    await Bun.write(target, await Bun.file(source).text())
     console.log(`已创建: ${file}`)
   }
   console.log("编辑 PLAN.md 填入任务后运行: opencode-auto run " + directory)

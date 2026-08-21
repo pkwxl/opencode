@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "bun run src/index.ts",
+    "build": "bun ./script/build.ts",
     "typecheck": "tsgo --noEmit",
     "test": "bun test"
   },
