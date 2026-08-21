@@ -36,7 +36,7 @@ opencode-auto status [dir]   # 查看各任务状态
 | --- | --- |
 | `--agent <name>` | 指定 opencode agent(默认使用目标目录配置) |
 | `--server <url>` | 复用已运行的 `opencode serve`,不另起进程;也可用环境变量 `OPENCODE_AUTO_SERVER` |
-| `--verbose [true]` | 输出会话内全部消息部件(文本、工具调用、推理、步骤等)与上下文用量/占比,每行带时间戳,并每 10 秒列出变更文件 |
+| `--verbose [true]` | 输出会话内全部消息部件(文本、工具调用、推理、步骤等)与上下文用量/占比,每行带时间戳,并每 10 秒列出 git status 新出现的变动文件(含子目录中的嵌套 git 仓库) |
 | `--wait-answer [1-60]` | 非权限提问先等待人工 stdin 答复(分钟),超时自动答复;不带值默认 1 分钟;缺省此选项则立即自动答复 |
 | `--commit-subtask [true]` | 每完成一项子任务立即 git 提交,并每 30 秒上报子任务进度与预计剩余时间 |
 

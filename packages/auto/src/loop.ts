@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises"
+import { readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { log } from "./log"
 import { block, countSubtasks, load, next } from "./plan"
@@ -67,27 +67,67 @@ export async function runAll(
   }
 }
 
-// Verbose mode: every 10s list files modified since the previous check so a
-// human watching the terminal can follow the agent's progress on disk.
+// Verbose mode: every 10s list files newly appearing in `git status`
+// (modified, staged, or untracked), so a human watching the terminal can
+// follow the agent's progress on disk.
 function watchFiles(directory: string) {
-  let since = Date.now()
+  let seen = new Set<string>()
   const timer = setInterval(async () => {
-    const checkpoint = Date.now()
-    const changed = await modifiedSince(directory, since).catch(() => [] as string[])
-    since = checkpoint
-    if (changed.length) log(`  ✎ 变更文件:\n${changed.map((file) => `    ${file}`).join("\n")}`)
+    const changed = await gitChangedFiles(directory).catch(() => [] as string[])
+    const fresh = changed.filter((file) => !seen.has(file))
+    seen = new Set(changed)
+    if (fresh.length) log(`  ✎ 变更文件:\n${fresh.map((file) => `    ${file}`).join("\n")}`)
   }, 10_000)
   return { close: () => clearInterval(timer) }
 }
 
-async function modifiedSince(directory: string, since: number): Promise<string[]> {
-  const entries = await readdir(directory, { recursive: true, withFileTypes: true })
-  const files = entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name))
-    .filter((path) => !path.includes("/node_modules/") && !path.includes("/.git/"))
-  const stats = await Promise.all(files.map(async (path) => ({ path, mtime: (await stat(path)).mtimeMs })))
-  return stats.filter((entry) => entry.mtime > since).map((entry) => relative(directory, entry.path)).sort()
+// 变动文件只取 git status 的输出:目标目录自身(可能位于更大的仓库中,
+// 用 pathspec `-- .` 限定该子树)加上所有含 .git 的子目录(嵌套仓库,
+// 含 worktree/子模块的 .git 文件)。返回相对目标目录的路径。
+async function gitChangedFiles(directory: string): Promise<string[]> {
+  const inRepo =
+    (await Bun.spawn(["git", "-C", directory, "rev-parse", "--is-inside-work-tree"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    }).exited) === 0
+  const roots = new Set<string>(inRepo ? [directory] : [])
+  // 手工逐层遍历而非 readdir recursive,以免每 10 秒扫一遍 .git/node_modules 内部。
+  const pending = [directory]
+  while (pending.length) {
+    const dir = pending.pop()!
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+    if (entries.some((entry) => entry.name === ".git")) roots.add(dir)
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules") {
+        pending.push(join(dir, entry.name))
+      }
+    }
+  }
+  const lists = await Promise.all([...roots].map((root) => gitStatusFiles(directory, root)))
+  return lists.flat()
+}
+
+// --porcelain -z --no-renames -uall: 逐文件 NUL 分隔输出,不带改名箭头;每条为
+// "XY <path>",路径相对仓库根(worktree 顶层),需换算为相对目标目录的路径。
+// -uall 下仍以 "?? dir/" 折叠输出的只有嵌套仓库目录(其内部文件由该仓库自身
+// 的 status 单独列出),跳过以免重复。
+async function gitStatusFiles(directory: string, root: string): Promise<string[]> {
+  const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
+    stdout: "pipe",
+    stderr: "ignore",
+  })
+  const toplevel = (await new Response(top.stdout).text()).trim()
+  if ((await top.exited) !== 0 || !toplevel) return []
+  const proc = Bun.spawn(
+    ["git", "-C", root, "status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."],
+    { stdout: "pipe", stderr: "ignore" },
+  )
+  const output = await new Response(proc.stdout).text()
+  if ((await proc.exited) !== 0) return []
+  return output
+    .split("\0")
+    .filter((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
+    .map((entry) => relative(directory, join(toplevel, entry.slice(3))))
 }
 
 // --commit-subtask mode: every 30s re-read PLAN.md, report the current task's

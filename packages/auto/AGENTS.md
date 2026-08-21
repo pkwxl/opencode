@@ -9,7 +9,7 @@
 ## 结构
 
 - `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析;`init` 幂等维护 AGENTS.md 的 CURRENT.md 指针块。
-- `src/loop.ts` — 任务循环:取下一个未完成任务执行;verbose 文件变更监视;子任务进度上报。
+- `src/loop.ts` — 任务循环:取下一个未完成任务执行;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报。
 - `src/runner.ts` — 单任务流水线:分解会话 → 逐子任务会话(driver 亲自执行各项 verify 命令)→ 收尾会话(driver 判定任务级验收,失败追加修复子任务,最多 3 轮);会话创建、事件监听、提问自动答复、权限阻塞、隐性阻塞检测;CURRENT.md 写入。
 - `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone)与 verify 命令提取(subtaskVerify/verifyCommand)。
 - `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 收尾三类)。
