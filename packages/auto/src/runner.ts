@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import { dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import { log } from "./log"
 import {
   appendSubtask,
@@ -314,14 +314,36 @@ async function watch(
   let lastText = ""
   let error = ""
   const autoAnswered: string[] = []
+  // verbose 已输出的 part 与 message,避免同一 part 的多次更新事件重复打印。
+  const seen = new Set<string>()
+  // 模型上下文上限(providerID/modelID → limit.context),首次需要时拉取。
+  let limits: Map<string, number> | undefined
   for await (const raw of stream) {
     const event = raw as import("@opencode-ai/sdk/v2").Event
     if (event.type === "message.part.updated") {
       const part = event.properties.part
-      if (part.sessionID === sessionID && part.type === "text" && part.time?.end) {
+      if (part.sessionID !== sessionID) continue
+      if (part.type === "text" && part.time?.end) {
         lastText = part.text
         if (verbose) log(part.text)
+        continue
       }
+      const line = verbose ? describePart(part) : undefined
+      if (line && !seen.has(part.id)) {
+        seen.add(part.id)
+        log(line)
+      }
+    }
+    if (event.type === "message.updated") {
+      const info = event.properties.info
+      if (!verbose || info.sessionID !== sessionID) continue
+      if (info.role !== "assistant" || !info.time.completed || seen.has(info.id)) continue
+      seen.add(info.id)
+      limits ??= await contextLimits(client)
+      const used = info.tokens.input + info.tokens.cache.read
+      const limit = limits.get(`${info.providerID}/${info.modelID}`)
+      const pct = limit ? ` (${Math.round((used / limit) * 100)}%)` : ""
+      log(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${pct}`)
     }
     if (event.type === "question.asked") {
       const asked = event.properties
@@ -382,6 +404,46 @@ async function watch(
     }
   }
   return { lastText, error }
+}
+
+// verbose 模式下把非文本 part 转成一行可读输出;返回 undefined 表示该 part
+// 尚无终态内容可输出(后续更新事件会再触发)。工具输出与推理原文较长,
+// 截断到与 verify 输出相同的 2000 字符上限。
+function describePart(part: Part): string | undefined {
+  if (part.type === "reasoning") return part.time.end ? `  推理:\n${part.text.trim().slice(0, 2000)}` : undefined
+  if (part.type === "tool") {
+    if (part.state.status === "completed") return `  工具 ${part.tool}: ${part.state.title || "完成"}`
+    if (part.state.status === "error") return `  工具 ${part.tool} 出错: ${part.state.error.slice(0, 2000)}`
+    return undefined
+  }
+  if (part.type === "step-finish") return `  步骤结束(${part.reason}): 输入 ${formatTokens(part.tokens.input)} / 输出 ${formatTokens(part.tokens.output)} tokens`
+  if (part.type === "step-start") return `  步骤开始`
+  if (part.type === "file") return `  文件: ${part.filename ?? part.url}`
+  if (part.type === "subtask") return `  子任务(${part.agent}): ${part.description}`
+  if (part.type === "agent") return `  子代理: ${part.name}`
+  if (part.type === "patch") return `  补丁(${part.files.length} 个文件): ${part.files.join(", ")}`
+  if (part.type === "snapshot") return `  快照: ${part.snapshot}`
+  if (part.type === "retry") return `  ↻ 请求重试(第 ${part.attempt} 次)`
+  if (part.type === "compaction") return `  上下文压缩${part.auto ? "(自动)" : ""}`
+  return undefined
+}
+
+// 拉取一次 provider 列表,建立 providerID/modelID → 上下文上限的映射;
+// 失败时返回空映射,上下文行退化为只显示用量不显示百分比。
+async function contextLimits(client: OpencodeClient): Promise<Map<string, number>> {
+  const response = await client.provider.list().catch(() => undefined)
+  const limits = new Map<string, number>()
+  for (const provider of response?.data?.all ?? []) {
+    for (const [id, model] of Object.entries(provider.models)) {
+      limits.set(`${provider.id}/${id}`, model.limit.context)
+    }
+  }
+  return limits
+}
+
+function formatTokens(n: number): string {
+  if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
 }
 
 // Two questions count as the same issue when their normalized texts match or

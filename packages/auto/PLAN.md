@@ -99,7 +99,8 @@ verify 由 agent 自行解释执行，driver 不再外部复跑。通过后才�
 `src/loop.ts`：启动时扫描 PLAN.md，取第一个非 done 任务：pending → 下发；
 blocked → 不要求 answer，直接开新会话续跑（attempts+1），prompt 告知 agent 问题已在
 会话外解决、不要重问；有可选 answer 时注入问答历史。串行推进直到全部 done（退出码 0）。
-任务完成时显示本次用时；`--verbose` 时每行输出带当前时间，并每 10 秒按文件修改
+任务完成时显示本次用时；`--verbose` 时每行输出带当前时间，打印会话内全部消息部件
+（文本、工具调用、推理、步骤等）与每条助手消息的上下文用量/占比，并每 10 秒按文件修改
 时间戳列出上次检查以来有变更的文件（跳过 node_modules 与 .git），便于观察进展。
 `--commit-subtask` 时 prompt 要求 agent 每完成并勾选一项子任务检查项即按提交规则
 提交一次（含嵌套 .git 子仓库），实现子任务级别的变动历史追踪；driver 同时每 30 秒
