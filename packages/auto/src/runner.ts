@@ -61,8 +61,9 @@ type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "bl
 //    driver runs the task-level acceptance: the "command:" verify prefix, or
 //    the report's verified-command line, or — with no command at all — the
 //    report's conclusion line. A gap appends a fix subtask (max FIX_ROUNDS).
-// Blocking happens on permission questions, a repeated question on the same
-// issue, exhausted transient session errors, or a failed verification.
+// Blocking happens on unanswered/rejected permission requests, a repeated
+// question on the same issue, exhausted transient session errors, or a failed
+// verification.
 export async function runTask(
   client: OpencodeClient,
   plan: Plan,
@@ -351,16 +352,23 @@ async function watch(
       const text = asked.questions.map((q) => q.question).join("\n")
       const permission = /权限|permission/i.test(text)
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
-      if (!permission && !repeated) {
+      // 权限提问在 --wait-answer 下也先等人工答复,无人答复才阻塞;
+      // 非权限提问无人答复时回落到 AUTO_ANSWER。
+      if (!repeated && (!permission || waitAnswer > 0)) {
         autoAnswered.push(text)
-        log(`❓ 收到非权限提问:\n${text}`)
-        const human = waitAnswer > 0 ? await askHuman(waitAnswer) : undefined
-        const reply = human ?? AUTO_ANSWER
-        log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
-        await client.question
-          .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
-          .catch(() => {})
-        continue
+        log(`❓ 收到${permission ? "权限" : "非权限"}提问:\n${text}`)
+        const human =
+          waitAnswer > 0
+            ? await askHuman(waitAnswer, permission ? "超时将阻塞等待人工介入" : "超时将自动答复")
+            : undefined
+        if (human || !permission) {
+          const reply = human ?? AUTO_ANSWER
+          log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
+          await client.question
+            .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
+            .catch(() => {})
+          continue
+        }
       }
       await client.question.reject({ requestID: asked.id }).catch(() => {})
       await client.session.abort({ sessionID }).catch(() => {})
@@ -375,6 +383,18 @@ async function watch(
     if (event.type === "permission.asked") {
       const asked = event.properties
       if (asked.sessionID !== sessionID) continue
+      // --wait-answer 下权限请求同样等待人工指令: 回答 allow/yes/y 等视为
+      // 确认授权(always 放行本请求的 patterns),其余回答或超时则拒绝并阻塞。
+      if (waitAnswer > 0) {
+        log(`🔐 收到权限请求: ${asked.permission} (${asked.patterns.join(", ")})`)
+        const human = await askHuman(waitAnswer, "输入 allow/yes/y 确认授权,超时或其余回答将拒绝并阻塞")
+        if (human && isApproval(human)) {
+          log(`→ 人工授权: ${human}(always 放行)`)
+          await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
+          continue
+        }
+        if (human) log(`→ 人工未授权: ${human}`)
+      }
       await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
       await client.session.abort({ sessionID }).catch(() => {})
       return {
@@ -455,15 +475,20 @@ function sameIssue(a: string, b: string): boolean {
   return x === y || x.includes(y) || y.includes(x)
 }
 
+// 权限等待中,这些回答(忽略首尾空白与大小写)视为确认授权。
+function isApproval(answer: string): boolean {
+  return /^(allow|yes|y|ok|approve|always|允许|授权|是)$/.test(answer.trim().toLowerCase())
+}
+
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
 // undefined on timeout or empty input, in which case the caller falls back to
-// AUTO_ANSWER.
-async function askHuman(minutes: number): Promise<string | undefined> {
+// AUTO_ANSWER (non-permission questions) or blocks (permission requests).
+async function askHuman(minutes: number, hint: string): Promise<string | undefined> {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const answer = await Promise.race([
-      rl.question(`请在 ${minutes} 分钟内输入回答(回车确认,超时将自动答复): `),
+      rl.question(`请在 ${minutes} 分钟内输入回答(回车确认,${hint}): `),
       new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), minutes * 60_000)
       }),

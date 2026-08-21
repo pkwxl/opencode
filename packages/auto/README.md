@@ -37,8 +37,11 @@ opencode-auto status [dir]   # 查看各任务状态
 | `--agent <name>` | 指定 opencode agent(默认使用目标目录配置) |
 | `--server <url>` | 复用已运行的 `opencode serve`,不另起进程;也可用环境变量 `OPENCODE_AUTO_SERVER` |
 | `--verbose [true]` | 输出会话内全部消息部件(文本、工具调用、推理、步骤等)与上下文用量/占比,每行带时间戳,并每 10 秒列出 git status 新出现的变动文件(含子目录中的嵌套 git 仓库) |
-| `--wait-answer [1-60]` | 非权限提问先等待人工 stdin 答复(分钟),超时自动答复;不带值默认 1 分钟;缺省此选项则立即自动答复 |
+| `--wait-answer [1-60]` | 提问先等待人工 stdin 答复(分钟):非权限提问超时自动答复;权限提问与权限审批(permission 请求)回答 `allow`/`yes`/`y` 等即授权放行,超时或其余回答则拒绝并阻塞;不带值默认 1 分钟;缺省此选项则立即自动答复、权限请求直接阻塞 |
 | `--commit-subtask [true]` | 每完成一项子任务立即 git 提交,并每 30 秒上报子任务进度与预计剩余时间 |
+
+每次 `run` 都会在目标目录的 `.auto/logs/run-<时间戳>.log` 新建日志文件,
+终端的全部输出同步写入该文件(逐条直写,进程中断也不丢已输出内容)。
 
 退出码:`0` 全部完成;`1` 用法/环境错误;`2` 阻塞等待人工介入。
 
@@ -92,6 +95,7 @@ bash chmod 绕过,并非安全边界。
 
 任务阻塞(退出码 `2`)时,driver 会把问题写入该任务的 `question` 字段并停机:
 
-- **权限问题**:按提示在目标目录 `opencode.json` 的 `permission` 规则中放行;
+- **权限问题**:带 `--wait-answer` 运行时会先等待人工指令,回答 `allow`/`yes`/`y` 等
+  即授权继续;否则按提示在目标目录 `opencode.json` 的 `permission` 规则中放行;
 - **其他问题**:在会话外处理(或在 `answer` 字段填写解答),然后重新运行
   `opencode-auto run` 即可从阻塞处续跑。

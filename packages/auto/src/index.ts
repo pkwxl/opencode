@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path"
-import { setVerbose } from "./log"
+import { log, setLogFile, setVerbose } from "./log"
 import { load } from "./plan"
 import { runAll } from "./loop"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
@@ -49,6 +49,8 @@ const directory = resolve(positional[0] ?? ".")
 if (command === "run") {
   const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
   setVerbose(verbose)
+  // 每次 run 都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
+  log(`📝 日志文件: ${setLogFile(directory)}`)
   const commitSubtask = flags.has("commit-subtask") && flags.get("commit-subtask") !== "false"
   const waitAnswer = parseWaitAnswer(flags.get("wait-answer"))
   if (waitAnswer === null) {

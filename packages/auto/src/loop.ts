@@ -21,7 +21,7 @@ export async function runAll(
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
   if (!(await Bun.file(path).exists())) {
-    console.error(`未找到计划文件: ${path}`)
+    log(`未找到计划文件: ${path}`)
     return 1
   }
 
