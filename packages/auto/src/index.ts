@@ -20,18 +20,34 @@ const command = args[0]
 
 const flags = new Map<string, string>()
 const positional: string[] = []
+// --agent/--server/--wait-answer 带值(吞掉下一个 token);--verbose/--commit-subtask
+// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value。
+const VALUE_FLAGS = new Set(["agent", "server", "wait-answer"])
+const BOOLEAN_FLAGS = new Set(["verbose", "commit-subtask"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
-  if (arg.startsWith("--")) {
-    flags.set(arg.slice(2), args[++i] ?? "")
+  if (!arg.startsWith("--")) {
+    positional.push(arg)
     continue
   }
-  positional.push(arg)
+  const eq = arg.indexOf("=")
+  if (eq !== -1) {
+    flags.set(arg.slice(2, eq), arg.slice(eq + 1))
+    continue
+  }
+  const key = arg.slice(2)
+  const next = args[i + 1]
+  if ((VALUE_FLAGS.has(key) && next !== undefined) || (BOOLEAN_FLAGS.has(key) && (next === "true" || next === "false"))) {
+    flags.set(key, next)
+    i++
+    continue
+  }
+  flags.set(key, "")
 }
 const directory = resolve(positional[0] ?? ".")
 
 if (command === "run") {
-  const verbose = flags.get("verbose") === "true" || flags.has("--verbose")
+  const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
   setVerbose(verbose)
   const commitSubtask = flags.has("commit-subtask") && flags.get("commit-subtask") !== "false"
   const waitAnswer = parseWaitAnswer(flags.get("wait-answer"))
@@ -99,7 +115,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose <true|false>] [--wait-answer [1-60]] [--commit-subtask [true|false]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--wait-answer [1-60]] [--commit-subtask [true|false]]
   opencode-auto status [dir]
 
 退出码: 0 全部完成,1 用法/环境错误,2 阻塞等待人工介入`)
