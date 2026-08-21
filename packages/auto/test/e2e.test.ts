@@ -11,17 +11,17 @@ import { runAll } from "../src/loop"
 const E2E = process.env.OPENCODE_AUTO_E2E === "1"
 
 const PLAN = `## T-001: 创建 hello.txt [pending]
-  - verify: test -f hello.txt && grep -q hello hello.txt
+  - verify: command: test -f hello.txt && grep -q hello hello.txt
 在当前目录创建 hello.txt,内容为 "hello"。
 
 ## T-002: 请求写权限并写入 greeting.txt [pending]
-  - verify: test -f greeting.txt
+  - verify: command: test -f greeting.txt
 这个任务需要先获得用户授权。调用 question 工具询问用户:
 "是否允许在 opencode.json 中放行 greeting.txt 的写权限?"
 拿到肯定答复后把问候语 "hello" 写入 greeting.txt。
 
 ## T-003: 汇总 [pending]
-  - verify: test -f SUMMARY.md
+  - verify: command: test -f SUMMARY.md
 创建 SUMMARY.md,列出生成的文件。
 `
 

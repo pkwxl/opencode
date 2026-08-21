@@ -1,8 +1,23 @@
 import { createInterface } from "node:readline/promises"
+import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { log } from "./log"
-import { begin, load, subtasks, type Plan, type Task } from "./plan"
-import { render, renderSubtask, renderWrapup } from "./prompt"
+import {
+  appendSubtask,
+  begin,
+  countSubtasks,
+  load,
+  markDone,
+  setSubtasks,
+  subtasks,
+  subtaskVerify,
+  tick,
+  verifyCommand,
+  type Plan,
+  type Task,
+} from "./plan"
+import { renderDecompose, renderSubtask, renderWrapup } from "./prompt"
+import { allowWrite, reprotect } from "./protect"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string }
 
@@ -11,12 +26,19 @@ export type Outcome = { type: "completed" } | { type: "blocked"; question: strin
 // on the same issue escalates to human intervention.
 const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
 
+// A failing task-level acceptance produces a fix subtask; after this many
+// unsuccessful fix rounds the task blocks for human intervention.
+const FIX_ROUNDS = 3
+
+// Verify commands get killed after this long to keep the driver from hanging
+// on a stuck test runner.
+const COMMAND_TIMEOUT = 10 * 60_000
+
 type Opts = {
   agent?: string
   verbose?: boolean
   waitAnswer?: number
   commitSubtask?: boolean
-  newSessionSubtask?: boolean
 }
 
 type Watch = {
@@ -27,15 +49,20 @@ type Watch = {
 
 type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "blocked" })
 
-// Runs one task. Default: a single fresh session executes the whole task and
-// "completed" requires the [done] marker in PLAN.md; verify is interpreted
-// and executed by the agent itself, never re-run by the driver.
-// --new-session-subtask runs strictly one fresh session per subtask checkbox
-// (bounding each session's context size), confirms each by its ticked
-// checkbox, then runs a final wrap-up session for verify/[done]/docs/commit.
-// A task without checkboxes falls back to a single session.
+// Runs one task through the three-phase pipeline; the driver owns all state
+// writes to PLAN.md and CURRENT.md, sessions never edit them:
+// 1. decompose (only when the task body has no checklist yet): a read-only
+//    session writes docs/<id>.subtasks.md, the driver injects the checklist;
+// 2. one fresh session per unticked subtask; after each session the driver
+//    runs that subtask's verify command itself — pass: tick, fail: one fix
+//    session then retry, still failing: blocked (items without a command are
+//    ticked on trust);
+// 3. a wrap-up session (docs, sweep commit, docs/<id>.report.md), then the
+//    driver runs the task-level acceptance: the "command:" verify prefix, or
+//    the report's verified-command line, or — with no command at all — the
+//    report's conclusion line. A gap appends a fix subtask (max FIX_ROUNDS).
 // Blocking happens on permission questions, a repeated question on the same
-// issue, session error, or idle without the expected disk state.
+// issue, exhausted transient session errors, or a failed verification.
 export async function runTask(
   client: OpencodeClient,
   plan: Plan,
@@ -43,20 +70,190 @@ export async function runTask(
   opts: Opts,
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
-  const items = opts.newSessionSubtask ? subtasks(task.body) : []
-  if (!items.length) {
-    const result = await runSession(client, task, render(plan, task, opts), opts)
-    return result.type === "blocked" ? result : confirmDone(plan.path, task.id, result.lastText)
-  }
-  for (const item of items) {
-    if (item.done) continue
-    const result = await runSession(client, task, renderSubtask(plan, task, item.text, opts), opts)
+  const decomposed = await ensureDecomposed(client, plan, task, opts)
+  if (decomposed.type === "blocked") return decomposed
+  task = decomposed.task
+  await writeCurrent(plan.path, task)
+
+  for (let round = 0; ; ) {
+    for (const item of subtasks(task.body).filter((item) => !item.done)) {
+      const blocked = await runSubtask(client, plan, task, item.text, opts)
+      if (blocked) return blocked
+      task = requireTask(await load(plan.path), task.id)
+      await writeCurrent(plan.path, task)
+    }
+
+    const result = await runSession(client, task, renderWrapup(plan, task), opts)
     if (result.type === "blocked") return result
-    const blocked = await confirmTick(plan.path, task.id, item.text, result.lastText)
-    if (blocked) return blocked
+    const verdict = await verifyTask(plan.path, task)
+    if (verdict.type === "done") return { type: "completed" }
+
+    round++
+    if (round >= FIX_ROUNDS) {
+      return { type: "blocked", question: `任务级验收连续 ${FIX_ROUNDS} 轮未通过:\n${verdict.gap}` }
+    }
+    log(`↻ ${task.id} 验收未通过,追加修复子任务(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
+    await appendSubtask(plan.path, task.id, verdict.fixText)
+    task = requireTask(await load(plan.path), task.id)
   }
-  const result = await runSession(client, task, renderWrapup(plan, task), opts)
-  return result.type === "blocked" ? result : confirmDone(plan.path, task.id, result.lastText)
+}
+
+function requireTask(plan: Plan, id: string): Task {
+  const task = plan.tasks.find((task) => task.id === id)
+  if (!task) throw new Error(`${plan.path}: task ${id} not found`)
+  return task
+}
+
+// CURRENT.md mirrors the task in progress; the agent contract makes every
+// session read it first, so the current task survives context compaction.
+// The server re-reads it on every provider turn, so no restart is needed.
+async function writeCurrent(path: string, task: Task) {
+  const progress = countSubtasks(task.body)
+  const content = [
+    `# 当前任务(由 opencode-auto 维护,请勿手工编辑)`,
+    ``,
+    `## ${task.id}: ${task.title} [${task.status}]`,
+    ...(task.verify ? [`  - verify: ${task.verify}`] : []),
+    ``,
+    task.body,
+    ``,
+    progress.total ? `进度: 子任务 ${progress.done}/${progress.total}` : `进度: 分解中`,
+    ``,
+  ].join("\n")
+  const file = join(dirname(path), "CURRENT.md")
+  await allowWrite(file)
+  await Bun.write(file, content)
+  await reprotect(file)
+}
+
+// Ensures the task body has a checklist: tasks resuming with one (or with a
+// human-written one) are used as-is; otherwise a decomposition session writes
+// docs/<id>.subtasks.md and the driver injects the items into PLAN.md.
+async function ensureDecomposed(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
+  if (subtasks(task.body).length) return { type: "ok", task }
+  const file = join(dirname(plan.path), "docs", `${task.id}.subtasks.md`)
+  let feedback = ""
+  // One automatic retry with feedback: a resumed session may have done the
+  // work instead of writing the file; the file is a hard requirement.
+  for (let i = 0; ; i++) {
+    const result = await runSession(client, task, renderDecompose(plan, task) + feedback, opts)
+    if (result.type === "blocked") return result
+    const items = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
+    if (items.length) {
+      await setSubtasks(plan.path, task.id, items)
+      return { type: "ok", task: requireTask(await load(plan.path), task.id) }
+    }
+    if (i === 1) {
+      return {
+        type: "blocked",
+        question:
+          `分解会话两次结束但 ${file} 缺失或不含有效检查项(隐性阻塞)。` +
+          `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+      }
+    }
+    log(`↻ ${task.id} 分解会话未产出 ${file},带反馈重试一次`)
+    feedback =
+      `\n\n你上次结束会话但未写出有效的 ${file}(缺失或无检查项)。这是硬性要求:` +
+      `即使任务已完成或极简单,也必须写出该文件(原子任务写单个检查项即可)。`
+  }
+}
+
+// Runs one subtask session, then verifies it: the driver re-runs the item's
+// verify command itself and only ticks the checkbox on success. A failure
+// gets one fix session before blocking. Items without a command are ticked
+// on trust (e.g. fix subtasks for natural-language acceptance gaps).
+async function runSubtask(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  text: string,
+  opts: Opts,
+): Promise<(Outcome & { type: "blocked" }) | undefined> {
+  const command = subtaskVerify(text)
+  const result = await runSession(client, task, renderSubtask(plan, task, text, opts), opts)
+  if (result.type === "blocked") return result
+  if (!command) {
+    await tick(plan.path, task.id, text)
+    return undefined
+  }
+  const first = await runCommand(dirname(plan.path), command)
+  if (first.ok) {
+    await tick(plan.path, task.id, text)
+    log(`  ✓ ${text.slice(0, 60)}`)
+    return undefined
+  }
+  log(`  ✗ 子任务 verify 失败,开修复会话: ${command}`)
+  const fix = await runSession(
+    client,
+    task,
+    renderSubtask(plan, task, text, opts) +
+      `\n\n该子任务的 verify 命令在会话外执行失败:\n$ ${command}\n${first.output}\n请定位修复,并在会话内重新运行该命令确认通过后结束。`,
+    opts,
+  )
+  if (fix.type === "blocked") return fix
+  const second = await runCommand(dirname(plan.path), command)
+  if (second.ok) {
+    await tick(plan.path, task.id, text)
+    log(`  ✓ ${text.slice(0, 60)}(修复后通过)`)
+    return undefined
+  }
+  return {
+    type: "blocked",
+    question: `子任务 "${text}" 的 verify 命令经修复会话后仍未通过:\n$ ${command}\n${second.output}`,
+  }
+}
+
+// Task-level acceptance after the wrap-up session: a "command:" verify prefix
+// is run directly; otherwise the report's verified-command line is extracted
+// and run; with no command at all the report's conclusion line decides.
+// A gap yields the fix subtask text for the next round.
+async function verifyTask(
+  path: string,
+  task: Task,
+): Promise<{ type: "done" } | { type: "gap"; gap: string; fixText: string }> {
+  const dir = dirname(path)
+  const report = await Bun.file(join(dir, "docs", `${task.id}.report.md`)).text().catch(() => "")
+  const command = verifyCommand(task) ?? /^verified-command:\s*(.+)$/m.exec(report)?.[1]?.trim()
+  if (command) {
+    const result = await runCommand(dir, command)
+    if (result.ok) {
+      await markDone(path, task.id, command)
+      return { type: "done" }
+    }
+    return {
+      type: "gap",
+      gap: `验收命令失败: $ ${command}\n${result.output}`,
+      fixText: `修复任务级验收失败,使命令通过(失败输出见 docs/${task.id}.report.md 或重跑该命令) (verify: \`${command.replaceAll("`", "'")}\`)`,
+    }
+  }
+  const conclusion = /结论[:：]\s*(通过|差距[^\n]*)/.exec(report)
+  if (conclusion?.[1] === "通过") {
+    await markDone(path, task.id)
+    return { type: "done" }
+  }
+  const gap = conclusion?.[1] ?? `收尾报告缺失或缺少结论行(docs/${task.id}.report.md)`
+  return { type: "gap", gap, fixText: `修复收尾报告指出的差距: ${gap}` }
+}
+
+// Runs a shell command in the target directory and captures its output.
+async function runCommand(dir: string, command: string): Promise<{ ok: boolean; output: string }> {
+  const proc = Bun.spawn(["sh", "-c", command], { cwd: dir, stdout: "pipe", stderr: "pipe" })
+  const timer = setTimeout(() => proc.kill(), COMMAND_TIMEOUT)
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { ok: code === 0, output: `${stdout}${stderr}`.trim().slice(-2000) }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // Runs one prompt in a fresh session. Transient provider failures
@@ -185,37 +382,6 @@ async function watch(
     }
   }
   return { lastText, error }
-}
-
-// Completion is whatever the agent claims: re-read PLAN.md from disk for the
-// [done] marker only. verify is interpreted and executed by the agent itself;
-// a passing run is recorded in the task's `verified` field (high-confidence
-// completion) and is never required or re-executed by the driver.
-async function confirmDone(path: string, id: string, lastText: string): Promise<Outcome> {
-  const fresh = await load(path)
-  const task = fresh.tasks.find((t) => t.id === id)
-  if (task?.status !== "done") {
-    const tail = lastText.trim().slice(-2000) || "(无输出)"
-    return {
-      type: "blocked",
-      question: `会话结束但任务未标记 [done](隐性阻塞)。Agent 最后的输出:\n${tail}`,
-    }
-  }
-  return { type: "completed" }
-}
-
-// After a subtask's dedicated session, trust nothing the agent claims:
-// re-read PLAN.md and require that subtask's checkbox to be ticked.
-async function confirmTick(path: string, id: string, text: string, lastText: string): Promise<Outcome | undefined> {
-  const fresh = await load(path)
-  const body = fresh.tasks.find((t) => t.id === id)?.body
-  const ticked = body !== undefined && subtasks(body).some((item) => item.text === text && item.done)
-  if (ticked) return undefined
-  const tail = lastText.trim().slice(-2000) || "(无输出)"
-  return {
-    type: "blocked",
-    question: `子任务会话结束但对应检查项未勾选(隐性阻塞): "${text}"。Agent 最后的输出:\n${tail}`,
-  }
 }
 
 // Two questions count as the same issue when their normalized texts match or

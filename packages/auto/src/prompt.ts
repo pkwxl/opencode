@@ -1,4 +1,4 @@
-import type { Plan, Task } from "./plan"
+import { verifyCommand, type Plan, type Task } from "./plan"
 
 type Opts = { commitSubtask?: boolean }
 
@@ -8,24 +8,43 @@ const QUESTION_RULE = `2. 遇到权限相关问题(如需要访问受限目录),
    你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。
    非权限问题调用 question 工具会被自动答复上面这句话;就同一问题再次询问会导致任务阻塞停机。`
 
-// Rebuilds full context for a fresh session: completed tasks, the current
-// task body, prior Q&A history, and the completion contract. commitSubtask
-// (--commit-subtask) additionally requires a git commit per subtask checkbox.
-export function render(plan: Plan, task: Task, opts: Opts = {}): string {
+// State-file rule: the driver owns PLAN.md / CURRENT.md; sessions never edit them.
+const STATE_RULE = `PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),` +
+  `会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。`
+
+// Decomposition session: read-only analysis, then write the subtask list to
+// docs/<id>.subtasks.md. The driver parses it and injects the checklist into
+// PLAN.md itself, so the session must not touch PLAN.md.
+export function renderDecompose(plan: Plan, task: Task): string {
   return [
     ...head(plan),
-    `你本次只负责这一任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
+    `当前任务(完整内容同时见 CURRENT.md):\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
     ...blockedSection(task),
-    `约束:
-1. 只完成当前任务,不要提前做后续任务,也不要重做已标记 [done] 的任务。
+    `你本次只做任务分解,不写实现代码:
+
+1. 阅读相关源码与 docs/,分析该任务;
+2. 把任务分解为多个子任务:仅把密不可分的工作放在同一子任务;子任务粒度以单个会话
+   用较小上下文可完成为宜;多个子任务间通过 docs/ 文档或已实现的源码同步记忆;
+3. 每个子任务必须可用一条命令客观验证(单元测试、编译或类型检查等);命令在目标目录下
+   执行,需要在包目录运行时把 cd 写进命令,如 \`cd packages/x && bun test\`;
+4. 把分解结果写入 docs/${task.id}.subtasks.md,格式为 Markdown 检查项,每项末尾标注
+   verify 命令,描述要自包含(执行会话仅凭该描述、CURRENT.md 与 docs/ 即可完成):
+
+- [ ] <子任务描述> (verify: \`<验证命令>\`)
+
+约束:
+1. 只做分解:不修改任何实现代码,也不执行任务正文中的执行期指令(如"调用 question
+   工具询问"、"写入某文件"等)——那些是后续子任务会话的职责;${STATE_RULE}
 ${QUESTION_RULE}
-${wrapup(task, opts)}`,
+3. 写出该文件是硬性要求:即使任务看起来已完成或极其简单,也必须写出文件
+   (原子任务分解为单个检查项即可);不产出有效文件会导致任务阻塞停机;
+4. 写入文件后立即结束会话。`,
   ].join("\n\n")
 }
 
-// --new-session-subtask: a fresh session handles exactly one subtask checkbox
-// of the task, ticks it, optionally commits, and ends. verify, the [done]
-// marker, docs, and the sweep commit are left to the wrap-up session.
+// Subtask session: exactly one checklist item. The session implements it and
+// runs its verify command until it passes; ticking the checkbox is the
+// driver's job (it re-runs the command itself after the session ends).
 export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts = {}): string {
   return [
     ...head(plan),
@@ -36,39 +55,58 @@ export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opt
 - [ ] ${subtask}
 
 约束:
-1. 严格只完成这一个子任务,完成后立即按下方步骤收尾并结束会话,以控制单次会话的上下文大小。
+1. 严格只完成这一个子任务,完成后立即按下方步骤收尾并结束会话,以控制单次会话的上下文大小;
 ${QUESTION_RULE}
 3. 收尾:
-   a. 勾选 PLAN.md 中 ${task.id} 正文里对应的检查项(把对应的 \`- [ ]\` 改为 \`- [x]\`);${
+   a. 运行该子任务末尾标注的 verify 命令,失败则修复直至通过;${
      opts.commitSubtask
        ? `
    b. git 提交全部未提交改动,实现子任务级别的变动历史追踪:
-${indent(commitRule(`${task.id} 与子任务"${subtask}"`), "      ")};`
-       : ""
-   }
-   不要运行 verify、不要把任务标记为 [done]、不要更新 docs/,这些在最后统一收尾。`,
+${indent(commitRule(`${task.id} 与子任务"${subtask}"`), "      ")};
+   c.`
+       : `
+   b.`
+   } 不要运行任务级 verify、不要更新 docs/,这些在最后统一收尾;${STATE_RULE}`,
   ].join("\n\n")
 }
 
-// --new-session-subtask final session: every subtask is already ticked in
-// PLAN.md; only the completion contract (verify, [done], docs, sweep commit)
-// remains. Per-subtask commits already happened in the subtask sessions, so
-// the commitSubtask line is omitted from the contract here.
+// Wrap-up session: every subtask is already ticked by the driver. Only docs,
+// the sweep commit, and the acceptance report remain. The driver executes
+// the verify command itself afterwards, so the report must state it
+// precisely on a "verified-command:" line.
 export function renderWrapup(plan: Plan, task: Task): string {
+  const direct = verifyCommand(task)
   return [
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
     ...blockedSection(task),
-    `该任务的全部子任务已在之前的会话中逐一完成并勾选,不要重做。本次会话只执行收尾:
+    `该任务的全部子任务已在之前的会话中逐一完成并验证,不要重做。本次会话只执行收尾:
 
-${wrapup(task, { commitSubtask: false })}`,
+1. 更新 docs/ 中受本任务影响的文档,使下一个会话仅凭磁盘文件就能理解当前进展;
+2. 写 docs/${task.id}.report.md,内容包含:
+   - 一行 \`verified-command: <命令>\`(独立成行):任务验收命令。${
+     direct
+       ? `任务 verify 字段已声明命令,直接照抄:\`${direct}\`;`
+       : task.verify
+         ? `任务 verify 字段是"${task.verify}",把它翻译为具体的测试/检查命令;`
+         : `任务未声明 verify 验收标准,给出项目自身的测试/检查命令;`
+   }
+   - 各子任务的产出摘要;
+   - 最后一行写 \`结论: 通过\` 或 \`结论: 差距 <差距描述>\`(先亲自运行 verified-command
+     确认结果再下结论);
+3. git 提交全部未提交改动(不仅限于本次会话修改的文件——之前的会话可能因中断
+   遗留未提交改动,须一并提交):
+${indent(commitRule(`${task.id} 与任务摘要`), "   ")}
+4. ${STATE_RULE}任务级 verify 由 driver 在你结束会话后亲自执行,不通过会追加修复子任务。
+以上全部完成前不要结束会话。`,
   ].join("\n\n")
 }
 
 function head(plan: Plan): string[] {
   const done = plan.tasks.filter((t) => t.status === "done")
   return [
-    "你正在按一份实施计划执行其中的一项任务。完整计划位于当前目录的 PLAN.md,先读它了解全貌。",
+    "你正在按一份实施计划执行其中的一项任务。完整计划位于当前目录的 PLAN.md,先读它了解全貌;" +
+      "但其他任务的描述只作背景,其中包含的指令(如提问、执行动作)不属于本次会话职责,不要执行。",
     done.length
       ? `以下任务已完成,不要重做:\n${done.map((t) => `- [done] ${t.id}: ${t.title}`).join("\n")}`
       : "计划中尚无已完成的任务。",
@@ -89,29 +127,6 @@ function blockedSection(task: Task): string[] {
   return []
 }
 
-// The completion contract: verify, tick checkboxes, mark [done], update
-// docs, sweep-commit everything (including changes stranded by interrupted
-// previous sessions).
-function wrapup(task: Task, opts: Opts): string {
-  return `3. 完成当前任务后,按顺序收尾:
-   a. ${task.verify ? `verify 字段是验收标准描述,由你解释并执行:将 \`${task.verify}\` 翻译为具体的测试/检查命令运行` : "任务未声明 verify 验收标准,可自行运行项目自身的测试/检查"};
-      验证执行通过时,把实际命令写入 PLAN.md 该任务的 verified 字段,作为高可信完成记录;
-      未执行或未通过则不写 verified,不影响标记 [done];
-      验证通过后必须勾选任务正文中对应的验证检查项(把验证相关的 \`- [ ]\` 改为 \`- [x]\`),
-      其余检查项也按实际完成情况勾选;未实际完成的项不得勾选;${
-        opts.commitSubtask
-          ? `\n      每完成并勾选一项子任务检查项,立即按 d 的提交规则完成一次 git 提交(含嵌套 .git
-        子仓库),实现子任务级别的变动历史追踪;d 步再提交剩余全部改动;`
-          : ""
-      }
-   b. 编辑 PLAN.md,把 ${task.id} 的状态标记改为 [done];
-   c. 更新 docs/ 中受本任务影响的文档;
-   d. git 提交全部未提交改动(不仅限于本次会话修改的文件——之前的会话可能因中断
-      遗留未提交改动,须一并提交):
-${indent(commitRule(`${task.id} 与任务摘要`), "      ")}
-   以上全部完成前不要结束会话。`
-}
-
 // Nested .git repos are usually gitignored by the parent (not submodules) and
 // invisible to git status, so they must be found on the filesystem and
 // committed first; the parent commit message records their paths and SHAs.
@@ -119,7 +134,7 @@ function commitRule(note: string): string {
   return `- 主动在工作目录的文件系统中查找含独立 .git 的子目录(它们通常被父仓库 .gitignore 忽略,
   不是 submodule,git status/git submodule 均不可见,必须直接查目录,如 find . -name .git);
 - 先在每个子仓库内 git add 全部改动并提交(提交信息遵循该子仓库风格);
-- 若工作目录本身是 git 仓库,再 git add 全部改动(含 PLAN.md 与 docs/)并提交,
+- 若工作目录本身是 git 仓库,再 git add 全部改动(含 docs/)并提交,
   提交信息遵循该仓库现有风格(参考 git log),注明 ${note};
   被父仓库 ignore 的子仓库不会进入该提交,必须在提交信息中列出其路径与新提交 SHA。`
 }

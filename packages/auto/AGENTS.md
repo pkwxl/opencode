@@ -8,12 +8,14 @@
 
 ## 结构
 
-- `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析。
+- `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析;`init` 幂等维护 AGENTS.md 的 CURRENT.md 指针块。
 - `src/loop.ts` — 任务循环:取下一个未完成任务执行;verbose 文件变更监视;子任务进度上报。
-- `src/runner.ts` — 单任务执行:会话创建、事件监听、提问自动答复、权限阻塞、隐性阻塞检测。
-- `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename)。
-- `src/prompt.ts` — 会话提示词模板(整任务 / 单子任务 / 收尾三类)。
-- `src/server.ts` — opencode server 获取:优先复用已有 server,否则 spawn 并管理其生命周期。
+- `src/runner.ts` — 单任务流水线:分解会话 → 逐子任务会话(driver 亲自执行各项 verify 命令)→ 收尾会话(driver 判定任务级验收,失败追加修复子任务,最多 3 轮);会话创建、事件监听、提问自动答复、权限阻塞、隐性阻塞检测;CURRENT.md 写入。
+- `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone)与 verify 命令提取(subtaskVerify/verifyCommand)。
+- `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 收尾三类)。
+- `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json/AGENTS.md
+  置 0o444,driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
+- `src/server.ts` — opencode server 获取:优先复用已有 server,否则 spawn 并管理其生命周期(server 长驻,不随会话重启)。
 - `src/log.ts` — verbose 模式下为输出加时间戳。
 - `templates/` — `init` 复制的模板(`PLAN.md`、`opencode.json`、`.opencode/agent/auto.md`)。
 - `script/build.ts` — 独立可执行文件构建脚本。
@@ -41,8 +43,18 @@
 
 - 退出码:`0` 全部完成,`1` 用法/环境错误,`2` 阻塞等待人工介入(问题写入 PLAN.md)。
 - 非权限提问自动答复;权限提问或同一问题重复出现则阻塞停机。
-- 完成判定只信磁盘:重读 `PLAN.md` 要求 `[done]` 标记(或子任务勾选),verify 由 agent
-  自行解释执行,driver 永不重跑。
+- **driver 独占状态写入**:PLAN.md 的状态标记、检查项勾选、verified 字段与 CURRENT.md
+  全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json、
+  AGENTS.md)被 chmod 为只读作为防误写护栏(非安全边界,同用户进程可经 bash chmod 绕过),
+  driver 自身写入经 `src/protect.ts` 的 allowWrite/reprotect 临时放行。完成判定不靠
+  agent 自报——子任务 verify 命令与任务级验收命令都由 driver 在会话外亲自执行。
+- verify 分级:任务 `verify: command: <cmd>` 前缀由 driver 直接执行;自然语言描述由
+  收尾会话翻译为 report.md 的 `verified-command` 行后仍由 driver 执行;均无命令时按
+  report.md 末行 `结论: 通过|差距` 判定,差距追加修复子任务(最多 3 轮)。
+- 任务流水线:正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,driver 注入
+  检查项),再逐检查项独立会话执行,最后收尾会话写 docs/T-NNN.report.md。
+- CURRENT.md 是当前任务镜像(每会话必读,抗上下文压缩);AGENTS.md 只含固定指针块,
+  driver 永不改写;server 长驻即可,指令文件每个 provider turn 现场重读。
 - `PLAN.md` 字段行(`  - key: value`)必须紧跟任务标题且连续;第一个非字段行(含空行)
   结束字段块。修改解析规则时同步更新 `test/plan.test.ts` 与 README 的格式说明。
 - 运行时依赖外部 `opencode` CLI(`createOpencodeServer` spawn `opencode serve`),

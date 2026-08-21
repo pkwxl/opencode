@@ -27,22 +27,24 @@ opencode serve 完成开发；遇阻即停、生成问题描述、等待人工�
 
 ## 目标 PLAN.md 格式（driver 的解析对象，本文件自身亦遵循）
 
-每个任务一个二级标题，状态标记在标题尾，`blocked` 段记录问答历史，`verify` 为验收标准描述：
+每个任务一个二级标题，状态标记在标题尾，`blocked` 段记录问答历史，`verify` 为验收标准：
 
 ```markdown
 ## T-NNN: 任务标题 [pending|in_progress|blocked|done]
-  - verify: <验收标准,可选>      # 可为自然语言,由 AI 解释并执行
-  - verified: <执行通过的命令>    # 可选,agent 验证通过后写入,作为高可信完成记录
+  - verify: command: <验收命令>   # driver 亲自执行;也可为自然语言,由收尾会话翻译成命令
+  - verified: <执行通过的命令>    # driver 验证通过后写入,作为高可信完成记录
   - blocked-at: <date>          # blocked 时由 driver 写入
   - question: "<上次卡住的问题>"  # blocked 时由 driver 写入
   - answer: "<人工解答>"         # 可选;阻塞后直接重新运行即续跑,无需填写
   - attempts: <n>
-任务描述正文(注入新会话 prompt 的核心内容)
+任务描述正文(注入分解会话 prompt 的核心内容;子任务检查项由分解会话产出、driver 注入)
 ```
 
 driver 状态机：`pending → in_progress → done | blocked`；`blocked` → 重新运行 driver 即重新进入
-`in_progress`（attempts + 1，无需填写 answer，可选 answer 会注入上下文）；未标 `done` 而会话 idle →
-按隐性 blocked 处理。
+`in_progress`（attempts + 1，无需填写 answer，可选 answer 会注入上下文）。
+**PLAN.md 与 CURRENT.md 只由 driver 写入**：agent 会话不得编辑；子任务勾选在 driver 亲自
+执行该项 verify 命令通过后发生；`[done]` 在任务级验收通过后由 driver 写入。
+当前任务镜像在 CURRENT.md（每会话必读，抗上下文压缩），AGENTS.md 只含固定指针块。
 
 ---
 
@@ -118,6 +120,78 @@ git 提交全部改动（被 ignore 的嵌套 .git 子仓库按文件系统查�
 `test/fixture/`：一个含 3 个任务的示例计划（其中一个任务设计成必然触发 question）。
 全程自动跑通：任务 1 完成 → 任务 2 阻塞停机 → 模拟人工在会话外介入（不写 answer）→ 重启续跑
 → 任务 3 完成 → 退出码 0，且 PLAN.md 全部标 done、docs 已更新。
+
+---
+
+## 第二阶段：driver 独占状态写入的三段式流水线
+
+背景：淘汰"AI 自维护 PLAN.md 状态"的工作方式。改为 driver 独占 PLAN.md/CURRENT.md 写入；
+任务先经分解会话产出 `docs/T-NNN.subtasks.md`（每项带 verify 命令），driver 注入检查项后
+逐子任务调度独立会话，并亲自执行 verify 命令判定勾选与 [done]；当前任务镜像到 CURRENT.md
+（agent 契约要求每会话必读，抗上下文压缩）；server 长驻不重启（AGENTS.md/CURRENT.md 每个
+provider turn 现场重读，无 server 级缓存）。
+
+## T-010: plan.ts 状态编辑函数 [done]
+  - verify: command: bun test test/plan.test.ts
+  - verified: bun test test/plan.test.ts
+新增 driver 侧编辑函数：`setSubtasks`（用分解结果替换正文检查项）、`tick`（勾选指定检查项）、
+`appendSubtask`（修复轮追加检查项）、`markDone`（写 verified 字段并标 [done]，无 verified 时
+清除该字段）；新增解析辅助 `subtaskVerify`（从检查项文本提取 ``(verify: `cmd`)``）与
+`verifyCommand`（任务级 `verify: command: <cmd>` 前缀约定）。edit() 支持正文整体替换。
+用例覆盖：注入/替换检查项、勾选、追加、markDone 有无 verified 两种路径、命令提取。
+
+## T-011: prompt.ts 三类会话模板重构 [done]
+  - verify: command: bun test test/prompt.test.ts
+  - verified: bun test test/prompt.test.ts
+替换现有模板：`renderDecompose`（只读分析，产出 docs/T-NNN.subtasks.md，每项必须带 verify
+命令；禁止改实现代码与状态文件）；`renderSubtask`（做一个子任务 + 跑该项 verify + 按
+commitSubtask 提交；不再勾选 PLAN.md）；`renderWrapup`（更新 docs、清扫提交、写
+docs/T-NNN.report.md，含 `verified-command:` 行与末行 `结论: 通过|差距`；不再标 done）。
+删除整任务模板 `render`。question 规则与提交规则保持不变。
+
+## T-012: runner/loop 流水线与 CURRENT.md [done]
+  - verify: command: bun typecheck && bun test
+  - verified: bun typecheck && bun test
+runner.ts 重写 runTask：begin → 无检查项时先跑分解会话并注入检查项（分解产物缺失/无检查项
+按 blocked 处理）→ 逐未勾选子任务开独立会话，会话后 driver 亲自执行该项 verify 命令
+（失败先开一次修复会话，仍失败按 blocked；无命令的检查项按可信勾选）→ 全部勾选后跑收尾
+会话，driver 判定任务级验收（`command:` 前缀直接执行；否则从 report.md 提取
+`verified-command` 执行；均无命令时按报告 `结论` 行判定）→ 通过则 markDone 完成，差距则
+appendSubtask 追加修复子任务，最多 3 轮，耗尽按 blocked。删除 confirmDone/confirmTick。
+新增 CURRENT.md 写入（任务开始与每次勾选后重写，含任务完整内容与进度快照）。
+loop.ts 移除 newSessionSubtask 选项。server 保持长驻。
+
+## T-013: CLI 与模板更新 [done]
+  - verify: command: bun run build && bun test
+  - verified: bun run build && bun test
+index.ts 移除 `--new-session-subtask`（新流水线成为默认）；`init` 幂等维护 AGENTS.md 指针块
+（`<!-- opencode-auto:start/end -->` 包围，告知每会话必读 CURRENT.md、勿编辑状态文件；
+已存在则跳过，文件缺失则创建）。templates/PLAN.md 更新 verify 约定（`command:` 前缀、
+不要手工写检查项）；templates/.opencode/agent/auto.md 重写工作契约（每会话先读 CURRENT.md、
+状态文件只读、问题规则与提交规则保留）。
+
+## T-014: e2e 全流程验收 [done]
+  - verify: command: bun test test/e2e.test.ts
+  - verified: bun test test/e2e.test.ts
+更新 test/e2e.test.ts：fixture 的 verify 字段改用 `command:` 前缀；流程含分解会话，断言不变
+（T-001 完成 → T-002 阻塞停机 → 会话外介入续跑 → T-003 完成 → 退出码 0）。
+
+## T-015: 文档收尾 [done]
+  - verify: command: bun typecheck
+  - verified: bun typecheck
+README.md 与包内 AGENTS.md 同步新行为约定：driver 独占 PLAN.md/CURRENT.md 写入、verify 分级
+（command: 由 driver 执行，自然语言由收尾会话翻译）、CURRENT.md 抗压缩机制、server 长驻、
+`--new-session-subtask` 移除；本文件（PLAN.md）的"目标 PLAN.md 格式"一节同步更新。
+
+## T-016: 状态文件只读保护 [done]
+  - verify: command: bun test && bun typecheck
+  - verified: bun test && bun typecheck
+`run` 期间把 driver 独占的文件（PLAN.md、CURRENT.md、opencode.json、AGENTS.md）chmod 为只读
+（0o444），作为提示词契约之外的纵深防御；driver 自身写入（plan.ts edit、runner 写 CURRENT.md）
+临时恢复可写、写完立即重新置只读；`run` 结束（含阻塞退出）在 finally 中恢复可写（0o644），
+便于人工介入时正常编辑。新增 `src/protect.ts`（protect/unprotect/allowWrite/reprotect，
+模块级开关，未启用时为 no-op 以兼容测试与单测脚本）。README、包内 AGENTS.md、agent 模板
+契约同步说明（含局限：同用户进程可经 bash chmod 绕过，定位为防误写护栏而非安全边界）。
 
 ---
 

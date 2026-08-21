@@ -1,5 +1,6 @@
 import { rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
+import { allowWrite, reprotect } from "./protect"
 
 export const STATUSES = ["pending", "in_progress", "blocked", "done"] as const
 export type Status = (typeof STATUSES)[number]
@@ -115,6 +116,67 @@ export async function setStatus(path: string, id: string, status: Status) {
   await edit(path, id, { status })
 }
 
+// Replaces the task body's checklist with the decomposition result. Any
+// pre-existing checklist lines are dropped; the description text is kept.
+export async function setSubtasks(path: string, id: string, items: string[]) {
+  const plan = await load(path)
+  const task = require(plan, id)
+  const description = task.body
+    .split("\n")
+    .filter((line) => !/^\s*- \[( |x|X)\]/.test(line))
+    .join("\n")
+    .trim()
+  const checklist = items.map((item) => `- [ ] ${item}`).join("\n")
+  await edit(path, id, { body: description ? `${description}\n\n${checklist}` : checklist })
+}
+
+// Ticks one checklist item (driver-side; the agent never edits PLAN.md).
+export async function tick(path: string, id: string, text: string) {
+  const plan = await load(path)
+  const task = require(plan, id)
+  let found = false
+  const body = task.body
+    .split("\n")
+    .map((line) => {
+      const match = /^\s*- \[ \]\s*(.*)$/.exec(line)
+      if (!found && match && match[1]!.trim() === text) {
+        found = true
+        return line.replace("- [ ]", "- [x]")
+      }
+      return line
+    })
+    .join("\n")
+  if (!found) throw new Error(`${plan.path}: task ${id} has no unticked subtask: ${text}`)
+  await edit(path, id, { body })
+}
+
+// Appends a fix-round subtask to the task body's checklist.
+export async function appendSubtask(path: string, id: string, text: string) {
+  const plan = await load(path)
+  const task = require(plan, id)
+  await edit(path, id, { body: `${task.body}\n- [ ] ${text}` })
+}
+
+// Marks the task [done]. A passing verify run records its command in the
+// `verified` field; without one the field is cleared (no stale record).
+export async function markDone(path: string, id: string, verified?: string) {
+  await edit(path, id, { status: "done", fields: { verified } })
+}
+
+// Extracts the verify command from a subtask line's trailing
+// "(verify: `<command>`)" annotation.
+export function subtaskVerify(text: string): string | undefined {
+  return /\(verify: `([^`]+)`\)\s*$/.exec(text)?.[1]
+}
+
+// Task-level verify convention: a "command: <cmd>" prefix means the driver
+// runs it directly; anything else is natural language for the wrap-up
+// session to translate into a command.
+export function verifyCommand(task: Task): string | undefined {
+  const match = /^command:\s*(.+)$/.exec(task.verify?.trim() ?? "")
+  return match?.[1]?.trim() || undefined
+}
+
 function require(plan: Plan, id: string): Task {
   const task = plan.tasks.find((task) => task.id === id)
   if (!task) throw new Error(`${plan.path}: task ${id} not found`)
@@ -125,6 +187,8 @@ type Edit = {
   status?: Status
   // undefined value deletes the field
   fields?: Record<string, string | undefined>
+  // full replacement of the task body (everything after the field block)
+  body?: string
 }
 
 async function edit(path: string, id: string, change: Edit) {
@@ -136,9 +200,9 @@ async function edit(path: string, id: string, change: Edit) {
     lines[head] = lines[head]!.replace(/\[(pending|in_progress|blocked|done)\]\s*$/, `[${change.status}]`)
   }
 
+  let count = 0
   if (change.fields) {
     const ordered = new Map<string, string>()
-    let count = 0
     while (head + 1 + count < lines.length && FIELD.test(lines[head + 1 + count]!)) {
       const field = FIELD.exec(lines[head + 1 + count]!)!
       ordered.set(field[1]!, field[2]!)
@@ -152,11 +216,27 @@ async function edit(path: string, id: string, change: Edit) {
       ordered.set(key, value)
     }
     lines.splice(head + 1, count, ...Array.from(ordered, ([key, value]) => `  - ${key}: ${value}`))
+    count = ordered.size
+  } else {
+    while (head + 1 + count < lines.length && FIELD.test(lines[head + 1 + count]!)) count++
+  }
+
+  if (change.body !== undefined) {
+    const start = head + 1 + count
+    let end = start
+    while (end < lines.length && !lines[end]!.startsWith("## ")) end++
+    // Keep one blank line separating the body from the next heading.
+    lines.splice(start, end - start, ...change.body.split("\n"), "")
   }
 
   const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`)
+  // Read-only protection (when active) does not block rename on POSIX, but
+  // Windows refuses to replace a read-only target — restore writability
+  // first and re-apply protection right after.
+  await allowWrite(path)
   await Bun.write(tmp, lines.join("\n"))
   await rename(tmp, path)
+  await reprotect(path)
 }
 
 function unquote(value: string): string {

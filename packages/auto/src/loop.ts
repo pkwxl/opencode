@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { log } from "./log"
 import { block, countSubtasks, load, next } from "./plan"
+import { protect, unprotect } from "./protect"
 import { runTask } from "./runner"
 import { ensure } from "./server"
 
@@ -16,7 +17,6 @@ export async function runAll(
     verbose?: boolean
     waitAnswer?: number
     commitSubtask?: boolean
-    newSessionSubtask?: boolean
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -27,8 +27,13 @@ export async function runAll(
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
   const progress = opts.commitSubtask ? trackSubtasks(path) : undefined
-  const server = await ensure(directory, opts.server)
+  // Driver-owned files go read-only for the whole run; driver writes
+  // re-apply it, and the finally below restores writability so a human can
+  // edit the files (e.g. opencode.json after a permission block).
+  await protect(directory)
+  let server: Awaited<ReturnType<typeof ensure>> | undefined
   try {
+    server = await ensure(directory, opts.server)
     for (;;) {
       const plan = await load(path)
       const task = next(plan)
@@ -46,7 +51,6 @@ export async function runAll(
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
         commitSubtask: opts.commitSubtask,
-        newSessionSubtask: opts.newSessionSubtask,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
@@ -58,7 +62,8 @@ export async function runAll(
   } finally {
     watcher?.close()
     progress?.close()
-    server.close()
+    server?.close()
+    await unprotect(directory)
   }
 }
 
