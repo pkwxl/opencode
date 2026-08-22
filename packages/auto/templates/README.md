@@ -3,9 +3,10 @@
 把本目录的三个文件复制到目标项目根目录:
 
 - `PLAN.md` — 实施计划,driver 的状态源。每个任务一个 `## T-NNN:` 段,状态标记
-  `[pending|in_progress|blocked|done]`,`verify` 字段描述验收标准(可以是自然语言),
-  由 agent 自行解释执行;执行通过会把实际命令写入 `verified` 字段作为高可信完成记录,
-  并勾选任务正文中对应的验证检查项(`- [ ]` → `- [x]`),driver 不再外部复跑,仅以 `[done]` 标记为准。
+  `[pending|in_progress|blocked|done]`,`verify` 字段描述验收标准(命令或自然语言),
+  由旁路的独立审核会话解释执行(命令仅作参考,审核 AI 可调整或补充检查);审核通过
+  会把实际命令写入 `verified` 字段作为高可信完成记录,driver 以审核结论为准勾选
+  检查项与 `[done]` 标记。
 - `opencode.json` — 权限白名单:安全的只读/构建/测试命令自动放行,其余 bash 命令
   升级为人工审批(触发阻塞流程)。
 - `.opencode/agent/auto.md` — 非交互执行 agent 契约。
@@ -27,7 +28,8 @@ opencode-auto run <dir> --agent auto --verbose true
 opencode-auto run <dir> --agent auto --commit-subtask
 # new-session-subtask: 严格按一个子任务一次全新会话执行(任务正文需用 - [ ] 检查项列出子任务),
 # 控制单次会话的最大上下文大小;每个子任务会话结束以其检查项勾选为准,
-# 全部子任务完成后再开一个收尾会话统一执行 verify、标 [done]、更新 docs、提交剩余改动:
+# 全部子任务完成后再开一个收尾会话统一更新 docs、提交剩余改动,
+# 随后由旁路独立审核会话做任务级验收,通过则由 driver 标 [done]:
 opencode-auto run <dir> --agent auto --new-session-subtask
 ```
 

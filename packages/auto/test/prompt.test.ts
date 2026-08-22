@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { parse } from "../src/plan"
-import { renderDecompose, renderSubtask, renderWrapup } from "../src/prompt"
+import { renderDecompose, renderSubtask, renderVerify, renderWrapup, VERDICT_FILE } from "../src/prompt"
 
 const plan = parse(
   "PLAN.md",
@@ -47,11 +47,12 @@ describe("renderDecompose", () => {
 describe("renderSubtask", () => {
   const subtask = "编写迁移脚本的 schema 部分 (verify: `bun test test/schema.test.ts`)"
 
-  test("只做一个子任务并运行其 verify 命令,不做收尾", () => {
+  test("只做一个子任务并自我检查,最终验收交给独立审核会话", () => {
     const text = renderSubtask(plan, task, subtask)
     expect(text).toContain(subtask)
     expect(text).toContain("严格只完成这一个子任务")
-    expect(text).toContain("运行该子任务末尾标注的 verify 命令")
+    expect(text).toContain("末尾标注的 verify 命令是建议的验证方式")
+    expect(text).toContain("独立审核会话做最终判定")
     expect(text).toContain("不要运行任务级 verify、不要更新 docs/")
     expect(text).toContain("T-002: 实现迁移")
     // 状态文件由 driver 维护,不再要求 agent 勾选
@@ -85,5 +86,32 @@ describe("renderWrapup", () => {
     expect(renderWrapup(plan, task)).toContain("直接照抄:\\`bun test\\`".replaceAll("\\`", "`"))
     const nl = renderWrapup(plan, plan.tasks[2]!)
     expect(nl).toContain('任务 verify 字段是"API 返回 200",把它翻译为具体的测试/检查命令')
+  })
+})
+
+describe("renderVerify", () => {
+  const subtask = "编写迁移脚本的 schema 部分 (verify: `bun test test/schema.test.ts`)"
+
+  test("子任务审核: 独立判定、命令仅为参考、禁止改代码、结论写入判定文件", () => {
+    const text = renderVerify(plan, task, { subtask })
+    expect(text).toContain(subtask)
+    expect(text).toContain("独立审核者")
+    expect(text).toContain("建议的验证命令仅供参考")
+    expect(text).toContain("不要因为命令本身的问题判不通过")
+    expect(text).toContain("禁止修改任何实现代码")
+    expect(text).toContain(VERDICT_FILE)
+    expect(text).toContain("结论: 通过")
+    expect(text).toContain("结论: 差距")
+    expect(text).toContain("verified-command")
+    expect(text).toContain("由 driver 独占维护")
+  })
+
+  test("任务级审核: 引用收尾报告与任务 verify 字段", () => {
+    const text = renderVerify(plan, task, { task: true })
+    expect(text).toContain("docs/T-002.report.md")
+    expect(text).toContain('任务 verify 字段是"command: bun test"')
+    expect(text).toContain("不要重做实现")
+    const nl = renderVerify(plan, plan.tasks[2]!, { task: true })
+    expect(nl).toContain('任务 verify 字段是"API 返回 200"')
   })
 })
