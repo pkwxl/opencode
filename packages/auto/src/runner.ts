@@ -35,6 +35,8 @@ type Opts = {
   verbose?: boolean
   waitAnswer?: number
   commitSubtask?: boolean
+  // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
+  contextLimit?: number
 }
 
 type Watch = {
@@ -43,17 +45,22 @@ type Watch = {
   lastText: string
   // 会话结束时最近一次 assistant 消息的上下文占比(0-100);上限未知记 100。
   pct: number
+  // 会话结束时最近一次 assistant 消息的上下文已用量(tokens: input + cache.read)。
+  used: number
 }
 
 type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "blocked" })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 上一会话结束时上下文
-// 占比低于 REUSE_BELOW 则下次复用同一会话,否则新建。初始 pct=100 保证首个
-// 会话新建;模型上限未知时 watch 记 100,即总是新建。
-type SessionChain = { id?: string; pct: number }
+// 占比低于 REUSE_BELOW 且已用量低于 contextLimit 则下次复用同一会话,否则新建。
+// 初始 pct=100 保证首个会话新建;模型上限未知时 watch 记 100,即总是新建。
+type SessionChain = { id?: string; pct: number; used: number }
 
 // 上下文占比低于该值(%)时复用上一会话。
 const REUSE_BELOW = 50
+
+// 会话复用的上下文已用量默认上限(tokens);--context-limit n 以千 tokens 覆盖。
+const DEFAULT_CONTEXT_LIMIT = 64_000
 
 // Runs one task through the three-phase pipeline; the driver owns all state
 // writes to PLAN.md and CURRENT.md, sessions never edit them:
@@ -70,8 +77,8 @@ const REUSE_BELOW = 50
 // only suggestions the reviewer may run, adapt, or supplement, so a broken
 // script cannot by itself fail acceptance.
 // All execution sessions of a task share one chain: the next session reuses
-// the previous one when its context usage ended below REUSE_BELOW, otherwise
-// a fresh session is created.
+// the previous one when its context usage ended below REUSE_BELOW and its used
+// tokens below contextLimit (default 64k), otherwise a fresh session is created.
 // Blocking happens on unanswered/rejected permission requests, a repeated
 // question on the same issue, exhausted transient session errors, or a failed
 // verification.
@@ -82,7 +89,7 @@ export async function runTask(
   opts: Opts,
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
-  const chain: SessionChain = { pct: 100 }
+  const chain: SessionChain = { pct: 100, used: 0 }
   const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
   if (decomposed.type === "blocked") return decomposed
   task = decomposed.task
@@ -238,7 +245,7 @@ async function review(
     // Remove any stale verdict from a previous review so it cannot be
     // mistaken for the current one when the session fails to write.
     await rm(file, { force: true })
-    const result = await runSession(client, task, renderVerify(plan, task) + feedback, opts, { pct: 100 })
+    const result = await runSession(client, task, renderVerify(plan, task) + feedback, opts, { pct: 100, used: 0 })
     if (result.type === "blocked") return result
     const verdict = parseVerdict(await Bun.file(file).text().catch(() => ""))
     if (verdict) return verdict
@@ -299,10 +306,18 @@ async function attempt(
   opts: Opts,
   chain: SessionChain,
 ): Promise<SessionResult> {
-  // 上一会话上下文占比低于 50% 则复用同一会话继续,否则新建。
-  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW
-  if (reuse) log(`♻ 复用会话(上下文 ${chain.pct}%)`)
-  if (!reuse && chain.id !== undefined) log(`▷ 上下文 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值,开启新会话`)
+  // 上一会话上下文占比低于 50% 且已用量低于 contextLimit(默认 64k tokens)
+  // 则复用同一会话继续,否则新建。
+  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW && chain.used < cap
+  if (reuse) log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens)`)
+  if (!reuse && chain.id !== undefined) {
+    const reason =
+      chain.pct >= REUSE_BELOW
+        ? `上下文占比 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值`
+        : `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap)} 上限`
+    log(`▷ ${reason},开启新会话`)
+  }
   const session = reuse ? undefined : await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
   if (session?.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
   const sessionID = session?.data.id ?? chain.id!
@@ -320,6 +335,7 @@ async function attempt(
   const result = await watching
   chain.id = sessionID
   chain.pct = result.pct
+  chain.used = result.used
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
   return { type: "idle", lastText: result.lastText }
@@ -335,8 +351,9 @@ async function watch(
   const waitAnswer = opts.waitAnswer ?? 0
   let lastText = ""
   let error = ""
-  // 上下文占比始终跟踪(会话复用决策依据),与 verbose 无关;拿不到上限记 100。
+  // 上下文占比与已用量始终跟踪(会话复用决策依据),与 verbose 无关;拿不到上限记 100。
   let pct = 100
+  let used = 0
   const autoAnswered: string[] = []
   // verbose 已输出的 part 与 message,避免同一 part 的多次更新事件重复打印。
   const seen = new Set<string>()
@@ -364,7 +381,7 @@ async function watch(
       if (info.role !== "assistant" || !info.time.completed || seen.has(info.id)) continue
       seen.add(info.id)
       limits ??= await contextLimits(client)
-      const used = info.tokens.input + info.tokens.cache.read
+      used = info.tokens.input + info.tokens.cache.read
       const limit = limits.get(`${info.providerID}/${info.modelID}`)
       pct = limit ? Math.round((used / limit) * 100) : 100
       if (verbose) log(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
@@ -402,6 +419,7 @@ async function watch(
         },
         lastText,
         pct,
+        used,
       }
     }
     if (event.type === "permission.asked") {
@@ -428,6 +446,7 @@ async function watch(
         },
         lastText,
         pct,
+        used,
       }
     }
     if (event.type === "session.error") {
@@ -448,7 +467,7 @@ async function watch(
       break
     }
   }
-  return { lastText, error, pct }
+  return { lastText, error, pct, used }
 }
 
 // verbose 模式下把非文本 part 转成一行可读输出;返回 undefined 表示该 part

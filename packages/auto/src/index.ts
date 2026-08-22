@@ -20,9 +20,10 @@ const command = args[0]
 
 const flags = new Map<string, string>()
 const positional: string[] = []
-// --agent/--server/--wait-answer 带值(吞掉下一个 token);--verbose/--commit-subtask
-// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value。
-const VALUE_FLAGS = new Set(["agent", "server", "wait-answer"])
+// --agent/--server/--wait-answer/--wait-between/--context-limit 带值(吞掉下一个
+// token);--verbose/--commit-subtask 是布尔选项,出现即 true,仅当紧随字面量
+// true/false 时才吞掉它。均支持 --flag=value。
+const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit"])
 const BOOLEAN_FLAGS = new Set(["verbose", "commit-subtask"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
@@ -52,9 +53,19 @@ if (command === "run") {
   // 每次 run 都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
   log(`📝 日志文件: ${setLogFile(directory)}`)
   const commitSubtask = flags.has("commit-subtask") && flags.get("commit-subtask") !== "false"
-  const waitAnswer = parseWaitAnswer(flags.get("wait-answer"))
+  const waitAnswer = parseMinutes(flags.get("wait-answer"))
   if (waitAnswer === null) {
     console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")
+    process.exit(1)
+  }
+  const waitBetween = parseMinutes(flags.get("wait-between"))
+  if (waitBetween === null) {
+    console.error("--wait-between 取值范围为 1..60(分钟);不带值时默认为 1")
+    process.exit(1)
+  }
+  const contextLimit = parseContextLimit(flags.get("context-limit"))
+  if (contextLimit === null) {
+    console.error("--context-limit 取值为正整数(单位: 千 tokens);缺省为 64")
     process.exit(1)
   }
   const code = await runAll(directory, {
@@ -62,19 +73,29 @@ if (command === "run") {
     server: flags.get("server"),
     verbose,
     waitAnswer,
+    waitBetween,
     commitSubtask,
+    contextLimit: contextLimit * 1000,
   })
   process.exit(code)
 }
 
-// --wait-answer 缺省(无此选项)= 0,总是立即自动答复;裸选项 = 默认 1 分钟;
+// --wait-answer/--wait-between 缺省(无此选项)= 0(不等待);裸选项 = 默认 1 分钟;
 // 返回 null 表示取值非法。
-function parseWaitAnswer(raw: string | undefined): number | null {
+function parseMinutes(raw: string | undefined): number | null {
   if (raw === undefined) return 0
   if (raw === "") return 1
   const minutes = Number(raw)
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) return null
   return minutes
+}
+
+// --context-limit 缺省/裸选项 = 64(千 tokens);返回 null 表示取值非法。
+function parseContextLimit(raw: string | undefined): number | null {
+  if (raw === undefined || raw === "") return 64
+  const limit = Number(raw)
+  if (!Number.isInteger(limit) || limit < 1) return null
+  return limit
 }
 
 if (command === "init") {
@@ -117,7 +138,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--wait-answer [1-60]] [--commit-subtask [true|false]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit-subtask [true|false]] [--context-limit [n]]
   opencode-auto status [dir]
 
 退出码: 0 全部完成,1 用法/环境错误,2 阻塞等待人工介入,130 被连续两次 Ctrl+C 强制终止`)

@@ -48,7 +48,8 @@
 - 非权限提问自动答复(--wait-answer 下先等人工 stdin 答复,超时回落自动答复);
   权限提问与 permission.asked 在 --wait-answer 下同样等待人工指令,回答
   allow/yes/y 等视为授权(permission 以 always 放行),超时或其余回答则阻塞停机;
-  同一问题重复出现仍阻塞停机。
+  同一问题重复出现仍阻塞停机。--wait-between 在每个任务完成后暂停等待人工
+  (回车立即继续,超时自动继续),首个任务前不等待。
 - **driver 独占状态写入**:PLAN.md 的状态标记、检查项勾选、verified 字段与 CURRENT.md
   全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json、
   AGENTS.md)被 chmod 为只读作为防误写护栏(非安全边界,同用户进程可经 bash chmod 绕过),
@@ -62,9 +63,9 @@
   行;判定文件缺失带反馈重试一次仍无则按隐性阻塞;差距追加修复子任务(最多 3 轮)。
 - 任务流水线:正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,driver 注入
   检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md。任务内所有会话
-  共用一条链:上一会话结束时上下文占比低于 50% 则复用,否则新建;占比由 watch 始终
-  跟踪(与 --verbose 无关),拿不到模型上限记 100 即总是新建;瞬时会话错误重试仍强制
-  换新会话。
+  共用一条链:上一会话结束时上下文占比低于 50% 且已用量低于 --context-limit(默认
+  64k tokens)则复用,否则新建;占比与用量由 watch 始终跟踪(与 --verbose 无关),
+  拿不到模型上限时占比记 100 即总是新建;瞬时会话错误重试仍强制换新会话。
 - CURRENT.md 是当前任务镜像(每会话必读,抗上下文压缩);AGENTS.md 只含固定指针块,
   driver 永不改写;server 长驻即可,指令文件每个 provider turn 现场重读。
 - `PLAN.md` 字段行(`  - key: value`)必须紧跟任务标题且连续;第一个非字段行(含空行)

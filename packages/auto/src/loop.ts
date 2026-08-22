@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises"
 import { readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { log } from "./log"
@@ -17,7 +18,11 @@ export async function runAll(
     server?: string
     verbose?: boolean
     waitAnswer?: number
+    // 任务间暂停等待人工的分钟数(0 = 不等待);回车立即继续,超时自动继续。
+    waitBetween?: number
     commitSubtask?: boolean
+    // 会话复用的上下文已用量上限(tokens),缺省由 runner 按 64k 处理。
+    contextLimit?: number
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -52,6 +57,7 @@ export async function runAll(
   process.on("SIGINT", onSigint)
   try {
     server = await ensure(directory, opts.server)
+    let ran = 0
     for (;;) {
       const plan = await load(path)
       const task = next(plan)
@@ -59,6 +65,8 @@ export async function runAll(
         log("✓ 全部任务已完成")
         return 0
       }
+      // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
+      if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id)
       if (task.status === "blocked" && task.question) {
         log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
       }
@@ -69,6 +77,7 @@ export async function runAll(
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
         commitSubtask: opts.commitSubtask,
+        contextLimit: opts.contextLimit,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
@@ -76,6 +85,7 @@ export async function runAll(
         return 2
       }
       log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
+      ran++
     }
   } finally {
     process.off("SIGINT", onSigint)
@@ -83,6 +93,27 @@ export async function runAll(
     progress?.close()
     server?.close()
     await unprotect(directory)
+  }
+}
+
+// --wait-between: 任务完成后、下一任务开始前暂停等待人工;回车(任意输入)
+// 立即继续,超时自动继续。与 runner 的 askHuman 一样转发 readline 截获的 ^C,
+// 使暂停期间连续两次 Ctrl+C 同样能强制终止。
+async function waitBetweenTasks(minutes: number, nextID: string) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const answer = await Promise.race([
+      rl.question(`⏸ 任务间暂停: 回车立即开始 ${nextID},或等待 ${minutes} 分钟自动继续: `),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), minutes * 60_000)
+      }),
+    ])
+    log(answer === undefined ? `⏳ 等待超时,自动继续 ${nextID}` : `→ 人工确认,继续 ${nextID}`)
+  } finally {
+    clearTimeout(timer)
+    rl.close()
   }
 }
 
