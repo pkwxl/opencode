@@ -38,6 +38,13 @@ describe("protect", () => {
     expect(await writable(path)).toBe(true)
   })
 
+  test("AGENTS.md 不在保护之列,始终保持可写", async () => {
+    const agents = join(dir, "AGENTS.md")
+    await Bun.write(agents, "# AGENTS.md\n")
+    await protect(dir)
+    expect(await writable(agents)).toBe(true)
+  })
+
   test("protect 对不存在的文件静默跳过", async () => {
     await protect(dir)
     expect(await writable(join(dir, "CURRENT.md")).catch(() => "missing")).toBe("missing")

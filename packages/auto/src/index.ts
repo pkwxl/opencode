@@ -1,32 +1,38 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path"
 import { log, setLogFile, setVerbose } from "./log"
+import { ensurePointer, runAll } from "./loop"
 import { load } from "./plan"
-import { runAll } from "./loop"
+import { renderInit, type CommitMode } from "./prompt"
+import { runOnce, type SubtaskMode } from "./runner"
+import { ensure } from "./server"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
-
-// AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
-// AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失。
-const POINTER = `<!-- opencode-auto:start -->
-本目录由 opencode-auto 驱动。每个会话开始必须先读 \`CURRENT.md\`(若存在),其中是当前
-任务的完整内容与进度,优先于一切会话记忆。不要编辑 \`CURRENT.md\` 与 \`PLAN.md\`,
-它们由 driver 独占维护。
-<!-- opencode-auto:end -->`
 
 const args = process.argv.slice(2)
 const command = args[0]
 
 const flags = new Map<string, string>()
 const positional: string[] = []
-// --agent/--server/--wait-answer/--wait-between/--context-limit 带值(吞掉下一个
-// token);--verbose/--commit-subtask 是布尔选项,出现即 true,仅当紧随字面量
-// true/false 时才吞掉它。均支持 --flag=value。
-const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit"])
-const BOOLEAN_FLAGS = new Set(["verbose", "commit-subtask"])
+// --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
+// --prompt 带值(吞掉下一个 token);--verbose/--dryrun/--commit-subtask 是布尔选项,
+// 出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value;
+// --prompt 另有短选项 -p。
+const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt"])
+const BOOLEAN_FLAGS = new Set(["verbose", "dryrun", "commit-subtask"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
+  if (arg === "-p") {
+    const next = args[i + 1]
+    if (next !== undefined) {
+      flags.set("prompt", next)
+      i++
+    } else {
+      flags.set("prompt", "")
+    }
+    continue
+  }
   if (!arg.startsWith("--")) {
     positional.push(arg)
     continue
@@ -52,7 +58,16 @@ if (command === "run") {
   setVerbose(verbose)
   // 每次 run 都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
   log(`📝 日志文件: ${setLogFile(directory)}`)
-  const commitSubtask = flags.has("commit-subtask") && flags.get("commit-subtask") !== "false"
+  const commit = parseCommit(flags)
+  if (commit === null) {
+    console.error("--commit 取值为 subtask|task|once|none;缺省为 subtask")
+    process.exit(1)
+  }
+  const subtask = parseSubtask(flags.get("subtask"))
+  if (subtask === null) {
+    console.error("--subtask 取值为 off|auto|ondemand;缺省为 auto")
+    process.exit(1)
+  }
   const waitAnswer = parseMinutes(flags.get("wait-answer"))
   if (waitAnswer === null) {
     console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")
@@ -74,10 +89,34 @@ if (command === "run") {
     verbose,
     waitAnswer,
     waitBetween,
-    commitSubtask,
+    commit,
+    subtask,
+    dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
     contextLimit: contextLimit * 1000,
   })
   process.exit(code)
+}
+
+// --commit 缺省/裸选项 = subtask;--commit-subtask 为旧别名(true→subtask,
+// false→task,即旧的默认行为);显式 --commit 优先。返回 null 表示取值非法。
+function parseCommit(flags: Map<string, string>): CommitMode | null {
+  const raw = flags.has("commit")
+    ? flags.get("commit")
+    : flags.has("commit-subtask")
+      ? flags.get("commit-subtask") === "false"
+        ? "task"
+        : ""
+      : undefined
+  if (raw === undefined || raw === "") return "subtask"
+  if (raw === "subtask" || raw === "task" || raw === "once" || raw === "none") return raw
+  return null
+}
+
+// --subtask 缺省/裸选项 = auto;返回 null 表示取值非法。
+function parseSubtask(raw: string | undefined): SubtaskMode | null {
+  if (raw === undefined || raw === "") return "auto"
+  if (raw === "off" || raw === "auto" || raw === "ondemand") return raw
+  return null
 }
 
 // --wait-answer/--wait-between 缺省(无此选项)= 0(不等待);裸选项 = 默认 1 分钟;
@@ -107,21 +146,40 @@ if (command === "init") {
   }
   for (const [file, source] of Object.entries(templates)) {
     const target = resolve(directory, file)
-    if (await Bun.file(target).exists()) {
+    const content = await Bun.file(source).text()
+    const existing = await Bun.file(target).text().catch(() => undefined)
+    // .opencode/agent/auto.md 与模板不一致时总是替换,保证 agent 契约为最新版本;
+    // 其余模板已存在则跳过(PLAN.md 可能已被用户编辑)。
+    if (existing !== undefined && (existing === content || file !== ".opencode/agent/auto.md")) {
       console.log(`跳过已存在: ${file}`)
       continue
     }
-    await Bun.write(target, await Bun.file(source).text())
-    console.log(`已创建: ${file}`)
+    await Bun.write(target, content)
+    console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
   }
   // 幂等维护 AGENTS.md 指针块: 只追加,从不改写已有内容。
-  const agentsFile = resolve(directory, "AGENTS.md")
-  const existing = await Bun.file(agentsFile).text().catch(() => "")
-  if (existing.includes("opencode-auto:start")) {
-    console.log("跳过已存在: AGENTS.md 指针块")
-  } else {
-    await Bun.write(agentsFile, existing ? `${existing.trimEnd()}\n\n${POINTER}\n` : `# AGENTS.md\n\n${POINTER}\n`)
-    console.log("已更新: AGENTS.md(追加 opencode-auto 指针块)")
+  console.log((await ensurePointer(directory)) ? "已更新: AGENTS.md(追加 opencode-auto 指针块)" : "跳过已存在: AGENTS.md 指针块")
+
+  // -p/--prompt: 初始化完成后直接调用一次 AI,按提示词填充 PLAN.md 等文档,
+  // 由用户审核后再运行 run。
+  const promptText = flags.get("prompt")
+  if (promptText !== undefined) {
+    if (!promptText.trim()) {
+      console.error("-p/--prompt 需要非空的提示词文本")
+      process.exit(1)
+    }
+    const server = await ensure(directory, flags.get("server"))
+    try {
+      const result = await runOnce(server.client, "初始化计划", renderInit(promptText), { agent: flags.get("agent") })
+      if (result.type === "blocked") {
+        console.error(`⏸ 初始化会话受阻:\n${result.question}`)
+        process.exit(2)
+      }
+    } finally {
+      server.close()
+    }
+    console.log("请审核 PLAN.md(必要时手工调整),确认后运行: opencode-auto run " + directory)
+    process.exit(0)
   }
   console.log("编辑 PLAN.md 填入任务后运行: opencode-auto run " + directory)
   process.exit(0)
@@ -137,9 +195,9 @@ if (command === "status") {
 }
 
 console.error(`用法:
-  opencode-auto init [dir]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit-subtask [true|false]] [--context-limit [n]]
+  opencode-auto init [dir] [-p|--prompt <prompt-text>] [--agent <name>] [--server <url>]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--dryrun [true|false]] [--context-limit [n]]
   opencode-auto status [dir]
 
-退出码: 0 全部完成,1 用法/环境错误,2 阻塞等待人工介入,130 被连续两次 Ctrl+C 强制终止`)
+退出码: 0 全部完成,1 用法/环境错误,2 阻塞/未完成等待人工介入,130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

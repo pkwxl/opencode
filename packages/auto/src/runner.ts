@@ -2,13 +2,14 @@ import { createInterface } from "node:readline/promises"
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
-import { log } from "./log"
+import { log, subbanner } from "./log"
 import {
   appendSubtask,
   begin,
   countSubtasks,
   load,
   markDone,
+  setStatus,
   setSubtasks,
   subtasks,
   tick,
@@ -16,10 +17,21 @@ import {
   type Plan,
   type Task,
 } from "./plan"
-import { renderDecompose, renderSubtask, renderVerify, renderWrapup, VERDICT_FILE } from "./prompt"
+import {
+  handoffFile,
+  renderCommitAll,
+  renderDecompose,
+  renderHandoffSteer,
+  renderSubtask,
+  renderVerify,
+  renderWhole,
+  renderWrapup,
+  VERDICT_FILE,
+  type CommitMode,
+} from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 
-export type Outcome = { type: "completed" } | { type: "blocked"; question: string }
+export type Outcome = { type: "completed" } | { type: "blocked"; question: string } | { type: "incomplete"; reason: string }
 
 // Non-permission questions get this fixed autonomous reply when no human
 // answers in time (or --wait-answer was not given); only a repeated question
@@ -30,11 +42,18 @@ const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前�
 // unsuccessful fix rounds the task blocks for human intervention.
 const FIX_ROUNDS = 3
 
+// --subtask 三档: off(单会话完成)/ auto(自动分解,缺省)/ ondemand(单会话执行,
+// 上下文达到 --context-limit 时交接文档 + 新会话续跑)。
+export type SubtaskMode = "off" | "auto" | "ondemand"
+
 type Opts = {
   agent?: string
   verbose?: boolean
   waitAnswer?: number
-  commitSubtask?: boolean
+  commit?: CommitMode
+  subtask?: SubtaskMode
+  // dryrun 会话: 权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复。
+  dryrun?: boolean
   // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
   contextLimit?: number
 }
@@ -62,17 +81,20 @@ const REUSE_BELOW = 50
 // 会话复用的上下文已用量默认上限(tokens);--context-limit n 以千 tokens 覆盖。
 const DEFAULT_CONTEXT_LIMIT = 64_000
 
-// Runs one task through the three-phase pipeline; the driver owns all state
-// writes to PLAN.md and CURRENT.md, sessions never edit them:
-// 1. decompose (only when the task body has no checklist yet): a read-only
-//    session writes docs/<id>.subtasks.md, the driver injects the checklist;
-// 2. one session per unticked subtask; the session self-checks its work and
-//    the driver ticks the item when the session ends — subtask-level trust,
-//    acceptance is deferred to the task-level review;
-// 3. a wrap-up session (docs, sweep commit, docs/<id>.report.md), then an
-//    independent side-channel task-level review session (always fresh, never
-//    on the chain) judges acceptance. A gap appends a fix subtask
-//    (max FIX_ROUNDS).
+// Runs one task through the pipeline; the driver owns all state
+// writes to PLAN.md and CURRENT.md, sessions never edit them.
+// --subtask auto (default): decompose (when the task body has no checklist) →
+// one session per subtask (driver ticks on trust) → wrap-up → review.
+// --subtask off: a single whole-task session → wrap-up → review; any gap
+// sends the task back to pending for a human to refine and re-run (no fix
+// subtasks).
+// --subtask ondemand: like off, but when the running session's context usage
+// reaches --context-limit the driver steers in a handoff prompt; the session
+// writes docs/<id>.handoff.md and a fresh session continues from it.
+// All modes end with a wrap-up session (docs, sweep commit per --commit,
+// docs/<id>.report.md) and an independent side-channel review session
+// (always fresh, never on the chain). A gap appends a fix subtask
+// (max FIX_ROUNDS, except off mode).
 // The driver never runs verify commands itself: the annotated commands are
 // only suggestions the reviewer may run, adapt, or supplement, so a broken
 // script cannot by itself fail acceptance.
@@ -90,25 +112,42 @@ export async function runTask(
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
   const chain: SessionChain = { pct: 100, used: 0 }
-  const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
-  if (decomposed.type === "blocked") return decomposed
-  task = decomposed.task
-  await writeCurrent(plan.path, task)
+  const mode = opts.subtask ?? "auto"
+  if (mode === "auto") {
+    const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
+    if (decomposed.type === "blocked") return decomposed
+    task = decomposed.task
+  } else {
+    const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
+    if (blocked) return blocked
+    task = requireTask(await load(plan.path), task.id)
+  }
+  await writeCurrent(plan.path, task, mode !== "auto")
 
   for (let round = 0; ; ) {
-    for (const item of subtasks(task.body).filter((item) => !item.done)) {
-      const blocked = await runSubtask(client, plan, task, item.text, opts, chain)
+    // auto 模式此处执行分解出的检查项;off/ondemand 模式只有验收失败后追加的
+    // 修复子任务(或正文中人工编写的检查项)。
+    for (;;) {
+      const items = subtasks(task.body)
+      const index = items.findIndex((item) => !item.done)
+      if (index === -1) break
+      const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain)
       if (blocked) return blocked
       task = requireTask(await load(plan.path), task.id)
-      await writeCurrent(plan.path, task)
+      await writeCurrent(plan.path, task, mode !== "auto")
     }
 
-    const result = await runSession(client, task, renderWrapup(plan, task), opts, chain)
+    const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
     if (result.type === "blocked") return result
     const verdict = await verifyTask(client, plan, task, opts)
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "done") return { type: "completed" }
 
+    // off 模式不追加修复子任务: 任务回退 pending,由用户改进 PLAN.md 后重试。
+    if (mode === "off") {
+      await setStatus(plan.path, task.id, "pending")
+      return { type: "incomplete", reason: verdict.gap }
+    }
     round++
     if (round >= FIX_ROUNDS) {
       return { type: "blocked", question: `任务级验收连续 ${FIX_ROUNDS} 轮未通过:\n${verdict.gap}` }
@@ -117,6 +156,82 @@ export async function runTask(
     await appendSubtask(plan.path, task.id, verdict.fixText)
     task = requireTask(await load(plan.path), task.id)
   }
+}
+
+// off/ondemand 的执行阶段: off 单会话完成整个任务;ondemand 会话进行中上下文
+// 达到 --context-limit 时由 driver steer 交接提示,会话写出交接文档后换新会话
+// 续跑,直到自然完成或交接文档标记完成。返回 undefined 表示执行阶段完成。
+async function executeWhole(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+  chain: SessionChain,
+  ondemand: boolean,
+): Promise<(Outcome & { type: "blocked" }) | undefined> {
+  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  const file = join(dirname(plan.path), handoffFile(task))
+  // 清除上一次尝试遗留的交接文档,避免误当作本次会话的产出。
+  if (ondemand) await rm(file, { force: true })
+  const steer = ondemand ? { limit: cap, text: renderHandoffSteer(task) } : undefined
+  let continuation = false
+  let feedback = ""
+  let retried = false
+  for (;;) {
+    const result = await runSession(
+      client,
+      task,
+      renderWhole(plan, task, { commit: opts.commit, ondemand, continuation }) + feedback,
+      opts,
+      chain,
+      steer,
+    )
+    if (result.type === "blocked") return result
+    // 未触发上下文上限即结束 = 任务在单会话内自然完成。
+    if (!ondemand || chain.used < cap) return undefined
+    const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
+    if (status === "完成") return undefined
+    if (status === "继续") {
+      log(`↻ ${task.id} 上下文达到 ${formatTokens(cap)} 上限,已交接 ${handoffFile(task)},新会话继续`)
+      continuation = true
+      feedback = ""
+      continue
+    }
+    if (retried) {
+      return {
+        type: "blocked",
+        question:
+          `会话上下文达到上限但两次未写出有效交接文档 ${handoffFile(task)}(缺失或无状态行,隐性阻塞)。` +
+          `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+      }
+    }
+    log(`↻ ${task.id} 达到上下文上限但未产出 ${handoffFile(task)},带反馈重试一次`)
+    retried = true
+    feedback =
+      `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`状态: 继续|完成\` 行)。` +
+      `这是硬性要求: 写出该文件后再结束会话。`
+  }
+}
+
+// --commit once: 计划全部完成后的唯一一次整体提交会话(全新,不进任何链)。
+export async function commitAll(client: OpencodeClient, plan: Plan, opts: Opts): Promise<Outcome> {
+  const result = await runSession(client, pseudoTask("PLAN", "整体提交"), renderCommitAll(plan), opts, { pct: 100, used: 0 })
+  if (result.type === "blocked") return result
+  return { type: "completed" }
+}
+
+// init --prompt 与 --dryrun 的单次独立会话: 不属于任何任务,不进任何链。
+export async function runOnce(
+  client: OpencodeClient,
+  title: string,
+  promptText: string,
+  opts: Opts,
+): Promise<SessionResult> {
+  return runSession(client, pseudoTask("AUTO", title), promptText, opts, { pct: 100, used: 0 })
+}
+
+function pseudoTask(id: string, title: string): Task {
+  return { id, title, status: "in_progress", attempts: 0, body: "" }
 }
 
 function requireTask(plan: Plan, id: string): Task {
@@ -128,7 +243,7 @@ function requireTask(plan: Plan, id: string): Task {
 // CURRENT.md mirrors the task in progress; the agent contract makes every
 // session read it first, so the current task survives context compaction.
 // The server re-reads it on every provider turn, so no restart is needed.
-async function writeCurrent(path: string, task: Task) {
+async function writeCurrent(path: string, task: Task, solo = false) {
   const progress = countSubtasks(task.body)
   const content = [
     `# 当前任务(由 opencode-auto 维护,请勿手工编辑)`,
@@ -138,7 +253,7 @@ async function writeCurrent(path: string, task: Task) {
     ``,
     task.body,
     ``,
-    progress.total ? `进度: 子任务 ${progress.done}/${progress.total}` : `进度: 分解中`,
+    progress.total ? `进度: 子任务 ${progress.done}/${progress.total}` : solo ? `进度: 单会话执行(无子任务划分)` : `进度: 分解中`,
     ``,
   ].join("\n")
   const file = join(dirname(path), "CURRENT.md")
@@ -194,9 +309,11 @@ async function runSubtask(
   plan: Plan,
   task: Task,
   text: string,
+  index: number,
   opts: Opts,
   chain: SessionChain,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
+  subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const result = await runSession(client, task, renderSubtask(plan, task, text, opts), opts, chain)
   if (result.type === "blocked") return result
   await tick(plan.path, task.id, text)
@@ -277,15 +394,20 @@ function parseVerdict(text: string): Verdict | undefined {
 // context ended below REUSE_BELOW). Transient provider failures
 // (session.error, e.g. malformed reasoning content from a gateway) are
 // retried in a fresh session before blocking.
+// steer: 会话进行中已用上下文达到 limit 时,driver 向该会话插入一次 text
+// (ondemand 的交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
+type Steer = { limit: number; text: string }
+
 async function runSession(
   client: OpencodeClient,
   task: Task,
   promptText: string,
   opts: Opts,
   chain: SessionChain,
+  steer?: Steer,
 ): Promise<SessionResult> {
   for (let i = 1; ; i++) {
-    const result = await attempt(client, task, promptText, opts, chain)
+    const result = await attempt(client, task, promptText, opts, chain, steer)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
     if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
@@ -305,6 +427,7 @@ async function attempt(
   promptText: string,
   opts: Opts,
   chain: SessionChain,
+  steer?: Steer,
 ): Promise<SessionResult> {
   // 上一会话上下文占比低于 50% 且已用量低于 contextLimit(默认 64k tokens)
   // 则复用同一会话继续,否则新建。
@@ -323,7 +446,7 @@ async function attempt(
   const sessionID = session?.data.id ?? chain.id!
 
   const events = await client.event.subscribe()
-  const watching = watch(client, sessionID, events.stream, opts)
+  const watching = watch(client, sessionID, events.stream, opts, steer)
 
   const prompt = await client.session.prompt({
     sessionID,
@@ -346,6 +469,7 @@ async function watch(
   sessionID: string,
   stream: AsyncIterable<unknown>,
   opts: Opts,
+  steer?: Steer,
 ): Promise<Watch> {
   const verbose = opts.verbose
   const waitAnswer = opts.waitAnswer ?? 0
@@ -354,6 +478,8 @@ async function watch(
   // 上下文占比与已用量始终跟踪(会话复用决策依据),与 verbose 无关;拿不到上限记 100。
   let pct = 100
   let used = 0
+  // steer 每会话只插入一次。
+  let steerSent = false
   const autoAnswered: string[] = []
   // verbose 已输出的 part 与 message,避免同一 part 的多次更新事件重复打印。
   const seen = new Set<string>()
@@ -385,12 +511,18 @@ async function watch(
       const limit = limits.get(`${info.providerID}/${info.modelID}`)
       pct = limit ? Math.round((used / limit) * 100) : 100
       if (verbose) log(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
+      if (steer && !steerSent && used >= steer.limit) {
+        steerSent = true
+        log(`⚠ 上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(steer.limit)} 上限,插入交接提示`)
+        await client.session.prompt({ sessionID, parts: [{ type: "text", text: steer.text }] }).catch(() => {})
+      }
     }
     if (event.type === "question.asked") {
       const asked = event.properties
       if (asked.sessionID !== sessionID) continue
       const text = asked.questions.map((q) => q.question).join("\n")
-      const permission = /权限|permission/i.test(text)
+      // dryrun 预检会话一律自动答复,不因提问阻塞。
+      const permission = opts.dryrun ? false : /权限|permission/i.test(text)
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
       // 权限提问在 --wait-answer 下也先等人工答复,无人答复才阻塞;
       // 非权限提问无人答复时回落到 AUTO_ANSWER。
@@ -425,6 +557,12 @@ async function watch(
     if (event.type === "permission.asked") {
       const asked = event.properties
       if (asked.sessionID !== sessionID) continue
+      // dryrun 预检: 自动拒绝但不中断会话,让 AI 记录受阻项后继续探查下一项。
+      if (opts.dryrun) {
+        log(`🔐 预检探查被拒绝(记入报告): ${asked.permission} (${asked.patterns.join(", ")})`)
+        await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
+        continue
+      }
       // --wait-answer 下权限请求同样等待人工指令: 回答 allow/yes/y 等视为
       // 确认授权(always 放行本请求的 patterns),其余回答或超时则拒绝并阻塞。
       if (waitAnswer > 0) {

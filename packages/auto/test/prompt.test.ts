@@ -1,6 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { parse } from "../src/plan"
-import { renderDecompose, renderSubtask, renderVerify, renderWrapup, VERDICT_FILE } from "../src/prompt"
+import {
+  renderCommitAll,
+  renderDecompose,
+  renderDryrun,
+  renderHandoffSteer,
+  renderInit,
+  renderSubtask,
+  renderVerify,
+  renderWhole,
+  renderWrapup,
+  VERDICT_FILE,
+} from "../src/prompt"
 
 const plan = parse(
   "PLAN.md",
@@ -60,8 +71,8 @@ describe("renderSubtask", () => {
     expect(text).not.toContain("改为 `- [x]`")
   })
 
-  test("--commit-subtask 启用时注入子任务级提交要求", () => {
-    const on = renderSubtask(plan, task, subtask, { commitSubtask: true })
+  test("--commit subtask 启用时注入子任务级提交要求", () => {
+    const on = renderSubtask(plan, task, subtask, { commit: "subtask" })
     expect(on).toContain("git 提交全部未提交改动,实现子任务级别的变动历史追踪")
     expect(on).toContain("find . -name .git")
     const off = renderSubtask(plan, task, subtask)
@@ -87,6 +98,17 @@ describe("renderWrapup", () => {
     const nl = renderWrapup(plan, plan.tasks[2]!)
     expect(nl).toContain('任务 verify 字段是"API 返回 200",把它翻译为具体的测试/检查命令')
   })
+
+  test("--commit once/none 省略清扫提交;--commit task 保留", () => {
+    expect(renderWrapup(plan, task, { commit: "task" })).toContain("git 提交全部未提交改动")
+    expect(renderWrapup(plan, task, { commit: "once" })).not.toContain("git 提交")
+    expect(renderWrapup(plan, task, { commit: "none" })).not.toContain("git 提交")
+  })
+
+  test("solo 模式(off/ondemand)不提及子任务", () => {
+    expect(renderWrapup(plan, task, { solo: true })).toContain("实现已在之前的会话中完成")
+    expect(renderWrapup(plan, task)).toContain("全部子任务已在之前的会话中逐一完成")
+  })
 })
 
 describe("renderVerify", () => {
@@ -106,5 +128,68 @@ describe("renderVerify", () => {
     expect(text).toContain("不要重做实现")
     const nl = renderVerify(plan, plan.tasks[2]!)
     expect(nl).toContain('任务 verify 字段是"API 返回 200"')
+  })
+})
+
+describe("renderWhole", () => {
+  test("off 模式: 单会话完成整个任务,不含交接条款", () => {
+    const text = renderWhole(plan, task)
+    expect(text).toContain("你本次负责整个任务,在单个会话内完成,不做子任务分解")
+    expect(text).toContain("T-002: 实现迁移")
+    expect(text).not.toContain("handoff.md")
+    expect(text).not.toContain("git 提交")
+  })
+
+  test("ondemand 模式: 附交接条款;continuation 要求先读交接文档", () => {
+    const text = renderWhole(plan, task, { ondemand: true })
+    expect(text).toContain("docs/T-002.handoff.md")
+    expect(text).toContain("[driver] 上下文即将达到上限")
+    expect(text).not.toContain("先读 docs/T-002.handoff.md")
+    const cont = renderWhole(plan, task, { ondemand: true, continuation: true })
+    expect(cont).toContain("先读 docs/T-002.handoff.md")
+    expect(cont).toContain("据此继续")
+  })
+
+  test("--commit subtask 时包含提交步骤", () => {
+    expect(renderWhole(plan, task, { commit: "subtask" })).toContain("git 提交全部未提交改动")
+    expect(renderWhole(plan, task, { commit: "task" })).not.toContain("git 提交")
+  })
+
+  test("交接提示要求写出状态行", () => {
+    const steer = renderHandoffSteer(task)
+    expect(steer).toContain("docs/T-002.handoff.md")
+    expect(steer).toContain("状态: 继续")
+    expect(steer).toContain("状态: 完成")
+  })
+})
+
+describe("renderDryrun", () => {
+  test("权限预检: 列出授权外访问并逐只读探查,报告写入 .auto/dryrun.md", () => {
+    const text = renderDryrun()
+    expect(text).toContain("权限预检")
+    expect(text).toContain("opencode.json")
+    expect(text).toContain("只读探查")
+    expect(text).toContain(".auto/dryrun.md")
+    expect(text).toContain("不修改任何实现代码")
+  })
+})
+
+describe("renderCommitAll", () => {
+  test("整体提交: 只做一次提交,含嵌套仓库规则", () => {
+    const text = renderCommitAll(plan)
+    expect(text).toContain("git 提交全部未提交改动")
+    expect(text).toContain("find . -name .git")
+    expect(text).toContain("整个计划完成")
+  })
+})
+
+describe("renderInit", () => {
+  test("初始化规划: 填充 PLAN.md,只规划不实施,包含用户提示词", () => {
+    const text = renderInit("实现一个待办事项 CLI")
+    expect(text).toContain("实现一个待办事项 CLI")
+    expect(text).toContain("把 PLAN.md 填充为一份可执行的实施计划")
+    expect(text).toContain("只做规划,不实施")
+    expect(text).toContain("verify")
+    expect(text).toContain("permission")
   })
 })

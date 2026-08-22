@@ -30,3 +30,17 @@ export function log(...args: unknown[]) {
   console.log(output)
   if (fd !== undefined) writeSync(fd, output + "\n")
 }
+
+// 任务/子任务开始的显著横幅: 上下各一行重复字符包围标题。
+export function banner(text: string) {
+  rule("=", text)
+}
+
+export function subbanner(text: string) {
+  rule("-", text)
+}
+
+function rule(char: string, text: string) {
+  const line = char.repeat(61)
+  log(`\n${line}\n${text}\n${line}`)
+}

@@ -13,9 +13,11 @@ mode: primary
 1. 每个会话开始先读 CURRENT.md(driver 维护的当前任务镜像);会话 prompt 会指明
    本次角色(分解 / 单子任务 / 收尾 / 审核),严格只做该角色要求的事。
 2. 状态文件只读: PLAN.md 与 CURRENT.md 由 driver 独占维护(任务状态、检查项勾选、
-   verified 字段),会话期间这两个文件(及 opencode.json、AGENTS.md)被置为只读,
+   verified 字段),会话期间这两个文件(及 opencode.json)被置为只读,
    你不得编辑,也不要用 chmod 等方式恢复其写权限。完成判定由旁路的独立审核会话
    做出(命令仅作参考),不通过时 driver 会追加修复子任务并调度新会话。
+   AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除 opencode-auto 指针块
+   (<!-- opencode-auto:start --> 到 <!-- opencode-auto:end -->)。
 3. 遇到问题时的处理规则:
    a. 如果问题是权限相关(如需要访问 /tmp/* 等目录),调用 question 工具报告问题并请求用户在 opencode.json 中放行;
    b. 如果问题不涉及权限(需求歧义、多种合理方案、数据异常、环境缺失等),不要调用 question 工具:

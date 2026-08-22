@@ -1,11 +1,30 @@
 import { createInterface } from "node:readline/promises"
 import { readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
-import { log } from "./log"
+import { banner, log } from "./log"
 import { block, countSubtasks, load, next } from "./plan"
+import { renderDryrun, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
-import { runTask } from "./runner"
+import { commitAll, runOnce, runTask, type SubtaskMode } from "./runner"
 import { ensure } from "./server"
+
+// AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
+// AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失。
+// AGENTS.md 不再置只读(任务可更新它),run/init 只确保指针块存在。
+const POINTER = `<!-- opencode-auto:start -->
+本目录由 opencode-auto 驱动。每个会话开始必须先读 \`CURRENT.md\`(若存在),其中是当前
+任务的完整内容与进度,优先于一切会话记忆。不要编辑 \`CURRENT.md\` 与 \`PLAN.md\`,
+它们由 driver 独占维护。
+<!-- opencode-auto:end -->`
+
+// 幂等维护 AGENTS.md 指针块: 只追加,从不改写已有内容。返回是否发生了写入。
+export async function ensurePointer(directory: string): Promise<boolean> {
+  const agentsFile = join(directory, "AGENTS.md")
+  const existing = await Bun.file(agentsFile).text().catch(() => "")
+  if (existing.includes("opencode-auto:start")) return false
+  await Bun.write(agentsFile, existing ? `${existing.trimEnd()}\n\n${POINTER}\n` : `# AGENTS.md\n\n${POINTER}\n`)
+  return true
+}
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
 // for a human to resolve the issue outside the session and re-run,
@@ -20,7 +39,10 @@ export async function runAll(
     waitAnswer?: number
     // 任务间暂停等待人工的分钟数(0 = 不等待);回车立即继续,超时自动继续。
     waitBetween?: number
-    commitSubtask?: boolean
+    commit?: CommitMode
+    subtask?: SubtaskMode
+    // dryrun: 只跑一次权限预检会话并输出报告,不执行任何任务。
+    dryrun?: boolean
     // 会话复用的上下文已用量上限(tokens),缺省由 runner 按 64k 处理。
     contextLimit?: number
   },
@@ -32,11 +54,14 @@ export async function runAll(
   }
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
-  const progress = opts.commitSubtask ? trackSubtasks(path) : undefined
+  const progress = opts.commit === "subtask" ? trackSubtasks(path) : undefined
   // Driver-owned files go read-only for the whole run; driver writes
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
+  // 启动会话前确保 AGENTS.md 指针块存在(缺失则补写);AGENTS.md 本身保持可写,
+  // 任务可更新它的其余内容。
+  if (await ensurePointer(directory)) log("已补写: AGENTS.md 指针块")
   let server: Awaited<ReturnType<typeof ensure>> | undefined
   // 单次 Ctrl+C 不终止(运行期间事件流/子进程可能吞掉或挂起默认退出),
   // 窗口期内连续第二次按下才强制终止:尽力恢复文件可写并关闭 server 后退出。
@@ -57,11 +82,30 @@ export async function runAll(
   process.on("SIGINT", onSigint)
   try {
     server = await ensure(directory, opts.server)
+    if (opts.dryrun) {
+      const result = await runOnce(server.client, "权限预检", renderDryrun(), { ...opts, dryrun: true })
+      if (result.type === "blocked") {
+        log(`⏸ 预检会话受阻:\n${result.question}`)
+        return 2
+      }
+      log(`✓ 权限预检完成,报告已写入 .auto/dryrun.md,要点:\n\n${result.lastText}`)
+      return 0
+    }
     let ran = 0
     for (;;) {
       const plan = await load(path)
       const task = next(plan)
       if (!task) {
+        // --commit once: 任务期间不提交,全部完成后开一次整体提交会话。
+        if (opts.commit === "once" && ran > 0) {
+          banner("全部任务完成,整体提交")
+          const outcome = await commitAll(server.client, plan, opts)
+          if (outcome.type !== "completed") {
+            const detail = outcome.type === "blocked" ? outcome.question : outcome.reason
+            log(`⏸ 整体提交未完成(任务本身已全部完成):\n${detail}`)
+            return 2
+          }
+        }
         log("✓ 全部任务已完成")
         return 0
       }
@@ -70,18 +114,24 @@ export async function runAll(
       if (task.status === "blocked" && task.question) {
         log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
       }
-      log(`▶ ${task.id}: ${task.title}(第 ${task.attempts + 1} 次尝试)`)
+      banner(`${task.id} ${task.title}`)
+      log(`▶ ${task.id} 开始执行(第 ${task.attempts + 1} 次尝试)`)
       const start = Date.now()
       const outcome = await runTask(server.client, plan, task, {
         agent: opts.agent,
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
-        commitSubtask: opts.commitSubtask,
+        commit: opts.commit,
+        subtask: opts.subtask,
         contextLimit: opts.contextLimit,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
         log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
+        return 2
+      }
+      if (outcome.type === "incomplete") {
+        log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
         return 2
       }
       log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
@@ -180,7 +230,7 @@ async function gitStatusFiles(directory: string, root: string): Promise<string[]
     .map((entry) => relative(directory, join(toplevel, entry.slice(3))))
 }
 
-// --commit-subtask mode: every 30s re-read PLAN.md, report the current task's
+// --commit subtask mode: every 30s re-read PLAN.md, report the current task's
 // subtask checkbox progress and a remaining-time estimate. The estimate is a
 // simple linear projection from completed items, so its precision is bounded
 // by this check interval.
