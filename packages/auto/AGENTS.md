@@ -10,7 +10,7 @@
 
 - `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析;`init` 幂等维护 AGENTS.md 的 CURRENT.md 指针块。
 - `src/loop.ts` — 任务循环:取下一个未完成任务执行;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报。
-- `src/runner.ts` — 单任务流水线:分解会话 → 逐子任务会话(driver 亲自执行各项 verify 命令)→ 收尾会话(driver 判定任务级验收,失败追加修复子任务,最多 3 轮);会话创建、事件监听、提问自动答复、权限等待授权/阻塞、隐性阻塞检测;CURRENT.md 写入。
+- `src/runner.ts` — 单任务流水线:分解会话 → 逐子任务会话(driver 亲自执行各项 verify 命令)→ 收尾会话(driver 判定任务级验收,失败追加修复子任务,最多 3 轮);会话链复用、事件监听、提问自动答复、权限等待授权/阻塞、隐性阻塞检测;CURRENT.md 写入。
 - `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone)与 verify 命令提取(subtaskVerify/verifyCommand)。
 - `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 收尾三类)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json/AGENTS.md
@@ -56,7 +56,10 @@
   收尾会话翻译为 report.md 的 `verified-command` 行后仍由 driver 执行;均无命令时按
   report.md 末行 `结论: 通过|差距` 判定,差距追加修复子任务(最多 3 轮)。
 - 任务流水线:正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,driver 注入
-  检查项),再逐检查项独立会话执行,最后收尾会话写 docs/T-NNN.report.md。
+  检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md。任务内所有会话
+  共用一条链:上一会话结束时上下文占比低于 50% 则复用,否则新建;占比由 watch 始终
+  跟踪(与 --verbose 无关),拿不到模型上限记 100 即总是新建;瞬时会话错误重试仍强制
+  换新会话。
 - CURRENT.md 是当前任务镜像(每会话必读,抗上下文压缩);AGENTS.md 只含固定指针块,
   driver 永不改写;server 长驻即可,指令文件每个 provider turn 现场重读。
 - `PLAN.md` 字段行(`  - key: value`)必须紧跟任务标题且连续;第一个非字段行(含空行)

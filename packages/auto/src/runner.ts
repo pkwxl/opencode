@@ -45,15 +45,25 @@ type Watch = {
   blocked?: Outcome & { type: "blocked" }
   error?: string
   lastText: string
+  // 会话结束时最近一次 assistant 消息的上下文占比(0-100);上限未知记 100。
+  pct: number
 }
 
 type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "blocked" })
+
+// 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 上一会话结束时上下文
+// 占比低于 REUSE_BELOW 则下次复用同一会话,否则新建。初始 pct=100 保证首个
+// 会话新建;模型上限未知时 watch 记 100,即总是新建。
+type SessionChain = { id?: string; pct: number }
+
+// 上下文占比低于该值(%)时复用上一会话。
+const REUSE_BELOW = 50
 
 // Runs one task through the three-phase pipeline; the driver owns all state
 // writes to PLAN.md and CURRENT.md, sessions never edit them:
 // 1. decompose (only when the task body has no checklist yet): a read-only
 //    session writes docs/<id>.subtasks.md, the driver injects the checklist;
-// 2. one fresh session per unticked subtask; after each session the driver
+// 2. one session per unticked subtask; after each session the driver
 //    runs that subtask's verify command itself — pass: tick, fail: one fix
 //    session then retry, still failing: blocked (items without a command are
 //    ticked on trust);
@@ -61,6 +71,9 @@ type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "bl
 //    driver runs the task-level acceptance: the "command:" verify prefix, or
 //    the report's verified-command line, or — with no command at all — the
 //    report's conclusion line. A gap appends a fix subtask (max FIX_ROUNDS).
+// All sessions of a task share one chain: the next session reuses the
+// previous one when its context usage ended below REUSE_BELOW, otherwise a
+// fresh session is created.
 // Blocking happens on unanswered/rejected permission requests, a repeated
 // question on the same issue, exhausted transient session errors, or a failed
 // verification.
@@ -71,20 +84,21 @@ export async function runTask(
   opts: Opts,
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
-  const decomposed = await ensureDecomposed(client, plan, task, opts)
+  const chain: SessionChain = { pct: 100 }
+  const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
   if (decomposed.type === "blocked") return decomposed
   task = decomposed.task
   await writeCurrent(plan.path, task)
 
   for (let round = 0; ; ) {
     for (const item of subtasks(task.body).filter((item) => !item.done)) {
-      const blocked = await runSubtask(client, plan, task, item.text, opts)
+      const blocked = await runSubtask(client, plan, task, item.text, opts, chain)
       if (blocked) return blocked
       task = requireTask(await load(plan.path), task.id)
       await writeCurrent(plan.path, task)
     }
 
-    const result = await runSession(client, task, renderWrapup(plan, task), opts)
+    const result = await runSession(client, task, renderWrapup(plan, task), opts, chain)
     if (result.type === "blocked") return result
     const verdict = await verifyTask(plan.path, task)
     if (verdict.type === "done") return { type: "completed" }
@@ -135,6 +149,7 @@ async function ensureDecomposed(
   plan: Plan,
   task: Task,
   opts: Opts,
+  chain: SessionChain,
 ): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
   if (subtasks(task.body).length) return { type: "ok", task }
   const file = join(dirname(plan.path), "docs", `${task.id}.subtasks.md`)
@@ -142,7 +157,7 @@ async function ensureDecomposed(
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the file; the file is a hard requirement.
   for (let i = 0; ; i++) {
-    const result = await runSession(client, task, renderDecompose(plan, task) + feedback, opts)
+    const result = await runSession(client, task, renderDecompose(plan, task) + feedback, opts, chain)
     if (result.type === "blocked") return result
     const items = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
     if (items.length) {
@@ -174,9 +189,10 @@ async function runSubtask(
   task: Task,
   text: string,
   opts: Opts,
+  chain: SessionChain,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   const command = subtaskVerify(text)
-  const result = await runSession(client, task, renderSubtask(plan, task, text, opts), opts)
+  const result = await runSession(client, task, renderSubtask(plan, task, text, opts), opts, chain)
   if (result.type === "blocked") return result
   if (!command) {
     await tick(plan.path, task.id, text)
@@ -195,6 +211,7 @@ async function runSubtask(
     renderSubtask(plan, task, text, opts) +
       `\n\n该子任务的 verify 命令在会话外执行失败:\n$ ${command}\n${first.output}\n请定位修复,并在会话内重新运行该命令确认通过后结束。`,
     opts,
+    chain,
   )
   if (fix.type === "blocked") return fix
   const second = await runCommand(dirname(plan.path), command)
@@ -257,7 +274,8 @@ async function runCommand(dir: string, command: string): Promise<{ ok: boolean; 
   }
 }
 
-// Runs one prompt in a fresh session. Transient provider failures
+// Runs one prompt on the session chain (reusing the previous session when its
+// context ended below REUSE_BELOW). Transient provider failures
 // (session.error, e.g. malformed reasoning content from a gateway) are
 // retried in a fresh session before blocking.
 async function runSession(
@@ -265,13 +283,17 @@ async function runSession(
   task: Task,
   promptText: string,
   opts: Opts,
+  chain: SessionChain,
 ): Promise<SessionResult> {
   for (let i = 1; ; i++) {
-    const result = await attempt(client, task, promptText, opts)
+    const result = await attempt(client, task, promptText, opts, chain)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
     if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
     log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${result.question}`)
+    // 重试保持"换新会话"语义,不复用出错的会话。
+    chain.id = undefined
+    chain.pct = 100
   }
 }
 
@@ -283,10 +305,15 @@ async function attempt(
   task: Task,
   promptText: string,
   opts: Opts,
+  chain: SessionChain,
 ): Promise<SessionResult> {
-  const session = await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
-  if (session.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
-  const sessionID = session.data.id
+  // 上一会话上下文占比低于 50% 则复用同一会话继续,否则新建。
+  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW
+  if (reuse) log(`♻ 复用会话(上下文 ${chain.pct}%)`)
+  if (!reuse && chain.id !== undefined) log(`▷ 上下文 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值,开启新会话`)
+  const session = reuse ? undefined : await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
+  if (session?.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
+  const sessionID = session?.data.id ?? chain.id!
 
   const events = await client.event.subscribe()
   const watching = watch(client, sessionID, events.stream, opts)
@@ -299,6 +326,8 @@ async function attempt(
   if (prompt.error) return { type: "blocked", question: `下发任务失败: ${JSON.stringify(prompt.error)}` }
 
   const result = await watching
+  chain.id = sessionID
+  chain.pct = result.pct
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
   return { type: "idle", lastText: result.lastText }
@@ -314,6 +343,8 @@ async function watch(
   const waitAnswer = opts.waitAnswer ?? 0
   let lastText = ""
   let error = ""
+  // 上下文占比始终跟踪(会话复用决策依据),与 verbose 无关;拿不到上限记 100。
+  let pct = 100
   const autoAnswered: string[] = []
   // verbose 已输出的 part 与 message,避免同一 part 的多次更新事件重复打印。
   const seen = new Set<string>()
@@ -337,14 +368,14 @@ async function watch(
     }
     if (event.type === "message.updated") {
       const info = event.properties.info
-      if (!verbose || info.sessionID !== sessionID) continue
+      if (info.sessionID !== sessionID) continue
       if (info.role !== "assistant" || !info.time.completed || seen.has(info.id)) continue
       seen.add(info.id)
       limits ??= await contextLimits(client)
       const used = info.tokens.input + info.tokens.cache.read
       const limit = limits.get(`${info.providerID}/${info.modelID}`)
-      const pct = limit ? ` (${Math.round((used / limit) * 100)}%)` : ""
-      log(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${pct}`)
+      pct = limit ? Math.round((used / limit) * 100) : 100
+      if (verbose) log(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
     }
     if (event.type === "question.asked") {
       const asked = event.properties
@@ -378,6 +409,7 @@ async function watch(
           question: permission ? text : `自动答复后仍就同一问题再次询问,需人工在会话外处理后重新运行:\n${text}`,
         },
         lastText,
+        pct,
       }
     }
     if (event.type === "permission.asked") {
@@ -403,6 +435,7 @@ async function watch(
           question: `需要权限: ${asked.permission} (${asked.patterns.join(", ")})。请在目标目录 opencode.json 的 permission 规则中放行后重新运行。`,
         },
         lastText,
+        pct,
       }
     }
     if (event.type === "session.error") {
@@ -423,7 +456,7 @@ async function watch(
       break
     }
   }
-  return { lastText, error }
+  return { lastText, error, pct }
 }
 
 // verbose 模式下把非文本 part 转成一行可读输出;返回 undefined 表示该 part
