@@ -510,6 +510,9 @@ function isApproval(answer: string): boolean {
 // AUTO_ANSWER (non-permission questions) or blocks (permission requests).
 async function askHuman(minutes: number, hint: string): Promise<string | undefined> {
   const rl = createInterface({ input: process.stdin, output: process.stdout })
+  // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
+  // 处理器,使等待人工答复期间连续两次 Ctrl+C 同样能强制终止。
+  rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const answer = await Promise.race([

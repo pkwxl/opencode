@@ -120,5 +120,5 @@ console.error(`用法:
   opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--wait-answer [1-60]] [--commit-subtask [true|false]]
   opencode-auto status [dir]
 
-退出码: 0 全部完成,1 用法/环境错误,2 阻塞等待人工介入`)
+退出码: 0 全部完成,1 用法/环境错误,2 阻塞等待人工介入,130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

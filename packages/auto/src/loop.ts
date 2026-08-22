@@ -7,7 +7,8 @@ import { runTask } from "./runner"
 import { ensure } from "./server"
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
-// for a human to resolve the issue outside the session and re-run. A blocked
+// for a human to resolve the issue outside the session and re-run,
+// 130 = force-killed by double Ctrl+C. A blocked
 // task needs no `answer`: re-running resumes it directly.
 export async function runAll(
   directory: string,
@@ -32,6 +33,23 @@ export async function runAll(
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
   let server: Awaited<ReturnType<typeof ensure>> | undefined
+  // 单次 Ctrl+C 不终止(运行期间事件流/子进程可能吞掉或挂起默认退出),
+  // 窗口期内连续第二次按下才强制终止:尽力恢复文件可写并关闭 server 后退出。
+  let sigintAt = 0
+  const onSigint = () => {
+    const now = Date.now()
+    if (now - sigintAt > 3000) {
+      sigintAt = now
+      log("⚠ 已捕获 Ctrl+C,3 秒内再次按下将强制终止运行")
+      return
+    }
+    log("✋ 收到连续 Ctrl+C,强制终止")
+    server?.close()
+    void unprotect(directory).finally(() => process.exit(130))
+    // 兜底:清理挂起时也要退出。
+    setTimeout(() => process.exit(130), 1000).unref()
+  }
+  process.on("SIGINT", onSigint)
   try {
     server = await ensure(directory, opts.server)
     for (;;) {
@@ -60,6 +78,7 @@ export async function runAll(
       log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
     }
   } finally {
+    process.off("SIGINT", onSigint)
     watcher?.close()
     progress?.close()
     server?.close()
