@@ -11,7 +11,6 @@ import {
   markDone,
   setSubtasks,
   subtasks,
-  subtaskVerify,
   tick,
   verifyCommand,
   type Plan,
@@ -60,14 +59,13 @@ const REUSE_BELOW = 50
 // writes to PLAN.md and CURRENT.md, sessions never edit them:
 // 1. decompose (only when the task body has no checklist yet): a read-only
 //    session writes docs/<id>.subtasks.md, the driver injects the checklist;
-// 2. one session per unticked subtask; after each session an independent
-//    side-channel review session (always fresh, never on the chain) audits
-//    the subtask and writes a verdict file — pass: tick, fail: one fix
-//    session then re-review, still failing: blocked (items without a verify
-//    annotation are ticked on trust);
-// 3. a wrap-up session (docs, sweep commit, docs/<id>.report.md), then a
-//    task-level review session judges acceptance the same way. A gap appends
-//    a fix subtask (max FIX_ROUNDS).
+// 2. one session per unticked subtask; the session self-checks its work and
+//    the driver ticks the item when the session ends — subtask-level trust,
+//    acceptance is deferred to the task-level review;
+// 3. a wrap-up session (docs, sweep commit, docs/<id>.report.md), then an
+//    independent side-channel task-level review session (always fresh, never
+//    on the chain) judges acceptance. A gap appends a fix subtask
+//    (max FIX_ROUNDS).
 // The driver never runs verify commands itself: the annotated commands are
 // only suggestions the reviewer may run, adapt, or supplement, so a broken
 // script cannot by itself fail acceptance.
@@ -180,11 +178,10 @@ async function ensureDecomposed(
   }
 }
 
-// Runs one subtask session, then an independent side-channel review session
-// audits it (the annotated verify command is only a suggestion for the
-// reviewer). Pass: tick. Gap: one fix session, then re-review; still failing:
-// blocked. Items without a verify annotation are ticked on trust (e.g. fix
-// subtasks for natural-language acceptance gaps).
+// Runs one subtask session, then ticks the checklist item on trust: the
+// session self-checks its own work, and acceptance of the whole task is
+// deferred to the single task-level review after wrap-up (a gap there
+// appends a fix subtask).
 async function runSubtask(
   client: OpencodeClient,
   plan: Plan,
@@ -193,41 +190,11 @@ async function runSubtask(
   opts: Opts,
   chain: SessionChain,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
-  const annotated = subtaskVerify(text)
   const result = await runSession(client, task, renderSubtask(plan, task, text, opts), opts, chain)
   if (result.type === "blocked") return result
-  if (!annotated) {
-    await tick(plan.path, task.id, text)
-    return undefined
-  }
-  const first = await review(client, plan, task, { subtask: text }, opts)
-  if (first.type === "blocked") return first
-  if (first.type === "pass") {
-    await tick(plan.path, task.id, text)
-    log(`  ✓ ${text.slice(0, 60)}`)
-    return undefined
-  }
-  log(`  ✗ 子任务审核未通过,开修复会话: ${first.gap}`)
-  const fix = await runSession(
-    client,
-    task,
-    renderSubtask(plan, task, text, opts) +
-      `\n\n该子任务的独立审核未通过:\n${first.gap}\n请定位修复,并在会话内自我检查确认后结束;之后会再次审核。`,
-    opts,
-    chain,
-  )
-  if (fix.type === "blocked") return fix
-  const second = await review(client, plan, task, { subtask: text }, opts)
-  if (second.type === "blocked") return second
-  if (second.type === "pass") {
-    await tick(plan.path, task.id, text)
-    log(`  ✓ ${text.slice(0, 60)}(修复后通过)`)
-    return undefined
-  }
-  return {
-    type: "blocked",
-    question: `子任务 "${text}" 经修复会话后仍未通过独立审核:\n${second.gap}`,
-  }
+  await tick(plan.path, task.id, text)
+  log(`  ✓ ${text.slice(0, 60)}`)
+  return undefined
 }
 
 // Task-level acceptance after the wrap-up session: an independent side-channel
@@ -240,7 +207,7 @@ async function verifyTask(
   task: Task,
   opts: Opts,
 ): Promise<{ type: "done" } | { type: "gap"; gap: string; fixText: string } | (Outcome & { type: "blocked" })> {
-  const verdict = await review(client, plan, task, { task: true }, opts)
+  const verdict = await review(client, plan, task, opts)
   if (verdict.type === "blocked") return verdict
   if (verdict.type === "pass") {
     await markDone(plan.path, task.id, verdict.command ?? verifyCommand(task))
@@ -263,7 +230,6 @@ async function review(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
-  scope: { subtask: string } | { task: true },
   opts: Opts,
 ): Promise<Verdict | (Outcome & { type: "blocked" })> {
   const file = join(dirname(plan.path), VERDICT_FILE)
@@ -272,7 +238,7 @@ async function review(
     // Remove any stale verdict from a previous review so it cannot be
     // mistaken for the current one when the session fails to write.
     await rm(file, { force: true })
-    const result = await runSession(client, task, renderVerify(plan, task, scope) + feedback, opts, { pct: 100 })
+    const result = await runSession(client, task, renderVerify(plan, task) + feedback, opts, { pct: 100 })
     if (result.type === "blocked") return result
     const verdict = parseVerdict(await Bun.file(file).text().catch(() => ""))
     if (verdict) return verdict

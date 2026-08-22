@@ -14,7 +14,6 @@ import {
   setStatus,
   setSubtasks,
   subtasks,
-  subtaskVerify,
   tick,
   verifyCommand,
 } from "../src/plan"
@@ -142,40 +141,35 @@ describe("edit", () => {
   })
 
   test("setSubtasks 注入检查项并保留正文描述", async () => {
-    await setSubtasks(path, "T-003", ["实现路由 (verify: `bun test`)", "编写文档 (verify: `bun typecheck`)"])
+    await setSubtasks(path, "T-003", ["实现路由", "编写文档"])
     const task = (await load(path)).tasks[2]!
-    expect(task.body).toBe(
-      "REST 接口。\n\n- [ ] 实现路由 (verify: `bun test`)\n- [ ] 编写文档 (verify: `bun typecheck`)",
-    )
+    expect(task.body).toBe("REST 接口。\n\n- [ ] 实现路由\n- [ ] 编写文档")
   })
 
   test("setSubtasks 替换已有检查项(含已勾选)", async () => {
-    await setSubtasks(path, "T-003", ["旧项 (verify: `bun test`)"])
-    await tick(path, "T-003", "旧项 (verify: `bun test`)")
-    await setSubtasks(path, "T-003", ["新项 (verify: `bun test`)"])
+    await setSubtasks(path, "T-003", ["旧项"])
+    await tick(path, "T-003", "旧项")
+    await setSubtasks(path, "T-003", ["新项"])
     const task = (await load(path)).tasks[2]!
-    expect(subtasks(task.body)).toEqual([{ text: "新项 (verify: `bun test`)", done: false }])
+    expect(subtasks(task.body)).toEqual([{ text: "新项", done: false }])
   })
 
   test("tick 勾选指定检查项,其他项不受影响", async () => {
-    await setSubtasks(path, "T-003", ["甲 (verify: `bun test`)", "乙 (verify: `bun test`)"])
-    await tick(path, "T-003", "甲 (verify: `bun test`)")
+    await setSubtasks(path, "T-003", ["甲", "乙"])
+    await tick(path, "T-003", "甲")
     expect(subtasks((await load(path)).tasks[2]!.body)).toEqual([
-      { text: "甲 (verify: `bun test`)", done: true },
-      { text: "乙 (verify: `bun test`)", done: false },
+      { text: "甲", done: true },
+      { text: "乙", done: false },
     ])
     // 重复勾选或勾选不存在的项报错
-    expect(tick(path, "T-003", "甲 (verify: `bun test`)")).rejects.toThrow("no unticked subtask")
+    expect(tick(path, "T-003", "甲")).rejects.toThrow("no unticked subtask")
     expect(tick(path, "T-003", "丙")).rejects.toThrow("no unticked subtask")
   })
 
   test("appendSubtask 追加修复子任务", async () => {
-    await setSubtasks(path, "T-003", ["甲 (verify: `bun test`)"])
-    await appendSubtask(path, "T-003", "修复验收失败 (verify: `bun test`)")
-    expect(subtasks((await load(path)).tasks[2]!.body).map((item) => item.text)).toEqual([
-      "甲 (verify: `bun test`)",
-      "修复验收失败 (verify: `bun test`)",
-    ])
+    await setSubtasks(path, "T-003", ["甲"])
+    await appendSubtask(path, "T-003", "修复验收失败")
+    expect(subtasks((await load(path)).tasks[2]!.body).map((item) => item.text)).toEqual(["甲", "修复验收失败"])
   })
 
   test("markDone 标 done 并按有无 verified 写/清字段", async () => {
@@ -193,12 +187,6 @@ describe("edit", () => {
 })
 
 describe("verify 命令提取", () => {
-  test("subtaskVerify 提取检查项尾部的 verify 命令", () => {
-    expect(subtaskVerify("实现路由 (verify: `bun test test/api.test.ts`)")).toBe("bun test test/api.test.ts")
-    expect(subtaskVerify("实现路由")).toBeUndefined()
-    expect(subtaskVerify("实现路由 (verify: `bun test`) 后面还有字")).toBeUndefined()
-  })
-
   test("verifyCommand 只认 command: 前缀", () => {
     const task = (id: string, verify?: string) =>
       parse("p", `## ${id}: t [pending]\n${verify ? `  - verify: ${verify}\n` : ""}正文。\n`).tasks[0]!

@@ -163,12 +163,6 @@ export async function markDone(path: string, id: string, verified?: string) {
   await edit(path, id, { status: "done", fields: { verified } })
 }
 
-// Extracts the verify command from a subtask line's trailing
-// "(verify: `<command>`)" annotation.
-export function subtaskVerify(text: string): string | undefined {
-  return /\(verify: `([^`]+)`\)\s*$/.exec(text)?.[1]
-}
-
 // Task-level verify convention: a "command: <cmd>" prefix means the driver
 // runs it directly; anything else is natural language for the wrap-up
 // session to translate into a command.

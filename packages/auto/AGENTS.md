@@ -10,8 +10,8 @@
 
 - `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析;`init` 幂等维护 AGENTS.md 的 CURRENT.md 指针块。
 - `src/loop.ts` — 任务循环:取下一个未完成任务执行;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报。
-- `src/runner.ts` — 单任务流水线:分解会话 → 逐子任务会话(每个子任务由旁路独立审核会话判定勾选)→ 收尾会话 → 任务级审核会话验收(失败追加修复子任务,最多 3 轮);会话链复用、事件监听、提问自动答复、权限等待授权/阻塞、隐性阻塞检测;CURRENT.md 写入。driver 不亲自执行任何 verify 命令。
-- `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone)与 verify 命令提取(subtaskVerify/verifyCommand,仅作提示词参考)。
+- `src/runner.ts` — 单任务流水线:分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行)→ 收尾会话 → 任务级旁路独立审核会话验收(失败追加修复子任务,最多 3 轮);会话链复用、事件监听、提问自动答复、权限等待授权/阻塞、隐性阻塞检测;CURRENT.md 写入。driver 不亲自执行任何 verify 命令。
+- `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone)与任务级 verify 命令提取(verifyCommand,仅作提示词参考)。
 - `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 收尾 / 审核四类);审核判定文件路径 VERDICT_FILE(`.auto/verify.md`)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json/AGENTS.md
   置 0o444,driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
@@ -51,12 +51,13 @@
   全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json、
   AGENTS.md)被 chmod 为只读作为防误写护栏(非安全边界,同用户进程可经 bash chmod 绕过),
   driver 自身写入经 `src/protect.ts` 的 allowWrite/reprotect 临时放行。完成判定不靠
-  agent 自报——子任务与任务级验收都由旁路独立审核会话判定,driver 只解析其判定文件。
-- verify 审核:driver 不亲自执行任何固定命令;每个待验收对象开一个全新的旁路审核
-  会话(不进会话链),审核者可读代码、运行/调整/补充检查命令(子任务尾注与任务
-  `verify: command: <cmd>` 前缀仅作参考),禁止改实现代码;判定写入 `.auto/verify.md`,
-  driver 解析末行 `结论: 通过|差距` 与可选的 `verified-command:` 行;判定文件缺失
-  带反馈重试一次仍无则按隐性阻塞;差距追加修复子任务(任务级最多 3 轮)。
+  agent 自报——任务级验收由旁路独立审核会话判定,driver 只解析其判定文件;
+  子任务会话结束后 driver 按可信勾选(验收统一在任务级进行)。
+- verify 审核:driver 不亲自执行任何固定命令;验收只在任务级做一次——收尾会话后
+  开一个全新的旁路审核会话(不进会话链),审核者可读代码、运行/调整/补充检查命令
+  (任务 `verify: command: <cmd>` 前缀仅作参考),禁止改实现代码;判定写入
+  `.auto/verify.md`,driver 解析末行 `结论: 通过|差距` 与可选的 `verified-command:`
+  行;判定文件缺失带反馈重试一次仍无则按隐性阻塞;差距追加修复子任务(最多 3 轮)。
 - 任务流水线:正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,driver 注入
   检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md。任务内所有会话
   共用一条链:上一会话结束时上下文占比低于 50% 则复用,否则新建;占比由 watch 始终

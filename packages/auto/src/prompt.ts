@@ -28,12 +28,10 @@ export function renderDecompose(plan: Plan, task: Task): string {
 1. 阅读相关源码与 docs/,分析该任务;
 2. 把任务分解为多个子任务:仅把密不可分的工作放在同一子任务;子任务粒度以单个会话
    用较小上下文可完成为宜;多个子任务间通过 docs/ 文档或已实现的源码同步记忆;
-3. 每个子任务给出建议的验证命令(单元测试、编译或类型检查等),供独立审核会话参考;
-   命令在目标目录下执行,需要在包目录运行时把 cd 写进命令,如 \`cd packages/x && bun test\`;
-4. 把分解结果写入 docs/${task.id}.subtasks.md,格式为 Markdown 检查项,每项末尾标注
-   建议的 verify 命令,描述要自包含(执行会话仅凭该描述、CURRENT.md 与 docs/ 即可完成):
+3. 把分解结果写入 docs/${task.id}.subtasks.md,格式为 Markdown 检查项,描述要自包含
+   (执行会话仅凭该描述、CURRENT.md 与 docs/ 即可完成):
 
-- [ ] <子任务描述> (verify: \`<验证命令>\`)
+- [ ] <子任务描述>
 
 约束:
 1. 只做分解:不修改任何实现代码,也不执行任务正文中的执行期指令(如"调用 question
@@ -46,9 +44,9 @@ ${QUESTION_RULE}
 }
 
 // Subtask session: exactly one checklist item. The session implements it and
-// self-checks (the annotated command is only a suggested way); final
-// acceptance is an independent review session after this one ends, and
-// ticking the checkbox is the driver's job.
+// self-checks; ticking the checkbox is the driver's job when the session
+// ends, and acceptance of the whole task happens once in the task-level
+// review after wrap-up.
 export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts = {}): string {
   return [
     ...head(plan),
@@ -62,8 +60,8 @@ export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opt
 1. 严格只完成这一个子任务,完成后立即按下方步骤收尾并结束会话,以控制单次会话的上下文大小;
 ${QUESTION_RULE}
 3. 收尾:
-   a. 自我检查该子任务是否真正完成(末尾标注的 verify 命令是建议的验证方式,可参考执行);
-      你结束会话后由一个独立审核会话做最终判定,不通过会另开修复会话;${
+   a. 自我检查该子任务是否真正完成;整个任务的验收在最后由独立审核会话统一进行,
+      不通过会追加修复子任务;${
      opts.commitSubtask
        ? `
    b. git 提交全部未提交改动,实现子任务级别的变动历史追踪:
@@ -85,7 +83,7 @@ export function renderWrapup(plan: Plan, task: Task): string {
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
     ...blockedSection(task),
-    `该任务的全部子任务已在之前的会话中逐一完成并验证,不要重做。本次会话只执行收尾:
+    `该任务的全部子任务已在之前的会话中逐一完成,不要重做。本次会话只执行收尾:
 
 1. 更新 docs/ 中受本任务影响的文档,使下一个会话仅凭磁盘文件就能理解当前进展;
 2. 写 docs/${task.id}.report.md,内容包含:
@@ -107,27 +105,20 @@ ${indent(commitRule(`${task.id} 与任务摘要`), "   ")}
   ].join("\n\n")
 }
 
-// Review session: independent acceptance, always a fresh side session (never
-// the execution chain). The reviewer may read code and run checks — the
-// annotated command is only a suggestion it may adapt or supplement — but
-// must not modify implementation code. Its verdict goes to VERDICT_FILE with
-// a final `结论: 通过` / `结论: 差距 <描述>` line, which the driver parses.
-export function renderVerify(plan: Plan, task: Task, scope: { subtask: string } | { task: true }): string {
-  const target =
-    "subtask" in scope
-      ? `本次审核对象是该任务的这一个子任务(其他子任务由其他会话负责,不要碰):
-
-- [ ] ${scope.subtask}
-
-子任务末尾的 verify 标注是建议的验证方式。`
-      : `本次审核对象是整个任务(全部子任务已由之前的会话逐一完成并通过子任务级审核,不要重做实现)。
-先读 docs/${task.id}.report.md(收尾报告)了解各子任务产出;任务 verify 字段${
-          task.verify ? `是"${task.verify}"` : "未声明"
-        },作为验收标准。`
+// Task-level review session: independent acceptance, always a fresh side
+// session (never the execution chain). The reviewer may read code and run
+// checks — the task verify field and the report's command are only
+// suggestions it may adapt or supplement — but must not modify
+// implementation code. Its verdict goes to VERDICT_FILE with a final
+// `结论: 通过` / `结论: 差距 <描述>` line, which the driver parses.
+export function renderVerify(plan: Plan, task: Task): string {
   return [
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
-    target,
+    `本次审核对象是整个任务(全部子任务已由之前的会话逐一完成,不要重做实现)。
+先读 docs/${task.id}.report.md(收尾报告)了解各子任务产出;任务 verify 字段${
+      task.verify ? `是"${task.verify}"` : "未声明"
+    },作为验收标准。`,
     `你是独立审核者:实现工作由之前的会话完成,你只看到磁盘上的结果,不要轻信任何自报,
 以你亲自检查的结果为准。
 

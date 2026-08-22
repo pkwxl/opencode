@@ -3,10 +3,10 @@
 把本目录的三个文件复制到目标项目根目录:
 
 - `PLAN.md` — 实施计划,driver 的状态源。每个任务一个 `## T-NNN:` 段,状态标记
-  `[pending|in_progress|blocked|done]`,`verify` 字段描述验收标准(命令或自然语言),
+  `[pending|in_progress|blocked|done]`,`verify` 字段描述任务级验收标准(命令或自然语言),
   由旁路的独立审核会话解释执行(命令仅作参考,审核 AI 可调整或补充检查);审核通过
-  会把实际命令写入 `verified` 字段作为高可信完成记录,driver 以审核结论为准勾选
-  检查项与 `[done]` 标记。
+  会把实际命令写入 `verified` 字段作为高可信完成记录。子任务检查项由子任务会话
+  自我检查后由 driver 直接勾选,验收统一在任务级进行。
 - `opencode.json` — 权限白名单:安全的只读/构建/测试命令自动放行,其余 bash 命令
   升级为人工审批(触发阻塞流程)。
 - `.opencode/agent/auto.md` — 非交互执行 agent 契约。

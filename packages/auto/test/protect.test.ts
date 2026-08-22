@@ -45,9 +45,9 @@ describe("protect", () => {
 
   test("保护期间 driver 的 PLAN.md 写入仍成功,且写后保持只读", async () => {
     await protect(dir)
-    await setSubtasks(path, "T-001", ["甲 (verify: `bun test`)"])
+    await setSubtasks(path, "T-001", ["甲"])
     expect(await writable(path)).toBe(false)
-    await tick(path, "T-001", "甲 (verify: `bun test`)")
+    await tick(path, "T-001", "甲")
     await markDone(path, "T-001", "bun test")
     expect(await writable(path)).toBe(false)
     const task = (await load(path)).tasks[0]!
