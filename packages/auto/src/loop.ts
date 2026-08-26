@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
-import { block, countSubtasks, load, next } from "./plan"
+import { block, countSubtasks, load, next, resetInProgress } from "./plan"
 import { renderDryrun, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
 import { commitAll, runOnce, runTask, type SubtaskMode } from "./runner"
@@ -125,6 +125,10 @@ export async function runAll(
       return 0
     }
     let ran = 0
+    // 中断恢复: 上次运行被 kill/Ctrl+C 可能遗留 in_progress 标记(无会话在跑),
+    // 重置为 pending;主循环经 next() 照样续跑,attempts 保留。
+    const stale = await resetInProgress(path)
+    if (stale.length) log(`↻ 恢复中断状态: ${stale.join(", ")} 从 in_progress 重置为 pending`)
     for (;;) {
       const plan = await load(path)
       const task = next(plan)

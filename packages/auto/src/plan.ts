@@ -23,7 +23,9 @@ export type Plan = {
 }
 
 // ## T-001: 任务标题 [pending]
-const HEADING = /^## (T-[\w-]+): (.+?) \[(pending|in_progress|blocked|done)\]\s*$/
+// 容忍状态标记前缺空格(## T-001: 标题[pending])——否则该标题会被静默
+// 吞进上一任务正文,任务从解析结果中消失,next() 直接跳到更后面的任务。
+const HEADING = /^## (T-[\w-]+): (.+?)\s*\[(pending|in_progress|blocked|done)\]\s*$/
 //   - verify: bun test
 const FIELD = /^\s+- ([\w-]+): (.*)$/
 
@@ -98,6 +100,17 @@ export async function begin(path: string, id: string) {
   const plan = await load(path)
   const task = require(plan, id)
   await edit(path, id, { status: "in_progress", fields: { attempts: String(task.attempts + 1) } })
+}
+
+// Crash recovery at run start: an interrupted run (kill, crash) leaves tasks
+// marked in_progress even though no session is actually running. Reset them
+// to pending; the loop resumes them via next() either way, attempts survive.
+// Keeps at most one in_progress task — the one the current run is executing.
+export async function resetInProgress(path: string): Promise<string[]> {
+  const plan = await load(path)
+  const stale = plan.tasks.filter((task) => task.status === "in_progress")
+  for (const task of stale) await edit(path, task.id, { status: "pending" })
+  return stale.map((task) => task.id)
 }
 
 export async function block(path: string, id: string, question: string) {

@@ -109,9 +109,13 @@ driver 对每个任务执行流水线,**PLAN.md 与 CURRENT.md 只由 driver 写
 driver 全程不亲自执行任何固定 verify 命令——命令只是给审核 AI 的参考,
 命令本身写错或环境不适用不会导致误判不通过。
 
-当前任务镜像在 `CURRENT.md`(任务开始与每次勾选后重写,含完整任务内容与进度);
+当前任务镜像在 `CURRENT.md`(任务开始时即写入——中断运行遗留的缺失/过期文件会被
+重建——每次勾选后刷新,含完整任务内容与进度);
 `init` 追加的 AGENTS.md 指针块要求每个会话先读它——AGENTS.md 作为 system context
 每个 provider turn 现场重读,不随上下文压缩丢失,server 无需重启。
+
+上次运行被 kill/Ctrl+C 中断时,PLAN.md 可能遗留 `in_progress` 标记(实际无会话在跑);
+`run` 启动时会把它们全部重置为 `pending` 再正常续跑(`attempts` 保留),无需手工清理。
 
 `run` 期间 driver 会把 PLAN.md、CURRENT.md、opencode.json 置为只读
 (chmod 0o444),driver 自身写入时临时恢复、写完立即重置;`run` 结束(含阻塞退出)
@@ -131,7 +135,8 @@ bash chmod 绕过,并非安全边界。AGENTS.md 不在只读之列(任务可更
 ```
 
 - 任务标题格式:`## T-<编号>: <标题> [<状态>]`,状态为 `pending` / `in_progress` /
-  `blocked` / `done`,driver 取第一个非 `done` 任务执行。
+  `blocked` / `done`,driver 取第一个非 `done` 任务执行。状态标记前的空格可省略
+  (`标题[pending]` 也能解析),但写计划时建议保留。
 - 字段行(`  - key: value`)必须紧跟标题且连续。driver 会自行维护 `attempts`、
   `verified`、`question`、`answer` 等字段与全部状态标记,**请勿手工编辑**;
   agent 会话也被禁止编辑 PLAN.md 与 CURRENT.md。

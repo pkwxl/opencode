@@ -119,6 +119,11 @@ export async function runTask(
   await begin(plan.path, task.id)
   const chain: SessionChain = { pct: 100, used: 0 }
   const mode = opts.subtask ?? "auto"
+  // Mirror the task into CURRENT.md before the first session: the agent
+  // contract requires every session to read it, and an interrupted run may
+  // have left it missing or stale. Later writeCurrent calls refresh it.
+  task = requireTask(await load(plan.path), task.id)
+  await writeCurrent(plan.path, task, mode !== "auto")
   if (mode === "auto") {
     const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
     if (decomposed.type === "blocked") return decomposed

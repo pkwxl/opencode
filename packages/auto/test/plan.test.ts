@@ -11,6 +11,7 @@ import {
   markDone,
   next,
   parse,
+  resetInProgress,
   setStatus,
   setSubtasks,
   subtasks,
@@ -76,6 +77,17 @@ describe("parse", () => {
     expect(() => parse("p", "## T-001: a [pending]\n## T-001: b [pending]\n")).toThrow("duplicate task id")
   })
 
+  test("状态标记前缺空格的标题也能解析(不被吞进上一任务正文)", () => {
+    const plan = parse("p", "## T-001: a [done]\n正文。\n## T-002: b[pending]\n## T-003: c [done]\n")
+    expect(plan.tasks.map((t) => [t.id, t.title, t.status])).toEqual([
+      ["T-001", "a", "done"],
+      ["T-002", "b", "pending"],
+      ["T-003", "c", "done"],
+    ])
+    expect(plan.tasks[0]!.body).toBe("正文。")
+    expect(next(plan)?.id).toBe("T-002")
+  })
+
   test("countSubtasks 统计正文中的检查项", () => {
     expect(countSubtasks("步骤:\n- [x] 甲\n- [ ] 乙\n  - [X] 丙\n- 普通列表\n")).toEqual({ done: 2, total: 3 })
     expect(countSubtasks("没有检查项")).toEqual({ done: 0, total: 0 })
@@ -109,6 +121,20 @@ describe("edit", () => {
     expect(task.attempts).toBe(1)
     await begin(path, "T-003")
     expect((await load(path)).tasks[2]!.attempts).toBe(2)
+  })
+
+  test("resetInProgress 重置中断遗留的 in_progress,保留字段", async () => {
+    await begin(path, "T-003")
+    const reset = await resetInProgress(path)
+    expect(reset).toEqual(["T-003"])
+    const task = (await load(path)).tasks[2]!
+    expect(task.status).toBe("pending")
+    expect(task.attempts).toBe(1)
+    // 无 in_progress 时为 no-op;blocked/done 不受影响
+    expect(await resetInProgress(path)).toEqual([])
+    const plan = await load(path)
+    expect(plan.tasks[0]!.status).toBe("done")
+    expect(plan.tasks[1]!.status).toBe("blocked")
   })
 
   test("block 写入问题并清除旧 answer", async () => {
