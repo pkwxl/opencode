@@ -7,6 +7,7 @@ import { renderDryrun, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
 import { commitAll, runOnce, runTask, type SubtaskMode } from "./runner"
 import { ensure } from "./server"
+import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 // AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
 // AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失。
@@ -53,6 +54,20 @@ export async function runAll(
     return 1
   }
 
+  // run 前完整性检查: agent 契约文件缺失时服务端只回 UnknownError(不含根因),
+  // 此处提前报出并提示恢复方式;与模板不一致仅警告(init 会刷新该文件)。
+  const agentName = opts.agent ?? "auto"
+  const agentFile = join(directory, ".opencode/agent", `${agentName}.md`)
+  const agentText = await Bun.file(agentFile).text().catch(() => undefined)
+  if (agentText === undefined) {
+    log(`⏸ 缺少 agent 契约文件: .opencode/agent/${agentName}.md(缺失会导致下发任务失败: UnknownError)`)
+    log(`  恢复方式: 运行 opencode-auto init ${directory} 重建该文件(或手工补回),然后重新运行`)
+    return 1
+  }
+  if (agentName === "auto" && agentText !== (await Bun.file(templateAgent).text())) {
+    log(`⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),可运行 opencode-auto init ${directory} 刷新`)
+  }
+
   const watcher = opts.verbose ? watchFiles(directory) : undefined
   const progress = opts.commit === "subtask" ? trackSubtasks(path) : undefined
   // Driver-owned files go read-only for the whole run; driver writes
@@ -83,7 +98,7 @@ export async function runAll(
   try {
     server = await ensure(directory, opts.server)
     if (opts.dryrun) {
-      const result = await runOnce(server.client, "权限预检", renderDryrun(), { ...opts, dryrun: true })
+      const result = await runOnce(server.client, "权限预检", renderDryrun(), { ...opts, dryrun: true, dir: directory })
       if (result.type === "blocked") {
         log(`⏸ 预检会话受阻:\n${result.question}`)
         return 2
@@ -99,7 +114,7 @@ export async function runAll(
         // --commit once: 任务期间不提交,全部完成后开一次整体提交会话。
         if (opts.commit === "once" && ran > 0) {
           banner("全部任务完成,整体提交")
-          const outcome = await commitAll(server.client, plan, opts)
+          const outcome = await commitAll(server.client, plan, { ...opts, dir: directory })
           if (outcome.type !== "completed") {
             const detail = outcome.type === "blocked" ? outcome.question : outcome.reason
             log(`⏸ 整体提交未完成(任务本身已全部完成):\n${detail}`)
@@ -119,6 +134,7 @@ export async function runAll(
       const start = Date.now()
       const outcome = await runTask(server.client, plan, task, {
         agent: opts.agent,
+        dir: directory,
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
         commit: opts.commit,

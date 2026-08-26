@@ -48,6 +48,8 @@ export type SubtaskMode = "off" | "auto" | "ondemand"
 
 type Opts = {
   agent?: string
+  // 目标目录;用于下发失败时检测 agent 契约文件缺失并给出恢复提示。
+  dir?: string
   verbose?: boolean
   waitAnswer?: number
   commit?: CommitMode
@@ -453,7 +455,7 @@ async function attempt(
     agent: opts.agent,
     parts: [{ type: "text", text: promptText }],
   })
-  if (prompt.error) return { type: "blocked", question: `下发任务失败: ${JSON.stringify(prompt.error)}` }
+  if (prompt.error) return { type: "blocked", question: `下发任务失败: ${JSON.stringify(prompt.error)}${await missingAgentHint(opts)}` }
 
   const result = await watching
   chain.id = sessionID
@@ -462,6 +464,16 @@ async function attempt(
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
   return { type: "idle", lastText: result.lastText }
+}
+
+// 下发任务失败的常见根因: 目标目录缺少 agent 契约文件时服务端只回
+// UnknownError(错误体不含根因),此处检测并提示恢复方式。
+async function missingAgentHint(opts: Opts): Promise<string> {
+  if (!opts.dir) return ""
+  const file = `.opencode/agent/${opts.agent ?? "auto"}.md`
+  const exists = await Bun.file(join(opts.dir, file)).exists()
+  if (exists) return ""
+  return `\n提示: 目标目录缺少 agent 契约文件 ${file},服务端会因此以 UnknownError 拒绝下发任务;运行 opencode-auto init ${opts.dir} 恢复后重跑`
 }
 
 async function watch(

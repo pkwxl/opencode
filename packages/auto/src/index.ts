@@ -170,7 +170,7 @@ if (command === "init") {
     }
     const server = await ensure(directory, flags.get("server"))
     try {
-      const result = await runOnce(server.client, "初始化计划", renderInit(promptText), { agent: flags.get("agent") })
+      const result = await runOnce(server.client, "初始化计划", renderInit(promptText), { agent: flags.get("agent"), dir: directory })
       if (result.type === "blocked") {
         console.error(`⏸ 初始化会话受阻:\n${result.question}`)
         process.exit(2)

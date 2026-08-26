@@ -9,7 +9,7 @@
 ## 结构
 
 - `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析(含 `-p` 短选项);`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,`-p/--prompt` 在初始化后直接调用一次 AI 填充 PLAN.md 供人工审核。
-- `src/loop.ts` — 任务循环:取下一个未完成任务执行;任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块存在;`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下)。
+- `src/loop.ts` — 任务循环:取下一个未完成任务执行;任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块存在;run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下)。
 - `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,未完成回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → 任务级旁路独立审核会话验收(off 以外失败追加修复子任务,最多 3 轮);会话链复用、事件监听、提问自动答复、权限等待授权/阻塞(dryrun 下自动拒绝但不中断)、隐性阻塞检测;CURRENT.md 写入;`commitAll` 与 `runOnce` 独立会话。driver 不亲自执行任何 verify 命令。
 - `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone/setStatus)与任务级 verify 命令提取(verifyCommand,仅作提示词参考)。
 - `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / 审核 / 权限预检 / 整体提交 / 初始化规划);审核判定文件路径 VERDICT_FILE(`.auto/verify.md`);--commit 四档(CommitMode)。
@@ -42,10 +42,13 @@
 
 ## 行为约定(改动前必读)
 
-- 退出码:`0` 全部完成,`1` 用法/环境错误,`2` 阻塞或未完成为 pending、等待人工介入
+- 退出码:`0` 全部完成,`1` 用法/环境错误(含 run 前 agent 契约文件缺失的完整性检查),`2` 阻塞或未完成为 pending、等待人工介入
   (阻塞问题写入 PLAN.md;pending 回退不写字段),
   `130` 被连续两次 Ctrl+C 强制终止(单次 Ctrl+C 仅提示,3 秒窗口内第二次才退出,
   退出前尽力恢复文件可写并关闭 server)。
+- 下发任务失败(UnknownError)的常见根因是目标目录缺少 `.opencode/agent/<agent>.md`
+  (服务端错误体不含根因):run 前完整性检查拦截该情况;运行中发生时 driver 在
+  阻塞问题后追加恢复提示(检测依赖 Opts.dir,run/init/dryrun/commitAll 均须传入)。
 - --commit 四档:`subtask`(缺省;每子任务提交,旧选项 --commit-subtask 为别名,
   `=false` 等价 `--commit task`)/ `task`(仅任务收尾提交)/ `once`(任务期间不提交,
   全部完成后开一次整体提交会话)/ `none`(从不提交)。
