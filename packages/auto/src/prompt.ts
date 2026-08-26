@@ -1,4 +1,4 @@
-import { verifyCommand, type Plan, type Task } from "./plan"
+import type { Plan, Task } from "./plan"
 
 // --commit 四档: subtask(每子任务提交,缺省)/ task(仅任务收尾提交)/
 // once(整个计划完成后提交一次)/ none(从不提交)。
@@ -65,7 +65,7 @@ export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opt
 ${QUESTION_RULE}
 3. 收尾:
    a. 自我检查该子任务是否真正完成;整个任务的验收在最后由独立审核会话统一进行,
-      不通过会追加修复子任务;${
+      不通过会把差距反馈回来修复;${
      opts.commit === "subtask"
        ? `
    b. git 提交全部未提交改动,实现子任务级别的变动历史追踪:
@@ -73,30 +73,21 @@ ${indent(commitRule(`${task.id} 与子任务"${subtask}"`), "      ")};
    c.`
        : `
    b.`
-   } 不要运行任务级 verify、不要更新 docs/,这些在最后统一收尾;${STATE_RULE}`,
+   } 不要运行任务级 verify(验收由 driver 交独立审核会话处理)、不要更新 docs/(最后统一收尾);${STATE_RULE}`,
   ].join("\n\n")
 }
 
 // Wrap-up session: every subtask is already ticked by the driver. Only docs,
-// the sweep commit, and the acceptance report remain. Final acceptance is an
-// independent review session afterwards, so the report must state the
-// suggested acceptance command precisely on a "verified-command:" line.
+// the sweep commit, and the output-summary report remain. The session never
+// runs the task verify and never concludes acceptance: verify handling
+// belongs to the driver, which delegates it to the independent review
+// session afterwards (a gap there appends a fix subtask).
 export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boolean } = {}): string {
-  const direct = verifyCommand(task)
   const commit = opts.commit !== "once" && opts.commit !== "none"
   const steps = [
     `1. 更新 docs/ 中受本任务影响的文档,使下一个会话仅凭磁盘文件就能理解当前进展;`,
-    `2. 写 docs/${task.id}.report.md,内容包含:
-   - 一行 \`verified-command: <命令>\`(独立成行):任务验收命令。${
-     direct
-       ? `任务 verify 字段已声明命令,直接照抄:\`${direct}\`;`
-       : task.verify
-         ? `任务 verify 字段是"${task.verify}",把它翻译为具体的测试/检查命令;`
-         : `任务未声明 verify 验收标准,给出项目自身的测试/检查命令;`
-   }
-   - 各子任务的产出摘要;
-   - 最后一行写 \`结论: 通过\` 或 \`结论: 差距 <差距描述>\`(先亲自运行 verified-command
-     确认结果再下结论);`,
+    `2. 写 docs/${task.id}.report.md: 各子任务的产出摘要(改动了什么、关键决策与遗留事项),
+   供后续会话与审核者仅凭磁盘文件了解本次任务的产出;`,
     ...(commit
       ? [
           `3. git 提交全部未提交改动(不仅限于本次会话修改的文件——之前的会话可能因中断
@@ -104,7 +95,8 @@ export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boole
 ${indent(commitRule(`${task.id} 与任务摘要`), "   ")}`,
         ]
       : []),
-    `${commit ? 4 : 3}. ${STATE_RULE}任务级验收由独立审核会话在你结束会话后进行,不通过会追加修复子任务。`,
+    `${commit ? 4 : 3}. 不要运行任务级 verify、不要下验收结论: verify 的处理权在 driver,任务级
+   验收由它启动的独立审核会话在你结束会话后进行,不通过会把差距反馈回执行会话修复。${STATE_RULE}`,
   ]
   return [
     ...head(plan),
@@ -122,11 +114,12 @@ ${steps.join("\n")}
 }
 
 // Task-level review session: independent acceptance, always a fresh side
-// session (never the execution chain). The reviewer may read code and run
-// checks — the task verify field and the report's command are only
-// suggestions it may adapt or supplement — but must not modify
-// implementation code. Its verdict goes to VERDICT_FILE with a final
-// `结论: 通过` / `结论: 差距 <描述>` line, which the driver parses.
+// session (never the execution chain). The driver owns the task verify field
+// and delegates its handling to this session: the reviewer may read code and
+// run checks — the verify field's declared command is only a suggestion it
+// may adapt or supplement — but must not modify implementation code. Its
+// verdict goes to VERDICT_FILE with a final `结论: 通过` /
+// `结论: 差距 <描述>` line, which the driver parses.
 export function renderVerify(plan: Plan, task: Task): string {
   return [
     ...head(plan),
@@ -147,7 +140,28 @@ ${QUESTION_RULE}
 4. 把判定写入 ${VERDICT_FILE}(覆盖写):简述你实际执行的检查;若实际运行了验证命令,
    附一行 \`verified-command: <命令>\`(独立成行);最后一行必须是 \`结论: 通过\` 或
    \`结论: 差距 <差距描述>\`;
-5. 写出判定文件后立即结束会话。`,
+ 5. 写出判定文件后立即结束会话。`,
+  ].join("\n\n")
+}
+
+// Fix round after a failed task-level review: the driver sends the review
+// session's gap back and resumes the execution session chain with it. The
+// session fixes exactly the reported gap; wrap-up and a fresh review session
+// re-run acceptance afterwards.
+export function renderFix(plan: Plan, task: Task, gap: string): string {
+  return [
+    ...head(plan),
+    `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
+    `任务级独立审核会话对本任务的验收未通过,差距如下:
+
+${gap}
+
+约束:
+1. 只修复审核指出的差距,逐项核对并修复,不要做差距之外的实现工作;
+${QUESTION_RULE}
+3. 不要运行任务级 verify(验收由 driver 交独立审核会话处理)、不要更新 docs/(最后统一收尾);
+   ${STATE_RULE}
+4. 修复完成并自我检查后,立即结束会话。`,
   ].join("\n\n")
 }
 

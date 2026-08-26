@@ -163,22 +163,17 @@ export async function tick(path: string, id: string, text: string) {
   await edit(path, id, { body })
 }
 
-// Appends a fix-round subtask to the task body's checklist.
-export async function appendSubtask(path: string, id: string, text: string) {
-  const plan = await load(path)
-  const task = require(plan, id)
-  await edit(path, id, { body: `${task.body}\n- [ ] ${text}` })
-}
-
 // Marks the task [done]. A passing verify run records its command in the
 // `verified` field; without one the field is cleared (no stale record).
 export async function markDone(path: string, id: string, verified?: string) {
   await edit(path, id, { status: "done", fields: { verified } })
 }
 
-// Task-level verify convention: a "command: <cmd>" prefix means the driver
-// runs it directly; anything else is natural language for the wrap-up
-// session to translate into a command.
+// Task-level verify convention: a "command: <cmd>" prefix declares a concrete
+// command; anything else is natural language. Either way the driver never
+// runs it — the review session interprets the field as the acceptance
+// standard, and the command a passing review actually ran is recorded in the
+// task's `verified` field.
 export function verifyCommand(task: Task): string | undefined {
   const match = /^command:\s*(.+)$/.exec(task.verify?.trim() ?? "")
   return match?.[1]?.trim() || undefined

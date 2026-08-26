@@ -4,6 +4,7 @@ import {
   renderCommitAll,
   renderDecompose,
   renderDryrun,
+  renderFix,
   renderHandoffSteer,
   renderInit,
   renderSubtask,
@@ -64,7 +65,7 @@ describe("renderSubtask", () => {
     expect(text).toContain("严格只完成这一个子任务")
     expect(text).toContain("自我检查该子任务是否真正完成")
     expect(text).toContain("整个任务的验收在最后由独立审核会话统一进行")
-    expect(text).toContain("不要运行任务级 verify、不要更新 docs/")
+    expect(text).toContain("不要运行任务级 verify(验收由 driver 交独立审核会话处理)、不要更新 docs/")
     expect(text).toContain("T-002: 实现迁移")
     // 状态文件由 driver 维护,不再要求 agent 勾选
     expect(text).toContain("由 driver 独占维护")
@@ -85,18 +86,19 @@ describe("renderWrapup", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("全部子任务已在之前的会话中逐一完成,不要重做")
     expect(text).toContain("docs/T-002.report.md")
-    expect(text).toContain("verified-command")
-    expect(text).toContain("结论: 通过")
-    expect(text).toContain("结论: 差距")
     expect(text).toContain("git 提交全部未提交改动")
     expect(text).toContain("由 driver 独占维护")
     expect(text).not.toContain("把当前任务的状态标记改为 [done]")
   })
 
-  test("command: 前缀的任务直接照抄命令;自然语言 verify 要求翻译", () => {
-    expect(renderWrapup(plan, task)).toContain("直接照抄:\\`bun test\\`".replaceAll("\\`", "`"))
-    const nl = renderWrapup(plan, plan.tasks[2]!)
-    expect(nl).toContain('任务 verify 字段是"API 返回 200",把它翻译为具体的测试/检查命令')
+  test("verify 处理权在 driver: 收尾不运行 verify、不下结论,由独立审核会话验收", () => {
+    const text = renderWrapup(plan, task)
+    expect(text).toContain("不要运行任务级 verify、不要下验收结论")
+    expect(text).toContain("verify 的处理权在 driver")
+    expect(text).toContain("独立审核会话")
+    expect(text).not.toContain("verified-command")
+    expect(text).not.toContain("结论: 通过")
+    expect(text).not.toContain("结论: 差距")
   })
 
   test("--commit once/none 省略清扫提交;--commit task 保留", () => {
@@ -108,6 +110,18 @@ describe("renderWrapup", () => {
   test("solo 模式(off/ondemand)不提及子任务", () => {
     expect(renderWrapup(plan, task, { solo: true })).toContain("实现已在之前的会话中完成")
     expect(renderWrapup(plan, task)).toContain("全部子任务已在之前的会话中逐一完成")
+  })
+})
+
+describe("renderFix", () => {
+  test("把审核差距反馈回执行会话: 只修差距、不运行 verify、不下结论", () => {
+    const text = renderFix(plan, task, "迁移脚本缺少回滚逻辑")
+    expect(text).toContain("迁移脚本缺少回滚逻辑")
+    expect(text).toContain("验收未通过")
+    expect(text).toContain("只修复审核指出的差距")
+    expect(text).toContain("不要运行任务级 verify")
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).not.toContain("verified-command")
   })
 })
 

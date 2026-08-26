@@ -11,9 +11,9 @@
 - `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析(含 `-p`/`-i` 短选项);`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,`-p/--prompt` 在初始化后直接调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
 - `src/loop.ts` — 任务循环:取下一个未完成任务执行;启动时 `resetInProgress` 把上次运行中断遗留的 in_progress 重置为 pending(中断恢复);任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块存在;run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下);`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
 - `src/interactive.ts` — `--interactive` 旁路:常驻 readline 把回车输入经 promptAsync(fire-and-forget)注入当前活动会话(attach 由 runner 在每个会话建立/复用时调用;无活动会话丢弃并提示);ask/任务间暂停的人工等待经同一输入行接收(空行原样上交给调用方解释);stdin 关闭后回落非交互行为;io 可注入供测试。
-- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,未完成回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → 任务级旁路独立审核会话验收(off 以外失败追加修复子任务,最多 3 轮);会话链复用、事件监听、提问自动答复、权限等待授权/阻塞(dryrun 下自动拒绝但不中断)、隐性阻塞检测;CURRENT.md 在任务开始时即写入(中断遗留缺失/过期时重建),每次勾选后刷新;`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收。driver 不亲自执行任何 verify 命令。
-- `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone/setStatus/resetInProgress)与任务级 verify 命令提取(verifyCommand,仅作提示词参考)。
-- `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / 审核 / 权限预检 / 整体提交 / 初始化规划);审核判定文件路径 VERDICT_FILE(`.auto/verify.md`);--commit 四档(CommitMode)。
+- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,未完成回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → 任务级旁路独立审核会话验收(off 以外失败把审核差距反馈回执行会话修复,最多 3 轮);会话链复用、事件监听、提问自动答复、权限请求等待授权(明确非授权回答拒绝后继续,超时阻塞;dryrun 下自动拒绝但不中断)、隐性阻塞检测;CURRENT.md 在任务开始时即写入(中断遗留缺失/过期时重建),每次勾选后刷新;`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收。driver 不亲自执行任何 verify 命令。
+- `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/markDone/setStatus/resetInProgress)与任务级 verify 命令提取(verifyCommand,仅作提示词参考)。
+- `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / 审核 / 修复 / 权限预检 / 整体提交 / 初始化规划);审核判定文件路径 VERDICT_FILE(`.auto/verify.md`);--commit 四档(CommitMode)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json
   置 0o444(AGENTS.md 不在其列,任务可更新它),driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
 - `src/server.ts` — opencode server 获取:优先复用已有 server,否则 spawn 并管理其生命周期(server 长驻,不随会话重启)。
@@ -56,16 +56,17 @@
   `=false` 等价 `--commit task`)/ `task`(仅任务收尾提交)/ `once`(任务期间不提交,
   全部完成后开一次整体提交会话)/ `none`(从不提交)。
 - --subtask 三档:`auto`(缺省;分解会话 → 逐子任务)/ `off`(单会话完成整个任务;
-  验收差距不追加修复子任务,任务回退 pending 等人工改进)/ `ondemand`(单会话执行,
+  验收差距不做修复重跑,任务回退 pending 等人工改进)/ `ondemand`(单会话执行,
   watch 在已用量达到 --context-limit 时向进行中会话 steer 交接提示——每会话一次,
   v2 prompt 默认 steer;会话结束按 docs/<id>.handoff.md 末行 `状态: 继续|完成`
   决定续跑或进入收尾,文件缺失带反馈重试一次再按隐性阻塞)。
 - --dryrun: 只跑一次权限预检会话(列出授权外目录/操作并逐只读探查),该会话内
   权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复;报告写入
   .auto/dryrun.md 并打印,不执行任何任务。
-- 非权限提问自动答复(--wait-answer 下先等人工 stdin 答复,超时回落自动答复);
-  权限提问与 permission.asked 在 --wait-answer 下同样等待人工指令,回答
-  allow/yes/y 等视为授权(permission 以 always 放行),超时或其余回答则阻塞停机;
+- 提问(含权限类)自动答复(--wait-answer 下先等人工 stdin 答复,超时回落自动答复;
+  缺省 --wait-answer 时权限提问仍直接阻塞);permission.asked 在 --wait-answer 下
+  同样等待人工指令,回答 allow/yes/y 等视为授权(以 always 放行),明确的其余回答
+  拒绝该权限但不中断(AI 无授权绕开继续),超时则拒绝并阻塞停机;
   同一问题重复出现仍阻塞停机。--wait-between 在每个任务完成后暂停等待人工
   (回车立即继续,超时自动继续),首个任务前不等待。
 - --interactive/-i 旁路交互(与 --verbose 互斥,index.ts 检查):不改变任何既有
@@ -81,13 +82,15 @@
   driver 自身写入经 `src/protect.ts` 的 allowWrite/reprotect 临时放行。完成判定不靠
   agent 自报——任务级验收由旁路独立审核会话判定,driver 只解析其判定文件;
   子任务会话结束后 driver 按可信勾选(验收统一在任务级进行)。
-- verify 审核:driver 不亲自执行任何固定命令;验收只在任务级做一次——收尾会话后
-  开一个全新的旁路审核会话(不进会话链),审核者可读代码、运行/调整/补充检查命令
-  (任务 `verify: command: <cmd>` 前缀仅作参考),禁止改实现代码;判定写入
-  `.auto/verify.md`,driver 解析末行 `结论: 通过|差距` 与可选的 `verified-command:`
-  行;判定文件缺失带反馈重试一次仍无则按隐性阻塞;差距追加修复子任务(最多 3 轮)。
+- verify 审核:verify 的处理权在 driver,driver 不亲自执行任何固定命令;验收只在
+  任务级做一次——收尾会话后开一个全新的旁路审核会话(不进会话链),审核者可读代码、
+  运行/调整/补充检查命令(任务 `verify: command: <cmd>` 前缀仅作参考),禁止改实现
+  代码;判定写入 `.auto/verify.md`,driver 解析末行 `结论: 通过|差距` 与可选的
+  `verified-command:` 行;判定文件缺失带反馈重试一次仍无则按隐性阻塞;差距由
+  driver 反馈回执行会话链续跑修复(renderFix),修复后重新收尾与验收(最多 3 轮)。
 - 任务流水线(auto 模式):正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,
-  driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md。
+  driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md
+  (只写产出摘要,不运行任务级 verify、不下验收结论)。
   任务内所有会话共用一条链:上一会话结束时上下文占比低于 50% 且已用量低于
   --context-limit(默认 64k tokens)则复用,否则新建;占比与用量由 watch 始终跟踪
   (与 --verbose 无关),拿不到模型上限时占比记 100 即总是新建;瞬时会话错误重试

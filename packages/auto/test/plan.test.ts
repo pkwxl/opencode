@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  appendSubtask,
   begin,
   block,
   countSubtasks,
@@ -190,12 +189,6 @@ describe("edit", () => {
     // 重复勾选或勾选不存在的项报错
     expect(tick(path, "T-003", "甲")).rejects.toThrow("no unticked subtask")
     expect(tick(path, "T-003", "丙")).rejects.toThrow("no unticked subtask")
-  })
-
-  test("appendSubtask 追加修复子任务", async () => {
-    await setSubtasks(path, "T-003", ["甲"])
-    await appendSubtask(path, "T-003", "修复验收失败")
-    expect(subtasks((await load(path)).tasks[2]!.body).map((item) => item.text)).toEqual(["甲", "修复验收失败"])
   })
 
   test("markDone 标 done 并按有无 verified 写/清字段", async () => {

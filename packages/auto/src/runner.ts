@@ -5,7 +5,6 @@ import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { log, subbanner, vlog } from "./log"
 import {
-  appendSubtask,
   begin,
   countSubtasks,
   load,
@@ -22,6 +21,7 @@ import {
   handoffFile,
   renderCommitAll,
   renderDecompose,
+  renderFix,
   renderHandoffSteer,
   renderSubtask,
   renderVerify,
@@ -34,13 +34,14 @@ import { allowWrite, reprotect } from "./protect"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string } | { type: "incomplete"; reason: string }
 
-// Non-permission questions get this fixed autonomous reply when no human
-// answers in time (or --wait-answer was not given); only a repeated question
-// on the same issue escalates to human intervention.
+// Questions get this fixed autonomous reply when no human answers in time
+// (or --wait-answer was not given for non-permission questions); only a
+// repeated question on the same issue escalates to human intervention.
 const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
 
-// A failing task-level acceptance produces a fix subtask; after this many
-// unsuccessful fix rounds the task blocks for human intervention.
+// A failing task-level acceptance feeds the gap back into the execution
+// session chain; after this many unsuccessful fix rounds the task blocks for
+// human intervention.
 const FIX_ROUNDS = 3
 
 // --subtask 三档: off(单会话完成)/ auto(自动分解,缺省)/ ondemand(单会话执行,
@@ -99,17 +100,18 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // writes docs/<id>.handoff.md and a fresh session continues from it.
 // All modes end with a wrap-up session (docs, sweep commit per --commit,
 // docs/<id>.report.md) and an independent side-channel review session
-// (always fresh, never on the chain). A gap appends a fix subtask
-// (max FIX_ROUNDS, except off mode).
+// (always fresh, never on the chain). A gap sends the review feedback back
+// into the execution chain for a fix round (max FIX_ROUNDS, except off mode).
 // The driver never runs verify commands itself: the annotated commands are
 // only suggestions the reviewer may run, adapt, or supplement, so a broken
 // script cannot by itself fail acceptance.
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW and its used
 // tokens below contextLimit (default 64k), otherwise a fresh session is created.
-// Blocking happens on unanswered/rejected permission requests, a repeated
-// question on the same issue, exhausted transient session errors, or a failed
-// verification.
+// Blocking happens on unanswered permission requests (an explicit non-approval
+// reply rejects the permission but lets the session continue without it), a
+// repeated question on the same issue, exhausted transient session errors, or
+// a failed verification.
 export async function runTask(
   client: OpencodeClient,
   plan: Plan,
@@ -136,8 +138,7 @@ export async function runTask(
   await writeCurrent(plan.path, task, mode !== "auto")
 
   for (let round = 0; ; ) {
-    // auto 模式此处执行分解出的检查项;off/ondemand 模式只有验收失败后追加的
-    // 修复子任务(或正文中人工编写的检查项)。
+    // auto 模式此处执行分解出的检查项;off/ondemand 模式只有正文中人工编写的检查项。
     for (;;) {
       const items = subtasks(task.body)
       const index = items.findIndex((item) => !item.done)
@@ -154,7 +155,7 @@ export async function runTask(
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "done") return { type: "completed" }
 
-    // off 模式不追加修复子任务: 任务回退 pending,由用户改进 PLAN.md 后重试。
+    // off 模式不做修复重跑: 任务回退 pending,由用户改进 PLAN.md 后重试。
     if (mode === "off") {
       await setStatus(plan.path, task.id, "pending")
       return { type: "incomplete", reason: verdict.gap }
@@ -163,9 +164,10 @@ export async function runTask(
     if (round >= FIX_ROUNDS) {
       return { type: "blocked", question: `任务级验收连续 ${FIX_ROUNDS} 轮未通过:\n${verdict.gap}` }
     }
-    log(`↻ ${task.id} 验收未通过,追加修复子任务(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
-    await appendSubtask(plan.path, task.id, verdict.fixText)
-    task = requireTask(await load(plan.path), task.id)
+    // 把审核会话的差距信息反馈回执行会话链,续跑修复后再走收尾与验收。
+    log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
+    const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap), opts, chain)
+    if (fixed.type === "blocked") return fixed
   }
 }
 
@@ -332,27 +334,23 @@ async function runSubtask(
   return undefined
 }
 
-// Task-level acceptance after the wrap-up session: an independent side-channel
-// review session audits the whole task (task verify field and the report's
-// verified-command are only suggestions). A gap yields the fix subtask text
-// for the next round.
+// Task-level acceptance after the wrap-up session: the driver owns the task
+// verify field and delegates it to an independent side-channel review session
+// (its declared command is only a suggestion). A gap is fed back into the
+// execution session chain for a fix round.
 async function verifyTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
   opts: Opts,
-): Promise<{ type: "done" } | { type: "gap"; gap: string; fixText: string } | (Outcome & { type: "blocked" })> {
+): Promise<{ type: "done" } | { type: "gap"; gap: string } | (Outcome & { type: "blocked" })> {
   const verdict = await review(client, plan, task, opts)
   if (verdict.type === "blocked") return verdict
   if (verdict.type === "pass") {
     await markDone(plan.path, task.id, verdict.command ?? verifyCommand(task))
     return { type: "done" }
   }
-  return {
-    type: "gap",
-    gap: verdict.gap,
-    fixText: `修复任务级验收指出的差距: ${verdict.gap}`,
-  }
+  return { type: "gap", gap: verdict.gap }
 }
 
 type Verdict = { type: "pass"; command?: string } | { type: "gap"; gap: string }
@@ -547,23 +545,19 @@ async function watch(
       // dryrun 预检会话一律自动答复,不因提问阻塞。
       const permission = opts.dryrun ? false : /权限|permission/i.test(text)
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
-      // 权限提问在 --wait-answer 下也先等人工答复,无人答复才阻塞;
-      // 非权限提问无人答复时回落到 AUTO_ANSWER。
+      // 权限与非权限提问在 --wait-answer 下都先等人工答复,超时一律回落
+      // AUTO_ANSWER 让 AI 自主决策继续;仅缺省 --wait-answer 时的权限提问
+      // 直接阻塞(无人值守时不能替人工决定是否授权)。
       if (!repeated && (!permission || waitAnswer > 0)) {
         autoAnswered.push(text)
         log(`❓ 收到${permission ? "权限" : "非权限"}提问:\n${text}`)
-        const human =
-          waitAnswer > 0
-            ? await askHuman(waitAnswer, permission ? "超时将阻塞等待人工介入" : "超时将自动答复", opts.interactive)
-            : undefined
-        if (human || !permission) {
-          const reply = human ?? AUTO_ANSWER
-          log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
-          await client.question
-            .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
-            .catch(() => {})
-          continue
-        }
+        const human = waitAnswer > 0 ? await askHuman(waitAnswer, "超时将自动答复", opts.interactive) : undefined
+        const reply = human ?? AUTO_ANSWER
+        log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
+        await client.question
+          .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
+          .catch(() => {})
+        continue
       }
       await client.question.reject({ requestID: asked.id }).catch(() => {})
       await client.session.abort({ sessionID }).catch(() => {})
@@ -587,16 +581,26 @@ async function watch(
         continue
       }
       // --wait-answer 下权限请求同样等待人工指令: 回答 allow/yes/y 等视为
-      // 确认授权(always 放行本请求的 patterns),其余回答或超时则拒绝并阻塞。
+      // 确认授权(always 放行本请求的 patterns);明确的其余回答拒绝该权限但
+      // 不中断会话,AI 在无该权限下绕开继续工作;只有超时(等同无人值守)
+      // 才拒绝并阻塞停机。
       if (waitAnswer > 0) {
         log(`🔐 收到权限请求: ${asked.permission} (${asked.patterns.join(", ")})`)
-        const human = await askHuman(waitAnswer, "输入 allow/yes/y 确认授权,超时或其余回答将拒绝并阻塞", opts.interactive)
+        const human = await askHuman(
+          waitAnswer,
+          "输入 allow/yes/y 确认授权,其余回答将拒绝该权限并继续,超时将拒绝并阻塞",
+          opts.interactive,
+        )
         if (human && isApproval(human)) {
           log(`→ 人工授权: ${human}(always 放行)`)
           await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
           continue
         }
-        if (human) log(`→ 人工未授权: ${human}`)
+        if (human) {
+          log(`→ 人工未授权: ${human}(拒绝该权限,AI 无授权继续)`)
+          await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
+          continue
+        }
       }
       await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
       await client.session.abort({ sessionID }).catch(() => {})
@@ -687,7 +691,7 @@ function isApproval(answer: string): boolean {
 
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
 // undefined on timeout or empty input, in which case the caller falls back to
-// AUTO_ANSWER (non-permission questions) or blocks (permission requests).
+// AUTO_ANSWER (questions) or blocks (permission requests).
 // --interactive 下改由常驻输入行接收回答(提示语、超时与回落语义不变)。
 async function askHuman(minutes: number, hint: string, interactive?: Interactive): Promise<string | undefined> {
   const promptText = `请在 ${minutes} 分钟内输入回答(回车确认,${hint}): `
