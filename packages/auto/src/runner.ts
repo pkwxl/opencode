@@ -2,7 +2,8 @@ import { createInterface } from "node:readline/promises"
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
-import { log, subbanner } from "./log"
+import type { Interactive } from "./interactive"
+import { log, subbanner, vlog } from "./log"
 import {
   appendSubtask,
   begin,
@@ -58,6 +59,9 @@ type Opts = {
   dryrun?: boolean
   // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
   contextLimit?: number
+  // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
+  // ask 的人工等待也改由它接收(语义不变)。
+  interactive?: Interactive
 }
 
 type Watch = {
@@ -446,6 +450,8 @@ async function attempt(
   const session = reuse ? undefined : await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
   if (session?.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
   const sessionID = session?.data.id ?? chain.id!
+  // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
+  opts.interactive?.attach(sessionID)
 
   const events = await client.event.subscribe()
   const watching = watch(client, sessionID, events.stream, opts, steer)
@@ -504,13 +510,13 @@ async function watch(
       if (part.sessionID !== sessionID) continue
       if (part.type === "text" && part.time?.end) {
         lastText = part.text
-        if (verbose) log(part.text)
+        if (verbose) vlog(part.text)
         continue
       }
       const line = verbose ? describePart(part) : undefined
       if (line && !seen.has(part.id)) {
         seen.add(part.id)
-        log(line)
+        vlog(line)
       }
     }
     if (event.type === "message.updated") {
@@ -522,7 +528,7 @@ async function watch(
       used = info.tokens.input + info.tokens.cache.read
       const limit = limits.get(`${info.providerID}/${info.modelID}`)
       pct = limit ? Math.round((used / limit) * 100) : 100
-      if (verbose) log(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
+      if (verbose) vlog(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
       if (steer && !steerSent && used >= steer.limit) {
         steerSent = true
         log(`⚠ 上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(steer.limit)} 上限,插入交接提示`)
@@ -543,7 +549,7 @@ async function watch(
         log(`❓ 收到${permission ? "权限" : "非权限"}提问:\n${text}`)
         const human =
           waitAnswer > 0
-            ? await askHuman(waitAnswer, permission ? "超时将阻塞等待人工介入" : "超时将自动答复")
+            ? await askHuman(waitAnswer, permission ? "超时将阻塞等待人工介入" : "超时将自动答复", opts.interactive)
             : undefined
         if (human || !permission) {
           const reply = human ?? AUTO_ANSWER
@@ -579,7 +585,7 @@ async function watch(
       // 确认授权(always 放行本请求的 patterns),其余回答或超时则拒绝并阻塞。
       if (waitAnswer > 0) {
         log(`🔐 收到权限请求: ${asked.permission} (${asked.patterns.join(", ")})`)
-        const human = await askHuman(waitAnswer, "输入 allow/yes/y 确认授权,超时或其余回答将拒绝并阻塞")
+        const human = await askHuman(waitAnswer, "输入 allow/yes/y 确认授权,超时或其余回答将拒绝并阻塞", opts.interactive)
         if (human && isApproval(human)) {
           log(`→ 人工授权: ${human}(always 放行)`)
           await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
@@ -677,7 +683,10 @@ function isApproval(answer: string): boolean {
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
 // undefined on timeout or empty input, in which case the caller falls back to
 // AUTO_ANSWER (non-permission questions) or blocks (permission requests).
-async function askHuman(minutes: number, hint: string): Promise<string | undefined> {
+// --interactive 下改由常驻输入行接收回答(提示语、超时与回落语义不变)。
+async function askHuman(minutes: number, hint: string, interactive?: Interactive): Promise<string | undefined> {
+  const promptText = `请在 ${minutes} 分钟内输入回答(回车确认,${hint}): `
+  if (interactive) return (await interactive.question(promptText, minutes)) || undefined
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
   // 处理器,使等待人工答复期间连续两次 Ctrl+C 同样能强制终止。
@@ -685,7 +694,7 @@ async function askHuman(minutes: number, hint: string): Promise<string | undefin
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const answer = await Promise.race([
-      rl.question(`请在 ${minutes} 分钟内输入回答(回车确认,${hint}): `),
+      rl.question(promptText),
       new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), minutes * 60_000)
       }),

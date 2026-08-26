@@ -8,16 +8,19 @@
 
 ## 结构
 
-- `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析(含 `-p` 短选项);`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,`-p/--prompt` 在初始化后直接调用一次 AI 填充 PLAN.md 供人工审核。
-- `src/loop.ts` — 任务循环:取下一个未完成任务执行;任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块存在;run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下)。
-- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,未完成回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → 任务级旁路独立审核会话验收(off 以外失败追加修复子任务,最多 3 轮);会话链复用、事件监听、提问自动答复、权限等待授权/阻塞(dryrun 下自动拒绝但不中断)、隐性阻塞检测;CURRENT.md 写入;`commitAll` 与 `runOnce` 独立会话。driver 不亲自执行任何 verify 命令。
+- `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析(含 `-p`/`-i` 短选项);`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,`-p/--prompt` 在初始化后直接调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
+- `src/loop.ts` — 任务循环:取下一个未完成任务执行;任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块存在;run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下);`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
+- `src/interactive.ts` — `--interactive` 旁路:常驻 readline 把回车输入经 promptAsync(fire-and-forget)注入当前活动会话(attach 由 runner 在每个会话建立/复用时调用;无活动会话丢弃并提示);ask/任务间暂停的人工等待经同一输入行接收(空行原样上交给调用方解释);stdin 关闭后回落非交互行为;io 可注入供测试。
+- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,未完成回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → 任务级旁路独立审核会话验收(off 以外失败追加修复子任务,最多 3 轮);会话链复用、事件监听、提问自动答复、权限等待授权/阻塞(dryrun 下自动拒绝但不中断)、隐性阻塞检测;CURRENT.md 写入;`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收。driver 不亲自执行任何 verify 命令。
 - `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtask/markDone/setStatus)与任务级 verify 命令提取(verifyCommand,仅作提示词参考)。
 - `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / 审核 / 权限预检 / 整体提交 / 初始化规划);审核判定文件路径 VERDICT_FILE(`.auto/verify.md`);--commit 四档(CommitMode)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json
   置 0o444(AGENTS.md 不在其列,任务可更新它),driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
 - `src/server.ts` — opencode server 获取:优先复用已有 server,否则 spawn 并管理其生命周期(server 长驻,不随会话重启)。
-- `src/log.ts` — verbose 模式下为输出加时间戳;任务/子任务开始横幅(banner/subbanner);run 时把全部输出同步写入目标目录
-  `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
+- `src/log.ts` — 输出双通道:verbose(文件记录级别)与 foreground(终端明细/时间戳)分离,
+  `setVerbose` 同开同关、`setInteractive` 只开文件记录;`log` 始终上终端、`vlog` 为 verbose 明细
+  (interactive 下只进文件);`setInput` 注册交互 readline 后 log 打印先清输入行再重绘;run 时把全部
+  输出同步写入目标目录 `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
 - `templates/` — `init` 复制的模板(`PLAN.md`、`opencode.json`、`.opencode/agent/auto.md`)。
 - `script/build.ts` — 独立可执行文件构建脚本。
 - `test/` — `bun test` 测试。
@@ -65,6 +68,13 @@
   allow/yes/y 等视为授权(permission 以 always 放行),超时或其余回答则阻塞停机;
   同一问题重复出现仍阻塞停机。--wait-between 在每个任务完成后暂停等待人工
   (回车立即继续,超时自动继续),首个任务前不等待。
+- --interactive/-i 旁路交互(与 --verbose 互斥,index.ts 检查):不改变任何既有
+  处理逻辑——常驻 readline 把回车输入作为额外用户消息经 `session.promptAsync`
+  注入当前活动会话(v1 引擎 steer 语义,下一 provider turn 边界处理;**不要用
+  v2 `delivery: "queue"`**,它与 v1 引擎不兼容会产生无历史的并发 drain);无活动
+  会话时输入丢弃并提示;ask/--wait-between 的人工等待改经该输入行接收(提示语、
+  超时、空行、回落语义与独立 readline 完全一致);终端不显示 verbose 明细,但日志
+  文件保持 --verbose 级完整记录(interactive 隐含 verbose 记录级别)。
 - **driver 独占状态写入**:PLAN.md 的状态标记、检查项勾选、verified 字段与 CURRENT.md
   全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json)
   被 chmod 为只读作为防误写护栏(非安全边界,同用户进程可经 bash chmod 绕过),

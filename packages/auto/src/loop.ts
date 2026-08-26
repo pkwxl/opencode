@@ -1,7 +1,8 @@
 import { createInterface } from "node:readline/promises"
 import { readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
-import { banner, log } from "./log"
+import { startInteractive, type Interactive } from "./interactive"
+import { banner, log, vlog } from "./log"
 import { block, countSubtasks, load, next } from "./plan"
 import { renderDryrun, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
@@ -46,6 +47,9 @@ export async function runAll(
     dryrun?: boolean
     // 会话复用的上下文已用量上限(tokens),缺省由 runner 按 64k 处理。
     contextLimit?: number
+    // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
+    // 调用方已把 verbose 记录级别打开,前台明细静默)。
+    interactive?: boolean
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -78,6 +82,8 @@ export async function runAll(
   // 任务可更新它的其余内容。
   if (await ensurePointer(directory)) log("已补写: AGENTS.md 指针块")
   let server: Awaited<ReturnType<typeof ensure>> | undefined
+  // --interactive 旁路输入控制器;server 就绪后创建,finally 中关闭。
+  let repl: Interactive | undefined
   // 单次 Ctrl+C 不终止(运行期间事件流/子进程可能吞掉或挂起默认退出),
   // 窗口期内连续第二次按下才强制终止:尽力恢复文件可写并关闭 server 后退出。
   let sigintAt = 0
@@ -97,8 +103,20 @@ export async function runAll(
   process.on("SIGINT", onSigint)
   try {
     server = await ensure(directory, opts.server)
+    if (opts.interactive) {
+      repl = startInteractive(server.client, opts.agent)
+      log("💬 交互模式: 回车把输入作为额外消息发往当前会话(无活动会话时丢弃)")
+    }
     if (opts.dryrun) {
-      const result = await runOnce(server.client, "权限预检", renderDryrun(), { ...opts, dryrun: true, dir: directory })
+      const result = await runOnce(server.client, "权限预检", renderDryrun(), {
+        agent: opts.agent,
+        dir: directory,
+        verbose: opts.verbose,
+        waitAnswer: opts.waitAnswer,
+        dryrun: true,
+        contextLimit: opts.contextLimit,
+        interactive: repl,
+      })
       if (result.type === "blocked") {
         log(`⏸ 预检会话受阻:\n${result.question}`)
         return 2
@@ -114,7 +132,14 @@ export async function runAll(
         // --commit once: 任务期间不提交,全部完成后开一次整体提交会话。
         if (opts.commit === "once" && ran > 0) {
           banner("全部任务完成,整体提交")
-          const outcome = await commitAll(server.client, plan, { ...opts, dir: directory })
+          const outcome = await commitAll(server.client, plan, {
+            agent: opts.agent,
+            dir: directory,
+            verbose: opts.verbose,
+            waitAnswer: opts.waitAnswer,
+            contextLimit: opts.contextLimit,
+            interactive: repl,
+          })
           if (outcome.type !== "completed") {
             const detail = outcome.type === "blocked" ? outcome.question : outcome.reason
             log(`⏸ 整体提交未完成(任务本身已全部完成):\n${detail}`)
@@ -125,7 +150,7 @@ export async function runAll(
         return 0
       }
       // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
-      if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id)
+      if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl)
       if (task.status === "blocked" && task.question) {
         log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
       }
@@ -140,6 +165,7 @@ export async function runAll(
         commit: opts.commit,
         subtask: opts.subtask,
         contextLimit: opts.contextLimit,
+        interactive: repl,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
@@ -155,6 +181,7 @@ export async function runAll(
     }
   } finally {
     process.off("SIGINT", onSigint)
+    repl?.close()
     watcher?.close()
     progress?.close()
     server?.close()
@@ -165,13 +192,20 @@ export async function runAll(
 // --wait-between: 任务完成后、下一任务开始前暂停等待人工;回车(任意输入)
 // 立即继续,超时自动继续。与 runner 的 askHuman 一样转发 readline 截获的 ^C,
 // 使暂停期间连续两次 Ctrl+C 同样能强制终止。
-async function waitBetweenTasks(minutes: number, nextID: string) {
+// --interactive 下改由常驻输入行接收(语义不变),避免两个 readline 争抢 stdin。
+async function waitBetweenTasks(minutes: number, nextID: string, repl?: Interactive) {
+  const promptText = `⏸ 任务间暂停: 回车立即开始 ${nextID},或等待 ${minutes} 分钟自动继续: `
+  if (repl) {
+    const answer = await repl.question(promptText, minutes)
+    log(answer === undefined ? `⏳ 等待超时,自动继续 ${nextID}` : `→ 人工确认,继续 ${nextID}`)
+    return
+  }
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const answer = await Promise.race([
-      rl.question(`⏸ 任务间暂停: 回车立即开始 ${nextID},或等待 ${minutes} 分钟自动继续: `),
+      rl.question(promptText),
       new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), minutes * 60_000)
       }),
@@ -192,7 +226,7 @@ function watchFiles(directory: string) {
     const changed = await gitChangedFiles(directory).catch(() => [] as string[])
     const fresh = changed.filter((file) => !seen.has(file))
     seen = new Set(changed)
-    if (fresh.length) log(`  ✎ 变更文件:\n${fresh.map((file) => `    ${file}`).join("\n")}`)
+    if (fresh.length) vlog(`  ✎ 变更文件:\n${fresh.map((file) => `    ${file}`).join("\n")}`)
   }, 10_000)
   return { close: () => clearInterval(timer) }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path"
-import { log, setLogFile, setVerbose } from "./log"
+import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensurePointer, runAll } from "./loop"
 import { load } from "./plan"
 import { renderInit, type CommitMode } from "./prompt"
@@ -16,13 +16,17 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt 带值(吞掉下一个 token);--verbose/--dryrun/--commit-subtask 是布尔选项,
-// 出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value;
-// --prompt 另有短选项 -p。
+// --prompt 带值(吞掉下一个 token);--verbose/--interactive/--dryrun/--commit-subtask
+// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value;
+// --prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值)。
 const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt"])
-const BOOLEAN_FLAGS = new Set(["verbose", "dryrun", "commit-subtask"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
+  if (arg === "-i") {
+    flags.set("interactive", "")
+    continue
+  }
   if (arg === "-p") {
     const next = args[i + 1]
     if (next !== undefined) {
@@ -55,7 +59,15 @@ const directory = resolve(positional[0] ?? ".")
 
 if (command === "run") {
   const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
+  // --interactive/-i: 旁路交互(与 --verbose 互斥);文件保持 verbose 级完整记录,
+  // 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
+  const interactive = flags.has("interactive") && flags.get("interactive") !== "false"
+  if (interactive && verbose) {
+    console.error("--interactive/-i 与 --verbose 互斥,只能选其一")
+    process.exit(1)
+  }
   setVerbose(verbose)
+  if (interactive) setInteractive()
   // 每次 run 都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
   log(`📝 日志文件: ${setLogFile(directory)}`)
   const commit = parseCommit(flags)
@@ -86,13 +98,15 @@ if (command === "run") {
   const code = await runAll(directory, {
     agent: flags.get("agent"),
     server: flags.get("server"),
-    verbose,
+    // interactive 隐含 verbose 记录级别(watch/变更文件监视照常运行并写入日志)。
+    verbose: verbose || interactive,
     waitAnswer,
     waitBetween,
     commit,
     subtask,
     dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
     contextLimit: contextLimit * 1000,
+    interactive,
   })
   process.exit(code)
 }
@@ -196,7 +210,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <prompt-text>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--dryrun [true|false]] [--context-limit [n]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--dryrun [true|false]] [--context-limit [n]]
   opencode-auto status [dir]
 
 退出码: 0 全部完成,1 用法/环境错误,2 阻塞/未完成等待人工介入,130 被连续两次 Ctrl+C 强制终止`)

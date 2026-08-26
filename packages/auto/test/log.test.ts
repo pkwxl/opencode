@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { log, setLogFile, setVerbose } from "../src/log"
+import { log, setInteractive, setLogFile, setVerbose, vlog } from "../src/log"
 
 describe("log", () => {
   let dir: string
@@ -33,5 +33,29 @@ describe("log", () => {
     const path = setLogFile(dir)
     log("计时输出")
     expect(await Bun.file(path).text()).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 计时输出\n$/)
+  })
+
+  test("interactive 下 vlog 只进文件不上终端,log 终端无时间戳而文件有", async () => {
+    setInteractive()
+    const path = setLogFile(dir)
+    const lines: string[] = []
+    const original = console.log
+    console.log = (...args: unknown[]) => lines.push(args.join(" "))
+    try {
+      log("状态行")
+      vlog("明细行")
+    } finally {
+      console.log = original
+    }
+    expect(lines).toEqual(["状态行"])
+    const content = await Bun.file(path).text()
+    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 状态行\n/)
+    expect(content).toContain("] 明细行\n")
+  })
+
+  test("非 verbose 下 vlog 完全静默", async () => {
+    const path = setLogFile(dir)
+    vlog("明细行")
+    expect(await Bun.file(path).text()).toBe("")
   })
 })

@@ -23,6 +23,9 @@ opencode-auto run <dir> --agent auto --wait-answer 5
 # verbose: 输出会话内全部消息部件(文本、工具调用、推理、步骤等)与每条助手消息的上下文用量/占比,
 # 每行输出带当前时间,并每 10 秒列出 git status 新出现的变动文件(含嵌套 .git 子仓库),便于观察进展:
 opencode-auto run <dir> --agent auto --verbose true
+# interactive: 旁路交互(与 --verbose 互斥)——终端保持干净输出并常驻等待输入,
+# 回车把输入作为额外消息发往当前活动会话(无活动会话时丢弃);日志文件仍保留 verbose 级完整记录:
+opencode-auto run <dir> --agent auto --interactive
 # commit-subtask: 要求 agent 每完成并勾选一项子任务(- [x])即提交一次(含嵌套 .git 子仓库),
 # 实现子任务级别的变动历史追踪;同时每 30 秒输出子任务进度与预计剩余用时(线性估算,精度受检查频度限制):
 opencode-auto run <dir> --agent auto --commit-subtask
