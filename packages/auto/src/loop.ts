@@ -47,6 +47,8 @@ export async function runAll(
     dryrun?: boolean
     // 会话复用的上下文已用量上限(tokens),缺省由 runner 按 64k 处理。
     contextLimit?: number
+    // --review 质量审核轮数上限(0 = 不启用),透传给 runTask。
+    review?: number
     // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
     // 调用方已把 verbose 记录级别打开,前台明细静默)。
     interactive?: boolean
@@ -169,6 +171,7 @@ export async function runAll(
         commit: opts.commit,
         subtask: opts.subtask,
         contextLimit: opts.contextLimit,
+        review: opts.review,
         interactive: repl,
       })
       if (outcome.type === "blocked") {

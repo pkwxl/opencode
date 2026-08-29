@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  appendSubtasks,
   begin,
   block,
   countSubtasks,
@@ -189,6 +190,27 @@ describe("edit", () => {
     // 重复勾选或勾选不存在的项报错
     expect(tick(path, "T-003", "甲")).rejects.toThrow("no unticked subtask")
     expect(tick(path, "T-003", "丙")).rejects.toThrow("no unticked subtask")
+  })
+
+  test("appendSubtasks 在既有检查项块之后追加", async () => {
+    await setSubtasks(path, "T-003", ["甲", "乙"])
+    await tick(path, "T-003", "甲")
+    await appendSubtasks(path, "T-003", ["修复 A", "修复 B"])
+    const task = (await load(path)).tasks[2]!
+    expect(task.body).toBe("REST 接口。\n\n- [x] 甲\n- [ ] 乙\n- [ ] 修复 A\n- [ ] 修复 B")
+  })
+
+  test("appendSubtasks 无检查项时接正文末", async () => {
+    await appendSubtasks(path, "T-003", ["修复 A"])
+    const task = (await load(path)).tasks[2]!
+    expect(task.body).toBe("REST 接口。\n\n- [ ] 修复 A")
+  })
+
+  test("appendSubtasks 检查项后有正文时插在检查项块之后而非正文末", async () => {
+    await Bun.write(path, "## T-001: a [pending]\n描述\n\n- [x] 已完成\n\n结语\n")
+    await appendSubtasks(path, "T-001", ["修复"])
+    const task = (await load(path)).tasks[0]!
+    expect(task.body).toBe("描述\n\n- [x] 已完成\n- [ ] 修复\n\n结语")
   })
 
   test("markDone 标 done 并按有无 verified 写/清字段", async () => {

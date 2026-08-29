@@ -31,7 +31,7 @@ opencode serve 完成开发；遇阻即停、生成问题描述、等待人工�
 
 ```markdown
 ## T-NNN: 任务标题 [pending|in_progress|blocked|done]
-  - verify: command: <验收命令>   # driver 亲自执行;也可为自然语言,由收尾会话翻译成命令
+  - verify: command: <验收命令>   # driver 包装为脚本亲自执行;也可为自然语言,由旁路脚本生成会话翻译成可执行脚本
   - verified: <执行通过的命令>    # driver 验证通过后写入,作为高可信完成记录
   - blocked-at: <date>          # blocked 时由 driver 写入
   - question: "<上次卡住的问题>"  # blocked 时由 driver 写入
@@ -42,8 +42,9 @@ opencode serve 完成开发；遇阻即停、生成问题描述、等待人工�
 
 driver 状态机：`pending → in_progress → done | blocked`；`blocked` → 重新运行 driver 即重新进入
 `in_progress`（attempts + 1，无需填写 answer，可选 answer 会注入上下文）。
-**PLAN.md 与 CURRENT.md 只由 driver 写入**：agent 会话不得编辑；子任务勾选在 driver 亲自
-执行该项 verify 命令通过后发生；`[done]` 在任务级验收通过后由 driver 写入。
+**PLAN.md 与 CURRENT.md 只由 driver 写入**：agent 会话不得编辑；子任务勾选在子任务
+会话结束后由 driver 按可信勾选（验收统一在任务级进行）；`[done]` 在任务级验收
+通过后由 driver 写入。
 当前任务镜像在 CURRENT.md（每会话必读，抗上下文压缩），AGENTS.md 只含固定指针块。
 
 ---
@@ -193,6 +194,94 @@ README.md 与包内 AGENTS.md 同步新行为约定：driver 独占 PLAN.md/CURR
 便于人工介入时正常编辑。新增 `src/protect.ts`（protect/unprotect/allowWrite/reprotect，
 模块级开关，未启用时为 no-op 以兼容测试与单测脚本）。README、包内 AGENTS.md、agent 模板
 契约同步说明（含局限：同用户进程可经 bash chmod 绕过，定位为防误写护栏而非安全边界）。
+
+---
+
+## 第三阶段：verify 三段式与 --review 审核循环
+
+背景：verify 判定目前完全在审核会话内进行，AI 经 bash 工具跑命令受输出截断（2000 字符）
+影响，大输出时反复重跑；且缺少 verify 之外对实现忠实性与正确性的独立审核环节。本阶段把
+verify 改为"脚本准备 → driver 执行 → AI 判定"三段式（输出零截断、命令只执行一次、执行
+与判定分离），并新增 `--review` 审核循环（忠实性/正确性/验证有效性审核 + 驱动式 fix
+子任务闭环）。完整设计见 docs/verify-review-design.md（唯一设计基准，含已确认决策、
+接口约定与流水线伪代码）；包内 AGENTS.md 与 README 的旧行为约定将在 T-021 统一改写，
+此前任务一律以设计文档与本阶段任务描述为准，不要按旧约定"纠正"实现。
+
+## T-017: verify 脚本机制层 src/verify.ts [done]
+  - verify: command: bun typecheck && bun test test/verify.test.ts
+  - verified: bun typecheck && bun test test/verify.test.ts
+新增 src/verify.ts（纯逻辑，不依赖 SDK 与 runner，可独立单测）与 test/verify.test.ts，
+实现设计文档 A.1 全部接口：verifyTmpDir（/tmp/<目标目录基名>，os.tmpdir + basename
+拼接）；resolveVerifyScript（依 verifyCommand 判定三分支：单 token 且为存在可执行文件
+→ existing 直接使用；普通命令行 → wrapped，driver 包装为 verify.sh——首行
+`#!/usr/bin/env bash`、其后原命令原文、不加 set -e 等额外语义、chmod 0o755、幂等覆盖；
+自然语言或缺失 → generate）；runVerifyScript（cwd=目标目录执行，可执行位直接 spawn、
+否则回退 bash；stdout/stderr 分别整写 verify.out/verify.err 且执行前 truncate；返回
+{ code, ms, timedOut, out, err }；VERIFY_TIMEOUT_MS 缺省 10 分钟，超时 kill、code 记
+124）。测试覆盖：来源三分支（临时目录构造可执行文件与各类 verify 字段）、包装内容
+（原命令透传、无额外语义）、执行落盘与退出码、超时 kill（注入小超时 + sleep 脚本，
+不真等 10 分钟）。遵循仓库根与包内 AGENTS.md 代码风格（中文注释、Bun API 优先、避免
+any 与多余解构）。
+
+## T-018: verify/review 提示词模板改造 [done]
+  - verify: command: bun typecheck && bun test test/prompt.test.ts
+  - verified: bun typecheck && bun test test/prompt.test.ts
+按设计文档 A.2/A.3/B.3/B.4 改造 src/prompt.ts：新增导出 REVIEW_FILE = ".auto/review.md"；
+新增 renderVerifyScriptGen(plan, task, scriptPath)（旁路脚本生成会话：只读分析，按
+verify 自然语言语义/任务验收标准写出可执行脚本到 runner 传入的 /tmp 绝对路径并 chmod
++x，只验证不修改实现，硬性要求产出）；新增 renderVerifyJudge(plan, task, run) 替换并
+删除 renderVerify（注入脚本路径、退出码、耗时、是否超时、out/err 路径；要求直读文件
+分段读大输出、读代码、可补跑只读检查；保留"脚本/命令本身问题不判不通过，说明原因并
+用等价方式验证"；判定协议不变：.auto/verify.md、末行 结论: 通过|差距、可选独立成行
+的 verified-command:）；新增 renderReview(plan, task, { final })（审核维度=忠实性+
+正确性+验证过程全面性有效性；非 final 以本任务改动为限——依 docs/T-NNN.report.md
+与 git log/status 界定并明确禁止审核其他任务代码；final 对全计划设计/实现/文档全面
+审核；产出 docs/T-NNN.audit.md（final: docs/final-audit.md），结论写 REVIEW_FILE 末行
+结论: 通过|差距；只审不改，报告与结论文件除外）；新增 renderReviewFix(plan, task,
+gap)（依审核差距产出单步/多步 fix 检查项到 docs/T-NNN.fix.md，- [ ] 自包含描述；硬性
+要求产出）。全部复用 QUESTION_RULE/STATE_RULE 既有段落。更新 test/prompt.test.ts：
+移除 renderVerify 旧断言，新增四个新模板的关键断言（路径与运行信息注入、范围限定语句、
+final 两分支、结论协议、硬性要求句式）。
+
+## T-019: runner 三段式 verify 接入 [done]
+  - verify: command: bun typecheck && bun test
+  - verified: bun typecheck && bun test
+按设计文档 A.4/A.5 改造 src/runner.ts 的 verifyTask（依赖 T-017/T-018；包内
+AGENTS.md 相关旧行为约定以设计文档为准，文档更新在 T-021）：resolveVerifyScript 判定
+来源，generate 时先开旁路脚本生成会话（一次性 chain，不进任务执行链；把现有 review()
+中"判定文件缺失带反馈重试一次、仍失败隐性阻塞"的骨架抽为通用 helper 供生成与判定
+会话复用）；runVerifyScript 执行并 log 一行结果（退出码、耗时、out/err 路径）；旁路
+判定会话（renderVerifyJudge）+ 沿用 parseVerdict 解析 VERDICT_FILE；通过 →
+markDone(path, id, verdict.command ?? verifyCommand(task) ?? 实际脚本路径)；差距 →
+既有 renderFix 修复循环不变（FIX_ROUNDS=3），每轮修复后重跑同一脚本再判定（V1 不自动
+重生成脚本）。Opts 增加 review?: number 字段（CLI 接线在 T-020）。会话链复用语义、
+dryrun、interactive、权限等待行为均不变。
+
+## T-020: --review 审核循环全链路 [done]
+  - verify: command: bun typecheck && bun test
+  - verified: bun typecheck && bun test
+按设计文档 B 实现审核循环（依赖 T-019；AGENTS.md 约定在 T-021 更新）：index.ts 把
+--review 加入 VALUE_FLAGS，新增 parseReviewLimit（缺省 0=不启用、裸选项 3、显式值须为
+1..10 整数否则用法错误退出码 1），用法文本补 --review [1-10]；loop.ts 把 opts.review
+透传至 runTask；plan.ts 新增 appendSubtasks(path, id, items)（在既有检查项块之后追加
+- [ ] 行，无检查项时接正文末）并补 test/plan.test.ts 用例；runner.ts 重构 runTask 为
+外层 review 轮循环——执行阶段（ensureDecomposed/executeWhole）仅首轮进入，每轮 =
+逐检查项子任务会话 → 收尾 → verifyTask →（opts.review>0 时）reviewTask：旁路审核
+会话 renderReview（final 由"当前任务之后全部 done"判定）产出 audit 报告，结论解析
+REVIEW_FILE（复用判定重试策略）；通过 → completed；差距 → off 模式 setStatus pending
+并返回 incomplete（与该模式 verify 失败语义一致），其余模式轮数 +1、超 limit 返回
+blocked（question=审核差距全文），未超 → 旁路修复规划会话 renderReviewFix 产出
+docs/T-NNN.fix.md（重试一次策略）→ appendSubtasks 注入 → 刷新 CURRENT.md → 进入
+下一轮循环。横幅与日志风格与现有一致。
+
+## T-021: 文档更新 README 与 AGENTS.md [done]
+  - verify: 通读更新后的 README.md 与包内 AGENTS.md，与 src/ 实现逐项对照一致：选项表含 --review [1-10]（缺省关闭、裸选项为 3）、verify 三段式（脚本准备三分支、driver 执行、AI 判定）、/tmp/<目标目录基名>/ 产物路径与超时及非零退出码语义、review 审核循环（审核维度、audit 报告、fix 子任务循环、off 模式例外、最后一个任务全面审核），且无残留旧行为矛盾表述（如"driver 不亲自执行任何 verify 命令"）
+同步两份文档与实现：README.md（run 选项表新增 --review；"执行流水线"公共部分改写为
+三段式 verify；新增 review 审核循环段落；退出码与 /tmp 产物说明、driver 执行脚本不经
+权限体系的明示）。包内 AGENTS.md（结构节补 src/verify.ts 与 docs 设计文档条目，
+prompt/runner/plan/index 条目更新；行为约定节整体改写 verify 条目、新增 --review 条目，
+核对退出码/交互/权限等相关条目）。templates/PLAN.md、templates/.opencode/agent/auto.md
+与 PLAN.md 头部"目标 PLAN.md 格式"注释行核对，受行为影响处一并更新（预计仅注释行）。
 
 ---
 

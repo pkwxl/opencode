@@ -143,6 +143,25 @@ export async function setSubtasks(path: string, id: string, items: string[]) {
   await edit(path, id, { body: description ? `${description}\n\n${checklist}` : checklist })
 }
 
+// Appends unticked checklist items after the task body's existing checklist
+// block (at the end of the body when it has none). Review-fix items go
+// through this so the regular subtask sessions execute them.
+export async function appendSubtasks(path: string, id: string, items: string[]) {
+  const plan = await load(path)
+  const task = require(plan, id)
+  const checklist = items.map((item) => `- [ ] ${item}`).join("\n")
+  const lines = task.body.split("\n")
+  const last = lines.findLastIndex((line) => /^\s*- \[( |x|X)\]/.test(line))
+  await edit(path, id, {
+    body:
+      last === -1
+        ? task.body
+          ? `${task.body}\n\n${checklist}`
+          : checklist
+        : [...lines.slice(0, last + 1), checklist, ...lines.slice(last + 1)].join("\n"),
+  })
+}
+
 // Ticks one checklist item (driver-side; the agent never edits PLAN.md).
 export async function tick(path: string, id: string, text: string) {
   const plan = await load(path)
@@ -170,10 +189,10 @@ export async function markDone(path: string, id: string, verified?: string) {
 }
 
 // Task-level verify convention: a "command: <cmd>" prefix declares a concrete
-// command; anything else is natural language. Either way the driver never
-// runs it — the review session interprets the field as the acceptance
-// standard, and the command a passing review actually ran is recorded in the
-// task's `verified` field.
+// command; anything else is natural language. resolveVerifyScript uses it to
+// pick the script source (existing file / wrapped verify.sh / generation
+// session); the judge session interprets the field as the acceptance standard
+// and what actually ran is recorded in the task's `verified` field.
 export function verifyCommand(task: Task): string | undefined {
   const match = /^command:\s*(.+)$/.exec(task.verify?.trim() ?? "")
   return match?.[1]?.trim() || undefined

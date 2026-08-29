@@ -5,6 +5,7 @@ import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { log, subbanner, vlog } from "./log"
 import {
+  appendSubtasks,
   begin,
   countSubtasks,
   load,
@@ -23,14 +24,20 @@ import {
   renderDecompose,
   renderFix,
   renderHandoffSteer,
+  renderReview,
+  renderReviewFix,
   renderSubtask,
-  renderVerify,
+  renderVerifyJudge,
+  renderVerifyScriptGen,
   renderWhole,
   renderWrapup,
+  REVIEW_FILE,
   VERDICT_FILE,
   type CommitMode,
+  type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
+import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string } | { type: "incomplete"; reason: string }
 
@@ -60,6 +67,8 @@ type Opts = {
   dryrun?: boolean
   // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
   contextLimit?: number
+  // --review 质量审核轮数上限(0=不启用);CLI 接线在 T-020。
+  review?: number
   // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
   // ask 的人工等待也改由它接收(语义不变)。
   interactive?: Interactive
@@ -91,20 +100,26 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // Runs one task through the pipeline; the driver owns all state
 // writes to PLAN.md and CURRENT.md, sessions never edit them.
 // --subtask auto (default): decompose (when the task body has no checklist) →
-// one session per subtask (driver ticks on trust) → wrap-up → review.
-// --subtask off: a single whole-task session → wrap-up → review; any gap
+// one session per subtask (driver ticks on trust) → wrap-up → verify.
+// --subtask off: a single whole-task session → wrap-up → verify; any gap
 // sends the task back to pending for a human to refine and re-run (no fix
 // subtasks).
 // --subtask ondemand: like off, but when the running session's context usage
 // reaches --context-limit the driver steers in a handoff prompt; the session
 // writes docs/<id>.handoff.md and a fresh session continues from it.
-// All modes end with a wrap-up session (docs, sweep commit per --commit,
-// docs/<id>.report.md) and an independent side-channel review session
-// (always fresh, never on the chain). A gap sends the review feedback back
-// into the execution chain for a fix round (max FIX_ROUNDS, except off mode).
-// The driver never runs verify commands itself: the annotated commands are
-// only suggestions the reviewer may run, adapt, or supplement, so a broken
-// script cannot by itself fail acceptance.
+// The execution phase (decompose / whole-task session) runs only on the first
+// round; every round then is: subtask sessions for the unticked checklist →
+// wrap-up session → three-stage task-level acceptance (the driver resolves
+// and runs the verify script itself, output dumped to /tmp files, never
+// truncated; an independent judge session reads the results and writes the
+// verdict; a gap feeds the verdict back into the execution chain for a fix
+// round, max FIX_ROUNDS, except off mode).
+// With --review n > 0 a quality-audit round follows each acceptance pass:
+// an independent audit session (final = every task after this one is done)
+// writes an audit report plus the REVIEW_FILE conclusion. A gap in off mode
+// reverts the task to pending like a verify gap; otherwise the driver plans
+// fix checklist items in a side session, appends them into PLAN.md and runs
+// the whole round again (up to n fix rounds, then blocked).
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW and its used
 // tokens below contextLimit (default 64k), otherwise a fresh session is created.
@@ -126,6 +141,8 @@ export async function runTask(
   // have left it missing or stale. Later writeCurrent calls refresh it.
   task = requireTask(await load(plan.path), task.id)
   await writeCurrent(plan.path, task, mode !== "auto")
+  // 执行阶段仅首轮进入: auto 先确保分解出检查项,off/ondemand 单会话执行
+  // 整个任务;review 差距注入的 fix 检查项走下方的子任务会话循环。
   if (mode === "auto") {
     const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
     if (decomposed.type === "blocked") return decomposed
@@ -137,8 +154,10 @@ export async function runTask(
   }
   await writeCurrent(plan.path, task, mode !== "auto")
 
+  const limit = opts.review ?? 0
   for (let round = 0; ; ) {
-    // auto 模式此处执行分解出的检查项;off/ondemand 模式只有正文中人工编写的检查项。
+    // auto 模式此处执行分解出的检查项(含 review 注入的 fix 检查项);
+    // off/ondemand 模式只有正文中人工编写的检查项。
     for (;;) {
       const items = subtasks(task.body)
       const index = items.findIndex((item) => !item.done)
@@ -151,23 +170,38 @@ export async function runTask(
 
     const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
     if (result.type === "blocked") return result
-    const verdict = await verifyTask(client, plan, task, opts)
+    // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
+    // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
+    const verdict = await verifyTask(client, plan, task, opts, chain)
     if (verdict.type === "blocked") return verdict
-    if (verdict.type === "done") return { type: "completed" }
-
-    // off 模式不做修复重跑: 任务回退 pending,由用户改进 PLAN.md 后重试。
-    if (mode === "off") {
+    if (verdict.type === "gap") {
       await setStatus(plan.path, task.id, "pending")
       return { type: "incomplete", reason: verdict.gap }
     }
-    round++
-    if (round >= FIX_ROUNDS) {
-      return { type: "blocked", question: `任务级验收连续 ${FIX_ROUNDS} 轮未通过:\n${verdict.gap}` }
+    if (limit <= 0) return { type: "completed" }
+
+    const audit = await reviewTask(client, plan, task, opts)
+    if (audit.type === "blocked") return audit
+    if (audit.type === "pass") return { type: "completed" }
+
+    // off 模式不做审核修复循环: 与该模式 verify 失败语义一致。
+    if (mode === "off") {
+      await setStatus(plan.path, task.id, "pending")
+      return { type: "incomplete", reason: audit.gap }
     }
-    // 把审核会话的差距信息反馈回执行会话链,续跑修复后再走收尾与验收。
-    log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
-    const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap), opts, chain)
-    if (fixed.type === "blocked") return fixed
+    round++
+    if (round > limit) {
+      return { type: "blocked", question: `质量审核连续 ${limit} 轮修复后仍未通过:\n${audit.gap}` }
+    }
+    // verifyTask 通过时已把任务标 done;审核发现差距须先置回 in_progress,
+    // 否则中断重跑时 next() 会跳过该任务,注入的 fix 检查项永不执行。
+    await setStatus(plan.path, task.id, "in_progress")
+    log(`↻ ${task.id} 质量审核未通过,规划修复子任务后继续(第 ${round}/${limit} 轮):\n${audit.gap}`)
+    const planned = await planReviewFix(client, plan, task, opts, audit.gap)
+    if (planned.type === "blocked") return planned
+    await appendSubtasks(plan.path, task.id, planned.items)
+    task = requireTask(await load(plan.path), task.id)
+    await writeCurrent(plan.path, task, mode !== "auto")
   }
 }
 
@@ -334,59 +368,211 @@ async function runSubtask(
   return undefined
 }
 
-// Task-level acceptance after the wrap-up session: the driver owns the task
-// verify field and delegates it to an independent side-channel review session
-// (its declared command is only a suggestion). A gap is fed back into the
-// execution session chain for a fix round.
+// Task-level acceptance after the wrap-up session, three stages (设计文档
+// A.4/A.5): resolve and (when needed) generate the verify script, execute it
+// via the driver, then run the independent judge session and parse its
+// verdict file. On pass the verified field prefers the judge's
+// verified-command line, then the task's original command, then the actual
+// executed script path. A gap is fed back into the execution session chain
+// for a fix round (wrap-up re-runs, then the same script is re-executed and
+// re-judged) until it passes or FIX_ROUNDS is exhausted; off mode skips fix
+// rounds and returns the gap to the caller (task reverts to pending).
+// Each review round re-enters verifyTask with a fresh fix-round budget.
 async function verifyTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
   opts: Opts,
+  chain: SessionChain,
 ): Promise<{ type: "done" } | { type: "gap"; gap: string } | (Outcome & { type: "blocked" })> {
-  const verdict = await review(client, plan, task, opts)
-  if (verdict.type === "blocked") return verdict
-  if (verdict.type === "pass") {
-    await markDone(plan.path, task.id, verdict.command ?? verifyCommand(task))
-    return { type: "done" }
+  const mode = opts.subtask ?? "auto"
+  for (let round = 0; ; ) {
+    const execution = await executeVerifyScript(client, plan, task, opts)
+    if (execution.type === "blocked") return execution
+    const verdict = await judge(client, plan, task, opts, execution.run)
+    if (verdict.type === "blocked") return verdict
+    if (verdict.type === "pass") {
+      await markDone(plan.path, task.id, verdict.command ?? verifyCommand(task) ?? execution.run.script)
+      return { type: "done" }
+    }
+    // off 模式不做修复重跑: 差距交回调用方(回退 pending,等人工改进后重试)。
+    if (mode === "off") return { type: "gap", gap: verdict.gap }
+    round++
+    if (round >= FIX_ROUNDS) {
+      return { type: "blocked", question: `任务级验收连续 ${FIX_ROUNDS} 轮未通过:\n${verdict.gap}` }
+    }
+    // 把判定会话的差距信息反馈回执行会话链,续跑修复后重新收尾与验收。
+    log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
+    const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap), opts, chain)
+    if (fixed.type === "blocked") return fixed
+    const wrapped = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
+    if (wrapped.type === "blocked") return wrapped
   }
-  return { type: "gap", gap: verdict.gap }
 }
 
 type Verdict = { type: "pass"; command?: string } | { type: "gap"; gap: string }
 
-// Runs an independent review session (always fresh: a throwaway chain at 100%
-// forces a new session and leaves the task's session chain untouched) and
-// parses its verdict file. A missing or conclusion-less file gets one retry
-// with feedback, then blocks as hidden blockage (same policy as decompose).
-async function review(
+// Verify 前两段: resolveVerifyScript 判定来源(existing/wrapped 由 driver 直接
+// 给出;自然语言或缺失先开一次性脚本生成旁路会话——generate 分支沿用约定名
+// /tmp/<基名>/verify.sh,上一轮(或修复前)生成的脚本存在则复用,V1 不自动重新
+// 生成),随后 runVerifyScript 在目标目录执行并 log 一行结果(退出码、耗时、
+// out/err 路径)。退出码非 0 不在此判定——判定权在判定会话。
+async function executeVerifyScript(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+): Promise<{ type: "ok"; run: VerifyRun } | (Outcome & { type: "blocked" })> {
+  const dir = opts.dir ?? dirname(plan.path)
+  const tmp = verifyTmpDir(dir)
+  // generate 分支的脚本约定名:上一次(或上轮修复前)生成的脚本存在则复用。
+  const script = join(tmp, "verify.sh")
+  const resolved = await resolveVerifyScript(task, dir)
+  if (resolved.kind === "generate" && !(await Bun.file(script).exists())) {
+    const failed = await generateScript(client, plan, task, opts, script)
+    if (failed) return failed
+  }
+  const path = resolved.kind === "generate" ? script : resolved.script
+  const run = await runVerifyScript(dir, path)
+  const outPath = join(tmp, "verify.out")
+  const errPath = join(tmp, "verify.err")
+  log(
+    `  ⚙ verify 脚本退出码 ${run.code}${run.timedOut ? "(超时终止)" : ""},耗时 ${run.ms}ms,输出: ${outPath} / ${errPath}`,
+  )
+  return { type: "ok", run: { script: path, code: run.code, ms: run.ms, timedOut: run.timedOut, out: outPath, err: errPath } }
+}
+
+// Verify 第三段: 独立判定旁路会话(一次性 chain,不进任务执行链),注入运行信息,
+// 解析 VERDICT_FILE 结论;产出缺失的重试策略见 requireArtifact。
+async function judge(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+  run: VerifyRun,
+): Promise<Verdict | (Outcome & { type: "blocked" })> {
+  const file = join(dirname(plan.path), VERDICT_FILE)
+  return requireArtifact(client, task, renderVerifyJudge(plan, task, run), opts, {
+    kind: "审核",
+    artifact: `有效判定文件 ${VERDICT_FILE}`,
+    detail: "缺失或无结论行",
+    requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过` 或 `结论: 差距 <描述>`。",
+    reset: () => rm(file, { force: true }),
+    collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
+  })
+}
+
+// Natural-language or missing verify: a one-shot side session writes the
+// executable script (retry/blockage policy shared via requireArtifact).
+async function generateScript(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+  script: string,
+): Promise<(Outcome & { type: "blocked" }) | undefined> {
+  const produced = await requireArtifact(client, task, renderVerifyScriptGen(plan, task, script), opts, {
+    kind: "脚本生成",
+    artifact: script,
+    requirement: "必须把可执行脚本写到该路径并 chmod +x。",
+    collect: async () => (await Bun.file(script).exists()) || undefined,
+  })
+  if (produced !== true) return produced
+  return undefined
+}
+
+// --review 质量审核(设计文档 B.2/B.3): 旁路审核会话产出 audit 报告,结论写
+// REVIEW_FILE(协议同 VERDICT_FILE,复用 requireArtifact/parseVerdict 的重试
+// 策略)。final = 当前任务之后全部任务已 done(或无后继),即本任务是最后一
+// 个任务,审核升级为全计划终审。
+async function reviewTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
   opts: Opts,
 ): Promise<Verdict | (Outcome & { type: "blocked" })> {
-  const file = join(dirname(plan.path), VERDICT_FILE)
+  // 重新加载: 当前任务刚被 verifyTask 标 done,计划状态已与前次加载不同。
+  const current = await load(plan.path)
+  const index = current.tasks.findIndex((item) => item.id === task.id)
+  const final = current.tasks.slice(index + 1).every((item) => item.status === "done")
+  log(`⚖ ${task.id} ${final ? "最终质量审核(全计划)" : "质量审核"}`)
+  const file = join(dirname(plan.path), REVIEW_FILE)
+  return requireArtifact(client, task, renderReview(current, task, { final }), opts, {
+    kind: "质量审核",
+    artifact: `有效结论文件 ${REVIEW_FILE}`,
+    detail: "缺失或无结论行",
+    requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过` 或 `结论: 差距 <描述>`。",
+    reset: () => rm(file, { force: true }),
+    collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
+  })
+}
+
+// 审核差距 → 旁路修复规划会话(设计文档 B.4): 产出 docs/<id>.fix.md 检查项,
+// 调用方经 appendSubtasks 注入 PLAN.md,交既有子任务会话机制执行。
+async function planReviewFix(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+  gap: string,
+): Promise<{ type: "ok"; items: string[] } | (Outcome & { type: "blocked" })> {
+  const file = join(dirname(plan.path), "docs", `${task.id}.fix.md`)
+  const collected = await requireArtifact(client, task, renderReviewFix(plan, task, gap), opts, {
+    kind: "修复规划",
+    artifact: `有效修复检查项文件 docs/${task.id}.fix.md`,
+    detail: "缺失或无检查项",
+    requirement: "必须把修复检查项写入该文件(每条差距至少一项)。",
+    reset: () => rm(file, { force: true }),
+    collect: async () => {
+      const items = subtasks(await Bun.file(file).text().catch(() => ""))
+      return items.length ? items.map((item) => item.text) : undefined
+    },
+  })
+  if (!Array.isArray(collected)) return collected
+  return { type: "ok", items: collected }
+}
+
+// “旁路会话必须产出文件”的通用骨架(设计文档 A.4): 会话结束但产物缺失或无效时
+// 带反馈重试一次,仍失败按隐性阻塞停机(人工检查后重新运行续跑)。脚本生成、
+// 判定、质量审核与修复规划会话共用;collect 返回 undefined 表示该次会话未产出
+// 有效产物。
+async function requireArtifact<T>(
+  client: OpencodeClient,
+  task: Task,
+  promptText: string,
+  opts: Opts,
+  spec: {
+    // 会话类型,用于日志与阻塞信息(如“审核”、“脚本生成”)。
+    kind: string
+    // 产物描述(如 `有效判定文件 ${VERDICT_FILE}`)。
+    artifact: string
+    // 阻塞信息中的缺失原因补充(如“缺失或无结论行”)。
+    detail?: string
+    // 重试反馈中的硬性要求。
+    requirement: string
+    // 每次会话前清理旧产物,避免会话未写出时被误当作本次产出。
+    reset?: () => Promise<void>
+    // 会话结束后采集产物。
+    collect: () => Promise<T | undefined>
+  },
+): Promise<T | (Outcome & { type: "blocked" })> {
   let feedback = ""
   for (let i = 0; ; i++) {
-    // Remove any stale verdict from a previous review so it cannot be
-    // mistaken for the current one when the session fails to write.
-    await rm(file, { force: true })
-    const result = await runSession(client, task, renderVerify(plan, task) + feedback, opts, { pct: 100, used: 0 })
+    await spec.reset?.()
+    const result = await runSession(client, task, promptText + feedback, opts, { pct: 100, used: 0 })
     if (result.type === "blocked") return result
-    const verdict = parseVerdict(await Bun.file(file).text().catch(() => ""))
-    if (verdict) return verdict
+    const value = await spec.collect()
+    if (value !== undefined) return value
     if (i === 1) {
       return {
         type: "blocked",
         question:
-          `审核会话两次结束但未产出有效判定文件 ${VERDICT_FILE}(缺失或无结论行,隐性阻塞)。` +
-          `请检查该文件后重新运行。审核会话最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+          `${spec.kind}会话两次结束但未产出${spec.artifact}${spec.detail ? `(${spec.detail})` : ""}(隐性阻塞)。` +
+          `请检查后重新运行。${spec.kind}会话最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
       }
     }
-    log(`↻ ${task.id} 审核会话未产出有效 ${VERDICT_FILE},带反馈重试一次`)
-    feedback =
-      `\n\n你上次结束会话但未写出有效的 ${VERDICT_FILE}(缺失或缺少结论行)。这是硬性要求:` +
-      `无论审核结论如何,都必须写出该文件,且最后一行为 \`结论: 通过\` 或 \`结论: 差距 <描述>\`。`
+    log(`↻ ${task.id} ${spec.kind}会话未产出${spec.artifact},带反馈重试一次`)
+    feedback = `\n\n你上次结束会话但未产出${spec.artifact}。这是硬性要求:${spec.requirement}`
   }
 }
 

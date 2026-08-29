@@ -9,6 +9,21 @@ type Opts = { commit?: CommitMode }
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
 export const VERDICT_FILE = ".auto/verify.md"
 
+// --review 质量审核会话的结论文件(相对目标目录);协议同 VERDICT_FILE,
+// driver 复用同一解析逻辑读取其末行结论。
+export const REVIEW_FILE = ".auto/review.md"
+
+// 三段式 verify 的运行信息:driver 执行脚本后交判定会话。out/err 为整写输出的
+// 绝对路径,内容由判定会话直读文件,不经工具输出截断(这正是三段式的目的)。
+export type VerifyRun = {
+  script: string
+  code: number
+  ms: number
+  timedOut: boolean
+  out: string
+  err: string
+}
+
 // Question-tool rules, identical across all session types.
 const QUESTION_RULE = `2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
    其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
@@ -113,34 +128,75 @@ ${steps.join("\n")}
   ].join("\n\n")
 }
 
-// Task-level review session: independent acceptance, always a fresh side
-// session (never the execution chain). The driver owns the task verify field
-// and delegates its handling to this session: the reviewer may read code and
-// run checks — the verify field's declared command is only a suggestion it
-// may adapt or supplement — but must not modify implementation code. Its
-// verdict goes to VERDICT_FILE with a final `结论: 通过` /
-// `结论: 差距 <描述>` line, which the driver parses.
-export function renderVerify(plan: Plan, task: Task): string {
+// Verify script generation session (always a fresh side session, never the
+// execution chain): the verify field is natural language or missing, so before
+// the driver can execute anything a session must translate the acceptance
+// semantics into an executable script at the given /tmp path. Read-only
+// analysis; producing the file is a hard requirement (the runner retries once
+// with feedback and then blocks as hidden blockage).
+export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string): string {
   return [
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
-    `本次审核对象是整个任务(全部子任务已由之前的会话逐一完成,不要重做实现)。
+    `本次会话只为该任务生成 verify 脚本:driver 将在会话外统一执行它并交独立判定会话判定,
+你不要执行任务本身的实现。任务 verify 字段${
+      task.verify ? `是"${task.verify}"` : "未声明"
+    },这是验收标准,按其语义(或任务正文与 docs/ 中的验收要求)设计验证方式。
+
+任务:
+1. 只读分析相关源码与 docs/,确定覆盖验收标准所需的检查(运行测试、lint、构建产物核对等);
+2. 把检查写成可执行的 bash 脚本,写入 ${scriptPath}(绝对路径,driver 管理的 /tmp 下的
+   目录,覆盖写):首行 #!/usr/bin/env bash,脚本自包含、可重复执行,非零退出码表示
+   验证未通过;写完 chmod +x 赋予可执行位。
+
+约束:
+1. 只做验证类操作(运行测试/检查、读文件),不修改任何实现代码与 docs/;${STATE_RULE}
+${QUESTION_RULE}
+3. 产出该脚本是硬性要求:即使任务看起来已完成或极其简单,也必须写出文件
+   (单一检查一行命令即可);不产出有效文件会导致任务阻塞停机;
+4. 不要执行你写出的脚本(可做 bash -n 之类的只读语法检查),执行与判定由 driver 和
+   独立判定会话负责;写出文件后立即结束会话。`,
+  ].join("\n\n")
+}
+
+// Verify judge session (always a fresh side session): the driver has already
+// executed the script — the prompt injects the run info (script path, exit
+// code, duration, timeout, out/err file paths) and the session only reads
+// files and code to reach a verdict. A non-zero exit code is not an automatic
+// fail: the "script itself is broken → verify an equivalent way instead"
+// leniency is kept. Verdict protocol is unchanged (VERDICT_FILE + 结论 line).
+export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun): string {
+  return [
+    ...head(plan),
+    `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
+    `本次审核对象是整个任务(实现已在之前的会话中完成,不要重做)。
 先读 docs/${task.id}.report.md(收尾报告)了解各子任务产出;任务 verify 字段${
       task.verify ? `是"${task.verify}"` : "未声明"
     },作为验收标准。`,
-    `你是独立审核者:实现工作由之前的会话完成,你只看到磁盘上的结果,不要轻信任何自报,
-以你亲自检查的结果为准。
+    `driver 已在会话外执行了该任务的 verify 脚本,运行信息:
 
-约束:
-1. 独立验证审核对象是否真正完成且符合要求:阅读相关源码与改动,可自行运行测试/检查命令;
-   建议的验证命令仅供参考,你可以照用、调整或补充其他检查——命令本身有问题(写法错误、
-   环境不适用等)时用等价方式验证,不要因为命令本身的问题判不通过;
+- 脚本: ${run.script}
+- 退出码: ${run.code}
+- 耗时: ${run.ms}ms
+- 超时: ${run.timedOut ? "是(已被 driver 终止)" : "否"}
+- stdout(整写文件): ${run.out}
+- stderr(整写文件): ${run.err}
+
+你是独立判定者:实现与脚本执行均由其他会话和进程完成,你只看到磁盘上的结果,
+不要轻信任何自报,以你亲自检查的结果为准。
+
+要求:
+1. 直读上述 out/err 文件——大文件用分段读取,不要经 bash cat 等工具回显输出
+   (会被截断,这正是三段式要避免的);结合收尾报告阅读相关源码与改动;
 ${QUESTION_RULE}
-3. 只审核不修复:禁止修改任何实现代码与文档,发现的问题只写进判定文件;${STATE_RULE}
-4. 把判定写入 ${VERDICT_FILE}(覆盖写):简述你实际执行的检查;若实际运行了验证命令,
-   附一行 \`verified-command: <命令>\`(独立成行);最后一行必须是 \`结论: 通过\` 或
-   \`结论: 差距 <差距描述>\`;
- 5. 写出判定文件后立即结束会话。`,
+3. 退出码非 0 或超时不直接判不通过:先从输出判断实际原因;若脚本/命令本身有问题
+   (写法错误、路径不对、环境不适用等),不判不通过,说明原因并用等价方式验证
+   (可自行补跑只读检查:重跑测试、grep、读文件等);
+4. 只判定不修复:禁止修改任何实现代码与文档,发现的问题只写进判定文件;${STATE_RULE}
+5. 把判定写入 ${VERDICT_FILE}(覆盖写):简述判定依据与你实际执行的检查;若以等价命令
+   完成验证,附一行 \`verified-command: <命令>\`(独立成行);最后一行必须是
+   \`结论: 通过\` 或 \`结论: 差距 <差距描述>\`;
+6. 写出判定文件后立即结束会话。`,
   ].join("\n\n")
 }
 
@@ -162,6 +218,80 @@ ${QUESTION_RULE}
 3. 不要运行任务级 verify(验收由 driver 交独立审核会话处理)、不要更新 docs/(最后统一收尾);
    ${STATE_RULE}
 4. 修复完成并自我检查后,立即结束会话。`,
+  ].join("\n\n")
+}
+
+// --review quality-audit session (always a fresh side session). Dimensions:
+// fidelity to the task/design docs, correctness (edge cases), and whether the
+// verification itself was comprehensive and effective. Non-final reviews are
+// scoped to this task's changes only; final reviews audit the whole plan.
+// The audit report goes to docs/<id>.audit.md (final: docs/final-audit.md)
+// and the conclusion to REVIEW_FILE with the same 结论-line protocol as
+// VERDICT_FILE.
+export function renderReview(plan: Plan, task: Task, opts: { final: boolean }): string {
+  return [
+    ...head(plan),
+    `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
+    `你是独立质量审核者,${
+      opts.final
+        ? "对整个实施计划的执行做最终全面审核"
+        : `对任务 ${task.id} 的完成质量做审核`
+    }(实现已在之前的会话中完成,不要重做)。
+
+审核维度:
+1. 忠实性: 实现与任务描述、设计文档(docs/)的要求对齐,没有偷换或遗漏要求;
+2. 正确性: 逻辑与边界情形处理正确,无明显缺陷或回归风险;
+3. 验证过程: verify 脚本与判定有效覆盖任务的验收标准,没有漏验或形同虚设的检查。`,
+    opts.final
+      ? `本次为最终审核: 通读 PLAN.md 全部任务、docs/ 下各报告与设计文档、整体 git 历史,
+对整个计划的设计、实现与文档做全面审核,不受单任务范围限制。`
+      : `本次审核范围以本任务改动为限: 依 docs/${task.id}.report.md 与 git log/status
+(自上一任务完成后的提交与工作区状态)界定本任务改了什么;禁止审核其他任务的代码
+(无论已完成还是未开始),发现的跨任务问题在报告中记录即可,不作为本任务的差距。`,
+    `产出:
+1. 审计报告写入 ${opts.final ? "docs/final-audit.md" : `docs/${task.id}.audit.md`}(覆盖写):
+   按上述维度逐项记录发现(依据、位置、严重程度);
+2. 结论写入 ${REVIEW_FILE}(覆盖写): 概述发现,仅有可记录的轻微问题时仍判通过;最后
+   一行必须是 \`结论: 通过\` 或 \`结论: 差距 <差距描述>\`(差距 = 必须修复的忠实性/
+   正确性/验证有效性问题)。
+
+约束:
+1. 只审不改: 禁止修改任何实现代码与文档,唯一可写的文件是审计报告与结论文件;${STATE_RULE}
+${QUESTION_RULE}
+3. 写出结论文件后立即结束会话。`,
+  ].join("\n\n")
+}
+
+// --review fix-planning session (always a fresh side session): turns the
+// audit gap into self-contained fix checklist items in docs/<id>.fix.md,
+// which the driver appends into PLAN.md for the regular subtask sessions to
+// execute. Planning only — no fixes here; producing the file is a hard
+// requirement (retry once with feedback, then hidden blockage).
+export function renderReviewFix(plan: Plan, task: Task, gap: string): string {
+  return [
+    ...head(plan),
+    `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
+    `任务 ${task.id} 的独立质量审核未通过,差距如下(审计报告见 docs/${task.id}.audit.md):
+
+${gap}
+
+你是修复规划者: 不要直接修复,把审核差距转化为可执行的修复检查项。
+
+任务:
+1. 读审计报告 docs/${task.id}.audit.md 与相关代码,理解每条差距及其上下文;
+2. 把每条差距规划为一个或多个修复步骤(单步或多步均可,以凭描述即可执行为准);
+3. 把修复检查项写入 docs/${task.id}.fix.md(覆盖写),格式:
+
+- [ ] <修复步骤描述>
+
+描述必须自包含: 仅凭该描述、CURRENT.md 与 docs/ 即可执行,并包含验证方式。
+
+约束:
+1. 只规划不修复: 不修改任何实现代码与文档,本次唯一可写的文件是 docs/${task.id}.fix.md;${STATE_RULE}
+${QUESTION_RULE}
+3. 产出该文件是硬性要求: 每条差距都必须有对应检查项(若认定某差距不成立,也要写
+   "核实并说明该差距不成立"的检查项);不产出有效文件会导致任务阻塞停机;
+4. 写出文件后立即结束会话。`,
   ].join("\n\n")
 }
 

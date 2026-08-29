@@ -19,7 +19,7 @@ const positional: string[] = []
 // --prompt 带值(吞掉下一个 token);--verbose/--interactive/--dryrun/--commit-subtask
 // 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value;
 // --prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值)。
-const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt"])
+const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt", "review"])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
@@ -95,6 +95,11 @@ if (command === "run") {
     console.error("--context-limit 取值为正整数(单位: 千 tokens);缺省为 64")
     process.exit(1)
   }
+  const review = parseReviewLimit(flags.get("review"))
+  if (review === null) {
+    console.error("--review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
+    process.exit(1)
+  }
   const code = await runAll(directory, {
     agent: flags.get("agent"),
     server: flags.get("server"),
@@ -106,6 +111,7 @@ if (command === "run") {
     subtask,
     dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
     contextLimit: contextLimit * 1000,
+    review,
     interactive,
   })
   process.exit(code)
@@ -148,6 +154,16 @@ function parseContextLimit(raw: string | undefined): number | null {
   if (raw === undefined || raw === "") return 64
   const limit = Number(raw)
   if (!Number.isInteger(limit) || limit < 1) return null
+  return limit
+}
+
+// --review 缺省(无此选项)= 0(不启用质量审核);裸选项 = 3;显式值须为 1..10
+// 整数;返回 null 表示取值非法。
+function parseReviewLimit(raw: string | undefined): number | null {
+  if (raw === undefined) return 0
+  if (raw === "") return 3
+  const limit = Number(raw)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10) return null
   return limit
 }
 
@@ -210,7 +226,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <prompt-text>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--dryrun [true|false]] [--context-limit [n]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--dryrun [true|false]] [--context-limit [n]]
   opencode-auto status [dir]
 
 退出码: 0 全部完成,1 用法/环境错误,2 阻塞/未完成等待人工介入,130 被连续两次 Ctrl+C 强制终止`)

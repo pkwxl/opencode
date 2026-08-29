@@ -7,10 +7,14 @@ import {
   renderFix,
   renderHandoffSteer,
   renderInit,
+  renderReview,
+  renderReviewFix,
   renderSubtask,
-  renderVerify,
+  renderVerifyJudge,
+  renderVerifyScriptGen,
   renderWhole,
   renderWrapup,
+  REVIEW_FILE,
   VERDICT_FILE,
 } from "../src/prompt"
 
@@ -125,23 +129,106 @@ describe("renderFix", () => {
   })
 })
 
-describe("renderVerify", () => {
-  test("任务级审核: 独立判定、引用收尾报告与任务 verify 字段、结论写入判定文件", () => {
-    const text = renderVerify(plan, task)
-    expect(text).toContain("独立审核者")
-    expect(text).toContain("建议的验证命令仅供参考")
-    expect(text).toContain("不要因为命令本身的问题判不通过")
-    expect(text).toContain("禁止修改任何实现代码")
+describe("renderVerifyScriptGen", () => {
+  test("生成会话: 脚本写入指定路径并 chmod,只读分析、硬性要求产出", () => {
+    const text = renderVerifyScriptGen(plan, task, "/tmp/auto/verify.sh")
+    expect(text).toContain("/tmp/auto/verify.sh")
+    expect(text).toContain("chmod +x")
+    expect(text).toContain("只读分析")
+    expect(text).toContain("只做验证类操作")
+    expect(text).toContain("不修改任何实现代码")
+    expect(text).toContain("不要执行你写出的脚本")
+    expect(text).toContain("产出该脚本是硬性要求")
+    expect(text).toContain('任务 verify 字段是"command: bun test"')
+    expect(text).toContain("question 工具")
+    expect(text).toContain("由 driver 独占维护")
+  })
+
+  test("自然语言 verify 同样给出验收标准语义", () => {
+    expect(renderVerifyScriptGen(plan, plan.tasks[2]!, "/tmp/auto/verify.sh")).toContain('任务 verify 字段是"API 返回 200"')
+  })
+})
+
+describe("renderVerifyJudge", () => {
+  const run = {
+    script: "/tmp/pkg/verify.sh",
+    code: 124,
+    ms: 600012,
+    timedOut: true,
+    out: "/tmp/pkg/verify.out",
+    err: "/tmp/pkg/verify.err",
+  }
+
+  test("注入脚本路径、退出码、耗时、超时与 out/err 路径", () => {
+    const text = renderVerifyJudge(plan, task, run)
+    expect(text).toContain("/tmp/pkg/verify.sh")
+    expect(text).toContain("124")
+    expect(text).toContain("600012ms")
+    expect(text).toContain("超时: 是")
+    expect(text).toContain("/tmp/pkg/verify.out")
+    expect(text).toContain("/tmp/pkg/verify.err")
+    const fresh = renderVerifyJudge(plan, task, { ...run, timedOut: false })
+    expect(fresh).toContain("超时: 否")
+  })
+
+  test("直读文件分段读、退出码不直接判死、等价验证与判定协议", () => {
+    const text = renderVerifyJudge(plan, task, run)
+    expect(text).toContain("直读上述 out/err 文件")
+    expect(text).toContain("分段读取")
+    expect(text).toContain("不直接判不通过")
+    expect(text).toContain("等价方式验证")
+    expect(text).toContain("只判定不修复")
     expect(text).toContain(VERDICT_FILE)
     expect(text).toContain("结论: 通过")
     expect(text).toContain("结论: 差距")
     expect(text).toContain("verified-command")
-    expect(text).toContain("由 driver 独占维护")
     expect(text).toContain("docs/T-002.report.md")
     expect(text).toContain('任务 verify 字段是"command: bun test"')
-    expect(text).toContain("不要重做实现")
-    const nl = renderVerify(plan, plan.tasks[2]!)
-    expect(nl).toContain('任务 verify 字段是"API 返回 200"')
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("不要重做")
+  })
+})
+
+describe("renderReview", () => {
+  test("非 final: 三维度审核、范围限于本任务改动、产出 audit 与结论文件", () => {
+    const text = renderReview(plan, task, { final: false })
+    expect(text).toContain("忠实性")
+    expect(text).toContain("正确性")
+    expect(text).toContain("验证过程")
+    expect(text).toContain("docs/T-002.audit.md")
+    expect(text).toContain(REVIEW_FILE)
+    expect(text).toContain("docs/T-002.report.md")
+    expect(text).toContain("git log/status")
+    expect(text).toContain("禁止审核其他任务的代码")
+    expect(text).toContain("只审不改")
+    expect(text).toContain("结论: 通过")
+    expect(text).toContain("结论: 差距")
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).not.toContain("docs/final-audit.md")
+  })
+
+  test("final: 对全计划全面审核,报告写 final-audit.md", () => {
+    const text = renderReview(plan, task, { final: true })
+    expect(text).toContain("docs/final-audit.md")
+    expect(text).toContain("最终审核")
+    expect(text).toContain("整个计划的设计、实现与文档")
+    expect(text).not.toContain("docs/T-002.audit.md")
+    expect(text).not.toContain("禁止审核其他任务的代码")
+  })
+})
+
+describe("renderReviewFix", () => {
+  test("把审核差距转为自包含 fix 检查项: 只规划不修复、硬性要求产出", () => {
+    const text = renderReviewFix(plan, task, "错误处理未覆盖空输入")
+    expect(text).toContain("错误处理未覆盖空输入")
+    expect(text).toContain("docs/T-002.fix.md")
+    expect(text).toContain("docs/T-002.audit.md")
+    expect(text).toContain("- [ ] <修复步骤描述>")
+    expect(text).toContain("自包含")
+    expect(text).toContain("只规划不修复")
+    expect(text).toContain("唯一可写的文件是 docs/T-002.fix.md")
+    expect(text).toContain("产出该文件是硬性要求")
+    expect(text).toContain("由 driver 独占维护")
   })
 })
 
