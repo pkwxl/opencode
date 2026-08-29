@@ -8,12 +8,13 @@
 
 ## 结构
 
-- `src/index.ts` — CLI 入口:`init` / `run` / `status` 三个子命令与参数解析(含 `-p`/`-i` 短选项;`--review`/`--early-review` 经 parseReviewLimit 校验——缺省 0 不启用、裸选项 3、显式值须为 1..10 整数;`--early` 为布尔修饰,review 未启用时单独出现为用法错误,`--early-review` 是 `--review n --early` 的快捷糖、与 `--review` 同现为用法错误,均退出码 1);`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,`-p/--prompt` 在初始化后直接调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
-- `src/loop.ts` — 任务循环:取下一个未完成任务执行;启动时 `resetInProgress` 把上次运行中断遗留的 in_progress 重置为 pending(中断恢复);任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块存在;run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下);`--review`/`--early` 透传至 runTask;`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
+- `src/index.ts` — CLI 入口:`init` / `run` / `check` / `status` 四个子命令与参数解析(含 `-p`/`-i` 短选项;`--review`/`--early-review` 经 parseReviewLimit 校验——缺省 0 不启用、裸选项 3、显式值须为 1..10 整数;`--early` 为布尔修饰,review 未启用时单独出现为用法错误,`--early-review` 是 `--review n --early` 的快捷糖、与 `--review` 同现为用法错误;`--permission` 经 parsePermission 校验,缺省/裸选项 ask-deny,非法取值均退出码 1);`check` 调 src/check.ts 检查 AGENTS.md/PLAN.md 违背验证原则的描述,命中退出码 1;`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,`-p/--prompt` 在初始化后直接调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
+- `src/loop.ts` — 任务循环:取下一个未完成任务执行;启动时 `resetInProgress` 把上次运行中断遗留的 in_progress 重置为 pending(中断恢复);任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块与验证原则块存在(两个独立标记块,各自幂等补写);run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下,每 10 分钟);`--review`/`--early`/`--permission` 透传至 runTask;`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
 - `src/interactive.ts` — `--interactive` 旁路:常驻 readline 把回车输入经 promptAsync(fire-and-forget)注入当前活动会话(attach 由 runner 在每个会话建立/复用时调用;无活动会话丢弃并提示);ask/任务间暂停的人工等待经同一输入行接收(空行原样上交给调用方解释);stdin 关闭后回落非交互行为;io 可注入供测试。
-- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,验收/审核差距不做修复重跑,任务回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → verifyTask 三段式验收(脚本准备 → driver 执行 → 独立判定会话;差距反馈回执行会话修复,最多 3 轮,off 模式直接回退 pending)→ `--review` 下 reviewTask 质量审核与 planReviewFix 修复规划(外层轮循环,执行阶段仅首轮进入;`--early` 下审核经 verifyTask 挂点在脚本执行窗口并行启动、结论随 done 带回,外层不再独立调用 reviewTask);旁路会话产物缺失"带反馈重试一次再隐性阻塞"的骨架统一在 requireArtifact;会话链复用、事件监听、提问自动答复、权限请求等待授权(明确非授权回答拒绝后继续,超时阻塞;dryrun 下自动拒绝但不中断)、隐性阻塞检测;CURRENT.md 在任务开始时即写入(中断遗留缺失/过期时重建),每次勾选后刷新;`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收。
+- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,验收/审核差距不做修复重跑,任务回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → verifyTask 三段式验收(脚本准备 → driver 执行 → 独立判定会话;判定会话禁止执行验证脚本/命令,可替换指定脚本后结论`重验`,driver 重新执行回传输出,至多 REVERIFY_ROUNDS=3 轮;差距反馈回执行会话修复,最多 FIX_ROUNDS=3 轮,off 模式直接回退 pending)→ `--review` 下 reviewTask 质量审核与 planReviewFix 修复规划(外层轮循环,执行阶段仅首轮进入;`--early` 下审核经 verifyTask 挂点在脚本执行窗口并行启动、结论随 done 带回,外层不再独立调用 reviewTask);旁路会话产物缺失"带反馈重试一次再隐性阻塞"的骨架统一在 requireArtifact;会话链复用、事件监听、提问自动答复(AUTO_ANSWER 含决策记录与 AUTO-DECISION 标注要求)、权限请求按 --permission 四档处理(dryrun 下自动拒绝但不中断)、隐性阻塞检测;CURRENT.md 在任务开始时即写入(中断遗留缺失/过期时重建),每次勾选后刷新,任务结束(任何 Outcome)在 finally 中删除(强制中断不走 finally,遗留下次重建);`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收。
 - `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtasks/markDone/setStatus/resetInProgress)与任务级 verify 命令提取(verifyCommand,供 resolveVerifyScript 判定脚本来源)。
-- `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / verify 脚本生成 / verify 判定 / 修复 / 质量审核 / 审核修复规划 / 权限预检 / 整体提交 / 初始化规划);renderReview 支持 early 形态(告知 verify 脚本并行执行、只读检查为主、维度 3 静态审核脚本内容);判定文件路径 VERDICT_FILE(`.auto/verify.md`)与 REVIEW_FILE(`.auto/review.md`);VerifyRun 运行信息类型;--commit 四档(CommitMode)。
+- `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / verify 脚本生成 / verify 判定 / 修复 / 质量审核 / 审核修复规划 / 权限预检 / 整体提交 / 初始化规划);QUESTION_RULE 与 runner 的 AUTO_ANSWER 同步要求自动决策记录决策过程并标注 `AUTO-DECISION:`;renderVerifyScriptGen/renderVerifyJudge 禁止执行验证脚本或验证性命令(执行权在 driver,结果经 out/err 回传),judge 可替换指定脚本并结论`重验`;renderReview 两形态维度 3 均为静态审核(early 另告知脚本并行执行、只读为主);renderInit 注入验证执行权原则;判定文件路径 VERDICT_FILE(`.auto/verify.md`)与 REVIEW_FILE(`.auto/review.md`);VerifyRun 运行信息类型;--commit 四档(CommitMode)。
+- `src/check.ts` — `check` 命令逻辑:启发式扫描目标目录 AGENTS.md 与 PLAN.md 中要求会话亲自运行验证脚本/命令的语句(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算),返回 findings(file/task/line/text)与 notes;命中退出码 1。
 - `src/verify.ts` — verify 脚本机制层(纯逻辑,不依赖 SDK 与 runner):verifyTmpDir(`/tmp/<目标目录基名>`)、resolveVerifyScript(依 verifyCommand 判定 existing/wrapped/generate 三分支)、runVerifyScript(cwd=目标目录执行,stdout/stderr 整写 verify.out/verify.err,VERIFY_TIMEOUT_MS 缺省 10 分钟,超时 kill 退出码记 124)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json
   置 0o444(AGENTS.md 不在其列,任务可更新它),driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
@@ -23,7 +24,7 @@
   (interactive 下只进文件);`setInput` 注册交互 readline 后 log 打印先清输入行再重绘;run 时把全部
   输出同步写入目标目录 `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
 - `templates/` — `init` 复制的模板(`PLAN.md`、`opencode.json`、`.opencode/agent/auto.md`)。
-- `docs/verify-review-design.md` — 第三阶段(verify 三段式与 --review 审核循环)与第四阶段(--early 并行审核,以 F 节为唯一设计基准)的设计基准:已确认决策、接口约定与流水线伪代码。
+- `docs/verify-review-design.md` — 第三阶段(verify 三段式与 --review 审核循环)与第四阶段(--early 并行审核,以 F 节为唯一设计基准)的设计基准:已确认决策、接口约定与流水线伪代码;G 节为判定会话执行限制与重验协议的后续修订基准。
 - `script/build.ts` — 独立可执行文件构建脚本。
 - `test/` — `bun test` 测试。
 
@@ -65,12 +66,17 @@
 - --dryrun: 只跑一次权限预检会话(列出授权外目录/操作并逐只读探查),该会话内
   权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复;报告写入
   .auto/dryrun.md 并打印,不执行任何任务。
-- 提问(含权限类)自动答复(--wait-answer 下先等人工 stdin 答复,超时回落自动答复;
-  缺省 --wait-answer 时权限提问仍直接阻塞);permission.asked 在 --wait-answer 下
-  同样等待人工指令,回答 allow/yes/y 等视为授权(以 always 放行),明确的其余回答
-  拒绝该权限但不中断(AI 无授权绕开继续),超时则拒绝并阻塞停机;
-  同一问题重复出现仍阻塞停机。--wait-between 在每个任务完成后暂停等待人工
-  (回车立即继续,超时自动继续),首个任务前不等待。
+- 提问自动答复(question.asked):非权限提问由 AUTO_ANSWER 自动答复(要求 AI 记录
+  决策过程,涉及架构/代码变更的决策须以 `AUTO-DECISION: <决策与理由>` 行标注);
+  --wait-answer 下先等人工 stdin 答复,超时回落自动答复;缺省 --wait-answer 时
+  权限类提问(question 工具)直接阻塞;同一问题重复出现仍阻塞停机。
+- --permission 四档(permission.asked 的处理策略,缺省 ask-deny):auto-allow 立即
+  自动授权(always 放行,不等待);ask-allow/ask-deny/ask-fail 先等人工
+  (--wait-answer 分钟,未设则不等待即视为超时;allow/yes/y 等视为授权以 always
+  放行,明确的其余回答拒绝该权限但不中断),超时分别回落:自动授权 / 自动拒绝但
+  会话继续(AI 无授权绕开) / 拒绝并退出运行(阻塞停机);dryrun 下仍自动拒绝但
+  不中断。--wait-between 在每个任务完成后暂停等待人工(回车立即继续,超时自动
+  继续),首个任务前不等待。
 - --interactive/-i 旁路交互(与 --verbose 互斥,index.ts 检查):不改变任何既有
   处理逻辑——常驻 readline 把回车输入作为额外用户消息经 `session.promptAsync`
   注入当前活动会话(v1 引擎 steer 语义,下一 provider turn 边界处理;**不要用
@@ -93,13 +99,20 @@
   (runVerifyScript:cwd=目标目录,有执行位直接 spawn 否则经 bash;stdout/stderr
   整写 /tmp/<基名>/verify.out 与 verify.err,执行前 truncate;超时 10 分钟 kill、
   code 记 124;退出码非 0 不直接判失败);③ 旁路独立判定会话(renderVerifyJudge,
-  一次性 chain 不进任务链)直读 out/err 与代码判定,写 `.auto/verify.md`,driver
-  解析末行 `结论: 通过|差距` 与可选 `verified-command:` 行;通过 → markDone
-  (verified 优先取判定的 verified-command,其次原命令,最后实际脚本路径);差距 →
-  renderFix 反馈回执行会话链修复,重新收尾与验收(FIX_ROUNDS=3,off 模式直接回退
-  pending)。旁路产物缺失"带反馈重试一次仍失败按隐性阻塞"统一走 requireArtifact。
-  driver 执行脚本不经 opencode 权限体系(等同人工本地跑测试,非安全边界,文档须
-  明示);/tmp 产物不进仓库,同基名目标目录共享。
+  一次性 chain 不进任务链)直读 out/err 与代码判定——**判定会话禁止执行验证脚本
+  或验证性命令**(运行测试/构建/lint/服务等;只读检查不受限),认定脚本本身有问题
+  或覆盖不足时编写新脚本替换 /tmp/<基名>/verify.sh 并以末行 `结论: 重验 <原因>`
+  结束,driver 固定改为执行该指定路径(不再按 verify 字段重新解析,wrapped 重包装
+  会覆盖替换产物)并把输出整写回传同一对 out/err,由新判定会话继续判定,至多
+  REVERIFY_ROUNDS=3 轮(耗尽或声称重验但未写出脚本按隐性阻塞);正常结论写
+  `.auto/verify.md`,driver 解析末行 `结论: 通过|差距` 与可选 `verified-command:`
+  行;通过 → markDone(verified 优先取判定的 verified-command,其次原命令,最后
+  实际脚本路径);差距 → renderFix 反馈回执行会话链修复,重新收尾与验收
+  (FIX_ROUNDS=3,off 模式直接回退 pending)。旁路产物缺失"带反馈重试一次仍失败
+  按隐性阻塞"统一走 requireArtifact。driver 执行脚本不经 opencode 权限体系
+  (等同人工本地跑测试,非安全边界,文档须明示);/tmp 产物不进仓库,同基名目标
+  目录共享。该执行权原则经 init 下沉:AGENTS.md 验证原则块、PLAN.md 模板与
+  renderInit 提示词;`check` 子命令可扫描两文件中违背该原则的描述。
 - --review:`--review [1-10]`(缺省 0 不启用、裸选项 3、显式值须 1..10 整数,
   index.ts parseReviewLimit 校验,loop 透传 runTask)。runTask 外层轮循环:执行
   阶段(ensureDecomposed/executeWhole)仅首轮进入;验收通过后 reviewTask 开旁路
@@ -127,10 +140,12 @@
   --context-limit(默认 64k tokens)则复用,否则新建;占比与用量由 watch 始终跟踪
   (与 --verbose 无关),拿不到模型上限时占比记 100 即总是新建;瞬时会话错误重试
   仍强制换新会话。
-- CURRENT.md 是当前任务镜像(每会话必读,抗上下文压缩);AGENTS.md 中 driver 只
-  维护固定指针块,不再置只读(任务可更新其余内容),driver 在 `run`/`init`
-  启动会话前确保指针块存在、缺失则追加,此外永不改写;server 长驻即可,指令文件
-  每个 provider turn 现场重读。
+- CURRENT.md 是当前任务镜像(每会话必读,抗上下文压缩):任务开始(首个会话前)
+  写入、每次勾选后刷新、任务结束(完成/阻塞/回退 pending)在 runTask 的 finally
+  中删除(强制中断不走 finally,遗留文件下次任务开始时重建);AGENTS.md 中 driver
+  只维护固定指针块与验证原则块两个标记块(`opencode-auto:start` 与
+  `opencode-auto:verify:start`,各自幂等补写、除此之外永不改写),不置只读
+  (任务可更新其余内容);server 长驻即可,指令文件每个 provider turn 现场重读。
 - `PLAN.md` 字段行(`  - key: value`)必须紧跟任务标题且连续;第一个非字段行(含空行)
   结束字段块。修改解析规则时同步更新 `test/plan.test.ts` 与 README 的格式说明。
 - 运行时依赖外部 `opencode` CLI(`createOpencodeServer` spawn `opencode serve`),
@@ -141,3 +156,11 @@
 任务的完整内容与进度,优先于一切会话记忆。不要编辑 `CURRENT.md` 与 `PLAN.md`,
 它们由 driver 独占维护。
 <!-- opencode-auto:end -->
+
+<!-- opencode-auto:verify:start -->
+验证原则: 任务级验证脚本与验证命令一律由 driver 在会话外执行,任何会话不要直接
+运行它们来下验收结论;验收标准写在任务的 verify 字段。若会话认为验证脚本本身有
+问题,可编写新的验证脚本替换指定脚本(/tmp/<目标目录基名>/verify.sh),由 driver
+重新执行并把输出回传给独立判定会话。任务描述与项目规范不要出现与此相违背的指示
+(可用 opencode-auto check 检查)。
+<!-- opencode-auto:verify:end -->

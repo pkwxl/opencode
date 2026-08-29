@@ -26,11 +26,16 @@ export type VerifyRun = {
   err: string
 }
 
-// Question-tool rules, identical across all session types.
+// Question-tool rules, identical across all session types. The autonomous
+// reply requires the agent to record its decision process; decisions touching
+// architecture or code must be marked with an AUTO-DECISION line.
 const QUESTION_RULE = `2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
    其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
-   你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。
-   非权限问题调用 question 工具会被自动答复上面这句话;就同一问题再次询问会导致任务阻塞停机。`
+   你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;
+   自主决策须记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档
+   (docs/ 设计文档或报告),涉及架构设计或代码变更的决策,还须在设计文档或代码
+   注释中以 \`AUTO-DECISION: <决策与理由>\` 行明确标注。
+   非权限问题调用 question 工具会被自动答复上述要求;就同一问题再次询问会导致任务阻塞停机。`
 
 // State-file rule: the driver owns PLAN.md / CURRENT.md; sessions never edit them.
 const STATE_RULE = `PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),` +
@@ -146,28 +151,35 @@ export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string
     },这是验收标准,按其语义(或任务正文与 docs/ 中的验收要求)设计验证方式。
 
 任务:
-1. 只读分析相关源码与 docs/,确定覆盖验收标准所需的检查(运行测试、lint、构建产物核对等);
+1. 只读分析相关源码与 docs/,确定覆盖验收标准所需的检查项(测试、lint、构建产物核对等);
 2. 把检查写成可执行的 bash 脚本,写入 ${scriptPath}(绝对路径,driver 管理的 /tmp 下的
    目录,覆盖写):首行 #!/usr/bin/env bash,脚本自包含、可重复执行,非零退出码表示
    验证未通过;写完 chmod +x 赋予可执行位。
 
 约束:
-1. 只做验证类操作(运行测试/检查、读文件),不修改任何实现代码与 docs/;${STATE_RULE}
+1. 只做验证类设计(为各项检查编写脚本),不修改任何实现代码与 docs/;${STATE_RULE}
 ${QUESTION_RULE}
 3. 产出该脚本是硬性要求:即使任务看起来已完成或极其简单,也必须写出文件
    (单一检查一行命令即可);不产出有效文件会导致任务阻塞停机;
-4. 不要执行你写出的脚本(可做 bash -n 之类的只读语法检查),执行与判定由 driver 和
-   独立判定会话负责;写出文件后立即结束会话。`,
+4. 禁止直接执行任何验证脚本或验证性命令(运行测试、构建、lint、启动服务等)——
+   验证的执行权在 driver,它会在会话外执行你写出的脚本并把输出回传给独立判定会话;
+   编写过程中只做只读分析(bash -n 之类的只读语法检查除外);写出文件后立即结束会话。`,
   ].join("\n\n")
 }
 
 // Verify judge session (always a fresh side session): the driver has already
 // executed the script — the prompt injects the run info (script path, exit
 // code, duration, timeout, out/err file paths) and the session only reads
-// files and code to reach a verdict. A non-zero exit code is not an automatic
-// fail: the "script itself is broken → verify an equivalent way instead"
-// leniency is kept. Verdict protocol is unchanged (VERDICT_FILE + 结论 line).
+// files and code to reach a verdict. The judge never executes verify scripts
+// or verification commands itself (execution belongs to the driver, results
+// arrive via the out/err files); when it deems the script itself broken or
+// insufficient it may write a new script replacing the designated one and
+// conclude 重验 — the driver re-executes it and feeds the results back the
+// same way. A non-zero exit code is not an automatic fail. Verdict protocol
+// is VERDICT_FILE + 结论 line (通过|差距|重验).
 export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun): string {
+  // 判定会话可写的新脚本指定路径:重验时 driver 固定改为执行该路径的脚本。
+  const replacement = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
   return [
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
@@ -185,20 +197,28 @@ export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun): strin
 - stderr(整写文件): ${run.err}
 
 你是独立判定者:实现与脚本执行均由其他会话和进程完成,你只看到磁盘上的结果,
-不要轻信任何自报,以你亲自检查的结果为准。
+不要轻信任何自报,以你亲自核查(只读检查)的结果为准。
 
 要求:
 1. 直读上述 out/err 文件——大文件用分段读取,不要经 bash cat 等工具回显输出
    (会被截断,这正是三段式要避免的);结合收尾报告阅读相关源码与改动;
 ${QUESTION_RULE}
-3. 退出码非 0 或超时不直接判不通过:先从输出判断实际原因;若脚本/命令本身有问题
-   (写法错误、路径不对、环境不适用等),不判不通过,说明原因并用等价方式验证
-   (可自行补跑只读检查:重跑测试、grep、读文件等);
-4. 只判定不修复:禁止修改任何实现代码与文档,发现的问题只写进判定文件;${STATE_RULE}
-5. 把判定写入 ${VERDICT_FILE}(覆盖写):简述判定依据与你实际执行的检查;若以等价命令
-   完成验证,附一行 \`verified-command: <命令>\`(独立成行);最后一行必须是
-   \`结论: 通过\` 或 \`结论: 差距 <差距描述>\`;
-6. 写出判定文件后立即结束会话。`,
+3. 禁止直接执行任何验证脚本或验证性命令(运行测试、构建、lint、启动服务等)——
+   验证的执行权在 driver,执行结果一律以上述 out/err 回传文件为准;只读检查
+   (读文件、git log/status、grep 源码)不受此限;
+4. 若认定现有脚本本身有问题(写法错误、路径不对、环境不适用)或未能覆盖验收
+   标准:编写新的验证脚本替换 ${replacement}(覆盖写并 chmod +x),在判定文件中
+   说明原因,末行写 \`结论: 重验 <原因>\`;driver 会亲自执行替换后的脚本并把
+   stdout/stderr 整写回传到同一对 out/err 文件,由新的判定会话继续判定;
+5. 退出码非 0 或超时不直接判不通过:先从输出判断实际原因;属于脚本本身问题的
+   按上一条重验处理,不要据此误判实现差距;
+6. 只判定不修复:禁止修改任何实现代码与文档,你可写的文件只有判定文件与第 4 条
+   的替换脚本;${STATE_RULE}
+7. 把判定写入 ${VERDICT_FILE}(覆盖写):简述判定依据与你实际执行的检查;若你
+   替换了脚本并最终判定通过,附一行 \`verified-command: <新脚本的核心命令>\`
+   (独立成行);最后一行必须是 \`结论: 通过\`、\`结论: 差距 <差距描述>\` 或
+   \`结论: 重验 <原因>\`;
+8. 写出判定文件后立即结束会话。`,
   ].join("\n\n")
 }
 
@@ -225,15 +245,16 @@ ${QUESTION_RULE}
 
 // --review quality-audit session (always a fresh side session). Dimensions:
 // fidelity to the task/design docs, correctness (edge cases), and whether the
-// verification itself was comprehensive and effective. Non-final reviews are
-// scoped to this task's changes only; final reviews audit the whole plan.
+// verification itself was comprehensive and effective. Dimension 3 is a
+// static review in both variants (the audit never executes verify scripts or
+// verification commands — execution belongs to the driver). Non-final reviews
+// are scoped to this task's changes only; final reviews audit the whole plan.
 // The audit report goes to docs/<id>.audit.md (final: docs/final-audit.md)
 // and the conclusion to REVIEW_FILE with the same 结论-line protocol as
 // VERDICT_FILE.
 // --early: the driver executes the verify script concurrently with this
-// session (design doc F.3) — the prompt says so, keeps the session to
-// read-only checks, and turns dimension 3 into a static review of the
-// script content (interpreting run results is the judge session's job).
+// session (design doc F.3) — the prompt says so and keeps the session to
+// read-only checks that cannot collide with the running script.
 export function renderReview(plan: Plan, task: Task, opts: { final: boolean; early?: boolean }): string {
   const script = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
   return [
@@ -253,7 +274,9 @@ export function renderReview(plan: Plan, task: Task, opts: { final: boolean; ear
         ? `直读 verify 脚本 ${script} 的内容,对照任务验收标准做静态审核,判断它是否
    有效覆盖验收标准、没有漏验或形同虚设的检查;脚本运行结果的解读属独立判定会话
    的职责,你不要执行该脚本。`
-        : "verify 脚本与判定有效覆盖任务的验收标准,没有漏验或形同虚设的检查。"
+        : `verify 脚本与判定有效覆盖任务的验收标准,没有漏验或形同虚设的检查——
+   对脚本内容与 .auto/verify.md 判定记录做静态审核即可,不要执行验证脚本或
+   验证性命令(验证的执行权在 driver)。`
     }`,
     ...(opts.early
       ? [
@@ -407,7 +430,10 @@ export function renderInit(promptText: string): string {
 3. 根据下方需求,把 PLAN.md 填充为一份可执行的实施计划:任务按依赖顺序排列,每个
    任务带 verify 验收标准(具体命令用 \`command: \` 前缀,或自然语言描述);不要手工
    编写子任务检查项(driver 会自动分解);
-4. 如执行计划需要访问项目目录外的路径或特殊命令,在 opencode.json 的 permission
+4. 任务描述不要包含要求执行者亲自运行验证脚本/验证命令或自行下验收结论的语句:
+   验收标准统一写在 verify 字段,验证的执行权在 driver、判定由独立判定会话负责
+   (见 AGENTS.md 验证原则块);确需执行期检查的,写成普通的开发步骤而非验收动作;
+5. 如执行计划需要访问项目目录外的路径或特殊命令,在 opencode.json 的 permission
    规则中补充放行。
 
 约束: 只做规划,不实施任何任务,不编写 docs/ 报告;完成后立即结束会话。

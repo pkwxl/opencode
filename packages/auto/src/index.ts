@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path"
+import { checkPrinciple } from "./check"
 import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensurePointer, runAll } from "./loop"
 import { load } from "./plan"
 import { renderInit, type CommitMode } from "./prompt"
-import { runOnce, type SubtaskMode } from "./runner"
+import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
 import { ensure } from "./server"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
 import templateConfig from "../templates/opencode.json" with { type: "file" }
@@ -16,11 +17,11 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt/--review/--early-review 带值(吞掉下一个 token);--verbose/--interactive/
-// --dryrun/--commit-subtask/--early 是布尔选项,出现即 true,仅当紧随字面量
-// true/false 时才吞掉它。均支持 --flag=value;
+// --prompt/--review/--early-review/--permission 带值(吞掉下一个 token);
+// --verbose/--interactive/--dryrun/--commit-subtask/--early 是布尔选项,出现即 true,
+// 仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value;
 // --prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值)。
-const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt", "review", "early-review"])
+const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt", "review", "early-review", "permission"])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask", "early"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
@@ -119,6 +120,11 @@ if (command === "run") {
     console.error("--early 需搭配 --review 一起使用(或改用快捷糖 --early-review)")
     process.exit(1)
   }
+  const permission = parsePermission(flags.get("permission"))
+  if (permission === null) {
+    console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
+    process.exit(1)
+  }
   const code = await runAll(directory, {
     agent: flags.get("agent"),
     server: flags.get("server"),
@@ -132,6 +138,7 @@ if (command === "run") {
     contextLimit: contextLimit * 1000,
     review: earlyReview > 0 ? earlyReview : review,
     early,
+    permission,
     interactive,
   })
   process.exit(code)
@@ -156,6 +163,13 @@ function parseCommit(flags: Map<string, string>): CommitMode | null {
 function parseSubtask(raw: string | undefined): SubtaskMode | null {
   if (raw === undefined || raw === "") return "auto"
   if (raw === "off" || raw === "auto" || raw === "ondemand") return raw
+  return null
+}
+
+// --permission 缺省/裸选项 = ask-deny;返回 null 表示取值非法。
+function parsePermission(raw: string | undefined): PermissionMode | null {
+  if (raw === undefined || raw === "") return "ask-deny"
+  if (raw === "auto-allow" || raw === "ask-allow" || raw === "ask-deny" || raw === "ask-fail") return raw
   return null
 }
 
@@ -207,8 +221,10 @@ if (command === "init") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
   }
-  // 幂等维护 AGENTS.md 指针块: 只追加,从不改写已有内容。
-  console.log((await ensurePointer(directory)) ? "已更新: AGENTS.md(追加 opencode-auto 指针块)" : "跳过已存在: AGENTS.md 指针块")
+  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块与验证原则块各自独立、只追加。
+  const ensured = await ensurePointer(directory)
+  console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
+  console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
 
   // -p/--prompt: 初始化完成后直接调用一次 AI,按提示词填充 PLAN.md 等文档,
   // 由用户审核后再运行 run。
@@ -235,6 +251,23 @@ if (command === "init") {
   process.exit(0)
 }
 
+// check: 启发式检查 AGENTS.md 与 PLAN.md 中是否有与"验证执行权在 driver"原则
+// 相违背的描述(要求会话亲自运行验证脚本/命令的语句);命中退出码 1,供人工修订。
+if (command === "check") {
+  const { findings, notes } = await checkPrinciple(directory)
+  console.log(`检查 ${directory}: 验证执行权原则(任务级验证脚本与命令由 driver 执行,会话不亲自运行)`)
+  for (const note of notes) console.log(`ℹ ${note}`)
+  if (!findings.length) {
+    console.log("✓ 未发现与验证原则相违背的描述")
+    process.exit(0)
+  }
+  for (const finding of findings) {
+    console.log(`⚠ ${finding.file}${finding.task ? `(${finding.task})` : ""}:${finding.line}: ${finding.text}`)
+  }
+  console.log(`发现 ${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订;验收标准统一写在任务的 verify 字段)`)
+  process.exit(1)
+}
+
 if (command === "status") {
   const plan = await load(resolve(directory, "PLAN.md"))
   for (const task of plan.tasks) {
@@ -246,8 +279,9 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <prompt-text>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--dryrun [true|false]] [--context-limit [n]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]]
+  opencode-auto check [dir]
   opencode-auto status [dir]
 
-退出码: 0 全部完成,1 用法/环境错误,2 阻塞/未完成等待人工介入,130 被连续两次 Ctrl+C 强制终止`)
+退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入,130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

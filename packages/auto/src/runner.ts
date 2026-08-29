@@ -44,7 +44,12 @@ export type Outcome = { type: "completed" } | { type: "blocked"; question: strin
 // Questions get this fixed autonomous reply when no human answers in time
 // (or --wait-answer was not given for non-permission questions); only a
 // repeated question on the same issue escalates to human intervention.
-const AUTO_ANSWER = "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
+// The reply also requires the agent to record its decision process, and any
+// decision touching architecture or code must be marked AUTO-DECISION.
+const AUTO_ANSWER =
+  "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。" +
+  "请记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档(docs/ 设计文档或报告);" +
+  "涉及架构设计或代码变更的决策,须在设计文档或代码注释中以 `AUTO-DECISION: <决策与理由>` 行明确标注。"
 
 // A failing task-level acceptance feeds the gap back into the execution
 // session chain; after this many unsuccessful fix rounds the task blocks for
@@ -54,6 +59,13 @@ const FIX_ROUNDS = 3
 // --subtask 三档: off(单会话完成)/ auto(自动分解,缺省)/ ondemand(单会话执行,
 // 上下文达到 --context-limit 时交接文档 + 新会话续跑)。
 export type SubtaskMode = "off" | "auto" | "ondemand"
+
+// --permission 四档: 权限请求(permission.asked)的处理策略,缺省 ask-deny。
+// auto-allow 立即自动授权(always 放行,不等待);ask-* 先等人工(--wait-answer
+// 分钟,未设则不等待即视为超时;allow/yes/y 等回答视为授权,明确拒绝的回答拒绝
+// 该权限但会话继续),超时分别回落:ask-allow 自动授权 / ask-deny 自动拒绝但会话
+// 继续(AI 无授权绕开) / ask-fail 拒绝并退出运行(阻塞停机)。
+export type PermissionMode = "auto-allow" | "ask-allow" | "ask-deny" | "ask-fail"
 
 type Opts = {
   agent?: string
@@ -72,6 +84,8 @@ type Opts = {
   // --early: 审核会话挪进 verify 脚本执行窗口并行(需 review>0,设计文档 F 节),
   // 经 verifyTask 审核挂点实现。
   early?: boolean
+  // --permission 四档: 权限请求的处理策略,缺省 ask-deny(见 PermissionMode)。
+  permission?: PermissionMode
   // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
   // ask 的人工等待也改由它接收(语义不变)。
   interactive?: Interactive
@@ -131,10 +145,17 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW and its used
 // tokens below contextLimit (default 64k), otherwise a fresh session is created.
-// Blocking happens on unanswered permission requests (an explicit non-approval
-// reply rejects the permission but lets the session continue without it), a
-// repeated question on the same issue, exhausted transient session errors, or
-// a failed verification.
+// CURRENT.md lives only while the task runs: it is (re)created before the
+// first session — an interrupted run may have left it missing or stale —
+// refreshed by later writeCurrent calls, and deleted when the task ends
+// (any outcome). A forced interrupt skips the finally, so a leftover file
+// is simply rebuilt on the next run.
+// Permission requests follow --permission (default ask-deny): auto-allow
+// grants immediately; ask-* wait for a human (per --wait-answer) and time
+// out into auto-allow / auto-deny (session continues) / abort+block
+// (ask-fail). Blocking happens on a repeated question on the same issue,
+// exhausted transient session errors, a failed verification, or an ask-fail
+// permission timeout.
 export async function runTask(
   client: OpencodeClient,
   plan: Plan,
@@ -145,77 +166,80 @@ export async function runTask(
   const chain: SessionChain = { pct: 100, used: 0 }
   const mode = opts.subtask ?? "auto"
   // Mirror the task into CURRENT.md before the first session: the agent
-  // contract requires every session to read it, and an interrupted run may
-  // have left it missing or stale. Later writeCurrent calls refresh it.
+  // contract requires every session to read it first.
   task = requireTask(await load(plan.path), task.id)
   await writeCurrent(plan.path, task, mode !== "auto")
-  // 执行阶段仅首轮进入: auto 先确保分解出检查项,off/ondemand 单会话执行
-  // 整个任务;review 差距注入的 fix 检查项走下方的子任务会话循环。
-  if (mode === "auto") {
-    const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
-    if (decomposed.type === "blocked") return decomposed
-    task = decomposed.task
-  } else {
-    const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
-    if (blocked) return blocked
-    task = requireTask(await load(plan.path), task.id)
-  }
-  await writeCurrent(plan.path, task, mode !== "auto")
-
-  const limit = opts.review ?? 0
-  // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
-  // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
-  const early = opts.early && limit > 0
-  for (let round = 0; ; ) {
-    // auto 模式此处执行分解出的检查项(含 review 注入的 fix 检查项);
-    // off/ondemand 模式只有正文中人工编写的检查项。
-    for (;;) {
-      const items = subtasks(task.body)
-      const index = items.findIndex((item) => !item.done)
-      if (index === -1) break
-      const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain)
+  try {
+    // 执行阶段仅首轮进入: auto 先确保分解出检查项,off/ondemand 单会话执行
+    // 整个任务;review 差距注入的 fix 检查项走下方的子任务会话循环。
+    if (mode === "auto") {
+      const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
+      if (decomposed.type === "blocked") return decomposed
+      task = decomposed.task
+    } else {
+      const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
       if (blocked) return blocked
+      task = requireTask(await load(plan.path), task.id)
+    }
+    await writeCurrent(plan.path, task, mode !== "auto")
+
+    const limit = opts.review ?? 0
+    // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
+    // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
+    const early = opts.early && limit > 0
+    for (let round = 0; ; ) {
+      // auto 模式此处执行分解出的检查项(含 review 注入的 fix 检查项);
+      // off/ondemand 模式只有正文中人工编写的检查项。
+      for (;;) {
+        const items = subtasks(task.body)
+        const index = items.findIndex((item) => !item.done)
+        if (index === -1) break
+        const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain)
+        if (blocked) return blocked
+        task = requireTask(await load(plan.path), task.id)
+        await writeCurrent(plan.path, task, mode !== "auto")
+      }
+
+      const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
+      if (result.type === "blocked") return result
+      // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
+      // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
+      // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
+      const verdict = await verifyTask(client, plan, task, opts, chain, early ? () => reviewTask(client, plan, task, opts, true) : undefined)
+      if (verdict.type === "blocked") return verdict
+      if (verdict.type === "gap") {
+        await setStatus(plan.path, task.id, "pending")
+        return { type: "incomplete", reason: verdict.gap }
+      }
+      if (limit <= 0) return { type: "completed" }
+
+      // early 的审核结论已随 verifyTask 带回(挂点在每次脚本执行前重开,done 必有
+      // 结论);非 early 在验收通过后串行开审核会话。
+      const audit = verdict.audit ?? (await reviewTask(client, plan, task, opts))
+      if (audit.type === "blocked") return audit
+      if (audit.type === "pass") return { type: "completed" }
+
+      // off 模式不做审核修复循环: 与该模式 verify 失败语义一致。
+      if (mode === "off") {
+        await setStatus(plan.path, task.id, "pending")
+        return { type: "incomplete", reason: audit.gap }
+      }
+      round++
+      if (round > limit) {
+        return { type: "blocked", question: `质量审核连续 ${limit} 轮修复后仍未通过:\n${audit.gap}` }
+      }
+      // verifyTask 通过时已把任务标 done;审核发现差距须先置回 in_progress,
+      // 否则中断重跑时 next() 会跳过该任务,注入的 fix 检查项永不执行。
+      await setStatus(plan.path, task.id, "in_progress")
+      log(`↻ ${task.id} 质量审核未通过,规划修复子任务后继续(第 ${round}/${limit} 轮):\n${audit.gap}`)
+      const planned = await planReviewFix(client, plan, task, opts, audit.gap)
+      if (planned.type === "blocked") return planned
+      await appendSubtasks(plan.path, task.id, planned.items)
       task = requireTask(await load(plan.path), task.id)
       await writeCurrent(plan.path, task, mode !== "auto")
     }
-
-    const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
-    if (result.type === "blocked") return result
-    // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
-    // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
-    // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
-    const verdict = await verifyTask(client, plan, task, opts, chain, early ? () => reviewTask(client, plan, task, opts, true) : undefined)
-    if (verdict.type === "blocked") return verdict
-    if (verdict.type === "gap") {
-      await setStatus(plan.path, task.id, "pending")
-      return { type: "incomplete", reason: verdict.gap }
-    }
-    if (limit <= 0) return { type: "completed" }
-
-    // early 的审核结论已随 verifyTask 带回(挂点在每次脚本执行前重开,done 必有
-    // 结论);非 early 在验收通过后串行开审核会话。
-    const audit = verdict.audit ?? (await reviewTask(client, plan, task, opts))
-    if (audit.type === "blocked") return audit
-    if (audit.type === "pass") return { type: "completed" }
-
-    // off 模式不做审核修复循环: 与该模式 verify 失败语义一致。
-    if (mode === "off") {
-      await setStatus(plan.path, task.id, "pending")
-      return { type: "incomplete", reason: audit.gap }
-    }
-    round++
-    if (round > limit) {
-      return { type: "blocked", question: `质量审核连续 ${limit} 轮修复后仍未通过:\n${audit.gap}` }
-    }
-    // verifyTask 通过时已把任务标 done;审核发现差距须先置回 in_progress,
-    // 否则中断重跑时 next() 会跳过该任务,注入的 fix 检查项永不执行。
-    await setStatus(plan.path, task.id, "in_progress")
-    log(`↻ ${task.id} 质量审核未通过,规划修复子任务后继续(第 ${round}/${limit} 轮):\n${audit.gap}`)
-    const planned = await planReviewFix(client, plan, task, opts, audit.gap)
-    if (planned.type === "blocked") return planned
-    await appendSubtasks(plan.path, task.id, planned.items)
-    task = requireTask(await load(plan.path), task.id)
-    await writeCurrent(plan.path, task, mode !== "auto")
+  } finally {
+    await removeCurrent(plan.path)
   }
 }
 
@@ -323,6 +347,14 @@ async function writeCurrent(path: string, task: Task, solo = false) {
   await reprotect(file)
 }
 
+// 任务结束(完成/阻塞/回退)即删除 CURRENT.md,不留过期镜像;强制中断不走
+// finally,遗留文件在下次任务开始时由 writeCurrent 重建。
+async function removeCurrent(path: string) {
+  const file = join(dirname(path), "CURRENT.md")
+  await allowWrite(file)
+  await rm(file, { force: true })
+}
+
 // Ensures the task body has a checklist: tasks resuming with one (or with a
 // human-written one) are used as-is; otherwise a decomposition session writes
 // docs/<id>.subtasks.md and the driver injects the items into PLAN.md.
@@ -383,14 +415,18 @@ async function runSubtask(
 }
 
 // Task-level acceptance after the wrap-up session, three stages (设计文档
-// A.4/A.5): resolve and (when needed) generate the verify script, execute it
-// via the driver, then run the independent judge session and parse its
-// verdict file. On pass the verified field prefers the judge's
-// verified-command line, then the task's original command, then the actual
-// executed script path. A gap is fed back into the execution session chain
-// for a fix round (wrap-up re-runs, then the same script is re-executed and
-// re-judged) until it passes or FIX_ROUNDS is exhausted; off mode skips fix
-// rounds and returns the gap to the caller (task reverts to pending).
+// A.4/A.5,判定会话执行限制见 G 节): resolve and (when needed) generate the
+// verify script, execute it via the driver, then run the independent judge
+// session and parse its verdict file. The judge never executes verify scripts
+// or commands itself; when it deems the script broken it replaces the
+// designated script and concludes 重验 — the driver then re-executes that
+// script (up to REVERIFY_ROUNDS) instead of resolving by verify field again.
+// On pass the verified field prefers the judge's verified-command line, then
+// the task's original command, then the actual executed script path. A gap is
+// fed back into the execution session chain for a fix round (wrap-up re-runs,
+// then the same script is re-executed and re-judged) until it passes or
+// FIX_ROUNDS is exhausted; off mode skips fix rounds and returns the gap to
+// the caller (task reverts to pending).
 // Each review round re-enters verifyTask with a fresh fix-round budget.
 // --early audit hook (设计文档 F.5): when given, a fresh audit session starts
 // right before each script execution (after the generate session, if any) and
@@ -405,14 +441,32 @@ async function verifyTask(
   audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
 ): Promise<{ type: "done"; audit?: Verdict } | { type: "gap"; gap: string } | (Outcome & { type: "blocked" })> {
   const mode = opts.subtask ?? "auto"
-  for (let round = 0; ; ) {
-    const execution = await executeVerifyScript(client, plan, task, opts, audit)
+  const dir = opts.dir ?? dirname(plan.path)
+  // 判定会话重验后固定执行指定脚本路径,不再按 verify 字段重新解析——wrapped
+  // 分支每次 resolve 都会重新包装,覆盖掉替换产物。
+  const replacement = join(verifyTmpDir(dir), "verify.sh")
+  let replaced: string | undefined
+  for (let round = 0, rechecks = 0; ; ) {
+    const execution = await executeVerifyScript(client, plan, task, opts, audit, replaced)
     if (execution.type === "blocked") return execution
     const verdict = await judge(client, plan, task, opts, execution.run)
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "pass") {
       await markDone(plan.path, task.id, verdict.command ?? verifyCommand(task) ?? execution.run.script)
       return { type: "done", audit: execution.audit }
+    }
+    // 判定会话认定脚本本身有问题并已替换: driver 重新执行替换脚本并再判定。
+    if (verdict.type === "reverify") {
+      if (!(await Bun.file(replacement).exists())) {
+        return { type: "blocked", question: `判定会话结论为重验,但未写出替换脚本 ${replacement}:\n${verdict.gap}` }
+      }
+      rechecks++
+      if (rechecks > REVERIFY_ROUNDS) {
+        return { type: "blocked", question: `验证脚本经 ${REVERIFY_ROUNDS} 轮替换重验仍未通过:\n${verdict.gap}` }
+      }
+      log(`↻ ${task.id} 判定会话替换了验证脚本,重新执行并判定(第 ${rechecks}/${REVERIFY_ROUNDS} 轮):\n${verdict.gap}`)
+      replaced = replacement
+      continue
     }
     // off 模式不做修复重跑: 差距交回调用方(回退 pending,等人工改进后重试)。
     if (mode === "off") return { type: "gap", gap: verdict.gap }
@@ -429,13 +483,18 @@ async function verifyTask(
   }
 }
 
-type Verdict = { type: "pass"; command?: string } | { type: "gap"; gap: string }
+type Verdict = { type: "pass"; command?: string } | { type: "gap"; gap: string } | { type: "reverify"; gap: string }
+
+// 判定会话替换脚本的重验轮数上限(独立于修复轮预算)。
+const REVERIFY_ROUNDS = 3
 
 // Verify 前两段: resolveVerifyScript 判定来源(existing/wrapped 由 driver 直接
 // 给出;自然语言或缺失先开一次性脚本生成旁路会话——generate 分支沿用约定名
 // /tmp/<基名>/verify.sh,上一轮(或修复前)生成的脚本存在则复用,V1 不自动重新
 // 生成),随后 runVerifyScript 在目标目录执行并 log 一行结果(退出码、耗时、
 // out/err 路径)。退出码非 0 不在此判定——判定权在判定会话。
+// override: 重验轮由判定会话替换出的指定脚本,直接执行、跳过 resolve(wrapped
+// 分支重新包装会覆盖掉替换产物)。
 // --early 审核挂点(F.2 时序保证): generate 分支的脚本生成会话结束后才启动
 // 审核会话,与脚本执行并行;脚本执行完毕先 join 审核(blocked 立即上抛),随后
 // 才进入判定会话。每次脚本执行(含修复轮重跑)重开一次新审核。
@@ -445,17 +504,23 @@ async function executeVerifyScript(
   task: Task,
   opts: Opts,
   audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
+  override?: string,
 ): Promise<{ type: "ok"; run: VerifyRun; audit?: Verdict } | (Outcome & { type: "blocked" })> {
   const dir = opts.dir ?? dirname(plan.path)
   const tmp = verifyTmpDir(dir)
   // generate 分支的脚本约定名:上一次(或上轮修复前)生成的脚本存在则复用。
   const script = join(tmp, "verify.sh")
-  const resolved = await resolveVerifyScript(task, dir)
-  if (resolved.kind === "generate" && !(await Bun.file(script).exists())) {
-    const failed = await generateScript(client, plan, task, opts, script)
-    if (failed) return failed
+  let path: string
+  if (override) {
+    path = override
+  } else {
+    const resolved = await resolveVerifyScript(task, dir)
+    if (resolved.kind === "generate" && !(await Bun.file(script).exists())) {
+      const failed = await generateScript(client, plan, task, opts, script)
+      if (failed) return failed
+    }
+    path = resolved.kind === "generate" ? script : resolved.script
   }
-  const path = resolved.kind === "generate" ? script : resolved.script
   const auditing = audit?.()
   const run = await runVerifyScript(dir, path)
   const outPath = join(tmp, "verify.out")
@@ -482,7 +547,7 @@ async function judge(
     kind: "审核",
     artifact: `有效判定文件 ${VERDICT_FILE}`,
     detail: "缺失或无结论行",
-    requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过` 或 `结论: 差距 <描述>`。",
+    requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 driver 重新执行)。",
     reset: () => rm(file, { force: true }),
     collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
   })
@@ -607,12 +672,14 @@ async function requireArtifact<T>(
 }
 
 function parseVerdict(text: string): Verdict | undefined {
-  const conclusion = /结论[:：]\s*(通过|差距[^\n]*)/.exec(text)
+  const conclusion = /结论[:：]\s*(通过|差距[^\n]*|重验[^\n]*)/.exec(text)
   if (!conclusion) return undefined
   if (conclusion[1] === "通过") {
     return { type: "pass", command: /^verified-command:\s*(.+)$/m.exec(text)?.[1]?.trim() }
   }
-  return { type: "gap", gap: conclusion[1]!.trim() }
+  const gap = conclusion[1]!.trim()
+  // 重验: 判定会话认定脚本本身有问题并已替换指定脚本,driver 重新执行后再判定。
+  return gap.startsWith("重验") ? { type: "reverify", gap: gap.replace(/^重验[:：]?\s*/, "").trim() } : { type: "gap", gap }
 }
 
 // Runs one prompt on the session chain (reusing the previous session when its
@@ -796,34 +863,55 @@ async function watch(
         await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
         continue
       }
-      // --wait-answer 下权限请求同样等待人工指令: 回答 allow/yes/y 等视为
-      // 确认授权(always 放行本请求的 patterns);明确的其余回答拒绝该权限但
-      // 不中断会话,AI 在无该权限下绕开继续工作;只有超时(等同无人值守)
-      // 才拒绝并阻塞停机。
+      const desc = `${asked.permission} (${asked.patterns.join(", ")})`
+      const mode = opts.permission ?? "ask-deny"
+      // auto-allow: 不等待人工,立即自动授权(always 放行本请求)。
+      if (mode === "auto-allow") {
+        log(`🔐 收到权限请求,--permission auto-allow 自动授权: ${desc}`)
+        await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
+        continue
+      }
+      // ask-*: 先等人工(--wait-answer 分钟,未设则不等待即视为超时)。回答
+      // allow/yes/y 等视为确认授权(always 放行);明确的其余回答拒绝该权限但
+      // 不中断会话,AI 在无该权限下绕开继续;超时按模式回落——ask-allow 自动
+      // 授权、ask-deny 自动拒绝但会话继续、ask-fail 拒绝并退出运行。
+      let human: string | undefined
       if (waitAnswer > 0) {
-        log(`🔐 收到权限请求: ${asked.permission} (${asked.patterns.join(", ")})`)
-        const human = await askHuman(
+        log(`🔐 收到权限请求: ${desc}`)
+        human = await askHuman(
           waitAnswer,
-          "输入 allow/yes/y 确认授权,其余回答将拒绝该权限并继续,超时将拒绝并阻塞",
+          `输入 allow/yes/y 确认授权,其余回答将拒绝该权限并继续,超时按 --permission ${mode} 处理`,
           opts.interactive,
         )
-        if (human && isApproval(human)) {
-          log(`→ 人工授权: ${human}(always 放行)`)
-          await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
-          continue
-        }
-        if (human) {
-          log(`→ 人工未授权: ${human}(拒绝该权限,AI 无授权继续)`)
-          await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
-          continue
-        }
+      } else {
+        log(`🔐 收到权限请求(未设 --wait-answer 不等待人工,按 --permission ${mode} 处理): ${desc}`)
+      }
+      if (human && isApproval(human)) {
+        log(`→ 人工授权: ${human}(always 放行)`)
+        await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
+        continue
+      }
+      if (human) {
+        log(`→ 人工未授权: ${human}(拒绝该权限,AI 无授权继续)`)
+        await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
+        continue
+      }
+      if (mode === "ask-allow") {
+        log(`→ 等待超时,--permission ask-allow 自动授权: ${desc}`)
+        await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
+        continue
       }
       await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
+      if (mode === "ask-deny") {
+        log(`→ 等待超时,--permission ask-deny 自动拒绝(AI 无授权继续): ${desc}`)
+        continue
+      }
+      // ask-fail: 拒绝并退出运行(阻塞停机,问题写入 PLAN.md)。
       await client.session.abort({ sessionID }).catch(() => {})
       return {
         blocked: {
           type: "blocked",
-          question: `需要权限: ${asked.permission} (${asked.patterns.join(", ")})。请在目标目录 opencode.json 的 permission 规则中放行后重新运行。`,
+          question: `权限请求无人答复(--permission ask-fail): ${desc}。请在目标目录 opencode.json 的 permission 规则中放行后重新运行。`,
         },
         lastText,
         pct,
@@ -907,7 +995,7 @@ function isApproval(answer: string): boolean {
 
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
 // undefined on timeout or empty input, in which case the caller falls back to
-// AUTO_ANSWER (questions) or blocks (permission requests).
+// AUTO_ANSWER (questions) or the --permission fallback (permission requests).
 // --interactive 下改由常驻输入行接收回答(提示语、超时与回落语义不变)。
 async function askHuman(minutes: number, hint: string, interactive?: Interactive): Promise<string | undefined> {
   const promptText = `请在 ${minutes} 分钟内输入回答(回车确认,${hint}): `

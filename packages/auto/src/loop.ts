@@ -6,7 +6,7 @@ import { banner, log, vlog } from "./log"
 import { block, countSubtasks, load, next, resetInProgress } from "./plan"
 import { renderDryrun, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
-import { commitAll, runOnce, runTask, type SubtaskMode } from "./runner"
+import { commitAll, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { ensure } from "./server"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
@@ -19,13 +19,28 @@ const POINTER = `<!-- opencode-auto:start -->
 它们由 driver 独占维护。
 <!-- opencode-auto:end -->`
 
-// 幂等维护 AGENTS.md 指针块: 只追加,从不改写已有内容。返回是否发生了写入。
-export async function ensurePointer(directory: string): Promise<boolean> {
+// AGENTS.md 验证原则块: 独立于指针块的第二个标记块,旧目标目录再次 init 也能补写。
+// 内容与 check 命令检查的原则一致(见 src/check.ts)。
+const VERIFY_PRINCIPLE = `<!-- opencode-auto:verify:start -->
+验证原则: 任务级验证脚本与验证命令一律由 driver 在会话外执行,任何会话不要直接
+运行它们来下验收结论;验收标准写在任务的 verify 字段。若会话认为验证脚本本身有
+问题,可编写新的验证脚本替换指定脚本(/tmp/<目标目录基名>/verify.sh),由 driver
+重新执行并把输出回传给独立判定会话。任务描述与项目规范不要出现与此相违背的指示
+(可用 opencode-auto check 检查)。
+<!-- opencode-auto:verify:end -->`
+
+// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块与验证原则块各自独立判断、只追加,
+// 从不改写已有内容。返回补写了哪些块。
+export async function ensurePointer(directory: string): Promise<{ pointer: boolean; principle: boolean }> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
-  if (existing.includes("opencode-auto:start")) return false
-  await Bun.write(agentsFile, existing ? `${existing.trimEnd()}\n\n${POINTER}\n` : `# AGENTS.md\n\n${POINTER}\n`)
-  return true
+  let text = existing
+  const pointer = !text.includes("opencode-auto:start")
+  if (pointer) text = text ? `${text.trimEnd()}\n\n${POINTER}\n` : `# AGENTS.md\n\n${POINTER}\n`
+  const principle = !text.includes("opencode-auto:verify:start")
+  if (principle) text = `${text.trimEnd()}\n\n${VERIFY_PRINCIPLE}\n`
+  if (pointer || principle) await Bun.write(agentsFile, text)
+  return { pointer, principle }
 }
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
@@ -52,6 +67,8 @@ export async function runAll(
     // --early: 审核会话与 driver 执行 verify 脚本并行(需 review 已启用),透传给
     // runTask;窗口时序见设计文档 F 节。
     early?: boolean
+    // --permission: 权限请求的处理策略(缺省 ask-deny),透传给 runner 的会话监听。
+    permission?: PermissionMode
     // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
     // 调用方已把 verbose 记录级别打开,前台明细静默)。
     interactive?: boolean
@@ -83,9 +100,11 @@ export async function runAll(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
-  // 启动会话前确保 AGENTS.md 指针块存在(缺失则补写);AGENTS.md 本身保持可写,
-  // 任务可更新它的其余内容。
-  if (await ensurePointer(directory)) log("已补写: AGENTS.md 指针块")
+  // 启动会话前确保 AGENTS.md 指针块与验证原则块存在(缺失则补写);AGENTS.md 本身
+  // 保持可写,任务可更新它的其余内容。
+  const ensured = await ensurePointer(directory)
+  if (ensured.pointer) log("已补写: AGENTS.md 指针块")
+  if (ensured.principle) log("已补写: AGENTS.md 验证原则块")
   let server: Awaited<ReturnType<typeof ensure>> | undefined
   // --interactive 旁路输入控制器;server 就绪后创建,finally 中关闭。
   let repl: Interactive | undefined
@@ -147,6 +166,7 @@ export async function runAll(
             verbose: opts.verbose,
             waitAnswer: opts.waitAnswer,
             contextLimit: opts.contextLimit,
+            permission: opts.permission,
             interactive: repl,
           })
           if (outcome.type !== "completed") {
@@ -176,6 +196,7 @@ export async function runAll(
         contextLimit: opts.contextLimit,
         review: opts.review,
         early: opts.early,
+        permission: opts.permission,
         interactive: repl,
       })
       if (outcome.type === "blocked") {
@@ -291,7 +312,7 @@ async function gitStatusFiles(directory: string, root: string): Promise<string[]
     .map((entry) => relative(directory, join(toplevel, entry.slice(3))))
 }
 
-// --commit subtask mode: every 30s re-read PLAN.md, report the current task's
+// --commit subtask mode: every 10min re-read PLAN.md, report the current task's
 // subtask checkbox progress and a remaining-time estimate. The estimate is a
 // simple linear projection from completed items, so its precision is bounded
 // by this check interval.
@@ -307,7 +328,7 @@ function trackSubtasks(path: string) {
     const elapsed = Date.now() - current.since
     const estimate = done ? formatDuration((elapsed / done) * (total - done)) : "未知(尚无已完成的子任务)"
     log(`  ⏳ ${task.id} 子任务进度 ${done}/${total},已用时 ${formatDuration(elapsed)},预计剩余 ${estimate}`)
-  }, 30_000)
+  }, 10 * 60_000)
   return { close: () => clearInterval(timer) }
 }
 

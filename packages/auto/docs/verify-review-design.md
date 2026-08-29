@@ -276,6 +276,21 @@ opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后
   在下次运行清理,无新增持久化并行状态;
 - `--interactive`:窗口内唯一会话为审核会话,attach 无歧义。
 
+## G. 判定会话执行限制与重验协议(后续修订,以此为准)
+
+> 本节修订 A.3 的判定会话约定与相关提示词;与其冲突的旧文("必要时可自行补跑只读
+> 检查""说明原因并用等价方式验证")以本节为准。其余各节(A/B/F)不变。
+
+| 决策点 | 结论 |
+| --- | --- |
+| 判定会话执行权 | **禁止直接执行任何验证脚本或验证性命令**(运行测试、构建、lint、启动服务等);执行结果一律以 driver 回传的 out/err 文件为准;只读检查(读文件、git log/status、grep 源码)不受限 |
+| 脚本缺陷处理 | 判定会话可编写**新的验证脚本替换**指定脚本(`/tmp/<基名>/verify.sh`,覆盖写 + chmod +x),判定文件末行 `结论: 重验 <原因>` |
+| 重验循环 | driver 固定改为执行该指定路径(不再按 verify 字段重新解析——wrapped 重包装会覆盖替换产物),输出整写回传同一对 out/err,由新判定会话继续判定;至多 REVERIFY_ROUNDS=3 轮,耗尽或声称重验但未写出脚本按隐性阻塞(blocked) |
+| verified-command | 判定通过且替换过脚本时,可附 `verified-command: <新脚本核心命令>`;markDone 的取值优先级不变 |
+| 生成会话 | renderVerifyScriptGen 同样禁止执行验证性命令(只读分析 + `bash -n` 类语法检查除外) |
+| 审核会话 | renderReview 两形态维度 3 统一为静态审核(脚本内容/判定记录对照验收标准),不执行验证脚本或验证命令;early 额外告知脚本并行执行、以只读为主 |
+| 原则下沉 | init 向 AGENTS.md 追加验证原则块(独立标记 `opencode-auto:verify:start/end`,幂等、与指针块互不影响)、PLAN.md 模板与 renderInit 提示词写明"任务描述不要求执行者亲自运行验证命令/脚本";`opencode-auto check` 启发式扫描 AGENTS.md/PLAN.md 中与原则相违背的描述,命中退出码 1(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算) |
+
 ## E. 测试与验证
 
 - 每任务 verify:`bun typecheck` + 对应测试文件(见 PLAN.md 各任务 verify 字段);

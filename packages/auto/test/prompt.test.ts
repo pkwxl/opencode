@@ -60,6 +60,9 @@ describe("renderDecompose", () => {
     expect(text).toContain("策略选 A 还是 B?")
     expect(text).toContain("选 A")
     expect(text).toContain("由 driver 独占维护")
+    // 自动答复要求记录决策过程并标注 AUTO-DECISION
+    expect(text).toContain("记录决策过程")
+    expect(text).toContain("AUTO-DECISION")
   })
 })
 
@@ -138,9 +141,10 @@ describe("renderVerifyScriptGen", () => {
     expect(text).toContain("/tmp/auto/verify.sh")
     expect(text).toContain("chmod +x")
     expect(text).toContain("只读分析")
-    expect(text).toContain("只做验证类操作")
+    expect(text).toContain("只做验证类设计")
     expect(text).toContain("不修改任何实现代码")
-    expect(text).toContain("不要执行你写出的脚本")
+    expect(text).toContain("禁止直接执行任何验证脚本或验证性命令")
+    expect(text).toContain("验证的执行权在 driver")
     expect(text).toContain("产出该脚本是硬性要求")
     expect(text).toContain('任务 verify 字段是"command: bun test"')
     expect(text).toContain("question 工具")
@@ -174,12 +178,19 @@ describe("renderVerifyJudge", () => {
     expect(fresh).toContain("超时: 否")
   })
 
-  test("直读文件分段读、退出码不直接判死、等价验证与判定协议", () => {
+  test("直读文件分段读、禁止执行验证、替换重验协议与判定协议", () => {
     const text = renderVerifyJudge(plan, task, run)
     expect(text).toContain("直读上述 out/err 文件")
     expect(text).toContain("分段读取")
     expect(text).toContain("不直接判不通过")
-    expect(text).toContain("等价方式验证")
+    expect(text).toContain("禁止直接执行任何验证脚本或验证性命令")
+    expect(text).toContain("验证的执行权在 driver")
+    expect(text).toContain("只读检查")
+    // 替换重验协议: 新脚本写指定路径,结论为重验,driver 执行后经同一对文件回传
+    const replacement = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
+    expect(text).toContain(`编写新的验证脚本替换 ${replacement}`)
+    expect(text).toContain("结论: 重验")
+    expect(text).toContain("整写回传到同一对 out/err 文件")
     expect(text).toContain("只判定不修复")
     expect(text).toContain(VERDICT_FILE)
     expect(text).toContain("结论: 通过")
@@ -229,11 +240,13 @@ describe("renderReview", () => {
     expect(text).toContain("静态审核")
     expect(text).toContain("运行结果的解读属独立判定会话")
     expect(text).toContain("你不要执行该脚本")
-    // 非 early 不带并行窗口措辞
+    // 非 early 不带并行窗口措辞,但同样禁止执行验证
     const plain = renderReview(plan, task, { final: false })
     expect(plain).not.toContain("并行")
-    expect(plain).not.toContain("静态审核")
     expect(plain).not.toContain(script)
+    expect(plain).toContain("静态审核")
+    expect(plain).toContain("不要执行验证脚本或")
+    expect(plain).toContain("验证的执行权在 driver")
   })
 
   test("early 与 final 可组合: 终审措辞与并行窗口措辞并存", () => {
@@ -319,5 +332,12 @@ describe("renderInit", () => {
     expect(text).toContain("只做规划,不实施")
     expect(text).toContain("verify")
     expect(text).toContain("permission")
+  })
+
+  test("初始化规划注入验证执行权原则: 任务描述不要求亲自运行验证命令", () => {
+    const text = renderInit("实现一个待办事项 CLI")
+    expect(text).toContain("任务描述不要包含要求执行者亲自运行验证脚本/验证命令")
+    expect(text).toContain("验证的执行权在 driver")
+    expect(text).toContain("AGENTS.md 验证原则块")
   })
 })
