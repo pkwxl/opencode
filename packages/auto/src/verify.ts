@@ -1,13 +1,13 @@
 import { access, chmod, constants, mkdir } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { join, resolve } from "node:path"
 import { verifyCommand, type Task } from "./plan"
 
-// verify 产物统一落在系统临时目录下按目标目录基名命名的子目录
-// (/tmp/<目标目录基名>/),不进仓库,清扫提交规则不受影响。不同路径同基名的
-// 目标目录共享该目录,可接受(设计文档 D 节)。
+// verify 产物统一落在目标目录下的 tmp/ 子目录(tmp/verify.sh、verify.out、
+// verify.err): 位于工作目录内,会话(判定/生成)可直接读取,避免 /tmp 的权限
+// 问题。run/init 会确保 tmp/ 与 .auto/logs/ 被 .gitignore 忽略(见 loop.ts
+// ensureGitignore),清扫提交规则不受影响。
 export function verifyTmpDir(dir: string): string {
-  return join(tmpdir(), basename(resolve(dir)))
+  return join(resolve(dir), "tmp")
 }
 
 export type VerifyScript =
@@ -35,7 +35,7 @@ export async function resolveVerifyScript(task: Task, dir: string): Promise<Veri
 }
 
 // 在目标目录执行 verify 脚本:有执行位直接 spawn,否则经 bash 运行。
-// stdout/stderr 经 Bun.file 写端整写 /tmp/<基名>/verify.out 与 verify.err
+// stdout/stderr 经 Bun.file 写端整写 tmp/verify.out 与 verify.err
 // (执行前 truncate;直接落文件不经管道,超时 kill 后孙进程占住管道也不会挂起
 // 读取);退出码非 0 不直接判失败——判定权在 AI 会话。超时 kill 直接子进程,
 // code 记 124(孙进程树不保证清理,V1 已知局限)。

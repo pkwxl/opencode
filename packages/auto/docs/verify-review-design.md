@@ -19,7 +19,7 @@
 
 | 决策点 | 结论 |
 | --- | --- |
-| verify 产物位置 | 系统临时目录 `os.tmpdir()` 下按目标目录基名分子目录:`/tmp/<目标目录基名>/{verify.sh, verify.out, verify.err}`;不进仓库,清扫提交规则不变 |
+| verify 产物位置 | 目标目录下 `tmp/` 子目录:`tmp/{verify.sh, verify.out, verify.err}`(V2 修订: 自 `/tmp/<目标目录基名>` 迁入工作目录,会话可直读、避免 /tmp 权限问题;run/init 经 ensureGitignore 保证不进仓库,清扫提交规则不变) |
 | `--review` 语义 | 缺省不启用;裸 `--review` = 3 轮;`--review n` 须为 1..10 的整数,否则用法错误(退出码 1) |
 | `--subtask off` 下 review 失败 | 与该模式 verify 失败行为一致:回退 `pending` 停机(退出码 2),不进 fix 循环 |
 | 审核范围界定 | 提示词引导:审核会话依据 `docs/T-NNN.report.md` + git log/status 自行界定本任务改动范围,不新增持久化状态 |
@@ -31,8 +31,8 @@
 纯逻辑模块,不依赖 SDK 与 runner,可独立单测。导出:
 
 ```ts
-// /tmp/<目标目录基名>/(不负责创建,调用方或本函数内 mkdir -p 均可,测试须可注入临时目录)
-verifyTmpDir(dir: string): string   // join(os.tmpdir(), basename(resolve(dir)))
+// 目标目录下 tmp/(不负责创建,调用方或本函数内 mkdir -p 均可)
+verifyTmpDir(dir: string): string   // join(resolve(dir), "tmp")
 
 export type VerifyScript =
   | { kind: "existing"; script: string }   // 直接使用既有可执行文件
@@ -53,7 +53,7 @@ runVerifyScript(dir: string, script: string, timeoutMs?: number):
   `verifyTmpDir/verify.sh`:首行 `#!/usr/bin/env bash`,其后为原命令原文,**不加
   `set -e` 等额外语义**,退出码原样透传;`chmod 0o755`。每次 verifyTask 重新生成
   (幂等覆盖,verify 字段可能被人工改过)。
-- **generate**:verify 为自然语言或缺失 → 交脚本生成会话(脚本持久于 /tmp,缺失时
+- **generate**:verify 为自然语言或缺失 → 交脚本生成会话(脚本持久于 tmp/,缺失时
   重新生成;跨修复轮复用)。
 
 `runVerifyScript` 执行语义:
@@ -71,7 +71,7 @@ runVerifyScript(dir: string, script: string, timeoutMs?: number):
 ### A.2 脚本生成会话 `renderVerifyScriptGen(plan, task, scriptPath)`(T-018)
 
 旁路全新会话(不进任务执行链)。只读分析源码与 docs/,按 verify 字段的自然语言语义
-或任务验收标准,写出可执行脚本到 runner 传入的 `scriptPath`(/tmp 下绝对路径)并
+或任务验收标准,写出可执行脚本到 runner 传入的 `scriptPath`(tmp/ 下绝对路径)并
 `chmod +x`。约束:只做验证类操作(运行测试/检查、读文件),不修改任何实现代码;
 硬性要求产出文件(缺失带反馈重试一次,仍失败按隐性阻塞——与分解会话/判定文件同
 策略);复用 QUESTION_RULE / STATE_RULE。
@@ -184,7 +184,7 @@ runTask:
 - **权限体系**:driver 直接执行 verify 脚本不经 opencode 权限体系,等同人工在本地
   跑测试;脚本来源为用户 PLAN 或受提示词约束的生成会话,定位为便利性取舍而非安全
   边界,文档须明示。
-- **/tmp 碰撞与清理**:不同路径同基名的目标目录共享同一 `/tmp/<基名>/`;文件每次
+- **tmp/ 位置与清理**:产物位于目标目录 tmp/(V2 前 位于 /tmp/<基名>/,同基名目录共享);文件每次
   执行覆盖写,脚本跨轮复用,系统重启丢失则按规则重新生成/包装,可接受。
 - **Windows**:交叉编译产物需 bash 可用(git bash);verify 脚本假设 POSIX shell,
   文档注明。
@@ -247,7 +247,7 @@ opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后
 - 提示词告知 verify 脚本正在同目录执行:避免运行可能与之冲突的命令(并发跑测试等),
   以读文件 / git log 为主;
 - 维度 3(验证过程有效性)按脚本内容与验收标准做**静态审核**(脚本文件在执行前已存在
-  于 `/tmp/<基名>/verify.sh`),运行结果的解读属判定会话职责;
+  于 `tmp/verify.sh`),运行结果的解读属判定会话职责;
 - final 判定、结论协议(REVIEW_FILE)、产物重试策略(requireArtifact)全部不变。
 
 ### F.4 选项语义
@@ -284,7 +284,7 @@ opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后
 | 决策点 | 结论 |
 | --- | --- |
 | 判定会话执行权 | **禁止直接执行任何验证脚本或验证性命令**(运行测试、构建、lint、启动服务等);执行结果一律以 driver 回传的 out/err 文件为准;只读检查(读文件、git log/status、grep 源码)不受限 |
-| 脚本缺陷处理 | 判定会话可编写**新的验证脚本替换**指定脚本(`/tmp/<基名>/verify.sh`,覆盖写 + chmod +x),判定文件末行 `结论: 重验 <原因>` |
+| 脚本缺陷处理 | 判定会话可编写**新的验证脚本替换**指定脚本(`tmp/verify.sh`,覆盖写 + chmod +x),判定文件末行 `结论: 重验 <原因>` |
 | 重验循环 | driver 固定改为执行该指定路径(不再按 verify 字段重新解析——wrapped 重包装会覆盖替换产物),输出整写回传同一对 out/err,由新判定会话继续判定;至多 REVERIFY_ROUNDS=3 轮,耗尽或声称重验但未写出脚本按隐性阻塞(blocked) |
 | verified-command | 判定通过且替换过脚本时,可附 `verified-command: <新脚本核心命令>`;markDone 的取值优先级不变 |
 | 生成会话 | renderVerifyScriptGen 同样禁止执行验证性命令(只读分析 + `bash -n` 类语法检查除外) |
@@ -296,6 +296,6 @@ opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后
 - 每任务 verify:`bun typecheck` + 对应测试文件(见 PLAN.md 各任务 verify 字段);
 - `test/verify.test.ts` 不依赖 opencode server 与网络,超时用注入小超时值验证;
 - e2e(`OPENCODE_AUTO_E2E=1`,需凭据)为可选手工验证项:三段式 verify 与
-  `--review 1` 循环各跑一次,观察 `/tmp/<基名>/` 产物、audit 报告与 fix 注入;
+  `--review 1` 循环各跑一次,观察 `tmp/` 产物、audit 报告与 fix 注入;
 - 全部任务完成后 `bun run build` 冒烟,确认 `type: "file"` 模板导入不受影响
   (预计不变)。

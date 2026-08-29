@@ -2,11 +2,11 @@
 import { resolve } from "node:path"
 import { checkPrinciple } from "./check"
 import { log, setInteractive, setLogFile, setVerbose } from "./log"
-import { ensurePointer, runAll } from "./loop"
+import { ensureGitignore, ensurePointer, runAll } from "./loop"
 import { load } from "./plan"
 import { renderInit, type CommitMode } from "./prompt"
 import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
-import { ensure } from "./server"
+import { manage } from "./server"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -126,7 +126,9 @@ if (command === "run") {
     process.exit(1)
   }
   const code = await runAll(directory, {
-    agent: flags.get("agent"),
+    // 缺省使用 init 生成的自主执行契约 agent(.opencode/agent/auto.md);
+    // 显式指定时须为目标目录 .opencode/agent/ 下已定义的 agent。
+    agent: flags.get("agent") ?? "auto",
     server: flags.get("server"),
     // interactive 隐含 verbose 记录级别(watch/变更文件监视照常运行并写入日志)。
     verbose: verbose || interactive,
@@ -225,6 +227,7 @@ if (command === "init") {
   const ensured = await ensurePointer(directory)
   console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
   console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
+  if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/logs/(driver 工作目录)")
 
   // -p/--prompt: 初始化完成后直接调用一次 AI,按提示词填充 PLAN.md 等文档,
   // 由用户审核后再运行 run。
@@ -234,9 +237,13 @@ if (command === "init") {
       console.error("-p/--prompt 需要非空的提示词文本")
       process.exit(1)
     }
-    const server = await ensure(directory, flags.get("server"))
+    const server = await manage(directory, flags.get("server"))
     try {
-      const result = await runOnce(server.client, "初始化计划", renderInit(promptText), { agent: flags.get("agent"), dir: directory })
+      const result = await runOnce(server.client, "初始化计划", renderInit(promptText), {
+        agent: flags.get("agent") ?? "auto",
+        dir: directory,
+        server,
+      })
       if (result.type === "blocked") {
         console.error(`⏸ 初始化会话受阻:\n${result.question}`)
         process.exit(2)

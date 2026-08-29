@@ -37,6 +37,8 @@ import {
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
+import { recallSession, rememberSession, forgetSession, RESUME_WINDOW_MINUTES, RESUME_WINDOW_MS } from "./resume"
+import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string } | { type: "incomplete"; reason: string }
@@ -89,6 +91,9 @@ type Opts = {
   // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
   // ask 的人工等待也改由它接收(语义不变)。
   interactive?: Interactive
+  // server 控制句柄: 新会话前 syncAgents(AGENTS.md 有更新则重启 server)、
+  // 网络类会话错误 restart 换新实例后重试。
+  server?: ServerControl
 }
 
 type Watch = {
@@ -106,7 +111,8 @@ type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "bl
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 上一会话结束时上下文
 // 占比低于 REUSE_BELOW 且已用量低于 contextLimit 则下次复用同一会话,否则新建。
 // 初始 pct=100 保证首个会话新建;模型上限未知时 watch 记 100,即总是新建。
-type SessionChain = { id?: string; pct: number; used: number }
+// note 为一次性附加说明(中断恢复时随首个提示词带给 AI,用后即清)。
+type SessionChain = { id?: string; pct: number; used: number; note?: string }
 
 // 上下文占比低于该值(%)时复用上一会话。
 const REUSE_BELOW = 50
@@ -127,7 +133,7 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // The execution phase (decompose / whole-task session) runs only on the first
 // round; every round then is: subtask sessions for the unticked checklist →
 // wrap-up session → three-stage task-level acceptance (the driver resolves
-// and runs the verify script itself, output dumped to /tmp files, never
+// and runs the verify script itself, output dumped to tmp/ files, never
 // truncated; an independent judge session reads the results and writes the
 // verdict; a gap feeds the verdict back into the execution chain for a fix
 // round, max FIX_ROUNDS, except off mode).
@@ -164,6 +170,29 @@ export async function runTask(
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
   const chain: SessionChain = { pct: 100, used: 0 }
+  const dir = opts.dir ?? dirname(plan.path)
+  // 中断恢复(应用重启后): 记忆的会话仍在时间窗内且 server 上存在 → 复用该会话
+  // 继续(上下文不丢);超窗或已不可用 → 新会话,但都告知 AI 这是任务/子任务中断
+  // 后的继续(note 随首个提示词注入)。
+  const remembered = await recallSession(dir, task.id)
+  if (remembered) {
+    if (Date.now() - remembered.at <= RESUME_WINDOW_MS && (await sessionAlive(client, remembered.session))) {
+      chain.id = remembered.session
+      chain.pct = 0
+      chain.used = 0
+      chain.note =
+        `[driver] opencode-auto 重启恢复: 你在本会话的上一次执行因应用中断而停止。` +
+        `先读 CURRENT.md 了解当前任务与进度,并以 git status / git diff 核对工作区实际状态,` +
+        `从中断处继续,不要重做已完成的工作。`
+      log(`↻ ${task.id} 复用 ${RESUME_WINDOW_MINUTES} 分钟内中断的会话 ${remembered.session} 继续`)
+    } else {
+      chain.note =
+        `[driver] 该任务(或其某个子任务)此前的执行因应用中断而停止,距今较久或原会话已不可用。` +
+        `部分工作可能已完成:先读 CURRENT.md 与 docs/ 相关文档,并以 git status / git diff 核对` +
+        `工作区实际状态,从中断处继续,不要重做已完成的工作。`
+      log(`↻ ${task.id} 中断的会话已超过 ${RESUME_WINDOW_MINUTES} 分钟或不存在,开新会话继续(已提示 AI 为中断后的继续)`)
+    }
+  }
   const mode = opts.subtask ?? "auto"
   // Mirror the task into CURRENT.md before the first session: the agent
   // contract requires every session to read it first.
@@ -240,6 +269,7 @@ export async function runTask(
     }
   } finally {
     await removeCurrent(plan.path)
+    await forgetSession(opts.dir ?? dirname(plan.path))
   }
 }
 
@@ -490,7 +520,7 @@ const REVERIFY_ROUNDS = 3
 
 // Verify 前两段: resolveVerifyScript 判定来源(existing/wrapped 由 driver 直接
 // 给出;自然语言或缺失先开一次性脚本生成旁路会话——generate 分支沿用约定名
-// /tmp/<基名>/verify.sh,上一轮(或修复前)生成的脚本存在则复用,V1 不自动重新
+// tmp/verify.sh,上一轮(或修复前)生成的脚本存在则复用,V1 不自动重新
 // 生成),随后 runVerifyScript 在目标目录执行并 log 一行结果(退出码、耗时、
 // out/err 路径)。退出码非 0 不在此判定——判定权在判定会话。
 // override: 重验轮由判定会话替换出的指定脚本,直接执行、跳过 resolve(wrapped
@@ -685,10 +715,16 @@ function parseVerdict(text: string): Verdict | undefined {
 // Runs one prompt on the session chain (reusing the previous session when its
 // context ended below REUSE_BELOW). Transient provider failures
 // (session.error, e.g. malformed reasoning content from a gateway) are
-// retried in a fresh session before blocking.
+// retried in a fresh session before blocking; network/server failures
+// (Internal network failure / Network error 等) additionally restart the
+// spawned opencode server before the retry.
 // steer: 会话进行中已用上下文达到 limit 时,driver 向该会话插入一次 text
 // (ondemand 的交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
 type Steer = { limit: number; text: string }
+
+// 会话错误中属于网络/服务故障的特征串;命中时先重启 server(外部 server 除外)
+// 再换新会话重试,避免对着同一坏实例反复失败。
+const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
 
 async function runSession(
   client: OpencodeClient,
@@ -703,6 +739,9 @@ async function runSession(
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
     if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
+    if (opts.server && NETWORK_FAILURE.test(result.question)) {
+      await opts.server.restart("会话错误为网络/服务故障,重启 opencode server 后换新会话重试")
+    }
     log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${result.question}`)
     // 重试保持"换新会话"语义,不复用出错的会话。
     chain.id = undefined
@@ -733,19 +772,28 @@ async function attempt(
         : `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap)} 上限`
     log(`▷ ${reason},开启新会话`)
   }
+  // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
+  // system context(AGENTS.md 每个 provider turn 现场重读,重启兜底缓存场景)。
+  if (!reuse) await opts.server?.syncAgents()
   const session = reuse ? undefined : await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
   if (session?.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
   const sessionID = session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
+  // 会话记忆: 持久化链上当前会话,应用中断后重新运行可复用继续(runTask 开头
+  // 经 recallSession 恢复)。伪任务(PLAN/AUTO)不记忆。
+  if (opts.dir && task.id.startsWith("T-")) await rememberSession(opts.dir, task.id, sessionID)
 
   const events = await client.event.subscribe()
   const watching = watch(client, sessionID, events.stream, opts, steer)
 
+  // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
+  const note = chain.note
+  chain.note = undefined
   const prompt = await client.session.prompt({
     sessionID,
     agent: opts.agent,
-    parts: [{ type: "text", text: promptText }],
+    parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
   })
   if (prompt.error) return { type: "blocked", question: `下发任务失败: ${JSON.stringify(prompt.error)}${await missingAgentHint(opts)}` }
 
@@ -756,6 +804,13 @@ async function attempt(
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
   return { type: "idle", lastText: result.lastText }
+}
+
+// 记忆会话是否仍存在于 server 上(opencode 会话持久化在项目存储,server 重启
+// 不丢;拉取失败或不存在则视为不可复用)。
+async function sessionAlive(client: OpencodeClient, id: string): Promise<boolean> {
+  const got = await client.session.get({ sessionID: id }).catch(() => undefined)
+  return got !== undefined && !got.error
 }
 
 // 下发任务失败的常见根因: 目标目录缺少 agent 契约文件时服务端只回

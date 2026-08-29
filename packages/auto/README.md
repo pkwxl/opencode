@@ -16,7 +16,9 @@ bun run build -- --target bun-windows-x64   # 交叉编译,产物带平台后缀
 ```
 
 产物是单个自包含文件(模板与 SDK 已嵌入),拷贝到任意机器即可运行。
-运行 `run` 时仍需目标机器装有 `opencode` CLI,或提供已有 server 地址(见下文)。
+运行 `run` 时只需目标机器装有 `opencode` CLI——缺省会自动启动并托管一个
+`opencode serve` 实例;也可提供已有 server 地址复用外部实例(见
+[opencode server 与 agent 选择](#opencode-server-与-agent-选择))。
 
 也可以不构建,直接用 Bun 运行源码:
 
@@ -41,8 +43,8 @@ opencode-auto status [dir]   # 查看各任务状态
 
 | 选项 | 说明 |
 | --- | --- |
-| `--agent <name>` | 指定 opencode agent(默认使用目标目录配置) |
-| `--server <url>` | 复用已运行的 `opencode serve`,不另起进程;也可用环境变量 `OPENCODE_AUTO_SERVER` |
+| `--agent <name>` | 会话使用的 opencode agent,缺省 `auto`——即 `init` 生成的自主执行契约 agent `.opencode/agent/auto.md`(非交互契约、状态文件只读、验证执行权在 driver 等,见[agent 选择](#opencode-server-与-agent-选择));显式指定时须为目标目录 `.opencode/agent/` 下已定义的 agent,缺失会导致下发任务失败 |
+| `--server <url>` | 复用已运行的 `opencode serve`,不另起进程;也可用环境变量 `OPENCODE_AUTO_SERVER`。缺省时自动 spawn 一个 `opencode serve` 并托管其生命周期(网络故障与 AGENTS.md 更新会自动重启,见[opencode server 与 agent 选择](#opencode-server-与-agent-选择)) |
 | `--verbose [true]` | 输出会话内全部消息部件(文本、工具调用、推理、步骤等)与上下文用量/占比,每行带时间戳,并每 10 秒列出 git status 新出现的变动文件(含子目录中的嵌套 git 仓库) |
 | `--interactive` / `-i` | 旁路交互(与 `--verbose` 互斥):终端保持非 verbose 的干净输出并常驻等待人工输入,回车把输入作为额外用户消息发往当前活动会话(steer 语义,在下一 provider turn 边界处理;无活动会话时输入丢弃并提示),等待输入不阻塞正常执行;日志文件仍保持 `--verbose` 级别的完整记录。`--wait-answer`/`--wait-between` 的人工等待也经这条输入行接收,ask 结束后恢复接收会话消息 |
 | `--wait-answer [1-60]` | 提问先等待人工 stdin 答复(分钟):非权限提问超时自动答复;权限请求在 `--permission` 的 ask-* 模式下作为等待窗口(见该选项);不带值默认 1 分钟;缺省此选项则非权限提问立即自动答复、权限类提问(question 工具)直接阻塞 |
@@ -76,6 +78,43 @@ T-009 实现迁移
 T-009 子任务 1：编写迁移脚本的 schema 部分
 -------------------------------------------------------------
 ```
+
+## opencode server 与 agent 选择
+
+### opencode server:缺省自动启动与自动重启
+
+`run` / `init -p` **缺省自动启动**一个 `opencode serve` 子进程(要求 PATH 上有
+`opencode` CLI),其生命周期完全由本工具托管:正常退出或被强制终止时关闭 server。
+仅当显式指定时才复用外部 server:`--server <url>` 或环境变量 `OPENCODE_AUTO_SERVER`
+(要求该地址健康,否则报用法/环境错误退出码 1)。
+
+托管实例在两种情况下会**自动杀死并重启新实例**:
+
+1. **网络类会话错误**:会话错误匹配 `Internal network failure` / `Network error`
+   等网络/服务故障特征时,driver 先重启 server 再换新会话重试(至多 3 次,仍失败
+   则阻塞停机),避免对着同一坏实例反复失败;
+2. **AGENTS.md 有更新**:AGENTS.md 是会话的 system context,driver 跟踪其变更
+   指纹(mtime + size),发现更新后**在下一个新会话开启前**重启 server,使新会话
+   必定加载最新内容(AGENTS.md 虽在每个 provider turn 现场重读,重启用于兜底
+   缓存场景)。
+
+复用外部 server 时实例不受本工具管理:上述两种情况只打提示、不重启(网络错误
+仍会换新会话重试),外部实例的启停与修复由使用者自行负责。
+
+### agent 的含义与选择
+
+opencode 的 agent 由目标目录 `.opencode/agent/<name>.md` 定义(frontmatter 指定
+描述/mode/权限,正文是该 agent 的系统提示词),会话用它决定行为契约与默认模型。
+`--agent <name>` 选择执行会话使用的 agent,差异如下:
+
+| 选择 | 适用场景 | 说明 |
+| --- | --- | --- |
+| `auto`(缺省) | 无人值守自动执行 | `init` 生成并维护的契约 agent(`.opencode/agent/auto.md`,与内置模板不一致时 `init` 会替换):非交互工作契约——每会话先读 CURRENT.md、严格只做本次角色、状态文件只读、验证执行权在 driver、权限问题走 question 工具其余自主决策并记录决策过程。**opencode-auto 的运行语义依赖该契约,通常保持缺省** |
+| 自定义 agent | 有特殊需求 | 目标目录 `.opencode/agent/` 下你自行定义的 agent(如绑定特定模型、限制工具集)。注意:该文件缺失会导致下发任务失败(run 前完整性检查会拦截并提示先 init);契约与 `auto` 不一致时,无人值守期间的自动答复、验收与恢复语义可能偏离预期 |
+| (不可选)内置 agent | 直接交互使用 opencode | opencode 内置的交互 agent(如 build/plan)面向有人对话场景,没有"只做本次角色、状态文件只读"等约束,不适合无人值守驱动,本工具不提供该选项 |
+
+`init` 生成的 `auto` 契约会随后续版本演进,`init` 对 `.opencode/agent/auto.md`
+总是替换为最新模板;`run` 启动时发现它与模板不一致会给出刷新提示。
 
 ## 执行流水线
 
@@ -111,20 +150,20 @@ AI 判定):
 
 1. **脚本准备**:按任务 `verify` 字段判定脚本来源——`command:` 前缀的具体命令且
    为单个可执行文件路径(如 `./scripts/e2e.sh`)→ 直接使用该文件;普通命令行
-   (如 `bun test`)→ driver 包装为 `/tmp/<目标目录基名>/verify.sh`(首行
-   shebang + 原命令原文,不加额外语义,退出码原样透传,每次验收幂等覆盖);
-   自然语言或缺失 → 先开一个旁路脚本生成会话,把它翻译成可执行脚本(每任务
-   生成一次,跨修复轮复用)。
-2. **driver 执行**:在目标目录执行脚本,stdout/stderr 整写
-   `/tmp/<目标目录基名>/verify.out` 与 `verify.err`(输出零截断,命令只执行
-   一次);超时 10 分钟强制终止(退出码记 124);退出码非 0 不直接判失败——
-   判定权在下一段的判定会话,保留"脚本本身坏/环境不适用不误判"的韧性。
+   (如 `bun test`)→ driver 包装为 `tmp/verify.sh`(目标目录下 driver 管理的
+   `tmp/` 工作目录;首行 shebang + 原命令原文,不加额外语义,退出码原样透传,
+   每次验收幂等覆盖);自然语言或缺失 → 先开一个旁路脚本生成会话,把它翻译成可
+   执行脚本(每任务生成一次,跨修复轮复用)。
+2. **driver 执行**:在目标目录执行脚本,stdout/stderr 整写 `tmp/verify.out` 与
+   `tmp/verify.err`(输出零截断,命令只执行一次);超时 10 分钟强制终止(退出码
+   记 124);退出码非 0 不直接判失败——判定权在下一段的判定会话,保留"脚本本身
+   坏/环境不适用不误判"的韧性。
 3. **AI 判定**:旁路独立判定会话(总是新建,不进会话链)直读 out/err 文件
    (大文件分段读,不经工具输出截断)与相关代码。判定会话**禁止直接执行任何
    验证脚本或验证性命令**(运行测试、构建、lint、启动服务等)——验证的执行权
    在 driver,结果一律以回传文件为准;只读检查(读文件、git log/status、grep
    源码)不受限。若判定会话认定脚本本身有问题或覆盖不足,可编写新的验证脚本
-   替换指定脚本(`/tmp/<目标目录基名>/verify.sh`),末行结论写
+   替换指定脚本(`tmp/verify.sh`),末行结论写
    `结论: 重验 <原因>`;driver 重新执行替换脚本并把输出整写回传同一对
    out/err 文件,由新的判定会话继续判定(至多 3 轮)。判定写入
    `.auto/verify.md`(末行 `结论: 通过|差距|重验`,可选独立成行的
@@ -134,9 +173,11 @@ AI 判定):
 
 driver 执行 verify 脚本**不经 opencode 权限体系**,等同人工在本地跑测试;脚本
 来源为用户 PLAN 中的命令或受提示词约束的生成会话,这是便利性取舍而非安全边界。
-`/tmp/<目标目录基名>/` 下的产物不进仓库(清扫提交规则不受影响);不同路径同
-基名的目标目录共享该目录;脚本假设 POSIX shell,Windows 交叉编译产物需 bash
-可用(git bash);超时只终止直接子进程,孙进程树不保证清理。
+verify 产物统一放在目标目录下的 `tmp/`(位于工作目录内,判定/生成会话可直接
+读取,避免系统 `/tmp` 的权限问题);`run`/`init` 会确保 `tmp/` 与 `.auto/logs/`
+被 `.gitignore` 忽略(清扫提交不会把它们带进仓库);脚本假设 POSIX shell,
+Windows 交叉编译产物需 bash 可用(git bash);超时只终止直接子进程,孙进程树
+不保证清理。
 
 `--review` 下验收阶段还叠加质量审核(`--early` 下审核会话与脚本执行并行,见下节)。
 
@@ -144,16 +185,28 @@ driver 执行 verify 脚本**不经 opencode 权限体系**,等同人工在本�
 过期文件会被重建——每次勾选后刷新,含完整任务内容与进度;**任务结束(完成/阻塞/
 回退 pending)即删除**,任务之间不残留过期镜像(强制中断不走删除逻辑,遗留文件
 在下次任务开始时重建);`init` 追加的 AGENTS.md 指针块要求每个会话先读它——
-AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失,
-server 无需重启。
+AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失;
+此外 driver 会跟踪 AGENTS.md 的变更指纹,**它有更新时在下一个新会话前自动重启
+opencode server**,确保新会话必定加载最新的 system context(见
+[opencode server 与 agent 选择](#opencode-server-与-agent-选择))。
 
 非权限提问无人答复时由 driver 自动答复并要求 AI 自主决策继续;自动答复同时要求
 AI **记录决策过程**(决策理由与否决的备选方案写入相关文档),涉及架构设计或代码
 变更的决策还须在设计文档或代码注释中以 `AUTO-DECISION: <决策与理由>` 行明确标注,
 便于人工事后复核无人值守期间的自主决策。
 
+### 中断恢复
+
 上次运行被 kill/Ctrl+C 中断时,PLAN.md 可能遗留 `in_progress` 标记(实际无会话在跑);
 `run` 启动时会把它们全部重置为 `pending` 再正常续跑(`attempts` 保留),无需手工清理。
+
+**会话级恢复**:run 期间 driver 把任务链上的当前会话 ID 持久化到目标目录
+`.auto/session.json`(每个会话建立/复用时刷新);应用崩溃或被强制终止后重新运行,
+距上次记录 **30 分钟内**且该会话在 server 上仍存在时,driver 直接**复用该会话
+继续**(上下文不丢,首个提示词附恢复说明,要求 AI 读 CURRENT.md 并用
+git status/diff 核对实际进度后从中断处继续);超过 30 分钟或会话已不可用时开
+新会话,但同样在首个提示词中告知 AI 这是任务/子任务中断后的继续,先核对已有
+进度、不要重做已完成的工作。任务结束(完成/阻塞/回退)即删除会话记忆。
 
 `run` 期间 driver 会把 PLAN.md、CURRENT.md、opencode.json 置为只读
 (chmod 0o444),driver 自身写入时临时恢复、写完立即重置;`run` 结束(含阻塞退出)
@@ -204,7 +257,7 @@ driver 在本地执行(超时上限 10 分钟),窗口内不含任何 verify 侧�
 
 early 模式下审核提示词相应调整:告知 verify 脚本正在同目录执行,避免运行可能冲突的
 命令(并发跑测试等),检查以读文件 / git log 等只读方式为主;"验证过程"维度对照
-验收标准对脚本内容(`/tmp/<目标目录基名>/verify.sh`)做静态审核(非 early 形态同样
+验收标准对脚本内容(`tmp/verify.sh`)做静态审核(非 early 形态同样
 是静态审核),运行结果的解读属判定会话职责。短脚本场景审核慢于脚本时判定须等待,
 收益退化为串行,不劣于不用 `--early`。
 

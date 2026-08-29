@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises"
-import { readdir } from "node:fs/promises"
+import { readdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
@@ -7,12 +7,13 @@ import { block, countSubtasks, load, next, resetInProgress } from "./plan"
 import { renderDryrun, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
 import { commitAll, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
-import { ensure } from "./server"
+import { manage, type ServerHandle } from "./server"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 // AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
-// AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失。
-// AGENTS.md 不再置只读(任务可更新它),run/init 只确保指针块存在。
+// AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失;
+// 它有更新时 driver 会在下一个新会话前重启 server,使新会话必定加载最新内容。
+// AGENTS.md 不置只读(任务可更新它),run/init 只确保指针块存在。
 const POINTER = `<!-- opencode-auto:start -->
 本目录由 opencode-auto 驱动。每个会话开始必须先读 \`CURRENT.md\`(若存在),其中是当前
 任务的完整内容与进度,优先于一切会话记忆。不要编辑 \`CURRENT.md\` 与 \`PLAN.md\`,
@@ -24,9 +25,9 @@ const POINTER = `<!-- opencode-auto:start -->
 const VERIFY_PRINCIPLE = `<!-- opencode-auto:verify:start -->
 验证原则: 任务级验证脚本与验证命令一律由 driver 在会话外执行,任何会话不要直接
 运行它们来下验收结论;验收标准写在任务的 verify 字段。若会话认为验证脚本本身有
-问题,可编写新的验证脚本替换指定脚本(/tmp/<目标目录基名>/verify.sh),由 driver
-重新执行并把输出回传给独立判定会话。任务描述与项目规范不要出现与此相违背的指示
-(可用 opencode-auto check 检查)。
+问题,可编写新的验证脚本替换指定脚本(tmp/verify.sh,目标目录下 driver 管理的
+工作目录),由 driver 重新执行并把输出回传给独立判定会话。任务描述与项目规范
+不要出现与此相违背的指示(可用 opencode-auto check 检查)。
 <!-- opencode-auto:verify:end -->`
 
 // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块与验证原则块各自独立判断、只追加,
@@ -41,6 +42,26 @@ export async function ensurePointer(directory: string): Promise<{ pointer: boole
   if (principle) text = `${text.trimEnd()}\n\n${VERIFY_PRINCIPLE}\n`
   if (pointer || principle) await Bun.write(agentsFile, text)
   return { pointer, principle }
+}
+
+// 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
+// 与 .auto/logs/(运行日志)。清扫提交会提交全部未提交改动,不忽略会把它们带进
+// 提交。已有等价条目则跳过;非 git 目录(无 .git 且无 .gitignore)不做任何事。
+// 返回是否追加了条目。
+export async function ensureGitignore(directory: string): Promise<boolean> {
+  const file = join(directory, ".gitignore")
+  const existing = await Bun.file(file).text().catch(() => undefined)
+  // .git 可能是目录(普通仓库)或文件(worktree/子模块),stat 两者皆可。
+  if (existing === undefined && !(await stat(join(directory, ".git")).then(() => true, () => false))) return false
+  const ignored = (entry: string) =>
+    (existing ? existing.split("\n") : []).some((line) => {
+      const normalized = line.trim().replace(/^\//, "").replace(/\/$/, "")
+      return normalized === entry.replace(/\/$/, "")
+    })
+  const missing = ["tmp/", ".auto/logs/"].filter((entry) => !ignored(entry))
+  if (!missing.length) return false
+  await Bun.write(file, `${existing ? `${existing.trimEnd()}\n` : ""}${missing.join("\n")}\n`)
+  return true
 }
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
@@ -80,8 +101,9 @@ export async function runAll(
     return 1
   }
 
-  // run 前完整性检查: agent 契约文件缺失时服务端只回 UnknownError(不含根因),
-  // 此处提前报出并提示恢复方式;与模板不一致仅警告(init 会刷新该文件)。
+  // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:
+  // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出并提示
+  // 恢复方式;与模板不一致仅警告(init 会刷新该文件)。
   const agentName = opts.agent ?? "auto"
   const agentFile = join(directory, ".opencode/agent", `${agentName}.md`)
   const agentText = await Bun.file(agentFile).text().catch(() => undefined)
@@ -101,11 +123,12 @@ export async function runAll(
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
   // 启动会话前确保 AGENTS.md 指针块与验证原则块存在(缺失则补写);AGENTS.md 本身
-  // 保持可写,任务可更新它的其余内容。
+  // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
   const ensured = await ensurePointer(directory)
   if (ensured.pointer) log("已补写: AGENTS.md 指针块")
   if (ensured.principle) log("已补写: AGENTS.md 验证原则块")
-  let server: Awaited<ReturnType<typeof ensure>> | undefined
+  if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/logs/(driver 工作目录)")
+  let server: ServerHandle | undefined
   // --interactive 旁路输入控制器;server 就绪后创建,finally 中关闭。
   let repl: Interactive | undefined
   // 单次 Ctrl+C 不终止(运行期间事件流/子进程可能吞掉或挂起默认退出),
@@ -126,20 +149,21 @@ export async function runAll(
   }
   process.on("SIGINT", onSigint)
   try {
-    server = await ensure(directory, opts.server)
+    server = await manage(directory, opts.server)
     if (opts.interactive) {
-      repl = startInteractive(server.client, opts.agent)
+      repl = startInteractive(server.client, agentName)
       log("💬 交互模式: 回车把输入作为额外消息发往当前会话(无活动会话时丢弃)")
     }
     if (opts.dryrun) {
       const result = await runOnce(server.client, "权限预检", renderDryrun(), {
-        agent: opts.agent,
+        agent: agentName,
         dir: directory,
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
         dryrun: true,
         contextLimit: opts.contextLimit,
         interactive: repl,
+        server,
       })
       if (result.type === "blocked") {
         log(`⏸ 预检会话受阻:\n${result.question}`)
@@ -150,7 +174,8 @@ export async function runAll(
     }
     let ran = 0
     // 中断恢复: 上次运行被 kill/Ctrl+C 可能遗留 in_progress 标记(无会话在跑),
-    // 重置为 pending;主循环经 next() 照样续跑,attempts 保留。
+    // 重置为 pending;主循环经 next() 照样续跑,attempts 保留。距中断较近时链上
+    // 会话的记忆(.auto/session.json)使 runTask 复用原会话继续。
     const stale = await resetInProgress(path)
     if (stale.length) log(`↻ 恢复中断状态: ${stale.join(", ")} 从 in_progress 重置为 pending`)
     for (;;) {
@@ -161,13 +186,14 @@ export async function runAll(
         if (opts.commit === "once" && ran > 0) {
           banner("全部任务完成,整体提交")
           const outcome = await commitAll(server.client, plan, {
-            agent: opts.agent,
+            agent: agentName,
             dir: directory,
             verbose: opts.verbose,
             waitAnswer: opts.waitAnswer,
             contextLimit: opts.contextLimit,
             permission: opts.permission,
             interactive: repl,
+            server,
           })
           if (outcome.type !== "completed") {
             const detail = outcome.type === "blocked" ? outcome.question : outcome.reason
@@ -187,7 +213,7 @@ export async function runAll(
       log(`▶ ${task.id} 开始执行(第 ${task.attempts + 1} 次尝试)`)
       const start = Date.now()
       const outcome = await runTask(server.client, plan, task, {
-        agent: opts.agent,
+        agent: agentName,
         dir: directory,
         verbose: opts.verbose,
         waitAnswer: opts.waitAnswer,
@@ -198,6 +224,7 @@ export async function runAll(
         early: opts.early,
         permission: opts.permission,
         interactive: repl,
+        server,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)

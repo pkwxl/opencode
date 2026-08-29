@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { chmod, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { basename, join } from "node:path"
+import { join } from "node:path"
 import { parse, type Task } from "../src/plan"
 import { resolveVerifyScript, runVerifyScript, VERIFY_TIMEOUT_MS, verifyTmpDir } from "../src/verify"
 
@@ -9,11 +9,11 @@ const task = (verify?: string): Task =>
   parse("PLAN.md", `## T-001: t [pending]\n${verify ? `  - verify: ${verify}\n` : ""}正文。\n`).tasks[0]!
 
 describe("verifyTmpDir", () => {
-  test("路径为 tmpdir 下按目标目录基名命名", () => {
+  test("路径为目标目录下的 tmp/ 子目录", () => {
     const dir = "/some/target/auto"
-    expect(verifyTmpDir(dir)).toBe(join(tmpdir(), "auto"))
-    // 尾部分隔符被规整,不产生空基名
-    expect(verifyTmpDir(`${dir}/`)).toBe(join(tmpdir(), "auto"))
+    expect(verifyTmpDir(dir)).toBe(join(dir, "tmp"))
+    // 尾部分隔符被规整
+    expect(verifyTmpDir(`${dir}/`)).toBe(join(dir, "tmp"))
   })
 })
 
@@ -26,7 +26,6 @@ describe("resolveVerifyScript", () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true })
-    await rm(verifyTmpDir(dir), { recursive: true, force: true })
   })
 
   test("existing:相对路径单 token 且可执行,直接使用该文件", async () => {
@@ -86,7 +85,6 @@ describe("runVerifyScript", () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true })
-    await rm(verifyTmpDir(dir), { recursive: true, force: true })
   })
 
   test("执行脚本,退出码与 out/err 落盘且整写返回", async () => {

@@ -138,9 +138,10 @@ ${steps.join("\n")}
 // Verify script generation session (always a fresh side session, never the
 // execution chain): the verify field is natural language or missing, so before
 // the driver can execute anything a session must translate the acceptance
-// semantics into an executable script at the given /tmp path. Read-only
-// analysis; producing the file is a hard requirement (the runner retries once
-// with feedback and then blocks as hidden blockage).
+// semantics into an executable script at the given tmp/ path (inside the
+// target directory, readable by later judge sessions). Read-only analysis;
+// producing the file is a hard requirement (the runner retries once with
+// feedback and then blocks as hidden blockage).
 export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string): string {
   return [
     ...head(plan),
@@ -152,9 +153,9 @@ export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string
 
 任务:
 1. 只读分析相关源码与 docs/,确定覆盖验收标准所需的检查项(测试、lint、构建产物核对等);
-2. 把检查写成可执行的 bash 脚本,写入 ${scriptPath}(绝对路径,driver 管理的 /tmp 下的
-   目录,覆盖写):首行 #!/usr/bin/env bash,脚本自包含、可重复执行,非零退出码表示
-   验证未通过;写完 chmod +x 赋予可执行位。
+2. 把检查写成可执行的 bash 脚本,写入 ${scriptPath}(绝对路径,driver 管理的目标目录
+   下 tmp/ 工作目录,覆盖写):首行 #!/usr/bin/env bash,脚本自包含、可重复执行,非零
+   退出码表示验证未通过;写完 chmod +x 赋予可执行位。
 
 约束:
 1. 只做验证类设计(为各项检查编写脚本),不修改任何实现代码与 docs/;${STATE_RULE}
@@ -475,6 +476,8 @@ function commitRule(note: string): string {
   return `- 主动在工作目录的文件系统中查找含独立 .git 的子目录(它们通常被父仓库 .gitignore 忽略,
   不是 submodule,git status/git submodule 均不可见,必须直接查目录,如 find . -name .git);
 - 先在每个子仓库内 git add 全部改动并提交(提交信息遵循该子仓库风格);
+- tmp/(driver 的 verify 工作目录)与 .auto/logs/(运行日志)已加入 .gitignore,
+  不要用 git add -f 等方式把它们纳入提交;
 - 若工作目录本身是 git 仓库,再 git add 全部改动(含 docs/)并提交,
   提交信息遵循该仓库现有风格(参考 git log),注明 ${note};
   被父仓库 ignore 的子仓库不会进入该提交,必须在提交信息中列出其路径与新提交 SHA。`
