@@ -10,6 +10,7 @@ import {
   countSubtasks,
   load,
   markDone,
+  parse,
   setStatus,
   setSubtasks,
   subtasks,
@@ -37,7 +38,14 @@ import {
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
-import { recallSession, rememberSession, forgetSession, RESUME_WINDOW_MINUTES, RESUME_WINDOW_MS } from "./resume"
+import {
+  forgetProgress,
+  recallProgress,
+  RESUME_WINDOW_MINUTES,
+  RESUME_WINDOW_MS,
+  saveProgress,
+  type Phase,
+} from "./resume"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
@@ -94,6 +102,10 @@ type Opts = {
   // server 控制句柄: 新会话前 syncAgents(AGENTS.md 有更新则重启 server)、
   // 网络类会话错误 restart 换新实例后重试。
   server?: ServerControl
+  // verify 脚本看门狗: 持续无输出的判定窗口(缺省 10 分钟)与绝对时长上限
+  // (缺省不设;--verify-idle / --verify-max 以分钟设定)。
+  verifyIdleMs?: number
+  verifyMaxMs?: number
 }
 
 type Watch = {
@@ -109,13 +121,21 @@ type Watch = {
 type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "blocked" })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 上一会话结束时上下文
-// 占比低于 REUSE_BELOW 且已用量低于 contextLimit 则下次复用同一会话,否则新建。
-// 初始 pct=100 保证首个会话新建;模型上限未知时 watch 记 100,即总是新建。
-// note 为一次性附加说明(中断恢复时随首个提示词带给 AI,用后即清)。
-type SessionChain = { id?: string; pct: number; used: number; note?: string }
+// 占比低于 REUSE_BELOW、已用量低于 contextLimit、且距其结束不超过 REUSE_IDLE_MS
+// 时,下次复用同一会话,否则新建。初始 pct=100 保证首个会话新建;模型上限未知时
+// watch 记 100,即总是新建。phase 携带当前流水线阶段: 执行链会话据此写进度恢复
+// 记录(.auto/progress.json);旁路一次性会话(requireArtifact)的链不带 phase、
+// 不写记录,避免污染执行链记忆。note 为一次性附加说明(中断恢复时随首个提示词
+// 带给 AI,用后即清)。
+type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase }
 
 // 上下文占比低于该值(%)时复用上一会话。
 const REUSE_BELOW = 50
+
+// 会话复用的间隔上限: 距上一会话结束超过该值即视为上下文陈旧(driver 侧工作
+// 如 verify 脚本执行、判定/审核会话可能耗时很久),不复用、开新会话。
+const REUSE_IDLE_MS = 5 * 60 * 1000
+const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000
 
 // 会话复用的上下文已用量默认上限(tokens);--context-limit n 以千 tokens 覆盖。
 const DEFAULT_CONTEXT_LIMIT = 64_000
@@ -149,19 +169,33 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // the done result, so the audit below consumes it instead of opening a
 // separate serial audit session.
 // All execution sessions of a task share one chain: the next session reuses
-// the previous one when its context usage ended below REUSE_BELOW and its used
-// tokens below contextLimit (default 64k), otherwise a fresh session is created.
-// CURRENT.md lives only while the task runs: it is (re)created before the
-// first session — an interrupted run may have left it missing or stale —
-// refreshed by later writeCurrent calls, and deleted when the task ends
-// (any outcome). A forced interrupt skips the finally, so a leftover file
-// is simply rebuilt on the next run.
-// Permission requests follow --permission (default ask-deny): auto-allow
-// grants immediately; ask-* wait for a human (per --wait-answer) and time
-// out into auto-allow / auto-deny (session continues) / abort+block
-// (ask-fail). Blocking happens on a repeated question on the same issue,
-// exhausted transient session errors, a failed verification, or an ask-fail
-// permission timeout.
+// the previous one when its context usage ended below REUSE_BELOW, its used
+// tokens below contextLimit (default 64k) and it went idle within
+// REUSE_IDLE_MS (default 5 minutes), otherwise a fresh session is created.
+// CURRENT.md lives while the task is interrupted or running: it is
+// (re)created before the first session — an interrupted run may have left it
+// missing or stale — refreshed by later writeCurrent calls, kept with an
+// interruption remark when the task ends blocked/incomplete (the next run's
+// first prompt carries the essence via the resume note), and deleted only
+// when the task completes.
+// Interruption recovery (进度记录 .auto/progress.json, design doc H): the
+// driver persists the current phase at every pipeline boundary and the
+// execution-chain session as active while a session is in flight. On re-run:
+// an active record within RESUME_WINDOW_MS with a live session resumes that
+// session (unsummarized in-flight work), anything else starts a fresh session
+// guided by the recorded phase (graceful exits leave a summarized record with
+// active=false); the phase also re-enters the pipeline precisely — a persisted
+// verify run skips script re-execution, off/ondemand past the execution phase
+// never re-runs the whole-task session, a valid fix checklist file is
+// injected without a new planning session. Network-failure blockades keep the
+// active record (the session is in-flight and unsummarized); every other
+// blocked/incomplete exit finalizes the summary (CURRENT.md remark) and drops
+// reuse eligibility. Permission requests follow --permission (default
+// ask-deny): auto-allow grants immediately; ask-* wait for a human (per
+// --wait-answer) and time out into auto-allow / auto-deny (session
+// continues) / abort+block (ask-fail). Blocking happens on a repeated
+// question on the same issue, exhausted transient session errors, a failed
+// verification, or an ask-fail permission timeout.
 export async function runTask(
   client: OpencodeClient,
   plan: Plan,
@@ -169,82 +203,175 @@ export async function runTask(
   opts: Opts,
 ): Promise<Outcome> {
   await begin(plan.path, task.id)
-  const chain: SessionChain = { pct: 100, used: 0 }
   const dir = opts.dir ?? dirname(plan.path)
-  // 中断恢复(应用重启后): 记忆的会话仍在时间窗内且 server 上存在 → 复用该会话
-  // 继续(上下文不丢);超窗或已不可用 → 新会话,但都告知 AI 这是任务/子任务中断
-  // 后的继续(note 随首个提示词注入)。
-  const remembered = await recallSession(dir, task.id)
-  if (remembered) {
-    if (Date.now() - remembered.at <= RESUME_WINDOW_MS && (await sessionAlive(client, remembered.session))) {
-      chain.id = remembered.session
+  const mode = opts.subtask ?? "auto"
+  const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
+  // 中断恢复(进度记录): 会话半途未总结(active)且在时间窗内、server 上仍存在 →
+  // 复用原会话继续(上下文不丢);优雅退出的总结记录、超窗或会话已不可用 → 新会话。
+  // 两种情况首个提示词均附"[driver] 中断后的继续"说明(含按阶段的下一步指引)。
+  const recalled = await recallProgress(dir, task.id)
+  if (recalled) {
+    chain.phase = recalled.phase
+    if (
+      recalled.active &&
+      recalled.session &&
+      Date.now() - recalled.at <= RESUME_WINDOW_MS &&
+      (await sessionAlive(client, recalled.session))
+    ) {
+      chain.id = recalled.session
       chain.pct = 0
       chain.used = 0
-      chain.note =
-        `[driver] opencode-auto 重启恢复: 你在本会话的上一次执行因应用中断而停止。` +
-        `先读 CURRENT.md 了解当前任务与进度,并以 git status / git diff 核对工作区实际状态,` +
-        `从中断处继续,不要重做已完成的工作。`
-      log(`↻ ${task.id} 复用 ${RESUME_WINDOW_MINUTES} 分钟内中断的会话 ${remembered.session} 继续`)
+      // 复用决策已由 30 分钟窗做出;链内后续的 5 分钟复用规则从当前时刻起算。
+      chain.at = Date.now()
+      chain.note = resumeNote(recalled.phase, true)
+      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用 ${RESUME_WINDOW_MINUTES} 分钟内中断的会话 ${recalled.session} 继续`)
     } else {
-      chain.note =
-        `[driver] 该任务(或其某个子任务)此前的执行因应用中断而停止,距今较久或原会话已不可用。` +
-        `部分工作可能已完成:先读 CURRENT.md 与 docs/ 相关文档,并以 git status / git diff 核对` +
-        `工作区实际状态,从中断处继续,不要重做已完成的工作。`
-      log(`↻ ${task.id} 中断的会话已超过 ${RESUME_WINDOW_MINUTES} 分钟或不存在,开新会话继续(已提示 AI 为中断后的继续)`)
+      chain.note = resumeNote(recalled.phase, false)
+      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(原会话不可复用,开新会话继续)`)
     }
   }
-  const mode = opts.subtask ?? "auto"
   // Mirror the task into CURRENT.md before the first session: the agent
   // contract requires every session to read it first.
   task = requireTask(await load(plan.path), task.id)
   await writeCurrent(plan.path, task, mode !== "auto")
-  try {
-    // 执行阶段仅首轮进入: auto 先确保分解出检查项,off/ondemand 单会话执行
-    // 整个任务;review 差距注入的 fix 检查项走下方的子任务会话循环。
+  // 阶段持久化: 每个阶段边界推进记录(active=false,总结态);执行链会话开始/结束
+  // 时由 attempt 刷新为 active=true(半途态)——此刻中断按"未总结"复用会话。
+  const persistStage = async (phase: Phase) => {
+    chain.phase = phase
+    if (opts.dir && task.id.startsWith("T-")) {
+      await saveProgress(opts.dir, { task: task.id, session: chain.id, at: Date.now(), active: false, phase })
+    }
+  }
+  const outcome = await pipeline(recalled?.phase)
+  if (outcome.type === "completed") {
+    await removeCurrent(plan.path)
+    await forgetProgress(dir)
+    return outcome
+  }
+  // 非完成结局(阻塞/回退 pending)时终结当前进展: CURRENT.md 写中断备注后保留,
+  // 供人工查看与下次恢复(下次 runTask 重建镜像时,备注要点经恢复提示词带给 AI)。
+  // 会话错误类(网络重试耗尽)保持 active 记录走 30 分钟窗复用(会话半途无法总结);
+  // 其余清除复用资格(进度已总结,人工介入可能耗时且改动环境,旧会话上下文不可信),
+  // 阶段信息保留供精确重入。
+  task = requireTask(await load(plan.path), task.id)
+  await writeCurrent(plan.path, task, mode !== "auto", interruptionRemark(outcome, chain.phase))
+  if (!(outcome.type === "blocked" && outcome.question.startsWith("会话错误:"))) {
+    await persistStage(chain.phase ?? (mode === "auto" ? { kind: "decompose" } : { kind: "whole" }))
+  }
+  return outcome
+
+  // 任务流水线(闭包,持 client/plan/task/opts/chain): resume 为恢复记录的阶段
+  // 标记,用于精确重入;一次性旗标(enterAudit/skipWrapup/fastFix/pendingVerify)
+  // 仅影响恢复后的首轮,之后回归常规循环。
+  async function pipeline(resume?: Phase): Promise<Outcome> {
+    // 阶段精确重入: 记录显示已推进到收尾及之后 → off/ondemand 跳过执行阶段
+    // (不重跑整任务会话;auto 的分解/子任务循环本就幂等,无需特判)。
+    const resumed = resume?.kind
     if (mode === "auto") {
+      await persistStage({ kind: "decompose" })
       const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
       if (decomposed.type === "blocked") return decomposed
       task = decomposed.task
-    } else {
+    } else if (resumed !== "wrapup" && resumed !== "verify" && resumed !== "review") {
+      // 非恢复续跑才清除上次尝试遗留的交接文档;恢复时保留(其中是中断会话的进度
+      // 总结,executeWhole 依其 `状态:` 行决定续跑)。
+      if (mode === "ondemand" && recalled?.active !== true) {
+        await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
+      }
+      await persistStage({ kind: "whole" })
       const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
       if (blocked) return blocked
       task = requireTask(await load(plan.path), task.id)
     }
+    await persistStage({ kind: "subtasks" })
     await writeCurrent(plan.path, task, mode !== "auto")
 
     const limit = opts.review ?? 0
     // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
     // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
     const early = opts.early && limit > 0
-    for (let round = 0; ; ) {
-      // auto 模式此处执行分解出的检查项(含 review 注入的 fix 检查项);
-      // off/ondemand 模式只有正文中人工编写的检查项。
-      for (;;) {
-        const items = subtasks(task.body)
-        const index = items.findIndex((item) => !item.done)
-        if (index === -1) break
-        const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain)
-        if (blocked) return blocked
-        task = requireTask(await load(plan.path), task.id)
-        await writeCurrent(plan.path, task, mode !== "auto")
+    // 恢复重入旗标(仅首轮生效):
+    // - review/audit → 验收已过,直接补跑审核会话;
+    // - verify → verifyTask 内部按 stage/run 精确恢复;
+    // - review/planfix 且修复检查项文件已有效 → 跳到注入分支(round 已是记录值);
+    //   文件无效(规划会话半途中断,差距原文已丢失)→ 退回重跑审核重新发现差距,
+    //   round 回退 1 使审核后的 round++ 回到记录值。
+    const resumedReview = resume?.kind === "review" ? resume : undefined
+    const fixFile = join(dirname(plan.path), "docs", `${task.id}.fix.md`)
+    const fixItems = subtasks(await Bun.file(fixFile).text().catch(() => "")).map((item) => item.text)
+    const fixReady = resumedReview?.stage === "planfix" && fixItems.length > 0
+    const replan = resumedReview?.stage === "planfix" && !fixReady
+    let enterAudit = resumedReview !== undefined && (resumedReview.stage === "audit" || replan)
+    let skipToInject = fixReady
+    let skipWrapup = resume?.kind === "verify" || enterAudit
+    let pendingVerify = resume?.kind === "verify" ? resume : undefined
+    const injectFix = async (items: string[], round: number) => {
+      await appendSubtasks(plan.path, task.id, items)
+      await persistStage({ kind: "review", round, stage: "fixrun" })
+      task = requireTask(await load(plan.path), task.id)
+      await writeCurrent(plan.path, task, mode !== "auto")
+    }
+    for (
+      let round = resumedReview ? (replan ? resumedReview.round - 1 : resumedReview.round) : 0;
+      ;
+    ) {
+      if (skipToInject) {
+        // planfix 恢复: 规划会话已产出有效检查项文件,直接注入后进入 fixrun。
+        skipToInject = false
+        log(`↻ ${task.id} 恢复中断: 修复检查项 ${fixFile} 已有效,直接注入(第 ${round}/${limit} 轮)`)
+        await injectFix(fixItems, round)
+        continue
       }
-
-      const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
-      if (result.type === "blocked") return result
-      // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
-      // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
-      // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
-      const verdict = await verifyTask(client, plan, task, opts, chain, early ? () => reviewTask(client, plan, task, opts, true) : undefined)
-      if (verdict.type === "blocked") return verdict
-      if (verdict.type === "gap") {
-        await setStatus(plan.path, task.id, "pending")
-        return { type: "incomplete", reason: verdict.gap }
+      let audit: Verdict | (Outcome & { type: "blocked" })
+      if (enterAudit) {
+        // review/audit 恢复: 任务级验收已通过(任务可能已被 loop 置回 in_progress),
+        // 直接补跑质量审核会话。
+        audit = await reviewTask(client, plan, task, opts)
+      } else {
+        // auto 模式此处执行分解出的检查项(含 review 注入的 fix 检查项);
+        // off/ondemand 模式只有正文中人工编写的检查项。
+        for (;;) {
+          const items = subtasks(task.body)
+          const index = items.findIndex((item) => !item.done)
+          if (index === -1) break
+          const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain)
+          if (blocked) return blocked
+          task = requireTask(await load(plan.path), task.id)
+          await writeCurrent(plan.path, task, mode !== "auto")
+        }
+        // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
+        if (!skipWrapup) {
+          await persistStage({ kind: "wrapup" })
+          const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
+          if (result.type === "blocked") return result
+        }
+        skipWrapup = false
+        // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
+        // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
+        // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
+        const verdict = await verifyTask(
+          client,
+          plan,
+          task,
+          opts,
+          chain,
+          early ? () => reviewTask(client, plan, task, opts, true) : undefined,
+          persistStage,
+          pendingVerify,
+        )
+        pendingVerify = undefined
+        if (verdict.type === "blocked") return verdict
+        if (verdict.type === "gap") {
+          await setStatus(plan.path, task.id, "pending")
+          return { type: "incomplete", reason: verdict.gap }
+        }
+        if (limit <= 0) return { type: "completed" }
+        await persistStage({ kind: "review", round, stage: "audit" })
+        // early 的审核结论已随 verifyTask 带回(挂点在每次脚本执行前重开,done 必有
+        // 结论);非 early 在验收通过后串行开审核会话。
+        audit = verdict.audit ?? (await reviewTask(client, plan, task, opts))
       }
-      if (limit <= 0) return { type: "completed" }
-
-      // early 的审核结论已随 verifyTask 带回(挂点在每次脚本执行前重开,done 必有
-      // 结论);非 early 在验收通过后串行开审核会话。
-      const audit = verdict.audit ?? (await reviewTask(client, plan, task, opts))
+      enterAudit = false
       if (audit.type === "blocked") return audit
       if (audit.type === "pass") return { type: "completed" }
 
@@ -261,21 +388,18 @@ export async function runTask(
       // 否则中断重跑时 next() 会跳过该任务,注入的 fix 检查项永不执行。
       await setStatus(plan.path, task.id, "in_progress")
       log(`↻ ${task.id} 质量审核未通过,规划修复子任务后继续(第 ${round}/${limit} 轮):\n${audit.gap}`)
+      await persistStage({ kind: "review", round, stage: "planfix" })
       const planned = await planReviewFix(client, plan, task, opts, audit.gap)
       if (planned.type === "blocked") return planned
-      await appendSubtasks(plan.path, task.id, planned.items)
-      task = requireTask(await load(plan.path), task.id)
-      await writeCurrent(plan.path, task, mode !== "auto")
+      await injectFix(planned.items, round)
     }
-  } finally {
-    await removeCurrent(plan.path)
-    await forgetSession(opts.dir ?? dirname(plan.path))
   }
 }
 
 // off/ondemand 的执行阶段: off 单会话完成整个任务;ondemand 会话进行中上下文
 // 达到 --context-limit 时由 driver steer 交接提示,会话写出交接文档后换新会话
 // 续跑,直到自然完成或交接文档标记完成。返回 undefined 表示执行阶段完成。
+// 上次尝试遗留交接文档的清理由调用方(pipeline)在做恢复判定后进行。
 async function executeWhole(
   client: OpencodeClient,
   plan: Plan,
@@ -286,8 +410,6 @@ async function executeWhole(
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const file = join(dirname(plan.path), handoffFile(task))
-  // 清除上一次尝试遗留的交接文档,避免误当作本次会话的产出。
-  if (ondemand) await rm(file, { force: true })
   const steer = ondemand ? { limit: cap, text: renderHandoffSteer(task) } : undefined
   let continuation = false
   let feedback = ""
@@ -330,7 +452,7 @@ async function executeWhole(
 
 // --commit once: 计划全部完成后的唯一一次整体提交会话(全新,不进任何链)。
 export async function commitAll(client: OpencodeClient, plan: Plan, opts: Opts): Promise<Outcome> {
-  const result = await runSession(client, pseudoTask("PLAN", "整体提交"), renderCommitAll(plan), opts, { pct: 100, used: 0 })
+  const result = await runSession(client, pseudoTask("PLAN", "整体提交"), renderCommitAll(plan), opts, { pct: 100, used: 0, at: 0 })
   if (result.type === "blocked") return result
   return { type: "completed" }
 }
@@ -342,7 +464,7 @@ export async function runOnce(
   promptText: string,
   opts: Opts,
 ): Promise<SessionResult> {
-  return runSession(client, pseudoTask("AUTO", title), promptText, opts, { pct: 100, used: 0 })
+  return runSession(client, pseudoTask("AUTO", title), promptText, opts, { pct: 100, used: 0, at: 0 })
 }
 
 function pseudoTask(id: string, title: string): Task {
@@ -358,7 +480,8 @@ function requireTask(plan: Plan, id: string): Task {
 // CURRENT.md mirrors the task in progress; the agent contract makes every
 // session read it first, so the current task survives context compaction.
 // The server re-reads it on every provider turn, so no restart is needed.
-async function writeCurrent(path: string, task: Task, solo = false) {
+// remark: 非完成结局保留文件时附带的"中断备注"(退出原因/阶段/恢复方式)。
+async function writeCurrent(path: string, task: Task, solo = false, remark?: string) {
   const progress = countSubtasks(task.body)
   const content = [
     `# 当前任务(由 opencode-auto 维护,请勿手工编辑)`,
@@ -370,6 +493,7 @@ async function writeCurrent(path: string, task: Task, solo = false) {
     ``,
     progress.total ? `进度: 子任务 ${progress.done}/${progress.total}` : solo ? `进度: 单会话执行(无子任务划分)` : `进度: 分解中`,
     ``,
+    ...(remark ? [remark, ""] : []),
   ].join("\n")
   const file = join(dirname(path), "CURRENT.md")
   await allowWrite(file)
@@ -377,17 +501,105 @@ async function writeCurrent(path: string, task: Task, solo = false) {
   await reprotect(file)
 }
 
-// 任务结束(完成/阻塞/回退)即删除 CURRENT.md,不留过期镜像;强制中断不走
-// finally,遗留文件在下次任务开始时由 writeCurrent 重建。
+// 任务完成才删除 CURRENT.md;阻塞/回退 pending 时由 runTask 写中断备注后保留,
+// 强制中断遗留的文件在下次任务开始时由 writeCurrent 重建。
 async function removeCurrent(path: string) {
   const file = join(dirname(path), "CURRENT.md")
   await allowWrite(file)
   await rm(file, { force: true })
 }
 
+// 阶段的人类可读描述(恢复日志与 CURRENT.md 中断备注共用)。
+export function phaseText(phase: Phase | undefined): string {
+  switch (phase?.kind) {
+    case undefined:
+      return "未记录阶段(按默认流程)"
+    case "decompose":
+      return "任务分解阶段(检查项尚未注入)"
+    case "whole":
+      return "整任务单会话执行阶段"
+    case "subtasks":
+      return "逐子任务执行阶段(从首个未勾选项继续)"
+    case "wrapup":
+      return "收尾阶段(docs 报告与提交)"
+    case "verify":
+      return `任务级验收(修复轮 ${phase.round}/${FIX_ROUNDS - 1}${phase.rechecks ? `,重验轮 ${phase.rechecks}/${REVERIFY_ROUNDS}` : ""},${
+        phase.run
+          ? "脚本已执行完毕待判定"
+          : phase.stage === "generate"
+            ? "待生成验证脚本"
+            : phase.stage === "judge"
+              ? "待判定"
+              : "待执行验证脚本"
+      })`
+    case "review":
+      return `质量审核(第 ${phase.round} 轮,${{ audit: "审核会话", planfix: "修复规划", fixrun: "修复检查项执行" }[phase.stage]})`
+  }
+}
+
+// 中断恢复时随首个提示词注入的"[driver] 中断后的继续"说明: 按记录的阶段给出
+// 具体的下一步指引,使 AI 不重做已完成的工作。
+function resumeNote(phase: Phase | undefined, reused: boolean): string {
+  const next = nextStepText(phase)
+  return (
+    `[driver] 该任务(或其某个子任务)此前的执行因应用中断而停止。` +
+    (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
+    `先读 CURRENT.md 了解当前任务与进度,并以 git status / git diff 核对工作区实际状态。` +
+    `${next}不要重做已完成的工作。`
+  )
+}
+
+function nextStepText(phase: Phase | undefined): string {
+  switch (phase?.kind) {
+    case undefined:
+      return ""
+    case "decompose":
+      return `当前处于任务分解阶段:检查项尚未注入 PLAN.md。`
+    case "whole":
+      return `当前处于整任务单会话执行阶段。`
+    case "subtasks":
+      return `当前处于逐子任务执行阶段:从 PLAN.md 检查项中首个未勾选项继续。`
+    case "wrapup":
+      return `全部检查项已完成,当前处于收尾阶段(更新 docs/ 报告并提交)。`
+    case "verify":
+      return phase.run
+        ? `任务级验收的验证脚本已由 driver 执行完毕(输出在 tmp/verify.out 与 tmp/verify.err),本会话为独立判定会话。`
+        : `当前处于任务级验收阶段:验证脚本由 driver 在会话外执行,你不要亲自运行。`
+    case "review":
+      return phase.stage === "audit"
+        ? `任务级验收已通过,当前处于质量审核阶段。`
+        : `当前处于质量审核差距的修复阶段:按 PLAN.md 中未勾选的修复检查项继续。`
+  }
+}
+
+// CURRENT.md 的中断备注(非完成结局保留文件时写入): 退出原因、阶段快照与恢复
+// 方式;下次运行重建镜像时,要点经恢复提示词(resumeNote)带给 AI。
+function interruptionRemark(outcome: Outcome, phase: Phase | undefined): string {
+  const why =
+    outcome.type === "blocked"
+      ? `阻塞: ${firstLine(outcome.question)}`
+      : outcome.type === "incomplete"
+        ? `未完成回退 pending: ${firstLine(outcome.reason)}`
+        : `完成`
+  return [
+    `## 中断备注(opencode-auto)`,
+    ``,
+    `- 退出时间: ${new Date().toISOString()}`,
+    `- 退出原因: ${why}`,
+    `- 中断阶段: ${phaseText(phase)}`,
+    `- 恢复方式: 处理上述原因后重新运行 opencode-auto run,driver 将按中断阶段精确继续;本备注要点会随恢复提示词带给 AI。`,
+  ].join("\n")
+}
+
+function firstLine(text: string): string {
+  return text.split("\n")[0]!.slice(0, 200)
+}
+
 // Ensures the task body has a checklist: tasks resuming with one (or with a
 // human-written one) are used as-is; otherwise a decomposition session writes
 // docs/<id>.subtasks.md and the driver injects the items into PLAN.md.
+// 中断恢复: 分解会话可能已写出文件但尚未注入——先直读文件,有效则直接注入,
+// 不再开会话。
 async function ensureDecomposed(
   client: OpencodeClient,
   plan: Plan,
@@ -397,6 +609,12 @@ async function ensureDecomposed(
 ): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
   if (subtasks(task.body).length) return { type: "ok", task }
   const file = join(dirname(plan.path), "docs", `${task.id}.subtasks.md`)
+  const existing = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
+  if (existing.length) {
+    log(`↻ ${task.id} 分解结果 ${file} 已存在,直接注入检查项`)
+    await setSubtasks(plan.path, task.id, existing)
+    return { type: "ok", task: requireTask(await load(plan.path), task.id) }
+  }
   let feedback = ""
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the file; the file is a hard requirement.
@@ -462,6 +680,11 @@ async function runSubtask(
 // right before each script execution (after the generate session, if any) and
 // joins before the judge session — a blocked audit propagates immediately;
 // the last audit verdict rides back with the done result.
+// 中断恢复(design doc H): persist 在各阶段边界写进度记录(含已执行的脚本运行
+// 记录);resume 提供上次中断时的轮数计数与运行记录——脚本已执行完毕时不重跑,
+// 直接(early 且审核结论缺失时补跑审核会话后)进入判定会话。修复轮进行中被中断
+// 的场景没有单独阶段标记,恢复后从脚本执行重来一轮判定(可能重复一次差距反馈,
+// 收敛不受影响)。
 async function verifyTask(
   client: OpencodeClient,
   plan: Plan,
@@ -469,16 +692,37 @@ async function verifyTask(
   opts: Opts,
   chain: SessionChain,
   audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
+  persist?: (phase: Phase) => Promise<void>,
+  resume?: Phase & { kind: "verify" },
 ): Promise<{ type: "done"; audit?: Verdict } | { type: "gap"; gap: string } | (Outcome & { type: "blocked" })> {
   const mode = opts.subtask ?? "auto"
   const dir = opts.dir ?? dirname(plan.path)
   // 判定会话重验后固定执行指定脚本路径,不再按 verify 字段重新解析——wrapped
   // 分支每次 resolve 都会重新包装,覆盖掉替换产物。
   const replacement = join(verifyTmpDir(dir), "verify.sh")
-  let replaced: string | undefined
-  for (let round = 0, rechecks = 0; ; ) {
-    const execution = await executeVerifyScript(client, plan, task, opts, audit, replaced)
+  let replaced = resume?.replaced === true
+  // 恢复用的运行记录(仅首轮消费): 脚本上次已执行完毕且有持久化记录时不重跑。
+  let pending = resume?.run ? resume : undefined
+  for (let round = resume?.round ?? 0, rechecks = resume?.rechecks ?? 0; ; ) {
+    const counters = { round, rechecks, replaced }
+    let execution: { type: "ok"; run: VerifyRun; audit?: Verdict } | (Outcome & { type: "blocked" })
+    if (pending?.run) {
+      // 中断恢复: 脚本已执行完毕且运行记录已持久化——不重跑脚本;early 且审核
+      // 结论缺失时先补跑审核会话,然后直接进入判定。
+      let auditVerdict: (typeof pending.audit) | undefined = pending.audit
+      if (!auditVerdict && audit) {
+        const fresh = await audit()
+        if (fresh.type === "blocked") return fresh
+        auditVerdict = fresh
+      }
+      log(`↻ ${task.id} 恢复中断: verify 脚本上次已执行完毕(${pending.run.script}),直接进入判定`)
+      execution = { type: "ok", run: pending.run, audit: auditVerdict }
+    } else {
+      execution = await executeVerifyScript(client, plan, task, opts, audit, replaced ? replacement : undefined, persist, counters)
+    }
+    pending = undefined
     if (execution.type === "blocked") return execution
+    await persist?.({ kind: "verify", stage: "judge", ...counters, run: execution.run, audit: execution.audit })
     const verdict = await judge(client, plan, task, opts, execution.run)
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "pass") {
@@ -495,7 +739,7 @@ async function verifyTask(
         return { type: "blocked", question: `验证脚本经 ${REVERIFY_ROUNDS} 轮替换重验仍未通过:\n${verdict.gap}` }
       }
       log(`↻ ${task.id} 判定会话替换了验证脚本,重新执行并判定(第 ${rechecks}/${REVERIFY_ROUNDS} 轮):\n${verdict.gap}`)
-      replaced = replacement
+      replaced = true
       continue
     }
     // off 模式不做修复重跑: 差距交回调用方(回退 pending,等人工改进后重试)。
@@ -521,10 +765,13 @@ const REVERIFY_ROUNDS = 3
 // Verify 前两段: resolveVerifyScript 判定来源(existing/wrapped 由 driver 直接
 // 给出;自然语言或缺失先开一次性脚本生成旁路会话——generate 分支沿用约定名
 // tmp/verify.sh,上一轮(或修复前)生成的脚本存在则复用,V1 不自动重新
-// 生成),随后 runVerifyScript 在目标目录执行并 log 一行结果(退出码、耗时、
-// out/err 路径)。退出码非 0 不在此判定——判定权在判定会话。
+// 生成),随后 runVerifyScript 在目标目录执行(进度看门狗: 持续无输出超过
+// --verify-idle 才终止;--verify-max 另设绝对上限)并 log 一行结果。退出码非 0
+// 不在此判定——判定权在判定会话。
 // override: 重验轮由判定会话替换出的指定脚本,直接执行、跳过 resolve(wrapped
 // 分支重新包装会覆盖掉替换产物)。
+// persist: 阶段边界写进度记录——脚本执行完毕即持久化运行记录,此刻中断,恢复时
+// 跳过执行直接进入判定会话(脚本可能很长)。
 // --early 审核挂点(F.2 时序保证): generate 分支的脚本生成会话结束后才启动
 // 审核会话,与脚本执行并行;脚本执行完毕先 join 审核(blocked 立即上抛),随后
 // 才进入判定会话。每次脚本执行(含修复轮重跑)重开一次新审核。
@@ -535,6 +782,8 @@ async function executeVerifyScript(
   opts: Opts,
   audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
   override?: string,
+  persist?: (phase: Phase) => Promise<void>,
+  counters: { round: number; rechecks: number; replaced: boolean } = { round: 0, rechecks: 0, replaced: false },
 ): Promise<{ type: "ok"; run: VerifyRun; audit?: Verdict } | (Outcome & { type: "blocked" })> {
   const dir = opts.dir ?? dirname(plan.path)
   const tmp = verifyTmpDir(dir)
@@ -544,6 +793,7 @@ async function executeVerifyScript(
   if (override) {
     path = override
   } else {
+    await persist?.({ kind: "verify", stage: "generate", ...counters })
     const resolved = await resolveVerifyScript(task, dir)
     if (resolved.kind === "generate" && !(await Bun.file(script).exists())) {
       const failed = await generateScript(client, plan, task, opts, script)
@@ -551,20 +801,37 @@ async function executeVerifyScript(
     }
     path = resolved.kind === "generate" ? script : resolved.script
   }
+  await persist?.({ kind: "verify", stage: "exec", ...counters })
   const auditing = audit?.()
-  const run = await runVerifyScript(dir, path)
+  const run = await runVerifyScript(dir, path, { idleMs: opts.verifyIdleMs, maxMs: opts.verifyMaxMs })
   const outPath = join(tmp, "verify.out")
   const errPath = join(tmp, "verify.err")
   log(
-    `  ⚙ verify 脚本退出码 ${run.code}${run.timedOut ? "(超时终止)" : ""},耗时 ${run.ms}ms,输出: ${outPath} / ${errPath}`,
+    `  ⚙ verify 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,输出: ${outPath} / ${errPath}`,
   )
+  const record: VerifyRun = {
+    script: path,
+    code: run.code,
+    ms: run.ms,
+    timedOut: run.timedOut,
+    timeoutReason: run.timeoutReason,
+    out: outPath,
+    err: errPath,
+  }
+  // 脚本执行完毕即持久化运行记录(early 的审核结论由 verifyTask 在 join 后随
+  // judge 阶段一并写入)。
+  await persist?.({ kind: "verify", stage: "exec", ...counters, run: record })
   const audited = await auditing
   if (audited?.type === "blocked") return audited
-  return { type: "ok", run: { script: path, code: run.code, ms: run.ms, timedOut: run.timedOut, out: outPath, err: errPath }, audit: audited }
+  return { type: "ok", run: record, audit: audited }
 }
 
 // Verify 第三段: 独立判定旁路会话(一次性 chain,不进任务执行链),注入运行信息,
 // 解析 VERDICT_FILE 结论;产出缺失的重试策略见 requireArtifact。
+// 判定会话被授权把验证经验沉淀到后续未完成任务的 verify 字段(renderVerifyJudge
+// 授权段): 会话期间临时放开 PLAN.md 写权限,结束后恢复并校验——解析失败或除
+// verify 字段外的结构性内容(任务集合/状态/attempts/正文)被改动时,整体还原
+// 会话前快照,越权编辑不被信任。
 async function judge(
   client: OpencodeClient,
   plan: Plan,
@@ -573,14 +840,40 @@ async function judge(
   run: VerifyRun,
 ): Promise<Verdict | (Outcome & { type: "blocked" })> {
   const file = join(dirname(plan.path), VERDICT_FILE)
-  return requireArtifact(client, task, renderVerifyJudge(plan, task, run), opts, {
-    kind: "审核",
-    artifact: `有效判定文件 ${VERDICT_FILE}`,
-    detail: "缺失或无结论行",
-    requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 driver 重新执行)。",
-    reset: () => rm(file, { force: true }),
-    collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
-  })
+  const snapshot = await Bun.file(plan.path).text()
+  await allowWrite(plan.path)
+  try {
+    // 重新加载计划: 此前轮次的判定会话可能已更新后续任务的 verify 字段。
+    return await requireArtifact(client, task, renderVerifyJudge(await load(plan.path), task, run), opts, {
+      kind: "审核",
+      artifact: `有效判定文件 ${VERDICT_FILE}`,
+      detail: "缺失或无结论行",
+      requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 driver 重新执行)。",
+      reset: () => rm(file, { force: true }),
+      collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
+    })
+  } finally {
+    await checkPlanEdit(plan.path, snapshot)
+    await reprotect(plan.path)
+  }
+}
+
+// 校验判定会话对 PLAN.md 的编辑仅限授权范围(后续未完成任务的 verify 字段):
+// 任务集合、状态、attempts 与正文(含检查项)任一变化或解析失败,即恢复会话前
+// 快照并警告。verified/question 等其余字段不在授权内但也不做还原——它们由
+// driver 在后续步骤统一重写,不会造成状态错乱。
+async function checkPlanEdit(planFile: string, before: string) {
+  const after = await Bun.file(planFile).text().catch(() => "")
+  if (after === before) return
+  const shape = (text: string) => parse(planFile, text).tasks.map((item) => `${item.id}|${item.status}|${item.attempts}|${item.body}`)
+  try {
+    if (JSON.stringify(shape(before)) === JSON.stringify(shape(after))) return
+  } catch {
+    // 解析失败按越权处理,走还原。
+  }
+  await allowWrite(planFile)
+  await Bun.write(planFile, before)
+  log(`⚠ 判定会话对 PLAN.md 的编辑超出授权(仅允许后续未完成任务的 verify 字段),已还原原内容`)
 }
 
 // Natural-language or missing verify: a one-shot side session writes the
@@ -684,7 +977,8 @@ async function requireArtifact<T>(
   let feedback = ""
   for (let i = 0; ; i++) {
     await spec.reset?.()
-    const result = await runSession(client, task, promptText + feedback, opts, { pct: 100, used: 0 })
+    // 旁路一次性会话: 链上不携带阶段(phase),不写进度恢复记录。
+    const result = await runSession(client, task, promptText + feedback, opts, { pct: 100, used: 0, at: 0 })
     if (result.type === "blocked") return result
     const value = await spec.collect()
     if (value !== undefined) return value
@@ -713,11 +1007,11 @@ function parseVerdict(text: string): Verdict | undefined {
 }
 
 // Runs one prompt on the session chain (reusing the previous session when its
-// context ended below REUSE_BELOW). Transient provider failures
-// (session.error, e.g. malformed reasoning content from a gateway) are
-// retried in a fresh session before blocking; network/server failures
-// (Internal network failure / Network error 等) additionally restart the
-// spawned opencode server before the retry.
+// context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
+// provider failures (session.error, e.g. malformed reasoning content from a
+// gateway) are retried in a fresh session before blocking; network/server
+// failures (Internal network failure / Network error 等) additionally restart
+// the spawned opencode server before the retry.
 // steer: 会话进行中已用上下文达到 limit 时,driver 向该会话插入一次 text
 // (ondemand 的交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
 type Steer = { limit: number; text: string }
@@ -760,16 +1054,20 @@ async function attempt(
   chain: SessionChain,
   steer?: Steer,
 ): Promise<SessionResult> {
-  // 上一会话上下文占比低于 50% 且已用量低于 contextLimit(默认 64k tokens)
-  // 则复用同一会话继续,否则新建。
+  // 上一会话上下文占比低于 50%、已用量低于 contextLimit(默认 64k tokens)、且距
+  // 其结束不超过 REUSE_IDLE_MS(默认 5 分钟)则复用同一会话继续,否则新建。
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW && chain.used < cap
-  if (reuse) log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens)`)
+  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW && chain.used < cap && Date.now() - chain.at <= REUSE_IDLE_MS
+  if (reuse) {
+    log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens,${Math.round((Date.now() - chain.at) / 1000)} 秒前结束)`)
+  }
   if (!reuse && chain.id !== undefined) {
     const reason =
       chain.pct >= REUSE_BELOW
         ? `上下文占比 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值`
-        : `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap)} 上限`
+        : chain.used >= cap
+          ? `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap)} 上限`
+          : `距上一会话结束已超过 ${REUSE_IDLE_MINUTES} 分钟(上下文已陈旧)`
     log(`▷ ${reason},开启新会话`)
   }
   // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
@@ -780,9 +1078,15 @@ async function attempt(
   const sessionID = session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
-  // 会话记忆: 持久化链上当前会话,应用中断后重新运行可复用继续(runTask 开头
-  // 经 recallSession 恢复)。伪任务(PLAN/AUTO)不记忆。
-  if (opts.dir && task.id.startsWith("T-")) await rememberSession(opts.dir, task.id, sessionID)
+  // 进度记录: 执行链会话(链上携带阶段)写 active 记录,应用中断后据此精确恢复;
+  // 旁路一次性会话(判定/审核/脚本生成/修复规划,链上无阶段)与伪任务(PLAN/AUTO)
+  // 不写,避免污染执行链记忆。
+  const remember = async () => {
+    if (opts.dir && task.id.startsWith("T-") && chain.phase) {
+      await saveProgress(opts.dir, { task: task.id, session: sessionID, at: Date.now(), active: true, phase: chain.phase })
+    }
+  }
+  await remember()
 
   const events = await client.event.subscribe()
   const watching = watch(client, sessionID, events.stream, opts, steer)
@@ -801,6 +1105,10 @@ async function attempt(
   chain.id = sessionID
   chain.pct = result.pct
   chain.used = result.used
+  chain.at = Date.now()
+  // 会话结束但阶段尚未推进: 刷新记录时间(30 分钟窗从最后一次活动起算)并保持
+  // active——此刻中断按"半途未总结"复用本会话继续。
+  await remember()
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
   return { type: "idle", lastText: result.lastText }

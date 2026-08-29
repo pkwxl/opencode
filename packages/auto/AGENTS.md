@@ -8,15 +8,15 @@
 
 ## 结构
 
-- `src/index.ts` — CLI 入口:`init` / `run` / `check` / `status` 四个子命令与参数解析(含 `-p`/`-i` 短选项;`--review`/`--early-review` 经 parseReviewLimit 校验——缺省 0 不启用、裸选项 3、显式值须为 1..10 整数;`--early` 为布尔修饰,review 未启用时单独出现为用法错误,`--early-review` 是 `--review n --early` 的快捷糖、与 `--review` 同现为用法错误;`--permission` 经 parsePermission 校验,缺省/裸选项 ask-deny,非法取值均退出码 1;`--agent` 缺省取 `auto` 契约 agent);`check` 调 src/check.ts 检查 AGENTS.md/PLAN.md 违背验证原则的描述,命中退出码 1;`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,并维护 .gitignore(忽略 tmp/ 与 .auto/logs/),`-p/--prompt` 在初始化后经 manage 启动 server 调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
-- `src/loop.ts` — 任务循环:取下一个未完成任务执行;启动时 `resetInProgress` 把上次运行中断遗留的 in_progress 重置为 pending(中断恢复);任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块与验证原则块存在(两个独立标记块,各自幂等补写);`ensureGitignore` 确保 tmp/ 与 .auto/logs/ 被 .gitignore 忽略(非 git 目录不动);run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下,每 10 分钟);`--review`/`--early`/`--permission`/server 句柄透传至 runTask;`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
+- `src/index.ts` — CLI 入口:`init` / `run` / `check` / `status` 四个子命令与参数解析(含 `-p`/`-i` 短选项;`--review`/`--early-review` 经 parseReviewLimit 校验——缺省 0 不启用、裸选项 3、显式值须为 1..10 整数;`--early` 为布尔修饰,review 未启用时单独出现为用法错误,`--early-review` 是 `--review n --early` 的快捷糖、与 `--review` 同现为用法错误;`--permission` 经 parsePermission 校验,缺省/裸选项 ask-deny,非法取值均退出码 1;`--verify-idle`(缺省/裸选项 10 分钟,1..120)与 `--verify-max`(缺省/裸选项不设上限,1..1440)为 verify 脚本看门狗参数;`--agent` 缺省取 `auto` 契约 agent);`check` 调 src/check.ts 检查 AGENTS.md/PLAN.md 违背验证原则的描述,命中退出码 1;`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,并维护 .gitignore(忽略 tmp/ 与 .auto/logs/),`-p/--prompt` 在初始化后经 manage 启动 server 调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
+- `src/loop.ts` — 任务循环:取下一个未完成任务执行;启动时 `resetInProgress` 把上次运行中断遗留的 in_progress 重置为 pending,并经 peekProgress 把进度记录处于 verify(--review 启用时)/review 阶段但已被标 done 的任务置回 in_progress(否则 next() 跳过、审核永不补跑);任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块与验证原则块存在(两个独立标记块,各自幂等补写);`ensureGitignore` 确保 tmp/ 与 .auto/logs/ 被 .gitignore 忽略(非 git 目录不动);run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下,每 10 分钟);`--review`/`--early`/`--permission`/`--verify-idle`/`--verify-max`/server 句柄透传至 runTask;`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
 - `src/interactive.ts` — `--interactive` 旁路:常驻 readline 把回车输入经 promptAsync(fire-and-forget)注入当前活动会话(attach 由 runner 在每个会话建立/复用时调用;无活动会话丢弃并提示);ask/任务间暂停的人工等待经同一输入行接收(空行原样上交给调用方解释);stdin 关闭后回落非交互行为;io 可注入供测试。
-- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话 → 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,验收/审核差距不做修复重跑,任务回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → verifyTask 三段式验收(脚本准备 → driver 执行 → 独立判定会话;判定会话禁止执行验证脚本/命令,可替换指定脚本后结论`重验`,driver 重新执行回传输出,至多 REVERIFY_ROUNDS=3 轮;差距反馈回执行会话修复,最多 FIX_ROUNDS=3 轮,off 模式直接回退 pending)→ `--review` 下 reviewTask 质量审核与 planReviewFix 修复规划(外层轮循环,执行阶段仅首轮进入;`--early` 下审核经 verifyTask 挂点在脚本执行窗口并行启动、结论随 done 带回,外层不再独立调用 reviewTask);旁路会话产物缺失"带反馈重试一次再隐性阻塞"的骨架统一在 requireArtifact;会话链复用、事件监听、提问自动答复(AUTO_ANSWER 含决策记录与 AUTO-DECISION 标注要求)、权限请求按 --permission 四档处理(dryrun 下自动拒绝但不中断)、隐性阻塞检测;新建会话前经 server 句柄 syncAgents(AGENTS.md 有更新则重启 server),网络类会话错误(Internal network failure / Network error 等)先 restart 换新 server 实例再换新会话重试;任务开始时 recallSession 恢复会话记忆(30 分钟窗口内且会话仍存在 → 复用原会话,否则新会话;两种情况首个提示词均附"中断后的继续"说明),每个会话建立/复用时 rememberSession 持久化 .auto/session.json,任务结束 forgetSession;CURRENT.md 在任务开始时即写入(中断遗留缺失/过期时重建),每次勾选后刷新,任务结束(任何 Outcome)在 finally 中删除(强制中断不走 finally,遗留下次重建);`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收。
-- `src/resume.ts` — 会话记忆:remember/recall/forget 维护目标目录 .auto/session.json({task, session, at}),RESUME_WINDOW_MS=30 分钟;recall 不做窗口判定(超窗也要提示中断继续,窗口与存活判定在 runner)。
+- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话(恢复时先直读 docs/<id>.subtasks.md,有效则直接注入不开会话)→ 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,验收/审核差距不做修复重跑,任务回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → verifyTask 三段式验收(脚本准备 → driver 执行 → 独立判定会话;判定会话禁止执行验证脚本/命令,可替换指定脚本后结论`重验`,driver 重新执行回传输出,至多 REVERIFY_ROUNDS=3 轮;判定会话另被授权更新后续未完成任务的 verify 字段——会话期间 allowWrite(PLAN.md)、结束后校验,越权编辑整体还原;差距反馈回执行会话修复,最多 FIX_ROUNDS=3 轮,off 模式直接回退 pending)→ `--review` 下 reviewTask 质量审核与 planReviewFix 修复规划(外层轮循环,执行阶段仅首轮进入;`--early` 下审核经 verifyTask 挂点在脚本执行窗口并行启动、结论随 done 带回,外层不再独立调用 reviewTask);旁路会话产物缺失"带反馈重试一次再隐性阻塞"的骨架统一在 requireArtifact;会话链复用(占比 <50%、用量 < --context-limit 且距上一会话结束 ≤5 分钟三者同时满足,REUSE_IDLE_MS;旁路一次性会话的链不带 phase、不写进度记录)、事件监听、提问自动答复(AUTO_ANSWER 含决策记录与 AUTO-DECISION 标注要求)、权限请求按 --permission 四档处理(dryrun 下自动拒绝但不中断)、隐性阻塞检测;新建会话前经 server 句柄 syncAgents(AGENTS.md 有更新则重启 server),网络类会话错误(Internal network failure / Network error 等)先 restart 换新 server 实例再换新会话重试;进度记录(.auto/progress.json,经 persistStage 在阶段边界推进、attempt 在执行链会话开始/结束时刷新 active)支撑中断精确恢复:runTask 开头 recallProgress——active 且 30 分钟窗内且会话存活则复用原会话,否则新会话,均附按 phase 的下一步指引;阶段级重入(verify 有持久化 run 跳过重跑直接判定、off/ondemand 过执行阶段不重跑 executeWhole、review/planfix 有有效 fix.md 直接注入);CURRENT.md 在任务开始时即写入,每次勾选后刷新,任务完成在收尾中删除;非完成结局(阻塞/回退 pending)写"中断备注"(原因/阶段/恢复方式)后保留,网络类 blocked(会话错误重试耗尽)保持 active 记录走 30 分钟窗复用;`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收。
+- `src/resume.ts` — 进度恢复记录:saveProgress/recallProgress/peekProgress/forgetProgress 维护目标目录 .auto/progress.json({task, session, at, active, phase}),RESUME_WINDOW_MS=30 分钟;phase 覆盖 decompose/whole/subtasks/wrapup/verify{stage,round,rechecks,replaced,run?,audit?}/review{round,stage};recall 不做窗口判定(窗口与存活判定在 runner),旧版 .auto/session.json 兼容读取(视为半途会话、无阶段);peek 供 loop 把验收/审核阶段中断但已标 done 的任务置回 in_progress。
 - `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtasks/markDone/setStatus/resetInProgress)与任务级 verify 命令提取(verifyCommand,供 resolveVerifyScript 判定脚本来源)。
-- `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / verify 脚本生成 / verify 判定 / 修复 / 质量审核 / 审核修复规划 / 权限预检 / 整体提交 / 初始化规划);QUESTION_RULE 与 runner 的 AUTO_ANSWER 同步要求自动决策记录决策过程并标注 `AUTO-DECISION:`;renderVerifyScriptGen/renderVerifyJudge 禁止执行验证脚本或验证性命令(执行权在 driver,结果经 out/err 回传),judge 可替换指定脚本并结论`重验`;renderReview 两形态维度 3 均为静态审核(early 另告知脚本并行执行、只读为主);renderInit 注入验证执行权原则;判定文件路径 VERDICT_FILE(`.auto/verify.md`)与 REVIEW_FILE(`.auto/review.md`);VerifyRun 运行信息类型;--commit 四档(CommitMode);commitRule 含"tmp/ 与 .auto/logs/ 不纳入提交"。
+- `src/prompt.ts` — 会话提示词模板(分解 / 单子任务 / 整任务 / 交接 steer / 收尾 / verify 脚本生成 / verify 判定 / 修复 / 质量审核 / 审核修复规划 / 权限预检 / 整体提交 / 初始化规划);QUESTION_RULE 与 runner 的 AUTO_ANSWER 同步要求自动决策记录决策过程并标注 `AUTO-DECISION:`;renderVerifyScriptGen/renderVerifyJudge 禁止执行验证脚本或验证性命令(执行权在 driver,结果经 out/err 回传),judge 可替换指定脚本并结论`重验`,另含 verify 经验沉淀授权段(仅后续未完成任务的 verify 字段,附现值清单);renderReview 两形态维度 3 均为静态审核(early 另告知脚本并行执行、只读为主);renderInit 注入验证执行权原则;判定文件路径 VERDICT_FILE(`.auto/verify.md`)与 REVIEW_FILE(`.auto/review.md`);VerifyRun 运行信息类型(含看门狗 timeoutReason);--commit 四档(CommitMode);commitRule 含"tmp/ 与 .auto/logs/ 不纳入提交"。
 - `src/check.ts` — `check` 命令逻辑:启发式扫描目标目录 AGENTS.md 与 PLAN.md 中要求会话亲自运行验证脚本/命令的语句(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算),返回 findings(file/task/line/text)与 notes;命中退出码 1。
-- `src/verify.ts` — verify 脚本机制层(纯逻辑,不依赖 SDK 与 runner):verifyTmpDir(目标目录下 `tmp/` 子目录,工作目录内可直接读,避免 /tmp 权限问题;loop 的 ensureGitignore 保证不进仓库)、resolveVerifyScript(依 verifyCommand 判定 existing/wrapped/generate 三支)、runVerifyScript(cwd=目标目录执行,stdout/stderr 整写 tmp/verify.out 与 verify.err,VERIFY_TIMEOUT_MS 缺省 10 分钟,超时 kill 退出码记 124)。
+- `src/verify.ts` — verify 脚本机制层(纯逻辑,不依赖 SDK 与 runner):verifyTmpDir(目标目录下 `tmp/` 子目录,工作目录内可直接读,避免 /tmp 权限问题;loop 的 ensureGitignore 保证不进仓库)、resolveVerifyScript(依 verifyCommand 判定 existing/wrapped/generate 三支)、runVerifyScript(cwd=目标目录执行,stdout/stderr 整写 tmp/verify.out 与 verify.err;进度看门狗——轮询两个输出文件的大小,任一增长即重置计时,持续 --verify-idle(缺省 10 分钟)无增长才 kill、退出码记 124 且 timeoutReason=idle,--verify-max(缺省不设)为绝对上限兜底且 timeoutReason=max)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json
   置 0o444(AGENTS.md 不在其列,任务可更新它),driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
 - `src/server.ts` — opencode server 管理:manage() 缺省 spawn `opencode serve` 并托管生命周期(需 PATH 上有 opencode CLI),显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管;client 为指向当前实例的 Proxy(restart 后既有引用自动生效);syncAgents 依 AGENTS.md 指纹(mtime+size)变更重启;restart 供网络故障换新实例,外部实例返回 false。
@@ -25,7 +25,7 @@
   (interactive 下只进文件);`setInput` 注册交互 readline 后 log 打印先清输入行再重绘;run 时把全部
   输出同步写入目标目录 `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
 - `templates/` — `init` 复制的模板(`PLAN.md`、`opencode.json`、`.opencode/agent/auto.md`)。
-- `docs/verify-review-design.md` — 第三阶段(verify 三段式与 --review 审核循环)与第四阶段(--early 并行审核,以 F 节为唯一设计基准)的设计基准:已确认决策、接口约定与流水线伪代码;G 节为判定会话执行限制与重验协议的后续修订基准。
+- `docs/verify-review-design.md` — 第三阶段(verify 三段式与 --review 审核循环)与第四阶段(--early 并行审核,以 F 节为唯一设计基准)的设计基准:已确认决策、接口约定与流水线伪代码;G 节为判定会话执行限制与重验协议、H 节为中断恢复/看门狗/判定会话 verify 字段授权的后续修订基准。
 - `script/build.ts` — 独立可执行文件构建脚本。
 - `test/` — `bun test` 测试。
 
@@ -88,7 +88,10 @@
 - **driver 独占状态写入**:PLAN.md 的状态标记、检查项勾选、verified 字段与 CURRENT.md
   全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json)
   被 chmod 为只读作为防误写护栏(非安全边界,同用户进程可经 bash chmod 绕过),
-  driver 自身写入经 `src/protect.ts` 的 allowWrite/reprotect 临时放行。完成判定不靠
+  driver 自身写入经 `src/protect.ts` 的 allowWrite/reprotect 临时放行。唯一例外是
+  verify 判定会话:其被授权更新后续未完成任务的 verify 字段(verify 经验沉淀),
+  会话期间 allowWrite(PLAN.md)、结束后校验,越权编辑(checkPlanEdit 比对任务集合/
+  状态/attempts/正文)整体还原。完成判定不靠
   agent 自报——任务级验收由 driver 执行 verify 脚本、旁路独立判定会话读输出判定,
   driver 只解析其判定文件;子任务会话结束后 driver 按可信勾选(验收统一在任务级进行)。
 - verify 三段式:verify 的处理权在 driver,验收只在任务级做一次——收尾会话后:
@@ -98,14 +101,19 @@
   每次幂等覆盖;自然语言或缺失 → generate,先开一次性旁路脚本生成会话产出脚本,
   产物约定名 tmp/verify.sh,跨修复轮复用,V1 不自动重生成);② driver 执行
   (runVerifyScript:cwd=目标目录,有执行位直接 spawn 否则经 bash;stdout/stderr
-  整写 tmp/verify.out 与 verify.err,执行前 truncate;超时 10 分钟 kill、
-  code 记 124;退出码非 0 不直接判失败);③ 旁路独立判定会话(renderVerifyJudge,
+  整写 tmp/verify.out 与 verify.err,执行前 truncate;进度看门狗——输出文件持续
+  无增长达 --verify-idle(缺省 10 分钟)才 kill、code 记 124 且 timeoutReason=idle,
+  --verify-max(缺省不设)为绝对上限兜底;执行完毕的运行记录持久化到进度记录,
+  此后中断恢复时跳过重跑;退出码非 0 不直接判失败);③ 旁路独立判定会话(renderVerifyJudge,
   一次性 chain 不进任务链)直读 out/err 与代码判定——**判定会话禁止执行验证脚本
   或验证性命令**(运行测试/构建/lint/服务等;只读检查不受限),认定脚本本身有问题
   或覆盖不足时编写新脚本替换 tmp/verify.sh 并以末行 `结论: 重验 <原因>`
   结束,driver 固定改为执行该指定路径(不再按 verify 字段重新解析,wrapped 重包装
   会覆盖替换产物)并把输出整写回传同一对 out/err,由新判定会话继续判定,至多
-  REVERIFY_ROUNDS=3 轮(耗尽或声称重验但未写出脚本按隐性阻塞);正常结论写
+  REVERIFY_ROUNDS=3 轮(耗尽或声称重验但未写出脚本按隐性阻塞);判定会话另被授权
+  verify 经验沉淀——发现预设命令的通病时可更新 PLAN.md 中后续未完成任务的
+  verify 字段(仅限该字段,会话期间 allowWrite(PLAN.md)、结束后 checkPlanEdit 校验,
+  越权整体还原),当前脚本无问题时不做修改。正常结论写
   `.auto/verify.md`,driver 解析末行 `结论: 通过|差距` 与可选 `verified-command:`
   行;通过 → markDone(verified 优先取判定的 verified-command,其次原命令,最后
   实际脚本路径);差距 → renderFix 反馈回执行会话链修复,重新收尾与验收
@@ -139,23 +147,33 @@
 - 任务流水线(auto 模式):正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,
   driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md
   (只写产出摘要,不运行任务级 verify、不下验收结论)。
-  任务内所有会话共用一条链:上一会话结束时上下文占比低于 50% 且已用量低于
-  --context-limit(默认 64k tokens)则复用,否则新建;占比与用量由 watch 始终跟踪
-  (与 --verbose 无关),拿不到模型上限时占比记 100 即总是新建;瞬时会话错误重试
-  仍强制换新会话。
+  任务内所有会话共用一条链:上一会话结束时上下文占比低于 50%、已用量低于
+  --context-limit(默认 64k tokens)且距其结束不超过 5 分钟(REUSE_IDLE_MS)则
+  复用,否则新建(verify 脚本执行与判定/审核等耗时较久后自动换新会话);占比
+  与用量由 watch 始终跟踪(与 --verbose 无关),拿不到模型上限时占比记 100 即
+  总是新建;瞬时会话错误重试仍强制换新会话。
 - CURRENT.md 是当前任务镜像(每会话必读,抗上下文压缩):任务开始(首个会话前)
-  写入、每次勾选后刷新、任务结束(完成/阻塞/回退 pending)在 runTask 的 finally
-  中删除(强制中断不走 finally,遗留文件下次任务开始时重建);AGENTS.md 中 driver
+  写入、每次勾选后刷新、任务完成时删除;非完成结局(阻塞/回退 pending)写"中断
+  备注"(退出原因/中断阶段/恢复方式)后保留,供人工查看与下次恢复(下次 runTask
+  重建镜像时,备注要点经恢复提示词带给 AI);强制中断遗留文件同样下次重建。
+  AGENTS.md 中 driver
   只维护固定指针块与验证原则块两个标记块(`opencode-auto:start` 与
   `opencode-auto:verify:start`,各自幂等补写、除此之外永不改写),不置只读
   (任务可更新其余内容);指令文件每个 provider turn 现场重读,且 AGENTS.md 指纹
   (mtime+size)变更时 server.syncAgents 在下一个新会话前重启 server 兜底。
-- 会话记忆(应用重启后复用中断会话):每个会话建立/复用时 rememberSession 把
-  {task, session, at} 写入目标目录 .auto/session.json;runTask 开始时 recallSession
-  读回——30 分钟窗口内(RESUME_WINDOW_MS)且会话在 server 上仍存在 → 复用原会话
-  继续(chain 直接 seed 该会话),否则新会话;两种情况首个提示词均附加"[driver]
-  中断后的继续"说明(读 CURRENT.md、git status/diff 核对进度,不重做)。任务
-  结束 forgetSession;伪任务(PLAN/AUTO)不记忆。
+- 进度恢复(应用重启后精确恢复中断):run 期间 driver 把当前阶段与执行链会话
+  持久化到目标目录 .auto/progress.json({task, session, at, active, phase};阶段
+  边界经 persistStage 写 active=false 总结态,执行链会话开始/结束经 attempt 刷
+  active=true 半途态;旁路一次性会话不写);runTask 开始时 recallProgress 读回——
+  active 且 30 分钟窗口内(RESUME_WINDOW_MS,自最后一次活动起算)且会话在 server
+  上仍存在 → 复用原会话继续(chain 直接 seed 该会话),否则新会话;两种情况首个
+  提示词均附加"[driver] 中断后的继续"说明(读 CURRENT.md、git status/diff 核对
+  进度,按 phase 给出下一步指引,不重做)。phase 支撑阶段级重入:verify 有持久化
+  run 记录跳过脚本重跑直接判定、off/ondemand 过执行阶段不重跑 executeWhole、
+  review/planfix 有有效 fix.md 直接注入、decompose 先直读 subtasks.md;loop 启动
+  经 peekProgress 把 verify/review 阶段中断但已标 done 的任务置回 in_progress。
+  任务完成 forgetProgress;优雅退出(非网络类 blocked/incomplete)保留记录但清
+  复用资格;网络类 blocked 保持 active 走 30 分钟窗复用;伪任务(PLAN/AUTO)不记忆。
 - opencode server 管理(src/server.ts manage):run/init -p 缺省 spawn `opencode serve`
   并托管生命周期;显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管。
   client 为 Proxy,restart 换实例后既有引用自动生效。网络类会话错误(NETWORK_FAILURE

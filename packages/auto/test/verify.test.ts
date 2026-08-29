@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parse, type Task } from "../src/plan"
-import { resolveVerifyScript, runVerifyScript, VERIFY_TIMEOUT_MS, verifyTmpDir } from "../src/verify"
+import { DEFAULT_VERIFY_IDLE_MS, resolveVerifyScript, runVerifyScript, verifyTmpDir } from "../src/verify"
 
 const task = (verify?: string): Task =>
   parse("PLAN.md", `## T-001: t [pending]\n${verify ? `  - verify: ${verify}\n` : ""}正文。\n`).tasks[0]!
@@ -127,17 +127,39 @@ describe("runVerifyScript", () => {
     expect(run.out).toBe("from-bash\n")
   })
 
-  test("超时 kill,code 记 124", async () => {
+  test("持续无输出超时被看门狗 kill(idle),code 记 124", async () => {
     const script = join(dir, "sleep.sh")
     await Bun.write(script, "#!/usr/bin/env bash\nsleep 30\n")
     await chmod(script, 0o755)
-    const run = await runVerifyScript(dir, script, 200)
+    const run = await runVerifyScript(dir, script, { idleMs: 400, pollMs: 100 })
     expect(run.timedOut).toBe(true)
+    expect(run.timeoutReason).toBe("idle")
     expect(run.code).toBe(124)
     expect(run.ms).toBeLessThan(10_000)
   })
 
-  test("缺省超时为 10 分钟", () => {
-    expect(VERIFY_TIMEOUT_MS).toBe(10 * 60 * 1000)
+  test("输出持续增长即视为有进度,不因总时长被 kill", async () => {
+    const script = join(dir, "slow.sh")
+    await Bun.write(script, "#!/usr/bin/env bash\nfor i in $(seq 1 12); do echo tick-$i; sleep 0.2; done\nexit 0\n")
+    await chmod(script, 0o755)
+    // 总时长 ~2.4s 远超 idleMs 700ms,但每 200ms 有输出 → 存活并正常完成。
+    const run = await runVerifyScript(dir, script, { idleMs: 700, pollMs: 100 })
+    expect(run.timedOut).toBe(false)
+    expect(run.code).toBe(0)
+    expect(run.out).toContain("tick-12")
+  })
+
+  test("绝对时长上限(max)独立于进度信号触发 kill", async () => {
+    const script = join(dir, "spin.sh")
+    await Bun.write(script, "#!/usr/bin/env bash\nwhile true; do echo spin; sleep 0.1; done\n")
+    await chmod(script, 0o755)
+    const run = await runVerifyScript(dir, script, { idleMs: 60_000, maxMs: 800, pollMs: 100 })
+    expect(run.timedOut).toBe(true)
+    expect(run.timeoutReason).toBe("max")
+    expect(run.code).toBe(124)
+  })
+
+  test("缺省无进度窗口为 10 分钟", () => {
+    expect(DEFAULT_VERIFY_IDLE_MS).toBe(10 * 60 * 1000)
   })
 })

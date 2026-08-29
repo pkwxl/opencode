@@ -17,11 +17,13 @@ export const REVIEW_FILE = ".auto/review.md"
 
 // 三段式 verify 的运行信息:driver 执行脚本后交判定会话。out/err 为整写输出的
 // 绝对路径,内容由判定会话直读文件,不经工具输出截断(这正是三段式的目的)。
+// timeoutReason: idle = 持续无输出被看门狗终止;max = 超过绝对时长上限被终止。
 export type VerifyRun = {
   script: string
   code: number
   ms: number
   timedOut: boolean
+  timeoutReason?: "idle" | "max"
   out: string
   err: string
 }
@@ -178,9 +180,17 @@ ${QUESTION_RULE}
 // conclude 重验 — the driver re-executes it and feeds the results back the
 // same way. A non-zero exit code is not an automatic fail. Verdict protocol
 // is VERDICT_FILE + 结论 line (通过|差距|重验).
+// The judge is additionally authorized to distill verify lessons into the
+// verify fields of LATER unfinished tasks in PLAN.md (the driver opens the
+// write window for the session and validates afterwards that nothing else
+// changed): only when the current verification revealed a real flaw in the
+// preset command pattern, and only verify fields — statuses, checklists and
+// everything else remain driver-owned.
 export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun): string {
   // 判定会话可写的新脚本指定路径:重验时 driver 固定改为执行该路径的脚本。
   const replacement = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
+  // 授权更新 verify 字段的对象: 后续未完成且声明了 verify 的任务。
+  const later = plan.tasks.filter((item) => item.id !== task.id && item.status !== "done" && item.verify)
   return [
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
@@ -193,7 +203,11 @@ export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun): strin
 - 脚本: ${run.script}
 - 退出码: ${run.code}
 - 耗时: ${run.ms}ms
-- 超时: ${run.timedOut ? "是(已被 driver 终止)" : "否"}
+- 超时: ${
+      run.timedOut
+        ? `是(已被 driver 终止${run.timeoutReason === "max" ? ":超过绝对时长上限" : ":持续无输出,看门狗判定无进度"})`
+        : "否"
+    }
 - stdout(整写文件): ${run.out}
 - stderr(整写文件): ${run.err}
 
@@ -213,13 +227,21 @@ ${QUESTION_RULE}
    stdout/stderr 整写回传到同一对 out/err 文件,由新的判定会话继续判定;
 5. 退出码非 0 或超时不直接判不通过:先从输出判断实际原因;属于脚本本身问题的
    按上一条重验处理,不要据此误判实现差距;
-6. 只判定不修复:禁止修改任何实现代码与文档,你可写的文件只有判定文件与第 4 条
-   的替换脚本;${STATE_RULE}
-7. 把判定写入 ${VERDICT_FILE}(覆盖写):简述判定依据与你实际执行的检查;若你
+6. verify 经验沉淀(可选): 仅当本次判定发现预设验证命令/脚本存在会重复出现的
+   通病(写法错误、路径不对、环境不适用等),才把 PLAN.md 中后续未完成任务里
+   同样有问题的 verify 字段更新为修正后的命令(保持 \`command: <命令>\` 单行
+   格式),使后续任务不再踩相同的坑;当前验证脚本没有此类问题时不要做任何修改。
+   driver 已在本会话期间临时放开了 PLAN.md 的写权限,会话结束后恢复并校验——
+   仅限 verify 字段,任务状态、检查项与正文一律不改,越权编辑会被整体还原。
+   后续未完成任务的 verify 字段现值:
+${later.length ? later.map((item) => `   - ${item.id}: ${item.verify}`).join("\n") : "   (无)"};
+7. 只判定不修复: 禁止修改任何实现代码与文档,你可写的文件只有判定文件、第 4 条
+   的替换脚本与第 6 条授权的 verify 字段;CURRENT.md 由 driver 独占维护,不得编辑;
+8. 把判定写入 ${VERDICT_FILE}(覆盖写):简述判定依据与你实际执行的检查;若你
    替换了脚本并最终判定通过,附一行 \`verified-command: <新脚本的核心命令>\`
    (独立成行);最后一行必须是 \`结论: 通过\`、\`结论: 差距 <差距描述>\` 或
    \`结论: 重验 <原因>\`;
-8. 写出判定文件后立即结束会话。`,
+9. 写出判定文件后立即结束会话。`,
   ].join("\n\n")
 }
 

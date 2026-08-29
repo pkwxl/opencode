@@ -201,6 +201,26 @@ describe("renderVerifyJudge", () => {
     expect(text).toContain("由 driver 独占维护")
     expect(text).toContain("不要重做")
   })
+
+  test("verify 经验沉淀授权: 仅后续未完成任务的 verify 字段,附现值清单", () => {
+    const text = renderVerifyJudge(plan, task, run)
+    expect(text).toContain("verify 经验沉淀")
+    expect(text).toContain("后续未完成任务")
+    expect(text).toContain("仅限 verify 字段")
+    expect(text).toContain("没有此类问题时不要做任何修改")
+    expect(text).toContain("越权编辑会被整体还原")
+    // 当前任务为 T-002: 现值清单只列后续未完成且带 verify 的 T-003。
+    expect(text).toContain(`后续未完成任务的 verify 字段现值:\n   - T-003: API 返回 200;\n7.`)
+    // CURRENT.md 仍禁改
+    expect(text).toContain("CURRENT.md 由 driver 独占维护,不得编辑")
+  })
+
+  test("运行信息标注看门狗超时原因", () => {
+    const text = renderVerifyJudge(plan, task, { ...run, timeoutReason: "idle" })
+    expect(text).toContain("持续无输出,看门狗判定无进度")
+    const capped = renderVerifyJudge(plan, task, { ...run, timeoutReason: "max" })
+    expect(capped).toContain("超过绝对时长上限")
+  })
 })
 
 describe("renderReview", () => {

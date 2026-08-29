@@ -17,11 +17,25 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt/--review/--early-review/--permission 带值(吞掉下一个 token);
-// --verbose/--interactive/--dryrun/--commit-subtask/--early 是布尔选项,出现即 true,
-// 仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value;
-// --prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值)。
-const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt", "review", "early-review", "permission"])
+// --prompt/--review/--early-review/--permission/--verify-idle/--verify-max 带值
+// (吞掉下一个 token);--verbose/--interactive/--dryrun/--commit-subtask/--early
+// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
+// --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值)。
+const VALUE_FLAGS = new Set([
+  "agent",
+  "server",
+  "wait-answer",
+  "wait-between",
+  "context-limit",
+  "commit",
+  "subtask",
+  "prompt",
+  "review",
+  "early-review",
+  "permission",
+  "verify-idle",
+  "verify-max",
+])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask", "early"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
@@ -125,6 +139,18 @@ if (command === "run") {
     console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
     process.exit(1)
   }
+  // --verify-idle: verify 脚本的无进度判定窗口(两个输出文件持续无增长即终止);
+  // --verify-max: 绝对时长上限(0 = 不设,只要持续有输出就永不限时)。
+  const verifyIdle = parseVerifyIdle(flags.get("verify-idle"))
+  if (verifyIdle === null) {
+    console.error("--verify-idle 取值范围为 1..120(分钟);缺省为 10")
+    process.exit(1)
+  }
+  const verifyMax = parseVerifyMax(flags.get("verify-max"))
+  if (verifyMax === null) {
+    console.error("--verify-max 取值范围为 1..1440(分钟);缺省不设上限")
+    process.exit(1)
+  }
   const code = await runAll(directory, {
     // 缺省使用 init 生成的自主执行契约 agent(.opencode/agent/auto.md);
     // 显式指定时须为目标目录 .opencode/agent/ 下已定义的 agent。
@@ -142,6 +168,8 @@ if (command === "run") {
     early,
     permission,
     interactive,
+    verifyIdleMs: verifyIdle * 60_000,
+    verifyMaxMs: verifyMax > 0 ? verifyMax * 60_000 : undefined,
   })
   process.exit(code)
 }
@@ -201,6 +229,23 @@ function parseReviewLimit(raw: string | undefined): number | null {
   const limit = Number(raw)
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) return null
   return limit
+}
+
+// --verify-idle 缺省/裸选项 = 10(分钟);显式值须为 1..120 整数;返回 null 表示非法。
+function parseVerifyIdle(raw: string | undefined): number | null {
+  if (raw === undefined || raw === "") return 10
+  const minutes = Number(raw)
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 120) return null
+  return minutes
+}
+
+// --verify-max 缺省/裸选项 = 0(不设绝对上限);显式值须为 1..1440 整数(分钟);
+// 返回 null 表示取值非法。
+function parseVerifyMax(raw: string | undefined): number | null {
+  if (raw === undefined || raw === "") return 0
+  const minutes = Number(raw)
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return null
+  return minutes
 }
 
 if (command === "init") {
@@ -286,7 +331,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <prompt-text>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 

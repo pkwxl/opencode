@@ -3,9 +3,10 @@ import { readdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
-import { block, countSubtasks, load, next, resetInProgress } from "./plan"
+import { block, countSubtasks, load, next, resetInProgress, setStatus } from "./plan"
 import { renderDryrun, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
+import { peekProgress } from "./resume"
 import { commitAll, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage, type ServerHandle } from "./server"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -26,8 +27,10 @@ const VERIFY_PRINCIPLE = `<!-- opencode-auto:verify:start -->
 验证原则: 任务级验证脚本与验证命令一律由 driver 在会话外执行,任何会话不要直接
 运行它们来下验收结论;验收标准写在任务的 verify 字段。若会话认为验证脚本本身有
 问题,可编写新的验证脚本替换指定脚本(tmp/verify.sh,目标目录下 driver 管理的
-工作目录),由 driver 重新执行并把输出回传给独立判定会话。任务描述与项目规范
-不要出现与此相违背的指示(可用 opencode-auto check 检查)。
+工作目录),由 driver 重新执行并把输出回传给独立判定会话。判定会话另可在 driver
+授权下更新 PLAN.md 中后续未完成任务的 verify 字段(把验证经验沉淀到后续任务,
+仅限 verify 字段),除此之外 PLAN.md 与 CURRENT.md 由 driver 独占维护。任务描述
+与项目规范不要出现与此相违背的指示(可用 opencode-auto check 检查)。
 <!-- opencode-auto:verify:end -->`
 
 // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块与验证原则块各自独立判断、只追加,
@@ -93,6 +96,10 @@ export async function runAll(
     // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
     // 调用方已把 verbose 记录级别打开,前台明细静默)。
     interactive?: boolean
+    // verify 脚本看门狗: 持续无输出的判定窗口与绝对时长上限(毫秒),透传给
+    // runner 的 runVerifyScript(--verify-idle / --verify-max 以分钟设定)。
+    verifyIdleMs?: number
+    verifyMaxMs?: number
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -175,9 +182,21 @@ export async function runAll(
     let ran = 0
     // 中断恢复: 上次运行被 kill/Ctrl+C 可能遗留 in_progress 标记(无会话在跑),
     // 重置为 pending;主循环经 next() 照样续跑,attempts 保留。距中断较近时链上
-    // 会话的记忆(.auto/session.json)使 runTask 复用原会话继续。
+    // 会话的进度记录(.auto/progress.json)使 runTask 复用原会话继续。
     const stale = await resetInProgress(path)
     if (stale.length) log(`↻ 恢复中断状态: ${stale.join(", ")} 从 in_progress 重置为 pending`)
+    // 精确恢复: 进度记录在验收(verify,且 --review 启用)或质量审核(review)阶段
+    // 中断的任务,验收通过时已被标 done——next() 会跳过它,审核永不补跑;置回
+    // in_progress 使主循环重入该任务,runTask 依记录的阶段直接续跑。
+    const record = await peekProgress(directory)
+    if (record?.phase && (record.phase.kind === "review" || (record.phase.kind === "verify" && (opts.review ?? 0) > 0))) {
+      const fresh = await load(path)
+      const pending = fresh.tasks.find((task) => task.id === record.task)
+      if (pending?.status === "done") {
+        await setStatus(path, pending.id, "in_progress")
+        log(`↻ ${pending.id} 上次中断于${record.phase.kind === "review" ? "质量审核" : "任务级验收"}阶段(任务已标 done),置回 in_progress 补跑`)
+      }
+    }
     for (;;) {
       const plan = await load(path)
       const task = next(plan)
@@ -225,6 +244,8 @@ export async function runAll(
         permission: opts.permission,
         interactive: repl,
         server,
+        verifyIdleMs: opts.verifyIdleMs,
+        verifyMaxMs: opts.verifyMaxMs,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)

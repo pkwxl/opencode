@@ -291,6 +291,32 @@ opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后
 | 审核会话 | renderReview 两形态维度 3 统一为静态审核(脚本内容/判定记录对照验收标准),不执行验证脚本或验证命令;early 额外告知脚本并行执行、以只读为主 |
 | 原则下沉 | init 向 AGENTS.md 追加验证原则块(独立标记 `opencode-auto:verify:start/end`,幂等、与指针块互不影响)、PLAN.md 模板与 renderInit 提示词写明"任务描述不要求执行者亲自运行验证命令/脚本";`opencode-auto check` 启发式扫描 AGENTS.md/PLAN.md 中与原则相违背的描述,命中退出码 1(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算) |
 
+## H. 中断恢复、看门狗与判定会话 verify 字段授权(后续修订,以此为准)
+
+> 本节修订会话记忆、verify 超时与判定会话写权限的约定;与其冲突的旧文
+> (固定 10 分钟超时、`.auto/session.json` 仅记会话 ID、状态文件绝对只读)
+> 以本节为准。
+
+| 决策点 | 结论 |
+| --- | --- |
+| 进度记录 | `.auto/progress.json` 取代 session.json:`{task, session?, at, active, phase}`;driver 在每个阶段边界写入(active=false 总结态),执行链会话运行期间由 attempt 刷新为 active=true(半途态);旁路一次性会话(判定/审核/脚本生成/修复规划)不写,修复"旁路会话污染执行链记忆"缺陷;旧版 session.json 兼容读取(视为半途会话、无阶段) |
+| phase 阶段 | decompose / whole / subtasks / wrapup / verify{stage: generate\|exec\|judge, round, rechecks, replaced, run?, audit?} / review{round, stage: audit\|planfix\|fixrun} |
+| 会话内恢复 | active 且 ≤30 分钟(RESUME_WINDOW_MS,自最后一次活动起算)且会话在 server 上存在 → 复用原会话;否则新会话;两种情况首个提示词均附"[driver] 中断后的继续"(按 phase 给出下一步指引) |
+| 阶段级重入 | verify 有持久化 run → 跳过脚本重跑直接判定(early 缺 audit 时只补跑审核);off/ondemand 已过执行阶段不重跑 executeWhole;review/planfix 且 fix.md 有效直接注入;verify/review 阶段已标 done 的任务由 loop 置回 in_progress 补跑;decompose 先直读 subtasks.md |
+| 优雅退出 | 非完成结局(阻塞/回退 pending)在 CURRENT.md 写"中断备注"(原因/阶段/恢复方式)并保留文件,记录转总结态(不复用会话);任务完成才删除 CURRENT.md 与记录;网络类 blocked(会话错误重试耗尽)保持 active 记录(会话半途无法总结) |
+| 链内复用间隔 | 复用条件在 pct<50 && used<contextLimit 之上增加"距上一会话结束 ≤5 分钟"(REUSE_IDLE_MS);重启恢复的 30 分钟窗不受此限(复用决策已由该窗做出,chain.at 重置为当前时刻) |
+| verify 看门狗 | 固定 10 分钟超时废除:轮询(默认 5s)verify.out/verify.err 文件大小,任一增长即重置 idle 计时;持续 `--verify-idle`(缺省 10 分钟,1..120)无增长才 kill(退出码 124,timeoutReason=idle);`--verify-max`(缺省不设,1..1440)为绝对上限兜底(timeoutReason=max)。只要持续有输出,运行时长不受限 |
+| 判定会话写授权 | 判定会话期间临时 allowWrite(PLAN.md)、结束后 reprotect 并校验:解析失败或任务集合/状态/attempts/正文任一变化 → 恢复会话前快照并警告(越权编辑整体还原);提示词授权**仅更新后续未完成(pending/blocked)任务的 verify 字段**(保持 `command: ` 单行格式),当前脚本无通病时不做任何修改;CURRENT.md 不放开(纯镜像,写了会被覆盖) |
+| 原则块措辞 | AGENTS.md 验证原则块(init 追加)补充判定会话 verify 字段授权例外;STATE_RULE 对判定会话改为 judge 专属表述 |
+
+### H.1 已知取舍
+
+- verify 修复轮(判定差距 → renderFix 会话)进行中被中断的,没有单独阶段标记:
+  恢复后从脚本执行重走一轮判定(可能重复一次差距反馈,收敛不受影响);
+- review/audit 阶段恢复时,early 已得出的审核结论若尚未被消费即中断,恢复后
+  重新开审核会话(不做结论持久化复用,窗口极窄、代价一次会话);
+- AGENTS.md 验证原则块的措辞更新只对新 init 目录生效(标记块幂等追加、不回写)。
+
 ## E. 测试与验证
 
 - 每任务 verify:`bun typecheck` + 对应测试文件(见 PLAN.md 各任务 verify 字段);
