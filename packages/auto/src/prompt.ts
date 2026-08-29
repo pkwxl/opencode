@@ -1,4 +1,6 @@
+import { dirname, join } from "node:path"
 import type { Plan, Task } from "./plan"
+import { verifyTmpDir } from "./verify"
 
 // --commit 四档: subtask(每子任务提交,缺省)/ task(仅任务收尾提交)/
 // once(整个计划完成后提交一次)/ none(从不提交)。
@@ -228,7 +230,12 @@ ${QUESTION_RULE}
 // The audit report goes to docs/<id>.audit.md (final: docs/final-audit.md)
 // and the conclusion to REVIEW_FILE with the same 结论-line protocol as
 // VERDICT_FILE.
-export function renderReview(plan: Plan, task: Task, opts: { final: boolean }): string {
+// --early: the driver executes the verify script concurrently with this
+// session (design doc F.3) — the prompt says so, keeps the session to
+// read-only checks, and turns dimension 3 into a static review of the
+// script content (interpreting run results is the judge session's job).
+export function renderReview(plan: Plan, task: Task, opts: { final: boolean; early?: boolean }): string {
+  const script = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
   return [
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
@@ -241,7 +248,19 @@ export function renderReview(plan: Plan, task: Task, opts: { final: boolean }): 
 审核维度:
 1. 忠实性: 实现与任务描述、设计文档(docs/)的要求对齐,没有偷换或遗漏要求;
 2. 正确性: 逻辑与边界情形处理正确,无明显缺陷或回归风险;
-3. 验证过程: verify 脚本与判定有效覆盖任务的验收标准,没有漏验或形同虚设的检查。`,
+3. 验证过程: ${
+      opts.early
+        ? `直读 verify 脚本 ${script} 的内容,对照任务验收标准做静态审核,判断它是否
+   有效覆盖验收标准、没有漏验或形同虚设的检查;脚本运行结果的解读属独立判定会话
+   的职责,你不要执行该脚本。`
+        : "verify 脚本与判定有效覆盖任务的验收标准,没有漏验或形同虚设的检查。"
+    }`,
+    ...(opts.early
+      ? [
+          `driver 正在与本会话并行执行该任务的 verify 脚本(它正在当前目录运行):避免执行
+可能与之冲突的命令(如并发跑测试、构建),检查以读文件、git log 等只读方式为主。`,
+        ]
+      : []),
     opts.final
       ? `本次为最终审核: 通读 PLAN.md 全部任务、docs/ 下各报告与设计文档、整体 git 历史,
 对整个计划的设计、实现与文档做全面审核,不受单任务范围限制。`

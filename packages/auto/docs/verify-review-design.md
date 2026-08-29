@@ -3,6 +3,7 @@
 > 本文档是 PLAN.md 第三阶段(T-017..T-021)的唯一设计基准:分解、执行、审核会话均以
 > 本文为准。包内 AGENTS.md 中与本文冲突的旧约定(如"driver 不亲自执行任何 verify
 > 命令")将在 T-021 统一改写;此前任务实现时不要按旧约定"纠正"代码。
+> 第四阶段(T-022..T-024,--early 并行审核)以本文 F 节为唯一设计基准。
 
 ## 背景与动机
 
@@ -193,6 +194,87 @@ runTask:
   重生成)。
 - **dogfood 顺序**:执行 T-017..T-021 期间运行中的 driver 仍是旧版(模块已在进程
   内加载),旧 verify 语义贯穿本阶段执行,符合预期;新行为自下一次 run 生效。
+
+## F. --early 并行审核(T-022..T-024)
+
+### F.1 动机与已确认决策
+
+verify 的脚本执行阶段(`runVerifyScript`,超时上限 10 分钟)是纯本地进程,不含任何
+opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后。`--early` 把审核
+会话挪进脚本执行窗口并行,节省约一个审核会话的墙钟时间(脚本越长收益越大;短脚本
+场景退化为串行,不劣于现状)。
+
+| 决策点 | 结论 |
+| --- | --- |
+| 并行窗口 | 仅 driver 执行 verify 脚本的阶段;窗口内 verify 侧零会话 |
+| 全局不变量 | **任意时刻至多一个 LLM 会话**(公理,记入本节;任何并行化扩展前必须先修订本节) |
+| 窗口内代码改动 | 零:审核会话只审不改(既有契约);review 差距只出修复计划不执行修复 |
+| worktree | 不需要,舍弃(无代码改动并行 → 无状态分叉、无合并回主线、无第二 server) |
+| 修复轮审核 | 每次脚本执行(含修复轮重跑)都重开一次新审核;通过时的审核与通过代码严格同步,**不再二次串行审核** |
+| audit 阻塞传播 | 窗口 join 得到 blocked 即从 verifyTask 返回 blocked(脚本输出已落盘,重跑语义与既有 blocked 一致) |
+
+### F.2 流水线
+
+```
+每轮(round):
+  逐检查项子任务会话 → 收尾会话                          (不变)
+  verifyTask:
+    resolve 脚本(existing/wrapped;generate 先开生成会话)   (不变)
+    ── 启动审核会话(旁路一次性 chain, renderReview early 措辞) ──┐
+    driver 执行脚本(runVerifyScript)                            │ 并行窗口
+    ── join 审核会话 → audit 结论(blocked 则立即上抛)          ─┘
+    判定会话(renderVerifyJudge) → VERDICT_FILE                (不变)
+    通过 → markDone,携带 audit 结论返回 {type:"done", audit}
+    差距 → renderFix 修复 → 收尾 → 重新执行脚本 ∥ 重开新审核 → 再判定
+    off 模式差距 / 修复轮耗尽 → 既有语义不变
+  结论合并(runTask 外层消费 verifyTask 带回的 audit):
+    verify 通过 + audit 通过   → completed
+    verify 通过 + audit 差距   → 既有 review 差距流程(off→pending;超轮→blocked;
+                                 否则 planReviewFix → appendSubtasks → 下一轮)
+    audit 阻塞                → blocked(见上表)
+    verify 差距/off/耗尽       → 既有语义;audit 报告仍留 docs/ 供人工参考
+```
+
+时序保证(全局单会话不变量的两个落点):
+
+1. **启动侧**:generate 分支的脚本生成会话结束后才启动审核(existing/wrapped 无前置
+   会话,直接与脚本并行启动);
+2. **汇合侧**:脚本执行完毕先 join 审核,再开判定会话——审核慢于短脚本时判定等待,
+   不得重叠。
+
+### F.3 审核会话适配(renderReview early 模式)
+
+- 提示词告知 verify 脚本正在同目录执行:避免运行可能与之冲突的命令(并发跑测试等),
+  以读文件 / git log 为主;
+- 维度 3(验证过程有效性)按脚本内容与验收标准做**静态审核**(脚本文件在执行前已存在
+  于 `/tmp/<基名>/verify.sh`),运行结果的解读属判定会话职责;
+- final 判定、结论协议(REVIEW_FILE)、产物重试策略(requireArtifact)全部不变。
+
+### F.4 选项语义
+
+- `--review N --early`:组合模式;`--early` 为布尔修饰,要求 review 已启用,单独出现
+  为用法错误(退出码 1);
+- `--early-review [n]`:快捷糖,等价 `--review n --early`;裸选项 3,显式值 1..10
+  (复用 parseReviewLimit 校验);与 `--review` 同时出现为用法错误(消除歧义);
+- 非 early(`--review N` 单用)行为完全不变:审核仍在整个 verify 通过后串行执行;
+- `--subtask off` / `--commit once|none` / `--interactive` 无额外约束(无 worktree
+  依赖);`--dryrun` 不达 verify,early 自然无效。
+
+### F.5 runner 接口约定
+
+- `verifyTask` 增加可选挂点参数(审核 thunk):`runVerifyScript` 前启动、判定会话前
+  join;每次脚本执行(含修复轮)重开;最后一次 audit 随 done 返回;
+- `verifyTask` 返回值扩展:`{ type: "done"; audit?: Verdict }`(非 early 模式不带);
+- `runTask` 外层:early 时不再独立调用 reviewTask,消费 verifyTask 带回的 audit;
+  非 early 走原路径;轮数计数、off 模式、FIX_ROUNDS 语义均不变。
+
+### F.6 风险与边界
+
+- 短脚本场景审核慢于脚本时判定会话等待,极端下 early 收益为零,不劣于串行;
+- 审核会话若补跑只读命令可能与脚本争用环境(如测试缓存):F.3 提示词已约束以读为主;
+- 中断恢复零新增:遗留 `.auto/review.md` 与 audit 报告由 requireArtifact 的 reset()
+  在下次运行清理,无新增持久化并行状态;
+- `--interactive`:窗口内唯一会话为审核会话,attach 无歧义。
 
 ## E. 测试与验证
 

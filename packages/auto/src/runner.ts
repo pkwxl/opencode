@@ -69,6 +69,9 @@ type Opts = {
   contextLimit?: number
   // --review 质量审核轮数上限(0=不启用);CLI 接线在 T-020。
   review?: number
+  // --early: 审核会话挪进 verify 脚本执行窗口并行(需 review>0,设计文档 F 节),
+  // 经 verifyTask 审核挂点实现。
+  early?: boolean
   // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
   // ask 的人工等待也改由它接收(语义不变)。
   interactive?: Interactive
@@ -120,6 +123,11 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // reverts the task to pending like a verify gap; otherwise the driver plans
 // fix checklist items in a side session, appends them into PLAN.md and runs
 // the whole round again (up to n fix rounds, then blocked).
+// --early moves that audit session into the verify-script execution window
+// (design doc F): verifyTask starts it right before executing the script,
+// joins it before the judge session and returns its verdict together with
+// the done result, so the audit below consumes it instead of opening a
+// separate serial audit session.
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW and its used
 // tokens below contextLimit (default 64k), otherwise a fresh session is created.
@@ -155,6 +163,9 @@ export async function runTask(
   await writeCurrent(plan.path, task, mode !== "auto")
 
   const limit = opts.review ?? 0
+  // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
+  // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
+  const early = opts.early && limit > 0
   for (let round = 0; ; ) {
     // auto 模式此处执行分解出的检查项(含 review 注入的 fix 检查项);
     // off/ondemand 模式只有正文中人工编写的检查项。
@@ -172,7 +183,8 @@ export async function runTask(
     if (result.type === "blocked") return result
     // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
     // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
-    const verdict = await verifyTask(client, plan, task, opts, chain)
+    // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
+    const verdict = await verifyTask(client, plan, task, opts, chain, early ? () => reviewTask(client, plan, task, opts, true) : undefined)
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "gap") {
       await setStatus(plan.path, task.id, "pending")
@@ -180,7 +192,9 @@ export async function runTask(
     }
     if (limit <= 0) return { type: "completed" }
 
-    const audit = await reviewTask(client, plan, task, opts)
+    // early 的审核结论已随 verifyTask 带回(挂点在每次脚本执行前重开,done 必有
+    // 结论);非 early 在验收通过后串行开审核会话。
+    const audit = verdict.audit ?? (await reviewTask(client, plan, task, opts))
     if (audit.type === "blocked") return audit
     if (audit.type === "pass") return { type: "completed" }
 
@@ -378,22 +392,27 @@ async function runSubtask(
 // re-judged) until it passes or FIX_ROUNDS is exhausted; off mode skips fix
 // rounds and returns the gap to the caller (task reverts to pending).
 // Each review round re-enters verifyTask with a fresh fix-round budget.
+// --early audit hook (设计文档 F.5): when given, a fresh audit session starts
+// right before each script execution (after the generate session, if any) and
+// joins before the judge session — a blocked audit propagates immediately;
+// the last audit verdict rides back with the done result.
 async function verifyTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
   opts: Opts,
   chain: SessionChain,
-): Promise<{ type: "done" } | { type: "gap"; gap: string } | (Outcome & { type: "blocked" })> {
+  audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
+): Promise<{ type: "done"; audit?: Verdict } | { type: "gap"; gap: string } | (Outcome & { type: "blocked" })> {
   const mode = opts.subtask ?? "auto"
   for (let round = 0; ; ) {
-    const execution = await executeVerifyScript(client, plan, task, opts)
+    const execution = await executeVerifyScript(client, plan, task, opts, audit)
     if (execution.type === "blocked") return execution
     const verdict = await judge(client, plan, task, opts, execution.run)
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "pass") {
       await markDone(plan.path, task.id, verdict.command ?? verifyCommand(task) ?? execution.run.script)
-      return { type: "done" }
+      return { type: "done", audit: execution.audit }
     }
     // off 模式不做修复重跑: 差距交回调用方(回退 pending,等人工改进后重试)。
     if (mode === "off") return { type: "gap", gap: verdict.gap }
@@ -417,12 +436,16 @@ type Verdict = { type: "pass"; command?: string } | { type: "gap"; gap: string }
 // /tmp/<基名>/verify.sh,上一轮(或修复前)生成的脚本存在则复用,V1 不自动重新
 // 生成),随后 runVerifyScript 在目标目录执行并 log 一行结果(退出码、耗时、
 // out/err 路径)。退出码非 0 不在此判定——判定权在判定会话。
+// --early 审核挂点(F.2 时序保证): generate 分支的脚本生成会话结束后才启动
+// 审核会话,与脚本执行并行;脚本执行完毕先 join 审核(blocked 立即上抛),随后
+// 才进入判定会话。每次脚本执行(含修复轮重跑)重开一次新审核。
 async function executeVerifyScript(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
   opts: Opts,
-): Promise<{ type: "ok"; run: VerifyRun } | (Outcome & { type: "blocked" })> {
+  audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
+): Promise<{ type: "ok"; run: VerifyRun; audit?: Verdict } | (Outcome & { type: "blocked" })> {
   const dir = opts.dir ?? dirname(plan.path)
   const tmp = verifyTmpDir(dir)
   // generate 分支的脚本约定名:上一次(或上轮修复前)生成的脚本存在则复用。
@@ -433,13 +456,16 @@ async function executeVerifyScript(
     if (failed) return failed
   }
   const path = resolved.kind === "generate" ? script : resolved.script
+  const auditing = audit?.()
   const run = await runVerifyScript(dir, path)
   const outPath = join(tmp, "verify.out")
   const errPath = join(tmp, "verify.err")
   log(
     `  ⚙ verify 脚本退出码 ${run.code}${run.timedOut ? "(超时终止)" : ""},耗时 ${run.ms}ms,输出: ${outPath} / ${errPath}`,
   )
-  return { type: "ok", run: { script: path, code: run.code, ms: run.ms, timedOut: run.timedOut, out: outPath, err: errPath } }
+  const audited = await auditing
+  if (audited?.type === "blocked") return audited
+  return { type: "ok", run: { script: path, code: run.code, ms: run.ms, timedOut: run.timedOut, out: outPath, err: errPath }, audit: audited }
 }
 
 // Verify 第三段: 独立判定旁路会话(一次性 chain,不进任务执行链),注入运行信息,
@@ -485,19 +511,23 @@ async function generateScript(
 // REVIEW_FILE(协议同 VERDICT_FILE,复用 requireArtifact/parseVerdict 的重试
 // 策略)。final = 当前任务之后全部任务已 done(或无后继),即本任务是最后一
 // 个任务,审核升级为全计划终审。
+// --early 下同一会话经挂点在 verify 脚本执行窗口并行启动(F.3): 提示词用
+// early 措辞(静态审核脚本内容、以只读检查为主),横幅随窗口启动打印。
 async function reviewTask(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
   opts: Opts,
+  early = false,
 ): Promise<Verdict | (Outcome & { type: "blocked" })> {
-  // 重新加载: 当前任务刚被 verifyTask 标 done,计划状态已与前次加载不同。
+  // 重新加载计划判定 final: 串行路径下当前任务刚被 verifyTask 标 done;early
+  // 窗口下审核先于 markDone 启动,但 final 只看后继任务,两者结论一致。
   const current = await load(plan.path)
   const index = current.tasks.findIndex((item) => item.id === task.id)
   const final = current.tasks.slice(index + 1).every((item) => item.status === "done")
-  log(`⚖ ${task.id} ${final ? "最终质量审核(全计划)" : "质量审核"}`)
+  log(`⚖ ${task.id} ${final ? "最终质量审核(全计划)" : "质量审核"}${early ? "(与 verify 脚本并行)" : ""}`)
   const file = join(dirname(plan.path), REVIEW_FILE)
-  return requireArtifact(client, task, renderReview(current, task, { final }), opts, {
+  return requireArtifact(client, task, renderReview(current, task, { final, early }), opts, {
     kind: "质量审核",
     artifact: `有效结论文件 ${REVIEW_FILE}`,
     detail: "缺失或无结论行",

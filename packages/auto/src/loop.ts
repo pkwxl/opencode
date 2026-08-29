@@ -49,6 +49,9 @@ export async function runAll(
     contextLimit?: number
     // --review 质量审核轮数上限(0 = 不启用),透传给 runTask。
     review?: number
+    // --early: 审核会话与 driver 执行 verify 脚本并行(需 review 已启用),透传给
+    // runTask;窗口时序见设计文档 F 节。
+    early?: boolean
     // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
     // 调用方已把 verbose 记录级别打开,前台明细静默)。
     interactive?: boolean
@@ -172,6 +175,7 @@ export async function runAll(
         subtask: opts.subtask,
         contextLimit: opts.contextLimit,
         review: opts.review,
+        early: opts.early,
         interactive: repl,
       })
       if (outcome.type === "blocked") {

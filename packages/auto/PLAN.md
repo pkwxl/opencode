@@ -285,6 +285,47 @@ prompt/runner/plan/index 条目更新；行为约定节整体改写 verify 条�
 
 ---
 
+## 第四阶段：--early 并行审核
+
+背景：verify 脚本执行阶段（runVerifyScript）是纯本地进程、不含任何 opencode 会话，把
+--review 的审核会话挪入该窗口并行执行，可节省约一个审核会话的墙钟时间；全局保持
+"任意时刻至多一个 LLM 会话"不变量，窗口内零代码改动（审核只审不改、差距只出计划），
+因此无需 worktree。设计基准为 docs/verify-review-design.md F 节（唯一基准，含已确认
+决策、流水线伪代码与接口约定）。
+
+## T-022: --early 选项解析与审核提示词适配 [done]
+  - verify: command: bun typecheck && bun test
+  - verified: bun typecheck && bun test
+index.ts 新增 --early 布尔选项（BOOLEAN_FLAGS）与 --early-review 值选项（VALUE_FLAGS，
+快捷糖，等价 --review n --early；裸选项 3、显式值 1..10 复用 parseReviewLimit 校验）；
+--early 单独出现（未启用 review）或 --early-review 与 --review 同时出现均为用法错误
+退出码 1；用法文本更新。loop.ts 把 early 透传至 runTask 的 opts。prompt.ts renderReview
+增加 early 模式措辞（依 F.3：告知 verify 脚本正在同目录执行、避免可能冲突的命令以
+读文件/git log 为主；维度 3 改为按 /tmp/<基名>/verify.sh 脚本内容与验收标准做静态
+审核，运行结果解读属判定会话）。test/prompt.test.ts 补新措辞断言。
+
+## T-023: runner 并行窗口与结论合并 [done]
+  - verify: command: bun typecheck && bun test
+  - verified: bun typecheck && bun test
+按设计文档 F.2/F.5 改造 src/runner.ts：verifyTask 增加可选审核挂点参数——
+runVerifyScript 前启动审核会话（旁路一次性 chain，重用 reviewTask）、判定会话前 join
+（blocked 立即上抛）；generate 分支的脚本生成会话结束后才启动审核；每次脚本执行
+（含修复轮重跑）重开一次新审核；返回值扩展为 { type: "done"; audit?: Verdict }。
+runTask 外层：early 且 review>0 时经挂点并行审核、消费带回的 audit 结论（通过 →
+completed；差距 → 既有 review 差距流程：off 模式 pending、超轮 blocked、否则
+planReviewFix → appendSubtasks → 下一轮），不再独立调用 reviewTask；非 early 走原
+路径；轮数计数、off 模式、FIX_ROUNDS 语义均不变。横幅与日志风格与现有一致（⚖ 审核
+横幅在窗口启动时打印）。
+
+## T-024: 文档同步 README 与 AGENTS.md [done]
+  - verify: 通读更新后的 README.md 与包内 AGENTS.md，与 src/ 实现逐项对照一致：选项表含 --early 与 --early-review [1-10]（语义、互斥与用法错误行为）、并行窗口描述（审核会话与 driver 脚本执行并行、join 后才开判定会话、修复轮重开审核）、"任意时刻至多一个 LLM 会话"不变量，且无 worktree 相关残留表述
+同步两份文档与实现：README.md（run 选项表、"执行流水线"审核段改写为并行窗口描述、
+全局单会话不变量说明）。包内 AGENTS.md（结构节条目核对；行为约定节 --review 条目
+补充 early 两形态与窗口时序保证）。templates/ 与 PLAN.md 头部注释核对（预计不变）。
+docs/verify-review-design.md F 节如实现中有偏差一并修订。
+
+---
+
 ## 备注
 
 - e2e 需要可用的 provider 凭证；CI 无凭证时 T-009 允许 mock provider 或用

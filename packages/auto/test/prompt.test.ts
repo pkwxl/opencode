@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
 import { parse } from "../src/plan"
+import { verifyTmpDir } from "../src/verify"
 import {
   renderCommitAll,
   renderDecompose,
@@ -214,6 +217,30 @@ describe("renderReview", () => {
     expect(text).toContain("整个计划的设计、实现与文档")
     expect(text).not.toContain("docs/T-002.audit.md")
     expect(text).not.toContain("禁止审核其他任务的代码")
+  })
+
+  test("early: 告知 verify 脚本并行执行、只读为主,维度 3 静态审核脚本内容", () => {
+    const script = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
+    const text = renderReview(plan, task, { final: false, early: true })
+    expect(text).toContain("并行执行该任务的 verify 脚本")
+    expect(text).toContain("避免执行")
+    expect(text).toContain("只读方式为主")
+    expect(text).toContain(script)
+    expect(text).toContain("静态审核")
+    expect(text).toContain("运行结果的解读属独立判定会话")
+    expect(text).toContain("你不要执行该脚本")
+    // 非 early 不带并行窗口措辞
+    const plain = renderReview(plan, task, { final: false })
+    expect(plain).not.toContain("并行")
+    expect(plain).not.toContain("静态审核")
+    expect(plain).not.toContain(script)
+  })
+
+  test("early 与 final 可组合: 终审措辞与并行窗口措辞并存", () => {
+    const text = renderReview(plan, task, { final: true, early: true })
+    expect(text).toContain("docs/final-audit.md")
+    expect(text).toContain("最终审核")
+    expect(text).toContain("并行执行该任务的 verify 脚本")
   })
 })
 

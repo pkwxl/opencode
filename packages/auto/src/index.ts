@@ -16,11 +16,12 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt 带值(吞掉下一个 token);--verbose/--interactive/--dryrun/--commit-subtask
-// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持 --flag=value;
+// --prompt/--review/--early-review 带值(吞掉下一个 token);--verbose/--interactive/
+// --dryrun/--commit-subtask/--early 是布尔选项,出现即 true,仅当紧随字面量
+// true/false 时才吞掉它。均支持 --flag=value;
 // --prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值)。
-const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt", "review"])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask"])
+const VALUE_FLAGS = new Set(["agent", "server", "wait-answer", "wait-between", "context-limit", "commit", "subtask", "prompt", "review", "early-review"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask", "early"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -100,6 +101,24 @@ if (command === "run") {
     console.error("--review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
     process.exit(1)
   }
+  // --early-review [n] 是 --review n --early 的快捷糖;与 --review 同时出现为
+  // 用法错误(消除歧义)。
+  const earlyReview = parseReviewLimit(flags.get("early-review"))
+  if (earlyReview === null) {
+    console.error("--early-review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
+    process.exit(1)
+  }
+  if (flags.has("review") && flags.has("early-review")) {
+    console.error("--early-review 是 --review n --early 的快捷糖,不要与 --review 同时使用")
+    process.exit(1)
+  }
+  // --early: 把 --review 的审核会话挪进 verify 脚本执行窗口并行(设计文档 F 节);
+  // 是布尔修饰,review 未启用时单独出现为用法错误。
+  const early = (flags.has("early") && flags.get("early") !== "false") || earlyReview > 0
+  if (early && review <= 0 && earlyReview <= 0) {
+    console.error("--early 需搭配 --review 一起使用(或改用快捷糖 --early-review)")
+    process.exit(1)
+  }
   const code = await runAll(directory, {
     agent: flags.get("agent"),
     server: flags.get("server"),
@@ -111,7 +130,8 @@ if (command === "run") {
     subtask,
     dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
     contextLimit: contextLimit * 1000,
-    review,
+    review: earlyReview > 0 ? earlyReview : review,
+    early,
     interactive,
   })
   process.exit(code)
@@ -157,8 +177,8 @@ function parseContextLimit(raw: string | undefined): number | null {
   return limit
 }
 
-// --review 缺省(无此选项)= 0(不启用质量审核);裸选项 = 3;显式值须为 1..10
-// 整数;返回 null 表示取值非法。
+// --review/--early-review 缺省(无此选项)= 0(不启用质量审核);裸选项 = 3;显式值
+// 须为 1..10 整数;返回 null 表示取值非法。
 function parseReviewLimit(raw: string | undefined): number | null {
   if (raw === undefined) return 0
   if (raw === "") return 3
@@ -226,7 +246,7 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <prompt-text>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--dryrun [true|false]] [--context-limit [n]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--dryrun [true|false]] [--context-limit [n]]
   opencode-auto status [dir]
 
 退出码: 0 全部完成,1 用法/环境错误,2 阻塞/未完成等待人工介入,130 被连续两次 Ctrl+C 强制终止`)
