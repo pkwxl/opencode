@@ -15,6 +15,7 @@ README.md。本文件只保留格式契约与当前阶段任务。
 ## T-NNN: 任务标题 [pending|in_progress|blocked|done]
   - verify: command: <验收命令>   # driver 包装为脚本亲自执行;也可为自然语言,由旁路脚本生成会话翻译成可执行脚本
   - verified: <执行通过的命令>    # driver 验证通过后写入,作为高可信完成记录
+  - final: <stage>@<round>      # driver 写入的终审阶段标记(--final-review 追加的 T-F 任务,stage ∈ audit|remediate|validate|finalize)
   - blocked-at: <date>          # blocked 时由 driver 写入
   - question: "<上次卡住的问题>"  # blocked 时由 driver 写入
   - answer: "<人工解答>"         # 可选;阻塞后直接重新运行即续跑,无需填写
@@ -41,7 +42,7 @@ driver 状态机：`pending → in_progress → done | blocked`；`blocked` → 
 Audit、审计轮上限熔断）。完整设计见 docs/mode-final-review-design.md（唯一设计基准，含
 已确认决策、状态机与恢复规则、文件级改动清单；与其冲突的旧表述以该文档为准）。
 
-## T-025: 模式层 src/mode.ts 与 CLI 接线 [pending]
+## T-025: 模式层 src/mode.ts 与 CLI 接线 [done]
   - verify: command: bun typecheck && bun test
 按设计文档 A 节实现提示词级模式层（V1 仅注册 migrate；optimize/implement/test 为既定
 扩展名，未注册即不可用）：
@@ -61,7 +62,7 @@ Audit、审计轮上限熔断）。完整设计见 docs/mode-final-review-design
   补模式注入断言（renderInit 出现 migrate 导语、执行类模板出现 exec 段）。
   遵循包内 AGENTS.md 代码风格（中文注释、Bun API 优先、避免 any）。
 
-## T-026: 终审基础设施 plan.ts 与 prompt.ts [pending]
+## T-026: 终审基础设施 plan.ts 与 prompt.ts [done]
   - verify: command: bun typecheck && bun test
 按设计文档 B.3/B.4 实现终审闭环的数据与提示词基础（依赖 T-025）：
 - plan.ts：Task 解析新增 final 字段（FIELD 行通用解析，edit 重写时随全部字段保留）；
@@ -77,7 +78,7 @@ Audit、审计轮上限熔断）。完整设计见 docs/mode-final-review-design
 - test/prompt.test.ts：renderFinalTask 关键断言（提案路径、阶段侧重注入、硬性要求句式、
   verify 命令约束语）。
 
-## T-027: 终审状态机 src/final.ts 与 loop/runner 接线 [pending]
+## T-027: 终审状态机 src/final.ts 与 loop/runner 接线 [done]
   - verify: command: bun typecheck && bun test
 按设计文档 B.1/B.2/B.5/B.6/C 节实现终审闭环状态机与 CLI（依赖 T-026）：
 - index.ts：--final-review 进 VALUE_FLAGS，parseFinalReviewLimit 镜像 parseReviewLimit
@@ -98,7 +99,7 @@ Audit、审计轮上限熔断）。完整设计见 docs/mode-final-review-design
 - 新增 test/final.test.ts（路由表：策略 无/重构/修补、结论 通过/差距、熔断与轮计数；
   提案文件幂等追加；状态重建各分支）——纯函数 + fixture 文件，不依赖 server 与网络。
 
-## T-028: 终审文档同步与收尾 [pending]
+## T-028: 终审文档同步与收尾 [done]
   - verify: command: bun typecheck && bun test
 按设计文档 D 节 P3 收尾（依赖 T-027）：
 - test/e2e.test.ts：补 CLI 解析用例（镜像既有风格）——-m 未注册名退出码 1、

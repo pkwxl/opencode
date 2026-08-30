@@ -1,5 +1,6 @@
 import { rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
+import type { FinalStage } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 
 export const STATUSES = ["pending", "in_progress", "blocked", "done"] as const
@@ -14,6 +15,9 @@ export type Task = {
   question?: string
   answer?: string
   attempts: number
+  // 终审阶段标记(--final-review 追加的 T-F 任务): <stage>@<round>,如 audit@1。
+  // FIELD 行通用解析,edit 重写时随全部字段行保留。
+  final?: string
   body: string
 }
 
@@ -71,6 +75,7 @@ export function parse(path: string, text: string): Plan {
       question: fields.get("question"),
       answer: fields.get("answer"),
       attempts: Number(fields.get("attempts") ?? 0),
+      final: fields.get("final"),
       body: body.join("\n").trim(),
     })
     i = j
@@ -188,6 +193,30 @@ export async function markDone(path: string, id: string, verified?: string) {
   await edit(path, id, { status: "done", fields: { verified } })
 }
 
+// 文件尾追加完整任务块(标题行 + 字段行 + 正文;终审 T-F 任务经 src/final.ts
+// 使用,主循环 next() 按文件顺序自然拾取)。原子写,复用 edit 的
+// allowWrite/reprotect 流程;重复 ID 直接报错,避免写出不可解析的计划文件。
+export async function appendTask(path: string, task: Task) {
+  const text = await Bun.file(path).text()
+  if (parse(path, text).tasks.some((existing) => existing.id === task.id)) {
+    throw new Error(`${path}: task ${task.id} already exists`)
+  }
+  const fields = [
+    ...(task.final ? [`  - final: ${task.final}`] : []),
+    ...(task.verify ? [`  - verify: ${task.verify}`] : []),
+    ...(task.verified ? [`  - verified: ${task.verified}`] : []),
+    ...(task.question ? [`  - question: ${quote(task.question)}`] : []),
+    ...(task.answer ? [`  - answer: ${quote(task.answer)}`] : []),
+    ...(task.attempts ? [`  - attempts: ${task.attempts}`] : []),
+  ]
+  const block = [`## ${task.id}: ${task.title} [${task.status}]`, ...fields, task.body].join("\n")
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`)
+  await allowWrite(path)
+  await Bun.write(tmp, `${text.trimEnd()}\n\n${block}\n`)
+  await rename(tmp, path)
+  await reprotect(path)
+}
+
 // Task-level verify convention: a "command: <cmd>" prefix declares a concrete
 // command; anything else is natural language. resolveVerifyScript uses it to
 // pick the script source (existing file / wrapped verify.sh / generation
@@ -196,6 +225,17 @@ export async function markDone(path: string, id: string, verified?: string) {
 export function verifyCommand(task: Task): string | undefined {
   const match = /^command:\s*(.+)$/.exec(task.verify?.trim() ?? "")
   return match?.[1]?.trim() || undefined
+}
+
+// 终审阶段标记解析(--final-review 追加的 T-F 任务): `<stage>@<round>`,如
+// audit@1;缺失、格式或阶段名非法、轮数非正返回 undefined。
+export function parseFinalMark(final: string | undefined): { stage: FinalStage; round: number } | undefined {
+  const match = /^(\w+)@(\d+)$/.exec(final?.trim() ?? "")
+  if (!match) return undefined
+  const stage = match[1]!
+  if (stage !== "audit" && stage !== "remediate" && stage !== "validate" && stage !== "finalize") return undefined
+  const round = Number(match[2]!)
+  return round >= 1 ? { stage: stage as FinalStage, round } : undefined
 }
 
 function require(plan: Plan, id: string): Task {

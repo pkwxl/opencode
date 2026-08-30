@@ -1,10 +1,12 @@
 import { createInterface } from "node:readline/promises"
 import { readdir, stat } from "node:fs/promises"
 import { join, relative } from "node:path"
+import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
-import { block, countSubtasks, load, next, resetInProgress, setStatus } from "./plan"
-import { renderDryrun, type CommitMode } from "./prompt"
+import type { ModeSpec } from "./mode"
+import { block, countSubtasks, load, next, resetInProgress, setStatus, type Plan } from "./plan"
+import { renderDryrun, stageText, type CommitMode } from "./prompt"
 import { protect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
 import { commitAll, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
@@ -100,6 +102,12 @@ export async function runAll(
     // runner 的 runVerifyScript(--verify-idle / --verify-max 以分钟设定)。
     verifyIdleMs?: number
     verifyMaxMs?: number
+    // -m/--mode 场景模式(缺省 migrate),透传给 runTask 的提示词渲染。
+    mode?: ModeSpec
+    // --final-review 终审闭环的审计轮上限(0 = 不启用,含首轮 audit): 任务全部
+    // 完成后按 docs/mode-final-review-design.md B/C 节推进——终审阶段是入
+    // PLAN.md 的 T-F 真任务,本循环只做"生成任务 → 跑任务 → 解析报告路由"。
+    finalReview?: number
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -197,11 +205,64 @@ export async function runAll(
         log(`↻ ${pending.id} 上次中断于${record.phase.kind === "review" ? "质量审核" : "任务级验收"}阶段(任务已标 done),置回 in_progress 补跑`)
       }
     }
+    // advanceFinal 闭包内引用会失去窄化,以 const 捕获已就绪的 server 句柄。
+    const serverHandle = server
+    // --final-review 终审闭环推进(设计文档 B.2/C): 路由纯函数依(带 final 标记的
+    // 任务及其状态,docs/final/ 产物)决定下一步——开生成会话产出提案、提案已
+    // 产出直接解析追加(C.3)、熔断/报告异常 block 对应终审任务(B.5/C.4);追加后
+    // 主循环 next() 按文件顺序自然拾取,无新增持久化状态。announce 为真时
+    // (next() 为空的启动挂点)先打印终审横幅;runTask 完成后的路由挂点不打印。
+    // 返回 appended = 已追加任务续跑、stopped = 阻塞退出(退出码 2)、
+    // idle = 无需推进(存在未完成终审任务或终审已完成)。
+    const advanceFinal = async (plan: Plan, announce = false): Promise<"appended" | "stopped" | "idle"> => {
+      const route = await routeFinal(directory, plan, opts.finalReview ?? 0)
+      if (route.type === "wait" || route.type === "complete") return "idle"
+      if (route.type === "block") {
+        await block(path, route.task, route.question)
+        log(`⏸ ${route.task} 已阻塞,问题已写入 PLAN.md:\n${route.question}`)
+        return "stopped"
+      }
+      if (announce) banner("全部任务完成,进入终审闭环")
+      const append = async (proposal: FinalProposal) => {
+        const id = await appendFinalTask(path, plan, route.stage, route.round, proposal)
+        log(`✓ 已追加终审任务 ${id}「${stageText(route.stage)}」,主循环继续执行`)
+        return "appended" as const
+      }
+      if (route.type === "append") {
+        log(`↻ 终审提案 docs/final/plan-${route.stage}-r${route.round}.md 已产出(追加前中断),直接解析追加`)
+        return append(route.proposal)
+      }
+      log(`▶ 终审闭环: 开生成会话规划「${stageText(route.stage)}」任务(第 ${route.round} 轮)`)
+      const generated = await generateFinalTask(serverHandle.client, plan, route.stage, route.round, route.prior, {
+        agent: agentName,
+        dir: directory,
+        verbose: opts.verbose,
+        waitAnswer: opts.waitAnswer,
+        contextLimit: opts.contextLimit,
+        permission: opts.permission,
+        interactive: repl,
+        server: serverHandle,
+        mode: opts.mode,
+      })
+      if (generated.type === "blocked") {
+        log(`⏸ 终审任务生成会话受阻(隐性阻塞,请检查后重新运行):\n${generated.question}`)
+        return "stopped"
+      }
+      return append(generated.proposal)
+    }
     for (;;) {
       const plan = await load(path)
       const task = next(plan)
       if (!task) {
-        // --commit once: 任务期间不提交,全部完成后开一次整体提交会话。
+        // --final-review: next() 为空且终审未完成 → 推进终审闭环(生成/追加下一
+        // 阶段任务后续跑循环);终审完成则照常进入整体提交与退出。
+        if ((opts.finalReview ?? 0) > 0) {
+          const advanced = await advanceFinal(plan, true)
+          if (advanced === "stopped") return 2
+          if (advanced === "appended") continue
+        }
+        // --commit once: 任务期间不提交,全部完成后开一次整体提交会话
+        // (终审闭环本身产生的改动一并提交,位置保持在终审全部结束之后)。
         if (opts.commit === "once" && ran > 0) {
           banner("全部任务完成,整体提交")
           const outcome = await commitAll(server.client, plan, {
@@ -246,6 +307,7 @@ export async function runAll(
         server,
         verifyIdleMs: opts.verifyIdleMs,
         verifyMaxMs: opts.verifyMaxMs,
+        mode: opts.mode,
       })
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
@@ -258,6 +320,13 @@ export async function runAll(
       }
       log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
       ran++
+      // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
+      // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
+      // 由下一次 next() 按文件顺序拾取。
+      if ((opts.finalReview ?? 0) > 0 && task.final) {
+        const advanced = await advanceFinal(await load(path))
+        if (advanced === "stopped") return 2
+      }
     }
   } finally {
     process.off("SIGINT", onSigint)

@@ -5,7 +5,8 @@
 (上一会话上下文占比低于 50% 且 5 分钟内结束时复用,否则新建,会话结束即由 driver
 勾选),收尾后由 driver 亲自执行 verify 脚本(持续无输出才超时,只要有进度不限时长)、
 旁路的独立判定会话读输出做任务级验收(`--review` 下
-再追加独立质量审核循环);遇到无法自主决策的反复提问、`--permission ask-fail` 下
+再追加独立质量审核循环,`--final-review` 可在全部任务完成后进入任务驱动的终审
+闭环);遇到无法自主决策的反复提问、`--permission ask-fail` 下
 无人答复的权限请求等情况时停机等待人工处理。中断(含应用崩溃、网络故障)后重新
 运行可依进度记录精确恢复到中断的会话与阶段。
 
@@ -32,7 +33,7 @@ bun run packages/auto/src/index.ts <子命令> ...
 
 ```sh
 opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/auto.md 模板,并在 AGENTS.md 追加 CURRENT.md 指针块与验证原则块
-opencode-auto init [dir] -p "<需求描述>"   # 初始化后直接调用一次 AI 按需求填充 PLAN.md,人工审核后再 run
+opencode-auto init [dir] -p "<需求描述>"   # 初始化后直接调用一次 AI 按需求填充 PLAN.md,人工审核后再 run(init/run 可加 -m <mode> 指定场景模式,见下)
 opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行
 opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中是否有违背验证执行权原则的描述
 opencode-auto status [dir]   # 查看各任务状态
@@ -47,6 +48,7 @@ opencode-auto status [dir]   # 查看各任务状态
 | --- | --- |
 | `--agent <name>` | 会话使用的 opencode agent,缺省 `auto`——即 `init` 生成的自主执行契约 agent `.opencode/agent/auto.md`(非交互契约、状态文件只读、验证执行权在 driver 等,见[agent 选择](#opencode-server-与-agent-选择));显式指定时须为目标目录 `.opencode/agent/` 下已定义的 agent,缺失会导致下发任务失败 |
 | `--server <url>` | 复用已运行的 `opencode serve`,不另起进程;也可用环境变量 `OPENCODE_AUTO_SERVER`。缺省时自动 spawn 一个 `opencode serve` 并托管其生命周期(网络故障与 AGENTS.md 更新会自动重启,见[opencode server 与 agent 选择](#opencode-server-与-agent-选择)) |
+| `-m` / `--mode <name>` | 提示词级场景模式(缺省 `migrate`,当前仅注册此一种;`init` 与 `run` 均接受,应使用相同模式):向计划初始化导语、执行类提示词与终审各阶段提示词注入场景侧重,不影响 driver 的调度与验收状态机;未注册名为用法错误(退出码 1,报文列出当前支持的模式)。详见[模式层](#模式层-m-mode) |
 | `--verbose [true]` | 输出会话内全部消息部件(文本、工具调用、推理、步骤等)与上下文用量/占比,每行带时间戳,并每 10 秒列出 git status 新出现的变动文件(含子目录中的嵌套 git 仓库) |
 | `--interactive` / `-i` | 旁路交互(与 `--verbose` 互斥):终端保持非 verbose 的干净输出并常驻等待人工输入,回车把输入作为额外用户消息发往当前活动会话(steer 语义,在下一 provider turn 边界处理;无活动会话时输入丢弃并提示),等待输入不阻塞正常执行;日志文件仍保持 `--verbose` 级别的完整记录。`--wait-answer`/`--wait-between` 的人工等待也经这条输入行接收,ask 结束后恢复接收会话消息 |
 | `--wait-answer [1-60]` | 提问先等待人工 stdin 答复(分钟):非权限提问超时自动答复;权限请求在 `--permission` 的 ask-* 模式下作为等待窗口(见该选项);不带值默认 1 分钟;缺省此选项则非权限提问立即自动答复、权限类提问(question 工具)直接阻塞 |
@@ -57,6 +59,7 @@ opencode-auto status [dir]   # 查看各任务状态
 | `--review [1-10]` | 质量审核循环(缺省不启用;裸选项为 3 轮;显式值须为 1..10 整数):每个任务验收通过后,由旁路独立审核会话按忠实性/正确性/验证有效性维度审核,发现差距自动规划修复子任务并再走一轮执行-收尾-验收-审核,直到通过或达到轮数上限(阻塞停机);最后一个任务的审核升级为对整个计划的最终全面审核。详见[质量审核](#质量审核--review) |
 | `--early` | 与 `--review` 组合,把质量审核会话挪进 verify 脚本执行窗口并行执行(需 `--review` 已启用,单独出现为用法错误退出码 1):脚本由 driver 本地执行、不含任何会话,窗口内审核与其并行,节省约一个审核会话的墙钟时间;任意时刻至多一个 LLM 会话。详见[质量审核](#质量审核--review) |
 | `--early-review [1-10]` | `--review n --early` 的快捷糖(缺省不启用;裸选项为 3 轮;显式值须为 1..10 整数);与 `--review` 同时出现为用法错误(消除歧义) |
+| `--final-review [1-5]` | 终审闭环(缺省不启用;裸选项为 2 轮;显式值须为 1..5 整数,值为审计轮上限、含首轮 audit):原任务全部完成后进入 audit → remediate → validate → finalize 的任务驱动终审流程,validate 差距回退 audit,审计轮耗尽熔断停机(退出码 2);可与 `--review` / `--early-review` 组合(逐任务审核照常 + 终审闭环,互不干扰)。详见[终审闭环](#终审闭环--final-review) |
 | `--dryrun [true]` | 权限预检:只调用一次 AI,列出执行任务可能需要的 opencode.json 授权之外的目录/操作并逐只读探查确认,报告写入 `.auto/dryrun.md` 并打印到终端;不执行任何任务 |
 | `--context-limit [n]` | 会话复用的上下文已用量上限(单位: 千 tokens):上一会话已用量达到该上限即新建会话,与 50% 占比阈值同时生效(两者都满足才复用);`--subtask ondemand` 下同时是交接阈值;缺省为 64(即 64k tokens) |
 | `--verify-idle [1-120]` | verify 脚本的无进度判定窗口(分钟,缺省 10):driver 轮询 `tmp/verify.out` / `tmp/verify.err` 的大小,持续无任何增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
@@ -66,7 +69,7 @@ opencode-auto status [dir]   # 查看各任务状态
 终端的全部输出同步写入该文件(逐条直写,进程中断也不丢已输出内容);
 `--interactive` 下日志文件额外包含 verbose 明细(会话部件、上下文用量、变更文件),与 `--verbose` 运行时的记录一致。
 
-退出码:`0` 全部完成;`1` 用法/环境错误;`2` 阻塞或未完成为 pending,等待人工介入;`130` 被强制终止。
+退出码:`0` 全部完成;`1` 用法/环境错误;`2` 阻塞或未完成为 pending,等待人工介入(含终审闭环熔断);`130` 被强制终止。
 
 运行期间单次 Ctrl+C 不会终止(仅提示),3 秒内再次按下 Ctrl+C 才强制退出;
 退出前会尽力恢复 PLAN.md 等文件的可写权限并关闭 opencode server。
@@ -298,6 +301,72 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 是静态审核),运行结果的解读属判定会话职责。短脚本场景审核慢于脚本时判定须等待,
 收益退化为串行,不劣于不用 `--early`。
 
+## 模式层(-m/--mode)
+
+`-m/--mode <name>`(缺省 `migrate`;显式值须为已注册的模式名,否则用法错误退出码
+1,报文会列出当前支持的模式)是**提示词级**的场景引导,不改变 driver 的调度与验收
+状态机,新增模式对 driver 是零改动:
+
+- `init`(含 `-p` 规划会话)注入场景导语:场景定义、任务排布原则与 verify 侧重;
+- 执行类会话(分解 / 整任务 / 子任务 / 收尾)注入对应的注意事项;
+- 终审各阶段生成会话注入阶段侧重(见[终审闭环](#终审闭环--final-review))。
+
+当前仅注册 `migrate`(迁移/升级场景):以保持外部行为不变为前提,任务按
+"基线确认 → 迁移改造 → 回归验证"排布,verify 优先复用既有测试/构建命令;执行
+注记要求新旧实现对等行为、兼容层注明用途与移除时机、迁移取舍按 `AUTO-DECISION`
+要求标注。`optimize` / `implement` / `test` 为既定扩展名,未注册即不可用。
+
+`init` 与 `run` 应使用相同模式。模式在 V1 **不持久化**(只有一种模式不存在实际
+分歧):跨天恢复时 CLI 忘带 `-m` 会回落 `migrate`;扩展第二种模式前会先补持久化。
+
+## 终审闭环(--final-review)
+
+`--final-review [n]`(缺省不启用;裸选项 2;显式值须为 1..5 整数,否则用法错误
+退出码 1)在原任务全部完成后启动**任务驱动的终审流程**,把"终审发现的问题"也纳入
+driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢复。n 为**审计轮上限**
+(含首轮 audit,即 audit → remediate → validate 循环的最大次数);`--final-review 1`
+可用作"只审一轮、不回退"的廉价形态。
+
+核心机制:终审阶段是**入 PLAN.md 的真任务**(`T-F<k>` ID、标题带阶段前缀、
+`final: <阶段>@<轮>` 字段标记),由主循环照常按文件顺序执行——分解/子任务会话/
+收尾/三段式验收/CURRENT.md/进度恢复/commit 档位全部复用;driver 只做
+"生成任务 → 跑任务 → 解析报告路由"的状态机:
+
+1. **生成会话**:旁路一次性会话把下一阶段规划成自包含任务提案
+   `docs/final/plan-<阶段>-r<轮>.md`(只规划不实施;提示词约束 verify 优先复用
+   原任务的验证命令,不得发明未运行过的检查);
+2. **追加真任务**:driver 解析提案追加为 `T-F<k>` 任务——audit/validate 的 verify
+   固定为报告结构检查,remediate 取提案的 `verify:` 行(缺省回落自然语言),
+   finalize 缺省结构检查、提案可覆盖;
+3. **路由**:任务完成且带 `final` 标记后,driver 解析阶段报告末行协议确定性路由:
+   - **终审审计**(报告 `docs/final/audit-r<N>.md`,末两行 `结论: <概述>` 与
+     `策略: 重构|修补|无`):策略"无"直达终审收尾(跳过修复与回归验证,原任务
+     已有任务级 verify 兜底);否则生成同轮修复任务;
+   - **修复**(报告名按策略取 `docs/final/refactor-r<N>.md` 或
+     `docs/final/patch-r<N>.md`,自由正文):完成后生成同轮回归验证任务;
+   - **回归验证**(报告 `docs/final/validate-r<N>.md`,末行
+     `结论: 通过` 或 `结论: 差距 <描述>`):通过生成终审收尾任务;差距回退
+     audit@<N+1>(提示词要求聚焦残余差距、不做全量重审),审计轮耗尽则**熔断**——
+     阻塞最后的终审任务,残余差距与报告指针写入 `question` 字段,退出码 2;
+   - **终审收尾**(报告 `docs/final/finalize.md`,自由正文):完成后终审结束;
+     `--commit once` 的整体提交保持在终审全部结束之后(终审改动一并提交)。
+
+要点:
+
+- audit/validate 任务本身就是审核,`--review` 启用时也**跳过其逐任务质量审核**
+  (`--early` 随之自然失效);修复/收尾任务照常参与逐任务审核;
+- 终审任务的 verify 同样由 driver 亲自执行、不经 opencode 权限体系(与既有
+  verify 语义一致,见[执行流水线](#执行流水线));协议行缺失或非法会先被结构
+  检查拦截、走既有修复循环,无需专门的协议重试;
+- **中断恢复零新增状态**:重新运行时由(带 `final` 标记的任务及其状态,
+  `docs/final/` 产物)重新路由——下一阶段任务已存在则主循环直接拾取;提案已产出
+  未追加则直接解析追加;终审任务已 done 但报告缺失/协议非法(多为人工改动)按
+  阻塞提示人工核查;终审任务内部中断走既有进度恢复机制;
+- 与其他选项的组合:`--final-review` 单用即仅终审;与 `--review` /
+  `--early-review` 可同现(逐任务审核照常 + 终审闭环,二者无交互);
+  `--dryrun` 不执行任务、终审不触发;`--subtask off` 下终审任务 verify 差距
+  同样回退 pending 停机;`--wait-between` / `--commit` 档位对终审任务照常生效。
+
 ## PLAN.md 格式
 
 ```md
@@ -313,7 +382,8 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
   `blocked` / `done`,driver 取第一个非 `done` 任务执行。状态标记前的空格可省略
   (`标题[pending]` 也能解析),但写计划时建议保留。
 - 字段行(`  - key: value`)必须紧跟标题且连续。driver 会自行维护 `attempts`、
-  `verified`、`question`、`answer` 等字段与全部状态标记,**请勿手工编辑**;
+  `verified`、`question`、`answer`、`final`(--final-review 追加的终审任务阶段标记,
+  格式 `<stage>@<round>`)等字段与全部状态标记,**请勿手工编辑**;
   agent 会话也被禁止编辑 PLAN.md 与 CURRENT.md。
 - `verify` 是验收标准(命令或自然语言描述均可):`command:` 前缀的具体命令由
   driver 包装为脚本亲自执行,自然语言描述由旁路脚本生成会话翻译成可执行脚本;

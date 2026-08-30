@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -55,3 +55,67 @@ test.skipIf(!E2E)(
   },
   { timeout: 600_000 },
 )
+
+// CLI 解析用例不需要 opencode 与 provider 凭证,始终运行: 以子进程运行源码入口,
+// 用法错误经 stderr 报文与退出码 1 断言;合法组合以空目录"未找到计划文件"退出
+// (解析全部通过、在 spawn server 之前),证明未误报组合用法错误。
+async function runCli(args: string[]) {
+  const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "src", "index.ts"), ...args], {
+    cwd: join(import.meta.dir, ".."),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  return { code: await proc.exited, out, err }
+}
+
+describe("CLI 解析: -m/--mode 与 --final-review", () => {
+  test("-m/--mode 未注册名为用法错误(退出码 1),报文列出支持的模式", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const run = await runCli(["run", dir, "-m", "optimize"])
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("--mode 取值须为已注册的模式")
+      expect(run.err).toContain("migrate")
+      const init = await runCli(["init", dir, "--mode", "nope"])
+      expect(init.code).toBe(1)
+      expect(init.err).toContain("--mode 取值须为已注册的模式")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--final-review 显式值须为 1..5 整数,否则用法错误(退出码 1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      for (const value of ["0", "6", "x"]) {
+        const run = await runCli(["run", dir, "--final-review", value])
+        expect(run.code).toBe(1)
+        expect(run.err).toContain("--final-review 取值范围为 1..5")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--final-review 与 --review/--early-review 组合不误报用法错误", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const combos = [
+        ["--review", "3"],
+        ["--early-review", "2"],
+        ["--review", "3", "--early"],
+      ]
+      for (const extra of combos) {
+        const run = await runCli(["run", dir, "--final-review", "2", ...extra])
+        // 组合合法: 解析全部通过后进入 runAll,因空目录缺少 PLAN.md 退出 1
+        // (driver 报文走 stdout,与用法错误的 stderr 区分)。
+        expect(run.code).toBe(1)
+        expect(run.out).toContain("未找到计划文件")
+        expect(run.err).toBe("")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})

@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path"
+import type { ModeSpec } from "./mode"
 import type { Plan, Task } from "./plan"
 import { verifyTmpDir } from "./verify"
 
@@ -6,7 +7,7 @@ import { verifyTmpDir } from "./verify"
 // once(整个计划完成后提交一次)/ none(从不提交)。
 export type CommitMode = "subtask" | "task" | "once" | "none"
 
-type Opts = { commit?: CommitMode }
+type Opts = { commit?: CommitMode; mode?: ModeSpec }
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
 export const VERDICT_FILE = ".auto/verify.md"
@@ -43,14 +44,21 @@ const QUESTION_RULE = `2. 遇到权限相关问题(如需要访问受限目录),
 const STATE_RULE = `PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),` +
   `会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。`
 
+// 执行类提示词的模式注意事项段(仅 Opts 带 mode 时注入;CLI 缺省 migrate,
+// run 总是携带,测试与其他调用方可不传)。
+function modeSection(mode: ModeSpec): string {
+  return `场景模式注意事项(${mode.name}):\n${mode.exec}`
+}
+
 // Decomposition session: read-only analysis, then write the subtask list to
 // docs/<id>.subtasks.md. The driver parses it and injects the checklist into
 // PLAN.md itself, so the session must not touch PLAN.md.
-export function renderDecompose(plan: Plan, task: Task): string {
+export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
   return [
     ...head(plan),
     `当前任务(完整内容同时见 CURRENT.md):\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
     ...blockedSection(task),
+    ...(opts.mode ? [modeSection(opts.mode)] : []),
     `你本次只做任务分解,不写实现代码:
 
 1. 阅读相关源码与 docs/,分析该任务;
@@ -80,6 +88,7 @@ export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opt
     ...head(plan),
     `当前任务(其他子任务由其他会话完成,不要碰):\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
     ...blockedSection(task),
+    ...(opts.mode ? [modeSection(opts.mode)] : []),
     `你本次只负责该任务的这一个子任务:
 
 - [ ] ${subtask}
@@ -126,6 +135,7 @@ ${indent(commitRule(`${task.id} 与任务摘要`), "   ")}`,
     ...head(plan),
     `当前任务:\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
     ...blockedSection(task),
+    ...(opts.mode ? [modeSection(opts.mode)] : []),
     `${
       opts.solo
         ? "该任务的实现已在之前的会话中完成,不要重做。本次会话只执行收尾:"
@@ -360,6 +370,100 @@ ${QUESTION_RULE}
   ].join("\n\n")
 }
 
+// --final-review 终审四阶段(audit → remediate → validate → finalize,
+// validate 差距回退 audit,设计文档 B.2)。
+export type FinalStage = "audit" | "remediate" | "validate" | "finalize"
+
+// --final-review 终审任务生成会话(设计文档 B.3/B.4,旁路一次性,复用
+// requireArtifact 骨架): 输入上游产物指针与残余差距原文(prior),产出任务提案
+// docs/final/plan-<stage>-r<N>.md;driver 解析提案后 appendTask 为真任务——ID、
+// final 字段与 audit/validate 的固定结构检查 verify 由 driver 决定,标题与正文
+// 取自提案,remediate 的 verify 取提案的 verify: 行。audit@r≥2 为回退重审,
+// 提示词要求聚焦残余差距与回归检查,不做全量重审。
+export function renderFinalTask(plan: Plan, stage: FinalStage, round: number, prior: string, mode?: ModeSpec): string {
+  const proposal = `docs/final/plan-${stage}-r${round}.md`
+  // 模式侧重: final 注册表只有 audit/validate/finalize 三键,remediate 无注入。
+  const emphasis = stage === "remediate" ? undefined : mode?.final[stage]
+  return [
+    ...head(plan),
+    ...(prior ? [`上游输入(终审上游产物指针与残余差距原文):\n\n${prior}`] : []),
+    ...(emphasis ? [`场景模式侧重(${mode!.name}):\n${emphasis}`] : []),
+    `你是终审闭环(audit → remediate → validate → finalize)的任务规划者: 不要直接实施,
+把下一阶段规划成一个可执行的任务提案。本次规划终审第 ${round} 轮的「${stageText(stage)}」任务${
+      stage === "audit" && round >= 2
+        ? ";本轮为 validate 差距回退后的重审,聚焦上游残余差距与回归检查,不做全量重审"
+        : ""
+    }。
+
+「${stageText(stage)}」任务的职责: ${stageDuty(stage)}
+
+任务:
+1. 只读分析相关源码、docs/ 与上游输入;
+2. 把「${stageText(stage)}」任务写成自包含的提案,写入 ${proposal}(覆盖写),格式:
+
+# <任务标题>
+
+<任务正文: 目标、范围、上下文与产出要求——${stageReport(stage, round)};检查项由后续分解会话另行生成,不要手写>
+
+verify: command: <命令>
+
+(verify 行可选、独立成行置于正文之后: 优先复用原任务的验证命令/既有测试套件,
+不得发明未运行过的检查;audit/validate/finalize 的 verify 由 driver 固定为结构
+检查,提案中的该行会被忽略)
+
+约束:
+1. 只规划不实施: 不修改任何实现代码与文档,本次唯一可写的文件是 ${proposal};${STATE_RULE}
+${QUESTION_RULE}
+3. 提案正文必须自包含: 仅凭它、CURRENT.md 与 docs/ 即可执行;
+4. 产出该提案文件是硬性要求: 即使认为该阶段无事可做,也必须写出文件(正文说明
+   原因即可);不产出有效文件会导致任务阻塞停机;
+5. 写出文件后立即结束会话。`,
+  ].join("\n\n")
+}
+
+// 终审四阶段的中文名(横幅/标题/提示词共用,loop 与 final 的日志亦用)。
+export function stageText(stage: FinalStage): string {
+  switch (stage) {
+    case "audit":
+      return "终审审计"
+    case "remediate":
+      return "修复"
+    case "validate":
+      return "回归验证"
+    case "finalize":
+      return "终审收尾"
+  }
+}
+
+// 各阶段任务的核心职责(注入生成会话提示词)。
+function stageDuty(stage: FinalStage): string {
+  switch (stage) {
+    case "audit":
+      return `通读 PLAN.md 全部任务、docs/ 下各报告与整体 git 历史,对整个计划的执行做全面审计,
+   给出结论与修复策略`
+    case "remediate":
+      return `按审计报告的差距与策略(重构或修补)修复实现,使回归验证可通过`
+    case "validate":
+      return `对修复后的整体做回归验证,给出通过或差距结论`
+    case "finalize":
+      return `终审收尾: 同步文档、清理过程产物,收束整个终审闭环`
+  }
+}
+
+// 各阶段任务的报告产出要求(设计文档 B.4 协议,随提案正文下沉到任务)。
+function stageReport(stage: FinalStage, round: number): string {
+  switch (stage) {
+    case "audit":
+      return `审计报告写入 docs/final/audit-r${round}.md,末两行固定为 \`结论: <概述>\` 与 \`策略: 重构|修补|无\`(driver 依此路由)`
+    case "remediate":
+      return `修复报告写入 docs/final/refactor-r${round}.md(策略为重构)或 docs/final/patch-r${round}.md(策略为修补),自由正文无协议`
+    case "validate":
+      return `验证报告写入 docs/final/validate-r${round}.md,末行固定为 \`结论: 通过\` 或 \`结论: 差距 <描述>\``
+    case "finalize":
+      return `收尾报告写入 docs/final/finalize.md,自由正文`
+  }
+}
+
 // ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 --context-limit
 // 时插入交接提示,会话把进度写入该文件,末行 `状态: 继续|完成` 由 driver 解析。
 export function handoffFile(task: Task): string {
@@ -390,6 +494,7 @@ ${indent(commitRule(`${task.id} 与任务摘要`), "   ")};
     ...head(plan),
     `当前任务(完整内容同时见 CURRENT.md):\n\n# ${task.id}: ${task.title}\n\n${task.body}`,
     ...blockedSection(task),
+    ...(opts.mode ? [modeSection(opts.mode)] : []),
     `你本次负责整个任务,在单个会话内完成,不做子任务分解。${
       opts.continuation ? `此前的会话因上下文限制中断,先读 ${handoffFile(task)} 了解进度与后续步骤,据此继续。` : ""
     }
@@ -442,10 +547,12 @@ ${commitRule("整个计划完成")}
   ].join("\n\n")
 }
 
-// init --prompt: 初始化规划会话,按用户需求填充 PLAN.md,不实施。
-export function renderInit(promptText: string): string {
+// init --prompt: 初始化规划会话,按用户需求填充 PLAN.md,不实施。mode 为
+// -m/--mode 的场景模式导语(CLI 缺省 migrate)。
+export function renderInit(promptText: string, mode?: ModeSpec): string {
   return [
     "你正在为当前目录初始化一份 opencode-auto 实施计划。",
+    ...(mode ? [`场景模式: ${mode.name}。\n${mode.init}`] : []),
     `任务:
 1. 阅读当前目录结构、README/AGENTS.md/docs(若存在),了解项目;
 2. 阅读 PLAN.md 模板,理解其格式(任务标题 \`## T-NNN: 标题 [pending]\`、紧跟标题的

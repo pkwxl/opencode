@@ -3,6 +3,7 @@ import { resolve } from "node:path"
 import { checkPrinciple } from "./check"
 import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensureGitignore, ensurePointer, runAll } from "./loop"
+import { MODES, resolveMode, type ModeSpec } from "./mode"
 import { load } from "./plan"
 import { renderInit, type CommitMode } from "./prompt"
 import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
@@ -17,10 +18,11 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt/--review/--early-review/--permission/--verify-idle/--verify-max 带值
-// (吞掉下一个 token);--verbose/--interactive/--dryrun/--commit-subtask/--early
-// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
-// --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值)。
+// --prompt/--review/--early-review/--permission/--verify-idle/--verify-max/--mode/
+// --final-review 带值(吞掉下一个 token);--verbose/--interactive/--dryrun/
+// --commit-subtask/--early 是布尔选项,出现即 true,仅当紧随字面量 true/false 时
+// 才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,--interactive 另有
+// 短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -35,6 +37,8 @@ const VALUE_FLAGS = new Set([
   "permission",
   "verify-idle",
   "verify-max",
+  "mode",
+  "final-review",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask", "early"])
 for (let i = 1; i < args.length; i++) {
@@ -50,6 +54,16 @@ for (let i = 1; i < args.length; i++) {
       i++
     } else {
       flags.set("prompt", "")
+    }
+    continue
+  }
+  if (arg === "-m") {
+    const next = args[i + 1]
+    if (next !== undefined) {
+      flags.set("mode", next)
+      i++
+    } else {
+      flags.set("mode", "")
     }
     continue
   }
@@ -128,10 +142,18 @@ if (command === "run") {
     process.exit(1)
   }
   // --early: 把 --review 的审核会话挪进 verify 脚本执行窗口并行(设计文档 F 节);
-  // 是布尔修饰,review 未启用时单独出现为用法错误。
+  // 是布尔修饰,review 未启用时单独出现为用法错误。--early/--early-review 只作用于
+  // 逐任务审核窗口,与 --final-review 终审闭环无交互、可同现。
   const early = (flags.has("early") && flags.get("early") !== "false") || earlyReview > 0
   if (early && review <= 0 && earlyReview <= 0) {
     console.error("--early 需搭配 --review 一起使用(或改用快捷糖 --early-review)")
+    process.exit(1)
+  }
+  // --final-review: 终审闭环的审计轮上限(含首轮 audit,即 audit→remediate→
+  // validate 的最大循环次数);可与 --review 组合(逐任务审核照常 + 终审闭环)。
+  const finalReview = parseFinalReviewLimit(flags.get("final-review"))
+  if (finalReview === null) {
+    console.error("--final-review 取值范围为 1..5(终审审计轮数上限);不带值时默认为 2")
     process.exit(1)
   }
   const permission = parsePermission(flags.get("permission"))
@@ -149,6 +171,11 @@ if (command === "run") {
   const verifyMax = parseVerifyMax(flags.get("verify-max"))
   if (verifyMax === null) {
     console.error("--verify-max 取值范围为 1..1440(分钟);缺省不设上限")
+    process.exit(1)
+  }
+  const mode = parseMode(flags.get("mode"))
+  if (mode === null) {
+    console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(MODES).join(", ")});缺省为 migrate`)
     process.exit(1)
   }
   const code = await runAll(directory, {
@@ -170,6 +197,8 @@ if (command === "run") {
     interactive,
     verifyIdleMs: verifyIdle * 60_000,
     verifyMaxMs: verifyMax > 0 ? verifyMax * 60_000 : undefined,
+    mode,
+    finalReview,
   })
   process.exit(code)
 }
@@ -231,6 +260,16 @@ function parseReviewLimit(raw: string | undefined): number | null {
   return limit
 }
 
+// --final-review 缺省(无此选项)= 0(不启用终审闭环);裸选项 = 2;显式值须为
+// 1..5 整数(审计轮上限,含首轮 audit);返回 null 表示取值非法。
+function parseFinalReviewLimit(raw: string | undefined): number | null {
+  if (raw === undefined) return 0
+  if (raw === "") return 2
+  const limit = Number(raw)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 5) return null
+  return limit
+}
+
 // --verify-idle 缺省/裸选项 = 10(分钟);显式值须为 1..120 整数;返回 null 表示非法。
 function parseVerifyIdle(raw: string | undefined): number | null {
   if (raw === undefined || raw === "") return 10
@@ -248,7 +287,18 @@ function parseVerifyMax(raw: string | undefined): number | null {
   return minutes
 }
 
+// -m/--mode 缺省(无此选项)= migrate;返回 null 表示未注册(裸选项取空串同样
+// 视为未注册名)。
+function parseMode(raw: string | undefined): ModeSpec | null {
+  return resolveMode(raw ?? "migrate") ?? null
+}
+
 if (command === "init") {
+  const mode = parseMode(flags.get("mode"))
+  if (mode === null) {
+    console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(MODES).join(", ")});缺省为 migrate`)
+    process.exit(1)
+  }
   // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。
   const templates: Record<string, string> = {
     "PLAN.md": templatePlan,
@@ -284,7 +334,7 @@ if (command === "init") {
     }
     const server = await manage(directory, flags.get("server"))
     try {
-      const result = await runOnce(server.client, "初始化计划", renderInit(promptText), {
+      const result = await runOnce(server.client, "初始化计划", renderInit(promptText, mode), {
         agent: flags.get("agent") ?? "auto",
         dir: directory,
         server,
@@ -330,10 +380,13 @@ if (command === "status") {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <prompt-text>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
+  opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent <name>] [--server <url>]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [-m|--mode <name>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入,130 被连续两次 Ctrl+C 强制终止`)
+选项: -m/--mode 提示词级场景模式(当前支持: ${Object.keys(MODES).join(", ")};缺省 migrate),init 与 run 应使用相同模式
+      --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合)
+
+退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { resolveMode } from "../src/mode"
 import { parse } from "../src/plan"
 import { verifyTmpDir } from "../src/verify"
 import {
   renderCommitAll,
   renderDecompose,
   renderDryrun,
+  renderFinalTask,
   renderFix,
   renderHandoffSteer,
   renderInit,
@@ -359,5 +361,103 @@ describe("renderInit", () => {
     expect(text).toContain("任务描述不要包含要求执行者亲自运行验证脚本/验证命令")
     expect(text).toContain("验证的执行权在 driver")
     expect(text).toContain("AGENTS.md 验证原则块")
+  })
+})
+
+const migrate = resolveMode("migrate")!
+
+describe("模式注入(-m/--mode)", () => {
+  test("renderInit 注入 migrate 模式导语;不传模式时不注入", () => {
+    const text = renderInit("把项目迁移到新框架", migrate)
+    expect(text).toContain("场景模式: migrate")
+    expect(text).toContain("外部行为不变")
+    expect(text).toContain("基线确认")
+    expect(text).toContain("回归验证")
+    const plain = renderInit("实现一个待办事项 CLI")
+    expect(plain).not.toContain("场景模式")
+    expect(plain).not.toContain("基线确认")
+  })
+
+  test("执行类模板注入 exec 段;不传模式时不注入", () => {
+    for (const text of [
+      renderDecompose(plan, task, { mode: migrate }),
+      renderSubtask(plan, task, "编写迁移脚本的 schema 部分", { mode: migrate }),
+      renderWrapup(plan, task, { mode: migrate }),
+      renderWhole(plan, task, { mode: migrate }),
+    ]) {
+      expect(text).toContain("场景模式注意事项(migrate)")
+      expect(text).toContain("对等行为")
+      expect(text).toContain("AUTO-DECISION")
+    }
+    expect(renderDecompose(plan, task)).not.toContain("场景模式注意事项")
+    expect(renderSubtask(plan, task, "编写迁移脚本的 schema 部分")).not.toContain("场景模式注意事项")
+    expect(renderWrapup(plan, task)).not.toContain("场景模式注意事项")
+    expect(renderWhole(plan, task)).not.toContain("场景模式注意事项")
+  })
+})
+
+describe("renderFinalTask", () => {
+  test("audit 首轮: 提案路径、报告协议、verify 约束与硬性要求", () => {
+    const text = renderFinalTask(plan, "audit", 1, "全部原任务已完成,开始首轮终审", migrate)
+    expect(text).toContain("docs/final/plan-audit-r1.md")
+    // 上游输入注入
+    expect(text).toContain("全部原任务已完成,开始首轮终审")
+    // 提案格式
+    expect(text).toContain("# <任务标题>")
+    expect(text).toContain("verify: command: <命令>")
+    // 报告协议随提案正文要求下沉
+    expect(text).toContain("docs/final/audit-r1.md")
+    expect(text).toContain("结论: <概述>")
+    expect(text).toContain("策略: 重构|修补|无")
+    // verify 命令约束语
+    expect(text).toContain("优先复用原任务的验证命令")
+    expect(text).toContain("不得发明未运行过的检查")
+    // 只规划不实施与硬性要求
+    expect(text).toContain("只规划不实施")
+    expect(text).toContain("产出该提案文件是硬性要求")
+    // STATE_RULE / QUESTION_RULE
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("AUTO-DECISION")
+    // 首轮不做回退重审措辞
+    expect(text).not.toContain("不做全量重审")
+  })
+
+  test("audit 首轮注入 migrate 的终审侧重;不传模式时不注入", () => {
+    expect(renderFinalTask(plan, "audit", 1, "", migrate)).toContain("场景模式侧重(migrate)")
+    expect(renderFinalTask(plan, "audit", 1, "", migrate)).toContain("行为对等")
+    expect(renderFinalTask(plan, "audit", 1, "", undefined)).not.toContain("场景模式侧重")
+    // 无 prior 时不带上游输入块
+    expect(renderFinalTask(plan, "audit", 1, "", migrate)).not.toContain("上游输入(终审上游产物指针与残余差距原文)")
+  })
+
+  test("audit 第 2 轮: 聚焦残余差距,不做全量重审", () => {
+    const text = renderFinalTask(plan, "audit", 2, "docs/final/validate-r1.md 末行: 结论: 差距 空输入未覆盖", migrate)
+    expect(text).toContain("docs/final/plan-audit-r2.md")
+    expect(text).toContain("docs/final/audit-r2.md")
+    expect(text).toContain("聚焦上游残余差距与回归检查")
+    expect(text).toContain("不做全量重审")
+    expect(text).toContain("结论: 差距 空输入未覆盖")
+  })
+
+  test("remediate: 提案路径与修复报告双命名,无模式侧重注入", () => {
+    const text = renderFinalTask(plan, "remediate", 1, "docs/final/audit-r1.md 末行: 策略: 修补", migrate)
+    expect(text).toContain("docs/final/plan-remediate-r1.md")
+    expect(text).toContain("docs/final/refactor-r1.md")
+    expect(text).toContain("docs/final/patch-r1.md")
+    expect(text).toContain("策略: 修补")
+    expect(text).not.toContain("场景模式侧重")
+  })
+
+  test("validate 与 finalize: 各自提案路径、结论协议与模式侧重", () => {
+    const validate = renderFinalTask(plan, "validate", 1, "docs/final/patch-r1.md 修复已完成", migrate)
+    expect(validate).toContain("docs/final/plan-validate-r1.md")
+    expect(validate).toContain("docs/final/validate-r1.md")
+    expect(validate).toContain("结论: 通过")
+    expect(validate).toContain("结论: 差距 <描述>")
+    expect(validate).toContain("回归覆盖")
+    const finalize = renderFinalTask(plan, "finalize", 1, "docs/final/validate-r1.md 末行: 结论: 通过", migrate)
+    expect(finalize).toContain("docs/final/plan-finalize-r1.md")
+    expect(finalize).toContain("docs/final/finalize.md")
+    expect(finalize).toContain("兼容层的收尾")
   })
 })

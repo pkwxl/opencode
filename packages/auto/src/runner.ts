@@ -4,6 +4,7 @@ import { dirname, join } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { log, subbanner, vlog } from "./log"
+import type { ModeSpec } from "./mode"
 import {
   appendSubtasks,
   begin,
@@ -11,6 +12,7 @@ import {
   load,
   markDone,
   parse,
+  parseFinalMark,
   setStatus,
   setSubtasks,
   subtasks,
@@ -77,7 +79,9 @@ export type SubtaskMode = "off" | "auto" | "ondemand"
 // 继续(AI 无授权绕开) / ask-fail 拒绝并退出运行(阻塞停机)。
 export type PermissionMode = "auto-allow" | "ask-allow" | "ask-deny" | "ask-fail"
 
-type Opts = {
+// 会话级选项: runTask/commitAll/runOnce 与终审任务生成会话(src/final.ts 复用
+// requireArtifact)共用的透传参数。
+export type Opts = {
   agent?: string
   // 目标目录;用于下发失败时检测 agent 契约文件缺失并给出恢复提示。
   dir?: string
@@ -89,7 +93,8 @@ type Opts = {
   dryrun?: boolean
   // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
   contextLimit?: number
-  // --review 质量审核轮数上限(0=不启用);CLI 接线在 T-020。
+  // --review 质量审核轮数上限(0=不启用);audit/validate 终审任务被强制置 0
+  // (见 pipeline),终审任务生成会话(src/final.ts)不受影响。
   review?: number
   // --early: 审核会话挪进 verify 脚本执行窗口并行(需 review>0,设计文档 F 节),
   // 经 verifyTask 审核挂点实现。
@@ -106,6 +111,8 @@ type Opts = {
   // (缺省不设;--verify-idle / --verify-max 以分钟设定)。
   verifyIdleMs?: number
   verifyMaxMs?: number
+  // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
+  mode?: ModeSpec
 }
 
 type Watch = {
@@ -165,9 +172,13 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // the whole round again (up to n fix rounds, then blocked).
 // --early moves that audit session into the verify-script execution window
 // (design doc F): verifyTask starts it right before executing the script,
-// joins it before the judge session and returns its verdict together with
-// the done result, so the audit below consumes it instead of opening a
+// joins it before the judge session and returns its verdict together with the
+// done result, so the audit below consumes it instead of opening a
 // separate serial audit session.
+// Final-review tasks (final field, appended by src/final.ts under
+// --final-review) run through this same pipeline; audit/validate ones force
+// review=0 — they are audits themselves — while remediate/finalize ones are
+// audited normally (design doc B.6).
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW, its used
 // tokens below contextLimit (default 64k) and it went idle within
@@ -286,7 +297,10 @@ export async function runTask(
     await persistStage({ kind: "subtasks" })
     await writeCurrent(plan.path, task, mode !== "auto")
 
-    const limit = opts.review ?? 0
+    // audit/validate 终审任务本身就是审核: 依 final 字段强制 review=0 跳过逐任务
+    // 质量审核(--early 随之自然失效);remediate/finalize 任务照常(设计文档 B.6)。
+    const finalMark = parseFinalMark(task.final)
+    const limit = finalMark && (finalMark.stage === "audit" || finalMark.stage === "validate") ? 0 : (opts.review ?? 0)
     // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
     // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
     const early = opts.early && limit > 0
@@ -342,7 +356,7 @@ export async function runTask(
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
         if (!skipWrapup) {
           await persistStage({ kind: "wrapup" })
-          const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
+          const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, mode: opts.mode, solo: mode !== "auto" }), opts, chain)
           if (result.type === "blocked") return result
         }
         skipWrapup = false
@@ -418,7 +432,7 @@ async function executeWhole(
     const result = await runSession(
       client,
       task,
-      renderWhole(plan, task, { commit: opts.commit, ondemand, continuation }) + feedback,
+      renderWhole(plan, task, { commit: opts.commit, mode: opts.mode, ondemand, continuation }) + feedback,
       opts,
       chain,
       steer,
@@ -619,7 +633,7 @@ async function ensureDecomposed(
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the file; the file is a hard requirement.
   for (let i = 0; ; i++) {
-    const result = await runSession(client, task, renderDecompose(plan, task) + feedback, opts, chain)
+    const result = await runSession(client, task, renderDecompose(plan, task, opts) + feedback, opts, chain)
     if (result.type === "blocked") return result
     const items = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
     if (items.length) {
@@ -752,7 +766,7 @@ async function verifyTask(
     log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
     const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap), opts, chain)
     if (fixed.type === "blocked") return fixed
-    const wrapped = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, solo: mode !== "auto" }), opts, chain)
+    const wrapped = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, mode: opts.mode, solo: mode !== "auto" }), opts, chain)
     if (wrapped.type === "blocked") return wrapped
   }
 }
@@ -952,9 +966,9 @@ async function planReviewFix(
 
 // “旁路会话必须产出文件”的通用骨架(设计文档 A.4): 会话结束但产物缺失或无效时
 // 带反馈重试一次,仍失败按隐性阻塞停机(人工检查后重新运行续跑)。脚本生成、
-// 判定、质量审核与修复规划会话共用;collect 返回 undefined 表示该次会话未产出
-// 有效产物。
-async function requireArtifact<T>(
+// 判定、质量审核、修复规划与终审任务生成(src/final.ts)会话共用;collect 返回
+// undefined 表示该次会话未产出有效产物。
+export async function requireArtifact<T>(
   client: OpencodeClient,
   task: Task,
   promptText: string,
@@ -1020,7 +1034,9 @@ type Steer = { limit: number; text: string }
 // 再换新会话重试,避免对着同一坏实例反复失败。
 const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
 
-async function runSession(
+// 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启);导出供
+// src/final.ts 的终审任务生成会话等旁路复用。
+export async function runSession(
   client: OpencodeClient,
   task: Task,
   promptText: string,
