@@ -26,6 +26,7 @@
   输出同步写入目标目录 `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
 - `templates/` — `init` 复制的模板(`PLAN.md`、`opencode.json`、`.opencode/agent/auto.md`)。
 - `docs/verify-review-design.md` — 第三阶段(verify 三段式与 --review 审核循环)与第四阶段(--early 并行审核,以 F 节为唯一设计基准)的设计基准:已确认决策、接口约定与流水线伪代码;G 节为判定会话执行限制与重验协议、H 节为中断恢复/看门狗/判定会话 verify 字段授权的后续修订基准。
+- `docs/mode-final-review-design.md` — `-m/--mode` 模式层(src/mode.ts 注册表,提示词级场景引导)与 `--final-review` 终审闭环(终审阶段为入 PLAN.md 的真任务 T-F\<k\>,Audit→Refactor/Patch→Validate→Finalize 状态机,末行结论协议路由 + 审计轮上限熔断)的设计基准:已确认决策、状态机与恢复规则、文件级改动清单。
 - `script/build.ts` — 独立可执行文件构建脚本。
 - `test/` — `bun test` 测试。
 
