@@ -3,8 +3,10 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
 import { parse } from "../src/plan"
+import { renderText } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
+import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import {
   renderDecompose,
   renderDryrun,
@@ -71,8 +73,8 @@ describe("renderDecompose", () => {
 describe("renderSubtask", () => {
   const subtask = "编写迁移脚本的 schema 部分"
 
-  test("只做一个子任务并自我检查,验收交给任务级审核", () => {
-    const text = renderSubtask(plan, task, subtask)
+  test("只做一个子任务并自我检查,验收交给任务级审核(verify 启用)", () => {
+    const text = renderSubtask(plan, task, subtask, { verify: true })
     expect(text).toContain(subtask)
     expect(text).toContain("严格只完成这一个子任务")
     expect(text).toContain("自我检查该子任务是否真正完成")
@@ -81,7 +83,17 @@ describe("renderSubtask", () => {
     expect(text).toContain("T-002: 实现迁移")
     // 状态文件由 driver 维护,不再要求 agent 勾选
     expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("verified 字段")
     expect(text).not.toContain("改为 `- [x]`")
+  })
+
+  test("verify 未启用: 不含任务级验收与 verify 描述,仍要求不更新 docs/", () => {
+    const text = renderSubtask(plan, task, subtask)
+    expect(text).toContain("自我检查该子任务是否真正完成")
+    expect(text).toContain("不要更新 docs/(最后统一收尾)")
+    expect(text).not.toContain("verify")
+    expect(text).not.toContain("验收")
+    expect(text).not.toContain("verified 字段")
   })
 
   test("不含会话内提交要求: 统一提交由 driver 在会话后执行", () => {
@@ -103,14 +115,23 @@ describe("renderWrapup", () => {
     expect(text).not.toContain("把当前任务的状态标记改为 [done]")
   })
 
-  test("verify 处理权在 driver: 收尾不运行 verify、不下结论,由独立审核会话验收", () => {
-    const text = renderWrapup(plan, task)
+  test("verify 处理权在 driver(verify 启用): 收尾不运行 verify、不下结论,由独立审核会话验收", () => {
+    const text = renderWrapup(plan, task, { verify: true })
     expect(text).toContain("不要运行任务级 verify、不要下验收结论")
     expect(text).toContain("verify 的处理权在 driver")
     expect(text).toContain("独立审核会话")
+    expect(text).toContain("verified 字段")
     expect(text).not.toContain("verified-command")
     expect(text).not.toContain("结论: 通过")
     expect(text).not.toContain("结论: 差距")
+  })
+
+  test("verify 未启用: 收尾提示不涉及验收,任务状态由 driver 登记", () => {
+    const text = renderWrapup(plan, task)
+    expect(text).toContain("任务状态由 driver 在会话结束后统一登记")
+    expect(text).not.toContain("verify")
+    expect(text).not.toContain("验收")
+    expect(text).not.toContain("verified")
   })
 
   test("solo 模式(off/ondemand)不提及子任务", () => {
@@ -332,20 +353,30 @@ describe("renderDryrun", () => {
 })
 
 describe("renderInit", () => {
-  test("初始化规划: 填充 PLAN.md,只规划不实施,包含用户提示词", () => {
+  test("初始化规划(verify 未启用): 填充 PLAN.md,不含 verify 相关描述", () => {
     const text = renderInit("实现一个待办事项 CLI")
     expect(text).toContain("实现一个待办事项 CLI")
     expect(text).toContain("把 PLAN.md 填充为一份可执行的实施计划")
     expect(text).toContain("只做规划,不实施")
-    expect(text).toContain("verify")
     expect(text).toContain("permission")
+    expect(text).not.toContain("verify")
+    expect(text).not.toContain("验证")
   })
 
-  test("初始化规划注入验证执行权原则: 任务描述不要求亲自运行验证命令", () => {
-    const text = renderInit("实现一个待办事项 CLI")
+  test("初始化规划(verify 启用): 注入验收标准要求与验证执行权原则", () => {
+    const text = renderInit("实现一个待办事项 CLI", undefined, { verify: true })
+    expect(text).toContain("每个任务带 verify 验收标准")
     expect(text).toContain("任务描述不要包含要求执行者亲自运行验证脚本/验证命令")
     expect(text).toContain("验证的执行权在 driver")
     expect(text).toContain("AGENTS.md 验证原则块")
+  })
+
+  test("模式导语同样按 verify 门控(migrate 的 verify 字段侧重)", () => {
+    const on = renderInit("把项目迁移到新框架", migrate, { verify: true })
+    expect(on).toContain("verify 字段优先复用既有的测试/构建命令")
+    const off = renderInit("把项目迁移到新框架", migrate)
+    expect(off).toContain("基线确认")
+    expect(off).not.toContain("verify")
   })
 })
 
@@ -446,9 +477,40 @@ describe("renderFinalTask", () => {
   })
 })
 
+describe("init 产物模板(PLAN.md / agent 契约)", () => {
+  test("verify 启用: PLAN.md 含 verify 字段示例与验证执行权原则", async () => {
+    const text = renderText(await Bun.file(planTemplate).text(), { verify: true })
+    expect(text).toContain("  - verify: command: <建议的验收命令,如 bun test>")
+    expect(text).toContain("验证脚本与验证命令的执行权在 driver")
+    expect(text).toContain("opencode-auto check")
+    expect(text).toContain("不要手工编写子任务")
+  })
+
+  test("verify 未启用: PLAN.md 不含 verify 字段示例与验证原则描述", async () => {
+    const text = renderText(await Bun.file(planTemplate).text(), { verify: false })
+    expect(text).toContain("## T-001: <任务标题> [pending]")
+    expect(text).toContain("<任务描述:目标、范围、关键约束。")
+    expect(text).toContain("不要手工编写子任务")
+    expect(text).not.toContain("verify")
+    expect(text).not.toContain("验证")
+  })
+
+  test("verify 未启用: agent 契约不含验收/验证描述,标记块列举相应收窄", async () => {
+    const raw = await Bun.file(agentTemplate).text()
+    const off = renderText(raw, { verify: false })
+    expect(off).toContain("AGENTS.md 不在只读之列")
+    expect(off).toContain("不得删除或改写任何")
+    expect(off).toContain("opencode-auto 标记块(指针/提交/维护规则")
+    expect(off).toContain("遵守 AGENTS.md 维护规则块")
+    expect(off).not.toContain("verify")
+    expect(off).not.toContain("验证")
+  })
+})
+
 describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
-  test("AGENTS.md 条款覆盖全部四类标记块并引用维护规则(防漂移)", async () => {
-    const text = await Bun.file(agentTemplate).text()
+  test("AGENTS.md 条款覆盖全部四类标记块并引用维护规则(防漂移,verify 启用)", async () => {
+    const raw = await Bun.file(agentTemplate).text()
+    const text = renderText(raw, { verify: true })
     expect(text).toContain("AGENTS.md 不在只读之列")
     // 不得删除或改写任何标记块(指针/验证/提交/维护规则),而非仅旧版的指针块
     expect(text).toContain("不得删除或改写任何")
@@ -488,9 +550,18 @@ describe("模板渲染完整性", () => {
       renderDryrun(),
       renderInit("需求"),
       renderInit("需求", migrate),
+      renderInit("需求", migrate, { verify: true }),
       renderDecompose(plan, solo),
       renderHandoffSteer(solo),
     ]
     for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
+  })
+
+  test("init 产物模板按 verify 两态渲染后不残留模板标签", async () => {
+    for (const raw of [await Bun.file(planTemplate).text(), await Bun.file(agentTemplate).text()]) {
+      for (const verify of [true, false]) {
+        expect(renderText(raw, { verify })).not.toMatch(/\{\{|\}\}/)
+      }
+    }
   })
 })

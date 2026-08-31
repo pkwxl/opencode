@@ -386,7 +386,7 @@ export async function runTask(
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
         if (!skipWrapup) {
           await persistStage({ kind: "wrapup" })
-          const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, solo: mode !== "auto" }), opts, chain)
+          const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
           if (result.type === "blocked") return result
           await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
         }
@@ -474,7 +474,7 @@ async function executeWhole(
     const result = await runSession(
       client,
       task,
-      renderWhole(plan, task, { mode: opts.mode, ondemand, continuation }) + feedback,
+      renderWhole(plan, task, { mode: opts.mode, verify: opts.verify, ondemand, continuation }) + feedback,
       opts,
       chain,
       steer,
@@ -804,10 +804,10 @@ async function verifyTask(
     }
     // 把判定会话的差距信息反馈回执行会话链,续跑修复后重新收尾与验收。
     log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
-    const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap), opts, chain)
+    const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap, opts), opts, chain)
     if (fixed.type === "blocked") return fixed
     await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: `${task.id} ${task.title}: 验收差距修复(轮 ${round})` })
-    const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, solo: mode !== "auto" }), opts, chain)
+    const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
     if (wrapped.type === "blocked") return wrapped
     await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
   }
@@ -900,7 +900,7 @@ async function judge(
   await allowWrite(plan.path)
   try {
     // 重新加载计划: 此前轮次的判定会话可能已更新后续任务的 verify 字段。
-    return await requireArtifact(client, task, renderVerifyJudge(await load(plan.path), task, run), opts, {
+    return await requireArtifact(client, task, renderVerifyJudge(await load(plan.path), task, run, opts), opts, {
       kind: "审核",
       artifact: `有效判定文件 ${VERDICT_FILE}`,
       detail: "缺失或无结论行",
@@ -942,7 +942,7 @@ async function generateScript(
   opts: Opts,
   script: string,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
-  const produced = await requireArtifact(client, task, renderVerifyScriptGen(plan, task, script), opts, {
+  const produced = await requireArtifact(client, task, renderVerifyScriptGen(plan, task, script, opts), opts, {
     kind: "脚本生成",
     artifact: script,
     requirement: "必须把可执行脚本写到该路径并 chmod +x。",
@@ -973,7 +973,7 @@ async function reviewTask(
   const final = current.tasks.slice(index + 1).every((item) => item.status === "done")
   log(`⚖ ${task.id} ${final ? "最终质量审核(全计划)" : "质量审核"}${early ? "(与 verify 脚本并行)" : ""}`)
   const file = join(dirname(plan.path), REVIEW_FILE)
-  return requireArtifact(client, task, renderReview(current, task, { final, early }), opts, {
+  return requireArtifact(client, task, renderReview(current, task, { final, early, verify: opts.verify }), opts, {
     kind: "质量审核",
     artifact: `有效结论文件 ${REVIEW_FILE}`,
     detail: "缺失或无结论行",
@@ -994,7 +994,7 @@ async function planReviewFix(
   gap: string,
 ): Promise<{ type: "ok"; items: string[] } | (Outcome & { type: "blocked" })> {
   const file = join(dirname(plan.path), "docs", `${task.id}.fix.md`)
-  const collected = await requireArtifact(client, task, renderReviewFix(plan, task, gap), opts, {
+  const collected = await requireArtifact(client, task, renderReviewFix(plan, task, gap, opts), opts, {
     kind: "修复规划",
     artifact: `有效修复检查项文件 docs/${task.id}.fix.md`,
     detail: "缺失或无检查项",

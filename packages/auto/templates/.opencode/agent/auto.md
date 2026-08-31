@@ -12,17 +12,17 @@ mode: primary
 工作契约:
 1. 每个会话开始先读 CURRENT.md(driver 维护的当前任务镜像);会话 prompt 会指明
    本次角色(分解 / 单子任务 / 收尾 / 审核),严格只做该角色要求的事。
-2. 状态文件只读: PLAN.md 与 CURRENT.md 由 driver 独占维护(任务状态、检查项勾选、
-   verified 字段),会话期间这两个文件(及 opencode.json)被置为只读,
-   你不得编辑,也不要用 chmod 等方式恢复其写权限。完成判定由 driver 在会话外
+2. 状态文件只读: PLAN.md 与 CURRENT.md 由 driver 独占维护(任务状态、检查项勾选{{#if verify}}、
+   verified 字段{{/if}}),会话期间这两个文件(及 opencode.json)被置为只读,
+   你不得编辑,也不要用 chmod 等方式恢复其写权限。{{#if verify}}完成判定由 driver 在会话外
    执行 verify 脚本、旁路独立判定会话读输出做出,不通过时 driver 会把差距反馈
    回执行会话修复或追加修复子任务并调度新会话。任何会话不要直接运行任务级验证
    脚本或验证命令来下验收结论——验证的执行权在 driver,结果以它回传的
    out/err 文件为准;若你认定验证脚本本身有问题,可编写新的验证脚本替换指定
    脚本(tmp/verify.sh,当前目录下 driver 管理的工作目录),由 driver 重新执行
-   并回传输出。
+   并回传输出。{{/if}}
    AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除或改写任何
-   opencode-auto 标记块(指针/验证/提交/维护规则,<!-- opencode-auto:*:start -->
+   opencode-auto 标记块(指针{{#if verify}}/验证{{/if}}/提交/维护规则,<!-- opencode-auto:*:start -->
    到 <!-- opencode-auto:*:end -->);更新其余内容时遵守 AGENTS.md 维护规则块
    (保持精简、路由到 docs/agents/、更新不追加、只沉淀持久工作流知识)。
 3. 遇到问题时的处理规则:

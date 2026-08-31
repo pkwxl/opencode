@@ -47,10 +47,10 @@ describe("渲染器", () => {
 
   test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
     usePromptLibrary(undefined)
-    const standalone = renderText("前:\n   {{> state-rule}}\n后", {})
+    const standalone = renderText("前:\n   {{> state-rule}}\n后", { verify: true })
     expect(standalone.split("\n")[1]).toBe("   PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。")
     expect(standalone.split("\n")[2]).toBe("   git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。")
-    const inline = renderText("前:\n   {{> state-rule}};尾", {})
+    const inline = renderText("前:\n   {{> state-rule}};尾", { verify: true })
     expect(inline.split("\n").at(-1)).toBe("   git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。;尾")
   })
 })

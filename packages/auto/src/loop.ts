@@ -63,22 +63,32 @@ AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
 
 // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、提交原则块与
 // 维护规则块各自独立判断、只追加,从不改写已有内容。返回补写了哪些块。
+// verify(任务级验收开关)为 false 时不补写验证原则块,并移除已存在的——
+// 验收机制不存在时,AGENTS.md 不得保留与其相关的描述。
 export async function ensurePointer(
   directory: string,
-): Promise<{ pointer: boolean; principle: boolean; commit: boolean; maint: boolean }> {
+  opts: { verify?: boolean } = {},
+): Promise<{ pointer: boolean; principle: boolean; principleRemoved: boolean; commit: boolean; maint: boolean }> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
   let text = existing
   const pointer = !text.includes("opencode-auto:start")
   if (pointer) text = text ? `${text.trimEnd()}\n\n${POINTER}\n` : `# AGENTS.md\n\n${POINTER}\n`
-  const principle = !text.includes("opencode-auto:verify:start")
+  const principle = Boolean(opts.verify) && !text.includes("opencode-auto:verify:start")
   if (principle) text = `${text.trimEnd()}\n\n${VERIFY_PRINCIPLE}\n`
+  const principleRemoved = !opts.verify && text.includes("opencode-auto:verify:start")
+  if (principleRemoved) {
+    // 吞掉块与其后全部换行: 块前空行分隔保留(前文与后文之间仍是单空行),
+    // 块在文件尾时不留尾部空行。
+    text = text.replace(/<!-- opencode-auto:verify:start -->[\s\S]*?<!-- opencode-auto:verify:end -->\n*/, "")
+    text = text.replace(/\n{2,}$/, "\n")
+  }
   const commit = !text.includes("opencode-auto:commit:start")
   if (commit) text = `${text.trimEnd()}\n\n${COMMIT_PRINCIPLE}\n`
   const maint = !text.includes("opencode-auto:maint:start")
   if (maint) text = `${text.trimEnd()}\n\n${MAINT_RULE}\n`
-  if (pointer || principle || commit || maint) await Bun.write(agentsFile, text)
-  return { pointer, principle, commit, maint }
+  if (text !== existing) await Bun.write(agentsFile, text)
+  return { pointer, principle, principleRemoved, commit, maint }
 }
 
 // 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
@@ -186,12 +196,13 @@ export async function runAll(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
-  // 启动会话前确保 AGENTS.md 指针块与验证/提交原则块、维护规则块存在(缺失则补写);
-  // AGENTS.md 本身保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前
-  // 重启 server)。
-  const ensured = await ensurePointer(directory)
+  // 启动会话前确保 AGENTS.md 指针块与验证/提交原则块、维护规则块就位(缺失则补写;
+  // verify 未启用时不补写验证原则块、已存在的会移除)。AGENTS.md 本身保持可写,
+  // 任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
+  const ensured = await ensurePointer(directory, { verify: opts.verify })
   if (ensured.pointer) log("已补写: AGENTS.md 指针块")
   if (ensured.principle) log("已补写: AGENTS.md 验证原则块")
+  if (ensured.principleRemoved) log("已移除: AGENTS.md 验证原则块(任务级验收未启用)")
   if (ensured.commit) log("已补写: AGENTS.md 提交原则块")
   if (ensured.maint) log("已补写: AGENTS.md 维护规则块")
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")

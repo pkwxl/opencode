@@ -9,7 +9,7 @@ import { load } from "./plan"
 import { renderInit } from "./prompt"
 import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage } from "./server"
-import { usePromptLibrary } from "./template"
+import { usePromptLibrary, renderText } from "./template"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -383,7 +383,10 @@ if (command === "init") {
   }
   for (const [file, source] of Object.entries(templates)) {
     const target = resolve(directory, file)
-    const content = await Bun.file(source).text()
+    const raw = await Bun.file(source).text()
+    // PLAN.md 与 agent 契约按 config.verify 条件渲染: 未启用任务级验收时,
+    // 产出物不含 verify 相关描述(verify 字段示例、driver 验收语义等)。
+    const content = file === "opencode.json" ? raw : renderText(raw, { verify: config.verify })
     const existing = await Bun.file(target).text().catch(() => undefined)
     // .opencode/agent/auto.md 与模板不一致时总是替换,保证 agent 契约为最新版本;
     // 其余模板已存在则跳过(PLAN.md 可能已被用户编辑)。
@@ -395,10 +398,15 @@ if (command === "init") {
     console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
   }
   // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、提交原则块与
-  // 维护规则块各自独立、只追加。
-  const ensured = await ensurePointer(directory)
+  // 维护规则块各自独立、只追加;验证原则块仅 config.verify 启用时补写,
+  // 未启用时移除已存在的块(验收机制不存在,AGENTS.md 不保留其描述)。
+  const ensured = await ensurePointer(directory, { verify: config.verify })
   console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
-  console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
+  if (config.verify) {
+    console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
+  } else if (ensured.principleRemoved) {
+    console.log("已移除: AGENTS.md 验证原则块(任务级验收未启用)")
+  }
   console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
   console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
@@ -413,7 +421,7 @@ if (command === "init") {
     }
     const server = await manage(directory, flags.get("server"))
     try {
-      const result = await runOnce(server.client, "初始化计划", renderInit(promptText, mode), {
+      const result = await runOnce(server.client, "初始化计划", renderInit(promptText, mode, { verify: config.verify }), {
         agent: config.agent,
         dir: directory,
         server,
@@ -432,20 +440,22 @@ if (command === "init") {
   process.exit(0)
 }
 
-// check: 启发式检查 AGENTS.md 与 PLAN.md 中是否有与"验证执行权在 driver"原则
-// 相违背的描述(要求会话亲自运行验证脚本/命令的语句);命中退出码 1,供人工修订。
+// check: 启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
+// (及 verify 启用时的"验证执行权在 driver"原则)相违背的描述;命中退出码 1,
+// 供人工修订。验证类检查是否启用由 checkPrinciple 依配置决定,verifyOn 仅用于
+// 调整报文措辞。
 if (command === "check") {
-  const { findings, notes } = await checkPrinciple(directory)
-  console.log(`检查 ${directory}: 验证执行权原则(任务级验证脚本与命令由 driver 执行,会话不亲自运行)`)
+  const { findings, notes, verifyOn } = await checkPrinciple(directory)
+  console.log(`检查 ${directory}: ${verifyOn ? "验证/提交执行权原则" : "提交执行权原则"}(验证类检查${verifyOn ? "已启用" : "未启用,任务级验收关闭"})`)
   for (const note of notes) console.log(`ℹ ${note}`)
   if (!findings.length) {
-    console.log("✓ 未发现与验证原则相违背的描述")
+    console.log(`✓ 未发现与${verifyOn ? "验证/提交" : "提交"}原则相违背的描述`)
     process.exit(0)
   }
   for (const finding of findings) {
     console.log(`⚠ ${finding.file}${finding.task ? `(${finding.task})` : ""}:${finding.line}: ${finding.text}`)
   }
-  console.log(`发现 ${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订;验收标准统一写在任务的 verify 字段)`)
+  console.log(`发现 ${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""})`)
   process.exit(1)
 }
 

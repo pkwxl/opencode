@@ -20,5 +20,5 @@
    注释中以 `AUTO-DECISION: <决策与理由>` 行明确标注。
    非权限问题调用 question 工具会被自动答复上述要求;就同一问题再次询问会导致任务阻塞停机。
 ## state-rule
-PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
+PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选{{#if verify}}、verified 字段{{/if}}),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
 git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。

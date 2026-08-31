@@ -5,10 +5,12 @@
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import type { Plan, Task } from "./plan"
-import { renderTemplate, type Ctx } from "./template"
+import { renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
-type Opts = { mode?: ModeSpec }
+// verify: config.verify(任务级三段式验收开关)。false 时与 verify 相关的描述
+// 从会话提示词中整体消失(验收机制不存在,提示词不得提及)。
+type Opts = { mode?: ModeSpec; verify?: boolean }
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
 export const VERDICT_FILE = ".auto/verify.md"
@@ -58,18 +60,18 @@ export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boole
 
 // Verify script generation session (fresh side session): translate the verify
 // field's acceptance semantics into an executable script at tmp/verify.sh.
-export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string): string {
-  return renderTemplate("verify-script-gen", { ...baseCtx(plan, task), scriptPath, verifyState: verifyState(task) })
+export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string, opts: Opts = {}): string {
+  return renderTemplate("verify-script-gen", { ...baseCtx(plan, task, opts), scriptPath, verifyState: verifyState(task) })
 }
 
 // Verify judge session (fresh side session): the driver already executed the
 // script — the prompt injects the run info and the later-verify list; the
 // session only reads files and code to reach a verdict (protocol details in
 // templates/prompts/verify-judge.md).
-export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun): string {
+export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun, opts: Opts = {}): string {
   const later = plan.tasks.filter((item) => item.id !== task.id && item.status !== "done" && item.verify)
   return renderTemplate("verify-judge", {
-    ...baseCtx(plan, task),
+    ...baseCtx(plan, task, opts),
     verifyState: verifyState(task),
     runScript: run.script,
     runCode: String(run.code),
@@ -86,15 +88,15 @@ export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun): strin
 
 // Fix round after a failed task-level review: send the gap back and resume the
 // execution session chain with it.
-export function renderFix(plan: Plan, task: Task, gap: string): string {
-  return renderTemplate("fix", { ...baseCtx(plan, task), gap })
+export function renderFix(plan: Plan, task: Task, gap: string, opts: Opts = {}): string {
+  return renderTemplate("fix", { ...baseCtx(plan, task, opts), gap })
 }
 
 // --review quality-audit session (fresh side session); variants for final and
 // early live in templates/prompts/review.md.
-export function renderReview(plan: Plan, task: Task, opts: { final: boolean; early?: boolean }): string {
+export function renderReview(plan: Plan, task: Task, opts: Opts & { final: boolean; early?: boolean }): string {
   return renderTemplate("review", {
-    ...baseCtx(plan, task),
+    ...baseCtx(plan, task, opts),
     final: opts.final,
     early: Boolean(opts.early),
     scriptPath: join(verifyTmpDir(dirname(plan.path)), "verify.sh"),
@@ -103,8 +105,8 @@ export function renderReview(plan: Plan, task: Task, opts: { final: boolean; ear
 
 // --review fix-planning session (fresh side session): turn the audit gap into
 // self-contained fix checklist items in docs/<id>.fix.md.
-export function renderReviewFix(plan: Plan, task: Task, gap: string): string {
-  return renderTemplate("review-fix", { ...baseCtx(plan, task), gap })
+export function renderReviewFix(plan: Plan, task: Task, gap: string, opts: Opts = {}): string {
+  return renderTemplate("review-fix", { ...baseCtx(plan, task, opts), gap })
 }
 
 // --final-review 终审四阶段(audit → remediate → validate → finalize,
@@ -114,12 +116,15 @@ export type FinalStage = "audit" | "remediate" | "validate" | "finalize"
 // --final-review 终审任务生成会话(旁路一次性,复用 requireArtifact 骨架);四阶段
 // 的职责与报告产出要求以条件段内联在 templates/prompts/final-task.md。
 export function renderFinalTask(plan: Plan, stage: FinalStage, round: number, prior: string, mode?: ModeSpec): string {
-  const emphasis = stage === "remediate" ? undefined : mode?.final[stage]
+  // 终审任务强制跳过任务级验收: verify 恒为 false(state-rule 的 verified 字段
+  // 表述不出现;模式文本同经渲染,可自带条件段)。
+  const emphasis = stage === "remediate" ? undefined : mode && modeText(mode.final[stage], {})
   return renderTemplate("final-task", {
     doneList: doneList(plan),
     prior,
     emphasis,
     modeName: mode?.name,
+    verify: false,
     round: String(round),
     stageName: stageText(stage),
     proposalFile: `docs/final/plan-${stage}-r${round}.md`,
@@ -178,8 +183,14 @@ export function renderDryrun(): string {
 }
 
 // init --prompt: 初始化规划会话,按用户需求填充 PLAN.md,不实施。
-export function renderInit(promptText: string, mode?: ModeSpec): string {
-  return renderTemplate("init", { promptText, modeName: mode?.name, modeInit: mode?.init })
+// verify: config.verify——未启用时提示词不含任何 verify 相关描述。
+export function renderInit(promptText: string, mode?: ModeSpec, opts: { verify?: boolean } = {}): string {
+  return renderTemplate("init", {
+    promptText,
+    verify: opts.verify,
+    modeName: mode?.name,
+    modeInit: mode && modeText(mode.init, opts),
+  })
 }
 
 function doneList(plan: Plan): string {
@@ -190,7 +201,8 @@ function doneList(plan: Plan): string {
 }
 
 // 公共上下文: head(done 清单)/blocked(阻塞问答)/mode-section(模式注记)三个
-// 共享片段与任务块所需的变量。
+// 共享片段与任务块所需的变量。模式文本先经模板引擎渲染(模式文件可用 {{#if verify}}
+// 条件段,如 migrate 的 verify 字段侧重),再作为变量注入。
 function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
   return {
     taskId: task.id,
@@ -200,10 +212,15 @@ function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
     blockedUnanswered: Boolean(task.question && !task.answer),
     question: task.question ?? "",
     answer: task.answer ?? "",
+    verify: opts.verify,
     modeName: opts.mode?.name,
-    modeInit: opts.mode?.init,
-    modeExec: opts.mode?.exec,
+    modeInit: opts.mode && modeText(opts.mode.init, opts),
+    modeExec: opts.mode && modeText(opts.mode.exec, opts),
   }
+}
+
+function modeText(text: string, opts: Opts): string {
+  return renderText(text, { verify: Boolean(opts.verify) })
 }
 
 // verify 字段在提示词中的两种形态: `是"<原文字段>"` 或 `未声明`。
