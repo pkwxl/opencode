@@ -89,6 +89,10 @@ export type Opts = {
   waitAnswer?: number
   commit?: CommitMode
   subtask?: SubtaskMode
+  // --verify: 启用 driver 的任务级三段式验收(脚本准备 → driver 执行 → 独立判定);
+  // 缺省不启用——任务在收尾后直接标 done(不写 verified,未经验证不落账),
+  // --review 的质量审核相应改为串行执行。
+  verify?: boolean
   // dryrun 会话: 权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复。
   dryrun?: boolean
   // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
@@ -175,6 +179,10 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // joins it before the judge session and returns its verdict together with the
 // done result, so the audit below consumes it instead of opening a
 // separate serial audit session.
+// --verify off (the default) skips the three-stage acceptance entirely: the
+// driver marks the task done right after wrap-up (no verified record — nothing
+// ran), and a --review audit, if enabled, runs serially at that point (--early
+// has no execution window to hook into and degrades to the serial audit).
 // Final-review tasks (final field, appended by src/final.ts under
 // --final-review) run through this same pipeline; audit/validate ones force
 // review=0 — they are audits themselves — while remediate/finalize ones are
@@ -301,9 +309,12 @@ export async function runTask(
     // 质量审核(--early 随之自然失效);remediate/finalize 任务照常(设计文档 B.6)。
     const finalMark = parseFinalMark(task.final)
     const limit = finalMark && (finalMark.stage === "audit" || finalMark.stage === "validate") ? 0 : (opts.review ?? 0)
+    // --verify 未启用: 略过三段式验收(early 依赖的脚本执行窗口随之不存在),
+    // 收尾后由 driver 直接标 done;--review 的质量审核改为此时串行执行。
+    const verifyOn = opts.verify === true
     // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
     // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
-    const early = opts.early && limit > 0
+    const early = opts.early && limit > 0 && verifyOn
     // 恢复重入旗标(仅首轮生效):
     // - review/audit → 验收已过,直接补跑审核会话;
     // - verify → verifyTask 内部按 stage/run 精确恢复;
@@ -360,30 +371,37 @@ export async function runTask(
           if (result.type === "blocked") return result
         }
         skipWrapup = false
-        // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
-        // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
-        // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
-        const verdict = await verifyTask(
-          client,
-          plan,
-          task,
-          opts,
-          chain,
-          early ? () => reviewTask(client, plan, task, opts, true) : undefined,
-          persistStage,
-          pendingVerify,
-        )
-        pendingVerify = undefined
-        if (verdict.type === "blocked") return verdict
-        if (verdict.type === "gap") {
-          await setStatus(plan.path, task.id, "pending")
-          return { type: "incomplete", reason: verdict.gap }
+        let auditFromVerify: Verdict | undefined
+        if (verifyOn) {
+          // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
+          // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
+          // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
+          const verdict = await verifyTask(
+            client,
+            plan,
+            task,
+            opts,
+            chain,
+            early ? () => reviewTask(client, plan, task, opts, true) : undefined,
+            persistStage,
+            pendingVerify,
+          )
+          pendingVerify = undefined
+          if (verdict.type === "blocked") return verdict
+          if (verdict.type === "gap") {
+            await setStatus(plan.path, task.id, "pending")
+            return { type: "incomplete", reason: verdict.gap }
+          }
+          auditFromVerify = verdict.audit
+        } else {
+          log(`⏭ ${task.id} 未启用 --verify,略过任务级验收,直接完成`)
+          await markDone(plan.path, task.id)
         }
         if (limit <= 0) return { type: "completed" }
         await persistStage({ kind: "review", round, stage: "audit" })
         // early 的审核结论已随 verifyTask 带回(挂点在每次脚本执行前重开,done 必有
-        // 结论);非 early 在验收通过后串行开审核会话。
-        audit = verdict.audit ?? (await reviewTask(client, plan, task, opts))
+        // 结论);其余情况(未启用 --verify 或非 early)在此时串行开审核会话。
+        audit = auditFromVerify ?? (await reviewTask(client, plan, task, opts))
       }
       enterAudit = false
       if (audit.type === "blocked") return audit

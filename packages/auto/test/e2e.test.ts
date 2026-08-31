@@ -118,4 +118,20 @@ describe("CLI 解析: -m/--mode 与 --final-review", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  test("--verify 为布尔选项,合法组合不误报用法错误", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const combos = [["--verify"], ["--verify", "true"], ["--verify=false", "--review", "2"], ["--verify", "--early-review", "2"]]
+      for (const extra of combos) {
+        const run = await runCli(["run", dir, ...extra])
+        // 组合合法: 解析全部通过后进入 runAll,因空目录缺少 PLAN.md 退出 1。
+        expect(run.code).toBe(1)
+        expect(run.out).toContain("未找到计划文件")
+        expect(run.err).toBe("")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

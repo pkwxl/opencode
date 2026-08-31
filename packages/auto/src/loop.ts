@@ -91,6 +91,9 @@ export async function runAll(
     contextLimit?: number
     // --review 质量审核轮数上限(0 = 不启用),透传给 runTask。
     review?: number
+    // --verify: 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标
+    // done),透传给 runTask。
+    verify?: boolean
     // --early: 审核会话与 driver 执行 verify 脚本并行(需 review 已启用),透传给
     // runTask;窗口时序见设计文档 F 节。
     early?: boolean
@@ -125,6 +128,9 @@ export async function runAll(
     log(error instanceof Error ? error.message : String(error))
     return 1
   }
+
+  // --early 依赖 verify 脚本执行窗口;未启用 --verify 时窗口不存在,审核降级为串行。
+  if (opts.early && !opts.verify) log("ℹ 未启用 --verify,--early 的并行审核窗口不存在,质量审核改为串行执行")
 
   // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:
   // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出并提示
@@ -312,6 +318,7 @@ export async function runAll(
         contextLimit: opts.contextLimit,
         review: opts.review,
         early: opts.early,
+        verify: opts.verify,
         permission: opts.permission,
         interactive: repl,
         server,

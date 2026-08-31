@@ -21,9 +21,9 @@ const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--verify-idle/--verify-max/--mode/
 // --final-review 带值(吞掉下一个 token);--verbose/--interactive/--dryrun/
-// --commit-subtask/--early 是布尔选项,出现即 true,仅当紧随字面量 true/false 时
-// 才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,--interactive 另有
-// 短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值规则)。
+// --commit-subtask/--early/--verify 是布尔选项,出现即 true,仅当紧随字面量
+// true/false 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,--interactive
+// 另有短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -41,7 +41,7 @@ const VALUE_FLAGS = new Set([
   "mode",
   "final-review",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask", "early"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask", "early", "verify"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -162,6 +162,9 @@ if (command === "run") {
     console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
     process.exit(1)
   }
+  // --verify: 启用 driver 的任务级三段式验收(脚本准备 → driver 执行 → 独立判定);
+  // 缺省不启用——任务在收尾后直接标 done,不写 verified(--review 的审核改为串行)。
+  const verify = flags.has("verify") && flags.get("verify") !== "false"
   // --verify-idle: verify 脚本的无进度判定窗口(两个输出文件持续无增长即终止);
   // --verify-max: 绝对时长上限(0 = 不设,只要持续有输出就永不限时)。
   const verifyIdle = parseVerifyIdle(flags.get("verify-idle"))
@@ -190,6 +193,7 @@ if (command === "run") {
     contextLimit: contextLimit * 1000,
     review: earlyReview > 0 ? earlyReview : review,
     early,
+    verify,
     permission,
     interactive,
     verifyIdleMs: verifyIdle * 60_000,
@@ -406,11 +410,12 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [-m|--mode <name>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [-m|--mode <name>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
 选项: -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码;缺省 migrate,解析成功后持久化到 .auto/config.json 供后续 run 沿用)
+      --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
