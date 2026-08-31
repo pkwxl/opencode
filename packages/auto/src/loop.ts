@@ -1,15 +1,16 @@
 import { createInterface } from "node:readline/promises"
-import { readdir, stat } from "node:fs/promises"
+import { stat } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
+import { commitTree, pendingChanges, repoRoots } from "./git"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { block, countSubtasks, load, next, resetInProgress, setStatus, type Plan } from "./plan"
-import { renderDryrun, stageText, type CommitMode } from "./prompt"
+import { renderDryrun, stageText } from "./prompt"
 import { protect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
-import { commitAll, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
+import { runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage, type ServerHandle } from "./server"
 import { usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -36,9 +37,18 @@ const VERIFY_PRINCIPLE = `<!-- opencode-auto:verify:start -->
 与项目规范不要出现与此相违背的指示(可用 opencode-auto check 检查)。
 <!-- opencode-auto:verify:end -->`
 
-// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块与验证原则块各自独立判断、只追加,
-// 从不改写已有内容。返回补写了哪些块。
-export async function ensurePointer(directory: string): Promise<{ pointer: boolean; principle: boolean }> {
+// AGENTS.md 提交原则块: 第三个标记块,与验证原则对等——提交执行权在 driver。
+const COMMIT_PRINCIPLE = `<!-- opencode-auto:commit:start -->
+提交原则: 会话结束后由 driver 递归统一提交全部改动(先嵌套子仓库后本仓库),
+提交信息携带任务编号与阶段;任何会话不要执行 git commit/amend/rebase 等提交
+类命令,也不要修改提交历史。需要留档的变更背景写入 docs/ 文档,由 driver 的
+提交一并纳入。任务描述与项目规范不要出现与此相违背的指示(可用
+opencode-auto check 检查)。
+<!-- opencode-auto:commit:end -->`
+
+// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块与提交原则块各自
+// 独立判断、只追加,从不改写已有内容。返回补写了哪些块。
+export async function ensurePointer(directory: string): Promise<{ pointer: boolean; principle: boolean; commit: boolean }> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
   let text = existing
@@ -46,14 +56,16 @@ export async function ensurePointer(directory: string): Promise<{ pointer: boole
   if (pointer) text = text ? `${text.trimEnd()}\n\n${POINTER}\n` : `# AGENTS.md\n\n${POINTER}\n`
   const principle = !text.includes("opencode-auto:verify:start")
   if (principle) text = `${text.trimEnd()}\n\n${VERIFY_PRINCIPLE}\n`
-  if (pointer || principle) await Bun.write(agentsFile, text)
-  return { pointer, principle }
+  const commit = !text.includes("opencode-auto:commit:start")
+  if (commit) text = `${text.trimEnd()}\n\n${COMMIT_PRINCIPLE}\n`
+  if (pointer || principle || commit) await Bun.write(agentsFile, text)
+  return { pointer, principle, commit }
 }
 
 // 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
-// 与 .auto/logs/(运行日志)。清扫提交会提交全部未提交改动,不忽略会把它们带进
-// 提交。已有等价条目则跳过;非 git 目录(无 .git 且无 .gitignore)不做任何事。
-// 返回是否追加了条目。
+// 与 .auto/(运行日志、进度恢复记录与判定文件等运行时状态)。统一提交会提交全部
+// 未提交改动,不忽略会把它们带进提交。已有等价条目则跳过;非 git 目录(无 .git
+// 且无 .gitignore)不做任何事。返回是否追加了条目。
 export async function ensureGitignore(directory: string): Promise<boolean> {
   const file = join(directory, ".gitignore")
   const existing = await Bun.file(file).text().catch(() => undefined)
@@ -64,7 +76,7 @@ export async function ensureGitignore(directory: string): Promise<boolean> {
       const normalized = line.trim().replace(/^\//, "").replace(/\/$/, "")
       return normalized === entry.replace(/\/$/, "")
     })
-  const missing = ["tmp/", ".auto/logs/"].filter((entry) => !ignored(entry))
+  const missing = ["tmp/", ".auto/"].filter((entry) => !ignored(entry))
   if (!missing.length) return false
   await Bun.write(file, `${existing ? `${existing.trimEnd()}\n` : ""}${missing.join("\n")}\n`)
   return true
@@ -83,7 +95,8 @@ export async function runAll(
     waitAnswer?: number
     // 任务间暂停等待人工的分钟数(0 = 不等待);回车立即继续,超时自动继续。
     waitBetween?: number
-    commit?: CommitMode
+    // --commit false: 关闭会话后统一提交(缺省启用;提交机制见 src/git.ts)。
+    commit?: boolean
     subtask?: SubtaskMode
     // dryrun: 只跑一次权限预检会话并输出报告,不执行任何任务。
     dryrun?: boolean
@@ -148,17 +161,24 @@ export async function runAll(
   }
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
-  const progress = opts.commit === "subtask" ? trackSubtasks(path) : undefined
+  // 每 10 分钟上报当前任务的子任务进度与预计剩余时间(基于 PLAN.md 勾选状态)。
+  const progress = trackSubtasks(path)
   // Driver-owned files go read-only for the whole run; driver writes
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
-  // 启动会话前确保 AGENTS.md 指针块与验证原则块存在(缺失则补写);AGENTS.md 本身
-  // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
+  // 启动会话前确保 AGENTS.md 指针块与验证/提交原则块存在(缺失则补写);AGENTS.md
+  // 本身保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
   const ensured = await ensurePointer(directory)
   if (ensured.pointer) log("已补写: AGENTS.md 指针块")
   if (ensured.principle) log("已补写: AGENTS.md 验证原则块")
-  if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/logs/(driver 工作目录)")
+  if (ensured.commit) log("已补写: AGENTS.md 提交原则块")
+  if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
+  // 工作区已有未提交改动会被 driver 的下一次提交一并纳入(统一提交为全量清扫
+  // 语义,与此前会话清扫提交一致),提前提示用户。dryrun 不做任何提交,不提示。
+  if (opts.commit !== false && !opts.dryrun && (await pendingChanges(directory))) {
+    log("⚠ 工作区已有未提交改动,driver 的下一次统一提交会将它们一并纳入(如需隔离请先自行提交)")
+  }
   let server: ServerHandle | undefined
   // --interactive 旁路输入控制器;server 就绪后创建,finally 中关闭。
   let repl: Interactive | undefined
@@ -271,31 +291,11 @@ export async function runAll(
       const task = next(plan)
       if (!task) {
         // --final-review: next() 为空且终审未完成 → 推进终审闭环(生成/追加下一
-        // 阶段任务后续跑循环);终审完成则照常进入整体提交与退出。
+        // 阶段任务后续跑循环);终审完成则照常退出。
         if ((opts.finalReview ?? 0) > 0) {
           const advanced = await advanceFinal(plan, true)
           if (advanced === "stopped") return 2
           if (advanced === "appended") continue
-        }
-        // --commit once: 任务期间不提交,全部完成后开一次整体提交会话
-        // (终审闭环本身产生的改动一并提交,位置保持在终审全部结束之后)。
-        if (opts.commit === "once" && ran > 0) {
-          banner("全部任务完成,整体提交")
-          const outcome = await commitAll(server.client, plan, {
-            agent: agentName,
-            dir: directory,
-            verbose: opts.verbose,
-            waitAnswer: opts.waitAnswer,
-            contextLimit: opts.contextLimit,
-            permission: opts.permission,
-            interactive: repl,
-            server,
-          })
-          if (outcome.type !== "completed") {
-            const detail = outcome.type === "blocked" ? outcome.question : outcome.reason
-            log(`⏸ 整体提交未完成(任务本身已全部完成):\n${detail}`)
-            return 2
-          }
         }
         log("✓ 全部任务已完成")
         return 0
@@ -329,14 +329,27 @@ export async function runAll(
       if (outcome.type === "blocked") {
         await block(path, task.id, outcome.question)
         log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
+        // 中断现场也提交: 保存断点(阻塞问题、CURRENT.md 中断备注),支持回滚到断点。
+        if (opts.commit !== false) {
+          await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(阻塞)` })
+        }
         return 2
       }
       if (outcome.type === "incomplete") {
         log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
+        if (opts.commit !== false) {
+          await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(回退 pending)` })
+        }
         return 2
       }
       log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
       ran++
+      // 任务完成的终态提交: PLAN.md 的 [done]/verified 与 CURRENT.md 的删除在此
+      // 一并落账(各会话产出已随会话提交,这里是收口);终审路由追加的下一任务
+      // 改动归入其生成/执行会话的提交。
+      if (opts.commit !== false) {
+        await commitTree(directory, task, { stage: "done", subject: `${task.id} ${task.title}: 完成` })
+      }
       // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
       // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
       // 由下一次 next() 按文件顺序拾取。
@@ -399,27 +412,10 @@ function watchFiles(directory: string) {
 
 // 变动文件只取 git status 的输出:目标目录自身(可能位于更大的仓库中,
 // 用 pathspec `-- .` 限定该子树)加上所有含 .git 的子目录(嵌套仓库,
-// 含 worktree/子模块的 .git 文件)。返回相对目标目录的路径。
+// 含 worktree/子模块的 .git 文件;仓库发现复用 src/git.ts 的 repoRoots)。
+// 返回相对目标目录的路径。
 async function gitChangedFiles(directory: string): Promise<string[]> {
-  const inRepo =
-    (await Bun.spawn(["git", "-C", directory, "rev-parse", "--is-inside-work-tree"], {
-      stdout: "ignore",
-      stderr: "ignore",
-    }).exited) === 0
-  const roots = new Set<string>(inRepo ? [directory] : [])
-  // 手工逐层遍历而非 readdir recursive,以免每 10 秒扫一遍 .git/node_modules 内部。
-  const pending = [directory]
-  while (pending.length) {
-    const dir = pending.pop()!
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
-    if (entries.some((entry) => entry.name === ".git")) roots.add(dir)
-    for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules") {
-        pending.push(join(dir, entry.name))
-      }
-    }
-  }
-  const lists = await Promise.all([...roots].map((root) => gitStatusFiles(directory, root)))
+  const lists = await Promise.all((await repoRoots(directory)).map((root) => gitStatusFiles(directory, root)))
   return lists.flat()
 }
 
@@ -446,10 +442,8 @@ async function gitStatusFiles(directory: string, root: string): Promise<string[]
     .map((entry) => relative(directory, join(toplevel, entry.slice(3))))
 }
 
-// --commit subtask mode: every 10min re-read PLAN.md, report the current task's
-// subtask checkbox progress and a remaining-time estimate. The estimate is a
-// simple linear projection from completed items, so its precision is bounded
-// by this check interval.
+// 每 10 分钟重读 PLAN.md,上报当前任务的子任务勾选进度与剩余时间估计(估计为
+// 已完成项的线性外推,精度受该检查间隔约束)。
 function trackSubtasks(path: string) {
   let current = { id: "", since: 0 }
   const timer = setInterval(async () => {

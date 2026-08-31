@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { appendFinalTask, finalProposalFile, finalReportFile, parseConclusion, parseProposal, parseStrategy, routeFinal } from "../src/final"
-import { load, parse, setStatus, verifyCommand } from "../src/plan"
+import { load, parse, setStatus } from "../src/plan"
 
 let dir: string
 
@@ -255,7 +255,7 @@ describe("appendFinalTask", () => {
     return { id, task: (await load(path)).tasks.find((task) => task.id === id)! }
   }
 
-  test("audit: T-F 编号、final 字段、固定结构检查 verify、标题带阶段前缀;提案 verify 被忽略", async () => {
+  test("audit: T-F 编号、final 字段、不写 verify 字段、标题带阶段前缀;提案 verify 被忽略", async () => {
     const { id, task } = await appended(path, await load(path), "audit", 1, {
       title: "全面审计",
       body: "审计正文。",
@@ -266,49 +266,37 @@ describe("appendFinalTask", () => {
     expect(task.status).toBe("pending")
     expect(task.final).toBe("audit@1")
     expect(task.body).toBe("审计正文。")
-    expect(task.verify).toBe(`command: test -s docs/final/audit-r1.md && grep -qE '^策略[:：] ?(重构|修补|无)$' docs/final/audit-r1.md`)
+    expect(task.verify).toBeUndefined()
   })
 
-  test("validate: verify 固定为结论行结构检查", async () => {
+  test("validate: 同样不写 verify 字段(终审任务强制跳过任务级验收)", async () => {
     const { task } = await appended(path, await load(path), "validate", 2, { title: "回归验证", body: "验证正文。" })
     expect(task.final).toBe("validate@2")
     expect(task.title).toBe("回归验证(第 2 轮): 回归验证")
-    expect(task.verify).toBe(`command: test -s docs/final/validate-r2.md && grep -qE '^结论[:：] ?(通过|差距)' docs/final/validate-r2.md`)
+    expect(task.verify).toBeUndefined()
   })
 
-  test("remediate: verify 取提案行,缺省回落自然语言(generate 分支)", async () => {
-    const withCommand = await appended(path, await load(path), "remediate", 1, {
+  test("remediate: 提案 verify 行一律忽略,不写入任务", async () => {
+    const { task } = await appended(path, await load(path), "remediate", 1, {
       title: "修复差距",
       body: "修复正文。",
       verify: "command: bun test",
     })
-    expect(withCommand.task.final).toBe("remediate@1")
-    expect(withCommand.task.verify).toBe("command: bun test")
-    const fallback = await appended(path, await load(path), "remediate", 2, { title: "再修复", body: "正文。" })
-    expect(fallback.task.verify).toBeTruthy()
-    expect(verifyCommand(fallback.task)).toBeUndefined()
+    expect(task.final).toBe("remediate@1")
+    expect(task.verify).toBeUndefined()
   })
 
-  test("finalize: 缺省结构检查、提案可覆盖;编号按既有终审任务数递增", async () => {
+  test("finalize: 不写 verify 字段;编号按既有终审任务数递增", async () => {
     const first = await appended(path, await load(path), "audit", 1, { title: "审计", body: "正文。" })
     expect(first.id).toBe("T-F1")
     const second = await appended(path, await load(path), "finalize", 1, { title: "收尾", body: "正文。" })
     expect(second.id).toBe("T-F2")
     expect(second.task.title).toBe("终审收尾: 收尾")
     expect(second.task.final).toBe("finalize@1")
-    expect(second.task.verify).toBe("command: test -s docs/final/finalize.md")
+    expect(second.task.verify).toBeUndefined()
     const override = await appended(path, await load(path), "finalize", 2, { title: "收尾", body: "正文。", verify: "command: bun test" })
     expect(override.task.final).toBe("finalize@2")
-    expect(override.task.verify).toBe("command: bun test")
-  })
-
-  test("audit/validate 的结构检查命令可真实执行(grep 中文协议行)", async () => {
-    const { task } = await appended(path, await load(path), "audit", 1, { title: "审计", body: "正文。" })
-    const command = verifyCommand(task)!
-    await write(finalReportFile("audit", 1), auditReport("重构"))
-    expect(await Bun.spawn(["bash", "-c", command], { cwd: dir }).exited).toBe(0)
-    await write(finalReportFile("audit", 1), "# 报告\n\n结论: 有差距\n策略: 大改\n")
-    expect(await Bun.spawn(["bash", "-c", command], { cwd: dir }).exited).not.toBe(0)
+    expect(override.task.verify).toBeUndefined()
   })
 
   test("追加后经 begin/edit 重写保留 final 字段与正文(往返)", async () => {

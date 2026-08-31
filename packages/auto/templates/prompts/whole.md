@@ -18,6 +18,4 @@
 {{> question-rule}}
 3. 不要运行任务级 verify、不要更新 docs/ 报告,这些在最后统一收尾;{{#if ondemand}}
    如果 driver 插入"[driver] 上下文即将达到上限"的提示,立即按提示写出 {{handoffFile}} 并结束会话;{{/if}}
-{{#if commitSubtask}}4. git 提交全部未提交改动:
-   {{> commit-rule}};
-{{/if}}   {{> state-rule}}
+   {{> state-rule}}

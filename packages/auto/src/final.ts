@@ -33,8 +33,8 @@ export function finalReportFile(stage: FinalStage, round: number, remediate: "re
 }
 
 // 审计报告末行策略(driver 依此确定性路由): 重构|修补|无。取最后一个策略行,
-// 取值非法或缺失返回 undefined——正常不可能(结构检查验收已拦截),命中按
-// 报告异常(C.4)处理。
+// 取值非法或缺失返回 undefined——正常不可能(提案正文对报告协议有硬性要求),
+// 命中按报告异常(C.4)处理。
 export function parseStrategy(text: string): "重构" | "修补" | "无" | undefined {
   const lines = text.trimEnd().split("\n")
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -65,8 +65,8 @@ export function parseConclusion(text: string): { type: "pass" } | { type: "gap";
 export type FinalProposal = { title: string; body: string; verify?: string }
 
 // 提案文件解析: 首行 `# <任务标题>`,自包含正文,可选末行 `verify: <...>`
-// (仅 remediate/finalize 采用,audit/validate 的 verify 由 driver 固定、提案
-// 中的该行被忽略)。缺失、无标题或无正文返回 undefined。
+// (兼容剥离——终审任务强制跳过任务级验收,该行一律被忽略、不写入任务)。
+// 缺失、无标题或无正文返回 undefined。
 export function parseProposal(text: string): FinalProposal | undefined {
   const lines = text.trim().split("\n")
   const title = /^#\s+(.+)$/.exec(lines[0] ?? "")
@@ -173,9 +173,9 @@ async function stageRoute(dir: string, plan: Plan, stage: FinalStage, round: num
   return { type: "generate", stage, round, prior }
 }
 
-// 终审任务已 done 但报告缺失或协议行非法(C.4): 结构检查验收通过后不应发生,
-// 多为报告被人工改动——阻塞提示人工核查(人工修复报告、或删改终审任务后由
-// 状态重建重新路由)。
+// 终审任务已 done 但报告缺失或协议行非法(C.4): 终审任务不做任务级验收,
+// 报告质量由路由时的本检查兜底——多为会话漏写或报告被人工改动,阻塞提示
+// 人工核查(人工修复报告、或删改终审任务后由状态重建重新路由)。
 function brokenReport(task: Task, report: string): FinalRoute {
   return {
     type: "block",
@@ -189,10 +189,9 @@ async function readReport(dir: string, file: string): Promise<string> {
 }
 
 // 解析结果追加终审任务: T-F<k> 按既有终审任务数 +1 编号(追加顺序确定、免
-// 碰撞),`final: <stage>@<round>` 字段标记;verify——audit/validate 固定为
-// 报告结构检查(提案 verify 行被忽略),remediate 取提案 verify 行(缺省回落
-// 自然语言 → generate 分支),finalize 缺省结构检查、提案可覆盖。标题带阶段
-// 前缀(status 可见),正文取自提案。返回新任务 ID。
+// 碰撞),`final: <stage>@<round>` 字段标记。不写 verify 字段——终审任务强制
+// 跳过任务级验收(该阶段本身即检验),提案中的 verify 行仅做兼容剥离、被忽略。
+// 标题带阶段前缀(status 可见),正文取自提案。返回新任务 ID。
 export async function appendFinalTask(
   path: string,
   plan: Plan,
@@ -200,22 +199,12 @@ export async function appendFinalTask(
   round: number,
   proposal: FinalProposal,
 ): Promise<string> {
-  const report = finalReportFile(stage, round)
-  const verify =
-    stage === "audit"
-      ? `command: test -s ${report} && grep -qE '^策略[:：] ?(重构|修补|无)$' ${report}`
-      : stage === "validate"
-        ? `command: test -s ${report} && grep -qE '^结论[:：] ?(通过|差距)' ${report}`
-        : stage === "remediate"
-          ? proposal.verify ?? "审计指出的差距已修复,原任务的验证命令与既有测试套件应通过"
-          : proposal.verify ?? `command: test -s ${report}`
   const id = `T-F${plan.tasks.filter((task) => task.final).length + 1}`
   await appendTask(path, {
     id,
     title: `${stageText(stage)}${stage === "finalize" ? "" : `(第 ${round} 轮)`}: ${proposal.title}`,
     status: "pending",
     final: `${stage}@${round}`,
-    verify,
     attempts: 0,
     body: proposal.body,
   })
@@ -240,7 +229,8 @@ export async function generateFinalTask(
     kind: "终审任务规划",
     artifact: `有效提案文件 ${file}`,
     detail: "缺失、无标题或无正文",
-    requirement: `必须把自包含的任务提案写入 ${file}(首行 \`# <任务标题>\`,正文,可选末行 \`verify: command: <命令>\`);即使认为该阶段无事可做,也要写出文件并在正文说明原因。`,
+    requirement: `必须把自包含的任务提案写入 ${file}(首行 \`# <任务标题>\`,正文);即使认为该阶段无事可做,也要写出文件并在正文说明原因。`,
+    commit: { stage: "final-plan", subject: `终审任务规划(${stageText(stage)} 第 ${round} 轮)` },
     reset: () => rm(join(dir, file), { force: true }),
     collect: async () => parseProposal(await readReport(dir, file)),
   })

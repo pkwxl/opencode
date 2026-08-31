@@ -8,17 +8,18 @@
 
 ## 结构
 
-- `src/index.ts` — CLI 入口:`init` / `run` / `check` / `status` 四个子命令与参数解析(含 `-p`/`-i`/`-m` 短选项;`--review`/`--early-review` 经 parseReviewLimit 校验——缺省 0 不启用、裸选项 3、显式值须为 1..10 整数;`--early` 为布尔修饰,review 未启用时单独出现为用法错误,`--early-review` 是 `--review n --early` 的快捷糖、与 `--review` 同现为用法错误;`--final-review` 经 parseFinalReviewLimit 校验(镜像 parseReviewLimit 风格)——缺省 0 不启用、裸选项 2、显式值须为 1..5 整数(审计轮上限),与 `--review`/`--early-review` 可同现;`-m/--mode` 镜像 -p 的吞值规则,init 与 run 均接受,resolveModeFlag 解析——优先级 显式值 > readPersistedMode(.auto/config.json)> migrate,成功后 writePersistedMode 回写;模式经 loadModes(内置+目标目录 .opencode/auto/modes/)装载,未注册名为用法错误退出码 1(报文列出当前支持的模式),显式值与持久化值不一致时警告;`--permission` 经 parsePermission 校验,缺省/裸选项 ask-deny,非法取值均退出码 1;`--verify-idle`(缺省/裸选项 10 分钟,1..120)与 `--verify-max`(缺省/裸选项不设上限,1..1440)为 verify 脚本看门狗参数;`--verify` 为布尔选项(缺省不启用,仅启用时 driver 才做任务级三段式验收,解析见 run 内联、经 runAll 透传);`--agent` 缺省取 `auto` 契约 agent);`check` 调 src/check.ts 检查 AGENTS.md/PLAN.md 违背验证原则的描述,命中退出码 1;`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,并维护 .gitignore(忽略 tmp/ 与 .auto/logs/),init 亦经 usePromptLibrary 装载目标目录提示词覆盖(校验失败退出码 1),`-p/--prompt` 在初始化后经 manage 启动 server 调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
-- `src/loop.ts` — 任务循环:取下一个未完成任务执行;启动时 `resetInProgress` 把上次运行中断遗留的 in_progress 重置为 pending,并经 peekProgress 把进度记录处于 verify(--review 启用时)/review 阶段但已被标 done 的任务置回 in_progress(否则 next() 跳过、审核永不补跑);runAll 开头经 usePromptLibrary 装载目标目录提示词覆盖(校验失败返回 1);任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块与验证原则块存在(两个独立标记块,各自幂等补写);`ensureGitignore` 确保 tmp/ 与 .auto/logs/ 被 .gitignore 忽略(非 git 目录不动);run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;`--commit once` 的整体提交;verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(`--commit subtask` 下,每 10 分钟);`--review`/`--early`/`--verify`/`--permission`/`--verify-idle`/`--verify-max`/mode/server 句柄透传至 runTask(--verify 未启用而 --early 启用时打降级提示);`--final-review` 终审推进挂点(advanceFinal: runTask 完成且任务带 final 标记后路由追加下一任务;next() 为空且终审未完成时打横幅"进入终审闭环"并续跑循环;熔断/报告异常 block 对应终审任务退出码 2);`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
+- `src/index.ts` — CLI 入口:`init` / `run` / `check` / `status` 四个子命令与参数解析(含 `-p`/`-i`/`-m` 短选项;`--review`/`--early-review` 经 parseReviewLimit 校验——缺省 0 不启用、裸选项 3、显式值须为 1..10 整数;`--early` 为布尔修饰,review 未启用时单独出现为用法错误,`--early-review` 是 `--review n --early` 的快捷糖、与 `--review` 同现为用法错误;`--final-review` 经 parseFinalReviewLimit 校验(镜像 parseReviewLimit 风格)——缺省 0 不启用、裸选项 2、显式值须为 1..5 整数(审计轮上限),与 `--review`/`--early-review` 可同现;`-m/--mode` 镜像 -p 的吞值规则,init 与 run 均接受,resolveModeFlag 解析——优先级 显式值 > readPersistedMode(.auto/config.json)> migrate,成功后 writePersistedMode 回写;模式经 loadModes(内置+目标目录 .opencode/auto/modes/)装载,未注册名为用法错误退出码 1(报文列出当前支持的模式),显式值与持久化值不一致时警告;`--commit` 经 parseCommit 校验(缺省/裸选项/true 启用统一提交,false 与 none 关闭,其余取值为用法错误;旧别名 --commit-subtask 已移除、出现即用法错误退出码 1);`--permission` 经 parsePermission 校验,缺省/裸选项 ask-deny,非法取值均退出码 1;`--verify-idle`(缺省/裸选项 10 分钟,1..120)与 `--verify-max`(缺省/裸选项不设上限,1..1440)为 verify 脚本看门狗参数;`--verify` 为布尔选项(缺省不启用,仅启用时 driver 才做任务级三段式验收,解析见 run 内联、经 runAll 透传);`--agent` 缺省取 `auto` 契约 agent);`check` 调 src/check.ts 检查 AGENTS.md/PLAN.md 违背验证/提交原则的描述,命中退出码 1;`init` 对 `.opencode/agent/auto.md` 与模板不一致时总是替换,并维护 .gitignore(忽略 tmp/ 与 .auto/),init 亦经 usePromptLibrary 装载目标目录提示词覆盖(校验失败退出码 1),`-p/--prompt` 在初始化后经 manage 启动 server 调用一次 AI 填充 PLAN.md 供人工审核;`--interactive` 与 `--verbose` 互斥检查在此。
+- `src/loop.ts` — 任务循环:取下一个未完成任务执行;启动时 `resetInProgress` 把上次运行中断遗留的 in_progress 重置为 pending,并经 peekProgress 把进度记录处于 verify(--review 启用时)/review 阶段但已被标 done 的任务置回 in_progress(否则 next() 跳过、审核永不补跑);runAll 开头经 usePromptLibrary 装载目标目录提示词覆盖(校验失败返回 1);任务开始横幅;`ensurePointer` 在启动会话前确保 AGENTS.md 指针块与验证/提交原则块存在(三个独立标记块,各自幂等补写);`ensureGitignore` 确保 tmp/ 与 .auto/ 被 .gitignore 忽略(非 git 目录不动);启动时经 pendingChanges 检测工作区遗留未提交改动并提示会被统一提交纳入;run 前完整性检查(.opencode/agent/<agent>.md 缺失直接报错退出并提示 init 恢复,与模板不一致仅警告);`--dryrun` 权限预检;任务边界统一提交(完成/阻塞/回退 pending 各一次,经 commitTree);verbose 变更文件监视(基于 git status,含子目录中的嵌套 git 仓库);子任务进度上报(每 10 分钟);`--review`/`--early`/`--verify`/`--permission`/`--verify-idle`/`--verify-max`/mode/server 句柄透传至 runTask(--verify 未启用而 --early 启用时打降级提示);`--final-review` 终审推进挂点(advanceFinal: runTask 完成且任务带 final 标记后路由追加下一任务;next() 为空且终审未完成时打横幅"进入终审闭环"并续跑循环;熔断/报告异常 block 对应终审任务退出码 2);`--interactive` 旁路控制器的创建/回收与 waitBetween 接入。
 - `src/interactive.ts` — `--interactive` 旁路:常驻 readline 把回车输入经 promptAsync(fire-and-forget)注入当前活动会话(attach 由 runner 在每个会话建立/复用时调用;无活动会话丢弃并提示);ask/任务间暂停的人工等待经同一输入行接收(空行原样上交给调用方解释);stdin 关闭后回落非交互行为;io 可注入供测试。
-- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话(恢复时先直读 docs/<id>.subtasks.md,有效则直接注入不开会话)→ 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,验收/审核差距不做修复重跑,任务回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → verifyTask 三段式验收(--verify 启用时;缺省略过验收、收尾后直接 markDone 不写 verified,--review 审核改为串行,--early 降级失效)(脚本准备 → driver 执行 → 独立判定会话;判定会话禁止执行验证脚本/命令,可替换指定脚本后结论`重验`,driver 重新执行回传输出,至多 REVERIFY_ROUNDS=3 轮;判定会话另被授权更新后续未完成任务的 verify 字段——会话期间 allowWrite(PLAN.md)、结束后校验,越权编辑整体还原;差距反馈回执行会话修复,最多 FIX_ROUNDS=3 轮,off 模式直接回退 pending)→ `--review` 下 reviewTask 质量审核与 planReviewFix 修复规划(外层轮循环,执行阶段仅首轮进入;`--early` 下审核经 verifyTask 挂点在脚本执行窗口并行启动、结论随 done 带回,外层不再独立调用 reviewTask);旁路会话产物缺失"带反馈重试一次再隐性阻塞"的骨架统一在 requireArtifact;会话链复用(占比 <50%、用量 < --context-limit 且距上一会话结束 ≤5 分钟三者同时满足,REUSE_IDLE_MS;旁路一次性会话的链不带 phase、不写进度记录)、事件监听、提问自动答复(AUTO_ANSWER 含决策记录与 AUTO-DECISION 标注要求)、权限请求按 --permission 四档处理(dryrun 下自动拒绝但不中断)、隐性阻塞检测;新建会话前经 server 句柄 syncAgents(AGENTS.md 有更新则重启 server),网络类会话错误(Internal network failure / Network error 等)先 restart 换新 server 实例再换新会话重试;进度记录(.auto/progress.json,经 persistStage 在阶段边界推进、attempt 在执行链会话开始/结束时刷新 active)支撑中断精确恢复:runTask 开头 recallProgress——active 且 30 分钟窗内且会话存活则复用原会话,否则新会话,均附按 phase 的下一步指引;阶段级重入(verify 有持久化 run 跳过重跑直接判定、off/ondemand 过执行阶段不重跑 executeWhole、review/planfix 有有效 fix.md 直接注入);CURRENT.md 在任务开始时即写入,每次勾选后刷新,任务完成在收尾中删除;非完成结局(阻塞/回退 pending)写"中断备注"(原因/阶段/恢复方式)后保留,网络类 blocked(会话错误重试耗尽)保持 active 记录走 30 分钟窗复用;`commitAll` 与 `runOnce` 独立会话;verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收;Opts 的 mode 透传至各执行类 render,audit/validate 终审任务依 final 字段强制 review=0(本身即审核,--early 随之自然失效)、remediate/finalize 不变,requireArtifact 导出供 src/final.ts 的生成会话复用。
+- `src/runner.ts` — 单任务流水线:`--subtask auto` 分解会话(恢复时先直读 docs/<id>.subtasks.md,有效则直接注入不开会话)→ 逐子任务会话(会话结束后 driver 直接勾选,验收不在子任务级进行);`--subtask off` 单会话完成整个任务,验收/审核差距不做修复重跑,任务回退 pending;`--subtask ondemand` 单会话执行、上下文达到 --context-limit 时 steer 交接提示、新会话从 docs/<id>.handoff.md 续跑;收尾会话 → verifyTask 三段式验收(--verify 启用时;缺省略过验收、收尾后直接 markDone 不写 verified,--review 审核改为串行,--early 降级失效)(脚本准备 → driver 执行 → 独立判定会话;判定会话禁止执行验证脚本/命令,可替换指定脚本后结论`重验`,driver 重新执行回传输出,至多 REVERIFY_ROUNDS=3 轮;判定会话另被授权更新后续未完成任务的 verify 字段——会话期间 allowWrite(PLAN.md)、结束后校验,越权编辑整体还原;差距反馈回执行会话修复,最多 FIX_ROUNDS=3 轮,off 模式直接回退 pending)→ `--review` 下 reviewTask 质量审核与 planReviewFix 修复规划(外层轮循环,执行阶段仅首轮进入;`--early` 下审核经 verifyTask 挂点在脚本执行窗口并行启动、结论随 done 带回,外层不再独立调用 reviewTask);旁路会话产物缺失"带反馈重试一次再隐性阻塞"的骨架统一在 requireArtifact;会话链复用(占比 <50%、用量 < --context-limit 且距上一会话结束 ≤5 分钟三者同时满足,REUSE_IDLE_MS;旁路一次性会话的链不带 phase、不写进度记录)、事件监听、提问自动答复(AUTO_ANSWER 含决策记录与 AUTO-DECISION 标注要求)、权限请求按 --permission 四档处理(dryrun 下自动拒绝但不中断)、隐性阻塞检测;新建会话前经 server 句柄 syncAgents(AGENTS.md 有更新则重启 server),网络类会话错误(Internal network failure / Network error 等)先 restart 换新 server 实例再换新会话重试;进度记录(.auto/progress.json,经 persistStage 在阶段边界推进、attempt 在执行链会话开始/结束时刷新 active)支撑中断精确恢复:runTask 开头 recallProgress——active 且 30 分钟窗内且会话存活则复用原会话,否则新会话,均附按 phase 的下一步指引;阶段级重入(verify 有持久化 run 跳过重跑直接判定、off/ondemand 过执行阶段不重跑 executeWhole、review/planfix 有有效 fix.md 直接注入);CURRENT.md 在任务开始时即写入,每次勾选后刷新,任务完成在收尾中删除;非完成结局(阻塞/回退 pending)写"中断备注"(原因/阶段/恢复方式)后保留,网络类 blocked(会话错误重试耗尽)保持 active 记录走 30 分钟窗复用;`runOnce` 独立会话(init -p/dryrun,不做会话后提交);verbose 明细走 vlog,askHuman 在 interactive 下改由旁路输入行接收;Opts 的 mode 透传至各执行类 render,终审任务(带 final 字段)依 final 强制 review=0 且跳过任务级验收(本身即检验,--early 随之自然失效;报告异常由路由时 block 兜底),requireArtifact 导出供 src/final.ts 的生成会话复用;会话后统一提交挂点:执行链各阶段(分解注入/子任务勾选/整任务/修复轮/收尾)在状态写入后、旁路一次性会话(经 requireArtifact 的 spec.commit)在会话结束后,均经 afterSession 调 commitTree。
 - `src/resume.ts` — 进度恢复记录:saveProgress/recallProgress/peekProgress/forgetProgress 维护目标目录 .auto/progress.json({task, session, at, active, phase}),RESUME_WINDOW_MS=30 分钟;phase 覆盖 decompose/whole/subtasks/wrapup/verify{stage,round,rechecks,replaced,run?,audit?}/review{round,stage};recall 不做窗口判定(窗口与存活判定在 runner),旧版 .auto/session.json 兼容读取(视为半途会话、无阶段);peek 供 loop 把验收/审核阶段中断但已标 done 的任务置回 in_progress。
 - `src/plan.ts` — `PLAN.md` 解析与原子编辑(写 tmp 再 rename);driver 侧状态函数(setSubtasks/tick/appendSubtasks/markDone/setStatus/resetInProgress)与任务级 verify 命令提取(verifyCommand,供 resolveVerifyScript 判定脚本来源);终审支持——Task 解析 final 字段(FIELD 行通用解析,edit 重写时随全部字段保留)、parseFinalMark(`<stage>@<round>` 校验)与 appendTask(文件尾追加完整任务块,原子写、复用 allowWrite/reprotect,重复 ID 报错)。
-- `src/prompt.ts` — 提示词上下文组装层:文案全部在 `templates/prompts/*.md`(共享片段在 `_partials.md`,经 src/template.ts 渲染),这里把 plan/task/运行信息组装为模板变量;render* 签名稳定(runner/loop/final 调用点不感知模板机制);VERDICT_FILE(`.auto/verify.md`)与 REVIEW_FILE(`.auto/review.md`)判定文件路径、VerifyRun 运行信息类型(含看门狗 timeoutReason);--commit 四档(CommitMode);stageText 终审阶段中文名(横幅/loop/final 共用);handoffFile/renderHandoffSteer 交接提示;终审四阶段(FinalStage)的职责与报告产出要求内联在 final-task.md 的条件段,renderFinalTask 只传 stage 标志位。
+- `src/prompt.ts` — 提示词上下文组装层:文案全部在 `templates/prompts/*.md`(共享片段在 `_partials.md`,经 src/template.ts 渲染),这里把 plan/task/运行信息组装为模板变量;render* 签名稳定(runner/loop/final 调用点不感知模板机制);VERDICT_FILE(`.auto/verify.md`)与 REVIEW_FILE(`.auto/review.md`)判定文件路径、VerifyRun 运行信息类型(含看门狗 timeoutReason);stageText 终审阶段中文名(横幅/loop/final 共用);handoffFile/renderHandoffSteer 交接提示;终审四阶段(FinalStage)的职责与报告产出要求内联在 final-task.md 的条件段,renderFinalTask 只传 stage 标志位。
 - `src/template.ts` — 提示词模板装载与渲染:内置模板经 `with { type: "file" }` 嵌入(embedded 注册表集中登记),readFileSync 在编译产物中同样可读 `/$bunfs` 路径;`usePromptLibrary(dir)` 装载目标目录 `.opencode/auto/prompts/` 同名覆盖(`_partials.md` 按节名合并片段),协议敏感模板(judge/review/verify-script-gen/review-fix/decompose/handoff-steer/final-task)覆盖时做关键协议内容校验、缺失即抛错(CLI 转退出码 1);语法 `{{var}}`/`{{#if x}}`/`{{^x}}`/`{{> 片段}}`(块标签独占一行整行吞掉,片段独占一行保留行尾换行并把行首缩进应用到每一行,行内引用仅应用到第二行起);无循环语法——清单类数据由调用方预拼接为字符串。
 - `src/mode.ts` — `-m/--mode` 模式层,模式以文件模板管理:内置 `templates/modes/<name>.md`(编译期嵌入),目标目录 `.opencode/auto/modes/<name>.md` 可新增或覆盖(新增模式零源码改动);`parseModeFile` 解析协议(首行 `# <name>` 须与文件名一致、五节齐备: init/exec/final: audit|validate|finalize,缺节/未知节/空节报错),`loadModes(dir?)` 合并内置与目标目录(文件名须匹配 `^[a-z][a-z0-9-]*$`);模式持久化 `.auto/config.json`(readPersistedMode/writePersistedMode,坏文件读作 undefined);ModeSpec 三段文案注入 renderInit、执行类模板与 renderFinalTask。
-- `src/final.ts` — `--final-review` 终审闭环状态机(设计文档 B/C 节,纯路由函数、无新增持久化状态):finalProposalFile/finalReportFile 产物路径(docs/final/ 下提案与各阶段报告);parseStrategy/parseConclusion 解析报告末行协议(策略: 重构|修补|无;结论: 通过|差距 <描述>),parseProposal 解析提案文件;routeFinal 由(带 final 标记的任务及其状态,docs/final/ 产物)推导路由并含幂等重建 C.1..C.5(未完成终审任务不生成新任务、下一阶段任务已存在不重复生成、提案已产出未追加直接解析追加、done 但报告缺失/协议非法按阻塞提示人工核查、final 字段非法 block);appendFinalTask(T-F<k> 按追加顺序编号、final: <stage>@<round> 字段、audit/validate 固定结构检查 verify、remediate 取提案 verify 行、finalize 缺省结构检查提案可覆盖);generateFinalTask 经 runner 的 requireArtifact 骨架开旁路生成会话产出提案。
-- `src/check.ts` — `check` 命令逻辑:启发式扫描目标目录 AGENTS.md 与 PLAN.md 中要求会话亲自运行验证脚本/命令的语句(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算),返回 findings(file/task/line/text)与 notes;命中退出码 1。
+- `src/final.ts` — `--final-review` 终审闭环状态机(设计文档 B/C 节,纯路由函数、无新增持久化状态):finalProposalFile/finalReportFile 产物路径(docs/final/ 下提案与各阶段报告);parseStrategy/parseConclusion 解析报告末行协议(策略: 重构|修补|无;结论: 通过|差距 <描述>),parseProposal 解析提案文件;routeFinal 由(带 final 标记的任务及其状态,docs/final/ 产物)推导路由并含幂等重建 C.1..C.5(未完成终审任务不生成新任务、下一阶段任务已存在不重复生成、提案已产出未追加直接解析追加、done 但报告缺失/协议非法按阻塞提示人工核查、final 字段非法 block);appendFinalTask(T-F<k> 按追加顺序编号、final: <stage>@<round> 字段、不写 verify 字段——终审任务强制跳过任务级验收,提案 verify 行兼容剥离、一律忽略);generateFinalTask 经 runner 的 requireArtifact 骨架开旁路生成会话产出提案。
+- `src/git.ts` — driver 统一提交机制:收回 AI 会话的提交权,任何会话结束后由 driver 经 commitTree 递归提交全部改动(repoRoots 发现目标目录所在仓库与全部嵌套 .git 子仓库,深度优先先子后父);提交信息 = 中文标题行(任务编号 + 阶段/子任务描述,子任务条目省略任务标题,超 100 字截断)+ 机器可读 trailer(Auto-Task/Auto-Stage,目标仓库另记 Auto-Nested 嵌套仓库路径与 SHA);无改动的仓库跳过、非 git 环境整体跳过;单仓库失败仅警告不阻塞(下一次提交全量 add 清扫连带);仓库未配置 user.email 时以固定身份兜底;pendingChanges 供 loop 启动时检测遗留未提交改动并提示。
+- `src/check.ts` — `check` 命令逻辑:启发式扫描目标目录 AGENTS.md 与 PLAN.md 中要求会话亲自运行验证脚本/命令、或要求会话执行 git 提交的语句(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算),返回 findings(file/task/line/text)与 notes;命中退出码 1。
 - `src/verify.ts` — verify 脚本机制层(纯逻辑,不依赖 SDK 与 runner):verifyTmpDir(目标目录下 `tmp/` 子目录,工作目录内可直接读,避免 /tmp 权限问题;loop 的 ensureGitignore 保证不进仓库)、resolveVerifyScript(依 verifyCommand 判定 existing/wrapped/generate 三支)、runVerifyScript(cwd=目标目录执行,stdout/stderr 整写 tmp/verify.out 与 verify.err;进度看门狗——轮询两个输出文件的大小,任一增长即重置计时,持续 --verify-idle(缺省 10 分钟)无增长才 kill、退出码记 124 且 timeoutReason=idle,--verify-max(缺省不设)为绝对上限兜底且 timeoutReason=max)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json
   置 0o444(AGENTS.md 不在其列,任务可更新它),driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
@@ -27,7 +28,7 @@
   `setVerbose` 同开同关、`setInteractive` 只开文件记录;`log` 始终上终端、`vlog` 为 verbose 明细
   (interactive 下只进文件);`setInput` 注册交互 readline 后 log 打印先清输入行再重绘;run 时把全部
   输出同步写入目标目录 `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
-- `templates/` — `init` 复制的模板(`PLAN.md`、`opencode.json`、`.opencode/agent/auto.md`);`templates/prompts/` 为 14 个会话提示词模板 + `_partials.md` 共享片段(编译期嵌入、运行期渲染,init 不复制,目标目录 `.opencode/auto/prompts/` 同名覆盖);`templates/modes/` 为内置模式文件(目标目录 `.opencode/auto/modes/` 同名覆盖/新增)。
+- `templates/` — `init` 复制的模板(`PLAN.md`、`opencode.json`、`.opencode/agent/auto.md`);`templates/prompts/` 为 13 个会话提示词模板 + `_partials.md` 共享片段(编译期嵌入、运行期渲染,init 不复制,目标目录 `.opencode/auto/prompts/` 同名覆盖);`templates/modes/` 为内置模式文件(目标目录 `.opencode/auto/modes/` 同名覆盖/新增)。
 - `docs/verify-review-design.md` — 第三阶段(verify 三段式与 --review 审核循环)与第四阶段(--early 并行审核,以 F 节为唯一设计基准)的设计基准:已确认决策、接口约定与流水线伪代码;G 节为判定会话执行限制与重验协议、H 节为中断恢复/看门狗/判定会话 verify 字段授权的后续修订基准。
 - `docs/mode-final-review-design.md` — `-m/--mode` 模式层(src/mode.ts 注册表,提示词级场景引导)与 `--final-review` 终审闭环(终审阶段为入 PLAN.md 的真任务 T-F\<k\>,Audit→Refactor/Patch→Validate→Finalize 状态机,末行结论协议路由 + 审计轮上限熔断)的设计基准:已确认决策、状态机与恢复规则、文件级改动清单。
 - `docs/fixme-knowledge-design.md` — `--track-fixme` 设计偏差追踪(AUTO-FIXME 注释锚点、driver 确定性扫描产出 tmp/fixme-scan.md、终审 audit 报告末行 `FIXME: CRITICAL=… WARN=… INFO=…` 协议 + CRITICAL 门禁不路由 remediate、finalize 生成前复扫回退 audit@r+1)与 `--extract-knowledge` 迁移知识沉淀(终审闭环完成后经 requireArtifact 旁路会话产出 docs/migration-kb/,提取失败不污染退出码;两选项均须搭配 --final-review)的设计基准:已确认决策、本期/未来范围切分、验收标准映射与文件级改动清单。**实现待后续会话按该文档分期(P1..P4)完成,实现前 CLI 不接受这两个选项。**
@@ -62,10 +63,22 @@
   退出前尽力恢复文件可写并关闭 server)。
 - 下发任务失败(UnknownError)的常见根因是目标目录缺少 `.opencode/agent/<agent>.md`
   (服务端错误体不含根因):run 前完整性检查拦截该情况;运行中发生时 driver 在
-  阻塞问题后追加恢复提示(检测依赖 Opts.dir,run/init/dryrun/commitAll 均须传入)。
-- --commit 四档:`subtask`(缺省;每子任务提交,旧选项 --commit-subtask 为别名,
-  `=false` 等价 `--commit task`)/ `task`(仅任务收尾提交)/ `once`(任务期间不提交,
-  全部完成后开一次整体提交会话)/ `none`(从不提交)。
+  阻塞问题后追加恢复提示(检测依赖 Opts.dir,run/init/dryrun 均须传入)。
+- 统一提交(收回 AI 提交权):任何会话结束且 driver 完成状态写入后,由 driver 经
+  src/git.ts 的 commitTree 递归提交全部改动(先嵌套 .git 子仓库、后目标目录所在
+  仓库,路径发现不依赖 git status——嵌套仓库通常被父仓库忽略),git 历史即 AI
+  变更的审计轨迹、回滚粒度 = 会话。提交信息 = `任务编号 [任务标题]: 阶段` 标题行
+  (子任务条目为 `任务编号: 子任务 <n> <标题>`、省略任务标题)+ `Auto-Task`/
+  `Auto-Stage` trailer(目标仓库另记 `Auto-Nested` 嵌套仓库路径与 SHA)。挂点:
+  分解注入/子任务勾选/整任务/修复轮/收尾在状态写入后,判定/审核/脚本生成/
+  修复规划/终审规划等旁路会话在会话结束后,任务完成/阻塞/回退 pending 由 loop
+  边界提交(中断现场也提交,支持回滚到断点);dryrun 与 init -p 不提交。单仓库
+  提交失败仅警告不阻塞(下一次提交全量 add 清扫连带);仓库未配置 user.email 时
+  以固定身份兜底;`--commit false`/`none` 可整体关闭(旧四档 subtask/task/once
+  与别名 --commit-subtask 已移除,出现即用法错误)。工作区遗留的未提交改动会被
+  下一次统一提交纳入(run 启动时经 pendingChanges 提示)。该执行权原则经 init
+  下沉:AGENTS.md 提交原则块、agent 契约与 state-rule 片段;`check` 子命令同步
+  扫描违背该原则的描述。
 - --subtask 三档:`auto`(缺省;分解会话 → 逐子任务)/ `off`(单会话完成整个任务;
   验收差距不做修复重跑,任务回退 pending 等人工改进)/ `ondemand`(单会话执行,
   watch 在已用量达到 --context-limit 时向进行中会话 steer 交接提示——每会话一次,
@@ -104,9 +117,8 @@
 - --verify:布尔选项,缺省不启用;仅启用时 driver 才进入任务级三段式验收——未启用
   时任务在收尾后由 driver 直接 markDone(不写 verified,未经验证不落账),--review
   的质量审核改为此时串行执行(--early 的并行窗口不存在,loop 启动时打降级提示),
-  --verify-idle/--verify-max 看门狗不参与;--final-review 的 audit/validate 报告
-  结构检查同属 verify、一并略过(报告缺失会在路由时按协议异常 block,建议终审与
-  --verify 搭配)。
+  --verify-idle/--verify-max 看门狗不参与;终审任务(带 final 字段)无论该选项
+  与否一律强制跳过任务级验收(报告缺失/协议非法在路由时按协议异常 block)。
 - verify 三段式(--verify 启用时):verify 的处理权在 driver,验收只在任务级做一次——收尾会话后:
   ① 脚本准备(resolveVerifyScript 依 verifyCommand 三分支:`command:` 为单个存在
   且可执行的文件路径 → existing 直接使用;普通命令行 → wrapped,driver 包装
@@ -134,7 +146,7 @@
   按隐性阻塞"统一走 requireArtifact。driver 执行脚本不经 opencode 权限体系
   (等同人工本地跑测试,非安全边界,文档须明示);verify 产物统一在目标目录
   tmp/(工作目录内会话可直读,避免 /tmp 权限问题),run/init 经 ensureGitignore
-  保证 tmp/ 与 .auto/logs/ 不进仓库。该执行权原则经 init 下沉:AGENTS.md 验证
+  保证 tmp/ 与 .auto/ 不进仓库。该执行权原则经 init 下沉:AGENTS.md 验证
   原则块、PLAN.md 模板与 renderInit 提示词;`check` 子命令可扫描两文件中违背
   该原则的描述。
 - --review:`--review [1-10]`(缺省 0 不启用、裸选项 3、显式值须 1..10 整数,
@@ -157,7 +169,7 @@
   `{type:"done", audit}` 带回由外层消费(通过 → completed;差距 → 既有 review
   差距流程,off/超轮语义不变),非 early 走原串行路径;全局保持任意时刻至多一个
   LLM 会话(脚本执行为纯本地进程,窗口内唯一会话即审核会话),因此无需 worktree。
-- 提示词模板:全部会话提示词以文件模板管理(`templates/prompts/` 14 个会话模板 +
+- 提示词模板:全部会话提示词以文件模板管理(`templates/prompts/` 13 个会话模板 +
   `_partials.md` 共享片段,src/template.ts 渲染,语法 `{{var}}`/`{{#if x}}`/`{{^x}}`/
   `{{> 片段}}`、块标签独占一行整行吞掉);目标目录 `.opencode/auto/prompts/` 同名
   覆盖,协议敏感模板(verify-judge/review/verify-script-gen/review-fix/decompose/
@@ -176,22 +188,21 @@
   0 不启用、裸选项 2、显式值须 1..5 整数为审计轮上限含首轮 audit;与 --review/
   --early-review 可同现,二者无交互;--dryrun 不触发)。原任务全部 done 后进入
   audit → remediate → validate → finalize 状态机——终审阶段是入 PLAN.md 的真任务
-  (T-F<k> 按追加顺序编号、`final: <stage>@<round>` 字段),复用 runTask 全流水线:
-  生成会话(renderFinalTask,旁路一次性)产出提案 docs/final/plan-<stage>-r<N>.md →
-  appendFinalTask 追加 → 主循环 next() 拾取执行 → 报告末行协议路由(策略:
-  重构|修补|无;结论: 通过|差距 <描述>):策略无直达 finalize(跳过 remediate 与
-  validate,原任务已有任务级 verify 兜底);remediate 后生成同轮 validate;validate
-  通过生成 finalize、差距回退 audit@r+1(聚焦残余差距不全量重审),审计轮耗尽熔断
-  block 最后终审任务(残余差距与报告指针写入 question,退出码 2)。audit/validate
-  任务依 final 字段强制 review=0(本身即审核,--early 随之自然失效),remediate/
-  finalize 照常;audit/validate 的 verify 固定为报告结构检查、remediate 取提案
-  verify 行(缺省回落自然语言 → generate 分支)、finalize 缺省结构检查提案可覆盖;
-  终审任务的 verify 仍由 driver 亲自执行、不经 opencode 权限体系(与既有语义一致)。
+  (T-F<k> 按追加顺序编号、`final: <stage>@<round>` 字段、不写 verify 字段),
+  复用 runTask 全流水线:生成会话(renderFinalTask,旁路一次性)产出提案
+  docs/final/plan-<stage>-r<N>.md → appendFinalTask 追加 → 主循环 next() 拾取执行 →
+  报告末行协议路由(策略: 重构|修补|无;结论: 通过|差距 <描述>):策略无直达
+  finalize(跳过 remediate 与 validate,原任务已有任务级 verify 兜底);remediate
+  后生成同轮 validate;validate 通过生成 finalize、差距回退 audit@r+1(聚焦残余
+  差距不全量重审),审计轮耗尽熔断 block 最后终审任务(残余差距与报告指针写入
+  question,退出码 2)。**终审任务本身即检验、不对检验再做检验**:全部四阶段任务
+  依 final 字段强制 review=0 且跳过任务级三段式验收(--early 随之自然失效),
+  收尾后 driver 直接 markDone;报告缺失/协议非法不在任务级拦截,由路由解析报告时
+  按协议异常 block 提示人工核查。
   中断恢复零新增状态(routeFinal 重新求值:未完成终审任务不生成新任务、下一阶段
   任务已存在不重复生成、提案已产出直接解析追加、done 但报告缺失/协议非法按阻塞
   提示人工核查;终审任务内部中断走既有 recallProgress/peekProgress);终审任务沿用
-  waitBetween/commit 档位/退出码语义,--commit once 的整体提交保持在终审全部结束
-  之后(终审改动一并提交)。
+  waitBetween/统一提交/退出码语义,终审各阶段改动随其生成/执行会话的统一提交落账。
 - 任务流水线(auto 模式):正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,
   driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md
   (只写产出摘要,不运行任务级 verify、不下验收结论)。
@@ -246,3 +257,11 @@
 工作目录),由 driver 重新执行并把输出回传给独立判定会话。任务描述与项目规范
 不要出现与此相违背的指示(可用 opencode-auto check 检查)。
 <!-- opencode-auto:verify:end -->
+
+<!-- opencode-auto:commit:start -->
+提交原则: 会话结束后由 driver 递归统一提交全部改动(先嵌套子仓库后本仓库),
+提交信息携带任务编号与阶段;任何会话不要执行 git commit/amend/rebase 等提交
+类命令,也不要修改提交历史。需要留档的变更背景写入 docs/ 文档,由 driver 的
+提交一并纳入。任务描述与项目规范不要出现与此相违背的指示(可用
+opencode-auto check 检查)。
+<!-- opencode-auto:commit:end -->

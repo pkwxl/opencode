@@ -6,6 +6,13 @@
 > 理由)。**本文只做设计,实现按 §H 分期留待后续会话完成**;实现合入前 CLI 不接受这
 > 两个选项。
 
+> **修订(基线变更)**:`--final-review` 的终审任务已强制跳过任务级三段式验收
+> 且不再写 verify 字段(终审不对检验再做检验,报告协议异常由路由时 brokenReport
+> 阻塞兜底)。本文与之冲突的描述随之失效——§3"audit 任务 verify"行、§4.1 的
+> "verify 结构检查扩展"、§C.3 的 appendFinalTask verify 扩展与 §C.4"报告缺
+> FIXME 行"的自愈路径不再存在;FIXME 协议行缺失/非法统一走路由时 brokenReport
+> 阻塞人工核查,P1..P4 实现时按此基线调整。
+
 ## 背景与动机
 
 1. **偏差显式化**:migrate 模式要求新实现与旧实现行为对等,但真实迁移中总会出现
@@ -58,7 +65,7 @@
 | CRITICAL 门禁(audit 后) | 报告计数 CRITICAL≥1 → `block()` 该 audit 任务、退出码 2,**不路由 remediate**——偏差是"已知且被迫"的,自动修复语义不成立,规格书要求人工复核;人工降级(改注释 Severity 后重跑)或修复偏差后继续 |
 | 二次门禁(finalize 前) | afterAudit(策略: 无)与 afterValidate(通过)两条 finalize 路由共用 `finalGate`:复扫一次,CRITICAL≥1 → 回退 `audit@<r+1>`(聚焦新 CRITICAL 清单,受 `--final-review` 审计轮上限约束,耗尽熔断)——覆盖末次 audit 之后 remediate/修复轮新引入的偏差;回退后的 audit 会话对自报定级重新验证,若仍 CRITICAL 则走上一行的门禁 |
 | malformed FIXME | 解析失败的标记(缺 Severity 行/格式坏)不阻断、不计入三档计数,单列 MALFORMED;审计按 WARN 级发现提示修正注释格式(规格书 §16) |
-| audit 任务 verify | track-fixme 开启时,appendFinalTask 的固定结构检查追加 `grep -qE '^FIXME[:：] ?CRITICAL=[0-9]+ WARN=[0-9]+ INFO=[0-9]+$'`——协议缺行走既有 FIX_ROUNDS 修复循环自愈,不新增重试逻辑 |
+| audit 任务 verify | **(随终审基线修订失效)** 终审任务已不写 verify 字段、不做任务级验收;FIXME 协议行缺失/非法统一在路由时按 brokenReport 阻塞人工核查,无修复轮自愈 |
 | 知识触发门禁 | 终审闭环完成(routeFinal complete)才提取;熔断/block/退出码 2 的路径根本不经过提取挂点 → 规格书 TC-08(SKIPPED)天然成立,无"FAIL 后跳过"分支可写错 |
 | 知识失败语义 | 会话两次未产出(requireArtifact 耗尽)→ 打印 ⚠ 警告(`knowledge_extraction_error` 记入运行日志),**退出码保持 0**;迁移成功不被文档生成失败反向污染(规格书 §16) |
 | 知识文档提交 | **不自动提交**:提取挂点放在 `--commit once` 整体提交之后,所有 commit 档位下知识文档都保持为工作区文件,由人工甄别后入库(与"知识必须经过验证"的原则一致) |
@@ -71,7 +78,7 @@
 
 1. `src/fixme.ts`:AUTO-FIXME 解析器 + 目标目录扫描器 + 扫描报告落盘(纯逻辑,零依赖);
 2. `--track-fixme`:执行类提示词注入标记规范 → audit 任务集成(生成前扫描注入、
-   报告协议行、verify 结构检查扩展)→ CRITICAL 门禁与 finalize 前二次门禁;
+   报告协议行)→ CRITICAL 门禁与 finalize 前二次门禁;
 3. `--extract-knowledge`:CLI 解析 + 终审完成后旁路提取会话 + 默认/显式路径 +
    失败不污染退出码;
 4. 测试(§J)与 README / 包内 AGENTS.md 文档。
@@ -201,9 +208,10 @@ routeFinal(dir, plan, { limit, trackFixme })
   │    报告含「FIXME Audit Report」段(逐条 [SEVERITY] file:line / Type / Spec /
   │    Reason / Final Status: Accepted|Adjusted|FalsePositive);
   │    stageReport(audit) 协议改为末三行: 结论 / 策略 / FIXME: CRITICAL=… WARN=… INFO=…
-  ├─ appendFinalTask(…, fixme): audit 的固定 verify 追加 FIXME 行 grep(§3)
+  ├─ appendFinalTask(…, fixme): 不写 verify 字段(终审基线修订;fixme 参数仅注入
+  │    生成会话提示词与路由门禁)
   ├─ afterAudit(trackFixme): parseFixmeSummary(报告末行协议)
-  │    缺失/非法 → brokenReport(结构检查应已拦截,自愈优先)
+  │    缺失/非法 → brokenReport(终审不做任务级验收,路由时兜底阻塞人工核查)
   │    CRITICAL≥1 → FinalRoute block: question 含计数、报告与扫描文件指针、
   │      人工处理方式(修复偏差;或降级注释后重跑)——不路由 remediate
   │    CRITICAL=0 → 照常按策略路由
@@ -223,7 +231,7 @@ routeFinal(dir, plan, { limit, trackFixme })
 | --- | --- |
 | 扫描器遇不可读/二进制文件 | 跳过,记入 skipped;绝不因扫描失败阻断流水线 |
 | malformed FIXME | 见 §A.2,不阻断 |
-| 报告缺 FIXME 行 | verify 结构检查判差距 → 既有 FIX_ROUNDS 自愈;人工删改报告 → brokenReport 阻塞人工核查(既有 C.4 机制) |
+| 报告缺 FIXME 行 | 路由时 brokenReport 阻塞人工核查(终审任务不做任务级验收,无自愈路径——终审基线修订) |
 | CRITICAL(报告计数) | block,退出码 2 |
 | CRITICAL(复扫,自报定级) | 回退 audit@r+1 重新验证(见 §3 二次门禁) |
 
@@ -302,7 +310,7 @@ routeFinal(dir, plan, { limit, trackFixme })
 | + `--dryrun` | 两选项均不触发 |
 | + `-m migrate` | exec 文案(AUTO-DECISION 要求)与 FIXME_RULE 并存,分工见 §A.3 |
 | + `--commit once` | 整体提交保持在终审完成后、知识提取前(知识文档不入库) |
-| + `--wait-between` / `--interactive` / `--subtask off` 等 | 无交互;off 模式下终审任务语义既有(verify 差距回退 pending) |
+| + `--wait-between` / `--interactive` / `--subtask off` 等 | 无交互;终审任务不做任务级验收,off 下的 verify 差距回退一途不存在(终审基线修订) |
 
 ## F. 数据模型与演进路径(Deviation Record)
 
@@ -340,10 +348,10 @@ routeFinal(dir, plan, { limit, trackFixme })
 | `src/index.ts` | 两选项解析(track-fixme 布尔、extract-knowledge 专用分支含 `-` 守卫)、依赖校验、用法文本 | P2/P3 |
 | `src/prompt.ts` | FIXME_RULE 常量;Opts.trackFixme;三执行模板注入;renderFinalTask audit 分支(trackFixme)与 stageReport 协议;renderKnowledge | P2/P3 |
 | `src/runner.ts` | Opts.trackFixme 透传渲染 | P2 |
-| `src/final.ts` | routeFinal 增 opts;audit 生成前扫描注入;parseFixmeSummary;afterAudit CRITICAL 门禁;finalGate 二次门禁;appendFinalTask 的 verify 扩展 | P2 |
+| `src/final.ts` | routeFinal 增 opts;audit 生成前扫描注入;parseFixmeSummary;afterAudit CRITICAL 门禁;finalGate 二次门禁 | P2 |
 | `src/knowledge.ts`(新增) | 提取编排(requireArtifact + renderKnowledge 调用) | P3 |
 | `test/fixme.test.ts`(新增) | 解析器金样、扫描范围(gitignore 生效/嵌套仓库/非 git 回落)、报告格式 | P1 |
-| `test/final.test.ts`(增) | parseFixmeSummary;CRITICAL 门禁不路由 remediate;finalGate 回退/熔断;verify 含 FIXME 行 | P2 |
+| `test/final.test.ts`(增) | parseFixmeSummary;CRITICAL 门禁不路由 remediate;finalGate 回退/熔断 | P2 |
 | `test/prompt.test.ts`(增) | 注入有/无断言;renderFinalTask audit 职责段;renderKnowledge 骨架与来源指针 | P2/P3 |
 | `test/e2e.test.ts`(增) | CLI 解析:依赖校验退出码 1、路径吞值与 `-` 守卫、`=path` 形式 | P2/P3 |
 | `README.md` / 包内 `AGENTS.md` | 选项表、行为约定、结构节、与规格书的适配偏差说明 | P4 |

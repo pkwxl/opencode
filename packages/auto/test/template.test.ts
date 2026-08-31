@@ -42,18 +42,16 @@ describe("渲染器", () => {
   test("片段引用: 共享片段按当前上下文渲染(片段内可用变量)", () => {
     usePromptLibrary(undefined)
     expect(renderText("{{> state-rule}}", {})).toContain("由 driver 独占维护")
-    expect(renderText("{{> commit-rule}}", { note: "T-001 与任务摘要" })).toContain("注明 T-001 与任务摘要;")
+    expect(renderText("{{> state-rule}}", {})).toContain("git 提交由 driver 在会话结束后统一执行")
   })
 
   test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
     usePromptLibrary(undefined)
-    const standalone = renderText("前:\n   {{> commit-rule}}\n后", { note: "N" })
-    expect(standalone.split("\n")[1]).toBe("   - 主动在工作目录的文件系统中查找含独立 .git 的子目录(它们通常被父仓库 .gitignore 忽略,")
-    expect(standalone.split("\n")[2]).toBe("     不是 submodule,git status/git submodule 均不可见,必须直接查目录,如 find . -name .git);")
-    const inline = renderText("前:\n   {{> commit-rule}};尾", { note: "N" })
-    expect(inline.split("\n")[1]).toBe("   - 主动在工作目录的文件系统中查找含独立 .git 的子目录(它们通常被父仓库 .gitignore 忽略,")
-    expect(inline.split("\n")[2]).toBe("     不是 submodule,git status/git submodule 均不可见,必须直接查目录,如 find . -name .git);")
-    expect(inline.split("\n").at(-1)).toBe("     被父仓库 ignore 的子仓库不会进入该提交,必须在提交信息中列出其路径与新提交 SHA。;尾")
+    const standalone = renderText("前:\n   {{> state-rule}}\n后", {})
+    expect(standalone.split("\n")[1]).toBe("   PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。")
+    expect(standalone.split("\n")[2]).toBe("   git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。")
+    const inline = renderText("前:\n   {{> state-rule}};尾", {})
+    expect(inline.split("\n").at(-1)).toBe("   git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。;尾")
   })
 })
 
@@ -66,10 +64,9 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("14 个会话模板与 _partials 齐备", () => {
+  test("13 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
-      "commit-all",
       "decompose",
       "dryrun",
       "final-task",
@@ -108,15 +105,11 @@ describe("内置模板注册表", () => {
       runErr: "/err",
       replacement: "/r",
       laterVerifyList: "   (无)",
-      note: "N",
-      stepNo: "3",
       final: true,
       early: true,
       solo: true,
-      commit: true,
       ondemand: true,
       continuation: true,
-      commitSubtask: true,
       reaudit: false,
       stageAudit: true,
       stageRemediate: false,

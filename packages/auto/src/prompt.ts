@@ -8,11 +8,7 @@ import type { Plan, Task } from "./plan"
 import { renderTemplate, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
-// --commit 四档: subtask(每子任务提交,缺省)/ task(仅任务收尾提交)/
-// once(整个计划完成后提交一次)/ none(从不提交)。
-export type CommitMode = "subtask" | "task" | "once" | "none"
-
-type Opts = { commit?: CommitMode; mode?: ModeSpec }
+type Opts = { mode?: ModeSpec }
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
 export const VERDICT_FILE = ".auto/verify.md"
@@ -42,26 +38,21 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
 }
 
 // Subtask session: exactly one checklist item. The session implements it and
-// self-checks; ticking the checkbox is the driver's job when the session ends.
+// self-checks; ticking the checkbox is the driver's job when the session ends
+// (会话后的统一提交同样由 driver 执行,见 src/git.ts)。
 export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts = {}): string {
   return renderTemplate("subtask", {
     ...baseCtx(plan, task, opts),
     subtask,
-    commitSubtask: opts.commit === "subtask",
-    note: `${task.id} 与子任务"${subtask}"`,
   })
 }
 
-// Wrap-up session: every subtask is already ticked by the driver. Only docs,
-// the sweep commit, and the output-summary report remain.
+// Wrap-up session: every subtask is already ticked by the driver. Only docs
+// and the output-summary report remain.
 export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boolean } = {}): string {
-  const commit = opts.commit !== "once" && opts.commit !== "none"
   return renderTemplate("wrapup", {
     ...baseCtx(plan, task, opts),
     solo: Boolean(opts.solo),
-    commit,
-    stepNo: commit ? "4" : "3",
-    note: `${task.id} 与任务摘要`,
   })
 }
 
@@ -177,20 +168,13 @@ export function renderWhole(
     ...baseCtx(plan, task, opts),
     ondemand: Boolean(opts.ondemand),
     continuation: Boolean(opts.continuation),
-    commitSubtask: opts.commit === "subtask",
     handoffFile: handoffFile(task),
-    note: `${task.id} 与任务摘要`,
   })
 }
 
 // --dryrun: 权限预检会话,报告写入 .auto/dryrun.md。
 export function renderDryrun(): string {
   return renderTemplate("dryrun", {})
-}
-
-// --commit once: 整个计划完成后的唯一一次提交会话(全新会话,不进任何链)。
-export function renderCommitAll(plan: Plan): string {
-  return renderTemplate("commit-all", { doneList: doneList(plan), note: "整个计划完成" })
 }
 
 // init --prompt: 初始化规划会话,按用户需求填充 PLAN.md,不实施。

@@ -5,7 +5,7 @@ import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensureGitignore, ensurePointer, runAll } from "./loop"
 import { loadModes, readPersistedMode, writePersistedMode, type ModeSpec } from "./mode"
 import { load } from "./plan"
-import { renderInit, type CommitMode } from "./prompt"
+import { renderInit } from "./prompt"
 import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage } from "./server"
 import { usePromptLibrary } from "./template"
@@ -21,7 +21,7 @@ const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--verify-idle/--verify-max/--mode/
 // --final-review 带值(吞掉下一个 token);--verbose/--interactive/--dryrun/
-// --commit-subtask/--early/--verify 是布尔选项,出现即 true,仅当紧随字面量
+// --early/--verify 是布尔选项,出现即 true,仅当紧随字面量
 // true/false 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,--interactive
 // 另有短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
@@ -41,7 +41,7 @@ const VALUE_FLAGS = new Set([
   "mode",
   "final-review",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "commit-subtask", "early", "verify"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -103,7 +103,11 @@ if (command === "run") {
   log(`📝 日志文件: ${setLogFile(directory)}`)
   const commit = parseCommit(flags)
   if (commit === null) {
-    console.error("--commit 取值为 subtask|task|once|none;缺省为 subtask")
+    console.error("--commit 取值为 true|false(none 为 false 别名);缺省 true,driver 在每个会话结束后统一提交全部改动")
+    process.exit(1)
+  }
+  if (flags.has("commit-subtask")) {
+    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 --commit false")
     process.exit(1)
   }
   const subtask = parseSubtask(flags.get("subtask"))
@@ -204,18 +208,13 @@ if (command === "run") {
   process.exit(code)
 }
 
-// --commit 缺省/裸选项 = subtask;--commit-subtask 为旧别名(true→subtask,
-// false→task,即旧的默认行为);显式 --commit 优先。返回 null 表示取值非法。
-function parseCommit(flags: Map<string, string>): CommitMode | null {
-  const raw = flags.has("commit")
-    ? flags.get("commit")
-    : flags.has("commit-subtask")
-      ? flags.get("commit-subtask") === "false"
-        ? "task"
-        : ""
-      : undefined
-  if (raw === undefined || raw === "") return "subtask"
-  if (raw === "subtask" || raw === "task" || raw === "once" || raw === "none") return raw
+// --commit 缺省/裸选项/true = 启用(会话后统一提交);false 与旧值 none = 关闭。
+// 旧的 subtask/task/once 档已随"收回 AI 提交权、driver 统一提交"一并移除。
+// 返回 null 表示取值非法。
+function parseCommit(flags: Map<string, string>): boolean | null {
+  const raw = flags.get("commit")
+  if (raw === undefined || raw === "" || raw === "true") return true
+  if (raw === "false" || raw === "none") return false
   return null
 }
 
@@ -347,11 +346,13 @@ if (command === "init") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
   }
-  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块与验证原则块各自独立、只追加。
+  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块与提交原则块
+  // 各自独立、只追加。
   const ensured = await ensurePointer(directory)
   console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
   console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
-  if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/logs/(driver 工作目录)")
+  console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
+  if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
   // -p/--prompt: 初始化完成后直接调用一次 AI,按提示词填充 PLAN.md 等文档,
   // 由用户审核后再运行 run。
@@ -410,13 +411,14 @@ if (command === "status") {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [-m|--mode <name>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [subtask|task|once|none]] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
+  opencode-auto run [dir] [--agent <name>] [--server <url>] [-m|--mode <name>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [true|false]] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
 选项: -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码;缺省 migrate,解析成功后持久化到 .auto/config.json 供后续 run 沿用)
+      --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动——先嵌套子仓库后本仓库,提交信息带任务编号与阶段,git 历史即 AI 变更的审计轨迹;false 关闭)
       --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
-      --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合)
+      --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

@@ -26,9 +26,10 @@ opencode-auto run <dir> --agent auto --verbose true
 # interactive: 旁路交互(与 --verbose 互斥)——终端保持干净输出并常驻等待输入,
 # 回车把输入作为额外消息发往当前活动会话(无活动会话时丢弃);日志文件仍保留 verbose 级完整记录:
 opencode-auto run <dir> --agent auto --interactive
-# commit-subtask: 要求 agent 每完成并勾选一项子任务(- [x])即提交一次(含嵌套 .git 子仓库),
-# 实现子任务级别的变动历史追踪;同时每 30 秒输出子任务进度与预计剩余用时(线性估算,精度受检查频度限制):
-opencode-auto run <dir> --agent auto --commit-subtask
+# commit: 会话后统一提交(缺省启用,收回 agent 的提交权)——任何会话结束且 driver 完成状态写入后,
+# driver 递归提交全部改动(先嵌套 .git 子仓库后本仓库),提交信息带任务编号与阶段,
+# 实现子任务级别的变动历史追踪与按会话回滚;false 关闭:
+opencode-auto run <dir> --agent auto --commit false
 # new-session-subtask: 严格按一个子任务一次全新会话执行(任务正文需用 - [ ] 检查项列出子任务),
 # 控制单次会话的最大上下文大小;每个子任务会话结束以其检查项勾选为准,
 # 全部子任务完成后再开一个收尾会话统一更新 docs、提交剩余改动,

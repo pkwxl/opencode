@@ -25,12 +25,6 @@
 
 <任务正文: 目标、范围、上下文与产出要求——{{#if stageAudit}}审计报告写入 docs/final/audit-r{{round}}.md,末两行固定为 `结论: <概述>` 与 `策略: 重构|修补|无`(driver 依此路由){{/if}}{{#if stageRemediate}}修复报告写入 docs/final/refactor-r{{round}}.md(策略为重构)或 docs/final/patch-r{{round}}.md(策略为修补),自由正文无协议{{/if}}{{#if stageValidate}}验证报告写入 docs/final/validate-r{{round}}.md,末行固定为 `结论: 通过` 或 `结论: 差距 <描述>`{{/if}}{{#if stageFinalize}}收尾报告写入 docs/final/finalize.md,自由正文{{/if}};检查项由后续分解会话另行生成,不要手写>
 
-verify: command: <命令>
-
-(verify 行可选、独立成行置于正文之后: 优先复用原任务的验证命令/既有测试套件,
-不得发明未运行过的检查;audit/validate/finalize 的 verify 由 driver 固定为结构
-检查,提案中的该行会被忽略)
-
 约束:
 1. 只规划不实施: 不修改任何实现代码与文档,本次唯一可写的文件是 {{proposalFile}};{{> state-rule}}
 {{> question-rule}}

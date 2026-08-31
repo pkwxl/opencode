@@ -20,8 +20,5 @@
 {{> question-rule}}
 3. 收尾:
    a. 自我检查该子任务是否真正完成;整个任务的验收在最后由独立审核会话统一进行,
-      不通过会把差距反馈回来修复;{{#if commitSubtask}}
-   b. git 提交全部未提交改动,实现子任务级别的变动历史追踪:
-      {{> commit-rule}};
-   c.{{/if}}{{^commitSubtask}}
-   b.{{/if}} 不要运行任务级 verify(验收由 driver 交独立审核会话处理)、不要更新 docs/(最后统一收尾);{{> state-rule}}
+      不通过会把差距反馈回来修复;
+   b. 不要运行任务级 verify(验收由 driver 交独立审核会话处理)、不要更新 docs/(最后统一收尾);{{> state-rule}}

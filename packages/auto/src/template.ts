@@ -14,7 +14,6 @@
 // 块/片段标签独占一行时整行吞掉(standalone 语义),条件段书写不必顾虑空行。
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import tplCommitAll from "../templates/prompts/commit-all.md" with { type: "file" }
 import tplDecompose from "../templates/prompts/decompose.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFinalTask from "../templates/prompts/final-task.md" with { type: "file" }
@@ -42,7 +41,6 @@ type Node =
 // 内置模板注册表: 新增内置模板 = 加文件 + 一条 `with { type: "file" }` 导入并
 // 登记到这里(用户自定义/覆盖走目标目录 .opencode/auto/prompts/,无需改源码)。
 const embedded: Record<string, string> = {
-  "commit-all": tplCommitAll,
   decompose: tplDecompose,
   dryrun: tplDryrun,
   "final-task": tplFinalTask,

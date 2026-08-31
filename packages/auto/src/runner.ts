@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
+import { commitTree } from "./git"
 import { log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import {
@@ -23,7 +24,6 @@ import {
 } from "./plan"
 import {
   handoffFile,
-  renderCommitAll,
   renderDecompose,
   renderFix,
   renderHandoffSteer,
@@ -36,7 +36,6 @@ import {
   renderWrapup,
   REVIEW_FILE,
   VERDICT_FILE,
-  type CommitMode,
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
@@ -68,6 +67,19 @@ const AUTO_ANSWER =
 // human intervention.
 const FIX_ROUNDS = 3
 
+// 会话后统一提交(收回 AI 提交权,见 src/git.ts): 每个会话结束且 driver 完成
+// 状态写入(tick 勾选等)后调用,递归提交全部改动——git 历史即 AI 变更的审计
+// 轨迹,回滚粒度 = 会话。--commit false 与 dryrun 跳过。
+async function afterSession(
+  dir: string | undefined,
+  opts: Opts,
+  task: { id: string; title: string },
+  info: { stage: string; subject: string },
+): Promise<void> {
+  if (!dir || opts.commit === false || opts.dryrun) return
+  await commitTree(dir, task, info)
+}
+
 // --subtask 三档: off(单会话完成)/ auto(自动分解,缺省)/ ondemand(单会话执行,
 // 上下文达到 --context-limit 时交接文档 + 新会话续跑)。
 export type SubtaskMode = "off" | "auto" | "ondemand"
@@ -79,7 +91,7 @@ export type SubtaskMode = "off" | "auto" | "ondemand"
 // 继续(AI 无授权绕开) / ask-fail 拒绝并退出运行(阻塞停机)。
 export type PermissionMode = "auto-allow" | "ask-allow" | "ask-deny" | "ask-fail"
 
-// 会话级选项: runTask/commitAll/runOnce 与终审任务生成会话(src/final.ts 复用
+// 会话级选项: runTask/runOnce 与终审任务生成会话(src/final.ts 复用
 // requireArtifact)共用的透传参数。
 export type Opts = {
   agent?: string
@@ -87,7 +99,8 @@ export type Opts = {
   dir?: string
   verbose?: boolean
   waitAnswer?: number
-  commit?: CommitMode
+  // --commit false: 关闭 driver 的会话后统一提交(缺省启用;提交机制见 src/git.ts)。
+  commit?: boolean
   subtask?: SubtaskMode
   // --verify: 启用 driver 的任务级三段式验收(脚本准备 → driver 执行 → 独立判定);
   // 缺省不启用——任务在收尾后直接标 done(不写 verified,未经验证不落账),
@@ -97,7 +110,7 @@ export type Opts = {
   dryrun?: boolean
   // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
   contextLimit?: number
-  // --review 质量审核轮数上限(0=不启用);audit/validate 终审任务被强制置 0
+  // --review 质量审核轮数上限(0=不启用);终审任务(final 字段)被强制置 0
   // (见 pipeline),终审任务生成会话(src/final.ts)不受影响。
   review?: number
   // --early: 审核会话挪进 verify 脚本执行窗口并行(需 review>0,设计文档 F 节),
@@ -184,9 +197,11 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // ran), and a --review audit, if enabled, runs serially at that point (--early
 // has no execution window to hook into and degrades to the serial audit).
 // Final-review tasks (final field, appended by src/final.ts under
-// --final-review) run through this same pipeline; audit/validate ones force
-// review=0 — they are audits themselves — while remediate/finalize ones are
-// audited normally (design doc B.6).
+// --final-review) run through this same pipeline but force BOTH review=0 AND
+// verify off regardless of the flags — the final-review stage is itself the
+// inspection; inspecting the inspection is skipped entirely. A missing or
+// malformed stage report surfaces later at routeFinal as a brokenReport
+// block (exit code 2, human check).
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW, its used
 // tokens below contextLimit (default 64k) and it went idle within
@@ -305,13 +320,15 @@ export async function runTask(
     await persistStage({ kind: "subtasks" })
     await writeCurrent(plan.path, task, mode !== "auto")
 
-    // audit/validate 终审任务本身就是审核: 依 final 字段强制 review=0 跳过逐任务
-    // 质量审核(--early 随之自然失效);remediate/finalize 任务照常(设计文档 B.6)。
+    // 终审任务(final 字段)本身即检验: 强制 review=0 且跳过三段式验收,不对检验
+    // 再做检验(--early 随之自然失效);报告缺失/协议非法由路由时 brokenReport
+    // 阻塞兜底(设计文档 B.6)。
     const finalMark = parseFinalMark(task.final)
-    const limit = finalMark && (finalMark.stage === "audit" || finalMark.stage === "validate") ? 0 : (opts.review ?? 0)
-    // --verify 未启用: 略过三段式验收(early 依赖的脚本执行窗口随之不存在),
-    // 收尾后由 driver 直接标 done;--review 的质量审核改为此时串行执行。
-    const verifyOn = opts.verify === true
+    const limit = finalMark ? 0 : (opts.review ?? 0)
+    // --verify 未启用(或终审任务强制关闭): 略过三段式验收(early 依赖的脚本执行
+    // 窗口随之不存在),收尾后由 driver 直接标 done;--review 的质量审核改为此时
+    // 串行执行。
+    const verifyOn = opts.verify === true && !finalMark
     // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
     // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
     const early = opts.early && limit > 0 && verifyOn
@@ -326,7 +343,9 @@ export async function runTask(
     const fixItems = subtasks(await Bun.file(fixFile).text().catch(() => "")).map((item) => item.text)
     const fixReady = resumedReview?.stage === "planfix" && fixItems.length > 0
     const replan = resumedReview?.stage === "planfix" && !fixReady
-    let enterAudit = resumedReview !== undefined && (resumedReview.stage === "audit" || replan)
+    // limit=0(--review 未启用或终审任务强制关闭)时补跑审核没有意义: 陈旧的
+    // review 阶段恢复记录不再开审核会话,按常规循环走完直接完成。
+    let enterAudit = limit > 0 && resumedReview !== undefined && (resumedReview.stage === "audit" || replan)
     let skipToInject = fixReady
     let skipWrapup = resume?.kind === "verify" || enterAudit
     let pendingVerify = resume?.kind === "verify" ? resume : undefined
@@ -367,8 +386,9 @@ export async function runTask(
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
         if (!skipWrapup) {
           await persistStage({ kind: "wrapup" })
-          const result = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, mode: opts.mode, solo: mode !== "auto" }), opts, chain)
+          const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, solo: mode !== "auto" }), opts, chain)
           if (result.type === "blocked") return result
+          await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
         }
         skipWrapup = false
         let auditFromVerify: Verdict | undefined
@@ -394,7 +414,11 @@ export async function runTask(
           }
           auditFromVerify = verdict.audit
         } else {
-          log(`⏭ ${task.id} 未启用 --verify,略过任务级验收,直接完成`)
+          log(
+            finalMark
+              ? `⏭ ${task.id} 终审任务不做任务级验收(该阶段本身即检验),直接完成`
+              : `⏭ ${task.id} 未启用 --verify,略过任务级验收,直接完成`,
+          )
           await markDone(plan.path, task.id)
         }
         if (limit <= 0) return { type: "completed" }
@@ -450,12 +474,13 @@ async function executeWhole(
     const result = await runSession(
       client,
       task,
-      renderWhole(plan, task, { commit: opts.commit, mode: opts.mode, ondemand, continuation }) + feedback,
+      renderWhole(plan, task, { mode: opts.mode, ondemand, continuation }) + feedback,
       opts,
       chain,
       steer,
     )
     if (result.type === "blocked") return result
+    await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject: `${task.id} ${task.title}: 执行` })
     // 未触发上下文上限即结束 = 任务在单会话内自然完成。
     if (!ondemand || chain.used < cap) return undefined
     const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
@@ -482,14 +507,8 @@ async function executeWhole(
   }
 }
 
-// --commit once: 计划全部完成后的唯一一次整体提交会话(全新,不进任何链)。
-export async function commitAll(client: OpencodeClient, plan: Plan, opts: Opts): Promise<Outcome> {
-  const result = await runSession(client, pseudoTask("PLAN", "整体提交"), renderCommitAll(plan), opts, { pct: 100, used: 0, at: 0 })
-  if (result.type === "blocked") return result
-  return { type: "completed" }
-}
-
-// init --prompt 与 --dryrun 的单次独立会话: 不属于任何任务,不进任何链。
+// init --prompt 与 --dryrun 的单次独立会话: 不属于任何任务,不进任何链,也不做
+// 会话后提交(预检不改动工作区;初始化产物须先经人工审核 PLAN.md)。
 export async function runOnce(
   client: OpencodeClient,
   title: string,
@@ -656,6 +675,7 @@ async function ensureDecomposed(
     const items = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
     if (items.length) {
       await setSubtasks(plan.path, task.id, items)
+      await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject: `${task.id} ${task.title}: 子任务分解` })
       return { type: "ok", task: requireTask(await load(plan.path), task.id) }
     }
     if (i === 1) {
@@ -690,6 +710,8 @@ async function runSubtask(
   const result = await runSession(client, task, renderSubtask(plan, task, text, opts), opts, chain)
   if (result.type === "blocked") return result
   await tick(plan.path, task.id, text)
+  // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
+  await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: `subtask ${index}`, subject: `${task.id}: 子任务 ${index} ${text}` })
   log(`  ✓ ${text.slice(0, 60)}`)
   return undefined
 }
@@ -784,8 +806,10 @@ async function verifyTask(
     log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
     const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap), opts, chain)
     if (fixed.type === "blocked") return fixed
-    const wrapped = await runSession(client, task, renderWrapup(plan, task, { commit: opts.commit, mode: opts.mode, solo: mode !== "auto" }), opts, chain)
+    await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: `${task.id} ${task.title}: 验收差距修复(轮 ${round})` })
+    const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, solo: mode !== "auto" }), opts, chain)
     if (wrapped.type === "blocked") return wrapped
+    await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
   }
 }
 
@@ -881,6 +905,7 @@ async function judge(
       artifact: `有效判定文件 ${VERDICT_FILE}`,
       detail: "缺失或无结论行",
       requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 driver 重新执行)。",
+      commit: { stage: "verify-judge", subject: `${task.id} ${task.title}: 验收判定` },
       reset: () => rm(file, { force: true }),
       collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
     })
@@ -921,6 +946,7 @@ async function generateScript(
     kind: "脚本生成",
     artifact: script,
     requirement: "必须把可执行脚本写到该路径并 chmod +x。",
+    commit: { stage: "verify-script", subject: `${task.id} ${task.title}: 验收脚本生成` },
     collect: async () => (await Bun.file(script).exists()) || undefined,
   })
   if (produced !== true) return produced
@@ -952,6 +978,7 @@ async function reviewTask(
     artifact: `有效结论文件 ${REVIEW_FILE}`,
     detail: "缺失或无结论行",
     requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过` 或 `结论: 差距 <描述>`。",
+    commit: { stage: "review", subject: `${task.id} ${task.title}: 质量审核${early ? "(与 verify 并行)" : ""}${final ? "(全计划)" : ""}` },
     reset: () => rm(file, { force: true }),
     collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
   })
@@ -972,6 +999,7 @@ async function planReviewFix(
     artifact: `有效修复检查项文件 docs/${task.id}.fix.md`,
     detail: "缺失或无检查项",
     requirement: "必须把修复检查项写入该文件(每条差距至少一项)。",
+    commit: { stage: "review-fix", subject: `${task.id} ${task.title}: 审核修复规划` },
     reset: () => rm(file, { force: true }),
     collect: async () => {
       const items = subtasks(await Bun.file(file).text().catch(() => ""))
@@ -985,7 +1013,9 @@ async function planReviewFix(
 // “旁路会话必须产出文件”的通用骨架(设计文档 A.4): 会话结束但产物缺失或无效时
 // 带反馈重试一次,仍失败按隐性阻塞停机(人工检查后重新运行续跑)。脚本生成、
 // 判定、质量审核、修复规划与终审任务生成(src/final.ts)会话共用;collect 返回
-// undefined 表示该次会话未产出有效产物。
+// undefined 表示该次会话未产出有效产物。spec.commit 声明该类会话的统一提交信息
+// (会话结束即提交;判定会话的 PLAN.md 越权还原发生在提交之后时,还原差异由
+// 下一次提交清扫,历史中保留越权记录本身亦是审计事实)。
 export async function requireArtifact<T>(
   client: OpencodeClient,
   task: Task,
@@ -1004,6 +1034,8 @@ export async function requireArtifact<T>(
     reset?: () => Promise<void>
     // 会话结束后采集产物。
     collect: () => Promise<T | undefined>
+    // 会话后统一提交的信息(阶段 trailer 与标题行;缺省不提交)。
+    commit?: { stage: string; subject: string }
   },
 ): Promise<T | (Outcome & { type: "blocked" })> {
   let feedback = ""
@@ -1012,6 +1044,7 @@ export async function requireArtifact<T>(
     // 旁路一次性会话: 链上不携带阶段(phase),不写进度恢复记录。
     const result = await runSession(client, task, promptText + feedback, opts, { pct: 100, used: 0, at: 0 })
     if (result.type === "blocked") return result
+    if (spec.commit) await afterSession(opts.dir, opts, task, spec.commit)
     const value = await spec.collect()
     if (value !== undefined) return value
     if (i === 1) {

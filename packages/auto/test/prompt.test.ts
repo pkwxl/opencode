@@ -5,7 +5,6 @@ import { loadModes } from "../src/mode"
 import { parse } from "../src/plan"
 import { verifyTmpDir } from "../src/verify"
 import {
-  renderCommitAll,
   renderDecompose,
   renderDryrun,
   renderFinalTask,
@@ -84,21 +83,21 @@ describe("renderSubtask", () => {
     expect(text).not.toContain("改为 `- [x]`")
   })
 
-  test("--commit subtask 启用时注入子任务级提交要求", () => {
-    const on = renderSubtask(plan, task, subtask, { commit: "subtask" })
-    expect(on).toContain("git 提交全部未提交改动,实现子任务级别的变动历史追踪")
-    expect(on).toContain("find . -name .git")
-    const off = renderSubtask(plan, task, subtask)
-    expect(off).not.toContain("git 提交全部未提交改动")
+  test("不含会话内提交要求: 统一提交由 driver 在会话后执行", () => {
+    const text = renderSubtask(plan, task, subtask)
+    expect(text).not.toContain("git 提交全部未提交改动")
+    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(text).toContain("不要运行 git commit")
   })
 })
 
 describe("renderWrapup", () => {
-  test("只执行收尾: docs、report.md、清扫提交,不标 done", () => {
+  test("只执行收尾: docs、report.md,不标 done、不提交", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("全部子任务已在之前的会话中逐一完成,不要重做")
     expect(text).toContain("docs/T-002.report.md")
-    expect(text).toContain("git 提交全部未提交改动")
+    expect(text).not.toContain("git 提交全部未提交改动")
+    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
     expect(text).toContain("由 driver 独占维护")
     expect(text).not.toContain("把当前任务的状态标记改为 [done]")
   })
@@ -111,12 +110,6 @@ describe("renderWrapup", () => {
     expect(text).not.toContain("verified-command")
     expect(text).not.toContain("结论: 通过")
     expect(text).not.toContain("结论: 差距")
-  })
-
-  test("--commit once/none 省略清扫提交;--commit task 保留", () => {
-    expect(renderWrapup(plan, task, { commit: "task" })).toContain("git 提交全部未提交改动")
-    expect(renderWrapup(plan, task, { commit: "once" })).not.toContain("git 提交")
-    expect(renderWrapup(plan, task, { commit: "none" })).not.toContain("git 提交")
   })
 
   test("solo 模式(off/ondemand)不提及子任务", () => {
@@ -300,7 +293,7 @@ describe("renderWhole", () => {
     expect(text).toContain("你本次负责整个任务,在单个会话内完成,不做子任务分解")
     expect(text).toContain("T-002: 实现迁移")
     expect(text).not.toContain("handoff.md")
-    expect(text).not.toContain("git 提交")
+    expect(text).not.toContain("git 提交全部未提交改动")
   })
 
   test("ondemand 模式: 附交接条款;continuation 要求先读交接文档", () => {
@@ -313,9 +306,9 @@ describe("renderWhole", () => {
     expect(cont).toContain("据此继续")
   })
 
-  test("--commit subtask 时包含提交步骤", () => {
-    expect(renderWhole(plan, task, { commit: "subtask" })).toContain("git 提交全部未提交改动")
-    expect(renderWhole(plan, task, { commit: "task" })).not.toContain("git 提交")
+  test("不含会话内提交要求(state-rule 注入提交原则)", () => {
+    expect(renderWhole(plan, task)).not.toContain("git 提交全部未提交改动")
+    expect(renderWhole(plan, task)).toContain("git 提交由 driver 在会话结束后统一执行")
   })
 
   test("交接提示要求写出状态行", () => {
@@ -334,15 +327,6 @@ describe("renderDryrun", () => {
     expect(text).toContain("只读探查")
     expect(text).toContain(".auto/dryrun.md")
     expect(text).toContain("不修改任何实现代码")
-  })
-})
-
-describe("renderCommitAll", () => {
-  test("整体提交: 只做一次提交,含嵌套仓库规则", () => {
-    const text = renderCommitAll(plan)
-    expect(text).toContain("git 提交全部未提交改动")
-    expect(text).toContain("find . -name .git")
-    expect(text).toContain("整个计划完成")
   })
 })
 
@@ -397,21 +381,20 @@ describe("模式注入(-m/--mode)", () => {
 })
 
 describe("renderFinalTask", () => {
-  test("audit 首轮: 提案路径、报告协议、verify 约束与硬性要求", () => {
+  test("audit 首轮: 提案路径、报告协议、无 verify 行块与硬性要求", () => {
     const text = renderFinalTask(plan, "audit", 1, "全部原任务已完成,开始首轮终审", migrate)
     expect(text).toContain("docs/final/plan-audit-r1.md")
     // 上游输入注入
     expect(text).toContain("全部原任务已完成,开始首轮终审")
     // 提案格式
     expect(text).toContain("# <任务标题>")
-    expect(text).toContain("verify: command: <命令>")
+    // 终审任务不做任务级验收: 提案不再含 verify 行块
+    expect(text).not.toContain("verify: command: <命令>")
+    expect(text).not.toContain("优先复用原任务的验证命令")
     // 报告协议随提案正文要求下沉
     expect(text).toContain("docs/final/audit-r1.md")
     expect(text).toContain("结论: <概述>")
     expect(text).toContain("策略: 重构|修补|无")
-    // verify 命令约束语
-    expect(text).toContain("优先复用原任务的验证命令")
-    expect(text).toContain("不得发明未运行过的检查")
     // 只规划不实施与硬性要求
     expect(text).toContain("只规划不实施")
     expect(text).toContain("产出该提案文件是硬性要求")
@@ -469,10 +452,10 @@ describe("模板渲染完整性", () => {
       renderDecompose(plan, task),
       renderDecompose(plan, task, { mode: migrate }),
       renderSubtask(plan, task, "子任务甲"),
-      renderSubtask(plan, task, "子任务甲", { commit: "subtask", mode: migrate }),
-      renderWrapup(plan, task, { commit: "task" }),
-      renderWrapup(plan, task, { commit: "once", solo: true, mode: migrate }),
-      renderWhole(plan, task, { commit: "subtask", ondemand: true, continuation: true, mode: migrate }),
+      renderSubtask(plan, task, "子任务甲", { mode: migrate }),
+      renderWrapup(plan, task),
+      renderWrapup(plan, task, { solo: true, mode: migrate }),
+      renderWhole(plan, task, { ondemand: true, continuation: true, mode: migrate }),
       renderVerifyScriptGen(plan, task, "/tmp/auto/verify.sh"),
       renderVerifyJudge(plan, task, { script: "/s", code: 1, ms: 2, timedOut: true, timeoutReason: "idle", out: "/o", err: "/e" }),
       renderFix(plan, task, "差距"),
@@ -483,7 +466,6 @@ describe("模板渲染完整性", () => {
       renderFinalTask(plan, "finalize", 1, "", undefined),
       renderHandoffSteer(task),
       renderDryrun(),
-      renderCommitAll(plan),
       renderInit("需求"),
       renderInit("需求", migrate),
       renderDecompose(plan, solo),

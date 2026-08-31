@@ -4,6 +4,13 @@
 > 为准;与其冲突的旧约定(`--review` 终审升级为 `docs/final-audit.md` 单会话全面审核
 > 的既有语义保持不变,终审闭环是独立新增的机制,不改动它)以本文为准。
 
+> **修订(终审不对检验再做检验)**:终审任务(T-F\<k\>,全部四阶段)依 final 字段
+> 强制 review=0 且跳过任务级三段式验收(`--verify` 对其无效),任务不再写 verify
+> 字段、提案的 `verify:` 行兼容剥离一律忽略;报告缺失/协议非法由路由解析时的
+> brokenReport 阻塞兜底(退出码 2,人工核查),不再有结构检查 verify 的修复轮
+> 自愈。下文与该修订冲突的描述(结构检查 verify、协议自愈、remediate/finalize
+> 参与逐任务审核等)以本修订为准。
+
 ## 背景与动机
 
 1. **模式层**:不同场景(迁移、优化、新实现、测试)下,计划初始化与执行各阶段的
@@ -26,8 +33,8 @@
 | `策略: 无` 路由 | 直达 Finalize,**跳过 Remediate 与 Validate**:Audit 本身就是全局检查,无补救即无验证对象;原任务已有任务级 verify 兜底 |
 | Validate 路由 | 报告末行 `结论: 通过`(→ 生成 Finalize 任务)或 `结论: 差距 <描述>`(→ 回退 Audit,受轮上限约束);不设独立"建议"字段——结论即建议 |
 | 模式层形态 | `src/mode.ts` 类型化注册表(策略模式精神),不用 prompts/ 目录模板:提示词是 TS 函数组合(带运行时参数:路径/字段/上下文),templates/ 只承载 init 复制件且须逐文件 `with { type: "file" }` 导入嵌入二进制,目录模板两者都冲突。新增模式 = 加一个类型完整的条目,driver 零改动 |
-| 终审阶段载体 | 真任务入 PLAN.md(`T-F<k>` ID + `final: <stage>@<round>` 字段标记),复用 runTask 全流水线(分解/子任务会话/收尾/三段式验收/CURRENT.md/进度恢复/commit 档位),driver 只做"生成任务 → 跑任务 → 解析报告路由"的状态机 |
-| audit/validate 任务的逐任务审核 | 跳过(它们本身就是审核;审核套娃浪费会话且语义混乱):runTask 内按 final 标记强制 review=0;refactor/patch/finalize 任务在 `--review` 启用时正常审核 |
+| 终审阶段载体 | 真任务入 PLAN.md(`T-F<k>` ID + `final: <stage>@<round>` 字段标记),复用 runTask 全流水线(分解/子任务会话/收尾/CURRENT.md/进度恢复/commit 档位;任务级验收与逐任务审核依 final 强制跳过),driver 只做"生成任务 → 跑任务 → 解析报告路由"的状态机 |
+| audit/validate 任务的逐任务审核 | **(修订)** 全部终审任务跳过逐任务审核与任务级三段式验收——终审阶段本身即检验,不对检验再做检验(审核/验收套娃浪费会话且语义混乱):runTask 内按 final 标记强制 review=0 且 verify 关闭(收尾后直接 done);闭环内部的修复质量由同轮 validate 回归验证兜底 |
 | 产物位置 | `docs/final/`(audit-r\<N\>.md / refactor-r\<N\>.md / patch-r\<N\>.md / validate-r\<N\>.md / finalize.md / plan-\<stage\>-r\<N\>.md 提案),避开既有终审报告 `docs/final-audit.md`(`--review` 的产物,命名不冲突) |
 | 全局单会话不变量 | 保持:终审闭环全程串行(生成会话 → 任务会话),无并行窗口,不需要 worktree |
 
@@ -78,7 +85,7 @@ export const MODES: Record<string, ModeSpec> = { migrate: { ... } }
 | `--early` / `--early-review` | 只作用于逐任务审核窗口,与终审无交互;`--early-review` 与 `--final-review` 可同现 |
 | `--dryrun` | 不执行任务,终审不触发 |
 | `--commit once` | 整体提交保持在终审全部结束后的既有位置(终审闭环本身产生的改动一并提交) |
-| `--subtask off/ondemand` | 终审任务遵循全局档位;off 下终审任务 verify 差距 → 回退 pending、退出码 2(既有语义) |
+| `--subtask off/ondemand` | 终审任务遵循全局档位;终审任务不做任务级验收,无 verify 差距回退一途(报告异常在路由时阻塞) |
 | `--wait-between` | 终审任务之间同样生效(与普通任务一致) |
 
 退出码:终审任务 blocked/incomplete → 既有退出码 2 语义;熔断 → 2(阻塞写入
@@ -93,16 +100,18 @@ docs/final/ 产物)` 的**纯函数**,无新增持久化状态。
 ```
 [原任务全部 done](next() 返回空,终审未完成)
  → 生成会话(旁路一次性,requireArtifact 骨架)产出任务提案 docs/final/plan-audit-r1.md
- → driver 解析并 appendTask:T-F1,字段 final: audit@1,verify = 结构检查命令
- → 主循环 next() 拾取 → runTask(T-F1) 全流水线(分解/子任务/收尾/三段式验收)
+ → driver 解析并 appendTask:T-F1,字段 final: audit@1(不写 verify 字段)
+ → 主循环 next() 拾取 → runTask(T-F1) 全流水线(分解/子任务/收尾;强制跳过任务级
+   验收与逐任务审核,收尾后直接 done)
  → runTask 完成且任务带 final 标记 → 路由:解析 docs/final/audit-r1.md 末行
-     策略: 无        → 生成 Finalize 任务 → 执行 → commit once(既有位置)→ 退出 0
-     策略: 重构|修补  → 生成 remediate 任务(verify 取自提案)→ 执行
-                      → 生成 validate 任务(verify = 结构检查)→ 执行
+      策略: 无        → 生成 Finalize 任务 → 执行 → commit once(既有位置)→ 退出 0
+      策略: 重构|修补  → 生成 remediate 任务 → 执行
+                       → 生成 validate 任务 → 执行
  → 解析 docs/final/validate-r1.md 末行:
-     结论: 通过 → 生成 Finalize 任务 → 执行 → 完成
-     结论: 差距 → 审计轮 < n ? 生成聚焦残余差距的 audit@<r+1> 任务 → 继续闭环
-                 审计轮 ≥ n ? 熔断(block 最后任务,退出码 2)
+      结论: 通过 → 生成 Finalize 任务 → 执行 → 完成
+      结论: 差距 → 审计轮 < n ? 生成聚焦残余差距的 audit@<r+1> 任务 → 继续闭环
+                  审计轮 ≥ n ? 熔断(block 最后任务,退出码 2)
+      报告缺失/协议行非法 → brokenReport 阻塞该任务(退出码 2,人工核查)
 ```
 
 - 任务 ID `T-F<k>`:k = 既有终审任务数 + 1,追加顺序确定、免碰撞(HEADING 的
@@ -122,11 +131,10 @@ docs/final/ 产物)` 的**纯函数**,无新增持久化状态。
 # <任务标题>
 
 <任务正文:目标、范围、上下文、检查项由 runTask 的分解会话另行生成,不手写>
-
-verify: command: <命令>          ← 可选;refactor/patch 建议给出(通常复用原任务的
-                                   验证命令);audit/validate/finalize 由 driver 固定,
-                                   提案中的该行被忽略
 ```
+
+(修订:提案不再包含可选 `verify:` 行——终审任务强制跳过任务级验收,该字段无用;
+旧提案中残留的该行解析时兼容剥离、被忽略。)
 
 - 各阶段侧重注入 `mode.final[stage]`(migrate 见 A.1);
 - 提案正文是任务的自包含描述:凭它 + CURRENT.md + docs/ 即可执行;
@@ -134,23 +142,22 @@ verify: command: <命令>          ← 可选;refactor/patch 建议给出(通常
 - audit@r≥2 的生成会话输入为 validate 差距原文 + 上一轮报告,提示词要求聚焦
   残余差距与回归检查,不做全量重审。
 
-driver 解析提案后 `appendTask`:ID/`final` 字段/audit-validate 的固定 verify 由
-driver 决定,标题与正文取自提案,verify 字段取提案的 `verify:` 行(refactor/patch;
-缺省回落自然语言 → generate 分支)。
+driver 解析提案后 `appendTask`:ID/`final` 字段由 driver 决定,标题与正文取自提案,
+不写 verify 字段(终审任务强制跳过任务级验收)。
 
-### B.4 报告协议与三段式验收的配合
+### B.4 报告协议与验收的关系
 
 - **audit 任务**:正文要求产出审计报告 `docs/final/audit-r<N>.md`,末两行
-  `结论: <概述>`、`策略: 重构|修补|无`;driver 固定 verify 为结构检查,如
-  `command: test -s docs/final/audit-r1.md && grep -qE '^策略[:：] ?(重构|修补|无)$' docs/final/audit-r1.md`。
+  `结论: <概述>`、`策略: 重构|修补|无`。
 - **validate 任务**:报告 `docs/final/validate-r<N>.md`,末行
-  `结论: 通过` 或 `结论: 差距 <描述>`;verify 同为结构检查。
-- **协议自愈**:策略/结论行缺失或取值非法 → 结构检查失败 → 三段式验收判差距 →
-  既有 FIX_ROUNDS 修复循环反馈回执行会话,无需专门的协议重试逻辑。
+  `结论: 通过` 或 `结论: 差距 <描述>`。
+- **报告异常兜底(修订)**:终审任务不做任务级验收,策略/结论行缺失或取值非法
+  (多为会话漏写或报告被人工改动)在 runTask 完成后的路由解析时按 brokenReport
+  阻塞该任务——退出码 2、提示人工核查(修复报告或删改终审任务后状态重建重新
+  路由);不做修复轮自愈。
 - **remediate 任务**:报告 `docs/final/refactor-r<N>.md` / `patch-r<N>.md`,
-  自由正文无协议;verify 取自提案命令。
-- **finalize 任务**:收尾报告 `docs/final/finalize.md`(自由正文);verify 缺省为
-  结构检查,提案可覆盖。
+  自由正文无协议;修复质量由同轮 validate 回归验证兜底。
+- **finalize 任务**:收尾报告 `docs/final/finalize.md`(自由正文)。
 - 各终审任务的收尾会话仍照常写 `docs/T-F<k>.report.md` 产出摘要,与阶段报告并存
   (摘要 vs 结论,不冲突)。
 
@@ -165,8 +172,10 @@ docs/final/audit-r<M>.md:<最近一轮差距原文>`,退出码 2。人工处理(
 ### B.6 runTask 适配
 
 - Opts 增 `mode`(透传 prompt 渲染);
-- audit/validate 终审任务强制 `review = 0`(任务对象带 `final` 字段且 stage ∈
-  {audit, validate} 时;`--early` 随之自然失效);
+- 终审任务(任务对象带 `final` 字段,全部四阶段)强制 `review = 0` 且跳过三段式
+  验收(`--verify` 对其无效,`--early` 随之自然失效),收尾后直接 markDone
+  (不写 verified);陈旧 verify/review 阶段恢复记录不补跑(enterAudit 加
+  limit>0 守卫,verify 阶段记录走收尾跳过 + 直接完成);
 - 导出 `requireArtifact` / `runSession` 供 `src/final.ts` 的生成会话复用;
 - 其余(链复用、权限、交互、看门狗)零改动。
 
@@ -179,8 +188,8 @@ docs/final/audit-r<M>.md:<最近一轮差距原文>`,退出码 2。人工处理(
 2. audit 任务 done 且报告末行策略合法 → 按策略路由;若下一阶段任务已存在(追加后
    中断)→ 不重复生成,主循环直接拾取;
 3. 提案文件已产出但对应任务未追加(追加前中断)→ 直接解析追加,不开生成会话;
-4. 终审任务 done 但报告缺失/协议非法 → 不可能(结构检查验收已拦截);报告被人工
-   删除 → 重新路由时按"任务存在但无报告"处理为阻塞,提示人工核查;
+4. 终审任务 done 但报告缺失/协议非法 → 路由时按 brokenReport 阻塞,提示人工
+   核查(终审任务不做任务级验收,该检查是唯一兜底);
 5. 全部原任务与终审任务 done、无待生成阶段 → 终审完成,退出 0。
 
 ## D. 文件级改动清单
@@ -190,7 +199,7 @@ docs/final/audit-r<M>.md:<最近一轮差距原文>`,退出码 2。人工处理(
 | `src/mode.ts`(新增) | ModeSpec / MODES / resolveMode | P1 |
 | `src/index.ts` | `-m/--mode`(VALUE_FLAG + 短选项)、`--final-review`(parseFinalReviewLimit)解析、用法文本 | P1 / P2 |
 | `src/prompt.ts` | 各 render 注入 mode 段;renderFinalTask | P1 / P2 |
-| `src/runner.ts` | Opts.mode;audit/validate 强制 review=0;导出 requireArtifact/runSession | P1 / P2 |
+| `src/runner.ts` | Opts.mode;终审任务(final 字段)强制 review=0 且跳过任务级验收;导出 requireArtifact/runSession | P1 / P2 |
 | `src/loop.ts` | Opts 透传;runTask 完成后路由挂点、next() 为空时终审启动挂点、横幅 | P2 |
 | `src/plan.ts` | Task 解析 `final` 字段;appendTask | P2 |
 | `src/final.ts`(新增) | 状态机路由表、策略/结论解析、appendFinalTask、幂等重建 | P2 |
@@ -201,9 +210,9 @@ docs/final/audit-r<M>.md:<最近一轮差距原文>`,退出码 2。人工处理(
 
 ## E. 风险、边界与已知局限
 
-- **提案 verify 命令的注入信任**:refactor/patch 任务的 verify 命令来自生成会话
-  提案,提示词须约束"优先复用原任务的验证命令/测试套件,不得发明未运行过的检查";
-  三段式判定会话对不合理脚本有重验护栏,风险可控。
+- **报告协议的会话依从性(修订)**:终审任务无结构检查验收兜底,报告协议行全靠
+  提案正文中的硬性要求约束;漏写时在路由时按 brokenReport 阻塞、需人工介入,
+  代价是一个停机事件而非自动修复——换取的是不对检验再做检验的纯粹性。
 - **空 PLAN**:无任务时终审照常进入(audit 大概率 `策略: 无` → finalize),
   不特判。
 - **终审成本**:每轮 = 生成会话×2..3 + 任务全流水线×2..3;`--final-review 1`
