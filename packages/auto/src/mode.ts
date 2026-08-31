@@ -1,7 +1,14 @@
 // -m/--mode 模式层(设计文档 A.1): 提示词级场景引导,不影响 driver 调度状态机。
+// 模式以文件模板管理——内置 templates/modes/<name>.md(经 `with { type: "file" }`
+// 编译期嵌入,新增内置模式 = 加文件 + 一条导入),目标目录 .opencode/auto/modes/
+// <name>.md 可新增或覆盖同名内置模式,新增模式零源码改动。
 // ModeSpec 三段文案的注入点: init → renderInit 的模式导语;exec → 分解/整任务/
 // 子任务/收尾等执行类提示词的注意事项段;final → 终审各阶段提示词的侧重
-// (T-026 的 renderFinalTask 消费,V1 先随注册表一并定义)。
+// (renderFinalTask 消费;remediate 阶段不注入)。
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import builtinMigrate from "../templates/modes/migrate.md" with { type: "file" }
+
 export type ModeSpec = {
   name: string
   // renderInit 的模式导语: 场景定义、任务排布原则、verify 侧重。
@@ -12,32 +19,88 @@ export type ModeSpec = {
   final: { audit: string; validate: string; finalize: string }
 }
 
-// V1 仅注册 migrate(迁移/升级场景);optimize/implement/test 为既定扩展名,
-// 未注册即不可用。新增模式 = 加一个类型完整的条目,driver 零改动。
-export const MODES: Record<string, ModeSpec> = {
-  migrate: {
-    name: "migrate",
-    init: `本次计划属于迁移/升级场景,以保持外部行为不变为前提:
-- 任务按"基线确认 → 迁移改造 → 回归验证"排布: 先固化当前外部行为的基线
-  (既有测试、可复现的检查或行为快照),再做迁移改造,最后做回归验证;
-- 每个任务的 verify 字段优先复用既有的测试/构建命令,避免发明未运行过的检查;
-- 不夹带与迁移无关的功能变更或重构,确有必要时单独立项。`,
-    exec: `迁移/升级模式注意事项:
-- 新实现须与旧实现保持对等行为(输入输出、边界情形、错误路径均不得漂移);
-- 迁移期间引入的兼容层、临时分支或开关须注明用途与移除时机;
-- 凡为推进迁移而做出的取舍(暂留旧路径、简化某分支等)属于代码变更决策,
-  按 AUTO-DECISION 要求记录决策过程并标注。`,
-    final: {
-      audit: `迁移场景的终审侧重: 对照基线抽查新旧实现的行为对等性,排查残留的旧路径、
-死代码与未收尾的兼容层。`,
-      validate: `迁移场景的回归侧重: 既有测试/构建命令对基线行为的回归覆盖是否充分,
-未覆盖的行为差异是否已补充验证。`,
-      finalize: `迁移场景的收尾侧重: 旧实现的清理与兼容层的收尾(移除、归档,或注明保留理由)。`,
-    },
-  },
+// 模式文件协议: 首行 `# <name>`(须与文件名一致),五节齐备、无未知节。
+const SECTIONS = ["init", "exec", "final: audit", "final: validate", "final: finalize"]
+
+// 模式名约束: 小写字母开头的字母/数字/连字符(与 CLI 取值一致)。
+const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
+
+// 装载全部模式: 内置注册表 + 目标目录 .opencode/auto/modes/<name>.md(同名覆盖
+// 内置)。文件不合法时抛出(由 CLI 转为退出码 1 的用法错误)。dir 省略时仅内置。
+export function loadModes(dir?: string): Record<string, ModeSpec> {
+  const modes: Record<string, ModeSpec> = { migrate: parseModeFile("migrate", readFileSync(builtinMigrate, "utf8")) }
+  if (!dir) return modes
+  const overlayDir = join(dir, ".opencode", "auto", "modes")
+  let files: string[] = []
+  try {
+    files = readdirSync(overlayDir)
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : ""
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error
+  }
+  for (const file of files.sort()) {
+    if (!file.endsWith(".md")) continue
+    const name = file.slice(0, -3)
+    if (!NAME_PATTERN.test(name)) {
+      throw new Error(`模式文件名 ${join(".opencode", "auto", "modes", file)} 不合法: 须为小写字母开头的字母/数字/连字符`)
+    }
+    modes[name] = parseModeFile(name, readFileSync(join(overlayDir, file), "utf8"))
+  }
+  return modes
 }
 
-// 解析模式名;未注册返回 undefined(CLI 侧报用法错误并列出支持的模式)。
-export function resolveMode(name: string): ModeSpec | undefined {
-  return MODES[name]
+// 模式持久化(.auto/config.json 的 mode 字段): init/run 解析成功后写入,后续
+// run 未显式 -m 时读取,避免跨天运行忘带 -m 回落到 migrate 与实际模式错配
+// (AGENTS.md "扩展第二模式前必须先补持久化" 的落地)。
+export function readPersistedMode(dir: string): string | undefined {
+  try {
+    const config = JSON.parse(readFileSync(join(dir, ".auto", "config.json"), "utf8"))
+    return typeof (config as { mode?: unknown }).mode === "string" ? (config as { mode: string }).mode : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function writePersistedMode(dir: string, name: string): void {
+  mkdirSync(join(dir, ".auto"), { recursive: true })
+  writeFileSync(join(dir, ".auto", "config.json"), JSON.stringify({ mode: name }, null, 2) + "\n")
+}
+
+// 解析模式文件内容;不合法时抛出并指明缺失/非法的节。
+export function parseModeFile(name: string, text: string): ModeSpec {
+  const lines = text.split("\n")
+  const title = /^#\s+(.+?)\s*$/.exec(lines[0] ?? "")
+  if (!title || title[1] !== name) throw new Error(`模式文件 ${name}.md 首行须为 "# ${name}"`)
+  const bodies = new Map<string, string[]>()
+  let section: string | undefined
+  for (const line of lines.slice(1)) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      section = heading[1]
+      if (!SECTIONS.includes(section)) {
+        throw new Error(`模式文件 ${name}.md 含未知节 "## ${section}"(可用节: ${SECTIONS.map((key) => `## ${key}`).join("、")})`)
+      }
+      if (!bodies.has(section)) bodies.set(section, [])
+      continue
+    }
+    if (section) bodies.get(section)!.push(line)
+  }
+  const body = (key: string) => trimBody(bodies.get(key) ?? []).join("\n")
+  const missing = SECTIONS.filter((key) => !body(key))
+  if (missing.length) {
+    throw new Error(`模式文件 ${name}.md 缺少节: ${missing.map((key) => `## ${key}`).join("、")}`)
+  }
+  return {
+    name,
+    init: body("init"),
+    exec: body("exec"),
+    final: { audit: body("final: audit"), validate: body("final: validate"), finalize: body("final: finalize") },
+  }
+}
+
+function trimBody(lines: string[]): string[] {
+  const copy = [...lines]
+  while (copy.length && !copy[0].trim()) copy.shift()
+  while (copy.length && !copy[copy.length - 1].trim()) copy.pop()
+  return copy
 }

@@ -1,0 +1,183 @@
+import { afterEach, describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { parsePartials, promptTemplateNames, renderText, renderTemplate, usePromptLibrary } from "../src/template"
+
+// 每个用例后恢复仅内置,避免覆盖状态泄漏到其他测试文件。
+afterEach(() => usePromptLibrary(undefined))
+
+describe("渲染器", () => {
+  test("变量替换: string 直替,boolean/undefined 渲染为空", () => {
+    expect(renderText("a{{x}}b", { x: "值" })).toBe("a值b")
+    expect(renderText("a{{x}}b", { x: true })).toBe("ab")
+    expect(renderText("a{{x}}b", { x: false })).toBe("ab")
+    expect(renderText("a{{x}}b", {})).toBe("ab")
+  })
+
+  test("条件段: 非空字符串或 true 为真,空串/false/未定义为假", () => {
+    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", { x: "文字" })).toBe("有")
+    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", { x: true })).toBe("有")
+    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", { x: "" })).toBe("无")
+    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", {})).toBe("无")
+  })
+
+  test("条件段支持嵌套", () => {
+    expect(renderText("{{#if a}}A{{#if b}}B{{/if}}{{/if}}", { a: true, b: true })).toBe("AB")
+    expect(renderText("{{#if a}}A{{#if b}}B{{/if}}{{/if}}", { a: true })).toBe("A")
+  })
+
+  test("独占一行的块标签整行吞掉,不残留空行", () => {
+    const text = ["前", "", "{{#if x}}", "中", "", "{{/if}}", "后"].join("\n")
+    expect(renderText(text, { x: true })).toBe("前\n\n中\n\n后")
+    expect(renderText(text, {})).toBe("前\n\n后")
+  })
+
+  test("未闭合/多余的闭合标签抛错", () => {
+    expect(() => renderText("{{#if x}}内容", { x: true })).toThrow("未闭合")
+    expect(() => renderText("{{/if}}", {})).toThrow("多余的 {{/if}}")
+    expect(() => renderText("{{#if x}}内容{{/each}}", { x: true })).toThrow("未知闭合标签")
+  })
+
+  test("片段引用: 共享片段按当前上下文渲染(片段内可用变量)", () => {
+    usePromptLibrary(undefined)
+    expect(renderText("{{> state-rule}}", {})).toContain("由 driver 独占维护")
+    expect(renderText("{{> commit-rule}}", { note: "T-001 与任务摘要" })).toContain("注明 T-001 与任务摘要;")
+  })
+
+  test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
+    usePromptLibrary(undefined)
+    const standalone = renderText("前:\n   {{> commit-rule}}\n后", { note: "N" })
+    expect(standalone.split("\n")[1]).toBe("   - 主动在工作目录的文件系统中查找含独立 .git 的子目录(它们通常被父仓库 .gitignore 忽略,")
+    expect(standalone.split("\n")[2]).toBe("     不是 submodule,git status/git submodule 均不可见,必须直接查目录,如 find . -name .git);")
+    const inline = renderText("前:\n   {{> commit-rule}};尾", { note: "N" })
+    expect(inline.split("\n")[1]).toBe("   - 主动在工作目录的文件系统中查找含独立 .git 的子目录(它们通常被父仓库 .gitignore 忽略,")
+    expect(inline.split("\n")[2]).toBe("     不是 submodule,git status/git submodule 均不可见,必须直接查目录,如 find . -name .git);")
+    expect(inline.split("\n").at(-1)).toBe("     被父仓库 ignore 的子仓库不会进入该提交,必须在提交信息中列出其路径与新提交 SHA。;尾")
+  })
+})
+
+describe("共享片段解析", () => {
+  test("## 节解析为首尾去空行的片段体,H1 与节外说明忽略", () => {
+    const partials = parsePartials("# 标题\n说明文字忽略。\n\n## a\n\n内容甲\n\n\n## b\n内容乙\n")
+    expect(partials.a).toBe("内容甲")
+    expect(partials.b).toBe("内容乙")
+  })
+})
+
+describe("内置模板注册表", () => {
+  test("14 个会话模板与 _partials 齐备", () => {
+    expect(promptTemplateNames()).toEqual([
+      "_partials",
+      "commit-all",
+      "decompose",
+      "dryrun",
+      "final-task",
+      "fix",
+      "handoff-steer",
+      "init",
+      "review",
+      "review-fix",
+      "subtask",
+      "verify-judge",
+      "verify-script-gen",
+      "whole",
+      "wrapup",
+    ])
+  })
+
+  test("全部内置模板可渲染(代表性上下文,无残留标签)", () => {
+    const ctx = {
+      taskId: "T-001",
+      taskBlock: "# T-001\n\n正文",
+      doneList: "- [done] T-000: 前置",
+      promptText: "需求",
+      gap: "差距",
+      subtask: "子任务",
+      scriptPath: "/tmp/verify.sh",
+      verifyState: "未声明",
+      handoffFile: "docs/T-001.handoff.md",
+      stageName: "终审审计",
+      round: "1",
+      proposalFile: "docs/final/plan-audit-r1.md",
+      runScript: "/x",
+      runCode: "0",
+      runMs: "1",
+      runTimeout: "否",
+      runOut: "/out",
+      runErr: "/err",
+      replacement: "/r",
+      laterVerifyList: "   (无)",
+      note: "N",
+      stepNo: "3",
+      final: true,
+      early: true,
+      solo: true,
+      commit: true,
+      ondemand: true,
+      continuation: true,
+      commitSubtask: true,
+      reaudit: false,
+      stageAudit: true,
+      stageRemediate: false,
+      stageValidate: false,
+      stageFinalize: false,
+      blockedAnswered: false,
+      blockedUnanswered: false,
+      question: "",
+      answer: "",
+      modeName: "migrate",
+      modeInit: "导语",
+      modeExec: "注记",
+      emphasis: "侧重",
+      prior: "上游",
+    }
+    for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
+      expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
+describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
+  test("同名模板覆盖内置,新内容生效", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "init.md"), "自定义初始化提示词: {{promptText}}")
+      usePromptLibrary(dir)
+      expect(renderTemplate("init", { promptText: "需求" })).toBe("自定义初始化提示词: 需求")
+      // 未覆盖的模板仍取内置
+      expect(renderTemplate("dryrun", {})).toContain("权限预检")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("协议敏感模板覆盖缺失协议行时报错并指明文件", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "verify-judge.md"), "随便写的判定提示词,没有结论协议")
+      expect(() => usePromptLibrary(dir)).toThrow(/verify-judge\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("_partials 覆盖按节名合并,未覆盖节保留内置", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则。")
+      usePromptLibrary(dir)
+      expect(renderText("{{> state-rule}}", {})).toBe("自定义状态规则。")
+      expect(renderText("{{> question-rule}}", {})).toContain("AUTO-DECISION")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

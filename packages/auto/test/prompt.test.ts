@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { resolveMode } from "../src/mode"
+import { loadModes } from "../src/mode"
 import { parse } from "../src/plan"
 import { verifyTmpDir } from "../src/verify"
 import {
@@ -56,7 +56,7 @@ describe("renderDecompose", () => {
   test("包含已完成任务、当前任务、问答历史与状态文件只读规则", () => {
     const text = renderDecompose(plan, task)
     expect(text).toContain("[done] T-001: 搭建 schema")
-    expect(text).toContain("其他任务的描述只作背景")
+    expect(text).toContain("其他任务无需了解")
     expect(text).toContain("T-002: 实现迁移")
     expect(text).toContain("编写迁移脚本。")
     expect(text).toContain("策略选 A 还是 B?")
@@ -364,7 +364,7 @@ describe("renderInit", () => {
   })
 })
 
-const migrate = resolveMode("migrate")!
+const migrate = loadModes().migrate!
 
 describe("模式注入(-m/--mode)", () => {
   test("renderInit 注入 migrate 模式导语;不传模式时不注入", () => {
@@ -459,5 +459,36 @@ describe("renderFinalTask", () => {
     expect(finalize).toContain("docs/final/plan-finalize-r1.md")
     expect(finalize).toContain("docs/final/finalize.md")
     expect(finalize).toContain("兼容层的收尾")
+  })
+})
+
+describe("模板渲染完整性", () => {
+  test("全部 render* 在代表性参数组合下渲染后不残留模板标签", () => {
+    const solo = plan.tasks[0]!
+    const texts = [
+      renderDecompose(plan, task),
+      renderDecompose(plan, task, { mode: migrate }),
+      renderSubtask(plan, task, "子任务甲"),
+      renderSubtask(plan, task, "子任务甲", { commit: "subtask", mode: migrate }),
+      renderWrapup(plan, task, { commit: "task" }),
+      renderWrapup(plan, task, { commit: "once", solo: true, mode: migrate }),
+      renderWhole(plan, task, { commit: "subtask", ondemand: true, continuation: true, mode: migrate }),
+      renderVerifyScriptGen(plan, task, "/tmp/auto/verify.sh"),
+      renderVerifyJudge(plan, task, { script: "/s", code: 1, ms: 2, timedOut: true, timeoutReason: "idle", out: "/o", err: "/e" }),
+      renderFix(plan, task, "差距"),
+      renderReview(plan, task, { final: false }),
+      renderReview(plan, task, { final: true, early: true }),
+      renderReviewFix(plan, task, "差距"),
+      renderFinalTask(plan, "audit", 2, "残余差距", migrate),
+      renderFinalTask(plan, "finalize", 1, "", undefined),
+      renderHandoffSteer(task),
+      renderDryrun(),
+      renderCommitAll(plan),
+      renderInit("需求"),
+      renderInit("需求", migrate),
+      renderDecompose(plan, solo),
+      renderHandoffSteer(solo),
+    ]
+    for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
   })
 })

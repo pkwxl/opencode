@@ -11,6 +11,7 @@ import { protect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
 import { commitAll, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage, type ServerHandle } from "./server"
+import { usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 // AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
@@ -113,6 +114,15 @@ export async function runAll(
   const path = join(directory, "PLAN.md")
   if (!(await Bun.file(path).exists())) {
     log(`未找到计划文件: ${path}`)
+    return 1
+  }
+
+  // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议敏感模板做关键
+  // 内容校验,失败按用法错误退出)。之后 render* 同步渲染,无需再感知目录。
+  try {
+    usePromptLibrary(directory)
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error))
     return 1
   }
 

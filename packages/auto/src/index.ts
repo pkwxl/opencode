@@ -3,11 +3,12 @@ import { resolve } from "node:path"
 import { checkPrinciple } from "./check"
 import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensureGitignore, ensurePointer, runAll } from "./loop"
-import { MODES, resolveMode, type ModeSpec } from "./mode"
+import { loadModes, readPersistedMode, writePersistedMode, type ModeSpec } from "./mode"
 import { load } from "./plan"
 import { renderInit, type CommitMode } from "./prompt"
 import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage } from "./server"
+import { usePromptLibrary } from "./template"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -173,11 +174,7 @@ if (command === "run") {
     console.error("--verify-max 取值范围为 1..1440(分钟);缺省不设上限")
     process.exit(1)
   }
-  const mode = parseMode(flags.get("mode"))
-  if (mode === null) {
-    console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(MODES).join(", ")});缺省为 migrate`)
-    process.exit(1)
-  }
+  const mode = resolveModeFlag(directory, flags.get("mode"))
   const code = await runAll(directory, {
     // 缺省使用 init 生成的自主执行契约 agent(.opencode/agent/auto.md);
     // 显式指定时须为目标目录 .opencode/agent/ 下已定义的 agent。
@@ -287,16 +284,44 @@ function parseVerifyMax(raw: string | undefined): number | null {
   return minutes
 }
 
-// -m/--mode 缺省(无此选项)= migrate;返回 null 表示未注册(裸选项取空串同样
-// 视为未注册名)。
-function parseMode(raw: string | undefined): ModeSpec | null {
-  return resolveMode(raw ?? "migrate") ?? null
+// -m/--mode 解析: 优先级 显式 -m > 持久化(.auto/config.json 的 mode)> 缺省
+// migrate;成功后把生效模式写回持久化,跨天 run 忘带 -m 也能沿用。目标目录
+// .opencode/auto/modes/<name>.md 可新增/覆盖模式(loadModes 合并)。模式文件
+// 不合法或名称未注册时打印错误并以退出码 1 终止。
+function resolveModeFlag(directory: string, raw: string | undefined): ModeSpec {
+  let modes: Record<string, ModeSpec>
+  try {
+    modes = loadModes(directory)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
+  const persisted = readPersistedMode(directory)
+  const name = raw ?? persisted ?? "migrate"
+  const mode = modes[name]
+  if (!mode) {
+    console.error(
+      `--mode 取值须为已注册的模式(当前支持: ${Object.keys(modes).join(", ")});缺省为 migrate` +
+        (persisted ? `,上次持久化: ${persisted}` : ""),
+    )
+    process.exit(1)
+  }
+  if (raw && persisted && raw !== persisted) {
+    console.error(`⚠ 模式 "${raw}" 与上次持久化的 "${persisted}" 不一致(init 与 run 应使用相同模式),已更新持久化值`)
+  }
+  if (!raw && persisted && persisted !== "migrate") console.error(`ℹ 沿用上次持久化的模式: ${persisted}(显式 -m 可覆盖)`)
+  writePersistedMode(directory, name)
+  return mode
 }
 
 if (command === "init") {
-  const mode = parseMode(flags.get("mode"))
-  if (mode === null) {
-    console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(MODES).join(", ")});缺省为 migrate`)
+  const mode = resolveModeFlag(directory, flags.get("mode"))
+  // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议校验失败即退出);
+  // 无 -p 时不渲染提示词,提前装载可在 init 阶段就暴露覆盖问题。
+  try {
+    usePromptLibrary(directory)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
   // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。
@@ -385,7 +410,7 @@ console.error(`用法:
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: -m/--mode 提示词级场景模式(当前支持: ${Object.keys(MODES).join(", ")};缺省 migrate),init 与 run 应使用相同模式
+选项: -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码;缺省 migrate,解析成功后持久化到 .auto/config.json 供后续 run 沿用)
       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
