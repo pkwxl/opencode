@@ -80,9 +80,9 @@ describe("checkPrinciple", () => {
       const before = await checkPrinciple(dir)
       expect(before.findings).toEqual([])
       expect(before.notes.length).toBe(1)
-      // init 补写指针块与验证/提交原则块后,原则块内的 driver 执行表述不再触发提示
+      // init 补写指针块、验证/提交原则块与维护规则块后,块内的 driver 执行表述不再触发提示
       const ensured = await ensurePointer(dir)
-      expect(ensured).toEqual({ pointer: true, principle: true, commit: true })
+      expect(ensured).toEqual({ pointer: true, principle: true, commit: true, maint: true })
       const after = await checkPrinciple(dir)
       expect(after.findings).toEqual([])
       expect(after.notes).toEqual([])
@@ -99,6 +99,36 @@ describe("checkPrinciple", () => {
       expect(notes.length).toBe(2)
       expect(notes[0]).toContain("AGENTS.md 不存在")
       expect(notes[1]).toContain("未找到 PLAN.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("AGENTS.md 超过 150 行输出精简提示(note 不进 findings)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
+    try {
+      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      const filler = Array.from({ length: 155 }, (_, i) => `规则条目 ${i + 1}: 与工作流相关的持久约定。`).join("\n")
+      await Bun.write(
+        join(dir, "AGENTS.md"),
+        [
+          "# AGENTS.md",
+          "",
+          "<!-- opencode-auto:start --><!-- opencode-auto:end -->",
+          "<!-- opencode-auto:verify:start --><!-- opencode-auto:verify:end -->",
+          "<!-- opencode-auto:commit:start --><!-- opencode-auto:commit:end -->",
+          "<!-- opencode-auto:maint:start --><!-- opencode-auto:maint:end -->",
+          "",
+          filler,
+          "",
+        ].join("\n"),
+      )
+      const { findings, notes } = await checkPrinciple(dir)
+      expect(findings).toEqual([])
+      // 2 行标题 + 空行 + 4 个标记块行 + 空行 + 155 行规则 = 162 行
+      expect(notes).toEqual([
+        "AGENTS.md 当前 162 行,超过 150 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/",
+      ])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

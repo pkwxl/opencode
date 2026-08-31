@@ -4,6 +4,7 @@ import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
 import { parse } from "../src/plan"
 import { verifyTmpDir } from "../src/verify"
+import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import {
   renderDecompose,
   renderDryrun,
@@ -442,6 +443,25 @@ describe("renderFinalTask", () => {
     expect(finalize).toContain("docs/final/plan-finalize-r1.md")
     expect(finalize).toContain("docs/final/finalize.md")
     expect(finalize).toContain("兼容层的收尾")
+  })
+})
+
+describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
+  test("AGENTS.md 条款覆盖全部四类标记块并引用维护规则(防漂移)", async () => {
+    const text = await Bun.file(agentTemplate).text()
+    expect(text).toContain("AGENTS.md 不在只读之列")
+    // 不得删除或改写任何标记块(指针/验证/提交/维护规则),而非仅旧版的指针块
+    expect(text).toContain("不得删除或改写任何")
+    expect(text).toContain("opencode-auto 标记块(指针/验证/提交/维护规则")
+    expect(text).toContain("<!-- opencode-auto:*:start -->")
+    expect(text).toContain("<!-- opencode-auto:*:end -->")
+    expect(text).not.toContain("不得删除 opencode-auto 指针块")
+    // 更新其余内容时遵守维护规则块(精简/路由/更新不追加/只沉淀持久知识)
+    expect(text).toContain("遵守 AGENTS.md 维护规则块")
+    expect(text).toContain("docs/agents/")
+    expect(text).toContain("保持精简")
+    expect(text).toContain("更新不追加")
+    expect(text).toContain("只沉淀持久工作流知识")
   })
 })
 

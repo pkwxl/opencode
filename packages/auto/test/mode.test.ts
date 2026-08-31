@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loadModes, parseModeFile, readPersistedMode, writePersistedMode } from "../src/mode"
+import { loadModes, parseModeFile } from "../src/mode"
 
 // 合法模式文件样例: 标题与文件名一致、五节齐备。
 function modeText(name: string, marker = "默认"): string {
@@ -106,20 +106,5 @@ describe("目标目录模式扩展(.opencode/auto/modes/)", () => {
     expect(() => parseModeFile("y", `# y\n\n## init\n\n\n## exec\n注记。\n## final: audit\na\n## final: validate\nb\n## final: finalize\nc\n`)).toThrow(
       /缺少节/,
     )
-  })
-})
-
-describe("模式持久化(.auto/config.json)", () => {
-  test("未写入/非法文件读取为 undefined,写入后可读回", () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-mode-"))
-    try {
-      expect(readPersistedMode(dir)).toBeUndefined()
-      writePersistedMode(dir, "optimize")
-      expect(readPersistedMode(dir)).toBe("optimize")
-      writeFileSync(join(dir, ".auto", "config.json"), "{ 非法")
-      expect(readPersistedMode(dir)).toBeUndefined()
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
   })
 })

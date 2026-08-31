@@ -46,9 +46,26 @@ const COMMIT_PRINCIPLE = `<!-- opencode-auto:commit:start -->
 opencode-auto check 检查)。
 <!-- opencode-auto:commit:end -->`
 
-// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块与提交原则块各自
-// 独立判断、只追加,从不改写已有内容。返回补写了哪些块。
-export async function ensurePointer(directory: string): Promise<{ pointer: boolean; principle: boolean; commit: boolean }> {
+// AGENTS.md 维护规则块: 第四个标记块,约束 AGENTS.md 保持工作流入口定位、
+// 不膨胀为知识库(长迁移中它每个 provider turn 都进入上下文,膨胀侵蚀全部会话
+// 的有效上下文);细节路由到 docs/agents/<主题>.md,由 check 命令的行数 note
+// 做唯一机器观测。见 docs/init-config-agents-design.md D.1。
+const MAINT_RULE = `<!-- opencode-auto:maint:start -->
+AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
+1. 保持精简: 全文不超过 150 行;不写入实现细节、长解释、命令输出或单任务知识。
+2. 路由不复制: 模块/阶段/任务特定的信息写入 docs/agents/<主题>.md,本文件只保留
+   一行路由条目(主题 → 路径)。
+3. 更新不追加: 新增信息前先检查既有规则或路由条目是否应修改;淘汰过时内容,
+   不要累积历史备注。
+4. 只沉淀持久的工作流知识: 仅记录会影响未来多数任务执行方式的约定;临时调试
+   状态、一次性决策、对话过程不写入(一次性决策按 AUTO-DECISION 记入相关文档)。
+<!-- opencode-auto:maint:end -->`
+
+// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、提交原则块与
+// 维护规则块各自独立判断、只追加,从不改写已有内容。返回补写了哪些块。
+export async function ensurePointer(
+  directory: string,
+): Promise<{ pointer: boolean; principle: boolean; commit: boolean; maint: boolean }> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
   let text = existing
@@ -58,8 +75,10 @@ export async function ensurePointer(directory: string): Promise<{ pointer: boole
   if (principle) text = `${text.trimEnd()}\n\n${VERIFY_PRINCIPLE}\n`
   const commit = !text.includes("opencode-auto:commit:start")
   if (commit) text = `${text.trimEnd()}\n\n${COMMIT_PRINCIPLE}\n`
-  if (pointer || principle || commit) await Bun.write(agentsFile, text)
-  return { pointer, principle, commit }
+  const maint = !text.includes("opencode-auto:maint:start")
+  if (maint) text = `${text.trimEnd()}\n\n${MAINT_RULE}\n`
+  if (pointer || principle || commit || maint) await Bun.write(agentsFile, text)
+  return { pointer, principle, commit, maint }
 }
 
 // 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
@@ -167,12 +186,14 @@ export async function runAll(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
-  // 启动会话前确保 AGENTS.md 指针块与验证/提交原则块存在(缺失则补写);AGENTS.md
-  // 本身保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
+  // 启动会话前确保 AGENTS.md 指针块与验证/提交原则块、维护规则块存在(缺失则补写);
+  // AGENTS.md 本身保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前
+  // 重启 server)。
   const ensured = await ensurePointer(directory)
   if (ensured.pointer) log("已补写: AGENTS.md 指针块")
   if (ensured.principle) log("已补写: AGENTS.md 验证原则块")
   if (ensured.commit) log("已补写: AGENTS.md 提交原则块")
+  if (ensured.maint) log("已补写: AGENTS.md 维护规则块")
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
   // 工作区已有未提交改动会被 driver 的下一次提交一并纳入(统一提交为全量清扫
   // 语义,与此前会话清扫提交一致),提前提示用户。dryrun 不做任何提交,不提示。

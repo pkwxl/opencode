@@ -21,6 +21,7 @@ describe("protect", () => {
     path = join(dir, "PLAN.md")
     await Bun.write(path, SAMPLE)
     await Bun.write(join(dir, "opencode.json"), "{}")
+    await Bun.write(join(dir, ".opencode/auto/config.json"), "{}")
   })
 
   afterEach(async () => {
@@ -34,8 +35,10 @@ describe("protect", () => {
     await protect(dir)
     expect(await writable(path)).toBe(false)
     expect(await writable(join(dir, "opencode.json"))).toBe(false)
+    expect(await writable(join(dir, ".opencode/auto/config.json"))).toBe(false)
     await unprotect(dir)
     expect(await writable(path)).toBe(true)
+    expect(await writable(join(dir, ".opencode/auto/config.json"))).toBe(true)
   })
 
   test("AGENTS.md 不在保护之列,始终保持可写", async () => {

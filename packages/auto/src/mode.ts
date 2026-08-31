@@ -5,7 +5,7 @@
 // ModeSpec 三段文案的注入点: init → renderInit 的模式导语;exec → 分解/整任务/
 // 子任务/收尾等执行类提示词的注意事项段;final → 终审各阶段提示词的侧重
 // (renderFinalTask 消费;remediate 阶段不注入)。
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import builtinMigrate from "../templates/modes/migrate.md" with { type: "file" }
 
@@ -47,23 +47,6 @@ export function loadModes(dir?: string): Record<string, ModeSpec> {
     modes[name] = parseModeFile(name, readFileSync(join(overlayDir, file), "utf8"))
   }
   return modes
-}
-
-// 模式持久化(.auto/config.json 的 mode 字段): init/run 解析成功后写入,后续
-// run 未显式 -m 时读取,避免跨天运行忘带 -m 回落到 migrate 与实际模式错配
-// (AGENTS.md "扩展第二模式前必须先补持久化" 的落地)。
-export function readPersistedMode(dir: string): string | undefined {
-  try {
-    const config = JSON.parse(readFileSync(join(dir, ".auto", "config.json"), "utf8"))
-    return typeof (config as { mode?: unknown }).mode === "string" ? (config as { mode: string }).mode : undefined
-  } catch {
-    return undefined
-  }
-}
-
-export function writePersistedMode(dir: string, name: string): void {
-  mkdirSync(join(dir, ".auto"), { recursive: true })
-  writeFileSync(join(dir, ".auto", "config.json"), JSON.stringify({ mode: name }, null, 2) + "\n")
 }
 
 // 解析模式文件内容;不合法时抛出并指明缺失/非法的节。

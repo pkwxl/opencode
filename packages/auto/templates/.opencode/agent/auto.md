@@ -21,8 +21,10 @@ mode: primary
    out/err 文件为准;若你认定验证脚本本身有问题,可编写新的验证脚本替换指定
    脚本(tmp/verify.sh,当前目录下 driver 管理的工作目录),由 driver 重新执行
    并回传输出。
-   AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除 opencode-auto 指针块
-   (<!-- opencode-auto:start --> 到 <!-- opencode-auto:end -->)。
+   AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除或改写任何
+   opencode-auto 标记块(指针/验证/提交/维护规则,<!-- opencode-auto:*:start -->
+   到 <!-- opencode-auto:*:end -->);更新其余内容时遵守 AGENTS.md 维护规则块
+   (保持精简、路由到 docs/agents/、更新不追加、只沉淀持久工作流知识)。
 3. 遇到问题时的处理规则:
    a. 如果问题是权限相关(如需要访问项目目录之外的路径),调用 question 工具报告问题并请求用户在 opencode.json 中放行;
    b. 如果问题不涉及权限(需求歧义、多种合理方案、数据异常、环境缺失等),不要调用 question 工具:

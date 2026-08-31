@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path"
 import { checkPrinciple } from "./check"
+import { formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "./config"
 import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensureGitignore, ensurePointer, runAll } from "./loop"
-import { loadModes, readPersistedMode, writePersistedMode, type ModeSpec } from "./mode"
+import { loadModes, type ModeSpec } from "./mode"
 import { load } from "./plan"
 import { renderInit } from "./prompt"
 import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
@@ -89,6 +90,21 @@ for (let i = 1; i < args.length; i++) {
 const directory = resolve(positional[0] ?? ".")
 
 if (command === "run") {
+  // 已固化选项(设计文档 §C): 宪法级项目属性经 init 固化到
+  // .opencode/auto/config.json,run 出现即用法错误(镜像 --commit-subtask
+  // 移除的既有先例);修订走 init amend 或直接编辑配置文件。
+  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "verify-idle", "verify-max", "commit"]) {
+    if (flags.has(key)) {
+      const flag = key === "mode" ? "-m/--mode" : `--${key}`
+      const fix = key === "mode" ? "-m" : `--${key}`
+      console.error(`${flag} 已在 init 固化(.opencode/auto/config.json)。变更方式: opencode-auto init <dir> ${fix} <值>,或直接编辑该文件`)
+      process.exit(1)
+    }
+  }
+  if (flags.has("commit-subtask")) {
+    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 opencode-auto init <dir> --commit false")
+    process.exit(1)
+  }
   const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
   // --interactive/-i: 旁路交互(与 --verbose 互斥);文件保持 verbose 级完整记录,
   // 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
@@ -101,20 +117,6 @@ if (command === "run") {
   if (interactive) setInteractive()
   // 每次 run 都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
   log(`📝 日志文件: ${setLogFile(directory)}`)
-  const commit = parseCommit(flags)
-  if (commit === null) {
-    console.error("--commit 取值为 true|false(none 为 false 别名);缺省 true,driver 在每个会话结束后统一提交全部改动")
-    process.exit(1)
-  }
-  if (flags.has("commit-subtask")) {
-    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 --commit false")
-    process.exit(1)
-  }
-  const subtask = parseSubtask(flags.get("subtask"))
-  if (subtask === null) {
-    console.error("--subtask 取值为 off|auto|ondemand;缺省为 auto")
-    process.exit(1)
-  }
   const waitAnswer = parseMinutes(flags.get("wait-answer"))
   if (waitAnswer === null) {
     console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")
@@ -123,11 +125,6 @@ if (command === "run") {
   const waitBetween = parseMinutes(flags.get("wait-between"))
   if (waitBetween === null) {
     console.error("--wait-between 取值范围为 1..60(分钟);不带值时默认为 1")
-    process.exit(1)
-  }
-  const contextLimit = parseContextLimit(flags.get("context-limit"))
-  if (contextLimit === null) {
-    console.error("--context-limit 取值为正整数(单位: 千 tokens);缺省为 64")
     process.exit(1)
   }
   const review = parseReviewLimit(flags.get("review"))
@@ -166,42 +163,44 @@ if (command === "run") {
     console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
     process.exit(1)
   }
-  // --verify: 启用 driver 的任务级三段式验收(脚本准备 → driver 执行 → 独立判定);
-  // 缺省不启用——任务在收尾后直接标 done,不写 verified(--review 的审核改为串行)。
-  const verify = flags.has("verify") && flags.get("verify") !== "false"
-  // --verify-idle: verify 脚本的无进度判定窗口(两个输出文件持续无增长即终止);
-  // --verify-max: 绝对时长上限(0 = 不设,只要持续有输出就永不限时)。
-  const verifyIdle = parseVerifyIdle(flags.get("verify-idle"))
-  if (verifyIdle === null) {
-    console.error("--verify-idle 取值范围为 1..120(分钟);缺省为 10")
+  // 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
+  // 错误退出 1(严格失败优于静默回落)。文件缺失取缺省并做 legacy 回落
+  // (.auto/config.json 的 mode,仅提示、不迁移)。
+  let config: ProjectConfig
+  try {
+    config = await loadProjectConfig(directory)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  const verifyMax = parseVerifyMax(flags.get("verify-max"))
-  if (verifyMax === null) {
-    console.error("--verify-max 取值范围为 1..1440(分钟);缺省不设上限")
+  if (await legacyModeFallback(directory)) log("ℹ 模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置")
+  const modes = loadModeTable(directory)
+  const mode = modes[config.mode]
+  if (!mode) {
+    console.error(`配置的 mode "${config.mode}" 未注册(当前支持: ${Object.keys(modes).join(", ")});修订方式: opencode-auto init <dir> -m <值>,或直接编辑 .opencode/auto/config.json`)
     process.exit(1)
   }
-  const mode = resolveModeFlag(directory, flags.get("mode"))
+  log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   const code = await runAll(directory, {
-    // 缺省使用 init 生成的自主执行契约 agent(.opencode/agent/auto.md);
-    // 显式指定时须为目标目录 .opencode/agent/ 下已定义的 agent。
-    agent: flags.get("agent") ?? "auto",
+    // agent 契约、验收/提交语义、上下文预算等来自配置文件(init 生成);
+    // agent 缺省为 init 生成的自主执行契约,存在性由 run 前完整性检查兜底。
+    agent: config.agent,
     server: flags.get("server"),
     // interactive 隐含 verbose 记录级别(watch/变更文件监视照常运行并写入日志)。
     verbose: verbose || interactive,
     waitAnswer,
     waitBetween,
-    commit,
-    subtask,
+    commit: config.commit,
+    subtask: config.subtask,
     dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
-    contextLimit: contextLimit * 1000,
+    contextLimit: config.contextLimit * 1000,
     review: earlyReview > 0 ? earlyReview : review,
     early,
-    verify,
+    verify: config.verify,
     permission,
     interactive,
-    verifyIdleMs: verifyIdle * 60_000,
-    verifyMaxMs: verifyMax > 0 ? verifyMax * 60_000 : undefined,
+    verifyIdleMs: config.verifyIdle * 60_000,
+    verifyMaxMs: config.verifyMax > 0 ? config.verifyMax * 60_000 : undefined,
     mode,
     finalReview,
   })
@@ -287,38 +286,87 @@ function parseVerifyMax(raw: string | undefined): number | null {
   return minutes
 }
 
-// -m/--mode 解析: 优先级 显式 -m > 持久化(.auto/config.json 的 mode)> 缺省
-// migrate;成功后把生效模式写回持久化,跨天 run 忘带 -m 也能沿用。目标目录
-// .opencode/auto/modes/<name>.md 可新增/覆盖模式(loadModes 合并)。模式文件
-// 不合法或名称未注册时打印错误并以退出码 1 终止。
-function resolveModeFlag(directory: string, raw: string | undefined): ModeSpec {
-  let modes: Record<string, ModeSpec>
+// 装载模式注册表(内置 + 目标目录 .opencode/auto/modes/ 覆盖);模式文件不合法
+// 时打印错误并以退出码 1 终止。init 与 run 共用。
+function loadModeTable(directory: string): Record<string, ModeSpec> {
   try {
-    modes = loadModes(directory)
+    return loadModes(directory)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  const persisted = readPersistedMode(directory)
-  const name = raw ?? persisted ?? "migrate"
-  const mode = modes[name]
-  if (!mode) {
-    console.error(
-      `--mode 取值须为已注册的模式(当前支持: ${Object.keys(modes).join(", ")});缺省为 migrate` +
-        (persisted ? `,上次持久化: ${persisted}` : ""),
-    )
-    process.exit(1)
-  }
-  if (raw && persisted && raw !== persisted) {
-    console.error(`⚠ 模式 "${raw}" 与上次持久化的 "${persisted}" 不一致(init 与 run 应使用相同模式),已更新持久化值`)
-  }
-  if (!raw && persisted && persisted !== "migrate") console.error(`ℹ 沿用上次持久化的模式: ${persisted}(显式 -m 可覆盖)`)
-  writePersistedMode(directory, name)
-  return mode
 }
 
 if (command === "init") {
-  const mode = resolveModeFlag(directory, flags.get("mode"))
+  // 项目宪法选项在 init 固化(设计文档 §B): 仅写命令行显式给出的键,未给出的
+  // 键保留既有配置(新项目取内置缺省)→ init 兼具创建与修订(amend)两种身份,
+  // 重复 init 无参数不重置已有配置。值域校验复用既有 parse*(与配置文件侧
+  // validateProjectConfig 同源)。
+  if (flags.has("commit-subtask")) {
+    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 --commit false")
+    process.exit(1)
+  }
+  const commit = parseCommit(flags)
+  if (commit === null) {
+    console.error("--commit 取值为 true|false(none 为 false 别名);缺省 true,driver 在每个会话结束后统一提交全部改动")
+    process.exit(1)
+  }
+  const subtask = parseSubtask(flags.get("subtask"))
+  if (subtask === null) {
+    console.error("--subtask 取值为 off|auto|ondemand;缺省为 auto")
+    process.exit(1)
+  }
+  const contextLimit = parseContextLimit(flags.get("context-limit"))
+  if (contextLimit === null) {
+    console.error("--context-limit 取值为正整数(单位: 千 tokens);缺省为 64")
+    process.exit(1)
+  }
+  // --verify-idle: verify 脚本的无进度判定窗口(两个输出文件持续无增长即终止);
+  // --verify-max: 绝对时长上限(0 = 不设,只要持续有输出就永不限时)。
+  const verifyIdle = parseVerifyIdle(flags.get("verify-idle"))
+  if (verifyIdle === null) {
+    console.error("--verify-idle 取值范围为 1..120(分钟);缺省为 10")
+    process.exit(1)
+  }
+  const verifyMax = parseVerifyMax(flags.get("verify-max"))
+  if (verifyMax === null) {
+    console.error("--verify-max 取值范围为 1..1440(分钟);缺省不设上限")
+    process.exit(1)
+  }
+  // 仅显式给出的键进入合并: --verify/--commit/--subtask 等裸选项取各自缺省档,
+  // 未出现的选项不覆盖既有配置。
+  const explicit: Partial<ProjectConfig> = {}
+  if (flags.has("agent")) explicit.agent = flags.get("agent")
+  if (flags.has("verify")) explicit.verify = flags.get("verify") !== "false"
+  if (flags.has("commit")) explicit.commit = commit
+  if (flags.has("subtask")) explicit.subtask = subtask
+  if (flags.has("context-limit")) explicit.contextLimit = contextLimit
+  if (flags.has("verify-idle")) explicit.verifyIdle = verifyIdle
+  if (flags.has("verify-max")) explicit.verifyMax = verifyMax
+  let existing: ProjectConfig
+  try {
+    existing = await loadProjectConfig(directory)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
+  // -m/--mode 解析(缩减版,init 侧): 优先级 显式值 > 既有配置值 > 缺省;
+  // 未注册名为用法错误(报文列出当前支持的模式)。
+  const modeName = flags.get("mode") ?? existing.mode
+  const modes = loadModeTable(directory)
+  const mode = modes[modeName]
+  if (!mode) {
+    console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(modes).join(", ")});缺省为 migrate`)
+    process.exit(1)
+  }
+  const config = mergeProjectConfig(existing, { ...explicit, mode: modeName })
+  try {
+    await saveProjectConfig(directory, config)
+  } catch (error) {
+    console.error(`写出 .opencode/auto/config.json 失败: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
+  console.log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议校验失败即退出);
   // 无 -p 时不渲染提示词,提前装载可在 init 阶段就暴露覆盖问题。
   try {
@@ -346,12 +394,13 @@ if (command === "init") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
   }
-  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块与提交原则块
-  // 各自独立、只追加。
+  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、提交原则块与
+  // 维护规则块各自独立、只追加。
   const ensured = await ensurePointer(directory)
   console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
   console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
   console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
+  console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
   // -p/--prompt: 初始化完成后直接调用一次 AI,按提示词填充 PLAN.md 等文档,
@@ -365,7 +414,7 @@ if (command === "init") {
     const server = await manage(directory, flags.get("server"))
     try {
       const result = await runOnce(server.client, "初始化计划", renderInit(promptText, mode), {
-        agent: flags.get("agent") ?? "auto",
+        agent: config.agent,
         dir: directory,
         server,
       })
@@ -401,6 +450,14 @@ if (command === "check") {
 }
 
 if (command === "status") {
+  // 任务清单前打印配置摘要;配置非法仅提示、不阻塞任务列表(缺失取缺省,
+  // 同样打印摘要)。
+  try {
+    const config = await loadProjectConfig(directory)
+    console.log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
+  } catch (error) {
+    console.log(`⚠ 项目配置(.opencode/auto/config.json) 非法: ${error instanceof Error ? error.message : String(error)}`)
+  }
   const plan = await load(resolve(directory, "PLAN.md"))
   for (const task of plan.tasks) {
     const extra = task.attempts ? ` (attempts: ${task.attempts})` : ""
@@ -410,14 +467,15 @@ if (command === "status") {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent <name>] [--server <url>]
-  opencode-auto run [dir] [--agent <name>] [--server <url>] [-m|--mode <name>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--commit [true|false]] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--context-limit [n]] [--verify-idle [1-120]] [--verify-max [1-1440]]
+  opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--verify-idle [1-120]] [--verify-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--server <url>]
+  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码;缺省 migrate,解析成功后持久化到 .auto/config.json 供后续 run 沿用)
-      --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动——先嵌套子仓库后本仓库,提交信息带任务编号与阶段,git 历史即 AI 变更的审计轨迹;false 关闭)
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--verify-idle、--verify-max、--commit)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+      -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
       --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
+      --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)

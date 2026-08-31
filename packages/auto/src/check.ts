@@ -6,6 +6,10 @@ import { join } from "node:path"
 // 或要求会话执行 git 提交的语句。原则性/否定句("不要运行…")与归属 driver 的
 // 语句不报告;匹配为启发式,报告供人工确认,不修改文件。
 
+// AGENTS.md 维护规则块第 1 条的行数上限(见 loop.ts MAINT_RULE);超限由 check
+// 输出 note 提示精简。
+const AGENTS_LINE_LIMIT = 150
+
 // 一处违背描述: 文件、行号、原文(PLAN.md 附任务 ID)。
 export type Finding = { file: string; task?: string; line: number; text: string }
 
@@ -52,6 +56,14 @@ export async function checkPrinciple(dir: string): Promise<{ findings: Finding[]
     }
     if (name === "AGENTS.md" && !text.includes("opencode-auto:commit:start")) {
       notes.push("AGENTS.md 缺少提交原则块,运行 opencode-auto init 可补写")
+    }
+    // 维护规则块第 1 条(≤150 行)的唯一机器观测点: 超限仅提示,不进 findings、
+    // 不影响退出码。
+    if (name === "AGENTS.md") {
+      const lines = text.trimEnd().split("\n").length
+      if (lines > AGENTS_LINE_LIMIT) {
+        notes.push(`AGENTS.md 当前 ${lines} 行,超过 ${AGENTS_LINE_LIMIT} 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/`)
+      }
     }
   }
   return { findings, notes }
