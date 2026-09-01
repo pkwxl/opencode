@@ -1,0 +1,316 @@
+# 阶段化流程(--phases)与迁移参数固化 — 设计说明
+
+> 本文档是 `--phases` 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 →
+> k 知识提炼)与迁移源参数(`--source-dir`/`--source-path`)固化、init 去 AI 化
+> (`-p` 落 brief.md)的唯一设计基准:实现任务以本文为准。**实现按 J 节分期
+> (P1..P4)完成,实现前 CLI 不接受这三个选项。**
+
+## 背景与动机
+
+1. **长流程的上下文污染**:迁移类项目天然分阶段(先摸清源系统,再设计,再实现,
+   再测试验收)。单一 PLAN.md 从头到尾驱动,后期阶段的会话被迫拖着前期全部
+   产物,AGENTS.md 与 docs/ 只增不减,上下文质量随流程推进持续劣化。需要
+   driver 强制的阶段边界:每阶段完成后归档、重置、蒸馏,下一阶段在精简场景
+   下继续。
+2. **init -p 的结构性缺陷**:init 时一次性生成 PLAN.md 无法感知各阶段产物
+   (分析结论、设计文档尚不存在),规划质量注定低下。阶段化流程要求"每阶段
+   开始前才规划该阶段任务",规划会话必须从 init 挪到 run 的阶段边界。
+3. **迁移参数的结构化**:源系统位置与源模块路径目前只能写在提示词自然语言里,
+   不可校验、不可复用。它们是项目属性(改它需改契约表述),应与其他宪法级
+   选项一样在 init 固化。
+
+## 已确认决策
+
+| 决策点 | 结论 |
+| --- | --- |
+| phases 取值 | `admtvk` 的**子序列且必须含 m**(如 `m`、`amt`、`dmvk` 合法;`tma`、`adk`、重复字母、空串非法)。顺序是语义的一部分,自由排列只产生无意义组合;一行校验消除一整类误用 |
+| 阶段注册表 | 固定六字母内置注册表(src/phases.ts)+ `phaseText()` 中文名,**不开放自定义**(阶段有 driver 侧语义:产物约定、v 的验收豁免、终审挂接点,非纯提示词文案;不搞 `.opencode/auto/phases/` 覆盖目录) |
+| CLI 形态(迁移参数) | `init <dest-dir> --source-dir <dir> --source-path <相对路径>`。**拒绝 `<src-dir>/<src-path>` 拼接形式**(目录边界歧义无法自解释,"最长现存前缀"猜测是隐式魔法);两参数只给其一时报错(必须成对);`<dest-dir>` 保持唯一位置参数 |
+| 阶段状态载体 | **推导式,零新增易腐状态**:`docs/phases.md` 台账(版本化、随仓库提交、人工可编辑)记录已完成阶段与产物指针;当前阶段 = phases 串中第一个未在台账出现的字母。与 final-review 的 routeFinal 同一范式 |
+| 跨阶段回退 | **V1 线性,不做自动回退路由**。人工回退 = 编辑台账(删末行)+ 删除对应归档目录后重跑 run——回退能力是推导式设计的副产品,无需专门代码;t/v 阶段内差距走既有 appendSubtasks/fix 轮,v 残余差距仿终审熔断 block(退出码 2) |
+| v 与 config.verify | **正交**。v 是流程阶段(其任务本身即检验,强制跳过任务级三段式验收与逐任务审核,复用终审任务的 final 豁免路径);config.verify 是任务级验收机制(m 等阶段任务照常)。`--phases` 含 v 而 verify=false 时 init/run 打 note 提示,不强制 |
+| --final-review 挂接 | **仅 m 阶段**:终审闭环为代码改动设计,a/d 产物是文档,t/v 自身即检验。run 时对 m 阶段启用,其余阶段忽略并打 note |
+| init 去 AI 化 | init **不再启动任何 AI 会话**(删除 manage/runOnce 路径);`-p` 文本写入 `.opencode/auto/brief.md`(版本化、人工可编辑、amend 语义——重复 init -p 覆盖重写),由每个阶段的规划会话消费 |
+| brief 注入范围 | brief.md 注入**每个**阶段的规划会话(不止下一个)——它是项目级意图,a 阶段定下的基调 k 阶段同样需要 |
+| 跨阶段记忆通道 | **handover.md 是唯一通道,且由 driver 控制注入**:阶段规划会话输入 = brief.md + 各前序 handover.md + AGENTS.md + source 规范 + mode.init;**不注入前序阶段原始 docs/**。"精简场景"靠 driver 从输入侧掐断,不靠交接会话自觉 |
+| 交接重构形态 | **归档 + 重置 + 蒸馏**:driver 机械执行(docs 归档 docs/phases/\<letter\>-\<name\>/、PLAN.md 归档后重置模板、台账追加、统一提交);AI 只做一件事——旁路会话蒸馏产出 handover.md。AI 不改写契约文件,符合 driver 独占状态写入与维护规则块 |
+| PLAN.md 审计轨迹 | 交接时本阶段 PLAN.md 归档为 `docs/phases/<letter>-<name>/PLAN.md`(含 attempts/verified/阻塞问答)再重置;翻旧账不依赖 git 操作,与 docs/final/ 产物约定同构 |
+| k 阶段与 --extract-knowledge | k 阶段**整体认领** docs/fixme-knowledge-design.md 的 `--extract-knowledge` 设计(产出 docs/migration-kb/、提取失败不污染退出码),该选项不再单独存在;`--track-fixme` 不并入,保持独立演进 |
+| init 修订 phases 的护栏 | 台账非空时改 `--phases`,校验台账已有字母构成新串的前缀,否则报错并指引人工修订台账——防止 amend 把流程状态打成不可推导 |
+| phases 缺省值 | `"m"`(无阶段声明 = 单次运行,行为与现状完全一致;向后兼容的关键) |
+| status 增强 | 配置摘要后打印阶段进度行(derive 自台账,零成本):`阶段: a✓ d✓ m▶ t v k` |
+
+## A. 概念与配置
+
+### A.1 阶段注册表(src/phases.ts)
+
+```ts
+export type Phase = "a" | "d" | "m" | "t" | "v" | "k"
+export const PHASE_ORDER = "admtvk"  // 唯一合法顺序;校验与推导共用
+export function phaseText(phase: Phase): string
+// a=分析 d=设计 m=迁移实现 t=测试 v=验收 k=知识提炼
+```
+
+- 校验 `parsePhases(raw)`:非空、字母 ∈ admtvk、不重复、含 m、为 `admtvk` 的
+  子序列;非法返回 null(CLI 转退出码 1,报文给出合法形式说明)。
+- 各阶段职责与产物约定(规划提示词按此注入,见 E 节):
+
+| 阶段 | 职责 | 主要产物 |
+| --- | --- | --- |
+| a 分析 | 摸清源系统与源模块的外部行为、依赖与边界 | docs/analysis/(行为基线、依赖清单) |
+| d 设计 | 目标系统侧的模块设计(接口、数据结构、适配点) | docs/design/ |
+| m 迁移实现 | 代码迁移与改造(必经阶段) | 源码 + docs/ 任务报告 |
+| t 测试 | 测试体系迁移/补齐,对基线行为的回归覆盖 | 测试代码 + docs/testing/ |
+| v 验收 | 整体验收(对照基线与需求) | docs/acceptance/(验收报告) |
+| k 知识提炼 | 迁移知识沉淀 | docs/migration-kb/(认领 --extract-knowledge 设计) |
+
+### A.2 配置键(src/config.ts)
+
+```jsonc
+{
+  "phases": "admtvk",                          // 缺省 "m"
+  "source": { "dir": "...", "path": "..." }    // 可选;缺省 undefined(非迁移场景)
+}
+```
+
+- `phases`:validateProjectConfig 复用 parsePhases 同源校验;非法 → throw
+  (中文报错含键名与期望),run/init 均退出码 1。
+- `source`:缺省 undefined;存在时 dir 须为非空字符串、path 须为非空相对路径
+  (不含 `..`);**init 时**校验 dir 为现存目录且 dir/path 解析后存在(环境错误,
+  退出码 1);run 时不再校验存在性(源系统可能已下线,台账与 docs/ 已归档所需)。
+- run 拒绝清单扩展:`phases`、`source-dir`、`source-path` 出现即用法错误退出码 1,
+  报文给 `init --phases <值>` / `init --source-dir <dir> --source-path <path>` 指引。
+
+### A.3 brief.md(`.opencode/auto/brief.md`)
+
+- `-p` 的载体:版本化、随仓库共享、人工可编辑;init -p 整写覆盖(amend 语义)。
+- 无 -p 且 brief.md 已存在 → 保留;无 -p 且不存在 → 不创建(规划会话按无 brief
+  渲染,模板含 `{{^brief}}` 条件段提示"未提供项目意图,请人工补充或按 source
+  规范推进")。
+- run 期间**不置只读**(它不是状态文件;protect.ts 不动它)。
+
+## B. CLI 面(src/index.ts)
+
+### B.1 init
+
+```
+opencode-auto init <dest-dir> [--phases <admtvk 子序列含 m>]
+                              [--source-dir <dir> --source-path <相对路径>]
+                              [-p|--prompt <prompt-text>] [既有宪法选项...]
+```
+
+- `--phases`/`--source-dir`/`--source-path` 进 VALUE_FLAGS;仅 init 接受,
+  走 mergeProjectConfig 的"仅显式键覆盖"(source 两键成对,任一给出即整体覆盖)。
+- 台账非空时改 `--phases` 的前缀护栏(见已确认决策);`source` 修订无护栏
+  (纯提示词输入,改它不破坏状态推导)。
+- `-p`:删除 manage/runOnce 调用,改为写 brief.md;init 成为纯环境配置,
+  结束语按 phases 分两态:`phases ≠ "m"` → "brief 已记录,运行 run 开始
+  a(分析)阶段规划";`phases = "m"` → "brief 已记录,运行 run 开始任务规划"。
+- PLAN.md 模板策略:`phases ≠ "m"` 时保持空模板(规划会话填充),不再提示
+  "编辑 PLAN.md 填入任务";`phases = "m"` 维持现状。
+- v 含而 verify=false 的 note 在此打印一次。
+
+### B.2 run
+
+- 拒绝清单加 `phases`/`source-dir`/`source-path`(报文给修订指引,同既有固化选项)。
+- run 启动横幅:配置摘要后加 `阶段: <进度行>`(与 status 共用 formatPhases)。
+- `--final-review` 与 phases 组合:仅 m 阶段挂接终审闭环;其他阶段完成时不进入
+  routeFinal,打 note"终审闭环仅作用于 m(迁移实现)阶段"。
+- `--dryrun` 不触发任何阶段动作(维持现状:仅权限预检)。
+
+### B.3 status
+
+- 配置摘要后打印阶段进度行:`阶段: a✓ d✓ m▶ t v k`(✓=台账已记录,▶=当前,
+  其余=未开始);台账缺失/非法仅提示不阻塞(与配置非法同等待遇)。
+
+## C. 阶段状态推导(docs/phases.md 台账)
+
+### C.1 台账格式(版本化、人工可编辑)
+
+```markdown
+# 阶段台账(opencode-auto 维护;人工修订见设计文档 C.3)
+
+- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)
+- [done] d 设计 → docs/phases/d-design/(交接: docs/phases/d-design/handover.md)
+```
+
+- 每行一个已完成阶段,顺序与完成顺序一致;driver 追加写在交接完成后、统一提交前。
+- 解析:容忍空行与注释;行协议 `- [done] <letter> <名称> → <归档目录>(交接: <handover>)`,
+  driver 只读字母与归档目录两列,其余为人工可读信息。
+
+### C.2 推导规则
+
+```
+currentPhase = phases 串中第一个未出现在台账字母集合中的字母
+全部出现 → 流程完成(run 退出 0,打"全部阶段已完成")
+台账含 phases 外字母/重复字母 → 环境错误退出 1(指引人工修订台账)
+```
+
+中断恢复零新增状态:run 启动重新求值;阶段内中断走既有 recallProgress/
+peekProgress;阶段边界中断(归档完成但台账未写)由交接动作的幂等性兜底
+(归档目录存在即跳过移动,台账查重后追加)。
+
+### C.3 人工回退规程(写入 README 与台账头部注释)
+
+回退到某阶段 = ① 从台账删除该阶段及其后的全部行;② 删除对应
+`docs/phases/<letter>-*/` 归档目录(或把其中 PLAN.md 拷回根目录续跑);③ 重跑 run。
+推导式状态使回退无需任何 driver 代码支持。
+
+## D. run 生命周期与路由(src/phases.ts)
+
+### D.1 单次 run 的阶段循环
+
+```
+run 启动
+ ├─ 装载 config(phases/source/brief 指针)
+ ├─ phases == "m" 且无 --final-review 之外的阶段语义 → 走现状路径(零改动)
+ ├─ 推导 currentPhase(C.2);全部完成 → 退出 0
+ └─ 循环:
+     ├─ PLAN.md 无未完成任务且无本阶段任务 → 阶段规划会话(E 节,旁路
+     │   requireArtifact 骨架,产物=填充后的 PLAN.md)
+     ├─ 主循环 runAll 照常(子任务/verify/review/统一提交/进度恢复零改动)
+     ├─ currentPhase == "m" 且 finalReview > 0 → 既有 routeFinal 终审闭环
+     ├─ 全部 done → 阶段交接(F 节)→ 台账追加 → 统一提交(Auto-Stage:
+     │   phase-transition)
+     └─ 推导下一阶段;无 → 退出 0
+```
+
+### D.2 routePhase 伪代码(纯路由函数,镜像 routeFinal 风格)
+
+```ts
+export type PhaseRoute =
+  | { type: "complete" }                          // 全部阶段完成
+  | { type: "plan"; phase: Phase }                // 开规划会话
+  | { type: "execute"; phase: Phase }             // 主循环有任务可跑
+  | { type: "handover"; phase: Phase }            // 任务全 done,进入交接
+  | { type: "blocked"; reason: string }           // 台账非法等,退出码 1/2
+
+export async function routePhase(dir, plan, config): Promise<PhaseRoute> {
+  const ledger = await readLedger(dir)            // C.1;非法 → blocked
+  const phase = PHASE_ORDER.filter(p => config.phases.includes(p))
+    .find(p => !ledger.done.includes(p))
+  if (!phase) return { type: "complete" }
+  if (plan.tasks.some(t => t.status !== "done")) return { type: "execute", phase }
+  if (plan.tasks.length) return { type: "handover", phase }  // 本阶段任务全 done
+  return { type: "plan", phase }                  // PLAN.md 空(模板态/已重置)
+}
+```
+
+幂等性:plan 路由在 PLAN.md 已有任务后不再触发;handover 路由在台账追加后
+自然消失;全部路由由(台账, PLAN.md)两文件推导,无隐藏状态。
+
+### D.3 v 阶段任务的验收豁免
+
+v 阶段任务本身即检验:runTask 依 `config.phases` 含 v 且 currentPhase == "v"
+强制 review=0、跳过任务级三段式验收(收尾后直接 markDone)——与终审任务的
+final 豁免共用同一代码路径(内部标记,不写 final 字段、不污染 PLAN.md 协议)。
+残余差距:v 阶段任务全 done 即交接,不熔断;验收报告的差距结论由 k/人工消费
+(V1 线性决策)。**修订备选**:若后续需要 v 差距熔断,仿 afterValidate 在
+handover 路由前解析验收报告末行 `结论: 通过|差距`,本文预留该挂点。
+
+## E. 阶段规划会话
+
+- 形态:旁路一次性会话,复用 runner 的 requireArtifact 骨架(产物缺失带反馈
+  重试一次,仍失败按隐性阻塞退出码 2);伪任务 PLAN 不进任务链、不写进度记录。
+- 模板 `templates/prompts/phase-plan.md`(协议敏感,覆盖校验:PLAN.md 填充
+  要求与任务格式协议必备);变量:
+
+```ts
+renderPhasePlan({
+  phase, phaseName,             // 当前阶段字母与中文名
+  brief,                        // brief.md 原文(可空)
+  sourceDir, sourcePath,        // config.source(可空)
+  handovers,                    // 各前序 handover.md 预拼接字符串(调用方组装)
+  modeName, modeInit,           // mode 正交注入(经 modeText 渲染)
+  verify,                       // config.verify(verify 字段描述条件段)
+  finalReview,                  // m 阶段且启用时提示任务排布预留终审空间
+})
+```
+
+- 产物要求(写入模板协议):直接编辑填充 PLAN.md(driver 临时 allowWrite,
+  结束后 checkPlanEdit 校验——任务格式合法、不改写标记块);每个任务自包含,
+  产物约定遵循 A.1 表;首阶段(a)额外要求把对源系统的勘察计划排为首批任务。
+- **注入纪律**(已确认决策):不注入前序原始 docs/;handovers 由 driver 读取
+  拼接,缺 handover 的阶段在清单中标注"(无交接文档)"。
+
+## F. 阶段交接(归档 + 重置 + 蒸馏)
+
+任务全 done 后,按序执行:
+
+1. **蒸馏会话**(AI 唯一职责):旁路一次性,模板
+   `templates/prompts/phase-handover.md`(协议敏感),通读本阶段 PLAN.md 与
+   docs/ 产物,产出 `docs/phases/<letter>-<name>/handover.md`(driver 先建目录)。
+   协议要求必备小节:关键决策、约束与坑、下一阶段必读清单、产物索引;
+   requireArtifact 校验小节齐备。k 阶段无下一阶段,仍写 handover(供人工归档)。
+2. **driver 机械归档**:本阶段新增/改动的 docs/ 内容移入
+   `docs/phases/<letter>-<name>/`(handover 已在其中);PLAN.md 拷贝为归档目录
+   内 PLAN.md 后重置为模板(含 verify 条件渲染);AGENTS.md 不改写,仅校验
+   ≤150 行,超限在交接提交信息与终端 note 中提示人工精简。
+3. **台账追加** C.1 行;4. **统一提交**:标题 `阶段交接: <letter> <名称> →
+   <下一字母> <名称>`,trailer `Auto-Stage: phase-transition`。
+
+归档移动的判定:driver 记录阶段开始时的 docs/ 快照(文件名+mtime),交接时
+移动差异项;快照存 .auto/(非版本化),缺失时(中断)退化为移动 A.1 表约定的
+本阶段产物目录。CURRENT.md 在交接前已由收尾删除,无需处理。
+
+## G. 与既有机制的交互
+
+| 机制 | 交互 |
+| --- | --- |
+| 任务级 verify | 各阶段任务照常(config.verify 门控);v 阶段任务豁免(D.3) |
+| --review/--early-review | 各阶段任务照常;v 阶段豁免(D.3) |
+| --final-review | 仅 m 阶段挂接(已确认决策) |
+| subtask 三档 | 不感知阶段,全阶段一致 |
+| 进度恢复 | 阶段内 = 既有 recallProgress/peekProgress;阶段边界 = 推导式幂等(C.2) |
+| 统一提交 | 阶段内会话照旧;交接一次提交(F.4) |
+| protect.ts | 不变(brief.md 不置只读;规划会话期间 PLAN.md 临时放行 + 校验) |
+| --dryrun | 不触发阶段动作 |
+| --interactive | 规划/蒸馏会话同样接收旁路输入(attach 由 runner 既有挂点覆盖) |
+| mode | 与 phases 正交:init 导语进规划会话,exec 注记进执行会话,final 侧重进 m 阶段终审 |
+| check | 不变(扫描 AGENTS.md/PLAN.md,与阶段无关) |
+| k 与 fixme 设计 | k 认领 --extract-knowledge;--track-fixme 独立演进 |
+
+## H. 退出码与异常
+
+- 配置非法(phases/source):1(严格失败优于静默回落)。
+- 台账非法(含 phases 外字母/重复/协议行无法解析):1,报文给人工修订指引。
+- 规划会话/蒸馏会话隐性阻塞:2(既有 requireArtifact 语义)。
+- 阶段内任务阻塞:2(既有语义,台账不受影响,重跑续当前阶段)。
+- 全部阶段完成:0。
+
+## J. 分期实现
+
+- **P1(配置与 CLI 面)**:config 加 `phases`/`source` 键与校验;init 去 AI 化
+  (-p 落 brief.md、删除 manage/runOnce 路径);run 拒绝清单扩展;`phases:"m"`
+  兼容路径(run 行为不变);init 前缀护栏;测试:config/CLI 解析、brief 写入。
+- **P2(阶段骨架)**:src/phases.ts(注册表/parsePhases/台账读写/routePhase);
+  run 阶段循环接线;阶段规划会话(phase-plan.md);交接的机械部分(归档+重置+
+  台账+提交);status 阶段行。蒸馏会话此期以模板占位(直接写最小 handover)。
+- **P3(蒸馏与注入)**:phase-handover.md 蒸馏会话;handovers 注入规划会话;
+  v 阶段豁免接线;--final-review 仅 m 挂接的 note。
+- **P4(k 阶段)**:认领 docs/fixme-knowledge-design.md 的 --extract-knowledge
+  (docs/migration-kb/ 产出、失败不污染退出码);该文档修订标注并入本设计。
+
+## K. 文件级改动清单
+
+| 文件 | 改动 |
+| --- | --- |
+| src/phases.ts | **新增**:Phase 注册表、parsePhases、phaseText、台账读写(readLedger/appendLedger)、routePhase、formatPhases(status/run 共用) |
+| src/config.ts | ProjectConfig 加 `phases: string`、`source?: {dir, path}`;CONFIG_DEFAULTS.phases="m";validate 两键;formatProjectConfig 追加 phases 摘要 |
+| src/index.ts | VALUE_FLAGS 加三键;init 侧 parse 与 merge、前缀护栏、-p 落 brief.md(删 manage/runOnce)、v+verify=false note、结束语分两态;run 拒绝清单扩展、阶段进度行;status 阶段行;用法文本 |
+| src/loop.ts | runAll 入口推导 currentPhase 与阶段循环(D.1);交接编排(F 节);终审闭环挂接按阶段门控 |
+| src/runner.ts | v 阶段豁免内部标记(D.3,与 final 豁免共路径);规划/蒸馏会话的 PLAN.md 临时放行与 checkPlanEdit 复用 |
+| src/prompt.ts | renderPhasePlan/renderPhaseHandover 组装;FinalStage 不受影响 |
+| templates/prompts/phase-plan.md、phase-handover.md | **新增**;登记 src/template.ts embedded 注册表与协议敏感校验清单 |
+| src/protect.ts | 无改动(brief.md 不保护;确认清单) |
+| docs/fixme-knowledge-design.md | P4 时修订标注:--extract-knowledge 并入 phases 设计 k 阶段 |
+| README.md | 用法、--phases/source 选项、brief.md、人工回退规程(C.3) |
+| test/ | config/CLI 解析、台账推导与 routePhase 幂等、模板协议防漂移(prompt.test.ts 扩展) |
+
+## L. 不做的事(范围外)
+
+- 跨阶段自动回退路由(t/v 差距自动退回 m 重新规划)——人工台账回退已覆盖。
+- 自定义阶段与阶段覆盖目录——阶段有 driver 语义,非纯文案。
+- 阶段内子阶段/嵌套 phases——YAGNI。
+- init 当场生成 PLAN.md——被阶段规划会话取代,init 纯配置。
+- v 阶段差距自动熔断——预留挂点(D.3 修订备选),V1 不实现。
