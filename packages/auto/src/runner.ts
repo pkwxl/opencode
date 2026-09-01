@@ -130,6 +130,11 @@ export type Opts = {
   verifyMaxMs?: number
   // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
   mode?: ModeSpec
+  // 阶段化流程下的当前阶段字母(loop 透传,缺省 undefined = 单次运行): "v"
+  // (验收)阶段任务本身即检验,强制 review=0 且跳过任务级三段式验收——与终审
+  // 任务的 final 字段共用同一豁免路径,为内部标记、不写 PLAN.md(设计文档
+  // phases-design.md D.3)。
+  phase?: "a" | "d" | "m" | "t" | "v" | "k"
 }
 
 type Watch = {
@@ -320,15 +325,18 @@ export async function runTask(
     await persistStage({ kind: "subtasks" })
     await writeCurrent(plan.path, task, mode !== "auto")
 
-    // 终审任务(final 字段)本身即检验: 强制 review=0 且跳过三段式验收,不对检验
-    // 再做检验(--early 随之自然失效);报告缺失/协议非法由路由时 brokenReport
-    // 阻塞兜底(设计文档 B.6)。
+    // 终审任务(final 字段)与 v(验收)阶段任务本身即检验: 共用同一豁免路径,
+    // 强制 review=0 且跳过三段式验收,不对检验再做检验(--early 随之自然失效);
+    // v 豁免为内部标记(opts.phase),不写 final 字段、不污染 PLAN.md 协议
+    // (设计文档 B.6 与 phases-design.md D.3)。终审任务报告缺失/协议非法由路由时
+    // brokenReport 阻塞兜底。
     const finalMark = parseFinalMark(task.final)
-    const limit = finalMark ? 0 : (opts.review ?? 0)
-    // --verify 未启用(或终审任务强制关闭): 略过三段式验收(early 依赖的脚本执行
+    const exempt = Boolean(finalMark) || opts.phase === "v"
+    const limit = exempt ? 0 : (opts.review ?? 0)
+    // --verify 未启用(或豁免强制关闭): 略过三段式验收(early 依赖的脚本执行
     // 窗口随之不存在),收尾后由 driver 直接标 done;--review 的质量审核改为此时
     // 串行执行。
-    const verifyOn = opts.verify === true && !finalMark
+    const verifyOn = opts.verify === true && !exempt
     // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
     // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
     const early = opts.early && limit > 0 && verifyOn
@@ -417,7 +425,9 @@ export async function runTask(
           log(
             finalMark
               ? `⏭ ${task.id} 终审任务不做任务级验收(该阶段本身即检验),直接完成`
-              : `⏭ ${task.id} 未启用 --verify,略过任务级验收,直接完成`,
+              : opts.phase === "v"
+                ? `⏭ ${task.id} v(验收)阶段任务不做任务级验收(该阶段本身即检验),直接完成`
+                : `⏭ ${task.id} 未启用 --verify,略过任务级验收,直接完成`,
           )
           await markDone(plan.path, task.id)
         }
@@ -507,8 +517,8 @@ async function executeWhole(
   }
 }
 
-// init --prompt 与 --dryrun 的单次独立会话: 不属于任何任务,不进任何链,也不做
-// 会话后提交(预检不改动工作区;初始化产物须先经人工审核 PLAN.md)。
+// --dryrun 的单次独立会话: 不属于任何任务,不进任何链,也不做会话后提交
+// (预检不改动工作区)。
 export async function runOnce(
   client: OpencodeClient,
   title: string,

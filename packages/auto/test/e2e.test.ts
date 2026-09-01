@@ -35,6 +35,11 @@ test.skipIf(!E2E)(
         join(dir, "opencode.json"),
         await Bun.file(new URL("../templates/opencode.json", import.meta.url)).text(),
       )
+      // run 前完整性检查要求 agent 契约文件存在(缺失时服务端只回 UnknownError)。
+      await Bun.write(
+        join(dir, ".opencode/agent/auto.md"),
+        await Bun.file(new URL("../templates/.opencode/agent/auto.md", import.meta.url)).text(),
+      )
 
       // 第一轮: T-001 完成,T-002 触发 question → 阻塞停机
       expect(await runAll(dir, {})).toBe(2)
@@ -49,6 +54,57 @@ test.skipIf(!E2E)(
       const done = await load(join(dir, "PLAN.md"))
       expect(done.tasks.every((t) => t.status === "done")).toBe(true)
       expect(await Bun.file(join(dir, "SUMMARY.md")).exists()).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+  { timeout: 600_000 },
+)
+
+// 阶段化流程 P3 端到端(phases=mv,台账已记录 m): v(验收)阶段任务豁免任务级
+// 验收与 --review(与终审任务共路径),交接由蒸馏会话产出 handover.md(四小节
+// 协议),归档重置后台账推进,全部阶段完成退出 0。
+test.skipIf(!E2E)(
+  "端到端: v 阶段验收豁免与蒸馏交接(phases=mv)",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-e2e-phase-"))
+    try {
+      // 台账记录 m 已完成 → 当前阶段 v;PLAN.md 预填 v 阶段任务(带 verify 字段,
+      // 用于证明豁免: 即使 verify/review 启用也不做任务级验收)。
+      await Bun.write(join(dir, "docs/phases.md"), "- [done] m 迁移实现 → docs/phases/m-migrate/(交接: docs/phases/m-migrate/handover.md)\n")
+      await Bun.write(
+        join(dir, "PLAN.md"),
+        `## T-001: 验收通过性检查 [pending]
+  - verify: command: test -f acceptance.md
+在当前目录创建 acceptance.md,内容为 "accepted"。
+`,
+      )
+      await Bun.write(
+        join(dir, "opencode.json"),
+        await Bun.file(new URL("../templates/opencode.json", import.meta.url)).text(),
+      )
+      await Bun.write(
+        join(dir, ".opencode/agent/auto.md"),
+        await Bun.file(new URL("../templates/.opencode/agent/auto.md", import.meta.url)).text(),
+      )
+
+      expect(await runAll(dir, { phases: "mv", verify: true, review: 3 })).toBe(0)
+      // v 阶段任务被标 done 但未写 verified 字段(豁免任务级验收),也没有跑
+      // verify 脚本与质量审核的产物。
+      const archived = await Bun.file(join(dir, "docs/phases/v-acceptance/PLAN.md")).text()
+      expect(archived).toContain("[done]")
+      expect(archived).not.toContain("verified:")
+      expect(await Bun.file(join(dir, "tmp/verify.sh")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".auto/verify.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".auto/review.md")).exists()).toBe(false)
+      // 蒸馏交接: handover.md 四小节齐备;台账推进 v 后根目录 PLAN.md 重置空模板。
+      const handover = await Bun.file(join(dir, "docs/phases/v-acceptance/handover.md")).text()
+      for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
+        expect(handover).toContain(section)
+      }
+      expect(await Bun.file(join(dir, "docs/phases.md")).text()).toContain("- [done] v 验收")
+      expect((await load(join(dir, "PLAN.md"))).tasks).toEqual([])
+      expect((await Bun.file(join(dir, "acceptance.md")).text()).trim()).toBe("accepted")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -84,6 +140,9 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--verify-idle", "10"],
         ["--verify-max", "0"],
         ["--commit", "true"],
+        ["--phases", "admtvk"],
+        ["--source-dir", "/tmp"],
+        ["--source-path", "src/mod.ts"],
       ]
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
@@ -92,6 +151,9 @@ describe("CLI 解析: run 侧选项与配置", () => {
         expect(run.err).toContain(".opencode/auto/config.json")
         expect(run.err).toContain("opencode-auto init <dir>")
       }
+      // 迁移源两键的修订指引为成对形式
+      const source = await runCli(["run", dir, "--source-dir", "/tmp"])
+      expect(source.err).toContain("--source-dir <目录> --source-path <相对路径>")
       // -m/--mode 报文同型(短选项形式给出修订指引)
       expect((await runCli(["run", dir, "-m", "migrate"])).err).toContain("-m/--mode 已在 init 固化")
       // --commit-subtask 移除报文保留
@@ -190,6 +252,7 @@ describe("CLI: init 固化项目配置", () => {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain("⚙ 项目配置(.opencode/auto/config.json)")
+      expect(init.out).toContain("编辑 PLAN.md 填入任务后运行")
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
         agent: "auto",
@@ -199,6 +262,7 @@ describe("CLI: init 固化项目配置", () => {
         verifyIdle: 10,
         verifyMax: 0,
         commit: true,
+        phases: "m",
       })
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -219,6 +283,7 @@ describe("CLI: init 固化项目配置", () => {
         verifyIdle: 10,
         verifyMax: 0,
         commit: false,
+        phases: "m",
       })
       expect((await runCli(["init", dir])).code).toBe(0)
       expect((await readConfig(dir)).commit).toBe(false)
@@ -255,6 +320,7 @@ describe("CLI: init 固化项目配置", () => {
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
       expect(status.out).toContain("⚙ 项目配置(.opencode/auto/config.json): 模式 migrate · agent auto")
+      expect(status.out).toContain("阶段 m")
       expect(status.out).toContain("[pending] T-001")
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ subtask: "fast" }))
       const broken = await runCli(["status", dir])
@@ -262,6 +328,242 @@ describe("CLI: init 固化项目配置", () => {
       expect(broken.out).toContain("⚠ 项目配置(.opencode/auto/config.json) 非法")
       expect(broken.out).toContain("subtask")
       expect(broken.out).toContain("[pending] T-001")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
+  async function readConfig(dir: string) {
+    return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
+  }
+
+  async function writeLedger(dir: string, letters: string[]) {
+    await Bun.write(
+      join(dir, "docs/phases.md"),
+      letters.map((letter) => `- [done] ${letter} 阶段 → docs/phases/${letter}-x/`).join("\n") + "\n",
+    )
+  }
+
+  test("init --phases 非法取值为用法错误,报文给出合法形式", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      for (const value of ["tma", "adk", "mm", "x", ""]) {
+        const init = await runCli(["init", dir, "--phases", value])
+        expect(init.code).toBe(1)
+        expect(init.err).toContain("--phases 取值须为 admtvk 的子序列且包含 m")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init --phases 合法值固化进 config;摘要含阶段;结束语按 phases 分两态", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const init = await runCli(["init", dir, "--phases", "admtvk"])
+      expect(init.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
+      expect(init.out).toContain("阶段 admtvk")
+      expect(init.out).toContain("开始 a(分析)阶段规划")
+      expect(init.out).not.toContain("编辑 PLAN.md 填入任务")
+      // amend: 无 --phases 保留既有值;显式给值可改
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
+      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init 前缀护栏: 台账非空时改 --phases 须以已完成阶段为前缀", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "admtvk"])).code).toBe(0)
+      await writeLedger(dir, ["a", "d"])
+      // "ad" 不是 "amt" 的前缀 → 拒绝并指引人工修订台账
+      const bad = await runCli(["init", dir, "--phases", "amt"])
+      expect(bad.code).toBe(1)
+      expect(bad.err).toContain("阶段台账")
+      expect(bad.err).toContain("ad")
+      expect(bad.err).toContain("前缀")
+      // 兼容值通过;台账已完成的 a/d 之后,下一阶段提示 m(迁移实现)
+      const ok = await runCli(["init", dir, "--phases", "admtk"])
+      expect(ok.code).toBe(0)
+      expect(ok.out).toContain("开始 m(迁移实现)阶段规划")
+      // 无 --phases 时不受护栏影响(不显式改写即无冲突)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      // 台账非法时 init 报环境错误并给人工修订指引
+      await Bun.write(join(dir, "docs/phases.md"), "- [done] a\n")
+      const broken = await runCli(["init", dir, "--phases", "admtvk"])
+      expect(broken.code).toBe(1)
+      expect(broken.err).toContain("docs/phases.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init --source-dir/--source-path 必须成对、校验存在性,合法对固化", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const onlyDir = await runCli(["init", dir, "--source-dir", dir])
+      expect(onlyDir.code).toBe(1)
+      expect(onlyDir.err).toContain("必须成对")
+      const onlyPath = await runCli(["init", dir, "--source-path", "src/mod.ts"])
+      expect(onlyPath.code).toBe(1)
+      expect(onlyPath.err).toContain("必须成对")
+      const missing = await runCli(["init", dir, "--source-dir", join(dir, "nope"), "--source-path", "src/mod.ts"])
+      expect(missing.code).toBe(1)
+      expect(missing.err).toContain("现存目录")
+      const escape = await runCli(["init", dir, "--source-dir", dir, "--source-path", "../mod.ts"])
+      expect(escape.code).toBe(1)
+      expect(escape.err).toContain("相对路径")
+      // 合法对: dir 为现存目录、path 在其下存在(目录或文件均可)
+      const sourceDir = join(dir, "legacy")
+      const sourcePath = "src/mod.ts"
+      await Bun.write(join(sourceDir, sourcePath), "export {}\n")
+      const ok = await runCli(["init", dir, "--source-dir", sourceDir, "--source-path", sourcePath])
+      expect(ok.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ source: { dir: sourceDir, path: sourcePath } })
+      // amend: 不给 source 保留既有值
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ source: { dir: sourceDir, path: sourcePath } })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init -p 写 brief.md(覆盖重写),无 -p 保留既有;init 不启动 AI 会话", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const brief = join(dir, ".opencode/auto/brief.md")
+      const first = await runCli(["init", dir, "-p", "把 legacy 迁移到 bun"])
+      expect(first.code).toBe(0)
+      expect(first.out).toContain("已写入: .opencode/auto/brief.md")
+      expect(first.out).toContain("brief 已记录")
+      expect(await Bun.file(brief).text()).toBe("把 legacy 迁移到 bun\n")
+      // 无 -p 保留既有
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe("把 legacy 迁移到 bun\n")
+      // 重复 init -p 覆盖重写(amend 语义);空文本为用法错误
+      expect((await runCli(["init", dir, "-p", "修订后的意图"])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe("修订后的意图\n")
+      const empty = await runCli(["init", dir, "-p", "  "])
+      expect(empty.code).toBe(1)
+      expect(empty.err).toContain("-p/--prompt 需要非空的提示词文本")
+      // 阶段化流程下结束语引导开始首个阶段规划
+      const staged = await runCli(["init", dir, "--phases", "am", "-p", "意图"])
+      expect(staged.out).toContain("brief 已记录")
+      expect(staged.out).toContain("开始 a(分析)阶段规划")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("phases 含 v 而 verify 未启用时 init 打 note;启用后不再打", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const init = await runCli(["init", dir, "--phases", "mvk"])
+      expect(init.code).toBe(0)
+      expect(init.out).toContain("phases 含 v(验收)阶段而任务级验收未启用")
+      const enabled = await runCli(["init", dir, "--verify"])
+      expect(enabled.code).toBe(0)
+      expect(enabled.out).not.toContain("任务级验收未启用")
+      // 不含 v 时不提示
+      const plain = await runCli(["init", dir, "--phases", "am"])
+      expect(plain.out).not.toContain("任务级验收未启用")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("CLI: 阶段化流程 P2(空模板 / 阶段行 / 台账预检)", () => {
+  test("init --phases amt → PLAN.md 为空模板(无任务);status 打印阶段进度行", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const init = await runCli(["init", dir, "--phases", "amt"])
+      expect(init.code).toBe(0)
+      const plan = await Bun.file(join(dir, "PLAN.md")).text()
+      expect(plan).not.toContain("## T-")
+      expect(plan).toContain("阶段规划会话")
+      const status = await runCli(["status", dir])
+      expect(status.code).toBe(0)
+      expect(status.out).toContain("阶段: a▶ m t")
+      // 空模板无任务,清单为空
+      expect(status.out).not.toContain("[pending] T-001")
+      // 台账推进后进度行随之更新
+      await Bun.write(join(dir, "docs/phases.md"), "- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)\n")
+      expect((await runCli(["status", dir])).out).toContain("阶段: a✓ m▶ t")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("phases = m 维持占位模板;切换 --phases 时占位模板态替换为空模板,已填任务保留", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await Bun.file(join(dir, "PLAN.md")).text()).toContain("## T-001: <任务标题> [pending]")
+      // 占位模板态(从未编辑)在切换 --phases 时视为缺失,替换为空模板
+      const staged = await runCli(["init", dir, "--phases", "am"])
+      expect(staged.code).toBe(0)
+      expect(staged.out).toContain("已替换(占位模板换为空模板")
+      expect(await Bun.file(join(dir, "PLAN.md")).text()).not.toContain("## T-")
+      // 已填真实任务的 PLAN.md 不被替换
+      await Bun.write(join(dir, "PLAN.md"), "## T-001: 真实任务 [pending]\n正文\n")
+      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      expect(await Bun.file(join(dir, "PLAN.md")).text()).toContain("真实任务")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("run 打印阶段进度行;台账非法为环境错误退出 1(先于 server 启动)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      // 台账行非法 → 预检退出 1,报文给人工修订指引
+      await Bun.write(join(dir, "docs/phases.md"), "- [done] a\n")
+      const broken = await runCli(["run", dir])
+      expect(broken.code).toBe(1)
+      expect(broken.out).toContain("阶段流程受阻")
+      expect(broken.out).toContain("docs/phases.md")
+      // 台账含 phases 外字母(k 不在 amt)→ 同为环境错误
+      await Bun.write(join(dir, "docs/phases.md"), "- [done] k 知识提炼 → docs/phases/k-knowledge/\n")
+      const outside = await runCli(["run", dir])
+      expect(outside.code).toBe(1)
+      expect(outside.out).toContain("之外的阶段字母")
+      // 合法台账通过预检;阶段进度行在配置摘要后打印(删掉 PLAN.md 使 run 在
+      // server 启动前退出,仅断言横幅)
+      await Bun.write(join(dir, "docs/phases.md"), "- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)\n")
+      await rm(join(dir, "PLAN.md"))
+      const banner = await runCli(["run", dir])
+      expect(banner.out).toContain("阶段: a✓ m▶ t")
+      expect(banner.out).toContain("未找到计划文件")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("status 台账非法仅提示不阻塞;phases = m 不打印阶段进度行", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      await Bun.write(join(dir, "docs/phases.md"), "随便一行\n")
+      const status = await runCli(["status", dir])
+      expect(status.code).toBe(0)
+      expect(status.out).toContain("⚠ 阶段台账(docs/phases.md)非法")
+      // phases = m 的项目不打印阶段行(缺省单次运行,无阶段语义)
+      const plain = await mkdtemp(join(tmpdir(), "auto-cli-"))
+      try {
+        expect((await runCli(["init", plain])).code).toBe(0)
+        expect((await runCli(["status", plain])).out).not.toContain("阶段: ")
+      } finally {
+        await rm(plain, { recursive: true, force: true })
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

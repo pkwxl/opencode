@@ -5,6 +5,7 @@
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import type { Plan, Task } from "./plan"
+import { phaseText, type Phase } from "./phases"
 import { renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
@@ -150,6 +151,55 @@ export function stageText(stage: FinalStage): string {
   }
 }
 
+// 阶段规划会话(设计文档 phases-design.md E 节): 旁路一次性,产物 = 直接编辑填充
+// 的 PLAN.md(会话被 driver 专门授权写它)。brief 为 .opencode/auto/brief.md 原文
+// (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
+// (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
+// finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
+export function renderPhasePlan(input: {
+  phase: Phase
+  brief?: string
+  handovers?: string
+  source?: { dir: string; path: string }
+  mode?: ModeSpec
+  verify?: boolean
+  finalReview?: number
+}): string {
+  const { phase } = input
+  return renderTemplate("phase-plan", {
+    phase,
+    phaseName: phaseText(phase),
+    brief: input.brief?.trim() || undefined,
+    handovers: input.handovers?.trim() || undefined,
+    sourceDir: input.source?.dir,
+    sourcePath: input.source?.path,
+    modeName: input.mode?.name,
+    modeInit: input.mode && modeText(input.mode.init, { verify: input.verify }),
+    verify: input.verify,
+    finalReview: phase === "m" && input.finalReview ? String(input.finalReview) : undefined,
+    phaseA: phase === "a",
+    phaseD: phase === "d",
+    phaseM: phase === "m",
+    phaseT: phase === "t",
+    phaseV: phase === "v",
+    phaseK: phase === "k",
+  })
+}
+
+// 阶段交接蒸馏会话(设计文档 phases-design.md F.1 步骤 1): 旁路一次性,通读本阶段
+// PLAN.md 与 docs/ 产物,蒸馏出归档目录下的 handover.md(四个必备小节协议在模板
+// 内联)。archive = phaseArchive(phase);next 为下一阶段"字母 中文名"或 undefined
+// (k 阶段无下一阶段,仍写 handover 供人工归档)。
+export function renderPhaseHandover(input: { phase: Phase; archive: string; next?: string; verify?: boolean }): string {
+  return renderTemplate("phase-handover", {
+    phase: input.phase,
+    phaseName: phaseText(input.phase),
+    archive: input.archive,
+    next: input.next,
+    verify: input.verify,
+  })
+}
+
 // ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 --context-limit
 // 时插入交接提示,会话把进度写入该文件,末行 `状态: 继续|完成` 由 driver 解析。
 export function handoffFile(task: Task): string {
@@ -180,17 +230,6 @@ export function renderWhole(
 // --dryrun: 权限预检会话,报告写入 .auto/dryrun.md。
 export function renderDryrun(): string {
   return renderTemplate("dryrun", {})
-}
-
-// init --prompt: 初始化规划会话,按用户需求填充 PLAN.md,不实施。
-// verify: config.verify——未启用时提示词不含任何 verify 相关描述。
-export function renderInit(promptText: string, mode?: ModeSpec, opts: { verify?: boolean } = {}): string {
-  return renderTemplate("init", {
-    promptText,
-    verify: opts.verify,
-    modeName: mode?.name,
-    modeInit: mode && modeText(mode.init, opts),
-  })
 }
 
 function doneList(plan: Plan): string {

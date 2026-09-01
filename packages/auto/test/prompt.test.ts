@@ -13,7 +13,8 @@ import {
   renderFinalTask,
   renderFix,
   renderHandoffSteer,
-  renderInit,
+  renderPhaseHandover,
+  renderPhasePlan,
   renderReview,
   renderReviewFix,
   renderSubtask,
@@ -79,7 +80,7 @@ describe("renderSubtask", () => {
     expect(text).toContain("严格只完成这一个子任务")
     expect(text).toContain("自我检查该子任务是否真正完成")
     expect(text).toContain("整个任务的验收在最后由独立审核会话统一进行")
-    expect(text).toContain("不要运行任务级 verify(验收由 driver 交独立审核会话处理)、不要更新 docs/")
+    expect(text).toContain("可新增但不要修改 docs/ 中的内容")
     expect(text).toContain("T-002: 实现迁移")
     // 状态文件由 driver 维护,不再要求 agent 勾选
     expect(text).toContain("由 driver 独占维护")
@@ -90,7 +91,7 @@ describe("renderSubtask", () => {
   test("verify 未启用: 不含任务级验收与 verify 描述,仍要求不更新 docs/", () => {
     const text = renderSubtask(plan, task, subtask)
     expect(text).toContain("自我检查该子任务是否真正完成")
-    expect(text).toContain("不要更新 docs/(最后统一收尾)")
+    expect(text).toContain("可新增但不要修改 docs/ 中的内容")
     expect(text).not.toContain("verify")
     expect(text).not.toContain("验收")
     expect(text).not.toContain("verified 字段")
@@ -142,7 +143,7 @@ describe("renderWrapup", () => {
 
 describe("renderFix", () => {
   test("把审核差距反馈回执行会话: 只修差距、不运行 verify、不下结论", () => {
-    const text = renderFix(plan, task, "迁移脚本缺少回滚逻辑")
+    const text = renderFix(plan, task, "迁移脚本缺少回滚逻辑", { verify: true })
     expect(text).toContain("迁移脚本缺少回滚逻辑")
     expect(text).toContain("验收未通过")
     expect(text).toContain("只修复审核指出的差距")
@@ -352,48 +353,9 @@ describe("renderDryrun", () => {
   })
 })
 
-describe("renderInit", () => {
-  test("初始化规划(verify 未启用): 填充 PLAN.md,不含 verify 相关描述", () => {
-    const text = renderInit("实现一个待办事项 CLI")
-    expect(text).toContain("实现一个待办事项 CLI")
-    expect(text).toContain("把 PLAN.md 填充为一份可执行的实施计划")
-    expect(text).toContain("只做规划,不实施")
-    expect(text).toContain("permission")
-    expect(text).not.toContain("verify")
-    expect(text).not.toContain("验证")
-  })
-
-  test("初始化规划(verify 启用): 注入验收标准要求与验证执行权原则", () => {
-    const text = renderInit("实现一个待办事项 CLI", undefined, { verify: true })
-    expect(text).toContain("每个任务带 verify 验收标准")
-    expect(text).toContain("任务描述不要包含要求执行者亲自运行验证脚本/验证命令")
-    expect(text).toContain("验证的执行权在 driver")
-    expect(text).toContain("AGENTS.md 验证原则块")
-  })
-
-  test("模式导语同样按 verify 门控(migrate 的 verify 字段侧重)", () => {
-    const on = renderInit("把项目迁移到新框架", migrate, { verify: true })
-    expect(on).toContain("verify 字段优先复用既有的测试/构建命令")
-    const off = renderInit("把项目迁移到新框架", migrate)
-    expect(off).toContain("基线确认")
-    expect(off).not.toContain("verify")
-  })
-})
-
 const migrate = loadModes().migrate!
 
 describe("模式注入(-m/--mode)", () => {
-  test("renderInit 注入 migrate 模式导语;不传模式时不注入", () => {
-    const text = renderInit("把项目迁移到新框架", migrate)
-    expect(text).toContain("场景模式: migrate")
-    expect(text).toContain("外部行为不变")
-    expect(text).toContain("基线确认")
-    expect(text).toContain("回归验证")
-    const plain = renderInit("实现一个待办事项 CLI")
-    expect(plain).not.toContain("场景模式")
-    expect(plain).not.toContain("基线确认")
-  })
-
   test("执行类模板注入 exec 段;不传模式时不注入", () => {
     for (const text of [
       renderDecompose(plan, task, { mode: migrate }),
@@ -477,6 +439,128 @@ describe("renderFinalTask", () => {
   })
 })
 
+describe("renderPhasePlan(阶段规划会话,E 节)", () => {
+  test("注入 brief/迁移源/模式导语与任务格式协议;授权直接编辑 PLAN.md", () => {
+    const text = renderPhasePlan({
+      phase: "a",
+      brief: "把 legacy 迁移到 bun",
+      source: { dir: "/legacy", path: "src/mod.ts" },
+      mode: migrate,
+      verify: true,
+    })
+    expect(text).toContain("「分析」阶段(a)")
+    expect(text).toContain("把 legacy 迁移到 bun")
+    expect(text).toContain("/legacy")
+    expect(text).toContain("src/mod.ts")
+    expect(text).toContain("场景模式导语(migrate)")
+    // a 阶段职责与首批勘察要求
+    expect(text).toContain("docs/analysis/")
+    expect(text).toContain("勘察计划排为首批任务")
+    // 任务格式协议(协议敏感标记)
+    expect(text).toContain("## T-NNN: <任务标题> [pending]")
+    expect(text).toContain("- verify: <验收标准")
+    // 本会话被授权直接编辑 PLAN.md(通常只读),其余状态文件仍禁改
+    expect(text).toContain("唯一可写的文件是 PLAN.md")
+    expect(text).toContain("CURRENT.md 与其余")
+    expect(text).toContain("不要用 chmod 等方式改动文件权限")
+    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(text).toContain("AUTO-DECISION")
+    // 非 m 阶段不带终审预留提示
+    expect(text).not.toContain("终审提醒")
+  })
+
+  test("brief 缺失 → 未提供提示段;各阶段职责条件注入", () => {
+    const missing = renderPhasePlan({ phase: "d" })
+    expect(missing).toContain("未提供(brief.md 缺失或为空)")
+    expect(missing).toContain("docs/design/")
+    expect(missing).not.toContain("docs/analysis/")
+    expect(renderPhasePlan({ phase: "m" })).toContain("代码迁移与改造")
+    expect(renderPhasePlan({ phase: "t" })).toContain("docs/testing/")
+    expect(renderPhasePlan({ phase: "v" })).toContain("docs/acceptance/")
+    expect(renderPhasePlan({ phase: "k" })).toContain("docs/migration-kb/")
+  })
+
+  test("handovers 注入两态: 有前序交接则注入清单,无则整块消失", () => {
+    const text = renderPhasePlan({
+      phase: "m",
+      handovers: "### a 分析(docs/phases/a-analysis/handover.md)\n\n- 决策甲: 选型 X",
+    })
+    expect(text).toContain("前序阶段交接")
+    expect(text).toContain("跨阶段记忆的唯一通道")
+    expect(text).toContain("### a 分析(docs/phases/a-analysis/handover.md)")
+    expect(text).toContain("- 决策甲: 选型 X")
+    // 首阶段无前序交接: 交接块整块消失
+    expect(renderPhasePlan({ phase: "a" })).not.toContain("前序阶段交接")
+  })
+
+  test("verify 未启用: 不含 verify 字段与验收执行权描述(m 阶段)", () => {
+    const text = renderPhasePlan({ phase: "m" })
+    expect(text).not.toContain("verify")
+    expect(text).not.toContain("验收")
+  })
+
+  test("finalReview 仅 m 阶段且启用时提示预留终审空间", () => {
+    const text = renderPhasePlan({ phase: "m", finalReview: 3 })
+    expect(text).toContain("终审提醒")
+    expect(text).toContain("审计轮上限 3")
+    // 非 m 阶段即使启用也不提示
+    expect(renderPhasePlan({ phase: "a", finalReview: 3 })).not.toContain("终审提醒")
+  })
+
+  test("代表性参数组合渲染后不残留模板标签", () => {
+    for (const text of [
+      renderPhasePlan({ phase: "a" }),
+      renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "/s", path: "p" }, mode: migrate, verify: true, finalReview: 2 }),
+      renderPhasePlan({ phase: "k", verify: true }),
+    ]) {
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
+describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
+  test("注入阶段/归档路径/四小节协议与唯一可写文件约束", () => {
+    const text = renderPhaseHandover({ phase: "a", archive: "docs/phases/a-analysis", next: "m 迁移实现", verify: true })
+    expect(text).toContain("「分析」阶段(a)")
+    expect(text).toContain("交接蒸馏者")
+    expect(text).toContain("docs/phases/a-analysis/handover.md")
+    for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
+      expect(text).toContain(section)
+    }
+    expect(text).toContain("下一阶段为「m 迁移实现」")
+    expect(text).toContain("唯一可写的文件是 docs/phases/a-analysis/handover.md")
+    expect(text).toContain("只蒸馏、")
+    expect(text).toContain("不改动任何既有产物")
+    expect(text).toContain("AUTO-DECISION")
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+  })
+
+  test("k 阶段无下一阶段: 供人工归档措辞,仍要求四小节", () => {
+    const text = renderPhaseHandover({ phase: "k", archive: "docs/phases/k-knowledge" })
+    expect(text).toContain("无下一阶段")
+    expect(text).toContain("供人工归档与后续查阅")
+    for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
+      expect(text).toContain(section)
+    }
+    // 有下一阶段时不带收尾措辞
+    expect(renderPhaseHandover({ phase: "a", archive: "x", next: "m 迁移实现" })).not.toContain("无下一阶段")
+  })
+
+  test("verify 未启用: 不含 verified 字段描述", () => {
+    expect(renderPhaseHandover({ phase: "m", archive: "docs/phases/m-migrate" })).not.toContain("verified")
+  })
+
+  test("代表性参数组合渲染后不残留模板标签", () => {
+    for (const text of [
+      renderPhaseHandover({ phase: "a", archive: "docs/phases/a-analysis", next: "m 迁移实现", verify: true }),
+      renderPhaseHandover({ phase: "k", archive: "docs/phases/k-knowledge" }),
+    ]) {
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
 describe("init 产物模板(PLAN.md / agent 契约)", () => {
   test("verify 启用: PLAN.md 含 verify 字段示例与验证执行权原则", async () => {
     const text = renderText(await Bun.file(planTemplate).text(), { verify: true })
@@ -548,9 +632,6 @@ describe("模板渲染完整性", () => {
       renderFinalTask(plan, "finalize", 1, "", undefined),
       renderHandoffSteer(task),
       renderDryrun(),
-      renderInit("需求"),
-      renderInit("需求", migrate),
-      renderInit("需求", migrate, { verify: true }),
       renderDecompose(plan, solo),
       renderHandoffSteer(solo),
     ]

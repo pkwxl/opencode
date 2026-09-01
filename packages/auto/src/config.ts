@@ -4,8 +4,9 @@
 // (前向兼容)。run 只控制本次执行,不再接受对应选项。旧版 .auto/config.json
 // (仅 mode)只在新文件缺失时回落读取,新文件一经写出即不再读取(不删除,留在
 // gitignore 内自然沉没)。
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { loadModes } from "./mode"
+import { parsePhases } from "./phases"
 import type { SubtaskMode } from "./runner"
 
 export type ProjectConfig = {
@@ -22,6 +23,12 @@ export type ProjectConfig = {
   // 分钟,0 = 不设,1..1440。
   verifyMax: number
   commit: boolean
+  // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
+  // 单次运行,行为与阶段化之前完全一致。
+  phases: string
+  // 迁移源参数(可选,非迁移场景缺省 undefined): dir = 源系统目录,path = 源模块
+  // 相对路径(不含 ..)。init 时另校验存在性;run 不再校验(源系统可能已下线)。
+  source?: { dir: string; path: string }
 }
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
@@ -33,6 +40,7 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   verifyIdle: 10,
   verifyMax: 0,
   commit: true,
+  phases: "m",
 }
 
 const CONFIG_FILE = join(".opencode", "auto", "config.json")
@@ -85,7 +93,7 @@ export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.verifyIdle}m/max ${config.verifyMax > 0 ? `${config.verifyMax}m` : "不设"}`
   return (
     `模式 ${config.mode} · agent ${config.agent} · 子任务 ${config.subtask} · 验收 ${config.verify ? "on" : "off"}` +
-    ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"} · 上下文上限 ${config.contextLimit}k`
+    ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"} · 上下文上限 ${config.contextLimit}k · 阶段 ${config.phases}`
   )
 }
 
@@ -103,6 +111,10 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof contextLimit !== "number" || !Number.isInteger(contextLimit) || contextLimit < 1) {
     throw new Error(`${CONFIG_FILE} 的 contextLimit 须为正整数(千 tokens)`)
   }
+  const phases = pick("phases")
+  if (typeof phases !== "string" || parsePhases(phases) === null) {
+    throw new Error(`${CONFIG_FILE} 的 phases 须为 admtvk 的子序列且包含 m(如 m、amt、admtvk)`)
+  }
   return {
     mode,
     agent: stringOf("agent", pick("agent")),
@@ -112,7 +124,25 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     verifyIdle: intInRange("verifyIdle", pick("verifyIdle"), 1, 120, "分钟"),
     verifyMax: intInRange("verifyMax", pick("verifyMax"), 0, 1440, "分钟,0 为不设"),
     commit: booleanOf("commit", pick("commit")),
+    phases,
+    source: sourceOf(record.source),
   }
+}
+
+// source 缺省 undefined(非迁移场景);存在时 dir 须为非空字符串、path 须为非空
+// 相对路径(不含 ..,防目录逃逸)。存在性校验只在 init 做(run 侧源系统可能已下线)。
+function sourceOf(value: unknown): { dir: string; path: string } | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${CONFIG_FILE} 的 source 须为 { "dir": ..., "path": ... } 对象`)
+  }
+  const record = value as Record<string, unknown>
+  const path = record.path
+  if (typeof path !== "string" || !path) throw new Error(`${CONFIG_FILE} 的 source.path 须为非空字符串`)
+  if (isAbsolute(path) || path.split(/[\\/]+/).includes("..")) {
+    throw new Error(`${CONFIG_FILE} 的 source.path 须为不含 .. 的相对路径(相对 source.dir)`)
+  }
+  return { dir: stringOf("source.dir", record.dir), path }
 }
 
 function stringOf(key: string, value: unknown): string {

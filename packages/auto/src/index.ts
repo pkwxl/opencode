@@ -1,16 +1,17 @@
 #!/usr/bin/env bun
-import { resolve } from "node:path"
+import { stat } from "node:fs/promises"
+import { isAbsolute, join, resolve } from "node:path"
 import { checkPrinciple } from "./check"
 import { formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "./config"
 import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensureGitignore, ensurePointer, runAll } from "./loop"
 import { loadModes, type ModeSpec } from "./mode"
-import { load } from "./plan"
-import { renderInit } from "./prompt"
-import { runOnce, type PermissionMode, type SubtaskMode } from "./runner"
-import { manage } from "./server"
+import { load, parse } from "./plan"
+import { formatPhases, parsePhases, phaseText, readLedger } from "./phases"
+import type { PermissionMode, SubtaskMode } from "./runner"
 import { usePromptLibrary, renderText } from "./template"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
+import templateScaffold from "../templates/PLAN.scaffold.md" with { type: "file" }
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
@@ -21,10 +22,11 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--verify-idle/--verify-max/--mode/
-// --final-review 带值(吞掉下一个 token);--verbose/--interactive/--dryrun/
-// --early/--verify 是布尔选项,出现即 true,仅当紧随字面量
-// true/false 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,--interactive
-// 另有短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值规则)。
+// --final-review/--phases/--source-dir/--source-path 带值(吞掉下一个 token);
+// --verbose/--interactive/--dryrun/--early/--verify 是布尔选项,出现即 true,仅当
+// 紧随字面量 true/false 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,
+// --interactive 另有短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的
+// 吞值规则)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -41,6 +43,9 @@ const VALUE_FLAGS = new Set([
   "verify-max",
   "mode",
   "final-review",
+  "phases",
+  "source-dir",
+  "source-path",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify"])
 for (let i = 1; i < args.length; i++) {
@@ -93,11 +98,14 @@ if (command === "run") {
   // 已固化选项(设计文档 §C): 宪法级项目属性经 init 固化到
   // .opencode/auto/config.json,run 出现即用法错误(镜像 --commit-subtask
   // 移除的既有先例);修订走 init amend 或直接编辑配置文件。
-  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "verify-idle", "verify-max", "commit"]) {
+  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "verify-idle", "verify-max", "commit", "phases", "source-dir", "source-path"]) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
-      const fix = key === "mode" ? "-m" : `--${key}`
-      console.error(`${flag} 已在 init 固化(.opencode/auto/config.json)。变更方式: opencode-auto init <dir> ${fix} <值>,或直接编辑该文件`)
+      const fix =
+        key === "source-dir" || key === "source-path"
+          ? "opencode-auto init <dir> --source-dir <目录> --source-path <相对路径>"
+          : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <值>`
+      console.error(`${flag} 已在 init 固化(.opencode/auto/config.json)。变更方式: ${fix},或直接编辑该文件`)
       process.exit(1)
     }
   }
@@ -181,6 +189,15 @@ if (command === "run") {
     process.exit(1)
   }
   log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
+  // 阶段进度行(B.2,与 status 共用 formatPhases;✓=台账已记录,▶=当前,其余=未
+  // 开始);台账非法仅提示,runAll 的阶段路由会以环境错误退出 1。
+  if (config.phases !== "m") {
+    try {
+      log(`阶段: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
+    } catch (error) {
+      log(`⚠ 阶段台账(docs/phases.md)非法: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   const code = await runAll(directory, {
     // agent 契约、验收/提交语义、上下文预算等来自配置文件(init 生成);
     // agent 缺省为 init 生成的自主执行契约,存在性由 run 前完整性检查兜底。
@@ -203,6 +220,8 @@ if (command === "run") {
     verifyMaxMs: config.verifyMax > 0 ? config.verifyMax * 60_000 : undefined,
     mode,
     finalReview,
+    phases: config.phases,
+    source: config.source,
   })
   process.exit(code)
 }
@@ -333,6 +352,44 @@ if (command === "init") {
     console.error("--verify-max 取值范围为 1..1440(分钟);缺省不设上限")
     process.exit(1)
   }
+  // --phases: 阶段化流程(设计文档 docs/phases-design.md);"m"(缺省)= 无阶段
+  // 声明,单次运行,行为不变。台账非空时的前缀护栏见下(已完成的阶段必须构成
+  // 新值的前缀,防止 amend 把流程状态打成不可推导)。
+  let phases: string | undefined
+  if (flags.has("phases")) {
+    const parsed = parsePhases(flags.get("phases") ?? "")
+    if (!parsed) {
+      console.error(`--phases 取值须为 admtvk 的子序列且包含 m(如 m、amt、admtvk),当前: "${flags.get("phases") ?? ""}"`)
+      process.exit(1)
+    }
+    phases = parsed.join("")
+  }
+  // --source-dir/--source-path: 迁移源参数,必须成对给出(拒绝 <src-dir>/<src-path>
+  // 拼接形式);存在性只在 init 校验,run 不再校验(源系统可能已下线)。
+  let source: { dir: string; path: string } | undefined
+  if (flags.has("source-dir") || flags.has("source-path")) {
+    if (!flags.has("source-dir") || !flags.has("source-path")) {
+      console.error("--source-dir 与 --source-path 必须成对给出: 源系统目录与源模块相对路径")
+      process.exit(1)
+    }
+    const sourceDir = flags.get("source-dir")!
+    const sourcePath = flags.get("source-path")!
+    if (!sourceDir.trim() || !sourcePath.trim()) {
+      console.error("--source-dir 与 --source-path 须为非空值")
+      process.exit(1)
+    }
+    if (isAbsolute(sourcePath) || sourcePath.split(/[\\/]+/).includes("..")) {
+      console.error("--source-path 须为不含 .. 的相对路径(相对 --source-dir)")
+      process.exit(1)
+    }
+    const dirIsDir = await stat(sourceDir).then((s) => s.isDirectory()).catch(() => false)
+    const pathExists = await stat(join(sourceDir, sourcePath)).then(() => true).catch(() => false)
+    if (!dirIsDir || !pathExists) {
+      console.error(`--source-dir 须为现存目录且 --source-path 在其下存在: ${sourceDir} 与 ${sourcePath}`)
+      process.exit(1)
+    }
+    source = { dir: sourceDir, path: sourcePath }
+  }
   // 仅显式给出的键进入合并: --verify/--commit/--subtask 等裸选项取各自缺省档,
   // 未出现的选项不覆盖既有配置。
   const explicit: Partial<ProjectConfig> = {}
@@ -343,6 +400,8 @@ if (command === "init") {
   if (flags.has("context-limit")) explicit.contextLimit = contextLimit
   if (flags.has("verify-idle")) explicit.verifyIdle = verifyIdle
   if (flags.has("verify-max")) explicit.verifyMax = verifyMax
+  if (phases !== undefined) explicit.phases = phases
+  if (source !== undefined) explicit.source = source
   let existing: ProjectConfig
   try {
     existing = await loadProjectConfig(directory)
@@ -350,12 +409,27 @@ if (command === "init") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
+  // 阶段台账(docs/phases.md)是推导式状态载体;非法即环境错误退出 1(报文给
+  // 人工修订指引)。台账非空时显式改 --phases 须满足前缀护栏。
+  let ledgerDone: string
+  try {
+    ledgerDone = (await readLedger(directory)).done.join("")
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
+  if (flags.has("phases") && ledgerDone && !phases!.startsWith(ledgerDone)) {
+    console.error(
+      `--phases 新值 "${phases}" 与阶段台账(docs/phases.md)不兼容: 台账已记录完成阶段 "${ledgerDone}",须构成新值的前缀。` +
+        "请改用以其为前缀的值,或按 README 的人工回退规程修订台账后再变更",
+    )
+    process.exit(1)
+  }
   // -m/--mode 解析(缩减版,init 侧): 优先级 显式值 > 既有配置值 > 缺省;
   // 未注册名为用法错误(报文列出当前支持的模式)。
   const modeName = flags.get("mode") ?? existing.mode
   const modes = loadModeTable(directory)
-  const mode = modes[modeName]
-  if (!mode) {
+  if (!modes[modeName]) {
     console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(modes).join(", ")});缺省为 migrate`)
     process.exit(1)
   }
@@ -367,6 +441,11 @@ if (command === "init") {
     process.exit(1)
   }
   console.log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
+  // v(验收)阶段与 config.verify 正交: v 阶段任务自身即检验、不受影响,但 m/t
+  // 等阶段任务的任务级三段式验收依赖 config.verify;含 v 而未启用时提示一次,不强制。
+  if (config.phases.includes("v") && !config.verify) {
+    console.log("ℹ phases 含 v(验收)阶段而任务级验收未启用: v 阶段任务自身即检验、不受影响,其余阶段任务将不做任务级三段式验收(如需启用: opencode-auto init <dir> --verify true)")
+  }
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议校验失败即退出);
   // 无 -p 时不渲染提示词,提前装载可在 init 阶段就暴露覆盖问题。
   try {
@@ -375,9 +454,10 @@ if (command === "init") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。
+  // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。阶段化流程
+  // (phases ≠ "m")下 PLAN.md 用空模板(规划会话填充,B.1),不写占位任务。
   const templates: Record<string, string> = {
-    "PLAN.md": templatePlan,
+    "PLAN.md": config.phases === "m" ? templatePlan : templateScaffold,
     "opencode.json": templateConfig,
     ".opencode/agent/auto.md": templateAgent,
   }
@@ -388,14 +468,15 @@ if (command === "init") {
     // 产出物不含 verify 相关描述(verify 字段示例、driver 验收语义等)。
     const content = file === "opencode.json" ? raw : renderText(raw, { verify: config.verify })
     const existing = await Bun.file(target).text().catch(() => undefined)
-    // .opencode/agent/auto.md 与模板不一致时总是替换,保证 agent 契约为最新版本;
-    // 其余模板已存在则跳过(PLAN.md 可能已被用户编辑)。
-    if (existing !== undefined && (existing === content || file !== ".opencode/agent/auto.md")) {
+    // 阶段化流程下占位模板态(从未编辑过的 <任务标题> 占位任务)视为缺失:
+    // 切换 --phases 时替换为空模板,交给阶段规划会话填充。
+    const stale = file === "PLAN.md" && config.phases !== "m" && existing !== undefined && isPristinePlan(existing)
+    if (existing !== undefined && !stale && (existing === content || file !== ".opencode/agent/auto.md")) {
       console.log(`跳过已存在: ${file}`)
       continue
     }
     await Bun.write(target, content)
-    console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
+    console.log(existing === undefined ? `已创建: ${file}` : stale ? `已替换(占位模板换为空模板,由阶段规划会话填充): ${file}` : `已替换(与模板不一致): ${file}`)
   }
   // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、提交原则块与
   // 维护规则块各自独立、只追加;验证原则块仅 config.verify 启用时补写,
@@ -411,32 +492,29 @@ if (command === "init") {
   console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
-  // -p/--prompt: 初始化完成后直接调用一次 AI,按提示词填充 PLAN.md 等文档,
-  // 由用户审核后再运行 run。
+  // -p/--prompt: 项目意图文本写入 .opencode/auto/brief.md(版本化、随仓库共享、
+  // 人工可编辑,amend 语义——重复 init -p 覆盖重写),由每个阶段的规划会话消费。
+  // init 不再启动任何 AI 会话(设计文档 phases-design.md §B.1: 规划必须感知
+  // 各阶段产物,从 init 挪到 run 的阶段边界)。
   const promptText = flags.get("prompt")
   if (promptText !== undefined) {
     if (!promptText.trim()) {
       console.error("-p/--prompt 需要非空的提示词文本")
       process.exit(1)
     }
-    const server = await manage(directory, flags.get("server"))
-    try {
-      const result = await runOnce(server.client, "初始化计划", renderInit(promptText, mode, { verify: config.verify }), {
-        agent: config.agent,
-        dir: directory,
-        server,
-      })
-      if (result.type === "blocked") {
-        console.error(`⏸ 初始化会话受阻:\n${result.question}`)
-        process.exit(2)
-      }
-    } finally {
-      server.close()
-    }
-    console.log("请审核 PLAN.md(必要时手工调整),确认后运行: opencode-auto run " + directory)
+    await Bun.write(join(directory, ".opencode", "auto", "brief.md"), promptText.trimEnd() + "\n")
+    console.log("已写入: .opencode/auto/brief.md(项目意图,阶段规划会话消费;重复 init -p 覆盖重写)")
+  }
+  // 结束语按 phases 分两态: "m" 维持"编辑 PLAN.md"现状;阶段化流程下 PLAN.md
+  // 由阶段规划会话填充,不提示手工编辑。
+  if (config.phases === "m") {
+    console.log(promptText !== undefined ? `brief 已记录,运行: opencode-auto run ${directory} 开始任务规划` : `编辑 PLAN.md 填入任务后运行: opencode-auto run ${directory}`)
     process.exit(0)
   }
-  console.log("编辑 PLAN.md 填入任务后运行: opencode-auto run " + directory)
+  const current = parsePhases(config.phases)!.find((phase) => !ledgerDone.includes(phase))
+  console.log(
+    `${promptText !== undefined ? "brief 已记录," : ""}运行: opencode-auto run ${directory}${current ? ` 开始 ${current}(${phaseText(current)})阶段规划` : "(全部阶段已完成)"}`,
+  )
   process.exit(0)
 }
 
@@ -461,10 +539,18 @@ if (command === "check") {
 
 if (command === "status") {
   // 任务清单前打印配置摘要;配置非法仅提示、不阻塞任务列表(缺失取缺省,
-  // 同样打印摘要)。
+  // 同样打印摘要)。阶段化流程(phases ≠ "m")另打印阶段进度行(B.3,✓=台账
+  // 已记录,▶=当前,其余=未开始);台账缺失/非法同样仅提示不阻塞。
   try {
     const config = await loadProjectConfig(directory)
     console.log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
+    if (config.phases !== "m") {
+      try {
+        console.log(`阶段: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
+      } catch (error) {
+        console.log(`⚠ 阶段台账(docs/phases.md)非法: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
   } catch (error) {
     console.log(`⚠ 项目配置(.opencode/auto/config.json) 非法: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -476,14 +562,29 @@ if (command === "status") {
   process.exit(0)
 }
 
+// 占位模板态判定(B.1): PLAN.md 仅含从未编辑的占位任务(标题仍为 <任务标题>、
+// 全部 pending、零 attempts、无任何字段写入)——阶段化流程切换 --phases 时把该
+// 状态视为缺失,替换为空模板交阶段规划会话填充。解析失败同样视为非占位态(保留)。
+function isPristinePlan(text: string): boolean {
+  try {
+    const tasks = parse("PLAN.md", text).tasks
+    return tasks.length > 0 && tasks.every((task) => task.title === "<任务标题>" && task.status === "pending" && !task.attempts && !task.verify && !task.verified && !task.question)
+  } catch {
+    return false
+  }
+}
+
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--verify-idle [1-120]] [--verify-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--server <url>]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--verify-idle [1-120]] [--verify-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--verify-idle、--verify-max、--commit)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--verify-idle、--verify-max、--commit、--phases、--source-dir/--source-path)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
       -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
+      -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+      --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)
+      --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;init 时校验存在性)
       --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
       --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)

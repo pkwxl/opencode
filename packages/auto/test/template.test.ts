@@ -64,7 +64,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("13 个会话模板与 _partials 齐备", () => {
+  test("14 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "decompose",
@@ -72,7 +72,8 @@ describe("内置模板注册表", () => {
       "final-task",
       "fix",
       "handoff-steer",
-      "init",
+      "phase-handover",
+      "phase-plan",
       "review",
       "review-fix",
       "subtask",
@@ -88,7 +89,6 @@ describe("内置模板注册表", () => {
       taskId: "T-001",
       taskBlock: "# T-001\n\n正文",
       doneList: "- [done] T-000: 前置",
-      promptText: "需求",
       gap: "差距",
       subtask: "子任务",
       scriptPath: "/tmp/verify.sh",
@@ -124,6 +124,22 @@ describe("内置模板注册表", () => {
       modeExec: "注记",
       emphasis: "侧重",
       prior: "上游",
+      phase: "a",
+      phaseName: "分析",
+      brief: "项目意图",
+      handovers: "### a 分析(docs/phases/a-analysis/handover.md)",
+      archive: "docs/phases/a-analysis",
+      next: "m 迁移实现",
+      sourceDir: "/legacy",
+      sourcePath: "src/mod.ts",
+      finalReview: "2",
+      phaseA: true,
+      phaseD: false,
+      phaseM: false,
+      phaseT: false,
+      phaseV: false,
+      phaseK: false,
+      verify: true,
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)
@@ -137,9 +153,9 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "init.md"), "自定义初始化提示词: {{promptText}}")
+      writeFileSync(join(overlay, "subtask.md"), "自定义子任务提示词: {{subtask}}")
       usePromptLibrary(dir)
-      expect(renderTemplate("init", { promptText: "需求" })).toBe("自定义初始化提示词: 需求")
+      expect(renderTemplate("subtask", { subtask: "任务甲" })).toBe("自定义子任务提示词: 任务甲")
       // 未覆盖的模板仍取内置
       expect(renderTemplate("dryrun", {})).toContain("权限预检")
     } finally {
@@ -155,6 +171,10 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       writeFileSync(join(overlay, "verify-judge.md"), "随便写的判定提示词,没有结论协议")
       expect(() => usePromptLibrary(dir)).toThrow(/verify-judge\.md 缺少关键协议内容/)
       expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
+      // phase-handover 覆盖缺四个必备小节标题 → 同样报错
+      writeFileSync(join(overlay, "phase-handover.md"), "自定义交接提示词,丢了小节协议")
+      expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/## 关键决策/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -1,16 +1,28 @@
 import { createInterface } from "node:readline/promises"
-import { stat } from "node:fs/promises"
-import { join, relative } from "node:path"
+import { mkdir, rm, stat } from "node:fs/promises"
+import { dirname, join, relative } from "node:path"
 import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { commitTree, pendingChanges, repoRoots } from "./git"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { block, countSubtasks, load, next, resetInProgress, setStatus, type Plan } from "./plan"
-import { renderDryrun, stageText } from "./prompt"
-import { protect, unprotect } from "./protect"
+import {
+  appendLedger,
+  archivePhaseDocs,
+  phaseArchive,
+  phaseText,
+  readLedger,
+  renderPlanScaffold,
+  routePhase,
+  snapshotDocs,
+  validHandover,
+  type Phase,
+} from "./phases"
+import { renderDryrun, renderPhaseHandover, renderPhasePlan, stageText } from "./prompt"
+import { allowWrite, protect, reprotect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
-import { runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
+import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage, type ServerHandle } from "./server"
 import { usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -154,6 +166,13 @@ export async function runAll(
     // 完成后按 docs/mode-final-review-design.md B/C 节推进——终审阶段是入
     // PLAN.md 的 T-F 真任务,本循环只做"生成任务 → 跑任务 → 解析报告路由"。
     finalReview?: number
+    // --phases 阶段化流程(设计文档 docs/phases-design.md,来自配置): "m"(缺省)=
+    // 无阶段声明,走既有单次运行路径(零改动);其余值启用阶段循环(D 节)——
+    // 推导当前阶段 → 规划会话填充 PLAN.md → 主循环执行 → 交接(归档+重置+台账+
+    // 提交)→ 下一阶段。--final-review 仅 m(迁移实现)阶段挂接。
+    phases?: string
+    // config.source 迁移源参数(可选),注入阶段规划会话。
+    source?: { dir: string; path: string }
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -232,6 +251,16 @@ export async function runAll(
   }
   process.on("SIGINT", onSigint)
   try {
+    // 阶段化流程: 台账非法为环境错误(H 节),提前于 server 启动求值一次路由,
+    // 免得白白拉起服务再退出;正式路由在阶段循环内逐轮重新求值(推导式状态)。
+    const phases = opts.phases ?? "m"
+    if (phases !== "m") {
+      const pre = await routePhase(directory, await load(path), phases)
+      if (pre.type === "blocked") {
+        log(`⏸ 阶段流程受阻: ${pre.reason}`)
+        return 1
+      }
+    }
     server = await manage(directory, opts.server)
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName)
@@ -318,78 +347,292 @@ export async function runAll(
       }
       return append(generated.proposal)
     }
-    for (;;) {
-      const plan = await load(path)
-      const task = next(plan)
-      if (!task) {
-        // --final-review: next() 为空且终审未完成 → 推进终审闭环(生成/追加下一
-        // 阶段任务后续跑循环);终审完成则照常退出。
-        if ((opts.finalReview ?? 0) > 0) {
-          const advanced = await advanceFinal(plan, true)
+    // 主任务循环: 依次执行 PLAN.md 中全部任务(子任务/verify/review/统一提交/
+    // 进度恢复零改动)。phase 为当前阶段字母(缺省单次运行取 "m"): ① finalGate
+    // —— --final-review 终审闭环的挂接门控,阶段化流程下仅 m(迁移实现)阶段挂接
+    // (G 节);② 透传 runTask,v(验收)阶段任务据此豁免任务级验收与 --review
+    // (phases-design.md D.3)。返回 0 = 全部完成,2 = 阻塞/未完成(问题已写入
+    // PLAN.md)。
+    const runTaskLoop = async (phase: Phase): Promise<number> => {
+      const finalGate = phase === "m"
+      for (;;) {
+        const plan = await load(path)
+        const task = next(plan)
+        if (!task) {
+          // --final-review: next() 为空且终审未完成 → 推进终审闭环(生成/追加下一
+          // 阶段任务后续跑循环);终审完成则照常退出。
+          if (finalGate && (opts.finalReview ?? 0) > 0) {
+            const advanced = await advanceFinal(plan, true)
+            if (advanced === "stopped") return 2
+            if (advanced === "appended") continue
+          }
+          log("✓ 全部任务已完成")
+          return 0
+        }
+        // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
+        if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl)
+        if (task.status === "blocked" && task.question) {
+          log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
+        }
+        banner(`${task.id} ${task.title}`)
+        log(`▶ ${task.id} 开始执行(第 ${task.attempts + 1} 次尝试)`)
+        const start = Date.now()
+        const outcome = await runTask(serverHandle.client, plan, task, {
+          agent: agentName,
+          dir: directory,
+          verbose: opts.verbose,
+          waitAnswer: opts.waitAnswer,
+          commit: opts.commit,
+          subtask: opts.subtask,
+          contextLimit: opts.contextLimit,
+          review: opts.review,
+          early: opts.early,
+          verify: opts.verify,
+          permission: opts.permission,
+          interactive: repl,
+          server: serverHandle,
+          verifyIdleMs: opts.verifyIdleMs,
+          verifyMaxMs: opts.verifyMaxMs,
+          mode: opts.mode,
+          phase,
+        })
+        if (outcome.type === "blocked") {
+          await block(path, task.id, outcome.question)
+          log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
+          // 中断现场也提交: 保存断点(阻塞问题、CURRENT.md 中断备注),支持回滚到断点。
+          if (opts.commit !== false) {
+            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(阻塞)` })
+          }
+          return 2
+        }
+        if (outcome.type === "incomplete") {
+          log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
+          if (opts.commit !== false) {
+            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(回退 pending)` })
+          }
+          return 2
+        }
+        log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
+        ran++
+        // 任务完成的终态提交: PLAN.md 的 [done]/verified 与 CURRENT.md 的删除在此
+        // 一并落账(各会话产出已随会话提交,这里是收口);终审路由追加的下一任务
+        // 改动归入其生成/执行会话的提交。
+        if (opts.commit !== false) {
+          await commitTree(directory, task, { stage: "done", subject: `${task.id} ${task.title}: 完成` })
+        }
+        // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
+        // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
+        // 由下一次 next() 按文件顺序拾取。
+        if (finalGate && (opts.finalReview ?? 0) > 0 && task.final) {
+          const advanced = await advanceFinal(await load(path))
           if (advanced === "stopped") return 2
-          if (advanced === "appended") continue
         }
-        log("✓ 全部任务已完成")
-        return 0
-      }
-      // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
-      if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl)
-      if (task.status === "blocked" && task.question) {
-        log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
-      }
-      banner(`${task.id} ${task.title}`)
-      log(`▶ ${task.id} 开始执行(第 ${task.attempts + 1} 次尝试)`)
-      const start = Date.now()
-      const outcome = await runTask(server.client, plan, task, {
-        agent: agentName,
-        dir: directory,
-        verbose: opts.verbose,
-        waitAnswer: opts.waitAnswer,
-        commit: opts.commit,
-        subtask: opts.subtask,
-        contextLimit: opts.contextLimit,
-        review: opts.review,
-        early: opts.early,
-        verify: opts.verify,
-        permission: opts.permission,
-        interactive: repl,
-        server,
-        verifyIdleMs: opts.verifyIdleMs,
-        verifyMaxMs: opts.verifyMaxMs,
-        mode: opts.mode,
-      })
-      if (outcome.type === "blocked") {
-        await block(path, task.id, outcome.question)
-        log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
-        // 中断现场也提交: 保存断点(阻塞问题、CURRENT.md 中断备注),支持回滚到断点。
-        if (opts.commit !== false) {
-          await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(阻塞)` })
-        }
-        return 2
-      }
-      if (outcome.type === "incomplete") {
-        log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
-        if (opts.commit !== false) {
-          await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(回退 pending)` })
-        }
-        return 2
-      }
-      log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
-      ran++
-      // 任务完成的终态提交: PLAN.md 的 [done]/verified 与 CURRENT.md 的删除在此
-      // 一并落账(各会话产出已随会话提交,这里是收口);终审路由追加的下一任务
-      // 改动归入其生成/执行会话的提交。
-      if (opts.commit !== false) {
-        await commitTree(directory, task, { stage: "done", subject: `${task.id} ${task.title}: 完成` })
-      }
-      // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
-      // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
-      // 由下一次 next() 按文件顺序拾取。
-      if ((opts.finalReview ?? 0) > 0 && task.final) {
-        const advanced = await advanceFinal(await load(path))
-        if (advanced === "stopped") return 2
       }
     }
+
+    if (phases === "m") return await runTaskLoop("m")
+
+    // 阶段规划会话(E 节): 旁路一次性,复用 requireArtifact 骨架,产物 = 直接编辑
+    // 填充的 PLAN.md——会话被 driver 专门授权写它(临时放行写权限,其余状态文件
+    // 仍只读)。伪任务 PLAN 不进任务链、不写进度记录。返回 0 = 规划完成。
+    const planPhase = async (phase: Phase): Promise<number> => {
+      // 阶段开始快照: 交接归档据此判定本阶段 docs/ 变更(F 节)。
+      await snapshotDocs(directory)
+      const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
+      // 前序阶段交接注入(E 节注入纪律): 只注入 handover 蒸馏产物,不注入前序
+      // 原始 docs/。台账中早于当前阶段且已 done 的各阶段逐个拼接;缺 handover 的
+      // 阶段在清单中标注"(无交接文档)"(P2 及更早的占位时代产物)。
+      const declared = [...phases] as Phase[]
+      const ledger = await readLedger(directory)
+      const handovers = (
+        await Promise.all(
+          declared
+            .slice(0, declared.indexOf(phase))
+            .filter((letter) => ledger.done.includes(letter))
+            .map(async (letter) => {
+              const text = await Bun.file(join(directory, phaseArchive(letter), "handover.md")).text().catch(() => undefined)
+              return [`### ${letter} ${phaseText(letter)}(${phaseArchive(letter)}/handover.md)`, "", text?.trim() || "(无交接文档)"].join("\n")
+            }),
+        )
+      ).join("\n\n")
+      log("▶ 开阶段规划会话填充 PLAN.md")
+      await allowWrite(path)
+      try {
+        const planned = await requireArtifact(
+          serverHandle.client,
+          { id: "PLAN", title: `阶段规划(${phase} ${phaseText(phase)})`, status: "in_progress", attempts: 0, body: "" },
+          renderPhasePlan({
+            phase,
+            brief,
+            handovers,
+            source: opts.source,
+            mode: opts.mode,
+            verify: opts.verify,
+            finalReview: opts.finalReview,
+          }),
+          {
+            agent: agentName,
+            dir: directory,
+            verbose: opts.verbose,
+            waitAnswer: opts.waitAnswer,
+            commit: opts.commit,
+            contextLimit: opts.contextLimit,
+            permission: opts.permission,
+            interactive: repl,
+            server: serverHandle,
+            mode: opts.mode,
+          },
+          {
+            kind: "阶段规划",
+            artifact: "已填充的 PLAN.md(至少一个任务)",
+            detail: "缺失、无任务或任务格式无法解析",
+            requirement:
+              "必须直接编辑 PLAN.md,把本阶段任务按 `## T-NNN: <任务标题> [pending]` 格式写入" +
+              "(至少一个;即使认为本阶段无事可做,也要写入一个说明性任务并在正文说明原因)。",
+            commit: { stage: "phase-plan", subject: `阶段规划: ${phase} ${phaseText(phase)}` },
+            reset: async () => {
+              await Bun.write(path, renderPlanScaffold(opts.verify === true))
+            },
+            collect: async () => {
+              const fresh = await load(path).catch(() => undefined)
+              return fresh?.tasks.length ? fresh.tasks.length : undefined
+            },
+          },
+        )
+        if (typeof planned !== "number") {
+          log(`⏸ 阶段规划会话受阻(隐性阻塞,请检查后重新运行):\n${planned.question}`)
+          return 2
+        }
+        log(`✓ 阶段规划完成: PLAN.md 已填入 ${planned} 个任务`)
+        return 0
+      } finally {
+        await reprotect(path)
+      }
+    }
+
+    // 阶段交接(F 节): ① 蒸馏会话(AI 唯一职责,旁路一次性)产出归档目录下的
+    // handover.md——先于机械归档,蒸馏读的是 docs/ 原位置文档,归档后就读不到了;
+    // ② 归档本阶段 docs/ 变更 + PLAN.md 拷贝归档后重置空模板 → ③ 台账追加 →
+    // ④ 统一提交(Auto-Stage: phase-transition)。各步幂等,中断重跑自然续完
+    // (C.2)。返回 0 = 交接完成,2 = 蒸馏会话隐性阻塞。
+    const handoverPhase = async (phase: Phase): Promise<number> => {
+      const letters = [...phases] as Phase[]
+      const nextLetter = letters[letters.indexOf(phase) + 1]
+      const next = nextLetter ? `${nextLetter} ${phaseText(nextLetter)}` : undefined
+      const target = next ?? "流程完成"
+      banner(`阶段交接: ${phase} ${phaseText(phase)} → ${target}`)
+      // driver 先建归档目录再开会话;handover.md 不在 protect 名单,无需 allowWrite。
+      const handoverFile = join(directory, phaseArchive(phase), "handover.md")
+      await mkdir(dirname(handoverFile), { recursive: true })
+      log(`▶ 开交接蒸馏会话产出 ${phaseArchive(phase)}/handover.md`)
+      const distilled = await requireArtifact(
+        serverHandle.client,
+        { id: "PLAN", title: `阶段交接蒸馏(${phase} ${phaseText(phase)})`, status: "in_progress", attempts: 0, body: "" },
+        renderPhaseHandover({ phase, archive: phaseArchive(phase), next, verify: opts.verify }),
+        {
+          agent: agentName,
+          dir: directory,
+          verbose: opts.verbose,
+          waitAnswer: opts.waitAnswer,
+          commit: opts.commit,
+          contextLimit: opts.contextLimit,
+          permission: opts.permission,
+          interactive: repl,
+          server: serverHandle,
+        },
+        {
+          kind: "交接蒸馏",
+          artifact: `有效交接文档 ${phaseArchive(phase)}/handover.md(四个必备小节齐备)`,
+          detail: "缺失或小节不全",
+          requirement:
+            `必须把交接文档写入 ${phaseArchive(phase)}/handover.md,并包含标题逐字为` +
+            "「## 关键决策」「## 约束与坑」「## 下一阶段必读清单」「## 产物索引」的四个小节。",
+          commit: { stage: "phase-handover", subject: `阶段交接蒸馏: ${phase} ${phaseText(phase)}` },
+          reset: () => rm(handoverFile, { force: true }),
+          collect: async () => {
+            const text = await Bun.file(handoverFile).text().catch(() => "")
+            return validHandover(text) || undefined
+          },
+        },
+      )
+      if (distilled !== true) {
+        log(`⏸ 交接蒸馏会话受阻(隐性阻塞,请检查后重新运行):\n${distilled.question}`)
+        return 2
+      }
+      const moved = await archivePhaseDocs(directory, phase)
+      if (moved.length) log(`  已归档本阶段 docs/ 变更 ${moved.length} 项 → ${phaseArchive(phase)}/`)
+      const archivedPlan = join(directory, phaseArchive(phase), "PLAN.md")
+      await mkdir(dirname(archivedPlan), { recursive: true })
+      await Bun.write(archivedPlan, await Bun.file(path).text())
+      await allowWrite(path)
+      await Bun.write(path, renderPlanScaffold(opts.verify === true))
+      await reprotect(path)
+      log("  本阶段 PLAN.md 已归档,PLAN.md 重置为空模板")
+      await appendLedger(directory, phase)
+      // AGENTS.md 只校验不改写(F.2): 超 150 行在交接提交信息与终端 note 提示人工精简。
+      const agentsLines = (await Bun.file(join(directory, "AGENTS.md")).text().catch(() => "")).trimEnd().split("\n").length
+      const fat = agentsLines > 150 ? `AGENTS.md ${agentsLines} 行超过 150 行上限,请人工精简` : undefined
+      if (fat) log(`ℹ ${fat}`)
+      if (opts.commit !== false) {
+        await commitTree(directory, { id: "PLAN", title: `阶段交接(${phase} ${phaseText(phase)})` }, {
+          stage: "phase-transition",
+          subject: `阶段交接: ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
+        })
+      }
+      return 0
+    }
+
+    // --phases 阶段循环(D.1): 推导 currentPhase → PLAN.md 空则开规划会话 → 主循环
+    // 执行 → 本阶段任务全 done 交接 → 台账追加推导下一阶段;全部阶段完成退出 0。
+    // 台账非法等环境错误退出 1(H 节)。--final-review 终审闭环仅 m 阶段挂接
+    // (runTaskLoop 的 finalGate),其余阶段忽略并提示。
+    const runPhaseLoop = async (): Promise<number> => {
+      if ((opts.finalReview ?? 0) > 0) {
+        log("ℹ 终审闭环(--final-review)仅作用于 m(迁移实现)阶段,其余阶段完成时不进入")
+      }
+      for (;;) {
+        const route = await routePhase(directory, await load(path), phases)
+        if (route.type === "blocked") {
+          log(`⏸ 阶段流程受阻: ${route.reason}`)
+          return 1
+        }
+        if (route.type === "complete") {
+          log("✓ 全部阶段已完成")
+          return 0
+        }
+        if (route.type === "plan") {
+          // 交接中断恢复(C.2 幂等性): 归档目录内已有归档 PLAN.md 而台账未记录 =
+          // 交接在"重置 PLAN.md 之后、台账追加之前"中断——补写台账并提交,不重新
+          // 规划本阶段(更早中断时 PLAN.md 仍有任务,路由为 handover,完整重跑交接)。
+          const interrupted =
+            (await stat(join(directory, phaseArchive(route.phase), "PLAN.md")).then(() => true, () => false)) &&
+            !(await readLedger(directory)).done.includes(route.phase)
+          if (interrupted) {
+            log(`↻ 恢复中断: ${route.phase} ${phaseText(route.phase)} 阶段交接已归档与重置,补写台账后进入下一阶段`)
+            await appendLedger(directory, route.phase)
+            if (opts.commit !== false) {
+              await commitTree(directory, { id: "PLAN", title: `阶段交接(${route.phase} ${phaseText(route.phase)})` }, {
+                stage: "phase-transition",
+                subject: `阶段交接: ${route.phase} ${phaseText(route.phase)}(中断恢复补账)`,
+              })
+            }
+            continue
+          }
+          banner(`${route.phase} ${phaseText(route.phase)} 阶段规划`)
+          const code = await planPhase(route.phase)
+          if (code !== 0) return code
+          continue
+        }
+        if (route.type === "execute") {
+          const code = await runTaskLoop(route.phase)
+          if (code !== 0) return code
+          continue
+        }
+        const code = await handoverPhase(route.phase)
+        if (code !== 0) return code
+      }
+    }
+    return await runPhaseLoop()
   } finally {
     process.off("SIGINT", onSigint)
     repl?.close()

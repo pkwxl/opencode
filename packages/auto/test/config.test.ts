@@ -81,11 +81,38 @@ describe("loadProjectConfig", () => {
         ["commit", 1],
         ["agent", ""],
         ["mode", 123],
+        ["phases", ""],
+        ["phases", "tma"],
+        ["phases", "adk"],
+        ["phases", "mm"],
+        ["phases", "mx"],
+        ["phases", 42],
+        ["source", "dir"],
+        ["source", { dir: "src" }],
+        ["source", { path: "mod" }],
+        ["source", { dir: "", path: "mod" }],
+        ["source", { dir: "src", path: "" }],
+        ["source", { dir: "src", path: "../mod" }],
+        ["source", { dir: "src", path: "/abs/mod" }],
       ]
       for (const [key, value] of bad) {
         writeConfig(dir, JSON.stringify({ [key]: value }))
-        await expect(loadProjectConfig(dir)).rejects.toThrow(key)
+        await expect(loadProjectConfig(dir)).rejects.toThrow(key === "source" ? "source" : key)
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("phases / source 合法取值原样读回;source 缺省 undefined", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ phases: "admtvk", source: { dir: "../legacy", path: "src/mod.ts" } }))
+      const config = await loadProjectConfig(dir)
+      expect(config.phases).toBe("admtvk")
+      expect(config.source).toEqual({ dir: "../legacy", path: "src/mod.ts" })
+      writeConfig(dir, JSON.stringify({ phases: "dmvk" }))
+      expect((await loadProjectConfig(dir)).source).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -106,8 +133,16 @@ describe("loadProjectConfig", () => {
   test("saveProjectConfig 写出完整配置后可读回(Bun.write 自动建父目录)", async () => {
     const dir = tempDir()
     try {
-      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, verify: true, contextLimit: 128, commit: false })
-      expect(await loadProjectConfig(dir)).toEqual({ ...CONFIG_DEFAULTS, verify: true, contextLimit: 128, commit: false })
+      const config: ProjectConfig = {
+        ...CONFIG_DEFAULTS,
+        verify: true,
+        contextLimit: 128,
+        commit: false,
+        phases: "admtvk",
+        source: { dir: "../legacy", path: "packages/core" },
+      }
+      await saveProjectConfig(dir, config)
+      expect(await loadProjectConfig(dir)).toEqual(config)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -162,12 +197,13 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
     expect(mergeProjectConfig(CONFIG_DEFAULTS, {})).toEqual(CONFIG_DEFAULTS)
   })
 
-  test("摘要一行含全部键的生效值", () => {
+  test("摘要一行含全部键的生效值(phases 追加在末尾)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "模式 migrate · agent auto · 子任务 auto · 验收 off · 看门狗 idle 10m/max 不设 · 提交 on · 上下文上限 64k",
+      "模式 migrate · agent auto · 子任务 auto · 验收 off · 看门狗 idle 10m/max 不设 · 提交 on · 上下文上限 64k · 阶段 m",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "模式 migrate · agent custom · 子任务 auto · 验收 on · 看门狗 idle 10m/max 30m · 提交 on · 上下文上限 64k",
+      "模式 migrate · agent custom · 子任务 auto · 验收 on · 看门狗 idle 10m/max 30m · 提交 on · 上下文上限 64k · 阶段 m",
     )
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("阶段 admtvk")
   })
 })
