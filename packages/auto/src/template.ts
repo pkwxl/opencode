@@ -19,6 +19,7 @@ import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFinalTask from "../templates/prompts/final-task.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
+import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
 import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file" }
@@ -47,6 +48,7 @@ const embedded: Record<string, string> = {
   "final-task": tplFinalTask,
   fix: tplFix,
   "handoff-steer": tplHandoffSteer,
+  knowledge: tplKnowledge,
   "phase-handover": tplPhaseHandover,
   "phase-plan": tplPhasePlan,
   review: tplReview,

@@ -3,6 +3,7 @@ import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
 import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { commitTree, pendingChanges, repoRoots } from "./git"
+import { extractKnowledge } from "./knowledge"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
 import type { ModeSpec } from "./mode"
@@ -616,6 +617,39 @@ export async function runAll(
                 subject: `阶段交接: ${route.phase} ${phaseText(route.phase)}(中断恢复补账)`,
               })
             }
+            continue
+          }
+          // k(知识提炼)阶段整体认领 --extract-knowledge 设计(P4): 不开规划会话、
+          // 不向 PLAN.md 填任务——plan 路由直接进入知识提取旁路会话(产物
+          // docs/migration-kb/,已产出则幂等跳过),随后照常交接。提取失败只打 ⚠
+          // 警告、不污染退出码(迁移成功不被文档生成失败反向污染);人工在 k 阶段
+          // 自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发。
+          // docs/ 快照不在此刷新: 交接归档沿用上一阶段的陈旧快照(或退化路径),
+          // 本阶段新增的 migration-kb 即差异项,已产出的知识文档同样被归档。
+          if (route.phase === "k") {
+            banner("k 知识提炼: 迁移知识沉淀")
+            const extracted = await extractKnowledge(serverHandle.client, directory, {
+              agent: agentName,
+              dir: directory,
+              verbose: opts.verbose,
+              waitAnswer: opts.waitAnswer,
+              commit: opts.commit,
+              contextLimit: opts.contextLimit,
+              permission: opts.permission,
+              interactive: repl,
+              server: serverHandle,
+              mode: opts.mode,
+            })
+            if (extracted.type === "ok") log(`✓ 迁移知识文档已产出: ${extracted.file}`)
+            else if (extracted.type === "skipped") log(`↻ 迁移知识文档已产出(${extracted.file}),跳过提取,直接进入交接`)
+            else {
+              log(
+                `⚠ 迁移知识沉淀未完成(knowledge_extraction_error),退出码不受影响,k 阶段照常交接;` +
+                  `可修复问题后按人工回退规程(删台账 k 行与 docs/phases/k-knowledge/)重跑单独重试。受阻详情:\n${extracted.question}`,
+              )
+            }
+            const code = await handoverPhase("k")
+            if (code !== 0) return code
             continue
           }
           banner(`${route.phase} ${phaseText(route.phase)} 阶段规划`)

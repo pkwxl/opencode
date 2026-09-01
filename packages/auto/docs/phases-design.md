@@ -197,7 +197,9 @@ export async function routePhase(dir, plan, config): Promise<PhaseRoute> {
 ```
 
 幂等性:plan 路由在 PLAN.md 已有任务后不再触发;handover 路由在台账追加后
-自然消失;全部路由由(台账, PLAN.md)两文件推导,无隐藏状态。
+自然消失;全部路由由(台账, PLAN.md)两文件推导,无隐藏状态。**k 阶段例外
+(P4/D.4)**:plan 路由不开规划会话,直接进入知识提取旁路会话后交接——
+routePhase 本身不变,k 分支在 run 的阶段循环内。
 
 ### D.3 v 阶段任务的验收豁免
 
@@ -207,6 +209,31 @@ final 豁免共用同一代码路径(内部标记,不写 final 字段、不污�
 残余差距:v 阶段任务全 done 即交接,不熔断;验收报告的差距结论由 k/人工消费
 (V1 线性决策)。**修订备选**:若后续需要 v 差距熔断,仿 afterValidate 在
 handover 路由前解析验收报告末行 `结论: 通过|差距`,本文预留该挂点。
+
+### D.4 k 阶段:整体认领 --extract-knowledge(P4 已实现)
+
+k(知识提炼)阶段整体认领 docs/fixme-knowledge-design.md 的 `--extract-knowledge`
+设计(该文档文首"P4 并入阶段化流程"修订节给出两设计的逐条映射),`--track-fixme`
+不并入、保持独立演进。k 阶段与通用阶段循环的关键差异:
+
+- **不开规划会话、不向 PLAN.md 填任务**:plan 路由(PLAN.md 空模板态)直接进入
+  知识提取旁路一次性会话(src/knowledge.ts,复用 requireArtifact 骨架,伪任务
+  PLAN),产物 = `docs/migration-kb/migration-<时间戳>.md`(时间戳与 run 日志同款)。
+  会话输入为阶段台账 docs/phases.md 与各阶段归档目录(handover.md 优先,原始产物
+  按产物索引取用),章节骨架/质量约束/mode.exec 注入见 templates/prompts/knowledge.md;
+- **提取失败不污染退出码**:会话受阻或两次未产出 → ⚠ 警告(knowledge_extraction_error,
+  细节进运行日志)后照常交接,退出码语义不变——迁移成功不被文档生成失败反向污染;
+- **幂等与恢复**:目录内已存在非空 .md(提取已产出、交接前中断)→ 跳过重提取;
+  交接中断走既有台账幂等补写;交接完成后重试提取 = 人工回退规程(删台账 k 行与
+  docs/phases/k-knowledge/ 归档目录后重跑);
+- **docs/ 快照不刷新**:提取前不调 snapshotDocs——交接归档沿用上一阶段的陈旧
+  快照(或快照缺失时的退化路径),本阶段新增的 migration-kb 即差异项,已产出的
+  知识文档同样被归档;
+- **知识文档入库**:作为 k 阶段产物随会话统一提交(stage=knowledge)与交接归档
+  (fixme 设计的"不自动提交"决策随独立选项一并废弃);
+- 人工在 k 阶段自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点
+  不触发(人工接管语义);提取会话唯一可写文件是输出路径,其余约束(状态文件
+  只读、不提交)与全部旁路会话一致。
 
 ## E. 阶段规划会话
 
@@ -288,8 +315,9 @@ renderPhasePlan({
   台账+提交);status 阶段行。蒸馏会话此期以模板占位(直接写最小 handover)。
 - **P3(蒸馏与注入)**:phase-handover.md 蒸馏会话;handovers 注入规划会话;
   v 阶段豁免接线;--final-review 仅 m 挂接的 note。
-- **P4(k 阶段)**:认领 docs/fixme-knowledge-design.md 的 --extract-knowledge
-  (docs/migration-kb/ 产出、失败不污染退出码);该文档修订标注并入本设计。
+- **P4(k 阶段,已实现)**:认领 docs/fixme-knowledge-design.md 的 --extract-knowledge
+  (docs/migration-kb/ 产出、失败不污染退出码,行为规格见 D.4);该文档文首已并入
+  修订标注。
 
 ## K. 文件级改动清单
 
@@ -301,9 +329,12 @@ renderPhasePlan({
 | src/loop.ts | runAll 入口推导 currentPhase 与阶段循环(D.1);交接编排(F 节);终审闭环挂接按阶段门控 |
 | src/runner.ts | v 阶段豁免内部标记(D.3,与 final 豁免共路径);规划/蒸馏会话的 PLAN.md 临时放行与 checkPlanEdit 复用 |
 | src/prompt.ts | renderPhasePlan/renderPhaseHandover 组装;FinalStage 不受影响 |
+| src/knowledge.ts | **新增**(P4/D.4): 知识提取编排——默认路径 knowledgeFile、幂等检查 existingKnowledge、extractKnowledge(requireArtifact + renderKnowledge 调用) |
+| templates/prompts/knowledge.md | **新增**(P4/D.4): 知识提取会话模板;登记 src/template.ts embedded 注册表(collect 从宽,不进协议敏感清单) |
 | templates/prompts/phase-plan.md、phase-handover.md | **新增**;登记 src/template.ts embedded 注册表与协议敏感校验清单 |
 | src/protect.ts | 无改动(brief.md 不保护;确认清单) |
-| docs/fixme-knowledge-design.md | P4 时修订标注:--extract-knowledge 并入 phases 设计 k 阶段 |
+| src/loop.ts(P4 增量) | runPhaseLoop 的 plan 路由接 k 分支: 提取(失败仅 ⚠)→ handoverPhase("k") → 台账推导 complete |
+| docs/fixme-knowledge-design.md | P4 修订标注已并入(文首"P4 并入阶段化流程"节):--extract-knowledge 并入 phases 设计 k 阶段 |
 | README.md | 用法、--phases/source 选项、brief.md、人工回退规程(C.3) |
 | test/ | config/CLI 解析、台账推导与 routePhase 幂等、模板协议防漂移(prompt.test.ts 扩展) |
 

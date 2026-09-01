@@ -3,8 +3,8 @@
 > 本文档是 `--track-fixme` 与 `--extract-knowledge` 两个 CLI 能力的唯一设计基准,基于
 > 《CLI 扩展需求规范:设计偏差追踪与迁移知识沉淀》(下称"规格书")修订而来。实现任务
 > 以本文为准;与规格书冲突之处以本文为准(冲突点在 §2 映射表与 §3 决策表中逐条给出
-> 理由)。**本文只做设计,实现按 §H 分期留待后续会话完成**;实现合入前 CLI 不接受这
-> 两个选项。
+> 理由)。`--extract-knowledge` 已按下方 P4 修订并入 `--phases` 的 k(知识提炼)阶段
+> 实现完毕;`--track-fixme` 仍按 §H 分期留待后续会话完成,实现合入前 CLI 不接受该选项。
 
 > **修订(基线变更)**:`--final-review` 的终审任务已强制跳过任务级三段式验收
 > 且不再写 verify 字段(终审不对检验再做检验,报告协议异常由路由时 brokenReport
@@ -12,6 +12,28 @@
 > "verify 结构检查扩展"、§C.3 的 appendFinalTask verify 扩展与 §C.4"报告缺
 > FIXME 行"的自愈路径不再存在;FIXME 协议行缺失/非法统一走路由时 brokenReport
 > 阻塞人工核查,P1..P4 实现时按此基线调整。
+
+> **修订(P4 并入阶段化流程)**:`--extract-knowledge` 已由 `--phases` 的 k(知识
+> 提炼)阶段**整体认领**并实现(docs/phases-design.md D.4/J 节 P4),该 CLI 选项
+> 不再单独存在。§D 在 k 阶段的映射:
+> - 触发挂点(§D.2)→ k 阶段的 plan 路由(PLAN.md 空模板态)直接进入知识提取
+>   旁路会话,不开规划会话、不向 PLAN.md 填任务;人工在 k 阶段自行向 PLAN.md 填
+>   任务时走通用 execute/handover 路由,提取挂点不触发(人工接管语义);
+> - 来源清单(§D.3)改为阶段化产物:阶段台账 `docs/phases.md` 与各阶段归档目录
+>   `docs/phases/<字母>-<名称>/`(handover.md 优先细读,原始产物按其产物索引
+>   取用)——前序原始 docs/ 在交接时已归档,`docs/*.report.md`、`docs/final/`
+>   等原位置不再存在;
+> - 章节骨架中 Design Deviations 改以 AUTO-DECISION 标注为来源(`--track-fixme`
+>   未并入,Final Status 审计字段随其缺席;track-fixme 落地后可回接);
+> - 失败语义(§D.5)不变:提取失败仅 ⚠ 警告、退出码不受影响,k 阶段照常交接;
+> - "知识文档不自动提交"决策随选项废弃:知识文档作为 k 阶段产物随会话统一提交
+>   与交接归档入库(统一提交收回 AI 提交权,git 历史即审计轨迹,人工甄别改为对
+>   已入库文档的后续修订);`--extract-knowledge=<path>` 显式路径随之不存在,
+>   默认路径 `docs/migration-kb/migration-<时间戳>.md` 不变;
+> - 恢复路径:交接前中断 → 幂等跳过已产出文档(目录内存在非空 .md 即视为已
+>   提取);交接完成后重试 → 人工回退规程(删台账 k 行与归档目录后重跑)。
+> §H 分期中该能力的 P3/P4 已按上述映射完成;`--track-fixme` 不受影响,仍按
+> §H P1/P2 待实现。
 
 ## 背景与动机
 
@@ -358,6 +380,9 @@ routeFinal(dir, plan, { limit, trackFixme })
 
 分期边界:P1(纯逻辑,零集成)→ P2(track-fixme 端到端)→ P3(extract-knowledge)
 → P4(文档)。各期独立可合入,合入即按本文档行为生效。
+**修订**:extract-knowledge 侧的 P3/P4(上表 `src/knowledge.ts`、
+`renderKnowledge`、README 修订各行的 P3/P4 部分)已按文首 P4 修订经 k 阶段完成;
+track-fixme 侧的 P1/P2(及共用测试行)仍按上表待实现。
 
 ## I. 风险、边界与已知局限
 

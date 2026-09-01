@@ -200,6 +200,18 @@ export function renderPhaseHandover(input: { phase: Phase; archive: string; next
   })
 }
 
+// k(知识提炼)阶段的知识提取会话(phases-design.md P4,整体认领
+// fixme-knowledge-design.md §D.3): 旁路一次性,通读阶段台账与各阶段归档产物,
+// 蒸馏出最终验证过的迁移知识文档。file 为输出路径(相对目标目录);mode.exec
+// 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
+export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
+  return renderTemplate("knowledge", {
+    file: input.file,
+    modeName: input.mode?.name,
+    modeExec: input.mode && modeText(input.mode.exec, {}),
+  })
+}
+
 // ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 --context-limit
 // 时插入交接提示,会话把进度写入该文件,末行 `状态: 继续|完成` 由 driver 解析。
 export function handoffFile(task: Task): string {

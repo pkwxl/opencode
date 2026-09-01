@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parse } from "../src/plan"
@@ -240,6 +240,8 @@ describe("快照与归档(F 节)", () => {
       // 本阶段新增/改动
       writeFileSync(join(dir, "docs/keep/new.md"), "新")
       writeFileSync(join(dir, "docs/keep/old.md"), "改动后")
+      // 快照按 mtime 判定差异: 显式回拨修改时间,避免与快照同毫秒写入被偶发漏检。
+      utimesSync(join(dir, "docs/keep/old.md"), 1_000, 1_000)
       mkdirSync(join(dir, "docs/analysis"), { recursive: true })
       writeFileSync(join(dir, "docs/analysis/baseline.md"), "行为基线")
       writeFileSync(join(dir, "docs/T-001.report.md"), "任务报告")

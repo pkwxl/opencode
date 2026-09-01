@@ -64,7 +64,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("14 个会话模板与 _partials 齐备", () => {
+  test("15 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "decompose",
@@ -72,6 +72,7 @@ describe("内置模板注册表", () => {
       "final-task",
       "fix",
       "handoff-steer",
+      "knowledge",
       "phase-handover",
       "phase-plan",
       "review",
@@ -124,6 +125,7 @@ describe("内置模板注册表", () => {
       modeExec: "注记",
       emphasis: "侧重",
       prior: "上游",
+      file: "docs/migration-kb/migration-2026_01-01_00-00-00.md",
       phase: "a",
       phaseName: "分析",
       brief: "项目意图",

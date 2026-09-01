@@ -13,6 +13,7 @@ import {
   renderFinalTask,
   renderFix,
   renderHandoffSteer,
+  renderKnowledge,
   renderPhaseHandover,
   renderPhasePlan,
   renderReview,
@@ -561,6 +562,48 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
   })
 })
 
+describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowledge)", () => {
+  const FILE = "docs/migration-kb/migration-2026-01-01_00-00-00.md"
+
+  test("注入输出路径、来源清单与章节骨架;只读分析、唯一可写文件为输出路径", () => {
+    const text = renderKnowledge({ file: FILE })
+    expect(text).toContain(FILE)
+    // 来源指针(阶段台账与各阶段归档目录,前序原始 docs/ 已归档)
+    expect(text).toContain("docs/phases.md")
+    expect(text).toContain("docs/phases/<字母>-<名称>/")
+    expect(text).toContain("handover.md")
+    expect(text).toContain("git log")
+    // 章节骨架(规格书 §13 的本仓库化,Design Deviations 改以 AUTO-DECISION 为来源)
+    for (const section of ["## 迁移概要", "## API 与类型映射", "## 实现模式", "## 坑点与边界情况", "## 可复用规则", "## 设计偏差与重要决策", "## 验证证据", "## 参考"]) {
+      expect(text).toContain(section)
+    }
+    expect(text).toContain("AUTO-DECISION")
+    // 质量约束(规格书 §14)
+    expect(text).toContain("最终状态优先")
+    expect(text).toContain("去重")
+    expect(text).toContain("不照抄会话对话")
+    expect(text).toContain("可验证锚点")
+    expect(text).toContain("已否决")
+    expect(text).toContain("唯一可写的文件是 " + FILE)
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(text).toContain("只提炼、")
+  })
+
+  test("注入 mode.exec 场景背景;不传模式时整块消失", () => {
+    const text = renderKnowledge({ file: FILE, mode: migrate })
+    expect(text).toContain("场景模式注记(migrate)")
+    expect(text).toContain("迁移/升级模式注意事项")
+    expect(renderKnowledge({ file: FILE })).not.toContain("场景模式注记")
+  })
+
+  test("渲染后不残留模板标签", () => {
+    for (const text of [renderKnowledge({ file: FILE }), renderKnowledge({ file: FILE, mode: migrate })]) {
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
 describe("init 产物模板(PLAN.md / agent 契约)", () => {
   test("verify 启用: PLAN.md 含 verify 字段示例与验证执行权原则", async () => {
     const text = renderText(await Bun.file(planTemplate).text(), { verify: true })
@@ -631,6 +674,7 @@ describe("模板渲染完整性", () => {
       renderFinalTask(plan, "audit", 2, "残余差距", migrate),
       renderFinalTask(plan, "finalize", 1, "", undefined),
       renderHandoffSteer(task),
+      renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
       renderDryrun(),
       renderDecompose(plan, solo),
       renderHandoffSteer(solo),
