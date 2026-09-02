@@ -304,7 +304,7 @@ opencode 会话;`--review` 的审核会话此前串行排在整个 verify 之后
 | 会话内恢复 | active 且 ≤30 分钟(RESUME_WINDOW_MS,自最后一次活动起算)且会话在 server 上存在 → 复用原会话;否则新会话;两种情况首个提示词均附"[driver] 中断后的继续"(按 phase 给出下一步指引) |
 | 阶段级重入 | verify 有持久化 run → 跳过脚本重跑直接判定(early 缺 audit 时只补跑审核);off/ondemand 已过执行阶段不重跑 executeWhole;review/planfix 且 fix.md 有效直接注入;verify/review 阶段已标 done 的任务由 loop 置回 in_progress 补跑;decompose 先直读 subtasks.md |
 | 优雅退出 | 非完成结局(阻塞/回退 pending)在 CURRENT.md 写"中断备注"(原因/阶段/恢复方式)并保留文件,记录转总结态(不复用会话);任务完成才删除 CURRENT.md 与记录;网络类 blocked(会话错误重试耗尽)保持 active 记录(会话半途无法总结) |
-| 链内复用间隔 | 复用条件在 pct<50 && used<contextLimit 之上增加"距上一会话结束 ≤5 分钟"(REUSE_IDLE_MS);重启恢复的 30 分钟窗不受此限(复用决策已由该窗做出,chain.at 重置为当前时刻) |
+| 链内复用间隔 | 复用条件在 pct<50 && used<contextLimit/2 之上增加"距上一会话结束 ≤5 分钟"(REUSE_IDLE_MS);重启恢复的 30 分钟窗不受此限(复用决策已由该窗做出,chain.at 重置为当前时刻) |
 | verify 看门狗 | 固定 10 分钟超时废除:轮询(默认 5s)verify.out/verify.err 文件大小,任一增长即重置 idle 计时;持续 `--verify-idle`(缺省 10 分钟,1..120)无增长才 kill(退出码 124,timeoutReason=idle);`--verify-max`(缺省不设,1..1440)为绝对上限兜底(timeoutReason=max)。只要持续有输出,运行时长不受限 |
 | 判定会话写授权 | 判定会话期间临时 allowWrite(PLAN.md)、结束后 reprotect 并校验:解析失败或任务集合/状态/attempts/正文任一变化 → 恢复会话前快照并警告(越权编辑整体还原);提示词授权**仅更新后续未完成(pending/blocked)任务的 verify 字段**(保持 `command: ` 单行格式),当前脚本无通病时不做任何修改;CURRENT.md 不放开(纯镜像,写了会被覆盖) |
 | 原则块措辞 | AGENTS.md 验证原则块(init 追加)补充判定会话 verify 字段授权例外;STATE_RULE 对判定会话改为 judge 专属表述 |

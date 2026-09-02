@@ -86,7 +86,7 @@ async function afterSession(
 }
 
 // --subtask 三档: off(单会话完成)/ auto(自动分解,缺省)/ ondemand(单会话执行,
-// 上下文达到 --context-limit 时交接文档 + 新会话续跑)。
+// 上下文达到 2x --context-limit 时交接文档 + 新会话续跑)。
 export type SubtaskMode = "off" | "auto" | "ondemand"
 
 // --permission 四档: 权限请求(permission.asked)的处理策略,缺省 ask-deny。
@@ -113,7 +113,8 @@ export type Opts = {
   verify?: boolean
   // dryrun 会话: 权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复。
   dryrun?: boolean
-  // 会话复用的上下文已用量上限(tokens);缺省 64k(--context-limit n 以千 tokens 计)。
+  // 上下文预算基线(tokens);缺省 64k(--context-limit n 以千 tokens 计):会话
+  // 复用的已用量阈值为其一半,ondemand 交接 steer 阈值为其 2 倍。
   contextLimit?: number
   // --review 质量审核轮数上限(0=不启用);终审任务(final 字段)被强制置 0
   // (见 pipeline),终审任务生成会话(src/final.ts)不受影响。
@@ -167,8 +168,8 @@ type Watch = {
 type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } | (Outcome & { type: "blocked" })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 上一会话结束时上下文
-// 占比低于 REUSE_BELOW、已用量低于 contextLimit、且距其结束不超过 REUSE_IDLE_MS
-// 时,下次复用同一会话,否则新建。初始 pct=100 保证首个会话新建;模型上限未知时
+// 占比低于 REUSE_BELOW、已用量低于 contextLimit 的一半、且距其结束不超过
+// REUSE_IDLE_MS 时,下次复用同一会话,否则新建。初始 pct=100 保证首个会话新建;模型上限未知时
 // watch 记 100,即总是新建。phase 携带当前流水线阶段: 执行链会话据此写进度恢复
 // 记录(.auto/progress.json);旁路一次性会话(requireArtifact)的链不带 phase、
 // 不写记录,避免污染执行链记忆。note 为一次性附加说明(中断恢复时随首个提示词
@@ -183,7 +184,8 @@ const REUSE_BELOW = 50
 const REUSE_IDLE_MS = 5 * 60 * 1000
 const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000
 
-// 会话复用的上下文已用量默认上限(tokens);--context-limit n 以千 tokens 覆盖。
+// 上下文预算默认基线(tokens);--context-limit n 以千 tokens 覆盖。会话复用阈值
+// 为其一半、ondemand 交接阈值为其 2 倍。
 const DEFAULT_CONTEXT_LIMIT = 64_000
 
 // Runs one task through the pipeline; the driver owns all state
@@ -194,7 +196,7 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // sends the task back to pending for a human to refine and re-run (no fix
 // subtasks).
 // --subtask ondemand: like off, but when the running session's context usage
-// reaches --context-limit the driver steers in a handoff prompt; the session
+// reaches 2x --context-limit the driver steers in a handoff prompt; the session
 // writes docs/<id>.handoff.md and a fresh session continues from it.
 // The execution phase (decompose / whole-task session) runs only on the first
 // round; every round then is: subtask sessions for the unticked checklist →
@@ -226,7 +228,7 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // block (exit code 2, human check).
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW, its used
-// tokens below contextLimit (default 64k) and it went idle within
+// tokens below 50% of contextLimit (default 32k) and it went idle within
 // REUSE_IDLE_MS (default 5 minutes), otherwise a fresh session is created.
 // CURRENT.md lives while the task is interrupted or running: it is
 // (re)created before the first session — an interrupted run may have left it
@@ -486,7 +488,7 @@ export async function runTask(
 }
 
 // off/ondemand 的执行阶段: off 单会话完成整个任务;ondemand 会话进行中上下文
-// 达到 --context-limit 时由 driver steer 交接提示,会话写出交接文档后换新会话
+// 达到 2x --context-limit 时由 driver steer 交接提示,会话写出交接文档后换新会话
 // 续跑,直到自然完成或交接文档标记完成。返回 undefined 表示执行阶段完成。
 // 上次尝试遗留交接文档的清理由调用方(pipeline)在做恢复判定后进行。
 async function executeWhole(
@@ -499,7 +501,7 @@ async function executeWhole(
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const file = join(dirname(plan.path), handoffFile(task))
-  const steer = ondemand ? { limit: cap, text: renderHandoffSteer(task) } : undefined
+  const steer = ondemand ? { limit: cap * 2, text: renderHandoffSteer(task) } : undefined
   let continuation = false
   let feedback = ""
   let retried = false
@@ -515,12 +517,12 @@ async function executeWhole(
     )
     if (result.type === "blocked") return result
     await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject: `${task.id} ${task.title}: 执行` })
-    // 未触发上下文上限即结束 = 任务在单会话内自然完成。
-    if (!ondemand || chain.used < cap) return undefined
+    // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成。
+    if (!ondemand || chain.used < cap * 2) return undefined
     const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
     if (status === "完成") return undefined
     if (status === "继续") {
-      log(`↻ ${task.id} 上下文达到 ${formatTokens(cap)} 上限,已交接 ${handoffFile(task)},新会话继续`)
+      log(`↻ ${task.id} 上下文达到 ${formatTokens(cap * 2)} 上限,已交接 ${handoffFile(task)},新会话继续`)
       continuation = true
       feedback = ""
       continue
@@ -1120,7 +1122,7 @@ type Steer = { limit: number; text: string }
 // 跨运行持续): tmp 为目标目录下 driver 工作目录(tmp/);seq 为按序归档编号
 // (初始化时扫描既有 tmp/test.<n>.sh 取最大值,历史全量保留不覆盖);handoffFile
 // 为 --handover-test 交接文档绝对路径;handover 开关;limit 为上下文已用量上限
-// (config.contextLimit,与 ondemand steer 同源);last 为最近一次执行信息
+// (config.contextLimit 原值;ondemand 的交接 steer 用其 2 倍);last 为最近一次执行信息
 // (continuation 提示引用其输出路径)。
 type TestRun = {
   dir: string
@@ -1236,10 +1238,10 @@ async function attempt(
   // 测试执行协议: 清除上一会话/上次运行遗留的待执行脚本(存在即请求,中断
   // 恢复或重试场景下的旧请求不应注入本会话;归档历史 tmp/test.<n>.sh 保留)。
   if (test) await rm(join(test.tmp, "test.sh"), { force: true })
-  // 上一会话上下文占比低于 50%、已用量低于 contextLimit(默认 64k tokens)、且距
-  // 其结束不超过 REUSE_IDLE_MS(默认 5 分钟)则复用同一会话继续,否则新建。
+  // 上一会话上下文占比低于 50%、已用量低于 contextLimit 的一半(默认 32k tokens)、
+  // 且距其结束不超过 REUSE_IDLE_MS(默认 5 分钟)则复用同一会话继续,否则新建。
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW && chain.used < cap && Date.now() - chain.at <= REUSE_IDLE_MS
+  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW && chain.used < cap / 2 && Date.now() - chain.at <= REUSE_IDLE_MS
   if (reuse) {
     log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens,${Math.round((Date.now() - chain.at) / 1000)} 秒前结束)`)
   }
@@ -1247,8 +1249,8 @@ async function attempt(
     const reason =
       chain.pct >= REUSE_BELOW
         ? `上下文占比 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值`
-        : chain.used >= cap
-          ? `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap)} 上限`
+        : chain.used >= cap / 2
+          ? `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap / 2)} 上限(复用阈值)`
           : `距上一会话结束已超过 ${REUSE_IDLE_MINUTES} 分钟(上下文已陈旧)`
     log(`▷ ${reason},开启新会话`)
   }

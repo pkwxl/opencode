@@ -143,7 +143,7 @@ export async function runAll(
     subtask?: SubtaskMode
     // dryrun: 只跑一次权限预检会话并输出报告,不执行任何任务。
     dryrun?: boolean
-    // 会话复用的上下文已用量上限(tokens),缺省由 runner 按 64k 处理。
+    // 上下文预算基线(tokens;会话复用的已用量阈值为其一半),缺省由 runner 按 64k 处理。
     contextLimit?: number
     // --review 质量审核轮数上限(0 = 不启用),透传给 runTask。
     review?: number

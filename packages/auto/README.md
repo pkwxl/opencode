@@ -63,7 +63,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 | --- | --- | --- | --- |
 | `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
 | `agent` | 非空字符串 | `auto` | 执行会话使用的 agent(`init` 生成的契约 agent),存在性由 run 前完整性检查兜底,见[agent 选择](#opencode-server-与-agent-选择) |
-| `contextLimit` | 正整数(千 tokens) | `64` | 会话复用的上下文已用量上限;`subtask` 为 `ondemand` 时同时是交接阈值 |
+| `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
 | `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线) |
 | `verify` | `true` / `false` | `false` | 任务级三段式验收(未启用时任务收尾后直接标 done,不写 `verified` 字段) |
 | `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(verify 与 test)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取 |
@@ -121,12 +121,12 @@ SHA),git 历史即 AI 变更的审计轨迹、回滚粒度 = 会话;AI 会话不
 | `--phases <admtvk 子序列含 m>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);台账非空时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工修订台账。见[阶段化流程](#阶段化流程--phases) |
 | `--source-dir <dir> --source-path <相对路径>` | 迁移源参数,写入配置的 `source` 键;两参数必须成对给出、`dir` 须为工作目录下的相对路径(不含 `..`,迁移源位于 `<工作目录>/<dir>`)、`path` 须为相对 `dir` 的相对路径(不含 `..`),init 时校验 `<工作目录>/<dir>/<path>` 存在(环境错误退出码 1);任一给出即整体覆盖既有 `source`。`dir` 接受软链接——存在性校验跟随链接解析,可把源系统大树留在工作目录外、在工作目录内以链接接入 |
 | `--dest-dir <相对路径>` | 迁移目标目录,写入配置的 `destDir` 键(相对工作目录、不含 `..`,可独立于 source 修订);driver 工作目录的流程文件与迁移产出的代码经它隔离——规划会话据此把代码任务指向 `<工作目录>/<dest-dir>`;不校验存在性(目标目录常由迁移过程创建) |
-| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到上限时交接续跑。见[执行流水线](#执行流水线) |
+| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
 | `--verify [true]` | 任务级三段式验收开关,写入配置(缺省/裸选项 `false`);启用时收尾后由 driver 亲自执行 verify 脚本、旁路独立判定会话判定,见[执行流水线](#执行流水线)。该开关同时决定验收描述是否进入 init 产物:未启用时 AGENTS.md 不含验证原则块、PLAN.md 模板与 agent 契约不含 verify 相关描述(已存在的 AGENTS.md 验证原则块会在 init/run 时移除);`phases` 含 `v` 而该开关未启用时 init 会打 note 提示(v 阶段任务自身即检验、不受影响) |
 | `--idle-time [1-120]` | driver 托管脚本的无进度判定窗口(分钟,缺省/裸选项 10;旧名 `--verify-idle` 已更名,出现即报错指引):driver 轮询两个输出文件(`tmp/verify.out` / `tmp/verify.err` 或 `tmp/test.<n>.out` / `test.<n>.err`)的大小,持续无任何增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
 | `--idle-max [1-1440]` | driver 托管脚本的绝对运行时长上限(分钟,缺省/裸选项不设;旧名 `--verify-max` 已更名):兜底防止脚本无限循环输出;设为正整数时无论是否有输出,总时长超限即终止 |
 | `--commit [true]` | 会话后统一提交开关,写入配置(缺省/裸选项 `true`;`none` 为 `false` 别名);`false` 关闭后改动留在工作区由人工提交 |
-| `--context-limit [n]` | 会话复用的上下文已用量上限(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到该上限即新建会话,与 50% 占比阈值同时生效 |
+| `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
 
 以上写入配置的选项均为"显式给出的键才被改写"的 amend 语义;`-p` 的 brief.md 同为
 整写覆盖(amend 语义),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
@@ -233,7 +233,7 @@ driver 对每个任务执行流水线,**PLAN.md 与 CURRENT.md 只由 driver 写
    `docs/T-NNN.subtasks.md`(Markdown 检查项);driver 解析后把检查项注入
    PLAN.md 正文。未产出有效文件会自动带反馈重试一次,仍失败则阻塞。
 2. **逐子任务执行**:任务内所有执行会话(分解/子任务/修复/收尾)串成一条链,
-   上一会话结束时上下文占比低于 50%、已用量低于配置的 `contextLimit`(默认 64k
+   上一会话结束时上下文占比低于 50%、已用量低于配置的 `contextLimit` 的一半(默认 32k
    tokens)且距其结束**不超过 5 分钟**则下一个会话复用它,否则新建(占比与用量
    始终跟踪,与 `--verbose` 无关;拿不到模型上下文上限时占比记 100,一律新建;
    verify 脚本执行与判定/审核等旁路会话可能耗时较久,超过 5 分钟即视为上下文
@@ -247,7 +247,7 @@ driver 对每个任务执行流水线,**PLAN.md 与 CURRENT.md 只由 driver 写
 `pending` 并以退出码 2 停机,由人工改进 PLAN.md 后重新运行。
 
 `subtask: ondemand`(按需交接):先按单会话执行;会话进行中上下文已用量达到
-配置的 `contextLimit` 时,driver 向该会话插入交接提示,AI 把进度与后续步骤写入
+配置的 `contextLimit` 的 2 倍时,driver 向该会话插入交接提示,AI 把进度与后续步骤写入
 `docs/T-NNN.handoff.md`(末行 `状态: 继续|完成`)后结束,driver 开新会话从交接
 文档续跑,直到任务完成。验收差距仍按公共部分的修复机制处理。
 

@@ -274,13 +274,13 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
   })
 }
 
-// ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 --context-limit
+// ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 2x --context-limit
 // 时插入交接提示,会话把进度写入该文件,末行 `状态: 继续|完成` 由 driver 解析。
 export function handoffFile(task: Task): string {
   return `docs/${task.id}.handoff.md`
 }
 
-// ondemand 模式: driver 在会话进行中(上下文达到上限时)插入的交接提示。
+// ondemand 模式: driver 在会话进行中(上下文达到交接阈值,2x contextLimit)插入的交接提示。
 // v2 prompt 默认 steer,在下一个 provider turn 边界进入会话。
 export function renderHandoffSteer(task: Task): string {
   return renderTemplate("handoff-steer", { handoffFile: handoffFile(task) })
