@@ -230,7 +230,7 @@ export async function generateFinalTask(
     artifact: `有效提案文件 ${file}`,
     detail: "缺失、无标题或无正文",
     requirement: `必须把自包含的任务提案写入 ${file}(首行 \`# <任务标题>\`,正文);即使认为该阶段无事可做,也要写出文件并在正文说明原因。`,
-    commit: { stage: "final-plan", subject: `终审任务规划(${stageText(stage)} 第 ${round} 轮)` },
+    commit: { stage: "final-plan", subject: `PLAN final-plan ${stage}@${round}` },
     reset: () => rm(join(dir, file), { force: true }),
     collect: async () => parseProposal(await readReport(dir, file)),
   })

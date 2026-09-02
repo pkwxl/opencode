@@ -54,7 +54,7 @@ export async function extractKnowledge(
       artifact: `非空知识文档 ${file}`,
       detail: "缺失或为空",
       requirement: `必须把知识文档写入 ${file}(按提示词给出的章节骨架写全;信息稀少也要写出骨架并说明原因)。`,
-      commit: { stage: "knowledge", subject: "k 知识提炼: 迁移知识沉淀" },
+      commit: { stage: "knowledge", subject: "PLAN knowledge 迁移知识沉淀" },
       reset: () => rm(join(dir, file), { force: true }),
       collect: async () => {
         const text = await Bun.file(join(dir, file)).text().catch(() => "")

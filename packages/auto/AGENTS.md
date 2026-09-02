@@ -21,7 +21,7 @@
 - `src/mode.ts` — `-m/--mode` 模式层,模式以文件模板管理:内置 `templates/modes/<name>.md`(编译期嵌入),目标目录 `.opencode/auto/modes/<name>.md` 可新增或覆盖(新增模式零源码改动);`parseModeFile` 解析协议(首行 `# <name>` 须与文件名一致、五节齐备: init/exec/final: audit|validate|finalize,缺节/未知节/空节报错),`loadModes(dir?)` 合并内置与目标目录(文件名须匹配 `^[a-z][a-z0-9-]*$`);ModeSpec 三段文案注入阶段规划会话(init 导语经 renderPhasePlan 的 modeInit 变量,P2 已接线)、执行类模板与 renderFinalTask。模式持久化经 src/config.ts 的 mode 键(旧 readPersistedMode/writePersistedMode 已随 .auto/config.json 职责并入 config.ts 删除)。
 - `src/knowledge.ts` — k(知识提炼)阶段的知识提取编排(phases-design.md P4/D.4,整体认领 fixme-knowledge-design.md 的 --extract-knowledge):knowledgeFile 默认输出路径 docs/migration-kb/migration-<时间戳>.md(时间戳与 run 日志同款)、existingKnowledge 幂等检查(目录内存在非空 .md 即视为已提取)、extractKnowledge(requireArtifact 骨架,伪任务 PLAN,collect 从宽 = 文件存在且非空,提交 stage=knowledge);失败返回 failed 由 loop 打 ⚠ 警告、不污染退出码。
 - `src/final.ts` — `--final-review` 终审闭环状态机(设计文档 B/C 节,纯路由函数、无新增持久化状态):finalProposalFile/finalReportFile 产物路径(docs/final/ 下提案与各阶段报告);parseStrategy/parseConclusion 解析报告末行协议(策略: 重构|修补|无;结论: 通过|差距 <描述>),parseProposal 解析提案文件;routeFinal 由(带 final 标记的任务及其状态,docs/final/ 产物)推导路由并含幂等重建 C.1..C.5(未完成终审任务不生成新任务、下一阶段任务已存在不重复生成、提案已产出未追加直接解析追加、done 但报告缺失/协议非法按阻塞提示人工核查、final 字段非法 block);appendFinalTask(T-F<k> 按追加顺序编号、final: <stage>@<round> 字段、不写 verify 字段——终审任务强制跳过任务级验收,提案 verify 行兼容剥离、一律忽略);generateFinalTask 经 runner 的 requireArtifact 骨架开旁路生成会话产出提案。
-- `src/git.ts` — driver 统一提交机制:收回 AI 会话的提交权,任何会话结束后由 driver 经 commitTree 递归提交全部改动(repoRoots 发现目标目录所在仓库与全部嵌套 .git 子仓库,深度优先先子后父);提交信息 = 中文标题行(任务编号 + 阶段/子任务描述,子任务条目省略任务标题,超 100 字截断)+ 机器可读 trailer(Auto-Task/Auto-Stage,目标仓库另记 Auto-Nested 嵌套仓库路径与 SHA);无改动的仓库跳过、非 git 环境整体跳过;单仓库失败仅警告不阻塞(下一次提交全量 add 清扫连带);仓库未配置 user.email 时以固定身份兜底;pendingChanges 供 loop 启动时检测遗留未提交改动并提示。
+- `src/git.ts` — driver 统一提交机制:收回 AI 会话的提交权,任何会话结束后由 driver 经 commitTree 递归提交全部改动(repoRoots 发现目标目录所在仓库与全部嵌套 .git 子仓库,深度优先先子后父);提交信息 = 短标签标题行(`T-NNN <label> <任务标题/子任务描述>`,label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/pending/blocked/done、伪任务用 PLAN <label>,超 100 字截断),会话标题与提交标题共用同一方案(见 runner.ts renameSession)+ 机器可读 trailer(Auto-Task/Auto-Stage,目标仓库另记 Auto-Nested 嵌套仓库路径与 SHA);无改动的仓库跳过、非 git 环境整体跳过;单仓库失败仅警告不阻塞(下一次提交全量 add 清扫连带);仓库未配置 user.email 时以固定身份兜底;pendingChanges 供 loop 启动时检测遗留未提交改动并提示。
 - `src/check.ts` — `check` 命令逻辑:启发式扫描目标目录 AGENTS.md 与 PLAN.md 中要求会话亲自运行验证脚本/命令、或要求会话执行 git 提交的语句(否定句、driver 归属句、PLAN 字段行与 opencode-auto 标记块不算),返回 findings(file/task/line/text)与 notes(缺验证/提交原则块提示、AGENTS.md 超 150 行的精简提示——note 不进 findings、不影响退出码);验证类扫描与缺验证原则块提示以 config.verify 启用为前提(未启用时配置非法也按未启用处理并给 note),提交类始终进行;命中退出码 1。
 - `src/verify.ts` — verify 脚本机制层(纯逻辑,不依赖 SDK 与 runner):verifyTmpDir(目标目录下 `tmp/` 子目录,工作目录内可直接读,避免 /tmp 权限问题;loop 的 ensureGitignore 保证不进仓库)、resolveVerifyScript(依 verifyCommand 判定 existing/wrapped/generate 三支)、runVerifyScript(cwd=目标目录执行,stdout/stderr 整写输出文件——缺省 tmp/verify.out 与 verify.err,opts.out/err 可指定绝对路径供 --test-by-driver 的 test.<n>.out/err 按序归档共用;进度看门狗——轮询两个输出文件的大小,任一增长即重置计时,持续 idleTime(缺省 10 分钟)无增长才 kill、退出码记 124 且 timeoutReason=idle,idleMax(缺省不设)为绝对上限兜底且 timeoutReason=max)。
 - `src/protect.ts` — 状态文件只读保护:`run` 期间 PLAN.md/CURRENT.md/opencode.json
@@ -143,8 +143,10 @@
 - 统一提交(收回 AI 提交权):任何会话结束且 driver 完成状态写入后,由 driver 经
   src/git.ts 的 commitTree 递归提交全部改动(先嵌套 .git 子仓库、后目标目录所在
   仓库,路径发现不依赖 git status——嵌套仓库通常被父仓库忽略),git 历史即 AI
-  变更的审计轨迹、回滚粒度 = 会话。提交信息 = `任务编号 [任务标题]: 阶段` 标题行
-  (子任务条目为 `任务编号: 子任务 <n> <标题>`、省略任务标题)+ `Auto-Task`/
+  变更的审计轨迹、回滚粒度 = 会话。提交信息 = `任务编号 <label> <任务标题/子任务>` 短标签
+  标题行(label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/
+  blocked/pending/done,伪任务用 PLAN <label>;子任务条目为 `任务编号 S<n> <标题>`、
+  省略任务标题)+ `Auto-Task`/
   `Auto-Stage` trailer(目标仓库另记 `Auto-Nested` 嵌套仓库路径与 SHA)。挂点:
   分解注入/子任务勾选/整任务/修复轮/收尾在状态写入后,判定/审核/脚本生成/
   修复规划/终审规划等旁路会话在会话结束后,任务完成/阻塞/回退 pending 由 loop
@@ -292,11 +294,14 @@
 - 任务流水线(auto 模式):正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,
   driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md
   (只写产出摘要,不运行任务级 verify、不下验收结论)。
-  任务内所有会话共用一条链:上一会话结束时上下文占比低于 50%、已用量低于
-  配置 contextLimit 的一半(默认 32k tokens)且距其结束不超过 5 分钟(REUSE_IDLE_MS)则
-  复用,否则新建(verify 脚本执行与判定/审核等耗时较久后自动换新会话);占比
-  与用量由 watch 始终跟踪(与 --verbose 无关),拿不到模型上限时占比记 100 即
-  总是新建;瞬时会话错误重试仍强制换新会话。
+   任务内所有会话共用一条链:上一会话结束时上下文占比低于 50%、已用量低于
+   配置 contextLimit 的一半(默认 32k tokens)且距其结束不超过 5 分钟(REUSE_IDLE_MS)则
+   复用,否则新建(verify 脚本执行与判定/审核等耗时较久后自动换新会话);占比
+   与用量由 watch 始终跟踪(与 --verbose 无关),拿不到模型上限时占比记 100 即
+   总是新建;瞬时会话错误重试仍强制换新会话。会话标题与提交标题共用同一短标签
+   方案且全部显式命名(不依赖服务端自动起题):新建会话以本阶段提交标题命名,
+   复用会话跨阶段在结束时改名(renameSession),任务终态再改名为
+   `T-NNN done|blocked|pending <标题>`——标题前缀即该会话的最新进度。
 - CURRENT.md 是当前任务镜像(每会话必读,抗上下文压缩):任务开始(首个会话前)
   写入、每次勾选后刷新、任务完成时删除;非完成结局(阻塞/回退 pending)写"中断
   备注"(退出原因/中断阶段/恢复方式)后保留,供人工查看与下次恢复(下次 runTask

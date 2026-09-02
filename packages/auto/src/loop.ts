@@ -414,14 +414,14 @@ export async function runAll(
           log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
           // 中断现场也提交: 保存断点(阻塞问题、CURRENT.md 中断备注),支持回滚到断点。
           if (opts.commit !== false) {
-            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(阻塞)` })
+            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
           }
           return 2
         }
         if (outcome.type === "incomplete") {
           log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
           if (opts.commit !== false) {
-            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} ${task.title}: 中断(回退 pending)` })
+            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
           }
           return 2
         }
@@ -431,7 +431,7 @@ export async function runAll(
         // 一并落账(各会话产出已随会话提交,这里是收口);终审路由追加的下一任务
         // 改动归入其生成/执行会话的提交。
         if (opts.commit !== false) {
-          await commitTree(directory, task, { stage: "done", subject: `${task.id} ${task.title}: 完成` })
+          await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
         }
         // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
         // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
@@ -509,7 +509,7 @@ export async function runAll(
             requirement:
               "必须直接编辑 PLAN.md,把本阶段任务按 `## T-NNN: <任务标题> [pending]` 格式写入" +
               "(至少一个;即使认为本阶段无事可做,也要写入一个说明性任务并在正文说明原因)。",
-            commit: { stage: "phase-plan", subject: `阶段规划: ${phase} ${phaseText(phase)}` },
+            commit: { stage: "phase-plan", subject: `PLAN plan ${phase} ${phaseText(phase)}` },
             reset: async () => {
               await Bun.write(path, renderPlanScaffold(opts.verify === true))
             },
@@ -567,7 +567,7 @@ export async function runAll(
           requirement:
             `必须把交接文档写入 ${phaseArchive(phase)}/handover.md,并包含标题逐字为` +
             "「## 关键决策」「## 约束与坑」「## 下一阶段必读清单」「## 产物索引」的四个小节。",
-          commit: { stage: "phase-handover", subject: `阶段交接蒸馏: ${phase} ${phaseText(phase)}` },
+          commit: { stage: "phase-handover", subject: `PLAN handover ${phase} ${phaseText(phase)}` },
           reset: () => rm(handoverFile, { force: true }),
           collect: async () => {
             const text = await Bun.file(handoverFile).text().catch(() => "")
@@ -596,7 +596,7 @@ export async function runAll(
       if (opts.commit !== false) {
         await commitTree(directory, { id: "PLAN", title: `阶段交接(${phase} ${phaseText(phase)})` }, {
           stage: "phase-transition",
-          subject: `阶段交接: ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
+          subject: `PLAN transition ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
         })
       }
       return 0
@@ -633,7 +633,7 @@ export async function runAll(
             if (opts.commit !== false) {
               await commitTree(directory, { id: "PLAN", title: `阶段交接(${route.phase} ${phaseText(route.phase)})` }, {
                 stage: "phase-transition",
-                subject: `阶段交接: ${route.phase} ${phaseText(route.phase)}(中断恢复补账)`,
+                subject: `PLAN transition ${route.phase} ${phaseText(route.phase)}(中断恢复补账)`,
               })
             }
             continue

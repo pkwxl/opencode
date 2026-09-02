@@ -3,7 +3,7 @@ import { mkdir, readdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
-import { commitTree } from "./git"
+import { commitTitle, commitTree } from "./git"
 import { autobanner, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import {
@@ -173,8 +173,10 @@ type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } 
 // watch 记 100,即总是新建。phase 携带当前流水线阶段: 执行链会话据此写进度恢复
 // 记录(.auto/progress.json);旁路一次性会话(requireArtifact)的链不带 phase、
 // 不写记录,避免污染执行链记忆。note 为一次性附加说明(中断恢复时随首个提示词
-// 带给 AI,用后即清)。
-type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase }
+// 带给 AI,用后即清)。subject 为本会话产出的提交标题(短标签方案): 新建会话
+// 以它显式命名,复用会话跨阶段在结束时改名(见 renameSession),使会话列表
+// 与 git 历史、任务进度对齐。
+type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string }
 
 // 上下文占比低于该值(%)时复用上一会话。
 const REUSE_BELOW = 50
@@ -302,6 +304,8 @@ export async function runTask(
   }
   const outcome = await pipeline(recalled?.phase)
   if (outcome.type === "completed") {
+    // 终态改名: 链上最后一个会话标题指向 done 标签(与 loop 的终态提交同题)。
+    await renameSession(client, chain, `${task.id} done ${task.title}`)
     await removeCurrent(plan.path)
     await forgetProgress(dir)
     return outcome
@@ -310,8 +314,9 @@ export async function runTask(
   // 供人工查看与下次恢复(下次 runTask 重建镜像时,备注要点经恢复提示词带给 AI)。
   // 会话错误类(网络重试耗尽)保持 active 记录走 30 分钟窗复用(会话半途无法总结);
   // 其余清除复用资格(进度已总结,人工介入可能耗时且改动环境,旧会话上下文不可信),
-  // 阶段信息保留供精确重入。
+  // 阶段信息保留供精确重入。会话标题同步改名为中断状态(与 loop 边界提交同题)。
   task = requireTask(await load(plan.path), task.id)
+  await renameSession(client, chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
   await writeCurrent(plan.path, task, mode !== "auto", interruptionRemark(outcome, chain.phase))
   if (!(outcome.type === "blocked" && outcome.question.startsWith("会话错误:"))) {
     await persistStage(chain.phase ?? (mode === "auto" ? { kind: "decompose" } : { kind: "whole" }))
@@ -420,9 +425,11 @@ export async function runTask(
         if (!skipWrapup) {
           await persistStage({ kind: "wrapup" })
           autobanner(`${task.id} ${task.title}: 收尾`)
+          const subject = `${task.id} wrapup ${task.title}`
+          chain.subject = subject
           const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
           if (result.type === "blocked") return result
-          await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
+          await afterSession(dir, opts, task, { stage: "wrapup", subject })
         }
         skipWrapup = false
         let auditFromVerify: Verdict | undefined
@@ -503,6 +510,8 @@ async function executeWhole(
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const file = join(dirname(plan.path), handoffFile(task))
   const steer = ondemand ? { limit: cap * 2, text: renderHandoffSteer(task) } : undefined
+  const subject = `${task.id} exec ${task.title}`
+  chain.subject = subject
   let continuation = false
   let feedback = ""
   let retried = false
@@ -517,7 +526,7 @@ async function executeWhole(
       steer,
     )
     if (result.type === "blocked") return result
-    await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject: `${task.id} ${task.title}: 执行` })
+    await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject })
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成。
     if (!ondemand || chain.used < cap * 2) return undefined
     const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
@@ -707,13 +716,15 @@ async function ensureDecomposed(
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the file; the file is a hard requirement.
   autobanner(`${task.id} ${task.title}: 子任务分解`)
+  const subject = `${task.id} decompose ${task.title}`
+  chain.subject = subject
   for (let i = 0; ; i++) {
     const result = await runSession(client, task, renderDecompose(plan, task, opts) + feedback, opts, chain)
     if (result.type === "blocked") return result
     const items = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
     if (items.length) {
       await setSubtasks(plan.path, task.id, items)
-      await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject: `${task.id} ${task.title}: 子任务分解` })
+      await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject })
       return { type: "ok", task: requireTask(await load(plan.path), task.id) }
     }
     if (i === 1) {
@@ -745,11 +756,13 @@ async function runSubtask(
   chain: SessionChain,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
+  const subject = `${task.id} S${index} ${text}`
+  chain.subject = subject
   const result = await runExecSession(client, plan, task, renderSubtask(plan, task, text, opts), opts, chain)
   if (result.type === "blocked") return result
   await tick(plan.path, task.id, text)
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
-  await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: `subtask ${index}`, subject: `${task.id}: 子任务 ${index} ${text}` })
+  await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: `subtask ${index}`, subject })
   log(`  ✓ ${text.slice(0, 60)}`)
   return undefined
 }
@@ -842,13 +855,17 @@ async function verifyTask(
     }
     // 把判定会话的差距信息反馈回执行会话链,续跑修复后重新收尾与验收。
     log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
+    const fixSubject = `${task.id} fix${round} ${task.title}`
+    chain.subject = fixSubject
     const fixed = await runExecSession(client, plan, task, renderFix(plan, task, verdict.gap, opts), opts, chain)
     if (fixed.type === "blocked") return fixed
-    await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: `${task.id} ${task.title}: 验收差距修复(轮 ${round})` })
+    await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
     autobanner(`${task.id} ${task.title}: 收尾`)
+    const wrapSubject = `${task.id} wrapup ${task.title}`
+    chain.subject = wrapSubject
     const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
     if (wrapped.type === "blocked") return wrapped
-    await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
+    await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
   }
 }
 
@@ -945,7 +962,7 @@ async function judge(
       artifact: `有效判定文件 ${VERDICT_FILE}`,
       detail: "缺失或无结论行",
       requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 driver 重新执行)。",
-      commit: { stage: "verify-judge", subject: `${task.id} ${task.title}: 验收判定` },
+      commit: { stage: "verify-judge", subject: `${task.id} judge ${task.title}` },
       reset: () => rm(file, { force: true }),
       collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
     })
@@ -987,7 +1004,7 @@ async function generateScript(
     kind: "脚本生成",
     artifact: script,
     requirement: "必须把可执行脚本写到该路径并 chmod +x。",
-    commit: { stage: "verify-script", subject: `${task.id} ${task.title}: 验收脚本生成` },
+    commit: { stage: "verify-script", subject: `${task.id} script ${task.title}` },
     collect: async () => (await Bun.file(script).exists()) || undefined,
   })
   if (produced !== true) return produced
@@ -1019,7 +1036,7 @@ async function reviewTask(
     artifact: `有效结论文件 ${REVIEW_FILE}`,
     detail: "缺失或无结论行",
     requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过` 或 `结论: 差距 <描述>`。",
-    commit: { stage: "review", subject: `${task.id} ${task.title}: 质量审核${early ? "(与 verify 并行)" : ""}${final ? "(全计划)" : ""}` },
+    commit: { stage: "review", subject: final ? `${task.id} final ${task.title}` : `${task.id} review ${task.title}` },
     reset: () => rm(file, { force: true }),
     collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),
   })
@@ -1041,7 +1058,7 @@ async function planReviewFix(
     artifact: `有效修复检查项文件 docs/${task.id}.fix.md`,
     detail: "缺失或无检查项",
     requirement: "必须把修复检查项写入该文件(每条差距至少一项)。",
-    commit: { stage: "review-fix", subject: `${task.id} ${task.title}: 审核修复规划` },
+    commit: { stage: "review-fix", subject: `${task.id} planfix ${task.title}` },
     reset: () => rm(file, { force: true }),
     collect: async () => {
       const items = subtasks(await Bun.file(file).text().catch(() => ""))
@@ -1083,8 +1100,9 @@ export async function requireArtifact<T>(
   let feedback = ""
   for (let i = 0; ; i++) {
     await spec.reset?.()
-    // 旁路一次性会话: 链上不携带阶段(phase),不写进度恢复记录。
-    const result = await runSession(client, task, promptText + feedback, opts, { pct: 100, used: 0, at: 0 })
+    // 旁路一次性会话: 链上不携带阶段(phase),不写进度恢复记录;subject 使新建
+    // 会话同样以提交标题显式命名。
+    const result = await runSession(client, task, promptText + feedback, opts, { pct: 100, used: 0, at: 0, subject: spec.commit?.subject })
     if (result.type === "blocked") return result
     if (spec.commit) await afterSession(opts.dir, opts, task, spec.commit)
     const value = await spec.collect()
@@ -1262,7 +1280,9 @@ async function attempt(
   // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
   // system context(AGENTS.md 每个 provider turn 现场重读,重启兜底缓存场景)。
   if (!reuse) await opts.server?.syncAgents()
-  const session = reuse ? undefined : await client.session.create({ title: `[auto] ${task.id} ${task.title}` })
+  // 显式标题: 新建会话直接以本阶段提交标题命名(短标签,如 `T-001 S2 编写 schema`),
+  // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`。
+  const session = reuse ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
   if (session?.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
   const sessionID = session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
@@ -1295,12 +1315,27 @@ async function attempt(
   chain.pct = result.pct
   chain.used = result.used
   chain.at = Date.now()
+  // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
+  // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
+  // 新建会话已在创建时命名,无需重复。
+  if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
   // 会话结束但阶段尚未推进: 刷新记录时间(30 分钟窗从最后一次活动起算)并保持
   // active——此刻中断按"半途未总结"复用本会话继续。
   await remember()
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
   return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
+}
+
+// 会话进度改名: 会话标题与提交标题共用同一短标签方案(`T-NNN <label> <标题/子任务>`,
+// label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/pending/
+// blocked/done 等),会话结束与任务终态时把链上会话改名为最新标签,标题前缀即任务
+// 进度;改名失败仅记录明细,不影响流程。
+async function renameSession(client: OpencodeClient, chain: SessionChain, subject: string): Promise<void> {
+  chain.subject = subject
+  if (!chain.id) return
+  const renamed = await client.session.update({ sessionID: chain.id, title: commitTitle(subject) }).catch(() => undefined)
+  if (renamed?.error) vlog(`会话改名失败: ${JSON.stringify(renamed.error)}`)
 }
 
 // 记忆会话是否仍存在于 server 上(opencode 会话持久化在项目存储,server 重启

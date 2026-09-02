@@ -75,9 +75,11 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 
 **统一提交**(`commit: true`,缺省):任何会话结束且 driver 完成状态写入(如勾选
 子任务)后,由 driver 递归提交全部改动——先嵌套 `.git` 子仓库、后目标目录所在
-仓库,提交信息带任务编号与阶段(子任务条目为 `T-NNN: 子任务 <n> <标题>`,省略
-任务标题;trailer `Auto-Task` / `Auto-Stage`,目标仓库另记 `Auto-Nested` 嵌套仓库
-SHA),git 历史即 AI 变更的审计轨迹、回滚粒度 = 会话;AI 会话不执行 git commit
+仓库,提交信息为短标签标题行 `T-NNN <label> <任务标题/子任务>`(如
+`T-001 decompose 修复登录`、`T-001 S2 编写 schema`、`T-001 wrapup 修复登录`、
+`T-001 done 修复登录`;trailer `Auto-Task` / `Auto-Stage`,目标仓库另记
+`Auto-Nested` 嵌套仓库 SHA),git 历史即 AI 变更的审计轨迹、回滚粒度 = 会话;
+opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 git commit
 (经 AGENTS.md 提交原则块与 agent 契约约束)。`false` 关闭后改动留在工作区。
 
 两条等价的修订通道:

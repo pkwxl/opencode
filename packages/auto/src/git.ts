@@ -21,13 +21,19 @@ function message(subject: string, task: { id: string }, stage: string, nested: {
   ].join("\n")
 }
 
+// 提交标题(即会话标题,短标签方案 `T-NNN <label> <标题/子任务>`,见 runner.ts):
+// 超过 100 字截断,git 标题行与会话列表都保持可读。
+export function commitTitle(subject: string): string {
+  return subject.length > 100 ? `${subject.slice(0, 100)}…` : subject
+}
+
 // 会话后统一提交。逐仓库(深度优先,嵌套仓库先提交): 有未提交改动才
 // git add -A + git commit,无改动跳过、非 git 环境整体跳过;单仓库失败仅
 // 警告不阻塞(改动保留在工作区,下一次提交全量 add 自然清扫连带)。
-// subject 为标题行(子任务条目由调用方省略任务标题以免过长,超过 100 字截断)。
+// subject 为标题行。
 export async function commitTree(dir: string, task: { id: string; title: string }, info: { stage: string; subject: string }): Promise<void> {
   const roots = await repoRoots(dir)
-  const subject = info.subject.length > 100 ? `${info.subject.slice(0, 100)}…` : info.subject
+  const subject = commitTitle(info.subject)
   const nested: { rel: string; sha: string }[] = []
   for (const root of roots) {
     const rel = relative(dir, root) || "."
