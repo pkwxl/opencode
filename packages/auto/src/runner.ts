@@ -419,6 +419,7 @@ export async function runTask(
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
         if (!skipWrapup) {
           await persistStage({ kind: "wrapup" })
+          autobanner(`${task.id} ${task.title}: 收尾`)
           const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
           if (result.type === "blocked") return result
           await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
@@ -844,6 +845,7 @@ async function verifyTask(
     const fixed = await runExecSession(client, plan, task, renderFix(plan, task, verdict.gap, opts), opts, chain)
     if (fixed.type === "blocked") return fixed
     await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: `${task.id} ${task.title}: 验收差距修复(轮 ${round})` })
+    autobanner(`${task.id} ${task.title}: 收尾`)
     const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
     if (wrapped.type === "blocked") return wrapped
     await afterSession(dir, opts, task, { stage: "wrapup", subject: `${task.id} ${task.title}: 收尾` })
@@ -932,6 +934,7 @@ async function judge(
   opts: Opts,
   run: VerifyRun,
 ): Promise<Verdict | (Outcome & { type: "blocked" })> {
+  autobanner(`${task.id} ${task.title}: 验收判定`)
   const file = join(dirname(plan.path), VERDICT_FILE)
   const snapshot = await Bun.file(plan.path).text()
   await allowWrite(plan.path)
@@ -979,6 +982,7 @@ async function generateScript(
   opts: Opts,
   script: string,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
+  autobanner(`${task.id} ${task.title}: 验收脚本生成`)
   const produced = await requireArtifact(client, task, renderVerifyScriptGen(plan, task, script, opts), opts, {
     kind: "脚本生成",
     artifact: script,
@@ -1008,7 +1012,7 @@ async function reviewTask(
   const current = await load(plan.path)
   const index = current.tasks.findIndex((item) => item.id === task.id)
   const final = current.tasks.slice(index + 1).every((item) => item.status === "done")
-  log(`⚖ ${task.id} ${final ? "最终质量审核(全计划)" : "质量审核"}${early ? "(与 verify 脚本并行)" : ""}`)
+  autobanner(`${task.id} ${task.title}: ${final ? "最终质量审核(全计划)" : "质量审核"}${early ? "(与 verify 脚本并行)" : ""}`)
   const file = join(dirname(plan.path), REVIEW_FILE)
   return requireArtifact(client, task, renderReview(current, task, { final, early, verify: opts.verify }), opts, {
     kind: "质量审核",
@@ -1030,6 +1034,7 @@ async function planReviewFix(
   opts: Opts,
   gap: string,
 ): Promise<{ type: "ok"; items: string[] } | (Outcome & { type: "blocked" })> {
+  autobanner(`${task.id} ${task.title}: 审核修复规划`)
   const file = join(dirname(plan.path), "docs", `${task.id}.fix.md`)
   const collected = await requireArtifact(client, task, renderReviewFix(plan, task, gap, opts), opts, {
     kind: "修复规划",

@@ -86,7 +86,7 @@ export function subbanner(text: string) {
   rule("-", text)
 }
 
-// 隐式(自动)任务子任务分割标记: 点线、空行、"<任务> <标题>: 子任务分解"。
+// 隐式(自动)任务子任务分割标记: 点线、空行、"<任务> <标题>: 阶段名"(子任务分解/收尾)。
 export function autobanner(text: string) {
   rule(".", text)
 }
