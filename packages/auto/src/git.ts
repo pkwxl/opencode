@@ -35,19 +35,19 @@ export async function commitTree(dir: string, task: { id: string; title: string 
       if (!(await hasChanges(root))) continue
       const added = await git(root, ["add", "-A", "--", "."])
       if (added.code !== 0) {
-        log(`⚠ git 提交失败(${rel}): git add 退出码 ${added.code}(${firstLine(added.err || added.out)})`)
+        log(`  ⚠ git 提交失败(${rel}): git add 退出码 ${added.code}(${firstLine(added.err || added.out)})`)
         continue
       }
       const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", message(subject, task, info.stage, root === dir ? nested : undefined)])
       if (committed.code !== 0) {
-        log(`⚠ git 提交失败(${rel}): ${firstLine(committed.err || committed.out)}(改动保留在工作区,下一次提交会清扫连带)`)
+        log(`  ⚠ git 提交失败(${rel}): ${firstLine(committed.err || committed.out)}(改动保留在工作区,下一次提交会清扫连带)`)
         continue
       }
       const sha = (await git(root, ["rev-parse", "--short", "HEAD"])).out.trim()
       if (root !== dir) nested.push({ rel, sha })
-      log(`✓ git 提交(${rel}): ${subject}`)
+      log(`  ✓ git 提交(${rel}): ${subject}`)
     } catch (error) {
-      log(`⚠ git 提交失败(${rel}): ${error instanceof Error ? error.message : String(error)}`)
+      log(`  ⚠ git 提交失败(${rel}): ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 }
