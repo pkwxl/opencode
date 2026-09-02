@@ -157,10 +157,16 @@ export async function runAll(
     // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
     // 调用方已把 verbose 记录级别打开,前台明细静默)。
     interactive?: boolean
-    // verify 脚本看门狗: 持续无输出的判定窗口与绝对时长上限(毫秒),透传给
-    // runner 的 runVerifyScript(--verify-idle / --verify-max 以分钟设定)。
-    verifyIdleMs?: number
-    verifyMaxMs?: number
+    // driver 托管脚本(verify 与 test)的看门狗: 持续无输出的判定窗口与绝对时长
+    // 上限(毫秒),透传给 runner 的 runVerifyScript(config 的 idleTime / idleMax
+    // 以分钟设定)。
+    idleMs?: number
+    maxMs?: number
+    // --test-by-driver: 测试执行协议(与 verify 正交)——执行类会话把测试脚本写入
+    // tmp/test.sh 由 driver 执行,输出反馈回会话;--handover-test: 测试失败且上下文
+    // 达上限时交接新会话续跑。均透传给 runTask。
+    testByDriver?: boolean
+    handoverTest?: boolean
     // -m/--mode 场景模式(缺省 migrate),透传给 runTask 的提示词渲染。
     mode?: ModeSpec
     // --final-review 终审闭环的审计轮上限(0 = 不启用,含首轮 audit): 任务全部
@@ -392,8 +398,10 @@ export async function runAll(
           permission: opts.permission,
           interactive: repl,
           server: serverHandle,
-          verifyIdleMs: opts.verifyIdleMs,
-          verifyMaxMs: opts.verifyMaxMs,
+          idleMs: opts.idleMs,
+          maxMs: opts.maxMs,
+          testByDriver: opts.testByDriver,
+          handoverTest: opts.handoverTest,
           mode: opts.mode,
           phase,
         })

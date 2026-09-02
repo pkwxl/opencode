@@ -81,7 +81,7 @@ describe("checkPrinciple", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await mkdir(join(dir, ".opencode/auto"), { recursive: true })
-      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ verifyIdle: 999 }))
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ idleTime: 999 }))
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n完成后 git commit -m 完成。\n")
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings.length).toBe(1)

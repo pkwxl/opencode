@@ -69,11 +69,11 @@ describe("loadProjectConfig", () => {
     const dir = tempDir()
     try {
       const bad: [string, unknown][] = [
-        ["verifyIdle", 0],
-        ["verifyIdle", 121],
-        ["verifyIdle", "10"],
-        ["verifyMax", -1],
-        ["verifyMax", 1441],
+        ["idleTime", 0],
+        ["idleTime", 121],
+        ["idleTime", "10"],
+        ["idleMax", -1],
+        ["idleMax", 1441],
         ["contextLimit", 0],
         ["contextLimit", 64.5],
         ["subtask", "fast"],
@@ -186,8 +186,28 @@ describe("legacy 回落(.auto/config.json)", () => {
   })
 })
 
+describe("看门狗键更名回落(verifyIdle/verifyMax → idleTime/idleMax)", () => {
+  test("新键缺失时旧键生效;新键优先;旧键坏值按新键名报错", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ verifyIdle: 20, verifyMax: 30 }))
+      const config = await loadProjectConfig(dir)
+      expect(config.idleTime).toBe(20)
+      expect(config.idleMax).toBe(30)
+      // 新键一经给出即优先于旧键
+      writeConfig(dir, JSON.stringify({ verifyIdle: 20, idleTime: 15 }))
+      expect((await loadProjectConfig(dir)).idleTime).toBe(15)
+      // 旧键的坏值同样被校验拦截(报错含新键名与期望值域)
+      writeConfig(dir, JSON.stringify({ verifyIdle: 999 }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/idleTime 须为 1\.\.120/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("mergeProjectConfig 与 formatProjectConfig", () => {
-  const existing: ProjectConfig = { ...CONFIG_DEFAULTS, verify: true, verifyMax: 30, agent: "custom" }
+  const existing: ProjectConfig = { ...CONFIG_DEFAULTS, verify: true, idleMax: 30, agent: "custom" }
 
   test("合并: 仅显式给出的键覆盖,undefined 视同未给出", () => {
     expect(mergeProjectConfig(existing, { commit: false })).toEqual({ ...existing, commit: false })

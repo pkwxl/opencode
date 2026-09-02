@@ -64,7 +64,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("15 个会话模板与 _partials 齐备", () => {
+  test("18 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "decompose",
@@ -78,6 +78,9 @@ describe("内置模板注册表", () => {
       "review",
       "review-fix",
       "subtask",
+      "test-continue",
+      "test-handover",
+      "test-result",
       "verify-judge",
       "verify-script-gen",
       "whole",

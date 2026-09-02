@@ -127,6 +127,22 @@ describe("runVerifyScript", () => {
     expect(run.out).toBe("from-bash\n")
   })
 
+  test("opts.out/err 指定输出路径(--test-by-driver 的按序归档共用)", async () => {
+    const script = join(dir, "check.sh")
+    await Bun.write(script, "#!/usr/bin/env bash\necho t-out\necho t-err >&2\nexit 5\n")
+    await chmod(script, 0o755)
+    const out = join(verifyTmpDir(dir), "test.1.out")
+    const err = join(verifyTmpDir(dir), "test.1.err")
+    const run = await runVerifyScript(dir, script, { out, err })
+    expect(run.code).toBe(5)
+    expect(run.out).toBe("t-out\n")
+    expect(run.err).toBe("t-err\n")
+    expect(await Bun.file(out).text()).toBe("t-out\n")
+    expect(await Bun.file(err).text()).toBe("t-err\n")
+    // 缺省路径不受影响(不写 verify.out)
+    expect(await Bun.file(join(verifyTmpDir(dir), "verify.out")).exists()).toBe(false)
+  })
+
   test("持续无输出超时被看门狗 kill(idle),code 记 124", async () => {
     const script = join(dir, "sleep.sh")
     await Bun.write(script, "#!/usr/bin/env bash\nsleep 30\n")

@@ -18,10 +18,10 @@ export type ProjectConfig = {
   contextLimit: number
   subtask: SubtaskMode
   verify: boolean
-  // 分钟,1..120。
-  verifyIdle: number
+  // 分钟,1..120。driver 执行脚本的通用看门狗(verify 与 test 脚本共用)。
+  idleTime: number
   // 分钟,0 = 不设,1..1440。
-  verifyMax: number
+  idleMax: number
   commit: boolean
   // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
   // 单次运行,行为与阶段化之前完全一致。
@@ -37,8 +37,8 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   contextLimit: 64,
   subtask: "auto",
   verify: false,
-  verifyIdle: 10,
-  verifyMax: 0,
+  idleTime: 10,
+  idleMax: 0,
   commit: true,
   phases: "m",
 }
@@ -90,7 +90,7 @@ async function readLegacyMode(dir: string): Promise<string | undefined> {
 
 // run 启动横幅 / status 共用的一行配置摘要。
 export function formatProjectConfig(config: ProjectConfig): string {
-  const watchdog = `idle ${config.verifyIdle}m/max ${config.verifyMax > 0 ? `${config.verifyMax}m` : "不设"}`
+  const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "不设"}`
   return (
     `模式 ${config.mode} · agent ${config.agent} · 子任务 ${config.subtask} · 验收 ${config.verify ? "on" : "off"}` +
     ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"} · 上下文上限 ${config.contextLimit}k · 阶段 ${config.phases}`
@@ -121,8 +121,10 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     contextLimit,
     subtask: subtaskOf(pick("subtask")),
     verify: booleanOf("verify", pick("verify")),
-    verifyIdle: intInRange("verifyIdle", pick("verifyIdle"), 1, 120, "分钟"),
-    verifyMax: intInRange("verifyMax", pick("verifyMax"), 0, 1440, "分钟,0 为不设"),
+    // 看门狗键由 verifyIdle/verifyMax 更名而来(现同时控制 verify 与 test 脚本
+    // 执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init 自然固化新键。
+    idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "分钟"),
+    idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "分钟,0 为不设"),
     commit: booleanOf("commit", pick("commit")),
     phases,
     source: sourceOf(record.source),

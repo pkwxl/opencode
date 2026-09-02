@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises"
-import { rm } from "node:fs/promises"
+import { mkdir, readdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
@@ -30,12 +30,17 @@ import {
   renderReview,
   renderReviewFix,
   renderSubtask,
+  renderTestContinue,
+  renderTestHandover,
+  renderTestResult,
   renderVerifyJudge,
   renderVerifyScriptGen,
   renderWhole,
   renderWrapup,
   REVIEW_FILE,
+  testHandoffFile,
   VERDICT_FILE,
+  type TestRunInfo,
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
@@ -124,10 +129,19 @@ export type Opts = {
   // server 控制句柄: 新会话前 syncAgents(AGENTS.md 有更新则重启 server)、
   // 网络类会话错误 restart 换新实例后重试。
   server?: ServerControl
-  // verify 脚本看门狗: 持续无输出的判定窗口(缺省 10 分钟)与绝对时长上限
-  // (缺省不设;--verify-idle / --verify-max 以分钟设定)。
-  verifyIdleMs?: number
-  verifyMaxMs?: number
+  // driver 托管脚本的看门狗: 持续无输出的判定窗口(缺省 10 分钟)与绝对时长上限
+  // (缺省不设;config 的 idleTime / idleMax 以分钟设定,verify 与 test 脚本共用)。
+  idleMs?: number
+  maxMs?: number
+  // --test-by-driver: 测试执行协议(与 verify 三段式正交,run 级开关)——执行类
+  // 会话(子任务/整任务/修复轮)不在会话内直接运行测试,把测试脚本写入 tmp/test.sh
+  // 由 driver 执行(存在即待执行请求),输出按序整写 tmp/test.<n>.out/err,退出码
+  // 与输出文件路径 steer 回原会话由 AI 直读判断。
+  testByDriver?: boolean
+  // --handover-test(需 --test-by-driver): 测试失败(非零退出或看门狗超时)且
+  // 会话上下文已用达到 contextLimit 时,要求 AI 写交接文档 docs/<id>.testhandoff.md
+  // 并结束会话,driver 开新会话据其续跑,防止在超大上下文中反复试错。
+  handoverTest?: boolean
   // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
   mode?: ModeSpec
   // 阶段化流程下的当前阶段字母(loop 透传,缺省 undefined = 单次运行): "v"
@@ -145,9 +159,12 @@ type Watch = {
   pct: number
   // 会话结束时最近一次 assistant 消息的上下文已用量(tokens: input + cache.read)。
   used: number
+  // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
+  // runExecSession 据此开新会话续跑。
+  testHandover?: boolean
 }
 
-type SessionResult = { type: "idle"; lastText: string } | (Outcome & { type: "blocked" })
+type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } | (Outcome & { type: "blocked" })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 上一会话结束时上下文
 // 占比低于 REUSE_BELOW、已用量低于 contextLimit、且距其结束不超过 REUSE_IDLE_MS
@@ -317,6 +334,12 @@ export async function runTask(
       if (mode === "ondemand" && recalled?.active !== true) {
         await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
       }
+      // --handover-test 的测试交接文档同理: 非恢复续跑时清除上次尝试遗留
+      // (runExecSession 的交接循环在一次 runTask 调用内闭环,跨调用的遗留文档
+      // 属陈旧状态;恢复续跑(active 记录)时保留,由续跑会话消费)。
+      if (opts.testByDriver && recalled?.active !== true) {
+        await rm(join(dirname(plan.path), testHandoffFile(task)), { force: true })
+      }
       await persistStage({ kind: "whole" })
       const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
       if (blocked) return blocked
@@ -481,8 +504,9 @@ async function executeWhole(
   let feedback = ""
   let retried = false
   for (;;) {
-    const result = await runSession(
+    const result = await runExecSession(
       client,
+      plan,
       task,
       renderWhole(plan, task, { mode: opts.mode, verify: opts.verify, ondemand, continuation }) + feedback,
       opts,
@@ -717,7 +741,7 @@ async function runSubtask(
   chain: SessionChain,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
-  const result = await runSession(client, task, renderSubtask(plan, task, text, opts), opts, chain)
+  const result = await runExecSession(client, plan, task, renderSubtask(plan, task, text, opts), opts, chain)
   if (result.type === "blocked") return result
   await tick(plan.path, task.id, text)
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
@@ -814,7 +838,7 @@ async function verifyTask(
     }
     // 把判定会话的差距信息反馈回执行会话链,续跑修复后重新收尾与验收。
     log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
-    const fixed = await runSession(client, task, renderFix(plan, task, verdict.gap, opts), opts, chain)
+    const fixed = await runExecSession(client, plan, task, renderFix(plan, task, verdict.gap, opts), opts, chain)
     if (fixed.type === "blocked") return fixed
     await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: `${task.id} ${task.title}: 验收差距修复(轮 ${round})` })
     const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
@@ -869,7 +893,7 @@ async function executeVerifyScript(
   }
   await persist?.({ kind: "verify", stage: "exec", ...counters })
   const auditing = audit?.()
-  const run = await runVerifyScript(dir, path, { idleMs: opts.verifyIdleMs, maxMs: opts.verifyMaxMs })
+  const run = await runVerifyScript(dir, path, { idleMs: opts.idleMs, maxMs: opts.maxMs })
   const outPath = join(tmp, "verify.out")
   const errPath = join(tmp, "verify.err")
   log(
@@ -1091,12 +1115,87 @@ function parseVerdict(text: string): Verdict | undefined {
 // (ondemand 的交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
 type Steer = { limit: number; text: string }
 
+// --test-by-driver 的测试执行协议状态(watch 与 runExecSession 共享,跨会话/
+// 跨运行持续): tmp 为目标目录下 driver 工作目录(tmp/);seq 为按序归档编号
+// (初始化时扫描既有 tmp/test.<n>.sh 取最大值,历史全量保留不覆盖);handoffFile
+// 为 --handover-test 交接文档绝对路径;handover 开关;limit 为上下文已用量上限
+// (config.contextLimit,与 ondemand steer 同源);last 为最近一次执行信息
+// (continuation 提示引用其输出路径)。
+type TestRun = {
+  dir: string
+  tmp: string
+  handoffFile: string
+  handover: boolean
+  limit: number
+  seq: number
+  last?: TestRunInfo
+}
+
+// 测试交接连续超过该次数时,continuation 提示附带"是否陷入无法解决的问题"评估
+// (AUTO-FIXME 标注遗留后继续);不设硬上限,不阻塞。
+const TEST_HANDOVER_ADVISORY = 10
+
+// 执行类会话(子任务/整任务/修复轮)的统一入口: --test-by-driver 未启用时直通
+// runSession;启用时包装测试交接循环——会话因测试失败且上下文达上限交结束后,
+// 以 continuation 提示(先读交接文档与最近输出)开新会话续跑,直至会话自然完成。
+// 交接次数不设硬上限,超过 TEST_HANDOVER_ADVISORY 时提示 AI 评估是否陷入无法
+// 解决的问题(可 AUTO-FIXME 标注遗留后继续)。
+async function runExecSession(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  promptText: string,
+  opts: Opts,
+  chain: SessionChain,
+  steer?: Steer,
+): Promise<SessionResult> {
+  if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
+  const dir = opts.dir ?? dirname(plan.path)
+  const tmp = verifyTmpDir(dir)
+  const test: TestRun = {
+    dir,
+    tmp,
+    handoffFile: join(dir, testHandoffFile(task)),
+    handover: opts.handoverTest === true,
+    limit: opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
+    seq: await latestTestSeq(tmp),
+  }
+  let continuation = false
+  let handovers = 0
+  for (;;) {
+    const extra = continuation
+      ? `\n\n${renderTestContinue({
+          handoffFile: testHandoffFile(task),
+          run: test.last,
+          stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined,
+        })}`
+      : ""
+    const result = await runSession(client, task, promptText + extra, opts, chain, steer, test)
+    if (result.type === "blocked") return result
+    if (!result.testHandover) return result
+    handovers++
+    log(`↻ ${task.id} 测试失败且上下文达到上限,已交接 ${testHandoffFile(task)},新会话继续(第 ${handovers} 次测试交接)`)
+    continuation = true
+  }
+}
+
+// 归档编号接续: 扫描 tmp/ 下既有 test.<n>.sh 取最大编号,跨会话/跨运行不覆盖
+// (全量保留历史);目录缺失从 0 起。
+async function latestTestSeq(tmp: string): Promise<number> {
+  let max = 0
+  for (const file of await readdir(tmp).catch(() => [] as string[])) {
+    max = Math.max(max, Number(/^test\.(\d+)\.sh$/.exec(file)?.[1] ?? 0))
+  }
+  return max
+}
+
 // 会话错误中属于网络/服务故障的特征串;命中时先重启 server(外部 server 除外)
 // 再换新会话重试,避免对着同一坏实例反复失败。
 const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
 
 // 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启);导出供
-// src/final.ts 的终审任务生成会话等旁路复用。
+// src/final.ts 的终审任务生成会话等旁路复用。test 为 --test-by-driver 的协议
+// 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效)。
 export async function runSession(
   client: OpencodeClient,
   task: Task,
@@ -1104,9 +1203,10 @@ export async function runSession(
   opts: Opts,
   chain: SessionChain,
   steer?: Steer,
+  test?: TestRun,
 ): Promise<SessionResult> {
   for (let i = 1; ; i++) {
-    const result = await attempt(client, task, promptText, opts, chain, steer)
+    const result = await attempt(client, task, promptText, opts, chain, steer, test)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
     if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
@@ -1130,7 +1230,11 @@ async function attempt(
   opts: Opts,
   chain: SessionChain,
   steer?: Steer,
+  test?: TestRun,
 ): Promise<SessionResult> {
+  // 测试执行协议: 清除上一会话/上次运行遗留的待执行脚本(存在即请求,中断
+  // 恢复或重试场景下的旧请求不应注入本会话;归档历史 tmp/test.<n>.sh 保留)。
+  if (test) await rm(join(test.tmp, "test.sh"), { force: true })
   // 上一会话上下文占比低于 50%、已用量低于 contextLimit(默认 64k tokens)、且距
   // 其结束不超过 REUSE_IDLE_MS(默认 5 分钟)则复用同一会话继续,否则新建。
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
@@ -1166,7 +1270,7 @@ async function attempt(
   await remember()
 
   const events = await client.event.subscribe()
-  const watching = watch(client, sessionID, events.stream, opts, steer)
+  const watching = watch(client, sessionID, events.stream, opts, steer, test)
 
   // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
   const note = chain.note
@@ -1188,7 +1292,7 @@ async function attempt(
   await remember()
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
-  return { type: "idle", lastText: result.lastText }
+  return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
 }
 
 // 记忆会话是否仍存在于 server 上(opencode 会话持久化在项目存储,server 重启
@@ -1214,6 +1318,7 @@ async function watch(
   stream: AsyncIterable<unknown>,
   opts: Opts,
   steer?: Steer,
+  test?: TestRun,
 ): Promise<Watch> {
   const verbose = opts.verbose
   const waitAnswer = opts.waitAnswer ?? 0
@@ -1224,7 +1329,54 @@ async function watch(
   let used = 0
   // steer 每会话只插入一次。
   let steerSent = false
+  // 自动答复过的问题(同一问题重复出现仍阻塞停机)。
   const autoAnswered: string[] = []
+  // --test-by-driver 测试执行协议状态: 会话 idle 时检测 tmp/test.sh(存在即待
+  // 执行请求)→ 归档执行 → steer 结果回本会话继续观察;--handover-test 在测试
+  // 失败且 used 达上限时改为要求写交接文档,文档就绪后正常结束(testHandover)。
+  let testHandover = false
+  let testHandoverAsked = false
+  let testHandoverRetried = false
+  const steerText = async (text: string) => {
+    await client.session.prompt({ sessionID, parts: [{ type: "text", text }] }).catch(() => {})
+  }
+  const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string }> => {
+    // 交接要求已发出: 校验交接文档就绪(非空即有效,内容交新会话解释)。
+    if (testHandoverAsked) {
+      const doc = await Bun.file(test!.handoffFile).text().catch(() => "")
+      if (doc.trim()) {
+        testHandover = true
+        return { type: "break" }
+      }
+      if (testHandoverRetried) {
+        return {
+          type: "blocked",
+          question:
+            `测试交接会话两次未写出有效的 ${test!.handoffFile}(缺失或为空,隐性阻塞)。` +
+            `请检查该文件后重新运行。Agent 最后的输出:\n${lastText.trim().slice(-2000) || "(无输出)"}`,
+        }
+      }
+      testHandoverRetried = true
+      await steerText(
+        `你上次结束会话但未写出有效的 ${test!.handoffFile}(缺失或为空)。这是硬性要求: ` +
+          `把进度、关键决策、失败测试上下文与后续步骤写入该文件后再结束会话。`,
+      )
+      return { type: "continue" }
+    }
+    const pending = join(test!.tmp, "test.sh")
+    if (!(await Bun.file(pending).exists())) return { type: "break" }
+    // 归档(存在即请求的协议标记,执行后移除以便再次请求)→ 执行 → 反馈。
+    const run = await executeTest(test!, opts)
+    const failed = run.code !== 0
+    if (failed && test!.handover && used >= test!.limit) {
+      testHandoverAsked = true
+      log(`⚠ 测试失败(退出码 ${run.code})且上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(test!.limit)} 上限,要求写交接文档后换新会话`)
+      await steerText(renderTestHandover(run, { handoffFile: test!.handoffFile, used, limit: test!.limit }))
+      return { type: "continue" }
+    }
+    await steerText(renderTestResult(run))
+    return { type: "continue" }
+  }
   // verbose 已输出的 part 与 message,避免同一 part 的多次更新事件重复打印。
   const seen = new Set<string>()
   // 模型上下文上限(providerID/modelID → limit.context),首次需要时拉取。
@@ -1373,10 +1525,49 @@ async function watch(
         event.properties.status.type === "idle") ||
       (event.type === "session.idle" && event.properties.sessionID === sessionID)
     ) {
+      // 测试执行协议: idle 先结算待执行请求(执行 + steer 反馈/交接要求)再结束;
+      // 无待执行请求且无未完成的交接要求时,会话才算真正结束。
+      if (test) {
+        const handled = await handleIdleTest()
+        if (handled.type === "continue") continue
+        if (handled.type === "blocked") {
+          return { blocked: { type: "blocked", question: handled.question }, lastText, pct, used, testHandover }
+        }
+      }
       break
     }
   }
-  return { lastText, error, pct, used }
+  return { lastText, error, pct, used, testHandover }
+}
+
+// --test-by-driver 的单次测试执行: tmp/test.sh 存在即待执行请求——按序归档为
+// tmp/test.<n>.sh(全量保留)并移除原文件,经 runVerifyScript 在目标目录执行
+// (输出整写 tmp/test.<n>.out / test.<n>.err,共用 idleTime/idleMax 看门狗)。
+// 退出码非 0 不在此判定——判断权在 AI(与 verify 哲学一致,机制彼此正交)。
+async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
+  const seq = ++test.seq
+  const script = join(test.tmp, `test.${seq}.sh`)
+  const out = join(test.tmp, `test.${seq}.out`)
+  const err = join(test.tmp, `test.${seq}.err`)
+  await mkdir(test.tmp, { recursive: true })
+  await Bun.write(script, Bun.file(join(test.tmp, "test.sh")))
+  await rm(join(test.tmp, "test.sh"), { force: true })
+  const run = await runVerifyScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out, err })
+  log(
+    `  ⚙ test 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,输出: ${out} / ${err}`,
+  )
+  const info: TestRunInfo = {
+    script,
+    code: run.code,
+    ms: run.ms,
+    timedOut: run.timedOut,
+    timeoutReason: run.timeoutReason,
+    out,
+    err,
+    seq,
+  }
+  test.last = info
+  return info
 }
 
 // verbose 模式下把非文本 part 转成一行可读输出;返回 undefined 表示该 part

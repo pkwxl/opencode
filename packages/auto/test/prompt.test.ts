@@ -19,12 +19,17 @@ import {
   renderReview,
   renderReviewFix,
   renderSubtask,
+  renderTestContinue,
+  renderTestHandover,
+  renderTestResult,
   renderVerifyJudge,
   renderVerifyScriptGen,
   renderWhole,
   renderWrapup,
   REVIEW_FILE,
+  testHandoffFile,
   VERDICT_FILE,
+  type TestRunInfo,
 } from "../src/prompt"
 
 const plan = parse(
@@ -104,6 +109,23 @@ describe("renderSubtask", () => {
     expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
     expect(text).toContain("不要运行 git commit")
   })
+
+  test("test-by-driver: 注入测试执行协议;未启用时整块消失", () => {
+    const on = renderSubtask(plan, task, subtask, { testByDriver: true })
+    expect(on).toContain("测试执行协议(--test-by-driver)")
+    expect(on).toContain("tmp/test.sh")
+    expect(on).toContain("不要在会话内直接运行测试命令")
+    expect(on).toContain("归档脚本复制为 tmp/test.sh")
+    // handover-test 附带交接文档提示
+    const handover = renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })
+    expect(handover).toContain("docs/T-002.testhandoff.md")
+    expect(handover).toContain("由新会话继续")
+    // 未启用时协议与交接描述均不出现
+    const off = renderSubtask(plan, task, subtask)
+    expect(off).not.toContain("测试执行协议")
+    expect(off).not.toContain("tmp/test.sh")
+    expect(off).not.toContain("testhandoff")
+  })
 })
 
 describe("renderWrapup", () => {
@@ -151,6 +173,13 @@ describe("renderFix", () => {
     expect(text).toContain("不要运行任务级 verify")
     expect(text).toContain("由 driver 独占维护")
     expect(text).not.toContain("verified-command")
+  })
+
+  test("test-by-driver: 修复轮同样注入测试执行协议", () => {
+    const text = renderFix(plan, task, "差距", { testByDriver: true })
+    expect(text).toContain("测试执行协议(--test-by-driver)")
+    expect(text).toContain("tmp/test.sh")
+    expect(renderFix(plan, task, "差距")).not.toContain("tmp/test.sh")
   })
 })
 
@@ -340,6 +369,72 @@ describe("renderWhole", () => {
     expect(steer).toContain("docs/T-002.handoff.md")
     expect(steer).toContain("状态: 继续")
     expect(steer).toContain("状态: 完成")
+  })
+
+  test("test-by-driver: 注入测试执行协议(与 ondemand 交接条款可同现)", () => {
+    const text = renderWhole(plan, task, { ondemand: true, testByDriver: true, handoverTest: true })
+    expect(text).toContain("测试执行协议(--test-by-driver)")
+    expect(text).toContain("tmp/test.sh")
+    expect(text).toContain("docs/T-002.handoff.md")
+    expect(text).toContain("docs/T-002.testhandoff.md")
+    expect(renderWhole(plan, task)).not.toContain("测试执行协议")
+  })
+})
+
+describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
+  const run: TestRunInfo = {
+    seq: 3,
+    script: "/tmp/pkg/tmp/test.3.sh",
+    code: 1,
+    ms: 1234,
+    timedOut: false,
+    out: "/tmp/pkg/tmp/test.3.out",
+    err: "/tmp/pkg/tmp/test.3.err",
+  }
+
+  test("testHandoffFile 路径与 ondemand handoff 分离命名", () => {
+    expect(testHandoffFile(task)).toBe("docs/T-002.testhandoff.md")
+    expect(testHandoffFile(task)).not.toBe("docs/T-002.handoff.md")
+  })
+
+  test("结果反馈: 退出码/耗时/归档脚本与输出路径,要求直读文件判断并说明再次请求方式", () => {
+    const text = renderTestResult(run)
+    expect(text).toContain("第 3 次")
+    expect(text).toContain("/tmp/pkg/tmp/test.3.sh")
+    expect(text).toContain("退出码: 1")
+    expect(text).toContain("1234ms")
+    expect(text).toContain("/tmp/pkg/tmp/test.3.out")
+    expect(text).toContain("/tmp/pkg/tmp/test.3.err")
+    expect(text).toContain("直读文件判断")
+    expect(text).toContain("复制为 tmp/test.sh")
+    const timeout = renderTestResult({ ...run, timedOut: true, timeoutReason: "idle" })
+    expect(timeout).toContain("持续无输出")
+  })
+
+  test("交接要求: 失败上下文 + 已用 tokens 达上限 + 交接文档硬性要求", () => {
+    const text = renderTestHandover(run, { handoffFile: "/tmp/pkg/docs/T-002.testhandoff.md", used: 66000, limit: 64000 })
+    expect(text).toContain("退出码 1")
+    expect(text).toContain("/tmp/pkg/tmp/test.3.out")
+    expect(text).toContain("66000")
+    expect(text).toContain("64000")
+    expect(text).toContain("/tmp/pkg/docs/T-002.testhandoff.md")
+    expect(text).toContain("写完立即结束会话")
+  })
+
+  test("续跑说明: 先读交接文档与最近输出;连续交接超阈值时提示 AUTO-FIXME 评估", () => {
+    const plain = renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run })
+    expect(plain).toContain("docs/T-002.testhandoff.md")
+    expect(plain).toContain("/tmp/pkg/tmp/test.3.out")
+    expect(plain).toContain("tmp/test.sh")
+    expect(plain).not.toContain("AUTO-FIXME")
+    const stuck = renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run, stuck: 11 })
+    expect(stuck).toContain("已连续进行 11 次")
+    expect(stuck).toContain("AUTO-FIXME")
+    // 无运行信息时省略最近测试段,仍渲染
+    const bare = renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md" })
+    expect(bare).toContain("docs/T-002.testhandoff.md")
+    expect(bare).not.toContain("test.3.out")
+    expect(bare).not.toMatch(/\{\{|\}\}/)
   })
 })
 
@@ -674,6 +769,9 @@ describe("模板渲染完整性", () => {
       renderFinalTask(plan, "audit", 2, "残余差距", migrate),
       renderFinalTask(plan, "finalize", 1, "", undefined),
       renderHandoffSteer(task),
+      renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", err: "/e", seq: 1 }),
+      renderTestHandover({ script: "/s", code: 1, ms: 9, timedOut: true, timeoutReason: "max", out: "/o", err: "/e", seq: 2 }, { handoffFile: "/h", used: 1, limit: 2 }),
+      renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", err: "/e", seq: 2 }, stuck: 11 }),
       renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
       renderDryrun(),
       renderDecompose(plan, solo),

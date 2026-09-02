@@ -11,7 +11,9 @@ import { verifyTmpDir } from "./verify"
 
 // verify: config.verify(任务级三段式验收开关)。false 时与 verify 相关的描述
 // 从会话提示词中整体消失(验收机制不存在,提示词不得提及)。
-type Opts = { mode?: ModeSpec; verify?: boolean }
+// testByDriver/handoverTest: --test-by-driver 测试执行协议(与 verify 正交,
+// run 级开关)。true 时执行类模板(subtask/whole/fix)注入协议段。
+type Opts = { mode?: ModeSpec; verify?: boolean; testByDriver?: boolean; handoverTest?: boolean }
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
 export const VERDICT_FILE = ".auto/verify.md"
@@ -31,6 +33,59 @@ export type VerifyRun = {
   timeoutReason?: "idle" | "max"
   out: string
   err: string
+}
+
+// --test-by-driver 的单次测试执行信息(VerifyRun + 按序归档编号): driver 执行
+// tmp/test.sh 后经 steer 注入执行会话,AI 直读 out/err 判断。
+export type TestRunInfo = VerifyRun & { seq: number }
+
+// --handover-test 的测试交接文档(相对目标目录): 测试失败且上下文达到上限时,
+// 会话把进度与后续步骤写入该文件后结束,driver 开新会话以 continuation 提示续跑。
+export function testHandoffFile(task: Task): string {
+  return `docs/${task.id}.testhandoff.md`
+}
+
+// 测试执行结果反馈(steer 注入执行会话): 退出码与输出文件路径,AI 直读文件判断。
+export function renderTestResult(run: TestRunInfo): string {
+  return renderTemplate("test-result", {
+    seq: String(run.seq),
+    script: run.script,
+    code: String(run.code),
+    ms: String(run.ms),
+    runTimeout: run.timedOut
+      ? `是(已被 driver 终止${run.timeoutReason === "max" ? ":超过绝对时长上限" : ":持续无输出,看门狗判定无进度"})`
+      : "否",
+    out: run.out,
+    err: run.err,
+  })
+}
+
+// --handover-test 交接要求(steer 注入执行会话): 测试失败且上下文达到上限,
+// 要求立即写交接文档并结束会话,由 driver 开新会话继续。
+export function renderTestHandover(run: TestRunInfo, info: { handoffFile: string; used: number; limit: number }): string {
+  return renderTemplate("test-handover", {
+    code: String(run.code),
+    out: run.out,
+    err: run.err,
+    script: run.script,
+    handoffFile: info.handoffFile,
+    used: String(info.used),
+    limit: String(info.limit),
+  })
+}
+
+// 测试交接后的新会话续跑说明(追加到执行提示词): 先读交接文档与最近一次测试
+// 输出再继续。stuck 为连续交接次数超过阈值(10)时的提醒——评估是否陷入暂时
+// 无法解决的问题,可经 AUTO-FIXME 标注遗留后继续。
+export function renderTestContinue(input: { handoffFile: string; run?: TestRunInfo; stuck?: number }): string {
+  return renderTemplate("test-continue", {
+    handoffFile: input.handoffFile,
+    runScript: input.run?.script,
+    runCode: input.run ? String(input.run.code) : undefined,
+    runOut: input.run?.out,
+    runErr: input.run?.err,
+    stuck: input.stuck ? String(input.stuck) : undefined,
+  })
 }
 
 // Decomposition session: read-only analysis, then write the subtask list to
@@ -267,6 +322,9 @@ function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
     modeName: opts.mode?.name,
     modeInit: opts.mode && modeText(opts.mode.init, opts),
     modeExec: opts.mode && modeText(opts.mode.exec, opts),
+    testByDriver: Boolean(opts.testByDriver),
+    handoverTest: Boolean(opts.handoverTest),
+    testHandoffFile: opts.testByDriver ? testHandoffFile(task) : undefined,
   }
 }
 

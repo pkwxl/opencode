@@ -21,12 +21,12 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt/--review/--early-review/--permission/--verify-idle/--verify-max/--mode/
+// --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
 // --final-review/--phases/--source-dir/--source-path 带值(吞掉下一个 token);
-// --verbose/--interactive/--dryrun/--early/--verify 是布尔选项,出现即 true,仅当
-// 紧随字面量 true/false 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,
-// --interactive 另有短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的
-// 吞值规则)。
+// --verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/--handover-test
+// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
+// --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
+// --mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -39,15 +39,15 @@ const VALUE_FLAGS = new Set([
   "review",
   "early-review",
   "permission",
-  "verify-idle",
-  "verify-max",
+  "idle-time",
+  "idle-max",
   "mode",
   "final-review",
   "phases",
   "source-dir",
   "source-path",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -98,7 +98,16 @@ if (command === "run") {
   // 已固化选项(设计文档 §C): 宪法级项目属性经 init 固化到
   // .opencode/auto/config.json,run 出现即用法错误(镜像 --commit-subtask
   // 移除的既有先例);修订走 init amend 或直接编辑配置文件。
-  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "verify-idle", "verify-max", "commit", "phases", "source-dir", "source-path"]) {
+  // 看门狗键已由 --verify-idle/--verify-max 更名为 --idle-time/--idle-max(现同时
+  // 控制 verify 与 test 脚本执行),旧名出现即单独提示更名。
+  for (const key of ["verify-idle", "verify-max"]) {
+    if (flags.has(key)) {
+      const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
+      console.error(`--${key} 已更名为 --${renamed}(现同时控制 verify 与 test 脚本执行的看门狗)。变更方式: opencode-auto init <dir> --${renamed} <值>,或直接编辑 .opencode/auto/config.json`)
+      process.exit(1)
+    }
+  }
+  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "phases", "source-dir", "source-path"]) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
@@ -171,6 +180,17 @@ if (command === "run") {
     console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
     process.exit(1)
   }
+  // --test-by-driver: 测试执行协议(与 verify 三段式正交)——执行类会话(子任务/
+  // 整任务/修复轮)不在会话内直接运行测试,把测试脚本写入 tmp/test.sh 由 driver
+  // 执行,输出按序归档 tmp/test.<n>.out/err 并 steer 回原会话由 AI 直读判断。
+  // --handover-test(需 --test-by-driver): 测试失败且会话上下文达到上限时,要求
+  // AI 写交接文档后换新会话续跑,防止超大上下文中反复试错。
+  const testByDriver = flags.has("test-by-driver") && flags.get("test-by-driver") !== "false"
+  const handoverTest = flags.has("handover-test") && flags.get("handover-test") !== "false"
+  if (handoverTest && !testByDriver) {
+    console.error("--handover-test 需搭配 --test-by-driver 一起使用")
+    process.exit(1)
+  }
   // 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
   // 错误退出 1(严格失败优于静默回落)。文件缺失取缺省并做 legacy 回落
   // (.auto/config.json 的 mode,仅提示、不迁移)。
@@ -182,6 +202,12 @@ if (command === "run") {
     process.exit(1)
   }
   if (await legacyModeFallback(directory)) log("ℹ 模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置")
+  if (testByDriver) {
+    log(
+      `⚙ 测试由 driver 执行(--test-by-driver): 会话写 tmp/test.sh 请求执行,输出按序归档 tmp/test.<n>.out/err 并反馈回会话判断` +
+        (handoverTest ? ";测试失败且上下文达上限时写交接文档换新会话(--handover-test)" : ""),
+    )
+  }
   const modes = loadModeTable(directory)
   const mode = modes[config.mode]
   if (!mode) {
@@ -216,12 +242,14 @@ if (command === "run") {
     verify: config.verify,
     permission,
     interactive,
-    verifyIdleMs: config.verifyIdle * 60_000,
-    verifyMaxMs: config.verifyMax > 0 ? config.verifyMax * 60_000 : undefined,
+    idleMs: config.idleTime * 60_000,
+    maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
     mode,
     finalReview,
     phases: config.phases,
     source: config.source,
+    testByDriver,
+    handoverTest,
   })
   process.exit(code)
 }
@@ -288,17 +316,17 @@ function parseFinalReviewLimit(raw: string | undefined): number | null {
   return limit
 }
 
-// --verify-idle 缺省/裸选项 = 10(分钟);显式值须为 1..120 整数;返回 null 表示非法。
-function parseVerifyIdle(raw: string | undefined): number | null {
+// --idle-time 缺省/裸选项 = 10(分钟);显式值须为 1..120 整数;返回 null 表示非法。
+function parseIdleTime(raw: string | undefined): number | null {
   if (raw === undefined || raw === "") return 10
   const minutes = Number(raw)
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 120) return null
   return minutes
 }
 
-// --verify-max 缺省/裸选项 = 0(不设绝对上限);显式值须为 1..1440 整数(分钟);
+// --idle-max 缺省/裸选项 = 0(不设绝对上限);显式值须为 1..1440 整数(分钟);
 // 返回 null 表示取值非法。
-function parseVerifyMax(raw: string | undefined): number | null {
+function parseIdleMax(raw: string | undefined): number | null {
   if (raw === undefined || raw === "") return 0
   const minutes = Number(raw)
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return null
@@ -325,6 +353,13 @@ if (command === "init") {
     console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 --commit false")
     process.exit(1)
   }
+  for (const key of ["verify-idle", "verify-max"]) {
+    if (flags.has(key)) {
+      const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
+      console.error(`--${key} 已更名为 --${renamed}(现同时控制 verify 与 test 脚本执行的看门狗)`)
+      process.exit(1)
+    }
+  }
   const commit = parseCommit(flags)
   if (commit === null) {
     console.error("--commit 取值为 true|false(none 为 false 别名);缺省 true,driver 在每个会话结束后统一提交全部改动")
@@ -340,16 +375,17 @@ if (command === "init") {
     console.error("--context-limit 取值为正整数(单位: 千 tokens);缺省为 64")
     process.exit(1)
   }
-  // --verify-idle: verify 脚本的无进度判定窗口(两个输出文件持续无增长即终止);
-  // --verify-max: 绝对时长上限(0 = 不设,只要持续有输出就永不限时)。
-  const verifyIdle = parseVerifyIdle(flags.get("verify-idle"))
-  if (verifyIdle === null) {
-    console.error("--verify-idle 取值范围为 1..120(分钟);缺省为 10")
+  // --idle-time: driver 托管脚本(verify 与 test)的无进度判定窗口(两个输出
+  // 文件持续无增长即终止);--idle-max: 绝对时长上限(0 = 不设,只要持续有输出
+  // 就永不限时)。
+  const idleTime = parseIdleTime(flags.get("idle-time"))
+  if (idleTime === null) {
+    console.error("--idle-time 取值范围为 1..120(分钟);缺省为 10")
     process.exit(1)
   }
-  const verifyMax = parseVerifyMax(flags.get("verify-max"))
-  if (verifyMax === null) {
-    console.error("--verify-max 取值范围为 1..1440(分钟);缺省不设上限")
+  const idleMax = parseIdleMax(flags.get("idle-max"))
+  if (idleMax === null) {
+    console.error("--idle-max 取值范围为 1..1440(分钟);缺省不设上限")
     process.exit(1)
   }
   // --phases: 阶段化流程(设计文档 docs/phases-design.md);"m"(缺省)= 无阶段
@@ -398,8 +434,8 @@ if (command === "init") {
   if (flags.has("commit")) explicit.commit = commit
   if (flags.has("subtask")) explicit.subtask = subtask
   if (flags.has("context-limit")) explicit.contextLimit = contextLimit
-  if (flags.has("verify-idle")) explicit.verifyIdle = verifyIdle
-  if (flags.has("verify-max")) explicit.verifyMax = verifyMax
+  if (flags.has("idle-time")) explicit.idleTime = idleTime
+  if (flags.has("idle-max")) explicit.idleMax = idleMax
   if (phases !== undefined) explicit.phases = phases
   if (source !== undefined) explicit.source = source
   let existing: ProjectConfig
@@ -575,12 +611,12 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--verify-idle [1-120]] [--verify-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>]
-  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>]
+  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--test-by-driver] [--handover-test] [--dryrun [true|false]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--verify-idle、--verify-max、--commit、--phases、--source-dir/--source-path)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--phases、--source-dir/--source-path)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
       -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
       -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
       --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)
@@ -588,6 +624,8 @@ console.error(`用法:
       --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
       --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
+      --test-by-driver 测试执行协议(与 --verify 正交): 执行类会话不在会话内直接运行测试,把测试脚本写入 tmp/test.sh 由 driver 执行,输出按序归档 tmp/test.<n>.out/err 并反馈回会话由 AI 判断
+      --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(docs/<任务>.testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

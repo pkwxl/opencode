@@ -26,6 +26,9 @@ import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file
 import tplReview from "../templates/prompts/review.md" with { type: "file" }
 import tplReviewFix from "../templates/prompts/review-fix.md" with { type: "file" }
 import tplSubtask from "../templates/prompts/subtask.md" with { type: "file" }
+import tplTestContinue from "../templates/prompts/test-continue.md" with { type: "file" }
+import tplTestHandover from "../templates/prompts/test-handover.md" with { type: "file" }
+import tplTestResult from "../templates/prompts/test-result.md" with { type: "file" }
 import tplVerifyJudge from "../templates/prompts/verify-judge.md" with { type: "file" }
 import tplVerifyScriptGen from "../templates/prompts/verify-script-gen.md" with { type: "file" }
 import tplWhole from "../templates/prompts/whole.md" with { type: "file" }
@@ -54,6 +57,9 @@ const embedded: Record<string, string> = {
   review: tplReview,
   "review-fix": tplReviewFix,
   subtask: tplSubtask,
+  "test-continue": tplTestContinue,
+  "test-handover": tplTestHandover,
+  "test-result": tplTestResult,
   "verify-judge": tplVerifyJudge,
   "verify-script-gen": tplVerifyScriptGen,
   whole: tplWhole,

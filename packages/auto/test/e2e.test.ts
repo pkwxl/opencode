@@ -137,8 +137,8 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--subtask", "auto"],
         ["--verify"],
         ["--verify=false"],
-        ["--verify-idle", "10"],
-        ["--verify-max", "0"],
+        ["--idle-time", "10"],
+        ["--idle-max", "0"],
         ["--commit", "true"],
         ["--phases", "admtvk"],
         ["--source-dir", "/tmp"],
@@ -160,6 +160,15 @@ describe("CLI 解析: run 侧选项与配置", () => {
       const removed = await runCli(["run", dir, "--commit-subtask"])
       expect(removed.code).toBe(1)
       expect(removed.err).toContain("--commit-subtask 已移除")
+      // 看门狗旧名给出更名指引
+      const renamed = await runCli(["run", dir, "--verify-idle", "10"])
+      expect(renamed.code).toBe(1)
+      expect(renamed.err).toContain("已更名为 --idle-time")
+      expect((await runCli(["init", dir, "--verify-max", "30"])).err).toContain("已更名为 --idle-max")
+      // --handover-test 需搭配 --test-by-driver
+      const lonely = await runCli(["run", dir, "--handover-test"])
+      expect(lonely.code).toBe(1)
+      expect(lonely.err).toContain("--handover-test 需搭配 --test-by-driver")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -218,10 +227,10 @@ describe("CLI 解析: run 侧选项与配置", () => {
   test("配置文件坏值 → run 退出码 1,报错含键名与期望", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ verifyIdle: 999 }))
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ idleTime: 999 }))
       const run = await runCli(["run", dir])
       expect(run.code).toBe(1)
-      expect(run.err).toContain("verifyIdle")
+      expect(run.err).toContain("idleTime")
       expect(run.err).toContain("1..120")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -259,8 +268,8 @@ describe("CLI: init 固化项目配置", () => {
         contextLimit: 64,
         subtask: "auto",
         verify: false,
-        verifyIdle: 10,
-        verifyMax: 0,
+        idleTime: 10,
+        idleMax: 0,
         commit: true,
         phases: "m",
       })
@@ -280,8 +289,8 @@ describe("CLI: init 固化项目配置", () => {
         contextLimit: 128,
         subtask: "auto",
         verify: true,
-        verifyIdle: 10,
-        verifyMax: 0,
+        idleTime: 10,
+        idleMax: 0,
         commit: false,
         phases: "m",
       })
@@ -299,8 +308,8 @@ describe("CLI: init 固化项目配置", () => {
       const bad = [
         ["--subtask", "fast"],
         ["--context-limit", "0"],
-        ["--verify-idle", "999"],
-        ["--verify-max", "0.5"],
+        ["--idle-time", "999"],
+        ["--idle-max", "0.5"],
         ["--commit", "maybe"],
       ]
       for (const extra of bad) {

@@ -4,9 +4,10 @@ import { join, resolve } from "node:path"
 import { verifyCommand, type Task } from "./plan"
 
 // verify 产物统一落在目标目录下的 tmp/ 子目录(tmp/verify.sh、verify.out、
-// verify.err): 位于工作目录内,会话(判定/生成)可直接读取,避免 /tmp 的权限
-// 问题。run/init 会确保 tmp/ 与 .auto/logs/ 被 .gitignore 忽略(见 loop.ts
-// ensureGitignore),清扫提交规则不受影响。
+// verify.err;--test-by-driver 的测试脚本同用该目录: tmp/test.sh 待执行、
+// test.<n>.sh/out/err 按序归档): 位于工作目录内,会话(判定/生成)可直接读取,
+// 避免 /tmp 的权限问题。run/init 会确保 tmp/ 与 .auto/logs/ 被 .gitignore 忽略
+// (见 loop.ts ensureGitignore),清扫提交规则不受影响。
 export function verifyTmpDir(dir: string): string {
   return join(resolve(dir), "tmp")
 }
@@ -47,25 +48,26 @@ export async function resolveVerifyScript(task: Task, dir: string): Promise<Veri
   return { kind: "wrapped", script }
 }
 
-// 在目标目录执行 verify 脚本:有执行位直接 spawn,否则经 bash 运行。
-// stdout/stderr 经 Bun.file 写端整写 tmp/verify.out 与 verify.err
-// (执行前 truncate;直接落文件不经管道,超时 kill 后孙进程占住管道也不会挂起
-// 读取);退出码非 0 不直接判失败——判定权在 AI 会话。
+// 在目标目录执行 driver 托管脚本(verify 与 --test-by-driver 的 test 脚本共用):
+// 有执行位直接 spawn,否则经 bash 运行。stdout/stderr 经 Bun.file 写端整写输出
+// 文件(执行前 truncate;直接落文件不经管道,超时 kill 后孙进程占住管道也不会
+// 挂起读取);退出码非 0 不直接判失败——判定权在 AI 会话。缺省输出为 tmp/verify.out
+// 与 verify.err;opts.out/err 指定其他绝对路径(如 test.<n>.out/err 按序归档)。
 // 超时是进度看门狗而非固定时长: 每隔 pollMs 轮询两个输出文件的大小,任一增长
 // 即视为有进度并重置 idle 计时;连续 idleMs 无增长才 kill(idle)。maxMs > 0 时
 // 另设绝对时长上限(max)。kill 直接子进程,孙进程树不保证清理(V1 已知局限)。
 export async function runVerifyScript(
   dir: string,
   script: string,
-  opts: { idleMs?: number; maxMs?: number; pollMs?: number } = {},
+  opts: { idleMs?: number; maxMs?: number; pollMs?: number; out?: string; err?: string } = {},
 ): Promise<VerifyRunResult> {
   const idleMs = opts.idleMs ?? DEFAULT_VERIFY_IDLE_MS
   const maxMs = opts.maxMs ?? 0
   const pollMs = opts.pollMs ?? 5_000
   const tmp = verifyTmpDir(dir)
   await mkdir(tmp, { recursive: true })
-  const outPath = join(tmp, "verify.out")
-  const errPath = join(tmp, "verify.err")
+  const outPath = opts.out ?? join(tmp, "verify.out")
+  const errPath = opts.err ?? join(tmp, "verify.err")
   await Bun.write(outPath, "")
   await Bun.write(errPath, "")
   const start = Date.now()
