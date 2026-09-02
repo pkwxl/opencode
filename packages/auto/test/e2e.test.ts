@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { load } from "../src/plan"
@@ -143,6 +143,7 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--phases", "admtvk"],
         ["--source-dir", "/tmp"],
         ["--source-path", "src/mod.ts"],
+        ["--dest-dir", "target"],
       ]
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
@@ -414,31 +415,52 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
-  test("init --source-dir/--source-path 必须成对、校验存在性,合法对固化", async () => {
+  test("init --source-dir/--source-path 必须成对、须为工作目录下相对路径并校验存在性;--dest-dir 固化", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const onlyDir = await runCli(["init", dir, "--source-dir", dir])
+      const onlyDir = await runCli(["init", dir, "--source-dir", "legacy"])
       expect(onlyDir.code).toBe(1)
       expect(onlyDir.err).toContain("必须成对")
       const onlyPath = await runCli(["init", dir, "--source-path", "src/mod.ts"])
       expect(onlyPath.code).toBe(1)
       expect(onlyPath.err).toContain("必须成对")
-      const missing = await runCli(["init", dir, "--source-dir", join(dir, "nope"), "--source-path", "src/mod.ts"])
+      // source-dir/dest-dir 均须为工作目录下的相对路径(绝对路径与 .. 逃逸拒绝)
+      const absolute = await runCli(["init", dir, "--source-dir", dir, "--source-path", "src/mod.ts"])
+      expect(absolute.code).toBe(1)
+      expect(absolute.err).toContain("工作目录下的相对路径")
+      const missing = await runCli(["init", dir, "--source-dir", "nope", "--source-path", "src/mod.ts"])
       expect(missing.code).toBe(1)
       expect(missing.err).toContain("现存目录")
-      const escape = await runCli(["init", dir, "--source-dir", dir, "--source-path", "../mod.ts"])
+      const escape = await runCli(["init", dir, "--source-dir", "legacy", "--source-path", "../mod.ts"])
       expect(escape.code).toBe(1)
       expect(escape.err).toContain("相对路径")
-      // 合法对: dir 为现存目录、path 在其下存在(目录或文件均可)
-      const sourceDir = join(dir, "legacy")
+      const destAbs = await runCli(["init", dir, "--dest-dir", join(dir, "target")])
+      expect(destAbs.code).toBe(1)
+      expect(destAbs.err).toContain("--dest-dir 须为工作目录下的相对路径")
+      expect((await runCli(["init", dir, "--dest-dir", "../up"])).code).toBe(1)
+      // 合法迁移参数: source 在 <dir>/<source-dir>/<source-path> 存在;dest-dir
+      // 只固化路径、不校验存在性(目标目录常由迁移过程创建)
       const sourcePath = "src/mod.ts"
-      await Bun.write(join(sourceDir, sourcePath), "export {}\n")
-      const ok = await runCli(["init", dir, "--source-dir", sourceDir, "--source-path", sourcePath])
+      await Bun.write(join(dir, "legacy", sourcePath), "export {}\n")
+      const ok = await runCli(["init", dir, "--source-dir", "legacy", "--source-path", sourcePath, "--dest-dir", "target"])
       expect(ok.code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: sourceDir, path: sourcePath } })
-      // amend: 不给 source 保留既有值
+      expect(await readConfig(dir)).toMatchObject({ source: { dir: "legacy", path: sourcePath }, destDir: "target" })
+      // amend: 不给迁移参数则保留既有值;--dest-dir 单独修订
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: sourceDir, path: sourcePath } })
+      expect(await readConfig(dir)).toMatchObject({ source: { dir: "legacy", path: sourcePath }, destDir: "target" })
+      expect((await runCli(["init", dir, "--dest-dir", "app"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ source: { dir: "legacy", path: sourcePath }, destDir: "app" })
+      // source-dir 接受软链接: 存在性校验经 stat 跟随解析,可把源系统大树留在
+      // 工作目录外、以链接接入(断链仍按不存在拒绝)
+      const outside = await mkdtemp(join(tmpdir(), "auto-cli-src-"))
+      await Bun.write(join(outside, "pkg/legacy.ts"), "export {}\n")
+      await symlink(outside, join(dir, "linked"))
+      const linked = await runCli(["init", dir, "--source-dir", "linked", "--source-path", "pkg/legacy.ts"])
+      expect(linked.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ source: { dir: "linked", path: "pkg/legacy.ts" } })
+      await symlink(join(dir, "nowhere"), join(dir, "broken"))
+      expect((await runCli(["init", dir, "--source-dir", "broken", "--source-path", "x"])).code).toBe(1)
+      await rm(outside, { recursive: true, force: true })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

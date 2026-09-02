@@ -1,7 +1,7 @@
 # 阶段化流程(--phases)与迁移参数固化 — 设计说明
 
 > 本文档是 `--phases` 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 →
-> k 知识提炼)与迁移源参数(`--source-dir`/`--source-path`)固化、init 去 AI 化
+> k 知识提炼)与迁移参数(`--source-dir`/`--source-path`/`--dest-dir`)固化、init 去 AI 化
 > (`-p` 落 brief.md)的唯一设计基准:实现任务以本文为准。**实现按 J 节分期
 > (P1..P4)完成,实现前 CLI 不接受这三个选项。**
 
@@ -25,14 +25,14 @@
 | --- | --- |
 | phases 取值 | `admtvk` 的**子序列且必须含 m**(如 `m`、`amt`、`dmvk` 合法;`tma`、`adk`、重复字母、空串非法)。顺序是语义的一部分,自由排列只产生无意义组合;一行校验消除一整类误用 |
 | 阶段注册表 | 固定六字母内置注册表(src/phases.ts)+ `phaseText()` 中文名,**不开放自定义**(阶段有 driver 侧语义:产物约定、v 的验收豁免、终审挂接点,非纯提示词文案;不搞 `.opencode/auto/phases/` 覆盖目录) |
-| CLI 形态(迁移参数) | `init <dest-dir> --source-dir <dir> --source-path <相对路径>`。**拒绝 `<src-dir>/<src-path>` 拼接形式**(目录边界歧义无法自解释,"最长现存前缀"猜测是隐式魔法);两参数只给其一时报错(必须成对);`<dest-dir>` 保持唯一位置参数 |
+| CLI 形态(迁移参数) | `init <工作目录> --source-dir <dir> --source-path <相对路径> [--dest-dir <相对路径>]`。位置参数是 driver 工作目录(流程文件 PLAN.md/docs/ 所在);**布局约定**: 迁移源在 `<工作目录>/<source-dir>`(source-path 为其下模块相对路径)、迁移目标在 `<工作目录>/<dest-dir>`——driver 工作目录与迁移目标经 dest-dir 隔离。**拒绝 `<src-dir>/<src-path>` 拼接形式**(目录边界歧义无法自解释,"最长现存前缀"猜测是隐式魔法);source 两参数只给其一时报错(必须成对),`--dest-dir` 独立固化/修订;三者均须为不含 `..` 的相对路径(会话 cwd 即工作目录,相对路径直接可用,配置随仓库共享可移植) |
 | 阶段状态载体 | **推导式,零新增易腐状态**:`docs/phases.md` 台账(版本化、随仓库提交、人工可编辑)记录已完成阶段与产物指针;当前阶段 = phases 串中第一个未在台账出现的字母。与 final-review 的 routeFinal 同一范式 |
 | 跨阶段回退 | **V1 线性,不做自动回退路由**。人工回退 = 编辑台账(删末行)+ 删除对应归档目录后重跑 run——回退能力是推导式设计的副产品,无需专门代码;t/v 阶段内差距走既有 appendSubtasks/fix 轮,v 残余差距仿终审熔断 block(退出码 2) |
 | v 与 config.verify | **正交**。v 是流程阶段(其任务本身即检验,强制跳过任务级三段式验收与逐任务审核,复用终审任务的 final 豁免路径);config.verify 是任务级验收机制(m 等阶段任务照常)。`--phases` 含 v 而 verify=false 时 init/run 打 note 提示,不强制 |
 | --final-review 挂接 | **仅 m 阶段**:终审闭环为代码改动设计,a/d 产物是文档,t/v 自身即检验。run 时对 m 阶段启用,其余阶段忽略并打 note |
 | init 去 AI 化 | init **不再启动任何 AI 会话**(删除 manage/runOnce 路径);`-p` 文本写入 `.opencode/auto/brief.md`(版本化、人工可编辑、amend 语义——重复 init -p 覆盖重写),由每个阶段的规划会话消费 |
 | brief 注入范围 | brief.md 注入**每个**阶段的规划会话(不止下一个)——它是项目级意图,a 阶段定下的基调 k 阶段同样需要 |
-| 跨阶段记忆通道 | **handover.md 是唯一通道,且由 driver 控制注入**:阶段规划会话输入 = brief.md + 各前序 handover.md + AGENTS.md + source 规范 + mode.init;**不注入前序阶段原始 docs/**。"精简场景"靠 driver 从输入侧掐断,不靠交接会话自觉 |
+| 跨阶段记忆通道 | **handover.md 是唯一通道,且由 driver 控制注入**:阶段规划会话输入 = brief.md + 各前序 handover.md + AGENTS.md + source/destDir 规范 + mode.init;**不注入前序阶段原始 docs/**。"精简场景"靠 driver 从输入侧掐断,不靠交接会话自觉 |
 | 交接重构形态 | **归档 + 重置 + 蒸馏**:driver 机械执行(docs 归档 docs/phases/\<letter\>-\<name\>/、PLAN.md 归档后重置模板、台账追加、统一提交);AI 只做一件事——旁路会话蒸馏产出 handover.md。AI 不改写契约文件,符合 driver 独占状态写入与维护规则块 |
 | PLAN.md 审计轨迹 | 交接时本阶段 PLAN.md 归档为 `docs/phases/<letter>-<name>/PLAN.md`(含 attempts/verified/阻塞问答)再重置;翻旧账不依赖 git 操作,与 docs/final/ 产物约定同构 |
 | k 阶段与 --extract-knowledge | k 阶段**整体认领** docs/fixme-knowledge-design.md 的 `--extract-knowledge` 设计(产出 docs/migration-kb/、提取失败不污染退出码),该选项不再单独存在;`--track-fixme` 不并入,保持独立演进 |
@@ -69,17 +69,25 @@ export function phaseText(phase: Phase): string
 ```jsonc
 {
   "phases": "admtvk",                          // 缺省 "m"
-  "source": { "dir": "...", "path": "..." }    // 可选;缺省 undefined(非迁移场景)
+  "source": { "dir": "...", "path": "..." },   // 可选;缺省 undefined(非迁移场景)
+  "destDir": "..."                             // 可选;缺省 undefined(迁移产出直接落在工作目录)
 }
 ```
 
 - `phases`:validateProjectConfig 复用 parsePhases 同源校验;非法 → throw
   (中文报错含键名与期望),run/init 均退出码 1。
-- `source`:缺省 undefined;存在时 dir 须为非空字符串、path 须为非空相对路径
-  (不含 `..`);**init 时**校验 dir 为现存目录且 dir/path 解析后存在(环境错误,
-  退出码 1);run 时不再校验存在性(源系统可能已下线,台账与 docs/ 已归档所需)。
-- run 拒绝清单扩展:`phases`、`source-dir`、`source-path` 出现即用法错误退出码 1,
-  报文给 `init --phases <值>` / `init --source-dir <dir> --source-path <path>` 指引。
+- `source`:缺省 undefined;存在时 dir 须为相对工作目录的不含 `..` 相对路径、
+  path 须为相对 dir 的非空相对路径(不含 `..`);**init 时**校验 `<工作目录>/dir`
+  为现存目录且 `dir/path` 存在(环境错误,退出码 1)——存在性校验经 stat 跟随
+  软链接,**dir 可为指向工作目录外的软链**(源系统大树不必复制进工作目录,以
+  链接接入即可;断链按不存在拒绝);run 时不再校验存在性
+  (源系统可能已下线,台账与 docs/ 已归档所需)。
+- `destDir`:缺省 undefined(迁移产出直接落在工作目录);存在时须为相对工作目录的
+  不含 `..` 相对路径,driver 工作目录的流程文件与迁移产出经它隔离。不校验存在性
+  (目标目录常由迁移过程创建)。
+- run 拒绝清单扩展:`phases`、`source-dir`、`source-path`、`dest-dir` 出现即用法
+  错误退出码 1,报文给 `init --phases <值>` / `init --source-dir <dir>
+  --source-path <path>` / `init --dest-dir <相对路径>` 指引。
 
 ### A.3 brief.md(`.opencode/auto/brief.md`)
 
@@ -94,13 +102,15 @@ export function phaseText(phase: Phase): string
 ### B.1 init
 
 ```
-opencode-auto init <dest-dir> [--phases <admtvk 子序列含 m>]
+opencode-auto init <工作目录> [--phases <admtvk 子序列含 m>]
                               [--source-dir <dir> --source-path <相对路径>]
+                              [--dest-dir <相对路径>]
                               [-p|--prompt <prompt-text>] [既有宪法选项...]
 ```
 
-- `--phases`/`--source-dir`/`--source-path` 进 VALUE_FLAGS;仅 init 接受,
-  走 mergeProjectConfig 的"仅显式键覆盖"(source 两键成对,任一给出即整体覆盖)。
+- `--phases`/`--source-dir`/`--source-path`/`--dest-dir` 进 VALUE_FLAGS;仅 init 接受,
+  走 mergeProjectConfig 的"仅显式键覆盖"(source 两键成对,任一给出即整体覆盖;
+  dest-dir 独立固化/修订)。
 - 台账非空时改 `--phases` 的前缀护栏(见已确认决策);`source` 修订无护栏
   (纯提示词输入,改它不破坏状态推导)。
 - `-p`:删除 manage/runOnce 调用,改为写 brief.md;init 成为纯环境配置,
@@ -112,7 +122,7 @@ opencode-auto init <dest-dir> [--phases <admtvk 子序列含 m>]
 
 ### B.2 run
 
-- 拒绝清单加 `phases`/`source-dir`/`source-path`(报文给修订指引,同既有固化选项)。
+- 拒绝清单加 `phases`/`source-dir`/`source-path`/`dest-dir`(报文给修订指引,同既有固化选项)。
 - run 启动横幅:配置摘要后加 `阶段: <进度行>`(与 status 共用 formatPhases)。
 - `--final-review` 与 phases 组合:仅 m 阶段挂接终审闭环;其他阶段完成时不进入
   routeFinal,打 note"终审闭环仅作用于 m(迁移实现)阶段"。
@@ -247,6 +257,7 @@ renderPhasePlan({
   phase, phaseName,             // 当前阶段字母与中文名
   brief,                        // brief.md 原文(可空)
   sourceDir, sourcePath,        // config.source(可空)
+  destDir,                      // config.destDir(可空): 迁移目标目录注入,代码任务指向它
   handovers,                    // 各前序 handover.md 预拼接字符串(调用方组装)
   modeName, modeInit,           // mode 正交注入(经 modeText 渲染)
   verify,                       // config.verify(verify 字段描述条件段)
@@ -324,8 +335,8 @@ renderPhasePlan({
 | 文件 | 改动 |
 | --- | --- |
 | src/phases.ts | **新增**:Phase 注册表、parsePhases、phaseText、台账读写(readLedger/appendLedger)、routePhase、formatPhases(status/run 共用) |
-| src/config.ts | ProjectConfig 加 `phases: string`、`source?: {dir, path}`;CONFIG_DEFAULTS.phases="m";validate 两键;formatProjectConfig 追加 phases 摘要 |
-| src/index.ts | VALUE_FLAGS 加三键;init 侧 parse 与 merge、前缀护栏、-p 落 brief.md(删 manage/runOnce)、v+verify=false note、结束语分两态;run 拒绝清单扩展、阶段进度行;status 阶段行;用法文本 |
+| src/config.ts | ProjectConfig 加 `phases: string`、`source?: {dir, path}`、`destDir?: string`;CONFIG_DEFAULTS.phases="m";validate 各键;formatProjectConfig 追加 phases 摘要 |
+| src/index.ts | VALUE_FLAGS 加四键;init 侧 parse 与 merge、前缀护栏、-p 落 brief.md(删 manage/runOnce)、v+verify=false note、结束语分两态;run 拒绝清单扩展、阶段进度行;status 阶段行;用法文本 |
 | src/loop.ts | runAll 入口推导 currentPhase 与阶段循环(D.1);交接编排(F 节);终审闭环挂接按阶段门控 |
 | src/runner.ts | v 阶段豁免内部标记(D.3,与 final 豁免共路径);规划/蒸馏会话的 PLAN.md 临时放行与 checkPlanEdit 复用 |
 | src/prompt.ts | renderPhasePlan/renderPhaseHandover 组装;FinalStage 不受影响 |

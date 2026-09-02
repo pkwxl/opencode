@@ -137,6 +137,7 @@ describe("内置模板注册表", () => {
       next: "m 迁移实现",
       sourceDir: "/legacy",
       sourcePath: "src/mod.ts",
+      destDir: "target",
       finalReview: "2",
       phaseA: true,
       phaseD: false,

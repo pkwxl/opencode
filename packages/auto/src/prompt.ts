@@ -210,12 +210,14 @@ export function stageText(stage: FinalStage): string {
 // 的 PLAN.md(会话被 driver 专门授权写它)。brief 为 .opencode/auto/brief.md 原文
 // (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
 // (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
+// source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
 // finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
 export function renderPhasePlan(input: {
   phase: Phase
   brief?: string
   handovers?: string
   source?: { dir: string; path: string }
+  destDir?: string
   mode?: ModeSpec
   verify?: boolean
   finalReview?: number
@@ -228,6 +230,7 @@ export function renderPhasePlan(input: {
     handovers: input.handovers?.trim() || undefined,
     sourceDir: input.source?.dir,
     sourcePath: input.source?.path,
+    destDir: input.destDir,
     modeName: input.mode?.name,
     modeInit: input.mode && modeText(input.mode.init, { verify: input.verify }),
     verify: input.verify,

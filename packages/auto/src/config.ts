@@ -26,9 +26,14 @@ export type ProjectConfig = {
   // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
   // 单次运行,行为与阶段化之前完全一致。
   phases: string
-  // 迁移源参数(可选,非迁移场景缺省 undefined): dir = 源系统目录,path = 源模块
-  // 相对路径(不含 ..)。init 时另校验存在性;run 不再校验(源系统可能已下线)。
+  // 迁移源参数(可选,非迁移场景缺省 undefined): dir = 源系统目录(相对工作目录、
+  // 不含 ..,源树与流程文件同在工作目录下),path = 源模块相对路径(相对 dir)。
+  // init 时另校验存在性;run 不再校验(源系统可能已下线)。
   source?: { dir: string; path: string }
+  // 迁移目标目录(可选,缺省 undefined = 迁移产出直接落在工作目录): 相对工作目录、
+  // 不含 ..。driver 工作目录(流程文件 PLAN.md/docs/ 等)与迁移目标经它隔离;
+  // 不校验存在性(目标目录常由迁移过程创建)。
+  destDir?: string
 }
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
@@ -128,11 +133,13 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     commit: booleanOf("commit", pick("commit")),
     phases,
     source: sourceOf(record.source),
+    destDir: destDirOf(record.destDir),
   }
 }
 
-// source 缺省 undefined(非迁移场景);存在时 dir 须为非空字符串、path 须为非空
-// 相对路径(不含 ..,防目录逃逸)。存在性校验只在 init 做(run 侧源系统可能已下线)。
+// source 缺省 undefined(非迁移场景);存在时 dir 须为相对工作目录的不含 .. 相对
+// 路径、path 须为相对 dir 的非空相对路径(均防目录逃逸——会话 cwd 是工作目录,
+// 相对路径即直接可用)。存在性校验只在 init 做(run 侧源系统可能已下线)。
 function sourceOf(value: unknown): { dir: string; path: string } | undefined {
   if (value === undefined) return undefined
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -144,7 +151,22 @@ function sourceOf(value: unknown): { dir: string; path: string } | undefined {
   if (isAbsolute(path) || path.split(/[\\/]+/).includes("..")) {
     throw new Error(`${CONFIG_FILE} 的 source.path 须为不含 .. 的相对路径(相对 source.dir)`)
   }
-  return { dir: stringOf("source.dir", record.dir), path }
+  const dir = stringOf("source.dir", record.dir)
+  if (isAbsolute(dir) || dir.split(/[\\/]+/).includes("..")) {
+    throw new Error(`${CONFIG_FILE} 的 source.dir 须为不含 .. 的相对路径(相对工作目录)`)
+  }
+  return { dir, path }
+}
+
+// destDir 缺省 undefined(迁移产出直接落在工作目录);存在时须为相对工作目录的
+// 不含 .. 相对路径。不做存在性校验(目标目录常由迁移过程创建)。
+function destDirOf(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  const dir = stringOf("destDir", value)
+  if (isAbsolute(dir) || dir.split(/[\\/]+/).includes("..")) {
+    throw new Error(`${CONFIG_FILE} 的 destDir 须为不含 .. 的相对路径(相对工作目录)`)
+  }
+  return dir
 }
 
 function stringOf(key: string, value: unknown): string {

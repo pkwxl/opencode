@@ -536,18 +536,22 @@ describe("renderFinalTask", () => {
 })
 
 describe("renderPhasePlan(阶段规划会话,E 节)", () => {
-  test("注入 brief/迁移源/模式导语与任务格式协议;授权直接编辑 PLAN.md", () => {
+  test("注入 brief/迁移源与目标/模式导语与任务格式协议;授权直接编辑 PLAN.md", () => {
     const text = renderPhasePlan({
       phase: "a",
       brief: "把 legacy 迁移到 bun",
-      source: { dir: "/legacy", path: "src/mod.ts" },
+      source: { dir: "legacy", path: "src/mod.ts" },
+      destDir: "target",
       mode: migrate,
       verify: true,
     })
     expect(text).toContain("「分析」阶段(a)")
     expect(text).toContain("把 legacy 迁移到 bun")
-    expect(text).toContain("/legacy")
+    expect(text).toContain("legacy")
     expect(text).toContain("src/mod.ts")
+    // 迁移目标参数: dest-dir 隔离流程文件与迁移产出
+    expect(text).toContain("迁移目标目录(相对工作目录): target")
+    expect(text).toContain("不要把迁移代码混入")
     expect(text).toContain("场景模式导语(migrate)")
     // a 阶段职责与首批勘察要求
     expect(text).toContain("docs/analysis/")
@@ -589,6 +593,15 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "a" })).not.toContain("前序阶段交接")
   })
 
+  test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
+    const withSource = renderPhasePlan({ phase: "m", source: { dir: "legacy", path: "pkg" } })
+    expect(withSource).toContain("## 输入: 迁移源参数")
+    expect(withSource).not.toContain("## 输入: 迁移目标参数")
+    const bare = renderPhasePlan({ phase: "m" })
+    expect(bare).not.toContain("## 输入: 迁移源参数")
+    expect(bare).not.toContain("## 输入: 迁移目标参数")
+  })
+
   test("verify 未启用: 不含 verify 字段与验收执行权描述(m 阶段)", () => {
     const text = renderPhasePlan({ phase: "m" })
     expect(text).not.toContain("verify")
@@ -606,7 +619,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
       renderPhasePlan({ phase: "a" }),
-      renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "/s", path: "p" }, mode: migrate, verify: true, finalReview: 2 }),
+      renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, verify: true, finalReview: 2 }),
       renderPhasePlan({ phase: "k", verify: true }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)

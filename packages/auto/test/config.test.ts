@@ -94,6 +94,12 @@ describe("loadProjectConfig", () => {
         ["source", { dir: "src", path: "" }],
         ["source", { dir: "src", path: "../mod" }],
         ["source", { dir: "src", path: "/abs/mod" }],
+        ["source", { dir: "../legacy", path: "mod" }],
+        ["source", { dir: "/abs/legacy", path: "mod" }],
+        ["destDir", ""],
+        ["destDir", "/abs/target"],
+        ["destDir", "../up"],
+        ["destDir", 42],
       ]
       for (const [key, value] of bad) {
         writeConfig(dir, JSON.stringify({ [key]: value }))
@@ -104,15 +110,18 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("phases / source 合法取值原样读回;source 缺省 undefined", async () => {
+  test("phases / source / destDir 合法取值原样读回;source 与 destDir 缺省 undefined", async () => {
     const dir = tempDir()
     try {
-      writeConfig(dir, JSON.stringify({ phases: "admtvk", source: { dir: "../legacy", path: "src/mod.ts" } }))
+      writeConfig(dir, JSON.stringify({ phases: "admtvk", source: { dir: "legacy", path: "src/mod.ts" }, destDir: "target" }))
       const config = await loadProjectConfig(dir)
       expect(config.phases).toBe("admtvk")
-      expect(config.source).toEqual({ dir: "../legacy", path: "src/mod.ts" })
+      expect(config.source).toEqual({ dir: "legacy", path: "src/mod.ts" })
+      expect(config.destDir).toBe("target")
       writeConfig(dir, JSON.stringify({ phases: "dmvk" }))
-      expect((await loadProjectConfig(dir)).source).toBeUndefined()
+      const absent = await loadProjectConfig(dir)
+      expect(absent.source).toBeUndefined()
+      expect(absent.destDir).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -139,7 +148,8 @@ describe("loadProjectConfig", () => {
         contextLimit: 128,
         commit: false,
         phases: "admtvk",
-        source: { dir: "../legacy", path: "packages/core" },
+        source: { dir: "legacy", path: "packages/core" },
+        destDir: "target",
       }
       await saveProjectConfig(dir, config)
       expect(await loadProjectConfig(dir)).toEqual(config)

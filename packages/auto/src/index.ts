@@ -22,8 +22,8 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
-// --final-review/--phases/--source-dir/--source-path 带值(吞掉下一个 token);
-// --verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/--handover-test
+// --final-review/--phases/--source-dir/--source-path/--dest-dir 带值(吞掉下一个
+// token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/--handover-test
 // 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
 // --mode 另有短选项 -m(镜像 -p 的吞值规则)。
@@ -46,6 +46,7 @@ const VALUE_FLAGS = new Set([
   "phases",
   "source-dir",
   "source-path",
+  "dest-dir",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test"])
 for (let i = 1; i < args.length; i++) {
@@ -107,7 +108,7 @@ if (command === "run") {
       process.exit(1)
     }
   }
-  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "phases", "source-dir", "source-path"]) {
+  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "phases", "source-dir", "source-path", "dest-dir"]) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
@@ -248,6 +249,7 @@ if (command === "run") {
     finalReview,
     phases: config.phases,
     source: config.source,
+    destDir: config.destDir,
     testByDriver,
     handoverTest,
   })
@@ -400,8 +402,12 @@ if (command === "init") {
     }
     phases = parsed.join("")
   }
-  // --source-dir/--source-path: 迁移源参数,必须成对给出(拒绝 <src-dir>/<src-path>
-  // 拼接形式);存在性只在 init 校验,run 不再校验(源系统可能已下线)。
+  // --source-dir/--source-path/--dest-dir: 迁移参数。布局约定: 位置参数是 driver
+  // 工作目录,迁移源在 <工作目录>/<source-dir>(source-path 为其下的模块相对路径)、
+  // 迁移目标在 <工作目录>/<dest-dir>——driver 流程文件(PLAN.md/docs/ 等)与迁移
+  // 产出经 dest-dir 隔离。source 两键必须成对给出(拒绝 <src-dir>/<src-path> 拼接
+  // 形式);存在性只在 init 校验,run 不再校验(源系统可能已下线)。dest-dir 独立
+  // 固化/修订(不校验存在性,目标目录常由迁移过程创建)。
   let source: { dir: string; path: string } | undefined
   if (flags.has("source-dir") || flags.has("source-path")) {
     if (!flags.has("source-dir") || !flags.has("source-path")) {
@@ -414,17 +420,34 @@ if (command === "init") {
       console.error("--source-dir 与 --source-path 须为非空值")
       process.exit(1)
     }
+    if (isAbsolute(sourceDir) || sourceDir.split(/[\\/]+/).includes("..")) {
+      console.error("--source-dir 须为工作目录下的相对路径(不含 ..): 迁移源位于 <工作目录>/<source-dir>")
+      process.exit(1)
+    }
     if (isAbsolute(sourcePath) || sourcePath.split(/[\\/]+/).includes("..")) {
       console.error("--source-path 须为不含 .. 的相对路径(相对 --source-dir)")
       process.exit(1)
     }
-    const dirIsDir = await stat(sourceDir).then((s) => s.isDirectory()).catch(() => false)
-    const pathExists = await stat(join(sourceDir, sourcePath)).then(() => true).catch(() => false)
+    const dirIsDir = await stat(join(directory, sourceDir)).then((s) => s.isDirectory()).catch(() => false)
+    const pathExists = await stat(join(directory, sourceDir, sourcePath)).then(() => true).catch(() => false)
     if (!dirIsDir || !pathExists) {
-      console.error(`--source-dir 须为现存目录且 --source-path 在其下存在: ${sourceDir} 与 ${sourcePath}`)
+      console.error(`--source-dir 须为工作目录下现存目录且 --source-path 在其下存在: ${sourceDir} 与 ${sourcePath}`)
       process.exit(1)
     }
     source = { dir: sourceDir, path: sourcePath }
+  }
+  let destDir: string | undefined
+  if (flags.has("dest-dir")) {
+    const dest = flags.get("dest-dir")!
+    if (!dest.trim()) {
+      console.error("--dest-dir 须为非空值")
+      process.exit(1)
+    }
+    if (isAbsolute(dest) || dest.split(/[\\/]+/).includes("..")) {
+      console.error("--dest-dir 须为工作目录下的相对路径(不含 ..): 迁移目标位于 <工作目录>/<dest-dir>")
+      process.exit(1)
+    }
+    destDir = dest
   }
   // 仅显式给出的键进入合并: --verify/--commit/--subtask 等裸选项取各自缺省档,
   // 未出现的选项不覆盖既有配置。
@@ -438,6 +461,7 @@ if (command === "init") {
   if (flags.has("idle-max")) explicit.idleMax = idleMax
   if (phases !== undefined) explicit.phases = phases
   if (source !== undefined) explicit.source = source
+  if (destDir !== undefined) explicit.destDir = destDir
   let existing: ProjectConfig
   try {
     existing = await loadProjectConfig(directory)
@@ -611,16 +635,17 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--test-by-driver] [--handover-test] [--dryrun [true|false]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--phases、--source-dir/--source-path)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
       -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
       -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
       --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)
-      --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;init 时校验存在性)
+      --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;两者均为相对 <dir> 的相对路径,init 时校验存在性)
+      --dest-dir <相对路径> 迁移目标目录(相对 <dir>): driver 工作目录与迁移目标经它隔离,迁移产出的代码写入 <dir>/<dest-dir>
       --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
       --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
