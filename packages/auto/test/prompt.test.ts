@@ -593,6 +593,19 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "a" })).not.toContain("前序阶段交接")
   })
 
+  test("prevRound 注入两态: 续轮结论块出现/整块消失(仅新一轮首个规划会话由 loop 传入)", () => {
+    const text = renderPhasePlan({
+      phase: "a",
+      prevRound: "### 上一轮(第 1 轮)阶段归档索引(docs/phases/round-1/)\n\n- docs/phases/round-1/m-migrate/",
+    })
+    expect(text).toContain("上一轮迁移结论(续轮)")
+    expect(text).toContain("完整、一致")
+    expect(text).toContain("不要重做已完成")
+    expect(text).toContain("- docs/phases/round-1/m-migrate/")
+    // 非续轮(无 prevRound): 结论块整块消失
+    expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
+  })
+
   test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
     const withSource = renderPhasePlan({ phase: "m", source: { dir: "legacy", path: "pkg" } })
     expect(withSource).toContain("## 输入: 迁移源参数")
@@ -620,6 +633,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     for (const text of [
       renderPhasePlan({ phase: "a" }),
       renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, verify: true, finalReview: 2 }),
+      renderPhasePlan({ phase: "a", prevRound: "### 上一轮(第 1 轮)阶段归档索引\n\n- docs/phases/round-1/m-migrate/" }),
       renderPhasePlan({ phase: "k", verify: true }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)

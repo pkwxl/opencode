@@ -1,15 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parse } from "../src/plan"
 import {
   appendLedger,
   archivePhaseDocs,
+  archiveRound,
+  currentRound,
   formatPhases,
   parsePhases,
   phaseArchive,
   phaseText,
+  prevRoundDigest,
   readLedger,
   renderPlanScaffold,
   routePhase,
@@ -325,5 +328,111 @@ describe("validHandover(蒸馏会话产物校验,交接蒸馏受阻路径的判�
     }
     // 次级标题不算数: "### 关键决策"包含协议子串但不是逐字的 ## 标题行
     expect(validHandover(HANDOVER.replace(/^## /gm, "### "))).toBe(false)
+  })
+})
+
+describe("续轮迁移(continue 子命令,M 节): currentRound / archiveRound / prevRoundDigest", () => {
+  function tempDir() {
+    return mkdtempSync(join(tmpdir(), "auto-phases-"))
+  }
+
+  async function exists(path: string) {
+    return await Bun.file(path).exists()
+  }
+
+  function dirExists(path: string) {
+    return statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false
+  }
+
+  // 伪造一轮已完成的现场: 台账 + 各阶段归档目录(交接文档)+ 知识文档残留 +
+  // 轮末根 PLAN 与 docs/ 快照。
+  function seedFinishedRound(dir: string) {
+    mkdirSync(join(dir, "docs"), { recursive: true })
+    writeFileSync(join(dir, "docs/phases.md"), "# 阶段台账\n\n- [done] a 分析 → docs/phases/a-analysis/\n- [done] m 迁移实现 → docs/phases/m-migrate/\n")
+    mkdirSync(join(dir, "docs/phases/a-analysis"), { recursive: true })
+    writeFileSync(join(dir, "docs/phases/a-analysis/handover.md"), "# a 分析 阶段交接\n\n## 关键决策\n- 决策甲\n")
+    mkdirSync(join(dir, "docs/phases/m-migrate/migration-kb"), { recursive: true })
+    writeFileSync(join(dir, "docs/phases/m-migrate/handover.md"), "# m 迁移实现 阶段交接\n\n## 关键决策\n- 迁移决策乙\n")
+    writeFileSync(join(dir, "docs/phases/m-migrate/migration-kb/migration-2026.md"), "# 迁移知识\n\nAPI 映射结论。")
+    mkdirSync(join(dir, "docs/migration-kb"), { recursive: true })
+    writeFileSync(join(dir, "docs/migration-kb/migration-2025.md"), "# 未归档残留\n")
+    writeFileSync(join(dir, "PLAN.md"), "## T-001: 轮后手工任务 [pending]\n正文\n")
+    mkdirSync(join(dir, ".auto"), { recursive: true })
+    writeFileSync(join(dir, ".auto/phase-snapshot.json"), "{}")
+  }
+
+  test("currentRound: 无归档 = 第 1 轮;round-<N> 取最大编号 + 1(推导式)", async () => {
+    const dir = tempDir()
+    try {
+      expect(await currentRound(dir)).toBe(1)
+      mkdirSync(join(dir, "docs/phases/round-1"), { recursive: true })
+      expect(await currentRound(dir)).toBe(2)
+      mkdirSync(join(dir, "docs/phases/round-3"), { recursive: true })
+      expect(await currentRound(dir)).toBe(4)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("archiveRound: 台账/阶段归档/知识残留/轮末 PLAN 移入 round-1,快照清除", async () => {
+    const dir = tempDir()
+    try {
+      seedFinishedRound(dir)
+      expect(await archiveRound(dir)).toBe(1)
+      expect(await exists(join(dir, "docs/phases/round-1/phases.md"))).toBe(true)
+      expect(await exists(join(dir, "docs/phases/round-1/a-analysis/handover.md"))).toBe(true)
+      expect(await exists(join(dir, "docs/phases/round-1/m-migrate/migration-kb/migration-2026.md"))).toBe(true)
+      // 交接前中断的知识残留从 docs/ 根移入轮归档,新一轮 k 阶段可重新提取
+      expect(await exists(join(dir, "docs/phases/round-1/migration-kb/migration-2025.md"))).toBe(true)
+      expect(await exists(join(dir, "docs/phases/round-1/PLAN.md"))).toBe(true)
+      expect(await exists(join(dir, "docs/phases.md"))).toBe(false)
+      expect(await exists(join(dir, "docs/migration-kb/migration-2025.md"))).toBe(false)
+      expect(await exists(join(dir, ".auto/phase-snapshot.json"))).toBe(false)
+      expect(await currentRound(dir)).toBe(2)
+      // 台账已随归档消失 = 空台账,routePhase 回到 plan 路由(新一轮从头规划)
+      expect((await readLedger(dir)).done).toEqual([])
+      // 全部移走后重复调用: 幂等,不新建空 round 目录
+      expect(await archiveRound(dir)).toBe(2)
+      expect(dirExists(join(dir, "docs/phases/round-2"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("prevRoundDigest: 归档索引 + 最终交接 + 迁移知识;无轮次归档 → undefined", async () => {
+    const fresh = tempDir()
+    try {
+      expect(await prevRoundDigest(fresh)).toBeUndefined()
+    } finally {
+      rmSync(fresh, { recursive: true, force: true })
+    }
+    const dir = tempDir()
+    try {
+      seedFinishedRound(dir)
+      await archiveRound(dir)
+      const digest = await prevRoundDigest(dir)
+      expect(digest).toBeDefined()
+      // 归档索引: 各阶段归档目录
+      expect(digest).toContain("### 上一轮(第 1 轮)阶段归档索引")
+      expect(digest).toContain("- docs/phases/round-1/a-analysis/")
+      // 最终交接: 台账最后一个完成阶段(m)的 handover.md 全文
+      expect(digest).toContain("### 上一轮最终交接(docs/phases/round-1/m-migrate/handover.md)")
+      expect(digest).toContain("迁移决策乙")
+      expect(digest).not.toContain("决策甲") // 仅注入最终交接,a 阶段交接不整篇注入
+      // 迁移知识: 归档内与残留的知识文档全文都收集
+      expect(digest).toContain("### 上一轮迁移知识(docs/phases/round-1/m-migrate/migration-kb/migration-2026.md)")
+      expect(digest).toContain("API 映射结论。")
+      expect(digest).toContain("### 上一轮迁移知识(docs/phases/round-1/migration-kb/migration-2025.md)")
+      // 空白轮目录(只有 round 目录、无内容)→ undefined
+      const bare = tempDir()
+      try {
+        mkdirSync(join(bare, "docs/phases/round-1"), { recursive: true })
+        expect(await prevRoundDigest(bare)).toBeUndefined()
+      } finally {
+        rmSync(bare, { recursive: true, force: true })
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

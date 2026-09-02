@@ -4,7 +4,7 @@
 // docs/phases.md 台账记录已完成阶段,当前阶段 = phases 串中第一个未在台账出现的
 // 字母,零新增易腐状态;routePhase 由(台账, PLAN.md)两文件推导路由,无隐藏
 // 状态,中断恢复即重新求值。
-import { mkdir, readdir, rename, stat } from "node:fs/promises"
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises"
 import { readFileSync } from "node:fs"
 import { dirname, join, relative } from "node:path"
 import type { Plan } from "./plan"
@@ -52,15 +52,22 @@ export function parsePhases(raw: string): Phase[] | null {
 // 修订指引,见设计文档 C.3 回退规程)。
 export type Ledger = { done: Phase[] }
 
+const LEDGER_ENTRY = /^-\s*\[done\]\s+([a-z])\s+\S+\s+→\s+\S/
+
 export async function readLedger(dir: string): Promise<Ledger> {
   const text = await Bun.file(join(dir, "docs", "phases.md")).text().catch(() => undefined)
   if (text === undefined) return { done: [] }
+  return { done: parseLedger(text) }
+}
+
+// 台账文本解析(readLedger 与轮次归档内 phases.md 共用): 容忍空行与 # 注释/标题,
+// 行协议 LEDGER_ENTRY;字母越界/重复/协议行无法解析 → throw(人工修订指引)。
+function parseLedger(text: string): Phase[] {
   const done: Phase[] = []
   for (const line of text.split("\n")) {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith("#")) continue
-    const entry = /^-\s*\[done\]\s+([a-z])\s+\S+\s+→\s+\S/.exec(trimmed)
-    const letter = entry?.[1]
+    const letter = LEDGER_ENTRY.exec(trimmed)?.[1]
     if (!letter || !PHASE_ORDER.includes(letter) || done.includes(letter as Phase)) {
       throw new Error(
         `docs/phases.md 台账行无法解析或非法: ${trimmed}` +
@@ -69,7 +76,7 @@ export async function readLedger(dir: string): Promise<Ledger> {
     }
     done.push(letter as Phase)
   }
-  return { done }
+  return done
 }
 
 // 各阶段归档目录英文名(A.1 产物约定的目录化;台账行、归档目录与交接文档共用)。
@@ -229,4 +236,116 @@ export const HANDOVER_SECTIONS = ["## 关键决策", "## 约束与坑", "## 下�
 // "### 关键决策"包含子串但不是合规标题)。
 export function validHandover(text: string): boolean {
   return HANDOVER_SECTIONS.every((section) => text.split("\n").some((line) => line.trim() === section))
+}
+
+// —— 续轮迁移(continue 子命令,设计文档 docs/phases-design.md M 节)——
+
+// 轮次归档目录名(docs/phases/round-<N>/): 完成轮的台账、各阶段归档目录与轮末
+// PLAN 快照整体移入。docs/phases/ 本就在快照/归档排除清单内,嵌套轮次目录无需
+// 新增排除规则(历届归档不属于任何单一阶段的产物)。
+const ROUND_RE = /^round-(\d+)$/
+
+// 当前轮次 = 已有轮次归档的最大编号 + 1(推导式,零新增持久化状态): 无归档 =
+// 第 1 轮;人工删除归档目录即回到对应轮次。
+export async function currentRound(dir: string): Promise<number> {
+  const entries = await readdir(join(dir, "docs", "phases"), { withFileTypes: true }).catch(() => [])
+  let max = 0
+  for (const entry of entries) {
+    const round = ROUND_RE.exec(entry.name)
+    if (round) max = Math.max(max, Number(round[1]))
+  }
+  return max + 1
+}
+
+// 归档完成轮(continue 子命令在校验"上一轮已全部完成"后调用): docs/phases/ 下
+// 全部阶段归档目录、docs/migration-kb 残留(交接前中断等)与根 PLAN.md(轮末快照,
+// 留痕任何轮后手工改动)移入 round-<N>/;台账最后移动——它是完成态的标记,
+// 归档中断重跑时未移动即整个动作可重跑(各步为 rename,幂等)。同时清除上一轮的
+// docs/ 快照(新一轮首个规划会话重新快照)。无可归档内容时不创建目录,返回轮次号。
+export async function archiveRound(dir: string): Promise<number> {
+  const round = await currentRound(dir)
+  const root = join(dir, "docs", "phases")
+  const target = join(root, `round-${round}`)
+  const moves: Array<[string, string]> = []
+  for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+    if (ROUND_RE.test(entry.name)) continue
+    moves.push([join(root, entry.name), join(target, entry.name)])
+  }
+  moves.push([join(dir, "docs", "migration-kb"), join(target, "migration-kb")])
+  moves.push([join(dir, "PLAN.md"), join(target, "PLAN.md")])
+  // 台账最后移动: 它是完成态的标记——init 的前置校验读它,归档中断重跑时
+  // 台账未移动即整个动作可安全重跑(已移走的条目不在源位,各步幂等)。
+  moves.push([join(dir, "docs", "phases.md"), join(target, "phases.md")])
+  const sources = await Promise.all(moves.map(([from]) => stat(from).then(() => true, () => false)))
+  if (!sources.some(Boolean)) return round
+  await mkdir(target, { recursive: true })
+  for (const [from, to] of moves.filter((_, index) => sources[index])) await rename(from, to)
+  await rm(join(dir, SNAPSHOT_FILE), { force: true })
+  return round
+}
+
+// 上一轮结论摘录(注入新一轮首个阶段规划会话,台账为空而存在轮次归档时): ① 各
+// 阶段归档目录索引;② 最终完成阶段的 handover.md 全文;③ 迁移知识文档全文——
+// 迁移结论的核心载体。与"蒸馏产物是唯一通道"的注入纪律一致: 原始产物不注入,
+// 会话可按索引自行取用(归档目录就在工作目录内)。无轮次归档 → undefined。
+export async function prevRoundDigest(dir: string): Promise<string | undefined> {
+  const prev = (await currentRound(dir)) - 1
+  if (prev < 1) return undefined
+  const root = join(dir, "docs", "phases", `round-${prev}`)
+  const done = await roundDoneLetters(root)
+  const dirs = (await readdir(root, { withFileTypes: true }).catch(() => []))
+    .filter((entry) => entry.isDirectory() && !ROUND_RE.test(entry.name))
+    .map((entry) => entry.name)
+    .sort()
+  const knowledge = await collectRoundKnowledge(root)
+  if (!done.length && !dirs.length && !knowledge.length) return undefined
+  const parts = [`### 上一轮(第 ${prev} 轮)阶段归档索引(docs/phases/round-${prev}/)\n`]
+  parts.push(dirs.map((name) => `- docs/phases/round-${prev}/${name}/`).join("\n"))
+  const lastDir = done.length ? dirs.find((name) => name.startsWith(`${done[done.length - 1]}-`)) : undefined
+  if (lastDir) {
+    const handover = await Bun.file(join(root, lastDir, "handover.md")).text().catch(() => undefined)
+    if (handover?.trim()) {
+      parts.push(`\n### 上一轮最终交接(docs/phases/round-${prev}/${lastDir}/handover.md)\n`)
+      parts.push(handover.trim())
+    }
+  }
+  for (const doc of knowledge) {
+    parts.push(`\n### 上一轮迁移知识(docs/phases/round-${prev}/${doc.rel})\n`)
+    parts.push(doc.text.trim())
+  }
+  return parts.join("\n")
+}
+
+// 归档内台账的完成字母(宽松解析: 坏行忽略不 throw——digest 是提示词输入,严格
+// 失败属于读 Ledger 的职责,这里不应让规划会话因归档笔误而中断)。
+async function roundDoneLetters(root: string): Promise<Phase[]> {
+  const text = await Bun.file(join(root, "phases.md")).text().catch(() => "")
+  const done: Phase[] = []
+  for (const line of text.split("\n")) {
+    const letter = LEDGER_ENTRY.exec(line.trim())?.[1]
+    if (letter && PHASE_ORDER.includes(letter) && !done.includes(letter as Phase)) done.push(letter as Phase)
+  }
+  return done
+}
+
+// 轮次归档内的迁移知识文档: k 阶段交接归档后位于 <阶段归档>/migration-kb/ 下,
+// 交接前中断的残留由 archiveRound 直接移到轮根——两处都收集。
+async function collectRoundKnowledge(root: string): Promise<Array<{ rel: string; text: string }>> {
+  const docs: Array<{ rel: string; text: string }> = []
+  const pending = [root]
+  while (pending.length) {
+    const current = pending.pop()!
+    for (const entry of await readdir(current, { withFileTypes: true }).catch(() => [])) {
+      const abs = join(current, entry.name)
+      if (entry.isDirectory()) {
+        pending.push(abs)
+        continue
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue
+      if (!relative(root, current).split(/[\\/]+/).includes("migration-kb")) continue
+      const text = await Bun.file(abs).text()
+      if (text.trim()) docs.push({ rel: relative(root, abs), text })
+    }
+  }
+  return docs.sort((a, b) => a.rel.localeCompare(b.rel))
 }

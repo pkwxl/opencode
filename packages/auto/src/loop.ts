@@ -13,6 +13,7 @@ import {
   archivePhaseDocs,
   phaseArchive,
   phaseText,
+  prevRoundDigest,
   readLedger,
   renderPlanScaffold,
   routePhase,
@@ -467,6 +468,11 @@ export async function runAll(
             }),
         )
       ).join("\n\n")
+      // 续轮注入(phases-design.md M 节,continue 子命令归档上一轮后的新一轮):
+      // 台账为空而存在轮次归档 → 上一轮结论(归档索引、最终交接与迁移知识)注入
+      // 本轮首个规划会话;后续阶段照常走 handovers 蒸馏链,不重复注入。
+      const prevRound = ledger.done.length ? undefined : await prevRoundDigest(directory)
+      if (prevRound) log("ℹ 续轮迁移: 注入上一轮结论(归档索引、最终交接与迁移知识)")
       log("▶ 开阶段规划会话填充 PLAN.md")
       await allowWrite(path)
       try {
@@ -477,6 +483,7 @@ export async function runAll(
             phase,
             brief,
             handovers,
+            prevRound,
             source: opts.source,
             destDir: opts.destDir,
             mode: opts.mode,

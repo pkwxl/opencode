@@ -133,6 +133,7 @@ describe("内置模板注册表", () => {
       phaseName: "分析",
       brief: "项目意图",
       handovers: "### a 分析(docs/phases/a-analysis/handover.md)",
+      prevRound: "### 上一轮(第 1 轮)阶段归档索引",
       archive: "docs/phases/a-analysis",
       next: "m 迁移实现",
       sourceDir: "/legacy",

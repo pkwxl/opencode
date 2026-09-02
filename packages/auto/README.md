@@ -36,6 +36,7 @@ bun run packages/auto/src/index.ts <子命令> ...
 ```sh
 opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/auto.md 模板,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等补写四个 opencode-auto 标记块
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后归档上一轮、开启新一轮(见"阶段化流程")
 opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行(agent/验收/提交等语义来自项目配置)
 opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/提交执行权原则的描述,并提示 AGENTS.md 行数超限
 opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
@@ -129,6 +130,12 @@ SHA),git 历史即 AI 变更的审计轨迹、回滚粒度 = 会话;AI 会话不
 
 以上写入配置的选项均为"显式给出的键才被改写"的 amend 语义;`-p` 的 brief.md 同为
 整写覆盖(amend 语义),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
+
+`continue` 子命令(续轮迁移)复用同一套 amend 语义与模板/标记块维护,差异见
+[续轮迁移](#续轮迁移-continue):`--phases`、`-p` 与其余执行选项
+(`--agent`/`--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/
+`--commit`)可按轮修订;`-m/--mode` 与迁移参数(`--source-dir`/`--source-path`/
+`--dest-dir`)跨轮固定,显式给出即用法错误(退出码 1)。
 
 ### run 的选项(本次执行)
 
@@ -565,14 +572,54 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
     落账。各步幂等,交接中途断电/Ctrl+C 后重跑会自行补完(含补写台账)。
   - 台账覆盖 `phases` 全部字母 → 退出码 0(`✓ 全部阶段已完成`)。
 - **阶段进度行**:`run` 启动横幅与 `status` 在配置摘要后打印一行进度,`✓` = 台账
-  已记录、`▶` = 当前阶段、其余字母 = 未开始:
+  已记录、`▶` = 当前阶段、其余字母 = 未开始;续轮(round-\<N\> 归档存在)时带轮次
+  标注:
 
   ```text
   阶段: a✓ d✓ m▶ t v k
+  阶段(第 2 轮): a▶ d m t v k
   ```
 
 - `--final-review` 只在 **m(迁移实现)** 阶段挂接,其余阶段完成时不进入终审闭环
   (启用时启动会打一次提示)。
+
+### 续轮迁移(continue)
+
+一轮阶段化迁移**全部完成后**(台账覆盖 `phases` 全部字母),`continue` 子命令开启
+新一轮继续迁移——目标是**让迁移结果与源系统更加完整、一致**(补齐上一轮的遗漏、
+对齐残余差距),而不是重做已完成的工作:
+
+```sh
+opencode-auto init <dir> --phases "admtvk" --source-dir legacy --source-path pkg --dest-dir app
+opencode-auto run <dir>                       # 第 1 轮: a→d→m→t→v→k 全部完成
+opencode-auto continue <dir> --phases "admtvk" -p "第二轮聚焦补齐 API 覆盖差距"
+opencode-auto run <dir>                       # 第 2 轮
+```
+
+- **前置校验**:仅阶段化项目(`phases ≠ "m"`)且上一轮已全部完成;台账为空、
+  缺阶段、含 `phases` 之外字母或项目非阶段化 → 退出码 1 并给指引(先跑 `run`
+  完成本轮,或按人工回退规程处理)。
+- **归档与重置**:上一轮整体归档到 `docs/phases/round-<N>/`(N = 被归档轮次)——
+  台账(`phases.md`)、各阶段归档目录、轮末根 `PLAN.md` 快照与未归档的知识文档
+  残留(`docs/migration-kb/`,移走后新一轮 k 阶段可重新提取)一并移入;台账随之
+  消失 = 空台账、根 `PLAN.md` 由模板循环重建为空模板、上一轮的 docs/ 快照清除。
+  各步为 rename 且台账最后移动,归档中断后重跑 `continue` 自然续完。
+- **结论注入**:新一轮**首个阶段规划会话**注入上一轮结论摘录——各阶段归档目录
+  索引 + 最终完成阶段的 `handover.md` 全文 + 迁移知识文档全文(蒸馏产物仍是唯一
+  通道,原始产物按索引可达,归档就在工作目录内);后续阶段照常走本轮 handover
+  蒸馏链,不重复注入。
+- **参数修订**:`--phases` 可为任何合法值(台账已归档重置,不受前缀护栏约束,
+  如第 2 轮改跑 `mtvk` 跳过分析与设计);`-p` 可换新一轮意图;`--agent`/
+  `--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/`--commit`
+  照常 amend。**跨轮固定**:`-m/--mode` 与迁移参数(`--source-dir`/`--source-path`/
+  `--dest-dir`)显式给出即用法错误——换源、换目标或换模式不是"同一迁移的继续",
+  请在新目录 init 新项目。
+- **轮次推导**:当前轮 = `docs/phases/` 下 `round-<N>` 最大编号 + 1,零新增
+  持久化状态;`run`/`status` 的阶段进度行带轮次标注(如上)。`continue` 是
+  `init`/`run` 之外的独立子命令,`--continue` 不是选项(出现即报错指引)。
+- **人工回退轮次**:回退续轮 = 把 `round-<N>/` 内容移回(`phases.md` →
+  `docs/phases.md`、各阶段归档目录 → `docs/phases/`)后重跑 `run`,即恢复上一轮
+  完成态;删除 `round-<N>/` 则回到该轮次编号。
 
 > 阶段化流程的 P1..P4 已全部接入:P3 起,交接文档由蒸馏会话产出并注入下一阶段
 > 规划会话,v 阶段任务豁免任务级验收;P4 起,k(知识提炼)阶段整体认领原

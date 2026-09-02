@@ -2,8 +2,8 @@
 
 > 本文档是 `--phases` 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 →
 > k 知识提炼)与迁移参数(`--source-dir`/`--source-path`/`--dest-dir`)固化、init 去 AI 化
-> (`-p` 落 brief.md)的唯一设计基准:实现任务以本文为准。**实现按 J 节分期
-> (P1..P4)完成,实现前 CLI 不接受这三个选项。**
+> (`-p` 落 brief.md)、续轮迁移(`continue` 子命令,M 节)的唯一设计基准:实现任务以本文为准。
+> **实现按 J 节分期(P1..P4)完成;M 节(continue 续轮)已实现。**
 
 ## 背景与动机
 
@@ -356,3 +356,25 @@ renderPhasePlan({
 - 阶段内子阶段/嵌套 phases——YAGNI。
 - init 当场生成 PLAN.md——被阶段规划会话取代,init 纯配置。
 - v 阶段差距自动熔断——预留挂点(D.3 修订备选),V1 不实现。
+
+## M. 续轮迁移(continue 子命令,已实现)
+
+一轮阶段化迁移全部完成后,继续迁移(补齐遗漏、对齐源系统)以"新一轮"进行: 上一轮
+整体归档、状态重置,上一轮结论注入新一轮首个规划会话——目标是**让迁移结果与源更加
+完整、一致**,不重做已完成的工作。
+
+| 决策点 | 结论 |
+| --- | --- |
+| CLI 形态 | 独立子命令 `continue [dir] [--phases <新值>] [-p <brief>] [其余可修订选项]`(不用 init 选项: 它是动作而非属性);`--continue` 不是选项,init/run 出现即报错指向子命令;`init --continue` 语义 = continue 子命令 |
+| 与 init 的关系 | continue = init 的 amend 机制 + 归档上一轮: 复用同一分支(parse*/merge/模板循环/ensurePointer/ensureGitignore/-p),以 cont 门控差异;宪法选项仍单一入口语义(config.json 只经 init/continue 写) |
+| 前置条件 | 既有 phases ≠ "m" 且台账覆盖既有 phases 全部字母(按**既有**配置判定,不看向新 --phases);非阶段化/台账为空/缺阶段/含外字母/新 --phases 为 "m" → 退出码 1 并给"先跑 run 完成本轮"或人工回退指引 |
+| 归档布局 | `docs/phases/round-<N>/`(N = 被归档轮次): 全部阶段归档目录 + `phases.md`(台账)+ `PLAN.md`(轮末根快照,留痕轮后手工改动)+ `migration-kb/`(交接前中断的知识残留,移走后新一轮 k 阶段可重新提取);docs/phases/ 本就在快照/归档排除清单内,嵌套轮次目录无需新增排除规则 |
+| 状态重置 | 台账随归档消失 = 空台账、根 PLAN.md 由 init 模板循环以空模板重建、`.auto/phase-snapshot.json` 清除(新一轮首个规划会话重新快照);run 侧零改动(routePhase 对空台账 + 空模板自然回到 plan 路由) |
+| 轮次推导 | 当前轮 = docs/phases/ 下 `round-<N>` 最大编号 + 1,零新增持久化状态(人工删除归档即回到对应轮次);run/status 阶段进度行带 `第 N 轮` 标注(round > 1 时) |
+| 参数锁定矩阵 | **跨轮固定**(迁移同一性,显式给出即退出码 1): -m/--mode、--source-dir、--source-path、--dest-dir——换源/换目标/换模式不是"同一迁移的继续",如需更换在新目录 init 新项目;**可按轮修订**: --phases(不受前缀护栏——台账已归档重置,任何合法值可改,如第 2 轮改跑 mtvk)、-p(brief 换新轮意图)、--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit |
+| 结论注入 | 新一轮台账为空时的**首个**阶段规划会话注入 `prevRoundDigest`(src/phases.ts): ① 各阶段归档目录索引;② 最终完成阶段 handover.md 全文;③ 迁移知识文档全文(宽松收集,坏行不中断)。注入纪律与轮内一致——蒸馏产物是唯一通道,原始产物不注入、按索引可达(归档就在工作目录内);后续阶段照常走本轮 handover 蒸馏链,不重复注入。phase-plan.md 的 `{{#if prevRound}}` 条件块承载续轮目标文案(排查遗漏与差距、不重做) |
+| 幂等与恢复 | 归档各步为 rename、**台账最后移动**(完成态标记)——归档中断重跑 continue 自然续完(已移走条目不在源位);重复 continue 在新一轮未完成时被前置条件拒绝(台账为空 → 尚缺全部字母) |
+| 退出码 | 同 init: 0 成功(归档+配置修订完成),1 用法/环境错误;run 侧无感知(看到空台账 + 空模板即正常开规划会话) |
+| 人工回退轮次 | 回退续轮 = 把 `round-<N>/` 内容移回(`phases.md` → `docs/phases.md`、阶段归档目录 → `docs/phases/`)后重跑 run,恢复上一轮完成态;删除 round 目录即回到该轮次编号 |
+
+文件级改动: src/phases.ts(currentRound/archiveRound/prevRoundDigest + readLedger 行解析抽为 parseLedger/LEDGER_ENTRY)、src/index.ts(continue 子命令与 cont 门控校验、归档挂点、轮次标注、--continue 拒绝、用法文本)、src/loop.ts(planPhase 台账为空时注入 prevRoundDigest)、src/prompt.ts(renderPhasePlan 的 prevRound 变量)、templates/prompts/phase-plan.md(`{{#if prevRound}}` 条件块,不进协议敏感校验清单——新增块对既有覆盖向后兼容)、README.md 与 AGENTS.md(用法与行为约定)、test/(phases/e2e/prompt)。

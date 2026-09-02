@@ -7,7 +7,7 @@ import { log, setInteractive, setLogFile, setVerbose } from "./log"
 import { ensureGitignore, ensurePointer, runAll } from "./loop"
 import { loadModes, type ModeSpec } from "./mode"
 import { load, parse } from "./plan"
-import { formatPhases, parsePhases, phaseText, readLedger } from "./phases"
+import { archiveRound, currentRound, formatPhases, parsePhases, phaseText, readLedger } from "./phases"
 import type { PermissionMode, SubtaskMode } from "./runner"
 import { usePromptLibrary, renderText } from "./template"
 import templatePlan from "../templates/PLAN.md" with { type: "file" }
@@ -123,6 +123,11 @@ if (command === "run") {
     console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 opencode-auto init <dir> --commit false")
     process.exit(1)
   }
+  // 续轮迁移是独立子命令(continue),不是任何命令的选项。
+  if (flags.has("continue")) {
+    console.error("--continue 不是选项: 续轮迁移用独立子命令 opencode-auto continue <dir>(上一轮阶段化迁移全部完成后开启新一轮)")
+    process.exit(1)
+  }
   const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
   // --interactive/-i: 旁路交互(与 --verbose 互斥);文件保持 verbose 级完整记录,
   // 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
@@ -217,10 +222,12 @@ if (command === "run") {
   }
   log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   // 阶段进度行(B.2,与 status 共用 formatPhases;✓=台账已记录,▶=当前,其余=未
-  // 开始);台账非法仅提示,runAll 的阶段路由会以环境错误退出 1。
+  // 开始);续轮(round-<N> 归档存在)时带轮次标注。台账非法仅提示,runAll 的阶段
+  // 路由会以环境错误退出 1。
   if (config.phases !== "m") {
     try {
-      log(`阶段: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
+      const round = await currentRound(directory)
+      log(`阶段${round > 1 ? `(第 ${round} 轮)` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
     } catch (error) {
       log(`⚠ 阶段台账(docs/phases.md)非法: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -346,11 +353,32 @@ function loadModeTable(directory: string): Record<string, ModeSpec> {
   }
 }
 
-if (command === "init") {
+if (command === "init" || command === "continue") {
   // 项目宪法选项在 init 固化(设计文档 §B): 仅写命令行显式给出的键,未给出的
   // 键保留既有配置(新项目取内置缺省)→ init 兼具创建与修订(amend)两种身份,
   // 重复 init 无参数不重置已有配置。值域校验复用既有 parse*(与配置文件侧
   // validateProjectConfig 同源)。
+  //
+  // continue 子命令(续轮迁移,设计文档 docs/phases-design.md M 节)= init 的
+  // amend 机制 + 归档上一轮: 上一轮阶段化迁移全部完成后开启新一轮,让迁移结果
+  // 与源更加完整、一致。复用 init 的解析/合并/模板与标记块维护,差异仅在:
+  // ① 前置校验(既有 phases ≠ "m" 且台账全覆盖);② 归档重置(archiveRound);
+  // ③ 迁移同一性选项(-m/--mode 与迁移参数)跨轮固定,显式给出即用法错误。
+  if (command === "init" && flags.has("continue")) {
+    console.error("--continue 不是选项: 续轮迁移用独立子命令 opencode-auto continue <dir>(上一轮阶段化迁移全部完成后开启新一轮)")
+    process.exit(1)
+  }
+  const cont = command === "continue"
+  if (cont) {
+    for (const key of ["mode", "source-dir", "source-path", "dest-dir"]) {
+      if (!flags.has(key)) continue
+      console.error(
+        `${key === "mode" ? "-m/--mode" : `--${key}`} 跨轮固定,continue 时不可变更: 续轮是同一迁移的继续(上一轮结论以同一源、同一目标为前提)。` +
+          "如需更换迁移对象或场景,请在新目录 init 新项目",
+      )
+      process.exit(1)
+    }
+  }
   if (flags.has("commit-subtask")) {
     console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 --commit false")
     process.exit(1)
@@ -478,7 +506,40 @@ if (command === "init") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  if (flags.has("phases") && ledgerDone && !phases!.startsWith(ledgerDone)) {
+  // continue 前置校验(按既有配置判定,不看向新 --phases 值): 仅阶段化项目、且
+  // 上一轮已全部完成——台账覆盖既有 phases 的全部字母。台账归档重置后,新一轮
+  // 的 --phases 不受前缀护栏约束(从头规划,任何合法值可改)。
+  if (cont) {
+    if (existing.phases === "m") {
+      console.error(
+        `continue 仅用于阶段化流程项目: 当前配置 phases = "m"(无阶段声明的单次运行,没有轮的概念)。` +
+          `可先 opencode-auto init <dir> --phases <admtvk 子序列含 m> 开启阶段化流程`,
+      )
+      process.exit(1)
+    }
+    if (phases === "m") {
+      console.error('continue 用于阶段化流程的续轮,--phases 不可为 "m"')
+      process.exit(1)
+    }
+    const declared = [...existing.phases]
+    const outside = [...ledgerDone].filter((letter) => !declared.includes(letter))
+    if (outside.length) {
+      console.error(
+        `continue 前置检查失败: docs/phases.md 台账记录了 phases(${existing.phases})之外的阶段字母: ${outside.join("、")}。` +
+          "请人工修订该文件(回退规程见 README)后再续轮",
+      )
+      process.exit(1)
+    }
+    const missing = declared.filter((letter) => !ledgerDone.includes(letter))
+    if (missing.length) {
+      console.error(
+        `continue 要求上一轮已全部完成: 阶段台账(docs/phases.md)${ledgerDone ? "" : "为空"}、尚缺 ${missing.join("、")}(phases ${existing.phases})。` +
+          `请先运行 opencode-auto run ${directory} 完成本轮`,
+      )
+      process.exit(1)
+    }
+  }
+  if (!cont && flags.has("phases") && ledgerDone && !phases!.startsWith(ledgerDone)) {
     console.error(
       `--phases 新值 "${phases}" 与阶段台账(docs/phases.md)不兼容: 台账已记录完成阶段 "${ledgerDone}",须构成新值的前缀。` +
         "请改用以其为前缀的值,或按 README 的人工回退规程修订台账后再变更",
@@ -513,6 +574,22 @@ if (command === "init") {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
+  }
+  // continue: 归档上一轮(前置校验已过)。归档移走 PLAN.md 与台账后,下方模板循环
+  // 以空模板重建 PLAN.md,台账缺失 = 空台账(新一轮从头规划);上一轮的 docs/
+  // 快照一并清除(新一轮首个规划会话重新快照)。
+  let archivedRound = 0
+  if (cont) {
+    try {
+      archivedRound = await archiveRound(directory)
+    } catch (error) {
+      console.error(`归档上一轮失败: ${error instanceof Error ? error.message : String(error)}`)
+      process.exit(1)
+    }
+    console.log(
+      `✓ 上一轮(第 ${archivedRound} 轮)已归档: docs/phases/round-${archivedRound}/(台账、各阶段归档、PLAN 与知识文档残留)。` +
+        "上一轮结论将注入新一轮首个阶段规划会话",
+    )
   }
   // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。阶段化流程
   // (phases ≠ "m")下 PLAN.md 用空模板(规划会话填充,B.1),不写占位任务。
@@ -566,12 +643,16 @@ if (command === "init") {
     console.log("已写入: .opencode/auto/brief.md(项目意图,阶段规划会话消费;重复 init -p 覆盖重写)")
   }
   // 结束语按 phases 分两态: "m" 维持"编辑 PLAN.md"现状;阶段化流程下 PLAN.md
-  // 由阶段规划会话填充,不提示手工编辑。
+  // 由阶段规划会话填充,不提示手工编辑。continue 下台账已归档重置(空),首个
+  // 阶段 = 新 phases 的第一个字母;另打新一轮横幅。
   if (config.phases === "m") {
     console.log(promptText !== undefined ? `brief 已记录,运行: opencode-auto run ${directory} 开始任务规划` : `编辑 PLAN.md 填入任务后运行: opencode-auto run ${directory}`)
     process.exit(0)
   }
-  const current = parsePhases(config.phases)!.find((phase) => !ledgerDone.includes(phase))
+  const current = parsePhases(config.phases)!.find((phase) => !(cont ? "" : ledgerDone).includes(phase))
+  if (cont) {
+    console.log(`已开启第 ${archivedRound + 1} 轮继续迁移: 在既有成果上让迁移结果与源更加完整、一致`)
+  }
   console.log(
     `${promptText !== undefined ? "brief 已记录," : ""}运行: opencode-auto run ${directory}${current ? ` 开始 ${current}(${phaseText(current)})阶段规划` : "(全部阶段已完成)"}`,
   )
@@ -606,7 +687,8 @@ if (command === "status") {
     console.log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
     if (config.phases !== "m") {
       try {
-        console.log(`阶段: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
+        const round = await currentRound(directory)
+        console.log(`阶段${round > 1 ? `(第 ${round} 轮)` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
       } catch (error) {
         console.log(`⚠ 阶段台账(docs/phases.md)非法: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -636,6 +718,7 @@ function isPristinePlan(text: string): boolean {
 
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>]
+  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--test-by-driver] [--handover-test] [--dryrun [true|false]]
   opencode-auto check [dir]
   opencode-auto status [dir]
@@ -651,6 +734,7 @@ console.error(`用法:
       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
       --test-by-driver 测试执行协议(与 --verify 正交): 执行类会话不在会话内直接运行测试,把测试脚本写入 tmp/test.sh 由 driver 执行,输出按序归档 tmp/test.<n>.out/err 并反馈回会话由 AI 判断
       --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(docs/<任务>.testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
+      continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——上一轮归档到 docs/phases/round-<N>/(台账、各阶段归档、PLAN 与知识文档残留),台账与 PLAN.md 重置,上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项、-p 可按轮修订(不受前缀护栏约束)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

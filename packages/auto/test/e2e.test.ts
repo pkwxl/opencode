@@ -600,3 +600,126 @@ describe("CLI: 阶段化流程 P2(空模板 / 阶段行 / 台账预检)", () => 
     }
   })
 })
+
+describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
+  async function readConfig(dir: string) {
+    return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
+  }
+
+  async function writeLedger(dir: string, letters: string[]) {
+    await Bun.write(
+      join(dir, "docs/phases.md"),
+      letters.map((letter) => `- [done] ${letter} 阶段 → docs/phases/${letter}-x/`).join("\n") + "\n",
+    )
+  }
+
+  test("--continue 不是选项: init/run 出现即指向 continue 子命令", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const init = await runCli(["init", dir, "--continue"])
+      expect(init.code).toBe(1)
+      expect(init.err).toContain("独立子命令 opencode-auto continue")
+      const run = await runCli(["run", dir, "--continue"])
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("独立子命令 opencode-auto continue")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("非阶段化项目 / 台账未完成 / --phases m / 跨轮固定选项 → 退出码 1", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // phases = m(缺省)的项目没有轮的概念
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const plain = await runCli(["continue", dir])
+      expect(plain.code).toBe(1)
+      expect(plain.err).toContain("continue 仅用于阶段化流程项目")
+      // 阶段化但台账为空(上一轮尚未开始/未完成)
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      const empty = await runCli(["continue", dir])
+      expect(empty.code).toBe(1)
+      expect(empty.err).toContain("为空")
+      expect(empty.err).toContain("尚缺 a、m")
+      // 台账半程
+      await writeLedger(dir, ["a"])
+      const partial = await runCli(["continue", dir])
+      expect(partial.code).toBe(1)
+      expect(partial.err).toContain("尚缺 m")
+      // --phases m 显式给出
+      const m = await runCli(["continue", dir, "--phases", "m"])
+      expect(m.code).toBe(1)
+      expect(m.err).toContain('不可为 "m"')
+      // 台账含 phases 之外字母 → 环境错误
+      await writeLedger(dir, ["a", "m", "k"])
+      const outside = await runCli(["continue", dir])
+      expect(outside.code).toBe(1)
+      expect(outside.err).toContain("之外的阶段字母")
+      await writeLedger(dir, ["a", "m"])
+      // 迁移同一性选项跨轮固定: -m 与迁移三键显式给出即用法错误
+      for (const extra of [["-m", "migrate"], ["--mode", "migrate"], ["--source-dir", "legacy", "--source-path", "x"], ["--dest-dir", "target"]]) {
+        const locked = await runCli(["continue", dir, ...extra])
+        expect(locked.code).toBe(1)
+        expect(locked.err).toContain("跨轮固定")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("上一轮全部完成 → 归档重置 + 参数按轮修订 + 新一轮状态正确", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "am", "-p", "第一轮意图"])).code).toBe(0)
+      await writeLedger(dir, ["a", "m"])
+      // 轮后手工留下的任务也一并归档留痕(台账完整 = 完成态,routePhase complete)
+      await Bun.write(join(dir, "PLAN.md"), "## T-009: 轮后手工任务 [pending]\n正文\n")
+      // 新 phases "admtvk" 不以台账 "am" 为前缀——归档重置后不受前缀护栏约束
+      const cont = await runCli(["continue", dir, "--phases", "admtvk", "-p", "第二轮聚焦补齐差距", "--context-limit", "128"])
+      expect(cont.code).toBe(0)
+      expect(cont.out).toContain("上一轮(第 1 轮)已归档")
+      expect(cont.out).toContain("docs/phases/round-1/")
+      expect(cont.out).toContain("已开启第 2 轮继续迁移")
+      expect(cont.out).toContain("开始 a(分析)阶段规划")
+      expect(await readConfig(dir)).toMatchObject({ phases: "admtvk", contextLimit: 128 })
+      // 归档内容与状态重置
+      expect(await Bun.file(join(dir, "docs/phases/round-1/phases.md")).text()).toContain("- [done] a")
+      expect(await Bun.file(join(dir, "docs/phases/round-1/PLAN.md")).text()).toContain("轮后手工任务")
+      expect(await Bun.file(join(dir, "docs/phases.md")).exists()).toBe(false)
+      // 根 PLAN.md 由模板循环重建为空模板
+      const plan = await Bun.file(join(dir, "PLAN.md")).text()
+      expect(plan).not.toContain("## T-")
+      expect(plan).toContain("阶段规划会话")
+      // -p 覆盖为新轮意图
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("第二轮聚焦补齐差距\n")
+      // status: 阶段进度行带轮次标注
+      const status = await runCli(["status", dir])
+      expect(status.out).toContain("阶段(第 2 轮): a▶ d m t v k")
+      // 重复 continue: 台账已重置(新一轮未开始)→ 拒绝并指引先跑 run
+      const again = await runCli(["continue", dir])
+      expect(again.code).toBe(1)
+      expect(again.err).toContain("尚缺 a、d、m、t、v、k")
+      expect(again.err).toContain(`opencode-auto run ${dir}`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("continue 不带 --phases 保留既有阶段;run 横幅带轮次标注", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      await writeLedger(dir, ["a", "m"])
+      const cont = await runCli(["continue", dir])
+      expect(cont.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "am" })
+      expect(cont.out).toContain("开始 a(分析)阶段规划")
+      // run 启动横幅的阶段进度行带轮次标注(删除 PLAN.md 使 run 在 server 前退出)
+      await rm(join(dir, "PLAN.md"))
+      const banner = await runCli(["run", dir])
+      expect(banner.out).toContain("阶段(第 2 轮): a▶ m")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
