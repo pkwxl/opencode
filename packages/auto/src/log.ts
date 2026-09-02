@@ -76,7 +76,8 @@ function stamp(text: string, on: boolean): string {
   return text.split("\n").map((line) => `[${time}] ${line}`).join("\n")
 }
 
-// 任务/子任务开始的显著横幅: 上下各一行重复字符包围标题。
+// 任务/子任务开始的显著横幅与隐式(自动)任务子任务分割标记: 首行重复字符,
+// 标题单独一行(任务/子任务)或空行后接标题(隐式分割)。
 export function banner(text: string) {
   rule("=", text)
 }
@@ -85,7 +86,11 @@ export function subbanner(text: string) {
   rule("-", text)
 }
 
+// 隐式(自动)任务子任务分割标记: 点线、空行、"<任务> <标题>: 子任务分解"。
+export function autobanner(text: string) {
+  rule(".", text)
+}
+
 function rule(char: string, text: string) {
-  const line = char.repeat(61)
-  log(`\n${line}\n${text}\n${line}`)
+  log(`\n${char.repeat(60)}\n${text}`)
 }

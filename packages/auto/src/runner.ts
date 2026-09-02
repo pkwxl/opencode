@@ -4,7 +4,7 @@ import { dirname, join } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { commitTree } from "./git"
-import { log, subbanner, vlog } from "./log"
+import { autobanner, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import {
   appendSubtasks,
@@ -703,6 +703,7 @@ async function ensureDecomposed(
   let feedback = ""
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the file; the file is a hard requirement.
+  autobanner(`${task.id} ${task.title}: 子任务分解`)
   for (let i = 0; ; i++) {
     const result = await runSession(client, task, renderDecompose(plan, task, opts) + feedback, opts, chain)
     if (result.type === "blocked") return result
