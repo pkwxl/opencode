@@ -26,7 +26,7 @@ import { allowWrite, protect, reprotect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage, type ServerHandle } from "./server"
-import { usePromptLibrary } from "./template"
+import { renderText, usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 // AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
@@ -235,7 +235,9 @@ export async function runAll(
     log(`  恢复方式: 运行 opencode-auto init ${directory} 重建该文件(或手工补回),然后重新运行`)
     return 1
   }
-  if (agentName === "auto" && agentText !== (await Bun.file(templateAgent).text())) {
+  // init 写入的是按当时 verify/testByDriver 渲染后的契约,比对须用当前配置同样
+  // 渲染(与原始模板全文比对会因 {{#if}} 标记恒不一致)。
+  if (agentName === "auto" && agentText !== renderText(await Bun.file(templateAgent).text(), { verify: Boolean(opts.verify), testByDriver: Boolean(opts.testByDriver) })) {
     log(`⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),可运行 opencode-auto init ${directory} 刷新`)
   }
 
