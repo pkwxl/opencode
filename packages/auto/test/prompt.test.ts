@@ -114,8 +114,9 @@ describe("renderSubtask", () => {
     const on = renderSubtask(plan, task, subtask, { testByDriver: true })
     expect(on).toContain("测试执行协议(--test-by-driver)")
     expect(on).toContain("tmp/test.sh")
-    expect(on).toContain("不要在会话内直接运行测试命令")
-    expect(on).toContain("归档脚本复制为 tmp/test.sh")
+    expect(on).toContain("不要在会话内直接运行编译、测试、构建、lint")
+    expect(on).toContain("把命令写成脚本放入 test/ 目录")
+    expect(on).toContain("把同一脚本路径再次写入 tmp/test.sh")
     // handover-test 附带交接文档提示
     const handover = renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })
     expect(handover).toContain("docs/T-002.testhandoff.md")
@@ -211,34 +212,32 @@ describe("renderVerifyJudge", () => {
     ms: 600012,
     timedOut: true,
     out: "/tmp/pkg/verify.out",
-    err: "/tmp/pkg/verify.err",
   }
 
-  test("注入脚本路径、退出码、耗时、超时与 out/err 路径", () => {
+  test("注入脚本路径、退出码、耗时、超时与输出文件路径", () => {
     const text = renderVerifyJudge(plan, task, run)
     expect(text).toContain("/tmp/pkg/verify.sh")
     expect(text).toContain("124")
     expect(text).toContain("600012ms")
     expect(text).toContain("超时: 是")
     expect(text).toContain("/tmp/pkg/verify.out")
-    expect(text).toContain("/tmp/pkg/verify.err")
     const fresh = renderVerifyJudge(plan, task, { ...run, timedOut: false })
     expect(fresh).toContain("超时: 否")
   })
 
   test("直读文件分段读、禁止执行验证、替换重验协议与判定协议", () => {
     const text = renderVerifyJudge(plan, task, run)
-    expect(text).toContain("直读上述 out/err 文件")
+    expect(text).toContain("直读上述输出文件")
     expect(text).toContain("分段读取")
     expect(text).toContain("不直接判不通过")
     expect(text).toContain("禁止直接执行任何验证脚本或验证性命令")
     expect(text).toContain("验证的执行权在 driver")
     expect(text).toContain("只读检查")
-    // 替换重验协议: 新脚本写指定路径,结论为重验,driver 执行后经同一对文件回传
+    // 替换重验协议: 新脚本写指定路径,结论为重验,driver 执行后经同一输出文件回传
     const replacement = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
     expect(text).toContain(`编写新的验证脚本替换 ${replacement}`)
     expect(text).toContain("结论: 重验")
-    expect(text).toContain("整写回传到同一对 out/err 文件")
+    expect(text).toContain("合并整写回传到同一输出文件")
     expect(text).toContain("只判定不修复")
     expect(text).toContain(VERDICT_FILE)
     expect(text).toContain("结论: 通过")
@@ -384,12 +383,11 @@ describe("renderWhole", () => {
 describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
   const run: TestRunInfo = {
     seq: 3,
-    script: "/tmp/pkg/tmp/test.3.sh",
+    script: "/tmp/pkg/test/build.sh",
     code: 1,
     ms: 1234,
     timedOut: false,
     out: "/tmp/pkg/tmp/test.3.out",
-    err: "/tmp/pkg/tmp/test.3.err",
   }
 
   test("testHandoffFile 路径与 ondemand handoff 分离命名", () => {
@@ -397,16 +395,15 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
     expect(testHandoffFile(task)).not.toBe("docs/T-002.handoff.md")
   })
 
-  test("结果反馈: 退出码/耗时/归档脚本与输出路径,要求直读文件判断并说明再次请求方式", () => {
+  test("结果反馈: 退出码/耗时/脚本与输出路径,要求直读文件判断并说明再次请求方式", () => {
     const text = renderTestResult(run)
     expect(text).toContain("第 3 次")
-    expect(text).toContain("/tmp/pkg/tmp/test.3.sh")
+    expect(text).toContain("/tmp/pkg/test/build.sh")
     expect(text).toContain("退出码: 1")
     expect(text).toContain("1234ms")
     expect(text).toContain("/tmp/pkg/tmp/test.3.out")
-    expect(text).toContain("/tmp/pkg/tmp/test.3.err")
     expect(text).toContain("直读文件判断")
-    expect(text).toContain("复制为 tmp/test.sh")
+    expect(text).toContain("把同一脚本路径再次写入 tmp/test.sh")
     const timeout = renderTestResult({ ...run, timedOut: true, timeoutReason: "idle" })
     expect(timeout).toContain("持续无输出")
   })
@@ -788,7 +785,7 @@ describe("模板渲染完整性", () => {
       renderWrapup(plan, task, { solo: true, mode: migrate }),
       renderWhole(plan, task, { ondemand: true, continuation: true, mode: migrate }),
       renderVerifyScriptGen(plan, task, "/tmp/auto/verify.sh"),
-      renderVerifyJudge(plan, task, { script: "/s", code: 1, ms: 2, timedOut: true, timeoutReason: "idle", out: "/o", err: "/e" }),
+      renderVerifyJudge(plan, task, { script: "/s", code: 1, ms: 2, timedOut: true, timeoutReason: "idle", out: "/o" }),
       renderFix(plan, task, "差距"),
       renderReview(plan, task, { final: false }),
       renderReview(plan, task, { final: true, early: true }),
@@ -796,9 +793,9 @@ describe("模板渲染完整性", () => {
       renderFinalTask(plan, "audit", 2, "残余差距", migrate),
       renderFinalTask(plan, "finalize", 1, "", undefined),
       renderHandoffSteer(task),
-      renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", err: "/e", seq: 1 }),
-      renderTestHandover({ script: "/s", code: 1, ms: 9, timedOut: true, timeoutReason: "max", out: "/o", err: "/e", seq: 2 }, { handoffFile: "/h", used: 1, limit: 2 }),
-      renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", err: "/e", seq: 2 }, stuck: 11 }),
+      renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
+      renderTestHandover({ script: "/s", code: 1, ms: 9, timedOut: true, timeoutReason: "max", out: "/o", seq: 2 }, { handoffFile: "/h", used: 1, limit: 2 }),
+      renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
       renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
       renderDryrun(),
       renderDecompose(plan, solo),
@@ -807,10 +804,12 @@ describe("模板渲染完整性", () => {
     for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("init 产物模板按 verify 两态渲染后不残留模板标签", async () => {
+  test("init 产物模板按 verify/testByDriver 两态渲染后不残留模板标签", async () => {
     for (const raw of [await Bun.file(planTemplate).text(), await Bun.file(agentTemplate).text()]) {
       for (const verify of [true, false]) {
-        expect(renderText(raw, { verify })).not.toMatch(/\{\{|\}\}/)
+        for (const testByDriver of [true, false]) {
+          expect(renderText(raw, { verify, testByDriver })).not.toMatch(/\{\{|\}\}/)
+        }
       }
     }
   })

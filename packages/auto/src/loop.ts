@@ -60,6 +60,18 @@ const COMMIT_PRINCIPLE = `<!-- opencode-auto:commit:start -->
 opencode-auto check 检查)。
 <!-- opencode-auto:commit:end -->`
 
+// AGENTS.md 测试执行原则块: 与验证/提交原则对等的第四类执行权原则块——
+// 编译/测试/构建/lint 等命令的执行权在 driver(由 config.testByDriver 启用)。
+// 与验证原则块同样按开关补写/移除:未启用时 AGENTS.md 不得保留其描述。
+const TEST_PRINCIPLE = `<!-- opencode-auto:test:start -->
+测试执行原则: 编译、测试、构建、lint 等可能耗时长或产生大量输出的命令一律由
+driver 在会话外执行,任何会话不要直接运行它们;需要时把命令写成脚本放入 test/
+目录,再把脚本路径写入 tmp/test.sh 告知 driver 执行。driver 运行后把退出码与
+输出文件路径(stdout 与 stderr 合并落入单个文件)反馈回会话,由 AI 直读文件
+判断结果。任务描述与项目规范不要出现与此相违背的指示(可用 opencode-auto
+check 检查)。
+<!-- opencode-auto:test:end -->`
+
 // AGENTS.md 维护规则块: 第四个标记块,约束 AGENTS.md 保持工作流入口定位、
 // 不膨胀为知识库(长迁移中它每个 provider turn 都进入上下文,膨胀侵蚀全部会话
 // 的有效上下文);细节路由到 docs/agents/<主题>.md,由 check 命令的行数 note
@@ -75,14 +87,15 @@ AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
    状态、一次性决策、对话过程不写入(一次性决策按 AUTO-DECISION 记入相关文档)。
 <!-- opencode-auto:maint:end -->`
 
-// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、提交原则块与
-// 维护规则块各自独立判断、只追加,从不改写已有内容。返回补写了哪些块。
-// verify(任务级验收开关)为 false 时不补写验证原则块,并移除已存在的——
-// 验收机制不存在时,AGENTS.md 不得保留与其相关的描述。
+// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
+// 提交原则块与维护规则块各自独立判断、只追加,从不改写已有内容。返回补写了哪些块。
+// verify(任务级验收开关)为 false 时不补写验证原则块,并移除已存在的;testByDriver
+// (编译/测试等命令执行权)为 false 时同样不补写测试执行原则块并移除已存在的——
+// 机制不存在时,AGENTS.md 不得保留与其相关的描述。
 export async function ensurePointer(
   directory: string,
-  opts: { verify?: boolean } = {},
-): Promise<{ pointer: boolean; principle: boolean; principleRemoved: boolean; commit: boolean; maint: boolean }> {
+  opts: { verify?: boolean; testByDriver?: boolean } = {},
+): Promise<{ pointer: boolean; principle: boolean; principleRemoved: boolean; test: boolean; testRemoved: boolean; commit: boolean; maint: boolean }> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
   let text = existing
@@ -93,8 +106,15 @@ export async function ensurePointer(
   const principleRemoved = !opts.verify && text.includes("opencode-auto:verify:start")
   if (principleRemoved) {
     // 吞掉块与其后全部换行: 块前空行分隔保留(前文与后文之间仍是单空行),
-    // 块在文件尾时不留尾部空行。
+    // 块在文件尾时不留尾部空行。测试执行原则块的移除同策略。
     text = text.replace(/<!-- opencode-auto:verify:start -->[\s\S]*?<!-- opencode-auto:verify:end -->\n*/, "")
+    text = text.replace(/\n{2,}$/, "\n")
+  }
+  const test = Boolean(opts.testByDriver) && !text.includes("opencode-auto:test:start")
+  if (test) text = `${text.trimEnd()}\n\n${TEST_PRINCIPLE}\n`
+  const testRemoved = !opts.testByDriver && text.includes("opencode-auto:test:start")
+  if (testRemoved) {
+    text = text.replace(/<!-- opencode-auto:test:start -->[\s\S]*?<!-- opencode-auto:test:end -->\n*/, "")
     text = text.replace(/\n{2,}$/, "\n")
   }
   const commit = !text.includes("opencode-auto:commit:start")
@@ -102,7 +122,7 @@ export async function ensurePointer(
   const maint = !text.includes("opencode-auto:maint:start")
   if (maint) text = `${text.trimEnd()}\n\n${MAINT_RULE}\n`
   if (text !== existing) await Bun.write(agentsFile, text)
-  return { pointer, principle, principleRemoved, commit, maint }
+  return { pointer, principle, principleRemoved, test, testRemoved, commit, maint }
 }
 
 // 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
@@ -226,13 +246,15 @@ export async function runAll(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
-  // 启动会话前确保 AGENTS.md 指针块与验证/提交原则块、维护规则块就位(缺失则补写;
-  // verify 未启用时不补写验证原则块、已存在的会移除)。AGENTS.md 本身保持可写,
-  // 任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
-  const ensured = await ensurePointer(directory, { verify: opts.verify })
+  // 启动会话前确保 AGENTS.md 指针块与验证/测试/提交原则块、维护规则块就位(缺失
+  // 则补写;verify/testByDriver 未启用时不补写对应块、已存在的会移除)。AGENTS.md
+  // 本身保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
+  const ensured = await ensurePointer(directory, { verify: opts.verify, testByDriver: opts.testByDriver })
   if (ensured.pointer) log("已补写: AGENTS.md 指针块")
   if (ensured.principle) log("已补写: AGENTS.md 验证原则块")
   if (ensured.principleRemoved) log("已移除: AGENTS.md 验证原则块(任务级验收未启用)")
+  if (ensured.test) log("已补写: AGENTS.md 测试执行原则块")
+  if (ensured.testRemoved) log("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
   if (ensured.commit) log("已补写: AGENTS.md 提交原则块")
   if (ensured.maint) log("已补写: AGENTS.md 维护规则块")
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")

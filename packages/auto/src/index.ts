@@ -108,7 +108,7 @@ if (command === "run") {
       process.exit(1)
     }
   }
-  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "phases", "source-dir", "source-path", "dest-dir"]) {
+  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "phases", "source-dir", "source-path", "dest-dir"]) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
@@ -186,20 +186,10 @@ if (command === "run") {
     console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
     process.exit(1)
   }
-  // --test-by-driver: 测试执行协议(与 verify 三段式正交)——执行类会话(子任务/
-  // 整任务/修复轮)不在会话内直接运行测试,把测试脚本写入 tmp/test.sh 由 driver
-  // 执行,输出按序归档 tmp/test.<n>.out/err 并 steer 回原会话由 AI 直读判断。
-  // --handover-test(需 --test-by-driver): 测试失败且会话上下文达到上限时,要求
-  // AI 写交接文档后换新会话续跑,防止超大上下文中反复试错。
-  const testByDriver = flags.has("test-by-driver") && flags.get("test-by-driver") !== "false"
-  const handoverTest = flags.has("handover-test") && flags.get("handover-test") !== "false"
-  if (handoverTest && !testByDriver) {
-    console.error("--handover-test 需搭配 --test-by-driver 一起使用")
-    process.exit(1)
-  }
   // 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
   // 错误退出 1(严格失败优于静默回落)。文件缺失取缺省并做 legacy 回落
-  // (.auto/config.json 的 mode,仅提示、不迁移)。
+  // (.auto/config.json 的 mode,仅提示、不迁移)。testByDriver/handoverTest 同为
+  // 宪法级选项,run 不再接受(已在上文拒绝清单拦截),这里从 config 读取。
   let config: ProjectConfig
   try {
     config = await loadProjectConfig(directory)
@@ -208,10 +198,10 @@ if (command === "run") {
     process.exit(1)
   }
   if (await legacyModeFallback(directory)) log("ℹ 模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置")
-  if (testByDriver) {
+  if (config.testByDriver) {
     log(
-      `⚙ 测试由 driver 执行(--test-by-driver): 会话写 tmp/test.sh 请求执行,输出按序归档 tmp/test.<n>.out/err 并反馈回会话判断` +
-        (handoverTest ? ";测试失败且上下文达上限时写交接文档换新会话(--handover-test)" : ""),
+      `⚙ 测试由 driver 执行: 会话把脚本放 test/、把脚本路径写入 tmp/test.sh 请求执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 并反馈回会话判断` +
+        (config.handoverTest ? ";测试失败且上下文达上限时写交接文档换新会话" : ""),
     )
   }
   const modes = loadModeTable(directory)
@@ -257,8 +247,8 @@ if (command === "run") {
     phases: config.phases,
     source: config.source,
     destDir: config.destDir,
-    testByDriver,
-    handoverTest,
+    testByDriver: config.testByDriver,
+    handoverTest: config.handoverTest,
   })
   process.exit(code)
 }
@@ -490,12 +480,31 @@ if (command === "init" || command === "continue") {
   if (phases !== undefined) explicit.phases = phases
   if (source !== undefined) explicit.source = source
   if (destDir !== undefined) explicit.destDir = destDir
+  // --test-by-driver / --handover-test: 与 --verify 同为布尔宪法级选项,init/continue
+  // 接受(裸选项或 true 启用、false 关闭),经 explicit 合并(amend 语义)。二者不属
+  // 迁移同一性选项,continue 可按轮修订。
+  if (flags.has("test-by-driver")) explicit.testByDriver = flags.get("test-by-driver") !== "false"
+  if (flags.has("handover-test")) explicit.handoverTest = flags.get("handover-test") !== "false"
   let existing: ProjectConfig
   try {
     existing = await loadProjectConfig(directory)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
+  }
+  // handoverTest 须搭配 testByDriver: 显式给出时按本次生效值校验(未显式给出
+  // test-by-driver 则回落既有配置值);amend 关闭 test-by-driver 而保留既有
+  // handoverTest=true 亦在此拦截。
+  {
+    const effectiveTestByDriver = explicit.testByDriver ?? existing.testByDriver
+    const effectiveHandoverTest = explicit.handoverTest ?? existing.handoverTest
+    if (effectiveHandoverTest && !effectiveTestByDriver) {
+      console.error(
+        `${explicit.handoverTest !== undefined ? "--handover-test" : "既有 handoverTest"} 需搭配 --test-by-driver 一起使用: ` +
+          "测试交接只在测试由 driver 执行时才有意义。修订方式: opencode-auto init <dir> --test-by-driver --handover-test,或直接编辑 .opencode/auto/config.json",
+      )
+      process.exit(1)
+    }
   }
   // 阶段台账(docs/phases.md)是推导式状态载体;非法即环境错误退出 1(报文给
   // 人工修订指引)。台账非空时显式改 --phases 须满足前缀护栏。
@@ -603,7 +612,7 @@ if (command === "init" || command === "continue") {
     const raw = await Bun.file(source).text()
     // PLAN.md 与 agent 契约按 config.verify 条件渲染: 未启用任务级验收时,
     // 产出物不含 verify 相关描述(verify 字段示例、driver 验收语义等)。
-    const content = file === "opencode.json" ? raw : renderText(raw, { verify: config.verify })
+    const content = file === "opencode.json" ? raw : renderText(raw, { verify: config.verify, testByDriver: config.testByDriver })
     const existing = await Bun.file(target).text().catch(() => undefined)
     // 阶段化流程下占位模板态(从未编辑过的 <任务标题> 占位任务)视为缺失:
     // 切换 --phases 时替换为空模板,交给阶段规划会话填充。
@@ -615,15 +624,20 @@ if (command === "init" || command === "continue") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `已创建: ${file}` : stale ? `已替换(占位模板换为空模板,由阶段规划会话填充): ${file}` : `已替换(与模板不一致): ${file}`)
   }
-  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、提交原则块与
-  // 维护规则块各自独立、只追加;验证原则块仅 config.verify 启用时补写,
-  // 未启用时移除已存在的块(验收机制不存在,AGENTS.md 不保留其描述)。
-  const ensured = await ensurePointer(directory, { verify: config.verify })
+  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
+  // 提交原则块与维护规则块各自独立、只追加;验证/测试原则块仅对应开关启用时补写,
+  // 未启用时移除已存在的块(机制不存在,AGENTS.md 不保留其描述)。
+  const ensured = await ensurePointer(directory, { verify: config.verify, testByDriver: config.testByDriver })
   console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
   if (config.verify) {
     console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
   } else if (ensured.principleRemoved) {
     console.log("已移除: AGENTS.md 验证原则块(任务级验收未启用)")
+  }
+  if (config.testByDriver) {
+    console.log(ensured.test ? "已补写: AGENTS.md 测试执行原则块" : "跳过已存在: AGENTS.md 测试执行原则块")
+  } else if (ensured.testRemoved) {
+    console.log("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
   }
   console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
   console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
@@ -660,21 +674,31 @@ if (command === "init" || command === "continue") {
 }
 
 // check: 启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
-// (及 verify 启用时的"验证执行权在 driver"原则)相违背的描述;命中退出码 1,
-// 供人工修订。验证类检查是否启用由 checkPrinciple 依配置决定,verifyOn 仅用于
-// 调整报文措辞。
+// (及 verify 启用时的"验证执行权在 driver"、testByDriver 启用时的"测试/编译
+// 等命令执行权在 driver"原则)相违背的描述;命中退出码 1,供人工修订。验证/
+// 测试类检查是否启用由 checkPrinciple 依配置决定,verifyOn/testOn 仅用于调整
+// 报文措辞。
 if (command === "check") {
-  const { findings, notes, verifyOn } = await checkPrinciple(directory)
-  console.log(`检查 ${directory}: ${verifyOn ? "验证/提交执行权原则" : "提交执行权原则"}(验证类检查${verifyOn ? "已启用" : "未启用,任务级验收关闭"})`)
+  const { findings, notes, verifyOn, testOn } = await checkPrinciple(directory)
+  const active = [
+    ...(verifyOn ? ["验证"] : []),
+    ...(testOn ? ["测试"] : []),
+    "提交",
+  ].join("/")
+  const detail = [
+    ...(verifyOn ? [] : ["验证类未启用(任务级验收关闭)"]),
+    ...(testOn ? [] : ["测试类未启用(测试由 driver 执行关闭)"]),
+  ].join(";")
+  console.log(`检查 ${directory}: ${active}执行权原则${detail ? `(${detail})` : ""}`)
   for (const note of notes) console.log(`ℹ ${note}`)
   if (!findings.length) {
-    console.log(`✓ 未发现与${verifyOn ? "验证/提交" : "提交"}原则相违背的描述`)
+    console.log(`✓ 未发现与${active}原则相违背的描述`)
     process.exit(0)
   }
   for (const finding of findings) {
     console.log(`⚠ ${finding.file}${finding.task ? `(${finding.task})` : ""}:${finding.line}: ${finding.text}`)
   }
-  console.log(`发现 ${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""})`)
+  console.log(`发现 ${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""}${testOn ? ";编译/测试/构建/lint 等命令统一写成脚本放 test/ 由 driver 执行" : ""})`)
   process.exit(1)
 }
 
@@ -717,24 +741,24 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>]
-  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]]
-  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--test-by-driver] [--handover-test] [--dryrun [true|false]]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]]
+  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]]
+  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
-      -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
-      -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
-      --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)
-      --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;两者均为相对 <dir> 的相对路径,init 时校验存在性)
-      --dest-dir <相对路径> 迁移目标目录(相对 <dir>): driver 工作目录与迁移目标经它隔离,迁移产出的代码写入 <dir>/<dest-dir>
-      --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
-      --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
-      --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
-      --test-by-driver 测试执行协议(与 --verify 正交): 执行类会话不在会话内直接运行测试,把测试脚本写入 tmp/test.sh 由 driver 执行,输出按序归档 tmp/test.<n>.out/err 并反馈回会话由 AI 判断
-      --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(docs/<任务>.testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
-      continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——上一轮归档到 docs/phases/round-<N>/(台账、各阶段归档、PLAN 与知识文档残留),台账与 PLAN.md 重置,上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项、-p 可按轮修订(不受前缀护栏约束)
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+       -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
+       -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+       --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)
+       --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;两者均为相对 <dir> 的相对路径,init 时校验存在性)
+       --dest-dir <相对路径> 迁移目标目录(相对 <dir>): driver 工作目录与迁移目标经它隔离,迁移产出的代码写入 <dir>/<dest-dir>
+       --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
+       --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
+       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
+       --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
+       --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(docs/<任务>.testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
+       continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——上一轮归档到 docs/phases/round-<N>/(台账、各阶段归档、PLAN 与知识文档残留),台账与 PLAN.md 重置,上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项(含 --test-by-driver/--handover-test)、-p 可按轮修订(不受前缀护栏约束)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
 process.exit(1)

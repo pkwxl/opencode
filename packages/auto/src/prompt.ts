@@ -22,9 +22,10 @@ export const VERDICT_FILE = ".auto/verify.md"
 // driver 复用同一解析逻辑读取其末行结论。
 export const REVIEW_FILE = ".auto/review.md"
 
-// 三段式 verify 的运行信息:driver 执行脚本后交判定会话。out/err 为整写输出的
-// 绝对路径,内容由判定会话直读文件,不经工具输出截断(这正是三段式的目的)。
-// timeoutReason: idle = 持续无输出被看门狗终止;max = 超过绝对时长上限被终止。
+// 三段式 verify 的运行信息:driver 执行脚本后交判定会话。out 为 stdout 与
+// stderr 合并整写的绝对路径(单文件),内容由判定会话直读,不经工具输出截断
+// (这正是三段式的目的)。timeoutReason: idle = 持续无输出被看门狗终止;
+// max = 超过绝对时长上限被终止。
 export type VerifyRun = {
   script: string
   code: number
@@ -32,11 +33,10 @@ export type VerifyRun = {
   timedOut: boolean
   timeoutReason?: "idle" | "max"
   out: string
-  err: string
 }
 
 // --test-by-driver 的单次测试执行信息(VerifyRun + 按序归档编号): driver 执行
-// tmp/test.sh 后经 steer 注入执行会话,AI 直读 out/err 判断。
+// AI 指定的 test/ 脚本后经 steer 注入执行会话,AI 直读合并输出文件判断。
 export type TestRunInfo = VerifyRun & { seq: number }
 
 // --handover-test 的测试交接文档(相对目标目录): 测试失败且上下文达到上限时,
@@ -56,7 +56,6 @@ export function renderTestResult(run: TestRunInfo): string {
       ? `是(已被 driver 终止${run.timeoutReason === "max" ? ":超过绝对时长上限" : ":持续无输出,看门狗判定无进度"})`
       : "否",
     out: run.out,
-    err: run.err,
   })
 }
 
@@ -66,7 +65,6 @@ export function renderTestHandover(run: TestRunInfo, info: { handoffFile: string
   return renderTemplate("test-handover", {
     code: String(run.code),
     out: run.out,
-    err: run.err,
     script: run.script,
     handoffFile: info.handoffFile,
     used: String(info.used),
@@ -83,7 +81,6 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
     runScript: input.run?.script,
     runCode: input.run ? String(input.run.code) : undefined,
     runOut: input.run?.out,
-    runErr: input.run?.err,
     stuck: input.stuck ? String(input.stuck) : undefined,
   })
 }
@@ -136,7 +133,6 @@ export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun, opts: 
       ? `是(已被 driver 终止${run.timeoutReason === "max" ? ":超过绝对时长上限" : ":持续无输出,看门狗判定无进度"})`
       : "否",
     runOut: run.out,
-    runErr: run.err,
     replacement: join(verifyTmpDir(dirname(plan.path)), "verify.sh"),
     laterVerifyList: later.length ? later.map((item) => `   - ${item.id}: ${item.verify}`).join("\n") : "   (无)",
   })

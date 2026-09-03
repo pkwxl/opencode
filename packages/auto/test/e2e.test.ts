@@ -144,6 +144,8 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--source-dir", "/tmp"],
         ["--source-path", "src/mod.ts"],
         ["--dest-dir", "target"],
+        ["--test-by-driver"],
+        ["--handover-test"],
       ]
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
@@ -166,8 +168,8 @@ describe("CLI 解析: run 侧选项与配置", () => {
       expect(renamed.code).toBe(1)
       expect(renamed.err).toContain("已更名为 --idle-time")
       expect((await runCli(["init", dir, "--verify-max", "30"])).err).toContain("已更名为 --idle-max")
-      // --handover-test 需搭配 --test-by-driver
-      const lonely = await runCli(["run", dir, "--handover-test"])
+      // --handover-test 需搭配 --test-by-driver(init 侧宪法级校验,run 已整体拒绝)
+      const lonely = await runCli(["init", dir, "--handover-test"])
       expect(lonely.code).toBe(1)
       expect(lonely.err).toContain("--handover-test 需搭配 --test-by-driver")
     } finally {
@@ -272,6 +274,8 @@ describe("CLI: init 固化项目配置", () => {
         idleTime: 10,
         idleMax: 0,
         commit: true,
+        testByDriver: false,
+        handoverTest: false,
         phases: "m",
       })
     } finally {
@@ -293,6 +297,8 @@ describe("CLI: init 固化项目配置", () => {
         idleTime: 10,
         idleMax: 0,
         commit: false,
+        testByDriver: false,
+        handoverTest: false,
         phases: "m",
       })
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -318,6 +324,32 @@ describe("CLI: init 固化项目配置", () => {
         expect(init.code).toBe(1)
         expect(init.err).not.toBe("")
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init --test-by-driver/--handover-test 固化配置并补写/移除 AGENTS.md 测试执行原则块", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const init = await runCli(["init", dir, "--test-by-driver", "--handover-test"])
+      expect(init.code).toBe(0)
+      expect(init.out).toContain("已补写: AGENTS.md 测试执行原则块")
+      expect(await readConfig(dir)).toMatchObject({ testByDriver: true, handoverTest: true })
+      const agents = await Bun.file(join(dir, "AGENTS.md")).text()
+      expect(agents).toContain("opencode-auto:test:start")
+      expect(agents).toContain("编译、测试、构建、lint")
+      // agent 契约同步带测试协议段(内联在工作契约第 2 条)
+      const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
+      expect(agent).toContain("编译、测试、构建、lint 等可能耗时长")
+      expect(agent).toContain("tmp/test.sh")
+      // amend 关闭 handover-test 保留 test-by-driver;再关闭 test-by-driver 移除块
+      expect((await runCli(["init", dir, "--handover-test", "false"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ testByDriver: true, handoverTest: false })
+      const off = await runCli(["init", dir, "--test-by-driver", "false"])
+      expect(off.code).toBe(0)
+      expect(off.out).toContain("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).not.toContain("opencode-auto:test:start")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

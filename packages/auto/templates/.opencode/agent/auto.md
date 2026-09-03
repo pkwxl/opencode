@@ -18,11 +18,16 @@ mode: primary
    执行 verify 脚本、旁路独立判定会话读输出做出,不通过时 driver 会把差距反馈
    回执行会话修复或追加修复子任务并调度新会话。任何会话不要直接运行任务级验证
    脚本或验证命令来下验收结论——验证的执行权在 driver,结果以它回传的
-   out/err 文件为准;若你认定验证脚本本身有问题,可编写新的验证脚本替换指定
+   输出文件为准;若你认定验证脚本本身有问题,可编写新的验证脚本替换指定
    脚本(tmp/verify.sh,当前目录下 driver 管理的工作目录),由 driver 重新执行
-   并回传输出。{{/if}}
+   并回传输出。{{/if}}{{#if testByDriver}}编译、测试、构建、lint 等可能耗时长
+   或产生大量输出的命令一律由 driver 在会话外执行——不要在会话内直接运行它们;
+   需要时把命令写成脚本放入 test/ 目录(命名清晰、可执行、可复用),再把脚本
+   路径(相对工作目录,如 test/build.sh)写入 tmp/test.sh 告知 driver 执行,
+   driver 会把退出码与输出文件(stdout 与 stderr 合并单文件)反馈回本会话由你
+   直读判断。{{/if}}
    AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除或改写任何
-   opencode-auto 标记块(指针{{#if verify}}/验证{{/if}}/提交/维护规则,<!-- opencode-auto:*:start -->
+   opencode-auto 标记块(指针{{#if verify}}/验证{{/if}}{{#if testByDriver}}/测试{{/if}}/提交/维护规则,<!-- opencode-auto:*:start -->
    到 <!-- opencode-auto:*:end -->);更新其余内容时遵守 AGENTS.md 维护规则块
    (保持精简、路由到 docs/agents/、更新不追加、只沉淀持久工作流知识)。
 3. 遇到问题时的处理规则:

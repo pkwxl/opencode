@@ -23,6 +23,14 @@ export type ProjectConfig = {
   // 分钟,0 = 不设,1..1440。
   idleMax: number
   commit: boolean
+  // --test-by-driver: 测试/编译/构建等命令的执行权收归 driver(与 verify 正交)。
+  // 启用时执行类会话不直接运行这类命令,改为把命令写成脚本放 test/ 目录、把
+  // 脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落单文件
+  // 后把退出码与输出文件反馈回会话。
+  testByDriver: boolean
+  // --handover-test(需 testByDriver): 测试失败且会话上下文达上限时要求 AI 写
+  // 交接文档后换新会话续跑,防止超大上下文中反复试错。
+  handoverTest: boolean
   // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
   // 单次运行,行为与阶段化之前完全一致。
   phases: string
@@ -45,6 +53,8 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   idleTime: 10,
   idleMax: 0,
   commit: true,
+  testByDriver: false,
+  handoverTest: false,
   phases: "m",
 }
 
@@ -98,7 +108,9 @@ export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "不设"}`
   return (
     `模式 ${config.mode} · agent ${config.agent} · 子任务 ${config.subtask} · 验收 ${config.verify ? "on" : "off"}` +
-    ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"} · 上下文上限 ${config.contextLimit}k · 阶段 ${config.phases}`
+    ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"}` +
+    (config.testByDriver ? ` · 测试 driver on${config.handoverTest ? "(交接)" : ""}` : "") +
+    ` · 上下文上限 ${config.contextLimit}k · 阶段 ${config.phases}`
   )
 }
 
@@ -120,12 +132,19 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof phases !== "string" || parsePhases(phases) === null) {
     throw new Error(`${CONFIG_FILE} 的 phases 须为 admtvk 的子序列且包含 m(如 m、amt、admtvk)`)
   }
+  const testByDriver = booleanOf("testByDriver", pick("testByDriver"))
+  const handoverTest = booleanOf("handoverTest", pick("handoverTest"))
+  if (handoverTest && !testByDriver) {
+    throw new Error(`${CONFIG_FILE} 的 handoverTest 须搭配 testByDriver: true`)
+  }
   return {
     mode,
     agent: stringOf("agent", pick("agent")),
     contextLimit,
     subtask: subtaskOf(pick("subtask")),
     verify: booleanOf("verify", pick("verify")),
+    testByDriver,
+    handoverTest,
     // 看门狗键由 verifyIdle/verifyMax 更名而来(现同时控制 verify 与 test 脚本
     // 执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init 自然固化新键。
     idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "分钟"),

@@ -38,7 +38,7 @@ opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后归档上一轮、开启新一轮(见"阶段化流程")
 opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行(agent/验收/提交等语义来自项目配置)
-opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/提交执行权原则的描述,并提示 AGENTS.md 行数超限
+opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/测试/提交执行权原则的描述,并提示 AGENTS.md 行数超限
 opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 ```
 
@@ -46,7 +46,8 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 模板不一致时总是替换,保证 agent 契约为最新版本。
 
 **breaking 变更**:`run` 不再接受 `-m/--mode`、`--agent`、`--context-limit`、
-`--subtask`、`--verify`、`--idle-time`、`--idle-max`、`--commit`、`--phases`、
+`--subtask`、`--verify`、`--idle-time`、`--idle-max`、`--commit`、`--test-by-driver`、
+`--handover-test`、`--phases`、
 `--source-dir`、`--source-path`、`--dest-dir`——任一出现即用法错误(退出码 1),报文
 给出修订指引(`opencode-auto init <dir> --<flag> <值>`,或直接编辑配置文件);这些
 选项已固化为项目属性,见下节。
@@ -69,6 +70,8 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 | `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(verify 与 test)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取 |
 | `idleMax` | 0..1440(分钟,0 = 不设) | `0` | driver 托管脚本的绝对时长上限;旧键名 `verifyMax` 在新键缺失时回落读取 |
 | `commit` | `true` / `false` | `true` | 会话后统一提交(git 历史即 AI 变更的审计轨迹) |
+| `testByDriver` | `true` / `false` | `false` | 编译/测试/构建/lint 等命令由 driver 执行(会话经 `test/` 脚本 + `tmp/test.sh` 标记请求),见[测试执行协议](#测试执行协议--test-by-driver) |
+| `handoverTest` | `true` / `false` | `false` | 测试失败且上下文达限时写交接文档换新会话续跑;须搭配 `testByDriver: true`,否则配置校验失败(退出码 1) |
 | `phases` | `admtvk` 的子序列且含 `m` | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼);`"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致。见[阶段化流程](#阶段化流程--phases) |
 | `source` | `{ "dir", "path" }` 或缺省 | 无 | 迁移源参数: `dir` 源系统目录(相对工作目录、不含 `..`)+ `path` 源模块相对路径(相对 `dir`);init 时校验 `join` 后存在,run 不再校验(源系统可能已下线) |
 | `destDir` | 相对路径(不含 `..`)或缺省 | 无 | 迁移目标目录(相对工作目录): driver 工作目录的流程文件(PLAN.md、docs/ 等)与迁移产出的代码经它隔离,产物写入 `<工作目录>/<destDir>`;不校验存在性(目标目录常由迁移过程创建),缺省 = 迁移产出直接落在工作目录 |
@@ -125,10 +128,12 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 | `--dest-dir <相对路径>` | 迁移目标目录,写入配置的 `destDir` 键(相对工作目录、不含 `..`,可独立于 source 修订);driver 工作目录的流程文件与迁移产出的代码经它隔离——规划会话据此把代码任务指向 `<工作目录>/<dest-dir>`;不校验存在性(目标目录常由迁移过程创建) |
 | `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
 | `--verify [true]` | 任务级三段式验收开关,写入配置(缺省/裸选项 `false`);启用时收尾后由 driver 亲自执行 verify 脚本、旁路独立判定会话判定,见[执行流水线](#执行流水线)。该开关同时决定验收描述是否进入 init 产物:未启用时 AGENTS.md 不含验证原则块、PLAN.md 模板与 agent 契约不含 verify 相关描述(已存在的 AGENTS.md 验证原则块会在 init/run 时移除);`phases` 含 `v` 而该开关未启用时 init 会打 note 提示(v 阶段任务自身即检验、不受影响) |
-| `--idle-time [1-120]` | driver 托管脚本的无进度判定窗口(分钟,缺省/裸选项 10;旧名 `--verify-idle` 已更名,出现即报错指引):driver 轮询两个输出文件(`tmp/verify.out` / `tmp/verify.err` 或 `tmp/test.<n>.out` / `test.<n>.err`)的大小,持续无任何增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
+| `--idle-time [1-120]` | driver 托管脚本的无进度判定窗口(分钟,缺省/裸选项 10;旧名 `--verify-idle` 已更名,出现即报错指引):driver 轮询输出文件(`tmp/verify.out` 或 `tmp/test.<n>.out`,stdout/stderr 合并单文件)的大小,持续无增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
 | `--idle-max [1-1440]` | driver 托管脚本的绝对运行时长上限(分钟,缺省/裸选项不设;旧名 `--verify-max` 已更名):兜底防止脚本无限循环输出;设为正整数时无论是否有输出,总时长超限即终止 |
 | `--commit [true]` | 会话后统一提交开关,写入配置(缺省/裸选项 `true`;`none` 为 `false` 别名);`false` 关闭后改动留在工作区由人工提交 |
 | `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
+| `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(与 `verify` 正交,缺省/裸选项 `false`),写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
+| `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
 
 以上写入配置的选项均为"显式给出的键才被改写"的 amend 语义;`-p` 的 brief.md 同为
 整写覆盖(amend 语义),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
@@ -136,8 +141,8 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 `continue` 子命令(续轮迁移)复用同一套 amend 语义与模板/标记块维护,差异见
 [续轮迁移](#续轮迁移-continue):`--phases`、`-p` 与其余执行选项
 (`--agent`/`--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/
-`--commit`)可按轮修订;`-m/--mode` 与迁移参数(`--source-dir`/`--source-path`/
-`--dest-dir`)跨轮固定,显式给出即用法错误(退出码 1)。
+`--commit`/`--test-by-driver`/`--handover-test`)可按轮修订;`-m/--mode` 与迁移参数
+(`--source-dir`/`--source-path`/`--dest-dir`)跨轮固定,显式给出即用法错误(退出码 1)。
 
 ### run 的选项(本次执行)
 
@@ -153,8 +158,6 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 | `--early` | 与 `--review` 组合,把质量审核会话挪进 verify 脚本执行窗口并行执行(需 `--review` 已启用,单独出现为用法错误退出码 1;配置 `verify: false` 时窗口不存在、审核串行,启动打降级提示):脚本由 driver 本地执行、不含任何会话,窗口内审核与其并行,节省约一个审核会话的墙钟时间;任意时刻至多一个 LLM 会话。详见[质量审核](#质量审核--review) |
 | `--early-review [1-10]` | `--review n --early` 的快捷糖(缺省不启用;裸选项为 3 轮;显式值须为 1..10 整数);与 `--review` 同时出现为用法错误(消除歧义) |
 | `--final-review [1-5]` | 终审闭环(缺省不启用;裸选项为 2 轮;显式值须为 1..5 整数,值为审计轮上限、含首轮 audit):原任务全部完成后进入 audit → remediate → validate → finalize 的任务驱动终审流程,validate 差距回退 audit,审计轮耗尽熔断停机(退出码 2);可与 `--review` / `--early-review` 组合(原任务的逐任务审核照常 + 终审闭环,互不干扰;终审任务本身即检验,强制不做任务级验收与逐任务审核)。详见[终审闭环](#终审闭环--final-review) |
-| `--test-by-driver` | 测试执行协议(与 `verify` 正交,可独立启用):执行类会话(子任务/整任务/修复轮)不在会话内直接运行测试,把测试脚本写入 `tmp/test.sh` 请求 driver 执行,退出码与完整输出反馈回会话由 AI 直读判断。详见[测试执行协议](#测试执行协议--test-by-driver) |
-| `--handover-test` | 需搭配 `--test-by-driver`(单独出现为用法错误退出码 1):测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
 | `--dryrun [true]` | 权限预检:只调用一次 AI,列出执行任务可能需要的 opencode.json 授权之外的目录/操作并逐只读探查确认,报告写入 `.auto/dryrun.md` 并打印到终端;不执行任何任务 |
 
 每次 `run` 都会在目标目录的 `.auto/logs/run-<时间戳>.log` 新建日志文件,
@@ -267,21 +270,21 @@ AI 判定):
    `tmp/` 工作目录;首行 shebang + 原命令原文,不加额外语义,退出码原样透传,
    每次验收幂等覆盖);自然语言或缺失 → 先开一个旁路脚本生成会话,把它翻译成可
    执行脚本(每任务生成一次,跨修复轮复用)。
-2. **driver 执行**:在目标目录执行脚本,stdout/stderr 整写 `tmp/verify.out` 与
-   `tmp/verify.err`(输出零截断,命令只执行一次)。超时是**进度看门狗**而非固定
-   时长:driver 轮询两个输出文件的大小,任一增长即视为有进度并重置计时,持续
+2. **driver 执行**:在目标目录执行脚本,stdout/stderr 合并整写 `tmp/verify.out`
+   (单文件,输出零截断,命令只执行一次)。超时是**进度看门狗**而非固定
+   时长:driver 轮询输出文件的大小,增长即视为有进度并重置计时,持续
    配置的 `idleTime`(默认 10 分钟)无增长才终止(退出码记 124);`idleMax`
    可另设绝对时长上限(缺省不设)。执行完毕的运行记录随进度记录持久化——此后
    中断,恢复时跳过重跑、直接进入判定。退出码非 0 不直接判失败——判定权在下一
    段的判定会话,保留"脚本本身坏/环境不适用不误判"的韧性。
-3. **AI 判定**:旁路独立判定会话(总是新建,不进会话链)直读 out/err 文件
+3. **AI 判定**:旁路独立判定会话(总是新建,不进会话链)直读输出文件
    (大文件分段读,不经工具输出截断)与相关代码。判定会话**禁止直接执行任何
    验证脚本或验证性命令**(运行测试、构建、lint、启动服务等)——验证的执行权
    在 driver,结果一律以回传文件为准;只读检查(读文件、git log/status、grep
    源码)不受限。若判定会话认定脚本本身有问题或覆盖不足,可编写新的验证脚本
    替换指定脚本(`tmp/verify.sh`),末行结论写
-   `结论: 重验 <原因>`;driver 重新执行替换脚本并把输出整写回传同一对
-   out/err 文件,由新的判定会话继续判定(至多 3 轮)。判定会话另被授权做
+   `结论: 重验 <原因>`;driver 重新执行替换脚本并把输出整写回传同一
+   输出文件,由新的判定会话继续判定(至多 3 轮)。判定会话另被授权做
    **verify 经验沉淀**:发现预设验证命令存在会重复出现的通病(写法错误、路径
    不对、环境不适用等)时,可更新 PLAN.md 中**后续未完成任务**的 verify 字段
    (仅限该字段,driver 在会话期间临时放开写权限、结束后校验并还原越权编辑),
@@ -409,33 +412,42 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 
 ## 测试执行协议(--test-by-driver)
 
-`--test-by-driver` 把"实现环节中的测试执行权"收归 driver(与任务级三段式验收
+`--test-by-driver`(宪法级选项,经 `init --test-by-driver` 固化到配置
+`testByDriver` 键,`run` 出现即用法错误)把"实现环节中编译/测试/构建/lint 等
+可能耗时长或产生大量输出的命令"的执行权收归 driver(与任务级三段式验收
 `verify` **正交**:不依赖 `verify` 开关、可独立启用,文件与协议完全分离)。适用会话为
 执行类会话——子任务会话(`subtask: auto`)、整任务会话(`off` / `ondemand`)与验收
 差距修复轮;分解、收尾、判定、审核等旁路会话不适用(`--dryrun` 亦不启用)。
 
 协议机制:
 
-- **请求 = 写文件**:会话需要运行测试时,把完整测试脚本写入 `tmp/test.sh`(可执行;
-  目标目录下 driver 管理的工作目录,已被 gitignore),然后结束本轮消息。文件存在即
-  "待执行请求"——没有 mtime 竞态,重写文件即可再次请求。
-- **执行与归档**:driver 在会话 idle 时检测待执行请求,把脚本按序归档为
-  `tmp/test.<n>.sh`(全量保留历史,编号跨会话/跨运行接续)并移除 `tmp/test.sh`,
-  然后在目标目录执行(共用 `idleTime` / `idleMax` 看门狗);stdout/stderr 整写
-  `tmp/test.<n>.out` / `tmp/test.<n>.err`。退出码非 0 不由 driver 判定——判断权在
-  AI(与 verify 的哲学一致)。
-- **反馈**:driver 经 steer(下一 provider turn 边界)把退出码、耗时、超时原因与
-  输出文件路径注入**同一会话**;AI 直读文件判断(不经工具输出截断,大文件分段读)。
-  重跑同一测试可把归档脚本复制回 `tmp/test.sh`;修改后重跑则重写 `tmp/test.sh`。
-  如此循环直至会话不再写脚本、自然结束,回到主流水线。
+- **请求 = 脚本 + 标记**:会话需要运行这类命令时,把命令写成脚本放入 `test/`
+  目录(命名清晰、可执行、可复用,随仓库版本化),再把脚本路径(相对工作目录,
+  如 `test/build.sh`)写入 `tmp/test.sh` 标记文件(目标目录下 driver 管理的
+  工作目录,已被 gitignore),然后结束本轮消息。标记存在即"待执行请求"——
+  没有 mtime 竞态,重写标记即可再次请求。
+- **执行与输出**:driver 在会话 idle 时检测标记:内容为现存文件路径 → 直接
+  运行该脚本(`test/` 内脚本已随统一提交版本化,不另归档);否则按内联脚本回落,
+  把内容整写为 `tmp/test.<n>.sh` 后运行(保留执行快照供审计)。两种形态均移除
+  标记后在目标目录执行(共用 `idleTime` / `idleMax` 看门狗),stdout/stderr
+  合并整写 `tmp/test.<n>.out`(单文件,编号跨会话/跨运行接续)。退出码非 0
+  不由 driver 判定——判断权在 AI(与 verify 的哲学一致)。
+- **反馈**:driver 经 steer(下一 provider turn 边界)把退出码、耗时、超时原因、
+  脚本与输出文件路径注入**同一会话**;AI 直读文件判断(不经工具输出截断,大文件
+  分段读)。重跑同一测试 = 把同一脚本路径再次写入 `tmp/test.sh`(脚本可先修改
+  再重跑)。如此循环直至会话不再写标记、自然结束,回到主流水线。
 
-每个执行会话入口会清除上一会话/上次运行遗留的待执行脚本(归档历史保留),防止陈旧
+每个执行会话入口会清除上一会话/上次运行遗留的待执行标记(归档历史保留),防止陈旧
 请求污染新会话;测试脚本不经 opencode 权限体系(等同 driver 亲自在本地跑测试,
-与 verify 脚本同一非安全边界)。
+与 verify 脚本同一非安全边界)。该约定同时经 init 下沉:AGENTS.md 补写测试执行
+原则块(`opencode-auto:test` 标记块,随配置补写/移除)、agent 契约带对应条款,
+`check` 子命令在 `testByDriver` 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自
+运行编译/测试/构建/lint 的描述。
 
 ### 测试交接(--handover-test)
 
-`--handover-test`(需搭配 `--test-by-driver`)针对"超大上下文中反复试错":测试失败
+`--handover-test`(需搭配 `--test-by-driver`,经 `init --handover-test` 固化到配置
+`handoverTest` 键)针对"超大上下文中反复试错":测试失败
 (非零退出码或看门狗超时)且会话上下文已用 tokens 达到 `contextLimit` 时,driver 不再
 把结果 steer 回原会话,而是要求 AI 立即把进度、关键决策、失败测试上下文与后续步骤
 写入 `docs/<任务ID>.testhandoff.md` 后结束会话(文档缺失带反馈重试一次,仍缺失按
@@ -685,7 +697,7 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 
 ## AGENTS.md 标记块与维护规则
 
-`init` / `run` 幂等维护目标目录 AGENTS.md 中的四个 opencode-auto 标记块
+`init` / `run` 幂等维护目标目录 AGENTS.md 中的五个 opencode-auto 标记块
 (`<!-- opencode-auto:*:start -->` 到 `<!-- opencode-auto:*:end -->`,各自独立判断、
 缺失则追加,除此之外永不改写 AGENTS.md):
 
@@ -693,11 +705,13 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 | --- | --- |
 | `opencode-auto:start` | CURRENT.md 指针:每个会话开始先读当前任务镜像 |
 | `opencode-auto:verify` | 验证原则:任务级验证脚本/命令由 driver 在会话外执行(仅 `verify: true` 时补写;未启用时移除已存在的块) |
+| `opencode-auto:test` | 测试执行原则:编译/测试/构建/lint 等命令由 driver 在会话外执行(仅 `testByDriver: true` 时补写;未启用时移除已存在的块) |
 | `opencode-auto:commit` | 提交原则:会话后由 driver 递归统一提交,会话不执行 git 提交 |
 | `opencode-auto:maint` | AGENTS.md 维护规则(见下) |
 
 提交原则块描述的是**与配置无关的不变式**(会话不提交),不随配置开关改写;验证
-原则块对应验收机制本身,随 `verify` 开关补写/移除——机制不存在时,AGENTS.md 不
+原则块对应验收机制、测试执行原则块对应测试执行协议,分别随 `verify` /
+`testByDriver` 开关补写/移除——机制不存在时,AGENTS.md 不
 保留其描述。生效配置由 run 启动横幅与 `status` 打印。
 
 **维护规则**(第四标记块,约束 AGENTS.md 保持工作流入口定位、不膨胀为知识库——
@@ -748,14 +762,17 @@ driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时�
 ## 原则检查(check)
 
 `opencode-auto check [dir]` 启发式扫描目标目录的 `AGENTS.md` 与 `PLAN.md`,报告与
-"验证执行权 / 提交执行权在 driver"原则相违背的描述——即要求会话/AI 亲自运行
-验证脚本或验证命令、自行下验收结论,或要求会话执行 git 提交的语句(命中打印
+"验证执行权 / 测试执行权 / 提交执行权在 driver"原则相违背的描述——即要求会话/AI
+亲自运行验证脚本或验证命令、自行下验收结论,要求会话直接运行编译/测试/构建/lint
+命令,或要求会话执行 git 提交的语句(命中打印
 文件、行号与原文,退出码 1;干净时退出码 0)。原则性/否定句("不要运行…")、
 归属 driver 的语句、PLAN.md 的 `verify` 字段行与 opencode-auto 标记块不算违背;
 匹配为启发式,报告供人工确认。验证类描述的检查仅在配置 `verify: true` 时进行
-(未启用时 driver 不做任务级验收,会话运行验证命令不算违背),提交类检查始终
+(未启用时 driver 不做任务级验收,会话运行验证命令不算违背),测试类描述的检查
+仅在 `testByDriver: true` 时进行,提交类检查始终
 进行。`check` 另输出提示(note,不影响退出码):缺少提交原则块、缺少验证原则块
-(仅 `verify: true` 时)、AGENTS.md 超 150 行(维护规则块第 1 条,建议精简并把
+(仅 `verify: true` 时)、缺少测试执行原则块(仅 `testByDriver: true` 时)、
+AGENTS.md 超 150 行(维护规则块第 1 条,建议精简并把
 细节路由到 `docs/agents/`)。`init` 会在 AGENTS.md 幂等维护标记块,并在启用验收
 时把验证原则写进 PLAN.md 模板,使规划时就注意这一点。
 

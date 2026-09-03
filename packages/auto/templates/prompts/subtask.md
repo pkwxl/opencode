@@ -23,4 +23,4 @@
       不通过会把差距反馈回来修复;{{/if}}
    b. {{#if verify}}不要运行任务级 verify(验收由 driver 交独立审核会话处理)、{{/if}}可新增但不要修改 docs/ 中的内容(若必须修改按 AUTO-DECISION 记入相关文档);{{> state-rule}}
 {{#if testByDriver}}
-测试执行协议(--test-by-driver): 不要在会话内直接运行测试命令;需要测试时,把完整测试脚本写入 tmp/test.sh(可执行;目标目录下 driver 管理的工作目录),然后结束本轮消息等待 driver 执行。driver 执行后会把退出码与完整输出文件路径反馈回本会话,你直读文件判断结果;需要再次测试时重写 tmp/test.sh,重跑同一测试可把反馈中给出的归档脚本复制为 tmp/test.sh。{{#if handoverTest}}测试失败且本会话上下文达到上限时,driver 会要求你把进度与后续步骤写入 {{testHandoffFile}} 并结束会话,由新会话继续。{{/if}}{{/if}}
+测试执行协议(--test-by-driver): 不要在会话内直接运行编译、测试、构建、lint 等可能耗时长或产生大量输出的命令;需要时把命令写成脚本放入 test/ 目录(命名清晰、可执行、可复用),再把脚本路径(相对工作目录,如 test/build.sh)写入 tmp/test.sh 告知 driver 执行,然后结束本轮消息等待。driver 执行后会把退出码与输出文件路径(stdout 与 stderr 合并落入单文件)反馈回本会话,你直读文件判断结果;需要再次测试时把同一脚本路径再次写入 tmp/test.sh 即可重跑(脚本可先修改再重跑)。{{#if handoverTest}}测试失败且本会话上下文达到上限时,driver 会要求你把进度与后续步骤写入 {{testHandoffFile}} 并结束会话,由新会话继续。{{/if}}{{/if}}

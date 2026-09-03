@@ -87,7 +87,7 @@ describe("runVerifyScript", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("执行脚本,退出码与 out/err 落盘且整写返回", async () => {
+  test("执行脚本,退出码与合并输出(单文件)落盘且整写返回", async () => {
     const script = join(dir, "check.sh")
     await Bun.write(script, "#!/usr/bin/env bash\necho stdout-内容\necho stderr-内容 >&2\nexit 7\n")
     await chmod(script, 0o755)
@@ -95,10 +95,12 @@ describe("runVerifyScript", () => {
     expect(run.code).toBe(7)
     expect(run.timedOut).toBe(false)
     expect(run.ms).toBeGreaterThanOrEqual(0)
-    expect(run.out).toBe("stdout-内容\n")
-    expect(run.err).toBe("stderr-内容\n")
-    expect(await Bun.file(join(verifyTmpDir(dir), "verify.out")).text()).toBe("stdout-内容\n")
-    expect(await Bun.file(join(verifyTmpDir(dir), "verify.err")).text()).toBe("stderr-内容\n")
+    // stdout/stderr 合并为单文件,行序随缓冲交错,分别断言两行均在
+    expect(run.out).toContain("stdout-内容")
+    expect(run.out).toContain("stderr-内容")
+    const written = await Bun.file(join(verifyTmpDir(dir), "verify.out")).text()
+    expect(written).toContain("stdout-内容")
+    expect(written).toContain("stderr-内容")
   })
 
   test("cwd 为目标目录", async () => {
@@ -127,18 +129,18 @@ describe("runVerifyScript", () => {
     expect(run.out).toBe("from-bash\n")
   })
 
-  test("opts.out/err 指定输出路径(--test-by-driver 的按序归档共用)", async () => {
+  test("opts.out 指定输出路径(--test-by-driver 的按序归档共用)", async () => {
     const script = join(dir, "check.sh")
     await Bun.write(script, "#!/usr/bin/env bash\necho t-out\necho t-err >&2\nexit 5\n")
     await chmod(script, 0o755)
     const out = join(verifyTmpDir(dir), "test.1.out")
-    const err = join(verifyTmpDir(dir), "test.1.err")
-    const run = await runVerifyScript(dir, script, { out, err })
+    const run = await runVerifyScript(dir, script, { out })
     expect(run.code).toBe(5)
-    expect(run.out).toBe("t-out\n")
-    expect(run.err).toBe("t-err\n")
-    expect(await Bun.file(out).text()).toBe("t-out\n")
-    expect(await Bun.file(err).text()).toBe("t-err\n")
+    expect(run.out).toContain("t-out")
+    expect(run.out).toContain("t-err")
+    const written = await Bun.file(out).text()
+    expect(written).toContain("t-out")
+    expect(written).toContain("t-err")
     // 缺省路径不受影响(不写 verify.out)
     expect(await Bun.file(join(verifyTmpDir(dir), "verify.out")).exists()).toBe(false)
   })

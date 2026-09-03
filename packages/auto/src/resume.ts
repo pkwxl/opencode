@@ -25,7 +25,6 @@ type RunRecord = {
   timedOut: boolean
   timeoutReason?: "idle" | "max"
   out: string
-  err: string
 }
 
 // early 并行审核的结论(结构兼容 runner 的 Verdict)。

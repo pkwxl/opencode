@@ -100,11 +100,29 @@ describe("loadProjectConfig", () => {
         ["destDir", "/abs/target"],
         ["destDir", "../up"],
         ["destDir", 42],
+        ["testByDriver", "yes"],
+        ["handoverTest", 1],
       ]
       for (const [key, value] of bad) {
         writeConfig(dir, JSON.stringify({ [key]: value }))
         await expect(loadProjectConfig(dir)).rejects.toThrow(key === "source" ? "source" : key)
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("handoverTest 须搭配 testByDriver,否则 throw", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ handoverTest: true }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/handoverTest 须搭配 testByDriver/)
+      writeConfig(dir, JSON.stringify({ testByDriver: true, handoverTest: true }))
+      const config = await loadProjectConfig(dir)
+      expect(config.testByDriver).toBe(true)
+      expect(config.handoverTest).toBe(true)
+      expect(CONFIG_DEFAULTS.testByDriver).toBe(false)
+      expect(CONFIG_DEFAULTS.handoverTest).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -235,5 +253,8 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
       "模式 migrate · agent custom · 子任务 auto · 验收 on · 看门狗 idle 10m/max 30m · 提交 on · 上下文上限 64k · 阶段 m",
     )
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("阶段 admtvk")
+    // 测试由 driver 执行键入摘要,交接修饰随 handoverTest
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true })).toContain("· 测试 driver on ·")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true, handoverTest: true })).toContain("· 测试 driver on(交接) ·")
   })
 })

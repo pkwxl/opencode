@@ -106,7 +106,6 @@ describe("内置模板注册表", () => {
       runMs: "1",
       runTimeout: "否",
       runOut: "/out",
-      runErr: "/err",
       replacement: "/r",
       laterVerifyList: "   (无)",
       final: true,
@@ -147,6 +146,8 @@ describe("内置模板注册表", () => {
       phaseV: false,
       phaseK: false,
       verify: true,
+      testByDriver: true,
+      handoverTest: true,
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)

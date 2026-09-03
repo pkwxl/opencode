@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import { mkdir, readdir, rm } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { commitTitle, commitTree } from "./git"
@@ -134,14 +134,16 @@ export type Opts = {
   // (缺省不设;config 的 idleTime / idleMax 以分钟设定,verify 与 test 脚本共用)。
   idleMs?: number
   maxMs?: number
-  // --test-by-driver: 测试执行协议(与 verify 三段式正交,run 级开关)——执行类
-  // 会话(子任务/整任务/修复轮)不在会话内直接运行测试,把测试脚本写入 tmp/test.sh
-  // 由 driver 执行(存在即待执行请求),输出按序整写 tmp/test.<n>.out/err,退出码
-  // 与输出文件路径 steer 回原会话由 AI 直读判断。
+  // --test-by-driver: 测试/编译/构建等命令的执行协议(与 verify 三段式正交,
+  // config.testByDriver 持久化、run 注入)——执行类会话(子任务/整任务/修复轮)
+  // 不在会话内直接运行这类命令,把命令写成脚本放 test/ 目录、把脚本路径写入
+  // tmp/test.sh 由 driver 执行(存在即待执行请求),driver 合并 stdout/stderr
+  // 整写 tmp/test.<n>.out,退出码与输出文件路径 steer 回原会话由 AI 直读判断。
   testByDriver?: boolean
-  // --handover-test(需 --test-by-driver): 测试失败(非零退出或看门狗超时)且
-  // 会话上下文已用达到 contextLimit 时,要求 AI 写交接文档 docs/<id>.testhandoff.md
-  // 并结束会话,driver 开新会话据其续跑,防止在超大上下文中反复试错。
+  // --handover-test(需 --test-by-driver,config 持久化): 测试失败(非零退出或
+  // 看门狗超时)且会话上下文已用达到 contextLimit 时,要求 AI 写交接文档
+  // docs/<id>.testhandoff.md 并结束会话,driver 开新会话据其续跑,防止在超大
+  // 上下文中反复试错。
   handoverTest?: boolean
   // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
   mode?: ModeSpec
@@ -660,7 +662,7 @@ function nextStepText(phase: Phase | undefined): string {
       return `全部检查项已完成,当前处于收尾阶段(更新 docs/ 报告并提交)。`
     case "verify":
       return phase.run
-        ? `任务级验收的验证脚本已由 driver 执行完毕(输出在 tmp/verify.out 与 tmp/verify.err),本会话为独立判定会话。`
+        ? `任务级验收的验证脚本已由 driver 执行完毕(输出在 tmp/verify.out),本会话为独立判定会话。`
         : `当前处于任务级验收阶段:验证脚本由 driver 在会话外执行,你不要亲自运行。`
     case "review":
       return phase.stage === "audit"
@@ -915,11 +917,10 @@ async function executeVerifyScript(
   }
   await persist?.({ kind: "verify", stage: "exec", ...counters })
   const auditing = audit?.()
-  const run = await runVerifyScript(dir, path, { idleMs: opts.idleMs, maxMs: opts.maxMs })
   const outPath = join(tmp, "verify.out")
-  const errPath = join(tmp, "verify.err")
+  const run = await runVerifyScript(dir, path, { idleMs: opts.idleMs, maxMs: opts.maxMs, out: outPath })
   log(
-    `  ⚙ verify 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,输出: ${outPath} / ${errPath}`,
+    `  ⚙ verify 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,输出: ${outPath}`,
   )
   const record: VerifyRun = {
     script: path,
@@ -928,7 +929,6 @@ async function executeVerifyScript(
     timedOut: run.timedOut,
     timeoutReason: run.timeoutReason,
     out: outPath,
-    err: errPath,
   }
   // 脚本执行完毕即持久化运行记录(early 的审核结论由 verifyTask 在 join 后随
   // judge 阶段一并写入)。
@@ -1143,10 +1143,11 @@ type Steer = { limit: number; text: string }
 
 // --test-by-driver 的测试执行协议状态(watch 与 runExecSession 共享,跨会话/
 // 跨运行持续): tmp 为目标目录下 driver 工作目录(tmp/);seq 为按序归档编号
-// (初始化时扫描既有 tmp/test.<n>.sh 取最大值,历史全量保留不覆盖);handoffFile
-// 为 --handover-test 交接文档绝对路径;handover 开关;limit 为上下文已用量上限
-// (config.contextLimit 原值;ondemand 的交接 steer 用其 2 倍);last 为最近一次执行信息
-// (continuation 提示引用其输出路径)。
+// (初始化时扫描既有 tmp/test.<n>.out 取最大值——每次执行都会产出 .out,故以
+// 它为编号基准;test/ 脚本路径形态不另产 .sh,内联形态产 tmp/test.<n>.sh);
+// handoffFile 为 --handover-test 交接文档绝对路径;handover 开关;limit 为上下文
+// 已用量上限(config.contextLimit 原值;ondemand 的交接 steer 用其 2 倍);
+// last 为最近一次执行信息(continuation 提示引用其输出路径)。
 type TestRun = {
   dir: string
   tmp: string
@@ -1205,12 +1206,12 @@ async function runExecSession(
   }
 }
 
-// 归档编号接续: 扫描 tmp/ 下既有 test.<n>.sh 取最大编号,跨会话/跨运行不覆盖
-// (全量保留历史);目录缺失从 0 起。
+// 归档编号接续: 扫描 tmp/ 下既有 test.<n>.out 取最大编号(每次执行都产出 .out,
+// 故覆盖 test/ 脚本路径与内联两种形态);跨会话/跨运行不覆盖。目录缺失从 0 起。
 async function latestTestSeq(tmp: string): Promise<number> {
   let max = 0
   for (const file of await readdir(tmp).catch(() => [] as string[])) {
-    max = Math.max(max, Number(/^test\.(\d+)\.sh$/.exec(file)?.[1] ?? 0))
+    max = Math.max(max, Number(/^test\.(\d+)\.out$/.exec(file)?.[1] ?? 0))
   }
   return max
 }
@@ -1374,9 +1375,10 @@ async function watch(
   let steerSent = false
   // 自动答复过的问题(同一问题重复出现仍阻塞停机)。
   const autoAnswered: string[] = []
-  // --test-by-driver 测试执行协议状态: 会话 idle 时检测 tmp/test.sh(存在即待
-  // 执行请求)→ 归档执行 → steer 结果回本会话继续观察;--handover-test 在测试
-  // 失败且 used 达上限时改为要求写交接文档,文档就绪后正常结束(testHandover)。
+  // --test-by-driver 测试执行协议状态: 会话 idle 时检测 tmp/test.sh(请求标记,
+  // 内容为 test/ 下脚本路径或内联脚本)→ 运行该脚本 → steer 结果回本会话继续
+  // 观察;--handover-test 在测试失败且 used 达上限时改为要求写交接文档,文档
+  // 就绪后正常结束(testHandover)。
   let testHandover = false
   let testHandoverAsked = false
   let testHandoverRetried = false
@@ -1583,21 +1585,32 @@ async function watch(
   return { lastText, error, pct, used, testHandover }
 }
 
-// --test-by-driver 的单次测试执行: tmp/test.sh 存在即待执行请求——按序归档为
-// tmp/test.<n>.sh(全量保留)并移除原文件,经 runVerifyScript 在目标目录执行
-// (输出整写 tmp/test.<n>.out / test.<n>.err,共用 idleTime/idleMax 看门狗)。
-// 退出码非 0 不在此判定——判断权在 AI(与 verify 哲学一致,机制彼此正交)。
+// --test-by-driver 的单次测试执行: tmp/test.sh 为请求标记,其内容有两种形态——
+// (1) 指向 test/ 下脚本的路径(相对工作目录,如 test/build.sh):driver 直接运行
+// 该脚本(脚本本身在 test/ 已进 git,无需另行归档);
+// (2) 内联脚本(AI 未按协议固化到 test/ 时的回落):driver 把内容整写为
+// tmp/test.<n>.sh 后运行,保留执行快照供审计。
+// 两种形态均把 stdout+stderr 合并整写 tmp/test.<n>.out(共用 idleTime/idleMax
+// 看门狗)。退出码非 0 不在此判定——判断权在 AI(与 verify 哲学一致,机制正交)。
 async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
   const seq = ++test.seq
-  const script = join(test.tmp, `test.${seq}.sh`)
+  const marker = join(test.tmp, "test.sh")
   const out = join(test.tmp, `test.${seq}.out`)
-  const err = join(test.tmp, `test.${seq}.err`)
+  const content = await Bun.file(marker).text()
+  const candidate = resolve(test.dir, content.trim())
+  let script: string
+  // 单行内容且指向现存文件 → 运行该 test/ 脚本(协议首选);否则按内联脚本回落。
+  if (!content.includes("\n") && (await Bun.file(candidate).exists())) {
+    script = candidate
+  } else {
+    script = join(test.tmp, `test.${seq}.sh`)
+    await Bun.write(script, content)
+  }
+  await rm(marker, { force: true })
   await mkdir(test.tmp, { recursive: true })
-  await Bun.write(script, Bun.file(join(test.tmp, "test.sh")))
-  await rm(join(test.tmp, "test.sh"), { force: true })
-  const run = await runVerifyScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out, err })
+  const run = await runVerifyScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out })
   log(
-    `  ⚙ test 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,输出: ${out} / ${err}`,
+    `  ⚙ test 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,脚本: ${script},输出: ${out}`,
   )
   const info: TestRunInfo = {
     script,
@@ -1606,7 +1619,6 @@ async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
     timedOut: run.timedOut,
     timeoutReason: run.timeoutReason,
     out,
-    err,
     seq,
   }
   test.last = info
