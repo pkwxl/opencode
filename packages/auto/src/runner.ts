@@ -1382,8 +1382,19 @@ async function watch(
   let testHandover = false
   let testHandoverAsked = false
   let testHandoverRetried = false
-  const steerText = async (text: string) => {
-    await client.session.prompt({ sessionID, parts: [{ type: "text", text }] }).catch(() => {})
+  // 回合结束服务端连发两个 idle 事件(session.status idle + session.idle);steer
+  // 经 promptAsync 投递即返回后,第二个 idle 会在 steer 回合启动前到达,照处理
+  // 会误判会话结束提前 break。处理过一次 idle 后忽略后续 idle,直到本会话出现
+  // 新的会话事件(新回合开始)再重新接受。
+  let idleHandled = false
+  // steer 投递用 promptAsync(投递即返回):v2 同步 /message 端点会阻塞到它启动的
+  // 整个回合结束,在事件循环内同步等待会卡死事件循环(事件堆积、提问/权限无人
+  // 应答)。投递失败记 log 并返回 false,调用方按隐性阻塞处理,不再静默空等。
+  const steerText = async (text: string): Promise<boolean> => {
+    const sent = await client.session.promptAsync({ sessionID, parts: [{ type: "text", text }] }).catch(() => undefined)
+    if (sent && !sent.error) return true
+    log(`⚠ steer 投递失败: ${sent?.error ? JSON.stringify(sent.error) : "请求异常"}`)
+    return false
   }
   const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string }> => {
     // 交接要求已发出: 校验交接文档就绪(非空即有效,内容交新会话解释)。
@@ -1402,10 +1413,11 @@ async function watch(
         }
       }
       testHandoverRetried = true
-      await steerText(
+      const ok = await steerText(
         `你上次结束会话但未写出有效的 ${test!.handoffFile}(缺失或为空)。这是硬性要求: ` +
           `把进度、关键决策、失败测试上下文与后续步骤写入该文件后再结束会话。`,
       )
+      if (!ok) return { type: "blocked", question: `steer 投递失败(要求补写 ${test!.handoffFile}),无法继续会话,详见日志。` }
       return { type: "continue" }
     }
     const pending = join(test!.tmp, "test.sh")
@@ -1416,10 +1428,12 @@ async function watch(
     if (failed && test!.handover && used >= test!.limit) {
       testHandoverAsked = true
       log(`⚠ 测试失败(退出码 ${run.code})且上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(test!.limit)} 上限,要求写交接文档后换新会话`)
-      await steerText(renderTestHandover(run, { handoffFile: test!.handoffFile, used, limit: test!.limit }))
+      const ok = await steerText(renderTestHandover(run, { handoffFile: test!.handoffFile, used, limit: test!.limit }))
+      if (!ok) return { type: "blocked", question: "steer 投递失败(测试交接要求),无法继续会话,详见日志。" }
       return { type: "continue" }
     }
-    await steerText(renderTestResult(run))
+    const ok = await steerText(renderTestResult(run))
+    if (!ok) return { type: "blocked", question: "steer 投递失败(测试结果反馈),无法继续会话,详见日志。" }
     return { type: "continue" }
   }
   // verbose 已输出的 part 与 message,避免同一 part 的多次更新事件重复打印。
@@ -1431,6 +1445,7 @@ async function watch(
     if (event.type === "message.part.updated") {
       const part = event.properties.part
       if (part.sessionID !== sessionID) continue
+      idleHandled = false
       if (part.type === "text" && part.time?.end) {
         lastText = part.text
         if (verbose) vlog(part.text)
@@ -1445,6 +1460,7 @@ async function watch(
     if (event.type === "message.updated") {
       const info = event.properties.info
       if (info.sessionID !== sessionID) continue
+      idleHandled = false
       if (info.role !== "assistant" || !info.time.completed || seen.has(info.id)) continue
       seen.add(info.id)
       limits ??= await contextLimits(client)
@@ -1455,7 +1471,15 @@ async function watch(
       if (steer && !steerSent && used >= steer.limit) {
         steerSent = true
         log(`⚠ 上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(steer.limit)} 上限,插入交接提示`)
-        await client.session.prompt({ sessionID, parts: [{ type: "text", text: steer.text }] }).catch(() => {})
+        const ok = await steerText(steer.text)
+        if (!ok) {
+          return {
+            blocked: { type: "blocked", question: "steer 投递失败(ondemand 交接提示),无法继续会话,详见日志。" },
+            lastText,
+            pct,
+            used,
+          }
+        }
       }
     }
     if (event.type === "question.asked") {
@@ -1558,6 +1582,7 @@ async function watch(
     if (event.type === "session.error") {
       const props = event.properties
       if (props.sessionID !== sessionID || !props.error) continue
+      idleHandled = false
       const detail =
         "data" in props.error && props.error.data && "message" in props.error.data
           ? String(props.error.data.message)
@@ -1570,6 +1595,9 @@ async function watch(
         event.properties.status.type === "idle") ||
       (event.type === "session.idle" && event.properties.sessionID === sessionID)
     ) {
+      // 孪生 idle 去重: 一个回合结束只结算一次(见 idleHandled 注释)。
+      if (idleHandled) continue
+      idleHandled = true
       // 测试执行协议: idle 先结算待执行请求(执行 + steer 反馈/交接要求)再结束;
       // 无待执行请求且无未完成的交接要求时,会话才算真正结束。
       if (test) {
