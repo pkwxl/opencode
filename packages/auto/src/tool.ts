@@ -7,7 +7,7 @@ import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "./config"
 import { extractPriorKnowledge } from "./knowledge"
-import { log } from "./log"
+import { banner, log } from "./log"
 import { runAll } from "./loop"
 import type { ModeSpec } from "./mode"
 import { parse } from "./plan"
@@ -176,6 +176,7 @@ export async function runTool(
 
       // 前置知识提取(设计文档 §3): 已有迁移结果的蒸馏产物 docs/prior-kb/,
       // 是本轮首个阶段规划会话与参数推断的输入。失败仅警告后继续(决策 3)。
+      banner("前置知识提取: 已有迁移结果复盘")
       const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
       const extracted = await extractPriorKnowledge(server.client, directory, {
         agent: config.agent,

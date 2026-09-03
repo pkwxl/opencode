@@ -1,6 +1,7 @@
 import { readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { log } from "./log"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
 import { requireArtifact, type Opts } from "./runner"
 
@@ -102,6 +103,7 @@ export async function extractPriorKnowledge(
   const existing = await existingPriorKnowledge(dir)
   if (existing) return { type: "skipped", file: existing }
   const file = priorKnowledgeFile()
+  log(`▶ 开前置知识提取会话(产出 ${file})`)
   const produced = await requireArtifact(
     client,
     { id: "PLAN", title: "前置知识提取(已有迁移结果复盘)", status: "in_progress", attempts: 0, body: "" },
