@@ -209,6 +209,58 @@ if (promptText !== undefined && !promptText.trim()) {
   process.exit(1)
 }
 
+// —— 运行级参数(每次生效,不固化)——
+// 解析与校验必须先于下面的固化块: 否则非法取值会在首次运行时留下已写盘的配置。
+
+const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
+// --interactive/-i: 旁路交互(与 --verbose 互斥);文件保持 verbose 级完整记录,
+// 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
+const interactive = flags.has("interactive") && flags.get("interactive") !== "false"
+if (interactive && verbose) {
+  console.error("--interactive/-i 与 --verbose 互斥,只能选其一")
+  process.exit(1)
+}
+const waitAnswer = parseMinutes(flags.get("wait-answer"))
+if (waitAnswer === null) {
+  console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")
+  process.exit(1)
+}
+const waitBetween = parseMinutes(flags.get("wait-between"))
+if (waitBetween === null) {
+  console.error("--wait-between 取值范围为 1..60(分钟);不带值时默认为 1")
+  process.exit(1)
+}
+const review = parseReviewLimit(flags.get("review"))
+if (review === null) {
+  console.error("--review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
+  process.exit(1)
+}
+// --early-review [n] 是 --review n --early 的快捷糖;与 --review 同时出现为用法错误。
+const earlyReview = parseReviewLimit(flags.get("early-review"))
+if (earlyReview === null) {
+  console.error("--early-review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
+  process.exit(1)
+}
+if (flags.has("review") && flags.has("early-review")) {
+  console.error("--early-review 是 --review n --early 的快捷糖,不要与 --review 同时使用")
+  process.exit(1)
+}
+const early = (flags.has("early") && flags.get("early") !== "false") || earlyReview > 0
+if (early && review <= 0 && earlyReview <= 0) {
+  console.error("--early 需搭配 --review 一起使用(或改用快捷糖 --early-review)")
+  process.exit(1)
+}
+const finalReview = parseFinalReviewLimit(flags.get("final-review"))
+if (finalReview === null) {
+  console.error("--final-review 取值范围为 1..5(终审审计轮数上限);不带值时默认为 2")
+  process.exit(1)
+}
+const permission = parsePermission(flags.get("permission"))
+if (permission === null) {
+  console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
+  process.exit(1)
+}
+
 // —— 配置固化(首跑)或冲突校验(二次运行起)——
 
 const modes = loadModeTable(directory)
@@ -284,60 +336,10 @@ if (firstRun) {
 }
 const mode = modes[modeName]!
 
-// —— 运行级参数(每次生效,不固化)——
-
-const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
-// --interactive/-i: 旁路交互(与 --verbose 互斥);文件保持 verbose 级完整记录,
-// 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
-const interactive = flags.has("interactive") && flags.get("interactive") !== "false"
-if (interactive && verbose) {
-  console.error("--interactive/-i 与 --verbose 互斥,只能选其一")
-  process.exit(1)
-}
 setVerbose(verbose)
 if (interactive) setInteractive()
 // 每次运行都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
 console.log(`📝 日志文件: ${setLogFile(directory)}`)
-const waitAnswer = parseMinutes(flags.get("wait-answer"))
-if (waitAnswer === null) {
-  console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")
-  process.exit(1)
-}
-const waitBetween = parseMinutes(flags.get("wait-between"))
-if (waitBetween === null) {
-  console.error("--wait-between 取值范围为 1..60(分钟);不带值时默认为 1")
-  process.exit(1)
-}
-const review = parseReviewLimit(flags.get("review"))
-if (review === null) {
-  console.error("--review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
-  process.exit(1)
-}
-// --early-review [n] 是 --review n --early 的快捷糖;与 --review 同时出现为用法错误。
-const earlyReview = parseReviewLimit(flags.get("early-review"))
-if (earlyReview === null) {
-  console.error("--early-review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
-  process.exit(1)
-}
-if (flags.has("review") && flags.has("early-review")) {
-  console.error("--early-review 是 --review n --early 的快捷糖,不要与 --review 同时使用")
-  process.exit(1)
-}
-const early = (flags.has("early") && flags.get("early") !== "false") || earlyReview > 0
-if (early && review <= 0 && earlyReview <= 0) {
-  console.error("--early 需搭配 --review 一起使用(或改用快捷糖 --early-review)")
-  process.exit(1)
-}
-const finalReview = parseFinalReviewLimit(flags.get("final-review"))
-if (finalReview === null) {
-  console.error("--final-review 取值范围为 1..5(终审审计轮数上限);不带值时默认为 2")
-  process.exit(1)
-}
-const permission = parsePermission(flags.get("permission"))
-if (permission === null) {
-  console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
-  process.exit(1)
-}
 
 const code = await runTool(directory, {
   config,

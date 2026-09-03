@@ -62,6 +62,9 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 - 运行级参数(每次生效,不固化,与原 run 一致): --server、--verbose、
   --interactive/-i、--wait-answer、--wait-between、--permission、
   --review、--early/--early-review、--final-review、--dryrun。
+- 校验顺序不变式: 两类选项的 parse* 值域与互斥校验全部排在固化块之前,
+  日志文件也延后到固化之后创建 —— 用法错误不得在新目录留下任何痕迹
+  (尤其 `.opencode/auto/config.json`,否则坏值退出后二次运行被已固化值绑死)。
 - --continue/--commit-subtask/--verify-idle/--verify-max 等历史选项的
   拦截报文删除(工具已不存在那些概念)。
 

@@ -347,7 +347,7 @@ AI **记录决策过程**(决策理由与否决的备选方案写入相关文档
 上次运行被 kill/Ctrl+C 中断时,PLAN.md 可能遗留 `in_progress` 标记(实际无会话在跑);
 启动时会把它们全部重置为 `pending` 再正常续跑(`attempts` 保留),无需手工清理。
 
-恢复的依据是**进度记录** `.auto/progress.json`:run 期间 driver 在任务流水线的每个
+恢复的依据是**进度记录** `.auto/progress.json`:运行期间 driver 在任务流水线的每个
 阶段边界持久化 `{task, session, at, active, phase}`——`phase` 标记当前阶段
 (分解 / 整任务执行 / 逐子任务 / 收尾 / verify{脚本生成/执行/判定,含修复轮与重验轮
 计数及已执行的脚本运行记录} / 质量审核{审核/修复规划/修复执行}),执行链会话在

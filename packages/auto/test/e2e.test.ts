@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdtemp, readdir, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { load } from "../src/plan"
@@ -204,6 +204,33 @@ describe("CLI: 去子命令化与历史选项拦截", () => {
       expect((await runCli([dir, "-p", "  "])).err).toContain("-p/--prompt 需要非空的提示词文本")
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("非法取值在固化前拦截: 新目录不留 .opencode/auto/config.json", async () => {
+    const bad: string[][] = [
+      ["--wait-answer", "99"],
+      ["--wait-between", "0"],
+      ["--review", "11"],
+      ["--early-review", "x"],
+      ["--final-review", "6"],
+      ["--permission", "yolo"],
+      ["--interactive", "--verbose"],
+      ["--early"],
+      ["--review", "3", "--early-review", "2"],
+      ["--handover-test"],
+      ["--mode", "nope"],
+    ]
+    for (const extra of bad) {
+      const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+      try {
+        const run = await runCli([dir, ...extra])
+        expect(run.code).toBe(1)
+        expect(run.err).not.toBe("")
+        expect(await readdir(dir)).toEqual([])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
     }
   })
 
