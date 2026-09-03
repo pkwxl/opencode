@@ -23,28 +23,32 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
   → .auto/tool.json.done === true → 报告完成,退出 0
   → 启动 server(全程一个实例,注入 runAll 复用)
   → [dryrun: 跳过以下前置步骤,直接走 runAll 的权限预检]
-  → 台账已覆盖 admtvk 全部字母(且本轮标记未建立)→ archiveRound 归档上一轮
   → 前置知识提取(docs/prior-kb/prior-<时间戳>.md,已有非空产物则跳过)
+  → 现场清理(本轮标记未建立时;原 continue 流程): 台账有完成阶段/无法解析,
+    或 PLAN.md 有任务,或 migration-kb 残留 → archiveRound 归档 + PLAN.md 重置
+  → 建立本轮标记 .auto/tool.json { "round": N }
   → 参数推断(config.source / destDir 缺失时;产物 .auto/infer.json,写回配置)
-  → 建立本轮标记 .auto/tool.json
   → runAll(phases 固定 "admtvk")
   → 退出码 0 → 标记 done
 ```
 
 状态载体全部沿用既有推导式机制,新增仅两个文件:
 
-- `.auto/tool.json`(非版本化): `{ "done": boolean }`——本工具"二次迁移
-  已完成"的唯一标记。缺失 = 未完成。归档判断规则:仅当标记不存在且台账
-  已覆盖 admtvk 全部字母时,把既有完整轮次视为"已有迁移结果"归档
-  (archiveRound 复用,原 continue 子命令语义),随后从头规划新一轮;
-  标记存在时不再归档(台账满 = 本轮刚跑完,直接写 done)。
+- `.auto/tool.json`(非版本化): 本轮标记,兼完成标记。缺失 = 本轮未建立,
+  目录里的阶段状态(台账/PLAN.md/migration-kb)一律视为"别人的"遗留——
+  本工具此前轮次(删除标记开新一轮)或人工/其他工具的迁移结果;知识提取
+  落盘后按原 continue 流程归档(archiveRound)并重置 PLAN.md,本轮从头规划。
+  `{ "round": N }` = 第 N 轮进行中: 建立后创建的文件视为"自己的",中断重跑
+  依断点续跑,绝不清理自己的现场。`{ "round": N, "done": true }` = 二次迁移
+  已完成,再跑报告完成退出 0。删除该文件可显式开启新一轮。
 - `docs/prior-kb/prior-<时间戳>.md`(版本化): 前置知识提取产物。独立于
   k 阶段的 docs/migration-kb/(existingKnowledge 只读该目录顶层,互不
   污染;k 阶段在本轮收尾照常产出本轮新知识)。
 
 中断恢复无需新增机制:台账 + PLAN.md + .auto/progress.json 推导断点;
-前置步骤各自幂等(提取看产物是否存在、推断看配置键是否已固化、归档
-各步 rename 幂等)。
+前置步骤各自幂等(提取看产物是否存在、现场清理看本轮标记是否已建立、
+推断看配置键是否已固化、归档各步 rename 幂等)。清理与建立标记之间中断:
+重跑时 PLAN.md 已重置为空模板(无任务)、台账为空 → 不再清理,只补建标记。
 
 ## 2. CLI 面(src/index.ts 重写)
 
@@ -70,7 +74,8 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 
 ## 3. 前置知识提取(新会话,模板 prior-knowledge.md)
 
-- 时机:归档上一轮之后、参数推断之前(推断以其产物为输入之一)。
+- 时机:现场清理之前(在旧有迁移现场原状上分析)、参数推断之前(推断以
+  其产物为输入之一)。知识落盘后才清理现场;提取失败仅警告,清理照常。
 - 输入:brief.md、docs/ 全树(含 docs/phases/ 各阶段归档与 round-N 轮次
   归档——已有迁移结果不限于本工具此前的输出,也可能是人工或其他工具的
   产物)、git log 概览。
@@ -133,7 +138,7 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 | templates/prompts/infer-source.md | 新增 |
 | templates/PLAN.md、loop.ts 原则块 | 删除 check 引用 |
 | src/check.ts、test/check.test.ts | 删除 |
-| test/tool.test.ts | 新增(infer 解析校验、prior 摘要、标记读写) |
+| test/tool.test.ts | 新增(infer 解析校验、prior 摘要、标记读写、现场清理判定) |
 | README.md、AGENTS.md | 重写用法与行为约定 |
 
 ## 8. 实施步骤

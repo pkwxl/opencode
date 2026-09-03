@@ -207,7 +207,7 @@ export function stageText(stage: FinalStage): string {
 // (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
 // (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
 // prevRound 为上一轮迁移结论摘录(phases-design.md M 节,loop 侧组装: 归档索引/
-// 最终交接/迁移知识),仅续轮(continue 子命令归档上一轮后)的新一轮首个规划会话注入。
+// 最终交接/迁移知识),仅续轮(主程序现场清理归档既有轮次后)的新一轮首个规划会话注入。
 // source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
 // finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
 export function renderPhasePlan(input: {

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { existingPriorKnowledge, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
-import { parseInferOutput, readToolState } from "../src/tool"
+import { needsSceneCleanup, parseInferOutput, readToolState } from "../src/tool"
 
 describe("parseInferOutput(参数推断产物协议)", () => {
   test("成功形态: 三键齐备的合法相对路径", () => {
@@ -57,6 +57,39 @@ describe("readToolState(完成标记)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  test("{round:N} 本轮标记原样读回(未完成)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tool-"))
+    try {
+      mkdirSync(join(dir, ".auto"), { recursive: true })
+      writeFileSync(join(dir, ".auto/tool.json"), JSON.stringify({ round: 2 }))
+      expect(await readToolState(dir)).toEqual({ round: 2 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("needsSceneCleanup(现场清理判定)", () => {
+  test("标记未建立 + 别人的遗留(台账有完成阶段 / 现场有内容)→ 清理", () => {
+    expect(needsSceneCleanup(false, ["a", "d", "m", "t", "v", "k"], false)).toBe(true)
+    expect(needsSceneCleanup(false, ["a"], false)).toBe(true)
+    expect(needsSceneCleanup(false, [], true)).toBe(true)
+  })
+
+  test("台账无法解析(undefined)视为别人的内容 → 清理", () => {
+    expect(needsSceneCleanup(false, undefined, false)).toBe(true)
+  })
+
+  test("标记未建立 + 空现场(全新项目)→ 不清理", () => {
+    expect(needsSceneCleanup(false, [], false)).toBe(false)
+  })
+
+  test("标记已建立 = 本轮在跑 → 永不清理(中断续跑)", () => {
+    expect(needsSceneCleanup(true, ["a"], true)).toBe(false)
+    expect(needsSceneCleanup(true, undefined, true)).toBe(false)
+    expect(needsSceneCleanup(true, [], false)).toBe(false)
   })
 })
 

@@ -26,7 +26,7 @@ import { allowWrite, protect, reprotect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { manage, type ServerHandle } from "./server"
-import { usePromptLibrary } from "./template"
+import { renderText, usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 // AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
@@ -146,6 +146,13 @@ export async function ensureGitignore(directory: string): Promise<boolean> {
 // for a human to resolve the issue outside the session and re-run,
 // 130 = force-killed by double Ctrl+C. A blocked
 // task needs no `answer`: re-running resumes it directly.
+// agent 契约渲染文本: 按 verify/testByDriver 两态渲染内置模板。tool.ts 的模板
+// 维护写入与 runAll 的完整性检查共用本函数,防止写入与比对口径漂移(模板含
+// {{#if}} 条件块,拿原始文本比对渲染后的文件必然不一致)。
+export async function renderAgentContract(verify: boolean, testByDriver: boolean): Promise<string> {
+  return renderText(await Bun.file(templateAgent).text(), { verify, testByDriver })
+}
+
 export async function runAll(
   directory: string,
   opts: {
@@ -235,7 +242,7 @@ export async function runAll(
     log(`  恢复方式: 重新运行 opencode-auto(启动时会按模板重建默认契约),或手工补回该文件`)
     return 1
   }
-  if (agentName === "auto" && agentText !== (await Bun.file(templateAgent).text())) {
+  if (agentName === "auto" && agentText !== (await renderAgentContract(Boolean(opts.verify), Boolean(opts.testByDriver)))) {
     log(`⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),重新运行 opencode-auto 会按模板刷新`)
   }
 

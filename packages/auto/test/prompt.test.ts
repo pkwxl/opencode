@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
+import { renderAgentContract } from "../src/loop"
 import { parse } from "../src/plan"
 import { renderText } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
@@ -756,6 +757,17 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
 })
 
 describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
+  test("一致性比对口径 = 写入口径:两态渲染文本与原始模板互不相等(含条件块),四组渲染与 renderText 直渲一致", async () => {
+    const raw = await Bun.file(agentTemplate).text()
+    expect(raw).toContain("{{#if verify}}")
+    for (const verify of [true, false]) {
+      for (const testByDriver of [true, false]) {
+        const rendered = await renderAgentContract(verify, testByDriver)
+        expect(rendered).toBe(renderText(raw, { verify, testByDriver }))
+        expect(rendered).not.toBe(raw)
+      }
+    }
+  })
   test("AGENTS.md 条款覆盖全部四类标记块并引用维护规则(防漂移,verify 启用)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const text = renderText(raw, { verify: true })

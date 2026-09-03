@@ -1,30 +1,32 @@
 // 专用二次迁移工具的主编排(设计文档 docs/specialized-tool-design.md): 无子命令,
-// 每次启动按"前置知识提取 → 参数推断 → 完整 admtvk 二次迁移"自动推进至结束;
-// 中断后再次运行依推导式状态(台账 + PLAN.md + .auto/progress.json + 本模块的
-// .auto/tool.json 完成标记)从断点恢复。index.ts 只做参数解析与配置固化/冲突
-// 校验,然后委托本模块。
+// 每次启动按"前置知识提取 → 现场清理 → 参数推断 → 完整 admtvk 二次迁移"自动推进
+// 至结束;中断后再次运行依推导式状态(台账 + PLAN.md + .auto/progress.json + 本
+// 模块的 .auto/tool.json 本轮标记)从断点恢复。index.ts 只做参数解析与配置固化/
+// 冲突校验,然后委托本模块。
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "./config"
-import { extractPriorKnowledge } from "./knowledge"
+import { existingKnowledge, extractPriorKnowledge } from "./knowledge"
 import { banner, log } from "./log"
-import { runAll } from "./loop"
+import { renderAgentContract, runAll } from "./loop"
 import type { ModeSpec } from "./mode"
-import { parse } from "./plan"
+import { load, parse } from "./plan"
 import { archiveRound, currentRound, formatPhases, PHASE_ORDER, readLedger, renderPlanScaffold } from "./phases"
 import { renderInferSource } from "./prompt"
+import { forgetProgress } from "./resume"
 import type { PermissionMode } from "./runner"
 import { requireArtifact } from "./runner"
 import { manage } from "./server"
-import { renderText, usePromptLibrary } from "./template"
+import { usePromptLibrary } from "./template"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
-import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
-// 完成标记(非版本化,设计文档 §1): 二次迁移全部完成后写入 {done: true};
-// 再次运行报告完成并退出 0。删除该文件可显式开启新一轮。
+// 本轮标记(非版本化,设计文档 §1): 现场清理后写入 { round: N } = 本轮开始,此后
+// 创建的文件视为"自己的",中断重跑依断点续跑、不再清理现场;二次迁移全部完成后写
+// 入 { round, done: true },再次运行报告完成并退出 0。删除该文件可显式开启新一轮
+// (目录内阶段状态按"别人的"遗留重新清理)。
 const STATE_FILE = join(".auto", "tool.json")
 
-export type ToolState = { done?: boolean }
+export type ToolState = { done?: boolean; round?: number }
 
 export async function readToolState(dir: string): Promise<ToolState> {
   const state = (await Bun.file(join(dir, STATE_FILE)).json().catch(() => undefined)) as ToolState | undefined
@@ -60,6 +62,15 @@ export function parseInferOutput(
   const destDir = rel(record.destDir)
   if (!sourceDir || !sourcePath || !destDir) return undefined
   return { sourceDir, sourcePath, destDir }
+}
+
+// 现场清理判定(推导式,设计文档 §1): 本轮标记未建立 = 本工具尚未开跑,目录里的
+// 阶段状态都是"别人的"遗留(本工具此前轮次在删除标记后、或人工/其他工具的迁移结
+// 果)。台账记录过完成阶段、无法解析(视为别人的内容)或现场有内容(PLAN.md 有任
+// 务/解析失败、migration-kb 残留)即有现场要清理。标记已建立 = 本轮在跑,中断重
+// 跑依断点续跑,绝不清理自己的现场。
+export function needsSceneCleanup(markerExists: boolean, ledgerDone: readonly string[] | undefined, sceneHasContent: boolean): boolean {
+  return !markerExists && (ledgerDone === undefined || ledgerDone.length > 0 || sceneHasContent)
 }
 
 // 占位模板态判定(沿用原 init 语义): PLAN.md 仅含从未编辑的占位任务视为缺失,
@@ -104,12 +115,12 @@ export async function runTool(
     return 1
   }
   const config = { ...input.config }
+  const planFile = resolve(directory, "PLAN.md")
 
   // 模板维护(每次运行幂等): PLAN.md 缺失/占位态 → 空模板(阶段化流程由规划会话
   // 填充);opencode.json 缺失才创建;agent 契约与模板不一致即替换(契约漂移以
   // 模板为准)。PLAN.md 按 verify 条件渲染(验收未启用时不含 verify 描述)。
   {
-    const planFile = resolve(directory, "PLAN.md")
     const existing = await Bun.file(planFile).text().catch(() => undefined)
     if (existing === undefined || isPristinePlan(existing)) {
       await Bun.write(planFile, renderPlanScaffold(config.verify))
@@ -120,9 +131,8 @@ export async function runTool(
       await Bun.write(opencodeFile, await Bun.file(templateConfig).text())
       log("已创建: opencode.json")
     }
-    const agentRaw = await Bun.file(templateAgent).text()
     const agentFile = resolve(directory, ".opencode", "agent", "auto.md")
-    const agentContent = renderText(agentRaw, { verify: config.verify, testByDriver: config.testByDriver })
+    const agentContent = await renderAgentContract(config.verify, config.testByDriver)
     if ((await Bun.file(agentFile).text().catch(() => undefined)) !== agentContent) {
       await Bun.write(agentFile, agentContent)
       log("已写入: .opencode/agent/auto.md(与模板保持一致)")
@@ -148,7 +158,8 @@ export async function runTool(
     )
   }
 
-  // 完成标记: 二次迁移已全部完成 → 报告完成,退出 0(决策 4)。
+  // 完成标记: 二次迁移已全部完成 → 报告完成,退出 0(决策 4)。仅 {round} = 本轮
+  // 进行中,照常续跑。
   const state = await readToolState(directory)
   if (state.done) {
     log("✓ 二次迁移已全部完成(删除 .auto/tool.json 可显式开启新一轮)")
@@ -160,22 +171,9 @@ export async function runTool(
   const server = await manage(directory, input.server)
   try {
     if (!input.dryrun) {
-      // 归档上一轮: 仅在本工具从未建立完成标记、且台账已覆盖 admtvk 全部字母时——
-      // 既有完整轮次是"已有迁移结果"(知识提取的输入),不是本轮的工作;归档后
-      // 台账与 PLAN.md 重置,本轮从头规划。台账未覆盖全部字母的既有轮次视为进行
-      // 中的本轮,由 runAll 续跑完成(断点恢复)。标记存在时永不归档(台账满 =
-      // 本轮刚跑完,由下方退出码写 done)。
-      if (!(await Bun.file(join(directory, STATE_FILE)).exists())) {
-        const ledger = await readLedger(directory)
-        if (PHASE_ORDER.split("").every((letter) => (ledger.done as string[]).includes(letter))) {
-          const round = await archiveRound(directory)
-          log(`✓ 已有完整迁移轮次(第 ${round} 轮)已归档: docs/phases/round-${round}/;其结论将作为本轮输入`)
-          await Bun.write(resolve(directory, "PLAN.md"), renderPlanScaffold(config.verify))
-        }
-      }
-
-      // 前置知识提取(设计文档 §3): 已有迁移结果的蒸馏产物 docs/prior-kb/,
-      // 是本轮首个阶段规划会话与参数推断的输入。失败仅警告后继续(决策 3)。
+      // 前置知识提取(设计文档 §3): 在旧有迁移现场原状上分析(先于现场清理),
+      // 蒸馏产物 docs/prior-kb/ 是本轮首个阶段规划会话与参数推断的输入。失败仅
+      // 警告后继续(决策 3)。
       banner("前置知识提取: 已有迁移结果复盘")
       const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
       const extracted = await extractPriorKnowledge(server.client, directory, {
@@ -192,6 +190,27 @@ export async function runTool(
       if (extracted.type === "ok") log(`✓ 前置知识文档已产出: ${extracted.file}`)
       else if (extracted.type === "skipped") log(`↻ 前置知识文档已存在(${extracted.file}),跳过提取`)
       else log(`⚠ 前置知识提取未完成,继续推进(参数推断会话可直读原始 docs/)。受阻详情:\n${extracted.question}`)
+
+      // 现场清理(原 continue 流程): 知识已蒸馏落盘后,若本轮标记未建立,目录里的
+      // 阶段状态都是"别人的"遗留——台账有完成阶段或无法解析、PLAN.md 有任务或
+      // migration-kb 有残留,即归档进轮次目录并重置 PLAN.md,本轮从头规划。无论
+      // 遗留来自本工具此前的轮次还是人工/其他工具的迁移。随后建立本轮标记: 此后
+      // 创建的文件视为"自己的",中断重跑依标记续跑、不再清理。
+      const markerExists = await Bun.file(join(directory, STATE_FILE)).exists()
+      if (!markerExists) {
+        const ledgerDone = await readLedger(directory).then((ledger) => ledger.done as readonly string[], () => undefined)
+        const sceneHasContent =
+          (await load(planFile).then((plan) => plan.tasks.length > 0, () => true)) || (await existingKnowledge(directory)) !== undefined
+        if (needsSceneCleanup(markerExists, ledgerDone, sceneHasContent)) {
+          const round = await archiveRound(directory)
+          log(`✓ 已有迁移现场已归档(第 ${round} 轮): docs/phases/round-${round}/;其结论将作为本轮输入`)
+          await Bun.write(planFile, renderPlanScaffold(config.verify))
+          await forgetProgress(directory)
+        }
+        const round = await currentRound(directory)
+        await writeToolState(directory, { round })
+        log(`✓ 本轮标记已建立: .auto/tool.json(第 ${round} 轮)`)
+      }
 
       // 参数推断(设计文档 §4): source/destDir 任一缺失时,AI 依据前置知识与目录
       // 勘察推断,结论经 .auto/infer.json 协议回传,driver 校验后仅采纳缺失键并
@@ -290,7 +309,7 @@ export async function runTool(
       destDir: config.destDir,
       managed: server,
     })
-    if (code === 0 && !input.dryrun) await writeToolState(directory, { done: true })
+    if (code === 0 && !input.dryrun) await writeToolState(directory, { ...(await readToolState(directory)), done: true })
     return code
   } finally {
     server.close()
