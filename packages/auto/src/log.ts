@@ -4,10 +4,10 @@ import type { Interface } from "node:readline/promises"
 import { mkdirSync, openSync, writeSync } from "node:fs"
 import { join } from "node:path"
 
-// verbose = 日志文件的记录级别(明细与时间戳);foreground = 终端是否显示明细与
-// 时间戳。--verbose 两者同开;--interactive 只开文件记录,终端保持非 verbose 的
-// 干净输出,避免明细流冲乱常驻输入行。
-let verbose = false
+// 日志文件始终完整记录全部输出(log 与 vlog)且逐行带时间戳;foreground = 终端
+// 是否显示 vlog 明细与时间戳。--verbose 开;--interactive 关——终端保持干净输出,
+// 避免明细流冲乱常驻输入行,会话明细不上终端但仍进日志文件,使 run 日志成为
+// 不依赖选项的完整审计记录。
 let foreground = false
 // run 模式下的日志文件描述符;writeSync 逐条直写,进程崩溃或被 kill 也不丢
 // 已输出的内容。
@@ -17,13 +17,11 @@ let fd: number | undefined
 let rl: Interface | undefined
 
 export function setVerbose(on: boolean) {
-  verbose = on
   foreground = on
 }
 
-// --interactive: 文件保持 verbose 级完整记录,前台不显示 verbose 明细。
+// --interactive: 终端不显示 verbose 明细(日志文件本就始终完整记录)。
 export function setInteractive() {
-  verbose = true
   foreground = false
 }
 
@@ -52,10 +50,9 @@ export function log(...args: unknown[]) {
   if (rl) rl.prompt(true)
 }
 
-// verbose 明细(会话部件、上下文用量、变更文件等): 文件按 verbose 级别记录,
+// verbose 明细(会话部件、上下文用量、变更文件等): 始终写入日志文件,
 // 终端仅 --verbose(foreground)显示;--interactive 下只进日志文件。
 export function vlog(...args: unknown[]) {
-  if (!verbose) return
   const text = format(args)
   if (foreground) console.log(stamp(text, true))
   record(text)
@@ -65,9 +62,9 @@ function format(args: unknown[]): string {
   return args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")
 }
 
-// 文件行按 verbose 记录级别加时间戳(writeSync 直写)。
+// 文件行始终带时间戳(writeSync 直写)。
 function record(text: string) {
-  if (fd !== undefined) writeSync(fd, stamp(text, verbose) + "\n")
+  if (fd !== undefined) writeSync(fd, stamp(text, true) + "\n")
 }
 
 function stamp(text: string, on: boolean): string {

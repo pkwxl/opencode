@@ -1364,11 +1364,10 @@ async function watch(
   steer?: Steer,
   test?: TestRun,
 ): Promise<Watch> {
-  const verbose = opts.verbose
   const waitAnswer = opts.waitAnswer ?? 0
   let lastText = ""
   let error = ""
-  // 上下文占比与已用量始终跟踪(会话复用决策依据),与 verbose 无关;拿不到上限记 100。
+  // 上下文占比与已用量始终跟踪(会话复用决策依据);拿不到上限记 100。
   let pct = 100
   let used = 0
   // steer 每会话只插入一次。
@@ -1422,7 +1421,7 @@ async function watch(
     await steerText(renderTestResult(run))
     return { type: "continue" }
   }
-  // verbose 已输出的 part 与 message,避免同一 part 的多次更新事件重复打印。
+  // 已记录的 part 与 message,避免同一 part 的多次更新事件重复输出。
   const seen = new Set<string>()
   // 模型上下文上限(providerID/modelID → limit.context),首次需要时拉取。
   let limits: Map<string, number> | undefined
@@ -1433,10 +1432,10 @@ async function watch(
       if (part.sessionID !== sessionID) continue
       if (part.type === "text" && part.time?.end) {
         lastText = part.text
-        if (verbose) vlog(part.text)
+        vlog(part.text)
         continue
       }
-      const line = verbose ? describePart(part) : undefined
+      const line = describePart(part)
       if (line && !seen.has(part.id)) {
         seen.add(part.id)
         vlog(line)
@@ -1451,7 +1450,7 @@ async function watch(
       used = info.tokens.input + info.tokens.cache.read
       const limit = limits.get(`${info.providerID}/${info.modelID}`)
       pct = limit ? Math.round((used / limit) * 100) : 100
-      if (verbose) vlog(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
+      vlog(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
       if (steer && !steerSent && used >= steer.limit) {
         steerSent = true
         log(`⚠ 上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(steer.limit)} 上限,插入交接提示`)
@@ -1625,8 +1624,9 @@ async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
   return info
 }
 
-// verbose 模式下把非文本 part 转成一行可读输出;返回 undefined 表示该 part
-// 尚无终态内容可输出(后续更新事件会再触发)。工具输出与推理原文较长,
+// 把非文本 part 转成一行可读输出(始终经 vlog 记录进日志文件,--verbose 时
+// 另上终端);返回 undefined 表示该 part 尚无终态内容可输出(后续更新事件会再
+// 触发)。工具输出与推理原文较长,
 // 截断到与 verify 输出相同的 2000 字符上限。
 function describePart(part: Part): string | undefined {
   if (part.type === "reasoning") return part.time.end ? `  推理:\n${part.text.trim().slice(0, 2000)}` : undefined

@@ -173,7 +173,7 @@ export async function runAll(
     // --permission: 权限请求的处理策略(缺省 ask-deny),透传给 runner 的会话监听。
     permission?: PermissionMode
     // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
-    // 调用方已把 verbose 记录级别打开,前台明细静默)。
+    // 终端明细静默,日志文件始终完整记录)。
     interactive?: boolean
     // driver 托管脚本(verify 与 test)的看门狗: 持续无输出的判定窗口与绝对时长
     // 上限(毫秒),透传给 runner 的 runVerifyScript(config 的 idleTime / idleMax
