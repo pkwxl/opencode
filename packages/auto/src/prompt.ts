@@ -270,6 +270,33 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
   })
 }
 
+// 前置知识提取会话(专用二次迁移工具,设计文档 docs/specialized-tool-design.md §3):
+// 旁路一次性,通读已有迁移结果(不限于本工具此前的轮次——docs/ 全树、阶段/轮次
+// 归档、产出代码与 git 历史),蒸馏出 docs/prior-kb/ 下的知识文档,作为二次迁移与
+// 参数推断的输入。file 为输出路径(相对目标目录);brief 为项目意图原文(可空)。
+export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec }): string {
+  return renderTemplate("prior-knowledge", {
+    file: input.file,
+    brief: input.brief?.trim() || undefined,
+    modeName: input.mode?.name,
+    modeExec: input.mode && modeText(input.mode.exec, {}),
+  })
+}
+
+// 参数推断会话(docs/specialized-tool-design.md §4): config.source/destDir 缺失时,
+// 依据前置知识产物与目录勘察推断迁移源/目标,结论以 JSON 协议整写 file
+// (.auto/infer.json;{"sourceDir","sourcePath","destDir"} 或 {"blocked": 原因}),
+// driver 校验后仅采纳缺失键。priorKb 为 prior-kb 文档路径清单(预拼接,会话直读);
+// known 为已固化参数的人类可读描述(预拼接,可空)。
+export function renderInferSource(input: { file: string; brief?: string; priorKb?: string; known?: string }): string {
+  return renderTemplate("infer-source", {
+    file: input.file,
+    brief: input.brief?.trim() || undefined,
+    priorKb: input.priorKb?.trim() || undefined,
+    known: input.known?.trim() || undefined,
+  })
+}
+
 // ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 2x --context-limit
 // 时插入交接提示,会话把进度写入该文件,末行 `状态: 继续|完成` 由 driver 解析。
 export function handoffFile(task: Task): string {

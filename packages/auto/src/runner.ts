@@ -686,7 +686,7 @@ function interruptionRemark(outcome: Outcome, phase: Phase | undefined): string 
     `- 退出时间: ${new Date().toISOString()}`,
     `- 退出原因: ${why}`,
     `- 中断阶段: ${phaseText(phase)}`,
-    `- 恢复方式: 处理上述原因后重新运行 opencode-auto run,driver 将按中断阶段精确继续;本备注要点会随恢复提示词带给 AI。`,
+    `- 恢复方式: 处理上述原因后重新运行 opencode-auto,driver 将按中断阶段精确继续;本备注要点会随恢复提示词带给 AI。`,
   ].join("\n")
 }
 
@@ -1353,7 +1353,7 @@ async function missingAgentHint(opts: Opts): Promise<string> {
   const file = `.opencode/agent/${opts.agent ?? "auto"}.md`
   const exists = await Bun.file(join(opts.dir, file)).exists()
   if (exists) return ""
-  return `\n提示: 目标目录缺少 agent 契约文件 ${file},服务端会因此以 UnknownError 拒绝下发任务;运行 opencode-auto init ${opts.dir} 恢复后重跑`
+  return `\n提示: 目标目录缺少 agent 契约文件 ${file},服务端会因此以 UnknownError 拒绝下发任务;重新运行 opencode-auto 恢复(启动时按模板重建默认契约)后重跑`
 }
 
 async function watch(

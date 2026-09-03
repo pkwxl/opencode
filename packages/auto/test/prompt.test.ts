@@ -13,9 +13,11 @@ import {
   renderFinalTask,
   renderFix,
   renderHandoffSteer,
+  renderInferSource,
   renderKnowledge,
   renderPhaseHandover,
   renderPhasePlan,
+  renderPriorKnowledge,
   renderReview,
   renderReviewFix,
   renderSubtask,
@@ -728,7 +730,7 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
     const text = renderText(await Bun.file(planTemplate).text(), { verify: true })
     expect(text).toContain("  - verify: command: <建议的验收命令,如 bun test>")
     expect(text).toContain("验证脚本与验证命令的执行权在 driver")
-    expect(text).toContain("opencode-auto check")
+    expect(text).not.toContain("opencode-auto check")
     expect(text).toContain("不要手工编写子任务")
   })
 
@@ -797,6 +799,10 @@ describe("模板渲染完整性", () => {
       renderTestHandover({ script: "/s", code: 1, ms: 9, timedOut: true, timeoutReason: "max", out: "/o", seq: 2 }, { handoffFile: "/h", used: 1, limit: 2 }),
       renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
       renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
+      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "意图", mode: migrate }),
+      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md" }),
+      renderInferSource({ file: ".auto/infer.json", brief: "意图", priorKb: "- docs/prior-kb/prior-x.md", known: "- 迁移目标目录: target" }),
+      renderInferSource({ file: ".auto/infer.json" }),
       renderDryrun(),
       renderDecompose(plan, solo),
       renderHandoffSteer(solo),

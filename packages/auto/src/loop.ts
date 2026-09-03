@@ -3,7 +3,7 @@ import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
 import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { commitTree, pendingChanges, repoRoots } from "./git"
-import { extractKnowledge } from "./knowledge"
+import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
 import type { ModeSpec } from "./mode"
@@ -39,8 +39,7 @@ const POINTER = `<!-- opencode-auto:start -->
 它们由 driver 独占维护。
 <!-- opencode-auto:end -->`
 
-// AGENTS.md 验证原则块: 独立于指针块的第二个标记块,旧目标目录再次 init 也能补写。
-// 内容与 check 命令检查的原则一致(见 src/check.ts)。
+// AGENTS.md 验证原则块: 独立于指针块的第二个标记块,重复运行也能补写。
 const VERIFY_PRINCIPLE = `<!-- opencode-auto:verify:start -->
 验证原则: 任务级验证脚本与验证命令一律由 driver 在会话外执行,任何会话不要直接
 运行它们来下验收结论;验收标准写在任务的 verify 字段。若会话认为验证脚本本身有
@@ -48,7 +47,7 @@ const VERIFY_PRINCIPLE = `<!-- opencode-auto:verify:start -->
 工作目录),由 driver 重新执行并把输出回传给独立判定会话。判定会话另可在 driver
 授权下更新 PLAN.md 中后续未完成任务的 verify 字段(把验证经验沉淀到后续任务,
 仅限 verify 字段),除此之外 PLAN.md 与 CURRENT.md 由 driver 独占维护。任务描述
-与项目规范不要出现与此相违背的指示(可用 opencode-auto check 检查)。
+与项目规范不要出现与此相违背的指示。
 <!-- opencode-auto:verify:end -->`
 
 // AGENTS.md 提交原则块: 第三个标记块,与验证原则对等——提交执行权在 driver。
@@ -56,8 +55,7 @@ const COMMIT_PRINCIPLE = `<!-- opencode-auto:commit:start -->
 提交原则: 会话结束后由 driver 递归统一提交全部改动(先嵌套子仓库后本仓库),
 提交信息携带任务编号与阶段;任何会话不要执行 git commit/amend/rebase 等提交
 类命令,也不要修改提交历史。需要留档的变更背景写入 docs/ 文档,由 driver 的
-提交一并纳入。任务描述与项目规范不要出现与此相违背的指示(可用
-opencode-auto check 检查)。
+提交一并纳入。任务描述与项目规范不要出现与此相违背的指示。
 <!-- opencode-auto:commit:end -->`
 
 // AGENTS.md 测试执行原则块: 与验证/提交原则对等的第四类执行权原则块——
@@ -68,8 +66,7 @@ const TEST_PRINCIPLE = `<!-- opencode-auto:test:start -->
 driver 在会话外执行,任何会话不要直接运行它们;需要时把命令写成脚本放入 test/
 目录,再把脚本路径写入 tmp/test.sh 告知 driver 执行。driver 运行后把退出码与
 输出文件路径(stdout 与 stderr 合并落入单个文件)反馈回会话,由 AI 直读文件
-判断结果。任务描述与项目规范不要出现与此相违背的指示(可用 opencode-auto
-check 检查)。
+判断结果。任务描述与项目规范不要出现与此相违背的指示。
 <!-- opencode-auto:test:end -->`
 
 // AGENTS.md 维护规则块: 第四个标记块,约束 AGENTS.md 保持工作流入口定位、
@@ -204,6 +201,9 @@ export async function runAll(
     // config.destDir 迁移目标目录(可选,相对工作目录),注入阶段规划会话——
     // driver 流程文件与迁移产出经它隔离。
     destDir?: string
+    // 调用方已托管的 server 句柄(专用工具 tool.ts 的前置会话与主循环共用一个
+    // 实例): 提供时不再自行 manage/close,生命周期归调用方。
+    managed?: ServerHandle
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -224,19 +224,19 @@ export async function runAll(
   // --early 依赖 verify 脚本执行窗口;未启用 --verify 时窗口不存在,审核降级为串行。
   if (opts.early && !opts.verify) log("ℹ 未启用 --verify,--early 的并行审核窗口不存在,质量审核改为串行执行")
 
-  // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:
-  // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出并提示
-  // 恢复方式;与模板不一致仅警告(init 会刷新该文件)。
+  // --agent 缺省取 auto 契约 agent(工具启动时生成的自主执行契约);完整性检查:
+  // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出;与模板
+  // 不一致仅警告(tool.ts 每次运行已按模板刷新该文件)。
   const agentName = opts.agent ?? "auto"
   const agentFile = join(directory, ".opencode/agent", `${agentName}.md`)
   const agentText = await Bun.file(agentFile).text().catch(() => undefined)
   if (agentText === undefined) {
     log(`⏸ 缺少 agent 契约文件: .opencode/agent/${agentName}.md(缺失会导致下发任务失败: UnknownError)`)
-    log(`  恢复方式: 运行 opencode-auto init ${directory} 重建该文件(或手工补回),然后重新运行`)
+    log(`  恢复方式: 重新运行 opencode-auto(启动时会按模板重建默认契约),或手工补回该文件`)
     return 1
   }
   if (agentName === "auto" && agentText !== (await Bun.file(templateAgent).text())) {
-    log(`⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),可运行 opencode-auto init ${directory} 刷新`)
+    log(`⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),重新运行 opencode-auto 会按模板刷新`)
   }
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
@@ -294,7 +294,7 @@ export async function runAll(
         return 1
       }
     }
-    server = await manage(directory, opts.server)
+    server = opts.managed ?? (await manage(directory, opts.server))
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName)
       log("💬 交互模式: 回车把输入作为额外消息发往当前会话(无活动会话时丢弃)")
@@ -490,11 +490,16 @@ export async function runAll(
             }),
         )
       ).join("\n\n")
-      // 续轮注入(phases-design.md M 节,continue 子命令归档上一轮后的新一轮):
-      // 台账为空而存在轮次归档 → 上一轮结论(归档索引、最终交接与迁移知识)注入
-      // 本轮首个规划会话;后续阶段照常走 handovers 蒸馏链,不重复注入。
-      const prevRound = ledger.done.length ? undefined : await prevRoundDigest(directory)
-      if (prevRound) log("ℹ 续轮迁移: 注入上一轮结论(归档索引、最终交接与迁移知识)")
+      // 本轮首个规划会话的额外注入(台账为空时): ① 前置知识(专用工具启动时的
+      // 已有迁移结果蒸馏,docs/prior-kb/,设计文档 specialized-tool-design.md §3);
+      // ② 上一轮结论(轮次归档存在时,phases-design.md M 节)。后续阶段照常走
+      // handovers 蒸馏链,不重复注入。
+      let prevRound: string | undefined
+      if (!ledger.done.length) {
+        const parts = [await priorKnowledgeDigest(directory), await prevRoundDigest(directory)].filter((part): part is string => Boolean(part?.trim()))
+        prevRound = parts.length ? parts.join("\n\n") : undefined
+        if (prevRound) log("ℹ 注入既有迁移结论(前置知识与上一轮归档摘录)")
+      }
       log("▶ 开阶段规划会话填充 PLAN.md")
       await allowWrite(path)
       try {
@@ -713,7 +718,7 @@ export async function runAll(
     repl?.close()
     watcher?.close()
     progress?.close()
-    server?.close()
+    if (!opts.managed) server?.close()
     await unprotect(directory)
   }
 }

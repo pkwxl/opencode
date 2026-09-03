@@ -1,8 +1,15 @@
 # opencode-auto
 
-按 `PLAN.md` 驱动 [opencode](https://opencode.ai) 自动逐任务执行实施的命令行工具。
-宪法级项目属性(agent 契约、验收/提交语义、上下文预算、场景模式)经 `init` 固化到
-`.opencode/auto/config.json`(版本化、随仓库共享、人工可编辑),`run` 只控制本次执行。
+基于已有迁移结果自动推进一轮完整二次迁移的命令行工具:**无子命令,直接执行主程序**
+——先做一轮前置知识提取(通读工作目录内已有迁移产出,蒸馏为 `docs/prior-kb/`),
+再自动推进完整的 **admtvk**(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 →
+k 知识提炼)阶段化流程至结束;中断后再次运行从断点恢复,全部完成后再次运行报告
+已完成。宪法级项目属性(agent 契约、验收/提交语义、上下文预算、场景模式、迁移
+参数)在**首次运行时**固化到 `.opencode/auto/config.json`(版本化、随仓库共享、
+人工可编辑),二次执行与首次运行对齐——显式给出且与固化值不一致的关键参数即用法
+错误(退出码 1),修订通道为直接编辑配置文件;运行参数(`--verbose`/`--review` 等)
+每次生效、不固化。迁移源/目标未显式给出时,由参数推断会话依据前置知识提取结果
+自动推断并写回配置。
 状态由 driver 独占维护:每个任务先经分解会话拆成子任务,再逐子任务调度会话完成
 (上一会话上下文占比低于 50% 且 5 分钟内结束时复用,否则新建,会话结束即由 driver
 勾选),配置启用验收(`verify: true`)时收尾后由 driver 亲自执行 verify 脚本(持续
@@ -21,49 +28,72 @@ bun run build -- --target bun-windows-x64   # 交叉编译,产物带平台后缀
 ```
 
 产物是单个自包含文件(模板与 SDK 已嵌入),拷贝到任意机器即可运行。
-运行 `run` 时只需目标机器装有 `opencode` CLI——缺省会自动启动并托管一个
+运行时只需目标机器装有 `opencode` CLI——缺省会自动启动并托管一个
 `opencode serve` 实例;也可提供已有 server 地址复用外部实例(见
 [opencode server 与 agent 选择](#opencode-server-与-agent-选择))。
 
 也可以不构建,直接用 Bun 运行源码:
 
 ```sh
-bun run packages/auto/src/index.ts <子命令> ...
+bun run packages/auto/src/index.ts [dir] [选项]
 ```
 
 ## 使用
 
 ```sh
-opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/auto.md 模板,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等补写四个 opencode-auto 标记块
-opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
-opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后归档上一轮、开启新一轮(见"阶段化流程")
-opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行(agent/验收/提交等语义来自项目配置)
-opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/测试/提交执行权原则的描述,并提示 AGENTS.md 行数超限
-opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
+opencode-auto [dir]       # 主程序: 首跑固化配置并自动推进完整 admtvk 二次迁移;再跑自动断点续跑
+opencode-auto [dir] -p "<项目意图>"   # 整写覆盖 .opencode/auto/brief.md(每次运行均可重写),由前置知识提取与阶段规划会话消费
+opencode-auto [dir] --source-dir legacy --source-path pkg --dest-dir app   # 显式给出迁移参数(不给则由参数推断会话依据知识提取结果自动推断)
+opencode-auto [dir] --dryrun   # 只跑一次权限预检,不执行任何任务
 ```
 
-`init` 对已存在的 PLAN.md、opencode.json 一律跳过;`.opencode/agent/auto.md` 与内置
-模板不一致时总是替换,保证 agent 契约为最新版本。
+位置参数 `[dir]` 是 **driver 工作目录**(流程文件 PLAN.md、docs/ 等所在);迁移源在
+`<dir>/<source-dir>/<source-path>`、迁移目标在 `<dir>/<dest-dir>`。
 
-**breaking 变更**:`run` 不再接受 `-m/--mode`、`--agent`、`--context-limit`、
-`--subtask`、`--verify`、`--idle-time`、`--idle-max`、`--commit`、`--test-by-driver`、
-`--handover-test`、`--phases`、
-`--source-dir`、`--source-path`、`--dest-dir`——任一出现即用法错误(退出码 1),报文
-给出修订指引(`opencode-auto init <dir> --<flag> <值>`,或直接编辑配置文件);这些
-选项已固化为项目属性,见下节。
+**首跑固化**:首次运行(`.opencode/auto/config.json` 尚不存在)把命令行显式给出的
+关键参数与缺省值一起固化到该文件(版本化、随仓库共享、人工可编辑),并生成/维护
+PLAN.md(空模板)、opencode.json 与 `.opencode/agent/auto.md` 契约(agent 契约与内置
+模板不一致时总是替换,保证契约为最新版本);**二次运行起**,显式给出的关键参数与
+固化值不一致即用法错误(退出码 1,报文含键名与生效值),一致视同未给出,修订通道
+为直接编辑配置文件。见[项目配置](#项目配置opencodeautoconfigjson)。
+
+**主流程**(每次启动依序求值,逐步幂等;`--dryrun` 跳过前置步骤直接权限预检):
+
+1. 读取配置(缺失则首跑固化)→ 模板维护 → `-p` 写入 brief.md;
+2. `.auto/tool.json` 完成标记存在(`done: true`)→ 报告"二次迁移已全部完成"并
+   退出 0(删除该文件可显式开启新一轮);
+3. 启动一个 `opencode serve` 实例(全程单实例,前置会话与任务执行共用);
+4. **归档上一轮**:完成标记不存在且阶段台账已覆盖 `admtvk` 全部字母 → 把既有完整
+   轮次视为"已有迁移结果"归档到 `docs/phases/round-<N>/`,随后从头规划本轮
+   (台账未覆盖全部字母的既有轮次视为进行中的本轮,直接续跑);
+5. **前置知识提取**(见[阶段化流程](#阶段化流程固定-admtvk)的"前置知识提取"):
+   通读 brief.md、docs/ 全树与 git log 概览,蒸馏为
+   `docs/prior-kb/prior-<时间戳>.md`;已有非空产物则跳过,失败仅警告后继续;
+6. **参数推断**:`source`/`destDir` 任一缺失时,AI 依据前置知识与目录勘察推断迁移
+   源/目标,结论经 `.auto/infer.json` 回传、driver 校验后仅采纳缺失键并固化进配置;
+   AI 报无法推断或会话受阻 → 退出码 2,报文指引显式给出参数或直接编辑配置;
+7. 打印阶段进度行,进入完整 `admtvk` 阶段循环(见[阶段化流程](#阶段化流程固定-admtvk));
+8. 全部阶段完成(退出码 0)→ 写完成标记 `.auto/tool.json` `{ "done": true }`。
+
+**breaking 变更**:子命令 `init`/`continue`/`run`/`check`/`status` 已全部移除——
+首参数命中其一即报错(退出码 1)并指向新用法;`--phases`(流程固定 `admtvk`)、
+`--continue`(续轮由主程序自动归档处理)、`--commit-subtask`(提交粒度选项已移除,
+用 `--commit false` 关闭)、`--verify-idle`/`--verify-max`(已更名为
+`--idle-time`/`--idle-max`)同样出现即报错。
 
 ## 项目配置(.opencode/auto/config.json)
 
-"决定会话被如何告知、验收与提交语义如何运作"的宪法级选项在 `init` 时固化到
-`.opencode/auto/config.json`:版本化、随仓库共享、人工可编辑。`run` 每次启动读取
-该文件并打印一行配置摘要,`status` 同样打印。选项归属的判别标准:**改它需要同时
-改 AGENTS.md / PLAN / 契约的表述,或它描述的是模型/项目属性 → init;只描述本次
-运行怎么跑、人怎么盯 → run。**
+"决定会话被如何告知、验收与提交语义如何运作"的宪法级选项在**首次运行时**固化到
+`.opencode/auto/config.json`:版本化、随仓库共享、人工可编辑。每次启动读取该文件
+并打印一行配置摘要;二次运行起显式给出且与固化值不一致的关键参数即用法错误
+(退出码 1,报文含键名与生效值),一致视同未给出。选项归属的判别标准:**改它需要
+同时改 AGENTS.md / PLAN / 契约的表述,或它描述的是模型/项目属性 → 关键参数(首跑
+固化);只描述本次运行怎么跑、人怎么盯 → 运行参数(每次生效)。**
 
 | 键 | 值域 | 缺省 | 说明 |
 | --- | --- | --- | --- |
 | `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
-| `agent` | 非空字符串 | `auto` | 执行会话使用的 agent(`init` 生成的契约 agent),存在性由 run 前完整性检查兜底,见[agent 选择](#opencode-server-与-agent-选择) |
+| `agent` | 非空字符串 | `auto` | 执行会话使用的 agent(首跑生成的契约 agent),存在性由启动时完整性检查兜底,见[agent 选择](#opencode-server-与-agent-选择) |
 | `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
 | `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线) |
 | `verify` | `true` / `false` | `false` | 任务级三段式验收(未启用时任务收尾后直接标 done,不写 `verified` 字段) |
@@ -72,9 +102,9 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 | `commit` | `true` / `false` | `true` | 会话后统一提交(git 历史即 AI 变更的审计轨迹) |
 | `testByDriver` | `true` / `false` | `false` | 编译/测试/构建/lint 等命令由 driver 执行(会话经 `test/` 脚本 + `tmp/test.sh` 标记请求),见[测试执行协议](#测试执行协议--test-by-driver) |
 | `handoverTest` | `true` / `false` | `false` | 测试失败且上下文达限时写交接文档换新会话续跑;须搭配 `testByDriver: true`,否则配置校验失败(退出码 1) |
-| `phases` | `admtvk` 的子序列且含 `m` | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼);`"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致。见[阶段化流程](#阶段化流程--phases) |
-| `source` | `{ "dir", "path" }` 或缺省 | 无 | 迁移源参数: `dir` 源系统目录(相对工作目录、不含 `..`)+ `path` 源模块相对路径(相对 `dir`);init 时校验 `join` 后存在,run 不再校验(源系统可能已下线) |
-| `destDir` | 相对路径(不含 `..`)或缺省 | 无 | 迁移目标目录(相对工作目录): driver 工作目录的流程文件(PLAN.md、docs/ 等)与迁移产出的代码经它隔离,产物写入 `<工作目录>/<destDir>`;不校验存在性(目标目录常由迁移过程创建),缺省 = 迁移产出直接落在工作目录 |
+| `phases` | `admtvk` 的子序列且含 `m` | `"admtvk"` | 键保留在 schema 中(前向兼容、人工可编辑),但本工具的流程**固定为完整 `admtvk`**,不再读取该键驱动流程,CLI 也不接受 `--phases`。见[阶段化流程](#阶段化流程固定-admtvk) |
+| `source` | `{ "dir", "path" }` 或缺省 | 无 | 迁移源参数: `dir` 源系统目录(相对工作目录、不含 `..`)+ `path` 源模块相对路径(相对 `dir`);首跑显式给出时校验 `join` 后存在,缺失时由参数推断会话自动推断并写回,此后不再校验(源系统可能已下线) |
+| `destDir` | 相对路径(不含 `..`)或缺省 | 无 | 迁移目标目录(相对工作目录): driver 工作目录的流程文件(PLAN.md、docs/ 等)与迁移产出的代码经它隔离,产物写入 `<工作目录>/<destDir>`;不校验存在性(目标目录常由迁移过程创建),缺失时由参数推断会话自动推断并写回 |
 
 **统一提交**(`commit: true`,缺省):任何会话结束且 driver 完成状态写入(如勾选
 子任务)后,由 driver 递归提交全部改动——先嵌套 `.git` 子仓库、后目标目录所在
@@ -85,30 +115,26 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 git commit
 (经 AGENTS.md 提交原则块与 agent 契约约束)。`false` 关闭后改动留在工作区。
 
-两条等价的修订通道:
+修订通道为**直接编辑** `.opencode/auto/config.json`(首跑写出全量键,人工编辑同样
+合法);`.auto/infer.json` 推断写回的迁移参数同样固化在该文件中,二次执行自然与
+首次运行对齐。
 
-1. **init amend**:`opencode-auto init <dir> --<flag> <值>`——仅命令行显式给出的键
-   被改写,其余保留既有值;裸选项取该键缺省档(如 `init --verify` 即 `verify: true`)。
-   重复 `init` 无参数不重置已有配置(init 兼具创建与修订两种身份);
-2. **直接编辑** `.opencode/auto/config.json`(init 每次写出全量键,人工编辑同样
-   合法)。
-
-坏 JSON / 键值越界 / `mode` 未注册 → `run` 与 `init` 均以退出码 1 失败,报错指明
-键名与期望值域(严格失败优于静默回落);未知键忽略(前向兼容)。`run` 期间该文件
-与 PLAN.md、CURRENT.md、opencode.json 一起置为只读,人工修订请在 run 外进行。
+坏 JSON / 键值越界 / `mode` 未注册 → 每次启动均以退出码 1 失败,报错指明
+键名与期望值域(严格失败优于静默回落);未知键忽略(前向兼容)。运行期间该文件
+与 PLAN.md、CURRENT.md、opencode.json 一起置为只读,人工修订请在运行外进行。
 
 兼容与迁移:
 
 | 场景 | 行为 |
 | --- | --- |
-| 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"重跑 init 可固化完整配置";init 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没) |
-| 旧脚本 `run -m xxx` / `run --verify` 等 | 退出码 1 + 修订指引(breaking) |
-| 重复 `init`(无参数) | 配置不变(全键保留),模板与标记块照常幂等 |
-| `init --verify true` 等 amend | 仅改写显式给出的键,其余保留 |
+| 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值并固化进首跑配置(旧文件不删除,留在 gitignore 内自然沉没) |
+| 旧脚本 `run -m xxx` / `run --verify` 等 | 首参数 `run` 先被"子命令已移除"拦截;改用 `opencode-auto [dir]` 后,二次运行关键参数与固化值不一致 → 退出码 1 + 修订指引(breaking) |
+| 重复运行(无关键参数) | 配置不变,自动断点续跑;`.auto/tool.json` 完成标记存在时直接报告完成退出 0 |
+| 中途修订关键参数 | 直接编辑 `.opencode/auto/config.json`(运行期间该文件只读,请在运行外进行) |
 | 中途 `verify` on→off | 已 done 任务的 `verified` 字段不回溯;未完成任务此后收尾即 done;`--review` / `--early` 的联动(串行审核/降级提示)按新值生效 |
 | 中途切换 `subtask` | 已注入检查项的任务照旧从勾选状态续跑(进度按任务记录,不跨任务混淆);新任务按新档执行;不建议中途切换 |
 | 中途换 `mode` | 仅提示词文案变化(模式不进调度状态机);终审已产出的报告不受影响 |
-| 中途 `commit` off | 工作区开始累积未提交改动(run 启动时会提示会被下一次统一提交纳入) |
+| 中途 `commit` off | 工作区开始累积未提交改动(启动时会提示会被下一次统一提交纳入) |
 
 组合要点:`verify: false`(缺省)时 `--review` 的质量审核串行执行、`--early` 的
 并行窗口不存在(启动打降级提示);`verify: true` 时 `--review --early` 并行审核照旧
@@ -116,35 +142,29 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 `contextLimit`,verify / commit / subtask 不参与;`--final-review` 的终审任务强制
 跳过任务级验收(与 `verify` 无交互)。
 
-### init 的选项(固化与修订)
+### 关键参数(首跑固化与冲突校验)
+
+以下选项在**首次运行时**固化进 `.opencode/auto/config.json`(仅显式给出的键进入
+比对,裸选项取各自缺省档);二次运行起显式给出且与固化值不一致即用法错误
+(退出码 1),修订通道为直接编辑配置文件:
 
 | 选项 | 说明 |
 | --- | --- |
-| `-p` / `--prompt <文本>` | 项目意图文本,整写覆盖到 `.opencode/auto/brief.md`(版本化、人工可编辑,重复 `init -p` 覆盖重写;无 `-p` 时保留既有文件),由每个阶段的规划会话消费;init 不启动任何 AI 会话 |
-| `-m` / `--mode <name>` | 场景模式,写入配置的 `mode` 键(优先级: 显式值 > 既有配置值 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
-| `--agent <name>` | 执行会话使用的 agent,写入配置的 `agent` 键(缺省 `auto`);不做存在性校验,由 run 前完整性检查兜底;见[agent 选择](#opencode-server-与-agent-选择) |
-| `--phases <admtvk 子序列含 m>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);台账非空时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工修订台账。见[阶段化流程](#阶段化流程--phases) |
-| `--source-dir <dir> --source-path <相对路径>` | 迁移源参数,写入配置的 `source` 键;两参数必须成对给出、`dir` 须为工作目录下的相对路径(不含 `..`,迁移源位于 `<工作目录>/<dir>`)、`path` 须为相对 `dir` 的相对路径(不含 `..`),init 时校验 `<工作目录>/<dir>/<path>` 存在(环境错误退出码 1);任一给出即整体覆盖既有 `source`。`dir` 接受软链接——存在性校验跟随链接解析,可把源系统大树留在工作目录外、在工作目录内以链接接入 |
-| `--dest-dir <相对路径>` | 迁移目标目录,写入配置的 `destDir` 键(相对工作目录、不含 `..`,可独立于 source 修订);driver 工作目录的流程文件与迁移产出的代码经它隔离——规划会话据此把代码任务指向 `<工作目录>/<dest-dir>`;不校验存在性(目标目录常由迁移过程创建) |
-| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
-| `--verify [true]` | 任务级三段式验收开关,写入配置(缺省/裸选项 `false`);启用时收尾后由 driver 亲自执行 verify 脚本、旁路独立判定会话判定,见[执行流水线](#执行流水线)。该开关同时决定验收描述是否进入 init 产物:未启用时 AGENTS.md 不含验证原则块、PLAN.md 模板与 agent 契约不含 verify 相关描述(已存在的 AGENTS.md 验证原则块会在 init/run 时移除);`phases` 含 `v` 而该开关未启用时 init 会打 note 提示(v 阶段任务自身即检验、不受影响) |
+| `-p` / `--prompt <文本>` | 项目意图文本,整写覆盖到 `.opencode/auto/brief.md`(版本化、人工可编辑;**每次运行均可重写**,无 `-p` 时保留既有文件),由前置知识提取会话、参数推断会话与每个阶段的规划会话消费;不进入固化/冲突比对 |
+| `-m` / `--mode <name>` | 场景模式,首跑写入配置的 `mode` 键(优先级: 显式值 > 旧 `.auto/config.json` 回落 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
+| `--agent <name>` | 执行会话使用的 agent,首跑写入配置的 `agent` 键(缺省 `auto`);不做存在性校验,由启动时完整性检查兜底;见[agent 选择](#opencode-server-与-agent-选择) |
+| `--source-dir <dir> --source-path <相对路径>` | 迁移源参数,首跑写入配置的 `source` 键;两参数必须成对给出、`dir` 须为工作目录下的相对路径(不含 `..`,迁移源位于 `<工作目录>/<dir>`)、`path` 须为相对 `dir` 的相对路径(不含 `..`),首跑显式给出时校验 `<工作目录>/<dir>/<path>` 存在(环境错误退出码 1)。`dir` 接受软链接——存在性校验跟随链接解析,可把源系统大树留在工作目录外、在工作目录内以链接接入。**都不给则由主程序的参数推断会话自动推断并固化** |
+| `--dest-dir <相对路径>` | 迁移目标目录,首跑写入配置的 `destDir` 键(相对工作目录、不含 `..`,可独立于 source 给出);driver 工作目录的流程文件与迁移产出的代码经它隔离——规划会话据此把代码任务指向 `<工作目录>/<dest-dir>`;不校验存在性(目标目录常由迁移过程创建),不给则由参数推断会话自动推断并固化 |
+| `--subtask [mode]` | 子任务划分,首跑写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
+| `--verify [true]` | 任务级三段式验收开关,首跑写入配置(缺省/裸选项 `false`);启用时收尾后由 driver 亲自执行 verify 脚本、旁路独立判定会话判定,见[执行流水线](#执行流水线)。该开关同时决定验收描述是否进入首跑产物:未启用时 AGENTS.md 不含验证原则块、PLAN.md 模板与 agent 契约不含 verify 相关描述(已存在的 AGENTS.md 验证原则块会在运行时移除);首跑且该开关未启用时会打一次 note 提示(v 阶段任务自身即检验、不受影响) |
 | `--idle-time [1-120]` | driver 托管脚本的无进度判定窗口(分钟,缺省/裸选项 10;旧名 `--verify-idle` 已更名,出现即报错指引):driver 轮询输出文件(`tmp/verify.out` 或 `tmp/test.<n>.out`,stdout/stderr 合并单文件)的大小,持续无增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
 | `--idle-max [1-1440]` | driver 托管脚本的绝对运行时长上限(分钟,缺省/裸选项不设;旧名 `--verify-max` 已更名):兜底防止脚本无限循环输出;设为正整数时无论是否有输出,总时长超限即终止 |
-| `--commit [true]` | 会话后统一提交开关,写入配置(缺省/裸选项 `true`;`none` 为 `false` 别名);`false` 关闭后改动留在工作区由人工提交 |
-| `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
-| `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(与 `verify` 正交,缺省/裸选项 `false`),写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
-| `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
+| `--commit [true]` | 会话后统一提交开关,首跑写入配置(缺省/裸选项 `true`;`none` 为 `false` 别名);`false` 关闭后改动留在工作区由人工提交 |
+| `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),首跑写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
+| `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(与 `verify` 正交,缺省/裸选项 `false`),首跑写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
+| `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),首跑写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
 
-以上写入配置的选项均为"显式给出的键才被改写"的 amend 语义;`-p` 的 brief.md 同为
-整写覆盖(amend 语义),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
-
-`continue` 子命令(续轮迁移)复用同一套 amend 语义与模板/标记块维护,差异见
-[续轮迁移](#续轮迁移-continue):`--phases`、`-p` 与其余执行选项
-(`--agent`/`--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/
-`--commit`/`--test-by-driver`/`--handover-test`)可按轮修订;`-m/--mode` 与迁移参数
-(`--source-dir`/`--source-path`/`--dest-dir`)跨轮固定,显式给出即用法错误(退出码 1)。
-
-### run 的选项(本次执行)
+### 运行参数(每次生效,不固化)
 
 | 选项 | 说明 |
 | --- | --- |
@@ -160,12 +180,14 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 | `--final-review [1-5]` | 终审闭环(缺省不启用;裸选项为 2 轮;显式值须为 1..5 整数,值为审计轮上限、含首轮 audit):原任务全部完成后进入 audit → remediate → validate → finalize 的任务驱动终审流程,validate 差距回退 audit,审计轮耗尽熔断停机(退出码 2);可与 `--review` / `--early-review` 组合(原任务的逐任务审核照常 + 终审闭环,互不干扰;终审任务本身即检验,强制不做任务级验收与逐任务审核)。详见[终审闭环](#终审闭环--final-review) |
 | `--dryrun [true]` | 权限预检:只调用一次 AI,列出执行任务可能需要的 opencode.json 授权之外的目录/操作并逐只读探查确认,报告写入 `.auto/dryrun.md` 并打印到终端;不执行任何任务 |
 
-每次 `run` 都会在目标目录的 `.auto/logs/run-<时间戳>.log` 新建日志文件,
+每次运行都会在目标目录的 `.auto/logs/run-<时间戳>.log` 新建日志文件,
 终端的全部输出同步写入该文件(逐条直写,进程中断也不丢已输出内容);
 `--interactive` 下日志文件额外包含 verbose 明细(会话部件、上下文用量、变更文件),与 `--verbose` 运行时的记录一致。
 
-退出码:`0` 全部完成(阶段化流程下 = 全部阶段完成);`1` 用法/环境错误(含阶段台账
-`docs/phases.md` 非法或记录了 `phases` 之外的阶段字母);`2` 阻塞或未完成为 pending,等待人工介入(含阶段规划会话受阻与终审闭环熔断);`130` 被强制终止。
+退出码:`0` 全部完成(阶段台账覆盖 `admtvk` 全部字母;或 `.auto/tool.json` 完成
+标记存在、此前已完成);`1` 用法/环境错误(含旧子命令名、历史选项、关键参数与
+首跑固化值冲突,或阶段台账 `docs/phases.md` 非法/记录了 `admtvk` 之外的阶段字母);
+`2` 阻塞或未完成为 pending,等待人工介入(含参数推断受阻、阶段规划会话受阻与终审闭环熔断);`130` 被强制终止。
 
 运行期间单次 Ctrl+C 不会终止(仅提示),3 秒内再次按下 Ctrl+C 才强制退出;
 退出前会尽力恢复 PLAN.md 等文件的可写权限并关闭 opencode server。
@@ -193,7 +215,7 @@ T-009 实现迁移: 子任务分解
 
 ### opencode server:缺省自动启动与自动重启
 
-`run` **缺省自动启动**一个 `opencode serve` 子进程(要求 PATH 上有
+主程序**缺省自动启动**一个 `opencode serve` 子进程(要求 PATH 上有
 `opencode` CLI),其生命周期完全由本工具托管:正常退出或被强制终止时关闭 server。
 仅当显式指定时才复用外部 server:`--server <url>` 或环境变量 `OPENCODE_AUTO_SERVER`
 (要求该地址健康,否则报用法/环境错误退出码 1)。
@@ -215,17 +237,18 @@ T-009 实现迁移: 子任务分解
 
 opencode 的 agent 由目标目录 `.opencode/agent/<name>.md` 定义(frontmatter 指定
 描述/mode/权限,正文是该 agent 的系统提示词),会话用它决定行为契约与默认模型。
-执行会话使用的 agent 由项目配置的 `agent` 键选择(`init --agent <name>` 修订),
-差异如下:
+执行会话使用的 agent 由项目配置的 `agent` 键选择(首跑 `--agent <name>` 固化,
+此后直接编辑配置修订),差异如下:
 
 | 选择 | 适用场景 | 说明 |
 | --- | --- | --- |
-| `auto`(缺省) | 无人值守自动执行 | `init` 生成并维护的契约 agent(`.opencode/agent/auto.md`,与内置模板不一致时 `init` 会替换):非交互工作契约——每会话先读 CURRENT.md、严格只做本次角色、状态文件只读、验证执行权在 driver、权限问题走 question 工具其余自主决策并记录决策过程。**opencode-auto 的运行语义依赖该契约,通常保持缺省** |
-| 自定义 agent | 有特殊需求 | 目标目录 `.opencode/agent/` 下你自行定义的 agent(如绑定特定模型、限制工具集),经 `init --agent <name>` 写入配置。注意:该文件缺失会导致下发任务失败(run 前完整性检查会拦截并提示先 init);契约与 `auto` 不一致时,无人值守期间的自动答复、验收与恢复语义可能偏离预期 |
+| `auto`(缺省) | 无人值守自动执行 | 主程序生成并维护的契约 agent(`.opencode/agent/auto.md`,与内置模板不一致时总是替换):非交互工作契约——每会话先读 CURRENT.md、严格只做本次角色、状态文件只读、验证执行权在 driver、权限问题走 question 工具其余自主决策并记录决策过程。**opencode-auto 的运行语义依赖该契约,通常保持缺省** |
+| 自定义 agent | 有特殊需求 | 目标目录 `.opencode/agent/` 下你自行定义的 agent(如绑定特定模型、限制工具集),经首跑 `--agent <name>` 写入配置。注意:该文件缺失会导致下发任务失败(启动时完整性检查会拦截并提示恢复方式);契约与 `auto` 不一致时,无人值守期间的自动答复、验收与恢复语义可能偏离预期 |
 | (不可选)内置 agent | 直接交互使用 opencode | opencode 内置的交互 agent(如 build/plan)面向有人对话场景,没有"只做本次角色、状态文件只读"等约束,不适合无人值守驱动,本工具不提供该选项 |
 
-`init` 生成的 `auto` 契约会随后续版本演进,`init` 对 `.opencode/agent/auto.md`
-总是替换为最新模板;`run` 启动时发现它与模板不一致会给出刷新提示。
+`auto` 契约会随后续版本演进,主程序每次运行把 `.opencode/agent/auto.md`
+与模板保持一致(不一致即替换);启动完整性检查发现它缺失时直接报错并提示
+重新运行即可恢复(模板维护会重建它)。
 
 ## 执行流水线
 
@@ -297,7 +320,7 @@ AI 判定):
 driver 执行 verify 脚本**不经 opencode 权限体系**,等同人工在本地跑测试;脚本
 来源为用户 PLAN 中的命令或受提示词约束的生成会话,这是便利性取舍而非安全边界。
 verify 产物统一放在目标目录下的 `tmp/`(位于工作目录内,判定/生成会话可直接
-读取,避免系统 `/tmp` 的权限问题);`run`/`init` 会确保 `tmp/` 与 `.auto/`
+读取,避免系统 `/tmp` 的权限问题);主程序每次运行会确保 `tmp/` 与 `.auto/`
 被 `.gitignore` 忽略(统一提交不会把它们带进仓库);脚本假设 POSIX shell,
 Windows 交叉编译产物需 bash 可用(git bash);超时只终止直接子进程,孙进程树
 不保证清理。
@@ -308,7 +331,7 @@ Windows 交叉编译产物需 bash 可用(git bash);超时只终止直接子进�
 当前任务镜像在 `CURRENT.md`:任务开始(首个会话前)即写入——中断运行遗留的缺失/
 过期文件会被重建——每次勾选后刷新,含完整任务内容与进度;**任务完成即删除**,
 而阻塞/回退 pending 的非完成结局会写入"中断备注"(退出原因、中断阶段、恢复方式)
-后**保留文件**,供人工查看与下次恢复;`init` 追加的 AGENTS.md 指针块要求每个会话
+后**保留文件**,供人工查看与下次恢复;AGENTS.md 指针块(主程序幂等维护)要求每个会话
 先读它——AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失;
 此外 driver 会跟踪 AGENTS.md 的变更指纹,**它有更新时在下一个新会话前自动重启
 opencode server**,确保新会话必定加载最新的 system context(见
@@ -322,7 +345,7 @@ AI **记录决策过程**(决策理由与否决的备选方案写入相关文档
 ### 中断恢复
 
 上次运行被 kill/Ctrl+C 中断时,PLAN.md 可能遗留 `in_progress` 标记(实际无会话在跑);
-`run` 启动时会把它们全部重置为 `pending` 再正常续跑(`attempts` 保留),无需手工清理。
+启动时会把它们全部重置为 `pending` 再正常续跑(`attempts` 保留),无需手工清理。
 
 恢复的依据是**进度记录** `.auto/progress.json`:run 期间 driver 在任务流水线的每个
 阶段边界持久化 `{task, session, at, active, phase}`——`phase` 标记当前阶段
@@ -345,7 +368,7 @@ AI **记录决策过程**(决策理由与否决的备选方案写入相关文档
   (`--early` 下缺失的并行审核结论也只补跑审核);修复轮/重验轮计数一并恢复;
 - 收尾及之后:off/ondemand 不再重跑整任务执行会话;质量审核轮计数恢复,
   修复规划已产出有效 `docs/T-NNN.fix.md` 时直接注入;
-- 验收/审核通过时已把任务标 `done` 才被中断的,`run` 启动时置回 `in_progress`
+- 验收/审核通过时已把任务标 `done` 才被中断的,启动时置回 `in_progress`
   补跑,不会被 `next()` 跳过。
 
 **优雅退出的总结**(非 AI 服务原因停机——阻塞、回退 pending 等):退出前 driver
@@ -354,14 +377,14 @@ AI **记录决策过程**(决策理由与否决的备选方案写入相关文档
 不可信);重新运行后凭备注、勾选状态与阶段记录开新会话精确继续。网络故障重试耗尽
 属于"会话半途无法总结",保持会话复用资格,恢复时优先找回原会话。
 
-`run` 期间 driver 会把 PLAN.md、CURRENT.md、opencode.json 与
+运行期间 driver 会把 PLAN.md、CURRENT.md、opencode.json 与
 `.opencode/auto/config.json` 置为只读(chmod 0o444),driver 自身写入时临时恢复、
 写完立即重置;**唯一例外**是 verify 判定会话——它被授权更新后续未完成任务的
 verify 字段,会话期间临时放开 PLAN.md 写权限、结束后恢复并校验(越权编辑整体
-还原)。`run` 结束(含阻塞退出)恢复可写,便于人工介入编辑(包括手工修订项目
+还原)。运行结束(含阻塞退出)恢复可写,便于人工介入编辑(包括手工修订项目
 配置)。这是提示词契约之外的防误写护栏——同用户进程仍可经 bash chmod 绕过,
-并非安全边界。AGENTS.md 不在只读之列(任务可更新它),driver 只在 `run`/`init`
-启动会话前确保其中存在四个 opencode-auto 标记块,缺失则追加(除此之外永不改写
+并非安全边界。AGENTS.md 不在只读之列(任务可更新它),driver 只在启动会话前
+确保其中存在五个 opencode-auto 标记块,缺失则追加(除此之外永不改写
 AGENTS.md,见[AGENTS.md 标记块与维护规则](#agentsmd-标记块与维护规则))。
 
 ## 质量审核(--review)
@@ -412,8 +435,8 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 
 ## 测试执行协议(--test-by-driver)
 
-`--test-by-driver`(宪法级选项,经 `init --test-by-driver` 固化到配置
-`testByDriver` 键,`run` 出现即用法错误)把"实现环节中编译/测试/构建/lint 等
+`--test-by-driver`(关键参数,首跑固化到配置 `testByDriver` 键;二次运行显式
+给出且不一致即用法错误)把"实现环节中编译/测试/构建/lint 等
 可能耗时长或产生大量输出的命令"的执行权收归 driver(与任务级三段式验收
 `verify` **正交**:不依赖 `verify` 开关、可独立启用,文件与协议完全分离)。适用会话为
 执行类会话——子任务会话(`subtask: auto`)、整任务会话(`off` / `ondemand`)与验收
@@ -439,14 +462,13 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 
 每个执行会话入口会清除上一会话/上次运行遗留的待执行标记(归档历史保留),防止陈旧
 请求污染新会话;测试脚本不经 opencode 权限体系(等同 driver 亲自在本地跑测试,
-与 verify 脚本同一非安全边界)。该约定同时经 init 下沉:AGENTS.md 补写测试执行
+与 verify 脚本同一非安全边界)。该约定同时经首跑固化下沉:AGENTS.md 补写测试执行
 原则块(`opencode-auto:test` 标记块,随配置补写/移除)、agent 契约带对应条款,
-`check` 子命令在 `testByDriver` 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自
-运行编译/测试/构建/lint 的描述。
+执行类提示词注入测试协议段。
 
 ### 测试交接(--handover-test)
 
-`--handover-test`(需搭配 `--test-by-driver`,经 `init --handover-test` 固化到配置
+`--handover-test`(需搭配 `--test-by-driver`,首跑固化到配置
 `handoverTest` 键)针对"超大上下文中反复试错":测试失败
 (非零退出码或看门狗超时)且会话上下文已用 tokens 达到 `contextLimit` 时,driver 不再
 把结果 steer 回原会话,而是要求 AI 立即把进度、关键决策、失败测试上下文与后续步骤
@@ -483,7 +505,7 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 
 ## 模式层(-m/--mode)
 
-`-m/--mode <name>`(仅 `init` 接受,写入配置的 `mode` 键;缺省 `migrate`;显式值须为
+`-m/--mode <name>`(关键参数,首跑固化到配置的 `mode` 键;缺省 `migrate`;显式值须为
 已注册的模式名,否则用法错误退出码 1,报文会列出当前支持的模式)是**提示词级**的
 场景引导,不改变 driver 的调度与验收状态机:
 
@@ -513,36 +535,40 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 (另有 `## final: validate` 与 `## final: finalize`;五节齐备,缺节/未知节为解析错误)
 ```
 
-模式固化在项目配置的 `mode` 键(`.opencode/auto/config.json`):`init -m <name>`
-显式修订(优先级: 显式值 > 既有配置值 > 缺省 `migrate`);`run` 读取配置解析,
-不再接受 `-m`(出现即用法错误)。`optimize` / `implement` / `test` 等扩展场景
-直接按上述格式添加文件即可。
+模式固化在项目配置的 `mode` 键(`.opencode/auto/config.json`):首跑 `-m <name>`
+显式给出,否则回落旧 `.auto/config.json` 的 mode,再否则缺省 `migrate`;二次运行
+显式给出且与固化值不一致即用法错误(退出码 1),修订通道为直接编辑配置文件。
+`optimize` / `implement` / `test` 等扩展场景直接按上述格式添加文件即可。
 
-## 阶段化流程(--phases)
+## 阶段化流程(固定 admtvk)
 
-`--phases <admtvk 子序列含 m>`(仅 `init` 接受,写入配置的 `phases` 键;缺省
-`"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致)把迁移类长流程拆为固定
-六阶段:**a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼**。取值
-必须为 `admtvk` 的子序列且包含 `m`(如 `m`、`amt`、`admtvk` 合法;`tma`、`adk`、
-重复字母、空串非法)——顺序是语义的一部分,一行校验消除一整类误用。阶段注册表
-固定内置,不开放自定义(阶段有 driver 侧语义:产物约定、v 的验收豁免、终审
-挂接点,非纯提示词文案)。
+主程序的迁移流程**固定为完整六阶段**:**a 分析 → d 设计 → m 迁移实现 → t 测试 →
+v 验收 → k 知识提炼**,自动推进至全部阶段完成(台账覆盖 `admtvk` 全部字母 →
+退出码 0 并写完成标记)。`--phases` 已移除(出现即用法错误);配置的 `phases` 键
+保留在 schema 中(前向兼容、人工可编辑),但工具恒定以 `"admtvk"` 驱动、不再读取
+该键。阶段注册表固定内置,不开放自定义(阶段有 driver 侧语义:产物约定、v 的
+验收豁免、终审挂接点,非纯提示词文案)。
 
-- **brief.md**:`init -p "<项目意图>"` 写入 `.opencode/auto/brief.md`(版本化、
-  人工可编辑,重复 `init -p` 覆盖重写,无 `-p` 时保留既有文件),由每个阶段的
-  规划会话消费——它是项目级意图,a 阶段定下的基调 k 阶段同样需要。init 不启动
-  任何 AI 会话(规划从 init 挪到 run 的阶段边界,规划会话才能感知各阶段产物)。
+- **brief.md**:`-p "<项目意图>"` 写入 `.opencode/auto/brief.md`(版本化、
+  人工可编辑,每次运行均可整写覆盖,无 `-p` 时保留既有文件),由前置知识提取
+  会话、参数推断会话与每个阶段的规划会话消费——它是项目级意图,a 阶段定下的
+  基调 k 阶段同样需要。
 - **迁移参数**:目录布局约定为——位置参数 `<dir>` 是 driver 工作目录(流程文件
   PLAN.md、docs/ 等所在),迁移源在 `<dir>/<source-dir>`(被迁移模块在其下的
   `<source-path>`)、迁移目标在 `<dir>/<dest-dir>`,driver 工作目录与迁移目标经
-  `dest-dir` 隔离。`init --source-dir <dir> --source-path <相对路径>` 成对固化到
-  配置的 `source` 键、  `--dest-dir <相对路径>` 固化到 `destDir` 键(拒绝
-  `<dir>/<path>` 拼接形式;三者均须为不含 `..` 的相对路径;init 时校验源存在性
-  ——校验经 stat 跟随软链接,`source-dir` 可为指向工作目录外的软链,便于把源系统
-  大树留在工作目录外以链接接入,断链按不存在拒绝;run 不再校验——源系统可能已
-  下线;目标目录不校验存在性,常由迁移过程创建)。
+  `dest-dir` 隔离。首跑 `--source-dir <dir> --source-path <相对路径>` 成对固化到
+  配置的 `source` 键、 `--dest-dir <相对路径>` 固化到 `destDir` 键(三者均须为
+  不含 `..` 的相对路径;显式给出时校验源存在性——校验经 stat 跟随软链接,
+  `source-dir` 可为指向工作目录外的软链,便于把源系统大树留在工作目录外以链接
+  接入,断链按不存在拒绝;固化后不再校验——源系统可能已下线;目标目录不校验
+  存在性,常由迁移过程创建)。**缺失时由参数推断会话自动推断并写回配置**:
+  AI 依据前置知识与目录勘察把结论整写 `.auto/infer.json`(成功
+  `{"sourceDir","sourcePath","destDir"}` / 无法推断 `{"blocked": "原因"}`),
+  driver 校验(合法 JSON、三键为非空不含 `..` 的相对路径、源存在性同上)后仅
+  采纳缺失键并 `saveProjectConfig` 固化;`blocked` 或会话受阻 → 退出码 2,报文
+  指引显式给出参数或直接编辑配置。
 - **阶段台账 `docs/phases.md`**:阶段状态是**推导式**的——台账(版本化、人工
-  可编辑)记录已完成阶段,当前阶段 = `phases` 串中第一个未在台账出现的字母:
+  可编辑)记录已完成阶段,当前阶段 = `admtvk` 串中第一个未在台账出现的字母:
 
   ```markdown
   # 阶段台账(opencode-auto 维护;人工修订见 README)
@@ -550,27 +576,36 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
   - [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)
   ```
 
-- **前缀护栏**:台账非空时 `init --phases` 的新值必须以台账已完成阶段为前缀,
-  否则报错(退出码 1)并指引人工修订台账——防止 amend 把流程状态打成不可推导。
-  台账行无法解析、字母越界或重复同样为环境错误(退出码 1)。
+- **台账合法性**:台账行无法解析、字母越界(`admtvk` 之外)或重复为环境错误
+  (退出码 1),报文给人工修订指引。
 - **人工回退**:回退到某阶段 = ① 从台账删除该阶段及其后的全部行;② 删除对应
-  `docs/phases/<letter>-*/` 归档目录(或把其中 PLAN.md 拷回根目录续跑);③ 重跑
-  `run`。推导式状态使回退无需专门代码支持。
+  `docs/phases/<letter>-*/` 归档目录(或把其中 PLAN.md 拷回根目录续跑);③ 重新
+  运行。推导式状态使回退无需专门代码支持。
 - `v`(验收)阶段与 `verify` 配置正交:v 阶段任务自身即检验,**豁免任务级验收
   与 `--review`**(与终审任务共用同一豁免路径,收尾后直接标 done、不写 verified);
-  其余阶段任务照常走 `verify` 开关;`phases` 含 `v` 而 `verify: false` 时 init 打
-  note 提示,不强制。
-- **阶段循环(`run`)**:配置 `phases ≠ "m"` 时 `run` 按"规划 → 执行 → 交接"推进到
+  其余阶段任务照常走 `verify` 开关;首跑且 `verify: false`(流程恒含 `v`)时会打
+  一次 note 提示,不强制。
+- **前置知识提取**(阶段循环之前,每次启动求值):通读 brief.md、docs/ 全树(含
+  `docs/phases/` 各阶段归档与 `round-<N>` 轮次归档——已有迁移结果不限于本工具
+  此前的输出,也可能是人工或其他工具的产物)与 git log 概览,把已有迁移经验蒸馏
+  为 `docs/prior-kb/prior-<时间戳>.md`(章节骨架同 k 阶段知识库:迁移概要/API
+  与类型映射/实现模式/坑点/可复用规则/设计偏差/验证证据/参考)。**幂等**:
+  `docs/prior-kb/` 下已有非空 .md 即跳过;**失败仅 ⚠ 警告后继续**(参数推断会话
+  可自行直读原始 docs/)。产物是本轮**首个阶段规划会话**的注入输入(与上一轮结论
+  摘录合并)与参数推断会话的输入;与 k 阶段的 `docs/migration-kb/` 隔离,互不
+  污染(归档上一轮时不移动它)。
+- **阶段循环**:主程序按"规划 → 执行 → 交接"推进到
   全部阶段完成,状态全部从台账 + `PLAN.md` 推导,不引入额外状态文件:
-  - **规划**:`PLAN.md` 处于空模板态时(`templates/PLAN.scaffold.md`,阶段化下
-    `init` 产出它而不写占位任务)开一个**阶段规划会话**,把本阶段任务按
+  - **规划**:`PLAN.md` 处于空模板态时(`templates/PLAN.scaffold.md`,主程序
+    模板维护产出它而不写占位任务)开一个**阶段规划会话**,把本阶段任务按
     `## T-NNN: <任务标题> [pending]` 格式直接写进 `PLAN.md`——这是唯一被授权写
     `PLAN.md` 的会话(会话期间临时放行,结束即恢复只读)。会话消费 `brief.md`、
     迁移源参数、迁移目标目录、模式导语与**各前序阶段的交接文档**(handover 蒸馏产物是跨阶段
     记忆的唯一通道,前序原始 `docs/` 不注入;缺 handover 的阶段在清单中标注
-    "(无交接文档)");规划受阻退出码 2(人工处理后重跑)。
+    "(无交接文档)");台账为空(新一轮首个规划会话)时另注入**前置知识文档与
+    上一轮结论摘录**的合并摘要(见"前置知识提取"与"续轮(自动归档)")。规划受阻退出码 2(人工处理后重跑)。
   - **执行**:有未完成任务时走既有主循环,任务级语义(分解/验收/审核/统一提交/
-    断点恢复)与单次运行完全一致(v 阶段任务的豁免见上)。
+    断点恢复)与[执行流水线](#执行流水线)完全一致(v 阶段任务的豁免见上)。
   - **k(知识提炼)阶段例外**:k 阶段不开规划会话、不向 `PLAN.md` 填任务——
     plan 路由直接进入**知识提取旁路会话**(整体认领原 `--extract-knowledge`
     设计,见 `docs/fixme-knowledge-design.md` 文首修订节),通读阶段台账与各
@@ -592,7 +627,7 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
     模板,台账追加一行,整体作为一次统一提交(`Auto-Stage: phase-transition`)
     落账。各步幂等,交接中途断电/Ctrl+C 后重跑会自行补完(含补写台账)。
   - 台账覆盖 `phases` 全部字母 → 退出码 0(`✓ 全部阶段已完成`)。
-- **阶段进度行**:`run` 启动横幅与 `status` 在配置摘要后打印一行进度,`✓` = 台账
+- **阶段进度行**:启动时在配置摘要后打印一行进度,`✓` = 台账
   已记录、`▶` = 当前阶段、其余字母 = 未开始;续轮(round-\<N\> 归档存在)时带轮次
   标注:
 
@@ -604,43 +639,42 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 - `--final-review` 只在 **m(迁移实现)** 阶段挂接,其余阶段完成时不进入终审闭环
   (启用时启动会打一次提示)。
 
-### 续轮迁移(continue)
+### 续轮(自动归档与完成标记)
 
-一轮阶段化迁移**全部完成后**(台账覆盖 `phases` 全部字母),`continue` 子命令开启
-新一轮继续迁移——目标是**让迁移结果与源系统更加完整、一致**(补齐上一轮的遗漏、
-对齐残余差距),而不是重做已完成的工作:
+`continue` 子命令已移除——续轮由主程序**自动处理**:启动时若 `.auto/tool.json`
+完成标记不存在且阶段台账已覆盖 `admtvk` 全部字母,说明存在一轮已完成的迁移
+(不限于本工具此前的轮次,也可能是历史遗留),主程序先把既有完整轮次归档到
+`docs/phases/round-<N>/`,再经前置知识提取消费其结论,从头规划新一轮继续迁移
+——目标是**让迁移结果与源系统更加完整、一致**(补齐遗漏、对齐残余差距),而不是
+重做已完成的工作:
 
 ```sh
-opencode-auto init <dir> --phases "admtvk" --source-dir legacy --source-path pkg --dest-dir app
-opencode-auto run <dir>                       # 第 1 轮: a→d→m→t→v→k 全部完成
-opencode-auto continue <dir> --phases "admtvk" -p "第二轮聚焦补齐 API 覆盖差距"
-opencode-auto run <dir>                       # 第 2 轮
+opencode-auto <dir> --source-dir legacy --source-path pkg --dest-dir app   # 第 1 轮: a→d→m→t→v→k 全部完成,写 .auto/tool.json {done:true}
+rm <dir>/.auto/tool.json    # 显式开启新一轮(或: 目录里本就有一轮完整迁移结果,首次运行会自动归档它)
+opencode-auto <dir> -p "第二轮聚焦补齐 API 覆盖差距"                        # 第 2 轮: 归档上一轮 → 前置知识提取 → 推断/规划 → 完整 admtvk
 ```
 
-- **前置校验**:仅阶段化项目(`phases ≠ "m"`)且上一轮已全部完成;台账为空、
-  缺阶段、含 `phases` 之外字母或项目非阶段化 → 退出码 1 并给指引(先跑 `run`
-  完成本轮,或按人工回退规程处理)。
+- **归档判定**:仅当完成标记不存在且台账覆盖全部字母时归档;标记存在时永不归档
+  (台账满 = 本轮刚跑完,直接写 `done`)。**台账部分完成的既有轮次不归档**——
+  视为进行中的本轮,直接续跑完成。
 - **归档与重置**:上一轮整体归档到 `docs/phases/round-<N>/`(N = 被归档轮次)——
   台账(`phases.md`)、各阶段归档目录、轮末根 `PLAN.md` 快照与未归档的知识文档
   残留(`docs/migration-kb/`,移走后新一轮 k 阶段可重新提取)一并移入;台账随之
-  消失 = 空台账、根 `PLAN.md` 由模板循环重建为空模板、上一轮的 docs/ 快照清除。
-  各步为 rename 且台账最后移动,归档中断后重跑 `continue` 自然续完。
-- **结论注入**:新一轮**首个阶段规划会话**注入上一轮结论摘录——各阶段归档目录
-  索引 + 最终完成阶段的 `handover.md` 全文 + 迁移知识文档全文(蒸馏产物仍是唯一
-  通道,原始产物按索引可达,归档就在工作目录内);后续阶段照常走本轮 handover
-  蒸馏链,不重复注入。
-- **参数修订**:`--phases` 可为任何合法值(台账已归档重置,不受前缀护栏约束,
-  如第 2 轮改跑 `mtvk` 跳过分析与设计);`-p` 可换新一轮意图;`--agent`/
-  `--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/`--commit`
-  照常 amend。**跨轮固定**:`-m/--mode` 与迁移参数(`--source-dir`/`--source-path`/
-  `--dest-dir`)显式给出即用法错误——换源、换目标或换模式不是"同一迁移的继续",
-  请在新目录 init 新项目。
+  消失 = 空台账、根 `PLAN.md` 重置为空模板、上一轮的 docs/ 快照清除。
+  各步为 rename 且台账最后移动,归档中断后重跑自然续完;无可归档内容时不创建
+  目录。`docs/prior-kb/` 不移动(前置知识跨轮沉淀)。
+- **结论注入**:新一轮**首个阶段规划会话**注入上一轮结论摘录(各阶段归档目录
+  索引 + 最终完成阶段的 `handover.md` 全文 + 迁移知识文档全文)与前置知识文档
+  的合并摘要(蒸馏产物仍是唯一通道,原始产物按索引可达,归档就在工作目录内);
+  后续阶段照常走本轮 handover 蒸馏链,不重复注入。
+- **完成标记 `.auto/tool.json`**(非版本化):全部阶段完成(退出码 0)时写入
+  `{ "done": true }`;之后再次运行报告"二次迁移已全部完成"并退出 0。**删除该
+  文件可显式开启新一轮**。
 - **轮次推导**:当前轮 = `docs/phases/` 下 `round-<N>` 最大编号 + 1,零新增
-  持久化状态;`run`/`status` 的阶段进度行带轮次标注(如上)。`continue` 是
-  `init`/`run` 之外的独立子命令,`--continue` 不是选项(出现即报错指引)。
+  持久化状态;阶段进度行带轮次标注(如上)。
 - **人工回退轮次**:回退续轮 = 把 `round-<N>/` 内容移回(`phases.md` →
-  `docs/phases.md`、各阶段归档目录 → `docs/phases/`)后重跑 `run`,即恢复上一轮
-  完成态;删除 `round-<N>/` 则回到该轮次编号。
+  `docs/phases.md`、各阶段归档目录 → `docs/phases/`)、删除完成标记后重新运行,
+  即恢复上一轮完成态;删除 `round-<N>/` 则回到该轮次编号。
 
 > 阶段化流程的 P1..P4 已全部接入:P3 起,交接文档由蒸馏会话产出并注入下一阶段
 > 规划会话,v 阶段任务豁免任务级验收;P4 起,k(知识提炼)阶段整体认领原
@@ -697,7 +731,7 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 
 ## AGENTS.md 标记块与维护规则
 
-`init` / `run` 幂等维护目标目录 AGENTS.md 中的五个 opencode-auto 标记块
+主程序每次运行幂等维护目标目录 AGENTS.md 中的五个 opencode-auto 标记块
 (`<!-- opencode-auto:*:start -->` 到 `<!-- opencode-auto:*:end -->`,各自独立判断、
 缺失则追加,除此之外永不改写 AGENTS.md):
 
@@ -712,7 +746,7 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 提交原则块描述的是**与配置无关的不变式**(会话不提交),不随配置开关改写;验证
 原则块对应验收机制、测试执行原则块对应测试执行协议,分别随 `verify` /
 `testByDriver` 开关补写/移除——机制不存在时,AGENTS.md 不
-保留其描述。生效配置由 run 启动横幅与 `status` 打印。
+保留其描述。生效配置由启动时的配置摘要行打印。
 
 **维护规则**(第四标记块,约束 AGENTS.md 保持工作流入口定位、不膨胀为知识库——
 它作为 system context 每个 provider turn 都进入上下文,膨胀会侵蚀全部会话的有效
@@ -729,8 +763,7 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 `docs/agents/<主题>.md` 存放**跨任务**的工作流知识(规范、映射约定、环境
 quirks),与 docs/ 根的**单任务**过程产物(subtasks/report/fix/final 等)分工;
 主题文件由会话在首次需要时创建并在 AGENTS.md 维护一行路由(纯提示词契约,无
-driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时输出提示
-(note,不影响退出码),是维护规则的唯一机器观测点。agent 契约
+driver 侧解析),随统一提交入库。agent 契约
 (`.opencode/agent/auto.md`)同步约束会话:不得删除或改写任何 opencode-auto
 标记块,更新其余内容须遵守维护规则。
 
@@ -756,25 +789,8 @@ driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时�
   driver 包装为脚本亲自执行,自然语言描述由旁路脚本生成会话翻译成可执行脚本;
   判定一律由独立判定会话做出,通过后 driver 把实际执行的命令或脚本记入
   `verified` 字段并标 `[done]`。该字段与验收机制仅在配置 `verify: true` 时生效:
-  未启用时 init 产出的 PLAN.md 模板不含 verify 字段示例与验证原则描述,手工写入
+  未启用时主程序产出的 PLAN.md 模板不含 verify 字段示例与验证原则描述,手工写入
   的 verify 字段会被解析但不会被验收流程消费。
-
-## 原则检查(check)
-
-`opencode-auto check [dir]` 启发式扫描目标目录的 `AGENTS.md` 与 `PLAN.md`,报告与
-"验证执行权 / 测试执行权 / 提交执行权在 driver"原则相违背的描述——即要求会话/AI
-亲自运行验证脚本或验证命令、自行下验收结论,要求会话直接运行编译/测试/构建/lint
-命令,或要求会话执行 git 提交的语句(命中打印
-文件、行号与原文,退出码 1;干净时退出码 0)。原则性/否定句("不要运行…")、
-归属 driver 的语句、PLAN.md 的 `verify` 字段行与 opencode-auto 标记块不算违背;
-匹配为启发式,报告供人工确认。验证类描述的检查仅在配置 `verify: true` 时进行
-(未启用时 driver 不做任务级验收,会话运行验证命令不算违背),测试类描述的检查
-仅在 `testByDriver: true` 时进行,提交类检查始终
-进行。`check` 另输出提示(note,不影响退出码):缺少提交原则块、缺少验证原则块
-(仅 `verify: true` 时)、缺少测试执行原则块(仅 `testByDriver: true` 时)、
-AGENTS.md 超 150 行(维护规则块第 1 条,建议精简并把
-细节路由到 `docs/agents/`)。`init` 会在 AGENTS.md 幂等维护标记块,并在启用验收
-时把验证原则写进 PLAN.md 模板,使规划时就注意这一点。
 
 ## 阻塞与恢复
 
@@ -786,4 +802,4 @@ AGENTS.md 超 150 行(维护规则块第 1 条,建议精简并把
   会话继续),超时分别自动授权 / 自动拒绝并继续(AI 无授权绕开) / 拒绝并阻塞停机
   (此时按提示在目标目录 `opencode.json` 的 `permission` 规则中放行后重跑);
 - **其他问题**:在会话外处理(或在 `answer` 字段填写解答),然后重新运行
-  `opencode-auto run` 即可从阻塞处续跑。
+  `opencode-auto <dir>` 即可从阻塞处续跑。
