@@ -3,18 +3,20 @@ import { join } from "node:path"
 
 // 进度恢复记录: run 期间 driver 把任务流水线的当前阶段与执行链会话持久化到目标
 // 目录 .auto/progress.json。应用崩溃/被强制终止后重新运行时据此精确恢复:
-// - active 且距上次活动不超过 RESUME_WINDOW_MS(30 分钟)且会话在 server 上仍
-//   存在 → 复用该会话继续(会话内未落盘的进度不丢),首个提示词附"中断后的继续"
-//   说明(含按阶段的下一步指引);
+// - active 且会话在 server 上仍存在 → 复用该会话继续(与 `opencode -r <session-id>`
+//   同构: 会话历史持久化在 server 项目存储,向原 session 下发新 prompt 即带全部
+//   上下文继续,会话内未落盘的进度不丢),首个提示词附"中断后的继续"说明(含按阶段
+//   的下一步指引);中断前已写出交接文档(ondemand handoff / handover-test)时不复用
+//   ——旧会话上下文已用满、进度由交接文档承载,开新会话凭交接续跑;
+//   --new-session 显式放弃旧会话(仅跳过复用,阶段精确重入保留)。
 // - 优雅退出(阻塞/回退 pending)由 driver 在退出前写好总结(CURRENT.md 中断备注
 //   + active=false 的记录),恢复时开新会话凭总结继续,不复用旧会话——人工介入
 //   可能耗时数小时且会改动环境,旧会话上下文已不可信;
 // - 记录同时携带阶段(phase): 恢复时按阶段重入流水线(verify 已执行的脚本运行
-//   记录直接交判定会话,不重跑;off/ondemand 已过执行阶段不再重跑整任务会话等)。
+//   记录直接交判定会话,不重跑;修复轮中断凭持久化的差距文本续跑修复;off/ondemand
+//   已过执行阶段不再重跑整任务会话等)。
 // 任务完成即删除记录;旁路一次性会话(判定/审核/脚本生成/修复规划)不写记录,
 // 只有执行链会话写,避免污染链记忆。
-export const RESUME_WINDOW_MS = 30 * 60 * 1000
-export const RESUME_WINDOW_MINUTES = RESUME_WINDOW_MS / 60_000
 
 // verify 阶段持久化的脚本运行记录(结构兼容 prompt.VerifyRun):脚本已由 driver
 // 执行完毕时随阶段保存,恢复时跳过执行直接进入判定会话(脚本可能很长)。
@@ -35,7 +37,8 @@ export type AuditVerdict = { type: "pass"; command?: string } | { type: "gap"; g
 // - whole: off/ondemand 模式整任务单会话执行阶段
 // - subtasks: 逐子任务会话阶段(从首个未勾选项继续)
 // - wrapup: 收尾会话阶段
-// - verify: 任务级验收;stage = generate(脚本生成)/ exec(脚本执行)/ judge(判定);
+// - verify: 任务级验收;stage = generate(脚本生成)/ exec(脚本执行)/ judge(判定)/
+//   fix(修复轮进行中,gap 为判定差距原文,中断恢复时凭它重新下发修复提示);
 //   round/rechecks/replaced 为修复轮与重验轮计数,run 为已执行的脚本运行记录,
 //   audit 为 early 并行审核已得出的结论
 // - review: 质量审核外层循环;round 为当前轮,stage = audit(审核会话)/
@@ -47,12 +50,15 @@ export type Phase =
   | { kind: "wrapup" }
   | {
       kind: "verify"
-      stage: "generate" | "exec" | "judge"
+      stage: "generate" | "exec" | "judge" | "fix"
       round: number
       rechecks: number
       replaced: boolean
       run?: RunRecord
       audit?: AuditVerdict
+      // stage = fix 时持久化的判定差距原文: 修复会话中断后恢复,凭它重新下发
+      // renderFix 续跑修复(执行链会话被复用时上下文不丢,差距文本仍随记录恢复)。
+      gap?: string
     }
   | { kind: "review"; round: number; stage: "audit" | "planfix" | "fixrun" }
 
@@ -61,7 +67,7 @@ export type Progress = {
   // 执行链会话 ID;优雅退出后保留作诊断,但 active=false 使其不再被复用。
   session?: string
   at: number
-  // true = 会话半途未总结(kill/崩溃/网络故障),恢复可按 30 分钟窗复用。
+  // true = 会话半途未总结(kill/崩溃/网络故障),恢复时会话存活即复用。
   active: boolean
   phase?: Phase
 }
@@ -82,7 +88,7 @@ export async function forgetProgress(dir: string) {
   await rm(join(dir, LEGACY), { force: true })
 }
 
-// 读取属于该任务的进度记录(不校验时间窗——窗口与存活判定在 runner)。任务不符、
+// 读取属于该任务的进度记录(不校验会话存活——存活判定在 runner)。任务不符、
 // 文件缺失或损坏返回 undefined。
 export async function recallProgress(dir: string, task: string): Promise<Progress | undefined> {
   const record = await readProgress(dir)

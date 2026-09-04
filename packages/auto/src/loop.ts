@@ -204,6 +204,9 @@ export async function runAll(
     // config.destDir 迁移目标目录(可选,相对工作目录),注入阶段规划会话——
     // driver 流程文件与迁移产出经它隔离。
     destDir?: string
+    // --new-session: 中断恢复时跳过会话复用(仅放弃旧会话上下文,阶段精确重入
+    // 保留),透传给 runTask。
+    newSession?: boolean
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -431,6 +434,7 @@ export async function runAll(
           testByDriver: opts.testByDriver,
           handoverTest: opts.handoverTest,
           mode: opts.mode,
+          newSession: opts.newSession,
           phase,
         })
         if (outcome.type === "blocked") {

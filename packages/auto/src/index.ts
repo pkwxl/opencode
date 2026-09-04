@@ -23,8 +23,9 @@ const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
 // --final-review/--phases/--source-dir/--source-path/--dest-dir 带值(吞掉下一个
-// token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/--handover-test
-// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
+// token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/
+// --handover-test/--new-session 是布尔选项,出现即 true,仅当紧随字面量 true/false
+// 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
 // --mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
@@ -48,7 +49,7 @@ const VALUE_FLAGS = new Set([
   "source-path",
   "dest-dir",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -249,6 +250,8 @@ if (command === "run") {
     destDir: config.destDir,
     testByDriver: config.testByDriver,
     handoverTest: config.handoverTest,
+    // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
+    newSession: flags.has("new-session") && flags.get("new-session") !== "false",
   })
   process.exit(code)
 }
@@ -743,11 +746,12 @@ function isPristinePlan(text: string): boolean {
 console.error(`用法:
   opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]]
   opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]]
-  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]]
+  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]] [--new-session]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
 选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+       --new-session 中断恢复时不复用被中断的旧会话、开新会话继续(仅跳过会话复用,阶段精确重入不受影响;缺省复用存活的被中断会话)
        -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
        -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
        --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)

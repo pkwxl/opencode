@@ -260,15 +260,22 @@
   持久化到目标目录 .auto/progress.json({task, session, at, active, phase};阶段
   边界经 persistStage 写 active=false 总结态,执行链会话开始/结束经 attempt 刷
   active=true 半途态;旁路一次性会话不写);runTask 开始时 recallProgress 读回——
-  active 且 30 分钟窗口内(RESUME_WINDOW_MS,自最后一次活动起算)且会话在 server
-  上仍存在 → 复用原会话继续(chain 直接 seed 该会话),否则新会话;两种情况首个
-  提示词均附加"[driver] 中断后的继续"说明(读 CURRENT.md、git status/diff 核对
-  进度,按 phase 给出下一步指引,不重做)。phase 支撑阶段级重入:verify 有持久化
-  run 记录跳过脚本重跑直接判定、off/ondemand 过执行阶段不重跑 executeWhole、
-  review/planfix 有有效 fix.md 直接注入、decompose 先直读 subtasks.md;loop 启动
-  经 peekProgress 把 verify/review 阶段中断但已标 done 的任务置回 in_progress。
-  任务完成 forgetProgress;优雅退出(非网络类 blocked/incomplete)保留记录但清
-  复用资格;网络类 blocked 保持 active 走 30 分钟窗复用;伪任务(PLAN/AUTO)不记忆。
+  active 且会话在 server 上仍存在 → 复用原会话继续(chain 直接 seed 该会话,
+  与 `opencode -r` 同构,不设时间窗),否则新会话;**交接文件优先**——active
+  恢复时交接文档已存在(ondemand 的 docs/<id>.handoff.md 或 handover-test 的
+  <id>.testhandoff.md)则不复用旧会话,开新会话凭交接续跑(handoff `状态: 完成`
+  时直接跳过整任务会话);`--new-session` 显式放弃复用(仅跳过复用、阶段精确
+  重入保留,并立即把记录转 active=false);两种情况首个提示词均附加"[driver]
+  中断后的继续"说明(读 CURRENT.md、git status/diff 核对进度,按 phase 给出
+  下一步指引,不重做)。phase 支撑阶段级重入:verify 有持久化 run 记录跳过
+  脚本重跑直接判定、stage=fix 凭持久化的判定差距原文(gap)重新下发修复提示
+  续跑修复轮、off/ondemand 过执行阶段不重跑 executeWhole、review/planfix 有
+  有效 fix.md 直接注入、decompose 先直读 subtasks.md;loop 启动经 peekProgress
+  把 verify/review 阶段中断但已标 done 的任务置回 in_progress。SSE 事件流未
+  收到会话结束事件即耗尽(server 故障/网络断开)时 abort 孤儿回合、按会话错误
+  处理,不误判会话正常结束。任务完成 forgetProgress;优雅退出(非网络类
+  blocked/incomplete)保留记录但清复用资格;网络类 blocked 保持 active 供恢复
+  复用;伪任务(PLAN/AUTO)不记忆。
 - opencode server 管理(src/server.ts manage):run 缺省 spawn `opencode serve`
   并托管生命周期;显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管。
   client 为 Proxy,restart 换实例后既有引用自动生效。网络类会话错误(NETWORK_FAILURE

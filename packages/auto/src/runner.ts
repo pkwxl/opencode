@@ -44,14 +44,7 @@ import {
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
-import {
-  forgetProgress,
-  recallProgress,
-  RESUME_WINDOW_MINUTES,
-  RESUME_WINDOW_MS,
-  saveProgress,
-  type Phase,
-} from "./resume"
+import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
@@ -147,6 +140,9 @@ export type Opts = {
   handoverTest?: boolean
   // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
   mode?: ModeSpec
+  // --new-session: 中断恢复时跳过会话复用(即使被中断的会话仍存活也开新会话);
+  // 阶段精确重入不受影响——仅放弃旧会话上下文,进度记录的 phase 照常指导续跑。
+  newSession?: boolean
   // 阶段化流程下的当前阶段字母(loop 透传,缺省 undefined = 单次运行): "v"
   // (验收)阶段任务本身即检验,强制 review=0 且跳过任务级三段式验收——与终审
   // 任务的 final 字段共用同一豁免路径,为内部标记、不写 PLAN.md(设计文档
@@ -243,11 +239,16 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // Interruption recovery (进度记录 .auto/progress.json, design doc H): the
 // driver persists the current phase at every pipeline boundary and the
 // execution-chain session as active while a session is in flight. On re-run:
-// an active record within RESUME_WINDOW_MS with a live session resumes that
-// session (unsummarized in-flight work), anything else starts a fresh session
+// an active record with a live session resumes that session (unsummarized
+// in-flight work — equivalent to `opencode -r <session-id>`), unless a handoff
+// document was written before the interruption (the old session's context was
+// exhausted and the handoff carries the state — a fresh session continues from
+// it) or --new-session was given (skip reuse only; the recorded phase still
+// re-enters the pipeline precisely). Anything else starts a fresh session
 // guided by the recorded phase (graceful exits leave a summarized record with
 // active=false); the phase also re-enters the pipeline precisely — a persisted
-// verify run skips script re-execution, off/ondemand past the execution phase
+// verify run skips script re-execution, an interrupted fix round re-issues the
+// persisted gap to the execution chain, off/ondemand past the execution phase
 // never re-runs the whole-task session, a valid fix checklist file is
 // injected without a new planning session. Network-failure blockades keep the
 // active record (the session is in-flight and unsummarized); every other
@@ -268,28 +269,37 @@ export async function runTask(
   const dir = opts.dir ?? dirname(plan.path)
   const mode = opts.subtask ?? "auto"
   const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
-  // 中断恢复(进度记录): 会话半途未总结(active)且在时间窗内、server 上仍存在 →
-  // 复用原会话继续(上下文不丢);优雅退出的总结记录、超窗或会话已不可用 → 新会话。
-  // 两种情况首个提示词均附"[driver] 中断后的继续"说明(含按阶段的下一步指引)。
+  // 中断恢复(进度记录): 会话半途未总结(active)且 server 上仍存在 → 复用原会话
+  // 继续(与 opencode -r 同构,上下文不丢);优雅退出的总结记录、会话已不可用、
+  // --new-session 显式放弃 → 新会话。两种情况首个提示词均附"[driver] 中断后的继续"
+  // 说明(含按阶段的下一步指引)。
+  // 交接文件优先于会话复用: 中断前会话已写出交接文档(ondemand 的 handoff.md 或
+  // --handover-test 的 testhandoff.md)时,旧会话上下文已用满、进度由文档承载——
+  // 开新会话凭交接续跑(executeWhole/runExecSession 据文件播种 continuation)。
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
     chain.phase = recalled.phase
-    if (
-      recalled.active &&
-      recalled.session &&
-      Date.now() - recalled.at <= RESUME_WINDOW_MS &&
-      (await sessionAlive(client, recalled.session))
-    ) {
+    const handedOff =
+      recalled.active === true &&
+      ((mode === "ondemand" && (await Bun.file(join(dir, handoffFile(task))).exists())) ||
+        (opts.handoverTest === true && (await Bun.file(join(dir, testHandoffFile(task))).exists())))
+    if (!handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))) {
       chain.id = recalled.session
       chain.pct = 0
       chain.used = 0
-      // 复用决策已由 30 分钟窗做出;链内后续的 5 分钟复用规则从当前时刻起算。
+      // 复用决策已在此做出;链内后续的 5 分钟复用规则从当前时刻起算。
       chain.at = Date.now()
       chain.note = resumeNote(recalled.phase, true)
-      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用 ${RESUME_WINDOW_MINUTES} 分钟内中断的会话 ${recalled.session} 继续`)
+      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用中断的会话 ${recalled.session} 继续(上下文不丢)`)
     } else {
+      // --new-session 显式放弃旧会话: 立即把记录转总结态,防止本次运行在无会话
+      // 阶段(如 verify 脚本执行)中断后,下次运行误复用与已推进阶段错位的旧会话。
+      if (opts.newSession && recalled.active) {
+        await saveProgress(dir, { ...recalled, active: false })
+      }
       chain.note = resumeNote(recalled.phase, false)
-      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(原会话不可复用,开新会话继续)`)
+      const why = handedOff ? "中断前已写出交接文档,开新会话凭交接续跑" : opts.newSession ? "--new-session 指定,开新会话继续" : "原会话不可复用,开新会话继续"
+      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why})`)
     }
   }
   // Mirror the task into CURRENT.md before the first session: the agent
@@ -314,7 +324,7 @@ export async function runTask(
   }
   // 非完成结局(阻塞/回退 pending)时终结当前进展: CURRENT.md 写中断备注后保留,
   // 供人工查看与下次恢复(下次 runTask 重建镜像时,备注要点经恢复提示词带给 AI)。
-  // 会话错误类(网络重试耗尽)保持 active 记录走 30 分钟窗复用(会话半途无法总结);
+  // 会话错误类(网络重试耗尽)保持 active 记录供恢复复用(会话半途无法总结);
   // 其余清除复用资格(进度已总结,人工介入可能耗时且改动环境,旧会话上下文不可信),
   // 阶段信息保留供精确重入。会话标题同步改名为中断状态(与 loop 边界提交同题)。
   task = requireTask(await load(plan.path), task.id)
@@ -514,7 +524,16 @@ async function executeWhole(
   const steer = ondemand ? { limit: cap * 2, text: renderHandoffSteer(task) } : undefined
   const subject = `${task.id} exec ${task.title}`
   chain.subject = subject
-  let continuation = false
+  // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在即
+  // active 恢复——中断前已交接。状态=完成 → 执行阶段已完成,跳过整任务会话;
+  // 状态=继续 → 以续跑提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
+  const prior = ondemand ? /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1] : undefined
+  if (prior === "完成") {
+    log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记执行已完成,跳过整任务会话`)
+    return undefined
+  }
+  let continuation = prior === "继续"
+  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已交接 ${handoffFile(task)},新会话凭交接文档续跑`)
   let feedback = ""
   let retried = false
   for (;;) {
@@ -623,13 +642,15 @@ export function phaseText(phase: Phase | undefined): string {
       return "收尾阶段(docs 报告与提交)"
     case "verify":
       return `任务级验收(修复轮 ${phase.round}/${FIX_ROUNDS - 1}${phase.rechecks ? `,重验轮 ${phase.rechecks}/${REVERIFY_ROUNDS}` : ""},${
-        phase.run
-          ? "脚本已执行完毕待判定"
-          : phase.stage === "generate"
-            ? "待生成验证脚本"
-            : phase.stage === "judge"
-              ? "待判定"
-              : "待执行验证脚本"
+        phase.stage === "fix"
+          ? "修复轮进行中(差距反馈已下发)"
+          : phase.run
+            ? "脚本已执行完毕待判定"
+            : phase.stage === "generate"
+              ? "待生成验证脚本"
+              : phase.stage === "judge"
+                ? "待判定"
+                : "待执行验证脚本"
       })`
     case "review":
       return `质量审核(第 ${phase.round} 轮,${{ audit: "审核会话", planfix: "修复规划", fixrun: "修复检查项执行" }[phase.stage]})`
@@ -661,9 +682,11 @@ function nextStepText(phase: Phase | undefined): string {
     case "wrapup":
       return `全部检查项已完成,当前处于收尾阶段(更新 docs/ 报告并提交)。`
     case "verify":
-      return phase.run
-        ? `任务级验收的验证脚本已由 driver 执行完毕(输出在 tmp/verify.out),本会话为独立判定会话。`
-        : `当前处于任务级验收阶段:验证脚本由 driver 在会话外执行,你不要亲自运行。`
+      return phase.stage === "fix"
+        ? `任务级验收发现差距,当前处于修复阶段:按反馈的差距继续修复,完成后由 driver 重新执行验证脚本并判定。`
+        : phase.run
+          ? `任务级验收的验证脚本已由 driver 执行完毕(输出在 tmp/verify.out),本会话为独立判定会话。`
+          : `当前处于任务级验收阶段:验证脚本由 driver 在会话外执行,你不要亲自运行。`
     case "review":
       return phase.stage === "audit"
         ? `任务级验收已通过,当前处于质量审核阶段。`
@@ -789,9 +812,8 @@ async function runSubtask(
 // the last audit verdict rides back with the done result.
 // 中断恢复(design doc H): persist 在各阶段边界写进度记录(含已执行的脚本运行
 // 记录);resume 提供上次中断时的轮数计数与运行记录——脚本已执行完毕时不重跑,
-// 直接(early 且审核结论缺失时补跑审核会话后)进入判定会话。修复轮进行中被中断
-// 的场景没有单独阶段标记,恢复后从脚本执行重来一轮判定(可能重复一次差距反馈,
-// 收敛不受影响)。
+// 直接(early 且审核结论缺失时补跑审核会话后)进入判定会话;修复轮进行中被中断
+// (stage=fix,差距原文随记录持久化)时凭差距重新下发修复提示续跑,不重复判定。
 async function verifyTask(
   client: OpencodeClient,
   plan: Plan,
@@ -809,9 +831,36 @@ async function verifyTask(
   const replacement = join(verifyTmpDir(dir), "verify.sh")
   let replaced = resume?.replaced === true
   // 恢复用的运行记录(仅首轮消费): 脚本上次已执行完毕且有持久化记录时不重跑。
-  let pending = resume?.run ? resume : undefined
+  // stage = fix 的修复轮中断不走直判(run 属上一轮已判定记录),由 pendingFix 接管。
+  let pending = resume?.run && resume.stage !== "fix" ? resume : undefined
+  // 修复轮中断恢复(仅首轮消费): fix 会话半途被中断,首轮凭持久化的差距原文重新
+  // 下发修复提示续跑(执行链会话经 runTask 复用时上下文不丢),随后照常收尾与重验。
+  let pendingFix = resume?.stage === "fix" && typeof resume.gap === "string" ? resume : undefined
+  // 差距反馈回执行会话链修复 + 重新收尾(正常修复轮与中断恢复共用)。
+  const fixRound = async (gap: string, round: number): Promise<(Outcome & { type: "blocked" }) | undefined> => {
+    const fixSubject = `${task.id} fix${round} ${task.title}`
+    chain.subject = fixSubject
+    const fixed = await runExecSession(client, plan, task, renderFix(plan, task, gap, opts), opts, chain)
+    if (fixed.type === "blocked") return fixed
+    await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
+    autobanner(`${task.id} ${task.title}: 收尾`)
+    const wrapSubject = `${task.id} wrapup ${task.title}`
+    chain.subject = wrapSubject
+    const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
+    if (wrapped.type === "blocked") return wrapped
+    await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
+    return undefined
+  }
   for (let round = resume?.round ?? 0, rechecks = resume?.rechecks ?? 0; ; ) {
     const counters = { round, rechecks, replaced }
+    if (pendingFix) {
+      // 中断恢复: 修复轮会话半途被中断,重新下发持久化的差距反馈续跑修复。
+      const fix = pendingFix
+      pendingFix = undefined
+      log(`↻ ${task.id} 恢复中断: 验收修复轮(第 ${round}/${FIX_ROUNDS - 1} 轮)会话被中断,凭持久化的差距反馈续跑修复:\n${fix.gap}`)
+      const blocked = await fixRound(fix.gap!, round)
+      if (blocked) return blocked
+    }
     let execution: { type: "ok"; run: VerifyRun; audit?: Verdict } | (Outcome & { type: "blocked" })
     if (pending?.run) {
       // 中断恢复: 脚本已执行完毕且运行记录已持久化——不重跑脚本;early 且审核
@@ -857,17 +906,11 @@ async function verifyTask(
     }
     // 把判定会话的差距信息反馈回执行会话链,续跑修复后重新收尾与验收。
     log(`↻ ${task.id} 验收未通过,把审核差距反馈回执行会话续跑修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${verdict.gap}`)
-    const fixSubject = `${task.id} fix${round} ${task.title}`
-    chain.subject = fixSubject
-    const fixed = await runExecSession(client, plan, task, renderFix(plan, task, verdict.gap, opts), opts, chain)
-    if (fixed.type === "blocked") return fixed
-    await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
-    autobanner(`${task.id} ${task.title}: 收尾`)
-    const wrapSubject = `${task.id} wrapup ${task.title}`
-    chain.subject = wrapSubject
-    const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
-    if (wrapped.type === "blocked") return wrapped
-    await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
+    // 修复轮进行中标记(stage=fix + 差距原文)先于 fix 会话持久化: 此刻中断,恢复时
+    // 凭差距重新下发修复提示续跑(执行链会话复用时上下文不丢),而不是重走一轮判定。
+    await persist?.({ kind: "verify", stage: "fix", round, rechecks, replaced, gap: verdict.gap })
+    const blocked = await fixRound(verdict.gap, round)
+    if (blocked) return blocked
   }
 }
 
@@ -1187,7 +1230,10 @@ async function runExecSession(
     limit: opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
     seq: await latestTestSeq(tmp),
   }
-  let continuation = false
+  // 中断恢复播种: 陈旧测试交接文档由 pipeline 在非恢复路径清除,此处文件仍非空即
+  // active 恢复——中断前已完成测试交接,首个会话即以续跑提示凭交接文档继续。
+  let continuation = (await Bun.file(test.handoffFile).text().catch(() => "")).trim() !== ""
+  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已测试交接 ${testHandoffFile(task)},新会话凭交接文档续跑`)
   let handovers = 0
   for (;;) {
     const extra = continuation
@@ -1320,8 +1366,8 @@ async function attempt(
   // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
   // 新建会话已在创建时命名,无需重复。
   if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
-  // 会话结束但阶段尚未推进: 刷新记录时间(30 分钟窗从最后一次活动起算)并保持
-  // active——此刻中断按"半途未总结"复用本会话继续。
+  // 会话结束但阶段尚未推进: 刷新记录时间并保持 active——此刻中断按"半途未总结"
+  // 复用本会话继续(无时间窗,恢复时只看会话是否存活)。
   await remember()
   if (result.blocked) return result.blocked
   if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
@@ -1387,6 +1433,10 @@ async function watch(
   // 会误判会话结束提前 break。处理过一次 idle 后忽略后续 idle,直到本会话出现
   // 新的会话事件(新回合开始)再重新接受。
   let idleHandled = false
+  // 会话经 idle 事件正常结算才置位;事件流未收 idle 即耗尽(SSE 断流: server 崩溃
+  // 或网络断开)时按会话错误处理,不作正常结束——否则 driver 会误勾选子任务、把
+  // 中断会话当已完成推进流水线。
+  let settled = false
   // steer 投递用 promptAsync(投递即返回):v2 同步 /message 端点会阻塞到它启动的
   // 整个回合结束,在事件循环内同步等待会卡死事件循环(事件堆积、提问/权限无人
   // 应答)。投递失败记 log 并返回 false,调用方按隐性阻塞处理,不再静默空等。
@@ -1607,8 +1657,17 @@ async function watch(
           return { blocked: { type: "blocked", question: handled.question }, lastText, pct, used, testHandover }
         }
       }
+      settled = true
       break
     }
+  }
+  if (!settled) {
+    // SSE 断流: 中止 server 端可能仍在运行的孤儿回合,避免与重试的新会话并发改文件
+    // (abort 对已完成的会话无害;网络已断时调用静默失败)。会话错误经 attempt 包装
+    // 后走重试/阻塞路径,进度记录保持 active,下次运行复用本会话继续。
+    await client.session.abort({ sessionID }).catch(() => {})
+    const msg = "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
+    error = error ? `${error}\n${msg}` : msg
   }
   return { lastText, error, pct, used, testHandover }
 }
