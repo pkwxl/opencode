@@ -215,6 +215,8 @@ export function stageText(stage: FinalStage): string {
 // 最终交接/迁移知识),仅续轮(continue 子命令归档上一轮后)的新一轮首个规划会话注入。
 // source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
 // finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
+// numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
+// 由 loop 在规划会话前经 ensureNumbering 确保就位),未启用时缺省——编号自 T-001 起。
 export function renderPhasePlan(input: {
   phase: Phase
   brief?: string
@@ -225,6 +227,7 @@ export function renderPhasePlan(input: {
   mode?: ModeSpec
   verify?: boolean
   finalReview?: number
+  numberStart?: number
 }): string {
   const { phase } = input
   return renderTemplate("phase-plan", {
@@ -240,12 +243,23 @@ export function renderPhasePlan(input: {
     modeInit: input.mode && modeText(input.mode.init, { verify: input.verify }),
     verify: input.verify,
     finalReview: phase === "m" && input.finalReview ? String(input.finalReview) : undefined,
+    numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
     phaseA: phase === "a",
     phaseD: phase === "d",
     phaseM: phase === "m",
     phaseT: phase === "t",
     phaseV: phase === "v",
     phaseK: phase === "k",
+  })
+}
+
+// 自动编号(config.autoNumber)的编号记录恢复会话(src/numbering.ts): 旁路一次性,
+// 产物 = AI 写入的 .auto/next-task(单个正整数)。floor 为 driver 确定性扫描的
+// 已用编号下限,作模板输入与 driver 侧 collect 校验共用同一数值。
+export function renderNumberRecovery(input: { floor: number }): string {
+  return renderTemplate("number-recovery", {
+    floor: String(input.floor),
+    floorPadded: String(input.floor).padStart(3, "0"),
   })
 }
 

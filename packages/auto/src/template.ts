@@ -20,6 +20,7 @@ import tplFinalTask from "../templates/prompts/final-task.md" with { type: "file
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
+import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
 import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file" }
@@ -52,6 +53,7 @@ const embedded: Record<string, string> = {
   fix: tplFix,
   "handoff-steer": tplHandoffSteer,
   knowledge: tplKnowledge,
+  "number-recovery": tplNumberRecovery,
   "phase-handover": tplPhaseHandover,
   "phase-plan": tplPhasePlan,
   review: tplReview,
@@ -72,6 +74,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   decompose: ["- [ ]"],
   "final-task": ["策略: 重构|修补|无", "结论: 通过", "结论: 差距"],
   "handoff-steer": ["状态: 继续", "状态: 完成"],
+  "number-recovery": [".auto/next-task"],
   "phase-handover": ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引", "handover.md"],
   "phase-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
   review: ["结论: 通过", "结论: 差距", ".auto/review.md"],

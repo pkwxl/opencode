@@ -27,6 +27,7 @@
 - 验收/审核 → `src/verify.ts` + `docs/verify-review-design.md`;终审闭环 → `src/final.ts` + `docs/mode-final-review-design.md`
 - 提示词文案 → 只动 `templates/prompts/*.md`(`src/prompt.ts` 只做数据组装),改后跑 `bun test test/prompt.test.ts`
 - 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`
+- 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
 - 完整文件清单与机制细节 → docs/structure.md、docs/behavior.md
 
 ## 核心不变量(改动前必读)
@@ -39,7 +40,7 @@
 设计本程序功能(行为契约,施加于目标目录,实现不得破坏):
 
 - 退出码:`0` 完成 / `1` 用法或环境错误 / `2` 阻塞或回退 pending 待人工 / `130` 连续两次 Ctrl+C 强退。
-- 宪法级项目属性(-m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--test-by-driver/--handover-test/--phases/--source-dir/--source-path/--dest-dir)仅 init 固化到目标目录 `.opencode/auto/config.json`,run 出现即退出码 1;配置坏文件严格失败,未知键忽略。
+- 宪法级项目属性(-m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--test-by-driver/--handover-test/--auto-number/--no-auto-number/--phases/--source-dir/--source-path/--dest-dir)仅 init 固化到目标目录 `.opencode/auto/config.json`,run 出现即退出码 1;配置坏文件严格失败,未知键忽略。
 - **driver 独占状态写入**:目标目录 PLAN.md/CURRENT.md 与 verified 字段全由 driver 写,AI 会话禁止编辑;`run` 期间这些状态文件只读(src/protect.ts 放行 driver 写入)。
 - **统一提交**:AI 会话不得执行提交类命令;会话结束后由 driver 经 src/git.ts 递归提交目标目录全部改动(先嵌套子仓库后本仓库)。
 - 完成判定不靠 agent 自报:verify 启用时 driver 执行脚本、独立判定会话下结论;子任务由 driver 勾选。

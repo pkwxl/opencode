@@ -148,6 +148,8 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--dest-dir", "target"],
         ["--test-by-driver"],
         ["--handover-test"],
+        ["--auto-number"],
+        ["--no-auto-number"],
       ]
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
@@ -156,6 +158,9 @@ describe("CLI 解析: run 侧选项与配置", () => {
         expect(run.err).toContain(".opencode/auto/config.json")
         expect(run.err).toContain("opencode-auto init <dir>")
       }
+      // 自动编号两键的修订指引为成对形式
+      const numbering = await runCli(["run", dir, "--auto-number"])
+      expect(numbering.err).toContain("--auto-number(关闭用 --no-auto-number)")
       // 迁移源两键的修订指引为成对形式
       const source = await runCli(["run", dir, "--source-dir", "/tmp"])
       expect(source.err).toContain("--source-dir <目录> --source-path <相对路径>")
@@ -278,6 +283,7 @@ describe("CLI: init 固化项目配置", () => {
         commit: true,
         testByDriver: false,
         handoverTest: false,
+        autoNumber: false,
         phases: "m",
       })
     } finally {
@@ -301,11 +307,46 @@ describe("CLI: init 固化项目配置", () => {
         commit: false,
         testByDriver: false,
         handoverTest: false,
+        autoNumber: false,
         phases: "m",
       })
       expect((await runCli(["init", dir])).code).toBe(0)
       expect((await readConfig(dir)).commit).toBe(false)
       expect((await readConfig(dir)).verify).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init --auto-number/--no-auto-number 固化与 amend;两开关同现为用法错误;phases = m 打提示", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // 启用: 固化 true,摘要含自动编号段;phases = m(缺省)无规划会话 → ℹ 提示
+      const init = await runCli(["init", dir, "--auto-number"])
+      expect(init.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
+      expect(init.out).toContain("自动编号 on")
+      expect(init.out).toContain("无规划会话消费编号记录")
+      // 阶段化流程(phases 含规划会话)不打该提示
+      const staged = await runCli(["init", dir, "--phases", "am"])
+      expect(staged.code).toBe(0)
+      expect(staged.out).not.toContain("无规划会话消费编号记录")
+      // amend: --no-auto-number 覆盖回 false;无参数重复 init 保留
+      expect((await runCli(["init", dir, "--no-auto-number"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
+      expect((await runCli(["init", dir, "--auto-number"])).code).toBe(0)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
+      // =false 形式视同未给出
+      expect((await runCli(["init", dir, "--auto-number=false"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
+      // 两开关同现且均未带 =false → 用法错误(init/continue 共用分支,continue 同样拦截)
+      const both = await runCli(["init", dir, "--auto-number", "--no-auto-number"])
+      expect(both.code).toBe(1)
+      expect(both.err).toContain("互斥")
+      const contBoth = await runCli(["continue", dir, "--auto-number", "--no-auto-number"])
+      expect(contBoth.code).toBe(1)
+      expect(contBoth.err).toContain("互斥")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

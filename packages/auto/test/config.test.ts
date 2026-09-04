@@ -102,11 +102,25 @@ describe("loadProjectConfig", () => {
         ["destDir", 42],
         ["testByDriver", "yes"],
         ["handoverTest", 1],
+        ["autoNumber", "yes"],
+        ["autoNumber", 1],
       ]
       for (const [key, value] of bad) {
         writeConfig(dir, JSON.stringify({ [key]: value }))
         await expect(loadProjectConfig(dir)).rejects.toThrow(key === "source" ? "source" : key)
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("autoNumber 缺省 false;合法布尔原样读回", async () => {
+    const dir = tempDir()
+    try {
+      expect(CONFIG_DEFAULTS.autoNumber).toBe(false)
+      expect((await loadProjectConfig(dir)).autoNumber).toBe(false)
+      writeConfig(dir, JSON.stringify({ autoNumber: true }))
+      expect((await loadProjectConfig(dir)).autoNumber).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -243,6 +257,10 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
     // 重复 init 无参数(空显式键)不重置已有配置
     expect(mergeProjectConfig(existing, {})).toEqual(existing)
     expect(mergeProjectConfig(CONFIG_DEFAULTS, {})).toEqual(CONFIG_DEFAULTS)
+    // autoNumber amend 语义: 显式给出覆盖,未给出保留
+    expect(mergeProjectConfig(existing, { autoNumber: true }).autoNumber).toBe(true)
+    expect(mergeProjectConfig({ ...existing, autoNumber: true }, { autoNumber: false }).autoNumber).toBe(false)
+    expect(mergeProjectConfig({ ...existing, autoNumber: true }, {}).autoNumber).toBe(true)
   })
 
   test("摘要一行含全部键的生效值(phases 追加在末尾)", () => {
@@ -256,5 +274,8 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
     // 测试由 driver 执行键入摘要,交接修饰随 handoverTest
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true })).toContain("· 测试 driver on ·")
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true, handoverTest: true })).toContain("· 测试 driver on(交接) ·")
+    // 自动编号仅启用时入摘要
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, autoNumber: true })).toContain("· 自动编号 on ·")
+    expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("自动编号")
   })
 })

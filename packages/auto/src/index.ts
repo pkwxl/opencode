@@ -24,8 +24,8 @@ const positional: string[] = []
 // --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
 // --final-review/--phases/--source-dir/--source-path/--dest-dir 带值(吞掉下一个
 // token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/
-// --handover-test/--new-session 是布尔选项,出现即 true,仅当紧随字面量 true/false
-// 时才吞掉它。均支持
+// --handover-test/--new-session/--auto-number/--no-auto-number 是布尔选项,出现即
+// true,仅当紧随字面量 true/false 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
 // --mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
@@ -49,7 +49,7 @@ const VALUE_FLAGS = new Set([
   "source-path",
   "dest-dir",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -109,13 +109,15 @@ if (command === "run") {
       process.exit(1)
     }
   }
-  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "phases", "source-dir", "source-path", "dest-dir"]) {
+  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "phases", "source-dir", "source-path", "dest-dir"]) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
         key === "source-dir" || key === "source-path"
           ? "opencode-auto init <dir> --source-dir <目录> --source-path <相对路径>"
-          : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <值>`
+          : key === "auto-number" || key === "no-auto-number"
+            ? "opencode-auto init <dir> --auto-number(关闭用 --no-auto-number)"
+            : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <值>`
       console.error(`${flag} 已在 init 固化(.opencode/auto/config.json)。变更方式: ${fix},或直接编辑该文件`)
       process.exit(1)
     }
@@ -250,6 +252,7 @@ if (command === "run") {
     destDir: config.destDir,
     testByDriver: config.testByDriver,
     handoverTest: config.handoverTest,
+    autoNumber: config.autoNumber,
     // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
     newSession: flags.has("new-session") && flags.get("new-session") !== "false",
   })
@@ -488,6 +491,14 @@ if (command === "init" || command === "continue") {
   // 迁移同一性选项,continue 可按轮修订。
   if (flags.has("test-by-driver")) explicit.testByDriver = flags.get("test-by-driver") !== "false"
   if (flags.has("handover-test")) explicit.handoverTest = flags.get("handover-test") !== "false"
+  // --auto-number/--no-auto-number: 一对布尔开关(启用/关闭自动编号),同为布尔
+  // 宪法级选项,经 explicit 合并(amend 语义);两者同现自相矛盾,为用法错误。
+  if (flags.has("auto-number") && flags.has("no-auto-number") && flags.get("auto-number") !== "false" && flags.get("no-auto-number") !== "false") {
+    console.error("--auto-number 与 --no-auto-number 是一对互斥开关,不要同时使用")
+    process.exit(1)
+  }
+  if (flags.has("auto-number") && flags.get("auto-number") !== "false") explicit.autoNumber = true
+  if (flags.has("no-auto-number") && flags.get("no-auto-number") !== "false") explicit.autoNumber = false
   let existing: ProjectConfig
   try {
     existing = await loadProjectConfig(directory)
@@ -578,6 +589,11 @@ if (command === "init" || command === "continue") {
   // 等阶段任务的任务级三段式验收依赖 config.verify;含 v 而未启用时提示一次,不强制。
   if (config.phases.includes("v") && !config.verify) {
     console.log("ℹ phases 含 v(验收)阶段而任务级验收未启用: v 阶段任务自身即检验、不受影响,其余阶段任务将不做任务级三段式验收(如需启用: opencode-auto init <dir> --verify true)")
+  }
+  // 自动编号由阶段规划会话消费编号记录;phases = "m" 没有规划会话(PLAN.md 由
+  // 人工维护),开关不产生效果,提示一次。
+  if (config.autoNumber && config.phases === "m") {
+    console.log('ℹ 自动编号(--auto-number)在 phases = "m" 下无规划会话消费编号记录,开关不产生效果(PLAN.md 编号由人工维护)')
   }
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议校验失败即退出);
   // 无 -p 时不渲染提示词,提前装载可在 init 阶段就暴露覆盖问题。
@@ -744,13 +760,13 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]]
-  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number]
+  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]] [--new-session]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--auto-number/--no-auto-number、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
        --new-session 中断恢复时不复用被中断的旧会话、开新会话继续(仅跳过会话复用,阶段精确重入不受影响;缺省复用存活的被中断会话)
        -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
        -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
@@ -762,6 +778,7 @@ console.error(`用法:
        --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
        --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
        --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(docs/<任务>.testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
+       --auto-number / --no-auto-number 自动编号开关(缺省 --no-auto-number = 沿用现状): 启用后任务编号(T-NNN)在目标目录永不重复——下一可用编号持久化在 .auto/next-task,阶段规划会话自该记录续接编号(不再每阶段从 T-001 重排);记录缺失(如 .auto/ 未随仓库共享的新克隆)时先经 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导下一编号并恢复记录,再继续规划
        continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——上一轮归档到 docs/phases/round-<N>/(台账、各阶段归档、PLAN 与知识文档残留),台账与 PLAN.md 重置,上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项(含 --test-by-driver/--handover-test)、-p 可按轮修订(不受前缀护栏约束)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)

@@ -31,6 +31,10 @@ export type ProjectConfig = {
   // --handover-test(需 testByDriver): 测试失败且会话上下文达上限时要求 AI 写
   // 交接文档后换新会话续跑,防止超大上下文中反复试错。
   handoverTest: boolean
+  // --auto-number: 自动编号——任务编号(T-NNN)在目标目录永不重复,下一可用编号
+  // 持久化在 .auto/next-task,规划会话自该记录续接编号;记录缺失时先经 AI 恢复
+  // 会话推导恢复再继续。缺省 false(编号自 T-001 起,与历史行为一致)。
+  autoNumber: boolean
   // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
   // 单次运行,行为与阶段化之前完全一致。
   phases: string
@@ -55,6 +59,7 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   commit: true,
   testByDriver: false,
   handoverTest: false,
+  autoNumber: false,
   phases: "m",
 }
 
@@ -110,6 +115,7 @@ export function formatProjectConfig(config: ProjectConfig): string {
     `模式 ${config.mode} · agent ${config.agent} · 子任务 ${config.subtask} · 验收 ${config.verify ? "on" : "off"}` +
     ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"}` +
     (config.testByDriver ? ` · 测试 driver on${config.handoverTest ? "(交接)" : ""}` : "") +
+    (config.autoNumber ? " · 自动编号 on" : "") +
     ` · 上下文上限 ${config.contextLimit}k · 阶段 ${config.phases}`
   )
 }
@@ -145,6 +151,7 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     verify: booleanOf("verify", pick("verify")),
     testByDriver,
     handoverTest,
+    autoNumber: booleanOf("autoNumber", pick("autoNumber")),
     // 看门狗键由 verifyIdle/verifyMax 更名而来(现同时控制 verify 与 test 脚本
     // 执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init 自然固化新键。
     idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "分钟"),

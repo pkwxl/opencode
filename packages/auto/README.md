@@ -47,7 +47,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 
 **breaking 变更**:`run` 不再接受 `-m/--mode`、`--agent`、`--context-limit`、
 `--subtask`、`--verify`、`--idle-time`、`--idle-max`、`--commit`、`--test-by-driver`、
-`--handover-test`、`--phases`、
+`--handover-test`、`--auto-number`、`--no-auto-number`、`--phases`、
 `--source-dir`、`--source-path`、`--dest-dir`——任一出现即用法错误(退出码 1),报文
 给出修订指引(`opencode-auto init <dir> --<flag> <值>`,或直接编辑配置文件);这些
 选项已固化为项目属性,见下节。
@@ -72,6 +72,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 | `commit` | `true` / `false` | `true` | 会话后统一提交(git 历史即 AI 变更的审计轨迹) |
 | `testByDriver` | `true` / `false` | `false` | 编译/测试/构建/lint 等命令由 driver 执行(会话经 `test/` 脚本 + `tmp/test.sh` 标记请求),见[测试执行协议](#测试执行协议--test-by-driver) |
 | `handoverTest` | `true` / `false` | `false` | 测试失败且上下文达限时写交接文档换新会话续跑;须搭配 `testByDriver: true`,否则配置校验失败(退出码 1) |
+| `autoNumber` | `true` / `false` | `false` | 自动编号:任务编号(T-NNN)在目标目录永不重复,下一可用编号持久化在 `.auto/next-task`,由阶段规划会话消费,记录缺失时先恢复再继续——见[阶段化流程](#阶段化流程--phases)一节末尾 |
 | `phases` | `admtvk` 的子序列且含 `m` | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼);`"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致。见[阶段化流程](#阶段化流程--phases) |
 | `source` | `{ "dir", "path" }` 或缺省 | 无 | 迁移源参数: `dir` 源系统目录(相对工作目录、不含 `..`)+ `path` 源模块相对路径(相对 `dir`);init 时校验 `join` 后存在,run 不再校验(源系统可能已下线) |
 | `destDir` | 相对路径(不含 `..`)或缺省 | 无 | 迁移目标目录(相对工作目录): driver 工作目录的流程文件(PLAN.md、docs/ 等)与迁移产出的代码经它隔离,产物写入 `<工作目录>/<destDir>`;不校验存在性(目标目录常由迁移过程创建),缺省 = 迁移产出直接落在工作目录 |
@@ -134,6 +135,7 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 | `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
 | `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(与 `verify` 正交,缺省/裸选项 `false`),写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
 | `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
+| `--auto-number` / `--no-auto-number` | 自动编号开关,写入配置的 `autoNumber` 键(缺省 `--no-auto-number` = 沿用历史行为;两开关同现且均未带 `=false` 为用法错误):启用后任务编号(T-NNN)在目标目录永不重复,阶段规划会话自 `.auto/next-task` 记录续接编号,记录缺失时先恢复再继续。`phases = "m"` 无规划会话消费编号记录,开关不产生效果(init 打一次提示)。详见[阶段化流程](#阶段化流程--phases) |
 
 以上写入配置的选项均为"显式给出的键才被改写"的 amend 语义;`-p` 的 brief.md 同为
 整写覆盖(amend 语义),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
@@ -141,7 +143,7 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 `continue` 子命令(续轮迁移)复用同一套 amend 语义与模板/标记块维护,差异见
 [续轮迁移](#续轮迁移-continue):`--phases`、`-p` 与其余执行选项
 (`--agent`/`--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/
-`--commit`/`--test-by-driver`/`--handover-test`)可按轮修订;`-m/--mode` 与迁移参数
+`--commit`/`--test-by-driver`/`--handover-test`/`--auto-number`/`--no-auto-number`)可按轮修订;`-m/--mode` 与迁移参数
 (`--source-dir`/`--source-path`/`--dest-dir`)跨轮固定,显式给出即用法错误(退出码 1)。
 
 ### run 的选项(本次执行)
@@ -616,6 +618,18 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 
 - `--final-review` 只在 **m(迁移实现)** 阶段挂接,其余阶段完成时不进入终审闭环
   (启用时启动会打一次提示)。
+- **自动编号(`init --auto-number`)**:缺省(`--no-auto-number`)沿用历史行为——
+  每个阶段的规划会话自 `T-001` 重排编号,阶段交接后 `PLAN.md` 重置空模板,编号跨
+  阶段/跨轮次重复(`docs/T-NNN.*.md` 产物文件名与提交信息中的编号随之冲突)。启用后
+  任务编号在目标目录**永不重复**:下一可用编号持久化在 `.auto/next-task`(内容仅为
+  一个正整数,driver 维护;`.auto/` 已被 gitignore,新克隆天然缺失),阶段规划会话
+  自该记录续接编号,driver 校验产出不复用已占用编号(复用视为无效产出、带反馈重试
+  一次仍失败按隐性阻塞退出码 2),规划成功后记录推进到本次最大编号 + 1(只增不减)。
+  **记录缺失时先恢复再继续**:现存文件(当前 `PLAN.md`、各阶段/轮次归档 PLAN、
+  `docs/` 产物文件名)中无任何编号证据(全新项目)时直接写 1;否则开一个旁路一次性
+  **编号恢复会话**通读归档与 git 提交历史推导下一编号(git 历史可发现产物已被删除的
+  编号),driver 以确定性扫描的下限校验其写入(小于下限视为无效,重试一次仍失败按
+  隐性阻塞退出码 2)。`T-F<k>` 终审编号是独立命名空间,不参与自动编号。
 
 ### 续轮迁移(continue)
 
@@ -644,7 +658,8 @@ opencode-auto run <dir>                       # 第 2 轮
   蒸馏链,不重复注入。
 - **参数修订**:`--phases` 可为任何合法值(台账已归档重置,不受前缀护栏约束,
   如第 2 轮改跑 `mtvk` 跳过分析与设计);`-p` 可换新一轮意图;`--agent`/
-  `--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/`--commit`
+  `--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/`--commit`/
+  `--test-by-driver`/`--handover-test`/`--auto-number`/`--no-auto-number`
   照常 amend。**跨轮固定**:`-m/--mode` 与迁移参数(`--source-dir`/`--source-path`/
   `--dest-dir`)显式给出即用法错误——换源、换目标或换模式不是"同一迁移的继续",
   请在新目录 init 新项目。

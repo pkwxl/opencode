@@ -10,7 +10,7 @@
   退出前尽力恢复文件可写并关闭 server)。
 - 项目配置固化(src/config.ts,设计文档 docs/init-config-agents-design.md 与
   docs/phases-design.md A.2):宪法级选项
-  -m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--phases/--source-dir/--source-path/--dest-dir 仅
+  -m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--auto-number/--no-auto-number/--phases/--source-dir/--source-path/--dest-dir 仅
   init 接受(仅显式给出的键被改写、其余保留既有值——init 兼具创建与修订两种身份,
   重复 init 无参数不重置配置;source 两键成对、任一给出即整体覆盖,init 时校验
   <工作目录>/join 后存在(经 stat 跟随软链接——source-dir 可为指向工作目录外的软链,
@@ -29,6 +29,20 @@
   既有);结束语按 phases 分两态("m" 维持"编辑 PLAN.md"现状,其余提示开始首个未完成
   阶段规划);phases 含 v 而 verify 未启用时 init 打 note 一次(v 与 verify 正交);
   phases ≠ "m" 时 PLAN.md 以空模板(templates/PLAN.scaffold.md)产出,交给规划会话。
+- --auto-number/--no-auto-number(config.autoNumber,缺省 false = 沿用历史行为;宪法级
+  选项,init/continue 修订,run 拒绝;两开关同现且均未带 =false 为用法错误;设计文档
+  docs/auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
+  编号持久化在 .auto/next-task(内容仅为一个正整数,driver 维护;.auto/ 已被 gitignore,
+  新克隆天然缺失)。唯一消费点是阶段规划会话:planPhase 先 ensureNumbering 确保记录
+  就位,把记录值作为编号起点注入规划提示词(替代"自 T-001 起"文案),collect 校验全部
+  任务编号 ≥ 起点(复用已占用编号视为无效产出,带反馈重试一次仍失败隐性阻塞退出 2),
+  成功后记录推进到本次最大编号 + 1(只增不减);phases = "m" 无规划会话,开关不产生
+  效果(init 时该组合打一次 ℹ 提示)。记录缺失时先恢复再继续:确定性下限(现存
+  PLAN.md/阶段与轮次归档 PLAN/docs 产物文件名中的最大编号 + 1)为 1(全新项目)直接
+  写 1 不开会话;大于 1 开旁路一次性 AI 恢复会话(模板 number-recovery.md)通读归档
+  与 git 提交历史推导下一编号并写入记录(git 历史可发现产物已删除的编号),driver 以
+  下限校验其产出(小于下限无效,重试一次仍失败隐性阻塞退出 2),恢复产物随会话统一
+  提交(stage=numbering)。T-F<k> 终审编号是独立推导命名空间,不参与自动编号记录。
 - 阶段循环(config.phases ≠ "m",P1..P4 已接线;设计文档 phases-design.md D/E/F 节):阶段
   状态是推导式的,routePhase 只读 docs/phases.md 台账与 PLAN.md(零新增持久化状态),
   run 据此循环——PLAN.md 为空模板 → 开阶段规划会话(旁路一次性,复用 requireArtifact
@@ -84,7 +98,8 @@
   仓库,路径发现不依赖 git status——嵌套仓库通常被父仓库忽略),git 历史即 AI
   变更的审计轨迹、回滚粒度 = 会话。提交信息 = `任务编号 <label> <任务标题/子任务>` 短标签
   标题行(label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/
-  blocked/pending/done,伪任务用 PLAN <label>;子任务条目为 `任务编号 S<n> <标题>`、
+  blocked/pending/done,伪任务用 PLAN <label>:plan/handover/transition/knowledge/
+  numbering/final-plan;子任务条目为 `任务编号 S<n> <标题>`、
   省略任务标题)+ `Auto-Task`/
   `Auto-Stage` trailer(目标仓库另记 `Auto-Nested` 嵌套仓库路径与 SHA)。挂点:
   分解注入/子任务勾选/整任务/修复轮/收尾在状态写入后,判定/审核/脚本生成/
@@ -199,12 +214,12 @@
   `{type:"done", audit}` 带回由外层消费(通过 → completed;差距 → 既有 review
   差距流程,off/超轮语义不变),非 early 走原串行路径;全局保持任意时刻至多一个
   LLM 会话(脚本执行为纯本地进程,窗口内唯一会话即审核会话),因此无需 worktree。
-- 提示词模板:全部会话提示词以文件模板管理(`templates/prompts/` 18 个会话模板 +
+- 提示词模板:全部会话提示词以文件模板管理(`templates/prompts/` 19 个会话模板 +
   `_partials.md` 共享片段,src/template.ts 渲染,语法 `{{var}}`/`{{#if x}}`/`{{^x}}`/
   `{{> 片段}}`、块标签独占一行整行吞掉);目标目录 `.opencode/auto/prompts/` 同名
   覆盖,协议敏感模板(verify-judge/review/verify-script-gen/review-fix/decompose/
-  handoff-steer/final-task/phase-plan/phase-handover)覆盖时校验关键协议内容
-  (`结论: 通过|差距|重验`、`.auto/verify.md`、交接四小节标题等),
+  handoff-steer/final-task/phase-plan/phase-handover/number-recovery)覆盖时校验关键协议内容
+  (`结论: 通过|差距|重验`、`.auto/verify.md`、交接四小节标题、`.auto/next-task` 等),
   缺失即退出码 1。改提示词文案只动模板文件,不动 src/prompt.ts
   (那里只做数据组装);改后必须跑 test/prompt.test.ts 防协议行漂移。
 - `-m/--mode` 模式层:提示词级场景引导,不影响 driver 调度状态机——ModeSpec 三段

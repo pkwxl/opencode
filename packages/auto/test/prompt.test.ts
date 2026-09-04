@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
 import { parse } from "../src/plan"
-import { renderText } from "../src/template"
+import { renderText, usePromptLibrary } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import planTemplate from "../templates/PLAN.md" with { type: "file" }
@@ -14,6 +14,7 @@ import {
   renderFix,
   renderHandoffSteer,
   renderKnowledge,
+  renderNumberRecovery,
   renderPhaseHandover,
   renderPhasePlan,
   renderReview,
@@ -637,15 +638,48 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "a", finalReview: 3 })).not.toContain("终审提醒")
   })
 
+  test("numberStart 两态: 自动编号起点注入 / 缺省自 T-001 起", () => {
+    const text = renderPhasePlan({ phase: "m", numberStart: 4 })
+    expect(text).toContain("任务编号自 T-004 起连续递增")
+    expect(text).toContain("不得复用")
+    expect(text).not.toContain("任务编号自 T-001")
+    // 未启用自动编号(缺省): 维持历史文案
+    const bare = renderPhasePlan({ phase: "m" })
+    expect(bare).toContain("任务编号自 T-001 连续递增")
+    expect(bare).not.toContain("不得复用")
+  })
+
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
       renderPhasePlan({ phase: "a" }),
-      renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, verify: true, finalReview: 2 }),
+      renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, verify: true, finalReview: 2, numberStart: 12 }),
       renderPhasePlan({ phase: "a", prevRound: "### 上一轮(第 1 轮)阶段归档索引\n\n- docs/phases/round-1/m-migrate/" }),
       renderPhasePlan({ phase: "k", verify: true }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
+  })
+})
+
+describe("renderNumberRecovery(编号恢复会话)", () => {
+  test("注入下限与证据清单,硬性产出协议指向 .auto/next-task", () => {
+    // 模板库可能被同进程其他用例覆盖过,复位为仅内置
+    usePromptLibrary(undefined)
+    const text = renderNumberRecovery({ floor: 5 })
+    // 协议敏感标记: driver 解析会话产出的依据
+    expect(text).toContain(".auto/next-task")
+    // 下限注入(原值与补零形式)
+    expect(text).toContain("= 5")
+    expect(text).toContain("T-005")
+    expect(text).toContain("不得小于它")
+    // 证据清单含 git 历史(发现产物已删除的编号)与归档 PLAN
+    expect(text).toContain("git log --oneline")
+    expect(text).toContain("docs/phases/")
+    // 硬性产出协议: 内容仅为不小于下限的正整数
+    expect(text).toContain("正整数")
+    expect(text).toContain("不要写任何其他内容")
+    expect(text).toContain("唯一可写的文件是 .auto/next-task")
+    expect(text).not.toMatch(/\{\{|\}\}/)
   })
 })
 
