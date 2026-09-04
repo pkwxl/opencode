@@ -78,7 +78,8 @@ async function afterSession(
   await commitTree(dir, task, info)
 }
 
-// --subtask 三档: off(单会话完成)/ auto(自动分解,缺省)/ ondemand(单会话执行,
+// --subtask 三档: off(单会话完成)/ auto(自动分解,缺省;子任务会话上下文达到
+// 2x --context-limit 时同样交接文档 + 新会话续跑)/ ondemand(单会话执行,
 // 上下文达到 2x --context-limit 时交接文档 + 新会话续跑)。
 export type SubtaskMode = "off" | "auto" | "ondemand"
 
@@ -107,7 +108,8 @@ export type Opts = {
   // dryrun 会话: 权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复。
   dryrun?: boolean
   // 上下文预算基线(tokens);缺省 64k(--context-limit n 以千 tokens 计):会话
-  // 复用的已用量阈值为其一半,ondemand 交接 steer 阈值为其 2 倍。
+  // 复用的已用量阈值为其一半,交接 steer 阈值为其 2 倍(ondemand 整任务会话与
+  // auto 子任务会话)。
   contextLimit?: number
   // --review 质量审核轮数上限(0=不启用);终审任务(final 字段)被强制置 0
   // (见 pipeline),终审任务生成会话(src/final.ts)不受影响。
@@ -185,7 +187,7 @@ const REUSE_IDLE_MS = 5 * 60 * 1000
 const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000
 
 // 上下文预算默认基线(tokens);--context-limit n 以千 tokens 覆盖。会话复用阈值
-// 为其一半、ondemand 交接阈值为其 2 倍。
+// 为其一半、交接 steer 阈值为其 2 倍。
 const DEFAULT_CONTEXT_LIMIT = 64_000
 
 // Runs one task through the pipeline; the driver owns all state
@@ -273,15 +275,16 @@ export async function runTask(
   // 继续(与 opencode -r 同构,上下文不丢);优雅退出的总结记录、会话已不可用、
   // --new-session 显式放弃 → 新会话。两种情况首个提示词均附"[driver] 中断后的继续"
   // 说明(含按阶段的下一步指引)。
-  // 交接文件优先于会话复用: 中断前会话已写出交接文档(ondemand 的 handoff.md 或
-  // --handover-test 的 testhandoff.md)时,旧会话上下文已用满、进度由文档承载——
-  // 开新会话凭交接续跑(executeWhole/runExecSession 据文件播种 continuation)。
+  // 交接文件优先于会话复用: 中断前会话已写出交接文档(ondemand/auto 子任务的
+  // handoff.md 或 --handover-test 的 testhandoff.md)时,旧会话上下文已用满、
+  // 进度由文档承载——开新会话凭交接续跑(executeWhole/runSubtask/runExecSession
+  // 据文件播种 continuation)。
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
     chain.phase = recalled.phase
     const handedOff =
       recalled.active === true &&
-      ((mode === "ondemand" && (await Bun.file(join(dir, handoffFile(task))).exists())) ||
+      ((mode !== "off" && (await Bun.file(join(dir, handoffFile(task))).exists())) ||
         (opts.handoverTest === true && (await Bun.file(join(dir, testHandoffFile(task))).exists())))
     if (!handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))) {
       chain.id = recalled.session
@@ -347,6 +350,11 @@ export async function runTask(
       const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
       if (decomposed.type === "blocked") return decomposed
       task = decomposed.task
+      // 子任务交接文档的陈旧清理(镜像 ondemand 语义): 非恢复续跑时清除上次尝试
+      // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。
+      if (recalled?.active !== true) {
+        await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
+      }
     } else if (resumed !== "wrapup" && resumed !== "verify" && resumed !== "review") {
       // 非恢复续跑才清除上次尝试遗留的交接文档;恢复时保留(其中是中断会话的进度
       // 总结,executeWhole 依其 `状态:` 行决定续跑)。
@@ -771,6 +779,11 @@ async function ensureDecomposed(
 // session self-checks its own work, and acceptance of the whole task is
 // deferred to the single task-level review after wrap-up (a gap there
 // appends a fix subtask).
+// handoff-steer 同样适用于子任务会话(与 ondemand 整任务会话同机制、共用
+// docs/<id>.handoff.md): 会话进行中上下文已用量达到 2x --context-limit 时
+// driver steer 交接提示,会话写出交接文档(末行 `状态: 继续|完成`,以本子任务
+// 是否完成计)后换新会话凭交接续跑,直到自然完成或交接文档标记完成;子任务
+// 完成后清除交接文档,下一子任务重新起算。
 async function runSubtask(
   client: OpencodeClient,
   plan: Plan,
@@ -783,11 +796,64 @@ async function runSubtask(
   subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
   chain.subject = subject
-  const result = await runExecSession(client, plan, task, renderSubtask(plan, task, text, opts), opts, chain)
-  if (result.type === "blocked") return result
+  const dir = opts.dir ?? dirname(plan.path)
+  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  const steer: Steer = { limit: cap * 2, text: renderHandoffSteer(task) }
+  const file = join(dirname(plan.path), handoffFile(task))
+  // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在且
+  // 状态=完成 → 子任务在中断前已由交接会话完成,直接勾选;状态=继续 → 以续跑
+  // 提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
+  const prior = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
+  if (prior === "完成") {
+    log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记子任务已完成,直接勾选`)
+  } else {
+    let continuation = prior === "继续"
+    if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已交接 ${handoffFile(task)},新会话凭交接文档续跑子任务`)
+    let feedback = ""
+    let retried = false
+    for (;;) {
+      const result = await runExecSession(
+        client,
+        plan,
+        task,
+        renderSubtask(plan, task, text, { ...opts, continuation }) + feedback,
+        opts,
+        chain,
+        steer,
+      )
+      if (result.type === "blocked") return result
+      // 未触发交接阈值(2x cap)即结束 = 子任务在单会话内自然完成,勾选后统一提交。
+      if (chain.used < cap * 2) break
+      const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
+      if (status === "完成") break
+      // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
+      await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
+      if (status === "继续") {
+        log(`↻ ${task.id} 子任务 ${index} 上下文达到 ${formatTokens(cap * 2)} 上限,已交接 ${handoffFile(task)},新会话继续`)
+        continuation = true
+        feedback = ""
+        continue
+      }
+      if (retried) {
+        return {
+          type: "blocked",
+          question:
+            `子任务会话上下文达到上限但两次未写出有效交接文档 ${handoffFile(task)}(缺失或无状态行,隐性阻塞)。` +
+            `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+        }
+      }
+      log(`↻ ${task.id} 子任务 ${index} 达到上下文上限但未产出 ${handoffFile(task)},带反馈重试一次`)
+      retried = true
+      feedback =
+        `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`状态: 继续|完成\` 行)。` +
+        `这是硬性要求: 写出该文件后再结束会话。`
+    }
+  }
+  // 子任务完成: 清除交接文档(下一子任务重新起算),driver 勾选后统一提交。
+  await rm(file, { force: true })
   await tick(plan.path, task.id, text)
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
-  await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: `subtask ${index}`, subject })
+  await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
   log(`  ✓ ${text.slice(0, 60)}`)
   return undefined
 }
@@ -1181,7 +1247,7 @@ function parseVerdict(text: string): Verdict | undefined {
 // failures (Internal network failure / Network error 等) additionally restart
 // the spawned opencode server before the retry.
 // steer: 会话进行中已用上下文达到 limit 时,driver 向该会话插入一次 text
-// (ondemand 的交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
+// (handoff-steer 交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
 type Steer = { limit: number; text: string }
 
 // --test-by-driver 的测试执行协议状态(watch 与 runExecSession 共享,跨会话/
@@ -1524,7 +1590,7 @@ async function watch(
         const ok = await steerText(steer.text)
         if (!ok) {
           return {
-            blocked: { type: "blocked", question: "steer 投递失败(ondemand 交接提示),无法继续会话,详见日志。" },
+             blocked: { type: "blocked", question: "steer 投递失败(交接提示),无法继续会话,详见日志。" },
             lastText,
             pct,
             used,

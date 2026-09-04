@@ -97,7 +97,10 @@
   下一次统一提交纳入(run 启动时经 pendingChanges 提示)。该执行权原则经 init
   下沉:AGENTS.md 提交原则块、agent 契约与 state-rule 片段;`check` 子命令同步
   扫描违背该原则的描述。
-- subtask 三档(config.subtask,init --subtask 修订):`auto`(缺省;分解会话 → 逐子任务)/
+- subtask 三档(config.subtask,init --subtask 修订):`auto`(缺省;分解会话 → 逐子任务,
+  子任务会话同样带 handoff-steer 交接——已用量达配置 contextLimit 的 2 倍时 steer 交接
+  提示,会话写出 docs/<id>.handoff.md(末行 `状态: 继续|完成`,以该子任务是否完成计),
+  新会话凭交接续跑,子任务完成后 driver 删除该文件)/
   `off`(单会话完成整个任务;
   验收差距不做修复重跑,任务回退 pending 等人工改进)/ `ondemand`(单会话执行,
   watch 在已用量达到配置 contextLimit 的 2 倍时向进行中会话 steer 交接提示——每会话一次,

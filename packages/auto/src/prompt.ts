@@ -95,10 +95,15 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
 // Subtask session: exactly one checklist item. The session implements it and
 // self-checks; ticking the checkbox is the driver's job when the session ends
 // (会话后的统一提交同样由 driver 执行,见 src/git.ts)。
-export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts = {}): string {
+// handoff-steer 同样适用于子任务会话: 上下文达到 2x contextLimit 时 driver
+// 插入交接提示,会话把进度写入 docs/<id>.handoff.md 后由新会话续跑;
+// continuation 表示此前会话因上下文限制中断,需先读交接文档继续。
+export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts & { continuation?: boolean } = {}): string {
   return renderTemplate("subtask", {
     ...baseCtx(plan, task, opts),
     subtask,
+    continuation: Boolean(opts.continuation),
+    handoffFile: handoffFile(task),
   })
 }
 
@@ -270,13 +275,15 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
   })
 }
 
-// ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 2x --context-limit
-// 时插入交接提示,会话把进度写入该文件,末行 `状态: 继续|完成` 由 driver 解析。
+// 交接文档(相对目标目录): ondemand 整任务会话与 auto 子任务会话共用——driver 在
+// 上下文达到 2x --context-limit 时插入交接提示,会话把进度写入该文件,末行
+// `状态: 继续|完成` 由 driver 解析。子任务场景的状态以该子任务是否完成计。
 export function handoffFile(task: Task): string {
   return `docs/${task.id}.handoff.md`
 }
 
-// ondemand 模式: driver 在会话进行中(上下文达到交接阈值,2x contextLimit)插入的交接提示。
+// driver 在会话进行中(上下文达到交接阈值,2x contextLimit)插入的交接提示
+// (ondemand 整任务会话与 auto 子任务会话)。
 // v2 prompt 默认 steer,在下一个 provider turn 边界进入会话。
 export function renderHandoffSteer(task: Task): string {
   return renderTemplate("handoff-steer", { handoffFile: handoffFile(task) })

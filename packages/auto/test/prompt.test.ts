@@ -110,6 +110,17 @@ describe("renderSubtask", () => {
     expect(text).toContain("不要运行 git commit")
   })
 
+  test("交接条款默认注入;continuation 要求先读交接文档", () => {
+    const text = renderSubtask(plan, task, subtask)
+    expect(text).toContain("docs/T-002.handoff.md")
+    expect(text).toContain("[driver] 上下文即将达到上限")
+    expect(text).toContain("以本子任务是否完成计")
+    expect(text).not.toContain("先读 docs/T-002.handoff.md")
+    const cont = renderSubtask(plan, task, subtask, { continuation: true })
+    expect(cont).toContain("先读 docs/T-002.handoff.md")
+    expect(cont).toContain("据此继续")
+  })
+
   test("test-by-driver: 注入测试执行协议;未启用时整块消失", () => {
     const on = renderSubtask(plan, task, subtask, { testByDriver: true })
     expect(on).toContain("测试执行协议(--test-by-driver)")
