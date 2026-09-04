@@ -1381,8 +1381,26 @@ async function watch(
   let testHandover = false
   let testHandoverAsked = false
   let testHandoverRetried = false
-  const steerText = async (text: string) => {
-    await client.session.prompt({ sessionID, parts: [{ type: "text", text }] }).catch(() => {})
+  // 孪生 idle 去重: 回合结束时服务端连发两个 idle 事件(session.status idle 与
+  // session.idle,status.ts);steer 改异步投递后第二个 idle 会先于新回合启动
+  // 到达,直接处理会在 steer 回合开跑前触发 idle 结算甚至提前 break。处理过
+  // 一次 idle 后忽略后续 idle,直到本会话出现新的活动事件(消息/提问/权限/
+  // 错误/非 idle 状态)才重新接受。
+  let idleSeen = false
+  // steer 投递必须走 promptAsync(投递即返回,与 interactive.ts 同款): 同步
+  // /message 端点会阻塞到它启动的整个回合结束,在事件循环内 await 会让 watch
+  // 停摆——期间事件全部堆积在缓冲区,run log 直到回合结束才一次性倾泻,且提问/
+  // 权限事件无法应答。投递失败不再静默吞掉: 记日志并返回错误详情,调用方报
+  // blocked 退出(否则 watch 会对已不可用的会话永久空等)。
+  const steerText = async (text: string): Promise<string | undefined> => {
+    const result = await client.session.promptAsync({ sessionID, parts: [{ type: "text", text }] }).catch((error: unknown) => ({
+      error: { name: "NetworkError", message: String(error) },
+    }))
+    if (result.error) {
+      const detail = JSON.stringify(result.error)
+      log(`⚠ steer 投递失败: ${detail}`)
+      return detail
+    }
   }
   const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string }> => {
     // 交接要求已发出: 校验交接文档就绪(非空即有效,内容交新会话解释)。
@@ -1401,10 +1419,11 @@ async function watch(
         }
       }
       testHandoverRetried = true
-      await steerText(
+      const retryFailure = await steerText(
         `你上次结束会话但未写出有效的 ${test!.handoffFile}(缺失或为空)。这是硬性要求: ` +
           `把进度、关键决策、失败测试上下文与后续步骤写入该文件后再结束会话。`,
       )
+      if (retryFailure) return { type: "blocked", question: `补发交接要求失败: ${retryFailure}。请重新运行 opencode-auto 恢复` }
       return { type: "continue" }
     }
     const pending = join(test!.tmp, "test.sh")
@@ -1415,10 +1434,12 @@ async function watch(
     if (failed && test!.handover && used >= test!.limit) {
       testHandoverAsked = true
       log(`⚠ 测试失败(退出码 ${run.code})且上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(test!.limit)} 上限,要求写交接文档后换新会话`)
-      await steerText(renderTestHandover(run, { handoffFile: test!.handoffFile, used, limit: test!.limit }))
+      const askFailure = await steerText(renderTestHandover(run, { handoffFile: test!.handoffFile, used, limit: test!.limit }))
+      if (askFailure) return { type: "blocked", question: `发出测试交接要求失败: ${askFailure}。请重新运行 opencode-auto 恢复` }
       return { type: "continue" }
     }
-    await steerText(renderTestResult(run))
+    const feedbackFailure = await steerText(renderTestResult(run))
+    if (feedbackFailure) return { type: "blocked", question: `反馈测试结果失败: ${feedbackFailure}。请重新运行 opencode-auto 恢复` }
     return { type: "continue" }
   }
   // 已记录的 part 与 message,避免同一 part 的多次更新事件重复输出。
@@ -1430,6 +1451,7 @@ async function watch(
     if (event.type === "message.part.updated") {
       const part = event.properties.part
       if (part.sessionID !== sessionID) continue
+      idleSeen = false
       if (part.type === "text" && part.time?.end) {
         lastText = part.text
         vlog(part.text)
@@ -1444,6 +1466,7 @@ async function watch(
     if (event.type === "message.updated") {
       const info = event.properties.info
       if (info.sessionID !== sessionID) continue
+      idleSeen = false
       if (info.role !== "assistant" || !info.time.completed || seen.has(info.id)) continue
       seen.add(info.id)
       limits ??= await contextLimits(client)
@@ -1454,12 +1477,21 @@ async function watch(
       if (steer && !steerSent && used >= steer.limit) {
         steerSent = true
         log(`⚠ 上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(steer.limit)} 上限,插入交接提示`)
-        await client.session.prompt({ sessionID, parts: [{ type: "text", text: steer.text }] }).catch(() => {})
+        const failure = await steerText(steer.text)
+        if (failure) {
+          return {
+            blocked: { type: "blocked", question: `插入 ondemand 交接提示失败: ${failure}。请重新运行 opencode-auto 恢复` },
+            lastText,
+            pct,
+            used,
+          }
+        }
       }
     }
     if (event.type === "question.asked") {
       const asked = event.properties
       if (asked.sessionID !== sessionID) continue
+      idleSeen = false
       const text = asked.questions.map((q) => q.question).join("\n")
       // dryrun 预检会话一律自动答复,不因提问阻塞。
       const permission = opts.dryrun ? false : /权限|permission/i.test(text)
@@ -1493,6 +1525,7 @@ async function watch(
     if (event.type === "permission.asked") {
       const asked = event.properties
       if (asked.sessionID !== sessionID) continue
+      idleSeen = false
       // dryrun 预检: 自动拒绝但不中断会话,让 AI 记录受阻项后继续探查下一项。
       if (opts.dryrun) {
         log(`🔐 预检探查被拒绝(记入报告): ${asked.permission} (${asked.patterns.join(", ")})`)
@@ -1557,11 +1590,15 @@ async function watch(
     if (event.type === "session.error") {
       const props = event.properties
       if (props.sessionID !== sessionID || !props.error) continue
+      idleSeen = false
       const detail =
         "data" in props.error && props.error.data && "message" in props.error.data
           ? String(props.error.data.message)
           : String(props.error.name)
       error = error ? `${error}\n${detail}` : detail
+    }
+    if (event.type === "session.status" && event.properties.sessionID === sessionID && event.properties.status.type !== "idle") {
+      idleSeen = false
     }
     if (
       (event.type === "session.status" &&
@@ -1569,6 +1606,10 @@ async function watch(
         event.properties.status.type === "idle") ||
       (event.type === "session.idle" && event.properties.sessionID === sessionID)
     ) {
+      // 孪生 idle 的第二个(与新回合启动前到达)直接忽略,等新回合的活动事件
+      // 解除抑制后再接受其回合结束的 idle。
+      if (idleSeen) continue
+      idleSeen = true
       // 测试执行协议: idle 先结算待执行请求(执行 + steer 反馈/交接要求)再结束;
       // 无待执行请求且无未完成的交接要求时,会话才算真正结束。
       if (test) {
