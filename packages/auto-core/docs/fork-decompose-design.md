@@ -1,6 +1,8 @@
 # 会话分叉式细粒度任务分解设计(fork-decompose)
 
 > 跨会话实施计划见仓库根 `plans/FORK_DECOMPOSITION_PLAN.md`(步骤勾选与进度以该文件为准);本文档是机制设计基准,落地偏差须回写本文。
+>
+> **落地状态(2026-09-05)**:步骤 1-4 已实现并提交于 auto-core 分支(`f481ba822` 分阶段分解提示词 / `8c6a18ff2` 子任务产物文件化 + 索引式 wrapup / `0e95e0dcb` 实验开关环境变量层 / `00bad6a04` fork 三段式流水线),`bun typecheck` / `bun test` 全绿(auto-core 304 例、auto 壳 27 例;新增 test/switches.test.ts 与 test/runner.test.ts 单测)。A/B 实验与默认值定型见 §11,宪法键转正待实验结论。
 
 ## 1. 背景与动机
 
@@ -51,17 +53,17 @@ T-001(subtask=auto, fork=on)
   └─ ③ 子任务 i(串行):会话 = fork(fork-base 末端,同一分叉点)
         提示词 = subtask 模板 + 全量检查项列表 + "执行第 i 项" + 产出文件约定
         会话结束 → driver 勾选 + 统一提交(不变)
-  wrapup 会话(全新,不 fork):索引式报告
+  wrapup 会话(不 fork,沿用链内复用规则):索引式报告
 ```
 
-进入条件:auto 模式、任务体无检查项、`fork=on` → 先 ①(及 ①′)后 ②;`fork=off` → 直接走现状 `ensureDecomposed()`(不加理解会话)。已有人工检查项的任务跳过 ①②。`docs/<id>.subtasks.md` 已存在的中断注入路径不变(有可用 fork-base 则 ③ 照常分叉,无则冷启动)。
+进入条件:auto 模式、任务体无检查项、`fork=on` → 先 ①(及 ①′)后 ②;`fork=off` → 直接走现状 `ensureDecomposed()`(不加理解会话)。已有人工检查项的任务跳过 ①②。① 幂等:`docs/<id>.context.md` 已存在(中断恢复/上一轮遗留)时跳过理解会话,仅补写缺失的 `fork-base`。`docs/<id>.subtasks.md` 已存在的中断注入路径不变(有可用 fork-base 则 ③ 照常分叉,无则冷启动)。
 
 ## 4. 关键机制
 
 ### 4.1 理解会话与摘要文件
 
 - 新模板 `understand.md`(全文见 §6):只读理解、预算内**选读**(优先任务正文点名文件与直接相关模块)、写 `docs/<id>.context.md` 四节摘要(相关文件与关键符号 / 约束与前提 / 已有决策与现状 / 风险与未知)、写完即结束。
-- 驱动侧 `ensureUnderstood()`:`requireArtifact` 同款骨架(两次重试 + 隐性阻塞),commit stage `"understand"`,成功后写任务字段 `fork-base: <sessionID>`(session 模式下即最终基点;digest 模式随后被 ①′ 覆写)。
+- 驱动侧 `ensureUnderstood()`:`requireArtifact` 同款骨架(两次重试 + 隐性阻塞),commit stage `"understand"`,成功后写任务字段 `fork-base: <sessionID>`(session 模式下即最终基点;digest 模式随后被 ①′ 覆写)。摘要文件已存在时幂等跳过,仅补写缺失的 `fork-base`(中断恰好落在摘要写盘与 setForkBase 之间的恢复路径)。
 - **摘要文件是磁盘态兜底**,三重用途:fork 失败时冷启动输入;wrapup/verify/后续任务低成本引用;人工审计(「从磁盘即可理解」哲学)。它不是 fork 的替代品——fork 省的是重复阅读的往返,摘要是降级通道与长期记忆。
 - digest 模式下它还是**基点原料**:context.md 会被逐字注入基点会话、成为全部分叉的前缀,故模板要求摘要紧凑(建议 200 行以内,见 §6 约束 4)。
 
@@ -80,23 +82,25 @@ T-001(subtask=auto, fork=on)
 
 ### 4.3 fork 会话创建与回退
 
-- `forkSession(client, base, title)`:`base` 为 §4.2 选定的生效基点;封装 `client.session.fork({ sessionID: base })`;返回 `{data}` 取 `.data.id`;`{error}` 或任何异常 → log「↻ fork 失败(原因),回退全新会话」→ `undefined`。**写成可注入依赖**(fake client 可测)。外部旧版 `--server` 无此路由属预期回退场景,不是错误。
+- `forkSession(client, base, title)`:`base` 为 §4.2 选定的生效基点;封装 `client.session.fork({ sessionID: base })`;返回 `{data}` 取 `.data.id`;`{error}` 或任何异常 → log「↻ fork 失败(原因),回退全新会话」→ `undefined`。**写成可注入依赖**(fake client 可测)。外部旧版 `--server` 无此路由属预期回退场景,不是错误。分叉成功后把新会话改名为本阶段提交标题(`session.update`,与 git 历史/任务进度对齐,失败仅记明细)。
 - `SessionChain` 增加两个字段:
   - `forkBase?: string` —— 分叉基点(生效基点会话);
   - `pending?: string` —— 预创建会话 id,`attempt()` 在 `!reuse` 时优先消费(等效于 `session.create` 的结果),消费即清。
 - 调用时序(**先 fork 后渲染**,warm/cold 提示词才能选对):
-  1. `const forked = await forkSession(client, forkBase, title)`;
-  2. 成功 → `chain.pending = forked`、`warm = true`;失败 → 走 `session.create`、`warm = false`;
-  3. 渲染提示词(warm 条件段见 §8 的 subtask 模板);
-  4. `runExecSession(...)` → `attempt()` 消费 `pending`。
+  0. 恢复续跑优先于分叉:链上仍有存活会话且恢复说明(note)待注入 → 不分叉,首个提示词进复用会话(`warm = true`);
+  1. 分叉前经 server 句柄 `syncAgents()`(与 create 路径同款,AGENTS.md 有更新则先重启 server 再分叉);
+  2. `const forked = await forkSession(client, forkBase, title)`;
+  3. 成功 → `chain.pending = forked`、`warm = true`;失败 → 走 `session.create`、`warm = false`;
+  4. 渲染提示词(warm 条件段见 §8 的 subtask 模板);
+  5. `runExecSession(...)` → `attempt()` 消费 `pending`。
 - 瞬时错误重试(`runSession` 的三次重试)会开全新会话——`pending` 已被首次尝试消费,重试自然回落 create 路径,反馈闭环不受影响。
 
 ### 4.4 链与上下文计量
 
 - **每阶段/每子任务新种子链**:`{ pct: 100, used: <基点用量>, at: 0, forkBase }` —— `pct:100` 强制首次不复用(fork 优先);`used` 播种使 `watch()` 的 2×cap steer 阈值按「前缀+新增」计算。
-- 基点用量来源:同次运行取基点会话 `chain.used`(session 模式 = 理解会话跟踪值;digest 模式 = 基点确认会话跟踪值,≈ 摘要大小,极小)。恢复运行:session 模式经 `client.session.messages({ sessionID })` 取末条消息 `tokens.input + tokens.cache.read` 重建(近似即可,首个 turn 的事件跟踪会自行校正;取不到按 0);digest 模式基点本就无条件重建,用量随建随取。
-- 同一子任务内的反馈重试仍可自然复用当次会话(复用规则不变);**跨子任务不复用**,每项重新从基点分叉。
-- 基点用量超过 `cap/2` 时驱动侧不起 fork,直接冷启动(防前缀逼近上限;digest 模式基本不触发)。
+- 基点用量来源:同次运行取基点会话 `chain.used`(session 模式 = 理解会话跟踪值,基点恰为链上会话时直接取跟踪值;digest 模式 = 基点确认会话跟踪值,≈ 摘要大小,极小)。恢复运行:session 模式经 `client.session.messages({ sessionID })` 取末条 assistant 消息 `tokens.input + tokens.cache.read` 重建(近似即可,首个 turn 的事件跟踪会自行校正;取不到按 0);digest 模式基点本就无条件重建,用量随建随取。
+- 同一子任务内的反馈重试仍可自然复用当次会话(复用规则不变);**跨子任务不复用**,每项重新从基点分叉。wrapup 与 verify 修复轮不 fork:wrapup 沿用链内复用规则(可能复用末个子任务会话,与现状一致)。
+- 基点用量达到 `cap/2` 时驱动侧不起 fork,直接冷启动(防前缀逼近上限;digest 模式基本不触发)。
 - **steer 开关**(`OPENCODE_AUTO_STEER=off`):`runSubtask`/`executeWhole`(ondemand)不构造 steer——2×cap 交接提示不注入;**且会话结束后的 `used < 2×cap` 交接判定一并停用**(否则自然结束但用量超限的会话会被误要求补写交接文档)。停用后会话要么自然完成,要么由 provider 侧压缩/上限错误收场(错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响)。`--handover-test` 的测试交接是独立机制,不受此开关影响;`used`/`pct` 计量始终保留(复用决策与日志依据)。
 
 ### 4.5 中断恢复
@@ -116,14 +120,14 @@ T-001(subtask=auto, fork=on)
 | `OPENCODE_AUTO_DECOMPOSE_FINE` | on\|off | off | 细粒度分解:decompose-\<phase\> 模板注入细粒度准则段(§5.1) |
 | `OPENCODE_AUTO_STEER` | on\|off | on | 超限交接 steer(2×cap):off = 停用注入与会话后交接判定(§4.4) |
 
-- 解析:值为空串视同未设;非法值 throw 中文报错(含变量名与期望值域)→ CLI 退出码 1(与配置「坏文件严格失败」哲学一致)。runner 入口解析一次;`runTask` 启动日志列出**非默认**生效项(默认组合静默,verbose 可查全量)。
+- 解析(实现独立成 `src/switches.ts`:`parseSwitches` 纯函数供单测直接构造 env 记录驱动 + `autoSwitches` memo 访问器):值为空串视同未设;非法值 throw 中文报错(含变量名与期望值域)→ CLI 退出码 1(与配置「坏文件严格失败」哲学一致)。runner 入口解析一次;`runTask` 启动日志列出**非默认**生效项(默认组合静默,verbose 可查全量)。
 - **不落盘**:环境变量覆盖不写回任何状态文件(区别于宪法键的 init 固化),实验语义 = 本次运行;同一次运行内开关恒定,会话中途不变。
 - **转正路径**:某开关实测定型后 → 升为宪法级键(如 `fork: "on" | "off"`)进 `ProjectConfig` + init 固化 + run 出现对应旗标退出码 1(仿 `--auto-number`);届时环境变量可保留为运行期覆盖通道(优先级 env > config)或退役,另议。原设计 §4.5 的宪法键方案即此路径,实验期暂缓。
 
 ### 4.7 产物文件化与索引式整合
 
 - 子任务产出文件 driver 机械命名:`docs/<id>/S<NN>.md`(NN 两位递增),避免 slug 清洗歧义;标题写在文件首行。代码类产出即源码树,不重复落文档。
-- wrapup 报告(`docs/<id>.report.md`)改索引式:逐子任务一行(序号 + 一句话结论 + 产物路径),不复制产物内容;只新增整体结论/遗留问题节。
+- wrapup 报告(`docs/<id>.report.md`)改索引式(auto 模式):逐子任务一行(序号 + 一句话结论 + 产物路径),不复制产物内容;只新增整体结论/遗留问题节。off/ondemand(solo,无子任务产物可索引)保持摘要式报告。
 
 ## 5. 分阶段分解提示词准则(decompose-\<phase\>)
 
@@ -289,9 +293,9 @@ docs/{{taskId}}.context.md,先读之了解任务背景再开始(不存在则按�
 首行,不并入其他文档);代码类产出直接落于源码树。
 ```
 
-(`outputFile` = `docs/<id>/S<NN>.md`,driver 机械命名。)
+(`outputFile` = `docs/<id>/S<NN>.md`,driver 机械命名。`subtaskList`/`outputFile` 均带条件回退:调用方未提供时 `renderSubtask` 从任务正文检查项推导 index/列表/产出文件,无列表时渲染单条呈现——旧调用不传参仍完整;`runSubtask` 现传 `index`/`warm`,列表与产出文件经推导。)
 
-**wrapup.md**:报告改索引式——逐子任务一行(序号 + 一句话结论 + 产物路径 `docs/<id>/S<NN>.md` 或代码位置),不复制/改写子任务产物内容;仅新增整体结论与遗留问题两节。
+**wrapup.md**:报告改索引式——逐子任务一行(序号 + 一句话结论 + 产物路径 `docs/<id>/S<NN>.md` 或代码位置),不复制/改写子任务产物内容;仅新增整体结论与遗留问题两节(solo 模式保持摘要式,见 §4.7)。
 
 ## 9. 不变量(实现不得破坏)
 
@@ -322,7 +326,7 @@ docs/{{taskId}}.context.md,先读之了解任务背景再开始(不存在则按�
 ## 11. 风险与开放问题
 
 - provider 缓存未命中时 fork 前缀全额计费:冷启动路径 + `fork=off` 兜底;日志同时输出基点用量供人工判断。
-- fork 会话在 SDK 返回形状(`{ data: Session }`/`.data.id`)以实现时的类型为准(与 `session.create` 同构,`attempt()` 现有解包方式对齐)。
+- fork 会话 SDK 返回形状(已落地):`{ data }` 取 `.data.id`、`{error}` 与调用异常三分支在 `forkSession` 统一处理(与 `session.create` 同构),fake client 单测覆盖(test/runner.test.ts)。
 - **A/B 实验矩阵**(定型默认值与转正范围的依据):{fork on\|off} × {fork-base session\|digest} × {fine on\|off} × {steer on\|off};指标:任务墙钟时间、总 tokens(input / cache.read 分计,取自 chain.used 跟踪与日志)、交接与重试次数、子任务数与子任务均上下文、verify/review 通过率。注意 fine=on 且 fork=off 会重现「细粒度 × 重复探索」的旧成本结构,仅作对照组,不建议日常使用。
 - digest 模式摘要失真:摘要缺细节时子任务须按指引回读文件;session 模式与冷启动提示词兜底;**混合基点**(分解用 session 保接地、执行用 digest 保瘦前缀)为候选改进,首期不做。
 - digest 确认 turn 依赖模型自律(应只回一句):实现期可验证 fork 的 `messageID` 语义——若支持「仅复制到指定消息为止」,可只以摘要 user 消息为前缀、去掉确认 turn,前缀完全确定化。

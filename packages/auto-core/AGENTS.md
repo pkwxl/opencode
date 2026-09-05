@@ -27,6 +27,7 @@
 
 - 项目配置 → `src/config.ts`(设计: docs/init-config-agents-design.md)
 - 任务流水线/会话链 → `src/runner.ts`;阶段循环 → `src/loop.ts` + `src/phases.ts`(设计: docs/phases-design.md)
+- fork 分解(理解→分解→执行三段式、分叉基点、OPENCODE_AUTO_* 实验开关)→ `src/runner.ts` + `src/switches.ts`(设计: docs/fork-decompose-design.md)
 - 验收/审核 → `src/verify.ts` + `docs/verify-review-design.md`;终审闭环 → `src/final.ts` + `docs/mode-final-review-design.md`
 - 提示词文案 → 只动 `templates/prompts/*.md`(`src/prompt.ts` 只做数据组装),改后跑 `bun test test/prompt.test.ts`
 - 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`
@@ -49,6 +50,8 @@
 - **driver 独占状态写入**:目标目录 PLAN.md/CURRENT.md 与 verified 字段全由 driver 写,AI 会话禁止编辑;`run` 期间这些状态文件只读(src/protect.ts 放行 driver 写入)。
 - **统一提交**:AI 会话不得执行提交类命令;会话结束后由 driver 经 src/git.ts 递归提交目标目录全部改动(先嵌套子仓库后本仓库)。
 - 完成判定不靠 agent 自报:verify 启用时 driver 执行脚本、独立判定会话下结论;子任务由 driver 勾选。
+- **独立判定会话不 fork**:verify-judge/review/review-fix/final 系会话全新创建,不继承执行上下文(独立判断是完成判定的基石,见 fork-decompose-design.md §9)。
+- **实验开关只读环境、不落盘**:`OPENCODE_AUTO_*` 环境变量层(src/switches.ts 核心内解析、CLI 壳零改动)不写任何状态文件,实验语义 = 本次运行;宪法键转正前不进 ProjectConfig。
 
 ## 本文档维护
 
