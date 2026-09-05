@@ -46,6 +46,7 @@ import {
 import { allowWrite, reprotect } from "./protect"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { shellProfile } from "./shell"
+import { autoSwitches } from "./switches"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
@@ -268,6 +269,11 @@ export async function runTask(
   task: Task,
   opts: Opts,
 ): Promise<Outcome> {
+  // 实验开关(OPENCODE_AUTO_* 环境变量层,fork-decompose-design.md §4.6): 入口
+  // 解析一次(memo)——非法值在此抛出中文报错(CLI 侧退出码 1),非默认组合记入
+  // 启动日志(默认组合静默,verbose 可查全量);fork/forkBase 由 fork 流水线消费,
+  // 本层只做解析与既有机制接线(fine/steer)。
+  autoSwitches()
   await begin(plan.path, task.id)
   const dir = opts.dir ?? dirname(plan.path)
   const mode = opts.subtask ?? "auto"
@@ -530,7 +536,9 @@ async function executeWhole(
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const file = join(dirname(plan.path), handoffFile(task))
-  const steer = ondemand ? { limit: cap * 2, text: renderHandoffSteer(task) } : undefined
+  // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
+  // (见 handoverDue);off 模式本就不构造。
+  const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
   chain.subject = subject
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在即
@@ -557,8 +565,9 @@ async function executeWhole(
     )
     if (result.type === "blocked") return result
     await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject })
-    // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成。
-    if (!ondemand || chain.used < cap * 2) return undefined
+    // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
+    // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
+    if (!handoverDue(steer, chain.used)) return undefined
     const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
     if (status === "完成") return undefined
     if (status === "继续") {
@@ -753,7 +762,9 @@ async function ensureDecomposed(
   const subject = `${task.id} decompose ${task.title}`
   chain.subject = subject
   for (let i = 0; ; i++) {
-    const result = await runSession(client, task, renderDecompose(plan, task, opts) + feedback, opts, chain)
+    // fine(OPENCODE_AUTO_DECOMPOSE_FINE=on)透传分解提示词: 注入细粒度准则段
+    // (fork-decompose-design.md §5.1)。
+    const result = await runSession(client, task, renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine }) + feedback, opts, chain)
     if (result.type === "blocked") return result
     const items = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
     if (items.length) {
@@ -784,7 +795,8 @@ async function ensureDecomposed(
 // docs/<id>.handoff.md): 会话进行中上下文已用量达到 2x --context-limit 时
 // driver steer 交接提示,会话写出交接文档(末行 `状态: 继续|完成`,以本子任务
 // 是否完成计)后换新会话凭交接续跑,直到自然完成或交接文档标记完成;子任务
-// 完成后清除交接文档,下一子任务重新起算。
+// 完成后清除交接文档,下一子任务重新起算。实验开关 OPENCODE_AUTO_STEER=off
+// 停用本机制(不注入交接提示、会话后不做交接判定,自然完成即收)。
 async function runSubtask(
   client: OpencodeClient,
   plan: Plan,
@@ -799,7 +811,9 @@ async function runSubtask(
   chain.subject = subject
   const dir = opts.dir ?? dirname(plan.path)
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const steer: Steer = { limit: cap * 2, text: renderHandoffSteer(task) }
+  // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
+  // (见 handoverDue);--handover-test 的测试交接是独立机制,不受影响。
+  const steer = handoffSteer(autoSwitches().steer, cap, task)
   const file = join(dirname(plan.path), handoffFile(task))
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在且
   // 状态=完成 → 子任务在中断前已由交接会话完成,直接勾选;状态=继续 → 以续跑
@@ -823,8 +837,11 @@ async function runSubtask(
         steer,
       )
       if (result.type === "blocked") return result
-      // 未触发交接阈值(2x cap)即结束 = 子任务在单会话内自然完成,勾选后统一提交。
-      if (chain.used < cap * 2) break
+      // 未触发交接阈值(2x cap)即结束 = 子任务在单会话内自然完成,勾选后统一提交;
+      // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
+      // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
+      // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
+      if (!handoverDue(steer, chain.used)) break
       const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
       if (status === "完成") break
       // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
@@ -1249,7 +1266,23 @@ function parseVerdict(text: string): Verdict | undefined {
 // the spawned opencode server before the retry.
 // steer: 会话进行中已用上下文达到 limit 时,driver 向该会话插入一次 text
 // (handoff-steer 交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
-type Steer = { limit: number; text: string }
+export type Steer = { limit: number; text: string }
+
+// 交接 steer 构造(ondemand 整任务会话与 auto 子任务会话两处调用点共用;导出纯
+// 函数供单测): 实验开关 OPENCODE_AUTO_STEER=off(on = autoSwitches().steer)时不
+// 构造——会话进行中不注入 2×cap 交接提示。
+export function handoffSteer(on: boolean, cap: number, task: Task): Steer | undefined {
+  return on ? { limit: cap * 2, text: renderHandoffSteer(task) } : undefined
+}
+
+// 会话结束后的交接判定(与 steer 构造同开关联动;导出纯函数供单测): 仅当交接
+// steer 生效(开关 on 且模式启用)且会话已用上下文达到其阈值(2×cap)时才要求
+// 交接文档/续跑;steer 未构造(off 模式整任务会话,或 OPENCODE_AUTO_STEER=off)
+// 时会话自然完成即收,不索要交接文档。--handover-test 的测试交接是独立机制
+// (watch 的 test 协议),不经此判定。
+export function handoverDue(steer: Steer | undefined, used: number): boolean {
+  return steer !== undefined && used >= steer.limit
+}
 
 // --test-by-driver 的测试执行协议状态(watch 与 runExecSession 共享,跨会话/
 // 跨运行持续): tmp 为目标目录下 driver 工作目录(tmp/);seq 为按序归档编号
