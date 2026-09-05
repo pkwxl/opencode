@@ -1,6 +1,6 @@
 # AGENTS.md
 
-面向编码代理的包内说明,保持精简;核心机制文档在 `../auto-core` 包:文件级结构见 [../auto-core/docs/structure.md](../auto-core/docs/structure.md),行为契约见 [../auto-core/docs/behavior.md](../auto-core/docs/behavior.md),设计基准见 `../auto-core/docs/` 下各设计文档;用户使用文档见 [README.md](./README.md)。
+面向编码代理的包内说明,保持精简;核心机制文档在 `../auto-core` 包:文件级结构见 [../auto-core/docs/structure.md](../auto-core/docs/structure.md),行为契约见 [../auto-core/docs/behavior.md](../auto-core/docs/behavior.md),设计基准见 `../auto-core/docs/` 下各设计文档,核心/外壳契约(边界/依赖方向/合入流程)见 [../auto-core/docs/shell-contract.md](../auto-core/docs/shell-contract.md);用户使用文档见 [README.md](./README.md)。
 
 ## 概述
 
