@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "bin": { "opencode-migrate": "./src/index.ts" },
+  "bin": { "auto-migrate": "./src/index.ts" },
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun ./script/build.ts",

@@ -146,7 +146,7 @@ describe("CLI: 去子命令化与历史选项拦截", () => {
         const run = await runCli([cmd, dir])
         expect(run.code).toBe(1)
         expect(run.err).toContain(`子命令 ${cmd} 已移除`)
-        expect(run.err).toContain("opencode-migrate [dir]")
+        expect(run.err).toContain("auto-migrate [dir]")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -243,7 +243,7 @@ describe("CLI: 去子命令化与历史选项拦截", () => {
     try {
       const help = await runCli([dir, "--help"])
       expect(help.code).toBe(0)
-      expect(help.out).toContain("opencode-migrate [dir]")
+      expect(help.out).toContain("auto-migrate [dir]")
       expect(help.out).toContain("关键参数")
       expect(help.out).toContain("运行参数")
     } finally {

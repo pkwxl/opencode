@@ -14,15 +14,15 @@ import { setShellProfile } from "@opencode-ai/auto-core/shell"
 import { runTool } from "./tool"
 
 // 外壳画像(migrate 简易壳): 报文程序名/契约恢复指引/日志审计语义参数化注入——
-// 报文程序名 opencode-migrate;agent 契约缺失提示重新运行本工具即可(启动时按
+// 报文程序名 auto-migrate;agent 契约缺失提示重新运行本工具即可(启动时按
 // 模板重建默认契约);run 日志始终完整记录(免 --verbose 的审计语义)。
-setShellProfile({ program: "opencode-migrate", bin: "opencode-migrate", agentRecovery: "startup", auditLog: true })
+setShellProfile({ program: "auto-migrate", bin: "auto-migrate", agentRecovery: "startup", auditLog: true })
 
 const args = process.argv.slice(2)
 
 // 旧子命令已随去子命令化移除: 首参数命中即报错并指向新用法。
 if (["init", "continue", "run", "check", "status"].includes(args[0] ?? "")) {
-  console.error(`子命令 ${args[0]} 已移除: 本工具无子命令,直接运行 opencode-migrate [dir] 即可(断点恢复与续轮归档自动处理)`)
+  console.error(`子命令 ${args[0]} 已移除: 本工具无子命令,直接运行 auto-migrate [dir] 即可(断点恢复与续轮归档自动处理)`)
   process.exit(1)
 }
 
@@ -96,7 +96,7 @@ for (let i = 0; i < args.length; i++) {
   flags.set(key, "")
 }
 if (positional.length > 1) {
-  console.error(`用法: opencode-migrate [dir] [选项](只接受一个目录参数,当前: ${positional.join(" ")})`)
+  console.error(`用法: auto-migrate [dir] [选项](只接受一个目录参数,当前: ${positional.join(" ")})`)
   process.exit(1)
 }
 const directory = resolve(positional[0] ?? ".")
@@ -460,7 +460,7 @@ function loadModeTable(directory: string): Record<string, ModeSpec> {
 // 用法文本(函数声明提升,--help 检查在顶部即可引用)。
 function usageText(): string {
   return `用法:
-  opencode-migrate [dir] [关键参数...] [运行参数...]
+  auto-migrate [dir] [关键参数...] [运行参数...]
 
 专用二次迁移工具: 基于已有迁移结果先做一轮前置知识提取(docs/prior-kb/),再自动
 推进一轮完整 admtvk(分析 → 设计 → 迁移实现 → 测试 → 验收 → 知识提炼)二次迁移

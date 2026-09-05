@@ -126,7 +126,7 @@
       "name": "@opencode-ai/auto-migrate",
       "version": "0.0.0",
       "bin": {
-        "opencode-migrate": "./src/index.ts",
+        "auto-migrate": "./src/index.ts",
       },
       "dependencies": {
         "@opencode-ai/auto-core": "workspace:*",
