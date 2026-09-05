@@ -1,4 +1,4 @@
-import { readdir, rm } from "node:fs/promises"
+import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { log } from "./log"
@@ -137,4 +137,25 @@ export async function priorKnowledgeDigest(dir: string): Promise<string | undefi
     if (text) parts.push(`### ${join(PRIOR_KB_DIR, name)}\n\n${text}`)
   }
   return parts.length ? parts.join("\n\n") : undefined
+}
+
+// 轮间归档原语(壳层轮间过渡调用,round 由调用方显式传入——内部推导 currentRound
+// 会让过渡中断重跑把半途文件劈进两个轮次目录): docs/prior-kb/ 下全部直接条目
+// (非空与否都移)rename 进 docs/phases/round-<round>/prior-kb/,保证源目录清空、
+// existingPriorKnowledge 的跳过检查必然放行新一轮重新蒸馏;归档后的旧 prior 文档
+// 仍是提取会话的输入(docs/ 全树细读对象)。镜像 archiveRound 风格: mkdir
+// recursive + 逐条 rename 幂等;源目录缺失/为空 → 空数组 no-op、不创建目标目录;
+// 返回移动条目的相对路径清单(相对目标目录,与 existingPriorKnowledge 返回同款)。
+export async function archivePriorKnowledge(dir: string, round: number): Promise<string[]> {
+  const root = join(dir, PRIOR_KB_DIR)
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  if (!entries.length) return []
+  const archive = join("docs", "phases", `round-${round}`, "prior-kb")
+  await mkdir(join(dir, archive), { recursive: true })
+  const moved: string[] = []
+  for (const entry of entries) {
+    await rename(join(root, entry.name), join(dir, archive, entry.name))
+    moved.push(join(archive, entry.name))
+  }
+  return moved
 }
