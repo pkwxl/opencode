@@ -4,7 +4,7 @@
 // 的调用点不感知模板机制。
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
-import type { Plan, Task } from "./plan"
+import { subtasks, type Plan, type Task } from "./plan"
 import { phaseText, type Phase } from "./phases"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
@@ -121,13 +121,37 @@ export function decomposeTemplateName(phase: Phase | undefined, names: string[])
 // handoff-steer 同样适用于子任务会话: 上下文达到 2x contextLimit 时 driver
 // 插入交接提示,会话把进度写入 docs/<id>.handoff.md 后由新会话续跑;
 // continuation 表示此前会话因上下文限制中断,需先读交接文档继续。
-export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts & { continuation?: boolean } = {}): string {
+// index/subtaskList/outputFile/warm(fork 三段式流水线,fork-decompose 设计
+// §8): 注入全量检查项列表与「你本次只负责其中的第 N 项」、文档类产出的独立
+// 落盘文件(driver 机械命名)、warm=会话从分叉基点继承了任务背景上下文(冷启动
+// 则提示先读 context.md 摘要)。缺省时由任务正文检查项推导 index/列表/产出文件
+// (与 runner 子任务循环同口径),旧调用不传参仍渲染完整提示词。
+export function renderSubtask(
+  plan: Plan,
+  task: Task,
+  subtask: string,
+  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean } = {},
+): string {
+  const items = subtasks(task.body)
+  const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
+  const index = at >= 0 ? String(at + 1) : undefined
   return renderTemplate("subtask", {
     ...baseCtx(plan, task, opts),
     subtask,
     continuation: Boolean(opts.continuation),
     handoffFile: handoffFile(task),
+    index,
+    subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.text}`).join("\n") : undefined),
+    outputFile: opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined),
+    warm: Boolean(opts.warm),
   })
+}
+
+// 子任务产物文件(相对目标目录): 文档/分析/设计类子任务的独立落盘文件,driver
+// 机械命名(两位递增,避免 slug 清洗歧义),标题写在文件首行;代码类产出直接落
+// 源码树,不重复落文档(fork-decompose 设计 §4.7)。
+export function subtaskOutputFile(task: Task, index: number): string {
+  return `docs/${task.id}/S${String(index).padStart(2, "0")}.md`
 }
 
 // Wrap-up session: every subtask is already ticked by the driver. Only docs

@@ -817,7 +817,7 @@ async function runSubtask(
         client,
         plan,
         task,
-        renderSubtask(plan, task, text, { ...opts, continuation }) + feedback,
+        renderSubtask(plan, task, text, { ...opts, continuation, index }) + feedback,
         opts,
         chain,
         steer,
