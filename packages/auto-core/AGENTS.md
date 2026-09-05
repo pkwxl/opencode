@@ -19,6 +19,10 @@
 - `src/templates.d.ts` 为 `*.md` / `*.json` 导入提供路径字符串类型;`tsconfig.json` 里 `resolveJsonModule: false` 勿移除。
 - 外壳经 `package.json` 的 `exports`(`"./*": "./src/*.ts"`、`"./templates/*"`)直接引用本包 TS 源与模板文件,新增 src 文件无需登记 exports;**核心不知外壳**(不得反向 import 任何壳包),外壳差异一律经 `src/shell.ts` 画像或参数注入。
 
+## 核心/外壳契约
+
+本包为核心,壳包(`packages/auto` 通用 CLI/bin `opencode-auto`、`packages/auto-migrate` 简易 CLI/bin `opencode-migrate`)经子路径单向依赖本包;**壳分支不得改本包**,差异经 `setShellProfile`/`registerTemplate`/参数透传注入。分支模型(核心改动只落 auto-core 分支、壳分支定期 merge auto-core 刷新快照、auto 为集成分支)与新壳接入清单见 [docs/shell-contract.md](./docs/shell-contract.md)。
+
 ## 导航(按改动定位)
 
 - 项目配置 → `src/config.ts`(设计: docs/init-config-agents-design.md)
@@ -28,6 +32,7 @@
 - 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`
 - 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
 - 外壳画像(报文程序名/契约恢复指引/日志审计语义参数化)→ `src/shell.ts`
+- 核心/外壳边界、合入流程、新壳接入 → docs/shell-contract.md
 - 完整文件清单与机制细节 → docs/structure.md、docs/behavior.md
 
 ## 核心不变量(改动前必读)
