@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
 import { stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
-import { checkPrinciple } from "./check"
-import { formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "./config"
-import { log, setInteractive, setLogFile, setVerbose } from "./log"
-import { ensureGitignore, ensurePointer, runAll } from "./loop"
-import { loadModes, type ModeSpec } from "./mode"
-import { load, parse } from "./plan"
-import { archiveRound, currentRound, formatPhases, parsePhases, phaseText, readLedger } from "./phases"
-import type { PermissionMode, SubtaskMode } from "./runner"
-import { usePromptLibrary, renderText } from "./template"
-import templatePlan from "../templates/PLAN.md" with { type: "file" }
-import templateScaffold from "../templates/PLAN.scaffold.md" with { type: "file" }
-import templateConfig from "../templates/opencode.json" with { type: "file" }
-import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
+import { checkPrinciple } from "@opencode-ai/auto-core/check"
+import { formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
+import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
+import { ensureGitignore, ensurePointer, runAll } from "@opencode-ai/auto-core/loop"
+import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
+import { load, parse } from "@opencode-ai/auto-core/plan"
+import { archiveRound, currentRound, formatPhases, parsePhases, phaseText, readLedger } from "@opencode-ai/auto-core/phases"
+import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
+import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
+import templatePlan from "@opencode-ai/auto-core/templates/PLAN.md" with { type: "file" }
+import templateScaffold from "@opencode-ai/auto-core/templates/PLAN.scaffold.md" with { type: "file" }
+import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
+import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
 
 const args = process.argv.slice(2)
 const command = args[0]

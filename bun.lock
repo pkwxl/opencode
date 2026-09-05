@@ -101,6 +101,19 @@
         "opencode-auto": "./src/index.ts",
       },
       "dependencies": {
+        "@opencode-ai/auto-core": "workspace:*",
+        "@opencode-ai/sdk": "workspace:*",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+      },
+    },
+    "packages/auto-core": {
+      "name": "@opencode-ai/auto-core",
+      "version": "0.0.0",
+      "dependencies": {
         "@opencode-ai/sdk": "workspace:*",
       },
       "devDependencies": {
@@ -1960,6 +1973,8 @@
     "@opencode-ai/app": ["@opencode-ai/app@workspace:packages/app"],
 
     "@opencode-ai/auto": ["@opencode-ai/auto@workspace:packages/auto"],
+
+    "@opencode-ai/auto-core": ["@opencode-ai/auto-core@workspace:packages/auto-core"],
 
     "@opencode-ai/cli": ["@opencode-ai/cli@workspace:packages/cli"],
 

@@ -476,9 +476,9 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 
 ## 提示词模板与自定义
 
-全部会话提示词以**文件模板**管理(文案与逻辑分离,`src/prompt.ts` 只组装数据):
+全部会话提示词以**文件模板**管理(文案与逻辑分离,提示词组装在核心包 `@opencode-ai/auto-core` 的 `src/prompt.ts`):
 
-- 内置模板在包内 `templates/prompts/`(每种会话一个文件,共享片段集中在其
+- 内置模板在核心包 `@opencode-ai/auto-core` 的 `templates/prompts/`(每种会话一个文件,共享片段集中在其
   `_partials.md`),编译期嵌入独立二进制;
 - 目标目录 `.opencode/auto/prompts/<name>.md` 同名文件可**覆盖**任意内置模板
   (`_partials.md` 按节名合并共享片段),不需要重新编译。
@@ -507,7 +507,7 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 - 终审各阶段生成会话注入阶段侧重(见[终审闭环](#终审闭环--final-review))。
 
 模式同样以文件模板管理:**新增模式 = 在目标目录放一个模式文件,零源码改动**。
-内置 `templates/modes/migrate.md`(迁移/升级场景:以保持外部行为不变为前提,任务
+内置 `templates/modes/migrate.md`(auto-core 包,迁移/升级场景:以保持外部行为不变为前提,任务
 按"基线确认 → 迁移改造 → 回归验证"排布,verify 优先复用既有测试/构建命令;执行
 注记要求新旧实现对等行为、兼容层注明用途与移除时机、迁移取舍按 `AUTO-DECISION`
 要求标注);目标目录 `.opencode/auto/modes/<name>.md` 可新增模式或覆盖内置,文件
@@ -577,7 +577,7 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
   note 提示,不强制。
 - **阶段循环(`run`)**:配置 `phases ≠ "m"` 时 `run` 按"规划 → 执行 → 交接"推进到
   全部阶段完成,状态全部从台账 + `PLAN.md` 推导,不引入额外状态文件:
-  - **规划**:`PLAN.md` 处于空模板态时(`templates/PLAN.scaffold.md`,阶段化下
+  - **规划**:`PLAN.md` 处于空模板态时(`templates/PLAN.scaffold.md`,auto-core 包,阶段化下
     `init` 产出它而不写占位任务)开一个**阶段规划会话**,把本阶段任务按
     `## T-NNN: <任务标题> [pending]` 格式直接写进 `PLAN.md`——这是唯一被授权写
     `PLAN.md` 的会话(会话期间临时放行,结束即恢复只读)。会话消费 `brief.md`、

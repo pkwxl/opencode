@@ -1,0 +1,21 @@
+{
+  "name": "@opencode-ai/auto-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./templates/*": "./templates/*",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": { "@opencode-ai/sdk": "workspace:*" },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}
