@@ -2,14 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import {
-  forgetProgress,
-  peekProgress,
-  recallProgress,
-  RESUME_WINDOW_MS,
-  saveProgress,
-  type Progress,
-} from "../src/resume"
+import { forgetProgress, peekProgress, recallProgress, saveProgress, type Progress } from "../src/resume"
 
 describe("进度记录", () => {
   let dir: string
@@ -32,15 +25,27 @@ describe("进度记录", () => {
     expect(await Bun.file(join(dir, ".auto", "session.json")).exists()).toBe(false)
   })
 
-  test("recall 不校验时间窗(超窗记忆仍返回,窗口判定在 runner)", async () => {
+  test("recall 不校验存活与时龄(任意久远的记录仍返回,存活判定在 runner)", async () => {
     await saveProgress(dir, {
       task: "T-001",
       session: "ses_old",
-      at: Date.now() - RESUME_WINDOW_MS - 1,
+      at: 0,
       active: true,
       phase: { kind: "verify", stage: "judge", round: 1, rechecks: 0, replaced: false },
     })
     expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_old")
+  })
+
+  test("verify 修复轮记录(stage=fix)的差距原文 gap 随记录往返", async () => {
+    const progress: Progress = {
+      task: "T-001",
+      session: "ses_fix",
+      at: Date.now(),
+      active: true,
+      phase: { kind: "verify", stage: "fix", round: 2, rechecks: 0, replaced: false, gap: "构建失败: 缺少依赖 x" },
+    }
+    await saveProgress(dir, progress)
+    expect(await recallProgress(dir, "T-001")).toEqual(progress)
   })
 
   test("任务不符、文件缺失或损坏返回 undefined", async () => {

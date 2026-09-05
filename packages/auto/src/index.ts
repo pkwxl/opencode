@@ -25,8 +25,8 @@ const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
 // --final-review/--source-dir/--source-path/--dest-dir 带值(吞掉下一个 token);
-// --verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/--handover-test
-// 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
+// --verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/--handover-test/
+// --new-session 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
 // --mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
@@ -53,7 +53,7 @@ const VALUE_FLAGS = new Set([
   "verify-idle",
   "verify-max",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session"])
 for (let i = 0; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -260,6 +260,8 @@ if (permission === null) {
   console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
   process.exit(1)
 }
+// --new-session: 中断恢复时跳过会话复用(每次生效、不固化),阶段精确重入保留。
+const newSession = flags.has("new-session") && flags.get("new-session") !== "false"
 
 // —— 配置固化(首跑)或冲突校验(二次运行起)——
 
@@ -288,7 +290,7 @@ if (firstRun) {
     console.error("--handover-test 需搭配 --test-by-driver 一起使用: 测试交接只在测试由 driver 执行时才有意义")
     process.exit(1)
   }
-  config = mergeProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" }, { ...explicit, mode: modeName })
+  config = mergeProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk", autoNumber: true }, { ...explicit, mode: modeName })
   try {
     await saveProjectConfig(directory, config)
   } catch (error) {
@@ -356,6 +358,7 @@ const code = await runTool(directory, {
   interactive,
   dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
   finalReview,
+  newSession,
 })
 process.exit(code)
 
@@ -480,6 +483,7 @@ function usageText(): string {
   --review [1-10] / --early / --early-review [1-10]  质量审核
   --final-review [1-5]       终审闭环(仅 m 阶段挂接)
   --dryrun [true|false]      只跑权限预检,不执行任务
+  --new-session [true|false] 中断恢复时跳过会话复用,开新会话继续(阶段精确重入保留)
 
 退出码: 0 全部完成(含"此前已完成"),1 用法/环境错误,2 阻塞等待人工介入,130 连续两次 Ctrl+C 强制终止`
 }

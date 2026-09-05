@@ -4,6 +4,7 @@ import { dirname, join, relative } from "node:path"
 import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { commitTree, pendingChanges, repoRoots } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
+import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { startInteractive, type Interactive } from "./interactive"
 import { banner, log, vlog } from "./log"
 import type { ModeSpec } from "./mode"
@@ -211,6 +212,13 @@ export async function runAll(
     // 调用方已托管的 server 句柄(专用工具 tool.ts 的前置会话与主循环共用一个
     // 实例): 提供时不再自行 manage/close,生命周期归调用方。
     managed?: ServerHandle
+    // --new-session: 中断恢复时跳过会话复用(仅放弃旧会话上下文,阶段精确重入
+    // 保留),透传给 runTask。
+    newSession?: boolean
+    // 自动编号(config.autoNumber): 任务编号在目标目录永不重复——阶段规划会话自
+    // .auto/next-task 记录续接编号,记录缺失先经 AI 恢复会话推导恢复(见
+    // src/numbering.ts)。
+    autoNumber?: boolean
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -436,6 +444,7 @@ export async function runAll(
           testByDriver: opts.testByDriver,
           handoverTest: opts.handoverTest,
           mode: opts.mode,
+          newSession: opts.newSession,
           phase,
         })
         if (outcome.type === "blocked") {
@@ -480,6 +489,30 @@ export async function runAll(
     const planPhase = async (phase: Phase): Promise<number> => {
       // 阶段开始快照: 交接归档据此判定本阶段 docs/ 变更(F 节)。
       await snapshotDocs(directory)
+      // 自动编号(config.autoNumber): 规划会话的编号起点来自 .auto/next-task
+      // 记录;记录缺失先恢复(无历史证据直接写 1,有证据开 AI 推导会话,见
+      // src/numbering.ts),恢复受阻即退出 2。恢复会话本身会产生一次统一提交
+      // (stage=numbering),先于规划会话。
+      let numberStart: number | undefined
+      if (opts.autoNumber) {
+        const numbering = await ensureNumbering(serverHandle.client, directory, {
+          agent: agentName,
+          dir: directory,
+          verbose: opts.verbose,
+          waitAnswer: opts.waitAnswer,
+          commit: opts.commit,
+          contextLimit: opts.contextLimit,
+          permission: opts.permission,
+          interactive: repl,
+          server: serverHandle,
+          mode: opts.mode,
+        })
+        if (numbering.type === "blocked") {
+          log(`⏸ 编号记录恢复会话受阻(隐性阻塞,请检查后重新运行):\n${numbering.question}`)
+          return 2
+        }
+        numberStart = numbering.next
+      }
       const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
       // 前序阶段交接注入(E 节注入纪律): 只注入 handover 蒸馏产物,不注入前序
       // 原始 docs/。台账中早于当前阶段且已 done 的各阶段逐个拼接;缺 handover 的
@@ -523,6 +556,7 @@ export async function runAll(
             mode: opts.mode,
             verify: opts.verify,
             finalReview: opts.finalReview,
+            numberStart,
           }),
           {
             agent: agentName,
@@ -539,23 +573,35 @@ export async function runAll(
           {
             kind: "阶段规划",
             artifact: "已填充的 PLAN.md(至少一个任务)",
-            detail: "缺失、无任务或任务格式无法解析",
+            detail: "缺失、无任务、任务格式无法解析或任务编号复用了已占用的编号",
             requirement:
               "必须直接编辑 PLAN.md,把本阶段任务按 `## T-NNN: <任务标题> [pending]` 格式写入" +
-              "(至少一个;即使认为本阶段无事可做,也要写入一个说明性任务并在正文说明原因)。",
+              "(至少一个;即使认为本阶段无事可做,也要写入一个说明性任务并在正文说明原因)。" +
+              (numberStart === undefined
+                ? ""
+                : `任务编号必须自 T-${String(numberStart).padStart(3, "0")} 起连续递增——更早的编号已被历史任务占用,复用视为无效产出。`),
             commit: { stage: "phase-plan", subject: `PLAN plan ${phase} ${phaseText(phase)}` },
             reset: async () => {
               await Bun.write(path, renderPlanScaffold(opts.verify === true))
             },
             collect: async () => {
               const fresh = await load(path).catch(() => undefined)
-              return fresh?.tasks.length ? fresh.tasks.length : undefined
+              if (!fresh?.tasks.length) return undefined
+              // 自动编号: 复用已占用编号(小于记录起点)视为无效产出,带反馈重试。
+              if (numberStart !== undefined && fresh.tasks.some((task) => (taskNumber(task.id) ?? numberStart) < numberStart)) return undefined
+              return fresh.tasks.length
             },
           },
         )
         if (typeof planned !== "number") {
           log(`⏸ 阶段规划会话受阻(隐性阻塞,请检查后重新运行):\n${planned.question}`)
           return 2
+        }
+        // 自动编号: 规划成功即把编号记录推进到本次最大编号 + 1(只增不减),
+        // 后续阶段/轮次的规划会话自该记录续接,编号在目标目录永不重复。
+        if (numberStart !== undefined) {
+          const next = await advanceNextTask(directory, (await load(path)).tasks.map((task) => task.id))
+          log(`✓ 编号记录推进: 下一可用任务编号 T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
         }
         log(`✓ 阶段规划完成: PLAN.md 已填入 ${planned} 个任务`)
         return 0

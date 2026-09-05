@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { load } from "../src/plan"
 import { runAll } from "../src/loop"
+import { renderText } from "../src/template"
 
 // Opt-in end-to-end test: requires `opencode` on PATH (or
 // OPENCODE_AUTO_SERVER pointing at a running serve) plus provider credentials.
@@ -36,9 +37,10 @@ test.skipIf(!E2E)(
         await Bun.file(new URL("../templates/opencode.json", import.meta.url)).text(),
       )
       // run 前完整性检查要求 agent 契约文件存在(缺失时服务端只回 UnknownError)。
+      // 写入按本次运行开关渲染后的契约(完整性比对按渲染后口径,见 renderAgentContract)。
       await Bun.write(
         join(dir, ".opencode/agent/auto.md"),
-        await Bun.file(new URL("../templates/.opencode/agent/auto.md", import.meta.url)).text(),
+        renderText(await Bun.file(new URL("../templates/.opencode/agent/auto.md", import.meta.url)).text(), {}),
       )
 
       // 第一轮: T-001 完成,T-002 触发 question → 阻塞停机
@@ -85,7 +87,7 @@ test.skipIf(!E2E)(
       )
       await Bun.write(
         join(dir, ".opencode/agent/auto.md"),
-        await Bun.file(new URL("../templates/.opencode/agent/auto.md", import.meta.url)).text(),
+        renderText(await Bun.file(new URL("../templates/.opencode/agent/auto.md", import.meta.url)).text(), { verify: true }),
       )
 
       expect(await runAll(dir, { phases: "mv", verify: true, review: 3 })).toBe(0)
@@ -269,8 +271,11 @@ describe("CLI: 首次运行固化配置", () => {
         commit: true,
         testByDriver: false,
         handoverTest: false,
+        autoNumber: true,
         phases: "admtvk",
       })
+      // 自动编号默认开启并固化(不暴露 CLI 参数),摘要含自动编号段
+      expect(run.out).toContain("自动编号 on")
       // 模板: PLAN.md 为空模板(无任务,交给阶段规划会话);opencode.json 与
       // agent 契约生成
       const plan = await Bun.file(join(dir, "PLAN.md")).text()
@@ -324,6 +329,26 @@ describe("CLI: 首次运行固化配置", () => {
       })
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("把 legacy 迁移到 bun\n")
       expect(run.out).not.toContain("任务级验收未启用")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("旧版配置缺 autoNumber 键 → 补 true 固化;人工显式 false 保留", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ mode: "migrate", verify: true }))
+      await seedDone(dir)
+      const run = await runCli([dir])
+      expect(run.code).toBe(0)
+      expect(run.out).toContain("配置补充固化: autoNumber = true")
+      expect(await readConfig(dir)).toMatchObject({ autoNumber: true, verify: true })
+      // 人工显式编辑为 false: 保留,不再补写(修订通道即配置文件)
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ mode: "migrate", autoNumber: false }))
+      const manual = await runCli([dir])
+      expect(manual.code).toBe(0)
+      expect(manual.out).not.toContain("配置补充固化")
+      expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -437,6 +462,8 @@ describe("CLI: 二次运行关键参数与首次对齐", () => {
         ["--final-review", "2", "--review", "3", "--early"],
         ["--permission", "ask-allow", "--wait-answer", "5", "--wait-between", "2"],
         ["--dryrun"],
+        ["--new-session"],
+        ["--new-session=false"],
       ]
       for (const extra of combos) {
         const run = await runCli([dir, ...extra])

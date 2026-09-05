@@ -105,6 +105,8 @@ export async function runTool(
     permission?: PermissionMode
     dryrun?: boolean
     finalReview?: number
+    // --new-session: 中断恢复时跳过会话复用(每次生效、不固化),透传 runAll。
+    newSession?: boolean
   },
 ): Promise<number> {
   // 提示词库最先装载(协议校验失败按用法错误退出),前置会话与 runAll 都依赖它。
@@ -116,6 +118,20 @@ export async function runTool(
   }
   const config = { ...input.config }
   const planFile = resolve(directory, "PLAN.md")
+
+  // 自动编号默认开启(不暴露 CLI 参数): 首跑已固化 autoNumber: true(index.ts);
+  // 旧版固化配置缺该键时补 true 写回——人工显式编辑为 false 的保留(修订通道
+  // 即配置文件本身)。
+  {
+    const raw = (await Bun.file(join(directory, ".opencode", "auto", "config.json"))
+      .json()
+      .catch(() => undefined)) as Record<string, unknown> | undefined
+    if (raw && typeof raw === "object" && !("autoNumber" in raw)) {
+      config.autoNumber = true
+      await saveProjectConfig(directory, config)
+      log("⚙ 配置补充固化: autoNumber = true(任务编号在目标目录永不重复,记录于 .auto/next-task)")
+    }
+  }
 
   // 模板维护(每次运行幂等): PLAN.md 缺失/占位态 → 空模板(阶段化流程由规划会话
   // 填充);opencode.json 缺失才创建;agent 契约与模板不一致即替换(契约漂移以
@@ -308,6 +324,8 @@ export async function runTool(
       source: config.source,
       destDir: config.destDir,
       managed: server,
+      newSession: input.newSession,
+      autoNumber: config.autoNumber,
     })
     if (code === 0 && !input.dryrun) await writeToolState(directory, { ...(await readToolState(directory)), done: true })
     return code

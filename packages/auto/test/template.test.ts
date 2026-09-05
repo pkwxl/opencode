@@ -64,7 +64,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("20 个会话模板与 _partials 齐备", () => {
+  test("21 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "decompose",
@@ -74,6 +74,7 @@ describe("内置模板注册表", () => {
       "handoff-steer",
       "infer-source",
       "knowledge",
+      "number-recovery",
       "phase-handover",
       "phase-plan",
       "prior-knowledge",

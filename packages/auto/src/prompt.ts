@@ -95,10 +95,15 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
 // Subtask session: exactly one checklist item. The session implements it and
 // self-checks; ticking the checkbox is the driver's job when the session ends
 // (会话后的统一提交同样由 driver 执行,见 src/git.ts)。
-export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts = {}): string {
+// handoff-steer 同样适用于子任务会话: 上下文达到 2x contextLimit 时 driver
+// 插入交接提示,会话把进度写入 docs/<id>.handoff.md 后由新会话续跑;
+// continuation 表示此前会话因上下文限制中断,需先读交接文档继续。
+export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts & { continuation?: boolean } = {}): string {
   return renderTemplate("subtask", {
     ...baseCtx(plan, task, opts),
     subtask,
+    continuation: Boolean(opts.continuation),
+    handoffFile: handoffFile(task),
   })
 }
 
@@ -210,6 +215,8 @@ export function stageText(stage: FinalStage): string {
 // 最终交接/迁移知识),仅续轮(主程序现场清理归档既有轮次后)的新一轮首个规划会话注入。
 // source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
 // finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
+// numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
+// 由 loop 在规划会话前经 ensureNumbering 确保就位),未启用时缺省——编号自 T-001 起。
 export function renderPhasePlan(input: {
   phase: Phase
   brief?: string
@@ -220,6 +227,7 @@ export function renderPhasePlan(input: {
   mode?: ModeSpec
   verify?: boolean
   finalReview?: number
+  numberStart?: number
 }): string {
   const { phase } = input
   return renderTemplate("phase-plan", {
@@ -235,6 +243,7 @@ export function renderPhasePlan(input: {
     modeInit: input.mode && modeText(input.mode.init, { verify: input.verify }),
     verify: input.verify,
     finalReview: phase === "m" && input.finalReview ? String(input.finalReview) : undefined,
+    numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
     phaseA: phase === "a",
     phaseD: phase === "d",
     phaseM: phase === "m",
@@ -297,13 +306,25 @@ export function renderInferSource(input: { file: string; brief?: string; priorKb
   })
 }
 
-// ondemand 模式的交接文档(相对目标目录);driver 在上下文达到 2x --context-limit
-// 时插入交接提示,会话把进度写入该文件,末行 `状态: 继续|完成` 由 driver 解析。
+// 自动编号(config.autoNumber)的编号记录恢复会话(src/numbering.ts): 旁路一次性,
+// 产物 = AI 写入的 .auto/next-task(单个正整数)。floor 为 driver 确定性扫描的
+// 已用编号下限,作模板输入与 driver 侧 collect 校验共用同一数值。
+export function renderNumberRecovery(input: { floor: number }): string {
+  return renderTemplate("number-recovery", {
+    floor: String(input.floor),
+    floorPadded: String(input.floor).padStart(3, "0"),
+  })
+}
+
+// 交接文档(相对目标目录): ondemand 整任务会话与 auto 子任务会话共用——driver 在
+// 上下文达到 2x --context-limit 时插入交接提示,会话把进度写入该文件,末行
+// `状态: 继续|完成` 由 driver 解析。子任务场景的状态以该子任务是否完成计。
 export function handoffFile(task: Task): string {
   return `docs/${task.id}.handoff.md`
 }
 
-// ondemand 模式: driver 在会话进行中(上下文达到交接阈值,2x contextLimit)插入的交接提示。
+// driver 在会话进行中(上下文达到交接阈值,2x contextLimit)插入的交接提示
+// (ondemand 整任务会话与 auto 子任务会话)。
 // v2 prompt 默认 steer,在下一个 provider turn 边界进入会话。
 export function renderHandoffSteer(task: Task): string {
   return renderTemplate("handoff-steer", { handoffFile: handoffFile(task) })
