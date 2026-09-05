@@ -22,6 +22,7 @@ import tplDecomposeK from "../templates/prompts/decompose-k.md" with { type: "fi
 import tplDecomposeM from "../templates/prompts/decompose-m.md" with { type: "file" }
 import tplDecomposeT from "../templates/prompts/decompose-t.md" with { type: "file" }
 import tplDecomposeV from "../templates/prompts/decompose-v.md" with { type: "file" }
+import tplContextBase from "../templates/prompts/context-base.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFinalTask from "../templates/prompts/final-task.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
@@ -39,6 +40,7 @@ import tplSubtask from "../templates/prompts/subtask.md" with { type: "file" }
 import tplTestContinue from "../templates/prompts/test-continue.md" with { type: "file" }
 import tplTestHandover from "../templates/prompts/test-handover.md" with { type: "file" }
 import tplTestResult from "../templates/prompts/test-result.md" with { type: "file" }
+import tplUnderstand from "../templates/prompts/understand.md" with { type: "file" }
 import tplVerifyJudge from "../templates/prompts/verify-judge.md" with { type: "file" }
 import tplVerifyScriptGen from "../templates/prompts/verify-script-gen.md" with { type: "file" }
 import tplWhole from "../templates/prompts/whole.md" with { type: "file" }
@@ -63,6 +65,7 @@ const embedded: Record<string, string> = {
   "decompose-m": tplDecomposeM,
   "decompose-t": tplDecomposeT,
   "decompose-v": tplDecomposeV,
+  "context-base": tplContextBase,
   dryrun: tplDryrun,
   "final-task": tplFinalTask,
   fix: tplFix,
@@ -79,6 +82,7 @@ const embedded: Record<string, string> = {
   "test-continue": tplTestContinue,
   "test-handover": tplTestHandover,
   "test-result": tplTestResult,
+  understand: tplUnderstand,
   "verify-judge": tplVerifyJudge,
   "verify-script-gen": tplVerifyScriptGen,
   whole: tplWhole,
@@ -103,6 +107,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "phase-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
   review: ["结论: 通过", "结论: 差距", ".auto/review.md"],
   "review-fix": ["- [ ]"],
+  understand: ["context.md"],
   "verify-judge": ["结论: 通过", "结论: 差距", "结论: 重验", ".auto/verify.md", "verified-command"],
   "verify-script-gen": ["#!/usr/bin/env bash"],
 }

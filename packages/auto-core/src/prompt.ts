@@ -98,6 +98,19 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
   })
 }
 
+// 理解会话(fork 三段式 ①,fork-decompose 设计 §6): 只读理解 + 预算内选读 +
+// 写 docs/<id>.context.md 四节摘要;摘要同时是磁盘态兜底(fork 失败冷启动输入、
+// wrapup/后续任务低成本引用)与 digest 模式的基点原料(逐字注入基点会话)。
+export function renderUnderstand(plan: Plan, task: Task, opts: Opts = {}): string {
+  return renderTemplate("understand", baseCtx(plan, task, opts))
+}
+
+// digest 基点会话(①′,driver 主导,fork-decompose 设计 §7): 摘要全文 + 一句
+// 确认;会话结束即成为该任务全部分叉(decompose/子任务)的前缀基点。
+export function renderContextBase(task: Task, digest: string): string {
+  return renderTemplate("context-base", { taskId: task.id, digest })
+}
+
 // Decomposition session: read-only analysis, then write the subtask list to
 // docs/<id>.subtasks.md. The driver parses it and injects the checklist into
 // PLAN.md itself, so the session must not touch PLAN.md.

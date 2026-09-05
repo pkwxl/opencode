@@ -13,6 +13,7 @@ import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import {
   decomposeTemplateName,
   modeCtx,
+  renderContextBase,
   renderDecompose,
   renderDryrun,
   renderFinalTask,
@@ -30,6 +31,7 @@ import {
   renderTestContinue,
   renderTestHandover,
   renderTestResult,
+  renderUnderstand,
   renderVerifyJudge,
   renderVerifyScriptGen,
   renderWhole,
@@ -161,6 +163,50 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       usePromptLibrary(undefined)
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("renderUnderstand(fork 流水线 ① 理解会话)", () => {
+  test("只读理解 + 摘要四节结构 + 硬性要求 + 写完即结束", () => {
+    const text = renderUnderstand(plan, task)
+    expect(text).toContain("只做任务背景理解,不写实现代码、不做任务分解")
+    expect(text).toContain("不修改任何实现代码")
+    expect(text).toContain("docs/T-002.context.md")
+    expect(text).toContain("## 相关文件与关键符号")
+    expect(text).toContain("## 约束与前提")
+    expect(text).toContain("## 已有决策与现状")
+    expect(text).toContain("## 风险与未知")
+    expect(text).toContain("不产出有效文件会导致任务阻塞停机")
+    expect(text).toContain("写完该文件后立即结束会话")
+    // 紧凑性约束(digest 模式下摘要成为全部分叉的前缀)
+    expect(text).toContain("写得紧凑、可检索")
+    expect(text).toContain("200 行")
+    // 状态文件只读规则与问答历史
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("[done] T-001: 搭建 schema")
+    expect(text).toContain("策略选 A 还是 B?")
+  })
+
+  test("优先选读任务正文点名的文件,不求全", () => {
+    const text = renderUnderstand(plan, task)
+    expect(text).toContain("有选择地阅读相关源码与 docs/")
+    expect(text).toContain("优先任务正文")
+    expect(text).toContain("点名的文件与直接相关模块,不求全")
+  })
+})
+
+describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
+  test("摘要全文逐字注入 + 一句确认 + 不读不写不展开", () => {
+    const digest = "## 相关文件与关键符号\n- src/x.ts: 数据模型\n\n## 约束与前提\n- 只读目标目录"
+    const text = renderContextBase(task, digest)
+    expect(text).toContain("任务 T-002 理解阶段产出的背景摘要")
+    expect(text).toContain("docs/T-002.context.md 全文")
+    expect(text).toContain("本会话由 driver 建立")
+    expect(text).toContain(digest)
+    expect(text).toContain("回复一句简短确认即可")
+    expect(text).toContain("不要读取文件、不要展开分析")
+    expect(text).toContain("不要修改任何内容")
+    expect(text).toContain("确认后立即结束会话")
   })
 })
 

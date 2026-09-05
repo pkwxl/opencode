@@ -33,6 +33,8 @@ type RunRecord = {
 export type AuditVerdict = { type: "pass"; command?: string } | { type: "gap"; gap: string } | { type: "reverify"; gap: string }
 
 // 任务流水线的阶段标记:
+// - understand: fork 流水线理解会话阶段(写 docs/<id>.context.md 摘要;fork=off
+//   不经过该阶段)
 // - decompose: auto 模式分解会话阶段(检查项尚未注入)
 // - whole: off/ondemand 模式整任务单会话执行阶段
 // - subtasks: 逐子任务会话阶段(从首个未勾选项继续)
@@ -44,6 +46,7 @@ export type AuditVerdict = { type: "pass"; command?: string } | { type: "gap"; g
 // - review: 质量审核外层循环;round 为当前轮,stage = audit(审核会话)/
 //   planfix(修复规划,docs/<id>.fix.md 可能已产出)/ fixrun(修复检查项执行中)
 export type Phase =
+  | { kind: "understand" }
   | { kind: "decompose" }
   | { kind: "whole" }
   | { kind: "subtasks" }

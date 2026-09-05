@@ -14,6 +14,7 @@ import {
   markDone,
   parse,
   parseFinalMark,
+  setForkBase,
   setStatus,
   setSubtasks,
   subtasks,
@@ -24,6 +25,7 @@ import {
 } from "./plan"
 import {
   handoffFile,
+  renderContextBase,
   renderDecompose,
   renderFix,
   renderHandoffSteer,
@@ -33,6 +35,7 @@ import {
   renderTestContinue,
   renderTestHandover,
   renderTestResult,
+  renderUnderstand,
   renderVerifyJudge,
   renderVerifyScriptGen,
   renderWhole,
@@ -46,7 +49,7 @@ import {
 import { allowWrite, reprotect } from "./protect"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { shellProfile } from "./shell"
-import { autoSwitches } from "./switches"
+import { autoSwitches, type Switches } from "./switches"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
@@ -178,7 +181,11 @@ type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } 
 // 带给 AI,用后即清)。subject 为本会话产出的提交标题(短标签方案): 新建会话
 // 以它显式命名,复用会话跨阶段在结束时改名(见 renameSession),使会话列表
 // 与 git 历史、任务进度对齐。
-type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string }
+// fork 三段式(fork-decompose 设计 §4.3): forkBase 为本链的分叉基点会话(种子
+// 链携带,溯源用);pending 为预创建会话 id(seedForkSession 从基点分叉所得),
+// attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
+// 瞬时错误重试自然回落 create 路径。
+export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string }
 
 // 上下文占比低于该值(%)时复用上一会话。
 const REUSE_BELOW = 50
@@ -352,9 +359,25 @@ export async function runTask(
     // 阶段精确重入: 记录显示已推进到收尾及之后 → off/ondemand 跳过执行阶段
     // (不重跑整任务会话;auto 的分解/子任务循环本就幂等,无需特判)。
     const resumed = resume?.kind
+    // fork 基点(fork-decompose 设计 §4.2): 仅 fork=on 的 auto 模式确立;digest
+    // 模式从 context.md 重建基点会话,session 模式沿用/校验 PLAN.md fork-base 字段,
+    // 失败沿回退链(digest → session → 冷启动)降级,undefined = 冷启动。
+    let fork: ForkBaseInfo | undefined
     if (mode === "auto") {
+      const sw = autoSwitches()
+      // ① 理解阶段: 任务体无检查项且 fork=on 才进入(已有人工检查项的任务跳过,
+      // 现状不变);摘要文件已存在(中断恢复/上一轮遗留)时幂等跳过。
+      if (sw.fork && !subtasks(task.body).length) {
+        await persistStage({ kind: "understand" })
+        const understood = await ensureUnderstood(client, plan, task, opts, chain)
+        if (understood.type === "blocked") return understood
+        task = understood.task
+      }
+      // ①′(digest)/基点校验(session)——此后 decompose 与每个子任务都从同一
+      // 基点分叉(fork=off 时 fork 恒为 undefined,行为与现状零差异)。
+      fork = sw.fork ? await ensureForkBase(client, plan, task, opts, chain) : undefined
       await persistStage({ kind: "decompose" })
-      const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
+      const decomposed = await ensureDecomposed(client, plan, task, opts, chain, fork)
       if (decomposed.type === "blocked") return decomposed
       task = decomposed.task
       // 子任务交接文档的陈旧清理(镜像 ondemand 语义): 非恢复续跑时清除上次尝试
@@ -443,7 +466,7 @@ export async function runTask(
           const items = subtasks(task.body)
           const index = items.findIndex((item) => !item.done)
           if (index === -1) break
-          const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain)
+          const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork)
           if (blocked) return blocked
           task = requireTask(await load(plan.path), task.id)
           await writeCurrent(plan.path, task, mode !== "auto")
@@ -650,6 +673,8 @@ export function phaseText(phase: Phase | undefined): string {
   switch (phase?.kind) {
     case undefined:
       return "未记录阶段(按默认流程)"
+    case "understand":
+      return "任务背景理解阶段(写 context.md 摘要)"
     case "decompose":
       return "任务分解阶段(检查项尚未注入)"
     case "whole":
@@ -691,6 +716,8 @@ function nextStepText(phase: Phase | undefined): string {
   switch (phase?.kind) {
     case undefined:
       return ""
+    case "understand":
+      return `当前处于任务背景理解阶段:把理解结果写入 docs/ 下的 context.md 摘要文件(若尚未写出)后结束。`
     case "decompose":
       return `当前处于任务分解阶段:检查项尚未注入 PLAN.md。`
     case "whole":
@@ -735,6 +762,180 @@ function firstLine(text: string): string {
   return text.split("\n")[0]!.slice(0, 200)
 }
 
+// fork 流水线 ① 理解阶段(fork-decompose 设计 §4.1): 理解会话只读探查并写
+// docs/<id>.context.md 四节摘要(requireArtifact 同款两次重试 + 隐性阻塞);成功后
+// driver 写任务字段 fork-base(session 模式下即最终基点;digest 模式随后被基点
+// 确认会话覆写)并按 "understand" 阶段统一提交。摘要已存在(中断恢复/上一轮
+// 遗留)时幂等跳过,仅补写缺失的 fork-base(中断恰好落在摘要写盘与 setForkBase
+// 之间的恢复路径)。
+async function ensureUnderstood(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+  chain: SessionChain,
+): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
+  const file = join(dirname(plan.path), "docs", `${task.id}.context.md`)
+  if ((await Bun.file(file).text().catch(() => "")).trim()) {
+    log(`↻ ${task.id} 理解摘要 ${file} 已存在,跳过理解会话`)
+    if (!task.forkBase && chain.id) {
+      await setForkBase(plan.path, task.id, chain.id)
+      task = requireTask(await load(plan.path), task.id)
+    }
+    return { type: "ok", task }
+  }
+  autobanner(`${task.id} ${task.title}: 任务背景理解`)
+  const subject = `${task.id} understand ${task.title}`
+  chain.subject = subject
+  let feedback = ""
+  for (let i = 0; ; i++) {
+    const result = await runSession(client, task, renderUnderstand(plan, task, opts) + feedback, opts, chain)
+    if (result.type === "blocked") return result
+    if ((await Bun.file(file).text().catch(() => "")).trim()) {
+      // 理解会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
+      if (chain.id) await setForkBase(plan.path, task.id, chain.id)
+      task = requireTask(await load(plan.path), task.id)
+      await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "understand", subject })
+      return { type: "ok", task }
+    }
+    if (i === 1) {
+      return {
+        type: "blocked",
+        question:
+          `理解会话两次结束但 ${file} 缺失或为空(隐性阻塞)。` +
+          `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+      }
+    }
+    log(`↻ ${task.id} 理解会话未产出 ${file},带反馈重试一次`)
+    feedback =
+      `\n\n你上次结束会话但未写出有效的 ${file}(缺失或为空)。这是硬性要求:` +
+      `把理解结果按四节结构写入该文件后再结束会话(即使任务看起来很简单)。`
+  }
+}
+
+// fork 基点信息: id 为生效基点会话;used 为基点末端上下文用量(tokens,播种进
+// 分叉链使 watch() 的 2×cap 交接阈值按「前缀+新增」计算,首个 turn 的事件跟踪
+// 随后自行校正)。
+export type ForkBaseInfo = { id: string; used: number }
+
+// 封装 client.session.fork(fork-decompose 设计 §4.3;client 可注入 fake 单测):
+// 在基点末端复制消息前缀为新会话并改名为本阶段短标签标题。{error} 或任何异常
+// (外部旧版 --server 无此路由、基点被存储清理等)都属预期回退场景——log 后
+// 返回 undefined,调用方走全新会话 + 冷启动,不是错误。
+export async function forkSession(client: OpencodeClient, base: string, title: string): Promise<string | undefined> {
+  try {
+    const forked = await client.session.fork({ sessionID: base })
+    if (forked.error) {
+      log(`↻ fork 失败(${JSON.stringify(forked.error)}),回退全新会话`)
+      return undefined
+    }
+    const id = forked.data.id
+    // 分叉会话默认标题形如 "... (fork #N)";改名为本阶段提交标题,与 git 历史、
+    // 任务进度对齐(改名失败仅记明细)。
+    const renamed = await client.session.update({ sessionID: id, title: commitTitle(title) }).catch(() => undefined)
+    if (renamed?.error) vlog(`fork 会话改名失败: ${JSON.stringify(renamed.error)}`)
+    return id
+  } catch (error) {
+    log(`↻ fork 失败(${error instanceof Error ? error.message : String(error)}),回退全新会话`)
+    return undefined
+  }
+}
+
+// 阶段/子任务首个会话的 fork 播种(fork-decompose 设计 §4.3/§4.4): 有基点即
+// 「先 fork 后渲染」——成功 → chain.pending = 分叉会话、种子链 { pct: 100,
+// used: 基点用量, at: 0, forkBase }(pct:100 强制首次不复用,fork 优先;跨子任务
+// 不复用、每项重新从基点分叉);fork 失败 → 重置链走全新会话 + 冷启动提示词;
+// 基点用量达 cap/2 → 不起 fork、直接冷启动(防前缀逼近上限)。中断恢复复用
+// 中断会话(链上仍有会话且恢复说明待注入)时不分叉,首个提示词进复用会话。
+// 返回 warm(= 本会话已继承任务背景)供提示词选择背景段;无基点(fork=off/
+// 从未确立)不动链,行为与现状完全一致。
+export async function seedForkSession(
+  client: OpencodeClient,
+  opts: Opts,
+  chain: SessionChain,
+  base: ForkBaseInfo | undefined,
+  subject: string,
+): Promise<boolean> {
+  if (!base) return false
+  // 恢复续跑优先于分叉: 中断会话仍在链上且恢复说明(note)待注入 → 复用之。
+  if (chain.id !== undefined && chain.note !== undefined) return true
+  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  if (base.used >= cap / 2) {
+    log(`↻ 基点用量 ${formatTokens(base.used)} 达到 ${formatTokens(cap / 2)} 上限,不起分叉(冷启动)`)
+    chain.id = undefined
+    chain.pending = undefined
+    chain.pct = 100
+    chain.used = 0
+    chain.at = 0
+    return false
+  }
+  // 新会话前同步 AGENTS.md(与 create 路径同款;分叉会话的 system context 继承
+  // 自基点,基点前缀与最新契约的一致性在此保证)。
+  await opts.server?.syncAgents()
+  const forked = await forkSession(client, base.id, subject)
+  chain.id = undefined
+  chain.pending = forked
+  chain.forkBase = base.id
+  chain.pct = 100
+  chain.used = forked ? base.used : 0
+  chain.at = 0
+  if (forked) log(`⑂ 从基点 ${base.id} 分叉新会话(前缀 ${formatTokens(base.used)} tokens)`)
+  return forked !== undefined
+}
+
+// fork 基点确立(fork-decompose 设计 §4.2): 返回生效基点,undefined = 冷启动。
+// digest 模式读 context.md 全文,经一次性链(subject `T-NNN ctxbase …`,不带
+// phase、不写进度记录;确认 turn 无工作区改动、commitTree 自然零提交)重建基点
+// 会话——前缀确定性 = 摘要全文,provider 缓存友好;每次运行无条件重建并覆写
+// fork-base(基点是每次运行重建的易失指针,旧基点会话自然沉没)。回退链:
+// digest 建立失败 → session 基点(PLAN.md 持久字段,校验存活,失效回退冷启动)
+// → 冷启动。session 模式基点跨运行持久,用量经 messages 末条消息重建(近似
+// 即可;同次运行且基点即链上会话时直接取跟踪值)。
+export async function ensureForkBase(
+  client: OpencodeClient,
+  plan: Plan,
+  task: Task,
+  opts: Opts,
+  chain: SessionChain,
+  switches: Switches = autoSwitches(),
+): Promise<ForkBaseInfo | undefined> {
+  if (!switches.fork) return undefined
+  const dir = opts.dir ?? dirname(plan.path)
+  if (switches.forkBase === "digest") {
+    const digest = (await Bun.file(join(dir, "docs", `${task.id}.context.md`)).text().catch(() => "")).trim()
+    if (digest) {
+      const subject = `${task.id} ctxbase ${task.title}`
+      const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
+      const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
+      if (result.type === "idle" && base.id) {
+        await setForkBase(plan.path, task.id, base.id)
+        log(`⑂ ${task.id} digest 基点就绪: 会话 ${base.id}(摘要前缀 ${formatTokens(base.used)} tokens)`)
+        return { id: base.id, used: base.used }
+      }
+      log(`↻ ${task.id} digest 基点会话未建立${result.type === "blocked" ? `(${firstLine(result.question)})` : ""},回退 session 基点`)
+    } else {
+      log(`↻ ${task.id} 缺少 docs/${task.id}.context.md 摘要,digest 基点不可建立,回退 session 基点`)
+    }
+  }
+  if (task.forkBase) {
+    if (await sessionAlive(client, task.forkBase)) {
+      const used = task.forkBase === chain.id ? chain.used : await sessionUsed(client, task.forkBase)
+      log(`⑂ ${task.id} session 基点就绪: 会话 ${task.forkBase}(${formatTokens(used)} tokens)`)
+      return { id: task.forkBase, used }
+    }
+    log(`↻ ${task.id} session 基点 ${task.forkBase} 已失效,回退冷启动`)
+  }
+  return undefined
+}
+
+// 基点会话末端上下文用量(tokens: input + cache.read)重建: 恢复运行时经
+// client.session.messages 取末条 assistant 消息;取不到按 0。
+async function sessionUsed(client: OpencodeClient, id: string): Promise<number> {
+  const got = await client.session.messages({ sessionID: id }).catch(() => undefined)
+  const last = got && !got.error ? got.data.findLast((message) => message.info.role === "assistant") : undefined
+  return last && last.info.role === "assistant" ? last.info.tokens.input + last.info.tokens.cache.read : 0
+}
+
 // Ensures the task body has a checklist: tasks resuming with one (or with a
 // human-written one) are used as-is; otherwise a decomposition session writes
 // docs/<id>.subtasks.md and the driver injects the items into PLAN.md.
@@ -746,6 +947,7 @@ async function ensureDecomposed(
   task: Task,
   opts: Opts,
   chain: SessionChain,
+  base?: ForkBaseInfo,
 ): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
   if (subtasks(task.body).length) return { type: "ok", task }
   const file = join(dirname(plan.path), "docs", `${task.id}.subtasks.md`)
@@ -761,6 +963,9 @@ async function ensureDecomposed(
   autobanner(`${task.id} ${task.title}: 子任务分解`)
   const subject = `${task.id} decompose ${task.title}`
   chain.subject = subject
+  // ② 分解会话从基点分叉(先 fork 后渲染,设计 §4.3);无基点/失败 → 现状全新
+  // 会话。种子链使分解会话不复用理解会话(基点保持纯净分叉点)。
+  await seedForkSession(client, opts, chain, base, subject)
   for (let i = 0; ; i++) {
     // fine(OPENCODE_AUTO_DECOMPOSE_FINE=on)透传分解提示词: 注入细粒度准则段
     // (fork-decompose-design.md §5.1)。
@@ -805,6 +1010,7 @@ async function runSubtask(
   index: number,
   opts: Opts,
   chain: SessionChain,
+  base?: ForkBaseInfo,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
@@ -824,6 +1030,10 @@ async function runSubtask(
   } else {
     let continuation = prior === "继续"
     if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已交接 ${handoffFile(task)},新会话凭交接文档续跑子任务`)
+    // ③ 子任务首个会话从基点分叉(与分解会话同一分叉点,先 fork 后渲染——warm/
+    // cold 背景段据此选择);跨子任务不复用(种子链强制),交接续跑与带反馈重试
+    // 沿用链内既有机制。无基点/失败 → 全新会话 + 冷启动提示词(读 context.md)。
+    const warm = await seedForkSession(client, opts, chain, base, subject)
     let feedback = ""
     let retried = false
     for (;;) {
@@ -831,7 +1041,7 @@ async function runSubtask(
         client,
         plan,
         task,
-        renderSubtask(plan, task, text, { ...opts, continuation, index }) + feedback,
+        renderSubtask(plan, task, text, { ...opts, continuation, index, warm }) + feedback,
         opts,
         chain,
         steer,
@@ -1424,14 +1634,20 @@ async function attempt(
           : `距上一会话结束已超过 ${REUSE_IDLE_MINUTES} 分钟(上下文已陈旧)`
     log(`▷ ${reason},开启新会话`)
   }
+  // fork 预创建会话(seedForkSession 从基点分叉所得)在 !reuse 时优先于 create,
+  // 消费即清——瞬时错误重试时 pending 已清,自然回落 create 路径(设计 §4.3)。
+  const forked = reuse ? undefined : chain.pending
+  chain.pending = undefined
   // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
   // system context(AGENTS.md 每个 provider turn 现场重读,重启兜底缓存场景)。
-  if (!reuse) await opts.server?.syncAgents()
+  // 分叉会话已在 seedForkSession 分叉前同步过。
+  if (!reuse && !forked) await opts.server?.syncAgents()
   // 显式标题: 新建会话直接以本阶段提交标题命名(短标签,如 `T-001 S2 编写 schema`),
-  // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`。
-  const session = reuse ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
+  // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`;分叉会话已在 forkSession
+  // 改名,不经 create。
+  const session = reuse || forked ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
   if (session?.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
-  const sessionID = session?.data.id ?? chain.id!
+  const sessionID = forked ?? session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
   // 进度记录: 执行链会话(链上携带阶段)写 active 记录,应用中断后据此精确恢复;

@@ -36,6 +36,12 @@ describe("进度记录", () => {
     expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_old")
   })
 
+  test("understand 阶段记录(fork 流水线理解会话)随记录往返", async () => {
+    const progress: Progress = { task: "T-001", session: "ses_understand", at: Date.now(), active: true, phase: { kind: "understand" } }
+    await saveProgress(dir, progress)
+    expect(await recallProgress(dir, "T-001")).toEqual(progress)
+  })
+
   test("verify 修复轮记录(stage=fix)的差距原文 gap 随记录往返", async () => {
     const progress: Progress = {
       task: "T-001",
