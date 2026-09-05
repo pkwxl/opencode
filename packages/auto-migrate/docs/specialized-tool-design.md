@@ -72,6 +72,10 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
   (尤其 `.opencode/auto/config.json`,否则坏值退出后二次运行被已固化值绑死)。
 - --continue/--commit-subtask/--verify-idle/--verify-max 等历史选项的
   拦截报文删除(工具已不存在那些概念)。
+- 未知选项拦截: 白名单(值选项∪布尔选项∪help 与历史拦截项)之外的
+  `--xxx` 一律报错退出 1,防拼错被静默忽略(如 --next-path 误写为
+  --next);近似名(前缀匹配)给出提示。先于取值校验,同受"不留痕"
+  不变式约束。
 
 ## 3. 前置知识提取(新会话,模板 prior-knowledge.md)
 

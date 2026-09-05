@@ -96,6 +96,15 @@ for (let i = 0; i < args.length; i++) {
   }
   flags.set(key, "")
 }
+// 未知选项拦截: 白名单(值选项∪布尔选项∪help 与历史拦截项)之外的旗标一律报错
+// 退出 1,防拼错被静默忽略(如 --next-path 误写为 --next);近似名给出提示。
+const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, "help", "continue", "commit-subtask"])
+for (const key of flags.keys()) {
+  if (KNOWN_FLAGS.has(key)) continue
+  const similar = key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
+  console.error(`未知选项 --${key}${similar.length ? `(是否想用 ${similar.join(" / ")}?)` : ""};运行 --help 查看全部选项`)
+  process.exit(1)
+}
 if (positional.length > 1) {
   console.error(`用法: auto-migrate [dir] [选项](只接受一个目录参数,当前: ${positional.join(" ")})`)
   process.exit(1)

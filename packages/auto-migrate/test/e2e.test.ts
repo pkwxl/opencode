@@ -174,6 +174,33 @@ describe("CLI: 去子命令化与历史选项拦截", () => {
     }
   })
 
+  test("未知选项拦截: 拼错旗标退出 1 并给近似名提示,先于取值校验且不写盘", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // --next-path 误写为 --next 不再被静默忽略,前缀近似名给出提示
+      const typo = await runCli([dir, "--next"])
+      expect(typo.code).toBe(1)
+      expect(typo.err).toContain("未知选项 --next")
+      expect(typo.err).toContain("是否想用 --next-path?")
+      // 无近似名的未知旗标只报未知;= 形式同样拦截
+      const random = await runCli([dir, "--definitely-not-a-flag"])
+      expect(random.code).toBe(1)
+      expect(random.err).toContain("未知选项 --definitely-not-a-flag")
+      expect(random.err).not.toContain("是否想用")
+      const eq = await runCli([dir, "--nex=1"])
+      expect(eq.code).toBe(1)
+      expect(eq.err).toContain("未知选项 --nex")
+      // 已知旗标不受影响: 取值校验报文照旧(不被未知选项报文抢占)
+      const known = await runCli([dir, "--subtask", "fast"])
+      expect(known.code).toBe(1)
+      expect(known.err).not.toContain("未知选项")
+      // 拦截在任何写盘之前: 新目录不留痕迹
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("非法取值为用法错误(退出码 1)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
