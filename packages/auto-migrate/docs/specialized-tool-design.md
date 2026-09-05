@@ -20,6 +20,7 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 ```
 读/建配置(.opencode/auto/config.json)
   → 模板维护(PLAN.md 空模板 / opencode.json / agent 契约)
+  → [--next-path: 轮间过渡(§9.2;前置不满足则退出 1)]
   → .auto/tool.json.done === true → 报告完成,退出 0
   → 启动 server(全程一个实例,注入 runAll 复用)
   → [dryrun: 跳过以下前置步骤,直接走 runAll 的权限预检]
@@ -153,3 +154,64 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 8. README.md 与 AGENTS.md 更新。
 
 每步完成后跑相关测试;7 为总验收。
+
+## 9. --next-path 轮间续迁(增量设计)
+
+> 本节是「前一轮彻底完成后继续迁移新模块」的增量设计,叠加在 §1-§4 基础流程
+> 之上;实施过程记录见仓库根 MIGRATE_NEXT_PATH_PLAN.md。
+
+### 9.1 参数语义与前置条件
+
+- `--next-path <相对路径>` = 新模块在既有 `--source-dir` 下的相对路径,即只修订
+  `config.source.path`;`source.dir` 与 `destDir` 不变,新模块在目标树下的落点
+  由新一轮规划会话决定。它是轮间修订指令,不是配置键——不进首跑固化与二次
+  运行的固化冲突比对。
+- 严格前置:必须 `.auto/tool.json` 带 `done: true`(前一轮彻底完成),不做幂等
+  宽容。不满足 → 退出码 1,报文区分两种形态:本轮进行中(`{round:N}`)→
+  "不带 --next-path 重新运行即从断点续跑";首次运行/无标记 → "先完成一次完整
+  迁移后再用 --next-path 开启下一轮"。
+- 值域与互斥(CLI 层,全部先于任何写盘——用法错误不在目录留痕):非空、相对、
+  不含 `..`;与 `--source-dir/--source-path/--dest-dir`(首跑固化参数)及
+  `--dryrun`(过渡会清理并改写工作目录,违反 dryrun 契约)互斥;首跑直接拒绝。
+  非首跑另做两项防御:`config.source` 已固化(缺失指引编辑
+  .opencode/auto/config.json)、`<工作目录>/<source-dir>/<next-path>` 存在
+  (stat 跟随软链接,与首跑 --source 校验同款)。
+
+### 9.2 过渡步骤(prepareNextRound,纯 fs、不起 server)
+
+过渡块插在 §1 的 done 完成检查之前,依序执行:
+
+1. readToolState → `!done` → 报错退出 1(报文见 9.1 两种形态)。
+2. `config.source.path → nextPath`,saveProjectConfig 落盘。
+3. `archivePriorKnowledge`(核心归档原语,round = `state.round`,缺失回落
+   `currentRound`):`docs/prior-kb/` 全部直接条目移入
+   `docs/phases/round-<N>/prior-kb/`,源目录清空。
+4. 删 `.auto/infer.json`(陈旧推断产物)与 `.auto/tool.json`(清 done 标记)。
+
+成功后必须重读 state(内存旧值仍是 done,直接复用会误报"已完成"提前退出)并
+同步内存 config.source。此后零新增编排,自然流程接管:前置知识提取(prior-kb
+已空 → 跳过检查必然放行,重新蒸馏)→ 现场清理(marker 缺失 + 台账全满 →
+archiveRound 归档完成轮 + PLAN 重置 + forgetProgress)→ 建新轮标记 → 参数推断
+跳过(config 完整)→ runAll(新 source.path 生效)。
+
+轮号口径:round-N/ 语义是"第 N 轮开始时的现场"。prior-kb 是第 N 轮的输入,故
+归档进 round-N/;随后 archiveRound 因 round-N/ 已存在而把完成轮产物归档进
+round-(N+1)/。跨号可接受、无数据丢失(archiveRound 跳过 round-* 条目),
+prevRoundDigest 取 round-(N+1)/ 恰为上一完成轮的交接与 migration-kb,注入
+语义不变。
+
+### 9.3 知识整理链路(零新增注入机制)
+
+旧 prior-kb 与上一轮 migration-kb/交接随归档进入轮次目录 → 新一轮前置知识
+提取会话细读 docs/ 全树(含轮次归档)重新蒸馏出新 prior 文档 →
+priorKnowledgeDigest 注入本轮首个规划会话;prevRoundDigest(上轮最终交接 +
+migration-kb 全文)照常注入同一会话;归档目录索引供各会话按需自行取用
+("蒸馏产物唯一通道"纪律不变)。
+
+### 9.4 中断恢复时序
+
+过渡各步幂等(配置重写同值、归档 rename、rm force),任一步中断后:
+
+- done 标记未删 → 重跑同一命令(带 --next-path)全流程重入,安全;
+- done 标记已删、自然流程未建新标记 → 带 --next-path 重跑被严格前置拒绝
+  (!done),不带参数重跑即自然流程续跑——严格拒绝方案在该时序下自洽。

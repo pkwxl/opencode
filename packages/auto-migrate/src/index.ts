@@ -30,11 +30,11 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
-// --final-review/--source-dir/--source-path/--dest-dir 带值(吞掉下一个 token);
-// --verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/--handover-test/
-// --new-session 是布尔选项,出现即 true,仅当紧随字面量 true/false 时才吞掉它。均支持
-// --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
-// --mode 另有短选项 -m(镜像 -p 的吞值规则)。
+// --final-review/--source-dir/--source-path/--dest-dir/--next-path 带值(吞掉下一个
+// token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/
+// --handover-test/--new-session 是布尔选项,出现即 true,仅当紧随字面量 true/false
+// 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,--interactive 另有短
+// 选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值规则)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -54,6 +54,7 @@ const VALUE_FLAGS = new Set([
   "source-dir",
   "source-path",
   "dest-dir",
+  "next-path",
   // 已移除/更名的历史选项同样吞掉紧随的值,使拦截报文不被位置参数干扰。
   "phases",
   "verify-idle",
@@ -153,6 +154,28 @@ const idleMax = parseIdleMax(flags.get("idle-max"))
 if (idleMax === null) {
   console.error("--idle-max 取值范围为 1..1440(分钟);缺省不设上限")
   process.exit(1)
+}
+
+// --next-path: 轮间修订指令(非固化参数,不进首跑固化与二次冲突比对)——前一轮
+// 彻底完成后修订 source.path 开启新一轮迁移。值域与互斥先于其他迁移参数校验:
+// 非空、相对、不含 ..;与首跑固化参数(--source-dir/--source-path/--dest-dir)及
+// --dryrun 互斥(过渡会清理并改写工作目录,违反 dryrun 契约)。
+let nextPath: string | undefined
+if (flags.has("next-path")) {
+  const value = flags.get("next-path")!
+  if (!value.trim() || isAbsolute(value) || value.split(/[\\/]+/).includes("..")) {
+    console.error("--next-path 须为不含 .. 的非空相对路径(相对既有 --source-dir)")
+    process.exit(1)
+  }
+  if (flags.has("source-dir") || flags.has("source-path") || flags.has("dest-dir")) {
+    console.error("--next-path 与 --source-dir/--source-path/--dest-dir 互斥: 后者是首次运行的固化参数,前者是轮间修订指令")
+    process.exit(1)
+  }
+  if (flags.has("dryrun") && flags.get("dryrun") !== "false") {
+    console.error("--next-path 与 --dryrun 互斥: 开启新一轮会清理并改写工作目录")
+    process.exit(1)
+  }
+  nextPath = value
 }
 
 // --source-dir/--source-path/--dest-dir: 迁移参数。布局约定: 位置参数是 driver
@@ -273,6 +296,12 @@ const newSession = flags.has("new-session") && flags.get("new-session") !== "fal
 
 const modes = loadModeTable(directory)
 const firstRun = !(await Bun.file(join(directory, ".opencode", "auto", "config.json")).exists())
+// --next-path 依赖前一轮完成标记与已固化配置,首跑无效(先于固化写盘拒绝,新
+// 目录不留任何盘上痕迹)。
+if (firstRun && nextPath !== undefined) {
+  console.error("--next-path 用于前一轮完成后的新一轮迁移,首次运行无效(直接运行即可)")
+  process.exit(1)
+}
 let config: ProjectConfig
 let modeName: string
 if (firstRun) {
@@ -341,6 +370,20 @@ if (firstRun) {
     )
     process.exit(1)
   }
+  // --next-path 轮间修订的前置: 依赖已固化的迁移源;新模块须在
+  // <工作目录>/<source-dir>/<next-path> 存在(stat 跟随软链接,与首跑 --source
+  // 校验同款)。均先于 runTool 的任何写盘。
+  if (nextPath !== undefined) {
+    if (!config.source) {
+      console.error("--next-path 依赖已固化的迁移源(--source-dir): 配置缺失,请先完成一轮迁移或编辑 .opencode/auto/config.json")
+      process.exit(1)
+    }
+    const pathExists = await stat(join(directory, config.source.dir, nextPath)).then(() => true, () => false)
+    if (!pathExists) {
+      console.error(`--next-path 在迁移源下不存在: ${config.source.dir}/${nextPath}`)
+      process.exit(1)
+    }
+  }
 }
 const mode = modes[modeName]!
 
@@ -365,6 +408,7 @@ const code = await runTool(directory, {
   dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
   finalReview,
   newSession,
+  nextPath,
 })
 process.exit(code)
 
@@ -490,6 +534,7 @@ function usageText(): string {
   --final-review [1-5]       终审闭环(仅 m 阶段挂接)
   --dryrun [true|false]      只跑权限预检,不执行任务
   --new-session [true|false] 中断恢复时跳过会话复用,开新会话继续(阶段精确重入保留)
+  --next-path <相对路径>     前一轮完成后开启下一轮迁移(新模块相对既有 --source-dir 的路径)
 
 退出码: 0 全部完成(含"此前已完成"),1 用法/环境错误,2 阻塞等待人工介入,130 连续两次 Ctrl+C 强制终止`
 }

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { CONFIG_DEFAULTS, loadProjectConfig, saveProjectConfig } from "@opencode-ai/auto-core/config"
 import { existingPriorKnowledge, priorKnowledgeDigest, priorKnowledgeFile } from "@opencode-ai/auto-core/knowledge"
-import { needsSceneCleanup, parseInferOutput, readToolState } from "../src/tool"
+import { needsSceneCleanup, parseInferOutput, prepareNextRound, readToolState } from "../src/tool"
 
 describe("parseInferOutput(参数推断产物协议)", () => {
   test("成功形态: 三键齐备的合法相对路径", () => {
@@ -90,6 +91,98 @@ describe("needsSceneCleanup(现场清理判定)", () => {
     expect(needsSceneCleanup(true, ["a"], true)).toBe(false)
     expect(needsSceneCleanup(true, undefined, true)).toBe(false)
     expect(needsSceneCleanup(true, [], false)).toBe(false)
+  })
+})
+
+describe("prepareNextRound(--next-path 轮间过渡)", () => {
+  // 捏造完成态前的基线: 已固化配置(含迁移源)+ 空白目录,由各用例补状态文件。
+  async function seedDir() {
+    const dir = mkdtempSync(join(tmpdir(), "auto-next-"))
+    await saveProjectConfig(dir, {
+      ...CONFIG_DEFAULTS,
+      mode: "migrate",
+      phases: "admtvk",
+      autoNumber: true,
+      source: { dir: "legacy", path: "src/old.ts" },
+      destDir: "target",
+    })
+    return dir
+  }
+
+  test("完成态: 修订 source.path + 归档 prior-kb 到 state.round 轮 + 清推断产物与标记", async () => {
+    const dir = await seedDir()
+    try {
+      mkdirSync(join(dir, ".auto"), { recursive: true })
+      writeFileSync(join(dir, ".auto/tool.json"), JSON.stringify({ round: 2, done: true }))
+      writeFileSync(join(dir, ".auto/infer.json"), "{}")
+      mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
+      writeFileSync(join(dir, "docs/prior-kb/prior-x.md"), "旧知识")
+      mkdirSync(join(dir, "docs/phases/round-1"), { recursive: true })
+      writeFileSync(join(dir, "docs/phases/round-1/PLAN.md"), "# 旧轮")
+      expect(await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")).toBe(0)
+      // 配置: 仅 source.path 修订,dir 与其余键不动
+      expect(await loadProjectConfig(dir)).toMatchObject({ source: { dir: "legacy", path: "src/new.ts" }, destDir: "target" })
+      // prior 文档落位 state.round(2)轮,源目录清空 → 跳过检查必然放行重新蒸馏
+      expect(await Bun.file(join(dir, "docs/phases/round-2/prior-kb/prior-x.md")).text()).toBe("旧知识")
+      expect(readdirSync(join(dir, "docs/prior-kb"))).toEqual([])
+      // 陈旧推断产物与 done 标记已清
+      expect(await Bun.file(join(dir, ".auto/infer.json")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".auto/tool.json")).exists()).toBe(false)
+      // §2.2 时序: 过渡成功后(done 标记已删、新标记未建)重跑被严格拒绝
+      const again = await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")
+      expect((again as { error: string }).error).toContain("先完成一次完整迁移")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("非完成态(无 tool.json / {round} 进行中)→ {error},不做任何写盘", async () => {
+    const dir = await seedDir()
+    try {
+      // 无标记: 前一形态报文
+      const none = await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")
+      expect((none as { error: string }).error).toContain("先完成一次完整迁移")
+      // 本轮进行中: 续跑指引形态报文
+      mkdirSync(join(dir, ".auto"), { recursive: true })
+      writeFileSync(join(dir, ".auto/tool.json"), JSON.stringify({ round: 3 }))
+      const ongoing = await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")
+      expect((ongoing as { error: string }).error).toContain("断点续跑")
+      // 拒绝路径零副作用: 配置与状态原样
+      expect(await loadProjectConfig(dir)).toMatchObject({ source: { dir: "legacy", path: "src/old.ts" } })
+      expect(await readToolState(dir)).toEqual({ round: 3 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("round 缺失回落 currentRound: {done:true} 且无轮次归档 → 归档到 round-1/prior-kb/", async () => {
+    const dir = await seedDir()
+    try {
+      mkdirSync(join(dir, ".auto"), { recursive: true })
+      writeFileSync(join(dir, ".auto/tool.json"), JSON.stringify({ done: true }))
+      mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
+      writeFileSync(join(dir, "docs/prior-kb/prior-a.md"), "知识甲")
+      expect(await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")).toBe(0)
+      expect(await Bun.file(join(dir, "docs/phases/round-1/prior-kb/prior-a.md")).text()).toBe("知识甲")
+      expect(await Bun.file(join(dir, ".auto/tool.json")).exists()).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("config.source 缺失 → {error} 兜底(CLI 层已前置拦截)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-next-"))
+    try {
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, mode: "migrate", phases: "admtvk", autoNumber: true })
+      mkdirSync(join(dir, ".auto"), { recursive: true })
+      writeFileSync(join(dir, ".auto/tool.json"), JSON.stringify({ round: 1, done: true }))
+      const result = await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")
+      expect((result as { error: string }).error).toContain("迁移源")
+      expect(await readToolState(dir)).toEqual({ round: 1, done: true })
+      expect((await loadProjectConfig(dir)).source).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

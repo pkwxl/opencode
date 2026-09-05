@@ -1,12 +1,12 @@
 // 专用二次迁移工具的主编排(设计文档 docs/specialized-tool-design.md): 无子命令,
-// 每次启动按"前置知识提取 → 现场清理 → 参数推断 → 完整 admtvk 二次迁移"自动推进
-// 至结束;中断后再次运行依推导式状态(台账 + PLAN.md + .auto/progress.json + 本
-// 模块的 .auto/tool.json 本轮标记)从断点恢复。index.ts 只做参数解析与配置固化/
-// 冲突校验,然后委托本模块。
+// 每次启动按"[--next-path 轮间过渡(可选)] → 前置知识提取 → 现场清理 → 参数推断 →
+// 完整 admtvk 二次迁移"自动推进至结束;中断后再次运行依推导式状态(台账 + PLAN.md
+// + .auto/progress.json + 本模块的 .auto/tool.json 本轮标记)从断点恢复。index.ts
+// 只做参数解析与配置固化/冲突校验,然后委托本模块。
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
-import { existingKnowledge, extractPriorKnowledge } from "@opencode-ai/auto-core/knowledge"
+import { archivePriorKnowledge, existingKnowledge, extractPriorKnowledge } from "@opencode-ai/auto-core/knowledge"
 import { banner, log } from "@opencode-ai/auto-core/log"
 import { renderAgentContract, runAll } from "@opencode-ai/auto-core/loop"
 import type { ModeSpec } from "@opencode-ai/auto-core/mode"
@@ -73,6 +73,40 @@ export function needsSceneCleanup(markerExists: boolean, ledgerDone: readonly st
   return !markerExists && (ledgerDone === undefined || ledgerDone.length > 0 || sceneHasContent)
 }
 
+// --next-path 轮间过渡(纯 fs、不起 server,便于离线测试): 前一轮彻底完成(done
+// 标记)前提下修订 source.path、把旧 docs/prior-kb/ 归档进
+// docs/phases/round-<N>/prior-kb/(N = 完成轮标记号,缺失回落 currentRound——
+// 归档后源目录清空,新一轮的前置知识提取必然重新蒸馏,旧文档成为提取输入)、清
+// 陈旧推断产物与 done 标记;此后主流程既有现场清理分支(marker 缺失即触发)自然
+// 接管,零新增编排。各步幂等(配置重写、rename、rm force),任一步中断后重跑
+// 安全:done 标记未删 → 带参重跑全流程重入;已删 → 重跑被 !done 严格拒绝,报文
+// 指引不带参数续跑。返回 0 = 过渡完成;{error} = 前一轮未彻底完成或迁移源缺失
+// (调用方转退出码 1,报文区分进行中/无标记两种形态)。
+export async function prepareNextRound(
+  directory: string,
+  config: ProjectConfig,
+  nextPath: string,
+): Promise<0 | { error: string }> {
+  const state = await readToolState(directory)
+  if (!state.done) {
+    return {
+      error: state.round
+        ? `--next-path 仅用于前一轮彻底完成后开启新一轮: 第 ${state.round} 轮迁移仍在进行中,不带 --next-path 重新运行即从断点续跑`
+        : "--next-path 仅用于前一轮彻底完成后开启新一轮: 当前目录没有已完成的迁移,先完成一次完整迁移后再用 --next-path 开启下一轮",
+    }
+  }
+  const source = config.source
+  if (!source) return { error: "--next-path 依赖已固化的迁移源(--source-dir): 配置缺失,请先完成一轮迁移或编辑 .opencode/auto/config.json" }
+  const round = state.round ?? (await currentRound(directory))
+  await saveProjectConfig(directory, { ...config, source: { dir: source.dir, path: nextPath } })
+  log(`✓ 迁移参数已修订: source.path → ${nextPath}`)
+  await archivePriorKnowledge(directory, round)
+  log(`✓ 前置知识已归档(第 ${round} 轮): docs/phases/round-${round}/prior-kb/,新一轮将重新蒸馏`)
+  await rm(join(directory, ".auto", "infer.json"), { force: true })
+  await rm(join(directory, STATE_FILE), { force: true })
+  return 0
+}
+
 // 占位模板态判定(沿用原 init 语义): PLAN.md 仅含从未编辑的占位任务视为缺失,
 // 以空模板重建交给阶段规划会话。解析失败视为非占位态(保留)。
 function isPristinePlan(text: string): boolean {
@@ -107,6 +141,9 @@ export async function runTool(
     finalReview?: number
     // --new-session: 中断恢复时跳过会话复用(每次生效、不固化),透传 runAll。
     newSession?: boolean
+    // --next-path: 轮间修订指令——前一轮彻底完成后修订 source.path 开启新一轮
+    // (纯过渡,后续由既有现场清理与规划流程接管)。
+    nextPath?: string
   },
 ): Promise<number> {
   // 提示词库最先装载(协议校验失败按用法错误退出),前置会话与 runAll 都依赖它。
@@ -175,8 +212,19 @@ export async function runTool(
   }
 
   // 完成标记: 二次迁移已全部完成 → 报告完成,退出 0(决策 4)。仅 {round} = 本轮
-  // 进行中,照常续跑。
-  const state = await readToolState(directory)
+  // 进行中,照常续跑。--next-path 轮间过渡在前: 成功后必须重读 state(过渡删了
+  // done 标记,内存旧值仍是 done,直接复用会误报"已完成"提前退出)并同步内存
+  // config(后续参数跳过检查与 runAll 均用新 source.path)。
+  let state = await readToolState(directory)
+  if (input.nextPath !== undefined) {
+    const transition = await prepareNextRound(directory, config, input.nextPath)
+    if (transition !== 0) {
+      log(transition.error)
+      return 1
+    }
+    if (config.source) config.source = { dir: config.source.dir, path: input.nextPath }
+    state = await readToolState(directory)
+  }
   if (state.done) {
     log("✓ 二次迁移已全部完成(删除 .auto/tool.json 可显式开启新一轮)")
     return 0

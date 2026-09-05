@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, readdir, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { CONFIG_DEFAULTS, saveProjectConfig } from "@opencode-ai/auto-core/config"
 import { load } from "@opencode-ai/auto-core/plan"
-import { runAll } from "@opencode-ai/auto-core/loop"
+import { renderAgentContract, runAll } from "@opencode-ai/auto-core/loop"
 import { renderText } from "@opencode-ai/auto-core/template"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
@@ -473,6 +474,104 @@ describe("CLI: 二次运行关键参数与首次对齐", () => {
         expect(run.err).toBe("")
         expect(run.out).toContain("⚙ 项目配置(.opencode/auto/config.json)")
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// --next-path 轮间修订的离线拒绝矩阵(成功路径需起 server,不做 CLI 级离线断言)。
+// 捏造完成态/进行态全部走真实文件布局,断言拒绝路径零写盘副作用。
+describe("CLI: --next-path 轮间修订", () => {
+  test("非法值(绝对路径/../ 空白)为用法错误,新目录不留任何写盘痕迹", async () => {
+    const bad: string[][] = [
+      ["--next-path", "/abs/mod.ts"],
+      ["--next-path", "../escape.ts"],
+      ["--next-path", "a/../b.ts"],
+      ["--next-path", "   "],
+    ]
+    for (const extra of bad) {
+      const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+      try {
+        const run = await runCli([dir, ...extra])
+        expect(run.code).toBe(1)
+        expect(run.err).toContain("--next-path 须为不含 .. 的非空相对路径")
+        expect(await readdir(dir)).toEqual([])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test("与首跑固化参数/--dryrun 互斥为用法错误", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const withSource = await runCli([dir, "--next-path", "src/new.ts", "--source-dir", "legacy", "--source-path", "src/old.ts"])
+      expect(withSource.code).toBe(1)
+      expect(withSource.err).toContain("--next-path 与 --source-dir/--source-path/--dest-dir 互斥")
+      expect(withSource.err).toContain("固化参数")
+      const withDest = await runCli([dir, "--next-path", "src/new.ts", "--dest-dir", "target"])
+      expect(withDest.code).toBe(1)
+      expect(withDest.err).toContain("--next-path 与 --source-dir/--source-path/--dest-dir 互斥")
+      const withDryrun = await runCli([dir, "--next-path", "src/new.ts", "--dryrun"])
+      expect(withDryrun.code).toBe(1)
+      expect(withDryrun.err).toContain("--next-path 与 --dryrun 互斥")
+      expect(withDryrun.err).toContain("清理并改写工作目录")
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("首跑目录: --next-path 无效(退出 1)且不留 config.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const run = await runCli([dir, "--next-path", "src/new.ts"])
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("首次运行无效")
+      expect(run.err).toContain("直接运行即可")
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("非完成态(第 2 轮进行中): 退出 1、报文含续跑指引、迁移状态未被改动", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      await saveProjectConfig(dir, {
+        ...CONFIG_DEFAULTS,
+        mode: "migrate",
+        phases: "admtvk",
+        autoNumber: true,
+        source: { dir: "legacy", path: "src/old.ts" },
+        destDir: "target",
+      })
+      await Bun.write(join(dir, ".auto/tool.json"), JSON.stringify({ round: 2 }))
+      await Bun.write(join(dir, "legacy/src/new.ts"), "export {}\n")
+      await Bun.write(
+        join(dir, "PLAN.md"),
+        `## T-001: 进行中的任务 [pending]
+  - verify: command: test -f x.txt
+任务正文。
+`,
+      )
+      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
+      await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false, false))
+      const before = {
+        config: await Bun.file(join(dir, ".opencode/auto/config.json")).text(),
+        plan: await Bun.file(join(dir, "PLAN.md")).text(),
+        marker: await Bun.file(join(dir, ".auto/tool.json")).text(),
+      }
+      const run = await runCli([dir, "--next-path", "src/new.ts"])
+      expect(run.code).toBe(1)
+      expect(run.out).toContain("第 2 轮迁移仍在进行中")
+      expect(run.out).toContain("从断点续跑")
+      // 拒绝路径零副作用: 配置/PLAN/本轮标记原样,未建轮次归档、未动 prior-kb
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(before.config)
+      expect(await Bun.file(join(dir, "PLAN.md")).text()).toBe(before.plan)
+      expect(await Bun.file(join(dir, ".auto/tool.json")).text()).toBe(before.marker)
+      expect(await Bun.file(join(dir, "docs")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
