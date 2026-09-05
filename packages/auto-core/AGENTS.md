@@ -21,7 +21,7 @@
 
 ## 核心/外壳契约
 
-本包为核心,壳包(`packages/auto` 通用 CLI/bin `opencode-auto`、`packages/auto-migrate` 简易 CLI/bin `opencode-migrate`)经子路径单向依赖本包;**壳分支不得改本包**,差异经 `setShellProfile`/`registerTemplate`/参数透传注入。分支模型(核心改动只落 auto-core 分支、壳分支定期 merge auto-core 刷新快照、auto 为集成分支)与新壳接入清单见 [docs/shell-contract.md](./docs/shell-contract.md)。
+本包为核心,壳包(`packages/auto` 通用 CLI/bin `opencode-auto`,及各壳分支的简易壳 `packages/<name>`,包名与 bin 由各壳自行命名、核心不记录)经子路径单向依赖本包;**壳分支不得改本包**,差异经 `setShellProfile`/`registerTemplate`/参数透传注入。分支模型(核心改动只落 auto-core 分支、壳分支定期 merge auto-core 刷新快照、auto 为集成分支)与新壳接入清单见 [docs/shell-contract.md](./docs/shell-contract.md)。
 
 ## 导航(按改动定位)
 
