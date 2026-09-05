@@ -1,8 +1,9 @@
 // 提示词模板装载与渲染(文案与逻辑分离)。全部会话提示词以文件模板管理: 内置
 // 模板在 templates/prompts/(经 `with { type: "file" }` 编译期嵌入二进制,
 // readFileSync 在编译产物中同样可读嵌入路径);目标目录 .opencode/auto/prompts/
-// 下同名 .md 可覆盖内置模板(_partials.md 按节名合并共享片段)。协议敏感模板
-// 覆盖时校验关键协议内容仍在,防止覆盖后丢失 driver 解析会话产出的依据。
+// 下同名 .md 可覆盖内置模板(_partials.md 按节名合并共享片段);外壳另可经
+// registerTemplate 登记附加模板(物理拆包后的壳层扩展点)。协议敏感模板覆盖时
+// 校验关键协议内容仍在,防止覆盖后丢失 driver 解析会话产出的依据。
 //
 // 模板语法(刻意保持最小;清单类数据由调用方预拼接为字符串,不做循环):
 //   {{var}}             变量: string 直接替换;boolean/undefined 渲染为空
@@ -19,11 +20,13 @@ import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFinalTask from "../templates/prompts/final-task.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
+import tplInferSource from "../templates/prompts/infer-source.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
 import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file" }
+import tplPriorKnowledge from "../templates/prompts/prior-knowledge.md" with { type: "file" }
 import tplReview from "../templates/prompts/review.md" with { type: "file" }
 import tplReviewFix from "../templates/prompts/review-fix.md" with { type: "file" }
 import tplSubtask from "../templates/prompts/subtask.md" with { type: "file" }
@@ -52,10 +55,12 @@ const embedded: Record<string, string> = {
   "final-task": tplFinalTask,
   fix: tplFix,
   "handoff-steer": tplHandoffSteer,
+  "infer-source": tplInferSource,
   knowledge: tplKnowledge,
   "number-recovery": tplNumberRecovery,
   "phase-handover": tplPhaseHandover,
   "phase-plan": tplPhasePlan,
+  "prior-knowledge": tplPriorKnowledge,
   review: tplReview,
   "review-fix": tplReviewFix,
   subtask: tplSubtask,
@@ -74,6 +79,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   decompose: ["- [ ]"],
   "final-task": ["策略: 重构|修补|无", "结论: 通过", "结论: 差距"],
   "handoff-steer": ["状态: 继续", "状态: 完成"],
+  "infer-source": ['"sourceDir"', '"blocked"'],
   "number-recovery": [".auto/next-task"],
   "phase-handover": ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引", "handover.md"],
   "phase-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
@@ -82,6 +88,12 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "verify-judge": ["结论: 通过", "结论: 差距", "结论: 重验", ".auto/verify.md", "verified-command"],
   "verify-script-gen": ["#!/usr/bin/env bash"],
 }
+
+// 动态注册表: 外壳经 registerTemplate 登记的附加模板与协议标记。独立于 embedded
+// 存放,usePromptLibrary 重载(目标目录覆盖装载)后仍保留;与内置模板同名时注册
+// 内容生效(外壳可整体替换内置文案),目标目录覆盖始终为最高优先。
+const registered: Record<string, string> = {}
+const registeredMarkers: Record<string, string[]> = {}
 
 type Library = { dir: string | undefined; templates: Record<string, string>; partials: Record<string, string> }
 
@@ -102,6 +114,8 @@ function readOverlayDir(dir: string): string[] {
 function loadLibrary(dir: string | undefined): Library {
   const templates: Record<string, string> = {}
   for (const [name, path] of Object.entries(embedded)) templates[name] = readTemplate(path)
+  Object.assign(templates, registered)
+  const markers = { ...PROTOCOL_MARKERS, ...registeredMarkers }
   let partials = parsePartials(templates["_partials"]!)
   if (dir) {
     const overlayDir = join(dir, ".opencode", "auto", "prompts")
@@ -113,7 +127,7 @@ function loadLibrary(dir: string | undefined): Library {
         partials = { ...partials, ...parsePartials(content) }
         continue
       }
-      const missing = (PROTOCOL_MARKERS[name] ?? []).filter((marker) => !content.includes(marker))
+      const missing = (markers[name] ?? []).filter((marker) => !content.includes(marker))
       if (missing.length) {
         throw new Error(
           `提示词模板覆盖 ${join(".opencode", "auto", "prompts", file)} 缺少关键协议内容: ${missing.join("、")}` +
@@ -135,6 +149,22 @@ export function usePromptLibrary(dir: string | undefined): void {
   if (library.dir === dir) return
   library = loadLibrary(dir)
   cache.clear()
+}
+
+// 登记附加模板(外壳启动时调用): text 为模板全文(支持与内置相同的模板语法),
+// markers 为协议敏感模板的必备内容(目标目录覆盖时的校验依据,同 PROTOCOL_MARKERS,
+// 省略 = 非协议敏感)。重复注册以后者为准;_partials 走目标目录覆盖机制,不接受
+// 注册。注册即时生效并跨 usePromptLibrary 重载保留。
+export function registerTemplate(name: string, text: string, markers?: string[]): void {
+  if (!name) throw new Error("模板名不能为空")
+  if (name === "_partials") throw new Error("共享片段经目标目录 _partials.md 覆盖,不接受注册")
+  const content = text.trim()
+  if (!content) throw new Error(`模板 ${name} 的内容不能为空`)
+  registered[name] = content
+  if (markers && markers.length) registeredMarkers[name] = markers
+  else delete registeredMarkers[name]
+  library.templates[name] = content
+  cache.delete(name)
 }
 
 export function renderTemplate(name: string, ctx: Ctx): string {

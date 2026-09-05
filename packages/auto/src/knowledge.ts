@@ -1,7 +1,8 @@
 import { readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { renderKnowledge } from "./prompt"
+import { log } from "./log"
+import { renderKnowledge, renderPriorKnowledge } from "./prompt"
 import { requireArtifact, type Opts } from "./runner"
 
 // k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(docs/fixme-knowledge-design.md
@@ -64,4 +65,76 @@ export async function extractKnowledge(
   )
   if (produced === true) return { type: "ok", file }
   return { type: "failed", question: produced.question }
+}
+
+// —— 前置知识提取(专用二次迁移工具,docs/specialized-tool-design.md §3)——
+
+// 前置知识文档目录(相对目标目录): 已有迁移结果(不限于本工具此前的轮次)的蒸馏
+// 产物。与 k 阶段的 docs/migration-kb/ 分离——existingKnowledge 只读各自目录顶层,
+// 前置产物不会被 k 阶段的幂等检查误认为本轮知识,archiveRound 也不移动它(它是
+// 新一轮迁移的输入,不是任何一轮的产物)。
+const PRIOR_KB_DIR = join("docs", "prior-kb")
+
+// 默认输出路径 docs/prior-kb/prior-<时间戳>.md(时间戳与 knowledgeFile 同款)。
+export function priorKnowledgeFile(): string {
+  const stamp = new Date().toISOString().slice(0, 19).replace("T", "_").replaceAll(":", "-")
+  return join(PRIOR_KB_DIR, `prior-${stamp}.md`)
+}
+
+// 幂等检查(与 existingKnowledge 同范式): 目录内已存在非空 .md → 跳过重提取。
+export async function existingPriorKnowledge(dir: string): Promise<string | undefined> {
+  const names = await readdir(join(dir, PRIOR_KB_DIR)).catch(() => [] as string[])
+  for (const name of names.sort()) {
+    if (!name.endsWith(".md")) continue
+    if ((await Bun.file(join(dir, PRIOR_KB_DIR, name)).text()).trim()) return join(PRIOR_KB_DIR, name)
+  }
+  return undefined
+}
+
+// 前置知识提取编排(与 extractKnowledge 同一 requireArtifact 骨架): 失败返回
+// failed 由调用方打 ⚠ 警告后继续(决策: 二次迁移不被文档生成失败污染——参数
+// 推断会话可自行直读原始 docs/)。
+export async function extractPriorKnowledge(
+  client: OpencodeClient,
+  dir: string,
+  opts: Opts,
+  brief?: string,
+): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "failed"; question: string }> {
+  const existing = await existingPriorKnowledge(dir)
+  if (existing) return { type: "skipped", file: existing }
+  const file = priorKnowledgeFile()
+  log(`▶ 开前置知识提取会话(产出 ${file})`)
+  const produced = await requireArtifact(
+    client,
+    { id: "PLAN", title: "前置知识提取(已有迁移结果复盘)", status: "in_progress", attempts: 0, body: "" },
+    renderPriorKnowledge({ file, brief, mode: opts.mode }),
+    opts,
+    {
+      kind: "前置知识提取",
+      artifact: `非空知识文档 ${file}`,
+      detail: "缺失或为空",
+      requirement: `必须把知识文档写入 ${file}(按提示词给出的章节骨架写全;已有迁移结果稀少也要写出骨架并说明原因)。`,
+      commit: { stage: "prior-knowledge", subject: "PLAN prior-kb 前置知识提取" },
+      reset: () => rm(join(dir, file), { force: true }),
+      collect: async () => {
+        const text = await Bun.file(join(dir, file)).text().catch(() => "")
+        return text.trim() ? true : undefined
+      },
+    },
+  )
+  if (produced === true) return { type: "ok", file }
+  return { type: "failed", question: produced.question }
+}
+
+// 前置知识摘要(注入本轮首个阶段规划会话与参数推断会话): docs/prior-kb/ 下全部
+// 非空文档按文件名排序拼接全文。无产物 → undefined。
+export async function priorKnowledgeDigest(dir: string): Promise<string | undefined> {
+  const names = await readdir(join(dir, PRIOR_KB_DIR)).catch(() => [] as string[])
+  const parts: string[] = []
+  for (const name of names.sort()) {
+    if (!name.endsWith(".md")) continue
+    const text = (await Bun.file(join(dir, PRIOR_KB_DIR, name)).text()).trim()
+    if (text) parts.push(`### ${join(PRIOR_KB_DIR, name)}\n\n${text}`)
+  }
+  return parts.length ? parts.join("\n\n") : undefined
 }

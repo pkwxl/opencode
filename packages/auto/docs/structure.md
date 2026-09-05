@@ -23,11 +23,9 @@
   与 .opencode/auto/config.json 置 0o444(AGENTS.md 不在其列,任务可更新它;人工修订
   配置须在 run 外),driver 写入经 allowWrite/reprotect 临时放行,runAll 的 finally 恢复 0o644。
 - `src/server.ts` — opencode server 管理:manage() 缺省 spawn `opencode serve` 并托管生命周期(需 PATH 上有 opencode CLI),显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管;client 为指向当前实例的 Proxy(restart 后既有引用自动生效);syncAgents 依 AGENTS.md 指纹(mtime+size)变更重启;restart 供网络故障换新实例,外部实例返回 false。
-- `src/log.ts` — 输出双通道:verbose(文件记录级别)与 foreground(终端明细/时间戳)分离,
-  `setVerbose` 同开同关、`setInteractive` 只开文件记录;`log` 始终上终端、`vlog` 为 verbose 明细
-  (interactive 下只进文件);`setInput` 注册交互 readline 后 log 打印先清输入行再重绘;run 时把全部
-  输出同步写入目标目录 `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
-- `templates/` — `init` 复制的模板(`PLAN.md`、`PLAN.scaffold.md`——阶段化流程(phases ≠ "m")下 init 产出的 PLAN.md 空模板,无任务标题行、verify 条件渲染,与交接重置态共用;`opencode.json`、`.opencode/agent/auto.md`——契约含"不得删除或改写任何 opencode-auto 标记块、更新其余内容遵守维护规则块"条款,防漂移断言在 test/prompt.test.ts);`templates/prompts/` 为 19 个会话提示词模板 + `_partials.md` 共享片段(编译期嵌入、运行期渲染,init 不复制,目标目录 `.opencode/auto/prompts/` 同名覆盖);`templates/modes/` 为内置模式文件(目标目录 `.opencode/auto/modes/` 同名覆盖/新增)。
+- `src/log.ts` — 输出双通道:verbose(终端明细/时间戳)与 audit(日志文件始终完整记录,免 verbose 门控)分离,`setVerbose` 同开终端与文件、`setInteractive` 只开文件记录、`setAuditLog` 由外壳画像联动(见 src/shell.ts);`log` 始终上终端、`vlog` 为明细(interactive/audit 未开 verbose 时只进文件);`setInput` 注册交互 readline 后 log 打印先清输入行再重绘;run 时把全部输出同步写入目标目录 `.auto/logs/run-<时间戳>.log`(writeSync 逐条直写)。
+- `src/shell.ts` — 外壳画像:核心报文与日志审计语义的外壳级参数(program 报文程序名/bin 管理子命令前缀/agentRecovery 契约缺失恢复指引 init|startup/auditLog 日志始终完整记录),壳层入口经 `setShellProfile` 设置一次;缺省 = 通用壳现状,不设置时核心报文与历史行为逐字节一致(物理拆包后各壳不再需要补丁 runner/loop 文本)。
+- `templates/` — `init` 复制的模板(`PLAN.md`、`PLAN.scaffold.md`——阶段化流程(phases ≠ "m")下 init 产出的 PLAN.md 空模板,无任务标题行、verify 条件渲染,与交接重置态共用;`opencode.json`、`.opencode/agent/auto.md`——契约含"不得删除或改写任何 opencode-auto 标记块、更新其余内容遵守维护规则块"条款,防漂移断言在 test/prompt.test.ts);`templates/prompts/` 为 21 个会话提示词模板 + `_partials.md` 共享片段(编译期嵌入、运行期渲染,init 不复制,目标目录 `.opencode/auto/prompts/` 同名覆盖,外壳另可经 registerTemplate 登记附加模板);`templates/modes/` 为内置模式文件(目标目录 `.opencode/auto/modes/` 同名覆盖/新增)。
 - `docs/verify-review-design.md` — 第三阶段(verify 三段式与 --review 审核循环)与第四阶段(--early 并行审核,以 F 节为唯一设计基准)的设计基准:已确认决策、接口约定与流水线伪代码;G 节为判定会话执行限制与重验协议、H 节为中断恢复/看门狗/判定会话 verify 字段授权的后续修订基准。
 - `docs/mode-final-review-design.md` — `-m/--mode` 模式层(src/mode.ts 注册表,提示词级场景引导)与 `--final-review` 终审闭环(终审阶段为入 PLAN.md 的真任务 T-F\<k\>,Audit→Refactor/Patch→Validate→Finalize 状态机,末行结论协议路由 + 审计轮上限熔断)的设计基准:已确认决策、状态机与恢复规则、文件级改动清单。
 - `docs/fixme-knowledge-design.md` — `--track-fixme` 设计偏差追踪(AUTO-FIXME 注释锚点、driver 确定性扫描产出 tmp/fixme-scan.md、终审 audit 报告末行 `FIXME: CRITICAL=… WARN=… INFO=…` 协议 + CRITICAL 门禁不路由 remediate、finalize 生成前复扫回退 audit@r+1)与 `--extract-knowledge` 迁移知识沉淀的设计基准:已确认决策、本期/未来范围切分、验收标准映射与文件级改动清单。**--extract-knowledge 已按文首"P4 并入阶段化流程"修订被 --phases 的 k(知识提炼)阶段整体认领实现(该 CLI 选项不存在);--track-fixme 仍按 §H P1/P2 待实现,实现前 CLI 不接受该选项。**

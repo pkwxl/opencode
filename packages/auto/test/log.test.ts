@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { log, setInteractive, setLogFile, setVerbose, vlog } from "../src/log"
+import { log, setAuditLog, setInteractive, setLogFile, setVerbose, vlog } from "../src/log"
 
 describe("log", () => {
   let dir: string
@@ -13,6 +13,7 @@ describe("log", () => {
 
   afterEach(async () => {
     setVerbose(false)
+    setAuditLog(false)
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -57,5 +58,23 @@ describe("log", () => {
     const path = setLogFile(dir)
     vlog("明细行")
     expect(await Bun.file(path).text()).toBe("")
+  })
+
+  test("audit(外壳画像 auditLog)下非 verbose 的 vlog 不上终端但仍写入日志文件(带时间戳)", async () => {
+    setAuditLog(true)
+    const path = setLogFile(dir)
+    const lines: string[] = []
+    const original = console.log
+    console.log = (...args: unknown[]) => lines.push(args.join(" "))
+    try {
+      vlog("明细行")
+      log("状态行")
+    } finally {
+      console.log = original
+    }
+    expect(lines).toEqual(["状态行"])
+    const content = await Bun.file(path).text()
+    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 明细行\n/)
+    expect(content).toMatch(/\] 状态行\n/)
   })
 })

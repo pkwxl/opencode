@@ -2,21 +2,25 @@ import { describe, expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
+import { renderAgentContract } from "../src/loop"
 import { parse } from "../src/plan"
 import { renderText, usePromptLibrary } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import {
+  modeCtx,
   renderDecompose,
   renderDryrun,
   renderFinalTask,
   renderFix,
   renderHandoffSteer,
+  renderInferSource,
   renderKnowledge,
   renderNumberRecovery,
   renderPhaseHandover,
   renderPhasePlan,
+  renderPriorKnowledge,
   renderReview,
   renderReviewFix,
   renderSubtask,
@@ -477,6 +481,16 @@ describe("模式注入(-m/--mode)", () => {
     expect(renderWrapup(plan, task)).not.toContain("场景模式注意事项")
     expect(renderWhole(plan, task)).not.toContain("场景模式注意事项")
   })
+
+  test("modeCtx: 共享模式变量组装(壳层自写 render* 的扩展点),verify 条件段与缺省形态", () => {
+    const withVerify = modeCtx(migrate, { verify: true })
+    expect(withVerify.modeName).toBe("migrate")
+    expect(withVerify.modeInit).toContain("优先复用既有的测试/构建命令")
+    const without = modeCtx(migrate)
+    expect(without.modeInit).not.toContain("优先复用既有的测试/构建命令")
+    expect(without.modeExec).toContain("对等行为")
+    expect(modeCtx()).toEqual({ modeName: undefined, modeInit: undefined, modeExec: undefined })
+  })
 })
 
 describe("renderFinalTask", () => {
@@ -773,7 +787,7 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
     const text = renderText(await Bun.file(planTemplate).text(), { verify: true })
     expect(text).toContain("  - verify: command: <建议的验收命令,如 bun test>")
     expect(text).toContain("验证脚本与验证命令的执行权在 driver")
-    expect(text).toContain("opencode-auto check")
+    expect(text).not.toContain("opencode-auto check")
     expect(text).toContain("不要手工编写子任务")
   })
 
@@ -799,6 +813,17 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
 })
 
 describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
+  test("一致性比对口径 = 写入口径:两态渲染文本与原始模板互不相等(含条件块),四组渲染与 renderText 直渲一致", async () => {
+    const raw = await Bun.file(agentTemplate).text()
+    expect(raw).toContain("{{#if verify}}")
+    for (const verify of [true, false]) {
+      for (const testByDriver of [true, false]) {
+        const rendered = await renderAgentContract(verify, testByDriver)
+        expect(rendered).toBe(renderText(raw, { verify, testByDriver }))
+        expect(rendered).not.toBe(raw)
+      }
+    }
+  })
   test("AGENTS.md 条款覆盖全部四类标记块并引用维护规则(防漂移,verify 启用)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const text = renderText(raw, { verify: true })
@@ -842,6 +867,10 @@ describe("模板渲染完整性", () => {
       renderTestHandover({ script: "/s", code: 1, ms: 9, timedOut: true, timeoutReason: "max", out: "/o", seq: 2 }, { handoffFile: "/h", used: 1, limit: 2 }),
       renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
       renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
+      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "意图", mode: migrate }),
+      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md" }),
+      renderInferSource({ file: ".auto/infer.json", brief: "意图", priorKb: "- docs/prior-kb/prior-x.md", known: "- 迁移目标目录: target" }),
+      renderInferSource({ file: ".auto/infer.json" }),
       renderDryrun(),
       renderDecompose(plan, solo),
       renderHandoffSteer(solo),

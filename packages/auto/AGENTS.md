@@ -28,6 +28,7 @@
 - 提示词文案 → 只动 `templates/prompts/*.md`(`src/prompt.ts` 只做数据组装),改后跑 `bun test test/prompt.test.ts`
 - 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`
 - 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
+- 外壳画像(报文程序名/契约恢复指引/日志审计语义参数化)→ `src/shell.ts`
 - 完整文件清单与机制细节 → docs/structure.md、docs/behavior.md
 
 ## 核心不变量(改动前必读)

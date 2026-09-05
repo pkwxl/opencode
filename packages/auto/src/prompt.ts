@@ -212,7 +212,7 @@ export function stageText(stage: FinalStage): string {
 // (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
 // (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
 // prevRound 为上一轮迁移结论摘录(phases-design.md M 节,loop 侧组装: 归档索引/
-// 最终交接/迁移知识),仅续轮(continue 子命令归档上一轮后)的新一轮首个规划会话注入。
+// 最终交接/迁移知识),仅续轮(主程序现场清理归档既有轮次后)的新一轮首个规划会话注入。
 // source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
 // finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
 // numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
@@ -284,8 +284,33 @@ export function renderPhaseHandover(input: { phase: Phase; archive: string; next
 export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
   return renderTemplate("knowledge", {
     file: input.file,
-    modeName: input.mode?.name,
-    modeExec: input.mode && modeText(input.mode.exec, {}),
+    ...modeCtx(input.mode),
+  })
+}
+
+// 前置知识提取会话(外壳的二次迁移编排,src/knowledge.ts extractPriorKnowledge):
+// 旁路一次性,通读已有迁移结果(不限于此前轮次——docs/ 全树、阶段/轮次归档、产出
+// 代码与 git 历史),蒸馏出 docs/prior-kb/ 下的知识文档,作为二次迁移与参数推断
+// 的输入。file 为输出路径(相对目标目录);brief 为项目意图原文(可空)。
+export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec }): string {
+  return renderTemplate("prior-knowledge", {
+    file: input.file,
+    brief: input.brief?.trim() || undefined,
+    ...modeCtx(input.mode),
+  })
+}
+
+// 参数推断会话(外壳的二次迁移编排): config.source/destDir 缺失时,依据前置知识
+// 产物与目录勘察推断迁移源/目标,结论以 JSON 协议整写 file(.auto/infer.json;
+// {"sourceDir","sourcePath","destDir"} 或 {"blocked": 原因}),driver 校验后仅采纳
+// 缺失键。priorKb 为 prior-kb 文档路径清单(预拼接,会话直读);known 为已固化
+// 参数的人类可读描述(预拼接,可空)。
+export function renderInferSource(input: { file: string; brief?: string; priorKb?: string; known?: string }): string {
+  return renderTemplate("infer-source", {
+    file: input.file,
+    brief: input.brief?.trim() || undefined,
+    priorKb: input.priorKb?.trim() || undefined,
+    known: input.known?.trim() || undefined,
   })
 }
 
@@ -323,6 +348,18 @@ export function renderDryrun(): string {
   return renderTemplate("dryrun", {})
 }
 
+// 模式注记上下文(baseCtx 的模式部分,独立导出): 旁路一次性会话(knowledge 等)
+// 与外壳自写的 render* 函数共用同口径的模式变量组装,壳层不必改 prompt.ts。
+// 模式文本先经模板引擎渲染(模式文件可用 {{#if verify}} 条件段)再作为变量注入;
+// 不传模式时三个变量均为 undefined(模板条件段整体消失)。
+export function modeCtx(mode?: ModeSpec, opts: { verify?: boolean } = {}): Ctx {
+  return {
+    modeName: mode?.name,
+    modeInit: mode && modeText(mode.init, opts),
+    modeExec: mode && modeText(mode.exec, opts),
+  }
+}
+
 function doneList(plan: Plan): string {
   return plan.tasks
     .filter((t) => t.status === "done")
@@ -331,10 +368,10 @@ function doneList(plan: Plan): string {
 }
 
 // 公共上下文: head(done 清单)/blocked(阻塞问答)/mode-section(模式注记)三个
-// 共享片段与任务块所需的变量。模式文本先经模板引擎渲染(模式文件可用 {{#if verify}}
-// 条件段,如 migrate 的 verify 字段侧重),再作为变量注入。
+// 共享片段与任务块所需的变量。
 function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
   return {
+    ...modeCtx(opts.mode, opts),
     taskId: task.id,
     taskBlock: `# ${task.id}: ${task.title}\n\n${task.body}`,
     doneList: doneList(plan),
@@ -343,9 +380,6 @@ function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
     question: task.question ?? "",
     answer: task.answer ?? "",
     verify: opts.verify,
-    modeName: opts.mode?.name,
-    modeInit: opts.mode && modeText(opts.mode.init, opts),
-    modeExec: opts.mode && modeText(opts.mode.exec, opts),
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),
     testHandoffFile: opts.testByDriver ? testHandoffFile(task) : undefined,
