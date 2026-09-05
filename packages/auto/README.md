@@ -104,6 +104,7 @@ opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 gi
 | --- | --- |
 | 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"重跑 init 可固化完整配置";init 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没) |
 | 旧脚本 `run -m xxx` / `run --verify` 等 | 退出码 1 + 修订指引(breaking) |
+| 未知的 `--` 选项(含拼错,如 `--next`) | 退出码 1 + 近似名提示(breaking;此前被静默忽略)。`check` / `status` 只接受目录参数,出现任何选项即拒绝 |
 | 重复 `init`(无参数) | 配置不变(全键保留),模板与标记块照常幂等 |
 | `init --verify true` 等 amend | 仅改写显式给出的键,其余保留 |
 | 中途 `verify` on→off | 已 done 任务的 `verified` 字段不回溯;未完成任务此后收尾即 done;`--review` / `--early` 的联动(串行审核/降级提示)按新值生效 |

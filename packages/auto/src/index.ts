@@ -94,6 +94,17 @@ for (let i = 1; i < args.length; i++) {
   }
   flags.set(key, "")
 }
+// 未知选项拦截: 白名单之外的旗标一律报错退出 1,防拼错被静默忽略。宪法级与
+// 历史选项对 init/continue/run 有专属拦截报文,此处放行交由其后各自处理;
+// check/status 不接受任何选项,出现旗标即拒绝。
+const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, "continue", "commit-subtask", "verify-idle", "verify-max"])
+const FLAGLESS = command === "check" || command === "status"
+for (const key of flags.keys()) {
+  if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
+  const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
+  console.error(`未知选项 --${key}${similar.length ? `(是否想用 ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status 只接受目录参数,不接受选项" : ";运行不带子命令的 opencode-auto 可查看用法"}`)
+  process.exit(1)
+}
 const directory = resolve(positional[0] ?? ".")
 
 if (command === "run") {
