@@ -1,18 +1,18 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@opencode-ai/auto",
+  "name": "@opencode-ai/auto-migrate",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "bin": { "opencode-auto": "./src/index.ts" },
+  "bin": { "opencode-migrate": "./src/index.ts" },
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun ./script/build.ts",
     "typecheck": "tsgo --noEmit",
     "test": "bun test"
   },
-  "dependencies": { "@opencode-ai/sdk": "workspace:*", "@opencode-ai/auto-core": "workspace:*" },
+  "dependencies": { "@opencode-ai/auto-core": "workspace:*" },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",

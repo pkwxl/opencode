@@ -4,11 +4,13 @@ import type { Interface } from "node:readline/promises"
 import { mkdirSync, openSync, writeSync } from "node:fs"
 import { join } from "node:path"
 
-// 日志文件始终完整记录全部输出(log 与 vlog)且逐行带时间戳;foreground = 终端
-// 是否显示 vlog 明细与时间戳。--verbose 开;--interactive 关——终端保持干净输出,
-// 避免明细流冲乱常驻输入行,会话明细不上终端但仍进日志文件,使 run 日志成为
-// 不依赖选项的完整审计记录。
+// verbose = 终端是否显示明细与时间戳(--verbose);audit = 日志文件是否始终完整
+// 记录(免 verbose 门控,经外壳画像 setShellProfile 联动,见 src/shell.ts)。
+// --verbose 时终端与文件同开;--interactive 只开文件记录,终端保持干净输出,
+// 避免明细流冲乱常驻输入行。audit 开启时日志文件成为不依赖选项的完整审计记录。
+let verbose = false
 let foreground = false
+let audit = false
 // run 模式下的日志文件描述符;writeSync 逐条直写,进程崩溃或被 kill 也不丢
 // 已输出的内容。
 let fd: number | undefined
@@ -17,12 +19,19 @@ let fd: number | undefined
 let rl: Interface | undefined
 
 export function setVerbose(on: boolean) {
+  verbose = on
   foreground = on
 }
 
-// --interactive: 终端不显示 verbose 明细(日志文件本就始终完整记录)。
+// --interactive: 文件保持完整记录(verbose 或 audit 级),前台不显示 verbose 明细。
 export function setInteractive() {
+  verbose = true
   foreground = false
+}
+
+// 外壳画像联动(setShellProfile 调用): true = vlog 始终写入日志文件并带时间戳。
+export function setAuditLog(on: boolean) {
+  audit = on
 }
 
 export function setInput(input: Interface | undefined) {
@@ -50,9 +59,11 @@ export function log(...args: unknown[]) {
   if (rl) rl.prompt(true)
 }
 
-// verbose 明细(会话部件、上下文用量、变更文件等): 始终写入日志文件,
-// 终端仅 --verbose(foreground)显示;--interactive 下只进日志文件。
+// verbose 明细(会话部件、上下文用量、变更文件等): verbose 或 audit 时记录,
+// 终端仅 --verbose(foreground)显示;--interactive 与 audit(未开 verbose)下只进
+// 日志文件。
 export function vlog(...args: unknown[]) {
+  if (!verbose && !audit) return
   const text = format(args)
   if (foreground) console.log(stamp(text, true))
   record(text)
@@ -62,9 +73,9 @@ function format(args: unknown[]): string {
   return args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")
 }
 
-// 文件行始终带时间戳(writeSync 直写)。
+// 文件行按 verbose 或 audit 记录级别加时间戳(writeSync 直写)。
 function record(text: string) {
-  if (fd !== undefined) writeSync(fd, stamp(text, true) + "\n")
+  if (fd !== undefined) writeSync(fd, stamp(text, verbose || audit) + "\n")
 }
 
 function stamp(text: string, on: boolean): string {

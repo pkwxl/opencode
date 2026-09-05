@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { log, setInteractive, setLogFile, setVerbose, vlog } from "../src/log"
+import { log, setAuditLog, setInteractive, setLogFile, setVerbose, vlog } from "../src/log"
 
 describe("log", () => {
   let dir: string
@@ -13,6 +13,7 @@ describe("log", () => {
 
   afterEach(async () => {
     setVerbose(false)
+    setAuditLog(false)
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -21,10 +22,10 @@ describe("log", () => {
     expect(path).toStartWith(join(dir, ".auto", "logs", "run-"))
     log("第一行")
     log("多行\n输出")
-    // writeSync 直写,无需等待 flush 即可读到;文件行始终带时间戳
+    // writeSync 直写,无需等待 flush 即可读到
     const content = await Bun.file(path).text()
-    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 第一行\n/)
-    expect(content).toMatch(/\] 多行\n\[\d{2}:\d{2}:\d{2}\] 输出\n/)
+    expect(content).toContain("第一行\n")
+    expect(content).toContain("多行\n输出\n")
     expect(await readdir(join(dir, ".auto", "logs"))).toHaveLength(1)
   })
 
@@ -53,17 +54,27 @@ describe("log", () => {
     expect(content).toContain("] 明细行\n")
   })
 
-  test("非 verbose 下 vlog 不上终端但仍写入日志文件", async () => {
+  test("非 verbose 下 vlog 完全静默", async () => {
+    const path = setLogFile(dir)
+    vlog("明细行")
+    expect(await Bun.file(path).text()).toBe("")
+  })
+
+  test("audit(外壳画像 auditLog)下非 verbose 的 vlog 不上终端但仍写入日志文件(带时间戳)", async () => {
+    setAuditLog(true)
     const path = setLogFile(dir)
     const lines: string[] = []
     const original = console.log
     console.log = (...args: unknown[]) => lines.push(args.join(" "))
     try {
       vlog("明细行")
+      log("状态行")
     } finally {
       console.log = original
     }
-    expect(lines).toEqual([])
-    expect(await Bun.file(path).text()).toContain("] 明细行\n")
+    expect(lines).toEqual(["状态行"])
+    const content = await Bun.file(path).text()
+    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 明细行\n/)
+    expect(content).toMatch(/\] 状态行\n/)
   })
 })

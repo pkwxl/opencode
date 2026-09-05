@@ -26,6 +26,7 @@ import { renderDryrun, renderPhaseHandover, renderPhasePlan, stageText } from ".
 import { allowWrite, protect, reprotect, unprotect } from "./protect"
 import { peekProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
+import { shellProfile } from "./shell"
 import { manage, type ServerHandle } from "./server"
 import { renderText, usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -147,8 +148,9 @@ export async function ensureGitignore(directory: string): Promise<boolean> {
 // for a human to resolve the issue outside the session and re-run,
 // 130 = force-killed by double Ctrl+C. A blocked
 // task needs no `answer`: re-running resumes it directly.
-// agent 契约渲染文本: 按 verify/testByDriver 两态渲染内置模板。tool.ts 的模板
-// 维护写入与 runAll 的完整性检查共用本函数,防止写入与比对口径漂移(模板含
+
+// agent 契约渲染文本: 按 verify/testByDriver 两态渲染内置模板。外壳的契约维护
+// 写入与 runAll 的完整性检查共用本函数,防止写入与比对口径漂移(模板含
 // {{#if}} 条件块,拿原始文本比对渲染后的文件必然不一致)。
 export async function renderAgentContract(verify: boolean, testByDriver: boolean): Promise<string> {
   return renderText(await Bun.file(templateAgent).text(), { verify, testByDriver })
@@ -181,7 +183,7 @@ export async function runAll(
     // --permission: 权限请求的处理策略(缺省 ask-deny),透传给 runner 的会话监听。
     permission?: PermissionMode
     // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
-    // 终端明细静默,日志文件始终完整记录)。
+    // 终端明细静默,日志文件保持完整记录)。
     interactive?: boolean
     // driver 托管脚本(verify 与 test)的看门狗: 持续无输出的判定窗口与绝对时长
     // 上限(毫秒),透传给 runner 的 runVerifyScript(config 的 idleTime / idleMax
@@ -209,8 +211,8 @@ export async function runAll(
     // config.destDir 迁移目标目录(可选,相对工作目录),注入阶段规划会话——
     // driver 流程文件与迁移产出经它隔离。
     destDir?: string
-    // 调用方已托管的 server 句柄(专用工具 tool.ts 的前置会话与主循环共用一个
-    // 实例): 提供时不再自行 manage/close,生命周期归调用方。
+    // 调用方已托管的 server 句柄(外壳的前置会话与主循环共用一个实例): 提供
+    // 时不再自行 manage/close,生命周期归调用方。
     managed?: ServerHandle
     // --new-session: 中断恢复时跳过会话复用(仅放弃旧会话上下文,阶段精确重入
     // 保留),透传给 runTask。
@@ -239,19 +241,29 @@ export async function runAll(
   // --early 依赖 verify 脚本执行窗口;未启用 --verify 时窗口不存在,审核降级为串行。
   if (opts.early && !opts.verify) log("ℹ 未启用 --verify,--early 的并行审核窗口不存在,质量审核改为串行执行")
 
-  // --agent 缺省取 auto 契约 agent(工具启动时生成的自主执行契约);完整性检查:
-  // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出;与模板
-  // 不一致仅警告(tool.ts 每次运行已按模板刷新该文件)。
+  // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:
+  // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出并按外壳
+  // 画像提示恢复方式(src/shell.ts);与模板不一致仅警告。
   const agentName = opts.agent ?? "auto"
   const agentFile = join(directory, ".opencode/agent", `${agentName}.md`)
   const agentText = await Bun.file(agentFile).text().catch(() => undefined)
+  const { program, bin, agentRecovery } = shellProfile()
   if (agentText === undefined) {
     log(`⏸ 缺少 agent 契约文件: .opencode/agent/${agentName}.md(缺失会导致下发任务失败: UnknownError)`)
-    log(`  恢复方式: 重新运行 opencode-auto(启动时会按模板重建默认契约),或手工补回该文件`)
+    log(
+      agentRecovery === "startup"
+        ? `  恢复方式: 重新运行 ${program}(启动时会按模板重建默认契约),或手工补回该文件`
+        : `  恢复方式: 运行 ${bin} init ${directory} 重建该文件(或手工补回),然后重新运行`,
+    )
     return 1
   }
+  // init 写入的是按当时 verify/testByDriver 渲染后的契约,比对须用当前配置同样
+  // 渲染(与原始模板全文比对会因 {{#if}} 标记恒不一致,口径同 renderAgentContract)。
   if (agentName === "auto" && agentText !== (await renderAgentContract(Boolean(opts.verify), Boolean(opts.testByDriver)))) {
-    log(`⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),重新运行 opencode-auto 会按模板刷新`)
+    log(
+      `⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),` +
+        (agentRecovery === "startup" ? `重新运行 ${program} 会按模板刷新` : `可运行 ${bin} init ${directory} 刷新`),
+    )
   }
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
@@ -530,10 +542,10 @@ export async function runAll(
             }),
         )
       ).join("\n\n")
-      // 本轮首个规划会话的额外注入(台账为空时): ① 前置知识(专用工具启动时的
-      // 已有迁移结果蒸馏,docs/prior-kb/,设计文档 specialized-tool-design.md §3);
-      // ② 上一轮结论(轮次归档存在时,phases-design.md M 节)。后续阶段照常走
-      // handovers 蒸馏链,不重复注入。
+      // 本轮首个规划会话的额外注入(台账为空时): ① 前置知识(外壳启动时的已有
+      // 迁移结果蒸馏,docs/prior-kb/,见 src/knowledge.ts);② 上一轮结论(轮次
+      // 归档存在时,phases-design.md M 节)。后续阶段照常走 handovers 蒸馏链,
+      // 不重复注入。
       let prevRound: string | undefined
       if (!ledger.done.length) {
         const parts = [await priorKnowledgeDigest(directory), await prevRoundDigest(directory)].filter((part): part is string => Boolean(part?.trim()))
@@ -771,6 +783,7 @@ export async function runAll(
     repl?.close()
     watcher?.close()
     progress?.close()
+    // 托管句柄(managed)的生命周期归调用方,此处不关闭。
     if (!opts.managed) server?.close()
     await unprotect(directory)
   }

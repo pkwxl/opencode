@@ -9,6 +9,7 @@ import { verifyTmpDir } from "../src/verify"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import {
+  modeCtx,
   renderDecompose,
   renderDryrun,
   renderFinalTask,
@@ -479,6 +480,16 @@ describe("模式注入(-m/--mode)", () => {
     expect(renderSubtask(plan, task, "编写迁移脚本的 schema 部分")).not.toContain("场景模式注意事项")
     expect(renderWrapup(plan, task)).not.toContain("场景模式注意事项")
     expect(renderWhole(plan, task)).not.toContain("场景模式注意事项")
+  })
+
+  test("modeCtx: 共享模式变量组装(壳层自写 render* 的扩展点),verify 条件段与缺省形态", () => {
+    const withVerify = modeCtx(migrate, { verify: true })
+    expect(withVerify.modeName).toBe("migrate")
+    expect(withVerify.modeInit).toContain("优先复用既有的测试/构建命令")
+    const without = modeCtx(migrate)
+    expect(without.modeInit).not.toContain("优先复用既有的测试/构建命令")
+    expect(without.modeExec).toContain("对等行为")
+    expect(modeCtx()).toEqual({ modeName: undefined, modeInit: undefined, modeExec: undefined })
   })
 })
 

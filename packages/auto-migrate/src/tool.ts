@@ -5,20 +5,20 @@
 // 冲突校验,然后委托本模块。
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
-import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "./config"
-import { existingKnowledge, extractPriorKnowledge } from "./knowledge"
-import { banner, log } from "./log"
-import { renderAgentContract, runAll } from "./loop"
-import type { ModeSpec } from "./mode"
-import { load, parse } from "./plan"
-import { archiveRound, currentRound, formatPhases, PHASE_ORDER, readLedger, renderPlanScaffold } from "./phases"
-import { renderInferSource } from "./prompt"
-import { forgetProgress } from "./resume"
-import type { PermissionMode } from "./runner"
-import { requireArtifact } from "./runner"
-import { manage } from "./server"
-import { usePromptLibrary } from "./template"
-import templateConfig from "../templates/opencode.json" with { type: "file" }
+import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
+import { existingKnowledge, extractPriorKnowledge } from "@opencode-ai/auto-core/knowledge"
+import { banner, log } from "@opencode-ai/auto-core/log"
+import { renderAgentContract, runAll } from "@opencode-ai/auto-core/loop"
+import type { ModeSpec } from "@opencode-ai/auto-core/mode"
+import { load, parse } from "@opencode-ai/auto-core/plan"
+import { archiveRound, currentRound, formatPhases, PHASE_ORDER, readLedger, renderPlanScaffold } from "@opencode-ai/auto-core/phases"
+import { renderInferSource } from "@opencode-ai/auto-core/prompt"
+import { forgetProgress } from "@opencode-ai/auto-core/resume"
+import type { PermissionMode } from "@opencode-ai/auto-core/runner"
+import { requireArtifact } from "@opencode-ai/auto-core/runner"
+import { manage } from "@opencode-ai/auto-core/server"
+import { usePromptLibrary } from "@opencode-ai/auto-core/template"
+import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
 // 本轮标记(非版本化,设计文档 §1): 现场清理后写入 { round: N } = 本轮开始,此后
 // 创建的文件视为"自己的",中断重跑依断点续跑、不再清理现场;二次迁移全部完成后写

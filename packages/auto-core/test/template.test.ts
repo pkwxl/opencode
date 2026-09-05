@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parsePartials, promptTemplateNames, renderText, renderTemplate, usePromptLibrary } from "../src/template"
+import { parsePartials, promptTemplateNames, registerTemplate, renderText, renderTemplate, usePromptLibrary } from "../src/template"
 
 // 每个用例后恢复仅内置,避免覆盖状态泄漏到其他测试文件。
 afterEach(() => usePromptLibrary(undefined))
@@ -203,5 +203,58 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("动态注册(registerTemplate)", () => {
+  test("注册附加模板: 即时可渲染(含条件语法)并进入模板名清单", () => {
+    registerTemplate("shell-extra", "外壳附加提示词: {{topic}}{{#if strict}}(严格){{/if}}")
+    expect(renderTemplate("shell-extra", { topic: "参数推断", strict: true })).toBe("外壳附加提示词: 参数推断(严格)")
+    expect(renderTemplate("shell-extra", { topic: "参数推断" })).toBe("外壳附加提示词: 参数推断")
+    expect(promptTemplateNames()).toContain("shell-extra")
+  })
+
+  test("注册跨 usePromptLibrary 重载保留;与内置同名时注册内容生效,目标目录覆盖仍最高优先", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      registerTemplate("shell-extra", "注册版: {{topic}}")
+      registerTemplate("dryrun", "外壳替换后的权限预检提示词")
+      usePromptLibrary(dir)
+      expect(renderTemplate("shell-extra", { topic: "甲" })).toBe("注册版: 甲")
+      expect(renderTemplate("dryrun", {})).toBe("外壳替换后的权限预检提示词")
+      // 目标目录同名覆盖 > 注册 > 内置(同目录二次装载须先重置,装载幂等短路)
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "dryrun.md"), "用户覆盖版预检提示词")
+      usePromptLibrary(undefined)
+      usePromptLibrary(dir)
+      expect(renderTemplate("dryrun", {})).toBe("用户覆盖版预检提示词")
+      expect(renderTemplate("shell-extra", { topic: "乙" })).toBe("注册版: 乙")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("带 markers 注册: 目标目录覆盖缺失协议行时报错", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      registerTemplate("shell-protocol", "外壳协议模板", ["结论: 通过"])
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "shell-protocol.md"), "覆盖版丢了协议行")
+      expect(() => usePromptLibrary(dir)).toThrow(/shell-protocol\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
+      writeFileSync(join(overlay, "shell-protocol.md"), "覆盖版保留协议行: 结论: 通过")
+      usePromptLibrary(dir)
+      expect(renderTemplate("shell-protocol", {})).toBe("覆盖版保留协议行: 结论: 通过")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("空模板名 / 空内容 / _partials 注册拒绝", () => {
+    expect(() => registerTemplate("", "内容")).toThrow("模板名不能为空")
+    expect(() => registerTemplate("shell-empty", "   ")).toThrow("内容不能为空")
+    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow("不接受注册")
   })
 })

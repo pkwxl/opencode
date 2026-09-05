@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { existingPriorKnowledge, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
+import { existingPriorKnowledge, priorKnowledgeDigest, priorKnowledgeFile } from "@opencode-ai/auto-core/knowledge"
 import { needsSceneCleanup, parseInferOutput, readToolState } from "../src/tool"
 
 describe("parseInferOutput(参数推断产物协议)", () => {
