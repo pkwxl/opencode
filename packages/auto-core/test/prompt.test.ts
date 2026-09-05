@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
 import { renderAgentContract } from "../src/loop"
 import { parse } from "../src/plan"
+import type { Phase } from "../src/phases"
 import { renderText, usePromptLibrary } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import {
+  decomposeTemplateName,
   modeCtx,
   renderDecompose,
   renderDryrun,
@@ -61,7 +64,7 @@ describe("renderDecompose", () => {
   test("要求只读分析并产出 subtasks.md 检查项", () => {
     const text = renderDecompose(plan, task)
     expect(text).toContain("docs/T-002.subtasks.md")
-    expect(text).toContain("- [ ] <子任务描述>")
+    expect(text).toContain("- [ ] <子任务描述;末尾注明该项的产出>")
     expect(text).toContain("只做任务分解,不写实现代码")
     expect(text).toContain("不修改任何实现代码")
     expect(text).toContain("question 工具")
@@ -79,6 +82,71 @@ describe("renderDecompose", () => {
     // 自动答复要求记录决策过程并标注 AUTO-DECISION
     expect(text).toContain("记录决策过程")
     expect(text).toContain("AUTO-DECISION")
+  })
+})
+
+describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
+  const phaseCases: Array<[Phase, string, string]> = [
+    ["a", "分析", "按问题/疑点/子系统/风险面切分"],
+    ["d", "设计", "按设计关注点切分"],
+    ["m", "迁移实现", "垂直薄切片优先"],
+    ["t", "测试", "按测试面/场景族切分"],
+    ["v", "验收", "按验收维度切分"],
+    ["k", "知识提炼", "按知识产物切分"],
+  ]
+
+  test("各阶段渲染: 注入阶段名与该阶段的切分准则段", () => {
+    for (const [phase, name, rule] of phaseCases) {
+      const text = renderDecompose(plan, task, { phase })
+      expect(text).toContain(`当前处于阶段 ${name}`)
+      expect(text).toContain(rule)
+      // 共通粒度准则段(decompose-rule)与检查项协议
+      expect(text).toContain("分解粒度准则")
+      expect(text).toContain("以任务描述为基准")
+      expect(text).toContain("- [ ]")
+    }
+  })
+
+  test("m 默认: 未传 phase 时选择 decompose-m", () => {
+    const text = renderDecompose(plan, task)
+    expect(text).toContain("当前处于阶段 迁移实现")
+    expect(text).toContain("垂直薄切片优先")
+  })
+
+  test("fine 两态: 细粒度段按开关出现/消失;contextBudget 注入半预算", () => {
+    const off = renderDecompose(plan, task, { contextLimit: 100_000 })
+    expect(off).toContain("约 50.0k tokens 量级")
+    expect(off).not.toContain("细粒度模式")
+    const on = renderDecompose(plan, task, { fine: true })
+    expect(on).toContain("细粒度模式")
+    expect(on).toContain("宁细勿粗")
+    expect(on).toContain("约 32.0k tokens 量级")
+  })
+
+  test("回退: 库中无 decompose-<phase> 时回退通用 decompose(缺省按 m 查名)", () => {
+    expect(decomposeTemplateName("m", ["decompose"])).toBe("decompose")
+    expect(decomposeTemplateName(undefined, ["decompose"])).toBe("decompose")
+    expect(decomposeTemplateName("v", ["decompose", "decompose-v"])).toBe("decompose-v")
+    expect(decomposeTemplateName(undefined, ["decompose", "decompose-m"])).toBe("decompose-m")
+  })
+
+  test("目标目录覆盖 decompose-m.md: 缺检查项协议行报错并指明文件,保留则生效", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-prompt-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,丢了检查项协议")
+      expect(() => usePromptLibrary(dir)).toThrow(/decompose-m\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/- \[ \]/)
+      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,保留协议: - [ ] 项")
+      usePromptLibrary(dir)
+      expect(renderDecompose(plan, task)).toBe("自定义分解提示词,保留协议: - [ ] 项")
+      // 未覆盖的阶段模板仍取内置
+      expect(renderDecompose(plan, task, { phase: "a" })).toContain("按问题/疑点/子系统/风险面切分")
+    } finally {
+      usePromptLibrary(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

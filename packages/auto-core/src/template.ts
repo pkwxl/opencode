@@ -16,6 +16,12 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import tplDecompose from "../templates/prompts/decompose.md" with { type: "file" }
+import tplDecomposeA from "../templates/prompts/decompose-a.md" with { type: "file" }
+import tplDecomposeD from "../templates/prompts/decompose-d.md" with { type: "file" }
+import tplDecomposeK from "../templates/prompts/decompose-k.md" with { type: "file" }
+import tplDecomposeM from "../templates/prompts/decompose-m.md" with { type: "file" }
+import tplDecomposeT from "../templates/prompts/decompose-t.md" with { type: "file" }
+import tplDecomposeV from "../templates/prompts/decompose-v.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFinalTask from "../templates/prompts/final-task.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
@@ -51,6 +57,12 @@ type Node =
 // 登记到这里(用户自定义/覆盖走目标目录 .opencode/auto/prompts/,无需改源码)。
 const embedded: Record<string, string> = {
   decompose: tplDecompose,
+  "decompose-a": tplDecomposeA,
+  "decompose-d": tplDecomposeD,
+  "decompose-k": tplDecomposeK,
+  "decompose-m": tplDecomposeM,
+  "decompose-t": tplDecomposeT,
+  "decompose-v": tplDecomposeV,
   dryrun: tplDryrun,
   "final-task": tplFinalTask,
   fix: tplFix,
@@ -77,6 +89,12 @@ const embedded: Record<string, string> = {
 // 协议敏感模板的必备内容: 目标目录覆盖这些模板时,装载期校验协议标记仍在。
 const PROTOCOL_MARKERS: Record<string, string[]> = {
   decompose: ["- [ ]"],
+  "decompose-a": ["- [ ]"],
+  "decompose-d": ["- [ ]"],
+  "decompose-k": ["- [ ]"],
+  "decompose-m": ["- [ ]"],
+  "decompose-t": ["- [ ]"],
+  "decompose-v": ["- [ ]"],
   "final-task": ["策略: 重构|修补|无", "结论: 通过", "结论: 差距"],
   "handoff-steer": ["状态: 继续", "状态: 完成"],
   "infer-source": ['"sourceDir"', '"blocked"'],

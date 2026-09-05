@@ -64,10 +64,16 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("21 个会话模板与 _partials 齐备", () => {
+  test("27 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "decompose",
+      "decompose-a",
+      "decompose-d",
+      "decompose-k",
+      "decompose-m",
+      "decompose-t",
+      "decompose-v",
       "dryrun",
       "final-task",
       "fix",
@@ -151,9 +157,50 @@ describe("内置模板注册表", () => {
       verify: true,
       testByDriver: true,
       handoverTest: true,
+      contextBudget: "32.0k",
+      fine: true,
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
+describe("分阶段分解模板 decompose-<phase>", () => {
+  const six = ["a", "d", "m", "t", "v", "k"] as const
+
+  test("六份齐备: 均含检查项协议、粒度准则段与阶段准则句", () => {
+    usePromptLibrary(undefined)
+    for (const letter of six) {
+      const text = renderTemplate(`decompose-${letter}`, {
+        taskId: "T-001",
+        taskBlock: "# T-001\n\n正文",
+        phaseName: "阶段名",
+        contextBudget: "32.0k",
+        fine: false,
+      })
+      expect(text).toContain("- [ ]")
+      expect(text).toContain("只做任务分解,不写实现代码")
+      expect(text).toContain("当前处于阶段 阶段名")
+      expect(text).toContain("分解粒度准则")
+      expect(text).toContain("以任务描述为基准")
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+
+  test("fine 两态: 细粒度段按开关出现/消失(片段内条件段与模板同级求值)", () => {
+    usePromptLibrary(undefined)
+    const ctx = { taskId: "T-001", taskBlock: "# T-001\n\n正文", phaseName: "分析", contextBudget: "32.0k" }
+    for (const letter of six) {
+      const on = renderTemplate(`decompose-${letter}`, { ...ctx, fine: true })
+      expect(on).toContain("细粒度模式")
+      expect(on).toContain("宁细勿粗")
+      expect(on).toContain("约 32.0k tokens 量级")
+      expect(on).not.toMatch(/\{\{|\}\}/)
+      const off = renderTemplate(`decompose-${letter}`, { ...ctx, fine: false })
+      expect(off).not.toContain("细粒度模式")
+      expect(off).not.toContain("宁细勿粗")
+      expect(off).not.toMatch(/\{\{|\}\}/)
     }
   })
 })

@@ -6,14 +6,27 @@ import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import type { Plan, Task } from "./plan"
 import { phaseText, type Phase } from "./phases"
-import { renderTemplate, renderText, type Ctx } from "./template"
+import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
 // verify: config.verify(任务级三段式验收开关)。false 时与 verify 相关的描述
 // 从会话提示词中整体消失(验收机制不存在,提示词不得提及)。
 // testByDriver/handoverTest: --test-by-driver 测试执行协议(与 verify 正交,
 // run 级开关)。true 时执行类模板(subtask/whole/fix)注入协议段。
-type Opts = { mode?: ModeSpec; verify?: boolean; testByDriver?: boolean; handoverTest?: boolean }
+// phase/contextLimit/fine: 阶段化流程的当前阶段字母、上下文预算基线(tokens)与
+// 细粒度分解开关(OPENCODE_AUTO_DECOMPOSE_FINE,开关层接线见
+// fork-decompose-design.md §4.6)——分解模板 decompose-<phase> 据此选择与渲染
+// (phaseName 注入阶段名;contextBudget = 半预算的粒度上限描述;fine 注入
+// 细粒度准则段)。
+type Opts = {
+  mode?: ModeSpec
+  verify?: boolean
+  testByDriver?: boolean
+  handoverTest?: boolean
+  phase?: Phase
+  contextLimit?: number
+  fine?: boolean
+}
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
 export const VERDICT_FILE = ".auto/verify.md"
@@ -88,8 +101,18 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
 // Decomposition session: read-only analysis, then write the subtask list to
 // docs/<id>.subtasks.md. The driver parses it and injects the checklist into
 // PLAN.md itself, so the session must not touch PLAN.md.
+// 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
+// 开启细粒度档),库中无此名回退通用 decompose。
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
-  return renderTemplate("decompose", baseCtx(plan, task, opts))
+  return renderTemplate(decomposeTemplateName(opts.phase, promptTemplateNames()), baseCtx(plan, task, opts))
+}
+
+// decompose 模板名解析(纯函数,便于单测): 阶段字母 → decompose-<phase>(缺省
+// m);names 为当前生效模板名清单(promptTemplateNames()),无此名时回退通用
+// decompose。
+export function decomposeTemplateName(phase: Phase | undefined, names: string[]): string {
+  const candidate = `decompose-${phase ?? "m"}`
+  return names.includes(candidate) ? candidate : "decompose"
 }
 
 // Subtask session: exactly one checklist item. The session implements it and
@@ -368,8 +391,20 @@ function doneList(plan: Plan): string {
 }
 
 // 公共上下文: head(done 清单)/blocked(阻塞问答)/mode-section(模式注记)三个
-// 共享片段与任务块所需的变量。
+// 共享片段与任务块所需的变量;phase/phaseName 缺省 m(单阶段流程,与
+// renderDecompose 的模板选择一致),contextBudget/fine 供分解粒度准则段
+// (decompose-rule)使用。
+// 上下文预算基线缺省与 runner 的 DEFAULT_CONTEXT_LIMIT 一致(64k tokens);本地
+// 声明避免 prompt 层反向依赖 runner。formatTokens 与 runner 日志同口径。
+const DEFAULT_CONTEXT_LIMIT = 64_000
+
+function formatTokens(n: number): string {
+  if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
 function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
+  const phase = opts.phase ?? "m"
   return {
     ...modeCtx(opts.mode, opts),
     taskId: task.id,
@@ -383,6 +418,10 @@ function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),
     testHandoffFile: opts.testByDriver ? testHandoffFile(task) : undefined,
+    phase,
+    phaseName: phaseText(phase),
+    contextBudget: formatTokens((opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 2),
+    fine: Boolean(opts.fine),
   }
 }
 
