@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdtemp, readdir, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { load } from "@opencode-ai/auto-core/plan"
@@ -205,6 +205,33 @@ describe("CLI 解析: run 侧选项与配置", () => {
         expect(run.err).toBe("")
         expect(run.out).toContain("⚙ 项目配置(.opencode/auto/config.json)")
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("未知选项拦截: 拼错旗标退出 1 并给近似名提示;check/status 拒绝任何选项;写盘前拦截", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // init 侧: 拼错的旗标不再被静默忽略
+      const typo = await runCli(["init", dir, "--next"])
+      expect(typo.code).toBe(1)
+      expect(typo.err).toContain("未知选项 --next")
+      // 前缀近似名给出提示
+      const similar = await runCli(["init", dir, "--idle"])
+      expect(similar.err).toContain("未知选项 --idle")
+      expect(similar.err).toContain("--idle-time")
+      expect(similar.err).toContain("--idle-max")
+      // = 形式同样拦截;拦截发生在任何写盘之前(init 未固化配置)
+      const eq = await runCli(["init", dir, "--nex=1"])
+      expect(eq.code).toBe(1)
+      expect(eq.err).toContain("未知选项 --nex")
+      expect(await readdir(dir)).toEqual([])
+      // check/status 只接受目录参数,出现旗标即拒绝
+      const checkFlag = await runCli(["check", dir, "--verbose"])
+      expect(checkFlag.code).toBe(1)
+      expect(checkFlag.err).toContain("未知选项 --verbose")
+      expect(checkFlag.err).toContain("只接受目录参数")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

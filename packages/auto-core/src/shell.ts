@@ -1,5 +1,5 @@
 // 外壳画像: 核心报文与日志审计语义的外壳级参数(壳层入口启动时经 setShellProfile
-// 设置一次,见 AUTO_CORE_INTEGRATION_PLAN 阶段二)。核心代码只读本画像、不感知
+// 设置一次,见 plans/AUTO_CORE_INTEGRATION_PLAN 阶段二)。核心代码只读本画像、不感知
 // 具体外壳——通用壳(auto)与简易壳(migrate)的行为差异(报文程序名、agent 契约
 // 恢复指引、日志审计语义)全部经此参数化,消除外壳对 runner/loop 文本的补丁。
 import { setAuditLog } from "./log"
