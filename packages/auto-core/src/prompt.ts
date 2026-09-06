@@ -4,16 +4,29 @@
 // 的调用点不感知模板机制。
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
-import type { Plan, Task } from "./plan"
+import { subtasks, type Plan, type Task } from "./plan"
 import { phaseText, type Phase } from "./phases"
-import { renderTemplate, renderText, type Ctx } from "./template"
+import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
 // verify: config.verify(任务级三段式验收开关)。false 时与 verify 相关的描述
 // 从会话提示词中整体消失(验收机制不存在,提示词不得提及)。
 // testByDriver/handoverTest: --test-by-driver 测试执行协议(与 verify 正交,
 // run 级开关)。true 时执行类模板(subtask/whole/fix)注入协议段。
-type Opts = { mode?: ModeSpec; verify?: boolean; testByDriver?: boolean; handoverTest?: boolean }
+// phase/contextLimit/fine: 阶段化流程的当前阶段字母、上下文预算基线(tokens)与
+// 细粒度分解开关(OPENCODE_AUTO_DECOMPOSE_FINE,开关层接线见
+// fork-decompose-design.md §4.6)——分解模板 decompose-<phase> 据此选择与渲染
+// (phaseName 注入阶段名;contextBudget = 半预算的粒度上限描述;fine 注入
+// 细粒度准则段)。
+type Opts = {
+  mode?: ModeSpec
+  verify?: boolean
+  testByDriver?: boolean
+  handoverTest?: boolean
+  phase?: Phase
+  contextLimit?: number
+  fine?: boolean
+}
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
 export const VERDICT_FILE = ".auto/verify.md"
@@ -85,11 +98,34 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
   })
 }
 
+// 理解会话(fork 三段式 ①,fork-decompose 设计 §6): 只读理解 + 预算内选读 +
+// 写 docs/<id>.context.md 四节摘要;摘要同时是磁盘态兜底(fork 失败冷启动输入、
+// wrapup/后续任务低成本引用)与 digest 模式的基点原料(逐字注入基点会话)。
+export function renderUnderstand(plan: Plan, task: Task, opts: Opts = {}): string {
+  return renderTemplate("understand", baseCtx(plan, task, opts))
+}
+
+// digest 基点会话(①′,driver 主导,fork-decompose 设计 §7): 摘要全文 + 一句
+// 确认;会话结束即成为该任务全部分叉(decompose/子任务)的前缀基点。
+export function renderContextBase(task: Task, digest: string): string {
+  return renderTemplate("context-base", { taskId: task.id, digest })
+}
+
 // Decomposition session: read-only analysis, then write the subtask list to
 // docs/<id>.subtasks.md. The driver parses it and injects the checklist into
 // PLAN.md itself, so the session must not touch PLAN.md.
+// 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
+// 开启细粒度档),库中无此名回退通用 decompose。
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
-  return renderTemplate("decompose", baseCtx(plan, task, opts))
+  return renderTemplate(decomposeTemplateName(opts.phase, promptTemplateNames()), baseCtx(plan, task, opts))
+}
+
+// decompose 模板名解析(纯函数,便于单测): 阶段字母 → decompose-<phase>(缺省
+// m);names 为当前生效模板名清单(promptTemplateNames()),无此名时回退通用
+// decompose。
+export function decomposeTemplateName(phase: Phase | undefined, names: string[]): string {
+  const candidate = `decompose-${phase ?? "m"}`
+  return names.includes(candidate) ? candidate : "decompose"
 }
 
 // Subtask session: exactly one checklist item. The session implements it and
@@ -98,13 +134,37 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
 // handoff-steer 同样适用于子任务会话: 上下文达到 2x contextLimit 时 driver
 // 插入交接提示,会话把进度写入 docs/<id>.handoff.md 后由新会话续跑;
 // continuation 表示此前会话因上下文限制中断,需先读交接文档继续。
-export function renderSubtask(plan: Plan, task: Task, subtask: string, opts: Opts & { continuation?: boolean } = {}): string {
+// index/subtaskList/outputFile/warm(fork 三段式流水线,fork-decompose 设计
+// §8): 注入全量检查项列表与「你本次只负责其中的第 N 项」、文档类产出的独立
+// 落盘文件(driver 机械命名)、warm=会话从分叉基点继承了任务背景上下文(冷启动
+// 则提示先读 context.md 摘要)。缺省时由任务正文检查项推导 index/列表/产出文件
+// (与 runner 子任务循环同口径),旧调用不传参仍渲染完整提示词。
+export function renderSubtask(
+  plan: Plan,
+  task: Task,
+  subtask: string,
+  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean } = {},
+): string {
+  const items = subtasks(task.body)
+  const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
+  const index = at >= 0 ? String(at + 1) : undefined
   return renderTemplate("subtask", {
     ...baseCtx(plan, task, opts),
     subtask,
     continuation: Boolean(opts.continuation),
     handoffFile: handoffFile(task),
+    index,
+    subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.text}`).join("\n") : undefined),
+    outputFile: opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined),
+    warm: Boolean(opts.warm),
   })
+}
+
+// 子任务产物文件(相对目标目录): 文档/分析/设计类子任务的独立落盘文件,driver
+// 机械命名(两位递增,避免 slug 清洗歧义),标题写在文件首行;代码类产出直接落
+// 源码树,不重复落文档(fork-decompose 设计 §4.7)。
+export function subtaskOutputFile(task: Task, index: number): string {
+  return `docs/${task.id}/S${String(index).padStart(2, "0")}.md`
 }
 
 // Wrap-up session: every subtask is already ticked by the driver. Only docs
@@ -368,8 +428,20 @@ function doneList(plan: Plan): string {
 }
 
 // 公共上下文: head(done 清单)/blocked(阻塞问答)/mode-section(模式注记)三个
-// 共享片段与任务块所需的变量。
+// 共享片段与任务块所需的变量;phase/phaseName 缺省 m(单阶段流程,与
+// renderDecompose 的模板选择一致),contextBudget/fine 供分解粒度准则段
+// (decompose-rule)使用。
+// 上下文预算基线缺省与 runner 的 DEFAULT_CONTEXT_LIMIT 一致(64k tokens);本地
+// 声明避免 prompt 层反向依赖 runner。formatTokens 与 runner 日志同口径。
+const DEFAULT_CONTEXT_LIMIT = 64_000
+
+function formatTokens(n: number): string {
+  if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
 function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
+  const phase = opts.phase ?? "m"
   return {
     ...modeCtx(opts.mode, opts),
     taskId: task.id,
@@ -383,6 +455,10 @@ function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),
     testHandoffFile: opts.testByDriver ? testHandoffFile(task) : undefined,
+    phase,
+    phaseName: phaseText(phase),
+    contextBudget: formatTokens((opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 2),
+    fine: Boolean(opts.fine),
   }
 }
 

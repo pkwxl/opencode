@@ -18,6 +18,10 @@ export type Task = {
   // 终审阶段标记(--final-review 追加的 T-F 任务): <stage>@<round>,如 audit@1。
   // FIELD 行通用解析,edit 重写时随全部字段行保留。
   final?: string
+  // fork 分解流水线的分叉基点会话 id(fork-decompose 设计 §4.2): session 模式 =
+  // 理解会话 id,digest 模式 = 基点确认会话 id(每次运行从 context.md 重建覆写);
+  // driver 独占写入(setForkBase),跨运行持久。
+  forkBase?: string
   body: string
 }
 
@@ -76,6 +80,7 @@ export function parse(path: string, text: string): Plan {
       answer: fields.get("answer"),
       attempts: Number(fields.get("attempts") ?? 0),
       final: fields.get("final"),
+      forkBase: fields.get("fork-base"),
       body: body.join("\n").trim(),
     })
     i = j
@@ -185,6 +190,12 @@ export async function tick(path: string, id: string, text: string) {
     .join("\n")
   if (!found) throw new Error(`${plan.path}: task ${id} has no unticked subtask: ${text}`)
   await edit(path, id, { body })
+}
+
+// 记录 fork 分解流水线的分叉基点会话(fork-decompose 设计 §4.2): session 模式在
+// 理解会话成功后写入,digest 模式在基点确认会话建立后覆写;AI 会话不写此字段。
+export async function setForkBase(path: string, id: string, sessionID: string) {
+  await edit(path, id, { fields: { "fork-base": sessionID } })
 }
 
 // Marks the task [done]. A passing verify run records its command in the

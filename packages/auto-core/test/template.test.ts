@@ -64,10 +64,17 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("21 个会话模板与 _partials 齐备", () => {
+  test("29 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
+      "context-base",
       "decompose",
+      "decompose-a",
+      "decompose-d",
+      "decompose-k",
+      "decompose-m",
+      "decompose-t",
+      "decompose-v",
       "dryrun",
       "final-task",
       "fix",
@@ -84,6 +91,7 @@ describe("内置模板注册表", () => {
       "test-continue",
       "test-handover",
       "test-result",
+      "understand",
       "verify-judge",
       "verify-script-gen",
       "whole",
@@ -97,7 +105,12 @@ describe("内置模板注册表", () => {
       taskBlock: "# T-001\n\n正文",
       doneList: "- [done] T-000: 前置",
       gap: "差距",
+      digest: "## 相关文件与关键符号\n- src/x.ts",
       subtask: "子任务",
+      index: "1",
+      subtaskList: "1. 任务甲\n2. 任务乙",
+      outputFile: "docs/T-001/S01.md",
+      warm: true,
       scriptPath: "/tmp/verify.sh",
       verifyState: "未声明",
       handoffFile: "docs/T-001.handoff.md",
@@ -151,9 +164,50 @@ describe("内置模板注册表", () => {
       verify: true,
       testByDriver: true,
       handoverTest: true,
+      contextBudget: "32.0k",
+      fine: true,
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
+describe("分阶段分解模板 decompose-<phase>", () => {
+  const six = ["a", "d", "m", "t", "v", "k"] as const
+
+  test("六份齐备: 均含检查项协议、粒度准则段与阶段准则句", () => {
+    usePromptLibrary(undefined)
+    for (const letter of six) {
+      const text = renderTemplate(`decompose-${letter}`, {
+        taskId: "T-001",
+        taskBlock: "# T-001\n\n正文",
+        phaseName: "阶段名",
+        contextBudget: "32.0k",
+        fine: false,
+      })
+      expect(text).toContain("- [ ]")
+      expect(text).toContain("只做任务分解,不写实现代码")
+      expect(text).toContain("当前处于阶段 阶段名")
+      expect(text).toContain("分解粒度准则")
+      expect(text).toContain("以任务描述为基准")
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+
+  test("fine 两态: 细粒度段按开关出现/消失(片段内条件段与模板同级求值)", () => {
+    usePromptLibrary(undefined)
+    const ctx = { taskId: "T-001", taskBlock: "# T-001\n\n正文", phaseName: "分析", contextBudget: "32.0k" }
+    for (const letter of six) {
+      const on = renderTemplate(`decompose-${letter}`, { ...ctx, fine: true })
+      expect(on).toContain("细粒度模式")
+      expect(on).toContain("宁细勿粗")
+      expect(on).toContain("约 32.0k tokens 量级")
+      expect(on).not.toMatch(/\{\{|\}\}/)
+      const off = renderTemplate(`decompose-${letter}`, { ...ctx, fine: false })
+      expect(off).not.toContain("细粒度模式")
+      expect(off).not.toContain("宁细勿粗")
+      expect(off).not.toMatch(/\{\{|\}\}/)
     }
   })
 })
@@ -182,10 +236,18 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       writeFileSync(join(overlay, "verify-judge.md"), "随便写的判定提示词,没有结论协议")
       expect(() => usePromptLibrary(dir)).toThrow(/verify-judge\.md 缺少关键协议内容/)
       expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
-      // phase-handover 覆盖缺四个必备小节标题 → 同样报错
+      // phase-handover 覆盖缺四个必备小节标题 → 同样报错;修复后再测 understand
       writeFileSync(join(overlay, "phase-handover.md"), "自定义交接提示词,丢了小节协议")
       expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md 缺少关键协议内容/)
       expect(() => usePromptLibrary(dir)).toThrow(/## 关键决策/)
+      writeFileSync(
+        join(overlay, "phase-handover.md"),
+        "自定义交接提示词,保留协议: ## 关键决策 ## 约束与坑 ## 下一阶段必读清单 ## 产物索引 handover.md",
+      )
+      // understand 覆盖丢 context.md 摘要文件协议 → 同样报错
+      writeFileSync(join(overlay, "understand.md"), "自定义理解提示词,丢了摘要文件协议")
+      expect(() => usePromptLibrary(dir)).toThrow(/understand\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/context\.md/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -13,6 +13,7 @@ import {
   next,
   parse,
   resetInProgress,
+  setForkBase,
   setStatus,
   setSubtasks,
   subtasks,
@@ -302,6 +303,42 @@ describe("final 字段与 appendTask", () => {
       appendTask(path, { id: "T-001", title: "重复", status: "pending", attempts: 0, body: "x" }),
     ).rejects.toThrow("already exists")
     expect(await Bun.file(path).text()).toBe(before)
+  })
+})
+
+describe("fork-base 字段(fork 分解流水线)", () => {
+  let dir: string
+  let path: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-plan-fork-"))
+    path = join(dir, "PLAN.md")
+    await Bun.write(path, SAMPLE)
+  })
+
+  afterEach(() => rm(dir, { recursive: true, force: true }))
+
+  test("parse 解析 fork-base 字段;缺省为 undefined", () => {
+    expect(parse("p", "## T-001: a [pending]\n  - fork-base: ses_x\n正文。\n").tasks[0]!.forkBase).toBe("ses_x")
+    expect(parse("p", "## T-001: a [pending]\n正文。\n").tasks[0]!.forkBase).toBeUndefined()
+  })
+
+  test("setForkBase 写入字段;覆写更新;与其他字段往返保留", async () => {
+    await setForkBase(path, "T-003", "ses_understand")
+    let task = (await load(path)).tasks[2]!
+    expect(task.forkBase).toBe("ses_understand")
+    expect(task.status).toBe("pending")
+    // digest 模式每次运行重建基点 → 覆写
+    await setForkBase(path, "T-003", "ses_ctxbase")
+    task = (await load(path)).tasks[2]!
+    expect(task.forkBase).toBe("ses_ctxbase")
+    // 其他 driver 写入(状态/勾选)不丢字段
+    await setStatus(path, "T-003", "in_progress")
+    await begin(path, "T-003")
+    task = (await load(path)).tasks[2]!
+    expect(task.forkBase).toBe("ses_ctxbase")
+    expect(task.attempts).toBe(1)
+    expect((await Bun.file(path).text())).toContain("  - fork-base: ses_ctxbase")
   })
 })
 

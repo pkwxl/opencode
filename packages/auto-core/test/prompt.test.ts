@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
 import { renderAgentContract } from "../src/loop"
 import { parse } from "../src/plan"
+import type { Phase } from "../src/phases"
 import { renderText, usePromptLibrary } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import {
+  decomposeTemplateName,
   modeCtx,
+  renderContextBase,
   renderDecompose,
   renderDryrun,
   renderFinalTask,
@@ -27,11 +31,13 @@ import {
   renderTestContinue,
   renderTestHandover,
   renderTestResult,
+  renderUnderstand,
   renderVerifyJudge,
   renderVerifyScriptGen,
   renderWhole,
   renderWrapup,
   REVIEW_FILE,
+  subtaskOutputFile,
   testHandoffFile,
   VERDICT_FILE,
   type TestRunInfo,
@@ -57,11 +63,24 @@ REST 接口。
 
 const task = plan.tasks[1]!
 
+// 带检查项的任务(fork 流水线子任务列表注入的载体): 首项已勾选模拟恢复场景。
+const listPlan = parse(
+  "PLAN.md",
+  `## T-004: 拆解执行 [pending]
+整体描述。
+
+- [x] 编写 schema 部分
+- [ ] 编写执行逻辑
+- [ ] 编写文档
+`,
+)
+const listTask = listPlan.tasks[0]!
+
 describe("renderDecompose", () => {
   test("要求只读分析并产出 subtasks.md 检查项", () => {
     const text = renderDecompose(plan, task)
     expect(text).toContain("docs/T-002.subtasks.md")
-    expect(text).toContain("- [ ] <子任务描述>")
+    expect(text).toContain("- [ ] <子任务描述;末尾注明该项的产出>")
     expect(text).toContain("只做任务分解,不写实现代码")
     expect(text).toContain("不修改任何实现代码")
     expect(text).toContain("question 工具")
@@ -79,6 +98,115 @@ describe("renderDecompose", () => {
     // 自动答复要求记录决策过程并标注 AUTO-DECISION
     expect(text).toContain("记录决策过程")
     expect(text).toContain("AUTO-DECISION")
+  })
+})
+
+describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
+  const phaseCases: Array<[Phase, string, string]> = [
+    ["a", "分析", "按问题/疑点/子系统/风险面切分"],
+    ["d", "设计", "按设计关注点切分"],
+    ["m", "迁移实现", "垂直薄切片优先"],
+    ["t", "测试", "按测试面/场景族切分"],
+    ["v", "验收", "按验收维度切分"],
+    ["k", "知识提炼", "按知识产物切分"],
+  ]
+
+  test("各阶段渲染: 注入阶段名与该阶段的切分准则段", () => {
+    for (const [phase, name, rule] of phaseCases) {
+      const text = renderDecompose(plan, task, { phase })
+      expect(text).toContain(`当前处于阶段 ${name}`)
+      expect(text).toContain(rule)
+      // 共通粒度准则段(decompose-rule)与检查项协议
+      expect(text).toContain("分解粒度准则")
+      expect(text).toContain("以任务描述为基准")
+      expect(text).toContain("- [ ]")
+    }
+  })
+
+  test("m 默认: 未传 phase 时选择 decompose-m", () => {
+    const text = renderDecompose(plan, task)
+    expect(text).toContain("当前处于阶段 迁移实现")
+    expect(text).toContain("垂直薄切片优先")
+  })
+
+  test("fine 两态: 细粒度段按开关出现/消失;contextBudget 注入半预算", () => {
+    const off = renderDecompose(plan, task, { contextLimit: 100_000 })
+    expect(off).toContain("约 50.0k tokens 量级")
+    expect(off).not.toContain("细粒度模式")
+    const on = renderDecompose(plan, task, { fine: true })
+    expect(on).toContain("细粒度模式")
+    expect(on).toContain("宁细勿粗")
+    expect(on).toContain("约 32.0k tokens 量级")
+  })
+
+  test("回退: 库中无 decompose-<phase> 时回退通用 decompose(缺省按 m 查名)", () => {
+    expect(decomposeTemplateName("m", ["decompose"])).toBe("decompose")
+    expect(decomposeTemplateName(undefined, ["decompose"])).toBe("decompose")
+    expect(decomposeTemplateName("v", ["decompose", "decompose-v"])).toBe("decompose-v")
+    expect(decomposeTemplateName(undefined, ["decompose", "decompose-m"])).toBe("decompose-m")
+  })
+
+  test("目标目录覆盖 decompose-m.md: 缺检查项协议行报错并指明文件,保留则生效", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-prompt-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,丢了检查项协议")
+      expect(() => usePromptLibrary(dir)).toThrow(/decompose-m\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/- \[ \]/)
+      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,保留协议: - [ ] 项")
+      usePromptLibrary(dir)
+      expect(renderDecompose(plan, task)).toBe("自定义分解提示词,保留协议: - [ ] 项")
+      // 未覆盖的阶段模板仍取内置
+      expect(renderDecompose(plan, task, { phase: "a" })).toContain("按问题/疑点/子系统/风险面切分")
+    } finally {
+      usePromptLibrary(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("renderUnderstand(fork 流水线 ① 理解会话)", () => {
+  test("只读理解 + 摘要四节结构 + 硬性要求 + 写完即结束", () => {
+    const text = renderUnderstand(plan, task)
+    expect(text).toContain("只做任务背景理解,不写实现代码、不做任务分解")
+    expect(text).toContain("不修改任何实现代码")
+    expect(text).toContain("docs/T-002.context.md")
+    expect(text).toContain("## 相关文件与关键符号")
+    expect(text).toContain("## 约束与前提")
+    expect(text).toContain("## 已有决策与现状")
+    expect(text).toContain("## 风险与未知")
+    expect(text).toContain("不产出有效文件会导致任务阻塞停机")
+    expect(text).toContain("写完该文件后立即结束会话")
+    // 紧凑性约束(digest 模式下摘要成为全部分叉的前缀)
+    expect(text).toContain("写得紧凑、可检索")
+    expect(text).toContain("200 行")
+    // 状态文件只读规则与问答历史
+    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("[done] T-001: 搭建 schema")
+    expect(text).toContain("策略选 A 还是 B?")
+  })
+
+  test("优先选读任务正文点名的文件,不求全", () => {
+    const text = renderUnderstand(plan, task)
+    expect(text).toContain("有选择地阅读相关源码与 docs/")
+    expect(text).toContain("优先任务正文")
+    expect(text).toContain("点名的文件与直接相关模块,不求全")
+  })
+})
+
+describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
+  test("摘要全文逐字注入 + 一句确认 + 不读不写不展开", () => {
+    const digest = "## 相关文件与关键符号\n- src/x.ts: 数据模型\n\n## 约束与前提\n- 只读目标目录"
+    const text = renderContextBase(task, digest)
+    expect(text).toContain("任务 T-002 理解阶段产出的背景摘要")
+    expect(text).toContain("docs/T-002.context.md 全文")
+    expect(text).toContain("本会话由 driver 建立")
+    expect(text).toContain(digest)
+    expect(text).toContain("回复一句简短确认即可")
+    expect(text).toContain("不要读取文件、不要展开分析")
+    expect(text).toContain("不要修改任何内容")
+    expect(text).toContain("确认后立即结束会话")
   })
 })
 
@@ -145,6 +273,50 @@ describe("renderSubtask", () => {
   })
 })
 
+describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注入)", () => {
+  test("注入全量检查项列表(按序编号)与「第 N 项」;产出文件按位补零", () => {
+    const text = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2 })
+    expect(text).toContain("本任务的完整子任务列表(按序执行,其他项由其他会话完成,不要碰)")
+    expect(text).toContain("1. 编写 schema 部分\n2. 编写执行逻辑\n3. 编写文档")
+    expect(text).toContain("你本次只负责其中的第 2 项")
+    expect(text).toContain("- [ ] 编写执行逻辑")
+    // 产出约定: 文档类产出写 driver 机械命名的独立文件
+    expect(text).toContain("产出约定")
+    expect(text).toContain("写入 docs/T-004/S02.md(独立文件,标题写在首行,不并入其他文档)")
+    expect(text).toContain("代码类产出直接落于源码树")
+  })
+
+  test("缺省推导: 不传 index 时按正文检查项定位同名项", () => {
+    const text = renderSubtask(listPlan, listTask, "编写文档")
+    expect(text).toContain("你本次只负责其中的第 3 项")
+    expect(text).toContain("写入 docs/T-004/S03.md")
+  })
+
+  test("背景段 warm 两态: 继承上下文勿重读 / 冷启动先读 context.md 摘要", () => {
+    const warm = renderSubtask(listPlan, listTask, "编写文档", { index: 3, warm: true })
+    expect(warm).toContain("本会话已继承任务背景上下文(理解阶段的摘要与已加载内容),无需重读已在上下文中的文件")
+    expect(warm).toContain("如仍缺背景,可读 docs/T-004.context.md 摘要")
+    expect(warm).not.toContain("先读之了解任务背景")
+    const cold = renderSubtask(listPlan, listTask, "编写文档", { index: 3 })
+    expect(cold).toContain("如存在 docs/T-004.context.md,先读之了解任务背景再开始(不存在则按需自行阅读源码)")
+    expect(cold).not.toContain("已继承任务背景上下文")
+  })
+
+  test("无检查项任务(旧形态): 单条呈现,列表与产出约定段不出现", () => {
+    const text = renderSubtask(plan, task, "编写迁移脚本")
+    expect(text).toContain("你本次只负责该任务的这一个子任务")
+    expect(text).not.toContain("完整子任务列表")
+    expect(text).not.toContain("产出约定")
+  })
+
+  test("subtaskOutputFile: 两位递增命名(超出两位自然进位)", () => {
+    expect(subtaskOutputFile(task, 1)).toBe("docs/T-002/S01.md")
+    expect(subtaskOutputFile(task, 9)).toBe("docs/T-002/S09.md")
+    expect(subtaskOutputFile(task, 12)).toBe("docs/T-002/S12.md")
+    expect(subtaskOutputFile(task, 123)).toBe("docs/T-002/S123.md")
+  })
+})
+
 describe("renderWrapup", () => {
   test("只执行收尾: docs、report.md,不标 done、不提交", () => {
     const text = renderWrapup(plan, task)
@@ -178,6 +350,22 @@ describe("renderWrapup", () => {
   test("solo 模式(off/ondemand)不提及子任务", () => {
     expect(renderWrapup(plan, task, { solo: true })).toContain("实现已在之前的会话中完成")
     expect(renderWrapup(plan, task)).toContain("全部子任务已在之前的会话中逐一完成")
+  })
+
+  test("索引式报告(auto 模式): 逐子任务一行引用产物路径,不复制产物内容", () => {
+    const text = renderWrapup(plan, task)
+    expect(text).toContain("索引式报告")
+    expect(text).toContain("逐子任务一行")
+    expect(text).toContain("docs/T-002/S<NN>.md 或代码位置")
+    expect(text).toContain("不复制或改写子任务产物的内容")
+    expect(text).toContain("整体结论与遗留问题两节")
+  })
+
+  test("solo 模式保持摘要式报告,不带索引式协议", () => {
+    const text = renderWrapup(plan, task, { solo: true })
+    expect(text).not.toContain("索引式")
+    expect(text).toContain("产出摘要(改动了什么、关键决策与遗留事项)")
+    expect(text).not.toContain("S<NN>")
   })
 })
 
@@ -851,6 +1039,8 @@ describe("模板渲染完整性", () => {
       renderDecompose(plan, task, { mode: migrate }),
       renderSubtask(plan, task, "子任务甲"),
       renderSubtask(plan, task, "子任务甲", { mode: migrate }),
+      renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, warm: true, mode: migrate }),
+      renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, continuation: true }),
       renderWrapup(plan, task),
       renderWrapup(plan, task, { solo: true, mode: migrate }),
       renderWhole(plan, task, { ondemand: true, continuation: true, mode: migrate }),
