@@ -70,6 +70,17 @@ const AUTO_ANSWER =
 // human intervention.
 const FIX_ROUNDS = 3
 
+// Session duration display format. Converts milliseconds to a readable string.
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (remainingSeconds === 0) return `${minutes}m`
+  return `${minutes}m${remainingSeconds.toFixed(0)}s`
+}
+
 // 会话后统一提交(收回 AI 提交权,见 src/git.ts): 每个会话结束且 driver 完成
 // 状态写入(tick 勾选等)后调用,递归提交全部改动——git 历史即 AI 变更的审计
 // 轨迹,回滚粒度 = 会话。--commit false 与 dryrun 跳过。
@@ -166,6 +177,8 @@ type Watch = {
   pct: number
   // 会话结束时最近一次 assistant 消息的上下文已用量(tokens: input + cache.read)。
   used: number
+  // 会话耗时(ms)。
+  durationMs?: number
   // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
   // runExecSession 据此开新会话续跑。
   testHandover?: boolean
@@ -1656,10 +1669,10 @@ async function attempt(
   // 测试执行协议: 清除上一会话/上次运行遗留的待执行脚本(存在即请求,中断
   // 恢复或重试场景下的旧请求不应注入本会话;归档历史 tmp/test.<n>.sh 保留)。
   if (test) await rm(join(test.tmp, "test.sh"), { force: true })
-  // 上一会话上下文占比低于 50%、已用量低于 contextLimit 的一半(默认 32k tokens)、
-  // 且距其结束不超过 REUSE_IDLE_MS(默认 5 分钟)则复用同一会话继续,否则新建。
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW && chain.used < cap / 2 && Date.now() - chain.at <= REUSE_IDLE_MS
+  // 记录新会话开始时间(复用会话不更新,仍用上一次的 at)
+  const startTime = reuse ? chain.at : Date.now()
   if (reuse) {
     log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens,${Math.round((Date.now() - chain.at) / 1000)} 秒前结束)`)
   }
@@ -1716,6 +1729,10 @@ async function attempt(
   chain.pct = result.pct
   chain.used = result.used
   chain.at = Date.now()
+  if (!reuse && result.durationMs !== undefined) {
+    const limit = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+    log(`✓ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${limit ? `/${formatTokens(limit)} tokens` : ""}), 耗时 ${formatDuration(result.durationMs)}`)
+  }
   // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
   // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
   // 新建会话已在创建时命名,无需重复。
@@ -1775,6 +1792,8 @@ async function watch(
   // 上下文占比与已用量始终跟踪(会话复用决策依据);拿不到上限记 100。
   let pct = 100
   let used = 0
+  // 会话开始时间戳,用于计算耗时
+  const startTime = Date.now()
   // steer 每会话只插入一次。
   let steerSent = false
   // 自动答复过的问题(同一问题重复出现仍阻塞停机)。
@@ -2027,7 +2046,7 @@ async function watch(
     const msg = "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
     error = error ? `${error}\n${msg}` : msg
   }
-  return { lastText, error, pct, used, testHandover }
+  return { lastText, error, pct, used, testHandover, durationMs: Date.now() - startTime }
 }
 
 // --test-by-driver 的单次测试执行: tmp/test.sh 为请求标记,其内容有两种形态——

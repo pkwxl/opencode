@@ -100,5 +100,8 @@ export function autobanner(text: string) {
 }
 
 function rule(char: string, text: string) {
-  log(`\n${char.repeat(60)}\n${text}`)
+  const time = new Date().toTimeString().slice(0, 8)
+  const paddedTime = ` ${time} `
+  const centerTime = `${char.repeat((60 - paddedTime.length) / 2)}${paddedTime}${char.repeat((60 - paddedTime.length) / 2)}`
+  log(`\n${centerTime}\n${text}`)
 }
