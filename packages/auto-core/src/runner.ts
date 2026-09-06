@@ -142,8 +142,9 @@ export type Opts = {
   testByDriver?: boolean
   // --handover-test(需 --test-by-driver,config 持久化): 测试失败(非零退出或
   // 看门狗超时)且会话上下文已用达到 contextLimit 时,要求 AI 写交接文档
-  // docs/<id>.testhandoff.md 并结束会话,driver 开新会话据其续跑,防止在超大
-  // 上下文中反复试错。
+  // docs/<id>[-S<n>].testhandoff.md(子任务会话带 -S<n> 后缀,整任务/修复轮为
+  // 任务级;子任务完成即清除,防下一子任务误读遗留交接)并结束会话,driver 开新
+  // 会话据其续跑,防止在超大上下文中反复试错。
   handoverTest?: boolean
   // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
   mode?: ModeSpec
@@ -299,7 +300,7 @@ export async function runTask(
     const handedOff =
       recalled.active === true &&
       ((mode !== "off" && (await Bun.file(join(dir, handoffFile(task))).exists())) ||
-        (opts.handoverTest === true && (await Bun.file(join(dir, testHandoffFile(task))).exists())))
+        (opts.handoverTest === true && (await testHandoffExists(dir, task))))
     if (!handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))) {
       chain.id = recalled.session
       chain.pct = 0
@@ -384,6 +385,10 @@ export async function runTask(
       // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。
       if (recalled?.active !== true) {
         await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
+        // --handover-test 的测试交接文档同理(任务级与子任务级一并清): runExecSession
+        // 的交接循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态;auto 模式
+        // 不进整任务分支,清理须在此覆盖,否则陈旧交接会被下一子任务误读续跑。
+        if (opts.testByDriver) await cleanTestHandoffs(plan.path, task)
       }
     } else if (resumed !== "wrapup" && resumed !== "verify" && resumed !== "review") {
       // 非恢复续跑才清除上次尝试遗留的交接文档;恢复时保留(其中是中断会话的进度
@@ -392,10 +397,9 @@ export async function runTask(
         await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
       }
       // --handover-test 的测试交接文档同理: 非恢复续跑时清除上次尝试遗留
-      // (runExecSession 的交接循环在一次 runTask 调用内闭环,跨调用的遗留文档
-      // 属陈旧状态;恢复续跑(active 记录)时保留,由续跑会话消费)。
+      // (任务级与子任务级一并清;恢复续跑(active 记录)时保留,由续跑会话消费)。
       if (opts.testByDriver && recalled?.active !== true) {
-        await rm(join(dirname(plan.path), testHandoffFile(task)), { force: true })
+        await cleanTestHandoffs(plan.path, task)
       }
       await persistStage({ kind: "whole" })
       const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
@@ -1045,6 +1049,7 @@ async function runSubtask(
         opts,
         chain,
         steer,
+        index,
       )
       if (result.type === "blocked") return result
       // 未触发交接阈值(2x cap)即结束 = 子任务在单会话内自然完成,勾选后统一提交;
@@ -1077,8 +1082,10 @@ async function runSubtask(
         `这是硬性要求: 写出该文件后再结束会话。`
     }
   }
-  // 子任务完成: 清除交接文档(下一子任务重新起算),driver 勾选后统一提交。
+  // 子任务完成: 清除交接文档(ondemand 交接与测试交接,下一子任务重新起算——
+  // 测试交接按子任务命名,这里移除本子任务的文件),driver 勾选后统一提交。
   await rm(file, { force: true })
+  await rm(join(dirname(plan.path), testHandoffFile(task, index)), { force: true })
   await tick(plan.path, task.id, text)
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
   await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
@@ -1498,7 +1505,9 @@ export function handoverDue(steer: Steer | undefined, used: number): boolean {
 // 跨运行持续): tmp 为目标目录下 driver 工作目录(tmp/);seq 为按序归档编号
 // (初始化时扫描既有 tmp/test.<n>.out 取最大值——每次执行都会产出 .out,故以
 // 它为编号基准;test/ 脚本路径形态不另产 .sh,内联形态产 tmp/test.<n>.sh);
-// handoffFile 为 --handover-test 交接文档绝对路径;handover 开关;limit 为上下文
+// handoffFile 为 --handover-test 交接文档绝对路径(按执行范围命名: 子任务为
+// docs/<id>-S<n>.testhandoff.md,整任务/修复轮为 docs/<id>.testhandoff.md);
+// handover 开关;limit 为上下文
 // 已用量上限(config.contextLimit 原值;ondemand 的交接 steer 用其 2 倍);
 // last 为最近一次执行信息(continuation 提示引用其输出路径)。
 type TestRun = {
@@ -1519,7 +1528,9 @@ const TEST_HANDOVER_ADVISORY = 10
 // runSession;启用时包装测试交接循环——会话因测试失败且上下文达上限交结束后,
 // 以 continuation 提示(先读交接文档与最近输出)开新会话续跑,直至会话自然完成。
 // 交接次数不设硬上限,超过 TEST_HANDOVER_ADVISORY 时提示 AI 评估是否陷入无法
-// 解决的问题(可 AUTO-FIXME 标注遗留后继续)。
+// 解决的问题(可 AUTO-FIXME 标注遗留后继续)。subtask 为子任务序号(仅子任务
+// 会话传入): 交接文档按执行范围命名(docs/<id>-S<n>.testhandoff.md),防下一
+// 子任务误读上一子任务的遗留交接;整任务/修复轮为任务级命名。
 async function runExecSession(
   client: OpencodeClient,
   plan: Plan,
@@ -1528,27 +1539,30 @@ async function runExecSession(
   opts: Opts,
   chain: SessionChain,
   steer?: Steer,
+  subtask?: number,
 ): Promise<SessionResult> {
   if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
   const dir = opts.dir ?? dirname(plan.path)
   const tmp = verifyTmpDir(dir)
+  const handoff = testHandoffFile(task, subtask)
   const test: TestRun = {
     dir,
     tmp,
-    handoffFile: join(dir, testHandoffFile(task)),
+    handoffFile: join(dir, handoff),
     handover: opts.handoverTest === true,
     limit: opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
     seq: await latestTestSeq(tmp),
   }
-  // 中断恢复播种: 陈旧测试交接文档由 pipeline 在非恢复路径清除,此处文件仍非空即
-  // active 恢复——中断前已完成测试交接,首个会话即以续跑提示凭交接文档继续。
+  // 中断恢复播种: 陈旧测试交接文档由 pipeline 在非恢复路径按范围清除,此处文件
+  // 仍非空即 active 恢复——中断前已完成测试交接,首个会话即以续跑提示凭交接文档
+  // 继续(文件按执行范围命名,只认本范围的交接)。
   let continuation = (await Bun.file(test.handoffFile).text().catch(() => "")).trim() !== ""
-  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已测试交接 ${testHandoffFile(task)},新会话凭交接文档续跑`)
+  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已测试交接 ${handoff},新会话凭交接文档续跑`)
   let handovers = 0
   for (;;) {
     const extra = continuation
       ? `\n\n${renderTestContinue({
-          handoffFile: testHandoffFile(task),
+          handoffFile: handoff,
           run: test.last,
           stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined,
         })}`
@@ -1557,7 +1571,7 @@ async function runExecSession(
     if (result.type === "blocked") return result
     if (!result.testHandover) return result
     handovers++
-    log(`↻ ${task.id} 测试失败且上下文达到上限,已交接 ${testHandoffFile(task)},新会话继续(第 ${handovers} 次测试交接)`)
+    log(`↻ ${task.id} 测试失败且上下文达到上限,已交接 ${handoff},新会话继续(第 ${handovers} 次测试交接)`)
     continuation = true
   }
 }
@@ -1570,6 +1584,30 @@ async function latestTestSeq(tmp: string): Promise<number> {
     max = Math.max(max, Number(/^test\.(\d+)\.out$/.exec(file)?.[1] ?? 0))
   }
   return max
+}
+
+// 该任务的测试交接文档是否留有任一执行范围的遗留(任务级 docs/<id>.testhandoff.md
+// 或子任务级 docs/<id>-S<n>.testhandoff.md): 中断恢复判定用——文件在手说明中断前
+// 会话已写出交接,旧会话上下文已用满,不得复用(开新会话凭交接续跑)。
+async function testHandoffExists(dir: string, task: Task): Promise<boolean> {
+  if (await Bun.file(join(dir, testHandoffFile(task))).exists()) return true
+  for (const name of await readdir(join(dir, "docs")).catch(() => [] as string[])) {
+    if (name.startsWith(`${task.id}-S`) && name.endsWith(".testhandoff.md")) return true
+  }
+  return false
+}
+
+// 测试交接文档的陈旧清理(非恢复续跑): 任务级与全部子任务级一并移除——交接
+// 循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态,留给下一执行范围
+// 会被误读为续跑依据。
+async function cleanTestHandoffs(planPath: string, task: Task): Promise<void> {
+  await rm(join(dirname(planPath), testHandoffFile(task)), { force: true })
+  const docs = join(dirname(planPath), "docs")
+  for (const name of await readdir(docs).catch(() => [] as string[])) {
+    if (name.startsWith(`${task.id}-S`) && name.endsWith(".testhandoff.md")) {
+      await rm(join(docs, name), { force: true })
+    }
+  }
 }
 
 // 会话错误中属于网络/服务故障的特征串;命中时先重启 server(外部 server 除外)
