@@ -177,6 +177,8 @@ type Watch = {
   pct: number
   // 会话结束时最近一次 assistant 消息的上下文已用量(tokens: input + cache.read)。
   used: number
+  // 上下文上限(tokens),计算 pct 用;若未知则为 undefined。
+  limit?: number
   // 会话耗时(ms)。
   durationMs?: number
   // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
@@ -1729,10 +1731,9 @@ async function attempt(
   chain.pct = result.pct
   chain.used = result.used
   chain.at = Date.now()
-  if (!reuse && result.durationMs !== undefined) {
-    const limit = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-    log(`✓ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${limit ? `/${formatTokens(limit)} tokens` : ""}), 耗时 ${formatDuration(result.durationMs)}`)
-  }
+   if (!reuse && result.durationMs !== undefined) {
+     log(`✓ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
+   }
   // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
   // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
   // 新建会话已在创建时命名,无需重复。
@@ -1785,13 +1786,14 @@ async function watch(
   opts: Opts,
   steer?: Steer,
   test?: TestRun,
-): Promise<Watch> {
-  const waitAnswer = opts.waitAnswer ?? 0
-  let lastText = ""
-  let error = ""
-  // 上下文占比与已用量始终跟踪(会话复用决策依据);拿不到上限记 100。
-  let pct = 100
-  let used = 0
+ ): Promise<Watch> {
+   const waitAnswer = opts.waitAnswer ?? 0
+   let lastText = ""
+   let error = ""
+   // 上下文占比与已用量始终跟踪(会话复用决策依据);拿不到上限记 100。
+   let pct = 100
+   let used = 0
+   let limit: number | undefined = undefined
   // 会话开始时间戳,用于计算耗时
   const startTime = Date.now()
   // steer 每会话只插入一次。
@@ -1889,11 +1891,11 @@ async function watch(
       if (info.sessionID !== sessionID) continue
       idleHandled = false
       if (info.role !== "assistant" || !info.time.completed || seen.has(info.id)) continue
-      seen.add(info.id)
-      limits ??= await contextLimits(client)
-      used = info.tokens.input + info.tokens.cache.read
-      const limit = limits.get(`${info.providerID}/${info.modelID}`)
-      pct = limit ? Math.round((used / limit) * 100) : 100
+       seen.add(info.id)
+        limits ??= await contextLimits(client)
+        used = info.tokens.input + info.tokens.cache.read
+        limit = limits.get(`${info.providerID}/${info.modelID}`)
+        pct = limit ? Math.round((used / limit) * 100) : 100
       vlog(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
       if (steer && !steerSent && used >= steer.limit) {
         steerSent = true
@@ -1903,9 +1905,10 @@ async function watch(
           return {
              blocked: { type: "blocked", question: "steer 投递失败(交接提示),无法继续会话,详见日志。" },
             lastText,
-            pct,
-            used,
-          }
+        pct,
+        used,
+        limit,
+      }
         }
       }
     }
@@ -2029,10 +2032,10 @@ async function watch(
       // 无待执行请求且无未完成的交接要求时,会话才算真正结束。
       if (test) {
         const handled = await handleIdleTest()
-        if (handled.type === "continue") continue
-        if (handled.type === "blocked") {
-          return { blocked: { type: "blocked", question: handled.question }, lastText, pct, used, testHandover }
-        }
+         if (handled.type === "continue") continue
+         if (handled.type === "blocked") {
+           return { blocked: { type: "blocked", question: handled.question }, lastText, pct, used, limit, testHandover }
+         }
       }
       settled = true
       break
@@ -2046,7 +2049,7 @@ async function watch(
     const msg = "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
     error = error ? `${error}\n${msg}` : msg
   }
-  return { lastText, error, pct, used, testHandover, durationMs: Date.now() - startTime }
+   return { lastText, error, pct, used, limit, testHandover, durationMs: Date.now() - startTime }
 }
 
 // --test-by-driver 的单次测试执行: tmp/test.sh 为请求标记,其内容有两种形态——
