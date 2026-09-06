@@ -271,6 +271,17 @@ describe("renderSubtask", () => {
     expect(off).not.toContain("tmp/test.sh")
     expect(off).not.toContain("testhandoff")
   })
+
+  test("测试交接文档按子任务命名(-S<n> 后缀): 下一子任务不会误读上一子任务的遗留交接", () => {
+    const handover = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, testByDriver: true, handoverTest: true })
+    expect(handover).toContain("docs/T-004-S2.testhandoff.md")
+    expect(handover).not.toContain("docs/T-004.testhandoff.md")
+    // 缺省推导 index(按正文检查项定位)同样带后缀
+    const derived = renderSubtask(listPlan, listTask, "编写文档", { testByDriver: true, handoverTest: true })
+    expect(derived).toContain("docs/T-004-S3.testhandoff.md")
+    // 无检查项任务(旧形态单子任务)保持任务级命名
+    expect(renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })).toContain("docs/T-002.testhandoff.md")
+  })
 })
 
 describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注入)", () => {
@@ -594,9 +605,11 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
     out: "/tmp/pkg/tmp/test.3.out",
   }
 
-  test("testHandoffFile 路径与 ondemand handoff 分离命名", () => {
+  test("testHandoffFile 路径与 ondemand handoff 分离命名;子任务带 -S<n> 后缀", () => {
     expect(testHandoffFile(task)).toBe("docs/T-002.testhandoff.md")
     expect(testHandoffFile(task)).not.toBe("docs/T-002.handoff.md")
+    expect(testHandoffFile(task, 2)).toBe("docs/T-002-S2.testhandoff.md")
+    expect(testHandoffFile(task, 12)).toBe("docs/T-002-S12.testhandoff.md")
   })
 
   test("结果反馈: 退出码/耗时/脚本与输出路径,要求直读文件判断并说明再次请求方式", () => {

@@ -54,8 +54,11 @@ export type TestRunInfo = VerifyRun & { seq: number }
 
 // --handover-test 的测试交接文档(相对目标目录): 测试失败且上下文达到上限时,
 // 会话把进度与后续步骤写入该文件后结束,driver 开新会话以 continuation 提示续跑。
-export function testHandoffFile(task: Task): string {
-  return `docs/${task.id}.testhandoff.md`
+// 文件按执行范围命名: 子任务会话带 -S<n> 后缀(docs/<id>-S<n>.testhandoff.md),
+// 整任务会话与验收修复轮为任务级(docs/<id>.testhandoff.md)——交接文档只对本
+// 执行范围生效,防止下一子任务误读上一子任务的遗留交接。
+export function testHandoffFile(task: Task, subtask?: number): string {
+  return `docs/${task.id}${subtask !== undefined ? `-S${subtask}` : ""}.testhandoff.md`
 }
 
 // 测试执行结果反馈(steer 注入执行会话): 退出码与输出文件路径,AI 直读文件判断。
@@ -149,7 +152,9 @@ export function renderSubtask(
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
   const index = at >= 0 ? String(at + 1) : undefined
   return renderTemplate("subtask", {
-    ...baseCtx(plan, task, opts),
+    // index 的推导值回灌 baseCtx: 测试交接文档命名(测试协议段)与本处注入的
+    // 「第 N 项」同源,缺省推导(旧调用不传 index)时同样带 -S<n> 后缀。
+    ...baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined }),
     subtask,
     continuation: Boolean(opts.continuation),
     handoffFile: handoffFile(task),
@@ -440,7 +445,7 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
+function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): Ctx {
   const phase = opts.phase ?? "m"
   return {
     ...modeCtx(opts.mode, opts),
@@ -454,7 +459,9 @@ function baseCtx(plan: Plan, task: Task, opts: Opts = {}): Ctx {
     verify: opts.verify,
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),
-    testHandoffFile: opts.testByDriver ? testHandoffFile(task) : undefined,
+    // 测试交接文档按执行范围命名: index(仅 renderSubtask 传入,子任务序号)存在
+    // 时带 -S<n> 后缀,整任务/修复轮为任务级命名。
+    testHandoffFile: opts.testByDriver ? testHandoffFile(task, opts.index) : undefined,
     phase,
     phaseName: phaseText(phase),
     contextBudget: formatTokens((opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 2),
