@@ -3,6 +3,7 @@ import { mkdir, readdir, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
+import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { commitTitle, commitTree } from "./git"
 import { autobanner, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
@@ -47,6 +48,7 @@ import {
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
+import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { shellProfile } from "./shell"
 import { autoSwitches, type Switches } from "./switches"
@@ -84,6 +86,8 @@ function formatDuration(ms: number): string {
 // 会话后统一提交(收回 AI 提交权,见 src/git.ts): 每个会话结束且 driver 完成
 // 状态写入(tick 勾选等)后调用,递归提交全部改动——git 历史即 AI 变更的审计
 // 轨迹,回滚粒度 = 会话。--commit false 与 dryrun 跳过。
+// 提交前引用 auto-correct(stable-refs P4,D6 第一层): rename 配对机械改写活
+// 文档引用 + 失效引用 ⚠ 日志(改写内容随本次统一提交落账,不另起提交)。
 async function afterSession(
   dir: string | undefined,
   opts: Opts,
@@ -91,6 +95,7 @@ async function afterSession(
   info: { stage: string; subject: string },
 ): Promise<void> {
   if (!dir || opts.commit === false || opts.dryrun) return
+  await autoCorrectRefs(dir)
   await commitTree(dir, task, info)
 }
 
@@ -153,9 +158,9 @@ export type Opts = {
   testByDriver?: boolean
   // --handover-test(需 --test-by-driver,config 持久化): 测试失败(非零退出或
   // 看门狗超时)且会话上下文已用达到 contextLimit 时,要求 AI 写交接文档
-  // docs/<id>[-S<n>].testhandoff.md(子任务会话带 -S<n> 后缀,整任务/修复轮为
-  // 任务级;子任务完成即清除,防下一子任务误读遗留交接)并结束会话,driver 开新
-  // 会话据其续跑,防止在超大上下文中反复试错。
+  // docs/<id>/testhandoff.md(子任务会话落 docs/<id>/S<两位序号>/testhandoff.md,
+  // 整任务/修复轮为任务级;子任务完成即清除,防下一子任务误读遗留交接)并结束
+  // 会话,driver 开新会话据其续跑,防止在超大上下文中反复试错。
   handoverTest?: boolean
   // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
   mode?: ModeSpec
@@ -224,7 +229,7 @@ const DEFAULT_CONTEXT_LIMIT = 64_000
 // subtasks).
 // --subtask ondemand: like off, but when the running session's context usage
 // reaches 2x --context-limit the driver steers in a handoff prompt; the session
-// writes docs/<id>.handoff.md and a fresh session continues from it.
+// writes docs/<id>/handoff.md and a fresh session continues from it.
 // The execution phase (decompose / whole-task session) runs only on the first
 // round; every round then is: subtask sessions for the unticked checklist →
 // wrap-up session → three-stage task-level acceptance (the driver resolves
@@ -314,7 +319,7 @@ export async function runTask(
     chain.phase = recalled.phase
     const handedOff =
       recalled.active === true &&
-      ((mode !== "off" && (await Bun.file(join(dir, handoffFile(task))).exists())) ||
+      ((mode !== "off" && (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "handoff"))).exists())) ||
         (opts.handoverTest === true && (await testHandoffExists(dir, task))))
     if (!handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))) {
       chain.id = recalled.session
@@ -400,6 +405,9 @@ export async function runTask(
       // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。
       if (recalled?.active !== true) {
         await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
+        // 旧平铺交接文档(docs/<id>.handoff.md)兼容清扫: 写目标已目录化,遗留
+        // 旧文件一并移除,防读回落误续跑陈旧交接。
+        await rm(join(dirname(plan.path), legacyTaskDoc(task.id, "handoff")), { force: true })
         // --handover-test 的测试交接文档同理(任务级与子任务级一并清): runExecSession
         // 的交接循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态;auto 模式
         // 不进整任务分支,清理须在此覆盖,否则陈旧交接会被下一子任务误读续跑。
@@ -410,6 +418,8 @@ export async function runTask(
       // 总结,executeWhole 依其 `状态:` 行决定续跑)。
       if (mode === "ondemand" && recalled?.active !== true) {
         await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
+        // 旧平铺交接文档兼容清扫(与 auto 分支同语义)。
+        await rm(join(dirname(plan.path), legacyTaskDoc(task.id, "handoff")), { force: true })
       }
       // --handover-test 的测试交接文档同理: 非恢复续跑时清除上次尝试遗留
       // (任务级与子任务级一并清;恢复续跑(active 记录)时保留,由续跑会话消费)。
@@ -446,7 +456,8 @@ export async function runTask(
     //   文件无效(规划会话半途中断,差距原文已丢失)→ 退回重跑审核重新发现差距,
     //   round 回退 1 使审核后的 round++ 回到记录值。
     const resumedReview = resume?.kind === "review" ? resume : undefined
-    const fixFile = join(dirname(plan.path), "docs", `${task.id}.fix.md`)
+    // 修复检查项文件(目录化布局,读回落兼容旧平铺 docs/<id>.fix.md)。
+    const fixFile = join(dirname(plan.path), await resolveTaskDoc(dirname(plan.path), task.id, "fix"))
     const fixItems = subtasks(await Bun.file(fixFile).text().catch(() => "")).map((item) => item.text)
     const fixReady = resumedReview?.stage === "planfix" && fixItems.length > 0
     const replan = resumedReview?.stage === "planfix" && !fixReady
@@ -577,7 +588,12 @@ async function executeWhole(
   ondemand: boolean,
 ): Promise<(Outcome & { type: "blocked" }) | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const file = join(dirname(plan.path), handoffFile(task))
+  // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径 docs/<id>/handoff.md
+  // (提示词经 handoffFile 注入),读点优先新路径、旧平铺存在则回落——存量项目
+  // 中断恢复续跑不受改名影响。
+  const planDir = dirname(plan.path)
+  const readHandoff = async (): Promise<string> =>
+    Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
   // (见 handoverDue);off 模式本就不构造。
   const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
@@ -586,7 +602,7 @@ async function executeWhole(
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在即
   // active 恢复——中断前已交接。状态=完成 → 执行阶段已完成,跳过整任务会话;
   // 状态=继续 → 以续跑提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
-  const prior = ondemand ? /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1] : undefined
+  const prior = ondemand ? /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1] : undefined
   if (prior === "完成") {
     log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记执行已完成,跳过整任务会话`)
     return undefined
@@ -610,7 +626,7 @@ async function executeWhole(
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
     if (!handoverDue(steer, chain.used)) return undefined
-    const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
+    const status = /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1]
     if (status === "完成") return undefined
     if (status === "继续") {
       log(`↻ ${task.id} 上下文达到 ${formatTokens(cap * 2)} 上限,已交接 ${handoffFile(task)},新会话继续`)
@@ -782,7 +798,7 @@ function firstLine(text: string): string {
 }
 
 // fork 流水线 ① 理解阶段(fork-decompose 设计 §4.1): 理解会话只读探查并写
-// docs/<id>.context.md 四节摘要(requireArtifact 同款两次重试 + 隐性阻塞);成功后
+// docs/<id>/context.md 四节摘要(requireArtifact 同款两次重试 + 隐性阻塞);成功后
 // driver 写任务字段 fork-base(session 模式下即最终基点;digest 模式随后被基点
 // 确认会话覆写)并按 "understand" 阶段统一提交。摘要已存在(中断恢复/上一轮
 // 遗留)时幂等跳过,仅补写缺失的 fork-base(中断恰好落在摘要写盘与 setForkBase
@@ -794,8 +810,13 @@ async function ensureUnderstood(
   opts: Opts,
   chain: SessionChain,
 ): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
-  const file = join(dirname(plan.path), "docs", `${task.id}.context.md`)
-  if ((await Bun.file(file).text().catch(() => "")).trim()) {
+  // 摘要路径(目录化布局,stable-refs P1): 写目标恒为新路径;读点经 resolveTaskDoc
+  // 回落旧平铺 docs/<id>.context.md,存量项目中断恢复不受改名影响。
+  const dir = dirname(plan.path)
+  const file = join(dir, taskDoc(task.id, "context"))
+  const readContext = async (): Promise<string> =>
+    (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "context"))).text().catch(() => "")).trim()
+  if (await readContext()) {
     log(`↻ ${task.id} 理解摘要 ${file} 已存在,跳过理解会话`)
     if (!task.forkBase && chain.id) {
       await setForkBase(plan.path, task.id, chain.id)
@@ -810,7 +831,7 @@ async function ensureUnderstood(
   for (let i = 0; ; i++) {
     const result = await runSession(client, task, renderUnderstand(plan, task, opts) + feedback, opts, chain)
     if (result.type === "blocked") return result
-    if ((await Bun.file(file).text().catch(() => "")).trim()) {
+    if (await readContext()) {
       // 理解会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
       if (chain.id) await setForkBase(plan.path, task.id, chain.id)
       task = requireTask(await load(plan.path), task.id)
@@ -921,7 +942,7 @@ export async function ensureForkBase(
   if (!switches.fork) return undefined
   const dir = opts.dir ?? dirname(plan.path)
   if (switches.forkBase === "digest") {
-    const digest = (await Bun.file(join(dir, "docs", `${task.id}.context.md`)).text().catch(() => "")).trim()
+    const digest = (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "context"))).text().catch(() => "")).trim()
     if (digest) {
       const subject = `${task.id} ctxbase ${task.title}`
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
@@ -933,7 +954,7 @@ export async function ensureForkBase(
       }
       log(`↻ ${task.id} digest 基点会话未建立${result.type === "blocked" ? `(${firstLine(result.question)})` : ""},回退 session 基点`)
     } else {
-      log(`↻ ${task.id} 缺少 docs/${task.id}.context.md 摘要,digest 基点不可建立,回退 session 基点`)
+      log(`↻ ${task.id} 缺少 ${taskDoc(task.id, "context")} 摘要,digest 基点不可建立,回退 session 基点`)
     }
   }
   if (task.forkBase) {
@@ -957,7 +978,7 @@ async function sessionUsed(client: OpencodeClient, id: string): Promise<number> 
 
 // Ensures the task body has a checklist: tasks resuming with one (or with a
 // human-written one) are used as-is; otherwise a decomposition session writes
-// docs/<id>.subtasks.md and the driver injects the items into PLAN.md.
+// docs/<id>/subtasks.md and the driver injects the items into PLAN.md.
 // 中断恢复: 分解会话可能已写出文件但尚未注入——先直读文件,有效则直接注入,
 // 不再开会话。
 async function ensureDecomposed(
@@ -969,8 +990,13 @@ async function ensureDecomposed(
   base?: ForkBaseInfo,
 ): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
   if (subtasks(task.body).length) return { type: "ok", task }
-  const file = join(dirname(plan.path), "docs", `${task.id}.subtasks.md`)
-  const existing = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
+  // 分解结果路径(目录化布局): 写目标恒为新路径;读点经 resolveTaskDoc 回落旧
+  // 平铺 docs/<id>.subtasks.md(中断恢复: 分解会话可能已写旧名文件但尚未注入)。
+  const dir = dirname(plan.path)
+  const file = join(dir, taskDoc(task.id, "subtasks"))
+  const readItems = async (): Promise<string[]> =>
+    subtasks(await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "subtasks"))).text().catch(() => "")).map((item) => item.text)
+  const existing = await readItems()
   if (existing.length) {
     log(`↻ ${task.id} 分解结果 ${file} 已存在,直接注入检查项`)
     await setSubtasks(plan.path, task.id, existing)
@@ -990,7 +1016,7 @@ async function ensureDecomposed(
     // (fork-decompose-design.md §5.1)。
     const result = await runSession(client, task, renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine }) + feedback, opts, chain)
     if (result.type === "blocked") return result
-    const items = subtasks(await Bun.file(file).text().catch(() => "")).map((item) => item.text)
+    const items = await readItems()
     if (items.length) {
       await setSubtasks(plan.path, task.id, items)
       await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject })
@@ -1016,7 +1042,7 @@ async function ensureDecomposed(
 // deferred to the single task-level review after wrap-up (a gap there
 // appends a fix subtask).
 // handoff-steer 同样适用于子任务会话(与 ondemand 整任务会话同机制、共用
-// docs/<id>.handoff.md): 会话进行中上下文已用量达到 2x --context-limit 时
+// docs/<id>/handoff.md): 会话进行中上下文已用量达到 2x --context-limit 时
 // driver steer 交接提示,会话写出交接文档(末行 `状态: 继续|完成`,以本子任务
 // 是否完成计)后换新会话凭交接续跑,直到自然完成或交接文档标记完成;子任务
 // 完成后清除交接文档,下一子任务重新起算。实验开关 OPENCODE_AUTO_STEER=off
@@ -1039,11 +1065,15 @@ async function runSubtask(
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
   // (见 handoverDue);--handover-test 的测试交接是独立机制,不受影响。
   const steer = handoffSteer(autoSwitches().steer, cap, task)
-  const file = join(dirname(plan.path), handoffFile(task))
+  // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径(提示词经 handoffFile
+  // 注入),读点优先新路径、旧平铺存在则回落。
+  const planDir = dirname(plan.path)
+  const readHandoff = async (): Promise<string> =>
+    Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在且
   // 状态=完成 → 子任务在中断前已由交接会话完成,直接勾选;状态=继续 → 以续跑
   // 提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
-  const prior = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
+  const prior = /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1]
   if (prior === "完成") {
     log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记子任务已完成,直接勾选`)
   } else {
@@ -1072,7 +1102,7 @@ async function runSubtask(
       // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
       // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
       if (!handoverDue(steer, chain.used)) break
-      const status = /状态[:：]\s*(继续|完成)/.exec(await Bun.file(file).text().catch(() => ""))?.[1]
+      const status = /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1]
       if (status === "完成") break
       // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
       await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
@@ -1098,9 +1128,11 @@ async function runSubtask(
     }
   }
   // 子任务完成: 清除交接文档(ondemand 交接与测试交接,下一子任务重新起算——
-  // 测试交接按子任务命名,这里移除本子任务的文件),driver 勾选后统一提交。
-  await rm(file, { force: true })
-  await rm(join(dirname(plan.path), testHandoffFile(task, index)), { force: true })
+  // 测试交接按子任务命名,这里移除本子任务的文件),新旧两处一并清(driver 勾选后统一提交)。
+  await rm(join(planDir, handoffFile(task)), { force: true })
+  await rm(join(planDir, legacyTaskDoc(task.id, "handoff")), { force: true })
+  await rm(join(planDir, testHandoffFile(task, index)), { force: true })
+  await rm(join(planDir, legacySubtaskTestHandoff(task.id, index)), { force: true })
   await tick(plan.path, task.id, text)
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
   await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
@@ -1195,6 +1227,23 @@ async function verifyTask(
     pending = undefined
     if (execution.type === "blocked") return execution
     await persist?.({ kind: "verify", stage: "judge", ...counters, run: execution.run, audit: execution.audit })
+    // 引用门禁(stable-refs P4,D6 第三层): 判定会话前对任务产物文档(docs/
+    // T-NNN/**)做确定性预扫——失效引用 = 差距,直接进修复轮、不消耗判定会话;
+    // 修复轮语义与判定差距一致(off 模式回退 pending,耗尽阻塞退出 2)。verify
+    // 未启用时无任务级验收,门禁不存在(退化为提交时 auto-correct 的 ⚠ 日志)。
+    const refGap = formatRefGap(await taskRefFindings(dir, task.id))
+    if (refGap) {
+      if (mode === "off") return { type: "gap", gap: refGap }
+      round++
+      if (round >= FIX_ROUNDS) {
+        return { type: "blocked", question: `任务产物文档连续 ${FIX_ROUNDS} 轮修复仍存在失效引用:\n${refGap}` }
+      }
+      log(`↻ ${task.id} 任务产物文档存在失效引用,反馈回执行会话修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${refGap}`)
+      await persist?.({ kind: "verify", stage: "fix", round, rechecks, replaced, gap: refGap })
+      const blocked = await fixRound(refGap, round)
+      if (blocked) return blocked
+      continue
+    }
     const verdict = await judge(client, plan, task, opts, execution.run)
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "pass") {
@@ -1401,7 +1450,7 @@ async function reviewTask(
   })
 }
 
-// 审核差距 → 旁路修复规划会话(设计文档 B.4): 产出 docs/<id>.fix.md 检查项,
+// 审核差距 → 旁路修复规划会话(设计文档 B.4): 产出 docs/<id>/fix.md 检查项,
 // 调用方经 appendSubtasks 注入 PLAN.md,交既有子任务会话机制执行。
 async function planReviewFix(
   client: OpencodeClient,
@@ -1411,16 +1460,19 @@ async function planReviewFix(
   gap: string,
 ): Promise<{ type: "ok"; items: string[] } | (Outcome & { type: "blocked" })> {
   autobanner(`${task.id} ${task.title}: 审核修复规划`)
-  const file = join(dirname(plan.path), "docs", `${task.id}.fix.md`)
+  // 修复检查项文件(目录化布局): reset/collect 同一目标;collect 读经 resolveTaskDoc
+  // 回落旧平铺 docs/<id>.fix.md(中断恢复: 规划会话可能已写旧名文件)。
+  const dir = dirname(plan.path)
+  const file = join(dir, taskDoc(task.id, "fix"))
   const collected = await requireArtifact(client, task, renderReviewFix(plan, task, gap, opts), opts, {
     kind: "修复规划",
-    artifact: `有效修复检查项文件 docs/${task.id}.fix.md`,
+    artifact: `有效修复检查项文件 ${taskDoc(task.id, "fix")}`,
     detail: "缺失或无检查项",
     requirement: "必须把修复检查项写入该文件(每条差距至少一项)。",
     commit: { stage: "review-fix", subject: `${task.id} planfix ${task.title}` },
     reset: () => rm(file, { force: true }),
     collect: async () => {
-      const items = subtasks(await Bun.file(file).text().catch(() => ""))
+      const items = subtasks(await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "fix"))).text().catch(() => ""))
       return items.length ? items.map((item) => item.text) : undefined
     },
   })
@@ -1521,7 +1573,7 @@ export function handoverDue(steer: Steer | undefined, used: number): boolean {
 // (初始化时扫描既有 tmp/test.<n>.out 取最大值——每次执行都会产出 .out,故以
 // 它为编号基准;test/ 脚本路径形态不另产 .sh,内联形态产 tmp/test.<n>.sh);
 // handoffFile 为 --handover-test 交接文档绝对路径(按执行范围命名: 子任务为
-// docs/<id>-S<n>.testhandoff.md,整任务/修复轮为 docs/<id>.testhandoff.md);
+// docs/<id>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<id>/testhandoff.md);
 // handover 开关;limit 为上下文
 // 已用量上限(config.contextLimit 原值;ondemand 的交接 steer 用其 2 倍);
 // last 为最近一次执行信息(continuation 提示引用其输出路径)。
@@ -1544,8 +1596,8 @@ const TEST_HANDOVER_ADVISORY = 10
 // 以 continuation 提示(先读交接文档与最近输出)开新会话续跑,直至会话自然完成。
 // 交接次数不设硬上限,超过 TEST_HANDOVER_ADVISORY 时提示 AI 评估是否陷入无法
 // 解决的问题(可 AUTO-FIXME 标注遗留后继续)。subtask 为子任务序号(仅子任务
-// 会话传入): 交接文档按执行范围命名(docs/<id>-S<n>.testhandoff.md),防下一
-// 子任务误读上一子任务的遗留交接;整任务/修复轮为任务级命名。
+// 会话传入): 交接文档按执行范围命名(子任务级 docs/<id>/S<两位序号>/
+// testhandoff.md),防下一子任务误读上一子任务的遗留交接;整任务/修复轮为任务级命名。
 async function runExecSession(
   client: OpencodeClient,
   plan: Plan,
@@ -1570,8 +1622,11 @@ async function runExecSession(
   }
   // 中断恢复播种: 陈旧测试交接文档由 pipeline 在非恢复路径按范围清除,此处文件
   // 仍非空即 active 恢复——中断前已完成测试交接,首个会话即以续跑提示凭交接文档
-  // 继续(文件按执行范围命名,只认本范围的交接)。
-  let continuation = (await Bun.file(test.handoffFile).text().catch(() => "")).trim() !== ""
+  // 继续(文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落)。
+  const seeded = subtask !== undefined
+    ? await resolveSubtaskDoc(dir, task.id, subtask, "testhandoff")
+    : await resolveTaskDoc(dir, task.id, "testhandoff")
+  let continuation = (await Bun.file(join(dir, seeded)).text().catch(() => "")).trim() !== ""
   if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已测试交接 ${handoff},新会话凭交接文档续跑`)
   let handovers = 0
   for (;;) {
@@ -1601,11 +1656,20 @@ async function latestTestSeq(tmp: string): Promise<number> {
   return max
 }
 
-// 该任务的测试交接文档是否留有任一执行范围的遗留(任务级 docs/<id>.testhandoff.md
-// 或子任务级 docs/<id>-S<n>.testhandoff.md): 中断恢复判定用——文件在手说明中断前
+// 该任务的测试交接文档是否留有任一执行范围的遗留(任务级 docs/<id>/testhandoff.md
+// 或子任务级 docs/<id>/S<kk>/testhandoff.md;兼容期旧平铺 docs/<id>.testhandoff.md
+// 与 docs/<id>-S<n>.testhandoff.md 同样认定): 中断恢复判定用——文件在手说明中断前
 // 会话已写出交接,旧会话上下文已用满,不得复用(开新会话凭交接续跑)。
 async function testHandoffExists(dir: string, task: Task): Promise<boolean> {
-  if (await Bun.file(join(dir, testHandoffFile(task))).exists()) return true
+  // 任务级: 目录化新路径与旧平铺两处。
+  if (await Bun.file(join(dir, taskDoc(task.id, "testhandoff"))).exists()) return true
+  if (await Bun.file(join(dir, legacyTaskDoc(task.id, "testhandoff"))).exists()) return true
+  // 子任务级: 任务目录内任意层级 testhandoff.md(** 匹配零段,任务级同名文件已被
+  // 上面覆盖,此处聚焦子任务目录;范围收窄到本任务)。
+  for await (const _ of new Bun.Glob(join("docs", task.id, "**", "testhandoff.md")).scan({ cwd: dir, onlyFiles: true })) {
+    return true
+  }
+  // 兼容期旧平铺 docs/<id>-S<n>.testhandoff.md 前缀扫描。
   for (const name of await readdir(join(dir, "docs")).catch(() => [] as string[])) {
     if (name.startsWith(`${task.id}-S`) && name.endsWith(".testhandoff.md")) return true
   }
@@ -1614,10 +1678,15 @@ async function testHandoffExists(dir: string, task: Task): Promise<boolean> {
 
 // 测试交接文档的陈旧清理(非恢复续跑): 任务级与全部子任务级一并移除——交接
 // 循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态,留给下一执行范围
-// 会被误读为续跑依据。
+// 会被误读为续跑依据。目录化新布局与兼容期旧平铺两处同清。
 async function cleanTestHandoffs(planPath: string, task: Task): Promise<void> {
-  await rm(join(dirname(planPath), testHandoffFile(task)), { force: true })
-  const docs = join(dirname(planPath), "docs")
+  const dir = dirname(planPath)
+  await rm(join(dir, taskDoc(task.id, "testhandoff")), { force: true })
+  await rm(join(dir, legacyTaskDoc(task.id, "testhandoff")), { force: true })
+  for await (const file of new Bun.Glob(join("docs", task.id, "S*", "testhandoff.md")).scan({ cwd: dir, onlyFiles: true })) {
+    await rm(join(dir, file), { force: true })
+  }
+  const docs = join(dir, "docs")
   for (const name of await readdir(docs).catch(() => [] as string[])) {
     if (name.startsWith(`${task.id}-S`) && name.endsWith(".testhandoff.md")) {
       await rm(join(docs, name), { force: true })

@@ -103,7 +103,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "handoff-steer": ["状态: 继续", "状态: 完成"],
   "infer-source": ['"sourceDir"', '"blocked"'],
   "number-recovery": [".auto/next-task"],
-  "phase-handover": ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引", "handover.md"],
+  "phase-handover": ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引", "{{handover}}"],
   "phase-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
   review: ["结论: 通过", "结论: 差距", ".auto/review.md"],
   "review-fix": ["- [ ]"],

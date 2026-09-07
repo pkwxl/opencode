@@ -614,9 +614,10 @@ if (command === "init" || command === "continue") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  // continue: 归档上一轮(前置校验已过)。归档移走 PLAN.md 与台账后,下方模板循环
-  // 以空模板重建 PLAN.md,台账缺失 = 空台账(新一轮从头规划);上一轮的 docs/
-  // 快照一并清除(新一轮首个规划会话重新快照)。
+  // continue: 归档上一轮(前置校验已过)。归档移走 PLAN.md 与台账、拷贝 AGENTS.md
+  // 快照后,下方模板循环以空模板重建 PLAN.md,台账缺失 = 空台账(新一轮从头规划);
+  // docs/ 产物文档(docs/T-*/、handovers/、migration-kb/、prior-kb/)为永久路径,
+  // 不随归档移动(stable-refs P2)。
   let archivedRound = 0
   if (cont) {
     try {
@@ -626,7 +627,7 @@ if (command === "init" || command === "continue") {
       process.exit(1)
     }
     console.log(
-      `✓ 上一轮(第 ${archivedRound} 轮)已归档: docs/phases/round-${archivedRound}/(台账、各阶段归档、PLAN 与知识文档残留)。` +
+      `✓ 上一轮(第 ${archivedRound} 轮)已归档: docs/phases/round-${archivedRound}/(台账、各阶段归档、轮末 PLAN 与 AGENTS.md 快照;交接与知识文档为永久路径,不随归档移动)。` +
         "上一轮结论将注入新一轮首个阶段规划会话",
     )
   }
@@ -671,6 +672,7 @@ if (command === "init" || command === "continue") {
   }
   console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
   console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
+  console.log(ensured.refs ? "已补写: AGENTS.md 引用规范块" : "跳过已存在: AGENTS.md 引用规范块")
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
   // -p/--prompt: 项目意图文本写入 .opencode/auto/brief.md(版本化、随仓库共享、
@@ -703,13 +705,14 @@ if (command === "init" || command === "continue") {
   process.exit(0)
 }
 
-// check: 启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
+// check: ①启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
 // (及 verify 启用时的"验证执行权在 driver"、testByDriver 启用时的"测试/编译
-// 等命令执行权在 driver"原则)相违背的描述;命中退出码 1,供人工修订。验证/
-// 测试类检查是否启用由 checkPrinciple 依配置决定,verifyOn/testOn 仅用于调整
-// 报文措辞。
+// 等命令执行权在 driver"原则)相违背的描述;②引用检查(stable-refs P4)——
+// 全量活文档(docs/**/*.md,排除 docs/phases/**)扫描失效引用(路径不存在 /
+// 行号超出文件总行数)。任一命中退出码 1,供人工修订。验证/测试类检查是否
+// 启用由 checkPrinciple 依配置决定,verifyOn/testOn 仅用于调整报文措辞。
 if (command === "check") {
-  const { findings, notes, verifyOn, testOn } = await checkPrinciple(directory)
+  const { findings, notes, refs, verifyOn, testOn } = await checkPrinciple(directory)
   const active = [
     ...(verifyOn ? ["验证"] : []),
     ...(testOn ? ["测试"] : []),
@@ -719,16 +722,28 @@ if (command === "check") {
     ...(verifyOn ? [] : ["验证类未启用(任务级验收关闭)"]),
     ...(testOn ? [] : ["测试类未启用(测试由 driver 执行关闭)"]),
   ].join(";")
-  console.log(`检查 ${directory}: ${active}执行权原则${detail ? `(${detail})` : ""}`)
+  console.log(`检查 ${directory}: ${active}执行权原则${detail ? `(${detail})` : ""} + 文档引用`)
   for (const note of notes) console.log(`ℹ ${note}`)
-  if (!findings.length) {
-    console.log(`✓ 未发现与${active}原则相违背的描述`)
+  if (!findings.length && !refs.length) {
+    console.log(`✓ 未发现与${active}原则相违背的描述,文档引用检查全部通过`)
     process.exit(0)
   }
   for (const finding of findings) {
     console.log(`⚠ ${finding.file}${finding.task ? `(${finding.task})` : ""}:${finding.line}: ${finding.text}`)
   }
-  console.log(`发现 ${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""}${testOn ? ";编译/测试/构建/lint 等命令统一写成脚本放 test/ 由 driver 执行" : ""})`)
+  for (const ref of refs) {
+    console.log(`⚠ 失效引用 ${ref.file}:${ref.line} → ${ref.path}(${ref.problem === "beyond-eof" ? "行号超出文件总行数" : "路径不存在"}): ${ref.text}`)
+  }
+  const summary = [
+    ...(findings.length
+      ? [
+          `${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订` +
+            `${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""}${testOn ? ";编译/测试/构建/lint 等命令统一写成脚本放 test/ 由 driver 执行" : ""})`,
+        ]
+      : []),
+    ...(refs.length ? [`${refs.length} 处失效引用(更新为现行路径,或行内标注 已删除/已归档/历史 豁免)`] : []),
+  ]
+  console.log(`发现 ${summary.join("与")}`)
   process.exit(1)
 }
 
@@ -788,8 +803,8 @@ console.error(`用法:
        --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
        --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
        --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
-       --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(docs/<任务>[-S<子任务>].testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
-       --auto-number / --no-auto-number 自动编号开关(缺省 --no-auto-number = 沿用现状): 启用后任务编号(T-NNN)在目标目录永不重复——下一可用编号持久化在 .auto/next-task,阶段规划会话自该记录续接编号(不再每阶段从 T-001 重排);记录缺失(如 .auto/ 未随仓库共享的新克隆)时先经 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导下一编号并恢复记录,再继续规划
+       --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(子任务会话为 docs/<任务>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<任务>/testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
+       --auto-number / --no-auto-number 自动编号开关(缺省 --auto-number = 启用,--no-auto-number 为关闭用退出开关): 任务编号(T-NNN)在目标目录永不重复——下一可用编号持久化在 .auto/next-task,阶段规划会话自该记录续接编号(不再每阶段从 T-001 重排);记录缺失(如 .auto/ 未随仓库共享的新克隆)时先经 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导下一编号并恢复记录,再继续规划
        continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——上一轮归档到 docs/phases/round-<N>/(台账、各阶段归档、PLAN 与知识文档残留),台账与 PLAN.md 重置,上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项(含 --test-by-driver/--handover-test)、-p 可按轮修订(不受前缀护栏约束)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)

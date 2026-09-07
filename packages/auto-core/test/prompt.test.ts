@@ -79,7 +79,7 @@ const listTask = listPlan.tasks[0]!
 describe("renderDecompose", () => {
   test("要求只读分析并产出 subtasks.md 检查项", () => {
     const text = renderDecompose(plan, task)
-    expect(text).toContain("docs/T-002.subtasks.md")
+    expect(text).toContain("docs/T-002/subtasks.md")
     expect(text).toContain("- [ ] <子任务描述;末尾注明该项的产出>")
     expect(text).toContain("只做任务分解,不写实现代码")
     expect(text).toContain("不修改任何实现代码")
@@ -171,7 +171,7 @@ describe("renderUnderstand(fork 流水线 ① 理解会话)", () => {
     const text = renderUnderstand(plan, task)
     expect(text).toContain("只做任务背景理解,不写实现代码、不做任务分解")
     expect(text).toContain("不修改任何实现代码")
-    expect(text).toContain("docs/T-002.context.md")
+    expect(text).toContain("docs/T-002/context.md")
     expect(text).toContain("## 相关文件与关键符号")
     expect(text).toContain("## 约束与前提")
     expect(text).toContain("## 已有决策与现状")
@@ -200,7 +200,7 @@ describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
     const digest = "## 相关文件与关键符号\n- src/x.ts: 数据模型\n\n## 约束与前提\n- 只读目标目录"
     const text = renderContextBase(task, digest)
     expect(text).toContain("任务 T-002 理解阶段产出的背景摘要")
-    expect(text).toContain("docs/T-002.context.md 全文")
+    expect(text).toContain("docs/T-002/context.md 全文")
     expect(text).toContain("本会话由 driver 建立")
     expect(text).toContain(digest)
     expect(text).toContain("回复一句简短确认即可")
@@ -245,12 +245,12 @@ describe("renderSubtask", () => {
 
   test("交接条款默认注入;continuation 要求先读交接文档", () => {
     const text = renderSubtask(plan, task, subtask)
-    expect(text).toContain("docs/T-002.handoff.md")
+    expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("[driver] 上下文即将达到上限")
     expect(text).toContain("以本子任务是否完成计")
-    expect(text).not.toContain("先读 docs/T-002.handoff.md")
+    expect(text).not.toContain("先读 docs/T-002/handoff.md")
     const cont = renderSubtask(plan, task, subtask, { continuation: true })
-    expect(cont).toContain("先读 docs/T-002.handoff.md")
+    expect(cont).toContain("先读 docs/T-002/handoff.md")
     expect(cont).toContain("据此继续")
   })
 
@@ -263,24 +263,24 @@ describe("renderSubtask", () => {
     expect(on).toContain("把同一脚本路径再次写入 tmp/test.sh")
     // handover-test 附带交接文档提示
     const handover = renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })
-    expect(handover).toContain("docs/T-002.testhandoff.md")
+    expect(handover).toContain("docs/T-002/testhandoff.md")
     expect(handover).toContain("由新会话继续")
-    // 未启用时协议与交接描述均不出现
+    // 未启用时协议与交接描述均不出现(doc-layout 共享段的规范性提及不含交接协议本身)
     const off = renderSubtask(plan, task, subtask)
     expect(off).not.toContain("测试执行协议")
     expect(off).not.toContain("tmp/test.sh")
-    expect(off).not.toContain("testhandoff")
+    expect(off).not.toContain("driver 会要求你把进度与后续步骤写入")
   })
 
-  test("测试交接文档按子任务命名(-S<n> 后缀): 下一子任务不会误读上一子任务的遗留交接", () => {
+  test("测试交接文档按子任务级目录命名: 下一子任务不会误读上一子任务的遗留交接", () => {
     const handover = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, testByDriver: true, handoverTest: true })
-    expect(handover).toContain("docs/T-004-S2.testhandoff.md")
-    expect(handover).not.toContain("docs/T-004.testhandoff.md")
-    // 缺省推导 index(按正文检查项定位)同样带后缀
+    expect(handover).toContain("docs/T-004/S02/testhandoff.md")
+    expect(handover).not.toContain("docs/T-004/testhandoff.md")
+    // 缺省推导 index(按正文检查项定位)同样落子任务级目录
     const derived = renderSubtask(listPlan, listTask, "编写文档", { testByDriver: true, handoverTest: true })
-    expect(derived).toContain("docs/T-004-S3.testhandoff.md")
+    expect(derived).toContain("docs/T-004/S03/testhandoff.md")
     // 无检查项任务(旧形态单子任务)保持任务级命名
-    expect(renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })).toContain("docs/T-002.testhandoff.md")
+    expect(renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })).toContain("docs/T-002/testhandoff.md")
   })
 })
 
@@ -293,23 +293,23 @@ describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注
     expect(text).toContain("- [ ] 编写执行逻辑")
     // 产出约定: 文档类产出写 driver 机械命名的独立文件
     expect(text).toContain("产出约定")
-    expect(text).toContain("写入 docs/T-004/S02.md(独立文件,标题写在首行,不并入其他文档)")
+    expect(text).toContain("写入 docs/T-004/S02/index.md(独立文件,标题写在首行,不并入其他文档)")
     expect(text).toContain("代码类产出直接落于源码树")
   })
 
   test("缺省推导: 不传 index 时按正文检查项定位同名项", () => {
     const text = renderSubtask(listPlan, listTask, "编写文档")
     expect(text).toContain("你本次只负责其中的第 3 项")
-    expect(text).toContain("写入 docs/T-004/S03.md")
+    expect(text).toContain("写入 docs/T-004/S03/index.md")
   })
 
   test("背景段 warm 两态: 继承上下文勿重读 / 冷启动先读 context.md 摘要", () => {
     const warm = renderSubtask(listPlan, listTask, "编写文档", { index: 3, warm: true })
     expect(warm).toContain("本会话已继承任务背景上下文(理解阶段的摘要与已加载内容),无需重读已在上下文中的文件")
-    expect(warm).toContain("如仍缺背景,可读 docs/T-004.context.md 摘要")
+    expect(warm).toContain("如仍缺背景,可读 docs/T-004/context.md 摘要")
     expect(warm).not.toContain("先读之了解任务背景")
     const cold = renderSubtask(listPlan, listTask, "编写文档", { index: 3 })
-    expect(cold).toContain("如存在 docs/T-004.context.md,先读之了解任务背景再开始(不存在则按需自行阅读源码)")
+    expect(cold).toContain("如存在 docs/T-004/context.md,先读之了解任务背景再开始(不存在则按需自行阅读源码)")
     expect(cold).not.toContain("已继承任务背景上下文")
   })
 
@@ -321,10 +321,10 @@ describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注
   })
 
   test("subtaskOutputFile: 两位递增命名(超出两位自然进位)", () => {
-    expect(subtaskOutputFile(task, 1)).toBe("docs/T-002/S01.md")
-    expect(subtaskOutputFile(task, 9)).toBe("docs/T-002/S09.md")
-    expect(subtaskOutputFile(task, 12)).toBe("docs/T-002/S12.md")
-    expect(subtaskOutputFile(task, 123)).toBe("docs/T-002/S123.md")
+    expect(subtaskOutputFile(task, 1)).toBe("docs/T-002/S01/index.md")
+    expect(subtaskOutputFile(task, 9)).toBe("docs/T-002/S09/index.md")
+    expect(subtaskOutputFile(task, 12)).toBe("docs/T-002/S12/index.md")
+    expect(subtaskOutputFile(task, 123)).toBe("docs/T-002/S123/index.md")
   })
 })
 
@@ -332,7 +332,7 @@ describe("renderWrapup", () => {
   test("只执行收尾: docs、report.md,不标 done、不提交", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("全部子任务已在之前的会话中逐一完成,不要重做")
-    expect(text).toContain("docs/T-002.report.md")
+    expect(text).toContain("docs/T-002/report.md")
     expect(text).not.toContain("git 提交全部未提交改动")
     expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
     expect(text).toContain("由 driver 独占维护")
@@ -367,7 +367,7 @@ describe("renderWrapup", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("索引式报告")
     expect(text).toContain("逐子任务一行")
-    expect(text).toContain("docs/T-002/S<NN>.md 或代码位置")
+    expect(text).toContain("docs/T-002/S<NN>/index.md 或代码位置")
     expect(text).toContain("不复制或改写子任务产物的内容")
     expect(text).toContain("整体结论与遗留问题两节")
   })
@@ -458,7 +458,7 @@ describe("renderVerifyJudge", () => {
     expect(text).toContain("结论: 通过")
     expect(text).toContain("结论: 差距")
     expect(text).toContain("verified-command")
-    expect(text).toContain("docs/T-002.report.md")
+    expect(text).toContain("docs/T-002/report.md")
     expect(text).toContain('任务 verify 字段是"command: bun test"')
     expect(text).toContain("由 driver 独占维护")
     expect(text).toContain("不要重做")
@@ -491,9 +491,9 @@ describe("renderReview", () => {
     expect(text).toContain("忠实性")
     expect(text).toContain("正确性")
     expect(text).toContain("验证过程")
-    expect(text).toContain("docs/T-002.audit.md")
+    expect(text).toContain("docs/T-002/audit.md")
     expect(text).toContain(REVIEW_FILE)
-    expect(text).toContain("docs/T-002.report.md")
+    expect(text).toContain("docs/T-002/report.md")
     expect(text).toContain("git log/status")
     expect(text).toContain("禁止审核其他任务的代码")
     expect(text).toContain("只审不改")
@@ -503,11 +503,12 @@ describe("renderReview", () => {
     expect(text).not.toContain("docs/final-audit.md")
   })
 
-  test("final: 对全计划全面审核,报告写 final-audit.md", () => {
+  test("final: 对全计划全面审核,终审审计并入任务审计路径(P1-D2)", () => {
     const text = renderReview(plan, task, { final: true })
-    expect(text).toContain("docs/final-audit.md")
     expect(text).toContain("最终审核")
     expect(text).toContain("整个计划的设计、实现与文档")
+    expect(text).toContain("docs/T-002/audit.md")
+    expect(text).not.toContain("docs/final-audit.md")
     expect(text).not.toContain("docs/T-002.audit.md")
     expect(text).not.toContain("禁止审核其他任务的代码")
   })
@@ -533,7 +534,7 @@ describe("renderReview", () => {
 
   test("early 与 final 可组合: 终审措辞与并行窗口措辞并存", () => {
     const text = renderReview(plan, task, { final: true, early: true })
-    expect(text).toContain("docs/final-audit.md")
+    expect(text).toContain("docs/T-002/audit.md")
     expect(text).toContain("最终审核")
     expect(text).toContain("并行执行该任务的 verify 脚本")
   })
@@ -543,12 +544,12 @@ describe("renderReviewFix", () => {
   test("把审核差距转为自包含 fix 检查项: 只规划不修复、硬性要求产出", () => {
     const text = renderReviewFix(plan, task, "错误处理未覆盖空输入")
     expect(text).toContain("错误处理未覆盖空输入")
-    expect(text).toContain("docs/T-002.fix.md")
-    expect(text).toContain("docs/T-002.audit.md")
+    expect(text).toContain("docs/T-002/fix.md")
+    expect(text).toContain("docs/T-002/audit.md")
     expect(text).toContain("- [ ] <修复步骤描述>")
     expect(text).toContain("自包含")
     expect(text).toContain("只规划不修复")
-    expect(text).toContain("唯一可写的文件是 docs/T-002.fix.md")
+    expect(text).toContain("唯一可写的文件是 docs/T-002/fix.md")
     expect(text).toContain("产出该文件是硬性要求")
     expect(text).toContain("由 driver 独占维护")
   })
@@ -565,11 +566,11 @@ describe("renderWhole", () => {
 
   test("ondemand 模式: 附交接条款;continuation 要求先读交接文档", () => {
     const text = renderWhole(plan, task, { ondemand: true })
-    expect(text).toContain("docs/T-002.handoff.md")
+    expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("[driver] 上下文即将达到上限")
-    expect(text).not.toContain("先读 docs/T-002.handoff.md")
+    expect(text).not.toContain("先读 docs/T-002/handoff.md")
     const cont = renderWhole(plan, task, { ondemand: true, continuation: true })
-    expect(cont).toContain("先读 docs/T-002.handoff.md")
+    expect(cont).toContain("先读 docs/T-002/handoff.md")
     expect(cont).toContain("据此继续")
   })
 
@@ -580,7 +581,7 @@ describe("renderWhole", () => {
 
   test("交接提示要求写出状态行", () => {
     const steer = renderHandoffSteer(task)
-    expect(steer).toContain("docs/T-002.handoff.md")
+    expect(steer).toContain("docs/T-002/handoff.md")
     expect(steer).toContain("状态: 继续")
     expect(steer).toContain("状态: 完成")
   })
@@ -589,8 +590,8 @@ describe("renderWhole", () => {
     const text = renderWhole(plan, task, { ondemand: true, testByDriver: true, handoverTest: true })
     expect(text).toContain("测试执行协议(--test-by-driver)")
     expect(text).toContain("tmp/test.sh")
-    expect(text).toContain("docs/T-002.handoff.md")
-    expect(text).toContain("docs/T-002.testhandoff.md")
+    expect(text).toContain("docs/T-002/handoff.md")
+    expect(text).toContain("docs/T-002/testhandoff.md")
     expect(renderWhole(plan, task)).not.toContain("测试执行协议")
   })
 })
@@ -605,11 +606,12 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
     out: "/tmp/pkg/tmp/test.3.out",
   }
 
-  test("testHandoffFile 路径与 ondemand handoff 分离命名;子任务带 -S<n> 后缀", () => {
-    expect(testHandoffFile(task)).toBe("docs/T-002.testhandoff.md")
-    expect(testHandoffFile(task)).not.toBe("docs/T-002.handoff.md")
-    expect(testHandoffFile(task, 2)).toBe("docs/T-002-S2.testhandoff.md")
-    expect(testHandoffFile(task, 12)).toBe("docs/T-002-S12.testhandoff.md")
+  test("testHandoffFile 路径与 ondemand handoff 分离命名;子任务级目录(两位零填充)", () => {
+    expect(testHandoffFile(task)).toBe("docs/T-002/testhandoff.md")
+    expect(testHandoffFile(task)).not.toBe("docs/T-002/handoff.md")
+    expect(testHandoffFile(task, 2)).toBe("docs/T-002/S02/testhandoff.md")
+    expect(testHandoffFile(task, 12)).toBe("docs/T-002/S12/testhandoff.md")
+    expect(testHandoffFile(task, 123)).toBe("docs/T-002/S123/testhandoff.md")
   })
 
   test("结果反馈: 退出码/耗时/脚本与输出路径,要求直读文件判断并说明再次请求方式", () => {
@@ -626,27 +628,27 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
   })
 
   test("交接要求: 失败上下文 + 已用 tokens 达上限 + 交接文档硬性要求", () => {
-    const text = renderTestHandover(run, { handoffFile: "/tmp/pkg/docs/T-002.testhandoff.md", used: 66000, limit: 64000 })
+    const text = renderTestHandover(run, { handoffFile: "/tmp/pkg/docs/T-002/testhandoff.md", used: 66000, limit: 64000 })
     expect(text).toContain("退出码 1")
     expect(text).toContain("/tmp/pkg/tmp/test.3.out")
     expect(text).toContain("66000")
     expect(text).toContain("64000")
-    expect(text).toContain("/tmp/pkg/docs/T-002.testhandoff.md")
+    expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("写完立即结束会话")
   })
 
   test("续跑说明: 先读交接文档与最近输出;连续交接超阈值时提示 AUTO-FIXME 评估", () => {
-    const plain = renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run })
-    expect(plain).toContain("docs/T-002.testhandoff.md")
+    const plain = renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run })
+    expect(plain).toContain("docs/T-002/testhandoff.md")
     expect(plain).toContain("/tmp/pkg/tmp/test.3.out")
     expect(plain).toContain("tmp/test.sh")
     expect(plain).not.toContain("AUTO-FIXME")
-    const stuck = renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run, stuck: 11 })
+    const stuck = renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run, stuck: 11 })
     expect(stuck).toContain("已连续进行 11 次")
     expect(stuck).toContain("AUTO-FIXME")
     // 无运行信息时省略最近测试段,仍渲染
-    const bare = renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md" })
-    expect(bare).toContain("docs/T-002.testhandoff.md")
+    const bare = renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md" })
+    expect(bare).toContain("docs/T-002/testhandoff.md")
     expect(bare).not.toContain("test.3.out")
     expect(bare).not.toMatch(/\{\{|\}\}/)
   })
@@ -695,9 +697,9 @@ describe("模式注入(-m/--mode)", () => {
 })
 
 describe("renderFinalTask", () => {
-  test("audit 首轮: 提案路径、报告协议、无 verify 行块与硬性要求", () => {
+  test("audit 首轮: 提案与报告锚定 T-F<k>、报告协议、无 verify 行块与硬性要求", () => {
     const text = renderFinalTask(plan, "audit", 1, "全部原任务已完成,开始首轮终审", migrate)
-    expect(text).toContain("docs/final/plan-audit-r1.md")
+    expect(text).toContain("docs/T-F1/plan-audit-r1.md")
     // 上游输入注入
     expect(text).toContain("全部原任务已完成,开始首轮终审")
     // 提案格式
@@ -705,10 +707,12 @@ describe("renderFinalTask", () => {
     // 终审任务不做任务级验收: 提案不再含 verify 行块
     expect(text).not.toContain("verify: command: <命令>")
     expect(text).not.toContain("优先复用原任务的验证命令")
-    // 报告协议随提案正文要求下沉
-    expect(text).toContain("docs/final/audit-r1.md")
+    // 报告协议随提案正文要求下沉(锚定同一 T-F<k> 任务目录,P1-D1)
+    expect(text).toContain("docs/T-F1/audit-r1.md")
     expect(text).toContain("结论: <概述>")
     expect(text).toContain("策略: 重构|修补|无")
+    // 旧 docs/final/ 布局不再出现
+    expect(text).not.toContain("docs/final/")
     // 只规划不实施与硬性要求
     expect(text).toContain("只规划不实施")
     expect(text).toContain("产出该提案文件是硬性要求")
@@ -717,6 +721,23 @@ describe("renderFinalTask", () => {
     expect(text).toContain("AUTO-DECISION")
     // 首轮不做回退重审措辞
     expect(text).not.toContain("不做全量重审")
+  })
+
+  test("锚定编号随 plan 内终审任务数推进(finalTask 推导)", () => {
+    const finalsPlan = parse(
+      "PLAN.md",
+      `## T-001: 原任务 [done]
+正文。
+
+## T-F1: 终审审计 [done]
+  - final: audit@1
+正文。
+`,
+    )
+    const text = renderFinalTask(finalsPlan, "remediate", 1, "", migrate)
+    expect(text).toContain("docs/T-F2/plan-remediate-r1.md")
+    expect(text).toContain("docs/T-F2/refactor-r1.md")
+    expect(text).not.toContain("docs/final/")
   })
 
   test("audit 首轮注入 migrate 的终审侧重;不传模式时不注入", () => {
@@ -728,33 +749,33 @@ describe("renderFinalTask", () => {
   })
 
   test("audit 第 2 轮: 聚焦残余差距,不做全量重审", () => {
-    const text = renderFinalTask(plan, "audit", 2, "docs/final/validate-r1.md 末行: 结论: 差距 空输入未覆盖", migrate)
-    expect(text).toContain("docs/final/plan-audit-r2.md")
-    expect(text).toContain("docs/final/audit-r2.md")
+    const text = renderFinalTask(plan, "audit", 2, "docs/T-F3/validate-r1.md 末行: 结论: 差距 空输入未覆盖", migrate)
+    expect(text).toContain("docs/T-F1/plan-audit-r2.md")
+    expect(text).toContain("docs/T-F1/audit-r2.md")
     expect(text).toContain("聚焦上游残余差距与回归检查")
     expect(text).toContain("不做全量重审")
     expect(text).toContain("结论: 差距 空输入未覆盖")
   })
 
   test("remediate: 提案路径与修复报告双命名,无模式侧重注入", () => {
-    const text = renderFinalTask(plan, "remediate", 1, "docs/final/audit-r1.md 末行: 策略: 修补", migrate)
-    expect(text).toContain("docs/final/plan-remediate-r1.md")
-    expect(text).toContain("docs/final/refactor-r1.md")
-    expect(text).toContain("docs/final/patch-r1.md")
+    const text = renderFinalTask(plan, "remediate", 1, "docs/T-F1/audit-r1.md 末行: 策略: 修补", migrate)
+    expect(text).toContain("docs/T-F1/plan-remediate-r1.md")
+    expect(text).toContain("docs/T-F1/refactor-r1.md")
+    expect(text).toContain("docs/T-F1/patch-r1.md")
     expect(text).toContain("策略: 修补")
     expect(text).not.toContain("场景模式侧重")
   })
 
   test("validate 与 finalize: 各自提案路径、结论协议与模式侧重", () => {
-    const validate = renderFinalTask(plan, "validate", 1, "docs/final/patch-r1.md 修复已完成", migrate)
-    expect(validate).toContain("docs/final/plan-validate-r1.md")
-    expect(validate).toContain("docs/final/validate-r1.md")
+    const validate = renderFinalTask(plan, "validate", 1, "docs/T-F2/patch-r1.md 修复已完成", migrate)
+    expect(validate).toContain("docs/T-F1/plan-validate-r1.md")
+    expect(validate).toContain("docs/T-F1/validate-r1.md")
     expect(validate).toContain("结论: 通过")
     expect(validate).toContain("结论: 差距 <描述>")
     expect(validate).toContain("回归覆盖")
-    const finalize = renderFinalTask(plan, "finalize", 1, "docs/final/validate-r1.md 末行: 结论: 通过", migrate)
-    expect(finalize).toContain("docs/final/plan-finalize-r1.md")
-    expect(finalize).toContain("docs/final/finalize.md")
+    const finalize = renderFinalTask(plan, "finalize", 1, "docs/T-F3/validate-r1.md 末行: 结论: 通过", migrate)
+    expect(finalize).toContain("docs/T-F1/plan-finalize-r1.md")
+    expect(finalize).toContain("docs/T-F1/finalize.md")
     expect(finalize).toContain("兼容层的收尾")
   })
 })
@@ -777,8 +798,9 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("迁移目标目录(相对工作目录): target")
     expect(text).toContain("不要把迁移代码混入")
     expect(text).toContain("场景模式导语(migrate)")
-    // a 阶段职责与首批勘察要求
-    expect(text).toContain("docs/analysis/")
+    // a 阶段职责(任务锚定产物约定)与首批勘察要求
+    expect(text).toContain("文档存放以任务为锚")
+    expect(text).toContain("行为基线")
     expect(text).toContain("勘察计划排为首批任务")
     // 任务格式协议(协议敏感标记)
     expect(text).toContain("## T-NNN: <任务标题> [pending]")
@@ -793,25 +815,26 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).not.toContain("终审提醒")
   })
 
-  test("brief 缺失 → 未提供提示段;各阶段职责条件注入", () => {
+  test("brief 缺失 → 未提供提示段;各阶段职责条件注入(任务锚定,k 为永久路径知识文档)", () => {
     const missing = renderPhasePlan({ phase: "d" })
     expect(missing).toContain("未提供(brief.md 缺失或为空)")
-    expect(missing).toContain("docs/design/")
-    expect(missing).not.toContain("docs/analysis/")
+    expect(missing).toContain("模块设计")
+    expect(missing).not.toContain("行为基线")
     expect(renderPhasePlan({ phase: "m" })).toContain("代码迁移与改造")
-    expect(renderPhasePlan({ phase: "t" })).toContain("docs/testing/")
-    expect(renderPhasePlan({ phase: "v" })).toContain("docs/acceptance/")
-    expect(renderPhasePlan({ phase: "k" })).toContain("docs/migration-kb/")
+    expect(renderPhasePlan({ phase: "t" })).toContain("回归覆盖")
+    expect(renderPhasePlan({ phase: "v" })).toContain("整体验收")
+    expect(renderPhasePlan({ phase: "k" })).toContain("docs/migration-kb/R<N>-migration-")
   })
 
-  test("handovers 注入两态: 有前序交接则注入清单,无则整块消失", () => {
+  test("handovers 注入两态: 有前序交接则注入清单(标注 docs/handovers/ 永久路径),无则整块消失", () => {
     const text = renderPhasePlan({
       phase: "m",
-      handovers: "### a 分析(docs/phases/a-analysis/handover.md)\n\n- 决策甲: 选型 X",
+      handovers: "### a 分析(docs/handovers/R1-a-analysis.md)\n\n- 决策甲: 选型 X",
     })
     expect(text).toContain("前序阶段交接")
-    expect(text).toContain("跨阶段记忆的唯一通道")
-    expect(text).toContain("### a 分析(docs/phases/a-analysis/handover.md)")
+    expect(text).toContain("唯一通道")
+    expect(text).toContain("docs/handovers/")
+    expect(text).toContain("### a 分析(docs/handovers/R1-a-analysis.md)")
     expect(text).toContain("- 决策甲: 选型 X")
     // 首阶段无前序交接: 交接块整块消失
     expect(renderPhasePlan({ phase: "a" })).not.toContain("前序阶段交接")
@@ -825,6 +848,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("上一轮迁移结论(续轮)")
     expect(text).toContain("完整、一致")
     expect(text).toContain("不要重做已完成")
+    expect(text).toContain("永久路径")
     expect(text).toContain("- docs/phases/round-1/m-migrate/")
     // 非续轮(无 prevRound): 结论块整块消失
     expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
@@ -899,16 +923,16 @@ describe("renderNumberRecovery(编号恢复会话)", () => {
 })
 
 describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
-  test("注入阶段/归档路径/四小节协议与唯一可写文件约束", () => {
-    const text = renderPhaseHandover({ phase: "a", archive: "docs/phases/a-analysis", next: "m 迁移实现", verify: true })
+  test("注入阶段/交接永久路径/四小节协议与唯一可写文件约束", () => {
+    const text = renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现", verify: true })
     expect(text).toContain("「分析」阶段(a)")
     expect(text).toContain("交接蒸馏者")
-    expect(text).toContain("docs/phases/a-analysis/handover.md")
+    expect(text).toContain("docs/handovers/R1-a-analysis.md")
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
     expect(text).toContain("下一阶段为「m 迁移实现」")
-    expect(text).toContain("唯一可写的文件是 docs/phases/a-analysis/handover.md")
+    expect(text).toContain("唯一可写的文件是 docs/handovers/R1-a-analysis.md")
     expect(text).toContain("只蒸馏、")
     expect(text).toContain("不改动任何既有产物")
     expect(text).toContain("AUTO-DECISION")
@@ -916,25 +940,25 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
   })
 
-  test("k 阶段无下一阶段: 供人工归档措辞,仍要求四小节", () => {
-    const text = renderPhaseHandover({ phase: "k", archive: "docs/phases/k-knowledge" })
+  test("k 阶段无下一阶段: 供后续查阅措辞,仍要求四小节", () => {
+    const text = renderPhaseHandover({ phase: "k", handover: "docs/handovers/R1-k-knowledge.md" })
     expect(text).toContain("无下一阶段")
-    expect(text).toContain("供人工归档与后续查阅")
+    expect(text).toContain("供后续轮次与人工查阅")
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
     // 有下一阶段时不带收尾措辞
-    expect(renderPhaseHandover({ phase: "a", archive: "x", next: "m 迁移实现" })).not.toContain("无下一阶段")
+    expect(renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })).not.toContain("无下一阶段")
   })
 
   test("verify 未启用: 不含 verified 字段描述", () => {
-    expect(renderPhaseHandover({ phase: "m", archive: "docs/phases/m-migrate" })).not.toContain("verified")
+    expect(renderPhaseHandover({ phase: "m", handover: "docs/handovers/R1-m-migrate.md" })).not.toContain("verified")
   })
 
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
-      renderPhaseHandover({ phase: "a", archive: "docs/phases/a-analysis", next: "m 迁移实现", verify: true }),
-      renderPhaseHandover({ phase: "k", archive: "docs/phases/k-knowledge" }),
+      renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现", verify: true }),
+      renderPhaseHandover({ phase: "k", handover: "docs/handovers/R1-k-knowledge.md" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
@@ -942,15 +966,15 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
 })
 
 describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowledge)", () => {
-  const FILE = "docs/migration-kb/migration-2026-01-01_00-00-00.md"
+  const FILE = "docs/migration-kb/R1-migration-2026-01-01_00-00-00.md"
 
   test("注入输出路径、来源清单与章节骨架;只读分析、唯一可写文件为输出路径", () => {
     const text = renderKnowledge({ file: FILE })
     expect(text).toContain(FILE)
-    // 来源指针(阶段台账与各阶段归档目录,前序原始 docs/ 已归档)
+    // 来源指针(阶段台账与各阶段交接文档永久路径,归档目录内是阶段 PLAN 快照)
     expect(text).toContain("docs/phases.md")
+    expect(text).toContain("docs/handovers/")
     expect(text).toContain("docs/phases/<字母>-<名称>/")
-    expect(text).toContain("handover.md")
     expect(text).toContain("git log")
     // 章节骨架(规格书 §13 的本仓库化,Design Deviations 改以 AUTO-DECISION 为来源)
     for (const section of ["## 迁移概要", "## API 与类型映射", "## 实现模式", "## 坑点与边界情况", "## 可复用规则", "## 设计偏差与重要决策", "## 验证证据", "## 参考"]) {
@@ -1068,7 +1092,7 @@ describe("模板渲染完整性", () => {
       renderHandoffSteer(task),
       renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
       renderTestHandover({ script: "/s", code: 1, ms: 9, timedOut: true, timeoutReason: "max", out: "/o", seq: 2 }, { handoffFile: "/h", used: 1, limit: 2 }),
-      renderTestContinue({ handoffFile: "docs/T-002.testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
+      renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
       renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "意图", mode: migrate }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md" }),

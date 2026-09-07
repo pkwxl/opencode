@@ -13,10 +13,12 @@
 ## 可用证据(只读)
 
 - 当前 PLAN.md 与各阶段/轮次归档(docs/phases/ 下各归档目录内的 PLAN.md);
-- docs/ 下的任务产物文件名(T-NNN.<用途>.md,如 T-001.subtasks.md;归档目录
-  内的同样有效);
+- docs/ 下的任务产物(T-NNN/<用途>.md 与 T-NNN/S<NN>/index.md,如 T-001/subtasks.md;旧平铺
+  T-NNN.<用途>.md 与归档目录内的同样有效);
 - git 提交历史: 提交信息携带任务编号(git log --oneline 概览即可),可发现
   产物已被删除、文件扫描看不到的编号。
+
+{{> doc-layout}}
 
 ## 任务
 

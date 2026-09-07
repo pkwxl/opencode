@@ -11,7 +11,7 @@ import { requireArtifact, type Opts } from "./runner"
 // T-001 重排);记录缺失时先恢复再继续——无任何历史证据(全新项目)直接写 1,
 // 有历史证据时开旁路一次性 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导
 // 下一编号(git 历史中可能存在产物已被删除的编号,纯文件扫描看不到),driver
-// 以确定性扫描的下限校验其产出。--no-auto-number(缺省)下本文件整体不生效。
+// 以确定性扫描的下限校验其产出。--no-auto-number(退出开关)下本文件整体不生效。
 
 // 编号记录文件(相对目标目录): 内容仅为一个正整数(下一可用编号)。
 export const NEXT_TASK_FILE = join(".auto", "next-task")
@@ -35,9 +35,11 @@ export async function writeNextTask(dir: string, n: number): Promise<void> {
 }
 
 // 已用编号的确定性下限: 扫描当前 PLAN.md、阶段/轮次归档 PLAN(docs/phases/**
-// /PLAN.md,交接会把 docs/T-*.md 一并移入归档目录,故 docs 产物文件名同样
-// 覆盖归档)与 docs 产物文件名(docs/**/T-*.md),取最大编号 + 1;无证据 = 1。
-// 只能看到现存文件——已被删除产物占用的编号需 AI 恢复会话查 git 历史补全。
+// /PLAN.md,交接会把 docs/ 任务文档一并移入归档目录,故 docs 产物路径同样
+// 覆盖归档)与 docs 任务文档(双布局: 目录化 docs/**/T-*/*.md 取路径段,旧平铺
+// docs/**/T-*.md 取文件名——兼容期两者并存,归档目录内的同样覆盖),取最大
+// 编号 + 1;无证据 = 1。只能看到现存文件——已被删除产物占用的编号需 AI 恢复
+// 会话查 git 历史补全。
 export async function taskNumberFloor(dir: string): Promise<number> {
   let max = 0
   const seen = (id: string) => {
@@ -62,8 +64,19 @@ export async function taskNumberFloor(dir: string): Promise<number> {
   for await (const file of new Bun.Glob(join("docs", "phases", "**", "PLAN.md")).scan({ cwd: dir, onlyFiles: true })) {
     await scanPlan(join(dir, file))
   }
+  // 旧平铺布局(兼容期): docs/**/T-*.md,取文件名的任务编号段。
   for await (const file of new Bun.Glob(join("docs", "**", "T-*.md")).scan({ cwd: dir, onlyFiles: true })) {
     seen(basename(file, ".md").split(".")[0]!)
+  }
+  // 目录化布局: docs/**/T-*/*.md,取首个 T-<纯数字> 路径段(T-F<k> 锚定段被
+  // taskNumber 自然过滤)。
+  for await (const file of new Bun.Glob(join("docs", "**", "T-*", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
+    for (const segment of file.split(/[\\/]/)) {
+      if (/^T-\d+$/.test(segment)) {
+        seen(segment)
+        break
+      }
+    }
   }
   return max + 1
 }

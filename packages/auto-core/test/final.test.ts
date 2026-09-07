@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { appendFinalTask, finalProposalFile, finalReportFile, parseConclusion, parseProposal, parseStrategy, routeFinal } from "../src/final"
+import { appendFinalTask, finalIndex, finalProposalFile, finalReportFile, parseConclusion, parseProposal, parseStrategy, routeFinal } from "../src/final"
 import { load, parse, setStatus } from "../src/plan"
 
 let dir: string
@@ -79,6 +79,23 @@ describe("协议解析", () => {
   })
 })
 
+describe("finalIndex(P1-D1 锚定编号)", () => {
+  test("plan 内带 final 字段任务数 + 1(与 appendFinalTask 编号同源)", () => {
+    expect(finalIndex(planWith())).toBe(1)
+    expect(finalIndex(planWith(finalTask("T-F1", "audit@1")))).toBe(2)
+    expect(finalIndex(planWith(finalTask("T-F1", "audit@1"), finalTask("T-F2", "remediate@1")))).toBe(3)
+  })
+
+  test("finalProposalFile/finalReportFile 锚定 docs/T-F<k>/ 目录", () => {
+    expect(finalProposalFile("audit", 1, 1)).toBe(join("docs", "T-F1", "plan-audit-r1.md"))
+    expect(finalReportFile("audit", 2, undefined, 4)).toBe(join("docs", "T-F4", "audit-r2.md"))
+    expect(finalReportFile("remediate", 1, "patch", 2)).toBe(join("docs", "T-F2", "patch-r1.md"))
+    expect(finalReportFile("remediate", 1, "refactor", 2)).toBe(join("docs", "T-F2", "refactor-r1.md"))
+    expect(finalReportFile("validate", 1, undefined, 3)).toBe(join("docs", "T-F3", "validate-r1.md"))
+    expect(finalReportFile("finalize", 1, undefined, 4)).toBe(join("docs", "T-F4", "finalize.md"))
+  })
+})
+
 describe("路由表: 终审启动与未完成状态", () => {
   test("无终审任务 → 生成 audit@1(prior 为空)", async () => {
     const route = await routeFinal(dir, planWith(), 2)
@@ -86,7 +103,7 @@ describe("路由表: 终审启动与未完成状态", () => {
   })
 
   test("提案已产出未追加 → 直接解析追加(C.3)", async () => {
-    await write(finalProposalFile("audit", 1), "# 全面审计\n\n审计任务正文。")
+    await write(finalProposalFile("audit", 1, 1), "# 全面审计\n\n审计任务正文。")
     const route = await routeFinal(dir, planWith(), 2)
     expect(route).toEqual({
       type: "append",
@@ -97,7 +114,7 @@ describe("路由表: 终审启动与未完成状态", () => {
   })
 
   test("提案无效(无正文)仍走 generate", async () => {
-    await write(finalProposalFile("audit", 1), "# 只有标题\n")
+    await write(finalProposalFile("audit", 1, 1), "# 只有标题\n")
     const route = await routeFinal(dir, planWith(), 2)
     expect(route).toEqual({ type: "generate", stage: "audit", round: 1, prior: "" })
   })
@@ -119,26 +136,26 @@ describe("路由表: 终审启动与未完成状态", () => {
 
 describe("路由表: audit 策略", () => {
   test("策略: 无 → 直达 finalize(跳过 remediate 与 validate)", async () => {
-    await write(finalReportFile("audit", 1), auditReport("无", "整体质量合格"))
+    await write(finalReportFile("audit", 1, undefined, 1), auditReport("无", "整体质量合格"))
     const route = await routeFinal(dir, planWith(finalTask("T-F1", "audit@1")), 2)
     expect(route.type).toBe("generate")
     if (route.type !== "generate") return
     expect(route.stage).toBe("finalize")
     expect(route.round).toBe(1)
     expect(route.prior).toContain("策略: 无")
-    expect(route.prior).toContain(finalReportFile("audit", 1))
+    expect(route.prior).toContain(finalReportFile("audit", 1, undefined, 1))
   })
 
   test("策略: 重构|修补 → 生成 remediate@同轮", async () => {
     for (const strategy of ["重构", "修补"]) {
-      await write(finalReportFile("audit", 1), auditReport(strategy))
+      await write(finalReportFile("audit", 1, undefined, 1), auditReport(strategy))
       const route = await routeFinal(dir, planWith(finalTask("T-F1", "audit@1")), 2)
       expect(route.type).toBe("generate")
       if (route.type !== "generate") return
       expect(route.stage).toBe("remediate")
       expect(route.round).toBe(1)
       expect(route.prior).toContain(strategy)
-      expect(route.prior).toContain(finalReportFile("validate", 1))
+      expect(route.prior).toContain(finalReportFile("validate", 1, undefined, 3))
     }
   })
 
@@ -147,16 +164,16 @@ describe("路由表: audit 策略", () => {
     expect(missing.type).toBe("block")
     if (missing.type !== "block") return
     expect(missing.task).toBe("T-F1")
-    expect(missing.question).toContain(finalReportFile("audit", 1))
+    expect(missing.question).toContain(finalReportFile("audit", 1, undefined, 1))
     expect(missing.question).toContain("人工")
 
-    await write(finalReportFile("audit", 1), "# 报告\n\n结论: 有差距\n策略: 大改\n")
+    await write(finalReportFile("audit", 1, undefined, 1), "# 报告\n\n结论: 有差距\n策略: 大改\n")
     const invalid = await routeFinal(dir, planWith(finalTask("T-F1", "audit@1")), 2)
     expect(invalid.type).toBe("block")
   })
 
   test("下一阶段任务已存在 → 不重复生成(C.2)", async () => {
-    await write(finalReportFile("audit", 1), auditReport("重构"))
+    await write(finalReportFile("audit", 1, undefined, 1), auditReport("重构"))
     const plan = planWith(`## T-002: 人工预置 [done]\n  - final: remediate@1\n正文。\n`, finalTask("T-F1", "audit@1"))
     expect(await routeFinal(dir, plan, 2)).toEqual({ type: "wait" })
   })
@@ -166,23 +183,23 @@ describe("路由表: remediate 与 validate", () => {
   const round1Done = [finalTask("T-F1", "audit@1"), finalTask("T-F2", "remediate@1")]
 
   test("remediate done → 生成 validate@同轮,修复报告按策略指向 refactor|patch", async () => {
-    await write(finalReportFile("audit", 1), auditReport("重构"))
+    await write(finalReportFile("audit", 1, undefined, 1), auditReport("重构"))
     const refactor = await routeFinal(dir, planWith(...round1Done), 2)
     expect(refactor.type).toBe("generate")
     if (refactor.type !== "generate") return
     expect(refactor.stage).toBe("validate")
     expect(refactor.round).toBe(1)
-    expect(refactor.prior).toContain(finalReportFile("remediate", 1, "refactor"))
+    expect(refactor.prior).toContain(finalReportFile("remediate", 1, "refactor", 2))
 
-    await write(finalReportFile("audit", 1), auditReport("修补"))
+    await write(finalReportFile("audit", 1, undefined, 1), auditReport("修补"))
     const patch = await routeFinal(dir, planWith(...round1Done), 2)
     expect(patch.type).toBe("generate")
     if (patch.type !== "generate") return
-    expect(patch.prior).toContain(finalReportFile("remediate", 1, "patch"))
+    expect(patch.prior).toContain(finalReportFile("remediate", 1, "patch", 2))
   })
 
   test("validate done + 结论: 通过 → 生成 finalize", async () => {
-    await write(finalReportFile("validate", 1), validateReport("通过"))
+    await write(finalReportFile("validate", 1, undefined, 3), validateReport("通过"))
     const route = await routeFinal(dir, planWith(...round1Done, finalTask("T-F3", "validate@1")), 2)
     expect(route.type).toBe("generate")
     if (route.type !== "generate") return
@@ -192,25 +209,25 @@ describe("路由表: remediate 与 validate", () => {
   })
 
   test("validate done + 结论: 差距 → 回退 audit@下一轮,prior 含差距原文", async () => {
-    await write(finalReportFile("validate", 1), validateReport("差距 回归测试仍失败"))
+    await write(finalReportFile("validate", 1, undefined, 3), validateReport("差距 回归测试仍失败"))
     const route = await routeFinal(dir, planWith(...round1Done, finalTask("T-F3", "validate@1")), 2)
     expect(route.type).toBe("generate")
     if (route.type !== "generate") return
     expect(route.stage).toBe("audit")
     expect(route.round).toBe(2)
     expect(route.prior).toContain("回归测试仍失败")
-    expect(route.prior).toContain(finalReportFile("validate", 1))
+    expect(route.prior).toContain(finalReportFile("validate", 1, undefined, 3))
   })
 
   test("validate 差距且审计轮耗尽 → 熔断 block 本任务,question 引用报告与差距原文(B.5)", async () => {
-    await write(finalReportFile("validate", 1), validateReport("差距 回归仍失败"))
+    await write(finalReportFile("validate", 1, undefined, 3), validateReport("差距 回归仍失败"))
     const route = await routeFinal(dir, planWith(...round1Done, finalTask("T-F3", "validate@1")), 1)
     expect(route.type).toBe("block")
     if (route.type !== "block") return
     expect(route.task).toBe("T-F3")
     expect(route.question).toContain("终审闭环连续 1 轮仍未通过")
-    expect(route.question).toContain(finalReportFile("validate", 1))
-    expect(route.question).toContain(finalReportFile("audit", 1))
+    expect(route.question).toContain(finalReportFile("validate", 1, undefined, 3))
+    expect(route.question).toContain(finalReportFile("audit", 1, undefined, 1))
     expect(route.question).toContain("回归仍失败")
   })
 
@@ -223,7 +240,7 @@ describe("路由表: remediate 与 validate", () => {
       finalTask("T-F5", "remediate@2"),
       finalTask("T-F6", "validate@2"),
     ]
-    await write(finalReportFile("validate", 2), validateReport("差距 第二轮仍未通过"))
+    await write(finalReportFile("validate", 2, undefined, 6), validateReport("差距 第二轮仍未通过"))
     const advance = await routeFinal(dir, planWith(...tasks), 3)
     expect(advance.type).toBe("generate")
     if (advance.type !== "generate") return
@@ -316,13 +333,13 @@ describe("状态重建(闭环全程推进)", () => {
 
     // audit@1: 提案已产出(C.3)→ 追加 → 任务 pending 时主循环直接拾取(C.1)→
     // 模拟执行: 会话写出审计报告、任务标 done → 路由 remediate
-    await write(finalProposalFile("audit", 1), "# 全面审计\n\n审计正文。")
+    await write(finalProposalFile("audit", 1, 1), "# 全面审计\n\n审计正文。")
     let route = await routeFinal(dir, await load(path), 2)
     expect(route.type).toBe("append")
     if (route.type !== "append") return
     await appendFinalTask(path, await load(path), route.stage, route.round, route.proposal)
     expect(await routeFinal(dir, await load(path), 2)).toEqual({ type: "wait" })
-    await write(finalReportFile("audit", 1), auditReport("修补"))
+    await write(finalReportFile("audit", 1, undefined, 1), auditReport("修补"))
     await setStatus(path, "T-F1", "done")
     route = await routeFinal(dir, await load(path), 2)
     expect(route.type).toBe("generate")
@@ -340,7 +357,7 @@ describe("状态重建(闭环全程推进)", () => {
     // validate@1 追加(done 后通过)→ 路由 finalize
     await appendFinalTask(path, await load(path), "validate", 1, { title: "回归验证", body: "验证正文。" })
     await setStatus(path, "T-F3", "done")
-    await write(finalReportFile("validate", 1), validateReport("通过"))
+    await write(finalReportFile("validate", 1, undefined, 3), validateReport("通过"))
     route = await routeFinal(dir, await load(path), 2)
     expect(route.type).toBe("generate")
     if (route.type !== "generate") return

@@ -4,9 +4,12 @@
 // docs/phases.md 台账记录已完成阶段,当前阶段 = phases 串中第一个未在台账出现的
 // 字母,零新增易腐状态;routePhase 由(台账, PLAN.md)两文件推导路由,无隐藏
 // 状态,中断恢复即重新求值。
-import { mkdir, readdir, rename, rm, stat } from "node:fs/promises"
+// stable-refs P2: docs/ 产物文档一律永久路径不随阶段/轮次移动——交接文档落
+// docs/handovers/R<N>-<字母>-<slug>.md,归档只收过期状态文件(PLAN 快照、台账、
+// 轮末 AGENTS.md 快照);P1 前的 docs/ 快照/差异归档链路已删除。
+import { mkdir, readdir, rename, stat } from "node:fs/promises"
 import { readFileSync } from "node:fs"
-import { dirname, join, relative } from "node:path"
+import { join, relative } from "node:path"
 import type { Plan } from "./plan"
 import { renderText } from "./template"
 import templateScaffold from "../templates/PLAN.scaffold.md" with { type: "file" }
@@ -47,9 +50,10 @@ export function parsePhases(raw: string): Phase[] | null {
 
 // 阶段台账(docs/phases.md): 版本化、随仓库提交、人工可编辑。每行一个已完成阶段,
 // 行协议 `- [done] <letter> <名称> → <归档目录>(交接: <handover>)`,driver 只读
-// 字母与归档目录两列,其余为人工可读信息;容忍空行与 # 注释/标题。文件缺失 = 流程
-// 尚未开始。台账行无法解析 / 字母越界 / 重复 → throw(环境错误退出 1,报文给人工
-// 修订指引,见设计文档 C.3 回退规程)。
+// 字母一列,其余为人工可读信息;P2 前的旧行(交接指针指向归档目录内 handover.md)
+// 同样容忍。容忍空行与 # 注释/标题。文件缺失 = 流程尚未开始。台账行无法解析 /
+// 字母越界 / 重复 → throw(环境错误退出 1,报文给人工修订指引,见设计文档 C.3
+// 回退规程)。
 export type Ledger = { done: Phase[] }
 
 const LEDGER_ENTRY = /^-\s*\[done\]\s+([a-z])\s+\S+\s+→\s+\S/
@@ -61,7 +65,8 @@ export async function readLedger(dir: string): Promise<Ledger> {
 }
 
 // 台账文本解析(readLedger 与轮次归档内 phases.md 共用): 容忍空行与 # 注释/标题,
-// 行协议 LEDGER_ENTRY;字母越界/重复/协议行无法解析 → throw(人工修订指引)。
+// 行协议 LEDGER_ENTRY(新旧两种交接指针形态均命中——正则只约束到归档目录列);
+// 字母越界/重复/协议行无法解析 → throw(人工修订指引)。
 function parseLedger(text: string): Phase[] {
   const done: Phase[] = []
   for (const line of text.split("\n")) {
@@ -71,7 +76,7 @@ function parseLedger(text: string): Phase[] {
     if (!letter || !PHASE_ORDER.includes(letter) || done.includes(letter as Phase)) {
       throw new Error(
         `docs/phases.md 台账行无法解析或非法: ${trimmed}` +
-          `(行协议: - [done] <letter> <名称> → <归档目录>,字母取 ${PHASE_ORDER} 中不重复的值;请人工修订该文件,回退规程见 README)`,
+          `(行协议: - [done] <letter> <名称> → <归档目录>(交接: <handover>),交接指针为可选列;字母取 ${PHASE_ORDER} 中不重复的值;请人工修订该文件,回退规程见 README)`,
       )
     }
     done.push(letter as Phase)
@@ -89,19 +94,31 @@ const PHASE_SLUGS: Record<Phase, string> = {
   k: "knowledge",
 }
 
-// 阶段归档目录(相对目标目录): docs/phases/<letter>-<slug>/。
+// 阶段归档目录(相对目标目录): docs/phases/<letter>-<slug>/。P2 起只收过期状态
+// 文件(阶段 PLAN.md 快照;P2 前还曾收本阶段 docs/ 变更与 handover.md)。
 export function phaseArchive(phase: Phase): string {
   return `docs/phases/${phase}-${PHASE_SLUGS[phase]}`
 }
 
+// 阶段交接文档路径(相对目标目录,stable-refs D3): docs/handovers/R<N>-<字母>-
+// <slug>.md——永久路径,落定不移动(R2),轮次经 R<N>- 文件名前缀表达(R7)。
+// 构造点在本文件而非 docpaths.ts: 文件名依赖阶段 slug 表(PHASE_SLUGS 归本模块
+// 所有,避免 docpaths→phases 反向依赖)。P2 前的交接位于归档目录
+// docs/phases/<字母>-<slug>/handover.md,读点经读回落兼容(prevRoundDigest/
+// planPhase,迁移完成后自然消亡)。
+export function handoverDoc(round: number, phase: Phase): string {
+  return `docs/handovers/R${round}-${phase}-${PHASE_SLUGS[phase]}.md`
+}
+
 // 台账追加(交接完成后、统一提交前调用;C.1 行协议)。查重后追加,重复调用幂等
 // ——交接在"台账追加之前"中断时,恢复路径安全补写。文件缺失时带头部注释创建。
+// 交接指针 = 本轮永久路径 handoverDoc(currentRound, phase)。
 export async function appendLedger(dir: string, phase: Phase): Promise<void> {
   if ((await readLedger(dir)).done.includes(phase)) return
   const file = join(dir, "docs", "phases.md")
   const existing = await Bun.file(file).text().catch(() => undefined)
   const header = "# 阶段台账(opencode-auto 维护;人工修订见 README)"
-  const line = `- [done] ${phase} ${phaseText(phase)} → ${phaseArchive(phase)}/(交接: ${phaseArchive(phase)}/handover.md)`
+  const line = `- [done] ${phase} ${phaseText(phase)} → ${phaseArchive(phase)}/(交接: ${handoverDoc(await currentRound(dir), phase)})`
   await Bun.write(file, `${(existing ?? header).trimEnd()}\n\n${line}\n`)
 }
 
@@ -161,73 +178,6 @@ export function renderPlanScaffold(verify: boolean): string {
   return renderText(readFileSync(templateScaffold, "utf8"), { verify })
 }
 
-// 阶段开始的 docs/ 快照与交接归档(F 节)。
-const SNAPSHOT_FILE = join(".auto", "phase-snapshot.json")
-
-// A.1 表约定的各阶段产物目录(docs/ 下一级,相对 docs/): 快照缺失时(中断/清理)
-// 的归档退化依据。m 阶段产物为源码 + docs/ 任务报告与终审产物(docs/final/),
-// 无专属产物目录。
-const PHASE_PRODUCTS: Record<Phase, string[]> = {
-  a: ["analysis"],
-  d: ["design"],
-  m: ["final"],
-  t: ["testing"],
-  v: ["acceptance"],
-  k: ["migration-kb"],
-}
-
-// docs/ 内参与快照/归档的文件(相对 docs/ 路径 → mtimeMs): 排除 docs/phases/
-// (历届归档)、docs/phases.md(台账)与 docs/agents/(AGENTS.md 维护规则块路由的
-// 跨阶段工作流知识)——它们不属于任何单一阶段的产物。
-async function docsFiles(dir: string): Promise<Map<string, number>> {
-  const root = join(dir, "docs")
-  const files = new Map<string, number>()
-  const pending = [root]
-  while (pending.length) {
-    const current = pending.pop()!
-    const entries = await readdir(current, { withFileTypes: true }).catch(() => [])
-    for (const entry of entries) {
-      if (current === root && entry.name === "phases" && entry.isDirectory()) continue
-      if (current === root && entry.name === "agents" && entry.isDirectory()) continue
-      if (current === root && entry.isFile() && entry.name === "phases.md") continue
-      const abs = join(current, entry.name)
-      if (entry.isDirectory()) {
-        pending.push(abs)
-        continue
-      }
-      if (!entry.isFile()) continue
-      files.set(relative(root, abs), (await stat(abs)).mtimeMs)
-    }
-  }
-  return files
-}
-
-// 阶段开始(规划会话前)记录 docs/ 快照到 .auto/phase-snapshot.json(非版本化,
-// 不进仓库);交接时据此判定"本阶段新增/改动"的归档差异项。
-export async function snapshotDocs(dir: string): Promise<void> {
-  const files = await docsFiles(dir)
-  await Bun.write(join(dir, SNAPSHOT_FILE), JSON.stringify(Object.fromEntries(files)))
-}
-
-// 交接归档(F.2): 把本阶段新增/改动的 docs/ 内容移入归档目录(保持相对路径)。
-// 差异判定依阶段开始快照(文件名+mtime);快照缺失时退化为移动 A.1 表约定的
-// 本阶段产物目录与 docs/T-* 任务产物。已移走的文件不在 docs/ 中,重复调用自然
-// 幂等(交接中断重跑的安全侧)。返回移动的相对路径清单。
-export async function archivePhaseDocs(dir: string, phase: Phase): Promise<string[]> {
-  const snapshot = (await Bun.file(join(dir, SNAPSHOT_FILE)).json().catch(() => undefined)) as Record<string, number> | undefined
-  const current = await docsFiles(dir)
-  const diff = snapshot
-    ? [...current].filter(([rel, mtime]) => snapshot[rel] !== mtime).map(([rel]) => rel)
-    : [...current.keys()].filter((rel) => PHASE_PRODUCTS[phase].includes(rel.split(/[\\/]+/)[0]!) || /^T-[\w.-]+\.md$/.test(rel))
-  const archive = join(dir, phaseArchive(phase))
-  for (const rel of diff) {
-    const target = join(archive, rel)
-    await mkdir(dirname(target), { recursive: true })
-    await rename(join(dir, "docs", rel), target)
-  }
-  return diff.sort()
-}
-
 // 交接文档的四个必备小节(F.1 协议): 蒸馏会话产物的 collect 校验与提示词模板
 // 的协议标记(phase-handover.md 内联同一组标题)共用。
 export const HANDOVER_SECTIONS = ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]
@@ -258,10 +208,13 @@ export async function currentRound(dir: string): Promise<number> {
 }
 
 // 归档完成轮(continue 子命令在校验"上一轮已全部完成"后调用): docs/phases/ 下
-// 全部阶段归档目录、docs/migration-kb 残留(交接前中断等)与根 PLAN.md(轮末快照,
-// 留痕任何轮后手工改动)移入 round-<N>/;台账最后移动——它是完成态的标记,
-// 归档中断重跑时未移动即整个动作可重跑(各步为 rename,幂等)。同时清除上一轮的
-// docs/ 快照(新一轮首个规划会话重新快照)。无可归档内容时不创建目录,返回轮次号。
+// 全部阶段归档目录与根 PLAN.md(轮末快照,留痕任何轮后手工改动)移入 round-<N>/,
+// 根 AGENTS.md 每轮拷贝快照(D7,轮内基本静态、阶段级快照冗余;拷贝不移动——它是
+// 跨轮的工作流入口);台账最后移动——它是完成态的标记,归档中断重跑时未移动即
+// 整个动作可重跑(各步为 rename/覆盖写,幂等)。docs/ 产物文档(docs/T-*/、
+// docs/handovers/、docs/migration-kb/、docs/prior-kb/)为永久路径,不参与归档
+// (stable-refs R2;P2 前 archiveRound 曾把 docs/migration-kb 残留一并移入)。
+// 无可归档内容时不创建目录,返回轮次号。
 export async function archiveRound(dir: string): Promise<number> {
   const round = await currentRound(dir)
   const root = join(dir, "docs", "phases")
@@ -271,7 +224,6 @@ export async function archiveRound(dir: string): Promise<number> {
     if (ROUND_RE.test(entry.name)) continue
     moves.push([join(root, entry.name), join(target, entry.name)])
   }
-  moves.push([join(dir, "docs", "migration-kb"), join(target, "migration-kb")])
   moves.push([join(dir, "PLAN.md"), join(target, "PLAN.md")])
   // 台账最后移动: 它是完成态的标记——init 的前置校验读它,归档中断重跑时
   // 台账未移动即整个动作可安全重跑(已移走的条目不在源位,各步幂等)。
@@ -280,14 +232,19 @@ export async function archiveRound(dir: string): Promise<number> {
   if (!sources.some(Boolean)) return round
   await mkdir(target, { recursive: true })
   for (const [from, to] of moves.filter((_, index) => sources[index])) await rename(from, to)
-  await rm(join(dir, SNAPSHOT_FILE), { force: true })
+  // 根 AGENTS.md 每轮拷贝快照(D7);无可归档内容(未建目录)时一并跳过。
+  const agents = await Bun.file(join(dir, "AGENTS.md")).text().catch(() => undefined)
+  if (agents !== undefined) await Bun.write(join(target, "AGENTS.md"), agents)
   return round
 }
 
 // 上一轮结论摘录(注入新一轮首个阶段规划会话,台账为空而存在轮次归档时): ① 各
-// 阶段归档目录索引;② 最终完成阶段的 handover.md 全文;③ 迁移知识文档全文——
-// 迁移结论的核心载体。与"蒸馏产物是唯一通道"的注入纪律一致: 原始产物不注入,
-// 会话可按索引自行取用(归档目录就在工作目录内)。无轮次归档 → undefined。
+// 阶段归档目录索引;② 最终完成阶段的交接文档全文(永久路径 docs/handovers/,
+// P2 前的轮次在归档目录内,读回落);③ 迁移知识文档全文——迁移结论的核心载体
+// (docs/migration-kb/ 的 R<N>- 前缀文件,无前缀存量宽松归入上一轮;P2 前的轮次
+// 归档内亦有 migration-kb/,一并读回落收集)。与"蒸馏产物是唯一通道"的注入纪律
+// 一致: 原始产物不注入,会话可按索引自行取用(归档目录就在工作目录内)。
+// 无轮次归档 → undefined。
 export async function prevRoundDigest(dir: string): Promise<string | undefined> {
   const prev = (await currentRound(dir)) - 1
   if (prev < 1) return undefined
@@ -297,20 +254,26 @@ export async function prevRoundDigest(dir: string): Promise<string | undefined> 
     .filter((entry) => entry.isDirectory() && !ROUND_RE.test(entry.name))
     .map((entry) => entry.name)
     .sort()
-  const knowledge = await collectRoundKnowledge(root)
+  const knowledge = await collectRoundKnowledge(dir, root, prev)
   if (!done.length && !dirs.length && !knowledge.length) return undefined
   const parts = [`### 上一轮(第 ${prev} 轮)阶段归档索引(docs/phases/round-${prev}/)\n`]
   parts.push(dirs.map((name) => `- docs/phases/round-${prev}/${name}/`).join("\n"))
-  const lastDir = done.length ? dirs.find((name) => name.startsWith(`${done[done.length - 1]}-`)) : undefined
-  if (lastDir) {
-    const handover = await Bun.file(join(root, lastDir, "handover.md")).text().catch(() => undefined)
-    if (handover?.trim()) {
-      parts.push(`\n### 上一轮最终交接(docs/phases/round-${prev}/${lastDir}/handover.md)\n`)
-      parts.push(handover.trim())
+  const last = done[done.length - 1]
+  if (last) {
+    // 最终交接自永久路径读取(D3);缺失时回落 P2 前的归档目录内 handover.md。
+    const handover = handoverDoc(prev, last)
+    let text = await Bun.file(join(dir, handover)).text().catch(() => undefined)
+    if (text === undefined) {
+      const lastDir = dirs.find((name) => name.startsWith(`${last}-`))
+      if (lastDir) text = await Bun.file(join(root, lastDir, "handover.md")).text().catch(() => undefined)
+    }
+    if (text?.trim()) {
+      parts.push(`\n### 上一轮最终交接(${handover})\n`)
+      parts.push(text.trim())
     }
   }
   for (const doc of knowledge) {
-    parts.push(`\n### 上一轮迁移知识(docs/phases/round-${prev}/${doc.rel})\n`)
+    parts.push(`\n### 上一轮迁移知识(${doc.rel})\n`)
     parts.push(doc.text.trim())
   }
   return parts.join("\n")
@@ -328,10 +291,20 @@ async function roundDoneLetters(root: string): Promise<Phase[]> {
   return done
 }
 
-// 轮次归档内的迁移知识文档: k 阶段交接归档后位于 <阶段归档>/migration-kb/ 下,
-// 交接前中断的残留由 archiveRound 直接移到轮根——两处都收集。
-async function collectRoundKnowledge(root: string): Promise<Array<{ rel: string; text: string }>> {
+// 迁移知识文档收集(上一轮): ① docs/migration-kb/(永久路径)内 R<prev>- 前缀的
+// 非空 .md——本轮次知识;无 R<N>- 前缀的存量(P2 前布局)宽松归入上一轮一并收集;
+// 前几轮(R<M>-,M ≠ prev)不收集,其结论已蒸馏进上一轮知识。② P2 前的轮次归档
+// 内 migration-kb/(交接归档/中断残留两处)读回落收集——新轮次归档不再含
+// migration-kb,自然空集。
+async function collectRoundKnowledge(dir: string, root: string, prev: number): Promise<Array<{ rel: string; text: string }>> {
   const docs: Array<{ rel: string; text: string }> = []
+  const kbRoot = join(dir, "docs", "migration-kb")
+  const prefix = `R${prev}-`
+  for (const name of (await readdir(kbRoot).catch(() => [] as string[])).sort()) {
+    if (!name.endsWith(".md") || (!name.startsWith(prefix) && /^R\d+-/.test(name))) continue
+    const text = await Bun.file(join(kbRoot, name)).text().catch(() => "")
+    if (text.trim()) docs.push({ rel: join("docs", "migration-kb", name), text })
+  }
   const pending = [root]
   while (pending.length) {
     const current = pending.pop()!
@@ -344,7 +317,7 @@ async function collectRoundKnowledge(root: string): Promise<Array<{ rel: string;
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue
       if (!relative(root, current).split(/[\\/]+/).includes("migration-kb")) continue
       const text = await Bun.file(abs).text()
-      if (text.trim()) docs.push({ rel: relative(root, abs), text })
+      if (text.trim()) docs.push({ rel: relative(dir, abs), text })
     }
   }
   return docs.sort((a, b) => a.rel.localeCompare(b.rel))

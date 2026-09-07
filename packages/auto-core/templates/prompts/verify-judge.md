@@ -5,7 +5,7 @@
 {{taskBlock}}
 
 本次审核对象是整个任务(实现已在之前的会话中完成,不要重做)。
-先读 docs/{{taskId}}.report.md(收尾报告)了解各子任务产出;任务 verify 字段{{verifyState}},作为验收标准。
+先读 docs/{{taskId}}/report.md(收尾报告)了解各子任务产出;任务 verify 字段{{verifyState}},作为验收标准。
 
 driver 已在会话外执行了该任务的 verify 脚本,运行信息:
 

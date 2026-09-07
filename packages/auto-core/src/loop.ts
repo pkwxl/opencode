@@ -1,7 +1,8 @@
 import { createInterface } from "node:readline/promises"
 import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
-import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
+import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
+import { migrateLegacyDocs } from "./docpaths"
 import { commitTree, pendingChanges, repoRoots } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
@@ -11,14 +12,14 @@ import type { ModeSpec } from "./mode"
 import { block, countSubtasks, load, next, resetInProgress, setStatus, type Plan } from "./plan"
 import {
   appendLedger,
-  archivePhaseDocs,
+  currentRound,
+  handoverDoc,
   phaseArchive,
   phaseText,
   prevRoundDigest,
   readLedger,
   renderPlanScaffold,
   routePhase,
-  snapshotDocs,
   validHandover,
   type Phase,
 } from "./phases"
@@ -86,15 +87,38 @@ AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
    状态、一次性决策、对话过程不写入(一次性决策按 AUTO-DECISION 记入相关文档)。
 <!-- opencode-auto:maint:end -->`
 
+// AGENTS.md 引用规范块: 第六个标记块(stable-refs P4 下沉),内容 = 设计文档
+// docs/stable-refs-design.md §3 规范的精编全文: 存放(R2 永久性/R3 目录化/R4
+// 角色文件名/R5 归档语义/R7 轮次表达)、引用语法(§3.2)与一致性检查三层(§3.3)。
+// 无条件补写(路径稳定性不依赖任何开关,§8)。
+const REFS_SPEC = `<!-- opencode-auto:refs:start -->
+引用与存放规范(稳定引用,细则见 stable-refs 设计文档):
+1. 存放: 任务文档只在 docs/T-NNN/ 内(context/subtasks/report/audit/fix/handoff/
+   testhandoff.md),子任务产物只在 docs/T-NNN/S<两位序号>/ 内(index.md、
+   testhandoff.md),终审产物在 docs/T-F<k>/ 内;阶段交接在 docs/handovers/、
+   迁移知识在 docs/migration-kb/、前置知识在 docs/prior-kb/。这些路径一经创建
+   即为永久路径: 永不移动、永不改名;docs/phases/ 只放过期状态文件。
+2. 引用: 文档间引用与对代码的引用一律写目标目录根相对路径(如
+   \`docs/T-003/S04/index.md\`、\`src/runner.ts:120\`,反引号或链接,可带 :行号
+   锚);不要引用 docs/phases/ 下的状态文件;轮次差异经文件名 R<N>- 前缀与
+   台账表达,不靠搬移目录。
+3. 检查: driver 在统一提交前自动改写 rename 引用并报告失效引用;check 子命令
+   全量扫描活文档;verify 启用时任务产物文档的失效引用会被验收门禁拦截进
+   修复轮。代码围栏内的路径与行内标注 已删除/已归档/历史 的引用豁免。
+<!-- opencode-auto:refs:end -->`
+
 // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
-// 提交原则块与维护规则块各自独立判断、只追加,从不改写已有内容。返回补写了哪些块。
-// verify(任务级验收开关)为 false 时不补写验证原则块,并移除已存在的;testByDriver
-// (编译/测试等命令执行权)为 false 时同样不补写测试执行原则块并移除已存在的——
-// 机制不存在时,AGENTS.md 不得保留与其相关的描述。
+// 提交原则块、维护规则块与引用规范块各自独立判断、只追加,从不改写已有内容。
+// 返回补写了哪些块。verify(任务级验收开关)为 false 时不补写验证原则块,并
+// 移除已存在的;testByDriver(编译/测试等命令执行权)为 false 时同样不补写
+// 测试执行原则块并移除已存在的——机制不存在时,AGENTS.md 不得保留与其相关的
+// 描述。引用规范块与维护规则块无条件补写(不依赖开关)。
 export async function ensurePointer(
   directory: string,
   opts: { verify?: boolean; testByDriver?: boolean } = {},
-): Promise<{ pointer: boolean; principle: boolean; principleRemoved: boolean; test: boolean; testRemoved: boolean; commit: boolean; maint: boolean }> {
+): Promise<
+  { pointer: boolean; principle: boolean; principleRemoved: boolean; test: boolean; testRemoved: boolean; commit: boolean; maint: boolean; refs: boolean }
+> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
   let text = existing
@@ -120,8 +144,10 @@ export async function ensurePointer(
   if (commit) text = `${text.trimEnd()}\n\n${COMMIT_PRINCIPLE}\n`
   const maint = !text.includes("opencode-auto:maint:start")
   if (maint) text = `${text.trimEnd()}\n\n${MAINT_RULE}\n`
+  const refs = !text.includes("opencode-auto:refs:start")
+  if (refs) text = `${text.trimEnd()}\n\n${REFS_SPEC}\n`
   if (text !== existing) await Bun.write(agentsFile, text)
-  return { pointer, principle, principleRemoved, test, testRemoved, commit, maint }
+  return { pointer, principle, principleRemoved, test, testRemoved, commit, maint, refs }
 }
 
 // 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
@@ -284,6 +310,7 @@ export async function runAll(
   if (ensured.testRemoved) log("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
   if (ensured.commit) log("已补写: AGENTS.md 提交原则块")
   if (ensured.maint) log("已补写: AGENTS.md 维护规则块")
+  if (ensured.refs) log("已补写: AGENTS.md 引用规范块")
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
   // 工作区已有未提交改动会被 driver 的下一次提交一并纳入(统一提交为全量清扫
   // 语义,与此前会话清扫提交一致),提前提示用户。dryrun 不做任何提交,不提示。
@@ -311,6 +338,17 @@ export async function runAll(
   }
   process.on("SIGINT", onSigint)
   try {
+    // 存量任务文档目录化迁移(stable-refs P1): 平铺旧布局 → docs/T-NNN/;幂等,
+    // dryrun 预检不改动工作区故跳过(P1-D6)。
+    if (!opts.dryrun) {
+      const migrated = await migrateLegacyDocs(directory)
+      if (migrated.moved.length || migrated.rewritten.length) {
+        log(`↻ 存量任务文档目录化迁移: 搬移 ${migrated.moved.length} 项,活文档引用改写 ${migrated.rewritten.length} 个文件`)
+        if (opts.commit !== false) {
+          await commitTree(directory, { id: "PLAN", title: "任务文档目录化迁移" }, { stage: "doc-migrate", subject: "PLAN doc-migrate 任务文档目录化迁移" })
+        }
+      }
+    }
     // 阶段化流程: 台账非法为环境错误(H 节),提前于 server 启动求值一次路由,
     // 免得白白拉起服务再退出;正式路由在阶段循环内逐轮重新求值(推导式状态)。
     const phases = opts.phases ?? "m"
@@ -365,7 +403,7 @@ export async function runAll(
     // advanceFinal 闭包内引用会失去窄化,以 const 捕获已就绪的 server 句柄。
     const serverHandle = server
     // --final-review 终审闭环推进(设计文档 B.2/C): 路由纯函数依(带 final 标记的
-    // 任务及其状态,docs/final/ 产物)决定下一步——开生成会话产出提案、提案已
+    // 任务及其状态,终审产物 docs/T-F<k>/)决定下一步——开生成会话产出提案、提案已
     // 产出直接解析追加(C.3)、熔断/报告异常 block 对应终审任务(B.5/C.4);追加后
     // 主循环 next() 按文件顺序自然拾取,无新增持久化状态。announce 为真时
     // (next() 为空的启动挂点)先打印终审横幅;runTask 完成后的路由挂点不打印。
@@ -386,7 +424,7 @@ export async function runAll(
         return "appended" as const
       }
       if (route.type === "append") {
-        log(`↻ 终审提案 docs/final/plan-${route.stage}-r${route.round}.md 已产出(追加前中断),直接解析追加`)
+        log(`↻ 终审提案 ${finalProposalFile(route.stage, route.round, finalIndex(plan))} 已产出(追加前中断),直接解析追加`)
         return append(route.proposal)
       }
       log(`▶ 终审闭环: 开生成会话规划「${stageText(route.stage)}」任务(第 ${route.round} 轮)`)
@@ -499,8 +537,6 @@ export async function runAll(
     // 填充的 PLAN.md——会话被 driver 专门授权写它(临时放行写权限,其余状态文件
     // 仍只读)。伪任务 PLAN 不进任务链、不写进度记录。返回 0 = 规划完成。
     const planPhase = async (phase: Phase): Promise<number> => {
-      // 阶段开始快照: 交接归档据此判定本阶段 docs/ 变更(F 节)。
-      await snapshotDocs(directory)
       // 自动编号(config.autoNumber): 规划会话的编号起点来自 .auto/next-task
       // 记录;记录缺失先恢复(无历史证据直接写 1,有证据开 AI 推导会话,见
       // src/numbering.ts),恢复受阻即退出 2。恢复会话本身会产生一次统一提交
@@ -527,18 +563,23 @@ export async function runAll(
       }
       const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
       // 前序阶段交接注入(E 节注入纪律): 只注入 handover 蒸馏产物,不注入前序
-      // 原始 docs/。台账中早于当前阶段且已 done 的各阶段逐个拼接;缺 handover 的
-      // 阶段在清单中标注"(无交接文档)"(P2 及更早的占位时代产物)。
+      // 原始 docs/。台账中早于当前阶段且已 done 的各阶段逐个拼接;交接文档为永久
+      // 路径 docs/handovers/R<N>-…(D3),P2 前完成的阶段落在归档目录内(读回落);
+      // 缺 handover 的阶段在清单中标注"(无交接文档)"。
       const declared = [...phases] as Phase[]
       const ledger = await readLedger(directory)
+      const round = await currentRound(directory)
       const handovers = (
         await Promise.all(
           declared
             .slice(0, declared.indexOf(phase))
             .filter((letter) => ledger.done.includes(letter))
             .map(async (letter) => {
-              const text = await Bun.file(join(directory, phaseArchive(letter), "handover.md")).text().catch(() => undefined)
-              return [`### ${letter} ${phaseText(letter)}(${phaseArchive(letter)}/handover.md)`, "", text?.trim() || "(无交接文档)"].join("\n")
+              const modern = handoverDoc(round, letter)
+              const text =
+                (await Bun.file(join(directory, modern)).text().catch(() => undefined)) ??
+                (await Bun.file(join(directory, phaseArchive(letter), "handover.md")).text().catch(() => undefined))
+              return [`### ${letter} ${phaseText(letter)}(${modern})`, "", text?.trim() || "(无交接文档)"].join("\n")
             }),
         )
       ).join("\n\n")
@@ -622,25 +663,27 @@ export async function runAll(
       }
     }
 
-    // 阶段交接(F 节): ① 蒸馏会话(AI 唯一职责,旁路一次性)产出归档目录下的
-    // handover.md——先于机械归档,蒸馏读的是 docs/ 原位置文档,归档后就读不到了;
-    // ② 归档本阶段 docs/ 变更 + PLAN.md 拷贝归档后重置空模板 → ③ 台账追加 →
-    // ④ 统一提交(Auto-Stage: phase-transition)。各步幂等,中断重跑自然续完
-    // (C.2)。返回 0 = 交接完成,2 = 蒸馏会话隐性阻塞。
+    // 阶段交接(F 节,stable-refs P2 起 docs 永不移动): ① 蒸馏会话(AI 唯一职责,
+    // 旁路一次性)产出永久路径 docs/handovers/R<N>-<字母>-<slug>.md(driver 先建目录,
+    // 落定不移动)→ ② PLAN.md 拷贝进归档目录后重置空模板(归档只收过期状态文件,
+    // 本阶段 docs/ 产物不动)→ ③ 台账追加 → ④ 统一提交(Auto-Stage:
+    // phase-transition)。各步幂等,中断重跑自然续完(C.2)。返回 0 = 交接完成,
+    // 2 = 蒸馏会话隐性阻塞。
     const handoverPhase = async (phase: Phase): Promise<number> => {
       const letters = [...phases] as Phase[]
       const nextLetter = letters[letters.indexOf(phase) + 1]
       const next = nextLetter ? `${nextLetter} ${phaseText(nextLetter)}` : undefined
       const target = next ?? "流程完成"
       banner(`阶段交接: ${phase} ${phaseText(phase)} → ${target}`)
-      // driver 先建归档目录再开会话;handover.md 不在 protect 名单,无需 allowWrite。
-      const handoverFile = join(directory, phaseArchive(phase), "handover.md")
+      // driver 先建 handovers/ 目录再开会话;handoverDoc 不在 protect 名单,无需 allowWrite。
+      const handover = handoverDoc(await currentRound(directory), phase)
+      const handoverFile = join(directory, handover)
       await mkdir(dirname(handoverFile), { recursive: true })
-      log(`▶ 开交接蒸馏会话产出 ${phaseArchive(phase)}/handover.md`)
+      log(`▶ 开交接蒸馏会话产出 ${handover}`)
       const distilled = await requireArtifact(
         serverHandle.client,
         { id: "PLAN", title: `阶段交接蒸馏(${phase} ${phaseText(phase)})`, status: "in_progress", attempts: 0, body: "" },
-        renderPhaseHandover({ phase, archive: phaseArchive(phase), next, verify: opts.verify }),
+        renderPhaseHandover({ phase, handover, next, verify: opts.verify }),
         {
           agent: agentName,
           dir: directory,
@@ -654,10 +697,10 @@ export async function runAll(
         },
         {
           kind: "交接蒸馏",
-          artifact: `有效交接文档 ${phaseArchive(phase)}/handover.md(四个必备小节齐备)`,
+          artifact: `有效交接文档 ${handover}(四个必备小节齐备)`,
           detail: "缺失或小节不全",
           requirement:
-            `必须把交接文档写入 ${phaseArchive(phase)}/handover.md,并包含标题逐字为` +
+            `必须把交接文档写入 ${handover},并包含标题逐字为` +
             "「## 关键决策」「## 约束与坑」「## 下一阶段必读清单」「## 产物索引」的四个小节。",
           commit: { stage: "phase-handover", subject: `PLAN handover ${phase} ${phaseText(phase)}` },
           reset: () => rm(handoverFile, { force: true }),
@@ -671,8 +714,6 @@ export async function runAll(
         log(`⏸ 交接蒸馏会话受阻(隐性阻塞,请检查后重新运行):\n${distilled.question}`)
         return 2
       }
-      const moved = await archivePhaseDocs(directory, phase)
-      if (moved.length) log(`  已归档本阶段 docs/ 变更 ${moved.length} 项 → ${phaseArchive(phase)}/`)
       const archivedPlan = join(directory, phaseArchive(phase), "PLAN.md")
       await mkdir(dirname(archivedPlan), { recursive: true })
       await Bun.write(archivedPlan, await Bun.file(path).text())
@@ -732,11 +773,10 @@ export async function runAll(
           }
           // k(知识提炼)阶段整体认领 --extract-knowledge 设计(P4): 不开规划会话、
           // 不向 PLAN.md 填任务——plan 路由直接进入知识提取旁路会话(产物
-          // docs/migration-kb/,已产出则幂等跳过),随后照常交接。提取失败只打 ⚠
-          // 警告、不污染退出码(迁移成功不被文档生成失败反向污染);人工在 k 阶段
-          // 自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发。
-          // docs/ 快照不在此刷新: 交接归档沿用上一阶段的陈旧快照(或退化路径),
-          // 本阶段新增的 migration-kb 即差异项,已产出的知识文档同样被归档。
+          // docs/migration-kb/R<N>-…,永久路径不随交接移动;本轮前缀文档已产出则
+          // 幂等跳过),随后照常交接。提取失败只打 ⚠ 警告、不污染退出码(迁移成功
+          // 不被文档生成失败反向污染);人工在 k 阶段自行向 PLAN.md 填任务时走通用
+          // execute/handover 路由,提取挂点不触发。
           if (route.phase === "k") {
             banner("k 知识提炼: 迁移知识沉淀")
             const extracted = await extractKnowledge(serverHandle.client, directory, {
@@ -756,7 +796,7 @@ export async function runAll(
             else {
               log(
                 `⚠ 迁移知识沉淀未完成(knowledge_extraction_error),退出码不受影响,k 阶段照常交接;` +
-                  `可修复问题后按人工回退规程(删台账 k 行与 docs/phases/k-knowledge/)重跑单独重试。受阻详情:\n${extracted.question}`,
+                  `可修复问题后按人工回退规程(删台账 k 行与 docs/migration-kb/ 内本轮 R<N>- 前缀文档)重跑单独重试。受阻详情:\n${extracted.question}`,
               )
             }
             const code = await handoverPhase("k")

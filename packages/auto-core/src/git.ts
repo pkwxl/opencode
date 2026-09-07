@@ -10,7 +10,7 @@ import { log } from "./log"
 // 提交信息: 中文标题行(人读)+ 机器可读 trailer(脚本化定位回滚点)。
 // Auto-Task 任务编号(T-F*/PLAN 等)、Auto-Stage 阶段与序号(伪任务为旁路
 // 阶段标签: phase-plan/phase-handover/phase-transition/knowledge/numbering/
-// final-plan 等);目标目录所在
+// final-plan/doc-migrate 等);目标目录所在
 // 仓库的提交另以 Auto-Nested 行记录本轮实际提交的嵌套仓库路径与 SHA,保持
 // 跨仓库可追踪(对齐旧 commit-rule 中"列出子仓库路径与提交 SHA"的要求)。
 function message(subject: string, task: { id: string }, stage: string, nested: { rel: string; sha: string }[] = []): string {

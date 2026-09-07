@@ -29,9 +29,9 @@
   既有);结束语按 phases 分两态("m" 维持"编辑 PLAN.md"现状,其余提示开始首个未完成
   阶段规划);phases 含 v 而 verify 未启用时 init 打 note 一次(v 与 verify 正交);
   phases ≠ "m" 时 PLAN.md 以空模板(templates/PLAN.scaffold.md)产出,交给规划会话。
-- --auto-number/--no-auto-number(config.autoNumber,缺省 false = 沿用历史行为;宪法级
-  选项,init/continue 修订,run 拒绝;两开关同现且均未带 =false 为用法错误;设计文档
-  docs/auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
+- --auto-number/--no-auto-number(config.autoNumber,缺省 true,--no-auto-number 为退出
+  开关;宪法级选项,init/continue 修订,run 拒绝;两开关同现且均未带 =false 为用法错误;
+  设计文档 docs/auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
   编号持久化在 .auto/next-task(内容仅为一个正整数,driver 维护;.auto/ 已被 gitignore,
   新克隆天然缺失)。唯一消费点是阶段规划会话:planPhase 先 ensureNumbering 确保记录
   就位,把记录值作为编号起点注入规划提示词(替代"自 T-001 起"文案),collect 校验全部
@@ -47,29 +47,34 @@
   状态是推导式的,routePhase 只读 docs/phases.md 台账与 PLAN.md(零新增持久化状态),
   run 据此循环——PLAN.md 为空模板 → 开阶段规划会话(旁路一次性,复用 requireArtifact
   骨架,产物 = 已填充的 PLAN.md;仅此会话经 allowWrite 被授权写 PLAN.md,受阻退出 2;
-  会话输入注入 brief、source、destDir、mode.init 与各前序阶段归档 handover.md 的预拼接
-  handovers——蒸馏产物是跨阶段记忆唯一通道,不注入前序原始 docs/,缺文件标注
-  "(无交接文档)")、
+  会话输入注入 brief、source、destDir、mode.init 与各前序阶段交接文档的预拼接
+  handovers——交接文档在 docs/handovers/R<N>-<字母>-<slug>.md 永久路径(stable-refs
+  P2),P2 前完成的阶段自归档目录内读回落;蒸馏产物是跨阶段记忆唯一通道,不注入前序
+  原始 docs/,缺文件标注"(无交接文档)")、
   有未完成任务 → 走既有主循环(分解/执行/验收/审核/统一提交/进度恢复语义不变;
   v 阶段任务豁免任务级验收与 --review,见下条)、
-  本阶段任务全 done → 交接(先开蒸馏会话产出归档目录 handover.md——四小节协议
-  关键决策/约束与坑/下一阶段必读清单/产物索引,validHandover 逐字校验标题行,
-  产物缺失带反馈重试一次仍失败隐性阻塞退出 2;再归档本阶段 docs/ 变更与 PLAN.md →
-  PLAN.md 重置空模板 → 台账追加 → 统一提交 stage=phase-transition);台账覆盖
-  phases 全部字母 → 退出 0。`--final-review` 只在 m 阶段挂接(其余阶段打一次
-  提示);AGENTS.md 超 150 行在交接时仅 note 提示、不改写。
+  本阶段任务全 done → 交接(先开蒸馏会话产出 docs/handovers/ 永久路径交接文档
+  ——四小节协议关键决策/约束与坑/下一阶段必读清单/产物索引,validHandover 逐字
+  校验标题行,产物缺失带反馈重试一次仍失败隐性阻塞退出 2;再把 PLAN.md 拷贝进
+  归档目录 docs/phases/<字母>-<slug>/(仅收过期状态文件)→ PLAN.md 重置空模板 →
+  台账追加(行协议含交接指针 handovers/ 路径,旧行形态容忍)→ 统一提交
+  stage=phase-transition;本阶段 docs/ 产物文档为永久路径,交接不搬移);
+  台账覆盖 phases 全部字母 → 退出 0。`--final-review` 只在 m 阶段挂接(其余阶段
+  打一次提示);AGENTS.md 超 150 行在交接时仅 note 提示、不改写。
 - k 阶段(P4,phases-design.md D.4;整体认领 fixme-knowledge-design.md 的
   --extract-knowledge,该 CLI 选项不存在):plan 路由(PLAN.md 空模板态)不开
   规划会话、不填 PLAN.md,直接进入知识提取旁路会话(src/knowledge.ts
-  extractKnowledge,requireArtifact 骨架)——通读阶段台账与各阶段归档目录
-  (handover.md 优先),产出 docs/migration-kb/migration-<时间戳>.md(章节骨架/
-  质量约束内联在 templates/prompts/knowledge.md,mode.exec 作场景背景注入);
-  目录内已存在非空 .md(交接前中断)则幂等跳过;提取失败(会话受阻或两次未产出)
-  仅打 ⚠ 警告、不污染退出码,k 阶段照常交接——迁移成功不被文档生成失败反向污染;
-  知识文档作为阶段产物随会话统一提交(stage=knowledge)并交接归档;docs/ 快照
-  不在 k 刷新(沿用上一阶段陈旧快照,新增 migration-kb 即归档差异项);人工在
-  k 阶段自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发;
-  交接完成后重试提取 = 人工回退规程(删台账 k 行与归档目录后重跑)。
+  extractKnowledge,requireArtifact 骨架)——通读阶段台账与各阶段交接文档
+  (docs/handovers/ 优先),产出永久路径
+  docs/migration-kb/R<N>-migration-<时间戳>.md(章节骨架/质量约束内联在
+  templates/prompts/knowledge.md,mode.exec 作场景背景注入;不随交接/轮次归档
+  移动);本轮 R<N>- 前缀非空 .md 已存在(交接前中断)则幂等跳过(前几轮文档
+  不算本轮已提取,第 1 轮无前缀存量按读回落视为本轮产物);提取失败(会话受阻
+  或两次未产出)仅打 ⚠ 警告、不污染退出码,k 阶段照常交接——迁移成功不被文档
+  生成失败反向污染;知识文档随会话统一提交(stage=knowledge);人工在 k 阶段
+  自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发;交接完成
+  后重试提取 = 人工回退规程(删台账 k 行与 docs/migration-kb/ 内本轮 R<N>- 前缀
+  文档后重跑)。
 - v 阶段验收豁免(phases-design.md D.3):runTask 依 loop 透传的 Opts.phase 在
   当前阶段为 v 时强制 review=0 且跳过任务级三段式验收(收尾后直接 markDone、不写
   verified)——与终审任务的 final 字段共用同一豁免代码路径,内部标记、不写 final
@@ -78,12 +83,15 @@
 - 续轮迁移(continue 子命令,phases-design.md M 节):上一轮阶段化迁移全部完成
   (台账覆盖既有 phases 全部字母)后开启新一轮继续迁移,目标是让迁移结果与源
   更加完整、一致。continue = init 的 amend 机制 + archiveRound 归档上一轮
-  (docs/phases/ 下全部阶段归档目录、docs/migration-kb 残留、轮末根 PLAN.md 与
-  台账移入 docs/phases/round-<N>/,台账最后移动故中断重跑幂等,并清 .auto/
-  phase-snapshot.json),台账随归档消失 = 空台账、根 PLAN.md 由模板循环重建空
-  模板,新一轮从头规划;上一轮结论(归档索引 + 最终阶段交接 handover.md 全文 +
-  迁移知识文档全文)经 prevRoundDigest 注入新一轮首个阶段规划会话,后续阶段照常
-  走本轮 handover 蒸馏链。迁移同一性选项(-m/--mode、--source-dir/--source-path、
+  (docs/phases/ 下全部阶段归档目录、轮末根 PLAN.md 与台账移入
+  docs/phases/round-<N>/,根 AGENTS.md 每轮拷贝快照进同目录、原文件保留;
+  台账最后移动故中断重跑幂等;docs/ 产物文档(docs/T-*/、handovers/、
+  migration-kb/、prior-kb/)为永久路径不参与归档),台账随归档消失 = 空台账、
+  根 PLAN.md 由模板循环重建空模板,新一轮从头规划;上一轮结论(归档索引 +
+  最终阶段交接文档全文 + 迁移知识文档全文: docs/migration-kb/ 的 R<N>- 前缀
+  文件,无前缀存量宽松归入上一轮,P2 前轮次归档内的 migration-kb/ 读回落收集)
+  经 prevRoundDigest 注入新一轮首个阶段规划会话,后续阶段照常走本轮 handover
+  蒸馏链。迁移同一性选项(-m/--mode、--source-dir/--source-path/
   --dest-dir)跨轮固定、continue 时显式给出即退出码 1(换源/换目标/换模式不是
   同一迁移的继续);--phases/-p 与其余执行选项可按轮修订(--phases 不受前缀护栏
   约束)。轮次推导式(当前轮 = round-<N> 最大编号 + 1),run/status 阶段进度行带
@@ -93,13 +101,56 @@
 - 下发任务失败(UnknownError)的常见根因是目标目录缺少 `.opencode/agent/<agent>.md`
   (服务端错误体不含根因):run 前完整性检查拦截该情况;运行中发生时 driver 在
   阻塞问题后追加恢复提示(检测依赖 Opts.dir,run/init/dryrun 均须传入)。
+- 任务文档路径契约(stable-refs P1,src/docpaths.ts 单一构造点):任务文档只出现在
+  任务自己的目录 `docs/T-NNN/` 内(理解摘要 context.md、分解检查项 subtasks.md、
+  收尾报告 report.md、审核报告 audit.md、修复检查项 fix.md、上下文交接 handoff.md、
+  任务级测试交接 testhandoff.md),子任务产物 `docs/T-NNN/S<两位序号>/index.md`、
+  子任务级测试交接同目录 testhandoff.md;终审产物按产出任务锚定各自的
+  `docs/T-F<k>/`(提案 plan-<stage>-r<N>.md 与 audit-r/refactor-r/patch-r/
+  validate-r/finalize 报告);这些路径一经创建即为永久路径。`--review` 的终审
+  审计与任务审计同路径 docs/<taskId>/audit.md。**读回落**:旧平铺项目
+  (docs/<id>.<role>.md 等)读点优先新路径、新缺失而旧存在回落旧路径,写目标恒为
+  新路径;**启动迁移**:run 启动时(try 块头部、阶段预检之前)把平铺旧布局幂等
+  迁移为目录化(七角色平铺/`<id>-S<n>.testhandoff.md`/任务目录内 `S<kk>.md`/
+  `docs/final-audit.md` 与 `docs/final/*` → `docs/T-F1/`),活文档
+  (docs/**/*.md,排除 docs/phases/**)中的旧路径记号机械改写(围栏与含
+  已删除|已归档|历史 的行豁免;目标已存在保留新文件跳过、绝不覆盖),有迁移
+  才统一提交 stage=doc-migrate;dryrun 预检不改动工作区故跳过,`--commit false`
+  仍迁移、仅不提交。**永久性全貌(stable-refs P2)**:docs/ 下文档
+  (docs/T-*/、docs/handovers/、docs/migration-kb/、docs/prior-kb/)一经创建
+  永不移动、永不改名——阶段交接产出 docs/handovers/R<N>-<字母>-<slug>.md
+  (handoverDoc,src/phases.ts),知识文档 docs/migration-kb/R<N>-migration-<时间
+  戳>.md 与前置知识 docs/prior-kb/R<N>-prior-<时间戳>.md(docpaths.ts
+  knowledgeDoc/priorKnowledgeDoc,轮次 R<N>- 前缀守卫幂等,第 1 轮无前缀存量
+  读回落);docs/phases/ 只收过期状态文件(阶段 PLAN 快照、轮次归档 = 各阶段
+  归档目录 + 台账 + 轮末 PLAN + AGENTS.md 快照),状态文件不被任何文档引用;
+   P2 前布局(交接在归档目录内、知识无前缀)各读点回落兼容。
+- 引用一致性三层(stable-refs P4,D6;设计文档 stable-refs-design.md §3.3):引用唯一
+  合法形态 = 目标目录根相对路径(反引号或 md 链接,可带 `:行号` 锚);校验语义 = 路径
+  存在 + 行号 ≤ 文件总行数;代码围栏内与行内含 已删除/已归档/历史 标记的引用豁免;
+  URL/绝对路径/`~`/`./`/`../` 形态与纯版本号 token(如 `v1.2`)不校验,md 链接的
+  `#fragment` 剥后验,目录引用只查存在性。三层:① **auto-correct**——每次统一提交前
+  (runner 的 afterSession 挂点,覆盖全部会话后提交)driver 先做 git rename 配对
+  (`git add -A` 暂存后 `git diff --cached --find-renames HEAD`,暂存本就是下一次提交
+  的前奏)机械改写活文档引用(**只配对 rename,删除/语义变化不自动改**),再复扫
+  失效引用并 ⚠ 日志;改写内容随本次统一提交落账,不另起提交;非 git 目录 auto-correct
+  空转(校验仍可跑)。② **check 子命令**——原则检查之外全量扫描活文档
+  (docs/**/*.md,排除 docs/phases/**;docs/phases.md 台账属活文档),失效引用命中
+  退出码 1;AGENTS.md 缺引用规范块与非 git 目录(auto-correct 不可用)给 note。③
+  **verify 门禁**——verifyTask 在每个判定会话前对任务产物文档(docs/T-NNN/**,
+  终审任务 T-F<k> 同法)做确定性预扫,失效引用 = 差距直接进修复轮(不消耗判定会话;
+  off 模式回退 pending,FIX_ROUNDS 耗尽阻塞退出 2);verify 未启用时门禁不存在,
+  退化为第①层的 ⚠ 日志(宽松契约)。该规范经 init 下沉:AGENTS.md 引用规范块
+  (第六标记块 `opencode-auto:refs`,无条件补写——路径稳定性不依赖任何开关);
+  wrapup(report 引用要求)/verify-script-gen(脚本内根相对路径)/fix(失效引用
+  允许只更新引用行)模板同步注入提示文案。
 - 统一提交(收回 AI 提交权):任何会话结束且 driver 完成状态写入后,由 driver 经
   src/git.ts 的 commitTree 递归提交全部改动(先嵌套 .git 子仓库、后目标目录所在
   仓库,路径发现不依赖 git status——嵌套仓库通常被父仓库忽略),git 历史即 AI
   变更的审计轨迹、回滚粒度 = 会话。提交信息 = `任务编号 <label> <任务标题/子任务>` 短标签
-  标题行(label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/
-  blocked/pending/done,伪任务用 PLAN <label>:plan/handover/transition/knowledge/
-  numbering/final-plan;子任务条目为 `任务编号 S<n> <标题>`、
+   标题行(label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/
+   blocked/pending/done,伪任务用 PLAN <label>:plan/handover/transition/knowledge/
+   numbering/final-plan/doc-migrate;子任务条目为 `任务编号 S<n> <标题>`、
   省略任务标题)+ `Auto-Task`/
   `Auto-Stage` trailer(目标仓库另记 `Auto-Nested` 嵌套仓库路径与 SHA)。挂点:
   分解注入/子任务勾选/整任务/修复轮/收尾在状态写入后,判定/审核/脚本生成/
@@ -114,12 +165,12 @@
   扫描违背该原则的描述。
 - subtask 三档(config.subtask,init --subtask 修订):`auto`(缺省;分解会话 → 逐子任务,
   子任务会话同样带 handoff-steer 交接——已用量达配置 contextLimit 的 2 倍时 steer 交接
-  提示,会话写出 docs/<id>.handoff.md(末行 `状态: 继续|完成`,以该子任务是否完成计),
+   提示,会话写出 docs/<id>/handoff.md(末行 `状态: 继续|完成`,以该子任务是否完成计),
   新会话凭交接续跑,子任务完成后 driver 删除该文件)/
   `off`(单会话完成整个任务;
   验收差距不做修复重跑,任务回退 pending 等人工改进)/ `ondemand`(单会话执行,
   watch 在已用量达到配置 contextLimit 的 2 倍时向进行中会话 steer 交接提示——每会话一次,
-  v2 prompt 默认 steer;会话结束按 docs/<id>.handoff.md 末行 `状态: 继续|完成`
+  v2 prompt 默认 steer;会话结束按 docs/<id>/handoff.md 末行 `状态: 继续|完成`
   决定续跑或进入收尾,文件缺失带反馈重试一次再按隐性阻塞)。中途切换:已注入检查项
   的任务照旧从勾选状态续跑(进度按任务记录),新任务按新档执行;README 注明不建议。
 - --dryrun: 只跑一次权限预检会话(列出授权外目录/操作并逐只读探查),该会话内
@@ -162,7 +213,7 @@
   (renderText 条件渲染)、ensurePointer 不补写 AGENTS.md 验证原则块(已存在的移除)、
   各会话提示词(state-rule 片段等经 baseCtx 的 verify 变量)不含
   verify 相关描述——验收机制不存在,提示词不得提及。
-- --test-by-driver/--handover-test(config.testByDriver/handoverTest,缺省 false;宪法级选项,init --test-by-driver/--handover-test 修订,run 拒绝;与 verify 正交的测试执行协议): 前者把实现环节"编译/测试/构建/lint 等可能耗时长或产生大量输出的命令"的执行权收归 driver——执行类会话(子任务/整任务/验收修复轮;分解/收尾/判定/审核等旁路会话与 --dryrun 不适用)不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录(命名清晰、可执行、可复用,随仓库版本化),把脚本路径(相对工作目录)写入 tmp/test.sh 标记(存在即待执行请求,重写即再次请求),driver 在会话 idle 时检测标记:内容为现存文件路径 → 直接运行该脚本(test/ 内脚本已随统一提交版本化,不另归档);否则按内联脚本回落整写为 tmp/test.<n>.sh 后运行(保留执行快照供审计);两种形态均把 stdout/stderr 合并整写 tmp/test.<n>.out(单文件,编号跨运行接续,共用 idleTime/idleMax 看门狗),移除标记后退出码/耗时/脚本与输出路径经 steer 注入同一会话由 AI 直读文件判断(退出码非 0 不由 driver 判定;steer 一律经 promptAsync 投递——v2 同步 /message 端点会阻塞到回合结束,在 watch 事件循环内同步等待会卡死事件循环;投递失败记 log 并按隐性阻塞 blocked 处理,回合结束的孪生 idle 事件经 watch 去重,处理过一次后直到新会话事件出现前不再结算);重跑同一测试 = 把同一脚本路径再次写入 tmp/test.sh(脚本可先修改再重跑)。每个执行会话入口清除遗留待执行标记。后者(需前者,配置层与 init 均交叉校验)在测试失败(非零退出或看门狗超时)且会话 used ≥ contextLimit 时改要求 AI 写测试交接文档后结束会话——文档按执行范围命名(子任务为 docs/<id>-S<n>.testhandoff.md,整任务会话与验收修复轮为 docs/<id>.testhandoff.md),交接只对本执行范围生效、下一子任务不会误读上一子任务的遗留交接(缺失带反馈重试一次仍缺失隐性阻塞),driver 开新会话以续跑提示(先读交接文档与最近输出)继续,不设硬上限、连续超 10 次提醒评估是否陷入无法解决的问题(可 AUTO-FIXME 标注遗留后继续);子任务完成时清除该子任务的测试交接文档(与 ondemand 交接同口径,下一子任务重新起算),非恢复续跑时清除任务级与子任务级的陈旧交接文档。提示词协议段经 subtask/whole/fix 模板的 testByDriver/handoverTest 条件块注入,steer 文案在 test-result/test-handover/test-continue 模板(无 driver 解析协议,覆盖校验不做标记要求)。该执行权约定经 init 下沉:AGENTS.md 测试执行原则块(随 config.testByDriver 补写/移除,镜像验证原则块)与 agent 契约的 testByDriver 条件段;`check` 子命令在 testByDriver 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自运行编译/测试/构建/lint 的描述(TEST_PATTERNS,与验证类同构)。
+- --test-by-driver/--handover-test(config.testByDriver/handoverTest,缺省 false;宪法级选项,init --test-by-driver/--handover-test 修订,run 拒绝;与 verify 正交的测试执行协议): 前者把实现环节"编译/测试/构建/lint 等可能耗时长或产生大量输出的命令"的执行权收归 driver——执行类会话(子任务/整任务/验收修复轮;分解/收尾/判定/审核等旁路会话与 --dryrun 不适用)不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录(命名清晰、可执行、可复用,随仓库版本化),把脚本路径(相对工作目录)写入 tmp/test.sh 标记(存在即待执行请求,重写即再次请求),driver 在会话 idle 时检测标记:内容为现存文件路径 → 直接运行该脚本(test/ 内脚本已随统一提交版本化,不另归档);否则按内联脚本回落整写为 tmp/test.<n>.sh 后运行(保留执行快照供审计);两种形态均把 stdout/stderr 合并整写 tmp/test.<n>.out(单文件,编号跨运行接续,共用 idleTime/idleMax 看门狗),移除标记后退出码/耗时/脚本与输出路径经 steer 注入同一会话由 AI 直读文件判断(退出码非 0 不由 driver 判定;steer 一律经 promptAsync 投递——v2 同步 /message 端点会阻塞到回合结束,在 watch 事件循环内同步等待会卡死事件循环;投递失败记 log 并按隐性阻塞 blocked 处理,回合结束的孪生 idle 事件经 watch 去重,处理过一次后直到新会话事件出现前不再结算);重跑同一测试 = 把同一脚本路径再次写入 tmp/test.sh(脚本可先修改再重跑)。每个执行会话入口清除遗留待执行标记。后者(需前者,配置层与 init 均交叉校验)在测试失败(非零退出或看门狗超时)且会话 used ≥ contextLimit 时改要求 AI 写测试交接文档后结束会话——文档按执行范围命名(子任务为 docs/<id>/S<两位序号>/testhandoff.md,整任务会话与验收修复轮为 docs/<id>/testhandoff.md),交接只对本执行范围生效、下一子任务不会误读上一子任务的遗留交接(缺失带反馈重试一次仍缺失隐性阻塞),driver 开新会话以续跑提示(先读交接文档与最近输出)继续,不设硬上限、连续超 10 次提醒评估是否陷入无法解决的问题(可 AUTO-FIXME 标注遗留后继续);子任务完成时清除该子任务的测试交接文档(与 ondemand 交接同口径,下一子任务重新起算),非恢复续跑时清除任务级与子任务级的陈旧交接文档。提示词协议段经 subtask/whole/fix 模板的 testByDriver/handoverTest 条件块注入,steer 文案在 test-result/test-handover/test-continue 模板(无 driver 解析协议,覆盖校验不做标记要求)。该执行权约定经 init 下沉:AGENTS.md 测试执行原则块(随 config.testByDriver 补写/移除,镜像验证原则块)与 agent 契约的 testByDriver 条件段;`check` 子命令在 testByDriver 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自运行编译/测试/构建/lint 的描述(TEST_PATTERNS,与验证类同构)。
 - verify 三段式(config.verify 启用时):verify 的处理权在 driver,验收只在任务级做一次——收尾会话后:
   ① 脚本准备(resolveVerifyScript 依 verifyCommand 三分支:`command:` 为单个存在
   且可执行的文件路径 → existing 直接使用;普通命令行 → wrapped,driver 包装
@@ -173,7 +224,10 @@
   合并整写 tmp/verify.out 单文件,执行前 truncate;进度看门狗——输出文件持续
   无增长达 idleTime(缺省 10 分钟)才 kill、code 记 124 且 timeoutReason=idle,
   idleMax(缺省不设)为绝对上限兜底;执行完毕的运行记录持久化到进度记录,
-  此后中断恢复时跳过重跑;退出码非 0 不直接判失败);③ 旁路独立判定会话(renderVerifyJudge,
+  此后中断恢复时跳过重跑;退出码非 0 不直接判失败);③ 旁路独立判定会话——进入前
+  driver 先对任务产物文档 docs/T-NNN/** 做引用门禁确定性预扫,失效引用 = 差距直接
+  进修复轮、不消耗判定会话(stable-refs P4 引用一致性三层),随后判定会话
+  (renderVerifyJudge,
   一次性 chain 不进任务链)直读输出与代码判定——**判定会话禁止执行验证脚本
   或验证性命令**(运行测试/构建/lint/服务等;只读检查不受限),认定脚本本身有问题
   或覆盖不足时编写新脚本替换 tmp/verify.sh 并以末行 `结论: 重验 <原因>`
@@ -198,13 +252,14 @@
   index.ts parseReviewLimit 校验,loop 透传 runTask)。runTask 外层轮循环:执行
   阶段(ensureDecomposed/executeWhole)仅首轮进入;验收通过后 reviewTask 开旁路
   审核会话(renderReview:维度=忠实性/正确性/验证过程有效性;final 由"当前任务
-  之后全部 done"判定,终审报告 docs/final-audit.md、其余 docs/T-NNN.audit.md,
+   之后全部 done"判定,审计报告统一写 docs/T-NNN/audit.md(final 与非 final
+   同一路径,P1-D2),
   范围以本任务改动为限、终审不限),结论写 `.auto/review.md`(协议同 VERDICT_FILE,
   复用 parseVerdict)。通过 → completed;差距 → off 模式 setStatus pending 返回
   incomplete(与该模式 verify 失败语义一致);轮数超限 → blocked(question=差距
   全文);未超 → 任务先置回 in_progress(verifyTask 已标 done,否则中断重跑时
   next() 会跳过、fix 检查项永不执行)→ planReviewFix 旁路规划会话产出
-  docs/T-NNN.fix.md → appendSubtasks 注入 PLAN.md → 刷新 CURRENT.md → 下一轮
+  docs/T-NNN/fix.md → appendSubtasks 注入 PLAN.md → 刷新 CURRENT.md → 下一轮
   (fix 检查项走子任务会话循环)。early 两形态:`--review n --early` 或快捷糖
   `--early-review [n]`(index.ts 校验:--early 单独出现、--early-review 与
   --review 同现均为用法错误退出码 1)——审核会话经 verifyTask 审核挂点在 verify
@@ -235,7 +290,7 @@
   audit → remediate → validate → finalize 状态机——终审阶段是入 PLAN.md 的真任务
   (T-F<k> 按追加顺序编号、`final: <stage>@<round>` 字段、不写 verify 字段),
   复用 runTask 全流水线:生成会话(renderFinalTask,旁路一次性)产出提案
-  docs/final/plan-<stage>-r<N>.md → appendFinalTask 追加 → 主循环 next() 拾取执行 →
+  docs/T-F<k>/plan-<stage>-r<N>.md(锚定即将追加的 T-F<k> 目录)→ appendFinalTask 追加 → 主循环 next() 拾取执行 →
   报告末行协议路由(策略: 重构|修补|无;结论: 通过|差距 <描述>):策略无直达
   finalize(跳过 remediate 与 validate,原任务已有任务级 verify 兜底);remediate
   后生成同轮 validate;validate 通过生成 finalize、差距回退 audit@r+1(聚焦残余
@@ -248,8 +303,8 @@
   任务已存在不重复生成、提案已产出直接解析追加、done 但报告缺失/协议非法按阻塞
   提示人工核查;终审任务内部中断走既有 recallProgress/peekProgress);终审任务沿用
   waitBetween/统一提交/退出码语义,终审各阶段改动随其生成/执行会话的统一提交落账。
-- 任务流水线(auto 模式):正文无检查项时先跑分解会话(产出 docs/T-NNN.subtasks.md,
-  driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN.report.md
+- 任务流水线(auto 模式):正文无检查项时先跑分解会话(产出 docs/T-NNN/subtasks.md,
+  driver 注入检查项),再逐检查项会话执行,最后收尾会话写 docs/T-NNN/report.md
   (只写产出摘要,不运行任务级 verify、不下验收结论)。
    任务内所有会话共用一条链:上一会话结束时上下文占比低于 50%、已用量低于
    配置 contextLimit 的一半(默认 32k tokens)且距其结束不超过 5 分钟(REUSE_IDLE_MS)则
@@ -264,11 +319,12 @@
   备注"(退出原因/中断阶段/恢复方式)后保留,供人工查看与下次恢复(下次 runTask
   重建镜像时,备注要点经恢复提示词带给 AI);强制中断遗留文件同样下次重建。
   AGENTS.md 中 driver
-  只维护五个固定标记块(指针 `opencode-auto:start`、验证 `opencode-auto:verify`、
+  只维护六个固定标记块(指针 `opencode-auto:start`、验证 `opencode-auto:verify`、
   测试执行 `opencode-auto:test`、提交 `opencode-auto:commit`、维护规则
-  `opencode-auto:maint`,各自幂等补写、除此之外永不改写;验证块随 config.verify、
-  测试块随 config.testByDriver 补写/移除,见"verify 验收开关"与
-  "--test-by-driver"条),
+  `opencode-auto:maint`、引用规范 `opencode-auto:refs`(stable-refs P4,规范全文
+  精编:存放目录化/永久路径、引用根相对路径语法、检查三层),各自幂等补写、
+  除此之外永不改写;验证块随 config.verify、测试块随 config.testByDriver 补写/移除,
+  见"verify 验收开关"与"--test-by-driver"条),
   不置只读(任务可更新其余内容,但经 agent 契约约束不得删除
   或改写任何标记块、更新其余内容须遵守维护规则块——保持精简 ≤150 行、路由到
   docs/agents/<主题>.md 存放跨任务工作流知识、更新不追加、只沉淀持久知识;check
@@ -280,8 +336,8 @@
   active=true 半途态;旁路一次性会话不写);runTask 开始时 recallProgress 读回——
   active 且会话在 server 上仍存在 → 复用原会话继续(chain 直接 seed 该会话,
   与 `opencode -r` 同构,不设时间窗),否则新会话;**交接文件优先**——active
-  恢复时交接文档已存在(ondemand 的 docs/<id>.handoff.md 或 handover-test 的
-  <id>[-S<n>].testhandoff.md——任务级或任一子任务级遗留均判定)则不复用旧会话,
+  恢复时交接文档已存在(ondemand 的 docs/<id>/handoff.md 或 handover-test 的
+  任务级/任一子任务级 testhandoff.md 遗留均判定)则不复用旧会话,
   开新会话凭交接续跑(handoff `状态: 完成`
   时直接跳过整任务会话);`--new-session` 显式放弃复用(仅跳过复用、阶段精确
   重入保留,并立即把记录转 active=false);两种情况首个提示词均附加"[driver]
