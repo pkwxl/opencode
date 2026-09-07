@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, readdir, rm, stat, utimes } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import {
@@ -128,9 +128,9 @@ describe("migrateLegacyDocs 存量迁移", () => {
   test("docs/ 缺失 → 空结果;无旧文件 → 空结果", async () => {
     const dir = await tempDir()
     try {
-      expect(await migrateLegacyDocs(dir)).toEqual({ moved: [], rewritten: [] })
+      expect(await migrateLegacyDocs(dir)).toEqual({ moved: [], rewritten: [], skipped: [] })
       await mkdir(join(dir, "docs"), { recursive: true })
-      expect(await migrateLegacyDocs(dir)).toEqual({ moved: [], rewritten: [] })
+      expect(await migrateLegacyDocs(dir)).toEqual({ moved: [], rewritten: [], skipped: [] })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -185,6 +185,78 @@ describe("migrateLegacyDocs 存量迁移", () => {
     }
   })
 
+  test("轮次归档提升: 任务文档/伴生 S 产物/交接变体/知识库/阶段产物/项目文档各归其位", async () => {
+    const dir = await tempDir()
+    try {
+      await write(dir, "docs/phases/round-3/m-migrate/T-021.context.md")
+      await write(dir, "docs/phases/round-3/m-migrate/T-021/S01.md")
+      await write(dir, "docs/phases/round-3/m-migrate/T-021/S02.gate.md")
+      // 交接双源: 旧 T-NNN.handover.md 命名变体(更旧)与 handover.md(最新)
+      await write(dir, "docs/phases/round-3/m-migrate/T-026.handover.md", "旧交接\n")
+      await write(dir, "docs/phases/round-3/m-migrate/handover.md", "最新交接\n")
+      const older = new Date(Date.now() - 60_000)
+      await utimes(join(dir, "docs/phases/round-3/m-migrate/T-026.handover.md"), older, older)
+      await write(dir, "docs/phases/round-3/k-knowledge/migration-kb/migration-2026-09-07_03-51-43.md")
+      await write(dir, "docs/phases/round-3/a-analysis/analysis/r3-baseline.md")
+      await write(dir, "docs/phases/round-3/a-analysis/PLAN.md", "过期状态\n")
+      await write(dir, "docs/phases/round-3/phases.md", "台账\n")
+      await write(dir, "docs/phases/round-2/m-migrate/005-dm-crate-skeleton.md")
+      await write(dir, "docs/phases/round-1/m-migrate/final/audit-r1.md")
+      // 预建空任务目录 → 空目录不算冲突,落位
+      await mkdir(join(dir, "docs/T-021"), { recursive: true })
+
+      const { moved } = await migrateLegacyDocs(dir)
+      expect([...moved].sort()).toEqual(
+        [
+          join("docs", "T-021", "context.md"),
+          join("docs", "T-021", "S01", "index.md"),
+          join("docs", "T-021", "S02", "gate.md"),
+          join("docs", "handovers", "R3-m-migrate.md"),
+          join("docs", "migration-kb", "R3-migration-2026-09-07_03-51-43.md"),
+          join("docs", "phase-docs", "R3-a-analysis", "r3-baseline.md"),
+          join("docs", "005-dm-crate-skeleton.md"),
+          join("docs", "T-F1", "audit-r1.md"),
+        ].sort(),
+      )
+      expect(await Bun.file(join(dir, "docs/T-021/context.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "docs/T-021/S01/index.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "docs/T-021/S02/gate.md")).exists()).toBe(true)
+      // 最新交接占领 docs/handovers/,旧命名变体原地保留
+      expect(await Bun.file(join(dir, "docs/handovers/R3-m-migrate.md")).text()).toBe("最新交接\n")
+      expect(await Bun.file(join(dir, "docs/phases/round-3/m-migrate/T-026.handover.md")).text()).toBe("旧交接\n")
+      // 过期状态(R5)与归档目录本身不动
+      expect(await Bun.file(join(dir, "docs/phases/round-3/a-analysis/PLAN.md")).text()).toBe("过期状态\n")
+      expect(await Bun.file(join(dir, "docs/phases/round-3/phases.md")).text()).toBe("台账\n")
+      expect((await stat(join(dir, "docs/phases/round-3/m-migrate"))).isDirectory()).toBe(true)
+      // 幂等
+      expect((await migrateLegacyDocs(dir)).moved).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("轮次归档跨轮同编号冲突: mtime 最新版归位,旧轮版本原地保留;旧归档引用被改写", async () => {
+    const dir = await tempDir()
+    try {
+      await write(dir, "docs/phases/round-1/m-migrate/T-005.report.md", "第 1 轮版\n")
+      await write(dir, "docs/phases/round-2/a-analysis/T-005.report.md", "第 2 轮版\n")
+      const older = new Date(Date.now() - 60_000)
+      await utimes(join(dir, "docs/phases/round-1/m-migrate/T-005.report.md"), older, older)
+      await write(dir, "docs/handovers/R2-a-analysis.md", "交接见 `docs/phases/round-1/m-migrate/T-005.report.md`。\n")
+      const { moved } = await migrateLegacyDocs(dir)
+      expect(moved).toEqual([join("docs", "T-005", "report.md")])
+      expect(await Bun.file(join(dir, "docs/T-005/report.md")).text()).toBe("第 2 轮版\n")
+      // 旧轮版本原地保留
+      expect(await Bun.file(join(dir, "docs/phases/round-1/m-migrate/T-005.report.md")).text()).toBe("第 1 轮版\n")
+      // 活文档中的旧归档引用被改写为提升后的永久路径
+      expect(await Bun.file(join(dir, "docs/handovers/R2-a-analysis.md")).text()).toBe(
+        "交接见 `docs/T-005/report.md`。\n",
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("活文档引用改写: 反引号/链接/词边界;围栏与标记行豁免;docs/phases/ 排除", async () => {
     const dir = await tempDir()
     try {
@@ -230,7 +302,7 @@ describe("migrateLegacyDocs 存量迁移", () => {
       expect(first.moved).toEqual([join("docs", "T-003", "context.md")])
       expect(first.rewritten).toEqual([join("docs", "T-005", "report.md")])
       const second = await migrateLegacyDocs(dir)
-      expect(second).toEqual({ moved: [], rewritten: [] })
+      expect(second).toEqual({ moved: [], rewritten: [], skipped: [] })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -245,6 +317,82 @@ describe("migrateLegacyDocs 存量迁移", () => {
       expect(moved).toEqual([])
       expect(await Bun.file(join(dir, "docs/T-003/context.md")).text()).toBe("新内容\n")
       expect(await Bun.file(join(dir, "docs/T-003.context.md")).exists()).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("冲突裁决: 同目标双源 mtime 最新优先占领空闲位,落选者原地保留不移动", async () => {
+    const dir = await tempDir()
+    try {
+      await write(dir, "docs/final-audit.md", "旧源\n")
+      await write(dir, "docs/final/final-audit.md", "新源\n")
+      const older = new Date(Date.now() - 60_000)
+      await utimes(join(dir, "docs/final-audit.md"), older, older)
+      const { moved } = await migrateLegacyDocs(dir)
+      expect(moved).toEqual([join("docs", "T-F1", "final-audit.md")])
+      expect(await Bun.file(join(dir, "docs/T-F1/final-audit.md")).text()).toBe("新源\n")
+      // 落选者(更旧)原地保留,不移动不删除
+      expect(await Bun.file(join(dir, "docs/final-audit.md")).text()).toBe("旧源\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("冲突跳过登记 .auto/migrate-skips.md: skipped 键稳定,清单全量重写内容不变(仅首次警告)", async () => {
+    const dir = await tempDir()
+    try {
+      await write(dir, "docs/T-001.report.md", "新源\n")
+      await mkdir(join(dir, "docs/phases/round-1/m-migrate"), { recursive: true })
+      await write(dir, "docs/phases/round-1/m-migrate/T-001.report.md", "旧源\n")
+      const first = await migrateLegacyDocs(dir)
+      expect(first.skipped).toEqual(["docs/phases/round-1/m-migrate/T-001.report.md"])
+      const registry = await Bun.file(join(dir, ".auto/migrate-skips.md")).text()
+      expect(registry).toContain("- docs/T-001/report.md ← docs/phases/round-1/m-migrate/T-001.report.md")
+      // 复跑: 跳过键不变,清单重写后逐字稳定(警告去重由 recordOnce 键集合保证)
+      const second = await migrateLegacyDocs(dir)
+      expect(second.skipped).toEqual(first.skipped)
+      expect(await Bun.file(join(dir, ".auto/migrate-skips.md")).text()).toBe(registry)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("同 mtime 决序: 路径字典序先手占领,确定性", async () => {
+    const dir = await tempDir()
+    try {
+      await write(dir, "docs/final-audit.md", "平铺版\n")
+      await write(dir, "docs/final/final-audit.md", "目录版\n")
+      const same = new Date()
+      await utimes(join(dir, "docs/final-audit.md"), same, same)
+      await utimes(join(dir, "docs/final/final-audit.md"), same, same)
+      const { moved } = await migrateLegacyDocs(dir)
+      expect(moved).toEqual([join("docs", "T-F1", "final-audit.md")])
+      // "docs/final-audit.md" < "docs/final/final-audit.md"(- < /)→ 平铺版先手
+      expect(await Bun.file(join(dir, "docs/T-F1/final-audit.md")).text()).toBe("平铺版\n")
+      expect(await Bun.file(join(dir, "docs/final/final-audit.md")).text()).toBe("目录版\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("空目录不算冲突: 目标位为空目录腾位落位;非空目录按冲突跳过", async () => {
+    const dir = await tempDir()
+    try {
+      // 目标位是空目录 → 不算冲突,删除空目录后落位
+      await write(dir, "docs/T-003.context.md", "旧内容\n")
+      await mkdir(join(dir, "docs/T-003/context.md"), { recursive: true })
+      const { moved } = await migrateLegacyDocs(dir)
+      expect(moved).toEqual([join("docs", "T-003", "context.md")])
+      expect(await Bun.file(join(dir, "docs/T-003/context.md")).text()).toBe("旧内容\n")
+      // 目标位是非空目录 → 冲突,不移动
+      await write(dir, "docs/T-004.report.md", "旧内容\n")
+      await mkdir(join(dir, "docs/T-004/report.md"), { recursive: true })
+      await Bun.write(join(dir, "docs/T-004/report.md/inner.txt"), "x")
+      const second = await migrateLegacyDocs(dir)
+      expect(second.moved).toEqual([])
+      expect(await readdir(join(dir, "docs/T-004/report.md"))).toEqual(["inner.txt"])
+      expect(await Bun.file(join(dir, "docs/T-004.report.md")).text()).toBe("旧内容\n")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

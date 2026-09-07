@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { existingKnowledge, existingPriorKnowledge, knowledgeFile, priorKnowledgeFile } from "../src/knowledge"
+import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, knowledgeFile, parsePriorVerdict, priorKnowledgeFile } from "../src/knowledge"
 
 describe("knowledgeFile(输出路径,轮次前缀)", () => {
   test("docs/migration-kb/R<N>-migration-<时间戳>.md,时间戳与 run 日志同款格式", () => {
@@ -93,5 +93,51 @@ describe("existingPriorKnowledge(本轮幂等检查,与 existingKnowledge 同一
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("existingDistilledDocs(已有蒸馏产物清单,提取会话引用化输入)", () => {
+  function tempDir() {
+    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
+  }
+
+  test("收集 migration-kb/handovers/历轮 prior-kb 的非空 .md,排除本轮前缀;目录缺失 → 空数组", async () => {
+    const dir = tempDir()
+    try {
+      expect(await existingDistilledDocs(dir, 2)).toEqual([])
+      mkdirSync(join(dir, "docs/migration-kb"), { recursive: true })
+      mkdirSync(join(dir, "docs/handovers"), { recursive: true })
+      mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
+      writeFileSync(join(dir, "docs/migration-kb", "R1-migration-a.md"), "上一轮知识")
+      writeFileSync(join(dir, "docs/migration-kb", "R1-migration-empty.md"), " \n")
+      writeFileSync(join(dir, "docs/migration-kb", "notes.txt"), "非 md 不算")
+      writeFileSync(join(dir, "docs/handovers", "R1-m-migrate.md"), "上一轮交接")
+      writeFileSync(join(dir, "docs/prior-kb", "R1-prior-old.md"), "旧前置知识")
+      writeFileSync(join(dir, "docs/prior-kb", "R2-prior-current.md"), "本轮文档不算")
+      expect(await existingDistilledDocs(dir, 2)).toEqual([
+        join("docs/handovers", "R1-m-migrate.md"),
+        join("docs/migration-kb", "R1-migration-a.md"),
+        join("docs/prior-kb", "R1-prior-old.md"),
+      ])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("parsePriorVerdict(复杂度评估协议判读)", () => {
+  test("simple/full、半角与全角冒号、取首个匹配行", () => {
+    expect(parsePriorVerdict("# 迁移知识库\n\n## 复杂度评估\n\n流程建议: simple\n\n依据: 微小增量")).toBe("simple")
+    expect(parsePriorVerdict("流程建议: full")).toBe("full")
+    expect(parsePriorVerdict("流程建议：simple")).toBe("simple")
+    expect(parsePriorVerdict("x\n流程建议: simple\ny\n流程建议: full")).toBe("simple")
+  })
+
+  test("缺失、占位未填、非法值 → undefined(调用方按完整流程处理)", () => {
+    expect(parsePriorVerdict("")).toBeUndefined()
+    expect(parsePriorVerdict("## 复杂度评估\n\n流程建议: <full|simple>")).toBeUndefined()
+    expect(parsePriorVerdict("流程建议: SIMPLE")).toBeUndefined()
+    expect(parsePriorVerdict("流程建议: simple(微小增量)")).toBeUndefined()
+    expect(parsePriorVerdict("建议: simple")).toBeUndefined()
   })
 })

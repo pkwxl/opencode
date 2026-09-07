@@ -9,6 +9,7 @@ import {
   currentRound,
   formatPhases,
   handoverDoc,
+  phaseDocsDir,
   parsePhases,
   phaseArchive,
   phaseText,
@@ -235,6 +236,12 @@ describe("归档目录与交接文档协议", () => {
     expect(handoverDoc(1, "a")).toBe("docs/handovers/R1-a-analysis.md")
     expect(handoverDoc(2, "m")).toBe("docs/handovers/R2-m-migrate.md")
     expect(handoverDoc(12, "k")).toBe("docs/handovers/R12-k-knowledge.md")
+  })
+
+  test("phaseDocsDir: docs/phase-docs/R<N>-<字母>-<slug>/ 阶段自由产物永久目录,与 handoverDoc 同名对位", () => {
+    expect(phaseDocsDir(1, "a")).toBe("docs/phase-docs/R1-a-analysis")
+    expect(phaseDocsDir(3, "m")).toBe("docs/phase-docs/R3-m-migrate")
+    expect(phaseDocsDir(12, "k")).toBe("docs/phase-docs/R12-k-knowledge")
   })
 })
 

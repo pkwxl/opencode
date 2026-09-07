@@ -365,11 +365,15 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
 // 前置知识提取会话(外壳的二次迁移编排,src/knowledge.ts extractPriorKnowledge):
 // 旁路一次性,通读已有迁移结果(不限于此前轮次——docs/ 全树、阶段/轮次归档、产出
 // 代码与 git 历史),蒸馏出 docs/prior-kb/ 下的知识文档,作为二次迁移与参数推断
-// 的输入。file 为输出路径(相对目标目录);brief 为项目意图原文(可空)。
-export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec }): string {
+// 的输入。file 为输出路径(相对目标目录);brief 为项目意图原文(可空);distilled
+// 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,非空时模板注入引用化
+// 条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的差分增量)。
+export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
+  const distilled = input.distilled?.filter(Boolean) ?? []
   return renderTemplate("prior-knowledge", {
     file: input.file,
     brief: input.brief?.trim() || undefined,
+    distilled: distilled.length ? distilled.map((path) => `- ${path}`).join("\n") : undefined,
     ...modeCtx(input.mode),
   })
 }

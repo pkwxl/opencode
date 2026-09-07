@@ -854,6 +854,16 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
   })
 
+  test("m 阶段附简化流程判定(复杂度评估 simple → 勘察设计并入首批任务,底线不省),其余阶段无", () => {
+    const m = renderPhasePlan({ phase: "m", prevRound: "### 上一轮迁移知识(docs/migration-kb/R1-migration-x.md)\n\n流程建议: simple" })
+    expect(m).toContain("简化流程判定")
+    expect(m).toContain("复杂度评估")
+    expect(m).toContain("并入本阶段首批任务")
+    expect(m).toContain("底线保障")
+    // 非 m 阶段不注入该判定
+    expect(renderPhasePlan({ phase: "a", prevRound: "x" })).not.toContain("简化流程判定")
+  })
+
   test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
     const withSource = renderPhasePlan({ phase: "m", source: { dir: "legacy", path: "pkg" } })
     expect(withSource).toContain("## 输入: 迁移源参数")
@@ -1068,6 +1078,38 @@ describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
   })
 })
 
+describe("renderPriorKnowledge(前置知识提取会话)", () => {
+  test("引用化两态: distilled 非空注入清单与不复述要求;空/缺省整块消失(行为同全量蒸馏)", () => {
+    usePromptLibrary(undefined)
+    const withList = renderPriorKnowledge({
+      file: "docs/prior-kb/R2-prior-x.md",
+      brief: "意图",
+      distilled: ["docs/handovers/R1-m-migrate.md", "docs/migration-kb/R1-migration-a.md"],
+    })
+    expect(withList).toContain("## 输入: 已有蒸馏产物(引用化要求)")
+    expect(withList).toContain("不得在本文复述")
+    expect(withList).toContain("- docs/handovers/R1-m-migrate.md")
+    expect(withList).toContain("- docs/migration-kb/R1-migration-a.md")
+    // 引用化同款约束: 已覆盖知识点以一行引用代替摘抄
+    expect(withList).toContain("一行引用代替摘抄")
+    const bare = renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md" })
+    expect(bare).not.toContain("## 输入: 已有蒸馏产物")
+    expect(bare).not.toContain("不得在本文复述")
+    expect(renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md", distilled: [] })).not.toContain("## 输入: 已有蒸馏产物")
+  })
+
+  test("复杂度评估骨架与协议: 章节存在、协议行规则说明齐全", () => {
+    usePromptLibrary(undefined)
+    const text = renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md" })
+    expect(text).toContain("## 复杂度评估")
+    expect(text).toContain("流程建议: <full|simple>")
+    expect(text).toContain("`流程建议: full`")
+    expect(text).toContain("`流程建议: simple`")
+    expect(text).toContain("任何拿不准一律")
+    expect(text).toContain("不豁免任何底线保障")
+  })
+})
+
 describe("模板渲染完整性", () => {
   test("全部 render* 在代表性参数组合下渲染后不残留模板标签", () => {
     const solo = plan.tasks[0]!
@@ -1096,6 +1138,7 @@ describe("模板渲染完整性", () => {
       renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "意图", mode: migrate }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md" }),
+      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", distilled: ["docs/handovers/R1-m-migrate.md"] }),
       renderInferSource({ file: ".auto/infer.json", brief: "意图", priorKb: "- docs/prior-kb/prior-x.md", known: "- 迁移目标目录: target" }),
       renderInferSource({ file: ".auto/infer.json" }),
       renderDryrun(),

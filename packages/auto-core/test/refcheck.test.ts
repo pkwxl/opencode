@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -13,6 +13,7 @@ import {
   scanRefs,
   taskRefFindings,
   validateRefs,
+  recordOnce,
 } from "../src/refcheck"
 
 describe("extractRefs", () => {
@@ -25,8 +26,13 @@ describe("extractRefs", () => {
   })
 
   test(":行号 尾锚剥离为 line", () => {
-    const text = "见 `docs/T-001/context.md:42` 的说明。"
+    const text = "见 `docs/T-001/context.md:42`。"
     expect(extractRefs(text)).toEqual([{ path: "docs/T-001/context.md", line: 42, at: 1 }])
+  })
+
+  test(":N-M 区间尾锚剥离,line 取区间上界", () => {
+    const text = "见 `kernel/comps/block/src/lib.rs:64-159`。"
+    expect(extractRefs(text)).toEqual([{ path: "kernel/comps/block/src/lib.rs", line: 159, at: 1 }])
   })
 
   test("含空白的 token 忽略", () => {
@@ -172,6 +178,116 @@ describe("activeDocs / validateRefs / scanRefs", () => {
     }
   })
 
+  test("validateRefs: 段边界后缀唯一匹配视为有效并消解(行号按匹配文件校验);多重匹配按缺失", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await Bun.write(join(dir, "pkg/src/mod.ts"), "a\nb\n")
+      const refs = extractRefs("`src/mod.ts`、`src/mod.ts:2`、`src/mod.ts:9`、`src/gone.ts`")
+      // 唯一命中 pkg/src/mod.ts → 有效;行号 9 超出其 2 行 → beyond-eof
+      expect(await validateRefs(dir, refs)).toEqual(new Map([["src/mod.ts", "beyond-eof"], ["src/gone.ts", "missing"]]))
+      // 再添一份同后缀副本 → 语境歧义,按缺失
+      await Bun.write(join(dir, "other/src/mod.ts"), "z")
+      expect(await validateRefs(dir, refs)).toEqual(new Map([["src/mod.ts", "missing"], ["src/gone.ts", "missing"]]))
+      // 直接命中优先于歧义: 根相对路径存在即有效(不再 missing);行号校验照常
+      await Bun.write(join(dir, "src/mod.ts"), "a\nb\n")
+      expect(await validateRefs(dir, refs)).toEqual(new Map([["src/mod.ts", "beyond-eof"], ["src/gone.ts", "missing"]]))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("validateRefs: 目录引用(尾缀 /)经后缀唯一匹配消解到目录;区间尾锚按上界校验行号", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await Bun.write(join(dir, "asterinas/kernel/comps/dm/lib.rs"), "a\nb\nc\n")
+      const refs = extractRefs("`kernel/comps/dm/`、`kernel/comps/dm/lib.rs:1-2`、`kernel/comps/dm/lib.rs:1-9`")
+      // 目录尾缀 / 消解到 asterinas/kernel/comps/dm → 有效;区间上界 9 超出 3 行 → beyond-eof
+      expect(await validateRefs(dir, refs)).toEqual(new Map([["kernel/comps/dm/lib.rs", "beyond-eof"]]))
+      // 再添一份同后缀目录副本 → 目录消解歧义,按缺失(文件引用仍唯一消解)
+      await Bun.write(join(dir, "linux/kernel/comps/dm/x.rs"), "z")
+      expect(await validateRefs(dir, refs)).toEqual(
+        new Map([["kernel/comps/dm/", "missing"], ["kernel/comps/dm/lib.rs", "beyond-eof"]]),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("validateRefs: 软链目录下钻参与后缀消解(参照源码树);循环软链不死循环", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await Bun.write(join(dir, "real/include/uapi/linux/dm.h"), "a\nb\n")
+      await Bun.write(join(dir, "real/include/linux/kdev_t.h"), "x\n")
+      await symlink(join(dir, "real"), join(dir, "linux"))
+      // linux/include/linux/kdev_t.h 以树内相对写法 `include/linux/kdev_t.h` 唯一命中
+      const refs = extractRefs("`include/linux/kdev_t.h`、`linux/dm.h:9`")
+      expect(await validateRefs(dir, refs)).toEqual(new Map([["linux/dm.h", "beyond-eof"]]))
+      // 循环软链(real/loop → linux → real)下钻有界,消解不受影响
+      await symlink(join(dir, "linux"), join(dir, "real/loop"))
+      expect(await validateRefs(dir, refs)).toEqual(new Map([["linux/dm.h", "beyond-eof"]]))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("validateRefs: 同一目标的带/不带尾杠两种写法共存消解(lookup 键归一不撞键)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await Bun.write(join(dir, "asterinas/kernel/core/comps/dm/lib.rs"), "x\n")
+      const refs = extractRefs("`kernel/core/comps/dm/`、`kernel/core/comps/dm`")
+      expect(await validateRefs(dir, refs)).toEqual(new Map())
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("scanRefs: 带上下文语境的相对引用经后缀唯一匹配消解(文档内同级路径)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await Bun.write(join(dir, "docs/T-001/context.md"), "x\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "同级引用 `context.md` 与代码引用 `pkg/util.ts`。\n")
+      await Bun.write(join(dir, "pkg/util.ts"), "code\n")
+      expect(await scanRefs(dir)).toEqual([])
+      // 唯一性破坏(另一任务也有 context.md)→ 恢复为 missing
+      await Bun.write(join(dir, "docs/T-002/context.md"), "x\n")
+      expect(await scanRefs(dir)).toEqual([
+        { file: "docs/T-001/report.md", line: 1, text: "同级引用 `context.md` 与代码引用 `pkg/util.ts`。", path: "context.md", problem: "missing" },
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("recordOnce: 新键 ⚠ 一次,已收录键静默;清单全量重写排序稳定,空 entries 删除文件", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    const warns: string[] = []
+    const original = console.log
+    console.log = (...args: unknown[]) => warns.push(args.map(String).join(" "))
+    try {
+      await recordOnce(dir, ".auto/reg.md", "# 清单\n", [
+        { key: "b", warn: "乙" },
+        { key: "a", warn: "甲" },
+      ])
+      expect(warns).toEqual(["  ⚠ 乙", "  ⚠ 甲"])
+      expect(await Bun.file(join(dir, ".auto/reg.md")).text()).toBe("# 清单\n- a\n- b\n")
+      // 复调: 已收录键 a 静默,新键 c 仍 ⚠;清单全量重写含三键
+      warns.length = 0
+      await recordOnce(dir, ".auto/reg.md", "# 清单\n", [
+        { key: "a", warn: "甲" },
+        { key: "c", warn: "丙" },
+      ])
+      expect(warns).toEqual(["  ⚠ 丙"])
+      // 全量重写: 本轮未上报的 b 视为已修复,自动移除
+      expect(await Bun.file(join(dir, ".auto/reg.md")).text()).toBe("# 清单\n- a\n- c\n")
+      // 空 entries → 清单删除(修复后自动移除)
+      await recordOnce(dir, ".auto/reg.md", "# 清单\n", [])
+      expect(await Bun.file(join(dir, ".auto/reg.md")).exists()).toBe(false)
+    } finally {
+      console.log = original
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("gitAvailable: 非 git 目录 false;taskRefFindings: 范围限定 docs/T-<id>/**,formatRefGap 组装差距文案", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
     try {
@@ -243,6 +359,51 @@ describe("renamePairs / autoCorrectRefs", () => {
       expect(findings).toHaveLength(1)
       expect(await Bun.file(join(dir, "docs/live.md")).text()).toBe("引用 `docs/gone.md`。")
     } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("autoCorrectRefs: 失效清单 .auto/invalid-refs.md,仅对新出现引用 ⚠;修复后移除,复发再警告", async () => {
+    const dir = await freshRepo()
+    const seen: string[] = []
+    const original = console.log
+    console.log = (...args: unknown[]) => seen.push(args.join(" "))
+    try {
+      await Bun.write(join(dir, "docs/live.md"), "引用 `docs/gone.md` 与 `docs/lost.md`。")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // 首轮: 两条新失效引用各警告一次,清单落盘(键排序,不含行号与原文)
+      await autoCorrectRefs(dir)
+      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(2)
+      const list = await Bun.file(join(dir, ".auto/invalid-refs.md")).text()
+      expect(list.split("\n").slice(1)).toEqual([
+        "- docs/live.md → docs/gone.md(missing)",
+        "- docs/live.md → docs/lost.md(missing)",
+        "",
+      ])
+      // 次轮: 清单已收录,不再重复警告
+      seen.length = 0
+      await autoCorrectRefs(dir)
+      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(0)
+      // 新增第三条 → 只警告新出现的
+      await Bun.write(join(dir, "docs/live.md"), "引用 `docs/gone.md` 与 `docs/lost.md` 与 `docs/vanished.md`。")
+      seen.length = 0
+      await autoCorrectRefs(dir)
+      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(1)
+      expect(seen.find((line) => line.includes("⚠ 失效引用"))).toContain("docs/vanished.md")
+      // 全部修复 → 清单移除
+      await Bun.write(join(dir, "docs/gone.md"), "x")
+      await Bun.write(join(dir, "docs/lost.md"), "x")
+      await Bun.write(join(dir, "docs/vanished.md"), "x")
+      await autoCorrectRefs(dir)
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
+      // 复发 → 视为新出现,重新警告
+      await rm(join(dir, "docs/gone.md"))
+      seen.length = 0
+      await autoCorrectRefs(dir)
+      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(1)
+    } finally {
+      console.log = original
       await rm(dir, { recursive: true, force: true })
     }
   })
