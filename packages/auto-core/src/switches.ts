@@ -1,4 +1,5 @@
-// fork 分解实验开关——环境变量层(设计文档 docs/fork-decompose-design.md §4.6):
+// OPENCODE_AUTO_* 实验开关注册表——环境变量层(fork 系开关设计文档
+// docs/fork-decompose-design.md §4.6,步进开关 docs/step-mode-design.md):
 // 实验期全部开关经 OPENCODE_AUTO_* 环境变量注入、核心内一次解析(memo)、全流水线
 // 一致,CLI 壳零改动(命名沿 OPENCODE_AUTO_SERVER 先例,src/server.ts)。不落盘:
 // 实验语义 = 本次运行,区别于宪法键的 init 固化,同一次运行内开关恒定;宪法键
@@ -13,7 +14,12 @@ export const SWITCH_ENV = {
   forkBase: "OPENCODE_AUTO_FORK_BASE",
   fine: "OPENCODE_AUTO_DECOMPOSE_FINE",
   steer: "OPENCODE_AUTO_STEER",
+  step: "OPENCODE_AUTO_STEP",
 } as const
+
+// 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
+// 粒度——所取值及更粗的边界都暂停(见 src/step.ts)。
+export type StepMode = "off" | "phase" | "task" | "subtask"
 
 export type Switches = {
   // fork 三段式流水线总开关: off = 现状流水线(无理解会话、无分叉),行为零变化。
@@ -26,9 +32,11 @@ export type Switches = {
   // 超限交接 steer(2×cap): off = 停用会话中交接注入与会话后的交接判定
   // (自然完成即收;--handover-test 的测试交接是独立机制,不受影响)。
   steer: boolean
+  // 步进模式: phase/task/subtask 在对应(及更粗)边界硬暂停等回车放行。
+  step: StepMode
 }
 
-const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "session", fine: false, steer: true }
+const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "session", fine: false, steer: true, step: "off" }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
 // (取缺省),非法值 throw 中文报错。
@@ -45,11 +53,19 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
   if (forkBase !== "session" && forkBase !== "digest") {
     throw new Error(`环境变量 ${SWITCH_ENV.forkBase} 取值非法: "${forkBaseRaw}"(期望 session|digest;空串视同未设,缺省 session)`)
   }
+  const stepRaw = env[SWITCH_ENV.step]
+  const step = stepRaw === undefined || stepRaw === "" ? SWITCH_DEFAULTS.step : stepRaw
+  if (step !== "off" && step !== "phase" && step !== "task" && step !== "subtask") {
+    throw new Error(
+      `环境变量 ${SWITCH_ENV.step} 取值非法: "${stepRaw}"(期望 off|phase|task|subtask;空串视同未设,缺省 off)`,
+    )
+  }
   return {
     fork: onOff(SWITCH_ENV.fork, env[SWITCH_ENV.fork], SWITCH_DEFAULTS.fork),
     forkBase: forkBase as Switches["forkBase"],
     fine: onOff(SWITCH_ENV.fine, env[SWITCH_ENV.fine], SWITCH_DEFAULTS.fine),
     steer: onOff(SWITCH_ENV.steer, env[SWITCH_ENV.steer], SWITCH_DEFAULTS.steer),
+    step: step as StepMode,
   }
 }
 
@@ -60,6 +76,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.forkBase === SWITCH_DEFAULTS.forkBase ? undefined : `${SWITCH_ENV.forkBase}=${switches.forkBase}`,
     switches.fine === SWITCH_DEFAULTS.fine ? undefined : `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     switches.steer === SWITCH_DEFAULTS.steer ? undefined : `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
+    switches.step === SWITCH_DEFAULTS.step ? undefined : `${SWITCH_ENV.step}=${switches.step}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -71,6 +88,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.forkBase}=${switches.forkBase}`,
     `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
+    `${SWITCH_ENV.step}=${switches.step}`,
   ].join(", ")
 }
 

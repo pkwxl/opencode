@@ -28,6 +28,7 @@
 - 项目配置 → `src/config.ts`(设计: docs/init-config-agents-design.md)
 - 任务流水线/会话链 → `src/runner.ts`;阶段循环 → `src/loop.ts` + `src/phases.ts`(设计: docs/phases-design.md)
 - fork 分解(理解→分解→执行三段式、分叉基点、OPENCODE_AUTO_* 实验开关)→ `src/runner.ts` + `src/switches.ts`(设计: docs/fork-decompose-design.md)
+- 步进模式(OPENCODE_AUTO_STEP 环境变量:phase/task/subtask 包含式边界硬暂停)→ `src/step.ts`(设计: docs/step-mode-design.md)
 - 验收/审核 → `src/verify.ts` + `docs/verify-review-design.md`;终审闭环 → `src/final.ts` + `docs/mode-final-review-design.md`
 - 提示词文案 → 只动 `templates/prompts/*.md`(`src/prompt.ts` 只做数据组装),改后跑 `bun test test/prompt.test.ts`
 - 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`

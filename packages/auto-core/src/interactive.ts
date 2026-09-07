@@ -11,8 +11,9 @@ import { log, setInput } from "./log"
 export type Interactive = {
   // 每个会话建立/复用时由 runner 调用,后续输入发往该会话。
   attach(sessionID: string): void
-  // 显示提示并等待一行人工输入;minutes 分钟超时或 stdin 关闭回落 undefined。
-  question(promptText: string, minutes: number): Promise<string | undefined>
+  // 显示提示并等待一行人工输入;minutes 缺省 = 无超时(等待输入行或 stdin 关闭),
+  // 设定时则超时或关闭回落 undefined(步进暂停经缺省实现硬等待)。
+  question(promptText: string, minutes?: number): Promise<string | undefined>
   close(): void
 }
 
@@ -92,7 +93,8 @@ export function startInteractive(
       rl.setPrompt(ASK_PROMPT)
       rl.prompt()
       return new Promise((resolve) => {
-        pending = { resolve, timer: setTimeout(() => settle(undefined), minutes * 60_000) }
+        // minutes 缺省 = 无超时硬等待(步进暂停);定时仅在显式给值时挂。
+        pending = { resolve, timer: minutes === undefined ? undefined : setTimeout(() => settle(undefined), minutes * 60_000) }
       })
     },
     close() {

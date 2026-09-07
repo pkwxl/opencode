@@ -29,6 +29,7 @@ import { peekProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { shellProfile } from "./shell"
 import { manage, type ServerHandle } from "./server"
+import { stepPause } from "./step"
 import { renderText, usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
@@ -521,6 +522,9 @@ export async function runAll(
         if (opts.commit !== false) {
           await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
         }
+        // 步进暂停(task 边界,OPENCODE_AUTO_STEP ≥ task): 任务终态提交后、终审
+        // 路由与下一任务前硬暂停,回车放行。
+        await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl })
         // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
         // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
         // 由下一次 next() 按文件顺序拾取。
@@ -739,6 +743,14 @@ export async function runAll(
     // 执行 → 本阶段任务全 done 交接 → 台账追加推导下一阶段;全部阶段完成退出 0。
     // 台账非法等环境错误退出 1(H 节)。--final-review 终审闭环仅 m 阶段挂接
     // (runTaskLoop 的 finalGate),其余阶段忽略并提示。
+    // 步进暂停(phase 边界,OPENCODE_AUTO_STEP ≥ phase): 交接(归档+台账+提交)
+    // 完成后、下一轮路由前硬暂停——最后一个阶段暂停后回车即「全部阶段已完成」退出。
+    const handoverWithStep = async (phase: Phase): Promise<number> => {
+      const code = await handoverPhase(phase)
+      if (code !== 0) return code
+      await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl })
+      return 0
+    }
     const runPhaseLoop = async (): Promise<number> => {
       if ((opts.finalReview ?? 0) > 0) {
         log("ℹ 终审闭环(--final-review)仅作用于 m(迁移实现)阶段,其余阶段完成时不进入")
@@ -799,7 +811,7 @@ export async function runAll(
                   `可修复问题后按人工回退规程(删台账 k 行与 docs/migration-kb/ 内本轮 R<N>- 前缀文档)重跑单独重试。受阻详情:\n${extracted.question}`,
               )
             }
-            const code = await handoverPhase("k")
+            const code = await handoverWithStep("k")
             if (code !== 0) return code
             continue
           }
@@ -813,7 +825,7 @@ export async function runAll(
           if (code !== 0) return code
           continue
         }
-        const code = await handoverPhase(route.phase)
+        const code = await handoverWithStep(route.phase)
         if (code !== 0) return code
       }
     }
