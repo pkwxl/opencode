@@ -39,3 +39,7 @@ context.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告
 fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级测试交接写同目录
 testhandoff.md。这些路径一经创建即为永久路径——不移动、不改名;引用其他任务的文档时
 一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
+不属于任何单个任务的阶段级自由产物(勘测报告、设计批次、覆盖矩阵、核验记录等)写入
+docs/phase-docs/ 下以 R<轮次>-<阶段字母>-<slug>/ 命名的子目录(如 docs/phase-docs/
+R3-a-analysis/r3-baseline.md)——同为永久路径,落定不移动、不参与轮次归档;引用一律
+使用该永久路径。

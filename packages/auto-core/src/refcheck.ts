@@ -1,10 +1,12 @@
 // 引用一致性层(stable-refs 设计 §4.5,三层见 D6): extractRefs 提取文档对文档/
 // 代码的路径引用(反引号 span 与 md 链接),rewriteRefs 做旧→新路径的机械改写
 // (启动迁移与提交前 auto-correct 共用本原语);P4 补齐 validateRefs(存在性 +
-// 行号上限)、renamePairs(git rename 配对)、活文档枚举与 scanRefs 全量扫描,
-// 供 check 子命令与 verify 门禁消费。
-import { stat } from "node:fs/promises"
-import { join, relative, sep } from "node:path"
+// 段边界后缀唯一匹配消解 + 行号上限)、renamePairs(git rename 配对)、活文档枚举
+// 与 scanRefs 全量扫描,供 check 子命令与 verify 门禁消费;autoCorrectRefs 另维护
+// .auto/invalid-refs.md 失效清单,仅对新出现的失效引用输出 ⚠ 日志。
+import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
+import type { Stats } from "node:fs"
+import { join, relative, sep, dirname } from "node:path"
 import { log } from "./log"
 
 // path = 剥离可选 `:行号` 尾锚后的引用路径;line = 尾锚行号(存在时);
@@ -41,10 +43,17 @@ export function extractRefs(text: string): Ref[] {
   text.split("\n").forEach((line, i) => {
     if (!mask[i]) return
     for (const token of tokensOf(line)) {
-      const anchor = /:(\d+)$/.exec(token)
+      // 尾锚两种形态: `:N` 单行号与 `:N-M` 行号区间;path 剥锚后校验,line 取区间
+      // 上界(存在性校验用不到行号,行号上限校验按最大行号判超界)。
+      const anchor = /:(\d+(?:-\d+)*)$/.exec(token)
       const path = anchor ? token.slice(0, -anchor[0].length) : token
       if (/\s/.test(path) || (!path.includes("/") && !path.includes("."))) continue
-      refs.push(anchor ? { path, line: Number(anchor[1]), at: i + 1 } : { path, at: i + 1 })
+      if (anchor) {
+        const line = Math.max(...anchor[1]!.split("-").map(Number))
+        refs.push({ path, line, at: i + 1 })
+      } else {
+        refs.push({ path, at: i + 1 })
+      }
     }
   })
   return refs
@@ -101,14 +110,140 @@ function checkable(path: string): boolean {
 // problem = 路径不存在(missing)或行号超出文件总行数(beyond-eof)。
 export type RefFinding = { file: string; line: number; text: string; path: string; problem: "missing" | "beyond-eof" }
 
-// 校验一组引用(§3.2 校验语义: 路径存在;行号 ≤ 文件总行数)。同一文档内的
-// 重复路径只校验一次;md 链接的 #fragment 尾锚剥后再验;目录引用只查存在性
-// (行号锚对目录无意义,忽略)。
-export async function validateRefs(dir: string, refs: Ref[]): Promise<Map<string, "missing" | "beyond-eof">> {
+// 目录文件索引(惰性构建,一次扫描全程复用): 目标目录树的全量文件与目录清单,
+// node_modules 与 .git 剪枝不下钻(体积大且副本路径会破坏唯一性判定)。软链目录
+// 照常下钻(迁移工程常以软链挂载参照源码树,如 linux → …),以 realpath 集合防
+// 循环软链与重复下钻。用于消解带上下文语境的相对引用——引用常以引用者所在目录
+// 或参照树根为基书写,直接按目标目录根解析会误判缺失;目录引用(尾缀 /)只在
+// 目录项内匹配,文件引用不限形态(同名文件与目录不会并存于同一路径,跨形态歧义
+// 按多重匹配缺失处理)。
+type IndexEntry = { path: string; dir: boolean }
+
+class FileIndex {
+  private files: Promise<IndexEntry[]> | undefined
+
+  constructor(private dir: string) {}
+
+  list(): Promise<IndexEntry[]> {
+    this.files ??= walkTree(this.dir).then((entries) => entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)))
+    return this.files
+  }
+
+  // 批量消解: 一趟遍历索引,对每项自末段向前枚举段边界后缀与目标集求交——总代价
+  // O(索引项 × 平均段数),引用数大时远优于逐目标全表过滤(O(引用数 × 文件数))。
+  // 唯一命中的目标收录(多重匹配属语境歧义,交由调用方按缺失处理);尾缀 `/` 的
+  // 目标只在目录项内匹配。带/不带尾杠的同一目标归一同键(值数组),避免互相覆盖。
+  async resolveAll(targets: string[]): Promise<Map<string, IndexEntry>> {
+    const lookup = new Map<string, Array<{ target: string; dirOnly: boolean }>>()
+    for (const target of targets) {
+      const key = `/${target.replace(/\/$/, "")}`
+      const item = { target, dirOnly: target.endsWith("/") }
+      const bucket = lookup.get(key)
+      if (bucket) bucket.push(item)
+      else lookup.set(key, [item])
+    }
+    const found = new Map<string, IndexEntry[]>()
+    for (const entry of await this.list()) {
+      const segs = entry.path.split("/")
+      let suffix = ""
+      for (let i = segs.length - 1; i >= 0; i--) {
+        suffix = `/${segs[i]!}${suffix}`
+        const items = lookup.get(suffix)
+        if (!items) continue
+        for (const { target, dirOnly } of items) {
+          if (dirOnly && !entry.dir) continue
+          const bucket = found.get(target)
+          if (bucket) bucket.push(entry)
+          else found.set(target, [entry])
+        }
+      }
+    }
+    const resolved = new Map<string, IndexEntry>()
+    for (const [target, hits] of found) if (hits.length === 1) resolved.set(target, hits[0]!)
+    return resolved
+  }
+}
+
+async function walkTree(dir: string, base = "", visited?: Set<string>): Promise<IndexEntry[]> {
+  const seen = visited ?? new Set<string>()
+  const out: IndexEntry[] = []
+  for (const entry of await readdir(join(dir, base), { withFileTypes: true }).catch(() => [])) {
+    const rel = base ? `${base}/${entry.name}` : entry.name
+    if (entry.name === "node_modules" || entry.name === ".git") continue
+    // 常规目录/文件按 Dirent 直收;软链需 stat 跟随判定目标形态(Dirent 对软链
+    // 恒报 isSymbolicLink),目录下钻前以 realpath 查 visited 防循环与重复。
+    if (entry.isDirectory()) {
+      await descend(dir, rel, seen, out)
+    } else if (entry.isFile()) {
+      out.push({ path: rel, dir: false })
+    } else if (entry.isSymbolicLink()) {
+      const info = await stat(join(dir, rel)).catch(() => undefined)
+      if (info?.isDirectory()) await descend(dir, rel, seen, out)
+      else if (info?.isFile()) out.push({ path: rel, dir: false })
+    }
+  }
+  return out
+}
+
+async function descend(dir: string, rel: string, seen: Set<string>, out: IndexEntry[]): Promise<void> {
+  const real = await realpath(join(dir, rel)).catch(() => undefined)
+  if (!real || seen.has(real)) return
+  seen.add(real)
+  out.push({ path: rel, dir: true })
+  out.push(...(await walkTree(dir, rel, seen)))
+}
+
+// 校验一组引用(§3.2 校验语义: 路径存在;行号 ≤ 文件总行数)。路径解析两步:
+// 目标目录根相对直接命中即有效;否则在目录树中找以该路径为段边界后缀的唯一文件
+// 匹配——唯一命中即视为有效并消解到匹配文件做行号校验(带上下文语境的相对引用,
+// 尤其非 docs 引用;多重匹配属语境歧义,按缺失)。同一文档内的重复路径只校验一次;
+// md 链接的 #fragment 尾锚剥后再验;目录引用只查存在性(行号锚对目录无意义,忽略)。
+// index 供扫描入口跨文档复用(缺省自建,惰性构建)。
+// 校验一组引用(§3.2 校验语义: 路径存在;行号 ≤ 文件总行数)。路径解析两步:
+// 目标目录根相对直接命中即有效;否则在目录树中找以该路径为段边界后缀的唯一文件
+// 匹配——唯一命中即视为有效并消解到匹配文件做行号校验(带上下文语境的相对引用,
+// 尤其非 docs 引用;多重匹配属语境歧义,按缺失)。resolved 为跨文档共享的消解
+// 结果表(target → 消解路径或 undefined,含直接命中;由 scanRefs 单趟批量预计算,
+// 避免逐文档重复全索引消解——表内缺项时回落自查)。同一文档内的重复路径只校验
+// 一次;md 链接的 #fragment 尾锚剥后再验;目录引用只查存在性(行号锚对目录无
+// 意义,忽略)。index 供缺表时的回落消解复用(缺省自建,惰性构建)。
+export async function validateRefs(
+  dir: string,
+  refs: Ref[],
+  index = new FileIndex(dir),
+  resolved?: Map<string, string | undefined>,
+): Promise<Map<string, "missing" | "beyond-eof">> {
   const problems = new Map<string, "missing" | "beyond-eof">()
-  for (const path of new Set(refs.filter((ref) => checkable(ref.path)).map((ref) => ref.path))) {
+  const paths = [...new Set(refs.filter((ref) => checkable(ref.path)).map((ref) => ref.path))]
+  // 第一步: 定位每个目标的落点(直接命中 / 唯一消解 / 缺失)。
+  const where = new Map<string, string>()
+  const missing = new Set<string>()
+  for (const path of paths) {
     const target = path.split("#")[0]!
-    const info = await stat(join(dir, target)).catch(() => undefined)
+    if (resolved?.has(target)) {
+      const hit = resolved.get(target)
+      if (hit) where.set(target, hit)
+      else missing.add(target)
+      continue
+    }
+    const direct = await stat(join(dir, target)).catch(() => undefined)
+    if (direct) {
+      where.set(target, target)
+      continue
+    }
+    const hit = (await index.resolveAll([target])).get(target)
+    if (hit) where.set(target, hit.path)
+    else missing.add(target)
+  }
+  // 第二步: 逐目标定性——落点存在性与行号上限(目录引用只查存在性)。
+  for (const path of paths) {
+    const target = path.split("#")[0]!
+    const at = where.get(target)
+    if (!at) {
+      if (missing.has(target)) problems.set(path, "missing")
+      continue
+    }
+    const info = await stat(join(dir, at)).catch(() => undefined)
     if (!info) {
       problems.set(path, "missing")
       continue
@@ -116,23 +251,44 @@ export async function validateRefs(dir: string, refs: Ref[]): Promise<Map<string
     if (!info.isFile()) continue
     const anchors = refs.filter((item) => item.path === path && item.line !== undefined)
     if (!anchors.length) continue
-    const text = await Bun.file(join(dir, target)).text().catch(() => "")
+    const text = await Bun.file(join(dir, at)).text().catch(() => "")
     const lines = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0)
     if (anchors.some((anchor) => anchor.line! > lines)) problems.set(path, "beyond-eof")
   }
   return problems
 }
 
-// 扫描一组文档(docs 缺省 = 全部活文档): 逐文档提取引用 → 校验 → 产出 findings。
+// 扫描一组文档(docs 缺省 = 全部活文档): 先汇总全部文档的可校验目标,直接命中
+// 判定后一趟 resolveAll 批量消解(结果表跨文档共享,索引全程只遍历一次),再逐
+// 文档引用校验产出 findings。
 export async function scanRefs(dir: string, docs?: string[]): Promise<RefFinding[]> {
   const files = docs ?? (await activeDocs(dir))
-  const findings: RefFinding[] = []
+  const index = new FileIndex(dir)
+  const scanned: Array<{ file: string; text: string; refs: Ref[] }> = []
+  const targets = new Set<string>()
   for (const file of files) {
     const text = await Bun.file(join(dir, file)).text().catch(() => undefined)
     if (text === undefined) continue
     const refs = extractRefs(text)
     if (!refs.length) continue
-    const problems = await validateRefs(dir, refs)
+    scanned.push({ file, text, refs })
+    for (const ref of refs) {
+      if (checkable(ref.path)) targets.add(ref.path.split("#")[0]!)
+    }
+  }
+  const resolved = new Map<string, string | undefined>()
+  const unresolved: string[] = []
+  for (const target of targets) {
+    if (await stat(join(dir, target)).catch(() => undefined)) resolved.set(target, target)
+    else unresolved.push(target)
+  }
+  const hits = await index.resolveAll(unresolved)
+  // 未命中目标(含多重匹配歧义)显式记 undefined = 已定性缺失,防止消费方回落自查
+  // 重复触发全索引遍历。
+  for (const target of unresolved) resolved.set(target, hits.get(target)?.path)
+  const findings: RefFinding[] = []
+  for (const { file, text, refs } of scanned) {
+    const problems = await validateRefs(dir, refs, index, resolved)
     if (!problems.size) continue
     const lines = text.split("\n")
     for (const ref of refs) {
@@ -192,9 +348,60 @@ async function gitOut(dir: string, args: string[]): Promise<string | undefined> 
   return run.code === 0 ? run.out : undefined
 }
 
+// —— 一次性警告登记(清单式去重,失效引用清单与迁移跳过清单共用)——
+// 键 = 稳定身份(不含行号/原文等随编辑漂移的成分)。每轮以 entries 全量重写清单
+// 文件——修复后自动移除,再复发视为新出现;新出现的键输出 ⚠(warn 缺省则静默
+// 登记),已收录键不重复警告。entries 为空时删除清单文件。
+export async function recordOnce(
+  dir: string,
+  file: string,
+  header: string,
+  entries: Array<{ key: string; warn?: string }>,
+): Promise<void> {
+  const text = await Bun.file(join(dir, file)).text().catch(() => "")
+  const known = new Set(text.split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2)))
+  for (const entry of entries) {
+    if (entry.warn && !known.has(entry.key)) log(`  ⚠ ${entry.warn}`)
+  }
+  if (entries.length) {
+    await mkdir(join(dir, dirname(file)), { recursive: true })
+    const body = [...new Set(entries.map((entry) => entry.key))].sort().map((key) => `- ${key}`).join("\n")
+    await Bun.write(join(dir, file), `${header}${body}\n`)
+  } else {
+    await rm(join(dir, file), { force: true })
+  }
+}
+
+// —— 失效引用清单(.auto/invalid-refs.md)——
+// 键 = `文件 → 路径(problem)`: 不含行号与原文(随编辑漂移,不能作身份)。清单每轮
+// 以当前 findings 全量重写——修复后自动移除,再复发视为新出现;已收录键不再 ⚠,
+// 仅对新出现的失效引用输出警告日志(防无休止重复报告,人工核验订正以此清单为入口)。
+const INVALID_REFS_FILE = join(".auto", "invalid-refs.md")
+
+function invalidRefKey(finding: RefFinding): string {
+  return `${finding.file} → ${finding.path}(${finding.problem})`
+}
+
+function problemLabel(problem: "missing" | "beyond-eof"): string {
+  return problem === "beyond-eof" ? "行号超出文件总行数" : "路径不存在"
+}
+
+async function recordInvalidRefs(dir: string, findings: RefFinding[]): Promise<void> {
+  await recordOnce(
+    dir,
+    INVALID_REFS_FILE,
+    "# 失效引用清单(auto 维护,供人工核验订正;已收录项不再重复警告,修复后自动移除)\n",
+    findings.map((finding) => ({
+      key: invalidRefKey(finding),
+      warn: `失效引用 ${finding.file}:${finding.line} → ${finding.path}(${problemLabel(finding.problem)}): ${finding.text}`,
+    })),
+  )
+}
+
 // 提交前 auto-correct(D6 第一层,挂点 runner 的 afterSession——覆盖全部统一
 // 提交): renamePairs → 活文档机械改写(只配对 rename,删除/语义变化不自动改,
-// 见 §8 边界)→ 复扫 findings 并 ⚠ 日志;verify 启用时任务产物文档(docs/
+// 见 §8 边界)→ 复扫 findings 并记录失效清单 .auto/invalid-refs.md(键已收录的
+// 不再 ⚠,仅对新出现的失效引用输出警告日志);verify 启用时任务产物文档(docs/
 // T-NNN/**)的失效引用另由 verifyTask 门禁拦截进修复轮,未启用时即止于本日志
 // (宽松契约)。返回复扫 findings。
 export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
@@ -213,9 +420,7 @@ export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
     if (rewritten) log(`  ↻ 引用 auto-correct: ${pairs.length} 组 rename 配对,改写活文档引用 ${rewritten} 处`)
   }
   const findings = await scanRefs(dir)
-  for (const finding of findings) {
-    log(`  ⚠ 失效引用 ${finding.file}:${finding.line} → ${finding.path}(${finding.problem === "beyond-eof" ? "行号超出文件总行数" : "路径不存在"}): ${finding.text}`)
-  }
+  await recordInvalidRefs(dir, findings)
   return findings
 }
 
@@ -233,9 +438,7 @@ export async function taskRefFindings(dir: string, id: string): Promise<RefFindi
 // 预扫 findings → 修复轮差距文案(纯函数,供单测)。
 export function formatRefGap(findings: RefFinding[]): string | undefined {
   if (!findings.length) return undefined
-  const lines = findings.map(
-    (finding) => `- ${finding.file}:${finding.line} → ${finding.path}(${finding.problem === "beyond-eof" ? "行号超出文件总行数" : "路径不存在"}): ${finding.text}`,
-  )
+  const lines = findings.map((finding) => `- ${finding.file}:${finding.line} → ${finding.path}(${problemLabel(finding.problem)}): ${finding.text}`)
   return [
     "任务产物文档存在失效引用(driver 确定性预扫,引用门禁):",
     ...lines,

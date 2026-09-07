@@ -110,6 +110,17 @@ export function handoverDoc(round: number, phase: Phase): string {
   return `docs/handovers/R${round}-${phase}-${PHASE_SLUGS[phase]}.md`
 }
 
+// 阶段级自由产物目录(stable-refs P2 补口,2026-09-07): a/d/t/v 阶段中不属于任何
+// 单个任务的勘测/设计/覆盖矩阵/验收记录类文档,写入 docs/phase-docs/R<N>-<字母>-
+// <slug>/<name>.md——永久路径,落定不移动、不参与轮次归档(D3 handovers 同款
+// 范式),轮次经 R<N>- 目录名前缀表达(R7),与 handoverDoc 交接蒸馏按同名对位
+// (蒸馏 = <slug>.md,原始产物 = 同名目录)。目录名依赖阶段 slug 表,构造点在
+// 本文件而非 docpaths.ts(同 handoverDoc);旧轮归档提升映射(docpaths.
+// phasesArchivePair)按同构路径直接拼接,不经本构造器以避免反向依赖。
+export function phaseDocsDir(round: number, phase: Phase): string {
+  return `docs/phase-docs/R${round}-${phase}-${PHASE_SLUGS[phase]}`
+}
+
 // 台账追加(交接完成后、统一提交前调用;C.1 行协议)。查重后追加,重复调用幂等
 // ——交接在"台账追加之前"中断时,恢复路径安全补写。文件缺失时带头部注释创建。
 // 交接指针 = 本轮永久路径 handoverDoc(currentRound, phase)。
