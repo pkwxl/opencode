@@ -52,6 +52,7 @@ import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { shellProfile } from "./shell"
 import { autoSwitches, type Switches } from "./switches"
+import { stepPause } from "./step"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
@@ -500,6 +501,9 @@ export async function runTask(
           if (blocked) return blocked
           task = requireTask(await load(plan.path), task.id)
           await writeCurrent(plan.path, task, mode !== "auto")
+          // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
+          // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
+          await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive })
         }
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
         if (!skipWrapup) {
