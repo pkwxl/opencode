@@ -614,9 +614,10 @@ if (command === "init" || command === "continue") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  // continue: 归档上一轮(前置校验已过)。归档移走 PLAN.md 与台账后,下方模板循环
-  // 以空模板重建 PLAN.md,台账缺失 = 空台账(新一轮从头规划);上一轮的 docs/
-  // 快照一并清除(新一轮首个规划会话重新快照)。
+  // continue: 归档上一轮(前置校验已过)。归档移走 PLAN.md 与台账、拷贝 AGENTS.md
+  // 快照后,下方模板循环以空模板重建 PLAN.md,台账缺失 = 空台账(新一轮从头规划);
+  // docs/ 产物文档(docs/T-*/、handovers/、migration-kb/、prior-kb/)为永久路径,
+  // 不随归档移动(stable-refs P2)。
   let archivedRound = 0
   if (cont) {
     try {
@@ -626,7 +627,7 @@ if (command === "init" || command === "continue") {
       process.exit(1)
     }
     console.log(
-      `✓ 上一轮(第 ${archivedRound} 轮)已归档: docs/phases/round-${archivedRound}/(台账、各阶段归档、PLAN 与知识文档残留)。` +
+      `✓ 上一轮(第 ${archivedRound} 轮)已归档: docs/phases/round-${archivedRound}/(台账、各阶段归档、轮末 PLAN 与 AGENTS.md 快照;交接与知识文档为永久路径,不随归档移动)。` +
         "上一轮结论将注入新一轮首个阶段规划会话",
     )
   }

@@ -1,17 +1,22 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { archivePriorKnowledge, existingKnowledge, knowledgeFile } from "../src/knowledge"
+import { existingKnowledge, existingPriorKnowledge, knowledgeFile, priorKnowledgeFile } from "../src/knowledge"
 
-describe("knowledgeFile(默认输出路径)", () => {
-  test("docs/migration-kb/migration-<时间戳>.md,时间戳与 run 日志同款格式", () => {
-    const file = knowledgeFile()
-    expect(file).toMatch(/^docs\/migration-kb\/migration-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.md$/)
+describe("knowledgeFile(输出路径,轮次前缀)", () => {
+  test("docs/migration-kb/R<N>-migration-<时间戳>.md,时间戳与 run 日志同款格式", () => {
+    expect(knowledgeFile(2)).toMatch(/^docs\/migration-kb\/R2-migration-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.md$/)
+    expect(knowledgeFile(1)).toMatch(/^docs\/migration-kb\/R1-migration-/)
+  })
+
+  test("priorKnowledgeFile: docs/prior-kb/R<N>-prior-<时间戳>.md(与 migration-kb 分离)", () => {
+    expect(priorKnowledgeFile(1)).toMatch(/^docs\/prior-kb\/R1-prior-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.md$/)
+    expect(priorKnowledgeFile(3)).toMatch(/^docs\/prior-kb\/R3-prior-/)
   })
 })
 
-describe("existingKnowledge(幂等检查)", () => {
+describe("existingKnowledge(本轮幂等检查,R<N>- 前缀守卫)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
@@ -19,98 +24,72 @@ describe("existingKnowledge(幂等检查)", () => {
   test("目录缺失或为空 → undefined", async () => {
     const dir = tempDir()
     try {
-      expect(await existingKnowledge(dir)).toBeUndefined()
+      expect(await existingKnowledge(dir, 1)).toBeUndefined()
       mkdirSync(join(dir, "docs/migration-kb"), { recursive: true })
-      expect(await existingKnowledge(dir)).toBeUndefined()
+      expect(await existingKnowledge(dir, 1)).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("存在非空 .md → 返回其相对路径;空文件与非 .md 不算;多个时取字典序首个", async () => {
+  test("本轮 R<round>- 前缀非空 .md → 返回;前几轮 R<M>- 不算;空文件与非 .md 不算", async () => {
     const dir = tempDir()
     try {
       const kb = join(dir, "docs/migration-kb")
       mkdirSync(kb, { recursive: true })
-      writeFileSync(join(kb, "migration-b.md"), " 知识甲 ")
-      writeFileSync(join(kb, "migration-a.md"), "知识乙")
+      writeFileSync(join(kb, "R1-migration-a.md"), "第 1 轮知识")
+      writeFileSync(join(kb, "R2-migration-b.md"), " 知识乙 ")
+      writeFileSync(join(kb, "R2-migration-empty.md"), " \n")
       writeFileSync(join(kb, "draft.txt"), "非 md 不算")
-      writeFileSync(join(kb, "migration-empty.md"), " \n")
-      expect(await existingKnowledge(dir)).toBe(join("docs/migration-kb", "migration-a.md"))
+      expect(await existingKnowledge(dir, 1)).toBe(join("docs/migration-kb", "R1-migration-a.md"))
+      expect(await existingKnowledge(dir, 2)).toBe(join("docs/migration-kb", "R2-migration-b.md"))
+      expect(await existingKnowledge(dir, 3)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("第 1 轮读回落: 无 R 前缀存量(P2 前布局)视为本轮产物;本轮前缀优先", async () => {
+    const dir = tempDir()
+    try {
+      const kb = join(dir, "docs/migration-kb")
+      mkdirSync(kb, { recursive: true })
+      writeFileSync(join(kb, "migration-legacy.md"), "P2 前存量")
+      expect(await existingKnowledge(dir, 1)).toBe(join("docs/migration-kb", "migration-legacy.md"))
+      // 轮次 ≥ 2 时无前缀存量不再算本轮(它属于更早的轮次)
+      expect(await existingKnowledge(dir, 2)).toBeUndefined()
+      // 本轮前缀文档优先于读回落
+      writeFileSync(join(kb, "R1-migration-new.md"), "本轮知识")
+      expect(await existingKnowledge(dir, 1)).toBe(join("docs/migration-kb", "R1-migration-new.md"))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 })
 
-describe("archivePriorKnowledge(轮间归档)", () => {
+describe("existingPriorKnowledge(本轮幂等检查,与 existingKnowledge 同一守卫)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
 
-  test("归档落位: 全部直接条目(非空与否、是否 .md)移入 round-<N>/prior-kb/,子目录整体保持内部结构", async () => {
+  test("本轮 R<round>-prior 前缀非空 .md → 返回;前几轮与无前缀存量(轮次 ≥ 2)不算", async () => {
     const dir = tempDir()
     try {
-      const prior = join(dir, "docs", "prior-kb")
+      const prior = join(dir, "docs/prior-kb")
       mkdirSync(prior, { recursive: true })
-      writeFileSync(join(prior, "prior-a.md"), "知识甲")
-      writeFileSync(join(prior, "prior-empty.md"), " \n")
-      writeFileSync(join(prior, "notes.txt"), "非 md 也移")
-      mkdirSync(join(prior, "sub"))
-      writeFileSync(join(prior, "sub", "inner.md"), "子路径")
-      const moved = await archivePriorKnowledge(dir, 2)
-      expect(moved.sort()).toEqual(
-        [
-          join("docs", "phases", "round-2", "prior-kb", "notes.txt"),
-          join("docs", "phases", "round-2", "prior-kb", "prior-a.md"),
-          join("docs", "phases", "round-2", "prior-kb", "prior-empty.md"),
-          join("docs", "phases", "round-2", "prior-kb", "sub"),
-        ].sort(),
-      )
-      expect(readdirSync(prior)).toEqual([])
-      expect(readFileSync(join(dir, "docs", "phases", "round-2", "prior-kb", "prior-a.md"), "utf8")).toBe("知识甲")
-      expect(readFileSync(join(dir, "docs", "phases", "round-2", "prior-kb", "sub", "inner.md"), "utf8")).toBe("子路径")
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("源目录缺失或为空 → 空数组 no-op,不创建归档目录", async () => {
-    const dir = tempDir()
-    try {
-      expect(await archivePriorKnowledge(dir, 1)).toEqual([])
-      mkdirSync(join(dir, "docs", "prior-kb"), { recursive: true })
-      expect(await archivePriorKnowledge(dir, 1)).toEqual([])
-      expect(existsSync(join(dir, "docs", "phases", "round-1"))).toBe(false)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("重复调用幂等: 第二轮源目录已空 → no-op 不改归档内容", async () => {
-    const dir = tempDir()
-    try {
-      const prior = join(dir, "docs", "prior-kb")
-      mkdirSync(prior, { recursive: true })
-      writeFileSync(join(prior, "prior-a.md"), "知识甲")
-      await archivePriorKnowledge(dir, 2)
-      expect(await archivePriorKnowledge(dir, 2)).toEqual([])
-      expect(readFileSync(join(dir, "docs", "phases", "round-2", "prior-kb", "prior-a.md"), "utf8")).toBe("知识甲")
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("显式 round 参数生效,不经 currentRound 推导(预置 round-1 时推导值应为 2)", async () => {
-    const dir = tempDir()
-    try {
-      mkdirSync(join(dir, "docs", "phases", "round-1"), { recursive: true })
-      const prior = join(dir, "docs", "prior-kb")
-      mkdirSync(prior, { recursive: true })
-      writeFileSync(join(prior, "prior-a.md"), "知识甲")
-      await archivePriorKnowledge(dir, 5)
-      expect(existsSync(join(dir, "docs", "phases", "round-5", "prior-kb", "prior-a.md"))).toBe(true)
-      expect(existsSync(join(dir, "docs", "phases", "round-2"))).toBe(false)
+      writeFileSync(join(prior, "R1-prior-a.md"), "第 1 轮前置知识")
+      writeFileSync(join(prior, "R2-prior-empty.md"), " \n")
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
+      writeFileSync(join(prior, "R2-prior-b.md"), "第 2 轮前置知识")
+      expect(await existingPriorKnowledge(dir, 2)).toBe(join("docs/prior-kb", "R2-prior-b.md"))
+      expect(await existingPriorKnowledge(dir, 1)).toBe(join("docs/prior-kb", "R1-prior-a.md"))
+      // 目录缺失 → undefined
+      const bare = tempDir()
+      try {
+        expect(await existingPriorKnowledge(bare, 1)).toBeUndefined()
+      } finally {
+        rmSync(bare, { recursive: true, force: true })
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

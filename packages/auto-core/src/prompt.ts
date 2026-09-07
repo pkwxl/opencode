@@ -336,23 +336,25 @@ export function renderNumberRecovery(input: { floor: number }): string {
 }
 
 // 阶段交接蒸馏会话(设计文档 phases-design.md F.1 步骤 1): 旁路一次性,通读本阶段
-// PLAN.md 与 docs/ 产物,蒸馏出归档目录下的 handover.md(四个必备小节协议在模板
-// 内联)。archive = phaseArchive(phase);next 为下一阶段"字母 中文名"或 undefined
-// (k 阶段无下一阶段,仍写 handover 供人工归档)。
-export function renderPhaseHandover(input: { phase: Phase; archive: string; next?: string; verify?: boolean }): string {
+// PLAN.md 与 docs/ 产物,蒸馏出永久路径交接文档(四个必备小节协议在模板内联)。
+// handover = handoverDoc(round, phase)(src/phases.ts,docs/handovers/R<N>-<字母>-
+// <slug>.md,stable-refs D3);next 为下一阶段"字母 中文名"或 undefined(k 阶段
+// 无下一阶段,仍写 handover 供后续查阅)。
+export function renderPhaseHandover(input: { phase: Phase; handover: string; next?: string; verify?: boolean }): string {
   return renderTemplate("phase-handover", {
     phase: input.phase,
     phaseName: phaseText(input.phase),
-    archive: input.archive,
+    handover: input.handover,
     next: input.next,
     verify: input.verify,
   })
 }
 
 // k(知识提炼)阶段的知识提取会话(phases-design.md P4,整体认领
-// fixme-knowledge-design.md §D.3): 旁路一次性,通读阶段台账与各阶段归档产物,
-// 蒸馏出最终验证过的迁移知识文档。file 为输出路径(相对目标目录);mode.exec
-// 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
+// fixme-knowledge-design.md §D.3): 旁路一次性,通读阶段台账与各阶段交接文档
+// (docs/handovers/),蒸馏出最终验证过的迁移知识文档(永久路径
+// docs/migration-kb/R<N>-…,不随轮次归档移动)。file 为输出路径(相对目标目录);
+// mode.exec 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
 export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
   return renderTemplate("knowledge", {
     file: input.file,

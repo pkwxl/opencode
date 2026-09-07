@@ -125,7 +125,11 @@ docs/
 全部任务文档路径的唯一构造点(代码侧的"三方认知一致"由本模块强制):
 
 - `taskDir(id)` / `taskDoc(id, role)` / `subtaskDir(id, k)` / `subtaskDoc(id, k, role)` /
-  `handoverDoc(round, phase)` / `knowledgeDoc(round, ts)` / `finalDoc(id, name)`。
+  `knowledgeDoc(round, ts)` / `priorKnowledgeDoc(round, ts)` / `finalDoc(id, name)`。
+  **偏差注记(2026-09-07,P2 实施)**:`handoverDoc(round, phase)` 落在
+  `src/phases.ts` 而非本模块——文件名依赖阶段 slug 表(PHASE_SLUGS 归 phases.ts
+  所有),放此可避免 docpaths→phases 反向依赖;`knowledgeDoc`/`priorKnowledgeDoc`
+  按设计落本模块。
 - `resolveTaskDoc(dir, id, role)`:读时新路径缺失 → 回落旧平铺路径(D4 读回落,镜像
   config.ts legacyModeFallback 先例);迁移完成后自然消亡。
 - 消费方改造:src/runner.ts(context/subtasks/handoff/testhandoff 路径构造与遗留清扫)、
@@ -154,17 +158,28 @@ docs/
   `docs/phases/<letter>-<slug>/`;appendLedger 新行协议
   `→ docs/phases/<letter>-<slug>/(交接: docs/handovers/R<N>-...md)`;**parseLedger 兼容
   旧行**(交接指针指向 docs/phases/.../handover.md 的行不 throw,字母与归档目录两列读取不变)。
-- **archiveRound**:+ 根 AGENTS.md 快照(D7);不再搬 migration-kb / prior-kb;
-  `round-<N>/` = 各阶段归档目录 + phases.md + 轮末 PLAN.md + AGENTS.md。
+  **实施注记(2026-09-07)**:planPhase 的前序交接注入自 handovers/ 永久路径读取,
+  P2 前完成的阶段自归档目录内 handover.md 读回落(中轮升级兼容)。
+- **archiveRound**:+ 根 AGENTS.md 快照(D7,拷贝不移动、无可归档内容时不建目录);
+  不再搬 migration-kb / prior-kb;`round-<N>/` = 各阶段归档目录 + phases.md +
+  轮末 PLAN.md + AGENTS.md。
 - **knowledge.ts**:knowledgeFile → `docs/migration-kb/R<N>-migration-<时间戳>.md`;
-  existingKnowledge 改轮次推导守卫(台账 k 行本轮已 done 即已提取,不再看目录空否);
-  archivePriorKnowledge 改轮次守卫(不再搬移)。
+  existingKnowledge 改轮次推导守卫——**实施细化(2026-09-07)**:守卫 = 本轮
+  `R<round>-` 前缀非空 .md(交接前中断与已完成两窗口都覆盖;台账 k 行 done 时
+  提取挂点本就不触发,无需读台账),第 1 轮无 `R<N>-` 前缀存量按读回落视为本轮
+  产物;archivePriorKnowledge 整体删除——轮次前缀守卫取代轮间搬移
+  (priorKnowledgeFile 同样 `R<N>-prior-<时间戳>.md`;**migrate 壳合入 P2 时需删
+  archivePriorKnowledge 调用点并适配 existingKnowledge(round) 签名**,见
+  shell-contract 合入流程)。
 - **prevRoundDigest**:① 归档索引不变;② 最终 handover 改从 `docs/handovers/R<N>-<字母>-<slug>.md`
-  读(最后完成字母推导);③ 知识收集 = `docs/migration-kb/` 的 `R<N>-` 前缀文件
-  (无前缀存量宽松归入上一轮)。
+  读(最后完成字母推导;**P2 前轮次自归档目录内 handover.md 读回落**);③ 知识收集 =
+  `docs/migration-kb/` 的 `R<N>-` 前缀文件(无前缀存量宽松归入上一轮;**P2 前轮次
+  归档内 migration-kb/ 读回落收集**,否则升级项目的既有知识自 digest 消失)。
 - renderPhaseHandover / phase-handover.md / phase-plan.md / knowledge.md /
   prior-knowledge.md / number-recovery.md 模板文案同步(产物约定改 docs/T-NNN/ 与
-  handovers/,A.1 产物目录表述删除)。
+  handovers/,A.1 产物目录表述删除)。**实施注记(2026-09-07)**:number-recovery.md
+  核对后零改动(证据清单双布局表述仍准确);phase-handover 协议标记随 `{{archive}}`
+  变量化改为 `{{handover}}`(template.ts PROTOCOL_MARKERS 同步)。
 
 ### 4.4 编号默认开启(P3:src/config.ts / src/index.ts)
 
@@ -219,17 +234,23 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 
 ### P2 归档缩减(docs 永不移动)
 
-- [ ] phases.ts 删快照/归档链路;handoverPhase 改产出 `docs/handovers/`;appendLedger
-      新行协议(parseLedger 兼容旧行不 throw)
-- [ ] archiveRound 增 AGENTS.md 快照、去 migration-kb / prior-kb 搬移
-- [ ] knowledge.ts 轮次守卫 + `R<N>-` 前缀;prevRoundDigest 改读永久路径
-- [ ] loop.ts planPhase 去 snapshotDocs、k 阶段快照特判删除
-- [ ] 模板与提示词(phase-handover / phase-plan / knowledge / prior-knowledge / number-recovery)
-- [ ] 测试:phases / knowledge / prompt 快照
-- [ ] 文档:phases-design.md F/M 节修订注记、behavior.md、structure.md、
-      壳包 `packages/auto` README(归档布局变化)
-- 收口:typecheck + test;冒烟——完整 admtvk 一轮 + continue 续轮,验证轮前后
+- [x] phases.ts 删快照/归档链路;handoverPhase 改产出 `docs/handovers/`;appendLedger
+      新行协议(parseLedger 兼容旧行不 throw——LEDGER_ENTRY 只约束到归档目录列,新旧
+      指针形态均命中)
+- [x] archiveRound 增 AGENTS.md 快照、去 migration-kb / prior-kb 搬移
+- [x] knowledge.ts 轮次守卫 + `R<N>-` 前缀;prevRoundDigest 改读永久路径
+      (实施细化与 migrate 壳适配点见 §4.3 注记)
+- [x] loop.ts planPhase 去 snapshotDocs、k 阶段快照特判删除
+- [x] 模板与提示词(phase-handover / phase-plan / knowledge / prior-knowledge /
+      number-recovery——后者核对后零改动,见 §4.3 注记)
+- [x] 测试:phases / knowledge / prompt 快照(含 P2 前布局读回落用例;
+      archivePriorKnowledge 测试随函数删除)
+- [x] 文档:phases-design.md F/M 节修订注记(另及 A.1/C.1/D.4/E 节)、behavior.md、
+      structure.md、壳包 `packages/auto` README(归档布局变化)+ src/index.ts continue 文案
+- 收口:`bun typecheck` + `bun test` 全绿(2026-09-07,auto-core 340 pass + 壳包
+  27 pass/2 skip);冒烟——完整 admtvk 一轮 + continue 续轮,验证轮前后
   `docs/` 顶层与 `docs/handovers/` 路径不变、`round-1/` 只含状态文件
+  (待 auto/ worktree 集成会话执行,同 P1)
 
 ### P3 编号默认开启
 
@@ -263,24 +284,36 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 | 期 | 状态 | 日期 | 提交 | 验证 |
 |---|---|---|---|---|
 | P1 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): P1-S1..S4(四会话提交,见 stable-refs-p1-plan.md §8) | 本包 `bun typecheck` + `bun test` 全绿(340 pass);auto/ worktree 三包集成冒烟待执行 |
-| P2 | 未开始 | - | - | - |
+| P2 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P2 归档缩减(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);三包集成冒烟待执行(P1 冒烟一并补) |
 | P3 | 未开始 | - | - | - |
 | P4 | 未开始 | - | - | - |
 
 ## 8. 遗留风险与边界
 
 - **parseLedger 旧指针行兼容**:当轮台账严格解析须容忍旧格式行(不 throw);round 归档内
-  台账的宽松解析已先行,不受影响。
+  台账的宽松解析已先行,不受影响。P2 实施核对:LEDGER_ENTRY 只约束到归档目录列,
+  新旧两种交接指针形态天然命中,零改动即兼容(2026-09-07)。
 - **auto-correct 边界**:只做 rename 配对改写;删除/语义变化产出 findings 走修复路径,
   不自动改写历史叙述。
 - **存量 migration-kb 无 `R<N>-` 前缀**:prevRoundDigest 宽松收集归入上一轮;新产出一律
   带前缀。
-- **k 阶段重提取规程**:existingKnowledge 改台账守卫后,人工重提取 = 删台账 k 行 + 删
-  归档目录后重跑(README 回退规程同步更新)。
+- **k 阶段重提取规程**:existingKnowledge 改轮次守卫后(P2 实施口径见 §4.3),人工
+  重提取 = 删台账 k 行 + 删 docs/migration-kb/ 内本轮 `R<N>-` 前缀文档后重跑
+  (P2 前规程"删归档目录"随差异归档链路一并废弃;README 回退规程已同步更新)。
 - **非 git 目标目录**:renamePairs 依赖 git,auto-correct 不可用(validate 仍可跑);
   check 对此报 note。
 - **--no-auto-number 项目**:目录化与永久性规范仍生效(路径稳定性不依赖编号唯一性;
-   编号唯一性只影响跨任务引用的可信度),模板文案不做特殊分支。
+  编号唯一性只影响跨任务引用的可信度),模板文案不做特殊分支。
+- **migrate 壳合入 P2 的适配点(2026-09-07)**:`archivePriorKnowledge` 已从核心删除
+  (轮次前缀守卫取代轮间搬移),`existingKnowledge(dir, round)` /
+  `priorKnowledgeFile(round)` / `existingPriorKnowledge(dir, round)` 签名变更——
+  migrate 分支 merge auto-core 后需删 tool.ts 的 archivePriorKnowledge 调用并适配
+  签名(壳分支适配,核心零回流)。
+- **既有 archiveRound 中断重跑轮号漂移(P2 范围外,2026-09-07 观察注记)**:归档在
+  "建目录后、台账移动前"中断时,重跑 continue 经 currentRound 推得 N+1,剩余条目
+  会被劈进 round-(N+1)/(M 节"自然续完"的表述在此窗口不成立);该边界自 M 节实现
+  起即存在,P2 未改变其行为,如需修复应在后续单独设计(如台账在场时复用无 phases.md
+  的既有 round-N 目录)。
 
 ### P1 实施期既定裁决(2026-09-06,详见 stable-refs-p1-plan.md §3)
 

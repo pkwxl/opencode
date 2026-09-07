@@ -47,29 +47,34 @@
   状态是推导式的,routePhase 只读 docs/phases.md 台账与 PLAN.md(零新增持久化状态),
   run 据此循环——PLAN.md 为空模板 → 开阶段规划会话(旁路一次性,复用 requireArtifact
   骨架,产物 = 已填充的 PLAN.md;仅此会话经 allowWrite 被授权写 PLAN.md,受阻退出 2;
-  会话输入注入 brief、source、destDir、mode.init 与各前序阶段归档 handover.md 的预拼接
-  handovers——蒸馏产物是跨阶段记忆唯一通道,不注入前序原始 docs/,缺文件标注
-  "(无交接文档)")、
+  会话输入注入 brief、source、destDir、mode.init 与各前序阶段交接文档的预拼接
+  handovers——交接文档在 docs/handovers/R<N>-<字母>-<slug>.md 永久路径(stable-refs
+  P2),P2 前完成的阶段自归档目录内读回落;蒸馏产物是跨阶段记忆唯一通道,不注入前序
+  原始 docs/,缺文件标注"(无交接文档)")、
   有未完成任务 → 走既有主循环(分解/执行/验收/审核/统一提交/进度恢复语义不变;
   v 阶段任务豁免任务级验收与 --review,见下条)、
-  本阶段任务全 done → 交接(先开蒸馏会话产出归档目录 handover.md——四小节协议
-  关键决策/约束与坑/下一阶段必读清单/产物索引,validHandover 逐字校验标题行,
-  产物缺失带反馈重试一次仍失败隐性阻塞退出 2;再归档本阶段 docs/ 变更与 PLAN.md →
-  PLAN.md 重置空模板 → 台账追加 → 统一提交 stage=phase-transition);台账覆盖
-  phases 全部字母 → 退出 0。`--final-review` 只在 m 阶段挂接(其余阶段打一次
-  提示);AGENTS.md 超 150 行在交接时仅 note 提示、不改写。
+  本阶段任务全 done → 交接(先开蒸馏会话产出 docs/handovers/ 永久路径交接文档
+  ——四小节协议关键决策/约束与坑/下一阶段必读清单/产物索引,validHandover 逐字
+  校验标题行,产物缺失带反馈重试一次仍失败隐性阻塞退出 2;再把 PLAN.md 拷贝进
+  归档目录 docs/phases/<字母>-<slug>/(仅收过期状态文件)→ PLAN.md 重置空模板 →
+  台账追加(行协议含交接指针 handovers/ 路径,旧行形态容忍)→ 统一提交
+  stage=phase-transition;本阶段 docs/ 产物文档为永久路径,交接不搬移);
+  台账覆盖 phases 全部字母 → 退出 0。`--final-review` 只在 m 阶段挂接(其余阶段
+  打一次提示);AGENTS.md 超 150 行在交接时仅 note 提示、不改写。
 - k 阶段(P4,phases-design.md D.4;整体认领 fixme-knowledge-design.md 的
   --extract-knowledge,该 CLI 选项不存在):plan 路由(PLAN.md 空模板态)不开
   规划会话、不填 PLAN.md,直接进入知识提取旁路会话(src/knowledge.ts
-  extractKnowledge,requireArtifact 骨架)——通读阶段台账与各阶段归档目录
-  (handover.md 优先),产出 docs/migration-kb/migration-<时间戳>.md(章节骨架/
-  质量约束内联在 templates/prompts/knowledge.md,mode.exec 作场景背景注入);
-  目录内已存在非空 .md(交接前中断)则幂等跳过;提取失败(会话受阻或两次未产出)
-  仅打 ⚠ 警告、不污染退出码,k 阶段照常交接——迁移成功不被文档生成失败反向污染;
-  知识文档作为阶段产物随会话统一提交(stage=knowledge)并交接归档;docs/ 快照
-  不在 k 刷新(沿用上一阶段陈旧快照,新增 migration-kb 即归档差异项);人工在
-  k 阶段自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发;
-  交接完成后重试提取 = 人工回退规程(删台账 k 行与归档目录后重跑)。
+  extractKnowledge,requireArtifact 骨架)——通读阶段台账与各阶段交接文档
+  (docs/handovers/ 优先),产出永久路径
+  docs/migration-kb/R<N>-migration-<时间戳>.md(章节骨架/质量约束内联在
+  templates/prompts/knowledge.md,mode.exec 作场景背景注入;不随交接/轮次归档
+  移动);本轮 R<N>- 前缀非空 .md 已存在(交接前中断)则幂等跳过(前几轮文档
+  不算本轮已提取,第 1 轮无前缀存量按读回落视为本轮产物);提取失败(会话受阻
+  或两次未产出)仅打 ⚠ 警告、不污染退出码,k 阶段照常交接——迁移成功不被文档
+  生成失败反向污染;知识文档随会话统一提交(stage=knowledge);人工在 k 阶段
+  自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发;交接完成
+  后重试提取 = 人工回退规程(删台账 k 行与 docs/migration-kb/ 内本轮 R<N>- 前缀
+  文档后重跑)。
 - v 阶段验收豁免(phases-design.md D.3):runTask 依 loop 透传的 Opts.phase 在
   当前阶段为 v 时强制 review=0 且跳过任务级三段式验收(收尾后直接 markDone、不写
   verified)——与终审任务的 final 字段共用同一豁免代码路径,内部标记、不写 final
@@ -78,12 +83,15 @@
 - 续轮迁移(continue 子命令,phases-design.md M 节):上一轮阶段化迁移全部完成
   (台账覆盖既有 phases 全部字母)后开启新一轮继续迁移,目标是让迁移结果与源
   更加完整、一致。continue = init 的 amend 机制 + archiveRound 归档上一轮
-  (docs/phases/ 下全部阶段归档目录、docs/migration-kb 残留、轮末根 PLAN.md 与
-  台账移入 docs/phases/round-<N>/,台账最后移动故中断重跑幂等,并清 .auto/
-  phase-snapshot.json),台账随归档消失 = 空台账、根 PLAN.md 由模板循环重建空
-  模板,新一轮从头规划;上一轮结论(归档索引 + 最终阶段交接 handover.md 全文 +
-  迁移知识文档全文)经 prevRoundDigest 注入新一轮首个阶段规划会话,后续阶段照常
-  走本轮 handover 蒸馏链。迁移同一性选项(-m/--mode、--source-dir/--source-path、
+  (docs/phases/ 下全部阶段归档目录、轮末根 PLAN.md 与台账移入
+  docs/phases/round-<N>/,根 AGENTS.md 每轮拷贝快照进同目录、原文件保留;
+  台账最后移动故中断重跑幂等;docs/ 产物文档(docs/T-*/、handovers/、
+  migration-kb/、prior-kb/)为永久路径不参与归档),台账随归档消失 = 空台账、
+  根 PLAN.md 由模板循环重建空模板,新一轮从头规划;上一轮结论(归档索引 +
+  最终阶段交接文档全文 + 迁移知识文档全文: docs/migration-kb/ 的 R<N>- 前缀
+  文件,无前缀存量宽松归入上一轮,P2 前轮次归档内的 migration-kb/ 读回落收集)
+  经 prevRoundDigest 注入新一轮首个阶段规划会话,后续阶段照常走本轮 handover
+  蒸馏链。迁移同一性选项(-m/--mode、--source-dir/--source-path/
   --dest-dir)跨轮固定、continue 时显式给出即退出码 1(换源/换目标/换模式不是
   同一迁移的继续);--phases/-p 与其余执行选项可按轮修订(--phases 不受前缀护栏
   约束)。轮次推导式(当前轮 = round-<N> 最大编号 + 1),run/status 阶段进度行带
@@ -108,7 +116,15 @@
   (docs/**/*.md,排除 docs/phases/**)中的旧路径记号机械改写(围栏与含
   已删除|已归档|历史 的行豁免;目标已存在保留新文件跳过、绝不覆盖),有迁移
   才统一提交 stage=doc-migrate;dryrun 预检不改动工作区故跳过,`--commit false`
-  仍迁移、仅不提交。
+  仍迁移、仅不提交。**永久性全貌(stable-refs P2)**:docs/ 下文档
+  (docs/T-*/、docs/handovers/、docs/migration-kb/、docs/prior-kb/)一经创建
+  永不移动、永不改名——阶段交接产出 docs/handovers/R<N>-<字母>-<slug>.md
+  (handoverDoc,src/phases.ts),知识文档 docs/migration-kb/R<N>-migration-<时间
+  戳>.md 与前置知识 docs/prior-kb/R<N>-prior-<时间戳>.md(docpaths.ts
+  knowledgeDoc/priorKnowledgeDoc,轮次 R<N>- 前缀守卫幂等,第 1 轮无前缀存量
+  读回落);docs/phases/ 只收过期状态文件(阶段 PLAN 快照、轮次归档 = 各阶段
+  归档目录 + 台账 + 轮末 PLAN + AGENTS.md 快照),状态文件不被任何文档引用;
+  P2 前布局(交接在归档目录内、知识无前缀)各读点回落兼容。
 - 统一提交(收回 AI 提交权):任何会话结束且 driver 完成状态写入后,由 driver 经
   src/git.ts 的 commitTree 递归提交全部改动(先嵌套 .git 子仓库、后目标目录所在
   仓库,路径发现不依赖 git status——嵌套仓库通常被父仓库忽略),git 历史即 AI

@@ -258,7 +258,7 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       expect(() => usePromptLibrary(dir)).toThrow(/## 关键决策/)
       writeFileSync(
         join(overlay, "phase-handover.md"),
-        "自定义交接提示词,保留协议: ## 关键决策 ## 约束与坑 ## 下一阶段必读清单 ## 产物索引 handover.md",
+        "自定义交接提示词,保留协议: ## 关键决策 ## 约束与坑 ## 下一阶段必读清单 ## 产物索引 写入 {{handover}}",
       )
       // understand 覆盖丢 context.md 摘要文件协议 → 同样报错
       writeFileSync(join(overlay, "understand.md"), "自定义理解提示词,丢了摘要文件协议")

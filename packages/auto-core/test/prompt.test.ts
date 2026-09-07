@@ -798,8 +798,9 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("迁移目标目录(相对工作目录): target")
     expect(text).toContain("不要把迁移代码混入")
     expect(text).toContain("场景模式导语(migrate)")
-    // a 阶段职责与首批勘察要求
-    expect(text).toContain("docs/analysis/")
+    // a 阶段职责(任务锚定产物约定)与首批勘察要求
+    expect(text).toContain("文档存放以任务为锚")
+    expect(text).toContain("行为基线")
     expect(text).toContain("勘察计划排为首批任务")
     // 任务格式协议(协议敏感标记)
     expect(text).toContain("## T-NNN: <任务标题> [pending]")
@@ -814,25 +815,26 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).not.toContain("终审提醒")
   })
 
-  test("brief 缺失 → 未提供提示段;各阶段职责条件注入", () => {
+  test("brief 缺失 → 未提供提示段;各阶段职责条件注入(任务锚定,k 为永久路径知识文档)", () => {
     const missing = renderPhasePlan({ phase: "d" })
     expect(missing).toContain("未提供(brief.md 缺失或为空)")
-    expect(missing).toContain("docs/design/")
-    expect(missing).not.toContain("docs/analysis/")
+    expect(missing).toContain("模块设计")
+    expect(missing).not.toContain("行为基线")
     expect(renderPhasePlan({ phase: "m" })).toContain("代码迁移与改造")
-    expect(renderPhasePlan({ phase: "t" })).toContain("docs/testing/")
-    expect(renderPhasePlan({ phase: "v" })).toContain("docs/acceptance/")
-    expect(renderPhasePlan({ phase: "k" })).toContain("docs/migration-kb/")
+    expect(renderPhasePlan({ phase: "t" })).toContain("回归覆盖")
+    expect(renderPhasePlan({ phase: "v" })).toContain("整体验收")
+    expect(renderPhasePlan({ phase: "k" })).toContain("docs/migration-kb/R<N>-migration-")
   })
 
-  test("handovers 注入两态: 有前序交接则注入清单,无则整块消失", () => {
+  test("handovers 注入两态: 有前序交接则注入清单(标注 docs/handovers/ 永久路径),无则整块消失", () => {
     const text = renderPhasePlan({
       phase: "m",
-      handovers: "### a 分析(docs/phases/a-analysis/handover.md)\n\n- 决策甲: 选型 X",
+      handovers: "### a 分析(docs/handovers/R1-a-analysis.md)\n\n- 决策甲: 选型 X",
     })
     expect(text).toContain("前序阶段交接")
-    expect(text).toContain("跨阶段记忆的唯一通道")
-    expect(text).toContain("### a 分析(docs/phases/a-analysis/handover.md)")
+    expect(text).toContain("唯一通道")
+    expect(text).toContain("docs/handovers/")
+    expect(text).toContain("### a 分析(docs/handovers/R1-a-analysis.md)")
     expect(text).toContain("- 决策甲: 选型 X")
     // 首阶段无前序交接: 交接块整块消失
     expect(renderPhasePlan({ phase: "a" })).not.toContain("前序阶段交接")
@@ -846,6 +848,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("上一轮迁移结论(续轮)")
     expect(text).toContain("完整、一致")
     expect(text).toContain("不要重做已完成")
+    expect(text).toContain("永久路径")
     expect(text).toContain("- docs/phases/round-1/m-migrate/")
     // 非续轮(无 prevRound): 结论块整块消失
     expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
@@ -920,16 +923,16 @@ describe("renderNumberRecovery(编号恢复会话)", () => {
 })
 
 describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
-  test("注入阶段/归档路径/四小节协议与唯一可写文件约束", () => {
-    const text = renderPhaseHandover({ phase: "a", archive: "docs/phases/a-analysis", next: "m 迁移实现", verify: true })
+  test("注入阶段/交接永久路径/四小节协议与唯一可写文件约束", () => {
+    const text = renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现", verify: true })
     expect(text).toContain("「分析」阶段(a)")
     expect(text).toContain("交接蒸馏者")
-    expect(text).toContain("docs/phases/a-analysis/handover.md")
+    expect(text).toContain("docs/handovers/R1-a-analysis.md")
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
     expect(text).toContain("下一阶段为「m 迁移实现」")
-    expect(text).toContain("唯一可写的文件是 docs/phases/a-analysis/handover.md")
+    expect(text).toContain("唯一可写的文件是 docs/handovers/R1-a-analysis.md")
     expect(text).toContain("只蒸馏、")
     expect(text).toContain("不改动任何既有产物")
     expect(text).toContain("AUTO-DECISION")
@@ -937,25 +940,25 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
   })
 
-  test("k 阶段无下一阶段: 供人工归档措辞,仍要求四小节", () => {
-    const text = renderPhaseHandover({ phase: "k", archive: "docs/phases/k-knowledge" })
+  test("k 阶段无下一阶段: 供后续查阅措辞,仍要求四小节", () => {
+    const text = renderPhaseHandover({ phase: "k", handover: "docs/handovers/R1-k-knowledge.md" })
     expect(text).toContain("无下一阶段")
-    expect(text).toContain("供人工归档与后续查阅")
+    expect(text).toContain("供后续轮次与人工查阅")
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
     // 有下一阶段时不带收尾措辞
-    expect(renderPhaseHandover({ phase: "a", archive: "x", next: "m 迁移实现" })).not.toContain("无下一阶段")
+    expect(renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })).not.toContain("无下一阶段")
   })
 
   test("verify 未启用: 不含 verified 字段描述", () => {
-    expect(renderPhaseHandover({ phase: "m", archive: "docs/phases/m-migrate" })).not.toContain("verified")
+    expect(renderPhaseHandover({ phase: "m", handover: "docs/handovers/R1-m-migrate.md" })).not.toContain("verified")
   })
 
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
-      renderPhaseHandover({ phase: "a", archive: "docs/phases/a-analysis", next: "m 迁移实现", verify: true }),
-      renderPhaseHandover({ phase: "k", archive: "docs/phases/k-knowledge" }),
+      renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现", verify: true }),
+      renderPhaseHandover({ phase: "k", handover: "docs/handovers/R1-k-knowledge.md" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
@@ -963,15 +966,15 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
 })
 
 describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowledge)", () => {
-  const FILE = "docs/migration-kb/migration-2026-01-01_00-00-00.md"
+  const FILE = "docs/migration-kb/R1-migration-2026-01-01_00-00-00.md"
 
   test("注入输出路径、来源清单与章节骨架;只读分析、唯一可写文件为输出路径", () => {
     const text = renderKnowledge({ file: FILE })
     expect(text).toContain(FILE)
-    // 来源指针(阶段台账与各阶段归档目录,前序原始 docs/ 已归档)
+    // 来源指针(阶段台账与各阶段交接文档永久路径,归档目录内是阶段 PLAN 快照)
     expect(text).toContain("docs/phases.md")
+    expect(text).toContain("docs/handovers/")
     expect(text).toContain("docs/phases/<字母>-<名称>/")
-    expect(text).toContain("handover.md")
     expect(text).toContain("git log")
     // 章节骨架(规格书 §13 的本仓库化,Design Deviations 改以 AUTO-DECISION 为来源)
     for (const section of ["## 迁移概要", "## API 与类型映射", "## 实现模式", "## 坑点与边界情况", "## 可复用规则", "## 设计偏差与重要决策", "## 验证证据", "## 参考"]) {

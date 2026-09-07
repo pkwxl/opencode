@@ -53,16 +53,20 @@ export function phaseText(phase: Phase): string
 
 - 校验 `parsePhases(raw)`:非空、字母 ∈ admtvk、不重复、含 m、为 `admtvk` 的
   子序列;非法返回 null(CLI 转退出码 1,报文给出合法形式说明)。
-- 各阶段职责与产物约定(规划提示词按此注入,见 E 节):
+- 各阶段职责与产物约定(规划提示词按此注入,见 E 节)。**2026-09-07 修订
+  (stable-refs P2,D2 产物目录折叠)**:下表"主要产物"列的阶段专属产物目录约定
+  (docs/analysis/ 等)已删除——a/d/t/v 阶段产物与终审产物一律任务锚定
+  `docs/T-NNN/`(终审 `docs/T-F<k>/`);k 知识文档为 `docs/migration-kb/`
+  永久路径(`R<N>-` 前缀);m 产物为源码改动与 `docs/T-NNN/` 任务报告:
 
-| 阶段 | 职责 | 主要产物 |
+| 阶段 | 职责 | 主要产物(P2 后口径) |
 | --- | --- | --- |
-| a 分析 | 摸清源系统与源模块的外部行为、依赖与边界 | docs/analysis/(行为基线、依赖清单) |
-| d 设计 | 目标系统侧的模块设计(接口、数据结构、适配点) | docs/design/ |
-| m 迁移实现 | 代码迁移与改造(必经阶段) | 源码 + docs/ 任务报告 |
-| t 测试 | 测试体系迁移/补齐,对基线行为的回归覆盖 | 测试代码 + docs/testing/ |
-| v 验收 | 整体验收(对照基线与需求) | docs/acceptance/(验收报告) |
-| k 知识提炼 | 迁移知识沉淀 | docs/migration-kb/(认领 --extract-knowledge 设计) |
+| a 分析 | 摸清源系统与源模块的外部行为、依赖与边界 | docs/T-NNN/(任务锚定,行为基线、依赖清单) |
+| d 设计 | 目标系统侧的模块设计(接口、数据结构、适配点) | docs/T-NNN/(任务锚定) |
+| m 迁移实现 | 代码迁移与改造(必经阶段) | 源码 + docs/T-NNN/ 任务报告(终审 docs/T-F<k>/) |
+| t 测试 | 测试体系迁移/补齐,对基线行为的回归覆盖 | 测试代码 + docs/T-NNN/(任务锚定) |
+| v 验收 | 整体验收(对照基线与需求) | docs/T-NNN/(任务锚定,验收结论) |
+| k 知识提炼 | 迁移知识沉淀 | docs/migration-kb/R<N>-…(永久路径,认领 --extract-knowledge 设计) |
 
 ### A.2 配置键(src/config.ts)
 
@@ -140,13 +144,14 @@ opencode-auto init <工作目录> [--phases <admtvk 子序列含 m>]
 ```markdown
 # 阶段台账(opencode-auto 维护;人工修订见设计文档 C.3)
 
-- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)
+- [done] a 分析 → docs/phases/a-analysis/(交接: docs/handovers/R1-a-analysis.md)
 - [done] d 设计 → docs/phases/d-design/(交接: docs/phases/d-design/handover.md)
 ```
 
 - 每行一个已完成阶段,顺序与完成顺序一致;driver 追加写在交接完成后、统一提交前。
 - 解析:容忍空行与注释;行协议 `- [done] <letter> <名称> → <归档目录>(交接: <handover>)`,
-  driver 只读字母与归档目录两列,其余为人工可读信息。
+  driver 只读字母一列,其余为人工可读信息;交接指针为可选列——第二行为 P2 前旧行
+  形态(交接在归档目录内),同样容忍(stable-refs P2 起新产出恒为 handovers/ 路径)。
 
 ### C.2 推导规则
 
@@ -228,19 +233,19 @@ k(知识提炼)阶段整体认领 docs/fixme-knowledge-design.md 的 `--extract-
 
 - **不开规划会话、不向 PLAN.md 填任务**:plan 路由(PLAN.md 空模板态)直接进入
   知识提取旁路一次性会话(src/knowledge.ts,复用 requireArtifact 骨架,伪任务
-  PLAN),产物 = `docs/migration-kb/migration-<时间戳>.md`(时间戳与 run 日志同款)。
-  会话输入为阶段台账 docs/phases.md 与各阶段归档目录(handover.md 优先,原始产物
-  按产物索引取用),章节骨架/质量约束/mode.exec 注入见 templates/prompts/knowledge.md;
+  PLAN),产物 = `docs/migration-kb/R<N>-migration-<时间戳>.md`(P2 起永久路径,
+  时间戳与 run 日志同款)。会话输入为阶段台账 docs/phases.md 与各阶段交接文档
+  (docs/handovers/ 优先,原始产物按产物索引取用),章节骨架/质量约束/mode.exec
+  注入见 templates/prompts/knowledge.md;
 - **提取失败不污染退出码**:会话受阻或两次未产出 → ⚠ 警告(knowledge_extraction_error,
   细节进运行日志)后照常交接,退出码语义不变——迁移成功不被文档生成失败反向污染;
-- **幂等与恢复**:目录内已存在非空 .md(提取已产出、交接前中断)→ 跳过重提取;
+- **幂等与恢复**:本轮 `R<N>-` 前缀非空 .md 已存在(提取已产出、交接前中断)→
+  跳过重提取(前几轮文档不算本轮已提取;第 1 轮无前缀存量按读回落视为本轮产物);
   交接中断走既有台账幂等补写;交接完成后重试提取 = 人工回退规程(删台账 k 行与
-  docs/phases/k-knowledge/ 归档目录后重跑);
-- **docs/ 快照不刷新**:提取前不调 snapshotDocs——交接归档沿用上一阶段的陈旧
-  快照(或快照缺失时的退化路径),本阶段新增的 migration-kb 即差异项,已产出的
-  知识文档同样被归档;
-- **知识文档入库**:作为 k 阶段产物随会话统一提交(stage=knowledge)与交接归档
-  (fixme 设计的"不自动提交"决策随独立选项一并废弃);
+  docs/migration-kb/ 内本轮 `R<N>-` 前缀文档后重跑);
+- **知识文档入库**:随会话统一提交(stage=knowledge),永久路径不随交接/轮次
+  归档移动(P2;fixme 设计的"不自动提交"决策随独立选项一并废弃;P2 前曾作为
+  阶段产物归档进 docs/phases/k-knowledge/);
 - 人工在 k 阶段自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点
   不触发(人工接管语义);提取会话唯一可写文件是输出路径,其余约束(状态文件
   只读、不提交)与全部旁路会话一致。
@@ -258,7 +263,7 @@ renderPhasePlan({
   brief,                        // brief.md 原文(可空)
   sourceDir, sourcePath,        // config.source(可空)
   destDir,                      // config.destDir(可空): 迁移目标目录注入,代码任务指向它
-  handovers,                    // 各前序 handover.md 预拼接字符串(调用方组装)
+  handovers,                    // 各前序交接文档预拼接字符串(调用方组装;P2 起读 docs/handovers/,P2 前自归档目录读回落)
   modeName, modeInit,           // mode 正交注入(经 modeText 渲染)
   verify,                       // config.verify(verify 字段描述条件段)
   finalReview,                  // m 阶段且启用时提示任务排布预留终审空间
@@ -273,23 +278,25 @@ renderPhasePlan({
 
 ## F. 阶段交接(归档 + 重置 + 蒸馏)
 
+> **2026-09-07 修订(stable-refs P2,docs 永不移动)**:交接蒸馏产物改为永久路径
+> `docs/handovers/R<N>-<字母>-<slug>.md`(落定不移动);本节原"按 docs/ 快照把
+> 本阶段新增/改动移入归档目录"的差异归档链路(snapshotDocs/archivePhaseDocs/
+> `.auto/phase-snapshot.json`)已删除——阶段产物文档(docs/T-*/ 等)永久留在
+> 原位;归档目录 `docs/phases/<letter>-<slug>/` 现只收阶段 PLAN.md 快照;轮次
+> 差异经 `R<N>-` 前缀与台账推导表达。台账行协议增加交接指针(见 C.1)。
+
 任务全 done 后,按序执行:
 
 1. **蒸馏会话**(AI 唯一职责):旁路一次性,模板
    `templates/prompts/phase-handover.md`(协议敏感),通读本阶段 PLAN.md 与
-   docs/ 产物,产出 `docs/phases/<letter>-<name>/handover.md`(driver 先建目录)。
+   docs/ 产物,产出 `docs/handovers/R<N>-<字母>-<slug>.md`(driver 先建目录)。
    协议要求必备小节:关键决策、约束与坑、下一阶段必读清单、产物索引;
-   requireArtifact 校验小节齐备。k 阶段无下一阶段,仍写 handover(供人工归档)。
-2. **driver 机械归档**:本阶段新增/改动的 docs/ 内容移入
-   `docs/phases/<letter>-<name>/`(handover 已在其中);PLAN.md 拷贝为归档目录
-   内 PLAN.md 后重置为模板(含 verify 条件渲染);AGENTS.md 不改写,仅校验
-   ≤150 行,超限在交接提交信息与终端 note 中提示人工精简。
+   requireArtifact 校验小节齐备。k 阶段无下一阶段,仍写 handover(供后续查阅)。
+2. **driver 机械归档**:PLAN.md 拷贝为归档目录内 PLAN.md 后重置为模板(含
+   verify 条件渲染);本阶段 docs/ 产物文档不动(永久路径);AGENTS.md 不改写,
+   仅校验 ≤150 行,超限在交接提交信息与终端 note 中提示人工精简。
 3. **台账追加** C.1 行;4. **统一提交**:标题 `阶段交接: <letter> <名称> →
    <下一字母> <名称>`,trailer `Auto-Stage: phase-transition`。
-
-归档移动的判定:driver 记录阶段开始时的 docs/ 快照(文件名+mtime),交接时
-移动差异项;快照存 .auto/(非版本化),缺失时(中断)退化为移动 A.1 表约定的
-本阶段产物目录。CURRENT.md 在交接前已由收尾删除,无需处理。
 
 ## G. 与既有机制的交互
 
@@ -359,6 +366,13 @@ renderPhasePlan({
 
 ## M. 续轮迁移(continue 子命令,已实现)
 
+> **2026-09-07 修订(stable-refs P2)**:归档布局增根 AGENTS.md 每轮快照(拷贝),
+> 不再搬移 `docs/migration-kb/`(知识文档改为永久路径 + `R<N>-` 前缀守卫,新一轮
+> 重新提取);`.auto/phase-snapshot.json` 随快照链路删除,状态重置只剩台账消失 +
+> PLAN.md 重建;结论注入 ②③ 改读永久路径——最终交接自 `docs/handovers/R<N>-….md`
+> (P2 前轮次自归档目录读回落),知识自 `docs/migration-kb/` 的 `R<N>-` 前缀文件
+> (无前缀存量与 P2 前归档内 migration-kb/ 宽松读回落收集)。
+
 一轮阶段化迁移全部完成后,继续迁移(补齐遗漏、对齐源系统)以"新一轮"进行: 上一轮
 整体归档、状态重置,上一轮结论注入新一轮首个规划会话——目标是**让迁移结果与源更加
 完整、一致**,不重做已完成的工作。
@@ -368,11 +382,11 @@ renderPhasePlan({
 | CLI 形态 | 独立子命令 `continue [dir] [--phases <新值>] [-p <brief>] [其余可修订选项]`(不用 init 选项: 它是动作而非属性);`--continue` 不是选项,init/run 出现即报错指向子命令;`init --continue` 语义 = continue 子命令 |
 | 与 init 的关系 | continue = init 的 amend 机制 + 归档上一轮: 复用同一分支(parse*/merge/模板循环/ensurePointer/ensureGitignore/-p),以 cont 门控差异;宪法选项仍单一入口语义(config.json 只经 init/continue 写) |
 | 前置条件 | 既有 phases ≠ "m" 且台账覆盖既有 phases 全部字母(按**既有**配置判定,不看向新 --phases);非阶段化/台账为空/缺阶段/含外字母/新 --phases 为 "m" → 退出码 1 并给"先跑 run 完成本轮"或人工回退指引 |
-| 归档布局 | `docs/phases/round-<N>/`(N = 被归档轮次): 全部阶段归档目录 + `phases.md`(台账)+ `PLAN.md`(轮末根快照,留痕轮后手工改动)+ `migration-kb/`(交接前中断的知识残留,移走后新一轮 k 阶段可重新提取);docs/phases/ 本就在快照/归档排除清单内,嵌套轮次目录无需新增排除规则 |
-| 状态重置 | 台账随归档消失 = 空台账、根 PLAN.md 由 init 模板循环以空模板重建、`.auto/phase-snapshot.json` 清除(新一轮首个规划会话重新快照);run 侧零改动(routePhase 对空台账 + 空模板自然回到 plan 路由) |
+| 归档布局 | `docs/phases/round-<N>/`(N = 被归档轮次): 全部阶段归档目录 + `phases.md`(台账)+ `PLAN.md`(轮末根快照,留痕轮后手工改动)+ `AGENTS.md`(根文件每轮拷贝快照,原文件保留);交接与知识文档为永久路径不参与归档(P2 起;P2 前版本曾把 `migration-kb/` 残留一并移入);docs/phases/ 本就是归档目录,嵌套轮次目录无需新增排除规则 |
+| 状态重置 | 台账随归档消失 = 空台账、根 PLAN.md 由 init 模板循环以空模板重建(P2 起 docs/ 快照链路已删除,无快照需清除);run 侧零改动(routePhase 对空台账 + 空模板自然回到 plan 路由) |
 | 轮次推导 | 当前轮 = docs/phases/ 下 `round-<N>` 最大编号 + 1,零新增持久化状态(人工删除归档即回到对应轮次);run/status 阶段进度行带 `第 N 轮` 标注(round > 1 时) |
 | 参数锁定矩阵 | **跨轮固定**(迁移同一性,显式给出即退出码 1): -m/--mode、--source-dir、--source-path、--dest-dir——换源/换目标/换模式不是"同一迁移的继续",如需更换在新目录 init 新项目;**可按轮修订**: --phases(不受前缀护栏——台账已归档重置,任何合法值可改,如第 2 轮改跑 mtvk)、-p(brief 换新轮意图)、--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit |
-| 结论注入 | 新一轮台账为空时的**首个**阶段规划会话注入 `prevRoundDigest`(src/phases.ts): ① 各阶段归档目录索引;② 最终完成阶段 handover.md 全文;③ 迁移知识文档全文(宽松收集,坏行不中断)。注入纪律与轮内一致——蒸馏产物是唯一通道,原始产物不注入、按索引可达(归档就在工作目录内);后续阶段照常走本轮 handover 蒸馏链,不重复注入。phase-plan.md 的 `{{#if prevRound}}` 条件块承载续轮目标文案(排查遗漏与差距、不重做) |
+| 结论注入 | 新一轮台账为空时的**首个**阶段规划会话注入 `prevRoundDigest`(src/phases.ts): ① 各阶段归档目录索引;② 最终完成阶段交接文档全文(自 `docs/handovers/R<N>-<字母>-<slug>.md` 永久路径读取,P2 前轮次自归档目录读回落);③ 迁移知识文档全文(`docs/migration-kb/` 的 `R<N>-` 前缀文件;无前缀存量宽松归入上一轮,P2 前归档内 migration-kb/ 读回落收集;宽松解析,坏行不中断)。注入纪律与轮内一致——蒸馏产物是唯一通道,原始产物不注入、按索引可达(归档就在工作目录内);后续阶段照常走本轮 handover 蒸馏链,不重复注入。phase-plan.md 的 `{{#if prevRound}}` 条件块承载续轮目标文案(排查遗漏与差距、不重做) |
 | 幂等与恢复 | 归档各步为 rename、**台账最后移动**(完成态标记)——归档中断重跑 continue 自然续完(已移走条目不在源位);重复 continue 在新一轮未完成时被前置条件拒绝(台账为空 → 尚缺全部字母) |
 | 退出码 | 同 init: 0 成功(归档+配置修订完成),1 用法/环境错误;run 侧无感知(看到空台账 + 空模板即正常开规划会话) |
 | 人工回退轮次 | 回退续轮 = 把 `round-<N>/` 内容移回(`phases.md` → `docs/phases.md`、阶段归档目录 → `docs/phases/`)后重跑 run,恢复上一轮完成态;删除 round 目录即回到该轮次编号 |

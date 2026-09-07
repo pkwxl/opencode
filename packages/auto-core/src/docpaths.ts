@@ -3,9 +3,10 @@
 // 文件名固定(R4),路径一经创建即为永久路径(R2)——driver/提示词模板/读回落
 // 三方认知经本模块统一,调用方不得自行拼串。旧平铺布局(docs/<id>.<role>.md 等)
 // 仅供读回落(设计 D4: 新路径缺失回落旧路径,镜像 config.ts 的 legacyModeFallback
-// 先例)与启动迁移映射使用,迁移完成后自然消亡。P1 不含 handoverDoc/knowledgeDoc
-// (P2);上游条款: R1 编号唯一、R2 永久性、R3 目录化、R4 角色文件名、R5 归档
-// 语义、R6 临时文件、R7 阶段差异表达。
+// 先例)与启动迁移映射使用,迁移完成后自然消亡。永久知识文档路径(knowledgeDoc/
+// priorKnowledgeDoc)亦在此构造;handoverDoc 依赖阶段 slug 表,落在 src/phases.ts
+// (偏差注记见设计文档 §4.1);上游条款: R1 编号唯一、R2 永久性、R3 目录化、
+// R4 角色文件名、R5 归档语义、R6 临时文件、R7 阶段差异表达。
 import { mkdir, readdir, rename, rm, rmdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { log } from "./log"
@@ -47,6 +48,20 @@ export function finalDir(index: number): string {
 // docs/T-F1/audit-r1.md
 export function finalDoc(index: number, name: string): string {
   return join(finalDir(index), name)
+}
+
+// —— 永久知识文档路径(P2)——
+
+// docs/migration-kb/R2-migration-2026-09-07_01-02-03.md(k 阶段知识文档;R2 永久
+// 路径 + R7 轮次前缀,不随交接/轮次归档移动;stamp 与 run 日志同款格式)。
+export function knowledgeDoc(round: number, stamp: string): string {
+  return join("docs", "migration-kb", `R${round}-migration-${stamp}.md`)
+}
+
+// docs/prior-kb/R1-prior-2026-09-07_01-02-03.md(前置知识文档;同上永久路径,
+// 轮次前缀守卫使新一轮重新蒸馏,取代旧的轮间搬移)。
+export function priorKnowledgeDoc(round: number, stamp: string): string {
+  return join("docs", "prior-kb", `R${round}-prior-${stamp}.md`)
 }
 
 // —— 旧平铺布局(读回落与迁移映射共用;迁移完成后自然消亡)——
