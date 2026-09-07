@@ -828,3 +828,49 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
     }
   })
 })
+
+// check 子命令的引用检查(stable-refs P4,D6 第二层): 原则检查之外全量扫描活文档
+// 失效引用,命中退出码 1;干净项目退出 0。无需 opencode/provider,始终运行。
+describe("CLI: check 引用检查(stable-refs P4)", () => {
+  test("活文档失效引用命中退出 1 并逐条报文;豁免行不报告", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await Bun.write(
+        join(dir, "PLAN.md"),
+        ["## T-001: 任务 [pending]", "实现功能。", ""].join("\n"),
+      )
+      await Bun.write(
+        join(dir, "docs/T-001/report.md"),
+        ["正常引用 `PLAN.md`。", "失效引用 `src/gone.ts`。", "已删除 的 `docs/old.md` 豁免。"].join("\n"),
+      )
+      const check = await runCli(["check", dir])
+      expect(check.code).toBe(1)
+      expect(check.out).toContain("+ 文档引用")
+      expect(check.out).toContain("⚠ 失效引用 docs/T-001/report.md:2 → src/gone.ts(路径不存在): 失效引用 `src/gone.ts`。")
+      expect(check.out).toContain("1 处失效引用(更新为现行路径,或行内标注 已删除/已归档/历史 豁免)")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("引用全部有效退出 0;init 产出含引用规范块", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const init = await runCli(["init", dir])
+      expect(init.out).toContain("已补写: AGENTS.md 引用规范块")
+      await Bun.write(
+        join(dir, "PLAN.md"),
+        ["## T-001: 任务 [pending]", "实现功能。", ""].join("\n"),
+      )
+      await Bun.write(join(dir, "src/mod.ts"), "l1\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/mod.ts:1` 与 [计划](PLAN.md)。\n")
+      const check = await runCli(["check", dir])
+      expect(check.code).toBe(0)
+      expect(check.out).toContain("✓ 未发现与提交原则相违背的描述,文档引用检查全部通过")
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("opencode-auto:refs:start")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})

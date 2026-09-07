@@ -48,6 +48,7 @@ import {
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
+import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { shellProfile } from "./shell"
 import { autoSwitches, type Switches } from "./switches"
@@ -85,6 +86,8 @@ function formatDuration(ms: number): string {
 // 会话后统一提交(收回 AI 提交权,见 src/git.ts): 每个会话结束且 driver 完成
 // 状态写入(tick 勾选等)后调用,递归提交全部改动——git 历史即 AI 变更的审计
 // 轨迹,回滚粒度 = 会话。--commit false 与 dryrun 跳过。
+// 提交前引用 auto-correct(stable-refs P4,D6 第一层): rename 配对机械改写活
+// 文档引用 + 失效引用 ⚠ 日志(改写内容随本次统一提交落账,不另起提交)。
 async function afterSession(
   dir: string | undefined,
   opts: Opts,
@@ -92,6 +95,7 @@ async function afterSession(
   info: { stage: string; subject: string },
 ): Promise<void> {
   if (!dir || opts.commit === false || opts.dryrun) return
+  await autoCorrectRefs(dir)
   await commitTree(dir, task, info)
 }
 
@@ -1223,6 +1227,23 @@ async function verifyTask(
     pending = undefined
     if (execution.type === "blocked") return execution
     await persist?.({ kind: "verify", stage: "judge", ...counters, run: execution.run, audit: execution.audit })
+    // 引用门禁(stable-refs P4,D6 第三层): 判定会话前对任务产物文档(docs/
+    // T-NNN/**)做确定性预扫——失效引用 = 差距,直接进修复轮、不消耗判定会话;
+    // 修复轮语义与判定差距一致(off 模式回退 pending,耗尽阻塞退出 2)。verify
+    // 未启用时无任务级验收,门禁不存在(退化为提交时 auto-correct 的 ⚠ 日志)。
+    const refGap = formatRefGap(await taskRefFindings(dir, task.id))
+    if (refGap) {
+      if (mode === "off") return { type: "gap", gap: refGap }
+      round++
+      if (round >= FIX_ROUNDS) {
+        return { type: "blocked", question: `任务产物文档连续 ${FIX_ROUNDS} 轮修复仍存在失效引用:\n${refGap}` }
+      }
+      log(`↻ ${task.id} 任务产物文档存在失效引用,反馈回执行会话修复(第 ${round}/${FIX_ROUNDS - 1} 轮):\n${refGap}`)
+      await persist?.({ kind: "verify", stage: "fix", round, rechecks, replaced, gap: refGap })
+      const blocked = await fixRound(refGap, round)
+      if (blocked) return blocked
+      continue
+    }
     const verdict = await judge(client, plan, task, opts, execution.run)
     if (verdict.type === "blocked") return verdict
     if (verdict.type === "pass") {

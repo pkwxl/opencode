@@ -212,6 +212,23 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
   全文,幂等补写);wrapup.md(report 引用要求)、verify-script-gen.md、fix.md 增
   引用规范提示文案。
 
+> **2026-09-07 实施注记(stable-refs P4,以实现为准)**:
+> - validateRefs 签名收敛为 `(dir, refs) → Map<path, problem>`,findings 的位置回填
+>   (file/line/text)由 scanRefs 组装(扫描入口);校验豁免在 §3.2 基础上细化——
+>   URL/绝对路径/`~`/`./`/`../` 形态与纯版本号 token(如 `v1.2`,扩展名以字母开头
+>   才算路径状)不校验,md 链接 `#fragment` 剥后验,目录引用只查存在性(行号锚忽略)。
+> - renamePairs 先 `git add -A` 暂存再 `git diff --cached --find-renames HEAD`——未跟踪
+>   的新路径(AI 常见纯 mv 改名)否则不参与配对;暂存本就是下一次统一提交的前奏,不
+>   改变提交结果;路径自仓库根换算为目标目录相对。
+> - auto-correct 挂点取 runner 的 afterSession(全部统一提交的公共入口,含
+>   requireArtifact 旁路会话),loop 任务边界提交前必已有会话提交先行覆盖,不另挂
+>   loop;findings 统一记 ⚠ 日志,"verify 启用时入 fix 轮"由 verify 门禁承担(下条)。
+> - verify 门禁在每个判定会话前执行(含修复轮后的重新判定),差距文案由 formatRefGap
+>   组装;off 模式与判定差距同语义(回退 pending),FIX_ROUNDS 耗尽阻塞退出 2。
+> - check 的非 git note 仅在 docs/ 存在(引用机制有对象)时给出。
+> - AGENTS.md 引用规范块为 §3 规范的精编全文(逐字全文会使六个标记块累计逼近维护
+>   规则块的 150 行预算);规范细则以本设计文档为准。
+
 ## 5. 实施分期与清单(每期一个独立会话)
 
 ### P1 路径统一(行为等价改名 + 存量迁移)
@@ -260,15 +277,19 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 
 ### P4 引用一致性三层
 
-- [ ] refcheck.ts 补 validateRefs / renamePairs;活文档枚举(排除 `docs/phases/`)
-- [ ] 提交前 auto-correct + findings 修复路径接线(verify 未启用退化日志)
-- [ ] check.ts 扩展(报文 + 退出码 + 缺规范块 note)
-- [ ] verifyTask 确定性预扫(判定会话前)
-- [ ] ensurePointer 规范块(opencode-auto:refs)+ wrapup / verify-script-gen / fix 模板文案
-- [ ] 测试:refcheck / check 新测试 + e2e
-- [ ] 文档:behavior.md(检查契约)、structure.md、verify-review-design.md 注记(若触及)
-- 收口:typecheck + test;冒烟——改代码文件名 → 活文档自动改写;删文件 → findings;
-  check 命中退出 1
+- [x] refcheck.ts 补 validateRefs / renamePairs;活文档枚举 activeDocs(排除 `docs/phases/`;
+      docs/phases.md 台账属活文档)+ scanRefs(逐文档提取→校验→findings)+
+      taskRefFindings/formatRefGap(门禁预扫范围与差距文案)+ gitAvailable/check 形态豁免
+- [x] 提交前 auto-correct + findings 修复路径接线(挂点 runner afterSession,覆盖全部
+      统一提交;verify 未启用退化日志)
+- [x] check.ts 扩展(refs 并入返回结构与 CLI 报文 + 退出码 1 + 缺规范块 note + 非 git note)
+- [x] verifyTask 确定性预扫(每个判定会话前;off 模式回退 pending,耗尽阻塞退出 2)
+- [x] ensurePointer 规范块(opencode-auto:refs)+ wrapup / verify-script-gen / fix 模板文案
+- [x] 测试:refcheck / check 新测试 + e2e(CLI check 引用命中退出 1 / 干净退出 0)
+- [x] 文档:behavior.md(检查契约)、structure.md、verify-review-design.md 注记、包 AGENTS.md 导航
+- 收口:typecheck + test 全绿(2026-09-07,auto-core 351 pass + 壳包 29 pass/2 skip);冒烟——
+  改代码文件名 → 活文档自动改写;删文件 → findings;check 命中退出 1(单测级覆盖,
+  真实运行冒烟待 auto/ worktree 集成会话一并执行)
 
 ## 6. 会话交接约定
 
@@ -286,7 +307,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 | P1 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): P1-S1..S4(四会话提交,见 stable-refs-p1-plan.md §8) | 本包 `bun typecheck` + `bun test` 全绿(340 pass);auto/ worktree 三包集成冒烟待执行 |
 | P2 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P2 归档缩减(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);三包集成冒烟待执行(P1 冒烟一并补) |
 | P3 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P3 编号默认开启(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);init 冒烟确认缺省摘要「自动编号 on」与 phases="m" ℹ 提示;structure.md 同步缺省注记 |
-| P4 | 未开始 | - | - | - |
+| P4 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P4 引用一致性三层(单会话提交) | 本包 typecheck + test 全绿(351 pass);壳包 packages/auto typecheck + test 绿(29 pass/2 skip);三层各就位(auto-correct 挂全部统一提交、check 子命令命中退出 1、verify 门禁进修复轮);真实运行冒烟待 auto/ worktree 集成会话执行(P1..P3 一并补) |
 
 ## 8. 遗留风险与边界
 

@@ -38,7 +38,7 @@ opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后归档上一轮、开启新一轮(见"阶段化流程")
 opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行(agent/验收/提交等语义来自项目配置)
-opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/测试/提交执行权原则的描述,并提示 AGENTS.md 行数超限
+opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 行数超限
 opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 ```
 
@@ -84,7 +84,10 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 `T-001 done 修复登录`;trailer `Auto-Task` / `Auto-Stage`,目标仓库另记
 `Auto-Nested` 嵌套仓库 SHA),git 历史即 AI 变更的审计轨迹、回滚粒度 = 会话;
 opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 git commit
-(经 AGENTS.md 提交原则块与 agent 契约约束)。`false` 关闭后改动留在工作区。
+(经 AGENTS.md 提交原则块与 agent 契约约束)。每次统一提交前 driver 先做**引用
+auto-correct**:git rename 配对成功的新旧路径机械改写活文档中的旧引用(只配对
+rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本次提交落账;非 git
+目录空转)。`false` 关闭后改动留在工作区。
 
 两条等价的修订通道:
 
@@ -286,7 +289,11 @@ AI 判定):
    中断,恢复时跳过重跑、直接进入判定。退出码非 0 不直接判失败——判定权在下一
    段的判定会话,保留"脚本本身坏/环境不适用不误判"的韧性。
 3. **AI 判定**:旁路独立判定会话(总是新建,不进会话链)直读输出文件
-   (大文件分段读,不经工具输出截断)与相关代码。判定会话**禁止直接执行任何
+   (大文件分段读,不经工具输出截断)与相关代码。进入判定前,driver 先对任务
+   产物文档(`docs/T-NNN/**`)做**引用门禁**确定性预扫——失效引用(路径不存在、
+   行号越界)直接作为差距进修复轮,不消耗判定会话(见
+   [原则检查(check)](#原则检查check) 的引用检查;未启用 verify 时无此门禁,
+   退化为提交时的 ⚠ 日志)。判定会话**禁止直接执行任何
    验证脚本或验证性命令**(运行测试、构建、lint、启动服务等)——验证的执行权
    在 driver,结果一律以回传文件为准;只读检查(读文件、git log/status、grep
    源码)不受限。若判定会话认定脚本本身有问题或覆盖不足,可编写新的验证脚本
@@ -736,7 +743,7 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 
 ## AGENTS.md 标记块与维护规则
 
-`init` / `run` 幂等维护目标目录 AGENTS.md 中的五个 opencode-auto 标记块
+`init` / `run` 幂等维护目标目录 AGENTS.md 中的六个 opencode-auto 标记块
 (`<!-- opencode-auto:*:start -->` 到 `<!-- opencode-auto:*:end -->`,各自独立判断、
 缺失则追加,除此之外永不改写 AGENTS.md):
 
@@ -747,13 +754,14 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 | `opencode-auto:test` | 测试执行原则:编译/测试/构建/lint 等命令由 driver 在会话外执行(仅 `testByDriver: true` 时补写;未启用时移除已存在的块) |
 | `opencode-auto:commit` | 提交原则:会话后由 driver 递归统一提交,会话不执行 git 提交 |
 | `opencode-auto:maint` | AGENTS.md 维护规则(见下) |
+| `opencode-auto:refs` | 引用与存放规范(stable-refs):docs/T-NNN/ 目录化永久路径、引用根相对路径语法、检查三层(无条件补写) |
 
 提交原则块描述的是**与配置无关的不变式**(会话不提交),不随配置开关改写;验证
 原则块对应验收机制、测试执行原则块对应测试执行协议,分别随 `verify` /
 `testByDriver` 开关补写/移除——机制不存在时,AGENTS.md 不
 保留其描述。生效配置由 run 启动横幅与 `status` 打印。
 
-**维护规则**(第四标记块,约束 AGENTS.md 保持工作流入口定位、不膨胀为知识库——
+**维护规则**(维护规则块,约束 AGENTS.md 保持工作流入口定位、不膨胀为知识库——
 它作为 system context 每个 provider turn 都进入上下文,膨胀会侵蚀全部会话的有效
 上下文):
 
@@ -814,6 +822,15 @@ driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时�
 AGENTS.md 超 150 行(维护规则块第 1 条,建议精简并把
 细节路由到 `docs/agents/`)。`init` 会在 AGENTS.md 幂等维护标记块,并在启用验收
 时把验证原则写进 PLAN.md 模板,使规划时就注意这一点。
+
+`check` 同时做**引用检查**(稳定引用规范,stable-refs):全量扫描活文档
+(`docs/**/*.md`,排除 `docs/phases/` 状态归档)中的路径引用——反引号 span 与
+Markdown 链接内的目标目录根相对路径(可带 `:行号` 锚),失效引用(路径不存在、
+行号超出文件总行数)逐条打印并退出码 1;代码围栏内的路径与行内含
+`已删除` / `已归档` / `历史` 标记的引用豁免;URL、绝对路径与版本号形态不校验。
+`check` 还会在 AGENTS.md 缺少引用规范块、或目标目录非 git(提交前引用
+auto-correct 不可用)时输出 note。引用的提交前自动修复(rename 改写)与
+verify 门禁见「统一提交」与「验收判定」相关章节。
 
 ## 阻塞与恢复
 

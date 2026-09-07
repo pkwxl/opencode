@@ -1,7 +1,8 @@
 import { join } from "node:path"
 import { loadProjectConfig } from "./config"
+import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
 
-// check 命令的检查逻辑: 扫描目标目录的 AGENTS.md 与 PLAN.md,报告与"验证执行权
+// check 命令的检查逻辑: ①原则检查——扫描目标目录的 AGENTS.md 与 PLAN.md,报告与"验证执行权
 // 在 driver""测试/编译等命令执行权在 driver"及"提交执行权在 driver"原则(见
 // loop.ts 的 AGENTS.md 验证/测试/提交原则块)相违背的描述——即要求会话/AI 亲自
 // 运行验证脚本或验证命令、自行下验收结论,或要求会话直接运行编译/测试/构建/lint
@@ -9,6 +10,10 @@ import { loadProjectConfig } from "./config"
 // driver 的语句不报告;匹配为启发式,报告供人工确认,不修改文件。验证原则仅在
 // config.verify 启用时成立,测试执行原则仅在 config.testByDriver 启用时成立
 // (未启用时相关检查与"缺少对应原则块"提示一并关闭);提交原则始终成立。
+// ②引用检查(stable-refs P4,D6 第二层): 全量活文档(docs/**/*.md,排除
+// docs/phases/**)扫描失效引用(路径不存在 / 行号超出文件总行数),命中经 refs
+// 并入 CLI 报文(退出码 1);目标目录缺引用规范块或非 git(auto-correct 不可用)
+// 给 note。
 
 // AGENTS.md 维护规则块第 1 条的行数上限(见 loop.ts MAINT_RULE);超限由 check
 // 输出 note 提示精简。
@@ -45,7 +50,9 @@ const TEST_PATTERNS: RegExp[] = [
 // (统一提交由 driver 在会话后执行);"提交信息/提交 SHA"等名词性表述不匹配。
 const COMMIT_PATTERNS: RegExp[] = [/\bgit\s+(add|commit)\b/i, /提交(全部|所有|一次)?(未提交)?(改动|变更|代码)/]
 
-export async function checkPrinciple(dir: string): Promise<{ findings: Finding[]; notes: string[]; verifyOn: boolean; testOn: boolean }> {
+export async function checkPrinciple(
+  dir: string,
+): Promise<{ findings: Finding[]; notes: string[]; refs: RefFinding[]; verifyOn: boolean; testOn: boolean }> {
   const findings: Finding[] = []
   const notes: string[] = []
   let verifyOn = false
@@ -70,6 +77,7 @@ export async function checkPrinciple(dir: string): Promise<{ findings: Finding[]
         ...(verifyOn ? ["验证原则块"] : []),
         ...(testOn ? ["测试执行原则块"] : []),
         "提交原则块",
+        "引用规范块",
       ].join("、")
       notes.push(
         name === "PLAN.md"
@@ -95,6 +103,9 @@ export async function checkPrinciple(dir: string): Promise<{ findings: Finding[]
     if (name === "AGENTS.md" && !text.includes("opencode-auto:commit:start")) {
       notes.push("AGENTS.md 缺少提交原则块,运行 opencode-auto init 可补写")
     }
+    if (name === "AGENTS.md" && !text.includes("opencode-auto:refs:start")) {
+      notes.push("AGENTS.md 缺少引用规范块,运行 opencode-auto init 可补写")
+    }
     // 维护规则块第 1 条(≤150 行)的唯一机器观测点: 超限仅提示,不进 findings、
     // 不影响退出码。
     if (name === "AGENTS.md") {
@@ -104,7 +115,13 @@ export async function checkPrinciple(dir: string): Promise<{ findings: Finding[]
       }
     }
   }
-  return { findings, notes, verifyOn, testOn }
+  // 引用检查(P4): 活文档存在才扫描与给 note(无 docs/ 的目录引用机制尚无对象)。
+  const docs = await activeDocs(dir)
+  const refs = docs.length ? await scanRefs(dir, docs) : []
+  if (docs.length && !(await gitAvailable(dir))) {
+    notes.push("非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验")
+  }
+  return { findings, notes, refs, verifyOn, testOn }
 }
 
 // 一行是否与原则相违背: 命中"执行动词 + 验证语义"(verify 启用时)或"会话执行

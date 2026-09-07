@@ -87,15 +87,38 @@ AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
    状态、一次性决策、对话过程不写入(一次性决策按 AUTO-DECISION 记入相关文档)。
 <!-- opencode-auto:maint:end -->`
 
+// AGENTS.md 引用规范块: 第六个标记块(stable-refs P4 下沉),内容 = 设计文档
+// docs/stable-refs-design.md §3 规范的精编全文: 存放(R2 永久性/R3 目录化/R4
+// 角色文件名/R5 归档语义/R7 轮次表达)、引用语法(§3.2)与一致性检查三层(§3.3)。
+// 无条件补写(路径稳定性不依赖任何开关,§8)。
+const REFS_SPEC = `<!-- opencode-auto:refs:start -->
+引用与存放规范(稳定引用,细则见 stable-refs 设计文档):
+1. 存放: 任务文档只在 docs/T-NNN/ 内(context/subtasks/report/audit/fix/handoff/
+   testhandoff.md),子任务产物只在 docs/T-NNN/S<两位序号>/ 内(index.md、
+   testhandoff.md),终审产物在 docs/T-F<k>/ 内;阶段交接在 docs/handovers/、
+   迁移知识在 docs/migration-kb/、前置知识在 docs/prior-kb/。这些路径一经创建
+   即为永久路径: 永不移动、永不改名;docs/phases/ 只放过期状态文件。
+2. 引用: 文档间引用与对代码的引用一律写目标目录根相对路径(如
+   \`docs/T-003/S04/index.md\`、\`src/runner.ts:120\`,反引号或链接,可带 :行号
+   锚);不要引用 docs/phases/ 下的状态文件;轮次差异经文件名 R<N>- 前缀与
+   台账表达,不靠搬移目录。
+3. 检查: driver 在统一提交前自动改写 rename 引用并报告失效引用;check 子命令
+   全量扫描活文档;verify 启用时任务产物文档的失效引用会被验收门禁拦截进
+   修复轮。代码围栏内的路径与行内标注 已删除/已归档/历史 的引用豁免。
+<!-- opencode-auto:refs:end -->`
+
 // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
-// 提交原则块与维护规则块各自独立判断、只追加,从不改写已有内容。返回补写了哪些块。
-// verify(任务级验收开关)为 false 时不补写验证原则块,并移除已存在的;testByDriver
-// (编译/测试等命令执行权)为 false 时同样不补写测试执行原则块并移除已存在的——
-// 机制不存在时,AGENTS.md 不得保留与其相关的描述。
+// 提交原则块、维护规则块与引用规范块各自独立判断、只追加,从不改写已有内容。
+// 返回补写了哪些块。verify(任务级验收开关)为 false 时不补写验证原则块,并
+// 移除已存在的;testByDriver(编译/测试等命令执行权)为 false 时同样不补写
+// 测试执行原则块并移除已存在的——机制不存在时,AGENTS.md 不得保留与其相关的
+// 描述。引用规范块与维护规则块无条件补写(不依赖开关)。
 export async function ensurePointer(
   directory: string,
   opts: { verify?: boolean; testByDriver?: boolean } = {},
-): Promise<{ pointer: boolean; principle: boolean; principleRemoved: boolean; test: boolean; testRemoved: boolean; commit: boolean; maint: boolean }> {
+): Promise<
+  { pointer: boolean; principle: boolean; principleRemoved: boolean; test: boolean; testRemoved: boolean; commit: boolean; maint: boolean; refs: boolean }
+> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
   let text = existing
@@ -121,8 +144,10 @@ export async function ensurePointer(
   if (commit) text = `${text.trimEnd()}\n\n${COMMIT_PRINCIPLE}\n`
   const maint = !text.includes("opencode-auto:maint:start")
   if (maint) text = `${text.trimEnd()}\n\n${MAINT_RULE}\n`
+  const refs = !text.includes("opencode-auto:refs:start")
+  if (refs) text = `${text.trimEnd()}\n\n${REFS_SPEC}\n`
   if (text !== existing) await Bun.write(agentsFile, text)
-  return { pointer, principle, principleRemoved, test, testRemoved, commit, maint }
+  return { pointer, principle, principleRemoved, test, testRemoved, commit, maint, refs }
 }
 
 // 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
@@ -285,6 +310,7 @@ export async function runAll(
   if (ensured.testRemoved) log("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
   if (ensured.commit) log("已补写: AGENTS.md 提交原则块")
   if (ensured.maint) log("已补写: AGENTS.md 维护规则块")
+  if (ensured.refs) log("已补写: AGENTS.md 引用规范块")
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
   // 工作区已有未提交改动会被 driver 的下一次提交一并纳入(统一提交为全量清扫
   // 语义,与此前会话清扫提交一致),提前提示用户。dryrun 不做任何提交,不提示。

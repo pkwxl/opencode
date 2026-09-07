@@ -672,6 +672,7 @@ if (command === "init" || command === "continue") {
   }
   console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
   console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
+  console.log(ensured.refs ? "已补写: AGENTS.md 引用规范块" : "跳过已存在: AGENTS.md 引用规范块")
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
   // -p/--prompt: 项目意图文本写入 .opencode/auto/brief.md(版本化、随仓库共享、
@@ -704,13 +705,14 @@ if (command === "init" || command === "continue") {
   process.exit(0)
 }
 
-// check: 启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
+// check: ①启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
 // (及 verify 启用时的"验证执行权在 driver"、testByDriver 启用时的"测试/编译
-// 等命令执行权在 driver"原则)相违背的描述;命中退出码 1,供人工修订。验证/
-// 测试类检查是否启用由 checkPrinciple 依配置决定,verifyOn/testOn 仅用于调整
-// 报文措辞。
+// 等命令执行权在 driver"原则)相违背的描述;②引用检查(stable-refs P4)——
+// 全量活文档(docs/**/*.md,排除 docs/phases/**)扫描失效引用(路径不存在 /
+// 行号超出文件总行数)。任一命中退出码 1,供人工修订。验证/测试类检查是否
+// 启用由 checkPrinciple 依配置决定,verifyOn/testOn 仅用于调整报文措辞。
 if (command === "check") {
-  const { findings, notes, verifyOn, testOn } = await checkPrinciple(directory)
+  const { findings, notes, refs, verifyOn, testOn } = await checkPrinciple(directory)
   const active = [
     ...(verifyOn ? ["验证"] : []),
     ...(testOn ? ["测试"] : []),
@@ -720,16 +722,28 @@ if (command === "check") {
     ...(verifyOn ? [] : ["验证类未启用(任务级验收关闭)"]),
     ...(testOn ? [] : ["测试类未启用(测试由 driver 执行关闭)"]),
   ].join(";")
-  console.log(`检查 ${directory}: ${active}执行权原则${detail ? `(${detail})` : ""}`)
+  console.log(`检查 ${directory}: ${active}执行权原则${detail ? `(${detail})` : ""} + 文档引用`)
   for (const note of notes) console.log(`ℹ ${note}`)
-  if (!findings.length) {
-    console.log(`✓ 未发现与${active}原则相违背的描述`)
+  if (!findings.length && !refs.length) {
+    console.log(`✓ 未发现与${active}原则相违背的描述,文档引用检查全部通过`)
     process.exit(0)
   }
   for (const finding of findings) {
     console.log(`⚠ ${finding.file}${finding.task ? `(${finding.task})` : ""}:${finding.line}: ${finding.text}`)
   }
-  console.log(`发现 ${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""}${testOn ? ";编译/测试/构建/lint 等命令统一写成脚本放 test/ 由 driver 执行" : ""})`)
+  for (const ref of refs) {
+    console.log(`⚠ 失效引用 ${ref.file}:${ref.line} → ${ref.path}(${ref.problem === "beyond-eof" ? "行号超出文件总行数" : "路径不存在"}): ${ref.text}`)
+  }
+  const summary = [
+    ...(findings.length
+      ? [
+          `${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订` +
+            `${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""}${testOn ? ";编译/测试/构建/lint 等命令统一写成脚本放 test/ 由 driver 执行" : ""})`,
+        ]
+      : []),
+    ...(refs.length ? [`${refs.length} 处失效引用(更新为现行路径,或行内标注 已删除/已归档/历史 豁免)`] : []),
+  ]
+  console.log(`发现 ${summary.join("与")}`)
   process.exit(1)
 }
 

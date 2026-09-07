@@ -124,7 +124,26 @@
   knowledgeDoc/priorKnowledgeDoc,轮次 R<N>- 前缀守卫幂等,第 1 轮无前缀存量
   读回落);docs/phases/ 只收过期状态文件(阶段 PLAN 快照、轮次归档 = 各阶段
   归档目录 + 台账 + 轮末 PLAN + AGENTS.md 快照),状态文件不被任何文档引用;
-  P2 前布局(交接在归档目录内、知识无前缀)各读点回落兼容。
+   P2 前布局(交接在归档目录内、知识无前缀)各读点回落兼容。
+- 引用一致性三层(stable-refs P4,D6;设计文档 stable-refs-design.md §3.3):引用唯一
+  合法形态 = 目标目录根相对路径(反引号或 md 链接,可带 `:行号` 锚);校验语义 = 路径
+  存在 + 行号 ≤ 文件总行数;代码围栏内与行内含 已删除/已归档/历史 标记的引用豁免;
+  URL/绝对路径/`~`/`./`/`../` 形态与纯版本号 token(如 `v1.2`)不校验,md 链接的
+  `#fragment` 剥后验,目录引用只查存在性。三层:① **auto-correct**——每次统一提交前
+  (runner 的 afterSession 挂点,覆盖全部会话后提交)driver 先做 git rename 配对
+  (`git add -A` 暂存后 `git diff --cached --find-renames HEAD`,暂存本就是下一次提交
+  的前奏)机械改写活文档引用(**只配对 rename,删除/语义变化不自动改**),再复扫
+  失效引用并 ⚠ 日志;改写内容随本次统一提交落账,不另起提交;非 git 目录 auto-correct
+  空转(校验仍可跑)。② **check 子命令**——原则检查之外全量扫描活文档
+  (docs/**/*.md,排除 docs/phases/**;docs/phases.md 台账属活文档),失效引用命中
+  退出码 1;AGENTS.md 缺引用规范块与非 git 目录(auto-correct 不可用)给 note。③
+  **verify 门禁**——verifyTask 在每个判定会话前对任务产物文档(docs/T-NNN/**,
+  终审任务 T-F<k> 同法)做确定性预扫,失效引用 = 差距直接进修复轮(不消耗判定会话;
+  off 模式回退 pending,FIX_ROUNDS 耗尽阻塞退出 2);verify 未启用时门禁不存在,
+  退化为第①层的 ⚠ 日志(宽松契约)。该规范经 init 下沉:AGENTS.md 引用规范块
+  (第六标记块 `opencode-auto:refs`,无条件补写——路径稳定性不依赖任何开关);
+  wrapup(report 引用要求)/verify-script-gen(脚本内根相对路径)/fix(失效引用
+  允许只更新引用行)模板同步注入提示文案。
 - 统一提交(收回 AI 提交权):任何会话结束且 driver 完成状态写入后,由 driver 经
   src/git.ts 的 commitTree 递归提交全部改动(先嵌套 .git 子仓库、后目标目录所在
   仓库,路径发现不依赖 git status——嵌套仓库通常被父仓库忽略),git 历史即 AI
@@ -205,7 +224,10 @@
   合并整写 tmp/verify.out 单文件,执行前 truncate;进度看门狗——输出文件持续
   无增长达 idleTime(缺省 10 分钟)才 kill、code 记 124 且 timeoutReason=idle,
   idleMax(缺省不设)为绝对上限兜底;执行完毕的运行记录持久化到进度记录,
-  此后中断恢复时跳过重跑;退出码非 0 不直接判失败);③ 旁路独立判定会话(renderVerifyJudge,
+  此后中断恢复时跳过重跑;退出码非 0 不直接判失败);③ 旁路独立判定会话——进入前
+  driver 先对任务产物文档 docs/T-NNN/** 做引用门禁确定性预扫,失效引用 = 差距直接
+  进修复轮、不消耗判定会话(stable-refs P4 引用一致性三层),随后判定会话
+  (renderVerifyJudge,
   一次性 chain 不进任务链)直读输出与代码判定——**判定会话禁止执行验证脚本
   或验证性命令**(运行测试/构建/lint/服务等;只读检查不受限),认定脚本本身有问题
   或覆盖不足时编写新脚本替换 tmp/verify.sh 并以末行 `结论: 重验 <原因>`
@@ -297,11 +319,12 @@
   备注"(退出原因/中断阶段/恢复方式)后保留,供人工查看与下次恢复(下次 runTask
   重建镜像时,备注要点经恢复提示词带给 AI);强制中断遗留文件同样下次重建。
   AGENTS.md 中 driver
-  只维护五个固定标记块(指针 `opencode-auto:start`、验证 `opencode-auto:verify`、
+  只维护六个固定标记块(指针 `opencode-auto:start`、验证 `opencode-auto:verify`、
   测试执行 `opencode-auto:test`、提交 `opencode-auto:commit`、维护规则
-  `opencode-auto:maint`,各自幂等补写、除此之外永不改写;验证块随 config.verify、
-  测试块随 config.testByDriver 补写/移除,见"verify 验收开关"与
-  "--test-by-driver"条),
+  `opencode-auto:maint`、引用规范 `opencode-auto:refs`(stable-refs P4,规范全文
+  精编:存放目录化/永久路径、引用根相对路径语法、检查三层),各自幂等补写、
+  除此之外永不改写;验证块随 config.verify、测试块随 config.testByDriver 补写/移除,
+  见"verify 验收开关"与"--test-by-driver"条),
   不置只读(任务可更新其余内容,但经 agent 契约约束不得删除
   或改写任何标记块、更新其余内容须遵守维护规则块——保持精简 ≤150 行、路由到
   docs/agents/<主题>.md 存放跨任务工作流知识、更新不追加、只沉淀持久知识;check
