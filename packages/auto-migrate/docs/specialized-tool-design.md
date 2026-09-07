@@ -24,9 +24,9 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
   → .auto/tool.json.done === true → 报告完成,退出 0
   → 启动 server(全程一个实例,注入 runAll 复用)
   → [dryrun: 跳过以下前置步骤,直接走 runAll 的权限预检]
-  → 前置知识提取(docs/prior-kb/prior-<时间戳>.md,已有非空产物则跳过)
+  → 前置知识提取(docs/prior-kb/R<N>-prior-<时间戳>.md,本轮前缀已有非空产物则跳过)
   → 现场清理(本轮标记未建立时;原 continue 流程): 台账有完成阶段/无法解析,
-    或 PLAN.md 有任务,或 migration-kb 残留 → archiveRound 归档 + PLAN.md 重置
+    或 PLAN.md 有任务,或 migration-kb 有本轮前缀残留 → archiveRound 归档 + PLAN.md 重置
   → 建立本轮标记 .auto/tool.json { "round": N }
   → 参数推断(config.source / destDir 缺失时;产物 .auto/infer.json,写回配置)
   → runAll(phases 固定 "admtvk")
@@ -42,12 +42,13 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
   `{ "round": N }` = 第 N 轮进行中: 建立后创建的文件视为"自己的",中断重跑
   依断点续跑,绝不清理自己的现场。`{ "round": N, "done": true }` = 二次迁移
   已完成,再跑报告完成退出 0。删除该文件可显式开启新一轮。
-- `docs/prior-kb/prior-<时间戳>.md`(版本化): 前置知识提取产物。独立于
-  k 阶段的 docs/migration-kb/(existingKnowledge 只读该目录顶层,互不
-  污染;k 阶段在本轮收尾照常产出本轮新知识)。
+- `docs/prior-kb/R<N>-prior-<时间戳>.md`(版本化,永久): 前置知识提取产物,
+  不随交接/轮次归档移动(stable-refs R2),轮次经 R<N>- 前缀表达。独立于
+  k 阶段的 docs/migration-kb/(各自幂等检查只读本轮前缀,互不污染;k 阶段
+  在本轮收尾照常产出本轮新知识;历轮文档原地保留、跨轮累积注入)。
 
 中断恢复无需新增机制:台账 + PLAN.md + .auto/progress.json 推导断点;
-前置步骤各自幂等(提取看产物是否存在、现场清理看本轮标记是否已建立、
+前置步骤各自幂等(提取看本轮前缀产物是否存在、现场清理看本轮标记是否已建立、
 推断看配置键是否已固化、归档各步 rename 幂等)。清理与建立标记之间中断:
 重跑时 PLAN.md 已重置为空模板(无任务)、台账为空 → 不再清理,只补建标记。
 
@@ -84,10 +85,11 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 - 输入:brief.md、docs/ 全树(含 docs/phases/ 各阶段归档与 round-N 轮次
   归档——已有迁移结果不限于本工具此前的输出,也可能是人工或其他工具的
   产物)、git log 概览。
-- 产物:docs/prior-kb/prior-<时间戳>.md,章节骨架复用 knowledge.md 的
+- 产物:docs/prior-kb/R<N>-prior-<时间戳>.md,章节骨架复用 knowledge.md 的
   知识库骨架(迁移概要/API 映射/实现模式/坑点/可复用规则/设计偏差/验证
   证据/参考)。
-- 幂等:docs/prior-kb/ 下已存在非空 .md → 跳过。
+- 幂等(轮次前缀守卫):docs/prior-kb/ 下存在本轮 R<N>- 前缀的非空 .md →
+  跳过;第 1 轮时无 R 前缀的存量(P2 前布局)按读回落视为本轮产物。
 - 失败:仅 ⚠ 警告后继续(决策 3)。
 - 消费:本轮首个阶段规划会话(台账为空时)经 loop.ts planPhase 注入——
   与 prevRoundDigest 合并为一个 prevRound 字符串传入 renderPhasePlan,
@@ -187,34 +189,33 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 
 1. readToolState → `!done` → 报错退出 1(报文见 9.1 两种形态)。
 2. `config.source.path → nextPath`,saveProjectConfig 落盘。
-3. `archivePriorKnowledge`(核心归档原语,round = `state.round`,缺失回落
-   `currentRound`):`docs/prior-kb/` 全部直接条目移入
-   `docs/phases/round-<N>/prior-kb/`,源目录清空。
-4. 删 `.auto/infer.json`(陈旧推断产物)与 `.auto/tool.json`(清 done 标记)。
+3. 删 `.auto/infer.json`(陈旧推断产物)与 `.auto/tool.json`(清 done 标记)。
+
+prior-kb 不做轮间搬移(stable-refs R2:docs/prior-kb/ 永久):新一轮以轮次
+前缀守卫区分——R<N>+1- 前缀无文件,提取幂等检查必然放行、重新蒸馏。
 
 成功后必须重读 state(内存旧值仍是 done,直接复用会误报"已完成"提前退出)并
-同步内存 config.source。此后零新增编排,自然流程接管:前置知识提取(prior-kb
-已空 → 跳过检查必然放行,重新蒸馏)→ 现场清理(marker 缺失 + 台账全满 →
+同步内存 config.source。此后零新增编排,自然流程接管:前置知识提取(本轮前缀
+无产物 → 放行,重新蒸馏)→ 现场清理(marker 缺失 + 台账全满 →
 archiveRound 归档完成轮 + PLAN 重置 + forgetProgress)→ 建新轮标记 → 参数推断
 跳过(config 完整)→ runAll(新 source.path 生效)。
 
-轮号口径:round-N/ 语义是"第 N 轮开始时的现场"。prior-kb 是第 N 轮的输入,故
-归档进 round-N/;随后 archiveRound 因 round-N/ 已存在而把完成轮产物归档进
-round-(N+1)/。跨号可接受、无数据丢失(archiveRound 跳过 round-* 条目),
-prevRoundDigest 取 round-(N+1)/ 恰为上一完成轮的交接与 migration-kb,注入
+轮号口径:round-N/ 语义是"第 N 轮开始时的现场"。--next-path 过渡不建轮次
+目录,archiveRound 把第 N 轮完成产物归档进 round-N/,新标记 round = N+1;
+prevRoundDigest 取 round-N/ 恰为上一完成轮的交接与 migration-kb,注入
 语义不变。
 
 ### 9.3 知识整理链路(零新增注入机制)
 
-旧 prior-kb 与上一轮 migration-kb/交接随归档进入轮次目录 → 新一轮前置知识
-提取会话细读 docs/ 全树(含轮次归档)重新蒸馏出新 prior 文档 →
+旧 prior-kb 与上一轮 migration-kb 原地保留(永久路径)→ 新一轮前置知识
+提取会话细读 docs/ 全树(含轮次归档)重新蒸馏出新 prior 文档(R<N>+1- 前缀)→
 priorKnowledgeDigest 注入本轮首个规划会话;prevRoundDigest(上轮最终交接 +
 migration-kb 全文)照常注入同一会话;归档目录索引供各会话按需自行取用
 ("蒸馏产物唯一通道"纪律不变)。
 
 ### 9.4 中断恢复时序
 
-过渡各步幂等(配置重写同值、归档 rename、rm force),任一步中断后:
+过渡各步幂等(配置重写同值、rm force),任一步中断后:
 
 - done 标记未删 → 重跑同一命令(带 --next-path)全流程重入,安全;
 - done 标记已删、自然流程未建新标记 → 带 --next-path 重跑被严格前置拒绝

@@ -6,7 +6,7 @@
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
-import { archivePriorKnowledge, existingKnowledge, extractPriorKnowledge } from "@opencode-ai/auto-core/knowledge"
+import { existingKnowledge, extractPriorKnowledge } from "@opencode-ai/auto-core/knowledge"
 import { banner, log } from "@opencode-ai/auto-core/log"
 import { renderAgentContract, runAll } from "@opencode-ai/auto-core/loop"
 import type { ModeSpec } from "@opencode-ai/auto-core/mode"
@@ -74,14 +74,14 @@ export function needsSceneCleanup(markerExists: boolean, ledgerDone: readonly st
 }
 
 // --next-path 轮间过渡(纯 fs、不起 server,便于离线测试): 前一轮彻底完成(done
-// 标记)前提下修订 source.path、把旧 docs/prior-kb/ 归档进
-// docs/phases/round-<N>/prior-kb/(N = 完成轮标记号,缺失回落 currentRound——
-// 归档后源目录清空,新一轮的前置知识提取必然重新蒸馏,旧文档成为提取输入)、清
-// 陈旧推断产物与 done 标记;此后主流程既有现场清理分支(marker 缺失即触发)自然
-// 接管,零新增编排。各步幂等(配置重写、rename、rm force),任一步中断后重跑
-// 安全:done 标记未删 → 带参重跑全流程重入;已删 → 重跑被 !done 严格拒绝,报文
-// 指引不带参数续跑。返回 0 = 过渡完成;{error} = 前一轮未彻底完成或迁移源缺失
-// (调用方转退出码 1,报文区分进行中/无标记两种形态)。
+// 标记)前提下修订 source.path、清陈旧推断产物与 done 标记;此后主流程既有现场清
+// 理分支(marker 缺失即触发)自然接管,零新增编排。前置知识不做轮间搬移(stable-
+// refs R2: docs/prior-kb/ 永久),新一轮以轮次前缀守卫区分——R<N>+1- 前缀无文
+// 件,提取幂等检查必然放行、重新蒸馏,历轮文档原地保留跨轮累积注入。各步幂等
+// (配置重写、rm force),任一步中断后重跑安全:done 标记未删 → 带参重跑全流程
+// 重入;已删 → 重跑被 !done 严格拒绝,报文指引不带参数续跑。返回 0 = 过渡完成;
+// {error} = 前一轮未彻底完成或迁移源缺失(调用方转退出码 1,报文区分进行中/无
+// 标记两种形态)。
 export async function prepareNextRound(
   directory: string,
   config: ProjectConfig,
@@ -97,11 +97,8 @@ export async function prepareNextRound(
   }
   const source = config.source
   if (!source) return { error: "--next-path 依赖已固化的迁移源(--source-dir): 配置缺失,请先完成一轮迁移或编辑 .opencode/auto/config.json" }
-  const round = state.round ?? (await currentRound(directory))
   await saveProjectConfig(directory, { ...config, source: { dir: source.dir, path: nextPath } })
   log(`✓ 迁移参数已修订: source.path → ${nextPath}`)
-  await archivePriorKnowledge(directory, round)
-  log(`✓ 前置知识已归档(第 ${round} 轮): docs/phases/round-${round}/prior-kb/,新一轮将重新蒸馏`)
   await rm(join(directory, ".auto", "infer.json"), { force: true })
   await rm(join(directory, STATE_FILE), { force: true })
   return 0
@@ -257,14 +254,18 @@ export async function runTool(
 
       // 现场清理(原 continue 流程): 知识已蒸馏落盘后,若本轮标记未建立,目录里的
       // 阶段状态都是"别人的"遗留——台账有完成阶段或无法解析、PLAN.md 有任务或
-      // migration-kb 有残留,即归档进轮次目录并重置 PLAN.md,本轮从头规划。无论
-      // 遗留来自本工具此前的轮次还是人工/其他工具的迁移。随后建立本轮标记: 此后
-      // 创建的文件视为"自己的",中断重跑依标记续跑、不再清理。
+      // migration-kb 有本轮前缀残留,即归档进轮次目录并重置 PLAN.md,本轮从头规划。
+      // 无论遗留来自本工具此前的轮次还是人工/其他工具的迁移。随后建立本轮标记:
+      // 此后创建的文件视为"自己的",中断重跑依标记续跑、不再清理。
       const markerExists = await Bun.file(join(directory, STATE_FILE)).exists()
       if (!markerExists) {
         const ledgerDone = await readLedger(directory).then((ledger) => ledger.done as readonly string[], () => undefined)
+        // migration-kb 残留以轮次前缀守卫判定(stable-refs R2): 只认本轮 R<N>-
+        // 前缀文档,历轮永久文档是合法存量、不触发清理;归档在现场判定之后,故
+        // 此处 currentRound 仍是待清理轮的号。
+        const sceneRound = await currentRound(directory)
         const sceneHasContent =
-          (await load(planFile).then((plan) => plan.tasks.length > 0, () => true)) || (await existingKnowledge(directory)) !== undefined
+          (await load(planFile).then((plan) => plan.tasks.length > 0, () => true)) || (await existingKnowledge(directory, sceneRound)) !== undefined
         if (needsSceneCleanup(markerExists, ledgerDone, sceneHasContent)) {
           const round = await archiveRound(directory)
           log(`✓ 已有迁移现场已归档(第 ${round} 轮): docs/phases/round-${round}/;其结论将作为本轮输入`)

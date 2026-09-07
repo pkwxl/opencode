@@ -109,22 +109,23 @@ describe("prepareNextRound(--next-path 轮间过渡)", () => {
     return dir
   }
 
-  test("完成态: 修订 source.path + 归档 prior-kb 到 state.round 轮 + 清推断产物与标记", async () => {
+  test("完成态: 修订 source.path + prior-kb 原地保留 + 清推断产物与标记", async () => {
     const dir = await seedDir()
     try {
       mkdirSync(join(dir, ".auto"), { recursive: true })
       writeFileSync(join(dir, ".auto/tool.json"), JSON.stringify({ round: 2, done: true }))
       writeFileSync(join(dir, ".auto/infer.json"), "{}")
       mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/prior-kb/prior-x.md"), "旧知识")
+      writeFileSync(join(dir, "docs/prior-kb/R2-prior-x.md"), "旧知识")
       mkdirSync(join(dir, "docs/phases/round-1"), { recursive: true })
       writeFileSync(join(dir, "docs/phases/round-1/PLAN.md"), "# 旧轮")
       expect(await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")).toBe(0)
       // 配置: 仅 source.path 修订,dir 与其余键不动
       expect(await loadProjectConfig(dir)).toMatchObject({ source: { dir: "legacy", path: "src/new.ts" }, destDir: "target" })
-      // prior 文档落位 state.round(2)轮,源目录清空 → 跳过检查必然放行重新蒸馏
-      expect(await Bun.file(join(dir, "docs/phases/round-2/prior-kb/prior-x.md")).text()).toBe("旧知识")
-      expect(readdirSync(join(dir, "docs/prior-kb"))).toEqual([])
+      // prior 文档不搬移(stable-refs R2 永久路径): 原地保留,新一轮靠 R<N>+1- 前缀守卫重新蒸馏
+      expect(await Bun.file(join(dir, "docs/prior-kb/R2-prior-x.md")).text()).toBe("旧知识")
+      expect(readdirSync(join(dir, "docs/phases/round-1"))).toEqual(["PLAN.md"])
+      expect(await Bun.file(join(dir, "docs/phases/round-2")).exists()).toBe(false)
       // 陈旧推断产物与 done 标记已清
       expect(await Bun.file(join(dir, ".auto/infer.json")).exists()).toBe(false)
       expect(await Bun.file(join(dir, ".auto/tool.json")).exists()).toBe(false)
@@ -155,7 +156,7 @@ describe("prepareNextRound(--next-path 轮间过渡)", () => {
     }
   })
 
-  test("round 缺失回落 currentRound: {done:true} 且无轮次归档 → 归档到 round-1/prior-kb/", async () => {
+  test("round 缺失({done:true} 无轮次号)同样成功: 零轮次依赖(prior-kb 不搬移)", async () => {
     const dir = await seedDir()
     try {
       mkdirSync(join(dir, ".auto"), { recursive: true })
@@ -163,7 +164,8 @@ describe("prepareNextRound(--next-path 轮间过渡)", () => {
       mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
       writeFileSync(join(dir, "docs/prior-kb/prior-a.md"), "知识甲")
       expect(await prepareNextRound(dir, await loadProjectConfig(dir), "src/new.ts")).toBe(0)
-      expect(await Bun.file(join(dir, "docs/phases/round-1/prior-kb/prior-a.md")).text()).toBe("知识甲")
+      expect(await Bun.file(join(dir, "docs/prior-kb/prior-a.md")).text()).toBe("知识甲")
+      expect(await Bun.file(join(dir, "docs/phases/round-1")).exists()).toBe(false)
       expect(await Bun.file(join(dir, ".auto/tool.json")).exists()).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -191,37 +193,50 @@ describe("prior-kb(前置知识提取)", () => {
     return mkdtempSync(join(tmpdir(), "auto-prior-"))
   }
 
-  test("priorKnowledgeFile: docs/prior-kb/prior-<时间戳>.md(与 k 阶段 migration-kb 分离)", () => {
-    expect(priorKnowledgeFile()).toMatch(/^docs\/prior-kb\/prior-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.md$/)
+  test("priorKnowledgeFile: docs/prior-kb/R<N>-prior-<时间戳>.md(与 k 阶段 migration-kb 分离)", () => {
+    expect(priorKnowledgeFile(2)).toMatch(/^docs\/prior-kb\/R2-prior-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.md$/)
   })
 
-  test("existingPriorKnowledge: 非空 .md 存在即返回;空文件/非 md 不算", async () => {
+  test("existingPriorKnowledge: 本轮 R<N>- 前缀守卫;空文件/非 md 不算;第 1 轮无前缀存量读回落", async () => {
     const dir = tempDir()
     try {
-      expect(await existingPriorKnowledge(dir)).toBeUndefined()
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
       const kb = join(dir, "docs/prior-kb")
       mkdirSync(kb, { recursive: true })
-      writeFileSync(join(kb, "prior-empty.md"), " \n")
-      expect(await existingPriorKnowledge(dir)).toBeUndefined()
-      writeFileSync(join(kb, "prior-a.md"), "知识")
-      expect(await existingPriorKnowledge(dir)).toBe(join("docs/prior-kb", "prior-a.md"))
+      // 前几轮前缀文档不算本轮已提取
+      writeFileSync(join(kb, "R1-prior-old.md"), "上一轮")
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
+      // 本轮前缀: 空文件不算,非空 .md 返回
+      writeFileSync(join(kb, "R2-prior-empty.md"), " \n")
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
+      writeFileSync(join(kb, "R2-prior-a.md"), "知识")
+      expect(await existingPriorKnowledge(dir, 2)).toBe(join("docs/prior-kb", "R2-prior-a.md"))
+      // 第 1 轮: 本轮 R1- 前缀优先于无前缀存量(P2 前布局读回落仅在前缀文件缺失时生效)
+      expect(await existingPriorKnowledge(dir, 1)).toBe(join("docs/prior-kb", "R1-prior-old.md"))
+      rmSync(join(kb, "R1-prior-old.md"))
+      writeFileSync(join(kb, "prior-legacy.md"), "旧布局")
+      expect(await existingPriorKnowledge(dir, 1)).toBe(join("docs/prior-kb", "prior-legacy.md"))
+      // 第 2 轮不回落无前缀存量
+      rmSync(join(kb, "R2-prior-a.md"))
+      rmSync(join(kb, "R2-prior-empty.md"))
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("priorKnowledgeDigest: 全部非空文档按文件名拼接;无产物 → undefined", async () => {
+  test("priorKnowledgeDigest: 全部非空文档按文件名拼接(历轮前缀跨轮累积);无产物 → undefined", async () => {
     const dir = tempDir()
     try {
       expect(await priorKnowledgeDigest(dir)).toBeUndefined()
       const kb = join(dir, "docs/prior-kb")
       mkdirSync(kb, { recursive: true })
-      writeFileSync(join(kb, "prior-b.md"), "乙")
-      writeFileSync(join(kb, "prior-a.md"), "甲")
+      writeFileSync(join(kb, "R2-prior-b.md"), "乙")
+      writeFileSync(join(kb, "R1-prior-a.md"), "甲")
       writeFileSync(join(kb, "note.txt"), "不算")
       const digest = await priorKnowledgeDigest(dir)
-      expect(digest).toContain("### docs/prior-kb/prior-a.md")
-      expect(digest).toContain("### docs/prior-kb/prior-b.md")
+      expect(digest).toContain("### docs/prior-kb/R1-prior-a.md")
+      expect(digest).toContain("### docs/prior-kb/R2-prior-b.md")
       expect(digest!.indexOf("甲")).toBeLessThan(digest!.indexOf("乙"))
     } finally {
       rmSync(dir, { recursive: true, force: true })
