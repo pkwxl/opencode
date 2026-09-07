@@ -114,13 +114,13 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("autoNumber 缺省 false;合法布尔原样读回", async () => {
+  test("autoNumber 缺省 true(stable-refs D5);合法布尔原样读回", async () => {
     const dir = tempDir()
     try {
-      expect(CONFIG_DEFAULTS.autoNumber).toBe(false)
-      expect((await loadProjectConfig(dir)).autoNumber).toBe(false)
-      writeConfig(dir, JSON.stringify({ autoNumber: true }))
+      expect(CONFIG_DEFAULTS.autoNumber).toBe(true)
       expect((await loadProjectConfig(dir)).autoNumber).toBe(true)
+      writeConfig(dir, JSON.stringify({ autoNumber: false }))
+      expect((await loadProjectConfig(dir)).autoNumber).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -265,17 +265,17 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
 
   test("摘要一行含全部键的生效值(phases 追加在末尾)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "模式 migrate · agent auto · 子任务 auto · 验收 off · 看门狗 idle 10m/max 不设 · 提交 on · 上下文上限 64k · 阶段 m",
+      "模式 migrate · agent auto · 子任务 auto · 验收 off · 看门狗 idle 10m/max 不设 · 提交 on · 自动编号 on · 上下文上限 64k · 阶段 m",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "模式 migrate · agent custom · 子任务 auto · 验收 on · 看门狗 idle 10m/max 30m · 提交 on · 上下文上限 64k · 阶段 m",
+      "模式 migrate · agent custom · 子任务 auto · 验收 on · 看门狗 idle 10m/max 30m · 提交 on · 自动编号 on · 上下文上限 64k · 阶段 m",
     )
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("阶段 admtvk")
     // 测试由 driver 执行键入摘要,交接修饰随 handoverTest
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true })).toContain("· 测试 driver on ·")
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true, handoverTest: true })).toContain("· 测试 driver on(交接) ·")
-    // 自动编号仅启用时入摘要
-    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, autoNumber: true })).toContain("· 自动编号 on ·")
-    expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("自动编号")
+    // 自动编号缺省启用入摘要(stable-refs D5);关闭时移除该段
+    expect(formatProjectConfig(CONFIG_DEFAULTS)).toContain("· 自动编号 on ·")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, autoNumber: false })).not.toContain("自动编号")
   })
 })

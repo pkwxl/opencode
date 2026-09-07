@@ -300,6 +300,7 @@ describe("CLI: init 固化项目配置", () => {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain("⚙ 项目配置(.opencode/auto/config.json)")
+      expect(init.out).toContain("自动编号 on")
       expect(init.out).toContain("编辑 PLAN.md 填入任务后运行")
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
@@ -312,7 +313,7 @@ describe("CLI: init 固化项目配置", () => {
         commit: true,
         testByDriver: false,
         handoverTest: false,
-        autoNumber: false,
+        autoNumber: true,
         phases: "m",
       })
     } finally {
@@ -336,7 +337,7 @@ describe("CLI: init 固化项目配置", () => {
         commit: false,
         testByDriver: false,
         handoverTest: false,
-        autoNumber: false,
+        autoNumber: true,
         phases: "m",
       })
       expect((await runCli(["init", dir])).code).toBe(0)

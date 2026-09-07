@@ -254,8 +254,8 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 
 ### P3 编号默认开启
 
-- [ ] config.ts 缺省翻转 + config / e2e 快照
-- [ ] index.ts / README / behavior 文案;auto-number-design.md 修订注记
+- [x] config.ts 缺省翻转 + config / e2e 快照
+- [x] index.ts / README / behavior 文案;auto-number-design.md 修订注记
 - 收口:typecheck + test;init 冒烟确认缺省摘要「自动编号 on」
 
 ### P4 引用一致性三层
@@ -285,7 +285,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 |---|---|---|---|---|
 | P1 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): P1-S1..S4(四会话提交,见 stable-refs-p1-plan.md §8) | 本包 `bun typecheck` + `bun test` 全绿(340 pass);auto/ worktree 三包集成冒烟待执行 |
 | P2 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P2 归档缩减(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);三包集成冒烟待执行(P1 冒烟一并补) |
-| P3 | 未开始 | - | - | - |
+| P3 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P3 编号默认开启(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);init 冒烟确认缺省摘要「自动编号 on」与 phases="m" ℹ 提示;structure.md 同步缺省注记 |
 | P4 | 未开始 | - | - | - |
 
 ## 8. 遗留风险与边界

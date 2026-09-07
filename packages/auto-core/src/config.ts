@@ -33,7 +33,8 @@ export type ProjectConfig = {
   handoverTest: boolean
   // --auto-number: 自动编号——任务编号(T-NNN)在目标目录永不重复,下一可用编号
   // 持久化在 .auto/next-task,规划会话自该记录续接编号;记录缺失时先经 AI 恢复
-  // 会话推导恢复再继续。缺省 false(编号自 T-001 起,与历史行为一致)。
+  // 会话推导恢复再继续。缺省 true(stable-refs D5 翻转);--no-auto-number 保留为
+  // 退出开关(关闭后编号自 T-001 重排,与历史行为一致)。
   autoNumber: boolean
   // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
   // 单次运行,行为与阶段化之前完全一致。
@@ -59,7 +60,7 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   commit: true,
   testByDriver: false,
   handoverTest: false,
-  autoNumber: false,
+  autoNumber: true,
   phases: "m",
 }
 

@@ -29,9 +29,9 @@
   既有);结束语按 phases 分两态("m" 维持"编辑 PLAN.md"现状,其余提示开始首个未完成
   阶段规划);phases 含 v 而 verify 未启用时 init 打 note 一次(v 与 verify 正交);
   phases ≠ "m" 时 PLAN.md 以空模板(templates/PLAN.scaffold.md)产出,交给规划会话。
-- --auto-number/--no-auto-number(config.autoNumber,缺省 false = 沿用历史行为;宪法级
-  选项,init/continue 修订,run 拒绝;两开关同现且均未带 =false 为用法错误;设计文档
-  docs/auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
+- --auto-number/--no-auto-number(config.autoNumber,缺省 true,--no-auto-number 为退出
+  开关;宪法级选项,init/continue 修订,run 拒绝;两开关同现且均未带 =false 为用法错误;
+  设计文档 docs/auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
   编号持久化在 .auto/next-task(内容仅为一个正整数,driver 维护;.auto/ 已被 gitignore,
   新克隆天然缺失)。唯一消费点是阶段规划会话:planPhase 先 ensureNumbering 确保记录
   就位,把记录值作为编号起点注入规划提示词(替代"自 T-001 起"文案),collect 校验全部

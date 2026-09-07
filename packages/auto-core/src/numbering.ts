@@ -11,7 +11,7 @@ import { requireArtifact, type Opts } from "./runner"
 // T-001 重排);记录缺失时先恢复再继续——无任何历史证据(全新项目)直接写 1,
 // 有历史证据时开旁路一次性 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导
 // 下一编号(git 历史中可能存在产物已被删除的编号,纯文件扫描看不到),driver
-// 以确定性扫描的下限校验其产出。--no-auto-number(缺省)下本文件整体不生效。
+// 以确定性扫描的下限校验其产出。--no-auto-number(退出开关)下本文件整体不生效。
 
 // 编号记录文件(相对目标目录): 内容仅为一个正整数(下一可用编号)。
 export const NEXT_TASK_FILE = join(".auto", "next-task")
