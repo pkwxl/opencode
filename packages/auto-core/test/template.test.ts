@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parsePartials, promptTemplateNames, registerTemplate, renderText, renderTemplate, usePromptLibrary } from "../src/template"
+import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 
 // 每个用例后恢复仅内置,避免覆盖状态泄漏到其他测试文件。
 afterEach(() => usePromptLibrary(undefined))
@@ -61,6 +62,21 @@ describe("共享片段解析", () => {
     expect(partials.a).toBe("内容甲")
     expect(partials.b).toBe("内容乙")
   })
+
+  test("doc-layout 节存在且不含模板变量;任务模板引用渲染为永久路径规范", () => {
+    usePromptLibrary(undefined)
+    const text = renderText("{{> doc-layout}}", {})
+    expect(text).toContain("文档存放规范")
+    expect(text).toContain("docs/T-NNN/")
+    expect(text).toContain("S<两位序号>/index.md")
+    expect(text).toContain("永久路径")
+    expect(text).toContain("不要在 docs/ 顶层另建平铺任务文件")
+    // 不含模板变量: phase-plan 等无 taskId 的模板同样可引用
+    expect(text).not.toMatch(/\{\{|\}\}/)
+    // 引用渲染: understand(任务文档写者)与 phase-plan(无 taskId 的规划者)都带该段
+    expect(renderTemplate("understand", { taskId: "T-001", taskBlock: "x" })).toContain("文档存放规范")
+    expect(renderTemplate("phase-plan", { phase: "a", phaseName: "分析" })).toContain("文档存放规范")
+  })
 })
 
 describe("内置模板注册表", () => {
@@ -109,11 +125,11 @@ describe("内置模板注册表", () => {
       subtask: "子任务",
       index: "1",
       subtaskList: "1. 任务甲\n2. 任务乙",
-      outputFile: "docs/T-001/S01.md",
+      outputFile: "docs/T-001/S01/index.md",
       warm: true,
       scriptPath: "/tmp/verify.sh",
       verifyState: "未声明",
-      handoffFile: "docs/T-001.handoff.md",
+      handoffFile: "docs/T-001/handoff.md",
       stageName: "终审审计",
       round: "1",
       proposalFile: "docs/final/plan-audit-r1.md",
@@ -294,6 +310,8 @@ describe("动态注册(registerTemplate)", () => {
       expect(renderTemplate("shell-extra", { topic: "乙" })).toBe("注册版: 乙")
     } finally {
       rmSync(dir, { recursive: true, force: true })
+      // 注册表面是模块级全局: 恢复内置 dryrun 文案,防跨测试文件污染(renderDryrun 等)
+      registerTemplate("dryrun", readFileSync(tplDryrun, "utf8"))
     }
   })
 

@@ -33,3 +33,9 @@ git 提交由 driver 在会话结束后统一执行,你不要运行 git commit �
    - 每项声明产出:文档类注明文件路径,代码类注明模块/文件范围;
    - 上限导向:每项以单个会话用较小上下文(约 {{contextBudget}} tokens 量级)
      可完成为宜;
+## doc-layout
+文档存放规范: 每个任务(T-NNN)的全部文档写入该任务自己的目录 docs/T-NNN/ 内(理解摘要
+context.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告 audit.md、修复检查项
+fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级测试交接写同目录
+testhandoff.md。这些路径一经创建即为永久路径——不移动、不改名;引用其他任务的文档时
+一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。

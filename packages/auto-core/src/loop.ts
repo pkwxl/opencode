@@ -1,7 +1,8 @@
 import { createInterface } from "node:readline/promises"
 import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
-import { appendFinalTask, generateFinalTask, routeFinal, type FinalProposal } from "./final"
+import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
+import { migrateLegacyDocs } from "./docpaths"
 import { commitTree, pendingChanges, repoRoots } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
@@ -311,6 +312,17 @@ export async function runAll(
   }
   process.on("SIGINT", onSigint)
   try {
+    // 存量任务文档目录化迁移(stable-refs P1): 平铺旧布局 → docs/T-NNN/;幂等,
+    // dryrun 预检不改动工作区故跳过(P1-D6)。
+    if (!opts.dryrun) {
+      const migrated = await migrateLegacyDocs(directory)
+      if (migrated.moved.length || migrated.rewritten.length) {
+        log(`↻ 存量任务文档目录化迁移: 搬移 ${migrated.moved.length} 项,活文档引用改写 ${migrated.rewritten.length} 个文件`)
+        if (opts.commit !== false) {
+          await commitTree(directory, { id: "PLAN", title: "任务文档目录化迁移" }, { stage: "doc-migrate", subject: "PLAN doc-migrate 任务文档目录化迁移" })
+        }
+      }
+    }
     // 阶段化流程: 台账非法为环境错误(H 节),提前于 server 启动求值一次路由,
     // 免得白白拉起服务再退出;正式路由在阶段循环内逐轮重新求值(推导式状态)。
     const phases = opts.phases ?? "m"
@@ -365,7 +377,7 @@ export async function runAll(
     // advanceFinal 闭包内引用会失去窄化,以 const 捕获已就绪的 server 句柄。
     const serverHandle = server
     // --final-review 终审闭环推进(设计文档 B.2/C): 路由纯函数依(带 final 标记的
-    // 任务及其状态,docs/final/ 产物)决定下一步——开生成会话产出提案、提案已
+    // 任务及其状态,终审产物 docs/T-F<k>/)决定下一步——开生成会话产出提案、提案已
     // 产出直接解析追加(C.3)、熔断/报告异常 block 对应终审任务(B.5/C.4);追加后
     // 主循环 next() 按文件顺序自然拾取,无新增持久化状态。announce 为真时
     // (next() 为空的启动挂点)先打印终审横幅;runTask 完成后的路由挂点不打印。
@@ -386,7 +398,7 @@ export async function runAll(
         return "appended" as const
       }
       if (route.type === "append") {
-        log(`↻ 终审提案 docs/final/plan-${route.stage}-r${route.round}.md 已产出(追加前中断),直接解析追加`)
+        log(`↻ 终审提案 ${finalProposalFile(route.stage, route.round, finalIndex(plan))} 已产出(追加前中断),直接解析追加`)
         return append(route.proposal)
       }
       log(`▶ 终审闭环: 开生成会话规划「${stageText(route.stage)}」任务(第 ${route.round} 轮)`)

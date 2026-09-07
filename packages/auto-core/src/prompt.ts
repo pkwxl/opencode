@@ -4,6 +4,7 @@
 // 的调用点不感知模板机制。
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
+import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Task } from "./plan"
 import { phaseText, type Phase } from "./phases"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
@@ -54,11 +55,12 @@ export type TestRunInfo = VerifyRun & { seq: number }
 
 // --handover-test 的测试交接文档(相对目标目录): 测试失败且上下文达到上限时,
 // 会话把进度与后续步骤写入该文件后结束,driver 开新会话以 continuation 提示续跑。
-// 文件按执行范围命名: 子任务会话带 -S<n> 后缀(docs/<id>-S<n>.testhandoff.md),
-// 整任务会话与验收修复轮为任务级(docs/<id>.testhandoff.md)——交接文档只对本
-// 执行范围生效,防止下一子任务误读上一子任务的遗留交接。
+// 文件按执行范围命名: 子任务会话写 docs/<id>/S<两位序号>/testhandoff.md,整任务
+// 会话与验收修复轮为任务级(docs/<id>/testhandoff.md)——交接文档只对本执行范围
+// 生效,防止下一子任务误读上一子任务的遗留交接。路径构造经 docpaths(目录化
+// 布局的唯一构造点),导出名与签名保持稳定,runner 调用面零改动。
 export function testHandoffFile(task: Task, subtask?: number): string {
-  return `docs/${task.id}${subtask !== undefined ? `-S${subtask}` : ""}.testhandoff.md`
+  return subtask !== undefined ? subtaskDoc(task.id, subtask, "testhandoff") : taskDoc(task.id, "testhandoff")
 }
 
 // 测试执行结果反馈(steer 注入执行会话): 退出码与输出文件路径,AI 直读文件判断。
@@ -102,7 +104,7 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
 }
 
 // 理解会话(fork 三段式 ①,fork-decompose 设计 §6): 只读理解 + 预算内选读 +
-// 写 docs/<id>.context.md 四节摘要;摘要同时是磁盘态兜底(fork 失败冷启动输入、
+// 写 docs/<id>/context.md 四节摘要;摘要同时是磁盘态兜底(fork 失败冷启动输入、
 // wrapup/后续任务低成本引用)与 digest 模式的基点原料(逐字注入基点会话)。
 export function renderUnderstand(plan: Plan, task: Task, opts: Opts = {}): string {
   return renderTemplate("understand", baseCtx(plan, task, opts))
@@ -115,7 +117,7 @@ export function renderContextBase(task: Task, digest: string): string {
 }
 
 // Decomposition session: read-only analysis, then write the subtask list to
-// docs/<id>.subtasks.md. The driver parses it and injects the checklist into
+// docs/<id>/subtasks.md. The driver parses it and injects the checklist into
 // PLAN.md itself, so the session must not touch PLAN.md.
 // 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
 // 开启细粒度档),库中无此名回退通用 decompose。
@@ -135,7 +137,7 @@ export function decomposeTemplateName(phase: Phase | undefined, names: string[])
 // self-checks; ticking the checkbox is the driver's job when the session ends
 // (会话后的统一提交同样由 driver 执行,见 src/git.ts)。
 // handoff-steer 同样适用于子任务会话: 上下文达到 2x contextLimit 时 driver
-// 插入交接提示,会话把进度写入 docs/<id>.handoff.md 后由新会话续跑;
+// 插入交接提示,会话把进度写入 docs/<id>/handoff.md 后由新会话续跑;
 // continuation 表示此前会话因上下文限制中断,需先读交接文档继续。
 // index/subtaskList/outputFile/warm(fork 三段式流水线,fork-decompose 设计
 // §8): 注入全量检查项列表与「你本次只负责其中的第 N 项」、文档类产出的独立
@@ -153,7 +155,7 @@ export function renderSubtask(
   const index = at >= 0 ? String(at + 1) : undefined
   return renderTemplate("subtask", {
     // index 的推导值回灌 baseCtx: 测试交接文档命名(测试协议段)与本处注入的
-    // 「第 N 项」同源,缺省推导(旧调用不传 index)时同样带 -S<n> 后缀。
+    // 「第 N 项」同源,缺省推导(旧调用不传 index)时同样落子任务级目录命名。
     ...baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined }),
     subtask,
     continuation: Boolean(opts.continuation),
@@ -167,9 +169,9 @@ export function renderSubtask(
 
 // 子任务产物文件(相对目标目录): 文档/分析/设计类子任务的独立落盘文件,driver
 // 机械命名(两位递增,避免 slug 清洗歧义),标题写在文件首行;代码类产出直接落
-// 源码树,不重复落文档(fork-decompose 设计 §4.7)。
+// 源码树,不重复落文档(fork-decompose 设计 §4.7)。构造经 docpaths 目录化。
 export function subtaskOutputFile(task: Task, index: number): string {
-  return `docs/${task.id}/S${String(index).padStart(2, "0")}.md`
+  return subtaskDoc(task.id, index, "index")
 }
 
 // Wrap-up session: every subtask is already ticked by the driver. Only docs
@@ -226,7 +228,7 @@ export function renderReview(plan: Plan, task: Task, opts: Opts & { final: boole
 }
 
 // --review fix-planning session (fresh side session): turn the audit gap into
-// self-contained fix checklist items in docs/<id>.fix.md.
+// self-contained fix checklist items in docs/<id>/fix.md.
 export function renderReviewFix(plan: Plan, task: Task, gap: string, opts: Opts = {}): string {
   return renderTemplate("review-fix", { ...baseCtx(plan, task, opts), gap })
 }
@@ -238,6 +240,10 @@ export type FinalStage = "audit" | "remediate" | "validate" | "finalize"
 // --final-review 终审任务生成会话(旁路一次性,复用 requireArtifact 骨架);四阶段
 // 的职责与报告产出要求以条件段内联在 templates/prompts/final-task.md。
 export function renderFinalTask(plan: Plan, stage: FinalStage, round: number, prior: string, mode?: ModeSpec): string {
+  // 终审产物按产出任务锚定(stable-refs P1-D1): 本会话产出的提案与后续报告都
+  // 落即将追加的 T-F<k> 任务自己的目录(k = finalIndex 同口径,函数内推导——
+  // 为避免 prompt↔final 循环依赖在此内联计数,构造经 docpaths 的 finalDoc)。
+  const index = plan.tasks.filter((task) => task.final).length + 1
   // 终审任务强制跳过任务级验收: verify 恒为 false(state-rule 的 verified 字段
   // 表述不出现;模式文本同经渲染,可自带条件段)。
   const emphasis = stage === "remediate" ? undefined : mode && modeText(mode.final[stage], {})
@@ -249,7 +255,8 @@ export function renderFinalTask(plan: Plan, stage: FinalStage, round: number, pr
     verify: false,
     round: String(round),
     stageName: stageText(stage),
-    proposalFile: `docs/final/plan-${stage}-r${round}.md`,
+    finalTask: `T-F${index}`,
+    proposalFile: finalDoc(index, `plan-${stage}-r${round}.md`),
     reaudit: stage === "audit" && round >= 2,
     stageAudit: stage === "audit",
     stageRemediate: stage === "remediate",
@@ -382,8 +389,9 @@ export function renderInferSource(input: { file: string; brief?: string; priorKb
 // 交接文档(相对目标目录): ondemand 整任务会话与 auto 子任务会话共用——driver 在
 // 上下文达到 2x --context-limit 时插入交接提示,会话把进度写入该文件,末行
 // `状态: 继续|完成` 由 driver 解析。子任务场景的状态以该子任务是否完成计。
+// 构造经 docpaths(任务目录化布局),读点回落由 runner 经 resolveTaskDoc 处理。
 export function handoffFile(task: Task): string {
-  return `docs/${task.id}.handoff.md`
+  return taskDoc(task.id, "handoff")
 }
 
 // driver 在会话进行中(上下文达到交接阈值,2x contextLimit)插入的交接提示
@@ -460,7 +468,7 @@ function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): 
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),
     // 测试交接文档按执行范围命名: index(仅 renderSubtask 传入,子任务序号)存在
-    // 时带 -S<n> 后缀,整任务/修复轮为任务级命名。
+    // 时落子任务级目录(docs/<id>/S<kk>/testhandoff.md),整任务/修复轮为任务级命名。
     testHandoffFile: opts.testByDriver ? testHandoffFile(task, opts.index) : undefined,
     phase,
     phaseName: phaseText(phase),

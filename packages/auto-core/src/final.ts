@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { finalDoc } from "./docpaths"
 import { appendTask, parseFinalMark, type Plan, type Task } from "./plan"
 import { renderFinalTask, stageText, type FinalStage } from "./prompt"
 import { requireArtifact, type Opts } from "./runner"
@@ -8,28 +9,44 @@ import { requireArtifact, type Opts } from "./runner"
 // --final-review 终审闭环状态机(设计文档 docs/mode-final-review-design.md
 // B.2/C 节)。终审阶段是入 PLAN.md 的真任务(T-F<k> + `final: <stage>@<round>`
 // 字段),由主循环 next() 按文件顺序自然执行;本模块是(带 final 标记的任务及
-// 其状态,docs/final/ 产物)的路由函数——无新增持久化状态,中断恢复即重新
+// 其状态,终审产物 docs/T-F<k>/)的路由函数——无新增持久化状态,中断恢复即重新
 // 求值:下一阶段任务已存在则主循环直接拾取(C.1/C.2),提案已产出未追加则
-// 直接解析追加(C.3),全部完成则结束(C.5)。
+// 直接解析追加(C.3),全部完成则结束(C.5)。终审产物按产出任务锚定各自的
+// docs/T-F<k>/ 目录(stable-refs P1-D1,构造经 src/docpaths.ts)。
 
-// 生成会话产出的任务提案文件(相对目标目录)。
-export function finalProposalFile(stage: FinalStage, round: number): string {
-  return `docs/final/plan-${stage}-r${round}.md`
+// 下一终审任务的锚定编号: plan 内带 final 字段任务数 + 1。追加前求值,
+// (plan, stage, round) → k 确定性成立(中断恢复重求值同值);appendFinalTask
+// 的 T-F<k> 编号同源,两处口径绑定防漂移。
+export function finalIndex(plan: Plan): number {
+  return plan.tasks.filter((task) => task.final).length + 1
 }
 
-// 各阶段任务的报告文件(相对目标目录);remediate 的报告名取决于同轮审计
-// 策略(重构→refactor,修补→patch)。
-export function finalReportFile(stage: FinalStage, round: number, remediate: "refactor" | "patch" = "refactor"): string {
+// 生成会话产出的任务提案文件(相对目标目录),锚定即将追加的 T-F<k> 目录。
+export function finalProposalFile(stage: FinalStage, round: number, index: number): string {
+  return finalDoc(index, `plan-${stage}-r${round}.md`)
+}
+
+// 各阶段任务的报告文件(相对目标目录),锚定产出该报告的 T-F<k> 目录;
+// remediate 的报告名取决于同轮审计策略(重构→refactor,修补→patch)。
+export function finalReportFile(stage: FinalStage, round: number, remediate: "refactor" | "patch" = "refactor", index: number): string {
   switch (stage) {
     case "audit":
-      return `docs/final/audit-r${round}.md`
+      return finalDoc(index, `audit-r${round}.md`)
     case "remediate":
-      return `docs/final/${remediate}-r${round}.md`
+      return finalDoc(index, `${remediate}-r${round}.md`)
     case "validate":
-      return `docs/final/validate-r${round}.md`
+      return finalDoc(index, `validate-r${round}.md`)
     case "finalize":
-      return `docs/final/finalize.md`
+      return finalDoc(index, "finalize.md")
   }
+}
+
+// stage@round 报告的锚定编号: 报告由同名终审任务产出、锚定其自己的 T-F<k> 目录
+// (P1-D1);任务已存在(通常已 done,路由在读它的报告)→ 取其编号;尚不存在
+// (报告属即将生成的后续任务)→ finalIndex(下一编号,由调用方按阶段次序加偏移)。
+function reportIndex(plan: Plan, stage: FinalStage, round: number): number {
+  const existing = plan.tasks.find((task) => task.final === `${stage}@${round}`)
+  return existing ? Number(existing.id.replace(/^T-F/, "")) : finalIndex(plan)
 }
 
 // 审计报告末行策略(driver 依此确定性路由): 重构|修补|无。取最后一个策略行,
@@ -61,7 +78,7 @@ export function parseConclusion(text: string): { type: "pass" } | { type: "gap";
   return undefined
 }
 
-// 生成会话产出的任务提案(解析自 docs/final/plan-<stage>-r<N>.md)。
+// 生成会话产出的任务提案(解析自 docs/T-F<k>/plan-<stage>-r<N>.md)。
 export type FinalProposal = { title: string; body: string; verify?: string }
 
 // 提案文件解析: 首行 `# <任务标题>`,自包含正文,可选末行 `verify: <...>`
@@ -81,7 +98,7 @@ export function parseProposal(text: string): FinalProposal | undefined {
 // 终审路由结果:
 // - complete: 终审完成(最后的终审任务为 finalize 且已 done;C.5)
 // - wait: 存在未完成终审任务,主循环既有机制处理,不生成新任务(C.1)
-// - generate: 开生成会话产出提案 docs/final/plan-<stage>-r<N>.md
+// - generate: 开生成会话产出提案 docs/T-F<k>/plan-<stage>-r<N>.md
 // - append: 提案已产出未追加,直接解析追加(C.3)
 // - block: 熔断(B.5)或报告异常(C.4)/final 字段非法,block 指定终审任务、退出码 2
 export type FinalRoute =
@@ -92,7 +109,7 @@ export type FinalRoute =
   | { type: "block"; task: string; question: string }
 
 // 终审状态机路由(loop 在 runTask 完成后与 next() 为空时求值): 由(带 final
-// 标记的任务及其状态,docs/final/ 产物)推导下一步。limit 为审计轮上限
+// 标记的任务及其状态,终审产物 docs/T-F<k>/)推导下一步。limit 为审计轮上限
 // (--final-review n,含首轮 audit): validate 差距回退 audit@<r+1> 受其约束,
 // 耗尽即熔断。
 export async function routeFinal(dir: string, plan: Plan, limit: number): Promise<FinalRoute> {
@@ -124,22 +141,23 @@ export async function routeFinal(dir: string, plan: Plan, limit: number): Promis
 // remediate 与 validate,原任务已有任务级 verify 兜底);重构|修补 → 生成
 // remediate@同轮任务(verify 取提案)。
 async function afterAudit(dir: string, plan: Plan, round: number, last: Task): Promise<FinalRoute> {
-  const report = finalReportFile("audit", round)
+  const report = finalReportFile("audit", round, undefined, reportIndex(plan, "audit", round))
   const strategy = parseStrategy(await readReport(dir, report))
   if (!strategy) return brokenReport(last, report)
   if (strategy === "无") {
     const prior = `第 ${round} 轮审计结论为「策略: 无」(报告 ${report}):无补救即无验证对象,直接终审收尾`
     return stageRoute(dir, plan, "finalize", round, prior)
   }
-  const prior = `第 ${round} 轮审计报告: ${report},策略: ${strategy};修复后须通过同轮回归验证(${finalReportFile("validate", round)})`
+  // validate@同轮报告由其后第 2 个终审任务产出(下一个是 remediate,再下一个 validate)。
+  const prior = `第 ${round} 轮审计报告: ${report},策略: ${strategy};修复后须通过同轮回归验证(${finalReportFile("validate", round, undefined, finalIndex(plan) + 1)})`
   return stageRoute(dir, plan, "remediate", round, prior)
 }
 
 // remediate 任务 done 后的路由: 生成 validate@同轮任务;prior 指向审计与修复
 // 报告(修复报告名按同轮审计策略取 refactor|patch)。
 async function afterRemediate(dir: string, plan: Plan, round: number): Promise<FinalRoute> {
-  const strategy = parseStrategy(await readReport(dir, finalReportFile("audit", round)))
-  const prior = `第 ${round} 轮修复已完成(报告 ${finalReportFile("remediate", round, strategy === "修补" ? "patch" : "refactor")}),对修复后的整体做回归验证;审计报告: ${finalReportFile("audit", round)}`
+  const strategy = parseStrategy(await readReport(dir, finalReportFile("audit", round, undefined, reportIndex(plan, "audit", round))))
+  const prior = `第 ${round} 轮修复已完成(报告 ${finalReportFile("remediate", round, strategy === "修补" ? "patch" : "refactor", reportIndex(plan, "remediate", round))}),对修复后的整体做回归验证;审计报告: ${finalReportFile("audit", round, undefined, reportIndex(plan, "audit", round))}`
   return stageRoute(dir, plan, "validate", round, prior)
 }
 
@@ -147,7 +165,7 @@ async function afterRemediate(dir: string, plan: Plan, round: number): Promise<F
 // audit@<round+1>(聚焦残余差距、不做全量重审),审计轮耗尽则熔断 block 本
 // 任务(B.5,question 引用残余差距原文与报告指针)。
 async function afterValidate(dir: string, plan: Plan, round: number, last: Task, limit: number): Promise<FinalRoute> {
-  const report = finalReportFile("validate", round)
+  const report = finalReportFile("validate", round, undefined, reportIndex(plan, "validate", round))
   const conclusion = parseConclusion(await readReport(dir, report))
   if (!conclusion) return brokenReport(last, report)
   if (conclusion.type === "pass") {
@@ -157,10 +175,10 @@ async function afterValidate(dir: string, plan: Plan, round: number, last: Task,
     return {
       type: "block",
       task: last.id,
-      question: `终审闭环连续 ${limit} 轮仍未通过,残余差距见 ${report} 与 ${finalReportFile("audit", round)}:${conclusion.gap}`,
+      question: `终审闭环连续 ${limit} 轮仍未通过,残余差距见 ${report} 与 ${finalReportFile("audit", round, undefined, reportIndex(plan, "audit", round))}:${conclusion.gap}`,
     }
   }
-  return stageRoute(dir, plan, "audit", round + 1, `第 ${round} 轮回归验证未通过,残余差距原文:\n${conclusion.gap}\n上游报告: ${report} 与 ${finalReportFile("audit", round)}`)
+  return stageRoute(dir, plan, "audit", round + 1, `第 ${round} 轮回归验证未通过,残余差距原文:\n${conclusion.gap}\n上游报告: ${report} 与 ${finalReportFile("audit", round, undefined, reportIndex(plan, "audit", round))}`)
 }
 
 // 生成下一阶段任务的路由,含幂等重建: 阶段任务已存在(追加后中断)→ 不重复
@@ -168,7 +186,7 @@ async function afterValidate(dir: string, plan: Plan, round: number, last: Task,
 // 开生成会话。prior 为生成会话的上游产物指针与残余差距原文。
 async function stageRoute(dir: string, plan: Plan, stage: FinalStage, round: number, prior = ""): Promise<FinalRoute> {
   if (plan.tasks.some((task) => task.final === `${stage}@${round}`)) return { type: "wait" }
-  const proposal = parseProposal(await readReport(dir, finalProposalFile(stage, round)))
+  const proposal = parseProposal(await readReport(dir, finalProposalFile(stage, round, finalIndex(plan))))
   if (proposal) return { type: "append", stage, round, proposal }
   return { type: "generate", stage, round, prior }
 }
@@ -199,7 +217,7 @@ export async function appendFinalTask(
   round: number,
   proposal: FinalProposal,
 ): Promise<string> {
-  const id = `T-F${plan.tasks.filter((task) => task.final).length + 1}`
+  const id = `T-F${finalIndex(plan)}`
   await appendTask(path, {
     id,
     title: `${stageText(stage)}${stage === "finalize" ? "" : `(第 ${round} 轮)`}: ${proposal.title}`,
@@ -224,7 +242,7 @@ export async function generateFinalTask(
   opts: Opts,
 ): Promise<{ type: "ok"; proposal: FinalProposal } | { type: "blocked"; question: string }> {
   const dir = opts.dir ?? dirname(plan.path)
-  const file = finalProposalFile(stage, round)
+  const file = finalProposalFile(stage, round, finalIndex(plan))
   const collected = await requireArtifact(client, planningTask(stage, round), renderFinalTask(plan, stage, round, prior, opts.mode), opts, {
     kind: "终审任务规划",
     artifact: `有效提案文件 ${file}`,

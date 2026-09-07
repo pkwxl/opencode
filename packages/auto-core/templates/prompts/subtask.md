@@ -23,7 +23,9 @@
 {{#if continuation}}
 此前的会话因上下文限制中断,先读 {{handoffFile}} 了解进度与后续步骤,据此继续。
 {{/if}}
-{{#if warm}}本会话已继承任务背景上下文(理解阶段的摘要与已加载内容),无需重读已在上下文中的文件;如仍缺背景,可读 docs/{{taskId}}.context.md 摘要。{{/if}}{{^warm}}如存在 docs/{{taskId}}.context.md,先读之了解任务背景再开始(不存在则按需自行阅读源码)。{{/if}}
+{{#if warm}}本会话已继承任务背景上下文(理解阶段的摘要与已加载内容),无需重读已在上下文中的文件;如仍缺背景,可读 docs/{{taskId}}/context.md 摘要。{{/if}}{{^warm}}如存在 docs/{{taskId}}/context.md,先读之了解任务背景再开始(不存在则按需自行阅读源码)。{{/if}}
+
+{{> doc-layout}}
 
 {{#if outputFile}}产出约定:本项若产出文档/分析/设计类内容,写入 {{outputFile}}(独立文件,标题写在首行,不并入其他文档);代码类产出直接落于源码树。
 

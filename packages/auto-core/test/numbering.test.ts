@@ -86,6 +86,29 @@ describe("taskNumberFloor", () => {
     }
   })
 
+  test("目录化布局产物: docs/**/T-*/*.md 取首个 T-<纯数字> 路径段(归档内同样覆盖)", async () => {
+    const dir = await tempDir()
+    try {
+      await Bun.write(join(dir, "docs/T-003/context.md"), "x\n")
+      expect(await taskNumberFloor(dir)).toBe(4)
+      await Bun.write(join(dir, "docs/phases/m-migrate/T-012/report.md"), "x\n")
+      expect(await taskNumberFloor(dir)).toBe(13)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("旧平铺与目录化并存: 双布局共同取最大编号", async () => {
+    const dir = await tempDir()
+    try {
+      await Bun.write(join(dir, "docs/T-002.subtasks.md"), "x\n")
+      await Bun.write(join(dir, "docs/T-007/context.md"), "x\n")
+      expect(await taskNumberFloor(dir)).toBe(8)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("PLAN 解析失败(重复编号)退化为标题行正则提取,不中断扫描", async () => {
     const dir = await tempDir()
     try {
@@ -96,10 +119,11 @@ describe("taskNumberFloor", () => {
     }
   })
 
-  test("T-F 终审编号不参与下限推导", async () => {
+  test("T-F 终审编号不参与下限推导(双布局)", async () => {
     const dir = await tempDir()
     try {
       await Bun.write(join(dir, "docs/final/T-F1.audit.md"), "x\n")
+      await Bun.write(join(dir, "docs/T-F2/audit-r1.md"), "x\n")
       expect(await taskNumberFloor(dir)).toBe(1)
     } finally {
       await rm(dir, { recursive: true, force: true })

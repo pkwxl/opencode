@@ -23,7 +23,7 @@ describe("handoffSteer / handoverDue(OPENCODE_AUTO_STEER 接线)", () => {
     const steer = handoffSteer(true, cap, task)!
     expect(steer).toBeDefined()
     expect(steer.limit).toBe(cap * 2)
-    expect(steer.text).toContain("docs/T-001.handoff.md")
+    expect(steer.text).toContain("docs/T-001/handoff.md")
   })
 
   test("steer=off: 不构造交接 steer(会话中不注入交接提示)", () => {
@@ -177,7 +177,7 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
   }
 
   test("digest 成功: 从 context.md 一次性链建基点会话,覆写 fork-base,返回基点", async () => {
-    await Bun.write(join(dir, "docs", "T-001.context.md"), "## 相关文件与关键符号\n- a.ts\n")
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
     const taskNoBase = await setupTask(false)
     const { client, calls } = fakeClient()
     const base = await ensureForkBase(client, await load(path), taskNoBase, {}, chain, digest)
@@ -190,8 +190,16 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
     expect(await Bun.file(path).text()).toContain("  - fork-base: ses_new_1")
   })
 
-  test("digest 基点会话失败(下发错误)→ 回退 session 基点: 校验存活并按 messages 重建用量", async () => {
+  test("digest 读回落: 新路径缺失而旧平铺 docs/T-001.context.md 存在 → 同样建立基点", async () => {
     await Bun.write(join(dir, "docs", "T-001.context.md"), "## 相关文件与关键符号\n- a.ts\n")
+    const taskNoBase = await setupTask(false)
+    const { client } = fakeClient()
+    const base = await ensureForkBase(client, await load(path), taskNoBase, {}, chain, digest)
+    expect(base).toEqual({ id: "ses_new_1", used: 0 })
+  })
+
+  test("digest 基点会话失败(下发错误)→ 回退 session 基点: 校验存活并按 messages 重建用量", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
     const taskWithBase = await setupTask(true)
     const { client } = fakeClient({
       prompt: () => ({ error: { message: "boom" } }),

@@ -33,6 +33,7 @@
 - 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`
 - 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
 - 外壳画像(报文程序名/契约恢复指引/日志审计语义参数化)→ `src/shell.ts`
+- 稳定引用与文件存放规范(docs/T-NNN/ 目录化、docs 永不移动、handovers/ 永久化、引用一致性三层检查)→ docs/stable-refs-design.md(设计定稿 2026-09-06,分 P1..P4 实施;P1 路径统一的可执行规格与会话切分见 docs/stable-refs-p1-plan.md,已实施——任务文档路径构造/读回落/存量迁移统一在 src/docpaths.ts,引用提取与机械改写基础层在 src/refcheck.ts)
 - 核心/外壳边界、合入流程、新壳接入 → docs/shell-contract.md
 - 完整文件清单与机制细节 → docs/structure.md、docs/behavior.md
 
