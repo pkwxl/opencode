@@ -1,12 +1,13 @@
 // 专用二次迁移工具的主编排(设计文档 docs/specialized-tool-design.md): 无子命令,
 // 每次启动按"[--next-path 轮间过渡(可选)] → 前置知识提取 → 现场清理 → 参数推断 →
-// 完整 admtvk 二次迁移"自动推进至结束;中断后再次运行依推导式状态(台账 + PLAN.md
-// + .auto/progress.json + 本模块的 .auto/tool.json 本轮标记)从断点恢复。index.ts
-// 只做参数解析与配置固化/冲突校验,然后委托本模块。
+// 二次迁移(默认完整 admtvk;复杂度评估 simple 裁剪为 mtvk,§10)"自动推进至结束;
+// 中断后再次运行依推导式状态(台账 + PLAN.md + .auto/progress.json + 本模块的
+// .auto/tool.json 本轮标记)从断点恢复。index.ts 只做参数解析与配置固化/冲突校验,
+// 然后委托本模块。
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
-import { existingKnowledge, extractPriorKnowledge } from "@opencode-ai/auto-core/knowledge"
+import { existingKnowledge, extractPriorKnowledge, parsePriorVerdict } from "@opencode-ai/auto-core/knowledge"
 import { banner, log } from "@opencode-ai/auto-core/log"
 import { renderAgentContract, runAll } from "@opencode-ai/auto-core/loop"
 import type { ModeSpec } from "@opencode-ai/auto-core/mode"
@@ -71,6 +72,14 @@ export function parseInferOutput(
 // 跑依断点续跑,绝不清理自己的现场。
 export function needsSceneCleanup(markerExists: boolean, ledgerDone: readonly string[] | undefined, sceneHasContent: boolean): boolean {
   return !markerExists && (ledgerDone === undefined || ledgerDone.length > 0 || sceneHasContent)
+}
+
+// 流程裁剪映射(纯函数,便于测试,设计文档 §10): prior 文档的复杂度评估给出
+// simple → 跳过独立分析/设计阶段,流程取 admtvk 的子序列 mtvk(parsePhases 合法,
+// 底线保障由 m 阶段首批任务承接,见 phase-plan.md 的 m 阶段简化流程判定);评估
+// 缺失/full/非法 → 完整 admtvk(保守缺省)。
+export function phasesForVerdict(verdict: "simple" | "full" | undefined): string {
+  return verdict === "simple" ? "mtvk" : PHASE_ORDER
 }
 
 // --next-path 轮间过渡(纯 fs、不起 server,便于离线测试): 前一轮彻底完成(done
@@ -228,8 +237,9 @@ export async function runTool(
   }
 
   // 全程一个 server 实例: 前置会话与 runAll 共用(runAll 经 managed 注入,不再
-  // 自行拉起/关闭)。
+  // 自行拉起/关闭)。流程默认完整 admtvk;dryrun 不做前置会话,维持默认。
   const server = await manage(directory, input.server)
+  let phases = PHASE_ORDER
   try {
     if (!input.dryrun) {
       // 前置知识提取(设计文档 §3): 在旧有迁移现场原状上分析(先于现场清理),
@@ -251,6 +261,17 @@ export async function runTool(
       if (extracted.type === "ok") log(`✓ 前置知识文档已产出: ${extracted.file}`)
       else if (extracted.type === "skipped") log(`↻ 前置知识文档已存在(${extracted.file}),跳过提取`)
       else log(`⚠ 前置知识提取未完成,继续推进(参数推断会话可直读原始 docs/)。受阻详情:\n${extracted.question}`)
+
+      // 复杂度评估 → 流程裁剪(设计文档 §10): 从本轮已落盘的 prior 文档解析
+      // 「复杂度评估」协议行(simple → mtvk 跳过独立分析/设计;缺失/full/非法 →
+      // 完整 admtvk 保守缺省)。verdict 取自持久文档,中断重跑(提取幂等跳过)
+      // 决策稳定。
+      if (extracted.type !== "failed") {
+        const verdict = parsePriorVerdict(await Bun.file(join(directory, extracted.file)).text().catch(() => ""))
+        phases = phasesForVerdict(verdict)
+        if (verdict === "simple")
+          log(`ℹ 复杂度评估: 简单轮 → 跳过独立分析/设计阶段(流程 ${phases};勘察与设计要点及底线保障由 m 阶段首批任务承接)`)
+      }
 
       // 现场清理(原 continue 流程): 知识已蒸馏落盘后,若本轮标记未建立,目录里的
       // 阶段状态都是"别人的"遗留——台账有完成阶段或无法解析、PLAN.md 有任务或
@@ -338,11 +359,11 @@ export async function runTool(
       }
     }
 
-    // 阶段进度行(✓=台账已记录,▶=当前;续轮归档存在时带轮次标注)。台账非法
-    // 仅提示,硬失败在 runAll 的阶段路由预检。
+    // 阶段进度行(✓=台账已记录,▶=当前;续轮归档存在时带轮次标注;复杂度评估
+    // simple 时按裁剪后流程展示)。台账非法仅提示,硬失败在 runAll 的阶段路由预检。
     try {
       const round = await currentRound(directory)
-      log(`阶段${round > 1 ? `(第 ${round} 轮)` : ""}: ${formatPhases(PHASE_ORDER, (await readLedger(directory)).done)}`)
+      log(`阶段${round > 1 ? `(第 ${round} 轮)` : ""}: ${formatPhases(phases, (await readLedger(directory)).done)}`)
     } catch (error) {
       log(`⚠ 阶段台账(docs/phases.md)非法: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -367,9 +388,9 @@ export async function runTool(
       handoverTest: config.handoverTest,
       mode: input.mode,
       finalReview: input.finalReview,
-      // 流程固定为完整 admtvk(设计文档 §2: config.phases 键保留在 schema 中,
-      // 工具恒定以此驱动)。
-      phases: PHASE_ORDER,
+      // 流程: 默认完整 admtvk;复杂度评估 simple 时裁剪为 mtvk(设计文档 §10:
+      // config.phases 键保留在 schema 中,工具以解析后的本值驱动)。
+      phases,
       source: config.source,
       destDir: config.destDir,
       managed: server,

@@ -29,7 +29,7 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
     或 PLAN.md 有任务,或 migration-kb 有本轮前缀残留 → archiveRound 归档 + PLAN.md 重置
   → 建立本轮标记 .auto/tool.json { "round": N }
   → 参数推断(config.source / destDir 缺失时;产物 .auto/infer.json,写回配置)
-  → runAll(phases 固定 "admtvk")
+  → runAll(phases 默认 "admtvk";复杂度评估 simple 裁剪为 "mtvk",§10)
   → 退出码 0 → 标记 done
 ```
 
@@ -94,6 +94,16 @@ admtvk 二次迁移,自动推进至结束;中断后再次运行从断点恢复�
 - 消费:本轮首个阶段规划会话(台账为空时)经 loop.ts planPhase 注入——
   与 prevRoundDigest 合并为一个 prevRound 字符串传入 renderPhasePlan,
   模板零改动;同时作为参数推断会话的输入。
+- 引用化(2026-09-07 增量):工作目录已有蒸馏产物(docs/migration-kb/、
+  docs/handovers/、历轮 docs/prior-kb/)时,提取会话(knowledge.ts
+  existingDistilledDocs)收到路径清单,「引用化要求」条件段生效——已覆盖的
+  知识点只写一行引用、不得复述(引用目标同场注入:prevRoundDigest 注入上一轮
+  交接与 migration-kb 全文,priorKnowledgeDigest 注入历轮 prior 全文),蒸馏
+  精力聚焦本轮迁移对象的差分增量(映射预判/坑点/规则/复杂度评估),避免前序
+  已是完整迁移轮时 473 行级的重复摘抄;清单为空(首轮、无既有知识)时条件段
+  消失,行为同全量蒸馏。
+- 复杂度评估(2026-09-07 增量):产物骨架新增「复杂度评估」节,首行为机器
+  可读协议行 `流程建议: full|simple`(§10)。
 
 ## 4. 参数推断(新会话,模板 infer-source.md)
 
@@ -220,3 +230,40 @@ migration-kb 全文)照常注入同一会话;归档目录索引供各会话按�
 - done 标记未删 → 重跑同一命令(带 --next-path)全流程重入,安全;
 - done 标记已删、自然流程未建新标记 → 带 --next-path 重跑被严格前置拒绝
   (!done),不带参数重跑即自然流程续跑——严格拒绝方案在该时序下自洽。
+
+## 10. 复杂度评估与流程裁剪(增量设计,2026-09-07)
+
+> 背景:对微小迁移对象(如 81 行的 dm-zero.c),阶段化流程的固定开销(236 行级
+> 阶段计划)远超任务本身;前序轮已是完整迁移时,prior-kb 又全量复述既有知识。
+> 本节给提取会话一个机器可读的复杂度评估出口,driver 据此裁剪流程;并让续轮
+> prior-kb 以引用代替复述(§3 引用化)。底线保障不随裁剪消失。
+
+### 10.1 协议
+
+- 产出:prior 文档骨架新增「复杂度评估」节(迁移概要之后),首行严格为
+  `流程建议: full` 或 `流程建议: simple`(半角冒号、小写、行内无其他文字)。
+- 判定(simple 从严):迁移对象是既有已迁移体系的微小增量(预计单模块内改动、
+  复用既有设施与实现模式、无新原语/新接口面/新载体),且映射与坑点已能由既有
+  知识直接给出;拿不准一律 full。
+- 判读:核心 knowledge.ts `parsePriorVerdict(text)` 取首个协议行;缺节、占位
+  未填、值非法 → undefined(调用方按完整流程处理,保守缺省)。
+
+### 10.2 driver 侧裁剪(tool.ts)
+
+- 提取成功/幂等跳过后,读本轮 prior 文档解析 verdict;`phasesForVerdict(verdict)`
+  映射:simple → `"mtvk"`(admtvk 子序列,parsePhases 合法),其余 → `PHASE_ORDER`。
+- 裁剪结果用于:阶段进度行展示与 runAll 的 phases 入参;日志明示
+  「复杂度评估: 简单轮 → 跳过独立分析/设计阶段(流程 mtvk)」。
+- 稳定性:verdict 取自持久文档,中断重跑(提取幂等跳过)决策不变;提取失败 →
+  无 verdict → 完整流程;dryrun 不做前置会话 → 维持默认。
+- 人工兜底:手工把 prior 文档协议行改为 full(或删除该节)即恢复完整流程。
+
+### 10.3 裁剪语义与底线承接
+
+- 跳过的只是「独立的 a/d 阶段」,不是底线:before 基线、守卫/翻转/排除/随批
+  更新(AU)四清单、AUTO-TODO 对账、计数账目等零漂移保障改由 m 阶段首批任务
+  承接——核心 phase-plan.md 的 m 阶段「简化流程判定」条件块向规划会话明示
+  (m 规划会话恰为裁剪轮的首个规划会话,经 prevRound 注入拿到含评估节的
+  prior 全文,条款自描述随文档走,无需 loop 新增机制)。
+- 台账/归档零特殊:routePhase、阶段交接与轮次归档均按实际 phases 串推导,
+  mtvk 轮的台账自然不含 a/d 行。

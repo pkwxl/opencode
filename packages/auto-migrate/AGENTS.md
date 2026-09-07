@@ -4,7 +4,7 @@
 
 ## 概述
 
-`@opencode-ai/auto-migrate` 是简易 CLI 外壳(bin `auto-migrate`):无子命令,`src/index.ts` 做参数解析与配置固化/冲突校验后委托 `src/tool.ts` 主编排(前置知识提取 → 现场清理 → 参数推断 → 完整 admtvk 二次迁移,自动推进至结束,中断续跑);前一轮彻底完成后 `--next-path <相对路径>` 一条命令归档旧知识并开启新一轮(设计见 docs/specialized-tool-design.md §9)。全部机制实现在核心库 `@opencode-ai/auto-core`(workspace 依赖,子路径导入)。注释与用户可见文案使用中文。
+`@opencode-ai/auto-migrate` 是简易 CLI 外壳(bin `auto-migrate`):无子命令,`src/index.ts` 做参数解析与配置固化/冲突校验后委托 `src/tool.ts` 主编排(前置知识提取 → 现场清理 → 参数推断 → 二次迁移,自动推进至结束,中断续跑;流程默认完整 admtvk,prior-kb 复杂度评估 simple 轮自动裁剪为 mtvk——设计见 docs/specialized-tool-design.md §10);前一轮彻底完成后 `--next-path <相对路径>` 一条命令归档旧知识并开启新一轮(设计见 docs/specialized-tool-design.md §9)。全部机制实现在核心库 `@opencode-ai/auto-core`(workspace 依赖,子路径导入)。注释与用户可见文案使用中文。
 
 ## 命令(在本包目录运行)
 

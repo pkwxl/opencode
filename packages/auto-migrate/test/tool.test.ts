@@ -3,8 +3,23 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CONFIG_DEFAULTS, loadProjectConfig, saveProjectConfig } from "@opencode-ai/auto-core/config"
-import { existingPriorKnowledge, priorKnowledgeDigest, priorKnowledgeFile } from "@opencode-ai/auto-core/knowledge"
-import { needsSceneCleanup, parseInferOutput, prepareNextRound, readToolState } from "../src/tool"
+import { existingPriorKnowledge, parsePriorVerdict, priorKnowledgeDigest, priorKnowledgeFile } from "@opencode-ai/auto-core/knowledge"
+import { needsSceneCleanup, parseInferOutput, phasesForVerdict, prepareNextRound, readToolState } from "../src/tool"
+
+describe("phasesForVerdict(复杂度评估 → 流程裁剪)", () => {
+  test("simple → mtvk(跳过独立分析/设计,admtvk 子序列);其余 → 完整 admtvk", () => {
+    expect(phasesForVerdict("simple")).toBe("mtvk")
+    expect(phasesForVerdict("full")).toBe("admtvk")
+    expect(phasesForVerdict(undefined)).toBe("admtvk")
+  })
+
+  test("判读与裁剪联动: prior 文档协议行 → 流程串", () => {
+    expect(phasesForVerdict(parsePriorVerdict("## 复杂度评估\n\n流程建议: simple\n\n微小增量"))).toBe("mtvk")
+    // 占位未填/缺失 → 保守完整流程
+    expect(phasesForVerdict(parsePriorVerdict("流程建议: <full|simple>"))).toBe("admtvk")
+    expect(phasesForVerdict(parsePriorVerdict(""))).toBe("admtvk")
+  })
+})
 
 describe("parseInferOutput(参数推断产物协议)", () => {
   test("成功形态: 三键齐备的合法相对路径", () => {

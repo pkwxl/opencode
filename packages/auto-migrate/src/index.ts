@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // 专用二次迁移工具(设计文档 docs/specialized-tool-design.md): 无子命令,直接执行
-// 主程序——前置知识提取 → 参数推断 → 完整 admtvk 二次迁移,自动推进至结束;中断后
+// 主程序——前置知识提取 → 参数推断 → 二次迁移(默认完整 admtvk,复杂度评估
+// simple 轮自动裁剪为 mtvk),自动推进至结束;中断后
 // 再次运行从断点恢复。关键参数(mode/source/dest/verify 等)首次运行时固化进
 // .opencode/auto/config.json;二次执行与首次运行对齐——显式给出且与固化值不一致
 // 即用法错误(退出码 1),修订通道为直接编辑配置文件。
@@ -116,9 +117,9 @@ if (flags.has("help")) {
   process.exit(0)
 }
 
-// 历史选项拦截: 流程固定 admtvk,续轮/提交粒度/看门狗更名等旧概念已不存在。
+// 历史选项拦截: 流程默认 admtvk,续轮/提交粒度/看门狗更名等旧概念已不存在。
 if (flags.has("phases")) {
-  console.error("--phases 已移除: 本工具的流程固定为完整 admtvk(分析 → 设计 → 迁移实现 → 测试 → 验收 → 知识提炼)")
+  console.error("--phases 已移除: 流程默认为完整 admtvk(分析 → 设计 → 迁移实现 → 测试 → 验收 → 知识提炼),简单轮经前置知识复杂度评估自动裁剪")
   process.exit(1)
 }
 if (flags.has("continue")) {
@@ -516,7 +517,8 @@ function usageText(): string {
   auto-migrate [dir] [关键参数...] [运行参数...]
 
 专用二次迁移工具: 基于已有迁移结果先做一轮前置知识提取(docs/prior-kb/),再自动
-推进一轮完整 admtvk(分析 → 设计 → 迁移实现 → 测试 → 验收 → 知识提炼)二次迁移
+推进一轮二次迁移(默认完整 admtvk:分析 → 设计 → 迁移实现 → 测试 → 验收 → 知识
+提炼;简单轮经复杂度评估自动裁剪为 mtvk)
 至结束;中断后再次运行自动从断点恢复,全部完成后再次运行报告已完成(删除
 .auto/tool.json 可显式开启新一轮)。
 
