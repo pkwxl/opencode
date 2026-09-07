@@ -88,6 +88,31 @@ export async function existingPriorKnowledge(dir: string, round: number): Promis
   return existingRoundDoc(dir, PRIOR_KB_DIR, round)
 }
 
+// 已有蒸馏产物清单(extractPriorKnowledge 的引用化输入): 此前蒸馏的结论性文档
+// ——迁移知识(KB_DIR)、阶段交接(docs/handovers/)与历轮前置知识(PRIOR_KB_DIR
+// 内非本轮 R<round>- 前缀者)。清单非空时提取会话被要求对已覆盖的知识点只引用
+// 不复述(引用目标同场可达: priorKnowledgeDigest 与 prevRoundDigest 注入全文)。
+// 各目录缺失或仅空文件 → 空数组(模板条件段消失,行为同全量蒸馏)。
+export async function existingDistilledDocs(dir: string, round: number): Promise<string[]> {
+  const found = new Set<string>()
+  for (const root of [KB_DIR, join("docs", "handovers"), PRIOR_KB_DIR]) {
+    for (const name of await readdir(join(dir, root)).catch(() => [] as string[])) {
+      if (!name.endsWith(".md")) continue
+      if (root === PRIOR_KB_DIR && name.startsWith(`R${round}-`)) continue
+      if (!(await Bun.file(join(dir, root, name)).text().catch(() => "")).trim()) continue
+      found.add(join(root, name))
+    }
+  }
+  return [...found].sort()
+}
+
+// 复杂度评估判读(prior-knowledge 模板「复杂度评估」节的首行协议): 首个匹配
+// `流程建议: simple|full` 的行(半角/全角冒号;行内与行尾不留其他文字)。缺节、
+// 占位未填或值非法 → undefined——调用方一律按完整流程处理(保守缺省)。
+export function parsePriorVerdict(text: string): "simple" | "full" | undefined {
+  return /^流程建议[:：][ \t]*(simple|full)[ \t]*$/m.exec(text)?.[1] as "simple" | "full" | undefined
+}
+
 // 目录内本轮 R<round>- 前缀的非空 .md → 首个(字典序);第 1 轮回落无 R 前缀的
 // 非空 .md(P2 前存量读回落);空文件与非 .md 不算。
 async function existingRoundDoc(dir: string, root: string, round: number): Promise<string | undefined> {
@@ -115,11 +140,12 @@ export async function extractPriorKnowledge(
   const existing = await existingPriorKnowledge(dir, round)
   if (existing) return { type: "skipped", file: existing }
   const file = priorKnowledgeFile(round)
-  log(`▶ 开前置知识提取会话(产出 ${file})`)
+  const distilled = await existingDistilledDocs(dir, round)
+  log(`▶ 开前置知识提取会话(产出 ${file}${distilled.length ? ";已有蒸馏产物引用化" : ""})`)
   const produced = await requireArtifact(
     client,
     { id: "PLAN", title: "前置知识提取(已有迁移结果复盘)", status: "in_progress", attempts: 0, body: "" },
-    renderPriorKnowledge({ file, brief, mode: opts.mode }),
+    renderPriorKnowledge({ file, brief, mode: opts.mode, distilled }),
     opts,
     {
       kind: "前置知识提取",
