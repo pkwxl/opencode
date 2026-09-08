@@ -11,8 +11,7 @@
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "test": "bun test",
-    "fix-refs": "bun ./script/fix-refs.ts",
-    "fix-docs": "bun ./script/fix-docs.ts"
+    "fix-refs": "bun ./script/fix-refs.ts"
   },
   "dependencies": { "@opencode-ai/sdk": "workspace:*" },
   "devDependencies": {

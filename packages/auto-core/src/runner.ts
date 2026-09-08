@@ -89,6 +89,7 @@ function formatDuration(ms: number): string {
 // 轨迹,回滚粒度 = 会话。--commit false 与 dryrun 跳过。
 // 提交前引用 auto-correct(stable-refs P4,D6 第一层): rename 配对机械改写活
 // 文档引用 + 失效引用 ⚠ 日志(改写内容随本次统一提交落账,不另起提交)。
+// 受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省 off 空转)。
 async function afterSession(
   dir: string | undefined,
   opts: Opts,
@@ -96,8 +97,21 @@ async function afterSession(
   info: { stage: string; subject: string },
 ): Promise<void> {
   if (!dir || opts.commit === false || opts.dryrun) return
-  await autoCorrectRefs(dir)
+  await gatedAutoCorrectRefs(dir, autoSwitches().refCheck)
   await commitTree(dir, task, info)
+}
+
+// refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off):
+// off 时提交前 auto-correct 与 verify 门禁预扫空转——目标目录零引用检查行为;
+// check 子命令的引用扫描段在 check.ts 同款门控;script/fix-refs.ts 手动脚本不经
+// 门禁(人工显式执行等价于显式开启)。导出供单测(parseSwitches 纯函数注入)。
+export async function gatedAutoCorrectRefs(dir: string, on: boolean): Promise<void> {
+  if (on) await autoCorrectRefs(dir)
+}
+
+// verify 门禁预扫(D6 第三层)的门禁同款: off 时无差距(门禁不存在)。
+export async function gatedTaskRefGap(dir: string, id: string, on: boolean): Promise<string | undefined> {
+  return on ? formatRefGap(await taskRefFindings(dir, id)) : undefined
 }
 
 // --subtask 三档: off(单会话完成)/ auto(自动分解,缺省;子任务会话上下文达到
@@ -1235,7 +1249,8 @@ async function verifyTask(
     // T-NNN/**)做确定性预扫——失效引用 = 差距,直接进修复轮、不消耗判定会话;
     // 修复轮语义与判定差距一致(off 模式回退 pending,耗尽阻塞退出 2)。verify
     // 未启用时无任务级验收,门禁不存在(退化为提交时 auto-correct 的 ⚠ 日志)。
-    const refGap = formatRefGap(await taskRefFindings(dir, task.id))
+    // 受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省 off 空转)。
+    const refGap = await gatedTaskRefGap(dir, task.id, autoSwitches().refCheck)
     if (refGap) {
       if (mode === "off") return { type: "gap", gap: refGap }
       round++

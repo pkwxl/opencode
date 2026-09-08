@@ -119,9 +119,10 @@ test.skipIf(!E2E)(
 // CLI 解析用例不需要 opencode 与 provider 凭证,始终运行: 以子进程运行源码入口,
 // 用法错误经 stderr 报文与退出码 1 断言;合法组合以空目录"未找到计划文件"退出
 // (解析全部通过、在 spawn server 之前),证明未误报组合用法错误。
-async function runCli(args: string[]) {
+async function runCli(args: string[], env?: Record<string, string>) {
   const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "src", "index.ts"), ...args], {
     cwd: join(import.meta.dir, ".."),
+    env: env ? { ...process.env, ...env } : undefined,
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -831,6 +832,9 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
 
 // check 子命令的引用检查(stable-refs P4,D6 第二层): 原则检查之外全量扫描活文档
 // 失效引用,命中退出码 1;干净项目退出 0。无需 opencode/provider,始终运行。
+// 受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省 off 空转):
+// 挂点行为用例注入 on 运行(核心内解析环境变量,CLI 壳零改动)。
+const REFCHECK_ON = { OPENCODE_AUTO_REF_CHECK: "on" }
 describe("CLI: check 引用检查(stable-refs P4)", () => {
   test("活文档失效引用命中退出 1 并逐条报文;豁免行不报告", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
@@ -844,7 +848,7 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
         join(dir, "docs/T-001/report.md"),
         ["正常引用 `PLAN.md`。", "失效引用 `src/gone.ts`。", "已删除 的 `docs/old.md` 豁免。"].join("\n"),
       )
-      const check = await runCli(["check", dir])
+      const check = await runCli(["check", dir], REFCHECK_ON)
       expect(check.code).toBe(1)
       expect(check.out).toContain("+ 文档引用")
       expect(check.out).toContain("⚠ 失效引用 docs/T-001/report.md:2 → src/gone.ts(路径不存在): 失效引用 `src/gone.ts`。")
@@ -865,10 +869,26 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
       )
       await Bun.write(join(dir, "src/mod.ts"), "l1\n")
       await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/mod.ts:1` 与 [计划](PLAN.md)。\n")
-      const check = await runCli(["check", dir])
+      const check = await runCli(["check", dir], REFCHECK_ON)
       expect(check.code).toBe(0)
       expect(check.out).toContain("✓ 未发现与提交原则相违背的描述,文档引用检查全部通过")
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("opencode-auto:refs:start")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("缺省 off: 引用检查空转——失效引用不命中(退出 0),目标目录零改动", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await Bun.write(join(dir, "docs/T-001/report.md"), "失效引用 `src/gone.ts`。\n")
+      const before = await Bun.file(join(dir, "docs/T-001/report.md")).text()
+      const check = await runCli(["check", dir])
+      expect(check.code).toBe(0)
+      expect(check.out).not.toContain("失效引用")
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(before)
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { loadProjectConfig } from "./config"
 import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
+import { autoSwitches, type Switches } from "./switches"
 
 // check 命令的检查逻辑: ①原则检查——扫描目标目录的 AGENTS.md 与 PLAN.md,报告与"验证执行权
 // 在 driver""测试/编译等命令执行权在 driver"及"提交执行权在 driver"原则(见
@@ -13,7 +14,8 @@ import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
 // ②引用检查(stable-refs P4,D6 第二层): 全量活文档(docs/**/*.md,排除
 // docs/phases/**)扫描失效引用(路径不存在 / 行号超出文件总行数),命中经 refs
 // 并入 CLI 报文(退出码 1);目标目录缺引用规范块或非 git(auto-correct 不可用)
-// 给 note。
+// 给 note。受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省
+// off 静默空转,refs 恒空、不给引用相关 note)。
 
 // AGENTS.md 维护规则块第 1 条的行数上限(见 loop.ts MAINT_RULE);超限由 check
 // 输出 note 提示精简。
@@ -52,6 +54,7 @@ const COMMIT_PATTERNS: RegExp[] = [/\bgit\s+(add|commit)\b/i, /提交(全部|所
 
 export async function checkPrinciple(
   dir: string,
+  switches: Switches = autoSwitches(),
 ): Promise<{ findings: Finding[]; notes: string[]; refs: RefFinding[]; verifyOn: boolean; testOn: boolean }> {
   const findings: Finding[] = []
   const notes: string[] = []
@@ -116,10 +119,14 @@ export async function checkPrinciple(
     }
   }
   // 引用检查(P4): 活文档存在才扫描与给 note(无 docs/ 的目录引用机制尚无对象)。
-  const docs = await activeDocs(dir)
-  const refs = docs.length ? await scanRefs(dir, docs) : []
-  if (docs.length && !(await gitAvailable(dir))) {
-    notes.push("非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验")
+  // OPENCODE_AUTO_REF_CHECK=off(缺省)时整段空转——静默,verbose 可查开关全量。
+  let refs: RefFinding[] = []
+  if (switches.refCheck) {
+    const docs = await activeDocs(dir)
+    refs = docs.length ? await scanRefs(dir, docs) : []
+    if (docs.length && !(await gitAvailable(dir))) {
+      notes.push("非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验")
+    }
   }
   return { findings, notes, refs, verifyOn, testOn }
 }

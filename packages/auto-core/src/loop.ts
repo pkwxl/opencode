@@ -2,7 +2,6 @@ import { createInterface } from "node:readline/promises"
 import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
 import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
-import { migrateLegacyDocs } from "./docpaths"
 import { commitTree, pendingChanges, repoRoots } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
@@ -90,7 +89,8 @@ AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
 
 // AGENTS.md 引用规范块: 第六个标记块(stable-refs P4 下沉),内容 = 设计文档
 // docs/stable-refs-design.md §3 规范的精编全文: 存放(R2 永久性/R3 目录化/R4
-// 角色文件名/R5 归档语义/R7 轮次表达)、引用语法(§3.2)与一致性检查三层(§3.3)。
+// 角色文件名/R5 归档语义/R7 轮次表达)、引用语法(§3.2,含 refcheck-scope P3
+// 的 @<sha> 版本标记)与一致性检查三层(§3.3)。
 // 无条件补写(路径稳定性不依赖任何开关,§8)。
 const REFS_SPEC = `<!-- opencode-auto:refs:start -->
 引用与存放规范(稳定引用,细则见 stable-refs 设计文档):
@@ -101,11 +101,14 @@ const REFS_SPEC = `<!-- opencode-auto:refs:start -->
    即为永久路径: 永不移动、永不改名;docs/phases/ 只放过期状态文件。
 2. 引用: 文档间引用与对代码的引用一律写目标目录根相对路径(如
    \`docs/T-003/S04/index.md\`、\`src/runner.ts:120\`,反引号或链接,可带 :行号
-   锚);不要引用 docs/phases/ 下的状态文件;轮次差异经文件名 R<N>- 前缀与
-   台账表达,不靠搬移目录。
-3. 检查: driver 在统一提交前自动改写 rename 引用并报告失效引用;check 子命令
-   全量扫描活文档;verify 启用时任务产物文档的失效引用会被验收门禁拦截进
-   修复轮。代码围栏内的路径与行内标注 已删除/已归档/历史 的引用豁免。
+   锚,锚可再带 @<sha> 版本标记——如 \`src/runner.ts:120@abc1234\`,表示该
+   范围仅对标记的历史版本有效,豁免行号校验);不要引用 docs/phases/ 下的
+   状态文件;轮次差异经文件名 R<N>- 前缀与台账表达,不靠搬移目录。
+3. 检查: driver 在统一提交前自动改写 rename 引用、对被修改文件的不一致行号
+   锚自动追加 @<sha> 版本标记(保留原范围,留待人工订正),并报告失效引用;
+   check 子命令全量扫描活文档;verify 启用时任务产物文档的失效引用会被验收
+   门禁拦截进修复轮。代码围栏内的路径与行内标注 已删除/已归档/历史 的引用
+   豁免。
 <!-- opencode-auto:refs:end -->`
 
 // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
@@ -339,17 +342,6 @@ export async function runAll(
   }
   process.on("SIGINT", onSigint)
   try {
-    // 存量任务文档目录化迁移(stable-refs P1): 平铺旧布局 → docs/T-NNN/;幂等,
-    // dryrun 预检不改动工作区故跳过(P1-D6)。
-    if (!opts.dryrun) {
-      const migrated = await migrateLegacyDocs(directory)
-      if (migrated.moved.length || migrated.rewritten.length) {
-        log(`↻ 存量任务文档目录化迁移: 搬移 ${migrated.moved.length} 项,活文档引用改写 ${migrated.rewritten.length} 个文件`)
-        if (opts.commit !== false) {
-          await commitTree(directory, { id: "PLAN", title: "任务文档目录化迁移" }, { stage: "doc-migrate", subject: "PLAN doc-migrate 任务文档目录化迁移" })
-        }
-      }
-    }
     // 阶段化流程: 台账非法为环境错误(H 节),提前于 server 启动求值一次路由,
     // 免得白白拉起服务再退出;正式路由在阶段循环内逐轮重新求值(推导式状态)。
     const phases = opts.phases ?? "m"

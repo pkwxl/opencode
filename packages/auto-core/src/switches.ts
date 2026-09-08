@@ -15,6 +15,7 @@ export const SWITCH_ENV = {
   fine: "OPENCODE_AUTO_DECOMPOSE_FINE",
   steer: "OPENCODE_AUTO_STEER",
   step: "OPENCODE_AUTO_STEP",
+  refCheck: "OPENCODE_AUTO_REF_CHECK",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -34,9 +35,13 @@ export type Switches = {
   steer: boolean
   // 步进模式: phase/task/subtask 在对应(及更粗)边界硬暂停等回车放行。
   step: StepMode
+  // refcheck 总开关(refcheck-scope-design D3,缺省 off): off 时三层挂点
+  // (提交前 auto-correct、check 引用扫描、verify 门禁预扫)全部空转,目标目录
+  // 零引用检查行为;fix-refs 手动脚本不受约束(人工显式执行等价于显式开启)。
+  refCheck: boolean
 }
 
-const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "session", fine: false, steer: true, step: "off" }
+const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "session", fine: false, steer: true, step: "off", refCheck: false }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
 // (取缺省),非法值 throw 中文报错。
@@ -66,6 +71,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     fine: onOff(SWITCH_ENV.fine, env[SWITCH_ENV.fine], SWITCH_DEFAULTS.fine),
     steer: onOff(SWITCH_ENV.steer, env[SWITCH_ENV.steer], SWITCH_DEFAULTS.steer),
     step: step as StepMode,
+    refCheck: onOff(SWITCH_ENV.refCheck, env[SWITCH_ENV.refCheck], SWITCH_DEFAULTS.refCheck),
   }
 }
 
@@ -77,6 +83,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.fine === SWITCH_DEFAULTS.fine ? undefined : `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     switches.steer === SWITCH_DEFAULTS.steer ? undefined : `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     switches.step === SWITCH_DEFAULTS.step ? undefined : `${SWITCH_ENV.step}=${switches.step}`,
+    switches.refCheck === SWITCH_DEFAULTS.refCheck ? undefined : `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -89,6 +96,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     `${SWITCH_ENV.step}=${switches.step}`,
+    `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
   ].join(", ")
 }
 
