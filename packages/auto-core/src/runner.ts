@@ -1787,7 +1787,7 @@ async function attempt(
   // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`;分叉会话已在 forkSession
   // 改名,不经 create。
   const session = reuse || forked ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
-  if (session?.error) return { type: "blocked", question: `创建会话失败: ${JSON.stringify(session.error)}` }
+  if (session?.error) return { type: "blocked", question: `创建会话失败: ${formatClientError(session.error)}` }
   const sessionID = forked ?? session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
@@ -1801,37 +1801,50 @@ async function attempt(
   }
   await remember()
 
-  const events = await client.event.subscribe()
-  const watching = watch(client, sessionID, events.stream, opts, steer, test)
+  // SSE 订阅跟随本会话生命周期: 订阅时传入 AbortSignal,无论正常结束、下发失败
+  // 提前返回还是异常退出,finally 都立即中止订阅,断开底层连接并释放客户端连接
+  // 配额——此前订阅无人关闭、依赖 GC 回收,长周期运行下已结束会话的 SSE 长连接
+  // 持续积压,占满客户端并发池(Bun 缺省 256 条)后,后续所有请求在池内无限排队
+  // 且无超时报错,表现为无声卡死。
+  const sse = new AbortController()
+  try {
+    const events = await client.event.subscribe(undefined, { signal: sse.signal })
+    const watching = watch(client, sessionID, events.stream, opts, steer, test)
 
-  // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
-  const note = chain.note
-  chain.note = undefined
-  const prompt = await client.session.prompt({
-    sessionID,
-    agent: opts.agent,
-    parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
-  })
-  if (prompt.error) return { type: "blocked", question: `下发任务失败: ${JSON.stringify(prompt.error)}${await missingAgentHint(opts)}` }
+    // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
+    const note = chain.note
+    chain.note = undefined
+    const prompt = await client.session.prompt({
+      sessionID,
+      agent: opts.agent,
+      parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
+    })
+    if (prompt.error) return { type: "blocked", question: `下发任务失败: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
 
-  const result = await watching
-  chain.id = sessionID
-  chain.pct = result.pct
-  chain.used = result.used
-  chain.at = Date.now()
-   if (!reuse && result.durationMs !== undefined) {
-     log(`✓ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
-   }
-  // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
-  // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
-  // 新建会话已在创建时命名,无需重复。
-  if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
-  // 会话结束但阶段尚未推进: 刷新记录时间并保持 active——此刻中断按"半途未总结"
-  // 复用本会话继续(无时间窗,恢复时只看会话是否存活)。
-  await remember()
-  if (result.blocked) return result.blocked
-  if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
-  return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
+    const result = await watching
+    chain.id = sessionID
+    chain.pct = result.pct
+    chain.used = result.used
+    chain.at = Date.now()
+    if (!reuse && result.durationMs !== undefined) {
+      log(`✓ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
+    }
+    // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
+    // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
+    // 新建会话已在创建时命名,无需重复。
+    if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
+    // 会话结束但阶段尚未推进: 刷新记录时间并保持 active——此刻中断按"半途未总结"
+    // 复用本会话继续(无时间窗,恢复时只看会话是否存活)。
+    await remember()
+    if (result.blocked) return result.blocked
+    if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
+    return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
+  } finally {
+    // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
+    // 释放(对已结束的订阅重复中止无害)。
+    sse.abort()
+    vlog(`▪ 已断开会话 ${sessionID} 的事件流订阅`)
+  }
 }
 
 // 会话进度改名: 会话标题与提交标题共用同一短标签方案(`T-NNN <label> <标题/子任务>`,
@@ -2219,6 +2232,13 @@ async function contextLimits(client: OpencodeClient): Promise<Map<string, number
 function formatTokens(n: number): string {
   if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
   return String(n)
+}
+
+// 客户端错误可读化: fetch 异常(网络断开、请求超时中止等)返回的是 Error 实例,
+// JSON.stringify 只得 "{}";取其 message 才能让「请求超时」等字样进入阻塞问题
+// 文案,其余(服务端结构化错误体)照旧序列化。
+function formatClientError(error: unknown): string {
+  return error instanceof Error ? error.message : JSON.stringify(error)
 }
 
 // Two questions count as the same issue when their normalized texts match or
