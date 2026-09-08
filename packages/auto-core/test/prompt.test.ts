@@ -823,7 +823,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "m" })).toContain("代码迁移与改造")
     expect(renderPhasePlan({ phase: "t" })).toContain("回归覆盖")
     expect(renderPhasePlan({ phase: "v" })).toContain("整体验收")
-    expect(renderPhasePlan({ phase: "k" })).toContain("docs/migration-kb/R<N>-migration-")
+    expect(renderPhasePlan({ phase: "k" })).toContain("docs/R-NN/migration-kb.md")
   })
 
   test("handovers 注入两态: 有前序交接则注入清单(标注 docs/handovers/ 永久路径),无则整块消失", () => {
@@ -854,14 +854,15 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
   })
 
-  test("m 阶段附简化流程判定(复杂度评估 simple → 勘察设计并入首批任务,底线不省),其余阶段无", () => {
-    const m = renderPhasePlan({ phase: "m", prevRound: "### 上一轮迁移知识(docs/migration-kb/R1-migration-x.md)\n\n流程建议: simple" })
-    expect(m).toContain("简化流程判定")
-    expect(m).toContain("复杂度评估")
+  test("m 阶段经 trimmedPhases 注入流程裁剪注记(--phases 裁剪 → 勘察设计并入首批任务,底线不省),缺省与其余阶段无", () => {
+    const m = renderPhasePlan({ phase: "m", trimmedPhases: true })
+    expect(m).toContain("流程裁剪注记")
+    expect(m).toContain("--phases 裁剪")
     expect(m).toContain("并入本阶段首批任务")
     expect(m).toContain("底线保障")
-    // 非 m 阶段不注入该判定
-    expect(renderPhasePlan({ phase: "a", prevRound: "x" })).not.toContain("简化流程判定")
+    // 缺省(完整流程)不注入;非 m 阶段即使传入也不注入(门控在函数内)
+    expect(renderPhasePlan({ phase: "m" })).not.toContain("流程裁剪注记")
+    expect(renderPhasePlan({ phase: "a", trimmedPhases: true })).not.toContain("流程裁剪注记")
   })
 
   test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
@@ -957,15 +958,15 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
-    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以 migration-kb 产物为准
+    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以本轮 migration-kb 产物为准
     expect(text).toContain("PLAN.md 为空模板")
     expect(text).toContain("CURRENT.md 不存在,属预期")
-    expect(text).toContain("docs/migration-kb/")
+    expect(text).toContain("docs/R-NN/migration-kb.md")
     expect(text).toContain("无任务清单时跳过")
     // 有下一阶段时不带收尾措辞
     const withNext = renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })
     expect(withNext).not.toContain("无下一阶段")
-    expect(withNext).not.toContain("docs/migration-kb/")
+    expect(withNext).not.toContain("migration-kb")
   })
 
   test("verify 未启用: 不含 verified 字段描述", () => {
@@ -988,10 +989,10 @@ describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowled
   test("注入输出路径、来源清单与章节骨架;只读分析、唯一可写文件为输出路径", () => {
     const text = renderKnowledge({ file: FILE })
     expect(text).toContain(FILE)
-    // 来源指针(阶段台账与各阶段交接文档永久路径,归档目录内是阶段 PLAN 快照)
-    expect(text).toContain("docs/phases.md")
-    expect(text).toContain("docs/handovers/")
-    expect(text).toContain("docs/phases/<字母>-<名称>/")
+    // 来源指针(本轮轮次目录内的阶段台账与各阶段交接文档,归档目录内是阶段 PLAN 快照)
+    expect(text).toContain("docs/R-NN/phases.md")
+    expect(text).toContain("docs/R-NN/handovers/")
+    expect(text).toContain("docs/R-NN/<字母>-<名称>/")
     expect(text).toContain("git log")
     // 章节骨架(规格书 §13 的本仓库化,Design Deviations 改以 AUTO-DECISION 为来源)
     for (const section of ["## 迁移概要", "## API 与类型映射", "## 实现模式", "## 坑点与边界情况", "## 可复用规则", "## 设计偏差与重要决策", "## 验证证据", "## 参考"]) {
@@ -1103,17 +1104,6 @@ describe("renderPriorKnowledge(前置知识提取会话)", () => {
     expect(bare).not.toContain("## 输入: 已有蒸馏产物")
     expect(bare).not.toContain("不得在本文复述")
     expect(renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md", distilled: [] })).not.toContain("## 输入: 已有蒸馏产物")
-  })
-
-  test("复杂度评估骨架与协议: 章节存在、协议行规则说明齐全", () => {
-    usePromptLibrary(undefined)
-    const text = renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md" })
-    expect(text).toContain("## 复杂度评估")
-    expect(text).toContain("流程建议: <full|simple>")
-    expect(text).toContain("`流程建议: full`")
-    expect(text).toContain("`流程建议: simple`")
-    expect(text).toContain("任何拿不准一律")
-    expect(text).toContain("不豁免任何底线保障")
   })
 })
 

@@ -71,10 +71,10 @@ T-001(subtask=auto, fork=on)
 
 基点 = decompose/子任务会话统一分叉的会话,持久化为 PLAN.md 任务字段 `fork-base`(两模式同名字段,语义均为「分叉基点会话」)。
 
-- **`session`(默认)**:基点 = 理解会话末端。
+- **`session`**:基点 = 理解会话末端。
   - 优点:前缀含实际读过的源码与探索过程,分解与执行的接地最全,行级细节不丢失;
   - 缺点:前缀大小不受控(取决于探索量),逼近 `cap/2` 会触发冷启动防护;provider 缓存未命中时前缀全额计费;基点 sessionID 跨运行失效只能回退冷启动。
-- **`digest`**:理解完成后 driver 建一个**全新基点会话**——提示词 = context.md 全文 + 要求一句确认(模板见 §7),经 `runSession` 一次性链(`{ pct: 100, used: 0, at: 0, subject: "T-NNN ctxbase …" }`,不带 phase、不写进度记录)运行,结束后的 `chain.id` 即基点,`setForkBase` 覆写字段。
+- **`digest`(默认)**:理解完成后 driver 建一个**全新基点会话**——提示词 = context.md 全文 + 要求一句确认(模板见 §7),经 `runSession` 一次性链(`{ pct: 100, used: 0, at: 0, subject: "T-NNN ctxbase …" }`,不带 phase、不写进度记录)运行,结束后的 `chain.id` 即基点,`setForkBase` 覆写字段。
   - 优点:前缀 = 紧凑摘要(大小可控可预估,cap 利用率最高,`cap/2` 防护基本不触发);**可从磁盘确定性重建**——恢复运行无条件重建(context.md 未变则前缀逐字一致,provider 缓存仍命中),「基点 sessionID 失效」这一回退场景在 digest 模式下不存在;
   - 缺点:丢失探索过程的原始细节,子任务需要具体代码时须按摘要指引回读文件(定向回读远廉于盲目探索,但多一跳);
   - 确认 turn 无工作区改动,`commitTree` 对无改动仓库自然跳过(不产生空提交);session 模式基点持久跨运行,digest 模式基点是**每次运行重建的易失指针**(重建后字段值更新,旧基点会话自然沉没)。
@@ -116,9 +116,9 @@ T-001(subtask=auto, fork=on)
 | 环境变量 | 值域 | 缺省 | 作用域 |
 |---|---|---|---|
 | `OPENCODE_AUTO_FORK` | on\|off | on | 总开关:off = 现状流水线(无理解会话、无分叉),行为零变化 |
-| `OPENCODE_AUTO_FORK_BASE` | session\|digest | session | 基点模式,仅 fork=on 有意义(§4.2) |
-| `OPENCODE_AUTO_DECOMPOSE_FINE` | on\|off | off | 细粒度分解:decompose-\<phase\> 模板注入细粒度准则段(§5.1) |
-| `OPENCODE_AUTO_STEER` | on\|off | on | 超限交接 steer(2×cap):off = 停用注入与会话后交接判定(§4.4) |
+| `OPENCODE_AUTO_FORK_BASE` | session\|digest | digest | 基点模式,仅 fork=on 有意义(§4.2) |
+| `OPENCODE_AUTO_DECOMPOSE_FINE` | on\|off | on | 细粒度分解:decompose-\<phase\> 模板注入细粒度准则段(§5.1) |
+| `OPENCODE_AUTO_STEER` | on\|off | off | 超限交接 steer(2×cap):off = 停用注入与会话后交接判定(§4.4) |
 
 - 解析(实现独立成 `src/switches.ts`:`parseSwitches` 纯函数供单测直接构造 env 记录驱动 + `autoSwitches` memo 访问器):值为空串视同未设;非法值 throw 中文报错(含变量名与期望值域)→ CLI 退出码 1(与配置「坏文件严格失败」哲学一致)。runner 入口解析一次;`runTask` 启动日志列出**非默认**生效项(默认组合静默,verbose 可查全量)。
 - **不落盘**:环境变量覆盖不写回任何状态文件(区别于宪法键的 init 固化),实验语义 = 本次运行;同一次运行内开关恒定,会话中途不变。

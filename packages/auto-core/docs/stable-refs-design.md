@@ -74,35 +74,54 @@ docs/
                             #   patch-r<r>.md / validate-r<r>.md / finalize.md
                             #   (各终审任务锚定自己的 docs/T-F<k>/,跨轮随任务递增,
                             #    见 P1 实施设计 P1-D1)
-  handovers/                # 阶段交接蒸馏(永久):R<N>-<字母>-<slug>.md
-  migration-kb/             # 迁移知识(永久):R<N>-migration-<时间戳>.md
-  prior-kb/                 # 先验知识(永久)
+  handovers/                # 阶段交接蒸馏(旧平铺,永久,读回落):R<N>-<字母>-<slug>.md
+  migration-kb/             # 迁移知识(旧平铺,永久,读回落):R<N>-migration-<时间戳>.md
+  prior-kb/                 # 先验知识(旧平铺,永久,读回落)
   agents/                   # AGENTS.md 维护规则块路由的跨阶段知识(不变)
-  phases.md                 # 当轮台账(不变)
-  phases/                   # 纯过期状态,不被任何文档引用
+  R-01/                     # 第 1 轮轮次目录(轮首建立,落盘即永久,R2)
+    PLAN.md                 # 本轮任务台账(根 PLAN.md 是指向它的相对符号链接)
+    phases.md               # 本轮阶段台账(根 docs/phases.md 在新布局消亡)
+    AGENTS.md.bak           # 轮首 AGENTS.md 快照(.bak 避免被当指令自动加载)
+    a-analysis/PLAN.md      # 阶段 PLAN.md 快照(纯过期状态,不被任何文档引用)
+    handovers/              # 阶段交接蒸馏(永久):<字母>-<slug>.md(去 R<N>- 前缀)
+    phase-docs/             # 阶段级自由产物:<字母>-<slug>/(去 R<N>- 前缀)
+    prior-kb.md             # 本轮前置知识(轮内固定名)
+    migration-kb.md         # 本轮迁移知识(轮内固定名)
+  phases/                   # 旧布局(存量读回落):纯过期状态,不被任何文档引用
     a-analysis/PLAN.md      # 阶段 PLAN.md 快照
     round-1/                # phases.md + 轮末 PLAN.md + AGENTS.md + 各阶段归档目录
 ```
+
+> **2026-09-08 轮次专用目录方案(plans/ROUND_WORKDIR_PLAN.md)**:每轮一个
+> `docs/R-NN/`(R 后两位零填充,自然进位;与 `docs/T-NNN/` 并列 = docs/ 下两类
+> 顶级命名空间:T = 跨轮永久编号的任务文档,R = 自包含轮次容器),轮首建立、
+> 其中一切落盘即永久,取代"共用目录 + 文件名前缀 + 轮末搬移归档"(archiveRound
+> 已删除)。存量兼容 = 只读回落:旧平铺 `docs/handovers/R<N>-*.md`、
+> `docs/prior-kb|migration-kb/`、`docs/phases/round-N/` 与根 `docs/phases.md`
+> 原地保留为读回落源,绝不搬移;写只写新布局。
 
 规则条款:
 
 - **R1 编号根本规则**:T-NNN 全局唯一、只增不减(`autoNumber` 缺省 on,D5);文档身份锚定
   任务编号;T-F<k> 终审编号独立命名空间,不进自动编号记录(既有语义)。
-- **R2 永久性**:`docs/` 下文档(`docs/T-*/`、`docs/handovers/`、`docs/migration-kb/`、
-  `docs/prior-kb/`、`docs/agents/`)一经创建永不移动、永不改名。
+- **R2 永久性**:`docs/` 下文档(`docs/T-*/`、`docs/R-*/`、旧平铺 `docs/handovers/`、
+  `docs/migration-kb/`、`docs/prior-kb/`、`docs/agents/`)一经创建永不移动、永不改名。
 - **R3 目录化**:任务文档只出现在 `docs/T-NNN/` 内;子任务文档只出现在 `docs/T-NNN/S<kk>/`
   内(两位零填充,S04)。
 - **R4 角色文件名固定**:context / subtasks / report / audit / fix / handoff / testhandoff / index。
-- **R5 归档语义**:`docs/phases/` 只收过期状态文件——每阶段 PLAN.md 快照、每轮
-  (台账 + 轮末 PLAN.md + AGENTS.md);状态文件不被任何文档引用。
+- **R5 归档语义**:过期状态文件(每阶段 PLAN.md 快照)收在轮次目录
+  `docs/R-NN/<字母>-<slug>/` 内(旧布局 `docs/phases/` 同款,存量读回落);
+  状态文件不被任何文档引用。
 - **R6 临时文件**:handoff.md / testhandoff.md 生命周期 = 执行范围,完成即 driver 删除
   (既有语义,仅位置移入目录)。
-- **R7 阶段差异表达**:轮次经文件名前缀 `R<N>-` 与台账推导表达,不靠搬移目录。
+- **R7 阶段差异表达**:轮次经 `docs/R-NN/` 轮次目录与台账推导表达(旧布局为文件名
+  前缀 `R<N>-`,存量读回落),不靠搬移目录。
 
 ### 3.2 引用语法
 
 - 唯一合法形态:**目标目录根相对路径**,反引号或 Markdown 链接;允许 `path:line` 行号锚。
-- 文档间引用指向 `docs/T-NNN/...` 永久路径;禁止引用 `docs/phases/` 状态文件与
+- 文档间引用指向 `docs/T-NNN/...` 永久路径;禁止引用轮次目录内的状态文件
+  (台账 phases.md、阶段归档内的 PLAN 快照;旧布局 `docs/phases/` 同)与
   handover 路径(handover 是 driver 注入通道,非引用目标)。
 - 豁免:代码围栏(``` 配对)内的路径;行内含 `已删除` / `已归档` / `历史` 标记的引用
   (描述过去状态)。

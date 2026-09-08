@@ -1,7 +1,15 @@
-import { rename } from "node:fs/promises"
+import { realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import type { FinalStage } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
+
+// 落笔目标解析(轮次专用目录方案): 阶段化流程下根 PLAN.md 是指向轮次目录
+// docs/R-NN/PLAN.md 的相对符号链接(单一事实源);rename 会替换链接本身而非写穿,
+// 故临时文件与改名一律落到链接目标(真实路径),链接保持存活。非符号链接
+// (phases = "m" 纯人工模式)= 原路径,行为零变化。
+async function writeTarget(path: string): Promise<string> {
+  return await realpath(path).catch(() => path)
+}
 
 export const STATUSES = ["pending", "in_progress", "blocked", "done"] as const
 export type Status = (typeof STATUSES)[number]
@@ -221,11 +229,12 @@ export async function appendTask(path: string, task: Task) {
     ...(task.attempts ? [`  - attempts: ${task.attempts}`] : []),
   ]
   const block = [`## ${task.id}: ${task.title} [${task.status}]`, ...fields, task.body].join("\n")
-  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`)
-  await allowWrite(path)
+  const target = await writeTarget(path)
+  const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`)
+  await allowWrite(target)
   await Bun.write(tmp, `${text.trimEnd()}\n\n${block}\n`)
-  await rename(tmp, path)
-  await reprotect(path)
+  await rename(tmp, target)
+  await reprotect(target)
 }
 
 // Task-level verify convention: a "command: <cmd>" prefix declares a concrete
@@ -301,14 +310,15 @@ async function edit(path: string, id: string, change: Edit) {
     lines.splice(start, end - start, ...change.body.split("\n"), "")
   }
 
-  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`)
+  const target = await writeTarget(path)
+  const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`)
   // Read-only protection (when active) does not block rename on POSIX, but
   // Windows refuses to replace a read-only target — restore writability
   // first and re-apply protection right after.
-  await allowWrite(path)
+  await allowWrite(target)
   await Bun.write(tmp, lines.join("\n"))
-  await rename(tmp, path)
-  await reprotect(path)
+  await rename(tmp, target)
+  await reprotect(target)
 }
 
 function unquote(value: string): string {

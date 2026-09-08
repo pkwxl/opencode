@@ -161,6 +161,29 @@ describe("activeDocs / validateRefs / scanRefs", () => {
     }
   })
 
+  test("活文档枚举: 轮次目录(新布局)内阶段归档排除,台账/交接/知识文档属活文档", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await mkdir(join(dir, "docs/R-01/a-analysis"), { recursive: true })
+      await Bun.write(join(dir, "docs/R-01/a-analysis/PLAN.md"), "x") // 阶段归档(状态文件)
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "x") // 台账(活文档,与根 phases.md 同款)
+      await Bun.write(join(dir, "docs/R-01/PLAN.md"), "x")
+      await Bun.write(join(dir, "docs/R-01/migration-kb.md"), "x")
+      await Bun.write(join(dir, "docs/R-01/prior-kb.md"), "x")
+      await mkdir(join(dir, "docs/R-01/handovers"), { recursive: true })
+      await Bun.write(join(dir, "docs/R-01/handovers/a-analysis.md"), "x")
+      expect(await activeDocs(dir)).toEqual([
+        "docs/R-01/PLAN.md",
+        "docs/R-01/handovers/a-analysis.md",
+        "docs/R-01/migration-kb.md",
+        "docs/R-01/phases.md",
+        "docs/R-01/prior-kb.md",
+      ])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("validateRefs: 存在性 + 行号 ≤ 总行数;目录引用只查存在性", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
     try {

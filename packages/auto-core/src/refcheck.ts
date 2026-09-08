@@ -110,13 +110,17 @@ function escapeRegexp(text: string): string {
 }
 
 // —— P4: 活文档枚举与校验 ——
-// 活文档范围(stable-refs §3.3): docs/**/*.md,排除 docs/phases/**(R5 状态文件
-// 不被任何文档引用,也不参与检查);排序保证扫描与日志输出确定。
+// 活文档范围(stable-refs §3.3): docs/**/*.md,排除 docs/phases/** 与轮次目录
+// docs/R-NN/<字母>-<slug>/** 内的阶段归档(R5 状态文件不被任何文档引用,也不
+// 参与检查;轮内台账 phases.md 与根 docs/phases.md 同款属活文档);排序保证扫描与
+// 日志输出确定。
 export async function activeDocs(dir: string): Promise<string[]> {
   const files: string[] = []
   for await (const file of new Bun.Glob(join("docs", "**", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
-    if (file.split(/[\\/]/)[1] === "phases") continue
-    files.push(file.split(sep).join("/"))
+    const segments = file.split(/[\\/]/)
+    if (segments[1] === "phases") continue
+    if (/^R-\d+$/.test(segments[1] ?? "") && /^[admtvk]-/.test(segments[2] ?? "")) continue
+    files.push(segments.join("/"))
   }
   return files.sort()
 }

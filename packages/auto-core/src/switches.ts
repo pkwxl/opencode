@@ -41,7 +41,7 @@ export type Switches = {
   refCheck: boolean
 }
 
-const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "session", fine: false, steer: true, step: "off", refCheck: false }
+const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "digest", fine: true, steer: false, step: "off", refCheck: false }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
 // (取缺省),非法值 throw 中文报错。
@@ -56,7 +56,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
   const forkBaseRaw = env[SWITCH_ENV.forkBase]
   const forkBase = forkBaseRaw === undefined || forkBaseRaw === "" ? SWITCH_DEFAULTS.forkBase : forkBaseRaw
   if (forkBase !== "session" && forkBase !== "digest") {
-    throw new Error(`环境变量 ${SWITCH_ENV.forkBase} 取值非法: "${forkBaseRaw}"(期望 session|digest;空串视同未设,缺省 session)`)
+    throw new Error(`环境变量 ${SWITCH_ENV.forkBase} 取值非法: "${forkBaseRaw}"(期望 session|digest;空串视同未设,缺省 digest)`)
   }
   const stepRaw = env[SWITCH_ENV.step]
   const step = stepRaw === undefined || stepRaw === "" ? SWITCH_DEFAULTS.step : stepRaw

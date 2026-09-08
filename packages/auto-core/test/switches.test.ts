@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { autoSwitches, formatSwitches, nonDefaultSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
 
 describe("parseSwitches(实验开关环境变量层)", () => {
-  test("默认组合: 全部未设取缺省(fork on / session / fine off / steer on / step off / refCheck off)", () => {
-    expect(parseSwitches({})).toEqual({ fork: true, forkBase: "session", fine: false, steer: true, step: "off", refCheck: false })
+  test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off)", () => {
+    expect(parseSwitches({})).toEqual({ fork: true, forkBase: "digest", fine: true, steer: false, step: "off", refCheck: false })
   })
 
   test("空串视同未设(六个变量同测)", () => {
@@ -16,29 +16,29 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.step]: "",
         [SWITCH_ENV.refCheck]: "",
       }),
-    ).toEqual({ fork: true, forkBase: "session", fine: false, steer: true, step: "off", refCheck: false })
+    ).toEqual({ fork: true, forkBase: "digest", fine: true, steer: false, step: "off", refCheck: false })
   })
 
   test("合法值: 显式设置全部开关", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "off",
-        [SWITCH_ENV.forkBase]: "digest",
-        [SWITCH_ENV.fine]: "on",
-        [SWITCH_ENV.steer]: "off",
+        [SWITCH_ENV.forkBase]: "session",
+        [SWITCH_ENV.fine]: "off",
+        [SWITCH_ENV.steer]: "on",
         [SWITCH_ENV.step]: "subtask",
         [SWITCH_ENV.refCheck]: "on",
       }),
-    ).toEqual({ fork: false, forkBase: "digest", fine: true, steer: false, step: "subtask", refCheck: true })
+    ).toEqual({ fork: false, forkBase: "session", fine: false, steer: true, step: "subtask", refCheck: true })
   })
 
   test("显式设置缺省值等价于未设", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "on",
-        [SWITCH_ENV.steer]: "on",
-        [SWITCH_ENV.fine]: "off",
-        [SWITCH_ENV.forkBase]: "session",
+        [SWITCH_ENV.steer]: "off",
+        [SWITCH_ENV.fine]: "on",
+        [SWITCH_ENV.forkBase]: "digest",
         [SWITCH_ENV.step]: "off",
         [SWITCH_ENV.refCheck]: "off",
       }),
@@ -73,18 +73,18 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off",
     )
   })
 
   test("非默认项逐一列出,默认项不出现;全量描述始终完整", () => {
-    const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
-    expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
+    const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "off" })
+    expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=off")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off",
     )
-    const all = parseSwitches({ [SWITCH_ENV.forkBase]: "digest", [SWITCH_ENV.steer]: "off" })
-    expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_STEER=off")
+    const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "on" })
+    expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=on")
     const stepped = parseSwitches({ [SWITCH_ENV.step]: "task" })
     expect(nonDefaultSwitches(stepped)).toBe("OPENCODE_AUTO_STEP=task")
     const refChecked = parseSwitches({ [SWITCH_ENV.refCheck]: "on" })

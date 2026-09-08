@@ -157,8 +157,8 @@ describe("seedForkSession(阶段/子任务首个会话的播种)", () => {
 describe("ensureForkBase(基点确立与回退链: digest → session → 冷启动)", () => {
   let dir: string
   let path: string
-  const digest = parseSwitches({ [SWITCH_ENV.forkBase]: "digest" })
-  const session = parseSwitches({})
+  const digest = parseSwitches({})
+  const session = parseSwitches({ [SWITCH_ENV.forkBase]: "session" })
   const chain = { pct: 100, used: 0, at: 0 }
 
   beforeEach(async () => {

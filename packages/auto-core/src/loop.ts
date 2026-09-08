@@ -96,14 +96,18 @@ const REFS_SPEC = `<!-- opencode-auto:refs:start -->
 引用与存放规范(稳定引用,细则见 stable-refs 设计文档):
 1. 存放: 任务文档只在 docs/T-NNN/ 内(context/subtasks/report/audit/fix/handoff/
    testhandoff.md),子任务产物只在 docs/T-NNN/S<两位序号>/ 内(index.md、
-   testhandoff.md),终审产物在 docs/T-F<k>/ 内;阶段交接在 docs/handovers/、
-   迁移知识在 docs/migration-kb/、前置知识在 docs/prior-kb/。这些路径一经创建
-   即为永久路径: 永不移动、永不改名;docs/phases/ 只放过期状态文件。
+   testhandoff.md),终审产物在 docs/T-F<k>/ 内;每轮一个轮次目录
+   docs/R-NN/(轮首建立、永久不动): 阶段台账 phases.md、阶段归档
+   <字母>-<slug>/、阶段交接 handovers/<字母>-<slug>.md、阶段级产物
+   phase-docs/<字母>-<slug>/、迁移知识 migration-kb.md 与前置知识
+   prior-kb.md 都在轮目录内。这些路径一经创建即为永久路径: 永不移动、
+   永不改名。
 2. 引用: 文档间引用与对代码的引用一律写目标目录根相对路径(如
    \`docs/T-003/S04/index.md\`、\`src/runner.ts:120\`,反引号或链接,可带 :行号
    锚,锚可再带 @<sha> 版本标记——如 \`src/runner.ts:120@abc1234\`,表示该
-   范围仅对标记的历史版本有效,豁免行号校验);不要引用 docs/phases/ 下的
-   状态文件;轮次差异经文件名 R<N>- 前缀与台账表达,不靠搬移目录。
+   范围仅对标记的历史版本有效,豁免行号校验);不要引用轮次目录内的状态
+   文件(台账 phases.md 与阶段归档内的 PLAN 快照);轮次差异经 docs/R-NN/
+   目录表达,不靠搬移目录或改名。
 3. 检查: driver 在统一提交前自动改写 rename 引用、对被修改文件的不一致行号
    锚自动追加 @<sha> 版本标记(保留原范围,留待人工订正),并报告失效引用;
    check 子命令全量扫描活文档;verify 启用时任务产物文档的失效引用会被验收
@@ -560,7 +564,8 @@ export async function runAll(
       const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
       // 前序阶段交接注入(E 节注入纪律): 只注入 handover 蒸馏产物,不注入前序
       // 原始 docs/。台账中早于当前阶段且已 done 的各阶段逐个拼接;交接文档为永久
-      // 路径 docs/handovers/R<N>-…(D3),P2 前完成的阶段落在归档目录内(读回落);
+      // 路径(新布局轮内 docs/R-NN/handovers/,旧布局 docs/handovers/R<N>-…,
+      // handoverDoc 按布局解析),P2 前完成的阶段落在阶段归档目录内(读回落);
       // 缺 handover 的阶段在清单中标注"(无交接文档)"。
       const declared = [...phases] as Phase[]
       const ledger = await readLedger(directory)
@@ -571,10 +576,10 @@ export async function runAll(
             .slice(0, declared.indexOf(phase))
             .filter((letter) => ledger.done.includes(letter))
             .map(async (letter) => {
-              const modern = handoverDoc(round, letter)
+              const modern = await handoverDoc(directory, round, letter)
               const text =
                 (await Bun.file(join(directory, modern)).text().catch(() => undefined)) ??
-                (await Bun.file(join(directory, phaseArchive(letter), "handover.md")).text().catch(() => undefined))
+                (await Bun.file(join(directory, await phaseArchive(directory, round, letter), "handover.md")).text().catch(() => undefined))
               return [`### ${letter} ${phaseText(letter)}(${modern})`, "", text?.trim() || "(无交接文档)"].join("\n")
             }),
         )
@@ -605,6 +610,8 @@ export async function runAll(
             mode: opts.mode,
             verify: opts.verify,
             finalReview: opts.finalReview,
+            // 生效 phases 经 --phases 裁剪(无独立 a/d 阶段)→ m 阶段规划注入裁剪注记
+            trimmedPhases: !phases.includes("a") && !phases.includes("d"),
             numberStart,
           }),
           {
@@ -659,12 +666,12 @@ export async function runAll(
       }
     }
 
-    // 阶段交接(F 节,stable-refs P2 起 docs 永不移动): ① 蒸馏会话(AI 唯一职责,
-    // 旁路一次性)产出永久路径 docs/handovers/R<N>-<字母>-<slug>.md(driver 先建目录,
-    // 落定不移动)→ ② PLAN.md 拷贝进归档目录后重置空模板(归档只收过期状态文件,
-    // 本阶段 docs/ 产物不动)→ ③ 台账追加 → ④ 统一提交(Auto-Stage:
-    // phase-transition)。各步幂等,中断重跑自然续完(C.2)。返回 0 = 交接完成,
-    // 2 = 蒸馏会话隐性阻塞。
+    // 阶段交接(F 节,轮次专用目录方案起 docs 永不移动): ① 蒸馏会话(AI 唯一职责,
+    // 旁路一次性)产出永久路径交接文档(新布局轮内 docs/R-NN/handovers/<字母>-
+    // <slug>.md,driver 先建目录,落定不移动)→ ② PLAN.md 拷贝进阶段归档目录后
+    // 重置空模板(归档只收过期状态文件,本阶段 docs/ 产物不动)→ ③ 台账追加 →
+    // ④ 统一提交(Auto-Stage: phase-transition)。各步幂等,中断重跑自然续完
+    // (C.2)。返回 0 = 交接完成,2 = 蒸馏会话隐性阻塞。
     const handoverPhase = async (phase: Phase): Promise<number> => {
       const letters = [...phases] as Phase[]
       const nextLetter = letters[letters.indexOf(phase) + 1]
@@ -672,7 +679,8 @@ export async function runAll(
       const target = next ?? "流程完成"
       banner(`阶段交接: ${phase} ${phaseText(phase)} → ${target}`)
       // driver 先建 handovers/ 目录再开会话;handoverDoc 不在 protect 名单,无需 allowWrite。
-      const handover = handoverDoc(await currentRound(directory), phase)
+      const round = await currentRound(directory)
+      const handover = await handoverDoc(directory, round, phase)
       const handoverFile = join(directory, handover)
       await mkdir(dirname(handoverFile), { recursive: true })
       log(`▶ 开交接蒸馏会话产出 ${handover}`)
@@ -710,7 +718,7 @@ export async function runAll(
         log(`⏸ 交接蒸馏会话受阻(隐性阻塞,请检查后重新运行):\n${distilled.question}`)
         return 2
       }
-      const archivedPlan = join(directory, phaseArchive(phase), "PLAN.md")
+      const archivedPlan = join(directory, await phaseArchive(directory, round, phase), "PLAN.md")
       await mkdir(dirname(archivedPlan), { recursive: true })
       await Bun.write(archivedPlan, await Bun.file(path).text())
       await allowWrite(path)
@@ -762,7 +770,7 @@ export async function runAll(
           // 交接在"重置 PLAN.md 之后、台账追加之前"中断——补写台账并提交,不重新
           // 规划本阶段(更早中断时 PLAN.md 仍有任务,路由为 handover,完整重跑交接)。
           const interrupted =
-            (await stat(join(directory, phaseArchive(route.phase), "PLAN.md")).then(() => true, () => false)) &&
+            (await stat(join(directory, await phaseArchive(directory, await currentRound(directory), route.phase), "PLAN.md")).then(() => true, () => false)) &&
             !(await readLedger(directory)).done.includes(route.phase)
           if (interrupted) {
             log(`↻ 恢复中断: ${route.phase} ${phaseText(route.phase)} 阶段交接已归档与重置,补写台账后进入下一阶段`)
@@ -776,11 +784,11 @@ export async function runAll(
             continue
           }
           // k(知识提炼)阶段整体认领 --extract-knowledge 设计(P4): 不开规划会话、
-          // 不向 PLAN.md 填任务——plan 路由直接进入知识提取旁路会话(产物
-          // docs/migration-kb/R<N>-…,永久路径不随交接移动;本轮前缀文档已产出则
-          // 幂等跳过),随后照常交接。提取失败只打 ⚠ 警告、不污染退出码(迁移成功
-          // 不被文档生成失败反向污染);人工在 k 阶段自行向 PLAN.md 填任务时走通用
-          // execute/handover 路由,提取挂点不触发。
+          // 不向 PLAN.md 填任务——plan 路由直接进入知识提取旁路会话(产物为永久路径:
+          // 新布局轮内 docs/R-NN/migration-kb.md,旧布局 docs/migration-kb/R<N>-…;
+          // 本轮文档已产出则幂等跳过),随后照常交接。提取失败只打 ⚠ 警告、不污染
+          // 退出码(迁移成功不被文档生成失败反向污染);人工在 k 阶段自行向 PLAN.md
+          // 填任务时走通用 execute/handover 路由,提取挂点不触发。
           if (route.phase === "k") {
             banner("k 知识提炼: 迁移知识沉淀")
             const extracted = await extractKnowledge(serverHandle.client, directory, {
@@ -800,7 +808,7 @@ export async function runAll(
             else {
               log(
                 `⚠ 迁移知识沉淀未完成(knowledge_extraction_error),退出码不受影响,k 阶段照常交接;` +
-                  `可修复问题后按人工回退规程(删台账 k 行与 docs/migration-kb/ 内本轮 R<N>- 前缀文档)重跑单独重试。受阻详情:\n${extracted.question}`,
+                  `可修复问题后按人工回退规程(删本轮台账 k 行与本轮迁移知识文档)重跑单独重试。受阻详情:\n${extracted.question}`,
               )
             }
             const code = await handoverWithStep("k")
