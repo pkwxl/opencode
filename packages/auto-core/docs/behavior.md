@@ -117,9 +117,10 @@
   永不移动、永不改名——阶段交接产出 docs/handovers/R<N>-<字母>-<slug>.md
   (handoverDoc,src/phases.ts),知识文档 docs/migration-kb/R<N>-migration-<时间
   戳>.md 与前置知识 docs/prior-kb/R<N>-prior-<时间戳>.md(docpaths.ts
-  knowledgeDoc/priorKnowledgeDoc,轮次 R<N>- 前缀守卫幂等,第 1 轮无前缀存量
-  读回落);docs/phases/ 只收过期状态文件(阶段 PLAN 快照、轮次归档 = 各阶段
-  归档目录 + 台账 + 轮末 PLAN + AGENTS.md 快照),状态文件不被任何文档引用;
+   knowledgeDoc/priorKnowledgeDoc,轮次 R<N>- 前缀守卫幂等,第 1 轮及轮已推进
+   的旧机制轮次(台账有完成阶段而无本轮前缀文档)无前缀存量读回落);
+   docs/phases/ 只收过期状态文件(阶段 PLAN 快照、轮次归档 = 各阶段
+   归档目录 + 台账 + 轮末 PLAN + AGENTS.md 快照),状态文件不被任何文档引用;
    P2 前布局(交接在归档目录内、知识无前缀)各读点回落兼容。
  - 引用一致性三层(stable-refs P4,D6;设计文档 stable-refs-design.md §3.3;
    **2026-09-08 起经实验开关 `OPENCODE_AUTO_REF_CHECK=on/off` 管控,缺省 off**
