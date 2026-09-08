@@ -115,8 +115,7 @@ export function handoverDoc(round: number, phase: Phase): string {
 // <slug>/<name>.md——永久路径,落定不移动、不参与轮次归档(D3 handovers 同款
 // 范式),轮次经 R<N>- 目录名前缀表达(R7),与 handoverDoc 交接蒸馏按同名对位
 // (蒸馏 = <slug>.md,原始产物 = 同名目录)。目录名依赖阶段 slug 表,构造点在
-// 本文件而非 docpaths.ts(同 handoverDoc);旧轮归档提升映射(docpaths.
-// phasesArchivePair)按同构路径直接拼接,不经本构造器以避免反向依赖。
+// 本文件而非 docpaths.ts(同 handoverDoc)。
 export function phaseDocsDir(round: number, phase: Phase): string {
   return `docs/phase-docs/R${round}-${phase}-${PHASE_SLUGS[phase]}`
 }

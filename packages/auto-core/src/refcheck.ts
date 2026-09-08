@@ -1,9 +1,11 @@
 // 引用一致性层(stable-refs 设计 §4.5,三层见 D6): extractRefs 提取文档对文档/
 // 代码的路径引用(反引号 span 与 md 链接),rewriteRefs 做旧→新路径的机械改写
-// (启动迁移与提交前 auto-correct 共用本原语);P4 补齐 validateRefs(存在性 +
-// 段边界后缀唯一匹配消解 + 行号上限)、renamePairs(git rename 配对)、活文档枚举
-// 与 scanRefs 全量扫描,供 check 子命令与 verify 门禁消费;autoCorrectRefs 另维护
-// .auto/invalid-refs.md 失效清单,仅对新出现的失效引用输出 ⚠ 日志。
+// (提交前 auto-correct 与 fix-refs 手动脚本共用本原语);P4 补齐 validateRefs
+// (存在性 + 段边界后缀唯一匹配消解 + 行号上限)、renamePairs(git rename 配对)、
+// 活文档枚举与 scanRefs 全量扫描,供 check 子命令与 verify 门禁消费;
+// autoCorrectRefs 另维护 .auto/invalid-refs.md 失效清单,仅对新出现的失效引用输出
+// ⚠ 日志。三层挂点受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,
+// 缺省 off 空转;管控点在 runner.ts/check.ts,本层函数不感知开关)。
 import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
 import type { Stats } from "node:fs"
 import { join, relative, sep, dirname } from "node:path"
@@ -61,6 +63,9 @@ export function extractRefs(text: string): Ref[] {
 
 // 机械改写: 对每个 pair 以全路径词边界正则替换并计数(防 docs/T-1.md 误配
 // docs/T-11.md、防截断半路径);同样只作用于候选行(围栏与标记行豁免)。
+// 排版不变式(2026-09-08 需求追加): 改写绝不动文档排版——只就地替换命中 token
+// 本身,行结构/空白/表格对齐/末尾换行一律原样保留;无命中(count=0)时输出与
+// 输入逐字节相同(调用方不写回,文件保持原样)。
 export function rewriteRefs(text: string, pairs: Array<{ old: string; new: string }>): { text: string; count: number } {
   const lines = text.split("\n")
   const mask = candidateMask(text)

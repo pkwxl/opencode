@@ -197,7 +197,8 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 - `validateRefs(dir, refs)`:存在性 + 行号 ≤ 总行数;产出 findings(file/line/text)。
 - `renamePairs(root)`:`git diff --find-renames --diff-filter=R HEAD` → `{ old, new }`。
 - `rewriteRefs(docs, pairs)`:机械替换,仅全路径词边界匹配;**只配对 rename,删除/语义
-  变化不自动改**(防误修复历史叙述)。
+  变化不自动改**(防误修复历史叙述);**改写不动排版**(2026-09-08 需求追加)——只
+  就地替换命中 token 本身,行结构/空白/表格对齐/末尾换行原样保留,无命中不写回。
 
 接线:
 
@@ -256,6 +257,16 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 >   任务文档自动保最新版。
 > - AGENTS.md 引用规范块为 §3 规范的精编全文(逐字全文会使六个标记块累计逼近维护
 >   规则块的 150 行预算);规范细则以本设计文档为准。
+
+> **2026-09-08 修订注记(refcheck-scope-design,对 §4.5/D6 的修订)**:
+> - 整个 refcheck 经 `OPENCODE_AUTO_REF_CHECK=on/off` 开关管控,**缺省 off**——
+>   off 时三层挂点(提交前 auto-correct、check 引用扫描、verify 门禁预扫)全部
+>   空转,目标目录零引用检查行为;fix-refs 手动脚本不受约束(P1 已实施)。
+> - 摒弃移动适配:migrateLegacyDocs 存量迁移(含 run 启动挂点与轮次归档提升)与
+>   fix-docs 脚本一并退役;旧平铺布局原地保留,读回落永久保留,遗留引用失效改走
+>   git 历史追踪恢复(refcheck-scope-design §4,P2 实施)。
+> - 检查范围收敛为三类(缺失恢复/提交前移动修正/范围再确认 `@sha` 版本标记),
+>   详见 refcheck-scope-design.md D4 与 §4-§6。
 
 ## 5. 实施分期与清单(每期一个独立会话)
 

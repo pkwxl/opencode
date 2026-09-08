@@ -4,6 +4,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { checkPrinciple } from "../src/check"
 import { ensurePointer } from "../src/loop"
+import { parseSwitches, SWITCH_ENV } from "../src/switches"
+
+// refcheck 开关(refcheck-scope-design D3): 引用检查挂点测试在注入 on 的开关下
+// 运行(parseSwitches 纯函数注入,不经环境变量 memo)。
+const REFCHECK_ON = parseSwitches({ [SWITCH_ENV.refCheck]: "on" })
 
 describe("checkPrinciple", () => {
   test("verify 启用: 标记要求会话亲自运行验证/执行提交的描述,放行合规语句", async () => {
@@ -280,7 +285,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
       await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/gone.ts`。\n行内含 已删除 标记的 `docs/old.md` 豁免。\n")
       await Bun.write(join(dir, "docs/phases/a-analysis/PLAN.md"), "状态文件引用 `src/also-gone.ts` 不检查。\n")
-      const { findings, notes, refs } = await checkPrinciple(dir)
+      const { findings, notes, refs } = await checkPrinciple(dir, REFCHECK_ON)
       expect(findings).toEqual([])
       expect(refs).toEqual([
         { file: "docs/T-001/report.md", line: 1, text: "引用 `src/gone.ts`。", path: "src/gone.ts", problem: "missing" },
@@ -300,13 +305,13 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
       await Bun.write(join(dir, "src/mod.ts"), "l1\nl2\n")
       await Bun.write(join(dir, "docs/live.md"), "见 `src/mod.ts:99`。\n")
-      const first = await checkPrinciple(dir)
+      const first = await checkPrinciple(dir, REFCHECK_ON)
       expect(first.refs).toEqual([{ file: "docs/live.md", line: 1, text: "见 `src/mod.ts:99`。", path: "src/mod.ts", problem: "beyond-eof" }])
       // docs 存在而非 git → 给 auto-correct 不可用 note
       expect(first.notes).toContain("非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验")
       // docs/ 移除后: 无 refs、无非 git note
       await rm(join(dir, "docs"), { recursive: true, force: true })
-      const second = await checkPrinciple(dir)
+      const second = await checkPrinciple(dir, REFCHECK_ON)
       expect(second.refs).toEqual([])
       expect(second.notes.every((note) => !note.includes("非 git"))).toBe(true)
     } finally {
@@ -324,13 +329,32 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
       await Bun.write(join(dir, "docs/ok.md"), "引用 `PLAN.md`。\n")
       const proc = Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "ignore", stderr: "ignore" })
       await proc.exited
-      const before = await checkPrinciple(dir)
+      const before = await checkPrinciple(dir, REFCHECK_ON)
       expect(before.refs).toEqual([])
       expect(before.notes).toEqual(["AGENTS.md 缺少提交原则块,运行 opencode-auto init 可补写", "AGENTS.md 缺少引用规范块,运行 opencode-auto init 可补写"])
       await ensurePointer(dir)
-      const after = await checkPrinciple(dir)
+      const after = await checkPrinciple(dir, REFCHECK_ON)
       expect(after.refs).toEqual([])
       expect(after.notes).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("缺省 off(refcheck-scope D3): 引用检查空转——refs 恒空、无非 git note、目标目录零改动", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
+    try {
+      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/live.md"), "引用 `docs/gone.md`。\n")
+      const before = await Bun.file(join(dir, "docs/live.md")).text()
+      // 缺省开关(autoSwitches 读 process.env,测试环境未设 → refCheck=off)
+      const { findings, notes, refs } = await checkPrinciple(dir)
+      expect(findings).toEqual([])
+      expect(refs).toEqual([])
+      expect(notes.every((note) => !note.includes("非 git"))).toBe(true)
+      // 零引用检查行为: 文档原样、不产生失效清单
+      expect(await Bun.file(join(dir, "docs/live.md")).text()).toBe(before)
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

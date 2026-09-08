@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
-import { ensureForkBase, forkSession, handoffSteer, handoverDue, seedForkSession, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, seedForkSession, type ForkBaseInfo, type SessionChain } from "../src/runner"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // 交接 steer 构造与交接判定的纯函数单测(接线在 executeWhole/runSubtask;完整
@@ -229,5 +229,64 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
     const { client } = fakeClient()
     const off = parseSwitches({ [SWITCH_ENV.fork]: "off" })
     expect(await ensureForkBase(client, await load(path), taskWithBase, {}, chain, off)).toBeUndefined()
+  })
+})
+
+// ---- refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off)----
+
+async function git(dir: string, ...args: string[]) {
+  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+  return out
+}
+
+async function freshRepo() {
+  const dir = await mkdtemp(join(tmpdir(), "auto-runner-"))
+  await git(dir, "init", "-q")
+  await git(dir, "config", "user.email", "t@t")
+  await git(dir, "config", "user.name", "t")
+  return dir
+}
+
+describe("gatedAutoCorrectRefs / gatedTaskRefGap(OPENCODE_AUTO_REF_CHECK 挂点门禁)", () => {
+  test("off(缺省): 提交前 auto-correct 与 verify 门禁预扫空转,目标目录零引用检查行为", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "src/old.ts"), "code\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "见 `src/old.ts` 与 `docs/gone.md`。\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // 提交前发生移动(rename 配对可得),但 off 时不得改写
+      await Bun.spawn(["mv", join(dir, "src/old.ts"), join(dir, "src/new.ts")]).exited
+      const before = await Bun.file(join(dir, "docs/T-001/report.md")).text()
+      await gatedAutoCorrectRefs(dir, false)
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(before)
+      // 不扫失效引用、不产生失效清单
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
+      // verify 门禁预扫空转: 无差距(门禁不存在)
+      expect(await gatedTaskRefGap(dir, "T-001", false)).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("on: auto-correct 按 rename 配对改写并落失效清单;verify 门禁产出差距文案", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "src/old.ts"), "code\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "见 `src/old.ts` 与 `docs/gone.md`。\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      await Bun.spawn(["mv", join(dir, "src/old.ts"), join(dir, "src/new.ts")]).exited
+      await gatedAutoCorrectRefs(dir, true)
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe("见 `src/new.ts` 与 `docs/gone.md`。\n")
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(true)
+      const gap = await gatedTaskRefGap(dir, "T-001", true)
+      expect(gap).toContain("任务产物文档存在失效引用")
+      expect(gap).toContain("docs/gone.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

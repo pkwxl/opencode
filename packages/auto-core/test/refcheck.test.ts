@@ -91,6 +91,32 @@ describe("rewriteRefs", () => {
     expect(text).toBe("`docs/a+b/x.md`")
     expect(count).toBe(1)
   })
+
+  test("改写不动排版: 仅命中 token 就地替换,行结构/空白/对齐/末尾换行原样保留", () => {
+    const text = [
+      "| 文档 | 说明 |",
+      "| `docs/T-1.md` | 报告 |  ",
+      "",
+      "见 `docs/T-1.md`。",
+      "```",
+      "docs/T-1.md",
+      "```",
+      "末行无换行 `docs/T-1.md`",
+    ].join("\n")
+    const { text: out, count } = rewriteRefs(text, [pair])
+    expect(count).toBe(3)
+    // 逐行对比: 除命中 token 的就地替换外逐字节相同(行数不变、豁免行/空行/
+    // 行尾空白原样;末行无换行状态保持——split/join 对称,不新增末尾换行)
+    const before = text.split("\n")
+    const after = out.split("\n")
+    expect(after).toHaveLength(before.length)
+    after.forEach((line, i) => {
+      if (i === 1 || i === 3 || i === 7) expect(line).toBe(before[i]!.replaceAll(pair.old, pair.new))
+      else expect(line).toBe(before[i])
+    })
+    // 无命中 → 输出与输入逐字节相同(调用方不写回,文件保持原样)
+    expect(rewriteRefs(text, [{ old: "docs/gone.md", new: "docs/x.md" }]).text).toBe(text)
+  })
 })
 
 async function git(dir: string, ...args: string[]) {

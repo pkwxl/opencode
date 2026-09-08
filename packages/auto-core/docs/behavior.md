@@ -110,13 +110,9 @@
   validate-r/finalize 报告);这些路径一经创建即为永久路径。`--review` 的终审
   审计与任务审计同路径 docs/<taskId>/audit.md。**读回落**:旧平铺项目
   (docs/<id>.<role>.md 等)读点优先新路径、新缺失而旧存在回落旧路径,写目标恒为
-  新路径;**启动迁移**:run 启动时(try 块头部、阶段预检之前)把平铺旧布局幂等
-  迁移为目录化(七角色平铺/`<id>-S<n>.testhandoff.md`/任务目录内 `S<kk>.md`/
-  `docs/final-audit.md` 与 `docs/final/*` → `docs/T-F1/`),活文档
-  (docs/**/*.md,排除 docs/phases/**)中的旧路径记号机械改写(围栏与含
-  已删除|已归档|历史 的行豁免;目标已存在保留新文件跳过、绝不覆盖),有迁移
-  才统一提交 stage=doc-migrate;dryrun 预检不改动工作区故跳过,`--commit false`
-  仍迁移、仅不提交。**永久性全貌(stable-refs P2)**:docs/ 下文档
+  新路径;读回落永久保留、平铺旧布局原地保留(refcheck-scope-design D2 摒弃移动
+  适配:2026-09-08 起 run 不再做存量目录化迁移,遗留引用失效走 git 历史恢复,
+  见 refcheck-scope-design.md §4)。**永久性全貌(stable-refs P2)**:docs/ 下文档
   (docs/T-*/、docs/handovers/、docs/migration-kb/、docs/prior-kb/)一经创建
   永不移动、永不改名——阶段交接产出 docs/handovers/R<N>-<字母>-<slug>.md
   (handoverDoc,src/phases.ts),知识文档 docs/migration-kb/R<N>-migration-<时间
@@ -125,7 +121,10 @@
   读回落);docs/phases/ 只收过期状态文件(阶段 PLAN 快照、轮次归档 = 各阶段
   归档目录 + 台账 + 轮末 PLAN + AGENTS.md 快照),状态文件不被任何文档引用;
    P2 前布局(交接在归档目录内、知识无前缀)各读点回落兼容。
- - 引用一致性三层(stable-refs P4,D6;设计文档 stable-refs-design.md §3.3):引用唯一
+ - 引用一致性三层(stable-refs P4,D6;设计文档 stable-refs-design.md §3.3;
+   **2026-09-08 起经实验开关 `OPENCODE_AUTO_REF_CHECK=on/off` 管控,缺省 off**
+   ——off 时三层挂点全部空转、目标目录零引用检查行为,范围收敛与恢复设计见
+   refcheck-scope-design.md):引用唯一
   合法形态 = 目标目录根相对路径(反引号或 md 链接,可带 `:行号` 锚);校验语义 = 路径
   存在 + 行号 ≤ 文件总行数;直接路径未命中时按段边界后缀在目标目录树内找唯一文件
   匹配——带上下文语境的相对引用(以引用者所在目录为基书写)唯一命中即视为有效并
@@ -135,7 +134,8 @@
   `#fragment` 剥后验,目录引用只查存在性。三层:① **auto-correct**——每次统一提交前
   (runner 的 afterSession 挂点,覆盖全部会话后提交)driver 先做 git rename 配对
   (`git add -A` 暂存后 `git diff --cached --find-renames HEAD`,暂存本就是下一次提交
-  的前奏)机械改写活文档引用(**只配对 rename,删除/语义变化不自动改**),再复扫
+   的前奏)机械改写活文档引用(**只配对 rename,删除/语义变化不自动改**;改写不动
+   排版——仅就地替换命中路径 token,行结构/空白/对齐原样保留),再复扫
   失效引用并维护失效清单 `.auto/invalid-refs.md`(键 = `文件 → 路径(problem)`,每轮
   全量重写——修复后自动移除、复发视为新出现):已收录键不再 ⚠,仅对新出现的失效
   引用输出警告日志(防无休止重复报告,人工核验订正以清单为入口);改写内容随本次
