@@ -292,6 +292,9 @@ renderPhasePlan({
    docs/ 产物,产出 `docs/handovers/R<N>-<字母>-<slug>.md`(driver 先建目录)。
    协议要求必备小节:关键决策、约束与坑、下一阶段必读清单、产物索引;
    requireArtifact 校验小节齐备。k 阶段无下一阶段,仍写 handover(供后续查阅)。
+   模板对无任务清单阶段(k)含兜底表述(2026-09-08): 空 PLAN.md/CURRENT.md 缺失
+   属预期、蒸馏以 docs/migration-kb/ 产物为准;"下一阶段"措辞不假设其开规划会话
+   (k 的读者是知识提取旁路会话)——否则蒸馏会话会因提示词矛盾空转勘察。
 2. **driver 机械归档**:PLAN.md 拷贝为归档目录内 PLAN.md 后重置为模板(含
    verify 条件渲染);本阶段 docs/ 产物文档不动(永久路径);AGENTS.md 不改写,
    仅校验 ≤150 行,超限在交接提交信息与终端 note 中提示人工精简。

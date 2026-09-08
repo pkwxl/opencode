@@ -957,8 +957,15 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
+    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以 migration-kb 产物为准
+    expect(text).toContain("PLAN.md 为空模板")
+    expect(text).toContain("CURRENT.md 不存在,属预期")
+    expect(text).toContain("docs/migration-kb/")
+    expect(text).toContain("无任务清单时跳过")
     // 有下一阶段时不带收尾措辞
-    expect(renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })).not.toContain("无下一阶段")
+    const withNext = renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })
+    expect(withNext).not.toContain("无下一阶段")
+    expect(withNext).not.toContain("docs/migration-kb/")
   })
 
   test("verify 未启用: 不含 verified 字段描述", () => {
