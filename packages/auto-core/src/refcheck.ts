@@ -6,7 +6,10 @@
 // autoCorrectRefs 另维护 .auto/invalid-refs.md 失效清单,仅对新出现的失效引用输出
 // ⚠ 日志;refcheck-scope P2 补齐 renameHistory(git 历史 rename 地图)与缺失
 // 恢复(失效确认在先、恢复在后: missing finding 的目标在历史中曾存在且链式解析
-// 落点当前存在 → 就地改写恢复;落点已删除保留 finding 人工订正)。
+// 落点当前存在 → 就地改写恢复;落点已删除保留 finding 人工订正);P3 补齐范围再
+// 确认(reconfirmAnchors): 带行号锚的引用,其目标文件在所属(可能嵌套的)git
+// 仓库有未提交差异时,比对 HEAD 版本与当前工作区版本的同范围行切片,不一致即
+// 保留原范围、就地追加 @<sha> 版本标记(语义: 该范围仅对此历史版本有效)。
 // 三层挂点受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,
 // 缺省 off 空转;管控点在 runner.ts/check.ts,本层函数不感知开关)。
 import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
@@ -15,9 +18,10 @@ import { join, relative, sep, dirname } from "node:path"
 import { repoRoots } from "./git"
 import { log } from "./log"
 
-// path = 剥离可选 `:行号` 尾锚后的引用路径;line = 尾锚行号(存在时);
+// path = 剥离可选 `@<sha>` 版本标记与 `:行号` 尾锚后的引用路径;line = 尾锚行号
+// (存在时);ver = `@<sha>` 版本标记(存在时——历史快照引用,行号上限校验豁免);
 // at = 引用所在行号(1 起)。
-export type Ref = { path: string; line?: number; at: number }
+export type Ref = { path: string; line?: number; at: number; ver?: string }
 
 // 行候选掩码(单趟状态机): ``` / ~~~ 围栏内的行豁免,含 已删除|已归档|历史 的
 // 标记行豁免——代码块内与已声明失效的引用不参与提取与改写;围栏开关行自身同样豁免。
@@ -41,25 +45,39 @@ function tokensOf(line: string): string[] {
   return [...tokens]
 }
 
-// 提取规则(P1 计划 §4.2): 候选行的 token 剥离可选 `:行号` 尾锚后,须无空白且
-// "含 / 或含 ."(路径状)才算引用。
+// 尾锚解析(refcheck-scope P3 §6,顺序不可颠倒): 先剥可选 `@<sha>` 版本标记
+// (7-40 位十六进制,历史快照引用),再剥 `:N` / `:N-M` 行号锚;anchorRaw 保留
+// 原锚文本(范围再确认改写须保留原范围,不能由 start/end 重建)。
+function parseTail(token: string): { path: string; start?: number; end?: number; ver?: string; anchorRaw?: string } {
+  let rest = token
+  let ver: string | undefined
+  const verMatch = /@([0-9a-f]{7,40})$/.exec(rest)
+  if (verMatch) {
+    ver = verMatch[1]!
+    rest = rest.slice(0, -verMatch[0].length)
+  }
+  const anchor = /:(\d+(?:-\d+)*)$/.exec(rest)
+  const path = anchor ? rest.slice(0, -anchor[0].length) : rest
+  if (!anchor) return ver ? { path, ver } : { path }
+  const nums = anchor[1]!.split("-").map(Number)
+  return { path, start: nums[0]!, end: nums[nums.length - 1]!, ver, anchorRaw: anchor[1]! }
+}
+
+// 提取规则(P1 计划 §4.2): 候选行的 token 剥离可选尾锚后,须无空白且
+// "含 / 或含 ."(路径状)才算引用;尾锚见 parseTail(行号区间 line 取上界——
+// 存在性校验用不到行号,行号上限校验按最大行号判超界)。
 export function extractRefs(text: string): Ref[] {
   const refs: Ref[] = []
   const mask = candidateMask(text)
   text.split("\n").forEach((line, i) => {
     if (!mask[i]) return
     for (const token of tokensOf(line)) {
-      // 尾锚两种形态: `:N` 单行号与 `:N-M` 行号区间;path 剥锚后校验,line 取区间
-      // 上界(存在性校验用不到行号,行号上限校验按最大行号判超界)。
-      const anchor = /:(\d+(?:-\d+)*)$/.exec(token)
-      const path = anchor ? token.slice(0, -anchor[0].length) : token
-      if (/\s/.test(path) || (!path.includes("/") && !path.includes("."))) continue
-      if (anchor) {
-        const line = Math.max(...anchor[1]!.split("-").map(Number))
-        refs.push({ path, line, at: i + 1 })
-      } else {
-        refs.push({ path, at: i + 1 })
-      }
+      const parsed = parseTail(token)
+      if (/\s/.test(parsed.path) || (!parsed.path.includes("/") && !parsed.path.includes("."))) continue
+      const ref: Ref = { path: parsed.path, at: i + 1 }
+      if (parsed.end !== undefined) ref.line = parsed.end
+      if (parsed.ver !== undefined) ref.ver = parsed.ver
+      refs.push(ref)
     }
   })
   return refs
@@ -215,7 +233,9 @@ async function descend(dir: string, rel: string, seen: Set<string>, out: IndexEn
 // 结果表(target → 消解路径或 undefined,含直接命中;由 scanRefs 单趟批量预计算,
 // 避免逐文档重复全索引消解——表内缺项时回落自查)。同一文档内的重复路径只校验
 // 一次;md 链接的 #fragment 尾锚剥后再验;目录引用只查存在性(行号锚对目录无
-// 意义,忽略)。index 供缺表时的回落消解复用(缺省自建,惰性构建)。
+// 意义,忽略)。带 ver(`@<sha>` 版本标记)的引用视为历史快照引用——只查路径
+// 存在性,行号上限校验豁免(历史版本不可机械校验,refcheck-scope P3 §6)。
+// index 供缺表时的回落消解复用(缺省自建,惰性构建)。
 export async function validateRefs(
   dir: string,
   refs: Ref[],
@@ -258,7 +278,7 @@ export async function validateRefs(
       continue
     }
     if (!info.isFile()) continue
-    const anchors = refs.filter((item) => item.path === path && item.line !== undefined)
+    const anchors = refs.filter((item) => item.path === path && item.line !== undefined && item.ver === undefined)
     if (!anchors.length) continue
     const text = await Bun.file(join(dir, at)).text().catch(() => "")
     const lines = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0)
@@ -414,6 +434,99 @@ async function recoverMissingRefs(dir: string, findings: RefFinding[]): Promise<
   return rewritten
 }
 
+// —— refcheck-scope P3: 引用范围再确认(§6,行号锚 + @sha 版本标记)——
+// 对象: 活文档中带行号锚(`:N` / `:N-M`)且不带版本标记的引用,其目标文件「被
+// 编辑修改过」——判据 = 目标文件在所属(可能嵌套的)git 仓库有未提交内容差异
+// (`git diff HEAD --name-only`;renamePairs 已 `git add -A` 暂存,暂存区即改动
+// 全集;嵌套子仓库逐个判定,镜像 git.ts 统一提交的嵌套优先遍历)。目标消解与
+// validateRefs 同款两步(直接命中 / 段边界后缀唯一匹配)。
+// 一致性判定 = 目标文件 HEAD 版本的范围行切片 vs 当前工作区版本同范围行切片
+// (当前文件行数不足即不一致):
+//   一致 → 引用不动;
+//   不一致 → 保留原引用范围不变,锚就地改写为 `path:N-M@<sha>`(sha = 所属仓库
+//   当前 HEAD 短哈希 7 位)——语义: 该范围仅对此历史版本有效,其后续内容已变更。
+// 幂等: 已带 `@sha` 的引用不再追加或更新标记,留待人工订正;HEAD 无该文件版本
+// (本轮新增文件)无历史版本可钉,跳过。排版不变式同 rewriteRefs(无命中不写回)。
+// 返回改写处数(0 = 本轮无再确认)。
+export async function reconfirmAnchors(dir: string): Promise<number> {
+  // 各仓库: 改动文件集(目标目录相对)与 HEAD 短哈希;无 git/无 HEAD/无改动跳过
+  const repos: Array<{ top: string; sha: string; changed: Set<string> }> = []
+  for (const root of await repoRoots(dir)) {
+    const top = (await gitOut(root, ["rev-parse", "--show-toplevel"]))?.trim()
+    if (!top) continue
+    const out = await gitOut(root, ["diff", "HEAD", "--name-only", "-z"])
+    const sha = (await gitOut(root, ["rev-parse", "--short=7", "HEAD"]))?.trim()
+    if (!out || !sha) continue
+    const changed = new Set<string>()
+    for (const part of out.split("\0")) {
+      if (!part) continue
+      const rel = relative(dir, join(top, part)).split(sep).join("/")
+      if (!rel.startsWith("..")) changed.add(rel)
+    }
+    if (changed.size) repos.push({ top, sha, changed })
+  }
+  if (!repos.length) return 0
+  const index = new FileIndex(dir)
+  let rewritten = 0
+  for (const file of await activeDocs(dir)) {
+    const text = await Bun.file(join(dir, file)).text().catch(() => undefined)
+    if (text === undefined) continue
+    // 候选: 带行号锚且不带版本标记的可校验引用(anchorRaw 保留原范围文本供改写)
+    const candidates: Array<{ path: string; start: number; end: number; anchorRaw: string }> = []
+    const mask = candidateMask(text)
+    text.split("\n").forEach((line, i) => {
+      if (!mask[i]) return
+      for (const token of tokensOf(line)) {
+        const parsed = parseTail(token)
+        if (parsed.start === undefined || parsed.end === undefined || parsed.ver !== undefined) continue
+        if (!checkable(parsed.path)) continue
+        candidates.push({ path: parsed.path, start: parsed.start, end: parsed.end, anchorRaw: parsed.anchorRaw! })
+      }
+    })
+    if (!candidates.length) continue
+    const pairs: Array<{ old: string; new: string }> = []
+    const seen = new Set<string>()
+    for (const ref of candidates) {
+      const target = ref.path.split("#")[0]!
+      let at: string | undefined
+      const direct = await stat(join(dir, target)).catch(() => undefined)
+      if (direct) {
+        if (!direct.isFile()) continue // 目录引用无行号语义
+        at = target
+      } else {
+        const hit = (await index.resolveAll([target])).get(target)
+        if (!hit || hit.dir) continue
+        at = hit.path
+      }
+      const repo = repos.find((item) => item.changed.has(at))
+      if (!repo) continue
+      const work = await Bun.file(join(dir, at)).text().catch(() => undefined)
+      if (work === undefined) continue
+      const head = await gitOut(repo.top, ["show", `HEAD:${relative(repo.top, join(dir, at)).split(sep).join("/")}`])
+      if (head === undefined) continue // HEAD 无此文件(本轮新增)→ 无版本可钉
+      const workLines = work.split("\n")
+      const headLines = head.split("\n")
+      // 当前文件行数不足即不一致;一致(同范围行切片逐行相同)→ 引用不动
+      const consistent =
+        workLines.length >= ref.end &&
+        headLines.length >= ref.end &&
+        workLines.slice(ref.start - 1, ref.end).join("\n") === headLines.slice(ref.start - 1, ref.end).join("\n")
+      if (consistent) continue
+      const token = `${ref.path}:${ref.anchorRaw}`
+      if (seen.has(token)) continue
+      seen.add(token)
+      pairs.push({ old: token, new: `${token}@${repo.sha}` })
+    }
+    if (!pairs.length) continue
+    const { text: out, count } = rewriteRefs(text, pairs)
+    if (count > 0) {
+      await Bun.write(join(dir, file), out)
+      rewritten += count
+    }
+  }
+  return rewritten
+}
+
 async function gitRun(dir: string, args: string[]): Promise<{ code: number; out: string }> {
   try {
     const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -482,11 +595,13 @@ async function recordInvalidRefs(dir: string, findings: RefFinding[]): Promise<v
 // 提交前 auto-correct(D6 第一层,挂点 runner 的 afterSession——覆盖全部统一
 // 提交): renamePairs → 活文档机械改写(只配对 rename,删除/语义变化不自动改,
 // 见 §8 边界)→ 复扫 findings → 缺失恢复(refcheck-scope P2: missing 条目经
-// git 历史 rename 地图追踪落点,就地改写恢复;恢复后再复扫)→ 记录失效清单
-// .auto/invalid-refs.md(只登记未恢复的失效引用;键已收录的不再 ⚠,仅对新出现
-// 的失效引用输出警告日志);verify 启用时任务产物文档(docs/T-NNN/**)的失效引用
-// 另由 verifyTask 门禁拦截进修复轮,未启用时即止于本日志(宽松契约)。
-// 返回复扫 findings(恢复后)。
+// git 历史 rename 地图追踪落点,就地改写恢复;恢复后再复扫)→ 范围再确认
+// (refcheck-scope P3: 改动文件的行号锚不一致就追加 @<sha> 版本标记,改写后
+// 再复扫——带标记的历史快照引用豁免行号上限校验,不再进失效清单)→ 记录失效
+// 清单 .auto/invalid-refs.md(只登记未恢复的失效引用;键已收录的不再 ⚠,仅对
+// 新出现的失效引用输出警告日志);verify 启用时任务产物文档(docs/T-NNN/**)的
+// 失效引用另由 verifyTask 门禁拦截进修复轮,未启用时即止于本日志(宽松契约)。
+// 返回复扫 findings(恢复与再确认后)。
 export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
   const pairs = await renamePairs(dir)
   if (pairs.length) {
@@ -506,6 +621,11 @@ export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
   const recovered = await recoverMissingRefs(dir, findings)
   if (recovered) {
     log(`  ↻ 缺失引用恢复: git 历史追踪改写 ${recovered} 处`)
+    findings = await scanRefs(dir)
+  }
+  const reconfirmed = await reconfirmAnchors(dir)
+  if (reconfirmed) {
+    log(`  ↻ 引用范围再确认: ${reconfirmed} 处行号锚追加 @sha 版本标记(范围仅对标记的历史版本有效)`)
     findings = await scanRefs(dir)
   }
   await recordInvalidRefs(dir, findings)

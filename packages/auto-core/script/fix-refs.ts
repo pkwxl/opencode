@@ -1,8 +1,9 @@
 // 引用预清理脚本(独立于会话挂点的一次性入口,stable-refs §4.5): 在正式运行
 // 迁移驱动前,对工作目录手动执行一轮 autoCorrectRefs——git rename 配对 → 活文档
 // 引用机械改写 → 缺失恢复(refcheck-scope P2: missing 引用经 git 历史 rename
-// 地图追踪落点就地恢复)→ 复扫并维护失效清单 .auto/invalid-refs.md(只登记未恢复
-// 项,仅新出现的 ⚠)。
+// 地图追踪落点就地恢复)→ 范围再确认(refcheck-scope P3: 改动文件的不一致行号
+// 锚就地追加 @<sha> 版本标记)→ 复扫并维护失效清单 .auto/invalid-refs.md(只登记
+// 未恢复项,仅新出现的 ⚠)。
 // 典型场景: 遗留工作树按新目录结构重组(移动/改名无需手动 git add,配对前脚本
 // 自动全量暂存)后运行本脚本,文档引用即机械改写到新路径;剩余缺失引用以
 // .auto/invalid-refs.md 为人工核验订正入口。改写与扫描范围 = docs/**/*.md

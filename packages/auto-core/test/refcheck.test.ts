@@ -15,6 +15,7 @@ import {
   validateRefs,
   recordOnce,
   renameHistory,
+  reconfirmAnchors,
 } from "../src/refcheck"
 
 describe("extractRefs", () => {
@@ -34,6 +35,15 @@ describe("extractRefs", () => {
   test(":N-M 区间尾锚剥离,line 取区间上界", () => {
     const text = "见 `kernel/comps/block/src/lib.rs:64-159`。"
     expect(extractRefs(text)).toEqual([{ path: "kernel/comps/block/src/lib.rs", line: 159, at: 1 }])
+  })
+
+  test("@<sha> 版本标记剥离为 ver(先剥 @sha 再剥 :N-M 行号锚)", () => {
+    const text = "见 `src/x.ts:64-159@abc1234`、`docs/a.md@deadbeef` 与 `src/y.ts:3@0123456789abcdef`。"
+    expect(extractRefs(text)).toEqual([
+      { path: "src/x.ts", line: 159, at: 1, ver: "abc1234" },
+      { path: "docs/a.md", at: 1, ver: "deadbeef" },
+      { path: "src/y.ts", line: 3, at: 1, ver: "0123456789abcdef" },
+    ])
   })
 
   test("含空白的 token 忽略", () => {
@@ -160,6 +170,23 @@ describe("activeDocs / validateRefs / scanRefs", () => {
         new Map([
           ["docs/T-001/context.md", "beyond-eof"],
           ["docs/T-999/x.md", "missing"],
+        ]),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("validateRefs: 带 @sha 版本标记的引用豁免行号上限校验(历史快照引用,只查路径存在性)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await Bun.write(join(dir, "src/mod.ts"), "a\nb\n")
+      const refs = extractRefs("`src/mod.ts:99@abc1234`、`src/mod.ts:99`、`src/gone.ts:3@abc1234`")
+      // :99@abc1234 豁免行号校验;bare :99 仍 beyond-eof;缺失路径带标记仍 missing
+      expect(await validateRefs(dir, refs)).toEqual(
+        new Map([
+          ["src/mod.ts", "beyond-eof"],
+          ["src/gone.ts", "missing"],
         ]),
       )
     } finally {
@@ -533,6 +560,100 @@ describe("缺失引用恢复(refcheck-scope P2,git 历史追踪)", () => {
       expect(await Bun.file(join(dir, "docs/live.md")).text()).toBe("引用 `docs/never-existed.md`。")
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("引用范围再确认(refcheck-scope P3,@sha 版本标记)", () => {
+  test("改动文件: 范围一致不动、不一致追加 @<sha>(HEAD 短哈希)、行数不足即不一致;复扫豁免行号校验;幂等不更新已标记引用", async () => {
+    const dir = await freshRepo()
+    const seen: string[] = []
+    const original = console.log
+    console.log = (...args: unknown[]) => seen.push(args.join(" "))
+    try {
+      await Bun.write(join(dir, "src/mod.ts"), "l1\nl2\nl3\nl4\n")
+      await Bun.write(
+        join(dir, "docs/T-001/report.md"),
+        "见 `src/mod.ts:3-4`、`src/mod.ts:1-2`、`src/mod.ts:1-9`、`src/new.ts:1` 与 `src/mod.ts:2@deadbeef`。",
+      )
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const sha1 = (await git(dir, "rev-parse", "--short=7", "HEAD")).trim()
+      // 本轮改动: mod.ts 第 1 行被改(l1→L1);new.ts 为本轮新增(HEAD 无版本)
+      await Bun.write(join(dir, "src/mod.ts"), "L1\nl2\nl3\nl4\n")
+      await Bun.write(join(dir, "src/new.ts"), "n1\nn2\n")
+      const findings = await autoCorrectRefs(dir)
+      // :3-4 范围一致不动;:1-2 不一致追加 @sha1;:1-9 行数不足即不一致追加 @sha1;
+      // :1(新增文件)无版本可钉跳过;:2@deadbeef 已标记不再更新
+      const report = `见 \`src/mod.ts:3-4\`、\`src/mod.ts:1-2@${sha1}\`、\`src/mod.ts:1-9@${sha1}\`、\`src/new.ts:1\` 与 \`src/mod.ts:2@deadbeef\`。`
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
+      expect(seen.filter((line) => line.includes("引用范围再确认"))).toHaveLength(1)
+      // 复扫: 带标记的历史快照引用豁免行号上限校验 → 无 findings、无失效清单
+      expect(findings).toEqual([])
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
+      // 幂等: 无新改动时再跑零再确认、文档逐字节不变
+      seen.length = 0
+      expect(await autoCorrectRefs(dir)).toEqual([])
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
+      expect(seen.filter((line) => line.includes("引用范围再确认"))).toHaveLength(0)
+      // 新一轮: 提交后 mod.ts 第 3 行再改 → :3-4 追加新 HEAD 标记;已标记引用不更新
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round-1")
+      const sha2 = (await git(dir, "rev-parse", "--short=7", "HEAD")).trim()
+      await Bun.write(join(dir, "src/mod.ts"), "L1\nl2\nL3\nl4\n")
+      expect(await autoCorrectRefs(dir)).toEqual([])
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(
+        `见 \`src/mod.ts:3-4@${sha2}\`、\`src/mod.ts:1-2@${sha1}\`、\`src/mod.ts:1-9@${sha1}\`、\`src/new.ts:1\` 与 \`src/mod.ts:2@deadbeef\`。`,
+      )
+    } finally {
+      console.log = original
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("嵌套子仓库的改动文件: 追加子仓库 HEAD 短哈希(逐个仓库判定)", async () => {
+    const dir = await freshRepo()
+    const sub = join(dir, "sub")
+    try {
+      await mkdir(sub, { recursive: true })
+      await git(sub, "init", "-q")
+      await git(sub, "config", "user.email", "t@t")
+      await git(sub, "config", "user.name", "t")
+      await Bun.write(join(sub, "lib/util.ts"), "u1\nu2\n")
+      await git(sub, "add", "-A")
+      await git(sub, "commit", "-qm", "sub init")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "嵌套引用 `sub/lib/util.ts:1-2`。")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "outer init")
+      const subSha = (await git(sub, "rev-parse", "--short=7", "HEAD")).trim()
+      // 子仓库内改动(未提交)→ 引用追加子仓库 HEAD 标记
+      await Bun.write(join(sub, "lib/util.ts"), "U1\nu2\n")
+      expect(await reconfirmAnchors(dir)).toBe(1)
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(`嵌套引用 \`sub/lib/util.ts:1-2@${subSha}\`。`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("无改动 / 非 git 目录空转(返回 0,文档不变)", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "src/mod.ts"), "l1\n")
+      await Bun.write(join(dir, "docs/live.md"), "引用 `src/mod.ts:1`。")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      expect(await reconfirmAnchors(dir)).toBe(0)
+      expect(await Bun.file(join(dir, "docs/live.md")).text()).toBe("引用 `src/mod.ts:1`。")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+    const plain = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
+    try {
+      await Bun.write(join(plain, "docs/live.md"), "引用 `src/mod.ts:1`。")
+      expect(await reconfirmAnchors(plain)).toBe(0)
+      expect(await Bun.file(join(plain, "docs/live.md")).text()).toBe("引用 `src/mod.ts:1`。")
+    } finally {
+      await rm(plain, { recursive: true, force: true })
     }
   })
 })
