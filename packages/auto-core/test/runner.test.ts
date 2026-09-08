@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
-import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, seedForkSession, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, runSession, seedForkSession, type ForkBaseInfo, type SessionChain } from "../src/runner"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // 交接 steer 构造与交接判定的纯函数单测(接线在 executeWhole/runSubtask;完整
@@ -229,6 +229,60 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
     const { client } = fakeClient()
     const off = parseSwitches({ [SWITCH_ENV.fork]: "off" })
     expect(await ensureForkBase(client, await load(path), taskWithBase, {}, chain, off)).toBeUndefined()
+  })
+})
+
+// ---- SSE 订阅生命周期(attempt 会话结束即断流,根治长连接泄漏)----
+
+// 带 signal 透传的 fake 订阅: 记录 subscribe 收到的 AbortSignal;事件流先发一个
+// idle 事件(watch 据此正常结算),finally 记录收尾——真实 SDK 生成器在消费方
+// break 时经 return() 走 finally(仅 releaseLock 不断连接),由 driver 显式 abort
+// 关闭底层连接,本测试断言的正是"信号已透传且各退出路径必然 abort"。
+function sseClient(
+  id: string,
+  over: { prompt?: () => unknown } = {},
+) {
+  const state = { signal: undefined as AbortSignal | undefined, closed: false }
+  const client = {
+    session: {
+      create: async () => ({ data: { id } }),
+      prompt: async () => (over.prompt ? over.prompt() : {}),
+      abort: async () => ({}),
+    },
+    event: {
+      subscribe: async (_params: unknown, options?: { signal?: AbortSignal }) => {
+        state.signal = options?.signal
+        const stream = async function* () {
+          try {
+            yield { type: "session.idle", properties: { sessionID: id } }
+          } finally {
+            state.closed = true
+          }
+        }
+        return { stream: stream() }
+      },
+    },
+  } as unknown as OpencodeClient
+  return { client, state }
+}
+
+describe("SSE 订阅生命周期(会话结束即断开)", () => {
+  test("正常结束: runSession 返回后订阅信号已中止,事件流已收尾", async () => {
+    const { client, state } = sseClient("ses_sse_1")
+    const result = await runSession(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 })
+    expect(result.type).toBe("idle")
+    expect(state.signal).toBeDefined()
+    expect(state.signal?.aborted).toBe(true)
+    expect(state.closed).toBe(true)
+  })
+
+  test("下发失败提前返回: 同样立即中止订阅,不留下悬挂长连接", async () => {
+    const { client, state } = sseClient("ses_sse_2", { prompt: () => ({ error: { name: "UnknownError" } }) })
+    const result = await runSession(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 })
+    expect(result.type).toBe("blocked")
+    expect((result as { question: string }).question).toContain("下发任务失败")
+    expect(state.signal?.aborted).toBe(true)
+    expect(state.closed).toBe(true)
   })
 })
 
