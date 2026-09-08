@@ -1,31 +1,30 @@
 // 专用二次迁移工具的主编排(设计文档 docs/specialized-tool-design.md): 无子命令,
-// 每次启动按"[--next-path 轮间过渡(可选)] → 前置知识提取 → 现场清理 → 参数推断 →
-// 二次迁移(默认完整 admtvk;复杂度评估 simple 裁剪为 mtvk,§10)"自动推进至结束;
-// 中断后再次运行依推导式状态(台账 + PLAN.md + .auto/progress.json + 本模块的
-// .auto/tool.json 本轮标记)从断点恢复。index.ts 只做参数解析与配置固化/冲突校验,
-// 然后委托本模块。
+// 每次启动按"[--next-path 轮间过渡(可选)] → 轮首建立(docs/R-NN 轮次专用目录)
+// → 前置知识提取 → 参数推断 → 二次迁移(流程缺省完整 admtvk,--phases 显式裁剪)"
+// 自动推进至结束;中断后再次运行依推导式状态(台账 + PLAN.md + .auto/progress.json
+// + 本模块的 .auto/tool.json 本轮标记)从断点恢复。index.ts 只做参数解析与配置固化/
+// 冲突校验,然后委托本模块。
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
-import { existingKnowledge, existingPriorKnowledge, extractPriorKnowledge, parsePriorVerdict } from "@opencode-ai/auto-core/knowledge"
+import { extractPriorKnowledge } from "@opencode-ai/auto-core/knowledge"
 import { banner, log } from "@opencode-ai/auto-core/log"
 import { renderAgentContract, runAll } from "@opencode-ai/auto-core/loop"
 import type { ModeSpec } from "@opencode-ai/auto-core/mode"
-import { load, parse } from "@opencode-ai/auto-core/plan"
-import { archiveRound, currentRound, formatPhases, parsePhases, PHASE_ORDER, readLedger, renderPlanScaffold } from "@opencode-ai/auto-core/phases"
+import { parse } from "@opencode-ai/auto-core/plan"
+import { currentRound, establishRound, formatPhases, nextRound, parsePhases, PHASE_ORDER, readLedger, renderPlanScaffold, roundRoot } from "@opencode-ai/auto-core/phases"
 import { renderInferSource } from "@opencode-ai/auto-core/prompt"
-import { forgetProgress } from "@opencode-ai/auto-core/resume"
 import type { PermissionMode } from "@opencode-ai/auto-core/runner"
 import { requireArtifact } from "@opencode-ai/auto-core/runner"
 import { manage } from "@opencode-ai/auto-core/server"
 import { usePromptLibrary } from "@opencode-ai/auto-core/template"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
-// 本轮标记(非版本化,设计文档 §1): 现场清理后写入 { round: N } = 本轮开始,此后
-// 创建的文件视为"自己的",中断重跑依断点续跑、不再清理现场;复杂度评估是轮首一次
-// 性决策,生效流程随标记固化(phases 键,见 resumePhases),续跑直接复用、不再评
-// 估;二次迁移全部完成后写入 { round, done: true },再次运行报告完成并退出 0。删
-// 除该文件可显式开启新一轮(目录内阶段状态按"别人的"遗留重新清理)。
+// 本轮标记(非版本化,设计文档 §1): 轮首建立(首轮/删标记重开由 runTool、轮间过渡
+// 由 prepareNextRound)写入 { round: N, phases } = 本轮开始,生效流程随标记固化
+// (--phases 是轮首一次性决策),续跑复用固化值、不再解析;二次迁移全部完成后写入
+// { round, phases, done: true },再次运行报告完成并退出 0。开启新一轮用
+// --next-path(见 prepareNextRound)。
 const STATE_FILE = join(".auto", "tool.json")
 
 export type ToolState = { done?: boolean; round?: number; phases?: string }
@@ -66,46 +65,31 @@ export function parseInferOutput(
   return { sourceDir, sourcePath, destDir }
 }
 
-// 现场清理判定(推导式,设计文档 §1): 本轮标记未建立 = 本工具尚未开跑,目录里的
-// 阶段状态都是"别人的"遗留(本工具此前轮次在删除标记后、或人工/其他工具的迁移结
-// 果)。台账记录过完成阶段、无法解析(视为别人的内容)或现场有内容(PLAN.md 有任
-// 务/解析失败、migration-kb 残留)即有现场要清理。标记已建立 = 本轮在跑,中断重
-// 跑依断点续跑,绝不清理自己的现场。
-export function needsSceneCleanup(markerExists: boolean, ledgerDone: readonly string[] | undefined, sceneHasContent: boolean): boolean {
-  return !markerExists && (ledgerDone === undefined || ledgerDone.length > 0 || sceneHasContent)
-}
-
-// 流程裁剪映射(纯函数,便于测试,设计文档 §10): prior 文档的复杂度评估给出
-// simple → 跳过独立分析/设计阶段,流程取 admtvk 的子序列 mtvk(parsePhases 合法,
-// 底线保障由 m 阶段首批任务承接,见 phase-plan.md 的 m 阶段简化流程判定);评估
-// 缺失/full/非法 → 完整 admtvk(保守缺省)。
-export function phasesForVerdict(verdict: "simple" | "full" | undefined): string {
-  return verdict === "simple" ? "mtvk" : PHASE_ORDER
-}
-
-// 续跑生效流程(纯函数,便于测试): 复杂度评估只在轮首做一次,生效流程固化进本轮
-// 标记(persisted = tool.json 的 phases 键,须为合法流程串);旧机制轮次的标记无该
-// 键,回落已落盘文档的复杂度记录值(verdict),再无则完整流程。台账已完成阶段必须
-// 落在流程内——固化值/记录值异常时钳制回完整流程(裁剪不得低于已完成进度,否则
-// routePhase 会以"台账记录了 phases 之外的阶段字母"拦截)。
-export function resumePhases(persisted: string | undefined, verdict: "simple" | "full" | undefined, ledgerDone: readonly string[]): string {
-  const phases = persisted && parsePhases(persisted) ? persisted : phasesForVerdict(verdict)
+// 生效流程解析(纯函数,便于测试): 轮标记固化值(须为合法流程串)优先,否则
+// config.phases(首跑固化,缺省 admtvk);台账已完成阶段必须落在流程内——固化值/
+// 配置值异常时钳制回完整流程(裁剪不得低于已完成进度,否则 routePhase 会以
+// "台账记录了 phases 之外的阶段字母"拦截)。
+export function effectivePhases(persisted: string | undefined, configured: string, ledgerDone: readonly string[]): string {
+  const phases = persisted && parsePhases(persisted) ? persisted : configured
   return ledgerDone.some((letter) => !phases.includes(letter)) ? PHASE_ORDER : phases
 }
 
 // --next-path 轮间过渡(纯 fs、不起 server,便于离线测试): 前一轮彻底完成(done
-// 标记)前提下修订 source.path、清陈旧推断产物与 done 标记;此后主流程既有现场清
-// 理分支(marker 缺失即触发)自然接管,零新增编排。前置知识不做轮间搬移(stable-
-// refs R2: docs/prior-kb/ 永久),新一轮以轮次前缀守卫区分——R<N>+1- 前缀无文
-// 件,提取幂等检查必然放行、重新蒸馏,历轮文档原地保留跨轮累积注入。各步幂等
-// (配置重写、rm force),任一步中断后重跑安全:done 标记未删 → 带参重跑全流程
-// 重入;已删 → 重跑被 !done 严格拒绝,报文指引不带参数续跑。返回 0 = 过渡完成;
-// {error} = 前一轮未彻底完成或迁移源缺失(调用方转退出码 1,报文区分进行中/无
-// 标记两种形态)。
+// 标记)前提下修订 source.path、清陈旧推断产物,随即轮首建立——建 docs/R-(N+1)/
+// 轮次专用目录(轮内 PLAN.md 恒为空模板,新轮目录恒空、无现场可清)、根 PLAN.md
+// 重建为指向轮内的相对符号链接、写 AGENTS.md.bak 快照(均经核心 establishRound),
+// 并写本轮标记 { round: N+1[, phases] }(phases 为与 --next-path 同给的 --phases
+// 轮次流程覆盖,缺省回落 config.phases)。前置知识不做轮间搬移(落盘即永久):
+// 新轮轮内 prior-kb.md 恒空,提取幂等检查必然放行、重新蒸馏,历轮文档原地保留
+// 跨轮累积注入。各步幂等(配置重写、rm force、establishRound 幂等),任一步中断
+// 后重跑安全:标记未覆写(done 仍在)→ 带参重跑全流程重入;已覆写 → 带参重跑被
+// !done 严格拒绝,报文指引不带参数续跑。返回 0 = 过渡完成;{error} = 前一轮未彻底
+// 完成或迁移源缺失(调用方转退出码 1,报文区分进行中/无标记两种形态)。
 export async function prepareNextRound(
   directory: string,
   config: ProjectConfig,
   nextPath: string,
+  phases?: string,
 ): Promise<0 | { error: string }> {
   const state = await readToolState(directory)
   if (!state.done) {
@@ -120,7 +104,11 @@ export async function prepareNextRound(
   await saveProjectConfig(directory, { ...config, source: { dir: source.dir, path: nextPath } })
   log(`✓ 迁移参数已修订: source.path → ${nextPath}`)
   await rm(join(directory, ".auto", "infer.json"), { force: true })
-  await rm(join(directory, STATE_FILE), { force: true })
+  const established = await establishRound(directory, { round: await nextRound(directory), plan: renderPlanScaffold(config.verify) })
+  log(`✓ 轮次目录: ${established.root}/(PLAN.md、阶段台账 phases.md、阶段归档与知识文档均落轮内,落盘即永久)`)
+  if (!established.linked) log(`⚠ 根 PLAN.md 符号链接创建失败,已兜底为轮内副本(写不联动,以 ${established.root}/PLAN.md 为准)`)
+  await writeToolState(directory, phases ? { round: established.round, phases } : { round: established.round })
+  log(`✓ 本轮标记已建立: .auto/tool.json(第 ${established.round} 轮${phases ? `,流程 ${phases}` : ""})`)
   return 0
 }
 
@@ -159,8 +147,11 @@ export async function runTool(
     // --new-session: 中断恢复时跳过会话复用(每次生效、不固化),透传 runAll。
     newSession?: boolean
     // --next-path: 轮间修订指令——前一轮彻底完成后修订 source.path 开启新一轮
-    // (纯过渡,后续由既有现场清理与规划流程接管)。
+    // (轮首建立 docs/R-(N+1) 并写本轮标记,后续由主流程接管)。
     nextPath?: string
+    // 与 --next-path 同给的 --phases: 新一轮流程覆盖(随本轮标记固化,续跑沿用;
+    // 不参与 config 固化冲突比对)。
+    phases?: string
   },
 ): Promise<number> {
   // 提示词库最先装载(协议校验失败按用法错误退出),前置会话与 runAll 都依赖它。
@@ -229,12 +220,12 @@ export async function runTool(
   }
 
   // 完成标记: 二次迁移已全部完成 → 报告完成,退出 0(决策 4)。仅 {round} = 本轮
-  // 进行中,照常续跑。--next-path 轮间过渡在前: 成功后必须重读 state(过渡删了
-  // done 标记,内存旧值仍是 done,直接复用会误报"已完成"提前退出)并同步内存
+  // 进行中,照常续跑。--next-path 轮间过渡在前: 成功后必须重读 state(过渡覆写
+  // 了本轮标记,内存旧值仍是 done,直接复用会误报"已完成"提前退出)并同步内存
   // config(后续参数跳过检查与 runAll 均用新 source.path)。
   let state = await readToolState(directory)
   if (input.nextPath !== undefined) {
-    const transition = await prepareNextRound(directory, config, input.nextPath)
+    const transition = await prepareNextRound(directory, config, input.nextPath, input.phases)
     if (transition !== 0) {
       log(transition.error)
       return 1
@@ -243,37 +234,49 @@ export async function runTool(
     state = await readToolState(directory)
   }
   if (state.done) {
-    log("✓ 二次迁移已全部完成(删除 .auto/tool.json 可显式开启新一轮)")
+    log("✓ 二次迁移已全部完成(开启新一轮: --next-path <相对路径>)")
     return 0
   }
 
   // 全程一个 server 实例: 前置会话与 runAll 共用(runAll 经 managed 注入,不再
-  // 自行拉起/关闭)。流程默认完整 admtvk;dryrun 不做前置会话,维持默认。
+  // 自行拉起/关闭)。流程缺省完整 admtvk;dryrun 不做前置会话,维持缺省。
   const server = await manage(directory, input.server)
   let phases = PHASE_ORDER
   try {
     if (!input.dryrun) {
       // 轮首/续跑分界(推导式): 本轮标记已建立且台账已有完成阶段 = 轮已推进的续跑
-      // ——前置知识提取与复杂度评估(§10)都是轮首一次性决策,续跑不重做: 生效流
-      // 程复用标记固化值(旧机制轮次无固化值时回落已落盘文档的记录值)。否则已跑
-      // 起来的迁移会因重评翻转流程形态,甚至裁出低于台账进度的流程撞 routePhase
-      // 的越界拦截,中断重跑无法直接恢复断点。
-      const markerExists = await Bun.file(join(directory, STATE_FILE)).exists()
+      // ——前置知识提取是轮首一次性决策,续跑不重做;生效流程复用标记固化值(无固
+      // 化值回落 config.phases)。否则已跑起来的迁移会因重开提取会话被拖回轮首,
+      // 无法直接恢复断点。
       const ledgerDone = await readLedger(directory).then((ledger) => ledger.done as readonly string[], () => undefined)
       let extracted: Awaited<ReturnType<typeof extractPriorKnowledge>> | undefined
       const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
-      if (markerExists && ledgerDone?.length) {
-        const round = await currentRound(directory)
-        const doc = state.phases ? undefined : await existingPriorKnowledge(directory, round)
-        const verdict = doc ? parsePriorVerdict(await Bun.file(join(directory, doc)).text().catch(() => "")) : undefined
-        phases = resumePhases(state.phases, verdict, ledgerDone)
-        if (verdict === "simple") log(`ℹ 复杂度评估(轮首记录值): simple → 流程 ${phases},续跑沿用、不再评估`)
-        log(`↻ 本轮已推进(第 ${round} 轮,台账 ${ledgerDone.join("")} 已完成),跳过前置知识提取与复杂度评估,从断点直接恢复`)
-        extracted = doc ? { type: "skipped", file: doc } : undefined
+      if (state.round !== undefined && ledgerDone?.length) {
+        phases = effectivePhases(state.phases, config.phases, ledgerDone)
+        log(`↻ 本轮已推进(第 ${state.round} 轮,台账 ${ledgerDone.join("")} 已完成),跳过前置知识提取,从断点直接恢复`)
       } else {
-        // 前置知识提取(设计文档 §3): 在旧有迁移现场原状上分析(先于现场清理),
-        // 蒸馏产物 docs/prior-kb/ 是本轮首个阶段规划会话与参数推断的输入。失败仅
-        // 警告后继续(决策 3)。
+        // 轮首建立(轮次专用目录 docs/R-NN,落盘即永久): 首轮/删标记重开/上轮完成
+        // 后经 --next-path 过渡(标记已含新轮号,此处幂等补建)——前置知识提取目标
+        // 由此锁定为轮内 R-NN/prior-kb.md(恒空 → 必重新蒸馏,旧轮文档误判本轮已
+        // 提取的缺陷结构性消除)。例外: 旧布局在途轮次(本轮无轮目录而根
+        // docs/phases.md 台账已有完成阶段)不打断——本轮维持旧布局续跑,下轮起进入
+        // 轮次目录布局(与通用壳 continue 同款政策)。
+        const round = state.round ?? (await currentRound(directory))
+        const inflightLegacy = state.round === undefined && (ledgerDone?.length ?? 0) > 0 && !(await roundRoot(directory, round))
+        if (!inflightLegacy) {
+          const established = await establishRound(directory, { round: state.round ?? (await nextRound(directory)), verify: config.verify })
+          log(`✓ 轮次目录: ${established.root}/(PLAN.md、阶段台账 phases.md、阶段归档与知识文档均落轮内,落盘即永久)`)
+          if (!established.linked) log(`⚠ 根 PLAN.md 符号链接创建失败,已兜底为轮内副本(写不联动,以 ${established.root}/PLAN.md 为准)`)
+          state = { ...state, round: established.round }
+        }
+        // 生效流程随本轮标记固化(幂等): --phases 是轮首一次性决策,续跑复用固
+        // 化值;--next-path 同给的覆盖值已在过渡时写入标记,此处保留。
+        phases = effectivePhases(state.phases, config.phases, ledgerDone ?? [])
+        await writeToolState(directory, { ...state, phases })
+
+        // 前置知识提取(设计文档 §3): 在历轮落盘文档(轮次目录/旧平铺均原地保留)
+        // 与既有迁移结果上复盘,蒸馏产物(新布局轮内 prior-kb.md)是本轮首个阶段规
+        // 划会话与参数推断的输入。失败仅警告后继续(决策 3)。
         banner("前置知识提取: 已有迁移结果复盘")
         extracted = await extractPriorKnowledge(server.client, directory, {
           agent: config.agent,
@@ -289,46 +292,6 @@ export async function runTool(
         if (extracted.type === "ok") log(`✓ 前置知识文档已产出: ${extracted.file}`)
         else if (extracted.type === "skipped") log(`↻ 前置知识文档已存在(${extracted.file}),跳过提取`)
         else log(`⚠ 前置知识提取未完成,继续推进(参数推断会话可直读原始 docs/)。受阻详情:\n${extracted.question}`)
-
-        // 复杂度评估 → 流程裁剪(设计文档 §10): 从本轮已落盘的 prior 文档解析
-        // 「复杂度评估」协议行(simple → mtvk 跳过独立分析/设计;缺失/full/非法 →
-        // 完整 admtvk 保守缺省)。评估是轮首决策,结论随本轮标记固化(见下),
-        // 续跑复用固化值、不再评估。
-        if (extracted.type !== "failed") {
-          const verdict = parsePriorVerdict(await Bun.file(join(directory, extracted.file)).text().catch(() => ""))
-          phases = phasesForVerdict(verdict)
-          if (verdict === "simple")
-            log(`ℹ 复杂度评估: 简单轮 → 跳过独立分析/设计阶段(流程 ${phases};勘察与设计要点及底线保障由 m 阶段首批任务承接)`)
-        }
-      }
-      // 生效流程固化进本轮标记(幂等): 轮首随标记建立写入,旧机制轮次的既有标记
-      // 就地升级——此后续跑一律复用固化值,不再评估。
-      {
-        const marker = await readToolState(directory)
-        if (marker.round !== undefined && !marker.phases) await writeToolState(directory, { ...marker, phases })
-      }
-
-      // 现场清理(原 continue 流程): 知识已蒸馏落盘后,若本轮标记未建立,目录里的
-      // 阶段状态都是"别人的"遗留——台账有完成阶段或无法解析、PLAN.md 有任务或
-      // migration-kb 有本轮前缀残留,即归档进轮次目录并重置 PLAN.md,本轮从头规划。
-      // 无论遗留来自本工具此前的轮次还是人工/其他工具的迁移。随后建立本轮标记:
-      // 此后创建的文件视为"自己的",中断重跑依标记续跑、不再清理。
-      if (!markerExists) {
-        // migration-kb 残留以轮次前缀守卫判定(stable-refs R2): 只认本轮 R<N>-
-        // 前缀文档,历轮永久文档是合法存量、不触发清理;归档在现场判定之后,故
-        // 此处 currentRound 仍是待清理轮的号。
-        const sceneRound = await currentRound(directory)
-        const sceneHasContent =
-          (await load(planFile).then((plan) => plan.tasks.length > 0, () => true)) || (await existingKnowledge(directory, sceneRound)) !== undefined
-        if (needsSceneCleanup(markerExists, ledgerDone, sceneHasContent)) {
-          const round = await archiveRound(directory)
-          log(`✓ 已有迁移现场已归档(第 ${round} 轮): docs/phases/round-${round}/;其结论将作为本轮输入`)
-          await Bun.write(planFile, renderPlanScaffold(config.verify))
-          await forgetProgress(directory)
-        }
-        const round = await currentRound(directory)
-        await writeToolState(directory, { round })
-        log(`✓ 本轮标记已建立: .auto/tool.json(第 ${round} 轮)`)
       }
 
       // 参数推断(设计文档 §4): source/destDir 任一缺失时,AI 依据前置知识与目录
@@ -392,13 +355,13 @@ export async function runTool(
       }
     }
 
-    // 阶段进度行(✓=台账已记录,▶=当前;续轮归档存在时带轮次标注;复杂度评估
-    // simple 时按裁剪后流程展示)。台账非法仅提示,硬失败在 runAll 的阶段路由预检。
+    // 阶段进度行(✓=台账已记录,▶=当前;轮次 > 1 带轮次标注;按生效流程展示,
+    // 含 --phases 裁剪)。台账非法仅提示,硬失败在 runAll 的阶段路由预检。
     try {
       const round = await currentRound(directory)
       log(`阶段${round > 1 ? `(第 ${round} 轮)` : ""}: ${formatPhases(phases, (await readLedger(directory)).done)}`)
     } catch (error) {
-      log(`⚠ 阶段台账(docs/phases.md)非法: ${error instanceof Error ? error.message : String(error)}`)
+      log(`⚠ 阶段台账非法: ${error instanceof Error ? error.message : String(error)}`)
     }
 
     const code = await runAll(directory, {
@@ -421,8 +384,8 @@ export async function runTool(
       handoverTest: config.handoverTest,
       mode: input.mode,
       finalReview: input.finalReview,
-      // 流程: 默认完整 admtvk;复杂度评估 simple 时裁剪为 mtvk(设计文档 §10:
-      // config.phases 键保留在 schema 中,工具以解析后的本值驱动)。
+      // 流程: 生效值 = 轮标记固化值 → config.phases(缺省完整 admtvk;--phases
+      // 显式裁剪,轮首一次性决策、随标记固化,续跑沿用)。
       phases,
       source: config.source,
       destDir: config.destDir,

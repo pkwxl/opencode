@@ -154,13 +154,9 @@ describe("CLI: 去子命令化与历史选项拦截", () => {
     }
   })
 
-  test("--phases/--continue/--commit-subtask/看门狗旧名均拦截", async () => {
+  test("--continue/--commit-subtask/看门狗旧名均拦截", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const phases = await runCli([dir, "--phases", "admtvk"])
-      expect(phases.code).toBe(1)
-      expect(phases.err).toContain("--phases 已移除")
-      expect(phases.err).toContain("admtvk")
       const cont = await runCli([dir, "--continue"])
       expect(cont.code).toBe(1)
       expect(cont.err).toContain("--continue 已移除")
@@ -171,6 +167,20 @@ describe("CLI: 去子命令化与历史选项拦截", () => {
       expect((await runCli([dir, "--verify-max", "30"])).err).toContain("已更名为 --idle-max")
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--phases: 非法取值(非 admtvk 子序列/不含 m/空值)为用法错误,先于固化拦截", async () => {
+    for (const value of ["xyz", "atvk", "", "admtvkm"]) {
+      const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+      try {
+        const run = await runCli([dir, "--phases", value])
+        expect(run.code).toBe(1)
+        expect(run.err).toContain("--phases 须为 admtvk 的子序列且包含 m")
+        expect(await readdir(dir)).toEqual([])
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
     }
   })
 
@@ -359,6 +369,25 @@ describe("CLI: 首次运行固化配置", () => {
       })
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("把 legacy 迁移到 bun\n")
       expect(run.out).not.toContain("任务级验收未启用")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--phases 显式裁剪首跑固化;二次运行不一致即冲突、一致视同未给出", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      await seedDone(dir)
+      const run = await runCli([dir, "--phases", "mtvk"])
+      expect(run.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "mtvk" })
+      // 二次运行: 与固化值不一致 → 用法错误(报文含生效值)
+      const conflict = await runCli([dir, "--phases", "admtvk"])
+      expect(conflict.code).toBe(1)
+      expect(conflict.err).toContain("与首次运行固化的配置不一致")
+      expect(conflict.err).toContain("--phases")
+      // 一致视同未给出
+      expect((await runCli([dir, "--phases", "mtvk"])).code).toBe(0)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -599,6 +628,30 @@ describe("CLI: --next-path 轮间修订", () => {
       expect(await Bun.file(join(dir, "PLAN.md")).text()).toBe(before.plan)
       expect(await Bun.file(join(dir, ".auto/tool.json")).text()).toBe(before.marker)
       expect(await Bun.file(join(dir, "docs")).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--phases 与 --next-path 同给: 不参与固化冲突比对(新一轮流程覆盖,随本轮标记固化)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      await saveProjectConfig(dir, {
+        ...CONFIG_DEFAULTS,
+        mode: "migrate",
+        phases: "admtvk",
+        autoNumber: true,
+        source: { dir: "legacy", path: "src/old.ts" },
+        destDir: "target",
+      })
+      // 进行中轮次 + 与固化值不同的 --phases: 若误参与比对会报"与首次运行固化的
+      // 配置不一致";正确行为是豁免比对、走到过渡前置校验(进行中 → 拒绝)
+      await Bun.write(join(dir, ".auto/tool.json"), JSON.stringify({ round: 1, phases: "admtvk" }))
+      await Bun.write(join(dir, "legacy/src/new.ts"), "export {}\n")
+      const run = await runCli([dir, "--next-path", "src/new.ts", "--phases", "mtvk"])
+      expect(run.code).toBe(1)
+      expect(run.err).not.toContain("不一致")
+      expect(run.out).toContain("仍在进行中")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

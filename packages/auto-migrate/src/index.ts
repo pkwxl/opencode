@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // 专用二次迁移工具(设计文档 docs/specialized-tool-design.md): 无子命令,直接执行
-// 主程序——前置知识提取 → 参数推断 → 二次迁移(默认完整 admtvk,复杂度评估
-// simple 轮自动裁剪为 mtvk),自动推进至结束;中断后
+// 主程序——轮首建立(docs/R-NN 轮次专用目录)→ 前置知识提取 → 参数推断 → 二次迁移
+// (流程缺省完整 admtvk,--phases 显式裁剪),自动推进至结束;中断后
 // 再次运行从断点恢复。关键参数(mode/source/dest/verify 等)首次运行时固化进
 // .opencode/auto/config.json;二次执行与首次运行对齐——显式给出且与固化值不一致
 // 即用法错误(退出码 1),修订通道为直接编辑配置文件。
@@ -10,6 +10,7 @@ import { isAbsolute, join, resolve } from "node:path"
 import { CONFIG_DEFAULTS, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
+import { parsePhases } from "@opencode-ai/auto-core/phases"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
 import { setShellProfile } from "@opencode-ai/auto-core/shell"
 import { runTool } from "./tool"
@@ -31,11 +32,12 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
-// --final-review/--source-dir/--source-path/--dest-dir/--next-path 带值(吞掉下一个
-// token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/
-// --handover-test/--new-session 是布尔选项,出现即 true,仅当紧随字面量 true/false
-// 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,--interactive 另有短
-// 选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值规则)。
+// --final-review/--source-dir/--source-path/--dest-dir/--next-path/--phases 带值
+// (吞掉下一个 token);--verbose/--interactive/--dryrun/--early/--verify/
+// --test-by-driver/--handover-test/--new-session 是布尔选项,出现即 true,仅当紧随
+// 字面量 true/false 时才吞掉它。均支持 --flag=value;--prompt 另有短选项 -p,
+// --interactive 另有短选项 -i(布尔,不吞值),--mode 另有短选项 -m(镜像 -p 的吞值
+// 规则)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -56,8 +58,8 @@ const VALUE_FLAGS = new Set([
   "source-path",
   "dest-dir",
   "next-path",
-  // 已移除/更名的历史选项同样吞掉紧随的值,使拦截报文不被位置参数干扰。
   "phases",
+  // 已移除/更名的历史选项同样吞掉紧随的值,使拦截报文不被位置参数干扰。
   "verify-idle",
   "verify-max",
 ])
@@ -117,11 +119,7 @@ if (flags.has("help")) {
   process.exit(0)
 }
 
-// 历史选项拦截: 流程默认 admtvk,续轮/提交粒度/看门狗更名等旧概念已不存在。
-if (flags.has("phases")) {
-  console.error("--phases 已移除: 流程默认为完整 admtvk(分析 → 设计 → 迁移实现 → 测试 → 验收 → 知识提炼),简单轮经前置知识复杂度评估自动裁剪")
-  process.exit(1)
-}
+// 历史选项拦截: 续轮/提交粒度/看门狗更名等旧概念已不存在。
 if (flags.has("continue")) {
   console.error("--continue 已移除: 续轮由主程序自动处理——上一轮完整时自动归档并开启新一轮,直接重新运行即可")
   process.exit(1)
@@ -228,9 +226,24 @@ if (flags.has("dest-dir")) {
   destDir = dest
 }
 
+// --phases: 阶段流程手动裁剪(admtvk 子序列且含 m,核心 parsePhases 校验;缺省
+// admtvk)。首跑作为关键参数固化;二次运行参与冲突校验。唯一例外: 与
+// --next-path 同给时不比对固化值,而是作为新一轮的流程覆盖随本轮标记
+// (.auto/tool.json 的 phases 键)固化,续跑沿用。
+let phasesFlag: string | undefined
+if (flags.has("phases")) {
+  const value = flags.get("phases")!
+  if (parsePhases(value) === null) {
+    console.error(`--phases 须为 admtvk 的子序列且包含 m(如 mtvk、admtvk);缺省 admtvk(完整流程)`)
+    process.exit(1)
+  }
+  phasesFlag = value
+}
+
 // 仅显式给出的键进入固化/冲突比对: 裸选项取各自缺省档。
 const explicit: Partial<ProjectConfig> = {}
 if (flags.has("agent")) explicit.agent = flags.get("agent")
+if (phasesFlag !== undefined) explicit.phases = phasesFlag
 if (flags.has("verify")) explicit.verify = flags.get("verify") !== "false"
 if (flags.has("commit")) explicit.commit = commit
 if (flags.has("subtask")) explicit.subtask = subtask
@@ -315,9 +328,10 @@ if (firstRun && nextPath !== undefined) {
 let config: ProjectConfig
 let modeName: string
 if (firstRun) {
-  // 首次运行: 显式键 + 缺省固化(phases 恒定 admtvk);mode 优先级 显式值 > 旧
-  // .auto/config.json 回落 > 缺省 migrate。source 显式给出时校验存在性(与推断
-  // 会话的产物校验同款: 目录现存、模块路径在其下存在,stat 跟随软链接)。
+  // 首次运行: 显式键 + 缺省固化(phases 缺省 admtvk,--phases 显式值覆盖);mode
+  // 优先级 显式值 > 旧 .auto/config.json 回落 > 缺省 migrate。source 显式给出时校
+  // 验存在性(与推断会话的产物校验同款: 目录现存、模块路径在其下存在,stat 跟随
+  // 软链接)。
   modeName = flags.get("mode") ?? (await legacyModeFallback(directory)) ?? CONFIG_DEFAULTS.mode
   if (!modes[modeName]) {
     console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(modes).join(", ")});缺省为 migrate`)
@@ -357,6 +371,8 @@ if (firstRun) {
   const checks: Array<[string, unknown, unknown]> = [
     ["-m/--mode", flags.has("mode") ? flags.get("mode") : undefined, config.mode],
     ["--agent", explicit.agent, config.agent],
+    // --phases 与 --next-path 同给时是新一轮流程覆盖(随本轮标记固化),不参与比对
+    ["--phases", nextPath !== undefined ? undefined : explicit.phases, config.phases],
     ["--verify", explicit.verify, config.verify],
     ["--commit", explicit.commit, config.commit],
     ["--subtask", explicit.subtask, config.subtask],
@@ -419,6 +435,9 @@ const code = await runTool(directory, {
   finalReview,
   newSession,
   nextPath,
+  // --phases 与 --next-path 同给 → 新一轮流程覆盖(随本轮标记固化);其余场景
+  // --phases 已经首跑固化/冲突校验,生效值即 config.phases,无需透传。
+  phases: nextPath !== undefined ? phasesFlag : undefined,
 })
 process.exit(code)
 
@@ -516,17 +535,19 @@ function usageText(): string {
   return `用法:
   auto-migrate [dir] [关键参数...] [运行参数...]
 
-专用二次迁移工具: 基于已有迁移结果先做一轮前置知识提取(docs/prior-kb/),再自动
-推进一轮二次迁移(默认完整 admtvk:分析 → 设计 → 迁移实现 → 测试 → 验收 → 知识
-提炼;简单轮经复杂度评估自动裁剪为 mtvk)
-至结束;中断后再次运行自动从断点恢复,全部完成后再次运行报告已完成(删除
-.auto/tool.json 可显式开启新一轮)。
+专用二次迁移工具: 轮首建立本轮专用目录(docs/R-NN,落盘即永久)后先做一轮前置
+知识提取(轮内 prior-kb.md),再自动推进一轮二次迁移(缺省完整 admtvk:分析 →
+设计 → 迁移实现 → 测试 → 验收 → 知识提炼;--phases 可显式裁剪,如 mtvk 跳过独立
+分析/设计阶段)至结束;中断后再次运行自动从断点恢复,全部完成后再次运行报告
+已完成(开启下一轮: --next-path <相对路径>)。
 
 关键参数(首次运行时固化到 .opencode/auto/config.json;二次执行与首次运行对齐,
 显式给出且不一致即报错,修订请直接编辑该文件):
   -p|--prompt <brief-text>   项目意图文本,写入 .opencode/auto/brief.md(每次运行均可重写)
   -m|--mode <name>           提示词级场景模式(内置 migrate;.opencode/auto/modes/<name>.md 可新增或覆盖)
   --agent <name>             执行契约 agent(缺省 auto,启动时按模板生成)
+  --phases <串>              阶段流程(admtvk 子序列且含 m,缺省 admtvk);与 --next-path 同给时
+                             不参与固化比对,作为新一轮流程覆盖随本轮标记固化
   --source-dir <dir> --source-path <相对路径>  迁移源(须成对;不给则由主程序依据知识提取结果自动推断)
   --dest-dir <相对路径>      迁移目标目录(不给则自动推断)
   --subtask [off|auto|ondemand]  子任务模式(缺省 auto)
@@ -545,7 +566,8 @@ function usageText(): string {
   --final-review [1-5]       终审闭环(仅 m 阶段挂接)
   --dryrun [true|false]      只跑权限预检,不执行任务
   --new-session [true|false] 中断恢复时跳过会话复用,开新会话继续(阶段精确重入保留)
-  --next-path <相对路径>     前一轮完成后开启下一轮迁移(新模块相对既有 --source-dir 的路径)
+  --next-path <相对路径>     前一轮完成后开启下一轮迁移(新模块相对既有 --source-dir 的路径;
+                             可搭配 --phases 裁剪新一轮流程)
 
 退出码: 0 全部完成(含"此前已完成"),1 用法/环境错误,2 阻塞等待人工介入,130 连续两次 Ctrl+C 强制终止`
 }
