@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CONFIG_DEFAULTS, loadProjectConfig, saveProjectConfig } from "@opencode-ai/auto-core/config"
 import { existingPriorKnowledge, parsePriorVerdict, priorKnowledgeDigest, priorKnowledgeFile } from "@opencode-ai/auto-core/knowledge"
-import { needsSceneCleanup, parseInferOutput, phasesForVerdict, prepareNextRound, readToolState } from "../src/tool"
+import { needsSceneCleanup, parseInferOutput, phasesForVerdict, prepareNextRound, readToolState, resumePhases } from "../src/tool"
 
 describe("phasesForVerdict(复杂度评估 → 流程裁剪)", () => {
   test("simple → mtvk(跳过独立分析/设计,admtvk 子序列);其余 → 完整 admtvk", () => {
@@ -18,6 +18,23 @@ describe("phasesForVerdict(复杂度评估 → 流程裁剪)", () => {
     // 占位未填/缺失 → 保守完整流程
     expect(phasesForVerdict(parsePriorVerdict("流程建议: <full|simple>"))).toBe("admtvk")
     expect(phasesForVerdict(parsePriorVerdict(""))).toBe("admtvk")
+  })
+})
+
+describe("resumePhases(续跑生效流程)", () => {
+  test("固化值优先(须为合法流程串);非法固化值回落文档记录值;再无则完整流程", () => {
+    expect(resumePhases("mtvk", "full", ["m"])).toBe("mtvk")
+    expect(resumePhases("admtvk", undefined, ["a", "d", "m", "t"])).toBe("admtvk")
+    expect(resumePhases("garbage", "simple", [])).toBe("mtvk")
+    expect(resumePhases(undefined, undefined, [])).toBe("admtvk")
+  })
+
+  test("台账已完成阶段必须落在流程内: 记录值裁剪低于进度 → 钳制回完整流程", () => {
+    // 旧机制轮次(无固化值)误评 simple 而台账已推进 a/d → 不得裁剪,否则 routePhase 越界拦截
+    expect(resumePhases(undefined, "simple", ["a", "d", "m", "t"])).toBe("admtvk")
+    // 正常裁剪轮续跑: 台账进度在流程内,沿用
+    expect(resumePhases(undefined, "simple", ["m"])).toBe("mtvk")
+    expect(resumePhases("mtvk", "full", ["m", "t"])).toBe("mtvk")
   })
 })
 

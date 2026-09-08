@@ -7,12 +7,12 @@
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
-import { existingKnowledge, extractPriorKnowledge, parsePriorVerdict } from "@opencode-ai/auto-core/knowledge"
+import { existingKnowledge, existingPriorKnowledge, extractPriorKnowledge, parsePriorVerdict } from "@opencode-ai/auto-core/knowledge"
 import { banner, log } from "@opencode-ai/auto-core/log"
 import { renderAgentContract, runAll } from "@opencode-ai/auto-core/loop"
 import type { ModeSpec } from "@opencode-ai/auto-core/mode"
 import { load, parse } from "@opencode-ai/auto-core/plan"
-import { archiveRound, currentRound, formatPhases, PHASE_ORDER, readLedger, renderPlanScaffold } from "@opencode-ai/auto-core/phases"
+import { archiveRound, currentRound, formatPhases, parsePhases, PHASE_ORDER, readLedger, renderPlanScaffold } from "@opencode-ai/auto-core/phases"
 import { renderInferSource } from "@opencode-ai/auto-core/prompt"
 import { forgetProgress } from "@opencode-ai/auto-core/resume"
 import type { PermissionMode } from "@opencode-ai/auto-core/runner"
@@ -22,12 +22,13 @@ import { usePromptLibrary } from "@opencode-ai/auto-core/template"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 
 // 本轮标记(非版本化,设计文档 §1): 现场清理后写入 { round: N } = 本轮开始,此后
-// 创建的文件视为"自己的",中断重跑依断点续跑、不再清理现场;二次迁移全部完成后写
-// 入 { round, done: true },再次运行报告完成并退出 0。删除该文件可显式开启新一轮
-// (目录内阶段状态按"别人的"遗留重新清理)。
+// 创建的文件视为"自己的",中断重跑依断点续跑、不再清理现场;复杂度评估是轮首一次
+// 性决策,生效流程随标记固化(phases 键,见 resumePhases),续跑直接复用、不再评
+// 估;二次迁移全部完成后写入 { round, done: true },再次运行报告完成并退出 0。删
+// 除该文件可显式开启新一轮(目录内阶段状态按"别人的"遗留重新清理)。
 const STATE_FILE = join(".auto", "tool.json")
 
-export type ToolState = { done?: boolean; round?: number }
+export type ToolState = { done?: boolean; round?: number; phases?: string }
 
 export async function readToolState(dir: string): Promise<ToolState> {
   const state = (await Bun.file(join(dir, STATE_FILE)).json().catch(() => undefined)) as ToolState | undefined
@@ -80,6 +81,16 @@ export function needsSceneCleanup(markerExists: boolean, ledgerDone: readonly st
 // 缺失/full/非法 → 完整 admtvk(保守缺省)。
 export function phasesForVerdict(verdict: "simple" | "full" | undefined): string {
   return verdict === "simple" ? "mtvk" : PHASE_ORDER
+}
+
+// 续跑生效流程(纯函数,便于测试): 复杂度评估只在轮首做一次,生效流程固化进本轮
+// 标记(persisted = tool.json 的 phases 键,须为合法流程串);旧机制轮次的标记无该
+// 键,回落已落盘文档的复杂度记录值(verdict),再无则完整流程。台账已完成阶段必须
+// 落在流程内——固化值/记录值异常时钳制回完整流程(裁剪不得低于已完成进度,否则
+// routePhase 会以"台账记录了 phases 之外的阶段字母"拦截)。
+export function resumePhases(persisted: string | undefined, verdict: "simple" | "full" | undefined, ledgerDone: readonly string[]): string {
+  const phases = persisted && parsePhases(persisted) ? persisted : phasesForVerdict(verdict)
+  return ledgerDone.some((letter) => !phases.includes(letter)) ? PHASE_ORDER : phases
 }
 
 // --next-path 轮间过渡(纯 fs、不起 server,便于离线测试): 前一轮彻底完成(done
@@ -242,35 +253,59 @@ export async function runTool(
   let phases = PHASE_ORDER
   try {
     if (!input.dryrun) {
-      // 前置知识提取(设计文档 §3): 在旧有迁移现场原状上分析(先于现场清理),
-      // 蒸馏产物 docs/prior-kb/ 是本轮首个阶段规划会话与参数推断的输入。失败仅
-      // 警告后继续(决策 3)。
-      banner("前置知识提取: 已有迁移结果复盘")
+      // 轮首/续跑分界(推导式): 本轮标记已建立且台账已有完成阶段 = 轮已推进的续跑
+      // ——前置知识提取与复杂度评估(§10)都是轮首一次性决策,续跑不重做: 生效流
+      // 程复用标记固化值(旧机制轮次无固化值时回落已落盘文档的记录值)。否则已跑
+      // 起来的迁移会因重评翻转流程形态,甚至裁出低于台账进度的流程撞 routePhase
+      // 的越界拦截,中断重跑无法直接恢复断点。
+      const markerExists = await Bun.file(join(directory, STATE_FILE)).exists()
+      const ledgerDone = await readLedger(directory).then((ledger) => ledger.done as readonly string[], () => undefined)
+      let extracted: Awaited<ReturnType<typeof extractPriorKnowledge>> | undefined
       const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
-      const extracted = await extractPriorKnowledge(server.client, directory, {
-        agent: config.agent,
-        dir: directory,
-        verbose: input.verbose,
-        waitAnswer: input.waitAnswer,
-        commit: config.commit,
-        contextLimit: config.contextLimit * 1000,
-        permission: input.permission,
-        server,
-        mode: input.mode,
-      }, brief)
-      if (extracted.type === "ok") log(`✓ 前置知识文档已产出: ${extracted.file}`)
-      else if (extracted.type === "skipped") log(`↻ 前置知识文档已存在(${extracted.file}),跳过提取`)
-      else log(`⚠ 前置知识提取未完成,继续推进(参数推断会话可直读原始 docs/)。受阻详情:\n${extracted.question}`)
+      if (markerExists && ledgerDone?.length) {
+        const round = await currentRound(directory)
+        const doc = state.phases ? undefined : await existingPriorKnowledge(directory, round)
+        const verdict = doc ? parsePriorVerdict(await Bun.file(join(directory, doc)).text().catch(() => "")) : undefined
+        phases = resumePhases(state.phases, verdict, ledgerDone)
+        if (verdict === "simple") log(`ℹ 复杂度评估(轮首记录值): simple → 流程 ${phases},续跑沿用、不再评估`)
+        log(`↻ 本轮已推进(第 ${round} 轮,台账 ${ledgerDone.join("")} 已完成),跳过前置知识提取与复杂度评估,从断点直接恢复`)
+        extracted = doc ? { type: "skipped", file: doc } : undefined
+      } else {
+        // 前置知识提取(设计文档 §3): 在旧有迁移现场原状上分析(先于现场清理),
+        // 蒸馏产物 docs/prior-kb/ 是本轮首个阶段规划会话与参数推断的输入。失败仅
+        // 警告后继续(决策 3)。
+        banner("前置知识提取: 已有迁移结果复盘")
+        extracted = await extractPriorKnowledge(server.client, directory, {
+          agent: config.agent,
+          dir: directory,
+          verbose: input.verbose,
+          waitAnswer: input.waitAnswer,
+          commit: config.commit,
+          contextLimit: config.contextLimit * 1000,
+          permission: input.permission,
+          server,
+          mode: input.mode,
+        }, brief)
+        if (extracted.type === "ok") log(`✓ 前置知识文档已产出: ${extracted.file}`)
+        else if (extracted.type === "skipped") log(`↻ 前置知识文档已存在(${extracted.file}),跳过提取`)
+        else log(`⚠ 前置知识提取未完成,继续推进(参数推断会话可直读原始 docs/)。受阻详情:\n${extracted.question}`)
 
-      // 复杂度评估 → 流程裁剪(设计文档 §10): 从本轮已落盘的 prior 文档解析
-      // 「复杂度评估」协议行(simple → mtvk 跳过独立分析/设计;缺失/full/非法 →
-      // 完整 admtvk 保守缺省)。verdict 取自持久文档,中断重跑(提取幂等跳过)
-      // 决策稳定。
-      if (extracted.type !== "failed") {
-        const verdict = parsePriorVerdict(await Bun.file(join(directory, extracted.file)).text().catch(() => ""))
-        phases = phasesForVerdict(verdict)
-        if (verdict === "simple")
-          log(`ℹ 复杂度评估: 简单轮 → 跳过独立分析/设计阶段(流程 ${phases};勘察与设计要点及底线保障由 m 阶段首批任务承接)`)
+        // 复杂度评估 → 流程裁剪(设计文档 §10): 从本轮已落盘的 prior 文档解析
+        // 「复杂度评估」协议行(simple → mtvk 跳过独立分析/设计;缺失/full/非法 →
+        // 完整 admtvk 保守缺省)。评估是轮首决策,结论随本轮标记固化(见下),
+        // 续跑复用固化值、不再评估。
+        if (extracted.type !== "failed") {
+          const verdict = parsePriorVerdict(await Bun.file(join(directory, extracted.file)).text().catch(() => ""))
+          phases = phasesForVerdict(verdict)
+          if (verdict === "simple")
+            log(`ℹ 复杂度评估: 简单轮 → 跳过独立分析/设计阶段(流程 ${phases};勘察与设计要点及底线保障由 m 阶段首批任务承接)`)
+        }
+      }
+      // 生效流程固化进本轮标记(幂等): 轮首随标记建立写入,旧机制轮次的既有标记
+      // 就地升级——此后续跑一律复用固化值,不再评估。
+      {
+        const marker = await readToolState(directory)
+        if (marker.round !== undefined && !marker.phases) await writeToolState(directory, { ...marker, phases })
       }
 
       // 现场清理(原 continue 流程): 知识已蒸馏落盘后,若本轮标记未建立,目录里的
@@ -278,9 +313,7 @@ export async function runTool(
       // migration-kb 有本轮前缀残留,即归档进轮次目录并重置 PLAN.md,本轮从头规划。
       // 无论遗留来自本工具此前的轮次还是人工/其他工具的迁移。随后建立本轮标记:
       // 此后创建的文件视为"自己的",中断重跑依标记续跑、不再清理。
-      const markerExists = await Bun.file(join(directory, STATE_FILE)).exists()
       if (!markerExists) {
-        const ledgerDone = await readLedger(directory).then((ledger) => ledger.done as readonly string[], () => undefined)
         // migration-kb 残留以轮次前缀守卫判定(stable-refs R2): 只认本轮 R<N>-
         // 前缀文档,历轮永久文档是合法存量、不触发清理;归档在现场判定之后,故
         // 此处 currentRound 仍是待清理轮的号。
@@ -313,7 +346,7 @@ export async function runTool(
         const inferred = await requireArtifact(
           server.client,
           { id: "PLAN", title: "迁移参数推断(源/目标)", status: "in_progress", attempts: 0, body: "" },
-          renderInferSource({ file: inferFile, brief, priorKb: extracted.type === "failed" ? undefined : `- ${extracted.file}`, known }),
+          renderInferSource({ file: inferFile, brief, priorKb: extracted && extracted.type !== "failed" ? `- ${extracted.file}` : undefined, known }),
           {
             agent: config.agent,
             dir: directory,
