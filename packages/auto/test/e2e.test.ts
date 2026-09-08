@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, readdir, rm, symlink } from "node:fs/promises"
+import { mkdtemp, readdir, readlink, rm, stat, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { load } from "@opencode-ai/auto-core/plan"
@@ -455,10 +455,11 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
   }
 
+  // 新布局(init 轮首建立 R-01): 台账写轮内 docs/R-01/phases.md。
   async function writeLedger(dir: string, letters: string[]) {
     await Bun.write(
-      join(dir, "docs/phases.md"),
-      letters.map((letter) => `- [done] ${letter} 阶段 → docs/phases/${letter}-x/`).join("\n") + "\n",
+      join(dir, "docs/R-01/phases.md"),
+      letters.map((letter) => `- [done] ${letter} 阶段 → docs/R-01/${letter}-x/`).join("\n") + "\n",
     )
   }
 
@@ -512,10 +513,10 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       // 无 --phases 时不受护栏影响(不显式改写即无冲突)
       expect((await runCli(["init", dir])).code).toBe(0)
       // 台账非法时 init 报环境错误并给人工修订指引
-      await Bun.write(join(dir, "docs/phases.md"), "- [done] a\n")
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] a\n")
       const broken = await runCli(["init", dir, "--phases", "admtvk"])
       expect(broken.code).toBe(1)
-      expect(broken.err).toContain("docs/phases.md")
+      expect(broken.err).toContain("docs/R-01/phases.md")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -617,42 +618,49 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
   })
 })
 
-describe("CLI: 阶段化流程 P2(空模板 / 阶段行 / 台账预检)", () => {
-  test("init --phases amt → PLAN.md 为空模板(无任务);status 打印阶段进度行", async () => {
+describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账预检)", () => {
+  test("init --phases amt → 轮首建立 R-01,根 PLAN.md 为轮内空模板符号链接;status 打印阶段进度行", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "amt"])
       expect(init.code).toBe(0)
-      const plan = await Bun.file(join(dir, "PLAN.md")).text()
+      expect(init.out).toContain("✓ 轮次目录: docs/R-01/")
+      expect(init.out).toContain("✓ 根 PLAN.md → docs/R-01/PLAN.md(相对符号链接")
+      // 根 PLAN.md 是指向轮内的相对符号链接;轮内 PLAN.md 为空模板(无任务)
+      expect(await readlink(join(dir, "PLAN.md"))).toBe("docs/R-01/PLAN.md")
+      const plan = await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()
       expect(plan).not.toContain("## T-")
       expect(plan).toContain("阶段规划会话")
+      // 轮首 AGENTS.md 快照(避免被当指令加载,.bak 后缀)
+      expect((await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).text()).length).toBeGreaterThan(0)
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
       expect(status.out).toContain("阶段: a▶ m t")
       // 空模板无任务,清单为空
       expect(status.out).not.toContain("[pending] T-001")
-      // 台账推进后进度行随之更新
-      await Bun.write(join(dir, "docs/phases.md"), "- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)\n")
+      // 台账推进后进度行随之更新(新布局: 轮内台账 docs/R-01/phases.md)
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] a 分析 → docs/R-01/a-analysis/(交接: docs/R-01/handovers/a-analysis.md)\n")
       expect((await runCli(["status", dir])).out).toContain("阶段: a✓ m▶ t")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("phases = m 维持占位模板;切换 --phases 时占位模板态替换为空模板,已填任务保留", async () => {
+  test("phases = m 维持占位模板;切换 --phases 时占位模板态换为空模板进 R-01,已填任务保留", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await Bun.file(join(dir, "PLAN.md")).text()).toContain("## T-001: <任务标题> [pending]")
-      // 占位模板态(从未编辑)在切换 --phases 时视为缺失,替换为空模板
+      // 占位模板态(从未编辑)在切换 --phases 时视为缺失,轮内 PLAN 初值 = 空模板
       const staged = await runCli(["init", dir, "--phases", "am"])
       expect(staged.code).toBe(0)
-      expect(staged.out).toContain("已替换(占位模板换为空模板")
+      expect(staged.out).toContain("✓ 轮次目录: docs/R-01/")
+      expect(await readlink(join(dir, "PLAN.md"))).toBe("docs/R-01/PLAN.md")
       expect(await Bun.file(join(dir, "PLAN.md")).text()).not.toContain("## T-")
-      // 已填真实任务的 PLAN.md 不被替换
+      // 已填真实任务的 PLAN.md(经根链接写入轮内)不被替换
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 真实任务 [pending]\n正文\n")
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      expect(await Bun.file(join(dir, "PLAN.md")).text()).toContain("真实任务")
+      expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).toContain("真实任务")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -663,19 +671,19 @@ describe("CLI: 阶段化流程 P2(空模板 / 阶段行 / 台账预检)", () => 
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
       // 台账行非法 → 预检退出 1,报文给人工修订指引
-      await Bun.write(join(dir, "docs/phases.md"), "- [done] a\n")
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] a\n")
       const broken = await runCli(["run", dir])
       expect(broken.code).toBe(1)
       expect(broken.out).toContain("阶段流程受阻")
-      expect(broken.out).toContain("docs/phases.md")
+      expect(broken.out).toContain("docs/R-01/phases.md")
       // 台账含 phases 外字母(k 不在 amt)→ 同为环境错误
-      await Bun.write(join(dir, "docs/phases.md"), "- [done] k 知识提炼 → docs/phases/k-knowledge/\n")
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] k 知识提炼 → docs/R-01/k-knowledge/\n")
       const outside = await runCli(["run", dir])
       expect(outside.code).toBe(1)
       expect(outside.out).toContain("之外的阶段字母")
       // 合法台账通过预检;阶段进度行在配置摘要后打印(删掉 PLAN.md 使 run 在
       // server 启动前退出,仅断言横幅)
-      await Bun.write(join(dir, "docs/phases.md"), "- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)\n")
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] a 分析 → docs/R-01/a-analysis/(交接: docs/R-01/handovers/a-analysis.md)\n")
       await rm(join(dir, "PLAN.md"))
       const banner = await runCli(["run", dir])
       expect(banner.out).toContain("阶段: a✓ m▶ t")
@@ -689,10 +697,10 @@ describe("CLI: 阶段化流程 P2(空模板 / 阶段行 / 台账预检)", () => 
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
-      await Bun.write(join(dir, "docs/phases.md"), "随便一行\n")
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "随便一行\n")
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
-      expect(status.out).toContain("⚠ 阶段台账(docs/phases.md)非法")
+      expect(status.out).toContain("⚠ 阶段台账(docs/R-01/phases.md)非法")
       // phases = m 的项目不打印阶段行(缺省单次运行,无阶段语义)
       const plain = await mkdtemp(join(tmpdir(), "auto-cli-"))
       try {
@@ -712,10 +720,11 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
     return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
   }
 
+  // 新布局(init 轮首建立 R-01): 台账写轮内 docs/R-01/phases.md。
   async function writeLedger(dir: string, letters: string[]) {
     await Bun.write(
-      join(dir, "docs/phases.md"),
-      letters.map((letter) => `- [done] ${letter} 阶段 → docs/phases/${letter}-x/`).join("\n") + "\n",
+      join(dir, "docs/R-01/phases.md"),
+      letters.map((letter) => `- [done] ${letter} 阶段 → docs/R-01/${letter}-x/`).join("\n") + "\n",
     )
   }
 
@@ -773,35 +782,39 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
     }
   })
 
-  test("上一轮全部完成 → 归档重置 + 参数按轮修订 + 新一轮状态正确", async () => {
+  test("上一轮全部完成 → 轮首建立 R-02 + 参数按轮修订 + 新一轮状态正确", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "am", "-p", "第一轮意图"])).code).toBe(0)
       await writeLedger(dir, ["a", "m"])
-      // 轮后手工留下的任务也一并归档留痕(台账完整 = 完成态,routePhase complete)
+      // 轮后手工留下的任务留在上一轮轮内 PLAN(经根链接写入 docs/R-01/PLAN.md),
+      // 落盘即永久,不随续轮移动
       await Bun.write(join(dir, "PLAN.md"), "## T-009: 轮后手工任务 [pending]\n正文\n")
-      // 新 phases "admtvk" 不以台账 "am" 为前缀——归档重置后不受前缀护栏约束
+      // 新 phases "admtvk" 不以台账 "am" 为前缀——新轮目录恒空,不受前缀护栏约束
       const cont = await runCli(["continue", dir, "--phases", "admtvk", "-p", "第二轮聚焦补齐差距", "--context-limit", "128"])
       expect(cont.code).toBe(0)
-      expect(cont.out).toContain("上一轮(第 1 轮)已归档")
-      expect(cont.out).toContain("docs/phases/round-1/")
+      expect(cont.out).toContain("✓ 轮次目录: docs/R-02/")
       expect(cont.out).toContain("已开启第 2 轮继续迁移")
       expect(cont.out).toContain("开始 a(分析)阶段规划")
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk", contextLimit: 128 })
-      // 归档内容与状态重置
-      expect(await Bun.file(join(dir, "docs/phases/round-1/phases.md")).text()).toContain("- [done] a")
-      expect(await Bun.file(join(dir, "docs/phases/round-1/PLAN.md")).text()).toContain("轮后手工任务")
-      expect(await Bun.file(join(dir, "docs/phases.md")).exists()).toBe(false)
-      // 根 PLAN.md 由模板循环重建为空模板
+      // 上一轮轮次目录原样保留(绝不搬移/删除): 台账与轮末 PLAN 均在 R-01 内
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [done] a")
+      expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).toContain("轮后手工任务")
+      // 不做旧式归档: docs/phases/ 不创建
+      expect(await stat(join(dir, "docs/phases")).catch(() => undefined)).toBeUndefined()
+      // 根 PLAN.md 重指新一轮轮内空模板
+      expect(await readlink(join(dir, "PLAN.md"))).toBe("docs/R-02/PLAN.md")
       const plan = await Bun.file(join(dir, "PLAN.md")).text()
       expect(plan).not.toContain("## T-")
       expect(plan).toContain("阶段规划会话")
+      // 新轮 AGENTS.md 快照
+      expect((await Bun.file(join(dir, "docs/R-02/AGENTS.md.bak")).text()).length).toBeGreaterThan(0)
       // -p 覆盖为新轮意图
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("第二轮聚焦补齐差距\n")
       // status: 阶段进度行带轮次标注
       const status = await runCli(["status", dir])
       expect(status.out).toContain("阶段(第 2 轮): a▶ d m t v k")
-      // 重复 continue: 台账已重置(新一轮未开始)→ 拒绝并指引先跑 run
+      // 重复 continue: 新一轮台账为空(尚未开始)→ 拒绝并指引先跑 run
       const again = await runCli(["continue", dir])
       expect(again.code).toBe(1)
       expect(again.err).toContain("尚缺 a、d、m、t、v、k")
