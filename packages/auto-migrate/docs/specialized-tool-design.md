@@ -28,6 +28,14 @@
   → .auto/tool.json.done === true → 报告完成,退出 0
   → 启动 server(全程一个实例,注入 runAll 复用)
   → [dryrun: 跳过以下前置步骤,直接走 runAll 的权限预检]
+  → [本轮标记缺失/损坏(readToolState 得 {})且有轮次现场证据(新布局轮目录
+    已建或旧布局根台账已推进): 开旁路一次性 AI 恢复会话重建 .auto/tool.json
+    (镜像核心 ensureNumbering 骨架)——driver 注入推导锚点(轮号 = docs/ 推导
+    当前轮、台账已完成字母、config.phases 缺省流程),AI 通读台账/运行日志
+    (.auto/logs/ 的进度行记录生效流程)/轮次目录取证后写回标记;driver 校验
+    产物(round 必须等于推导轮号、phases 合法且覆盖台账、done 仅当台账覆盖
+    生效流程),非法带反馈重试一次,仍失败/受阻 → 退出码 2。恢复出 done →
+    报告完成退出 0;无现场证据 = 全新项目,直接走正常轮首建立]
   → 轮已推进(本轮标记在且台账有完成阶段)→ 跳过前置步骤,从断点直接恢复
   → 轮首建立(核心 establishRound): 建 docs/R-NN/(轮内 PLAN.md 初值 = 根
     PLAN.md 现状或空模板)、根 PLAN.md 重指轮内符号链接、写 AGENTS.md.bak;
@@ -46,7 +54,9 @@
   `{ "round": N, "phases": "..." }` = 第 N 轮进行中: 轮首建立时写入,生效流程
   随标记固化(--phases 是轮首一次性决策),中断重跑依断点续跑、复用固化值。
   `{ ..., "done": true }` = 二次迁移已完成,再跑报告完成退出 0。开启新一轮用
-  --next-path(§9)。
+  --next-path(§9)。非版本化意味着新克隆/清理 .auto/ 后必然缺失——主程序启动
+  时自动恢复(见上方流程;恢复会话模板 tool-state-recovery 由壳层
+  registerTemplate 注册,核心不含)。
 - 前置知识产物(版本化,永久): 新布局 = 轮内固定名 docs/R-NN/prior-kb.md
   (轮目录轮首即建且恒空,必重新蒸馏,"旧轮文档误判本轮已提取"的缺陷结构性
   消除);旧布局存量 = docs/prior-kb/R<N>-prior-<时间戳>.md(读回落)。独立于

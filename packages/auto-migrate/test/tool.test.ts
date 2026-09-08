@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CONFIG_DEFAULTS, loadProjectConfig, saveProjectConfig } from "@opencode-ai/auto-core/config"
-import { effectivePhases, parseInferOutput, prepareNextRound, readToolState } from "../src/tool"
+import { effectivePhases, parseInferOutput, parseRecoveredState, prepareNextRound, readToolState, stateRecoveryAnchor } from "../src/tool"
 
 describe("effectivePhases(生效流程: 标记固化值 → config.phases)", () => {
   test("固化值优先(须为合法流程串);非法固化值/缺失回落 config.phases", () => {
@@ -86,6 +86,109 @@ describe("readToolState(完成标记)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("stateRecoveryAnchor(标记恢复锚点: 推导式现场证据)", () => {
+  test("全新目录(无任何轮次痕迹)→ undefined(无需恢复,走正常轮首建立)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-recover-"))
+    try {
+      expect(await stateRecoveryAnchor(dir)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("仅旧布局已归档轮次(docs/phases/round-1)→ undefined(归档即完成,新轮由轮首建立开启)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-recover-"))
+    try {
+      mkdirSync(join(dir, "docs/phases/round-1"), { recursive: true })
+      expect(await stateRecoveryAnchor(dir)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("新布局轮目录已建(轮首)台账为空 → 轮号锚定、无完成字母", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-recover-"))
+    try {
+      mkdirSync(join(dir, "docs/R-02"), { recursive: true })
+      expect(await stateRecoveryAnchor(dir)).toEqual({ round: 2, ledgerDone: [] })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("新布局在途轮: 轮内台账完成字母随锚点返回", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-recover-"))
+    try {
+      mkdirSync(join(dir, "docs/R-01/m-migrate"), { recursive: true })
+      writeFileSync(
+        join(dir, "docs/R-01/phases.md"),
+        "- [done] m 迁移实现 → docs/R-01/m-migrate/\n- [done] t 测试 → docs/R-01/t-testing/\n",
+      )
+      expect(await stateRecoveryAnchor(dir)).toEqual({ round: 1, ledgerDone: ["m", "t"] })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("旧布局在途轮(无轮目录,根台账已推进)→ 轮号回落旧语义推导", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-recover-"))
+    try {
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(join(dir, "docs/phases.md"), "- [done] m 迁移实现 → docs/phases/m-migrate/\n")
+      expect(await stateRecoveryAnchor(dir)).toEqual({ round: 1, ledgerDone: ["m"] })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("parseRecoveredState(标记恢复产物的 driver 校验)", () => {
+  const anchor = { round: 2, ledgerDone: ["m", "t"], configuredPhases: "admtvk" }
+
+  test("合法产物: round 锚定;phases/done 省略 = 回落缺省语义", () => {
+    expect(parseRecoveredState(`{"round":2}`, anchor)).toEqual({ round: 2 })
+    expect(parseRecoveredState(`{"round":2,"phases":"mtvk"}`, anchor)).toEqual({ round: 2, phases: "mtvk" })
+  })
+
+  test("done 成立: 台账覆盖生效流程(含 phases 裁剪轮)", () => {
+    expect(parseRecoveredState(`{"round":2,"phases":"mtvk","done":true}`, { ...anchor, ledgerDone: ["m", "t", "v", "k"] })).toEqual({
+      round: 2,
+      phases: "mtvk",
+      done: true,
+    })
+    expect(
+      parseRecoveredState(`{"round":2,"done":true}`, { ...anchor, ledgerDone: ["a", "d", "m", "t", "v", "k"] }),
+    ).toEqual({ round: 2, done: true })
+  })
+
+  test("round 必须与推导轮号一致(轮次由 docs/ 推导,不容 AI 改判)", () => {
+    expect(parseRecoveredState(`{"round":1}`, anchor)).toBeUndefined()
+    expect(parseRecoveredState(`{"round":3}`, anchor)).toBeUndefined()
+    expect(parseRecoveredState(`{}`, anchor)).toBeUndefined()
+  })
+
+  test("phases 非法(非流程串/不含 m/未覆盖台账已完成字母)→ 无效", () => {
+    expect(parseRecoveredState(`{"round":2,"phases":"xyz"}`, anchor)).toBeUndefined()
+    expect(parseRecoveredState(`{"round":2,"phases":"atvk"}`, anchor)).toBeUndefined()
+    // 台账已完成 m,t;phases 裁掉 t → routePhase 会以越界拦截,恢复不得产出
+    expect(parseRecoveredState(`{"round":2,"phases":"mvk"}`, anchor)).toBeUndefined()
+    expect(parseRecoveredState(`{"round":2,"phases":42}`, anchor)).toBeUndefined()
+  })
+
+  test("done 与台账不符(生效流程未全部完成)→ 无效(完成判定不靠 agent 自报)", () => {
+    expect(parseRecoveredState(`{"round":2,"done":true}`, anchor)).toBeUndefined()
+    expect(parseRecoveredState(`{"round":2,"phases":"mtvk","done":true}`, anchor)).toBeUndefined()
+    expect(parseRecoveredState(`{"round":2,"done":false}`, anchor)).toBeUndefined()
+  })
+
+  test("非法 JSON / 非对象 → 无效(视为未产出)", () => {
+    expect(parseRecoveredState("", anchor)).toBeUndefined()
+    expect(parseRecoveredState("not json", anchor)).toBeUndefined()
+    expect(parseRecoveredState("[]", anchor)).toBeUndefined()
+    expect(parseRecoveredState("42", anchor)).toBeUndefined()
   })
 })
 

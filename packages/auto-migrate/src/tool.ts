@@ -1,9 +1,10 @@
 // 专用二次迁移工具的主编排(设计文档 docs/specialized-tool-design.md): 无子命令,
-// 每次启动按"[--next-path 轮间过渡(可选)] → 轮首建立(docs/R-NN 轮次专用目录)
-// → 前置知识提取 → 参数推断 → 二次迁移(流程缺省完整 admtvk,--phases 显式裁剪)"
-// 自动推进至结束;中断后再次运行依推导式状态(台账 + PLAN.md + .auto/progress.json
-// + 本模块的 .auto/tool.json 本轮标记)从断点恢复。index.ts 只做参数解析与配置固化/
-// 冲突校验,然后委托本模块。
+// 每次启动按"[--next-path 轮间过渡(可选)] → [本轮标记缺失时自动恢复] → 轮首建立
+// (docs/R-NN 轮次专用目录)→ 前置知识提取 → 参数推断 → 二次迁移(流程缺省完整
+// admtvk,--phases 显式裁剪)"自动推进至结束;中断后再次运行依推导式状态(台账 +
+// PLAN.md + .auto/progress.json+ 本模块的 .auto/tool.json 本轮标记)从断点恢复。
+// index.ts 只做参数解析与配置固化/冲突校验,然后委托本模块。
+import { readFileSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { formatProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
@@ -16,16 +17,23 @@ import { currentRound, establishRound, formatPhases, nextRound, parsePhases, PHA
 import { renderInferSource } from "@opencode-ai/auto-core/prompt"
 import type { PermissionMode } from "@opencode-ai/auto-core/runner"
 import { requireArtifact } from "@opencode-ai/auto-core/runner"
-import { manage } from "@opencode-ai/auto-core/server"
-import { usePromptLibrary } from "@opencode-ai/auto-core/template"
+import { manage, type ServerHandle } from "@opencode-ai/auto-core/server"
+import { registerTemplate, renderTemplate, usePromptLibrary } from "@opencode-ai/auto-core/template"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
+import tplStateRecovery from "./templates/tool-state-recovery.md" with { type: "file" }
 
 // 本轮标记(非版本化,设计文档 §1): 轮首建立(首轮/删标记重开由 runTool、轮间过渡
 // 由 prepareNextRound)写入 { round: N, phases } = 本轮开始,生效流程随标记固化
 // (--phases 是轮首一次性决策),续跑复用固化值、不再解析;二次迁移全部完成后写入
 // { round, phases, done: true },再次运行报告完成并退出 0。开启新一轮用
-// --next-path(见 prepareNextRound)。
+// --next-path(见 prepareNextRound)。标记缺失/损坏(新克隆、清理 .auto/ 等)时由
+// runTool 自动恢复(stateRecoveryAnchor + ensureToolState,见下)。
 const STATE_FILE = join(".auto", "tool.json")
+
+// 壳层附加模板(本轮标记恢复会话): 经核心 registerTemplate 注册(核心不知外壳,
+// 本轮标记是本壳的私有状态文件),协议标记供目标目录 .opencode/auto/prompts/
+// 同名覆盖时校验;注册即时生效并跨 usePromptLibrary 重载保留。
+registerTemplate("tool-state-recovery", readFileSync(tplStateRecovery, "utf8"), [STATE_FILE, '"round"'])
 
 export type ToolState = { done?: boolean; round?: number; phases?: string }
 
@@ -74,6 +82,107 @@ export function effectivePhases(persisted: string | undefined, configured: strin
   return ledgerDone.some((letter) => !phases.includes(letter)) ? PHASE_ORDER : phases
 }
 
+// —— 本轮标记恢复(.auto/tool.json 缺失/损坏时自动重建,镜像核心 ensureNumbering
+// 骨架: driver 确定性锚点 + 旁路一次性 AI 恢复会话 + driver 校验)——
+
+// 恢复锚点(推导式证据): 新布局轮目录已建(轮首建立必然先于任何阶段推进)或旧
+// 布局根台账已有完成阶段 → 存在可恢复的轮次现场;否则为全新项目(或仅余旧布局
+// 已归档轮次——归档即完成,新轮由正常轮首建立流程开启),无需恢复,返回
+// undefined。台账非法(解析 throw)时按无台账字母处理,硬失败仍由 runAll 的
+// 阶段路由预检报出。
+export async function stateRecoveryAnchor(dir: string): Promise<{ round: number; ledgerDone: string[] } | undefined> {
+  const round = await currentRound(dir)
+  const root = await roundRoot(dir, round)
+  const ledgerDone = await readLedger(dir).then((ledger) => ledger.done as string[], () => [] as string[])
+  return root || ledgerDone.length ? { round, ledgerDone } : undefined
+}
+
+// AI 恢复产物的 driver 校验(纯函数): 产物 = .auto/tool.json 文本;锚点 = driver
+// 推导的轮号/台账/配置流程。round 必须等于锚定轮号(轮次由 docs/ 推导,不容 AI
+// 改判);phases 给出时必须是合法流程串且覆盖台账已完成字母(否则 routePhase 会
+// 以"台账记录了 phases 之外的阶段字母"拦截);done 仅在台账确认生效流程全部完成
+// 时成立(完成判定不靠 agent 自报)。非法 → undefined(视为未产出,带反馈重试)。
+export function parseRecoveredState(
+  text: string,
+  anchor: { round: number; ledgerDone: readonly string[]; configuredPhases: string },
+): ToolState | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined
+  const record = parsed as Record<string, unknown>
+  if (record.round !== anchor.round) return undefined
+  const state: ToolState = { round: anchor.round }
+  if (record.phases !== undefined) {
+    if (typeof record.phases !== "string" || !parsePhases(record.phases)) return undefined
+    const phases = record.phases
+    if (anchor.ledgerDone.some((letter) => !phases.includes(letter))) return undefined
+    state.phases = phases
+  }
+  if (record.done !== undefined) {
+    if (record.done !== true) return undefined
+    const phases = effectivePhases(state.phases, anchor.configuredPhases, anchor.ledgerDone)
+    if (![...phases].every((letter) => anchor.ledgerDone.includes(letter))) return undefined
+    state.done = true
+  }
+  return state
+}
+
+// 恢复会话提示词(壳层渲染已注册的 tool-state-recovery 模板): 锚点预拼接注入,
+// 会话直读台账/运行日志/轮次目录取证。
+function renderToolStateRecovery(input: { round: number; ledgerDone: readonly string[]; configuredPhases: string }): string {
+  return renderTemplate("tool-state-recovery", {
+    round: String(input.round),
+    ledgerDone: input.ledgerDone.length ? input.ledgerDone.join("、") : "(无)",
+    configuredPhases: input.configuredPhases,
+  })
+}
+
+// 标记恢复主流程(本轮标记缺失/损坏且有轮次现场证据时调用): 旁路一次性 AI 恢复
+// 会话通读台账/运行日志/轮次目录重建标记(产物即 .auto/tool.json 本身),driver
+// 以 parseRecoveredState 校验;受阻或两次未产出 → { blocked }(调用方转退出码 2)。
+async function ensureToolState(
+  server: ServerHandle,
+  directory: string,
+  anchor: { round: number; ledgerDone: string[] },
+  config: ProjectConfig,
+  input: { verbose?: boolean; waitAnswer?: number; permission?: PermissionMode; mode: ModeSpec },
+): Promise<ToolState | { blocked: string }> {
+  const recovered = await requireArtifact(
+    server.client,
+    { id: "PLAN", title: "本轮标记恢复", status: "in_progress", attempts: 0, body: "" },
+    renderToolStateRecovery({ ...anchor, configuredPhases: config.phases }),
+    {
+      agent: config.agent,
+      dir: directory,
+      verbose: input.verbose,
+      waitAnswer: input.waitAnswer,
+      commit: config.commit,
+      contextLimit: config.contextLimit * 1000,
+      permission: input.permission,
+      server,
+      mode: input.mode,
+    },
+    {
+      kind: "标记恢复",
+      artifact: `有效本轮标记 ${STATE_FILE}`,
+      detail: "缺失、非法 JSON、round 与推导轮号不符、phases 非法或未覆盖台账、done 与台账不符",
+      requirement:
+        `必须把重建的标记整写为 ${STATE_FILE}: 单个 JSON 对象,round 必须为 ${anchor.round};` +
+        `phases 仅在有证据时给出(合法流程串且覆盖台账已完成字母);仅当台账确认本轮全部阶段完成时才写 "done": true。`,
+      commit: { stage: "recover", subject: "PLAN recover 本轮标记恢复" },
+      reset: () => rm(join(directory, STATE_FILE), { force: true }),
+      collect: async () =>
+        parseRecoveredState(await Bun.file(join(directory, STATE_FILE)).text().catch(() => ""), { ...anchor, configuredPhases: config.phases }),
+    },
+  )
+  if ("question" in recovered) return { blocked: recovered.question }
+  return recovered
+}
+
 // --next-path 轮间过渡(纯 fs、不起 server,便于离线测试): 前一轮彻底完成(done
 // 标记)前提下修订 source.path、清陈旧推断产物,随即轮首建立——建 docs/R-(N+1)/
 // 轮次专用目录(轮内 PLAN.md 恒为空模板,新轮目录恒空、无现场可清)、根 PLAN.md
@@ -96,7 +205,7 @@ export async function prepareNextRound(
     return {
       error: state.round
         ? `--next-path 仅用于前一轮彻底完成后开启新一轮: 第 ${state.round} 轮迁移仍在进行中,不带 --next-path 重新运行即从断点续跑`
-        : "--next-path 仅用于前一轮彻底完成后开启新一轮: 当前目录没有已完成的迁移,先完成一次完整迁移后再用 --next-path 开启下一轮",
+        : "--next-path 仅用于前一轮彻底完成后开启新一轮: 当前目录没有已完成的迁移,先完成一次完整迁移后再用 --next-path 开启下一轮(若此前确有迁移现场而本轮标记 .auto/tool.json 缺失/损坏,先不带参数运行一次,driver 会自动恢复标记)",
     }
   }
   const source = config.source
@@ -244,6 +353,30 @@ export async function runTool(
   let phases = PHASE_ORDER
   try {
     if (!input.dryrun) {
+      // 本轮标记恢复(.auto/tool.json 缺失/损坏 = readToolState 得 {}): .auto
+      // 非版本化,新克隆/清理/损坏后丢失。推导证据(轮目录/台账)显示已有轮次
+      // 现场时先恢复标记再继续——恢复出的 round/phases/done 直接接管下面的轮首/
+      // 续跑分界:进行中 → 断点恢复;已完成(完成标记丢失)→ 报告完成退出 0。
+      // 无现场证据 = 全新项目(或仅余旧布局已归档轮次),落入正常轮首建立。
+      if (state.round === undefined) {
+        const anchor = await stateRecoveryAnchor(directory)
+        if (anchor) {
+          banner("本轮标记恢复: .auto/tool.json 缺失")
+          const recovered = await ensureToolState(server, directory, anchor, config, input)
+          if ("blocked" in recovered) {
+            log(`⏸ 本轮标记恢复会话受阻(隐性阻塞,请检查后重新运行):\n${recovered.blocked}`)
+            return 2
+          }
+          state = recovered
+          log(
+            `✓ 本轮标记已恢复: ${STATE_FILE}(第 ${state.round} 轮${state.phases ? `,流程 ${state.phases}` : ""}${state.done ? ",已完成" : ""})`,
+          )
+          if (state.done) {
+            log("✓ 二次迁移已全部完成(开启新一轮: --next-path <相对路径>)")
+            return 0
+          }
+        }
+      }
       // 轮首/续跑分界(推导式): 本轮标记已建立且台账已有完成阶段 = 轮已推进的续跑
       // ——前置知识提取是轮首一次性决策,续跑不重做;生效流程复用标记固化值(无固
       // 化值回落 config.phases)。否则已跑起来的迁移会因重开提取会话被拖回轮首,
