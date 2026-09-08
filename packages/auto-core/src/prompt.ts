@@ -287,6 +287,8 @@ export function stageText(stage: FinalStage): string {
 // 最终交接/迁移知识),仅续轮(新一轮轮目录建立后)的新一轮首个规划会话注入。
 // source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
 // finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
+// trimmedPhases 仅 m 阶段生效(生效 phases 经 --phases 裁剪、不含独立 a/d 阶段时由
+// loop 传入,模板注入「流程裁剪注记」——勘察设计并入首批任务,底线保障不省)。
 // numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
 // 由 loop 在规划会话前经 ensureNumbering 确保就位),未启用时缺省——编号自 T-001 起。
 export function renderPhasePlan(input: {
@@ -299,6 +301,7 @@ export function renderPhasePlan(input: {
   mode?: ModeSpec
   verify?: boolean
   finalReview?: number
+  trimmedPhases?: boolean
   numberStart?: number
 }): string {
   const { phase } = input
@@ -315,6 +318,7 @@ export function renderPhasePlan(input: {
     modeInit: input.mode && modeText(input.mode.init, { verify: input.verify }),
     verify: input.verify,
     finalReview: phase === "m" && input.finalReview ? String(input.finalReview) : undefined,
+    trimmedPhases: phase === "m" && input.trimmedPhases ? true : undefined,
     numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
     phaseA: phase === "a",
     phaseD: phase === "d",

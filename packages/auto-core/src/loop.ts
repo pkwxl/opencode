@@ -610,6 +610,8 @@ export async function runAll(
             mode: opts.mode,
             verify: opts.verify,
             finalReview: opts.finalReview,
+            // 生效 phases 经 --phases 裁剪(无独立 a/d 阶段)→ m 阶段规划注入裁剪注记
+            trimmedPhases: !phases.includes("a") && !phases.includes("d"),
             numberStart,
           }),
           {

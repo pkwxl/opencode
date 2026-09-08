@@ -147,13 +147,6 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
   return [...found].sort()
 }
 
-// 复杂度评估判读(prior-knowledge 模板「复杂度评估」节的首行协议): 首个匹配
-// `流程建议: simple|full` 的行(半角/全角冒号;行内与行尾不留其他文字)。缺节、
-// 占位未填或值非法 → undefined——调用方一律按完整流程处理(保守缺省)。
-export function parsePriorVerdict(text: string): "simple" | "full" | undefined {
-  return /^流程建议[:：][ \t]*(simple|full)[ \t]*$/m.exec(text)?.[1] as "simple" | "full" | undefined
-}
-
 // 目录内本轮 R<round>- 前缀的非空 .md → 首个(字典序);allowLegacy 时再回落无
 // R 前缀的非空 .md(第 1 轮的 P2 前存量读回落,及 prior-kb 的旧机制轮次续跑,
 // 见 existingPriorKnowledge);空文件与非 .md 不算。

@@ -854,14 +854,15 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
   })
 
-  test("m 阶段附简化流程判定(复杂度评估 simple → 勘察设计并入首批任务,底线不省),其余阶段无", () => {
-    const m = renderPhasePlan({ phase: "m", prevRound: "### 上一轮迁移知识(docs/migration-kb/R1-migration-x.md)\n\n流程建议: simple" })
-    expect(m).toContain("简化流程判定")
-    expect(m).toContain("复杂度评估")
+  test("m 阶段经 trimmedPhases 注入流程裁剪注记(--phases 裁剪 → 勘察设计并入首批任务,底线不省),缺省与其余阶段无", () => {
+    const m = renderPhasePlan({ phase: "m", trimmedPhases: true })
+    expect(m).toContain("流程裁剪注记")
+    expect(m).toContain("--phases 裁剪")
     expect(m).toContain("并入本阶段首批任务")
     expect(m).toContain("底线保障")
-    // 非 m 阶段不注入该判定
-    expect(renderPhasePlan({ phase: "a", prevRound: "x" })).not.toContain("简化流程判定")
+    // 缺省(完整流程)不注入;非 m 阶段即使传入也不注入(门控在函数内)
+    expect(renderPhasePlan({ phase: "m" })).not.toContain("流程裁剪注记")
+    expect(renderPhasePlan({ phase: "a", trimmedPhases: true })).not.toContain("流程裁剪注记")
   })
 
   test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
@@ -1103,17 +1104,6 @@ describe("renderPriorKnowledge(前置知识提取会话)", () => {
     expect(bare).not.toContain("## 输入: 已有蒸馏产物")
     expect(bare).not.toContain("不得在本文复述")
     expect(renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md", distilled: [] })).not.toContain("## 输入: 已有蒸馏产物")
-  })
-
-  test("复杂度评估骨架与协议: 章节存在、协议行规则说明齐全", () => {
-    usePromptLibrary(undefined)
-    const text = renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md" })
-    expect(text).toContain("## 复杂度评估")
-    expect(text).toContain("流程建议: <full|simple>")
-    expect(text).toContain("`流程建议: full`")
-    expect(text).toContain("`流程建议: simple`")
-    expect(text).toContain("任何拿不准一律")
-    expect(text).toContain("不豁免任何底线保障")
   })
 })
 

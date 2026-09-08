@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, knowledgeFile, parsePriorVerdict, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
+import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, knowledgeFile, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
 
 describe("knowledgeFile(输出路径,布局感知)", () => {
   function tempDir() {
@@ -252,22 +252,5 @@ describe("priorKnowledgeDigest(前置知识摘要,双布局跨轮累积注入)",
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
-})
-
-describe("parsePriorVerdict(复杂度评估协议判读)", () => {
-  test("simple/full、半角与全角冒号、取首个匹配行", () => {
-    expect(parsePriorVerdict("# 迁移知识库\n\n## 复杂度评估\n\n流程建议: simple\n\n依据: 微小增量")).toBe("simple")
-    expect(parsePriorVerdict("流程建议: full")).toBe("full")
-    expect(parsePriorVerdict("流程建议：simple")).toBe("simple")
-    expect(parsePriorVerdict("x\n流程建议: simple\ny\n流程建议: full")).toBe("simple")
-  })
-
-  test("缺失、占位未填、非法值 → undefined(调用方按完整流程处理)", () => {
-    expect(parsePriorVerdict("")).toBeUndefined()
-    expect(parsePriorVerdict("## 复杂度评估\n\n流程建议: <full|simple>")).toBeUndefined()
-    expect(parsePriorVerdict("流程建议: SIMPLE")).toBeUndefined()
-    expect(parsePriorVerdict("流程建议: simple(微小增量)")).toBeUndefined()
-    expect(parsePriorVerdict("建议: simple")).toBeUndefined()
   })
 })
