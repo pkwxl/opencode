@@ -4,11 +4,15 @@
 // (存在性 + 段边界后缀唯一匹配消解 + 行号上限)、renamePairs(git rename 配对)、
 // 活文档枚举与 scanRefs 全量扫描,供 check 子命令与 verify 门禁消费;
 // autoCorrectRefs 另维护 .auto/invalid-refs.md 失效清单,仅对新出现的失效引用输出
-// ⚠ 日志。三层挂点受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,
+// ⚠ 日志;refcheck-scope P2 补齐 renameHistory(git 历史 rename 地图)与缺失
+// 恢复(失效确认在先、恢复在后: missing finding 的目标在历史中曾存在且链式解析
+// 落点当前存在 → 就地改写恢复;落点已删除保留 finding 人工订正)。
+// 三层挂点受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,
 // 缺省 off 空转;管控点在 runner.ts/check.ts,本层函数不感知开关)。
 import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
 import type { Stats } from "node:fs"
 import { join, relative, sep, dirname } from "node:path"
+import { repoRoots } from "./git"
 import { log } from "./log"
 
 // path = 剥离可选 `:行号` 尾锚后的引用路径;line = 尾锚行号(存在时);
@@ -338,6 +342,78 @@ export async function renamePairs(dir: string): Promise<Array<{ old: string; new
   return pairs
 }
 
+// —— refcheck-scope P2: rename 历史地图与缺失引用恢复(§4)——
+// rename 历史地图(D5 的确定性判据:「曾出现」= 所属 git 仓库历史中曾存在该
+// 路径): 目标仓库及嵌套子仓库各自执行 git log --find-renames --diff-filter=R
+// --name-status --format= -z,按新→旧序遍历、首现优先得 old→new 直接边,再链式
+// 解析到最终落点(visited 防环;成环等病态历史解析到的落点若已不存在,由调用方
+// 存在性检查兜底保留 finding);路径换算目标目录相对,目录树外路径丢弃。
+// 键值均为目标目录相对路径(old → 最终落点)。
+export async function renameHistory(dir: string): Promise<Map<string, string>> {
+  const edges = new Map<string, string>()
+  for (const root of await repoRoots(dir)) {
+    const top = (await gitOut(root, ["rev-parse", "--show-toplevel"]))?.trim()
+    if (!top) continue
+    const out = await gitOut(root, ["log", "--find-renames", "--diff-filter=R", "--name-status", "--format=", "-z"])
+    if (!out) continue
+    const parts = out.split("\0")
+    for (let i = 0; i < parts.length - 2; i++) {
+      if (!parts[i]!.startsWith("R")) continue
+      const oldRel = relative(dir, join(top, parts[i + 1]!)).split(sep).join("/")
+      const newRel = relative(dir, join(top, parts[i + 2]!)).split(sep).join("/")
+      if (oldRel.startsWith("..") || newRel.startsWith("..")) continue
+      if (!edges.has(oldRel)) edges.set(oldRel, newRel)
+    }
+  }
+  const history = new Map<string, string>()
+  for (const old of edges.keys()) {
+    const visited = new Set<string>([old])
+    let current = old
+    while (true) {
+      const next = edges.get(current)
+      if (!next || visited.has(next)) break
+      visited.add(next)
+      current = next
+    }
+    if (current !== old) history.set(old, current)
+  }
+  return history
+}
+
+// 缺失引用恢复(§4,失效确认在先、恢复在后——顺序不可颠倒): 对 findings 中
+// problem: "missing" 的条目逐一定性——rename 历史地图含该目标为 old 且链式落点
+// 当前存在 → rewriteRefs 就地改写恢复(排版不变式);落点已删除(或历史中不曾
+// 存在)→ 保留 finding 入失效清单,人工订正。只恢复「移动/改名」导致的失效,
+// 删除与语义变化不自动恢复(§8 边界)。最小范围: 只改写失效确认的该引用所在
+// 文档中的该路径 token,不波及其他文档。返回改写处数(0 = 本轮无恢复)。
+async function recoverMissingRefs(dir: string, findings: RefFinding[]): Promise<number> {
+  const missing = findings.filter((finding) => finding.problem === "missing")
+  if (!missing.length) return 0
+  const history = await renameHistory(dir)
+  if (!history.size) return 0
+  const byFile = new Map<string, Array<{ old: string; new: string }>>()
+  for (const finding of missing) {
+    const target = finding.path.split("#")[0]!
+    const landing = history.get(target)
+    if (!landing) continue
+    if (!(await stat(join(dir, landing)).catch(() => undefined))) continue
+    const pairs = byFile.get(finding.file) ?? []
+    if (!pairs.some((pair) => pair.old === target)) pairs.push({ old: target, new: landing })
+    byFile.set(finding.file, pairs)
+  }
+  let rewritten = 0
+  for (const [file, pairs] of byFile) {
+    const text = await Bun.file(join(dir, file)).text().catch(() => undefined)
+    if (text === undefined) continue
+    const { text: out, count } = rewriteRefs(text, pairs)
+    if (count > 0) {
+      await Bun.write(join(dir, file), out)
+      rewritten += count
+    }
+  }
+  return rewritten
+}
+
 async function gitRun(dir: string, args: string[]): Promise<{ code: number; out: string }> {
   try {
     const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -405,10 +481,12 @@ async function recordInvalidRefs(dir: string, findings: RefFinding[]): Promise<v
 
 // 提交前 auto-correct(D6 第一层,挂点 runner 的 afterSession——覆盖全部统一
 // 提交): renamePairs → 活文档机械改写(只配对 rename,删除/语义变化不自动改,
-// 见 §8 边界)→ 复扫 findings 并记录失效清单 .auto/invalid-refs.md(键已收录的
-// 不再 ⚠,仅对新出现的失效引用输出警告日志);verify 启用时任务产物文档(docs/
-// T-NNN/**)的失效引用另由 verifyTask 门禁拦截进修复轮,未启用时即止于本日志
-// (宽松契约)。返回复扫 findings。
+// 见 §8 边界)→ 复扫 findings → 缺失恢复(refcheck-scope P2: missing 条目经
+// git 历史 rename 地图追踪落点,就地改写恢复;恢复后再复扫)→ 记录失效清单
+// .auto/invalid-refs.md(只登记未恢复的失效引用;键已收录的不再 ⚠,仅对新出现
+// 的失效引用输出警告日志);verify 启用时任务产物文档(docs/T-NNN/**)的失效引用
+// 另由 verifyTask 门禁拦截进修复轮,未启用时即止于本日志(宽松契约)。
+// 返回复扫 findings(恢复后)。
 export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
   const pairs = await renamePairs(dir)
   if (pairs.length) {
@@ -424,7 +502,12 @@ export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
     }
     if (rewritten) log(`  ↻ 引用 auto-correct: ${pairs.length} 组 rename 配对,改写活文档引用 ${rewritten} 处`)
   }
-  const findings = await scanRefs(dir)
+  let findings = await scanRefs(dir)
+  const recovered = await recoverMissingRefs(dir, findings)
+  if (recovered) {
+    log(`  ↻ 缺失引用恢复: git 历史追踪改写 ${recovered} 处`)
+    findings = await scanRefs(dir)
+  }
   await recordInvalidRefs(dir, findings)
   return findings
 }

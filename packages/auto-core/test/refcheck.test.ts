@@ -14,6 +14,7 @@ import {
   taskRefFindings,
   validateRefs,
   recordOnce,
+  renameHistory,
 } from "../src/refcheck"
 
 describe("extractRefs", () => {
@@ -430,6 +431,107 @@ describe("renamePairs / autoCorrectRefs", () => {
       expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(1)
     } finally {
       console.log = original
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("缺失引用恢复(refcheck-scope P2,git 历史追踪)", () => {
+  test("历史移动经 rename 地图链式解析就地恢复;落点已删除与纯删除保留入失效清单", async () => {
+    const dir = await freshRepo()
+    const seen: string[] = []
+    const original = console.log
+    console.log = (...args: unknown[]) => seen.push(args.join(" "))
+    try {
+      await Bun.write(join(dir, "src/chain-a.ts"), "c1\nc2\n")
+      await Bun.write(join(dir, "src/victim.ts"), "v\n")
+      await Bun.write(join(dir, "src/gone.ts"), "g\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "见 `src/chain-a.ts:2`、`src/victim.ts` 与 `src/gone.ts`。")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      // 历史移动(提交入历史): chain-a → chain-b → chain-c(链式);
+      // victim → renamed 后落点再删除;gone 纯删除
+      await git(dir, "mv", "src/chain-a.ts", "src/chain-b.ts")
+      await git(dir, "commit", "-qm", "mv a->b")
+      await git(dir, "mv", "src/chain-b.ts", "src/chain-c.ts")
+      await git(dir, "mv", "src/victim.ts", "src/renamed.ts")
+      await git(dir, "commit", "-qm", "mv b->c, victim->renamed")
+      await rm(join(dir, "src/renamed.ts"))
+      await rm(join(dir, "src/gone.ts"))
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "del renamed/gone")
+      // rename 历史地图: 新→旧首现优先 + 链式解析到最终落点
+      expect(await renameHistory(dir)).toEqual(
+        new Map([
+          ["src/chain-b.ts", "src/chain-c.ts"],
+          ["src/victim.ts", "src/renamed.ts"],
+          ["src/chain-a.ts", "src/chain-c.ts"],
+        ]),
+      )
+      const findings = await autoCorrectRefs(dir)
+      // chain-a 恢复到最终落点 chain-c(行号锚 :2 保留);victim 落点已删除、
+      // gone 纯删除 → 不自动恢复,保留 finding
+      const report = "见 `src/chain-c.ts:2`、`src/victim.ts` 与 `src/gone.ts`。"
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
+      expect(seen.filter((line) => line.includes("缺失引用恢复"))).toHaveLength(1)
+      expect(findings).toEqual([
+        { file: "docs/T-001/report.md", line: 1, text: report, path: "src/victim.ts", problem: "missing" },
+        { file: "docs/T-001/report.md", line: 1, text: report, path: "src/gone.ts", problem: "missing" },
+      ])
+      // 复扫后失效清单只登记未恢复项
+      const list = await Bun.file(join(dir, ".auto/invalid-refs.md")).text()
+      expect(list).toContain("- docs/T-001/report.md → src/victim.ts(missing)")
+      expect(list).toContain("- docs/T-001/report.md → src/gone.ts(missing)")
+      expect(list).not.toContain("chain-a")
+      // 幂等: 再跑一次无恢复改写、文档不变、findings 与清单不变(未恢复项不重复 ⚠)
+      seen.length = 0
+      expect(await autoCorrectRefs(dir)).toEqual(findings)
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
+      expect(seen.filter((line) => line.includes("缺失引用恢复"))).toHaveLength(0)
+      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(0)
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).text()).toBe(list)
+    } finally {
+      console.log = original
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("嵌套子仓库的历史移动同样参与恢复(路径换算目标目录相对)", async () => {
+    const dir = await freshRepo()
+    const sub = join(dir, "sub")
+    try {
+      await mkdir(sub, { recursive: true })
+      await git(sub, "init", "-q")
+      await git(sub, "config", "user.email", "t@t")
+      await git(sub, "config", "user.name", "t")
+      await Bun.write(join(sub, "lib/util.ts"), "u\n")
+      await git(sub, "add", "-A")
+      await git(sub, "commit", "-qm", "sub init")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "嵌套引用 `sub/lib/util.ts`。")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "outer init")
+      // 子仓库内历史移动 util → helpers(外层引用随之失效)
+      await git(sub, "mv", "lib/util.ts", "lib/helpers.ts")
+      await git(sub, "commit", "-qm", "sub mv")
+      const findings = await autoCorrectRefs(dir)
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe("嵌套引用 `sub/lib/helpers.ts`。")
+      expect(findings).toEqual([])
+      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("历史中不曾存在的路径不恢复(「曾出现」判据 = git 历史);非 git 目录空转", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "docs/live.md"), "引用 `docs/never-existed.md`。")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "init")
+      const findings = await autoCorrectRefs(dir)
+      expect(findings).toHaveLength(1)
+      expect(await Bun.file(join(dir, "docs/live.md")).text()).toBe("引用 `docs/never-existed.md`。")
+    } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })

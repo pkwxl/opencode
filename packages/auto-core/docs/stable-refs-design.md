@@ -264,7 +264,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 >   空转,目标目录零引用检查行为;fix-refs 手动脚本不受约束(P1 已实施)。
 > - 摒弃移动适配:migrateLegacyDocs 存量迁移(含 run 启动挂点与轮次归档提升)与
 >   fix-docs 脚本一并退役;旧平铺布局原地保留,读回落永久保留,遗留引用失效改走
->   git 历史追踪恢复(refcheck-scope-design §4,P2 实施)。
+>   git 历史追踪恢复(refcheck-scope-design §4,P2 已实施)。
 > - 检查范围收敛为三类(缺失恢复/提交前移动修正/范围再确认 `@sha` 版本标记),
 >   详见 refcheck-scope-design.md D4 与 §4-§6。
 
