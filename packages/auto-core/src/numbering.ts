@@ -34,12 +34,12 @@ export async function writeNextTask(dir: string, n: number): Promise<void> {
   await Bun.write(join(dir, NEXT_TASK_FILE), `${n}\n`)
 }
 
-// 已用编号的确定性下限: 扫描当前 PLAN.md、阶段/轮次归档 PLAN(docs/phases/**
-// /PLAN.md,交接会把 docs/ 任务文档一并移入归档目录,故 docs 产物路径同样
-// 覆盖归档)与 docs 任务文档(双布局: 目录化 docs/**/T-*/*.md 取路径段,旧平铺
-// docs/**/T-*.md 取文件名——兼容期两者并存,归档目录内的同样覆盖),取最大
-// 编号 + 1;无证据 = 1。只能看到现存文件——已被删除产物占用的编号需 AI 恢复
-// 会话查 git 历史补全。
+// 已用编号的确定性下限: 扫描当前 PLAN.md、阶段/轮次归档 PLAN(旧布局
+// docs/phases/**/PLAN.md;新布局轮次目录 docs/R-*/PLAN.md 与轮内阶段归档
+// docs/R-*/**/PLAN.md)与 docs 任务文档(双布局: 目录化 docs/**/T-*/*.md 取
+// 路径段,旧平铺 docs/**/T-*.md 取文件名——兼容期两者并存,归档目录内的同样
+// 覆盖),取最大编号 + 1;无证据 = 1。只能看到现存文件——已被删除产物占用的
+// 编号需 AI 恢复会话查 git 历史补全。
 export async function taskNumberFloor(dir: string): Promise<number> {
   let max = 0
   const seen = (id: string) => {
@@ -61,8 +61,10 @@ export async function taskNumberFloor(dir: string): Promise<number> {
     }
   }
   await scanPlan(join(dir, "PLAN.md"))
-  for await (const file of new Bun.Glob(join("docs", "phases", "**", "PLAN.md")).scan({ cwd: dir, onlyFiles: true })) {
-    await scanPlan(join(dir, file))
+  for (const pattern of [join("docs", "phases", "**", "PLAN.md"), join("docs", "R-*", "PLAN.md"), join("docs", "R-*", "**", "PLAN.md")]) {
+    for await (const file of new Bun.Glob(pattern).scan({ cwd: dir, onlyFiles: true })) {
+      await scanPlan(join(dir, file))
+    }
   }
   // 旧平铺布局(兼容期): docs/**/T-*.md,取文件名的任务编号段。
   for await (const file of new Bun.Glob(join("docs", "**", "T-*.md")).scan({ cwd: dir, onlyFiles: true })) {

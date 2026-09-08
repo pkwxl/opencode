@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm, stat } from "node:fs/promises"
+import { lstat, mkdtemp, rm, stat, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { load, markDone, setSubtasks, tick } from "../src/plan"
@@ -64,5 +64,24 @@ describe("protect", () => {
     expect(task.status).toBe("done")
     expect(task.verified).toBe("bun test")
     expect(task.body).toContain("- [x] 甲")
+  })
+
+  test("PLAN.md 为符号链接(轮次目录布局): chmod 经链接作用到轮内文件,driver 写入落轮内且链接存活", async () => {
+    // 轮次专用目录布局: 根 PLAN.md 是指向 docs/R-01/PLAN.md 的相对符号链接
+    await Bun.write(join(dir, "docs/R-01/PLAN.md"), SAMPLE)
+    await rm(path)
+    await symlink(join("docs", "R-01", "PLAN.md"), path)
+    const inner = join(dir, "docs/R-01/PLAN.md")
+    await protect(dir)
+    expect(await writable(path)).toBe(false)
+    expect(await writable(inner)).toBe(false)
+    // driver 写入经链接落轮内(rename 不替换链接本身,见 plan.ts writeTarget)
+    await setSubtasks(path, "T-001", ["甲"])
+    expect((await lstat(path)).isSymbolicLink()).toBe(true)
+    expect((await load(path)).tasks[0]!.body).toContain("甲")
+    expect(await Bun.file(inner).text()).toContain("甲")
+    expect(await writable(inner)).toBe(false)
+    await unprotect(dir)
+    expect(await writable(inner)).toBe(true)
   })
 })

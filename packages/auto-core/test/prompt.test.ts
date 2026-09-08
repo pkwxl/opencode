@@ -823,7 +823,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "m" })).toContain("代码迁移与改造")
     expect(renderPhasePlan({ phase: "t" })).toContain("回归覆盖")
     expect(renderPhasePlan({ phase: "v" })).toContain("整体验收")
-    expect(renderPhasePlan({ phase: "k" })).toContain("docs/migration-kb/R<N>-migration-")
+    expect(renderPhasePlan({ phase: "k" })).toContain("docs/R-NN/migration-kb.md")
   })
 
   test("handovers 注入两态: 有前序交接则注入清单(标注 docs/handovers/ 永久路径),无则整块消失", () => {
@@ -957,15 +957,15 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
-    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以 migration-kb 产物为准
+    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以本轮 migration-kb 产物为准
     expect(text).toContain("PLAN.md 为空模板")
     expect(text).toContain("CURRENT.md 不存在,属预期")
-    expect(text).toContain("docs/migration-kb/")
+    expect(text).toContain("docs/R-NN/migration-kb.md")
     expect(text).toContain("无任务清单时跳过")
     // 有下一阶段时不带收尾措辞
     const withNext = renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })
     expect(withNext).not.toContain("无下一阶段")
-    expect(withNext).not.toContain("docs/migration-kb/")
+    expect(withNext).not.toContain("migration-kb")
   })
 
   test("verify 未启用: 不含 verified 字段描述", () => {
@@ -988,10 +988,10 @@ describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowled
   test("注入输出路径、来源清单与章节骨架;只读分析、唯一可写文件为输出路径", () => {
     const text = renderKnowledge({ file: FILE })
     expect(text).toContain(FILE)
-    // 来源指针(阶段台账与各阶段交接文档永久路径,归档目录内是阶段 PLAN 快照)
-    expect(text).toContain("docs/phases.md")
-    expect(text).toContain("docs/handovers/")
-    expect(text).toContain("docs/phases/<字母>-<名称>/")
+    // 来源指针(本轮轮次目录内的阶段台账与各阶段交接文档,归档目录内是阶段 PLAN 快照)
+    expect(text).toContain("docs/R-NN/phases.md")
+    expect(text).toContain("docs/R-NN/handovers/")
+    expect(text).toContain("docs/R-NN/<字母>-<名称>/")
     expect(text).toContain("git log")
     // 章节骨架(规格书 §13 的本仓库化,Design Deviations 改以 AUTO-DECISION 为来源)
     for (const section of ["## 迁移概要", "## API 与类型映射", "## 实现模式", "## 坑点与边界情况", "## 可复用规则", "## 设计偏差与重要决策", "## 验证证据", "## 参考"]) {

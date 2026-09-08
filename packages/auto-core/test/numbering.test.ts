@@ -86,6 +86,23 @@ describe("taskNumberFloor", () => {
     }
   })
 
+  test("轮次目录(新布局): docs/R-NN/PLAN.md 与轮内阶段归档 PLAN 同样覆盖", async () => {
+    const dir = await tempDir()
+    try {
+      // 轮内 PLAN(根 PLAN.md 是指向它的符号链接,两路扫描同内容取最大不重复计入)
+      await Bun.write(join(dir, "docs/R-01/PLAN.md"), "## T-006: 本轮任务 [pending]\n")
+      expect(await taskNumberFloor(dir)).toBe(7)
+      // 轮内阶段归档 PLAN 快照
+      await Bun.write(join(dir, "docs/R-01/m-migrate/PLAN.md"), "## T-015: 归档任务 [done]\n")
+      expect(await taskNumberFloor(dir)).toBe(16)
+      // 与旧布局归档并存: 共同取最大
+      await Bun.write(join(dir, "docs/phases/round-1/PLAN.md"), "## T-020: 旧轮任务 [done]\n")
+      expect(await taskNumberFloor(dir)).toBe(21)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("目录化布局产物: docs/**/T-*/*.md 取首个 T-<纯数字> 路径段(归档内同样覆盖)", async () => {
     const dir = await tempDir()
     try {

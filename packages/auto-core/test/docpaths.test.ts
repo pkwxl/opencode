@@ -5,11 +5,17 @@ import { join } from "node:path"
 import {
   finalDir,
   finalDoc,
+  knowledgeDoc,
+  legacyKnowledgeDoc,
+  legacyPriorKnowledgeDoc,
   legacySubtaskArtifact,
   legacySubtaskTestHandoff,
   legacyTaskDoc,
+  priorKnowledgeDoc,
   resolveSubtaskDoc,
   resolveTaskDoc,
+  roundDir,
+  roundDirName,
   subtaskDir,
   subtaskDoc,
   taskDir,
@@ -42,8 +48,26 @@ describe("新布局构造器", () => {
   })
 })
 
-describe("旧平铺布局构造器", () => {
-  test("legacyTaskDoc/legacySubtaskTestHandoff/legacySubtaskArtifact", () => {
+describe("轮次专用目录与轮内知识文档(新布局,R-NN 两位零填充自然进位)", () => {
+  test("roundDirName/roundDir: docs/R-01,自然进位 R-99 → R-100", () => {
+    expect(roundDirName(1)).toBe("R-01")
+    expect(roundDirName(12)).toBe("R-12")
+    expect(roundDirName(100)).toBe("R-100")
+    expect(roundDir(3)).toBe(join("docs", "R-03"))
+  })
+
+  test("knowledgeDoc/priorKnowledgeDoc: 轮内固定名(原时间戳名取消)", () => {
+    expect(knowledgeDoc(1)).toBe(join("docs", "R-01", "migration-kb.md"))
+    expect(priorKnowledgeDoc(5)).toBe(join("docs", "R-05", "prior-kb.md"))
+  })
+
+  test("legacyKnowledgeDoc/legacyPriorKnowledgeDoc: 旧平铺形态(读回落常量化)", () => {
+    expect(legacyKnowledgeDoc(2, "2026-09-07_01-02-03")).toBe(join("docs", "migration-kb", "R2-migration-2026-09-07_01-02-03.md"))
+    expect(legacyPriorKnowledgeDoc(1, "2026-09-07_01-02-03")).toBe(join("docs", "prior-kb", "R1-prior-2026-09-07_01-02-03.md"))
+  })
+})
+
+describe("旧平铺布局构造器", () => {  test("legacyTaskDoc/legacySubtaskTestHandoff/legacySubtaskArtifact", () => {
     expect(legacyTaskDoc("T-003", "context")).toBe(join("docs", "T-003.context.md"))
     expect(legacyTaskDoc("T-003", "handoff")).toBe(join("docs", "T-003.handoff.md"))
     expect(legacySubtaskTestHandoff("T-003", 2)).toBe(join("docs", "T-003-S2.testhandoff.md"))

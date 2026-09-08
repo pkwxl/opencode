@@ -284,7 +284,7 @@ export function stageText(stage: FinalStage): string {
 // (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
 // (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
 // prevRound 为上一轮迁移结论摘录(phases-design.md M 节,loop 侧组装: 归档索引/
-// 最终交接/迁移知识),仅续轮(主程序现场清理归档既有轮次后)的新一轮首个规划会话注入。
+// 最终交接/迁移知识),仅续轮(新一轮轮目录建立后)的新一轮首个规划会话注入。
 // source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
 // finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
 // numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
@@ -337,9 +337,9 @@ export function renderNumberRecovery(input: { floor: number }): string {
 
 // 阶段交接蒸馏会话(设计文档 phases-design.md F.1 步骤 1): 旁路一次性,通读本阶段
 // PLAN.md 与 docs/ 产物,蒸馏出永久路径交接文档(四个必备小节协议在模板内联)。
-// handover = handoverDoc(round, phase)(src/phases.ts,docs/handovers/R<N>-<字母>-
-// <slug>.md,stable-refs D3);next 为下一阶段"字母 中文名"或 undefined(k 阶段
-// 无下一阶段,仍写 handover 供后续查阅)。
+// handover = handoverDoc(dir, round, phase)(src/phases.ts,新布局轮内
+// docs/R-NN/handovers/<字母>-<slug>.md,旧布局 docs/handovers/R<N>-<字母>-<slug>.md);
+// next 为下一阶段"字母 中文名"或 undefined(k 阶段无下一阶段,仍写 handover 供后续查阅)。
 export function renderPhaseHandover(input: { phase: Phase; handover: string; next?: string; verify?: boolean }): string {
   return renderTemplate("phase-handover", {
     phase: input.phase,
@@ -352,9 +352,9 @@ export function renderPhaseHandover(input: { phase: Phase; handover: string; nex
 
 // k(知识提炼)阶段的知识提取会话(phases-design.md P4,整体认领
 // fixme-knowledge-design.md §D.3): 旁路一次性,通读阶段台账与各阶段交接文档
-// (docs/handovers/),蒸馏出最终验证过的迁移知识文档(永久路径
-// docs/migration-kb/R<N>-…,不随轮次归档移动)。file 为输出路径(相对目标目录);
-// mode.exec 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
+// (本轮轮次目录 docs/R-NN/ 内),蒸馏出最终验证过的迁移知识文档(永久路径:
+// 新布局轮内 migration-kb.md,旧布局 docs/migration-kb/R<N>-…)。file 为输出路径
+// (相对目标目录);mode.exec 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
 export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
   return renderTemplate("knowledge", {
     file: input.file,
@@ -363,11 +363,12 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
 }
 
 // 前置知识提取会话(外壳的二次迁移编排,src/knowledge.ts extractPriorKnowledge):
-// 旁路一次性,通读已有迁移结果(不限于此前轮次——docs/ 全树、阶段/轮次归档、产出
-// 代码与 git 历史),蒸馏出 docs/prior-kb/ 下的知识文档,作为二次迁移与参数推断
-// 的输入。file 为输出路径(相对目标目录);brief 为项目意图原文(可空);distilled
-// 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,非空时模板注入引用化
-// 条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的差分增量)。
+// 旁路一次性,通读已有迁移结果(不限于此前轮次——docs/ 全树、历轮轮次目录
+// docs/R-NN/、旧布局阶段/轮次归档、产出代码与 git 历史),蒸馏出前置知识文档
+// (新布局轮内 docs/R-NN/prior-kb.md,旧布局 docs/prior-kb/R<N>-…),作为二次迁移
+// 与参数推断的输入。file 为输出路径(相对目标目录);brief 为项目意图原文(可空);
+// distilled 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,非空时模板注入
+// 引用化条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的差分增量)。
 export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
   const distilled = input.distilled?.filter(Boolean) ?? []
   return renderTemplate("prior-knowledge", {
