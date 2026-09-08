@@ -94,6 +94,34 @@ describe("existingPriorKnowledge(本轮幂等检查,与 existingKnowledge 同一
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test("旧机制轮次续跑回落: 轮次 ≥ 2 且台账已有完成阶段 → 无前缀存量算本轮;台账为空(新一轮)不回落", async () => {
+    const dir = tempDir()
+    try {
+      const prior = join(dir, "docs/prior-kb")
+      mkdirSync(prior, { recursive: true })
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(join(prior, "prior-2026-09-03_14-40-52.md"), "旧机制轮次一直消费的无前缀存量")
+      // 台账为空(新一轮开工)→ 不回落,R<N>- 前缀缺失自然重新蒸馏
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
+      // 轮已推进(台账有完成阶段)→ 回落接受无前缀存量: 旧判据"目录非空即跳过"
+      // 使旧机制轮次从未产出本轮 R 文档,严格按前缀判定会把中断重跑拖回轮首
+      writeFileSync(
+        join(dir, "docs", "phases.md"),
+        "# 阶段台账\n\n- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)\n",
+      )
+      expect(await existingPriorKnowledge(dir, 2)).toBe(join("docs/prior-kb", "prior-2026-09-03_14-40-52.md"))
+      // 本轮 R 前缀文档优先于回落
+      writeFileSync(join(prior, "R2-prior-new.md"), "本轮文档")
+      expect(await existingPriorKnowledge(dir, 2)).toBe(join("docs/prior-kb", "R2-prior-new.md"))
+      // 台账非法按未推进处理(严格失败属 readLedger 的直接调用方职责)
+      rmSync(join(prior, "R2-prior-new.md"))
+      writeFileSync(join(dir, "docs", "phases.md"), "垃圾行\n")
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("existingDistilledDocs(已有蒸馏产物清单,提取会话引用化输入)", () => {

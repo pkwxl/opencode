@@ -3,7 +3,7 @@ import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { knowledgeDoc, priorKnowledgeDoc } from "./docpaths"
 import { log } from "./log"
-import { currentRound } from "./phases"
+import { currentRound, readLedger } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
 import { requireArtifact, type Opts } from "./runner"
 
@@ -25,13 +25,13 @@ export function knowledgeFile(round: number): string {
   return knowledgeDoc(round, stamp)
 }
 
-// 本轮幂等检查(轮次推导守卫,取代旧"目录空否"判据): docs/migration-kb/ 内存在
-// 本轮 R<round>- 前缀的非空 .md(提取已产出、交接前中断)→ 返回其路径跳过重提取;
-// 前几轮的 R<M>- 文档不算本轮已提取;第 1 轮时无 R 前缀的存量(P2 前布局)按读回落
-// 视为本轮产物,避免中轮升级触发重复提取。台账 k 行 done 后提取挂点本就不触发
-// (routePhase 只在 k 未 done 时进入提取),无需读台账。
+// 本轮幂等检查: docs/migration-kb/ 内存在本轮 R<round>- 前缀的非空 .md(提取已
+// 产出、交接前中断)→ 返回其路径跳过重提取;前几轮的 R<M>- 文档不算本轮已提取;
+// 第 1 轮时无 R 前缀的存量(P2 前布局)按读回落视为本轮产物,避免中轮升级触发重
+// 复提取。台账 k 行 done 后提取挂点本就不触发(routePhase 只在 k 未 done 时进入
+// 提取),无需读台账。
 export async function existingKnowledge(dir: string, round: number): Promise<string | undefined> {
-  return existingRoundDoc(dir, KB_DIR, round)
+  return existingRoundDoc(dir, KB_DIR, round, round === 1)
 }
 
 // 知识提取编排(镜像 final.ts generateFinalTask 的 requireArtifact 骨架,伪任务
@@ -83,9 +83,17 @@ export function priorKnowledgeFile(round: number): string {
   return priorKnowledgeDoc(round, stamp)
 }
 
-// 幂等检查(与 existingKnowledge 同一"本轮前缀"守卫)。
+// 幂等检查(与 existingKnowledge 同一"本轮前缀"守卫;另含新旧机制过渡回落):
+// 本轮阶段已推进(台账已有完成阶段)而无本轮 R<round>- 前缀文档,说明本轮开工于
+// 前缀守卫引入之前——旧判据"目录非空即跳过"使旧机制轮次一直以无前缀存量续命、
+// 从未产出本轮 R 文档,严格按前缀判定会把每次中断重跑都拖回轮首重开提取会话,
+// 无法直接恢复断点。故台账已推进时回落接受无前缀非空文档(与第 1 轮读回落同款)。
+// 新一轮开工时台账已随轮末归档移走(空台账),不受回落影响,仍按 R<N>- 前缀缺失
+// 自然重新蒸馏。台账非法按未推进处理(严格失败属 readLedger 调用方职责)。
 export async function existingPriorKnowledge(dir: string, round: number): Promise<string | undefined> {
-  return existingRoundDoc(dir, PRIOR_KB_DIR, round)
+  const advanced =
+    round === 1 || (await readLedger(dir).then((ledger) => ledger.done.length > 0, () => false))
+  return existingRoundDoc(dir, PRIOR_KB_DIR, round, advanced)
 }
 
 // 已有蒸馏产物清单(extractPriorKnowledge 的引用化输入): 此前蒸馏的结论性文档
@@ -113,13 +121,14 @@ export function parsePriorVerdict(text: string): "simple" | "full" | undefined {
   return /^流程建议[:：][ \t]*(simple|full)[ \t]*$/m.exec(text)?.[1] as "simple" | "full" | undefined
 }
 
-// 目录内本轮 R<round>- 前缀的非空 .md → 首个(字典序);第 1 轮回落无 R 前缀的
-// 非空 .md(P2 前存量读回落);空文件与非 .md 不算。
-async function existingRoundDoc(dir: string, root: string, round: number): Promise<string | undefined> {
+// 目录内本轮 R<round>- 前缀的非空 .md → 首个(字典序);allowLegacy 时再回落无
+// R 前缀的非空 .md(第 1 轮的 P2 前存量读回落,及 prior-kb 的旧机制轮次续跑,
+// 见 existingPriorKnowledge);空文件与非 .md 不算。
+async function existingRoundDoc(dir: string, root: string, round: number, allowLegacy: boolean): Promise<string | undefined> {
   const names = await readdir(join(dir, root)).catch(() => [] as string[])
   const prefix = `R${round}-`
   const modern = names.filter((name) => name.startsWith(prefix)).sort()
-  const legacy = (round === 1 ? names.filter((name) => !/^R\d+-/.test(name)) : []).sort()
+  const legacy = (allowLegacy ? names.filter((name) => !/^R\d+-/.test(name)) : []).sort()
   for (const name of [...modern, ...legacy]) {
     if (!name.endsWith(".md")) continue
     if ((await Bun.file(join(dir, root, name)).text()).trim()) return join(root, name)
