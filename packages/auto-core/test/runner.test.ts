@@ -58,11 +58,14 @@ function fakeClient(
     get?: (sessionID: string) => unknown
     prompt?: () => unknown
     messages?: (sessionID: string) => unknown
+    // 事件流当前跟随的会话(未新建时的 idle 目标): 复用/恢复接管路径不调用
+    // create,idle 事件须发给链上既有会话,否则 watch 收不到结束事件。
+    current?: string
   } = {},
 ) {
   const calls = { forks: [] as string[], creates: 0, updates: [] as { id: string; title: string }[] }
   let seq = 0
-  let lastCreated = "ses_new_0"
+  let lastCreated = over.current ?? "ses_new_0"
   const client = {
     session: {
       create: async () => {
@@ -283,6 +286,48 @@ describe("SSE 订阅生命周期(会话结束即断开)", () => {
     expect((result as { question: string }).question).toContain("下发任务失败")
     expect(state.signal?.aborted).toBe(true)
     expect(state.closed).toBe(true)
+  })
+})
+
+// ---- 会话链复用(OPENCODE_AUTO_REUSE_SESSION,缺省 off)----
+
+describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
+  const REUSE_OFF = parseSwitches({})
+  const REUSE_ON = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
+  // 复用阈值(占比 <50%、已用 <cap/2、闲置 ≤5 分钟)全部满足的链。
+  const reusable = (): SessionChain => ({ id: "ses_new_1", pct: 10, used: 100, at: Date.now() })
+
+  test("off(缺省): 阈值全部满足也开新会话", async () => {
+    const { client, calls } = fakeClient({ current: "ses_new_1" })
+    const chain = reusable()
+    expect((await runSession(client, task, "提示词", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    expect(calls.creates).toBe(1)
+  })
+
+  test("on: 阈值满足即复用链上会话,不新建", async () => {
+    const { client, calls } = fakeClient({ current: "ses_new_1" })
+    const chain = reusable()
+    expect((await runSession(client, task, "提示词", {}, chain, undefined, undefined, REUSE_ON)).type).toBe("idle")
+    expect(calls.creates).toBe(0)
+    expect(chain.id).toBe("ses_new_1")
+  })
+
+  test("中断恢复接管(链上有会话且 note 待注入): 开关 off、阈值全不满足也进原会话;说明用后即清", async () => {
+    const { client, calls } = fakeClient({ current: "ses_interrupted" })
+    const chain: SessionChain = {
+      id: "ses_interrupted",
+      pct: 80,
+      used: 90_000,
+      at: Date.now() - 10 * 60_000,
+      note: "[driver] 中断后的继续",
+    }
+    expect((await runSession(client, task, "提示词", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    expect(calls.creates).toBe(0)
+    expect(chain.id).toBe("ses_interrupted")
+    expect(chain.note).toBeUndefined()
+    // 恢复说明已消费: 下一个提示词回归常规规则(off → 新会话)
+    expect((await runSession(client, task, "下一个提示词", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    expect(calls.creates).toBe(1)
   })
 })
 

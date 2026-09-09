@@ -4,8 +4,8 @@
 宪法级项目属性(agent 契约、验收/提交语义、上下文预算、场景模式)经 `init` 固化到
 `.opencode/auto/config.json`(版本化、随仓库共享、人工可编辑),`run` 只控制本次执行。
 状态由 driver 独占维护:每个任务先经分解会话拆成子任务,再逐子任务调度会话完成
-(上一会话上下文占比低于 50% 且 5 分钟内结束时复用,否则新建,会话结束即由 driver
-勾选),配置启用验收(`verify: true`)时收尾后由 driver 亲自执行 verify 脚本(持续
+(缺省每个会话独立新建;`OPENCODE_AUTO_REUSE_SESSION=on` 时上一会话上下文占比低于
+50% 且 5 分钟内结束则复用,会话结束即由 driver 勾选),配置启用验收(`verify: true`)时收尾后由 driver 亲自执行 verify 脚本(持续
 无输出才超时,只要有进度不限时长)、旁路的独立判定会话读输出做任务级验收(缺省
 不启用:任务收尾后直接标 done;`--review` 下再追加独立质量审核循环,
 `--final-review` 可在全部任务完成后进入任务驱动的终审闭环);遇到无法自主决策的
@@ -64,7 +64,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 | --- | --- | --- | --- |
 | `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
 | `agent` | 非空字符串 | `auto` | 执行会话使用的 agent(`init` 生成的契约 agent),存在性由 run 前完整性检查兜底,见[agent 选择](#opencode-server-与-agent-选择) |
-| `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
+| `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用(需 `OPENCODE_AUTO_REUSE_SESSION=on`)的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
 | `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线) |
 | `verify` | `true` / `false` | `false` | 任务级三段式验收(未启用时任务收尾后直接标 done,不写 `verified` 字段) |
 | `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(verify 与 test)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取 |
@@ -246,11 +246,14 @@ driver 对每个任务执行流水线,**PLAN.md 与 CURRENT.md 只由 driver 写
    `docs/T-NNN/subtasks.md`(Markdown 检查项);driver 解析后把检查项注入
    PLAN.md 正文。未产出有效文件会自动带反馈重试一次,仍失败则阻塞。
 2. **逐子任务执行**:任务内所有执行会话(分解/子任务/修复/收尾)串成一条链,
-   上一会话结束时上下文占比低于 50%、已用量低于配置的 `contextLimit` 的一半(默认 32k
-   tokens)且距其结束**不超过 5 分钟**则下一个会话复用它,否则新建(占比与用量
-   始终跟踪,与 `--verbose` 无关;拿不到模型上下文上限时占比记 100,一律新建;
-    verify 脚本执行与判定/审核等旁路会话可能耗时较久,超过 5 分钟即视为上下文
-    陈旧、自动换新会话);
+   链内复用**缺省关闭**——每个提示词都开新会话(提示词自带完整上下文,不依赖
+   上一会话的记忆);置 `OPENCODE_AUTO_REUSE_SESSION=on` 恢复阈值复用:上一会话
+   结束时上下文占比低于 50%、已用量低于配置的 `contextLimit` 的一半(默认 32k
+   tokens)且距其结束**不超过 5 分钟**才复用它(占比与用量始终跟踪,与
+   `--verbose` 无关;拿不到模型上下文上限时占比记 100,一律新建;verify 脚本执行
+   与判定/审核等旁路会话可能耗时较久,超过 5 分钟即视为上下文陈旧、自动换新
+   会话)。每个会话结束都打印一行上下文用量与耗时(`✓ 会话结束: 上下文 n%
+   (用量/上限),耗时 …`),复用会话与中断恢复接管的会话同样打印;
     子任务会话进行中上下文已用量达到配置的 `contextLimit` 的 2 倍时,driver
     同样插入交接提示,AI 把本子任务进度写入 `docs/T-NNN/handoff.md`(末行
     `状态: 继续|完成`,以该子任务是否完成计)后结束,新会话凭交接文档续跑
@@ -351,7 +354,9 @@ AI **记录决策过程**(决策理由与否决的备选方案写入相关文档
 
 **会话内恢复**(会话半途、无法总结进度——kill/崩溃/网络故障):只要该会话在
 server 上仍存在,driver 直接**复用该会话继续**(上下文不丢,与 `opencode -r
-<session-id>` 同构,不再设时间窗);首个提示词附恢复说明,要求 AI 读 CURRENT.md
+<session-id>` 同构,不再设时间窗;该接管不受 `OPENCODE_AUTO_REUSE_SESSION` 与复用
+阈值约束,恢复日志带上继承的上下文用量,恢复说明用后即清、下一个提示词回归常规
+规则);首个提示词附恢复说明,要求 AI 读 CURRENT.md
 并用 git status/diff 核对实际进度后从中断处继续。**交接文件优先**:中断前已写出
 交接文档(subtask auto 子任务或 ondemand 的 `docs/<id>/handoff.md`、handover-test
 的任务级/子任务级 `testhandoff.md`——任一范围的遗留均判定)时不复用旧会话——其
