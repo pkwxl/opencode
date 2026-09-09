@@ -192,7 +192,9 @@
 
 - `test/runner.test.ts` 新增 `sessionUsage(恢复复用判据)` 6 例(末行报错桩但此前
   有真实产出 / 纯报错桩空会话 / kill 残行 / 带真实 tokens 的错误行 / 尚无 assistant
-  消息 / messages 查询失败)。`bun typecheck && bun test` 全绿,445→451 pass。
+  消息 / messages 查询失败)。`bun typecheck && bun test` 全绿,445→451 pass——这两个
+  数取自当时并存另一会话 2 条未提交 taskContext 用例(后落 `b0eceec96`)的工作树;
+  单看本修复是 443→449(把那两个测试文件回退到本 commit 实测 `Ran 449 tests`)。
 - 真实数据回放:取 `ses_f78b6649cffe…` 的全部 19 条消息喂给新旧两版判据——旧版
   `{used:0, errorStub:true}`(复现 22:26 那次丢弃),新版 `{used:109192, pct:42,
   errorStub:false}`(与运行内日志的 109.2k/42% 一致)。
