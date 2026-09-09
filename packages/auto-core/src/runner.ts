@@ -524,8 +524,8 @@ export async function runTask(
           if (index === -1) break
           const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork)
           if (blocked) return blocked
+          // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。
           task = requireTask(await load(plan.path), task.id)
-          await writeCurrent(plan.path, task, mode !== "auto")
           // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
           // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
           await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive })
@@ -1058,6 +1058,9 @@ async function ensureDecomposed(
     const items = await readItems()
     if (items.length) {
       await setSubtasks(plan.path, task.id, items)
+      // 镜像刷新同样先于统一提交(与子任务勾选同口径): 注入的检查项与镜像同入
+      // decompose 提交,调用方随后的刷新即幂等空写。
+      await writeCurrent(plan.path, requireTask(await load(plan.path), task.id))
       await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject })
       return { type: "ok", task: requireTask(await load(plan.path), task.id) }
     }
@@ -1173,6 +1176,10 @@ async function runSubtask(
   await rm(join(planDir, testHandoffFile(task, index)), { force: true })
   await rm(join(planDir, legacySubtaskTestHandoff(task.id, index)), { force: true })
   await tick(plan.path, task.id, text)
+  // 镜像刷新属本次状态写入,须在统一提交前落盘: 否则 PLAN.md 的勾选与 CURRENT.md
+  // 的同一次刷新分属相邻两次提交(镜像永远落后一格,回滚到子任务提交取回的镜像
+  // 与 PLAN.md 不一致;步进暂停现场亦会残留未提交改动)。
+  await writeCurrent(plan.path, requireTask(await load(plan.path), task.id), (opts.subtask ?? "auto") !== "auto")
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
   await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
   log(`  ✓ ${text.slice(0, 60)}`)
