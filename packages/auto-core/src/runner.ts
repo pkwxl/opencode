@@ -354,8 +354,10 @@ export async function runTask(
     const usage = alive ? await sessionUsage(client, recalled.session!) : undefined
     // 双保险(session-error-retry-plan.md 第 5 点): 历史遗留的 progress.json 可能
     // 记着一个只挨了一记报错、从未真正产出过内容的会话(旧版"重试即换白板会话"
-    // 逻辑的残留:0 tokens 且末条 assistant 消息本身就是报错)。有了第 3/4 点的
-    // 修复后理论上不会再产生这种记录,此处仅兜底改造上线前生成的旧文件。
+    // 逻辑的残留:整条会话没有任何跑完过的 assistant 轮次,只有报错桩)。有了第
+    // 3/4 点的修复后理论上不会再产生这种记录,此处仅兜底改造上线前生成的旧文件。
+    // 注意判据不能只看末条:撞不可重试错误死掉的长会话(第 3/4 点刻意保住的正是
+    // 它)末行也是报错桩,判据落在 sessionUsage 的 basis 扫描上。
     const errorStub = usage !== undefined && usage.used === 0 && usage.errorStub
     if (alive && usage && !errorStub) {
       chain.id = recalled.session!
@@ -879,7 +881,15 @@ async function ensureUnderstood(
   chain.subject = subject
   let feedback = ""
   for (let i = 0; ; i++) {
-    const result = await runSession(client, task, renderUnderstand(plan, task, opts) + feedback, opts, chain)
+    // taskContext(OPENCODE_AUTO_TASK_CONTEXT)透传理解提示词: 放宽 context.md
+    // 的建议行数措辞(与 fine 透传分解提示词同一接线方式)。
+    const result = await runSession(
+      client,
+      task,
+      renderUnderstand(plan, task, { ...opts, taskContext: autoSwitches().taskContext }) + feedback,
+      opts,
+      chain,
+    )
     if (result.type === "blocked") return result
     if (await readContext()) {
       // 理解会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
@@ -1019,18 +1029,33 @@ export async function ensureForkBase(
 }
 
 // 会话末端上下文用量(tokens: input + cache.read)与占比重建: 经
-// client.session.messages 取末条 assistant 消息,上限查 provider 表(与 watch 同
-// 口径: 取不到上限记 pct=100)。用于 fork 基点用量与中断恢复接管会话的用量继承。
-async function sessionUsage(client: OpencodeClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
+// client.session.messages **从末条往前**取第一条真正跑完过的 assistant 消息(不是
+// 字面末条,原因见 basis 注释),上限查 provider 表(与 watch 同口径: 取不到上限记
+// pct=100)。用于 fork 基点用量与中断恢复接管会话的用量继承。导出仅供单测直接驱动
+// 判据(与 ensureForkBase 同款,恢复决策本身落在 runTask,完整流水线由壳包 e2e 覆盖)。
+export async function sessionUsage(client: OpencodeClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
   const got = await client.session.messages({ sessionID: id }).catch(() => undefined)
-  const last = got && !got.error ? got.data.findLast((message) => message.info.role === "assistant") : undefined
+  const data = got && !got.error ? got.data : undefined
+  if (!data) return { used: 0, pct: 100, errorStub: false }
+  const last = data.findLast((message) => message.info.role === "assistant")
   if (!last || last.info.role !== "assistant") return { used: 0, pct: 100, errorStub: false }
-  const used = last.info.tokens.input + last.info.tokens.cache.read
-  const limit = (await contextLimits(client)).get(`${last.info.providerID}/${last.info.modelID}`)
-  // errorStub: 末条 assistant 消息本身就是报错(session-error-retry-plan.md 第 5
-  // 点的兜底判据——历史遗留 progress.json 可能记着一个只挨了一记报错、从未真正
-  // 产出过内容的会话)。
-  return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit, errorStub: last.info.error !== undefined }
+  // 用量基准 = 从末条往前第一条"真正跑完过"的 assistant 消息(tokens 非 0)。provider
+  // 报错时服务端会追加一条 tokens 全 0 的 assistant 行(prompt.ts 先建行、processor
+  // .halt() 只写 error,step-finish 从未发生),被中断的轮次同样留下 0 tokens 的残行;
+  // 直接取末条会把"累积了十万级上下文、最后一轮撞限流"的会话读成 0 用量。基准不排除
+  // error 行:step-finish 之后才判定的错误(输出超限、内容过滤等)带真实 tokens,正是
+  // 末端用量的最佳估计。
+  const basis = data.findLast(
+    (message) => message.info.role === "assistant" && message.info.tokens.input + message.info.tokens.cache.read > 0,
+  )
+  if (!basis || basis.info.role !== "assistant") {
+    // 整条会话从未有过真实产出:末条本身就是报错桩,即 session-error-retry-plan.md
+    // 第 5 点要兜底的历史遗留形态(旧版"重试即换白板会话"留下的空会话)。
+    return { used: 0, pct: 100, errorStub: last.info.error !== undefined }
+  }
+  const used = basis.info.tokens.input + basis.info.tokens.cache.read
+  const limit = (await contextLimits(client)).get(`${basis.info.providerID}/${basis.info.modelID}`)
+  return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit, errorStub: false }
 }
 
 // 基点会话末端上下文用量(tokens);取不到按 0。

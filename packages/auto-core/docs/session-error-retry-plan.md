@@ -9,6 +9,11 @@
 > 按需补充(如需要,从 `runTask` 约 345 行起的 `alive`/`usage`/`errorStub` 三个
 > 变量入手)。
 >
+> **2026-09-09 追加:第 5 点的实现有缺陷——判据只看会话末条消息,已在生产现场
+> (同目录 T-063 第二次事故)误杀一个真实累计 109.2k 上下文的会话,把第 1–4 点
+> 在进程内保住的进度在跨进程边界上全部扔掉。判据已修正并补 6 个用例,详见文末
+> 「事后修正」一节;第 1–4 点本身经现场验证按设计生效,不受影响。**
+>
 > 本计划修订 `precise-resume-plan.md` 中"维持现状"一条:「runSession 运行中瞬时
 > 错误重试仍换新会话」——该现状已被证实是一个实际发生过的 bug 根因,不再维持。
 
@@ -127,3 +132,83 @@
 - fork 的 provider 前缀缓存友好特性(`fork-decompose-design.md` §4.2/4.3)不受
   影响——本改造只是把"重试时开的新会话"从"空白"换成"fork 自 chain.id",复用
   的正是同一套 `forkSession()`/`seedForkSession()` 基础设施。
+
+## 事后修正(2026-09-09):第 5 点判据误杀长会话(T-063 复盘)
+
+第 5 点按本文件原文实现后,在**同一目录**的下一次事故中反向起效,把第 1–4 点
+好不容易保住的会话又扔了。本节记录现场与修正,后续读者以本节为准。
+
+### 现场
+
+案发仍是 `/workspace/kernel-dm-stripe`,任务 T-063(批次 III 设计)。
+
+1. `run-2026-09-09_15-58-55.log:2053`(17:55:26):子任务 8 会话
+   `ses_f78b6649cffe1X1U02wb383fhp` 工作 6m23s、累计 **109.2k/262.1k(42%)**
+   真实上下文后撞上 Kimi 5 小时限额(`isRetryable:false`)。第 1–3 点按设计生效:
+   `⛔ 遇到不可重试的会话错误(重试无意义),直接阻塞`,不 fork、不换新会话,
+   `chain.id` 留在该会话上(`runner.ts` attempt 的 `else` 分支 `remember()` 落盘;
+   `runTask` 对"会话错误"阻塞跳过 `persistStage`,故 `active:true` 记录得以保留)。
+   DB 里该会话标题被改为 `T-063 blocked …`,即改名时 `chain.id` 就是它——第 1–4
+   点在进程内的行为直接由此坐实。
+2. `run-2026-09-09_22-26-31.log:14`(22:26:34):下一次运行读出该记录,判据
+   `usage.used === 0 && usage.errorStub` 成立,打出
+   `(原会话只挨了一记报错、无真实产出,开新会话继续)`——109.2k 上下文被丢弃。
+3. 代价:S08 从 12.3k 的 digest 前缀重新分叉,逐个重读 `docs/T-063/S01–S07/index.md`,
+   会话重新长到 **116.0k** 才收口(22:40:19)。与本文开头 T-062 的"被迫从零重新
+   发现全部状态、比完全不复用还差"是同一形态,只是触发源从"重试换白板"换成了
+   这个兜底分支。
+
+### 根因
+
+`sessionUsage()` 当时**只取末条 assistant 消息**算用量。opencode server 侧的行为是:
+每轮 LLM 调用前先落一条 `tokens` 全 0 的 assistant 行(`packages/opencode/src/session/prompt.ts`
+建行),provider 报错时 `processor.ts` 的 `halt()` 只往该行写 `error`、`step-finish`
+从未发生,`tokens` 保持全 0(`packages/opencode/src/session/processor.ts`)。于是
+"跑了很多活、最后一轮撞错"的会话,末行与旧事故里那个**空会话**的末行完全同形:
+`{tokens: 0/0, error: APIError}`。单看末条无法区分二者,而本可区分它们的正是本文件
+第 5 点自己写的要求——"需要结合是否有过更早的真实 assistant 消息判断"——实现时漏了
+这一半。
+
+更要紧的是:修正第 1–4 点之后,**"末行为报错桩的长会话"成了 `progress.json` 里
+最常见的记录形态**(本工作区最高频的失败方式就是这个限额错误),所以该误判不是边角
+情况,而是每次不可重试错误阻塞后的下一次运行必然触发。
+
+### 修法
+
+`sessionUsage()` 改为先求 `basis` = 从末条往前第一条**真正跑完过**的 assistant 消息
+(`tokens.input + tokens.cache.read > 0`):
+
+- `used`/`pct`/`limit` 一律由 `basis` 重建;`basis` 不排除带 `error` 的行——
+  step-finish 之后才判定的错误(输出超限、内容过滤、压缩前超限等)自带真实
+  tokens,正是末端用量的最佳估计。
+- `errorStub` 仅当**整条会话都没有 `basis`**、且末行本身就是报错时才为真——
+  即旧"重试即换白板会话"留下的纯报错桩空会话,第 5 点原本要检出的形态照旧检出。
+
+一处改动同时收三个问题:恢复误杀长会话、被 kill 会话(末行是 0-token 无 error 的
+残行)的用量继承成假 0、以及 session 模式 fork 基点 `sessionUsed()` 读 0 导致
+"基点用量达 cap/2 不起分叉"门禁失效。
+
+### 验证
+
+- `test/runner.test.ts` 新增 `sessionUsage(恢复复用判据)` 6 例(末行报错桩但此前
+  有真实产出 / 纯报错桩空会话 / kill 残行 / 带真实 tokens 的错误行 / 尚无 assistant
+  消息 / messages 查询失败)。`bun typecheck && bun test` 全绿,445→451 pass——这两个
+  数取自当时并存另一会话 2 条未提交 taskContext 用例(后落 `b0eceec96`)的工作树;
+  单看本修复是 443→449(把那两个测试文件回退到本 commit 实测 `Ran 449 tests`)。
+- 真实数据回放:取 `ses_f78b6649cffe…` 的全部 19 条消息喂给新旧两版判据——旧版
+  `{used:0, errorStub:true}`(复现 22:26 那次丢弃),新版 `{used:109192, pct:42,
+  errorStub:false}`(与运行内日志的 109.2k/42% 一致)。
+- 口径全量对比:`/workspace/kernel-dm-stripe` 539 个会话中,旧判据标出 16 个报错桩、
+  其中 **9 个是误判**(此前有真实产出);新判据标出 7 个,全部是真正只有报错桩的
+  会话——误判清零,原检出能力不丢。
+- 未做:本文件"验证计划"里为第 5 点设想的 `test/resume.test.ts` 端到端(需 mock
+  `executeWhole`/wrapup/verify 整条流水线才能驱动到 `runTask` 顶部的恢复判定)。
+  改判据落在 `sessionUsage` 上并已按其单点直接建测,`runTask` 侧只剩
+  `used === 0 && errorStub` 一行合成条件,性价比仍不支持补那条 e2e,留作按需。
+
+### 落地范围
+
+只改 `packages/auto-core`(核心):`src/runner.ts`(`sessionUsage` + 恢复分支注释)、
+`test/runner.test.ts`、`docs/behavior.md`、`docs/structure.md` 与本文件。按分支模型
+核心改动只落 `auto-core` 分支,`migrate`/`auto` 两个 worktree 经 `git merge auto-core`
+刷新快照获得(事故目录跑的是 `opencode-migrate`,合并前该处仍是旧判据)。

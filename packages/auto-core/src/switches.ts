@@ -18,11 +18,18 @@ export const SWITCH_ENV = {
   refCheck: "OPENCODE_AUTO_REF_CHECK",
   reuseSession: "OPENCODE_AUTO_REUSE_SESSION",
   stuck: "OPENCODE_AUTO_STUCK",
+  taskContext: "OPENCODE_AUTO_TASK_CONTEXT",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
 // 粒度——所取值及更粗的边界都暂停(见 src/step.ts)。
 export type StepMode = "off" | "phase" | "task" | "subtask"
+
+// 理解摘要行数档位(OPENCODE_AUTO_TASK_CONTEXT)值域: off 为现状(建议 200 行
+// 以内);small/medium/large 逐档放宽(300/400/500 行,见 src/prompt.ts 的
+// TASK_CONTEXT_LINES)——仅调整提示词里的"建议行数"措辞,不做代码侧截断或校验
+// (context.md 本就无硬性行数限制,超出建议行数不会被拒收)。
+export type TaskContextMode = "off" | "small" | "medium" | "large"
 
 export type Switches = {
   // fork 三段式流水线总开关: off = 现状流水线(无理解会话、无分叉),行为零变化。
@@ -50,9 +57,23 @@ export type Switches = {
   // driver 经 steer 主动注入提示(每会话至多三次,不中止会话);off = 不检测、
   // 不注入。dryrun 预检会话本就靠反复被拒探查权限,恒不检测(与本开关无关)。
   stuck: boolean
+  // 理解摘要行数档位(缺省 off,现状零变化): small/medium/large 放宽 context.md
+  // 的建议行数上限(见 src/prompt.ts 的 TASK_CONTEXT_LINES),供怀疑摘要因"建议
+  // 200 行"措辞被过度压缩、信息丢失时调大预算验证。
+  taskContext: TaskContextMode
 }
 
-const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "digest", fine: true, steer: false, step: "off", refCheck: false, reuseSession: false, stuck: true }
+const SWITCH_DEFAULTS: Switches = {
+  fork: true,
+  forkBase: "digest",
+  fine: true,
+  steer: false,
+  step: "off",
+  refCheck: false,
+  reuseSession: false,
+  stuck: true,
+  taskContext: "off",
+}
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
 // (取缺省),非法值 throw 中文报错。
@@ -76,6 +97,13 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
       `环境变量 ${SWITCH_ENV.step} 取值非法: "${stepRaw}"(期望 off|phase|task|subtask;空串视同未设,缺省 off)`,
     )
   }
+  const taskContextRaw = env[SWITCH_ENV.taskContext]
+  const taskContext = taskContextRaw === undefined || taskContextRaw === "" ? SWITCH_DEFAULTS.taskContext : taskContextRaw
+  if (taskContext !== "off" && taskContext !== "small" && taskContext !== "medium" && taskContext !== "large") {
+    throw new Error(
+      `环境变量 ${SWITCH_ENV.taskContext} 取值非法: "${taskContextRaw}"(期望 off|small|medium|large;空串视同未设,缺省 off)`,
+    )
+  }
   return {
     fork: onOff(SWITCH_ENV.fork, env[SWITCH_ENV.fork], SWITCH_DEFAULTS.fork),
     forkBase: forkBase as Switches["forkBase"],
@@ -85,6 +113,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     refCheck: onOff(SWITCH_ENV.refCheck, env[SWITCH_ENV.refCheck], SWITCH_DEFAULTS.refCheck),
     reuseSession: onOff(SWITCH_ENV.reuseSession, env[SWITCH_ENV.reuseSession], SWITCH_DEFAULTS.reuseSession),
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
+    taskContext: taskContext as TaskContextMode,
   }
 }
 
@@ -99,6 +128,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.refCheck === SWITCH_DEFAULTS.refCheck ? undefined : `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
     switches.reuseSession === SWITCH_DEFAULTS.reuseSession ? undefined : `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
+    switches.taskContext === SWITCH_DEFAULTS.taskContext ? undefined : `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -114,6 +144,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
     `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
+    `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
   ].join(", ")
 }
 

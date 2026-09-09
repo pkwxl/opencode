@@ -391,8 +391,12 @@
   active 且会话在 server 上仍存在 → 复用原会话继续(chain 直接 seed 该会话,
   与 `opencode -r` 同构,不设时间窗;该接管不受 OPENCODE_AUTO_REUSE_SESSION 与
   复用阈值约束——恢复语义即"接着被中断的那个会话继续",首个提示词进原会话,恢复
-  说明用后即清、此后回归常规规则。seed 的用量为经 session.messages 末条 assistant
-  消息重建的真实值,恢复日志与链内后续决策据此,不再用 0/0 占位),否则新会话;**交接文件优先**——active
+  说明用后即清、此后回归常规规则。seed 的用量为经 session.messages 重建的真实值
+  ——从末条往前取第一条真正跑完过的 assistant 消息(tokens 非 0):末条常是 provider
+  报错/被中断留下的 0-token 行,直接取末条会把"跑了很多活、最后一轮撞错"的长会话读成
+  0 用量(恢复日志假值 + 复用判定误杀);整条会话都没有这种消息时才是纯报错桩会话
+  (旧"重试即换白板会话"遗留),判为不可复用、开新会话。恢复日志与链内后续决策据此,
+  不再用 0/0 占位),否则新会话;**交接文件优先**——active
   恢复时交接文档已存在(ondemand 的 docs/<id>/handoff.md 或 handover-test 的
   任务级/任一子任务级 testhandoff.md 遗留均判定)则不复用旧会话,
   开新会话凭交接续跑(handoff `状态: 完成`

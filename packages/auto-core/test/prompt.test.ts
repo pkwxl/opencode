@@ -195,6 +195,14 @@ describe("renderUnderstand(fork 流水线 ① 理解会话)", () => {
     expect(text).toContain("优先任务正文")
     expect(text).toContain("点名的文件与直接相关模块,不求全")
   })
+
+  test("taskContext 档位: off 缺省 200 行,small/medium/large 放宽 300/400/500 行", () => {
+    expect(renderUnderstand(plan, task)).toContain("建议 200 行")
+    expect(renderUnderstand(plan, task, { taskContext: "off" })).toContain("建议 200 行")
+    expect(renderUnderstand(plan, task, { taskContext: "small" })).toContain("建议 300 行")
+    expect(renderUnderstand(plan, task, { taskContext: "medium" })).toContain("建议 400 行")
+    expect(renderUnderstand(plan, task, { taskContext: "large" })).toContain("建议 500 行")
+  })
 })
 
 describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {

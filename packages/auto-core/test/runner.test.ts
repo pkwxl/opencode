@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
-import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, runSession, seedForkSession, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, runSession, seedForkSession, sessionUsage, type ForkBaseInfo, type SessionChain } from "../src/runner"
 import { recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
@@ -445,6 +445,72 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// ---- 会话末端用量重建与"报错桩"判据(sessionUsage: 跨进程恢复是否复用旧会话的依据)----
+
+describe("sessionUsage(恢复复用判据)", () => {
+  // server 的 messages 按创建序(旧→新)返回;runner 只读 info 的 role/tokens/error
+  // 与 providerID/modelID(查上下文上限)。
+  const user = { info: { role: "user" } }
+  const asst = (input: number, cacheRead: number, error?: unknown) => ({
+    info: {
+      role: "assistant",
+      providerID: "kimi",
+      modelID: "k2",
+      tokens: { input, cache: { read: cacheRead } },
+      ...(error ? { error } : {}),
+    },
+  })
+  const limit = 262_100
+  const client = (messages: unknown[] | { error: unknown }) =>
+    ({
+      session: {
+        messages: async () => (Array.isArray(messages) ? { data: messages } : messages),
+      },
+      provider: { list: async () => ({ data: { all: [{ id: "kimi", models: { k2: { limit: { context: limit } } } }] } }) },
+    }) as unknown as OpencodeClient
+
+  test("末条是 0-token 报错桩、此前有真实产出: 用量取真实末端,不判为报错桩(T-063 现场)", async () => {
+    // 第 1–4 点刻意把这个会话留在 progress.json 里:跑了很多活,最后一轮撞 isRetryable:false
+    // 的账号级限流——服务端为此追加了 tokens 全 0 的报错行。
+    const usage = await sessionUsage(
+      client([user, asst(3981, 8448), asst(1416, 107776), asst(0, 0, { name: "APIError" })]),
+      "ses_real",
+    )
+    expect(usage.used).toBe(109192)
+    expect(usage.pct).toBe(42)
+    expect(usage.errorStub).toBe(false)
+  })
+
+  test("整条会话只有报错桩(旧'重试即换白板会话'遗留形态): 判为报错桩,恢复时开新会话", async () => {
+    const usage = await sessionUsage(client([user, asst(0, 0, { name: "APIError" })]), "ses_stub")
+    expect(usage.used).toBe(0)
+    expect(usage.errorStub).toBe(true)
+  })
+
+  test("末条是被中断的 0-token 残行(无 error,kill/崩溃场景): 用量取更早的真实轮次", async () => {
+    const usage = await sessionUsage(client([user, asst(2675, 62720), asst(0, 0)]), "ses_killed")
+    expect(usage.used).toBe(65395)
+    expect(usage.errorStub).toBe(false)
+  })
+
+  test("末条错误行自带真实 tokens(step-finish 后才判定,如输出超限): 直接以它为基准", async () => {
+    const usage = await sessionUsage(client([user, asst(1000, 5000), asst(2000, 60000, { name: "MessageOutputLengthError" })]), "ses_partial")
+    expect(usage.used).toBe(62000)
+    expect(usage.errorStub).toBe(false)
+  })
+
+  test("尚无任何 assistant 消息: used 0、上限未知口径不变,不判为报错桩(空会话第一轮照常复用)", async () => {
+    const usage = await sessionUsage(client([user]), "ses_fresh")
+    expect(usage).toEqual({ used: 0, pct: 100, errorStub: false })
+  })
+
+  test("messages 拉取失败或返回 error: 退化为用量 0 且不判报错桩(不因查询故障牺牲会话)", async () => {
+    expect(await sessionUsage(client({ error: { name: "UnknownError" } }), "ses_x")).toEqual({ used: 0, pct: 100, errorStub: false })
+    const broken = { session: { messages: async () => { throw new Error("fetch failed") } } } as unknown as OpencodeClient
+    expect(await sessionUsage(broken, "ses_x")).toEqual({ used: 0, pct: 100, errorStub: false })
   })
 })
 
