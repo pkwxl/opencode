@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Task } from "./plan"
+import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
@@ -410,6 +411,23 @@ export function handoffFile(task: Task): string {
 // v2 prompt 默认 steer,在下一个 provider turn 边界进入会话。
 export function renderHandoffSteer(task: Task): string {
   return renderTemplate("handoff-steer", { handoffFile: handoffFile(task) })
+}
+
+// 死循环提示(driver 在会话进行中检测到重复动作后经 steer 注入,src/stuck.ts):
+// level 决定提示的力度——1 换思路、2 先写诊断再动手、3 停止重试并收尾(会话内
+// 最多三次)。与交接 steer 同为 steer 注入,二者互不影响。
+export function renderStuckHint(hit: StuckHit): string {
+  return renderTemplate("stuck-hint", {
+    tool: hit.tool,
+    count: String(hit.count),
+    level: String(hit.level),
+    input: hit.input || "(无参数)",
+    detail: hit.detail || "(空)",
+    repeatError: hit.kind === "error",
+    level1: hit.level === 1,
+    level2: hit.level === 2,
+    level3: hit.level >= 3,
+  })
 }
 
 // --subtask off/ondemand: 单会话完成整个任务(不做子任务分解)。ondemand 额外附带

@@ -27,6 +27,7 @@ import {
   renderPriorKnowledge,
   renderReview,
   renderReviewFix,
+  renderStuckHint,
   renderSubtask,
   renderTestContinue,
   renderTestHandover,
@@ -651,6 +652,57 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
     expect(bare).toContain("docs/T-002/testhandoff.md")
     expect(bare).not.toContain("test.3.out")
     expect(bare).not.toMatch(/\{\{|\}\}/)
+  })
+})
+
+describe("renderStuckHint(死循环提示)", () => {
+  const errorHit = {
+    kind: "error" as const,
+    tool: "edit",
+    count: 3,
+    level: 1,
+    input: '{"filePath":"src/a.ts"}',
+    detail: "String not found in file",
+  }
+
+  test("同报错重复: 说明是同一个报错,列出工具/参数/报错原文", () => {
+    const text = renderStuckHint(errorHit)
+    expect(text).toContain("循环检测")
+    expect(text).toContain("edit")
+    expect(text).toContain("3 次以完全相同的报错失败")
+    expect(text).toContain("src/a.ts")
+    expect(text).toContain("String not found in file")
+    expect(text).toContain("报错:")
+    expect(text).not.toContain("相同的参数得到完全相同的结果")
+  })
+
+  test("同参同果重复: 换一种说法,标注的是输出而非报错", () => {
+    const text = renderStuckHint({ ...errorHit, kind: "repeat", tool: "read", count: 4, detail: "文件内容" })
+    expect(text).toContain("4 次以相同的参数得到完全相同的结果")
+    expect(text).toContain("输出:")
+    expect(text).not.toContain("报错失败")
+  })
+
+  test("三级升级: 换思路 → 先写诊断 → 停止重试并收尾", () => {
+    const first = renderStuckHint(errorHit)
+    expect(first).toContain("先停下来核对前提")
+    expect(first).not.toContain("AUTO-FIXME")
+    const second = renderStuckHint({ ...errorHit, level: 2 })
+    expect(second).toContain("第 2 次提醒")
+    expect(second).toContain("已经试过哪些做法")
+    expect(second).not.toContain("AUTO-FIXME")
+    const third = renderStuckHint({ ...errorHit, level: 3 })
+    expect(third).toContain("最后一次提醒")
+    expect(third).toContain("AUTO-FIXME")
+    expect(third).toContain("结束本次会话")
+    expect(third).not.toContain("先停下来核对前提")
+  })
+
+  test("空参数/空输出有占位,渲染无残留标签", () => {
+    const text = renderStuckHint({ ...errorHit, input: "", detail: "" })
+    expect(text).toContain("(无参数)")
+    expect(text).toContain("(空)")
+    expect(text).not.toMatch(/\{\{|\}\}/)
   })
 })
 

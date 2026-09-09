@@ -17,6 +17,7 @@ export const SWITCH_ENV = {
   step: "OPENCODE_AUTO_STEP",
   refCheck: "OPENCODE_AUTO_REF_CHECK",
   reuseSession: "OPENCODE_AUTO_REUSE_SESSION",
+  stuck: "OPENCODE_AUTO_STUCK",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -45,9 +46,13 @@ export type Switches = {
   // REUSE_IDLE_MS)不再参与;on = 恢复既有的阈值复用。中断恢复接管的会话不受
   // 本开关约束(恢复语义即"接着被中断的那个会话继续",见 attempt 的 resumed)。
   reuseSession: boolean
+  // 死循环检测(缺省 on,见 src/stuck.ts): 会话内重复同一动作且结果不变时,
+  // driver 经 steer 主动注入提示(每会话至多三次,不中止会话);off = 不检测、
+  // 不注入。dryrun 预检会话本就靠反复被拒探查权限,恒不检测(与本开关无关)。
+  stuck: boolean
 }
 
-const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "digest", fine: true, steer: false, step: "off", refCheck: false, reuseSession: false }
+const SWITCH_DEFAULTS: Switches = { fork: true, forkBase: "digest", fine: true, steer: false, step: "off", refCheck: false, reuseSession: false, stuck: true }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
 // (取缺省),非法值 throw 中文报错。
@@ -79,6 +84,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     step: step as StepMode,
     refCheck: onOff(SWITCH_ENV.refCheck, env[SWITCH_ENV.refCheck], SWITCH_DEFAULTS.refCheck),
     reuseSession: onOff(SWITCH_ENV.reuseSession, env[SWITCH_ENV.reuseSession], SWITCH_DEFAULTS.reuseSession),
+    stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
   }
 }
 
@@ -92,6 +98,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.step === SWITCH_DEFAULTS.step ? undefined : `${SWITCH_ENV.step}=${switches.step}`,
     switches.refCheck === SWITCH_DEFAULTS.refCheck ? undefined : `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
     switches.reuseSession === SWITCH_DEFAULTS.reuseSession ? undefined : `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
+    switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -106,6 +113,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.step}=${switches.step}`,
     `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
     `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
+    `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
   ].join(", ")
 }
 
