@@ -33,12 +33,15 @@ import { renderText, usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 // AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
+// 指针不强制每会话开读 CURRENT.md: 提示词已内联当前任务、子任务会话另有 context.md
+// 背景摘要,无条件重读是纯开销;CURRENT.md 保留为上下文压缩后的兜底入口。
 // AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失;
 // 它有更新时 driver 会在下一个新会话前重启 server,使新会话必定加载最新内容。
 // AGENTS.md 不置只读(任务可更新它),run/init 只确保指针块存在。
 const POINTER = `<!-- opencode-auto:start -->
-本目录由 opencode-auto 驱动。每个会话开始必须先读 \`CURRENT.md\`(若存在),其中是当前
-任务的完整内容与进度,优先于一切会话记忆。不要编辑 \`CURRENT.md\` 与 \`PLAN.md\`,
+本目录由 opencode-auto 驱动。会话提示词已内联本次要做的任务,通常无需另读状态文件。
+\`CURRENT.md\`(若存在)是当前任务完整内容与进度的镜像: 上下文被压缩后、或你对当前
+任务与进度存疑时读它,其内容优先于一切会话记忆。不要编辑 \`CURRENT.md\` 与 \`PLAN.md\`,
 它们由 driver 独占维护。
 <!-- opencode-auto:end -->`
 

@@ -700,8 +700,9 @@ function requireTask(plan: Plan, id: string): Task {
   return task
 }
 
-// CURRENT.md mirrors the task in progress; the agent contract makes every
-// session read it first, so the current task survives context compaction.
+// CURRENT.md mirrors the task in progress. Prompts already inline the task, so
+// the agent contract points sessions here only as a fallback: after context
+// compaction, or when a session doubts the current task/progress.
 // The server re-reads it on every provider turn, so no restart is needed.
 // remark: 非完成结局保留文件时附带的"中断备注"(退出原因/阶段/恢复方式)。
 async function writeCurrent(path: string, task: Task, solo = false, remark?: string) {
