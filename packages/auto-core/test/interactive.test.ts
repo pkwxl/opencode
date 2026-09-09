@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { PassThrough, Writable } from "node:stream"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { exitRequested, resetExitRequest } from "../src/exit"
 import { startInteractive, type Interactive } from "../src/interactive"
 
 // 用注入的流驱动常驻 readline;桩 client 记录 promptAsync 收到的消息。
@@ -31,6 +32,30 @@ describe("interactive", () => {
   afterEach(() => {
     repl?.close()
     repl = undefined
+    resetExitRequest()
+  })
+
+  test("/exit 不发往会话,置位退出请求", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    ctx.repl.attach("s1")
+    expect(exitRequested()).toBe(false)
+    ctx.input.write("/exit\n")
+    await tick()
+    expect(ctx.sent).toEqual([])
+    expect(exitRequested()).toBe(true)
+    // 置位后输入行继续可用,后续消息照常发送。
+    ctx.input.write("继续发消息\n")
+    await tick()
+    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "继续发消息" }])
+  })
+
+  test("无活动会话时 /exit 仍置位(与消息丢弃语义不同)", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    ctx.input.write("/exit\n")
+    await tick()
+    expect(exitRequested()).toBe(true)
   })
 
   test("回车把输入作为消息发往已 attach 的会话", async () => {

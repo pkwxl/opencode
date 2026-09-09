@@ -6,6 +6,8 @@
   (含 run 前 agent 契约文件缺失的完整性检查、项目配置 .opencode/auto/config.json 非法、
   阶段台账 docs/phases.md 非法或记录了 `phases` 之外的字母),`2` 阻塞或未完成为 pending、等待人工介入
   (阻塞问题写入 PLAN.md;pending 回退不写字段;含阶段规划会话受阻与 --final-review 终审闭环熔断),
+  `3` `--interactive` 下收到 /exit、已在安全边界处暂停退出(不需要人工介入,重新
+  运行即可完整恢复,见下方 /exit 一条与设计文档 docs/exit-resume-design.md),
   `130` 被连续两次 Ctrl+C 强制终止(单次 Ctrl+C 仅提示,3 秒窗口内第二次才退出,
   退出前尽力恢复文件可写并关闭 server)。
 - 项目配置固化(src/config.ts,设计文档 docs/init-config-agents-design.md 与
@@ -230,7 +232,13 @@
   v2 `delivery: "queue"`**,它与 v1 引擎不兼容会产生无历史的并发 drain);无活动
   会话时输入丢弃并提示;ask/--wait-between 的人工等待改经该输入行接收(提示语、
   超时、空行、回落语义与独立 readline 完全一致);终端不显示 verbose 明细,但日志
-  文件保持 --verbose 级完整记录(interactive 隐含 verbose 记录级别)。
+  文件保持 --verbose 级完整记录(interactive 隐含 verbose 记录级别)。输入行识别
+  到 `/exit`(trim 后完全相等,pending——正在等待 ask/步进暂停的回答——时不特判,
+  原样作答)不发往会话,只置位退出请求:在下一个 phase/task/subtask 安全边界
+  (与步进模式 `OPENCODE_AUTO_STEP` 的三级边界同一批挂点,该处 PLAN.md/CURRENT.md/
+  .auto/progress.json 均已由边界自身的常规收尾写好)以退出码 `3` 停机,不写任何
+  阻塞/pending 标记,重新运行凭已持久化的进度精确恢复(与该处发生真实 crash/kill
+  中断的恢复路径完全同构)。详见设计文档 docs/exit-resume-design.md。
 - **driver 独占状态写入**:PLAN.md 的状态标记、检查项勾选、verified 字段与 CURRENT.md
   全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json
   与 .opencode/auto/config.json)

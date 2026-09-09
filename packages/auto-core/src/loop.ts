@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises"
 import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
 import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
+import { ExitRequested, maybeExit } from "./exit"
 import { commitTree, pendingChanges, repoRoots } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
@@ -238,7 +239,7 @@ export async function runAll(
     server = opts.managed ?? (await manage(directory, opts.server))
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName)
-      log("💬 交互模式: 回车把输入作为额外消息发往当前会话(无活动会话时丢弃)")
+      log("💬 交互模式: 回车把输入作为额外消息发往当前会话(无活动会话时丢弃);输入 /exit 将在下一个安全边界处暂停退出,重新运行即可恢复")
     }
     if (opts.dryrun) {
       const result = await runOnce(server.client, "权限预检", renderDryrun(), {
@@ -400,6 +401,7 @@ export async function runAll(
         // 步进暂停(task 边界,OPENCODE_AUTO_STEP ≥ task): 任务终态提交后、终审
         // 路由与下一任务前硬暂停,回车放行。
         await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl })
+        maybeExit("task", `任务 ${task.id} ${task.title}`)
         // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
         // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
         // 由下一次 next() 按文件顺序拾取。
@@ -628,6 +630,7 @@ export async function runAll(
       const code = await handoverPhase(phase)
       if (code !== 0) return code
       await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl })
+      maybeExit("phase", `阶段 ${phase} ${phaseText(phase)} 交接`)
       return 0
     }
     const runPhaseLoop = async (): Promise<number> => {
@@ -709,6 +712,17 @@ export async function runAll(
       }
     }
     return await runPhaseLoop()
+  } catch (error) {
+    // /exit(设计文档 docs/exit-resume-design.md): 三处安全边界(phase/task/
+    // subtask,后者经 runTask 从 runner.ts 一路上抛)命中后在此统一落地——已停
+    // 在该边界的正常收尾点(PLAN.md/CURRENT.md/.auto/progress.json 均已写好,
+    // 与该处真实 crash/kill 中断的现场同构),退出码 3 区别于 2(阻塞/pending
+    // 需人工介入):重新运行即可精确恢复,不需要任何人工操作。
+    if (error instanceof ExitRequested) {
+      log(`⏸ ${error.message},进度已保存,重新运行即可完整恢复`)
+      return 3
+    }
+    throw error
   } finally {
     process.off("SIGINT", onSigint)
     repl?.close()

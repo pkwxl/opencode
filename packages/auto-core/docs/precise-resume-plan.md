@@ -23,8 +23,12 @@
 | 旁路一次性会话 | 维持重跑新会话(产物幂等保证状态匹配),不写进度记录 |
 | 增强项 | ① verify 修复轮中断精确恢复(stage=fix + gap 持久化);② SSE 事件流中断不再误判会话结束(按会话错误处理 + abort 孤儿回合) |
 
-维持现状:退出码体系;优雅退出(阻塞/回退 pending)→ active=false 不复用;runSession
-运行中瞬时错误重试仍换新会话。
+维持现状:退出码体系;优雅退出(阻塞/回退 pending)→ active=false 不复用。
+
+~~runSession 运行中瞬时错误重试仍换新会话~~ ——已被
+[session-error-retry-plan.md](session-error-retry-plan.md) 取代(2026-09-09 实施):
+isRetryable:false 直接阻塞不重试;可重试错误改为 fork(chain.id) 重试,失败即弃、
+原会话不受影响,不再无差别清空 chain.id 换白板会话。
 
 ## 已完成(代码,已验证全绿)
 

@@ -6,6 +6,7 @@
 // 不改动任何既有处理逻辑: 无 --wait-answer 时提问仍自动答复,权限仍阻塞。
 import { createInterface } from "node:readline/promises"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { requestExit } from "./exit"
 import { log, setInput } from "./log"
 
 export type Interactive = {
@@ -56,6 +57,16 @@ export function startInteractive(
       return
     }
     if (!text) {
+      rl.prompt()
+      return
+    }
+    // /exit(设计文档 docs/exit-resume-design.md): 不发往会话,只置位——真正的
+    // 暂停延迟到下一个 phase/task/subtask 安全边界,进度届时已按常规收尾写好,
+    // 下次运行精确恢复。不判断当前是否有活动会话(与消息转发的丢弃语义不同,
+    // /exit 的意图与是否已连上会话无关)。
+    if (text === "/exit") {
+      requestExit()
+      log("🚪 已收到 /exit: 将在下一个安全边界(阶段/任务/子任务交接完成处)暂停并退出,进度已持久化,重新运行即可完整恢复")
       rl.prompt()
       return
     }

@@ -5,6 +5,7 @@ import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
 import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, runSession, seedForkSession, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // 交接 steer 构造与交接判定的纯函数单测(接线在 executeWhole/runSubtask;完整
@@ -328,6 +329,122 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
     // 恢复说明已消费: 下一个提示词回归常规规则(off → 新会话)
     expect((await runSession(client, task, "下一个提示词", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
     expect(calls.creates).toBe(1)
+  })
+})
+
+// ---- 会话错误重试(session-error-retry-plan.md)----
+
+describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞", () => {
+  // 构造一个只发 session.error(可选 isRetryable)+ session.idle 的事件流,喂给
+  // fakeClient 同款的 subscribe——outcomes 按 create/fork 调用顺序逐个消费,
+  // 决定该次新建/分叉出的会话本轮是否报错。
+  type Outcome = "error-retryable" | "error-fatal" | "ok"
+  function retryClient(outcomes: Outcome[]) {
+    const calls = { forks: [] as string[], creates: 0 }
+    const queue: unknown[] = []
+    let index = 0
+    let seq = 0
+    const enqueue = (id: string) => {
+      const outcome = outcomes[index++]
+      if (outcome === "error-retryable" || outcome === "error-fatal") {
+        queue.push({
+          type: "session.error",
+          properties: { sessionID: id, error: { name: "APIError", data: { message: "usage limit", isRetryable: outcome === "error-retryable" } } },
+        })
+      }
+      queue.push({ type: "session.idle", properties: { sessionID: id } })
+    }
+    const client = {
+      session: {
+        create: async () => {
+          calls.creates++
+          const id = `ses_new_${++seq}`
+          enqueue(id)
+          return { data: { id } }
+        },
+        fork: async (params: { sessionID: string }) => {
+          calls.forks.push(params.sessionID)
+          const id = `ses_fork_${calls.forks.length}`
+          enqueue(id)
+          return { data: { id } }
+        },
+        update: async () => ({}),
+        prompt: async () => ({}),
+        promptAsync: async () => ({}),
+        abort: async () => ({}),
+        messages: async () => ({ data: [] }),
+      },
+      event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
+    } as unknown as OpencodeClient
+    return { client, calls }
+  }
+
+  test("isRetryable:false: 不 fork、不换新会话重试,直接阻塞", async () => {
+    const { client, calls } = retryClient(["error-fatal"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("blocked")
+    expect((result as { question: string }).question).toContain("会话错误:")
+    expect((result as { retryable?: boolean }).retryable).toBe(false)
+    expect(calls.creates).toBe(1)
+    expect(calls.forks).toEqual([])
+  })
+
+  test("可重试错误 + chain.id 已有真实累计上下文: fork 原会话重试,成功即晋升为 chain.id", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_real"])
+    expect(calls.creates).toBe(1)
+    expect(chain.id).toBe("ses_fork_1")
+  })
+
+  test("fork 副本重试仍失败: 丢弃副本,从同一个原会话重新 fork(不是对失败副本再 fork)", async () => {
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"])
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_real", "ses_real"])
+    expect(chain.id).toBe("ses_fork_2")
+  })
+
+  test("chain.id 本为空(首条消息即失败): 无值得保护的内容,维持现状开空白新会话", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual([])
+    expect(calls.creates).toBe(2)
+  })
+
+  test("可重试的中间失败态不落盘 progress.json,不顶替之前的真实记录", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-remember-"))
+    try {
+      const real: Awaited<ReturnType<typeof recallProgress>> = { task: "T-001", session: "ses_real_old", at: 1, active: true, phase: { kind: "understand" } }
+      await saveProgress(dir, real!)
+      // RETRIES=3: 三次尝试全部可重试失败,耗尽后阻塞——全程不应落盘。
+      const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable"])
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "understand" } }
+      const result = await runSession(client, task, "提示词", { dir }, chain)
+      expect(result.type).toBe("blocked")
+      expect(await recallProgress(dir, "T-001")).toEqual(real)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("不可重试的阻塞: 属于'非可重试会话错误的终态',正常落盘 progress.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-remember-fatal-"))
+    try {
+      const { client } = retryClient(["error-fatal"])
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "understand" } }
+      const result = await runSession(client, task, "提示词", { dir }, chain)
+      expect(result.type).toBe("blocked")
+      expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_new_1")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 
