@@ -1867,7 +1867,7 @@ async function attempt(
     // 仅新建会话打印,复用轮的数字要等下一轮 ♻ 行才出现,中断恢复接管的会话与
     // 任务末轮的复用会话因此从不输出上下文用量。
     if (result.durationMs !== undefined) {
-      log(`✓ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
+      log(`◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
     }
     // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
