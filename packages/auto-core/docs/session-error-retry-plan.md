@@ -1,7 +1,13 @@
 # 会话错误重试改造计划(交接文档)
 
-> 状态:**待实施**(问题现场已用真实事故复盘、根因已定位到具体代码行,方案已与
-> 用户确认;下一步在新会话中按本文件动手)。
+> 状态:**已实施**(2026-09-09,`packages/auto-core/src/runner.ts`)。待实施改动
+> 1–5 全部落地,`test/runner.test.ts` 补齐第 1–4 点用例(6 个新用例,`bun
+> typecheck && bun test` 全绿,431→437 pass)。第 5 点(`runTask` 跨进程恢复的
+> "报错桩"兜底)代码已实现并随现有测试跑绿,但计划中要求的 `test/resume.test.ts`
+> 端到端场景**未补**——需要完整 mock `executeWhole`/wrapup/verify 整条流水线才能
+> 驱动到 `runTask` 顶部的恢复判定,成本与"双保险"分支的价值不成比例,留作后续
+> 按需补充(如需要,从 `runTask` 约 345 行起的 `alive`/`usage`/`errorStub` 三个
+> 变量入手)。
 >
 > 本计划修订 `precise-resume-plan.md` 中"维持现状"一条:「runSession 运行中瞬时
 > 错误重试仍换新会话」——该现状已被证实是一个实际发生过的 bug 根因,不再维持。

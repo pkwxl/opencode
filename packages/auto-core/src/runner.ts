@@ -206,9 +206,13 @@ type Watch = {
   // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
   // runExecSession 据此开新会话续跑。
   testHandover?: boolean
+  // session-error-retry-plan.md: 会话错误是否值得重试(仅 ApiError 携带
+  // isRetryable;字段不存在或非 false 一律按可重试处理,保守缺省;多个
+  // session.error 事件叠加取悲观口径,只要出现过一次 false 即不可重试)。
+  retryable?: boolean
 }
 
-type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } | (Outcome & { type: "blocked" })
+type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } | (Outcome & { type: "blocked"; retryable?: boolean })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
 // OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一
@@ -342,12 +346,18 @@ export async function runTask(
       recalled.active === true &&
       ((mode !== "off" && (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "handoff"))).exists())) ||
         (opts.handoverTest === true && (await testHandoffExists(dir, task))))
-    if (!handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))) {
-      // 继承中断会话的真实上下文用量(经末条 assistant 消息重建): 此前 seed 为
-      // 0/0 占位以保证首个提示词必定复用,代价是恢复后的日志与链内后续复用决策
-      // 全用假值;首轮复用现由 attempt 的 resumed 判据保证,这里只取真实值。
-      const usage = await sessionUsage(client, recalled.session)
-      chain.id = recalled.session
+    const alive = !handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))
+    // 继承中断会话的真实上下文用量(经末条 assistant 消息重建): 此前 seed 为
+    // 0/0 占位以保证首个提示词必定复用,代价是恢复后的日志与链内后续复用决策
+    // 全用假值;首轮复用现由 attempt 的 resumed 判据保证,这里只取真实值。
+    const usage = alive ? await sessionUsage(client, recalled.session!) : undefined
+    // 双保险(session-error-retry-plan.md 第 5 点): 历史遗留的 progress.json 可能
+    // 记着一个只挨了一记报错、从未真正产出过内容的会话(旧版"重试即换白板会话"
+    // 逻辑的残留:0 tokens 且末条 assistant 消息本身就是报错)。有了第 3/4 点的
+    // 修复后理论上不会再产生这种记录,此处仅兜底改造上线前生成的旧文件。
+    const errorStub = usage !== undefined && usage.used === 0 && usage.errorStub
+    if (alive && usage && !errorStub) {
+      chain.id = recalled.session!
       chain.pct = usage.pct
       chain.used = usage.used
       // 复用决策已在此做出;链内后续的 5 分钟复用规则从当前时刻起算。
@@ -364,7 +374,13 @@ export async function runTask(
         await saveProgress(dir, { ...recalled, active: false })
       }
       chain.note = resumeNote(recalled.phase, false)
-      const why = handedOff ? "中断前已写出交接文档,开新会话凭交接续跑" : opts.newSession ? "--new-session 指定,开新会话继续" : "原会话不可复用,开新会话继续"
+      const why = handedOff
+        ? "中断前已写出交接文档,开新会话凭交接续跑"
+        : opts.newSession
+          ? "--new-session 指定,开新会话继续"
+          : errorStub
+            ? "原会话只挨了一记报错、无真实产出,开新会话继续"
+            : "原会话不可复用,开新会话继续"
       log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why})`)
     }
   }
@@ -1003,13 +1019,16 @@ export async function ensureForkBase(
 // 会话末端上下文用量(tokens: input + cache.read)与占比重建: 经
 // client.session.messages 取末条 assistant 消息,上限查 provider 表(与 watch 同
 // 口径: 取不到上限记 pct=100)。用于 fork 基点用量与中断恢复接管会话的用量继承。
-async function sessionUsage(client: OpencodeClient, id: string): Promise<{ used: number; pct: number; limit?: number }> {
+async function sessionUsage(client: OpencodeClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
   const got = await client.session.messages({ sessionID: id }).catch(() => undefined)
   const last = got && !got.error ? got.data.findLast((message) => message.info.role === "assistant") : undefined
-  if (!last || last.info.role !== "assistant") return { used: 0, pct: 100 }
+  if (!last || last.info.role !== "assistant") return { used: 0, pct: 100, errorStub: false }
   const used = last.info.tokens.input + last.info.tokens.cache.read
   const limit = (await contextLimits(client)).get(`${last.info.providerID}/${last.info.modelID}`)
-  return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit }
+  // errorStub: 末条 assistant 消息本身就是报错(session-error-retry-plan.md 第 5
+  // 点的兜底判据——历史遗留 progress.json 可能记着一个只挨了一记报错、从未真正
+  // 产出过内容的会话)。
+  return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit, errorStub: last.info.error !== undefined }
 }
 
 // 基点会话末端上下文用量(tokens);取不到按 0。
@@ -1765,9 +1784,31 @@ export async function runSession(
     const result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
+    // 不可重试(isRetryable:false,如账号级限流): 换哪个会话都一样失败,直接
+    // 阻塞——不进入下面的重试/fork 逻辑。attempt() 已保证 chain.id 落在这一轮
+    // 实际用过的会话上(哪怕它就是刚失败的这个),真正有内容的会话不被牺牲。
+    if (result.retryable === false) {
+      log(`⛔ ${task.id} 遇到不可重试的会话错误(重试无意义),直接阻塞:\n${result.question}`)
+      return result
+    }
     if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
       await opts.server.restart("会话错误为网络/服务故障,重启 opencode server 后换新会话重试")
+    }
+    // chain.id 已有真实累计上下文(attempt() 在可重试的会话错误分支已把 chain.id
+    // 还原为本轮重试前的原会话,不是刚失败的会话/副本): fork 一份独立副本重试同
+    // 一条提示词,原会话不受影响——失败即弃,再次失败就再从同一个原会话重新
+    // fork(session-error-retry-plan.md)。chain.id 为空(本轮是这个会话的第一条
+    // 消息,还没成功过): 没有值得保护的内容,fork 无意义,维持现状开空白新会话。
+    if (chain.id !== undefined) {
+      const forked = await forkSession(client, chain.id, chain.subject ?? `${task.id} 重试`)
+      if (forked !== undefined) {
+        log(`↻ ${task.id} 遇到瞬时会话错误,从原会话 ${chain.id} 分叉副本重试(${i}/${RETRIES - 1}):\n${result.question}`)
+        chain.pending = forked
+        chain.pct = 100
+        continue
+      }
+      log(`↻ fork 重试副本失败,回退空白新会话`)
     }
     log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${result.question}`)
     // 重试保持"换新会话"语义,不复用出错的会话。
@@ -1840,13 +1881,15 @@ async function attempt(
   opts.interactive?.attach(sessionID)
   // 进度记录: 执行链会话(链上携带阶段)写 active 记录,应用中断后据此精确恢复;
   // 旁路一次性会话(判定/审核/脚本生成/修复规划,链上无阶段)与伪任务(PLAN/AUTO)
-  // 不写,避免污染执行链记忆。
+  // 不写,避免污染执行链记忆。session-error-retry-plan.md 第 4 点: 不再在
+  // sessionID 刚确定、结果未知时就抢先落盘——只有确认这一轮不是"可重试的会话
+  // 错误"(成功、不可重试的阻塞、或非会话错误类阻塞)才写,否则可重试的中间
+  // 失败态会把真正有内容的旧会话从 progress.json 顶替掉。
   const remember = async () => {
     if (opts.dir && task.id.startsWith("T-") && chain.phase) {
       await saveProgress(opts.dir, { task: task.id, session: sessionID, at: Date.now(), active: true, phase: chain.phase })
     }
   }
-  await remember()
 
   // SSE 订阅跟随本会话生命周期: 订阅时传入 AbortSignal,无论正常结束、下发失败
   // 提前返回还是异常退出,finally 都立即中止订阅,断开底层连接并释放客户端连接
@@ -1869,9 +1912,17 @@ async function attempt(
       agent: opts.agent,
       parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
     })
-    if (prompt.error) return { type: "blocked", question: `下发任务失败: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
+    if (prompt.error) {
+      await remember()
+      return { type: "blocked", question: `下发任务失败: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
+    }
 
     const result = await watching
+    // 本轮开始前的原链状态: 可重试的会话错误需要还原到这里(而不是留在这一轮
+    // 刚失败的会话上),下一次重试才会从"从未被动过的原会话"重新 fork。
+    const previousId = chain.id
+    const previousUsed = chain.used
+    const previousAt = chain.at
     chain.id = sessionID
     chain.pct = result.pct
     chain.used = result.used
@@ -1886,11 +1937,21 @@ async function attempt(
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
     // 新建会话已在创建时命名,无需重复。
     if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
-    // 会话结束但阶段尚未推进: 刷新记录时间并保持 active——此刻中断按"半途未总结"
-    // 复用本会话继续(无时间窗,恢复时只看会话是否存活)。
-    await remember()
+    // 可重试的会话错误(session-error-retry-plan.md): 半截失败态,不落盘
+    // progress.json——链状态整体还原为本轮重试前的原会话,交给 runSession 的
+    // 重试循环从原会话重新 fork。不可重试的会话错误、非会话错误类阻塞与成功
+    // 一律"晋升":chain.id 落在这一轮实际用过的会话上并写 progress.json(会话
+    // 结束但阶段尚未推进时,刷新记录时间并保持 active——此刻中断按"半途未
+    // 总结"复用本会话继续,无时间窗,恢复时只看会话是否存活)。
+    if (result.error && result.retryable !== false) {
+      chain.id = previousId
+      chain.used = previousUsed
+      chain.at = previousAt
+    } else {
+      await remember()
+    }
     if (result.blocked) return result.blocked
-    if (result.error) return { type: "blocked", question: `会话错误: ${result.error}` }
+    if (result.error) return { type: "blocked", question: `会话错误: ${result.error}`, retryable: result.retryable }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
     // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
@@ -1945,6 +2006,9 @@ async function watch(
    const waitAnswer = opts.waitAnswer ?? 0
    let lastText = ""
    let error = ""
+   // 会话错误是否可重试(session-error-retry-plan.md): 只有 ApiError 携带
+   // isRetryable,其余错误类型没有该字段,缺省按可重试处理(undefined)。
+   let retryable: boolean | undefined = undefined
    // 上下文占比与已用量始终跟踪(会话复用决策依据);拿不到上限记 100。
    let pct = 100
    let used = 0
@@ -2191,6 +2255,11 @@ async function watch(
           ? String(props.error.data.message)
           : String(props.error.name)
       error = error ? `${error}\n${detail}` : detail
+      // 悲观口径: 一旦某次 session.error 明确带 isRetryable:false(账号级限流等,
+      // 换会话/换新会话都一样失败),整轮就判定为不可重试,不因后续事件回撤。
+      if ("data" in props.error && props.error.data && "isRetryable" in props.error.data && props.error.data.isRetryable === false) {
+        retryable = false
+      }
     }
     if (
       (event.type === "session.status" &&
@@ -2222,7 +2291,7 @@ async function watch(
     const msg = "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
     error = error ? `${error}\n${msg}` : msg
   }
-   return { lastText, error, pct, used, limit, testHandover, durationMs: Date.now() - startTime }
+   return { lastText, error, pct, used, limit, testHandover, durationMs: Date.now() - startTime, retryable }
 }
 
 // --test-by-driver 的单次测试执行: tmp/test.sh 为请求标记,其内容有两种形态——
