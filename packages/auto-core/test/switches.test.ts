@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { autoSwitches, formatSwitches, nonDefaultSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
 
 describe("parseSwitches(实验开关环境变量层)", () => {
-  test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off)", () => {
+  test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off / stuck on)", () => {
     expect(parseSwitches({})).toEqual({
       fork: true,
       forkBase: "digest",
@@ -11,10 +11,11 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       step: "off",
       refCheck: false,
       reuseSession: false,
+      stuck: true,
     })
   })
 
-  test("空串视同未设(七个变量同测)", () => {
+  test("空串视同未设(八个变量同测)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "",
@@ -24,6 +25,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.step]: "",
         [SWITCH_ENV.refCheck]: "",
         [SWITCH_ENV.reuseSession]: "",
+        [SWITCH_ENV.stuck]: "",
       }),
     ).toEqual({
       fork: true,
@@ -33,6 +35,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       step: "off",
       refCheck: false,
       reuseSession: false,
+      stuck: true,
     })
   })
 
@@ -46,6 +49,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.step]: "subtask",
         [SWITCH_ENV.refCheck]: "on",
         [SWITCH_ENV.reuseSession]: "on",
+        [SWITCH_ENV.stuck]: "off",
       }),
     ).toEqual({
       fork: false,
@@ -55,6 +59,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       step: "subtask",
       refCheck: true,
       reuseSession: true,
+      stuck: false,
     })
   })
 
@@ -68,6 +73,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.step]: "off",
         [SWITCH_ENV.refCheck]: "off",
         [SWITCH_ENV.reuseSession]: "off",
+        [SWITCH_ENV.stuck]: "on",
       }),
     ).toEqual(parseSwitches({}))
   })
@@ -91,6 +97,8 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.refCheck]: "1" })).toThrow(/缺省 off/)
     expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/OPENCODE_AUTO_REUSE_SESSION/)
     expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/OPENCODE_AUTO_STUCK/)
+    expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/缺省 on/)
     // 报文提示空串语义与缺省值
     expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/空串视同未设/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "1" })).toThrow(/缺省 off/)
@@ -98,11 +106,11 @@ describe("parseSwitches(实验开关环境变量层)", () => {
 })
 
 describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
-  test("默认组合静默: 非默认项为 undefined;全量描述列出七项", () => {
+  test("默认组合静默: 非默认项为 undefined;全量描述列出八项", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on",
     )
   })
 
@@ -110,7 +118,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "off" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=off")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "on" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=on")
@@ -120,6 +128,8 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     expect(nonDefaultSwitches(refChecked)).toBe("OPENCODE_AUTO_REF_CHECK=on")
     const reused = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
     expect(nonDefaultSwitches(reused)).toBe("OPENCODE_AUTO_REUSE_SESSION=on")
+    const unstuck = parseSwitches({ [SWITCH_ENV.stuck]: "off" })
+    expect(nonDefaultSwitches(unstuck)).toBe("OPENCODE_AUTO_STUCK=off")
   })
 })
 

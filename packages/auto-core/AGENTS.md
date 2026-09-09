@@ -33,6 +33,7 @@
 - 提示词文案 → 只动 `templates/prompts/*.md`(`src/prompt.ts` 只做数据组装),改后跑 `bun test test/prompt.test.ts`
 - 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`
 - 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
+- 死循环检测(会话内重复同一动作且结果不变 → driver steer 提示,OPENCODE_AUTO_STUCK 缺省 on)→ `src/stuck.ts` + `templates/prompts/stuck-hint.md`(设计: docs/stuck-loop-design.md)
 - 外壳画像(报文程序名/契约恢复指引/日志审计语义参数化)→ `src/shell.ts`
 - 稳定引用与文件存放规范(docs/T-NNN/ 目录化、docs 永不移动、轮次专用目录 docs/R-NN/(轮首 establishRound 建立、根 PLAN.md 为其符号链接)、引用一致性三层检查)→ docs/stable-refs-design.md(设计定稿 2026-09-06,P1..P4 已全部实施;轮次专用目录方案 2026-09-08,见 plans/ROUND_WORKDIR_PLAN.md 与 phases-design.md M 节;路径构造/读回落在 src/docpaths.ts,引用提取/校验/改写/门禁在 src/refcheck.ts)
 - refcheck 范围收敛与恢复(OPENCODE_AUTO_REF_CHECK 开关默认关、git 历史恢复缺失引用、行号锚 @sha 版本标记、摒弃移动文件适配)→ docs/refcheck-scope-design.md(2026-09-08 定稿,P1..P3 已全部实施;开关在 src/switches.ts,缺失恢复 renameHistory/recoverMissingRefs 与范围再确认 reconfirmAnchors 在 src/refcheck.ts)

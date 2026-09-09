@@ -80,7 +80,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("29 个会话模板与 _partials 齐备", () => {
+  test("30 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "context-base",
@@ -103,6 +103,7 @@ describe("内置模板注册表", () => {
       "prior-knowledge",
       "review",
       "review-fix",
+      "stuck-hint",
       "subtask",
       "test-continue",
       "test-handover",

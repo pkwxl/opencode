@@ -32,6 +32,7 @@ import {
   renderHandoffSteer,
   renderReview,
   renderReviewFix,
+  renderStuckHint,
   renderSubtask,
   renderTestContinue,
   renderTestHandover,
@@ -51,6 +52,7 @@ import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { shellProfile } from "./shell"
+import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, SWITCH_ENV, type Switches } from "./switches"
 import { stepPause } from "./step"
 import type { ServerControl } from "./server"
@@ -1852,9 +1854,12 @@ async function attempt(
   // 持续积压,占满客户端并发池(Bun 缺省 256 条)后,后续所有请求在池内无限排队
   // 且无超时报错,表现为无声卡死。
   const sse = new AbortController()
+  // 死循环检测器(会话级,见 src/stuck.ts): 开关 off 时不建;dryrun 预检会话恒不建
+  // ——它本就靠反复被拒探查权限,重复报错是其正常形态,不是死循环。
+  const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await client.event.subscribe(undefined, { signal: sse.signal })
-    const watching = watch(client, sessionID, events.stream, opts, steer, test)
+    const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck)
 
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note
@@ -1935,6 +1940,7 @@ async function watch(
   opts: Opts,
   steer?: Steer,
   test?: TestRun,
+  stuck?: StuckTracker,
  ): Promise<Watch> {
    const waitAnswer = opts.waitAnswer ?? 0
    let lastText = ""
@@ -2033,6 +2039,24 @@ async function watch(
       if (line && !seen.has(part.id)) {
         seen.add(part.id)
         vlog(line)
+        // 死循环检测(src/stuck.ts): 工具调用的终态逐个喂给检测器,识别到"重复
+        // 同一动作且结果不变"即经 steer 主动注入提示,帮能力较弱的模型跳出空转。
+        // 只提示不中止会话;投递失败已由 steerText 记日志,照常继续观察。
+        if (stuck && part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
+          const hit = stuck.observe({
+            tool: part.tool,
+            input: part.state.input,
+            status: part.state.status,
+            result: part.state.status === "error" ? part.state.error : part.state.output,
+          })
+          if (hit) {
+            log(
+              `⚠ 检测到重复动作: ${hit.tool} 已 ${hit.count} 次${hit.kind === "error" ? "报同一个错" : "同参同果"},` +
+                `插入提示(第 ${hit.level}/${STUCK_MAX_HINTS} 次)`,
+            )
+            await steerText(renderStuckHint(hit))
+          }
+        }
       }
     }
     if (event.type === "message.updated") {
