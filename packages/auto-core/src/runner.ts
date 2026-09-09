@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
+import { maybeExit } from "./exit"
 import { commitTitle, commitTree } from "./git"
 import { autobanner, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
@@ -547,6 +548,7 @@ export async function runTask(
           // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
           // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
           await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive })
+          maybeExit("subtask", `${task.id} 子任务 ${index + 1}`)
         }
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
         if (!skipWrapup) {
