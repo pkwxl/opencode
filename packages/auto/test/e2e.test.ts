@@ -618,6 +618,86 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
   })
 })
 
+// 快捷模式用例只覆盖起会话前的用法校验(二选一/非空/phases 兼容/文件存在性/
+// PLAN.md 覆盖防护/子命令拦截),不触发真实计划生成会话——那需要 opencode 与
+// provider 凭证,按仓库既有约定归入顶部的 OPENCODE_AUTO_E2E 门控端到端用例。
+describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式)", () => {
+  test("二选一: 同时给出为用法错误;值须非空", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const both = await runCli(["init", dir, "--implement-file", "a.md", "--implement-prompt", "做点什么"])
+      expect(both.code).toBe(1)
+      expect(both.err).toContain("二选一")
+      const emptyFile = await runCli(["init", dir, "--implement-file", ""])
+      expect(emptyFile.code).toBe(1)
+      expect(emptyFile.err).toContain("--implement-file 需要非空的文件路径")
+      const emptyPrompt = await runCli(["init", dir, "--implement-prompt", "  "])
+      expect(emptyPrompt.code).toBe(1)
+      expect(emptyPrompt.err).toContain("--implement-prompt 需要非空的提示词文本")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("仅用于单阶段(phases = m): 与非 m 的 --phases 组合(显式给出或既有配置)为用法错误", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const explicit = await runCli(["init", dir, "--phases", "am", "--implement-prompt", "做点什么"])
+      expect(explicit.code).toBe(1)
+      expect(explicit.err).toContain('仅用于单阶段(phases = "m")快捷模式')
+      expect(explicit.err).toContain("本次给出的 --phases")
+      // 既有配置已是阶段化流程,不再显式给 --phases 同样拦截
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      const implicit = await runCli(["init", dir, "--implement-prompt", "做点什么"])
+      expect(implicit.code).toBe(1)
+      expect(implicit.err).toContain("既有配置 phases")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--implement-file 指定的文件必须存在且为常规文件", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const missing = await runCli(["init", dir, "--implement-file", join(dir, "no-such-plan.md")])
+      expect(missing.code).toBe(1)
+      expect(missing.err).toContain("--implement-file 指定的文件不存在或不是常规文件")
+      const isDir = await runCli(["init", dir, "--implement-file", dir])
+      expect(isDir.code).toBe(1)
+      expect(isDir.err).toContain("--implement-file 指定的文件不存在或不是常规文件")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("PLAN.md 已含正式任务时拒绝快捷模式(防误覆盖已有计划)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await Bun.write(join(dir, "PLAN.md"), "## T-001: 已有任务 [pending]\n做点什么。\n")
+      const blocked = await runCli(["init", dir, "--implement-prompt", "重新生成"])
+      expect(blocked.code).toBe(1)
+      expect(blocked.err).toContain("PLAN.md 已包含正式任务")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("continue 与 run 均不接受这两个选项", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const cont = await runCli(["continue", dir, "--implement-file", "a.md"])
+      expect(cont.code).toBe(1)
+      expect(cont.err).toContain("continue 用于阶段化流程续轮,不支持")
+      const run = await runCli(["run", dir, "--implement-prompt", "做点什么"])
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("init 专用的快捷模式选项")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账预检)", () => {
   test("init --phases amt → 轮首建立 R-01,根 PLAN.md 为轮内空模板符号链接;status 打印阶段进度行", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))

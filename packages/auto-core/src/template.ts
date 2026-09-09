@@ -27,6 +27,7 @@ import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFinalTask from "../templates/prompts/final-task.md" with { type: "file" }
 import tplFix from "../templates/prompts/fix.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
+import tplImplementPlan from "../templates/prompts/implement-plan.md" with { type: "file" }
 import tplInferSource from "../templates/prompts/infer-source.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
@@ -71,6 +72,7 @@ const embedded: Record<string, string> = {
   "final-task": tplFinalTask,
   fix: tplFix,
   "handoff-steer": tplHandoffSteer,
+  "implement-plan": tplImplementPlan,
   "infer-source": tplInferSource,
   knowledge: tplKnowledge,
   "number-recovery": tplNumberRecovery,
@@ -103,6 +105,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "decompose-v": ["- [ ]"],
   "final-task": ["策略: 重构|修补|无", "结论: 通过", "结论: 差距"],
   "handoff-steer": ["状态: 继续", "状态: 完成"],
+  "implement-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
   "infer-source": ['"sourceDir"', '"blocked"'],
   "number-recovery": [".auto/next-task"],
   "phase-handover": ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引", "{{handover}}"],

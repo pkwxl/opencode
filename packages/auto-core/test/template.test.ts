@@ -80,7 +80,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("30 个会话模板与 _partials 齐备", () => {
+  test("31 个会话模板与 _partials 齐备", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "context-base",
@@ -95,6 +95,7 @@ describe("内置模板注册表", () => {
       "final-task",
       "fix",
       "handoff-steer",
+      "implement-plan",
       "infer-source",
       "knowledge",
       "number-recovery",
@@ -183,6 +184,9 @@ describe("内置模板注册表", () => {
       handoverTest: true,
       contextBudget: "32.0k",
       fine: true,
+      fromFile: true,
+      filePath: "docs/rough-plan.md",
+      content: "先做 A,再做 B",
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)

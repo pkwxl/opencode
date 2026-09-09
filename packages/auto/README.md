@@ -36,6 +36,8 @@ bun run packages/auto/src/index.ts <子命令> ...
 ```sh
 opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/auto.md 模板,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等补写四个 opencode-auto 标记块
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+opencode-auto init [dir] --implement-file <file>       # 单阶段(m)快捷模式: 依据计划文件开一次性计划生成会话,直接填充详细 PLAN.md(见"PLAN.md 格式"一节)
+opencode-auto init [dir] --implement-prompt "<text>"   # 单阶段(m)快捷模式: 依据实施提示词生成 PLAN.md,同上
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后建立新一轮轮次目录、开启新一轮(见"阶段化流程")
 opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行(agent/验收/提交等语义来自项目配置)
 opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 行数超限
@@ -50,7 +52,9 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 `--handover-test`、`--auto-number`、`--no-auto-number`、`--phases`、
 `--source-dir`、`--source-path`、`--dest-dir`——任一出现即用法错误(退出码 1),报文
 给出修订指引(`opencode-auto init <dir> --<flag> <值>`,或直接编辑配置文件);这些
-选项已固化为项目属性,见下节。
+选项已固化为项目属性,见下节。`run` 同样不接受 `--implement-file`/`--implement-prompt`
+——二者是 `init` 专用的单阶段快捷模式选项(见 [PLAN.md 格式](#planmd-格式)一节),
+产物 `PLAN.md` 经人工审核后才用 `run` 执行。
 
 ## 项目配置(.opencode/auto/config.json)
 
@@ -854,6 +858,29 @@ driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时�
   `verified` 字段并标 `[done]`。该字段与验收机制仅在配置 `verify: true` 时生效:
   未启用时 init 产出的 PLAN.md 模板不含 verify 字段示例与验证原则描述,手工写入
   的 verify 字段会被解析但不会被验收流程消费。
+
+### 快捷模式:由 AI 生成 PLAN.md(--implement-file / --implement-prompt)
+
+手工编写 `PLAN.md` 之外,`init` 提供一个专用于 `phases = "m"`(单阶段、无轮次概念)
+项目的快捷模式:不自己拆任务,而是给一份粗略的计划文件或一句实施提示词,由一次性
+的**计划生成会话**直接编辑填充详细、分步的 `PLAN.md`(与阶段化流程的阶段规划会话
+同款机制——这是 `init` 唯一会启动 AI 会话的路径,其余路径下 `init` 不启动会话)。
+
+```sh
+opencode-auto init [dir] --implement-file <file>       # 依据指定的计划文件(全文注入会话)生成 PLAN.md
+opencode-auto init [dir] --implement-prompt "<text>"    # 直接依据实施提示词生成 PLAN.md
+```
+
+- 二者二选一(同时给出为用法错误),值须非空;要求生效 `phases` 为 `"m"`(既有配置
+  或本次 `--phases` 给出的值不是 `"m"` 时报错,提示先 `--phases m` 切换)。
+- `PLAN.md` 当前必须是占位模板态或不存在,已有正式任务时拒绝执行(防止误覆盖已有
+  或此前生成的计划)。
+- 生成完成后打印任务数并退出(不进入执行);**需人工审核 `PLAN.md`**,确认任务拆分
+  与描述无误后再另行调用 `opencode-auto run [dir]` 执行——execution 阶段仍是逐个
+  任务由 driver 的分解会话自动进一步拆解为子任务推进(见[执行流水线](#执行流水线)),
+  与手写 `PLAN.md` 的正常流程完全一致。
+- 计划生成会话受阻(隐性阻塞)时退出码 `2`,报文同其余旁路一次性会话;`run` 不接受
+  这两个选项(它们只属于 `init`)。
 
 ## 原则检查(check)
 
