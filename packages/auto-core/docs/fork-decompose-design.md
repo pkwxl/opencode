@@ -329,7 +329,19 @@ docs/{{taskId}}.context.md,先读之了解任务背景再开始(不存在则按�
 - fork 会话 SDK 返回形状(已落地):`{ data }` 取 `.data.id`、`{error}` 与调用异常三分支在 `forkSession` 统一处理(与 `session.create` 同构),fake client 单测覆盖(test/runner.test.ts)。
 - **A/B 实验矩阵**(定型默认值与转正范围的依据):{fork on\|off} × {fork-base session\|digest} × {fine on\|off} × {steer on\|off};指标:任务墙钟时间、总 tokens(input / cache.read 分计,取自 chain.used 跟踪与日志)、交接与重试次数、子任务数与子任务均上下文、verify/review 通过率。注意 fine=on 且 fork=off 会重现「细粒度 × 重复探索」的旧成本结构,仅作对照组,不建议日常使用。
 - digest 模式摘要失真:摘要缺细节时子任务须按指引回读文件;session 模式与冷启动提示词兜底;**混合基点**(分解用 session 保接地、执行用 digest 保瘦前缀)为候选改进,首期不做。
-- digest 确认 turn 依赖模型自律(应只回一句):实现期可验证 fork 的 `messageID` 语义——若支持「仅复制到指定消息为止」,可只以摘要 user 消息为前缀、去掉确认 turn,前缀完全确定化。
+- digest 确认 turn 依赖模型自律(应只回一句):fork 的 `messageID` 语义已在源码确认(见 §11.1 末条),但据此去掉确认 turn 会让分叉末条停在 user 消息,provider 是否接受连续两条 user 消息需实测,故暂不改实现。
 - 摘要超长(model 无视紧凑建议)时 digest 前缀优势收窄:`cap/2` 防护与 understand 模板的行数建议兜底。
 - steer=off 下长会话可能触发 provider 侧压缩(compaction)而非交接:对比「压缩续命」与「交接换新」的质量差异正是实验目的之一;机制上两者都不破坏磁盘进度与统一提交。
 - 后续扩展(非本期):依赖组声明与只读子任务组并行;`subtaskList` 中标注依赖序的协议。
+
+### 11.1 已否决:以「极简开局会话」作为全局分叉基点
+
+`AUTO-DECISION: 不引入任务无关的「开局基点」会话(先用极简输入如 hi 建一个会话完成 system 组装与缓存预热,此后全流水线会话都从它分叉)——opencode 的 fork 语义决定这条路没有净增益。已否决,记录如下备查。`
+
+- **fork 只搬消息**:`Session.fork`(`packages/opencode/src/session/session.ts:693`)逐条克隆消息 info 与 parts(含工具输出),不复制 agent / model / permission,不设 `parentID`,**不复制任何 system 上下文**。
+- **system 每 turn 现场重建**:`session/prompt.ts` 每步重新求值 `SystemPrompt.environment` / `Instruction.system()`(读 AGENTS.md、CLAUDE.md、`config.instructions`,见 `session/instruction.ts`)/ `SystemPrompt.skills` / `SystemPrompt.mcp`,再由 `session/llm/request.ts` 与 agent 契约拼成 system,工具集按 agent/permission 重算;auto 侧每次 `client.session.prompt` 都显式带 `agent`(`src/runner.ts` 的 `attempt`)。故分叉会话与全新会话拿到的 system 与工具**完全一致**——AGENTS.md 与工具上下文对全新会话本就无条件生效,不需要靠 fork 传递。
+- **缓存前缀不增加**:两条路径的 `system + tools` 前缀逐字相同,开局会话不扩大可复用前缀,反而给每个分叉多加一对 user/assistant 消息(纯文本基点与「把同一段文本注入每个首轮提示词」token 等价,且多一次 assistant 回合)。
+- **缓存预热无收益**:本次运行的第一个真实会话即完成预热;专设开局会话只是把预热提前一个回合,多付一次推理往返。
+- **「AGENTS.md 变更后须重建基点」的顾虑不成立**:AGENTS.md 每 turn 现场重读,分叉会话不会带着旧内容;既有 `syncAgents()`(`src/server.ts`,指纹变化即重启 server)已覆盖新建会话与分叉两条路径。
+- **结论边界**:fork 唯一独有的传递物是**消息历史(含工具输出)**。所以 §4.2 的 digest / session 基点这类「已读过文件、已形成理解」的基点依然成立;任务无关的开局基点没有可传递物。将来若只想让更多会话共享一段固定文本,直接做成 `_partials.md` 公共片段注入各首轮提示词即可。
+- **(开放问题闭环)`messageID` 语义**:`msgs.slice(0, target)`,`target` = 该消息下标——复制到指定消息**之前**为止,不含该条。以 digest 确认 turn 的 assistant 消息 id 分叉即可得到「只含摘要 user 消息」的确定性前缀;但这样分叉出的会话末条是 user 消息,再下发提示词会形成连续两条 user 消息,provider 是否接受**需实测**,故本次只记录语义,不改 `ensureForkBase`。
