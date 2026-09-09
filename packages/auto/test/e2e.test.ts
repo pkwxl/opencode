@@ -403,27 +403,28 @@ describe("CLI: init 固化项目配置", () => {
     }
   })
 
-  test("init --test-by-driver/--handover-test 固化配置并补写/移除 AGENTS.md 测试执行原则块", async () => {
+  test("init --test-by-driver/--handover-test 固化配置并刷新 AGENTS.md opencode-auto 块的测试段落", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--test-by-driver", "--handover-test"])
       expect(init.code).toBe(0)
-      expect(init.out).toContain("已补写: AGENTS.md 测试执行原则块")
+      expect(init.out).toContain("已补写: AGENTS.md opencode-auto 块")
       expect(await readConfig(dir)).toMatchObject({ testByDriver: true, handoverTest: true })
       const agents = await Bun.file(join(dir, "AGENTS.md")).text()
-      expect(agents).toContain("opencode-auto:test:start")
-      expect(agents).toContain("编译、测试、构建、lint")
+      expect(agents).toContain("Test principle:")
+      expect(agents).toContain("build, test, compile, and lint")
       // agent 契约同步带测试协议段(内联在工作契约第 2 条)
       const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       expect(agent).toContain("编译、测试、构建、lint 等可能耗时长")
       expect(agent).toContain("tmp/test.sh")
-      // amend 关闭 handover-test 保留 test-by-driver;再关闭 test-by-driver 移除块
+      // amend 关闭 handover-test 保留 test-by-driver;再关闭 test-by-driver 时块内容
+      // 与渲染不一致(测试段落应消失),整块刷新
       expect((await runCli(["init", dir, "--handover-test", "false"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ testByDriver: true, handoverTest: false })
       const off = await runCli(["init", dir, "--test-by-driver", "false"])
       expect(off.code).toBe(0)
-      expect(off.out).toContain("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
-      expect(await Bun.file(join(dir, "AGENTS.md")).text()).not.toContain("opencode-auto:test:start")
+      expect(off.out).toContain("已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)")
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).not.toContain("Test principle:")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -951,11 +952,11 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
     }
   })
 
-  test("引用全部有效退出 0;init 产出含引用规范块", async () => {
+  test("引用全部有效退出 0;init 产出含引用规范段落", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir])
-      expect(init.out).toContain("已补写: AGENTS.md 引用规范块")
+      expect(init.out).toContain("已补写: AGENTS.md opencode-auto 块")
       await Bun.write(
         join(dir, "PLAN.md"),
         ["## T-001: 任务 [pending]", "实现功能。", ""].join("\n"),
@@ -965,7 +966,7 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
       const check = await runCli(["check", dir], REFCHECK_ON)
       expect(check.code).toBe(0)
       expect(check.out).toContain("✓ 未发现与提交原则相违背的描述,文档引用检查全部通过")
-      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("opencode-auto:refs:start")
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("Reference and storage conventions")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

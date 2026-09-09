@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { renderAgentsBlock } from "../src/agents-block"
 import { checkPrinciple } from "../src/check"
 import { ensurePointer } from "../src/loop"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -48,12 +49,8 @@ describe("checkPrinciple", () => {
       expect(findings[1]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 11, text: "完成后运行验收命令确认全部通过。" })
       expect(findings[2]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 12 })
       expect(findings[3]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 13 })
-      // verify 字段行、否定句、driver 归属句均不计;缺验证/提交原则块与引用规范块给出提示
-      expect(notes).toEqual([
-        `AGENTS.md 缺少验证原则块,运行 opencode-auto init 可补写`,
-        `AGENTS.md 缺少提交原则块,运行 opencode-auto init 可补写`,
-        `AGENTS.md 缺少引用规范块,运行 opencode-auto init 可补写`,
-      ])
+      // verify 字段行、否定句、driver 归属句均不计;缺 opencode-auto 块给出提示
+      expect(notes).toEqual([`AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -86,10 +83,8 @@ describe("checkPrinciple", () => {
       expect(findings[0]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 8 })
       expect(findings[1]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 9 })
       expect(findings[2]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 10 })
-      // 编写(非执行动词)与 driver 归属句不计;缺测试执行原则块给出提示(引用规范块随文件缺失一并列入补写清单)
-      expect(notes).toEqual([
-        `AGENTS.md 不存在,可运行 opencode-auto init ${dir} 补写指针块、测试执行原则块、提交原则块、引用规范块`,
-      ])
+      // 编写(非执行动词)与 driver 归属句不计;AGENTS.md 缺失给出提示
+      expect(notes).toEqual([`AGENTS.md 不存在,可运行 opencode-auto init ${dir} 补写 opencode-auto 块`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -115,8 +110,7 @@ describe("checkPrinciple", () => {
       )
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
-      // 验证原则块提示随 verify 关闭;提交原则块与引用规范块提示保留
-      expect(notes).toEqual([`AGENTS.md 缺少提交原则块,运行 opencode-auto init 可补写`, `AGENTS.md 缺少引用规范块,运行 opencode-auto init 可补写`])
+      expect(notes).toEqual([`AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -164,13 +158,17 @@ describe("checkPrinciple", () => {
   test("AGENTS.md 的 opencode-auto 块整体跳过;init 补写后无提示", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
+      await mkdir(join(dir, ".opencode/auto"), { recursive: true })
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ verify: true, testByDriver: true }))
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n  - verify: command: bun test\n实现功能。\n")
       const before = await checkPrinciple(dir)
       expect(before.findings).toEqual([])
       expect(before.notes.length).toBe(1)
-      // init 补写指针块、验证/测试/提交原则块、维护规则块与引用规范块后,块内的 driver 执行表述不再触发提示
+      // init 补写 opencode-auto 块(含验证/测试/提交/摘要/维护规则/引用规范全部段落)后,
+      // 块内的 driver 执行表述不再触发提示;ensurePointer 的开关取自同一份 config.json,
+      // 与 checkPrinciple 渲染比对时的口径一致
       const ensured = await ensurePointer(dir, { verify: true, testByDriver: true })
-      expect(ensured).toEqual({ pointer: true, principle: true, principleRemoved: false, test: true, testRemoved: false, commit: true, maint: true, refs: true })
+      expect(ensured).toEqual({ block: "inserted", legacyRemoved: 0 })
       const after = await checkPrinciple(dir)
       expect(after.findings).toEqual([])
       expect(after.notes).toEqual([])
@@ -179,55 +177,63 @@ describe("checkPrinciple", () => {
     }
   })
 
-  test("verify 未启用: ensurePointer 不补写验证原则块,已存在的移除且前后文完好", async () => {
+  test("verify 关闭: 渲染内容不含验证段落;旧版验证子块作为多余标记块被清理", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
-    const block = "<!-- opencode-auto:verify:start -->\n验证原则: 验证由 driver 执行。\n<!-- opencode-auto:verify:end -->"
+    const legacy = "<!-- opencode-auto:verify:start -->\n验证原则: 验证由 driver 执行。\n<!-- opencode-auto:verify:end -->"
     try {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
-      await Bun.write(join(dir, "AGENTS.md"), "# AGENTS.md\n\n项目自有内容。\n")
-      const first = await ensurePointer(dir)
-      expect(first.principle).toBe(false)
-      expect(first.principleRemoved).toBe(false)
+      await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${legacy}\n\n后文。\n`)
+      const ensured = await ensurePointer(dir)
+      expect(ensured.block).toBe("inserted")
+      expect(ensured.legacyRemoved).toBe(1)
       const written = await Bun.file(join(dir, "AGENTS.md")).text()
-      expect(written).toContain("项目自有内容。")
       expect(written).not.toContain("opencode-auto:verify:start")
-      expect(written).toContain("opencode-auto:commit:start")
-      // 已存在的验证原则块: 再次 ensure(verify 关)整块移除,前后文与空行分隔保持
-      await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${block}\n\n后文。\n`)
-      const second = await ensurePointer(dir)
-      expect(second.principleRemoved).toBe(true)
-      const cleaned = await Bun.file(join(dir, "AGENTS.md")).text()
-      expect(cleaned).not.toContain("opencode-auto:verify:start")
-      expect(cleaned).toContain("前文。")
-      expect(cleaned).toContain("后文。")
-      expect(cleaned).not.toContain("验证由 driver 执行")
-      expect(cleaned).toMatch(/前文。\n\n后文。/)
+      expect(written).not.toContain("验证由 driver 执行")
+      expect(written).not.toContain("Verify principle:")
+      expect(written).toContain("前文。")
+      expect(written).toContain("后文。")
+      expect(written).toMatch(/前文。\n\n后文。/)
+      expect(written).toContain("opencode-auto:start")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("testByDriver 未启用: ensurePointer 不补写测试执行原则块,已存在的移除且前后文完好", async () => {
+  test("testByDriver 关闭: 渲染内容不含测试段落;旧版测试子块作为多余标记块被清理", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
-    const block = "<!-- opencode-auto:test:start -->\n测试执行原则: 编译/测试由 driver 执行。\n<!-- opencode-auto:test:end -->"
+    const legacy = "<!-- opencode-auto:test:start -->\n测试执行原则: 编译/测试由 driver 执行。\n<!-- opencode-auto:test:end -->"
     try {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
-      await Bun.write(join(dir, "AGENTS.md"), "# AGENTS.md\n\n项目自有内容。\n")
-      const first = await ensurePointer(dir)
-      expect(first.test).toBe(false)
-      expect(first.testRemoved).toBe(false)
+      await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${legacy}\n\n后文。\n`)
+      const ensured = await ensurePointer(dir)
+      expect(ensured.block).toBe("inserted")
+      expect(ensured.legacyRemoved).toBe(1)
       const written = await Bun.file(join(dir, "AGENTS.md")).text()
       expect(written).not.toContain("opencode-auto:test:start")
-      // testByDriver 启用时补写,再关闭时整块移除,前后文与空行分隔保持
-      const enabled = await ensurePointer(dir, { testByDriver: true })
-      expect(enabled.test).toBe(true)
-      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("opencode-auto:test:start")
-      await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${block}\n\n后文。\n`)
-      const second = await ensurePointer(dir)
-      expect(second.testRemoved).toBe(true)
-      const cleaned = await Bun.file(join(dir, "AGENTS.md")).text()
-      expect(cleaned).not.toContain("opencode-auto:test:start")
-      expect(cleaned).toMatch(/前文。\n\n后文。/)
+      expect(written).not.toContain("Test principle:")
+      expect(written).toMatch(/前文。\n\n后文。/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("opencode-auto 块内容与当前配置渲染不一致: 整块替换,前后文与空行分隔保持,幂等", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
+    const stale = "<!-- opencode-auto:start -->\n过期内容。\n<!-- opencode-auto:end -->"
+    try {
+      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${stale}\n\n后文。\n`)
+      const ensured = await ensurePointer(dir, { verify: true, testByDriver: true })
+      expect(ensured).toEqual({ block: "replaced", legacyRemoved: 0 })
+      const written = await Bun.file(join(dir, "AGENTS.md")).text()
+      expect(written).not.toContain("过期内容。")
+      expect(written).toContain("Verify principle:")
+      expect(written).toContain("Test principle:")
+      expect(written).toMatch(/前文。\n\n<!-- opencode-auto:start -->/)
+      expect(written).toMatch(/opencode-auto:end -->\n\n后文。/)
+      // 幂等: 内容已与渲染一致,再次运行不改动文件
+      const second = await ensurePointer(dir, { verify: true, testByDriver: true })
+      expect(second).toEqual({ block: "unchanged", legacyRemoved: 0 })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -251,26 +257,15 @@ describe("checkPrinciple", () => {
     try {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
       const filler = Array.from({ length: 155 }, (_, i) => `规则条目 ${i + 1}: 与工作流相关的持久约定。`).join("\n")
-      await Bun.write(
-        join(dir, "AGENTS.md"),
-        [
-          "# AGENTS.md",
-          "",
-          "<!-- opencode-auto:start --><!-- opencode-auto:end -->",
-          "<!-- opencode-auto:verify:start --><!-- opencode-auto:verify:end -->",
-          "<!-- opencode-auto:commit:start --><!-- opencode-auto:commit:end -->",
-          "<!-- opencode-auto:maint:start --><!-- opencode-auto:maint:end -->",
-          "<!-- opencode-auto:refs:start --><!-- opencode-auto:refs:end -->",
-          "",
-          filler,
-          "",
-        ].join("\n"),
-      )
+      // 与 checkPrinciple 默认(verify/testByDriver 均未启用)渲染出的块内容完全一致,
+      // 避免额外触发"内容不一致"的过期提示,只保留行数超限提示。
+      const content = ["# AGENTS.md", "", renderAgentsBlock(), "", filler, ""].join("\n")
+      await Bun.write(join(dir, "AGENTS.md"), content)
+      const lines = content.trimEnd().split("\n").length
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
-      // 2 行标题 + 空行 + 5 个标记块行 + 空行 + 155 行规则 = 163 行
       expect(notes).toEqual([
-        "AGENTS.md 当前 163 行,超过 150 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/",
+        `AGENTS.md 当前 ${lines} 行,超过 150 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/`,
       ])
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -291,7 +286,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
         { file: "docs/T-001/report.md", line: 1, text: "引用 `src/gone.ts`。", path: "src/gone.ts", problem: "missing" },
       ])
       expect(notes).toEqual([
-        "AGENTS.md 不存在,可运行 opencode-auto init " + dir + " 补写指针块、提交原则块、引用规范块",
+        "AGENTS.md 不存在,可运行 opencode-auto init " + dir + " 补写 opencode-auto 块",
         "非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验",
       ])
     } finally {
@@ -319,7 +314,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
     }
   })
 
-  test("git 仓库内不给非 git note;init 补写后引用规范块提示消失", async () => {
+  test("git 仓库内不给非 git note;init 补写后 opencode-auto 块提示消失", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await mkdir(join(dir, ".opencode/auto"), { recursive: true })
@@ -331,7 +326,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
       await proc.exited
       const before = await checkPrinciple(dir, REFCHECK_ON)
       expect(before.refs).toEqual([])
-      expect(before.notes).toEqual(["AGENTS.md 缺少提交原则块,运行 opencode-auto init 可补写", "AGENTS.md 缺少引用规范块,运行 opencode-auto init 可补写"])
+      expect(before.notes).toEqual(["AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写"])
       await ensurePointer(dir)
       const after = await checkPrinciple(dir, REFCHECK_ON)
       expect(after.refs).toEqual([])

@@ -1,32 +1,32 @@
 import { join } from "node:path"
+import { LEGACY_BLOCK, renderAgentsBlock } from "./agents-block"
 import { loadProjectConfig } from "./config"
 import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
 import { autoSwitches, type Switches } from "./switches"
 
 // check 命令的检查逻辑: ①原则检查——扫描目标目录的 AGENTS.md 与 PLAN.md,报告与"验证执行权
 // 在 driver""测试/编译等命令执行权在 driver"及"提交执行权在 driver"原则(见
-// loop.ts 的 AGENTS.md 验证/测试/提交原则块)相违背的描述——即要求会话/AI 亲自
+// agents-block.ts 的 opencode-auto 单一标记块)相违背的描述——即要求会话/AI 亲自
 // 运行验证脚本或验证命令、自行下验收结论,或要求会话直接运行编译/测试/构建/lint
 // 等命令,或要求会话执行 git 提交的语句。原则性/否定句("不要运行…")与归属
 // driver 的语句不报告;匹配为启发式,报告供人工确认,不修改文件。验证原则仅在
 // config.verify 启用时成立,测试执行原则仅在 config.testByDriver 启用时成立
-// (未启用时相关检查与"缺少对应原则块"提示一并关闭);提交原则始终成立。
+// (未启用时相关检查也按未启用渲染比对,不影响块存在性);提交原则始终成立。
 // ②引用检查(stable-refs P4,D6 第二层): 全量活文档(docs/**/*.md,排除
 // docs/phases/**)扫描失效引用(路径不存在 / 行号超出文件总行数),命中经 refs
-// 并入 CLI 报文(退出码 1);目标目录缺引用规范块或非 git(auto-correct 不可用)
+// 并入 CLI 报文(退出码 1);目标目录缺 opencode-auto 块或非 git(auto-correct 不可用)
 // 给 note。受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省
 // off 静默空转,refs 恒空、不给引用相关 note)。
 
-// AGENTS.md 维护规则块第 1 条的行数上限(见 loop.ts MAINT_RULE);超限由 check
-// 输出 note 提示精简。
+// AGENTS.md 维护规则(见 agents-block.ts MAINT_RULE)第 1 条的行数上限;超限由
+// check 输出 note 提示精简。
 const AGENTS_LINE_LIMIT = 150
 
 // 一处违背描述: 文件、行号、原文(PLAN.md 附任务 ID)。
 export type Finding = { file: string; task?: string; line: number; text: string }
 
-// AGENTS.md 中 driver 维护的 opencode-auto 块(指针块 `opencode-auto:start`、
-// 验证原则块 `opencode-auto:verify:start` 与提交原则块 `opencode-auto:commit:start`
-// 等标记)整体跳过——块内容本身就是原则表述。
+// AGENTS.md 中 driver 维护的 opencode-auto 块(单一标记块 `opencode-auto:start`,
+// 及可能残留的旧版带名块)整体跳过——块内容本身就是原则表述。
 const AUTO_BLOCK = /<!--\s*opencode-auto:[^\n]*?start\s*-->[\s\S]*?<!--\s*opencode-auto:[^\n]*?end\s*-->/g
 
 // PLAN.md 的字段行(verify/verified/question/answer 等): verify 字段本身就是交给
@@ -75,17 +75,10 @@ export async function checkPrinciple(
   for (const name of ["AGENTS.md", "PLAN.md"]) {
     const text = await Bun.file(join(dir, name)).text().catch(() => undefined)
     if (text === undefined) {
-      const blocks = [
-        "指针块",
-        ...(verifyOn ? ["验证原则块"] : []),
-        ...(testOn ? ["测试执行原则块"] : []),
-        "提交原则块",
-        "引用规范块",
-      ].join("、")
       notes.push(
         name === "PLAN.md"
           ? `未找到 ${name},先运行 opencode-auto init ${dir} 生成`
-          : `${name} 不存在,可运行 opencode-auto init ${dir} 补写${blocks}`,
+          : `${name} 不存在,可运行 opencode-auto init ${dir} 补写 opencode-auto 块`,
       )
       continue
     }
@@ -97,17 +90,18 @@ export async function checkPrinciple(
       if (heading) task = heading[1]
       if (violates(line, patterns)) findings.push({ file: name, task, line: index + 1, text: line.trim() })
     })
-    if (verifyOn && name === "AGENTS.md" && !text.includes("opencode-auto:verify:start")) {
-      notes.push("AGENTS.md 缺少验证原则块,运行 opencode-auto init 可补写")
-    }
-    if (testOn && name === "AGENTS.md" && !text.includes("opencode-auto:test:start")) {
-      notes.push("AGENTS.md 缺少测试执行原则块,运行 opencode-auto init 可补写")
-    }
-    if (name === "AGENTS.md" && !text.includes("opencode-auto:commit:start")) {
-      notes.push("AGENTS.md 缺少提交原则块,运行 opencode-auto init 可补写")
-    }
-    if (name === "AGENTS.md" && !text.includes("opencode-auto:refs:start")) {
-      notes.push("AGENTS.md 缺少引用规范块,运行 opencode-auto init 可补写")
+    if (name === "AGENTS.md") {
+      if (!text.includes("opencode-auto:start")) {
+        notes.push("AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写")
+      } else {
+        if (!text.includes(renderAgentsBlock({ verify: verifyOn, testByDriver: testOn }))) {
+          notes.push("AGENTS.md 的 opencode-auto 块内容与当前配置不一致(过期),运行 opencode-auto init/run 可刷新")
+        }
+        const legacyCount = [...text.matchAll(LEGACY_BLOCK)].length
+        if (legacyCount) {
+          notes.push(`AGENTS.md 中检测到 ${legacyCount} 个旧版/多余 opencode-auto 标记块,运行 opencode-auto init/run 可清理`)
+        }
+      }
     }
     // 维护规则块第 1 条(≤150 行)的唯一机器观测点: 超限仅提示,不进 findings、
     // 不影响退出码。

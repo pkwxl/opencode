@@ -1144,9 +1144,11 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
     const raw = await Bun.file(agentTemplate).text()
     const off = renderText(raw, { verify: false })
     expect(off).toContain("AGENTS.md 不在只读之列")
-    expect(off).toContain("不得删除或改写任何")
-    expect(off).toContain("opencode-auto 标记块(指针/提交/维护规则")
-    expect(off).toContain("遵守 AGENTS.md 维护规则块")
+    expect(off).toContain("不得删除或改写 opencode-auto")
+    expect(off).toContain("标记块(指针/提交/摘要/维护规则/引用规范")
+    expect(off).toContain("<!-- opencode-auto:start -->")
+    expect(off).toContain("<!-- opencode-auto:end -->")
+    expect(off).toContain("遵守块内的 AGENTS.md 维护规则")
     expect(off).not.toContain("verify")
     expect(off).not.toContain("验证")
   })
@@ -1164,18 +1166,20 @@ describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
       }
     }
   })
-  test("AGENTS.md 条款覆盖全部四类标记块并引用维护规则(防漂移,verify 启用)", async () => {
+  test("AGENTS.md 条款覆盖 opencode-auto 单一标记块并引用维护规则(防漂移,verify 启用)", async () => {
     const raw = await Bun.file(agentTemplate).text()
-    const text = renderText(raw, { verify: true })
+    const text = renderText(raw, { verify: true, testByDriver: true })
     expect(text).toContain("AGENTS.md 不在只读之列")
-    // 不得删除或改写任何标记块(指针/验证/提交/维护规则),而非仅旧版的指针块
-    expect(text).toContain("不得删除或改写任何")
-    expect(text).toContain("opencode-auto 标记块(指针/验证/提交/维护规则")
-    expect(text).toContain("<!-- opencode-auto:*:start -->")
-    expect(text).toContain("<!-- opencode-auto:*:end -->")
+    // 不得删除或改写 opencode-auto 标记块(指针/验证/测试/提交/摘要/维护规则/引用规范),
+    // 合并为单一 start/end 块,而非旧版按名各自独立的多个标记块
+    expect(text).toContain("不得删除或改写 opencode-auto")
+    expect(text).toContain("标记块(指针/验证/测试/提交/摘要/维护规则/引用规范")
+    expect(text).toContain("<!-- opencode-auto:start -->")
+    expect(text).toContain("<!-- opencode-auto:end -->")
+    expect(text).not.toContain("<!-- opencode-auto:*:start -->")
     expect(text).not.toContain("不得删除 opencode-auto 指针块")
-    // 更新其余内容时遵守维护规则块(精简/路由/更新不追加/只沉淀持久知识)
-    expect(text).toContain("遵守 AGENTS.md 维护规则块")
+    // 更新其余内容时遵守块内的维护规则(精简/路由/更新不追加/只沉淀持久知识)
+    expect(text).toContain("遵守块内的 AGENTS.md 维护规则")
     expect(text).toContain("docs/agents/")
     expect(text).toContain("保持精简")
     expect(text).toContain("更新不追加")

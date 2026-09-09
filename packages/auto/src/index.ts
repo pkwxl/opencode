@@ -707,28 +707,21 @@ if (command === "init" || command === "continue") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
   }
-  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
-  // 提交原则块与维护规则块各自独立、只追加;验证/测试原则块仅对应开关启用时补写,
-  // 未启用时移除已存在的块(机制不存在,AGENTS.md 不保留其描述)。
+  // 幂等同步 AGENTS.md 的 opencode-auto 块: 按当前配置渲染,与文件中现有标准块比对
+  // ——缺失则追加、内容不一致则整块替换、旧版/多余的带名标记块一律清理。
   const ensured = await ensurePointer(directory, { verify: config.verify, testByDriver: config.testByDriver })
-  console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
-  if (config.verify) {
-    console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
-  } else if (ensured.principleRemoved) {
-    console.log("已移除: AGENTS.md 验证原则块(任务级验收未启用)")
-  }
-  if (config.testByDriver) {
-    console.log(ensured.test ? "已补写: AGENTS.md 测试执行原则块" : "跳过已存在: AGENTS.md 测试执行原则块")
-  } else if (ensured.testRemoved) {
-    console.log("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
-  }
-  console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
-  console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
-  console.log(ensured.refs ? "已补写: AGENTS.md 引用规范块" : "跳过已存在: AGENTS.md 引用规范块")
+  console.log(
+    ensured.block === "inserted"
+      ? "已补写: AGENTS.md opencode-auto 块"
+      : ensured.block === "replaced"
+        ? "已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)"
+        : "跳过已存在: AGENTS.md opencode-auto 块(已是最新)",
+  )
+  if (ensured.legacyRemoved) console.log(`已清理: AGENTS.md 中 ${ensured.legacyRemoved} 个旧版/多余 opencode-auto 标记块`)
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
   // 轮首建立(轮次专用目录 docs/R-NN,phases-design.md M 节;须在 ensurePointer
-  // 之后,AGENTS.md.bak 快照才含各原则块): init 建当前轮(全新项目 = R-01,幂等
+  // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
   // ——轮内 PLAN.md 已存在不重写,根链接重建不漂移),占位模板态 PLAN 以空模板
   // 作初值;continue 建新一轮 R-(N+1)(前置校验已过),轮内 PLAN.md 恒为空模板
   // (新轮目录恒空,上一轮结论经 prevRoundDigest 注入新一轮首个阶段规划会话)。
