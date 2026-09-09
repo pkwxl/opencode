@@ -51,7 +51,7 @@ import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { shellProfile } from "./shell"
-import { autoSwitches, type Switches } from "./switches"
+import { autoSwitches, SWITCH_ENV, type Switches } from "./switches"
 import { stepPause } from "./step"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
@@ -208,10 +208,13 @@ type Watch = {
 
 type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } | (Outcome & { type: "blocked" })
 
-// 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 上一会话结束时上下文
-// 占比低于 REUSE_BELOW、已用量低于 contextLimit 的一半、且距其结束不超过
-// REUSE_IDLE_MS 时,下次复用同一会话,否则新建。初始 pct=100 保证首个会话新建;模型上限未知时
-// watch 记 100,即总是新建。phase 携带当前流水线阶段: 执行链会话据此写进度恢复
+// 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
+// OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一
+// 会话结束时上下文占比低于 REUSE_BELOW、已用量低于 contextLimit 的一半、且距其
+// 结束不超过 REUSE_IDLE_MS 才复用。初始 pct=100 保证首个会话新建;模型上限未知时
+// watch 记 100,即总是新建。中断恢复接管的会话不受开关与阈值约束(attempt 的
+// resumed: 链上有会话且 note 待注入 → 首个提示词必进原会话)。
+// phase 携带当前流水线阶段: 执行链会话据此写进度恢复
 // 记录(.auto/progress.json);旁路一次性会话(requireArtifact)的链不带 phase、
 // 不写记录,避免污染执行链记忆。note 为一次性附加说明(中断恢复时随首个提示词
 // 带给 AI,用后即清)。subject 为本会话产出的提交标题(短标签方案): 新建会话
@@ -223,11 +226,12 @@ type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } 
 // 瞬时错误重试自然回落 create 路径。
 export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string }
 
-// 上下文占比低于该值(%)时复用上一会话。
+// 上下文占比低于该值(%)时复用上一会话(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效)。
 const REUSE_BELOW = 50
 
-// 会话复用的间隔上限: 距上一会话结束超过该值即视为上下文陈旧(driver 侧工作
-// 如 verify 脚本执行、判定/审核会话可能耗时很久),不复用、开新会话。
+// 会话复用的间隔上限(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效): 距上一会话结束
+// 超过该值即视为上下文陈旧(driver 侧工作如 verify 脚本执行、判定/审核会话可能
+// 耗时很久),不复用、开新会话。
 const REUSE_IDLE_MS = 5 * 60 * 1000
 const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000
 
@@ -337,13 +341,20 @@ export async function runTask(
       ((mode !== "off" && (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "handoff"))).exists())) ||
         (opts.handoverTest === true && (await testHandoffExists(dir, task))))
     if (!handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))) {
+      // 继承中断会话的真实上下文用量(经末条 assistant 消息重建): 此前 seed 为
+      // 0/0 占位以保证首个提示词必定复用,代价是恢复后的日志与链内后续复用决策
+      // 全用假值;首轮复用现由 attempt 的 resumed 判据保证,这里只取真实值。
+      const usage = await sessionUsage(client, recalled.session)
       chain.id = recalled.session
-      chain.pct = 0
-      chain.used = 0
+      chain.pct = usage.pct
+      chain.used = usage.used
       // 复用决策已在此做出;链内后续的 5 分钟复用规则从当前时刻起算。
       chain.at = Date.now()
       chain.note = resumeNote(recalled.phase, true)
-      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用中断的会话 ${recalled.session} 继续(上下文不丢)`)
+      log(
+        `↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用中断的会话 ${recalled.session} 继续(上下文不丢,` +
+          `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens,上限未知"})`,
+      )
     } else {
       // --new-session 显式放弃旧会话: 立即把记录转总结态,防止本次运行在无会话
       // 阶段(如 verify 脚本执行)中断后,下次运行误复用与已推进阶段错位的旧会话。
@@ -986,12 +997,21 @@ export async function ensureForkBase(
   return undefined
 }
 
-// 基点会话末端上下文用量(tokens: input + cache.read)重建: 恢复运行时经
-// client.session.messages 取末条 assistant 消息;取不到按 0。
-async function sessionUsed(client: OpencodeClient, id: string): Promise<number> {
+// 会话末端上下文用量(tokens: input + cache.read)与占比重建: 经
+// client.session.messages 取末条 assistant 消息,上限查 provider 表(与 watch 同
+// 口径: 取不到上限记 pct=100)。用于 fork 基点用量与中断恢复接管会话的用量继承。
+async function sessionUsage(client: OpencodeClient, id: string): Promise<{ used: number; pct: number; limit?: number }> {
   const got = await client.session.messages({ sessionID: id }).catch(() => undefined)
   const last = got && !got.error ? got.data.findLast((message) => message.info.role === "assistant") : undefined
-  return last && last.info.role === "assistant" ? last.info.tokens.input + last.info.tokens.cache.read : 0
+  if (!last || last.info.role !== "assistant") return { used: 0, pct: 100 }
+  const used = last.info.tokens.input + last.info.tokens.cache.read
+  const limit = (await contextLimits(client)).get(`${last.info.providerID}/${last.info.modelID}`)
+  return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit }
+}
+
+// 基点会话末端上下文用量(tokens);取不到按 0。
+async function sessionUsed(client: OpencodeClient, id: string): Promise<number> {
+  return (await sessionUsage(client, id)).used
 }
 
 // Ensures the task body has a checklist: tasks resuming with one (or with a
@@ -1719,7 +1739,8 @@ const NETWORK_FAILURE = /internal network failure|network error|fetch failed|eco
 
 // 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启);导出供
 // src/final.ts 的终审任务生成会话等旁路复用。test 为 --test-by-driver 的协议
-// 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效)。
+// 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效);
+// switches 缺省取 OPENCODE_AUTO_* 解析值(复用开关),注入供单测。
 export async function runSession(
   client: OpencodeClient,
   task: Task,
@@ -1728,9 +1749,10 @@ export async function runSession(
   chain: SessionChain,
   steer?: Steer,
   test?: TestRun,
+  switches: Switches = autoSwitches(),
 ): Promise<SessionResult> {
   for (let i = 1; ; i++) {
-    const result = await attempt(client, task, promptText, opts, chain, steer, test)
+    const result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
     if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
@@ -1753,27 +1775,42 @@ async function attempt(
   promptText: string,
   opts: Opts,
   chain: SessionChain,
-  steer?: Steer,
-  test?: TestRun,
+  steer: Steer | undefined,
+  test: TestRun | undefined,
+  switches: Switches,
 ): Promise<SessionResult> {
   // 测试执行协议: 清除上一会话/上次运行遗留的待执行脚本(存在即请求,中断
   // 恢复或重试场景下的旧请求不应注入本会话;归档历史 tmp/test.<n>.sh 保留)。
   if (test) await rm(join(test.tmp, "test.sh"), { force: true })
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const reuse = chain.id !== undefined && chain.pct < REUSE_BELOW && chain.used < cap / 2 && Date.now() - chain.at <= REUSE_IDLE_MS
-  // 记录新会话开始时间(复用会话不更新,仍用上一次的 at)
-  const startTime = reuse ? chain.at : Date.now()
-  if (reuse) {
+  // 中断恢复接管的会话(链上有会话且恢复说明待注入): 首个提示词无条件进原会话
+  // ——恢复语义即"接着被中断的那个会话继续",不受复用开关与阈值约束(与
+  // seedForkSession 的"恢复续跑优先于分叉"同一判据)。说明用后即清,此后该链
+  // 回归常规复用规则。
+  const resumed = chain.id !== undefined && chain.note !== undefined
+  // 链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控(缺省 off): off 时任务内每个
+  // 提示词都开新会话,阈值(占比/用量/闲置)不再参与决策。
+  const reuseSession = switches.reuseSession
+  const reuse =
+    chain.id !== undefined &&
+    (resumed ||
+      (reuseSession && chain.pct < REUSE_BELOW && chain.used < cap / 2 && Date.now() - chain.at <= REUSE_IDLE_MS))
+  // 恢复接管的复用已由 runTask 的恢复日志交代(含继承的上下文用量),不重复打印。
+  if (reuse && !resumed) {
     log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens,${Math.round((Date.now() - chain.at) / 1000)} 秒前结束)`)
   }
   if (!reuse && chain.id !== undefined) {
-    const reason =
-      chain.pct >= REUSE_BELOW
+    const reason = !reuseSession
+      ? `会话复用已关闭(${SWITCH_ENV.reuseSession}=off,缺省)`
+      : chain.pct >= REUSE_BELOW
         ? `上下文占比 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值`
         : chain.used >= cap / 2
           ? `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap / 2)} 上限(复用阈值)`
           : `距上一会话结束已超过 ${REUSE_IDLE_MINUTES} 分钟(上下文已陈旧)`
-    log(`▷ ${reason},开启新会话`)
+    // 复用关闭是缺省形态(链上每个会话都命中),只进明细日志;开启复用后的不
+    // 复用原因是决策依据,照常上终端。
+    if (reuseSession) log(`▷ ${reason},开启新会话`)
+    else vlog(`▷ ${reason},开启新会话`)
   }
   // fork 预创建会话(seedForkSession 从基点分叉所得)在 !reuse 时优先于 create,
   // 消费即清——瞬时错误重试时 pending 已清,自然回落 create 路径(设计 §4.3)。
@@ -1826,8 +1863,11 @@ async function attempt(
     chain.pct = result.pct
     chain.used = result.used
     chain.at = Date.now()
-    if (!reuse && result.durationMs !== undefined) {
-      log(`✓ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
+    // 每个会话结束都打印用量与耗时(复用会话同样打印,耗时即本轮耗时): 此前
+    // 仅新建会话打印,复用轮的数字要等下一轮 ♻ 行才出现,中断恢复接管的会话与
+    // 任务末轮的复用会话因此从不输出上下文用量。
+    if (result.durationMs !== undefined) {
+      log(`◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
     }
     // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
@@ -2219,13 +2259,17 @@ function describePart(part: Part): string | undefined {
 // 拉取一次 provider 列表,建立 providerID/modelID → 上下文上限的映射;
 // 失败时返回空映射,上下文行退化为只显示用量不显示百分比。
 async function contextLimits(client: OpencodeClient): Promise<Map<string, number>> {
-  const response = await client.provider.list().catch(() => undefined)
   const limits = new Map<string, number>()
-  for (const provider of response?.data?.all ?? []) {
-    for (const [id, model] of Object.entries(provider.models)) {
-      limits.set(`${provider.id}/${id}`, model.limit.context)
+  // 整段容错: 请求失败(网络/旧版 server)、错误响应体与客户端不具备该表面
+  // (测试替身)都退化为空映射,由调用方按"上限未知"处理。
+  try {
+    const response = await client.provider.list()
+    for (const provider of response?.data?.all ?? []) {
+      for (const [id, model] of Object.entries(provider.models)) {
+        limits.set(`${provider.id}/${id}`, model.limit.context)
+      }
     }
-  }
+  } catch {}
   return limits
 }
 
