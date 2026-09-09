@@ -32,134 +32,15 @@ import { stepPause } from "./step"
 import { renderText, usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
-// AGENTS.md 指针块: CURRENT.md 由 driver 整文件重写,指针本身永不变更。
-// 指针不强制每会话开读 CURRENT.md: 提示词已内联当前任务、子任务会话另有 context.md
+// AGENTS.md 的 opencode-auto 块(单一标记块,内容与幂等同步逻辑见 agents-block.ts):
+// CURRENT.md 由 driver 整文件重写,块本身按当前配置渲染比对、不一致才整块替换。
+// 块不强制每会话开读 CURRENT.md: 提示词已内联当前任务、子任务会话另有 context.md
 // 背景摘要,无条件重读是纯开销;CURRENT.md 保留为上下文压缩后的兜底入口。
 // AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失;
 // 它有更新时 driver 会在下一个新会话前重启 server,使新会话必定加载最新内容。
-// AGENTS.md 不置只读(任务可更新它),run/init 只确保指针块存在。
-const POINTER = `<!-- opencode-auto:start -->
-本目录由 opencode-auto 驱动。会话提示词已内联本次要做的任务,通常无需另读状态文件。
-\`CURRENT.md\`(若存在)是当前任务完整内容与进度的镜像: 上下文被压缩后、或你对当前
-任务与进度存疑时读它,其内容优先于一切会话记忆。不要编辑 \`CURRENT.md\` 与 \`PLAN.md\`,
-它们由 driver 独占维护。
-<!-- opencode-auto:end -->`
-
-// AGENTS.md 验证原则块: 独立于指针块的第二个标记块,重复运行也能补写。
-const VERIFY_PRINCIPLE = `<!-- opencode-auto:verify:start -->
-验证原则: 任务级验证脚本与验证命令一律由 driver 在会话外执行,任何会话不要直接
-运行它们来下验收结论;验收标准写在任务的 verify 字段。若会话认为验证脚本本身有
-问题,可编写新的验证脚本替换指定脚本(tmp/verify.sh,目标目录下 driver 管理的
-工作目录),由 driver 重新执行并把输出回传给独立判定会话。判定会话另可在 driver
-授权下更新 PLAN.md 中后续未完成任务的 verify 字段(把验证经验沉淀到后续任务,
-仅限 verify 字段),除此之外 PLAN.md 与 CURRENT.md 由 driver 独占维护。任务描述
-与项目规范不要出现与此相违背的指示。
-<!-- opencode-auto:verify:end -->`
-
-// AGENTS.md 提交原则块: 第三个标记块,与验证原则对等——提交执行权在 driver。
-const COMMIT_PRINCIPLE = `<!-- opencode-auto:commit:start -->
-提交原则: 会话结束后由 driver 递归统一提交全部改动(先嵌套子仓库后本仓库),
-提交信息携带任务编号与阶段;任何会话不要执行 git commit/amend/rebase 等提交
-类命令,也不要修改提交历史。需要留档的变更背景写入 docs/ 文档,由 driver 的
-提交一并纳入。任务描述与项目规范不要出现与此相违背的指示。
-<!-- opencode-auto:commit:end -->`
-
-// AGENTS.md 测试执行原则块: 与验证/提交原则对等的第四类执行权原则块——
-// 编译/测试/构建/lint 等命令的执行权在 driver(由 config.testByDriver 启用)。
-// 与验证原则块同样按开关补写/移除:未启用时 AGENTS.md 不得保留其描述。
-const TEST_PRINCIPLE = `<!-- opencode-auto:test:start -->
-测试执行原则: 编译、测试、构建、lint 等可能耗时长或产生大量输出的命令一律由
-driver 在会话外执行,任何会话不要直接运行它们;需要时把命令写成脚本放入 test/
-目录,再把脚本路径写入 tmp/test.sh 告知 driver 执行。driver 运行后把退出码与
-输出文件路径(stdout 与 stderr 合并落入单个文件)反馈回会话,由 AI 直读文件
-判断结果。任务描述与项目规范不要出现与此相违背的指示。
-<!-- opencode-auto:test:end -->`
-
-// AGENTS.md 维护规则块: 第四个标记块,约束 AGENTS.md 保持工作流入口定位、
-// 不膨胀为知识库(长迁移中它每个 provider turn 都进入上下文,膨胀侵蚀全部会话
-// 的有效上下文);细节路由到 docs/agents/<主题>.md,由 check 命令的行数 note
-// 做唯一机器观测。见 docs/init-config-agents-design.md D.1。
-const MAINT_RULE = `<!-- opencode-auto:maint:start -->
-AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
-1. 保持精简: 全文不超过 150 行;不写入实现细节、长解释、命令输出或单任务知识。
-2. 路由不复制: 模块/阶段/任务特定的信息写入 docs/agents/<主题>.md,本文件只保留
-   一行路由条目(主题 → 路径)。
-3. 更新不追加: 新增信息前先检查既有规则或路由条目是否应修改;淘汰过时内容,
-   不要累积历史备注。
-4. 只沉淀持久的工作流知识: 仅记录会影响未来多数任务执行方式的约定;临时调试
-   状态、一次性决策、对话过程不写入(一次性决策按 AUTO-DECISION 记入相关文档)。
-<!-- opencode-auto:maint:end -->`
-
-// AGENTS.md 引用规范块: 第六个标记块(stable-refs P4 下沉),内容 = 设计文档
-// docs/stable-refs-design.md §3 规范的精编全文: 存放(R2 永久性/R3 目录化/R4
-// 角色文件名/R5 归档语义/R7 轮次表达)、引用语法(§3.2,含 refcheck-scope P3
-// 的 @<sha> 版本标记)与一致性检查三层(§3.3)。
-// 无条件补写(路径稳定性不依赖任何开关,§8)。
-const REFS_SPEC = `<!-- opencode-auto:refs:start -->
-引用与存放规范(稳定引用,细则见 stable-refs 设计文档):
-1. 存放: 任务文档只在 docs/T-NNN/ 内(context/subtasks/report/audit/fix/handoff/
-   testhandoff.md),子任务产物只在 docs/T-NNN/S<两位序号>/ 内(index.md、
-   testhandoff.md),终审产物在 docs/T-F<k>/ 内;每轮一个轮次目录
-   docs/R-NN/(轮首建立、永久不动): 阶段台账 phases.md、阶段归档
-   <字母>-<slug>/、阶段交接 handovers/<字母>-<slug>.md、阶段级产物
-   phase-docs/<字母>-<slug>/、迁移知识 migration-kb.md 与前置知识
-   prior-kb.md 都在轮目录内。这些路径一经创建即为永久路径: 永不移动、
-   永不改名。
-2. 引用: 文档间引用与对代码的引用一律写目标目录根相对路径(如
-   \`docs/T-003/S04/index.md\`、\`src/runner.ts:120\`,反引号或链接,可带 :行号
-   锚,锚可再带 @<sha> 版本标记——如 \`src/runner.ts:120@abc1234\`,表示该
-   范围仅对标记的历史版本有效,豁免行号校验);不要引用轮次目录内的状态
-   文件(台账 phases.md 与阶段归档内的 PLAN 快照);轮次差异经 docs/R-NN/
-   目录表达,不靠搬移目录或改名。
-3. 检查: driver 在统一提交前自动改写 rename 引用、对被修改文件的不一致行号
-   锚自动追加 @<sha> 版本标记(保留原范围,留待人工订正),并报告失效引用;
-   check 子命令全量扫描活文档;verify 启用时任务产物文档的失效引用会被验收
-   门禁拦截进修复轮。代码围栏内的路径与行内标注 已删除/已归档/历史 的引用
-   豁免。
-<!-- opencode-auto:refs:end -->`
-
-// 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
-// 提交原则块、维护规则块与引用规范块各自独立判断、只追加,从不改写已有内容。
-// 返回补写了哪些块。verify(任务级验收开关)为 false 时不补写验证原则块,并
-// 移除已存在的;testByDriver(编译/测试等命令执行权)为 false 时同样不补写
-// 测试执行原则块并移除已存在的——机制不存在时,AGENTS.md 不得保留与其相关的
-// 描述。引用规范块与维护规则块无条件补写(不依赖开关)。
-export async function ensurePointer(
-  directory: string,
-  opts: { verify?: boolean; testByDriver?: boolean } = {},
-): Promise<
-  { pointer: boolean; principle: boolean; principleRemoved: boolean; test: boolean; testRemoved: boolean; commit: boolean; maint: boolean; refs: boolean }
-> {
-  const agentsFile = join(directory, "AGENTS.md")
-  const existing = await Bun.file(agentsFile).text().catch(() => "")
-  let text = existing
-  const pointer = !text.includes("opencode-auto:start")
-  if (pointer) text = text ? `${text.trimEnd()}\n\n${POINTER}\n` : `# AGENTS.md\n\n${POINTER}\n`
-  const principle = Boolean(opts.verify) && !text.includes("opencode-auto:verify:start")
-  if (principle) text = `${text.trimEnd()}\n\n${VERIFY_PRINCIPLE}\n`
-  const principleRemoved = !opts.verify && text.includes("opencode-auto:verify:start")
-  if (principleRemoved) {
-    // 吞掉块与其后全部换行: 块前空行分隔保留(前文与后文之间仍是单空行),
-    // 块在文件尾时不留尾部空行。测试执行原则块的移除同策略。
-    text = text.replace(/<!-- opencode-auto:verify:start -->[\s\S]*?<!-- opencode-auto:verify:end -->\n*/, "")
-    text = text.replace(/\n{2,}$/, "\n")
-  }
-  const test = Boolean(opts.testByDriver) && !text.includes("opencode-auto:test:start")
-  if (test) text = `${text.trimEnd()}\n\n${TEST_PRINCIPLE}\n`
-  const testRemoved = !opts.testByDriver && text.includes("opencode-auto:test:start")
-  if (testRemoved) {
-    text = text.replace(/<!-- opencode-auto:test:start -->[\s\S]*?<!-- opencode-auto:test:end -->\n*/, "")
-    text = text.replace(/\n{2,}$/, "\n")
-  }
-  const commit = !text.includes("opencode-auto:commit:start")
-  if (commit) text = `${text.trimEnd()}\n\n${COMMIT_PRINCIPLE}\n`
-  const maint = !text.includes("opencode-auto:maint:start")
-  if (maint) text = `${text.trimEnd()}\n\n${MAINT_RULE}\n`
-  const refs = !text.includes("opencode-auto:refs:start")
-  if (refs) text = `${text.trimEnd()}\n\n${REFS_SPEC}\n`
-  if (text !== existing) await Bun.write(agentsFile, text)
-  return { pointer, principle, principleRemoved, test, testRemoved, commit, maint, refs }
-}
+// AGENTS.md 不置只读(任务可更新它),run/init 只确保该块与当前配置渲染一致。
+import { ensurePointer, renderAgentsBlock } from "./agents-block"
+export { ensurePointer, renderAgentsBlock }
 
 // 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
 // 与 .auto/(运行日志、进度恢复记录与判定文件等运行时状态)。统一提交会提交全部
@@ -310,18 +191,13 @@ export async function runAll(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
-  // 启动会话前确保 AGENTS.md 指针块与验证/测试/提交原则块、维护规则块就位(缺失
-  // 则补写;verify/testByDriver 未启用时不补写对应块、已存在的会移除)。AGENTS.md
-  // 本身保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
+  // 启动会话前确保 AGENTS.md 的 opencode-auto 块与当前配置渲染一致(缺失则追加、
+  // 内容与渲染不一致则整块替换、旧版/多余的带名标记块一律清理)。AGENTS.md 本身
+  // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
   const ensured = await ensurePointer(directory, { verify: opts.verify, testByDriver: opts.testByDriver })
-  if (ensured.pointer) log("已补写: AGENTS.md 指针块")
-  if (ensured.principle) log("已补写: AGENTS.md 验证原则块")
-  if (ensured.principleRemoved) log("已移除: AGENTS.md 验证原则块(任务级验收未启用)")
-  if (ensured.test) log("已补写: AGENTS.md 测试执行原则块")
-  if (ensured.testRemoved) log("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
-  if (ensured.commit) log("已补写: AGENTS.md 提交原则块")
-  if (ensured.maint) log("已补写: AGENTS.md 维护规则块")
-  if (ensured.refs) log("已补写: AGENTS.md 引用规范块")
+  if (ensured.block === "inserted") log("已补写: AGENTS.md opencode-auto 块")
+  if (ensured.block === "replaced") log("已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)")
+  if (ensured.legacyRemoved) log(`已清理: AGENTS.md 中 ${ensured.legacyRemoved} 个旧版/多余 opencode-auto 标记块`)
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
   // 工作区已有未提交改动会被 driver 的下一次提交一并纳入(统一提交为全量清扫
   // 语义,与此前会话清扫提交一致),提前提示用户。dryrun 不做任何提交,不提示。

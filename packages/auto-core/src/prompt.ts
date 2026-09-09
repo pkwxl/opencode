@@ -330,6 +330,23 @@ export function renderPhasePlan(input: {
   })
 }
 
+// 计划生成会话(packages/auto 的 init 快捷模式 --implement-file/--implement-prompt):
+// 旁路一次性,产物 = 直接编辑填充的 PLAN.md(会话被 driver 专门授权写它),复用
+// 与 renderPhasePlan 同款任务格式约定,但不含阶段/轮次/交接等阶段化流程概念——
+// 该快捷模式仅用于 phases = "m" 项目(调用方校验)。输入二选一: file 给出时按
+// 「计划文件」呈现 content(源文件全文,path 供报文引用),否则按「实施提示词」
+// 呈现(content = 提示词原文);brief 为 .opencode/auto/brief.md 原文(可空,与
+// -p/--prompt 同给时一并注入,供规划会话感知项目意图)。
+export function renderImplementPlan(input: { file?: string; content: string; brief?: string; verify?: boolean }): string {
+  return renderTemplate("implement-plan", {
+    fromFile: input.file !== undefined,
+    filePath: input.file,
+    content: input.content,
+    brief: input.brief?.trim() || undefined,
+    verify: input.verify,
+  })
+}
+
 // 自动编号(config.autoNumber)的编号记录恢复会话(src/numbering.ts): 旁路一次性,
 // 产物 = AI 写入的 .auto/next-task(单个正整数)。floor 为 driver 确定性扫描的
 // 已用编号下限,作模板输入与 driver 侧 collect 校验共用同一数值。

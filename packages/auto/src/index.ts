@@ -3,6 +3,7 @@ import { lstat, rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { checkPrinciple } from "@opencode-ai/auto-core/check"
 import { formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
+import { implementPlan } from "@opencode-ai/auto-core/implement"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensureGitignore, ensurePointer, runAll } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
@@ -21,7 +22,8 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--review/--early-review/--permission/--idle-time/--idle-max/--mode/
-// --final-review/--phases/--source-dir/--source-path/--dest-dir 带值(吞掉下一个
+// --final-review/--phases/--source-dir/--source-path/--dest-dir/--implement-file/
+// --implement-prompt 带值(吞掉下一个
 // token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number 是布尔选项,出现即
 // true,仅当紧随字面量 true/false 时才吞掉它。均支持
@@ -47,6 +49,8 @@ const VALUE_FLAGS = new Set([
   "source-dir",
   "source-path",
   "dest-dir",
+  "implement-file",
+  "implement-prompt",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number"])
 for (let i = 1; i < args.length; i++) {
@@ -135,6 +139,15 @@ if (command === "run") {
   if (flags.has("commit-subtask")) {
     console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 opencode-auto init <dir> --commit false")
     process.exit(1)
+  }
+  // --implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项
+  // (计划生成会话是一次性的,产物 PLAN.md 经人工审核后另行调用 run 执行),不是
+  // run 的选项。
+  for (const key of ["implement-file", "implement-prompt"]) {
+    if (flags.has(key)) {
+      console.error(`--${key} 是 init 专用的快捷模式选项: 用它生成 PLAN.md、人工审核无误后再调用 opencode-auto run ${directory} 执行,run 本身不接受该选项`)
+      process.exit(1)
+    }
   }
   // 续轮迁移是独立子命令(continue),不是任何命令的选项。
   if (flags.has("continue")) {
@@ -385,9 +398,28 @@ if (command === "init" || command === "continue") {
       )
       process.exit(1)
     }
+    if (flags.has("implement-file") || flags.has("implement-prompt")) {
+      console.error("--implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项: continue 用于阶段化流程续轮,不支持")
+      process.exit(1)
+    }
   }
   if (flags.has("commit-subtask")) {
     console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 --commit false")
+    process.exit(1)
+  }
+  // --implement-file/--implement-prompt(init 单阶段 m 快捷模式,设计见文件尾用法
+  // 文本): 二选一,不与继续调用叠加使用;值须非空。文件存在性与 phases 兼容性
+  // 校验放在 existing 配置装载之后(§下文)。
+  if (flags.has("implement-file") && flags.has("implement-prompt")) {
+    console.error("--implement-file 与 --implement-prompt 二选一: 二者是同一快捷模式的两种输入来源,不要同时给出")
+    process.exit(1)
+  }
+  if (flags.has("implement-file") && !flags.get("implement-file")?.trim()) {
+    console.error("--implement-file 需要非空的文件路径")
+    process.exit(1)
+  }
+  if (flags.has("implement-prompt") && !flags.get("implement-prompt")?.trim()) {
+    console.error("--implement-prompt 需要非空的提示词文本")
     process.exit(1)
   }
   for (const key of ["verify-idle", "verify-max"]) {
@@ -516,6 +548,32 @@ if (command === "init" || command === "continue") {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
+  }
+  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 生效 phases 依赖
+  // existing.phases(未显式给出 --phases 时沿用既有配置)才能算出,故校验放在
+  // existing 装载之后;--implement-file 的文件存在性同样在此校验(读盘前的用法
+  // 校验已尽量前置,存在性判断天然需要 I/O)。
+  const implementFile = flags.get("implement-file")
+  const implementPrompt = flags.get("implement-prompt")
+  let implementFilePath: string | undefined
+  if (implementFile !== undefined || implementPrompt !== undefined) {
+    const effectivePhases = phases ?? existing.phases
+    if (effectivePhases !== "m") {
+      console.error(
+        `--implement-file/--implement-prompt 仅用于单阶段(phases = "m")快捷模式,` +
+          `${phases !== undefined ? "本次给出的 --phases" : "既有配置 phases"} 为 "${effectivePhases}"。` +
+          `请先 opencode-auto init <dir> --phases m 切换(新项目不传 --phases 缺省即 m)后再使用该快捷模式`,
+      )
+      process.exit(1)
+    }
+    if (implementFile !== undefined) {
+      implementFilePath = resolve(implementFile)
+      const fileOk = await stat(implementFilePath).then((s) => s.isFile()).catch(() => false)
+      if (!fileOk) {
+        console.error(`--implement-file 指定的文件不存在或不是常规文件: ${implementFilePath}`)
+        process.exit(1)
+      }
+    }
   }
   // handoverTest 须搭配 testByDriver: 显式给出时按本次生效值校验(未显式给出
   // test-by-driver 则回落既有配置值);amend 关闭 test-by-driver 而保留既有
@@ -649,28 +707,21 @@ if (command === "init" || command === "continue") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
   }
-  // 幂等维护 AGENTS.md 的 opencode-auto 块: 指针块、验证原则块、测试执行原则块、
-  // 提交原则块与维护规则块各自独立、只追加;验证/测试原则块仅对应开关启用时补写,
-  // 未启用时移除已存在的块(机制不存在,AGENTS.md 不保留其描述)。
+  // 幂等同步 AGENTS.md 的 opencode-auto 块: 按当前配置渲染,与文件中现有标准块比对
+  // ——缺失则追加、内容不一致则整块替换、旧版/多余的带名标记块一律清理。
   const ensured = await ensurePointer(directory, { verify: config.verify, testByDriver: config.testByDriver })
-  console.log(ensured.pointer ? "已补写: AGENTS.md 指针块" : "跳过已存在: AGENTS.md 指针块")
-  if (config.verify) {
-    console.log(ensured.principle ? "已补写: AGENTS.md 验证原则块" : "跳过已存在: AGENTS.md 验证原则块")
-  } else if (ensured.principleRemoved) {
-    console.log("已移除: AGENTS.md 验证原则块(任务级验收未启用)")
-  }
-  if (config.testByDriver) {
-    console.log(ensured.test ? "已补写: AGENTS.md 测试执行原则块" : "跳过已存在: AGENTS.md 测试执行原则块")
-  } else if (ensured.testRemoved) {
-    console.log("已移除: AGENTS.md 测试执行原则块(测试由 driver 执行未启用)")
-  }
-  console.log(ensured.commit ? "已补写: AGENTS.md 提交原则块" : "跳过已存在: AGENTS.md 提交原则块")
-  console.log(ensured.maint ? "已补写: AGENTS.md 维护规则块" : "跳过已存在: AGENTS.md 维护规则块")
-  console.log(ensured.refs ? "已补写: AGENTS.md 引用规范块" : "跳过已存在: AGENTS.md 引用规范块")
+  console.log(
+    ensured.block === "inserted"
+      ? "已补写: AGENTS.md opencode-auto 块"
+      : ensured.block === "replaced"
+        ? "已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)"
+        : "跳过已存在: AGENTS.md opencode-auto 块(已是最新)",
+  )
+  if (ensured.legacyRemoved) console.log(`已清理: AGENTS.md 中 ${ensured.legacyRemoved} 个旧版/多余 opencode-auto 标记块`)
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
   // 轮首建立(轮次专用目录 docs/R-NN,phases-design.md M 节;须在 ensurePointer
-  // 之后,AGENTS.md.bak 快照才含各原则块): init 建当前轮(全新项目 = R-01,幂等
+  // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
   // ——轮内 PLAN.md 已存在不重写,根链接重建不漂移),占位模板态 PLAN 以空模板
   // 作初值;continue 建新一轮 R-(N+1)(前置校验已过),轮内 PLAN.md 恒为空模板
   // (新轮目录恒空,上一轮结论经 prevRoundDigest 注入新一轮首个阶段规划会话)。
@@ -729,6 +780,39 @@ if (command === "init" || command === "continue") {
     }
     await Bun.write(join(directory, ".opencode", "auto", "brief.md"), promptText.trimEnd() + "\n")
     console.log("已写入: .opencode/auto/brief.md(项目意图,阶段规划会话消费;重复 init -p 覆盖重写)")
+  }
+  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 计划生成会话直接
+  // 编辑填充 PLAN.md,与阶段规划会话同款机制——这是 init 唯一会启动 AI 会话的
+  // 路径(§B.1 的"init 不启动会话"原则对通常路径不变,此快捷模式是显式选择)。
+  // PLAN.md 当前必须是占位/空模板态: 会话开始前 reset 会无条件清空 PLAN.md,已
+  // 有正式任务时拒绝执行,防止误覆盖人工或此前生成的计划。
+  if (implementFile !== undefined || implementPrompt !== undefined) {
+    const currentPlan = await Bun.file(join(directory, "PLAN.md")).text().catch(() => undefined)
+    if (currentPlan !== undefined && !isPristinePlan(currentPlan)) {
+      console.error(
+        "PLAN.md 已包含正式任务,--implement-file/--implement-prompt 仅用于从空白/占位状态生成新计划: " +
+          "如需重新生成,请先备份并清空 PLAN.md(或删除后重新运行 init)",
+      )
+      process.exit(1)
+    }
+    const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
+    console.log(`▶ 计划生成会话输入: ${implementFilePath !== undefined ? `计划文件 ${implementFilePath}` : "实施提示词"}`)
+    const result = await implementPlan(
+      directory,
+      {
+        file: implementFilePath,
+        content: implementFilePath !== undefined ? await Bun.file(implementFilePath).text() : implementPrompt!,
+        brief,
+      },
+      { agent: config.agent, commit: config.commit, contextLimit: config.contextLimit * 1000, verify: config.verify, mode: modes[modeName] },
+    )
+    if (result.type === "blocked") {
+      console.error(`⏸ 计划生成会话受阻(隐性阻塞,请检查后重新运行):\n${result.question}`)
+      process.exit(2)
+    }
+    console.log(`✓ 计划生成完成: PLAN.md 已填入 ${result.count} 个任务`)
+    console.log(`人工审核 PLAN.md 无误后运行: opencode-auto run ${directory}`)
+    process.exit(0)
   }
   // 结束语按 phases 分两态: "m" 维持"编辑 PLAN.md"现状;阶段化流程下 PLAN.md
   // 由阶段规划会话填充,不提示手工编辑。continue 下新轮目录恒空(台账为空),首个
@@ -828,7 +912,7 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--implement-file <file>|--implement-prompt <text>]
   opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]] [--new-session]
   opencode-auto check [dir]
@@ -847,6 +931,7 @@ console.error(`用法:
        --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
        --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(子任务会话为 docs/<任务>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<任务>/testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
        --auto-number / --no-auto-number 自动编号开关(缺省 --auto-number = 启用,--no-auto-number 为关闭用退出开关): 任务编号(T-NNN)在目标目录永不重复——下一可用编号持久化在 .auto/next-task,阶段规划会话自该记录续接编号(不再每阶段从 T-001 重排);记录缺失(如 .auto/ 未随仓库共享的新克隆)时先经 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导下一编号并恢复记录,再继续规划
+       --implement-file <file> / --implement-prompt <text> 单阶段(phases = "m")快捷模式,二选一: 依据指定的计划文件(全文注入)或直接给出的实施提示词,开一次性计划生成会话直接编辑填充 PLAN.md(与阶段规划会话同款机制,是 init 唯一会启动 AI 会话的路径);要求生效 phases 为 "m"(不兼容时先 --phases m 切换)且 PLAN.md 为占位/空模板态(已有正式任务时拒绝,防误覆盖);生成完成后需人工审核 PLAN.md,再另行调用 opencode-auto run <dir> 执行——之后逐个任务由 driver 的分解会话自动拆解为子任务推进,run 不接受这两个选项
        continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——轮首建立新一轮轮次目录 docs/R-NN/(本轮 PLAN.md、阶段台账、阶段归档与知识文档均落轮内,落盘即永久;根 PLAN.md 重建为指向轮内的相对符号链接,AGENTS.md 快照存轮内 AGENTS.md.bak),上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项(含 --test-by-driver/--handover-test)、-p 可按轮修订(不受前缀护栏约束)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)

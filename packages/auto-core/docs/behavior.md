@@ -158,13 +158,13 @@
   统一提交落账,不另起提交;非 git 目录 auto-correct
   空转(校验仍可跑)。② **check 子命令**——原则检查之外全量扫描活文档
   (docs/**/*.md,排除 docs/phases/**;docs/phases.md 台账属活文档),失效引用命中
-  退出码 1(check 为人工/CI 显式调用,报告不按清单去重);AGENTS.md 缺引用规范块与
-  非 git 目录(auto-correct 不可用)给 note。③
+  退出码 1(check 为人工/CI 显式调用,报告不按清单去重);AGENTS.md 缺 opencode-auto
+  块与非 git 目录(auto-correct 不可用)给 note。③
   **verify 门禁**——verifyTask 在每个判定会话前对任务产物文档(docs/T-NNN/**,
   终审任务 T-F<k> 同法)做确定性预扫,失效引用 = 差距直接进修复轮(不消耗判定会话;
   off 模式回退 pending,FIX_ROUNDS 耗尽阻塞退出 2);verify 未启用时门禁不存在,
-  退化为第①层的 ⚠ 日志(宽松契约)。该规范经 init 下沉:AGENTS.md 引用规范块
-  (第六标记块 `opencode-auto:refs`,无条件补写——路径稳定性不依赖任何开关);
+  退化为第①层的 ⚠ 日志(宽松契约)。该规范经 init 下沉:AGENTS.md 的 opencode-auto
+  标记块内引用规范段落(无条件出现——路径稳定性不依赖任何开关);
   wrapup(report 引用要求)/verify-script-gen(脚本内根相对路径)/fix(失效引用
   允许只更新引用行)模板同步注入提示文案。
 - 统一提交(收回 AI 提交权):任何会话结束且 driver 完成状态写入后,由 driver 经
@@ -362,18 +362,20 @@
   提交,镜像不落后于已提交的 PLAN.md)、任务完成时删除;非完成结局(阻塞/回退 pending)写"中断
   备注"(退出原因/中断阶段/恢复方式)后保留,供人工查看与下次恢复(下次 runTask
   重建镜像时,备注要点经恢复提示词带给 AI);强制中断遗留文件同样下次重建。
-  AGENTS.md 中 driver
-  只维护六个固定标记块(指针 `opencode-auto:start`、验证 `opencode-auto:verify`、
-  测试执行 `opencode-auto:test`、提交 `opencode-auto:commit`、维护规则
-  `opencode-auto:maint`、引用规范 `opencode-auto:refs`(stable-refs P4,规范全文
-  精编:存放目录化/永久路径、引用根相对路径语法、检查三层),各自幂等补写、
-  除此之外永不改写;验证块随 config.verify、测试块随 config.testByDriver 补写/移除,
-  见"verify 验收开关"与"--test-by-driver"条),
-  不置只读(任务可更新其余内容,但经 agent 契约约束不得删除
-  或改写任何标记块、更新其余内容须遵守维护规则块——保持精简 ≤150 行、路由到
-  docs/agents/<主题>.md 存放跨任务工作流知识、更新不追加、只沉淀持久知识;check
-  对行数超限输出 note);指令文件每个 provider turn 现场重读,且 AGENTS.md 指纹
-  (mtime+size)变更时 server.syncAgents 在下一个新会话前重启 server 兜底。
+  AGENTS.md 中 driver 只维护单一标记块 `opencode-auto:start`/`opencode-auto:end`
+  (内容为英文,含指针、验证原则、测试执行原则、提交原则、摘要原则——非交互场景不
+  产出会话末尾总结、维护规则、引用规范(stable-refs P4,规范全文精编:存放目录化/
+  永久路径、引用根相对路径语法、检查三层)七段;验证/测试两段随 config.verify/
+  config.testByDriver 出现或消失,见"verify 验收开关"与"--test-by-driver"条,其余
+  段落无条件出现):run/init 启动时按当前配置渲染该块并与文件中现有的标准块比对,
+  不一致则整块替换、缺失则追加,文件中残留的任何其他 `opencode-auto:<name>:start/end`
+  标记块(旧版六块格式,或任何游离标记块)一律清理——这也是旧格式向新格式的迁移
+  路径。AGENTS.md 不置只读(任务可更新其余内容,但经 agent 契约约束不得删除
+  或改写 opencode-auto 标记块、更新其余内容须遵守块内的维护规则——保持精简 ≤150
+  行、路由到 docs/agents/<主题>.md 存放跨任务工作流知识、更新不追加、只沉淀持久
+  知识;check 对块缺失/内容过期/残留旧版块与行数超限均输出 note);指令文件每个
+  provider turn 现场重读,且 AGENTS.md 指纹(mtime+size)变更时 server.syncAgents
+  在下一个新会话前重启 server 兜底。
 - 进度恢复(应用重启后精确恢复中断):run 期间 driver 把当前阶段与执行链会话
   持久化到目标目录 .auto/progress.json({task, session, at, active, phase};阶段
   边界经 persistStage 写 active=false 总结态,执行链会话开始/结束经 attempt 刷

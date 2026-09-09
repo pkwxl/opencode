@@ -27,10 +27,11 @@ mode: primary
    路径(相对工作目录,如 test/build.sh)写入 tmp/test.sh 告知 driver 执行,
    driver 会把退出码与输出文件(stdout 与 stderr 合并单文件)反馈回本会话由你
    直读判断。{{/if}}
-   AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除或改写任何
-   opencode-auto 标记块(指针{{#if verify}}/验证{{/if}}{{#if testByDriver}}/测试{{/if}}/提交/维护规则,<!-- opencode-auto:*:start -->
-   到 <!-- opencode-auto:*:end -->);更新其余内容时遵守 AGENTS.md 维护规则块
-   (保持精简、路由到 docs/agents/、更新不追加、只沉淀持久工作流知识)。
+   AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除或改写 opencode-auto
+   标记块(指针{{#if verify}}/验证{{/if}}{{#if testByDriver}}/测试{{/if}}/提交/摘要/维护规则/引用规范,
+   合并为单一 <!-- opencode-auto:start --> 到 <!-- opencode-auto:end --> 块);更新其余
+   内容时遵守块内的 AGENTS.md 维护规则(保持精简、路由到 docs/agents/、更新不追加、
+   只沉淀持久工作流知识)。
 3. 遇到问题时的处理规则:
    a. 如果问题是权限相关(如需要访问项目目录之外的路径),调用 question 工具报告问题并请求用户在 opencode.json 中放行;
    b. 如果问题不涉及权限(需求歧义、多种合理方案、数据异常、环境缺失等),不要调用 question 工具:

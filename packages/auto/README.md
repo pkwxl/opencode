@@ -34,8 +34,10 @@ bun run packages/auto/src/index.ts <子命令> ...
 ## 使用
 
 ```sh
-opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/auto.md 模板,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等补写四个 opencode-auto 标记块
+opencode-auto init [dir]     # 生成 PLAN.md、opencode.json、.opencode/agent/auto.md 模板,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等同步单一 opencode-auto 标记块
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+opencode-auto init [dir] --implement-file <file>       # 单阶段(m)快捷模式: 依据计划文件开一次性计划生成会话,直接填充详细 PLAN.md(见"PLAN.md 格式"一节)
+opencode-auto init [dir] --implement-prompt "<text>"   # 单阶段(m)快捷模式: 依据实施提示词生成 PLAN.md,同上
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后建立新一轮轮次目录、开启新一轮(见"阶段化流程")
 opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行(agent/验收/提交等语义来自项目配置)
 opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 行数超限
@@ -50,7 +52,9 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 `--handover-test`、`--auto-number`、`--no-auto-number`、`--phases`、
 `--source-dir`、`--source-path`、`--dest-dir`——任一出现即用法错误(退出码 1),报文
 给出修订指引(`opencode-auto init <dir> --<flag> <值>`,或直接编辑配置文件);这些
-选项已固化为项目属性,见下节。
+选项已固化为项目属性,见下节。`run` 同样不接受 `--implement-file`/`--implement-prompt`
+——二者是 `init` 专用的单阶段快捷模式选项(见 [PLAN.md 格式](#planmd-格式)一节),
+产物 `PLAN.md` 经人工审核后才用 `run` 执行。
 
 ## 项目配置(.opencode/auto/config.json)
 
@@ -392,8 +396,9 @@ verify 字段,会话期间临时放开 PLAN.md 写权限、结束后恢复并校
 还原)。`run` 结束(含阻塞退出)恢复可写,便于人工介入编辑(包括手工修订项目
 配置)。这是提示词契约之外的防误写护栏——同用户进程仍可经 bash chmod 绕过,
 并非安全边界。AGENTS.md 不在只读之列(任务可更新它),driver 只在 `run`/`init`
-启动会话前确保其中存在四个 opencode-auto 标记块,缺失则追加(除此之外永不改写
-AGENTS.md,见[AGENTS.md 标记块与维护规则](#agentsmd-标记块与维护规则))。
+启动会话前确保其中存在与当前配置渲染一致的单一 opencode-auto 标记块(缺失则追加、
+内容不一致则整块替换,旧版/多余的带名标记块一律清理,除此之外永不改写 AGENTS.md,
+见[AGENTS.md 标记块与维护规则](#agentsmd-标记块与维护规则))。
 
 ## 质量审核(--review)
 
@@ -470,8 +475,8 @@ early 模式下审核提示词相应调整:告知 verify 脚本正在同目录�
 
 每个执行会话入口会清除上一会话/上次运行遗留的待执行标记(归档历史保留),防止陈旧
 请求污染新会话;测试脚本不经 opencode 权限体系(等同 driver 亲自在本地跑测试,
-与 verify 脚本同一非安全边界)。该约定同时经 init 下沉:AGENTS.md 补写测试执行
-原则块(`opencode-auto:test` 标记块,随配置补写/移除)、agent 契约带对应条款,
+与 verify 脚本同一非安全边界)。该约定同时经 init 下沉:AGENTS.md 的 opencode-auto
+标记块内测试执行原则段落(随 `testByDriver` 出现或消失)、agent 契约带对应条款,
 `check` 子命令在 `testByDriver` 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自
 运行编译/测试/构建/lint 的描述。
 
@@ -792,27 +797,30 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 
 ## AGENTS.md 标记块与维护规则
 
-`init` / `run` 幂等维护目标目录 AGENTS.md 中的六个 opencode-auto 标记块
-(`<!-- opencode-auto:*:start -->` 到 `<!-- opencode-auto:*:end -->`,各自独立判断、
-缺失则追加,除此之外永不改写 AGENTS.md):
+`init` / `run` 在目标目录 AGENTS.md 中幂等同步单一 opencode-auto 标记块
+(`<!-- opencode-auto:start -->` 到 `<!-- opencode-auto:end -->`,内容为英文):
+按当前配置渲染后与文件中现有的标准块比对,一致则不动、不一致则整块替换、缺失则
+追加;文件中任何其他 `opencode-auto:<name>:start/end` 标记块(旧版六块格式,或
+游离标记块)一律清理,除此之外永不改写 AGENTS.md。块内含以下段落:
 
-| 标记块 | 内容 |
+| 段落 | 内容 |
 | --- | --- |
-| `opencode-auto:start` | CURRENT.md 指针:每个会话开始先读当前任务镜像 |
-| `opencode-auto:verify` | 验证原则:任务级验证脚本/命令由 driver 在会话外执行(仅 `verify: true` 时补写;未启用时移除已存在的块) |
-| `opencode-auto:test` | 测试执行原则:编译/测试/构建/lint 等命令由 driver 在会话外执行(仅 `testByDriver: true` 时补写;未启用时移除已存在的块) |
-| `opencode-auto:commit` | 提交原则:会话后由 driver 递归统一提交,会话不执行 git 提交 |
-| `opencode-auto:maint` | AGENTS.md 维护规则(见下) |
-| `opencode-auto:refs` | 引用与存放规范(stable-refs):docs/T-NNN/ 目录化永久路径、引用根相对路径语法、检查三层(无条件补写) |
+| 指针 | CURRENT.md 指针:每个会话开始先读当前任务镜像 |
+| 验证原则(Verify principle) | 任务级验证脚本/命令由 driver 在会话外执行(仅 `verify: true` 时出现) |
+| 测试执行原则(Test principle) | 编译/测试/构建/lint 等命令由 driver 在会话外执行(仅 `testByDriver: true` 时出现) |
+| 提交原则(Commit principle) | 会话后由 driver 递归统一提交,会话不执行 git 提交 |
+| 摘要原则(Summary principle) | 非交互场景不产出会话末尾总结,产出物一律写入 docs/ |
+| 维护规则(AGENTS.md maintenance rules) | AGENTS.md 维护规则(见下) |
+| 引用与存放规范(Reference and storage conventions) | stable-refs:docs/T-NNN/ 目录化永久路径、引用根相对路径语法、检查三层 |
 
-提交原则块描述的是**与配置无关的不变式**(会话不提交),不随配置开关改写;验证
-原则块对应验收机制、测试执行原则块对应测试执行协议,分别随 `verify` /
-`testByDriver` 开关补写/移除——机制不存在时,AGENTS.md 不
-保留其描述。生效配置由 run 启动横幅与 `status` 打印。
+提交原则、摘要原则、维护规则、引用规范描述的是**与配置无关的不变式**,无条件
+出现;验证原则对应验收机制、测试执行原则对应测试执行协议,分别随 `verify` /
+`testByDriver` 开关出现或消失——机制不存在时,块内不保留其描述。生效配置由 run
+启动横幅与 `status` 打印。
 
-**维护规则**(维护规则块,约束 AGENTS.md 保持工作流入口定位、不膨胀为知识库——
-它作为 system context 每个 provider turn 都进入上下文,膨胀会侵蚀全部会话的有效
-上下文):
+**维护规则**(块内的维护规则段落,约束 AGENTS.md 保持工作流入口定位、不膨胀为
+知识库——它作为 system context 每个 provider turn 都进入上下文,膨胀会侵蚀全部
+会话的有效上下文):
 
 1. **保持精简**:全文不超过 150 行;不写入实现细节、长解释、命令输出或单任务知识;
 2. **路由不复制**:模块/阶段/任务特定的信息写入 `docs/agents/<主题>.md`,本文件
@@ -825,10 +833,10 @@ driver 的分解/执行/验收闭环,并获得与普通任务一致的断点恢�
 `docs/agents/<主题>.md` 存放**跨任务**的工作流知识(规范、映射约定、环境
 quirks),与 docs/ 根的**单任务**过程产物(subtasks/report/fix/final 等)分工;
 主题文件由会话在首次需要时创建并在 AGENTS.md 维护一行路由(纯提示词契约,无
-driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时输出提示
-(note,不影响退出码),是维护规则的唯一机器观测点。agent 契约
-(`.opencode/agent/auto.md`)同步约束会话:不得删除或改写任何 opencode-auto
-标记块,更新其余内容须遵守维护规则。
+driver 侧解析),随统一提交入库。`check` 在块缺失、内容与当前配置渲染不一致、
+残留旧版标记块、或 AGENTS.md 超 150 行时输出提示(note,不影响退出码)。agent 契约
+(`.opencode/agent/auto.md`)同步约束会话:不得删除或改写 opencode-auto 标记块,
+更新其余内容须遵守块内的维护规则。
 
 ## PLAN.md 格式
 
@@ -855,6 +863,29 @@ driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时�
   未启用时 init 产出的 PLAN.md 模板不含 verify 字段示例与验证原则描述,手工写入
   的 verify 字段会被解析但不会被验收流程消费。
 
+### 快捷模式:由 AI 生成 PLAN.md(--implement-file / --implement-prompt)
+
+手工编写 `PLAN.md` 之外,`init` 提供一个专用于 `phases = "m"`(单阶段、无轮次概念)
+项目的快捷模式:不自己拆任务,而是给一份粗略的计划文件或一句实施提示词,由一次性
+的**计划生成会话**直接编辑填充详细、分步的 `PLAN.md`(与阶段化流程的阶段规划会话
+同款机制——这是 `init` 唯一会启动 AI 会话的路径,其余路径下 `init` 不启动会话)。
+
+```sh
+opencode-auto init [dir] --implement-file <file>       # 依据指定的计划文件(全文注入会话)生成 PLAN.md
+opencode-auto init [dir] --implement-prompt "<text>"    # 直接依据实施提示词生成 PLAN.md
+```
+
+- 二者二选一(同时给出为用法错误),值须非空;要求生效 `phases` 为 `"m"`(既有配置
+  或本次 `--phases` 给出的值不是 `"m"` 时报错,提示先 `--phases m` 切换)。
+- `PLAN.md` 当前必须是占位模板态或不存在,已有正式任务时拒绝执行(防止误覆盖已有
+  或此前生成的计划)。
+- 生成完成后打印任务数并退出(不进入执行);**需人工审核 `PLAN.md`**,确认任务拆分
+  与描述无误后再另行调用 `opencode-auto run [dir]` 执行——execution 阶段仍是逐个
+  任务由 driver 的分解会话自动进一步拆解为子任务推进(见[执行流水线](#执行流水线)),
+  与手写 `PLAN.md` 的正常流程完全一致。
+- 计划生成会话受阻(隐性阻塞)时退出码 `2`,报文同其余旁路一次性会话;`run` 不接受
+  这两个选项(它们只属于 `init`)。
+
 ## 原则检查(check)
 
 `opencode-auto check [dir]` 启发式扫描目标目录的 `AGENTS.md` 与 `PLAN.md`,报告与
@@ -866,11 +897,11 @@ driver 侧解析),随统一提交入库。`check` 在 AGENTS.md 超 150 行时�
 匹配为启发式,报告供人工确认。验证类描述的检查仅在配置 `verify: true` 时进行
 (未启用时 driver 不做任务级验收,会话运行验证命令不算违背),测试类描述的检查
 仅在 `testByDriver: true` 时进行,提交类检查始终
-进行。`check` 另输出提示(note,不影响退出码):缺少提交原则块、缺少验证原则块
-(仅 `verify: true` 时)、缺少测试执行原则块(仅 `testByDriver: true` 时)、
-AGENTS.md 超 150 行(维护规则块第 1 条,建议精简并把
-细节路由到 `docs/agents/`)。`init` 会在 AGENTS.md 幂等维护标记块,并在启用验收
-时把验证原则写进 PLAN.md 模板,使规划时就注意这一点。
+进行。`check` 另输出提示(note,不影响退出码):缺少 opencode-auto 块、块内容与
+当前配置渲染不一致(过期)、残留旧版/多余的带名标记块、AGENTS.md 超 150 行
+(维护规则段落第 1 条,建议精简并把细节路由到 `docs/agents/`)。`init` 会在
+AGENTS.md 幂等同步该标记块,并在启用验收时把验证原则写进 PLAN.md 模板,使规划
+时就注意这一点。
 
 `check` 同时做**引用检查**(稳定引用规范,stable-refs;实验开关
 `OPENCODE_AUTO_REF_CHECK=on` 时启用,缺省 off 不扫描):全量扫描活文档

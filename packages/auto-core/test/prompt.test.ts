@@ -19,6 +19,7 @@ import {
   renderFinalTask,
   renderFix,
   renderHandoffSteer,
+  renderImplementPlan,
   renderInferSource,
   renderKnowledge,
   renderNumberRecovery,
@@ -963,6 +964,50 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   })
 })
 
+describe("renderImplementPlan(init 快捷模式 --implement-file/--implement-prompt)", () => {
+  test("file 给出: 按「计划文件」呈现,注入路径与全文;任务格式协议与授权文案同 phase-plan", () => {
+    const text = renderImplementPlan({ file: "/tmp/rough-plan.md", content: "先做 A,再做 B", verify: true })
+    expect(text).toContain("## 输入: 计划文件(/tmp/rough-plan.md)")
+    expect(text).toContain("先做 A,再做 B")
+    expect(text).not.toContain("## 输入: 实施提示词")
+    expect(text).toContain("## T-NNN: <任务标题> [pending]")
+    expect(text).toContain("- verify: <验收标准")
+    expect(text).toContain("唯一可写的文件是 PLAN.md")
+    expect(text).toContain("不要用 chmod 等方式改动文件权限")
+    expect(text).toContain("AUTO-DECISION")
+  })
+
+  test("file 未给出: 按「实施提示词」呈现同一 content", () => {
+    const text = renderImplementPlan({ content: "实现一个登录页面" })
+    expect(text).toContain("## 输入: 实施提示词")
+    expect(text).toContain("实现一个登录页面")
+    expect(text).not.toContain("## 输入: 计划文件")
+  })
+
+  test("brief 两态: 给出则注入项目意图段,未给出/空白则整块消失", () => {
+    const withBrief = renderImplementPlan({ content: "x", brief: "把 legacy 迁移到 bun" })
+    expect(withBrief).toContain("## 输入: 项目意图(.opencode/auto/brief.md)")
+    expect(withBrief).toContain("把 legacy 迁移到 bun")
+    expect(renderImplementPlan({ content: "x" })).not.toContain("## 输入: 项目意图")
+    expect(renderImplementPlan({ content: "x", brief: "   " })).not.toContain("## 输入: 项目意图")
+  })
+
+  test("verify 未启用: 不含 verify 字段与验收执行权描述", () => {
+    const text = renderImplementPlan({ content: "x" })
+    expect(text).not.toContain("verify")
+    expect(text).not.toContain("验收")
+  })
+
+  test("代表性参数组合渲染后不残留模板标签", () => {
+    for (const text of [
+      renderImplementPlan({ content: "提示词" }),
+      renderImplementPlan({ file: "docs/rough.md", content: "计划全文", brief: "意图", verify: true }),
+    ]) {
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
 describe("renderNumberRecovery(编号恢复会话)", () => {
   test("注入下限与证据清单,硬性产出协议指向 .auto/next-task", () => {
     // 模板库可能被同进程其他用例覆盖过,复位为仅内置
@@ -1099,9 +1144,11 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
     const raw = await Bun.file(agentTemplate).text()
     const off = renderText(raw, { verify: false })
     expect(off).toContain("AGENTS.md 不在只读之列")
-    expect(off).toContain("不得删除或改写任何")
-    expect(off).toContain("opencode-auto 标记块(指针/提交/维护规则")
-    expect(off).toContain("遵守 AGENTS.md 维护规则块")
+    expect(off).toContain("不得删除或改写 opencode-auto")
+    expect(off).toContain("标记块(指针/提交/摘要/维护规则/引用规范")
+    expect(off).toContain("<!-- opencode-auto:start -->")
+    expect(off).toContain("<!-- opencode-auto:end -->")
+    expect(off).toContain("遵守块内的 AGENTS.md 维护规则")
     expect(off).not.toContain("verify")
     expect(off).not.toContain("验证")
   })
@@ -1119,18 +1166,20 @@ describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
       }
     }
   })
-  test("AGENTS.md 条款覆盖全部四类标记块并引用维护规则(防漂移,verify 启用)", async () => {
+  test("AGENTS.md 条款覆盖 opencode-auto 单一标记块并引用维护规则(防漂移,verify 启用)", async () => {
     const raw = await Bun.file(agentTemplate).text()
-    const text = renderText(raw, { verify: true })
+    const text = renderText(raw, { verify: true, testByDriver: true })
     expect(text).toContain("AGENTS.md 不在只读之列")
-    // 不得删除或改写任何标记块(指针/验证/提交/维护规则),而非仅旧版的指针块
-    expect(text).toContain("不得删除或改写任何")
-    expect(text).toContain("opencode-auto 标记块(指针/验证/提交/维护规则")
-    expect(text).toContain("<!-- opencode-auto:*:start -->")
-    expect(text).toContain("<!-- opencode-auto:*:end -->")
+    // 不得删除或改写 opencode-auto 标记块(指针/验证/测试/提交/摘要/维护规则/引用规范),
+    // 合并为单一 start/end 块,而非旧版按名各自独立的多个标记块
+    expect(text).toContain("不得删除或改写 opencode-auto")
+    expect(text).toContain("标记块(指针/验证/测试/提交/摘要/维护规则/引用规范")
+    expect(text).toContain("<!-- opencode-auto:start -->")
+    expect(text).toContain("<!-- opencode-auto:end -->")
+    expect(text).not.toContain("<!-- opencode-auto:*:start -->")
     expect(text).not.toContain("不得删除 opencode-auto 指针块")
-    // 更新其余内容时遵守维护规则块(精简/路由/更新不追加/只沉淀持久知识)
-    expect(text).toContain("遵守 AGENTS.md 维护规则块")
+    // 更新其余内容时遵守块内的维护规则(精简/路由/更新不追加/只沉淀持久知识)
+    expect(text).toContain("遵守块内的 AGENTS.md 维护规则")
     expect(text).toContain("docs/agents/")
     expect(text).toContain("保持精简")
     expect(text).toContain("更新不追加")
