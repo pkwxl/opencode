@@ -881,7 +881,15 @@ async function ensureUnderstood(
   chain.subject = subject
   let feedback = ""
   for (let i = 0; ; i++) {
-    const result = await runSession(client, task, renderUnderstand(plan, task, opts) + feedback, opts, chain)
+    // taskContext(OPENCODE_AUTO_TASK_CONTEXT)透传理解提示词: 放宽 context.md
+    // 的建议行数措辞(与 fine 透传分解提示词同一接线方式)。
+    const result = await runSession(
+      client,
+      task,
+      renderUnderstand(plan, task, { ...opts, taskContext: autoSwitches().taskContext }) + feedback,
+      opts,
+      chain,
+    )
     if (result.type === "blocked") return result
     if (await readContext()) {
       // 理解会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。

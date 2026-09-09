@@ -8,6 +8,7 @@ import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Task } from "./plan"
 import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
+import type { TaskContextMode } from "./switches"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
@@ -19,7 +20,9 @@ import { verifyTmpDir } from "./verify"
 // 细粒度分解开关(OPENCODE_AUTO_DECOMPOSE_FINE,开关层接线见
 // fork-decompose-design.md §4.6)——分解模板 decompose-<phase> 据此选择与渲染
 // (phaseName 注入阶段名;contextBudget = 半预算的粒度上限描述;fine 注入
-// 细粒度准则段)。
+// 细粒度准则段)。taskContext: 理解摘要行数档位(OPENCODE_AUTO_TASK_CONTEXT,
+// 见 src/switches.ts),理解会话模板据此渲染 contextLines(建议行数措辞,不是
+// 硬性截断)。
 type Opts = {
   mode?: ModeSpec
   verify?: boolean
@@ -28,6 +31,7 @@ type Opts = {
   phase?: Phase
   contextLimit?: number
   fine?: boolean
+  taskContext?: TaskContextMode
 }
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
@@ -499,6 +503,12 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
+// 理解摘要建议行数档位(OPENCODE_AUTO_TASK_CONTEXT,开关层见 src/switches.ts):
+// off 为现状(200,与改动前的硬编码措辞一致);small/medium/large 逐档放宽。
+// 仅改变提示词里的"建议行数"措辞——ensureUnderstood 只校验 context.md 非空,
+// 不按行数截断或拒收,调大档位不改变任何校验行为。
+const TASK_CONTEXT_LINES: Record<TaskContextMode, number> = { off: 200, small: 300, medium: 400, large: 500 }
+
 function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): Ctx {
   const phase = opts.phase ?? "m"
   return {
@@ -520,6 +530,7 @@ function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): 
     phaseName: phaseText(phase),
     contextBudget: formatTokens((opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 2),
     fine: Boolean(opts.fine),
+    contextLines: String(TASK_CONTEXT_LINES[opts.taskContext ?? "off"]),
   }
 }
 
