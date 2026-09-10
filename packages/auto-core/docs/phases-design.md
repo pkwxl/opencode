@@ -167,6 +167,16 @@ currentPhase = phases 串中第一个未出现在台账字母集合中的字母
 peekProgress;阶段边界中断(归档完成但台账未写)由交接动作的幂等性兜底
 (归档目录存在即跳过移动,台账查重后追加)。
 
+**会话恢复优先于文件推导路由**(2026-09-10,docs/session-resume-precedence-design.md):
+routePhase 的(台账, PLAN.md)推导仍是缺省路由,但对**阶段级旁路步骤**(规划/交接
+蒸馏)增加一层 driver 状态优先——这些会话经 requireArtifact 的 spec.step 在提示词
+下发时写 `.auto/progress.json` 的 step 恢复点(phase.kind="step"),driver 收口后
+经 closeStep 删除。runPhaseLoop 消费路由前先查 openStep:存在未收口、归属阶段 ==
+当前路由阶段且未入台账的恢复点 → 重入该步骤续跑(复用中断的会话),即使 PLAN.md
+已有任务/交接文档已存在。理由:PLAN.md 任务与交接文档是 AI 写的(或会话中断后
+driver 才补的),其存在不能证明会话已收口;唯有 driver 恢复点被删除才算收口。人工
+回退(改台账)与字母不一致的陈旧记录仍让文件路由优先(告警),回退规程不变。
+
 ### C.3 人工回退规程(写入 README 与台账头部注释)
 
 回退到某阶段 = ① 从台账删除该阶段及其后的全部行;② 删除对应

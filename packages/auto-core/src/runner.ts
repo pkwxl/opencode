@@ -51,7 +51,7 @@ import {
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
-import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
+import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, SWITCH_ENV, type Switches } from "./switches"
@@ -784,6 +784,8 @@ export function phaseText(phase: Phase | undefined): string {
       })`
     case "review":
       return `质量审核(第 ${phase.round} 轮,${{ audit: "审核会话", planfix: "修复规划", fixrun: "修复检查项执行" }[phase.stage]})`
+    case "step":
+      return phase.step === "phase-plan" ? `阶段规划步骤(${phase.letter} 阶段,填充 PLAN.md)` : `阶段交接步骤(${phase.letter} 阶段,产出交接文档)`
   }
 }
 
@@ -791,6 +793,14 @@ export function phaseText(phase: Phase | undefined): string {
 // 具体的下一步指引,使 AI 不重做已完成的工作。
 function resumeNote(phase: Phase | undefined, reused: boolean): string {
   const next = nextStepText(phase)
+  if (phase?.kind === "step") {
+    return (
+      `[driver] 本阶段步骤此前的执行因应用中断而停止。` +
+      (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
+      `以 git status / git diff 核对工作区实际状态。` +
+      `${next}不要重做已完成的工作。`
+    )
+  }
   return (
     `[driver] 该任务(或其某个子任务)此前的执行因应用中断而停止。` +
     (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
@@ -823,6 +833,10 @@ function nextStepText(phase: Phase | undefined): string {
       return phase.stage === "audit"
         ? `任务级验收已通过,当前处于质量审核阶段。`
         : `当前处于质量审核差距的修复阶段:按 PLAN.md 中未勾选的修复检查项继续。`
+    case "step":
+      return phase.step === "phase-plan"
+        ? `当前处于阶段规划步骤:先读 PLAN.md 现状(上次会话可能已写入部分任务),在其基础上补全/修正本阶段任务,不要重复已存在的任务编号,完成后结束会话。`
+        : `当前处于阶段交接步骤:先读交接文档现状(上次会话可能已写入部分内容),补全四个必备小节(关键决策/约束与坑/下一阶段必读清单/产物索引),不要重做已完成的部分,完成后结束会话。`
   }
 }
 
@@ -1581,6 +1595,14 @@ async function planReviewFix(
 // undefined 表示该次会话未产出有效产物。spec.commit 声明该类会话的统一提交信息
 // (会话结束即提交;判定会话的 PLAN.md 越权还原发生在提交之后时,还原差异由
 // 下一次提交清扫,历史中保留越权记录本身亦是审计事实)。
+//
+// spec.step(阶段级旁路步骤,docs/session-resume-precedence-design.md): 仅阶段
+// 规划/交接蒸馏会话声明。有值时:① 会话链携带 step 阶段,attempt 在提示词下发
+// 成功时写 active 记录(认领在跑的会话,回合进行中被 kill 也不丢);② 进入时若
+// 发现同一步骤的 active 记录(上次运行中断、driver 未收口)→ 续跑: 会话存活且非
+// 报错桩则复用原会话(保留产物现场,不重置),否则开新会话重做本步骤(照常重置);
+// ③ 收口(删除记录)由调用方在后处理完成后经 closeStep 执行——requireArtifact 本身
+// 不删,避免"产物已校验但后处理(编号推进/台账/提交)未完成"时被 kill 丢失步骤认领。
 export async function requireArtifact<T>(
   client: OpencodeClient,
   task: Task,
@@ -1601,14 +1623,67 @@ export async function requireArtifact<T>(
     collect: () => Promise<T | undefined>
     // 会话后统一提交的信息(阶段 trailer 与标题行;缺省不提交)。
     commit?: { stage: string; subject: string }
+    // 阶段级旁路步骤身份(仅阶段规划/交接蒸馏会话声明);有值即启用 driver 侧
+    // 恢复点与会话续跑(见函数头注释)。
+    step?: { step: StepKind; letter: PhaseLetter }
   },
 ): Promise<T | (Outcome & { type: "blocked" })> {
+  const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, letter: spec.step.letter } : undefined
+  // 阶段步骤续跑判定: 上次运行在本步骤中断(driver 未收口)且原会话仍可复用 →
+  // 首个提示词进原会话(保留产物现场);否则按全新步骤处理(重置 + 新会话)。
+  let resumedSession: string | undefined
+  let resumedUsage: { used: number; pct: number; limit?: number } | undefined
+  if (stepPhase && opts.dir) {
+    const recalled = await recallProgress(opts.dir, task.id)
+    const sameStep =
+      recalled?.active === true &&
+      recalled.phase?.kind === "step" &&
+      recalled.phase.step === spec.step!.step &&
+      recalled.phase.letter === spec.step!.letter
+    if (sameStep) {
+      const candidate = !opts.newSession ? recalled!.session : undefined
+      const alive = candidate !== undefined ? await sessionAlive(client, candidate) : false
+      const usage = alive ? await sessionUsage(client, candidate!) : undefined
+      // 报错桩(整条会话无真实产出)不复用——与 runTask 跨进程恢复同款双保险。
+      if (alive && usage && !(usage.used === 0 && usage.errorStub)) {
+        resumedSession = candidate
+        resumedUsage = usage
+        log(
+          `↻ ${task.id} ${spec.kind}会话恢复中断点,复用会话 ${candidate} 继续(上下文不丢,` +
+            `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens"})`,
+        )
+      } else {
+        const why = opts.newSession ? "--new-session 指定" : candidate === undefined ? "记录无会话" : alive ? "原会话只挨了一记报错、无真实产出" : "原会话不可复用"
+        log(`↻ ${task.id} ${spec.kind}会话恢复中断点(${why},开新会话重做本步骤)`)
+      }
+    } else {
+      // 全新步骤(或记录不属于本步骤): 先写一个 session 未定的 active 恢复点,使
+      // attempt 的下发前快照(prior)恒非空——可重试会话错误还原时保留步骤认领而非
+      // 删除记录,避免"可重试错误耗尽 → 无记录 → 下次运行凭半成品 PLAN.md 跳过本
+      // 步骤"。会话 id 由首个提示词下发时的 remember 落实。
+      await saveProgress(opts.dir, { task: task.id, session: undefined, at: Date.now(), active: true, phase: stepPhase })
+    }
+  }
   let feedback = ""
   for (let i = 0; ; i++) {
-    await spec.reset?.()
-    // 旁路一次性会话: 链上不携带阶段(phase),不写进度恢复记录;subject 使新建
-    // 会话同样以提交标题显式命名。
-    const result = await runSession(client, task, promptText + feedback, opts, { pct: 100, used: 0, at: 0, subject: spec.commit?.subject })
+    // 续跑复用原会话时保留产物现场(上次会话可能已写入部分产物,重置会毁掉它);
+    // 其余情况(全新步骤、反馈重试)照常重置,避免会话未写出时被误当作本次产出。
+    const resume = i === 0 && resumedSession !== undefined
+    if (!resume) await spec.reset?.()
+    const chain: SessionChain = {
+      pct: resume ? resumedUsage!.pct : 100,
+      used: resume ? resumedUsage!.used : 0,
+      at: resume ? Date.now() : 0,
+      subject: spec.commit?.subject,
+      phase: stepPhase,
+    }
+    if (resume) {
+      // attempt 的 resumed 判据(链上有会话且 note 待注入)使首个提示词必进原会话,
+      // 不受复用开关与阈值约束;note 用后即清。
+      chain.id = resumedSession
+      chain.note = resumeNote(stepPhase, true)
+    }
+    const result = await runSession(client, task, promptText + feedback, opts, chain)
     if (result.type === "blocked") return result
     if (spec.commit) await afterSession(opts.dir, opts, task, spec.commit)
     const value = await spec.collect()
@@ -1623,6 +1698,10 @@ export async function requireArtifact<T>(
     }
     log(`↻ ${task.id} ${spec.kind}会话未产出${spec.artifact},带反馈重试一次`)
     feedback = `\n\n你上次结束会话但未产出${spec.artifact}。这是硬性要求:${spec.requirement}`
+    // 反馈重试不再复用原会话(它已结束本轮却未产出有效产物): 清续跑标记,下一轮
+    // 重置产物并开新会话。
+    resumedSession = undefined
+    resumedUsage = undefined
   }
 }
 
@@ -1906,17 +1985,19 @@ async function attempt(
   const sessionID = forked ?? session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
-  // 进度记录: 执行链会话(链上携带阶段)写 active 记录,应用中断后据此精确恢复;
-  // 旁路一次性会话(判定/审核/脚本生成/修复规划,链上无阶段)与伪任务(PLAN/AUTO)
-  // 不写,避免污染执行链记忆。session-error-retry-plan.md 第 4 点: 不再在
-  // sessionID 刚确定、结果未知时就抢先落盘——只有确认这一轮不是"可重试的会话
-  // 错误"(成功、不可重试的阻塞、或非会话错误类阻塞)才写,否则可重试的中间
-  // 失败态会把真正有内容的旧会话从 progress.json 顶替掉。
+  // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
+  // 据此精确恢复;无阶段的旁路会话(判定/审核/脚本生成/修复规划/dryrun/fork 基点)
+  // 不写,避免污染恢复记忆。session-resume-precedence-design.md: 下发成功即落盘
+  // 认领在跑的会话(此前只在回合结束后写,回合进行中被 kill 会丢失认领);可重试
+  // 错误把记录还原为下发前快照,被弃的 fork 副本不顶替真实恢复点(保留
+  // session-error-retry-plan.md 第 4 点的保护,改为"下发即写 + 失败还原")。
   const remember = async () => {
-    if (opts.dir && task.id.startsWith("T-") && chain.phase) {
+    if (opts.dir && chain.phase) {
       await saveProgress(opts.dir, { task: task.id, session: sessionID, at: Date.now(), active: true, phase: chain.phase })
     }
   }
+  // 下发前的 progress.json 快照: 可重试错误时还原,防止被弃副本顶替真实恢复点。
+  const prior = opts.dir && chain.phase ? await peekProgress(opts.dir) : undefined
 
   // SSE 订阅跟随本会话生命周期: 订阅时传入 AbortSignal,无论正常结束、下发失败
   // 提前返回还是异常退出,finally 都立即中止订阅,断开底层连接并释放客户端连接
@@ -1943,6 +2024,10 @@ async function attempt(
       await remember()
       return { type: "blocked", question: `下发任务失败: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
     }
+    // 下发成功即认领在跑的会话: 此刻进程被 kill/Ctrl+C,progress.json 指向本会话,
+    // 下次运行复用之(精确恢复的核心——回合进行中的会话不丢)。回合结束后再按
+    // 结果刷新或还原(见下方可重试错误分支)。
+    await remember()
 
     const result = await watching
     // 本轮开始前的原链状态: 可重试的会话错误需要还原到这里(而不是留在这一轮
@@ -1964,16 +2049,20 @@ async function attempt(
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
     // 新建会话已在创建时命名,无需重复。
     if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
-    // 可重试的会话错误(session-error-retry-plan.md): 半截失败态,不落盘
-    // progress.json——链状态整体还原为本轮重试前的原会话,交给 runSession 的
-    // 重试循环从原会话重新 fork。不可重试的会话错误、非会话错误类阻塞与成功
-    // 一律"晋升":chain.id 落在这一轮实际用过的会话上并写 progress.json(会话
-    // 结束但阶段尚未推进时,刷新记录时间并保持 active——此刻中断按"半途未
-    // 总结"复用本会话继续,无时间窗,恢复时只看会话是否存活)。
+    // 可重试的会话错误(session-error-retry-plan.md): 半截失败态——链状态与
+    // progress.json 一并还原为本轮下发前的原会话/原记录,被弃的 fork 副本不顶替
+    // 真实恢复点,交给 runSession 的重试循环从原会话重新 fork。不可重试的会话
+    // 错误、非会话错误类阻塞与成功一律"晋升":chain.id 落在这一轮实际用过的会话
+    // 上并刷新 progress.json(会话结束但阶段尚未推进时,保持 active——此刻中断
+    // 按"半途未总结"复用本会话继续,无时间窗,恢复时只看会话是否存活)。
     if (result.error && result.retryable !== false) {
       chain.id = previousId
       chain.used = previousUsed
       chain.at = previousAt
+      if (opts.dir && chain.phase) {
+        if (prior) await saveProgress(opts.dir, prior)
+        else await forgetProgress(opts.dir)
+      }
     } else {
       await remember()
     }

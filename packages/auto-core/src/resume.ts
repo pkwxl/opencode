@@ -15,8 +15,14 @@ import { join } from "node:path"
 // - 记录同时携带阶段(phase): 恢复时按阶段重入流水线(verify 已执行的脚本运行
 //   记录直接交判定会话,不重跑;修复轮中断凭持久化的差距文本续跑修复;off/ondemand
 //   已过执行阶段不再重跑整任务会话等)。
-// 任务完成即删除记录;旁路一次性会话(判定/审核/脚本生成/修复规划)不写记录,
-// 只有执行链会话写,避免污染链记忆。
+// 记录在提示词下发成功时即写(认领在跑的会话——回合进行中被 kill 也不丢),回合
+// 结束后按结果刷新;可重试的会话错误把记录还原为下发前快照(被弃副本不顶替真实
+// 恢复点,见 session-error-retry-plan.md 第 4 点与 session-resume-precedence-design.md)。
+// 任务完成即删除记录。除执行链会话外,阶段级旁路步骤(phase-plan/phase-handover,
+// phase.kind = "step")也写记录: driver 收口(产物校验+提交+后处理)前保持 active,
+// 使中断后会话恢复优先于"凭 AI 写的文件推导路由"(后者会把未收口的规划/交接会话
+// 静默跳过)。无阶段的一次性旁路会话(判定/审核/脚本生成/修复规划/dryrun/fork 基点)
+// 仍不写记录,避免污染恢复记忆。
 
 // verify 阶段持久化的脚本运行记录(结构兼容 prompt.VerifyRun):脚本已由 driver
 // 执行完毕时随阶段保存,恢复时跳过执行直接进入判定会话(脚本可能很长)。
@@ -32,6 +38,16 @@ type RunRecord = {
 // early 并行审核的结论(结构兼容 runner 的 Verdict)。
 export type AuditVerdict = { type: "pass"; command?: string } | { type: "gap"; gap: string } | { type: "reverify"; gap: string }
 
+// 阶段字母(与 phases.ts 的 Phase 同值域;此处内联避免 resume→phases 反向依赖,
+// 阶段步骤恢复点用它标注归属阶段)。
+export type PhaseLetter = "a" | "d" | "m" | "t" | "v" | "k"
+
+// 阶段级旁路步骤(driver 侧收口的流程步骤,非任务流水线阶段): phase-plan = 阶段
+// 规划会话(填充 PLAN.md),phase-handover = 阶段交接蒸馏会话(产出交接文档)。
+// 这两类会话此前不写恢复点,中断后流程仅凭 AI 写的文件(PLAN.md/交接文档)推导
+// 路由,把未收口的会话静默跳过——见 docs/session-resume-precedence-design.md。
+export type StepKind = "phase-plan" | "phase-handover"
+
 // 任务流水线的阶段标记:
 // - understand: fork 流水线理解会话阶段(写 docs/<id>.context.md 摘要;fork=off
 //   不经过该阶段)
@@ -45,6 +61,8 @@ export type AuditVerdict = { type: "pass"; command?: string } | { type: "gap"; g
 //   audit 为 early 并行审核已得出的结论
 // - review: 质量审核外层循环;round 为当前轮,stage = audit(审核会话)/
 //   planfix(修复规划,docs/<id>.fix.md 可能已产出)/ fixrun(修复检查项执行中)
+// - step: 阶段级旁路步骤(phase-plan/phase-handover),letter 标注归属阶段;
+//   driver 收口前记录保持 active,中断后据此让会话恢复优先于文件推导路由
 export type Phase =
   | { kind: "understand" }
   | { kind: "decompose" }
@@ -64,6 +82,7 @@ export type Phase =
       gap?: string
     }
   | { kind: "review"; round: number; stage: "audit" | "planfix" | "fixrun" }
+  | { kind: "step"; step: StepKind; letter: PhaseLetter }
 
 export type Progress = {
   task: string
@@ -103,6 +122,26 @@ export async function recallProgress(dir: string, task: string): Promise<Progres
 // 的任务置回 in_progress,否则 next() 会跳过它、收尾永不补跑。
 export async function peekProgress(dir: string): Promise<Progress | undefined> {
   return readProgress(dir)
+}
+
+// 当前未收口的阶段步骤恢复点: 记录为 active 的 step 变体时返回其步骤身份与会话
+// (供 loop 让会话恢复优先于文件推导路由,见 docs/session-resume-precedence-design.md);
+// 非 step 记录、已收口(active=false)或无记录返回 undefined。
+export async function openStep(dir: string): Promise<{ step: StepKind; letter: PhaseLetter; session?: string } | undefined> {
+  const record = await peekProgress(dir)
+  if (record?.active && record.phase?.kind === "step") {
+    return { step: record.phase.step, letter: record.phase.letter, session: record.session }
+  }
+  return undefined
+}
+
+// 阶段步骤收口: 仅当当前记录正是该步骤时删除之(driver 已完成产物校验/提交/
+// 后处理,恢复点不再需要)。记录不匹配(已被任务记录覆盖等)时不动,避免误清。
+export async function closeStep(dir: string, step: StepKind, letter: PhaseLetter): Promise<void> {
+  const record = await peekProgress(dir)
+  if (record?.phase?.kind === "step" && record.phase.step === step && record.phase.letter === letter) {
+    await forgetProgress(dir)
+  }
 }
 
 async function readProgress(dir: string): Promise<Progress | undefined> {

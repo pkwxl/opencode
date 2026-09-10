@@ -25,6 +25,13 @@
 
 维持现状:退出码体系;优雅退出(阻塞/回退 pending)→ active=false 不复用。
 
+> **2026-09-10 追加**:恢复点落盘时机经 [session-resume-precedence-design.md](session-resume-precedence-design.md)
+> 进一步细化——active 记录改为**提示词下发成功时即写**(认领回合进行中的会话,
+> 此前"回合结束后才写"会在回合中被 kill 时丢失认领),可重试会话错误还原为下发前
+> 快照;阶段级旁路步骤(规划/交接)也经 requireArtifact 的 spec.step 携带恢复点,
+> 且会话恢复优先于文件推导路由。本文"会话内恢复/phase 阶段"语义不变,落盘时机与
+> 覆盖面以该文档为准。
+
 ~~runSession 运行中瞬时错误重试仍换新会话~~ ——已被
 [session-error-retry-plan.md](session-error-retry-plan.md) 取代(2026-09-09 实施):
 isRetryable:false 直接阻塞不重试;可重试错误改为 fork(chain.id) 重试,失败即弃、
