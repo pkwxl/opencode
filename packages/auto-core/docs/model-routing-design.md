@@ -1,6 +1,8 @@
 # 阶段化模型路由与配额降级(Model Routing / Failover)设计
 
-状态: 设计定稿待实施(2026-09-10),实施由新会话按本文 H 节 P1..P6 推进。实验开关层
+状态: 已实施(2026-09-10,P1..P6 全部落地——switches 解析、runner 路由求值、错误归类、
+降级环、单测与文档;`bun typecheck` 干净、`bun test` 全绿)。P5 自动化验证已通过;三包真实
+冒烟待有 provider 凭证的环境(`OPENCODE_AUTO_E2E=1`)。实验开关层
 (`OPENCODE_AUTO_MODEL` / `OPENCODE_AUTO_MODEL_FALLBACK`),两者缺省未设 = 现有行为零变化,
 CLI 壳零改动,不落盘、不进 `ProjectConfig`。
 

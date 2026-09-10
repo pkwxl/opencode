@@ -245,6 +245,7 @@ export async function generateFinalTask(
   const file = finalProposalFile(stage, round, finalIndex(plan))
   const collected = await requireArtifact(client, planningTask(stage, round), renderFinalTask(plan, stage, round, prior, opts.mode), opts, {
     kind: "终审任务规划",
+    role: "final-plan",
     artifact: `有效提案文件 ${file}`,
     detail: "缺失、无标题或无正文",
     requirement: `必须把自包含的任务提案写入 ${file}(首行 \`# <任务标题>\`,正文);即使认为该阶段无事可做,也要写出文件并在正文说明原因。`,

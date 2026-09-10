@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
-import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, requireArtifact, runSession, seedForkSession, sessionUsage, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
@@ -62,9 +62,20 @@ function fakeClient(
     // 事件流当前跟随的会话(未新建时的 idle 目标): 复用/恢复接管路径不调用
     // create,idle 事件须发给链上既有会话,否则 watch 收不到结束事件。
     current?: string
+    // 自定义事件流(缺省为单 idle 正常结束流):收当前会话 id,便于测试发定向事件;
+    // () => AsyncIterable 亦可(参数少者可赋给参数多者)。
+    events?: (sessionID: string) => AsyncIterable<unknown>
   } = {},
 ) {
-  const calls = { forks: [] as string[], creates: 0, updates: [] as { id: string; title: string }[] }
+  const calls = {
+    forks: [] as string[],
+    creates: 0,
+    updates: [] as { id: string; title: string }[],
+    // 记录每次 prompt 下发参数,供模型路由断言(model 缺省时该属性不存在)。
+    prompts: [] as { sessionID: string; agent?: string; model?: { providerID: string; modelID: string }; parts: unknown[] }[],
+    // 记录 session.abort 调用的会话 id,供提前结算/断流清理断言(D.2 降级前必 abort)。
+    aborts: [] as string[],
+  }
   let seq = 0
   let lastCreated = over.current ?? "ses_new_0"
   const client = {
@@ -83,12 +94,20 @@ function fakeClient(
         calls.updates.push({ id: params.sessionID, title: params.title })
         return {}
       },
-      prompt: async () => (over.prompt ? over.prompt() : {}),
+      prompt: async (
+        params: { sessionID: string; agent?: string; model?: { providerID: string; modelID: string }; parts: unknown[] },
+      ) => {
+        calls.prompts.push(params)
+        return over.prompt ? over.prompt() : {}
+      },
       promptAsync: async () => ({}),
-      abort: async () => ({}),
+      abort: async (params?: { sessionID: string }) => {
+        if (params?.sessionID) calls.aborts.push(params.sessionID)
+        return {}
+      },
       messages: async (params: { sessionID: string }) => (over.messages ? over.messages(params.sessionID) : { data: [] }),
     },
-    event: { subscribe: async () => ({ stream: idleStream(lastCreated) }) },
+    event: { subscribe: async () => ({ stream: over.events ? over.events(lastCreated) : idleStream(lastCreated) }) },
   } as unknown as OpencodeClient
   return { client, calls }
 }
@@ -724,5 +743,388 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// ---- 阶段化模型路由(docs/model-routing-design.md C.1/C.3,P2)----
+
+describe("resolveModel(路由求值 role > letter > wildcard)", () => {
+  const policy = (raw?: string) => parseSwitches(raw ? { [SWITCH_ENV.model]: raw } : {}).model
+
+  test("role 覆盖 letter 覆盖 wildcard", () => {
+    const p = policy("*=kimi/k2,m=anthropic/c-4,verify-judge=kimi/k2-lite")
+    expect(resolveModel(p, "m", "verify-judge")).toBe("kimi/k2-lite") // role 命中优先
+    expect(resolveModel(p, "m", "understand")).toBe("anthropic/c-4") // role 缺、letter 命中
+    expect(resolveModel(p, "t", "understand")).toBe("kimi/k2") // letter 缺、wildcard 兜底
+  })
+
+  test("未设(空策略): 任意 (letter, role) → undefined", () => {
+    const p = policy()
+    expect(resolveModel(p, undefined, "bypass")).toBeUndefined()
+    expect(resolveModel(p, "m", "understand")).toBeUndefined()
+  })
+
+  test("仅字母: 命中字母取值,否则 undefined", () => {
+    const p = policy("m=anthropic/c-4")
+    expect(resolveModel(p, "m", "subtask")).toBe("anthropic/c-4")
+    expect(resolveModel(p, "t", "subtask")).toBeUndefined()
+  })
+
+  test("仅通配(裸值形态): 全量命中", () => {
+    const p = policy("kimi/k2")
+    expect(resolveModel(p, undefined, "bypass")).toBe("kimi/k2")
+    expect(resolveModel(p, "m", "subtask")).toBe("kimi/k2")
+  })
+})
+
+describe("splitModel(prov/model → SDK model 参数,按首个 / 切分)", () => {
+  test("基本切分", () => {
+    expect(splitModel("anthropic/c-4")).toEqual({ providerID: "anthropic", modelID: "c-4" })
+  })
+  test("modelID 含冒号仍只按首个斜杠切", () => {
+    expect(splitModel("openai/gpt-4:128k")).toEqual({ providerID: "openai", modelID: "gpt-4:128k" })
+  })
+})
+
+describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
+  test("phaseToRole: 执行链各阶段映射(subtasks→subtask,verify/review 按 stage,step 按 slug)", () => {
+    expect(phaseToRole({ kind: "understand" })).toBe("understand")
+    expect(phaseToRole({ kind: "decompose" })).toBe("decompose")
+    expect(phaseToRole({ kind: "whole" })).toBe("whole")
+    expect(phaseToRole({ kind: "subtasks" })).toBe("subtask")
+    expect(phaseToRole({ kind: "wrapup" })).toBe("wrapup")
+    expect(phaseToRole({ kind: "verify", stage: "generate", round: 1, rechecks: 0, replaced: false })).toBe("verify-generate")
+    expect(phaseToRole({ kind: "verify", stage: "exec", round: 1, rechecks: 0, replaced: false })).toBe("verify-exec")
+    expect(phaseToRole({ kind: "verify", stage: "judge", round: 1, rechecks: 0, replaced: false })).toBe("verify-judge")
+    expect(phaseToRole({ kind: "verify", stage: "fix", round: 1, rechecks: 0, replaced: false })).toBe("verify-fix")
+    expect(phaseToRole({ kind: "review", round: 1, stage: "audit" })).toBe("review-audit")
+    expect(phaseToRole({ kind: "review", round: 1, stage: "planfix" })).toBe("review-planfix")
+    expect(phaseToRole({ kind: "review", round: 1, stage: "fixrun" })).toBe("review-fixrun")
+    expect(phaseToRole({ kind: "step", step: "phase-plan", letter: "a" })).toBe("phase-plan")
+    expect(phaseToRole({ kind: "step", step: "phase-handover", letter: "m" })).toBe("phase-handover")
+    expect(phaseToRole(undefined)).toBeUndefined()
+  })
+
+  test("roleOf: 显式 role 优先 > phase 推导 > bypass 兜底", () => {
+    expect(roleOf({ pct: 100, used: 0, at: 0, role: "knowledge" })).toBe("knowledge")
+    expect(
+      roleOf({ pct: 100, used: 0, at: 0, role: "verify-judge", phase: { kind: "review", round: 1, stage: "audit" } }),
+    ).toBe("verify-judge")
+    expect(roleOf({ pct: 100, used: 0, at: 0, phase: { kind: "wrapup" } })).toBe("wrapup")
+    expect(roleOf({ pct: 100, used: 0, at: 0 })).toBe("bypass")
+  })
+})
+
+describe("attempt 接线: runSession 依注入策略带/不带 model(不依赖 autoSwitches memo)", () => {
+  test("字母命中: opts.phase=m → anthropic/c-4 进 prompt.model", async () => {
+    const { client, calls } = fakeClient()
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 } // 无 role/phase → bypass;letter m 命中
+    await runSession(client, task, "提示词", { phase: "m" }, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "m=anthropic/c-4,*=kimi/k2" }))
+    expect(calls.prompts[0]!.model).toEqual({ providerID: "anthropic", modelID: "c-4" })
+  })
+
+  test("旁路角色: chain.role=verify-judge → role 覆盖 wildcard", async () => {
+    const { client, calls } = fakeClient()
+    const chain: SessionChain = { pct: 100, used: 0, at: 0, role: "verify-judge" }
+    await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "verify-judge=kimi/k2-lite,*=kimi/k2" }))
+    expect(calls.prompts[0]!.model).toEqual({ providerID: "kimi", modelID: "k2-lite" })
+  })
+
+  test("未设策略: prompt 参数里没有 model 键(逐字节等价现状)", async () => {
+    const { client, calls } = fakeClient()
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", { phase: "m" }, chain, undefined, undefined, parseSwitches({}))
+    expect("model" in calls.prompts[0]!).toBe(false)
+  })
+})
+
+// ---- 会话错误分类器(docs/model-routing-design.md D.1,P3)----
+// 固定报文样本驱动判据演进(设计 G.2):新 provider 措辞漏判时改这里并回归。
+// 分类问"换模型有没有用",与 opencode 自身 RETRYABLE 判据(换会话有没有用)不同。
+describe("classifySessionError(固定报文样本 → 类别)", () => {
+  test("quota: isRetryable:false 的 insufficient_quota 报文", () => {
+    expect(
+      classifySessionError({
+        message: "Error 002: Invalid request",
+        responseBody: '{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}',
+        statusCode: 429,
+        isRetryable: false,
+      }),
+    ).toBe("quota")
+  })
+  test("quota: 402 状态码", () => {
+    expect(classifySessionError({ statusCode: 402, message: "Payment Required" })).toBe("quota")
+  })
+  test("quota: 余额/额度文案", () => {
+    expect(classifySessionError({ message: "insufficient balance in your account" })).toBe("quota")
+    expect(classifySessionError({ responseBody: "you have reached your usage limit" })).toBe("quota")
+  })
+  test("quota 优先于 auth: isRetryable:false 同时带 401", () => {
+    expect(classifySessionError({ isRetryable: false, statusCode: 401, message: "unauthorized" })).toBe("quota")
+  })
+  test("auth: 401", () => {
+    expect(classifySessionError({ statusCode: 401, message: "bad credentials" })).toBe("auth")
+  })
+  test("auth: 403 + ProviderAuthError 名", () => {
+    expect(classifySessionError({ statusCode: 403, message: "ProviderAuthError: rejected key" })).toBe("auth")
+  })
+  test("rate: 429 且 attempt>=3", () => {
+    expect(classifySessionError({ statusCode: 429, message: "rate limit exceeded", attempt: 3 })).toBe("rate")
+  })
+  test("rate: 429 且 next > 60s", () => {
+    expect(classifySessionError({ statusCode: 429, message: "resource_exhausted", next: 40 * 60_000 })).toBe("rate")
+  })
+  test("非 rate: 单个 429(attempt:1、无 next)→ unknown(仍视为 opencode 在退避)", () => {
+    expect(classifySessionError({ statusCode: 429, message: "too many requests", attempt: 1 })).toBe("unknown")
+  })
+  test("非 rate: 429 且 next<=60s → unknown", () => {
+    expect(classifySessionError({ statusCode: 429, message: "too many requests", next: 30_000 })).toBe("unknown")
+  })
+  test("overflow: 报文含 ContextOverflowError", () => {
+    expect(classifySessionError({ message: "ContextOverflowError: prompt is too long" })).toBe("overflow")
+  })
+  test("overflow 优先: 与 isRetryable:false 同时出现仍判 overflow", () => {
+    expect(classifySessionError({ message: "ContextOverflowError", isRetryable: false })).toBe("overflow")
+  })
+  test("transient: overloaded_error", () => {
+    expect(classifySessionError({ message: "overloaded_error: engine busy" })).toBe("transient")
+  })
+  test("transient: 500 内部错误", () => {
+    expect(classifySessionError({ statusCode: 500, message: "Internal Server Error" })).toBe("transient")
+  })
+  test("unknown: 无意义字符串(保守缺省,不在 unknown 上换模型)", () => {
+    expect(classifySessionError({ message: "asdf zxcv qwerty" })).toBe("unknown")
+  })
+  test("unknown: 空输入", () => {
+    expect(classifySessionError({})).toBe("unknown")
+  })
+})
+
+// ---- 错误信号接线 → runSession 出口(docs/model-routing-design.md D.2/CRITICAL 不变量,P3)----
+describe("错误信号接线: watch 三触发面 → runSession 出口(P3 仅分类+标记,不做候选决策)", () => {
+  test("retry part quota(isRetryable:false): 提前结算——先 abort 再返回,failover=true、errorClass=quota", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield {
+            type: "message.part.updated",
+            properties: {
+              part: {
+                id: "pt_retry",
+                sessionID: sid,
+                messageID: "msg_1",
+                type: "retry",
+                attempt: 2,
+                error: { name: "APIError", data: { message: "insufficient_quota", isRetryable: false, statusCode: 429, responseBody: '{"code":"insufficient_quota"}' } },
+                time: { created: 1 },
+              },
+            },
+          }
+          // 即便随后有 idle,提前结算也已 return,不会走到 settled。
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string; failover?: boolean; errorClass?: string; retryable?: boolean }
+    expect(blocked.failover).toBe(true)
+    expect(blocked.errorClass).toBe("quota")
+    expect(blocked.retryable).toBe(false)
+    expect(blocked.question).toContain("会话错误:")
+    // D.2 核心:提前结算前必须 abort(不留孤儿 server 回合与 fork 并发改文件)。
+    expect(calls.aborts).toContain("ses_new_1")
+    expect(calls.creates).toBe(1)
+    expect(calls.forks).toEqual([])
+  })
+
+  test("session.status retry 变体 rate(next 超阈值): 触发提前结算并 abort", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield {
+            type: "session.status",
+            properties: { sessionID: sid, status: { type: "retry", attempt: 1, message: "rate limit, retrying later", next: 40 * 60_000 } },
+          }
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    // rate 无 isRetryable:false → retryable 保持 undefined → P3 不改控制流,runSession 仍按
+    // 既有序换会话重试至 RETRIES 耗尽阻塞(降级决策留 P4 读 result.failover)。但每次尝试的
+    // 提前结算都必然 abort——aborts 记录证明 D.2 触发面 3 已生效。
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("blocked")
+    expect(calls.aborts.length).toBeGreaterThanOrEqual(1)
+    expect(calls.aborts).toContain("ses_new_1")
+  })
+
+  test("session.error quota(isRetryable:false): 带出 errorClass=quota,但不 failover、不 abort、不提前结算", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield {
+            type: "session.error",
+            properties: { sessionID: sid, error: { name: "APIError", data: { message: "insufficient_quota", isRetryable: false, statusCode: 402 } } },
+          }
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("blocked")
+    const blocked = result as { errorClass?: string; failover?: boolean; retryable?: boolean }
+    expect(blocked.errorClass).toBe("quota")
+    expect(blocked.failover).toBeUndefined()
+    expect(blocked.retryable).toBe(false)
+    // session.error 路径绝不做提前结算的 abort。
+    expect(calls.aborts).toEqual([])
+  })
+
+  test("session.error 普通可重试 500: 不触发提前 failover(走既有重试耗尽路径)", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield {
+            type: "session.error",
+            properties: { sessionID: sid, error: { name: "APIError", data: { message: "Internal Server Error", isRetryable: true, statusCode: 500 } } },
+          }
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("blocked")
+    expect((result as { failover?: boolean }).failover).toBeUndefined()
+    // 可重试 500 → errorClass transient(仅上报,不降级)。耗尽前每次尝试都开新会话。
+    expect(calls.creates).toBe(3)
+  })
+
+  test("retry part overflow: 只累积不提前结算,继续观察到 idle 正常结束", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield {
+            type: "message.part.updated",
+            properties: {
+              part: {
+                id: "pt_retry2",
+                sessionID: sid,
+                messageID: "msg_1",
+                type: "retry",
+                attempt: 1,
+                error: { name: "APIError", data: { message: "ContextOverflowError: input too long", isRetryable: true } },
+                time: { created: 1 },
+              },
+            },
+          }
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.aborts).toEqual([])
+  })
+})
+
+// ---- 配额降级(D.3/D.4,P4):runSession 降级支 + 候选钳制与耗尽 + 降级 note ----
+// 复用 fakeClient(over.events 按当前会话 id 造定向事件流、over.fork 造分叉结果),
+// 仅注入 switches.model.fallback 驱动降级;候选窗口钳制经扩展 provider.list 表面断言。
+describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过 / 耗尽仍阻塞", () => {
+  const FAILOVER = parseSwitches({ [SWITCH_ENV.modelFallback]: "prov/b,prov/c" })
+  // 第 n 次订阅(n 从 1)发不可重试 quota 的 session.error,其后仍发 idle 让 watch
+  // 正常结算;第 2 次起发 idle。用于「首轮配额失败、次轮成功」。
+  const quotaThenIdleEvents = () => {
+    let n = 0
+    return (sid: string) =>
+      (async function* () {
+        n++
+        if (n === 1) yield { type: "session.error", properties: { sessionID: sid, error: { name: "APIError", data: { message: "insufficient_quota", isRetryable: false } } } }
+        yield { type: "session.idle", properties: { sessionID: sid } }
+      })()
+  }
+  // 每次订阅都发不可重试 quota session.error(耗尽场景)。
+  const alwaysQuotaEvents = () => {
+    return (sid: string) =>
+      (async function* () {
+        yield { type: "session.error", properties: { sessionID: sid, error: { name: "APIError", data: { message: "insufficient_quota", isRetryable: false } } } }
+        yield { type: "session.idle", properties: { sessionID: sid } }
+      })()
+  }
+
+  test("quota + 两候选:切到首个候选(prov/b),从首个失败会话 fork 保上下文,降级 note 随次轮提示词带给 AI", async () => {
+    const { client, calls } = fakeClient({ events: quotaThenIdleEvents() })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, FAILOVER)
+    expect(result.type).toBe("idle")
+    // 首轮不带 model(未设路由主模型),次轮带首个降级候选 prov/b。
+    expect("model" in calls.prompts[0]!).toBe(false)
+    expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
+    // 上下文随迁:对首个失败会话(ses_new_1)做了一次 fork。
+    expect(calls.forks).toContain("ses_new_1")
+    // 降级 note(一次性)已随次轮提示词下发并自动清除。
+    const text = (calls.prompts[1]!.parts[0] as { text: string }).text
+    expect(text).toContain("[driver]")
+    expect(text).toContain("已切换模型")
+    expect(chain.note).toBeUndefined()
+    // 换模型续跑落在分叉出的会话上(ses_fork_1),而非白板新会话。
+    expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
+  })
+
+  test("候选耗尽(每轮都 quota):回落 blocked,问题含全部已试候选;尝试次数有界(候选×RETRIES)", async () => {
+    const { client, calls } = fakeClient({ events: alwaysQuotaEvents() })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, FAILOVER)
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string; retryable?: boolean }
+    expect(blocked.question).toContain("配额降级已用尽候选")
+    expect(blocked.question).toContain("prov/b")
+    expect(blocked.question).toContain("prov/c")
+    expect(blocked.retryable).toBe(false)
+    // 有界:不挂死。每个候选独享一轮 RETRIES(3),首个未降级候选由首轮失败带出 →
+    // 总提示词数 ≤ 1 + fallback.length × RETRIES。
+    expect(calls.prompts.length).toBeLessThanOrEqual(1 + FAILOVER.model.fallback.length * 3)
+  })
+
+  test("候选窗口钳制:prov/b 上下文窗口 < cap 被跳过,首个生效切换为窗口足够的 prov2/c", async () => {
+    const { client, calls } = fakeClient({ events: quotaThenIdleEvents() })
+    // 扩展 provider 表面:prov/b 窗口 1000 < 显式 cap 5000(跳过),prov2/c 窗口 1_000_000(可用)。
+    const clamped = {
+      ...client,
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              { id: "prov", models: { b: { limit: { context: 1000 } } } },
+              { id: "prov2", models: { c: { limit: { context: 1_000_000 } } } },
+            ],
+          },
+        }),
+      },
+    } as unknown as OpencodeClient
+    const CLAMP = parseSwitches({ [SWITCH_ENV.modelFallback]: "prov/b,prov2/c" })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(clamped, task, "提示词", { contextLimit: 5000 }, chain, undefined, undefined, CLAMP)
+    expect(result.type).toBe("idle")
+    // 被选中的降级候选跳过了 prov/b(窗口不足),直接取 prov2/c。
+    expect(calls.prompts[1]!.model).toEqual({ providerID: "prov2", modelID: "c" })
+    // prov/b 从未作为下发模型出现(证明是被跳过、而非选中后失败)。
+    expect(calls.prompts.some((p) => p.model?.providerID === "prov" && p.model?.modelID === "b")).toBe(false)
+  })
+
+  test("不变量 F:fallback 为空 ⇒ quota 直接阻塞,无降级 fork、prompt 不带 model(逐字节等价现状)", async () => {
+    const { client, calls } = fakeClient({ events: quotaThenIdleEvents() })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string; retryable?: boolean }
+    expect(blocked.retryable).toBe(false)
+    expect(blocked.question).toContain("会话错误:")
+    expect(blocked.question).not.toContain("配额降级已用尽候选")
+    // 未进降级支:一次 fork 都没有;首轮即直接阻塞、无第二次提示词;prompt 无 model 键。
+    expect(calls.forks.length).toBe(0)
+    expect(calls.prompts.length).toBe(1)
+    expect("model" in calls.prompts[0]!).toBe(false)
   })
 })

@@ -219,6 +219,35 @@
   会话、不改判定、不写状态文件(判据可能误判,停机代价远高于一条多余的提示;
   第三级把收尾的决定权交回 AI,由既有流水线接管),steer 投递失败只记日志。
   dryrun 预检会话恒不检测(反复被拒探查权限是其正常形态)。
+- 阶段化模型路由与配额降级(OPENCODE_AUTO_MODEL / OPENCODE_AUTO_MODEL_FALLBACK,缺省
+  均未设 = 现状逐字节等价;设计文档 docs/model-routing-design.md):实验开关层按
+  「(阶段字母, 会话角色) → 模型」逐次给每个提示词带 `model`——唯一注入点在 attempt 的
+  `client.session.prompt`,求值为 undefined 时**不带 model 键**(而非带 `model: undefined`);
+  逐次 prompt 级 model 优先级最高、会回写会话表供链上后续沿用,故不改 opencode.json、不按阶段
+  拆 agent 契约、不重启 server。OPENCODE_AUTO_MODEL 两形态:裸值 `prov/model`(等价 `*=prov/model`
+  全量覆盖),或条目表 `键=prov/model` 逗号分隔(条目内分隔符用 `=` 而非 `:`,因 model id 可含
+  冒号;值必含 `/`,否则中文报错退出码 1);键 ∈ `*` ∪ 阶段字母 `admtvk` ∪ 角色词表。角色来源:
+  执行链按 `chain.phase` 推导(understand/decompose/whole/subtask/wrapup/verify-{generate,exec,
+  judge,fix}/review-{audit,planfix,fixrun}/phase-plan/phase-handover),旁路一次性会话按
+  requireArtifact 的 `spec.role`(verify-judge/verify-generate/review-audit/review-planfix/
+  final-plan/knowledge/prior-knowledge/implement-scan/number-recovery,未给则 `bypass`);求值
+  优先级 **角色 > 字母 > `*`**(resolveModel)。OPENCODE_AUTO_MODEL_FALLBACK 为有序候选表
+  `prov/a,prov/b`,缺省空 = 不降级。配额降级:watch 三条触发面把会话错误归类
+  (classifySessionError → quota/auth/rate/overflow/transient/unknown,判据问「换模型有没有用」
+  而非「重试有没有用」,与 opencode 自身的 retry 分类刻意不同;不确定即 unknown、保守不换;
+  overflow 明确不换,交交接机制)——① session.error 的结构化字段(message/statusCode/isRetryable/
+  responseBody),② message.part.updated 的 retry part(带 attempt 与 ApiError),③ session.status
+  的 retry 变体(带 attempt 与 next 下次等待时长);命中 quota/auth/rate 即降级:取有序候选表下一
+  候选写入 `chain.model`,复用既有 fork 副本路径续跑(session.fork 只搬消息、prompt 级 model 覆盖
+  之,**上下文随迁、无需重做**),降级**前先 `session.abort`** 防 server 端孤儿回合与 fork 副本
+  并发改文件(与断流清理同一手法),并经一次性 `chain.note` 提醒 AI 换模型续跑沿用前文产物格式与
+  协议(与 stuck-hint 同一弱模型兜底哲学)。候选经上下文窗口钳制(`contextLimits` 已知 limit.context
+  `< 配置 contextLimit` 者跳过并记原因,避免降级后立刻撞上限比原故障更糟;上限未知不过滤);候选
+  耗尽(全部已试或全部被钳制)回落既有阻塞(退出码 2、回退 pending 语义不变,文案追加已试候选清单)。
+  降级只改 model 参数、**不落盘**(`chain.model` 仅内存、progress.json 不记 model)、不改会话
+  创建方式(「独立判定会话不 fork」不受影响);每个候选各享一轮 RETRIES(降级计数与 RETRIES 分离,
+  互不掩盖,总上限 = 候选数 × RETRIES);`chain.model` 只在链内有效,新链(下一子任务/阶段)重新按
+  路由表求值(不跨链粘滞,代价是配额型故障在每条新链首个提示词重撞一次主模型,D.5 已接受取舍)。
 - --permission 四档(permission.asked 的处理策略,缺省 ask-deny):auto-allow 立即
   自动授权(always 放行,不等待);ask-allow/ask-deny/ask-fail 先等人工
   (--wait-answer 分钟,未设则不等待即视为超时;allow/yes/y 等视为授权以 always

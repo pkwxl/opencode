@@ -48,6 +48,7 @@ export async function implementPlan(
         sessionOpts,
         {
           kind: "计划生成",
+          role: "implement-scan",
           artifact: "已填充的 PLAN.md(至少一个任务)",
           detail: "缺失、无任务或任务格式无法解析",
           requirement: "必须直接编辑 PLAN.md,把任务按 `## T-NNN: <任务标题> [pending]` 格式写入(至少一个)。",

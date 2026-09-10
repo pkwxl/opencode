@@ -54,7 +54,7 @@ import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
-import { autoSwitches, SWITCH_ENV, type Switches } from "./switches"
+import { autoSwitches, SWITCH_ENV, type ModelLetter, type ModelPolicy, type ModelRole, type Switches } from "./switches"
 import { stepPause } from "./step"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
@@ -211,9 +211,19 @@ type Watch = {
   // isRetryable;字段不存在或非 false 一律按可重试处理,保守缺省;多个
   // session.error 事件叠加取悲观口径,只要出现过一次 false 即不可重试)。
   retryable?: boolean
+  // model-routing-design.md D.2: 三条触发面增量累积的结构化错误数据(message/
+  // statusCode/isRetryable/responseBody,第 3 信号再带 attempt/next),供分类与上报。
+  errorInfo?: ErrorInfo
+  // 上述 errorInfo 经 classifySessionError 的归类结果(有错误信息时才有意义)。
+  errorClass?: ErrorClass
+  // 仅 retry part / session.status retry 两条提前结算面置 true:标识本错误可降级,
+  // 交由 runSession 的 P4 failover 决策读取(此处只标记,不选择候选)。
+  failover?: boolean
 }
 
-type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } | (Outcome & { type: "blocked"; retryable?: boolean })
+type SessionResult =
+  | { type: "idle"; lastText: string; testHandover?: boolean }
+  | (Outcome & { type: "blocked"; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
 // OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一
@@ -231,7 +241,112 @@ type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } 
 // 链携带,溯源用);pending 为预创建会话 id(seedForkSession 从基点分叉所得),
 // attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
 // 瞬时错误重试自然回落 create 路径。
-export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string }
+export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string }
+
+// resume.Phase → 会话角色(模型路由的细键,见 docs/model-routing-design.md B.5/C.1)。
+// 执行链各阶段映射同名角色;subtasks 取单数 subtask;verify/review 按 stage 细分;
+// step 变体的英文 slug 即 StepKind(phase-plan / phase-handover)。phase 缺省时返回
+// undefined——由 roleOf 落 bypass(裸链与无 phase 的旁路会话)。
+export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
+  if (!phase) return undefined
+  switch (phase.kind) {
+    case "understand":
+      return "understand"
+    case "decompose":
+      return "decompose"
+    case "whole":
+      return "whole"
+    case "subtasks":
+      return "subtask"
+    case "wrapup":
+      return "wrapup"
+    case "verify":
+      return phase.stage === "generate"
+        ? "verify-generate"
+        : phase.stage === "exec"
+          ? "verify-exec"
+          : phase.stage === "judge"
+            ? "verify-judge"
+            : "verify-fix"
+    case "review":
+      return phase.stage === "audit"
+        ? "review-audit"
+        : phase.stage === "planfix"
+          ? "review-planfix"
+          : "review-fixrun"
+    case "step":
+      return phase.step === "phase-plan" ? "phase-plan" : "phase-handover"
+  }
+}
+
+// 会话角色(路由键之一): 显式 chain.role(旁路经 requireArtifact 的 spec.role 设定)
+// 优先,其次由执行链 phase 推导,最后兜底 bypass。见设计 B.5/C.1。
+export function roleOf(chain: SessionChain): ModelRole {
+  return chain.role ?? phaseToRole(chain.phase) ?? "bypass"
+}
+
+// 路由求值(设计 C.1,优先级由细到粗): role > letter > wildcard;均未命中返回
+// undefined(= 不带 model)。两变量未设时空策略对任意 (letter, role) 恒 undefined,
+// 保证 prompt 逐字节等价现状。
+export function resolveModel(policy: ModelPolicy, letter: ModelLetter | undefined, role: ModelRole): string | undefined {
+  return policy.byRole[role] ?? (letter ? policy.byLetter[letter] : undefined) ?? policy.wildcard
+}
+
+// "prov/model" → SDK prompt 的 model 参数(按首个 "/" 切分: providerID 在前、
+// modelID 为其余,后者可含冒号)。与 parseModelPolicy「值必含 /」约定一致,idx 恒 ≥0。
+export function splitModel(s: string): { providerID: string; modelID: string } {
+  const idx = s.indexOf("/")
+  return { providerID: s.slice(0, idx), modelID: s.slice(idx + 1) }
+}
+
+// 会话错误归类(docs/model-routing-design.md D.1):换模型是否可能有用,是 failover
+// (P4)的决策依据。与 opencode retry.ts 的 RETRYABLE 正则(问"重试有没有用")刻意
+// 不同——这里问"换候选模型有没有用"。缺省 unknown 表示拿不准,P4 保守不在其上换。
+export type ErrorClass = "quota" | "auth" | "rate" | "overflow" | "transient" | "unknown"
+
+// 分类器的结构化输入:取自 B.4 的三条触发面——session.error 的 data、retry part 的
+// ApiError.data(+attempt)、session.status retry 变体(+attempt、next)。字段全可选,
+// 便于多信号增量累积(见 watch 内 errorInfo 累加器)。
+export type ErrorInfo = {
+  message?: string
+  statusCode?: number
+  isRetryable?: boolean
+  responseBody?: string
+  attempt?: number
+  next?: number
+}
+
+// 分类判据集中于此(设计 G.2:新 provider 措辞漏判时,正则在此演进并由 test/runner.test.ts
+// 的固定报文样本回归)。分类器问"换模型有没有用",与 opencode 自身的重试分类器不同。
+const OVERFLOW_RE = /contextoverflowerror/i
+const QUOTA_RE = /insufficient_quota|quota|balance|credit|usage limit/i
+const AUTH_RE = /providerautherror|unauthorized|forbidden/i
+const RATE_RE = /rate limit|resource exhausted/i
+const TRANSIENT_RE = /overloaded|timeout|timed out|econn|socket hang up|network|temporar|internal server error|bad gateway|service unavailable|500|502|503|504/i
+const QUOTA_STATUS = 402
+// rate 阈值:单个 429 只是 opencode 仍在退避(不可据此换模型),须满足"已重试够多次"
+// 或"下次等待超阈值"才判 rate(设计 D.1 rate 行、B.4 第 2 信号)。
+const RATE_ATTEMPTS = 3
+const RATE_WAIT_MS = 60_000
+
+// 归类优先级(自上而下,首个命中即返回,与设计 D.1 判据表一致):
+//   1. overflow   —— 报文含 ContextOverflowError(交接/handover 机制管,明确不换)。
+//   2. quota      —— 服务端明说不可重试、或配额/余额/额度文案、或 402。
+//   3. auth       —— 401/403 或认证/越权文案(provider 不可用)。
+//   4. rate       —— 429/限流文案且达到重试次数或下次等待超阈值。
+//   5. transient  —— 已知瞬时错误(走现有重试路径,不换模型)。
+//   6. unknown    —— 保守缺省(拿不准不换)。
+export function classifySessionError(info: ErrorInfo): ErrorClass {
+  const hay = `${info.message ?? ""}\n${info.responseBody ?? ""}`
+  if (OVERFLOW_RE.test(hay)) return "overflow"
+  if (info.isRetryable === false || QUOTA_RE.test(hay) || info.statusCode === QUOTA_STATUS) return "quota"
+  if (info.statusCode === 401 || info.statusCode === 403 || AUTH_RE.test(hay)) return "auth"
+  const rateSignal = info.statusCode === 429 || RATE_RE.test(hay)
+  const rateThreshold = (info.attempt ?? 0) >= RATE_ATTEMPTS || (info.next ?? 0) > RATE_WAIT_MS
+  if (rateSignal && rateThreshold) return "rate"
+  if (TRANSIENT_RE.test(hay)) return "transient"
+  return "unknown"
+}
 
 // 上下文占比低于该值(%)时复用上一会话(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效)。
 const REUSE_BELOW = 50
@@ -1476,6 +1591,7 @@ async function judge(
     // 重新加载计划: 此前轮次的判定会话可能已更新后续任务的 verify 字段。
     return await requireArtifact(client, task, renderVerifyJudge(await load(plan.path), task, run, opts), opts, {
       kind: "审核",
+      role: "verify-judge",
       artifact: `有效判定文件 ${VERDICT_FILE}`,
       detail: "缺失或无结论行",
       requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 driver 重新执行)。",
@@ -1519,6 +1635,7 @@ async function generateScript(
   autobanner(`${task.id} ${task.title}: 验收脚本生成`)
   const produced = await requireArtifact(client, task, renderVerifyScriptGen(plan, task, script, opts), opts, {
     kind: "脚本生成",
+    role: "verify-generate",
     artifact: script,
     requirement: "必须把可执行脚本写到该路径并 chmod +x。",
     commit: { stage: "verify-script", subject: `${task.id} script ${task.title}` },
@@ -1550,6 +1667,7 @@ async function reviewTask(
   const file = join(dirname(plan.path), REVIEW_FILE)
   return requireArtifact(client, task, renderReview(current, task, { final, early, verify: opts.verify }), opts, {
     kind: "质量审核",
+    role: "review-audit",
     artifact: `有效结论文件 ${REVIEW_FILE}`,
     detail: "缺失或无结论行",
     requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过` 或 `结论: 差距 <描述>`。",
@@ -1575,6 +1693,7 @@ async function planReviewFix(
   const file = join(dir, taskDoc(task.id, "fix"))
   const collected = await requireArtifact(client, task, renderReviewFix(plan, task, gap, opts), opts, {
     kind: "修复规划",
+    role: "review-planfix",
     artifact: `有效修复检查项文件 ${taskDoc(task.id, "fix")}`,
     detail: "缺失或无检查项",
     requirement: "必须把修复检查项写入该文件(每条差距至少一项)。",
@@ -1626,6 +1745,10 @@ export async function requireArtifact<T>(
     // 阶段级旁路步骤身份(仅阶段规划/交接蒸馏会话声明);有值即启用 driver 侧
     // 恢复点与会话续跑(见函数头注释)。
     step?: { step: StepKind; letter: PhaseLetter }
+    // 会话角色(模型路由细键,docs/model-routing-design.md C.1):旁路一次性会话
+    // 显式声明(如 verify-judge / review-audit / knowledge);缺省 undefined →
+    // roleOf 落 bypass。带 spec.step 的阶段步骤会话无需声明(roleOf 由 step 变体推导)。
+    role?: ModelRole
   },
 ): Promise<T | (Outcome & { type: "blocked" })> {
   const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, letter: spec.step.letter } : undefined
@@ -1676,6 +1799,7 @@ export async function requireArtifact<T>(
       at: resume ? Date.now() : 0,
       subject: spec.commit?.subject,
       phase: stepPhase,
+      role: spec.role,
     }
     if (resume) {
       // attempt 的 resumed 判据(链上有会话且 note 待注入)使首个提示词必进原会话,
@@ -1886,13 +2010,95 @@ export async function runSession(
   test?: TestRun,
   switches: Switches = autoSwitches(),
 ): Promise<SessionResult> {
-  for (let i = 1; ; i++) {
+  // 配额降级候选跟踪(设计 D.3/D.4):整条会话链共享——每个模型候选各享一轮完整的
+  // RETRIES 重试(i 在切换候选时重置为 1),总上限 = 候选数 × RETRIES,降级计数与
+  // RETRIES 分离、互不掩盖。tried 记录本链已试过的候选串(有序,供耗尽文案与去重
+  // 再选);clipped 记录因上下文窗口不足被跳过的候选(供耗尽文案与去重日志);limits
+  // 惰性取一次 contextLimits 并缓存(降级判定只读上下文窗口,容错空映射)。
+  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  const tried: string[] = []
+  const clipped: string[] = []
+  let limits: Map<string, number> | undefined
+  let i = 1
+  for (;;) {
     const result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
+    // P4 配额降级(设计 D.3):在下方「不可重试直接阻塞」之前插入一支——分类为
+    // quota/auth/rate 且配置了候选表时,取下一候选(经 D.4 窗口钳制)、换 chain.model、
+    // 复用既有 fork 副本路径续跑(上下文随迁)。候选表为空时整段跳过,行为逐字节等价
+    // 现状(不变量 F:两变量未设 → 不进降级、不新增日志、不改文案、同阻塞路径)。
+    // 判据取 result.errorClass(P3 三条触发面统一带来的归类):plain session.error 的
+    // quota(isRetryable:false)与提前结算的 retry part / session.status retry 均带
+    // errorClass,故据它决策即可覆盖两条路径(不读 result.failover)。
+    const classZh =
+      result.errorClass === "quota" ? "配额受限" : result.errorClass === "auth" ? "provider 鉴权失败" : result.errorClass === "rate" ? "限流等待过久" : undefined
+    if (switches.model.fallback.length > 0 && classZh !== undefined) {
+      limits ??= await contextLimits(client)
+      // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选:窗口已知且 < cap 者跳过
+      // 并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障更糟);窗口未知(不在映射)
+      // 不过滤。
+      let candidate: string | undefined
+      for (const c of switches.model.fallback) {
+        if (tried.includes(c)) continue
+        const limit = limits.get(c)
+        if (limit !== undefined && limit < cap) {
+          if (!clipped.includes(c)) {
+            clipped.push(c)
+            log(`⇄ ${task.id} 跳过候选 ${c}:上下文窗口 ${formatTokens(limit)} < 链需求 ${formatTokens(cap)},降级后恐立刻撞上限`)
+          }
+          continue
+        }
+        candidate = c
+        break
+      }
+      // 候选耗尽(全部试过,或全部被窗口钳制跳过)→ 回落阻塞(退出码语义不变,仍 blocked):
+      // 在原文案后追加「已试候选清单 + 因窗口不足跳过的候选」。
+      if (candidate === undefined) {
+        const clippedReason = clipped.length ? `;因上下文窗口不足跳过 ${clipped.join(", ")}` : ""
+        return { type: "blocked", question: `${result.question}\n(配额降级已用尽候选: ${tried.join(", ") || "无"}${clippedReason})`, retryable: result.retryable }
+      }
+      // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
+      // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
+      // 一并标记已试(防被再选)。
+      const from = chain.model ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+      if (from !== undefined && !tried.includes(from)) tried.push(from)
+      tried.push(candidate)
+      chain.model = candidate
+      // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
+      // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学)。
+      chain.note = `[driver] 因${classZh}已切换模型继续,请沿用前文的产物格式与协议。`
+      log(`⇄ ${task.id} ${classZh},链上下文保留,切换模型 ${from ?? "主模型"} → ${candidate}(候选 ${tried.length}/${switches.model.fallback.length})`)
+      // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
+      // 换模型续跑无需重做上下文;attempt 已把 chain.id 停在承载真实累计消息的原会话。fork
+      // 成功即从副本续跑、i 重置 1(本候选独享一轮 RETRIES)。无 chain.id 或 fork 失败则回
+      // 退全新会话——切换仍生效,仅不继承上下文。
+      if (chain.id !== undefined) {
+        const forked = await forkSession(client, chain.id, chain.subject ?? `${task.id} 降级`)
+        if (forked !== undefined) {
+          // chain.id 清空、改由 pending 承载分叉会话:note 非空 + chain.id 非空会命中
+          // attempt 的「中断恢复(resumed)复用原会话」分支而忽略 pending,故此处必须清 id,
+          // 让降级 note 随分叉副本会话下发(副本已含真实累计消息)。
+          chain.id = undefined
+          chain.pending = forked
+          chain.pct = 100
+          i = 1
+          continue
+        }
+        log(`↻ 降级 fork 副本失败,切换仍生效、回退空白新会话(不继承上下文)`)
+      } else {
+        log(`↻ 链上无会话上下文可继承,切换仍生效、开空白新会话`)
+      }
+      chain.id = undefined
+      chain.pct = 100
+      i = 1
+      continue
+    }
     // 不可重试(isRetryable:false,如账号级限流): 换哪个会话都一样失败,直接
     // 阻塞——不进入下面的重试/fork 逻辑。attempt() 已保证 chain.id 落在这一轮
     // 实际用过的会话上(哪怕它就是刚失败的这个),真正有内容的会话不被牺牲。
+    // (候选表为空时不可重试的 quota 落在此处,行为等价现状;候选表非空时上面的
+    // 降级支已先行处理可降级类。)
     if (result.retryable === false) {
       log(`⛔ ${task.id} 遇到不可重试的会话错误(重试无意义),直接阻塞:\n${result.question}`)
       return result
@@ -1912,6 +2118,7 @@ export async function runSession(
         log(`↻ ${task.id} 遇到瞬时会话错误,从原会话 ${chain.id} 分叉副本重试(${i}/${RETRIES - 1}):\n${result.question}`)
         chain.pending = forked
         chain.pct = 100
+        i++
         continue
       }
       log(`↻ fork 重试副本失败,回退空白新会话`)
@@ -1920,6 +2127,7 @@ export async function runSession(
     // 重试保持"换新会话"语义,不复用出错的会话。
     chain.id = undefined
     chain.pct = 100
+    i++
   }
 }
 
@@ -2015,9 +2223,14 @@ async function attempt(
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note
     chain.note = undefined
+    // 本次模型(docs/model-routing-design.md C.3): 链上已降级候选优先(留给 P4),
+    // 否则按路由表以阶段字母 + 会话角色求值。target 未定义时不带 model 键——
+    // 两变量未设时 resolveModel 恒 undefined,逐字节等价现状(而非带 model: undefined)。
+    const target = chain.model ?? resolveModel(switches.model, opts.phase, roleOf(chain))
     const prompt = await client.session.prompt({
       sessionID,
       agent: opts.agent,
+      ...(target ? { model: splitModel(target) } : {}),
       parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
     })
     if (prompt.error) {
@@ -2067,7 +2280,8 @@ async function attempt(
       await remember()
     }
     if (result.blocked) return result.blocked
-    if (result.error) return { type: "blocked", question: `会话错误: ${result.error}`, retryable: result.retryable }
+    if (result.error)
+      return { type: "blocked", question: `会话错误: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
     // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
@@ -2125,6 +2339,11 @@ async function watch(
    // 会话错误是否可重试(session-error-retry-plan.md): 只有 ApiError 携带
    // isRetryable,其余错误类型没有该字段,缺省按可重试处理(undefined)。
    let retryable: boolean | undefined = undefined
+   // 结构化错误累加器(model-routing-design.md D.2): 三条触发面(session.error、
+   // retry part、session.status retry)增量合并 message/statusCode/isRetryable/
+   // responseBody(+attempt/next),既供分类又随错误结果上报;undefined 表示本回合
+   // 未收到任何结构化错误信号。
+   let errorInfo: ErrorInfo | undefined = undefined
    // 上下文占比与已用量始终跟踪(会话复用决策依据);拿不到上限记 100。
    let pct = 100
    let used = 0
@@ -2214,6 +2433,41 @@ async function watch(
         lastText = part.text
         vlog(part.text)
         continue
+      }
+      // retry part(B.4 第 1 信号 / D.2 触发面 2): { type:"retry", attempt, error:
+      // ApiError },随 message.part.updated 到达,自带完整结构化 ApiError,是最省事
+      // 的分类面。先累积 errorInfo 再喂分类器;命中 quota/auth/rate 即提前结算本回合
+      // ——必须先 abort server 端仍在跑的旧回合再返回(与断流清理同一手法),否则会
+      // 与随后 fork 出的新会话并发改文件(D.2);overflow/transient/unknown 只累积不结算。
+      if (part.type === "retry") {
+        const data = part.error?.data
+        errorInfo = {
+          ...(errorInfo ?? {}),
+          ...(data?.message !== undefined ? { message: String(data.message) } : {}),
+          ...(data?.statusCode !== undefined ? { statusCode: data.statusCode } : {}),
+          ...(data?.isRetryable !== undefined ? { isRetryable: data.isRetryable } : {}),
+          ...(data?.responseBody !== undefined ? { responseBody: String(data.responseBody) } : {}),
+          attempt: part.attempt,
+        }
+        const cls = classifySessionError(errorInfo)
+        if (cls === "quota" || cls === "auth" || cls === "rate") {
+          await client.session.abort({ sessionID }).catch(() => {})
+          const msg = errorInfo.message ?? error
+          error = error ? `${error}\n${msg}` : msg
+          return {
+            lastText,
+            error: msg,
+            pct,
+            used,
+            limit,
+            // isRetryable:false(如 insufficient_quota)才下传不可重试;其余可降级
+            // 错误换会话仍无意义但换模型可能有用,交给 P4(retryable 保持 undefined)。
+            retryable: errorInfo.isRetryable === false ? false : undefined,
+            errorInfo,
+            errorClass: cls,
+            failover: true,
+          }
+        }
       }
       const line = describePart(part)
       if (line && !seen.has(part.id)) {
@@ -2376,6 +2630,53 @@ async function watch(
       if ("data" in props.error && props.error.data && "isRetryable" in props.error.data && props.error.data.isRetryable === false) {
         retryable = false
       }
+      // D.2 触发面 1:除 message/retryable 外把结构化字段带进 errorInfo 供分类与上报
+      // (Watch 加 errorInfo?,retryable? 是同类先例)。**不改变控制流**——此路径绝不做
+      // failover 提前结算,只让现有错误路径把分类带上行下效。错误名(APIError/
+      // ProviderAuthError/ContextOverflowError/…)折进 message,使分类器能据名识别
+      // overflow/auth 这类以错误名为判据的类别(设计 D.1)。
+      const edata = "data" in props.error ? (props.error.data as Record<string, unknown> | undefined) : undefined
+      const errName = props.error.name
+      const classifyMsg = detail.toLowerCase().includes(errName.toLowerCase()) ? detail : `${errName} ${detail}`
+      errorInfo = {
+        ...(errorInfo ?? {}),
+        message: errorInfo?.message ? `${errorInfo.message}\n${classifyMsg}` : classifyMsg,
+        ...(typeof edata?.statusCode === "number" ? { statusCode: edata.statusCode } : {}),
+        ...(typeof edata?.responseBody === "string" ? { responseBody: edata.responseBody } : {}),
+        ...(edata && "isRetryable" in edata ? { isRetryable: Boolean(edata.isRetryable) } : {}),
+      }
+    }
+    // session.status retry 变体(B.4 第 2 信号 / D.2 触发面 3): { type:"retry",
+    // attempt, message, action?, next },next 为下次尝试的等待时长,把"还要再等 40 分钟"
+    // 变成主动决策。与 retry part 同判据的第二信号(server 不产 retry part 时仍可用),
+    // 容错缺失字段(旧版 server)。命中可降级即先 abort 再提前结算,否则继续观察(不作 idle)。
+    if (event.type === "session.status" && event.properties.sessionID === sessionID && event.properties.status.type === "retry") {
+      idleHandled = false
+      const st = event.properties.status as unknown as { attempt?: number; message?: string; next?: number }
+      errorInfo = {
+        ...(errorInfo ?? {}),
+        ...(st.message !== undefined ? { message: st.message } : {}),
+        ...(st.attempt !== undefined ? { attempt: st.attempt } : {}),
+        ...(st.next !== undefined ? { next: st.next } : {}),
+      }
+      const cls = classifySessionError(errorInfo)
+      if (cls === "quota" || cls === "auth" || cls === "rate") {
+        await client.session.abort({ sessionID }).catch(() => {})
+        const msg = errorInfo.message ?? error
+        error = error ? `${error}\n${msg}` : msg
+        return {
+          lastText,
+          error: msg,
+          pct,
+          used,
+          limit,
+          retryable: errorInfo.isRetryable === false ? false : undefined,
+          errorInfo,
+          errorClass: cls,
+          failover: true,
+        }
+      }
+      continue
     }
     if (
       (event.type === "session.status" &&
@@ -2407,7 +2708,19 @@ async function watch(
     const msg = "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
     error = error ? `${error}\n${msg}` : msg
   }
-   return { lastText, error, pct, used, limit, testHandover, durationMs: Date.now() - startTime, retryable }
+   return {
+     lastText,
+     error,
+     pct,
+     used,
+     limit,
+     testHandover,
+     durationMs: Date.now() - startTime,
+     retryable,
+     // 仅当确有会话错误时把分类带上行下效(不改控制流);正常结束不带这两个键,行为
+     // 逐字节等价现状。errorInfo 可能为空(如纯断流)→ 据空输入归类为 unknown。
+     ...(error ? { errorInfo, errorClass: classifySessionError(errorInfo ?? {}) } : {}),
+   }
 }
 
 // --test-by-driver 的单次测试执行: tmp/test.sh 为请求标记,其内容有两种形态——

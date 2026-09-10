@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { autoSwitches, formatSwitches, nonDefaultSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
 
 describe("parseSwitches(实验开关环境变量层)", () => {
-  test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off / stuck on / taskContext off)", () => {
+  test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off / stuck on / taskContext off / model off)", () => {
     expect(parseSwitches({})).toEqual({
       fork: true,
       forkBase: "digest",
@@ -13,10 +13,11 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       reuseSession: false,
       stuck: true,
       taskContext: "off",
+      model: { byLetter: {}, byRole: {}, fallback: [] },
     })
   })
 
-  test("空串视同未设(九个变量同测)", () => {
+  test("空串视同未设(十一个变量同测)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "",
@@ -28,6 +29,8 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.reuseSession]: "",
         [SWITCH_ENV.stuck]: "",
         [SWITCH_ENV.taskContext]: "",
+        [SWITCH_ENV.model]: "",
+        [SWITCH_ENV.modelFallback]: "",
       }),
     ).toEqual({
       fork: true,
@@ -39,6 +42,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       reuseSession: false,
       stuck: true,
       taskContext: "off",
+      model: { byLetter: {}, byRole: {}, fallback: [] },
     })
   })
 
@@ -65,6 +69,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       reuseSession: true,
       stuck: false,
       taskContext: "large",
+      model: { byLetter: {}, byRole: {}, fallback: [] },
     })
   })
 
@@ -117,14 +122,67 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/空串视同未设/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "1" })).toThrow(/缺省 off/)
   })
+
+  test("model 用例(1) 空串 = 缺省空策略(未设)", () => {
+    expect(parseSwitches({ [SWITCH_ENV.model]: "" }).model).toEqual({ byLetter: {}, byRole: {}, fallback: [] })
+  })
+
+  test("model 用例(2) 裸值 prov/model ⇒ 全量覆盖 wildcard", () => {
+    expect(parseSwitches({ [SWITCH_ENV.model]: "kimi/k2" }).model).toEqual({
+      wildcard: "kimi/k2",
+      byLetter: {},
+      byRole: {},
+      fallback: [],
+    })
+  })
+
+  test("model 用例(3) 条目表 ⇒ wildcard/字母/角色三项填充(分隔符 =,值可含冒号)", () => {
+    expect(
+      parseSwitches({
+        [SWITCH_ENV.model]: "*=kimi/k2,m=anthropic/c-4,t=kimi/k2-lite,verify-judge=kimi/k2-lite,decompose=anthropic/c-4",
+      }).model,
+    ).toEqual({
+      wildcard: "kimi/k2",
+      byLetter: { m: "anthropic/c-4", t: "kimi/k2-lite" },
+      byRole: { "verify-judge": "kimi/k2-lite", decompose: "anthropic/c-4" },
+      fallback: [],
+    })
+  })
+
+  test("model 用例(4) 越界键 ⇒ 中文报错含变量名与越界键", () => {
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/OPENCODE_AUTO_MODEL/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/键非法/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/"x"/)
+  })
+
+  test("model 用例(5) 值缺 / ⇒ 中文报错", () => {
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=kimik2" })).toThrow(/OPENCODE_AUTO_MODEL/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=kimik2" })).toThrow(/取值非法/)
+    // 裸值形态同样要求含 /
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "kimik2" })).toThrow(/取值非法/)
+  })
+
+  test("modelFallback 有序候选表 ⇒ fallback 数组按序", () => {
+    expect(parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,anthropic/c-4" }).model.fallback).toEqual([
+      "kimi/k2",
+      "anthropic/c-4",
+    ])
+    // 空串/未设 = 不降级(空数组)
+    expect(parseSwitches({ [SWITCH_ENV.modelFallback]: "" }).model.fallback).toEqual([])
+  })
+
+  test("modelFallback 坏值(缺 /)⇒ 中文报错", () => {
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,bad" })).toThrow(/OPENCODE_AUTO_MODEL_FALLBACK/)
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,bad" })).toThrow(/取值非法/)
+  })
 })
 
 describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
-  test("默认组合静默: 非默认项为 undefined;全量描述列出九项", () => {
+  test("默认组合静默: 非默认项为 undefined;全量描述列出十一项", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=",
     )
   })
 
@@ -132,7 +190,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "off" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=off")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "on" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=on")
@@ -146,6 +204,13 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     expect(nonDefaultSwitches(unstuck)).toBe("OPENCODE_AUTO_STUCK=off")
     const widened = parseSwitches({ [SWITCH_ENV.taskContext]: "medium" })
     expect(nonDefaultSwitches(widened)).toBe("OPENCODE_AUTO_TASK_CONTEXT=medium")
+    // model 生效:路由项按 wildcard→字母→角色稳定次序回推环境变量取值;降级候选独立成项
+    const routed = parseSwitches({ [SWITCH_ENV.model]: "*=kimi/k2,m=anthropic/c-4,decompose=anthropic/c-4" })
+    expect(nonDefaultSwitches(routed)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2,m=anthropic/c-4,decompose=anthropic/c-4")
+    const failed = parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,anthropic/c-4" })
+    expect(nonDefaultSwitches(failed)).toBe("OPENCODE_AUTO_MODEL_FALLBACK=kimi/k2,anthropic/c-4")
+    const both = parseSwitches({ [SWITCH_ENV.model]: "kimi/k2", [SWITCH_ENV.modelFallback]: "b/y" })
+    expect(nonDefaultSwitches(both)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2, OPENCODE_AUTO_MODEL_FALLBACK=b/y")
   })
 })
 

@@ -117,6 +117,7 @@ export async function ensureNumbering(
     opts,
     {
       kind: "编号恢复",
+      role: "number-recovery",
       artifact: `有效编号记录 ${NEXT_TASK_FILE}(不小于 ${floor} 的正整数)`,
       detail: "缺失、非正整数或小于已用编号下限",
       requirement: `必须把推导出的下一可用任务编号写入 ${NEXT_TASK_FILE}: 文件内容仅为一个不小于 ${floor} 的正整数(可带换行),不要写任何其他内容。`,

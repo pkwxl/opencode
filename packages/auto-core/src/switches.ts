@@ -19,6 +19,8 @@ export const SWITCH_ENV = {
   reuseSession: "OPENCODE_AUTO_REUSE_SESSION",
   stuck: "OPENCODE_AUTO_STUCK",
   taskContext: "OPENCODE_AUTO_TASK_CONTEXT",
+  model: "OPENCODE_AUTO_MODEL",
+  modelFallback: "OPENCODE_AUTO_MODEL_FALLBACK",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -30,6 +32,47 @@ export type StepMode = "off" | "phase" | "task" | "subtask"
 // TASK_CONTEXT_LINES)——仅调整提示词里的"建议行数"措辞,不做代码侧截断或校验
 // (context.md 本就无硬性行数限制,超出建议行数不会被拒收)。
 export type TaskContextMode = "off" | "small" | "medium" | "large"
+
+// 会话角色词表(阶段化模型路由,见 docs/model-routing-design.md C.1):实验期固定、
+// 不做自由命名;与 B.5 执行链角色一一对应,`bypass` 为未显式给 role 的旁路会话兜底。
+// 导出为共享真源,后续 P2(resolveModel / roleOf)与旁路改造复用同一份。
+export const MODEL_ROLES = [
+  "understand",
+  "decompose",
+  "whole",
+  "subtask",
+  "wrapup",
+  "verify-generate",
+  "verify-exec",
+  "verify-judge",
+  "verify-fix",
+  "review-audit",
+  "review-planfix",
+  "review-fixrun",
+  "phase-plan",
+  "phase-handover",
+  "final-plan",
+  "knowledge",
+  "prior-knowledge",
+  "implement-scan",
+  "number-recovery",
+  "bypass",
+] as const
+export type ModelRole = (typeof MODEL_ROLES)[number]
+
+// 阶段字母键(OPENCODE_AUTO_MODEL 条目表的字母键值域,见 runner 的 opts.phase)。
+const MODEL_LETTERS = ["a", "d", "m", "t", "v", "k"] as const
+export type ModelLetter = (typeof MODEL_LETTERS)[number]
+
+// 归一化后的模型路由策略(P1 只解析并持有,实际求值 resolveModel 落 P2)。缺省
+// wildcard=undefined / byLetter={} / byRole={} / fallback=[] 即「未设」——两变量
+// 均未设时 resolveModel 必须据此起「不带 model」(逐字节等价现状)。
+export type ModelPolicy = {
+  wildcard?: string
+  byLetter: Partial<Record<ModelLetter, string>>
+  byRole: Partial<Record<ModelRole, string>>
+  fallback: string[]
+}
 
 export type Switches = {
   // fork 三段式流水线总开关: off = 现状流水线(无理解会话、无分叉),行为零变化。
@@ -61,6 +104,10 @@ export type Switches = {
   // 的建议行数上限(见 src/prompt.ts 的 TASK_CONTEXT_LINES),供怀疑摘要因"建议
   // 200 行"措辞被过度压缩、信息丢失时调大预算验证。
   taskContext: TaskContextMode
+  // 阶段化模型路由 + 配额降级候选(缺省未设 = 现状零变化): OPENCODE_AUTO_MODEL 归一
+  // 化为 wildcard/byLetter/byRole,OPENCODE_AUTO_MODEL_FALLBACK 的有序候选折进 fallback。
+  // 实际求值与降级动作落 P2/P4,本层只解析、校验、日志登记。
+  model: ModelPolicy
 }
 
 const SWITCH_DEFAULTS: Switches = {
@@ -73,6 +120,82 @@ const SWITCH_DEFAULTS: Switches = {
   reuseSession: false,
   stuck: true,
   taskContext: "off",
+  model: { byLetter: {}, byRole: {}, fallback: [] },
+}
+
+// OPENCODE_AUTO_MODEL / _FALLBACK 归一化为 ModelPolicy(纯函数,供单测)。两形态:
+// 裸值 prov/model 等价全量覆盖(*=prov/model);条目表 `键=prov/model` 逗号分隔,键 ∈
+// {* ∪ 阶段字母 ∪ 角色词表},条目内分隔符用 = 而非 :(model id 可能含冒号)。值必须
+// 含 /;空串视同未设。坏值严格失败: throw 中文报错(含变量名、示例、越界键/坏值)。
+function parseModelPolicy(rawModel: string | undefined, rawFallback: string | undefined): ModelPolicy {
+  const policy: ModelPolicy = { byLetter: {}, byRole: {}, fallback: [] }
+  const modelExample = "*=kimi/k2,m=anthropic/c-4,verify-judge=kimi/k2-lite"
+  const modelRaw = rawModel === undefined || rawModel === "" ? undefined : rawModel
+  if (modelRaw !== undefined) {
+    if (modelRaw.includes("=")) {
+      // 条目表形态:逐条 key=value。
+      for (const entry of modelRaw.split(",")) {
+        const idx = entry.indexOf("=")
+        if (idx < 0) {
+          throw new Error(
+            `环境变量 ${SWITCH_ENV.model} 条目非法: "${entry}"(条目表形态每项须为 键=prov/model;示例 ${modelExample})`,
+          )
+        }
+        const key = entry.slice(0, idx)
+        const value = entry.slice(idx + 1)
+        if (!value.includes("/")) {
+          throw new Error(
+            `环境变量 ${SWITCH_ENV.model} 取值非法: "${value}"(键 "${key}" 的模型须为 provider/model 形态含斜杠;示例 ${modelExample})`,
+          )
+        }
+        if (key === "*") policy.wildcard = value
+        else if ((MODEL_LETTERS as readonly string[]).includes(key)) policy.byLetter[key as ModelLetter] = value
+        else if ((MODEL_ROLES as readonly string[]).includes(key)) policy.byRole[key as ModelRole] = value
+        else {
+          throw new Error(
+            `环境变量 ${SWITCH_ENV.model} 键非法: "${key}"(期望 *、阶段字母 ${MODEL_LETTERS.join("|")} 或角色词表 ${MODEL_ROLES.join("|")};示例 ${modelExample})`,
+          )
+        }
+      }
+    } else {
+      // 裸值形态:全量覆盖。
+      if (!modelRaw.includes("/")) {
+        throw new Error(
+          `环境变量 ${SWITCH_ENV.model} 取值非法: "${modelRaw}"(裸值须为 provider/model 形态含斜杠,或改用条目表 键=prov/model;示例 ${modelExample})`,
+        )
+      }
+      policy.wildcard = modelRaw
+    }
+  }
+  const fallbackRaw = rawFallback === undefined || rawFallback === "" ? undefined : rawFallback
+  if (fallbackRaw !== undefined) {
+    // 有序候选表 prov/a,prov/b;空/未设 = 不降级(空数组)。
+    for (const item of fallbackRaw.split(",")) {
+      if (!item.includes("/")) {
+        throw new Error(
+          `环境变量 ${SWITCH_ENV.modelFallback} 取值非法: "${item}"(候选须为 provider/model 形态、逗号分隔有序表;示例 prov/a,prov/b)`,
+        )
+      }
+      policy.fallback.push(item)
+    }
+  }
+  return policy
+}
+
+// 由策略回推 OPENCODE_AUTO_MODEL 的环境变量取值(启动日志用):固定按 wildcard→
+// 字母→角色的稳定次序渲染条目表;三项皆空返回空串(视同未设)。
+function renderModelEnv(policy: ModelPolicy): string {
+  const parts: string[] = []
+  if (policy.wildcard !== undefined) parts.push(`*=${policy.wildcard}`)
+  for (const letter of MODEL_LETTERS) {
+    const value = policy.byLetter[letter]
+    if (value !== undefined) parts.push(`${letter}=${value}`)
+  }
+  for (const role of MODEL_ROLES) {
+    const value = policy.byRole[role]
+    if (value !== undefined) parts.push(`${role}=${value}`)
+  }
+  return parts.join(",")
 }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
@@ -114,6 +237,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     reuseSession: onOff(SWITCH_ENV.reuseSession, env[SWITCH_ENV.reuseSession], SWITCH_DEFAULTS.reuseSession),
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
     taskContext: taskContext as TaskContextMode,
+    model: parseModelPolicy(env[SWITCH_ENV.model], env[SWITCH_ENV.modelFallback]),
   }
 }
 
@@ -129,6 +253,11 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.reuseSession === SWITCH_DEFAULTS.reuseSession ? undefined : `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     switches.taskContext === SWITCH_DEFAULTS.taskContext ? undefined : `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
+    (() => {
+      const routing = renderModelEnv(switches.model)
+      return routing === "" ? undefined : `${SWITCH_ENV.model}=${routing}`
+    })(),
+    switches.model.fallback.length ? `${SWITCH_ENV.modelFallback}=${switches.model.fallback.join(",")}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -145,6 +274,8 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
+    `${SWITCH_ENV.model}=${renderModelEnv(switches.model)}`,
+    `${SWITCH_ENV.modelFallback}=${switches.model.fallback.join(",")}`,
   ].join(", ")
 }
 

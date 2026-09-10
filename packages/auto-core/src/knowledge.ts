@@ -65,6 +65,7 @@ export async function extractKnowledge(
     opts,
     {
       kind: "知识提取",
+      role: "knowledge",
       artifact: `非空知识文档 ${file}`,
       detail: "缺失或为空",
       requirement: `必须把知识文档写入 ${file}(按提示词给出的章节骨架写全;信息稀少也要写出骨架并说明原因)。`,
@@ -184,6 +185,7 @@ export async function extractPriorKnowledge(
     opts,
     {
       kind: "前置知识提取",
+      role: "prior-knowledge",
       artifact: `非空知识文档 ${file}`,
       detail: "缺失或为空",
       requirement: `必须把知识文档写入 ${file}(按提示词给出的章节骨架写全;已有迁移结果稀少也要写出骨架并说明原因)。`,
