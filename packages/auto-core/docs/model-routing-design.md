@@ -18,13 +18,14 @@ CLI 壳零改动,不落盘、不进 `ProjectConfig`。
 
 两者在实现上是**同一个注入点**: 逐次提示词携带目标模型 + 一份(阶段, 角色)→ 模型的路由表。
 
-## B. 事实基线(实现前必读,行号以 auto-core 分支为准)
+## B. 事实基线(实现前必读,行号以 auto-core 分支 HEAD `2f2b20a09`〔会话恢复优先层,2026-09-10 实施〕为准)
 
 ### B.1 driver 侧:全流水线只有一个 prompt 点
 
-`src/runner.ts:1937` 的 `client.session.prompt({ sessionID, agent: opts.agent, parts })`
+`src/runner.ts:2018` 的 `client.session.prompt({ sessionID, agent: opts.agent, parts })`
 是唯一的提示词下发处(`attempt()` 内);verify-judge / review / final / 知识提取等旁路一次性
-会话经 `requireArtifact`(runner.ts:1611)同样走 `runSession` → `attempt`。因此**在这一处
+会话经 `requireArtifact`(runner.ts:1606 定义、:1686 转发 runSession)同样走
+`runSession` → `attempt`。因此**在这一处
 加 model 即覆盖全部会话**,无需逐调用点改造。
 
 SDK 表面已支持:`session.prompt` 的参数含 `model?: { providerID: string; modelID: string }`
@@ -47,10 +48,10 @@ input.model(本次 prompt)> agent.model(.opencode/agent/*.md frontmatter 或 ope
 ### B.3 现状:配额错误的三条路径
 
 - **可重试面**: `session.error` 事件里 `data.isRetryable !== false` → `attempt()` 包装为
-  `会话错误: …`(runner.ts:1981)→ `runSession` 的瞬时错误重试循环(runner.ts:1812)从原会话
-  fork 副本重试(runner.ts:1830-1843),`RETRIES = 3`(runner.ts:1848)耗尽后阻塞。
+  `会话错误: …`(runner.ts:2070)→ `runSession` 的瞬时错误重试循环(runner.ts:1891)从原会话
+  fork 副本重试(runner.ts:1909-1922),`RETRIES = 3`(runner.ts:1927)耗尽后阻塞。
 - **不可重试面**: `isRetryable === false`(如 `insufficient_quota`,
-  `packages/opencode/src/provider/error.ts:117-121`)→ 直接阻塞(runner.ts:1817-1820)→
+  `packages/opencode/src/provider/error.ts:117-121`)→ 直接阻塞(runner.ts:1896-1899)→
   `loop.ts` `block()` 回退 pending、**退出码 2** 待人工。
 - **等待面**: opencode 自己对可重试错误做**无次数上限、不可配置**的退避
   (`packages/opencode/src/session/retry.ts:175-198`,尊重 `retry-after`,
@@ -58,7 +59,7 @@ input.model(本次 prompt)> agent.model(.opencode/agent/*.md frontmatter 或 ope
   等 `--idle-time` 看门狗判死。
 
 分类信息目前**被丢弃**:`watch` 的 `session.error` 分支只取 `data.message`,`isRetryable` 也只
-用于 `=== false` 判定(runner.ts:2276-2289),`statusCode` / `responseBody` / `responseHeaders`
+用于 `=== false` 判定(runner.ts:2365-2379),`statusCode` / `responseBody` / `responseHeaders`
 不进 `Watch` 结果。
 
 ### B.4 两条现成的、当前未被利用的降级信号
@@ -66,24 +67,28 @@ input.model(本次 prompt)> agent.model(.opencode/agent/*.md frontmatter 或 ope
 1. **retry part**: `RetryPart = { type: "retry", attempt, error: ApiError }`
    (`packages/sdk/js/src/v2/gen/types.gen.ts:605-615`)——带完整结构化 `ApiError`。它随
    `message.part.updated` 到达,`watch` 已经在处理该事件,`describePart` 甚至已有打印分支
-   (runner.ts:2382),但**只打印不上报**。这是最省事的分类面。
+   (runner.ts:2471),但**只打印不上报**。这是最省事的分类面。
 2. **`session.status` 的 retry 变体**: `{ type: "retry", attempt, message, action?, next }`
    (`types.gen.ts:673-690`),`next` 为下次尝试的等待时长。`watch` 只匹配
-   `status.type === "idle"`(runner.ts:2292-2295),retry 变体被忽略。这条能把"还要再等 40 分钟"
+   `status.type === "idle"`(runner.ts:2380-2385),retry 变体被忽略。这条能把"还要再等 40 分钟"
    变成主动决策,而不必等 idle 看门狗。
 
 ### B.5 路由键的取数来源
 
 - 阶段字母: `opts.phase`(`"a"|"d"|"m"|"t"|"v"|"k"`,runner.ts:192,loop 透传,缺省 undefined)。
-- 执行链角色: `chain.phase` 是 `src/resume.ts:48` 的判别联合
+- 执行链角色: `chain.phase` 是 `src/resume.ts:66` 的判别联合
   (`understand` / `decompose` / `whole` / `subtasks` / `wrapup` / `verify:{generate,exec,judge,fix}`
-  / `review:{audit,planfix,fixrun}`),在 runner.ts:345/397 赋值,`attempt()` 可直接取。
-- 旁路会话: `chain.phase` 缺省(runner.ts:1611 构造的链不带 phase),现只有中文 `spec.kind`
-  标签(runner.ts:1464 审核、:1507 脚本生成、:1538 质量审核、:1563 修复规划;loop.ts:511 阶段规划、
-  :584 交接蒸馏;final.ts:247 终审任务规划;knowledge.ts:67/180 知识提取;implement.ts:44;
-  numbering.ts:113 编号恢复)。→ 需给 `requireArtifact` 的 spec 加英文 `role` 字段。
+  / `review:{audit,planfix,fixrun}` / `step:{phase-plan,phase-handover}`——step 变体为
+  会话恢复优先层新增,`StepKind = "phase-plan" | "phase-handover"` 在 resume.ts:49),
+  在 runner.ts:345/397 赋值,`attempt()` 可直接取。
+- 旁路会话: `requireArtifact` 构造的链(runner.ts:1673-1679)现仅对带 `spec.step` 的步骤携带
+  `chain.phase`(`step` 变体,英文 slug 即 `StepKind`,loop.ts:481 阶段规划、:572 交接蒸馏的
+  role 可直接取);其余链 `chain.phase` 缺省,现只有中文 `spec.kind`
+  标签(runner.ts:1477 审核、:1520 脚本生成、:1551 质量审核、:1576 修复规划;
+  final.ts:246 终审任务规划;knowledge.ts:61/180 知识提取;implement.ts:44;
+  numbering.ts:113 编号恢复)。→ 需给 `requireArtifact` 的 spec 加英文 `role` 字段(`step` 已具备)。
 - 候选模型的上下文窗口: `contextLimits(client)` 已给出 `providerID/modelID → limit.context`
-  映射(runner.ts:2389),用量百分比也已按消息真实 model 计算(runner.ts:1057、:2161)。
+  映射(runner.ts:2478),用量百分比也已按消息真实 model 计算(runner.ts:1072、:2250)。
 
 ## C. 设计:路由表与生效点
 
@@ -116,7 +121,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 ### C.3 生效点
 
-`attempt()`(runner.ts:1850)取 `opts.phase` 与 `chain.phase`/`chain.role` 解析出目标模型,
+`attempt()`(runner.ts:1929)取 `opts.phase` 与 `chain.phase`/`chain.role` 解析出目标模型,
 连同 `chain.model`(该链已降级到的候选,见 D.4)一起传给 `client.session.prompt` 的
 `model` 字段:
 
@@ -147,13 +152,13 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 ### D.2 三个触发面接线
 
-1. `watch` 的 `session.error` 分支(runner.ts:2276):除现有 `message`/`retryable` 外,把
+1. `watch` 的 `session.error` 分支(runner.ts:2365):除现有 `message`/`retryable` 外,把
    `data` 的结构化字段带出(`Watch` 加 `errorInfo?`,`retryable?: boolean` 是同类先例)。
 2. `watch` 的 `message.part.updated` 分支: `part.type === "retry"` 时记录
    `{ attempt, statusCode, isRetryable, responseBody }`(取自 `RetryPart.error`,该 part 本身
    不带等待时长)并喂给分类器;命中 `quota|auth|rate` 阈值即
    提前结算本回合——**必须先 `client.session.abort({ sessionID })` 再 break**,与断流清理
-   (runner.ts:2313-2320)同一手法:server 端旧回合此刻仍在跑,不中止就会与随后 fork 出的
+   (runner.ts:2402-2409)同一手法:server 端旧回合此刻仍在跑,不中止就会与随后 fork 出的
    新会话并发改文件。返回 `blocked` 且带 `failover: true`。
 3. `session.status` retry 变体: 同一判据的第二信号(server 不产出 retry part 时仍可用),
    额外提供 `next`(下次尝试的等待时长,`rate` 判据用它做"还要等太久就别等了"的阈值),
@@ -161,17 +166,17 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 ### D.3 降级动作
 
-`runSession`(runner.ts:1800)的重试循环里,在 `result.retryable === false` 直接阻塞
-(runner.ts:1817-1820)**之前**插入一支: 分类为可降级且候选表还有未试项 →
+`runSession`(runner.ts:1879)的重试循环里,在 `result.retryable === false` 直接阻塞
+(runner.ts:1896-1899)**之前**插入一支: 分类为可降级且候选表还有未试项 →
 取下一候选(经 D.4 钳制)→ `chain.model = 候选` → 复用现有 fork 副本路径继续
-(runner.ts:1830-1843)。
+(runner.ts:1909-1922)。
 
 上下文随迁是这里的收益而非意外: `session.fork` 逐条克隆消息
 (fork-decompose-design.md:341「fork 只搬消息,不复制 agent/model/permission」),而 prompt 级
 `model` 优先级最高(B.2)——**换模型续跑不需要重做上下文**。日志形如
 `⇄ T-001 配额受限,链上下文保留,切换模型 a/x → b/y(候选 2/3)`。
 
-降级后首个提示词经 `chain.note`(一次性附加说明,runner.ts:1934-1940)带一句"已切换模型,
+降级后首个提示词经 `chain.note`(一次性附加说明,runner.ts:2015-2021)带一句"已切换模型,
 注意沿用前文的产物格式与协议"——与 `stuck-hint` 为弱模型兜底是同一套哲学。
 
 ### D.4 候选钳制与耗尽
@@ -225,7 +230,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 | 步 | 内容 | 文件 | 验证 |
 |---|---|---|---|
 | P1 | `SWITCH_ENV` 增 `model` / `modelFallback`;`parseSwitches` 解析 C.2 两种形态并归一化为 `ModelPolicy`;`nonDefaultSwitches` / `formatSwitches` 登记;非法值中文报错 | `src/switches.ts` | `bun test test/switches.test.ts`(补空/裸值/条目表/越界键/值缺 `/` 五类用例) |
-| P2 | 路由纯函数 `resolveModel(policy, letter, role)` 与 `roleOf(chain)`;`SessionChain` 加 `role?` / `model?`;`requireArtifact` spec 加英文 `role` 并在 11 个调用点补齐(B.5 清单);`attempt()` 传 `model` | `src/runner.ts`(+ `src/resume.ts` 若角色 slug 需要) | `bun test test/runner.test.ts`(fake client 断言 prompt 收到的 `model`;未设开关时断言参数里**没有** `model` 键) |
+| P2 | 路由纯函数 `resolveModel(policy, letter, role)` 与 `roleOf(chain)`;`SessionChain` 加 `role?` / `model?`;`requireArtifact` spec 加英文 `role` 并在调用点补齐(B.5 清单,11 处中 loop.ts 阶段规划/交接蒸馏已可经 `spec.step` 的 `StepKind` 取英文 slug、`roleOf` 映射 `step` 变体即可,需补 `role` 的 9 处);`attempt()` 传 `model` | `src/runner.ts`(+ `src/resume.ts` 若角色 slug 需要) | `bun test test/runner.test.ts`(fake client 断言 prompt 收到的 `model`;未设开关时断言参数里**没有** `model` 键) |
 | P3 | 分类器 `classifySessionError` + `Watch.errorInfo` / retry part 记录 / `session.status` retry 第二信号 | `src/runner.ts` | 单测:固定报文样本 → 类别;未知报文 → `unknown` |
 | P4 | `runSession` 降级支(D.3)+ 候选窗口钳制与耗尽(D.4)+ 降级 note(D.3) | `src/runner.ts` | 单测:quota 不可重试 + 两候选 → 第二次 prompt 带候选模型且上下文来自 fork;候选耗尽 → 仍 `blocked` |
 | P5 | 真实冒烟(`auto/` worktree 三包全量):设 `OPENCODE_AUTO_MODEL` 跑一轮 migrate 短流程,核对日志 `⇄`/百分比再基线;故意配错 provider 密钥触发 `auth` 降级 | `auto/` | 见 docs/behavior.md 冒烟约定;typecheck + 三包 test |
