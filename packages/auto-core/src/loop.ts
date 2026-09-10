@@ -25,7 +25,7 @@ import {
 } from "./phases"
 import { renderDryrun, renderPhaseHandover, renderPhasePlan, stageText } from "./prompt"
 import { allowWrite, protect, reprotect, unprotect } from "./protect"
-import { peekProgress } from "./resume"
+import { closeStep, openStep, peekProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { shellProfile } from "./shell"
 import { manage, type ServerHandle } from "./server"
@@ -509,6 +509,7 @@ export async function runAll(
           },
           {
             kind: "阶段规划",
+            step: { step: "phase-plan", letter: phase },
             artifact: "已填充的 PLAN.md(至少一个任务)",
             detail: "缺失、无任务、任务格式无法解析或任务编号复用了已占用的编号",
             requirement:
@@ -541,6 +542,9 @@ export async function runAll(
           log(`✓ 编号记录推进: 下一可用任务编号 T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
         }
         log(`✓ 阶段规划完成: PLAN.md 已填入 ${planned} 个任务`)
+        // 收口: 删除本步骤的 driver 侧恢复点(产物已校验、提交与编号推进均完成)。
+        // 在此之前被 kill → 记录仍 active,下次运行经 openStep 重入规划并复用会话。
+        await closeStep(directory, "phase-plan", phase)
         return 0
       } finally {
         await reprotect(path)
@@ -582,6 +586,7 @@ export async function runAll(
         },
         {
           kind: "交接蒸馏",
+          step: { step: "phase-handover", letter: phase },
           artifact: `有效交接文档 ${handover}(四个必备小节齐备)`,
           detail: "缺失或小节不全",
           requirement:
@@ -599,6 +604,10 @@ export async function runAll(
         log(`⏸ 交接蒸馏会话受阻(隐性阻塞,请检查后重新运行):\n${distilled.question}`)
         return 2
       }
+      // 收口: 蒸馏会话(本步骤唯一的 AI 环节)已产出有效交接文档并提交,删除 driver
+      // 侧恢复点。其后的归档/重置/台账为幂等的 driver 记账,中断由 runPhaseLoop 的
+      // "交接中断恢复"(归档 PLAN 已在而台账缺行)兜底,不再依赖会话恢复。
+      await closeStep(directory, "phase-handover", phase)
       const archivedPlan = join(directory, await phaseArchive(directory, round, phase), "PLAN.md")
       await mkdir(dirname(archivedPlan), { recursive: true })
       await Bun.write(archivedPlan, await Bun.file(path).text())
@@ -646,6 +655,47 @@ export async function runAll(
         if (route.type === "complete") {
           log("✓ 全部阶段已完成")
           return 0
+        }
+        // 会话恢复优先于文件推导路由(docs/session-resume-precedence-design.md):
+        // driver 侧仍有未收口的阶段步骤恢复点(上次运行的规划/交接会话被中断、driver
+        // 未完成收口)→ 重入该步骤并复用中断的会话,即使 PLAN.md/台账已让文件推导路由
+        // 前进。PLAN.md 任务与交接文档是 AI 写的(或会话中断后才由 driver 补的),不能
+        // 证明会话已收口;唯有 driver 的恢复点被 closeStep 删除才算收口。仅当步骤归属
+        // 阶段 == 当前路由阶段且该阶段未入台账时生效: 字母不一致(人工回退/陈旧记录)
+        // 让文件路由优先并告警,阶段已入台账则清除陈旧记录。
+        const open = await openStep(directory)
+        if (open) {
+          const ledger = await readLedger(directory)
+          if (ledger.done.includes(open.letter)) {
+            await closeStep(directory, open.step, open.letter)
+          } else if (open.letter === route.phase) {
+            log(
+              `↻ 会话恢复点优先: ${open.step === "phase-plan" ? "阶段规划" : "阶段交接"}会话` +
+                `(${open.letter} ${phaseText(open.letter)})未收口,重入该步骤续跑`,
+            )
+            if (open.step === "phase-plan") {
+              banner(`${open.letter} ${phaseText(open.letter)} 阶段规划`)
+              const code = await planPhase(open.letter)
+              if (code !== 0) return code
+              continue
+            }
+            // 交接重入仅当文件路由也是 handover(本阶段任务全部 done): 否则(尚有
+            // 未完成任务的异常态)归档+重置会丢未完成任务,让文件路由优先并告警。
+            if (route.type === "handover") {
+              const code = await handoverWithStep(open.letter)
+              if (code !== 0) return code
+              continue
+            }
+            log(
+              `⚠ 未收口的交接恢复点(${open.letter})与当前路由(${route.type})不一致` +
+                `(尚有未完成任务?),按文件推导路由继续,不重入交接以免丢失未完成任务`,
+            )
+          } else {
+            log(
+              `⚠ 未收口的阶段步骤恢复点(${open.step} ${open.letter})与当前路由阶段(${route.phase})不一致,` +
+                `按文件推导路由继续(如为人工回退请忽略;否则检查 .auto/progress.json)`,
+            )
+          }
         }
         if (route.type === "plan") {
           // 交接中断恢复(C.2 幂等性): 归档目录内已有归档 PLAN.md 而台账未记录 =

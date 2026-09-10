@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
-import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, runSession, seedForkSession, sessionUsage, type ForkBaseInfo, type SessionChain } from "../src/runner"
-import { recallProgress, saveProgress } from "../src/resume"
+import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, requireArtifact, runSession, seedForkSession, sessionUsage, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { openStep, recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // 交接 steer 构造与交接判定的纯函数单测(接线在 executeWhole/runSubtask;完整
@@ -567,6 +567,160 @@ describe("gatedAutoCorrectRefs / gatedTaskRefGap(OPENCODE_AUTO_REF_CHECK 挂点�
       const gap = await gatedTaskRefGap(dir, "T-001", true)
       expect(gap).toContain("任务产物文档存在失效引用")
       expect(gap).toContain("docs/gone.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---- 阶段步骤恢复点(requireArtifact spec.step: 会话恢复优先于文件推导)----
+
+describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
+  // 专用 fake client: 记录 create 次数与每个 prompt 的目标会话;messages 返回一条
+  // 真实 assistant 轮次(tokens>0)使 sessionUsage 判为可复用、非报错桩;事件流对
+  // "当前会话"(新建则随之更新,复用则保持)发一个 idle 让 watch 正常结算。
+  function artifactClient(current?: string) {
+    const state = { creates: 0, prompts: [] as string[], current }
+    const client = {
+      session: {
+        create: async () => {
+          state.creates++
+          state.current = `ses_new_${state.creates}`
+          return { data: { id: state.current } }
+        },
+        fork: async () => ({ data: { id: "ses_fork" } }),
+        get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
+        update: async () => ({}),
+        prompt: async (params: { sessionID: string }) => {
+          state.prompts.push(params.sessionID)
+          return {}
+        },
+        promptAsync: async () => ({}),
+        abort: async () => ({}),
+        messages: async () => ({
+          data: [
+            { info: { role: "user" } },
+            { info: { role: "assistant", providerID: "kimi", modelID: "k2", tokens: { input: 5000, output: 200, reasoning: 0, cache: { read: 1000, write: 0 } } } },
+          ],
+        }),
+      },
+      provider: { list: async () => ({ data: { all: [] } }) },
+      event: {
+        subscribe: async () => ({
+          stream: (async function* () {
+            yield { type: "session.idle", properties: { sessionID: state.current } }
+          })(),
+        }),
+      },
+    } as unknown as OpencodeClient
+    return { client, state }
+  }
+
+  const planTask = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
+  const spec = (reset: () => void) => ({
+    kind: "阶段规划",
+    step: { step: "phase-plan" as const, letter: "m" as const },
+    artifact: "已填充的 PLAN.md",
+    requirement: "写入 PLAN.md",
+    reset: async () => {
+      reset()
+    },
+    collect: async () => 4,
+  })
+
+  test("未收口 step 记录 + 会话存活: 复用原会话、不重置产物、提示词进原会话", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-step-resume-"))
+    try {
+      await saveProgress(dir, { task: "PLAN", session: "ses_plan_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+      const { client, state } = artifactClient("ses_plan_old")
+      let resetCalled = false
+      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(false) // 复用会话 → 保留产物现场,不重置
+      expect(state.creates).toBe(0) // 复用,不新建
+      expect(state.prompts).toEqual(["ses_plan_old"]) // 提示词进原会话
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("无 step 记录(全新步骤): 重置产物、开新会话,且下发即写 active 恢复点", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-step-fresh-"))
+    try {
+      const { client, state } = artifactClient()
+      let resetCalled = false
+      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.creates).toBe(1)
+      // 伪任务 PLAN 携带 step 阶段 → 下发成功即落盘(此前 T- 门控会漏掉旁路会话)
+      const rec = await recallProgress(dir, "PLAN")
+      expect(rec?.active).toBe(true)
+      expect(rec?.session).toBe("ses_new_1")
+      expect(rec?.phase).toEqual({ kind: "step", step: "phase-plan", letter: "m" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("step 记录存在但会话已死(get 失败): 不复用,重置并开新会话", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-step-dead-"))
+    try {
+      await saveProgress(dir, { task: "PLAN", session: "ses_dead", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+      const { client, state } = artifactClient("ses_dead")
+      ;(client as unknown as { session: { get: unknown } }).session.get = async () => ({ error: { name: "NotFound" } })
+      let resetCalled = false
+      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(true) // 会话不可复用 → 重置重做
+      expect(state.creates).toBe(1)
+      expect(state.prompts).toEqual(["ses_new_1"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("可重试错误耗尽: 步骤恢复点不被删除(还原为 session 未定的初始认领),下次运行仍重入本步骤", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-step-retry-"))
+    try {
+      // 每次会话都以可重试错误结束 → runSession 重试 RETRIES 次后阻塞。
+      const queue: unknown[] = []
+      let seq = 0
+      const enqueue = (id: string) => {
+        queue.push({ type: "session.error", properties: { sessionID: id, error: { name: "APIError", data: { message: "net", isRetryable: true } } } })
+        queue.push({ type: "session.idle", properties: { sessionID: id } })
+      }
+      const client = {
+        session: {
+          create: async () => {
+            const id = `ses_new_${++seq}`
+            enqueue(id)
+            return { data: { id } }
+          },
+          fork: async () => {
+            const id = `ses_fork_${++seq}`
+            enqueue(id)
+            return { data: { id } }
+          },
+          get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
+          update: async () => ({}),
+          prompt: async () => ({}),
+          promptAsync: async () => ({}),
+          abort: async () => ({}),
+          messages: async () => ({ data: [] }),
+        },
+        provider: { list: async () => ({ data: { all: [] } }) },
+        event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
+      } as unknown as OpencodeClient
+      const result = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}))
+      expect((result as { type: string }).type).toBe("blocked")
+      // 关键: 可重试错误把记录还原为下发前快照(requireArtifact 进入时写的初始恢复点,
+      // session 未定),而非删除——步骤认领保留,下次运行 openStep 命中即重入规划,
+      // 不会凭半成品 PLAN.md(AI 写的文件)跳过本步骤。
+      const open = await openStep(dir)
+      expect(open?.step).toBe("phase-plan")
+      expect(open?.letter).toBe("m")
+      expect(open?.session).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

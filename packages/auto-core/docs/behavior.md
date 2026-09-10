@@ -386,8 +386,14 @@
   在下一个新会话前重启 server 兜底。
 - 进度恢复(应用重启后精确恢复中断):run 期间 driver 把当前阶段与执行链会话
   持久化到目标目录 .auto/progress.json({task, session, at, active, phase};阶段
-  边界经 persistStage 写 active=false 总结态,执行链会话开始/结束经 attempt 刷
-  active=true 半途态;旁路一次性会话不写);runTask 开始时 recallProgress 读回——
+  边界经 persistStage 写 active=false 总结态,执行链会话经 attempt 在**提示词下发
+  成功时即写 active=true**(认领在跑的会话——回合进行中被 kill/Ctrl+C 也不丢,此前
+  只在回合结束后写会丢失认领),回合结束后按结果刷新;可重试的会话错误把记录还原为
+  下发前快照,被弃的 fork 副本不顶替真实恢复点。无阶段的一次性旁路会话(判定/审核/
+  脚本生成/修复规划/dryrun/fork 基点)不写;**阶段级旁路步骤**(phase-plan 规划 /
+  phase-handover 交接蒸馏,phase.kind="step")经 requireArtifact 的 spec.step 同样
+  写 active 记录,driver 收口(产物校验+提交+后处理)后经 closeStep 删除——见
+  docs/session-resume-precedence-design.md);runTask 开始时 recallProgress 读回——
   active 且会话在 server 上仍存在 → 复用原会话继续(chain 直接 seed 该会话,
   与 `opencode -r` 同构,不设时间窗;该接管不受 OPENCODE_AUTO_REUSE_SESSION 与
   复用阈值约束——恢复语义即"接着被中断的那个会话继续",首个提示词进原会话,恢复
@@ -411,7 +417,13 @@
   收到会话结束事件即耗尽(server 故障/网络断开)时 abort 孤儿回合、按会话错误
   处理,不误判会话正常结束。任务完成 forgetProgress;优雅退出(非网络类
   blocked/incomplete)保留记录但清复用资格;网络类 blocked 保持 active 供恢复
-  复用;伪任务(PLAN/AUTO)不记忆。
+  复用;伪任务 AUTO(dryrun/编号恢复等无阶段旁路)不记忆,伪任务 PLAN 仅在承载
+  阶段步骤(spec.step)时记忆。**会话恢复优先于流程恢复**:runPhaseLoop 在消费
+  routePhase 的文件推导路由之前先查 openStep——存在未收口的阶段步骤恢复点(归属
+  阶段 == 当前路由阶段且未入台账)即重入该步骤续跑(复用中断的会话),即使 PLAN.md
+  已有任务/台账已让文件路由前进;PLAN.md 任务与交接文档是 AI 写的(或会话中断后
+  driver 才补的),不能证明会话已收口,唯有 driver 恢复点被 closeStep 删除才算收口
+  (阶段已入台账则清除陈旧记录,字母不一致则告警并让文件路由优先)。
 - opencode server 管理(src/server.ts manage):run 缺省 spawn `opencode serve`
   并托管生命周期;显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管。
   client 为 Proxy,restart 换实例后既有引用自动生效。网络类会话错误(NETWORK_FAILURE

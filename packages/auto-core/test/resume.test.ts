@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { forgetProgress, peekProgress, recallProgress, saveProgress, type Progress } from "../src/resume"
+import { closeStep, forgetProgress, openStep, peekProgress, recallProgress, saveProgress, type Progress } from "../src/resume"
 
 describe("进度记录", () => {
   let dir: string
@@ -83,5 +83,50 @@ describe("进度记录", () => {
 
   test("forget 对缺失文件无害", async () => {
     await forgetProgress(dir)
+  })
+})
+
+describe("阶段步骤恢复点(openStep/closeStep)", () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-step-"))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("step 记录往返;openStep 返回未收口步骤的身份与会话", async () => {
+    const progress: Progress = { task: "PLAN", session: "ses_plan", at: 5, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } }
+    await saveProgress(dir, progress)
+    expect(await recallProgress(dir, "PLAN")).toEqual(progress)
+    expect(await openStep(dir)).toEqual({ step: "phase-plan", letter: "m", session: "ses_plan" })
+  })
+
+  test("openStep: 已收口(active=false)、非 step 记录、无记录均返回 undefined", async () => {
+    await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: false, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+    expect(await openStep(dir)).toBeUndefined()
+    await saveProgress(dir, { task: "T-001", session: "s", at: 1, active: true, phase: { kind: "subtasks" } })
+    expect(await openStep(dir)).toBeUndefined()
+    await forgetProgress(dir)
+    expect(await openStep(dir)).toBeUndefined()
+  })
+
+  test("closeStep: 步骤/字母匹配才删除;不匹配则保留", async () => {
+    await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+    await closeStep(dir, "phase-handover", "m")
+    expect(await openStep(dir)).toBeDefined()
+    await closeStep(dir, "phase-plan", "d")
+    expect(await openStep(dir)).toBeDefined()
+    await closeStep(dir, "phase-plan", "m")
+    expect(await openStep(dir)).toBeUndefined()
+    expect(await peekProgress(dir)).toBeUndefined()
+  })
+
+  test("closeStep: 当前是任务记录(非本步骤)时不误删", async () => {
+    await saveProgress(dir, { task: "T-009", session: "s", at: 1, active: true, phase: { kind: "subtasks" } })
+    await closeStep(dir, "phase-plan", "m")
+    expect((await peekProgress(dir))?.task).toBe("T-009")
   })
 })

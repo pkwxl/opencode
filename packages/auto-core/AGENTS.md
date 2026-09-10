@@ -31,7 +31,7 @@
 - 步进模式(OPENCODE_AUTO_STEP 环境变量:phase/task/subtask 包含式边界硬暂停)→ `src/step.ts`(设计: docs/step-mode-design.md)
 - 验收/审核 → `src/verify.ts` + `docs/verify-review-design.md`;终审闭环 → `src/final.ts` + `docs/mode-final-review-design.md`
 - 提示词文案 → 只动 `templates/prompts/*.md`(`src/prompt.ts` 只做数据组装),改后跑 `bun test test/prompt.test.ts`
-- 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`;模式 → `templates/modes/` + `src/mode.ts`
+- 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`(恢复点在提示词下发时即写、可重试错误还原;阶段级旁路步骤 phase-plan/phase-handover 经 requireArtifact 的 spec.step 携带 step 恢复点,openStep/closeStep 收口;**会话恢复优先于文件推导路由**——设计 docs/session-resume-precedence-design.md,2026-09-10 已实施);模式 → `templates/modes/` + `src/mode.ts`
 - 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
 - 死循环检测(会话内重复同一动作且结果不变 → driver steer 提示,OPENCODE_AUTO_STUCK 缺省 on)→ `src/stuck.ts` + `templates/prompts/stuck-hint.md`(设计: docs/stuck-loop-design.md)
 - 阶段化模型路由与配额降级(OPENCODE_AUTO_MODEL / _FALLBACK:按阶段字母 + 会话角色逐次带 model,配额受限时 fork 保上下文换候选)→ 设计 docs/model-routing-design.md(2026-09-10 定稿,**P1..P6 未实施**,新会话从该文档 H 节继续)
