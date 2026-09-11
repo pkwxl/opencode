@@ -153,6 +153,8 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--handover-test"],
         ["--auto-number"],
         ["--no-auto-number"],
+        ["--wrapup"],
+        ["--no-wrapup"],
       ]
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
@@ -164,6 +166,9 @@ describe("CLI 解析: run 侧选项与配置", () => {
       // 自动编号两键的修订指引为成对形式
       const numbering = await runCli(["run", dir, "--auto-number"])
       expect(numbering.err).toContain("--auto-number(关闭用 --no-auto-number)")
+      // wrapup 两键的修订指引为成对形式
+      const wrapup = await runCli(["run", dir, "--wrapup"])
+      expect(wrapup.err).toContain("--wrapup(关闭用 --no-wrapup)")
       // 迁移源两键的修订指引为成对形式
       const source = await runCli(["run", dir, "--source-dir", "/tmp"])
       expect(source.err).toContain("--source-dir <目录> --source-path <相对路径>")
@@ -315,6 +320,7 @@ describe("CLI: init 固化项目配置", () => {
         testByDriver: false,
         handoverTest: false,
         autoNumber: true,
+        wrapup: true,
         phases: "m",
       })
     } finally {
@@ -339,6 +345,7 @@ describe("CLI: init 固化项目配置", () => {
         testByDriver: false,
         handoverTest: false,
         autoNumber: true,
+        wrapup: true,
         phases: "m",
       })
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -376,6 +383,37 @@ describe("CLI: init 固化项目配置", () => {
       expect(both.code).toBe(1)
       expect(both.err).toContain("互斥")
       const contBoth = await runCli(["continue", dir, "--auto-number", "--no-auto-number"])
+      expect(contBoth.code).toBe(1)
+      expect(contBoth.err).toContain("互斥")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init --wrapup/--no-wrapup 固化与 amend;两开关同现为用法错误", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // 缺省(不给任一键)固化 true
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ wrapup: true })
+      // amend: --no-wrapup 覆盖为 false;摘要现"收尾 off";无参数重复 init 保留
+      const off = await runCli(["init", dir, "--no-wrapup"])
+      expect(off.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ wrapup: false })
+      expect(off.out).toContain("收尾 off")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ wrapup: false })
+      // --wrapup 覆盖回 true
+      expect((await runCli(["init", dir, "--wrapup"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ wrapup: true })
+      // =false 形式视同未给出
+      expect((await runCli(["init", dir, "--no-wrapup=false"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ wrapup: true })
+      // 两开关同现且均未带 =false → 用法错误(init/continue 共用分支,continue 同样拦截)
+      const both = await runCli(["init", dir, "--wrapup", "--no-wrapup"])
+      expect(both.code).toBe(1)
+      expect(both.err).toContain("互斥")
+      const contBoth = await runCli(["continue", dir, "--wrapup", "--no-wrapup"])
       expect(contBoth.code).toBe(1)
       expect(contBoth.err).toContain("互斥")
     } finally {
@@ -700,7 +738,7 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
 
   // config 固化先于 PLAN.md 覆盖防护与计划生成会话,故经防护拦截路径即可验证
   // 缺省档(不触发真实 AI 会话)。
-  test("快捷模式下 --subtask 缺省固化为 ondemand;显式给出时按给出值", async () => {
+  test("快捷模式下 --subtask 缺省固化为 ondemand、wrapup 缺省固化为 false;显式给出时按给出值", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -708,10 +746,14 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
       const blocked = await runCli(["init", dir, "--implement-prompt", "重新生成"])
       expect(blocked.code).toBe(1)
       expect(blocked.err).toContain("PLAN.md 已包含正式任务")
-      expect(JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).subtask).toBe("ondemand")
-      const explicit = await runCli(["init", dir, "--implement-prompt", "重新生成", "--subtask", "auto"])
+      const config = JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
+      expect(config.subtask).toBe("ondemand")
+      expect(config.wrapup).toBe(false)
+      const explicit = await runCli(["init", dir, "--implement-prompt", "重新生成", "--subtask", "auto", "--wrapup"])
       expect(explicit.code).toBe(1)
-      expect(JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).subtask).toBe("auto")
+      const explicitConfig = JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
+      expect(explicitConfig.subtask).toBe("auto")
+      expect(explicitConfig.wrapup).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

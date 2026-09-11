@@ -153,6 +153,8 @@ export async function runAll(
     // .auto/next-task 记录续接编号,记录缺失先经 AI 恢复会话推导恢复(见
     // src/numbering.ts)。
     autoNumber?: boolean
+    // --no-wrapup(config.wrapup,缺省 true): 关闭任务收尾会话,透传给 runTask。
+    wrapup?: boolean
   },
 ): Promise<number> {
   const path = join(directory, "PLAN.md")
@@ -400,6 +402,7 @@ export async function runAll(
           handoverTest: opts.handoverTest,
           mode: opts.mode,
           newSession: opts.newSession,
+          wrapup: opts.wrapup,
           phase,
         })
         if (outcome.type === "blocked") {

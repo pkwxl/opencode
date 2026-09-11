@@ -183,6 +183,9 @@ export type Opts = {
   // 任务的 final 字段共用同一豁免路径,为内部标记、不写 PLAN.md(设计文档
   // phases-design.md D.3)。
   phase?: "a" | "d" | "m" | "t" | "v" | "k"
+  // --no-wrapup(config.wrapup 持久化,缺省 true): 关闭时每个任务的子任务/整
+  // 任务执行完成后跳过收尾会话(renderWrapup),修复轮后的收尾同样跳过。
+  wrapup?: boolean
 }
 
 type Watch = {
@@ -666,8 +669,9 @@ export async function runTask(
           await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive, dir })
           maybeExit("subtask", `${task.id} 子任务 ${index + 1}`)
         }
-        // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
-        if (!skipWrapup) {
+        // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费);
+        // config.wrapup=false(--no-wrapup,缺省 true)时整体关闭。
+        if (!skipWrapup && (opts.wrapup ?? true)) {
           await persistStage({ kind: "wrapup" })
           autobanner(`${task.id} ${task.title}: 收尾`)
           const subject = `${task.id} wrapup ${task.title}`
@@ -1413,12 +1417,14 @@ async function verifyTask(
     const fixed = await runExecSession(client, plan, task, renderFix(plan, task, gap, opts), opts, chain)
     if (fixed.type === "blocked") return fixed
     await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
-    autobanner(`${task.id} ${task.title}: 收尾`)
-    const wrapSubject = `${task.id} wrapup ${task.title}`
-    chain.subject = wrapSubject
-    const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
-    if (wrapped.type === "blocked") return wrapped
-    await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
+    if (opts.wrapup ?? true) {
+      autobanner(`${task.id} ${task.title}: 收尾`)
+      const wrapSubject = `${task.id} wrapup ${task.title}`
+      chain.subject = wrapSubject
+      const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
+      if (wrapped.type === "blocked") return wrapped
+      await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
+    }
     return undefined
   }
   for (let round = resume?.round ?? 0, rechecks = resume?.rechecks ?? 0; ; ) {

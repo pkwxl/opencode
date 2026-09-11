@@ -104,6 +104,8 @@ describe("loadProjectConfig", () => {
         ["handoverTest", 1],
         ["autoNumber", "yes"],
         ["autoNumber", 1],
+        ["wrapup", "yes"],
+        ["wrapup", 1],
       ]
       for (const [key, value] of bad) {
         writeConfig(dir, JSON.stringify({ [key]: value }))
@@ -121,6 +123,18 @@ describe("loadProjectConfig", () => {
       expect((await loadProjectConfig(dir)).autoNumber).toBe(true)
       writeConfig(dir, JSON.stringify({ autoNumber: false }))
       expect((await loadProjectConfig(dir)).autoNumber).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("wrapup 缺省 true;合法布尔原样读回", async () => {
+    const dir = tempDir()
+    try {
+      expect(CONFIG_DEFAULTS.wrapup).toBe(true)
+      expect((await loadProjectConfig(dir)).wrapup).toBe(true)
+      writeConfig(dir, JSON.stringify({ wrapup: false }))
+      expect((await loadProjectConfig(dir)).wrapup).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -277,5 +291,8 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
     // 自动编号缺省启用入摘要(stable-refs D5);关闭时移除该段
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toContain("· 自动编号 on ·")
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, autoNumber: false })).not.toContain("自动编号")
+    // wrapup 缺省 true 不入摘要(现状零变化);关闭时摘要现"收尾 off"
+    expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("收尾")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, wrapup: false })).toContain("· 收尾 off ·")
   })
 })

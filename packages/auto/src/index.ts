@@ -25,7 +25,8 @@ const positional: string[] = []
 // --final-review/--phases/--source-dir/--source-path/--dest-dir/--implement-file/
 // --implement-prompt 带值(吞掉下一个
 // token);--verbose/--interactive/--dryrun/--early/--verify/--test-by-driver/
-// --handover-test/--new-session/--auto-number/--no-auto-number 是布尔选项,出现即
+// --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
+// 是布尔选项,出现即
 // true,仅当紧随字面量 true/false 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
 // --mode 另有短选项 -m(镜像 -p 的吞值规则)。
@@ -52,7 +53,7 @@ const VALUE_FLAGS = new Set([
   "implement-file",
   "implement-prompt",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -123,7 +124,7 @@ if (command === "run") {
       process.exit(1)
     }
   }
-  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "phases", "source-dir", "source-path", "dest-dir"]) {
+  for (const key of ["mode", "agent", "context-limit", "subtask", "verify", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "source-dir", "source-path", "dest-dir"]) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
@@ -131,7 +132,9 @@ if (command === "run") {
           ? "opencode-auto init <dir> --source-dir <目录> --source-path <相对路径>"
           : key === "auto-number" || key === "no-auto-number"
             ? "opencode-auto init <dir> --auto-number(关闭用 --no-auto-number)"
-            : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <值>`
+            : key === "wrapup" || key === "no-wrapup"
+              ? "opencode-auto init <dir> --wrapup(关闭用 --no-wrapup)"
+              : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <值>`
       console.error(`${flag} 已在 init 固化(.opencode/auto/config.json)。变更方式: ${fix},或直接编辑该文件`)
       process.exit(1)
     }
@@ -276,6 +279,7 @@ if (command === "run") {
     testByDriver: config.testByDriver,
     handoverTest: config.handoverTest,
     autoNumber: config.autoNumber,
+    wrapup: config.wrapup,
     // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
     newSession: flags.has("new-session") && flags.get("new-session") !== "false",
   })
@@ -542,6 +546,14 @@ if (command === "init" || command === "continue") {
   }
   if (flags.has("auto-number") && flags.get("auto-number") !== "false") explicit.autoNumber = true
   if (flags.has("no-auto-number") && flags.get("no-auto-number") !== "false") explicit.autoNumber = false
+  // --wrapup/--no-wrapup: 一对布尔开关(启用/关闭任务收尾会话),镜像
+  // --auto-number/--no-auto-number 同款处理;两者同现自相矛盾,为用法错误。
+  if (flags.has("wrapup") && flags.has("no-wrapup") && flags.get("wrapup") !== "false" && flags.get("no-wrapup") !== "false") {
+    console.error("--wrapup 与 --no-wrapup 是一对互斥开关,不要同时使用")
+    process.exit(1)
+  }
+  if (flags.has("wrapup") && flags.get("wrapup") !== "false") explicit.wrapup = true
+  if (flags.has("no-wrapup") && flags.get("no-wrapup") !== "false") explicit.wrapup = false
   let existing: ProjectConfig
   try {
     existing = await loadProjectConfig(directory)
@@ -578,6 +590,10 @@ if (command === "init" || command === "continue") {
     // (计划生成会话产出整任务计划后以单会话执行为主、上下文超限再交接续跑,
     // 不经逐任务分解);显式 --subtask 优先。
     if (!flags.has("subtask")) explicit.subtask = "ondemand"
+    // 快捷模式缺省关闭收尾会话: 该模式只产出 PLAN.md(计划生成会话),不进入
+    // 任务执行循环,未显式给出 --wrapup/--no-wrapup 时 wrapup 固化为 false
+    // (镜像 subtask 固化 ondemand 的同款处理);显式给出优先。
+    if (!flags.has("wrapup") && !flags.has("no-wrapup")) explicit.wrapup = false
   }
   // handoverTest 须搭配 testByDriver: 显式给出时按本次生效值校验(未显式给出
   // test-by-driver 则回落既有配置值);amend 关闭 test-by-driver 而保留既有
@@ -916,13 +932,13 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--implement-file <file>|--implement-prompt <text>]
-  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>]
+  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]] [--new-session]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--auto-number/--no-auto-number、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--auto-number/--no-auto-number、--wrapup/--no-wrapup、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
        --new-session 中断恢复时不复用被中断的旧会话、开新会话继续(仅跳过会话复用,阶段精确重入不受影响;缺省复用存活的被中断会话)
        -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
        -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
@@ -935,7 +951,8 @@ console.error(`用法:
        --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
        --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(子任务会话为 docs/<任务>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<任务>/testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错
        --auto-number / --no-auto-number 自动编号开关(缺省 --auto-number = 启用,--no-auto-number 为关闭用退出开关): 任务编号(T-NNN)在目标目录永不重复——下一可用编号持久化在 .auto/next-task,阶段规划会话自该记录续接编号(不再每阶段从 T-001 重排);记录缺失(如 .auto/ 未随仓库共享的新克隆)时先经 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导下一编号并恢复记录,再继续规划
-       --implement-file <file> / --implement-prompt <text> 单阶段(phases = "m")快捷模式,二选一: 依据指定的计划文件(全文注入)或直接给出的实施提示词,开一次性计划生成会话直接编辑填充 PLAN.md(与阶段规划会话同款机制,是 init 唯一会启动 AI 会话的路径);要求生效 phases 为 "m"(不兼容时先 --phases m 切换)且 PLAN.md 为占位/空模板态(已有正式任务时拒绝,防误覆盖);该模式下未显式给出 --subtask 时 subtask 缺省固化为 ondemand(单会话执行、上下文超限按需交接,不做逐任务分解);生成完成后需人工审核 PLAN.md,再另行调用 opencode-auto run <dir> 执行——之后逐个任务按固化的 subtask 档推进,run 不接受这两个选项
+       --wrapup / --no-wrapup 任务收尾会话开关(缺省 --wrapup = 启用,--no-wrapup 为关闭用退出开关): 关闭后每个任务的子任务/整任务执行完成后跳过收尾会话(含修复轮后的收尾)
+       --implement-file <file> / --implement-prompt <text> 单阶段(phases = "m")快捷模式,二选一: 依据指定的计划文件(全文注入)或直接给出的实施提示词,开一次性计划生成会话直接编辑填充 PLAN.md(与阶段规划会话同款机制,是 init 唯一会启动 AI 会话的路径);要求生效 phases 为 "m"(不兼容时先 --phases m 切换)且 PLAN.md 为占位/空模板态(已有正式任务时拒绝,防误覆盖);该模式下未显式给出 --subtask 时 subtask 缺省固化为 ondemand(单会话执行、上下文超限按需交接,不做逐任务分解),未显式给出 --wrapup/--no-wrapup 时 wrapup 缺省固化为 false(该模式只产出 PLAN.md,不进入任务执行循环,收尾会话不适用);生成完成后需人工审核 PLAN.md,再另行调用 opencode-auto run <dir> 执行——之后逐个任务按固化的 subtask/wrapup 档推进,run 不接受这两个选项
        continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——轮首建立新一轮轮次目录 docs/R-NN/(本轮 PLAN.md、阶段台账、阶段归档与知识文档均落轮内,落盘即永久;根 PLAN.md 重建为指向轮内的相对符号链接,AGENTS.md 快照存轮内 AGENTS.md.bak),上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项(含 --test-by-driver/--handover-test)、-p 可按轮修订(不受前缀护栏约束)
 
 退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)

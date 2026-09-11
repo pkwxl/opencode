@@ -36,6 +36,9 @@ export type ProjectConfig = {
   // 会话推导恢复再继续。缺省 true(stable-refs D5 翻转);--no-auto-number 保留为
   // 退出开关(关闭后编号自 T-001 重排,与历史行为一致)。
   autoNumber: boolean
+  // --no-wrapup: 关闭任务收尾会话(renderWrapup,子任务/整任务执行完成后与
+  // 修复轮后的收尾会话)。缺省 true(现状零变化)。
+  wrapup: boolean
   // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
   // 单次运行,行为与阶段化之前完全一致。
   phases: string
@@ -61,6 +64,7 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   testByDriver: false,
   handoverTest: false,
   autoNumber: true,
+  wrapup: true,
   phases: "m",
 }
 
@@ -117,6 +121,7 @@ export function formatProjectConfig(config: ProjectConfig): string {
     ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"}` +
     (config.testByDriver ? ` · 测试 driver on${config.handoverTest ? "(交接)" : ""}` : "") +
     (config.autoNumber ? " · 自动编号 on" : "") +
+    (config.wrapup ? "" : " · 收尾 off") +
     ` · 上下文上限 ${config.contextLimit}k · 阶段 ${config.phases}`
   )
 }
@@ -153,6 +158,7 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     testByDriver,
     handoverTest,
     autoNumber: booleanOf("autoNumber", pick("autoNumber")),
+    wrapup: booleanOf("wrapup", pick("wrapup")),
     // 看门狗键由 verifyIdle/verifyMax 更名而来(现同时控制 verify 与 test 脚本
     // 执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init 自然固化新键。
     idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "分钟"),
