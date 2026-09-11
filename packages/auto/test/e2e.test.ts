@@ -697,6 +697,25 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  // config 固化先于 PLAN.md 覆盖防护与计划生成会话,故经防护拦截路径即可验证
+  // 缺省档(不触发真实 AI 会话)。
+  test("快捷模式下 --subtask 缺省固化为 ondemand;显式给出时按给出值", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await Bun.write(join(dir, "PLAN.md"), "## T-001: 已有任务 [pending]\n做点什么。\n")
+      const blocked = await runCli(["init", dir, "--implement-prompt", "重新生成"])
+      expect(blocked.code).toBe(1)
+      expect(blocked.err).toContain("PLAN.md 已包含正式任务")
+      expect(JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).subtask).toBe("ondemand")
+      const explicit = await runCli(["init", dir, "--implement-prompt", "重新生成", "--subtask", "auto"])
+      expect(explicit.code).toBe(1)
+      expect(JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).subtask).toBe("auto")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账预检)", () => {

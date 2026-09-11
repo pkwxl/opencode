@@ -69,7 +69,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 | `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
 | `agent` | 非空字符串 | `auto` | 执行会话使用的 agent(`init` 生成的契约 agent),存在性由 run 前完整性检查兜底,见[agent 选择](#opencode-server-与-agent-选择) |
 | `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用(需 `OPENCODE_AUTO_REUSE_SESSION=on`)的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
-| `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线) |
+| `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线);`--implement-file`/`--implement-prompt` 快捷模式缺省 `ondemand` |
 | `verify` | `true` / `false` | `false` | 任务级三段式验收(未启用时任务收尾后直接标 done,不写 `verified` 字段) |
 | `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(verify 与 test)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取 |
 | `idleMax` | 0..1440(分钟,0 = 不设) | `0` | driver 托管脚本的绝对时长上限;旧键名 `verifyMax` 在新键缺失时回落读取 |
@@ -136,7 +136,7 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 | `--phases <admtvk 子序列含 m>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);台账非空时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工修订台账。见[阶段化流程](#阶段化流程--phases) |
 | `--source-dir <dir> --source-path <相对路径>` | 迁移源参数,写入配置的 `source` 键;两参数必须成对给出、`dir` 须为工作目录下的相对路径(不含 `..`,迁移源位于 `<工作目录>/<dir>`)、`path` 须为相对 `dir` 的相对路径(不含 `..`),init 时校验 `<工作目录>/<dir>/<path>` 存在(环境错误退出码 1);任一给出即整体覆盖既有 `source`。`dir` 接受软链接——存在性校验跟随链接解析,可把源系统大树留在工作目录外、在工作目录内以链接接入 |
 | `--dest-dir <相对路径>` | 迁移目标目录,写入配置的 `destDir` 键(相对工作目录、不含 `..`,可独立于 source 修订);driver 工作目录的流程文件与迁移产出的代码经它隔离——规划会话据此把代码任务指向 `<工作目录>/<dest-dir>`;不校验存在性(目标目录常由迁移过程创建) |
-| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
+| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`;`--implement-file`/`--implement-prompt` 快捷模式下未显式给出时缺省 `ondemand`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
 | `--verify [true]` | 任务级三段式验收开关,写入配置(缺省/裸选项 `false`);启用时收尾后由 driver 亲自执行 verify 脚本、旁路独立判定会话判定,见[执行流水线](#执行流水线)。该开关同时决定验收描述是否进入 init 产物:未启用时 AGENTS.md 不含验证原则块、PLAN.md 模板与 agent 契约不含 verify 相关描述(已存在的 AGENTS.md 验证原则块会在 init/run 时移除);`phases` 含 `v` 而该开关未启用时 init 会打 note 提示(v 阶段任务自身即检验、不受影响) |
 | `--idle-time [1-120]` | driver 托管脚本的无进度判定窗口(分钟,缺省/裸选项 10;旧名 `--verify-idle` 已更名,出现即报错指引):driver 轮询输出文件(`tmp/verify.out` 或 `tmp/test.<n>.out`,stdout/stderr 合并单文件)的大小,持续无增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
 | `--idle-max [1-1440]` | driver 托管脚本的绝对运行时长上限(分钟,缺省/裸选项不设;旧名 `--verify-max` 已更名):兜底防止脚本无限循环输出;设为正整数时无论是否有输出,总时长超限即终止 |
@@ -883,10 +883,13 @@ opencode-auto init [dir] --implement-prompt "<text>"    # 直接依据实施提�
   或本次 `--phases` 给出的值不是 `"m"` 时报错,提示先 `--phases m` 切换)。
 - `PLAN.md` 当前必须是占位模板态或不存在,已有正式任务时拒绝执行(防止误覆盖已有
   或此前生成的计划)。
+- 该模式下未显式给出 `--subtask` 时,`subtask` 缺省固化为 `ondemand`(计划生成会话
+  产出整任务计划后以单会话执行为主、上下文超限再交接续跑,不经逐任务分解);显式
+  `--subtask` 优先。
 - 生成完成后打印任务数并退出(不进入执行);**需人工审核 `PLAN.md`**,确认任务拆分
-  与描述无误后再另行调用 `opencode-auto run [dir]` 执行——execution 阶段仍是逐个
-  任务由 driver 的分解会话自动进一步拆解为子任务推进(见[执行流水线](#执行流水线)),
-  与手写 `PLAN.md` 的正常流程完全一致。
+  与描述无误后再另行调用 `opencode-auto run [dir]` 执行——execution 阶段逐个任务按
+  固化的 `subtask` 档推进(见[执行流水线](#执行流水线)),与手写 `PLAN.md` 的正常
+  流程完全一致。
 - 计划生成会话受阻(隐性阻塞)时退出码 `2`,报文同其余旁路一次性会话;`run` 不接受
   这两个选项(它们只属于 `init`)。
 
