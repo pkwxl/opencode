@@ -7,7 +7,7 @@ import { commitTree, pendingChanges, repoRoots } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { startInteractive, type Interactive } from "./interactive"
-import { banner, log, vlog } from "./log"
+import { banner, formatDuration, log, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { block, countSubtasks, load, next, resetInProgress, setStatus, type Plan } from "./plan"
 import {
@@ -29,6 +29,16 @@ import { closeStep, openStep, peekProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { shellProfile } from "./shell"
 import { manage, type ServerHandle } from "./server"
+import {
+  flushStats,
+  loadStats,
+  statsBoot,
+  statsId,
+  statsPhase,
+  statsTask,
+  statsTotals,
+  type StatsResume,
+} from "./stats"
 import { stepPause } from "./step"
 import { renderText, usePromptLibrary } from "./template"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
@@ -186,8 +196,13 @@ export async function runAll(
   }
 
   const watcher = opts.verbose ? watchFiles(directory) : undefined
+  // 统计装载(plans/STATS_PLAN.md §1): 读盘 → 折旧上一进程遗留段 → 轮次滚动 → 开
+  // 本进程首段;有旧文档时打印续接横幅(§4.6)。必须先于 trackSubtasks(其心跳读
+  // 数依赖已装载句柄与 statsTask 设定的桶身份)。
+  const resumed = await loadStats(directory)
+  if (resumed) log(resumeBanner(resumed))
   // 每 10 分钟上报当前任务的子任务进度与预计剩余时间(基于 PLAN.md 勾选状态)。
-  const progress = trackSubtasks(path)
+  const progress = trackSubtasks(path, directory)
   // Driver-owned files go read-only for the whole run; driver writes
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
@@ -351,6 +366,9 @@ export async function runAll(
         }
         banner(`${task.id} ${task.title}`)
         log(`▶ ${task.id} 开始执行(第 ${task.attempts + 1} 次尝试)`)
+        // 任务切换挂点(STATS_PLAN §3): 重置 task 桶(id 变化时)、清空 per-session
+        // 映射;同 id 幂等——中断续跑同任务不重置、不重复计数。
+        await statsTask(directory, task.id)
         const start = Date.now()
         const outcome = await runTask(serverHandle.client, plan, task, {
           agent: agentName,
@@ -412,7 +430,11 @@ export async function runAll(
       }
     }
 
-    if (phases === "m") return await runTaskLoop("m")
+    if (phases === "m") {
+      // 非分阶段路径: 全程归 "m" 阶段桶(STATS_PLAN §3)。
+      await statsPhase(directory, "m")
+      return await runTaskLoop("m")
+    }
 
     // 阶段规划会话(E 节): 旁路一次性,复用 requireArtifact 骨架,产物 = 直接编辑
     // 填充的 PLAN.md——会话被 driver 专门授权写它(临时放行写权限,其余状态文件
@@ -656,6 +678,9 @@ export async function runAll(
           log("✓ 全部阶段已完成")
           return 0
         }
+        // 阶段切换挂点(STATS_PLAN §3): 字母变化重置 phase 桶;相同字母幂等。
+        // blocked 已 return、complete 即将退出,均无需切换。
+        await statsPhase(directory, route.phase)
         // 会话恢复优先于文件推导路由(docs/session-resume-precedence-design.md):
         // driver 侧仍有未收口的阶段步骤恢复点(上次运行的规划/交接会话被中断、driver
         // 未完成收口)→ 重入该步骤并复用中断的会话,即使 PLAN.md/台账已让文件推导路由
@@ -778,6 +803,9 @@ export async function runAll(
     repl?.close()
     watcher?.close()
     progress?.close()
+    // 统计优雅收口(STATS_PLAN §1): fold 开放段后关段落盘并卸载句柄;下次
+    // loadStats 无折旧可读。写失败内部静默,不影响退出码。
+    await flushStats(directory)
     // 托管句柄(managed)的生命周期归调用方,此处不关闭。
     if (!opts.managed) server?.close()
     await unprotect(directory)
@@ -860,25 +888,53 @@ async function gitStatusFiles(directory: string, root: string): Promise<string[]
 
 // 每 10 分钟重读 PLAN.md,上报当前任务的子任务勾选进度与剩余时间估计(估计为
 // 已完成项的线性外推,精度受该检查间隔约束)。
-function trackSubtasks(path: string) {
-  let current = { id: "", since: 0 }
-  const timer = setInterval(async () => {
-    const plan = await load(path).catch(() => undefined)
-    const task = plan && (plan.tasks.find((t) => t.status === "in_progress") ?? next(plan))
-    if (!task) return
-    if (task.id !== current.id) current = { id: task.id, since: Date.now() }
-    const { done, total } = countSubtasks(task.body)
-    if (!total) return
-    const elapsed = Date.now() - current.since
-    const estimate = done ? formatDuration((elapsed / done) * (total - done)) : "未知(尚无已完成的子任务)"
-    log(`  ⏳ ${task.id} 子任务进度 ${done}/${total},已用时 ${formatDuration(elapsed)},预计剩余 ${estimate}`)
+function trackSubtasks(path: string, directory: string) {
+  const timer = setInterval(() => {
+    void subtaskProgressLine(path, directory)
+      .then((line) => line && log(line))
+      .catch(() => {}) // 统计永不影响流程: 读数/解析异常静默,下次心跳重试
   }, 10 * 60_000)
   return { close: () => clearInterval(timer) }
 }
 
-function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000)
-  const minutes = Math.floor(seconds / 60)
-  if (!minutes) return `${seconds} 秒`
-  return `${minutes} 分 ${seconds % 60} 秒`
+// 进度心跳文案(plans/STATS_PLAN.md §4.5): 任务用时改读 stats 任务桶的跨中断
+// 累计(含开放段实时外推),取代原内存 since——进程重启后首次外推即可信。
+// 返回完整报文行;无可上报对象(无任务/无子任务)或守卫失败返回 undefined。
+// 守卫 statsId === task.id: task 桶身份与当前任务一致才可信(statsTask 切换前
+// 的窗口期、或未装载句柄时 statsId 为 undefined)。
+// AUTO-DECISION: 守卫失败时跳过本次上报(返回 undefined),不保留内存 since 兜底。
+// 备选"守卫失败退回内存计时"会在跨中断重启后的守卫真空期回到旧的外推失真问题,
+// 且双口径并存使文案时而有累计、时而只有本进程,展示口径漂移;心跳 10 分钟一次,
+// 跳过一次的代价远小于口径失真,否决。
+export async function subtaskProgressLine(path: string, directory: string): Promise<string | undefined> {
+  const plan = await load(path).catch(() => undefined)
+  const task = plan && (plan.tasks.find((t) => t.status === "in_progress") ?? next(plan))
+  if (!task) return undefined
+  const { done, total } = countSubtasks(task.body)
+  if (!total) return undefined
+  if (statsId(directory) !== task.id) return undefined
+  const totals = await statsTotals(directory, "task")
+  const boot = await statsBoot(directory)
+  if (!totals || !boot) return undefined
+  const elapsed = totals.wallMs
+  const estimate = done ? formatDuration((elapsed / done) * (total - done)) : "未知(尚无已完成的子任务)"
+  const totalText = formatDuration(elapsed)
+  const localText = formatDuration(elapsed - boot.task.wallMs)
+  // "本进程"仅当 ≠ 累计时输出(未中断时两者相等,文案等价现状);按格式化结果
+  // 比较,差值不足 1 秒(舍入相同)时不打。
+  const local = localText === totalText ? "" : `(本进程 ${localText})`
+  return `  ⏳ ${task.id} 子任务进度 ${done}/${total},累计用时 ${totalText}${local},预计剩余 ${estimate}`
+}
+
+// 启动续接横幅(plans/STATS_PLAN.md §4.6): 快照取自折旧入账之后、轮次滚动之前,
+// round/phase/task 均为上一进程停下时的位置;task 缺失(上一进程停在非任务段
+// 或桶 id 损坏)省略任务段。
+function resumeBanner(resumed: StatsResume): string {
+  const parts = [`第 ${resumed.round} 轮`]
+  if (resumed.phase) parts.push(`${resumed.phase} 阶段`)
+  if (resumed.task) {
+    parts.push(`${resumed.task} 已累计 ${formatDuration(resumed.taskWallMs)}(AI ${formatDuration(resumed.taskAiMs)})`)
+  }
+  const at = new Date(resumed.lastWriteAt).toTimeString().slice(0, 5)
+  return `↻ 统计续接: ${parts.join(" / ")},上次进程止于 ${at}`
 }
