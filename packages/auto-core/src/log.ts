@@ -105,3 +105,51 @@ function rule(char: string, text: string) {
   const centerTime = `${char.repeat((60 - paddedTime.length) / 2)}${paddedTime}${char.repeat((60 - paddedTime.length) / 2)}`
   log(`\n${centerTime}\n${text}`)
 }
+
+// ===== 统计/报文 formatter(纯函数,与上面的输出机制互不干扰)=====
+// 供 stats 报文(plans/STATS_PLAN.md §4)与既有 runner/loop 私有副本收口使用:
+// 高频行(进度心跳、会话结束行)用紧凑式 formatDurationCompact,结论行(任务/阶段/
+// 轮次收口)用中文式 formatDuration——双口径与现状一致(STATS_PLAN §5)。
+// 接线(删 runner.ts:79-88 与 loop.ts:879-884 私有副本、改 import)属 T-002/T-003,
+// 本收口只新增函数,不改任何现有调用点。
+
+// 中文式时长(loop.ts:879-884 版逐字保留 + 新增小时档): "N 秒" / "N 分 N 秒" /
+// "N 小时 N 分"。用于任务/阶段/轮次收口等结论行。
+// AUTO-DECISION: 小时档取 "N 小时 N 分"(舍秒): 小时级场景秒无意义,且与计划 §4
+// 报文草案("52 分"同样舍秒)风格一致;备选 "N 时 N 分 N 秒" 更精确但结论行偏长,否决。
+export function formatDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000)
+  const minutes = Math.floor(seconds / 60)
+  if (!minutes) return `${seconds} 秒`
+  const hours = Math.floor(minutes / 60)
+  if (!hours) return `${minutes} 分 ${seconds % 60} 秒`
+  return `${hours} 小时 ${minutes % 60} 分`
+}
+
+// 紧凑式时长(runner.ts:79-88 版逐字保持): "Nms" / "N.Ns" / "Nm" / "NmNs"。
+// 用于会话结束行、复用提示等高频行。
+export function formatDurationCompact(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (remainingSeconds === 0) return `${minutes}m`
+  return `${minutes}m${remainingSeconds.toFixed(0)}s`
+}
+
+// token 数紧凑表示(runner.ts:2806 / prompt.ts:501 版逐字保持): ≥10000 → "N.Nk"。
+export function formatTokens(n: number): string {
+  if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+// 费用表示: 0(或无费用信息)返回 undefined,供报文拼接时省略费用项
+// (STATS_PLAN §5)。返回 "$N.NNN" 风格。
+// AUTO-DECISION: 精度取 toFixed(4) 后去尾零(parseFloat 往返): 计划 §4 报文草案
+// 同时出现 "$0.041" 与 "$0.31",说明精度随数值自适应而非定长;备选固定 3 位
+// (toFixed(3)) 会得到 "$0.310" 这类拖零,与草案不符,否决。
+export function formatCost(cost: number): string | undefined {
+  if (!cost) return undefined
+  return `$${parseFloat(cost.toFixed(4))}`
+}
