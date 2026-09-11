@@ -498,6 +498,16 @@ export async function statsBoot(
   return { task: copyTotals(handle.boot.task), phase: copyTotals(handle.boot.phase), round: copyTotals(handle.boot.round) }
 }
 
+// 历轮聚合读数(T-006 轮次完成行的"历轮累计"段): history 副本(rounds = 已滚出
+// 轮数,totals 为历轮合计,不含本轮 roundB)。rounds = 0 时调用方省略历轮段。
+export async function statsHistory(
+  dir: string | undefined,
+): Promise<{ rounds: number; totals: Totals } | undefined> {
+  if (!dir) return undefined
+  const { handle } = await ensure(dir)
+  return { rounds: handle.doc.history.rounds, totals: copyTotals(handle.doc.history.totals) }
+}
+
 // ===== 会话与等待(statsSessionBegin/End、statsWaitBegin/End)=====
 
 // 会话期心跳周期: fold+落盘,限制 kill -9 损失 ≤ ~30s(折旧只承认到 lastWriteAt)。

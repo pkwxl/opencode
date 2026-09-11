@@ -166,3 +166,27 @@ export function formatCacheHit(cacheRead: number, input: number): string {
   if (!(total > 0)) return "—"
   return `${((cacheRead / total) * 100).toFixed(1)}%`
 }
+
+// tokens 分项行(STATS_PLAN §4 的统一 tokens 行格式,T-006 收口): T-004 ◉ 会话结束
+// 行 2 与 T-006 任务/阶段/轮次结论行共用同一构造函数,保证格式不漂移——
+// `tokens 入 N / 出 M[/ 思考 R] / 缓存读 C / 缓存写 W,命中率 H[,费用 $X]`。
+// 省略规则: reasoning=0 省略思考项(插在"出"与"缓存读"之间,与 Usage 分项声明序
+// 一致);cost=0 省略费用项(formatCost);命中率分母 0 显示 —(formatCacheHit)。
+// 需要"累计"后缀的调用方(如会话行的费用累计)在返回值后自行追加。
+export function formatUsageLine(usage: {
+  input: number
+  output: number
+  reasoning: number
+  cacheRead: number
+  cacheWrite: number
+  cost: number
+}): string {
+  const cost = formatCost(usage.cost)
+  return (
+    `tokens 入 ${formatTokens(usage.input)} / 出 ${formatTokens(usage.output)}` +
+    `${usage.reasoning ? ` / 思考 ${formatTokens(usage.reasoning)}` : ""}` +
+    ` / 缓存读 ${formatTokens(usage.cacheRead)} / 缓存写 ${formatTokens(usage.cacheWrite)}` +
+    `,命中率 ${formatCacheHit(usage.cacheRead, usage.input)}` +
+    `${cost ? `,费用 ${cost}` : ""}`
+  )
+}

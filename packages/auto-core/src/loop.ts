@@ -7,7 +7,7 @@ import { commitTree, pendingChanges, repoRoots } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { startInteractive, type Interactive } from "./interactive"
-import { banner, formatDuration, log, vlog } from "./log"
+import { banner, formatDuration, formatUsageLine, log, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { block, countSubtasks, load, next, resetInProgress, setStatus, type Plan } from "./plan"
 import {
@@ -33,6 +33,7 @@ import {
   flushStats,
   loadStats,
   statsBoot,
+  statsHistory,
   statsId,
   statsPhase,
   statsTask,
@@ -359,6 +360,13 @@ export async function runAll(
             if (advanced === "appended") continue
           }
           log("✓ 全部任务已完成")
+          // 非分阶段路径的轮次完成行(STATS_PLAN §4.4,T-006): 阶段桶恒为 "m" 伪
+          // 阶段,省略阶段段。分阶段路径由 runPhaseLoop 的 complete 路由统一打印,
+          // 此处(phases !== "m" 时 runTaskLoop 只是单阶段执行)不重复。
+          if (phases === "m") {
+            const lines = await roundCompleteLines(directory)
+            if (lines) for (const line of lines) log(line)
+          }
           return 0
         }
         // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
@@ -397,6 +405,13 @@ export async function runAll(
         if (outcome.type === "blocked") {
           await block(path, task.id, outcome.question)
           log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
+          // 任务三态行(STATS_PLAN §4.2,T-006): blocked 同样输出累计统计段 +
+          // tokens 行(守卫失败时不打印,与 T-006 前行为一致——原本只有 done 有统计行)。
+          const lines = await taskEndLines(directory, task.id)
+          if (lines) {
+            log(`⏸ ${task.id} 阻塞: ${lines[0]}`)
+            log(lines[1])
+          }
           // 中断现场也提交: 保存断点(阻塞问题、CURRENT.md 中断备注),支持回滚到断点。
           if (opts.commit !== false) {
             await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
@@ -405,12 +420,26 @@ export async function runAll(
         }
         if (outcome.type === "incomplete") {
           log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
+          const lines = await taskEndLines(directory, task.id)
+          if (lines) {
+            log(`⏸ ${task.id} 未完成: ${lines[0]}`)
+            log(lines[1])
+          }
           if (opts.commit !== false) {
             await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
           }
           return 2
         }
-        log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
+        {
+          const lines = await taskEndLines(directory, task.id)
+          if (lines) {
+            log(`✓ ${task.id} 完成: ${lines[0]}`)
+            log(lines[1])
+          } else {
+            // 守卫失败(统计未装载/桶身份不符)回落 T-006 前旧文案。
+            log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
+          }
+        }
         ran++
         // 任务完成的终态提交: PLAN.md 的 [done]/verified 与 CURRENT.md 的删除在此
         // 一并落账(各会话产出已随会话提交,这里是收口);终审路由追加的下一任务
@@ -650,6 +679,10 @@ export async function runAll(
           subject: `PLAN transition ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
         })
       }
+      // 阶段收口行(STATS_PLAN §4.3,T-006): commitTree 之后、return 0 之前——
+      // 交接提交时长仍计入本阶段桶(读数实时外推,含当前开放段)。
+      const closing = await phaseCloseLines(directory, phase)
+      if (closing) for (const line of closing) log(line)
       return 0
     }
 
@@ -678,6 +711,10 @@ export async function runAll(
         }
         if (route.type === "complete") {
           log("✓ 全部阶段已完成")
+          // 轮次完成行(STATS_PLAN §4.4,T-006): 阶段数取台账 done 计数(本轮已
+          // 交接阶段);历轮累计段在 history.rounds > 0 时由构造函数自行追加。
+          const lines = await roundCompleteLines(directory, { phaseCount: (await readLedger(directory)).done.length })
+          if (lines) for (const line of lines) log(line)
           return 0
         }
         // 阶段切换挂点(STATS_PLAN §3): 字母变化重置 phase 桶;相同字母幂等。
@@ -946,4 +983,89 @@ function resumeBanner(resumed: StatsResume): string {
   }
   const at = new Date(resumed.lastWriteAt).toTimeString().slice(0, 5)
   return `↻ 统计续接: ${parts.join(" / ")},上次进程止于 ${at}`
+}
+
+// ===== T-006 结论行报文(plans/STATS_PLAN.md §4.2/4.3/4.4)=====
+// 三处结论行(任务三态/阶段收口/轮次完成)统一在这里构造,loop 主体只负责 log。
+// tokens 行与 T-004 ◉ 会话结束行 2 共用 log.ts 的 formatUsageLine,格式不漂移。
+
+// 任务结束三态行的统计段(done/blocked/incomplete 共用,§4.2): 返回
+// [`用时 W(AI A[,其中本进程 P]),会话 N 次`, tokens 行] 两件套,由调用方拼状态
+// 前缀(✓ 完成 / ⏸ 阻塞 / ⏸ 未完成)。桶为任务桶跨中断累计(含中断前)。守卫
+// statsId === taskID(与 subtaskProgressLine 同一理由:桶身份不符时读数不可信),
+// 守卫失败返回 undefined,调用方回落 T-006 前的旧文案(done)或不打印(blocked/
+// incomplete 原本就无统计行)。
+// AUTO-DECISION: "本进程"取墙钟差(wallMs − boot.task.wallMs)。草案"其中本进程"
+// 紧邻 AI 一词,有 AI 子集读法;但 T-002 进度心跳行(本文件 subtaskProgressLine)
+// 已把"本进程"确立为同一任务桶的墙钟口径,同一措辞跨报文行必须同义,且主语
+// "用时"本身是墙钟——备选"AI 子集"会造成心跳行与结论行同词异义,否决。按格式
+// 化结果比较,差值不足 1 秒(舍入相同)时不打(与心跳行同手法)。
+export async function taskEndLines(directory: string | undefined, taskID: string): Promise<string[] | undefined> {
+  if (statsId(directory) !== taskID) return undefined
+  const totals = await statsTotals(directory, "task")
+  const boot = await statsBoot(directory)
+  if (!totals || !boot) return undefined
+  const wall = formatDuration(totals.wallMs)
+  const local = formatDuration(totals.wallMs - boot.task.wallMs)
+  const since = local === wall ? "" : `,其中本进程 ${local}`
+  return [
+    `用时 ${wall}(AI ${formatDuration(totals.aiMs)}${since}),会话 ${totals.sessions} 次`,
+    formatUsageLine(totals.usage),
+  ]
+}
+
+// 阶段收口行(§4.3,handoverPhase 末尾 commitTree 之后): [`■ 阶段 t 测试验证 收口:
+// 总用时 W(含规划/交接/提交;AI A[,人工等待 Z]),任务 T 个 / 会话 S 次`, tokens 行]。
+// 阶段桶含规划/交接蒸馏等旁路会话(旁路归 phase+round 桶,见 stats.ts 接线注释),
+// 与"含规划/交接/提交"文案对应。守卫桶 id === letter(字母不符 = 桶已被后续阶段
+// 重置,不打印)。
+// AUTO-DECISION: 人工等待段仅 waitMs > 0 时输出(轮次行同理)——与费用/思考项的
+// 0 省略规则同风格,"人工等待 0 秒"是纯噪声;草案示例(waitMs = 3 分)未覆盖 0
+// 情形,按既有省略惯例处理。
+export async function phaseCloseLines(directory: string | undefined, letter: Phase): Promise<string[] | undefined> {
+  const totals = await statsTotals(directory, "phase")
+  if (!totals || totals.id !== letter) return undefined
+  const wait = totals.waitMs ? `,人工等待 ${formatDuration(totals.waitMs)}` : ""
+  return [
+    `■ 阶段 ${letter} ${phaseText(letter)} 收口: 总用时 ${formatDuration(totals.wallMs)}` +
+      `(含规划/交接/提交;AI ${formatDuration(totals.aiMs)}${wait}),任务 ${totals.tasks} 个 / 会话 ${totals.sessions} 次`,
+    formatUsageLine(totals.usage),
+  ]
+}
+
+// 轮次完成行(§4.4): 本轮 [`■ 第 N 轮完成: 总用时 W(AI A[,人工等待 Z]),[阶段 P / ]
+// 任务 T / 会话 S`, tokens 行];phaseCount 仅分阶段路径提供(台账 done 计数 = 本轮
+// 已交接阶段数),非分阶段路径省略阶段段(全程恒为 "m" 一个伪阶段,计数无信息)。
+// history.rounds > 0 时追加两行历轮累计段(缩进两格,"历轮"前缀区别于本轮行)。
+// 轮号取 roundB.id(loadStats 以 currentRound 快照建立并随轮次滚动重置);损坏缺失
+// 时回落 currentRound 现查。
+// AUTO-DECISION: 历轮累计单列两行,不并入本轮数字——计划只写"tokens 行含 history
+// 历累计,rounds=0 省略历轮部分",未给并入格式;并入会把命中率/费用混成跨轮加权
+// 值且破坏主行"本轮"语义。备选"并入主行加(累计…)"否决。
+export async function roundCompleteLines(
+  directory: string | undefined,
+  opts?: { phaseCount?: number },
+): Promise<string[] | undefined> {
+  const totals = await statsTotals(directory, "round")
+  if (!totals) return undefined
+  // totals 非空即 directory 已定义(statsTotals 对 undefined 空转返回 undefined)。
+  const round = Number(totals.id) || (await currentRound(directory as string).catch(() => 1))
+  const wait = totals.waitMs ? `,人工等待 ${formatDuration(totals.waitMs)}` : ""
+  const phasesPart = opts?.phaseCount !== undefined ? `阶段 ${opts.phaseCount} / ` : ""
+  const lines = [
+    `■ 第 ${round} 轮完成: 总用时 ${formatDuration(totals.wallMs)}(AI ${formatDuration(totals.aiMs)}${wait}),` +
+      `${phasesPart}任务 ${totals.tasks} / 会话 ${totals.sessions}`,
+    formatUsageLine(totals.usage),
+  ]
+  const history = await statsHistory(directory)
+  if (history && history.rounds > 0) {
+    const h = history.totals
+    const hwait = h.waitMs ? `,人工等待 ${formatDuration(h.waitMs)}` : ""
+    lines.push(
+      `  历轮累计(${history.rounds} 轮): 总用时 ${formatDuration(h.wallMs)}(AI ${formatDuration(h.aiMs)}${hwait}),` +
+        `任务 ${h.tasks} / 会话 ${h.sessions}`,
+      `  历轮 ${formatUsageLine(h.usage)}`,
+    )
+  }
+  return lines
 }

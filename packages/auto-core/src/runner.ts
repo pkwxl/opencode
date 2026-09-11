@@ -6,7 +6,7 @@ import type { Interactive } from "./interactive"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { commitTitle, commitTree } from "./git"
-import { autobanner, formatCacheHit, formatCost, formatDurationCompact, log, subbanner, vlog } from "./log"
+import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import {
   appendSubtasks,
@@ -2285,14 +2285,12 @@ async function attempt(
       `◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),` +
         `用时 ${formatDurationCompact(report?.thisAiMs ?? result.durationMs ?? 0)}${since}`,
     )
+    // 行 2 复用 log.ts 的 formatUsageLine(T-006 收口,任务/阶段/轮次结论行同格式);
+    // 会话特有的费用跨轮累计作为后缀追加(仅本次费用显示且跨轮时,见上方
+    // AUTO-DECISION: cost=0 整项省略,不出现孤立的"(累计 $X)")。
     const cost = formatCost(usage.cost)
-    const costSince = rounds > 1 ? formatCost(report!.session.usage.cost) : undefined
-    log(
-      `tokens 入 ${formatTokens(usage.input)} / 出 ${formatTokens(usage.output)}` +
-        `${usage.reasoning ? ` / 思考 ${formatTokens(usage.reasoning)}` : ""} / 缓存读 ${formatTokens(usage.cacheRead)} / 缓存写 ${formatTokens(usage.cacheWrite)}` +
-        `,命中率 ${formatCacheHit(usage.cacheRead, usage.input)}` +
-        `${cost ? `,费用 ${cost}${costSince ? `(累计 ${costSince})` : ""}` : ""}`,
-    )
+    const costSince = cost && rounds > 1 ? formatCost(report!.session.usage.cost) : undefined
+    log(formatUsageLine(usage) + (costSince ? `(累计 ${costSince})` : ""))
     // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
     // 新建会话已在创建时命名,无需重复。

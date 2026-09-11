@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { log, setAuditLog, setInteractive, setLogFile, setVerbose, vlog } from "../src/log"
-import { formatCacheHit, formatCost, formatDuration, formatDurationCompact, formatTokens } from "../src/log"
+import { formatCacheHit, formatCost, formatDuration, formatDurationCompact, formatTokens, formatUsageLine } from "../src/log"
 
 describe("log", () => {
   let dir: string
@@ -128,5 +128,21 @@ describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
     expect(formatCacheHit(0, 100)).toBe("0.0%")
     expect(formatCacheHit(0, 0)).toBe("—") // 分母 0
     expect(formatCacheHit(28_400, 1200)).toBe("95.9%") // STATS_PLAN §4 报文草案例
+  })
+
+  // T-006: formatUsageLine 收口(tokens 行统一格式)——T-004 会话结束行 2 与
+  // T-006 任务/阶段/轮次结论行共用。
+  test("formatUsageLine: 思考项位次(出与缓存读之间)/cost=0 省略费用/命中率分母 0", () => {
+    const base = { input: 1200, output: 340, reasoning: 0, cacheRead: 28_400, cacheWrite: 3100, cost: 0 }
+    expect(formatUsageLine(base)).toBe("tokens 入 1200 / 出 340 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%")
+    expect(formatUsageLine({ ...base, reasoning: 120 })).toBe(
+      "tokens 入 1200 / 出 340 / 思考 120 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%",
+    )
+    expect(formatUsageLine({ ...base, cost: 0.041 })).toBe(
+      "tokens 入 1200 / 出 340 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%,费用 $0.041",
+    )
+    expect(formatUsageLine({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0 })).toBe(
+      "tokens 入 0 / 出 0 / 缓存读 0 / 缓存写 0,命中率 —",
+    )
   })
 })
