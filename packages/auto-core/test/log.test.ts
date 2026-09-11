@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { log, setAuditLog, setInteractive, setLogFile, setVerbose, vlog } from "../src/log"
-import { formatCost, formatDuration, formatDurationCompact, formatTokens } from "../src/log"
+import { formatCacheHit, formatCost, formatDuration, formatDurationCompact, formatTokens } from "../src/log"
 
 describe("log", () => {
   let dir: string
@@ -120,5 +120,13 @@ describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
     expect(formatCost(0.31)).toBe("$0.31")
     expect(formatCost(1.5)).toBe("$1.5")
     expect(formatCost(0.00012)).toBe("$0.0001") // 4 位精度上限截断
+  })
+
+  test("formatCacheHit: hit = cacheRead/(cacheRead+input) 一位小数,分母 0 → —", () => {
+    expect(formatCacheHit(95, 5)).toBe("95.0%")
+    expect(formatCacheHit(959, 41)).toBe("95.9%")
+    expect(formatCacheHit(0, 100)).toBe("0.0%")
+    expect(formatCacheHit(0, 0)).toBe("—") // 分母 0
+    expect(formatCacheHit(28_400, 1200)).toBe("95.9%") // STATS_PLAN §4 报文草案例
   })
 })

@@ -2,7 +2,23 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { flushStats, loadStats, MAX_TICK, setStatsClock, statsBoot, statsId, statsPhase, statsTask, statsTotals, type StatsDoc } from "../src/stats"
+import {
+  flushStats,
+  loadStats,
+  MAX_TICK,
+  setStatsClock,
+  statsBoot,
+  statsId,
+  statsPhase,
+  statsSessionBegin,
+  statsSessionEnd,
+  statsTask,
+  statsTotals,
+  statsWaitBegin,
+  statsWaitEnd,
+  type StatsDoc,
+  type Usage,
+} from "../src/stats"
 
 // S02 覆盖: 持久化与装载闭环(schema/宽容解析/原子写/折旧/轮次滚动/flush)。
 // 会话 API(statsSessionBegin/End、wait、per-session)与读数 API 的用例在 S03/S04 追加。
@@ -409,5 +425,189 @@ describe("stats 层级切换与读数", () => {
     expect(statsId(dir)).toBe("T-007")
     await flushStats(dir)
     expect(statsId(dir)).toBeUndefined() // 卸载后无句柄
+  })
+})
+
+// S04 覆盖: statsSessionBegin/End、statsWaitBegin/End、per-session 续接、淘汰。
+describe("stats 会话与等待", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
+    now = 100_000
+    setStatsClock(() => now)
+  })
+
+  afterEach(async () => {
+    setStatsClock()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  async function readDoc(): Promise<StatsDoc> {
+    return JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as StatsDoc
+  }
+
+  function usage(input: number): Usage {
+    return { input, output: 10, reasoning: 5, cacheRead: 90, cacheWrite: 20, cost: 0.01, steps: 2 }
+  }
+
+  test("dir === undefined 全部空转", async () => {
+    await statsSessionBegin(undefined, "T-001")
+    expect(await statsSessionEnd(undefined, "s1", usage(100))).toBeUndefined()
+    await statsWaitBegin(undefined, "askHuman")
+    await statsWaitEnd(undefined)
+  })
+
+  test("会话闭环: AI 段入 aiMs,usage 入四层,报告携带累计,结束后恢复墙钟段", async () => {
+    await loadStats(dir)
+    now += 2000 // 会话前墙钟(驱动工作): 只进 wallMs
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5000
+    const report = await statsSessionEnd(dir, "s1", usage(100))
+    expect(report?.thisAiMs).toBe(5000)
+    expect(report?.session.task).toBe("T-001")
+    expect(report?.session.aiMs).toBe(5000)
+    expect(report?.session.wallMs).toBe(5000) // 无等待: wallMs = aiMs
+    expect(report?.session.rounds).toBe(1)
+    expect(report?.session.usage.input).toBe(100)
+    expect(report?.session.at).toBe(107_000)
+    expect(report?.task.aiMs).toBe(5000)
+    expect(report?.phase.wallMs).toBe(7000) // 2000 墙钟 + 5000 AI
+    expect(report?.round.usage.cacheRead).toBe(90)
+
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.open).toBeUndefined() // flush 收口
+    expect(doc.taskB.wallMs).toBe(5000) // 会话前 2000 随 statsTask 重置离桶(留在 phase/round)
+    expect(doc.taskB.aiMs).toBe(5000)
+    expect(doc.phaseB.wallMs).toBe(7000)
+    expect(doc.phaseB.aiMs).toBe(5000)
+    expect(doc.roundB.aiMs).toBe(5000)
+    expect(doc.taskB.sessions).toBe(1)
+    expect(doc.phaseB.sessions).toBe(1)
+    expect(doc.roundB.sessions).toBe(1)
+    expect(doc.taskB.usage).toEqual(usage(100))
+    expect(doc.roundB.usage.steps).toBe(2)
+
+    // 会话结束后恢复墙钟段: 时长照进 wallMs 但 aiMs 不再增长
+    await loadStats(dir)
+    now += 3000
+    const t = await statsTotals(dir, "task")
+    expect(t?.wallMs).toBe(8000) // 5000 + 3000
+    expect(t?.aiMs).toBe(5000)
+    await flushStats(dir)
+  })
+
+  test("等待扣除: 等待期间 aiMs/wallMs 均不增长,waitMs 单记;嵌套去重只计一次", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 3000
+    await statsWaitBegin(dir, "askHuman") // 关 AI 段
+    now += 2000
+    await statsWaitBegin(dir, "nested") // 嵌套: 仍同一段等待
+    now += 1000
+    await statsWaitEnd(dir) // 深度 2→1: 仍在等待
+    now += 1000
+    expect((await statsTotals(dir, "task"))?.aiMs).toBe(3000) // 等待中不外推
+    await statsWaitEnd(dir) // 深度归零: 等待 4000 入账,重开 AI 段
+    now += 4000
+    const report = await statsSessionEnd(dir, "s1", usage(50))
+    expect(report?.thisAiMs).toBe(7000) // 3000 + 4000,等待不计
+    expect(report?.session.wallMs).toBe(11_000) // per-session wallMs 含等待
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.taskB.aiMs).toBe(7000)
+    expect(doc.taskB.wallMs).toBe(7000) // 三桶 wallMs 排除纯人工等待
+    expect(doc.taskB.waitMs).toBe(4000)
+    expect(doc.phaseB.waitMs).toBe(4000)
+    expect(doc.roundB.waitMs).toBe(4000)
+  })
+
+  test("等待中关段重开保持 ai 标志: 会话内等待结束后 AI 时长继续累计", async () => {
+    await loadStats(dir)
+    await statsSessionBegin(dir, "T-001")
+    now += 1000
+    await statsWaitBegin(dir)
+    now += 500
+    await statsWaitEnd(dir)
+    now += 1000
+    const report = await statsSessionEnd(dir, "s1", usage(1))
+    expect(report?.thisAiMs).toBe(2000) // 等待前后两段 AI 拼接
+    await flushStats(dir)
+  })
+
+  test("waitEnd 无配对 begin 空转;会话外等待(stepPause)进三桶不进 per-session", async () => {
+    await loadStats(dir)
+    await statsWaitEnd(dir) // 无配对: 不炸
+    now += 1000
+    await statsWaitBegin(dir, "stepPause") // 会话外(墙钟段)等待
+    now += 2000
+    await statsWaitEnd(dir)
+    now += 1000
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.taskB.waitMs).toBe(2000)
+    expect(doc.taskB.wallMs).toBe(2000) // 等待前后墙钟各 1000
+    expect(doc.sessions).toEqual({})
+  })
+
+  test("per-session 跨装载续接: 同 sessionID 二次会话累加 rounds/aiMs/usage", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5000
+    await statsSessionEnd(dir, "s1", usage(100))
+    await flushStats(dir)
+
+    now += 60_000 // 模拟进程重启
+    await loadStats(dir)
+    await statsTask(dir, "T-001") // 同 id 幂等: sessions 映射保留
+    await statsSessionBegin(dir, "T-001")
+    now += 3000
+    const report = await statsSessionEnd(dir, "s1", usage(50))
+    expect(report?.thisAiMs).toBe(3000) // 本次
+    expect(report?.session.aiMs).toBe(8000) // 跨中断累计
+    expect(report?.session.rounds).toBe(2)
+    expect(report?.session.usage.input).toBe(150)
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.sessions.s1.rounds).toBe(2)
+    expect(doc.sessions.s1.at).toBe(168_000)
+  })
+
+  test("sessions 超 64 按 at 淘汰最旧,聚合无损", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    for (let i = 0; i < 65; i++) {
+      await statsSessionBegin(dir, "T-001")
+      now += 1000
+      await statsSessionEnd(dir, `s${i}`, usage(1))
+    }
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(Object.keys(doc.sessions)).toHaveLength(64)
+    expect(doc.sessions.s0).toBeUndefined() // 最旧被淘汰
+    expect(doc.sessions.s64).toBeDefined()
+    expect(doc.taskB.sessions).toBe(65) // 聚合不受影响
+    expect(doc.taskB.usage.input).toBe(65)
+  })
+
+  test("statsSessionEnd 无配对 begin(异常兜底): usage 照记,thisAiMs = 0", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    now += 1000
+    const report = await statsSessionEnd(dir, "sX", usage(7))
+    expect(report?.thisAiMs).toBe(0)
+    expect(report?.session.task).toBe("T-001") // 缺省回落当前 taskB.id
+    expect(report?.session.rounds).toBe(1)
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.taskB.sessions).toBe(1)
+    expect(doc.taskB.usage.input).toBe(7)
+    expect(doc.taskB.aiMs).toBe(0) // 墙钟段: 无 AI 入账
+    expect(doc.taskB.wallMs).toBe(1000)
   })
 })

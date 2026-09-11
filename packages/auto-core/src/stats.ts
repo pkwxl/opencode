@@ -222,12 +222,15 @@ function book(doc: StatsDoc, ms: number, ai: boolean) {
 
 // 折开放段: 入账 [open.at, now] 并把锚点推进到 now(段保持开放)。
 // 时钟回拨(now <= open.at)时锚点不动——若后退锚点,已入账区间会被下次 fold 双计。
+// AI 段时长并行计入进行中会话的 aiMs 累计(thisAiMs / per-session 口径)。
 function fold(handle: Handle) {
   const open = handle.doc.open
   if (!open) return
   const now = clock()
   if (now <= open.at) return
-  book(handle.doc, Math.min(now - open.at, MAX_TICK), open.ai)
+  const ms = Math.min(now - open.at, MAX_TICK)
+  book(handle.doc, ms, open.ai)
+  if (open.ai && handle.session) handle.session.aiMs += ms
   open.at = now
 }
 
@@ -262,6 +265,17 @@ function rollHistory(doc: StatsDoc) {
 
 // ===== 原子写 + 写队列 =====
 
+// 会话内进行中状态(不持久化): statsSessionBegin 关联当前任务并清零累计;AI 段每次
+// fold 的时长并行计入 aiMs(thisAiMs / per-session 口径),会话内人工等待计入 waitMs
+// (per-session wallMs = aiMs + waitMs,与三桶"wallMs 排除纯人工等待"口径区分)。
+// kill -9 丢失未落账的会话内累计(三桶经折旧仍承认到 lastWriteAt,per-session 无从
+// 归属故宁少不多——与折旧不进 per-session 同一取舍)。
+type ActiveSession = {
+  task: string
+  aiMs: number
+  waitMs: number
+}
+
 type Handle = {
   doc: StatsDoc
   // 本进程起点快照(statsBoot): loadStats 时刻(折旧+轮次滚动之后)的三桶 Totals
@@ -269,6 +283,12 @@ type Handle = {
   // "本进程增量 = statsTotals − statsBoot" 始终对齐当前桶身份。不持久化。
   boot: { task: Totals; phase: Totals; round: Totals }
   writing: Promise<void> // 写队列尾: 所有落盘(心跳/事件/flush)都经此链串行化
+  session?: ActiveSession // 进行中的 AI 会话(statsSessionBegin/End 维护)
+  // 人工等待嵌套深度计数: depth 0→1 关段(fold 后 open=undefined,墙钟/AI 均不
+  // 增长)、归零时 waitMs 单记入三桶并重开段(ai 标志恢复为关段前的值)。嵌套去重:
+  // --early 并行会话等重叠等待只计一次(计划 :52)。
+  wait: { depth: number; start: number; ai: boolean }
+  timer?: ReturnType<typeof setInterval> // 会话期 30s 心跳(fold+落盘,unref)
 }
 
 // 对齐 plan.ts edit 的 .tmp → rename;stats.json 非 protect 名单文件,无需
@@ -347,6 +367,7 @@ async function load(dir: string): Promise<Loaded> {
     doc,
     boot: { task: copyTotals(doc.taskB), phase: copyTotals(doc.phaseB), round: copyTotals(doc.roundB) },
     writing: Promise.resolve(),
+    wait: { depth: 0, start: 0, ai: false },
   }
   handles.set(dir, handle)
   queueWrite(dir, handle)
@@ -368,6 +389,8 @@ export async function flushStats(dir: string | undefined): Promise<void> {
   if (!dir) return
   if (!handles.has(dir) && !loading.has(dir)) return
   const { handle } = await ensure(dir)
+  stopHeartbeat(handle)
+  handle.session = undefined
   fold(handle)
   handle.doc.open = undefined
   queueWrite(dir, handle)
@@ -471,4 +494,160 @@ export async function statsBoot(
   if (!dir) return undefined
   const { handle } = await ensure(dir)
   return { task: copyTotals(handle.boot.task), phase: copyTotals(handle.boot.phase), round: copyTotals(handle.boot.round) }
+}
+
+// ===== 会话与等待(statsSessionBegin/End、statsWaitBegin/End)=====
+
+// 会话期心跳周期: fold+落盘,限制 kill -9 损失 ≤ ~30s(折旧只承认到 lastWriteAt)。
+const HEARTBEAT_MS = 30_000
+
+// sessions 淘汰上限: 超 64 按 at(最后活跃时刻)淘汰最旧(聚合已入三桶,无损)。
+const MAX_SESSIONS = 64
+
+function startHeartbeat(dir: string, handle: Handle) {
+  if (handle.timer) return // 已在跳(嵌套/并行会话共用一个)
+  handle.timer = setInterval(() => {
+    fold(handle)
+    queueWrite(dir, handle)
+  }, HEARTBEAT_MS)
+  handle.timer.unref() // 不阻止进程退出
+}
+
+function stopHeartbeat(handle: Handle) {
+  if (handle.timer) clearInterval(handle.timer)
+  handle.timer = undefined
+}
+
+function addUsage(target: Usage, delta: Usage) {
+  target.input += num(delta.input)
+  target.output += num(delta.output)
+  target.reasoning += num(delta.reasoning)
+  target.cacheRead += num(delta.cacheRead)
+  target.cacheWrite += num(delta.cacheWrite)
+  target.cost += num(delta.cost)
+  target.steps += num(delta.steps)
+}
+
+// prompt 下发前(runner attempt): fold 当前段后开 AI 段、关联当前任务并启动 30s
+// 心跳(fold+落盘,unref)。
+// AUTO-DECISION: begin 时不落盘——紧接的首次心跳(≤30s)即把 fold 结果持久化,
+// kill -9 损失仍受心跳周期上界约束;备选"begin 即 queueWrite"只缩小数秒窗口却
+// 每次会话多一次写盘,否决。
+// begin 时已有进行中会话(并行/异常路径未配对 end): 旧会话的内存累计被遗弃(三桶
+// 已入账无损,per-session 宁少不多),新会话从零累计。
+export async function statsSessionBegin(dir: string | undefined, taskID: string): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  fold(handle)
+  handle.session = { task: taskID, aiMs: 0, waitMs: 0 }
+  handle.doc.open = { at: clock(), ai: true }
+  startHeartbeat(dir, handle)
+}
+
+// statsSessionEnd 的打印用报告(◉ 会话结束行,T-003/T-004 消费): thisAiMs = 本次
+// 会话 AI 时长;session = 该 sessionID 跨中断累计(含本次);task/phase/round = 三桶
+// 当前累计副本(与 statsTotals 同口径)。
+export type StatsSessionReport = {
+  thisAiMs: number
+  session: SessionStat
+  task: Bucket
+  phase: Bucket
+  round: Bucket
+}
+
+// 回合结束(含 error/blocked/异常,runner 8 个 return 全带): fold、usage 入四层
+// (task/phase/round 三桶 + per-session)、sessions 计数 +1、关 AI 段重开墙钟段、
+// 停心跳、落盘,返回打印用报告。无配对 begin(下发失败等异常兜底)时 thisAiMs = 0,
+// usage 与 sessions/rounds 计数照记——消耗真实发生,不丢。
+export async function statsSessionEnd(
+  dir: string | undefined,
+  sessionID: string,
+  usage: Usage,
+): Promise<StatsSessionReport | undefined> {
+  if (!dir) return undefined
+  const { handle } = await ensure(dir)
+  fold(handle)
+  stopHeartbeat(handle)
+  const active = handle.session
+  handle.session = undefined
+  const doc = handle.doc
+  const now = clock()
+  // 关 AI 段重开墙钟段;若正处于人工等待中(段已关),由 waitEnd 负责重开——
+  // 把 wait.ai 拨回 false,等待结束后恢复的是墙钟段而非已结束会话的 AI 段。
+  if (handle.wait.depth === 0) doc.open = { at: now, ai: false }
+  else handle.wait.ai = false
+  for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+    bucket.sessions += 1
+    addUsage(bucket.usage, usage)
+  }
+  // per-session 续接: 同 sessionID 跨中断(fork 续跑)累加 rounds/aiMs/usage;
+  // task 以本次 begin 关联为准(缺省沿用旧值/当前 taskB.id)。
+  const entry = doc.sessions[sessionID] ?? {
+    task: "",
+    aiMs: 0,
+    wallMs: 0,
+    rounds: 0,
+    usage: emptyUsage(),
+    at: 0,
+  }
+  entry.task = active?.task ?? (entry.task || doc.taskB.id)
+  entry.aiMs += active?.aiMs ?? 0
+  entry.wallMs += (active?.aiMs ?? 0) + (active?.waitMs ?? 0)
+  entry.rounds += 1
+  addUsage(entry.usage, usage)
+  entry.at = now
+  doc.sessions[sessionID] = entry
+  evictSessions(doc)
+  queueWrite(dir, handle)
+  return {
+    thisAiMs: active?.aiMs ?? 0,
+    session: { ...entry, usage: { ...entry.usage } },
+    task: extrapolate(doc, doc.taskB),
+    phase: extrapolate(doc, doc.phaseB),
+    round: extrapolate(doc, doc.roundB),
+  }
+}
+
+// 超上限按 at 升序淘汰最旧(淘汰无损: 聚合已入三桶;per-session 展示丢历史属
+// 已接受取舍,见 context.md 风险节)。
+function evictSessions(doc: StatsDoc) {
+  const ids = Object.keys(doc.sessions)
+  if (ids.length <= MAX_SESSIONS) return
+  ids.sort((a, b) => doc.sessions[a].at - doc.sessions[b].at)
+  for (const id of ids.slice(0, ids.length - MAX_SESSIONS)) delete doc.sessions[id]
+}
+
+// 人工等待开始(askHuman/stepPause/--wait-between): 嵌套深度 +1;最外层 fold 当前
+// 段后关段(等待期间 aiMs/wallMs 均不增长——总用时排除纯人工等待,计划 :14/:52)并
+// 落盘。reason 目前不消费(计划签名预留,供将来审计/vlog)。
+export async function statsWaitBegin(dir: string | undefined, reason?: string): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  handle.wait.depth += 1
+  if (handle.wait.depth > 1) return // 嵌套: 重叠等待只计一次
+  fold(handle)
+  handle.wait.ai = handle.doc.open?.ai ?? false
+  handle.wait.start = clock()
+  handle.doc.open = undefined
+  queueWrite(dir, handle)
+}
+
+// 人工等待结束: 深度归零时 waitMs 单记入三桶(clampTick 钳制,会话内则同时计入
+// per-session wallMs),并按关段前的 ai 标志重开段、落盘。无配对 begin 空转。
+export async function statsWaitEnd(dir: string | undefined): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  if (handle.wait.depth === 0) return
+  handle.wait.depth -= 1
+  if (handle.wait.depth > 0) return
+  const now = clock()
+  const ms = clampTick(now - handle.wait.start)
+  if (ms) {
+    for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+      bucket.waitMs += ms
+    }
+    if (handle.session) handle.session.waitMs += ms
+  }
+  handle.doc.open = { at: now, ai: handle.wait.ai }
+  queueWrite(dir, handle)
 }

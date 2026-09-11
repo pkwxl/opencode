@@ -153,3 +153,16 @@ export function formatCost(cost: number): string | undefined {
   if (!cost) return undefined
   return `$${parseFloat(cost.toFixed(4))}`
 }
+
+// 缓存命中率: hit = cacheRead / (cacheRead + input)(STATS_PLAN §已确认口径:服务端
+// 归一化后 input 已不含 cache 部分);分母 0(无用量信息)→ "—"。返回 "N.N%" 风格,
+// 供 ◉ 会话结束 tokens 行拼接("命中率 95.9%")。
+// AUTO-DECISION: cacheHit 口径落在 log.ts formatter(展示层纯函数)而非 statsTotals
+// 返回字段——计划未钉死位置,但命中率只是展示口径,入库保持原始分项(cacheRead/
+// input)更利于后续改口径;备选"stats.ts 助手"会把展示格式("—"/百分号)泄漏进
+// 统计模块,否决。取原始双参而非 Usage 类型,避免 log → stats 类型依赖。
+export function formatCacheHit(cacheRead: number, input: number): string {
+  const total = cacheRead + input
+  if (!(total > 0)) return "—"
+  return `${((cacheRead / total) * 100).toFixed(1)}%`
+}
