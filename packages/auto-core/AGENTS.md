@@ -35,6 +35,7 @@
 - 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
 - 死循环检测(会话内重复同一动作且结果不变 → driver steer 提示,OPENCODE_AUTO_STUCK 缺省 on)→ `src/stuck.ts` + `templates/prompts/stuck-hint.md`(设计: docs/stuck-loop-design.md)
 - 阶段化模型路由与配额降级(OPENCODE_AUTO_MODEL / _FALLBACK:按阶段字母 + 会话角色逐次带 model,配额受限时 fork 保上下文换候选)→ 设计 docs/model-routing-design.md(2026-09-10 定稿,**P1..P6 已实施**;解析在 src/switches.ts 的 parseModelPolicy,注入点为 runner.ts attempt 的 client.session.prompt——target=chain.model??resolveModel(角色>字母>*),roleOf/phaseToRole 推角色、splitModel 拆分、classifySessionError 归类 quota/auth/rate/overflow/transient/unknown、runSession 降级环取候选+窗口钳制经 fork 续跑)
+- 跨中断累计统计(任务/会话/阶段/轮次用时与 Token 分项,.auto/stats.json 增量落盘,无开关常态统计)→ `src/stats.ts`(设计: docs/stats-timing-design.md,**P1..P7 已实施**;loop.ts 生命周期与结论行、runner.ts 会话边界与 ◉ 两行报文、step.ts/askHuman/waitBetweenTasks 等待扣除)
 - 外壳画像(报文程序名/契约恢复指引/日志审计语义参数化)→ `src/shell.ts`
 - 稳定引用与文件存放规范(docs/T-NNN/ 目录化、docs 永不移动、轮次专用目录 docs/R-NN/(轮首 establishRound 建立、根 PLAN.md 为其符号链接)、引用一致性三层检查)→ docs/stable-refs-design.md(设计定稿 2026-09-06,P1..P4 已全部实施;轮次专用目录方案 2026-09-08,见 plans/ROUND_WORKDIR_PLAN.md 与 phases-design.md M 节;路径构造/读回落在 src/docpaths.ts,引用提取/校验/改写/门禁在 src/refcheck.ts)
 - refcheck 范围收敛与恢复(OPENCODE_AUTO_REF_CHECK 开关默认关、git 历史恢复缺失引用、行号锚 @sha 版本标记、摒弃移动文件适配)→ docs/refcheck-scope-design.md(2026-09-08 定稿,P1..P3 已全部实施;开关在 src/switches.ts,缺失恢复 renameHistory/recoverMissingRefs 与范围再确认 reconfirmAnchors 在 src/refcheck.ts)
