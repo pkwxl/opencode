@@ -6,6 +6,7 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
 import { classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
+import { flushStats, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // 交接 steer 构造与交接判定的纯函数单测(接线在 executeWhole/runSubtask;完整
@@ -1126,5 +1127,160 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.forks.length).toBe(0)
     expect(calls.prompts.length).toBe(1)
     expect("model" in calls.prompts[0]!).toBe(false)
+  })
+})
+
+// ---- 会话边界统计接线(STATS_PLAN §2,T-003): 逐 step-finish part 去重累加、
+// 全出口(含 blocked/下发失败)收段入账。仿 :601 artifactClient 手法,事件流经
+// fakeClient 的 events 注入;统计读数经 statsTotals(公开 API),per-session 归
+// 属经落盘 .auto/stats.json 核对。----
+describe("会话边界统计接线(T-003): Watch.usage 与 statsSessionBegin/End", () => {
+  // 构造一条 step-finish 的 message.part.updated 事件(tokens 分项缺省补 0)。
+  const stepFinish = (
+    sid: string,
+    id: string,
+    tokens: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } },
+    cost = 0,
+  ) => ({
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id,
+        sessionID: sid,
+        messageID: "msg_1",
+        type: "step-finish",
+        reason: "stop",
+        cost,
+        tokens: { reasoning: 0, cache: { read: 0, write: 0 }, ...tokens },
+        time: { created: 1 },
+      },
+    },
+  })
+
+  test("Watch.usage = 逐 part 之和(分项含 reasoning/cache/cost,steps 按 part 计数),per-session 归任务", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
+    try {
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            yield stepFinish(sid, "pt_sf1", { input: 1200, output: 300, reasoning: 50, cache: { read: 800, write: 100 } }, 0.01)
+            yield stepFinish(sid, "pt_sf2", { input: 500, output: 40 })
+            // 串话守卫: 别的会话的 step-finish 不得计入本会话。
+            yield stepFinish("ses_other", "pt_sfX", { input: 9999, output: 9999 })
+            yield { type: "session.idle", properties: { sessionID: sid } }
+          })(),
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runSession(client, task, "提示词", { dir }, chain)
+      expect(result.type).toBe("idle")
+      const round = await statsTotals(dir, "round")
+      expect(round?.usage).toEqual({ input: 1700, output: 340, reasoning: 50, cacheRead: 800, cacheWrite: 100, cost: 0.01, steps: 2 })
+      expect(round?.sessions).toBe(1)
+      await flushStats(dir)
+      // per-session 入账: sessionID → 任务关联 + 同口径 usage。
+      const doc = JSON.parse(await Bun.file(join(dir, ".auto/stats.json")).text())
+      expect(doc.sessions.ses_new_1.task).toBe("T-001")
+      expect(doc.sessions.ses_new_1.usage).toEqual({ input: 1700, output: 340, reasoning: 50, cacheRead: 800, cacheWrite: 100, cost: 0.01, steps: 2 })
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("同 part 重发(SSE 重放同一 step-finish 更新事件)不重计", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
+    try {
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            yield stepFinish(sid, "pt_sf1", { input: 1200, output: 300 }, 0.02)
+            yield stepFinish(sid, "pt_sf1", { input: 1200, output: 300 }, 0.02)
+            yield { type: "session.idle", properties: { sessionID: sid } }
+          })(),
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      await runSession(client, task, "提示词", { dir }, chain)
+      const round = await statsTotals(dir, "round")
+      expect(round?.usage).toEqual({ input: 1200, output: 300, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0.02, steps: 1 })
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("blocked 出口 usage 不丢(阻塞前已累加的 step 照常入账)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
+    try {
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            yield stepFinish(sid, "pt_sf1", { input: 1200, output: 300 })
+            // 权限提问且未设 --wait-answer → 立即阻塞(watch 的 blocked return 出口)。
+            yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
+          })(),
+      })
+      // fakeClient 未覆盖 question/permission 表面,补桩(拒绝+中止即返回)。
+      const stubbed = {
+        ...client,
+        question: { reply: async () => ({}), reject: async () => ({}) },
+        permission: { reply: async () => ({}) },
+      } as unknown as OpencodeClient
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await runSession(stubbed, task, "提示词", { dir }, chain)
+      expect(result.type).toBe("blocked")
+      const round = await statsTotals(dir, "round")
+      expect(round?.usage).toEqual({ input: 1200, output: 300, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 1 })
+      expect(round?.sessions).toBe(1)
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("下发失败路径: finally 兜底收段(零 usage 照记、sessions +1,AI 段不悬挂)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
+    try {
+      const { client } = fakeClient({ prompt: () => ({ error: { name: "UnknownError", data: {} } }) })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      // 下发失败(非"会话错误:"前缀)→ 不重试直接阻塞;唯一一次 attempt 由 finally
+      // 兜底收段。
+      const result = await runSession(client, task, "提示词", { dir }, chain)
+      expect(result.type).toBe("blocked")
+      const round = await statsTotals(dir, "round")
+      expect(round?.sessions).toBe(1)
+      expect(round?.usage).toEqual({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 })
+      await flushStats(dir)
+      const doc = JSON.parse(await Bun.file(join(dir, ".auto/stats.json")).text())
+      expect(doc.open).toBeUndefined() // 优雅收口后不留悬挂段
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("旁路会话(伪任务 PLAN,无 phase)同样照记: 入 phase+round 桶与 per-session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
+    try {
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            yield stepFinish(sid, "pt_sf1", { input: 700, output: 90 })
+            yield { type: "session.idle", properties: { sessionID: sid } }
+          })(),
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const plan = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
+      const result = await runSession(client, plan, "规划提示词", { dir }, chain)
+      expect(result.type).toBe("idle")
+      const phase = await statsTotals(dir, "phase")
+      expect(phase?.usage.input).toBe(700)
+      expect(phase?.sessions).toBe(1)
+      await flushStats(dir)
+      const doc = JSON.parse(await Bun.file(join(dir, ".auto/stats.json")).text())
+      expect(doc.sessions.ses_new_1.task).toBe("PLAN")
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

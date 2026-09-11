@@ -6,7 +6,7 @@ import type { Interactive } from "./interactive"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { commitTitle, commitTree } from "./git"
-import { autobanner, log, subbanner, vlog } from "./log"
+import { autobanner, formatDurationCompact, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import {
   appendSubtasks,
@@ -53,6 +53,7 @@ import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
+import { statsSessionBegin, statsSessionEnd, type Usage } from "./stats"
 import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, SWITCH_ENV, type ModelLetter, type ModelPolicy, type ModelRole, type Switches } from "./switches"
 import { stepPause } from "./step"
@@ -76,16 +77,8 @@ const AUTO_ANSWER =
 // human intervention.
 const FIX_ROUNDS = 3
 
-// Session duration display format. Converts milliseconds to a readable string.
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainingSeconds = seconds % 60
-  if (remainingSeconds === 0) return `${minutes}m`
-  return `${minutes}m${remainingSeconds.toFixed(0)}s`
-}
+// 会话耗时显示用紧凑式时长: 已收口至 src/log.ts 的 formatDurationCompact
+// (STATS_PLAN §5,T-001 上收、本任务删本处私有副本并改 import)。
 
 // 会话后统一提交(收回 AI 提交权,见 src/git.ts): 每个会话结束且 driver 完成
 // 状态写入(tick 勾选等)后调用,递归提交全部改动——git 历史即 AI 变更的审计
@@ -219,6 +212,11 @@ type Watch = {
   // 仅 retry part / session.status retry 两条提前结算面置 true:标识本错误可降级,
   // 交由 runSession 的 P4 failover 决策读取(此处只标记,不选择候选)。
   failover?: boolean
+  // 本回合 token 增量累加(STATS_PLAN §2,T-003): 逐 step-finish part 按 part.id
+  // 去重累加——唯一不重不漏口径(服务端 assistantMessage.tokens 是末步覆盖值、
+  // session.tokens 含 fork 继承前缀,均不可直接求和,不得回退到这两个口径)。
+  // attempt 在回合结束时据此 statsSessionEnd 入账。
+  usage?: Usage
 }
 
 type SessionResult =
@@ -2213,6 +2211,9 @@ async function attempt(
   // 持续积压,占满客户端并发池(Bun 缺省 256 条)后,后续所有请求在池内无限排队
   // 且无超时报错,表现为无声卡死。
   const sse = new AbortController()
+  // 统计收段幂等守卫(STATS_PLAN §2,T-003): 正常路径在 await watching 后收段;
+  // 下发失败/异常等未走到正常收段的路径由 finally 兜底——AI 段不悬挂。
+  let booked = false
   // 死循环检测器(会话级,见 src/stuck.ts): 开关 off 时不建;dryrun 预检会话恒不建
   // ——它本就靠反复被拒探查权限,重复报错是其正常形态,不是死循环。
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
@@ -2227,6 +2228,10 @@ async function attempt(
     // 否则按路由表以阶段字母 + 会话角色求值。target 未定义时不带 model 键——
     // 两变量未设时 resolveModel 恒 undefined,逐字节等价现状(而非带 model: undefined)。
     const target = chain.model ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    // 统计接线(STATS_PLAN §2,T-003): prompt 下发前开 AI 段并关联任务。旁路会话
+    // (伪任务 PLAN/AUTO,恢复点先例见 resume.ts)同此照记——statsTask 未设当前任务
+    // 时 usage/sessions 仍入 phase+round 桶。
+    await statsSessionBegin(opts.dir, task.id)
     const prompt = await client.session.prompt({
       sessionID,
       agent: opts.agent,
@@ -2243,6 +2248,10 @@ async function attempt(
     await remember()
 
     const result = await watching
+    // 收段入账(T-003): usage 入 task/phase/round 三桶 + per-session;报告(report)
+    // 的打印消费属 P4(◉ 会话结束两行化,plans/STATS_PLAN.md §4.1),本步只接线。
+    const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage())
+    booked = true
     // 本轮开始前的原链状态: 可重试的会话错误需要还原到这里(而不是留在这一轮
     // 刚失败的会话上),下一次重试才会从"从未被动过的原会话"重新 fork。
     const previousId = chain.id
@@ -2256,7 +2265,7 @@ async function attempt(
     // 仅新建会话打印,复用轮的数字要等下一轮 ♻ 行才出现,中断恢复接管的会话与
     // 任务末轮的复用会话因此从不输出上下文用量。
     if (result.durationMs !== undefined) {
-      log(`◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDuration(result.durationMs)}`)
+      log(`◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDurationCompact(result.durationMs)}`)
     }
     // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
@@ -2284,11 +2293,19 @@ async function attempt(
       return { type: "blocked", question: `会话错误: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
+    // 统计兜底(T-003): 下发失败/异常等未走正常收段的路径同样收段——无配对 begin
+    // 时 thisAiMs=0、usage 零值照记(stats.ts 既有语义,消耗真实发生不虚构)。
+    if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage())
     // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
     // 释放(对已结束的订阅重复中止无害)。
     sse.abort()
     vlog(`▪ 已断开会话 ${sessionID} 的事件流订阅`)
   }
+}
+
+// statsSessionEnd 兜底用零用量(下发失败/异常路径无 usage 可记,不虚构消耗)。
+function zeroUsage(): Usage {
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
 }
 
 // 会话进度改名: 会话标题与提交标题共用同一短标签方案(`T-NNN <label> <标题/子任务>`,
@@ -2350,6 +2367,21 @@ async function watch(
    let limit: number | undefined = undefined
   // 会话开始时间戳,用于计算耗时
   const startTime = Date.now()
+  // token 增量累加(STATS_PLAN §2,T-003): 逐 step-finish part 按 part.id 去重累加
+  // (SSE 重发同一 part 的更新事件不重计);跨会话串话由事件循环内 sessionID 守卫排除。
+  const usage: Usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
+  const billedSteps = new Set<string>()
+  // 回合快照(STATS_PLAN §2): watch 的全部 return 出口统一带 durationMs + usage,
+  // error/blocked 提前结算口同样带——消耗真实发生,不丢。extra 为各出口差异字段。
+  const snapshot = (extra?: Partial<Watch>): Watch => ({
+    lastText,
+    pct,
+    used,
+    limit,
+    durationMs: Date.now() - startTime,
+    usage,
+    ...extra,
+  })
   // steer 每会话只插入一次。
   let steerSent = false
   // 自动答复过的问题(同一问题重复出现仍阻塞停机)。
@@ -2429,6 +2461,17 @@ async function watch(
       const part = event.properties.part
       if (part.sessionID !== sessionID) continue
       idleHandled = false
+      // step-finish 增量累加(T-003,唯一不重不漏口径): 同 part 重发不重计。
+      if (part.type === "step-finish" && !billedSteps.has(part.id)) {
+        billedSteps.add(part.id)
+        usage.input += part.tokens.input
+        usage.output += part.tokens.output
+        usage.reasoning += part.tokens.reasoning
+        usage.cacheRead += part.tokens.cache.read
+        usage.cacheWrite += part.tokens.cache.write
+        usage.cost += part.cost
+        usage.steps += 1
+      }
       if (part.type === "text" && part.time?.end) {
         lastText = part.text
         vlog(part.text)
@@ -2454,19 +2497,15 @@ async function watch(
           await client.session.abort({ sessionID }).catch(() => {})
           const msg = errorInfo.message ?? error
           error = error ? `${error}\n${msg}` : msg
-          return {
-            lastText,
+          return snapshot({
             error: msg,
-            pct,
-            used,
-            limit,
             // isRetryable:false(如 insufficient_quota)才下传不可重试;其余可降级
             // 错误换会话仍无意义但换模型可能有用,交给 P4(retryable 保持 undefined)。
             retryable: errorInfo.isRetryable === false ? false : undefined,
             errorInfo,
             errorClass: cls,
             failover: true,
-          }
+          })
         }
       }
       const line = describePart(part)
@@ -2509,13 +2548,9 @@ async function watch(
         log(`⚠ 上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(steer.limit)} 上限,插入交接提示`)
         const ok = await steerText(steer.text)
         if (!ok) {
-          return {
-             blocked: { type: "blocked", question: "steer 投递失败(交接提示),无法继续会话,详见日志。" },
-            lastText,
-        pct,
-        used,
-        limit,
-      }
+          return snapshot({
+            blocked: { type: "blocked", question: "steer 投递失败(交接提示),无法继续会话,详见日志。" },
+          })
         }
       }
     }
@@ -2542,15 +2577,12 @@ async function watch(
       }
       await client.question.reject({ requestID: asked.id }).catch(() => {})
       await client.session.abort({ sessionID }).catch(() => {})
-      return {
+      return snapshot({
         blocked: {
           type: "blocked",
           question: permission ? text : `自动答复后仍就同一问题再次询问,需人工在会话外处理后重新运行:\n${text}`,
         },
-        lastText,
-        pct,
-        used,
-      }
+      })
     }
     if (event.type === "permission.asked") {
       const asked = event.properties
@@ -2606,15 +2638,12 @@ async function watch(
       }
       // ask-fail: 拒绝并退出运行(阻塞停机,问题写入 PLAN.md)。
       await client.session.abort({ sessionID }).catch(() => {})
-      return {
+      return snapshot({
         blocked: {
           type: "blocked",
           question: `权限请求无人答复(--permission ask-fail): ${desc}。请在目标目录 opencode.json 的 permission 规则中放行后重新运行。`,
         },
-        lastText,
-        pct,
-        used,
-      }
+      })
     }
     if (event.type === "session.error") {
       const props = event.properties
@@ -2664,17 +2693,13 @@ async function watch(
         await client.session.abort({ sessionID }).catch(() => {})
         const msg = errorInfo.message ?? error
         error = error ? `${error}\n${msg}` : msg
-        return {
-          lastText,
+        return snapshot({
           error: msg,
-          pct,
-          used,
-          limit,
           retryable: errorInfo.isRetryable === false ? false : undefined,
           errorInfo,
           errorClass: cls,
           failover: true,
-        }
+        })
       }
       continue
     }
@@ -2693,7 +2718,7 @@ async function watch(
         const handled = await handleIdleTest()
          if (handled.type === "continue") continue
          if (handled.type === "blocked") {
-           return { blocked: { type: "blocked", question: handled.question }, lastText, pct, used, limit, testHandover }
+           return snapshot({ blocked: { type: "blocked", question: handled.question }, testHandover })
          }
       }
       settled = true
@@ -2708,19 +2733,14 @@ async function watch(
     const msg = "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
     error = error ? `${error}\n${msg}` : msg
   }
-   return {
-     lastText,
+   return snapshot({
      error,
-     pct,
-     used,
-     limit,
      testHandover,
-     durationMs: Date.now() - startTime,
      retryable,
      // 仅当确有会话错误时把分类带上行下效(不改控制流);正常结束不带这两个键,行为
      // 逐字节等价现状。errorInfo 可能为空(如纯断流)→ 据空输入归类为 unknown。
      ...(error ? { errorInfo, errorClass: classifySessionError(errorInfo ?? {}) } : {}),
-   }
+   })
 }
 
 // --test-by-driver 的单次测试执行: tmp/test.sh 为请求标记,其内容有两种形态——
