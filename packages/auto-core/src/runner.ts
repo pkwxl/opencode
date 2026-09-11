@@ -6,7 +6,7 @@ import type { Interactive } from "./interactive"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { commitTitle, commitTree } from "./git"
-import { autobanner, formatDurationCompact, log, subbanner, vlog } from "./log"
+import { autobanner, formatCacheHit, formatCost, formatDurationCompact, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import {
   appendSubtasks,
@@ -2249,7 +2249,7 @@ async function attempt(
 
     const result = await watching
     // 收段入账(T-003): usage 入 task/phase/round 三桶 + per-session;报告(report)
-    // 的打印消费属 P4(◉ 会话结束两行化,plans/STATS_PLAN.md §4.1),本步只接线。
+    // 由下方 ◉ 会话结束两行消费(累计用时/轮次/累计费用,STATS_PLAN §4.1)。
     const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage())
     booked = true
     // 本轮开始前的原链状态: 可重试的会话错误需要还原到这里(而不是留在这一轮
@@ -2261,12 +2261,37 @@ async function attempt(
     chain.pct = result.pct
     chain.used = result.used
     chain.at = Date.now()
-    // 每个会话结束都打印用量与耗时(复用会话同样打印,耗时即本轮耗时): 此前
-    // 仅新建会话打印,复用轮的数字要等下一轮 ♻ 行才出现,中断恢复接管的会话与
-    // 任务末轮的复用会话因此从不输出上下文用量。
-    if (result.durationMs !== undefined) {
-      log(`◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),耗时 ${formatDurationCompact(result.durationMs)}`)
-    }
+    // ◉ 会话结束两行(STATS_PLAN §4.1,T-004): 无条件打印——所有经 attempt 的会话
+    // (含 verify 判定/审核/阶段规划/交接蒸馏等旁路,复用会话同样打印)统一输出;
+    // 行 1 上下文与用时,行 2 tokens 分项。省略规则: 单轮(session.rounds ≤ 1)
+    // 省略"(累计…)";reasoning=0 省略思考项;cost=0 省略费用;命中率分母 0 显示 —
+    // (formatCacheHit 口径)。report 仅 dir 缺失时为 undefined,按单轮处理,用时
+    // 回落 watch 的 durationMs。下发失败在上方提前 return,不会走到这里。
+    // AUTO-DECISION: 行 1 用时取 report.thisAiMs(纯 AI 时长口径)而非旧行的
+    // watch durationMs(含会话内人工等待)——与同行"累计"(session.aiMs 累计)同基
+    // 才有可比性,且符合"AI 用时排除 askHuman 挂起"的既定口径;旧行为只在无
+    // stats 目录(dir undefined)时经回落保留。
+    // AUTO-DECISION: 思考项插在"出"与"缓存读"之间(/ 思考 N)——计划草案未给出
+    // reasoning>0 的示例位次,取与 Usage 分项声明序(input/output/reasoning/
+    // cacheRead/cacheWrite)一致的位置;备选"行尾追加"会拆开缓存读/写相邻对,否决。
+    // AUTO-DECISION: 本次 cost=0 但跨轮累计 >0 时仍按"cost=0 省略费用"整项省略
+    // (不显示孤立的"(累计 $X)")——孤立累计无本次基数易误读,且逐字遵循既定省略
+    // 规则;备选"省略本次保留累计"与规则文字冲突,否决。
+    const usage = result.usage ?? zeroUsage()
+    const rounds = report?.session.rounds ?? 1
+    const since = rounds > 1 ? `(累计 ${formatDurationCompact(report!.session.aiMs)} / ${rounds} 轮)` : ""
+    log(
+      `◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),` +
+        `用时 ${formatDurationCompact(report?.thisAiMs ?? result.durationMs ?? 0)}${since}`,
+    )
+    const cost = formatCost(usage.cost)
+    const costSince = rounds > 1 ? formatCost(report!.session.usage.cost) : undefined
+    log(
+      `tokens 入 ${formatTokens(usage.input)} / 出 ${formatTokens(usage.output)}` +
+        `${usage.reasoning ? ` / 思考 ${formatTokens(usage.reasoning)}` : ""} / 缓存读 ${formatTokens(usage.cacheRead)} / 缓存写 ${formatTokens(usage.cacheWrite)}` +
+        `,命中率 ${formatCacheHit(usage.cacheRead, usage.input)}` +
+        `${cost ? `,费用 ${cost}${costSince ? `(累计 ${costSince})` : ""}` : ""}`,
+    )
     // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
     // 新建会话已在创建时命名,无需重复。

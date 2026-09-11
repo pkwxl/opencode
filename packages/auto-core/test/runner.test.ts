@@ -1284,3 +1284,156 @@ describe("会话边界统计接线(T-003): Watch.usage 与 statsSessionBegin/End
     }
   })
 })
+
+// ---- ◉ 会话结束两行化 + 无条件打印(STATS_PLAN §4.1,T-004)----
+describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", () => {
+  // 捕获 log() 的终端输出(console.log);vlog 缺省不上终端,不影响过滤。
+  async function captureLogs(fn: () => Promise<unknown>): Promise<string[]> {
+    const lines: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    }
+    try {
+      await fn()
+    } finally {
+      console.log = orig
+    }
+    return lines
+  }
+  // 取一次运行输出的 ◉ 两行(行 1 以 ◉ 开头,行 2 以 "tokens 入" 开头)。
+  const endLines = (lines: string[]) => {
+    const i = lines.findIndex((l) => l.startsWith("◉ 会话结束"))
+    return i >= 0 ? [lines[i]!, lines[i + 1]!] : []
+  }
+  const stepFinish = (
+    sid: string,
+    id: string,
+    tokens: { input: number; output: number; reasoning?: number; cache?: { read: number; write: number } },
+    cost = 0,
+  ) => ({
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id,
+        sessionID: sid,
+        messageID: "msg_1",
+        type: "step-finish",
+        reason: "stop",
+        cost,
+        tokens: { reasoning: 0, cache: { read: 0, write: 0 }, ...tokens },
+        time: { created: 1 },
+      },
+    },
+  })
+
+  test("两行输出: 行 1 上下文+用时,行 2 tokens 分项/命中率/费用;单轮省略(累计…),reasoning=0 省略思考项", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-endline-"))
+    try {
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            yield stepFinish(sid, "pt_sf1", { input: 1200, output: 340, cache: { read: 28400, write: 3100 } }, 0.041)
+            yield { type: "session.idle", properties: { sessionID: sid } }
+          })(),
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const lines = await captureLogs(() => runSession(client, task, "提示词", { dir }, chain))
+      const [line1, line2] = endLines(lines)
+      expect(line1).toMatch(/^◉ 会话结束: 上下文 100% \(0 tokens\),用时 \S+$/)
+      expect(line1).not.toContain("(累计")
+      // 命中率 28400/(28400+1200) = 95.9%;reasoning=0 无思考项(formatTokens ≥10000 才缩写,3100 原样)。
+      expect(line2).toBe("tokens 入 1200 / 出 340 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%,费用 $0.041")
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("reasoning>0: 思考项插在「出」与「缓存读」之间", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-endline-"))
+    try {
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            yield stepFinish(sid, "pt_sf1", { input: 100, output: 20, reasoning: 120 })
+            yield { type: "session.idle", properties: { sessionID: sid } }
+          })(),
+      })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const lines = await captureLogs(() => runSession(client, task, "提示词", { dir }, chain))
+      const [, line2] = endLines(lines)
+      expect(line2).toBe("tokens 入 100 / 出 20 / 思考 120 / 缓存读 0 / 缓存写 0,命中率 0.0%")
+      expect(line2).not.toContain("费用") // cost=0 省略费用
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("零用量: 命中率分母 0 显示 —;blocked 出口同样无条件打印两行", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-endline-"))
+    try {
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            // 权限提问且未设 --wait-answer → 立即阻塞(无任何 step-finish)。
+            yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
+          })(),
+      })
+      const stubbed = {
+        ...client,
+        question: { reply: async () => ({}), reject: async () => ({}) },
+        permission: { reply: async () => ({}) },
+      } as unknown as OpencodeClient
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      let outcome: unknown
+      const lines = await captureLogs(async () => {
+        outcome = await runSession(stubbed, task, "提示词", { dir }, chain)
+      })
+      expect((outcome as { type: string }).type).toBe("blocked")
+      const [line1, line2] = endLines(lines)
+      expect(line1).toMatch(/^◉ 会话结束: 上下文 /)
+      expect(line2).toBe("tokens 入 0 / 出 0 / 缓存读 0 / 缓存写 0,命中率 —")
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("复用会话第 2 轮: 行 1 带(累计 … / 2 轮),费用带(累计 $X);单轮省略规则对照", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-endline-"))
+    try {
+      // 每轮的 step-finish 用量由 outer 变量驱动(第 1 轮 cost 0.01,第 2 轮 0.02)。
+      let roundUsage = { input: 100, output: 10, cost: 0.01 }
+      const { client } = fakeClient({
+        events: (sid) =>
+          (async function* () {
+            yield stepFinish(sid, `pt_sf_${roundUsage.cost}`, { input: roundUsage.input, output: roundUsage.output }, roundUsage.cost)
+            yield { type: "session.idle", properties: { sessionID: sid } }
+          })(),
+      })
+      const REUSE_ON = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const first = await captureLogs(() => runSession(client, task, "提示词", { dir, contextLimit: 100_000 }, chain, undefined, undefined, REUSE_ON))
+      // 第 1 轮(单轮): 两处累计均省略。
+      const [first1, first2] = endLines(first)
+      expect(first1).not.toContain("(累计")
+      expect(first2).toContain("费用 $0.01")
+      expect(first2).not.toContain("(累计")
+      // 造可复用链(pct<50、used<cap/2、刚结束)→ 第 2 轮复用同一 sessionID。
+      chain.pct = 10
+      chain.used = 100
+      chain.at = Date.now()
+      roundUsage = { input: 200, output: 20, cost: 0.02 }
+      const second = await captureLogs(() => runSession(client, task, "提示词", { dir, contextLimit: 100_000 }, chain, undefined, undefined, REUSE_ON))
+      const [line1, line2] = endLines(second)
+      expect(line1).toMatch(/,用时 \S+\(累计 \S+ \/ 2 轮\)$/)
+      expect(line2).toContain("tokens 入 200 / 出 20")
+      expect(line2).toContain("费用 $0.02(累计 $0.03)")
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
