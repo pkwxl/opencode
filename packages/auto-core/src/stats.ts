@@ -264,6 +264,10 @@ function rollHistory(doc: StatsDoc) {
 
 type Handle = {
   doc: StatsDoc
+  // 本进程起点快照(statsBoot): loadStats 时刻(折旧+轮次滚动之后)的三桶 Totals
+  // 副本;桶在本进程内被重置(statsTask/statsPhase 切换)时对应快照同步归零,保证
+  // "本进程增量 = statsTotals − statsBoot" 始终对齐当前桶身份。不持久化。
+  boot: { task: Totals; phase: Totals; round: Totals }
   writing: Promise<void> // 写队列尾: 所有落盘(心跳/事件/flush)都经此链串行化
 }
 
@@ -339,7 +343,11 @@ async function load(dir: string): Promise<Loaded> {
   // 开本进程首段(墙钟段,ai=false;会话段由 statsSessionBegin 切换)。
   doc.open = { at: now, ai: false }
   doc.lastWriteAt = now
-  const handle: Handle = { doc, writing: Promise.resolve() }
+  const handle: Handle = {
+    doc,
+    boot: { task: copyTotals(doc.taskB), phase: copyTotals(doc.phaseB), round: copyTotals(doc.roundB) },
+    writing: Promise.resolve(),
+  }
   handles.set(dir, handle)
   queueWrite(dir, handle)
   return { handle, resumed }
@@ -365,4 +373,102 @@ export async function flushStats(dir: string | undefined): Promise<void> {
   queueWrite(dir, handle)
   await handle.writing
   handles.delete(dir)
+}
+
+// ===== 层级切换与读数(statsPhase/statsTask/statsTotals/statsId/statsBoot)=====
+
+function copyTotals(t: Totals): Totals {
+  return {
+    aiMs: t.aiMs,
+    wallMs: t.wallMs,
+    waitMs: t.waitMs,
+    sessions: t.sessions,
+    tasks: t.tasks,
+    usage: { ...t.usage },
+  }
+}
+
+// 读数实时外推: 把开放段 [open.at, now] 的未落账部分计入**副本**返回(与 fold 同一
+// 钳制),不修改 doc、不落盘——展示层任意时刻可读到当前值,状态机不受影响。
+function extrapolate(doc: StatsDoc, bucket: Bucket): Bucket {
+  const copy: Bucket = { id: bucket.id, since: bucket.since, ...copyTotals(bucket) }
+  const open = doc.open
+  if (open) {
+    const now = clock()
+    if (now > open.at) {
+      const ms = Math.min(now - open.at, MAX_TICK)
+      copy.wallMs += ms
+      if (open.ai) copy.aiMs += ms
+    }
+  }
+  return copy
+}
+
+// 阶段切换(runPhaseLoop routePhase 后/非分阶段 "m"): fold 当前段(计入旧桶)后,
+// 字母变化时重置 phaseB(id=letter, since=now)并落盘;相同字母幂等(不重置、累计
+// 继续)。boot.phase 随桶重置归零,保持"本进程增量"口径对齐当前桶。
+export async function statsPhase(dir: string | undefined, letter: string): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  fold(handle)
+  if (handle.doc.phaseB.id === letter) return
+  handle.doc.phase = letter
+  handle.doc.phaseB = emptyBucket(letter, clock())
+  handle.boot.phase = emptyTotals()
+  queueWrite(dir, handle)
+}
+
+// 任务切换(runTaskLoop 任务横幅处): fold 后,id 变化时重置 taskB、清空 sessions
+// 映射(计划 :49;清空前聚合已入三桶,per-session 展示丢历史属已接受取舍)并落盘;
+// 同 id 幂等——中断续跑同任务不重置、不重复计数、保留 per-session 续接。
+// AUTO-DECISION: tasks 计数 = 进入一个不同任务 id 计 +1(含本进程首次进入),累加在
+// phase/round 桶(对应"阶段 N 个任务 / 本轮 N 个任务"报文口径);taskB 重置后置 1 表
+// 示本桶覆盖当前这一个任务。备选"按任务完成计数"被否决:完成时刻(blocked/
+// incomplete 也算?)口径模糊,而"进入"语义简单且跨中断幂等(同 id 不重复计)。
+export async function statsTask(dir: string | undefined, id: string): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  fold(handle)
+  if (handle.doc.taskB.id === id) return
+  handle.doc.taskB = emptyBucket(id, clock())
+  handle.doc.taskB.tasks = 1
+  handle.doc.phaseB.tasks += 1
+  handle.doc.roundB.tasks += 1
+  handle.doc.sessions = {}
+  handle.boot.task = emptyTotals()
+  queueWrite(dir, handle)
+}
+
+export type StatsScope = "task" | "phase" | "round"
+
+// 读数: 返回该桶累计副本 + 开放段实时外推(未落账段即时计入,不修改状态不落盘)。
+// dir === undefined 返回 undefined。
+export async function statsTotals(
+  dir: string | undefined,
+  scope: StatsScope,
+): Promise<Bucket | undefined> {
+  if (!dir) return undefined
+  const { handle } = await ensure(dir)
+  const bucket = scope === "task" ? handle.doc.taskB : scope === "phase" ? handle.doc.phaseB : handle.doc.roundB
+  return extrapolate(handle.doc, bucket)
+}
+
+// 当前 taskB.id(trackSubtasks 守卫: statsId === task.id 才信 statsTotals,T-002 消费)。
+// AUTO-DECISION: 同步且不触发惰性装载——守卫读数应无副作用;未装载/空 id 返回
+// undefined 即守卫失败,语义正确。若为守卫读数触发一次 load(读盘+落盘)反而引入
+// 不必要的 IO 与状态时序,否决。
+export function statsId(dir: string | undefined): string | undefined {
+  if (!dir) return undefined
+  return handles.get(dir)?.doc.taskB.id || undefined
+}
+
+// 本进程起点快照(loadStats 时刻、折旧+轮次滚动之后;桶在本进程内重置时对应快照
+// 归零)。"累计 X(本进程 Y)"口径: 本进程增量 = statsTotals(scope) − statsBoot(scope)
+// 的同名字段差。返回深拷贝,调用方改动不影响内部状态。
+export async function statsBoot(
+  dir: string | undefined,
+): Promise<{ task: Totals; phase: Totals; round: Totals } | undefined> {
+  if (!dir) return undefined
+  const { handle } = await ensure(dir)
+  return { task: copyTotals(handle.boot.task), phase: copyTotals(handle.boot.phase), round: copyTotals(handle.boot.round) }
 }
