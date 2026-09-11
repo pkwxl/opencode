@@ -37,6 +37,8 @@ import {
   statsPhase,
   statsTask,
   statsTotals,
+  statsWaitBegin,
+  statsWaitEnd,
   type StatsResume,
 } from "./stats"
 import { stepPause } from "./step"
@@ -360,7 +362,7 @@ export async function runAll(
           return 0
         }
         // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
-        if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl)
+        if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
         if (task.status === "blocked" && task.question) {
           log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
         }
@@ -417,8 +419,8 @@ export async function runAll(
           await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
         }
         // 步进暂停(task 边界,OPENCODE_AUTO_STEP ≥ task): 任务终态提交后、终审
-        // 路由与下一任务前硬暂停,回车放行。
-        await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl })
+        // 路由与下一任务前硬暂停,回车放行。dir 传入使暂停等待从用时统计扣除。
+        await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl, dir: directory })
         maybeExit("task", `任务 ${task.id} ${task.title}`)
         // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
         // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
@@ -660,7 +662,7 @@ export async function runAll(
     const handoverWithStep = async (phase: Phase): Promise<number> => {
       const code = await handoverPhase(phase)
       if (code !== 0) return code
-      await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl })
+      await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl, dir: directory })
       maybeExit("phase", `阶段 ${phase} ${phaseText(phase)} 交接`)
       return 0
     }
@@ -816,27 +818,34 @@ export async function runAll(
 // 立即继续,超时自动继续。与 runner 的 askHuman 一样转发 readline 截获的 ^C,
 // 使暂停期间连续两次 Ctrl+C 同样能强制终止。
 // --interactive 下改由常驻输入行接收(语义不变),避免两个 readline 争抢 stdin。
-async function waitBetweenTasks(minutes: number, nextID: string, repl?: Interactive) {
+// dir 传入时等待区间经 statsWaitBegin/End 从总用时/AI 用时扣除、单记 waitMs
+// (STATS_PLAN §3 三处人工等待点之一);导出供单测直驱(对齐 subtaskProgressLine)。
+export async function waitBetweenTasks(minutes: number, nextID: string, repl?: Interactive, dir?: string) {
   const promptText = `⏸ 任务间暂停: 回车立即开始 ${nextID},或等待 ${minutes} 分钟自动继续: `
-  if (repl) {
-    const answer = await repl.question(promptText, minutes)
-    log(answer === undefined ? `⏳ 等待超时,自动继续 ${nextID}` : `→ 人工确认,继续 ${nextID}`)
-    return
-  }
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
-  let timer: ReturnType<typeof setTimeout> | undefined
+  await statsWaitBegin(dir, "waitBetweenTasks")
   try {
-    const answer = await Promise.race([
-      rl.question(promptText),
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), minutes * 60_000)
-      }),
-    ])
-    log(answer === undefined ? `⏳ 等待超时,自动继续 ${nextID}` : `→ 人工确认,继续 ${nextID}`)
+    if (repl) {
+      const answer = await repl.question(promptText, minutes)
+      log(answer === undefined ? `⏳ 等待超时,自动继续 ${nextID}` : `→ 人工确认,继续 ${nextID}`)
+      return
+    }
+    const rl = createInterface({ input: process.stdin, output: process.stdout })
+    rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const answer = await Promise.race([
+        rl.question(promptText),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), minutes * 60_000)
+        }),
+      ])
+      log(answer === undefined ? `⏳ 等待超时,自动继续 ${nextID}` : `→ 人工确认,继续 ${nextID}`)
+    } finally {
+      clearTimeout(timer)
+      rl.close()
+    }
   } finally {
-    clearTimeout(timer)
-    rl.close()
+    await statsWaitEnd(dir)
   }
 }
 

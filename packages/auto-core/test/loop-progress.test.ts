@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { subtaskProgressLine } from "../src/loop"
-import { flushStats, loadStats, setStatsClock, statsTask } from "../src/stats"
+import type { Interactive } from "../src/interactive"
+import { subtaskProgressLine, waitBetweenTasks } from "../src/loop"
+import { flushStats, loadStats, setStatsClock, statsTask, statsTotals } from "../src/stats"
 
 // T-002: loop 生命周期接线 —— 进度心跳(trackSubtasks → subtaskProgressLine)改读
 // stats 任务桶累计的守卫与文案断言(statsId 守卫、"本进程"仅当 ≠ 累计时输出)。
@@ -68,5 +69,61 @@ describe("subtaskProgressLine 进度心跳", () => {
     const line = await subtaskProgressLine(path, dir)
     expect(line).toContain("累计用时 24 分 0 秒(本进程 6 分 0 秒)")
     expect(line).toContain("预计剩余 24 分 0 秒") // 外推基于累计口径
+  })
+})
+
+// T-005 接线覆盖: waitBetweenTasks(--wait-between 任务间暂停)传 dir 时暂停区间
+// 经 statsWaitBegin/End 从总用时扣除、单记 waitMs。
+describe("waitBetweenTasks 等待扣除(stats 接线)", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-loop-wait-"))
+    now = 100_000
+    setStatsClock(() => now)
+  })
+
+  afterEach(async () => {
+    setStatsClock()
+    await flushStats(dir).catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  // fake 常驻输入行: 作答前推进注入时钟,模拟人工等待;answer 控制回车/超时语义。
+  function fakeRepl(answer: string | undefined, advance: number): Interactive {
+    return {
+      attach: () => {},
+      question: async () => {
+        now += advance
+        return answer as string
+      },
+      close: () => {},
+    } as unknown as Interactive
+  }
+
+  test("回车立即继续: 等待 40s 不进 wallMs,单记 waitMs", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    now += 5000
+    await waitBetweenTasks(5, "T-002", fakeRepl("", 40_000), dir)
+    const totals = await statsTotals(dir, "task")
+    expect(totals?.wallMs).toBe(5000)
+    expect(totals?.waitMs).toBe(40_000)
+  })
+
+  test("超时自动继续(answer=undefined): 同样扣除;dir 缺省则统计零接触", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await waitBetweenTasks(5, "T-002", fakeRepl(undefined, 5 * 60_000), dir)
+    expect((await statsTotals(dir, "task"))?.waitMs).toBe(5 * 60_000)
+    // dir 缺省: 空转,不落盘不装载
+    const fresh = await mkdtemp(join(tmpdir(), "auto-loop-wait-fresh-"))
+    try {
+      await waitBetweenTasks(5, "T-002", fakeRepl("", 1000))
+      expect(await Bun.file(join(fresh, ".auto", "stats.json")).exists()).toBe(false)
+    } finally {
+      await rm(fresh, { recursive: true, force: true })
+    }
   })
 })

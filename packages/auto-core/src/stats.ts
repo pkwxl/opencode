@@ -286,7 +286,9 @@ type Handle = {
   session?: ActiveSession // 进行中的 AI 会话(statsSessionBegin/End 维护)
   // 人工等待嵌套深度计数: depth 0→1 关段(fold 后 open=undefined,墙钟/AI 均不
   // 增长)、归零时 waitMs 单记入三桶并重开段(ai 标志恢复为关段前的值)。嵌套去重:
-  // --early 并行会话等重叠等待只计一次(计划 :52)。
+  // --early 并行会话等重叠等待只计一次(计划 :52)。由此层级桶的 aiMs 语义 =
+  // "AI 活跃墙钟时长"(任一会话 AI 段开放的墙钟区间并集),而非各会话 AI 时长之
+  // 和——并行会话重叠时 层级 aiMs ≤ Σ session aiMs,属预期而非漏计。
   wait: { depth: number; start: number; ai: boolean }
   timer?: ReturnType<typeof setInterval> // 会话期 30s 心跳(fold+落盘,unref)
 }

@@ -53,7 +53,7 @@ import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
-import { statsSessionBegin, statsSessionEnd, type Usage } from "./stats"
+import { statsSessionBegin, statsSessionEnd, statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
 import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, SWITCH_ENV, type ModelLetter, type ModelPolicy, type ModelRole, type Switches } from "./switches"
 import { stepPause } from "./step"
@@ -662,7 +662,8 @@ export async function runTask(
           task = requireTask(await load(plan.path), task.id)
           // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
           // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
-          await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive })
+          // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。
+          await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive, dir })
           maybeExit("subtask", `${task.id} 子任务 ${index + 1}`)
         }
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费)。
@@ -2592,7 +2593,7 @@ async function watch(
       if (!repeated && (!permission || waitAnswer > 0)) {
         autoAnswered.push(text)
         log(`❓ 收到${permission ? "权限" : "非权限"}提问:\n${text}`)
-        const human = waitAnswer > 0 ? await askHuman(waitAnswer, "超时将自动答复", opts.interactive) : undefined
+        const human = waitAnswer > 0 ? await askHuman(waitAnswer, "超时将自动答复", opts.interactive, opts.dir) : undefined
         const reply = human ?? AUTO_ANSWER
         log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
         await client.question
@@ -2637,6 +2638,7 @@ async function watch(
           waitAnswer,
           `输入 allow/yes/y 确认授权,其余回答将拒绝该权限并继续,超时按 --permission ${mode} 处理`,
           opts.interactive,
+          opts.dir,
         )
       } else {
         log(`🔐 收到权限请求(未设 --wait-answer 不等待人工,按 --permission ${mode} 处理): ${desc}`)
@@ -2878,24 +2880,37 @@ function isApproval(answer: string): boolean {
 // undefined on timeout or empty input, in which case the caller falls back to
 // AUTO_ANSWER (questions) or the --permission fallback (permission requests).
 // --interactive 下改由常驻输入行接收回答(提示语、超时与回落语义不变)。
-async function askHuman(minutes: number, hint: string, interactive?: Interactive): Promise<string | undefined> {
+// dir 传入时等待区间(含 interactive.question 路径)经 statsWaitBegin/End 从会话
+// 用时与 AI 用时中同步扣除、单记 waitMs(STATS_PLAN §2/§3: AI 段关-开);导出供
+// 单测直驱(对齐 runSession 等内部接线测试)。
+export async function askHuman(
+  minutes: number,
+  hint: string,
+  interactive?: Interactive,
+  dir?: string,
+): Promise<string | undefined> {
   const promptText = `请在 ${minutes} 分钟内输入回答(回车确认,${hint}): `
-  if (interactive) return (await interactive.question(promptText, minutes)) || undefined
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
-  // 处理器,使等待人工答复期间连续两次 Ctrl+C 同样能强制终止。
-  rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
-  let timer: ReturnType<typeof setTimeout> | undefined
+  await statsWaitBegin(dir, "askHuman")
   try {
-    const answer = await Promise.race([
-      rl.question(promptText),
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), minutes * 60_000)
-      }),
-    ])
-    return answer?.trim() || undefined
+    if (interactive) return (await interactive.question(promptText, minutes)) || undefined
+    const rl = createInterface({ input: process.stdin, output: process.stdout })
+    // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
+    // 处理器,使等待人工答复期间连续两次 Ctrl+C 同样能强制终止。
+    rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const answer = await Promise.race([
+        rl.question(promptText),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), minutes * 60_000)
+        }),
+      ])
+      return answer?.trim() || undefined
+    } finally {
+      clearTimeout(timer)
+      rl.close()
+    }
   } finally {
-    clearTimeout(timer)
-    rl.close()
+    await statsWaitEnd(dir)
   }
 }

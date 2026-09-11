@@ -4,9 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
-import { classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import type { Interactive } from "../src/interactive"
+import { askHuman, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
-import { flushStats, statsTotals } from "../src/stats"
+import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // 交接 steer 构造与交接判定的纯函数单测(接线在 executeWhole/runSubtask;完整
@@ -1435,5 +1436,61 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
       await flushStats(dir)
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// ---- 三处人工等待点扣时长(STATS_PLAN §2/§3,T-005): askHuman 接线 ----
+// stepPause / waitBetweenTasks 的接线用例分别在 step.test.ts / loop-progress.test.ts。
+describe("askHuman 等待扣除(stats 接线,T-005)", () => {
+  let now: number
+
+  beforeEach(() => {
+    now = 100_000
+    setStatsClock(() => now)
+  })
+
+  afterEach(() => {
+    setStatsClock()
+  })
+
+  // fake 常驻输入行: 作答前推进注入时钟,模拟人工等待时长。
+  function fakeInteractive(answer: string, advance: number): Interactive {
+    return {
+      attach: () => {},
+      question: async () => {
+        now += advance
+        return answer
+      },
+      close: () => {},
+    } as unknown as Interactive
+  }
+
+  test("interactive 路径: 会话内等待同步扣除会话用时与 AI 用时,waitMs 单记", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-ask-"))
+    try {
+      await loadStats(dir)
+      await statsSessionBegin(dir, "T-001")
+      now += 3000 // AI 活跃 3s
+      const answer = await askHuman(5, "超时将自动答复", fakeInteractive("allow", 8000), dir)
+      expect(answer).toBe("allow") // 行为不变: 回答照传
+      now += 2000 // AI 再活跃 2s
+      const report = await statsSessionEnd(dir, "s1", { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 })
+      expect(report?.thisAiMs).toBe(5000) // 3000 + 2000,等待 8000 不计
+      expect(report?.session.wallMs).toBe(13_000) // per-session wallMs = aiMs + waitMs
+      const round = await statsTotals(dir, "round")
+      expect(round?.aiMs).toBe(5000)
+      expect(round?.wallMs).toBe(5000)
+      expect(round?.waitMs).toBe(8000)
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("空回答回落 undefined(行为不变);dir 缺省统计零接触", async () => {
+    // interactive 路径历来不做 trim(readline 路径才有 answer?.trim()),空串 → undefined。
+    expect(await askHuman(5, "hint", fakeInteractive("", 1000))).toBeUndefined()
+    // 非空回答(含空白)原样返回——与改动前对等行为。
+    expect(await askHuman(5, "hint", fakeInteractive("allow", 1000))).toBe("allow")
   })
 })

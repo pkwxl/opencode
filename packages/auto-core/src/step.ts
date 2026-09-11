@@ -6,6 +6,7 @@
 import { createInterface } from "node:readline/promises"
 import type { Interactive } from "./interactive"
 import { log } from "./log"
+import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { autoSwitches, type StepMode } from "./switches"
 
 // 边界与档位的细度序(off 恒为 0): 值越细序越大,边界序 ≤ 档位序即暂停。
@@ -25,28 +26,42 @@ export function stepApplies(step: StepMode, boundary: Boundary): boolean {
 // 放行(不解释输入内容,空回车即继续)。interactive = --interactive 的常驻输入行
 // (免两个 readline 争抢 stdin;其 close 回落语义同样适用);step 显式覆盖档位
 // (缺省取 OPENCODE_AUTO_STEP 解析值,注入供单测);io 注入供单测。
+// dir 传目标目录时,等待区间经 statsWaitBegin/End 从总用时/AI 用时中扣除、单记
+// waitMs(STATS_PLAN §3 三处人工等待点之一);off 零行为时统计同样零接触。
 export async function stepPause(
   boundary: Boundary,
   label: string,
-  opts: { interactive?: Interactive; step?: StepMode; io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream } } = {},
+  opts: {
+    interactive?: Interactive
+    step?: StepMode
+    io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream }
+    dir?: string
+  } = {},
 ): Promise<void> {
   const step = opts.step ?? autoSwitches().step
   if (!stepApplies(step, boundary)) return
   const promptText = `⏸ 步进暂停(step=${step}): ${label} 已完成,回车继续: `
-  if (opts.interactive) {
-    await opts.interactive.question(promptText)
-  } else {
-    const rl = createInterface({ input: opts.io?.input ?? process.stdin, output: opts.io?.output ?? process.stdout })
-    // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
-    // 处理器,使暂停等待期间连续两次 Ctrl+C 同样能强制终止。
-    rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
-    // stdin 关闭(管道结束等): 回落 undefined 自动放行,与 interactive 的 close 语义一致。
-    const closed = new Promise<undefined>((resolve) => rl.on("close", () => resolve(undefined)))
-    try {
-      await Promise.race([rl.question(promptText), closed])
-    } finally {
-      rl.close()
+  // 人工等待扣除: 等待期间关段(aiMs/wallMs 均不增长),结束后重开段;异常路径
+  // 同样经 finally 配对 waitEnd,不留悬挂关段。
+  await statsWaitBegin(opts.dir, `stepPause:${boundary}`)
+  try {
+    if (opts.interactive) {
+      await opts.interactive.question(promptText)
+    } else {
+      const rl = createInterface({ input: opts.io?.input ?? process.stdin, output: opts.io?.output ?? process.stdout })
+      // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
+      // 处理器,使暂停等待期间连续两次 Ctrl+C 同样能强制终止。
+      rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
+      // stdin 关闭(管道结束等): 回落 undefined 自动放行,与 interactive 的 close 语义一致。
+      const closed = new Promise<undefined>((resolve) => rl.on("close", () => resolve(undefined)))
+      try {
+        await Promise.race([rl.question(promptText), closed])
+      } finally {
+        rl.close()
+      }
     }
+  } finally {
+    await statsWaitEnd(opts.dir)
   }
   log(`→ 步进放行: ${label}`)
 }
