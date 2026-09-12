@@ -339,13 +339,32 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
   // fakeClient 同款的 subscribe——outcomes 按 create/fork 调用顺序逐个消费,
   // 决定该次新建/分叉出的会话本轮是否报错。
   type Outcome = "error-retryable" | "error-fatal" | "ok"
-  function retryClient(outcomes: Outcome[]) {
+  // used: 与 outcomes 同序的"该次会话末端上下文用量",不给则为 0(纯报错桩)。
+  // 经 message.updated 事件注入,与真实链路同一条计量路径(input + cache.read)。
+  function retryClient(outcomes: Outcome[], used: number[] = []) {
     const calls = { forks: [] as string[], creates: 0 }
     const queue: unknown[] = []
     let index = 0
     let seq = 0
     const enqueue = (id: string) => {
+      const tokens = used[index] ?? 0
       const outcome = outcomes[index++]
+      if (tokens > 0) {
+        queue.push({
+          type: "message.updated",
+          properties: {
+            info: {
+              id: `msg_${id}`,
+              sessionID: id,
+              role: "assistant",
+              time: { completed: Date.now() },
+              tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              providerID: "zai",
+              modelID: "glm",
+            },
+          },
+        })
+      }
       if (outcome === "error-retryable" || outcome === "error-fatal") {
         queue.push({
           type: "session.error",
@@ -373,6 +392,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
         promptAsync: async () => ({}),
         abort: async () => ({}),
         messages: async () => ({ data: [] }),
+        get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
       },
       event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
     } as unknown as OpencodeClient
@@ -416,6 +436,70 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual([])
     expect(calls.creates).toBe(2)
+  })
+
+  // ---- 保住最值钱的会话(provider-timeout-analysis-20260912.md §8.4)----
+
+  test("chain.id 为空但失败会话已积累上下文(子任务形态): 分叉失败会话本体,不开空白会话", async () => {
+    // 子任务只有一个提示词回合,失败那一刻链上必然无会话——老策略在此开空白
+    // 新会话,把会话里已核实的研究成果整份扔掉,重开后在同一点再撞墙。
+    const { client, calls } = retryClient(["error-retryable", "ok"], [168_000])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_new_1"])
+    expect(calls.creates).toBe(1)
+    expect(chain.id).toBe("ses_fork_1")
+  })
+
+  test("失败会话用量高于链上原会话: 取失败会话(价值 = 已积累上下文)", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"], [50_000])
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_new_1"])
+  })
+
+  test("副本承接失败会话的前缀用量(2×cap 交接阈值按前缀 + 新增计算)", async () => {
+    // 三次全失败 → 耗尽阻塞;链上留下的 used 即重试时播种进副本的前缀值
+    // (attempt() 的可重试分支把 used 还原为本轮下发前快照,即播种值)。
+    const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable"], [50_000])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("blocked")
+    expect(chain.used).toBe(50_000)
+  })
+
+  test("失败会话用量低于链上原会话: 仍取原会话(刚失败不等于更值钱)", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"], [800])
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_real"])
+  })
+
+  test("链上无会话可分叉但基点存活: 从基点重新播种,赚回暖前缀而非纯冷启动", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0, forkBase: "ses_base" }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_base"])
+    expect(calls.creates).toBe(1)
+    expect(chain.forkBase).toBe("ses_base")
+  })
+
+  test("失败会话为纯报错桩(用量 0)且无基点: 维持空白新会话,不把报错桩背进副本", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", {}, chain)
+    expect(calls.forks).toEqual([])
+  })
+
+  test("重试成功后 chain.failed 清空,不残留到下一轮", async () => {
+    const { client } = retryClient(["error-retryable", "ok"], [9000])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", {}, chain)
+    expect(chain.failed).toBeUndefined()
   })
 
   test("可重试的中间失败态不落盘 progress.json,不顶替之前的真实记录", async () => {

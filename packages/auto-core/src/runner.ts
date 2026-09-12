@@ -231,7 +231,14 @@ type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } 
 // 链携带,溯源用);pending 为预创建会话 id(seedForkSession 从基点分叉所得),
 // attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
 // 瞬时错误重试自然回落 create 路径。
-export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string }
+export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; failed?: FailedSession }
+
+// 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
+// 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能
+// 从"本轮积累最多的会话"分叉: 超时类故障下,失败会话里那 100k+ 已核实研究是最
+// 值钱的资产,开空白会话等于把它扔掉再从零撞同一堵墙。副本不顶替恢复点(progress
+// 的还原逻辑不动,原会话仍是恢复点),晋升后即清。
+export type FailedSession = { id: string; used: number }
 
 // 上下文占比低于该值(%)时复用上一会话(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效)。
 const REUSE_BELOW = 50
@@ -1901,20 +1908,49 @@ export async function runSession(
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
       await opts.server.restart("会话错误为网络/服务故障,重启 opencode server 后换新会话重试")
     }
-    // chain.id 已有真实累计上下文(attempt() 在可重试的会话错误分支已把 chain.id
-    // 还原为本轮重试前的原会话,不是刚失败的会话/副本): fork 一份独立副本重试同
-    // 一条提示词,原会话不受影响——失败即弃,再次失败就再从同一个原会话重新
-    // fork(session-error-retry-plan.md)。chain.id 为空(本轮是这个会话的第一条
-    // 消息,还没成功过): 没有值得保护的内容,fork 无意义,维持现状开空白新会话。
-    if (chain.id !== undefined) {
-      const forked = await forkSession(client, chain.id, chain.subject ?? `${task.id} 重试`)
-      if (forked !== undefined) {
-        log(`↻ ${task.id} 遇到瞬时会话错误,从原会话 ${chain.id} 分叉副本重试(${i}/${RETRIES - 1}):\n${result.question}`)
-        chain.pending = forked
-        chain.pct = 100
+    // 保住最值钱的会话再从它分叉: 候选为刚失败的会话本体与链上原会话(attempt()
+    // 已把 chain.id 还原为下发前的原会话;复用轮里两者同一个,去重后只试一次),
+    // 价值以"已积累的上下文用量"度量,取最大者,fork 失败再退而求其次;都不可用
+    // 时依次回落 fork 基点(暖前缀,见下方 forkBase 分支)与空白新会话。
+    //
+    // 失败会话优先的理由: 超时/流中断类故障与会话内容无关(provider 侧停顿),
+    // 会话里那 100k+ 已核实产出是本轮最值钱的资产,开空白会话等于把它扔掉、再从
+    // 零撞同一堵墙——session-error-retry-plan.md 事实基线第 4 点记过这种"比完全不
+    // 复用还差"的反例。代价是副本尾部带着那条 0-token 报错消息、重试提示词落在它
+    // 后面;used 为 0 的失败会话则是纯报错桩(下发即失败,什么也没跑出来),没有
+    // 值得保护的内容,不进候选(维持原设计判据)。
+    //
+    // 一律 fork 副本而非直接复用: 原会话不受影响,失败即弃,恢复点仍是原会话
+    // (progress 的还原逻辑不动,见 attempt() 的可重试分支)。此处也不设
+    // seedForkSession 的"用量达 cap/2 即冷启动"护栏——那道护栏防的是新子任务背上
+    // 过大前缀,而重试是同一条提示词的续命,前缀大恰恰因为活干得多。
+    const sources: { id: string; used: number; why: string }[] = []
+    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
+    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
+    chain.failed = undefined
+    sources.sort((a, b) => b.used - a.used)
+    let seeded = false
+    for (const source of sources) {
+      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 重试`)
+      if (forked === undefined) continue
+      log(`↻ ${task.id} 遇到瞬时会话错误,从${source.why} ${source.id}(${formatTokens(source.used)} tokens)分叉副本重试(${i}/${RETRIES - 1}):\n${result.question}`)
+      chain.pending = forked
+      chain.pct = 100
+      chain.used = source.used
+      seeded = true
+      break
+    }
+    if (seeded) continue
+    if (sources.length) log(`↻ fork 重试副本失败,回退分叉基点/空白新会话`)
+    // 无会话可分叉(子任务的首条消息即失败,链上本就为空)但基点还在: 从基点重新
+    // 播种,至少赚回免费的暖前缀,而不是纯冷启动——与 fork 三段式"每项重新从基点
+    // 分叉"(fork-decompose 设计 §4.3)同一语义。基点失效则回落空白新会话。
+    if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(client, chain.forkBase))) {
+      const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(client, chain.forkBase) }
+      if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} 重试`)) {
+        log(`↻ ${task.id} 遇到瞬时会话错误,链上无会话可分叉,已从基点重新播种重试(${i}/${RETRIES - 1}):\n${result.question}`)
         continue
       }
-      log(`↻ fork 重试副本失败,回退空白新会话`)
     }
     log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${result.question}`)
     // 重试保持"换新会话"语义,不复用出错的会话。
@@ -2059,11 +2095,14 @@ async function attempt(
       chain.id = previousId
       chain.used = previousUsed
       chain.at = previousAt
+      // 链状态还原,但失败会话本身留给重试环作首选分叉源(见 FailedSession)。
+      chain.failed = { id: sessionID, used: result.used }
       if (opts.dir && chain.phase) {
         if (prior) await saveProgress(opts.dir, prior)
         else await forgetProgress(opts.dir)
       }
     } else {
+      chain.failed = undefined
       await remember()
     }
     if (result.blocked) return result.blocked
