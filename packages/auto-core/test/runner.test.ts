@@ -5,8 +5,9 @@ import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
-import { askHuman, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
+import { resolvesOf } from "../src/resolve"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
@@ -77,6 +78,10 @@ function fakeClient(
     prompts: [] as { sessionID: string; agent?: string; model?: { providerID: string; modelID: string }; parts: unknown[] }[],
     // 记录 session.abort 调用的会话 id,供提前结算/断流清理断言(D.2 降级前必 abort)。
     aborts: [] as string[],
+    // 提问答复/驳回(auto-resolve T-005): replies 记每次答复文案,rejects 记驳回的
+    // requestID(重复提问走驳回 + abort)。
+    replies: [] as string[],
+    rejects: [] as string[],
   }
   let seq = 0
   let lastCreated = over.current ?? "ses_new_0"
@@ -108,6 +113,16 @@ function fakeClient(
         return {}
       },
       messages: async (params: { sessionID: string }) => (over.messages ? over.messages(params.sessionID) : { data: [] }),
+    },
+    question: {
+      reply: async (params: { requestID: string; answers: string[][] }) => {
+        calls.replies.push(params.answers.flat().join(""))
+        return {}
+      },
+      reject: async (params: { requestID: string }) => {
+        calls.rejects.push(params.requestID)
+        return {}
+      },
     },
     event: { subscribe: async () => ({ stream: over.events ? over.events(lastCreated) : idleStream(lastCreated) }) },
   } as unknown as OpencodeClient
@@ -1492,5 +1507,176 @@ describe("askHuman 等待扣除(stats 接线,T-005)", () => {
     expect(await askHuman(5, "hint", fakeInteractive("", 1000))).toBeUndefined()
     // 非空回答(含空白)原样返回——与改动前对等行为。
     expect(await askHuman(5, "hint", fakeInteractive("allow", 1000))).toBe("allow")
+  })
+})
+
+// ---- driver 侧代答采集接线(docs/auto-resolve-design.md §G,T-005): H1..H4 ----
+// H1 观测(question.asked 回落自动答复)→ H2 随 snapshot 出全部出口 → H3 收段落账
+// (补 task/phase/round/session)→ H4 会话收尾扫描 agent 标记。台账读回经
+// resolvesOf,模块本身的单测在 test/resolve.test.ts。
+describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
+  async function captureLogs(fn: () => Promise<unknown>): Promise<string[]> {
+    const lines: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    }
+    try {
+      await fn()
+    } finally {
+      console.log = orig
+    }
+    return lines
+  }
+
+  // 一条 question.asked 事件(非权限提问: 文案不含"权限/permission")。
+  const question = (sid: string, id: string, text: string) => ({
+    type: "question.asked",
+    properties: { id, sessionID: sid, questions: [{ question: text }] },
+  })
+
+  const idle = (sid: string) => ({ type: "session.idle", properties: { sessionID: sid } })
+
+  // fake 常驻输入行: 人工在 --wait-answer 内真答了。
+  const fakeInteractive = (answer: string) =>
+    ({ attach: () => {}, question: async () => answer, close: () => {} }) as unknown as Interactive
+
+  const Q1 = "是否把 prompt.ts 的第三份 formatTokens 一并收口?"
+  const Q2 = "折旧入账是否同样过 MAX_TICK 钳制?"
+
+  let dir = ""
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-resolve-runner-"))
+  })
+
+  afterEach(async () => {
+    await flushStats(dir)
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("回落自动答复: 落 driver 台账(桶身份 + 会话 id)并打 ⚑ 两行,答复全文降为明细日志", async () => {
+    // 轮号取目标目录推导值(docs/R-03 → 第 3 轮),阶段字母由 opts.phase 带入。
+    await mkdir(join(dir, "docs", "R-03"), { recursive: true })
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield question(sid, "req_1", Q1)
+          yield idle(sid)
+        })(),
+    })
+    const lines = await captureLogs(() => runSession(client, task, "提示词", { dir, phase: "m" }, { pct: 100, used: 0, at: 0 }))
+    const items = await resolvesOf(dir, "task", "T-001")
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      source: "driver",
+      task: "T-001",
+      phase: "m",
+      round: 3,
+      session: "ses_new_1",
+      question: Q1,
+    })
+    expect(lines.some((l) => l.startsWith(`⚑ 自动代答(AUTO-RESOLVE)第 1 个: ${Q1}`))).toBe(true)
+    expect(lines.some((l) => l.includes("要求会话以 AUTO-RESOLVE 标注决策"))).toBe(true)
+    // 旧的 `→ 自动答复: <长文案>` 不再上终端(降为 vlog),但答复本身照发。
+    expect(lines.some((l) => l.startsWith("→ 自动答复"))).toBe(false)
+    expect(calls.replies).toHaveLength(1)
+    expect(calls.replies[0]).toContain("AUTO-RESOLVE")
+  })
+
+  test("同一回合两个不同提问: 计数递增,台账两条(按轮号/阶段缺省入桶)", async () => {
+    const { client } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield question(sid, "req_1", Q1)
+          yield question(sid, "req_2", Q2)
+          yield idle(sid)
+        })(),
+    })
+    const lines = await captureLogs(() => runSession(client, task, "提示词", { dir }, { pct: 100, used: 0, at: 0 }))
+    const items = await resolvesOf(dir, "task", "T-001")
+    expect(items.map((item) => item.question)).toEqual([Q1, Q2])
+    expect(items.every((item) => item.phase === "" && item.round === 1)).toBe(true)
+    expect(lines.some((l) => l.startsWith("⚑ 自动代答(AUTO-RESOLVE)第 2 个"))).toBe(true)
+  })
+
+  test("重复提问阻塞(blocked 出口): 已代答的第 1 条不丢,第 2 次不重复落账", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield question(sid, "req_1", Q1)
+          yield question(sid, "req_2", Q1)
+          yield idle(sid)
+        })(),
+    })
+    const result = await captureLogs(async () => {
+      const outcome = await runSession(client, task, "提示词", { dir }, { pct: 100, used: 0, at: 0 })
+      expect(outcome.type).toBe("blocked")
+    })
+    expect(result.length).toBeGreaterThan(0)
+    expect(calls.rejects).toEqual(["req_2"])
+    expect(await resolvesOf(dir, "task", "T-001")).toHaveLength(1)
+  })
+
+  test("人工在 --wait-answer 内真答了: 不计代答(那是真人做的决定)", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield question(sid, "req_1", Q1)
+          yield idle(sid)
+        })(),
+    })
+    const lines = await captureLogs(() =>
+      runSession(
+        client,
+        task,
+        "提示词",
+        { dir, waitAnswer: 5, interactive: fakeInteractive("按方案 A 做") },
+        { pct: 100, used: 0, at: 0 },
+      ),
+    )
+    expect(await resolvesOf(dir, "task", "T-001")).toEqual([])
+    expect(lines.some((l) => l.startsWith("→ 人工答复: 按方案 A 做"))).toBe(true)
+    expect(lines.some((l) => l.startsWith("⚑ 自动代答"))).toBe(false)
+    expect(calls.replies[0]).toBe("按方案 A 做")
+  })
+
+  test("dryrun 预检会话: 自动答复照旧,但不计代答(预检只探查权限)", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield question(sid, "req_1", Q1)
+          yield idle(sid)
+        })(),
+    })
+    const lines = await captureLogs(() => runSession(client, task, "提示词", { dir, dryrun: true }, { pct: 100, used: 0, at: 0 }))
+    expect(await resolvesOf(dir, "task", "T-001")).toEqual([])
+    expect(lines.some((l) => l.startsWith("→ 自动答复:"))).toBe(true)
+    expect(calls.replies).toHaveLength(1)
+  })
+
+  test("autoAnswer 两档文案: 都点明被代答;off 要求标注 AUTO-RESOLVE,on 不提标注", () => {
+    const off = autoAnswer(false)
+    const on = autoAnswer(true)
+    expect(off).toContain("这是一个被代答的提问")
+    expect(on).toContain("这是一个被代答的提问")
+    expect(off).toContain("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")
+    expect(off).toContain("AUTO-DECISION")
+    expect(on).not.toContain("AUTO-DECISION")
+    expect(on).not.toContain("AUTO-RESOLVE")
+  })
+
+  test("H4 会话收尾扫描: --commit false 下照样采集(采集是审计,不受提交开关影响)", async () => {
+    const proc = Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "pipe", stderr: "pipe" })
+    expect(await proc.exited).toBe(0)
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    await Bun.write(
+      join(dir, "report.md"),
+      ["## 自动代答问题", "", "- AUTO-RESOLVE: 是否顺带收口 -> 顺带收口 (同层依赖)", "- AUTO-DECISION: 字段命名取 matched (与 schema 一致)", ""].join("\n"),
+    )
+    await afterSession(dir, { commit: false, phase: "t" }, { id: "T-001", title: "示例任务" }, { stage: "wrapup", subject: "T-001 wrapup 示例任务" })
+    const items = await resolvesOf(dir, "task", "T-001")
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ source: "agent", phase: "t", round: 2, question: "是否顺带收口", file: "report.md:3" })
   })
 })

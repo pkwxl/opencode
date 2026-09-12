@@ -1,7 +1,7 @@
 # 自主决策(AUTO-DECISION)与代答决策(AUTO-RESOLVE)分离设计
 
 状态: 实施中(2026-09-12;T-001 设计基准、T-002 开关接线、T-003 规则文本改造、
-T-004 `src/resolve.ts` 模块已落地,T-005..T-008 待做)。计划文件
+T-004 `src/resolve.ts` 模块、T-005 driver 侧采集接线已落地,T-006..T-008 待做)。计划文件
 `plans/AUTO_RESOLVE_PLAN.md`(含动机、已确认口径与八任务拆分)。本文承担两件事:
 ① 把口径/判据/schema/挂点/报文固定为后续任务的唯一依据;② 记录 T-001 对计划所引
 全部代码位置的核实结果与**四处修正**(§J)。行号以 auto-core 分支 `bf745fa94` 为准。
@@ -370,7 +370,7 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
 | T-002 | `OPENCODE_AUTO_ASK` 开关五处接线 + 渲染出口统一注入 `ask`,**不改文案** | `switches.ts` / `prompt.ts` | ✅ 563 pass |
 | T-003 | `question-rule` 两档重写 + `autoAnswer` 改函数 + `MAINT_RULE` 补句 + `whole`/`subtask` 条款条件化 | `_partials.md` / `runner.ts:69` / `agents-block.ts:33` / 两份模板 | ✅ 567 pass |
 | T-004 | `src/resolve.ts` 全量 + `sameIssue` 上收 + `changedFiles` 上收 git.ts + `test/resolve.test.ts` | 新模块 | ✅ 593 pass |
-| T-005 | driver 采集接线 H1..H4 | `runner.ts` | ⬜ |
+| T-005 | driver 采集接线 H1..H4 + `test/runner.test.ts` 七例 | `runner.ts` | ✅ 600 pass |
 | T-006 | 报文输出 H5/H6 | `loop.ts` | ⬜ |
 | T-007 | 收尾闭环 H7 | `prompt.ts` / `wrapup.md` | ⬜ |
 | T-008 | 文档同步(本文回填、structure.md、behavior.md、README、AGENTS.md 导航) | 文档 | ⬜ |
@@ -462,3 +462,32 @@ AUTO-DECISION 只计数不落账、driver↔agent 经 `sameIssue` 配对置 `mat
 - **AUTO-DECISION: 报文单条文本压成单行并截断到 80 字**。driver 源的 `question` 是提
   问原文,可能多行、可能很长,整段贴进结论行会把高亮块淹掉;完整原文在台账与任务报告
   里,截断只影响终端一瞥。
+
+## O. 决策记录(T-005 driver 侧采集接线)
+
+- **AUTO-RESOLVE: 权限提问在 `--wait-answer` 超时后的回落是否计入代答 -> 计入
+  (§B 只写"仅回落自动答复才计入",未就权限/非权限分流,归属判据下这是本应问用户
+  的取舍)**。权限提问回落同样是 driver 替用户拍板(`ask-*` 三档的超时回落各有语义,
+  但"人没答、driver 定了"这件事一致);漏掉它会让最该被看见的一类代答缺席。代价是
+  权限类条目混进台账,可由 `question` 原文自然区分。
+- **AUTO-RESOLVE: AUTO-DECISION 的任务级计数(§H-④ 折进高亮块末行的那个数)是否在
+  本任务实现 -> 不实现,留给 T-006(超出 H1..H4 的字面范围)**。H4 每会话回一次
+  "本次扫描看见的标记条数",任务级聚合口径由报文侧决定: `--commit true`(缺省)下
+  每会话只扫自己的变更,逐会话求和即对;`--commit false` 下后一次扫描会重看前一次的
+  标记,求和即重复计数。这个取舍属 T-006 的报文决策,本任务只把每次扫描的计数落进
+  `vlog` 明细日志(§H-④ 的"扫描确实跑过的证据"),不造跨会话累加器。
+- **AUTO-DECISION: `compact` 上收为导出的 `compactText`**(`src/resolve.ts`)。会话内
+  即时行(§H-①)与高亮块展示同一份提问文本,单行化与 80 字截断口径不该各写一份。
+- **AUTO-DECISION: `afterSession` 与 `autoAnswer` 导出供单测**(与 `gatedAutoCorrectRefs`
+  /`askHuman` 同款"内部接线的可测出口")。H4 的"采集在 commit 开关的提前 return 之前"
+  与两档答复文案都无其他可达路径,不导出则这两条只能靠人工复读。
+- **AUTO-DECISION: H3 落账抽成模块私有 `recordDriverResolves`,无观测时零 IO**。回合
+  无提问是常态,此时既不读轮号也不碰台账文件;轮号只在确有代答时现场取。
+- **AUTO-DECISION: 轮号取 `currentRound(dir)` 现场推导,不从 stats 的内存 handle 读**。
+  `currentRound` 是既有推导式真源(一次 readdir),stats 未导出轮号读口;为此新开读口
+  会让两个模块共享同一份缓存状态,不值当。
+- **AUTO-DECISION: 会话内即时行的第二行按档取文案**(`off` = "要求会话以 AUTO-RESOLVE
+  标注决策",`on` = "driver 已完整记录,本档不要求会话另行标注"),与 `autoAnswer`
+  同一次 `autoSwitches().ask` 取值——日志与实际答复永不打架(§M 已就 `autoAnswer`
+  立过同样的口径)。原 `→ 自动答复: <长文案>` 降为 `vlog`: 答复全文每次都一样,占着
+  终端两三行却不携带本次信息;dryrun 预检不计代答,仍走原行。

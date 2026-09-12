@@ -380,17 +380,18 @@ export function resolveHighlight(items: ResolveItem[], opts?: HighlightOpts): st
 // 与 agent 源格式不规范各自带 ⚠ 点名(两者是不同的失守: 前者是根本没标,后者是标了
 // 但没按格式写)。
 function entryText(item: ResolveItem): string {
-  const question = compact(item.question)
+  const question = compactText(item.question)
   if (item.source === "driver") return `${question}  ⚠ 会话未按要求写出 AUTO-RESOLVE 标记`
-  const option = item.option ? ` → ${compact(item.option)}` : ""
-  const reason = item.reason ? `(${compact(item.reason)})` : ""
+  const option = item.option ? ` → ${compactText(item.option)}` : ""
+  const reason = item.reason ? `(${compactText(item.reason)})` : ""
   const warn = item.malformed ? "  ⚠ 格式不规范" : ""
   return `${question}${option}${reason}${warn}`
 }
 
 // 压成单行并截断: driver 源的提问原文可能是多行长文本,整段贴进结论行会把高亮块
-// 淹掉;完整原文在台账与任务报告里。
-function compact(text: string): string {
+// 淹掉;完整原文在台账与任务报告里。导出供 runner 的会话内即时行(H1)共用同一压缩
+// 口径——两处展示的是同一份提问文本,截断长度不该各写一份。
+export function compactText(text: string): string {
   const line = text.replace(/\s+/g, " ").trim()
   return line.length > MAX_TEXT ? `${line.slice(0, MAX_TEXT)}…` : line
 }

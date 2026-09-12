@@ -8,6 +8,7 @@ import { maybeExit } from "./exit"
 import { commitTitle, commitTree } from "./git"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
+import { currentRound } from "./phases"
 import {
   appendSubtasks,
   begin,
@@ -51,7 +52,7 @@ import {
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
-import { sameIssue } from "./resolve"
+import { collectAgentResolves, compactText, recordResolves, sameIssue, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { statsSessionBegin, statsSessionEnd, statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
@@ -72,7 +73,8 @@ export type Outcome = { type: "completed" } | { type: "blocked"; question: strin
 // off 档(缺省)要求以 AUTO-RESOLVE 标注该决策并明确区别于 AUTO-DECISION(台账靠
 // 会话自觉标注补全);on 档下提问本身即流经 driver 的事件、已被完整落账,故不要求
 // 任何标注——此档文案不出现 AUTO-DECISION 字样,避免会话出于惯性继续留痕。
-function autoAnswer(ask: boolean): string {
+// 导出供单测直驱两档文案(与 gatedAutoCorrectRefs 同款: 内部接线的可测出口)。
+export function autoAnswer(ask: boolean): string {
   const head =
     "这是一个被代答的提问: 它本应由用户拍板,因无人值守由 driver 代替用户闭环。" +
     "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
@@ -104,15 +106,42 @@ const FIX_ROUNDS = 3
 // 提交前引用 auto-correct(stable-refs P4,D6 第一层): rename 配对机械改写活
 // 文档引用 + 失效引用 ⚠ 日志(改写内容随本次统一提交落账,不另起提交)。
 // 受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省 off 空转)。
-async function afterSession(
+// 导出供单测(H4 守卫: 采集不受 --commit false / dryrun 的提前 return 影响)。
+export async function afterSession(
   dir: string | undefined,
   opts: Opts,
   task: { id: string; title: string },
   info: { stage: string; subject: string },
 ): Promise<void> {
-  if (!dir || opts.commit === false || opts.dryrun) return
+  if (!dir) return
+  // 代答标记采集(auto-resolve H4,docs/auto-resolve-design.md §G): 提到 commit/
+  // dryrun 提前 return **之前**——采集是审计,不该受提交开关影响;on 档下它降级为
+  // 兜底(driver 已在事件侧完整落账),但会话自愿标了就收。扫描本次会话的未提交
+  // 变更文件,AUTO-RESOLVE 落台账、AUTO-DECISION 只回计数。
+  await collectSessionMarks(dir, opts, task, info.stage)
+  if (opts.commit === false || opts.dryrun) return
   await gatedAutoCorrectRefs(dir, autoSwitches().refCheck)
   await commitTree(dir, task, info)
+}
+
+// H4 的采集体: 计数只进明细日志(vlog),不上终端——AUTO-DECISION 永不与
+// AUTO-RESOLVE 争版面(§H-④),而"扫描确实跑过、看见了多少标记"是可追溯的证据。
+// 本任务的高亮块由 loop 侧读台账构造(T-006),此处不打终端行。台账写失败全静默,
+// 采集本身也不得影响流程与退出码,故整体 catch 吞掉。
+async function collectSessionMarks(
+  dir: string,
+  opts: Opts,
+  task: { id: string },
+  stage: string,
+): Promise<void> {
+  const found = await collectAgentResolves(dir, {
+    task: task.id,
+    phase: opts.phase ?? "",
+    round: await currentRound(dir).catch(() => 0),
+  }).catch(() => undefined)
+  if (!found) return
+  if (found.resolves) vlog(`⚑ ${task.id} ${stage}: 采集到 AUTO-RESOLVE 标记 ${found.resolves} 条`)
+  if (found.decisions) vlog(`ℹ ${task.id} ${stage}: 记录 AUTO-DECISION ${found.decisions} 条`)
 }
 
 // refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off):
@@ -238,6 +267,10 @@ type Watch = {
   // session.tokens 含 fork 继承前缀,均不可直接求和,不得回退到这两个口径)。
   // attempt 在回合结束时据此 statsSessionEnd 入账。
   usage?: Usage
+  // 本回合被 driver 代答的提问(auto-resolve H1/H2,docs/auto-resolve-design.md §G):
+  // 与 usage 完全同构——由 snapshot 统一带出,7 个 return 出口(含 error/blocked 提前
+  // 结算口)一个不漏;attempt 在回合结束时补桶身份后 recordResolves 落账。
+  resolves?: ResolveEvent[]
 }
 
 type SessionResult =
@@ -2154,6 +2187,25 @@ export async function runSession(
   }
 }
 
+// H3 的落账体: 回合内观测到的代答补上 task/phase/round/session 后落台账。无观测即
+// 空转(不读轮号、不碰文件),故常见的"整轮无提问"路径零新增 IO。
+async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveEvent[] | undefined): Promise<void> {
+  if (!opts.dir || !events?.length) return
+  const round = await currentRound(opts.dir).catch(() => 0)
+  await recordResolves(
+    opts.dir,
+    events.map((event) => ({
+      at: event.at,
+      task: taskID,
+      phase: opts.phase ?? "",
+      round,
+      session: event.session,
+      source: "driver" as const,
+      question: event.question,
+    })),
+  )
+}
+
 // Session errors get this many fresh-session attempts before blocking.
 const RETRIES = 3
 
@@ -2277,6 +2329,10 @@ async function attempt(
     // 由下方 ◉ 会话结束两行消费(累计用时/轮次/累计费用,STATS_PLAN §4.1)。
     const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage())
     booked = true
+    // 代答落账(auto-resolve H3): 与 statsSessionEnd 同处收段——watch 侧只观测提问
+    // 原文与会话 id,桶身份(任务/阶段/轮号)由此处补齐。旁路会话的伪任务
+    // (PLAN/AUTO)照记,与统计同一口径。写失败在模块内静默,不影响回合结果。
+    await recordDriverResolves(opts, task.id, result.resolves)
     // 本轮开始前的原链状态: 可重试的会话错误需要还原到这里(而不是留在这一轮
     // 刚失败的会话上),下一次重试才会从"从未被动过的原会话"重新 fork。
     const previousId = chain.id
@@ -2419,8 +2475,12 @@ async function watch(
   // (SSE 重发同一 part 的更新事件不重计);跨会话串话由事件循环内 sessionID 守卫排除。
   const usage: Usage = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
   const billedSteps = new Set<string>()
-  // 回合快照(STATS_PLAN §2): watch 的全部 return 出口统一带 durationMs + usage,
-  // error/blocked 提前结算口同样带——消耗真实发生,不丢。extra 为各出口差异字段。
+  // 本回合的代答观测(auto-resolve H1): 仅"无人工答复的回落自动答复"入列——
+  // --wait-answer 下人工真答了的是真人决定,dryrun 预检只探查权限,两者都不是代答。
+  const resolves: ResolveEvent[] = []
+  // 回合快照(STATS_PLAN §2): watch 的全部 return 出口统一带 durationMs + usage +
+  // resolves,error/blocked 提前结算口同样带——消耗与代答都真实发生,不丢。extra 为
+  // 各出口差异字段。
   const snapshot = (extra?: Partial<Watch>): Watch => ({
     lastText,
     pct,
@@ -2428,6 +2488,7 @@ async function watch(
     limit,
     durationMs: Date.now() - startTime,
     usage,
+    resolves,
     ...extra,
   })
   // steer 每会话只插入一次。
@@ -2616,9 +2677,21 @@ async function watch(
         autoAnswered.push(text)
         log(`❓ 收到${permission ? "权限" : "非权限"}提问:\n${text}`)
         const human = waitAnswer > 0 ? await askHuman(waitAnswer, "超时将自动答复", opts.interactive, opts.dir) : undefined
-        const fallback = autoAnswer(autoSwitches().ask)
+        const ask = autoSwitches().ask
+        const fallback = autoAnswer(ask)
         const reply = human ?? fallback
-        log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${fallback}`)
+        // 代答观测(auto-resolve H1,docs/auto-resolve-design.md §G/§H-①): 仅回落
+        // 自动答复才计——人工答了是真人做的决定,dryrun 预检不产生工程决策。回落时
+        // 把原 `→ 自动答复: <长文案>` 换成两行高亮式(答复全文降为明细日志),
+        // 让"driver 替用户做了主"在会话日志里一眼可见、事后可数。
+        if (human) log(`→ 人工答复: ${human}`)
+        else if (opts.dryrun) log(`→ 自动答复: ${fallback}`)
+        else {
+          resolves.push({ at: Date.now(), question: text, session: sessionID })
+          log(`⚑ 自动代答(AUTO-RESOLVE)第 ${resolves.length} 个: ${compactText(text)}`)
+          log(`  → 已代答,${ask ? "driver 已完整记录,本档不要求会话另行标注" : "要求会话以 AUTO-RESOLVE 标注决策"}`)
+          vlog(`  代答内容: ${fallback}`)
+        }
         await client.question
           .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
           .catch(() => {})
