@@ -13,19 +13,37 @@
 - 项目配置固化(src/config.ts,设计文档 docs/init-config-agents-design.md 与
   docs/phases-design.md A.2):宪法级选项
   -m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--auto-number/--no-auto-number/--phases/--source-dir/--source-path/--dest-dir 仅
-  init 接受(仅显式给出的键被改写、其余保留既有值——init 兼具创建与修订两种身份,
-  重复 init 无参数不重置配置;source 两键成对、任一给出即整体覆盖,init 时校验
+  init 接受(**init 缺省无状态全量覆盖**: 产出仅由本次参数决定,未给出的键回落
+  CONFIG_DEFAULTS、可选键 source/destDir 直接消失——同一条 init 在任何环境下产出一致,
+  单次即可得到确定状态;`--amend` 切回增量修订语义即"仅显式给出的键被改写、其余保留
+  既有值",continue 恒为 amend。设计文档 init-config-agents-design.md §B.1;
+  source 两键成对、任一给出即整体覆盖,init 时校验
   <工作目录>/join 后存在(经 stat 跟随软链接——source-dir 可为指向工作目录外的软链,
   断链按不存在拒绝);三迁移键均须为不含 .. 的相对路径,dest-dir 独立固化/修订、
   不校验存在性——迁移目标在 <工作目录>/<dest-dir>,driver 流程文件与迁移产出经它隔离;
-  台账非空时改 --phases 须满足前缀护栏——已完成阶段构成新值前缀,否则退出码 1 并指引
-  人工修订台账),run 出现即用法错误退出码 1(报文给修订指引)。
+  台账非空时 phases 须满足前缀护栏——已完成阶段构成**本次生效值**的前缀,否则退出码 1
+  并指引人工修订台账或改用 --amend;护栏判生效值而非"是否显式给出 --phases",否则无参
+  init 会把阶段化项目 phases 静默重置为 "m"、毁掉轮次布局),run 出现即用法错误退出码 1
+  (报文给修订指引;run 同样拒绝 --amend 与 -f/--force)。
+  覆盖既有配置时有两道防误触闸,均排在第一个写盘点之前、先拦截再询问,`-f/--force`
+  一并跳过: ① 工作区干净度(src/clean.ts,覆盖目标目录所在仓库与目录树下全部嵌套
+  仓库/子模块,非 git 目录视为干净);② 交互确认(src/confirm.ts,非 TTY 直接放行)。
+  二者互不覆盖——非 TTY 只免掉提问,干净度拦截对 CI 与脚本照常生效。
   人工修订通道为直接编辑配置文件;坏 JSON/键值越界/mode 未注册时 run 与 init 均退出
   码 1(严格失败优于静默回落),未知键忽略;旧 .auto/config.json 的 mode 仅在新文件
   缺失时回落读取(run 打提示);run 期间配置文件置只读(brief.md 不在其列,非状态文件);
   status 与 run 启动横幅打印
   formatProjectConfig 一行摘要(含阶段)。判别标准: 改它需同时改 AGENTS.md/PLAN/契约表述或
   描述模型/项目属性 → init;只描述本次运行怎么跑、人怎么盯 → run。
+- 反初始化(src/reset.ts,`reset` 子命令):与 init 互逆,精确移除 init 写出的配置层产物,
+  把工作区还原至未初始化状态。清理 .opencode/auto/config.json 与 brief.md、
+  .opencode/agent/auto.md、旧版 .auto/config.json、AGENTS.md 的 opencode-auto 标记块、
+  .gitignore 的 tmp/ 与 .auto/ 条目,以及**内容逐字节等于模板**的 opencode.json(被改过
+  则保留并说明原因);PLAN.md、docs/(含 R-NN 与 T-NNN)、.auto/ 其余运行时状态与 tmp/
+  一律不动;目录一律 rmdir 仅在为空时回收(绝不 rm -r),用户自建的 .opencode/auto/prompts/
+  与 .opencode/agent/ 下其他 agent 契约因此完好。执行前先打印完整清单,再过与 init 同款的
+  干净度闸门与交互确认(reset 恒为破坏性,闸门无条件生效)。init → reset → init 的产出
+  与首次 init 逐字节一致;无任何 init 产物时打提示并以 0 退出。
 - init 去 AI 化(phases-design.md):init 不启动任何 AI 会话,`-p/--prompt` 整写覆盖
   .opencode/auto/brief.md(项目意图,版本化、人工可编辑,阶段规划会话消费;无 -p 保留
   既有);结束语按 phases 分两态("m" 维持"编辑 PLAN.md"现状,其余提示开始首个未完成

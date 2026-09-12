@@ -2,8 +2,9 @@
 // 决定会话被如何告知、验收与提交语义如何运作的项目属性——在 init 固化到
 // .opencode/auto/config.json,版本化、随仓库共享、人工可编辑;未知键忽略
 // (前向兼容)。run 只控制本次执行,不再接受对应选项。旧版 .auto/config.json
-// (仅 mode)只在新文件缺失时回落读取,新文件一经写出即不再读取(不删除,留在
-// gitignore 内自然沉没)。
+// (仅 mode)只在新文件缺失时回落读取,新文件一经写出即不再读取;它不会被 run
+// 清理(留在 gitignore 内自然沉没),但属配置层,由 reset 一并移除。
+import { chmod } from "node:fs/promises"
 import { isAbsolute, join } from "node:path"
 import { loadModes } from "./mode"
 import { parsePhases } from "./phases"
@@ -97,8 +98,13 @@ export function mergeProjectConfig(existing: ProjectConfig, explicit: Partial<Pr
 }
 
 // 普通整写(Bun.write 自动建父目录);只在 init(非 protect 期)调用,无需原子写。
+// 写前 best-effort 解除只读位: protect.ts 在 run 期间把本文件 chmod 0444,run 被
+// 强杀时该位会残留,而 allowWrite 靠模块级状态、在新进程里帮不上忙——不解除
+// 会让此后所有 init 以 EACCES 失败。
 export async function saveProjectConfig(dir: string, config: ProjectConfig): Promise<void> {
-  await Bun.write(join(dir, CONFIG_FILE), JSON.stringify(config, null, 2) + "\n")
+  const file = join(dir, CONFIG_FILE)
+  await chmod(file, 0o644).catch(() => {})
+  await Bun.write(file, JSON.stringify(config, null, 2) + "\n")
 }
 
 // run 启动提示用: 新文件缺失而旧版 .auto/config.json 仍有持久化 mode(生效

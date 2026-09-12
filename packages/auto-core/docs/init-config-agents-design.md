@@ -56,7 +56,7 @@
 | 配置内容 | 全键显式:`mode / agent / contextLimit / subtask / verify / verifyIdle / verifyMax / commit`(schema 见 §A);init 写出完整文件 |
 | 迁移至 init 的选项 | `-m/--mode`、`--agent`、`--context-limit`、`--subtask`、`--verify`、`--verify-idle`、`--verify-max`、`--commit`(分类总表见 §4) |
 | run 侧处置 | 上述选项在 `run` 出现即用法错误(退出码 1),报文给出修订指引(`init --<flag> <值>` 或直接编辑 config);镜像 `--commit-subtask` 移除的既有先例 |
-| init 合并语义 | **仅写命令行显式给出的键**,未给出的键保留既有配置值(新项目取内置缺省)→ init 兼具创建与修订(amend)两种身份;重复 init 无参数不重置已有配置 |
+| init 合并语义 | **已修订(见 §B.1)**。原结论:仅写命令行显式给出的键,未给出的键保留既有配置值 → init 兼具创建与修订(amend)两种身份。现行:init 缺省**无状态全量覆盖**,amend 退为显式 `--amend` |
 | 人工修订通道 | 直接编辑 `.opencode/auto/config.json`;坏 JSON / 越界值 / 未注册模式 → run 与 init 均退出码 1 并指明键名(严格失败优于静默回落) |
 | 模式解析收口 | `-m` 仅 init 接受;resolveModeFlag 的"与持久化不一致警告"随固化消失(不再存在 run 侧分歧);run 读 `config.mode` → `loadModes` 查找,未注册名按环境错误退出 1 |
 | 原则块表述 | AGENTS.md 三个既有块保持**与配置无关的不变式**表述(会话不跑验证/不提交),不随 verify/commit 开关改写——避免配置与 AGENTS.md 双源;生效配置由 run 启动横幅与 status 打印 |
@@ -160,6 +160,36 @@ opencode-auto init [dir] [-p|--prompt <prompt-text>] [-m|--mode <name>] [--agent
 5. `-p` 会话的 agent 取合并后 config;
 6. `--agent` 显式值仅持久化(与现状一致不做存在性校验,留给 run 前完整性检查)。
 
+### B.1 修订:无状态全量覆盖 + `--amend`(后续变更,覆盖 §3 的"init 合并语义"行)
+
+**动机**:原设计让 init 兼具创建与修订两种身份,后果是产出取决于磁盘上的历史状态
+——`init --agent foo --verify true` 之后再跑无参 `init`,那两个键原样留着。同一条命令
+在干净环境与脏环境下产出两份不同的 `config.json`,用户无法靠单次 init 得到确定状态,
+必须先知道"上次传过什么"。
+
+**现行结论**:
+
+- `init` 缺省**无状态全量覆盖**:产出仅由本次执行传入的参数决定,未给出的键一律回落
+  `CONFIG_DEFAULTS`,不与磁盘上的旧配置做任何增量合并。可选键 `source` / `destDir` 未
+  给出时直接从文件中消失(`CONFIG_DEFAULTS` 不含它们,无须为"删键"写特例)。
+- `--amend` 显式切回原合并语义;`continue` 恒为 amend(续轮迁移依赖既有配置,跨轮固定
+  项已被前置守卫拒绝传入,没有"全量覆盖"可言)。
+- 实现上只有一个分水岭 `base = amend ? existing : CONFIG_DEFAULTS`,其余取基线处一律
+  改读 `base`。
+- **阶段台账前缀护栏改判本次生效值**(`effectivePhases = phases ?? base.phases`),不再
+  判"是否显式给出 `--phases`"。否则一个已跑到 `admt` 的阶段化项目上执行无参 init,
+  phases 会被静默重置为缺省 `"m"`,紧接着根 `PLAN.md` 的轮次符号链接被还原成普通文件
+  ——轮次布局当场破掉且无任何报错。这是全量覆盖引入的唯一真实破坏性风险。
+- **两道防误触闸**(均排在第一个写盘点 `saveProjectConfig` 之前,先拦截再询问):
+  ① 工作区干净度(`src/clean.ts`,复用 `git.ts` 的 `changedFiles`,覆盖目标目录所在仓库
+  与目录树下全部嵌套仓库/子模块);② 交互确认(`src/confirm.ts`,非 TTY 视为已授权直接
+  放行)。二者仅在"已存在配置且本次为全量覆盖"时生效,`-f/--force` 一并跳过。
+  非 TTY 免提示与干净度闸门**互不覆盖**:脚本与 CI 同样会被脏工作区拦下。
+- `brief.md` 不随配置的全量覆盖被清空:它是独立文件,只在给 `-p` 时整写覆盖。
+
+**逆操作**见 `src/reset.ts`(`reset` 子命令):与 init 互逆,精确移除配置层产物。清单与
+边界口径写在该文件头注释。
+
 ## C. run 改造(src/index.ts)
 
 选项面:
@@ -241,8 +271,9 @@ AGENTS.md 维护规则(本文件是工作流入口,不是知识库):
 | --- | --- |
 | 旧项目(仅 `.auto/config.json` 有 mode) | loadProjectConfig 回落读取 mode,run 打 `ℹ 模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置`;init 写出新文件后回落终止 |
 | 旧脚本 `run -m xxx` / `run --verify` 等 | 退出码 1 + 修订指引(发布说明注明 breaking) |
-| 重复 `init`(无参数) | 配置不变(全键保留),模板/块照常幂等 |
-| `init --verify false`(amend) | 仅改写 verify 键,其余保留 |
+| 重复 `init`(无参数) | **全键回落缺省值**(§B.1 修订后;原为"配置不变"),模板/块照常幂等 |
+| `init --verify false` | 写 verify 键,其余键回落缺省 |
+| `init --amend --verify false` | 仅改写 verify 键,其余保留(原 amend 语义) |
 | 中途把 verify on→off | 已 done 任务的 verified 字段不回溯;未完成任务此后收尾即 done;`--review`/`--early` 的既有联动(串行审核/降级提示)按新值生效 |
 | 中途切换 subtask | 已注入检查项的任务照旧从勾选状态续跑(进度 phase 按任务记录,不跨任务混淆);新任务按新档执行;README 注明不建议中途切换 |
 | 中途换 mode | 仅提示词文案变化(模式不进调度状态机的既有保证);终审已产出的报告不受影响 |

@@ -40,12 +40,19 @@ opencode-auto init [dir] --implement-file <file>       # 单阶段(m)快捷模�
 opencode-auto init [dir] --implement-prompt "<text>"   # 单阶段(m)快捷模式: 依据实施提示词生成 PLAN.md,同上
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后建立新一轮轮次目录、开启新一轮(见"阶段化流程")
 opencode-auto run [dir]      # 按 PLAN.md 逐任务自动执行(agent/验收/提交等语义来自项目配置)
+opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
 opencode-auto check [dir]    # 检查 AGENTS.md 与 PLAN.md 中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 行数超限
 opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 ```
 
 `init` 对已存在的 PLAN.md、opencode.json 一律跳过;`.opencode/agent/auto.md` 与内置
 模板不一致时总是替换,保证 agent 契约为最新版本。
+
+`init` 写 `.opencode/auto/config.json` 的语义是**无状态全量覆盖**:产出仅由本次执行
+传入的参数决定,未给出的键一律回落内置缺省,不与磁盘上的旧配置做增量合并。于是
+"干净环境跑一次无参 `init`"与"带参 `init` 之后再跑一次无参 `init`"产出逐字节一致
+——单次 `init` 即可得到确定状态,无需前置清理;相同参数连跑多次结果恒定。想只改一
+两个键而保留其余既有值,用 `init --amend`(见[init 的选项](#init-的选项固化与修订))。
 
 **breaking 变更**:`run` 不再接受 `-m/--mode`、`--agent`、`--context-limit`、
 `--subtask`、`--verify`、`--idle-time`、`--idle-max`、`--commit`、`--test-by-driver`、
@@ -94,12 +101,15 @@ git rename 配对成功的新旧路径机械改写活文档中的旧引用(只�
 rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本次提交落账;非 git
 目录空转)。`false` 关闭后改动留在工作区。
 
-两条等价的修订通道:
+写入通道有三条:
 
-1. **init amend**:`opencode-auto init <dir> --<flag> <值>`——仅命令行显式给出的键
-   被改写,其余保留既有值;裸选项取该键缺省档(如 `init --verify` 即 `verify: true`)。
-   重复 `init` 无参数不重置已有配置(init 兼具创建与修订两种身份);
-2. **直接编辑** `.opencode/auto/config.json`(init 每次写出全量键,人工编辑同样
+1. **init(缺省,全量覆盖)**:`opencode-auto init <dir> [--<flag> <值> ...]`——产出
+   仅由本次参数决定,未给出的键强制回落缺省值。可选键 `source` / `destDir` 在未给出
+   时直接从文件中消失;
+2. **init --amend(增量修订)**:`opencode-auto init <dir> --amend --<flag> <值>`——
+   仅命令行显式给出的键被改写,其余保留既有值;裸选项取该键缺省档(如
+   `init --amend --verify` 即 `verify: true`)。`continue` 恒为 amend;
+3. **直接编辑** `.opencode/auto/config.json`(init 每次写出全量键,人工编辑同样
    合法)。
 
 坏 JSON / 键值越界 / `mode` 未注册 → `run` 与 `init` 均以退出码 1 失败,报错指明
@@ -110,11 +120,14 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 
 | 场景 | 行为 |
 | --- | --- |
-| 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"重跑 init 可固化完整配置";init 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没) |
+| 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"重跑 init 可固化完整配置";init 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没,由 `reset` 一并清理) |
 | 旧脚本 `run -m xxx` / `run --verify` 等 | 退出码 1 + 修订指引(breaking) |
 | 未知的 `--` 选项(含拼错,如 `--next`) | 退出码 1 + 近似名提示(breaking;此前被静默忽略)。`check` / `status` 只接受目录参数,出现任何选项即拒绝 |
-| 重复 `init`(无参数) | 配置不变(全键保留),模板与标记块照常幂等 |
-| `init --verify true` 等 amend | 仅改写显式给出的键,其余保留 |
+| 重复 `init`(无参数) | **全键回落缺省值**(breaking:此前为"配置不变");模板与标记块照常幂等 |
+| `init --verify true` 等带参 init | 给出的键按值写入,**未给出的键回落缺省** |
+| `init --amend --verify true` | 仅改写显式给出的键,其余保留(旧的 amend 语义) |
+| 覆盖已存在配置且工作区脏 | 退出码 1 + 未提交文件清单(含嵌套仓库/子模块);`-f`/`--force` 跳过 |
+| 覆盖已存在配置且在交互式终端 | 提示确认 `[y/N]`,非 `y` 即取消且不做任何改动;非 TTY(CI/脚本)直接覆盖 |
 | 中途 `verify` on→off | 已 done 任务的 `verified` 字段不回溯;未完成任务此后收尾即 done;`--review` / `--early` 的联动(串行审核/降级提示)按新值生效 |
 | 中途切换 `subtask` | 已注入检查项的任务照旧从勾选状态续跑(进度按任务记录,不跨任务混淆);新任务按新档执行;不建议中途切换 |
 | 中途换 `mode` | 仅提示词文案变化(模式不进调度状态机);终审已产出的报告不受影响 |
@@ -144,16 +157,54 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 | `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
 | `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(与 `verify` 正交,缺省/裸选项 `false`),写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
 | `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
+| `--amend` | 切回增量修订语义:只改写命令行显式给出的键,其余保留既有配置(不给 `--amend` 时 init 为全量覆盖)。`continue` 恒为 amend,无须给该选项;`run` 出现即用法错误 |
+| `-f` / `--force` | 跳过覆盖确认与工作区干净度检查,供 CI 与自动化脚本(与 `reset` 共用);`run` 出现即用法错误 |
 | `--auto-number` / `--no-auto-number` | 自动编号开关,写入配置的 `autoNumber` 键(缺省 `--auto-number` = 启用,`--no-auto-number` 为关闭用退出开关;两开关同现且均未带 `=false` 为用法错误):启用后任务编号(T-NNN)在目标目录永不重复,阶段规划会话自 `.auto/next-task` 记录续接编号,记录缺失时先恢复再继续。`phases = "m"` 无规划会话消费编号记录,开关不产生效果(init 打一次提示)。详见[阶段化流程](#阶段化流程--phases) |
 
-以上写入配置的选项均为"显式给出的键才被改写"的 amend 语义;`-p` 的 brief.md 同为
-整写覆盖(amend 语义),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
+以上写入配置的选项在缺省(全量覆盖)下"未给出即回落缺省值",加 `--amend` 后才是
+"显式给出的键才被改写";`-p` 的 brief.md 是独立文件,恒为整写覆盖且无 `-p` 时保留
+既有(不随配置的全量覆盖被清空),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
 
-`continue` 子命令(续轮迁移)复用同一套 amend 语义与模板/标记块维护,差异见
+`continue` 子命令(续轮迁移)恒为 amend 语义,复用同一套模板/标记块维护,差异见
 [续轮迁移](#续轮迁移-continue):`--phases`、`-p` 与其余执行选项
 (`--agent`/`--context-limit`/`--subtask`/`--verify`/`--idle-time`/`--idle-max`/
 `--commit`/`--test-by-driver`/`--handover-test`/`--auto-number`/`--no-auto-number`)可按轮修订;`-m/--mode` 与迁移参数
 (`--source-dir`/`--source-path`/`--dest-dir`)跨轮固定,显式给出即用法错误(退出码 1)。
+
+### 反初始化(reset)
+
+`opencode-auto reset [dir]` 是 `init` 的逆操作:精确移除 `init` 写出的**配置层**产物,
+把工作区还原至未初始化状态,消除配置残留对 opencode 主程序与其他扩展组件的干扰。
+
+清理范围(枚举式白名单,无通配、无递归删除):
+
+| 目标 | 动作 |
+| --- | --- |
+| `.opencode/auto/config.json` | 删除 |
+| `.opencode/auto/brief.md` | 删除 |
+| `.auto/config.json` | 删除(旧版仅含 `mode` 的残留配置) |
+| `.opencode/agent/auto.md` | 删除(`init` 本就无条件按模板覆盖它,是纯 auto 产物) |
+| `opencode.json` | **逐字节等于内置模板时才删**;被改过则保留并在清单中说明原因 |
+| `AGENTS.md` | 只摘除 `opencode-auto` 标记块,其余正文原样保留;摘除后仅剩空壳标题(即该文件本就是 init 建的)则整个删除 |
+| `.gitignore` | 只移除 `tmp/` 与 `.auto/` 两条,用户自有条目保留;移除后文件为空则整个删除 |
+| `.opencode/auto/`、`.opencode/agent/`、`.opencode/` | **仅在为空时**回收(`rmdir`,非空即跳过) |
+
+**明确不动**:`PLAN.md`、`docs/`(含轮次目录 `R-NN` 与任务目录 `T-NNN`)、`.auto/` 除
+`config.json` 外的全部运行时状态(日志、`stats.json`、`resolves.json`、`progress.json`)、
+`tmp/`。这些是人与 AI 的工作成果或运行痕迹,不是 `init` 的产物。
+
+空目录才回收这一条同时保住了两样东西:你自建的提示词覆盖目录
+`.opencode/auto/prompts/`,以及 `.opencode/agent/` 下你自己的其他 agent 契约。
+
+执行前有两道闸(`-f`/`--force` 一并跳过):
+
+- **工作区干净度**:目标目录所在仓库及目录树下全部嵌套仓库/子模块有未提交改动时,
+  退出码 1 并列出文件,不做任何改动。git 是唯一的撤销手段,脏工作区意味着撤销不回来。
+- **交互确认**:先打印完整清单(含保留项与原因),再问一次 `[y/N]`。非 TTY(CI、脚本)
+  免提示直接执行——但干净度闸门照常生效。
+
+`reset` 后再 `init`,产出与首次 `init` 逐字节一致。目录中没有任何 `init` 产物时,
+`reset` 打印"未发现 init 产物"并以 0 退出。
 
 ### run 的选项(本次执行)
 

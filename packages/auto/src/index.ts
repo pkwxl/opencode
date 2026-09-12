@@ -2,12 +2,15 @@
 import { lstat, rm, stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { checkPrinciple } from "@opencode-ai/auto-core/check"
-import { formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
+import { checkCleanTree } from "@opencode-ai/auto-core/clean"
+import { confirm } from "@opencode-ai/auto-core/confirm"
+import { CONFIG_DEFAULTS, formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { implementPlan } from "@opencode-ai/auto-core/implement"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensureGitignore, ensurePointer, runAll } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { load, parse } from "@opencode-ai/auto-core/plan"
+import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import { currentRound, establishRound, formatPhases, ledgerPath, nextRound, parsePhases, phaseText, readLedger, renderPlanScaffold, roundRoot } from "@opencode-ai/auto-core/phases"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
@@ -53,11 +56,15 @@ const VALUE_FLAGS = new Set([
   "implement-file",
   "implement-prompt",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "early", "verify", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
     flags.set("interactive", "")
+    continue
+  }
+  if (arg === "-f") {
+    flags.set("force", "")
     continue
   }
   if (arg === "-p") {
@@ -103,7 +110,14 @@ for (let i = 1; i < args.length; i++) {
 // check/status 不接受任何选项,出现旗标即拒绝。
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, "continue", "commit-subtask", "verify-idle", "verify-max"])
 const FLAGLESS = command === "check" || command === "status"
+// reset 是反初始化,没有可配置项: 只接受 -f/--force(跳过确认与工作区干净度闸门)。
+const RESET_FLAGS = new Set(["force"])
 for (const key of flags.keys()) {
+  if (command === "reset") {
+    if (RESET_FLAGS.has(key)) continue
+    console.error(`未知选项 --${key}: reset 只接受目录参数与 -f/--force`)
+    process.exit(1)
+  }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
   const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
   console.error(`未知选项 --${key}${similar.length ? `(是否想用 ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status 只接受目录参数,不接受选项" : ";运行不带子命令的 opencode-auto 可查看用法"}`)
@@ -141,6 +155,16 @@ if (command === "run") {
   }
   if (flags.has("commit-subtask")) {
     console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 opencode-auto init <dir> --commit false")
+    process.exit(1)
+  }
+  // --amend/--force 是 init/reset 专用: 前者切回增量修订语义,后者跳过覆盖确认
+  // 与工作区干净度闸门;run 不写配置、不做破坏性覆盖,两者都无意义。
+  if (flags.has("amend")) {
+    console.error("--amend 是 init 专用选项(切回增量修订语义,只改命令行显式给出的键),run 不接受")
+    process.exit(1)
+  }
+  if (flags.has("force")) {
+    console.error("-f/--force 是 init/reset 专用选项(跳过覆盖确认与工作区干净度检查),run 不接受")
     process.exit(1)
   }
   // --implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项
@@ -377,13 +401,17 @@ function loadModeTable(directory: string): Record<string, ModeSpec> {
 }
 
 if (command === "init" || command === "continue") {
-  // 项目宪法选项在 init 固化(设计文档 §B): 仅写命令行显式给出的键,未给出的
-  // 键保留既有配置(新项目取内置缺省)→ init 兼具创建与修订(amend)两种身份,
-  // 重复 init 无参数不重置已有配置。值域校验复用既有 parse*(与配置文件侧
-  // validateProjectConfig 同源)。
+  // 项目宪法选项在 init 固化(设计文档 §B): 缺省为**无状态全量覆盖**——产出的
+  // config.json 仅由本次执行传入的参数决定,未给出的键一律回落内置缺省,不与磁盘
+  // 上的旧配置做任何增量合并。于是「干净环境跑一次无参 init」与「带参 init 之后
+  // 再跑一次无参 init」产出逐字节一致,单次 init 即可得到确定状态,无需前置清理。
+  // 值域校验复用既有 parse*(与配置文件侧 validateProjectConfig 同源)。
+  //
+  // --amend 显式切回旧的增量修订语义(只改命令行显式给出的键,其余保留既有配置),
+  // 供「只想改一个字段又不想重述全部参数」的场景;continue 恒为 amend(下方 base)。
   //
   // continue 子命令(续轮迁移,设计文档 docs/phases-design.md M 节)= init 的
-  // amend 机制 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
+  // amend 语义 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
   // 让迁移结果与源更加完整、一致。复用 init 的解析/合并/模板与标记块维护,差异
   // 仅在: ① 前置校验(既有 phases ≠ "m" 且台账全覆盖);② 轮首建立
   // (establishRound: 建 docs/R-(N+1)/、根 PLAN.md 链接重指轮内、AGENTS.md.bak
@@ -561,19 +589,29 @@ if (command === "init" || command === "continue") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 生效 phases 依赖
-  // existing.phases(未显式给出 --phases 时沿用既有配置)才能算出,故校验放在
-  // existing 装载之后;--implement-file 的文件存在性同样在此校验(读盘前的用法
-  // 校验已尽量前置,存在性判断天然需要 I/O)。
+  // 全量覆盖 vs 增量修订的唯一分水岭: 缺省取内置缺省表作基线(未给出的键回落
+  // 默认值),--amend 取磁盘上的既有配置作基线(未给出的键保留原值)。continue
+  // 恒为 amend——续轮迁移依赖既有配置,跨轮固定项(mode/迁移参数)已在上方前置
+  // 守卫拒绝传入,没有「全量覆盖」可言。
+  //
+  // 可选键 source/destDir 无须特判: CONFIG_DEFAULTS 不含这两个键,mergeProjectConfig
+  // 过滤 undefined 后展开,无参 init 写出的 config.json 里它们自然消失。
+  const amend = cont || flags.has("amend")
+  const base: ProjectConfig = amend ? existing : CONFIG_DEFAULTS
+  // 本次生效的 phases: 显式给出即用之,否则取基线值(全量覆盖下 = 缺省 "m",
+  // --amend/continue 下 = 既有配置值)。下方快捷模式校验与阶段台账前缀护栏共用。
+  const effectivePhases = phases ?? base.phases
+  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 依赖生效 phases 才能
+  // 算出,故校验放在基线装载之后;--implement-file 的文件存在性同样在此校验
+  // (读盘前的用法校验已尽量前置,存在性判断天然需要 I/O)。
   const implementFile = flags.get("implement-file")
   const implementPrompt = flags.get("implement-prompt")
   let implementFilePath: string | undefined
   if (implementFile !== undefined || implementPrompt !== undefined) {
-    const effectivePhases = phases ?? existing.phases
     if (effectivePhases !== "m") {
       console.error(
         `--implement-file/--implement-prompt 仅用于单阶段(phases = "m")快捷模式,` +
-          `${phases !== undefined ? "本次给出的 --phases" : "既有配置 phases"} 为 "${effectivePhases}"。` +
+          `${phases !== undefined ? "本次给出的 --phases" : amend ? "既有配置 phases" : "本次生效的缺省 phases"} 为 "${effectivePhases}"。` +
           `请先 opencode-auto init <dir> --phases m 切换(新项目不传 --phases 缺省即 m)后再使用该快捷模式`,
       )
       process.exit(1)
@@ -599,8 +637,8 @@ if (command === "init" || command === "continue") {
   // test-by-driver 则回落既有配置值);amend 关闭 test-by-driver 而保留既有
   // handoverTest=true 亦在此拦截。
   {
-    const effectiveTestByDriver = explicit.testByDriver ?? existing.testByDriver
-    const effectiveHandoverTest = explicit.handoverTest ?? existing.handoverTest
+    const effectiveTestByDriver = explicit.testByDriver ?? base.testByDriver
+    const effectiveHandoverTest = explicit.handoverTest ?? base.handoverTest
     if (effectiveHandoverTest && !effectiveTestByDriver) {
       console.error(
         `${explicit.handoverTest !== undefined ? "--handover-test" : "既有 handoverTest"} 需搭配 --test-by-driver 一起使用: ` +
@@ -652,22 +690,53 @@ if (command === "init" || command === "continue") {
       process.exit(1)
     }
   }
-  if (!cont && flags.has("phases") && ledgerDone && !phases!.startsWith(ledgerDone)) {
+  // 前缀护栏判定的是**本次生效值**而非「是否显式给出」: 全量覆盖下无参 init 会把
+  // phases 回落为缺省 "m",若项目已跑在阶段化流程中途(台账非空),这会静默毁掉
+  // 轮次布局(下方 phases === "m" 分支把根 PLAN.md 的轮次符号链接还原成普通文件)。
+  // 判生效值即可把这种情形拦在任何写盘之前。--amend/continue 下生效值 = 既有配置
+  // 值,天然满足前缀条件,旧行为不变。
+  if (!cont && ledgerDone && !effectivePhases.startsWith(ledgerDone)) {
     console.error(
-      `--phases 新值 "${phases}" 与阶段台账(${await ledgerPath(directory)})不兼容: 台账已记录完成阶段 "${ledgerDone}",须构成新值的前缀。` +
-        "请改用以其为前缀的值,或按 README 的人工回退规程修订台账后再变更",
+      flags.has("phases")
+        ? `--phases 新值 "${effectivePhases}" 与阶段台账(${await ledgerPath(directory)})不兼容: 台账已记录完成阶段 "${ledgerDone}",须构成新值的前缀。` +
+            "请改用以其为前缀的值,或按 README 的人工回退规程修订台账后再变更"
+        : `无参 init 以缺省值全量覆盖,phases 将被重置为 "${effectivePhases}",与阶段台账(${await ledgerPath(directory)})已记录的完成阶段 "${ledgerDone}" 不兼容(会毁掉轮次布局)。` +
+            `保留既有配置请用 opencode-auto init ${directory} --amend;确实要变更请显式给出以 "${ledgerDone}" 为前缀的 --phases`,
     )
     process.exit(1)
   }
-  // -m/--mode 解析(缩减版,init 侧): 优先级 显式值 > 既有配置值 > 缺省;
-  // 未注册名为用法错误(报文列出当前支持的模式)。
-  const modeName = flags.get("mode") ?? existing.mode
+  // -m/--mode 解析(缩减版,init 侧): 优先级 显式值 > 基线值(全量覆盖下即缺省,
+  // --amend/continue 下为既有配置值);未注册名为用法错误(报文列出当前支持的模式)。
+  const modeName = flags.get("mode") ?? base.mode
   const modes = loadModeTable(directory)
   if (!modes[modeName]) {
     console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(modes).join(", ")});缺省为 migrate`)
     process.exit(1)
   }
-  const config = mergeProjectConfig(existing, { ...explicit, mode: modeName })
+  const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
+  // 防误触闸门: 只在「已存在配置、且本次是全量覆盖」时生效——全新目录没有可覆盖
+  // 的东西,--amend 也不会丢弃任何既有键。两道闸都必须排在第一个写盘点
+  // (saveProjectConfig)之前,现有 e2e 断言「旗标校验通过前目录为空」的不变式
+  // 依赖于此;先拦截再询问,避免用户答完 y 才看到报错。
+  const force = flags.has("force")
+  const overwriting = !amend && !force && (await Bun.file(join(directory, ".opencode", "auto", "config.json")).exists())
+  if (overwriting) {
+    // ① 工作区干净度: init 会覆盖已落盘的配置,git 是用户唯一的撤销手段。
+    //    非 TTY 同样生效——免掉的只是交互确认,不是这道拦截。
+    const dirty = await checkCleanTree(directory, "init 全量覆盖")
+    if (dirty) {
+      console.error(dirty)
+      process.exit(1)
+    }
+    // ② 交互确认: 非 TTY 直接放行(confirm 内部判定)。
+    const ok = await confirm(
+      "发现已存在的配置 .opencode/auto/config.json,init 将以本次参数全量覆盖(未给出的键回落默认值)。继续? [y/N] ",
+    )
+    if (!ok) {
+      console.log("已取消,未做任何改动")
+      process.exit(0)
+    }
+  }
   try {
     await saveProjectConfig(directory, config)
   } catch (error) {
@@ -853,6 +922,45 @@ if (command === "init" || command === "continue") {
 
 // check: ①启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
 // (及 verify 启用时的"验证执行权在 driver"、testByDriver 启用时的"测试/编译
+// reset 子命令(反初始化 / 卸载): 与 init 互逆,精确移除 init 写出的配置层产物,
+// 把工作区还原到未初始化状态,消除配置残留对 opencode 主程序与其他扩展组件的
+// 干扰。清单与执行都在 auto-core/reset.ts(边界口径写在那里的文件头注释):只清
+// 配置层,不碰 .auto/ 运行时状态、PLAN.md、docs/ 与 tmp/;与主程序共用的
+// opencode.json 逐字节比对模板后才删,AGENTS.md 只摘除 opencode-auto 标记块;
+// 目录一律 rmdir(空才回收),保住 .opencode/auto/prompts/ 与用户其他 agent 契约。
+if (command === "reset") {
+  const entries = await planReset(directory)
+  const actionable = entries.filter((entry) => entry.action !== "keep")
+  if (!actionable.length) {
+    console.log(`未发现 init 产物,无需 reset: ${directory}`)
+    process.exit(0)
+  }
+  console.log(`将在 ${directory} 执行以下清理:`)
+  console.log(formatResetPlan(entries))
+  const force = flags.has("force")
+  if (!force) {
+    // reset 恒为破坏性,干净度闸门无条件生效(不像 init 只在覆盖时才查)。
+    const dirty = await checkCleanTree(directory, "reset 反初始化")
+    if (dirty) {
+      console.error(dirty)
+      process.exit(1)
+    }
+    const ok = await confirm(`以上 ${actionable.length} 项将被删除/还原,继续? [y/N] `)
+    if (!ok) {
+      console.log("已取消,未做任何改动")
+      process.exit(0)
+    }
+  }
+  try {
+    await applyReset(directory, entries)
+  } catch (error) {
+    console.error(`reset 失败: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  }
+  console.log(`✓ 已还原至未初始化状态(PLAN.md、docs/、.auto/ 运行时状态与 tmp/ 未受影响)`)
+  process.exit(0)
+}
+
 // 等命令执行权在 driver"原则)相违背的描述;②引用检查(stable-refs P4)——
 // 全量活文档(docs/**/*.md,排除 docs/phases/**)扫描失效引用(路径不存在 /
 // 行号超出文件总行数)。任一命中退出码 1,供人工修订。验证/测试类检查是否
@@ -932,16 +1040,21 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
   opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]] [--new-session]
+  opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--auto-number/--no-auto-number、--wrapup/--no-wrapup、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑;重复 init 无参数不重置已有配置,仅显式给出的键被改写),run 出现即用法错误
+选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--auto-number/--no-auto-number、--wrapup/--no-wrapup、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑),run 出现即用法错误
+       init 缺省无状态全量覆盖: 产出仅由本次参数决定,未给出的键一律回落缺省值,不与磁盘上的旧配置合并——同一条 init 在任何环境下产出一致,无需前置清理
+       --amend 切回增量修订语义(只改显式给出的键,其余保留既有配置);continue 恒为 amend
+       -f/--force 跳过覆盖确认与工作区干净度检查(供 CI 与自动化脚本;init 与 reset 共用)
        --new-session 中断恢复时不复用被中断的旧会话、开新会话继续(仅跳过会话复用,阶段精确重入不受影响;缺省复用存活的被中断会话)
        -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
        -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+       reset 反初始化(与 init 互逆): 移除 init 写出的配置层产物(.opencode/auto/config.json 与 brief.md、.opencode/agent/auto.md、旧版 .auto/config.json、AGENTS.md 的 opencode-auto 块、.gitignore 的 tmp/ 与 .auto/ 条目,以及内容未被修改过的 opencode.json);PLAN.md、docs/、.auto/ 运行时状态与 tmp/ 一律不动,空目录才回收(保住 .opencode/auto/prompts/ 与你自己的其他 agent 契约)
        --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)
        --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;两者均为相对 <dir> 的相对路径,init 时校验存在性)
        --dest-dir <相对路径> 迁移目标目录(相对 <dir>): driver 工作目录与迁移目标经它隔离,迁移产出的代码写入 <dir>/<dest-dir>

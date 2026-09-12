@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises"
 import { join } from "node:path"
 
 // AGENTS.md 的 opencode-auto 块: 单一标记块,内容 = 指针 + 验证原则(verify 开关)+
@@ -86,4 +87,36 @@ export async function ensurePointer(
 
   if (text !== existing) await Bun.write(agentsFile, text)
   return { block, legacyRemoved }
+}
+
+// ensurePointer 的逆操作(reset 用): 摘除标准块与任何旧版带名块,文件其余内容
+// (用户自写正文)原样保留。摘除后正文仅剩 `# AGENTS.md` 空壳标题——即该文件
+// 本就是 ensurePointer 建的——则报 emptied,由调用方整个删除。dryRun 只算结果
+// 不落盘,供 reset 先打印清单再确认。
+export async function removePointer(
+  directory: string,
+  opts: { dryRun?: boolean } = {},
+): Promise<{ removed: boolean; emptied: boolean }> {
+  const agentsFile = join(directory, "AGENTS.md")
+  const existing = await Bun.file(agentsFile).text().catch(() => undefined)
+  if (existing === undefined) return { removed: false, emptied: false }
+
+  let removed = false
+  let text = existing.replace(LEGACY_BLOCK, () => {
+    removed = true
+    return ""
+  })
+  const match = CANONICAL_BLOCK.exec(text)
+  if (match) {
+    text = text.slice(0, match.index) + text.slice(match.index + match[0].length)
+    removed = true
+  }
+  text = text.replace(/\n{3,}/g, "\n\n").trim()
+
+  const emptied = removed && (text === "" || text === "# AGENTS.md")
+  if (!opts.dryRun && removed) {
+    if (emptied) await rm(agentsFile, { force: true })
+    else await Bun.write(agentsFile, `${text}\n`)
+  }
+  return { removed, emptied }
 }

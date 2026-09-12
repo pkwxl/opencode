@@ -4,7 +4,7 @@
 
 ## 概述
 
-`@opencode-ai/auto` 是通用 CLI 外壳(bin `opencode-auto`):init/continue/run/check/status 五个子命令与参数解析集中在 `src/index.ts`,全部机制实现在核心库 `@opencode-ai/auto-core`(workspace 依赖,子路径导入,经 `@opencode-ai/sdk` 的 v2 接口驱动 opencode 逐任务自动执行)。注释与用户可见文案使用中文。
+`@opencode-ai/auto` 是通用 CLI 外壳(bin `opencode-auto`):init/continue/run/reset/check/status 六个子命令与参数解析集中在 `src/index.ts`,全部机制实现在核心库 `@opencode-ai/auto-core`(workspace 依赖,子路径导入,经 `@opencode-ai/sdk` 的 v2 接口驱动 opencode 逐任务自动执行)。注释与用户可见文案使用中文。
 
 ## 命令(在本包目录运行)
 
@@ -22,6 +22,13 @@
 
 - **模板必须保持 `with { type: "file" }` 导入**(经 `@opencode-ai/auto-core/templates/*` 子路径),这是编译时嵌入二进制的唯一方式;新增 init 复制模板 → `src/index.ts` 的 `templates` 映射,提示词/模式模板 → 改在 `../auto-core` 包。
 - `src/templates.d.ts` 为 `*.md` / `*.json` 导入提供路径字符串类型;`tsconfig.json` 里 `resolveJsonModule: false` 勿移除。
+
+## init / reset 的配置语义(改动前必读)
+
+- `init` 缺省**无状态全量覆盖**:`.opencode/auto/config.json` 仅由本次参数决定,未给出的键回落 `CONFIG_DEFAULTS`。唯一分水岭是 `src/index.ts` 的 `base = amend ? existing : CONFIG_DEFAULTS`;`--amend` 与 `continue` 取既有配置作基线。
+- 阶段台账前缀护栏判的是**本次生效值**(`effectivePhases`)而非"是否显式给出 `--phases`"——否则无参 init 会把阶段化项目的 phases 静默重置为 `"m"`、毁掉轮次布局。新增任何影响 `phases` 的路径都要保持这条判定。
+- `reset` 的清理清单与边界口径在 `../auto-core/src/reset.ts` 的文件头注释,改清单前先读完那段:只清配置层,目录一律 `rmdir`(空才回收,绝不 `rm -r`),与主程序共用的 `opencode.json` 逐字节比对模板后才删。
+- 两条破坏性路径(`reset`、覆盖既有配置的 `init`)执行前过 `../auto-core/src/clean.ts` 的工作区干净度闸门与 `confirm.ts` 的交互确认,`-f/--force` 一并跳过;两者都必须排在第一个写盘点之前。
 
 ## 核心不变量(改动前必读)
 
