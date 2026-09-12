@@ -4,6 +4,10 @@ import { dirname, join, relative } from "node:path"
 import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { ExitRequested, maybeExit } from "./exit"
 import { changedFiles, commitTree, pendingChanges } from "./git"
+// .gitignore 条目维护已上收至叶子模块 gitignore.ts(与 reset 成对);此处
+// 再导出以保持既有导入路径 @opencode-ai/auto-core/loop 不变。
+import { ensureGitignore } from "./gitignore"
+export { ensureGitignore } from "./gitignore"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { startInteractive, type Interactive } from "./interactive"
@@ -56,26 +60,6 @@ import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "f
 // AGENTS.md 不置只读(任务可更新它),run/init 只确保该块与当前配置渲染一致。
 import { ensurePointer, renderAgentsBlock } from "./agents-block"
 export { ensurePointer, renderAgentsBlock }
-
-// 确保 .gitignore 忽略 driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)
-// 与 .auto/(运行日志、进度恢复记录与判定文件等运行时状态)。统一提交会提交全部
-// 未提交改动,不忽略会把它们带进提交。已有等价条目则跳过;非 git 目录(无 .git
-// 且无 .gitignore)不做任何事。返回是否追加了条目。
-export async function ensureGitignore(directory: string): Promise<boolean> {
-  const file = join(directory, ".gitignore")
-  const existing = await Bun.file(file).text().catch(() => undefined)
-  // .git 可能是目录(普通仓库)或文件(worktree/子模块),stat 两者皆可。
-  if (existing === undefined && !(await stat(join(directory, ".git")).then(() => true, () => false))) return false
-  const ignored = (entry: string) =>
-    (existing ? existing.split("\n") : []).some((line) => {
-      const normalized = line.trim().replace(/^\//, "").replace(/\/$/, "")
-      return normalized === entry.replace(/\/$/, "")
-    })
-  const missing = ["tmp/", ".auto/"].filter((entry) => !ignored(entry))
-  if (!missing.length) return false
-  await Bun.write(file, `${existing ? `${existing.trimEnd()}\n` : ""}${missing.join("\n")}\n`)
-  return true
-}
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
 // for a human to resolve the issue outside the session and re-run,
