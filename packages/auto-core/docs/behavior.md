@@ -202,10 +202,28 @@
 - --dryrun: 只跑一次权限预检会话(列出授权外目录/操作并逐只读探查),该会话内
   权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复;报告写入
   .auto/dryrun.md 并打印,不执行任何任务。
-- 提问自动答复(question.asked):非权限提问由 AUTO_ANSWER 自动答复(要求 AI 记录
-  决策过程,涉及架构/代码变更的决策须以 `AUTO-DECISION: <决策与理由>` 行标注);
-  --wait-answer 下先等人工 stdin 答复,超时回落自动答复;缺省 --wait-answer 时
-  权限类提问(question 工具)直接阻塞;同一问题重复出现仍阻塞停机。
+- 提问自动答复(question.asked)与代答审计(OPENCODE_AUTO_ASK,缺省 off;设计文档
+  docs/auto-resolve-design.md):非权限提问由 autoAnswer(ask) 自动答复,两档文案都点明
+  "这是一个被代答的提问";--wait-answer 下先等人工 stdin 答复,超时回落自动答复;
+  缺省 --wait-answer 时权限类提问(question 工具)直接阻塞;同一问题重复出现仍阻塞
+  停机。决策标记分两类,判据是**这个分歧点的决定权本应属于谁**——属于用户(需求意图
+  与范围取舍、对外可见行为与接口契约的变更、「什么算做完」的判定标准、事实确认类问题、
+  超出或收窄任务描述的字面范围)→ `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)`;
+  属于 AI(实现手段的选择,且任一选项都不改变用户可见行为)→
+  `AUTO-DECISION: <决策> (<理由>)`;同一决策只标一类,拿不准标 AUTO-RESOLVE。提问策略
+  两档由 OPENCODE_AUTO_ASK 切换,提问义务与标注义务同进同退: off(缺省,渲染结果逐
+  字节等价改造前)压制非权限提问、强制两类标注;on 令归属用户的分歧点主动调 question
+  工具、纯实现手段自主决定且**不要求任何标注**(driver 已在事件侧完整落账)。driver
+  两路采集:① question.asked 的回落自动答复入回合内 `resolves[]`(经 7 个 snapshot
+  出口带出,人工真答与 dryrun 预检会话不计),② 会话收尾扫描本次未提交变更文件里的
+  两类标记行(扫描挂在 `--commit false` / dryrun 的提前 return **之前**——采集是审计,
+  不该受提交开关影响);两源经 sameIssue 配对,展示时已配对的 driver 项让位给信息更全
+  的 agent 项,未配对的以 ⚠ 点名"会话未按要求标注"。AUTO-RESOLVE 在任务三态行、阶段
+  收口、轮次完成之前以 `⚑` 置顶展示(任务级逐条、上限 8 条、单条压成单行截断 80 字,
+  阶段/轮次只给计数);AUTO-DECISION 只折成一个计数(有代答时折进高亮块末行,无代答时
+  仅进 vlog),阶段/轮次汇总完全不展示。收尾会话被注入 driver 观测到的代答清单(只列
+  driver 源、未配对的排在前、不截断),要求 docs/T-NNN/report.md 单列「自动代答问题」
+  节——持久审计轨迹是进 git 的标记行与该节,台账只是 driver 的计数与高亮依据。
 - 死循环检测(OPENCODE_AUTO_STUCK,缺省 on;设计文档 docs/stuck-loop-design.md):
   弱模型常连续多次以同一方式重复同一动作且始终不成功,自己走不出来;driver 在
   watch 中观察工具调用终态,两条会话级判据——同一工具 + 同一报错(**不含参数**,
@@ -460,7 +478,13 @@
    docs/stats-timing-design.md),与恢复判定完全无关:不参与 recallProgress/openStep
    等任何判定,损坏或缺失只是统计从当下重开、不影响运行;它是本机运行足迹(换机/
    清 .auto/ 即丢失,跨中断经增量落盘与折旧续接);清零 = 人工 `rm .auto/stats.json`
-   (人工回退重跑同一任务前的既定规程——重跑与中断续跑对统计不可区分)。
+   (人工回退重跑同一任务前的既定规程——重跑与中断续跑对统计不可区分)。代答台账
+   `.auto/resolves.json`(src/resolve.ts,设计 docs/auto-resolve-design.md)同族同契约:
+   driver 独占写、gitignore 内、不进 protect 名单、不参与 recallProgress/openStep 等
+   任何恢复判定,损坏或缺失只是高亮与计数从当下重开、不影响运行与退出码(写失败全
+   静默);**独立成文件不并入 stats.json**——stats 有 30s 心跳高频写,塞进一个会增长的
+   问题文本数组会让每次心跳重写全量文本;条目上限 512 FIFO 淘汰,清零同样是人工
+   `rm .auto/resolves.json`。
 - opencode server 管理(src/server.ts manage):run 缺省 spawn `opencode serve`
   并托管生命周期;显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管。
   client 为 Proxy,restart 换实例后既有引用自动生效。网络类会话错误(NETWORK_FAILURE

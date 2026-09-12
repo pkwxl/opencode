@@ -1,10 +1,10 @@
 # 自主决策(AUTO-DECISION)与代答决策(AUTO-RESOLVE)分离设计
 
-状态: 实施中(2026-09-12;T-001 设计基准、T-002 开关接线、T-003 规则文本改造、
-T-004 `src/resolve.ts` 模块、T-005 driver 侧采集接线已落地,T-006..T-008 待做)。计划文件
-`plans/AUTO_RESOLVE_PLAN.md`(含动机、已确认口径与八任务拆分)。本文承担两件事:
-① 把口径/判据/schema/挂点/报文固定为后续任务的唯一依据;② 记录 T-001 对计划所引
-全部代码位置的核实结果与**四处修正**(§J)。行号以 auto-core 分支 `bf745fa94` 为准。
+状态: **已实施**(2026-09-12;T-001..T-008 全部落地,`bun typecheck` 通过、
+`bun test` 616 pass)。计划文件 `plans/AUTO_RESOLVE_PLAN.md`(含动机、已确认口径与
+八任务拆分)。本文承担两件事: ① 把口径/判据/schema/挂点/报文固定为实施的唯一依据;
+② 记录 T-001 对计划所引全部代码位置的核实结果与**四处修正**(§J)。设计基准行号以
+auto-core 分支 `bf745fa94`(改造前)为准,§G 表末另附实施后的实际落点(T-008 回填)。
 
 体例仿 `docs/stats-timing-design.md`。台账与报文机制常态启用、零开关,持久化在目标
 目录 `.auto/resolves.json`(gitignore 内、driver 独占写、不进 protect 名单);**唯一
@@ -214,6 +214,18 @@ export type ResolveDoc = { v: 1; items: ResolveItem[]; decisions?: Record<string
 | H6 | `src/loop.ts:687` 阶段收口(`phaseCloseLines`,`:1028`)/ `:369`+`:719` 轮次完成(`roundCompleteLines`,`:1048`) | 汇总计数行,同样置顶于 `■` 行之前 |
 | H7 | `src/prompt.ts:184` `renderWrapup` + `templates/prompts/wrapup.md` | 注入 driver 观测到的代答清单,要求 report.md 写「自动代答问题」节 |
 
+**实施后落点(T-008 回填,行号以本次实施完成时的 auto-core 工作树为准)**:
+
+| # | 落点 | 备注 |
+|---|---|---|
+| H1 | `src/runner.ts:2693-2701` | 仅 `human === undefined` 且非 dryrun 时 `resolves.push({ at, question, session })`,随即打 `⚑ 自动代答(AUTO-RESOLVE)第 N 个: …`;原 `→ 自动答复: <长文案>` 降为 `vlog` |
+| H2 | `src/runner.ts:281`(`Watch.resolves`)+ `:3581` `snapshot()` | **7 个** `return snapshot` 出口(`:2619` / `:2670` / `:2712` / `:2774` / `:2829` / `:2854` / `:2869`)统一带出 |
+| H3 | `src/runner.ts:2345` | `attempt` 在 `await watching` 后调模块私有 `recordDriverResolves`(`:2202`),无观测时零 IO;轮号现场取 `currentRound` |
+| H4 | `src/runner.ts:137`(`afterSession` 内,`:110` 起) | `collectAgentResolves` 在 `opts.commit === false \|\| opts.dryrun` 提前 return **之前** |
+| H5 | `src/loop.ts:416` / `:432` / `:444` | 三态行前置 `taskResolveLines`(`:981`),块体经 `resolveHighlight`,AUTO-DECISION 计数经 `decisionsOf` 折进末行 |
+| H6 | `src/loop.ts:694`(阶段)/ `:371`+`:727`(轮次) | `phaseResolveLines`(`:989`)/ `roundResolveLines`(`:997`),只给计数行 |
+| H7 | `src/prompt.ts:199` `renderWrapup` + 私有 `resolveList`(`:212`)+ `templates/prompts/wrapup.md` 第 4 项 | 两处调用点 `src/runner.ts:738` 与 `:1484` 先经 `wrapupResolves`(`:151`)读台账 |
+
 规则文本挂点:`templates/prompts/_partials.md:14-21` 的 `question-rule` 片段,被
 **23 份**模板经 `{{> question-rule}}` 引用(清单见 §J-3),改这一处即全量生效 ——
 这是选择改片段而非改各模板的理由。**片段名保持 `question-rule` 不变**(目标目录
@@ -401,7 +413,7 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
 | T-005 | driver 采集接线 H1..H4 + `test/runner.test.ts` 七例 | `runner.ts` | ✅ 600 pass |
 | T-006 | 报文输出 H5/H6(三处置顶块构造函数 + 五处调用点)+ 逐任务 AUTO-DECISION 计数 | `loop.ts` / `resolve.ts` | ✅ 612 pass |
 | T-007 | 收尾闭环 H7(`renderWrapup` 增 `resolves` 入参 + `wrapup.md` 条件段 + 两处调用点读台账) | `prompt.ts` / `wrapup.md` / `runner.ts` | ✅ 616 pass |
-| T-008 | 文档同步(本文回填、structure.md、behavior.md、README、AGENTS.md 导航) | 文档 | ⬜ |
+| T-008 | 文档同步(本文回填 §G 实施落点 + 状态 + §Q、structure.md、behavior.md、README、AGENTS.md 导航) | 文档 | ✅ 616 pass |
 
 **单测**(`test/resolve.test.ts`,mkdtemp 风格照 `test/stats.test.ts`):
 `parseResolveLine` 六态(完整三段 / `→` 与 `=>` 变体 / 中文括号 / 无箭头 malformed
@@ -519,3 +531,53 @@ AUTO-DECISION 只计数不落账、driver↔agent 经 `sameIssue` 配对置 `mat
   同一次 `autoSwitches().ask` 取值——日志与实际答复永不打架(§M 已就 `autoAnswer`
   立过同样的口径)。原 `→ 自动答复: <长文案>` 降为 `vlog`: 答复全文每次都一样,占着
   终端两三行却不携带本次信息;dryrun 预检不计代答,仍走原行。
+
+## P. 决策记录(T-007 收尾闭环)
+
+- **AUTO-RESOLVE: 注入清单含不含 agent 源条目 -> 只列 driver 源(§I 只写"driver 观测
+  到的代答清单",没说清 agent 项去留;这改变了收尾提示词的可见内容,属本应问用户的
+  范围取舍)**。agent 项是会话自己已经写进文档/代码的标记,再在提示词里报一遍既无新
+  信息,又容易诱导它把同一条按两个措辞写进报告;而"强制写进 git"这条闭环要防的恰恰是
+  会话**没**标注的那部分,那部分只在 driver 源里。
+- **AUTO-RESOLVE: 清单是否设条数上限或正文截断 -> 都不设(§I 未定;上限会让提示词的
+  "每一条都必须出现"与实际给出的清单自相矛盾,是对外可见行为的取舍)**。终端高亮块有
+  8 条上限与 80 字截断,因为终端版面有限且完整记录在报告里;提示词是那份报告的唯一
+  输入,截掉即永久丢失。条数由会话实际提问数封顶(每任务个位数,§F),不构成风险。
+- **AUTO-DECISION: 预拼接落 `src/prompt.ts` 私有 `resolveList()`,不复用
+  `resolveHighlight`**。模板语法刻意不做循环(清单类数据由调用方拼成字符串,见
+  `src/template.ts` 头注释),而两处展示口径相反:终端要截断、提示词要全文。
+- **AUTO-DECISION: 条件段做成收尾的第 4 个编号项,不另起独立段落**。收尾提示词的三项
+  要求由末句"以上全部完成前不要结束会话"统辖,独立段落会脱出该统辖,变成可做可不做的
+  附注。
+- **AUTO-DECISION: 两处调用点经模块私有 `wrapupResolves` 而非各自内联 `resolvesOf`**。
+  台账读失败一律吞成空这一条(审计永不影响流程与退出码)只该写一次,与 `loop.ts` 三处
+  置顶块的同款 `catch` 口径一致。
+
+## Q. 决策记录(T-008 文档同步收尾)
+
+- **AUTO-RESOLVE: `docs/structure.md` 的 `src/switches.ts` 条目里,`OPENCODE_AUTO_MODEL`
+  / `_FALLBACK` 的序号是否为 `ask` 让位 -> 让位,由「第十/十一变量」改为「第十一/十二
+  变量」(计划 §文档更新对 structure.md 只写"`src/resolve.ts` 新行 + runner/loop/prompt
+  条目补挂点 + 设计文档索引行",改写既有开关条目的序号超出该字面范围)**。`SWITCH_ENV`
+  注册表里 `ask` 排在 `model` 之前,不让位则文档序号与注册表顺序不符,且下一个新增开关
+  会沿着错位继续排;让位是一次性的两字改动,不让位是持续累积的偏差。
+- **AUTO-RESOLVE: `packages/auto/README.md` 用整节还是在既有段落补句 -> 新开顶级节
+  「提问策略与代答审计(AUTO-RESOLVE)」(计划只写"提问自动答复相关段落同步 +
+  `OPENCODE_AUTO_ASK` 两档的选用建议",未定形态;新开顶级节改变了对外文档的结构)**。
+  §K-1 要求"需要可审计的代答记录时应当用 `on` 档"必须显眼——否则用户会把缺省档的计数
+  当成完备值,这正是该风险条要防的;一句话塞进既有段落达不到,而判据表、报文样例与两档
+  对比表也放不进去。体例照「死循环检测」节(同为无人值守期间的 driver 自主行为,同样
+  需要先讲清"为什么要有"再给开关)。既有段落改为一句话概述 + 锚链接,不重复展开。
+- **AUTO-DECISION: §G 在表末追加「实施后落点」表,不原地改写挂点表的行号**。挂点表的
+  行号以改造前的 `bf745fa94` 为准,是 T-001 勘测的事实基线,§J 的四处修正正以它为锚;
+  原地覆盖会同时丢掉基线与"设计落点 → 实际落点"的对照关系,而这正是回读设计文档时最
+  想看的一列。
+- **AUTO-DECISION: `.auto/resolves.json` 的契约并进 `docs/behavior.md` 里
+  `.auto/stats.json` 那一段,不另起 bullet**。两者同族同契约(driver 独占写、gitignore
+  内、不进 protect 名单、不参与任何恢复判定、损坏或缺失只是从当下重开、清零 = 人工
+  `rm`),分开写会让读者以为是两套规则;差异只有"为什么独立成文件"一句,就近对照最省
+  读者的力气。
+- **AUTO-DECISION: `AGENTS.md` 只加一行导航,把提问策略与代答台账合并表述**。该文件的
+  维护规则写明"新机制只在此加一行导航或不变量,细节写入 `docs/` 下对应文档";拆成
+  "开关"与"审计"两行会与 stats/stuck/model-routing 等既有条目的粒度不一致,而这两件事
+  本就是同一条因果链的两端(§B:压制提问 → 决策不可见 → 必须记录)。
