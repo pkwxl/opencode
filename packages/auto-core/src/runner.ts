@@ -51,6 +51,7 @@ import {
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
+import { sameIssue } from "./resolve"
 import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { statsSessionBegin, statsSessionEnd, statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
@@ -62,15 +63,32 @@ import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
 export type Outcome = { type: "completed" } | { type: "blocked"; question: string } | { type: "incomplete"; reason: string }
 
-// Questions get this fixed autonomous reply when no human answers in time
-// (or --wait-answer was not given for non-permission questions); only a
-// repeated question on the same issue escalates to human intervention.
-// The reply also requires the agent to record its decision process, and any
-// decision touching architecture or code must be marked AUTO-DECISION.
-const AUTO_ANSWER =
-  "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。" +
-  "请记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档(docs/ 设计文档或报告);" +
-  "涉及架构设计或代码变更的决策,须在设计文档或代码注释中以 `AUTO-DECISION: <决策与理由>` 行明确标注。"
+// Questions get this autonomous reply when no human answers in time (or
+// --wait-answer was not given for non-permission questions); only a repeated
+// question on the same issue escalates to human intervention.
+// 文案按提问策略档位取用(OPENCODE_AUTO_ASK,docs/auto-resolve-design.md §G):
+// 两档共同点明"这是一个被代答的提问"——本应由用户拍板的分歧点因无人值守由 driver
+// 代替用户闭环,让会话知道自己正在替用户做主,而不是当成一次普通的自主决策。
+// off 档(缺省)要求以 AUTO-RESOLVE 标注该决策并明确区别于 AUTO-DECISION(台账靠
+// 会话自觉标注补全);on 档下提问本身即流经 driver 的事件、已被完整落账,故不要求
+// 任何标注——此档文案不出现 AUTO-DECISION 字样,避免会话出于惯性继续留痕。
+function autoAnswer(ask: boolean): string {
+  const head =
+    "这是一个被代答的提问: 它本应由用户拍板,因无人值守由 driver 代替用户闭环。" +
+    "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
+  if (ask) {
+    return (
+      head +
+      "本次运行允许发问,driver 已完整记录这次代答,你无须为它另行留痕,按答复继续执行即可。"
+    )
+  }
+  return (
+    head +
+    "请记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档(docs/ 设计文档或报告);" +
+    "该决策须在设计文档或代码注释中以 `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` 行明确标注," +
+    "不要记成 `AUTO-DECISION`——后者只用于决定权本就属于你的纯实现取舍。"
+  )
+}
 
 // A failing task-level acceptance feeds the gap back into the execution
 // session chain; after this many unsuccessful fix rounds the task blocks for
@@ -2592,14 +2610,15 @@ async function watch(
       const permission = opts.dryrun ? false : /权限|permission/i.test(text)
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
       // 权限与非权限提问在 --wait-answer 下都先等人工答复,超时一律回落
-      // AUTO_ANSWER 让 AI 自主决策继续;仅缺省 --wait-answer 时的权限提问
+      // autoAnswer 让 AI 自主决策继续;仅缺省 --wait-answer 时的权限提问
       // 直接阻塞(无人值守时不能替人工决定是否授权)。
       if (!repeated && (!permission || waitAnswer > 0)) {
         autoAnswered.push(text)
         log(`❓ 收到${permission ? "权限" : "非权限"}提问:\n${text}`)
         const human = waitAnswer > 0 ? await askHuman(waitAnswer, "超时将自动答复", opts.interactive, opts.dir) : undefined
-        const reply = human ?? AUTO_ANSWER
-        log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${AUTO_ANSWER}`)
+        const fallback = autoAnswer(autoSwitches().ask)
+        const reply = human ?? fallback
+        log(human ? `→ 人工答复: ${human}` : `→ 自动答复: ${fallback}`)
         await client.question
           .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
           .catch(() => {})
@@ -2866,15 +2885,6 @@ function formatClientError(error: unknown): string {
   return error instanceof Error ? error.message : JSON.stringify(error)
 }
 
-// Two questions count as the same issue when their normalized texts match or
-// one contains the other (the agent may rephrase a question it already asked).
-function sameIssue(a: string, b: string): boolean {
-  const normalize = (s: string) => s.replace(/\s+/g, "").toLowerCase()
-  const x = normalize(a)
-  const y = normalize(b)
-  return x === y || x.includes(y) || y.includes(x)
-}
-
 // 权限等待中,这些回答(忽略首尾空白与大小写)视为确认授权。
 function isApproval(answer: string): boolean {
   return /^(allow|yes|y|ok|approve|always|允许|授权|是)$/.test(answer.trim().toLowerCase())
@@ -2882,7 +2892,7 @@ function isApproval(answer: string): boolean {
 
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
 // undefined on timeout or empty input, in which case the caller falls back to
-// AUTO_ANSWER (questions) or the --permission fallback (permission requests).
+// autoAnswer() (questions) or the --permission fallback (permission requests).
 // --interactive 下改由常驻输入行接收回答(提示语、超时与回落语义不变)。
 // dir 传入时等待区间(含 interactive.question 路径)经 statsWaitBegin/End 从会话
 // 用时与 AI 用时中同步扣除、单记 waitMs(STATS_PLAN §2/§3: AI 段关-开);导出供

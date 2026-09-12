@@ -3,7 +3,7 @@ import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
 import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { ExitRequested, maybeExit } from "./exit"
-import { commitTree, pendingChanges, repoRoots } from "./git"
+import { changedFiles, commitTree, pendingChanges } from "./git"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { startInteractive, type Interactive } from "./interactive"
@@ -895,44 +895,12 @@ export async function waitBetweenTasks(minutes: number, nextID: string, repl?: I
 function watchFiles(directory: string) {
   let seen = new Set<string>()
   const timer = setInterval(async () => {
-    const changed = await gitChangedFiles(directory).catch(() => [] as string[])
+    const changed = await changedFiles(directory).catch(() => [] as string[])
     const fresh = changed.filter((file) => !seen.has(file))
     seen = new Set(changed)
     if (fresh.length) vlog(`  ✎ 变更文件:\n${fresh.map((file) => `    ${file}`).join("\n")}`)
   }, 10_000)
   return { close: () => clearInterval(timer) }
-}
-
-// 变动文件只取 git status 的输出:目标目录自身(可能位于更大的仓库中,
-// 用 pathspec `-- .` 限定该子树)加上所有含 .git 的子目录(嵌套仓库,
-// 含 worktree/子模块的 .git 文件;仓库发现复用 src/git.ts 的 repoRoots)。
-// 返回相对目标目录的路径。
-async function gitChangedFiles(directory: string): Promise<string[]> {
-  const lists = await Promise.all((await repoRoots(directory)).map((root) => gitStatusFiles(directory, root)))
-  return lists.flat()
-}
-
-// --porcelain -z --no-renames -uall: 逐文件 NUL 分隔输出,不带改名箭头;每条为
-// "XY <path>",路径相对仓库根(worktree 顶层),需换算为相对目标目录的路径。
-// -uall 下仍以 "?? dir/" 折叠输出的只有嵌套仓库目录(其内部文件由该仓库自身
-// 的 status 单独列出),跳过以免重复。
-async function gitStatusFiles(directory: string, root: string): Promise<string[]> {
-  const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
-    stdout: "pipe",
-    stderr: "ignore",
-  })
-  const toplevel = (await new Response(top.stdout).text()).trim()
-  if ((await top.exited) !== 0 || !toplevel) return []
-  const proc = Bun.spawn(
-    ["git", "-C", root, "status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."],
-    { stdout: "pipe", stderr: "ignore" },
-  )
-  const output = await new Response(proc.stdout).text()
-  if ((await proc.exited) !== 0) return []
-  return output
-    .split("\0")
-    .filter((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
-    .map((entry) => relative(directory, join(toplevel, entry.slice(3))))
 }
 
 // 每 10 分钟重读 PLAN.md,上报当前任务的子任务勾选进度与剩余时间估计(估计为

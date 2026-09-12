@@ -19,6 +19,7 @@ export const SWITCH_ENV = {
   reuseSession: "OPENCODE_AUTO_REUSE_SESSION",
   stuck: "OPENCODE_AUTO_STUCK",
   taskContext: "OPENCODE_AUTO_TASK_CONTEXT",
+  ask: "OPENCODE_AUTO_ASK",
   model: "OPENCODE_AUTO_MODEL",
   modelFallback: "OPENCODE_AUTO_MODEL_FALLBACK",
 } as const
@@ -104,6 +105,13 @@ export type Switches = {
   // 的建议行数上限(见 src/prompt.ts 的 TASK_CONTEXT_LINES),供怀疑摘要因"建议
   // 200 行"措辞被过度压缩、信息丢失时调大预算验证。
   taskContext: TaskContextMode
+  // 提问策略(缺省 off,现状零变化;设计文档 docs/auto-resolve-design.md §E):
+  // off = 压制——非权限问题一律不调 question 工具、自主决策,凡本应发问却未发问的
+  // 分歧点强制以 AUTO-RESOLVE 标注,纯工程取舍以 AUTO-DECISION 标注;on = 允许——
+  // 决定权属于用户的分歧点主动调 question 工具发问,纯实现手段自主决定且不要求
+  // 任何标注(提问是流经 driver 的事件,代答记录由 driver 观测即完备)。提问策略
+  // 与标注义务同进同退、由本开关单键切换,不拆成两个独立布尔量。
+  ask: boolean
   // 阶段化模型路由 + 配额降级候选(缺省未设 = 现状零变化): OPENCODE_AUTO_MODEL 归一
   // 化为 wildcard/byLetter/byRole,OPENCODE_AUTO_MODEL_FALLBACK 的有序候选折进 fallback。
   // 实际求值与降级动作落 P2/P4,本层只解析、校验、日志登记。
@@ -120,6 +128,7 @@ const SWITCH_DEFAULTS: Switches = {
   reuseSession: false,
   stuck: true,
   taskContext: "off",
+  ask: false,
   model: { byLetter: {}, byRole: {}, fallback: [] },
 }
 
@@ -237,6 +246,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     reuseSession: onOff(SWITCH_ENV.reuseSession, env[SWITCH_ENV.reuseSession], SWITCH_DEFAULTS.reuseSession),
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
     taskContext: taskContext as TaskContextMode,
+    ask: onOff(SWITCH_ENV.ask, env[SWITCH_ENV.ask], SWITCH_DEFAULTS.ask),
     model: parseModelPolicy(env[SWITCH_ENV.model], env[SWITCH_ENV.modelFallback]),
   }
 }
@@ -253,6 +263,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.reuseSession === SWITCH_DEFAULTS.reuseSession ? undefined : `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     switches.taskContext === SWITCH_DEFAULTS.taskContext ? undefined : `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
+    switches.ask === SWITCH_DEFAULTS.ask ? undefined : `${SWITCH_ENV.ask}=${switches.ask ? "on" : "off"}`,
     (() => {
       const routing = renderModelEnv(switches.model)
       return routing === "" ? undefined : `${SWITCH_ENV.model}=${routing}`
@@ -274,6 +285,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
+    `${SWITCH_ENV.ask}=${switches.ask ? "on" : "off"}`,
     `${SWITCH_ENV.model}=${renderModelEnv(switches.model)}`,
     `${SWITCH_ENV.modelFallback}=${switches.model.fallback.join(",")}`,
   ].join(", ")

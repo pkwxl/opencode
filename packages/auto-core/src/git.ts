@@ -96,6 +96,43 @@ function depth(path: string): number {
   return path.split(sep).length
 }
 
+// 工作区未提交变更文件清单(相对目标目录的路径): 目标目录自身(可能位于更大的
+// 仓库中,用 pathspec `-- .` 限定该子树)加上所有含 .git 的子目录(嵌套仓库,含
+// worktree/子模块的 .git 文件;仓库发现复用本文件的 repoRoots)。非 git 环境返回
+// 空数组。
+// 本函数(与 gitStatusFiles)自 loop.ts 上收至此,供 loop 的变更文件监视与
+// resolve.ts 的会话收尾扫描共用: 从 loop.ts 导出会造成 loop → runner → resolve →
+// loop 的循环依赖,在 resolve.ts 镜像一份则留下两份必须同步演进的仓库遍历;git.ts
+// 是叶子模块(只依赖 log.ts)且已持有 repoRoots 与同款 porcelain 解析。决策记录见
+// docs/auto-resolve-design.md §N。
+export async function changedFiles(dir: string): Promise<string[]> {
+  const lists = await Promise.all((await repoRoots(dir)).map((root) => gitStatusFiles(dir, root)))
+  return lists.flat()
+}
+
+// --porcelain -z --no-renames -uall: 逐文件 NUL 分隔输出,不带改名箭头;每条为
+// "XY <path>",路径相对仓库根(worktree 顶层),需换算为相对目标目录的路径。
+// -uall 下仍以 "?? dir/" 折叠输出的只有嵌套仓库目录(其内部文件由该仓库自身
+// 的 status 单独列出),跳过以免重复。
+async function gitStatusFiles(dir: string, root: string): Promise<string[]> {
+  const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
+    stdout: "pipe",
+    stderr: "ignore",
+  })
+  const toplevel = (await new Response(top.stdout).text()).trim()
+  if ((await top.exited) !== 0 || !toplevel) return []
+  const proc = Bun.spawn(
+    ["git", "-C", root, "status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."],
+    { stdout: "pipe", stderr: "ignore" },
+  )
+  const output = await new Response(proc.stdout).text()
+  if ((await proc.exited) !== 0) return []
+  return output
+    .split("\0")
+    .filter((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
+    .map((entry) => relative(dir, join(toplevel, entry.slice(3))))
+}
+
 // 仓库内是否有未提交改动(限定该目录子树;折叠目录项只可能是嵌套仓库,由其
 // 自身的提交单独处理)。git 不可用(spawn 抛错)按无改动处理。
 async function hasChanges(root: string): Promise<boolean> {

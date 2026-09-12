@@ -8,7 +8,7 @@ import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Task } from "./plan"
 import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
-import type { TaskContextMode } from "./switches"
+import { autoSwitches, type TaskContextMode } from "./switches"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
@@ -32,6 +32,16 @@ type Opts = {
   contextLimit?: number
   fine?: boolean
   taskContext?: TaskContextMode
+}
+
+// 本层唯一渲染出口(所有 render* 经此调用 renderTemplate): 统一注入提问策略变量
+// ask(OPENCODE_AUTO_ASK,设计文档 docs/auto-resolve-design.md §E)。该变量服务
+// _partials.md 的 question-rule 片段,而该片段被 23 份模板引用——逐 render 函数
+// 透传 opts 会在新增模板时静默漏档,故在出口统一注入而非照搬 fine 的逐函数透传
+// (fine 只服务 decompose-<phase> 一族,透传面可控)。ctx 显式给出的 ask 优先,
+// 供单测直驱两档(镜像 src/step.ts:41 的 `opts.x ?? autoSwitches().x` 口径)。
+function renderPrompt(name: string, ctx: Ctx): string {
+  return renderTemplate(name, { ask: autoSwitches().ask, ...ctx })
 }
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
@@ -70,7 +80,7 @@ export function testHandoffFile(task: Task, subtask?: number): string {
 
 // 测试执行结果反馈(steer 注入执行会话): 退出码与输出文件路径,AI 直读文件判断。
 export function renderTestResult(run: TestRunInfo): string {
-  return renderTemplate("test-result", {
+  return renderPrompt("test-result", {
     seq: String(run.seq),
     script: run.script,
     code: String(run.code),
@@ -85,7 +95,7 @@ export function renderTestResult(run: TestRunInfo): string {
 // --handover-test 交接要求(steer 注入执行会话): 测试失败且上下文达到上限,
 // 要求立即写交接文档并结束会话,由 driver 开新会话继续。
 export function renderTestHandover(run: TestRunInfo, info: { handoffFile: string; used: number; limit: number }): string {
-  return renderTemplate("test-handover", {
+  return renderPrompt("test-handover", {
     code: String(run.code),
     out: run.out,
     script: run.script,
@@ -99,7 +109,7 @@ export function renderTestHandover(run: TestRunInfo, info: { handoffFile: string
 // 输出再继续。stuck 为连续交接次数超过阈值(10)时的提醒——评估是否陷入暂时
 // 无法解决的问题,可经 AUTO-FIXME 标注遗留后继续。
 export function renderTestContinue(input: { handoffFile: string; run?: TestRunInfo; stuck?: number }): string {
-  return renderTemplate("test-continue", {
+  return renderPrompt("test-continue", {
     handoffFile: input.handoffFile,
     runScript: input.run?.script,
     runCode: input.run ? String(input.run.code) : undefined,
@@ -112,13 +122,13 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
 // 写 docs/<id>/context.md 四节摘要;摘要同时是磁盘态兜底(fork 失败冷启动输入、
 // wrapup/后续任务低成本引用)与 digest 模式的基点原料(逐字注入基点会话)。
 export function renderUnderstand(plan: Plan, task: Task, opts: Opts = {}): string {
-  return renderTemplate("understand", baseCtx(plan, task, opts))
+  return renderPrompt("understand", baseCtx(plan, task, opts))
 }
 
 // digest 基点会话(①′,driver 主导,fork-decompose 设计 §7): 摘要全文 + 一句
 // 确认;会话结束即成为该任务全部分叉(decompose/子任务)的前缀基点。
 export function renderContextBase(task: Task, digest: string): string {
-  return renderTemplate("context-base", { taskId: task.id, digest })
+  return renderPrompt("context-base", { taskId: task.id, digest })
 }
 
 // Decomposition session: read-only analysis, then write the subtask list to
@@ -127,7 +137,7 @@ export function renderContextBase(task: Task, digest: string): string {
 // 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
 // 开启细粒度档),库中无此名回退通用 decompose。
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
-  return renderTemplate(decomposeTemplateName(opts.phase, promptTemplateNames()), baseCtx(plan, task, opts))
+  return renderPrompt(decomposeTemplateName(opts.phase, promptTemplateNames()), baseCtx(plan, task, opts))
 }
 
 // decompose 模板名解析(纯函数,便于单测): 阶段字母 → decompose-<phase>(缺省
@@ -158,7 +168,7 @@ export function renderSubtask(
   const items = subtasks(task.body)
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
   const index = at >= 0 ? String(at + 1) : undefined
-  return renderTemplate("subtask", {
+  return renderPrompt("subtask", {
     // index 的推导值回灌 baseCtx: 测试交接文档命名(测试协议段)与本处注入的
     // 「第 N 项」同源,缺省推导(旧调用不传 index)时同样落子任务级目录命名。
     ...baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined }),
@@ -182,7 +192,7 @@ export function subtaskOutputFile(task: Task, index: number): string {
 // Wrap-up session: every subtask is already ticked by the driver. Only docs
 // and the output-summary report remain.
 export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boolean } = {}): string {
-  return renderTemplate("wrapup", {
+  return renderPrompt("wrapup", {
     ...baseCtx(plan, task, opts),
     solo: Boolean(opts.solo),
   })
@@ -191,7 +201,7 @@ export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boole
 // Verify script generation session (fresh side session): translate the verify
 // field's acceptance semantics into an executable script at tmp/verify.sh.
 export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string, opts: Opts = {}): string {
-  return renderTemplate("verify-script-gen", { ...baseCtx(plan, task, opts), scriptPath, verifyState: verifyState(task) })
+  return renderPrompt("verify-script-gen", { ...baseCtx(plan, task, opts), scriptPath, verifyState: verifyState(task) })
 }
 
 // Verify judge session (fresh side session): the driver already executed the
@@ -200,7 +210,7 @@ export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string
 // templates/prompts/verify-judge.md).
 export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun, opts: Opts = {}): string {
   const later = plan.tasks.filter((item) => item.id !== task.id && item.status !== "done" && item.verify)
-  return renderTemplate("verify-judge", {
+  return renderPrompt("verify-judge", {
     ...baseCtx(plan, task, opts),
     verifyState: verifyState(task),
     runScript: run.script,
@@ -218,13 +228,13 @@ export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun, opts: 
 // Fix round after a failed task-level review: send the gap back and resume the
 // execution session chain with it.
 export function renderFix(plan: Plan, task: Task, gap: string, opts: Opts = {}): string {
-  return renderTemplate("fix", { ...baseCtx(plan, task, opts), gap })
+  return renderPrompt("fix", { ...baseCtx(plan, task, opts), gap })
 }
 
 // --review quality-audit session (fresh side session); variants for final and
 // early live in templates/prompts/review.md.
 export function renderReview(plan: Plan, task: Task, opts: Opts & { final: boolean; early?: boolean }): string {
-  return renderTemplate("review", {
+  return renderPrompt("review", {
     ...baseCtx(plan, task, opts),
     final: opts.final,
     early: Boolean(opts.early),
@@ -235,7 +245,7 @@ export function renderReview(plan: Plan, task: Task, opts: Opts & { final: boole
 // --review fix-planning session (fresh side session): turn the audit gap into
 // self-contained fix checklist items in docs/<id>/fix.md.
 export function renderReviewFix(plan: Plan, task: Task, gap: string, opts: Opts = {}): string {
-  return renderTemplate("review-fix", { ...baseCtx(plan, task, opts), gap })
+  return renderPrompt("review-fix", { ...baseCtx(plan, task, opts), gap })
 }
 
 // --final-review 终审四阶段(audit → remediate → validate → finalize,
@@ -252,7 +262,7 @@ export function renderFinalTask(plan: Plan, stage: FinalStage, round: number, pr
   // 终审任务强制跳过任务级验收: verify 恒为 false(state-rule 的 verified 字段
   // 表述不出现;模式文本同经渲染,可自带条件段)。
   const emphasis = stage === "remediate" ? undefined : mode && modeText(mode.final[stage], {})
-  return renderTemplate("final-task", {
+  return renderPrompt("final-task", {
     doneList: doneList(plan),
     prior,
     emphasis,
@@ -310,7 +320,7 @@ export function renderPhasePlan(input: {
   numberStart?: number
 }): string {
   const { phase } = input
-  return renderTemplate("phase-plan", {
+  return renderPrompt("phase-plan", {
     phase,
     phaseName: phaseText(phase),
     brief: input.brief?.trim() || undefined,
@@ -342,7 +352,7 @@ export function renderPhasePlan(input: {
 // 呈现(content = 提示词原文);brief 为 .opencode/auto/brief.md 原文(可空,与
 // -p/--prompt 同给时一并注入,供规划会话感知项目意图)。
 export function renderImplementPlan(input: { file?: string; content: string; brief?: string; verify?: boolean }): string {
-  return renderTemplate("implement-plan", {
+  return renderPrompt("implement-plan", {
     fromFile: input.file !== undefined,
     filePath: input.file,
     content: input.content,
@@ -355,7 +365,7 @@ export function renderImplementPlan(input: { file?: string; content: string; bri
 // 产物 = AI 写入的 .auto/next-task(单个正整数)。floor 为 driver 确定性扫描的
 // 已用编号下限,作模板输入与 driver 侧 collect 校验共用同一数值。
 export function renderNumberRecovery(input: { floor: number }): string {
-  return renderTemplate("number-recovery", {
+  return renderPrompt("number-recovery", {
     floor: String(input.floor),
     floorPadded: String(input.floor).padStart(3, "0"),
   })
@@ -367,7 +377,7 @@ export function renderNumberRecovery(input: { floor: number }): string {
 // docs/R-NN/handovers/<字母>-<slug>.md,旧布局 docs/handovers/R<N>-<字母>-<slug>.md);
 // next 为下一阶段"字母 中文名"或 undefined(k 阶段无下一阶段,仍写 handover 供后续查阅)。
 export function renderPhaseHandover(input: { phase: Phase; handover: string; next?: string; verify?: boolean }): string {
-  return renderTemplate("phase-handover", {
+  return renderPrompt("phase-handover", {
     phase: input.phase,
     phaseName: phaseText(input.phase),
     handover: input.handover,
@@ -382,7 +392,7 @@ export function renderPhaseHandover(input: { phase: Phase; handover: string; nex
 // 新布局轮内 migration-kb.md,旧布局 docs/migration-kb/R<N>-…)。file 为输出路径
 // (相对目标目录);mode.exec 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
 export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
-  return renderTemplate("knowledge", {
+  return renderPrompt("knowledge", {
     file: input.file,
     ...modeCtx(input.mode),
   })
@@ -397,7 +407,7 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
 // 引用化条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的差分增量)。
 export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
   const distilled = input.distilled?.filter(Boolean) ?? []
-  return renderTemplate("prior-knowledge", {
+  return renderPrompt("prior-knowledge", {
     file: input.file,
     brief: input.brief?.trim() || undefined,
     distilled: distilled.length ? distilled.map((path) => `- ${path}`).join("\n") : undefined,
@@ -411,7 +421,7 @@ export function renderPriorKnowledge(input: { file: string; brief?: string; mode
 // 缺失键。priorKb 为 prior-kb 文档路径清单(预拼接,会话直读);known 为已固化
 // 参数的人类可读描述(预拼接,可空)。
 export function renderInferSource(input: { file: string; brief?: string; priorKb?: string; known?: string }): string {
-  return renderTemplate("infer-source", {
+  return renderPrompt("infer-source", {
     file: input.file,
     brief: input.brief?.trim() || undefined,
     priorKb: input.priorKb?.trim() || undefined,
@@ -431,14 +441,14 @@ export function handoffFile(task: Task): string {
 // (ondemand 整任务会话与 auto 子任务会话)。
 // v2 prompt 默认 steer,在下一个 provider turn 边界进入会话。
 export function renderHandoffSteer(task: Task): string {
-  return renderTemplate("handoff-steer", { handoffFile: handoffFile(task) })
+  return renderPrompt("handoff-steer", { handoffFile: handoffFile(task) })
 }
 
 // 死循环提示(driver 在会话进行中检测到重复动作后经 steer 注入,src/stuck.ts):
 // level 决定提示的力度——1 换思路、2 先写诊断再动手、3 停止重试并收尾(会话内
 // 最多三次)。与交接 steer 同为 steer 注入,二者互不影响。
 export function renderStuckHint(hit: StuckHit): string {
-  return renderTemplate("stuck-hint", {
+  return renderPrompt("stuck-hint", {
     tool: hit.tool,
     count: String(hit.count),
     level: String(hit.level),
@@ -458,7 +468,7 @@ export function renderWhole(
   task: Task,
   opts: Opts & { ondemand?: boolean; continuation?: boolean } = {},
 ): string {
-  return renderTemplate("whole", {
+  return renderPrompt("whole", {
     ...baseCtx(plan, task, opts),
     ondemand: Boolean(opts.ondemand),
     continuation: Boolean(opts.continuation),
@@ -468,7 +478,7 @@ export function renderWhole(
 
 // --dryrun: 权限预检会话,报告写入 .auto/dryrun.md。
 export function renderDryrun(): string {
-  return renderTemplate("dryrun", {})
+  return renderPrompt("dryrun", {})
 }
 
 // 模式注记上下文(baseCtx 的模式部分,独立导出): 旁路一次性会话(knowledge 等)

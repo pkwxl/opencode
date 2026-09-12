@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
 import { renderAgentContract } from "../src/loop"
 import { parse } from "../src/plan"
 import type { Phase } from "../src/phases"
-import { renderText, usePromptLibrary } from "../src/template"
+import { autoSwitches } from "../src/switches"
+import { renderTemplate, renderText, usePromptLibrary } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import planTemplate from "../templates/PLAN.md" with { type: "file" }
@@ -161,6 +162,108 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       expect(renderDecompose(plan, task)).toBe("自定义分解提示词,保留协议: - [ ] 项")
       // 未覆盖的阶段模板仍取内置
       expect(renderDecompose(plan, task, { phase: "a" })).toContain("按问题/疑点/子系统/风险面切分")
+    } finally {
+      usePromptLibrary(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,docs/auto-resolve-design.md §E)", () => {
+  const prompts = join(import.meta.dir, "..", "templates", "prompts")
+  const consumers = readdirSync(prompts)
+    .filter((name) => name.endsWith(".md") && name !== "_partials.md")
+    .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
+    .sort()
+
+  test("引用该片段的模板恰为 23 份(勘测结论 §J-3;新增引用需同步设计文档)", () => {
+    expect(consumers.length).toBe(23)
+    expect(consumers).toContain("decompose-m.md")
+    expect(consumers).toContain("whole.md")
+    expect(consumers).toContain("subtask.md")
+    // wrapup 不引用该片段(收尾会话不提问);T-007 的「自动代答问题」节是独立条件段
+    expect(consumers).not.toContain("wrapup.md")
+  })
+
+  const fragment = (ask: boolean) => renderText("{{> question-rule}}", { ask })
+
+  // 历史标记读取方模板: 它们要求会话汇总既有文档里 AUTO-DECISION 标记的决策,
+  // 与"本次是否留痕"无关(历史标记在 git 里恒存),故 on 档下照常出现该字样。
+  const historyReaders = ["knowledge.md", "prior-knowledge.md", "phase-handover.md"]
+
+  test("off 档(缺省): 保留现状的不提问口径,并按归属判据要求两类标注", () => {
+    const off = fragment(false)
+    expect(off).toContain("不要调用 question 工具")
+    expect(off).toContain("记录决策过程")
+    expect(off).toContain("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")
+    expect(off).toContain("AUTO-DECISION: <决策> (<理由>)")
+    // 判别硬判据与正反例(设计文档 §C): 拿不准倒向 AUTO-RESOLVE
+    expect(off).toContain("决定权本应属于用户")
+    expect(off).toContain("决定权本就属于你")
+    expect(off).toContain("拿不准标 AUTO-RESOLVE")
+    expect(off).toContain("matched 还是 paired")
+  })
+
+  test("on 档: 归属于用户的分歧点主动发问,且全片段不出现 AUTO-DECISION 字样", () => {
+    const on = fragment(true)
+    expect(on).toContain("直接发问,不要替用户拍板")
+    expect(on).toContain("决定权本应属于用户")
+    expect(on).toContain("无须为它留痕")
+    expect(on).toContain("拿不准就问")
+    // 不提标注 = 不给会话出于惯性继续留痕的由头(设计文档 §K-4)
+    expect(on).not.toContain("AUTO-DECISION")
+    expect(on).not.toContain("AUTO-RESOLVE")
+    expect(on).not.toContain("不要调用 question 工具")
+  })
+
+  test("两档结构不变式: 各自恰好一条编号 2 的约束项,首尾不引入空行", () => {
+    for (const ask of [false, true]) {
+      const text = fragment(ask)
+      expect(text.startsWith("2. ")).toBe(true)
+      expect(text.endsWith("\n")).toBe(false)
+      // 片段落在各模板的 "1." 与 "3." 之间,顶格编号行必须只有这一条
+      expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)
+      expect(text).not.toContain("\n\n")
+    }
+  })
+
+  test("23 份消费模板在两档下均渲染通过(片段改动波及全部引用方)", () => {
+    for (const ask of [false, true]) {
+      for (const name of consumers) {
+        const rendered = renderTemplate(name.replace(/\.md$/, ""), { ask })
+        expect(rendered).toContain("question 工具")
+      }
+    }
+  })
+
+  test("on 档下执行类模板整体不含 AUTO-DECISION(历史标记读取方除外)", () => {
+    for (const name of consumers.filter((item) => !historyReaders.includes(item))) {
+      expect(renderTemplate(name.replace(/\.md$/, ""), { ask: true })).not.toContain("AUTO-DECISION")
+    }
+    // off 档下 whole/subtask 的 docs/ 修改条款仍点名 AUTO-DECISION(逐字保留现状口径)
+    expect(renderTemplate("whole", { ask: false })).toContain("按 AUTO-DECISION 标注并记入相关文档")
+    expect(renderTemplate("subtask", { ask: false })).toContain("按 AUTO-DECISION 标注并记入相关文档")
+    expect(renderTemplate("whole", { ask: true })).toContain("若必须修改,记入相关文档")
+  })
+
+  test("渲染出口注入 ask: 覆盖片段后按开关取值渲染条件段(缺省 off 走 off 分支)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-ask-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(
+        join(overlay, "_partials.md"),
+        "# 覆盖\n\n## question-rule\n{{#if ask}}ASK-ON-BRANCH{{/if}}{{^ask}}ASK-OFF-BRANCH{{/if}}\n",
+      )
+      usePromptLibrary(dir)
+      // 测试进程未设 OPENCODE_AUTO_ASK,autoSwitches().ask === false —— 出口注入
+      // 的是开关值而非 undefined,故走 off 分支而不是两个分支都消失。
+      expect(autoSwitches().ask).toBe(false)
+      const text = renderWhole(plan, task)
+      expect(text).toContain("ASK-OFF-BRANCH")
+      expect(text).not.toContain("ASK-ON-BRANCH")
+      // 调用点显式给出的 ask 优先于开关(单测直驱两档的口径)
+      expect(renderText("{{#if ask}}ON{{/if}}{{^ask}}OFF{{/if}}", { ask: true })).toBe("ON")
     } finally {
       usePromptLibrary(undefined)
       rmSync(dir, { recursive: true, force: true })
