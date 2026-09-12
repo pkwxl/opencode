@@ -19,6 +19,8 @@ export const SWITCH_ENV = {
   reuseSession: "OPENCODE_AUTO_REUSE_SESSION",
   stuck: "OPENCODE_AUTO_STUCK",
   taskContext: "OPENCODE_AUTO_TASK_CONTEXT",
+  retryWaits: "OPENCODE_AUTO_RETRY_WAITS",
+  retryAsk: "OPENCODE_AUTO_RETRY_ASK",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -61,6 +63,13 @@ export type Switches = {
   // 的建议行数上限(见 src/prompt.ts 的 TASK_CONTEXT_LINES),供怀疑摘要因"建议
   // 200 行"措辞被过度压缩、信息丢失时调大预算验证。
   taskContext: TaskContextMode
+  // 瞬时会话错误的重试阶梯(OPENCODE_AUTO_RETRY_WAITS,逗号分隔的分钟数):每个
+  // 元素是「该次重试前的等待」,元素个数即重试次数上限。缺省 0,1,2,4,8 = 五次
+  // 重试,首次立即、其后 1/2/4/8 分钟。off = 不重试(首次失败即进人工裁决)。
+  retryWaits: number[]
+  // 阶梯耗尽后等待人工裁决的分钟数(OPENCODE_AUTO_RETRY_ASK);0 = 不等人工,
+  // 直接按回落处理(阻塞退出)。
+  retryAsk: number
 }
 
 const SWITCH_DEFAULTS: Switches = {
@@ -73,6 +82,8 @@ const SWITCH_DEFAULTS: Switches = {
   reuseSession: false,
   stuck: true,
   taskContext: "off",
+  retryWaits: [0, 1, 2, 4, 8],
+  retryAsk: 30,
 }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
@@ -84,6 +95,28 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
       throw new Error(`环境变量 ${name} 取值非法: "${raw}"(期望 on|off;空串视同未设,缺省 ${fallback ? "on" : "off"})`)
     }
     return value === "on"
+  }
+  // 分钟阶梯: off = 空表(不重试);否则逗号分隔的非负分钟数(允许小数,供单测取
+  // 亚分钟值)。空串视同未设。
+  const waitList = (name: string, raw: string | undefined, fallback: number[]): number[] => {
+    if (raw === undefined || raw === "") return fallback
+    if (raw === "off") return []
+    const parts = raw.split(",").map((part) => part.trim())
+    return parts.map((part) => {
+      const value = Number(part)
+      if (part === "" || !Number.isFinite(value) || value < 0) {
+        throw new Error(`环境变量 ${name} 取值非法: "${raw}"(期望 off 或逗号分隔的非负分钟数,如 0,1,2,4,8;空串视同未设)`)
+      }
+      return value
+    })
+  }
+  const minutes = (name: string, raw: string | undefined, fallback: number): number => {
+    if (raw === undefined || raw === "") return fallback
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`环境变量 ${name} 取值非法: "${raw}"(期望非负分钟数,0 = 不等待;空串视同未设,缺省 ${fallback})`)
+    }
+    return value
   }
   const forkBaseRaw = env[SWITCH_ENV.forkBase]
   const forkBase = forkBaseRaw === undefined || forkBaseRaw === "" ? SWITCH_DEFAULTS.forkBase : forkBaseRaw
@@ -114,7 +147,14 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     reuseSession: onOff(SWITCH_ENV.reuseSession, env[SWITCH_ENV.reuseSession], SWITCH_DEFAULTS.reuseSession),
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
     taskContext: taskContext as TaskContextMode,
+    retryWaits: waitList(SWITCH_ENV.retryWaits, env[SWITCH_ENV.retryWaits], SWITCH_DEFAULTS.retryWaits),
+    retryAsk: minutes(SWITCH_ENV.retryAsk, env[SWITCH_ENV.retryAsk], SWITCH_DEFAULTS.retryAsk),
   }
+}
+
+// 阶梯的规范写法(日志与默认值比较同一来源): 空表渲染为 off。
+function formatWaits(waits: number[]): string {
+  return waits.length ? waits.join(",") : "off"
 }
 
 // 非默认生效项(启动日志): `名=值` 逗号清单,默认组合返回 undefined(静默)。
@@ -129,6 +169,8 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.reuseSession === SWITCH_DEFAULTS.reuseSession ? undefined : `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     switches.taskContext === SWITCH_DEFAULTS.taskContext ? undefined : `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
+    formatWaits(switches.retryWaits) === formatWaits(SWITCH_DEFAULTS.retryWaits) ? undefined : `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
+    switches.retryAsk === SWITCH_DEFAULTS.retryAsk ? undefined : `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -145,6 +187,8 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
+    `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
+    `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
   ].join(", ")
 }
 
