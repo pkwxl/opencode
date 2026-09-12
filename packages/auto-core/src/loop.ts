@@ -25,6 +25,7 @@ import {
 } from "./phases"
 import { renderDryrun, renderPhaseHandover, renderPhasePlan, stageText } from "./prompt"
 import { allowWrite, protect, reprotect, unprotect } from "./protect"
+import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
 import { closeStep, openStep, peekProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { shellProfile } from "./shell"
@@ -366,6 +367,8 @@ export async function runAll(
           // 阶段,省略阶段段。分阶段路径由 runPhaseLoop 的 complete 路由统一打印,
           // 此处(phases !== "m" 时 runTaskLoop 只是单阶段执行)不重复。
           if (phases === "m") {
+            // 轮次代答汇总(auto-resolve-design.md §H-③,H6): 置顶于 ■ 轮次行之前。
+            for (const line of await roundResolveLines(directory)) log(line)
             const lines = await roundCompleteLines(directory)
             if (lines) for (const line of lines) log(line)
           }
@@ -408,6 +411,9 @@ export async function runAll(
         if (outcome.type === "blocked") {
           await block(path, task.id, outcome.question)
           log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
+          // 代答高亮块(auto-resolve-design.md §H-②,H5): 置顶于结论行之前。三态
+          // 一律打印,且不受统计守卫影响(阻塞任务同样可能已被代答了若干问题)。
+          for (const line of await taskResolveLines(directory, task.id)) log(line)
           // 任务三态行(STATS_PLAN §4.2,T-006): blocked 同样输出累计统计段 +
           // tokens 行(守卫失败时不打印,与 T-006 前行为一致——原本只有 done 有统计行)。
           const lines = await taskEndLines(directory, task.id)
@@ -423,6 +429,7 @@ export async function runAll(
         }
         if (outcome.type === "incomplete") {
           log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
+          for (const line of await taskResolveLines(directory, task.id)) log(line)
           const lines = await taskEndLines(directory, task.id)
           if (lines) {
             log(`⏸ ${task.id} 未完成: ${lines[0]}`)
@@ -434,6 +441,7 @@ export async function runAll(
           return 2
         }
         {
+          for (const line of await taskResolveLines(directory, task.id)) log(line)
           const lines = await taskEndLines(directory, task.id)
           if (lines) {
             log(`✓ ${task.id} 完成: ${lines[0]}`)
@@ -682,6 +690,8 @@ export async function runAll(
           subject: `PLAN transition ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
         })
       }
+      // 阶段代答汇总(auto-resolve-design.md §H-③,H6): 置顶于 ■ 收口行之前。
+      for (const line of await phaseResolveLines(directory, phase)) log(line)
       // 阶段收口行(STATS_PLAN §4.3,T-006): commitTree 之后、return 0 之前——
       // 交接提交时长仍计入本阶段桶(读数实时外推,含当前开放段)。
       const closing = await phaseCloseLines(directory, phase)
@@ -714,6 +724,7 @@ export async function runAll(
         }
         if (route.type === "complete") {
           log("✓ 全部阶段已完成")
+          for (const line of await roundResolveLines(directory)) log(line)
           // 轮次完成行(STATS_PLAN §4.4,T-006): 阶段数取台账 done 计数(本轮已
           // 交接阶段);历轮累计段在 history.rounds > 0 时由构造函数自行追加。
           const lines = await roundCompleteLines(directory, { phaseCount: (await readLedger(directory)).done.length })
@@ -954,6 +965,40 @@ function resumeBanner(resumed: StatsResume): string {
   }
   const at = new Date(resumed.lastWriteAt).toTimeString().slice(0, 5)
   return `↻ 统计续接: ${parts.join(" / ")},上次进程止于 ${at}`
+}
+
+// ===== 代答高亮块(docs/auto-resolve-design.md §H,H5/H6)=====
+// 三处置顶块与下面三处结论行一一配对: 高亮先打、结论行后打(§H-② 的版面顺序——
+// 用户先看见"系统替我做了什么主",再看统计)。构造与 log 分离的理由同结论行: 文案
+// 可单测直驱(test/loop-conclusion.test.ts),loop 主体只负责 log。
+// 三者一律返回数组(空数组 = 没有代答,不占任何版面),与结论行的 undefined 语义
+// 刻意不同: 结论行的 undefined 表示"守卫失败、读数不可信",调用方要回落旧文案;
+// 高亮块没有守卫失败这一态——台账读不到就是没有代答。
+// 台账读失败(损坏/权限)一律吞成空: 审计永不影响流程与退出码。
+
+// 任务置顶块(H5): 打在 ✓/⏸ 结论行之前。AUTO-DECISION 计数经 decisionsOf 折进末行
+// (§H-④),没有代答时整块为空、该计数也随之不上终端(它在会话收尾已进 vlog)。
+export async function taskResolveLines(directory: string | undefined, taskID: string): Promise<string[]> {
+  const items = await resolvesOf(directory, "task", taskID).catch(() => [])
+  if (!items.length) return []
+  const decisions = await decisionsOf(directory, taskID).catch(() => 0)
+  return resolveHighlight(items, { scope: "task", id: taskID, decisions })
+}
+
+// 阶段置顶块(H6): 打在 ■ 阶段收口行之前,只给计数(逐条已在各任务结束时展示过)。
+export async function phaseResolveLines(directory: string | undefined, letter: Phase): Promise<string[]> {
+  const items = await resolvesOf(directory, "phase", letter).catch(() => [])
+  return resolveHighlight(items, { scope: "phase", id: letter })
+}
+
+// 轮次置顶块(H6): 打在 ■ 轮次完成行之前。轮号取 currentRound 现查——落账侧
+// (runner 的 collectSessionMarks/recordDriverResolves)用的就是同一来源,两侧同源
+// 才不会错桶;失败取 0,与落账侧的 catch 回落一致。
+export async function roundResolveLines(directory: string | undefined): Promise<string[]> {
+  if (!directory) return []
+  const round = await currentRound(directory).catch(() => 0)
+  const items = await resolvesOf(directory, "round", round).catch(() => [])
+  return resolveHighlight(items, { scope: "round", id: round })
 }
 
 // ===== T-006 结论行报文(plans/STATS_PLAN.md §4.2/4.3/4.4)=====

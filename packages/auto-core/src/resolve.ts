@@ -45,7 +45,12 @@ export type ResolveItem = {
   matched?: boolean // driver 源:已找到配对的 agent 标记
 }
 
-export type ResolveDoc = { v: 1; items: ResolveItem[] }
+// decisions: 逐任务的 AUTO-DECISION 计数(不落行级明细——台账的存在理由是驱动高亮,
+// AUTO-DECISION 不参与高亮就不需要行级持久化,其持久轨迹是进 git 的标记行本身)。
+// 之所以仍要持久化一个计数: 高亮块末行要把它折叠进去(§H-④),而扫描发生在 runner
+// 的会话收尾、展示发生在 loop 的任务收口,中间隔着多个会话与可能的进程重启,内存
+// 传不过去。
+export type ResolveDoc = { v: 1; items: ResolveItem[]; decisions?: Record<string, number> }
 
 // driver 源的回合内观测(runner watch() 的 Watch.resolves,T-005 接线): 落账所需的
 // task/phase/round 由 attempt 侧在 await watching 之后补齐,故事件本身只带提问原文
@@ -58,6 +63,10 @@ export type ResolveCtx = { task: string; phase?: string; round?: number; session
 // 台账总量上限: 超出按 FIFO 淘汰最旧。上限内不会触及(一轮 24 任务 × 每任务个位数),
 // 设上限只为防异常刷屏把文件撑大。
 const MAX_ITEMS = 512
+
+// decisions 映射的键数上限: 同样 FIFO 淘汰最早写入的任务(JS 对象保持字符串键的
+// 插入序)。一个计数键只有十几字节,设上限同样只为防异常增长。
+const MAX_DECISION_KEYS = 512
 
 // 单文件扫描上限: 超过 2MB 的文件跳过(标记行只会出现在人写的文档与源码里)。
 const MAX_SCAN_BYTES = 2 * 1024 * 1024
@@ -170,10 +179,22 @@ function parseDoc(raw: string): ResolveDoc {
         matched: item.matched === true ? true : undefined,
       })
     }
-    return { v: 1, items }
+    return { v: 1, items, decisions: parseDecisions(parsed.decisions) }
   } catch {
     return { v: 1, items: [] }
   }
+}
+
+// 计数映射的宽容解析: 非对象整体丢弃,坏值(非有限正整数)逐键跳过——计数是体感
+// 指标,坏数据宁可丢也不该让读回失败。
+function parseDecisions(raw: unknown): Record<string, number> | undefined {
+  if (typeof raw !== "object" || !raw || Array.isArray(raw)) return undefined
+  const out: Record<string, number> = {}
+  for (const [task, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!task || typeof value !== "number" || !Number.isFinite(value) || value <= 0) continue
+    out[task] = Math.floor(value)
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 async function readDoc(dir: string): Promise<ResolveDoc> {
@@ -203,6 +224,10 @@ function update(dir: string, mutate: (doc: ResolveDoc) => void): Promise<void> {
       const doc = await readDoc(dir)
       mutate(doc)
       if (doc.items.length > MAX_ITEMS) doc.items = doc.items.slice(-MAX_ITEMS) // FIFO 淘汰最旧
+      const tasks = doc.decisions ? Object.keys(doc.decisions) : []
+      if (tasks.length > MAX_DECISION_KEYS) {
+        doc.decisions = Object.fromEntries(tasks.slice(-MAX_DECISION_KEYS).map((task) => [task, doc.decisions![task]!]))
+      }
       await atomicWrite(dir, JSON.stringify(doc))
     })
     .catch(() => {})
@@ -237,11 +262,38 @@ export async function recordResolves(dir: string | undefined, items: ResolveItem
   })
 }
 
+// 累加逐任务 AUTO-DECISION 计数。累加口径成立的前提是"每次扫描只看得见本次会话的
+// 未提交改动"(afterSession 扫描完即统一提交);`--commit false` 下改动跨会话堆积、
+// 同一批标记会被反复看见,计数偏大——AUTO-RESOLVE 侧由去重键吸收,计数侧不设行级
+// 明细故吸收不了。这是已接受边界: 该计数是"标注门槛是否失控"的体感指标,不是事实
+// 来源,而 `--commit false` 本身就已破坏该前提(见 docs/auto-resolve-design.md §K)。
+function addDecisions(doc: ResolveDoc, task: string, count: number) {
+  if (!task || count <= 0) return
+  doc.decisions = { ...doc.decisions, [task]: (doc.decisions?.[task] ?? 0) + count }
+}
+
+// 累加落账(导出供单测直驱;collectAgentResolves 内部与标记落账合并为同一次写)。
+export async function recordDecisions(dir: string | undefined, task: string, count: number): Promise<void> {
+  if (!dir || !task || count <= 0) return
+  await update(dir, (doc) => {
+    addDecisions(doc, task, count)
+  })
+}
+
+// 读回某任务的 AUTO-DECISION 累计计数(高亮块末行折叠用)。缺失/损坏一律 0。
+export async function decisionsOf(dir: string | undefined, task: string): Promise<number> {
+  if (!dir || !task) return 0
+  await writing.get(dir)?.catch(() => {})
+  const doc = await readDoc(dir)
+  return doc.decisions?.[task] ?? 0
+}
+
 // ===== 会话收尾扫描(H4)=====
 
 // 扫描本次会话的工作区变更文件,提取两类标记: AUTO-RESOLVE 落账(并回配 driver 项
-// 的 matched),AUTO-DECISION 只回计数——台账的存在理由是驱动高亮,AUTO-DECISION 不
-// 参与高亮就不需要行级持久化,它的持久轨迹本来就是进 git 的标记行本身。
+// 的 matched),AUTO-DECISION 只累加逐任务计数、不落行级明细——台账的存在理由是驱动
+// 高亮,AUTO-DECISION 不参与高亮就不需要行级持久化,它的持久轨迹本来就是进 git 的
+// 标记行本身;计数则是高亮块末行的折叠数字(§H-④)。
 // 变更文件经 git.ts 的 changedFiles 逐仓库遍历(嵌套子仓库是本项目常态);非 git
 // 目录返回空清单,机制自然空转。二进制与超过 2MB 的文件跳过。
 // 返回本次扫描到的标记条数(落账去重之前的口径: 它回答的是"扫描确实跑过、看见了
@@ -278,9 +330,12 @@ export async function collectAgentResolves(
       })
     }
   }
-  if (items.length) {
+  // 标记落账与计数累加合并为同一次读-改-写: 两者同源于本次扫描,分两次 update 会多
+  // 一轮读盘与原子写。
+  if (items.length || decisions) {
     await update(dir, (doc) => {
-      mergeAgent(doc, items)
+      if (items.length) mergeAgent(doc, items)
+      addDecisions(doc, ctx.task, decisions)
     })
   }
   return { resolves: items.length, decisions }

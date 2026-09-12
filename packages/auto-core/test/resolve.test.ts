@@ -4,7 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   collectAgentResolves,
+  decisionsOf,
   parseResolveLine,
+  recordDecisions,
   recordResolves,
   resolveHighlight,
   resolvesOf,
@@ -335,5 +337,74 @@ describe("resolveHighlight", () => {
     expect(resolveHighlight([agentItem("问题一", { option: "方案", reason: "理由" })], { scope: "round", id: 2 })).toEqual([
       "⚑ 第 2 轮共自动代答 1 个待确认问题,逐条见各任务报告",
     ])
+  })
+})
+
+// T-006 追加: 逐任务 AUTO-DECISION 计数(高亮块末行的折叠数字)。行级明细仍不落账,
+// 落的只是每个任务一个整数。
+describe("AUTO-DECISION 计数", () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-resolve-count-"))
+    setResolveClock(() => 2_000)
+  })
+
+  afterEach(async () => {
+    setResolveClock()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("逐任务累加、互不串台;dir/任务缺省或计数非正时空转", async () => {
+    await recordDecisions(dir, "T-001", 2)
+    await recordDecisions(dir, "T-001", 3)
+    await recordDecisions(dir, "T-002", 1)
+    expect(await decisionsOf(dir, "T-001")).toBe(5)
+    expect(await decisionsOf(dir, "T-002")).toBe(1)
+    expect(await decisionsOf(dir, "T-003")).toBe(0)
+    await recordDecisions(dir, "T-001", 0)
+    await recordDecisions(dir, "", 4)
+    await recordDecisions(undefined, "T-001", 4)
+    expect(await decisionsOf(dir, "T-001")).toBe(5)
+    expect(await decisionsOf(undefined, "T-001")).toBe(0)
+  })
+
+  test("扫描把计数与标记落进同一次写", async () => {
+    await git(dir, "init", "-q")
+    await writeFile(
+      join(dir, "report.md"),
+      [
+        "AUTO-RESOLVE: 是否收窄范围 -> 不收窄 (计划已写死)",
+        "AUTO-DECISION: 新字段命名 matched (与 schema 注释同词)",
+        "AUTO-DECISION: 扫描按行正则 (与 refcheck 同量级)",
+      ].join("\n"),
+    )
+    expect(await collectAgentResolves(dir, { task: "T-007", phase: "m", round: 1 })).toEqual({
+      resolves: 1,
+      decisions: 2,
+    })
+    expect(await decisionsOf(dir, "T-007")).toBe(2)
+    expect((await resolvesOf(dir, "task", "T-007")).map((item) => item.question)).toEqual(["是否收窄范围"])
+    // 二次扫描(同一批改动仍未提交)累加计数,标记侧由去重键吸收——`--commit false`
+    // 下计数偏大是已接受边界(docs/auto-resolve-design.md §K)。
+    await collectAgentResolves(dir, { task: "T-007", phase: "m", round: 1 })
+    expect(await decisionsOf(dir, "T-007")).toBe(4)
+    expect(await resolvesOf(dir, "task", "T-007")).toHaveLength(1)
+  })
+
+  test("坏计数宽容: 非对象/负值/非数值逐键跳过,不影响 items 读回", async () => {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(
+      join(dir, ".auto", "resolves.json"),
+      JSON.stringify({
+        v: 1,
+        items: [agentItem("问题", { option: "方案", reason: "理由" })],
+        decisions: { "T-001": -3, "T-002": "五", "T-003": 4.7, "": 9 },
+      }),
+    )
+    expect(await decisionsOf(dir, "T-001")).toBe(0)
+    expect(await decisionsOf(dir, "T-002")).toBe(0)
+    expect(await decisionsOf(dir, "T-003")).toBe(4)
+    expect(await resolvesOf(dir, "task", "T-001")).toHaveLength(1)
   })
 })

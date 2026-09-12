@@ -167,8 +167,15 @@ export type ResolveItem = {
   matched?: boolean     // driver 源:已找到配对的 agent 标记
 }
 
-export type ResolveDoc = { v: 1; items: ResolveItem[] }
+// decisions: 逐任务 AUTO-DECISION 计数(T-006 补,只存整数、不存行级明细)
+export type ResolveDoc = { v: 1; items: ResolveItem[]; decisions?: Record<string, number> }
 ```
+
+**为什么 AUTO-DECISION 仍要持久化一个计数**(T-006 决策,与"AUTO-DECISION 不进台账"
+不矛盾):不落的是**行级明细**,落的是每个任务一个整数。§H-④ 要求把该计数折进高亮块
+末行,而扫描发生在 runner 的会话收尾、展示发生在 loop 的任务收口,中间隔着多个会话
+与可能的进程重启,内存传不过去;备选"把计数挂上 `Outcome` 一路传回 loop"要穿透三个
+结局分支且进程重启即丢,否决。键数上限同样 **512**,FIFO 淘汰最早写入的任务。
 
 公共 API(首参一律 `dir: string | undefined`,undefined = 空转,与 `src/stats.ts`
 同构):
@@ -176,9 +183,10 @@ export type ResolveDoc = { v: 1; items: ResolveItem[] }
 - `recordResolves(dir, items)` —— 追加落账;按 `source + task + 归一化 question`
   去重;总量上限 **512** 条 FIFO 淘汰(上限内不会触及:一轮 24 任务 × 每任务个位数)。
 - `collectAgentResolves(dir, ctx)` —— 扫描本次会话的工作区变更文件,提取
-  `AUTO-RESOLVE:` 与 `AUTO-DECISION:` 两类标记;前者落账,后者只回计数。返回
-  `{ resolves: number; decisions: number }`。
+  `AUTO-RESOLVE:` 与 `AUTO-DECISION:` 两类标记;前者落账,后者累加逐任务计数(与
+  标记落账合并为同一次读-改-写)。返回 `{ resolves: number; decisions: number }`。
 - `parseResolveLine(text)` —— §D 的纯函数,单测直驱。
+- `recordDecisions(dir, task, n)` / `decisionsOf(dir, task)` —— 计数的累加与读回。
 - `resolvesOf(dir, scope, id)` —— `scope ∈ task | phase | round`,按桶身份过滤读回。
 - `resolveHighlight(items, opts)` —— 纯函数构造高亮报文行(§H),单测直驱。
 - `sameIssue(a, b)` —— **从 `src/runner.ts:2889` 上收到本模块并导出**,runner 改
@@ -357,7 +365,12 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
    `rm .auto/resolves.json`(与 stats 同款规程)。
 9. 扫描按会话触发、只看未提交变更:若某会话未产生任何文件改动,该会话内的 agent
    标记不会被采集 —— 但没有文件改动就没有标记可采,不构成漏洞。
-10. **核心不变量零破坏**:退出码不变(`on` 档的重复提问阻塞走既有退出码 2 通道);
+10. **`--commit false` 下 AUTO-DECISION 计数偏大**(T-006 记):累加口径成立的前提是
+    "每次扫描只看得见本次会话的未提交改动"(afterSession 扫描完即统一提交)。不提交
+    时改动跨会话堆积,同一批标记被反复看见 —— AUTO-RESOLVE 侧由去重键吸收,计数侧
+    因不存行级明细吸收不了。已接受边界:该计数是"标注门槛是否失控"的体感指标而非
+    事实来源,且 `--commit false` 本身就已破坏该前提(整个 H4 扫描都建立其上)。
+11. **核心不变量零破坏**:退出码不变(`on` 档的重复提问阻塞走既有退出码 2 通道);
     driver 独占写状态文件不变(`.auto/resolves.json` 是运行时状态,不进 protect
     名单);统一提交不变;独立判定会话不 fork 不变;新增的 `OPENCODE_AUTO_ASK` 只读
     环境、不落盘,符合"实验语义 = 本次运行"。
@@ -371,7 +384,7 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
 | T-003 | `question-rule` 两档重写 + `autoAnswer` 改函数 + `MAINT_RULE` 补句 + `whole`/`subtask` 条款条件化 | `_partials.md` / `runner.ts:69` / `agents-block.ts:33` / 两份模板 | ✅ 567 pass |
 | T-004 | `src/resolve.ts` 全量 + `sameIssue` 上收 + `changedFiles` 上收 git.ts + `test/resolve.test.ts` | 新模块 | ✅ 593 pass |
 | T-005 | driver 采集接线 H1..H4 + `test/runner.test.ts` 七例 | `runner.ts` | ✅ 600 pass |
-| T-006 | 报文输出 H5/H6 | `loop.ts` | ⬜ |
+| T-006 | 报文输出 H5/H6(三处置顶块构造函数 + 五处调用点)+ 逐任务 AUTO-DECISION 计数 | `loop.ts` / `resolve.ts` | ✅ 612 pass |
 | T-007 | 收尾闭环 H7 | `prompt.ts` / `wrapup.md` | ⬜ |
 | T-008 | 文档同步(本文回填、structure.md、behavior.md、README、AGENTS.md 导航) | 文档 | ⬜ |
 

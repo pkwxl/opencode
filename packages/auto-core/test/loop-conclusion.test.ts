@@ -2,7 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { phaseCloseLines, roundCompleteLines, taskEndLines } from "../src/loop"
+import { taskDoc } from "../src/docpaths"
+import {
+  phaseCloseLines,
+  phaseResolveLines,
+  roundCompleteLines,
+  roundResolveLines,
+  taskEndLines,
+  taskResolveLines,
+} from "../src/loop"
+import { recordDecisions, recordResolves, type ResolveItem } from "../src/resolve"
 import {
   flushStats,
   loadStats,
@@ -214,5 +223,128 @@ describe("roundCompleteLines 轮次完成行", () => {
     expect(await taskEndLines(undefined, "T-001")).toBeUndefined()
     expect(await phaseCloseLines(undefined, "m")).toBeUndefined()
     expect(await Bun.file(join(dir, ".auto", "stats.json")).exists()).toBe(false)
+  })
+})
+
+// ===== 代答高亮块(docs/auto-resolve-design.md §H,T-006 的 H5/H6)=====
+// 台账经 recordResolves/recordDecisions 直接播种(不走 runner 接线,那是 T-005 的
+// 覆盖面),断言三个构造函数的置顶块文案、driver↔agent 合并、折叠计数与空转。
+describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLines", () => {
+  let dir: string
+
+  const item = (partial: Partial<ResolveItem> & { question: string }): ResolveItem => ({
+    at: 1_000_000,
+    task: "T-001",
+    phase: "m",
+    round: 1,
+    source: "agent",
+    ...partial,
+  })
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-resolve-lines-"))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("无代答: 三处一律返回空数组,不占版面", async () => {
+    expect(await taskResolveLines(dir, "T-001")).toEqual([])
+    expect(await phaseResolveLines(dir, "m")).toEqual([])
+    expect(await roundResolveLines(dir)).toEqual([])
+  })
+
+  test("dir 缺省: 空转返回空数组,不落盘", async () => {
+    expect(await taskResolveLines(undefined, "T-001")).toEqual([])
+    expect(await phaseResolveLines(undefined, "m")).toEqual([])
+    expect(await roundResolveLines(undefined)).toEqual([])
+    expect(await Bun.file(join(dir, ".auto", "resolves.json")).exists()).toBe(false)
+  })
+
+  test("任务置顶块: 逐条列出 + 标记位置 + 完整记录指引", async () => {
+    await recordResolves(dir, [
+      item({
+        question: "是否把 prompt.ts 的第三份 formatTokens 一并收口",
+        option: "顺带收口",
+        reason: "同层依赖,不引入反向 import",
+        file: "src/prompt.ts:501",
+      }),
+      item({ question: "折旧入账是否同样过 MAX_TICK 钳制", option: "同样钳制", reason: "宁少不多" }),
+    ])
+    expect(await taskResolveLines(dir, "T-001")).toEqual([
+      "⚑ 本任务自动代答了 2 个本应由你确认的问题,请重点确认:",
+      "  1. 是否把 prompt.ts 的第三份 formatTokens 一并收口 → 顺带收口(同层依赖,不引入反向 import)",
+      "     src/prompt.ts:501",
+      "  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)",
+      `  完整记录见 ${taskDoc("T-001", "report")} 的「自动代答问题」节`,
+    ])
+  })
+
+  test("未配对的 driver 项带 ⚠ 点名;已配对的被信息更全的 agent 项取代", async () => {
+    await recordResolves(dir, [
+      item({ source: "driver", question: "验收口径是否包含并发场景", session: "ses_1" }),
+      item({ source: "driver", question: "折旧入账是否同样过 MAX_TICK 钳制", session: "ses_1", matched: true }),
+      item({ question: "折旧入账是否同样过 MAX_TICK 钳制", option: "同样钳制", reason: "宁少不多" }),
+    ])
+    const lines = await taskResolveLines(dir, "T-001")
+    expect(lines[0]).toBe("⚑ 本任务自动代答了 2 个本应由你确认的问题,请重点确认:")
+    expect(lines[1]).toBe("  1. 验收口径是否包含并发场景  ⚠ 会话未按要求写出 AUTO-RESOLVE 标记")
+    expect(lines[2]).toBe("  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)")
+  })
+
+  test("AUTO-DECISION 计数折进末行;无代答时整块为空(计数不上终端)", async () => {
+    await recordDecisions(dir, "T-001", 2)
+    await recordDecisions(dir, "T-001", 3)
+    // 只有 AUTO-DECISION、没有代答 → 空块(计数在会话收尾已进 vlog,§H-④)。
+    expect(await taskResolveLines(dir, "T-001")).toEqual([])
+    await recordResolves(dir, [item({ question: "是否收窄本任务范围", option: "不收窄", reason: "计划已写死" })])
+    const lines = await taskResolveLines(dir, "T-001")
+    expect(lines.at(-1)).toBe("  另记录 AUTO-DECISION 5 条(已折叠,见任务报告)")
+  })
+
+  test("超 8 条截断为前 8 条 + 另有 N 条", async () => {
+    await recordResolves(
+      dir,
+      Array.from({ length: 10 }, (_, i) => item({ question: `问题 ${i + 1}`, option: "方案", reason: "理由" })),
+    )
+    const lines = await taskResolveLines(dir, "T-001")
+    expect(lines[1]).toBe("  1. 问题 1 → 方案(理由)")
+    expect(lines[8]).toBe("  8. 问题 8 → 方案(理由)")
+    expect(lines.at(-1)).toBe(`  …另有 2 条,全部见 ${taskDoc("T-001", "report")}`)
+  })
+
+  test("阶段/轮次汇总: 只给计数与未标注数,不展示 AUTO-DECISION", async () => {
+    await recordResolves(dir, [
+      item({ task: "T-001", question: "问题甲", option: "方案", reason: "理由" }),
+      item({ task: "T-002", question: "问题乙", option: "方案", reason: "理由" }),
+      item({ task: "T-002", source: "driver", question: "问题丙" }),
+    ])
+    await recordDecisions(dir, "T-001", 9)
+    expect(await phaseResolveLines(dir, "m")).toEqual([
+      "⚑ 阶段 m 共自动代答 3 个待确认问题(其中 1 个未按要求标注),逐条见各任务报告",
+    ])
+    // 轮号取 currentRound 现查: 无 docs/R-NN 目录时为第 1 轮,与落账侧同源。
+    expect(await roundResolveLines(dir)).toEqual([
+      "⚑ 第 1 轮共自动代答 3 个待确认问题(其中 1 个未按要求标注),逐条见各任务报告",
+    ])
+  })
+
+  test("桶身份过滤: 别的任务/阶段/轮次的条目不串台", async () => {
+    await recordResolves(dir, [
+      item({ task: "T-001", phase: "m", round: 1, question: "本桶问题", option: "方案", reason: "理由" }),
+      item({ task: "T-002", phase: "t", round: 2, question: "别桶问题", option: "方案", reason: "理由" }),
+    ])
+    expect(await taskResolveLines(dir, "T-002")).toHaveLength(3)
+    expect((await phaseResolveLines(dir, "m"))[0]).toContain("共自动代答 1 个")
+    expect((await roundResolveLines(dir))[0]).toContain("共自动代答 1 个")
+  })
+
+  test("台账损坏: 吞成空块,不影响流程", async () => {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(join(dir, ".auto", "resolves.json"), "{ 坏文件")
+    expect(await taskResolveLines(dir, "T-001")).toEqual([])
+    expect(await phaseResolveLines(dir, "m")).toEqual([])
+    expect(await roundResolveLines(dir)).toEqual([])
   })
 })
