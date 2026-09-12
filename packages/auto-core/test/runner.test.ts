@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { load, parse } from "../src/plan"
-import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, requireArtifact, runSession, seedForkSession, sessionUsage, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, requireArtifact, retryDecision, runSession, seedForkSession, sessionUsage, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import type { Interactive } from "../src/interactive"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
@@ -335,17 +336,39 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
 // ---- 会话错误重试(session-error-retry-plan.md)----
 
 describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞", () => {
+  // 阶梯夹具: 两次重试、零等待 —— 次数与改造前的 RETRIES=3(共三次尝试)一致,
+  // 使既有用例的报错条数与断言逐字节沿用;retryAsk=0 关掉人工等待(无人值守形态)。
+  const NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0" })
   // 构造一个只发 session.error(可选 isRetryable)+ session.idle 的事件流,喂给
   // fakeClient 同款的 subscribe——outcomes 按 create/fork 调用顺序逐个消费,
   // 决定该次新建/分叉出的会话本轮是否报错。
   type Outcome = "error-retryable" | "error-fatal" | "ok"
-  function retryClient(outcomes: Outcome[]) {
+  // used: 与 outcomes 同序的"该次会话末端上下文用量",不给则为 0(纯报错桩)。
+  // 经 message.updated 事件注入,与真实链路同一条计量路径(input + cache.read)。
+  function retryClient(outcomes: Outcome[], used: number[] = []) {
     const calls = { forks: [] as string[], creates: 0 }
     const queue: unknown[] = []
     let index = 0
     let seq = 0
     const enqueue = (id: string) => {
+      const tokens = used[index] ?? 0
       const outcome = outcomes[index++]
+      if (tokens > 0) {
+        queue.push({
+          type: "message.updated",
+          properties: {
+            info: {
+              id: `msg_${id}`,
+              sessionID: id,
+              role: "assistant",
+              time: { completed: Date.now() },
+              tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              providerID: "zai",
+              modelID: "glm",
+            },
+          },
+        })
+      }
       if (outcome === "error-retryable" || outcome === "error-fatal") {
         queue.push({
           type: "session.error",
@@ -373,6 +396,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
         promptAsync: async () => ({}),
         abort: async () => ({}),
         messages: async () => ({ data: [] }),
+        get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
       },
       event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
     } as unknown as OpencodeClient
@@ -382,7 +406,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
   test("isRetryable:false: 不 fork、不换新会话重试,直接阻塞", async () => {
     const { client, calls } = retryClient(["error-fatal"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain)
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("blocked")
     expect((result as { question: string }).question).toContain("会话错误:")
     expect((result as { retryable?: boolean }).retryable).toBe(false)
@@ -393,7 +417,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
   test("可重试错误 + chain.id 已有真实累计上下文: fork 原会话重试,成功即晋升为 chain.id", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain)
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_real"])
     expect(calls.creates).toBe(1)
@@ -403,7 +427,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
   test("fork 副本重试仍失败: 丢弃副本,从同一个原会话重新 fork(不是对失败副本再 fork)", async () => {
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"])
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain)
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_real", "ses_real"])
     expect(chain.id).toBe("ses_fork_2")
@@ -412,10 +436,151 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
   test("chain.id 本为空(首条消息即失败): 无值得保护的内容,维持现状开空白新会话", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain)
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual([])
     expect(calls.creates).toBe(2)
+  })
+
+  // ---- 保住最值钱的会话(provider-timeout-analysis-20260912.md §8.4)----
+
+  test("chain.id 为空但失败会话已积累上下文(子任务形态): 分叉失败会话本体,不开空白会话", async () => {
+    // 子任务只有一个提示词回合,失败那一刻链上必然无会话——老策略在此开空白
+    // 新会话,把会话里已核实的研究成果整份扔掉,重开后在同一点再撞墙。
+    const { client, calls } = retryClient(["error-retryable", "ok"], [168_000])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_new_1"])
+    expect(calls.creates).toBe(1)
+    expect(chain.id).toBe("ses_fork_1")
+  })
+
+  test("失败会话用量高于链上原会话: 取失败会话(价值 = 已积累上下文)", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"], [50_000])
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_new_1"])
+  })
+
+  test("副本承接失败会话的前缀用量(2×cap 交接阈值按前缀 + 新增计算)", async () => {
+    // 三次全失败 → 耗尽阻塞;链上留下的 used 即重试时播种进副本的前缀值
+    // (attempt() 的可重试分支把 used 还原为本轮下发前快照,即播种值)。
+    const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable"], [50_000])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("blocked")
+    expect(chain.used).toBe(50_000)
+  })
+
+  test("失败会话用量低于链上原会话: 仍取原会话(刚失败不等于更值钱)", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"], [800])
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_real"])
+  })
+
+  test("链上无会话可分叉但基点存活: 从基点重新播种,赚回暖前缀而非纯冷启动", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0, forkBase: "ses_base" }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_base"])
+    expect(calls.creates).toBe(1)
+    expect(chain.forkBase).toBe("ses_base")
+  })
+
+  test("失败会话为纯报错桩(用量 0)且无基点: 维持空白新会话,不把报错桩背进副本", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(calls.forks).toEqual([])
+  })
+
+  test("重试成功后 chain.failed 清空,不残留到下一轮", async () => {
+    const { client } = retryClient(["error-retryable", "ok"], [9000])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(chain.failed).toBeUndefined()
+  })
+
+  // ---- 重试阶梯与人工裁决(provider-timeout-analysis-20260912.md §8.4)----
+
+  // 只答固定几句的人工输入行(--interactive 形态);答完即回落 undefined。
+  const answering = (answers: (string | undefined)[]): Interactive => ({
+    attach() {},
+    question: async () => answers.shift(),
+    close() {},
+  })
+
+  test("阶梯次数由 waits 的元素个数决定,不再是写死的 RETRIES", async () => {
+    // 0,0,0 = 三次重试 → 连同首次共四次尝试,第四次仍失败才阻塞。
+    const three = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.retryAsk]: "0" })
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, three)
+    expect(result.type).toBe("idle")
+    expect(calls.creates).toBe(4)
+  })
+
+  test("退避真的等待: waits 的分钟数落到实际睡眠上", async () => {
+    // 0.002 分钟 = 120ms,足以与零等待区分又不拖慢测试。
+    const slow = parseSwitches({ [SWITCH_ENV.retryWaits]: "0.002", [SWITCH_ENV.retryAsk]: "0" })
+    const { client } = retryClient(["error-retryable", "ok"])
+    const began = Date.now()
+    const result = await runSession(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, slow)
+    expect(result.type).toBe("idle")
+    expect(Date.now() - began).toBeGreaterThanOrEqual(100)
+  })
+
+  test("阶梯耗尽 + 人工答继续: 阶梯从头再走一轮,不退出", async () => {
+    const ask = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "1" })
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", { interactive: answering(["继续"]) }, chain, undefined, undefined, ask)
+    expect(result.type).toBe("idle")
+    // 三次尝试用尽 → 问人工 → 继续 → 第四次成功。
+    expect(calls.creates).toBe(4)
+  })
+
+  test("阶梯耗尽 + 人工答退出: 立即阻塞,文案标明是人工决定", async () => {
+    const ask = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "1" })
+    const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"])
+    const result = await runSession(client, task, "提示词", { interactive: answering(["exit"]) }, { pct: 100, used: 0, at: 0 }, undefined, undefined, ask)
+    expect(result.type).toBe("blocked")
+    expect((result as { question: string }).question).toContain("人工选择退出")
+  })
+
+  test("阶梯耗尽 + 无人应答: 按回落阻塞(无人值守跑批不会卡死)", async () => {
+    const ask = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "1" })
+    const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"])
+    const result = await runSession(client, task, "提示词", { interactive: answering([undefined]) }, { pct: 100, used: 0, at: 0 }, undefined, undefined, ask)
+    expect(result.type).toBe("blocked")
+    expect((result as { question: string }).question).toContain("人工未裁决")
+  })
+
+  test("retryAsk=0: 不等人工,耗尽即阻塞(文案不提人工)", async () => {
+    const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable"])
+    const result = await runSession(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("blocked")
+    expect((result as { question: string }).question).toContain("自动重试 2 次仍失败")
+    expect((result as { question: string }).question).not.toContain("人工")
+  })
+
+  test("waits=off: 首次失败即进人工裁决,不自动重试", async () => {
+    const none = parseSwitches({ [SWITCH_ENV.retryWaits]: "off", [SWITCH_ENV.retryAsk]: "1" })
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const result = await runSession(client, task, "提示词", { interactive: answering(["继续"]) }, { pct: 100, used: 0, at: 0 }, undefined, undefined, none)
+    expect(result.type).toBe("idle")
+    expect(calls.creates).toBe(2)
+  })
+
+  test("retryDecision: 继续/退出词表与回落归一", () => {
+    for (const yes of ["c", "continue", "retry", "y", "YES", " 继续 ", "重试"]) expect(retryDecision(yes)).toBe("continue")
+    for (const no of ["q", "quit", "exit", "stop", "n", "NO", "退出", "停"]) expect(retryDecision(no)).toBe("exit")
+    for (const other of [undefined, "", "   ", "嗯", "maybe"]) expect(retryDecision(other)).toBe("fallback")
   })
 
   test("可重试的中间失败态不落盘 progress.json,不顶替之前的真实记录", async () => {
@@ -423,10 +588,10 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
     try {
       const real: Awaited<ReturnType<typeof recallProgress>> = { task: "T-001", session: "ses_real_old", at: 1, active: true, phase: { kind: "understand" } }
       await saveProgress(dir, real!)
-      // RETRIES=3: 三次尝试全部可重试失败,耗尽后阻塞——全程不应落盘。
+      // 阶梯 0,0: 三次尝试全部可重试失败,耗尽后阻塞——全程不应落盘。
       const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable"])
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "understand" } }
-      const result = await runSession(client, task, "提示词", { dir }, chain)
+      const result = await runSession(client, task, "提示词", { dir }, chain, undefined, undefined, NO_WAIT)
       expect(result.type).toBe("blocked")
       expect(await recallProgress(dir, "T-001")).toEqual(real)
     } finally {
@@ -439,7 +604,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
     try {
       const { client } = retryClient(["error-fatal"])
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "understand" } }
-      const result = await runSession(client, task, "提示词", { dir }, chain)
+      const result = await runSession(client, task, "提示词", { dir }, chain, undefined, undefined, NO_WAIT)
       expect(result.type).toBe("blocked")
       expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_new_1")
     } finally {
@@ -576,6 +741,8 @@ describe("gatedAutoCorrectRefs / gatedTaskRefGap(OPENCODE_AUTO_REF_CHECK 挂点�
 // ---- 阶段步骤恢复点(requireArtifact spec.step: 会话恢复优先于文件推导)----
 
 describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
+  // 零等待阶梯: 本块只验恢复点语义,不该被重试退避拖成分钟级。
+  const STEP_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0" })
   // 专用 fake client: 记录 create 次数与每个 prompt 的目标会话;messages 返回一条
   // 真实 assistant 轮次(tokens>0)使 sessionUsage 判为可复用、非报错桩;事件流对
   // "当前会话"(新建则随之更新,复用则保持)发一个 idle 让 watch 正常结算。
@@ -683,7 +850,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   test("可重试错误耗尽: 步骤恢复点不被删除(还原为 session 未定的初始认领),下次运行仍重入本步骤", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-retry-"))
     try {
-      // 每次会话都以可重试错误结束 → runSession 重试 RETRIES 次后阻塞。
+      // 每次会话都以可重试错误结束 → runSession 走完阶梯后阻塞。
       const queue: unknown[] = []
       let seq = 0
       const enqueue = (id: string) => {
@@ -712,7 +879,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
         provider: { list: async () => ({ data: { all: [] } }) },
         event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
       } as unknown as OpencodeClient
-      const result = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}))
+      const result = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}), STEP_NO_WAIT)
       expect((result as { type: string }).type).toBe("blocked")
       // 关键: 可重试错误把记录还原为下发前快照(requireArtifact 进入时写的初始恢复点,
       // session 未定),而非删除——步骤认领保留,下次运行 openStep 命中即重入规划,

@@ -231,7 +231,14 @@ type SessionResult = { type: "idle"; lastText: string; testHandover?: boolean } 
 // 链携带,溯源用);pending 为预创建会话 id(seedForkSession 从基点分叉所得),
 // attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
 // 瞬时错误重试自然回落 create 路径。
-export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string }
+export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; failed?: FailedSession }
+
+// 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
+// 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能
+// 从"本轮积累最多的会话"分叉: 超时类故障下,失败会话里那 100k+ 已核实研究是最
+// 值钱的资产,开空白会话等于把它扔掉再从零撞同一堵墙。副本不顶替恢复点(progress
+// 的还原逻辑不动,原会话仍是恢复点),晋升后即清。
+export type FailedSession = { id: string; used: number }
 
 // 上下文占比低于该值(%)时复用上一会话(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效)。
 const REUSE_BELOW = 50
@@ -1627,6 +1634,9 @@ export async function requireArtifact<T>(
     // 恢复点与会话续跑(见函数头注释)。
     step?: { step: StepKind; letter: PhaseLetter }
   },
+  // 缺省取 OPENCODE_AUTO_* 解析值,透传给 runSession(与其同款注入点,供单测把
+  // 重试阶梯压成零等待)。
+  switches: Switches = autoSwitches(),
 ): Promise<T | (Outcome & { type: "blocked" })> {
   const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, letter: spec.step.letter } : undefined
   // 阶段步骤续跑判定: 上次运行在本步骤中断(driver 未收口)且原会话仍可复用 →
@@ -1683,7 +1693,7 @@ export async function requireArtifact<T>(
       chain.id = resumedSession
       chain.note = resumeNote(stepPhase, true)
     }
-    const result = await runSession(client, task, promptText + feedback, opts, chain)
+    const result = await runSession(client, task, promptText + feedback, opts, chain, undefined, undefined, switches)
     if (result.type === "blocked") return result
     if (spec.commit) await afterSession(opts.dir, opts, task, spec.commit)
     const value = await spec.collect()
@@ -1886,7 +1896,20 @@ export async function runSession(
   test?: TestRun,
   switches: Switches = autoSwitches(),
 ): Promise<SessionResult> {
-  for (let i = 1; ; i++) {
+  // 重试阶梯(OPENCODE_AUTO_RETRY_WAITS,缺省 0,1,2,4,8): waits 的每个元素是该次
+  // 重试前的等待分钟数,元素个数即重试次数上限。首次重试立即——瞬时抖动确实会在
+  // 下一回合就恢复(DB 里有「尝试 1 静默 300s 被中止、尝试 2 成功」的实例);其后
+  // 按分钟级退避。
+  //
+  // 为什么退避从分钟起步、而不是从秒开始翻倍: 退避本身不是恢复手段。opencode 内层
+  // 每次故障已经用掉 6×300s 超时 + 2+4+8+16+30s 退避 ≈ 1860s(实测 1862s),外层再叠
+  // 一条秒级曲线只占其中零头,改变不了下一次请求的命运。分钟级等待的唯一意义是
+  // 「跨过一段上游退化」,而实测退化以小时计(6 次致命错误挤在最后 18 小时,每个
+  // 致命会话死前已有 2–6 个 ≥250s 的步骤)——所以阶梯必然有耗尽的一天,耗尽后的
+  // 出路是人工裁决,不是继续加码次数。
+  const waits = switches.retryWaits
+  let i = 1
+  for (;;) {
     const result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
     if (!transient) return result
@@ -1897,34 +1920,104 @@ export async function runSession(
       log(`⛔ ${task.id} 遇到不可重试的会话错误(重试无意义),直接阻塞:\n${result.question}`)
       return result
     }
-    if (i === RETRIES) return { type: "blocked", question: `${result.question}\n(已换新会话自动重试 ${RETRIES - 1} 次仍失败)` }
+    // 阶梯耗尽: 先交人工裁决,再决定继续或退出(OPENCODE_AUTO_RETRY_ASK=0 关闭)。
+    //
+    // 为什么不直接退出: 优雅阻塞退出写的是 active=false 的恢复点,重跑明确不复用
+    // 旧会话(resume.ts 的既定语义——人工介入可能耗时数小时且会改动环境,旧上下文
+    // 不可信)。那条理由对真正的阻塞提问成立,对超时不成立: 人什么也没改,只是等。
+    // 于是退出这条路恰好把上面刚保住的那个会话扔掉。留在进程里等,会话就还活着、
+    // 还能继续 fork。
+    if (i > waits.length) {
+      const decision = await askRetry(switches.retryAsk, task, waits.length, result.question, opts.interactive)
+      if (decision === "continue") {
+        log(`↻ ${task.id} 人工选择继续,重试阶梯从头再走一轮`)
+        i = 1
+        continue
+      }
+      const why = decision === "exit" ? ",人工选择退出" : switches.retryAsk > 0 ? ",人工未裁决" : ""
+      return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why})` }
+    }
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
       await opts.server.restart("会话错误为网络/服务故障,重启 opencode server 后换新会话重试")
     }
-    // chain.id 已有真实累计上下文(attempt() 在可重试的会话错误分支已把 chain.id
-    // 还原为本轮重试前的原会话,不是刚失败的会话/副本): fork 一份独立副本重试同
-    // 一条提示词,原会话不受影响——失败即弃,再次失败就再从同一个原会话重新
-    // fork(session-error-retry-plan.md)。chain.id 为空(本轮是这个会话的第一条
-    // 消息,还没成功过): 没有值得保护的内容,fork 无意义,维持现状开空白新会话。
-    if (chain.id !== undefined) {
-      const forked = await forkSession(client, chain.id, chain.subject ?? `${task.id} 重试`)
-      if (forked !== undefined) {
-        log(`↻ ${task.id} 遇到瞬时会话错误,从原会话 ${chain.id} 分叉副本重试(${i}/${RETRIES - 1}):\n${result.question}`)
-        chain.pending = forked
-        chain.pct = 100
+    // 本次重试前的退避。计数在动作之前推进,下面三条 continue 路径共用 nth 作日志序号。
+    const waitMinutes = waits[i - 1] ?? 0
+    const nth = i++
+    if (waitMinutes > 0) {
+      log(`⏳ ${task.id} 遇到瞬时会话错误,等待 ${waitMinutes} 分钟后重试(${nth}/${waits.length}):\n${firstLine(result.question)}`)
+      await Bun.sleep(waitMinutes * 60_000)
+    }
+    // 保住最值钱的会话再从它分叉: 候选为刚失败的会话本体与链上原会话(attempt()
+    // 已把 chain.id 还原为下发前的原会话;复用轮里两者同一个,去重后只试一次),
+    // 价值以"已积累的上下文用量"度量,取最大者,fork 失败再退而求其次;都不可用
+    // 时依次回落 fork 基点(暖前缀,见下方 forkBase 分支)与空白新会话。
+    //
+    // 失败会话优先的理由: 超时/流中断类故障与会话内容无关(provider 侧停顿),
+    // 会话里那 100k+ 已核实产出是本轮最值钱的资产,开空白会话等于把它扔掉、再从
+    // 零撞同一堵墙——session-error-retry-plan.md 事实基线第 4 点记过这种"比完全不
+    // 复用还差"的反例。代价是副本尾部带着那条 0-token 报错消息、重试提示词落在它
+    // 后面;used 为 0 的失败会话则是纯报错桩(下发即失败,什么也没跑出来),没有
+    // 值得保护的内容,不进候选(维持原设计判据)。
+    //
+    // 一律 fork 副本而非直接复用: 原会话不受影响,失败即弃,恢复点仍是原会话
+    // (progress 的还原逻辑不动,见 attempt() 的可重试分支)。此处也不设
+    // seedForkSession 的"用量达 cap/2 即冷启动"护栏——那道护栏防的是新子任务背上
+    // 过大前缀,而重试是同一条提示词的续命,前缀大恰恰因为活干得多。
+    const sources: { id: string; used: number; why: string }[] = []
+    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
+    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
+    chain.failed = undefined
+    sources.sort((a, b) => b.used - a.used)
+    let seeded = false
+    for (const source of sources) {
+      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 重试`)
+      if (forked === undefined) continue
+      log(`↻ ${task.id} 遇到瞬时会话错误,从${source.why} ${source.id}(${formatTokens(source.used)} tokens)分叉副本重试(${nth}/${waits.length}):\n${result.question}`)
+      chain.pending = forked
+      chain.pct = 100
+      chain.used = source.used
+      seeded = true
+      break
+    }
+    if (seeded) continue
+    if (sources.length) log(`↻ fork 重试副本失败,回退分叉基点/空白新会话`)
+    // 无会话可分叉(子任务的首条消息即失败,链上本就为空)但基点还在: 从基点重新
+    // 播种,至少赚回免费的暖前缀,而不是纯冷启动——与 fork 三段式"每项重新从基点
+    // 分叉"(fork-decompose 设计 §4.3)同一语义。基点失效则回落空白新会话。
+    if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(client, chain.forkBase))) {
+      const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(client, chain.forkBase) }
+      if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} 重试`)) {
+        log(`↻ ${task.id} 遇到瞬时会话错误,链上无会话可分叉,已从基点重新播种重试(${nth}/${waits.length}):\n${result.question}`)
         continue
       }
-      log(`↻ fork 重试副本失败,回退空白新会话`)
     }
-    log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${i}/${RETRIES - 1}):\n${result.question}`)
+    log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${nth}/${waits.length}):\n${result.question}`)
     // 重试保持"换新会话"语义,不复用出错的会话。
     chain.id = undefined
     chain.pct = 100
   }
 }
 
-// Session errors get this many fresh-session attempts before blocking.
-const RETRIES = 3
+// 阶梯耗尽后人工裁决的三态: continue = 再走一轮阶梯;exit = 立即阻塞退出;
+// fallback = 无人应答/答非所问,按既定回落处理(本分支即阻塞;auto-core 分支上
+// 由配额降级环接管,改为切换候选模型后继续,见 model-routing-design.md)。
+export type RetryDecision = "continue" | "exit" | "fallback"
+
+// 人工答复归一化(纯函数,导出供单测): 空答复、超时、stdin 关闭一律归 fallback,
+// 使无人值守的跑批不会卡死也不会被静默放行。
+export function retryDecision(answer: string | undefined): RetryDecision {
+  const value = (answer ?? "").trim().toLowerCase()
+  if (/^(c|continue|retry|y|yes|继续|重试)$/.test(value)) return "continue"
+  if (/^(q|quit|exit|stop|n|no|退出|停止|停)$/.test(value)) return "exit"
+  return "fallback"
+}
+
+// 阶梯耗尽的人工等待: minutes = 0 时不问、直接回落(无人值守跑批的既定形态)。
+async function askRetry(minutes: number, task: Task, tries: number, question: string, interactive?: Interactive): Promise<RetryDecision> {
+  if (minutes <= 0) return "fallback"
+  log(`⏸ ${task.id} 自动重试 ${tries} 次仍失败,等待人工裁决(continue = 再试一轮,exit = 退出;${minutes} 分钟无应答按回落处理):\n${question}`)
+  return retryDecision(await askHuman(minutes, "continue = 再试一轮,exit = 退出", interactive))
+}
 
 async function attempt(
   client: OpencodeClient,
@@ -2059,11 +2152,14 @@ async function attempt(
       chain.id = previousId
       chain.used = previousUsed
       chain.at = previousAt
+      // 链状态还原,但失败会话本身留给重试环作首选分叉源(见 FailedSession)。
+      chain.failed = { id: sessionID, used: result.used }
       if (opts.dir && chain.phase) {
         if (prior) await saveProgress(opts.dir, prior)
         else await forgetProgress(opts.dir)
       }
     } else {
+      chain.failed = undefined
       await remember()
     }
     if (result.blocked) return result.blocked
