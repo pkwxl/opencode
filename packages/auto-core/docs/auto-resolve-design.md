@@ -285,8 +285,23 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
 > 你自主识别到的其他代答决策一并列入。
 
 `renderWrapup` 是同步纯函数(`src/prompt.ts` 只做数据组装,见 AGENTS.md),所以清单
-由两处调用点(`src/runner.ts:696` 与 `:1441`,均已在 `await runSession(...)` 表达式
-内)先 `await resolvesOf(...)` 读出、再作为 `opts.resolves` 传入。
+由两处调用点(`runTask` 的收尾与 `verifyTask` 修复轮后的收尾)先经模块私有
+`wrapupResolves(dir, task.id)`(`resolvesOf` + `catch` 吞空)读出、再作为
+`opts.resolves` 传入。
+
+**已实施(T-007)**:
+
+- 条件段是收尾提示词的**第 4 项**(前三项是文档更新 / report.md / 验收归属),受同一
+  句"以上全部完成前不要结束会话"统辖;`{{#if resolveList}}` 整段消失时逐字节等价改造
+  前的形态。
+- 清单**只列 driver 源**:agent 源是会话自己已经标注过的,再报一遍徒增噪声;**未配对
+  `matched` 的排在前**(§I 的"优先列未找到配对的"),它们正是最可能在报告里缺席的。
+- **不截断条数、不截断正文**:提示词要求"上面每一条都必须出现",丢条目会与该要求
+  自相矛盾;只把提问原文的换行与连续空白压成单行(多行提问会把清单结构冲散),空
+  问题不占位。
+- 预拼接在 `src/prompt.ts` 私有 `resolveList()`(模板语法刻意不做循环,清单类数据由
+  调用方拼成字符串,见 `src/template.ts` 头注释),不复用 `resolveHighlight`/
+  `compactText`:终端高亮要 80 字截断,提示词要全文,两者口径相反。
 
 这条闭环让持久记录不依赖 AI 自觉:driver 观测到的那部分被强制写进 git。
 
@@ -385,7 +400,7 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
 | T-004 | `src/resolve.ts` 全量 + `sameIssue` 上收 + `changedFiles` 上收 git.ts + `test/resolve.test.ts` | 新模块 | ✅ 593 pass |
 | T-005 | driver 采集接线 H1..H4 + `test/runner.test.ts` 七例 | `runner.ts` | ✅ 600 pass |
 | T-006 | 报文输出 H5/H6(三处置顶块构造函数 + 五处调用点)+ 逐任务 AUTO-DECISION 计数 | `loop.ts` / `resolve.ts` | ✅ 612 pass |
-| T-007 | 收尾闭环 H7 | `prompt.ts` / `wrapup.md` | ⬜ |
+| T-007 | 收尾闭环 H7(`renderWrapup` 增 `resolves` 入参 + `wrapup.md` 条件段 + 两处调用点读台账) | `prompt.ts` / `wrapup.md` / `runner.ts` | ✅ 616 pass |
 | T-008 | 文档同步(本文回填、structure.md、behavior.md、README、AGENTS.md 导航) | 文档 | ⬜ |
 
 **单测**(`test/resolve.test.ts`,mkdtemp 风格照 `test/stats.test.ts`):

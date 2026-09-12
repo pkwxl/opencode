@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Task } from "./plan"
+import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
 import { autoSwitches, type TaskContextMode } from "./switches"
@@ -191,11 +192,30 @@ export function subtaskOutputFile(task: Task, index: number): string {
 
 // Wrap-up session: every subtask is already ticked by the driver. Only docs
 // and the output-summary report remain.
-export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boolean } = {}): string {
+// resolves(收尾闭环 H7,docs/auto-resolve-design.md §I): driver 本任务观测到的代答
+// 清单,注入后要求 report.md 单列「自动代答问题」一节——持久审计轨迹由此不再依赖会话
+// 自觉标注,driver 看见的那部分被强制写进 git。本层是同步纯函数(prompt.ts 只做数据
+// 组装),清单由调用点(runner 的两处收尾)先 resolvesOf 读台账再传入。
+export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boolean; resolves?: ResolveItem[] } = {}): string {
   return renderPrompt("wrapup", {
     ...baseCtx(plan, task, opts),
     solo: Boolean(opts.solo),
+    resolveList: resolveList(opts.resolves),
   })
+}
+
+// 代答清单的预拼接(模板语法刻意不做循环,清单类数据由调用方拼成字符串,见
+// src/template.ts 头注释)。只列 driver 源: agent 源是会话自己已经标注过的,再报一遍
+// 徒增噪声。未配对 agent 标记的排在前(§I 的"优先列未找到配对的"),它们正是最可能在
+// 报告里缺席的那些。不截断条数、不截断正文——提示词要求"上面每一条都必须出现",丢条目
+// 会与该要求自相矛盾;只把提问原文的换行压成单行,否则多行提问会把清单结构冲散。
+function resolveList(items: ResolveItem[] | undefined): string | undefined {
+  const driver = (items ?? []).filter((item) => item.source === "driver")
+  const lines = [...driver.filter((item) => !item.matched), ...driver.filter((item) => item.matched)]
+    .map((item) => item.question.replace(/\s+/g, " ").trim())
+    .filter((question) => question.length > 0)
+    .map((question) => `   - ${question}`)
+  return lines.length ? lines.join("\n") : undefined
 }
 
 // Verify script generation session (fresh side session): translate the verify

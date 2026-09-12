@@ -6,6 +6,7 @@ import { loadModes } from "../src/mode"
 import { renderAgentContract } from "../src/loop"
 import { parse } from "../src/plan"
 import type { Phase } from "../src/phases"
+import type { ResolveItem } from "../src/resolve"
 import { autoSwitches } from "../src/switches"
 import { renderTemplate, renderText, usePromptLibrary } from "../src/template"
 import { verifyTmpDir } from "../src/verify"
@@ -78,6 +79,11 @@ const listPlan = parse(
 `,
 )
 const listTask = listPlan.tasks[0]!
+
+// 台账条目工厂(收尾闭环 H7 的清单入参): 缺省造一条 driver 源、未配对的代答。
+function resolveItem(question: string): ResolveItem {
+  return { at: 0, task: task.id, phase: "m", round: 1, source: "driver", question }
+}
 
 describe("renderDecompose", () => {
   test("要求只读分析并产出 subtasks.md 检查项", () => {
@@ -490,6 +496,48 @@ describe("renderWrapup", () => {
     expect(text).not.toContain("索引式")
     expect(text).toContain("产出摘要(改动了什么、关键决策与遗留事项)")
     expect(text).not.toContain("S<NN>")
+  })
+
+  // 收尾闭环 H7(docs/auto-resolve-design.md §I): driver 观测到的代答清单注入收尾
+  // 提示词,要求 report.md 单列「自动代答问题」节。
+  test("无代答(缺省/空清单)时代答段整体消失", () => {
+    for (const text of [renderWrapup(plan, task), renderWrapup(plan, task, { resolves: [] })]) {
+      expect(text).not.toContain("自动代答")
+      expect(text).not.toContain("AUTO-RESOLVE")
+      expect(text).not.toContain("resolveList")
+    }
+  })
+
+  test("有代答时逐条列出原问题,并要求 report.md 单列「自动代答问题」节", () => {
+    const text = renderWrapup(plan, task, { resolves: [resolveItem("是否把第三份 formatTokens 一并收口?")] })
+    expect(text).toContain("driver 自动代答了以下本应由你询问用户的问题")
+    expect(text).toContain("   - 是否把第三份 formatTokens 一并收口?")
+    expect(text).toContain("请在 docs/T-002/report.md 中单列「自动代答问题」一节")
+    expect(text).toContain("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")
+    expect(text).toContain("上面每一条都必须出现")
+    // 置于三项固定收尾要求之后、"以上全部完成前不要结束会话"之前
+    expect(text.indexOf("自动代答")).toBeGreaterThan(text.indexOf("report.md:"))
+    expect(text.indexOf("自动代答")).toBeLessThan(text.indexOf("以上全部完成前不要结束会话"))
+  })
+
+  test("清单只列 driver 源(agent 源已由会话自行标注),未配对的排在前", () => {
+    const text = renderWrapup(plan, task, {
+      resolves: [
+        { ...resolveItem("已配对的问题"), matched: true },
+        { ...resolveItem("会话自己标过的"), source: "agent", option: "方案甲", reason: "理由" },
+        resolveItem("没被标注的问题"),
+      ],
+    })
+    expect(text).not.toContain("会话自己标过的")
+    expect(text.indexOf("没被标注的问题")).toBeLessThan(text.indexOf("已配对的问题"))
+  })
+
+  test("多行提问压成单行,空问题不占位", () => {
+    const text = renderWrapup(plan, task, {
+      resolves: [resolveItem("折旧入账\n是否同样过   钳制?"), resolveItem("   ")],
+    })
+    expect(text).toContain("   - 折旧入账 是否同样过 钳制?")
+    expect(text).not.toContain("   - \n")
   })
 })
 
@@ -1331,6 +1379,7 @@ describe("模板渲染完整性", () => {
       renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, continuation: true }),
       renderWrapup(plan, task),
       renderWrapup(plan, task, { solo: true, mode: migrate }),
+      renderWrapup(plan, task, { resolves: [resolveItem("是否把第三份实现一并收口?")] }),
       renderWhole(plan, task, { ondemand: true, continuation: true, mode: migrate }),
       renderVerifyScriptGen(plan, task, "/tmp/auto/verify.sh"),
       renderVerifyJudge(plan, task, { script: "/s", code: 1, ms: 2, timedOut: true, timeoutReason: "idle", out: "/o" }),

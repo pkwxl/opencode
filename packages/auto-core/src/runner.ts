@@ -52,7 +52,7 @@ import {
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
-import { collectAgentResolves, compactText, recordResolves, sameIssue, type ResolveEvent } from "./resolve"
+import { collectAgentResolves, compactText, recordResolves, resolvesOf, sameIssue, type ResolveEvent, type ResolveItem } from "./resolve"
 import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { statsSessionBegin, statsSessionEnd, statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
@@ -142,6 +142,14 @@ async function collectSessionMarks(
   if (!found) return
   if (found.resolves) vlog(`⚑ ${task.id} ${stage}: 采集到 AUTO-RESOLVE 标记 ${found.resolves} 条`)
   if (found.decisions) vlog(`ℹ ${task.id} ${stage}: 记录 AUTO-DECISION ${found.decisions} 条`)
+}
+
+// 收尾会话的代答清单(auto-resolve H7,docs/auto-resolve-design.md §I): 本任务台账里
+// driver 观测到的代答问题,经 renderWrapup 注入收尾提示词,要求 report.md 单列「自动
+// 代答问题」一节——driver 看见的那部分因此被强制写进 git,持久记录不再依赖会话自觉。
+// 台账读失败一律吞成空(与 loop 侧三处置顶块同款): 审计永不影响流程与退出码。
+async function wrapupResolves(dir: string | undefined, taskID: string): Promise<ResolveItem[]> {
+  return await resolvesOf(dir, "task", taskID).catch(() => [])
 }
 
 // refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off):
@@ -727,7 +735,8 @@ export async function runTask(
           autobanner(`${task.id} ${task.title}: 收尾`)
           const subject = `${task.id} wrapup ${task.title}`
           chain.subject = subject
-          const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
+          const resolves = await wrapupResolves(dir, task.id)
+          const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto", resolves }), opts, chain)
           if (result.type === "blocked") return result
           await afterSession(dir, opts, task, { stage: "wrapup", subject })
         }
@@ -1472,7 +1481,8 @@ async function verifyTask(
       autobanner(`${task.id} ${task.title}: 收尾`)
       const wrapSubject = `${task.id} wrapup ${task.title}`
       chain.subject = wrapSubject
-      const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto" }), opts, chain)
+      const resolves = await wrapupResolves(dir, task.id)
+      const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto", resolves }), opts, chain)
       if (wrapped.type === "blocked") return wrapped
       await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
     }
