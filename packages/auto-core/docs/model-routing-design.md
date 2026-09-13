@@ -1,7 +1,8 @@
 # 阶段化模型路由与配额降级(Model Routing / Failover)设计
 
 状态: 已实施(2026-09-10,P1..P6 全部落地——switches 解析、runner 路由求值、错误归类、
-降级环、单测与文档;`bun typecheck` 干净、`bun test` 全绿)。P5 自动化验证已通过;三包真实
+降级环、单测与文档;`bun typecheck` 干净、`bun test` 全绿)。2026-09-13 补 P7:重试阶梯
+耗尽后的人工回落接入降级环(D.3 第二触发面),`bun test` 652→657 pass。P5 自动化验证已通过;三包真实
 冒烟待有 provider 凭证的环境(`OPENCODE_AUTO_E2E=1`)。实验开关层
 (`OPENCODE_AUTO_MODEL` / `OPENCODE_AUTO_MODEL_FALLBACK`),两者缺省未设 = 现有行为零变化,
 CLI 壳零改动,不落盘、不进 `ProjectConfig`。
@@ -168,10 +169,28 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 ### D.3 降级动作
 
-`runSession`(runner.ts:1879)的重试循环里,在 `result.retryable === false` 直接阻塞
-(runner.ts:1896-1899)**之前**插入一支: 分类为可降级且候选表还有未试项 →
-取下一候选(经 D.4 钳制)→ `chain.model = 候选` → 复用现有 fork 副本路径继续
-(runner.ts:1909-1922)。
+`runSession` 的重试循环里,在 `result.retryable === false` 直接阻塞**之前**插入一支:
+分类为可降级且候选表还有未试项 → 取下一候选(经 D.4 钳制)→ `chain.model = 候选` →
+复用现有 fork 副本路径继续。
+
+降级动作收在一个闭包 `switchModel(why)` 里,**两个触发面共用**:
+
+| 触发面 | 归类 | 时机 |
+| --- | --- | --- |
+| 配额降级(本设计) | `quota` / `auth` / `rate` | 立即,排在阶梯与人工裁决之前 |
+| 重试阶梯耗尽后的回落(2026-09-13 接入) | `transient` / `unknown` | 阶梯跑完 + 人工未答继续/退出 |
+
+第二个触发面补的是另一条出路: 阶梯对瞬时故障已无计可施(见
+`session-error-retry-plan.md`「2026-09-12 修正二」——上游退化以小时计,加码次数只是线性
+烧钱),而换一个 provider 是阶梯之外唯一还没试过的手段。人工明确答 `exit` 时不降级:那是
+「停下来」的指令,不是「再想办法」。分支顺序不变——quota/auth/rate 三类照旧在阶梯之前
+立即换模型,本条只给 transient/unknown 加出路。
+
+分叉源取与重试环同一套「保住最值钱的会话」判据(失败会话本体与链上原会话,按已积累用量
+取大者,0 用量的纯报错桩不进候选)。两条触发面的链状态形态不同,这套判据同时覆盖: 不可
+重试类 `attempt` 已把会话晋升到 `chain.id`、`chain.failed` 为空,选出的就是 `chain.id`
+(行为等价接入前);可重试类跑完阶梯回落到这里时,`attempt` 已把 `chain.id` 还原成下发前的
+原会话,真正攒着上下文的是 `chain.failed`,不看它就会把 100k+ 产出扔掉去开白板会话。
 
 上下文随迁是这里的收益而非意外: `session.fork` 逐条克隆消息
 (fork-decompose-design.md:341「fork 只搬消息,不复制 agent/model/permission」),而 prompt 级
@@ -185,9 +204,10 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 - 候选的 `limit.context`(B.5)已知且 `< opts.contextLimit` → 跳过该候选并 log 原因
   (防止降级后立刻撞上下文超限/交接预算,比原故障更糟)。上限未知(容错空映射)不过滤。
-- 候选耗尽 → 回落现有阻塞路径(退出码 2、回退 pending),契约不变;阻塞文案追加"已试候选清单"。
-- 降级计数与 `RETRIES = 3` 分离: 每个候选各享一轮既有重试,总上限 = 候选数 × RETRIES,
-  避免两个计数器互相掩盖。
+- 候选耗尽 → 回落现有阻塞路径(退出码 2、回退 pending),契约不变;阻塞文案追加"已试候选清单"
+  (配额支作 `(配额降级已用尽候选: …)`,阶梯回落支作 `(自动重试 n 次仍失败…;降级已用尽候选: …)`)。
+- 降级计数与重试阶梯分离: 每个候选各享一轮完整阶梯(切换时 `i = 1`),总上限 =
+  (1 + 候选数)× 阶梯长度,避免两个计数器互相掩盖。
 
 ### D.5 不跨链粘滞
 
@@ -215,6 +235,8 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 - driver 独占状态写入、统一提交、完成判定独立于 agent 自报——均与模型选择正交,不得借
   降级路径写 PLAN.md/CURRENT.md。
 - 现有 `retryable === false` 的语义(换会话无用)在**无候选表**时必须保持原行为。
+- 重试阶梯与人工裁决(`session-error-retry-plan.md`)在**无候选表**时必须保持原行为:
+  回落即阻塞,文案不提降级、不新增 fork、prompt 不带 `model`。
 
 ## G. 风险
 
@@ -237,6 +259,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 | P4 | `runSession` 降级支(D.3)+ 候选窗口钳制与耗尽(D.4)+ 降级 note(D.3) | `src/runner.ts` | 单测:quota 不可重试 + 两候选 → 第二次 prompt 带候选模型且上下文来自 fork;候选耗尽 → 仍 `blocked` |
 | P5 | 真实冒烟(`auto/` worktree 三包全量):设 `OPENCODE_AUTO_MODEL` 跑一轮 migrate 短流程,核对日志 `⇄`/百分比再基线;故意配错 provider 密钥触发 `auth` 降级 | `auto/` | 见 docs/behavior.md 冒烟约定;typecheck + 三包 test |
 | P6 | 文档:AGENTS.md 导航行已随本文加;实施后把本文状态改为「已实施(P1..P5)」并补 `docs/structure.md` / `docs/behavior.md` 的开关与降级段落 | `docs/`、`AGENTS.md` | 人工复核 |
+| P7 | 重试阶梯耗尽后的人工回落接入降级环(D.3 第二触发面):降级动作闭包化为 `switchModel()`、分叉源改用与重试环同一套「最值钱会话」判据 | `src/runner.ts`、`test/runner.test.ts` | 单测:transient 跑完阶梯 → 换候选重开一轮;人工答 `exit` 不降级;候选耗尽仍 `blocked` 且列清单;无候选表逐字节等价(不变量 F) |
 | 后续 | `overflow` → 换更大窗口模型的降级路(B.4/D.1 已留类别);转正宪法键(U1) | — | 另开设计 |
 
 ## I. 未决问题

@@ -370,74 +370,81 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
 
 // ---- 会话错误重试(session-error-retry-plan.md)----
 
+// 构造一个只发 session.error(可选 isRetryable)+ session.idle 的事件流,喂给
+// fakeClient 同款的 subscribe——outcomes 按 create/fork 调用顺序逐个消费,
+// 决定该次新建/分叉出的会话本轮是否报错。
+type Outcome = "error-retryable" | "error-fatal" | "ok"
+// used: 与 outcomes 同序的"该次会话末端上下文用量"(给数字则每次会话同额),不给则为
+// 0(纯报错桩)。
+// 经 message.updated 事件注入,与真实链路同一条计量路径(input + cache.read)。
+// message: 报错文案,决定 classifySessionError 的归类 —— 缺省 "usage limit" 落 quota
+// (配额支的既有用例据此),传 transient/unknown 文案则走重试阶梯。
+function retryClient(outcomes: Outcome[], used: number[] | number = [], message = "usage limit") {
+  // prompts 记每次下发参数(model 缺省时该属性不存在),供模型路由/降级断言。
+  const calls = { forks: [] as string[], creates: 0, prompts: [] as { sessionID: string; model?: { providerID: string; modelID: string }; parts: unknown[] }[] }
+  const queue: unknown[] = []
+  let index = 0
+  let seq = 0
+  const enqueue = (id: string) => {
+    const tokens = typeof used === "number" ? used : (used[index] ?? 0)
+    const outcome = outcomes[index++]
+    if (tokens > 0) {
+      queue.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: `msg_${id}`,
+            sessionID: id,
+            role: "assistant",
+            time: { completed: Date.now() },
+            tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            providerID: "zai",
+            modelID: "glm",
+          },
+        },
+      })
+    }
+    if (outcome === "error-retryable" || outcome === "error-fatal") {
+      queue.push({
+        type: "session.error",
+        properties: { sessionID: id, error: { name: "APIError", data: { message, isRetryable: outcome === "error-retryable" } } },
+      })
+    }
+    queue.push({ type: "session.idle", properties: { sessionID: id } })
+  }
+  const client = {
+    session: {
+      create: async () => {
+        calls.creates++
+        const id = `ses_new_${++seq}`
+        enqueue(id)
+        return { data: { id } }
+      },
+      fork: async (params: { sessionID: string }) => {
+        calls.forks.push(params.sessionID)
+        const id = `ses_fork_${calls.forks.length}`
+        enqueue(id)
+        return { data: { id } }
+      },
+      update: async () => ({}),
+      prompt: async (params: { sessionID: string; model?: { providerID: string; modelID: string }; parts: unknown[] }) => {
+        calls.prompts.push(params)
+        return {}
+      },
+      promptAsync: async () => ({}),
+      abort: async () => ({}),
+      messages: async () => ({ data: [] }),
+      get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
+    },
+    event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
+  } as unknown as OpencodeClient
+  return { client, calls }
+}
+
 describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞", () => {
   // 阶梯夹具: 两次重试、零等待 —— 次数与改造前的 RETRIES=3(共三次尝试)一致,
   // 使既有用例的报错条数与断言逐字节沿用;retryAsk=0 关掉人工等待(无人值守形态)。
   const NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0" })
-  // 构造一个只发 session.error(可选 isRetryable)+ session.idle 的事件流,喂给
-  // fakeClient 同款的 subscribe——outcomes 按 create/fork 调用顺序逐个消费,
-  // 决定该次新建/分叉出的会话本轮是否报错。
-  type Outcome = "error-retryable" | "error-fatal" | "ok"
-  // used: 与 outcomes 同序的"该次会话末端上下文用量",不给则为 0(纯报错桩)。
-  // 经 message.updated 事件注入,与真实链路同一条计量路径(input + cache.read)。
-  function retryClient(outcomes: Outcome[], used: number[] = []) {
-    const calls = { forks: [] as string[], creates: 0 }
-    const queue: unknown[] = []
-    let index = 0
-    let seq = 0
-    const enqueue = (id: string) => {
-      const tokens = used[index] ?? 0
-      const outcome = outcomes[index++]
-      if (tokens > 0) {
-        queue.push({
-          type: "message.updated",
-          properties: {
-            info: {
-              id: `msg_${id}`,
-              sessionID: id,
-              role: "assistant",
-              time: { completed: Date.now() },
-              tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-              providerID: "zai",
-              modelID: "glm",
-            },
-          },
-        })
-      }
-      if (outcome === "error-retryable" || outcome === "error-fatal") {
-        queue.push({
-          type: "session.error",
-          properties: { sessionID: id, error: { name: "APIError", data: { message: "usage limit", isRetryable: outcome === "error-retryable" } } },
-        })
-      }
-      queue.push({ type: "session.idle", properties: { sessionID: id } })
-    }
-    const client = {
-      session: {
-        create: async () => {
-          calls.creates++
-          const id = `ses_new_${++seq}`
-          enqueue(id)
-          return { data: { id } }
-        },
-        fork: async (params: { sessionID: string }) => {
-          calls.forks.push(params.sessionID)
-          const id = `ses_fork_${calls.forks.length}`
-          enqueue(id)
-          return { data: { id } }
-        },
-        update: async () => ({}),
-        prompt: async () => ({}),
-        promptAsync: async () => ({}),
-        abort: async () => ({}),
-        messages: async () => ({ data: [] }),
-        get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
-      },
-      event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
-    } as unknown as OpencodeClient
-    return { client, calls }
-  }
-
   test("isRetryable:false: 不 fork、不换新会话重试,直接阻塞", async () => {
     const { client, calls } = retryClient(["error-fatal"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
@@ -1311,6 +1318,120 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.forks.length).toBe(0)
     expect(calls.prompts.length).toBe(1)
     expect("model" in calls.prompts[0]!).toBe(false)
+  })
+})
+
+// ---- 阶梯耗尽后的回落接入配额降级环(T1):transient/unknown 耗尽阶梯 → 换候选续跑 ----
+// 与上组的区别:触发面不是 quota/auth/rate(那三类在阶梯之前就换模型),而是重试阶梯
+// 跑完、人工也没给出继续/退出时的回落支。用 retryClient:它按 create/fork 顺序给每个
+// 会话排事件,能如实模拟「每次重试都失败」并让失败会话带上真实用量。
+describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / exit 不降级 / 候选耗尽仍阻塞", () => {
+  // 零等待两级阶梯(首次 + 两次重试 = 三次尝试)+ 不等人工(retryAsk=0 ⇒ askRetry
+  // 直接回落)+ 两个候选。
+  const LADDER_FAILOVER = parseSwitches({
+    [SWITCH_ENV.retryWaits]: "0,0",
+    [SWITCH_ENV.retryAsk]: "0",
+    [SWITCH_ENV.modelFallback]: "prov/b,prov/c",
+  })
+  // 可重试(未标 isRetryable:false)⇒ 归类落 transient/unknown ⇒ 不进 quota 支,只能
+  // 走阶梯。每个会话带 50k 用量:失败会话有真实上下文才进分叉候选(0 用量是纯报错桩,
+  // 按设计不保),而这正是本项要保住的资产。
+  const TRANSIENT = "stream disconnected"
+  const allFail = (n = 12) => Array<Outcome>(n).fill("error-retryable")
+  const answering = (answers: (string | undefined)[]): Interactive => ({
+    attach() {},
+    question: async () => answers.shift(),
+    close() {},
+  })
+
+  test("阶梯耗尽 + 回落:切到首个候选(prov/b)、带降级 note 从最值钱的会话 fork 续跑,阶梯重开一轮", async () => {
+    // 三次尝试全失败 → 回落降级 → 第四次带 prov/b 成功。
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], 50_000, TRANSIENT)
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER_FAILOVER)
+    expect(result.type).toBe("idle")
+    expect(calls.prompts.length).toBe(4)
+    // 阶梯内三次尝试都不带 model(未设路由主模型),降级后第四次带首个候选。
+    for (const p of calls.prompts.slice(0, 3)) expect("model" in p).toBe(false)
+    expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "b" })
+    // 上下文随迁:降级从上一轮的失败会话(50k 用量,链上 chain.id 已被 attempt 还原为空)
+    // 分叉,而不是开白板新会话。
+    expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1", "ses_fork_2"])
+    expect(calls.creates).toBe(1)
+    expect(calls.prompts[3]!.sessionID).toBe("ses_fork_3")
+    // 一次性降级 note 已随该提示词下发并清除,文案点名触发原因。
+    const text = (calls.prompts[3]!.parts[0] as { text: string }).text
+    expect(text).toContain("[driver]")
+    expect(text).toContain("重试阶梯耗尽")
+    expect(text).toContain("已切换模型")
+    expect(chain.note).toBeUndefined()
+    // chain.model 停在生效候选上(作用域:chain 由 runTask 逐任务新建,下一个任务自动
+    // 回首选模型,无需退回逻辑)。
+    expect(chain.model).toBe("prov/b")
+  })
+
+  test("人工答 exit:不降级,立即阻塞(exit 是停下来,不是再想办法)", async () => {
+    const ask = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "1", [SWITCH_ENV.modelFallback]: "prov/b,prov/c" })
+    const { client, calls } = retryClient(allFail(), 50_000, TRANSIENT)
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", { interactive: answering(["exit"]) }, chain, undefined, undefined, ask)
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string }
+    expect(blocked.question).toContain("人工选择退出")
+    expect(blocked.question).not.toContain("已用尽候选")
+    // 三次尝试后即阻塞,没有第四次;没有任何 prompt 带 model,链上也没留下降级痕迹。
+    expect(calls.prompts.length).toBe(3)
+    expect(calls.prompts.every((p) => !("model" in p))).toBe(true)
+    expect(chain.model).toBeUndefined()
+  })
+
+  test("候选耗尽(每个候选各跑一轮完整阶梯仍失败):阻塞,文案列全部已试候选", async () => {
+    const { client, calls } = retryClient(allFail(), 50_000, TRANSIENT)
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER_FAILOVER)
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string }
+    expect(blocked.question).toContain("自动重试 2 次仍失败")
+    expect(blocked.question).toContain("降级已用尽候选")
+    expect(blocked.question).toContain("prov/b")
+    expect(blocked.question).toContain("prov/c")
+    // 有界、不挂死:主模型 + 每个候选各独享一轮三次尝试的阶梯。
+    expect(calls.prompts.length).toBe(3 * (1 + LADDER_FAILOVER.model.fallback.length))
+    // 后两轮分别带两个候选下发。
+    expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "b" })
+    expect(calls.prompts[6]!.model).toEqual({ providerID: "prov", modelID: "c" })
+  })
+
+  test("候选窗口钳制同样生效:窗口不足的候选被跳过,不作为回落目标下发", async () => {
+    const { client: base, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], 50_000, TRANSIENT)
+    const clamped = {
+      ...base,
+      provider: {
+        list: async () => ({
+          data: { all: [{ id: "prov", models: { b: { limit: { context: 1000 } } } }, { id: "prov2", models: { c: { limit: { context: 1_000_000 } } } }] },
+        }),
+      },
+    } as unknown as OpencodeClient
+    const CLAMP = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0", [SWITCH_ENV.modelFallback]: "prov/b,prov2/c" })
+    const result = await runSession(clamped, task, "提示词", { contextLimit: 5000 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, CLAMP)
+    expect(result.type).toBe("idle")
+    expect(calls.prompts[3]!.model).toEqual({ providerID: "prov2", modelID: "c" })
+    expect(calls.prompts.some((p) => p.model?.providerID === "prov" && p.model?.modelID === "b")).toBe(false)
+  })
+
+  test("不变量 F:候选表为空 ⇒ 阶梯耗尽照旧阻塞,文案与 model 面逐字节等价现状", async () => {
+    const NO_FAILOVER = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0" })
+    const { client, calls } = retryClient(allFail(), 50_000, TRANSIENT)
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_FAILOVER)
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string }
+    expect(blocked.question).toContain("自动重试 2 次仍失败")
+    expect(blocked.question).not.toContain("降级")
+    expect(blocked.question).not.toContain("已用尽候选")
+    expect(calls.prompts.length).toBe(3)
+    expect(calls.prompts.every((p) => !("model" in p))).toBe(true)
+    expect(chain.model).toBeUndefined()
   })
 })
 

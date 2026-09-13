@@ -317,7 +317,7 @@ opencode 1.18.x 对所有 provider 强制生效的 300s `headerTimeout`/`chunkTi
 | 阶梯耗尽 | 等人工裁决，`OPENCODE_AUTO_RETRY_ASK` 缺省 30 分钟 | 见下 |
 | 人工答 continue/继续 | 阶梯从头再走一轮 | 人在环里，不设轮数上限 |
 | 人工答 exit/退出 | 立即阻塞，文案标明是人工决定 | |
-| 超时／答非所问／stdin 关闭 | 回落（本分支 = 阻塞） | 无人值守的跑批既不能卡死，也不能被静默放行 |
+| 超时／答非所问／stdin 关闭 | 回落 = 切下一个候选模型续跑，候选耗尽（或未配候选表）才阻塞 | 无人值守的跑批既不能卡死，也不能被静默放行；换 provider 是阶梯之外唯一还没试过的手段 |
 
 **为什么耗尽后是等人工、而不是直接退出。** 优雅阻塞退出写的是 `active=false` 的恢复
 点，重跑时明确不复用旧会话——`resume.ts` 给的理由是「人工介入可能耗时数小时且会改动
@@ -325,13 +325,19 @@ opencode 1.18.x 对所有 provider 强制生效的 300s `headerTimeout`/`chunkTi
 都没改，只是等。于是退出这条路恰好把上一节刚花力气保住的那个会话扔掉了。留在进程里
 等，会话就还活着、还能继续分叉。
 
-**为什么不是「超时自动切备选模型」。** 这条本应是回落动作，但阶段化模型路由与配额降级
-（`chain.model` / `switches.model.fallback` / `classifySessionError`）只落在 `auto-core`
-分支，本修正所在的公共基点上整套机制都不存在。故本分支的回落 = 阻塞；`auto-core` 合并
-后由降级环接管回落动作，见 `model-routing-design.md`。届时的作用域天然满足「切备选仅在
-本次任务内有效」——`chain` 由 `runTask` 每个任务新建一条、任务内所有执行会话共享
-（`runner.ts` 的 "All execution sessions of a task share one chain"），`chain.model` 随
-之逐任务归零，下一个任务重新从首选模型起跑。
+**回落 = 切备选模型（2026-09-13 接上，仅 `auto-core` 分支）。** 这条本就该是回落动作，
+只是阶段化模型路由与配额降级（`chain.model` / `switches.model.fallback` /
+`classifySessionError`）只落在 `auto-core` 分支，本修正所在的公共基点上整套机制都不存在，
+故公共基点与 `migrate` 上回落 = 阻塞。`auto-core` 上该接缝已接通：`decision === "fallback"`
+且候选表非空时，走与配额降级支同一段逻辑（`switchModel()`）切下一个候选、重开一轮阶梯，
+候选耗尽才阻塞（文案追加「降级已用尽候选: …」）。人工明确答 `exit` 时不降级——那是
+「停下来」的指令，不是「再想办法」。详见 `model-routing-design.md` D.3。
+
+作用域天然满足「切备选仅在本次任务内有效」——`chain` 由 `runTask` 每个任务新建一条、
+任务内所有执行会话共享（`runner.ts` 的 "All execution sessions of a task share one chain"），
+`chain.model` 随之逐任务归零，下一个任务重新从首选模型起跑，无需额外的退回逻辑。已知
+偏差：同一任务的各子任务共用这条链，所以在第 3 个子任务切的备选会一直用到该任务最后一个
+子任务；若要按子任务重置是另一处改动，未做。
 
 ### 落地范围
 

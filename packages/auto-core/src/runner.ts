@@ -2108,6 +2108,76 @@ export async function runSession(
   // 出路是人工裁决,不是继续加码次数。
   const waits = switches.retryWaits
   let i = 1
+  // 候选降级的公共动作(两个触发面共用:下面的配额降级支、阶梯耗尽后的人工回落):
+  // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选,换 chain.model、挂一次性
+  // 降级 note、fork 副本带上下文随迁,并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
+  // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方按各自文案阻塞)。
+  // why 为触发原因的中文短语,进日志与降级 note。
+  const switchModel = async (why: string): Promise<boolean> => {
+    limits ??= await contextLimits(client)
+    // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
+    // 更糟);窗口未知(不在映射)不过滤。
+    let candidate: string | undefined
+    for (const c of switches.model.fallback) {
+      if (tried.includes(c)) continue
+      const limit = limits.get(c)
+      if (limit !== undefined && limit < cap) {
+        if (!clipped.includes(c)) {
+          clipped.push(c)
+          log(`⇄ ${task.id} 跳过候选 ${c}:上下文窗口 ${formatTokens(limit)} < 链需求 ${formatTokens(cap)},降级后恐立刻撞上限`)
+        }
+        continue
+      }
+      candidate = c
+      break
+    }
+    // 候选耗尽(全部试过,或全部被窗口钳制跳过)。
+    if (candidate === undefined) return false
+    // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
+    // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
+    // 一并标记已试(防被再选)。
+    const from = chain.model ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    if (from !== undefined && !tried.includes(from)) tried.push(from)
+    tried.push(candidate)
+    chain.model = candidate
+    // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
+    // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学)。
+    chain.note = `[driver] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
+    log(`⇄ ${task.id} ${why},链上下文保留,切换模型 ${from ?? "主模型"} → ${candidate}(候选 ${tried.length}/${switches.model.fallback.length})`)
+    i = 1
+    // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
+    // 换模型续跑无需重做上下文。分叉源与重试环同一套「保住最值钱的会话」判据:失败会话
+    // 本体(用量 > 0 才算,0 用量是纯报错桩)与链上原会话,取已积累用量大者。两条触发面
+    // 的链状态形态不同,这套判据同时覆盖:不可重试类(quota/auth/rate)attempt 已把会话
+    // 晋升到 chain.id、chain.failed 为空,选出的就是 chain.id(行为等价改造前);可重试类
+    // 跑完阶梯回落到这里时,attempt 把 chain.id 还原成了下发前的原会话、真正攒着上下文的
+    // 是 chain.failed,若不看它就会把 100k+ 产出扔掉去开白板会话。fork 成功即从副本续跑;
+    // 都不可用则回退全新会话——切换仍生效,仅不继承上下文。
+    const sources: { id: string; used: number; why: string }[] = []
+    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
+    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
+    chain.failed = undefined
+    sources.sort((a, b) => b.used - a.used)
+    for (const source of sources) {
+      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 降级`)
+      if (forked === undefined) continue
+      // chain.id 清空、改由 pending 承载分叉会话:note 非空 + chain.id 非空会命中
+      // attempt 的「中断恢复(resumed)复用原会话」分支而忽略 pending,故此处必须清 id,
+      // 让降级 note 随分叉副本会话下发(副本已含真实累计消息)。
+      chain.id = undefined
+      chain.pending = forked
+      chain.pct = 100
+      chain.used = source.used
+      return true
+    }
+    if (sources.length) log(`↻ 降级 fork 副本失败,切换仍生效、回退空白新会话(不继承上下文)`)
+    else log(`↻ 链上无会话上下文可继承,切换仍生效、开空白新会话`)
+    chain.id = undefined
+    chain.pct = 100
+    return true
+  }
+  // 候选耗尽时追加到阻塞文案后的清单:已试候选 + 因窗口不足跳过的候选。
+  const exhausted = () => `已用尽候选: ${tried.join(", ") || "无"}${clipped.length ? `;因上下文窗口不足跳过 ${clipped.join(", ")}` : ""}`
   for (;;) {
     const result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
     const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
@@ -2122,65 +2192,9 @@ export async function runSession(
     const classZh =
       result.errorClass === "quota" ? "配额受限" : result.errorClass === "auth" ? "provider 鉴权失败" : result.errorClass === "rate" ? "限流等待过久" : undefined
     if (switches.model.fallback.length > 0 && classZh !== undefined) {
-      limits ??= await contextLimits(client)
-      // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选:窗口已知且 < cap 者跳过
-      // 并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障更糟);窗口未知(不在映射)
-      // 不过滤。
-      let candidate: string | undefined
-      for (const c of switches.model.fallback) {
-        if (tried.includes(c)) continue
-        const limit = limits.get(c)
-        if (limit !== undefined && limit < cap) {
-          if (!clipped.includes(c)) {
-            clipped.push(c)
-            log(`⇄ ${task.id} 跳过候选 ${c}:上下文窗口 ${formatTokens(limit)} < 链需求 ${formatTokens(cap)},降级后恐立刻撞上限`)
-          }
-          continue
-        }
-        candidate = c
-        break
-      }
-      // 候选耗尽(全部试过,或全部被窗口钳制跳过)→ 回落阻塞(退出码语义不变,仍 blocked):
-      // 在原文案后追加「已试候选清单 + 因窗口不足跳过的候选」。
-      if (candidate === undefined) {
-        const clippedReason = clipped.length ? `;因上下文窗口不足跳过 ${clipped.join(", ")}` : ""
-        return { type: "blocked", question: `${result.question}\n(配额降级已用尽候选: ${tried.join(", ") || "无"}${clippedReason})`, retryable: result.retryable }
-      }
-      // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
-      // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
-      // 一并标记已试(防被再选)。
-      const from = chain.model ?? resolveModel(switches.model, opts.phase, roleOf(chain))
-      if (from !== undefined && !tried.includes(from)) tried.push(from)
-      tried.push(candidate)
-      chain.model = candidate
-      // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
-      // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学)。
-      chain.note = `[driver] 因${classZh}已切换模型继续,请沿用前文的产物格式与协议。`
-      log(`⇄ ${task.id} ${classZh},链上下文保留,切换模型 ${from ?? "主模型"} → ${candidate}(候选 ${tried.length}/${switches.model.fallback.length})`)
-      // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
-      // 换模型续跑无需重做上下文;attempt 已把 chain.id 停在承载真实累计消息的原会话。fork
-      // 成功即从副本续跑、i 重置 1(本候选独享一轮完整阶梯)。无 chain.id 或 fork 失败则回
-      // 退全新会话——切换仍生效,仅不继承上下文。
-      if (chain.id !== undefined) {
-        const forked = await forkSession(client, chain.id, chain.subject ?? `${task.id} 降级`)
-        if (forked !== undefined) {
-          // chain.id 清空、改由 pending 承载分叉会话:note 非空 + chain.id 非空会命中
-          // attempt 的「中断恢复(resumed)复用原会话」分支而忽略 pending,故此处必须清 id,
-          // 让降级 note 随分叉副本会话下发(副本已含真实累计消息)。
-          chain.id = undefined
-          chain.pending = forked
-          chain.pct = 100
-          i = 1
-          continue
-        }
-        log(`↻ 降级 fork 副本失败,切换仍生效、回退空白新会话(不继承上下文)`)
-      } else {
-        log(`↻ 链上无会话上下文可继承,切换仍生效、开空白新会话`)
-      }
-      chain.id = undefined
-      chain.pct = 100
-      i = 1
-      continue
+      if (await switchModel(classZh)) continue
+      // 候选耗尽 → 回落阻塞(退出码语义不变,仍 blocked),文案追加候选清单。
+      return { type: "blocked", question: `${result.question}\n(配额降级${exhausted()})`, retryable: result.retryable }
     }
     // 不可重试(isRetryable:false,如账号级限流): 换哪个会话都一样失败,直接
     // 阻塞——不进入下面的重试/fork 逻辑。attempt() 已保证 chain.id 落在这一轮
@@ -2206,6 +2220,17 @@ export async function runSession(
         continue
       }
       const why = decision === "exit" ? ",人工选择退出" : switches.retryAsk > 0 ? ",人工未裁决" : ""
+      // 回落(无人应答/答非所问/retryAsk=0 的无人值守形态)接配额降级环:阶梯对
+      // transient/unknown 已无计可施,但换一个 provider 仍可能跑通——与 quota 支同一段
+      // 逻辑(tried 去重、窗口钳制、chain.model + 降级 note、fork 带上下文、i=1 重开阶
+      // 梯)。人工明确答 exit 时不降级:那是「停下来」的指令,不是「再想想办法」。
+      // 候选表为空时整段跳过,逐字节等价改造前(不变量 F)。
+      // 作用域:chain 由 runTask 逐任务新建,chain.model 随之逐任务归零,下一个任务自动
+      // 从首选模型重新起跑——「切备选仅在本次任务内有效」天然成立,无需退回逻辑。
+      if (decision === "fallback" && switches.model.fallback.length > 0) {
+        if (await switchModel("重试阶梯耗尽")) continue
+        return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why};降级${exhausted()})` }
+      }
       return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why})` }
     }
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
@@ -2289,8 +2314,8 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
 }
 
 // 阶梯耗尽后人工裁决的三态: continue = 再走一轮阶梯;exit = 立即阻塞退出;
-// fallback = 无人应答/答非所问,按既定回落处理(本分支即阻塞;auto-core 分支上
-// 由配额降级环接管,改为切换候选模型后继续,见 model-routing-design.md)。
+// fallback = 无人应答/答非所问,按既定回落处理(本分支由配额降级环接管:配置了候选
+// 表就切下一个候选模型继续,候选耗尽或未配置才阻塞,见 model-routing-design.md)。
 export type RetryDecision = "continue" | "exit" | "fallback"
 
 // 人工答复归一化(纯函数,导出供单测): 空答复、超时、stdin 关闭一律归 fallback,
