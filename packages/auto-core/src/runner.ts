@@ -54,7 +54,7 @@ import {
 import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { collectAgentResolves, compactText, recordResolves, resolvesOf, sameIssue, type ResolveEvent, type ResolveItem } from "./resolve"
-import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type Progress, type StepKind } from "./resume"
+import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { statsSessionBegin, statsSessionEnd, statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
 import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
@@ -431,15 +431,56 @@ const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000
 // 为其一半、交接 steer 阈值为其 2 倍。
 const DEFAULT_CONTEXT_LIMIT = 64_000
 
-// 中断记录的子任务归属校验: active 记录标注了归属子任务序号(index),而 PLAN.md
-// 中该检查项已被勾选——中断发生在子任务结束后的间歇(勾选/提交/步进暂停期间),
-// 会话属于已完成的子任务,记录陈旧应淘汰(恢复时不复用、转总结态),防下一子任务
-// 误把它当作自己的中断会话继续。序号缺失(老记录/间歇总结态)或检查项未勾选时不
-// 属陈旧,保持原恢复语义。
-export function staleSubtaskRecord(recalled: Progress, body: string): boolean {
-  const phase = recalled.phase
-  if (recalled.active !== true || phase?.kind !== "subtasks" || typeof phase.index !== "number") return false
-  return subtasks(body)[phase.index - 1]?.done === true
+// 恢复点的单元归属门禁: active 记录的中断会话属于某个具体执行单元(任务级
+// 阶段/子任务#N/修复检查项#N),仅当本次运行将重跑该单元时返回 true(允许
+// 复用其会话)。单元已过(检查项序号错位:中断发生在子任务收口后的间歇)、
+// 配置/实验开关变更使该单元不再执行、或记录缺失序号无法判定归属(老版本
+// 记录)时返回 false——恢复只发生在原单元重跑时,防下一单元误续上一单元的
+// 中断会话。ctx 由调用方按当前 PLAN.md/文件状态预计算(文件 IO 不进本函数)。
+export type UnitRerunCtx = {
+  // 子任务模式(auto/off/ondemand)与 fork 开关(understand/decompose 单元的运行条件)
+  mode: "auto" | "off" | "ondemand"
+  fork: boolean
+  // 当前 PLAN.md 检查项(含 review 注入的修复项)
+  items: { text: string; done: boolean }[]
+  // docs/<id>/context.md 已有有效摘要 / subtasks.md 已有检查项(理解/分解单元将幂等跳过)
+  contextExists: boolean
+  subtasksFileItems: number
+  // 收尾/验收/审核单元本轮是否会跑(配置与豁免已计入)
+  wrapup: boolean
+  verify: boolean
+  review: boolean
+}
+
+export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean {
+  const firstUnticked = ctx.items.findIndex((item) => !item.done)
+  // 序号归属: 记录的检查项恰为当前首个未勾选项 = 该单元将重跑
+  const atItem = (index: number | undefined) => index !== undefined && firstUnticked === index - 1
+  switch (phase?.kind) {
+    case "understand":
+      return ctx.mode === "auto" && ctx.fork && ctx.items.length === 0 && !ctx.contextExists
+    case "decompose":
+      // 理解单元先跑(fork 且摘要缺失)时,分解会话不是首个消费链的单元
+      return ctx.mode === "auto" && ctx.items.length === 0 && ctx.subtasksFileItems === 0 && !(ctx.fork && !ctx.contextExists)
+    case "whole":
+      return ctx.mode !== "auto"
+    case "subtasks":
+      return atItem(phase.index)
+    case "wrapup":
+      return ctx.wrapup && firstUnticked === -1
+    case "verify":
+      // active 的 verify 记录只会是修复轮执行会话(generate 为旁路、exec 由 driver 承担)
+      return phase.stage === "fix" && ctx.verify
+    case "review":
+      // 审核/修复规划是独立旁路会话(重跑恒新建);active 记录只会是 fixrun 检查项会话
+      return phase.stage === "fixrun" && ctx.review && atItem(phase.index)
+    case "step":
+      // step 恢复点由 loop 经 openStep 判定归属,不经任务流水线复用
+      return true
+    case undefined:
+      // 旧版无阶段记录(session.json): 无法判定单元归属,不复用(恢复走默认流程)
+      return false
+  }
 }
 
 // Runs one task through the pipeline; the driver owns all state
@@ -507,7 +548,13 @@ export function staleSubtaskRecord(recalled: Progress, body: string): boolean {
 // injected without a new planning session. Network-failure blockades keep the
 // active record (the session is in-flight and unsummarized); every other
 // blocked/incomplete exit finalizes the summary (CURRENT.md remark) and drops
-// reuse eligibility. Permission requests follow --permission (default
+// reuse eligibility. Session reuse is gated by unit attribution (unitReruns):
+// the interrupted session belongs to one concrete execution unit (pipeline
+// stage / subtask #N / review-fix item #N) and is resumed only when that unit
+// will actually rerun — a unit already passed, disabled by config/switches, or
+// unattributable (legacy record without index) seals the record and starts a
+// fresh session, so the next unit never inherits a stranger's session.
+// Permission requests follow --permission (default
 // ask-deny): auto-allow grants immediately; ask-* wait for a human (per
 // --wait-answer) and time out into auto-allow / auto-deny (session
 // continues) / abort+block (ask-fail). Blocking happens on a repeated
@@ -539,13 +586,29 @@ export async function runTask(
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
     chain.phase = recalled.phase
-    // 子任务归属淘汰: 中断发生在子任务结束后的间歇时,记录可能仍把上一子任务的
-    // 会话标为 active;归属检查项已勾选 = 该子任务已完成,中断记录陈旧——转总结态
-    // 且不再复用其会话(无序号的老记录无法判定归属,保持原恢复语义)。
-    const stale = staleSubtaskRecord(recalled, requireTask(await load(plan.path), task.id).body)
-    if (stale) {
-      await saveProgress(dir, { ...recalled, active: false })
-      recalled.active = false
+    // 单元归属门禁(unitReruns): 中断会话属于某个具体执行单元(任务级阶段/子任务
+    // #N/修复检查项#N),仅当本次运行将重跑该单元才允许复用其会话;否则(单元已过、
+    // 配置/开关变更使其不再执行、老记录缺序号无法判定归属)记录转总结态、开新会话
+    // ——防已进入下一单元时误续上一单元的中断会话。
+    let rerun = true
+    if (recalled.active === true) {
+      const fresh = requireTask(await load(plan.path), task.id)
+      const planDir = dirname(plan.path)
+      const exempt = Boolean(parseFinalMark(fresh.final)) || opts.phase === "v"
+      rerun = unitReruns(recalled.phase, {
+        mode,
+        fork: switches.fork,
+        items: subtasks(fresh.body),
+        contextExists: (await Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "context"))).text().catch(() => "")).trim().length > 0,
+        subtasksFileItems: subtasks(await Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "subtasks"))).text().catch(() => "")).length,
+        wrapup: opts.wrapup ?? true,
+        verify: opts.verify === true && !exempt,
+        review: !exempt && (opts.review ?? 0) > 0,
+      })
+      if (!rerun) {
+        await saveProgress(dir, { ...recalled, active: false })
+        recalled.active = false
+      }
     }
     const handedOff =
       recalled.active === true &&
@@ -581,8 +644,8 @@ export async function runTask(
         await saveProgress(dir, { ...recalled, active: false })
       }
       chain.note = resumeNote(recalled.phase, false)
-      const why = stale
-        ? "中断于上一子任务结束后的间歇,归属检查项已勾选,淘汰陈旧中断记录,开新会话继续"
+      const why = !rerun
+        ? "中断会话所属的执行单元本次不会重跑(已完成或不再执行),其恢复点已淘汰,开新会话继续"
         : handedOff
           ? "中断前已写出交接文档,开新会话凭交接续跑"
           : opts.newSession
@@ -749,17 +812,19 @@ export async function runTask(
           const items = subtasks(task.body)
           const index = items.findIndex((item) => !item.done)
           if (index === -1) break
-          // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘;间歇期
-          // 中断的恢复据此淘汰"归属检查项已勾选"的陈旧中断会话(staleSubtaskRecord)。
-          chain.phase = { kind: "subtasks", index: index + 1 }
+          // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘,恢复时
+          // 经单元归属门禁(unitReruns)仅当该子任务将重跑才复用其会话。review 修复轮
+          // (fixrun)保持 review 阶段标记(round/stage 供精确重入),仅追加序号。
+          const loopPhase: Phase = chain.phase?.kind === "review" ? chain.phase : { kind: "subtasks" }
+          chain.phase = { ...loopPhase, index: index + 1 }
           const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork)
           if (blocked) return blocked
           // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。
           task = requireTask(await load(plan.path), task.id)
-          // 子任务已收口(勾选+统一提交): 进度记录刷新为总结态(active=false)——
-          // 子任务间歇(步进暂停/回试处理)期间中断不再遗留"半途未总结"的上一子任务
-          // 会话,恢复时不会被下一子任务误续。
-          await persistStage({ kind: "subtasks" })
+          // 子任务已收口(勾选+统一提交): 进度记录刷新为总结态(active=false,剥离
+          // 序号)——子任务间歇(步进暂停/回试处理)期间中断不再遗留"半途未总结"的
+          // 上一单元会话,恢复时不会被下一单元误续。
+          await persistStage(loopPhase)
           // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
           // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
           // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。

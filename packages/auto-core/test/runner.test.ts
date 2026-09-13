@@ -6,8 +6,8 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
-import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, staleSubtaskRecord, type ForkBaseInfo, type SessionChain } from "../src/runner"
-import { openStep, recallProgress, saveProgress, type Progress } from "../src/resume"
+import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
+import { openStep, recallProgress, saveProgress } from "../src/resume"
 import { resolvesOf } from "../src/resolve"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -1010,24 +1010,70 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
   })
 })
 
-describe("staleSubtaskRecord(子任务间歇中断记录的归属淘汰)", () => {
-  const body = "- [x] 第一项\n- [ ] 第二项\n- [ ] 第三项"
-  const record = (phase: Progress["phase"], active = true): Progress => ({ task: "T-001", session: "ses_x", at: 1, active, phase })
-
-  test("active 记录归属的检查项已勾选 = 陈旧(中断于子任务结束后的间歇)", () => {
-    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 1 }), body)).toBe(true)
+describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑才允许复用)", () => {
+  const ctx = (over: Partial<UnitRerunCtx> = {}): UnitRerunCtx => ({
+    mode: "auto",
+    fork: true,
+    items: [{ text: "第一项", done: true }, { text: "第二项", done: false }, { text: "第三项", done: false }],
+    contextExists: false,
+    subtasksFileItems: 0,
+    wrapup: true,
+    verify: true,
+    review: true,
+    ...over,
   })
 
-  test("归属检查项未勾选 = 非陈旧(子任务进行中/勾选前中断,照常恢复)", () => {
-    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 2 }), body)).toBe(false)
-    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 3 }), body)).toBe(false)
+  test("subtasks: 归属序号恰为首个未勾选项才可复用;已勾选(间歇期中断)/缺序号(老记录)/越界均否", () => {
+    expect(unitReruns({ kind: "subtasks", index: 2 }, ctx())).toBe(true)
+    expect(unitReruns({ kind: "subtasks", index: 1 }, ctx())).toBe(false) // 中断于子任务 1 收口后的间歇
+    expect(unitReruns({ kind: "subtasks", index: 3 }, ctx())).toBe(false)
+    expect(unitReruns({ kind: "subtasks" }, ctx())).toBe(false) // 老版本无序号记录: 无法判定归属
+    expect(unitReruns({ kind: "subtasks", index: 9 }, ctx())).toBe(false)
   })
 
-  test("无序号(老记录/间歇总结态)、非 active、非 subtasks 阶段、序号越界均不判陈旧", () => {
-    expect(staleSubtaskRecord(record({ kind: "subtasks" }), body)).toBe(false)
-    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 1 }, false), body)).toBe(false)
-    expect(staleSubtaskRecord(record({ kind: "whole" }), body)).toBe(false)
-    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 9 }), body)).toBe(false)
+  test("understand/decompose: 产物已出现(摘要在位/检查项已注入)使单元幂等跳过 → 不复用", () => {
+    const noItems = ctx({ items: [] })
+    expect(unitReruns({ kind: "understand" }, noItems)).toBe(true)
+    expect(unitReruns({ kind: "understand" }, ctx({ items: [] }))).toBe(true)
+    expect(unitReruns({ kind: "understand" }, ctx({ items: [], contextExists: true }))).toBe(false)
+    expect(unitReruns({ kind: "understand" }, ctx({ items: [], fork: false }))).toBe(false)
+    expect(unitReruns({ kind: "understand" }, ctx({ items: [], mode: "off" }))).toBe(false)
+    // decompose: 理解单元将先跑(摘要缺失)时,分解会话不是首个消费链的单元
+    expect(unitReruns({ kind: "decompose" }, noItems)).toBe(false)
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], contextExists: true }))).toBe(true)
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], fork: false }))).toBe(true)
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], subtasksFileItems: 3, contextExists: true }))).toBe(false)
+    // 已有检查项时两个前置单元都不再跑
+    expect(unitReruns({ kind: "understand" }, ctx())).toBe(false)
+    expect(unitReruns({ kind: "decompose" }, ctx())).toBe(false)
+  })
+
+  test("whole/wrapup: 模式或配置使单元不跑 → 不复用;wrapup 要求检查项已全部勾完", () => {
+    expect(unitReruns({ kind: "whole" }, ctx({ mode: "off" }))).toBe(true)
+    expect(unitReruns({ kind: "whole" }, ctx({ mode: "ondemand" }))).toBe(true)
+    expect(unitReruns({ kind: "whole" }, ctx({ mode: "auto" }))).toBe(false)
+    const done = ctx({ items: [{ text: "唯一项", done: true }] })
+    expect(unitReruns({ kind: "wrapup" }, done)).toBe(true)
+    expect(unitReruns({ kind: "wrapup" }, ctx())).toBe(false) // 尚有未勾项,下一个单元是子任务
+    expect(unitReruns({ kind: "wrapup" }, ctx({ items: [], wrapup: false }))).toBe(false)
+  })
+
+  test("verify/review: active 记录只会是链上修复会话;旁路阶段与开关关闭均不复用", () => {
+    const fix = { kind: "verify", stage: "fix", round: 1, rechecks: 0, replaced: false } as const
+    expect(unitReruns(fix, ctx())).toBe(true)
+    expect(unitReruns(fix, ctx({ verify: false }))).toBe(false)
+    expect(unitReruns({ kind: "verify", stage: "judge", round: 1, rechecks: 0, replaced: false }, ctx())).toBe(false)
+    const fixrun = { kind: "review", round: 1, stage: "fixrun", index: 2 } as const
+    expect(unitReruns(fixrun, ctx())).toBe(true)
+    expect(unitReruns(fixrun, ctx({ review: false }))).toBe(false)
+    expect(unitReruns({ kind: "review", round: 1, stage: "fixrun", index: 1 }, ctx())).toBe(false)
+    expect(unitReruns({ kind: "review", round: 1, stage: "fixrun" }, ctx())).toBe(false) // 老记录无序号
+    expect(unitReruns({ kind: "review", round: 1, stage: "audit" }, ctx())).toBe(false) // 旁路会话重跑恒新建
+  })
+
+  test("无阶段(旧版 session.json)无法判定归属 → 不复用;step 记录不归本门禁", () => {
+    expect(unitReruns(undefined, ctx())).toBe(false)
+    expect(unitReruns({ kind: "step", step: "phase-plan", letter: "m" }, ctx())).toBe(true)
   })
 
   test("phaseText 的 subtasks 文案带归属序号", () => {

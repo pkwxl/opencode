@@ -54,18 +54,23 @@ export type StepKind = "phase-plan" | "phase-handover"
 // - decompose: auto 模式分解会话阶段(检查项尚未注入)
 // - whole: off/ondemand 模式整任务单会话执行阶段
 // - subtasks: 逐子任务会话阶段(从首个未勾选项继续);index = 归属子任务的 1 起
-//   序号,仅子任务会话的 active 记录携带(间歇/总结态记录不带)——中断发生在
-//   子任务结束后的间歇时,恢复凭 index 判定归属检查项已勾选即淘汰陈旧记录,
-//   不让下一子任务误把上一子任务的中断会话当作自己的继续
+//   序号,仅子任务会话的 active 记录携带(间歇/总结态记录不带)
 // - wrapup: 收尾会话阶段
 // - verify: 任务级验收;stage = generate(脚本生成)/ exec(脚本执行)/ judge(判定)/
 //   fix(修复轮进行中,gap 为判定差距原文,中断恢复时凭它重新下发修复提示);
 //   round/rechecks/replaced 为修复轮与重验轮计数,run 为已执行的脚本运行记录,
 //   audit 为 early 并行审核已得出的结论
 // - review: 质量审核外层循环;round 为当前轮,stage = audit(审核会话)/
-//   planfix(修复规划,docs/<id>.fix.md 可能已产出)/ fixrun(修复检查项执行中)
+//   planfix(修复规划,docs/<id>.fix.md 可能已产出)/ fixrun(修复检查项执行中);
+//   fixrun 检查项会话的 active 记录携带 index(归属检查项的 1 起序号)
 // - step: 阶段级旁路步骤(phase-plan/phase-handover),letter 标注归属阶段;
 //   driver 收口前记录保持 active,中断后据此让会话恢复优先于文件推导路由
+//
+// 单元归属门禁(runner.unitReruns): active 记录的会话属于某个具体执行单元
+// (任务级阶段/子任务#N/修复检查项#N),恢复时仅当本次运行将重跑该单元才允许
+// 复用其会话;单元已过、配置/开关变更使其不再执行、或记录缺失序号无法判定
+// 归属(老版本记录)时,记录转总结态、开新会话——恢复只发生在原单元重跑时,
+// 不让下一单元误续上一单元的中断会话。
 export type Phase =
   | { kind: "understand" }
   | { kind: "decompose" }
@@ -84,7 +89,7 @@ export type Phase =
       // renderFix 续跑修复(执行链会话被复用时上下文不丢,差距文本仍随记录恢复)。
       gap?: string
     }
-  | { kind: "review"; round: number; stage: "audit" | "planfix" | "fixrun" }
+  | { kind: "review"; round: number; stage: "audit" | "planfix" | "fixrun"; index?: number }
   | { kind: "step"; step: StepKind; letter: PhaseLetter }
 
 export type Progress = {
