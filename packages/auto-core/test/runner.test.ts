@@ -6,8 +6,8 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
-import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
-import { openStep, recallProgress, saveProgress } from "../src/resume"
+import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, staleSubtaskRecord, type ForkBaseInfo, type SessionChain } from "../src/runner"
+import { openStep, recallProgress, saveProgress, type Progress } from "../src/resume"
 import { resolvesOf } from "../src/resolve"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -1007,6 +1007,32 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
     ).toBe("verify-judge")
     expect(roleOf({ pct: 100, used: 0, at: 0, phase: { kind: "wrapup" } })).toBe("wrapup")
     expect(roleOf({ pct: 100, used: 0, at: 0 })).toBe("bypass")
+  })
+})
+
+describe("staleSubtaskRecord(子任务间歇中断记录的归属淘汰)", () => {
+  const body = "- [x] 第一项\n- [ ] 第二项\n- [ ] 第三项"
+  const record = (phase: Progress["phase"], active = true): Progress => ({ task: "T-001", session: "ses_x", at: 1, active, phase })
+
+  test("active 记录归属的检查项已勾选 = 陈旧(中断于子任务结束后的间歇)", () => {
+    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 1 }), body)).toBe(true)
+  })
+
+  test("归属检查项未勾选 = 非陈旧(子任务进行中/勾选前中断,照常恢复)", () => {
+    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 2 }), body)).toBe(false)
+    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 3 }), body)).toBe(false)
+  })
+
+  test("无序号(老记录/间歇总结态)、非 active、非 subtasks 阶段、序号越界均不判陈旧", () => {
+    expect(staleSubtaskRecord(record({ kind: "subtasks" }), body)).toBe(false)
+    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 1 }, false), body)).toBe(false)
+    expect(staleSubtaskRecord(record({ kind: "whole" }), body)).toBe(false)
+    expect(staleSubtaskRecord(record({ kind: "subtasks", index: 9 }), body)).toBe(false)
+  })
+
+  test("phaseText 的 subtasks 文案带归属序号", () => {
+    expect(phaseText({ kind: "subtasks", index: 2 })).toBe("逐子任务执行阶段(中断于子任务 2,从首个未勾选项继续)")
+    expect(phaseText({ kind: "subtasks" })).toBe("逐子任务执行阶段(从首个未勾选项继续)")
   })
 })
 

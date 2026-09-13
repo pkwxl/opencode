@@ -54,7 +54,7 @@ import {
 import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { collectAgentResolves, compactText, recordResolves, resolvesOf, sameIssue, type ResolveEvent, type ResolveItem } from "./resolve"
-import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
+import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type Progress, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { statsSessionBegin, statsSessionEnd, statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
 import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
@@ -431,6 +431,17 @@ const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000
 // 为其一半、交接 steer 阈值为其 2 倍。
 const DEFAULT_CONTEXT_LIMIT = 64_000
 
+// 中断记录的子任务归属校验: active 记录标注了归属子任务序号(index),而 PLAN.md
+// 中该检查项已被勾选——中断发生在子任务结束后的间歇(勾选/提交/步进暂停期间),
+// 会话属于已完成的子任务,记录陈旧应淘汰(恢复时不复用、转总结态),防下一子任务
+// 误把它当作自己的中断会话继续。序号缺失(老记录/间歇总结态)或检查项未勾选时不
+// 属陈旧,保持原恢复语义。
+export function staleSubtaskRecord(recalled: Progress, body: string): boolean {
+  const phase = recalled.phase
+  if (recalled.active !== true || phase?.kind !== "subtasks" || typeof phase.index !== "number") return false
+  return subtasks(body)[phase.index - 1]?.done === true
+}
+
 // Runs one task through the pipeline; the driver owns all state
 // writes to PLAN.md and CURRENT.md, sessions never edit them.
 // --subtask auto (default): decompose (when the task body has no checklist) →
@@ -528,6 +539,14 @@ export async function runTask(
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
     chain.phase = recalled.phase
+    // 子任务归属淘汰: 中断发生在子任务结束后的间歇时,记录可能仍把上一子任务的
+    // 会话标为 active;归属检查项已勾选 = 该子任务已完成,中断记录陈旧——转总结态
+    // 且不再复用其会话(无序号的老记录无法判定归属,保持原恢复语义)。
+    const stale = staleSubtaskRecord(recalled, requireTask(await load(plan.path), task.id).body)
+    if (stale) {
+      await saveProgress(dir, { ...recalled, active: false })
+      recalled.active = false
+    }
     const handedOff =
       recalled.active === true &&
       ((mode !== "off" && (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "handoff"))).exists())) ||
@@ -562,13 +581,15 @@ export async function runTask(
         await saveProgress(dir, { ...recalled, active: false })
       }
       chain.note = resumeNote(recalled.phase, false)
-      const why = handedOff
-        ? "中断前已写出交接文档,开新会话凭交接续跑"
-        : opts.newSession
-          ? "--new-session 指定,开新会话继续"
-          : errorStub
-            ? "原会话只挨了一记报错、无真实产出,开新会话继续"
-            : "原会话不可复用,开新会话继续"
+      const why = stale
+        ? "中断于上一子任务结束后的间歇,归属检查项已勾选,淘汰陈旧中断记录,开新会话继续"
+        : handedOff
+          ? "中断前已写出交接文档,开新会话凭交接续跑"
+          : opts.newSession
+            ? "--new-session 指定,开新会话继续"
+            : errorStub
+              ? "原会话只挨了一记报错、无真实产出,开新会话继续"
+              : "原会话不可复用,开新会话继续"
       log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why})`)
     }
   }
@@ -728,10 +749,17 @@ export async function runTask(
           const items = subtasks(task.body)
           const index = items.findIndex((item) => !item.done)
           if (index === -1) break
+          // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘;间歇期
+          // 中断的恢复据此淘汰"归属检查项已勾选"的陈旧中断会话(staleSubtaskRecord)。
+          chain.phase = { kind: "subtasks", index: index + 1 }
           const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork)
           if (blocked) return blocked
           // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。
           task = requireTask(await load(plan.path), task.id)
+          // 子任务已收口(勾选+统一提交): 进度记录刷新为总结态(active=false)——
+          // 子任务间歇(步进暂停/回试处理)期间中断不再遗留"半途未总结"的上一子任务
+          // 会话,恢复时不会被下一子任务误续。
+          await persistStage({ kind: "subtasks" })
           // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
           // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
           // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。
@@ -960,7 +988,7 @@ export function phaseText(phase: Phase | undefined): string {
     case "whole":
       return "整任务单会话执行阶段"
     case "subtasks":
-      return "逐子任务执行阶段(从首个未勾选项继续)"
+      return `逐子任务执行阶段(${phase.index !== undefined ? `中断于子任务 ${phase.index},` : ""}从首个未勾选项继续)`
     case "wrapup":
       return "收尾阶段(docs 报告与提交)"
     case "verify":
@@ -2544,7 +2572,8 @@ async function attempt(
     // 真实恢复点,交给 runSession 的重试循环从原会话重新 fork。不可重试的会话
     // 错误、非会话错误类阻塞与成功一律"晋升":chain.id 落在这一轮实际用过的会话
     // 上并刷新 progress.json(会话结束但阶段尚未推进时,保持 active——此刻中断
-    // 按"半途未总结"复用本会话继续,无时间窗,恢复时只看会话是否存活)。
+    // 按"半途未总结"复用本会话继续,无时间窗,恢复时只看会话是否存活;子任务间歇
+    // 的窗口由 pipeline 在勾选+提交后经 persistStage 主动收口为总结态)。
     if (result.error && result.retryable !== false) {
       chain.id = previousId
       chain.used = previousUsed

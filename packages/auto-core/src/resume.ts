@@ -53,7 +53,10 @@ export type StepKind = "phase-plan" | "phase-handover"
 //   不经过该阶段)
 // - decompose: auto 模式分解会话阶段(检查项尚未注入)
 // - whole: off/ondemand 模式整任务单会话执行阶段
-// - subtasks: 逐子任务会话阶段(从首个未勾选项继续)
+// - subtasks: 逐子任务会话阶段(从首个未勾选项继续);index = 归属子任务的 1 起
+//   序号,仅子任务会话的 active 记录携带(间歇/总结态记录不带)——中断发生在
+//   子任务结束后的间歇时,恢复凭 index 判定归属检查项已勾选即淘汰陈旧记录,
+//   不让下一子任务误把上一子任务的中断会话当作自己的继续
 // - wrapup: 收尾会话阶段
 // - verify: 任务级验收;stage = generate(脚本生成)/ exec(脚本执行)/ judge(判定)/
 //   fix(修复轮进行中,gap 为判定差距原文,中断恢复时凭它重新下发修复提示);
@@ -67,7 +70,7 @@ export type Phase =
   | { kind: "understand" }
   | { kind: "decompose" }
   | { kind: "whole" }
-  | { kind: "subtasks" }
+  | { kind: "subtasks"; index?: number }
   | { kind: "wrapup" }
   | {
       kind: "verify"

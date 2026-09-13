@@ -42,6 +42,12 @@ describe("进度记录", () => {
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
   })
 
+  test("subtasks 阶段记录的归属子任务序号 index 随记录往返", async () => {
+    const progress: Progress = { task: "T-001", session: "ses_s2", at: Date.now(), active: true, phase: { kind: "subtasks", index: 2 } }
+    await saveProgress(dir, progress)
+    expect(await recallProgress(dir, "T-001")).toEqual(progress)
+  })
+
   test("verify 修复轮记录(stage=fix)的差距原文 gap 随记录往返", async () => {
     const progress: Progress = {
       task: "T-001",
