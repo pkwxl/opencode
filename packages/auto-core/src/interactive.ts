@@ -7,6 +7,7 @@
 import { createInterface } from "node:readline/promises"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { requestExit } from "./exit"
+import { requestFailback } from "./failback"
 import { log, setInput } from "./log"
 
 export type Interactive = {
@@ -67,6 +68,26 @@ export function startInteractive(
     if (text === "/exit") {
       requestExit()
       log("🚪 已收到 /exit: 将在下一个安全边界(阶段/任务/子任务交接完成处)暂停并退出,进度已持久化,重新运行即可完整恢复")
+      rl.prompt()
+      return
+    }
+    // /failback(设计文档 docs/model-routing-design.md E 节): 与 /exit 同构但不
+    // 停止——置位后在下一个安全边界重置降级状态,回试首选模型;带参数(空格分隔的
+    // provider/model 列表)时整体重定义模型序(首个为首选、其余为降级候选环)。
+    // 与是否已连上会话无关,不发往会话。
+    if (text === "/failback" || text.startsWith("/failback ")) {
+      const order = text.slice("/failback".length).trim().split(/\s+/).filter(Boolean)
+      const bad = order.find((item) => !item.includes("/"))
+      if (bad !== undefined) {
+        log(`⚠ /failback 参数非法: "${bad}"(模型须为 provider/model 形态含斜杠;用法 /failback [首选 prov/a 候选 prov/b ...])`)
+      } else {
+        requestFailback(order)
+        log(
+          order.length
+            ? `⇄ 已收到 /failback: 将在下一个安全边界(阶段/任务/子任务交接完成处)重定义模型序——首选 ${order[0]},降级候选 ${order.slice(1).join(", ") || "(无)"},并重试首选`
+            : "⇄ 已收到 /failback: 将在下一个安全边界(阶段/任务/子任务交接完成处)重置降级状态,重新尝试首选模型",
+        )
+      }
       rl.prompt()
       return
     }

@@ -15,12 +15,13 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       taskContext: "off",
       ask: false,
       model: { byLetter: {}, byRole: {}, fallback: [] },
+      modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
       retryAsk: 30,
     })
   })
 
-  test("空串视同未设(十四个变量同测)", () => {
+  test("空串视同未设(十五个变量同测)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "",
@@ -35,6 +36,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.ask]: "",
         [SWITCH_ENV.model]: "",
         [SWITCH_ENV.modelFallback]: "",
+        [SWITCH_ENV.modelFailbackScope]: "",
         [SWITCH_ENV.retryWaits]: "",
         [SWITCH_ENV.retryAsk]: "",
       }),
@@ -50,6 +52,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       taskContext: "off",
       ask: false,
       model: { byLetter: {}, byRole: {}, fallback: [] },
+      modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
       retryAsk: 30,
     })
@@ -68,6 +71,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.stuck]: "off",
         [SWITCH_ENV.taskContext]: "large",
         [SWITCH_ENV.ask]: "on",
+        [SWITCH_ENV.modelFailbackScope]: "subtask",
         [SWITCH_ENV.retryWaits]: "0,3",
         [SWITCH_ENV.retryAsk]: "5",
       }),
@@ -83,6 +87,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       taskContext: "large",
       ask: true,
       model: { byLetter: {}, byRole: {}, fallback: [] },
+      modelFailbackScope: "subtask",
       retryWaits: [0, 3],
       retryAsk: 5,
     })
@@ -101,6 +106,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.stuck]: "on",
         [SWITCH_ENV.taskContext]: "off",
         [SWITCH_ENV.ask]: "off",
+        [SWITCH_ENV.modelFailbackScope]: "task",
       }),
     ).toEqual(parseSwitches({}))
   })
@@ -114,6 +120,13 @@ describe("parseSwitches(实验开关环境变量层)", () => {
   test("taskContext 合法值域: small/medium/large 均可解析", () => {
     for (const value of ["small", "medium", "large"] as const) {
       expect(parseSwitches({ [SWITCH_ENV.taskContext]: value }).taskContext).toBe(value)
+    }
+  })
+
+  test("modelFailbackScope 合法值域: phase/task/subtask/session 均可解析,缺省 task(= 现状)", () => {
+    expect(parseSwitches({}).modelFailbackScope).toBe("task")
+    for (const value of ["phase", "task", "subtask", "session"] as const) {
+      expect(parseSwitches({ [SWITCH_ENV.modelFailbackScope]: value }).modelFailbackScope).toBe(value)
     }
   })
 
@@ -152,6 +165,9 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.ask]: "ask" })).toThrow(/OPENCODE_AUTO_ASK/)
     expect(() => parseSwitches({ [SWITCH_ENV.ask]: "ask" })).toThrow(/on\|off/)
     expect(() => parseSwitches({ [SWITCH_ENV.ask]: "ask" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "turn" })).toThrow(/OPENCODE_AUTO_MODEL_FAILBACK_SCOPE/)
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "turn" })).toThrow(/phase\|task\|subtask\|session/)
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "turn" })).toThrow(/缺省 task/)
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "1,-2" })).toThrow(/OPENCODE_AUTO_RETRY_WAITS/)
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "1,,2" })).toThrow(/非负分钟数/)
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "soon" })).toThrow(/0,1,2,4,8/)
@@ -217,11 +233,11 @@ describe("parseSwitches(实验开关环境变量层)", () => {
 })
 
 describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
-  test("默认组合静默: 非默认项为 undefined;全量描述列出十四项", () => {
+  test("默认组合静默: 非默认项为 undefined;全量描述列出十五项", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RETRY_ASK=30",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RETRY_ASK=30",
     )
   })
 
@@ -229,7 +245,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "off" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=off")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RETRY_ASK=30",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RETRY_ASK=30",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "on" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=on")
@@ -251,6 +267,10 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     expect(nonDefaultSwitches(routed)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2,m=anthropic/c-4,decompose=anthropic/c-4")
     const failed = parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,anthropic/c-4" })
     expect(nonDefaultSwitches(failed)).toBe("OPENCODE_AUTO_MODEL_FALLBACK=kimi/k2,anthropic/c-4")
+    // failback 粒度: 缺省 task 静默,非默认粒度独立成项
+    const scoped = parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "session" })
+    expect(nonDefaultSwitches(scoped)).toBe("OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session")
+    expect(formatSwitches(scoped)).toContain("OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session")
     const both = parseSwitches({ [SWITCH_ENV.model]: "kimi/k2", [SWITCH_ENV.modelFallback]: "b/y" })
     expect(nonDefaultSwitches(both)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2, OPENCODE_AUTO_MODEL_FALLBACK=b/y")
   })

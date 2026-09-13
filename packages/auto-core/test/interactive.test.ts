@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { PassThrough, Writable } from "node:stream"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { exitRequested, resetExitRequest } from "../src/exit"
+import { consumeFailback, failbackOverride, failbackRequested, resetFailback } from "../src/failback"
 import { startInteractive, type Interactive } from "../src/interactive"
 
 // 用注入的流驱动常驻 readline;桩 client 记录 promptAsync 收到的消息。
@@ -33,6 +34,7 @@ describe("interactive", () => {
     repl?.close()
     repl = undefined
     resetExitRequest()
+    resetFailback()
   })
 
   test("/exit 不发往会话,置位退出请求", async () => {
@@ -56,6 +58,44 @@ describe("interactive", () => {
     ctx.input.write("/exit\n")
     await tick()
     expect(exitRequested()).toBe(true)
+  })
+
+  test("/failback 不发往会话,置位回试请求", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    ctx.repl.attach("s1")
+    expect(failbackRequested()).toBe(false)
+    ctx.input.write("/failback\n")
+    await tick()
+    expect(ctx.sent).toEqual([])
+    expect(failbackRequested()).toBe(true)
+    // 无参形态: 消费仅重置降级状态,不产生模型序覆写。
+    const chain: { model?: string } = { model: "prov/b" }
+    expect(consumeFailback(chain)).toBe(true)
+    expect(chain.model).toBeUndefined()
+    expect(failbackOverride()).toBeUndefined()
+  })
+
+  test("/failback 带参: 空格分隔模型序,首个为首选、其余为降级候选环", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    ctx.input.write("/failback kimi/k3 zai/glm-5.3-flash zai/glm-5.3\n")
+    await tick()
+    expect(failbackRequested()).toBe(true)
+    expect(consumeFailback()).toBe(true)
+    expect(failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: ["zai/glm-5.3-flash", "zai/glm-5.3"] })
+  })
+
+  test("/failback 参数缺斜杠: 拒绝置位,输入行继续可用", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    ctx.repl.attach("s1")
+    ctx.input.write("/failback kimi/k3 bad\n")
+    await tick()
+    expect(failbackRequested()).toBe(false)
+    ctx.input.write("继续发消息\n")
+    await tick()
+    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "继续发消息" }])
   })
 
   test("回车把输入作为消息发往已 attach 的会话", async () => {

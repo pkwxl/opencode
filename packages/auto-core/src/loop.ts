@@ -3,6 +3,7 @@ import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
 import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { ExitRequested, maybeExit } from "./exit"
+import { clearSticky, consumeFailback } from "./failback"
 import { changedFiles, commitTree, pendingChanges } from "./git"
 // .gitignore 条目维护已上收至叶子模块 gitignore.ts(与 reset 成对);此处
 // 再导出以保持既有导入路径 @opencode-ai/auto-core/loop 不变。
@@ -446,6 +447,9 @@ export async function runAll(
         // 路由与下一任务前硬暂停,回车放行。dir 传入使暂停等待从用时统计扣除。
         await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl, dir: directory })
         maybeExit("task", `任务 ${task.id} ${task.title}`)
+        // /failback 消费点(task 边界): 链已随 runTask 销毁、无需清 chain.model;
+        // 重置 phase 粒度 sticky holder 并应用模型序覆写(若有)。
+        consumeFailback()
         // --final-review 路由挂点: runTask 完成且任务带 final 标记 → 解析阶段报告
         // 路由追加下一任务(设计文档 B.2);熔断/报告异常立即阻塞退出,追加的任务
         // 由下一次 next() 按文件顺序拾取。
@@ -694,6 +698,10 @@ export async function runAll(
       if (code !== 0) return code
       await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl, dir: directory })
       maybeExit("phase", `阶段 ${phase} ${phaseText(phase)} 交接`)
+      // failback 回试(phase 边界): 所有粒度都在阶段边界重置——phase 粒度的跨任务
+      // sticky holder 在此清零;/failback 请求同点消费。
+      clearSticky()
+      consumeFailback()
       return 0
     }
     const runPhaseLoop = async (): Promise<number> => {

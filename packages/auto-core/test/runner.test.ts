@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
 import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseToRole, requireArtifact, resolveModel, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, type ForkBaseInfo, type SessionChain } from "../src/runner"
@@ -94,7 +95,11 @@ function fakeClient(
       },
       fork: async (params: { sessionID: string }) => {
         calls.forks.push(params.sessionID)
-        return over.fork ? over.fork(params.sessionID) : { data: { id: `ses_fork_${calls.forks.length}` } }
+        const result = over.fork ? over.fork(params.sessionID) : { data: { id: `ses_fork_${calls.forks.length}` } }
+        // fork 出的副本是后续 prompt 的下发目标,事件流跟随它(与 create 同规则)。
+        const id = (result as { data?: { id?: string } }).data?.id
+        if (id) lastCreated = id
+        return result
       },
       get: async (params: { sessionID: string }) => (over.get ? over.get(params.sessionID) : { data: { id: params.sessionID } }),
       update: async (params: { sessionID: string; title: string }) => {
@@ -1318,6 +1323,102 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.forks.length).toBe(0)
     expect(calls.prompts.length).toBe(1)
     expect("model" in calls.prompts[0]!).toBe(false)
+  })
+})
+
+// ---- 降级回试粒度(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE)与 /failback 覆写 ----
+// scope 决定降级后何时回试首选: task(缺省)= 链内粘滞(现状);session = 新建会话即回试;
+// phase = 经 failback 模块 sticky holder 跨链(跨任务)粘滞、阶段边界清零。/failback 带参
+// 消费后整体重定义模型序(首选通配 + 候选环),经 override 层优先于 switches.model。
+describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / 模型序重定义 / 使用模型播报", () => {
+  afterEach(() => {
+    resetFailback()
+  })
+  const SCOPED = (scope: "task" | "session" | "phase") =>
+    parseSwitches({ [SWITCH_ENV.model]: "prov/a", [SWITCH_ENV.modelFallback]: "prov/b", [SWITCH_ENV.modelFailbackScope]: scope })
+  // 首轮订阅发不可重试 quota,其后 idle(与上组 quotaThenIdleEvents 同构,自带计数器
+  // 以支撑同一 client 跨多次 runSession 的订阅序号)。
+  const quotaThenIdle = () => {
+    let n = 0
+    return (sid: string) =>
+      (async function* () {
+        n++
+        if (n === 1) yield { type: "session.error", properties: { sessionID: sid, error: { name: "APIError", data: { message: "insufficient_quota", isRetryable: false } } } }
+        yield { type: "session.idle", properties: { sessionID: sid } }
+      })()
+  }
+
+  test("缺省 task 粒度: 降级在同一条链内粘滞——第二次 runSession(同链)仍用候选 prov/b(现状不变)", async () => {
+    const { client, calls } = fakeClient({ events: quotaThenIdle() })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("task"))
+    expect(chain.model).toBe("prov/b")
+    await runSession(client, task, "提示词2", {}, chain, undefined, undefined, SCOPED("task"))
+    // 第三次提示词(第二次 runSession 的首轮)仍带降级候选。
+    expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "b" })
+  })
+
+  test("session 粒度: 新建会话起点回试首选 prov/a(降级 fork 的迁移会话不被 undo)", async () => {
+    const { client, calls } = fakeClient({ events: quotaThenIdle() })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("session"))
+    // 降级 fork 出的迁移会话仍用候选 prov/b(不在 fork 消费点清零,防震荡)。
+    expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
+    expect(chain.model).toBe("prov/b")
+    // 第二次 runSession: 复用关闭 → 全新 create,起点清零回首选 prov/a。
+    await runSession(client, task, "提示词2", {}, chain, undefined, undefined, SCOPED("session"))
+    expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "a" })
+    expect(chain.model).toBeUndefined()
+  })
+
+  test("phase 粒度: 降级经 sticky holder 跨链粘滞(模拟下一任务的新链),clearSticky(阶段边界)后回首选", async () => {
+    const { client, calls } = fakeClient({ events: quotaThenIdle() })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("phase"))
+    expect(stickyModel()).toBe("prov/b")
+    // 新链(下一任务): 链上无 chain.model,sticky 兜底仍用 prov/b。
+    const next: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词2", {}, next, undefined, undefined, SCOPED("phase"))
+    expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "b" })
+    // 阶段边界清零: 再下一条链回首选 prov/a。
+    clearSticky()
+    const third: SessionChain = { pct: 100, used: 0, at: 0 }
+    await runSession(client, task, "提示词3", {}, third, undefined, undefined, SCOPED("phase"))
+    expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "a" })
+  })
+
+  test("/failback 带参覆写: 首选 prov/x + 候选环 prov/y;env 未设 fallback 也能经覆写环降级", async () => {
+    const { client, calls } = fakeClient({ events: quotaThenIdle() })
+    requestFailback(["prov/x", "prov/y"])
+    expect(consumeFailback()).toBe(true)
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
+    expect(result.type).toBe("idle")
+    // 首选取覆写通配(路由表未设);quota 后从覆写环降级到 prov/y。
+    expect(calls.prompts[0]!.model).toEqual({ providerID: "prov", modelID: "x" })
+    expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "y" })
+  })
+
+  test("实际使用模型播报: ◈ 行含模型与来源,同链同模型不重复,降级切换后再播报", async () => {
+    const lines: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
+    try {
+      const { client } = fakeClient({ events: quotaThenIdle() })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("task"))
+      await runSession(client, task, "提示词2", {}, chain, undefined, undefined, SCOPED("task"))
+    } finally {
+      console.log = orig
+    }
+    const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
+    // 首选 prov/a(路由)一次 + 降级 prov/b(降级候选)一次;第二次 runSession 模型
+    // 未变(prov/b 粘滞)不重复播报。
+    expect(shown.length).toBe(2)
+    expect(shown[0]).toContain("prov/a")
+    expect(shown[0]).toContain("路由")
+    expect(shown[1]).toContain("prov/b")
+    expect(shown[1]).toContain("降级候选")
   })
 })
 

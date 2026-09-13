@@ -22,6 +22,7 @@ export const SWITCH_ENV = {
   ask: "OPENCODE_AUTO_ASK",
   model: "OPENCODE_AUTO_MODEL",
   modelFallback: "OPENCODE_AUTO_MODEL_FALLBACK",
+  modelFailbackScope: "OPENCODE_AUTO_MODEL_FAILBACK_SCOPE",
   retryWaits: "OPENCODE_AUTO_RETRY_WAITS",
   retryAsk: "OPENCODE_AUTO_RETRY_ASK",
 } as const
@@ -29,6 +30,13 @@ export const SWITCH_ENV = {
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
 // 粒度——所取值及更粗的边界都暂停(见 src/step.ts)。
 export type StepMode = "off" | "phase" | "task" | "subtask"
+
+// 降级回试粒度(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE)值域: 降级到候选模型后,在哪个
+// 边界重新回到首选模型——包含式粒度,所取值及更粗的边界都重置(与 step 同一 RANK
+// 思路,见 src/failback.ts): phase 仅阶段边界(跨任务粘滞);task(缺省)= 现状,
+// 链逐任务销毁天然归零;subtask 加子任务边界;session 每个新会话起点都回试首选
+// (降级 fork 出的迁移会话不触发,防震荡)。
+export type FailbackScope = "phase" | "task" | "subtask" | "session"
 
 // 理解摘要行数档位(OPENCODE_AUTO_TASK_CONTEXT)值域: off 为现状(建议 200 行
 // 以内);small/medium/large 逐档放宽(300/400/500 行,见 src/prompt.ts 的
@@ -118,6 +126,10 @@ export type Switches = {
   // 化为 wildcard/byLetter/byRole,OPENCODE_AUTO_MODEL_FALLBACK 的有序候选折进 fallback。
   // 实际求值与降级动作落 P2/P4,本层只解析、校验、日志登记。
   model: ModelPolicy
+  // 降级回试粒度(缺省 task = 现状零变化): 降级后在哪个边界重置回首选模型,
+  // 见 FailbackScope 与 src/failback.ts;/failback 命令的运行期覆写不经过本层
+  // (src/failback.ts 模块态)。
+  modelFailbackScope: FailbackScope
   // 瞬时会话错误的重试阶梯(OPENCODE_AUTO_RETRY_WAITS,逗号分隔的分钟数):每个
   // 元素是「该次重试前的等待」,元素个数即重试次数上限。缺省 0,1,2,4,8 = 五次
   // 重试,首次立即、其后 1/2/4/8 分钟。off = 不重试(首次失败即进人工裁决)。
@@ -139,6 +151,7 @@ const SWITCH_DEFAULTS: Switches = {
   taskContext: "off",
   ask: false,
   model: { byLetter: {}, byRole: {}, fallback: [] },
+  modelFailbackScope: "task",
   retryWaits: [0, 1, 2, 4, 8],
   retryAsk: 30,
 }
@@ -269,6 +282,19 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
       `环境变量 ${SWITCH_ENV.taskContext} 取值非法: "${taskContextRaw}"(期望 off|small|medium|large;空串视同未设,缺省 off)`,
     )
   }
+  const failbackScopeRaw = env[SWITCH_ENV.modelFailbackScope]
+  const modelFailbackScope =
+    failbackScopeRaw === undefined || failbackScopeRaw === "" ? SWITCH_DEFAULTS.modelFailbackScope : failbackScopeRaw
+  if (
+    modelFailbackScope !== "phase" &&
+    modelFailbackScope !== "task" &&
+    modelFailbackScope !== "subtask" &&
+    modelFailbackScope !== "session"
+  ) {
+    throw new Error(
+      `环境变量 ${SWITCH_ENV.modelFailbackScope} 取值非法: "${failbackScopeRaw}"(期望 phase|task|subtask|session;空串视同未设,缺省 task)`,
+    )
+  }
   return {
     fork: onOff(SWITCH_ENV.fork, env[SWITCH_ENV.fork], SWITCH_DEFAULTS.fork),
     forkBase: forkBase as Switches["forkBase"],
@@ -281,6 +307,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     taskContext: taskContext as TaskContextMode,
     ask: onOff(SWITCH_ENV.ask, env[SWITCH_ENV.ask], SWITCH_DEFAULTS.ask),
     model: parseModelPolicy(env[SWITCH_ENV.model], env[SWITCH_ENV.modelFallback]),
+    modelFailbackScope: modelFailbackScope as FailbackScope,
     retryWaits: waitList(SWITCH_ENV.retryWaits, env[SWITCH_ENV.retryWaits], SWITCH_DEFAULTS.retryWaits),
     retryAsk: minutes(SWITCH_ENV.retryAsk, env[SWITCH_ENV.retryAsk], SWITCH_DEFAULTS.retryAsk),
   }
@@ -309,6 +336,9 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
       return routing === "" ? undefined : `${SWITCH_ENV.model}=${routing}`
     })(),
     switches.model.fallback.length ? `${SWITCH_ENV.modelFallback}=${switches.model.fallback.join(",")}` : undefined,
+    switches.modelFailbackScope === SWITCH_DEFAULTS.modelFailbackScope
+      ? undefined
+      : `${SWITCH_ENV.modelFailbackScope}=${switches.modelFailbackScope}`,
     formatWaits(switches.retryWaits) === formatWaits(SWITCH_DEFAULTS.retryWaits) ? undefined : `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     switches.retryAsk === SWITCH_DEFAULTS.retryAsk ? undefined : `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
   ].filter((item): item is string => item !== undefined)
@@ -330,6 +360,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.ask}=${switches.ask ? "on" : "off"}`,
     `${SWITCH_ENV.model}=${renderModelEnv(switches.model)}`,
     `${SWITCH_ENV.modelFallback}=${switches.model.fallback.join(",")}`,
+    `${SWITCH_ENV.modelFailbackScope}=${switches.modelFailbackScope}`,
     `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
   ].join(", ")

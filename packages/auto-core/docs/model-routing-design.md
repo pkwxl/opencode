@@ -2,10 +2,12 @@
 
 状态: 已实施(2026-09-10,P1..P6 全部落地——switches 解析、runner 路由求值、错误归类、
 降级环、单测与文档;`bun typecheck` 干净、`bun test` 全绿)。2026-09-13 补 P7:重试阶梯
-耗尽后的人工回落接入降级环(D.3 第二触发面),`bun test` 652→657 pass。P5 自动化验证已通过;三包真实
+耗尽后的人工回落接入降级环(D.3 第二触发面),`bun test` 652→657 pass;补 P8:回试粒度
+`OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`(D.6)、`/failback` 命令与运行期模型序覆写(D.7)、
+使用模型播报(D.8),`bun test` 675 pass。P5 自动化验证已通过;三包真实
 冒烟待有 provider 凭证的环境(`OPENCODE_AUTO_E2E=1`)。实验开关层
-(`OPENCODE_AUTO_MODEL` / `OPENCODE_AUTO_MODEL_FALLBACK`),两者缺省未设 = 现有行为零变化,
-CLI 壳零改动,不落盘、不进 `ProjectConfig`。
+(`OPENCODE_AUTO_MODEL` / `OPENCODE_AUTO_MODEL_FALLBACK` / `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`),
+缺省未设 = 现有行为零变化,CLI 壳零改动,不落盘、不进 `ProjectConfig`。
 
 ## A. 动机
 
@@ -209,12 +211,56 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 - 降级计数与重试阶梯分离: 每个候选各享一轮完整阶梯(切换时 `i = 1`),总上限 =
   (1 + 候选数)× 阶梯长度,避免两个计数器互相掩盖。
 
-### D.5 不跨链粘滞
+### D.5 不跨链粘滞(缺省 task 粒度)
 
-`chain.model` 只在链内有效,新链(下一子任务/下一阶段)重新按路由表求值,即主模型每个任务
-边界都被再试一次。理由: 与"阶段状态是推导式的、零新增易腐状态"(phases.ts 头注)一致,且
-避免一次抖动导致整轮永久降级。代价是配额型故障会在每条新链上重撞一次首个提示词——
-这是已接受的取舍(见 G.4 与 U2)。
+`chain.model` 只在链内有效:执行链由 `runTask` 逐任务新建,任务边界即天然归零,下一任务
+重新按路由表求值,主模型每个任务边界都被再试一次(实现早于本文措辞——链在任务级而不
+是子任务级,同一任务的子任务间共享链、降级在任务内粘滞);旁路一次性会话
+(`requireArtifact`)的链逐调用新建,降级从不跨调用粘滞。理由: 与"阶段状态是推导式的、
+零新增易腐状态"(phases.ts 头注)一致,且避免一次抖动导致整轮永久降级。代价是配额型
+故障会在每条新链上重撞一次首个提示词——这是已接受的取舍(见 G.4 与 U2)。2026-09-13
+起回试粒度可由 `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` 调整(D.6),缺省 `task` 即本节语义。
+
+### D.6 回试粒度(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE,2026-09-13 实施)
+
+降级到候选模型后、在哪个流水线边界重置回首选模型,四档**包含式**粒度(与 step.ts 同一
+RANK 思路,所取值及更粗的边界都重置;实现见 `src/failback.ts`):
+
+| 值 | 重置时机 | 实现机制 |
+|---|---|---|
+| `phase` | 仅阶段边界(降级跨任务粘滞) | 链逐任务销毁,候选人选经 failback 模块的 sticky holder(`setSticky`/`stickyModel`)带进本阶段后续任务;阶段边界(loop.ts `clearSticky()`)清零 |
+| `task`(缺省) | 任务边界 | 零代码:链逐任务销毁天然归零(= D.5 现状) |
+| `subtask` | 子任务/任务/阶段边界 | 子任务边界(runner.ts 子任务循环,紧随 `maybeExit`)清 `chain.model` |
+| `session` | 每个新会话起点(任务/子任务/隐藏任务会话) | attempt 的**全新 create 分支**清 `chain.model`;会话复用与 fork 消费不清——降级 fork 出的迁移会话若清零会把 failover 立即 undo 成震荡。旁路/隐藏任务链本就逐调用新建,天然回试首选 |
+
+已试候选去重(`tried`)是 `runSession` 局部态,随每次会话调用自然归零——边界重置后
+整条候选环重新可用,无需额外清理。`reuseSession=on` 时 session 粒度以真实会话边界为准
+(复用同一会话则降级粘滞,符合"新会话才重置"语义)。
+
+### D.7 /failback 命令与运行期模型序覆写(2026-09-13 实施)
+
+与 `/exit`(docs/exit-resume-design.md)同构的人工接管通道,仅 `--interactive` 常驻输入行
+可用,等待回答(pending)状态下不识别:
+
+- **置位**(interactive.ts): `/failback` 精确匹配或 `/failback prov/a prov/b ...` 前缀匹配;
+  参数逐项校验须为 `provider/model` 形态(含 `/`),坏值 log 用法且不置位。不发往会话,
+  与是否已连上会话无关。
+- **消费**(三处安全边界,挂点同 step/exit: runner.ts 子任务边界、loop.ts 任务/阶段边界,
+  紧随 `maybeExit`): `consumeFailback(chain?)` 清链上降级候选与 sticky holder;**不抛异常、
+  不占退出码通道**(区别于 `/exit` 的 ExitRequested → 退出码 3)。与 `/exit` 同时 pending 时
+  exit 优先(进程已结束)。
+- **带参语义 = 整体重定义模型序**: 首个模型为首选(通配,覆盖路由表全部字母/角色键),
+  其余按序成为降级候选环。覆写经 failback 模块的 `override` 层承载(`failbackOverride()`),
+  attempt 的 target 求值链变为 `chain.model ?? sticky ?? override.wildcard ?? resolveModel(...)`,
+  switchModel 的候选环与触发门禁同理取 `override.fallback ?? switches.model.fallback`——
+  **不原地改 switches memo**(恒定约定不破)。覆写持续生效至进程结束或下一次带参 /failback。
+
+### D.8 实际使用模型上终端(2026-09-13 实施)
+
+attempt 求值出 target 后播报 `◈ <任务> 使用模型 <prov/model>(<来源>)`,来源 ∈
+`路由` / `降级候选` / `降级候选·阶段内粘滞` / `/failback 指定`;经 `chain.modelShown`
+去重——同链同模型的续跑 prompt 不重复播报,新建会话或模型变化(降级切换、/failback 消费、
+粒度重置)时再次播报。target 未定义(路由与覆写均未设)时静默,不变量 F 不破。
 
 ## E. 决策记录(已确认)
 
@@ -224,6 +270,11 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 - **D4 降级 = 复用既有 fork 重试路径**,上下文随迁,不新造续跑机制。
 - **D5 降级状态不落盘**(缺省),`progress.json` 不记 model;跨进程恢复后重新按路由表求值。
 - **D6 分类器保守缺省**: 不确定即不换;`overflow` 明确不换。
+- **D7 回试粒度缺省 `task`**(= 现状零变化);粒度语义与 step 包含式 RANK 对齐;phase 档的
+  跨任务粘滞经 failback 模块 sticky holder 承载,不落盘(同 D5)。
+- **D8 /failback 与 /exit 同构但不停止**: 安全边界消费、不抛异常、不占退出码;带参 = 整体
+  重定义首选+候选序,经运行期 override 层实现,switches memo 恒定约定不破。
+- **D9 使用模型播报走既有 log 通道**: 每次 prompt 求值处播报、按链去重;未设模型时静默。
 
 ## F. 不变量(实现不得破坏)
 
@@ -260,6 +311,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 | P5 | 真实冒烟(`auto/` worktree 三包全量):设 `OPENCODE_AUTO_MODEL` 跑一轮 migrate 短流程,核对日志 `⇄`/百分比再基线;故意配错 provider 密钥触发 `auth` 降级 | `auto/` | 见 docs/behavior.md 冒烟约定;typecheck + 三包 test |
 | P6 | 文档:AGENTS.md 导航行已随本文加;实施后把本文状态改为「已实施(P1..P5)」并补 `docs/structure.md` / `docs/behavior.md` 的开关与降级段落 | `docs/`、`AGENTS.md` | 人工复核 |
 | P7 | 重试阶梯耗尽后的人工回落接入降级环(D.3 第二触发面):降级动作闭包化为 `switchModel()`、分叉源改用与重试环同一套「最值钱会话」判据 | `src/runner.ts`、`test/runner.test.ts` | 单测:transient 跑完阶梯 → 换候选重开一轮;人工答 `exit` 不降级;候选耗尽仍 `blocked` 且列清单;无候选表逐字节等价(不变量 F) |
+| P8 | 回试粒度 `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`(D.6)+ `/failback` 命令与运行期模型序覆写(D.7)+ 使用模型播报(D.8) | `src/switches.ts`、`src/failback.ts`(新)、`src/runner.ts`、`src/loop.ts`、`src/interactive.ts` | 单测:switches 值域/坏值/日志登记;failback 模块态与 RANK;interactive `/failback` 解析;runner 的 task/session/phase 三档回试与覆写降级(675 全绿) |
 | 后续 | `overflow` → 换更大窗口模型的降级路(B.4/D.1 已留类别);转正宪法键(U1) | — | 另开设计 |
 
 ## I. 未决问题

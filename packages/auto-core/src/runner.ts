@@ -5,6 +5,7 @@ import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
+import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
 import { commitTitle, commitTree } from "./git"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
@@ -301,7 +302,9 @@ type SessionResult =
 // 链携带,溯源用);pending 为预创建会话 id(seedForkSession 从基点分叉所得),
 // attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
 // 瞬时错误重试自然回落 create 路径。
-export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession }
+// modelShown 为终端展示的已播报模型(每次 prompt 求值出的 target 与之比对,去重
+// 「◈ 使用模型」日志;仅内存态,不落盘)。
+export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string }
 
 // 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
 // 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能
@@ -508,8 +511,8 @@ export async function runTask(
   // 实验开关(OPENCODE_AUTO_* 环境变量层,fork-decompose-design.md §4.6): 入口
   // 解析一次(memo)——非法值在此抛出中文报错(CLI 侧退出码 1),非默认组合记入
   // 启动日志(默认组合静默,verbose 可查全量);fork/forkBase 由 fork 流水线消费,
-  // 本层只做解析与既有机制接线(fine/steer)。
-  autoSwitches()
+  // 本层只做解析与既有机制接线(fine/steer);failback 粒度在子任务边界消费。
+  const switches = autoSwitches()
   await begin(plan.path, task.id)
   const dir = opts.dir ?? dirname(plan.path)
   const mode = opts.subtask ?? "auto"
@@ -734,6 +737,11 @@ export async function runTask(
           // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。
           await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive, dir })
           maybeExit("subtask", `${task.id} 子任务 ${index + 1}`)
+          // failback 回试(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): subtask/session 粒度
+          // 在子任务边界清链上降级候选,下一子任务回试首选(task 粒度由链逐任务销毁
+          // 天然承担);/failback 请求同点消费(可整体重定义模型序)。
+          if (failbackApplies(switches.modelFailbackScope, "subtask")) chain.model = undefined
+          consumeFailback(chain)
         }
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费);
         // config.wrapup=false(--no-wrapup,缺省 true)时整体关闭。
@@ -2108,6 +2116,10 @@ export async function runSession(
   // 出路是人工裁决,不是继续加码次数。
   const waits = switches.retryWaits
   let i = 1
+  // 有效降级候选环: /failback 带参重定义过模型序时用其覆写环,否则取 switches 的
+  // OPENCODE_AUTO_MODEL_FALLBACK 解析结果(switches memo 恒定,覆写经 failback 模块态
+  // 承载)。降级触发门禁与 switchModel 的候选遍历共用同一来源。
+  const fallbackRing = () => failbackOverride()?.fallback ?? switches.model.fallback
   // 候选降级的公共动作(两个触发面共用:下面的配额降级支、阶梯耗尽后的人工回落):
   // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选,换 chain.model、挂一次性
   // 降级 note、fork 副本带上下文随迁,并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
@@ -2115,10 +2127,11 @@ export async function runSession(
   // why 为触发原因的中文短语,进日志与降级 note。
   const switchModel = async (why: string): Promise<boolean> => {
     limits ??= await contextLimits(client)
+    const fallback = fallbackRing()
     // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
     // 更糟);窗口未知(不在映射)不过滤。
     let candidate: string | undefined
-    for (const c of switches.model.fallback) {
+    for (const c of fallback) {
       if (tried.includes(c)) continue
       const limit = limits.get(c)
       if (limit !== undefined && limit < cap) {
@@ -2135,15 +2148,19 @@ export async function runSession(
     if (candidate === undefined) return false
     // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
     // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
-    // 一并标记已试(防被再选)。
-    const from = chain.model ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    // 一并标记已试(防被再选)。与 attempt 的 target 求值同一优先级链(chain.model >
+    // sticky > /failback 覆写 > 路由表)。
+    const from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
     if (from !== undefined && !tried.includes(from)) tried.push(from)
     tried.push(candidate)
     chain.model = candidate
+    // failback 粒度 phase: 降级跨任务粘滞——链逐任务销毁,候选人选经 failback 模块的
+    // sticky holder 带进本阶段后续任务,阶段边界(clearSticky)才重置回首选。
+    if (switches.modelFailbackScope === "phase") setSticky(candidate)
     // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
     // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学)。
     chain.note = `[driver] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
-    log(`⇄ ${task.id} ${why},链上下文保留,切换模型 ${from ?? "主模型"} → ${candidate}(候选 ${tried.length}/${switches.model.fallback.length})`)
+    log(`⇄ ${task.id} ${why},链上下文保留,切换模型 ${from ?? "主模型"} → ${candidate}(候选 ${tried.length}/${fallback.length})`)
     i = 1
     // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
     // 换模型续跑无需重做上下文。分叉源与重试环同一套「保住最值钱的会话」判据:失败会话
@@ -2191,7 +2208,7 @@ export async function runSession(
     // errorClass,故据它决策即可覆盖两条路径(不读 result.failover)。
     const classZh =
       result.errorClass === "quota" ? "配额受限" : result.errorClass === "auth" ? "provider 鉴权失败" : result.errorClass === "rate" ? "限流等待过久" : undefined
-    if (switches.model.fallback.length > 0 && classZh !== undefined) {
+    if (fallbackRing().length > 0 && classZh !== undefined) {
       if (await switchModel(classZh)) continue
       // 候选耗尽 → 回落阻塞(退出码语义不变,仍 blocked),文案追加候选清单。
       return { type: "blocked", question: `${result.question}\n(配额降级${exhausted()})`, retryable: result.retryable }
@@ -2226,8 +2243,9 @@ export async function runSession(
       // 梯)。人工明确答 exit 时不降级:那是「停下来」的指令,不是「再想想办法」。
       // 候选表为空时整段跳过,逐字节等价改造前(不变量 F)。
       // 作用域:chain 由 runTask 逐任务新建,chain.model 随之逐任务归零,下一个任务自动
-      // 从首选模型重新起跑——「切备选仅在本次任务内有效」天然成立,无需退回逻辑。
-      if (decision === "fallback" && switches.model.fallback.length > 0) {
+      // 从首选模型重新起跑——「切备选仅在本次任务内有效」天然成立;更细/更粗的回试粒度
+      // 由 OPENCODE_AUTO_MODEL_FAILBACK_SCOPE 在边界挂点消费(见 src/failback.ts)。
+      if (decision === "fallback" && fallbackRing().length > 0) {
         if (await switchModel("重试阶梯耗尽")) continue
         return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why};降级${exhausted()})` }
       }
@@ -2390,6 +2408,10 @@ async function attempt(
   // 改名,不经 create。
   const session = reuse || forked ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
   if (session?.error) return { type: "blocked", question: `创建会话失败: ${formatClientError(session.error)}` }
+  // failback 粒度 session(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): 每个全新会话起点
+  // 都清链上降级候选、回试首选模型。仅 create 路径(会话复用与 fork 消费不动)——
+  // 降级 fork 出的迁移会话经 pending 进入,若在此清零会把 failover 立即 undo 成震荡。
+  if (session !== undefined && switches.modelFailbackScope === "session") chain.model = undefined
   const sessionID = forked ?? session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
@@ -2426,10 +2448,27 @@ async function attempt(
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note
     chain.note = undefined
-    // 本次模型(docs/model-routing-design.md C.3): 链上已降级候选优先(留给 P4),
-    // 否则按路由表以阶段字母 + 会话角色求值。target 未定义时不带 model 键——
-    // 两变量未设时 resolveModel 恒 undefined,逐字节等价现状(而非带 model: undefined)。
-    const target = chain.model ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    // 本次模型(docs/model-routing-design.md C.3/E): 优先级 链上降级候选 >
+    // phase 粒度跨任务粘滞(sticky holder)> /failback 运行期覆写首选 > 路由表
+    // (阶段字母 + 会话角色)。target 未定义时不带 model 键——两变量未设且无任何
+    // 覆写时全链恒 undefined,逐字节等价现状(而非带 model: undefined)。
+    const override = failbackOverride()
+    const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    // 实际使用模型上终端(前端可见): 新建/分叉会话或模型较上次 prompt 有变化时
+    // 播报一行(来源标注),同会话同模型的续跑 prompt 不重复。target 未定义(未设
+    // 路由)时静默,保持不变量 F。
+    if (target !== undefined && target !== chain.modelShown) {
+      const from =
+        chain.model !== undefined
+          ? "降级候选"
+          : stickyModel() !== undefined
+            ? "降级候选·阶段内粘滞"
+            : override !== undefined
+              ? "/failback 指定"
+              : "路由"
+      log(`◈ ${task.id} 使用模型 ${target}(${from})`)
+      chain.modelShown = target
+    }
     // 统计接线(STATS_PLAN §2,T-003): prompt 下发前开 AI 段并关联任务。旁路会话
     // (伪任务 PLAN/AUTO,恢复点先例见 resume.ts)同此照记——statsTask 未设当前任务
     // 时 usage/sessions 仍入 phase+round 桶。

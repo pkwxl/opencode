@@ -285,8 +285,17 @@
   「最值钱会话」判据(失败会话本体与链上原会话按已积累用量取大者,0 用量的纯报错桩不保)。
   降级只改 model 参数、**不落盘**(`chain.model` 仅内存、progress.json 不记 model)、不改会话
   创建方式(「独立判定会话不 fork」不受影响);每个候选各享一轮完整重试阶梯(降级计数与阶梯计数
-  分离,互不掩盖,总上限 =(1 + 候选数)× 阶梯长度);`chain.model` 只在链内有效,新链(下一子任务/阶段)重新按
-  路由表求值(不跨链粘滞,代价是配额型故障在每条新链首个提示词重撞一次主模型,D.5 已接受取舍)。
+   分离,互不掩盖,总上限 =(1 + 候选数)× 阶梯长度);`chain.model` 只在链内有效,执行链逐任务新建,
+   任务边界重新按路由表求值(缺省不跨任务粘滞,代价是配额型故障在每条新链首个提示词重撞一次
+   主模型,D.5 已接受取舍)。回试粒度可调(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE,缺省 `task` =
+   现状,D.6): `phase` 仅阶段边界重置(降级经 failback 模块 sticky holder 跨任务粘滞)、`subtask`
+   加子任务边界清链上候选、`session` 每个全新会话起点(create 分支)回试首选——降级 fork 出的
+   迁移会话不清,防 failover 被立即 undo 成震荡。`--interactive` 下另有 `/failback` 人工接管
+   (D.7,与 /exit 同构的安全边界消费、不退出): 无参 = 下一边界重置降级状态回试首选;带参
+   `/failback 首选 prov/a 候选 prov/b ...` = 下一边界整体重定义运行期模型序(首个为首选通配、
+   其余为降级候选环,经 failback 模块 override 层优先于 switches.model,memo 恒定不破)。每个
+   提示词实际使用的模型播报上终端(D.8): `◈ <任务> 使用模型 prov/model(路由|降级候选|
+   降级候选·阶段内粘滞|/failback 指定)`,同链同模型去重不重复。
 - --permission 四档(permission.asked 的处理策略,缺省 ask-deny):auto-allow 立即
   自动授权(always 放行,不等待);ask-allow/ask-deny/ask-fail 先等人工
   (--wait-answer 分钟,未设则不等待即视为超时;allow/yes/y 等视为授权以 always
