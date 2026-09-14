@@ -422,9 +422,11 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
 // 旁路一次性,通读已有迁移结果(不限于此前轮次——docs/ 全树、历轮轮次目录
 // docs/R-NN/、旧布局阶段/轮次归档、产出代码与 git 历史),蒸馏出前置知识文档
 // (新布局轮内 docs/R-NN/prior-kb.md,旧布局 docs/prior-kb/R<N>-…),作为二次迁移
-// 与参数推断的输入。file 为输出路径(相对目标目录);brief 为项目意图原文(可空);
-// distilled 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,非空时模板注入
-// 引用化条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的差分增量)。
+// 与参数推断的输入。file 为中间产物 temp-kb.md 的输出路径(相对目标目录;收笔
+// 标记经 driver 确认后才改名转正,完成判定协议见 knowledge.ts);brief 为项目意图
+// 原文(可空);distilled 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,
+// 非空时模板注入引用化条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的
+// 差分增量)。
 export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
   const distilled = input.distilled?.filter(Boolean) ?? []
   return renderPrompt("prior-knowledge", {

@@ -1365,6 +1365,15 @@ describe("renderPriorKnowledge(前置知识提取会话)", () => {
     expect(bare).not.toContain("不得在本文复述")
     expect(renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md", distilled: [] })).not.toContain("## 输入: 已有蒸馏产物")
   })
+
+  test("收笔标记协议: 中间产物路径说明 + 末尾「完成」独占一行 + 未写全前不写", () => {
+    usePromptLibrary(undefined)
+    const text = renderPriorKnowledge({ file: "docs/R-01/temp-kb.md" })
+    expect(text).toContain("中间产物路径")
+    expect(text).toContain("独占一行写「完成」作为收笔标记")
+    expect(text).toContain("绝不写该行")
+    expect(text).toContain("转正为正式的前置知识文档")
+  })
 })
 
 describe("模板渲染完整性", () => {

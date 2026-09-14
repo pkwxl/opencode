@@ -140,7 +140,10 @@
   docs/R-NN/(轮首建立):阶段交接产出台账行内轮内 handovers/<字母>-<slug>.md
   (handoverDoc,src/phases.ts),知识文档轮内固定名 migration-kb.md 与
   prior-kb.md(docpaths.ts knowledgeDoc/priorKnowledgeDoc,轮目录恒空使新一轮
-  必重新蒸馏,旧机制轮次(台账有完成阶段而无本轮文档)旧平铺无前缀存量读回落);
+  必重新蒸馏,旧机制轮次(台账有完成阶段而无本轮文档)旧平铺无前缀存量读回落;
+  刻意例外: 前置知识提取的中间产物 temp-kb.md(正式产物同目录)非永久——AI
+  只写它并在末尾标「完成」收笔,driver 确认后改名为 prior-kb.md 并提交,
+  完成判定 = 落盘且已提交,见 knowledge.ts extractPriorKnowledge);
   阶段 PLAN 快照等过期状态收在轮内 <字母>-<slug>/ 归档目录,状态文件不被任何
   文档引用;旧布局(docs/handovers/R<N>-*.md、docs/migration-kb|prior-kb/ 平铺、
   docs/phases/ 与 round-N/ 归档)原地保留为读回落,P2 前布局(交接在归档目录

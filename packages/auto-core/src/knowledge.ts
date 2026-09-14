@@ -1,11 +1,12 @@
-import { readdir, rm } from "node:fs/promises"
+import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { knowledgeDoc, legacyKnowledgeDoc, legacyPriorKnowledgeDoc, priorKnowledgeDoc, roundDirName } from "./docpaths"
+import { knowledgeDoc, legacyKnowledgeDoc, legacyPriorKnowledgeDoc, priorKnowledgeDoc, roundDirName, TEMP_KB_NAME, tempPriorKnowledgeDoc } from "./docpaths"
+import { changedFiles, commitTree } from "./git"
 import { log } from "./log"
 import { currentRound, readLedger, roundRoot } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
-import { requireArtifact, type Opts } from "./runner"
+import { afterSession, requireArtifact, type Opts } from "./runner"
 
 // k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(docs/fixme-knowledge-design.md
 // §D + docs/phases-design.md P4): 各阶段完成后,旁路一次性会话把最终验证过的迁移
@@ -123,7 +124,7 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
   const found = new Set<string>()
   for (const root of [KB_DIR, join("docs", "handovers"), PRIOR_KB_DIR]) {
     for (const name of await readdir(join(dir, root)).catch(() => [] as string[])) {
-      if (!name.endsWith(".md")) continue
+      if (!name.endsWith(".md") || name === TEMP_KB_NAME) continue
       if (root === PRIOR_KB_DIR && name.startsWith(`R${round}-`)) continue
       if (!(await Bun.file(join(dir, root, name)).text().catch(() => "")).trim()) continue
       found.add(join(root, name))
@@ -150,55 +151,93 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
 
 // 目录内本轮 R<round>- 前缀的非空 .md → 首个(字典序);allowLegacy 时再回落无
 // R 前缀的非空 .md(第 1 轮的 P2 前存量读回落,及 prior-kb 的旧机制轮次续跑,
-// 见 existingPriorKnowledge);空文件与非 .md 不算。
+// 见 existingPriorKnowledge);空文件与非 .md 不算;temp-kb.md(提取中间产物,
+// 未收笔态)永远不算既有产物。
 async function existingRoundDoc(dir: string, root: string, round: number, allowLegacy: boolean): Promise<string | undefined> {
   const names = await readdir(join(dir, root)).catch(() => [] as string[])
   const prefix = `R${round}-`
   const modern = names.filter((name) => name.startsWith(prefix)).sort()
   const legacy = (allowLegacy ? names.filter((name) => !/^R\d+-/.test(name)) : []).sort()
   for (const name of [...modern, ...legacy]) {
-    if (!name.endsWith(".md")) continue
+    if (!name.endsWith(".md") || name === TEMP_KB_NAME) continue
     if ((await Bun.file(join(dir, root, name)).text()).trim()) return join(root, name)
   }
   return undefined
 }
 
-// 前置知识提取编排(与 extractKnowledge 同一 requireArtifact 骨架): 失败返回
-// failed 由调用方打 ⚠ 警告后继续(决策: 二次迁移不被文档生成失败污染——参数
-// 推断会话可自行直读原始 docs/)。
+// 前置知识提取编排(与 extractKnowledge 同一 requireArtifact 骨架)。
+//
+// 完成判定(2026-09-13 健壮性改造,specialized-tool-design §3——根因: AI 服务
+// 出错时"会话结束 + 文件非空"的旧判据会把半途而废的现场误判为已完成): 阶段完成
+// ⟺ 正式知识文档 prior-kb.md 落盘且已提交。协议:
+// ① AI 只写中间产物 temp-kb.md(正式产物同目录),全文写完后在末尾独占一行写
+//    「完成」收笔;collect 只认带收笔标记的文档,缺一视为未产出(带反馈重试);
+// ② 收笔确认后由 driver 改名为正式产物并统一提交——改名与提交都是 driver 动作,
+//    AI 自报不作数;
+// ③ 重新运行时产物已存在但尚未提交(上次中断在改名后/提交前,或提交失败遗留)→
+//    driver 补提交后即完成;
+// ④ 产物缺失而工作区有未提交改动 = 上次提取半途而废的现场(或人工改动): driver
+//    不主动清理(git 状态的决定权在人工),返回 dirty 由调用方请人工处置后重跑。
+// ③④ 以 git 为准,仅在统一提交启用(opts.commit !== false)时生效;提交关闭时
+// 维持旧语义(文档存在即完成,脏检查跳过)。
+// ⑤依赖的干净基线由外壳在轮次目录初建后统一提交(stage=round-start)提供。
+// failed(会话受阻/两次未产出)由调用方转阻塞停机,人工处置后重新运行重启本阶段。
 export async function extractPriorKnowledge(
   client: OpencodeClient,
   dir: string,
   opts: Opts,
   brief?: string,
-): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "failed"; question: string }> {
+): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }> {
   const round = await currentRound(dir)
+  const task = { id: "PLAN", title: "前置知识提取(已有迁移结果复盘)", status: "in_progress" as const, attempts: 0, body: "" }
+  const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb 前置知识提取" }
   const existing = await existingPriorKnowledge(dir, round)
-  if (existing) return { type: "skipped", file: existing }
+  if (existing) {
+    // ③ 补提交: 文档已落盘但仍在未提交改动清单中 → 提交后完成。
+    if (opts.commit !== false && (await changedFiles(dir)).includes(existing)) {
+      await commitTree(dir, task, commit)
+      log(`✓ 前置知识文档已产出但尚未提交,已补提交: ${existing}`)
+    }
+    return { type: "skipped", file: existing }
+  }
   const file = await priorKnowledgeFile(dir, round)
+  const temp = tempPriorKnowledgeDoc(file)
+  // ④ 半途而废现场检测: 产物缺失 + 工作区脏 → 交人工清理,不主动动 git。
+  if (opts.commit !== false) {
+    const dirty = await changedFiles(dir)
+    if (dirty.length) return { type: "dirty", files: dirty }
+  }
   const distilled = await existingDistilledDocs(dir, round)
-  log(`▶ 开前置知识提取会话(产出 ${file}${distilled.length ? ";已有蒸馏产物引用化" : ""})`)
-  const produced = await requireArtifact(
-    client,
-    { id: "PLAN", title: "前置知识提取(已有迁移结果复盘)", status: "in_progress", attempts: 0, body: "" },
-    renderPriorKnowledge({ file, brief, mode: opts.mode, distilled }),
-    opts,
-    {
-      kind: "前置知识提取",
-      role: "prior-knowledge",
-      artifact: `非空知识文档 ${file}`,
-      detail: "缺失或为空",
-      requirement: `必须把知识文档写入 ${file}(按提示词给出的章节骨架写全;已有迁移结果稀少也要写出骨架并说明原因)。`,
-      commit: { stage: "prior-knowledge", subject: "PLAN prior-kb 前置知识提取" },
-      reset: () => rm(join(dir, file), { force: true }),
-      collect: async () => {
-        const text = await Bun.file(join(dir, file)).text().catch(() => "")
-        return text.trim() ? true : undefined
-      },
+  log(`▶ 开前置知识提取会话(产出 ${temp},收笔标记确认后改名 ${file}${distilled.length ? ";已有蒸馏产物引用化" : ""})`)
+  const produced = await requireArtifact(client, task, renderPriorKnowledge({ file: temp, brief, mode: opts.mode, distilled }), opts, {
+    kind: "前置知识提取",
+    role: "prior-knowledge",
+    artifact: `带收笔标记的知识文档 ${temp}`,
+    detail: "缺失、为空或末尾缺少「完成」收笔标记",
+    requirement:
+      `必须把知识文档写入 ${temp}(按提示词给出的章节骨架写全;已有迁移结果稀少也要写出骨架并说明原因),` +
+      `全文写完后在文档末尾独占一行写「完成」作为收笔标记——缺少该标记一律视为未完成。`,
+    // 统一提交不在此挂接: 收笔确认 → 改名 → 提交须按序进行,会话结束即提交会把
+    // 未收笔的 temp-kb.md 抢先落账。改名后的提交在下方由 driver 执行。
+    reset: () => rm(join(dir, temp), { force: true }),
+    collect: async () => {
+      const text = await Bun.file(join(dir, temp)).text().catch(() => "")
+      return priorKnowledgeComplete(text) ? true : undefined
     },
-  )
-  if (produced === true) return { type: "ok", file }
-  return { type: "failed", question: produced.question }
+  })
+  if (produced !== true) return { type: "failed", question: produced.question }
+  // ② 收笔确认 → 改名转正并统一提交(commit 关闭时改名照做、提交跳过)。
+  await rename(join(dir, temp), join(dir, file))
+  await afterSession(dir, opts, task, commit)
+  return { type: "ok", file }
+}
+
+// 收笔标记判定(纯函数,导出供单测): 文档非空且最后一个非空行恰为「完成」。
+// AI 明确声明工作完成的协议标记;章节未写全前 AI 被要求绝不写该行。
+export function priorKnowledgeComplete(text: string): boolean {
+  const trimmed = text.trimEnd()
+  if (!trimmed) return false
+  return trimmed.split("\n").pop()!.trim() === "完成"
 }
 
 // 前置知识摘要(注入本轮首个阶段规划会话与参数推断会话): 历轮前置知识按路径排序
@@ -210,7 +249,7 @@ export async function priorKnowledgeDigest(dir: string): Promise<string | undefi
     if (entry.isDirectory() && /^R-\d+$/.test(entry.name)) files.push(join("docs", entry.name, "prior-kb.md"))
   }
   for (const name of await readdir(join(dir, PRIOR_KB_DIR)).catch(() => [] as string[])) {
-    if (name.endsWith(".md")) files.push(join(PRIOR_KB_DIR, name))
+    if (name.endsWith(".md") && name !== TEMP_KB_NAME) files.push(join(PRIOR_KB_DIR, name))
   }
   const parts: string[] = []
   for (const file of files.sort()) {

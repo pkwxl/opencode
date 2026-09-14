@@ -11,7 +11,7 @@
 // 此构造;handoverDoc 依赖阶段 slug 表,落在 src/phases.ts
 // (偏差注记见设计文档 §4.1);上游条款: R1 编号唯一、R2 永久性、R3 目录化、
 // R4 角色文件名、R5 归档语义、R6 临时文件、R7 阶段差异表达。
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 // 任务文档角色(R4: 角色文件名固定);index(子任务产物)只经 subtaskDoc 构造。
 export type TaskRole = "context" | "subtasks" | "report" | "audit" | "fix" | "handoff" | "testhandoff"
@@ -75,6 +75,18 @@ export function knowledgeDoc(round: number): string {
 // 知识必重新蒸馏,取代旧的轮次前缀守卫)。
 export function priorKnowledgeDoc(round: number): string {
   return join(roundDir(round), "prior-kb.md")
+}
+
+// 前置知识提取的中间产物(未收笔态;健壮性协议,见 specialized-tool-design §3):
+// AI 只写本文件,driver 确认末尾「完成」收笔标记后才改名为正式知识文档(完成
+// 判定 = 改名落盘 + 提交)。固定名,各存量扫描(existingRoundDoc/
+// existingDistilledDocs/priorKnowledgeDigest)一律跳过,永不被当作既有知识。
+export const TEMP_KB_NAME = "temp-kb.md"
+
+// 中间产物与正式产物同目录: 新布局 docs/R-NN/temp-kb.md,旧布局
+// docs/prior-kb/temp-kb.md。final 为正式产物的相对路径(priorKnowledgeFile)。
+export function tempPriorKnowledgeDoc(final: string): string {
+  return join(dirname(final), TEMP_KB_NAME)
 }
 
 // 旧平铺形态(读回落常量化,存量项目原地保留、绝不搬移):

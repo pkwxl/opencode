@@ -18,6 +18,7 @@ import {
   roundDirName,
   subtaskDir,
   subtaskDoc,
+  tempPriorKnowledgeDoc,
   taskDir,
   taskDoc,
 } from "../src/docpaths"
@@ -59,6 +60,11 @@ describe("轮次专用目录与轮内知识文档(新布局,R-NN 两位零填充
   test("knowledgeDoc/priorKnowledgeDoc: 轮内固定名(原时间戳名取消)", () => {
     expect(knowledgeDoc(1)).toBe(join("docs", "R-01", "migration-kb.md"))
     expect(priorKnowledgeDoc(5)).toBe(join("docs", "R-05", "prior-kb.md"))
+  })
+
+  test("tempPriorKnowledgeDoc: 中间产物与正式产物同目录(新布局轮内/旧平铺)", () => {
+    expect(tempPriorKnowledgeDoc(priorKnowledgeDoc(5))).toBe(join("docs", "R-05", "temp-kb.md"))
+    expect(tempPriorKnowledgeDoc(legacyPriorKnowledgeDoc(1, "2026-09-07_01-02-03"))).toBe(join("docs", "prior-kb", "temp-kb.md"))
   })
 
   test("legacyKnowledgeDoc/legacyPriorKnowledgeDoc: 旧平铺形态(读回落常量化)", () => {

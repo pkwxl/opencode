@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, knowledgeFile, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
+import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, extractPriorKnowledge, knowledgeFile, priorKnowledgeComplete, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
+
+async function git(dir: string, ...args: string[]) {
+  const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+  return out
+}
 
 describe("knowledgeFile(输出路径,布局感知)", () => {
   function tempDir() {
@@ -177,6 +185,22 @@ describe("existingPriorKnowledge(本轮幂等检查,与 existingKnowledge 同一
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test("temp-kb.md(提取中间产物,未收笔态)永不算既有产物: 旧平铺读回落跳过", async () => {
+    const dir = tempDir()
+    try {
+      const prior = join(dir, "docs/prior-kb")
+      mkdirSync(prior, { recursive: true })
+      // 仅有 temp-kb.md(无 R 前缀,旧机制轮次续跑回落本可能误食): 一律跳过
+      writeFileSync(join(prior, "temp-kb.md"), "半途而废的中间产物")
+      expect(await existingPriorKnowledge(dir, 1)).toBeUndefined()
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(join(dir, "docs", "phases.md"), "- [done] a 分析 → docs/phases/a-analysis/(交接: docs/phases/a-analysis/handover.md)\n")
+      expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("existingDistilledDocs(已有蒸馏产物清单,提取会话引用化输入)", () => {
@@ -202,6 +226,9 @@ describe("existingDistilledDocs(已有蒸馏产物清单,提取会话引用化�
         join("docs/migration-kb", "R1-migration-a.md"),
         join("docs/prior-kb", "R1-prior-old.md"),
       ])
+      // temp-kb.md(中间产物)不进蒸馏产物清单
+      writeFileSync(join(dir, "docs/prior-kb", "temp-kb.md"), "未收笔的中间产物")
+      expect(await existingDistilledDocs(dir, 2)).not.toContain(join("docs/prior-kb", "temp-kb.md"))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -249,6 +276,82 @@ describe("priorKnowledgeDigest(前置知识摘要,双布局跨轮累积注入)",
       expect(digest).toContain(`### ${join("docs", "prior-kb", "R0-prior-legacy.md")}`)
       expect(digest).toContain("旧平铺前置知识")
       expect(digest).not.toContain("R-02")
+      // temp-kb.md(中间产物)不注入摘要
+      writeFileSync(join(dir, "docs/prior-kb/temp-kb.md"), "未收笔的中间产物")
+      expect(await priorKnowledgeDigest(dir)).not.toContain("temp-kb")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("priorKnowledgeComplete(收笔标记判定)", () => {
+  test("最后一个非空行恰为「完成」→ true;空文档/无标记/标记带尾巴 → false", () => {
+    expect(priorKnowledgeComplete("")).toBe(false)
+    expect(priorKnowledgeComplete("  \n")).toBe(false)
+    expect(priorKnowledgeComplete("完成")).toBe(true)
+    expect(priorKnowledgeComplete("# 知识库\n\n正文\n\n完成")).toBe(true)
+    expect(priorKnowledgeComplete("正文\n完成\n\n  \n")).toBe(true)
+    expect(priorKnowledgeComplete("正文\n  完成  \n")).toBe(true)
+    expect(priorKnowledgeComplete("正文,已完成。")).toBe(false)
+    expect(priorKnowledgeComplete("正文\n完成。")).toBe(false)
+    expect(priorKnowledgeComplete("完成\n再补一段正文")).toBe(false)
+  })
+})
+
+describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交人工)", () => {
+  function tempDir() {
+    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
+  }
+  // 本组只覆盖不启动会话的分支(skipped/dirty),client 不会被触达。
+  const client = {} as OpencodeClient
+
+  test("产物已存在且已提交 → skipped,不产生新提交", async () => {
+    const dir = tempDir()
+    try {
+      await git(dir, "init", "-q")
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\n完成\n")
+      await git(dir, "add", "-A")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+      const result = await extractPriorKnowledge(client, dir, { dir })
+      expect(result).toEqual({ type: "skipped", file: join("docs", "R-01", "prior-kb.md") })
+      expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("产物已存在但尚未提交 → 补提交后 skipped(完成判定以提交为准)", async () => {
+    const dir = tempDir()
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\n完成\n")
+      const result = await extractPriorKnowledge(client, dir, { dir })
+      expect(result).toEqual({ type: "skipped", file: join("docs", "R-01", "prior-kb.md") })
+      // 已补提交: 工作区干净,提交带 prior-knowledge 阶段标记
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+      expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: prior-knowledge")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("产物缺失但工作区有未提交改动 → dirty(不主动清理,列出改动文件)", async () => {
+    const dir = tempDir()
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-01/temp-kb.md"), "半途而废的中间产物")
+      const result = await extractPriorKnowledge(client, dir, { dir })
+      expect(result.type).toBe("dirty")
+      expect((result as { files: string[] }).files).toContain(join("docs", "R-01", "temp-kb.md"))
+      // 不主动清理: 现场原样保留,无任何新提交
+      expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
+      expect(await Bun.file(join(dir, "docs/R-01/temp-kb.md")).text()).toBe("半途而废的中间产物")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
