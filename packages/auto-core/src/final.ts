@@ -4,7 +4,7 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { finalDoc } from "./docpaths"
 import { appendTask, parseFinalMark, type Plan, type Task } from "./plan"
 import { renderFinalTask, stageText, type FinalStage } from "./prompt"
-import { requireArtifact, type Opts } from "./runner"
+import { requireArtifact, type Opts, type UnitStop } from "./runner"
 
 // --final-review 终审闭环状态机(设计文档 docs/mode-final-review-design.md
 // B.2/C 节)。终审阶段是入 PLAN.md 的真任务(T-F<k> + `final: <stage>@<round>`
@@ -240,12 +240,14 @@ export async function generateFinalTask(
   round: number,
   prior: string,
   opts: Opts,
-): Promise<{ type: "ok"; proposal: FinalProposal } | { type: "blocked"; question: string }> {
+): Promise<{ type: "ok"; proposal: FinalProposal } | UnitStop> {
   const dir = opts.dir ?? dirname(plan.path)
   const file = finalProposalFile(stage, round, finalIndex(plan))
   const collected = await requireArtifact(client, planningTask(stage, round), renderFinalTask(plan, stage, round, prior, opts.mode), opts, {
     kind: "终审任务规划",
     role: "final-plan",
+    // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(commit-boundary-design.md)。
+    unitStart: true,
     artifact: `有效提案文件 ${file}`,
     detail: "缺失、无标题或无正文",
     requirement: `必须把自包含的任务提案写入 ${file}(首行 \`# <任务标题>\`,正文);即使认为该阶段无事可做,也要写出文件并在正文说明原因。`,

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, extractPriorKnowledge, knowledgeFile, priorKnowledgeComplete, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
+import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, extractKnowledge, extractPriorKnowledge, knowledgeFile, priorKnowledgeComplete, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -352,6 +352,60 @@ describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交�
       // 不主动清理: 现场原样保留,无任何新提交
       expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
       expect(await Bun.file(join(dir, "docs/R-01/temp-kb.md")).text()).toBe("半途而废的中间产物")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("extractKnowledge 完成判定(③补提交/④dirty 推广,commit-boundary-design.md)", () => {
+  function tempDir() {
+    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
+  }
+  // 本组只覆盖不启动会话的分支(skipped/dirty),client 不会被触达。
+  const client = {} as OpencodeClient
+
+  test("③ 本轮文档已产出但尚未提交 → 补提交后 skipped(完成判定以提交为准)", async () => {
+    const dir = tempDir()
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-01/migration-kb.md"), "第 1 轮迁移知识")
+      const result = await extractKnowledge(client, dir, { dir })
+      expect(result).toEqual({ type: "skipped", file: join("docs", "R-01", "migration-kb.md") })
+      expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
+      expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: knowledge")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("④ 文档缺失但工作区有未提交改动 → dirty(半途而废现场交人工,不主动清理)", async () => {
+    const dir = tempDir()
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+      writeFileSync(join(dir, "src.ts"), "半途而废的产物")
+      const result = await extractKnowledge(client, dir, { dir })
+      expect(result.type).toBe("dirty")
+      expect((result as { files: string[] }).files).toContain("src.ts")
+      expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("门禁关闭(--commit false)维持旧语义: 产物存在即 skipped,不查不提交", async () => {
+    const dir = tempDir()
+    try {
+      await git(dir, "init", "-q")
+      await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-01/migration-kb.md"), "第 1 轮迁移知识")
+      const result = await extractKnowledge(client, dir, { dir, commit: false })
+      expect(result).toEqual({ type: "skipped", file: join("docs", "R-01", "migration-kb.md") })
+      expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

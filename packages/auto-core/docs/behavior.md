@@ -196,18 +196,34 @@
   变更的审计轨迹、回滚粒度 = 会话。提交信息 = `任务编号 <label> <任务标题/子任务>` 短标签
    标题行(label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/
    blocked/pending/done,伪任务用 PLAN <label>:plan/handover/transition/knowledge/
-   numbering/final-plan/doc-migrate;子任务条目为 `任务编号 S<n> <标题>`、
-  省略任务标题)+ `Auto-Task`/
-  `Auto-Stage` trailer(目标仓库另记 `Auto-Nested` 嵌套仓库路径与 SHA)。挂点:
-  分解注入/子任务勾选/整任务/修复轮/收尾在状态写入后(状态写入含 CURRENT.md
-  镜像刷新: 分解注入与子任务勾选先刷新镜像再提交),判定/审核/脚本生成/
-  修复规划/终审规划等旁路会话在会话结束后,任务完成/阻塞/回退 pending 由 loop
-  边界提交(中断现场也提交,支持回滚到断点);dryrun 不提交。单仓库
-  提交失败仅警告不阻塞(下一次提交全量 add 清扫连带);仓库未配置 user.email 时
-  以固定身份兜底;`--commit false`(init 修订,写入配置 commit 键;none 为 false 别名)
-  可整体关闭(旧四档 subtask/task/once
-  与别名 --commit-subtask 已移除,出现即用法错误)。工作区遗留的未提交改动会被
-  下一次统一提交纳入(run 启动时经 pendingChanges 提示)。该执行权原则经 init
+   numbering/final-plan/doc-migrate/housekeeping/carryover/implement;子任务条目为 `任务编号 S<n> <标题>`、
+   省略任务标题)+ `Auto-Task`/
+  `Auto-Stage` trailer(目标仓库另以 `Auto-Nested` 记录**全部**嵌套仓库路径与最终
+  /最新 SHA——本轮有提交记新 SHA、无提交记当前 HEAD,任一 root 提交都能对齐跨仓库
+  状态)。挂点:
+   分解注入/子任务勾选/整任务/修复轮/收尾在状态写入后(状态写入含 CURRENT.md
+   镜像刷新: 分解注入与子任务勾选先刷新镜像再提交),判定/审核/脚本生成/
+   修复规划/终审规划等旁路会话在会话结束后,任务完成/阻塞/回退 pending 由 loop
+   边界提交(中断现场也提交,支持回滚到断点);dryrun 不提交。
+  **提交是完成条件(commit-boundary-design.md,2026-09-14)**:任务/子任务/隐藏任务
+  (伪任务/旁路会话)只要修改了 Git 纳管内容,统一提交成功才算完成——提交失败
+  一律**阻塞停机(退出码 2)待人工**,不再仅警告(commitTree 把失败清单上报给
+  调用方);每个执行单元(任务/子任务/独立隐藏任务)启动时经 beginUnit 做
+  **clean 门禁**(工作区必须干净,依赖的信息全部由上一次提交固定;driver 独占
+  状态文件 PLAN.md/CURRENT.md 的遗留由 carryover 补提交自愈,其余脏区阻塞交人工
+  ——run 启动与各单元启动同口径,旧"工作区遗留改动会被下一次提交吸纳"语义随之
+  废除)并记录逐仓库 HEAD SHA 基线,收口时经 unitViolations 校验:工作区干净且
+  基线..HEAD 区间内全部提交带 `Auto-Stage` trailer(外部提交 = 隔离破坏,阻塞);
+  恢复续跑(active 进度记录 + 会话复用/交接续跑)豁免 clean 检查——工作区脏区是
+  本单元自身进度。独立隐藏任务的幂等入口推广前置知识提取的 ③④ 协议: 产物已落盘
+  未提交 → 补提交即完成(git.ts commitPending;knowledge/phase-handover 直连,
+  phase-plan 经 carryover 自愈覆盖,final 提案经追加提交覆盖);产物缺失而工作区
+  脏 → dirty 阻塞交人工(不写状态文件、不清扫,git 决定权在人工;k 阶段"提取失败
+  仅警告"对 dirty 例外)。AGENTS.md 指针块/.gitignore 的启动补写经 housekeeping
+  提交收口;终审任务追加与修复检查项注入(driver 状态写入)各自成提交。仓库未配置
+  user.email 时以固定身份兜底;`--commit false`(init 修订,写入配置 commit 键;none 为 false 别名)
+  可整体关闭——门禁随之全部失效,维持旧语义(旧四档 subtask/task/once
+  与别名 --commit-subtask 已移除,出现即用法错误)。该执行权原则经 init
   下沉:AGENTS.md 提交原则块、agent 契约与 state-rule 片段;`check` 子命令同步
   扫描违背该原则的描述。
 - subtask 三档(config.subtask,init --subtask 修订):`auto`(缺省;分解会话 → 逐子任务,
@@ -326,9 +342,13 @@
   driver 自身写入经 `src/protect.ts` 的 allowWrite/reprotect 临时放行。唯一例外是
   verify 判定会话:其被授权更新后续未完成任务的 verify 字段(verify 经验沉淀),
   会话期间 allowWrite(PLAN.md)、结束后校验,越权编辑(checkPlanEdit 比对任务集合/
-  状态/attempts/正文)整体还原。完成判定不靠
-  agent 自报——任务级验收由 driver 执行 verify 脚本、旁路独立判定会话读输出判定,
-  driver 只解析其判定文件;子任务会话结束后 driver 按可信勾选(验收统一在任务级进行)。
+   状态/attempts/正文)整体还原。完成判定不靠
+   agent 自报——任务级验收由 driver 执行 verify 脚本、旁路独立判定会话读输出判定,
+   driver 只解析其判定文件;子任务会话结束后 driver 按可信勾选(验收统一在任务级进行)。
+   **完成判定以提交为条件(commit-boundary-design.md)**:任何单元(任务/子任务/
+   隐藏任务)的产物或状态写入,统一提交成功落账才算完成——提交失败即阻塞退出 2;
+   单元启动要求工作区 clean(SHA 基线),收口校验提交区间内只有 driver 提交
+   (带 Auto-Stage trailer)。
 - verify 验收开关(config.verify,缺省 false;仅启用时 driver 才进入任务级三段式验收)
   ——未启用时任务在收尾后由 driver 直接 markDone(不写 verified,未经验证不落账),
   --review 的质量审核改为此时串行执行(--early 的并行窗口不存在,loop 启动时打降级

@@ -31,7 +31,7 @@
 - 步进模式(OPENCODE_AUTO_STEP 环境变量:phase/task/subtask 包含式边界硬暂停)→ `src/step.ts`(设计: docs/step-mode-design.md)
 - 验收/审核 → `src/verify.ts` + `docs/verify-review-design.md`;终审闭环 → `src/final.ts` + `docs/mode-final-review-design.md`
 - 提示词文案 → 只动 `templates/prompts/*.md`(`src/prompt.ts` 只做数据组装),改后跑 `bun test test/prompt.test.ts`
-- 统一提交 → `src/git.ts`;中断恢复 → `src/resume.ts`(恢复点在提示词下发时即写、可重试错误还原;**单元归属门禁**——active 会话属于具体执行单元(阶段/子任务#N/修复检查项#N),仅当该单元将重跑才复用,否则记录转总结态开新会话,runner.ts unitReruns;子任务/修复项 active 记录带归属序号 index、单元收口即转总结态;阶段级旁路步骤 phase-plan/phase-handover 经 requireArtifact 的 spec.step 携带 step 恢复点,openStep/closeStep 收口;**会话恢复优先于文件推导路由**——设计 docs/session-resume-precedence-design.md,2026-09-10 已实施);模式 → `templates/modes/` + `src/mode.ts`
+- 统一提交 → `src/git.ts`;单元提交边界(完成判定 = 落盘且已提交、启动 clean 门禁 + SHA 基线、Auto-Nested 全量嵌套仓库、隐藏任务 ③④)→ 同 `src/git.ts` 的 beginUnit/unitBaseline/unitViolations/commitPending + `src/runner.ts` afterSession/requireArtifact(spec.unitStart),设计 docs/commit-boundary-design.md;中断恢复 → `src/resume.ts`(恢复点在提示词下发时即写、可重试错误还原;**单元归属门禁**——active 会话属于具体执行单元(阶段/子任务#N/修复检查项#N),仅当该单元将重跑才复用,否则记录转总结态开新会话,runner.ts unitReruns;子任务/修复项 active 记录带归属序号 index、单元收口即转总结态;阶段级旁路步骤 phase-plan/phase-handover 经 requireArtifact 的 spec.step 携带 step 恢复点,openStep/closeStep 收口;**会话恢复优先于文件推导路由**——设计 docs/session-resume-precedence-design.md,2026-09-10 已实施;恢复保真专项——可恢复 session id 标准 + stash 回滚,设计 docs/session-recovery-fidelity-design.md,实施另立计划);模式 → `templates/modes/` + `src/mode.ts`
 - 自动编号(--auto-number)→ `src/numbering.ts`(记录 .auto/next-task、缺失时 AI 恢复会话)+ `templates/prompts/number-recovery.md`
 - 死循环检测(会话内重复同一动作且结果不变 → driver steer 提示,OPENCODE_AUTO_STUCK 缺省 on)→ `src/stuck.ts` + `templates/prompts/stuck-hint.md`(设计: docs/stuck-loop-design.md)
 - 阶段化模型路由与配额降级(OPENCODE_AUTO_MODEL / _FALLBACK:按阶段字母 + 会话角色逐次带 model,配额受限时 fork 保上下文换候选;OPENCODE_AUTO_MODEL_FAILBACK_SCOPE 控回试粒度 phase|task|subtask|session 缺省 task,/failback 在安全边界重置降级状态、带参整体重定义模型序,实际使用模型 ◈ 行上终端)→ 设计 docs/model-routing-design.md(2026-09-10 定稿,**P1..P8 已实施**;解析在 src/switches.ts 的 parseModelPolicy,注入点为 runner.ts attempt 的 client.session.prompt——target=chain.model??sticky??override??resolveModel(角色>字母>*),roleOf/phaseToRole 推角色、splitModel 拆分、classifySessionError 归类 quota/auth/rate/overflow/transient/unknown、runSession 降级环取候选+窗口钳制经 fork 续跑;回试粒度与 /failback 模块态在 src/failback.ts,边界挂点同 step/exit)
@@ -55,8 +55,8 @@
 - 退出码:`0` 完成 / `1` 用法或环境错误 / `2` 阻塞或回退 pending 待人工 / `130` 连续两次 Ctrl+C 强退。
 - 宪法级项目属性(-m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--test-by-driver/--handover-test/--auto-number/--no-auto-number/--phases/--source-dir/--source-path/--dest-dir)仅 init 固化到目标目录 `.opencode/auto/config.json`,run 出现即退出码 1;配置坏文件严格失败,未知键忽略。
 - **driver 独占状态写入**:目标目录 PLAN.md/CURRENT.md 与 verified 字段全由 driver 写,AI 会话禁止编辑;`run` 期间这些状态文件只读(src/protect.ts 放行 driver 写入)。
-- **统一提交**:AI 会话不得执行提交类命令;会话结束后由 driver 经 src/git.ts 递归提交目标目录全部改动(先嵌套子仓库后本仓库)。
-- 完成判定不靠 agent 自报:verify 启用时 driver 执行脚本、独立判定会话下结论;子任务由 driver 勾选。
+- **统一提交**:AI 会话不得执行提交类命令;会话结束后由 driver 经 src/git.ts 递归提交目标目录全部改动(先嵌套子仓库后本仓库)。**提交是完成条件**(docs/commit-boundary-design.md):统一提交失败 → 阻塞停机待人工;执行单元(任务/子任务/独立隐藏任务)启动要求工作区 clean(PLAN.md/CURRENT.md 遗留自愈,其余脏区 dirty 交人工,run 启动同口径),收口经 SHA 基线校验提交区间内只有 driver 提交(Auto-Stage trailer);恢复续跑豁免 clean 检查。
+- 完成判定不靠 agent 自报:verify 启用时 driver 执行脚本、独立判定会话下结论;子任务由 driver 勾选;隐藏任务产物落盘且已提交才算完成(③ 补提交/④ dirty,git.ts commitPending/beginUnit)。
 - **独立判定会话不 fork**:verify-judge/review/review-fix/final 系会话全新创建,不继承执行上下文(独立判断是完成判定的基石,见 fork-decompose-design.md §9)。
 - **实验开关只读环境、不落盘**:`OPENCODE_AUTO_*` 环境变量层(src/switches.ts 核心内解析、CLI 壳零改动)不写任何状态文件,实验语义 = 本次运行;宪法键转正前不进 ProjectConfig。
 

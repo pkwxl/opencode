@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path"
 import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { ExitRequested, maybeExit } from "./exit"
 import { clearSticky, consumeFailback } from "./failback"
-import { changedFiles, commitTree, pendingChanges } from "./git"
+import { beginUnit, changedFiles, commitPending, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
 // .gitignore 条目维护已上收至叶子模块 gitignore.ts(与 reset 成对);此处
 // 再导出以保持既有导入路径 @opencode-ai/auto-core/loop 不变。
 import { ensureGitignore } from "./gitignore"
@@ -31,7 +31,7 @@ import {
 import { renderDryrun, renderPhaseHandover, renderPhasePlan, stageText } from "./prompt"
 import { allowWrite, protect, reprotect, unprotect } from "./protect"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
-import { closeStep, openStep, peekProgress } from "./resume"
+import { closeStep, openStep, peekProgress, recallProgress } from "./resume"
 import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { shellProfile } from "./shell"
 import { manage, type ServerHandle } from "./server"
@@ -198,6 +198,19 @@ export async function runAll(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
+  // 启动 clean 门禁(commit-boundary-design.md P3): 提交启用时要求工作区 clean——
+  // 此后所有执行单元(任务/子任务/隐藏任务)依赖的信息全部由上一次提交固定。
+  // 人工遗留脏区阻塞交人工(替代旧"⚠ 会被下一次提交吸纳"提示:吸纳会把人工改动
+  // 混入 driver 审计轨迹,破坏提交即隔离边界);driver 独占状态文件(PLAN.md/
+  // CURRENT.md)的遗留由首个单元的 beginUnit 以 carryover 补提交自愈。
+  if (opts.commit !== false && !opts.dryrun) {
+    const files = await changedFiles(directory)
+    if (files.length) {
+      log("⏸ 工作区存在未提交改动,为保证执行单元以干净基线启动,请先人工处置(提交或清理)后重新运行:")
+      for (const file of files) log(`  ${file}`)
+      return 2
+    }
+  }
   // 启动会话前确保 AGENTS.md 的 opencode-auto 块与当前配置渲染一致(缺失则追加、
   // 内容与渲染不一致则整块替换、旧版/多余的带名标记块一律清理)。AGENTS.md 本身
   // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
@@ -206,10 +219,18 @@ export async function runAll(
   if (ensured.block === "replaced") log("已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)")
   if (ensured.legacyRemoved) log(`已清理: AGENTS.md 中 ${ensured.legacyRemoved} 个旧版/多余 opencode-auto 标记块`)
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
-  // 工作区已有未提交改动会被 driver 的下一次提交一并纳入(统一提交为全量清扫
-  // 语义,与此前会话清扫提交一致),提前提示用户。dryrun 不做任何提交,不提示。
-  if (opts.commit !== false && !opts.dryrun && (await pendingChanges(directory))) {
-    log("⚠ 工作区已有未提交改动,driver 的下一次统一提交会将它们一并纳入(如需隔离请先自行提交)")
+  // housekeeping 收口提交: ensurePointer/ensureGitignore 的补写是 driver 改动,立即
+  // 落账使首个执行单元启动时工作区 clean;提交失败按环境阻塞退出 2
+  // (commit-boundary-design.md P3)。dryrun 不做任何提交。
+  if (opts.commit !== false && !opts.dryrun && (await changedFiles(directory)).length) {
+    const settled = await commitTree(directory, { id: "PLAN", title: "运行前基线收口" }, {
+      stage: "housekeeping",
+      subject: "PLAN housekeeping 运行前基线收口(AGENTS.md 指针块/.gitignore)",
+    })
+    if (!settled.ok) {
+      log(`⏸ 运行前基线收口提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")},请人工处理 git 后重新运行`)
+      return 2
+    }
   }
   let server: ServerHandle | undefined
   // --interactive 旁路输入控制器;server 就绪后创建,finally 中关闭。
@@ -303,6 +324,19 @@ export async function runAll(
       if (announce) banner("全部任务完成,进入终审闭环")
       const append = async (proposal: FinalProposal) => {
         const id = await appendFinalTask(path, plan, route.stage, route.round, proposal)
+        // 追加是 driver 状态写入(PLAN.md),立即统一提交——下一个执行单元(终审
+        // 任务)的启动 clean 门禁据此成立;提交同时清扫"追加前中断"遗留的未提交
+        // 提案文件(③ 补账语义,commit-boundary-design.md P3)。失败 → stopped 交人工。
+        if (opts.commit !== false && !opts.dryrun) {
+          const settled = await commitTree(directory, { id: "PLAN", title: `终审任务追加(${stageText(route.stage)} 第 ${route.round} 轮)` }, {
+            stage: "final-plan",
+            subject: `PLAN final-plan 追加终审任务 ${id}`,
+          })
+          if (!settled.ok) {
+            log(`⏸ 终审任务 ${id} 已追加但提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。请人工提交后重新运行`)
+            return "stopped" as const
+          }
+        }
         log(`✓ 已追加终审任务 ${id}「${stageText(route.stage)}」,主循环继续执行`)
         return "appended" as const
       }
@@ -322,6 +356,11 @@ export async function runAll(
         server: serverHandle,
         mode: opts.mode,
       })
+      if (generated.type === "dirty") {
+        log(`⏸ 终审任务生成会话启动前工作区不净,请人工处置(提交/清理)后重新运行:`)
+        for (const file of generated.files) log(`  ${file}`)
+        return "stopped"
+      }
       if (generated.type === "blocked") {
         log(`⏸ 终审任务生成会话受阻(隐性阻塞,请检查后重新运行):\n${generated.question}`)
         return "stopped"
@@ -364,6 +403,25 @@ export async function runAll(
         if (task.status === "blocked" && task.question) {
           log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
         }
+        // 任务单元提交边界(commit-boundary-design.md P3): 启动 clean 门禁 + SHA
+        // 基线。active 进度记录 = 恢复续跑(工作区承载本单元自身进度,含交接文档)
+        // 豁免 clean、仍记基线;done 终态提交后凭基线做收口校验(提交区间须全为
+        // driver 提交)。driver 独占状态文件遗留由 beginUnit 以 carryover 自愈。
+        let taskBaseline: UnitBaseline | undefined
+        {
+          const recalled = await recallProgress(directory, task.id)
+          if (recalled?.active === true) {
+            if (opts.commit !== false && !opts.dryrun) taskBaseline = await unitBaseline(directory)
+          } else {
+            const gate = await beginUnit(directory, opts, task)
+            if (gate.type === "dirty") {
+              log(`⏸ ${task.id} 启动前工作区不净,为保证执行单元以干净基线启动,请人工处置(提交或清理)后重新运行:`)
+              for (const file of gate.files) log(`  ${file}`)
+              return 2
+            }
+            taskBaseline = gate.baseline
+          }
+        }
         banner(`${task.id} ${task.title}`)
         log(`▶ ${task.id} 开始执行(第 ${task.attempts + 1} 次尝试)`)
         // 任务切换挂点(STATS_PLAN §3): 重置 task 桶(id 变化时)、清空 per-session
@@ -393,6 +451,13 @@ export async function runAll(
           wrapup: opts.wrapup,
           phase,
         })
+        if (outcome.type === "dirty") {
+          // 单元启动 clean 门禁失败(runTask 内层): 不写 PLAN.md、不做清扫提交——
+          // git 状态的决定权在人工(commit-boundary-design.md)。
+          log(`⏸ ${task.id} 执行单元启动前工作区不净(疑似上次半途而废的现场或人工改动),请人工处置(提交/清理)后重新运行:`)
+          for (const file of outcome.files) log(`  ${file}`)
+          return 2
+        }
         if (outcome.type === "blocked") {
           await block(path, task.id, outcome.question)
           log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
@@ -407,8 +472,11 @@ export async function runAll(
             log(lines[1])
           }
           // 中断现场也提交: 保存断点(阻塞问题、CURRENT.md 中断备注),支持回滚到断点。
+          // 提交失败(典型: 统一提交被环境拒绝)仅升级告警——已处在退出 2 的路上,
+          // 改动保留在工作区待人工处置。
           if (opts.commit !== false) {
-            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
+            const settled = await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
+            if (!settled.ok) log(`⚠ 中断现场提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(改动保留在工作区,请人工处理)`)
           }
           return 2
         }
@@ -421,7 +489,8 @@ export async function runAll(
             log(lines[1])
           }
           if (opts.commit !== false) {
-            await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
+            const settled = await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
+            if (!settled.ok) log(`⚠ 中断现场提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(改动保留在工作区,请人工处理)`)
           }
           return 2
         }
@@ -440,8 +509,26 @@ export async function runAll(
         // 任务完成的终态提交: PLAN.md 的 [done]/verified 与 CURRENT.md 的删除在此
         // 一并落账(各会话产出已随会话提交,这里是收口);终审路由追加的下一任务
         // 改动归入其生成/执行会话的提交。
+        // 完成条件门禁(commit-boundary-design.md): 终态提交失败 → 退出 2 交人工
+        // (任务标记已在工作区,人工提交后重跑,下一任务以干净基线启动);提交成功
+        // 后凭任务基线做收口校验(提交区间须全为 driver 提交,外部提交即隔离破坏)。
         if (opts.commit !== false) {
-          await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+          const settled = await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
+          if (!settled.ok) {
+            log(
+              `⏸ ${task.id} 已完成但终态统一提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。` +
+                `任务标记仍在工作区,请人工提交后重新运行`,
+            )
+            return 2
+          }
+          if (taskBaseline) {
+            const violations = await unitViolations(directory, taskBaseline)
+            if (violations.length) {
+              log(`⏸ ${task.id} 单元收口校验未通过(任务按已完成计,但隔离边界已被破坏,请人工核查):`)
+              for (const problem of violations) log(`  ${problem}`)
+              return 2
+            }
+          }
         }
         // 步进暂停(task 边界,OPENCODE_AUTO_STEP ≥ task): 任务终态提交后、终审
         // 路由与下一任务前硬暂停,回车放行。dir 传入使暂停等待从用时统计扣除。
@@ -488,6 +575,11 @@ export async function runAll(
           server: serverHandle,
           mode: opts.mode,
         })
+        if (numbering.type === "dirty") {
+          log(`⏸ 编号记录恢复前工作区不净,请人工处置(提交/清理)后重新运行:`)
+          for (const file of numbering.files) log(`  ${file}`)
+          return 2
+        }
         if (numbering.type === "blocked") {
           log(`⏸ 编号记录恢复会话受阻(隐性阻塞,请检查后重新运行):\n${numbering.question}`)
           return 2
@@ -562,6 +654,9 @@ export async function runAll(
           {
             kind: "阶段规划",
             step: { step: "phase-plan", letter: phase },
+            // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
+            // (commit-boundary-design.md;PLAN.md 遗留由 beginUnit carryover 自愈)。
+            unitStart: true,
             artifact: "已填充的 PLAN.md(至少一个任务)",
             detail: "缺失、无任务、任务格式无法解析或任务编号复用了已占用的编号",
             requirement:
@@ -584,7 +679,12 @@ export async function runAll(
           },
         )
         if (typeof planned !== "number") {
-          log(`⏸ 阶段规划会话受阻(隐性阻塞,请检查后重新运行):\n${planned.question}`)
+          if (planned.type === "dirty") {
+            log(`⏸ 阶段规划会话启动前工作区不净,请人工处置(提交/清理)后重新运行:`)
+            for (const file of planned.files) log(`  ${file}`)
+          } else {
+            log(`⏸ 阶段规划会话受阻(隐性阻塞,请检查后重新运行):\n${planned.question}`)
+          }
           return 2
         }
         // 自动编号: 规划成功即把编号记录推进到本次最大编号 + 1(只增不减),
@@ -620,41 +720,68 @@ export async function runAll(
       const handover = await handoverDoc(directory, round, phase)
       const handoverFile = join(directory, handover)
       await mkdir(dirname(handoverFile), { recursive: true })
-      log(`▶ 开交接蒸馏会话产出 ${handover}`)
-      const distilled = await requireArtifact(
-        serverHandle.client,
-        { id: "PLAN", title: `阶段交接蒸馏(${phase} ${phaseText(phase)})`, status: "in_progress", attempts: 0, body: "" },
-        renderPhaseHandover({ phase, handover, next, verify: opts.verify }),
-        {
-          agent: agentName,
-          dir: directory,
-          verbose: opts.verbose,
-          waitAnswer: opts.waitAnswer,
-          commit: opts.commit,
-          contextLimit: opts.contextLimit,
-          permission: opts.permission,
-          interactive: repl,
-          server: serverHandle,
-        },
-        {
-          kind: "交接蒸馏",
-          step: { step: "phase-handover", letter: phase },
-          artifact: `有效交接文档 ${handover}(四个必备小节齐备)`,
-          detail: "缺失或小节不全",
-          requirement:
-            `必须把交接文档写入 ${handover},并包含标题逐字为` +
-            "「## 关键决策」「## 约束与坑」「## 下一阶段必读清单」「## 产物索引」的四个小节。",
-          commit: { stage: "phase-handover", subject: `PLAN handover ${phase} ${phaseText(phase)}` },
-          reset: () => rm(handoverFile, { force: true }),
-          collect: async () => {
-            const text = await Bun.file(handoverFile).text().catch(() => "")
-            return validHandover(text) || undefined
+      // 蒸馏幂等跳过 + ③ 补提交(commit-boundary-design.md P4): 交接文档已齐备
+      // (四小节经 validHandover 校验)时不再重开蒸馏会话——上次中断在"蒸馏已产出、
+      // driver 未收口"区间的现场直接续跑归档/台账;文档仍在未提交清单则先补提交
+      // (产物落盘且已提交才算完成)。部分写就(小节不全)照常走蒸馏: reset 清文件
+      // 重来,step 恢复点(openStep)仍可复用原会话续写。
+      const distillTask = { id: "PLAN", title: `阶段交接蒸馏(${phase} ${phaseText(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
+      const distillCommit = { stage: "phase-handover", subject: `PLAN handover ${phase} ${phaseText(phase)}` }
+      if (validHandover(await Bun.file(handoverFile).text().catch(() => ""))) {
+        const pending = await commitPending(directory, opts, distillTask, distillCommit, [handover])
+        if (pending !== "clean") {
+          if (!pending.ok) {
+            log(`⏸ 交接文档补提交失败: ${pending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")},请人工处理后重新运行`)
+            return 2
+          }
+          log(`✓ 交接文档已产出但尚未提交,已补提交: ${handover}`)
+        }
+        log(`↻ 交接文档 ${handover} 已齐备,跳过蒸馏会话直接进入归档`)
+      } else {
+        log(`▶ 开交接蒸馏会话产出 ${handover}`)
+        const distilled = await requireArtifact(
+          serverHandle.client,
+          distillTask,
+          renderPhaseHandover({ phase, handover, next, verify: opts.verify }),
+          {
+            agent: agentName,
+            dir: directory,
+            verbose: opts.verbose,
+            waitAnswer: opts.waitAnswer,
+            commit: opts.commit,
+            contextLimit: opts.contextLimit,
+            permission: opts.permission,
+            interactive: repl,
+            server: serverHandle,
           },
-        },
-      )
-      if (distilled !== true) {
-        log(`⏸ 交接蒸馏会话受阻(隐性阻塞,请检查后重新运行):\n${distilled.question}`)
-        return 2
+          {
+            kind: "交接蒸馏",
+            step: { step: "phase-handover", letter: phase },
+            // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
+            // (commit-boundary-design.md;部分写就的交接文档由 reset 清理重写)。
+            unitStart: true,
+            artifact: `有效交接文档 ${handover}(四个必备小节齐备)`,
+            detail: "缺失或小节不全",
+            requirement:
+              `必须把交接文档写入 ${handover},并包含标题逐字为` +
+              "「## 关键决策」「## 约束与坑」「## 下一阶段必读清单」「## 产物索引」的四个小节。",
+            commit: distillCommit,
+            reset: () => rm(handoverFile, { force: true }),
+            collect: async () => {
+              const text = await Bun.file(handoverFile).text().catch(() => "")
+              return validHandover(text) || undefined
+            },
+          },
+        )
+        if (distilled !== true) {
+          if (distilled.type === "dirty") {
+            log(`⏸ 交接蒸馏会话启动前工作区不净,请人工处置(提交/清理)后重新运行:`)
+            for (const file of distilled.files) log(`  ${file}`)
+          } else {
+            log(`⏸ 交接蒸馏会话受阻(隐性阻塞,请检查后重新运行):\n${distilled.question}`)
+          }
+          return 2
+        }
       }
       // 收口: 蒸馏会话(本步骤唯一的 AI 环节)已产出有效交接文档并提交,删除 driver
       // 侧恢复点。其后的归档/重置/台账为幂等的 driver 记账,中断由 runPhaseLoop 的
@@ -673,10 +800,20 @@ export async function runAll(
       const fat = agentsLines > 150 ? `AGENTS.md ${agentsLines} 行超过 150 行上限,请人工精简` : undefined
       if (fat) log(`ℹ ${fat}`)
       if (opts.commit !== false) {
-        await commitTree(directory, { id: "PLAN", title: `阶段交接(${phase} ${phaseText(phase)})` }, {
+        // 交接提交是阶段单元的收口落账(归档/重置/台账),提交失败 → 阻塞退出 2
+        // 交人工: 台账已追加,重跑会按台账路由到下一阶段,遗留未提交改动由人工
+        // 处置后继续(commit-boundary-design.md P3)。
+        const settled = await commitTree(directory, { id: "PLAN", title: `阶段交接(${phase} ${phaseText(phase)})` }, {
           stage: "phase-transition",
           subject: `PLAN transition ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
         })
+        if (!settled.ok) {
+          log(
+            `⏸ 阶段交接提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。` +
+              `归档/台账改动保留在工作区(台账已追加),请人工提交后重新运行`,
+          )
+          return 2
+        }
       }
       // 阶段代答汇总(auto-resolve-design.md §H-③,H6): 置顶于 ■ 收口行之前。
       for (const line of await phaseResolveLines(directory, phase)) log(line)
@@ -807,7 +944,14 @@ export async function runAll(
             })
             if (extracted.type === "ok") log(`✓ 迁移知识文档已产出: ${extracted.file}`)
             else if (extracted.type === "skipped") log(`↻ 迁移知识文档已产出(${extracted.file}),跳过提取,直接进入交接`)
-            else {
+            else if (extracted.type === "dirty") {
+              // dirty(commit-boundary-design.md ④ 推广): 工作区不净(上次提取半途而废
+              // 的现场、补提交失败或统一提交失败)必须停机交人工——照常交接会让下一个
+              // 单元在不干净的基线上启动,破坏提交边界。
+              log(`⏸ 迁移知识提取无法在干净基线上完成或收账,请人工处置(提交/清理)后重新运行:`)
+              for (const file of extracted.files) log(`  ${file}`)
+              return 2
+            } else {
               log(
                 `⚠ 迁移知识沉淀未完成(knowledge_extraction_error),退出码不受影响,k 阶段照常交接;` +
                   `可修复问题后按人工回退规程(删本轮台账 k 行与本轮迁移知识文档)重跑单独重试。受阻详情:\n${extracted.question}`,

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
+import { changedFiles } from "../src/git"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
 import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
@@ -935,6 +936,195 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
       expect(open?.step).toBe("phase-plan")
       expect(open?.letter).toBe("m")
       expect(open?.session).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---- requireArtifact 独立单元门禁(spec.unitStart,commit-boundary-design.md)----
+
+describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
+  // 复用 step 恢复块的 fake client 形态: 单会话 + idle 结算,记录 create/prompt;
+  // produce 使会话回合内落一个文件(模拟 AI 写产物,供统一提交有物可提)。
+  function unitClient(produce?: () => Promise<void>) {
+    const state = { creates: 0, prompts: [] as string[] }
+    const client = {
+      session: {
+        create: async () => {
+          state.creates++
+          return { data: { id: `ses_new_${state.creates}` } }
+        },
+        fork: async () => ({ data: { id: "ses_fork" } }),
+        get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
+        update: async () => ({}),
+        prompt: async (params: { sessionID: string }) => {
+          state.prompts.push(params.sessionID)
+          return {}
+        },
+        promptAsync: async () => ({}),
+        abort: async () => ({}),
+        messages: async () => ({ data: [{ info: { role: "user" } }] }),
+      },
+      provider: { list: async () => ({ data: { all: [] } }) },
+      event: {
+        subscribe: async () => ({
+          stream: (async function* () {
+            if (produce) await produce()
+            yield { type: "session.idle", properties: { sessionID: `ses_new_${state.creates}` } }
+          })(),
+        }),
+      },
+    } as unknown as OpencodeClient
+    return { client, state }
+  }
+
+  const planTask = { id: "PLAN", title: "知识提取(k)", status: "in_progress" as const, attempts: 0, body: "" }
+  const unitSpec = {
+    kind: "知识提取",
+    unitStart: true,
+    artifact: "非空知识文档",
+    requirement: "写入文档",
+    collect: async () => "产出",
+  }
+
+  async function git(dir: string, ...args: string[]) {
+    const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+    if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+    return out
+  }
+
+  test("启动前工作区脏(人工改动)→ dirty,不开会话", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
+    try {
+      await git(dir, "init", "-q")
+      await writeFile(join(dir, "human.txt"), "人工遗留")
+      const { client, state } = unitClient()
+      const value = await requireArtifact(client, planTask, "提取提示词", { dir }, unitSpec)
+      expect(value).toEqual({ type: "dirty", files: ["human.txt"] })
+      expect(state.creates).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("driver 状态文件(PLAN.md)遗留 → carryover 自愈后照常开会话产出", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
+    try {
+      await git(dir, "init", "-q")
+      await writeFile(join(dir, "seed.txt"), "s")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "seed")
+      // 上次提交失败遗留的 driver 状态落账: 只含 PLAN.md → 自愈补提交
+      await writeFile(join(dir, "PLAN.md"), "## T-001: 遗留 [done]\n")
+      const { client, state } = unitClient()
+      const value = await requireArtifact(client, planTask, "提取提示词", { dir }, unitSpec)
+      expect(value).toBe("产出")
+      expect(state.creates).toBe(1)
+      const log = await git(dir, "log", "--pretty=%B")
+      expect(log).toContain("Auto-Stage: carryover")
+      // .auto/ 运行时状态(stats)不属纳管内容,排除后工作区应干净
+      expect((await changedFiles(dir)).filter((file) => !file.startsWith(".auto/"))).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("spec.commit 提交失败(pre-commit 拒绝)→ blocked,不视为完成", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
+    try {
+      await git(dir, "init", "-q")
+      await mkdir(join(dir, "hooks"))
+      await writeFile(join(dir, "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+      // 先落账 hook 脚本本身(保持工作区 clean),再启用 hooksPath 使后续提交失败
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "hooks")
+      await git(dir, "config", "core.hooksPath", "hooks")
+      const { client } = unitClient(async () => {
+        await writeFile(join(dir, "kb.md"), "知识")
+      })
+      const value = await requireArtifact(client, planTask, "提取提示词", { dir }, {
+        ...unitSpec,
+        commit: { stage: "knowledge", subject: "PLAN knowledge 提取" },
+      })
+      expect(typeof value === "object" && "type" in value && value.type).toBe("blocked")
+      if (typeof value === "object" && "type" in value && value.type === "blocked") {
+        expect(value.question).toContain("统一提交失败")
+        expect(value.question).toContain("不视为完成")
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("恢复复用原会话(step 记录存活)豁免 clean 检查: 脏的产物现场照常续跑", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
+    try {
+      await git(dir, "init", "-q")
+      // 半途产物 + active step 记录 + 存活会话 → 复用续跑而非 dirty 阻塞
+      await writeFile(join(dir, "docs-kb.md"), "半途产物")
+      await saveProgress(dir, { task: "PLAN", session: "ses_alive", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+      const state = { creates: 0, prompts: [] as string[] }
+      const client = {
+        session: {
+          create: async () => {
+            state.creates++
+            return { data: { id: `ses_new_${state.creates}` } }
+          },
+          fork: async () => ({ data: { id: "ses_fork" } }),
+          get: async (params: { sessionID: string }) => ({ data: { id: params.sessionID } }),
+          update: async () => ({}),
+          prompt: async (params: { sessionID: string }) => {
+            state.prompts.push(params.sessionID)
+            return {}
+          },
+          promptAsync: async () => ({}),
+          abort: async () => ({}),
+          messages: async () => ({
+            data: [
+              { info: { role: "user" } },
+              { info: { role: "assistant", providerID: "kimi", modelID: "k2", tokens: { input: 5000, output: 200, reasoning: 0, cache: { read: 1000, write: 0 } } } },
+            ],
+          }),
+        },
+        provider: { list: async () => ({ data: { all: [] } }) },
+        event: {
+          subscribe: async () => ({
+            stream: (async function* () {
+              yield { type: "session.idle", properties: { sessionID: "ses_alive" } }
+            })(),
+          }),
+        },
+      } as unknown as OpencodeClient
+      const value = await requireArtifact(client, planTask, "续跑提示词", { dir }, {
+        ...unitSpec,
+        step: { step: "phase-plan", letter: "m" },
+      })
+      expect(value).toBe("产出")
+      expect(state.prompts).toEqual(["ses_alive"]) // 复用原会话,未因脏区分叉
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("afterSession 完成条件门禁(commit-boundary-design.md)", () => {
+  test("提交失败(pre-commit 拒绝)→ failed 带问题文本;门禁关闭(--commit false)→ ok", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-after-gate-"))
+    try {
+      await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
+      await mkdir(join(dir, "hooks"))
+      await writeFile(join(dir, "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+      await Bun.spawn(["git", "-C", dir, "config", "core.hooksPath", "hooks"]).exited
+      await writeFile(join(dir, "a.txt"), "a")
+      const failed = await afterSession(dir, {}, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
+      expect(failed.type).toBe("failed")
+      if (failed.type === "failed") expect(failed.question).toContain("统一提交失败")
+      const off = await afterSession(dir, { commit: false }, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
+      expect(off).toEqual({ type: "ok" })
+      const none = await afterSession(undefined, {}, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
+      expect(none).toEqual({ type: "ok" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -6,7 +6,7 @@ import type { Interactive } from "./interactive"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
-import { commitTitle, commitTree } from "./git"
+import { beginUnit, commitTitle, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { currentRound } from "./phases"
@@ -63,7 +63,17 @@ import { stepPause } from "./step"
 import type { ServerControl } from "./server"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 
-export type Outcome = { type: "completed" } | { type: "blocked"; question: string } | { type: "incomplete"; reason: string }
+// 任务结局。dirty(commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
+// 出口: 不写 PLAN.md、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
+export type Outcome =
+  | { type: "completed" }
+  | { type: "blocked"; question: string }
+  | { type: "incomplete"; reason: string }
+  | { type: "dirty"; files: string[] }
+
+// 单元停机出口(blocked = 问题写 PLAN.md + interrupted 清扫提交;dirty = 不写不扫,
+// 人工处置 git 后重跑)。供各执行函数的返回联合引用,替代原 `Outcome & {type:"blocked"}`。
+export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; files: string[] }
 
 // Questions get this autonomous reply when no human answers in time (or
 // --wait-answer was not given for non-permission questions); only a repeated
@@ -108,21 +118,47 @@ const FIX_ROUNDS = 3
 // 文档引用 + 失效引用 ⚠ 日志(改写内容随本次统一提交落账,不另起提交)。
 // 受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省 off 空转)。
 // 导出供单测(H4 守卫: 采集不受 --commit false / dryrun 的提前 return 影响)。
+//
+// 完成条件门禁(commit-boundary-design.md P2): 返回 SessionCommit——统一提交
+// 失败或(baseline 给出时)单元收口校验不通过 → failed,调用方按"不视为完成"
+// 阻塞停机待人工;无 dir / 门禁关闭 → ok(旧行为)。baseline 仅在单元收口调用点
+// (子任务末次提交/隐藏任务 spec.commit)传入。
+export type SessionCommit = { type: "ok" } | { type: "failed"; question: string }
+
 export async function afterSession(
   dir: string | undefined,
   opts: Opts,
   task: { id: string; title: string },
   info: { stage: string; subject: string },
-): Promise<void> {
-  if (!dir) return
+  baseline?: UnitBaseline,
+): Promise<SessionCommit> {
+  if (!dir) return { type: "ok" }
   // 代答标记采集(auto-resolve H4,docs/auto-resolve-design.md §G): 提到 commit/
   // dryrun 提前 return **之前**——采集是审计,不该受提交开关影响;on 档下它降级为
   // 兜底(driver 已在事件侧完整落账),但会话自愿标了就收。扫描本次会话的未提交
   // 变更文件,AUTO-RESOLVE 落台账、AUTO-DECISION 只回计数。
   await collectSessionMarks(dir, opts, task, info.stage)
-  if (opts.commit === false || opts.dryrun) return
+  if (opts.commit === false || opts.dryrun) return { type: "ok" }
   await gatedAutoCorrectRefs(dir, autoSwitches().refCheck)
-  await commitTree(dir, task, info)
+  const result = await commitTree(dir, task, info)
+  if (!result.ok) {
+    return {
+      type: "failed",
+      question: `统一提交失败: ${result.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。改动保留在工作区,请人工处理 git 后重新运行。`,
+    }
+  }
+  if (baseline) {
+    const violations = await unitViolations(dir, baseline)
+    if (violations.length) return { type: "failed", question: `单元收口校验未通过: ${violations.join("; ")}` }
+  }
+  return { type: "ok" }
+}
+
+// afterSession 门禁失败 → blocked 出口(unit 描述本单元,如「T-001 子任务 2」):
+// 提交失败即不视为完成,问题进 PLAN.md,由 loop 的 interrupted 提交重试一次落账,
+// 仍失败则留脏现场给人工(退出码 2)。
+function commitBlocked(unit: string, commit: { type: "failed"; question: string }): { type: "blocked"; question: string } {
+  return { type: "blocked", question: `${unit}的产出未提交落账,不视为完成——${commit.question}` }
 }
 
 // H4 的采集体: 计数只进明细日志(vlog),不上终端——AUTO-DECISION 永不与
@@ -245,7 +281,9 @@ export type Opts = {
 }
 
 type Watch = {
-  blocked?: Outcome & { type: "blocked" }
+  // 会话内阻塞(askHuman 超时回落/权限拒绝)恒为 blocked 形态,不含 dirty——
+  // dirty 只在单元启动门禁(runSubtask/requireArtifact/beginUnit)产生,先于会话。
+  blocked?: { type: "blocked"; question: string }
   error?: string
   lastText: string
   // 会话结束时最近一次 assistant 消息的上下文占比(0-100);上限未知记 100。
@@ -284,7 +322,7 @@ type Watch = {
 
 type SessionResult =
   | { type: "idle"; lastText: string; testHandover?: boolean }
-  | (Outcome & { type: "blocked"; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass })
+  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
 // OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一
@@ -707,7 +745,7 @@ export async function runTask(
       if (sw.fork && !subtasks(task.body).length) {
         await persistStage({ kind: "understand" })
         const understood = await ensureUnderstood(client, plan, task, opts, chain)
-        if (understood.type === "blocked") return understood
+        if (understood.type !== "ok") return understood
         task = understood.task
       }
       // ①′(digest)/基点校验(session)——此后 decompose 与每个子任务都从同一
@@ -715,7 +753,7 @@ export async function runTask(
       fork = sw.fork ? await ensureForkBase(client, plan, task, opts, chain) : undefined
       await persistStage({ kind: "decompose" })
       const decomposed = await ensureDecomposed(client, plan, task, opts, chain, fork)
-      if (decomposed.type === "blocked") return decomposed
+      if (decomposed.type !== "ok") return decomposed
       task = decomposed.task
       // 子任务交接文档的陈旧清理(镜像 ondemand 语义): 非恢复续跑时清除上次尝试
       // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。
@@ -783,11 +821,24 @@ export async function runTask(
     let skipToInject = fixReady
     let skipWrapup = resume?.kind === "verify" || enterAudit
     let pendingVerify = resume?.kind === "verify" ? resume : undefined
-    const injectFix = async (items: string[], round: number) => {
+    // 修复检查项注入是 driver 状态写入(PLAN.md 检查项 + CURRENT.md 镜像),注入后
+    // 立即统一提交——下一个执行单元(fixrun 检查项)的启动 clean 门禁据此成立
+    // (commit-boundary-design.md P3);提交失败即阻塞,planfix 产物不算落账。
+    const injectFix = async (items: string[], round: number): Promise<{ type: "blocked"; question: string } | undefined> => {
       await appendSubtasks(plan.path, task.id, items)
       await persistStage({ kind: "review", round, stage: "fixrun" })
       task = requireTask(await load(plan.path), task.id)
       await writeCurrent(plan.path, task, mode !== "auto")
+      if (opts.commit !== false && !opts.dryrun) {
+        const committed = await commitTree(dir, task, { stage: "review-fix", subject: `${task.id} planfix ${task.title} 修复检查项注入` })
+        if (!committed.ok) {
+          return commitBlocked(`${task.id} 修复检查项注入`, {
+            type: "failed",
+            question: `统一提交失败: ${committed.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。改动保留在工作区,请人工处理 git 后重新运行。`,
+          })
+        }
+      }
+      return undefined
     }
     for (
       let round = resumedReview ? (replan ? resumedReview.round - 1 : resumedReview.round) : 0;
@@ -797,10 +848,11 @@ export async function runTask(
         // planfix 恢复: 规划会话已产出有效检查项文件,直接注入后进入 fixrun。
         skipToInject = false
         log(`↻ ${task.id} 恢复中断: 修复检查项 ${fixFile} 已有效,直接注入(第 ${round}/${limit} 轮)`)
-        await injectFix(fixItems, round)
+        const injected = await injectFix(fixItems, round)
+        if (injected) return injected
         continue
       }
-      let audit: Verdict | (Outcome & { type: "blocked" })
+      let audit: Verdict | UnitStop
       if (enterAudit) {
         // review/audit 恢复: 任务级验收已通过(任务可能已被 loop 置回 in_progress),
         // 直接补跑质量审核会话。
@@ -817,7 +869,18 @@ export async function runTask(
           // (fixrun)保持 review 阶段标记(round/stage 供精确重入),仅追加序号。
           const loopPhase: Phase = chain.phase?.kind === "review" ? chain.phase : { kind: "subtasks" }
           chain.phase = { ...loopPhase, index: index + 1 }
-          const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork)
+          // 恢复续跑判定(active 记录恰归属本检查项): 中断现场的工作区脏区是本单元
+          // 自身进度,runSubtask 的启动 clean 门禁据此豁免(commit-boundary-design.md)。
+          const recalledPhase = recalled?.active === true ? recalled.phase : undefined
+          const resumeUnit =
+            recalledPhase !== undefined &&
+            recalledPhase.kind !== "step" &&
+            "index" in recalledPhase &&
+            recalledPhase.index === index + 1 &&
+            (recalledPhase.kind === "subtasks"
+              ? loopPhase.kind === "subtasks"
+              : recalledPhase.kind === "review" && loopPhase.kind === "review" && recalledPhase.stage === "fixrun")
+          const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit)
           if (blocked) return blocked
           // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。
           task = requireTask(await load(plan.path), task.id)
@@ -846,7 +909,8 @@ export async function runTask(
           const resolves = await wrapupResolves(dir, task.id)
           const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto", resolves }), opts, chain)
           if (result.type === "blocked") return result
-          await afterSession(dir, opts, task, { stage: "wrapup", subject })
+          const committed = await afterSession(dir, opts, task, { stage: "wrapup", subject })
+          if (committed.type === "failed") return commitBlocked(`${task.id} 收尾会话`, committed)
         }
         skipWrapup = false
         let auditFromVerify: Verdict | undefined
@@ -865,7 +929,7 @@ export async function runTask(
             pendingVerify,
           )
           pendingVerify = undefined
-          if (verdict.type === "blocked") return verdict
+          if (verdict.type === "blocked" || verdict.type === "dirty") return verdict
           if (verdict.type === "gap") {
             await setStatus(plan.path, task.id, "pending")
             return { type: "incomplete", reason: verdict.gap }
@@ -888,7 +952,7 @@ export async function runTask(
         audit = auditFromVerify ?? (await reviewTask(client, plan, task, opts))
       }
       enterAudit = false
-      if (audit.type === "blocked") return audit
+      if (audit.type === "blocked" || audit.type === "dirty") return audit
       if (audit.type === "pass") return { type: "completed" }
 
       // off 模式不做审核修复循环: 与该模式 verify 失败语义一致。
@@ -906,8 +970,9 @@ export async function runTask(
       log(`↻ ${task.id} 质量审核未通过,规划修复子任务后继续(第 ${round}/${limit} 轮):\n${audit.gap}`)
       await persistStage({ kind: "review", round, stage: "planfix" })
       const planned = await planReviewFix(client, plan, task, opts, audit.gap)
-      if (planned.type === "blocked") return planned
-      await injectFix(planned.items, round)
+      if (planned.type !== "ok") return planned
+      const injected = await injectFix(planned.items, round)
+      if (injected) return injected
     }
   }
 }
@@ -923,7 +988,7 @@ async function executeWhole(
   opts: Opts,
   chain: SessionChain,
   ondemand: boolean,
-): Promise<(Outcome & { type: "blocked" }) | undefined> {
+): Promise<UnitStop | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径 docs/<id>/handoff.md
   // (提示词经 handoffFile 注入),读点优先新路径、旧平铺存在则回落——存量项目
@@ -959,7 +1024,8 @@ async function executeWhole(
       steer,
     )
     if (result.type === "blocked") return result
-    await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject })
+    const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject })
+    if (committed.type === "failed") return commitBlocked(`${task.id} 执行会话`, committed)
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
     if (!handoverDue(steer, chain.used)) return undefined
@@ -1161,7 +1227,7 @@ async function ensureUnderstood(
   task: Task,
   opts: Opts,
   chain: SessionChain,
-): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
+): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
   // 摘要路径(目录化布局,stable-refs P1): 写目标恒为新路径;读点经 resolveTaskDoc
   // 回落旧平铺 docs/<id>.context.md,存量项目中断恢复不受改名影响。
   const dir = dirname(plan.path)
@@ -1195,7 +1261,8 @@ async function ensureUnderstood(
       // 理解会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
       if (chain.id) await setForkBase(plan.path, task.id, chain.id)
       task = requireTask(await load(plan.path), task.id)
-      await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "understand", subject })
+      const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "understand", subject })
+      if (committed.type === "failed") return commitBlocked(`${task.id} 理解会话`, committed)
       return { type: "ok", task }
     }
     if (i === 1) {
@@ -1375,7 +1442,7 @@ async function ensureDecomposed(
   opts: Opts,
   chain: SessionChain,
   base?: ForkBaseInfo,
-): Promise<({ type: "ok" } & { task: Task }) | (Outcome & { type: "blocked" })> {
+): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
   if (subtasks(task.body).length) return { type: "ok", task }
   // 分解结果路径(目录化布局): 写目标恒为新路径;读点经 resolveTaskDoc 回落旧
   // 平铺 docs/<id>.subtasks.md(中断恢复: 分解会话可能已写旧名文件但尚未注入)。
@@ -1409,7 +1476,8 @@ async function ensureDecomposed(
       // 镜像刷新同样先于统一提交(与子任务勾选同口径): 注入的检查项与镜像同入
       // decompose 提交,调用方随后的刷新即幂等空写。
       await writeCurrent(plan.path, requireTask(await load(plan.path), task.id))
-      await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject })
+      const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject })
+      if (committed.type === "failed") return commitBlocked(`${task.id} 分解会话`, committed)
       return { type: "ok", task: requireTask(await load(plan.path), task.id) }
     }
     if (i === 1) {
@@ -1446,11 +1514,24 @@ async function runSubtask(
   opts: Opts,
   chain: SessionChain,
   base?: ForkBaseInfo,
-): Promise<(Outcome & { type: "blocked" }) | undefined> {
+  // 本子任务恢复续跑(active 进度记录归属本单元): 豁免启动 clean 门禁——工作区
+  // 脏区是本单元自身进度(含交接文档),收口时一并落账(commit-boundary-design.md)。
+  resumeUnit = false,
+): Promise<UnitStop | undefined> {
   subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
   chain.subject = subject
   const dir = opts.dir ?? dirname(plan.path)
+  // 子任务单元提交边界: 启动 clean 门禁 + SHA 基线(收口时校验提交区间全为 driver
+  // 提交);driver 独占状态文件遗留由 beginUnit 内部 carryover 自愈。
+  let baseline: UnitBaseline | undefined
+  if (resumeUnit) {
+    if (opts.commit !== false && !opts.dryrun) baseline = await unitBaseline(dir)
+  } else {
+    const gate = await beginUnit(dir, opts, task)
+    if (gate.type === "dirty") return { type: "dirty", files: gate.files }
+    baseline = gate.baseline
+  }
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
   // (见 handoverDue);--handover-test 的测试交接是独立机制,不受影响。
@@ -1495,7 +1576,8 @@ async function runSubtask(
       const status = /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1]
       if (status === "完成") break
       // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
-      await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
+      const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
+      if (committed.type === "failed") return commitBlocked(`${task.id} 子任务 ${index}`, committed)
       if (status === "继续") {
         log(`↻ ${task.id} 子任务 ${index} 上下文达到 ${formatTokens(cap * 2)} 上限,已交接 ${handoffFile(task)},新会话继续`)
         continuation = true
@@ -1529,7 +1611,9 @@ async function runSubtask(
   // 与 PLAN.md 不一致;步进暂停现场亦会残留未提交改动)。
   await writeCurrent(plan.path, requireTask(await load(plan.path), task.id), (opts.subtask ?? "auto") !== "auto")
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
-  await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
+  // 单元收口: 带基线做提交区间校验——勾选与镜像未落账即不视为完成。
+  const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject }, baseline)
+  if (committed.type === "failed") return commitBlocked(`${task.id} 子任务 ${index}`, committed)
   log(`  ✓ ${text.slice(0, 60)}`)
   return undefined
 }
@@ -1562,10 +1646,10 @@ async function verifyTask(
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
+  audit?: () => Promise<Verdict | UnitStop>,
   persist?: (phase: Phase) => Promise<void>,
   resume?: Phase & { kind: "verify" },
-): Promise<{ type: "done"; audit?: Verdict } | { type: "gap"; gap: string } | (Outcome & { type: "blocked" })> {
+): Promise<{ type: "done"; audit?: Verdict } | { type: "gap"; gap: string } | UnitStop> {
   const mode = opts.subtask ?? "auto"
   const dir = opts.dir ?? dirname(plan.path)
   // 判定会话重验后固定执行指定脚本路径,不再按 verify 字段重新解析——wrapped
@@ -1579,12 +1663,13 @@ async function verifyTask(
   // 下发修复提示续跑(执行链会话经 runTask 复用时上下文不丢),随后照常收尾与重验。
   let pendingFix = resume?.stage === "fix" && typeof resume.gap === "string" ? resume : undefined
   // 差距反馈回执行会话链修复 + 重新收尾(正常修复轮与中断恢复共用)。
-  const fixRound = async (gap: string, round: number): Promise<(Outcome & { type: "blocked" }) | undefined> => {
+  const fixRound = async (gap: string, round: number): Promise<UnitStop | undefined> => {
     const fixSubject = `${task.id} fix${round} ${task.title}`
     chain.subject = fixSubject
     const fixed = await runExecSession(client, plan, task, renderFix(plan, task, gap, opts), opts, chain)
     if (fixed.type === "blocked") return fixed
-    await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
+    const fixCommitted = await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
+    if (fixCommitted.type === "failed") return commitBlocked(`${task.id} 修复轮 ${round}`, fixCommitted)
     if (opts.wrapup ?? true) {
       autobanner(`${task.id} ${task.title}: 收尾`)
       const wrapSubject = `${task.id} wrapup ${task.title}`
@@ -1592,7 +1677,8 @@ async function verifyTask(
       const resolves = await wrapupResolves(dir, task.id)
       const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto", resolves }), opts, chain)
       if (wrapped.type === "blocked") return wrapped
-      await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
+      const wrapCommitted = await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
+      if (wrapCommitted.type === "failed") return commitBlocked(`${task.id} 修复后收尾会话`, wrapCommitted)
     }
     return undefined
   }
@@ -1606,14 +1692,14 @@ async function verifyTask(
       const blocked = await fixRound(fix.gap!, round)
       if (blocked) return blocked
     }
-    let execution: { type: "ok"; run: VerifyRun; audit?: Verdict } | (Outcome & { type: "blocked" })
+    let execution: { type: "ok"; run: VerifyRun; audit?: Verdict } | UnitStop
     if (pending?.run) {
       // 中断恢复: 脚本已执行完毕且运行记录已持久化——不重跑脚本;early 且审核
       // 结论缺失时先补跑审核会话,然后直接进入判定。
       let auditVerdict: (typeof pending.audit) | undefined = pending.audit
       if (!auditVerdict && audit) {
         const fresh = await audit()
-        if (fresh.type === "blocked") return fresh
+        if (fresh.type === "blocked" || fresh.type === "dirty") return fresh
         auditVerdict = fresh
       }
       log(`↻ ${task.id} 恢复中断: verify 脚本上次已执行完毕(${pending.run.script}),直接进入判定`)
@@ -1622,7 +1708,7 @@ async function verifyTask(
       execution = await executeVerifyScript(client, plan, task, opts, audit, replaced ? replacement : undefined, persist, counters)
     }
     pending = undefined
-    if (execution.type === "blocked") return execution
+    if (execution.type === "blocked" || execution.type === "dirty") return execution
     await persist?.({ kind: "verify", stage: "judge", ...counters, run: execution.run, audit: execution.audit })
     // 引用门禁(stable-refs P4,D6 第三层): 判定会话前对任务产物文档(docs/
     // T-NNN/**)做确定性预扫——失效引用 = 差距,直接进修复轮、不消耗判定会话;
@@ -1643,7 +1729,7 @@ async function verifyTask(
       continue
     }
     const verdict = await judge(client, plan, task, opts, execution.run)
-    if (verdict.type === "blocked") return verdict
+    if (verdict.type === "blocked" || verdict.type === "dirty") return verdict
     if (verdict.type === "pass") {
       await markDone(plan.path, task.id, verdict.command ?? verifyCommand(task) ?? execution.run.script)
       return { type: "done", audit: execution.audit }
@@ -1700,11 +1786,11 @@ async function executeVerifyScript(
   plan: Plan,
   task: Task,
   opts: Opts,
-  audit?: () => Promise<Verdict | (Outcome & { type: "blocked" })>,
+  audit?: () => Promise<Verdict | UnitStop>,
   override?: string,
   persist?: (phase: Phase) => Promise<void>,
   counters: { round: number; rechecks: number; replaced: boolean } = { round: 0, rechecks: 0, replaced: false },
-): Promise<{ type: "ok"; run: VerifyRun; audit?: Verdict } | (Outcome & { type: "blocked" })> {
+): Promise<{ type: "ok"; run: VerifyRun; audit?: Verdict } | UnitStop> {
   const dir = opts.dir ?? dirname(plan.path)
   const tmp = verifyTmpDir(dir)
   // generate 分支的脚本约定名:上一次(或上轮修复前)生成的脚本存在则复用。
@@ -1740,7 +1826,7 @@ async function executeVerifyScript(
   // judge 阶段一并写入)。
   await persist?.({ kind: "verify", stage: "exec", ...counters, run: record })
   const audited = await auditing
-  if (audited?.type === "blocked") return audited
+  if (audited?.type === "blocked" || audited?.type === "dirty") return audited
   return { type: "ok", run: record, audit: audited }
 }
 
@@ -1756,7 +1842,7 @@ async function judge(
   task: Task,
   opts: Opts,
   run: VerifyRun,
-): Promise<Verdict | (Outcome & { type: "blocked" })> {
+): Promise<Verdict | UnitStop> {
   autobanner(`${task.id} ${task.title}: 验收判定`)
   const file = join(dirname(plan.path), VERDICT_FILE)
   const snapshot = await Bun.file(plan.path).text()
@@ -1805,7 +1891,7 @@ async function generateScript(
   task: Task,
   opts: Opts,
   script: string,
-): Promise<(Outcome & { type: "blocked" }) | undefined> {
+): Promise<UnitStop | undefined> {
   autobanner(`${task.id} ${task.title}: 验收脚本生成`)
   const produced = await requireArtifact(client, task, renderVerifyScriptGen(plan, task, script, opts), opts, {
     kind: "脚本生成",
@@ -1831,7 +1917,7 @@ async function reviewTask(
   task: Task,
   opts: Opts,
   early = false,
-): Promise<Verdict | (Outcome & { type: "blocked" })> {
+): Promise<Verdict | UnitStop> {
   // 重新加载计划判定 final: 串行路径下当前任务刚被 verifyTask 标 done;early
   // 窗口下审核先于 markDone 启动,但 final 只看后继任务,两者结论一致。
   const current = await load(plan.path)
@@ -1859,7 +1945,7 @@ async function planReviewFix(
   task: Task,
   opts: Opts,
   gap: string,
-): Promise<{ type: "ok"; items: string[] } | (Outcome & { type: "blocked" })> {
+): Promise<{ type: "ok"; items: string[] } | UnitStop> {
   autobanner(`${task.id} ${task.title}: 审核修复规划`)
   // 修复检查项文件(目录化布局): reset/collect 同一目标;collect 读经 resolveTaskDoc
   // 回落旧平铺 docs/<id>.fix.md(中断恢复: 规划会话可能已写旧名文件)。
@@ -1896,6 +1982,14 @@ async function planReviewFix(
 // 报错桩则复用原会话(保留产物现场,不重置),否则开新会话重做本步骤(照常重置);
 // ③ 收口(删除记录)由调用方在后处理完成后经 closeStep 执行——requireArtifact 本身
 // 不删,避免"产物已校验但后处理(编号推进/台账/提交)未完成"时被 kill 丢失步骤认领。
+//
+// spec.unitStart(commit-boundary-design.md P2): 独立隐藏任务单元声明(阶段规划/
+// 交接蒸馏/知识提取/前置知识/编号恢复/终审任务生成)。有值时: ① 入口经 beginUnit
+// 做启动 clean 门禁并记 SHA 基线(恢复复用原会话时豁免 clean——脏区是本单元自身
+// 产物现场——但仍记基线);② spec.commit 失败 → blocked(不开反馈重试: git 故障
+// 重开会话无意义),提交后做单元收口校验(提交区间须全为 driver 提交)。任务内部的
+// 验收机具会话(judge/review/planfix/脚本生成)不声明——它们运行在任务单元内层,
+// 提交义务由 afterSession 门禁覆盖。
 export async function requireArtifact<T>(
   client: OpencodeClient,
   task: Task,
@@ -1916,6 +2010,8 @@ export async function requireArtifact<T>(
     collect: () => Promise<T | undefined>
     // 会话后统一提交的信息(阶段 trailer 与标题行;缺省不提交)。
     commit?: { stage: string; subject: string }
+    // 独立隐藏任务单元声明(启动 clean 门禁 + SHA 基线 + 收口校验,见函数头注释)。
+    unitStart?: boolean
     // 阶段级旁路步骤身份(仅阶段规划/交接蒸馏会话声明);有值即启用 driver 侧
     // 恢复点与会话续跑(见函数头注释)。
     step?: { step: StepKind; letter: PhaseLetter }
@@ -1927,7 +2023,7 @@ export async function requireArtifact<T>(
   // 缺省取 OPENCODE_AUTO_* 解析值,透传给 runSession(与其同款注入点,供单测把
   // 重试阶梯压成零等待)。
   switches: Switches = autoSwitches(),
-): Promise<T | (Outcome & { type: "blocked" })> {
+): Promise<T | UnitStop> {
   const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, letter: spec.step.letter } : undefined
   // 阶段步骤续跑判定: 上次运行在本步骤中断(driver 未收口)且原会话仍可复用 →
   // 首个提示词进原会话(保留产物现场);否则按全新步骤处理(重置 + 新会话)。
@@ -1965,6 +2061,19 @@ export async function requireArtifact<T>(
     }
   }
   let feedback = ""
+  // 独立隐藏任务单元的提交边界(spec.unitStart,commit-boundary-design.md P2):
+  // 恢复复用原会话(resumedSession)豁免 clean 检查——工作区脏区是本单元自身产物
+  // 现场;全新进入要求 clean(driver 独占状态文件遗留自愈),两种情况都记 SHA 基线。
+  let baseline: UnitBaseline | undefined
+  if (spec.unitStart && opts.dir && opts.commit !== false && !opts.dryrun) {
+    if (resumedSession) {
+      baseline = await unitBaseline(opts.dir)
+    } else {
+      const gate = await beginUnit(opts.dir, opts, task)
+      if (gate.type === "dirty") return { type: "dirty", files: gate.files }
+      baseline = gate.baseline
+    }
+  }
   for (let i = 0; ; i++) {
     // 续跑复用原会话时保留产物现场(上次会话可能已写入部分产物,重置会毁掉它);
     // 其余情况(全新步骤、反馈重试)照常重置,避免会话未写出时被误当作本次产出。
@@ -1986,7 +2095,10 @@ export async function requireArtifact<T>(
     }
     const result = await runSession(client, task, promptText + feedback, opts, chain, undefined, undefined, switches)
     if (result.type === "blocked") return result
-    if (spec.commit) await afterSession(opts.dir, opts, task, spec.commit)
+    if (spec.commit) {
+      const committed = await afterSession(opts.dir, opts, task, spec.commit, baseline)
+      if (committed.type === "failed") return commitBlocked(`${task.id} ${spec.kind}会话`, committed)
+    }
     const value = await spec.collect()
     if (value !== undefined) return value
     if (i === 1) {

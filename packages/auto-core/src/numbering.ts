@@ -3,7 +3,7 @@ import { basename, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { parse } from "./plan"
 import { renderNumberRecovery } from "./prompt"
-import { requireArtifact, type Opts } from "./runner"
+import { requireArtifact, type Opts, type UnitStop } from "./runner"
 
 // --auto-number(config.autoNumber)的任务编号记录机制: 任务编号(T-NNN)在目标目录
 // 永不重复,下一可用编号持久化在 .auto/next-task(driver 维护的状态文件;.auto/
@@ -102,7 +102,7 @@ export async function ensureNumbering(
   client: OpencodeClient,
   dir: string,
   opts: Opts,
-): Promise<{ type: "ok"; next: number } | { type: "blocked"; question: string }> {
+): Promise<{ type: "ok"; next: number } | UnitStop> {
   const existing = await readNextTask(dir)
   if (existing !== undefined) return { type: "ok", next: existing }
   const floor = await taskNumberFloor(dir)
@@ -118,6 +118,9 @@ export async function ensureNumbering(
     {
       kind: "编号恢复",
       role: "number-recovery",
+      // 独立隐藏任务单元(commit-boundary-design.md)。产物 .auto/next-task 被
+      // gitignore,不涉纳管文件修改,门禁主要覆盖收口校验与会话可能触碰的其他文件。
+      unitStart: true,
       artifact: `有效编号记录 ${NEXT_TASK_FILE}(不小于 ${floor} 的正整数)`,
       detail: "缺失、非正整数或小于已用编号下限",
       requirement: `必须把推导出的下一可用任务编号写入 ${NEXT_TASK_FILE}: 文件内容仅为一个不小于 ${floor} 的正整数(可带换行),不要写任何其他内容。`,
@@ -130,5 +133,5 @@ export async function ensureNumbering(
     },
   )
   if (typeof recovered === "number") return { type: "ok", next: recovered }
-  return { type: "blocked", question: recovered.question }
+  return recovered
 }

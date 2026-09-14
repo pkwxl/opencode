@@ -49,6 +49,8 @@ export async function implementPlan(
         {
           kind: "计划生成",
           role: "implement-scan",
+          // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(commit-boundary-design.md)。
+          unitStart: true,
           artifact: "已填充的 PLAN.md(至少一个任务)",
           detail: "缺失、无任务或任务格式无法解析",
           requirement: "必须直接编辑 PLAN.md,把任务按 `## T-NNN: <任务标题> [pending]` 格式写入(至少一个)。",
@@ -62,7 +64,17 @@ export async function implementPlan(
           },
         },
       )
-      if (typeof planned !== "number") return { type: "blocked", question: planned.question }
+      if (typeof planned !== "number") {
+        // dirty(启动前工作区不净)折为 blocked 报文(init 交互语境,无 run 循环的
+        // dirty 专门处理;不写状态文件,处置权在人工)。
+        return {
+          type: "blocked",
+          question:
+            planned.type === "dirty"
+              ? `计划生成前工作区不净,请人工处置(提交/清理)后重试:\n${planned.files.join("\n")}`
+              : planned.question,
+        }
+      }
       return { type: "ok", count: planned }
     } finally {
       await reprotect(path)

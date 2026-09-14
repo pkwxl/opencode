@@ -2,11 +2,11 @@ import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { knowledgeDoc, legacyKnowledgeDoc, legacyPriorKnowledgeDoc, priorKnowledgeDoc, roundDirName, TEMP_KB_NAME, tempPriorKnowledgeDoc } from "./docpaths"
-import { changedFiles, commitTree } from "./git"
+import { changedFiles, commitPending, commitTree } from "./git"
 import { log } from "./log"
 import { currentRound, readLedger, roundRoot } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
-import { afterSession, requireArtifact, type Opts } from "./runner"
+import { afterSession, requireArtifact, type Opts, type UnitStop } from "./runner"
 
 // k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(docs/fixme-knowledge-design.md
 // §D + docs/phases-design.md P4): 各阶段完成后,旁路一次性会话把最终验证过的迁移
@@ -50,27 +50,52 @@ export async function existingKnowledge(dir: string, round: number): Promise<str
 // PLAN 不进任务链、不写进度记录): collect 从宽——文件存在且非空即算产出(章节
 // 完整性是提示词级要求,过度结构校验会制造无意义重试);产出随会话统一提交
 // (stage=knowledge),docs/migration-kb/ 为永久路径、交接不搬移(R2)。
+// 完成判定含提交(commit-boundary-design.md ③④ 推广): ③ 幂等入口发现本轮文档
+// 已产出但仍在未提交清单 → 补提交后即完成;④ 文档缺失而工作区脏(上次提取半途
+// 而废的现场或人工改动)→ 返回 dirty 交人工处置后重跑——对 k 阶段"提取失败仅
+// ⚠ 不污染退出码"的既有语义,dirty 例外(工作区不净会污染后续所有单元的启动
+// 基线,必须先停下)。提交失败(requireArtifact 的 blocked)同样按 dirty 口径
+// 上抛,由调用方停机。
 export async function extractKnowledge(
   client: OpencodeClient,
   dir: string,
   opts: Opts,
-): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "failed"; question: string }> {
+): Promise<
+  { type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }
+> {
   const round = await currentRound(dir)
+  const task = { id: "PLAN", title: "迁移知识提炼(k 知识提炼)", status: "in_progress" as const, attempts: 0, body: "" }
+  const commit = { stage: "knowledge", subject: "PLAN knowledge 迁移知识沉淀" }
   const existing = await existingKnowledge(dir, round)
-  if (existing) return { type: "skipped", file: existing }
+  if (existing) {
+    // ③ 补提交: 文档已落盘但仍在未提交改动清单中 → 提交后完成。
+    const pending = await commitPending(dir, opts, task, commit, [existing])
+    if (pending !== "clean") {
+      log(pending.ok ? `✓ 知识文档已产出但尚未提交,已补提交: ${existing}` : `⚠ 知识文档补提交失败: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
+      if (!pending.ok) return { type: "dirty", files: [existing] }
+    }
+    return { type: "skipped", file: existing }
+  }
+  // ④ 半途而废现场检测: 产物缺失 + 工作区脏 → 交人工清理,不主动动 git。
+  if (opts.commit !== false && !opts.dryrun) {
+    const dirty = await changedFiles(dir)
+    if (dirty.length) return { type: "dirty", files: dirty }
+  }
   const file = await knowledgeFile(dir, round)
   const produced = await requireArtifact(
     client,
-    { id: "PLAN", title: "迁移知识提炼(k 知识提炼)", status: "in_progress", attempts: 0, body: "" },
+    task,
     renderKnowledge({ file, mode: opts.mode }),
     opts,
     {
       kind: "知识提取",
       role: "knowledge",
+      // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(commit-boundary-design.md)。
+      unitStart: true,
       artifact: `非空知识文档 ${file}`,
       detail: "缺失或为空",
       requirement: `必须把知识文档写入 ${file}(按提示词给出的章节骨架写全;信息稀少也要写出骨架并说明原因)。`,
-      commit: { stage: "knowledge", subject: "PLAN knowledge 迁移知识沉淀" },
+      commit,
       reset: () => rm(join(dir, file), { force: true }),
       collect: async () => {
         const text = await Bun.file(join(dir, file)).text().catch(() => "")
@@ -79,6 +104,12 @@ export async function extractKnowledge(
     },
   )
   if (produced === true) return { type: "ok", file }
+  if (produced.type === "dirty") return { type: "dirty", files: produced.files }
+  // 会话受阻/未产出后若工作区已脏(典型: 提交失败),同样按 dirty 停机。
+  if (opts.commit !== false && !opts.dryrun) {
+    const dirty = await changedFiles(dir)
+    if (dirty.length) return { type: "dirty", files: dirty }
+  }
   return { type: "failed", question: produced.question }
 }
 
@@ -193,10 +224,16 @@ export async function extractPriorKnowledge(
   const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb 前置知识提取" }
   const existing = await existingPriorKnowledge(dir, round)
   if (existing) {
-    // ③ 补提交: 文档已落盘但仍在未提交改动清单中 → 提交后完成。
-    if (opts.commit !== false && (await changedFiles(dir)).includes(existing)) {
-      await commitTree(dir, task, commit)
-      log(`✓ 前置知识文档已产出但尚未提交,已补提交: ${existing}`)
+    // ③ 补提交: 文档已落盘但仍在未提交改动清单中 → 提交后完成(与全部隐藏任务
+    // 同协议,helper 见 git.ts commitPending)。
+    const pending = await commitPending(dir, opts, task, commit, [existing])
+    if (pending !== "clean") {
+      if (pending.ok) {
+        log(`✓ 前置知识文档已产出但尚未提交,已补提交: ${existing}`)
+      } else {
+        log(`⚠ 前置知识文档补提交失败: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
+        return { type: "dirty", files: [existing] }
+      }
     }
     return { type: "skipped", file: existing }
   }
@@ -212,23 +249,33 @@ export async function extractPriorKnowledge(
   const produced = await requireArtifact(client, task, renderPriorKnowledge({ file: temp, brief, mode: opts.mode, distilled }), opts, {
     kind: "前置知识提取",
     role: "prior-knowledge",
+    // 独立隐藏任务单元(commit-boundary-design.md)。注意统一提交不在此挂接:
+    // 收笔确认 → 改名 → 提交须按序进行,会话结束即提交会把未收笔的 temp-kb.md
+    // 抢先落账;改名后的提交在下方由 driver 执行。
+    unitStart: true,
     artifact: `带收笔标记的知识文档 ${temp}`,
     detail: "缺失、为空或末尾缺少「完成」收笔标记",
     requirement:
       `必须把知识文档写入 ${temp}(按提示词给出的章节骨架写全;已有迁移结果稀少也要写出骨架并说明原因),` +
       `全文写完后在文档末尾独占一行写「完成」作为收笔标记——缺少该标记一律视为未完成。`,
-    // 统一提交不在此挂接: 收笔确认 → 改名 → 提交须按序进行,会话结束即提交会把
-    // 未收笔的 temp-kb.md 抢先落账。改名后的提交在下方由 driver 执行。
     reset: () => rm(join(dir, temp), { force: true }),
     collect: async () => {
       const text = await Bun.file(join(dir, temp)).text().catch(() => "")
       return priorKnowledgeComplete(text) ? true : undefined
     },
   })
-  if (produced !== true) return { type: "failed", question: produced.question }
-  // ② 收笔确认 → 改名转正并统一提交(commit 关闭时改名照做、提交跳过)。
+  if (produced !== true) {
+    if (produced.type === "dirty") return { type: "dirty", files: produced.files }
+    return { type: "failed", question: produced.question }
+  }
+  // ② 收笔确认 → 改名转正并统一提交(commit 关闭时改名照做、提交跳过);提交
+  // 失败 → dirty 交人工(完成判定 = 产物落盘且已提交,commit-boundary-design.md)。
   await rename(join(dir, temp), join(dir, file))
-  await afterSession(dir, opts, task, commit)
+  const committed = await afterSession(dir, opts, task, commit)
+  if (committed.type === "failed") {
+    log(`⚠ 前置知识文档已转正但提交失败: ${committed.question}`)
+    return { type: "dirty", files: [file] }
+  }
   return { type: "ok", file }
 }
 
