@@ -27,10 +27,11 @@ opencode-auto run <dir> --agent auto --verbose true
 # interactive: 旁路交互(与 --verbose 互斥)——终端保持干净输出并常驻等待输入,
 # 回车把输入作为额外消息发往当前活动会话(无活动会话时丢弃);日志文件仍保留 verbose 级完整记录:
 opencode-auto run <dir> --agent auto --interactive
-# commit: 会话后统一提交(缺省启用,收回 agent 的提交权)——任何会话结束且 driver 完成状态写入后,
+# commit: 会话后统一提交(恒启用,收回 agent 的提交权)——任何会话结束且 driver 完成状态写入后,
 # driver 递归提交全部改动(先嵌套 .git 子仓库后本仓库),提交信息带任务编号与阶段,
-# 实现子任务级别的变动历史追踪与按会话回滚;false 关闭:
-opencode-auto run <dir> --agent auto --commit false
+# 实现子任务级别的变动历史追踪与按会话回滚。提交是完成条件,`--commit false` 已于
+# 2026-09-15 退役(出现即用法错误);该键与其他宪法键一样只在 init 固化:
+opencode-auto init <dir> --commit true
 # new-session-subtask: 严格按一个子任务一次全新会话执行(任务正文需用 - [ ] 检查项列出子任务),
 # 控制单次会话的最大上下文大小;每个子任务会话结束以其检查项勾选为准,
 # 全部子任务完成后再开一个收尾会话统一更新 docs、提交剩余改动,

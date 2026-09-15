@@ -60,6 +60,48 @@ describe("进度记录", () => {
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
   })
 
+  test("严格恢复字段(baseline/model)随记录往返;缺字段的旧记录两字段为 undefined", async () => {
+    const progress: Progress = {
+      task: "T-001",
+      session: "ses_strict",
+      at: 7,
+      active: true,
+      phase: { kind: "subtasks", index: 3 },
+      baseline: [
+        { root: "/tmp/target", sha: "abc1234" },
+        { root: "/tmp/target/pkg", sha: "def5678" },
+      ],
+      model: "kimi/k2",
+    }
+    await saveProgress(dir, progress)
+    expect(await recallProgress(dir, "T-001")).toEqual(progress)
+    // 严格恢复启用前写入的旧记录: 两字段缺失 → undefined(runner 据此判不可复用)
+    await saveProgress(dir, { task: "T-002", session: "ses_old", at: 8, active: true, phase: { kind: "whole" } })
+    const legacy = await recallProgress(dir, "T-002")
+    expect(legacy?.baseline).toBeUndefined()
+    expect(legacy?.model).toBeUndefined()
+  })
+
+  test("baseline/model 坏值容错: 非数组 → undefined,数组内缺 root/sha 的项被过滤,model 非字符串 → undefined", async () => {
+    await Bun.write(
+      join(dir, ".auto", "progress.json"),
+      JSON.stringify({ task: "T-003", at: 1, active: true, baseline: "abc1234", model: 42 }),
+    )
+    const bad = await recallProgress(dir, "T-003")
+    expect(bad?.baseline).toBeUndefined()
+    expect(bad?.model).toBeUndefined()
+    await Bun.write(
+      join(dir, ".auto", "progress.json"),
+      JSON.stringify({
+        task: "T-003",
+        at: 1,
+        active: true,
+        baseline: [{ root: "/tmp/a", sha: "abc1234" }, { root: "/tmp/b" }, { sha: "def5678" }, null],
+      }),
+    )
+    expect((await recallProgress(dir, "T-003"))?.baseline).toEqual([{ root: "/tmp/a", sha: "abc1234" }])
+  })
+
   test("任务不符、文件缺失或损坏返回 undefined", async () => {
     await saveProgress(dir, { task: "T-001", at: Date.now(), active: false })
     expect(await recallProgress(dir, "T-002")).toBeUndefined()

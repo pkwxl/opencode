@@ -687,7 +687,7 @@ export async function runTask(
   // 恢复时核对、不可保真回滚重跑。此刻取任务级基线(与 loop 的 beginUnit 之间无
   // 提交,HEAD 相同;恢复续跑豁免 clean 的路径同样适用)——子任务/阶段边界会由
   // runSubtask/persistStage 刷新为更近的单元基线。
-  const strict = strictResumeActive(opts)
+  const strict = strictResumeActive(opts, switches)
   if (strict) chain.baseline = await unitBaseline(dir)
   // 中断恢复(进度记录): 会话半途未总结(active)且 server 上仍存在 → 复用原会话
   // 继续(与 opencode -r 同构,上下文不丢);优雅退出的总结记录、会话已不可用、
@@ -794,7 +794,7 @@ export async function runTask(
         chain.used = usage.used
         // 复用决策已在此做出;链内后续的 5 分钟复用规则从当前时刻起算。
         chain.at = Date.now()
-        chain.note = resumeNote(recalled.phase, true)
+        chain.note = resumeNote(recalled.phase, true, strict)
         log(
           `↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用中断的会话 ${recalled.session} 继续(上下文不丢,` +
             `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens,上限未知"})`,
@@ -805,7 +805,7 @@ export async function runTask(
         if (opts.newSession && recalled.active) {
           await saveProgress(dir, { ...recalled, active: false })
         }
-        chain.note = resumeNote(recalled.phase, false)
+        chain.note = resumeNote(recalled.phase, false, strict)
         const why = !rerun
           ? "中断会话所属的执行单元本次不会重跑(已完成或不再执行),其恢复点已淘汰,开新会话继续"
           : handedOff
@@ -1324,8 +1324,12 @@ export function phaseText(phase: Phase | undefined): string {
 // (读 CURRENT.md → git status → 首个未勾选项),阶段指引冗余;逐步骤的下一步指引
 // 保留在交接文档/状态文件里,不进恢复提示词。非复用路径(回滚后冷启动不带说明,
 // 优雅退出的总结态续跑)维持既有指引。
-export function resumeNote(phase: Phase | undefined, reused: boolean): string {
-  if (reused && autoSwitches().strictResume) {
+// strictResume 由调用方传入**门禁值**(strictResumeActive: 开关 on 且提交门禁在位),
+// 不是裸开关——门禁关闭(dryrun)时没有单元基线也没有回滚兜底,"一句 continue"赖以
+// 成立的前提(不可保真即回滚重跑)不存在,故维持既有多行指引(设计 §4.1 ①/⑥)。
+// 缺省取 OPENCODE_AUTO_* 解析值,注入供单测。
+export function resumeNote(phase: Phase | undefined, reused: boolean, strictResume = autoSwitches().strictResume): string {
+  if (reused && strictResume) {
     return `[driver] 会话曾中断,请继续当前工作直至本单元完成。`
   }
   const next = nextStepText(phase)
@@ -2263,7 +2267,7 @@ export async function requireArtifact<T>(
   // 严格恢复(OPENCODE_AUTO_STRICT_RESUME): 复用前核对单元基线与生效模型
   // (session-recovery-fidelity-design.md 3.1);不可保真时回滚到基线后按全新步骤
   // 重做——外部提交混入直接 dirty 交人工(不动 git)。
-  const strict = strictResumeActive(opts)
+  const strict = strictResumeActive(opts, switches)
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
   if (stepPhase && opts.dir) {
@@ -2363,7 +2367,7 @@ export async function requireArtifact<T>(
       // attempt 的 resumed 判据(链上有会话且 note 待注入)使首个提示词必进原会话,
       // 不受复用开关与阈值约束;note 用后即清。
       chain.id = resumedSession
-      chain.note = resumeNote(stepPhase, true)
+      chain.note = resumeNote(stepPhase, true, strict)
     }
     const result = await runSession(client, task, promptText + feedback, opts, chain, undefined, undefined, switches)
     if (result.type === "blocked") return result
@@ -2917,7 +2921,7 @@ async function attempt(
         // 严格恢复(session-recovery-fidelity-design.md 3.1): active 记录随带单元
         // 基线与本次生效模型(恢复时核对;model 未配置路由时无串可记,严格恢复下
         // 该记录视为不可复用)。基线缺 thread 时以当前 HEAD 兜底(窗口从现在起)。
-        ...(strictResumeActive(opts)
+        ...(strictResumeActive(opts, switches)
           ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: promptModel }
           : {}),
       })
@@ -2940,7 +2944,7 @@ async function attempt(
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await client.event.subscribe(undefined, { signal: sse.signal })
-    const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck)
+    const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck, switches)
 
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note
@@ -3123,6 +3127,9 @@ async function watch(
   steer?: Steer,
   test?: TestRun,
   stuck?: StuckTracker,
+  // 严格恢复门禁(交接边界写核)取本次运行的开关;缺省取 OPENCODE_AUTO_* 解析值,
+  // 注入供单测(attempt 透传其自身持有的 switches)。
+  switches: Switches = autoSwitches(),
  ): Promise<Watch> {
    const waitAnswer = opts.waitAnswer ?? 0
    let lastText = ""
@@ -3201,7 +3208,7 @@ async function watch(
       // 交接边界写核(session-recovery-fidelity-design.md 3.3,严格恢复): 文档无效
       // 一次即判,不再 steer 补写重试——"完成判定不靠 agent 自报"同样适用于交接
       // 文档(S07 幻影档实证),发现时机就在交接边界。
-      if (strictResumeActive(opts)) {
+      if (strictResumeActive(opts, switches)) {
         return { type: "invalid" }
       }
       if (testHandoverRetried) {

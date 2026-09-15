@@ -23,6 +23,9 @@ export type ProjectConfig = {
   idleTime: number
   // 分钟,0 = 不设,1..1440。
   idleMax: number
+  // 会话后统一提交(缺省 true)。**false 已于 2026-09-15 退役**——统一提交是完成
+  // 条件,读到 commit: false 的存量配置一律严格失败(见 validateProjectConfig);
+  // 字段本身与代码侧的 opts.commit 门禁暂留,清理另立任务。
   commit: boolean
   // --test-by-driver: 测试/编译/构建等命令的执行权收归 driver(与 verify 正交)。
   // 启用时执行类会话不直接运行这类命令,改为把命令写成脚本放 test/ 目录、把
@@ -150,6 +153,14 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof phases !== "string" || parsePhases(phases) === null) {
     throw new Error(`${CONFIG_FILE} 的 phases 须为 admtvk 的子序列且包含 m(如 m、amt、admtvk)`)
   }
+  // commit:false 已退役(2026-09-15,docs/commit-boundary-design.md): 统一提交是
+  // 完成条件,单元提交边界的 clean 门禁/SHA 基线与恢复保真的回滚锚点全部以"提交
+  // 恒开"为前提,关闭档与之冲突。存量配置按"坏文件严格失败"口径处理——读到 false
+  // 即报错交人工,不静默改写语义(代码侧的 opts.commit 门禁暂留,清理另立任务)。
+  const commit = booleanOf("commit", pick("commit"))
+  if (!commit) {
+    throw new Error(`${CONFIG_FILE} 的 commit: false 已退役(统一提交是完成条件,见 docs/commit-boundary-design.md): 请删除该键或改为 true`)
+  }
   const testByDriver = booleanOf("testByDriver", pick("testByDriver"))
   const handoverTest = booleanOf("handoverTest", pick("handoverTest"))
   if (handoverTest && !testByDriver) {
@@ -169,7 +180,7 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     // 执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init 自然固化新键。
     idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "分钟"),
     idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "分钟,0 为不设"),
-    commit: booleanOf("commit", pick("commit")),
+    commit,
     phases,
     source: sourceOf(record.source),
     destDir: destDirOf(record.destDir),

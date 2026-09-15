@@ -116,6 +116,20 @@ describe("loadProjectConfig", () => {
     }
   })
 
+  test("commit: false 已退役 → 严格失败;true/缺失照常(commit-boundary-design.md 2026-09-15)", async () => {
+    const dir = tempDir()
+    try {
+      expect(CONFIG_DEFAULTS.commit).toBe(true)
+      expect((await loadProjectConfig(dir)).commit).toBe(true)
+      writeConfig(dir, JSON.stringify({ commit: true }))
+      expect((await loadProjectConfig(dir)).commit).toBe(true)
+      writeConfig(dir, JSON.stringify({ commit: false }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/commit: false 已退役/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("autoNumber 缺省 true(stable-refs D5);合法布尔原样读回", async () => {
     const dir = tempDir()
     try {
@@ -192,7 +206,7 @@ describe("loadProjectConfig", () => {
         ...CONFIG_DEFAULTS,
         verify: true,
         contextLimit: 128,
-        commit: false,
+        testByDriver: true,
         phases: "admtvk",
         source: { dir: "legacy", path: "packages/core" },
         destDir: "target",
@@ -266,8 +280,8 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
   const existing: ProjectConfig = { ...CONFIG_DEFAULTS, verify: true, idleMax: 30, agent: "custom" }
 
   test("合并: 仅显式给出的键覆盖,undefined 视同未给出", () => {
-    expect(mergeProjectConfig(existing, { commit: false })).toEqual({ ...existing, commit: false })
-    expect(mergeProjectConfig(existing, { commit: undefined, mode: "migrate" })).toEqual(existing)
+    expect(mergeProjectConfig(existing, { subtask: "off" })).toEqual({ ...existing, subtask: "off" })
+    expect(mergeProjectConfig(existing, { subtask: undefined, mode: "migrate" })).toEqual(existing)
     // 重复 init 无参数(空显式键)不重置已有配置
     expect(mergeProjectConfig(existing, {})).toEqual(existing)
     expect(mergeProjectConfig(CONFIG_DEFAULTS, {})).toEqual(CONFIG_DEFAULTS)

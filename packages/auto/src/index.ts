@@ -154,7 +154,7 @@ if (command === "run") {
     }
   }
   if (flags.has("commit-subtask")) {
-    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 opencode-auto init <dir> --commit false")
+    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),且不再支持关闭(--commit false 已退役)")
     process.exit(1)
   }
   // --amend/--force 是 init/reset 专用: 前者切回增量修订语义,后者跳过覆盖确认
@@ -310,13 +310,14 @@ if (command === "run") {
   process.exit(code)
 }
 
-// --commit 缺省/裸选项/true = 启用(会话后统一提交);false 与旧值 none = 关闭。
+// --commit 缺省/裸选项/true = 启用(会话后统一提交)。false 与旧值 none 已于
+// 2026-09-15 退役(docs/commit-boundary-design.md): 统一提交是完成条件,单元基线、
+// 恢复保真回滚等机制全部以"提交恒开"为前提,关闭档与之冲突——出现即用法错误。
 // 旧的 subtask/task/once 档已随"收回 AI 提交权、driver 统一提交"一并移除。
-// 返回 null 表示取值非法。
+// 返回 null 表示取值非法(含已退役的关闭档)。
 function parseCommit(flags: Map<string, string>): boolean | null {
   const raw = flags.get("commit")
   if (raw === undefined || raw === "" || raw === "true") return true
-  if (raw === "false" || raw === "none") return false
   return null
 }
 
@@ -436,7 +437,7 @@ if (command === "init" || command === "continue") {
     }
   }
   if (flags.has("commit-subtask")) {
-    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),如需关闭用 --commit false")
+    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),且不再支持关闭(--commit false 已退役)")
     process.exit(1)
   }
   // --implement-file/--implement-prompt(init 单阶段 m 快捷模式,设计见文件尾用法
@@ -463,7 +464,10 @@ if (command === "init" || command === "continue") {
   }
   const commit = parseCommit(flags)
   if (commit === null) {
-    console.error("--commit 取值为 true|false(none 为 false 别名);缺省 true,driver 在每个会话结束后统一提交全部改动")
+    console.error(
+      "--commit 取值只剩 true(缺省): --commit false(及旧别名 none)已退役——统一提交是完成条件" +
+        "(docs/commit-boundary-design.md),driver 在每个会话结束后统一提交全部改动,不再支持关闭",
+    )
     process.exit(1)
   }
   const subtask = parseSubtask(flags.get("subtask"))
@@ -1040,8 +1044,8 @@ function isPristinePlan(text: string): boolean {
 }
 
 console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
-  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true|false]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
+  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]] [--new-session]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
@@ -1059,7 +1063,7 @@ console.error(`用法:
        --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;两者均为相对 <dir> 的相对路径,init 时校验存在性)
        --dest-dir <相对路径> 迁移目标目录(相对 <dir>): driver 工作目录与迁移目标经它隔离,迁移产出的代码写入 <dir>/<dest-dir>
        --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
-       --commit [true] 会话后统一提交(缺省启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;false 关闭)
+       --commit [true] 会话后统一提交(恒为启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;--commit false 与旧别名 none 已退役——提交是完成条件,不再支持关闭)
        --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
        --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
        --handover-test 需搭配 --test-by-driver: 测试失败且会话上下文达到上限时,要求 AI 写交接文档(子任务会话为 docs/<任务>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<任务>/testhandoff.md)后换新会话续跑,防止在超大上下文中反复试错

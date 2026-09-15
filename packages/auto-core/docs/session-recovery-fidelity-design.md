@@ -1,7 +1,8 @@
 # 会话恢复保真设计:可恢复 session id 标准、极简续跑与 stash 回滚
 
-> 状态: 2026-09-14 立项,设计定稿;**2026-09-15 开始实施(S1/S2/S3 分步,进行中,
-> 进度与续跑指引见 §4 勾选表)**(commit-boundary-design.md 决策 D6)。
+> 状态: 2026-09-14 立项,设计定稿;**2026-09-15 实施完成(S1/S2/S3 全部落地,
+> 开关 OPENCODE_AUTO_STRICT_RESUME 缺省 off 灰度中,见 §4 勾选表)**
+> (commit-boundary-design.md 决策 D6)。
 > 2026-09-15 依据双目标目录现场日志审计(kernel-spi-nor / kernel-dm,
 > 2026-09-10..15 约 23MB run 日志)实证修订:复用判据补 model 一致性(3.1 ④)、
 > R3 交接边界写核(3.3 新触发)、fork 基点独立性显性化(3.4)、相邻机制修正建议
@@ -143,7 +144,7 @@ Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 
    直接进降级环(未配置候选则阻塞)。属主: session-error-retry-plan.md /
    model-routing-design.md。
 
-## 4. 分期实施(进行中,新会话从本表继续)
+## 4. 分期实施(2026-09-15 全部完成)
 
 落点速览(2026-09-15 会话 1 已改文件): `src/switches.ts`、`src/resume.ts`、
 `src/git.ts`、`src/runner.ts`、`test/switches.test.ts`;typecheck 干净、全量
@@ -188,7 +189,7 @@ Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 
 - [x] **S2-d requireArtifact step 续跑严格化**: sameStep 且基线在册 → baselineIntact
   失败 dirty;model 不一致/记录无 model/死亡 → rollbackUnitState 后按全新步骤重做;
   旧记录无基线 → 不复用、走既有"开新会话重做本步骤"。
-- [ ] **S1/S2 测试**(下一步):
+- [x] **S1/S2 测试**:
   - test/resume.test.ts: baseline/model 往返、缺字段记录兼容;
   - test/git.test.ts: baselineIntact(HEAD==基线/driver 区间通过/外部提交检出/空基线)
     与 rollbackUnit(脏区+driver 提交 → stash×2+reset 回基线、stash list 含
@@ -198,19 +199,29 @@ Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 
     路径(注入 switches: 记录带 baseline+model 匹配 → 复用;model 不一致/会话死 →
     回滚后重开——git init 临时仓 + saveProgress 构造记录,断言 HEAD 复位与
     stash 存在)。
-- [ ] **S3 收尾**(测试后):
-  - 可注入化补完(进行中被叫停,已做 strictResumeActive(opts, switches?) 半笔):
-    ① requireArtifact 内部 strictResumeActive(opts) → 传 switches;② watch 加
-    switches 形参(attempt 调用点透传),handleIdleTest 用之;③ resumeNote 加第三参
-    `strictResume = autoSwitches().strictResume`,runTask/requireArtifact 两调用点
-    传 switches.strictResume;④ attempt 的 remember 里 strictResumeActive 传
-    switches;
+- [x] **S3 收尾**:
+  - 可注入化补完(已做): ① requireArtifact 内部 strictResumeActive 传 switches;
+    ② watch 加 switches 形参(attempt 调用点透传),handleIdleTest 用之;③ resumeNote
+    加第三参 `strictResume = autoSwitches().strictResume`,runTask/requireArtifact 三个
+    调用点传**门禁值** `strict`(§4.1 ⑥,非裸开关);④ attempt 的 remember 里
+    strictResumeActive 传 switches(runTask 入口的门禁调用一并透传)。
+    executeWhole/runSubtask 的 strictResumeActive(opts) 不在单测面上,保持现状;
   - 文档同步: docs/behavior.md(严格恢复行为段: 记录标准/核对/回滚/未配路由时
     一律不复用的口径)、docs/structure.md(switches 第十六变量 + git.ts
     baselineIntact/rollbackUnit + runner.ts 增补)、包 AGENTS.md 导航行、根
     /workspace/aseo/AGENTS.md「进行中的方案」段(改为已实施 + 开关缺省 off 灰度)、
     本文件状态行转"已实施(灰度)";
   - 终验: 包目录 `bun typecheck` + `bun test` 全绿。
+
+落定(2026-09-15 会话 2): 注入化四处全部补完(requireArtifact 的 strictResumeActive
+传 switches、watch 加 switches 形参经 attempt 透传、resumeNote 第三参由调用点传门禁值、
+attempt 的 remember 传 switches;runTask 入口的门禁调用一并透传)。新增测试 20 例——
+test/resume.test.ts 2(baseline/model 往返与坏值容错)、test/git.test.ts 8
+(baselineIntact 三例 + rollbackUnit 五例,含 upstream 自引用构造与嵌套仓库)、
+test/runner.test.ts 9(resumeNote 三态 + requireArtifact 严格路径六态,含开关 off 的
+等价现状回归);反向核对已做——把注入的 strictResume 改 off,四条严格用例应声而倒。
+auto-core `bun typecheck` 干净、`bun test` 726 全绿(前 706);auto 壳 typecheck 干净、
+e2e 52 通过(新增 --commit false 退役一例)。
 
 ### 4.1 实施期决策记录(设计文本之外的落定口径)
 
@@ -225,6 +236,15 @@ Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 
    rollbackUnit 双侧。
 5. **中途回滚重做的界**: executeWhole/runSubtask 各一次(`rolled`),再失败走既有
    隐性阻塞;现场已保全在 stash。
+6. **resumeNote 的门禁口径**(2026-09-15 会话 2 落定): 第三参由调用点传**门禁值**
+   `strictResumeActive(opts, switches)`,不是裸开关——门禁不在位时没有单元基线也没有
+   回滚兜底,"一句 continue"赖以成立的前提(不可保真即回滚重跑)不存在,故维持既有
+   多行阶段指引。与 §4.1 ① 同一法理。
+7. **`--commit false` 退役**(2026-09-15 用户决策,commit-boundary-design.md D7):
+   提交关闭档与本设计(及提交边界)冲突——门禁关闭时严格恢复整体空转,却要求每个
+   新机制都挂一条空转分支。已做入口层软退役: CLI `--commit false`/`none` 与配置
+   `commit: false` 出现即用法错误/严格失败;`strictResumeActive` 的 `opts.commit !== false`
+   项随之恒真,门禁实际只剩"开关 on 且非 dryrun"。代码侧门禁分支暂留,清理另立任务。
 
 ## 5. 风险
 

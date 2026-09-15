@@ -348,11 +348,11 @@ describe("CLI: init 固化项目配置", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["init", dir, "--amend", "--verify", "--context-limit", "128", "--commit", "false"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, commit: false })
+      expect((await runCli(["init", dir, "--amend", "--verify", "--context-limit", "128", "--subtask", "ondemand"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, subtask: "ondemand" })
       // 再 amend 一个无关键: 上一轮改过的三个键原样保留
       expect((await runCli(["init", dir, "--amend", "--agent", "custom"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, commit: false, agent: "custom" })
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, subtask: "ondemand", agent: "custom" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -361,8 +361,8 @@ describe("CLI: init 固化项目配置", () => {
   test("init 缺省全量覆盖: 未给出的键强制回落默认值,与干净环境无参 init 一致", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--verify", "--context-limit", "128", "--commit", "false", "--agent", "custom"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, commit: false, agent: "custom" })
+      expect((await runCli(["init", dir, "--verify", "--context-limit", "128", "--subtask", "ondemand", "--agent", "custom"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, subtask: "ondemand", agent: "custom" })
       // 无参 init: 上面改过的四个键全部回到默认值
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
@@ -374,6 +374,22 @@ describe("CLI: init 固化项目配置", () => {
       } finally {
         await rm(clean, { recursive: true, force: true })
       }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("--commit false / none 已退役: init 与 continue 均用法错误退出 1,--commit true 照常", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const off = await runCli(["init", dir, "--commit", "false"])
+      expect(off.code).toBe(1)
+      expect(off.err).toContain("已退役")
+      expect((await runCli(["init", dir, "--commit", "none"])).code).toBe(1)
+      // 缺省/显式 true 照常固化(提交恒开)
+      expect((await runCli(["init", dir, "--commit", "true"])).code).toBe(0)
+      expect((await readConfig(dir)).commit).toBe(true)
+      expect((await runCli(["continue", dir, "--commit", "false"])).code).toBe(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

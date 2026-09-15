@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { beginUnit, changedFiles, commitPending, commitTree, pendingChanges, unitBaseline, unitViolations } from "../src/git"
+import { baselineIntact, beginUnit, changedFiles, commitPending, commitTree, pendingChanges, rollbackUnit, unitBaseline, unitViolations } from "../src/git"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -246,6 +246,193 @@ describe("commitPending(隐藏任务 ③ 补提交)", () => {
       // 门禁关闭 → clean 空转
       await writeFile(join(dir, "docs", "kb2.md"), "知识2")
       expect(await commitPending(dir, { commit: false }, task, { stage: "knowledge", subject: "x" }, [join("docs", "kb2.md")])).toBe("clean")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---- 恢复保真(session-recovery-fidelity-design.md 3.1 ③ / 3.3)----
+
+describe("baselineIntact(恢复时的基线核对)", () => {
+  test("HEAD == 基线 / 区间全 driver 提交 → 通过;外部提交检出;**未提交脏区不报**", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.txt"), "a")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      const baseline = await unitBaseline(dir)
+      // ① HEAD == 基线
+      expect(await baselineIntact(dir, baseline)).toEqual([])
+      // ② 基线..HEAD 全是 driver 提交(带 Auto-Stage trailer)
+      await writeFile(join(dir, "b.txt"), "b")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1" })
+      expect(await baselineIntact(dir, baseline)).toEqual([])
+      // ③ 半途脏区正是恢复对象: 核对不看未提交改动(与 unitViolations 的关键差异)
+      await writeFile(join(dir, "c.txt"), "c")
+      expect(await baselineIntact(dir, baseline)).toEqual([])
+      expect((await unitViolations(dir, baseline)).some((problem) => problem.includes("未提交改动"))).toBe(true)
+      // ④ 外部提交(无 Auto-Stage trailer)混入 → 认知失真
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "人工提交")
+      const problems = await baselineIntact(dir, baseline)
+      expect(problems).toHaveLength(1)
+      expect(problems[0]).toContain("非 driver 提交")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("空基线恒通过;基线在册但仓库不可读 → HEAD 不可读", async () => {
+    const dir = await fresh()
+    try {
+      expect(await baselineIntact(dir, [])).toEqual([])
+      const problems = await baselineIntact(dir, [{ root: join(dir, "missing"), sha: "abc1234" }])
+      expect(problems).toHaveLength(1)
+      expect(problems[0]).toContain("HEAD 不可读")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("空仓库基线(单元启动时尚无提交): driver 提交通过,外部提交检出", async () => {
+    const dir = await fresh()
+    try {
+      const baseline = await unitBaseline(dir)
+      expect(baseline).toEqual([{ root: dir, sha: "" }])
+      expect(await baselineIntact(dir, baseline)).toEqual([])
+      await writeFile(join(dir, "a.txt"), "a")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 单元内首个提交" })
+      expect(await baselineIntact(dir, baseline)).toEqual([])
+      await writeFile(join(dir, "b.txt"), "b")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "人工提交")
+      expect((await baselineIntact(dir, baseline))[0]).toContain("非 driver 提交")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("rollbackUnit(不可保真时的回滚协议)", () => {
+  const info = { task: "T-001", unit: "子任务 1" }
+
+  test("脏区 + 本单元 driver 提交 → stash×2 + soft reset 回基线,工作区净、现场在 stash", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "seed.txt"), "s")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      const baseline = await unitBaseline(dir)
+      const base = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      await writeFile(join(dir, "done.txt"), "已落账的半截工作")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1 半途" })
+      await writeFile(join(dir, "wip.txt"), "未提交的半截工作")
+      const result = await rollbackUnit(dir, baseline, info)
+      expect(result.ok).toBe(true)
+      expect(result.stashes).toBe(2)
+      expect(result.resets).toEqual(["."])
+      expect(result.skipped).toEqual([])
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(base)
+      expect(await changedFiles(dir)).toEqual([])
+      const stashes = await git(dir, "stash", "list")
+      expect(stashes).toContain("auto-rollback")
+      expect(stashes.trim().split("\n")).toHaveLength(2)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("外部提交混入 → ok=false 且该仓库原样(不动人工提交,交人工处置)", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "seed.txt"), "s")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "human.txt"), "人工改动")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "人工提交")
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      await writeFile(join(dir, "wip.txt"), "半截工作")
+      const result = await rollbackUnit(dir, baseline, info)
+      expect(result.ok).toBe(false)
+      expect(result.failures).toHaveLength(1)
+      expect(result.failures[0]!.rel).toBe(".")
+      expect(result.stashes).toBe(0)
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(head)
+      expect(await changedFiles(dir)).toEqual(["wip.txt"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("检测到 upstream → 只 stash 不动分支历史(计入 skipped)", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "seed.txt"), "s")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "done.txt"), "已落账")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1 半途" })
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      // 自引用 upstream(无需远端): 当前分支的 upstream 指向本地镜像分支
+      const current = (await git(dir, "rev-parse", "--abbrev-ref", "HEAD")).trim()
+      await git(dir, "branch", "upstream-mirror")
+      await git(dir, "config", `branch.${current}.remote`, ".")
+      await git(dir, "config", `branch.${current}.merge`, "refs/heads/upstream-mirror")
+      await writeFile(join(dir, "wip.txt"), "半截工作")
+      const result = await rollbackUnit(dir, baseline, info)
+      expect(result.ok).toBe(true)
+      expect(result.stashes).toBe(1)
+      expect(result.resets).toEqual([])
+      expect(result.skipped).toEqual(["."])
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(head)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("空仓库基线(单元启动时尚无提交)→ 只 stash 不回退历史", async () => {
+    const dir = await fresh()
+    try {
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "a.txt"), "a")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 单元内首个提交" })
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      await writeFile(join(dir, "wip.txt"), "半截工作")
+      const result = await rollbackUnit(dir, baseline, info)
+      expect(result.ok).toBe(true)
+      expect(result.stashes).toBe(1)
+      expect(result.resets).toEqual([])
+      expect(result.skipped).toEqual(["."])
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(head)
+      expect(await changedFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("嵌套仓库各自回滚到各自基线(深度优先,先内后外)", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "pkg"))
+      await git(join(dir, "pkg"), "init", "-q")
+      await writeFile(join(dir, "root.txt"), "r")
+      await writeFile(join(dir, "pkg", "inner.txt"), "i")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      const baseline = await unitBaseline(dir)
+      const bases = Object.fromEntries(baseline.map((line) => [line.root, line.sha]))
+      // 两仓库各落一个 driver 提交 + 各留一份脏区
+      await writeFile(join(dir, "root2.txt"), "r2")
+      await writeFile(join(dir, "pkg", "inner2.txt"), "i2")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1 半途" })
+      await writeFile(join(dir, "wip.txt"), "半截")
+      await writeFile(join(dir, "pkg", "wip.txt"), "半截")
+      const result = await rollbackUnit(dir, baseline, info)
+      expect(result.ok).toBe(true)
+      expect(result.resets.sort()).toEqual([".", "pkg"])
+      expect(result.stashes).toBe(4)
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(bases[dir])
+      expect((await git(join(dir, "pkg"), "rev-parse", "--short", "HEAD")).trim()).toBe(bases[join(dir, "pkg")])
+      expect(await changedFiles(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -4,11 +4,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
-import { changedFiles } from "../src/git"
+import { changedFiles, unitBaseline } from "../src/git"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
-import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
-import { openStep, recallProgress, saveProgress } from "../src/resume"
+import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, resumeNote, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
+import { openStep, recallProgress, saveProgress, type Phase } from "../src/resume"
 import { resolvesOf } from "../src/resolve"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -2330,5 +2330,223 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ source: "agent", phase: "t", round: 2, question: "是否顺带收口", file: "report.md:3" })
+  })
+})
+
+// ---- 恢复保真(session-recovery-fidelity-design.md 3.2/3.1/3.3)----
+
+describe("resumeNote(中断恢复说明)", () => {
+  const subtasks: Phase = { kind: "subtasks", index: 2 }
+  const planStep: Phase = { kind: "step", step: "phase-plan", letter: "m" }
+  const ONE_LINE = "[driver] 会话曾中断,请继续当前工作直至本单元完成。"
+
+  test("严格恢复门禁在位 + 复用原会话 → 收敛为一句 continue(3.2)", () => {
+    expect(resumeNote(subtasks, true, true)).toBe(ONE_LINE)
+    expect(resumeNote(planStep, true, true)).toBe(ONE_LINE)
+    expect(resumeNote(undefined, true, true)).toBe(ONE_LINE)
+  })
+
+  test("门禁不在位(缺省 off / dryrun)→ 复用路径维持既有按阶段指引", () => {
+    const note = resumeNote(subtasks, true, false)
+    expect(note).not.toBe(ONE_LINE)
+    expect(note).toContain("你正在原来中断的会话中继续")
+    expect(note).toContain("首个未勾选项")
+  })
+
+  test("非复用路径(总结态续跑)恒给按阶段指引,不受严格恢复影响", () => {
+    const note = resumeNote(subtasks, false, true)
+    expect(note).toContain("部分工作可能已完成")
+    expect(note).toContain("首个未勾选项")
+    const step = resumeNote({ kind: "step", step: "phase-handover", letter: "t" }, false, true)
+    expect(step).toContain("本阶段步骤")
+    expect(step).toContain("四个必备小节")
+  })
+})
+
+describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基线/模型核对)", () => {
+  // 注入开关: 严格恢复 on + 模型路由(严格恢复要求记录带生效模型,未配路由一律不复用)
+  // + 零等待重试阶梯(本块只验恢复判据,不该被退避拖成分钟级)。
+  const STRICT = parseSwitches({
+    [SWITCH_ENV.strictResume]: "on",
+    [SWITCH_ENV.model]: "*=kimi/k2",
+    [SWITCH_ENV.retryWaits]: "0,0",
+    [SWITCH_ENV.retryAsk]: "0",
+  })
+  const LOOSE = parseSwitches({
+    [SWITCH_ENV.model]: "*=kimi/k2",
+    [SWITCH_ENV.retryWaits]: "0,0",
+    [SWITCH_ENV.retryAsk]: "0",
+  })
+
+  beforeEach(() => {
+    // 严格恢复的模型求值链含 sticky / /failback 覆写(src/failback.ts 模块态),
+    // 与其他用例共享进程 → 每例前复位,避免串扰。
+    clearSticky()
+    resetFailback()
+  })
+
+  async function git(dir: string, ...args: string[]) {
+    const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+    if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+    return out
+  }
+
+  // 记录了阶段步骤恢复点的临时仓库: 种子提交 + active step 记录(基线/模型由入参给定)。
+  async function seeded(record: { model?: string; withBaseline?: boolean } = {}) {
+    const dir = await mkdtemp(join(tmpdir(), "auto-strict-resume-"))
+    await git(dir, "init", "-q")
+    await writeFile(join(dir, "seed.txt"), "s")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "seed")
+    const baseline = await unitBaseline(dir)
+    await saveProgress(dir, {
+      task: "PLAN",
+      session: "ses_plan_old",
+      at: 1,
+      active: true,
+      phase: { kind: "step", step: "phase-plan", letter: "m" },
+      ...(record.withBaseline === false ? {} : { baseline }),
+      ...(record.model === undefined ? {} : { model: record.model }),
+    })
+    return { dir, head: (await git(dir, "rev-parse", "--short", "HEAD")).trim() }
+  }
+
+  function stepClient(current?: string, alive = true) {
+    const state = { creates: 0, prompts: [] as string[], current }
+    const client = {
+      session: {
+        create: async () => {
+          state.creates++
+          state.current = `ses_new_${state.creates}`
+          return { data: { id: state.current } }
+        },
+        fork: async () => ({ data: { id: "ses_fork" } }),
+        get: async (params: { sessionID: string }) => (alive ? { data: { id: params.sessionID } } : { error: { name: "NotFound" } }),
+        update: async () => ({}),
+        prompt: async (params: { sessionID: string }) => {
+          state.prompts.push(params.sessionID)
+          return {}
+        },
+        promptAsync: async () => ({}),
+        abort: async () => ({}),
+        messages: async () => ({
+          data: [
+            { info: { role: "user" } },
+            { info: { role: "assistant", providerID: "kimi", modelID: "k2", tokens: { input: 5000, output: 200, reasoning: 0, cache: { read: 1000, write: 0 } } } },
+          ],
+        }),
+      },
+      provider: { list: async () => ({ data: { all: [] } }) },
+      event: {
+        subscribe: async () => ({
+          stream: (async function* () {
+            yield { type: "session.idle", properties: { sessionID: state.current } }
+          })(),
+        }),
+      },
+    } as unknown as OpencodeClient
+    return { client, state }
+  }
+
+  const planTask = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
+  const spec = (reset: () => void) => ({
+    kind: "阶段规划",
+    step: { step: "phase-plan" as const, letter: "m" as const },
+    artifact: "已填充的 PLAN.md",
+    requirement: "写入 PLAN.md",
+    reset: async () => {
+      reset()
+    },
+    collect: async () => 4,
+  })
+
+  test("基线完好 + 模型一致 + 会话存活 → 复用原会话、保留产物现场", async () => {
+    const { dir } = await seeded({ model: "kimi/k2" })
+    try {
+      const { client, state } = stepClient("ses_plan_old")
+      let resetCalled = false
+      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(resetCalled).toBe(false)
+      expect(state.creates).toBe(0)
+      expect(state.prompts).toEqual(["ses_plan_old"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("模型不一致 → 回滚到单元基线(现场进 stash)后开新会话重做本步骤", async () => {
+    const { dir, head } = await seeded({ model: "kimi/old" })
+    try {
+      const { client, state } = stepClient("ses_plan_old")
+      let resetCalled = false
+      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.creates).toBe(1)
+      expect(state.prompts).toEqual(["ses_new_1"])
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(head)
+      expect(await git(dir, "stash", "list")).toContain("auto-rollback")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("原会话已死 → 同样回滚后重做(不在陌生脏区上续跑)", async () => {
+    const { dir } = await seeded({ model: "kimi/k2" })
+    try {
+      const { client, state } = stepClient("ses_plan_old", false)
+      let resetCalled = false
+      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.creates).toBe(1)
+      expect(await git(dir, "stash", "list")).toContain("auto-rollback")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("基线以来混入外部提交 → dirty 交人工(不回滚、不开会话)", async () => {
+    const { dir } = await seeded({ model: "kimi/k2" })
+    try {
+      await writeFile(join(dir, "human.txt"), "人工改动")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "人工提交")
+      const { client, state } = stepClient("ses_plan_old")
+      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}), STRICT)
+      expect(typeof value === "object" && "type" in value && value.type).toBe("dirty")
+      expect(state.creates).toBe(0)
+      expect(await git(dir, "stash", "list")).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("严格恢复启用前的旧记录(无基线)→ 不复用也不回滚,开新会话重做", async () => {
+    const { dir } = await seeded({ withBaseline: false })
+    try {
+      const { client, state } = stepClient("ses_plan_old")
+      let resetCalled = false
+      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.creates).toBe(1)
+      expect(await git(dir, "stash", "list")).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("开关缺省 off: 同一条模型不一致的记录仍按既有语义复用(等价现状)", async () => {
+    const { dir } = await seeded({ model: "kimi/old" })
+    try {
+      const { client, state } = stepClient("ses_plan_old")
+      let resetCalled = false
+      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), LOOSE)).toBe(4)
+      expect(resetCalled).toBe(false)
+      expect(state.creates).toBe(0)
+      expect(state.prompts).toEqual(["ses_plan_old"])
+      expect(await git(dir, "stash", "list")).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -221,9 +221,13 @@
   脏 → dirty 阻塞交人工(不写状态文件、不清扫,git 决定权在人工;k 阶段"提取失败
   仅警告"对 dirty 例外)。AGENTS.md 指针块/.gitignore 的启动补写经 housekeeping
   提交收口;终审任务追加与修复检查项注入(driver 状态写入)各自成提交。仓库未配置
-  user.email 时以固定身份兜底;`--commit false`(init 修订,写入配置 commit 键;none 为 false 别名)
-  可整体关闭——门禁随之全部失效,维持旧语义(旧四档 subtask/task/once
-  与别名 --commit-subtask 已移除,出现即用法错误)。该执行权原则经 init
+  user.email 时以固定身份兜底。**提交不可关闭(2026-09-15 退役 `--commit false`)**:
+  统一提交是完成条件,单元 clean 门禁/SHA 基线与恢复保真的回滚锚点全部以"提交恒开"
+  为前提,关闭档与之冲突——`--commit false`(及旧别名 `none`)出现即用法错误退出 1,
+  存量 `.opencode/auto/config.json` 里写着 `commit: false` 的按坏文件严格失败(请删该键
+  或改 true);`--commit true` 仍可写,等同缺省。门禁此后只在 dryrun 与非 git 环境不生效
+  (代码侧 `opts.commit` 分支暂留、恒不可达,清理另立任务;旧四档 subtask/task/once
+  与别名 --commit-subtask 早已移除,出现即用法错误)。该执行权原则经 init
   下沉:AGENTS.md 提交原则块、agent 契约与 state-rule 片段;`check` 子命令同步
   扫描违背该原则的描述。
 - subtask 三档(config.subtask,init --subtask 修订):`auto`(缺省;分解会话 → 逐子任务,
@@ -253,8 +257,8 @@
   工具、纯实现手段自主决定且**不要求任何标注**(driver 已在事件侧完整落账)。driver
   两路采集:① question.asked 的回落自动答复入回合内 `resolves[]`(经 7 个 snapshot
   出口带出,人工真答与 dryrun 预检会话不计),② 会话收尾扫描本次未提交变更文件里的
-  两类标记行(扫描挂在 `--commit false` / dryrun 的提前 return **之前**——采集是审计,
-  不该受提交开关影响);两源经 sameIssue 配对,展示时已配对的 driver 项让位给信息更全
+  两类标记行(扫描挂在提交门禁关闭(dryrun,及已退役的 `--commit false`)的提前
+  return **之前**——采集是审计,不该受提交开关影响);两源经 sameIssue 配对,展示时已配对的 driver 项让位给信息更全
   的 agent 项,未配对的以 ⚠ 点名"会话未按要求标注"。AUTO-RESOLVE 在任务三态行、阶段
   收口、轮次完成之前以 `⚑` 置顶展示(任务级逐条、上限 8 条、单条压成单行截断 80 字,
   阶段/轮次只给计数);AUTO-DECISION 只折成一个计数(有代答时折进高亮块末行,无代答时
@@ -563,6 +567,30 @@
    静默);**独立成文件不并入 stats.json**——stats 有 30s 心跳高频写,塞进一个会增长的
    问题文本数组会让每次心跳重写全量文本;条目上限 512 FIFO 淘汰,清零同样是人工
    `rm .auto/resolves.json`。
+- 严格恢复(OPENCODE_AUTO_STRICT_RESUME,**缺省 off = 现状逐字节等价**;设计文档
+  docs/session-recovery-fidelity-design.md,2026-09-15 实施、灰度中):会话复用的判据
+  从"会话还在"收紧为"恢复后行为可论证地等于未中断的延续",不满足即**回滚到单元基线
+  重跑**,以浪费的半截工作换确定性。整体 gated 于"开关 on 且提交门禁在位"(dryrun 下
+  空转——无基线即无回滚锚点)。① **记录标准**:active 进度记录随带 `baseline`(逐仓库
+  HEAD 短 SHA,任务入口/阶段边界/子任务门禁后/requireArtifact 单元起点逐级刷新,越近
+  回滚半径越小)与 `model`(本次提示词的生效 provider/model 串)。② **恢复核对**:各
+  仓库 HEAD == 基线,或 基线..HEAD 区间全是 driver 提交(Auto-Stage trailer)——
+  `git.baselineIntact`,与单元收口校验的差异是**不看未提交改动**(半途脏区正是恢复
+  对象);外部提交混入一律 dirty 阻塞交人工(回滚只回收 driver 自己的单元内改动)。
+  生效模型与当前配置解析结果不一致 → 不复用(异模型续跑 = 行为漂移);**未配置
+  OPENCODE_AUTO_MODEL 时记录无模型可写,严格恢复下视同不匹配——要会话复用就得配
+  模型路由**。旧记录(开关启用前写入,无基线)不可严格核对 → 不复用、也不回滚,开
+  新会话。③ **回滚协议**(`git.rollbackUnit`,逐仓库深度优先镜像 commitTree):
+  `git stash push -u`(信息含 `auto-rollback` 前缀)保全现场 → 基线..HEAD 有本单元
+  driver 提交时 `git reset --soft` 回基线后再 stash 收回;检测到 upstream 的仓库只
+  stash 不动历史(已推送/被引用),基线为空或单元期间新建的仓库同样只 stash;随后
+  进度记录转总结态(清基线/模型)、CURRENT.md 写回滚备注(现场去向与找回方式),
+  新会话冷启动重做本单元(不附恢复说明)。④ **提示词瘦身**:复用原会话时恢复说明
+  收敛为一句 `[driver] 会话曾中断,请继续当前工作直至本单元完成。`(会话本就靠盘面
+  自定位,阶段指引冗余);门禁不在位与非复用路径维持既有按阶段指引。⑤ **交接边界
+  写核**:交接/测试交接文档在交接当下即校验(缺失或无 `状态: 继续|完成` 行),严格
+  恢复下不再 steer 补写重试——无效一次即回滚冷启动重做(每个执行单元一次为限,再失败
+  按既有隐性阻塞),"完成判定不靠 agent 自报"同样适用于交接文档。
 - opencode server 管理(src/server.ts manage):run 缺省 spawn `opencode serve`
   并托管生命周期;显式 url(--server / OPENCODE_AUTO_SERVER)时连接外部实例、不托管。
   client 为 Proxy,restart 换实例后既有引用自动生效。网络类会话错误(NETWORK_FAILURE
