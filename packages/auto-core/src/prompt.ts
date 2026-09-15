@@ -95,13 +95,16 @@ export function renderTestResult(run: TestRunInfo): string {
 }
 
 // --handover-test 收尾+交接要求(steer 注入执行会话): AI 发起测试的那一刻,
-// driver 已判定需要交接——提交定版、并发起测试,同时以本提示词要求会话把不依赖
+// driver 已判定需要交接——提交定版、把脚本定下来,同时以本提示词要求会话把不依赖
 // 测试结果的剩余工作做完落盘、写出交接文档后结束会话,测试结果交下一个会话判读。
+// 措辞对测试时机保持中性("将由 driver 执行"): 顺序态在交接收口之后才跑,并发态
+// (OPENCODE_AUTO_HANDOVER_CONCURRENT=on)此刻已在跑,一份文案两态都成立。
 //
 // 文案硬约束(测试交接前置化设计 D2): **不得出现"上下文/超限/上限/tokens"**——
 // 会话一旦知道自己上下文吃紧,就会自行判定余量不足而省略本应完成的落盘工作
 // (现场实证);只陈述"需要交接并切换新会话"这一事实。同样不写"不要改源码":
-// AI 发起测试时本就知道被测内容不该动,状态由定版提交 + 重测守卫兜底。
+// 顺序态下会话收尾的改动本就会一并落进提交 #2 并被测试覆盖,说了反而提示它这是
+// 个可以自由裁量的边界。
 // 入参只有交接文档路径——此刻测试尚未出结果,退出码/输出都还不存在。
 export function renderTestWrapup(info: { handoffFile: string }): string {
   return renderPrompt("test-wrapup", { handoffFile: info.handoffFile })

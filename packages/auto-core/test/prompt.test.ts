@@ -790,7 +790,9 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
 
   test("收尾+交接要求: 落盘不依赖测试的剩余工作 + 交接文档硬性要求", () => {
     const text = renderTestWrapup({ handoffFile: "/tmp/pkg/docs/T-002/testhandoff.md" })
-    expect(text).toContain("并行执行")
+    // 对测试时机保持中性: 顺序态(缺省)交接收口后才跑,并发态此刻已在跑,一份文案两态都成立。
+    expect(text).toContain("将由 driver 执行")
+    expect(text).not.toContain("并行执行")
     expect(text).toContain("不依赖本次测试结果")
     expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("写完立即结束会话")
@@ -798,7 +800,7 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
 
   // 文案硬约束(测试交接前置化设计 D2): 收尾提示词不得让会话知道"上下文吃紧"
   // ——现场实证会话一旦知道就会自行判定余量不足、省略本应完成的落盘工作;
-  // 也不写"不要改源码"(发起测试时它本就知道,状态由定版提交 + 重测守卫兜底)。
+  // 也不写"不要改源码"(顺序态下收尾改动本就会落进提交 #2 并被测试覆盖)。
   test("收尾提示词不得出现上下文/超限措辞,也不代劳禁改源码", () => {
     const text = renderTestWrapup({ handoffFile: "docs/T-002/testhandoff.md" })
     for (const banned of ["上下文", "超限", "上限", "token", "Token", "不要修改", "不要改动"]) {

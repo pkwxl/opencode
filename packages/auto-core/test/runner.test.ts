@@ -7,7 +7,7 @@ import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyMod
 import { changedFiles, unitBaseline } from "../src/git"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
-import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, resumeNote, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, testHandoverDue, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
+import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, resumeNote, resolveTestScript, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, testHandoverDue, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
 import { openStep, recallProgress, saveProgress, type Phase } from "../src/resume"
 import { resolvesOf } from "../src/resolve"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
@@ -2576,5 +2576,70 @@ describe("testHandoverDue(--handover-test 判据)", () => {
 
   test("全新/fork 会话起跑值归零: 不被上一个会话的残值误判为超限", () => {
     expect(testHandoverDue(test64k, 0)).toBe(false)
+  })
+})
+
+// 请求标记的消费(测试交接顺序化 E1): 顺序态在定版那一刻就把脚本定下来、标记拿走,
+// 执行推迟到交接收口之后,所以"定出脚本"必须独立于"执行"可测。
+describe("resolveTestScript(消费 tmp/test.sh 请求标记)", () => {
+  let dir = ""
+  let tmp = ""
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-test-script-"))
+    tmp = join(dir, "tmp")
+    await mkdir(tmp, { recursive: true })
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("test/ 路径形态: 直取该脚本,不另产 tmp/test.<n>.sh", async () => {
+    await mkdir(join(dir, "test"), { recursive: true })
+    await writeFile(join(dir, "test", "build.sh"), "echo hi")
+    await writeFile(join(tmp, "test.sh"), "test/build.sh")
+    const run = { dir, tmp, seq: 0 }
+    expect(await resolveTestScript(run)).toEqual({ script: join(dir, "test", "build.sh"), seq: 1 })
+    expect(await Bun.file(join(tmp, "test.1.sh")).exists()).toBe(false)
+  })
+
+  // 现状固定(非本次改动引入): 判据是"整份内容不含换行",所以标记文件带尾随换行
+  // 时——AI 写文件的常态——走的是内联回落,tmp/test.<n>.sh 里是一行路径,由 bash
+  // 当命令执行。结果等价、脚本照跑,但 test/ 路径形态实际很少命中。
+  test("路径后带尾随换行: 现状走内联回落(整份内容含换行即判为内联)", async () => {
+    await mkdir(join(dir, "test"), { recursive: true })
+    await writeFile(join(dir, "test", "build.sh"), "echo hi")
+    await writeFile(join(tmp, "test.sh"), "test/build.sh\n")
+    const pending = await resolveTestScript({ dir, tmp, seq: 0 })
+    expect(pending.script).toBe(join(tmp, "test.1.sh"))
+    expect(await Bun.file(pending.script).text()).toBe("test/build.sh\n")
+  })
+
+  test("内联形态回落: 整写为 tmp/test.<n>.sh 保留执行快照", async () => {
+    await writeFile(join(tmp, "test.sh"), "set -e\necho inline\n")
+    const run = { dir, tmp, seq: 4 }
+    const pending = await resolveTestScript(run)
+    expect(pending).toEqual({ script: join(tmp, "test.5.sh"), seq: 5 })
+    expect(await Bun.file(pending.script).text()).toBe("set -e\necho inline\n")
+  })
+
+  test("单行但指向不存在的文件: 当内联脚本处理(不误判为路径)", async () => {
+    await writeFile(join(tmp, "test.sh"), "make check")
+    const run = { dir, tmp, seq: 0 }
+    const pending = await resolveTestScript(run)
+    expect(pending.script).toBe(join(tmp, "test.1.sh"))
+    expect(await Bun.file(pending.script).text()).toBe("make check")
+  })
+
+  test("标记读完即删且序号递增: 会话收尾期重写标记不会让 driver 跑错脚本", async () => {
+    await writeFile(join(tmp, "test.sh"), "echo one")
+    const run = { dir, tmp, seq: 0 }
+    expect((await resolveTestScript(run)).seq).toBe(1)
+    expect(await Bun.file(join(tmp, "test.sh")).exists()).toBe(false)
+    expect(run.seq).toBe(1)
+
+    await writeFile(join(tmp, "test.sh"), "echo two")
+    expect((await resolveTestScript(run)).seq).toBe(2)
+    expect(run.seq).toBe(2)
   })
 })

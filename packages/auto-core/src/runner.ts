@@ -6,7 +6,7 @@ import type { Interactive } from "./interactive"
 import { archivedTestHandoff, latestHandoffSeq, legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
-import { baselineIntact, beginUnit, commitTitle, commitTree, rollbackUnit, stashAll, stashPopAll, trackedSourceChanges, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
+import { baselineIntact, beginUnit, commitTitle, commitTree, rollbackUnit, trackedSourceChanges, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { currentRound } from "./phases"
@@ -2461,10 +2461,14 @@ type TestRun = {
   handovers: number
   startUsed: number
   last?: TestRunInfo
-  // 交接期与会话收尾并发执行中的测试(D2)。watch 起跑、attempt 在 watch 返回后
-  // 收口: 测试进程不能跨会话悬挂(会与随后开的新会话并发改文件),且 test.last
-  // 是重测守卫与新会话续跑提示的依据。收口即清。
+  // 并发态(OPENCODE_AUTO_HANDOVER_CONCURRENT=on)下与会话收尾并发执行中的测试。
+  // watch 起跑、attempt 在 watch 返回后收口: 测试进程不能跨会话悬挂(会与随后开的
+  // 新会话并发改文件),且 test.last 是新会话续跑提示的依据。收口即清。
   running?: Promise<TestRunInfo>
+  // 顺序态(缺省)下已定版、待交接收口后执行的脚本(与 running 互斥)。标记
+  // tmp/test.sh 在定版那一刻就被消费掉——会话随后还会继续收尾,标记留着会被
+  // 下一轮误读;执行推迟到提交 #2 之后,由 runExecSession 收口。执行即清。
+  pending?: { script: string; seq: number }
 }
 
 // 测试交接判据(交接触发解耦,测试交接前置化设计 D1): 不再叠加"测试失败"——
@@ -2547,11 +2551,19 @@ async function runExecSession(
     if (!result.testHandover) return result
     handovers++
     test.handovers = handovers
-    // 重测守卫(D2/D5/D6): 定版提交之后,会话收尾期间若确实改了被测内容,本次
-    // 测试结果已失效——暂存改动、对定版快照重跑同一脚本、再恢复暂存,使"两次
-    // 提交之间源码与脚本无任何修改"成立(D3)。
-    const guarded = await guardRetest(dir, task, test, opts, handovers)
-    if (guarded) return guarded
+    // 并发态的漂移登记(E3): 定版之后、提交 #2 之前比对**已跟踪**的非文档改动——
+    // 非空即说明本次测试面对的定版快照与将要落账的树不是同一份。只记事实,不
+    // stash、不重跑、不阻塞(重测守卫已退役,见 docs/test-handover-early-design.md §H)。
+    // 必须在提交 #2 之前做: 提交之后 diff 恒空,什么也看不见。
+    if (autoSwitches().handoverConcurrent) {
+      const drifted = await trackedSourceChanges(dir)
+      if (drifted.length) {
+        log(
+          `⚠ ${task.id} 并发态: 交接收尾期间改动了被测内容(${drifted.slice(0, 3).join(", ")}${drifted.length > 3 ? " 等" : ""}),` +
+            `本次测试跑的是定版快照,判读时以交接文档为准`,
+        )
+      }
+    }
     archived = archivedTestHandoff(handoff, handovers)
     await archiveHandoff(dir, handoff, handoff, handovers)
     // 提交 #2(交接确认): 会话收尾落盘的成果 + 归档交接文档一并落账。单元尚未
@@ -2561,48 +2573,16 @@ async function runExecSession(
       subject: `${task.id} 测试交接 #${handovers}`,
     })
     if (committed.type === "failed") return commitBlocked(`${task.id} 测试交接 #${handovers}`, committed)
+    // 顺序态(缺省,E1): 交接收口之后才执行——被测的就是提交 #2 的那一份树。脚本
+    // 自身若改写了跟踪文件(如 rustfmt apply),留作未提交增量,由下一单元的提交吸纳。
+    if (test.pending) {
+      const pending = test.pending
+      test.pending = undefined
+      await runTestScript(test, opts, pending.script, pending.seq)
+    }
     log(`↻ ${task.id} 上下文达到上限,已交接 ${archived},新会话继续(第 ${handovers} 次测试交接)`)
     continuation = true
   }
-}
-
-// 交接重测守卫(测试交接前置化设计 D2/D5/D6): 比对定版提交(#1)以来**已跟踪**的
-// 非文档改动——会话收尾期间本不该动被测内容(发起测试时它就知道),动了则本次
-// 测试结果对不上工作区。此时 stash -u 挪开收尾改动、对定版快照重跑同一脚本、
-// 再 pop 回来,收尾成果一份不丢。pop 冲突不吞: stash 条目保留、阻塞交人工。
-// 重跑的脚本仍在手: 内联形态落在 tmp/(driver 工作目录,ensureGitignore 已登记为
-// 忽略,`stash -u` 不动忽略文件),test/ 形态本就已提交。
-// 返回 undefined 表示无需重测或重测已完成。
-async function guardRetest(
-  dir: string,
-  task: Task,
-  test: TestRun,
-  opts: Opts,
-  n: number,
-): Promise<{ type: "blocked"; question: string } | undefined> {
-  const script = test.last?.script
-  if (!script) return undefined
-  const changed = await trackedSourceChanges(dir)
-  if (!changed.length) return undefined
-  log(`⚠ ${task.id} 交接收尾期间改动了被测内容(${changed.slice(0, 3).join(", ")}${changed.length > 3 ? " 等" : ""}),暂存后对定版快照重跑测试`)
-  const stashed = await stashAll(dir, `opencode-auto: ${task.id} handoff-${n} 收尾改动`)
-  if (stashed.failures.length) {
-    return {
-      type: "blocked",
-      question: `交接重测前暂存收尾改动失败(${stashed.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}),改动保留在工作区,请人工处理后重新运行。`,
-    }
-  }
-  await runTestScript(test, opts, script)
-  const conflicts = await stashPopAll(dir, stashed)
-  if (conflicts.length) {
-    return {
-      type: "blocked",
-      question:
-        `交接重测后恢复暂存改动冲突(${conflicts.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}),` +
-        `stash 条目已保留(git stash list),请人工处理后重新运行。`,
-    }
-  }
-  return undefined
 }
 
 // 交接文档归档: from(可能是旧平铺名,经 resolve 选出的实际读点)重命名为**新路径
@@ -3115,9 +3095,10 @@ async function attempt(
     await remember()
 
     const result = await watching
-    // 交接期并发测试的统一收口(D2): watch 起跑、这里等它落定——正常结束、
-    // 会话错误、SSE 断流各路都经过此处,测试进程不会跨会话悬挂。结果写在
-    // test.last 上,供重测守卫与新会话续跑提示引用。
+    // 并发态(OPENCODE_AUTO_HANDOVER_CONCURRENT=on)交接期测试的统一收口: watch
+    // 起跑、这里等它落定——正常结束、会话错误、SSE 断流各路都经过此处,测试进程
+    // 不会跨会话悬挂。结果写在 test.last 上,供新会话续跑提示引用。顺序态(缺省)
+    // 此处恒空转,测试由 runExecSession 在提交 #2 之后执行。
     if (test?.running) {
       await test.running.catch(() => {})
       test.running = undefined
@@ -3361,13 +3342,16 @@ async function watch(
     const pending = join(test!.tmp, "test.sh")
     if (!(await Bun.file(pending).exists())) return { type: "break" }
     // 交接判定就在这一刻(D1),先于执行——判据已与测试成败解耦。命中时 driver
-    // 一口气做三件事: 提交定版 → 并发起测试 → 下发收尾+交接指令(D2/D3)。
+    // 先提交定版、把脚本定下来,再下发收尾+交接指令;测试何时跑由
+    // OPENCODE_AUTO_HANDOVER_CONCURRENT 决定(缺省顺序,见 E1/E2)。
     if (testHandoverDue(test!, used)) {
       testHandoverAsked = true
       const n = test!.handovers + 1
       log(
         `⚠ 上下文已用 ${formatTokens(used > 0 ? used : test!.startUsed)} tokens 达到 ${formatTokens(test!.limit)} 上限,` +
-          `提交定版后测试与会话收尾并发进行,要求写交接文档后换新会话`,
+          (switches.handoverConcurrent
+            ? `提交定版后测试与会话收尾并发进行,要求写交接文档后换新会话`
+            : `提交定版后先交接、再跑测试,要求写交接文档后换新会话`),
       )
       // 提交 #1(定版): 固定被测的脚本与源码。此刻会话处于 idle(本函数由 idle
       // 事件驱动),没有半写文件,是唯一安全的 mid-session 提交时点;走
@@ -3381,9 +3365,12 @@ async function watch(
       if (pin.type === "failed") {
         return { type: "blocked", question: commitBlocked(`${test!.task.id} 测试交接 #${n} 定版`, pin).question }
       }
-      // 并发起测试: 不 await——串行会把会话晾到缓存失效(D2)。收口由 attempt
-      // 在 watch 返回后统一做(test.running),覆盖正常结束/会话错误/断流各路。
-      test!.running = executeTest(test!, opts)
+      // 顺序态(缺省): 只消费请求标记、把脚本定下来,执行推迟到交接收口之后
+      // (runExecSession 的 test.pending),收尾期因此没有任何并发写。
+      // 并发态: 不 await 即起跑,收口由 attempt 在 watch 返回后统一做(test.running),
+      // 覆盖正常结束/会话错误/断流各路;代价是测试面对的是定版快照而非最终树。
+      if (switches.handoverConcurrent) test!.running = executeTest(test!, opts)
+      else test!.pending = await resolveTestScript(test!)
       const ok = await steerText(renderTestWrapup({ handoffFile: test!.handoffFile }))
       if (!ok) return { type: "blocked", question: "steer 投递失败(测试交接要求),无法继续会话,详见日志。" }
       return { type: "continue" }
@@ -3711,14 +3698,25 @@ async function watch(
    })
 }
 
-// --test-by-driver 的单次测试执行: tmp/test.sh 为请求标记,其内容有两种形态——
-// (1) 指向 test/ 下脚本的路径(相对工作目录,如 test/build.sh):driver 直接运行
-// 该脚本(脚本本身在 test/ 已进 git,无需另行归档);
-// (2) 内联脚本(AI 未按协议固化到 test/ 时的回落):driver 把内容整写为
-// tmp/test.<n>.sh 后运行,保留执行快照供审计。
-// 两种形态均把 stdout+stderr 合并整写 tmp/test.<n>.out(共用 idleTime/idleMax
-// 看门狗)。退出码非 0 不在此判定——判断权在 AI(与 verify 哲学一致,机制正交)。
+// --test-by-driver 的单次测试执行 = 消费请求标记 + 执行。两步拆开是因为顺序态的
+// 测试交接要在定版那一刻先消费标记、把脚本定下来,执行推迟到交接收口之后。
+// stdout+stderr 合并整写 tmp/test.<n>.out(共用 idleTime/idleMax 看门狗);退出码
+// 非 0 不在此判定——判断权在 AI(与 verify 哲学一致,机制正交)。
 async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
+  const pending = await resolveTestScript(test)
+  return runTestScript(test, opts, pending.script, pending.seq)
+}
+
+// 请求标记的消费(定出本次要跑的脚本,占一个归档序号): tmp/test.sh 存在即请求,
+// 读完就删以便再次请求。内容有两种形态——
+// (1) 指向 test/ 下脚本的路径(相对工作目录,如 test/build.sh):直接运行该脚本
+// (脚本本身在 test/ 已进 git,无需另行归档);判据是**整份内容不含换行**,故带
+// 尾随换行的路径会落到形态 (2),结果等价(内联的一行路径由 bash 当命令执行);
+// (2) 内联脚本(AI 未按协议固化到 test/ 时的回落):把内容整写为 tmp/test.<n>.sh,
+// 保留执行快照供审计。
+// 顺序态在定版那一刻先行调用——标记必须在会话继续收尾之前拿走(否则收尾期重写
+// 标记会让 driver 跑错脚本),内联形态也要与定版提交同一时刻物化。
+export async function resolveTestScript(test: Pick<TestRun, "dir" | "tmp" | "seq">): Promise<{ script: string; seq: number }> {
   const seq = ++test.seq
   const marker = join(test.tmp, "test.sh")
   const content = await Bun.file(marker).text()
@@ -3732,11 +3730,11 @@ async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
     await Bun.write(script, content)
   }
   await rm(marker, { force: true })
-  return runTestScript(test, opts, script, seq)
+  return { script, seq }
 }
 
-// 已知脚本路径的执行内核(executeTest 消费请求标记后调用;交接重测守卫亦直接
-// 调用它对定版快照重跑同一脚本——那时标记早已被消费,没有第二次可读)。
+// 已知脚本路径的执行内核(executeTest 消费请求标记后调用;顺序态的测试交接亦直接
+// 调用它执行定版时已消费出来的 test.pending——那时标记早已被拿走,没有第二次可读)。
 // 每次执行都占一个新的归档序号,输出恒为 tmp/test.<n>.out。
 async function runTestScript(test: TestRun, opts: Opts, script: string, seq = ++test.seq): Promise<TestRunInfo> {
   const out = join(test.tmp, `test.${seq}.out`)

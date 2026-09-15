@@ -424,8 +424,9 @@ function documentOnly(rel: string): boolean {
 
 // 自 HEAD(= 交接定版提交)以来**已跟踪**文件的改动清单(相对目标目录),排除文档面。
 // 未跟踪新增不计(D5)——新建文件参与编译的场景会漏判,是已知取舍,换来"会话收尾
-// 落盘文档/产物不会白白触发一次重测"。非空即"被测内容已变,本次测试结果失效",
-// 调用方据此 stash + 对定版快照重跑。非 git 环境返回空数组(门禁天然失效)。
+// 落盘文档/产物不会白白触发一次登记"。测试交接的并发态据此登记漂移: 非空即
+// "本次测试跑的定版快照与将要落账的树不是同一份",只记事实不做处置(E3)。
+// 非 git 环境返回空数组。
 export async function trackedSourceChanges(dir: string): Promise<string[]> {
   const lists = await Promise.all((await repoRoots(dir)).map((root) => gitDiffFiles(dir, root)))
   return lists.flat().filter((rel) => !documentOnly(rel))
@@ -446,33 +447,3 @@ async function gitDiffFiles(dir: string, root: string): Promise<string[]> {
   return diff.out.split("\0").filter(Boolean).map((path) => relative(dir, join(toplevel, path)))
 }
 
-// 交接重测守卫的暂存台账(逐仓库一条 stash 条目)。
-export type StashPush = { entries: string[]; failures: { rel: string; error: string }[] }
-
-// 逐仓库 git stash push -u(含未跟踪,限定目标目录子树): 把会话收尾期间的改动
-// 整体挪开,使重跑测试面对的就是定版提交的逐字节快照。无改动的仓库不产条目。
-export async function stashAll(dir: string, message: string): Promise<StashPush> {
-  const result: StashPush = { entries: [], failures: [] }
-  for (const root of await repoRoots(dir)) {
-    const rel = relative(dir, root) || "."
-    if (!(await hasChanges(root))) continue
-    const pushed = await git(root, ["stash", "push", "-u", "-m", message, "--", "."]).catch((error) => ({ code: 1, out: "", err: String(error) }))
-    if (pushed.code !== 0) {
-      result.failures.push({ rel, error: firstLine(pushed.err || pushed.out) })
-      continue
-    }
-    result.entries.push(root)
-  }
-  return result
-}
-
-// 恢复暂存(按 push 的逆序 pop): 冲突或失败的仓库进返回列表,其 stash 条目
-// **保留**交人工——调用方据此阻塞停机(退出码 2),绝不丢会话收尾的成果。
-export async function stashPopAll(dir: string, pushed: StashPush): Promise<{ rel: string; error: string }[]> {
-  const failures: { rel: string; error: string }[] = []
-  for (const root of [...pushed.entries].reverse()) {
-    const popped = await git(root, ["stash", "pop"]).catch((error) => ({ code: 1, out: "", err: String(error) }))
-    if (popped.code !== 0) failures.push({ rel: relative(dir, root) || ".", error: firstLine(popped.err || popped.out) })
-  }
-  return failures
-}

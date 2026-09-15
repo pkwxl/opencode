@@ -1,7 +1,8 @@
 # 测试交接前置化设计(判据解耦 + 一次交接两次提交)
 
-状态:**已实施 2026-09-15**(`auto-core` 分支;P1..P5、P7、P8 落地,P6 灰度开关经评估未做,
-理由见 §F)。上游登记:`session-recovery-fidelity-design.md` §3.5 ①「交接触发解耦」。
+状态:**已实施 2026-09-15**(`auto-core` 分支;P1..P5 落地,P6 灰度开关经评估未做,理由见 §F)。
+**2026-09-15 修订(§H):测试时机由「真并发」改为「先交接、后运行」,重测守卫退役。**
+D2/D3/D5/D6 的原文保留在下,作为改造前的事实基线;现行行为以 §H 为准。上游登记:`session-recovery-fidelity-design.md` §3.5 ①「交接触发解耦」。
 现场证据:`docs/session-interruption-field-audit-20260915.md`(仓库根,未纳入版本控制)。
 
 ## A. 事实基线(改造前)
@@ -30,13 +31,13 @@ if (failed && test.handover && used >= test.limit) { …要求写交接文档…
 | # | 决策 | 取值 | 理由 |
 |---|---|---|---|
 | D1 | 判据与时机 | **仅在 AI 发起测试(`tmp/test.sh` 出现)的那一刻判定并下发 prompt**;判据解耦为单条件 `used ≥ contextLimit`。这一刻取不到实时值时沿用起跑值 `startUsed` | 发起测试通常意味着相关工作已做完、正要验证——那是唯一天然干净的分割点;越过这一刻上下文就开始变化,不再好切 |
-| D2 | 测试与收尾的关系 | **真并发**:不 await 测试即 steer 收尾+交接指令。提示词**不**要求「别改源码」 | 串行会把会话晾到 provider 缓存失效;AI 发起测试时本就知道被测内容不该动,无需代劳,状态由 D3 的定版提交固定、由重测守卫兜底 |
-| D3 | 提交策略 | **一次交接、两次提交**:下发脚本时提交 #1 定版,交接收口时提交 #2 确认。两次提交之间源码与脚本必须无修改 | 每次交接都有可回退的留档;定版把「被测的是哪一份代码」变成事实而非约定 |
+| D2 | 测试与收尾的关系 | ~~**真并发**~~(**已于 §H 改为顺序**;并发保留在 `OPENCODE_AUTO_HANDOVER_CONCURRENT=on` 之后):不 await 测试即 steer 收尾+交接指令。提示词**不**要求「别改源码」 | 串行会把会话晾到 provider 缓存失效;AI 发起测试时本就知道被测内容不该动,无需代劳,状态由 D3 的定版提交固定、由重测守卫兜底 |
+| D3 | 提交策略 | **一次交接、两次提交**:下发脚本时提交 #1 定版,交接收口时提交 #2 确认。~~两次提交之间源码与脚本必须无修改~~(**§H 改**:顺序态的不变量是「被测的就是提交 #2 的那一份树」) | 每次交接都有可回退的留档;定版把「被测的是哪一份代码」变成事实而非约定 |
 | D4 | 交接文档归档 | 同目录累积 `testhandoff-<n>.md`,新会话读最新一份 | 交接链可回溯;当前份名恒定,会话的写目标不变 |
 | D5 | 重测触发面 | 只看 `test/**` 与**已跟踪**的非文档源文件;`docs/**`、`PLAN.md`/`CURRENT.md` 与未跟踪新增不计 | 会话收尾必然落盘文档,若一律触发就等于每次交接都多跑一遍测试;未跟踪新增参与编译的场景会漏判,是明确取舍 |
-| D6 | stash 处置 | `stash -u` → 对定版快照重跑 → `stash pop` → 提交 #2;pop 冲突即阻塞(退出码 2),stash 条目保留 | 收尾成果一份不丢;冲突不吞 |
+| D6 | ~~stash 处置~~(**§H 整体退役**) | `stash -u` → 对定版快照重跑 → `stash pop` → 提交 #2;pop 冲突即阻塞(退出码 2),stash 条目保留 | 收尾成果一份不丢;冲突不吞 |
 
-## C. 交接时序
+## C. 交接时序(改造前;现行时序见 §H)
 
 ```
 会话 idle,tmp/test.sh 在盘
@@ -56,6 +57,7 @@ if (failed && test.handover && used >= test.limit) { …要求写交接文档…
 ```
 
 不变量:**提交 #1 与提交 #2 之间,源码与 `test/` 脚本逐字节相同**(⑤ 保证)。
+——该不变量已随 ⑤ 的退役一并作废,替代物见 §H。
 
 ## D. 文案硬约束(D2 的落实)
 
@@ -93,10 +95,12 @@ if (failed && test.handover && used >= test.limit) { …要求写交接文档…
   改造前行为),已足够。
 - **未跟踪新增不触发重测**(D5):会话收尾新建的源文件若参与编译,重测守卫看不见。
   换来的是「收尾落盘文档/产物不会白白多跑一遍测试」。
-- **stash `-u` 与构建产物**:首次测试若产出未 gitignore 的构建产物,它们会被卷进 stash,
+- ~~**stash `-u` 与构建产物**~~(随重测守卫退役,§H):首次测试若产出未 gitignore 的构建产物,它们会被卷进 stash,
   重跑再产一遍可能让 `pop` 冲突 → 按 D6 阻塞、stash 条目保留交人工。目标项目应把构建
   产物纳入 `.gitignore`。
-- **重跑脚本靠 `tmp/` 被忽略才活下来**:`git stash -u` 收走未跟踪文件但不动 **被忽略**
+- ~~**重跑脚本靠 `tmp/` 被忽略才活下来**~~(重跑已取消;但顺序态把脚本挂在
+  `TestRun.pending` 上跨会话边界存活,内联形态的 `tmp/test.<n>.sh` 仍依赖 `tmp/` 被忽略,
+  这条依赖原样成立,§H):`git stash -u` 收走未跟踪文件但不动 **被忽略**
   的文件,而 `tmp/` 由 `ensureGitignore` 登记为忽略——内联形态的 `tmp/test.<n>.sh` 与
   历次 `.out` 因此在 stash 期间原样留在盘上,重跑拿得到脚本(`test/` 形态本就已提交)。
   若将来改动 driver 工作目录的忽略策略,这条依赖必须一并复核。
@@ -123,3 +127,81 @@ if (failed && test.handover && used >= test.limit) { …要求写交接文档…
 - [x] P8 文档 —— 本文档、`behavior.md`、`structure.md`、`session-recovery-fidelity-design.md`
       §3.5 ①、`commit-boundary-design.md`、`packages/auto/README.md`、CLI 帮助、导航与根 AGENTS.md
 - [ ] 真实冒烟(三包全量,在 `auto/` 集成 worktree;需有凭证的环境)
+
+## H. 修订(2026-09-15):先交接、后运行
+
+### H.1 事故与根因
+
+`auto-migrate` 在 `/workspace/kernel-spi-nor` 跑 T-028 时阻塞退出(退出码 2):
+
+```
+⏸ T-028 已阻塞: 交接重测后恢复暂存改动冲突
+  (asterinas: error: Your local changes to the following files would be overwritten by merge:),
+  stash 条目已保留(git stash list),请人工处理后重新运行。
+```
+
+链路:该项目的测试脚本在步骤 0b **原地改写被测源码**(`rustfmt --edition 2024 nor.rs`,
+`--check` 非零即 apply 定格)。于是——
+
+1. 并发执行的测试 #1 把 `nor.rs` 改成 rustfmt 形态;
+2. 会话收尾只写了文档,但 `trackedSourceChanges` 看到 `nor.rs` 变了,守卫判为「收尾期间改动了
+   被测内容」(**归因即已出错**:动它的是 driver 自己并发跑的测试脚本,不是会话);
+3. 守卫 stash 后对定版快照重跑同一脚本,rustfmt **再次**应用同一份 reflow,工作区又脏;
+4. `git stash pop` 拒绝——已验证 git 在本地改动与 stash 内容**逐字节相同**时同样报
+   「Your local changes … would be overwritten by merge」。
+
+这不是竞态而是**确定性陷阱**:凡测试脚本对跟踪文件做确定性改写,重跑必然复现同一改动,
+每一次测试交接都必然阻塞。D2 的前提(「会话收尾期间本不该动被测内容」)被 D2 自己引入的
+并发执行打破;而 `TEST_PRINCIPLE`(`src/agents-block.ts`)从未要求测试脚本只读。
+
+### H.2 决策
+
+| # | 决策 | 取值 |
+|---|---|---|
+| E1 | 测试时机 | **顺序**:会话结束 → 归档交接文档 → 提交 #2 → **才跑测试**。脚本自身对跟踪文件的改写留作未提交增量,由下一单元的提交吸纳 |
+| E2 | 回退口子 | `OPENCODE_AUTO_HANDOVER_CONCURRENT`,缺省 `off`(顺序);`on` 回到 D2 的真并发 |
+| E3 | 重测守卫 | `guardRetest` / `stashAll` / `stashPopAll` **整体删除**。并发态只用 `trackedSourceChanges` 打一行漂移告警(提交 #2 之前,之后 diff 恒空),不 stash、不重跑、不阻塞 |
+| E4 | 提交 #1 定版 | **保留**,一次交接仍两次提交——它不再承担 D3 的逐字节不变量,但仍是测试请求时刻的可回退检查点 |
+
+**不变量更替**:D3 的「两次提交之间源码与脚本逐字节相同」作废且不再需要;顺序态的不变量是
+**被测的就是提交 #2 的那一份树**。这比原来更强——测试覆盖了会话收尾落盘的工作,而不只是定版快照。
+
+**代价**:交接的墙钟时间由 `max(收尾, 测试)` 变为 `收尾 + 测试`,即每次交接多出一个「收尾时长」。
+现场量级:kernel-spi-nor 的测试中位数约 300s、收尾约 74s,单次交接多付约 1–2 分钟。
+E2 的开关正是为赶时间时换回并发准备的。
+
+### H.3 现行时序
+
+```
+会话 idle,tmp/test.sh 在盘
+  │
+  ├─ testHandoverDue == false ──► executeTest → steer test-result → 同会话继续
+  │
+  └─ true(上下文达上限)
+       ① afterSession 提交 #1   stage `<单元> handoff-<n>-pin`   subject `T-NNN 测试交接 #n 定版`
+       ② resolveTestScript: 消费 tmp/test.sh,把脚本定下来挂 TestRun.pending  ← 不执行
+          (并发态: test.running = executeTest(...),不 await)
+       ③ steer test-wrapup(落盘剩余工作 + 写交接文档 + 结束会话)
+       …会话收尾中,没有任何并发写…
+       ④ 并发态才做: trackedSourceChanges 非空 → 打一行漂移告警(必须在 ⑥ 之前)
+       ⑤ rename testhandoff.md → testhandoff-<n>.md
+       ⑥ afterSession 提交 #2   stage `<单元> handoff-<n>`      subject `T-NNN 测试交接 #n`
+       ⑦ runTestScript(test.pending):**被测的就是提交 #2 的树**
+       ⑧ 新会话:任务提示词 + test-continue(先读归档交接文档,再判读那次测试的结果)
+```
+
+② 必须在定版那一刻消费标记:标记留到收尾之后,会话若重写它,driver 就会跑错脚本;内联形态也
+要与定版提交同一时刻物化。执行与「定出脚本」因此拆成 `resolveTestScript` / `runTestScript` 两半,
+`executeTest` 退化为两者的串联。
+
+### H.4 文案
+
+`test-wrapup.md` 首句对测试时机保持**中性**(「你刚提交的测试脚本将由 driver 执行」)——顺序态
+此刻还没跑,并发态已在跑,一份文案两态都成立,不做双模板。D 节的硬约束(不得出现
+上下文/超限/上限/tokens,不代劳禁改源码)原样有效,反向断言仍锁在 `test/prompt.test.ts`。
+
+### H.5 目标项目侧的建议(未强制)
+
+测试脚本原地改写跟踪文件,在顺序态下不再引发阻塞(改写落在提交 #2 之后,成为下一单元的增量),
+但它仍意味着「提交里的内容不是测试验证过的内容」。格式化类步骤更宜 `--check` 留证、把 apply
+交给会话,由会话在下一轮落盘。此处不加机制门禁,只在本文登记。

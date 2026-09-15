@@ -26,6 +26,7 @@ export const SWITCH_ENV = {
   retryWaits: "OPENCODE_AUTO_RETRY_WAITS",
   retryAsk: "OPENCODE_AUTO_RETRY_ASK",
   strictResume: "OPENCODE_AUTO_STRICT_RESUME",
+  handoverConcurrent: "OPENCODE_AUTO_HANDOVER_CONCURRENT",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -144,6 +145,13 @@ export type Switches = {
   // 收敛为一句 continue、交接文档无效一次即回滚。门禁关闭(--commit false/dryrun)
   // 时由 runner 侧整体空转(记录不带新字段)。
   strictResume: boolean
+  // 测试交接的测试时机(缺省 off = 先交接、后运行): off 时定版提交后只把脚本定下来
+  // (消费 tmp/test.sh 标记),会话收尾、交接文档归档、提交 #2 全部完成之后才执行——
+  // 被测的就是提交 #2 的那一份树,收尾期没有并发写。on 恢复旧的真并发(定版后不 await
+  // 测试即下发收尾),此时测试面对的是定版快照,收尾期若改了被测内容只打一行告警,
+  // 不 stash、不重跑、不阻塞(重测守卫已随本开关的引入退役,见
+  // docs/test-handover-early-design.md §H)。
+  handoverConcurrent: boolean
 }
 
 const SWITCH_DEFAULTS: Switches = {
@@ -162,6 +170,7 @@ const SWITCH_DEFAULTS: Switches = {
   retryWaits: [0, 1, 2, 4, 8],
   retryAsk: 30,
   strictResume: false,
+  handoverConcurrent: false,
 }
 
 // OPENCODE_AUTO_MODEL / _FALLBACK 归一化为 ModelPolicy(纯函数,供单测)。两形态:
@@ -319,6 +328,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     retryWaits: waitList(SWITCH_ENV.retryWaits, env[SWITCH_ENV.retryWaits], SWITCH_DEFAULTS.retryWaits),
     retryAsk: minutes(SWITCH_ENV.retryAsk, env[SWITCH_ENV.retryAsk], SWITCH_DEFAULTS.retryAsk),
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
+    handoverConcurrent: onOff(SWITCH_ENV.handoverConcurrent, env[SWITCH_ENV.handoverConcurrent], SWITCH_DEFAULTS.handoverConcurrent),
   }
 }
 
@@ -351,6 +361,9 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     formatWaits(switches.retryWaits) === formatWaits(SWITCH_DEFAULTS.retryWaits) ? undefined : `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     switches.retryAsk === SWITCH_DEFAULTS.retryAsk ? undefined : `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
     switches.strictResume === SWITCH_DEFAULTS.strictResume ? undefined : `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
+    switches.handoverConcurrent === SWITCH_DEFAULTS.handoverConcurrent
+      ? undefined
+      : `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -374,6 +387,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
     `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
+    `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
   ].join(", ")
 }
 
