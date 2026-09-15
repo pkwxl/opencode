@@ -211,6 +211,29 @@ export async function runAll(
       return 2
     }
   }
+  // 中断恢复(必须早于下方运行前基线收口提交): 上次运行被 kill/Ctrl+C 可能遗留
+  // in_progress 标记(无会话在跑),重置为 pending;主循环经 next() 照样续跑,
+  // attempts 保留。距中断较近时链上会话的进度记录(.auto/progress.json)使 runTask
+  // 复用原会话继续。这两段写的是 driver 独占状态文件 PLAN.md——放在 housekeeping
+  // 收口之前,其写盘随该次提交一并落账,首个执行单元启动时工作区本就 clean
+  // (否则要么白耗一次 carryover 自愈提交,要么在阶段化布局下直接撞 clean 门禁)。
+  // dryrun 不改任何状态文件,故整段跳过(与下方 dryrun 提前 return 的旧位置等价)。
+  if (!opts.dryrun) {
+    const stale = await resetInProgress(path)
+    if (stale.length) log(`↻ 恢复中断状态: ${stale.join(", ")} 从 in_progress 重置为 pending`)
+    // 精确恢复: 进度记录在验收(verify,且 --review 启用)或质量审核(review)阶段
+    // 中断的任务,验收通过时已被标 done——next() 会跳过它,审核永不补跑;置回
+    // in_progress 使主循环重入该任务,runTask 依记录的阶段直接续跑。
+    const record = await peekProgress(directory)
+    if (record?.phase && (record.phase.kind === "review" || (record.phase.kind === "verify" && (opts.review ?? 0) > 0))) {
+      const fresh = await load(path)
+      const pending = fresh.tasks.find((task) => task.id === record.task)
+      if (pending?.status === "done") {
+        await setStatus(path, pending.id, "in_progress")
+        log(`↻ ${pending.id} 上次中断于${record.phase.kind === "review" ? "质量审核" : "任务级验收"}阶段(任务已标 done),置回 in_progress 补跑`)
+      }
+    }
+  }
   // 启动会话前确保 AGENTS.md 的 opencode-auto 块与当前配置渲染一致(缺失则追加、
   // 内容与渲染不一致则整块替换、旧版/多余的带名标记块一律清理)。AGENTS.md 本身
   // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
@@ -225,7 +248,7 @@ export async function runAll(
   if (opts.commit !== false && !opts.dryrun && (await changedFiles(directory)).length) {
     const settled = await commitTree(directory, { id: "PLAN", title: "运行前基线收口" }, {
       stage: "housekeeping",
-      subject: "PLAN housekeeping 运行前基线收口(AGENTS.md 指针块/.gitignore)",
+      subject: "PLAN housekeeping 运行前基线收口(AGENTS.md 指针块/.gitignore/中断状态复位)",
     })
     if (!settled.ok) {
       log(`⏸ 运行前基线收口提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")},请人工处理 git 后重新运行`)
@@ -287,23 +310,6 @@ export async function runAll(
       return 0
     }
     let ran = 0
-    // 中断恢复: 上次运行被 kill/Ctrl+C 可能遗留 in_progress 标记(无会话在跑),
-    // 重置为 pending;主循环经 next() 照样续跑,attempts 保留。距中断较近时链上
-    // 会话的进度记录(.auto/progress.json)使 runTask 复用原会话继续。
-    const stale = await resetInProgress(path)
-    if (stale.length) log(`↻ 恢复中断状态: ${stale.join(", ")} 从 in_progress 重置为 pending`)
-    // 精确恢复: 进度记录在验收(verify,且 --review 启用)或质量审核(review)阶段
-    // 中断的任务,验收通过时已被标 done——next() 会跳过它,审核永不补跑;置回
-    // in_progress 使主循环重入该任务,runTask 依记录的阶段直接续跑。
-    const record = await peekProgress(directory)
-    if (record?.phase && (record.phase.kind === "review" || (record.phase.kind === "verify" && (opts.review ?? 0) > 0))) {
-      const fresh = await load(path)
-      const pending = fresh.tasks.find((task) => task.id === record.task)
-      if (pending?.status === "done") {
-        await setStatus(path, pending.id, "in_progress")
-        log(`↻ ${pending.id} 上次中断于${record.phase.kind === "review" ? "质量审核" : "任务级验收"}阶段(任务已标 done),置回 in_progress 补跑`)
-      }
-    }
     // advanceFinal 闭包内引用会失去窄化,以 const 捕获已就绪的 server 句柄。
     const serverHandle = server
     // --final-review 终审闭环推进(设计文档 B.2/C): 路由纯函数依(带 final 标记的

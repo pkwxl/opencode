@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { baselineIntact, beginUnit, changedFiles, commitPending, commitTree, pendingChanges, rollbackUnit, stashAll, stashPopAll, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
@@ -222,6 +222,39 @@ describe("beginUnit(单元启动门禁)", () => {
       expect(gate).toEqual({ type: "dirty", files: ["src.ts"] })
       // 脏区原样保留(driver 不动 git)
       expect(await changedFiles(dir)).toEqual(["src.ts"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("轮次专用目录布局: 根 PLAN.md 为符号链接时,链接目标遗留同样 carryover 自愈", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/R-01"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/PLAN.md"), "## T-001: 示例 [in_progress]\n")
+      await symlink("docs/R-01/PLAN.md", join(dir, "PLAN.md"))
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
+      // plan.ts 的原子写经 realpath 落到链接目标,git 报出的脏区是 docs/R-01/PLAN.md。
+      await writeFile(join(dir, "docs/R-01/PLAN.md"), "## T-001: 示例 [pending]\n")
+      expect(await changedFiles(dir)).toEqual(["docs/R-01/PLAN.md"])
+      const gate = await beginUnit(dir, {}, task)
+      expect(gate.type).toBe("ok")
+      expect(await changedFiles(dir)).toEqual([])
+      expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: carryover")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("轮次专用目录布局: 轮内非状态文件的脏区仍 dirty 交人工", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs/R-01"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/PLAN.md"), "## T-001: 示例 [pending]\n")
+      await symlink("docs/R-01/PLAN.md", join(dir, "PLAN.md"))
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
+      await writeFile(join(dir, "docs/R-01/phases.md"), "a\n")
+      expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: ["docs/R-01/phases.md"] })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises"
+import { readdir, realpath } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
 import { log } from "./log"
 
@@ -102,10 +102,25 @@ export async function pendingChanges(dir: string): Promise<boolean> {
 
 // —— 单元提交边界(commit-boundary-design.md)——
 
-// driver 独占状态文件(相对目标目录,protect.ts 拦截 AI 写入): 单元启动遇脏时,
-// 脏区全属此清单 = 上次提交失败遗留的 driver 落账 → carryover 补提交自愈;
-// 其余脏区(人工改动/AI 半途产物)一律阻塞交人工,不自动清扫。
-const DRIVER_STATE_FILES = ["PLAN.md", "CURRENT.md"]
+// driver 独占状态文件名(protect.ts 拦截 AI 写入): 单元启动遇脏时,脏区全属此
+// 清单 = 上次提交失败遗留的 driver 落账 → carryover 补提交自愈;其余脏区
+// (人工改动/AI 半途产物)一律阻塞交人工,不自动清扫。
+const DRIVER_STATE_NAMES = ["PLAN.md", "CURRENT.md"]
+
+// 本次运行中 driver 独占状态文件的实际路径(相对目标目录): 轮次专用目录方案下
+// 根 PLAN.md 是指向 docs/R-NN/PLAN.md 的符号链接,plan.ts 的原子写经 realpath 落到
+// 链接目标(见 plan.ts 的 writeTarget),git 报出的脏区路径因此是 docs/R-NN/PLAN.md
+// 而非 PLAN.md——只比字面名会让 carryover 自愈在阶段化布局下整体失效。故链接名与
+// 链接目标(解析失败/非链接时即其自身)一并纳入。
+async function driverStateFiles(dir: string): Promise<string[]> {
+  const files = new Set<string>()
+  for (const name of DRIVER_STATE_NAMES) {
+    files.add(name)
+    const resolved = await realpath(join(dir, name)).catch(() => undefined)
+    if (resolved) files.add(relative(dir, resolved))
+  }
+  return Array.from(files)
+}
 
 // 单元 SHA 基线: 逐仓库 HEAD 短 SHA(空仓库记空串——其后任何提交都发生在本单元
 // 期间,收口校验全量检查)。
@@ -280,7 +295,8 @@ export async function beginUnit(
   if (opts.commit === false || opts.dryrun) return { type: "ok", baseline: undefined }
   const dirty = await changedFiles(dir)
   if (dirty.length) {
-    if (dirty.every((file) => DRIVER_STATE_FILES.includes(file))) {
+    const state = await driverStateFiles(dir)
+    if (dirty.every((file) => state.includes(file))) {
       const healed = await commitTree(dir, task, { stage: "carryover", subject: `${task.id} carryover 状态落账补提交` })
       if (healed.ok) {
         log(`  ✓ 检测到 driver 状态文件未落账(${dirty.join(", ")}),已补提交自愈`)

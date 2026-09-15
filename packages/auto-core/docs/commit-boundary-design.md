@@ -39,7 +39,7 @@
 | `commitTree(...) → CommitResult` | 返回 `{ok, failures[{rel,error}]}`(原签名只加返回值,向后兼容壳调用);`Auto-Nested` 扩为全量嵌套仓库 |
 | `unitBaseline(dir)` | 逐仓库 HEAD 短 SHA(空仓库记空串) |
 | `unitViolations(dir, baseline)` | 收口校验:工作区不净 / `基线..HEAD` 存在无 `Auto-Stage:` 的提交 → 违规清单 |
-| `beginUnit(dir, opts, task)` | 单元启动门禁:clean → 记基线;脏区全属 driver 独占状态文件(`PLAN.md`/`CURRENT.md`,上次提交失败的落账)→ `carryover` 补提交自愈;否则返回 dirty |
+| `beginUnit(dir, opts, task)` | 单元启动门禁:clean → 记基线;脏区全属 driver 独占状态文件(`PLAN.md`/`CURRENT.md`,上次提交失败的落账)→ `carryover` 补提交自愈;否则返回 dirty。白名单经 `driverStateFiles(dir)` 现场解析(见 §6 符号链接条) |
 | `commitPending(dir, task, info, files)` | 隐藏任务 ③:产物已在未提交清单 → 补提交即完成;否则 "clean" |
 
 ### 3.2 会话后提交门禁(P2)
@@ -114,3 +114,13 @@
 - **judge 越权还原残差**:判定会话对 PLAN.md 越权编辑的还原发生在提交之后时,残差
   会使下一个单元启动门禁报脏——按异常现场交人工,符合"越权即异常"的既有立场。
 - **空提交禁止**:门禁自愈/补提交均经 commitTree,无改动仓库自动跳过,不产生空提交。
+- **driver 独占状态文件的白名单必须解析符号链接(2026-09-15 修)**:轮次专用目录方案下
+  根 `PLAN.md` 是指向 `docs/R-NN/PLAN.md` 的符号链接,`plan.ts` 的原子写经 `realpath`
+  落到链接目标,故 `changedFiles` 报出的脏区路径是 `docs/R-NN/PLAN.md` 而非 `PLAN.md`。
+  原先的字面清单 `["PLAN.md", "CURRENT.md"]` 因此对不上,D5 承诺的 carryover 自愈在
+  阶段化布局(auto-migrate 缺省 `phases: "admtvk"`)下**整体失效**:`loop.ts` 的中断恢复
+  (`resetInProgress` + 进度记录精确恢复置位)一写 PLAN.md,首个任务单元启动即判 dirty
+  退出 2,重跑连 run 启动门禁都过不去。修法两条:① `beginUnit` 改以 `driverStateFiles(dir)`
+  现场解析,链接名与链接目标一并纳入白名单;② `loop.ts` 把中断恢复的两段写盘上移到启动
+  clean 门禁之后、运行前基线收口提交(`housekeeping`)之前,由该次提交自然落账,免去
+  每次运行白耗一笔 carryover。dryrun 下整段跳过(与上移前位于 dryrun 提前 return 之后等价)。
