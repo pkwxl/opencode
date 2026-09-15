@@ -3,9 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  archivedTestHandoff,
   finalDir,
   finalDoc,
   knowledgeDoc,
+  latestHandoffSeq,
   legacyKnowledgeDoc,
   legacyPriorKnowledgeDoc,
   legacySubtaskArtifact,
@@ -148,3 +150,41 @@ describe("resolveSubtaskDoc 读回落", () => {
   })
 })
 
+
+describe("测试交接文档的归档份", () => {
+  test("归档名: 去 .md 缀 -<n>.md,目录化与旧平铺两种形态同规则", () => {
+    expect(archivedTestHandoff(subtaskDoc("T-003", 2, "testhandoff"), 1)).toBe(join("docs", "T-003", "S02", "testhandoff-1.md"))
+    expect(archivedTestHandoff(taskDoc("T-003", "testhandoff"), 12)).toBe(join("docs", "T-003", "testhandoff-12.md"))
+    expect(archivedTestHandoff(legacySubtaskTestHandoff("T-003", 2), 3)).toBe(join("docs", "T-003-S2.testhandoff-3.md"))
+  })
+
+  test("编号接续: 扫同目录取最大;空目录为 0;当前份与同目录他文件不误计", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-handoff-"))
+    try {
+      const handoff = subtaskDoc("T-003", 2, "testhandoff")
+      expect(await latestHandoffSeq(dir, handoff)).toBe(0)
+      await Bun.write(join(dir, handoff), "当前份\n")
+      await Bun.write(join(dir, subtaskDoc("T-003", 2, "index")), "产物\n")
+      expect(await latestHandoffSeq(dir, handoff)).toBe(0)
+      await Bun.write(join(dir, archivedTestHandoff(handoff, 1)), "第一次\n")
+      await Bun.write(join(dir, archivedTestHandoff(handoff, 2)), "第二次\n")
+      expect(await latestHandoffSeq(dir, handoff)).toBe(2)
+      // 自然进位到两位数,按数值而非字典序取最大。
+      await Bun.write(join(dir, archivedTestHandoff(handoff, 10)), "第十次\n")
+      expect(await latestHandoffSeq(dir, handoff)).toBe(10)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("编号接续只认本执行范围: 任务级归档不算进子任务级", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-handoff-"))
+    try {
+      await Bun.write(join(dir, archivedTestHandoff(taskDoc("T-003", "testhandoff"), 4)), "任务级\n")
+      expect(await latestHandoffSeq(dir, taskDoc("T-003", "testhandoff"))).toBe(4)
+      expect(await latestHandoffSeq(dir, subtaskDoc("T-003", 2, "testhandoff"))).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})

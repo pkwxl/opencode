@@ -1,12 +1,12 @@
 import { createInterface } from "node:readline/promises"
-import { mkdir, readdir, rm } from "node:fs/promises"
+import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
-import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
+import { archivedTestHandoff, latestHandoffSeq, legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
-import { baselineIntact, beginUnit, commitTitle, commitTree, rollbackUnit, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
+import { baselineIntact, beginUnit, commitTitle, commitTree, rollbackUnit, stashAll, stashPopAll, trackedSourceChanges, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { currentRound } from "./phases"
@@ -38,7 +38,7 @@ import {
   renderStuckHint,
   renderSubtask,
   renderTestContinue,
-  renderTestHandover,
+  renderTestWrapup,
   renderTestResult,
   renderUnderstand,
   renderVerifyJudge,
@@ -1840,8 +1840,8 @@ async function runSubtask(
   // 测试交接按子任务命名,这里移除本子任务的文件),新旧两处一并清(driver 勾选后统一提交)。
   await rm(join(planDir, handoffFile(task)), { force: true })
   await rm(join(planDir, legacyTaskDoc(task.id, "handoff")), { force: true })
-  await rm(join(planDir, testHandoffFile(task, index)), { force: true })
-  await rm(join(planDir, legacySubtaskTestHandoff(task.id, index)), { force: true })
+  await removeHandoffChain(planDir, testHandoffFile(task, index))
+  await removeHandoffChain(planDir, legacySubtaskTestHandoff(task.id, index))
   await tick(plan.path, task.id, text)
   // 镜像刷新属本次状态写入,须在统一提交前落盘: 否则 PLAN.md 的勾选与 CURRENT.md
   // 的同一次刷新分属相邻两次提交(镜像永远落后一格,回滚到子任务提交取回的镜像
@@ -1903,7 +1903,8 @@ async function verifyTask(
   const fixRound = async (gap: string, round: number): Promise<UnitStop | undefined> => {
     const fixSubject = `${task.id} fix${round} ${task.title}`
     chain.subject = fixSubject
-    const fixed = await runExecSession(client, plan, task, renderFix(plan, task, gap, opts), opts, chain)
+    // 修复轮无子任务序号(交接文档为任务级),但提交 stage 要跟着修复轮走。
+    const fixed = await runExecSession(client, plan, task, renderFix(plan, task, gap, opts), opts, chain, undefined, undefined, `fix ${round}`)
     if (fixed.type === "blocked") return fixed
     const fixCommitted = await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
     if (fixCommitted.type === "failed") return commitBlocked(`${task.id} 修复轮 ${round}`, fixCommitted)
@@ -2446,6 +2447,8 @@ function handoffStatus(text: string): string | undefined {
 // handover 开关;limit 为上下文
 // 已用量上限(config.contextLimit 原值;ondemand 的交接 steer 用其 2 倍);
 // last 为最近一次执行信息(continuation 提示引用其输出路径)。
+// task/unit/handovers 供交接定版提交(#1)构造提交信息——watch 不持有 task 与执行
+// 范围标签,经本结构带下去;startUsed 为判据的回落值(见 testHandoverDue)。
 type TestRun = {
   dir: string
   tmp: string
@@ -2453,7 +2456,25 @@ type TestRun = {
   handover: boolean
   limit: number
   seq: number
+  task: Task
+  unit: string
+  handovers: number
+  startUsed: number
   last?: TestRunInfo
+  // 交接期与会话收尾并发执行中的测试(D2)。watch 起跑、attempt 在 watch 返回后
+  // 收口: 测试进程不能跨会话悬挂(会与随后开的新会话并发改文件),且 test.last
+  // 是重测守卫与新会话续跑提示的依据。收口即清。
+  running?: Promise<TestRunInfo>
+}
+
+// 测试交接判据(交接触发解耦,测试交接前置化设计 D1): 不再叠加"测试失败"——
+// 上下文达 contextLimit 单条件即交接,判定时点固定为"AI 发起测试的那一刻"
+// (tmp/test.sh 出现时)。那是唯一天然干净的分割点: 发起测试通常意味着相关工作
+// 已做完、正要验证;越过这一刻上下文就开始变化,不再好切。
+// used 为本会话实时用量;这一刻还没收到任何 message.updated(仍为 0,或
+// contextLimits 拉取失败)时,回落到起跑时已知的 startUsed 决策。
+export function testHandoverDue(test: { handover: boolean; limit: number; startUsed: number }, used: number): boolean {
+  return test.handover && (used > 0 ? used : test.startUsed) >= test.limit
 }
 
 // 测试交接连续超过该次数时,continuation 提示附带"是否陷入无法解决的问题"评估
@@ -2476,11 +2497,15 @@ async function runExecSession(
   chain: SessionChain,
   steer?: Steer,
   subtask?: number,
+  unit = subtask !== undefined ? `subtask ${subtask}` : "execute",
 ): Promise<SessionResult> {
   if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
   const dir = opts.dir ?? dirname(plan.path)
   const tmp = verifyTmpDir(dir)
   const handoff = testHandoffFile(task, subtask)
+  // 归档编号跨会话/跨运行接续(D4): 中断恢复时从既有 testhandoff-<n>.md 的最大
+  // 编号续起,不从 1 重来覆盖历史交接。
+  let handovers = await latestHandoffSeq(dir, handoff)
   const test: TestRun = {
     dir,
     tmp,
@@ -2488,20 +2513,31 @@ async function runExecSession(
     handover: opts.handoverTest === true,
     limit: opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
     seq: await latestTestSeq(tmp),
+    task,
+    unit,
+    handovers,
+    startUsed: 0,
   }
   // 中断恢复播种: 陈旧测试交接文档由 pipeline 在非恢复路径按范围清除,此处文件
-  // 仍非空即 active 恢复——中断前已完成测试交接,首个会话即以续跑提示凭交接文档
-  // 继续(文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落)。
+  // 仍非空即 active 恢复——中断前已完成测试交接。两态(D4):
+  // ① 当前份 testhandoff.md 非空 = 会话已写出但 driver 在归档前死掉,补归档后续跑;
+  // ② 只有归档份 = 归档已完成,直接凭最新一份续跑。
+  // (文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落。)
   const seeded = subtask !== undefined
     ? await resolveSubtaskDoc(dir, task.id, subtask, "testhandoff")
     : await resolveTaskDoc(dir, task.id, "testhandoff")
-  let continuation = (await Bun.file(join(dir, seeded)).text().catch(() => "")).trim() !== ""
-  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已测试交接 ${handoff},新会话凭交接文档续跑`)
-  let handovers = 0
+  if ((await Bun.file(join(dir, seeded)).text().catch(() => "")).trim() !== "") {
+    handovers++
+    await archiveHandoff(dir, seeded, handoff, handovers)
+    test.handovers = handovers
+  }
+  let continuation = handovers > 0
+  let archived = handovers > 0 ? archivedTestHandoff(handoff, handovers) : handoff
+  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已测试交接 ${archived},新会话凭交接文档续跑`)
   for (;;) {
     const extra = continuation
       ? `\n\n${renderTestContinue({
-          handoffFile: handoff,
+          handoffFile: archived,
           run: test.last,
           stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined,
         })}`
@@ -2510,9 +2546,89 @@ async function runExecSession(
     if (result.type === "blocked") return result
     if (!result.testHandover) return result
     handovers++
-    log(`↻ ${task.id} 测试失败且上下文达到上限,已交接 ${handoff},新会话继续(第 ${handovers} 次测试交接)`)
+    test.handovers = handovers
+    // 重测守卫(D2/D5/D6): 定版提交之后,会话收尾期间若确实改了被测内容,本次
+    // 测试结果已失效——暂存改动、对定版快照重跑同一脚本、再恢复暂存,使"两次
+    // 提交之间源码与脚本无任何修改"成立(D3)。
+    const guarded = await guardRetest(dir, task, test, opts, handovers)
+    if (guarded) return guarded
+    archived = archivedTestHandoff(handoff, handovers)
+    await archiveHandoff(dir, handoff, handoff, handovers)
+    // 提交 #2(交接确认): 会话收尾落盘的成果 + 归档交接文档一并落账。单元尚未
+    // 收口,不传 baseline。
+    const committed = await afterSession(dir, opts, task, {
+      stage: `${unit} handoff-${handovers}`,
+      subject: `${task.id} 测试交接 #${handovers}`,
+    })
+    if (committed.type === "failed") return commitBlocked(`${task.id} 测试交接 #${handovers}`, committed)
+    log(`↻ ${task.id} 上下文达到上限,已交接 ${archived},新会话继续(第 ${handovers} 次测试交接)`)
     continuation = true
   }
+}
+
+// 交接重测守卫(测试交接前置化设计 D2/D5/D6): 比对定版提交(#1)以来**已跟踪**的
+// 非文档改动——会话收尾期间本不该动被测内容(发起测试时它就知道),动了则本次
+// 测试结果对不上工作区。此时 stash -u 挪开收尾改动、对定版快照重跑同一脚本、
+// 再 pop 回来,收尾成果一份不丢。pop 冲突不吞: stash 条目保留、阻塞交人工。
+// 重跑的脚本仍在手: 内联形态落在 tmp/(driver 工作目录,ensureGitignore 已登记为
+// 忽略,`stash -u` 不动忽略文件),test/ 形态本就已提交。
+// 返回 undefined 表示无需重测或重测已完成。
+async function guardRetest(
+  dir: string,
+  task: Task,
+  test: TestRun,
+  opts: Opts,
+  n: number,
+): Promise<{ type: "blocked"; question: string } | undefined> {
+  const script = test.last?.script
+  if (!script) return undefined
+  const changed = await trackedSourceChanges(dir)
+  if (!changed.length) return undefined
+  log(`⚠ ${task.id} 交接收尾期间改动了被测内容(${changed.slice(0, 3).join(", ")}${changed.length > 3 ? " 等" : ""}),暂存后对定版快照重跑测试`)
+  const stashed = await stashAll(dir, `opencode-auto: ${task.id} handoff-${n} 收尾改动`)
+  if (stashed.failures.length) {
+    return {
+      type: "blocked",
+      question: `交接重测前暂存收尾改动失败(${stashed.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}),改动保留在工作区,请人工处理后重新运行。`,
+    }
+  }
+  await runTestScript(test, opts, script)
+  const conflicts = await stashPopAll(dir, stashed)
+  if (conflicts.length) {
+    return {
+      type: "blocked",
+      question:
+        `交接重测后恢复暂存改动冲突(${conflicts.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}),` +
+        `stash 条目已保留(git stash list),请人工处理后重新运行。`,
+    }
+  }
+  return undefined
+}
+
+// 交接文档归档: from(可能是旧平铺名,经 resolve 选出的实际读点)重命名为**新路径
+// 家族**的 testhandoff-<n>.md——与 docpaths 的"写目标恒为新路径、读点经 resolve
+// 选址"同一口径,归档份因此只有一族,编号接续只需扫新路径同目录。旧平铺项目的
+// 目标目录可能还不存在,先建。
+async function archiveHandoff(dir: string, from: string, handoff: string, n: number): Promise<void> {
+  const target = join(dir, archivedTestHandoff(handoff, n))
+  await mkdir(dirname(target), { recursive: true })
+  await rename(join(dir, from), target)
+}
+
+// 一份交接文档及其全部归档份(testhandoff.md + testhandoff-<n>.md)是否在盘。
+async function handoffChainExists(dir: string, handoff: string): Promise<boolean> {
+  if (await Bun.file(join(dir, handoff)).exists()) return true
+  return (await latestHandoffSeq(dir, handoff)) > 0
+}
+
+// 移除一份交接文档及其全部归档份: 交接链在一次 runTask 调用内闭环,单元完成
+// (或非恢复路径的陈旧清理)即整链清除——留给下一执行范围会被误读为续跑依据,
+// 也会永久否决会话复用。历史交接内容由 git 提交记录承载,不靠工作区文件留存。
+async function removeHandoffChain(dir: string, handoff: string): Promise<void> {
+  for (let n = await latestHandoffSeq(dir, handoff); n > 0; n--) {
+    await rm(join(dir, archivedTestHandoff(handoff, n)), { force: true })
+  }
+  await rm(join(dir, handoff), { force: true })
 }
 
 // 归档编号接续: 扫描 tmp/ 下既有 test.<n>.out 取最大编号(每次执行都产出 .out,
@@ -2530,17 +2646,20 @@ async function latestTestSeq(tmp: string): Promise<number> {
 // 与 docs/<id>-S<n>.testhandoff.md 同样认定): 中断恢复判定用——文件在手说明中断前
 // 会话已写出交接,旧会话上下文已用满,不得复用(开新会话凭交接续跑)。
 async function testHandoffExists(dir: string, task: Task): Promise<boolean> {
+  // 当前份与归档份(testhandoff-<n>.md)同样认定: 归档只是 driver 收口时的重命名,
+  // 交接这件事已经发生——本单元闭环前不得复用旧会话(单元完成时随 removeHandoffChain
+  // 一并清除,陈旧归档不会永久否决复用)。
   // 任务级: 目录化新路径与旧平铺两处。
-  if (await Bun.file(join(dir, taskDoc(task.id, "testhandoff"))).exists()) return true
-  if (await Bun.file(join(dir, legacyTaskDoc(task.id, "testhandoff"))).exists()) return true
-  // 子任务级: 任务目录内任意层级 testhandoff.md(** 匹配零段,任务级同名文件已被
+  if (await handoffChainExists(dir, taskDoc(task.id, "testhandoff"))) return true
+  if (await handoffChainExists(dir, legacyTaskDoc(task.id, "testhandoff"))) return true
+  // 子任务级: 任务目录内任意层级 testhandoff*.md(** 匹配零段,任务级同名文件已被
   // 上面覆盖,此处聚焦子任务目录;范围收窄到本任务)。
-  for await (const _ of new Bun.Glob(join("docs", task.id, "**", "testhandoff.md")).scan({ cwd: dir, onlyFiles: true })) {
+  for await (const _ of new Bun.Glob(join("docs", task.id, "**", "testhandoff*.md")).scan({ cwd: dir, onlyFiles: true })) {
     return true
   }
-  // 兼容期旧平铺 docs/<id>-S<n>.testhandoff.md 前缀扫描。
+  // 兼容期旧平铺 docs/<id>-S<n>.testhandoff.md(含归档份)前缀扫描。
   for (const name of await readdir(join(dir, "docs")).catch(() => [] as string[])) {
-    if (name.startsWith(`${task.id}-S`) && name.endsWith(".testhandoff.md")) return true
+    if (name.startsWith(`${task.id}-S`) && /\.testhandoff(-\d+)?\.md$/.test(name)) return true
   }
   return false
 }
@@ -2550,14 +2669,14 @@ async function testHandoffExists(dir: string, task: Task): Promise<boolean> {
 // 会被误读为续跑依据。目录化新布局与兼容期旧平铺两处同清。
 async function cleanTestHandoffs(planPath: string, task: Task): Promise<void> {
   const dir = dirname(planPath)
-  await rm(join(dir, taskDoc(task.id, "testhandoff")), { force: true })
-  await rm(join(dir, legacyTaskDoc(task.id, "testhandoff")), { force: true })
-  for await (const file of new Bun.Glob(join("docs", task.id, "S*", "testhandoff.md")).scan({ cwd: dir, onlyFiles: true })) {
+  await removeHandoffChain(dir, taskDoc(task.id, "testhandoff"))
+  await removeHandoffChain(dir, legacyTaskDoc(task.id, "testhandoff"))
+  for await (const file of new Bun.Glob(join("docs", task.id, "S*", "testhandoff*.md")).scan({ cwd: dir, onlyFiles: true })) {
     await rm(join(dir, file), { force: true })
   }
   const docs = join(dir, "docs")
   for (const name of await readdir(docs).catch(() => [] as string[])) {
-    if (name.startsWith(`${task.id}-S`) && name.endsWith(".testhandoff.md")) {
+    if (name.startsWith(`${task.id}-S`) && /\.testhandoff(-\d+)?\.md$/.test(name)) {
       await rm(join(docs, name), { force: true })
     }
   }
@@ -2865,6 +2984,11 @@ async function attempt(
     chain.id !== undefined &&
     (resumed ||
       (reuseSession && chain.pct < REUSE_BELOW && chain.used < cap / 2 && Date.now() - chain.at <= REUSE_IDLE_MS))
+  // 测试交接判据的回落值(D1): 复用/恢复接管的会话起跑就背着链上已用量,首个
+  // message.updated 到达前的测试请求照样要判得出来;fork 与全新会话归零——
+  // chain.used 是上一个会话的残值,照搬会让刚起跑的小会话在首次测试就误判超限、
+  // 白烧一次交接。
+  if (test) test.startUsed = reuse ? chain.used : 0
   // 恢复接管的复用已由 runTask 的恢复日志交代(含继承的上下文用量),不重复打印。
   if (reuse && !resumed) {
     log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens,${Math.round((Date.now() - chain.at) / 1000)} 秒前结束)`)
@@ -2991,6 +3115,13 @@ async function attempt(
     await remember()
 
     const result = await watching
+    // 交接期并发测试的统一收口(D2): watch 起跑、这里等它落定——正常结束、
+    // 会话错误、SSE 断流各路都经过此处,测试进程不会跨会话悬挂。结果写在
+    // test.last 上,供重测守卫与新会话续跑提示引用。
+    if (test?.running) {
+      await test.running.catch(() => {})
+      test.running = undefined
+    }
     // 收段入账(T-003): usage 入 task/phase/round 三桶 + per-session;报告(report)
     // 由下方 ◉ 会话结束两行消费(累计用时/轮次/累计费用,STATS_PLAN §4.1)。
     const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage())
@@ -3229,16 +3360,36 @@ async function watch(
     }
     const pending = join(test!.tmp, "test.sh")
     if (!(await Bun.file(pending).exists())) return { type: "break" }
-    // 归档(存在即请求的协议标记,执行后移除以便再次请求)→ 执行 → 反馈。
-    const run = await executeTest(test!, opts)
-    const failed = run.code !== 0
-    if (failed && test!.handover && used >= test!.limit) {
+    // 交接判定就在这一刻(D1),先于执行——判据已与测试成败解耦。命中时 driver
+    // 一口气做三件事: 提交定版 → 并发起测试 → 下发收尾+交接指令(D2/D3)。
+    if (testHandoverDue(test!, used)) {
       testHandoverAsked = true
-      log(`⚠ 测试失败(退出码 ${run.code})且上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(test!.limit)} 上限,要求写交接文档后换新会话`)
-      const ok = await steerText(renderTestHandover(run, { handoffFile: test!.handoffFile, used, limit: test!.limit }))
+      const n = test!.handovers + 1
+      log(
+        `⚠ 上下文已用 ${formatTokens(used > 0 ? used : test!.startUsed)} tokens 达到 ${formatTokens(test!.limit)} 上限,` +
+          `提交定版后测试与会话收尾并发进行,要求写交接文档后换新会话`,
+      )
+      // 提交 #1(定版): 固定被测的脚本与源码。此刻会话处于 idle(本函数由 idle
+      // 事件驱动),没有半写文件,是唯一安全的 mid-session 提交时点;走
+      // afterSession 而非裸 commitTree,使代答采集与引用订正落在定版之内——
+      // 订正会改文件,必须先于测试启动,三者才是同一份快照。单元尚未收口,
+      // 不传 baseline。
+      const pin = await afterSession(test!.dir, opts, test!.task, {
+        stage: `${test!.unit} handoff-${n}-pin`,
+        subject: `${test!.task.id} 测试交接 #${n} 定版`,
+      })
+      if (pin.type === "failed") {
+        return { type: "blocked", question: commitBlocked(`${test!.task.id} 测试交接 #${n} 定版`, pin).question }
+      }
+      // 并发起测试: 不 await——串行会把会话晾到缓存失效(D2)。收口由 attempt
+      // 在 watch 返回后统一做(test.running),覆盖正常结束/会话错误/断流各路。
+      test!.running = executeTest(test!, opts)
+      const ok = await steerText(renderTestWrapup({ handoffFile: test!.handoffFile }))
       if (!ok) return { type: "blocked", question: "steer 投递失败(测试交接要求),无法继续会话,详见日志。" }
       return { type: "continue" }
     }
+    // 归档(存在即请求的协议标记,执行后移除以便再次请求)→ 执行 → 反馈。
+    const run = await executeTest(test!, opts)
     const ok = await steerText(renderTestResult(run))
     if (!ok) return { type: "blocked", question: "steer 投递失败(测试结果反馈),无法继续会话,详见日志。" }
     return { type: "continue" }
@@ -3570,7 +3721,6 @@ async function watch(
 async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
   const seq = ++test.seq
   const marker = join(test.tmp, "test.sh")
-  const out = join(test.tmp, `test.${seq}.out`)
   const content = await Bun.file(marker).text()
   const candidate = resolve(test.dir, content.trim())
   let script: string
@@ -3582,6 +3732,14 @@ async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
     await Bun.write(script, content)
   }
   await rm(marker, { force: true })
+  return runTestScript(test, opts, script, seq)
+}
+
+// 已知脚本路径的执行内核(executeTest 消费请求标记后调用;交接重测守卫亦直接
+// 调用它对定版快照重跑同一脚本——那时标记早已被消费,没有第二次可读)。
+// 每次执行都占一个新的归档序号,输出恒为 tmp/test.<n>.out。
+async function runTestScript(test: TestRun, opts: Opts, script: string, seq = ++test.seq): Promise<TestRunInfo> {
+  const out = join(test.tmp, `test.${seq}.out`)
   await mkdir(test.tmp, { recursive: true })
   const run = await runVerifyScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out })
   log(

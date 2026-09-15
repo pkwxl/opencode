@@ -7,7 +7,7 @@ import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyMod
 import { changedFiles, unitBaseline } from "../src/git"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
-import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, resumeNote, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
+import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, resumeNote, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, testHandoverDue, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
 import { openStep, recallProgress, saveProgress, type Phase } from "../src/resume"
 import { resolvesOf } from "../src/resolve"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
@@ -2548,5 +2548,33 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// 测试交接判据(交接触发解耦,D1): 与 handoverDue 并列——两套阈值两套语义,
+// 前者是 ondemand 上下文交接的 2×cap,这里是 --handover-test 的 contextLimit
+// 单条件,且判定时点固定在"AI 发起测试的那一刻"。
+describe("testHandoverDue(--handover-test 判据)", () => {
+  const test64k = { handover: true, limit: 64_000, startUsed: 0 }
+
+  test("解耦: 不看测试成败,上下文达 contextLimit 单条件即交接", () => {
+    expect(testHandoverDue(test64k, 64_000)).toBe(true)
+    expect(testHandoverDue(test64k, 64_001)).toBe(true)
+    expect(testHandoverDue(test64k, 63_999)).toBe(false)
+  })
+
+  test("开关关闭(未启用 --handover-test): 冲多高都不交接", () => {
+    expect(testHandoverDue({ ...test64k, handover: false }, 640_000)).toBe(false)
+  })
+
+  test("实时用量拿不到时回落起跑值: 复用会话起跑就超限,首次测试请求即判得出来", () => {
+    const resumed = { handover: true, limit: 64_000, startUsed: 120_000 }
+    expect(testHandoverDue(resumed, 0)).toBe(true)
+    // 实时值一到就以实时值为准(单调增,回落值只在 used=0 的窗口起作用)。
+    expect(testHandoverDue(resumed, 1_000)).toBe(false)
+  })
+
+  test("全新/fork 会话起跑值归零: 不被上一个会话的残值误判为超限", () => {
+    expect(testHandoverDue(test64k, 0)).toBe(false)
   })
 })

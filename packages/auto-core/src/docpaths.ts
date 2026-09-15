@@ -11,7 +11,8 @@
 // 此构造;handoverDoc 依赖阶段 slug 表,落在 src/phases.ts
 // (偏差注记见设计文档 §4.1);上游条款: R1 编号唯一、R2 永久性、R3 目录化、
 // R4 角色文件名、R5 归档语义、R6 临时文件、R7 阶段差异表达。
-import { dirname, join } from "node:path"
+import { readdir } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 
 // 任务文档角色(R4: 角色文件名固定);index(子任务产物)只经 subtaskDoc 构造。
 export type TaskRole = "context" | "subtasks" | "report" | "audit" | "fix" | "handoff" | "testhandoff"
@@ -135,4 +136,26 @@ export async function resolveSubtaskDoc(dir: string, id: string, k: number, role
   const legacy = role === "testhandoff" ? legacySubtaskTestHandoff(id, k) : legacySubtaskArtifact(id, k)
   if (await Bun.file(join(dir, legacy)).exists()) return legacy
   return modern
+}
+
+// —— 测试交接文档的归档份(测试交接前置化设计 D4)——
+//
+// 当前份恒为 testhandoff.md(会话的写目标),driver 在交接收口时把它重命名为
+// testhandoff-<n>.md 归档,新会话读最新一份、早期各份留作可回溯链。构造规则
+// 是"去掉 .md 后缀、缀 -<n>.md",对目录化新布局与旧平铺名同样成立
+// (docs/T-003/S02/testhandoff-1.md 与 docs/T-003-S2.testhandoff-1.md)。
+export function archivedTestHandoff(handoff: string, n: number): string {
+  return `${handoff.replace(/\.md$/, "")}-${n}.md`
+}
+
+// 同目录既有归档份的最大编号(镜像 runner.ts 的 latestTestSeq: 扫目录取最大,
+// 跨会话/跨运行接续编号,中断恢复不从 1 重来);目录缺失或无归档份返回 0。
+export async function latestHandoffSeq(dir: string, handoff: string): Promise<number> {
+  const stem = basename(handoff).replace(/\.md$/, "")
+  const re = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-(\\d+)\\.md$`)
+  let max = 0
+  for (const name of await readdir(join(dir, dirname(handoff))).catch(() => [] as string[])) {
+    max = Math.max(max, Number(re.exec(name)?.[1] ?? 0))
+  }
+  return max
 }

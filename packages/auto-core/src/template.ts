@@ -40,7 +40,7 @@ import tplReviewFix from "../templates/prompts/review-fix.md" with { type: "file
 import tplStuckHint from "../templates/prompts/stuck-hint.md" with { type: "file" }
 import tplSubtask from "../templates/prompts/subtask.md" with { type: "file" }
 import tplTestContinue from "../templates/prompts/test-continue.md" with { type: "file" }
-import tplTestHandover from "../templates/prompts/test-handover.md" with { type: "file" }
+import tplTestWrapup from "../templates/prompts/test-wrapup.md" with { type: "file" }
 import tplTestResult from "../templates/prompts/test-result.md" with { type: "file" }
 import tplUnderstand from "../templates/prompts/understand.md" with { type: "file" }
 import tplVerifyJudge from "../templates/prompts/verify-judge.md" with { type: "file" }
@@ -84,7 +84,7 @@ const embedded: Record<string, string> = {
   "stuck-hint": tplStuckHint,
   subtask: tplSubtask,
   "test-continue": tplTestContinue,
-  "test-handover": tplTestHandover,
+  "test-wrapup": tplTestWrapup,
   "test-result": tplTestResult,
   understand: tplUnderstand,
   "verify-judge": tplVerifyJudge,
@@ -112,6 +112,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "phase-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
   review: ["结论: 通过", "结论: 差距", ".auto/review.md"],
   "review-fix": ["- [ ]"],
+  "test-wrapup": ["{{handoffFile}}", "不依赖本次测试结果"],
   understand: ["context.md"],
   "verify-judge": ["结论: 通过", "结论: 差距", "结论: 重验", ".auto/verify.md", "verified-command"],
   "verify-script-gen": ["#!/usr/bin/env bash"],

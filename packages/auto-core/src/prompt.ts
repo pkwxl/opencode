@@ -69,8 +69,9 @@ export type VerifyRun = {
 // AI 指定的 test/ 脚本后经 steer 注入执行会话,AI 直读合并输出文件判断。
 export type TestRunInfo = VerifyRun & { seq: number }
 
-// --handover-test 的测试交接文档(相对目标目录): 测试失败且上下文达到上限时,
-// 会话把进度与后续步骤写入该文件后结束,driver 开新会话以 continuation 提示续跑。
+// --handover-test 的测试交接文档(相对目标目录): 上下文达到上限时(判定时点固定
+// 为"AI 发起测试的那一刻",不再叠加测试失败),会话把进度与后续步骤写入该文件后
+// 结束,driver 归档为 testhandoff-<n>.md 并开新会话以 continuation 提示续跑。
 // 文件按执行范围命名: 子任务会话写 docs/<id>/S<两位序号>/testhandoff.md,整任务
 // 会话与验收修复轮为任务级(docs/<id>/testhandoff.md)——交接文档只对本执行范围
 // 生效,防止下一子任务误读上一子任务的遗留交接。路径构造经 docpaths(目录化
@@ -93,21 +94,21 @@ export function renderTestResult(run: TestRunInfo): string {
   })
 }
 
-// --handover-test 交接要求(steer 注入执行会话): 测试失败且上下文达到上限,
-// 要求立即写交接文档并结束会话,由 driver 开新会话继续。
-export function renderTestHandover(run: TestRunInfo, info: { handoffFile: string; used: number; limit: number }): string {
-  return renderPrompt("test-handover", {
-    code: String(run.code),
-    out: run.out,
-    script: run.script,
-    handoffFile: info.handoffFile,
-    used: String(info.used),
-    limit: String(info.limit),
-  })
+// --handover-test 收尾+交接要求(steer 注入执行会话): AI 发起测试的那一刻,
+// driver 已判定需要交接——提交定版、并发起测试,同时以本提示词要求会话把不依赖
+// 测试结果的剩余工作做完落盘、写出交接文档后结束会话,测试结果交下一个会话判读。
+//
+// 文案硬约束(测试交接前置化设计 D2): **不得出现"上下文/超限/上限/tokens"**——
+// 会话一旦知道自己上下文吃紧,就会自行判定余量不足而省略本应完成的落盘工作
+// (现场实证);只陈述"需要交接并切换新会话"这一事实。同样不写"不要改源码":
+// AI 发起测试时本就知道被测内容不该动,状态由定版提交 + 重测守卫兜底。
+// 入参只有交接文档路径——此刻测试尚未出结果,退出码/输出都还不存在。
+export function renderTestWrapup(info: { handoffFile: string }): string {
+  return renderPrompt("test-wrapup", { handoffFile: info.handoffFile })
 }
 
-// 测试交接后的新会话续跑说明(追加到执行提示词): 先读交接文档与最近一次测试
-// 输出再继续。stuck 为连续交接次数超过阈值(10)时的提醒——评估是否陷入暂时
+// 测试交接后的新会话续跑说明(追加到执行提示词): 先读交接文档(归档份
+// testhandoff-<n>.md)与本次测试输出再继续——判读测试结果正是本会话的首要工作。stuck 为连续交接次数超过阈值(10)时的提醒——评估是否陷入暂时
 // 无法解决的问题,可经 AUTO-FIXME 标注遗留后继续。
 export function renderTestContinue(input: { handoffFile: string; run?: TestRunInfo; stuck?: number }): string {
   return renderPrompt("test-continue", {

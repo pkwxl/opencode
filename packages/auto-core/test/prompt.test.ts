@@ -33,7 +33,7 @@ import {
   renderStuckHint,
   renderSubtask,
   renderTestContinue,
-  renderTestHandover,
+  renderTestWrapup,
   renderTestResult,
   renderUnderstand,
   renderVerifyJudge,
@@ -383,12 +383,12 @@ describe("renderSubtask", () => {
     // handover-test 附带交接文档提示
     const handover = renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })
     expect(handover).toContain("docs/T-002/testhandoff.md")
-    expect(handover).toContain("由新会话继续")
+    expect(handover).toContain("由新会话判读测试结果继续")
     // 未启用时协议与交接描述均不出现(doc-layout 共享段的规范性提及不含交接协议本身)
     const off = renderSubtask(plan, task, subtask)
     expect(off).not.toContain("测试执行协议")
     expect(off).not.toContain("tmp/test.sh")
-    expect(off).not.toContain("driver 会要求你把进度与后续步骤写入")
+    expect(off).not.toContain("既定的交接节奏")
   })
 
   test("测试交接文档按子任务级目录命名: 下一子任务不会误读上一子任务的遗留交接", () => {
@@ -788,14 +788,22 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
     expect(timeout).toContain("持续无输出")
   })
 
-  test("交接要求: 失败上下文 + 已用 tokens 达上限 + 交接文档硬性要求", () => {
-    const text = renderTestHandover(run, { handoffFile: "/tmp/pkg/docs/T-002/testhandoff.md", used: 66000, limit: 64000 })
-    expect(text).toContain("退出码 1")
-    expect(text).toContain("/tmp/pkg/tmp/test.3.out")
-    expect(text).toContain("66000")
-    expect(text).toContain("64000")
+  test("收尾+交接要求: 落盘不依赖测试的剩余工作 + 交接文档硬性要求", () => {
+    const text = renderTestWrapup({ handoffFile: "/tmp/pkg/docs/T-002/testhandoff.md" })
+    expect(text).toContain("并行执行")
+    expect(text).toContain("不依赖本次测试结果")
     expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("写完立即结束会话")
+  })
+
+  // 文案硬约束(测试交接前置化设计 D2): 收尾提示词不得让会话知道"上下文吃紧"
+  // ——现场实证会话一旦知道就会自行判定余量不足、省略本应完成的落盘工作;
+  // 也不写"不要改源码"(发起测试时它本就知道,状态由定版提交 + 重测守卫兜底)。
+  test("收尾提示词不得出现上下文/超限措辞,也不代劳禁改源码", () => {
+    const text = renderTestWrapup({ handoffFile: "docs/T-002/testhandoff.md" })
+    for (const banned of ["上下文", "超限", "上限", "token", "Token", "不要修改", "不要改动"]) {
+      expect(text).not.toContain(banned)
+    }
   })
 
   test("续跑说明: 先读交接文档与最近输出;连续交接超阈值时提示 AUTO-FIXME 评估", () => {
@@ -1400,7 +1408,7 @@ describe("模板渲染完整性", () => {
       renderFinalTask(plan, "finalize", 1, "", undefined),
       renderHandoffSteer(task),
       renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
-      renderTestHandover({ script: "/s", code: 1, ms: 9, timedOut: true, timeoutReason: "max", out: "/o", seq: 2 }, { handoffFile: "/h", used: 1, limit: 2 }),
+      renderTestWrapup({ handoffFile: "/h" }),
       renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
       renderKnowledge({ file: "docs/migration-kb/migration-x.md", mode: migrate }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "意图", mode: migrate }),

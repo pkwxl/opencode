@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { baselineIntact, beginUnit, changedFiles, commitPending, commitTree, pendingChanges, rollbackUnit, unitBaseline, unitViolations } from "../src/git"
+import { baselineIntact, beginUnit, changedFiles, commitPending, commitTree, pendingChanges, rollbackUnit, stashAll, stashPopAll, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -433,6 +433,106 @@ describe("rollbackUnit(不可保真时的回滚协议)", () => {
       expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(bases[dir])
       expect((await git(join(dir, "pkg"), "rev-parse", "--short", "HEAD")).trim()).toBe(bases[join(dir, "pkg")])
       expect(await changedFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("交接重测守卫: trackedSourceChanges / stashAll / stashPopAll", () => {
+  test("非 git 目录: 无改动可言,返回空数组", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
+    try {
+      await writeFile(join(dir, "src.ts"), "a")
+      expect(await trackedSourceChanges(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("只认已跟踪的非文档改动: 文档面与未跟踪新增都不触发重测", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs", "T-001"), { recursive: true })
+      await mkdir(join(dir, "test"), { recursive: true })
+      await writeFile(join(dir, "src.ts"), "v1")
+      await writeFile(join(dir, "test", "build.sh"), "echo v1")
+      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "旧")
+      await writeFile(join(dir, "PLAN.md"), "计划")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
+      expect(await trackedSourceChanges(dir)).toEqual([])
+
+      // 文档面改动(docs/** 与 PLAN.md/CURRENT.md)不计。
+      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "新")
+      await writeFile(join(dir, "PLAN.md"), "计划 2")
+      // 未跟踪新增不计(已知取舍)。
+      await writeFile(join(dir, "fresh.ts"), "新文件")
+      expect(await trackedSourceChanges(dir)).toEqual([])
+
+      // 已跟踪源码与 test/ 脚本改动才计。
+      await writeFile(join(dir, "src.ts"), "v2")
+      await writeFile(join(dir, "test", "build.sh"), "echo v2")
+      expect((await trackedSourceChanges(dir)).sort()).toEqual([join("test", "build.sh"), "src.ts"].sort())
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("stash 往返: 暂存回到定版快照,pop 后收尾改动一份不丢", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "src.ts"), "v1")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
+      await writeFile(join(dir, "src.ts"), "v2")
+      await writeFile(join(dir, "untracked.ts"), "收尾新增")
+
+      const stashed = await stashAll(dir, "opencode-auto: T-001 handoff-1 收尾改动")
+      expect(stashed.failures).toEqual([])
+      expect(stashed.entries.length).toBe(1)
+      // 重跑测试面对的就是定版提交的逐字节快照。
+      expect(await Bun.file(join(dir, "src.ts")).text()).toBe("v1")
+      expect(await Bun.file(join(dir, "untracked.ts")).exists()).toBe(false)
+
+      expect(await stashPopAll(dir, stashed)).toEqual([])
+      expect(await Bun.file(join(dir, "src.ts")).text()).toBe("v2")
+      expect(await Bun.file(join(dir, "untracked.ts")).text()).toBe("收尾新增")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("工作区本就干净: 不产 stash 条目,pop 无事可做", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "src.ts"), "v1")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
+      const stashed = await stashAll(dir, "空")
+      expect(stashed.entries).toEqual([])
+      expect(await stashPopAll(dir, stashed)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("嵌套仓库同样覆盖: 各自一条 stash 条目,pop 全部恢复", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "src.ts"), "v1")
+      const nested = join(dir, "vendor")
+      await mkdir(nested, { recursive: true })
+      await git(nested, "init", "-q")
+      await writeFile(join(nested, "lib.ts"), "n1")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
+
+      await writeFile(join(dir, "src.ts"), "v2")
+      await writeFile(join(nested, "lib.ts"), "n2")
+      expect((await trackedSourceChanges(dir)).sort()).toEqual(["src.ts", join("vendor", "lib.ts")].sort())
+
+      const stashed = await stashAll(dir, "两仓")
+      expect(stashed.entries.length).toBe(2)
+      expect(await Bun.file(join(nested, "lib.ts")).text()).toBe("n1")
+      expect(await stashPopAll(dir, stashed)).toEqual([])
+      expect(await Bun.file(join(nested, "lib.ts")).text()).toBe("n2")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
