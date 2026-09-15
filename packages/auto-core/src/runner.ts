@@ -1,12 +1,13 @@
 import { createInterface } from "node:readline/promises"
 import { mkdir, readdir, rename, rm } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
 import type { Interactive } from "./interactive"
 import { archivedTestHandoff, latestHandoffSeq, legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
-import { baselineIntact, beginUnit, commitTitle, commitTree, rollbackUnit, trackedSourceChanges, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
+import { baselineIntact, beginUnit, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, restoreFile, rollbackUnit, trackedSourceChanges, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
+import { forgetHandover, handoffComplete, handoffStatus, handoverStage, peekHandover, recallHandover, saveHandover, type Handover } from "./handover"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { currentRound } from "./phases"
@@ -861,6 +862,10 @@ export async function runTask(
   // 标记,用于精确重入;一次性旗标(enterAudit/skipWrapup/fastFix/pendingVerify)
   // 仅影响恢复后的首轮,之后回归常规循环。
   async function pipeline(resume?: Phase): Promise<Outcome> {
+    // 交接文档的现场复原(测试交接中断恢复 F3): 必须无条件、且早于任何执行单元的
+    // clean 门禁——上一次运行的陈旧清理可能把已落账的在途交接文档删掉,那道删除
+    // 本身就是脏区,门禁会当场阻塞。复原即消脏。
+    if (opts.testByDriver) await restoreTestHandoffs(dir, task)
     // 阶段精确重入: 记录显示已推进到收尾及之后 → off/ondemand 跳过执行阶段
     // (不重跑整任务会话;auto 的分解/子任务循环本就幂等,无需特判)。
     const resumed = resume?.kind
@@ -1477,9 +1482,10 @@ export type ForkBaseInfo = { id: string; used: number }
 // 在基点末端复制消息前缀为新会话并改名为本阶段短标签标题。{error} 或任何异常
 // (外部旧版 --server 无此路由、基点被存储清理等)都属预期回退场景——log 后
 // 返回 undefined,调用方走全新会话 + 冷启动,不是错误。
-export async function forkSession(client: OpencodeClient, base: string, title: string): Promise<string | undefined> {
+export async function forkSession(client: OpencodeClient, base: string, title: string, messageID?: string): Promise<string | undefined> {
   try {
-    const forked = await client.session.fork({ sessionID: base })
+    // messageID 为分叉锚点: 服务端复制该消息**之前**的全部消息(缺省复制整条会话)。
+    const forked = await client.session.fork({ sessionID: base, ...(messageID ? { messageID } : {}) })
     if (forked.error) {
       log(`↻ fork 失败(${JSON.stringify(forked.error)}),回退全新会话`)
       return undefined
@@ -2432,12 +2438,6 @@ export function handoverDue(steer: Steer | undefined, used: number): boolean {
   return steer !== undefined && used >= steer.limit
 }
 
-// 交接文档的状态行(`状态: 继续|完成`);undefined = 缺失/无效(交接边界写核与
-// 恢复 seeding 共用同一判据,session-recovery-fidelity-design.md 3.3 R3)。
-function handoffStatus(text: string): string | undefined {
-  return /状态[:：]\s*(继续|完成)/.exec(text)?.[1]
-}
-
 // --test-by-driver 的测试执行协议状态(watch 与 runExecSession 共享,跨会话/
 // 跨运行持续): tmp 为目标目录下 driver 工作目录(tmp/);seq 为按序归档编号
 // (初始化时扫描既有 tmp/test.<n>.out 取最大值——每次执行都会产出 .out,故以
@@ -2469,6 +2469,10 @@ type TestRun = {
   // tmp/test.sh 在定版那一刻就被消费掉——会话随后还会继续收尾,标记留着会被
   // 下一轮误读;执行推迟到提交 #2 之后,由 runExecSession 收口。执行即清。
   pending?: { script: string; seq: number }
+  // 中断恢复(§I)的一次性旗标: 本轮会话是"从定版点分叉出来重做交接收尾"的,
+  // 收尾指令已随首个提示词下发——watch 因此一开始就处于"已索要交接文档"状态,
+  // 会话 idle 时直接校验文档而不是当成普通结束。用后即清。
+  resumeWrapup?: boolean
 }
 
 // 测试交接判据(交接触发解耦,测试交接前置化设计 D1): 不再叠加"测试失败"——
@@ -2507,6 +2511,10 @@ async function runExecSession(
   const dir = opts.dir ?? dirname(plan.path)
   const tmp = verifyTmpDir(dir)
   const handoff = testHandoffFile(task, subtask)
+  // 现场复原(中断恢复 F3): 已落账却不在工作区的交接文档先取回——上一次运行的
+  // 陈旧清理可能把在途文档删掉。必须早于下面的归档编号扫描: 编号要基于复原后的
+  // 现场,否则被删掉的归档份会让编号倒退、覆盖历史交接。
+  await restoreTestHandoffs(dir, task)
   // 归档编号跨会话/跨运行接续(D4): 中断恢复时从既有 testhandoff-<n>.md 的最大
   // 编号续起,不从 1 重来覆盖历史交接。
   let handovers = await latestHandoffSeq(dir, handoff)
@@ -2522,22 +2530,89 @@ async function runExecSession(
     handovers,
     startUsed: 0,
   }
-  // 中断恢复播种: 陈旧测试交接文档由 pipeline 在非恢复路径按范围清除,此处文件
-  // 仍非空即 active 恢复——中断前已完成测试交接。两态(D4):
-  // ① 当前份 testhandoff.md 非空 = 会话已写出但 driver 在归档前死掉,补归档后续跑;
-  // ② 只有归档份 = 归档已完成,直接凭最新一份续跑。
-  // (文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落。)
+  // 中断恢复(测试交接中断恢复,docs/test-handover-early-design.md §I): 按
+  // 「文件状态 × 提交状态」定出交接时序被打断的位置,再从该位置续跑。观测量是
+  // 当前份 testhandoff.md、归档份 testhandoff-<n>.md 以及两者的落账情况;在途
+  // 记录(.auto/handover.json)只补上文件和提交推不出来的身份信息(待跑脚本、
+  // 可 fork 的会话)。文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落。
+  const record = await recallHandover(dir, task.id, handoff)
   const seeded = subtask !== undefined
     ? await resolveSubtaskDoc(dir, task.id, subtask, "testhandoff")
     : await resolveTaskDoc(dir, task.id, "testhandoff")
-  if ((await Bun.file(join(dir, seeded)).text().catch(() => "")).trim() !== "") {
-    handovers++
-    await archiveHandoff(dir, seeded, handoff, handovers)
-    test.handovers = handovers
+  const current = await Bun.file(join(dir, seeded)).text().catch(() => undefined)
+  const archivedRel = handovers > 0 ? archivedTestHandoff(handoff, handovers) : handoff
+  const hasArchived = handovers > 0 && (await Bun.file(join(dir, archivedRel)).exists())
+  const stage = handoverStage({
+    record,
+    current,
+    currentCommitted: current !== undefined && (await fileCommitted(dir, seeded)),
+    archived: hasArchived,
+    archivedCommitted: hasArchived && (await fileCommitted(dir, archivedRel)),
+  })
+  let continuation = false
+  let archived = archivedRel
+  // 首轮提示词的一次性改写: 收尾未完成时从定版点 fork 出的会话已经带着本执行
+  // 范围的全部上下文,要下发的是收尾指令本身,而不是再讲一遍任务提示词。
+  let firstPrompt: string | undefined
+  if (stage === "wrapup" && record) {
+    // H1 收尾未完成: 定版提交已落账、会话没写完交接文档就被打断。从定版那一刻的
+    // 会话状态 fork 出新会话重做收尾——收尾之后照常走归档 → 提交 #2 → 跑脚本。
+    if (await seedPinFork(client, chain, record, `${task.id} 测试交接 #${record.n} 收尾`)) {
+      if (record.script) test.pending = { script: record.script, seq: record.seq ?? ++test.seq }
+      test.resumeWrapup = true
+      firstPrompt = renderTestWrapup({ handoffFile: test.handoffFile })
+      log(`↻ ${task.id} 恢复中断: 测试交接 #${record.n} 定版已落账、收尾未完成,从定版点分叉会话重做收尾`)
+    } else {
+      // 定版会话已不可用: 收尾无从接续,丢掉在途记录冷启动重做本执行范围
+      // (定版提交留在历史里,是一次无害的中间提交)。
+      await forgetHandover(dir)
+      log(`↻ ${task.id} 恢复中断: 测试交接 #${record.n} 的定版会话已不可用,冷启动重做本执行范围`)
+    }
+  } else if (stage === "commit" || stage === "test") {
+    // H2 交接已写完未收口 / H3 已收口: 补齐缺的那几步(补状态行 → 归档 → 提交 #2
+    // → 执行脚本),再开续跑会话。
+    if (stage === "commit") {
+      if (!hasArchived) {
+        // F2 补标记: 内容按构造是完整的(已落账,或带状态行),缺的那一行由 driver
+        // 补上——归档份本身要自证"这是写完的交接",随提交 #2 一并落账。
+        await fillHandoffStatus(join(dir, seeded))
+        handovers++
+        test.handovers = handovers
+        archived = archivedTestHandoff(handoff, handovers)
+        await archiveHandoff(dir, seeded, handoff, handovers)
+      }
+      const committed = await afterSession(dir, opts, task, {
+        stage: `${unit} handoff-${handovers}`,
+        subject: `${task.id} 测试交接 #${handovers}`,
+      })
+      if (committed.type === "failed") return commitBlocked(`${task.id} 测试交接 #${handovers}`, committed)
+      log(`↻ ${task.id} 恢复中断: 交接文档 ${archived} 已写完但未收口,已补提交`)
+    } else {
+      log(`↻ ${task.id} 恢复中断: 测试交接 #${handovers} 已收口(${archived} 已落账)`)
+    }
+    // 脚本幂等(F6): 该跑就跑。记录里有定版时消费出来的脚本就跑它;记录缺失
+    // (本机制上线前的存量现场)回落到 tmp/ 下最新一份执行快照;都没有就只凭
+    // 交接文档续跑,不臆造测试结果。
+    const script = record?.script ?? (await latestTestScript(tmp))
+    if (script) {
+      log(`↻ ${task.id} 恢复中断: 重跑定版时待执行的测试脚本 ${script}`)
+      await runTestScript(test, opts, script)
+    }
+    // 续跑会话已经开过并被打断 → 从它分叉恢复,把那一轮已积累的上下文接回来。
+    if (record?.nextSession && (await seedSessionFork(client, chain, record.nextSession, `${task.id} 测试交接 #${handovers} 续跑`))) {
+      log(`↻ ${task.id} 恢复中断: 中断前的续跑会话 ${record.nextSession} 尚存,已分叉副本接回`)
+    }
+    continuation = true
+    await saveHandover(dir, {
+      ...(record ?? { task: task.id, scope: handoff, unit, n: handovers }),
+      n: handovers,
+      script: undefined,
+      seq: undefined,
+      pinSession: undefined,
+      pinMessage: undefined,
+      nextSession: undefined,
+    })
   }
-  let continuation = handovers > 0
-  let archived = handovers > 0 ? archivedTestHandoff(handoff, handovers) : handoff
-  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已测试交接 ${archived},新会话凭交接文档续跑`)
   for (;;) {
     const extra = continuation
       ? `\n\n${renderTestContinue({
@@ -2546,9 +2621,17 @@ async function runExecSession(
           stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined,
         })}`
       : ""
-    const result = await runSession(client, task, promptText + extra, opts, chain, steer, test)
+    const prompt = firstPrompt ?? promptText + extra
+    firstPrompt = undefined
+    const result = await runSession(client, task, prompt, opts, chain, steer, test)
+    test.resumeWrapup = false
+    // 阻塞退出保留在途记录: 人工处置后重新运行时,状态机据它落回被打断的位置。
     if (result.type === "blocked") return result
-    if (!result.testHandover) return result
+    // 会话自然结束 = 本执行范围的交接循环闭环,记录随之作废。
+    if (!result.testHandover) {
+      await forgetHandover(dir)
+      return result
+    }
     handovers++
     test.handovers = handovers
     // 并发态的漂移登记(E3): 定版之后、提交 #2 之前比对**已跟踪**的非文档改动——
@@ -2580,8 +2663,85 @@ async function runExecSession(
       test.pending = undefined
       await runTestScript(test, opts, pending.script, pending.seq)
     }
+    // 收口完成: 在途记录进入"已收口"态——待跑脚本已消费、定版锚点作废,余下的
+    // 身份信息只剩下一会儿要开的续跑会话(由 attempt 回填 nextSession)。
+    await saveHandover(dir, { task: task.id, scope: handoff, unit, n: handovers })
     log(`↻ ${task.id} 上下文达到上限,已交接 ${archived},新会话继续(第 ${handovers} 次测试交接)`)
     continuation = true
+  }
+}
+
+// 定版点分叉(F5): 从记录的定版会话在定版那一刻的状态分叉出新会话,用于重做
+// 被打断的交接收尾。server 的 fork 语义是"复制 target **之前**的消息",故锚点取
+// 定版时观测到的末条消息的**后一条**;取不到(消息已被清理、锚点就是末条)时整份
+// 分叉——收尾提示词重下一遍,会话至多把收尾做两遍,不会丢东西。
+export async function seedPinFork(client: OpencodeClient, chain: SessionChain, record: Handover, subject: string): Promise<boolean> {
+  if (!record.pinSession || !(await sessionAlive(client, record.pinSession))) return false
+  let anchor: string | undefined
+  if (record.pinMessage) {
+    const got = await client.session.messages({ sessionID: record.pinSession }).catch(() => undefined)
+    const list = got && !got.error ? got.data : []
+    const at = list.findIndex((message) => message.info.id === record.pinMessage)
+    anchor = at >= 0 ? list[at + 1]?.info.id : undefined
+  }
+  const forked = await forkSession(client, record.pinSession, subject, anchor)
+  if (!forked) return false
+  chain.id = undefined
+  chain.pending = forked
+  chain.pct = 100
+  // 分叉前缀的用量无法廉价测得,归零处理: attempt 对非复用会话本就把
+  // test.startUsed 归零,链内后续复用决策在本回合结束后即被真实用量覆盖。
+  chain.used = 0
+  chain.at = 0
+  // 收尾指令自成一体,不再叠加恢复说明(那是给冷启动会话读的)。
+  chain.note = undefined
+  return true
+}
+
+// 整份分叉一个尚存的会话(F5,续跑会话被打断时接回其上下文);不可用返回 false,
+// 调用方按冷启动继续。
+async function seedSessionFork(client: OpencodeClient, chain: SessionChain, session: string, subject: string): Promise<boolean> {
+  if (!(await sessionAlive(client, session))) return false
+  const forked = await forkSession(client, session, subject)
+  if (!forked) return false
+  chain.id = undefined
+  chain.pending = forked
+  chain.pct = 100
+  chain.used = await sessionUsed(client, session).catch(() => 0)
+  chain.at = 0
+  return true
+}
+
+// 交接文档补状态行(F2): 内容已落账或已带状态行时才会走到这里,缺行只是该内容
+// 写于状态行约定之前。补 `状态: 继续`——测试结果还没判读,本执行范围一定没完。
+async function fillHandoffStatus(path: string): Promise<void> {
+  const text = await Bun.file(path).text().catch(() => "")
+  if (!text.trim() || handoffStatus(text)) return
+  await Bun.write(path, `${text.trimEnd()}\n\n状态: 继续\n`)
+}
+
+// tmp/ 下最新一份执行快照 tmp/test.<n>.sh: 在途记录缺失(本机制上线前的存量
+// 现场)时的回落——定版消费出来的脚本就物化在那里。目录缺失或无快照返回 undefined。
+async function latestTestScript(tmp: string): Promise<string | undefined> {
+  let max = 0
+  for (const file of await readdir(tmp).catch(() => [] as string[])) {
+    max = Math.max(max, Number(/^test\.(\d+)\.sh$/.exec(file)?.[1] ?? 0))
+  }
+  return max > 0 ? join(tmp, `test.${max}.sh`) : undefined
+}
+
+// 交接文档的现场复原(F3): 已被提交跟踪、却在工作区被删掉的交接文档取回。
+// 上一次运行的陈旧清理会把在途文档整链删除,而它在定版/收口提交里已经落账
+// ——删除本身即脏区,下一个执行单元的 clean 门禁当场阻塞。以 git 为权威复原,
+// 脏区随之消失,恢复状态机也拿回了判定所需的文件。
+// task 省略时复原全部任务的交接文档(run 启动时用: 那一刻还不知道要跑哪个任务,
+// 而运行开始前一份被删掉的已落账交接文档没有任何一种正当解释)。
+export async function restoreTestHandoffs(dir: string, task?: Task): Promise<void> {
+  const deleted = await deletedFiles(dir, "docs")
+  for (const rel of deleted) {
+    if (!/testhandoff(-\d+)?\.md$/.test(rel)) continue
+    if (task && !rel.includes(task.id)) continue
+    if (await restoreFile(dir, rel)) log(`↻ 交接文档 ${rel} 曾被清理,已从提交复原`)
   }
 }
 
@@ -2604,11 +2764,14 @@ async function handoffChainExists(dir: string, handoff: string): Promise<boolean
 // 移除一份交接文档及其全部归档份: 交接链在一次 runTask 调用内闭环,单元完成
 // (或非恢复路径的陈旧清理)即整链清除——留给下一执行范围会被误读为续跑依据,
 // 也会永久否决会话复用。历史交接内容由 git 提交记录承载,不靠工作区文件留存。
-async function removeHandoffChain(dir: string, handoff: string): Promise<void> {
+async function removeHandoffChain(dir: string, handoff: string, untrackedOnly = false): Promise<void> {
   for (let n = await latestHandoffSeq(dir, handoff); n > 0; n--) {
-    await rm(join(dir, archivedTestHandoff(handoff, n)), { force: true })
+    const rel = archivedTestHandoff(handoff, n)
+    if (untrackedOnly) await removeIfUntracked(dir, rel)
+    else await rm(join(dir, rel), { force: true })
   }
-  await rm(join(dir, handoff), { force: true })
+  if (untrackedOnly) await removeIfUntracked(dir, handoff)
+  else await rm(join(dir, handoff), { force: true })
 }
 
 // 归档编号接续: 扫描 tmp/ 下既有 test.<n>.out 取最大编号(每次执行都产出 .out,
@@ -2647,19 +2810,32 @@ async function testHandoffExists(dir: string, task: Task): Promise<boolean> {
 // 测试交接文档的陈旧清理(非恢复续跑): 任务级与全部子任务级一并移除——交接
 // 循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态,留给下一执行范围
 // 会被误读为续跑依据。目录化新布局与兼容期旧平铺两处同清。
-async function cleanTestHandoffs(planPath: string, task: Task): Promise<void> {
+//
+// 两道收窄(中断恢复 F4): ① 本任务有在途交接记录时整段跳过——那不是遗留,是
+// 被打断的在途状态,判定权在恢复状态机;② 只删**未被 git 跟踪**的份。已落账的
+// 交接文档必然属于在途交接(单元正常完成时由 removeHandoffChain 在单元内删除、
+// 随单元提交落账),在这里删它只会制造脏区,把下一个执行单元的 clean 门禁撞停
+// ——kernel-spi-nor T-028 现场正是如此。
+export async function cleanTestHandoffs(planPath: string, task: Task): Promise<void> {
   const dir = dirname(planPath)
-  await removeHandoffChain(dir, taskDoc(task.id, "testhandoff"))
-  await removeHandoffChain(dir, legacyTaskDoc(task.id, "testhandoff"))
+  if (await peekHandover(dir, task.id)) return
+  await removeHandoffChain(dir, taskDoc(task.id, "testhandoff"), true)
+  await removeHandoffChain(dir, legacyTaskDoc(task.id, "testhandoff"), true)
   for await (const file of new Bun.Glob(join("docs", task.id, "S*", "testhandoff*.md")).scan({ cwd: dir, onlyFiles: true })) {
-    await rm(join(dir, file), { force: true })
+    await removeIfUntracked(dir, file)
   }
   const docs = join(dir, "docs")
   for (const name of await readdir(docs).catch(() => [] as string[])) {
     if (name.startsWith(`${task.id}-S`) && /\.testhandoff(-\d+)?\.md$/.test(name)) {
-      await rm(join(docs, name), { force: true })
+      await removeIfUntracked(dir, join("docs", name))
     }
   }
+}
+
+// 未被 git 跟踪才删(F4);已跟踪的留给恢复状态机,删它等于制造脏区。
+async function removeIfUntracked(dir: string, rel: string): Promise<void> {
+  if (await fileTracked(dir, rel)) return
+  await rm(join(dir, rel), { force: true })
 }
 
 // 会话错误中属于网络/服务故障的特征串;命中时先重启 server(外部 server 除外)
@@ -3006,6 +3182,15 @@ async function attempt(
   const sessionID = forked ?? session?.data.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
+  // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
+  // 下次运行从它分叉接回上下文。定版前的会话(记录里还留着待跑脚本与定版锚点)
+  // 不认领,那一态的恢复靠定版点分叉。
+  if (test && opts.dir) {
+    const inflight = await recallHandover(opts.dir, task.id, relative(test.dir, test.handoffFile))
+    if (inflight && inflight.script === undefined && inflight.pinSession === undefined && inflight.nextSession !== sessionID) {
+      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID })
+    }
+  }
   // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
   // 据此精确恢复;无阶段的旁路会话(判定/审核/脚本生成/修复规划/dryrun/fork 基点)
   // 不写,避免污染恢复记忆。session-resume-precedence-design.md: 下发成功即落盘
@@ -3289,8 +3474,12 @@ async function watch(
   // 观察;--handover-test 在测试失败且 used 达上限时改为要求写交接文档,文档
   // 就绪后正常结束(testHandover)。
   let testHandover = false
-  let testHandoverAsked = false
+  let testHandoverAsked = test?.resumeWrapup === true
   let testHandoverRetried = false
+  // 本会话事件流里观测到的末条消息 id(测试交接中断恢复 §I): 定版那一刻把它记进
+  // 在途交接记录,收尾没写完就被打断时据此从定版点 fork 出新会话重做收尾。纯观测,
+  // 不额外发请求。
+  let lastMessage: string | undefined
   // 回合结束服务端连发两个 idle 事件(session.status idle + session.idle);steer
   // 经 promptAsync 投递即返回后,第二个 idle 会在 steer 回合启动前到达,照处理
   // 会误判会话结束提前 break。处理过一次 idle 后忽略后续 idle,直到本会话出现
@@ -3310,10 +3499,12 @@ async function watch(
     return false
   }
   const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string } | { type: "invalid" }> => {
-    // 交接要求已发出: 校验交接文档就绪(非空即有效,内容交新会话解释)。
+    // 交接要求已发出: 校验交接文档写完了(F1,末行 `状态: 继续|完成`)。判据由
+    // "非空"收紧为状态行,是为了让中断恢复分得清"会话写完了"与"driver 死在会话
+    // 写文件途中的半截文件"——后者要重做收尾,不能当成交接完成往下走。
     if (testHandoverAsked) {
       const doc = await Bun.file(test!.handoffFile).text().catch(() => "")
-      if (doc.trim()) {
+      if (handoffComplete(doc, false)) {
         testHandover = true
         return { type: "break" }
       }
@@ -3327,14 +3518,14 @@ async function watch(
         return {
           type: "blocked",
           question:
-            `测试交接会话两次未写出有效的 ${test!.handoffFile}(缺失或为空,隐性阻塞)。` +
+            `测试交接会话两次未写出有效的 ${test!.handoffFile}(缺失或缺少 \`状态: 继续|完成\` 行,隐性阻塞)。` +
             `请检查该文件后重新运行。Agent 最后的输出:\n${lastText.trim().slice(-2000) || "(无输出)"}`,
         }
       }
       testHandoverRetried = true
       const ok = await steerText(
-        `你上次结束会话但未写出有效的 ${test!.handoffFile}(缺失或为空)。这是硬性要求: ` +
-          `把进度、关键决策、失败测试上下文与后续步骤写入该文件后再结束会话。`,
+        `你上次结束会话但未写出有效的 ${test!.handoffFile}(缺失或缺少 \`状态: 继续|完成\` 行)。这是硬性要求: ` +
+          `把进度、关键决策、失败测试上下文与后续步骤写入该文件,末行写出状态行后再结束会话。`,
       )
       if (!ok) return { type: "blocked", question: `steer 投递失败(要求补写 ${test!.handoffFile}),无法继续会话,详见日志。` }
       return { type: "continue" }
@@ -3371,6 +3562,20 @@ async function watch(
       // 覆盖正常结束/会话错误/断流各路;代价是测试面对的是定版快照而非最终树。
       if (switches.handoverConcurrent) test!.running = executeTest(test!, opts)
       else test!.pending = await resolveTestScript(test!)
+      // 在途交接记录(中断恢复 §I): 定版已落账、收尾还没开始的这一刻是记录的
+      // 唯一正确时点——待跑脚本刚消费出来(标记已被拿走,重新运行再也读不到),
+      // 会话锚点还没被收尾的那些消息盖过。并发态无待跑脚本可记(定版即起跑),
+      // 记录仍写,恢复时退化为引用最近一次测试输出。
+      await saveHandover(test!.dir, {
+        task: test!.task.id,
+        scope: relative(test!.dir, test!.handoffFile),
+        unit: test!.unit,
+        n,
+        script: test!.pending?.script,
+        seq: test!.pending?.seq,
+        pinSession: sessionID,
+        pinMessage: lastMessage,
+      })
       const ok = await steerText(renderTestWrapup({ handoffFile: test!.handoffFile }))
       if (!ok) return { type: "blocked", question: "steer 投递失败(测试交接要求),无法继续会话,详见日志。" }
       return { type: "continue" }
@@ -3466,6 +3671,7 @@ async function watch(
       const info = event.properties.info
       if (info.sessionID !== sessionID) continue
       idleHandled = false
+      lastMessage = info.id
       if (info.role !== "assistant" || !info.time.completed || seen.has(info.id)) continue
        seen.add(info.id)
         limits ??= await contextLimits(client)

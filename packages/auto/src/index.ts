@@ -1037,7 +1037,7 @@ if (command === "status") {
 function isPristinePlan(text: string): boolean {
   try {
     const tasks = parse("PLAN.md", text).tasks
-    return tasks.length > 0 && tasks.every((task) => task.title === "<任务标题>" && task.status === "pending" && !task.attempts && !task.verify && !task.verified && !task.question)
+    return tasks.length > 0 && tasks.every((task) => task.title === "<任务标题>" && task.status === "pending" && !task.attempts && !task.verify && !task.verified)
   } catch {
     return false
   }
@@ -1066,7 +1066,7 @@ console.error(`用法:
        --commit [true] 会话后统一提交(恒为启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;--commit false 与旧别名 none 已退役——提交是完成条件,不再支持关闭)
        --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
        --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
-       --handover-test 需搭配 --test-by-driver: 会话上下文达到上限后,在它下一次发起测试的那一刻交接——driver 先提交定版固定脚本与源码,并要求 AI 把不依赖测试结果的剩余工作落盘、写出交接文档(子任务会话为 docs/<任务>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<任务>/testhandoff.md)后结束会话;文档归档为 testhandoff-<n>.md 并再提交一次确认交接,随后才执行测试(被测的即该次提交的树),新会话据此判读测试结果续跑,防止在超大上下文中反复试错。置 OPENCODE_AUTO_HANDOVER_CONCURRENT=on 可回到旧的并发时序(定版后即起跑测试、与会话收尾并行,测试面对的是定版快照)
+       --handover-test 需搭配 --test-by-driver: 会话上下文达到上限后,在它下一次发起测试的那一刻交接——driver 先提交定版固定脚本与源码,并要求 AI 把不依赖测试结果的剩余工作落盘、写出交接文档(子任务会话为 docs/<任务>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<任务>/testhandoff.md)后结束会话;文档归档为 testhandoff-<n>.md 并再提交一次确认交接,随后才执行测试(被测的即该次提交的树),新会话据此判读测试结果续跑,防止在超大上下文中反复试错。交接途中被打断时,下次运行按交接文档的文件状态与提交状态定位断点续跑(收尾未写完则从定版点分叉会话重做收尾,已写完则补提交后跑脚本)。置 OPENCODE_AUTO_HANDOVER_CONCURRENT=on 可回到旧的并发时序(定版后即起跑测试、与会话收尾并行,测试面对的是定版快照)
        --auto-number / --no-auto-number 自动编号开关(缺省 --auto-number = 启用,--no-auto-number 为关闭用退出开关): 任务编号(T-NNN)在目标目录永不重复——下一可用编号持久化在 .auto/next-task,阶段规划会话自该记录续接编号(不再每阶段从 T-001 重排);记录缺失(如 .auto/ 未随仓库共享的新克隆)时先经 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导下一编号并恢复记录,再继续规划
        --wrapup / --no-wrapup 任务收尾会话开关(缺省 --wrapup = 启用,--no-wrapup 为关闭用退出开关): 关闭后每个任务的子任务/整任务执行完成后跳过收尾会话(含修复轮后的收尾)
        --implement-file <file> / --implement-prompt <text> 单阶段(phases = "m")快捷模式,二选一: 依据指定的计划文件(全文注入)或直接给出的实施提示词,开一次性计划生成会话直接编辑填充 PLAN.md(与阶段规划会话同款机制,是 init 唯一会启动 AI 会话的路径);要求生效 phases 为 "m"(不兼容时先 --phases m 切换)且 PLAN.md 为占位/空模板态(已有正式任务时拒绝,防误覆盖);该模式下未显式给出 --subtask 时 subtask 缺省固化为 ondemand(单会话执行、上下文超限按需交接,不做逐任务分解),未显式给出 --wrapup/--no-wrapup 时 wrapup 缺省固化为 false(该模式只产出 PLAN.md,不进入任务执行循环,收尾会话不适用);生成完成后需人工审核 PLAN.md,再另行调用 opencode-auto run <dir> 执行——之后逐个任务按固化的 subtask/wrapup 档推进,run 不接受这两个选项

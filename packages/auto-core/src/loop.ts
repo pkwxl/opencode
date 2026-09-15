@@ -32,7 +32,7 @@ import { renderDryrun, renderPhaseHandover, renderPhasePlan, stageText } from ".
 import { allowWrite, protect, reprotect, unprotect } from "./protect"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
 import { closeStep, openStep, peekProgress, recallProgress } from "./resume"
-import { requireArtifact, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
+import { requireArtifact, restoreTestHandoffs, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
 import { shellProfile } from "./shell"
 import { manage, type ServerHandle } from "./server"
 import {
@@ -198,16 +198,23 @@ export async function runAll(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
+  // 交接文档的现场复原(测试交接中断恢复 F3,docs/test-handover-early-design.md §I):
+  // 必须早于启动 clean 门禁——上一次运行可能把已落账的在途交接文档删掉,那道删除
+  // 本身就是脏区,门禁会在这里当场拦下整次运行。复原即消脏,随后的恢复状态机也
+  // 才拿得到判定所需的文件。
+  if (!opts.dryrun) await restoreTestHandoffs(directory)
   // 启动 clean 门禁(commit-boundary-design.md P3): 提交启用时要求工作区 clean——
   // 此后所有执行单元(任务/子任务/隐藏任务)依赖的信息全部由上一次提交固定。
   // 人工遗留脏区阻塞交人工(替代旧"⚠ 会被下一次提交吸纳"提示:吸纳会把人工改动
   // 混入 driver 审计轨迹,破坏提交即隔离边界);driver 独占状态文件(PLAN.md/
-  // CURRENT.md)的遗留由首个单元的 beginUnit 以 carryover 补提交自愈。
+  // CURRENT.md)的遗留走 beginUnit 的 carryover 补提交自愈——上一次运行以非提交
+  // 路径退出(如单元门禁不净直接 return 2)会留下它们的写盘,那是 driver 自己的
+  // 落账、不是人工改动,拦在这里只会让下一次运行永远起不来。
   if (opts.commit !== false && !opts.dryrun) {
-    const files = await changedFiles(directory)
-    if (files.length) {
+    const gate = await beginUnit(directory, opts, { id: "PLAN", title: "运行前基线收口" })
+    if (gate.type === "dirty") {
       log("⏸ 工作区存在未提交改动,为保证执行单元以干净基线启动,请先人工处置(提交或清理)后重新运行:")
-      for (const file of files) log(`  ${file}`)
+      for (const file of gate.files) log(`  ${file}`)
       return 2
     }
   }
@@ -323,8 +330,8 @@ export async function runAll(
       const route = await routeFinal(directory, plan, opts.finalReview ?? 0)
       if (route.type === "wait" || route.type === "complete") return "idle"
       if (route.type === "block") {
-        await block(path, route.task, route.question)
-        log(`⏸ ${route.task} 已阻塞,问题已写入 PLAN.md:\n${route.question}`)
+        await block(path, route.task)
+        log(`⏸ ${route.task} 已阻塞(原因见本条,不再写入 PLAN.md):\n${route.question}`)
         return "stopped"
       }
       if (announce) banner("全部任务完成,进入终审闭环")
@@ -406,8 +413,8 @@ export async function runAll(
         }
         // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
         if (ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
-        if (task.status === "blocked" && task.question) {
-          log(`↻ ${task.id} 此前因问题阻塞,未填写 answer,直接续跑:\n${task.question}`)
+        if (task.status === "blocked") {
+          log(`↻ ${task.id} 此前被阻塞,直接续跑(阻塞原因见上次运行日志)`)
         }
         // 任务单元提交边界(commit-boundary-design.md P3): 启动 clean 门禁 + SHA
         // 基线。active 进度记录 = 恢复续跑(工作区承载本单元自身进度,含交接文档)
@@ -465,8 +472,8 @@ export async function runAll(
           return 2
         }
         if (outcome.type === "blocked") {
-          await block(path, task.id, outcome.question)
-          log(`⏸ ${task.id} 已阻塞,问题已写入 PLAN.md:\n${outcome.question}`)
+          await block(path, task.id)
+          log(`⏸ ${task.id} 已阻塞(原因见本条,不再写入 PLAN.md):\n${outcome.question}`)
           // 代答高亮块(auto-resolve-design.md §H-②,H5): 置顶于结论行之前。三态
           // 一律打印,且不受统计守卫影响(阻塞任务同样可能已被代答了若干问题)。
           for (const line of await taskResolveLines(directory, task.id)) log(line)

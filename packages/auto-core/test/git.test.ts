@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { baselineIntact, beginUnit, changedFiles, commitPending, commitTree, pendingChanges, rollbackUnit, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
+import { baselineIntact, beginUnit, changedFiles, commitPending, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, restoreFile, rollbackUnit, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -525,6 +525,70 @@ describe("交接漂移登记: trackedSourceChanges", () => {
       await writeFile(join(dir, "src.ts"), "v2")
       await writeFile(join(nested, "lib.ts"), "n2")
       expect((await trackedSourceChanges(dir)).sort()).toEqual(["src.ts", join("vendor", "lib.ts")].sort())
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
+  test("已落账却被删掉的文档: 列得出、取得回,复原即消脏", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs", "T-028", "S03"), { recursive: true })
+      const rel = join("docs", "T-028", "S03", "testhandoff.md")
+      await writeFile(join(dir, rel), "交接正文\n\n状态: 继续\n")
+      await commitTree(dir, task, { stage: "subtask 3 handoff-1", subject: "T-001 测试交接 #1" })
+      expect(await fileTracked(dir, rel)).toBe(true)
+      expect(await fileCommitted(dir, rel)).toBe(true)
+      expect(await deletedFiles(dir, "docs")).toEqual([])
+
+      // 上一次运行的陈旧清理把在途文档删掉: 删除本身即脏区
+      await rm(join(dir, rel), { force: true })
+      expect(await deletedFiles(dir, "docs")).toEqual([rel])
+      expect(await changedFiles(dir)).toEqual([rel])
+
+      expect(await restoreFile(dir, rel)).toBe(true)
+      expect(await Bun.file(join(dir, rel)).text()).toBe("交接正文\n\n状态: 继续\n")
+      expect(await changedFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("未跟踪文件: 不算已落账、不算被删", async () => {
+    const dir = await fresh()
+    try {
+      await mkdir(join(dir, "docs"), { recursive: true })
+      await writeFile(join(dir, "docs", "stray.md"), "遗留")
+      expect(await fileTracked(dir, join("docs", "stray.md"))).toBe(false)
+      expect(await fileCommitted(dir, join("docs", "stray.md"))).toBe(false)
+      expect(await deletedFiles(dir, "docs")).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("已跟踪但工作区有改动: 不算已落账(提交 #2 还没发生)", async () => {
+    const dir = await fresh()
+    try {
+      await writeFile(join(dir, "a.md"), "一")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 执行" })
+      await writeFile(join(dir, "a.md"), "二")
+      expect(await fileTracked(dir, "a.md")).toBe(true)
+      expect(await fileCommitted(dir, "a.md")).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("非 git 目录: 一律安全回落", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
+    try {
+      expect(await deletedFiles(dir, "docs")).toEqual([])
+      expect(await fileTracked(dir, "a.md")).toBe(false)
+      expect(await fileCommitted(dir, "a.md")).toBe(false)
+      expect(await restoreFile(dir, "a.md")).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

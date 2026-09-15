@@ -95,14 +95,15 @@ describe("renderDecompose", () => {
     expect(text).toContain("question 工具")
   })
 
-  test("包含已完成任务、当前任务、问答历史与状态文件只读规则", () => {
+  test("包含已完成任务、当前任务与状态文件只读规则,不再复述 PLAN.md 阻塞记事", () => {
     const text = renderDecompose(plan, task)
     expect(text).toContain("[done] T-001: 搭建 schema")
     expect(text).toContain("其他任务无需了解")
     expect(text).toContain("T-002: 实现迁移")
     expect(text).toContain("编写迁移脚本。")
-    expect(text).toContain("策略选 A 还是 B?")
-    expect(text).toContain("选 A")
+    // 阻塞原因/解答已退役: 不再从 PLAN.md 读出来注入提示词
+    expect(text).not.toContain("策略选 A 还是 B?")
+    expect(text).not.toContain("此前被阻塞")
     expect(text).toContain("由 driver 独占维护")
     // 自动答复要求记录决策过程并标注 AUTO-DECISION
     expect(text).toContain("记录决策过程")
@@ -292,10 +293,9 @@ describe("renderUnderstand(fork 流水线 ① 理解会话)", () => {
     // 紧凑性约束(digest 模式下摘要成为全部分叉的前缀)
     expect(text).toContain("写得紧凑、可检索")
     expect(text).toContain("200 行")
-    // 状态文件只读规则与问答历史
+    // 状态文件只读规则
     expect(text).toContain("由 driver 独占维护")
     expect(text).toContain("[done] T-001: 搭建 schema")
-    expect(text).toContain("策略选 A 还是 B?")
   })
 
   test("优先选读任务正文点名的文件,不求全", () => {
@@ -796,6 +796,11 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
     expect(text).toContain("不依赖本次测试结果")
     expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("写完立即结束会话")
+    // 状态行(中断恢复 F1): driver 凭它分辨"写完了"与"driver 死在会话写文件途中的半截文件"
+    expect(text).toContain("状态: 继续")
+    // 测试结果恒由下一个会话判读,交接之后一定还有工作——测试交接没有"完成"这一态
+    // (handoff.md 才有: 那边的交接只是建议,活干完了自然不交接)
+    expect(text).not.toContain("状态: 完成")
   })
 
   // 文案硬约束(测试交接前置化设计 D2): 收尾提示词不得让会话知道"上下文吃紧"

@@ -20,8 +20,6 @@ export type Task = {
   status: Status
   verify?: string
   verified?: string
-  question?: string
-  answer?: string
   attempts: number
   // 终审阶段标记(--final-review 追加的 T-F 任务): <stage>@<round>,如 audit@1。
   // FIELD 行通用解析,edit 重写时随全部字段行保留。
@@ -84,8 +82,6 @@ export function parse(path: string, text: string): Plan {
       status: status as Status,
       verify: fields.get("verify"),
       verified: fields.get("verified"),
-      question: fields.get("question"),
-      answer: fields.get("answer"),
       attempts: Number(fields.get("attempts") ?? 0),
       final: fields.get("final"),
       forkBase: fields.get("fork-base"),
@@ -131,15 +127,14 @@ export async function resetInProgress(path: string): Promise<string[]> {
   return stale.map((task) => task.id)
 }
 
-export async function block(path: string, id: string, question: string) {
+// 阻塞只改状态: 原因与处置结果不再写进 PLAN.md——两者在运行日志与终端里都完整
+// 在案,把它们复刻进 PLAN.md 只是对该文件的又一次改写(而 PLAN.md 的每一次改写
+// 都要落账、都参与下一个执行单元的 clean 门禁)。存量的 question/answer/blocked-at
+// 三行在此一并清除,退役才算落到实处(edit 会原样保留未知字段行)。
+export async function block(path: string, id: string) {
   await edit(path, id, {
     status: "blocked",
-    fields: {
-      "blocked-at": new Date().toISOString().slice(0, 10),
-      question: quote(question),
-      // A new question invalidates any previously given answer.
-      answer: undefined,
-    },
+    fields: { question: undefined, answer: undefined, "blocked-at": undefined },
   })
 }
 
@@ -224,8 +219,6 @@ export async function appendTask(path: string, task: Task) {
     ...(task.final ? [`  - final: ${task.final}`] : []),
     ...(task.verify ? [`  - verify: ${task.verify}`] : []),
     ...(task.verified ? [`  - verified: ${task.verified}`] : []),
-    ...(task.question ? [`  - question: ${quote(task.question)}`] : []),
-    ...(task.answer ? [`  - answer: ${quote(task.answer)}`] : []),
     ...(task.attempts ? [`  - attempts: ${task.attempts}`] : []),
   ]
   const block = [`## ${task.id}: ${task.title} [${task.status}]`, ...fields, task.body].join("\n")

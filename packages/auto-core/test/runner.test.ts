@@ -4,11 +4,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
-import { changedFiles, unitBaseline } from "../src/git"
+import { changedFiles, commitTree, unitBaseline } from "../src/git"
 import { load, parse } from "../src/plan"
 import type { Interactive } from "../src/interactive"
-import { afterSession, askHuman, autoAnswer, classifySessionError, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, resumeNote, resolveTestScript, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, testHandoverDue, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
+import { afterSession, askHuman, autoAnswer, classifySessionError, cleanTestHandoffs, seedPinFork, ensureForkBase, forkSession, gatedAutoCorrectRefs, gatedTaskRefGap, handoffSteer, handoverDue, phaseText, phaseToRole, requireArtifact, resolveModel, restoreTestHandoffs, resumeNote, resolveTestScript, retryDecision, roleOf, runSession, seedForkSession, sessionUsage, splitModel, testHandoverDue, unitReruns, type ForkBaseInfo, type SessionChain, type UnitRerunCtx } from "../src/runner"
 import { openStep, recallProgress, saveProgress, type Phase } from "../src/resume"
+import { saveHandover } from "../src/handover"
 import { resolvesOf } from "../src/resolve"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -84,6 +85,8 @@ function fakeClient(
     // requestID(重复提问走驳回 + abort)。
     replies: [] as string[],
     rejects: [] as string[],
+    // 每次 fork 传入的分叉锚点(undefined = 整份分叉),供定版点分叉断言。
+    forkAnchors: [] as (string | undefined)[],
   }
   let seq = 0
   let lastCreated = over.current ?? "ses_new_0"
@@ -94,8 +97,9 @@ function fakeClient(
         lastCreated = `ses_new_${++seq}`
         return { data: { id: lastCreated } }
       },
-      fork: async (params: { sessionID: string }) => {
+      fork: async (params: { sessionID: string; messageID?: string }) => {
         calls.forks.push(params.sessionID)
+        calls.forkAnchors.push(params.messageID)
         const result = over.fork ? over.fork(params.sessionID) : { data: { id: `ses_fork_${calls.forks.length}` } }
         // fork 出的副本是后续 prompt 的下发目标,事件流跟随它(与 create 同规则)。
         const id = (result as { data?: { id?: string } }).data?.id
@@ -2641,5 +2645,136 @@ describe("resolveTestScript(消费 tmp/test.sh 请求标记)", () => {
     await writeFile(join(tmp, "test.sh"), "echo two")
     expect((await resolveTestScript(run)).seq).toBe(2)
     expect(run.seq).toBe(2)
+  })
+})
+
+// 测试交接文档的陈旧清理与现场复原(中断恢复 F3/F4): 真实临时 git 仓库驱动
+// ——判据本身就是"被 git 跟踪与否",替身无法覆盖。
+describe("cleanTestHandoffs / restoreTestHandoffs(测试交接中断恢复)", () => {
+  const t028 = parse("PLAN.md", `## T-028: 落码 [in_progress]\n正文。\n`).tasks[0]!
+
+  async function fixture() {
+    const dir = await mkdtemp(join(tmpdir(), "auto-handover-runner-"))
+    const proc = Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "ignore", stderr: "ignore" })
+    await proc.exited
+    await mkdir(join(dir, "docs", "T-028", "S03"), { recursive: true })
+    await writeFile(join(dir, "PLAN.md"), "# PLAN\n")
+    return dir
+  }
+
+  test("已落账的在途文档不删: 删它等于制造脏区,撞停下一个执行单元的 clean 门禁", async () => {
+    const dir = await fixture()
+    try {
+      const rel = join("docs", "T-028", "S03", "testhandoff.md")
+      await writeFile(join(dir, rel), "交接正文\n\n状态: 继续\n")
+      await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "subtask 3 handoff-1", subject: "T-028 测试交接 #1" })
+      await cleanTestHandoffs(join(dir, "PLAN.md"), t028)
+      expect(await Bun.file(join(dir, rel)).exists()).toBe(true)
+      expect(await changedFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("未跟踪的遗留照删", async () => {
+    const dir = await fixture()
+    try {
+      await writeFile(join(dir, "PLAN.md"), "# PLAN\n")
+      await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "execute", subject: "T-028 基线" })
+      const rel = join("docs", "T-028", "S03", "testhandoff.md")
+      await writeFile(join(dir, rel), "上一次尝试的遗留")
+      await cleanTestHandoffs(join(dir, "PLAN.md"), t028)
+      expect(await Bun.file(join(dir, rel)).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("有在途交接记录时整段跳过(未跟踪的当前份同样保留)", async () => {
+    const dir = await fixture()
+    try {
+      const rel = join("docs", "T-028", "S03", "testhandoff.md")
+      await writeFile(join(dir, rel), "会话正在写")
+      await saveHandover(dir, { task: "T-028", scope: rel, unit: "subtask 3", n: 1 })
+      await cleanTestHandoffs(join(dir, "PLAN.md"), t028)
+      expect(await Bun.file(join(dir, rel)).exists()).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("现场复原: 被上一次运行删掉的已落账文档取回,脏区随之消失", async () => {
+    const dir = await fixture()
+    try {
+      const rel = join("docs", "T-028", "S03", "testhandoff.md")
+      await writeFile(join(dir, rel), "交接正文\n\n状态: 继续\n")
+      await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "subtask 3 handoff-1", subject: "T-028 测试交接 #1" })
+      await rm(join(dir, rel), { force: true })
+      expect(await changedFiles(dir)).toEqual([rel])
+      await restoreTestHandoffs(dir, t028)
+      expect(await Bun.file(join(dir, rel)).text()).toContain("状态: 继续")
+      expect(await changedFiles(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("现场复原只认本任务的交接文档", async () => {
+    const dir = await fixture()
+    try {
+      await mkdir(join(dir, "docs", "T-029"), { recursive: true })
+      const mine = join("docs", "T-028", "S03", "testhandoff.md")
+      const other = join("docs", "T-029", "testhandoff.md")
+      const report = join("docs", "T-028", "S03", "index.md")
+      for (const rel of [mine, other, report]) await writeFile(join(dir, rel), "正文\n")
+      await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "execute", subject: "T-028 基线" })
+      for (const rel of [mine, other, report]) await rm(join(dir, rel), { force: true })
+      await restoreTestHandoffs(dir, t028)
+      expect(await Bun.file(join(dir, mine)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, other)).exists()).toBe(false)
+      expect(await Bun.file(join(dir, report)).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// 定版点分叉(中断恢复 F5): server 的 fork 语义是"复制 target **之前**的消息",
+// 故锚点取定版时观测到的末条消息的后一条。
+describe("seedPinFork(从定版那一刻的会话状态分叉)", () => {
+  const record = { task: "T-028", scope: "docs/T-028/S03/testhandoff.md", unit: "subtask 3", n: 1 }
+  const makeChain = (): SessionChain => ({ pct: 10, used: 100, at: Date.now(), id: "ses_prev", note: "恢复说明" })
+  const messages = () => ({ data: [{ info: { id: "msg_1" } }, { info: { id: "msg_2" } }, { info: { id: "msg_3" } }] })
+
+  test("锚点 = 定版末条消息的后一条;链改为消费分叉会话,恢复说明清掉", async () => {
+    const { client, calls } = fakeClient({ messages })
+    const chain = makeChain()
+    await expect(seedPinFork(client, chain, { ...record, pinSession: "ses_pin", pinMessage: "msg_2" }, "T-028 收尾")).resolves.toBe(true)
+    expect(calls.forks).toEqual(["ses_pin"])
+    expect(calls.forkAnchors).toEqual(["msg_3"])
+    expect(chain).toMatchObject({ id: undefined, pending: "ses_fork_1", pct: 100, used: 0, at: 0, note: undefined })
+  })
+
+  test("定版消息就是末条(收尾回合一条都没落下): 整份分叉", async () => {
+    const { client, calls } = fakeClient({ messages })
+    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin", pinMessage: "msg_3" }, "x")).resolves.toBe(true)
+    expect(calls.forkAnchors).toEqual([undefined])
+  })
+
+  test("锚点已不在会话里(消息被清理)或记录没记锚点: 整份分叉", async () => {
+    const { client, calls } = fakeClient({ messages })
+    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin", pinMessage: "msg_没了" }, "x")).resolves.toBe(true)
+    await expect(seedPinFork(client, makeChain(), { ...record, pinSession: "ses_pin" }, "x")).resolves.toBe(true)
+    expect(calls.forkAnchors).toEqual([undefined, undefined])
+  })
+
+  test("没有定版会话、会话已失效、fork 失败: 一律 false,调用方冷启动", async () => {
+    const { client } = fakeClient({ messages })
+    await expect(seedPinFork(client, makeChain(), record, "x")).resolves.toBe(false)
+    const dead = fakeClient({ get: () => ({ error: { name: "NotFoundError" } }) })
+    await expect(seedPinFork(dead.client, makeChain(), { ...record, pinSession: "ses_pin" }, "x")).resolves.toBe(false)
+    expect(dead.calls.forks).toEqual([])
+    const broken = fakeClient({ messages, fork: () => ({ error: { name: "NotFoundError" } }) })
+    await expect(seedPinFork(broken.client, makeChain(), { ...record, pinSession: "ses_pin" }, "x")).resolves.toBe(false)
   })
 })

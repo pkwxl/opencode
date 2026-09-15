@@ -447,3 +447,40 @@ async function gitDiffFiles(dir: string, root: string): Promise<string[]> {
   return diff.out.split("\0").filter(Boolean).map((path) => relative(dir, join(toplevel, path)))
 }
 
+
+// 交接文档的现场复原(测试交接中断恢复 F3): 已被提交跟踪、却在工作区被删掉的
+// 文件清单(相对目标目录)。测试交接途中被打断后,下一次运行的陈旧清理可能把
+// 已落账的交接文档删掉——那不是"遗留",是在途状态,以 git 为权威复原即可,
+// 复原顺带消掉脏区,单元 clean 门禁自然放行。pathspec 限定在目标目录子树内。
+export async function deletedFiles(dir: string, pathspec: string): Promise<string[]> {
+  const top = await git(dir, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
+  const toplevel = top?.code === 0 ? top.out.trim() : ""
+  if (!toplevel) return []
+  const listed = await git(dir, ["ls-files", "--deleted", "-z", "--", pathspec]).catch(() => undefined)
+  if (!listed || listed.code !== 0) return []
+  // ls-files 的路径相对仓库根(cwd 在子目录时同样如此),换算为相对目标目录。
+  return listed.out.split("\0").filter(Boolean).map((path) => relative(dir, join(toplevel, path)))
+}
+
+// 单个文件的复原: 从索引取回(被删的已跟踪文件其索引项仍在,取回即得上次提交
+// 的内容)。非 git 环境或该文件未被跟踪时返回 false,调用方按"无可复原"处理。
+export async function restoreFile(dir: string, rel: string): Promise<boolean> {
+  const done = await git(dir, ["checkout", "--", rel]).catch(() => undefined)
+  return done?.code === 0
+}
+
+// 单个文件是否被 git 跟踪(已落过账): 陈旧清理据此区分"遗留"与"在途"。
+export async function fileTracked(dir: string, rel: string): Promise<boolean> {
+  const tracked = await git(dir, ["ls-files", "--error-unmatch", "--", rel]).catch(() => undefined)
+  return tracked?.code === 0
+}
+
+// 单个文件是否"已落账": 被 git 跟踪且工作区副本与提交一致。测试交接恢复据此
+// 判断提交 #2 是否已经发生(归档份已落账 = 交接收口完成),也据此认定内容完整
+// (F2: 提交那一刻文件是整的,缺状态行是历史格式问题,不是半截文件)。
+export async function fileCommitted(dir: string, rel: string): Promise<boolean> {
+  if (!(await fileTracked(dir, rel))) return false
+  const status = await git(dir, ["status", "--porcelain", "-z", "--", rel]).catch(() => undefined)
+  if (!status || status.code !== 0) return false
+  return status.out.split("\0").filter(Boolean).length === 0
+}

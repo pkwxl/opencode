@@ -50,10 +50,11 @@ test.skipIf(!E2E)(
       const blocked = await load(join(dir, "PLAN.md"))
       expect(blocked.tasks[0]!.status).toBe("done")
       expect(blocked.tasks[1]!.status).toBe("blocked")
-      expect(blocked.tasks[1]!.question).toBeTruthy()
+      // 阻塞原因不再写进 PLAN.md(只在运行日志里),状态之外不留字段
+      expect(await Bun.file(join(dir, "PLAN.md")).text()).not.toContain("question:")
 
-      // 模拟人工介入: 阻塞的问题是会话外事务,无需填写 answer,直接重启续跑
-      // 第二轮: T-002 携带"问题已在会话外解决,不要重问"的提示续跑,T-003 完成,全部 done
+      // 模拟人工介入: 阻塞的问题是会话外事务,直接重启续跑
+      // 第二轮: T-002 续跑,T-003 完成,全部 done
       expect(await runAll(dir, {})).toBe(0)
       const done = await load(join(dir, "PLAN.md"))
       expect(done.tasks.every((t) => t.status === "done")).toBe(true)

@@ -57,8 +57,6 @@ describe("parse", () => {
   test("解析字段与正文", () => {
     const task = plan.tasks[1]!
     expect(task.verify).toBe("bun test test/migrate.test.ts")
-    expect(task.question).toBe("迁移策略选 A 还是 B?")
-    expect(task.answer).toBe("选 A")
     expect(task.attempts).toBe(1)
     expect(task.body).toBe("编写迁移脚本。")
   })
@@ -139,21 +137,19 @@ describe("edit", () => {
     expect(plan.tasks[1]!.status).toBe("blocked")
   })
 
-  test("block 写入问题并清除旧 answer", async () => {
-    await block(path, "T-002", "新的问题?\n第二行")
+  test("block 只改状态,并清除存量的 question/answer/blocked-at 三行", async () => {
+    await block(path, "T-002")
     const task = (await load(path)).tasks[1]!
     expect(task.status).toBe("blocked")
-    expect(task.question).toBe("新的问题? 第二行")
-    expect(task.answer).toBeUndefined()
     expect(task.attempts).toBe(1)
+    // 阻塞原因不再写进 PLAN.md,存量三行一并清除
+    const text = await Bun.file(path).text()
+    expect(text).not.toContain("question:")
+    expect(text).not.toContain("answer:")
+    expect(text).not.toContain("blocked-at:")
     // 其它字段与其它任务不受影响
     expect(task.verify).toBe("bun test test/migrate.test.ts")
     expect((await load(path)).tasks[0]!.status).toBe("done")
-  })
-
-  test("含引号的问题可往返", async () => {
-    await block(path, "T-003", '选择 "A" 还是 "B"?')
-    expect((await load(path)).tasks[2]!.question).toBe('选择 "A" 还是 "B"?')
   })
 
   test("setStatus 保留字段与正文", async () => {
@@ -161,7 +157,7 @@ describe("edit", () => {
     const task = (await load(path)).tasks[1]!
     expect(task.status).toBe("done")
     expect(task.body).toBe("编写迁移脚本。")
-    expect(task.question).toBe("迁移策略选 A 还是 B?")
+    expect(task.verify).toBe("bun test test/migrate.test.ts")
   })
 
   test("操作不存在的任务报错", async () => {
