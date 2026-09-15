@@ -1,7 +1,8 @@
 # 会话恢复保真设计:可恢复 session id 标准、极简续跑与 stash 回滚
 
-> 状态: 2026-09-14 立项,**设计定稿、实施另立分步计划**(commit-boundary-design.md
-> 决策 D6)。2026-09-15 依据双目标目录现场日志审计(kernel-spi-nor / kernel-dm,
+> 状态: 2026-09-14 立项,设计定稿;**2026-09-15 开始实施(S1/S2/S3 分步,进行中,
+> 进度与续跑指引见 §4 勾选表)**(commit-boundary-design.md 决策 D6)。
+> 2026-09-15 依据双目标目录现场日志审计(kernel-spi-nor / kernel-dm,
 > 2026-09-10..15 约 23MB run 日志)实证修订:复用判据补 model 一致性(3.1 ④)、
 > R3 交接边界写核(3.3 新触发)、fork 基点独立性显性化(3.4)、相邻机制修正建议
 > (3.5 登记给属主)。实证明细与日志出处见仓库根 docs/session-interruption-field-audit-20260915.md。
@@ -142,17 +143,88 @@ Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 
    直接进降级环(未配置候选则阻塞)。属主: session-error-retry-plan.md /
    model-routing-design.md。
 
-## 4. 分期(实施另立计划)
+## 4. 分期实施(进行中,新会话从本表继续)
 
-- **S1** 基线入记录 + 核对:Progress.baseline + Progress.model(3.1 ③④ 同批)、恢复时
-  核对(HEAD/trailer + model 一致)、失败走 dirty(不动回滚);resumeNote 瘦身。
-  测试: resume.test.ts 扩展。
-- **S2** 回滚协议:rollbackUnit(dir, baseline)(git.ts),R5 路径接线(会话死亡时
-  先回滚再新会话);R3 收紧(交接文档无效一次即回滚,不再带反馈重试)**+ 交接边界
-  写核**(交接会话结束后 driver 立即核验文档在盘与尾行,缺失即回滚——S07 幻影档
-  实证的防线)。
-- **S3** 开关与灰度:OPENCODE_AUTO_STRICT_RESUME(off|on,缺省 off = 现状),实验
-  结论后转正;文档同步(behavior/structure/AGENTS/本文件勾选)。
+落点速览(2026-09-15 会话 1 已改文件): `src/switches.ts`、`src/resume.ts`、
+`src/git.ts`、`src/runner.ts`、`test/switches.test.ts`;typecheck 干净、全量
+`bun test` 706 绿(注入化改造最后一笔之前的一次全量,其后仅 typecheck 复验)。
+
+- [x] **S1-a 开关**(S3 前置): `OPENCODE_AUTO_STRICT_RESUME`(off|on,缺省 off)
+  全套登记(switches.ts 的 SWITCH_ENV/Switches/DEFAULTS/parse/nonDefault/format);
+  test/switches.test.ts 已同步(十六变量、非法值、非默认项)。
+- [x] **S1-b 字段**: resume.ts Progress 加 `baseline?: UnitBaseline`(type-import 自
+  git.ts,无环)+ `model?: string`,parseProgress 往返(baseline 数组逐项校验)。
+- [x] **S1-c 核对**: git.ts 抽出共享 `foreignCommits(root, sha)`(unitViolations 同步
+  改用);新增 `baselineIntact(dir, baseline)`——只查 HEAD==基线或区间全 Auto-Stage,
+  **不查未提交改动**(半途脏区正是恢复对象)。
+- [x] **S1-d 记录**: runner.ts attempt 的 remember() 在 strictResumeActive 时写
+  `baseline: chain.baseline ?? unitBaseline(dir)` 与 `model: promptModel`(target
+  求值后回填的外层 let);链上基线置点: runTask 入口、persistStage(阶段边界刷新,
+  回滚半径收窄)、runSubtask(子任务门禁后)、requireArtifact(unitStart 链)。
+- [x] **S1-e resumeNote 瘦身**: `reused && strictResume` → 单句
+  `[driver] 会话曾中断,请继续当前工作直至本单元完成。`;非复用路径(优雅退出
+  总结态)保持既有按阶段指引;resumeNote 已 export。
+- [x] **S2-a rollbackUnit(dir, baseline, info)**(git.ts): 逐仓库镜像 commitTree
+  深度优先;外部提交 → 该仓库不动、计 failures(整体 ok=false → 调用方 dirty);
+  `stash push -u -m "auto-rollback …" -- .`(pathspec 限定子树);有 upstream → 跳过
+  reset 只 stash 告警;基线为空仓库/仓库不在基线 → 仅 stash;reset --soft 后二次
+  stash 收回已落账提交;返回 RollbackResult{ok,failures,stashes,resets,skipped}。
+- [x] **S2-b R5 接线**(runTask 恢复块): strict 分支——基线核对失败 → `dirty` 出口;
+  会话死亡/报错桩/--new-session/model 不一致 → `rollbackUnitState`(runner 侧编排:
+  rollbackUnit + 记录转总结态清基线/模型 + CURRENT.md 回滚备注)→ `recalled.active
+  = false`(pipeline 走非恢复续跑语义)、不设 chain.note(冷启动);`rolledBack`
+  备注随后并入任务镜像 writeCurrent。旧记录无基线(legacyRecord)→ alive 强制
+  false → 走既有新会话路径(文案注明)。
+- [x] **S2-c R3 收紧 + 交接边界写核**: executeWhole/runSubtask——handoverDue 后文档
+  无效一次即 `rollbackRedo()`(回滚 + continuation/feedback/retried 与链状态复位
+  + 冷启动重做,runSubtask 另从基点重新 seedForkSession),`rolled` 一次为限,再
+  失败按既有隐性阻塞上抛;watch 的 handleIdleTest 在 strict 下文档缺失/为空直接
+  `{type:"invalid"}`(不再 steer 补写重试)→ idle 处折成 blocked +
+  `Watch.testHandoverInvalid` → attempt 折成 `SessionResult.rollback` 标记 → 单元
+  所有者回滚重做;**作用域**: fixRound 无基线上下文,忽略该标记维持现状(阻塞),
+  回滚重做只落在 executeWhole/runSubtask 两处(决策: 修复轮回滚锚点不属本设计的
+  单元范畴)。恢复时交接文档在场但无状态行(handoffInvalid,需基线在册)→ 回滚
+  而非凭文档续跑;`handoffStatus()` 统一状态行判据。
+- [x] **S2-d requireArtifact step 续跑严格化**: sameStep 且基线在册 → baselineIntact
+  失败 dirty;model 不一致/记录无 model/死亡 → rollbackUnitState 后按全新步骤重做;
+  旧记录无基线 → 不复用、走既有"开新会话重做本步骤"。
+- [ ] **S1/S2 测试**(下一步):
+  - test/resume.test.ts: baseline/model 往返、缺字段记录兼容;
+  - test/git.test.ts: baselineIntact(HEAD==基线/driver 区间通过/外部提交检出/空基线)
+    与 rollbackUnit(脏区+driver 提交 → stash×2+reset 回基线、stash list 含
+    auto-rollback、工作区净;外部提交 → ok=false 且仓库原样;upstream → 只 stash;
+    空基线 → 只 stash;嵌套仓库各自回滚);
+  - test/runner.test.ts: resumeNote 两态(需注入,见下);requireArtifact strict
+    路径(注入 switches: 记录带 baseline+model 匹配 → 复用;model 不一致/会话死 →
+    回滚后重开——git init 临时仓 + saveProgress 构造记录,断言 HEAD 复位与
+    stash 存在)。
+- [ ] **S3 收尾**(测试后):
+  - 可注入化补完(进行中被叫停,已做 strictResumeActive(opts, switches?) 半笔):
+    ① requireArtifact 内部 strictResumeActive(opts) → 传 switches;② watch 加
+    switches 形参(attempt 调用点透传),handleIdleTest 用之;③ resumeNote 加第三参
+    `strictResume = autoSwitches().strictResume`,runTask/requireArtifact 两调用点
+    传 switches.strictResume;④ attempt 的 remember 里 strictResumeActive 传
+    switches;
+  - 文档同步: docs/behavior.md(严格恢复行为段: 记录标准/核对/回滚/未配路由时
+    一律不复用的口径)、docs/structure.md(switches 第十六变量 + git.ts
+    baselineIntact/rollbackUnit + runner.ts 增补)、包 AGENTS.md 导航行、根
+    /workspace/aseo/AGENTS.md「进行中的方案」段(改为已实施 + 开关缺省 off 灰度)、
+    本文件状态行转"已实施(灰度)";
+  - 终验: 包目录 `bun typecheck` + `bun test` 全绿。
+
+### 4.1 实施期决策记录(设计文本之外的落定口径)
+
+1. **门禁联动**: 严格机制整体 gated 于 `strictResumeActive = 开关 on 且
+   --commit true 且非 dryrun`;off(缺省)记录不带新字段、核对与回滚逐字节等价现状。
+2. **无路由即不复用**(§5 字面口径): 未配 OPENCODE_AUTO_MODEL 时记录无 model 可写,
+   严格恢复下视同不匹配 → 回滚;需会话复用须配置路由(behavior.md 要写明)。
+3. **基线锚点分级**: 任务入口基线(runTask,与 loop beginUnit 同 HEAD)被子任务/
+   阶段边界基线覆盖收窄;更近基线与更远基线在"区间全 driver 提交"下核对等价,
+   回滚半径更小。
+4. **外部提交 ≠ 回滚**: 一律 dirty 交人工(3.3「不做的事」),包括恢复核对与
+   rollbackUnit 双侧。
+5. **中途回滚重做的界**: executeWhole/runSubtask 各一次(`rolled`),再失败走既有
+   隐性阻塞;现场已保全在 stash。
 
 ## 5. 风险
 

@@ -6,7 +6,7 @@ import type { Interactive } from "./interactive"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
-import { beginUnit, commitTitle, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
+import { baselineIntact, beginUnit, commitTitle, commitTree, rollbackUnit, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
 import { currentRound } from "./phases"
@@ -54,7 +54,7 @@ import {
 import { allowWrite, reprotect } from "./protect"
 import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
 import { collectAgentResolves, compactText, recordResolves, resolvesOf, sameIssue, type ResolveEvent, type ResolveItem } from "./resolve"
-import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
+import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type Progress, type StepKind } from "./resume"
 import { shellProfile } from "./shell"
 import { statsSessionBegin, statsSessionEnd, statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
 import { createStuckTracker, STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
@@ -202,6 +202,65 @@ export async function gatedTaskRefGap(dir: string, id: string, on: boolean): Pro
   return on ? formatRefGap(await taskRefFindings(dir, id)) : undefined
 }
 
+// —— 恢复保真(session-recovery-fidelity-design.md,OPENCODE_AUTO_STRICT_RESUME)——
+
+// 严格恢复是否生效: 开关 on 且提交门禁在位(--commit true 且非 dryrun)。门禁关闭
+// 时记录不带基线/模型字段、核对与回滚整体空转(逐字节等价现状)。switches 缺省取
+// OPENCODE_AUTO_* 解析值,注入供单测。
+export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches()): boolean {
+  return switches.strictResume && opts.commit !== false && !opts.dryrun
+}
+
+// 恢复时的模型一致性求值(设计 3.1 ④): 与 attempt 为复用会话计算 target 的优先级
+// 链一致(链上降级候选在恢复时不存在,取 sticky > /failback 覆写 > 路由表)。返回
+// undefined = 当前未配置模型路由(此时记录也无可记,核对按不匹配处理)。
+export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined): string | undefined {
+  return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase, phaseToRole(phase) ?? "bypass")
+}
+
+// 回滚协议的 runner 侧编排(设计 3.3): rollbackUnit(stash 保全 + soft reset 收回
+// driver 提交)→ 进度记录转总结态(清基线/模型)→ CURRENT.md 写回滚备注(planPath
+// 给出时;runTask 恢复路径不在此写,由随后的任务镜像统一携带)。回滚失败返回
+// dirty(git 状态的决定权在人工);成功返回备注文本,调用方以冷启动(不附
+// resumeNote)重做本单元。
+async function rollbackUnitState(
+  dir: string,
+  task: Task,
+  unit: string,
+  baseline: UnitBaseline,
+  extra: { planPath?: string; progress?: Progress; solo?: boolean } = {},
+): Promise<{ type: "ok"; remark: string } | UnitStop> {
+  const rolled = await rollbackUnit(dir, baseline, { task: task.id, unit })
+  if (!rolled.ok) {
+    return { type: "dirty", files: rolled.failures.map((failure) => `${failure.rel}: ${failure.error}`) }
+  }
+  if (extra.progress) {
+    await saveProgress(dir, { ...extra.progress, active: false, baseline: undefined, model: undefined })
+  }
+  const remark = rollbackRemark(task.id, unit, rolled)
+  if (extra.planPath) {
+    await writeCurrent(extra.planPath, task, extra.solo ?? false, remark)
+  }
+  log(
+    `↻ ${task.id} ${unit}已回滚到单元基线(stash ${rolled.stashes} 次` +
+      `${rolled.resets.length ? `,reset ${rolled.resets.join(", ")}` : ""}` +
+      `${rolled.skipped.length ? `;仅 stash 未 reset: ${rolled.skipped.join(", ")}` : ""}),新会话从干净基线重做本单元`,
+  )
+  return { type: "ok", remark }
+}
+
+// CURRENT.md 的回滚备注(回滚重跑路径保留文件时写入): 现场去向与找回方式。
+function rollbackRemark(taskID: string, unit: string, rolled: RollbackResult): string {
+  return [
+    `## 回滚备注(opencode-auto)`,
+    ``,
+    `- 回滚时间: ${new Date().toISOString()}`,
+    `- 回滚单元: ${taskID} ${unit}`,
+    `- 现场保全: 未提交改动与被收回的本单元提交均在 git stash(信息含 auto-rollback 前缀),可用 git stash list 定位、git stash show -p 查看`,
+    `- 后续: 本单元将由新会话从基线重做;如需找回被回滚的部分工作,请人工检查 stash 后自行取舍`,
+  ].join("\n")
+}
+
 // --subtask 三档: off(单会话完成)/ auto(自动分解,缺省;子任务会话上下文达到
 // 2x --context-limit 时同样交接文档 + 新会话续跑)/ ondemand(单会话执行,
 // 上下文达到 2x --context-limit 时交接文档 + 新会话续跑)。
@@ -318,11 +377,19 @@ type Watch = {
   // 与 usage 完全同构——由 snapshot 统一带出,7 个 return 出口(含 error/blocked 提前
   // 结算口)一个不漏;attempt 在回合结束时补桶身份后 recordResolves 落账。
   resolves?: ResolveEvent[]
+  // 测试交接写核失败(严格恢复,session-recovery-fidelity-design.md 3.3): 会话被要求
+  // 写测试交接文档但文档缺失/为空,严格模式下不再补写重试——经 attempt 折成下方
+  // SessionResult 的 rollback 标记,交单元所有者回滚后冷启动重做。
+  testHandoverInvalid?: boolean
 }
 
 type SessionResult =
   | { type: "idle"; lastText: string; testHandover?: boolean }
-  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass })
+  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & {
+      // 严格恢复: 本阻塞由交接文档无效触发,单元所有者(executeWhole/runSubtask)据此
+      // 回滚到单元基线并冷启动重做,而非把阻塞上抛;无基线的调用方忽略此标记。
+      rollback?: boolean
+    })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
 // OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一
@@ -342,7 +409,10 @@ type SessionResult =
 // 瞬时错误重试自然回落 create 路径。
 // modelShown 为终端展示的已播报模型(每次 prompt 求值出的 target 与之比对,去重
 // 「◈ 使用模型」日志;仅内存态,不落盘)。
-export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string }
+// baseline 为当前执行单元的 SHA 基线(严格恢复,session-recovery-fidelity-design.md
+// 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
+// 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
+export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
 
 // 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
 // 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能
@@ -613,6 +683,12 @@ export async function runTask(
   const dir = opts.dir ?? dirname(plan.path)
   const mode = opts.subtask ?? "auto"
   const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
+  // 严格恢复(session-recovery-fidelity-design.md): on 时记录携带单元基线/生效模型、
+  // 恢复时核对、不可保真回滚重跑。此刻取任务级基线(与 loop 的 beginUnit 之间无
+  // 提交,HEAD 相同;恢复续跑豁免 clean 的路径同样适用)——子任务/阶段边界会由
+  // runSubtask/persistStage 刷新为更近的单元基线。
+  const strict = strictResumeActive(opts)
+  if (strict) chain.baseline = await unitBaseline(dir)
   // 中断恢复(进度记录): 会话半途未总结(active)且 server 上仍存在 → 复用原会话
   // 继续(与 opencode -r 同构,上下文不丢);优雅退出的总结记录、会话已不可用、
   // --new-session 显式放弃 → 新会话。两种情况首个提示词均附"[driver] 中断后的继续"
@@ -621,6 +697,9 @@ export async function runTask(
   // handoff.md 或 --handover-test 的 testhandoff.md)时,旧会话上下文已用满、
   // 进度由文档承载——开新会话凭交接续跑(executeWhole/runSubtask/runExecSession
   // 据文件播种 continuation)。
+  // 严格恢复: rolledBack 非空 = 恢复时已回滚到单元基线( CURRENT.md 镜像改带
+  // 回滚备注,新会话冷启动重做、不附恢复说明)。
+  let rolledBack: string | undefined
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
     chain.phase = recalled.phase
@@ -648,11 +727,23 @@ export async function runTask(
         recalled.active = false
       }
     }
+    const handoffRaw =
+      mode !== "off" ? await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "handoff"))).text().catch(() => undefined) : undefined
     const handedOff =
+      recalled.active === true && (handoffRaw !== undefined || (opts.handoverTest === true && (await testHandoffExists(dir, task))))
+    // 严格恢复(session-recovery-fidelity-design.md 3.3): 交接文档在场但无有效状态行
+    // (低质)→ R3 触发,回滚重跑,不凭文档续跑;需基线在册才可回滚。
+    const handoffInvalid =
+      strict &&
       recalled.active === true &&
-      ((mode !== "off" && (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "handoff"))).exists())) ||
-        (opts.handoverTest === true && (await testHandoffExists(dir, task))))
-    const alive = !handedOff && !opts.newSession && recalled.active && recalled.session && (await sessionAlive(client, recalled.session))
+      rerun &&
+      handoffRaw !== undefined &&
+      handoffStatus(handoffRaw) === undefined &&
+      recalled.baseline !== undefined
+    // 严格恢复: 无基线的旧记录(开关启用前写入)无法严格核对,按不可复用处理。
+    const legacyRecord = strict && recalled.baseline === undefined
+    const alive =
+      !handedOff && !opts.newSession && recalled.active && recalled.session && !legacyRecord && (await sessionAlive(client, recalled.session))
     // 继承中断会话的真实上下文用量(经末条 assistant 消息重建): 此前 seed 为
     // 0/0 占位以保证首个提示词必定复用,代价是恢复后的日志与链内后续复用决策
     // 全用假值;首轮复用现由 attempt 的 resumed 判据保证,这里只取真实值。
@@ -664,44 +755,83 @@ export async function runTask(
     // 注意判据不能只看末条:撞不可重试错误死掉的长会话(第 3/4 点刻意保住的正是
     // 它)末行也是报错桩,判据落在 sessionUsage 的 basis 扫描上。
     const errorStub = usage !== undefined && usage.used === 0 && usage.errorStub
-    if (alive && usage && !errorStub) {
-      chain.id = recalled.session!
-      chain.pct = usage.pct
-      chain.used = usage.used
-      // 复用决策已在此做出;链内后续的 5 分钟复用规则从当前时刻起算。
-      chain.at = Date.now()
-      chain.note = resumeNote(recalled.phase, true)
-      log(
-        `↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用中断的会话 ${recalled.session} 继续(上下文不丢,` +
-          `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens,上限未知"})`,
-      )
-    } else {
-      // --new-session 显式放弃旧会话: 立即把记录转总结态,防止本次运行在无会话
-      // 阶段(如 verify 脚本执行)中断后,下次运行误复用与已推进阶段错位的旧会话。
-      if (opts.newSession && recalled.active) {
-        await saveProgress(dir, { ...recalled, active: false })
+    // 严格核对与回滚(3.1 ③④ + 3.3): 只对 active、将重跑、未交接、基线在册的记录
+    // 生效;回滚后记录转总结态(复用既有的"非恢复续跑"语义——pipeline 清理陈旧
+    // 交接文档、下一单元以干净基线启动),新会话冷启动重做,不附恢复说明。
+    if (handoffInvalid) {
+      const done = await rollbackUnitState(dir, task, "执行单元(交接文档无效)", recalled.baseline!, { progress: recalled })
+      if (done.type !== "ok") return done
+      rolledBack = done.remark
+      recalled.active = false
+      log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 存在但无有效状态行,严格恢复判定不可保真,已回滚重跑`)
+    } else if (strict && recalled.active === true && rerun && !handedOff && recalled.baseline) {
+      const drift = await baselineIntact(dir, recalled.baseline)
+      if (drift.length) {
+        // 外部提交混入: 不回滚(回滚只回收 driver 自己的单元内改动),dirty 交人工。
+        return { type: "dirty", files: drift }
       }
-      chain.note = resumeNote(recalled.phase, false)
-      const why = !rerun
-        ? "中断会话所属的执行单元本次不会重跑(已完成或不再执行),其恢复点已淘汰,开新会话继续"
-        : handedOff
-          ? "中断前已写出交接文档,开新会话凭交接续跑"
-          : opts.newSession
-            ? "--new-session 指定,开新会话继续"
+      const modelNow = resumeModelNow(opts, switches, recalled.phase)
+      const modelOk = recalled.model !== undefined && recalled.model === modelNow
+      if (!(alive && usage && !errorStub) || opts.newSession || !modelOk) {
+        const why = opts.newSession
+          ? "--new-session 指定"
+          : !(alive && usage)
+            ? "原会话不可复用"
             : errorStub
-              ? "原会话只挨了一记报错、无真实产出,开新会话继续"
-              : "原会话不可复用,开新会话继续"
-      log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why})`)
+              ? "原会话只挨了一记报错、无真实产出"
+              : `模型不一致(记录 ${recalled.model},当前 ${modelNow ?? "未配置路由"})`
+        const done = await rollbackUnitState(dir, task, "执行单元", recalled.baseline!, { progress: recalled })
+        if (done.type !== "ok") return done
+        rolledBack = done.remark
+        recalled.active = false
+        log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why}),严格恢复判定不可保真,已回滚到单元基线重做`)
+      }
+    }
+    if (!rolledBack) {
+      if (alive && usage && !errorStub) {
+        chain.id = recalled.session!
+        chain.pct = usage.pct
+        chain.used = usage.used
+        // 复用决策已在此做出;链内后续的 5 分钟复用规则从当前时刻起算。
+        chain.at = Date.now()
+        chain.note = resumeNote(recalled.phase, true)
+        log(
+          `↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用中断的会话 ${recalled.session} 继续(上下文不丢,` +
+            `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens,上限未知"})`,
+        )
+      } else {
+        // --new-session 显式放弃旧会话: 立即把记录转总结态,防止本次运行在无会话
+        // 阶段(如 verify 脚本执行)中断后,下次运行误复用与已推进阶段错位的旧会话。
+        if (opts.newSession && recalled.active) {
+          await saveProgress(dir, { ...recalled, active: false })
+        }
+        chain.note = resumeNote(recalled.phase, false)
+        const why = !rerun
+          ? "中断会话所属的执行单元本次不会重跑(已完成或不再执行),其恢复点已淘汰,开新会话继续"
+          : handedOff
+            ? "中断前已写出交接文档,开新会话凭交接续跑"
+            : opts.newSession
+              ? "--new-session 指定,开新会话继续"
+              : legacyRecord
+                ? "严格恢复启用前的旧记录无单元基线,无法严格核对,开新会话继续"
+                : errorStub
+                  ? "原会话只挨了一记报错、无真实产出,开新会话继续"
+                  : "原会话不可复用,开新会话继续"
+        log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why})`)
+      }
     }
   }
   // Mirror the task into CURRENT.md before the first session: the agent
   // contract requires every session to read it first.
   task = requireTask(await load(plan.path), task.id)
-  await writeCurrent(plan.path, task, mode !== "auto")
+  await writeCurrent(plan.path, task, mode !== "auto", rolledBack)
   // 阶段持久化: 每个阶段边界推进记录(active=false,总结态);执行链会话开始/结束
   // 时由 attempt 刷新为 active=true(半途态)——此刻中断按"未总结"复用会话。
+  // 严格恢复时同步刷新链上单元基线: 回滚锚点跟随阶段边界收紧(基线..HEAD 只含
+  // driver 提交时更近的基线与更远的基线核对等价,回滚半径更小)。
   const persistStage = async (phase: Phase) => {
     chain.phase = phase
+    if (strict) chain.baseline = await unitBaseline(dir)
     if (opts.dir && task.id.startsWith("T-")) {
       await saveProgress(opts.dir, { task: task.id, session: chain.id, at: Date.now(), active: false, phase })
     }
@@ -990,6 +1120,8 @@ async function executeWhole(
   ondemand: boolean,
 ): Promise<UnitStop | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  const dir = opts.dir ?? dirname(plan.path)
+  const strict = strictResumeActive(opts)
   // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径 docs/<id>/handoff.md
   // (提示词经 handoffFile 注入),读点优先新路径、旧平铺存在则回落——存量项目
   // 中断恢复续跑不受改名影响。
@@ -1004,7 +1136,7 @@ async function executeWhole(
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在即
   // active 恢复——中断前已交接。状态=完成 → 执行阶段已完成,跳过整任务会话;
   // 状态=继续 → 以续跑提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
-  const prior = ondemand ? /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1] : undefined
+  const prior = ondemand ? handoffStatus(await readHandoff()) : undefined
   if (prior === "完成") {
     log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记执行已完成,跳过整任务会话`)
     return undefined
@@ -1013,6 +1145,29 @@ async function executeWhole(
   if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已交接 ${handoffFile(task)},新会话凭交接文档续跑`)
   let feedback = ""
   let retried = false
+  // 严格恢复的回滚重做(3.3 R3 收紧): 交接文档无效(含测试交接写核失败)一次即回滚
+  // 到单元基线、冷启动重做本单元,不再带反馈重试;以一次为限,再失败按隐性阻塞
+  // 上抛(现场已保全在 stash)。
+  let rolled = false
+  const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
+    if (!strict || !chain.baseline) return undefined
+    const done = await rollbackUnitState(dir, task, "执行会话", chain.baseline, {
+      planPath: plan.path,
+      progress: await peekProgress(dir),
+      solo: (opts.subtask ?? "auto") !== "auto",
+    })
+    if (done.type !== "ok") return done
+    continuation = false
+    feedback = ""
+    retried = false
+    chain.id = undefined
+    chain.pending = undefined
+    chain.note = undefined
+    chain.pct = 100
+    chain.used = 0
+    chain.at = 0
+    return "done"
+  }
   for (;;) {
     const result = await runExecSession(
       client,
@@ -1023,19 +1178,40 @@ async function executeWhole(
       chain,
       steer,
     )
-    if (result.type === "blocked") return result
-    const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "execute", subject })
+    if (result.type === "blocked") {
+      // 测试交接写核失败(严格恢复): 回滚后冷启动重做,一次为限。
+      if (result.rollback && !rolled) {
+        const redone = await rollbackRedo()
+        if (redone === "done") {
+          rolled = true
+          continue
+        }
+        if (redone) return redone
+      }
+      return result
+    }
+    const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} 执行会话`, committed)
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
     if (!handoverDue(steer, chain.used)) return undefined
-    const status = /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1]
+    const status = handoffStatus(await readHandoff())
     if (status === "完成") return undefined
     if (status === "继续") {
       log(`↻ ${task.id} 上下文达到 ${formatTokens(cap * 2)} 上限,已交接 ${handoffFile(task)},新会话继续`)
       continuation = true
       feedback = ""
       continue
+    }
+    // 交接边界写核失败(严格恢复): 无效一次即回滚冷启动重做。
+    if (!rolled) {
+      const redone = await rollbackRedo()
+      if (redone === "done") {
+        rolled = true
+        log(`↻ ${task.id} 达到上下文上限但未产出有效交接文档 ${handoffFile(task)},严格恢复已回滚,冷启动重做`)
+        continue
+      }
+      if (redone) return redone
     }
     if (retried) {
       return {
@@ -1143,7 +1319,15 @@ export function phaseText(phase: Phase | undefined): string {
 
 // 中断恢复时随首个提示词注入的"[driver] 中断后的继续"说明: 按记录的阶段给出
 // 具体的下一步指引,使 AI 不重做已完成的工作。
-function resumeNote(phase: Phase | undefined, reused: boolean): string {
+// 严格恢复(OPENCODE_AUTO_STRICT_RESUME=on)下复用会话(R1/R2)收敛为一句 continue
+// (session-recovery-fidelity-design.md 3.2): 现场实证表明恢复会话本就靠盘面自定位
+// (读 CURRENT.md → git status → 首个未勾选项),阶段指引冗余;逐步骤的下一步指引
+// 保留在交接文档/状态文件里,不进恢复提示词。非复用路径(回滚后冷启动不带说明,
+// 优雅退出的总结态续跑)维持既有指引。
+export function resumeNote(phase: Phase | undefined, reused: boolean): string {
+  if (reused && autoSwitches().strictResume) {
+    return `[driver] 会话曾中断,请继续当前工作直至本单元完成。`
+  }
   const next = nextStepText(phase)
   if (phase?.kind === "step") {
     return (
@@ -1523,7 +1707,8 @@ async function runSubtask(
   chain.subject = subject
   const dir = opts.dir ?? dirname(plan.path)
   // 子任务单元提交边界: 启动 clean 门禁 + SHA 基线(收口时校验提交区间全为 driver
-  // 提交);driver 独占状态文件遗留由 beginUnit 内部 carryover 自愈。
+  // 提交);driver 独占状态文件遗留由 beginUnit 内部 carryover 自愈。基线同时上链
+  // (严格恢复: active 记录携带、回滚锚点)。
   let baseline: UnitBaseline | undefined
   if (resumeUnit) {
     if (opts.commit !== false && !opts.dryrun) baseline = await unitBaseline(dir)
@@ -1532,6 +1717,8 @@ async function runSubtask(
     if (gate.type === "dirty") return { type: "dirty", files: gate.files }
     baseline = gate.baseline
   }
+  chain.baseline = baseline
+  const strict = strictResumeActive(opts)
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
   // (见 handoverDue);--handover-test 的测试交接是独立机制,不受影响。
@@ -1544,7 +1731,7 @@ async function runSubtask(
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在且
   // 状态=完成 → 子任务在中断前已由交接会话完成,直接勾选;状态=继续 → 以续跑
   // 提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
-  const prior = /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1]
+  const prior = handoffStatus(await readHandoff())
   if (prior === "完成") {
     log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记子任务已完成,直接勾选`)
   } else {
@@ -1553,9 +1740,34 @@ async function runSubtask(
     // ③ 子任务首个会话从基点分叉(与分解会话同一分叉点,先 fork 后渲染——warm/
     // cold 背景段据此选择);跨子任务不复用(种子链强制),交接续跑与带反馈重试
     // 沿用链内既有机制。无基点/失败 → 全新会话 + 冷启动提示词(读 context.md)。
-    const warm = await seedForkSession(client, opts, chain, base, subject)
+    let warm = await seedForkSession(client, opts, chain, base, subject)
     let feedback = ""
     let retried = false
+    // 严格恢复的回滚重做(3.3 R3 收紧): 交接文档无效(含测试交接写核失败)一次即
+    // 回滚到子任务基线、冷启动重做,不再带反馈重试;以一次为限,再失败按隐性阻塞
+    // 上抛(现场已保全在 stash)。
+    let rolled = false
+    const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
+      if (!strict || !baseline) return undefined
+      const done = await rollbackUnitState(dir, task, `子任务 ${index}`, baseline, {
+        planPath: plan.path,
+        progress: await peekProgress(dir),
+        solo: (opts.subtask ?? "auto") !== "auto",
+      })
+      if (done.type !== "ok") return done
+      continuation = false
+      feedback = ""
+      retried = false
+      chain.id = undefined
+      chain.pending = undefined
+      chain.note = undefined
+      chain.pct = 100
+      chain.used = 0
+      chain.at = 0
+      // 冷启动重做从基点重新分叉(与子任务首个会话同一形态,拿回暖前缀)。
+      warm = await seedForkSession(client, opts, chain, base, subject)
+      return "done"
+    }
     for (;;) {
       const result = await runExecSession(
         client,
@@ -1567,13 +1779,24 @@ async function runSubtask(
         steer,
         index,
       )
-      if (result.type === "blocked") return result
+      if (result.type === "blocked") {
+        // 测试交接写核失败(严格恢复): 回滚后冷启动重做,一次为限。
+        if (result.rollback && !rolled) {
+          const redone = await rollbackRedo()
+          if (redone === "done") {
+            rolled = true
+            continue
+          }
+          if (redone) return redone
+        }
+        return result
+      }
       // 未触发交接阈值(2x cap)即结束 = 子任务在单会话内自然完成,勾选后统一提交;
       // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
       // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
       // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
       if (!handoverDue(steer, chain.used)) break
-      const status = /状态[:：]\s*(继续|完成)/.exec(await readHandoff())?.[1]
+      const status = handoffStatus(await readHandoff())
       if (status === "完成") break
       // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
       const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
@@ -1583,6 +1806,16 @@ async function runSubtask(
         continuation = true
         feedback = ""
         continue
+      }
+      // 交接边界写核失败(严格恢复): 无效一次即回滚冷启动重做。
+      if (!rolled) {
+        const redone = await rollbackRedo()
+        if (redone === "done") {
+          rolled = true
+          log(`↻ ${task.id} 子任务 ${index} 达到上下文上限但未产出有效交接文档 ${handoffFile(task)},严格恢复已回滚,冷启动重做`)
+          continue
+        }
+        if (redone) return redone
       }
       if (retried) {
         return {
@@ -2027,6 +2260,10 @@ export async function requireArtifact<T>(
   const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, letter: spec.step.letter } : undefined
   // 阶段步骤续跑判定: 上次运行在本步骤中断(driver 未收口)且原会话仍可复用 →
   // 首个提示词进原会话(保留产物现场);否则按全新步骤处理(重置 + 新会话)。
+  // 严格恢复(OPENCODE_AUTO_STRICT_RESUME): 复用前核对单元基线与生效模型
+  // (session-recovery-fidelity-design.md 3.1);不可保真时回滚到基线后按全新步骤
+  // 重做——外部提交混入直接 dirty 交人工(不动 git)。
+  const strict = strictResumeActive(opts)
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
   if (stepPhase && opts.dir) {
@@ -2041,7 +2278,32 @@ export async function requireArtifact<T>(
       const alive = candidate !== undefined ? await sessionAlive(client, candidate) : false
       const usage = alive ? await sessionUsage(client, candidate!) : undefined
       // 报错桩(整条会话无真实产出)不复用——与 runTask 跨进程恢复同款双保险。
-      if (alive && usage && !(usage.used === 0 && usage.errorStub)) {
+      const usable = alive && usage && !(usage.used === 0 && usage.errorStub)
+      const legacyRecord = strict && recalled!.baseline === undefined
+      if (strict && recalled!.baseline) {
+        const drift = await baselineIntact(opts.dir, recalled!.baseline)
+        if (drift.length) return { type: "dirty", files: drift }
+        const modelNow = resumeModelNow(opts, switches, recalled!.phase)
+        if (usable && !legacyRecord && recalled!.model !== undefined && recalled!.model === modelNow) {
+          resumedSession = candidate
+          resumedUsage = usage
+          log(
+            `↻ ${task.id} ${spec.kind}会话恢复中断点,复用会话 ${candidate} 继续(上下文不丢,` +
+              `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens"})`,
+          )
+        } else {
+          const why = opts.newSession
+            ? "--new-session 指定"
+            : !usable
+              ? "原会话不可复用"
+              : recalled!.model === undefined
+                ? "记录无生效模型(严格恢复启用前的旧记录)"
+                : `模型不一致(记录 ${recalled!.model},当前 ${modelNow ?? "未配置路由"})`
+          const done = await rollbackUnitState(opts.dir, task, `${spec.kind}步骤`, recalled!.baseline, { progress: recalled })
+          if (done.type !== "ok") return done
+          log(`↻ ${task.id} ${spec.kind}会话恢复中断点(${why},严格恢复已回滚,重做本步骤)`)
+        }
+      } else if (usable && !legacyRecord) {
         resumedSession = candidate
         resumedUsage = usage
         log(
@@ -2049,7 +2311,15 @@ export async function requireArtifact<T>(
             `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens"})`,
         )
       } else {
-        const why = opts.newSession ? "--new-session 指定" : candidate === undefined ? "记录无会话" : alive ? "原会话只挨了一记报错、无真实产出" : "原会话不可复用"
+        const why = opts.newSession
+          ? "--new-session 指定"
+          : candidate === undefined
+            ? "记录无会话"
+            : legacyRecord
+              ? "严格恢复启用前的旧记录无单元基线,无法严格核对"
+              : alive
+                ? "原会话只挨了一记报错、无真实产出"
+                : "原会话不可复用"
         log(`↻ ${task.id} ${spec.kind}会话恢复中断点(${why},开新会话重做本步骤)`)
       }
     } else {
@@ -2086,6 +2356,8 @@ export async function requireArtifact<T>(
       subject: spec.commit?.subject,
       phase: stepPhase,
       role: spec.role,
+      // 单元基线上链(严格恢复: attempt 写 active 记录时随记)。
+      baseline,
     }
     if (resume) {
       // attempt 的 resumed 判据(链上有会话且 note 待注入)使首个提示词必进原会话,
@@ -2153,6 +2425,12 @@ export function handoffSteer(on: boolean, cap: number, task: Task): Steer | unde
 // (watch 的 test 协议),不经此判定。
 export function handoverDue(steer: Steer | undefined, used: number): boolean {
   return steer !== undefined && used >= steer.limit
+}
+
+// 交接文档的状态行(`状态: 继续|完成`);undefined = 缺失/无效(交接边界写核与
+// 恢复 seeding 共用同一判据,session-recovery-fidelity-design.md 3.3 R3)。
+function handoffStatus(text: string): string | undefined {
+  return /状态[:：]\s*(继续|完成)/.exec(text)?.[1]
 }
 
 // --test-by-driver 的测试执行协议状态(watch 与 runExecSession 共享,跨会话/
@@ -2626,9 +2904,23 @@ async function attempt(
   // 认领在跑的会话(此前只在回合结束后写,回合进行中被 kill 会丢失认领);可重试
   // 错误把记录还原为下发前快照,被弃的 fork 副本不顶替真实恢复点(保留
   // session-error-retry-plan.md 第 4 点的保护,改为"下发即写 + 失败还原")。
+  // 本次提示词的生效模型(target 求值后回填,remember 写严格恢复记录用)。
+  let promptModel: string | undefined
   const remember = async () => {
     if (opts.dir && chain.phase) {
-      await saveProgress(opts.dir, { task: task.id, session: sessionID, at: Date.now(), active: true, phase: chain.phase })
+      await saveProgress(opts.dir, {
+        task: task.id,
+        session: sessionID,
+        at: Date.now(),
+        active: true,
+        phase: chain.phase,
+        // 严格恢复(session-recovery-fidelity-design.md 3.1): active 记录随带单元
+        // 基线与本次生效模型(恢复时核对;model 未配置路由时无串可记,严格恢复下
+        // 该记录视为不可复用)。基线缺 thread 时以当前 HEAD 兜底(窗口从现在起)。
+        ...(strictResumeActive(opts)
+          ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: promptModel }
+          : {}),
+      })
     }
   }
   // 下发前的 progress.json 快照: 可重试错误时还原,防止被弃副本顶替真实恢复点。
@@ -2659,6 +2951,7 @@ async function attempt(
     // 覆写时全链恒 undefined,逐字节等价现状(而非带 model: undefined)。
     const override = failbackOverride()
     const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    promptModel = target
     // 实际使用模型上终端(前端可见): 新建/分叉会话或模型较上次 prompt 有变化时
     // 播报一行(来源标注),同会话同模型的续跑 prompt 不重复。target 未定义(未设
     // 路由)时静默,保持不变量 F。
@@ -2765,7 +3058,11 @@ async function attempt(
       chain.failed = undefined
       await remember()
     }
-    if (result.blocked) return result.blocked
+    if (result.blocked) {
+      // 严格恢复的测试交接写核失败(3.3): 折成 rollback 标记上抛,单元所有者
+      // (executeWhole/runSubtask)据此回滚重做;无基线的调用方按普通阻塞处理。
+      return result.testHandoverInvalid ? { ...result.blocked, rollback: true } : result.blocked
+    }
     if (result.error)
       return { type: "blocked", question: `会话错误: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
@@ -2893,13 +3190,19 @@ async function watch(
     log(`⚠ steer 投递失败: ${sent?.error ? JSON.stringify(sent.error) : "请求异常"}`)
     return false
   }
-  const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string }> => {
+  const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string } | { type: "invalid" }> => {
     // 交接要求已发出: 校验交接文档就绪(非空即有效,内容交新会话解释)。
     if (testHandoverAsked) {
       const doc = await Bun.file(test!.handoffFile).text().catch(() => "")
       if (doc.trim()) {
         testHandover = true
         return { type: "break" }
+      }
+      // 交接边界写核(session-recovery-fidelity-design.md 3.3,严格恢复): 文档无效
+      // 一次即判,不再 steer 补写重试——"完成判定不靠 agent 自报"同样适用于交接
+      // 文档(S07 幻影档实证),发现时机就在交接边界。
+      if (strictResumeActive(opts)) {
+        return { type: "invalid" }
       }
       if (testHandoverRetried) {
         return {
@@ -3213,9 +3516,20 @@ async function watch(
       if (test) {
         const handled = await handleIdleTest()
          if (handled.type === "continue") continue
-         if (handled.type === "blocked") {
-           return snapshot({ blocked: { type: "blocked", question: handled.question }, testHandover })
-         }
+          if (handled.type === "blocked") {
+            return snapshot({ blocked: { type: "blocked", question: handled.question }, testHandover })
+          }
+          if (handled.type === "invalid") {
+            return snapshot({
+              blocked: {
+                type: "blocked",
+                question:
+                  `测试交接文档 ${test.handoffFile} 缺失或为空(严格恢复: 交接边界写核失败,不再补写重试,` +
+                  `本单元将回滚到基线重做)。Agent 最后的输出:\n${lastText.trim().slice(-2000) || "(无输出)"}`,
+              },
+              testHandoverInvalid: true,
+            })
+          }
       }
       settled = true
       break

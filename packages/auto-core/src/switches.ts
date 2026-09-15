@@ -25,6 +25,7 @@ export const SWITCH_ENV = {
   modelFailbackScope: "OPENCODE_AUTO_MODEL_FAILBACK_SCOPE",
   retryWaits: "OPENCODE_AUTO_RETRY_WAITS",
   retryAsk: "OPENCODE_AUTO_RETRY_ASK",
+  strictResume: "OPENCODE_AUTO_STRICT_RESUME",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -137,6 +138,12 @@ export type Switches = {
   // 阶梯耗尽后等待人工裁决的分钟数(OPENCODE_AUTO_RETRY_ASK);0 = 不等人工,
   // 直接按回落处理(阻塞退出)。
   retryAsk: number
+  // 严格恢复(session-recovery-fidelity-design.md,缺省 off = 现状): on 时进度
+  // 记录补单元基线 baseline 与生效模型 model、恢复时核对(外部提交混入走 dirty、
+  // 模型不一致/会话死亡/--new-session 回滚到单元基线重跑)、复用会话的恢复说明
+  // 收敛为一句 continue、交接文档无效一次即回滚。门禁关闭(--commit false/dryrun)
+  // 时由 runner 侧整体空转(记录不带新字段)。
+  strictResume: boolean
 }
 
 const SWITCH_DEFAULTS: Switches = {
@@ -154,6 +161,7 @@ const SWITCH_DEFAULTS: Switches = {
   modelFailbackScope: "task",
   retryWaits: [0, 1, 2, 4, 8],
   retryAsk: 30,
+  strictResume: false,
 }
 
 // OPENCODE_AUTO_MODEL / _FALLBACK 归一化为 ModelPolicy(纯函数,供单测)。两形态:
@@ -310,6 +318,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     modelFailbackScope: modelFailbackScope as FailbackScope,
     retryWaits: waitList(SWITCH_ENV.retryWaits, env[SWITCH_ENV.retryWaits], SWITCH_DEFAULTS.retryWaits),
     retryAsk: minutes(SWITCH_ENV.retryAsk, env[SWITCH_ENV.retryAsk], SWITCH_DEFAULTS.retryAsk),
+    strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
   }
 }
 
@@ -341,6 +350,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
       : `${SWITCH_ENV.modelFailbackScope}=${switches.modelFailbackScope}`,
     formatWaits(switches.retryWaits) === formatWaits(SWITCH_DEFAULTS.retryWaits) ? undefined : `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     switches.retryAsk === SWITCH_DEFAULTS.retryAsk ? undefined : `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
+    switches.strictResume === SWITCH_DEFAULTS.strictResume ? undefined : `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -363,6 +373,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.modelFailbackScope}=${switches.modelFailbackScope}`,
     `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
     `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
+    `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
   ].join(", ")
 }
 

@@ -1,5 +1,6 @@
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
+import type { UnitBaseline } from "./git"
 
 // 进度恢复记录: run 期间 driver 把任务流水线的当前阶段与执行链会话持久化到目标
 // 目录 .auto/progress.json。应用崩溃/被强制终止后重新运行时据此精确恢复:
@@ -100,6 +101,15 @@ export type Progress = {
   // true = 会话半途未总结(kill/崩溃/网络故障),恢复时会话存活即复用。
   active: boolean
   phase?: Phase
+  // 单元基线(逐仓库 HEAD 短 SHA,session-recovery-fidelity-design.md 3.1 ③):
+  // 严格恢复(OPENCODE_AUTO_STRICT_RESUME)on 时由 attempt 随 active 记录写入,
+  // 恢复时核对 各仓库 HEAD == 基线 或 基线..HEAD 全部带 Auto-Stage trailer;
+  // 旧记录/开关关闭时缺失 → 严格恢复下视为不可复用(走回滚或新会话)。
+  baseline?: UnitBaseline
+  // 生效模型(provider/model 串,3.1 ④): 下发该提示词时求值出的实际 model;恢复时
+  // 与当前配置解析结果不一致 → 不复用(会话在异模型上续跑 = 行为漂移)。未配置模型
+  // 路由时无串可记,严格恢复下同样视为不可复用。
+  model?: string
 }
 
 const FILE = join(".auto", "progress.json")
@@ -172,6 +182,12 @@ function parseProgress(raw: string): Progress | undefined {
       at: typeof parsed.at === "number" ? parsed.at : 0,
       active: parsed.active === true,
       phase: typeof parsed.phase?.kind === "string" ? parsed.phase : undefined,
+      baseline: Array.isArray(parsed.baseline)
+        ? parsed.baseline.filter(
+            (line): line is { root: string; sha: string } => typeof line?.root === "string" && typeof line?.sha === "string",
+          )
+        : undefined,
+      model: typeof parsed.model === "string" ? parsed.model : undefined,
     }
   } catch {
     return undefined

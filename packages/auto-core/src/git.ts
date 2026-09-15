@@ -133,17 +133,136 @@ export async function unitViolations(dir: string, baseline: UnitBaseline): Promi
   for (const { root, sha } of baseline) {
     const head = (await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim()
     if (head === undefined || head === sha) continue
-    // 基线为空串(单元启动时仓库尚无提交)→ 全部提交都在区间内。
-    const bodies = await git(root, ["log", "-z", "--format=%B", ...(sha ? [`${sha}..HEAD`] : ["HEAD"])])
-    const foreign = bodies.out
-      .split("\0")
-      .filter((body) => body.trim())
-      .filter((body) => !body.includes("Auto-Stage:")).length
+    const foreign = await foreignCommits(root, sha)
     if (foreign) {
       problems.push(`${relative(dir, root) || "."}: 检测到 ${foreign} 个非 driver 提交(无 Auto-Stage trailer),单元期间存在外部提交`)
     }
   }
   return problems
+}
+
+// 基线..HEAD 区间内无 Auto-Stage trailer 的提交数(= 外部提交数);sha 为空串表示
+// 单元启动时仓库尚无提交,全量检查。unitViolations 与恢复保真核对/回滚共用。
+async function foreignCommits(root: string, sha: string): Promise<number> {
+  const bodies = await git(root, ["log", "-z", "--format=%B", ...(sha ? [`${sha}..HEAD`] : ["HEAD"])])
+  return bodies.out
+    .split("\0")
+    .filter((body) => body.trim())
+    .filter((body) => !body.includes("Auto-Stage:")).length
+}
+
+// —— 恢复保真(session-recovery-fidelity-design.md)——
+
+// 恢复时的基线核对(设计 3.1 ③): 各仓库 HEAD == 基线,或 基线..HEAD 区间全部为
+// driver 提交(Auto-Stage trailer)——期间只有 driver 提交,会话上下文对现状的认知
+// 仍成立。与 unitViolations 的差异: **不检查未提交改动**——半途会话的脏区正是
+// 恢复对象。返回问题清单(空 = 基线完好)。
+export async function baselineIntact(dir: string, baseline: UnitBaseline): Promise<string[]> {
+  const problems: string[] = []
+  for (const { root, sha } of baseline) {
+    const rel = relative(dir, root) || "."
+    const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
+    const head = got?.code === 0 ? got.out.trim() : ""
+    if (!head) {
+      // HEAD 不可读: 基线也为空(单元启动时即无提交,现仍无提交)属正常,其余为异常。
+      if (!sha) continue
+      problems.push(`${rel}: HEAD 不可读(仓库缺失或历史损坏),基线核对失败`)
+      continue
+    }
+    if (head === sha) continue
+    const foreign = await foreignCommits(root, sha)
+    if (foreign > 0) {
+      problems.push(`${rel}: 基线以来存在 ${foreign} 个非 driver 提交(无 Auto-Stage trailer),外部提交已混入,会话上下文对现状的认知失真`)
+    }
+  }
+  return problems
+}
+
+// 回滚结果(设计 3.3): failures 非空 = 有仓库未能回滚(调用方按 dirty 交人工);
+// stashes 为实际执行的 stash 次数(保全现场 + reset 收回),resets/skipped 供日志
+// 与 CURRENT.md 回滚备注(跳过 reset 的仓库: 有 upstream / 基线为空 / 单元期间新建)。
+export type RollbackResult = {
+  ok: boolean
+  failures: { rel: string; error: string }[]
+  stashes: number
+  resets: string[]
+  skipped: string[]
+}
+
+// 回滚协议(设计 3.3,不可保真时): 逐仓库(深度优先,镜像 commitTree 的遍历)
+// ① git stash push -u 保全现场(未提交改动可人工找回;gitignored 的 .auto/、tmp/
+// 天然不参与);② baseline..HEAD 间存在本单元 driver 提交时 git reset --soft 回
+// 基线后再 stash(把已落账的部分工作一并收回;检测到 upstream 则跳过 reset 只
+// stash 并告警——已推送/被引用的历史不动)。外部提交混入的仓库整体不回滚(人工
+// 处置),计入 failures;仓库不在基线中(单元期间新建)只 stash 不 reset。
+export async function rollbackUnit(
+  dir: string,
+  baseline: UnitBaseline,
+  info: { task: string; unit: string },
+): Promise<RollbackResult> {
+  const result: RollbackResult = { ok: true, failures: [], stashes: 0, resets: [], skipped: [] }
+  const message = `auto-rollback ${info.task} ${info.unit} ${new Date().toISOString()}`
+  for (const root of await repoRoots(dir)) {
+    const rel = relative(dir, root) || "."
+    try {
+      const entry = baseline.find((line) => line.root === root)
+      const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
+      const head = got?.code === 0 ? got.out.trim() : ""
+      // 外部提交混入: 该仓库不回滚(回滚只回收 driver 自己的单元内改动)。
+      if (entry && head && head !== entry.sha) {
+        const foreign = await foreignCommits(root, entry.sha)
+        if (foreign > 0) {
+          result.failures.push({ rel, error: `检测到 ${foreign} 个非 driver 提交(无 Auto-Stage trailer),该仓库不回滚,请人工处置` })
+          continue
+        }
+      }
+      // ① stash 保全现场(pathspec 限定在该目录子树内,目标目录可能位于更大的仓库中)。
+      if (await hasChanges(root)) {
+        const stashed = await git(root, ["stash", "push", "-u", "-m", message, "--", "."])
+        if (stashed.code !== 0) {
+          result.failures.push({ rel, error: `git stash 退出码 ${stashed.code}(${firstLine(stashed.err || stashed.out)})` })
+          continue
+        }
+        result.stashes++
+      }
+      // ② 收回本单元的 driver 提交: 无基线(空仓库启动/单元期间新建)或 HEAD 未动
+      //    时无需 reset;有 upstream 的仓库只 stash 不动历史。
+      const sha = entry?.sha ?? ""
+      if (!sha || !head || head === sha) {
+        if (!sha && head) {
+          result.skipped.push(rel)
+          log(`  ⚠ ${rel}: 基线为空仓库或仓库不在基线中,仅 stash 不回退历史`)
+        }
+        continue
+      }
+      const upstream = await git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => undefined)
+      if (upstream?.code === 0) {
+        result.skipped.push(rel)
+        log(`  ⚠ ${rel}: 检测到 upstream(${upstream.out.trim()}),跳过 reset 只 stash(分支历史可能已被引用)`)
+        continue
+      }
+      const reset = await git(root, ["reset", "--soft", sha])
+      if (reset.code !== 0) {
+        result.failures.push({ rel, error: `git reset --soft ${sha} 退出码 ${reset.code}(${firstLine(reset.err || reset.out)})` })
+        continue
+      }
+      result.resets.push(rel)
+      if (await hasChanges(root)) {
+        const stashed = await git(root, ["stash", "push", "-u", "-m", `${message} (reset)`, "--", "."])
+        if (stashed.code !== 0) {
+          result.failures.push({ rel, error: `git stash(reset 收回)退出码 ${stashed.code}(${firstLine(stashed.err || stashed.out)})` })
+          continue
+        }
+        result.stashes++
+      }
+      log(`  ↻ ${rel}: 已回滚到基线 ${sha}`)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error)
+      result.failures.push({ rel, error: firstLine(text) })
+    }
+  }
+  result.ok = result.failures.length === 0
+  return result
 }
 
 // 单元启动门禁结果: ok = 基线已记录(baseline 为 undefined 表示门禁关闭——
