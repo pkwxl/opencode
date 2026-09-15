@@ -794,6 +794,8 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
     expect(text).toContain("将由 driver 执行")
     expect(text).not.toContain("并行执行")
     expect(text).toContain("不依赖本次测试结果")
+    // 未完成事项必须随交接带走: 否则新会话无从知晓,会被当成已完成而永久遗漏
+    expect(text).toContain("还没做完的事")
     expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("写完立即结束会话")
     // 状态行(中断恢复 F1): driver 凭它分辨"写完了"与"driver 死在会话写文件途中的半截文件"

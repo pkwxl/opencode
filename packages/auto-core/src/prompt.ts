@@ -105,6 +105,9 @@ export function renderTestResult(run: TestRunInfo): string {
 // (现场实证);只陈述"需要交接并切换新会话"这一事实。同样不写"不要改源码":
 // 顺序态下会话收尾的改动本就会一并落进提交 #2 并被测试覆盖,说了反而提示它这是
 // 个可以自由裁量的边界。
+// 文档内容的清单里另有一条"本执行范围内还没做完的事": 第 1 步要求把不依赖测试
+// 结果的剩余工作做完,但会话并不总能做完(它也不知道自己为什么要交接);没列出来
+// 的剩余工作在交接处静默消失——新会话读不到、也不知道有,会当成已完成而永久遗漏。
 // 入参只有交接文档路径——此刻测试尚未出结果,退出码/输出都还不存在。
 export function renderTestWrapup(info: { handoffFile: string }): string {
   return renderPrompt("test-wrapup", { handoffFile: info.handoffFile })
