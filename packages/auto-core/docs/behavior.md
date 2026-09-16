@@ -425,7 +425,7 @@
   handoff-steer/final-task/phase-plan/phase-handover/number-recovery)覆盖时校验关键协议内容
   (`结论: 通过|差距|重验`、`.auto/verify.md`、交接四小节标题、`.auto/next-task` 等),
   缺失即退出码 1。改提示词文案只动模板文件,不动 src/prompt.ts
-  (那里只做数据组装);改后必须跑 test/prompt.test.ts 防协议行漂移。
+  (那里只做数据组装);改后必须跑 test/prompt-*.test.ts 防协议行漂移。
 - `-m/--mode` 模式层:提示词级场景引导,不影响 driver 调度状态机——ModeSpec 三段
   文案(init 导语 / exec 执行注记 / final 终审各阶段侧重,文件模板管理:内置
   templates/modes/ + 目标目录 .opencode/auto/modes/,见 src/mode.ts)注入
