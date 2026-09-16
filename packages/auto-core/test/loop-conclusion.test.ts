@@ -10,7 +10,7 @@ import {
   roundResolveLines,
   taskEndLines,
   taskResolveLines,
-} from "../src/loop"
+} from "../src/conclusion"
 import { recordDecisions, recordResolves, type ResolveItem } from "../src/resolve"
 import {
   flushStats,

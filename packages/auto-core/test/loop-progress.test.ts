@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Interactive } from "../src/interactive"
-import { subtaskProgressLine, waitBetweenTasks } from "../src/loop"
+import { subtaskProgressLine, waitBetweenTasks } from "../src/loop-progress"
 import { flushStats, loadStats, setStatsClock, statsTask, statsTotals } from "../src/stats"
 
 // T-002: loop 生命周期接线 —— 进度心跳(trackSubtasks → subtaskProgressLine)改读
