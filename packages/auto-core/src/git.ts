@@ -34,8 +34,22 @@ function message(subject: string, task: { id: string }, stage: string, nested: {
 
 // 提交标题(即会话标题,短标签方案 `T-NNN <label> <标题/子任务>`,见 runner.ts):
 // 超过 100 字截断,git 标题行与会话列表都保持可读。
+const TITLE_MAX = 100
+
 export function commitTitle(subject: string): string {
-  return subject.length > 100 ? `${subject.slice(0, 100)}…` : subject
+  return subject.length > TITLE_MAX ? `${subject.slice(0, TITLE_MAX)}…` : subject
+}
+
+// 带后缀的提交标题: 主体(执行单元标题,可能很长)+ 后缀(如 `测试交接 #2 定版`)。
+// 超长时截的是**主体**——后缀才是区分同一单元多次提交的唯一信息,交给 commitTitle
+// 从尾部截会把 `#n`/`定版` 削掉,同一子任务的几次交接提交就此变得无法区分。
+export function suffixedTitle(base: string, suffix: string): string {
+  // fit = 主体不截断时的可用长度(留一格分隔空格);再截时还要留一格省略号。
+  const fit = TITLE_MAX - suffix.length - 1
+  if (base.length <= fit) return `${base} ${suffix}`
+  // 后缀本身就吃满了预算(不该发生): 退回统一截断,至少不产出超长标题。
+  if (fit - 1 <= 0) return commitTitle(`${base} ${suffix}`)
+  return `${base.slice(0, fit - 1)}… ${suffix}`
 }
 
 // 统一提交结果(commit-boundary-design.md P1): ok=false 时 failures 列出提交

@@ -46,7 +46,7 @@ if (failed && test.handover && used >= test.limit) { …要求写交接文档…
   ├─ testHandoverDue(test, used) == false ──► executeTest → steer test-result → 同会话继续
   │
   └─ true(上下文达上限)
-       ① afterSession 提交 #1   stage `<单元> handoff-<n>-pin`   subject `T-NNN 测试交接 #n 定版`
+       ① afterSession 提交 #1   stage `<单元> handoff-<n>-pin`   subject `<单元提交标题> 测试交接 #n 定版`
        ② test.running = executeTest(...)        ← 不 await
        ③ steer test-wrapup(落盘剩余工作 + 写交接文档 + 结束会话)
        …会话收尾中,测试并发跑…
@@ -186,7 +186,7 @@ E2 的开关正是为赶时间时换回并发准备的。
        …会话收尾中,没有任何并发写…
        ④ 并发态才做: trackedSourceChanges 非空 → 打一行漂移告警(必须在 ⑥ 之前)
        ⑤ rename testhandoff.md → testhandoff-<n>.md
-       ⑥ afterSession 提交 #2   stage `<单元> handoff-<n>`      subject `T-NNN 测试交接 #n`
+       ⑥ afterSession 提交 #2   stage `<单元> handoff-<n>`      subject `<单元提交标题> 测试交接 #n`
        ⑦ runTestScript(test.pending):**被测的就是提交 #2 的树**
        ⑧ 新会话:任务提示词 + test-continue(先读归档交接文档,再判读那次测试的结果)
 ```
@@ -194,6 +194,14 @@ E2 的开关正是为赶时间时换回并发准备的。
 ② 必须在定版那一刻消费标记:标记留到收尾之后,会话若重写它,driver 就会跑错脚本;内联形态也
 要与定版提交同一时刻物化。执行与「定出脚本」因此拆成 `resolveTestScript` / `runTestScript` 两半,
 `executeTest` 退化为两者的串联。
+
+交接提交的标题主体取**本执行单元自己的提交标题**(子任务 `T-NNN S<n> <子任务标题>`、
+整任务 `T-NNN exec <标题>`、修复轮 `T-NNN fix<n> <标题>`),与该单元完成时的提交同题,
+git 历史里一眼看得出这几次中间提交属于哪个子任务。标题超长时截的是**主体**而非后缀
+(`suffixedTitle`)——`#n` 与「定版」才是区分同一单元多次交接提交的唯一信息,交给
+`commitTitle` 从尾部截会把它们削掉。交接相关的日志行同理带 `T-NNN S<n>` 短标签:这些行
+大多发生在会话横幅之外(定版、收口、恢复判定,以及顺序态下在会话结束之后才跑的测试脚本),
+只打任务编号看不出归属哪个子任务。
 
 ### H.4 文案
 

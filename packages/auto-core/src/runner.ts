@@ -6,7 +6,7 @@ import type { Interactive } from "./interactive"
 import { archivedTestHandoff, latestHandoffSeq, legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
-import { baselineIntact, beginUnit, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, restoreFile, rollbackUnit, trackedSourceChanges, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
+import { baselineIntact, beginUnit, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
 import { forgetHandover, handoffComplete, handoffStatus, handoverStage, peekHandover, recallHandover, saveHandover, type Handover } from "./handover"
 import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
 import type { ModeSpec } from "./mode"
@@ -2458,6 +2458,15 @@ type TestRun = {
   seq: number
   task: Task
   unit: string
+  // 交接提交的标题主体: 取本执行单元的提交标题(子任务为 `T-NNN S<n> <子任务标题>`,
+  // 整任务为 `T-NNN exec <标题>`,修复轮为 `T-NNN fix<n> <标题>`),交接提交在其后
+  // 缀 `测试交接 #<n>[ 定版]`——与该单元完成时的提交同题,git 历史里一眼看出这几次
+  // 中间提交属于哪个子任务。
+  subject: string
+  // 日志与终端用的短标签(`T-NNN S<n>` / `T-NNN`): 交接相关的日志行大多发生在会话
+  // 横幅之外(定版、收口、恢复判定、顺序态的脚本执行都在会话结束之后),只打任务
+  // 编号看不出是哪个子任务。
+  label: string
   handovers: number
   startUsed: number
   last?: TestRunInfo
@@ -2527,6 +2536,8 @@ async function runExecSession(
     seq: await latestTestSeq(tmp),
     task,
     unit,
+    subject: chain.subject ?? task.id,
+    label: subtask !== undefined ? `${task.id} S${subtask}` : task.id,
     handovers,
     startUsed: 0,
   }
@@ -2557,16 +2568,16 @@ async function runExecSession(
   if (stage === "wrapup" && record) {
     // H1 收尾未完成: 定版提交已落账、会话没写完交接文档就被打断。从定版那一刻的
     // 会话状态 fork 出新会话重做收尾——收尾之后照常走归档 → 提交 #2 → 跑脚本。
-    if (await seedPinFork(client, chain, record, `${task.id} 测试交接 #${record.n} 收尾`)) {
+    if (await seedPinFork(client, chain, record, `${test.label} 测试交接 #${record.n} 收尾`)) {
       if (record.script) test.pending = { script: record.script, seq: record.seq ?? ++test.seq }
       test.resumeWrapup = true
       firstPrompt = renderTestWrapup({ handoffFile: test.handoffFile })
-      log(`↻ ${task.id} 恢复中断: 测试交接 #${record.n} 定版已落账、收尾未完成,从定版点分叉会话重做收尾`)
+      log(`↻ ${test.label} 恢复中断: 测试交接 #${record.n} 定版已落账、收尾未完成,从定版点分叉会话重做收尾`)
     } else {
       // 定版会话已不可用: 收尾无从接续,丢掉在途记录冷启动重做本执行范围
       // (定版提交留在历史里,是一次无害的中间提交)。
       await forgetHandover(dir)
-      log(`↻ ${task.id} 恢复中断: 测试交接 #${record.n} 的定版会话已不可用,冷启动重做本执行范围`)
+      log(`↻ ${test.label} 恢复中断: 测试交接 #${record.n} 的定版会话已不可用,冷启动重做本执行范围`)
     }
   } else if (stage === "commit" || stage === "test") {
     // H2 交接已写完未收口 / H3 已收口: 补齐缺的那几步(补状态行 → 归档 → 提交 #2
@@ -2581,26 +2592,24 @@ async function runExecSession(
         archived = archivedTestHandoff(handoff, handovers)
         await archiveHandoff(dir, seeded, handoff, handovers)
       }
-      const committed = await afterSession(dir, opts, task, {
-        stage: `${unit} handoff-${handovers}`,
-        subject: `${task.id} 测试交接 #${handovers}`,
-      })
-      if (committed.type === "failed") return commitBlocked(`${task.id} 测试交接 #${handovers}`, committed)
-      log(`↻ ${task.id} 恢复中断: 交接文档 ${archived} 已写完但未收口,已补提交`)
+      const subject = suffixedTitle(test.subject, `测试交接 #${handovers}`)
+      const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${handovers}`, subject })
+      if (committed.type === "failed") return commitBlocked(subject, committed)
+      log(`↻ ${test.label} 恢复中断: 交接文档 ${archived} 已写完但未收口,已补提交`)
     } else {
-      log(`↻ ${task.id} 恢复中断: 测试交接 #${handovers} 已收口(${archived} 已落账)`)
+      log(`↻ ${test.label} 恢复中断: 测试交接 #${handovers} 已收口(${archived} 已落账)`)
     }
     // 脚本幂等(F6): 该跑就跑。记录里有定版时消费出来的脚本就跑它;记录缺失
     // (本机制上线前的存量现场)回落到 tmp/ 下最新一份执行快照;都没有就只凭
     // 交接文档续跑,不臆造测试结果。
     const script = record?.script ?? (await latestTestScript(tmp))
     if (script) {
-      log(`↻ ${task.id} 恢复中断: 重跑定版时待执行的测试脚本 ${script}`)
+      log(`↻ ${test.label} 恢复中断: 重跑定版时待执行的测试脚本 ${script}`)
       await runTestScript(test, opts, script)
     }
     // 续跑会话已经开过并被打断 → 从它分叉恢复,把那一轮已积累的上下文接回来。
-    if (record?.nextSession && (await seedSessionFork(client, chain, record.nextSession, `${task.id} 测试交接 #${handovers} 续跑`))) {
-      log(`↻ ${task.id} 恢复中断: 中断前的续跑会话 ${record.nextSession} 尚存,已分叉副本接回`)
+    if (record?.nextSession && (await seedSessionFork(client, chain, record.nextSession, `${test.label} 测试交接 #${handovers} 续跑`))) {
+      log(`↻ ${test.label} 恢复中断: 中断前的续跑会话 ${record.nextSession} 尚存,已分叉副本接回`)
     }
     continuation = true
     await saveHandover(dir, {
@@ -2642,7 +2651,7 @@ async function runExecSession(
       const drifted = await trackedSourceChanges(dir)
       if (drifted.length) {
         log(
-          `⚠ ${task.id} 并发态: 交接收尾期间改动了被测内容(${drifted.slice(0, 3).join(", ")}${drifted.length > 3 ? " 等" : ""}),` +
+          `⚠ ${test.label} 并发态: 交接收尾期间改动了被测内容(${drifted.slice(0, 3).join(", ")}${drifted.length > 3 ? " 等" : ""}),` +
             `本次测试跑的是定版快照,判读时以交接文档为准`,
         )
       }
@@ -2651,11 +2660,9 @@ async function runExecSession(
     await archiveHandoff(dir, handoff, handoff, handovers)
     // 提交 #2(交接确认): 会话收尾落盘的成果 + 归档交接文档一并落账。单元尚未
     // 收口,不传 baseline。
-    const committed = await afterSession(dir, opts, task, {
-      stage: `${unit} handoff-${handovers}`,
-      subject: `${task.id} 测试交接 #${handovers}`,
-    })
-    if (committed.type === "failed") return commitBlocked(`${task.id} 测试交接 #${handovers}`, committed)
+    const subject = suffixedTitle(test.subject, `测试交接 #${handovers}`)
+    const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${handovers}`, subject })
+    if (committed.type === "failed") return commitBlocked(subject, committed)
     // 顺序态(缺省,E1): 交接收口之后才执行——被测的就是提交 #2 的那一份树。脚本
     // 自身若改写了跟踪文件(如 rustfmt apply),留作未提交增量,由下一单元的提交吸纳。
     if (test.pending) {
@@ -2666,7 +2673,7 @@ async function runExecSession(
     // 收口完成: 在途记录进入"已收口"态——待跑脚本已消费、定版锚点作废,余下的
     // 身份信息只剩下一会儿要开的续跑会话(由 attempt 回填 nextSession)。
     await saveHandover(dir, { task: task.id, scope: handoff, unit, n: handovers })
-    log(`↻ ${task.id} 上下文达到上限,已交接 ${archived},新会话继续(第 ${handovers} 次测试交接)`)
+    log(`↻ ${test.label} 上下文达到上限,已交接 ${archived},新会话继续(第 ${handovers} 次测试交接)`)
     continuation = true
   }
 }
@@ -3539,7 +3546,7 @@ async function watch(
       testHandoverAsked = true
       const n = test!.handovers + 1
       log(
-        `⚠ 上下文已用 ${formatTokens(used > 0 ? used : test!.startUsed)} tokens 达到 ${formatTokens(test!.limit)} 上限,` +
+        `⚠ ${test!.label} 上下文已用 ${formatTokens(used > 0 ? used : test!.startUsed)} tokens 达到 ${formatTokens(test!.limit)} 上限,` +
           (switches.handoverConcurrent
             ? `提交定版后测试与会话收尾并发进行,要求写交接文档后换新会话`
             : `提交定版后先交接、再跑测试,要求写交接文档后换新会话`),
@@ -3549,12 +3556,10 @@ async function watch(
       // afterSession 而非裸 commitTree,使代答采集与引用订正落在定版之内——
       // 订正会改文件,必须先于测试启动,三者才是同一份快照。单元尚未收口,
       // 不传 baseline。
-      const pin = await afterSession(test!.dir, opts, test!.task, {
-        stage: `${test!.unit} handoff-${n}-pin`,
-        subject: `${test!.task.id} 测试交接 #${n} 定版`,
-      })
+      const pinSubject = suffixedTitle(test!.subject, `测试交接 #${n} 定版`)
+      const pin = await afterSession(test!.dir, opts, test!.task, { stage: `${test!.unit} handoff-${n}-pin`, subject: pinSubject })
       if (pin.type === "failed") {
-        return { type: "blocked", question: commitBlocked(`${test!.task.id} 测试交接 #${n} 定版`, pin).question }
+        return { type: "blocked", question: commitBlocked(pinSubject, pin).question }
       }
       // 顺序态(缺省): 只消费请求标记、把脚本定下来,执行推迟到交接收口之后
       // (runExecSession 的 test.pending),收尾期因此没有任何并发写。
@@ -3947,7 +3952,7 @@ async function runTestScript(test: TestRun, opts: Opts, script: string, seq = ++
   await mkdir(test.tmp, { recursive: true })
   const run = await runVerifyScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out })
   log(
-    `  ⚙ test 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,脚本: ${script},输出: ${out}`,
+    `  ⚙ ${test.label} test 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,脚本: ${script},输出: ${out}`,
   )
   const info: TestRunInfo = {
     script,

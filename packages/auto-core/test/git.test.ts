@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { baselineIntact, beginUnit, changedFiles, commitPending, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, restoreFile, rollbackUnit, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
+import { baselineIntact, beginUnit, changedFiles, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -592,5 +592,27 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("suffixedTitle(交接提交标题 = 单元标题 + 交接标记)", () => {
+  test("短标题原样拼接", () => {
+    expect(suffixedTitle("T-028 S3 参数确定主链族落码", "测试交接 #1 定版")).toBe("T-028 S3 参数确定主链族落码 测试交接 #1 定版")
+  })
+
+  test("超长时截主体、保后缀,总长不超过 commitTitle 的上限(不被二次截断)", () => {
+    const base = `T-028 S3 ${"标".repeat(120)}`
+    const title = suffixedTitle(base, "测试交接 #2 定版")
+    expect(title.endsWith("… 测试交接 #2 定版")).toBe(true)
+    expect(title.length).toBeLessThanOrEqual(100)
+    // 关键: #n 与"定版"是区分同一子任务多次交接提交的唯一信息,不能被截掉
+    expect(commitTitle(title)).toBe(title)
+  })
+
+  test("恰好卡在上限: 不截", () => {
+    const suffix = "测试交接 #1"
+    const base = "x".repeat(100 - suffix.length - 1)
+    expect(suffixedTitle(base, suffix)).toBe(`${base} ${suffix}`)
+    expect(suffixedTitle(base, suffix).length).toBe(100)
   })
 })
