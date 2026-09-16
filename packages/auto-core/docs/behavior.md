@@ -516,7 +516,11 @@
   边界经 persistStage 写 active=false 总结态,执行链会话经 attempt 在**提示词下发
   成功时即写 active=true**(认领在跑的会话——回合进行中被 kill/Ctrl+C 也不丢,此前
   只在回合结束后写会丢失认领),回合结束后按结果刷新;可重试的会话错误把记录还原为
-  下发前快照,被弃的 fork 副本不顶替真实恢复点。无阶段的一次性旁路会话(判定/审核/
+  下发前快照,被弃的 fork 副本不顶替真实恢复点。测试交接收场(testhandoff.md 写出
+  `状态: 继续`)是唯一不认领会话的成功出口——该会话任务已告完成,记录转「无会话
+  在途态」(active=true 而 session 缺失,链 id 同步清空),续跑会话出错退出后记录
+  不再指回交接之前的会话,重启复用经 .auto/handover.json 的 nextSession/定版锚点
+  接回交接之后的会话。无阶段的一次性旁路会话(判定/审核/
   脚本生成/修复规划/dryrun/fork 基点)不写;**阶段级旁路步骤**(phase-plan 规划 /
   phase-handover 交接蒸馏,phase.kind="step")经 requireArtifact 的 spec.step 同样
   写 active 记录,driver 收口(产物校验+提交+后处理)后经 closeStep 删除——见

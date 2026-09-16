@@ -277,7 +277,8 @@ export async function attempt(
     // 错误、非会话错误类阻塞与成功一律"晋升":chain.id 落在这一轮实际用过的会话
     // 上并刷新 progress.json(会话结束但阶段尚未推进时,保持 active——此刻中断
     // 按"半途未总结"复用本会话继续,无时间窗,恢复时只看会话是否存活;子任务间歇
-    // 的窗口由 pipeline 在勾选+提交后经 persistStage 主动收口为总结态)。
+    // 的窗口由 pipeline 在勾选+提交后经 persistStage 主动收口为总结态)。唯一例外
+    // 是测试交接收场——会话以交接文档收尾,任务已告完成,不认领(见下方分支)。
     if (result.error && result.retryable !== false) {
       chain.id = previousId
       chain.used = previousUsed
@@ -290,7 +291,22 @@ export async function attempt(
       }
     } else {
       chain.failed = undefined
-      await remember()
+      // 测试交接收场(testhandoff.md 写出 `状态: 继续`): 该会话的任务即告完成,作为
+      // 重启复用/重试分叉的锚点一并丢弃——链 id 清空(此后续跑会话出错,重试分叉源
+      // 只剩续跑谱系 chain.failed,不再可能 fork 回上下文已用满的定版前旧会话);
+      // progress 同步转「无会话在途态」: session 丢弃(下次运行无会话可复用,恢复经
+      // .auto/handover.json 的 nextSession/定版锚点接回交接**之后**的会话),active
+      // 保留(单元仍在途: 恢复续跑的 clean 豁免与交接文档保留依赖它)。此前的行为是
+      // 照常 remember() 认领定版会话——续跑会话随后遇可重试错误会把这份陈旧认领还原
+      // 成 progress.json,程序退出后再运行即复用/分叉到交接之前的会话(2026-09-16 修)。
+      if (result.testHandover) {
+        chain.id = undefined
+        if (opts.dir && chain.phase) {
+          await saveProgress(opts.dir, { task: task.id, session: undefined, at: Date.now(), active: true, phase: chain.phase })
+        }
+      } else {
+        await remember()
+      }
     }
     if (result.blocked) {
       // 严格恢复的测试交接写核失败(3.3): 折成 rollback 标记上抛,单元所有者

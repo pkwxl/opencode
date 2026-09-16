@@ -95,7 +95,10 @@ export type Phase =
 
 export type Progress = {
   task: string
-  // 执行链会话 ID;优雅退出后保留作诊断,但 active=false 使其不再被复用。
+  // 执行链会话 ID;优雅退出后保留作诊断,但 active=false 使其不再被复用。测试交接
+  // 收场写「无会话在途态」(active=true 而 session 缺失): 交出交接文档的会话任务
+  // 已完成、不得作重启复用对象,恢复经 .auto/handover.json 接回交接之后的会话
+  // (attempt 的 testHandover 分支)。
   session?: string
   at: number
   // true = 会话半途未总结(kill/崩溃/网络故障),恢复时会话存活即复用。

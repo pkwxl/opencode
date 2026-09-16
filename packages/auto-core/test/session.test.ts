@@ -5,14 +5,16 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { SessionChain } from "../src/chain"
 import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
+import { recallHandover, saveHandover } from "../src/handover"
 import type { Interactive } from "../src/interactive"
 import { recallProgress, saveProgress } from "../src/resume"
 import { retryDecision, runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
+import type { TestRun } from "../src/testrun"
 import { task, fakeClient, retryClient, type Outcome } from "./fixtures/runner"
 
 // ---- 会话链复用(OPENCODE_AUTO_REUSE_SESSION,缺省 off)----
@@ -267,6 +269,112 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 直接阻塞",
       const result = await runSession(client, task, "提示词", { dir }, chain, undefined, undefined, NO_WAIT)
       expect(result.type).toBe("blocked")
       expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_new_1")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---- 测试交接收场(2026-09-16 修): 交接之后的会话才是重启复用/重试分叉的对象 ----
+
+describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分叉锚点", () => {
+  const NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0" })
+
+  // 驱动一次完整的测试交接(--handover-test 顺序态): 上下文超限 + AI 请求测试(tmp/
+  // test.sh)→ 定版 + 收尾 steer → AI 写出交接文档(状态: 继续)→ 会话以 testHandover
+  // 收场。替 AI 落盘的两步写在事件流生成器里,与真实链路同一批事件驱动 watch。
+  const handoverStream =
+    (tmp: string, handoffFile: string) =>
+    (sid: string): AsyncIterable<unknown> =>
+      (async function* () {
+        const msg = (id: string, input: number) => ({
+          type: "message.updated",
+          properties: {
+            info: {
+              id,
+              sessionID: sid,
+              role: "assistant",
+              time: { completed: Date.now() },
+              tokens: { input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              providerID: "zai",
+              modelID: "glm",
+            },
+          },
+        })
+        yield msg("m_limit", 2000)
+        await Bun.write(join(tmp, "test.sh"), "echo ok")
+        yield { type: "session.idle", properties: { sessionID: sid } }
+        await Bun.write(handoffFile, "# 交接\n\n状态: 继续\n")
+        yield msg("m_wrapup", 2100)
+        yield { type: "session.idle", properties: { sessionID: sid } }
+      })()
+
+  const makeDir = async (prefix: string) => {
+    const dir = await mkdtemp(join(tmpdir(), prefix))
+    const tmp = join(dir, "tmp")
+    const handoffFile = join(dir, "docs", "T-001", "S01", "testhandoff.md")
+    return { dir, tmp, handoffFile }
+  }
+
+  const makeTest = (dir: string, tmp: string, handoffFile: string): TestRun => ({
+    dir,
+    tmp,
+    handoffFile,
+    handover: true,
+    limit: 1000,
+    seq: 0,
+    task,
+    unit: "subtask 1",
+    subject: "T-001 S1 示例任务",
+    label: "T-001 S1",
+    handovers: 0,
+    startUsed: 0,
+  })
+
+  test("交接收场不认领定版会话: progress 转无会话在途态、chain.id 清空", async () => {
+    const { dir, tmp, handoffFile } = await makeDir("auto-handover-end-")
+    try {
+      const { client } = fakeClient({ events: handoverStream(tmp, handoffFile) })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
+      const result = await runSession(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect(result.type).toBe("idle")
+      expect((result as { testHandover?: boolean }).testHandover).toBe(true)
+      // 定版会话(本会话 ses_new_1)的任务已告完成: 链与记录都不再认领它。active 保留
+      // (单元在途: 恢复续跑的 clean 豁免与交接文档保留依赖它),session 缺失 = 无会话
+      // 可复用,恢复只能经 handover.json 的 nextSession/定版锚点接回交接之后的会话。
+      expect(chain.id).toBeUndefined()
+      expect(await recallProgress(dir, "T-001")).toMatchObject({ task: "T-001", session: undefined, active: true, phase: { kind: "subtasks", index: 1 } })
+      // 定版锚点照常在册(收尾未完成的中断恢复据此分叉)。
+      expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ pinSession: "ses_new_1", pinMessage: "m_limit" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("续跑会话遇可重试错误退出: 记录仍不认领旧会话,重启复用对象 = 之后的会话", async () => {
+    const { dir, tmp, handoffFile } = await makeDir("auto-handover-retry-")
+    try {
+      // 第一段: 走完一次测试交接,收场丢弃定版会话(同上一用例)。
+      const pin = fakeClient({ events: handoverStream(tmp, handoffFile) })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
+      const handedOver = await runSession(pin.client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect((handedOver as { testHandover?: boolean }).testHandover).toBe(true)
+      // 模拟 runExecSession 的交接收口(归档 + 提交 #2 + 跑脚本后,在途记录转已收口
+      // 态: 脚本与定版锚点作废,待 attempt 回填 nextSession)。
+      await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1 })
+      // 第二段: 续跑会话三轮全部可重试失败(纯报错桩、无上下文)→ 阶梯耗尽阻塞退出。
+      const retry = retryClient(["error-retryable", "error-retryable", "error-retryable"])
+      const outcome = await runSession(retry.client, task, "续跑提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect(outcome.type).toBe("blocked")
+      expect((outcome as { question: string }).question).toContain("会话错误:")
+      // 重试分叉源不含定版会话(修复前: chain.id 被还原为定版会话,凭满额上下文成为
+      // 首选分叉源,把续跑提示词 fork 回交接之前的会话)。
+      expect(retry.calls.forks).toEqual([])
+      // 退出后 progress 仍是无会话在途态——重启复用不再可能落回交接之前的会话。
+      expect(await recallProgress(dir, "T-001")).toMatchObject({ session: undefined, active: true })
+      // 在途交接记录认领的是续跑会话(每次尝试回填,末次为 ses_new_3): 重启复用经
+      // 它分叉接回,对象 = 交接之后的会话。
+      expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_new_3" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
