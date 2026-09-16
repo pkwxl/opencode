@@ -23,6 +23,9 @@ export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; 
 // human intervention.
 export const FIX_ROUNDS = 3
 
+// 判定会话替换脚本的重验轮数上限(独立于修复轮预算)。
+export const REVERIFY_ROUNDS = 3
+
 // 完成条件门禁(commit-boundary-design.md P2): 返回 SessionCommit——统一提交
 // 失败或(baseline 给出时)单元收口校验不通过 → failed,调用方按"不视为完成"
 // 阻塞停机待人工;无 dir / 门禁关闭 → ok(旧行为)。baseline 仅在单元收口调用点
