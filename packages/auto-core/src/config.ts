@@ -8,7 +8,7 @@ import { chmod } from "node:fs/promises"
 import { isAbsolute, join } from "node:path"
 import { loadModes } from "./mode"
 import { parsePhases } from "./phases"
-import type { SubtaskMode } from "./runner"
+import type { SubtaskMode } from "./opts"
 
 export type ProjectConfig = {
   // 须为 loadModes(dir) 已注册名。

@@ -1,7 +1,8 @@
 # 大文件拆分方案(runner.ts / loop.ts 按职责切模块)
 
-**状态**: 立项 2026-09-16(auto-core 分支)。分步实施,每步一个提交,新会话从本文件 §H 勾选表继续。
-**基线提交**: `f50cd615b`(本文所有行号以该提交为准;每步落地后行号会漂移,**定位一律按符号名 grep,不要照抄行号**)。
+**状态**: 实施中(auto-core 分支)。**S1 已完成(2026-09-16)**,下一步 **S2 `src/chain.ts`**。每步一个提交,新会话从本文件 §H 勾选表继续。
+**基线提交**: `f50cd615b`(§D.1/§E 表中的行号以该提交为准;**每步落地后行号已漂移,定位一律按符号名 grep,不要照抄行号**)。
+**当前进度**: `src/runner.ts` 4064 → 3964 行;新增 `src/opts.ts` 112 行。`bun test` 771 pass / 0 fail(与基线同),`packages/auto` 零改动通过 typecheck。
 
 ## A 事实基线(2026-09-16 实测)
 
@@ -228,7 +229,7 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 
 **runner.ts(S1–S12)**
 
-- [ ] **S1** `src/opts.ts` — 纯类型与常量,零运行时依赖,先走通验证最省事。
+- [x] **S1** `src/opts.ts` — 纯类型与常量,零运行时依赖,先走通验证最省事。**已完成 2026-09-16**(提交见 git log `refactor(auto-core): 拆出 src/opts.ts`):`Outcome` `UnitStop` `SessionCommit` `SubtaskMode` `PermissionMode` `Opts` `FIX_ROUNDS` `DEFAULT_CONTEXT_LIMIT` 迁出;`config/final/implement/knowledge/numbering/loop` 六个包内调用方已改精确导入;`runner.ts` 末尾留兼容再导出。实测:runner.ts −100 行、opts.ts 112 行,771 pass 不变,`packages/auto` 零改动。
 - [ ] **S2** `src/chain.ts` — 会话链类型 + 模型路由求值 + 错误归类。
 - [ ] **S3** `src/unit-commit.ts` — 单元提交与回滚;同步改 `knowledge.ts`(`afterSession`)为精确导入。
 - [ ] **S4** `src/resume-gate.ts` — 恢复点单元归属门禁 + 阶段/中断文案。
@@ -257,6 +258,60 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 **收尾(S20)**
 
 - [ ] **S20** 按 §G.3 清理文档行号锚;根 `AGENTS.md` 的「进行中的方案」改记完成;`cd ../auto && bun typecheck` 确认壳包零改动;壳分支按仓库约定 `git merge auto-core` 刷新快照。
+
+## H.1 施工手册(S1 实测跑通,后续步骤照此执行)
+
+每步的机械流程,新会话直接按此照做:
+
+1. **定位**:按符号名 grep,不要用 §D.1 表里的基线行号(已漂移)。
+   `grep -n '^export type X\|^function X\|^const X' src/runner.ts`
+2. **抽取**:用一段 python 按行区间**逐字**切出到新文件,不要手敲重录——手敲必然改标点。
+   ```python
+   src = open("src/runner.ts").read().split("\n")
+   seg = lambda a, b: "\n".join(src[a-1:b])   # 1-indexed inclusive
+   ```
+   新文件头部写 3–4 行职责说明 + `拆分自 src/runner.ts(docs/module-split-plan.md S<n>,纯搬运)`,再跟 import。
+3. **删除**:同一段 python 按区间删 runner.ts,**区间末尾多带一行**把符号后的空行一并收掉,否则留下连续空行。
+4. **接线**:runner.ts 顶部加 `import { … } from "./<新模块>"`(保留仍在用的符号),末尾兼容再导出块追加一行。
+5. **`bun typecheck`** —— 先只跑它,快且能立刻暴露漏搬的符号。
+6. **改包内调用方**:`grep -n 'from "./runner"' src/*.ts`,把本步迁走的符号改为从新模块精确导入(§C)。**壳包 `packages/auto` 一律不动**,靠再导出兜住。
+7. **`bun test`** —— 数字必须等于上一步的基线(S1 后为 **771 pass / 0 fail**),少一个就是搬丢了测试。
+8. **逐字校验**(§J 第一行风险的实做手段):
+   ```bash
+   git diff src/runner.ts | grep '^-' | grep -v '^---' | sed 's/^-//' | grep -v '^$' > /tmp/removed.txt
+   tail -n +<新文件头部行数+1> src/<新模块>.ts | grep -v '^$' > /tmp/moved.txt
+   diff /tmp/removed.txt /tmp/moved.txt
+   ```
+   差异只应是本步**有意**的改动(见下 §H.2);其余任何一行差异都是搬运事故。
+9. **`docs/structure.md`**:插一条新 bullet(位置紧邻 `src/runner.ts` 那条)。
+10. **提交**:`refactor(auto-core): 拆出 src/<模块>.ts`,正文写清迁了哪些符号、哪些调用方改了精确导入、实测行数与测试数。
+
+### H.2 S1 踩到的三个点(后续步骤会重复遇到)
+
+- **模块私有常量要加 `export`**:`FIX_ROUNDS` / `DEFAULT_CONTEXT_LIMIT` 原是 `const`,迁出后必须导出。这是搬运中**唯一允许**的正文改动,逐字校验时把它规范化掉再比:
+  `sed 's/^export const FIX_ROUNDS/const FIX_ROUNDS/'`。
+- **注释块可能跨符号**:`SessionCommit` 头上那段长注释,前几段讲的是 `afterSession`、最后一段才讲 `SessionCommit`。处置口径:**按段落把每段跟着它描述的符号走,措辞一字不改**;原本用来分段的那行孤立 `//` 随之删掉(S1 里删的就是它,也是逐字校验唯一的一行差异)。
+- **`docs/structure.md` 多数步骤是"加条目"而非"挪文字"**:`src/runner.ts` 那条 15750 字符的 bullet 讲的是流水线**行为**(行为留在 runner.ts),没有可整段excise 的"类型定义"文字。别为了凑 §G.1 的"拆成 13 条"硬搬——**只有讲的是被迁走的那段机制时才搬文字**,否则新写一条。
+
+### H.3 下一步(S2 `src/chain.ts`)的现成坐标
+
+当前 HEAD 下的符号位置(仍需自行 grep 复核):
+
+| 符号 | 行 | 备注 |
+|---|---|---|
+| `Watch` | 242 | 模块私有 `type`,迁出需加 `export`(watch.ts/session.ts 都要用) |
+| `SessionResult` | 286 | 同上,模块私有 |
+| `SessionChain` | 315 | 已导出 |
+| `FailedSession` | 322 | 已导出 |
+| `phaseToRole` / `roleOf` / `resolveModel` / `splitModel` | 328 / 362 / 369 / 375 | 已导出 |
+| `ErrorClass` / `ErrorInfo` | 383 / 388 | 已导出 |
+| 归类正则 + `QUOTA_STATUS` / `RATE_ATTEMPTS` / `RATE_WAIT_MS` | 399–415 | 模块私有,`classifySessionError` 独用,不必导出 |
+| `classifySessionError` | 417 | 已导出 |
+| `REUSE_BELOW` / `REUSE_IDLE_MS` / `REUSE_IDLE_MINUTES` | 430 / 435 / 436 | 模块私有,`attempt`(→ S8 session.ts)要用,迁出需加 `export` |
+| `ForkBaseInfo` | 1374 | **不连续**——在文件另一处,别漏 |
+
+`chain.ts` 需要的 import:`Phase`(./resume)、`ModelLetter` `ModelPolicy` `ModelRole`(./switches)、`UnitBaseline`(./git)、`Usage`(./stats,`Watch` 用)、`Part`(@opencode-ai/sdk/v2,若 `Watch`/`SessionResult` 引用)——以 `tsgo` 报错为准补齐。
+`UnitRerunCtx`(444)属 **S4** `resume-gate.ts`,夹在 S2 区间附近,注意别顺手带走。
 
 ## I 决策记录
 

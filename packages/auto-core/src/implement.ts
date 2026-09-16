@@ -14,7 +14,8 @@ import { load } from "./plan"
 import { renderPlanScaffold } from "./phases"
 import { renderImplementPlan } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
-import { requireArtifact, type Opts, type PermissionMode } from "./runner"
+import type { Opts, PermissionMode } from "./opts"
+import { requireArtifact } from "./runner"
 import { manage } from "./server"
 
 export async function implementPlan(

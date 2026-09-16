@@ -32,7 +32,8 @@ import { renderDryrun, renderPhaseHandover, renderPhasePlan, stageText } from ".
 import { allowWrite, protect, reprotect, unprotect } from "./protect"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
 import { closeStep, openStep, peekProgress, recallProgress } from "./resume"
-import { requireArtifact, restoreTestHandoffs, runOnce, runTask, type PermissionMode, type SubtaskMode } from "./runner"
+import type { PermissionMode, SubtaskMode } from "./opts"
+import { requireArtifact, restoreTestHandoffs, runOnce, runTask } from "./runner"
 import { shellProfile } from "./shell"
 import { manage, type ServerHandle } from "./server"
 import {
