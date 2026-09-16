@@ -1,19 +1,18 @@
 import { rm } from "node:fs/promises"
-import { dirname, join, relative, resolve } from "node:path"
+import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import type { Interactive } from "./interactive"
-import { classifySessionError, phaseToRole, resolveModel, roleOf, splitModel, REUSE_BELOW, REUSE_IDLE_MINUTES, REUSE_IDLE_MS, type ErrorInfo, type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
+import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { writeCurrent, removeCurrent } from "./current"
-import { afterSession, autoAnswer, commitBlocked, gatedAutoCorrectRefs, gatedTaskRefGap, resumeModelNow, rollbackUnitState, strictResumeActive, wrapupResolves } from "./unit-commit"
+import { afterSession, commitBlocked, gatedTaskRefGap, resumeModelNow, rollbackUnitState, strictResumeActive, wrapupResolves } from "./unit-commit"
 import { archivedTestHandoff, latestHandoffSeq, legacySubtaskTestHandoff, legacyTaskDoc, resolveSubtaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
-import { consumeFailback, failbackApplies, failbackOverride, setSticky, stickyModel } from "./failback"
-import { baselineIntact, beginUnit, commitTitle, commitTree, fileCommitted, suffixedTitle, trackedSourceChanges, unitBaseline, type UnitBaseline } from "./git"
+import { consumeFailback, failbackApplies } from "./failback"
+import { baselineIntact, beginUnit, commitTree, fileCommitted, suffixedTitle, trackedSourceChanges, unitBaseline, type UnitBaseline } from "./git"
 import { forgetHandover, handoffStatus, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
-import { autobanner, formatCost, formatDurationCompact, formatUsageLine, log, subbanner, vlog } from "./log"
-import { DEFAULT_CONTEXT_LIMIT, FIX_ROUNDS, REVERIFY_ROUNDS, type Opts, type Outcome, type PermissionMode, type SubtaskMode, type UnitStop } from "./opts"
-import { firstLine, interruptionRemark, phaseText, resumeNote, unitReruns } from "./resume-gate"
-import { currentRound } from "./phases"
+import { autobanner, log, subbanner } from "./log"
+import { DEFAULT_CONTEXT_LIMIT, FIX_ROUNDS, REVERIFY_ROUNDS, type Opts, type Outcome, type UnitStop } from "./opts"
+import { interruptionRemark, phaseText, resumeNote, unitReruns } from "./resume-gate"
+import { ensureForkBase, runSession } from "./session"
 import {
   appendSubtasks,
   begin,
@@ -32,7 +31,6 @@ import {
 } from "./plan"
 import {
   handoffFile,
-  renderContextBase,
   renderDecompose,
   renderFix,
   renderReview,
@@ -51,12 +49,9 @@ import {
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
-import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
-import { askHuman, contextLimits, forkSession, formatClientError, formatTokens, missingAgentHint, renameSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed, zeroUsage } from "./session-api"
-import { statsSessionBegin, statsSessionEnd, type Usage } from "./stats"
-import { createStuckTracker } from "./stuck"
-import { autoSwitches, SWITCH_ENV, type ModelRole, type Switches } from "./switches"
+import { forkSession, formatTokens, renameSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "./session-api"
+import { autoSwitches, type ModelRole, type Switches } from "./switches"
 import { stepPause } from "./step"
 import {
   archiveHandoff,
@@ -68,16 +63,13 @@ import {
   latestTestSeq,
   removeHandoffChain,
   restoreTestHandoffs,
-  resolveTestScript,
   runTestScript,
   TEST_HANDOVER_ADVISORY,
   testHandoffExists,
-  testHandoverDue,
   type Steer,
   type TestRun,
 } from "./testrun"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
-import { watch } from "./watch"
 
 // 会话耗时显示用紧凑式时长: 已收口至 src/log.ts 的 formatDurationCompact
 // (STATS_PLAN §5,T-001 上收、本任务删本处私有副本并改 import)。
@@ -808,51 +800,6 @@ async function ensureUnderstood(
       `\n\n你上次结束会话但未写出有效的 ${file}(缺失或为空)。这是硬性要求:` +
       `把理解结果按四节结构写入该文件后再结束会话(即使任务看起来很简单)。`
   }
-}
-
-// fork 基点确立(fork-decompose 设计 §4.2): 返回生效基点,undefined = 冷启动。
-// digest 模式读 context.md 全文,经一次性链(subject `T-NNN ctxbase …`,不带
-// phase、不写进度记录;确认 turn 无工作区改动、commitTree 自然零提交)重建基点
-// 会话——前缀确定性 = 摘要全文,provider 缓存友好;每次运行无条件重建并覆写
-// fork-base(基点是每次运行重建的易失指针,旧基点会话自然沉没)。回退链:
-// digest 建立失败 → session 基点(PLAN.md 持久字段,校验存活,失效回退冷启动)
-// → 冷启动。session 模式基点跨运行持久,用量经 messages 末条消息重建(近似
-// 即可;同次运行且基点即链上会话时直接取跟踪值)。
-export async function ensureForkBase(
-  client: OpencodeClient,
-  plan: Plan,
-  task: Task,
-  opts: Opts,
-  chain: SessionChain,
-  switches: Switches = autoSwitches(),
-): Promise<ForkBaseInfo | undefined> {
-  if (!switches.fork) return undefined
-  const dir = opts.dir ?? dirname(plan.path)
-  if (switches.forkBase === "digest") {
-    const digest = (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "context"))).text().catch(() => "")).trim()
-    if (digest) {
-      const subject = `${task.id} ctxbase ${task.title}`
-      const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
-      const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
-      if (result.type === "idle" && base.id) {
-        await setForkBase(plan.path, task.id, base.id)
-        log(`⑂ ${task.id} digest 基点就绪: 会话 ${base.id}(摘要前缀 ${formatTokens(base.used)} tokens)`)
-        return { id: base.id, used: base.used }
-      }
-      log(`↻ ${task.id} digest 基点会话未建立${result.type === "blocked" ? `(${firstLine(result.question)})` : ""},回退 session 基点`)
-    } else {
-      log(`↻ ${task.id} 缺少 ${taskDoc(task.id, "context")} 摘要,digest 基点不可建立,回退 session 基点`)
-    }
-  }
-  if (task.forkBase) {
-    if (await sessionAlive(client, task.forkBase)) {
-      const used = task.forkBase === chain.id ? chain.used : await sessionUsed(client, task.forkBase)
-      log(`⑂ ${task.id} session 基点就绪: 会话 ${task.forkBase}(${formatTokens(used)} tokens)`)
-      return { id: task.forkBase, used }
-    }
-    log(`↻ ${task.id} session 基点 ${task.forkBase} 已失效,回退冷启动`)
-  }
-  return undefined
 }
 
 // Ensures the task body has a checklist: tasks resuming with one (or with a
@@ -1640,13 +1587,6 @@ function parseVerdict(text: string): Verdict | undefined {
   return gap.startsWith("重验") ? { type: "reverify", gap: gap.replace(/^重验[:：]?\s*/, "").trim() } : { type: "gap", gap }
 }
 
-// Runs one prompt on the session chain (reusing the previous session when its
-// context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
-// provider failures (session.error, e.g. malformed reasoning content from a
-// gateway) are retried in a fresh session before blocking; network/server
-// failures (Internal network failure / Network error 等) additionally restart
-// the spawned opencode server before the retry.
-
 // 执行类会话(子任务/整任务/修复轮)的统一入口: --test-by-driver 未启用时直通
 // runSession;启用时包装测试交接循环——会话因测试失败且上下文达上限交结束后,
 // 以 continuation 提示(先读交接文档与最近输出)开新会话续跑,直至会话自然完成。
@@ -1868,546 +1808,6 @@ async function seedSessionFork(client: OpencodeClient, chain: SessionChain, sess
   return true
 }
 
-// 会话错误中属于网络/服务故障的特征串;命中时先重启 server(外部 server 除外)
-// 再换新会话重试,避免对着同一坏实例反复失败。
-const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
-
-// 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启);导出供
-// src/final.ts 的终审任务生成会话等旁路复用。test 为 --test-by-driver 的协议
-// 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效);
-// switches 缺省取 OPENCODE_AUTO_* 解析值(复用开关),注入供单测。
-export async function runSession(
-  client: OpencodeClient,
-  task: Task,
-  promptText: string,
-  opts: Opts,
-  chain: SessionChain,
-  steer?: Steer,
-  test?: TestRun,
-  switches: Switches = autoSwitches(),
-): Promise<SessionResult> {
-  // 配额降级候选跟踪(设计 D.3/D.4):整条会话链共享——每个模型候选各享一轮完整的
-  // 重试阶梯(i 在切换候选时重置为 1),总上限 = 候选数 × 阶梯长度,降级计数与
-  // 阶梯计数分离、互不掩盖。tried 记录本链已试过的候选串(有序,供耗尽文案与去重
-  // 再选);clipped 记录因上下文窗口不足被跳过的候选(供耗尽文案与去重日志);limits
-  // 惰性取一次 contextLimits 并缓存(降级判定只读上下文窗口,容错空映射)。
-  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const tried: string[] = []
-  const clipped: string[] = []
-  let limits: Map<string, number> | undefined
-  // 重试阶梯(OPENCODE_AUTO_RETRY_WAITS,缺省 0,1,2,4,8): waits 的每个元素是该次
-  // 重试前的等待分钟数,元素个数即重试次数上限。首次重试立即——瞬时抖动确实会在
-  // 下一回合就恢复(DB 里有「尝试 1 静默 300s 被中止、尝试 2 成功」的实例);其后
-  // 按分钟级退避。
-  //
-  // 为什么退避从分钟起步、而不是从秒开始翻倍: 退避本身不是恢复手段。opencode 内层
-  // 每次故障已经用掉 6×300s 超时 + 2+4+8+16+30s 退避 ≈ 1860s(实测 1862s),外层再叠
-  // 一条秒级曲线只占其中零头,改变不了下一次请求的命运。分钟级等待的唯一意义是
-  // 「跨过一段上游退化」,而实测退化以小时计(6 次致命错误挤在最后 18 小时,每个
-  // 致命会话死前已有 2–6 个 ≥250s 的步骤)——所以阶梯必然有耗尽的一天,耗尽后的
-  // 出路是人工裁决,不是继续加码次数。
-  const waits = switches.retryWaits
-  let i = 1
-  // 有效降级候选环: /failback 带参重定义过模型序时用其覆写环,否则取 switches 的
-  // OPENCODE_AUTO_MODEL_FALLBACK 解析结果(switches memo 恒定,覆写经 failback 模块态
-  // 承载)。降级触发门禁与 switchModel 的候选遍历共用同一来源。
-  const fallbackRing = () => failbackOverride()?.fallback ?? switches.model.fallback
-  // 候选降级的公共动作(两个触发面共用:下面的配额降级支、阶梯耗尽后的人工回落):
-  // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选,换 chain.model、挂一次性
-  // 降级 note、fork 副本带上下文随迁,并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
-  // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方按各自文案阻塞)。
-  // why 为触发原因的中文短语,进日志与降级 note。
-  const switchModel = async (why: string): Promise<boolean> => {
-    limits ??= await contextLimits(client)
-    const fallback = fallbackRing()
-    // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
-    // 更糟);窗口未知(不在映射)不过滤。
-    let candidate: string | undefined
-    for (const c of fallback) {
-      if (tried.includes(c)) continue
-      const limit = limits.get(c)
-      if (limit !== undefined && limit < cap) {
-        if (!clipped.includes(c)) {
-          clipped.push(c)
-          log(`⇄ ${task.id} 跳过候选 ${c}:上下文窗口 ${formatTokens(limit)} < 链需求 ${formatTokens(cap)},降级后恐立刻撞上限`)
-        }
-        continue
-      }
-      candidate = c
-      break
-    }
-    // 候选耗尽(全部试过,或全部被窗口钳制跳过)。
-    if (candidate === undefined) return false
-    // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
-    // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
-    // 一并标记已试(防被再选)。与 attempt 的 target 求值同一优先级链(chain.model >
-    // sticky > /failback 覆写 > 路由表)。
-    const from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
-    if (from !== undefined && !tried.includes(from)) tried.push(from)
-    tried.push(candidate)
-    chain.model = candidate
-    // failback 粒度 phase: 降级跨任务粘滞——链逐任务销毁,候选人选经 failback 模块的
-    // sticky holder 带进本阶段后续任务,阶段边界(clearSticky)才重置回首选。
-    if (switches.modelFailbackScope === "phase") setSticky(candidate)
-    // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
-    // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学)。
-    chain.note = `[driver] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
-    log(`⇄ ${task.id} ${why},链上下文保留,切换模型 ${from ?? "主模型"} → ${candidate}(候选 ${tried.length}/${fallback.length})`)
-    i = 1
-    // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
-    // 换模型续跑无需重做上下文。分叉源与重试环同一套「保住最值钱的会话」判据:失败会话
-    // 本体(用量 > 0 才算,0 用量是纯报错桩)与链上原会话,取已积累用量大者。两条触发面
-    // 的链状态形态不同,这套判据同时覆盖:不可重试类(quota/auth/rate)attempt 已把会话
-    // 晋升到 chain.id、chain.failed 为空,选出的就是 chain.id(行为等价改造前);可重试类
-    // 跑完阶梯回落到这里时,attempt 把 chain.id 还原成了下发前的原会话、真正攒着上下文的
-    // 是 chain.failed,若不看它就会把 100k+ 产出扔掉去开白板会话。fork 成功即从副本续跑;
-    // 都不可用则回退全新会话——切换仍生效,仅不继承上下文。
-    const sources: { id: string; used: number; why: string }[] = []
-    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
-    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
-    chain.failed = undefined
-    sources.sort((a, b) => b.used - a.used)
-    for (const source of sources) {
-      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 降级`)
-      if (forked === undefined) continue
-      // chain.id 清空、改由 pending 承载分叉会话:note 非空 + chain.id 非空会命中
-      // attempt 的「中断恢复(resumed)复用原会话」分支而忽略 pending,故此处必须清 id,
-      // 让降级 note 随分叉副本会话下发(副本已含真实累计消息)。
-      chain.id = undefined
-      chain.pending = forked
-      chain.pct = 100
-      chain.used = source.used
-      return true
-    }
-    if (sources.length) log(`↻ 降级 fork 副本失败,切换仍生效、回退空白新会话(不继承上下文)`)
-    else log(`↻ 链上无会话上下文可继承,切换仍生效、开空白新会话`)
-    chain.id = undefined
-    chain.pct = 100
-    return true
-  }
-  // 候选耗尽时追加到阻塞文案后的清单:已试候选 + 因窗口不足跳过的候选。
-  const exhausted = () => `已用尽候选: ${tried.join(", ") || "无"}${clipped.length ? `;因上下文窗口不足跳过 ${clipped.join(", ")}` : ""}`
-  for (;;) {
-    const result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
-    const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
-    if (!transient) return result
-    // P4 配额降级(设计 D.3):在下方「不可重试直接阻塞」之前插入一支——分类为
-    // quota/auth/rate 且配置了候选表时,取下一候选(经 D.4 窗口钳制)、换 chain.model、
-    // 复用既有 fork 副本路径续跑(上下文随迁)。候选表为空时整段跳过,行为逐字节等价
-    // 现状(不变量 F:两变量未设 → 不进降级、不新增日志、不改文案、同阻塞路径)。
-    // 判据取 result.errorClass(P3 三条触发面统一带来的归类):plain session.error 的
-    // quota(isRetryable:false)与提前结算的 retry part / session.status retry 均带
-    // errorClass,故据它决策即可覆盖两条路径(不读 result.failover)。
-    const classZh =
-      result.errorClass === "quota" ? "配额受限" : result.errorClass === "auth" ? "provider 鉴权失败" : result.errorClass === "rate" ? "限流等待过久" : undefined
-    if (fallbackRing().length > 0 && classZh !== undefined) {
-      if (await switchModel(classZh)) continue
-      // 候选耗尽 → 回落阻塞(退出码语义不变,仍 blocked),文案追加候选清单。
-      return { type: "blocked", question: `${result.question}\n(配额降级${exhausted()})`, retryable: result.retryable }
-    }
-    // 不可重试(isRetryable:false,如账号级限流): 换哪个会话都一样失败,直接
-    // 阻塞——不进入下面的重试/fork 逻辑。attempt() 已保证 chain.id 落在这一轮
-    // 实际用过的会话上(哪怕它就是刚失败的这个),真正有内容的会话不被牺牲。
-    // (候选表为空时不可重试的 quota 落在此处,行为等价现状;候选表非空时上面的
-    // 降级支已先行处理可降级类。)
-    if (result.retryable === false) {
-      log(`⛔ ${task.id} 遇到不可重试的会话错误(重试无意义),直接阻塞:\n${result.question}`)
-      return result
-    }
-    // 阶梯耗尽: 先交人工裁决,再决定继续或退出(OPENCODE_AUTO_RETRY_ASK=0 关闭)。
-    //
-    // 为什么不直接退出: 优雅阻塞退出写的是 active=false 的恢复点,重跑明确不复用
-    // 旧会话(resume.ts 的既定语义——人工介入可能耗时数小时且会改动环境,旧上下文
-    // 不可信)。那条理由对真正的阻塞提问成立,对超时不成立: 人什么也没改,只是等。
-    // 于是退出这条路恰好把上面刚保住的那个会话扔掉。留在进程里等,会话就还活着、
-    // 还能继续 fork。
-    if (i > waits.length) {
-      const decision = await askRetry(switches.retryAsk, task, waits.length, result.question, opts.interactive, opts.dir)
-      if (decision === "continue") {
-        log(`↻ ${task.id} 人工选择继续,重试阶梯从头再走一轮`)
-        i = 1
-        continue
-      }
-      const why = decision === "exit" ? ",人工选择退出" : switches.retryAsk > 0 ? ",人工未裁决" : ""
-      // 回落(无人应答/答非所问/retryAsk=0 的无人值守形态)接配额降级环:阶梯对
-      // transient/unknown 已无计可施,但换一个 provider 仍可能跑通——与 quota 支同一段
-      // 逻辑(tried 去重、窗口钳制、chain.model + 降级 note、fork 带上下文、i=1 重开阶
-      // 梯)。人工明确答 exit 时不降级:那是「停下来」的指令,不是「再想想办法」。
-      // 候选表为空时整段跳过,逐字节等价改造前(不变量 F)。
-      // 作用域:chain 由 runTask 逐任务新建,chain.model 随之逐任务归零,下一个任务自动
-      // 从首选模型重新起跑——「切备选仅在本次任务内有效」天然成立;更细/更粗的回试粒度
-      // 由 OPENCODE_AUTO_MODEL_FAILBACK_SCOPE 在边界挂点消费(见 src/failback.ts)。
-      if (decision === "fallback" && fallbackRing().length > 0) {
-        if (await switchModel("重试阶梯耗尽")) continue
-        return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why};降级${exhausted()})` }
-      }
-      return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why})` }
-    }
-    if (opts.server && NETWORK_FAILURE.test(result.question)) {
-      await opts.server.restart("会话错误为网络/服务故障,重启 opencode server 后换新会话重试")
-    }
-    // 本次重试前的退避。计数在动作之前推进,下面三条 continue 路径共用 nth 作日志序号。
-    const waitMinutes = waits[i - 1] ?? 0
-    const nth = i++
-    if (waitMinutes > 0) {
-      log(`⏳ ${task.id} 遇到瞬时会话错误,等待 ${waitMinutes} 分钟后重试(${nth}/${waits.length}):\n${firstLine(result.question)}`)
-      await Bun.sleep(waitMinutes * 60_000)
-    }
-    // 保住最值钱的会话再从它分叉: 候选为刚失败的会话本体与链上原会话(attempt()
-    // 已把 chain.id 还原为下发前的原会话;复用轮里两者同一个,去重后只试一次),
-    // 价值以"已积累的上下文用量"度量,取最大者,fork 失败再退而求其次;都不可用
-    // 时依次回落 fork 基点(暖前缀,见下方 forkBase 分支)与空白新会话。
-    //
-    // 失败会话优先的理由: 超时/流中断类故障与会话内容无关(provider 侧停顿),
-    // 会话里那 100k+ 已核实产出是本轮最值钱的资产,开空白会话等于把它扔掉、再从
-    // 零撞同一堵墙——session-error-retry-plan.md 事实基线第 4 点记过这种"比完全不
-    // 复用还差"的反例。代价是副本尾部带着那条 0-token 报错消息、重试提示词落在它
-    // 后面;used 为 0 的失败会话则是纯报错桩(下发即失败,什么也没跑出来),没有
-    // 值得保护的内容,不进候选(维持原设计判据)。
-    //
-    // 一律 fork 副本而非直接复用: 原会话不受影响,失败即弃,恢复点仍是原会话
-    // (progress 的还原逻辑不动,见 attempt() 的可重试分支)。此处也不设
-    // seedForkSession 的"用量达 cap/2 即冷启动"护栏——那道护栏防的是新子任务背上
-    // 过大前缀,而重试是同一条提示词的续命,前缀大恰恰因为活干得多。
-    const sources: { id: string; used: number; why: string }[] = []
-    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
-    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
-    chain.failed = undefined
-    sources.sort((a, b) => b.used - a.used)
-    let seeded = false
-    for (const source of sources) {
-      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 重试`)
-      if (forked === undefined) continue
-      log(`↻ ${task.id} 遇到瞬时会话错误,从${source.why} ${source.id}(${formatTokens(source.used)} tokens)分叉副本重试(${nth}/${waits.length}):\n${result.question}`)
-      chain.pending = forked
-      chain.pct = 100
-      chain.used = source.used
-      seeded = true
-      break
-    }
-    if (seeded) continue
-    if (sources.length) log(`↻ fork 重试副本失败,回退分叉基点/空白新会话`)
-    // 无会话可分叉(子任务的首条消息即失败,链上本就为空)但基点还在: 从基点重新
-    // 播种,至少赚回免费的暖前缀,而不是纯冷启动——与 fork 三段式"每项重新从基点
-    // 分叉"(fork-decompose 设计 §4.3)同一语义。基点失效则回落空白新会话。
-    if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(client, chain.forkBase))) {
-      const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(client, chain.forkBase) }
-      if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} 重试`)) {
-        log(`↻ ${task.id} 遇到瞬时会话错误,链上无会话可分叉,已从基点重新播种重试(${nth}/${waits.length}):\n${result.question}`)
-        continue
-      }
-    }
-    log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${nth}/${waits.length}):\n${result.question}`)
-    // 重试保持"换新会话"语义,不复用出错的会话。
-    chain.id = undefined
-    chain.pct = 100
-  }
-}
-
-// H3 的落账体: 回合内观测到的代答补上 task/phase/round/session 后落台账。无观测即
-// 空转(不读轮号、不碰文件),故常见的"整轮无提问"路径零新增 IO。
-async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveEvent[] | undefined): Promise<void> {
-  if (!opts.dir || !events?.length) return
-  const round = await currentRound(opts.dir).catch(() => 0)
-  await recordResolves(
-    opts.dir,
-    events.map((event) => ({
-      at: event.at,
-      task: taskID,
-      phase: opts.phase ?? "",
-      round,
-      session: event.session,
-      source: "driver" as const,
-      question: event.question,
-    })),
-  )
-}
-
-// 阶梯耗尽后人工裁决的三态: continue = 再走一轮阶梯;exit = 立即阻塞退出;
-// fallback = 无人应答/答非所问,按既定回落处理(本分支由配额降级环接管:配置了候选
-// 表就切下一个候选模型继续,候选耗尽或未配置才阻塞,见 model-routing-design.md)。
-export type RetryDecision = "continue" | "exit" | "fallback"
-
-// 人工答复归一化(纯函数,导出供单测): 空答复、超时、stdin 关闭一律归 fallback,
-// 使无人值守的跑批不会卡死也不会被静默放行。
-export function retryDecision(answer: string | undefined): RetryDecision {
-  const value = (answer ?? "").trim().toLowerCase()
-  if (/^(c|continue|retry|y|yes|继续|重试)$/.test(value)) return "continue"
-  if (/^(q|quit|exit|stop|n|no|退出|停止|停)$/.test(value)) return "exit"
-  return "fallback"
-}
-
-// 阶梯耗尽的人工等待: minutes = 0 时不问、直接回落(无人值守跑批的既定形态)。
-async function askRetry(minutes: number, task: Task, tries: number, question: string, interactive?: Interactive, dir?: string): Promise<RetryDecision> {
-  if (minutes <= 0) return "fallback"
-  log(`⏸ ${task.id} 自动重试 ${tries} 次仍失败,等待人工裁决(continue = 再试一轮,exit = 退出;${minutes} 分钟无应答按回落处理):\n${question}`)
-  return retryDecision(await askHuman(minutes, "continue = 再试一轮,exit = 退出", interactive, dir))
-}
-
-async function attempt(
-  client: OpencodeClient,
-  task: Task,
-  promptText: string,
-  opts: Opts,
-  chain: SessionChain,
-  steer: Steer | undefined,
-  test: TestRun | undefined,
-  switches: Switches,
-): Promise<SessionResult> {
-  // 测试执行协议: 清除上一会话/上次运行遗留的待执行脚本(存在即请求,中断
-  // 恢复或重试场景下的旧请求不应注入本会话;归档历史 tmp/test.<n>.sh 保留)。
-  if (test) await rm(join(test.tmp, "test.sh"), { force: true })
-  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  // 中断恢复接管的会话(链上有会话且恢复说明待注入): 首个提示词无条件进原会话
-  // ——恢复语义即"接着被中断的那个会话继续",不受复用开关与阈值约束(与
-  // seedForkSession 的"恢复续跑优先于分叉"同一判据)。说明用后即清,此后该链
-  // 回归常规复用规则。
-  const resumed = chain.id !== undefined && chain.note !== undefined
-  // 链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控(缺省 off): off 时任务内每个
-  // 提示词都开新会话,阈值(占比/用量/闲置)不再参与决策。
-  const reuseSession = switches.reuseSession
-  const reuse =
-    chain.id !== undefined &&
-    (resumed ||
-      (reuseSession && chain.pct < REUSE_BELOW && chain.used < cap / 2 && Date.now() - chain.at <= REUSE_IDLE_MS))
-  // 测试交接判据的回落值(D1): 复用/恢复接管的会话起跑就背着链上已用量,首个
-  // message.updated 到达前的测试请求照样要判得出来;fork 与全新会话归零——
-  // chain.used 是上一个会话的残值,照搬会让刚起跑的小会话在首次测试就误判超限、
-  // 白烧一次交接。
-  if (test) test.startUsed = reuse ? chain.used : 0
-  // 恢复接管的复用已由 runTask 的恢复日志交代(含继承的上下文用量),不重复打印。
-  if (reuse && !resumed) {
-    log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens,${Math.round((Date.now() - chain.at) / 1000)} 秒前结束)`)
-  }
-  if (!reuse && chain.id !== undefined) {
-    const reason = !reuseSession
-      ? `会话复用已关闭(${SWITCH_ENV.reuseSession}=off,缺省)`
-      : chain.pct >= REUSE_BELOW
-        ? `上下文占比 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值`
-        : chain.used >= cap / 2
-          ? `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap / 2)} 上限(复用阈值)`
-          : `距上一会话结束已超过 ${REUSE_IDLE_MINUTES} 分钟(上下文已陈旧)`
-    // 复用关闭是缺省形态(链上每个会话都命中),只进明细日志;开启复用后的不
-    // 复用原因是决策依据,照常上终端。
-    if (reuseSession) log(`▷ ${reason},开启新会话`)
-    else vlog(`▷ ${reason},开启新会话`)
-  }
-  // fork 预创建会话(seedForkSession 从基点分叉所得)在 !reuse 时优先于 create,
-  // 消费即清——瞬时错误重试时 pending 已清,自然回落 create 路径(设计 §4.3)。
-  const forked = reuse ? undefined : chain.pending
-  chain.pending = undefined
-  // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
-  // system context(AGENTS.md 每个 provider turn 现场重读,重启兜底缓存场景)。
-  // 分叉会话已在 seedForkSession 分叉前同步过。
-  if (!reuse && !forked) await opts.server?.syncAgents()
-  // 显式标题: 新建会话直接以本阶段提交标题命名(短标签,如 `T-001 S2 编写 schema`),
-  // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`;分叉会话已在 forkSession
-  // 改名,不经 create。
-  const session = reuse || forked ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
-  if (session?.error) return { type: "blocked", question: `创建会话失败: ${formatClientError(session.error)}` }
-  // failback 粒度 session(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): 每个全新会话起点
-  // 都清链上降级候选、回试首选模型。仅 create 路径(会话复用与 fork 消费不动)——
-  // 降级 fork 出的迁移会话经 pending 进入,若在此清零会把 failover 立即 undo 成震荡。
-  if (session !== undefined && switches.modelFailbackScope === "session") chain.model = undefined
-  const sessionID = forked ?? session?.data.id ?? chain.id!
-  // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
-  opts.interactive?.attach(sessionID)
-  // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
-  // 下次运行从它分叉接回上下文。定版前的会话(记录里还留着待跑脚本与定版锚点)
-  // 不认领,那一态的恢复靠定版点分叉。
-  if (test && opts.dir) {
-    const inflight = await recallHandover(opts.dir, task.id, relative(test.dir, test.handoffFile))
-    if (inflight && inflight.script === undefined && inflight.pinSession === undefined && inflight.nextSession !== sessionID) {
-      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID })
-    }
-  }
-  // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
-  // 据此精确恢复;无阶段的旁路会话(判定/审核/脚本生成/修复规划/dryrun/fork 基点)
-  // 不写,避免污染恢复记忆。session-resume-precedence-design.md: 下发成功即落盘
-  // 认领在跑的会话(此前只在回合结束后写,回合进行中被 kill 会丢失认领);可重试
-  // 错误把记录还原为下发前快照,被弃的 fork 副本不顶替真实恢复点(保留
-  // session-error-retry-plan.md 第 4 点的保护,改为"下发即写 + 失败还原")。
-  // 本次提示词的生效模型(target 求值后回填,remember 写严格恢复记录用)。
-  let promptModel: string | undefined
-  const remember = async () => {
-    if (opts.dir && chain.phase) {
-      await saveProgress(opts.dir, {
-        task: task.id,
-        session: sessionID,
-        at: Date.now(),
-        active: true,
-        phase: chain.phase,
-        // 严格恢复(session-recovery-fidelity-design.md 3.1): active 记录随带单元
-        // 基线与本次生效模型(恢复时核对;model 未配置路由时无串可记,严格恢复下
-        // 该记录视为不可复用)。基线缺 thread 时以当前 HEAD 兜底(窗口从现在起)。
-        ...(strictResumeActive(opts, switches)
-          ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: promptModel }
-          : {}),
-      })
-    }
-  }
-  // 下发前的 progress.json 快照: 可重试错误时还原,防止被弃副本顶替真实恢复点。
-  const prior = opts.dir && chain.phase ? await peekProgress(opts.dir) : undefined
-
-  // SSE 订阅跟随本会话生命周期: 订阅时传入 AbortSignal,无论正常结束、下发失败
-  // 提前返回还是异常退出,finally 都立即中止订阅,断开底层连接并释放客户端连接
-  // 配额——此前订阅无人关闭、依赖 GC 回收,长周期运行下已结束会话的 SSE 长连接
-  // 持续积压,占满客户端并发池(Bun 缺省 256 条)后,后续所有请求在池内无限排队
-  // 且无超时报错,表现为无声卡死。
-  const sse = new AbortController()
-  // 统计收段幂等守卫(STATS_PLAN §2,T-003): 正常路径在 await watching 后收段;
-  // 下发失败/异常等未走到正常收段的路径由 finally 兜底——AI 段不悬挂。
-  let booked = false
-  // 死循环检测器(会话级,见 src/stuck.ts): 开关 off 时不建;dryrun 预检会话恒不建
-  // ——它本就靠反复被拒探查权限,重复报错是其正常形态,不是死循环。
-  const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
-  try {
-    const events = await client.event.subscribe(undefined, { signal: sse.signal })
-    const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck, switches)
-
-    // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
-    const note = chain.note
-    chain.note = undefined
-    // 本次模型(docs/model-routing-design.md C.3/E): 优先级 链上降级候选 >
-    // phase 粒度跨任务粘滞(sticky holder)> /failback 运行期覆写首选 > 路由表
-    // (阶段字母 + 会话角色)。target 未定义时不带 model 键——两变量未设且无任何
-    // 覆写时全链恒 undefined,逐字节等价现状(而非带 model: undefined)。
-    const override = failbackOverride()
-    const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
-    promptModel = target
-    // 实际使用模型上终端(前端可见): 新建/分叉会话或模型较上次 prompt 有变化时
-    // 播报一行(来源标注),同会话同模型的续跑 prompt 不重复。target 未定义(未设
-    // 路由)时静默,保持不变量 F。
-    if (target !== undefined && target !== chain.modelShown) {
-      const from =
-        chain.model !== undefined
-          ? "降级候选"
-          : stickyModel() !== undefined
-            ? "降级候选·阶段内粘滞"
-            : override !== undefined
-              ? "/failback 指定"
-              : "路由"
-      log(`◈ ${task.id} 使用模型 ${target}(${from})`)
-      chain.modelShown = target
-    }
-    // 统计接线(STATS_PLAN §2,T-003): prompt 下发前开 AI 段并关联任务。旁路会话
-    // (伪任务 PLAN/AUTO,恢复点先例见 resume.ts)同此照记——statsTask 未设当前任务
-    // 时 usage/sessions 仍入 phase+round 桶。
-    await statsSessionBegin(opts.dir, task.id)
-    const prompt = await client.session.prompt({
-      sessionID,
-      agent: opts.agent,
-      ...(target ? { model: splitModel(target) } : {}),
-      parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
-    })
-    if (prompt.error) {
-      await remember()
-      return { type: "blocked", question: `下发任务失败: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
-    }
-    // 下发成功即认领在跑的会话: 此刻进程被 kill/Ctrl+C,progress.json 指向本会话,
-    // 下次运行复用之(精确恢复的核心——回合进行中的会话不丢)。回合结束后再按
-    // 结果刷新或还原(见下方可重试错误分支)。
-    await remember()
-
-    const result = await watching
-    // 并发态(OPENCODE_AUTO_HANDOVER_CONCURRENT=on)交接期测试的统一收口: watch
-    // 起跑、这里等它落定——正常结束、会话错误、SSE 断流各路都经过此处,测试进程
-    // 不会跨会话悬挂。结果写在 test.last 上,供新会话续跑提示引用。顺序态(缺省)
-    // 此处恒空转,测试由 runExecSession 在提交 #2 之后执行。
-    if (test?.running) {
-      await test.running.catch(() => {})
-      test.running = undefined
-    }
-    // 收段入账(T-003): usage 入 task/phase/round 三桶 + per-session;报告(report)
-    // 由下方 ◉ 会话结束两行消费(累计用时/轮次/累计费用,STATS_PLAN §4.1)。
-    const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage())
-    booked = true
-    // 代答落账(auto-resolve H3): 与 statsSessionEnd 同处收段——watch 侧只观测提问
-    // 原文与会话 id,桶身份(任务/阶段/轮号)由此处补齐。旁路会话的伪任务
-    // (PLAN/AUTO)照记,与统计同一口径。写失败在模块内静默,不影响回合结果。
-    await recordDriverResolves(opts, task.id, result.resolves)
-    // 本轮开始前的原链状态: 可重试的会话错误需要还原到这里(而不是留在这一轮
-    // 刚失败的会话上),下一次重试才会从"从未被动过的原会话"重新 fork。
-    const previousId = chain.id
-    const previousUsed = chain.used
-    const previousAt = chain.at
-    chain.id = sessionID
-    chain.pct = result.pct
-    chain.used = result.used
-    chain.at = Date.now()
-    // ◉ 会话结束两行(STATS_PLAN §4.1,T-004): 无条件打印——所有经 attempt 的会话
-    // (含 verify 判定/审核/阶段规划/交接蒸馏等旁路,复用会话同样打印)统一输出;
-    // 行 1 上下文与用时,行 2 tokens 分项。省略规则: 单轮(session.rounds ≤ 1)
-    // 省略"(累计…)";reasoning=0 省略思考项;cost=0 省略费用;命中率分母 0 显示 —
-    // (formatCacheHit 口径)。report 仅 dir 缺失时为 undefined,按单轮处理,用时
-    // 回落 watch 的 durationMs。下发失败在上方提前 return,不会走到这里。
-    // AUTO-DECISION: 行 1 用时取 report.thisAiMs(纯 AI 时长口径)而非旧行的
-    // watch durationMs(含会话内人工等待)——与同行"累计"(session.aiMs 累计)同基
-    // 才有可比性,且符合"AI 用时排除 askHuman 挂起"的既定口径;旧行为只在无
-    // stats 目录(dir undefined)时经回落保留。
-    // AUTO-DECISION: 思考项插在"出"与"缓存读"之间(/ 思考 N)——计划草案未给出
-    // reasoning>0 的示例位次,取与 Usage 分项声明序(input/output/reasoning/
-    // cacheRead/cacheWrite)一致的位置;备选"行尾追加"会拆开缓存读/写相邻对,否决。
-    // AUTO-DECISION: 本次 cost=0 但跨轮累计 >0 时仍按"cost=0 省略费用"整项省略
-    // (不显示孤立的"(累计 $X)")——孤立累计无本次基数易误读,且逐字遵循既定省略
-    // 规则;备选"省略本次保留累计"与规则文字冲突,否决。
-    const usage = result.usage ?? zeroUsage()
-    const rounds = report?.session.rounds ?? 1
-    const since = rounds > 1 ? `(累计 ${formatDurationCompact(report!.session.aiMs)} / ${rounds} 轮)` : ""
-    log(
-      `◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),` +
-        `用时 ${formatDurationCompact(report?.thisAiMs ?? result.durationMs ?? 0)}${since}`,
-    )
-    // 行 2 复用 log.ts 的 formatUsageLine(T-006 收口,任务/阶段/轮次结论行同格式);
-    // 会话特有的费用跨轮累计作为后缀追加(仅本次费用显示且跨轮时,见上方
-    // AUTO-DECISION: cost=0 整项省略,不出现孤立的"(累计 $X)")。
-    const cost = formatCost(usage.cost)
-    const costSince = cost && rounds > 1 ? formatCost(report!.session.usage.cost) : undefined
-    log(formatUsageLine(usage) + (costSince ? `(累计 ${costSince})` : ""))
-    // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
-    // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
-    // 新建会话已在创建时命名,无需重复。
-    if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
-    // 可重试的会话错误(session-error-retry-plan.md): 半截失败态——链状态与
-    // progress.json 一并还原为本轮下发前的原会话/原记录,被弃的 fork 副本不顶替
-    // 真实恢复点,交给 runSession 的重试循环从原会话重新 fork。不可重试的会话
-    // 错误、非会话错误类阻塞与成功一律"晋升":chain.id 落在这一轮实际用过的会话
-    // 上并刷新 progress.json(会话结束但阶段尚未推进时,保持 active——此刻中断
-    // 按"半途未总结"复用本会话继续,无时间窗,恢复时只看会话是否存活;子任务间歇
-    // 的窗口由 pipeline 在勾选+提交后经 persistStage 主动收口为总结态)。
-    if (result.error && result.retryable !== false) {
-      chain.id = previousId
-      chain.used = previousUsed
-      chain.at = previousAt
-      // 链状态还原,但失败会话本身留给重试环作首选分叉源(见 FailedSession)。
-      chain.failed = { id: sessionID, used: result.used }
-      if (opts.dir && chain.phase) {
-        if (prior) await saveProgress(opts.dir, prior)
-        else await forgetProgress(opts.dir)
-      }
-    } else {
-      chain.failed = undefined
-      await remember()
-    }
-    if (result.blocked) {
-      // 严格恢复的测试交接写核失败(3.3): 折成 rollback 标记上抛,单元所有者
-      // (executeWhole/runSubtask)据此回滚重做;无基线的调用方按普通阻塞处理。
-      return result.testHandoverInvalid ? { ...result.blocked, rollback: true } : result.blocked
-    }
-    if (result.error)
-      return { type: "blocked", question: `会话错误: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
-    return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
-  } finally {
-    // 统计兜底(T-003): 下发失败/异常等未走正常收段的路径同样收段——无配对 begin
-    // 时 thisAiMs=0、usage 零值照记(stats.ts 既有语义,消耗真实发生不虚构)。
-    if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage())
-    // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
-    // 释放(对已结束的订阅重复中止无害)。
-    sse.abort()
-    vlog(`▪ 已断开会话 ${sessionID} 的事件流订阅`)
-  }
-}
-
 // 拆分期兼容再导出(docs/module-split-plan.md §D.3): 这些符号已迁往 src/opts.ts 等新模块,
 // 此处保留 `runner` 子路径的旧入口,使壳包与既有单测无需随拆分同步改动。
 // 收尾步骤(S12)复核最终留存面——壳包只消费 PermissionMode / SubtaskMode。
@@ -2420,3 +1820,5 @@ export { unitReruns, phaseText, resumeNote } from "./resume-gate"
 export { askHuman, forkSession, seedForkSession, sessionUsage } from "./session-api"
 export type { Steer, TestRun } from "./testrun"
 export { cleanTestHandoffs, handoffSteer, handoverDue, resolveTestScript, restoreTestHandoffs, testHandoverDue } from "./testrun"
+export type { RetryDecision } from "./session"
+export { ensureForkBase, retryDecision, runSession } from "./session"

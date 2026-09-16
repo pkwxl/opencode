@@ -1,8 +1,8 @@
 # 大文件拆分方案(runner.ts / loop.ts 按职责切模块)
 
-**状态**: 实施中(auto-core 分支)。**S1–S7 已完成(2026-09-16)**,下一步 **S8 `src/session.ts`**。每步一个提交,新会话从本文件 §H 勾选表继续。
+**状态**: 实施中(auto-core 分支)。**S1–S8 已完成(2026-09-16)**,下一步 **S9 `src/artifact.ts`**。每步一个提交,新会话从本文件 §H 勾选表继续。
 **基线提交**: `f50cd615b`(§D.1/§E 表中的行号以该提交为准;**每步落地后行号已漂移,定位一律按符号名 grep,不要照抄行号**)。
-**当前进度**: `src/runner.ts` 4064 → 2422 行;新增 `src/opts.ts` 115 行、`src/chain.ts` 211 行、`src/unit-commit.ts` 189 行、`src/current.ts` 41 行、`src/resume-gate.ts` 178 行、`src/session-api.ts` 251 行、`src/testrun.ts` 281 行、`src/watch.ts` 508 行。`bun test` 771 pass / 0 fail(与基线同),`packages/auto` 零改动通过 typecheck。
+**当前进度**: `src/runner.ts` 4064 → 1824 行;新增 `src/opts.ts` 115 行、`src/chain.ts` 211 行、`src/unit-commit.ts` 189 行、`src/current.ts` 41 行、`src/resume-gate.ts` 178 行、`src/session-api.ts` 251 行、`src/testrun.ts` 281 行、`src/watch.ts` 508 行、`src/attempt.ts` 312 行、`src/session.ts` 331 行。`bun test` 771 pass / 0 fail(与基线同),`packages/auto` 零改动通过 typecheck。
 
 ## A 事实基线(2026-09-16 实测)
 
@@ -74,7 +74,7 @@ test/prompt.test.ts  1444 行
 - **一步一提交**:每个步骤独立提交,commit 前 `bun typecheck && bun test` 必须双绿。提交信息 `refactor(auto-core): 拆分 …`。
 - **步骤可中断**:任一步骤结束时仓库都处于可编译可测试状态;没有"拆到一半"的中间态跨会话。
 
-## D 切分方案:runner.ts → 12 个模块 + 留存
+## D 切分方案:runner.ts → 13 个模块 + 留存(S3 的 `current.ts`、S8 的 `attempt.ts` 为实施期追加,见 §I D7/D10)
 
 ### D.1 目标文件表
 
@@ -90,7 +90,8 @@ test/prompt.test.ts  1444 行
 | `src/session-api.ts` | `forkSession` `seedForkSession` `sessionUsage` `sessionUsed` `renameSession` `sessionAlive` `missingAgentHint` `zeroUsage` `contextLimits` `describePart` `formatTokens` `formatClientError` `isApproval` `askHuman`(**`ensureForkBase` 改留 runner.ts、S8 随 session.ts 落位,见 §I D9**) | 1485–1631, 3389–3425, 3974–4064 | ~300(实测 251) |
 | `src/testrun.ts` | `Steer` `handoffSteer` `handoverDue` `TestRun` `testHandoverDue` `TEST_HANDOVER_ADVISORY` `fillHandoffStatus` `latestTestScript` `restoreTestHandoffs` `archiveHandoff` `handoffChainExists` `removeHandoffChain` `latestTestSeq` `testHandoffExists` `cleanTestHandoffs` `removeIfUntracked` `executeTest` `resolveTestScript` `runTestScript` | 2423–2507, 2724–2849, 3916–3973 | ~300 |
 | `src/watch.ts` | `watch` | 3426–3915 | ~505 |
-| `src/session.ts` | `NETWORK_FAILURE` `runSession` `recordDriverResolves` `RetryDecision` `retryDecision` `askRetry` `attempt` + `ensureForkBase`(S5 顺延,§I D9) | 2850–3388 | ~560 |
+| `src/attempt.ts`(S8 追加,见 §I D10) | `attempt` `recordDriverResolves` | 3124–3388 区段 | ~310(实测 312) |
+| `src/session.ts` | `NETWORK_FAILURE` `runSession` `RetryDecision` `retryDecision` `askRetry` + `ensureForkBase`(S5 顺延,§I D9);`attempt` / `recordDriverResolves` 改归 `src/attempt.ts`(§I D10) | 2850–3388 | ~560(实测拆两份:331 + 312) |
 | `src/artifact.ts` | `requireArtifact` | 2237–2403 | ~185 |
 | `src/exec-session.ts` | `runExecSession` `seedPinFork` `seedSessionFork` | 2508–2723 | ~235 |
 | `src/review.ts` | `verifyTask` `Verdict` `executeVerifyScript` `judge` `checkPlanEdit` `generateScript` `reviewTask` `planReviewFix` `parseVerdict` | 1886–2236, 2404–2422 | ~395 |
@@ -101,12 +102,12 @@ test/prompt.test.ts  1444 行
 
 ```
 opts ─┬─ chain ─┬─ session-api ─┐
-      │         │                ├─ watch ─┬─ session ─┬─ artifact ─┬─ review ─┐
-      ├─ unit-commit ────────────┤          │           │            │          │
-      │   └─ current             │          │           │            │          │
-      ├─ resume-gate ────────────┘          │           ├─ exec-session ─────────┤
-      └─ testrun ───────────────────────────┘           │                        │
-                                                         └──────── execute ──────┴─ runner
+      │         │                ├─ watch ─ attempt ─┬─ session ─┬─ artifact ─┬─ review ─┐
+      ├─ unit-commit ────────────┤                    │           │            │          │
+      │   └─ current             │                    │           │            │          │
+      ├─ resume-gate ────────────┘                    │           ├─ exec-session ─────────┤
+      └─ testrun ─────────────────────────────────────┘           │                        │
+                                                                   └──────── execute ──────┴─ runner
 ```
 
 **唯一的环及其消解**:`watch` 要调测试执行(`executeTest` / `resolveTestScript` / `runTestScript`),而交接状态机 `runExecSession` 要调 `runSession`。若把"测试执行 + 交接"塞进同一个模块,就得到 `watch → 测试模块 → session → watch` 的环。
@@ -116,7 +117,7 @@ opts ─┬─ chain ─┬─ session-api ─┐
 - `testrun.ts` = **测试执行与交接文档的文件操作**,不依赖任何会话驱动代码(只用 `verify.ts` / `prompt.ts` / `docpaths.ts` / `git.ts`),是叶子。
 - `exec-session.ts` = **交接时序的状态机**(`runExecSession` 的中断恢复分支、定版分叉),位于 `session` 之上。
 
-于是 `watch → testrun`(单向)、`exec-session → session + testrun`(单向),环消失。**后续任何改动都不得让 `testrun.ts` 反向 import `session.ts` / `watch.ts`。**
+于是 `watch → testrun`(单向)、`exec-session → session + testrun`(单向),环消失。**后续任何改动都不得让 `testrun.ts` 反向 import `session.ts` / `attempt.ts` / `watch.ts`。**
 
 其它已核实的方向性事实:
 
@@ -137,7 +138,8 @@ export type { UnitRerunCtx } from "./resume-gate"
 export { unitReruns, phaseText, resumeNote } from "./resume-gate"
 export { askHuman, forkSession, seedForkSession, sessionUsage } from "./session-api"   // ensureForkBase 仍定义在 runner.ts(§I D9)
 export { handoffSteer, handoverDue, testHandoverDue, resolveTestScript, restoreTestHandoffs, cleanTestHandoffs } from "./testrun"
-export { runSession, retryDecision } from "./session"
+export type { RetryDecision } from "./session"
+export { ensureForkBase, retryDecision, runSession } from "./session"   // ensureForkBase 由 S8 收回落位(§I D9)
 export { requireArtifact } from "./artifact"
 export { seedPinFork } from "./exec-session"
 ```
@@ -218,7 +220,7 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 
 ## G 文档与引用更新
 
-1. **`docs/structure.md`**:第 17 行那条 15750 字符的 `src/runner.ts` 总纲条目,按 §D.1 拆成 13 条(`src/opts.ts` … `src/runner.ts`),原文照搬到对应条目下,不重写描述;第 15 行 `src/loop.ts` 同理拆成 6 条。**每步实施时同步更新自己那一条**,不要攒到最后。
+1. **`docs/structure.md`**:第 17 行那条 15750 字符的 `src/runner.ts` 总纲条目,按 §D.1 拆成 14 条(`src/opts.ts` … `src/runner.ts`),原文照搬到对应条目下,不重写描述;第 15 行 `src/loop.ts` 同理拆成 6 条。**每步实施时同步更新自己那一条**,不要攒到最后。
 2. **`AGENTS.md` 导航段**:把指向 `src/runner.ts` 的条目改指新模块(例如"验收/审核 → `src/review.ts`"、"测试交接 → `src/testrun.ts` + `src/exec-session.ts`"、"模型路由注入点 → `src/session.ts` 的 attempt")。
 3. **带行号锚的设计文档引用**(33 处 runner + 21 处 loop):按两档处理——
    - 仍描述**当前行为**的设计文档(model-routing / commit-boundary / test-handover-early / session-recovery-fidelity / stats-timing / auto-resolve / phases 等):重新指向新文件与新行号。
@@ -239,7 +241,8 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 - [x] **S5** `src/session-api.ts` — 会话 SDK 薄封装(分叉/用量/改名/存活)+ 输出格式化 + `askHuman`。**已完成 2026-09-16**:`forkSession` `seedForkSession` `sessionUsage` `sessionUsed` `zeroUsage` `renameSession` `sessionAlive` `missingAgentHint` `describePart` `contextLimits` `formatTokens` `formatClientError` `isApproval` `askHuman` 迁出(三段不连续区间 801–865 / 912–945 / 2705–2741 / 3287–3381);除 `forkSession` `seedForkSession` `sessionUsage` `askHuman` 外**其余 10 个原为模块私有、迁出后全部加 `export`**(逐个核实均有留存侧调用点)。**`ensureForkBase` 未迁**——它调 `runSession` 驱动一次性基点会话,搬进 session-api 即 `session-api → runner/session` 反向依赖(见 §I D9),连同其上 8 行注释原地留在 runner.ts,故 D.3 再导出清单里也不含它。**包内无调用方需改**(其余 src 模块不取这些符号;注意 `formatTokens` 在 `log.ts`/`prompt.ts` 各有一份同值副本,本步不做去重——纯搬运不碰既有重复)。runner.ts 清掉 4 个悬空 import(`node:readline/promises` 整行、`./shell` 整行、sdk 的 `Part`、`./stats` 的 `statsWaitBegin`/`statsWaitEnd`)。实测:runner.ts −235 行(3391 → 3156)、session-api.ts 251 行,771 pass 不变,`packages/auto` 零改动;逐字校验差异只有本步有意的 4 处 import 行改动。
 - [x] **S6** `src/testrun.ts` — 测试执行与交接文档文件操作。**已完成 2026-09-16**:`Steer` `handoffSteer` `handoverDue` `TestRun` `testHandoverDue` `TEST_HANDOVER_ADVISORY` `fillHandoffStatus` `latestTestScript` `restoreTestHandoffs` `archiveHandoff` `handoffChainExists` `removeHandoffChain` `latestTestSeq` `testHandoffExists` `cleanTestHandoffs` `removeIfUntracked` `executeTest` `resolveTestScript` `runTestScript` 迁出(三段不连续区间 1636–1714 / 1937–2061 / 3089–3145,与 §H.3 预记坐标逐行吻合);`TestRun` `TEST_HANDOVER_ADVISORY` `fillHandoffStatus` `latestTestScript` `archiveHandoff` `removeHandoffChain` `latestTestSeq` `testHandoffExists` `executeTest` `runTestScript` **十个原为模块私有、迁出后加 `export`**(逐个核实均有留存侧调用点),`handoffChainExists` / `removeIfUntracked` 留存侧零引用、**保持私有**。**§D.2 环消解验收通过**:`testrun.ts` 的 import 仅 `node:fs/promises` `node:path` `./docpaths` `./git` `./handover` `./log` `./opts` `./plan` `./prompt` `./verify`,无 `session`/`watch`/`exec-session`/`runner`;三段区间内对 `runSession`/`attempt`/`watch`/`requireArtifact`/`runExecSession`/`afterSession` 的命中只有 2 处**注释**提及 runExecSession,无调用。`loop.ts` 的 `restoreTestHandoffs` 改精确导入(其余包内调用方只取 `requireArtifact`/`runOnce`/`runTask`,不受影响)。runner.ts 清掉 9 个悬空 import 符号(`node:fs/promises` 的 `mkdir`/`readdir`/`rename`、`./git` 的 `deletedFiles`/`fileTracked`/`restoreFile`、`./handover` 的 `peekHandover`、`./prompt` 的 `renderHandoffSteer`/`TestRunInfo`)。**§H.3 预推 import 清单偏保守**:实际不需要 `./switches` 的 `autoSwitches`(`handoffSteer` 取 `on` 形参、开关在调用点求值)、`./verify` 的 `verifyTmpDir`/`resolveVerifyScript`、`./docpaths` 的 `legacySubtaskTestHandoff`/`resolveSubtaskDoc`/`resolveTaskDoc`、`node:path` 的 `relative`、`./prompt` 的 `testHandoffFile` —— 预推清单只作起点,实际以 `grep -cw` 逐个核。**兼容再导出多带了 `TestRun`**(按 §H.3 指示补的类型再导出,但它迁出前是模块私有、从不属于 `runner` 的公开面;`Steer` 原本就 `export`、确需兜住):S12 收敛时 `TestRun` 那半行直接删,不必确认调用方。实测:runner.ts −244 行(3156 → 2912)、testrun.ts 281 行,771 pass 不变,`packages/auto` 零改动;逐字校验差异只有本步有意的 5 处 import 行改动。
 - [x] **S7** `src/watch.ts` — 单函数独占文件。**已完成 2026-09-16**:`watch` 单符号单区间迁出(2415–2899,与 §H.3 预记坐标逐行吻合),迁出前为模块私有、迁出后加 `export`;留存侧 `attempt` 从 `./watch` 精确导入(唯一调用点 `runner.ts:2270`,S8 搬 `attempt` 后该 import 随之转入 `session.ts`,即 §D.2 的 `session → watch`)。**方向性验收通过**:区间内对上层符号(`runSession`/`requireArtifact`/`runExecSession`/`verifyTask` 等)零命中,`attempt` 的 3 处命中全是属性名(`part.attempt` / `st.attempt`)不是调用;对 runner.ts 内 34 个顶层声明逐个 `grep -cw`,命中的只有 `watch` 自身。**兼容再导出未追加任何行**(迁出前私有,`test/runner.test.ts` 经 `runSession` 间接覆盖)。**包内无调用方需改**。留存侧清出 11 个悬空 import 符号:本步造成的 9 个(`./chain` 的 `Watch`、`./handover` 的 `handoffComplete`、`./prompt` 的 `renderStuckHint`/`renderTestResult`、`./resolve` 的 `compactText`/`sameIssue`、`./session-api` 的 `describePart`/`isApproval`、`./stuck` 的 `STUCK_MAX_HINTS`/`StuckTracker`、`./testrun` 的 `executeTest`),外加**扫出 2 个 HEAD 上就已悬空的历史遗留**(`./mode` 的 `ModeSpec`、`./server` 的 `ServerControl`,整行删除;已核实在 S7 前的 HEAD 上计数即为 1,非本步造成——见 §H.2 新增条)。实测:runner.ts −490 行(2912 → 2422)、watch.ts 508 行,771 pass 不变,`packages/auto` 零改动;逐字校验差异只有本步有意的 10 处 import 行改动,485 行函数体逐字一致。
-- [ ] **S8** `src/session.ts` — `runSession` / `attempt` / 重试决策 + `ensureForkBase`(§I D9 顺延)。**顺带处置孤儿注释(S7 实测已修正定位)**:那段 6 行英文注释(`// Runs one prompt on the session chain …`,讲复用阈值 REUSE_BELOW/REUSE_IDLE_MS、瞬时错误换新会话重试、网络失败重启 server)**并不在 `runSession` 上方,而在 `runExecSession` 上方**(S7 后为 1643–1648,其下隔一个空行即 `runExecSession` 自己的中文注释块 1650–1656);它描述的是 `runSession`(S7 后 1879,自带一段完整中文注释)。即:**注释描述 S8 的符号、物理位置却在 S10 的符号头上**。处置:S8 搬 `runSession` 时判断去留——留则把这 6 行一并带去 `session.ts` 放在 `runSession` 的中文注释之前(它与 runExecSession 无关,留在原地会误导 S10),删则单独一次改动并在 §I 登记;无论哪种,S10 搬 `runExecSession` 时该位置都不应再有它。
+- [x] **S8** `src/session.ts` + `src/attempt.ts` — 会话驱动核心层(`runSession` 的重试阶梯与配额降级环、人工裁决、fork 基点)与单次下发执行体。**已完成 2026-09-16**:三段不连续区间迁出(`ensureForkBase` 813–856 / 孤儿英文注释 1643–1648 / `NETWORK_FAILURE`+`runSession`+`recordDriverResolves`+`RetryDecision`+`retryDecision`+`askRetry`+`attempt` 1871–2409,与 §H.3 预记坐标逐行吻合,唯二订正是 `runSession` 实际收尾在 2105 而非 2107、`recordDriverResolves` 的注释头在 2107 而非 2109)。**计划外拆成两个文件**(见 §I D10):三段合计 590 行正文,加 header 与 import 必然越过 §B 判据 1 的 600 行线,按 `attempt`(唯一调用方 `runSession`)与 `recordDriverResolves`(唯一调用方 `attempt`)整组下沉为 `src/attempt.ts`,方向 `session → attempt → watch` 单向。私有符号的 `export` 判据逐个核实:`attempt` 因跨模块被 `runSession` 调用而加 `export`,`NETWORK_FAILURE` / `askRetry` / `recordDriverResolves` 留存侧零引用、**保持私有**。**孤儿注释处置**:那 6 行英文注释随 `runSession` 带走,放在其中文注释之前(原地留着会误导 S10 的 `runExecSession`),`NETWORK_FAILURE` 块相应提到它之前——这是本步逐字校验里仅有的两处"位置变动"(另一处是 `recordDriverResolves` 随 `attempt` 下沉),**行内容零改动**(removed/moved 各 580 行,排序后逐字相同)。**包内调用方无需改**(其余 src 模块只取 `requireArtifact`/`runOnce`/`runTask`);runner.ts 顶部加 `import { ensureForkBase, runSession } from "./session"`,末尾按"迁出前是否公开"补两行再导出(`runSession` / `retryDecision` / `RetryDecision` / `ensureForkBase` 迁出前均已 `export`)。悬空 import 扫全表清出 **42 个**符号:本步造成 31 个(`node:path` 的 `relative`、`./interactive` 整行、`./chain` 的 `resolveModel`/`roleOf`/`splitModel`/三个 `REUSE_*`、`./failback` 三个、`./git` 的 `commitTitle`、`./log` 四个、`./phases` 整行、`./prompt` 的 `renderContextBase`、`./resolve` 整行、`./resume-gate` 的 `firstLine`、`./session-api` 五个、`./stats` 整行、`./stuck` 整行、`./switches` 的 `SWITCH_ENV`、`./watch` 整行),**历史遗留 11 个**(`./chain` 的 `classifySessionError`/`phaseToRole`/`ErrorInfo`、`./opts` 的 `PermissionMode`/`SubtaskMode`、`./stats` 的 `Usage`、`./testrun` 的 `resolveTestScript`/`testHandoverDue`、`./unit-commit` 的 `autoAnswer`/`gatedAutoCorrectRefs`、`node:path` 的 `resolve`)——它们只在**兼容再导出块**或**注释**里出现,`grep -cw` 计数非零故历次扫描都漏掉,见 §H.2 新增条。实测:runner.ts −598 行(2422 → 1824)、session.ts 331 行、attempt.ts 312 行,771 pass 不变,`packages/auto` 零改动。
+
 - [ ] **S9** `src/artifact.ts` — `requireArtifact`;同步改 `final.ts` / `implement.ts` / `numbering.ts` / `knowledge.ts` 为精确导入。
 - [ ] **S10** `src/exec-session.ts` — 交接时序状态机。
 - [ ] **S11** `src/review.ts` — 验收三段式 + 质量审核。
@@ -301,31 +304,26 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 - **兼容再导出只兜「迁出前就公开」的符号**:§D.3 的存在理由是让 `packages/auto` 与 `test/runner.test.ts` 零改动(§I D2),所以判据是**该符号在迁出前有没有 `export`**,不是它迁到哪去了。迁出时新加的 `export`(S3 的 `commitBlocked`、S5 的 10 个、S6 的 10 个)是为了让留存侧能调用,不构成 `runner` 子路径的旧入口,**不该进再导出块**——进了只是给 S12 多一行要删的东西。S6 按 §H.3 的指示给 `TestRun` 补了再导出,事后核实它迁出前是私有,已在 S6 条目里标明 S12 可直接删。
 - **动手前用 `grep -cw` 定 import,不要照抄预推清单**:§H.3 一类的预推 import 清单是按「这段代码看起来会用什么」列的,实际总会多列。S6 预推了 `autoSwitches`/`verifyTmpDir`/`resolveVerifyScript`/`legacySubtaskTestHandoff` 等 8 个符号,实测一个没用上(开关在调用点求值、脚本路径由形参带入)。正确做法:切出区间到临时文件 → 剥掉注释行 → 对候选符号逐个 `grep -cw` → 只留命中的;剩下的漏网之鱼交 `bun typecheck` 报。
 - **悬空 import 扫描要扫全表,不只扫本步搬走的符号**:S7 按 §H.2 末条对 runner.ts 顶部**每一个** import 符号(而非只对本步搬走的符号所用的那些)跑 `grep -cw`,扫出 2 个在 S7 之前的 HEAD 上就已计数为 1 的历史遗留(`./mode` 的 `ModeSpec`、`./server` 的 `ServerControl`)——它们是更早步骤漏扫的残留,`tsgo`(未开 `noUnusedLocals`)与 `bun test` 都不报。判定办法:`git show HEAD:./src/runner.ts | grep -cw <符号>`,本步前就是 1 即历史遗留。处置口径:**一并删掉并在当步条目里标明"非本步造成"**,不必单独立步——删死 import 行为中立、不污染 diff 诊断(逐字校验时它只多出几行 import 差异,与本步有意的改动同类)。
+- **悬空 import 的判据要剥掉注释与再导出块**:S7 的"扫全表"仍不够——`grep -cw` 会把**注释里的提名**和**末尾兼容再导出块里的符号名**算作使用,于是 `classifySessionError`/`phaseToRole`/`PermissionMode`/`SubtaskMode`/`Usage`/`resolveTestScript`/`testHandoverDue`/`autoAnswer`/`gatedAutoCorrectRefs` 这类"只在 `export … from` 里出现"的符号历次都逃过扫描(`export { x } from "./m"` 根本不需要 import x),S8 一次清出 11 个这样的历史遗留。正确判据:**取 import 块与再导出块之间的正文、剥掉 `//` 注释行**再判定该符号是否出现。处置口径同 S7:一并删掉并在当步条目里标明"非本步造成"。
 - **`docs/structure.md` 多数步骤是"加条目"而非"挪文字"**:`src/runner.ts` 那条 15750 字符的 bullet 讲的是流水线**行为**(行为留在 runner.ts),没有可整段excise 的"类型定义"文字。别为了凑 §G.1 的"拆成 13 条"硬搬——**只有讲的是被迁走的那段机制时才搬文字**,否则新写一条。
 
-### H.3 下一步(S8 `src/session.ts`)的现成坐标
+### H.3 下一步(S9 `src/artifact.ts`)的现成坐标
 
-当前 HEAD(S7 落地后,runner.ts 2422 行)下的位置,仍需自行 grep 复核。**本步是 S1 以来最复杂的一步**:5 段不连续区间、含本方案唯一的"注释与符号错位"、且要顺带把 §I D9 欠下的 `ensureForkBase` 收回落位。
+当前 HEAD(S8 落地后,runner.ts 1824 行)下的位置,仍需自行 grep 复核。**本步是 S1 以来最简单的一步**:单符号、单连续区间,唯一的额外动作是把包内 4 个调用方改精确导入。
 
 | 区间 | 符号 | 行 | 备注 |
 |---|---|---|---|
-| 一 | `ensureForkBase` | **813–856** | §I D9 顺延至本步。813–820 为其上 8 行中文注释(讲 fork 基点确立与 digest/session/冷启动回退链),821 为 `export async function ensureForkBase(`,856 为收尾 `}`。**已 `export`**,迁出无需补 |
-| 二 | 孤儿英文注释 | **1643–1648** | `// Runs one prompt on the session chain …`,描述的是 `runSession` 但物理位置在 `runExecSession` 头上——见上方 S8 条目的处置口径。**只有它要带走,1650–1656 的中文注释是 `runExecSession` 自己的、必须留下** |
-| 三 | `NETWORK_FAILURE` + `runSession` | **1871–2107** | 1871–1872 为 `NETWORK_FAILURE` 的 2 行中文注释、1873 为其 `const`(模块私有,迁出需 `export`?——先核留存侧是否还有调用,见下);1875–1878 为 `runSession` 的 4 行中文注释、1879 起为 `export async function runSession(` |
-| 四 | `recordDriverResolves` | **2109–2127** | 模块私有,迁出需核留存侧调用(§H.2:只有留存侧仍调才补 `export`) |
-| 五 | `RetryDecision` / `retryDecision` / `askRetry` / `attempt` | **2129–2409** | 2129 `export type RetryDecision`、2133 `export function retryDecision`、2141 `async function askRetry`(私有)、2147 `async function attempt`(私有);2409 为 `attempt` 收尾 `}`,其后 2410 空行、2411 起即 §D.3 兼容再导出块 |
+| 一 | `requireArtifact` | **1390–1577** | 1390–1411 为其上 22 行中文注释(讲"旁路会话必须产出文件"的通用骨架、`spec.step` 阶段级旁路步骤恢复、`spec.unitStart` 独立隐藏任务单元门禁),1412 为 `export async function requireArtifact<T>(`,1577 为收尾 `}`;1578 空行、1579 起为 `parseVerdict`(S11 的 `review.ts`)。**已 `export`**,迁出无需补 |
 
-**开工先做的三件核对**(§H.2 前两条的固定动作):
+**开工先做的三件核对**(§H.2 的固定动作):
 
-1. **区间内的出向调用**:对每段跑一遍,确认不命中留存侧的 `runTask` / `runOnce` / `requireArtifact` / `verifyTask` / `reviewTask` / `executeWhole` / `runSubtask` / `runExecSession` / `pseudoTask` / `requireTask`。**`ensureForkBase` 调 `runSession`**(D9 的成因)——这正是它该进本步的理由,同模块内不构成跨模块依赖;但要确认它不调更上层的东西。**`attempt` 调 `watch`**(已在 S7 确认,转为 `session → watch` 跨模块单向,合法)。
-2. **留存侧对本步符号的调用点**:`runSession` 被留存侧多处调用(`requireArtifact` / `verifyTask` / 各旁路),`attempt` 被 `runSession` 内部调用,`ensureForkBase` 的唯一调用方是留存侧 `runTask`。故 runner.ts 顶部需 `import { ensureForkBase, runSession } from "./session"`(按实测补全)。
-3. **模块私有符号的 `export` 判据**:`NETWORK_FAILURE` / `recordDriverResolves` / `askRetry` / `attempt` 迁出后,**只有留存侧仍有调用点的才补 `export`**(§H.2)。预判:`attempt` 只被 `runSession` 调(同去 session.ts)→ **保持私有**;`askRetry` 同理;`NETWORK_FAILURE` 只在 `runSession` 内用 → 保持私有;`recordDriverResolves` 需实测。逐个 `grep -n` 核,别照抄本表。
+1. **区间内的出向调用**:`requireArtifact` 调 `runSession`(已迁 `session.ts`,跨模块单向 `artifact → session`,合法)。确认它不命中留存侧的 `runTask` / `runOnce` / `runExecSession` / `verifyTask` / `reviewTask` / `executeWhole` / `runSubtask` / `pseudoTask` / `requireTask`——§D.2 把 `artifact` 放在 `session` 之上、`review`/`exec-session` 之下,正是因为"没人在 session 层调它、它也不调更上层"。
+2. **留存侧与包内调用方**:`requireArtifact` 被包内 4 个模块(`final.ts` / `implement.ts` / `numbering.ts` / `knowledge.ts`)消费——本步**必须**把这 4 处的 `import { requireArtifact } from "./runner"` 改为 `from "./artifact"`(§C 的"包内精确导入",也是 §D.1 让它单独成文件的理由:让它们不必拉进整个会话驱动图);留存侧 runner.ts 内部的调用点另行 `grep -n` 计数后加精确导入。`loop.ts` 的那行取 `requireArtifact, runOnce, runTask` 三个,只改前者、后两个仍从 `./runner` 取。
+3. **再导出**:§D.3 清单里 `export { requireArtifact } from "./artifact"` 本步落地(迁出前已 `export`,`test/runner.test.ts` 直接 import 它,必须兜住)。
 
-**兼容再导出**:§D.3 清单里 `export { runSession, retryDecision } from "./session"` 这一行本步落地(两者迁出前均已 `export`)。`ensureForkBase` 迁出前也是 `export`,但 §D.3 清单里没有它(S5 写明"仍定义在 runner.ts"),**本步要给它补上再导出**——判据是"迁出前是否公开"(§H.2),它公开,故补。
+**import 清单**:预期比 S8 窄得多(骨架函数只做"下发 → 校验产物 → 反馈重试 → 提交/收口"),至少涉及 `./session`(`runSession`)、`./unit-commit`(`afterSession` 等)、`./git`(`beginUnit`/`unitBaseline`/`commitTree` 一类)、`./resume`(`saveProgress`/`peekProgress`/`forgetProgress`)、`./chain`、`./opts`、`./plan`、`./log`、`./switches`。仍按 §H.2:切出区间 → 剥注释 → 逐个 `grep -cw` → 只留命中的,漏网的交 `bun typecheck` 报。**不得出现 `./runner`**。
 
-**预估结果**:session.ts 约 560 行(§D.1 预估,含本步并入的 `ensureForkBase` 44 行与孤儿注释 6 行,仍 < 600),runner.ts 降至约 1870 行。
-
-**import 清单**:按 §H.1 第 2 步切出后先跑 `bun typecheck` 报缺失,再逐个从 runner.ts 的 import 块对照补;预期面很宽(本步是会话驱动的核心层),至少涉及 `./chain`(`SessionChain` `SessionResult` `ForkBaseInfo` `ErrorInfo` `classifySessionError` `resolveModel` `roleOf` `splitModel` 与三个 `REUSE_*`)、`./watch`、`./session-api`、`./failback`、`./switches`、`./stats`、`./stuck`、`./testrun`、`./unit-commit`、`./resume`、`./resolve`、`./prompt`、`./log`、`./git`、`./plan`、`./opts`、`./interactive`。**不必再引 `./server`**:S7 删掉的那行 `ServerControl` 是真死引用——会话驱动侧访问 server 一律走 `opts.server`,其类型由 `src/opts.ts` 自己 import `ServerControl` 供给(已核实全仓仅 `opts.ts` 与 `server.ts` 引用该类型)。**不得出现 `./runner`**。
+**预估结果**:artifact.ts 约 210 行(188 行正文 + header + import),runner.ts 降至约 1635 行。
 
 ## I 决策记录
 
@@ -337,6 +335,7 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 - **D7(S3 实施期追加)拆出 `src/current.ts`**:`rollbackUnitState` 要写 CURRENT.md 回滚备注,而 D.1 原把 `writeCurrent`/`removeCurrent` 留在 runner.ts——那样 `unit-commit` 就得反向 import `runner`,与 §D.2 的单向约束直接冲突。两函数是纯叶子(只依赖 `plan.countSubtasks` 与 `protect`),独立成 41 行文件比塞进名不副实的 `unit-commit.ts` 干净;runner.ts 的 7 处调用点改精确导入。同类问题(留存侧小工具被下层模块反向依赖)后续步骤若再遇,按同样口径就地拆叶子并在此登记。
 - **D8(S4 实施期追加)`REVERIFY_ROUNDS` 并入 `src/opts.ts`**:D.1 原把它排给 `review.ts`(S11),但 `phaseText` 要渲染「重验轮 n/N」,S4 先迁走 `phaseText` 就会出现 `resume-gate → runner`(乃至将来 `resume-gate → review`)的反向依赖。它与已在 `opts.ts` 的 `FIX_ROUNDS` 是同类预算常量(都是验收轮数上限),归到底层常量模块名实相符,比为了迁就原表把 `phaseText` 留在 runner.ts 干净。同 D7 口径:**下层模块需要留存侧常量/小工具时,就地把它沉到更底层的叶子模块,不做反向 import**,并在此登记。
 - **D9(S5 实施期追加)`ensureForkBase` 不进 `session-api.ts`,留 runner.ts 待 S8 随 `session.ts` 落位**:D.1 原把它排给 session-api,但它**调 `runSession`** 建一次性基点会话(digest 模式读 context.md 全文、经 `T-NNN ctxbase …` 一次性链重建基点),是**会话驱动**而非 SDK 薄封装。搬进 session-api 会造成 `session-api → runner`(S8 后为 `session-api → session`)的反向依赖,而 `session.ts` 反过来要用 session-api 的 `forkSession`/`seedForkSession`/`sessionUsage`——正好成环,与 §D.2 单向约束冲突。它的唯一调用方是留存侧 runTask(`runner.ts` 内),留在原地既不破方向、也不欠账;真正的归属是 `session.ts`(与 `runSession` 同层),S8 一并搬。同 D7/D8 口径的镜像情形:**D7/D8 是「下层模块需要留存侧的常量/小工具」→ 把它沉到更底层的叶子;D9 是「拟迁的符号其实属于上层」→ 让它留在上层等对应步骤**,两者都不得反向 import。
+- **D10(S8 实施期追加)`attempt` 与 `recordDriverResolves` 另立 `src/attempt.ts`,不与 `runSession` 同文件**:D.1 原把会话驱动层七个符号一并排给 `session.ts`,实测三段区间合计 590 行正文——仅 import 块就要 15+ 行(本层是会话驱动的核心,出向面最宽),加 header 必然落在 620 行上下,直接违反 §B 判据 1 的"单文件 ≤ 600"。切分点没有第二个选择:`attempt`(264 行)是 `runSession` 的唯一被调、`recordDriverResolves`(18 行)是 `attempt` 的唯一被调,整组下沉后方向仍是单向链 `session → attempt → watch`,两个文件各 331 / 312 行、都留出了余量。这也与 §D.4「`watch`/`runTask`/`attempt` 拆完后各自独占一个文件」的原意一致(D.4 写下时把 `attempt` 与 `runSession` 排进同一文件,是行数估算未计 import 的疏漏)。同 D7 口径:**实施期发现单文件越线时,按"唯一调用方"关系整组下沉成叶子模块,不拆函数内部**,并在此登记。
 - **D6 历史计划文档的引用用 `@sha` 钉住而非追新**:那些文档描述的是当时的实现状态,把行号追到新文件会制造"文档说的是现在"的错觉;`@<sha>` 版本标记是仓库既有约定(见 `src/agents-block.ts` 的引用规范)。
 
 ## J 风险与回滚
