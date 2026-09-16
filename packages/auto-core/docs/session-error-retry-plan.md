@@ -427,3 +427,50 @@ D.4「候选耗尽回落阻塞路径（退出码 2）」自本修正起**被取�
 `docs/behavior.md`、`docs/structure.md` 与本文件。
 
 `bun typecheck` 干净，`bun test` 全绿（772 pass）。
+
+## 2026-09-16 修正四：重试重发必须带一次性说明（防新会话重做半成品）
+
+### 动机
+
+「保住最值钱的会话」是首选路径，但三条**回退到空白新会话/上下文不完整会话**的重发
+路径（瞬时阶梯的空白回退、`awaitRecovery` 恢复后分叉全败的空白回退、`switchModel`
+降级 fork 失败的空白回退，以及分叉源落选失败会话本体而取链上原会话/基点的情形）
+原先把**同一份提示词原样重发**，不带任何说明。此时本次尝试已落盘的部分产出不在新
+会话的上下文里（SSE 断流时孤儿回合的编辑仍留在工作区；首轮流中断时失败会话用量为
+0、连分叉候选都不进），而任务提示词模板（subtask/whole）没有「核对工作区」指令——
+新会话对着半成品从头重做：追加式产物（文档小节、编号条目）重复、已完成的步骤被重
+执行。跨运行恢复的 `resumeNote` 一直有「以 git status / git diff 核对现场……不要
+重做已完成的工作」，运行内重试路径是同一风险的裸露面。另外 `switchModel` 的降级
+note 在 fork 失败回落空白会话时仍说「请沿用前文的产物格式与协议」——对没有前文的
+会话是误导。
+
+### 新判据
+
+重发同一提示词时按「接管的会话是否带着本次尝试的上下文」分两档挂一次性 note
+（`chain.note` 机制，用后即清）：
+
+- **上下文完整**（分叉源 = 下发过本提示词的会话；可重试类记在 `chain.failed`、
+  不可重试类已被 attempt 晋升到 `chain.id`，`failedID = chain.failed?.id ?? chain.id`
+  统一识别）：只解释「重发不是重复要求，请继续完成本次任务要求」——与修正三里
+  awaitRecovery 的恢复说明同一动机（副本尾部带着报错消息，同一提示词再次出现没有
+  解释会被当作重复要求）。此前该说明只有 awaitRecovery 的 seeded 分支有，普通阶梯
+  重试的 fork 路径没有，本修正补齐。
+- **上下文不完整**（空白新会话 / 基点重播种 / 分叉链上原会话）：在上述解释之外追加
+  现场核对段（`WORKSPACE_CHECK`，措辞与 resumeNote 同口径）：「工作区可能已包含本
+  提示词对应的部分产出：先以 git status / git diff 核对现场，在此基础上续做剩余
+  工作，不要重做已完成的部分。」
+
+配套接线：阶梯重试的 seeded 分支挂 note 但**不清 `chain.id`**（原会话仍是下次重试
+的重新分叉源，「丢弃副本、从同一个原会话重新 fork」语义不变），为此 `attempt` 的
+`resumed` 判据追加 `chain.pending === undefined`——note 与 pending 并存时优先消费
+pending 副本，不会误复用原会话（switchModel/awaitRecovery 的「必须清 id」防撞逻辑
+保留，双保险）。
+
+### 落地范围
+
+`packages/auto-core`：`src/session.ts`（`WORKSPACE_CHECK`/`retryNote`、三个回退分支
+与三处 seeded 分支的 note 接线）、`src/attempt.ts`（`resumed` 判据加 pending 优先）、
+`test/session.test.ts`（6 个新用例：fork 失败会话本体的重试说明与 pending 优先、
+纯报错桩分叉原会话的现场核对说明、空白回退的现场核对说明、降级 fork 失败的现场
+核对版降级说明、恢复期分叉失败的现场核对说明）。`bun typecheck` 干净，`bun test`
+全绿（778 pass）。

@@ -64,8 +64,10 @@ export async function attempt(
   // 中断恢复接管的会话(链上有会话且恢复说明待注入): 首个提示词无条件进原会话
   // ——恢复语义即"接着被中断的那个会话继续",不受复用开关与阈值约束(与
   // seedForkSession 的"恢复续跑优先于分叉"同一判据)。说明用后即清,此后该链
-  // 回归常规复用规则。
-  const resumed = chain.id !== undefined && chain.note !== undefined
+  // 回归常规复用规则。分叉会话(pending)在场时让位: runSession 的重试环会同时
+  // 挂上 note(重试说明)与 pending(失败会话的副本)且刻意不清 chain.id(下次
+  // 重试仍从原会话重新 fork),此刻要接管的是副本而非复用原会话。
+  const resumed = chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
   // 链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控(缺省 off): off 时任务内每个
   // 提示词都开新会话,阈值(占比/用量/闲置)不再参与决策。
   const reuseSession = switches.reuseSession

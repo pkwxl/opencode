@@ -194,6 +194,53 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(chain.failed).toBeUndefined()
   })
 
+  // ---- 重试说明: 重发同一提示词必须带一次性说明 ----
+  // 两档按「接管的会话是否带着本次尝试的上下文」区分: 分叉失败会话本体(上下文完整)
+  // 只解释"重发不是重复要求"; 回退空白新会话 / 分叉原会话(本次尝试已落盘的部分产出
+  // 不在新会话上下文里)还须引导核对工作区,防新会话对着半成品从头重做——与跨运行
+  // 恢复 resumeNote 的现场核对同一口径。
+
+  test("分叉失败会话本体重试: 重发带一次性说明;note 与 pending 并存时接管的是副本而非复用原会话", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"], 50_000)
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    // 失败会话(50k)价值高于链上原会话(5k),分叉自 ses_new_1;chain.id(原会话)刻意
+    // 保留供下次重试重新分叉,故 note+id+pending 三者并存——要接管的是 pending 副本。
+    expect(calls.forks).toEqual(["ses_new_1"])
+    expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
+    const text = (calls.prompts[1]!.parts[0] as { text: string }).text
+    expect(text).toContain("提示词")
+    expect(text).toContain("现已重试")
+    expect(text).not.toContain("git status")
+    expect(chain.note).toBeUndefined()
+  })
+
+  test("失败会话为纯报错桩、分叉原会话重试: 原会话不含本次尝试的上下文,带现场核对说明", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_real"])
+    expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
+    const text = (calls.prompts[1]!.parts[0] as { text: string }).text
+    expect(text).toContain("git status")
+    expect(text).toContain("不要重做")
+  })
+
+  test("链上无可分叉内容回退空白新会话: 重发带现场核对说明(工作区可能有部分产出)", async () => {
+    const { client, calls } = retryClient(["error-retryable", "ok"])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual([])
+    expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
+    const text = (calls.prompts[1]!.parts[0] as { text: string }).text
+    expect(text).toContain("git status")
+    expect(text).toContain("不要重做")
+    expect(chain.note).toBeUndefined()
+  })
+
   // ---- 重试阶梯与等待-探测环(provider-timeout-analysis-20260912.md §8.4)----
 
   test("阶梯次数由 waits 的元素个数决定,不再是写死的 RETRIES", async () => {
@@ -509,6 +556,40 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(chain.note).toBeUndefined()
     // 换模型续跑落在分叉出的会话上(ses_fork_1),而非白板新会话。
     expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
+  })
+
+  test("降级 fork 失败回退空白新会话: 降级说明改现场核对版(空白会话没有前文可沿用)", async () => {
+    const { client, calls } = fakeClient({
+      events: quotaThenIdleEvents(),
+      fork: () => ({ error: { name: "NotFound" } }),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, FAILOVER)
+    expect(result.type).toBe("idle")
+    // fork 失败 → 次轮落在新建的空白会话(不是分叉副本),模型切换仍生效。
+    expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
+    expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
+    const text = (calls.prompts[1]!.parts[0] as { text: string }).text
+    expect(text).toContain("已切换模型")
+    expect(text).toContain("git status")
+    expect(text).toContain("不要重做")
+    expect(chain.note).toBeUndefined()
+  })
+
+  test("未配候选表 + 恢复期分叉失败回退空白新会话: 恢复重发同样带现场核对说明", async () => {
+    const { client, calls } = fakeClient({
+      events: quotaThenIdleEvents(),
+      fork: () => ({ error: { name: "NotFound" } }),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" }))
+    expect(result.type).toBe("idle")
+    // 致命错误 → 等待-探测(探测成功)→ 分叉被中断会话失败 → 空白新会话重发。
+    expect(calls.forks).toEqual(["ses_new_1"])
+    expect(calls.prompts[2]!.sessionID).toBe("ses_new_3")
+    const text = (calls.prompts[2]!.parts[0] as { text: string }).text
+    expect(text).toContain("git status")
+    expect(text).toContain("不要重做")
   })
 
   test("候选耗尽(首选与两候选全配额受限): 不再阻塞——等待-探测环等恢复,探测沿用末个候选,恢复后从被中断会话分叉续跑", async () => {

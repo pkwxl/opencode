@@ -76,6 +76,19 @@ const NETWORK_FAILURE = /internal network failure|network error|fetch failed|eco
 // 每个等待轮次白烧一遍全量前缀,配额受限期间只会雪上加霜)。
 const RECOVERY_PROBE_PROMPT = "[driver] 服务可用性探测: 请只回复 ok,不要执行任何其他操作。"
 
+// 重试/恢复后重发同一提示词时的一次性说明(经 chain.note 随下一个提示词带给 AI,
+// 用后即清)。两档按「接管的会话是否带着本次尝试的上下文」区分:
+// ① 上下文完整(分叉失败会话本体): 副本尾部带着当初的报错消息,同一提示词再次
+//    出现需要一句解释,避免 AI 把重发当作重复要求从头重做(与 awaitRecovery 的
+//    恢复说明同一动机);
+// ② 上下文不完整(回退空白新会话 / 基点重播种 / 分叉链上原会话): 本次尝试已落盘
+//    的部分产出不在新会话的上下文里,必须引导 AI 先核对工作区再续做——否则新会话
+//    对着半成品从头重做,追加式产物重复、已完成的步骤被重执行(与跨运行恢复的
+//    resumeNote 同一口径: 现场核对 + 不要重做)。
+const WORKSPACE_CHECK =
+  "工作区可能已包含本提示词对应的部分产出:先以 git status / git diff 核对现场,在此基础上续做剩余工作,不要重做已完成的部分。"
+const retryNote = (lead: string) => `[driver] ${lead}${WORKSPACE_CHECK}`
+
 // Runs one prompt on the session chain (reusing the previous session when its
 // context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
 // provider failures (session.error, e.g. malformed reasoning content from a
@@ -160,9 +173,6 @@ export async function runSession(
     // failback 粒度 phase: 降级跨任务粘滞——链逐任务销毁,候选人选经 failback 模块的
     // sticky holder 带进本阶段后续任务,阶段边界(clearSticky)才重置回首选。
     if (switches.modelFailbackScope === "phase") setSticky(candidate)
-    // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
-    // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学)。
-    chain.note = `[driver] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
     log(`⇄ ${task.id} ${why},链上下文保留,切换模型 ${from ?? "主模型"} → ${candidate}(候选 ${tried.length}/${fallback.length})`)
     i = 1
     // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
@@ -173,6 +183,10 @@ export async function runSession(
     // 跑完阶梯回落到这里时,attempt 把 chain.id 还原成了下发前的原会话、真正攒着上下文的
     // 是 chain.failed,若不看它就会把 100k+ 产出扔掉去开白板会话。fork 成功即从副本续跑;
     // 都不可用则回退全新会话——切换仍生效,仅不继承上下文。
+    // 「下发过本提示词的会话」:可重试类记在 chain.failed,不可重试类已被 attempt 晋升到
+    // chain.id——分到它即上下文完整,只带换模说明;分到链上原会话则本次尝试的部分产出
+    // 不在副本里,须带现场核对说明(见 retryNote)。
+    const failedID = chain.failed?.id ?? chain.id
     const sources: { id: string; used: number; why: string }[] = []
     if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
     if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
@@ -188,10 +202,20 @@ export async function runSession(
       chain.pending = forked
       chain.pct = 100
       chain.used = source.used
+      // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
+      // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学);
+      // 分到原会话(无本次尝试上下文)时改带现场核对版。
+      chain.note =
+        source.id === failedID
+          ? `[driver] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
+          : retryNote(`因${why}已切换模型继续,但本会话未继承本次尝试的上下文。`)
       return true
     }
     if (sources.length) log(`↻ 降级 fork 副本失败,切换仍生效、回退空白新会话(不继承上下文)`)
     else log(`↻ 链上无会话上下文可继承,切换仍生效、开空白新会话`)
+    // 回退空白新会话:上下文一分不剩——「请沿用前文」对没有前文的会话是误导,降级说明
+    // 换成现场核对版(工作区可能有本次尝试的部分产出)。
+    chain.note = retryNote(`因${why}已切换模型继续,但本会话未继承此前会话的上下文。`)
     chain.id = undefined
     chain.pct = 100
     return true
@@ -232,6 +256,10 @@ export async function runSession(
       const sources: { id: string; used: number; why: string }[] = []
       if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
       if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
+      // 「下发过本提示词的会话」:不可重试类被 attempt 晋升到 chain.id、可重试类记在
+      // chain.failed——分到它即上下文完整,只带恢复说明;分到原会话/空白会话则本次
+      // 尝试的部分产出不在上下文里,须带现场核对说明(见 retryNote)。
+      const failedID = chain.failed?.id ?? chain.id
       chain.failed = undefined
       sources.sort((a, b) => b.used - a.used)
       let seeded = false
@@ -246,13 +274,19 @@ export async function runSession(
         chain.pct = 100
         chain.used = source.used
         // 一次性恢复说明: 分叉副本尾部带着当初的报错消息,同一提示词再次出现需要
-        // 一句解释,避免 AI 把重发当作重复要求。
-        chain.note = "[driver] 上次下发因服务/配额故障中断,现已恢复,请继续完成本次任务要求。"
+        // 一句解释,避免 AI 把重发当作重复要求;分到原会话(无本次尝试上下文)时
+        // 改带现场核对版。
+        chain.note =
+          source.id === failedID
+            ? "[driver] 上次下发因服务/配额故障中断,现已恢复,请继续完成本次任务要求。"
+            : retryNote("上次下发因服务/配额故障中断,现已恢复,但本会话未继承本次尝试的上下文。")
         seeded = true
         break
       }
       if (!seeded) {
         if (sources.length) log(`↻ ${task.id} 服务已恢复,但分叉被中断会话的副本均失败,回退空白新会话重发任务`)
+        // 空白新会话对本次尝试的产出一无所知,重发必须带现场核对说明。
+        chain.note = retryNote("上次下发因服务/配额故障中断,现已恢复,但未能继承此前会话的上下文。")
         chain.id = undefined
         chain.pct = 100
       }
@@ -335,6 +369,11 @@ export async function runSession(
     // (progress 的还原逻辑不动,见 attempt() 的可重试分支)。此处也不设
     // seedForkSession 的"用量达 cap/2 即冷启动"护栏——那道护栏防的是新子任务背上
     // 过大前缀,而重试是同一条提示词的续命,前缀大恰恰因为活干得多。
+    //
+    // 「下发过本提示词的会话」= chain.failed(可重试类 attempt 已还原链状态并把它
+    // 记录在案):分到它即上下文完整,重发只需一句解释;分到链上原会话、基点或空白
+    // 会话则本次尝试已落盘的部分产出不在上下文里,须带现场核对说明(见 retryNote)。
+    const failedID = chain.failed?.id ?? chain.id
     const sources: { id: string; used: number; why: string }[] = []
     if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
     if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
@@ -348,6 +387,14 @@ export async function runSession(
       chain.pending = forked
       chain.pct = 100
       chain.used = source.used
+      // 一次性重试说明: 副本尾部带着报错消息,同一提示词再次出现需要一句解释,避免
+      // AI 把重发当作重复要求(与 awaitRecovery 的恢复说明同一动机)。原会话保留在
+      // chain.id 不动(下次重试仍从它重新 fork);note 与 pending 并存时 attempt 优先
+      // 消费 pending(resumed 判据要求 pending 为空),不会误复用原会话。
+      chain.note =
+        source.id === failedID
+          ? "[driver] 上次下发因瞬时会话错误中断,现已重试,请继续完成本次任务要求。"
+          : retryNote("上次下发因瞬时会话错误中断,但本会话未继承本次尝试的上下文。")
       seeded = true
       break
     }
@@ -355,17 +402,21 @@ export async function runSession(
     if (sources.length) log(`↻ fork 重试副本失败,回退分叉基点/空白新会话`)
     // 无会话可分叉(子任务的首条消息即失败,链上本就为空)但基点还在: 从基点重新
     // 播种,至少赚回免费的暖前缀,而不是纯冷启动——与 fork 三段式"每项重新从基点
-    // 分叉"(fork-decompose 设计 §4.3)同一语义。基点失效则回落空白新会话。
+    // 分叉"(fork-decompose 设计 §4.3)同一语义。基点前缀只有任务背景,本次尝试的
+    // 上下文不在其中,重发须带现场核对说明。基点失效则回落空白新会话。
     if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(client, chain.forkBase))) {
       const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(client, chain.forkBase) }
       if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} 重试`)) {
         log(`↻ ${task.id} 遇到瞬时会话错误,链上无会话可分叉,已从基点重新播种重试(${nth}/${waits.length}):\n${result.question}`)
+        chain.note = retryNote("上次下发因瞬时会话错误中断,但本会话未继承本次尝试的上下文。")
         continue
       }
     }
     log(`↻ ${task.id} 遇到瞬时会话错误,换新会话重试(${nth}/${waits.length}):\n${result.question}`)
-    // 重试保持"换新会话"语义,不复用出错的会话。
+    // 重试保持"换新会话"语义,不复用出错的会话;空白会话对本次尝试的产出一无所知,
+    // 重发必须带现场核对说明,否则新会话对着半成品从头重做。
     chain.id = undefined
     chain.pct = 100
+    chain.note = retryNote("上次下发因瞬时会话错误中断,但本会话未继承此前会话的上下文。")
   }
 }
