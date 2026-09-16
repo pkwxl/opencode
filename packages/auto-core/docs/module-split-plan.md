@@ -1,8 +1,8 @@
 # 大文件拆分方案(runner.ts / loop.ts 按职责切模块)
 
-**状态**: 实施中(auto-core 分支)。**S1–S13 已完成(2026-09-16),runner.ts 部分收官、loop.ts 部分起步**;下一步 **S14 `RunAllOpts` 具名类型 + `src/loop-preflight.ts`**。每步一个提交,新会话从本文件 §H 勾选表继续。
+**状态**: 实施中(auto-core 分支)。**S1–S14 已完成(2026-09-16),runner.ts 部分收官、loop.ts 部分推进中**;下一步 **S15 `src/loop-task.ts`(`advanceFinal`/`runTaskLoop` 闭包转顶层函数 + `LoopCtx`)**。每步一个提交,新会话从本文件 §H 勾选表继续。
 **基线提交**: `f50cd615b`(§D.1/§E 表中的行号以该提交为准;**每步落地后行号已漂移,定位一律按符号名 grep,不要照抄行号**)。
-**当前进度**: `src/runner.ts` 4064 → 578 行;新增 `src/opts.ts` 115 行、`src/chain.ts` 211 行、`src/unit-commit.ts` 189 行、`src/current.ts` 41 行、`src/resume-gate.ts` 178 行、`src/session-api.ts` 251 行、`src/testrun.ts` 281 行、`src/watch.ts` 508 行、`src/attempt.ts` 312 行、`src/session.ts` 331 行、`src/artifact.ts` 208 行、`src/exec-session.ts` 253 行、`src/review.ts` 392 行、`src/execute.ts` 455 行;`src/loop.ts` 1239 → 1014 行,新增 `src/loop-progress.ts` 99 行、`src/conclusion.ts` 140 行。`bun test` 771 pass / 0 fail(与基线同),`packages/auto` 零改动通过 typecheck。
+**当前进度**: `src/runner.ts` 4064 → 578 行;新增 `src/opts.ts` 115 行、`src/chain.ts` 211 行、`src/unit-commit.ts` 189 行、`src/current.ts` 41 行、`src/resume-gate.ts` 178 行、`src/session-api.ts` 251 行、`src/testrun.ts` 281 行、`src/watch.ts` 508 行、`src/attempt.ts` 312 行、`src/session.ts` 331 行、`src/artifact.ts` 208 行、`src/exec-session.ts` 253 行、`src/review.ts` 392 行、`src/execute.ts` 455 行;`src/loop.ts` 1239 → 821 行,新增 `src/loop-progress.ts` 99 行、`src/conclusion.ts` 140 行、`src/loop-preflight.ts` 227 行。`bun test` 771 pass / 0 fail(与基线同),`packages/auto` 零改动通过 typecheck。
 
 ## A 事实基线(2026-09-16 实测)
 
@@ -140,7 +140,7 @@ export { requireArtifact } from "./artifact"                 // packages/auto-mi
 
 ## E 切分方案:loop.ts → 5 个模块 + 留存
 
-`runAll` 的 5 个闭包捕获的局部量已核实为:`directory` `path` `opts` `serverHandle` `agentName` `phases` `repl`。`ran` 只在 `runTaskLoop` 体内使用(415/521 两处),提取后降为该函数的局部变量,**不进 ctx**。
+`runAll` 的 5 个闭包捕获的局部量已核实为:`directory` `path` `opts` `serverHandle` `agentName` `phases` `repl`。`ran` 只在 `runTaskLoop` 体内使用(415/521 两处),~~提取后降为该函数的局部变量,**不进 ctx**~~——**S14 复核订正(§I D14)**:`ran` 虽只在 `runTaskLoop` 体内读写,却声明在 `runAll` 作用域,阶段化流程下 `runPhaseLoop` 每遇 `execute` 路由都会再调一次 `runTaskLoop`,计数跨调用累积(后续阶段的首个任务前照样走 `--wait-between` 暂停);降为局部即每次清零,是行为改动。须作为**可变字段进 ctx**。
 
 引入显式上下文类型:
 
@@ -153,6 +153,7 @@ export type LoopCtx = {
   agentName: string
   phases: string
   repl?: Interactive
+  ran: number          // S14 复核追加(§I D14): runTaskLoop 跨调用累积的已跑任务数,可变
 }
 ```
 
@@ -160,10 +161,10 @@ export type LoopCtx = {
 |---|---|---|---|
 | `src/conclusion.ts` | `resumeBanner` `taskResolveLines` `phaseResolveLines` `roundResolveLines` `taskEndLines` `phaseCloseLines` `roundCompleteLines` | 1109–1236 | ~150 |
 | `src/loop-progress.ts` | `waitBetweenTasks` `watchFiles` `trackSubtasks` `subtaskProgressLine` | 1023–1108 | ~110 |
-| `src/loop-preflight.ts` | `runAll` 的预检段(PLAN.md 存在性、模板装载、agent 契约校验、stats 装载、`protect`、交接文档复原、启动 clean 门禁、中断恢复、AGENTS.md/gitignore 收口、housekeeping 提交) | 146–264 | ~160 |
+| `src/loop-preflight.ts` | `runAll` 的预检段(PLAN.md 存在性、模板装载、agent 契约校验、stats 装载、`protect`、交接文档复原、启动 clean 门禁、中断恢复、AGENTS.md/gitignore 收口、housekeeping 提交)+ `RunAllOpts` + `renderAgentContract`(S14 实施,§I D13) | 146–264 | ~160(实测 227) |
 | `src/loop-task.ts` | `advanceFinal` `runTaskLoop`(改为取 `LoopCtx` 的顶层函数) | 329–382, 389–561 | ~270 |
 | `src/loop-phase.ts` | `planPhase` `handoverPhase` `handoverWithStep` `runPhaseLoop` | 572–990 | ~460 |
-| `src/loop.ts`(留存) | `RunAllOpts` 类型、`renderAgentContract`、`runAll` 外壳(server 起停、SIGINT、dryrun、装配 ctx、try/catch/finally) | 1–145, 265–328, 991–1022 | ~290 |
+| `src/loop.ts`(留存) | ~~`RunAllOpts` 类型、`renderAgentContract`~~(S14 下沉至 loop-preflight,此处只留再导出)、`runAll` 外壳(server 起停、SIGINT、dryrun、装配 ctx、try/catch/finally) | 1–145, 265–328, 991–1022 | ~290 |
 
 方向:`loop-phase → loop-task`(`planPhase` 调 `runTaskLoop`),`loop-task` 不反调阶段函数。`conclusion.ts` / `loop-progress.ts` 是叶子,已分别对应现存的 `test/loop-conclusion.test.ts` / `test/loop-progress.test.ts`。
 
@@ -176,6 +177,8 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
   progress?: { close(): void }
 } | { exit: number }>
 ```
+
+**S14 实测签名**:`Promise<{ agentName: string; watcher?: { close(): void }; progress: { close(): void } } | { exit: number }>`——`resumed` 只在段内用(续接横幅),不进返回值;`watchFiles`/`trackSubtasks` 返回的都是 `{ close }` 对象而非 `FSWatcher`,`progress` 恒有值故非可选。`runAll` 侧 `if ("exit" in pre) return pre.exit` 后解构。
 
 预检段有若干"报错即退出码 1/2"的出口,提取后用 `{ exit: n }` 分支回传,由 `runAll` 决定 return——**不要在被提取的函数里直接 `process.exit`**,那会改变现有行为。**S13 复核订正**:原文此处写"现在走的是 return + finally 清理"不准确——预检段位于 `runAll` 的 `try` **之前**,它的 `return 1/2` 不经 finally;其中两处 `return 2`(启动 clean 门禁 dirty、housekeeping 提交失败)发生在 `watchFiles`/`trackSubtasks` 已启动、`protect` 已施加之后,现状即不关计时器、不 `unprotect`、不 `flushStats`。纯搬运须**原样保留**这一时序(`runAll` 拿到 `{ exit }` 直接 return,不补清理),见 §H.3 与 §I D13。
 
@@ -243,8 +246,8 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 **loop.ts(S13–S17)**
 
 - [x] **S13** `src/conclusion.ts` + `src/loop-progress.ts` — 两个叶子模块,一步搬完;测试文件已存在,改 import 即可。**已完成 2026-09-16**:loop.ts 尾部两段相邻连续区间迁出(`waitBetweenTasks`/`watchFiles`/`trackSubtasks`/`subtaskProgressLine` 1020–1107 → `loop-progress.ts`;`resumeBanner` + 三个代答高亮块 + 三个结论行 1109–1239 → `conclusion.ts`,`// ===== … =====` 分节注释整块随行;1019 空行随删,与 §H.3 预记坐标逐行吻合)。私有符号 `watchFiles`/`trackSubtasks`/`resumeBanner` 迁出后加 `export`(唯一调用方 `runAll`),其余 8 个原已导出。**方向性验收通过**:两新文件均为纯叶子,import 无 `./loop` 且互不引用。**import 清单**:loop-progress = `node:readline/promises` `./git` `./interactive`(类型) `./log` `./plan` `./stats`;conclusion = `./log` `./phases` `./resolve` `./stats`。§H.3 预推的 `node:path` 的 `join` **两份都不需要**——区间里的 `join` 只有 `.join("\n")` / `parts.join(" / ")` 数组方法调用(假阳性,见 §H.2 新增条)。悬空 import 按 §H.2 python 判词扫全表,清出 **14 个本步造成**(与 §H.3 预扫逐项吻合:`node:readline/promises` 整行、`./log` 的 `formatUsageLine`/`vlog`、`./plan` 的 `countSubtasks`、`./resolve` 整行 3 个、`./stats` 7 个)+ **1 个历史遗留** `node:path` 的 `relative`(HEAD 上只在 import 行出现,非本步造成);`./stats` 剩 4 个收成单行。**消费方**:壳包不取这 11 个符号(跨 worktree 已核),**loop.ts 不留再导出**;`test/loop-progress.test.ts` 与 `test/loop-conclusion.test.ts` 各改一行 import 为精确导入(测试体零改动,文件名不改)。新文件 header 的设计文档指向写 `docs/stats-timing-design.md §F`(原注释里的 `plans/STATS_PLAN.md §4.x` 已不存在于仓库,纯搬运不改原注释,只在新写的 header 里指现行文档)。`docs/structure.md` 在 `src/loop.ts` 条目后新增两条(按 §H.2 末条新写),loop 条目末尾追加一句迁出指路;`AGENTS.md` 导航段的统计/代答/大文件拆分三条同步改指。实测:loop.ts −225 行(1239 → 1014)、loop-progress.ts 99 行、conclusion.ts 140 行,`bun typecheck` 干净、771 pass / 0 fail 不变,`packages/auto` 零改动通过 typecheck;逐字校验 199 行非空正文逐字一致(`export` 已规范化),差异只有本步有意的 import 行改写。
-- [ ] **S14** 提取 `RunAllOpts` 具名类型 + `src/loop-preflight.ts`,注意 §E 的"不要 process.exit"。
-- [ ] **S15** `src/loop-task.ts` — 闭包转顶层函数,引入 `LoopCtx`;`ran` 降为局部。
+- [x] **S14** 提取 `RunAllOpts` 具名类型 + `src/loop-preflight.ts`,注意 §E 的"不要 process.exit"。**已完成 2026-09-16**:三段迁出(`templateAgent` 默认 import 行 52;`renderAgentContract` 及其上 3 行注释 69–74;`RunAllOpts` 内联类型 79–142;预检段 146–263,与 §H.3 预记坐标逐行吻合)。**按 §H.3 建议落位(§I D13)**:`RunAllOpts` 定义在 `loop-preflight.ts`(字段整体去掉 2 格缩进包成 `export type RunAllOpts = { … }`),`renderAgentContract` 连同 `with { type: "file" }` 模板 import 一并下沉;loop.ts 以 `import { preflight, type RunAllOpts }` 取用、`export { renderAgentContract, type RunAllOpts } from "./loop-preflight"` 再导出(migrate 壳取 `renderAgentContract`,不得删),`runAll` 签名收成单行 `runAll(directory: string, opts: RunAllOpts)`。`const path = join(directory, "PLAN.md")` 留在 runAll 作形参传入。**出口时序原样保留**:5 处 `return 1/2` 改写为 `return { exit: 1/2 }`,runAll 拿到即 `return pre.exit`,两处 exit 2 仍不经 finally、不补清理(§I D13);段尾追加 `return { agentName, watcher, progress }`,runAll 解构后原 `watcher`/`progress`/`agentName` 的后续用法零改动。**方向性验收通过**:`loop-preflight.ts` 无 `./loop` import,出向只有 agents-block/conclusion/git/gitignore/log/loop-progress/mode/opts/plan/protect/resume/server/shell/stats/template/testrun 叶子。**import 清单与 §H.3 预推逐项吻合**(`block` 命中的是 `ensured.block` 属性、`join` 另有 `.join(", ")`,判词带 `(?<![.\w])` 后均正确排除;`join` 仍有一处真实调用 `join(directory, ".opencode/agent", …)`,需 import)。悬空 import 按 §H.2 python 判词扫全表,loop.ts 清出 **19 个、全为本步造成**,与 §H.3 预扫名单一致:`./git` 的 `changedFiles`、`import { ensureGitignore } from "./gitignore"`(只删 import 行,其上注释与 `export { ensureGitignore } from` 保留)、`./loop-progress` 的 `trackSubtasks`/`watchFiles`、`./conclusion` 的 `resumeBanner`、`./mode` 整行、`./plan` 的 `resetInProgress`/`setStatus`、`./protect` 的 `protect`、`./resume` 的 `peekProgress`、`./opts` 整行 2 个、`./testrun` 整行、`./shell` 整行、`./stats` 的 `loadStats`、`./template` 整行 2 个、`templateAgent` 默认 import;**本步无历史遗留**;`ensurePointer` 不悬空(本地 `export { ensurePointer, renderAgentsBlock }` 需要它)。`./conclusion` 剩 6 个并行 136 字符 > 120,保持多行。复扫两文件全部 import 均有正文使用。**消费方**:壳包取 `runAll`/`ensureGitignore`/`ensurePointer`/`renderAgentContract` 四者仍可从 `loop` 取到;跨 worktree 无人用 `typeof runAll`/`Parameters<…>` 取选项类型;`test/prompt.test.ts:6` 改从 `../src/loop-preflight` 精确导入(测试体零改动),`test/check.test.ts`/`test/gitignore.test.ts` 取的是 agents-block/gitignore 的再导出,不属本步。逐字校验(剥行首空白后排序比对,抵消 `RunAllOpts` 去缩进)差异只有本步有意的改动:`preflight` 签名 7 行与段尾 `return { agentName, watcher, progress }`、5 处 `return { exit: n }`、`export type RunAllOpts = {`/`}` 包裹、runAll 签名收行,以及新写的 2 行 `preflight` 注释。`docs/structure.md` 在 loop 条目后新增 `src/loop-preflight.ts` 条目(按 §H.2 末条新写)并在 loop 条目末尾追加 S14 迁出指路;`AGENTS.md` 导航段「阶段循环」条补运行前预检指路、「大文件拆分」条更新进度。实测:loop.ts −193 行(1014 → 821)、loop-preflight.ts 227 行,`bun typecheck` 干净、771 pass / 0 fail 不变,`packages/auto` 零改动通过 typecheck。
+- [ ] **S15** `src/loop-task.ts` — 闭包转顶层函数,引入 `LoopCtx`;~~`ran` 降为局部~~ `ran` 作为可变字段进 ctx(S14 复核订正,§I D14)。
 - [ ] **S16** `src/loop-phase.ts` — 同上;`loop.ts` 收敛为 `runAll` 外壳。
 - [ ] **S17** 复核 §B 判据,更新 `docs/structure.md` loop 条目与 `AGENTS.md`。
 
@@ -306,35 +309,53 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 - **数组/字符串方法名与 import 同名也是假阳性(S13)**:`\bjoin\b` 会命中 `parts.join(" / ")`,于是 §H.3 预推给两个叶子模块都列了 `node:path` 的 `join`,实际都不需要。与上面「对象属性名」同理:判词命中后看前一个字符是不是 `.`。
 - **本文件内的 `export { a, b }`(无 from)是真实使用**:loop.ts 有 `import { ensurePointer, renderAgentsBlock } from "./agents-block"` + `export { ensurePointer, renderAgentsBlock }` 这种"先 import 再本地导出"写法,与 `export { x } from "./m"` 不同,它**需要** import。扫描时若把 `export {` 行一概剔除,`renderAgentsBlock` 会被误报悬空——剔除只针对带 `from` 的再导出行。
 - **`docs/structure.md` 多数步骤是"加条目"而非"挪文字"**:`src/runner.ts` 那条 15750 字符的 bullet 讲的是流水线**行为**(行为留在 runner.ts),没有可整段excise 的"类型定义"文字。别为了凑 §G.1 的"拆成 13 条"硬搬——**只有讲的是被迁走的那段机制时才搬文字**,否则新写一条。
+- **去缩进搬运的逐字校验要先剥行首空白(S14)**:闭包/内联类型转顶层声明时缩进必然变化(S14 的 `RunAllOpts` 字段 −2 格,S15/S16 的闭包体将 −4 格),§H.1 第 8 步的 `diff` 会整片报差。两侧都过一道 `sed 's/^ *//'` 再 `sort` 比对,剩下的才是真差异;缩进本身交 `bun typecheck` 与目检。
+- **默认 import 也要进扫描表(S14)**:§H.2 的 python 正则只匹配 `import { … } from`,`import templateAgent from "…" with { type: "file" }` 这类默认 import 会漏扫;补一条 `^import\s+(\w+)\s+from\s+"([^"]+)"` 一并计数。判词另加负向后顾 `(?<![.\w])`,可以一次排除属性名与数组方法名两类假阳性(§H.2 前两条),S14 的 `ensured.block`/`.join(", ")` 即由此自动剔除。
+- **提取函数的联合返回值写显式类型(S14)**:`preflight` 若靠推断得出 `{ exit } | { agentName, … }`,TS 会把对象字面量联合规范化成双方都带可选 `undefined` 属性的形状,`"exit" in pre` 的窄化就不再干净;照 §E 写出显式返回类型最省心。
+- **"只在某闭包里用"不等于"可降为该闭包的局部"(S14 复核)**:判据还要看**该闭包会不会被调多次**。`ran` 声明在 `runAll` 作用域、只在 `runTaskLoop` 里读写,但 `runPhaseLoop` 会多次调 `runTaskLoop`,计数跨调用累积;降为局部即每次清零(§I D14)。闭包转顶层函数前,对每个"只在闭包内使用"的外层 `let` 都 `grep -n '<闭包名>('` 数一遍调用点。
 
-### H.3 下一步(S14 `RunAllOpts` + `src/loop-preflight.ts`)的现成坐标
+### H.3 下一步(S15 `src/loop-task.ts` + `LoopCtx`)的现成坐标
 
-当前 HEAD(S13 落地后,loop.ts 1014 行)下的位置,仍需自行 grep 复核。
+当前 HEAD(S14 落地后,loop.ts 821 行)下的位置,仍需自行 grep 复核。闭包都在 `runAll` 的 `try` 块内,体缩进 6 格,转顶层函数后 −4 格(逐字校验按 §H.2 新增条剥行首空白)。
 
 | 对象 | 区间 | 备注 |
 |---|---|---|
-| `RunAllOpts` 内联类型 | **78–143**(`opts: {` … `},`) | 含逐字段中文注释,整块提成 `export type RunAllOpts = { … }`,`runAll` 签名改 `opts: RunAllOpts`。字段类型用到 `SubtaskMode`/`PermissionMode`(`./opts`)、`ModeSpec`(`./mode`)、`ServerHandle`(`./server`) |
-| 预检段 | **146–263**(`if (!(await Bun.file(path).exists()))` 起,至 housekeeping 提交块的 `}` 止;264 为 `let server`) | 145 行 `const path = join(directory, "PLAN.md")` **留在 runAll**(后续 phase 路由、runTaskLoop 都用它),作为形参传入。段内含 PLAN.md 存在性、`usePromptLibrary`、`--early` 降级提示、agent 契约完整性检查、`watchFiles`/`loadStats`+`resumeBanner`/`trackSubtasks`、`protect`、`restoreTestHandoffs`、启动 clean 门禁、`resetInProgress` + `peekProgress` 精确恢复、`ensurePointer`/`ensureGitignore`、housekeeping 提交 |
+| `let ran = 0` | **125** | 转为 ctx 字段 `ran: 0`(§I D14),此行删除 |
+| `serverHandle` | **126–127**(注释 + `const serverHandle = server`) | **留在 runAll**——闭包之后的 `planPhase`/`handoverPhase`/`runPhaseLoop` 仍用 8 次;作为 `ctx.server` 传入 |
+| `advanceFinal` | **128–188**(注释 128–134,`const advanceFinal = async (plan: Plan, announce = false)` 135) | 改 `export async function advanceFinal(ctx: LoopCtx, plan: Plan, announce = false)`;唯一调用方 `runTaskLoop`(2 处),S16 前 loop.ts 余下正文零引用——可不 export,但 S16 的 loop-phase 也不调它,**保持模块私有** |
+| `runTaskLoop` | **189–369**(注释 189–194,`const runTaskLoop = async (phase: Phase)` 195;370 空行、371 `if (phases === "m")`) | 改 `export async function runTaskLoop(ctx: LoopCtx, phase: Phase)`;loop.ts 两处调用点 **372**(`runTaskLoop("m")`)与 **789**(`runPhaseLoop` 内 `runTaskLoop(route.phase)`)改为带 `ctx` |
 
-**预检段的出口(5 处,S14 必须原样保留时序)**:
+**捕获量实测**(剥注释、判词排除 `.`/属性,在两段区间内计数):`advanceFinal` = `directory` 3 / `path` 2 / `opts` 8 / `agentName` 1 / `repl` 1 / `serverHandle` 2;`runTaskLoop` = 以上全部 + `phases` 2 + `ran` 2(221 读、327 `ran++`)+ `advanceFinal` 2。与 §E 所列一致,**另加 `ran`**。`server`(`let`)只在 102 赋值一次、`repl` 只在 104 赋值一次,二者在 ctx 构造点(127 之后)已定值,按值装进 ctx 不丢更新;`phases` 为 94 行 `const`。
 
-- `return 1` ×3:PLAN.md 不存在、`usePromptLibrary` 抛错、agent 契约文件缺失——都在 `watchFiles`/`trackSubtasks`/`protect` **之前**,无副作用残留。
-- `return 2` ×2:启动 clean 门禁 dirty、housekeeping 提交失败——都在计时器已启、`protect` 已施加**之后**,且位于 `runAll` 的 `try` **之前**,现状**不经 finally**(不 `watcher.close()`/`progress.close()`/`flushStats`/`unprotect`)。S14 是纯搬运,`preflight` 返回 `{ exit: 2 }` 时 `runAll` 直接 `return`,**不得顺手补清理**(那是行为改动,见 §I D13;是否修另立任务)。
+**建议的最小改写(让函数体尽量逐字不动)**:
 
-**预检段产出、runAll 后续仍用的局部量**(剥注释后在 264–1014 计数):`agentName`(8 处,`startInteractive`/`runOnce`/`runTask` 透传)、`watcher`(finally 1 处)、`progress`(finally 1 处)——与 §E 建议签名一致。`agentFile`/`agentText`/`program`/`bin`/`agentRecovery`/`resumed`/`stale`/`record`/`ensured` 只在段内使用,随迁;`gate`/`fresh`/`pending`/`settled` 在后续闭包里有**同名但独立**的局部声明,不是捕获,不进返回值。
+```ts
+// loop-task.ts
+export type LoopCtx = {
+  directory: string
+  path: string
+  opts: RunAllOpts          // import type from "./loop-preflight"(下层,方向正确)
+  server: ServerHandle
+  agentName: string
+  phases: string
+  repl?: Interactive
+  ran: number               // runTaskLoop 跨调用累积(§I D14)
+}
+export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
+  const { directory, path, opts, server: serverHandle, agentName, phases, repl } = ctx
+  …函数体原样(−4 格),仅 `ran` 两处改 `ctx.ran`、`advanceFinal(` 两处改 `advanceFinal(ctx, `
+}
+```
 
-**必须先决策的反向依赖(§I D13 候选)**:预检段调 `renderAgentContract`(loop.ts 70–74,模块内定义),原样搬走即 `loop-preflight → loop` 反向依赖;§E 表把 `renderAgentContract` 列在 loop.ts 留存,与 §D.2/§E 的单向约束冲突。同理 `RunAllOpts` 若按 §E 原文放 loop.ts,`loop-preflight` 取其类型也是反向(虽然 `import type` 会被擦除,但方向图仍然成环)。建议按 D7/D11 口径:
+runAll 在 127 之后构造 `const ctx: LoopCtx = { directory, path, opts, server: serverHandle, agentName, phases, repl, ran: 0 }`,两处调用点传 `ctx`。`LoopCtx` 定义放 `loop-task.ts`(S16 的 `loop-phase.ts` 与 loop.ts 都从它取,方向 `loop → loop-phase → loop-task → loop-preflight` 单向)。
 
-- `RunAllOpts` **定义在 `loop-preflight.ts`**,loop.ts `import type` 取用并 `export type { RunAllOpts } from "./loop-preflight"`(runAll 的公开签名要用到,壳包若需要具名类型有稳定入口)。
-- `renderAgentContract` 连同其上 3 行注释与 `import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }` **迁入 `loop-preflight.ts`**(唯一包内调用方就是预检段),loop.ts 留 `export { renderAgentContract } from "./loop-preflight"`——**这一行不得删**:migrate 壳 `packages/auto-migrate/src/tool.ts:14` 与其 `test/e2e.test.ts:7` 从 `@opencode-ai/auto-core/loop` 取它(跨 worktree 已核)。`test/prompt.test.ts:6` 改精确导入。模板保持 `with { type: "file" }`(包 AGENTS.md 构建约定)。
+**import 清单(预推,按 §H.2 python 判词;需复核)**:`./final`(`appendFinalTask`/`finalIndex`/`finalProposalFile`/`generateFinalTask`/`routeFinal`/`FinalProposal`)、`./exit`(`maybeExit`)、`./failback`(`consumeFailback`)、`./git`(`beginUnit`/`commitTree`/`unitBaseline`/`unitViolations`/`UnitBaseline`)、`./loop-progress`(`waitBetweenTasks`)、`./conclusion`(`taskEndLines`/`taskResolveLines`)、`./log`(`banner`/`formatDuration`/`log`)、`./plan`(`block`/`load`/`next`/`Plan`)、`./phases`(`Phase`)、`./prompt`(`stageText`)、`./resume`(`recallProgress`)、`./runner`(`runTask`)、`./stats`(`statsTask`)、`./step`(`stepPause`),加 `LoopCtx` 所需的 `./loop-preflight`(`RunAllOpts`)/`./server`(`ServerHandle`)/`./interactive`(`Interactive`)类型。区间内**无** `roundCompleteLines`/`roundResolveLines`(那是 runPhaseLoop 的)。
 
-**import 清单(预推,按 §H.2 python 判词;`block` 命中的是 `ensured.block` 属性、`join` 另有 `.join(", ")` 方法调用,均需复核)**:`node:path`(`join`)、`./agents-block`(`ensurePointer`)、`./conclusion`(`resumeBanner`)、`./git`(`beginUnit`/`changedFiles`/`commitTree`)、`./gitignore`(`ensureGitignore`)、`./log`(`log`)、`./loop-progress`(`trackSubtasks`/`watchFiles`)、`./plan`(`load`/`resetInProgress`/`setStatus`)、`./protect`(`protect`)、`./resume`(`peekProgress`)、`./shell`(`shellProfile`)、`./stats`(`loadStats`)、`./template`(`renderText`(随 renderAgentContract)/`usePromptLibrary`)、`./testrun`(`restoreTestHandoffs`),加 `RunAllOpts` 所需的 `./opts`/`./mode`/`./server` 类型。
+**预计清出的悬空 import**(loop.ts 侧):`./final` 整行 6 个、`./git` 的 `beginUnit`/`unitBaseline`/`unitViolations`/`UnitBaseline`、`./loop-progress` 整行(`waitBetweenTasks`)、`./conclusion` 的 `taskEndLines`/`taskResolveLines`、`./log` 的 `formatDuration`、`./plan` 的 `block`/`Plan`、`./prompt` 的 `stageText`、`./resume` 的 `recallProgress`、`./runner` 的 `runTask`、`./stats` 的 `statsTask`。**`./plan` 的 `next` 要特别核**:loop.ts 余下正文的 5 处 `next` 命中全是**同名局部变量**(534 `const next = nextLetter ? …`、512 `const next = await advanceNextTask(…)`)与属性(`numbering.next`、`{ … next, verify }` 简写),S15 后它大概率也悬空——判词区分不了遮蔽的局部变量,须看上下文。`maybeExit`/`consumeFailback`/`commitTree`/`banner`/`load`/`Phase`/`stepPause` 在余下正文仍有真实使用,保留。
 
-**预计清出的悬空 import**(loop.ts 侧):`./git` 的 `changedFiles`、`./conclusion` 的 `resumeBanner`、`./loop-progress` 的 `trackSubtasks`/`watchFiles`、`./plan` 的 `resetInProgress`/`setStatus`、`./protect` 的 `protect`、`./resume` 的 `peekProgress`、`./testrun` 整行、`./shell` 整行、`./stats` 的 `loadStats`、`./template` 的 `usePromptLibrary`(`renderText` 若随迁亦然,核 loop.ts 余下正文)、`import { ensureGitignore } from "./gitignore"`(**只删 import 行**,紧随其后的 `export { ensureGitignore } from "./gitignore"` 与其上 2 行注释保留——通用壳与 migrate 壳都从 `loop` 取它)、`templateAgent` 默认 import;类型侧 `SubtaskMode`/`ModeSpec` 视 `RunAllOpts` 迁走后 loop.ts 是否仍用而定。`ensurePointer` **不是悬空**:loop.ts 的本地 `export { ensurePointer, renderAgentsBlock }` 需要它(§H.2 新增条)。
+**消费方(已跨 worktree 核)**:壳包不取 `advanceFinal`/`runTaskLoop`/`LoopCtx`(二者迁出前是闭包、根本不可导出),loop.ts **不留再导出**;无测试直接覆盖这两个闭包(经 `runAll` 的 e2e 间接覆盖)。
 
-**消费方(已跨 worktree 核)**:壳包从 `@opencode-ai/auto-core/loop` 取 `runAll`/`ensureGitignore`/`ensurePointer`(通用壳)与 `runAll`/`ensureGitignore`/`renderAgentContract`(migrate 壳)——四者在 S14 后仍须可从 `loop` 取到。包内测试:`test/check.test.ts:7`(`ensurePointer`)、`test/gitignore.test.ts:5`(`ensureGitignore`)、`test/prompt.test.ts:6`(`renderAgentContract`)。
-
-**预估结果**:loop-preflight.ts ≈ 118(段)+ 66(RunAllOpts)+ 5(renderAgentContract)+ header/import ≈ 215 行;loop.ts ≈ 1014 − 118 − 66 − 5 + 返回值分派 ~8 ≈ **835 行**;`bun test` 仍 771。
+**预估结果**:loop-task.ts ≈ 242(段)+ LoopCtx 10 + header/import 30 ≈ **280 行**;loop.ts ≈ 821 − 242 − 1(`let ran`)+ ctx 构造与 import ~5 − 悬空 import 行 ~5 ≈ **580 行**(S15 后 loop.ts 已进 600 线内,S16 再拆 loop-phase 是为职责清晰与 §E 的终态);`bun test` 仍 771。
 
 ## I 决策记录
 
@@ -349,7 +370,8 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 - **D10(S8 实施期追加)`attempt` 与 `recordDriverResolves` 另立 `src/attempt.ts`,不与 `runSession` 同文件**:D.1 原把会话驱动层七个符号一并排给 `session.ts`,实测三段区间合计 590 行正文——仅 import 块就要 15+ 行(本层是会话驱动的核心,出向面最宽),加 header 必然落在 620 行上下,直接违反 §B 判据 1 的"单文件 ≤ 600"。切分点没有第二个选择:`attempt`(264 行)是 `runSession` 的唯一被调、`recordDriverResolves`(18 行)是 `attempt` 的唯一被调,整组下沉后方向仍是单向链 `session → attempt → watch`,两个文件各 331 / 312 行、都留出了余量。这也与 §D.4「`watch`/`runTask`/`attempt` 拆完后各自独占一个文件」的原意一致(D.4 写下时把 `attempt` 与 `runSession` 排进同一文件,是行数估算未计 import 的疏漏)。同 D7 口径:**实施期发现单文件越线时,按"唯一调用方"关系整组下沉成叶子模块,不拆函数内部**,并在此登记。
 - **D11(S12 实施期追加)`requireTask` 随 `execute.ts` 迁出,不单立叶子**:§D.1 原把它留在 runner.ts,但区间二的 `ensureUnderstood`/`ensureDecomposed`/`runSubtask` 共调用它 6 次,留原地即 `execute → runner` 反向依赖。它是 5 行的「重读 PLAN.md 取任务」小工具,按 D7 口径可沉到新叶子,但单立 5 行文件不划算;而留存侧 `runTask` 从 `./execute` 取用正是 §D.2 的正向(`runner → execute`),迁进 `execute.ts` 加 `export` 即无环、无新文件。`pseudoTask` 只被 `runOnce` 用,留原地。`plan.ts` 里逐字同构的私有 `require` 不去重(§H.2「同值副本」条)。
 - **D12(S12 实施期追加)`runner.ts` 兼容再导出收敛为「壳包消费面」三符号**:§D.3 原建议「只留包外那两个类型」,开工前跨 worktree 核实发现 migrate 壳 `packages/auto-migrate/src/tool.ts` 从 `@opencode-ai/auto-core/runner` 取 `requireArtifact`(§A.4 当时只看了本分支上的 `packages/auto`)。壳分支不得改核心、按约定定期 `git merge auto-core` 刷新快照——删掉它会让下一次 merge 后 migrate 壳编译失败,等于核心单方面破坏壳契约,故终态保留 `PermissionMode`/`SubtaskMode` + `requireArtifact`。其余 11 行再导出只服务包内与单测:包内早已精确导入,`test/runner.test.ts:10` 一行改为 8 条精确 import(纯 import 改写)。选择收敛而非全留:全留时 runner.ts 约 590 行也能过判据 1,但会让「`runner` 是万能入口」的旧认知延续下去,与拆分的目的相悖。**壳包若要改从 `artifact` 子路径取 `requireArtifact`,由壳分支自行决定,核心侧不催**;在那之前这一行不得删。
-- **D13(S13 复核时预登记,S14 实施时确认)预检段的出口原样保留"不经 finally"**:§E 原文称预检出口"现在走的是 return + finally 清理",实核不成立——两处 `return 2` 位于 `runAll` 的 `try` 之前,此时 verbose 变更文件监视与 10 分钟进度心跳两个 `setInterval` 已启动、driver 状态文件已置只读,现状即不清理——通用壳 `packages/auto/src/index.ts` 拿到退出码即 `process.exit(code)`,计时器不会挂住进程,但 driver 状态文件的只读位不恢复(`unprotect` 未跑)、stats 开放段不落盘(`flushStats` 未跑,下次 `loadStats` 走折旧)。这可能是既有缺陷,但修它就是行为改动,与本方案"纯搬运"定位冲突;S14 保持时序不变,**另立任务评估**(候选修法:把 `watchFiles`/`trackSubtasks`/`protect` 挪进 try 或预检失败出口前补清理)。同批预登记:`renderAgentContract` 与 `RunAllOpts` 按 D7/D11 口径随预检段下沉到 `loop-preflight.ts`、loop.ts 以再导出兜住壳包消费面,以免 `loop-preflight → loop` 反向依赖(§H.3)。
+- **D13(S13 复核时预登记,S14 实施时确认——已按此落地)预检段的出口原样保留"不经 finally"**:§E 原文称预检出口"现在走的是 return + finally 清理",实核不成立——两处 `return 2` 位于 `runAll` 的 `try` 之前,此时 verbose 变更文件监视与 10 分钟进度心跳两个 `setInterval` 已启动、driver 状态文件已置只读,现状即不清理——通用壳 `packages/auto/src/index.ts` 拿到退出码即 `process.exit(code)`,计时器不会挂住进程,但 driver 状态文件的只读位不恢复(`unprotect` 未跑)、stats 开放段不落盘(`flushStats` 未跑,下次 `loadStats` 走折旧)。这可能是既有缺陷,但修它就是行为改动,与本方案"纯搬运"定位冲突;S14 保持时序不变,**另立任务评估**(候选修法:把 `watchFiles`/`trackSubtasks`/`protect` 挪进 try 或预检失败出口前补清理)。同批预登记:`renderAgentContract` 与 `RunAllOpts` 按 D7/D11 口径随预检段下沉到 `loop-preflight.ts`、loop.ts 以再导出兜住壳包消费面,以免 `loop-preflight → loop` 反向依赖(§H.3)。**S14 实施确认**:`preflight` 回传 `{ exit }`、runAll 直接 return,未补任何清理;`RunAllOpts`/`renderAgentContract` 定义在 `loop-preflight.ts`,loop.ts 一行 `export { renderAgentContract, type RunAllOpts } from "./loop-preflight"` 兜住。"预检失败出口不清理"的评估仍未立任务。
+- **D14(S14 复核时预登记,S15 实施)`ran` 作为可变字段进 `LoopCtx`,不降为 `runTaskLoop` 局部**:§E 原文按"只在 `runTaskLoop` 体内使用"判定它可降为局部,但它声明在 `runAll` 作用域、`runPhaseLoop` 每遇 `execute` 路由都会再调一次 `runTaskLoop`——计数跨调用累积,决定的是 `--wait-between` 在**后续阶段首个任务前**是否暂停(`ran > 0 && opts.waitBetween`)。降为局部即每个执行阶段的首个任务都不暂停,是行为改动,与"纯搬运"定位冲突。故 `LoopCtx` 加 `ran: number`,runAll 构造 ctx 时置 0、按引用传入,`runTaskLoop` 内两处改 `ctx.ran`(读与 `++`)。备选"`runTaskLoop` 返回本次跑的任务数由调用方累加"要改返回值语义与两处调用点,否决。
 - **D6 历史计划文档的引用用 `@sha` 钉住而非追新**:那些文档描述的是当时的实现状态,把行号追到新文件会制造"文档说的是现在"的错觉;`@<sha>` 版本标记是仓库既有约定(见 `src/agents-block.ts` 的引用规范)。
 
 ## J 风险与回滚

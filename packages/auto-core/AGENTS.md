@@ -26,7 +26,7 @@
 ## 导航(按改动定位)
 
 - 项目配置 → `src/config.ts`(设计: docs/init-config-agents-design.md)
-- 任务流水线 → `src/runner.ts`(runTask/runOnce)+ `src/execute.ts`(整任务/理解/分解/子任务执行);会话链与会话驱动 → `src/chain.ts` + `src/session.ts`(runSession)→ `src/attempt.ts`(单次下发)→ `src/watch.ts`(事件流),产物型旁路会话 → `src/artifact.ts`(requireArtifact);阶段循环 → `src/loop.ts` + `src/phases.ts`(设计: docs/phases-design.md)
+- 任务流水线 → `src/runner.ts`(runTask/runOnce)+ `src/execute.ts`(整任务/理解/分解/子任务执行);会话链与会话驱动 → `src/chain.ts` + `src/session.ts`(runSession)→ `src/attempt.ts`(单次下发)→ `src/watch.ts`(事件流),产物型旁路会话 → `src/artifact.ts`(requireArtifact);阶段循环 → `src/loop.ts` + `src/phases.ts`(设计: docs/phases-design.md),运行前预检(契约完整性/启动 clean 门禁/中断状态复位/housekeeping 提交)→ `src/loop-preflight.ts`
 - fork 分解(理解→分解→执行三段式、分叉基点、OPENCODE_AUTO_* 实验开关)→ `src/execute.ts` + `src/session.ts` 的 ensureForkBase + `src/session-api.ts` 的 forkSession/seedForkSession + `src/switches.ts`(设计: docs/fork-decompose-design.md)
 - 步进模式(OPENCODE_AUTO_STEP 环境变量:phase/task/subtask 包含式边界硬暂停)→ `src/step.ts`(设计: docs/step-mode-design.md)
 - 验收/审核 → `src/review.ts`(verifyTask/reviewTask)+ `src/verify.ts` + `docs/verify-review-design.md`;终审闭环 → `src/final.ts` + `docs/mode-final-review-design.md`
@@ -42,7 +42,7 @@
 - 稳定引用与文件存放规范(docs/T-NNN/ 目录化、docs 永不移动、轮次专用目录 docs/R-NN/(轮首 establishRound 建立、根 PLAN.md 为其符号链接)、引用一致性三层检查)→ docs/stable-refs-design.md(设计定稿 2026-09-06,P1..P4 已全部实施;轮次专用目录方案 2026-09-08,见 plans/ROUND_WORKDIR_PLAN.md 与 phases-design.md M 节;路径构造/读回落在 src/docpaths.ts,引用提取/校验/改写/门禁在 src/refcheck.ts)
 - refcheck 范围收敛与恢复(OPENCODE_AUTO_REF_CHECK 开关默认关、git 历史恢复缺失引用、行号锚 @sha 版本标记、摒弃移动文件适配)→ docs/refcheck-scope-design.md(2026-09-08 定稿,P1..P3 已全部实施;开关在 src/switches.ts,缺失恢复 renameHistory/recoverMissingRefs 与范围再确认 reconfirmAnchors 在 src/refcheck.ts)
 - 核心/外壳边界、合入流程、新壳接入 → docs/shell-contract.md
-- **大文件拆分(进行中)** → docs/module-split-plan.md(2026-09-16 立项:目标单文件 ≤ 600 行,纯搬运不改行为。**runner.ts 部分已完成**(S1–S12,4064 → 578 行,拆出 opts/chain/unit-commit/current/resume-gate/session-api/testrun/watch/attempt/session/artifact/exec-session/review/execute 14 个模块);`src/loop.ts` 部分进行中(S13 已拆出叶子 `src/conclusion.ts` / `src/loop-progress.ts`,1239 → 1014 行;S14 起提取预检段与闭包)。**`runner.ts` 不再是万能入口**:只留 runTask/runOnce,兼容再导出仅保留壳包消费面(PermissionMode/SubtaskMode 类型与 requireArtifact),包内模块与单测一律从符号所在模块精确导入。**动这些文件前先读该文 §D.2 的依赖方向图**——下层模块不得反向 import runner,`testrun.ts` 不得反向 import 会话驱动层)
+- **大文件拆分(进行中)** → docs/module-split-plan.md(2026-09-16 立项:目标单文件 ≤ 600 行,纯搬运不改行为。**runner.ts 部分已完成**(S1–S12,4064 → 578 行,拆出 opts/chain/unit-commit/current/resume-gate/session-api/testrun/watch/attempt/session/artifact/exec-session/review/execute 14 个模块);`src/loop.ts` 部分进行中(S13 已拆出叶子 `src/conclusion.ts` / `src/loop-progress.ts`,S14 拆出运行前预检 `src/loop-preflight.ts`(含 `RunAllOpts` 与 `renderAgentContract`,loop.ts 再导出兜住壳包),1239 → 821 行;S15 起把闭包转顶层函数)。**`runner.ts` 不再是万能入口**:只留 runTask/runOnce,兼容再导出仅保留壳包消费面(PermissionMode/SubtaskMode 类型与 requireArtifact),包内模块与单测一律从符号所在模块精确导入。**动这些文件前先读该文 §D.2 的依赖方向图**——下层模块不得反向 import runner,`testrun.ts` 不得反向 import 会话驱动层)
 - 完整文件清单与机制细节 → docs/structure.md、docs/behavior.md
 
 ## 核心不变量(改动前必读)

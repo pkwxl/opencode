@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { loadModes } from "../src/mode"
-import { renderAgentContract } from "../src/loop"
+import { renderAgentContract } from "../src/loop-preflight"
 import { parse } from "../src/plan"
 import type { Phase } from "../src/phases"
 import type { ResolveItem } from "../src/resolve"
