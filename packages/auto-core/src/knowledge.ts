@@ -7,7 +7,8 @@ import { log } from "./log"
 import { currentRound, readLedger, roundRoot } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
-import { afterSession, requireArtifact } from "./runner"
+import { requireArtifact } from "./runner"
+import { afterSession } from "./unit-commit"
 
 // k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(docs/fixme-knowledge-design.md
 // §D + docs/phases-design.md P4): 各阶段完成后,旁路一次性会话把最终验证过的迁移
