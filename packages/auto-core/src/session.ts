@@ -1,6 +1,6 @@
 // 会话驱动的核心层: 单个提示词在会话链上的执行(runSession——复用/新建、瞬时
-// 错误换新会话重试、网络故障重启 server、配额受限的模型降级环与窗口钳制),
-// 阶梯耗尽后的人工裁决(askRetry/retryDecision),以及 fork 基点的确立
+// 错误换新会话重试、网络故障重启 server、配额受限的模型降级环与窗口钳制、
+// 一切会话故障的最终归宿「等待-探测环」awaitRecovery),以及 fork 基点的确立
 // (ensureForkBase——它驱动一次性基点会话,属会话驱动而非 SDK 薄封装,故与
 // runSession 同层,见 docs/module-split-plan.md §I D9)。
 // 位于 attempt/watch 之上、runner 之下;**不得反向 import runner**。
@@ -12,14 +12,14 @@ import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type Sessio
 import { attempt } from "./attempt"
 import { resolveTaskDoc, taskDoc } from "./docpaths"
 import { failbackOverride, setSticky, stickyModel } from "./failback"
-import type { Interactive } from "./interactive"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { setForkBase, type Plan, type Task } from "./plan"
 import { renderContextBase } from "./prompt"
 import { firstLine } from "./resume-gate"
-import { askHuman, contextLimits, forkSession, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
+import { contextLimits, forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
 import { autoSwitches, type Switches } from "./switches"
+import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { type Steer, type TestRun } from "./testrun"
 
 // fork 基点确立(fork-decompose 设计 §4.2): 返回生效基点,undefined = 冷启动。
@@ -71,14 +71,21 @@ export async function ensureForkBase(
 // 再换新会话重试,避免对着同一坏实例反复失败。
 const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
 
+// 等待-探测环的探测提示词: 极小负载,只求一次真实的 provider 往返判明服务是否
+// 恢复——绝不用被中断的会话探测(往真实会话塞探测轮次会污染上下文,分叉探测则
+// 每个等待轮次白烧一遍全量前缀,配额受限期间只会雪上加霜)。
+const RECOVERY_PROBE_PROMPT = "[driver] 服务可用性探测: 请只回复 ok,不要执行任何其他操作。"
+
 // Runs one prompt on the session chain (reusing the previous session when its
 // context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
 // provider failures (session.error, e.g. malformed reasoning content from a
-// gateway) are retried in a fresh session before blocking; network/server
-// failures (Internal network failure / Network error 等) additionally restart
-// the spawned opencode server before the retry.
-// 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启);导出供
-// src/final.ts 的终审任务生成会话等旁路复用。test 为 --test-by-driver 的协议
+// gateway) are retried in a fresh session; network/server failures
+// (Internal network failure / Network error 等) additionally restart the
+// spawned opencode server before the retry; non-retryable failures (quota
+// etc.) and ladder exhaustion fall into the recovery wait-probe loop instead
+// of blocking — a session fault never terminates the run.
+// 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启、等待-探测环);
+// 导出供 src/final.ts 的终审任务生成会话等旁路复用。test 为 --test-by-driver 的协议
 // 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效);
 // switches 缺省取 OPENCODE_AUTO_* 解析值(复用开关),注入供单测。
 export async function runSession(
@@ -108,19 +115,18 @@ export async function runSession(
   // 为什么退避从分钟起步、而不是从秒开始翻倍: 退避本身不是恢复手段。opencode 内层
   // 每次故障已经用掉 6×300s 超时 + 2+4+8+16+30s 退避 ≈ 1860s(实测 1862s),外层再叠
   // 一条秒级曲线只占其中零头,改变不了下一次请求的命运。分钟级等待的唯一意义是
-  // 「跨过一段上游退化」,而实测退化以小时计(6 次致命错误挤在最后 18 小时,每个
-  // 致命会话死前已有 2–6 个 ≥250s 的步骤)——所以阶梯必然有耗尽的一天,耗尽后的
-  // 出路是人工裁决,不是继续加码次数。
+  // 「跨过一段上游退化」;阶梯耗尽后的出路是下方的等待-探测环(2026-09-16 起,
+  // 此前为人工裁决)——配额/限流的恢复窗口以小时计,加码次数无济于事,等就是了。
   const waits = switches.retryWaits
   let i = 1
   // 有效降级候选环: /failback 带参重定义过模型序时用其覆写环,否则取 switches 的
   // OPENCODE_AUTO_MODEL_FALLBACK 解析结果(switches memo 恒定,覆写经 failback 模块态
   // 承载)。降级触发门禁与 switchModel 的候选遍历共用同一来源。
   const fallbackRing = () => failbackOverride()?.fallback ?? switches.model.fallback
-  // 候选降级的公共动作(两个触发面共用:下面的配额降级支、阶梯耗尽后的人工回落):
+  // 候选降级的公共动作(两个触发面共用:下面的配额降级支、阶梯耗尽后的回落):
   // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选,换 chain.model、挂一次性
   // 降级 note、fork 副本带上下文随迁,并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
-  // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方按各自文案阻塞)。
+  // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方落入等待-探测环)。
   // why 为触发原因的中文短语,进日志与降级 note。
   const switchModel = async (why: string): Promise<boolean> => {
     limits ??= await contextLimits(client)
@@ -190,16 +196,87 @@ export async function runSession(
     chain.pct = 100
     return true
   }
-  // 候选耗尽时追加到阻塞文案后的清单:已试候选 + 因窗口不足跳过的候选。
-  const exhausted = () => `已用尽候选: ${tried.join(", ") || "无"}${clipped.length ? `;因上下文窗口不足跳过 ${clipped.join(", ")}` : ""}`
+  // 等待-探测环(2026-09-16 策略): 会话故障的最终归宿——不再阻塞退出,以
+  // recoveryWait(缺省 30 分钟)为间隔无限等待,每轮用**全新临时干净会话**下发极小
+  // 探测提示词判明服务是否恢复;恢复后 fork 被中断的会话(与重试环同一套「保住
+  // 最值钱的会话」判据: 失败会话本体 > 链上原会话,0 用量纯报错桩不进候选)从
+  // 副本续跑,fork 失败回退空白新会话重发完整提示词,阶梯计数重开一轮。如此无论
+  // 面临何种配额限制,程序都能等到额度恢复后再继续;等待期间连按两次 Ctrl+C 经
+  // runAll 的进程级 SIGINT 处理器强制退出(130),这是唯一的退出方式。
+  // 探测链不带 phase(不写进度记录、不动真实链的恢复点),但复制真实链的
+  // model/role——探测的就是恢复后要续跑的那条模型,配额按模型/账号计量,探测
+  // 别的模型结论无意义。探测会话本身异常(订阅断开等)同样视为未恢复,继续等。
+  const awaitRecovery = async (why: string): Promise<void> => {
+    for (;;) {
+      log(`⏳ ${task.id} ${why},等待 ${switches.recoveryWait} 分钟后用全新临时会话探测服务是否恢复(连按两次 Ctrl+C 可强制退出)`)
+      // 等待可能以小时计,从会话与 AI 用时中扣除、单记 waitMs(与 askHuman 同口径,
+      // STATS_PLAN §2/§3);探测会话自身的用时照常入账。
+      await statsWaitBegin(opts.dir, "recovery")
+      try {
+        await Bun.sleep(switches.recoveryWait * 60_000)
+      } finally {
+        await statsWaitEnd(opts.dir)
+      }
+      const probe: SessionChain = { pct: 100, used: 0, at: 0, model: chain.model, role: roleOf(chain) }
+      let ping: SessionResult
+      try {
+        ping = await attempt(client, task, RECOVERY_PROBE_PROMPT, opts, probe, undefined, undefined, switches)
+      } catch (error) {
+        log(`⏳ ${task.id} 探测会话本身异常(${formatClientError(error)}),服务未恢复,继续等待`)
+        continue
+      }
+      if (ping.type !== "idle") {
+        log(`⏳ ${task.id} 探测会话仍未恢复(${firstLine(ping.question)}),继续等待`)
+        continue
+      }
+      const sources: { id: string; used: number; why: string }[] = []
+      if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
+      if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
+      chain.failed = undefined
+      sources.sort((a, b) => b.used - a.used)
+      let seeded = false
+      for (const source of sources) {
+        const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 恢复`)
+        if (forked === undefined) continue
+        log(`↻ ${task.id} 服务已恢复,从${source.why} ${source.id}(${formatTokens(source.used)} tokens)分叉副本重发任务`)
+        // 清 chain.id、改由 pending 承载分叉会话(与 switchModel 同理: note + chain.id
+        // 非空会命中 attempt 的 resumed 复用分支而忽略 pending)。
+        chain.id = undefined
+        chain.pending = forked
+        chain.pct = 100
+        chain.used = source.used
+        // 一次性恢复说明: 分叉副本尾部带着当初的报错消息,同一提示词再次出现需要
+        // 一句解释,避免 AI 把重发当作重复要求。
+        chain.note = "[driver] 上次下发因服务/配额故障中断,现已恢复,请继续完成本次任务要求。"
+        seeded = true
+        break
+      }
+      if (!seeded) {
+        if (sources.length) log(`↻ ${task.id} 服务已恢复,但分叉被中断会话的副本均失败,回退空白新会话重发任务`)
+        chain.id = undefined
+        chain.pct = 100
+      }
+      i = 1
+      return
+    }
+  }
   for (;;) {
-    const result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
-    const transient = result.type === "blocked" && result.question.startsWith("会话错误:")
-    if (!transient) return result
-    // P4 配额降级(设计 D.3):在下方「不可重试直接阻塞」之前插入一支——分类为
-    // quota/auth/rate 且配置了候选表时,取下一候选(经 D.4 窗口钳制)、换 chain.model、
-    // 复用既有 fork 副本路径续跑(上下文随迁)。候选表为空时整段跳过,行为逐字节等价
-    // 现状(不变量 F:两变量未设 → 不进降级、不新增日志、不改文案、同阻塞路径)。
+    let result: SessionResult
+    try {
+      result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
+    } catch (error) {
+      // 会话故障不退出: SDK 调用抛出的异常(事件流订阅断开、请求超时中止等)与
+      // 返回错误同渠道进入重试/等待机制——除连按两次 Ctrl+C 外,任何会话故障都
+      // 不终止运行。
+      result = { type: "blocked", question: `会话错误: ${formatClientError(error)}` }
+    }
+    // 会话故障面(错误本体/创建会话失败/下发任务失败)全部进入恢复机制,不直接
+    // 上抛阻塞;仍直接返回的 blocked 只有会话内阻塞提问与权限拒绝——那需要人工
+    // 答复,本就不属于故障。
+    if (result.type !== "blocked") return result
+    if (!(result.question.startsWith("会话错误:") || result.question.startsWith("创建会话失败:") || result.question.startsWith("下发任务失败:"))) return result
+    // P4 配额降级(设计 D.3):分类为 quota/auth/rate 且配置了候选表时,取下一候选
+    // (经 D.4 窗口钳制)、换 chain.model、复用既有 fork 副本路径续跑(上下文随迁)。
     // 判据取 result.errorClass(P3 三条触发面统一带来的归类):plain session.error 的
     // quota(isRetryable:false)与提前结算的 retry part / session.status retry 均带
     // errorClass,故据它决策即可覆盖两条路径(不读 result.failover)。
@@ -207,46 +284,30 @@ export async function runSession(
       result.errorClass === "quota" ? "配额受限" : result.errorClass === "auth" ? "provider 鉴权失败" : result.errorClass === "rate" ? "限流等待过久" : undefined
     if (fallbackRing().length > 0 && classZh !== undefined) {
       if (await switchModel(classZh)) continue
-      // 候选耗尽 → 回落阻塞(退出码语义不变,仍 blocked),文案追加候选清单。
-      return { type: "blocked", question: `${result.question}\n(配额降级${exhausted()})`, retryable: result.retryable }
+      // 候选耗尽(候选与首选全部配额受限/不可用): 不再阻塞退出——等待-探测环等到
+      // 额度恢复,期间探测用当前生效模型,恢复后从被中断的会话分叉续跑。
+      await awaitRecovery(`${classZh}且降级候选已用尽(已试 ${tried.join(", ") || "无"})`)
+      continue
     }
-    // 不可重试(isRetryable:false,如账号级限流): 换哪个会话都一样失败,直接
-    // 阻塞——不进入下面的重试/fork 逻辑。attempt() 已保证 chain.id 落在这一轮
-    // 实际用过的会话上(哪怕它就是刚失败的这个),真正有内容的会话不被牺牲。
-    // (候选表为空时不可重试的 quota 落在此处,行为等价现状;候选表非空时上面的
-    // 降级支已先行处理可降级类。)
+    // 不可重试(isRetryable:false,配额/鉴权类): 换会话无意义、未配候选表也换不了
+    // 模型——不再直接阻塞,等待-探测环无限等额度恢复,期间全新临时会话探测,恢复
+    // 后 fork 被中断的会话续跑。attempt() 已保证 chain.id 落在这一轮实际用过的
+    // 会话上(哪怕它就是刚失败的这个),真正有内容的会话不被牺牲。
     if (result.retryable === false) {
-      log(`⛔ ${task.id} 遇到不可重试的会话错误(重试无意义),直接阻塞:\n${result.question}`)
-      return result
+      await awaitRecovery(`遇到不可重试的会话错误(${firstLine(result.question)})`)
+      continue
     }
-    // 阶梯耗尽: 先交人工裁决,再决定继续或退出(OPENCODE_AUTO_RETRY_ASK=0 关闭)。
-    //
-    // 为什么不直接退出: 优雅阻塞退出写的是 active=false 的恢复点,重跑明确不复用
-    // 旧会话(resume.ts 的既定语义——人工介入可能耗时数小时且会改动环境,旧上下文
-    // 不可信)。那条理由对真正的阻塞提问成立,对超时不成立: 人什么也没改,只是等。
-    // 于是退出这条路恰好把上面刚保住的那个会话扔掉。留在进程里等,会话就还活着、
-    // 还能继续 fork。
+    // 阶梯耗尽: 不再等人工裁决——先试降级候选(换 provider 是阶梯之外唯一还没
+    // 试过的手段),候选也用尽(或未配置)则进入等待-探测环,半小时一次直至服务
+    // 恢复,从被中断的会话分叉续跑、阶梯重开一轮。留在进程里等,会话就还活着、
+    // 还能继续 fork——阻塞退出反而会把阶梯期间刚保住的那个会话扔掉。
+    // 作用域:chain 由 runTask 逐任务新建,chain.model 随之逐任务归零,下一个任务
+    // 自动从首选模型重新起跑;更细/更粗的回试粒度由 OPENCODE_AUTO_MODEL_FAILBACK_SCOPE
+    // 在边界挂点消费(见 src/failback.ts)。
     if (i > waits.length) {
-      const decision = await askRetry(switches.retryAsk, task, waits.length, result.question, opts.interactive, opts.dir)
-      if (decision === "continue") {
-        log(`↻ ${task.id} 人工选择继续,重试阶梯从头再走一轮`)
-        i = 1
-        continue
-      }
-      const why = decision === "exit" ? ",人工选择退出" : switches.retryAsk > 0 ? ",人工未裁决" : ""
-      // 回落(无人应答/答非所问/retryAsk=0 的无人值守形态)接配额降级环:阶梯对
-      // transient/unknown 已无计可施,但换一个 provider 仍可能跑通——与 quota 支同一段
-      // 逻辑(tried 去重、窗口钳制、chain.model + 降级 note、fork 带上下文、i=1 重开阶
-      // 梯)。人工明确答 exit 时不降级:那是「停下来」的指令,不是「再想想办法」。
-      // 候选表为空时整段跳过,逐字节等价改造前(不变量 F)。
-      // 作用域:chain 由 runTask 逐任务新建,chain.model 随之逐任务归零,下一个任务自动
-      // 从首选模型重新起跑——「切备选仅在本次任务内有效」天然成立;更细/更粗的回试粒度
-      // 由 OPENCODE_AUTO_MODEL_FAILBACK_SCOPE 在边界挂点消费(见 src/failback.ts)。
-      if (decision === "fallback" && fallbackRing().length > 0) {
-        if (await switchModel("重试阶梯耗尽")) continue
-        return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why};降级${exhausted()})` }
-      }
-      return { type: "blocked", question: `${result.question}\n(自动重试 ${waits.length} 次仍失败${why})` }
+      if (fallbackRing().length > 0 && (await switchModel("重试阶梯耗尽"))) continue
+      await awaitRecovery(`重试阶梯(${waits.length} 次重试)耗尽仍失败`)
+      continue
     }
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
       await opts.server.restart("会话错误为网络/服务故障,重启 opencode server 后换新会话重试")
@@ -307,25 +368,4 @@ export async function runSession(
     chain.id = undefined
     chain.pct = 100
   }
-}
-
-// 阶梯耗尽后人工裁决的三态: continue = 再走一轮阶梯;exit = 立即阻塞退出;
-// fallback = 无人应答/答非所问,按既定回落处理(本分支由配额降级环接管:配置了候选
-// 表就切下一个候选模型继续,候选耗尽或未配置才阻塞,见 model-routing-design.md)。
-export type RetryDecision = "continue" | "exit" | "fallback"
-
-// 人工答复归一化(纯函数,导出供单测): 空答复、超时、stdin 关闭一律归 fallback,
-// 使无人值守的跑批不会卡死也不会被静默放行。
-export function retryDecision(answer: string | undefined): RetryDecision {
-  const value = (answer ?? "").trim().toLowerCase()
-  if (/^(c|continue|retry|y|yes|继续|重试)$/.test(value)) return "continue"
-  if (/^(q|quit|exit|stop|n|no|退出|停止|停)$/.test(value)) return "exit"
-  return "fallback"
-}
-
-// 阶梯耗尽的人工等待: minutes = 0 时不问、直接回落(无人值守跑批的既定形态)。
-async function askRetry(minutes: number, task: Task, tries: number, question: string, interactive?: Interactive, dir?: string): Promise<RetryDecision> {
-  if (minutes <= 0) return "fallback"
-  log(`⏸ ${task.id} 自动重试 ${tries} 次仍失败,等待人工裁决(continue = 再试一轮,exit = 退出;${minutes} 分钟无应答按回落处理):\n${question}`)
-  return retryDecision(await askHuman(minutes, "continue = 再试一轮,exit = 退出", interactive, dir))
 }

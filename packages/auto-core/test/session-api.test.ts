@@ -127,16 +127,37 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
     expect(base).toEqual({ id: "ses_new_1", used: 0 })
   })
 
-  test("digest 基点会话失败(下发错误)→ 回退 session 基点: 校验存活并按 messages 重建用量", async () => {
+  test("digest 基点会话受阻(会话内阻塞提问,非故障)→ 回退 session 基点: 校验存活并按 messages 重建用量", async () => {
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
     const taskWithBase = await setupTask(true)
+    // 权限提问且未设 --wait-answer → 会话以非故障的 blocked 收场(会话故障——错误/
+    // 下发失败——自 2026-09-16 起在 runSession 内重试至恢复,不再走到回退)。
     const { client } = fakeClient({
-      prompt: () => ({ error: { message: "boom" } }),
+      events: (sid) =>
+        (async function* () {
+          yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
+        })(),
       messages: () => ({ data: [{ info: { role: "user" } }, { info: { role: "assistant", tokens: { input: 700, cache: { read: 300 } } } }] }),
     })
-    const base = await ensureForkBase(client, await load(path), taskWithBase, {}, chain, digest)
+    const stubbed = { ...client, permission: { reply: async () => ({}) } } as unknown as OpencodeClient
+    const base = await ensureForkBase(stubbed, await load(path), taskWithBase, {}, chain, digest)
     expect(base).toEqual({ id: "ses_U", used: 1000 })
     expect(await Bun.file(path).text()).toContain("  - fork-base: ses_U")
+  })
+
+  test("digest 基点会话遇下发故障不回退: 会话故障经重试恢复后照样建立基点", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+    const taskNoBase = await setupTask(false)
+    let n = 0
+    const { client } = fakeClient({
+      prompt: () => {
+        n++
+        return n === 1 ? { error: { message: "boom" } } : {}
+      },
+    })
+    const base = await ensureForkBase(client, await load(path), taskNoBase, {}, chain, digest)
+    expect(base).toEqual({ id: "ses_new_2", used: 0 })
+    expect(await Bun.file(path).text()).toContain("  - fork-base: ses_new_2")
   })
 
   test("digest 摘要缺失 → 回退 session 基点", async () => {

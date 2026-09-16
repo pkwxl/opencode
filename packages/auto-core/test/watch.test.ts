@@ -1,4 +1,8 @@
-// src/watch.ts 的接线单测(经 runSession 驱动): SSE 订阅生命周期、错误信号三触发面、会话边界统计、◉ 两行报文、代答采集。
+// src/watch.ts 的接线单测(错误信号/统计/两行报文经 attempt 或 runSession 驱动):
+// SSE 订阅生命周期、错误信号三触发面、会话边界统计、◉ 两行报文、代答采集。
+// 会话故障类出口(会话错误/下发失败)经 attempt 直驱——runSession 自 2026-09-16 起
+// 对故障不再返回 blocked(进入等待-探测环,见 test/session.test.ts),而 attempt 的
+// 返回值正是 watch 分类标记(P3)的直接出口面。
 // 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
@@ -6,6 +10,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { attempt } from "../src/attempt"
 import type { SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { resolvesOf } from "../src/resolve"
@@ -29,7 +34,7 @@ describe("SSE 订阅生命周期(会话结束即断开)", () => {
 
   test("下发失败提前返回: 同样立即中止订阅,不留下悬挂长连接", async () => {
     const { client, state } = sseClient("ses_sse_2", { prompt: () => ({ error: { name: "UnknownError" } }) })
-    const result = await runSession(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 })
+    const result = await attempt(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("blocked")
     expect((result as { question: string }).question).toContain("下发任务失败")
     expect(state.signal?.aborted).toBe(true)
@@ -37,10 +42,10 @@ describe("SSE 订阅生命周期(会话结束即断开)", () => {
   })
 })
 
-// ---- 错误信号接线 → runSession 出口(docs/model-routing-design.md D.2/CRITICAL 不变量,P3)----
-describe("错误信号接线: watch 三触发面 → runSession 出口(P3 仅分类+标记,不做候选决策)", () => {
+// ---- 错误信号接线 → attempt 出口(docs/model-routing-design.md D.2/CRITICAL 不变量,P3)----
+describe("错误信号接线: watch 三触发面 → attempt 出口(P3 仅分类+标记,不做候选决策)", () => {
   // 零等待阶梯: 本块只验错误归类与出口标记,不该被重试退避拖成分钟级。
-  const SIGNAL_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0" })
+  const SIGNAL_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
   test("retry part quota(isRetryable:false): 提前结算——先 abort 再返回,failover=true、errorClass=quota", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
@@ -64,7 +69,7 @@ describe("错误信号接线: watch 三触发面 → runSession 出口(P3 仅分
         })(),
     })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
+    const result = await attempt(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
     expect(result.type).toBe("blocked")
     const blocked = result as { question: string; failover?: boolean; errorClass?: string; retryable?: boolean }
     expect(blocked.failover).toBe(true)
@@ -92,7 +97,7 @@ describe("错误信号接线: watch 三触发面 → runSession 出口(P3 仅分
     // rate 无 isRetryable:false → retryable 保持 undefined → P3 不改控制流,runSession 仍按
     // 既有序换会话重试至 RETRIES 耗尽阻塞(降级决策留 P4 读 result.failover)。但每次尝试的
     // 提前结算都必然 abort——aborts 记录证明 D.2 触发面 3 已生效。
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
+    const result = await attempt(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
     expect(result.type).toBe("blocked")
     expect(calls.aborts.length).toBeGreaterThanOrEqual(1)
     expect(calls.aborts).toContain("ses_new_1")
@@ -110,7 +115,7 @@ describe("错误信号接线: watch 三触发面 → runSession 出口(P3 仅分
         })(),
     })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
+    const result = await attempt(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
     expect(result.type).toBe("blocked")
     const blocked = result as { errorClass?: string; failover?: boolean; retryable?: boolean }
     expect(blocked.errorClass).toBe("quota")
@@ -132,11 +137,12 @@ describe("错误信号接线: watch 三触发面 → runSession 出口(P3 仅分
         })(),
     })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
+    const result = await attempt(client, task, "提示词", {}, chain, undefined, undefined, SIGNAL_NO_WAIT)
     expect(result.type).toBe("blocked")
     expect((result as { failover?: boolean }).failover).toBeUndefined()
-    // 可重试 500 → errorClass transient(仅上报,不降级)。耗尽前每次尝试都开新会话。
-    expect(calls.creates).toBe(3)
+    // 可重试 500 → errorClass transient(仅上报,不降级;runSession 侧的阶梯与
+    // 等待-探测消费在 test/session.test.ts 覆盖)。
+    expect(calls.creates).toBe(1)
   })
 
   test("retry part overflow: 只累积不提前结算,继续观察到 idle 正常结束", async () => {
@@ -279,9 +285,9 @@ describe("会话边界统计接线(T-003): Watch.usage 与 statsSessionBegin/End
     try {
       const { client } = fakeClient({ prompt: () => ({ error: { name: "UnknownError", data: {} } }) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      // 下发失败(非"会话错误:"前缀)→ 不重试直接阻塞;唯一一次 attempt 由 finally
-      // 兜底收段。
-      const result = await runSession(client, task, "提示词", { dir }, chain)
+      // 下发失败(runSession 侧自 2026-09-16 起作为会话故障重试,这里直驱单次
+      // attempt 验证其 finally 兜底收段)。
+      const result = await attempt(client, task, "提示词", { dir }, chain, undefined, undefined, parseSwitches({}))
       expect(result.type).toBe("blocked")
       const round = await statsTotals(dir, "round")
       expect(round?.sessions).toBe(1)

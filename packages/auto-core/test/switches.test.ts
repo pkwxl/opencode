@@ -17,7 +17,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       model: { byLetter: {}, byRole: {}, fallback: [] },
       modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
-      retryAsk: 30,
+      recoveryWait: 30,
       strictResume: false,
       handoverConcurrent: false,
     })
@@ -40,7 +40,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.modelFallback]: "",
         [SWITCH_ENV.modelFailbackScope]: "",
         [SWITCH_ENV.retryWaits]: "",
-        [SWITCH_ENV.retryAsk]: "",
+        [SWITCH_ENV.recoveryWait]: "",
         [SWITCH_ENV.strictResume]: "",
         [SWITCH_ENV.handoverConcurrent]: "",
       }),
@@ -58,7 +58,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       model: { byLetter: {}, byRole: {}, fallback: [] },
       modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
-      retryAsk: 30,
+      recoveryWait: 30,
       strictResume: false,
       handoverConcurrent: false,
     })
@@ -79,7 +79,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.ask]: "on",
         [SWITCH_ENV.modelFailbackScope]: "subtask",
         [SWITCH_ENV.retryWaits]: "0,3",
-        [SWITCH_ENV.retryAsk]: "5",
+        [SWITCH_ENV.recoveryWait]: "5",
         [SWITCH_ENV.strictResume]: "on",
         [SWITCH_ENV.handoverConcurrent]: "on",
       }),
@@ -97,7 +97,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       model: { byLetter: {}, byRole: {}, fallback: [] },
       modelFailbackScope: "subtask",
       retryWaits: [0, 3],
-      retryAsk: 5,
+      recoveryWait: 5,
       strictResume: true,
       handoverConcurrent: true,
     })
@@ -171,8 +171,9 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(parseSwitches({ [SWITCH_ENV.retryWaits]: "0,1,2,4,8" }).retryWaits).toEqual([0, 1, 2, 4, 8])
     expect(parseSwitches({ [SWITCH_ENV.retryWaits]: " 0 , 0.5 " }).retryWaits).toEqual([0, 0.5])
     expect(parseSwitches({ [SWITCH_ENV.retryWaits]: "off" }).retryWaits).toEqual([])
-    expect(parseSwitches({ [SWITCH_ENV.retryAsk]: "0" }).retryAsk).toBe(0)
-    expect(parseSwitches({ [SWITCH_ENV.retryAsk]: "90" }).retryAsk).toBe(90)
+    expect(parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" }).recoveryWait).toBe(0)
+    expect(parseSwitches({ [SWITCH_ENV.recoveryWait]: "90" }).recoveryWait).toBe(90)
+    expect(parseSwitches({ [SWITCH_ENV.recoveryWait]: "0.5" }).recoveryWait).toBe(0.5)
   })
 
   test("非法值: 报错含变量名与期望值域", () => {
@@ -201,8 +202,8 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "1,-2" })).toThrow(/OPENCODE_AUTO_RETRY_WAITS/)
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "1,,2" })).toThrow(/非负分钟数/)
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "soon" })).toThrow(/0,1,2,4,8/)
-    expect(() => parseSwitches({ [SWITCH_ENV.retryAsk]: "-1" })).toThrow(/OPENCODE_AUTO_RETRY_ASK/)
-    expect(() => parseSwitches({ [SWITCH_ENV.retryAsk]: "soon" })).toThrow(/非负分钟数/)
+    expect(() => parseSwitches({ [SWITCH_ENV.recoveryWait]: "-1" })).toThrow(/OPENCODE_AUTO_RECOVERY_WAIT/)
+    expect(() => parseSwitches({ [SWITCH_ENV.recoveryWait]: "soon" })).toThrow(/非负分钟数/)
     // 报文提示空串语义与缺省值
     expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/空串视同未设/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "1" })).toThrow(/缺省 off/)
@@ -267,7 +268,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RETRY_ASK=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off",
     )
   })
 
@@ -275,7 +276,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "off" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=off")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RETRY_ASK=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "on" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=on")

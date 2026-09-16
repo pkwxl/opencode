@@ -21,6 +21,12 @@
 > provider 超时事故里连烧 3 小时 18 分零产出。详见文末「2026-09-12 修正:保住最值钱
 > 的会话」一节与服务超时归因分析(provider-timeout-analysis-20260912.md §8)。**
 >
+> **2026-09-16 追加:人工裁决与阻塞退出被「等待-探测环」取代——不可重试错误、
+> 阶梯耗尽、降级候选用尽一律以半小时(OPENCODE_AUTO_RECOVERY_WAIT,缺省 30 分钟)为
+> 间隔无限等待,每轮用全新临时会话探测,恢复后 fork 被中断的会话续跑;会话故障自此
+> 不再导致程序退出(唯一出口 = 连按两次 Ctrl+C)。askRetry/retryDecision 与
+> OPENCODE_AUTO_RETRY_ASK 退役。详见文末「2026-09-16 修正三」一节。**
+>
 > **2026-09-10 追加:第 4 点("remember 不再抢先落盘")经
 > [session-resume-precedence-design.md](session-resume-precedence-design.md) 细化为
 > "下发即写 + 可重试失败还原为下发前快照"——第 4 点把落盘从"sessionID 刚确定"挪到
@@ -349,3 +355,75 @@ opencode 1.18.x 对所有 provider 强制生效的 300s `headerTimeout`/`chunkTi
 `docs/structure.md` 与本文件。
 
 `bun typecheck` 干净，`bun test` 全绿（466→475 pass）。
+
+## 2026-09-16 修正三：等待-探测环取代人工裁决与阻塞退出（会话故障不退出）
+
+### 动机
+
+三条现场诉求汇总为一条策略转变：
+
+1. **配额类不可重试错误**（`isRetryable:false`，如 `insufficient_quota`）此前的终点是
+   直接阻塞（退出码 2 待人工）——但配额恢复以小时/天计，人工不在场时整轮迁移停摆；
+   且实际上游对这类错误的「避免立即重试」机制在现场不可依赖（server 侧对可重试配额
+   错误无限退避、driver 只能等 idle 看门狗）。
+2. 瞬时错误的重试阶梯耗尽后走人工裁决（`askRetry`），同样把无人值守的跑批挂在人工
+   应答上。
+3. 总纲：**保证会话故障不会导致程序退出**——无论哪种配额限制，程序都应等到额度恢复
+   后再继续。
+
+### 机制（`src/session.ts` 的 `awaitRecovery` 等待-探测环）
+
+三条故障路径在 `runSession` 内共同落入同一个等待-探测环：
+
+| 触发路径 | 进入条件 |
+| --- | --- |
+| 不可重试错误 | `result.retryable === false`（quota 的 `isRetryable:false`、auth 401/403 等） |
+| 阶梯耗尽 | 瞬时错误走完 `OPENCODE_AUTO_RETRY_WAITS` 阶梯且无候选可切（候选表为空或已用尽） |
+| 降级候选用尽 | quota/auth/rate 类错误、`switchModel` 已试完全部候选（首选 + OPENCODE_AUTO_MODEL_FALLBACK） |
+
+环的行为：
+
+- 以 `OPENCODE_AUTO_RECOVERY_WAIT`（缺省 30 分钟）为间隔**无限等待**，等待期间连按
+  两次 Ctrl+C 经 runAll 的进程级 SIGINT 处理器强制退出（130）——这是唯一出口。
+- 每轮探测用**全新临时干净会话**（经 `attempt` 下发极小探测提示词 `RECOVERY_PROBE_PROMPT`）：
+  绝不用被中断的会话探测——往真实会话塞探测轮次会污染上下文，分叉探测则每个等待轮次
+  白烧一遍全量前缀（配额受限期间只会雪上加霜）。探测链复制真实链的 `model`/`role`
+  （探测的就是恢复后要续跑的那条模型——配额按模型/账号计量），但不带 `phase`、不写
+  进度记录、不动真实链的恢复点。
+- 探测成功（会话正常结束）即服务恢复：**fork 被中断的会话**（与重试环同一套「保住最
+  值钱的会话」判据：失败会话本体 > 链上原会话，0 用量纯报错桩不进候选）重发原提示词，
+  附一次性恢复说明（`chain.note`，解释同一提示词为何再次出现），阶梯计数重开一轮
+  （刚恢复的抖动不立即坠回等待环）；fork 失败或无可分叉内容则空白新会话重发。
+- 探测会话本身异常（SDK 抛出、创建/下发失败）同样视为未恢复，继续等待。
+
+### 同批退役与扩展
+
+- **人工裁决整体退役**：`askRetry`/`retryDecision` 与 `OPENCODE_AUTO_RETRY_ASK`
+  开关删除（`OPENCODE_AUTO_RETRY_ASK` 环境变量自此被忽略）。阶梯耗尽后的顺序固定为
+  「切候选 → 等待-探测」，无人工参与。
+- **故障面扩展**：`runSession` 把 `创建会话失败:`/`下发任务失败:` 前缀的 blocked 与
+  `attempt` 抛出的异常（SDK 层面：订阅断开、请求超时等）一律折入故障面进入恢复机制；
+  仍直接返回 blocked 的只有会话内阻塞提问与权限拒绝——那需要人工答复，不属于故障。
+  由此「会话错误重试耗尽 → blocked」这条退出路径不复存在。
+- **等待计时口径**：等待经 `statsWaitBegin/End` 从会话与 AI 用时中扣除、单记 `waitMs`
+  （与 askHuman 同口径；探测会话自身的用时照常入账）。
+- 新开关 `OPENCODE_AUTO_RECOVERY_WAIT`（非负分钟数，缺省 30）进入 switches 注册表，
+  `OPENCODE_AUTO_RETRY_WAITS=off` 语义改为「首次失败即进等待-探测环」。
+
+### 与 model-routing 设计的关系
+
+`model-routing-design.md` 的不变量「无候选表时 quota 直接阻塞（逐字节等价现状）」与
+D.4「候选耗尽回落阻塞路径（退出码 2）」自本修正起**被取代**：候选切换（立即换 provider
+续跑）仍是第一选择，但其耗尽态从阻塞改为等待恢复；切换/fork/窗口钳制/note 机制全部
+照旧。降级粘滞语义不变（恢复续跑沿用当时的 `chain.model`，任务边界照常回试首选）。
+
+### 落地范围
+
+`packages/auto-core`：`src/session.ts`（`awaitRecovery` 闭包、三条故障路径接入、故障面
+扩展、`askRetry`/`retryDecision` 删除）、`src/switches.ts`（`retryAsk` 退役、
+`recoveryWait` 新增）、`test/session.test.ts`（等待-探测环新用例、人工裁决用例删除）、
+`test/watch.test.ts` 与 `test/session-api.test.ts`（错误信号/统计/SSE/ensureForkBase
+改直驱 attempt 或按新语义重写）、`test/artifact.test.ts`、`test/switches.test.ts`、
+`docs/behavior.md`、`docs/structure.md` 与本文件。
+
+`bun typecheck` 干净，`bun test` 全绿（772 pass）。

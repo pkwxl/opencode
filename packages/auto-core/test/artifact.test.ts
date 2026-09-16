@@ -16,7 +16,7 @@ import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   // 零等待阶梯: 本块只验恢复点语义,不该被重试退避拖成分钟级。
-  const STEP_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.retryAsk]: "0" })
+  const STEP_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
   // 专用 fake client: 记录 create 次数与每个 prompt 的目标会话;messages 返回一条
   // 真实 assistant 轮次(tokens>0)使 sessionUsage 判为可复用、非报错桩;事件流对
   // "当前会话"(新建则随之更新,复用则保持)发一个 idle 让 watch 正常结算。
@@ -121,14 +121,19 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
     }
   })
 
-  test("可重试错误耗尽: 步骤恢复点不被删除(还原为 session 未定的初始认领),下次运行仍重入本步骤", async () => {
+  test("可重试错误耗尽进等待-探测: 恢复后步骤正常完成,中途失败不删步骤认领", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-retry-"))
     try {
-      // 每次会话都以可重试错误结束 → runSession 走完阶梯后阻塞。
+      // 前三次会话(阶梯 0,0 的三次尝试)全部可重试错误 → 阶梯耗尽进入等待-探测
+      // → 探测会话(第 4 次 create)成功 → 空白新会话重发(第 5 次 create)成功。
       const queue: unknown[] = []
       let seq = 0
+      let n = 0
       const enqueue = (id: string) => {
-        queue.push({ type: "session.error", properties: { sessionID: id, error: { name: "APIError", data: { message: "net", isRetryable: true } } } })
+        n++
+        if (n <= 3) {
+          queue.push({ type: "session.error", properties: { sessionID: id, error: { name: "APIError", data: { message: "net", isRetryable: true } } } })
+        }
         queue.push({ type: "session.idle", properties: { sessionID: id } })
       }
       const client = {
@@ -154,14 +159,12 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
         event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
       } as unknown as OpencodeClient
       const result = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}), STEP_NO_WAIT)
-      expect((result as { type: string }).type).toBe("blocked")
-      // 关键: 可重试错误把记录还原为下发前快照(requireArtifact 进入时写的初始恢复点,
-      // session 未定),而非删除——步骤认领保留,下次运行 openStep 命中即重入规划,
-      // 不会凭半成品 PLAN.md(AI 写的文件)跳过本步骤。
+      expect(result).toBe(4)
+      // 中途失败从未删除步骤认领(openStep 全程可重入本步骤);成功后由调用方收口,
+      // 此处直接验证记录仍指向本步骤的会话谱系而非被删。
       const open = await openStep(dir)
       expect(open?.step).toBe("phase-plan")
       expect(open?.letter).toBe("m")
-      expect(open?.session).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -342,12 +345,12 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     [SWITCH_ENV.strictResume]: "on",
     [SWITCH_ENV.model]: "*=kimi/k2",
     [SWITCH_ENV.retryWaits]: "0,0",
-    [SWITCH_ENV.retryAsk]: "0",
+    [SWITCH_ENV.recoveryWait]: "0",
   })
   const LOOSE = parseSwitches({
     [SWITCH_ENV.model]: "*=kimi/k2",
     [SWITCH_ENV.retryWaits]: "0,0",
-    [SWITCH_ENV.retryAsk]: "0",
+    [SWITCH_ENV.recoveryWait]: "0",
   })
 
   beforeEach(() => {

@@ -24,7 +24,7 @@ export const SWITCH_ENV = {
   modelFallback: "OPENCODE_AUTO_MODEL_FALLBACK",
   modelFailbackScope: "OPENCODE_AUTO_MODEL_FAILBACK_SCOPE",
   retryWaits: "OPENCODE_AUTO_RETRY_WAITS",
-  retryAsk: "OPENCODE_AUTO_RETRY_ASK",
+  recoveryWait: "OPENCODE_AUTO_RECOVERY_WAIT",
   strictResume: "OPENCODE_AUTO_STRICT_RESUME",
   handoverConcurrent: "OPENCODE_AUTO_HANDOVER_CONCURRENT",
 } as const
@@ -134,11 +134,13 @@ export type Switches = {
   modelFailbackScope: FailbackScope
   // 瞬时会话错误的重试阶梯(OPENCODE_AUTO_RETRY_WAITS,逗号分隔的分钟数):每个
   // 元素是「该次重试前的等待」,元素个数即重试次数上限。缺省 0,1,2,4,8 = 五次
-  // 重试,首次立即、其后 1/2/4/8 分钟。off = 不重试(首次失败即进人工裁决)。
+  // 重试,首次立即、其后 1/2/4/8 分钟。off = 不重试(首次失败即进等待-探测环)。
   retryWaits: number[]
-  // 阶梯耗尽后等待人工裁决的分钟数(OPENCODE_AUTO_RETRY_ASK);0 = 不等人工,
-  // 直接按回落处理(阻塞退出)。
-  retryAsk: number
+  // 等待-探测环的间隔分钟数(OPENCODE_AUTO_RECOVERY_WAIT): 会话故障(不可重试的
+  // 配额类、阶梯耗尽的瞬时类、降级候选用尽)一律不再阻塞退出,改为以该间隔无限
+  // 等待,每轮用全新临时会话下发极小探测提示词;探测成功(服务恢复)后 fork 被中断
+  // 的会话续跑。等待期间连按两次 Ctrl+C 经进程级 SIGINT 处理器强制退出(130)。
+  recoveryWait: number
   // 严格恢复(session-recovery-fidelity-design.md,缺省 off = 现状): on 时进度
   // 记录补单元基线 baseline 与生效模型 model、恢复时核对(外部提交混入走 dirty、
   // 模型不一致/会话死亡/--new-session 回滚到单元基线重跑)、复用会话的恢复说明
@@ -168,7 +170,7 @@ const SWITCH_DEFAULTS: Switches = {
   model: { byLetter: {}, byRole: {}, fallback: [] },
   modelFailbackScope: "task",
   retryWaits: [0, 1, 2, 4, 8],
-  retryAsk: 30,
+  recoveryWait: 30,
   strictResume: false,
   handoverConcurrent: false,
 }
@@ -326,7 +328,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     model: parseModelPolicy(env[SWITCH_ENV.model], env[SWITCH_ENV.modelFallback]),
     modelFailbackScope: modelFailbackScope as FailbackScope,
     retryWaits: waitList(SWITCH_ENV.retryWaits, env[SWITCH_ENV.retryWaits], SWITCH_DEFAULTS.retryWaits),
-    retryAsk: minutes(SWITCH_ENV.retryAsk, env[SWITCH_ENV.retryAsk], SWITCH_DEFAULTS.retryAsk),
+    recoveryWait: minutes(SWITCH_ENV.recoveryWait, env[SWITCH_ENV.recoveryWait], SWITCH_DEFAULTS.recoveryWait),
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     handoverConcurrent: onOff(SWITCH_ENV.handoverConcurrent, env[SWITCH_ENV.handoverConcurrent], SWITCH_DEFAULTS.handoverConcurrent),
   }
@@ -359,7 +361,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
       ? undefined
       : `${SWITCH_ENV.modelFailbackScope}=${switches.modelFailbackScope}`,
     formatWaits(switches.retryWaits) === formatWaits(SWITCH_DEFAULTS.retryWaits) ? undefined : `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
-    switches.retryAsk === SWITCH_DEFAULTS.retryAsk ? undefined : `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
+    switches.recoveryWait === SWITCH_DEFAULTS.recoveryWait ? undefined : `${SWITCH_ENV.recoveryWait}=${switches.recoveryWait}`,
     switches.strictResume === SWITCH_DEFAULTS.strictResume ? undefined : `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
     switches.handoverConcurrent === SWITCH_DEFAULTS.handoverConcurrent
       ? undefined
@@ -385,7 +387,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.modelFallback}=${switches.model.fallback.join(",")}`,
     `${SWITCH_ENV.modelFailbackScope}=${switches.modelFailbackScope}`,
     `${SWITCH_ENV.retryWaits}=${formatWaits(switches.retryWaits)}`,
-    `${SWITCH_ENV.retryAsk}=${switches.retryAsk}`,
+    `${SWITCH_ENV.recoveryWait}=${switches.recoveryWait}`,
     `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
     `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
   ].join(", ")
