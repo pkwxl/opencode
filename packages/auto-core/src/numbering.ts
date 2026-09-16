@@ -4,7 +4,7 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { parse } from "./plan"
 import { renderNumberRecovery } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
-import { requireArtifact } from "./runner"
+import { requireArtifact } from "./artifact"
 
 // --auto-number(config.autoNumber)的任务编号记录机制: 任务编号(T-NNN)在目标目录
 // 永不重复,下一可用编号持久化在 .auto/next-task(driver 维护的状态文件;.auto/

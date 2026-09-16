@@ -5,7 +5,7 @@ import { finalDoc } from "./docpaths"
 import { appendTask, parseFinalMark, type Plan, type Task } from "./plan"
 import { renderFinalTask, stageText, type FinalStage } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
-import { requireArtifact } from "./runner"
+import { requireArtifact } from "./artifact"
 
 // --final-review 终审闭环状态机(设计文档 docs/mode-final-review-design.md
 // B.2/C 节)。终审阶段是入 PLAN.md 的真任务(T-F<k> + `final: <stage>@<round>`

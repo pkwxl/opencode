@@ -7,7 +7,7 @@ import { log } from "./log"
 import { currentRound, readLedger, roundRoot } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
-import { requireArtifact } from "./runner"
+import { requireArtifact } from "./artifact"
 import { afterSession } from "./unit-commit"
 
 // k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(docs/fixme-knowledge-design.md
