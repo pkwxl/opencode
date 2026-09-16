@@ -1,0 +1,211 @@
+// 会话链与模型路由求值: 任务内会话串链的状态载体(SessionChain / Watch /
+// SessionResult / FailedSession / ForkBaseInfo)、阶段→角色→模型的路由求值
+// (phaseToRole / roleOf / resolveModel / splitModel),以及会话错误归类
+// (classifySessionError)与会话复用阈值常量。见 docs/model-routing-design.md。
+// 拆分自 src/runner.ts(docs/module-split-plan.md S2,纯搬运)。
+import { type UnitBaseline } from "./git"
+import { type ResolveEvent } from "./resolve"
+import { type Phase } from "./resume"
+import { type Usage } from "./stats"
+import { type ModelLetter, type ModelPolicy, type ModelRole } from "./switches"
+
+export type Watch = {
+  // 会话内阻塞(askHuman 超时回落/权限拒绝)恒为 blocked 形态,不含 dirty——
+  // dirty 只在单元启动门禁(runSubtask/requireArtifact/beginUnit)产生,先于会话。
+  blocked?: { type: "blocked"; question: string }
+  error?: string
+  lastText: string
+  // 会话结束时最近一次 assistant 消息的上下文占比(0-100);上限未知记 100。
+  pct: number
+  // 会话结束时最近一次 assistant 消息的上下文已用量(tokens: input + cache.read)。
+  used: number
+  // 上下文上限(tokens),计算 pct 用;若未知则为 undefined。
+  limit?: number
+  // 会话耗时(ms)。
+  durationMs?: number
+  // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
+  // runExecSession 据此开新会话续跑。
+  testHandover?: boolean
+  // session-error-retry-plan.md: 会话错误是否值得重试(仅 ApiError 携带
+  // isRetryable;字段不存在或非 false 一律按可重试处理,保守缺省;多个
+  // session.error 事件叠加取悲观口径,只要出现过一次 false 即不可重试)。
+  retryable?: boolean
+  // model-routing-design.md D.2: 三条触发面增量累积的结构化错误数据(message/
+  // statusCode/isRetryable/responseBody,第 3 信号再带 attempt/next),供分类与上报。
+  errorInfo?: ErrorInfo
+  // 上述 errorInfo 经 classifySessionError 的归类结果(有错误信息时才有意义)。
+  errorClass?: ErrorClass
+  // 仅 retry part / session.status retry 两条提前结算面置 true:标识本错误可降级,
+  // 交由 runSession 的 P4 failover 决策读取(此处只标记,不选择候选)。
+  failover?: boolean
+  // 本回合 token 增量累加(STATS_PLAN §2,T-003): 逐 step-finish part 按 part.id
+  // 去重累加——唯一不重不漏口径(服务端 assistantMessage.tokens 是末步覆盖值、
+  // session.tokens 含 fork 继承前缀,均不可直接求和,不得回退到这两个口径)。
+  // attempt 在回合结束时据此 statsSessionEnd 入账。
+  usage?: Usage
+  // 本回合被 driver 代答的提问(auto-resolve H1/H2,docs/auto-resolve-design.md §G):
+  // 与 usage 完全同构——由 snapshot 统一带出,7 个 return 出口(含 error/blocked 提前
+  // 结算口)一个不漏;attempt 在回合结束时补桶身份后 recordResolves 落账。
+  resolves?: ResolveEvent[]
+  // 测试交接写核失败(严格恢复,session-recovery-fidelity-design.md 3.3): 会话被要求
+  // 写测试交接文档但文档缺失/为空,严格模式下不再补写重试——经 attempt 折成下方
+  // SessionResult 的 rollback 标记,交单元所有者回滚后冷启动重做。
+  testHandoverInvalid?: boolean
+}
+
+export type SessionResult =
+  | { type: "idle"; lastText: string; testHandover?: boolean }
+  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & {
+      // 严格恢复: 本阻塞由交接文档无效触发,单元所有者(executeWhole/runSubtask)据此
+      // 回滚到单元基线并冷启动重做,而非把阻塞上抛;无基线的调用方忽略此标记。
+      rollback?: boolean
+    })
+
+// 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
+// OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一
+// 会话结束时上下文占比低于 REUSE_BELOW、已用量低于 contextLimit 的一半、且距其
+// 结束不超过 REUSE_IDLE_MS 才复用。初始 pct=100 保证首个会话新建;模型上限未知时
+// watch 记 100,即总是新建。中断恢复接管的会话不受开关与阈值约束(attempt 的
+// resumed: 链上有会话且 note 待注入 → 首个提示词必进原会话)。
+// phase 携带当前流水线阶段: 执行链会话据此写进度恢复
+// 记录(.auto/progress.json);旁路一次性会话(requireArtifact)的链不带 phase、
+// 不写记录,避免污染执行链记忆。note 为一次性附加说明(中断恢复时随首个提示词
+// 带给 AI,用后即清)。subject 为本会话产出的提交标题(短标签方案): 新建会话
+// 以它显式命名,复用会话跨阶段在结束时改名(见 renameSession),使会话列表
+// 与 git 历史、任务进度对齐。
+// fork 三段式(fork-decompose 设计 §4.3): forkBase 为本链的分叉基点会话(种子
+// 链携带,溯源用);pending 为预创建会话 id(seedForkSession 从基点分叉所得),
+// attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
+// 瞬时错误重试自然回落 create 路径。
+// modelShown 为终端展示的已播报模型(每次 prompt 求值出的 target 与之比对,去重
+// 「◈ 使用模型」日志;仅内存态,不落盘)。
+// baseline 为当前执行单元的 SHA 基线(严格恢复,session-recovery-fidelity-design.md
+// 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
+// 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
+export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
+
+// 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
+// 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能
+// 从"本轮积累最多的会话"分叉: 超时类故障下,失败会话里那 100k+ 已核实研究是最
+// 值钱的资产,开空白会话等于把它扔掉再从零撞同一堵墙。副本不顶替恢复点(progress
+// 的还原逻辑不动,原会话仍是恢复点),晋升后即清。
+export type FailedSession = { id: string; used: number }
+
+// fork 基点信息: id 为生效基点会话;used 为基点末端上下文用量(tokens,播种进
+// 分叉链使 watch() 的 2×cap 交接阈值按「前缀+新增」计算,首个 turn 的事件跟踪
+// 随后自行校正)。
+export type ForkBaseInfo = { id: string; used: number }
+
+// resume.Phase → 会话角色(模型路由的细键,见 docs/model-routing-design.md B.5/C.1)。
+// 执行链各阶段映射同名角色;subtasks 取单数 subtask;verify/review 按 stage 细分;
+// step 变体的英文 slug 即 StepKind(phase-plan / phase-handover)。phase 缺省时返回
+// undefined——由 roleOf 落 bypass(裸链与无 phase 的旁路会话)。
+export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
+  if (!phase) return undefined
+  switch (phase.kind) {
+    case "understand":
+      return "understand"
+    case "decompose":
+      return "decompose"
+    case "whole":
+      return "whole"
+    case "subtasks":
+      return "subtask"
+    case "wrapup":
+      return "wrapup"
+    case "verify":
+      return phase.stage === "generate"
+        ? "verify-generate"
+        : phase.stage === "exec"
+          ? "verify-exec"
+          : phase.stage === "judge"
+            ? "verify-judge"
+            : "verify-fix"
+    case "review":
+      return phase.stage === "audit"
+        ? "review-audit"
+        : phase.stage === "planfix"
+          ? "review-planfix"
+          : "review-fixrun"
+    case "step":
+      return phase.step === "phase-plan" ? "phase-plan" : "phase-handover"
+  }
+}
+
+// 会话角色(路由键之一): 显式 chain.role(旁路经 requireArtifact 的 spec.role 设定)
+// 优先,其次由执行链 phase 推导,最后兜底 bypass。见设计 B.5/C.1。
+export function roleOf(chain: SessionChain): ModelRole {
+  return chain.role ?? phaseToRole(chain.phase) ?? "bypass"
+}
+
+// 路由求值(设计 C.1,优先级由细到粗): role > letter > wildcard;均未命中返回
+// undefined(= 不带 model)。两变量未设时空策略对任意 (letter, role) 恒 undefined,
+// 保证 prompt 逐字节等价现状。
+export function resolveModel(policy: ModelPolicy, letter: ModelLetter | undefined, role: ModelRole): string | undefined {
+  return policy.byRole[role] ?? (letter ? policy.byLetter[letter] : undefined) ?? policy.wildcard
+}
+
+// "prov/model" → SDK prompt 的 model 参数(按首个 "/" 切分: providerID 在前、
+// modelID 为其余,后者可含冒号)。与 parseModelPolicy「值必含 /」约定一致,idx 恒 ≥0。
+export function splitModel(s: string): { providerID: string; modelID: string } {
+  const idx = s.indexOf("/")
+  return { providerID: s.slice(0, idx), modelID: s.slice(idx + 1) }
+}
+
+// 会话错误归类(docs/model-routing-design.md D.1):换模型是否可能有用,是 failover
+// (P4)的决策依据。与 opencode retry.ts 的 RETRYABLE 正则(问"重试有没有用")刻意
+// 不同——这里问"换候选模型有没有用"。缺省 unknown 表示拿不准,P4 保守不在其上换。
+export type ErrorClass = "quota" | "auth" | "rate" | "overflow" | "transient" | "unknown"
+
+// 分类器的结构化输入:取自 B.4 的三条触发面——session.error 的 data、retry part 的
+// ApiError.data(+attempt)、session.status retry 变体(+attempt、next)。字段全可选,
+// 便于多信号增量累积(见 watch 内 errorInfo 累加器)。
+export type ErrorInfo = {
+  message?: string
+  statusCode?: number
+  isRetryable?: boolean
+  responseBody?: string
+  attempt?: number
+  next?: number
+}
+
+// 分类判据集中于此(设计 G.2:新 provider 措辞漏判时,正则在此演进并由 test/runner.test.ts
+// 的固定报文样本回归)。分类器问"换模型有没有用",与 opencode 自身的重试分类器不同。
+const OVERFLOW_RE = /contextoverflowerror/i
+const QUOTA_RE = /insufficient_quota|quota|balance|credit|usage limit/i
+const AUTH_RE = /providerautherror|unauthorized|forbidden/i
+const RATE_RE = /rate limit|resource exhausted/i
+const TRANSIENT_RE = /overloaded|timeout|timed out|econn|socket hang up|network|temporar|internal server error|bad gateway|service unavailable|500|502|503|504/i
+const QUOTA_STATUS = 402
+// rate 阈值:单个 429 只是 opencode 仍在退避(不可据此换模型),须满足"已重试够多次"
+// 或"下次等待超阈值"才判 rate(设计 D.1 rate 行、B.4 第 2 信号)。
+const RATE_ATTEMPTS = 3
+const RATE_WAIT_MS = 60_000
+
+// 归类优先级(自上而下,首个命中即返回,与设计 D.1 判据表一致):
+//   1. overflow   —— 报文含 ContextOverflowError(交接/handover 机制管,明确不换)。
+//   2. quota      —— 服务端明说不可重试、或配额/余额/额度文案、或 402。
+//   3. auth       —— 401/403 或认证/越权文案(provider 不可用)。
+//   4. rate       —— 429/限流文案且达到重试次数或下次等待超阈值。
+//   5. transient  —— 已知瞬时错误(走现有重试路径,不换模型)。
+//   6. unknown    —— 保守缺省(拿不准不换)。
+export function classifySessionError(info: ErrorInfo): ErrorClass {
+  const hay = `${info.message ?? ""}\n${info.responseBody ?? ""}`
+  if (OVERFLOW_RE.test(hay)) return "overflow"
+  if (info.isRetryable === false || QUOTA_RE.test(hay) || info.statusCode === QUOTA_STATUS) return "quota"
+  if (info.statusCode === 401 || info.statusCode === 403 || AUTH_RE.test(hay)) return "auth"
+  const rateSignal = info.statusCode === 429 || RATE_RE.test(hay)
+  const rateThreshold = (info.attempt ?? 0) >= RATE_ATTEMPTS || (info.next ?? 0) > RATE_WAIT_MS
+  if (rateSignal && rateThreshold) return "rate"
+  if (TRANSIENT_RE.test(hay)) return "transient"
+  return "unknown"
+}
+
+// 上下文占比低于该值(%)时复用上一会话(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效)。
+export const REUSE_BELOW = 50
+
+// 会话复用的间隔上限(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效): 距上一会话结束
+// 超过该值即视为上下文陈旧(driver 侧工作如 verify 脚本执行、判定/审核会话可能
+// 耗时很久),不复用、开新会话。
+export const REUSE_IDLE_MS = 5 * 60 * 1000
+export const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000

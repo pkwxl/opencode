@@ -1,8 +1,8 @@
 # 大文件拆分方案(runner.ts / loop.ts 按职责切模块)
 
-**状态**: 实施中(auto-core 分支)。**S1 已完成(2026-09-16)**,下一步 **S2 `src/chain.ts`**。每步一个提交,新会话从本文件 §H 勾选表继续。
+**状态**: 实施中(auto-core 分支)。**S1–S2 已完成(2026-09-16)**,下一步 **S3 `src/unit-commit.ts`**。每步一个提交,新会话从本文件 §H 勾选表继续。
 **基线提交**: `f50cd615b`(§D.1/§E 表中的行号以该提交为准;**每步落地后行号已漂移,定位一律按符号名 grep,不要照抄行号**)。
-**当前进度**: `src/runner.ts` 4064 → 3964 行;新增 `src/opts.ts` 112 行。`bun test` 771 pass / 0 fail(与基线同),`packages/auto` 零改动通过 typecheck。
+**当前进度**: `src/runner.ts` 4064 → 3766 行;新增 `src/opts.ts` 112 行、`src/chain.ts` 211 行。`bun test` 771 pass / 0 fail(与基线同),`packages/auto` 零改动通过 typecheck。
 
 ## A 事实基线(2026-09-16 实测)
 
@@ -128,9 +128,10 @@ opts ─┬─ chain ─┬─ session-api ─┐
 
 ```ts
 export type { Opts, Outcome, UnitStop, SessionCommit, PermissionMode, SubtaskMode } from "./opts"
-export type { SessionChain, FailedSession, ForkBaseInfo, ErrorClass, ErrorInfo, UnitRerunCtx } from "./chain"
+export type { SessionChain, FailedSession, ForkBaseInfo, ErrorClass, ErrorInfo } from "./chain"
 export { phaseToRole, roleOf, resolveModel, splitModel, classifySessionError } from "./chain"
 export { afterSession, autoAnswer, gatedAutoCorrectRefs, gatedTaskRefGap, strictResumeActive, resumeModelNow } from "./unit-commit"
+export type { UnitRerunCtx } from "./resume-gate"
 export { unitReruns, phaseText, resumeNote } from "./resume-gate"
 export { forkSession, seedForkSession, ensureForkBase, sessionUsage, askHuman } from "./session-api"
 export { handoffSteer, handoverDue, testHandoverDue, resolveTestScript, restoreTestHandoffs, cleanTestHandoffs } from "./testrun"
@@ -230,7 +231,7 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 **runner.ts(S1–S12)**
 
 - [x] **S1** `src/opts.ts` — 纯类型与常量,零运行时依赖,先走通验证最省事。**已完成 2026-09-16**(提交见 git log `refactor(auto-core): 拆出 src/opts.ts`):`Outcome` `UnitStop` `SessionCommit` `SubtaskMode` `PermissionMode` `Opts` `FIX_ROUNDS` `DEFAULT_CONTEXT_LIMIT` 迁出;`config/final/implement/knowledge/numbering/loop` 六个包内调用方已改精确导入;`runner.ts` 末尾留兼容再导出。实测:runner.ts −100 行、opts.ts 112 行,771 pass 不变,`packages/auto` 零改动。
-- [ ] **S2** `src/chain.ts` — 会话链类型 + 模型路由求值 + 错误归类。
+- [x] **S2** `src/chain.ts` — 会话链类型 + 模型路由求值 + 错误归类。**已完成 2026-09-16**:`Watch` `SessionResult` `SessionChain` `FailedSession` `ForkBaseInfo` `phaseToRole` `roleOf` `resolveModel` `splitModel` `ErrorClass` `ErrorInfo` `classifySessionError` + 归类正则/阈值 + `REUSE_BELOW` `REUSE_IDLE_MS` `REUSE_IDLE_MINUTES` 迁出;`Watch` / `SessionResult` / 三个 `REUSE_*` 原为模块私有,迁出后加 `export`。**包内无调用方需改**(其余 src 模块只从 runner 取 `requireArtifact` / `afterSession` / `restoreTestHandoffs` / `runOnce` / `runTask`,不碰会话链符号),`runner.ts` 末尾追加两行兼容再导出。实测:runner.ts −198 行、chain.ts 211 行,771 pass 不变,`packages/auto` 零改动。
 - [ ] **S3** `src/unit-commit.ts` — 单元提交与回滚;同步改 `knowledge.ts`(`afterSession`)为精确导入。
 - [ ] **S4** `src/resume-gate.ts` — 恢复点单元归属门禁 + 阶段/中断文案。
 - [ ] **S5** `src/session-api.ts` — 会话 SDK 薄封装(分叉/用量/改名/存活)+ 输出格式化 + `askHuman`。
@@ -286,32 +287,39 @@ export async function preflight(directory: string, path: string, opts: RunAllOpt
 9. **`docs/structure.md`**:插一条新 bullet(位置紧邻 `src/runner.ts` 那条)。
 10. **提交**:`refactor(auto-core): 拆出 src/<模块>.ts`,正文写清迁了哪些符号、哪些调用方改了精确导入、实测行数与测试数。
 
-### H.2 S1 踩到的三个点(后续步骤会重复遇到)
+### H.2 S1/S2 踩到的点(后续步骤会重复遇到)
 
 - **模块私有常量要加 `export`**:`FIX_ROUNDS` / `DEFAULT_CONTEXT_LIMIT` 原是 `const`,迁出后必须导出。这是搬运中**唯一允许**的正文改动,逐字校验时把它规范化掉再比:
   `sed 's/^export const FIX_ROUNDS/const FIX_ROUNDS/'`。
 - **注释块可能跨符号**:`SessionCommit` 头上那段长注释,前几段讲的是 `afterSession`、最后一段才讲 `SessionCommit`。处置口径:**按段落把每段跟着它描述的符号走,措辞一字不改**;原本用来分段的那行孤立 `//` 随之删掉(S1 里删的就是它,也是逐字校验唯一的一行差异)。
+- **符号可能不连续**(S2 的 `ForkBaseInfo` 在文件另一处,离主区间 900 多行):按 §D.1 的"承接符号"逐个 grep 核位置,别假设一个区间切完就够。
+- **迁出后 runner.ts 会留下悬空的 type import**:S2 搬走 `resolveModel`/`phaseToRole` 后,`./switches` 的 `ModelLetter` / `ModelPolicy` 在 runner.ts 已无人使用,但 `tsgo` 不报未使用导入(未开 `noUnusedLocals`),`bun test` 也不会发现。**每步末尾对本步搬走的符号所用的 import 逐个 `grep -cw` 一遍**,计数只剩 import 行自身的就删掉。
 - **`docs/structure.md` 多数步骤是"加条目"而非"挪文字"**:`src/runner.ts` 那条 15750 字符的 bullet 讲的是流水线**行为**(行为留在 runner.ts),没有可整段excise 的"类型定义"文字。别为了凑 §G.1 的"拆成 13 条"硬搬——**只有讲的是被迁走的那段机制时才搬文字**,否则新写一条。
 
-### H.3 下一步(S2 `src/chain.ts`)的现成坐标
+### H.3 下一步(S3 `src/unit-commit.ts`)的现成坐标
 
 当前 HEAD 下的符号位置(仍需自行 grep 复核):
 
 | 符号 | 行 | 备注 |
 |---|---|---|
-| `Watch` | 242 | 模块私有 `type`,迁出需加 `export`(watch.ts/session.ts 都要用) |
-| `SessionResult` | 286 | 同上,模块私有 |
-| `SessionChain` | 315 | 已导出 |
-| `FailedSession` | 322 | 已导出 |
-| `phaseToRole` / `roleOf` / `resolveModel` / `splitModel` | 328 / 362 / 369 / 375 | 已导出 |
-| `ErrorClass` / `ErrorInfo` | 383 / 388 | 已导出 |
-| 归类正则 + `QUOTA_STATUS` / `RATE_ATTEMPTS` / `RATE_WAIT_MS` | 399–415 | 模块私有,`classifySessionError` 独用,不必导出 |
-| `classifySessionError` | 417 | 已导出 |
-| `REUSE_BELOW` / `REUSE_IDLE_MS` / `REUSE_IDLE_MINUTES` | 430 / 435 / 436 | 模块私有,`attempt`(→ S8 session.ts)要用,迁出需加 `export` |
-| `ForkBaseInfo` | 1374 | **不连续**——在文件另一处,别漏 |
+| `AUTO_ANSWER` 相关注释段起 | 69 | `autoAnswer` 头上的英文注释,整段随符号走 |
+| `autoAnswer` | 79 | 已导出 |
+| `afterSession` | 107 | 已导出;`knowledge.ts` 从 `./runner` 取它,本步改精确导入 |
+| `commitBlocked` | 139 | 模块私有,**留存侧 16 处调用**(各会话收口的 failed → blocked 折叠),迁出需加 `export` |
+| `collectSessionMarks` | 147 | 模块私有,`afterSession` 独用,保持私有 |
+| `wrapupResolves` | 167 | 模块私有,留存侧 2 处调用(收尾/修复后收尾),迁出需加 `export` |
+| `gatedAutoCorrectRefs` / `gatedTaskRefGap` | 175 / 180 | 已导出 |
+| `strictResumeActive` / `resumeModelNow` | 189 / 196 | 已导出 |
+| `rollbackUnitState` | 205 | 模块私有,**留存侧 5 处调用**(runTask 恢复块 ×2 / executeWhole / runSubtask / requireArtifact 步骤),迁出需加 `export` |
+| `rollbackRemark` | 232 | 模块私有,`rollbackUnitState` 独用,保持私有 |
 
-`chain.ts` 需要的 import:`Phase`(./resume)、`ModelLetter` `ModelPolicy` `ModelRole`(./switches)、`UnitBaseline`(./git)、`Usage`(./stats,`Watch` 用)、`Part`(@opencode-ai/sdk/v2,若 `Watch`/`SessionResult` 引用)——以 `tsgo` 报错为准补齐。
-`UnitRerunCtx`(444)属 **S4** `resume-gate.ts`,夹在 S2 区间附近,注意别顺手带走。
+区间从 69 到 239 基本连续(S2 已把原先夹在中间的会话链符号抽走),末尾紧邻的是 **S4** 的 `UnitRerunCtx` 注释段,注意别顺手带走。
+
+`unit-commit.ts` 需要的 import(以 `tsgo` 报错为准补齐):`Opts`(./opts)、`Phase`(./resume)、`Switches` `autoSwitches`(./switches)、
+`RollbackResult` `UnitBaseline` `commitTree` `rollbackUnit` 等(./git)、`ResolveItem` 与 resolve 系函数(./resolve)、`autoCorrectRefs` `formatRefGap` `taskRefFindings`(./refcheck)、
+`log`/`vlog`(./log)、`shellProfile`(./shell)。**方向性核对**:`unit-commit` 位于会话驱动层之下,不得 import `session`/`watch`/`runner`。
+
+上表的"留存侧调用数"已于 2026-09-16 实测;实施时用 `grep -n '<符号>' src/runner.ts` 复核一遍即可。
 
 ## I 决策记录
 
