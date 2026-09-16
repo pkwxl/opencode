@@ -42,7 +42,7 @@
    `14:00:18`),`14:00:50` 开始正式撰写主产物,工作到 `14:08:06` 撞上
    「You've reached your 5-hour usage limit」(Kimi API 403,payload 里明确带
    `"isRetryable":false`)。
-2. `runSession()` 的重试循环(`src/runner.ts:1758` 起)对任何 `会话错误:` 前缀的
+2. `runSession()` 的重试循环(`src/runner.ts:1758@f50cd615b` 起)对任何 `会话错误:` 前缀的
    阻塞结果一律执行 `chain.id = undefined` 后重试——**不区分错误是否值得重试,
    也不管当前会话是否已经积累了真实进度**。于是:
    - 第 1 次重试开了空白新会话 `ses_f7980ae04ffeWjCxLiXJCnh6aF`,同样秒撞限额;
@@ -50,12 +50,12 @@
      还是秒撞限额,最终阻塞:「会话错误:...(已换新会话自动重试 2 次仍失败)」。
    - 真正干了活的 `ses_f7988a9c...` 从此无人再引用——不是被显式丢弃,是被
      "一撞错就换白板重来"的重试策略架空了。
-3. `attempt()`(`src/runner.ts:1832`–`1845` 附近)在拿到 `sessionID` 之后、
+3. `attempt()`(`src/runner.ts:1832@f50cd615b`–`1845` 附近)在拿到 `sessionID` 之后、
    `client.session.prompt()` 发出之前就调用 `remember()` 把该 id 写入
    `progress.json` 标为 `active:true`——不管这一轮最终是否成功。三次尝试里最后一次
    (空白会话 `ses_f7980aca7ffe`)因此成为最终落盘的"可恢复会话"。
 4. 下一次运行(`run-2026-09-09_14-09-55.log`)的跨进程恢复判定(`runTask`,约
-   `src/runner.ts:345`)只用 `sessionAlive()`(仅确认会话存在,`1916`–`1919` 行)
+   `src/runner.ts:345@f50cd615b`)只用 `sessionAlive()`(仅确认会话存在,`1916`–`1919` 行)
    判断"可复用",不检查这一轮是否真有实质产出。于是它自信地"复用"了
    `ses_f7980aca7ffe`——日志打出"上下文不丢,已用 0/262.1k tokens,0%",但实际
    `sqlite`(`~/.local/share/opencode/opencode.db`)里查到该会话历史只有两条:
@@ -63,7 +63,7 @@
    状态(重读 CURRENT.md、git status、逐个重读 S01–S11),且上下文里还白白背了一份
    已经作废的 23KB 提示词 + 一条报错桩 + 第二次近乎重复的 23KB 提示词——比完全不
    复用还差(该重做的活一点没少,还多付了冗余上下文的 token)。
-5. 更上游的浪费:`watch()` 收到 SSE `session.error` 事件时(`src/runner.ts:2188`
+5. 更上游的浪费:`watch()` 收到 SSE `session.error` 事件时(`src/runner.ts:2188@f50cd615b`
    附近)只取了 `props.error.data.message` 拼进错误字符串,`isRetryable` 这种结构化
    字段读了就扔,完全没参与"要不要重试"的判断——哪怕 API 已经明确说了"重试没用"。
 

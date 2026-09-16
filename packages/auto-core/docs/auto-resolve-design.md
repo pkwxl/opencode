@@ -52,8 +52,8 @@ AI 本无须裁量」的场景也被迫产出大量 AUTO-DECISION 留痕。
   需 AI 自评的中间档 —— 那是在归属判据之外再叠一道模糊阈值,两道软判据串联只会比
   一道更不可控。
 - **仅回落自动答复才计入 AUTO-RESOLVE**。`--wait-answer` 下人工真答了的提问不计
-  (`src/runner.ts:2619` 的 `human !== undefined` 分支)—— 那是真人做的决定。
-- **dryrun 预检会话不计**。预检只探查权限(`src/runner.ts:2609` 的
+  (`src/watch.ts:317` 的 `if (human)` 分支)—— 那是真人做的决定。
+- **dryrun 预检会话不计**。预检只探查权限(`src/watch.ts:301` 的
   `opts.dryrun ? false : …`),不产生工程决策。
 - **展示分级复用既有 `vlog` 通道,不为「显示多少」新造开关**。`src/log.ts:11-34` 已
   提供三档:`--verbose` 终端+文件、`--interactive` 仅文件、外壳 `audit` 画像下
@@ -154,7 +154,7 @@ export type ResolveSource = "driver" | "agent"
 
 export type ResolveItem = {
   at: number
-  task: string          // T-NNN;旁路会话为伪任务 PLAN/AUTO(pseudoTask,runner.ts:850)
+  task: string          // T-NNN;旁路会话为伪任务 PLAN/AUTO(pseudoTask,src/runner.ts:570)
   phase: string         // 阶段字母,未知为 ""
   round: number
   session?: string      // driver 源携带会话 id
@@ -214,17 +214,17 @@ export type ResolveDoc = { v: 1; items: ResolveItem[]; decisions?: Record<string
 | H6 | `src/loop.ts:687` 阶段收口(`phaseCloseLines`,`:1028`)/ `:369`+`:719` 轮次完成(`roundCompleteLines`,`:1048`) | 汇总计数行,同样置顶于 `■` 行之前 |
 | H7 | `src/prompt.ts:184` `renderWrapup` + `templates/prompts/wrapup.md` | 注入 driver 观测到的代答清单,要求 report.md 写「自动代答问题」节 |
 
-**实施后落点(T-008 回填,行号以本次实施完成时的 auto-core 工作树为准)**:
+**实施后落点(T-008 回填,行号以 2026-09-16 大文件拆分后的 auto-core 工作树为准)**:
 
 | # | 落点 | 备注 |
 |---|---|---|
-| H1 | `src/runner.ts:2693-2701` | 仅 `human === undefined` 且非 dryrun 时 `resolves.push({ at, question, session })`,随即打 `⚑ 自动代答(AUTO-RESOLVE)第 N 个: …`;原 `→ 自动答复: <长文案>` 降为 `vlog` |
-| H2 | `src/runner.ts:281`(`Watch.resolves`)+ `:3581` `snapshot()` | **7 个** `return snapshot` 出口(`:2619` / `:2670` / `:2712` / `:2774` / `:2829` / `:2854` / `:2869`)统一带出 |
-| H3 | `src/runner.ts:2345` | `attempt` 在 `await watching` 后调模块私有 `recordDriverResolves`(`:2202`),无观测时零 IO;轮号现场取 `currentRound` |
-| H4 | `src/runner.ts:137`(`afterSession` 内,`:110` 起) | `collectAgentResolves` 在 `opts.commit === false \|\| opts.dryrun` 提前 return **之前** |
-| H5 | `src/loop.ts:416` / `:432` / `:444` | 三态行前置 `taskResolveLines`(`:981`),块体经 `resolveHighlight`,AUTO-DECISION 计数经 `decisionsOf` 折进末行 |
-| H6 | `src/loop.ts:694`(阶段)/ `:371`+`:727`(轮次) | `phaseResolveLines`(`:989`)/ `roundResolveLines`(`:997`),只给计数行 |
-| H7 | `src/prompt.ts:199` `renderWrapup` + 私有 `resolveList`(`:212`)+ `templates/prompts/wrapup.md` 第 4 项 | 两处调用点 `src/runner.ts:738` 与 `:1484` 先经 `wrapupResolves`(`:151`)读台账 |
+| H1 | `src/watch.ts:317-323` | 仅 `human === undefined` 且非 dryrun 时 `resolves.push({ at, question, session })`,随即打 `⚑ 自动代答(AUTO-RESOLVE)第 N 个: …`;原 `→ 自动答复: <长文案>` 降为 `vlog` |
+| H2 | `src/chain.ts:49`(`Watch.resolves`)+ `src/watch.ts:63` `snapshot()` | **7 个** `return snapshot` 出口(`:238` / `:290` / `:332` / `:394` / `:449` / `:474`·`:477` / `:500`)统一带出 |
+| H3 | `src/attempt.ts:231` | `attempt` 在 `await watching` 后调模块私有 `recordDriverResolves`(`:32`),无观测时零 IO;轮号现场取 `currentRound` |
+| H4 | `src/unit-commit.ts:101`(`afterSession` 内,`:55` 起) | `collectAgentResolves` 在 `opts.commit === false \|\| opts.dryrun` 提前 return **之前** |
+| H5 | `src/loop-task.ts:196` / `:215` / `:228` | 三态行前置 `taskResolveLines`(`src/conclusion.ts:34`),块体经 `resolveHighlight`,AUTO-DECISION 计数经 `decisionsOf` 折进末行 |
+| H6 | `src/loop-phase.ts:301`(阶段)/ `src/loop-task.ts:125`+`src/loop-phase.ts:341`(轮次) | `phaseResolveLines`(`src/conclusion.ts:42`)/ `roundResolveLines`(`src/conclusion.ts:50`),只给计数行 |
+| H7 | `src/prompt.ts:199` `renderWrapup` + 私有 `resolveList`(`:212`)+ `templates/prompts/wrapup.md` 第 4 项 | 两处调用点 `src/runner.ts:488` 与 `src/review.ts:92` 先经 `wrapupResolves`(`src/unit-commit.ts:115`)读台账 |
 
 规则文本挂点:`templates/prompts/_partials.md:14-21` 的 `question-rule` 片段,被
 **23 份**模板经 `{{> question-rule}}` 引用(清单见 §J-3),改这一处即全量生效 ——
@@ -368,10 +368,10 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
    的那部分有意义**,不能解读为全量漏标率。**需要可审计的代答记录时应当用 `on`
    档** —— 这条建议必须同时写进 README,否则用户会以为缺省档的计数是完备的。
 2. **`on` 档新增两项成本**。① 每个问题一次会话往返(token 与时长);② 提问变多后
-   `src/runner.ts:2610` 的重复提问判定更易触发 —— `sameIssue` 用的是归一化后**子串
-   包含**(`x.includes(y) || y.includes(x)`,`:2893`),短问题被长问题包含即判为同一
-   问题,命中即 abort 会话并阻塞退出 2。缓解在于 `autoAnswered` 是 `watch()` 内的
-   局部量(`:2435`),作用域仅当前回合而非整个任务,误判半径有限;但 `on` 档冒烟必须
+`src/watch.ts:302` 的重复提问判定更易触发 —— `sameIssue` 用的是归一化后**子串
+包含**(`x.includes(y) || y.includes(x)`,`src/resolve.ts:142`),短问题被长问题包含即判为同一
+问题,命中即 abort 会话并阻塞退出 2。缓解在于 `autoAnswered` 是 `watch()` 内的
+局部量(`src/watch.ts:76`),作用域仅当前回合而非整个任务,误判半径有限;但 `on` 档冒烟必须
    专门验这条,若出现误阻塞则**收紧 `sameIssue`(改为全等 + 长度比阈值)而非放弃
    重复检测** —— 重复提问停机是防 AI 空转的安全网,不能拆。
 3. **误标风险(反向)**:AI 可能为求稳把纯工程取舍也标成 AUTO-RESOLVE,高亮块噪声化
@@ -450,8 +450,8 @@ AUTO-DECISION 只计数不落账、driver↔agent 经 `sameIssue` 配对置 `mat
   记入相关文档)` —— `off` 档逐字保留现状口径,`on` 档只剩"记入相关文档"。
 - **AUTO-DECISION: 归属判据中的"验收口径"改写为"「什么算做完」的判定标准"**
   (`templates/prompts/_partials.md`)。`config.verify === false` 时提示词不得出现
-  "验收/verify" 字样(`src/prompt.ts:14` 注释的既定口径),`test/prompt.test.ts` 有三
-  处 `not.toContain("验收")` 守卫该不变量;判据列表被 23 份模板无条件引用,内嵌
+  "验收/verify" 字样(`src/prompt.ts:14` 注释的既定口径),`test/prompt-exec.test.ts` /
+  `test/prompt-phase.test.ts` 各有 `not.toContain("验收")` 守卫该不变量;判据列表被 23 份模板无条件引用,内嵌
   `{{#if verify}}` 会把一个与验收开关无关的判据切成两半,换词更干净且语义不减。
 - **AUTO-DECISION: 两档条件段的开闭标签与内容同行相接**(`…{{/if}}{{#if ask}}…`)。
   `src/template.ts:277` 的 standalone 判定使独占一行的块标签整行连同换行被吞掉,但两

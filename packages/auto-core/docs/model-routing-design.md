@@ -126,7 +126,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 ### C.3 生效点
 
-`attempt()`(runner.ts:1929)取 `opts.phase` 与 `chain.phase`/`chain.role` 解析出目标模型,
+`attempt()`(`src/attempt.ts:179`)取 `opts.phase` 与 `chain.phase`/`chain.role` 解析出目标模型,
 连同 `chain.model`(该链已降级到的候选,见 D.4)一起传给 `client.session.prompt` 的
 `model` 字段:
 
@@ -157,13 +157,13 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 ### D.2 三个触发面接线
 
-1. `watch` 的 `session.error` 分支(runner.ts:2365):除现有 `message`/`retryable` 外,把
+1. `watch` 的 `session.error` 分支(`src/watch.ts:401`):除现有 `message`/`retryable` 外,把
    `data` 的结构化字段带出(`Watch` 加 `errorInfo?`,`retryable?: boolean` 是同类先例)。
 2. `watch` 的 `message.part.updated` 分支: `part.type === "retry"` 时记录
    `{ attempt, statusCode, isRetryable, responseBody }`(取自 `RetryPart.error`,该 part 本身
    不带等待时长)并喂给分类器;命中 `quota|auth|rate` 阈值即
    提前结算本回合——**必须先 `client.session.abort({ sessionID })` 再 break**,与断流清理
-   (runner.ts:2402-2409)同一手法:server 端旧回合此刻仍在跑,不中止就会与随后 fork 出的
+   (`src/watch.ts:235-238`)同一手法:server 端旧回合此刻仍在跑,不中止就会与随后 fork 出的
    新会话并发改文件。返回 `blocked` 且带 `failover: true`。
 3. `session.status` retry 变体: 同一判据的第二信号(server 不产出 retry part 时仍可用),
    额外提供 `next`(下次尝试的等待时长,`rate` 判据用它做"还要等太久就别等了"的阈值),
@@ -199,7 +199,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 `model` 优先级最高(B.2)——**换模型续跑不需要重做上下文**。日志形如
 `⇄ T-001 配额受限,链上下文保留,切换模型 a/x → b/y(候选 2/3)`。
 
-降级后首个提示词经 `chain.note`(一次性附加说明,runner.ts:2015-2021)带一句"已切换模型,
+降级后首个提示词经 `chain.note`(一次性附加说明,`src/attempt.ts:172-173`)带一句"已切换模型,
 注意沿用前文的产物格式与协议"——与 `stuck-hint` 为弱模型兜底是同一套哲学。
 
 ### D.4 候选钳制与耗尽

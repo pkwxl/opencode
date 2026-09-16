@@ -79,20 +79,20 @@ type StatsDoc = {
 - 测试注入: 模块级可替换时钟 `setStatsClock`(`src/stats.ts:93`)——备选"各 API 加
   now 形参"要穿透全部公共 API 与接线层,污染签名,否决。
 
-## E. 挂点表(行号以 auto-core 分支 T-007 时 HEAD 为准)
+## E. 挂点表(行号以 2026-09-16 大文件拆分后的 auto-core 分支为准)
 
 | 挂点 | 位置 | 动作 |
 |---|---|---|
-| 进程启动 | `src/loop.ts:205` | `loadStats(directory)`(折旧+轮次滚动+开本进程首段);有旧文档打续接横幅 `resumeBanner`(`src/loop.ts:978`) |
-| 进程收口 | `src/loop.ts:847` | runAll finally `flushStats(directory)`(关段落盘、卸载句柄;unprotect 之前) |
-| 任务切换 | `src/loop.ts:381` | 任务横幅处 `statsTask(dir, task.id)`(同 id 幂等;切换清空 sessions 映射) |
-| 阶段切换 | `src/loop.ts:722`(分阶段 routePhase 后)、`src/loop.ts:466`(非分阶段 "m") | `statsPhase(dir, letter)`(同字母幂等) |
-| 会话开始 | `src/runner.ts:2235` | prompt 下发前 `statsSessionBegin(opts.dir, task.id)`(fold、开 AI 段、启心跳) |
-| 会话结束 | `src/runner.ts:2254` | `await watching` 后 `statsSessionEnd(dir, sessionID, usage)` 取打印报告;`finally` 以 `booked` 守卫幂等兜底(`src/runner.ts:2322`,零 usage 照记) |
-| Token 采集 | `src/runner.ts:2489` | watch 的 `message.part.updated` 分支对 step-finish part 按 `part.id` 去重(`billedSteps` 专用集合)累加七分项;watch() 全部 7 个 return 出口经 `snapshot` 统一携带 durationMs + usage |
-| 人工等待 ×3 | `src/runner.ts:2891`(askHuman)、`src/loop.ts:862`(waitBetweenTasks)、`src/step.ts:46`(stepPause) | `statsWaitBegin/End` try/finally 配对包裹(含 interactive 路径与异常路径) |
-| 进度心跳 | `src/loop.ts:955` | `subtaskProgressLine` 读 `statsTotals(dir,"task").wallMs`,守卫 `statsId === task.id` |
-| 结论行 ×3 | `src/loop.ts:1003`(taskEndLines)、`src/loop.ts:1025`(phaseCloseLines)、`src/loop.ts:1045`(roundCompleteLines) | 导出报文构造函数,loop 主体只负责 log,单测直驱 |
+| 进程启动 | `src/loop-preflight.ts:154` | `loadStats(directory)`(折旧+轮次滚动+开本进程首段);有旧文档打续接横幅 `resumeBanner`(`src/loop-preflight.ts:155`) |
+| 进程收口 | `src/loop.ts:126` | runAll finally `flushStats(directory)`(关段落盘、卸载句柄;unprotect 之前) |
+| 任务切换 | `src/loop-task.ts:159` | 任务横幅处 `statsTask(dir, task.id)`(同 id 幂等;切换清空 sessions 映射) |
+| 阶段切换 | `src/loop-phase.ts:350`(分阶段 routePhase 后)、`src/loop.ts:103`(非分阶段 "m") | `statsPhase(dir, letter)`(同字母幂等) |
+| 会话开始 | `src/attempt.ts:199` | prompt 下发前 `statsSessionBegin(opts.dir, task.id)`(fold、开 AI 段、启心跳) |
+| 会话结束 | `src/attempt.ts:226` | `await watching` 后 `statsSessionEnd(dir, sessionID, usage)` 取打印报告;`finally` 以 `booked` 守卫幂等兜底(`src/attempt.ts:306`,零 usage 照记) |
+| Token 采集 | `src/watch.ts:203` | watch 的 `message.part.updated` 分支对 step-finish part 按 `part.id` 去重(`billedSteps` 专用集合)累加七分项;watch() 全部 7 个 return 出口经 `snapshot` 统一携带 durationMs + usage |
+| 人工等待 ×3 | `src/session-api.ts:221`(askHuman)、`src/loop-progress.ts:18`(waitBetweenTasks)、`src/step.ts:46`(stepPause) | `statsWaitBegin/End` try/finally 配对包裹(含 interactive 路径与异常路径) |
+| 进度心跳 | `src/loop-progress.ts:81` | `subtaskProgressLine` 读 `statsTotals(dir,"task").wallMs`,守卫 `statsId === task.id` |
+| 结论行 ×3 | `src/conclusion.ts:72`(taskEndLines)、`src/conclusion.ts:94`(phaseCloseLines)、`src/conclusion.ts:114`(roundCompleteLines) | 导出报文构造函数,loop 主体只负责 log,单测直驱 |
 
 formatter 收口(`src/log.ts`):`formatDuration`(中文式+小时档,:120)、
 `formatDurationCompact`(紧凑式逐字保持,:131)、`formatTokens`(:142)、`formatCost`
@@ -103,7 +103,7 @@ formatDuration 副本已删改 import(runner.ts 与 prompt.ts 的 formatTokens �
 
 ## F. 六处报文(已实施文案)
 
-1. **会话/子会话结束**(`src/runner.ts:2265` 起,所有 attempt 会话**无条件打印**):
+1. **会话/子会话结束**(`src/attempt.ts:241` 起,所有 attempt 会话**无条件打印**):
    行 1 `◉ 会话结束: 上下文 42% (35.2k/83.1k tokens),用时 12.4s(累计 1m40s / 3 轮)`;
    行 2 `tokens 入 1.2k / 出 340 / 缓存读 28.4k / 缓存写 3.1k,命中率 95.9%,费用 $0.041(累计 $0.31)`。
    省略规则: 单轮(session.rounds ≤ 1)省略"(累计…)";reasoning=0 省略思考项
@@ -149,13 +149,13 @@ formatDuration 副本已删改 import(runner.ts 与 prompt.ts 的 formatTokens �
   外提签名,宁少不多。
 - **watch() return 出口实为 7 个**(T-003 报告):计划写"8 个"系较早版本;逐一清点
   经 snapshot 全覆盖,不硬凑数字(handleIdleTest 的 5 个 return 是另一类型)。
-- **◉ 行 1 用时取 report.thisAiMs**(`src/runner.ts:2270` 附近注释):与同行"累计"
+- **◉ 行 1 用时取 report.thisAiMs**(`src/attempt.ts:248` 附近注释):与同行"累计"
   (session.aiMs)同基才有可比性;备选 durationMs 会与本基口径分裂。
 - **等待区间 try/finally 配对 waitEnd(含异常路径)**(T-005 报告):readline 被拒/
   interactive 抛错不留悬挂关段。
 - **waitBetweenTasks/askHuman 导出供单测直驱**(T-005 报告):对齐 subtaskProgressLine
   先例,接线本身(dir 透传、配对)必须有覆盖。
-- **任务行"本进程"取墙钟差**(`src/loop.ts:999` 附近注释):T-002 心跳行已把"本进程"
+- **任务行"本进程"取墙钟差**(`src/conclusion.ts:67` 附近注释):T-002 心跳行已把"本进程"
   确立为墙钟口径,同词跨行必须同义;否决 AI 子集读法。
 - **历轮累计单列两行不并入**(`src/loop.ts` roundCompleteLines 注释);**人工等待段
   仅 waitMs > 0 时输出**(与费用/思考项 0 省略同风格)。

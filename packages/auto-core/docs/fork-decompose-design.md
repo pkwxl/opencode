@@ -326,7 +326,7 @@ docs/{{taskId}}.context.md,先读之了解任务背景再开始(不存在则按�
 ## 11. 风险与开放问题
 
 - provider 缓存未命中时 fork 前缀全额计费:冷启动路径 + `fork=off` 兜底;日志同时输出基点用量供人工判断。
-- fork 会话 SDK 返回形状(已落地):`{ data }` 取 `.data.id`、`{error}` 与调用异常三分支在 `forkSession` 统一处理(与 `session.create` 同构),fake client 单测覆盖(test/runner.test.ts)。
+- fork 会话 SDK 返回形状(已落地):`{ data }` 取 `.data.id`、`{error}` 与调用异常三分支在 `forkSession` 统一处理(与 `session.create` 同构),fake client 单测覆盖(test/session-api.test.ts)。
 - **A/B 实验矩阵**(定型默认值与转正范围的依据):{fork on\|off} × {fork-base session\|digest} × {fine on\|off} × {steer on\|off};指标:任务墙钟时间、总 tokens(input / cache.read 分计,取自 chain.used 跟踪与日志)、交接与重试次数、子任务数与子任务均上下文、verify/review 通过率。注意 fine=on 且 fork=off 会重现「细粒度 × 重复探索」的旧成本结构,仅作对照组,不建议日常使用。
 - digest 模式摘要失真:摘要缺细节时子任务须按指引回读文件;session 模式与冷启动提示词兜底;**混合基点**(分解用 session 保接地、执行用 digest 保瘦前缀)为候选改进,首期不做。
 - digest 确认 turn 依赖模型自律(应只回一句):fork 的 `messageID` 语义已在源码确认(见 §11.1 末条),但据此去掉确认 turn 会让分叉末条停在 user 消息,provider 是否接受连续两条 user 消息需实测,故暂不改实现。
