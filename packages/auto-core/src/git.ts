@@ -1,4 +1,4 @@
-import { readdir, realpath } from "node:fs/promises"
+import { readdir, realpath, rm } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
 import { log } from "./log"
 
@@ -487,6 +487,14 @@ export async function restoreFile(dir: string, rel: string): Promise<boolean> {
 export async function fileTracked(dir: string, rel: string): Promise<boolean> {
   const tracked = await git(dir, ["ls-files", "--error-unmatch", "--", rel]).catch(() => undefined)
   return tracked?.code === 0
+}
+
+// 未被 git 跟踪才删(交接文档族陈旧清理的共用语义,与 testhandoff 的 F4 收窄同款):
+// 已跟踪的文件属已落账状态,删除即脏区——在途与否的判定权留给恢复语义(或人工),
+// 清理绝不自动制造脏区去撞下一个执行单元的 clean 门禁。
+export async function removeIfUntracked(dir: string, rel: string): Promise<void> {
+  if (await fileTracked(dir, rel)) return
+  await rm(join(dir, rel), { force: true })
 }
 
 // 单个文件是否"已落账": 被 git 跟踪且工作区副本与提交一致。测试交接恢复据此

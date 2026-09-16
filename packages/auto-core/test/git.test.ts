@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { baselineIntact, beginUnit, changedFiles, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
+import { baselineIntact, beginUnit, changedFiles, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, removeIfUntracked, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -564,6 +564,27 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
       expect(await fileTracked(dir, join("docs", "stray.md"))).toBe(false)
       expect(await fileCommitted(dir, join("docs", "stray.md"))).toBe(false)
       expect(await deletedFiles(dir, "docs")).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // steer 交接文档(handoff.md)陈旧清理的共用原语(F4 语义上收): 已跟踪的属未收口
+  // 单元的在途状态,删它即脏区——保留给恢复语义;未跟踪的陈旧遗留照删。
+  test("removeIfUntracked: 已跟踪的不删且不产生脏区,未跟踪的照删", async () => {
+    const dir = await fresh()
+    try {
+      const rel = join("docs", "T-028", "handoff.md")
+      await mkdir(join(dir, "docs", "T-028"), { recursive: true })
+      await writeFile(join(dir, rel), "交接正文\n\n状态: 继续\n")
+      await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "subtask 1 handoff", subject: "T-028 S1 交接" })
+      await removeIfUntracked(dir, rel)
+      expect(await Bun.file(join(dir, rel)).exists()).toBe(true)
+      expect(await changedFiles(dir)).toEqual([])
+      const stray = join("docs", "T-028", "handoff-legacy.md")
+      await writeFile(join(dir, stray), "遗留")
+      await removeIfUntracked(dir, stray)
+      expect(await Bun.file(join(dir, stray)).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

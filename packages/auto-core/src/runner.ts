@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
@@ -8,7 +7,7 @@ import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictR
 import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies } from "./failback"
-import { baselineIntact, commitTree, unitBaseline } from "./git"
+import { baselineIntact, commitTree, removeIfUntracked, unitBaseline } from "./git"
 import { handoffStatus } from "./handover"
 import { autobanner, log } from "./log"
 import { type Opts, type Outcome, type UnitStop } from "./opts"
@@ -335,12 +334,16 @@ export async function runTask(
       if (decomposed.type !== "ok") return decomposed
       task = decomposed.task
       // 子任务交接文档的陈旧清理(镜像 ondemand 语义): 非恢复续跑时清除上次尝试
-      // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。
+      // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。只删未被 git
+      // 跟踪的份(F4 同款): 已跟踪的 handoff.md 必属未收口的执行单元(单元收口时
+      // 删除随提交落账,盘上与 HEAD 同时消失;检查项按序执行,未收口单元必是首个
+      // 未勾选项),保留给重跑的子任务凭交接续跑——无条件删它只会制造脏区,把下一
+      // 单元的 clean 门禁撞停后陷入"人工恢复→再删→再阻塞"的循环(T-028 同类现场)。
       if (recalled?.active !== true) {
-        await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
+        await removeIfUntracked(dirname(plan.path), handoffFile(task))
         // 旧平铺交接文档(docs/<id>.handoff.md)兼容清扫: 写目标已目录化,遗留
         // 旧文件一并移除,防读回落误续跑陈旧交接。
-        await rm(join(dirname(plan.path), legacyTaskDoc(task.id, "handoff")), { force: true })
+        await removeIfUntracked(dirname(plan.path), legacyTaskDoc(task.id, "handoff"))
         // --handover-test 的测试交接文档同理(任务级与子任务级一并清): runExecSession
         // 的交接循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态;auto 模式
         // 不进整任务分支,清理须在此覆盖,否则陈旧交接会被下一子任务误读续跑。
@@ -348,11 +351,12 @@ export async function runTask(
       }
     } else if (resumed !== "wrapup" && resumed !== "verify" && resumed !== "review") {
       // 非恢复续跑才清除上次尝试遗留的交接文档;恢复时保留(其中是中断会话的进度
-      // 总结,executeWhole 依其 `状态:` 行决定续跑)。
+      // 总结,executeWhole 依其 `状态:` 行决定续跑)。同样只删未被 git 跟踪的份
+      // (理由同 auto 分支: 已跟踪的属未收口单元的在途状态,删它即脏区)。
       if (mode === "ondemand" && recalled?.active !== true) {
-        await rm(join(dirname(plan.path), handoffFile(task)), { force: true })
+        await removeIfUntracked(dirname(plan.path), handoffFile(task))
         // 旧平铺交接文档兼容清扫(与 auto 分支同语义)。
-        await rm(join(dirname(plan.path), legacyTaskDoc(task.id, "handoff")), { force: true })
+        await removeIfUntracked(dirname(plan.path), legacyTaskDoc(task.id, "handoff"))
       }
       // --handover-test 的测试交接文档同理: 非恢复续跑时清除上次尝试遗留
       // (任务级与子任务级一并清;恢复续跑(active 记录)时保留,由续跑会话消费)。

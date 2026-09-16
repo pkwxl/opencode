@@ -332,3 +332,41 @@ clean 门禁,少写一次就少一次摩擦。
   分叉接回,不再存在落回定版前旧会话的路径。任务/子任务处理过程中本就不始终依赖活跃 AI 会话
   (归档、提交 #2、跑脚本都是无会话窗口),这些窗口中断后的恢复由 §I 状态机承载,记录不认领
   会话正是它成立的前提。
+
+## K. 修订(2026-09-16):steer 交接文档 handoff.md 的陈旧清理同样只删未跟踪份
+
+### K.1 缺口(§I 只修了 testhandoff一族)
+
+§I/F4 给 `cleanTestHandoffs` 加了两道收窄(有在途记录整段跳过、只删未被 git 跟踪的
+份),但 steer 交接文档 `docs/<id>/handoff.md`(ondemand 整任务与 auto 子任务的 2×cap
+交接)在 `runTask` 流水线的陈旧清理仍是**无条件 `rm`**(条件仅「非恢复续跑」)。触发链:
+交接续跑会话被非会话错误阻塞(权限 ask-fail、重复提问、steer 投递失败、两次未写出有效
+交接文档)→ `runTask` 把进度记录转总结态(`active=false`)→ 该 handoff.md 已被续跑前的
+`afterSession` 提交(`git add -A` 一并落账)→ 下次运行 cleanup 无条件删已跟踪文件 →
+删除即脏区 → 下一执行单元的 `beginUnit` clean 门禁阻塞退出 2。人工 `git checkout`
+恢复文件后再运行,cleanup 又删一次——循环阻塞;人工若选择「提交删除」破局,交接文档里
+「还没做完的事」清单随之丢失,续跑只剩阶段级 resumeNote 指引,剩余步骤可能永久遗漏
+(test-wrapup.md 警告的正是这个损失形态)。与 kernel-spi-nor T-028 现场同类。
+
+### K.2 决策
+
+- **陈旧清理只删未被 git 跟踪的份**(与 F4 同语义):`removeIfUntracked` 从
+  `testrun.ts` 的私有函数上收到 `git.ts` 导出,`runTask` 两处(auto 分支与 ondemand
+  分支)的 handoff.md/旧平铺名清理改走它。已跟踪的 handoff.md 必属未收口的执行单元
+  (单元收口时删除随提交落账,盘上与 HEAD 同时消失;检查项按序执行,未收口单元必是
+  首个未勾选项),保留在盘上正好被重跑的 `runSubtask`/`executeWhole` 的
+  `handoffStatus` 读走、凭交接续跑——这正是恢复语义要的载体,删它没有任何收益。
+- **不对 handoff.md 做 git 复原**(不并入 `restoreTestHandoffs`):testhandoff 按执行
+  范围命名,复原不会串范围;handoff.md 是任务级、跨子任务共享,若把「单元收口时删
+  除尚未提交」窗口的工作区删除复原回来,下一子任务会把上一子任务的交接误读成自己
+  的续跑依据。该窗口的脏区维持「阻塞交人工」现状(量小且安全)。
+- 已知取舍:若人工在 PLAN.md 手动勾掉了交接所属子任务(检查项按序的不变量被人工
+  打破),盘上保留的 handoff.md 会被下一子任务误读;此前该场景的表现是脏区阻塞,
+  两种都需要人工介入,不改判。
+
+### K.3 落地范围
+
+`packages/auto-core`:`src/git.ts`(`removeIfUntracked` 导出)、`src/testrun.ts`
+(私有副本删除,改 import)、`src/runner.ts`(两处陈旧清理改用)、
+`test/git.test.ts`(`removeIfUntracked` 真实仓库用例)。`bun typecheck` 干净,
+`bun test` 全绿(778 pass)。

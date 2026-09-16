@@ -8,7 +8,7 @@
 import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { archivedTestHandoff, latestHandoffSeq, legacyTaskDoc, taskDoc } from "./docpaths"
-import { deletedFiles, fileTracked, restoreFile } from "./git"
+import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
 import { handoffStatus, peekHandover } from "./handover"
 import { log } from "./log"
 import type { Opts } from "./opts"
@@ -216,11 +216,8 @@ export async function cleanTestHandoffs(planPath: string, task: Task): Promise<v
   }
 }
 
-// 未被 git 跟踪才删(F4);已跟踪的留给恢复状态机,删它等于制造脏区。
-async function removeIfUntracked(dir: string, rel: string): Promise<void> {
-  if (await fileTracked(dir, rel)) return
-  await rm(join(dir, rel), { force: true })
-}
+// 未跟踪才删的共用实现在 src/git.ts 的 removeIfUntracked(F4 语义上收,steer 交接
+// 文档 handoff.md 的陈旧清理同款复用);已跟踪的留给恢复状态机,删它等于制造脏区。
 
 // --test-by-driver 的单次测试执行 = 消费请求标记 + 执行。两步拆开是因为顺序态的
 // 测试交接要在定版那一刻先消费标记、把脚本定下来,执行推迟到交接收口之后。
