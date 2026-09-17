@@ -45,6 +45,8 @@
 
 ### H6. log.ts 对已关闭的 readline 调 `prompt()` 崩溃 ✓
 
+> **勘误(2026-09-17 修复时实证)**:「`rl.prompt(true)` 抛 `ERR_USE_AFTER_CLOSE`」在 Node 20 与 Bun 下均不成立(close 后 prompt/pause/resume/write 均不抛,仅 promises `question()` 抛而 log.ts 未用)。真实缺陷降级为不对称清理:`close()` 清了 log.ts 的输入行引用而 stdin 关闭的 `close` 事件没清,日志继续向已关闭 readline 重绘提示符。修复见文末修复记录。
+
 `log.ts:53-60` + `interactive.ts:107-111`:stdin 关闭(管道耗尽/Ctrl+D/终端断开)时 `rl.on("close")` 只置内部 `dead`,未 `setInput(undefined)`;log.ts 模块级 `rl` 引用继续存活,此后任何一条日志触发 `rl.prompt(true)` 抛 `ERR_USE_AFTER_CLOSE`,可打穿主流程(interactive.ts 的 settle 有 dead 守卫,log.ts 侧漏了对称清理)。
 
 修复:close 时同步 `setInput(undefined)`,或 log.ts 的 prompt 包 try/catch。
@@ -187,6 +189,8 @@
 - 2026-09-17(auto-core 分支):**H4 修复(部分为确认无需改)**——复核时 H4 的三个面里两个已被后续机制解决:「isRetryable===false 一刀切 BAIL」不复存在(session.ts 不可重试错误进 awaitRecovery 等待-探测环、attempt.ts 晋升链上认领,P4 降级环优先于等待);旧 NETWORK 正则的裸 "Error"/"Timeout" 词元已随 watch/attempt 重排消失(现行 NETWORK_FAILURE 全为具体短语)。仍存的具体缺陷是 chain.ts `TRANSIENT_RE` 的裸数字码 `500|502|503|504` 无边界("Error 1500"、"code 5042"、版本号 "5.0.4" 误归 transient),已加数字/小数点边界 `(?<![\d.])50[0234](?![\d.])`;回归测试 test/chain.test.ts(+2 例:独立 5xx 数字码仍命中、长号码/版本号子串落 unknown)。`bun typecheck` 干净、`bun test` 852 全绿。
 
 - 2026-09-17(auto-core 分支):**H5 已修复**——`ensureGitignore` 的 git 环境判据从「本目录存在 `.git`」改为 `git rev-parse --is-inside-work-tree`(与 git.ts repoRoots 同口径),目标目录嵌于更大仓库子目录时同样补写 .gitignore,`.auto/`/`tmp/` 不再被统一提交带进父仓库、stats 心跳不再自锁 clean 门禁;回归测试 test/gitignore.test.ts(假 `.git` 目录改真 `git init`、新增大仓库子目录用例),`bun typecheck` 干净、`bun test` 853 全绿。
+
+- 2026-09-17(auto-core 分支):**H6 修复(原判崩溃路径经实证不成立,收敛为对称清理)**——复核时先实证报告的「`rl.prompt(true)` 抛 `ERR_USE_AFTER_CLOSE`」:Node 20 与 Bun 下 close 后 `prompt/pause/resume/write` 均不抛,仅 promises API 的 `question()` 抛而 log.ts 未调用,崩溃路径不成立。仍修真实存在的不对称:`interactive.ts` 显式 `close()` 会 `setInput(undefined)` 而 stdin 关闭的 `rl.on("close")` 路径漏了它,导致日志继续向已关闭的 readline 重绘提示符;已在 close 事件里补 `setInput(undefined)`。回归断言相应改为可观测行为(关闭后 log 不再向 output 重绘提示符,还原修复即失败),`bun typecheck` 干净、`bun test` 854 全绿。
 
 ## 核查后确认无问题的面(节选)
 - 异步资源管理严谨:attempt 的 SSE AbortController/finally 收段兜底、watch 探针定时器在生成器 finally 清理、step/waitBetween 的 readline 配对关闭。

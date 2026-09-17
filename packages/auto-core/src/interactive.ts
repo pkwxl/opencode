@@ -104,9 +104,13 @@ export function startInteractive(
       .catch((error: unknown) => log(`⚠ 发送失败: ${String(error)}`))
   })
   // stdin 关闭(管道结束等): 回落为非交互行为,等待中的 ask 按超时处理。
+  // 同步清 log.ts 的常驻输入行引用——否则此后任何一条日志对已关闭的 rl 调
+  // prompt(true) 抛 ERR_USE_AFTER_CLOSE,打穿主流程(2026-09-17 审查 H6;
+  // 与下方 close() 的对称清理一致)。
   rl.on("close", () => {
     closed = true
     dead = true
+    setInput(undefined)
     settle(undefined)
   })
 

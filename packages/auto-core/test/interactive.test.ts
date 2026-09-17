@@ -4,11 +4,19 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { exitRequested, resetExitRequest } from "../src/exit"
 import { consumeFailback, failbackOverride, failbackRequested, resetFailback } from "../src/failback"
 import { startInteractive, type Interactive } from "../src/interactive"
+import { log } from "../src/log"
 
 // 用注入的流驱动常驻 readline;桩 client 记录 promptAsync 收到的消息。
+// chunks 收集 output 流收到的全部内容(供断言提示符重绘等副作用)。
 function setup() {
   const input = new PassThrough()
-  const output = new Writable({ write: (_chunk, _enc, cb) => cb() })
+  const chunks: string[] = []
+  const output = new Writable({
+    write: (chunk, _enc, cb) => {
+      chunks.push(String(chunk))
+      cb()
+    },
+  })
   const sent: Array<{ sessionID: string; text: string }> = []
   const client = {
     session: {
@@ -19,7 +27,7 @@ function setup() {
     },
   } as unknown as OpencodeClient
   const repl = startInteractive(client, undefined, { input, output })
-  return { input, sent, repl }
+  return { input, sent, repl, chunks }
 }
 
 // readline 的 line 事件异步派发,等一拍再断言。
@@ -148,5 +156,20 @@ describe("interactive", () => {
     expect(await answer).toBeUndefined()
     await tick()
     expect(ctx.sent).toEqual([])
+  })
+
+  test("stdin 关闭后日志不再向已关闭的 readline 重绘提示符(2026-09-17 审查 H6)", async () => {
+    const ctx = setup()
+    repl = ctx.repl
+    ctx.input.end()
+    await tick()
+    // 只观测日志触发的重绘: 清掉启动/关闭期间已写入的提示符。
+    ctx.chunks.length = 0
+    log("stdin 关闭后的日志")
+    // close 事件已同步清掉 log.ts 的常驻输入行引用: 日志不再触发提示符重绘。
+    // (报告原判"rl.prompt(true) 抛 ERR_USE_AFTER_CLOSE"经实证不成立——Node 20/Bun
+    // 均不抛,仅 promises question() 抛且 log.ts 未用;修复收敛为对称清理,可观测
+    // 差异即本断言。)
+    expect(ctx.chunks.join("")).not.toContain("💬")
   })
 })
