@@ -5,8 +5,10 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterSession, gatedAutoCorrectRefs, gatedTaskRefGap } from "../src/unit-commit"
-import { git, freshRepo } from "./fixtures/runner"
+import { commitTree, unitBaseline } from "../src/git"
+import { recallHandover, saveHandover } from "../src/handover"
+import { afterSession, gatedAutoCorrectRefs, gatedTaskRefGap, rollbackUnitState } from "../src/unit-commit"
+import { git, freshRepo, task } from "./fixtures/runner"
 
 // ---- refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off)----
 
@@ -68,6 +70,36 @@ describe("afterSession 完成条件门禁(commit-boundary-design.md)", () => {
       expect(off).toEqual({ type: "ok" })
       const none = await afterSession(undefined, {}, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
       expect(none).toEqual({ type: "ok" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---- rollbackUnitState(单元回滚编排)----
+
+describe("rollbackUnitState(单元回滚编排)", () => {
+  test("回滚成功即在途测试交接记录一并作废(.auto/handover.json 删除)", async () => {
+    const dir = await freshRepo()
+    try {
+      await writeFile(join(dir, "seed.txt"), "s")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      const baseline = await unitBaseline(dir)
+      await writeFile(join(dir, "wip.txt"), "半截工作")
+      // 在途记录: 定版后收尾途中(带待跑脚本与定版锚点)。
+      await saveHandover(dir, {
+        task: "T-001",
+        scope: "docs/T-001/testhandoff.md",
+        unit: "execute",
+        n: 1,
+        script: join(dir, "test", "t.sh"),
+        pinSession: "ses_pin",
+      })
+      const done = await rollbackUnitState(dir, task, "执行会话", baseline!)
+      expect(done.type).toBe("ok")
+      // 记录指向的定版提交与锚点属被收回的单元,不删会让重做被恢复状态机接回
+      // 「继续被丢弃的交接」。
+      expect(await recallHandover(dir, "T-001", "docs/T-001/testhandoff.md")).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

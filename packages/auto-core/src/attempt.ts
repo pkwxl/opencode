@@ -220,6 +220,9 @@ export async function attempt(
       parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
     })
     if (prompt.error) {
+      // 下发即失败: 刚认领的 nextSession 是什么都没收到的空会话,不配作恢复锚点
+      // ——还原为认领前的记录(与下方 0-token 报错桩还原同一口径)。
+      if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
       await remember()
       return { type: "blocked", question: `下发任务失败: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
     }
@@ -315,6 +318,9 @@ export async function attempt(
       }
     } else {
       chain.failed = undefined
+      // 0-token 还原对不可重试错误同样适用(§J.3 只覆盖可重试分支的补齐):
+      // 首发即死的报错桩(会话里只有一条用户消息、没有任何产出)不配作恢复锚点。
+      if (result.error && result.used === 0 && handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
       // 测试交接收场(testhandoff.md 写出 `状态: 继续`): 该会话的任务即告完成,作为
       // 重启复用/重试分叉的锚点一并丢弃——链 id 清空(此后续跑会话出错,重试分叉源
       // 只剩续跑谱系 chain.failed,不再可能 fork 回上下文已用满的定版前旧会话);

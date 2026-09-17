@@ -455,3 +455,40 @@ handover → prompt 反向依赖)、`src/exec-session.ts`(H2/H3 分支按 `ran` 
 固化执行、fork 成功时 `firstPrompt` 收敛;正常收口 `ran` 固化,并发态取
 `test.last`)、`test/handover.test.ts`(已收口态往返用例)。
 `bun typecheck` 干净,`bun test` 全绿(832 pass)。
+
+## N. 修订(2026-09-17):正确性审查六项修复
+
+起因:对 testhandoff 机制的一次整体正确性/完备性/健壮性审查(非现场事故驱动),
+发现六处缺陷,按「可能性 × 影响」排序修复。
+
+### N.1 修复表
+
+| # | 缺陷 | 修复 |
+|---|---|---|
+| N-1 | **进程内重试丢失整场在途交接**(最重): `testHandoverAsked` 是 watch 实例状态,收尾途中会话出错被 runSession 重试环/降级环 fork 续跑时,新实例把「收尾完成」误判为自然结束 → 交接循环丢失(定版脚本永不执行、文档永不归档、定版提交悬空)——跨进程中断有记录可恢复,进程内重试反而没有 | watch 定版 steer 投递成功即置 `test.resumeWrapup`(与 H1 跨进程恢复同一旗标、同一语义),重试出的新 watch 实例直接进收尾校验态;收口后由 runExecSession 既有清零行复位 |
+| N-2 | **任务级交接链永不清理 → 陈旧归档被误判 H3**: `removeHandoffChain` 只在 runSubtask 收口调用;executeWhole 与修复轮(任务级 scope)正常完成后归档份永留盘上且已落账,F4 收窄又使陈旧清理不删已跟踪份 → 同 scope 再入(任务回退重跑/下一轮修复)时「无记录 + 归档已落账」被判「已收口」,重跑旧脚本并向新会话注入上一范围的陈旧交接 | executeWhole 与 fixRound 在 runExecSession 返回后、收口提交前补 `removeHandoffChain`(新路径 + 旧平铺名),删除随收口提交落账——「单元完成必清链」自此对三类执行范围都成立,F4 收窄依赖的不变量闭合 |
+| N-3 | **恢复编号 off-by-one**: 未收口记录的 `n` 是在途交接已分配的号而非已收口计数,直接当 `handovers` 初值使恢复收口归档跳空一号(定版「#n 定版」与收口「#n+1」标题不对应) | 新纯函数 `closedHandovers`: 记录未收口(带 script/pinSession)且 `nextBase === record.n` 时基数退一格;盘扫描更大(误写件)仍由 diskMax 托住不覆盖 |
+| N-4 | **严格恢复回滚不清在途记录**: 写核失败回滚重做后,旧记录让恢复状态机把重做接回「继续被丢弃的交接」(从定版点 fork 重做收尾、对回滚后的树跑定版脚本) | `rollbackUnitState` 回滚成功即 `forgetHandover`(在途记录按构造必属当前单元) |
+| N-5 | **0-token 认领还原只覆盖可重试分支**(§J.3 缺口): 不可重试 0-token 错误与 prompt 下发失败两条路径不还原 nextSession 认领,进程在等待-探测环被强退后重启只能从报错桩 fork | 还原条件扩到这两处(首发即死的空会话/报错桩不配作恢复锚点,同一口径) |
+| N-6 | **H2 已归档未落账分支不补状态行**: 存量现场(归档发生于状态行约定之前)会把缺状态行的归档随提交 #2 落账 | 该分支补 `fillHandoffStatus`(幂等) |
+
+### N.2 登记不改的(已知取舍)
+
+- **H4 回落可被误写的当前份触发升级**: 无记录 + 半截当前文档按「已交接」处理并补
+  状态行落账——§L 给归档命名族做了防伪,当前份没有。有提示词排他条款压着,且该
+  分支本意是兜住机制上线前的存量进度,不改。
+- **收尾期重发的测试请求被静默丢弃**: 定版消费标记后,会话在收尾期重写 tmp/test.sh
+  不会被结算(收尾校验优先),下一 attempt 开局清除。会话预期落空但无损:续跑会话
+  凭交接文档可重新发起。
+- **并发态跨进程中断丢定版测试**: 并发态记录不写 script(定版即起跑),进程死于
+  收尾途中后恢复无任何执行入口,测试永不重跑。并发态(`OPENCODE_AUTO_HANDOVER_CONCURRENT`)
+  缺省 off 且本身是降级形态,登记备用。
+
+### N.3 落地范围
+
+`packages/auto-core`:`src/watch.ts`(N-1)、`src/execute.ts` + `src/review.ts`(N-2)、
+`src/handover.ts` + `src/exec-session.ts`(N-3/N-6)、`src/unit-commit.ts`(N-4)、
+`src/attempt.ts`(N-5);测试 `test/watch.test.ts`(N-1 定版播种与重试接续,经真实
+git 仓库驱动)、`test/handover.test.ts`(N-3 三组)、`test/unit-commit.test.ts`(N-4
+真实仓库回滚)、`test/session.test.ts`(N-5 两例,与 §J.3 用例同族)。每个修复的
+用例均验证过「撤掉修复即红」。`bun typecheck` 干净,`bun test` 全绿(840 pass)。

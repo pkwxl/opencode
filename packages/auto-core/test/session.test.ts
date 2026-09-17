@@ -554,6 +554,39 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  test("续跑会话 0-token 即死且不可重试(isRetryable:false): 同样撤回认领(§J.3 补齐)", async () => {
+    // §J.3 的还原最初只覆盖可重试分支;不可重试的 0-token 报错桩(如首发即
+    // insufficient_quota)同样不配作恢复锚点——进程在等待-探测环被强退后,重启
+    // 恢复只能从上一锚点分叉。
+    const { dir, tmp, handoffFile } = await makeDir("auto-handover-fatal-stub-")
+    try {
+      await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
+      const { client } = retryClient(["error-fatal"])
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect(result.type).toBe("blocked")
+      expect((result as { retryable?: boolean }).retryable).toBe(false)
+      expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("续跑会话下发即失败(prompt.error): 撤回认领——空会话不配作恢复锚点", async () => {
+    const { dir, tmp, handoffFile } = await makeDir("auto-handover-prompt-fail-")
+    try {
+      await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
+      const { client } = fakeClient({ prompt: () => ({ error: { name: "UnknownError", data: { message: "boom" } } }) })
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect(result.type).toBe("blocked")
+      expect((result as { question: string }).question).toContain("下发任务失败")
+      expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("attempt 接线: runSession 依注入策略带/不带 model(不依赖 autoSwitches memo)", () => {

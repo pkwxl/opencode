@@ -108,6 +108,14 @@ export async function executeWhole(
       }
       return result
     }
+    // 任务级测试交接链随执行范围闭环整链清除(与 runSubtask 子任务收口同口径):
+    // 归档份已落账也必须删——留给同范围的下一次执行(任务回退重跑)会被恢复
+    // 状态机误判为「已收口」的在途交接(无记录 + 归档已落账 = H3)。删除随下方
+    // 统一提交落账。
+    if (opts.testByDriver) {
+      await removeHandoffChain(planDir, taskDoc(task.id, "testhandoff"))
+      await removeHandoffChain(planDir, legacyTaskDoc(task.id, "testhandoff"))
+    }
     const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} 执行会话`, committed)
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造

@@ -6,9 +6,9 @@
 // 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { attempt } from "../src/attempt"
 import type { SessionChain } from "../src/chain"
@@ -17,8 +17,9 @@ import { resolvesOf } from "../src/resolve"
 import { runSession } from "../src/session"
 import { flushStats, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
+import type { TestRun } from "../src/testrun"
 import { afterSession, autoAnswer } from "../src/unit-commit"
-import { task, fakeClient, sseClient } from "./fixtures/runner"
+import { task, fakeClient, freshRepo, sseClient } from "./fixtures/runner"
 
 // ---- SSE 订阅生命周期(attempt 会话结束即断流,根治长连接泄漏)----
 
@@ -652,5 +653,97 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ source: "agent", phase: "t", round: 2, question: "是否顺带收口", file: "report.md:3" })
+  })
+})
+
+// ---- 测试交接: 定版后进程内重试不丢交接(watch 定版 steer 播种 resumeWrapup)----
+// testHandoverAsked 是 watch 实例状态;收尾途中会话出错被 runSession 重试环 fork
+// 续跑时新 attempt 建新 watch 实例——没有 resumeWrapup 播种,新实例会把收尾完成
+// 误判为自然结束,交接循环就此丢失(定版脚本永不执行、交接文档永不归档)。
+
+describe("测试交接: 定版 steer 投递成功即播种 resumeWrapup", () => {
+  let dir = ""
+
+  beforeEach(async () => {
+    dir = await freshRepo()
+  })
+
+  afterEach(async () => {
+    await flushStats(dir)
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const msg = (sid: string, id: string) => ({
+    type: "message.updated",
+    properties: {
+      info: {
+        id,
+        sessionID: sid,
+        role: "assistant",
+        time: { completed: Date.now() },
+        tokens: { input: 1000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        providerID: "zai",
+        modelID: "glm",
+      },
+    },
+  })
+
+  test("定版后旗标置位;新 watch 实例凭旗标在 idle 时校验交接文档而非判自然结束", async () => {
+    const tmp = join(dir, "tmp")
+    await mkdir(join(dir, "test"), { recursive: true })
+    await mkdir(tmp, { recursive: true })
+    await writeFile(join(dir, "test", "build.sh"), "#!/bin/sh\nexit 0\n")
+    const handoffPath = join(dir, "docs", "T-001", "testhandoff.md")
+    const testRun: TestRun = {
+      dir,
+      tmp,
+      handoffFile: handoffPath,
+      handover: true,
+      limit: 1,
+      seq: 0,
+      task,
+      unit: "execute",
+      subject: "T-001 exec 示例任务",
+      label: "T-001",
+      handovers: 0,
+      startUsed: 0,
+    }
+    const { client } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield msg(sid, `${sid}_m1`)
+          // 会话在回合内发起测试(attempt 开局会清掉遗留标记,须在此写入)。
+          await writeFile(join(tmp, "test.sh"), "test/build.sh")
+          yield { type: "session.idle", properties: { sessionID: sid } }
+          // 定版 + 收尾 steer 已发生;会话收尾写出交接文档后再次 idle。
+          await mkdir(dirname(handoffPath), { recursive: true })
+          await writeFile(handoffPath, "# 交接\n\n状态: 继续\n")
+          yield msg(sid, `${sid}_m2`)
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await attempt(client, task, "提示词", { dir }, chain, undefined, testRun, parseSwitches({}))
+    expect(result.type).toBe("idle")
+    expect((result as { testHandover?: boolean }).testHandover).toBe(true)
+    // 定版 steer 投递成功即播种(本修复断言): 重试环 fork 出的新实例凭此接续。
+    expect(testRun.resumeWrapup).toBe(true)
+    // 在途记录已在定版后落盘,待跑脚本为定版消费出的路径形态。
+    const record = JSON.parse(await Bun.file(join(dir, ".auto", "handover.json")).text())
+    expect(record.n).toBe(1)
+    expect(record.script).toBe(join(dir, "test", "build.sh"))
+    // 重试场景: 同一 TestRun 换新会话(标记已消费、文档已就绪)——新 watch 实例
+    // 必须在 idle 时校验交接文档并判 testHandover,而不是当成自然结束丢掉交接。
+    const { client: client2 } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield msg(sid, `${sid}_m1`)
+          yield { type: "session.idle", properties: { sessionID: sid } }
+        })(),
+    })
+    const chain2: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result2 = await attempt(client2, task, "提示词", { dir }, chain2, undefined, testRun, parseSwitches({}))
+    expect(result2.type).toBe("idle")
+    expect((result2 as { testHandover?: boolean }).testHandover).toBe(true)
   })
 })

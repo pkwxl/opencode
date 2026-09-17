@@ -190,6 +190,12 @@ export async function watch(
       })
       const ok = await steerText(renderTestWrapup({ handoffFile: test!.handoffFile }))
       if (!ok) return { type: "blocked", question: "steer 投递失败(测试交接要求),无法继续会话,详见日志。" }
+      // 收尾要求已生效,播种 resumeWrapup: testHandoverAsked 是本 watch 实例的状态,
+      // 收尾途中会话出错被 runSession 重试环/降级环 fork 续跑时,新 attempt 建新
+      // watch 实例——没有这面旗标,新实例会把「收尾完成」误判为自然结束,交接循环
+      // 就此丢失(定版脚本永不执行、交接文档永不归档)。跨进程中断的同款播种在
+      // exec-session 的 H1 分支;收口后由 runExecSession 在每次 runSession 返回后清零。
+      test!.resumeWrapup = true
       return { type: "continue" }
     }
     // 归档(存在即请求的协议标记,执行后移除以便再次请求)→ 执行 → 反馈。

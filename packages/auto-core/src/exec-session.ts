@@ -9,7 +9,7 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { SessionChain, SessionResult } from "./chain"
 import { archivedTestHandoff, latestHandoffSeq, resolveSubtaskDoc, resolveTaskDoc } from "./docpaths"
 import { fileCommitted, suffixedTitle, trackedSourceChanges } from "./git"
-import { forgetHandover, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
+import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import type { Plan, Task } from "./plan"
@@ -68,7 +68,9 @@ export async function runExecSession(
   // 盘扫描会被会话在归档命名族里的自行落笔污染,把从未发生的交接误判为已收口。
   // 归档编号跨会话/跨运行接续(D4)取两侧最大,不从 1 重来、也不覆盖误写件。
   const seq = handoverSeq(record, await latestHandoffSeq(dir, handoff))
-  let handovers = seq.nextBase
+  // handovers 初值 = 已收口计数: 记录未收口时 record.n 是在途交接已分配的号而非
+  // 已收口计数,直接当基数会让恢复收口越过它(归档跳空、定版与收口标题不对应)。
+  let handovers = closedHandovers(record, seq)
   const test: TestRun = {
     dir,
     tmp,
@@ -130,6 +132,10 @@ export async function runExecSession(
         closedN = handovers
         archived = archivedTestHandoff(handoff, closedN)
         await archiveHandoff(dir, seeded, handoff, closedN)
+      } else {
+        // 归档在盘但未落账: 存量现场可能缺状态行(归档发生于状态行约定之前),补写
+        // 幂等(已有状态行则不动),随提交 #2 一并落账。
+        await fillHandoffStatus(join(dir, archived))
       }
       const subject = suffixedTitle(test.subject, `测试交接 #${closedN}`)
       const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${closedN}`, subject })

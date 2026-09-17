@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  closedHandovers,
   forgetHandover,
   handoffComplete,
   handoffStatus,
@@ -161,5 +162,27 @@ describe("handoverStage(文件状态 × 提交状态)", () => {
   test("H4 无记录的存量现场: 留着一份文档就按已交接处理,不凭空重做", () => {
     expect(handoverStage({ ...base, current: "上一版 driver 写下的交接", currentCommitted: true })).toBe("commit")
     expect(handoverStage({ ...base, current: "没有状态行的半截" })).toBe("commit")
+  })
+})
+
+describe("closedHandovers(恢复入口的已收口计数)", () => {
+  // record 夹具带 script/pinSession = 未收口形态;closed 为收口后形态(两者作废)。
+  const closed: Handover = { task: "T-028", scope: "docs/T-028/S03/testhandoff.md", unit: "subtask 3", n: 1 }
+
+  test("未收口记录的 n 是已分配的号而非已收口计数: 基数退一格,恢复收口正落 record.n", () => {
+    // 定版 #1 后收尾途中被打断: 归档扫描为 0,基数须为 0 而非 1——否则恢复收口
+    // 归档为 testhandoff-2.md,跳空一号且与「#1 定版」提交标题对不上。
+    expect(closedHandovers({ ...record, n: 1 }, handoverSeq({ ...record, n: 1 }, 0))).toBe(0)
+    // 交接 #2 定版后被打断(#1 已收口归档): 基数 1,恢复收口正落 #2。
+    expect(closedHandovers({ ...record, n: 2 }, handoverSeq({ ...record, n: 2 }, 1))).toBe(1)
+  })
+
+  test("已收口记录与无记录维持 nextBase 原义", () => {
+    expect(closedHandovers({ ...closed, n: 1 }, handoverSeq({ ...closed, n: 1 }, 1))).toBe(1)
+    expect(closedHandovers(undefined, handoverSeq(undefined, 3))).toBe(3)
+  })
+
+  test("盘上误写件更大时不被踩: 基数仍被 diskMax 托住", () => {
+    expect(closedHandovers({ ...record, n: 1 }, handoverSeq({ ...record, n: 1 }, 2))).toBe(2)
   })
 })

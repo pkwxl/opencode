@@ -8,6 +8,7 @@ import { writeCurrent } from "./current"
 import { phaseToRole, resolveModel } from "./chain"
 import { failbackOverride, stickyModel } from "./failback"
 import { commitTree, rollbackUnit, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
+import { forgetHandover } from "./handover"
 import { log, vlog } from "./log"
 import type { Opts, SessionCommit, UnitStop } from "./opts"
 import { currentRound } from "./phases"
@@ -161,6 +162,10 @@ export async function rollbackUnitState(
   if (!rolled.ok) {
     return { type: "dirty", files: rolled.failures.map((failure) => `${failure.rel}: ${failure.error}`) }
   }
+  // 在途测试交接记录随单元回滚一并作废: 记录指向的定版提交与定版锚点属于被收回
+  // 的单元,留着会让重做被恢复状态机接回「继续被丢弃的交接」(从定版点 fork 重做
+  // 收尾、对回滚后的树跑定版脚本),而不是从基线重做整个单元。
+  await forgetHandover(dir)
   if (extra.progress) {
     await saveProgress(dir, { ...extra.progress, active: false, baseline: undefined, model: undefined })
   }

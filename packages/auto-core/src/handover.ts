@@ -126,6 +126,19 @@ export function handoverSeq(record: Handover | undefined, diskMax: number): { ob
   return { observed, nextBase: Math.max(diskMax, observed) }
 }
 
+// 恢复入口的已收口计数(handovers 初值): 记录未收口(还带着待跑脚本或定版锚点——
+// 收口时两者一并作废)时,record.n 是这场在途交接**已分配的号**,不是已收口计数。
+// 直接拿 handoverSeq 的 nextBase 当基数,恢复收口时 handovers++ 会越过它——归档
+// 跳空一号,定版提交(「#n 定版」)与收口提交(「#n+1」)的编号也对不上。已收口
+// 记录与无记录的盘扫描兜底维持 nextBase 原义。盘扫描更大(命名族误写件)时同样
+// 不覆盖: 基数仍被 diskMax 托住。
+export function closedHandovers(record: Handover | undefined, seq: { observed: number; nextBase: number }): number {
+  if (record && (record.script !== undefined || record.pinSession !== undefined) && seq.nextBase === record.n && record.n > 0) {
+    return record.n - 1
+  }
+  return seq.nextBase
+}
+
 export function handoverStage(observed: {
   // 在途记录(仅用于区分"收尾未完成"与"从来没交接过")。
   record?: Handover

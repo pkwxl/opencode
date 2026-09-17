@@ -9,7 +9,7 @@ import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { requireArtifact } from "./artifact"
 import type { SessionChain } from "./chain"
-import { resolveTaskDoc, taskDoc } from "./docpaths"
+import { legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { runExecSession } from "./exec-session"
 import { autobanner, log } from "./log"
 import { FIX_ROUNDS, REVERIFY_ROUNDS, type Opts, type UnitStop } from "./opts"
@@ -27,6 +27,7 @@ import {
 import { allowWrite, reprotect } from "./protect"
 import type { Phase } from "./resume"
 import { autoSwitches } from "./switches"
+import { removeHandoffChain } from "./testrun"
 import { afterSession, commitBlocked, gatedTaskRefGap } from "./unit-commit"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
 import { runWrapup } from "./wrapup"
@@ -82,6 +83,13 @@ export async function verifyTask(
     // 修复轮无子任务序号(交接文档为任务级),但提交 stage 要跟着修复轮走。
     const fixed = await runExecSession(client, plan, task, renderFix(plan, task, gap, opts), opts, chain, undefined, undefined, `fix ${round}`)
     if (fixed.type === "blocked") return fixed
+    // 任务级测试交接链随修复轮闭环整链清除(与 executeWhole/runSubtask 收口同口径):
+    // 归档份已落账也必须删——留给下一轮修复/任务重跑会被恢复状态机误判为「已收口」
+    // 的在途交接(无记录 + 归档已落账 = H3)。删除随下方统一提交落账。
+    if (opts.testByDriver) {
+      await removeHandoffChain(dir, taskDoc(task.id, "testhandoff"))
+      await removeHandoffChain(dir, legacyTaskDoc(task.id, "testhandoff"))
+    }
     const fixCommitted = await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
     if (fixCommitted.type === "failed") return commitBlocked(`${task.id} 修复轮 ${round}`, fixCommitted)
     if (opts.wrapup ?? true) {
