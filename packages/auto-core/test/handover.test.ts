@@ -41,6 +41,25 @@ describe("在途交接记录的读写", () => {
     }
   })
 
+  test("已收口态往返: 待跑脚本与定版锚点作废、执行结果固化(ran)保留", async () => {
+    const dir = await fresh()
+    try {
+      const closed: Handover = {
+        task: "T-028",
+        scope: "docs/T-028/S03/testhandoff.md",
+        unit: "subtask 3",
+        n: 1,
+        ran: { script: "/work/test/t028.sh", seq: 7, code: 0, ms: 1200, timedOut: false, out: "/work/tmp/test.7.out" },
+      }
+      await saveHandover(dir, closed)
+      const got = await recallHandover(dir, "T-028", "docs/T-028/S03/testhandoff.md")
+      expect(got).toEqual(closed)
+      expect(got?.ran?.code).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("范围不符不取回(下一执行范围不得续上一范围的交接)", async () => {
     const dir = await fresh()
     try {

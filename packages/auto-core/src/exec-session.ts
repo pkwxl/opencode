@@ -13,7 +13,7 @@ import { forgetHandover, handoverSeq, handoverStage, recallHandover, saveHandove
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import type { Plan, Task } from "./plan"
-import { renderTestContinue, renderTestWrapup, testHandoffFile } from "./prompt"
+import { renderTestContinue, renderTestWrapup, testHandoffFile, type TestRunInfo } from "./prompt"
 import { runSession } from "./session"
 import { forkSession, sessionAlive, sessionUsed } from "./session-api"
 import { autoSwitches } from "./switches"
@@ -61,7 +61,7 @@ export async function runExecSession(
   // 「文件状态 × 提交状态」定出交接时序被打断的位置,再从该位置续跑。观测量是
   // 当前份 testhandoff.md、归档份 testhandoff-<n>.md 以及两者的落账情况;在途
   // 记录(.auto/handover.json)只补上文件和提交推不出来的身份信息(待跑脚本、
-  // 可 fork 的会话)。文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落。
+  // 已执行结果、可 fork 的会话)。文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落。
   const record = await recallHandover(dir, task.id, handoff)
   // 观测序号与归档续号分离(handoverSeq): 观测以在途记录为权威、盘扫描兜底——
   // 盘扫描会被会话在归档命名族里的自行落笔污染,把从未发生的交接误判为已收口。
@@ -137,17 +137,32 @@ export async function runExecSession(
     } else {
       log(`↻ ${test.label} 恢复中断: 测试交接 #${closedN} 已收口(${archived} 已落账)`)
     }
-    // 脚本幂等(F6): 该跑就跑。记录里有定版时消费出来的脚本就跑它;记录缺失
-    // (本机制上线前的存量现场)回落到 tmp/ 下最新一份执行快照;都没有就只凭
-    // 交接文档续跑,不臆造测试结果。
-    const script = record?.script ?? (await latestTestScript(tmp))
-    if (script) {
-      log(`↻ ${test.label} 恢复中断: 重跑定版时待执行的测试脚本 ${script}`)
-      await runTestScript(test, opts, script)
+    // 脚本执行状态(F6 修订,2026-09-17,设计文档 §M): 定版脚本的执行结果在收口时
+    // 随在途记录落盘(ran)——本地脚本除断电/强制终止外必然跑完,已执行即视为完成,
+    // 恢复不重复执行,凭记录引用落盘的输出。仅「定版已消费出脚本而执行结果未落盘」
+    // (执行途中被打断)才重跑;记录缺失(本机制上线前的存量现场)回落到 tmp/ 下
+    // 最新一份执行快照。旧格式记录(无 ran 亦无 script): 收口时清脚本即表示已执行,
+    // 不重跑、不臆造结果,续跑会话凭交接文档与 tmp/ 下既有输出判读。
+    let ran = record?.ran
+    if (ran) {
+      test.last = ran
+    } else {
+      const script = record ? record.script : await latestTestScript(tmp)
+      if (script) {
+        log(`↻ ${test.label} 恢复中断: 重跑定版时待执行的测试脚本 ${script}`)
+        ran = await runTestScript(test, opts, script)
+      }
     }
     // 续跑会话已经开过并被打断 → 从它分叉恢复,把那一轮已积累的上下文接回来。
     if (record?.nextSession && (await seedSessionFork(client, chain, record.nextSession, `${test.label} 测试交接 #${closedN} 续跑`))) {
       log(`↻ ${test.label} 恢复中断: 中断前的续跑会话 ${record.nextSession} 尚存,已分叉副本接回`)
+      // fork 副本带着续跑会话的全部上下文(任务提示词与续跑说明在它开出时已下发),
+      // 整份重发只会重复: 本次恢复有新跑的测试才把结果带给它,否则收敛为一句继续
+      // (与恢复保真"复用会话的恢复说明收敛为一句 continue"同口径)。
+      firstPrompt =
+        ran && !record?.ran
+          ? renderTestContinue({ handoffFile: archived, run: ran, stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined })
+          : "[driver] 上次运行在此中断,已从续跑会话分叉恢复;请接着中断点继续。"
     }
     continuation = true
     await saveHandover(dir, {
@@ -158,6 +173,7 @@ export async function runExecSession(
       pinSession: undefined,
       pinMessage: undefined,
       nextSession: undefined,
+      ...(ran ? { ran } : {}),
     })
   }
   for (;;) {
@@ -203,14 +219,19 @@ export async function runExecSession(
     if (committed.type === "failed") return commitBlocked(subject, committed)
     // 顺序态(缺省,E1): 交接收口之后才执行——被测的就是提交 #2 的那一份树。脚本
     // 自身若改写了跟踪文件(如 rustfmt apply),留作未提交增量,由下一单元的提交吸纳。
+    let ran: TestRunInfo | undefined
     if (test.pending) {
       const pending = test.pending
       test.pending = undefined
-      await runTestScript(test, opts, pending.script, pending.seq)
+      ran = await runTestScript(test, opts, pending.script, pending.seq)
+    } else if (autoSwitches().handoverConcurrent) {
+      // 并发态: 定版即起跑,执行结果已经 attempt 收口写在 test.last。
+      ran = test.last
     }
-    // 收口完成: 在途记录进入"已收口"态——待跑脚本已消费、定版锚点作废,余下的
-    // 身份信息只剩下一会儿要开的续跑会话(由 attempt 回填 nextSession)。
-    await saveHandover(dir, { task: task.id, scope: handoff, unit, n: handovers })
+    // 收口完成: 在途记录进入"已收口"态——待跑脚本已消费、定版锚点作废,执行结果
+    // 随记录固化(ran,恢复不再重复执行);余下的身份信息只剩下一会儿要开的续跑
+    // 会话(由 attempt 回填 nextSession)。
+    await saveHandover(dir, { task: task.id, scope: handoff, unit, n: handovers, ...(ran ? { ran } : {}) })
     log(`↻ ${test.label} 上下文达到上限,已交接 ${archived},新会话继续(第 ${handovers} 次测试交接)`)
     continuation = true
   }

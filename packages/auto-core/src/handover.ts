@@ -31,6 +31,19 @@ export type Handover = {
   pinMessage?: string
   // 收口之后开出的续跑会话: 它自己也可能被打断,恢复时从它 fork。
   nextSession?: string
+  // 定版脚本的执行结果固化(F6 修订,2026-09-17): 收口执行落定即随记录写入——
+  // 本地脚本除断电/强制终止外必然跑完,已执行即视为完成,恢复不再重复执行,
+  // 凭此引用落盘的输出(详见设计文档 test-handover-early-design.md §M)。
+  // 结构与 TestRunInfo 一致(结构化声明避免 handover → prompt 的反向依赖)。
+  ran?: {
+    script: string
+    seq: number
+    code: number
+    ms: number
+    timedOut: boolean
+    timeoutReason?: "idle" | "max"
+    out: string
+  }
 }
 
 const FILE = join(".auto", "handover.json")
