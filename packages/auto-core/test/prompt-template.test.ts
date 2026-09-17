@@ -1,4 +1,4 @@
-// src/prompt.ts 与模板机制的单测: question-rule 片段、模式注入、init 产物模板、agent 契约模板、渲染完整性。
+// src/prompt.ts 与模板机制的单测: question-rule 片段、digest-rule 片段、模式注入、init 产物模板、agent 契约模板、渲染完整性。
 // 拆分自 test/prompt.test.ts(docs/module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
@@ -131,6 +131,51 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,docs/auto-
     } finally {
       usePromptLibrary(undefined)
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("digest-rule 片段与跨任务引用纪律(L2,docs/session-boundary-hardening-design.md §4.2)", () => {
+  const prompts = join(import.meta.dir, "..", "templates", "prompts")
+  const consumers = readdirSync(prompts)
+    .filter((name) => name.endsWith(".md") && name !== "_partials.md")
+    .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> digest-rule}}"))
+    .sort()
+
+  test("引用该片段的模板恰为 understand/decompose 基础+六阶段变体共 8 份", () => {
+    expect(consumers).toEqual([
+      "decompose-a.md",
+      "decompose-d.md",
+      "decompose-k.md",
+      "decompose-m.md",
+      "decompose-t.md",
+      "decompose-v.md",
+      "decompose.md",
+      "understand.md",
+    ])
+    // 执行类模板不引用:subtask/whole 会话不写 digest,防误读由 L1 ground-state 接地覆盖
+    expect(consumers).not.toContain("subtask.md")
+    expect(consumers).not.toContain("whole.md")
+  })
+
+  test("片段三条纪律: 跨任务引用只指阶段级单源 / 收尾产物仅作格式模板定性 / 摘录优先不整文回源", () => {
+    const text = renderText("{{> digest-rule}}", {})
+    expect(text).toContain("跨任务引用只指阶段级单源(裁决/契约/台账)")
+    expect(text).toContain("已完成另一任务的产物,仅作格式模板")
+    expect(text).toContain("能摘录要点不整文回源")
+    // 定性义务点名前序任务级收尾产物族(report/批记录/testhandoff)
+    expect(text).toContain("report/批记录/testhandoff")
+    // 背景行写明误读后果:前序完成叙事流入会被下游会话误读为本任务已完成
+    expect(text).toContain("误读为本任务已完成")
+    expect(text).not.toMatch(/\{\{|\}\}/)
+  })
+
+  test("8 份消费模板渲染含纪律段且不残留模板标签(片段改动波及全部引用方)", () => {
+    for (const name of consumers) {
+      const rendered = renderTemplate(name.replace(/\.md$/, ""), {})
+      expect(rendered).toContain("跨任务引用纪律")
+      expect(rendered).toContain("仅作格式模板")
+      expect(rendered).not.toMatch(/\{\{|\}\}/)
     }
   })
 })

@@ -166,7 +166,7 @@
 ## 5. 实施步骤(勾选表)
 
 - [x] S1 L1 接地块 + L3 全限定编号:templates/prompts 文案 + `src/prompt.ts` 组装 + `test/prompt-exec.test.ts` 断言(2026-09-17 已实施:文案为 `_partials.md` 新增 `ground-state` 片段,`subtask.md` 头部引用;renderSubtask 组装 taskTitle/taskStatusText/qualifiedId/subtaskSnapshot/doneIds 五变量——快照 `S01☑ S02☐ …,已完成 k/n`、全限定编号两位补零、前序 done 任务只内联 id 不复述 head 清单;夹具 groundPlan/groundTask 复现撞名形态,断言含「他任务 S 编号与本任务无关」「S01☑ 不得出现」)
-- [ ] S2 L2 digest 纪律:understand/decompose 模板 + 模板测试
+- [x] S2 L2 digest 纪律:understand/decompose 模板 + 模板测试(2026-09-17 已实施:文案为 `_partials.md` 新增 `digest-rule` 片段——三条纪律(只指阶段级单源/收尾产物带「已完成另一任务的产物,仅作格式模板」定性/摘录优先不整文回源)+ 背景行写明误读后果;understand.md 与 decompose 基础+六阶段变体(a/d/k/m/t/v)共 8 份模板在产物说明与 doc-layout 之间引用;测试在 `test/prompt-template.test.ts`——消费方恰 8 份、subtask/whole 不引用、片段纪律断言与全量渲染无残留)
 - [ ] S3 零落盘 + 产物形检:`产出:` 字段结构化解析 + `src/execute.ts` 形检(存在性/非平凡/终止符/可选章节)+ `templates/prompts/subtask.md` 终止符纪律 + 单测(零落盘→重提示→仍零→blocked;清单缺失/截断→同环;形检全过→正常勾选;dryrun/testHandover 豁免)
 - [ ] S3b 自动会话形检(D5):understand/decompose 追加非平凡+终止符(接入既有重试环)、wrapup 新增存在性+形检门禁(runner.ts 收尾段)+ `_partials.md` 终止符纪律共享段 + 单测(含"已存在即跳过"路径不受影响断言)
 - [ ] S3c 全量文档终止符(D6):单元收口处 changedFiles 全量 .md 形检 + 豁免清单 + 单测(修改后 eof 不在末行→拦截;豁免文件不受影响;全过→正常收口)

@@ -17,6 +17,8 @@
 
 - [ ] <子任务描述>
 
+{{> digest-rule}}
+
 {{> doc-layout}}
 
 约束:
