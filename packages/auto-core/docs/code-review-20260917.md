@@ -186,8 +186,9 @@
 
 - 2026-09-17(auto-core 分支):**H4 修复(部分为确认无需改)**——复核时 H4 的三个面里两个已被后续机制解决:「isRetryable===false 一刀切 BAIL」不复存在(session.ts 不可重试错误进 awaitRecovery 等待-探测环、attempt.ts 晋升链上认领,P4 降级环优先于等待);旧 NETWORK 正则的裸 "Error"/"Timeout" 词元已随 watch/attempt 重排消失(现行 NETWORK_FAILURE 全为具体短语)。仍存的具体缺陷是 chain.ts `TRANSIENT_RE` 的裸数字码 `500|502|503|504` 无边界("Error 1500"、"code 5042"、版本号 "5.0.4" 误归 transient),已加数字/小数点边界 `(?<![\d.])50[0234](?![\d.])`;回归测试 test/chain.test.ts(+2 例:独立 5xx 数字码仍命中、长号码/版本号子串落 unknown)。`bun typecheck` 干净、`bun test` 852 全绿。
 
-## 核查后确认无问题的面(节选)
+- 2026-09-17(auto-core 分支):**H5 已修复**——`ensureGitignore` 的 git 环境判据从「本目录存在 `.git`」改为 `git rev-parse --is-inside-work-tree`(与 git.ts repoRoots 同口径),目标目录嵌于更大仓库子目录时同样补写 .gitignore,`.auto/`/`tmp/` 不再被统一提交带进父仓库、stats 心跳不再自锁 clean 门禁;回归测试 test/gitignore.test.ts(假 `.git` 目录改真 `git init`、新增大仓库子目录用例),`bun typecheck` 干净、`bun test` 853 全绿。
 
+## 核查后确认无问题的面(节选)
 - 异步资源管理严谨:attempt 的 SSE AbortController/finally 收段兜底、watch 探针定时器在生成器 finally 清理、step/waitBetween 的 readline 配对关闭。
 - git 调用全程 spawn 数组无注入面;pathspec 子树限定与嵌套仓库深度排序处理周到。
 - 布尔/数字解析无 truthiness 陷阱;三路优先级(宪法键/实验开关/CLI)无交叉污染;commit:false 双入口严格失败与设计一致。

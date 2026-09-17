@@ -2,7 +2,7 @@
 // 从 loop.ts 导出会让 reset.ts 拖进 loop → runner → … 整条依赖链,与 git.ts
 // 上收 changedFiles 的理由同源)。loop.ts 再导出 ensureGitignore 保持既有
 // 导入路径 @opencode-ai/auto-core/loop 不变。
-import { rm, stat } from "node:fs/promises"
+import { rm } from "node:fs/promises"
 import { join } from "node:path"
 
 // driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)与 .auto/(运行
@@ -14,14 +14,27 @@ function normalize(line: string): string {
   return line.trim().replace(/^\//, "").replace(/\/$/, "")
 }
 
+// 是否在 git work tree 内。判据与 git.ts repoRoots 同口径(git rev-parse
+// --is-inside-work-tree): 目标目录可能嵌于更大仓库的子目录(.git 在上级),
+// 仅查本目录 .git 会漏判——漏判的代价是 .auto/ 与 tmp/ 被统一提交带进父仓库,
+// 且 stats 心跳持续改写已跟踪的 stats.json,每个单元启动都被自己制造的脏区
+// 阻塞(2026-09-17 审查 H5)。
+async function insideWorkTree(directory: string): Promise<boolean> {
+  const proc = Bun.spawn(["git", "-C", directory, "rev-parse", "--is-inside-work-tree"], {
+    stdout: "pipe",
+    stderr: "ignore",
+  })
+  const out = await new Response(proc.stdout).text()
+  return (await proc.exited) === 0 && out.trim() === "true"
+}
+
 // 确保 .gitignore 忽略 driver 工作目录。统一提交会提交全部未提交改动,不忽略
-// 会把它们带进提交。已有等价条目则跳过;非 git 目录(无 .git 且无 .gitignore)
-// 不做任何事。返回是否追加了条目。
+// 会把它们带进提交。已有等价条目则跳过;非 git 环境(不在任何 work tree 内且
+// 无 .gitignore)不做任何事。返回是否追加了条目。
 export async function ensureGitignore(directory: string): Promise<boolean> {
   const file = join(directory, ".gitignore")
   const existing = await Bun.file(file).text().catch(() => undefined)
-  // .git 可能是目录(普通仓库)或文件(worktree/子模块),stat 两者皆可。
-  if (existing === undefined && !(await stat(join(directory, ".git")).then(() => true, () => false))) return false
+  if (existing === undefined && !(await insideWorkTree(directory))) return false
   const lines = existing ? existing.split("\n") : []
   const missing = ENTRIES.filter((entry) => !lines.some((line) => normalize(line) === normalize(entry)))
   if (!missing.length) return false
