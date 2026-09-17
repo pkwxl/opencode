@@ -180,6 +180,32 @@ describe("digest-rule 片段与跨任务引用纪律(L2,docs/session-boundary-ha
   })
 })
 
+describe("eof-rule 片段与文档终止符纪律(D4/D5,docs/session-boundary-hardening-design.md §4.3)", () => {
+  const prompts = join(import.meta.dir, "..", "templates", "prompts")
+  const consumers = readdirSync(prompts)
+    .filter((name) => name.endsWith(".md") && name !== "_partials.md")
+    .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> eof-rule}}"))
+    .sort()
+
+  test("引用该片段的模板现阶段为 subtask.md(S3b 将扩展至 understand/decompose/wrapup)", () => {
+    expect(consumers).toEqual(["subtask.md"])
+  })
+
+  test("片段内容: 终止符形态与独占末行要求,存量文档不回补", () => {
+    const text = renderText("{{> eof-rule}}", {})
+    expect(text).toContain("<!-- auto: eof -->")
+    expect(text).toContain("最后一行正文")
+    expect(text).toContain("存量文档无需回补")
+    expect(text).not.toMatch(/\{\{|\}\}/)
+  })
+
+  test("subtask 渲染含终止符纪律段", () => {
+    const rendered = renderSubtask(plan, task, "编写迁移脚本的 schema 部分")
+    expect(rendered).toContain("文档终止符纪律")
+    expect(rendered).toContain("<!-- auto: eof -->")
+  })
+})
+
 describe("模式注入(-m/--mode)", () => {
   test("执行类模板注入 exec 段;不传模式时不注入", () => {
     for (const text of [

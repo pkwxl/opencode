@@ -170,6 +170,20 @@ export async function unitViolations(dir: string, baseline: UnitBaseline): Promi
   return problems
 }
 
+// 工作区相对单元基线是否零变更(session-boundary-hardening §4.3 的零落盘判据):
+// 各仓库 HEAD 均未离开基线(本单元内无任何提交——beginUnit 后本单元的 driver
+// 提交只发生在交接/收口边界,自然结束判定时 HEAD 未动 = 全单元无落账)且工作区
+// 无未提交改动。空基线(非 git 环境/门禁关闭)无法判定,恒非零落盘。
+export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<boolean> {
+  if (!baseline.length) return false
+  if ((await changedFiles(dir)).length) return false
+  for (const { root, sha } of baseline) {
+    const head = (await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim()
+    if (head !== sha) return false
+  }
+  return true
+}
+
 // 基线..HEAD 区间内无 Auto-Stage trailer 的提交数(= 外部提交数);sha 为空串表示
 // 单元启动时仓库尚无提交,全量检查。unitViolations 与恢复保真核对/回滚共用。
 async function foreignCommits(root: string, sha: string): Promise<number> {
@@ -376,15 +390,25 @@ function depth(path: string): number {
 // 是叶子模块(只依赖 log.ts)且已持有 repoRoots 与同款 porcelain 解析。决策记录见
 // docs/auto-resolve-design.md §N。
 export async function changedFiles(dir: string): Promise<string[]> {
-  const lists = await Promise.all((await repoRoots(dir)).map((root) => gitStatusFiles(dir, root)))
-  return lists.flat()
+  const lists = await Promise.all((await repoRoots(dir)).map((root) => statusEntries(dir, root)))
+  return lists.flat().map((entry) => entry.rel)
+}
+
+// 未跟踪(= 本单元新建)文件清单(session-boundary-hardening §4.3 形检的「新建
+// .md」判据): 逐仓库 porcelain 状态里的 ?? 项,相对目标目录。beginUnit 保证单元
+// 启动时工作区 clean,故未跟踪即本单元新建;嵌套仓库内部文件由其自身 status
+// 列出,判据跨仓库一致。非 git 环境返回空集。
+export async function untrackedFiles(dir: string): Promise<Set<string>> {
+  const lists = await Promise.all((await repoRoots(dir)).map((root) => statusEntries(dir, root)))
+  return new Set(lists.flat().filter((entry) => entry.status === "??").map((entry) => entry.rel))
 }
 
 // --porcelain -z --no-renames -uall: 逐文件 NUL 分隔输出,不带改名箭头;每条为
-// "XY <path>",路径相对仓库根(worktree 顶层),需换算为相对目标目录的路径。
+// "XY <path>",路径相对仓库根(worktree 顶层),换算为相对目标目录的路径。
 // -uall 下仍以 "?? dir/" 折叠输出的只有嵌套仓库目录(其内部文件由该仓库自身
-// 的 status 单独列出),跳过以免重复。
-async function gitStatusFiles(dir: string, root: string): Promise<string[]> {
+// 的 status 单独列出),跳过以免重复。XY 状态码随条目保留(未跟踪判据与清单
+// 共用同一次解析)。
+async function statusEntries(dir: string, root: string): Promise<{ rel: string; status: string }[]> {
   const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     stdout: "pipe",
     stderr: "ignore",
@@ -400,7 +424,7 @@ async function gitStatusFiles(dir: string, root: string): Promise<string[]> {
   return output
     .split("\0")
     .filter((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
-    .map((entry) => relative(dir, join(toplevel, entry.slice(3))))
+    .map((entry) => ({ rel: relative(dir, join(toplevel, entry.slice(3))), status: entry.slice(0, 2) }))
 }
 
 // 仓库内是否有未提交改动(限定该目录子树;折叠目录项只可能是嵌套仓库,由其

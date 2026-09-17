@@ -9,13 +9,14 @@ import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
+import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { runExecSession } from "./exec-session"
-import { beginUnit, unitBaseline, type UnitBaseline } from "./git"
+import { beginUnit, unitBaseline, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { handoffStatus } from "./handover"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
-import { load, setForkBase, setSubtasks, subtasks, tick, type Plan, type Task } from "./plan"
+import { declaredArtifacts, load, setForkBase, setSubtasks, subtasks, tick, type Plan, type Task } from "./plan"
 import { handoffFile, renderDecompose, renderSubtask, renderUnderstand, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
@@ -346,6 +347,9 @@ export async function runSubtask(
     let warm = await seedForkSession(client, opts, chain, base, subject)
     let feedback = ""
     let retried = false
+    // 产物形检的重提示次数(D2): 与交接文档反馈的 retried 各自计数——两条环路
+    // 各限一次,互不挤占对方的重试额度。
+    let shapeRetried = false
     // 严格恢复的回滚重做(3.3 R3 收紧): 交接文档无效(含测试交接写核失败)一次即
     // 回滚到子任务基线、冷启动重做,不再带反馈重试;以一次为限,再失败按隐性阻塞
     // 上抛(现场已保全在 stash)。
@@ -394,11 +398,34 @@ export async function runSubtask(
         }
         return result
       }
-      // 未触发交接阈值(2x cap)即结束 = 子任务在单会话内自然完成,勾选后统一提交;
+      // 未触发交接阈值(2x cap)即结束 = 子任务会话自然收场。完成判定不靠 agent
+      // 自报: 先过产物形检(D2/D4,session-boundary-hardening §4.3)——零落盘/
+      // 声明产出缺失/新建文档截断任一命中都不得勾选推进(T-068 S01 事故的判定层
+      // 缺口),带反馈重提示一次,仍不过 → blocked 交人工。dryrun/提交门禁关闭/
+      // 非 git 不启用,测试交接收场会话豁免(其完成判据在 testhandoff.md)。
       // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
       // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
       // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
-      if (!handoverDue(steer, chain.used)) break
+      if (!handoverDue(steer, chain.used)) {
+        if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
+          const problems = await subtaskArtifactProblems(dir, text, baseline)
+          if (problems.length) {
+            if (shapeRetried) {
+              return {
+                type: "blocked",
+                question:
+                  `子任务会话自然结束但产物形检未过(隐性阻塞): ${problems.join("; ")}。` +
+                  `请检查产出后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+              }
+            }
+            log(`↻ ${task.id} 子任务 ${index} 自然结束但产物形检未过,带反馈重提示一次`)
+            shapeRetried = true
+            feedback = shapeFeedback(task, index, problems)
+            continue
+          }
+        }
+        break
+      }
       const status = handoffStatus(await readHandoff())
       if (status === "完成") break
       // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
@@ -452,4 +479,45 @@ export async function runSubtask(
   if (committed.type === "failed") return commitBlocked(`${task.id} 子任务 ${index}`, committed)
   log(`  ✓ ${text.slice(0, 60)}`)
   return undefined
+}
+
+// —— 子任务产物形检(D2/D4,session-boundary-hardening 设计 §4.3)——
+
+// 形检清单: ① 零落盘(工作区相对单元基线零变更——beginUnit 保证基线时 clean,
+// HEAD 未动 + 无脏区即本单元至今零落盘);② 声明产出逐路径存在;③ 新建 .md 非
+// 平凡 + 末行终止符(未跟踪 = 本单元新建;修改型产物的存在性检查恒真,无害);
+// ④ 声明必填章节存在。全部为确定性判据,零产物/截断的「自然结束」不构成完成。
+async function subtaskArtifactProblems(dir: string, text: string, baseline: UnitBaseline): Promise<string[]> {
+  const problems: string[] = []
+  if (await unitQuiet(dir, baseline)) problems.push("工作区相对单元基线零变更(零落盘)")
+  const fresh = await untrackedFiles(dir)
+  for (const { path, sections } of declaredArtifacts(text)) {
+    if (!(await Bun.file(join(dir, path)).exists())) {
+      problems.push(`声明产出 ${path} 不存在`)
+      continue
+    }
+    if (!path.toLowerCase().endsWith(".md")) continue
+    const content = await Bun.file(join(dir, path)).text().catch(() => "")
+    if (fresh.has(path)) problems.push(...docShapeProblems(content, path))
+    for (const section of sections) {
+      if (!content.includes(section)) problems.push(`声明产出 ${path} 缺少章节「${section}」`)
+    }
+  }
+  return problems
+}
+
+// D2 反馈文案: 复述 L1 权威状态(台账勾选快照)并逐项引用未过关项,直指误判——
+// 前序任务的完成叙事不是本任务状态(T-068 S01 事故形态)。
+function shapeFeedback(task: Task, index: number, problems: string[]): string {
+  const items = subtasks(task.body)
+  const done = items.filter((item) => item.done).length
+  const sid = `S${String(index).padStart(2, "0")}`
+  return (
+    `\n\n你上次结束了会话,但本子任务(${task.id}.${sid})的产物形检未过,不得视为完成:\n` +
+    `${problems.map((problem) => `- ${problem}`).join("\n")}\n` +
+    `权威状态: 任务 ${task.id}「${task.title}」进行中,子任务勾选 ${done}/${items.length},${sid} 尚未勾选;` +
+    `前序任务或其他文档中的完成叙事与本任务进度无关,不要据此判断本子任务已完成。` +
+    `请实际完成本子任务并把产出写入磁盘: 声明的产出文件必须存在;新建的 Markdown 文档须内容完整,` +
+    `并以 \`${EOF_MARK}\` 独占最后一行正文后再结束会话。`
+  )
 }
