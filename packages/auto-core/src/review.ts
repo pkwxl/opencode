@@ -20,17 +20,16 @@ import {
   renderReviewFix,
   renderVerifyJudge,
   renderVerifyScriptGen,
-  renderWrapup,
   REVIEW_FILE,
   VERDICT_FILE,
   type VerifyRun,
 } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 import type { Phase } from "./resume"
-import { runSession } from "./session"
 import { autoSwitches } from "./switches"
-import { afterSession, commitBlocked, gatedTaskRefGap, wrapupResolves } from "./unit-commit"
+import { afterSession, commitBlocked, gatedTaskRefGap } from "./unit-commit"
 import { resolveVerifyScript, runVerifyScript, verifyTmpDir } from "./verify"
+import { runWrapup } from "./wrapup"
 
 // Task-level acceptance after the wrap-up session, three stages (设计文档
 // A.4/A.5,判定会话执行限制见 G 节): resolve and (when needed) generate the
@@ -86,14 +85,8 @@ export async function verifyTask(
     const fixCommitted = await afterSession(dir, opts, task, { stage: `fix ${round}`, subject: fixSubject })
     if (fixCommitted.type === "failed") return commitBlocked(`${task.id} 修复轮 ${round}`, fixCommitted)
     if (opts.wrapup ?? true) {
-      autobanner(`${task.id} ${task.title}: 收尾`)
-      const wrapSubject = `${task.id} wrapup ${task.title}`
-      chain.subject = wrapSubject
-      const resolves = await wrapupResolves(dir, task.id)
-      const wrapped = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto", resolves }), opts, chain)
-      if (wrapped.type === "blocked") return wrapped
-      const wrapCommitted = await afterSession(dir, opts, task, { stage: "wrapup", subject: wrapSubject })
-      if (wrapCommitted.type === "failed") return commitBlocked(`${task.id} 修复后收尾会话`, wrapCommitted)
+      const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "auto", label: "修复后收尾会话" })
+      if (stopped) return stopped
     }
     return undefined
   }

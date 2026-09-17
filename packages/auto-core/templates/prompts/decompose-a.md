@@ -23,6 +23,8 @@
 
 {{> digest-rule}}
 
+{{> eof-rule}}
+
 {{> doc-layout}}
 
 约束:

@@ -3,13 +3,13 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { writeCurrent, removeCurrent } from "./current"
 import { ensureDecomposed, ensureUnderstood, executeWhole, requireTask, runSubtask } from "./execute"
-import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive, wrapupResolves } from "./unit-commit"
+import { commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies } from "./failback"
 import { baselineIntact, commitTree, removeIfUntracked, unitBaseline } from "./git"
 import { handoffStatus } from "./handover"
-import { autobanner, log } from "./log"
+import { log } from "./log"
 import { type Opts, type Outcome, type UnitStop } from "./opts"
 import { interruptionRemark, phaseText, resumeNote, unitReruns } from "./resume-gate"
 import { planReviewFix, reviewTask, verifyTask, type Verdict } from "./review"
@@ -25,12 +25,13 @@ import {
   type Plan,
   type Task,
 } from "./plan"
-import { handoffFile, renderWrapup } from "./prompt"
+import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches } from "./switches"
 import { stepPause } from "./step"
 import { cleanTestHandoffs, restoreTestHandoffs, testHandoffExists } from "./testrun"
+import { runWrapup } from "./wrapup"
 
 // 会话耗时显示用紧凑式时长: 已收口至 src/log.ts 的 formatDurationCompact
 // (STATS_PLAN §5,T-001 上收、本任务删本处私有副本并改 import)。
@@ -483,17 +484,12 @@ export async function runTask(
           consumeFailback(chain)
         }
         // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费);
-        // config.wrapup=false(--no-wrapup,缺省 true)时整体关闭。
+        // config.wrapup=false(--no-wrapup,缺省 true)时整体关闭。report.md 存在性 +
+        // 形检门禁在 runWrapup 内(session-boundary-hardening §4.5 D5,S3b)。
         if (!skipWrapup && (opts.wrapup ?? true)) {
           await persistStage({ kind: "wrapup" })
-          autobanner(`${task.id} ${task.title}: 收尾`)
-          const subject = `${task.id} wrapup ${task.title}`
-          chain.subject = subject
-          const resolves = await wrapupResolves(dir, task.id)
-          const result = await runSession(client, task, renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: mode !== "auto", resolves }), opts, chain)
-          if (result.type === "blocked") return result
-          const committed = await afterSession(dir, opts, task, { stage: "wrapup", subject })
-          if (committed.type === "failed") return commitBlocked(`${task.id} 收尾会话`, committed)
+          const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "auto", label: "收尾会话" })
+          if (stopped) return stopped
         }
         skipWrapup = false
         let auditFromVerify: Verdict | undefined

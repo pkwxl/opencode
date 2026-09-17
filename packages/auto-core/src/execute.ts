@@ -195,7 +195,12 @@ export async function ensureUnderstood(
       chain,
     )
     if (result.type === "blocked") return result
-    if (await readContext()) {
+    const content = await readContext()
+    // D5 形检(session-boundary-hardening §4.5,S3b): 存在性之外追加非平凡 + 末行
+    // 终止符,接入既有重试环;只查本次会话产出——上方「已存在即跳过」路径不受影响
+    // (不追溯存量,历史无终止符文档不会被卡)。
+    const problems = content ? docShapeProblems(content, taskDoc(task.id, "context")) : []
+    if (content && !problems.length) {
       // 理解会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
       if (chain.id) await setForkBase(plan.path, task.id, chain.id)
       task = requireTask(await load(plan.path), task.id)
@@ -203,18 +208,21 @@ export async function ensureUnderstood(
       if (committed.type === "failed") return commitBlocked(`${task.id} 理解会话`, committed)
       return { type: "ok", task }
     }
+    const why = content ? `未过形检(${problems.join("; ")})` : "缺失或为空"
     if (i === 1) {
       return {
         type: "blocked",
         question:
-          `理解会话两次结束但 ${file} 缺失或为空(隐性阻塞)。` +
+          `理解会话两次结束但 ${file} ${why}(隐性阻塞)。` +
           `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
       }
     }
-    log(`↻ ${task.id} 理解会话未产出 ${file},带反馈重试一次`)
-    feedback =
-      `\n\n你上次结束会话但未写出有效的 ${file}(缺失或为空)。这是硬性要求:` +
-      `把理解结果按四节结构写入该文件后再结束会话(即使任务看起来很简单)。`
+    log(`↻ ${task.id} 理解会话产出的 ${file} ${why},带反馈重试一次`)
+    feedback = content
+      ? `\n\n你上次结束会话但 ${file} 未过形检: ${problems.join("; ")}。这是硬性要求:` +
+        `把理解结果按四节结构补全,并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
+      : `\n\n你上次结束会话但未写出有效的 ${file}(缺失或为空)。这是硬性要求:` +
+        `把理解结果按四节结构写入该文件后再结束会话(即使任务看起来很简单)。`
   }
 }
 
@@ -236,8 +244,9 @@ export async function ensureDecomposed(
   // 平铺 docs/<id>.subtasks.md(中断恢复: 分解会话可能已写旧名文件但尚未注入)。
   const dir = dirname(plan.path)
   const file = join(dir, taskDoc(task.id, "subtasks"))
-  const readItems = async (): Promise<string[]> =>
-    subtasks(await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "subtasks"))).text().catch(() => "")).map((item) => item.text)
+  const readRaw = async (): Promise<string> =>
+    (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "subtasks"))).text().catch(() => "")).trim()
+  const readItems = async (): Promise<string[]> => subtasks(await readRaw()).map((item) => item.text)
   const existing = await readItems()
   if (existing.length) {
     log(`↻ ${task.id} 分解结果 ${file} 已存在,直接注入检查项`)
@@ -258,8 +267,13 @@ export async function ensureDecomposed(
     // (fork-decompose-design.md §5.1)。
     const result = await runSession(client, task, renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine }) + feedback, opts, chain)
     if (result.type === "blocked") return result
-    const items = await readItems()
-    if (items.length) {
+    const raw = await readRaw()
+    const items = subtasks(raw).map((item) => item.text)
+    // D5 形检(session-boundary-hardening §4.5,S3b): 有检查项之外追加非平凡 + 末行
+    // 终止符,接入既有重试环;只查本次会话产出——上方「文件已存在即直接注入」路径
+    // 不受影响(不追溯存量)。
+    const problems = items.length ? docShapeProblems(raw, taskDoc(task.id, "subtasks")) : []
+    if (items.length && !problems.length) {
       await setSubtasks(plan.path, task.id, items)
       // 镜像刷新同样先于统一提交(与子任务勾选同口径): 注入的检查项与镜像同入
       // decompose 提交,调用方随后的刷新即幂等空写。
@@ -268,18 +282,21 @@ export async function ensureDecomposed(
       if (committed.type === "failed") return commitBlocked(`${task.id} 分解会话`, committed)
       return { type: "ok", task: requireTask(await load(plan.path), task.id) }
     }
+    const why = items.length ? `未过形检(${problems.join("; ")})` : "缺失或无检查项"
     if (i === 1) {
       return {
         type: "blocked",
         question:
-          `分解会话两次结束但 ${file} 缺失或不含有效检查项(隐性阻塞)。` +
+          `分解会话两次结束但 ${file} ${why}(隐性阻塞)。` +
           `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
       }
     }
-    log(`↻ ${task.id} 分解会话未产出 ${file},带反馈重试一次`)
-    feedback =
-      `\n\n你上次结束会话但未写出有效的 ${file}(缺失或无检查项)。这是硬性要求:` +
-      `即使任务已完成或极简单,也必须写出该文件(原子任务写单个检查项即可)。`
+    log(`↻ ${task.id} 分解会话产出的 ${file} ${why},带反馈重试一次`)
+    feedback = items.length
+      ? `\n\n你上次结束会话但 ${file} 未过形检: ${problems.join("; ")}。这是硬性要求:` +
+        `补全内容并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
+      : `\n\n你上次结束会话但未写出有效的 ${file}(缺失或无检查项)。这是硬性要求:` +
+        `即使任务已完成或极简单,也必须写出该文件(原子任务写单个检查项即可)。`
   }
 }
 
