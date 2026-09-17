@@ -1,6 +1,6 @@
 # 会话边界加固:跨任务状态混淆防护、零落盘完成判定与在途失联探针
 
-> 状态: 2026-09-16 立项,S1–S4 已实施(2026-09-17),S5–S8 待办(见 §5 勾选表)。
+> 状态: 2026-09-16 立项,S1–S5 已实施(2026-09-17),S6–S8 待办(见 §5 勾选表)。
 > 起因:kernel-dm T-068 S01 会话静默事故(2026-09-16 15:07 run,旧版
 > migrate@c9af64969 构建)三层叠加:①子任务会话在 22 分钟只读调研中读入前序任务
 > T-067 的收尾叙事,误判"所有任务均已完成",零产物结束回合;②runSubtask 在
@@ -171,7 +171,7 @@
 - [x] S3b 自动会话形检(D5):understand/decompose 追加非平凡+终止符(接入既有重试环)、wrapup 新增存在性+形检门禁(runner.ts 收尾段)+ `_partials.md` 终止符纪律共享段 + 单测(含"已存在即跳过"路径不受影响断言)(2026-09-17 已实施:understand/decompose 在既有「存在性+两次重试」环内追加 docShapeProblems——内容在但形检不过与缺失分案文案,跳过/直注路径不受影响;wrapup 两调用点(runner 主收尾 + review 修复轮收尾)收口到新模块 `src/wrapup.ts` 的 `runWrapup`——report.md 缺失/为空/形检不过 → 带反馈重试一次 → 仍不过 blocked,门禁不过不提交;模板侧 eof-rule 共享段扩展至 understand/decompose 基础+六阶段变体/wrapup(消费方恰 10 份);测试 `test/auto-doc-shape.test.ts` 9 例(真实 git 仓库全链路:跳过路径零会话、截断/空壳→重提示→补正/仍不过→blocked、wrapup 门禁)+ `test/prompt-template.test.ts` eof-rule 消费清单更新)
 - [x] S3c 全量文档终止符(D6):单元收口处 changedFiles 全量 .md 形检 + 豁免清单 + 单测(修改后 eof 不在末行→拦截;豁免文件不受影响;全过→正常收口)(2026-09-17 已实施:取数为 `src/git.ts` 新增 `unitChangedFiles`——基线..工作树的已跟踪变更(`git diff <基线或空树> --diff-filter=d`,单元期间已随交接提交落账的文档同入区间、删除项排除)+ 未跟踪新建,空基线空集;豁免清单在 `src/doccheck.ts` 具名常量 `EOF_SCAN_EXEMPT_NAMES` + `eofScanExempt`——PLAN.md/CURRENT.md 按文件名判(轮次布局下 git 报出的是链接目标 docs/R-NN/PLAN.md)、.auto/ 状态文件、handoff/testhandoff 交接文档族(含归档份 testhandoff-<n>.md 与旧平铺名,自带 `状态:` 终态契约不混用);扫描接入 runSubtask 既有 D2/D4 形检环(subtaskArtifactProblems 增 ⑤,与 ③ 已检路径去重),重提示/重提示一次→blocked 与反馈文案同环共用(文案改述「新建或修改的 Markdown 文档」并指引恢复末行终止符);行为变更:修改型(已跟踪).md 自此同样要求非平凡+末行终止符(S3 时修改型声明产物只查存在性,对应用例已改写为 D6 拦截→补正→勾选);测试 `test/subtask-shape.test.ts` 新增 D6 组 4 例(顺带文档截断、追加在终止符之后、豁免族、单元期间已落账文档)+ unitChangedFiles 2 例 + eofScanExempt 纯函数 1 例,全套 820 pass)
 - [x] S4 在途探针:`src/watch.ts` + `src/attempt.ts` + 单测(两连败→可重试错误;探针恢复→继续 watching;定时器清理)(2026-09-17 已实施:探测体 `probeSession` 落 `src/session-api.ts`——sessionAlive 同族,独立短超时(30s,`PROBE_TIMEOUT_MS`)连接 GET 会话元信息,超时/异常/错误响应同按未通计;watch 侧事件流套 trip 竞速迭代包装——半开时原流 next() 永不兑现、裸 for-await 无从让探针生效,包装生成器只悬挂在 yield 上,finally 清理无时延(半开出口跳过内层 return() 防排在悬挂 next() 后等死,由 sse.abort() 收尾);周期 `opts.idleMs ?? 10min` 与脚本看门狗同键同缺省,两连败判半开 → 日志明细 → abort 会话 → 可重试会话错误(报文带 network/timeout 判据归 transient,走既有重试阶梯与降级环、不换模型),探针成功即重置计数;attempt 在 prompt 下发前启动 watch,探针覆盖 POST 在途窗口(POST 悬挂仍由 TURN_TIMEOUT 2h 最终兜底),attempt 接线 = watching 带错误先回即提前 sse.abort 释放 reader 与连接配额;全部 AI 会话经 attempt→watch 同覆盖,含 verify-judge 等旁路;测试 `test/watch-probe.test.ts` 4 例——两连败→transient 可重试+abort、一败后恢复→照常 idle 结算不 abort、结算后探针不再发(定时器清理)、probeSession 超时/异常/错误/正常四分支;既有 watch.test.ts 下发失败用例补一个宏任务让出再断言流收尾——竞速包装使生成器收尾晚几个微任务,行为无变化)
-- [ ] S5 提示词四件套:`bun test test/prompt-exec.test.ts test/prompt-verify.test.ts test/prompt-phase.test.ts test/prompt-template.test.ts`
+- [x] S5 提示词四件套:`bun test test/prompt-exec.test.ts test/prompt-verify.test.ts test/prompt-phase.test.ts test/prompt-template.test.ts`(2026-09-17 已过:4 文件 118 例全绿,0 fail,837 expect)
 - [ ] S6 包级验证:packages/auto-core `bun typecheck` + `bun test` 全绿;packages/auto typecheck 无感
 - [ ] S7 migrate 分支 merge auto-core 刷新快照,重构建二进制
 - [ ] S8 kernel-dm 现场处置(人工):提交 `docs/T-067/audit/` 过 clean 门禁 → 新版重跑 T-068(S01 零产物丢弃无害,digest 基点复用)→ 观察 L1 接地是否拦住 T-067 叙事误判
