@@ -1,6 +1,7 @@
-// src/execute.ts runSubtask 产物形检(D2/D4)与 src/doccheck.ts 的单测
-// (session-boundary-hardening 设计 §4.3/S3): 零落盘→重提示→仍零→blocked;
-// 清单缺失/截断→同环;形检全过→正常勾选;dryrun/testHandover 豁免。
+// src/execute.ts runSubtask 产物形检(D2/D4/D6)与 src/doccheck.ts 的单测
+// (session-boundary-hardening 设计 §4.3/§4.6,S3/S3c): 零落盘→重提示→仍零→blocked;
+// 清单缺失/截断→同环;全量文档终止符扫描(修改后 eof 不在末行→拦截、豁免清单、
+// 未声明顺带文档);形检全过→正常勾选;dryrun/testHandover 豁免。
 // 走完整 runSubtask 链路(fake client + 真实 git 仓库),替 AI 落盘的脚本写在
 // 事件流生成器里(与 session.test.ts 的 handoverStream 同款接线)。
 
@@ -9,8 +10,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
 import type { SessionChain } from "../src/chain"
-import { docShapeProblems, endsWithEof, EOF_MARK, MIN_DOC_CHARS, shapeCheckOn } from "../src/doccheck"
+import { docShapeProblems, endsWithEof, EOF_MARK, eofScanExempt, MIN_DOC_CHARS, shapeCheckOn } from "../src/doccheck"
 import { runSubtask } from "../src/execute"
+import { unitBaseline, unitChangedFiles } from "../src/git"
 import type { Opts } from "../src/opts"
 import { load, subtasks } from "../src/plan"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
@@ -80,6 +82,26 @@ describe("doccheck 纯函数(非平凡 + 末行终止符)", () => {
     expect(shapeCheckOn({}, [], false)).toBe(false)
     expect(shapeCheckOn({}, baseline, true)).toBe(false)
   })
+
+  test("eofScanExempt: driver 状态文件(含轮次布局链接目标)/ .auto/ / 交接文档族豁免,普通文档不豁免", () => {
+    for (const rel of [
+      "PLAN.md",
+      "CURRENT.md",
+      "docs/R-01/PLAN.md", // 轮次专用目录布局下根 PLAN.md 的符号链接目标
+      ".auto/state.md",
+      "docs/T-001/handoff.md",
+      "docs/T-001/testhandoff.md",
+      "docs/T-001/testhandoff-2.md",
+      "docs/T-001/S01/testhandoff.md",
+      "docs/T-001.testhandoff.md", // 旧平铺名
+      "docs/T-001-S2.testhandoff-3.md", // 旧平铺归档份
+    ]) {
+      expect(eofScanExempt(rel), rel).toBe(true)
+    }
+    for (const rel of ["docs/T-001/report.md", "docs/T-001/S01/record.md", "README.md", "docs/notes.md"]) {
+      expect(eofScanExempt(rel), rel).toBe(false)
+    }
+  })
 })
 
 describe("runSubtask 产物形检(D2/D4)", () => {
@@ -111,7 +133,8 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     try {
       const { client, calls } = scriptedClient([
         async () => {
-          await Bun.write(join(dir, "docs/notes.md"), "顺带笔记\n")
+          // 顺带文档同样受 D6 全量扫描约束(须非平凡 + 末行终止符)。
+          await Bun.write(join(dir, "docs/notes.md"), `# 顺带笔记\n\n${filler}\n\n${EOF_MARK}\n`)
         },
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
@@ -215,7 +238,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     }
   })
 
-  test("修改型声明产物(已跟踪、无终止符): 存在性恒真,不要求终止符", async () => {
+  test("修改型声明产物(已跟踪): 存在性恒真,但受 D6 全量扫描约束——改写后缺终止符 → 重提示补正 → 勾选", async () => {
     const body = "更新说明 产出: README.md"
     const dir = await shapeRepo(body)
     try {
@@ -223,11 +246,19 @@ describe("runSubtask 产物形检(D2/D4)", () => {
         async () => {
           await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n补充一行。\n")
         },
+        async () => {
+          await Bun.write(join(dir, "README.md"), `# 示例\n\n背景说明。\n\n${filler}\n\n${EOF_MARK}\n`)
+        },
       ])
       const plan = await load(join(dir, "PLAN.md"))
       const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
-      expect(calls.prompts.length).toBe(1)
+      expect(calls.prompts.length).toBe(2)
+      // D4 存在性恒真(不报「声明产出 … 不存在」),D6 以非平凡 + 末行终止符拦截修改型文档
+      const feedback = promptText(calls.prompts[1]!)
+      expect(feedback).not.toContain("声明产出 README.md 不存在")
+      expect(feedback).toContain("README.md")
+      expect(feedback).toContain("末行终止符缺失")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -246,5 +277,137 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("runSubtask 全量文档终止符扫描(D6)", () => {
+  test("未声明的顺带文档截断(新建、缺终止符): 拦截,补正后勾选", async () => {
+    const dir = await shapeRepo()
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+          await Bun.write(join(dir, "docs/notes.md"), `# 顺带分析\n\n${filler}\n`)
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/notes.md"), `# 顺带分析\n\n${filler}\n\n${EOF_MARK}\n`)
+        },
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(2)
+      const feedback = promptText(calls.prompts[1]!)
+      expect(feedback).toContain("docs/notes.md")
+      expect(feedback).toContain("末行终止符缺失")
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("修改既有文档后终止符不在末行(追加在终止符之后): 拦截,恢复末行终止符后勾选", async () => {
+    const dir = await shapeRepo()
+    try {
+      // 既有文档自带终止符;会话中途改写把正文追加在终止符之后 = 截断形态
+      await Bun.write(join(dir, "docs/existing.md"), `# 既有\n\n${filler}\n\n${EOF_MARK}\n`)
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", "existing")
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+          await Bun.write(join(dir, "docs/existing.md"), `# 既有\n\n${filler}\n\n${EOF_MARK}\n\n## 追加\n\n后续内容。\n`)
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/existing.md"), `# 既有\n\n${filler}\n\n## 追加\n\n后续内容。\n\n${EOF_MARK}\n`)
+        },
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(2)
+      const feedback = promptText(calls.prompts[1]!)
+      expect(feedback).toContain("docs/existing.md")
+      expect(feedback).toContain("末行终止符缺失")
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("豁免文档族(handoff/testhandoff/driver 状态文件)不受影响: 全过正常收口", async () => {
+    const dir = await shapeRepo()
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+          // 豁免清单内的文件短且无终止符,不得触发形检
+          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# 交接\n\n状态: 继续\n")
+          await Bun.write(join(dir, "docs/T-001/testhandoff-1.md"), "# 测试交接归档\n")
+          await Bun.write(join(dir, "docs/R-01/PLAN.md"), "# 轮次台账\n")
+        },
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(1)
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("单元期间已随 driver 提交落账的文档同样纳入扫描(基线..工作树取数)", async () => {
+    const dir = await shapeRepo()
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+          // 模拟交接边界的 driver 提交: 单元期间文档已落账(缺终止符),
+          // 工作区 changedFiles 看不到,基线 diff 仍须捞回
+          await Bun.write(join(dir, "docs/committed.md"), `# 落账文档\n\n${filler}\n`)
+          await git(dir, "add", "-A")
+          await git(dir, "commit", "-q", "-m", "mid-unit\n\nAuto-Stage: subtask 1")
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/committed.md"), `# 落账文档\n\n${filler}\n\n${EOF_MARK}\n`)
+        },
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(2)
+      expect(promptText(calls.prompts[1]!)).toContain("docs/committed.md")
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("unitChangedFiles(D6 取数)", () => {
+  test("基线..工作树: 已提交改动/未提交修改/未跟踪新建均入列,删除项排除", async () => {
+    const dir = await freshRepo()
+    try {
+      await Bun.write(join(dir, "a.md"), "甲\n")
+      await Bun.write(join(dir, "b.md"), "乙\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", "init")
+      const baseline = await unitBaseline(dir)
+      await Bun.write(join(dir, "c.md"), "丙\n")
+      await git(dir, "add", "c.md")
+      await git(dir, "commit", "-q", "-m", "mid")
+      await Bun.write(join(dir, "a.md"), "甲\n改\n")
+      await Bun.write(join(dir, "d.md"), "丁\n")
+      await rm(join(dir, "b.md"))
+      const files = await unitChangedFiles(dir, baseline)
+      expect(files).toEqual(new Set(["a.md", "c.md", "d.md"]))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("空基线(非 git 环境/门禁关闭)返回空集", async () => {
+    expect(await unitChangedFiles(join(tmpdir(), "nonexistent-dir"), [])).toEqual(new Set())
   })
 })

@@ -9,10 +9,10 @@ import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
-import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
+import { docShapeProblems, EOF_MARK, eofScanExempt, shapeCheckOn } from "./doccheck"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
 import { runExecSession } from "./exec-session"
-import { beginUnit, unitBaseline, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
+import { beginUnit, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { handoffStatus } from "./handover"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
@@ -416,8 +416,8 @@ export async function runSubtask(
         return result
       }
       // 未触发交接阈值(2x cap)即结束 = 子任务会话自然收场。完成判定不靠 agent
-      // 自报: 先过产物形检(D2/D4,session-boundary-hardening §4.3)——零落盘/
-      // 声明产出缺失/新建文档截断任一命中都不得勾选推进(T-068 S01 事故的判定层
+      // 自报: 先过产物形检(D2/D4/D6,session-boundary-hardening §4.3/§4.6)——零落盘/
+      // 声明产出缺失/文档截断(含全量变更扫描)任一命中都不得勾选推进(T-068 S01 事故的判定层
       // 缺口),带反馈重提示一次,仍不过 → blocked 交人工。dryrun/提交门禁关闭/
       // 非 git 不启用,测试交接收场会话豁免(其完成判据在 testhandoff.md)。
       // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
@@ -498,16 +498,20 @@ export async function runSubtask(
   return undefined
 }
 
-// —— 子任务产物形检(D2/D4,session-boundary-hardening 设计 §4.3)——
+// —— 子任务产物形检(D2/D4/D6,session-boundary-hardening 设计 §4.3/§4.6)——
 
 // 形检清单: ① 零落盘(工作区相对单元基线零变更——beginUnit 保证基线时 clean,
 // HEAD 未动 + 无脏区即本单元至今零落盘);② 声明产出逐路径存在;③ 新建 .md 非
 // 平凡 + 末行终止符(未跟踪 = 本单元新建;修改型产物的存在性检查恒真,无害);
-// ④ 声明必填章节存在。全部为确定性判据,零产物/截断的「自然结束」不构成完成。
+// ④ 声明必填章节存在;⑤ D6 全量文档终止符——本单元 git 变更内所有 .md(新建或
+// 修改,含未声明的顺带文档与单元期间已随交接提交落账的份)非平凡 + 末行终止符,
+// 豁免清单见 doccheck.ts。全部为确定性判据,零产物/截断的「自然结束」不构成完成。
 async function subtaskArtifactProblems(dir: string, text: string, baseline: UnitBaseline): Promise<string[]> {
   const problems: string[] = []
   if (await unitQuiet(dir, baseline)) problems.push("工作区相对单元基线零变更(零落盘)")
   const fresh = await untrackedFiles(dir)
+  // ③ 已做过形检的路径,D6 扫描跳过(同一路径不重复成案)。
+  const shaped = new Set<string>()
   for (const { path, sections } of declaredArtifacts(text)) {
     if (!(await Bun.file(join(dir, path)).exists())) {
       problems.push(`声明产出 ${path} 不存在`)
@@ -515,10 +519,21 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
     }
     if (!path.toLowerCase().endsWith(".md")) continue
     const content = await Bun.file(join(dir, path)).text().catch(() => "")
-    if (fresh.has(path)) problems.push(...docShapeProblems(content, path))
+    if (fresh.has(path)) {
+      problems.push(...docShapeProblems(content, path))
+      shaped.add(path)
+    }
     for (const section of sections) {
       if (!content.includes(section)) problems.push(`声明产出 ${path} 缺少章节「${section}」`)
     }
+  }
+  // ⑤ 与 ② 互补: 存在性抓「该有的没有」(未创建的文件对 git 扫描不可见),全量
+  // 扫描抓「写了的没写完」;修改既有文档后终止符不在末行同样不过(「追加在终止符
+  // 之后」的截断形态),重提示反馈指引恢复末行终止符。
+  for (const rel of await unitChangedFiles(dir, baseline)) {
+    if (!rel.toLowerCase().endsWith(".md") || shaped.has(rel) || eofScanExempt(rel)) continue
+    const content = await Bun.file(join(dir, rel)).text().catch(() => "")
+    problems.push(...docShapeProblems(content, rel))
   }
   return problems
 }
@@ -534,7 +549,7 @@ function shapeFeedback(task: Task, index: number, problems: string[]): string {
     `${problems.map((problem) => `- ${problem}`).join("\n")}\n` +
     `权威状态: 任务 ${task.id}「${task.title}」进行中,子任务勾选 ${done}/${items.length},${sid} 尚未勾选;` +
     `前序任务或其他文档中的完成叙事与本任务进度无关,不要据此判断本子任务已完成。` +
-    `请实际完成本子任务并把产出写入磁盘: 声明的产出文件必须存在;新建的 Markdown 文档须内容完整,` +
-    `并以 \`${EOF_MARK}\` 独占最后一行正文后再结束会话。`
+    `请实际完成本子任务并把产出写入磁盘: 声明的产出文件必须存在;本单元新建或修改的 Markdown 文档须内容完整,` +
+    `并以 \`${EOF_MARK}\` 独占最后一行正文后再结束会话(修改既有文档时,终止符同样须保持在最后一行)。`
   )
 }

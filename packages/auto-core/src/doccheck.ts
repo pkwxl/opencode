@@ -27,6 +27,23 @@ export function docShapeProblems(text: string, path: string): string[] {
   return problems
 }
 
+// D6 全量扫描豁免清单(session-boundary-hardening §4.6,代码内具名常量): driver
+// 独占状态文件 PLAN.md/CURRENT.md(protect.ts 域;轮次专用目录布局下根 PLAN.md 是
+// 符号链接,git 报出的路径是链接目标 docs/R-NN/PLAN.md,故按文件名判)与 .auto/
+// 下状态文件。交接文档族(handoff/testhandoff)自带 `状态:` 终态契约,语义不混用,
+// 由 HANDOFF_NAME 一并覆盖(含归档份 testhandoff-<n>.md 与旧平铺名 <id>.handoff.md、
+// <id>(-S<n>).testhandoff(-<n>).md)。
+export const EOF_SCAN_EXEMPT_NAMES = ["PLAN.md", "CURRENT.md"]
+
+const HANDOFF_NAME = /^(?:.+\.)?(?:test)?handoff(?:-\d+)?\.md$/
+
+// 路径(相对目标目录)是否豁免 D6 全量文档终止符扫描。
+export function eofScanExempt(rel: string): boolean {
+  if (rel === ".auto" || rel.startsWith(".auto/")) return true
+  const name = rel.split("/").at(-1) ?? rel
+  return EOF_SCAN_EXEMPT_NAMES.includes(name) || HANDOFF_NAME.test(name)
+}
+
 // D2/D4 形检是否启用(session-boundary-hardening §4.3): dryrun / 提交门禁关闭
 // (--commit false 已退役,防御性保留)/ 非 git(无基线)不判;测试交接收场会话
 // 豁免——其完成判据在 testhandoff.md,已由交接边界写核覆盖(现接线 runExecSession

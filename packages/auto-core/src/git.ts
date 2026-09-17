@@ -184,6 +184,31 @@ export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<bo
   return true
 }
 
+// 本单元 git 变更文件清单(session-boundary-hardening §4.6 全量文档终止符扫描的
+// 取数): 各仓库 基线..工作树 的已跟踪变更(git diff <baseline>——单元期间交接
+// 边界的 driver 提交同样落在区间内,git diff 与工作树比较把已提交与未提交一并
+// 报出)加上未跟踪新建(未跟踪即本单元新建,与 untrackedFiles 同判据)。排除删除
+// 项(文件不在盘,无形检对象);空基线(非 git 环境/门禁关闭)返回空集。
+export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Promise<Set<string>> {
+  const files = new Set<string>()
+  for (const { root, sha } of baseline) {
+    const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
+    const toplevel = top?.code === 0 ? top.out.trim() : ""
+    if (!toplevel) continue
+    // 基线为空串 = 单元启动时仓库尚无提交,与空树比较(本单元的全部落账都入区间)。
+    // --ignore-submodules=all: 嵌套仓库在外层是一条 gitlink,其内部文件由该仓库
+    // 自身的 diff 单独列出(与 gitDiffFiles/statusEntries 同一道理)。
+    const diff = await git(root, ["diff", "--name-only", "-z", "--diff-filter=d", "--ignore-submodules=all", sha || EMPTY_TREE, "--", "."])
+    if (diff.code !== 0) continue
+    for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(dir, join(toplevel, path)))
+  }
+  for (const rel of await untrackedFiles(dir)) files.add(rel)
+  return files
+}
+
+// git 空树哈希(固定常量): 无提交仓库的「相对基线 diff」以此为空基线端。
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 // 基线..HEAD 区间内无 Auto-Stage trailer 的提交数(= 外部提交数);sha 为空串表示
 // 单元启动时仓库尚无提交,全量检查。unitViolations 与恢复保真核对/回滚共用。
 async function foreignCommits(root: string, sha: string): Promise<number> {
