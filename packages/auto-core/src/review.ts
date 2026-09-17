@@ -381,13 +381,24 @@ export async function planReviewFix(
   return { type: "ok", items: collected }
 }
 
-function parseVerdict(text: string): Verdict | undefined {
-  const conclusion = /结论[:：]\s*(通过|差距[^\n]*|重验[^\n]*)/.exec(text)
-  if (!conclusion) return undefined
-  if (conclusion[1] === "通过") {
-    return { type: "pass", command: /^verified-command:\s*(.+)$/m.exec(text)?.[1]?.trim() }
+// 判定/审核文件的结论行(协议要求为最后一行): 结论: 通过 | 差距 <描述> | 重验
+// <原因>。取最后一个结论行、行首锚定、`通过` 须整值相等——全文首个匹配会把正文里
+// 引用判定标准的字样(如"结论: 通过标准是…")误判为通过(口径对齐 final.ts
+// parseConclusion)。结论行存在但取值非法返回 undefined(进重试环),不再向下扫描
+// 更早的结论行。
+export function parseVerdict(text: string): Verdict | undefined {
+  const lines = text.trimEnd().split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (!/^结论[:：]/.test(line)) continue
+    const value = line.replace(/^结论[:：]\s*/, "").trim()
+    if (value === "通过") {
+      return { type: "pass", command: /^verified-command:\s*(.+)$/m.exec(text)?.[1]?.trim() }
+    }
+    // 重验: 判定会话认定脚本本身有问题并已替换指定脚本,driver 重新执行后再判定。
+    if (value.startsWith("重验")) return { type: "reverify", gap: value.replace(/^重验[:：]?\s*/, "").trim() }
+    if (value.startsWith("差距")) return { type: "gap", gap: value.replace(/^差距[:：]?\s*/, "").trim() }
+    return undefined
   }
-  const gap = conclusion[1]!.trim()
-  // 重验: 判定会话认定脚本本身有问题并已替换指定脚本,driver 重新执行后再判定。
-  return gap.startsWith("重验") ? { type: "reverify", gap: gap.replace(/^重验[:：]?\s*/, "").trim() } : { type: "gap", gap }
+  return undefined
 }

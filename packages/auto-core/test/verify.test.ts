@@ -129,6 +129,19 @@ describe("runVerifyScript", () => {
     expect(run.out).toBe("from-bash\n")
   })
 
+  test("超时 kill 落在真脚本上: 无可执行位的脚本被杀后不得继续写输出(2026-09-17 审查 H1)", async () => {
+    // 不经 exec 时旧实现的 kill 只杀外层 bash,脚本本体成孤儿继续运行——
+    // 这里断言被杀脚本后续的回声永不落盘。
+    const script = join(dir, "orphan.sh")
+    await Bun.write(script, "echo first\nsleep 2\necho second\n")
+    const run = await runVerifyScript(dir, script, { idleMs: 300, pollMs: 50 })
+    expect(run.code).toBe(124)
+    expect(run.out).toContain("first")
+    // 越过脚本里 sleep 2 的时点再读盘: 若脚本成孤儿仍在跑,second 会追加上来
+    await Bun.sleep(2500)
+    expect(await Bun.file(join(verifyTmpDir(dir), "verify.out")).text()).not.toContain("second")
+  }, 10_000)
+
   test("opts.out 指定输出路径(--test-by-driver 的按序归档共用)", async () => {
     const script = join(dir, "check.sh")
     await Bun.write(script, "#!/usr/bin/env bash\necho t-out\necho t-err >&2\nexit 5\n")

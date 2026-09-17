@@ -71,10 +71,12 @@ export async function runVerifyScript(
   await Bun.write(outPath, "")
   const start = Date.now()
   // 经 bash -c 以位置参数注入脚本与输出路径,免 shell 引用;脚本自身 stdout/stderr
-  // 由内层重定向合并到输出文件,外层 bash 无输出。可执行脚本直接 exec,否则经 bash。
+  // 由内层重定向合并到输出文件,外层 bash 无输出。两个分支都以 exec 替换外层
+  // bash(可执行脚本直接执行,否则 exec bash): 超时 kill 只达直接子进程,不用
+  // exec 的话被杀的只是外层 bash,脚本本体成孤儿继续运行、继续写输出文件。
   const exec = await isExecutable(script)
   const proc = Bun.spawn({
-    cmd: ["bash", "-c", `${exec ? 'exec "$0"' : 'bash "$0"'} > "$1" 2>&1`, script, outPath],
+    cmd: ["bash", "-c", `${exec ? 'exec "$0"' : 'exec bash "$0"'} > "$1" 2>&1`, script, outPath],
     cwd: dir,
     stdout: "ignore",
     stderr: "ignore",

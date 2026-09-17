@@ -180,6 +180,10 @@
 4. **H5/H6**——特定环境下确定性故障;
 5. **M1/M2** 归入"提交边界宁阻塞不误放"的同一批整改。
 
+## 修复记录
+
+- 2026-09-17(auto-core 分支):**H1/H2/H3 已修复**——verify.ts 两个分支均改 `exec`(超时 kill 落在真脚本上,不再留下孤儿脚本继续写输出);review.ts `parseVerdict` 对齐 final.ts 口径(行首锚定、倒序取最后一个结论行、`通过` 须整值相等,并导出供回归测试);handover.ts `handoffStatus` 改整行锚定(值恰为 继续|完成,正文复述提示词字样不再命中)。回归测试:test/verify.test.ts(孤儿脚本不得续写输出)、test/review.test.ts(parseVerdict 假通过等 8 例)、test/handover.test.ts(状态行锚定 5 例);`bun typecheck` 干净、`bun test` 850 全绿。
+
 ## 核查后确认无问题的面(节选)
 
 - 异步资源管理严谨:attempt 的 SSE AbortController/finally 收段兜底、watch 探针定时器在生成器 finally 清理、step/waitBetween 的 readline 配对关闭。

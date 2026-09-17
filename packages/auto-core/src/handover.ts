@@ -89,6 +89,10 @@ export async function forgetHandover(dir: string): Promise<void> {
 // testhandoff.md 共用同一判据(交接边界写核,session-recovery-fidelity-design.md
 // 3.3 R3)。undefined = 缺失/无效。
 //
+// 判据是整行锚定的状态行: 行首起、值恰为 继续|完成。不锚定的全文匹配会把正文
+// 引用提示词字样的文本(如"写完末行 状态: 继续 后结束")误判为已写完——提示词
+// 本身含此指令,会话复述很常见(2026-09-17 审查 H3)。
+//
 // 两种交接对这行的用法不同。handoff.md 的交接 steer 只是**建议**交接,会话真把活
 // 干完了自然无需交接,故 `完成` 是一条真实出口,runSubtask 据此收口。测试交接没有
 // 这条出口: 测试结果必须由下一个会话判读,交接之后一定还有工作,`完成` 不可达——
@@ -96,7 +100,7 @@ export async function forgetHandover(dir: string): Promise<void> {
 // handoffComplete),不对值分支。解析仍兼收两值: 会话万一写了 `完成`,按写完处理
 // 好过判成半截文件要求重写。
 export function handoffStatus(text: string): string | undefined {
-  return /状态[:：]\s*(继续|完成)/.exec(text)?.[1]
+  return /^[ \t]*状态[:：][ \t]*(继续|完成)[ \t]*$/m.exec(text)?.[1]
 }
 
 // 交接文档是否写完(F1/F2): 有状态行即完整;没有状态行但内容已落账(已跟踪且

@@ -99,6 +99,19 @@ describe("交接文档的完整判据(F1/F2)", () => {
     expect(handoffStatus("正文,没有状态行")).toBeUndefined()
   })
 
+  test("状态行须整行锚定: 正文复述提示词字样不得命中(2026-09-17 审查 H3)", () => {
+    // 句中出现状态字样(会话复述提示词指令的常见形态)
+    expect(handoffStatus("完成后请写出 状态: 继续 行")).toBeUndefined()
+    // 值带尾巴(如"继续执行剩余工作")不算有效状态行
+    expect(handoffStatus("正文\n状态: 继续执行剩余工作\n")).toBeUndefined()
+    // 跨行不算(旧判据 \s 可吞换行)
+    expect(handoffStatus("状态:\n继续\n")).toBeUndefined()
+    // 行内允许前后空白
+    expect(handoffStatus("正文\n  状态:  继续  \n")).toBe("继续")
+    // 全文多行命中时取第一个有效状态行即可(值只分 继续|完成)
+    expect(handoffStatus("状态: 继续\n状态: 完成\n")).toBe("继续")
+  })
+
   test("有状态行即完整;缺状态行但已落账同样完整;半截文件不完整", () => {
     expect(handoffComplete("正文\n状态: 继续", false)).toBe(true)
     // 已落账 = 提交那一刻文件是整的,缺行只是写于状态行约定之前
