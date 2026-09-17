@@ -128,6 +128,16 @@ describe("classifySessionError(固定报文样本 → 类别)", () => {
   test("transient: 500 内部错误", () => {
     expect(classifySessionError({ statusCode: 500, message: "Internal Server Error" })).toBe("transient")
   })
+  test("transient: 报文里独立出现的 5xx 数字码", () => {
+    expect(classifySessionError({ message: "upstream returned 502" })).toBe("transient")
+    expect(classifySessionError({ message: "HTTP/1.1 503" })).toBe("transient")
+  })
+  test("非 transient: 长号码里的 50x 子串不算 5xx 信号(2026-09-17 审查 H4)", () => {
+    expect(classifySessionError({ message: "Error 1500: something odd" })).toBe("unknown")
+    expect(classifySessionError({ message: "error code 5042" })).toBe("unknown")
+    expect(classifySessionError({ message: "5000 requests sent" })).toBe("unknown")
+    expect(classifySessionError({ message: "runtime v5.0.4" })).toBe("unknown")
+  })
   test("unknown: 无意义字符串(保守缺省,不在 unknown 上换模型)", () => {
     expect(classifySessionError({ message: "asdf zxcv qwerty" })).toBe("unknown")
   })

@@ -180,7 +180,10 @@ const OVERFLOW_RE = /contextoverflowerror/i
 const QUOTA_RE = /insufficient_quota|quota|balance|credit|usage limit/i
 const AUTH_RE = /providerautherror|unauthorized|forbidden/i
 const RATE_RE = /rate limit|resource exhausted/i
-const TRANSIENT_RE = /overloaded|timeout|timed out|econn|socket hang up|network|temporar|internal server error|bad gateway|service unavailable|500|502|503|504/i
+// 数字状态码须带数字/小数点边界: 裸 500|502|503|504 会把 "Error 1500"、
+// "code 5042"、版本号 "5.0.4" 误归 transient(2026-09-17 审查 H4)。长号码里的
+// 子串与版本号都不构成"服务端 5xx"信号,应落 unknown 保守不换模型。
+const TRANSIENT_RE = /overloaded|timeout|timed out|econn|socket hang up|network|temporar|internal server error|bad gateway|service unavailable|(?<![\d.])50[0234](?![\d.])/i
 const QUOTA_STATUS = 402
 // rate 阈值:单个 429 只是 opencode 仍在退避(不可据此换模型),须满足"已重试够多次"
 // 或"下次等待超阈值"才判 rate(设计 D.1 rate 行、B.4 第 2 信号)。

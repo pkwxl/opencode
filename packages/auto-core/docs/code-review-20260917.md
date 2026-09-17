@@ -184,6 +184,8 @@
 
 - 2026-09-17(auto-core 分支):**H1/H2/H3 已修复**——verify.ts 两个分支均改 `exec`(超时 kill 落在真脚本上,不再留下孤儿脚本继续写输出);review.ts `parseVerdict` 对齐 final.ts 口径(行首锚定、倒序取最后一个结论行、`通过` 须整值相等,并导出供回归测试);handover.ts `handoffStatus` 改整行锚定(值恰为 继续|完成,正文复述提示词字样不再命中)。回归测试:test/verify.test.ts(孤儿脚本不得续写输出)、test/review.test.ts(parseVerdict 假通过等 8 例)、test/handover.test.ts(状态行锚定 5 例);`bun typecheck` 干净、`bun test` 850 全绿。
 
+- 2026-09-17(auto-core 分支):**H4 修复(部分为确认无需改)**——复核时 H4 的三个面里两个已被后续机制解决:「isRetryable===false 一刀切 BAIL」不复存在(session.ts 不可重试错误进 awaitRecovery 等待-探测环、attempt.ts 晋升链上认领,P4 降级环优先于等待);旧 NETWORK 正则的裸 "Error"/"Timeout" 词元已随 watch/attempt 重排消失(现行 NETWORK_FAILURE 全为具体短语)。仍存的具体缺陷是 chain.ts `TRANSIENT_RE` 的裸数字码 `500|502|503|504` 无边界("Error 1500"、"code 5042"、版本号 "5.0.4" 误归 transient),已加数字/小数点边界 `(?<![\d.])50[0234](?![\d.])`;回归测试 test/chain.test.ts(+2 例:独立 5xx 数字码仍命中、长号码/版本号子串落 unknown)。`bun typecheck` 干净、`bun test` 852 全绿。
+
 ## 核查后确认无问题的面(节选)
 
 - 异步资源管理严谨:attempt 的 SSE AbortController/finally 收段兜底、watch 探针定时器在生成器 finally 清理、step/waitBetween 的 readline 配对关闭。
