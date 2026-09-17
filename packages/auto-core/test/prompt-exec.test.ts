@@ -26,7 +26,7 @@ import {
   testHandoffFile,
   type TestRunInfo,
 } from "../src/prompt"
-import { listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
+import { groundPlan, groundTask, listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
 
 describe("renderDecompose", () => {
   test("要求只读分析并产出 subtasks.md 检查项", () => {
@@ -285,6 +285,51 @@ describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注
     expect(subtaskOutputFile(task, 9)).toBe("docs/T-002/S09/index.md")
     expect(subtaskOutputFile(task, 12)).toBe("docs/T-002/S12/index.md")
     expect(subtaskOutputFile(task, 123)).toBe("docs/T-002/S123/index.md")
+  })
+})
+
+describe("renderSubtask(L1 权威状态接地 + L3 全限定编号,session-boundary-hardening §4.1)", () => {
+  test("接地块注入: 当前任务状态 + 全限定编号 + 勾选快照 + 前序任务独立声明", () => {
+    const text = renderSubtask(groundPlan, groundTask, "本任务子任务一", { index: 1 })
+    expect(text).toContain("driver 台账权威状态")
+    expect(text).toContain("当前任务: T-002「本任务」,状态: 进行中")
+    expect(text).toContain("全限定编号: T-002.S01")
+    expect(text).toContain("S01☐ S02☐ S03☐,已完成 0/3")
+    expect(text).toContain("勾选由 driver 在各子任务会话结束后统一维护")
+    expect(text).toContain("前序已完成任务 T-001 是与本任务相互独立的任务")
+    expect(text).toContain("与本任务进度无关")
+    expect(text).toContain("仅可作格式/先例参考")
+    // 接地块紧随 head 之后、任务块之前(会话先见权威状态再看任务正文)
+    expect(text.indexOf("driver 台账权威状态")).toBeGreaterThan(text.indexOf("不要执行。"))
+    expect(text.indexOf("driver 台账权威状态")).toBeLessThan(text.indexOf("# T-002: 本任务"))
+  })
+
+  test("勾选快照反映台账勾选状态: S 编号与全限定编号两位补零、已完成 k/n 如实计数", () => {
+    const text = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2 })
+    expect(text).toContain("S01☑ S02☐ S03☐,已完成 1/3")
+    expect(text).toContain("全限定编号: T-004.S02")
+  })
+
+  test("编号撞名防误读: 前序任务的勾选状态不注入,声明直指他任务的 S 编号与本任务无关", () => {
+    const text = renderSubtask(groundPlan, groundTask, "本任务子任务一", { index: 1 })
+    expect(text).toContain("其他任务文档/提交记录中出现的 S 编号属于那些任务,与本任务无关")
+    expect(text).not.toContain("S01☑")
+    // 防的就是把 T-001 的「S01 已完成」读成本任务状态
+    expect(text).toContain("不要从其他任务的文档、交接或 git 提交记录推断本任务是否完成")
+  })
+
+  test("无检查项任务(旧形态): 无编号与快照行,状态行与声明仍注入", () => {
+    const text = renderSubtask(plan, task, "编写迁移脚本")
+    expect(text).toContain("当前任务: T-002「实现迁移」,状态: 已阻塞")
+    expect(text).not.toContain("全限定编号")
+    expect(text).not.toContain("勾选快照")
+    // 前序声明仍在场(plan 夹具有已完成的 T-001)
+    expect(text).toContain("前序已完成任务 T-001")
+  })
+
+  test("无前序已完成任务: 前序声明整体消失", () => {
+    const text = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2 })
+    expect(text).not.toContain("前序已完成任务")
   })
 })
 

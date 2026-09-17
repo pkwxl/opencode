@@ -56,6 +56,12 @@ git 提交由 driver 在会话结束后统一执行,你不要运行 git commit �
    - 每项声明产出:文档类注明文件路径,代码类注明模块/文件范围;
    - 上限导向:每项以单个会话用较小上下文(约 {{contextBudget}} tokens 量级)
      可完成为宜;
+## ground-state
+driver 台账权威状态(本任务与本子任务的进度一律以此为准,不要从其他任务的文档、交接或 git 提交记录推断本任务是否完成):
+- 当前任务: {{taskId}}「{{taskTitle}}」,状态: {{taskStatusText}};{{#if qualifiedId}}
+- 本子任务全限定编号: {{qualifiedId}};其他任务文档/提交记录中出现的 S 编号属于那些任务,与本任务无关;{{/if}}{{#if subtaskSnapshot}}
+- 本任务子任务勾选快照: {{subtaskSnapshot}};勾选由 driver 在各子任务会话结束后统一维护,会话期间不会变化;{{/if}}{{#if doneIds}}
+- 前序已完成任务 {{doneIds}} 是与本任务相互独立的任务,其收尾/完成叙事与本任务进度无关;其文档仅可作格式/先例参考,不得读作「本任务(或本子任务)已完成」的依据。{{/if}}
 ## doc-layout
 文档存放规范: 每个任务(T-NNN)的全部文档写入该任务自己的目录 docs/T-NNN/ 内(理解摘要
 context.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告 audit.md、修复检查项

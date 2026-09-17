@@ -5,7 +5,7 @@
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
-import { subtasks, type Plan, type Task } from "./plan"
+import { subtasks, type Plan, type Status, type Task } from "./plan"
 import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
@@ -156,6 +156,27 @@ export function decomposeTemplateName(phase: Phase | undefined, names: string[])
   return names.includes(candidate) ? candidate : "decompose"
 }
 
+// L1 权威状态接地块(session-boundary-hardening 设计 §4.1): 子任务会话注入 driver 从
+// PLAN 台账生成的权威状态(任务状态/全限定编号/勾选快照/前序任务独立声明),使前序
+// 任务的完成叙事无法被读成本任务状态——数据在此组装,文案在 _partials.md 的
+// ground-state 片段。展示层(PLAN.md)保留 S01 短编号,全限定编号只进提示词(L3)。
+// 任务状态中文(driver 执行子任务会话时任务恒为进行中,其余态为完整性而如实呈现)。
+const STATUS_TEXT: Record<Status, string> = { pending: "待开始", in_progress: "进行中", blocked: "已阻塞", done: "已完成" }
+
+// 勾选快照: S01☑ S02☐ …,已完成 k/n(勾选状态来自台账,正是会话读不到的权威信息)。
+function subtaskSnapshot(items: { done: boolean }[]): string | undefined {
+  if (!items.length) return undefined
+  const ticks = items.map((item, i) => `S${String(i + 1).padStart(2, "0")}${item.done ? "☑" : "☐"}`).join(" ")
+  return `${ticks},已完成 ${items.filter((item) => item.done).length}/${items.length}`
+}
+
+// 前序已完成任务 id 内联清单(与 head 的 doneList 同源;接地块声明行只内联 id,
+// 不复述标题清单,避免与 head 的已完成列表重复)。
+function doneIds(plan: Plan): string | undefined {
+  const ids = plan.tasks.filter((item) => item.status === "done").map((item) => item.id)
+  return ids.length ? ids.join("、") : undefined
+}
+
 // Subtask session: exactly one checklist item. The session implements it and
 // self-checks; ticking the checkbox is the driver's job when the session ends
 // (会话后的统一提交同样由 driver 执行,见 src/git.ts)。
@@ -183,6 +204,13 @@ export function renderSubtask(
     subtask,
     continuation: Boolean(opts.continuation),
     handoffFile: handoffFile(task),
+    // L1 接地块变量(ground-state 片段): 台账权威状态随每个子任务会话注入;
+    // qualifiedId 仅在编号可知时给出(无检查项的旧形态任务没有 S 编号)。
+    taskTitle: task.title,
+    taskStatusText: STATUS_TEXT[task.status],
+    qualifiedId: index !== undefined ? `${task.id}.S${index.padStart(2, "0")}` : undefined,
+    subtaskSnapshot: subtaskSnapshot(items),
+    doneIds: doneIds(plan),
     index,
     subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.text}`).join("\n") : undefined),
     outputFile: opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined),

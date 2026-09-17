@@ -39,6 +39,27 @@ export const listPlan = parse(
 )
 export const listTask = listPlan.tasks[0]!
 
+// L1 接地夹具(session-boundary-hardening 设计 §4.1): 前序任务 T-001 已 done 且其子任务
+// 全勾(复现 kernel-dm T-068 事故「前任务 S01–S10 全勾被误读」的撞名形态),当前任务
+// T-002 进行中、子任务全未勾——接地块/全限定编号的断言以此为准。
+export const groundPlan = parse(
+  "PLAN.md",
+  `## T-001: 前序任务 [done]
+描述。
+
+- [x] 前序子任务一
+- [x] 前序子任务二
+
+## T-002: 本任务 [in_progress]
+描述。
+
+- [ ] 本任务子任务一
+- [ ] 本任务子任务二
+- [ ] 本任务子任务三
+`,
+)
+export const groundTask = groundPlan.tasks[1]!
+
 // 台账条目工厂(收尾闭环 H7 的清单入参): 缺省造一条 driver 源、未配对的代答。
 export function resolveItem(question: string): ResolveItem {
   return { at: 0, task: task.id, phase: "m", round: 1, source: "driver", question }

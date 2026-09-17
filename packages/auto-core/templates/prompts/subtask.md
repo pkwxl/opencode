@@ -1,5 +1,7 @@
 {{> head}}
 
+{{> ground-state}}
+
 当前任务:
 
 {{taskBlock}}
