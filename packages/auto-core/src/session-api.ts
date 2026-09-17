@@ -139,6 +139,27 @@ export async function sessionAlive(client: OpencodeClient, id: string): Promise<
   return got !== undefined && !got.error
 }
 
+// 失联探针的探测体(session-boundary-hardening-design.md D3/§4.4): 一条独立的
+// 短超时连接 GET 会话元信息——半开的旧连接(无 FIN/RST)不响应也不拒绝,但不影响
+// 新连接,故新请求的成败即传输层活性的可信信号;超时无响应与请求异常同按未通计。
+// 与 sessionAlive 同族,差别只在超时上界与调用场景(在途周期探测 vs 恢复前一次性核对)。
+export const PROBE_TIMEOUT_MS = 30_000
+export async function probeSession(client: OpencodeClient, sessionID: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      client.session.get({ sessionID }).then((got) => !got.error),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs)
+      }),
+    ])
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // 下发任务失败的常见根因: 目标目录缺少 agent 契约文件时服务端只回
 // UnknownError(错误体不含根因),此处检测并按外壳画像提示恢复方式(见 src/shell.ts)。
 export async function missingAgentHint(opts: Opts): Promise<string> {

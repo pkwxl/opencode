@@ -168,7 +168,14 @@ export async function attempt(
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await client.event.subscribe(undefined, { signal: sse.signal })
-    const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck, switches)
+    // 失联探针判半开等错误收场(session-boundary-hardening §4.4)可能先于悬挂的
+    // POST 返回——同一死连接上的 POST 由 TURN_TIMEOUT(2h)最终兜底,watch 侧
+    // trip 后不再等它:带错误先回即提前断流,释放 SSE reader 与连接配额(对已
+    // 中止的订阅重复 abort 无害;正常结束路径此处无 effect)。
+    const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck, switches).then((w) => {
+      if (w.error) sse.abort()
+      return w
+    })
 
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note

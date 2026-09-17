@@ -38,6 +38,9 @@ describe("SSE 订阅生命周期(会话结束即断开)", () => {
     expect(result.type).toBe("blocked")
     expect((result as { question: string }).question).toContain("下发任务失败")
     expect(state.signal?.aborted).toBe(true)
+    // 失联探针的 trip 竞速包装(S4,watch.ts)让事件流生成器的收尾晚几个微任务才
+    // 落定(本路径 attempt 不等 watching 即返回)——让出一个宏任务再断言流已收尾。
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(state.closed).toBe(true)
   })
 })

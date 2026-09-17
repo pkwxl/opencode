@@ -1,6 +1,8 @@
 // 单次会话的事件流订阅与实时处置: 消费 SSE part/status 事件,做终端回显、
 // 上下文用量跟踪与交接 steer 插入、死循环提示、代答采集(AUTO-RESOLVE /
-// AUTO-DECISION)、测试请求的发起与收口、会话错误信号的归类上报。
+// AUTO-DECISION)、测试请求的发起与收口、会话错误信号的归类上报;在途失联探针
+// (session-boundary-hardening-design.md D3/§4.4)周期探测会话活性,两连败判半开
+// 并收口为可重试会话错误。
 // 位于 session.ts 之下(其 attempt 起订阅后 await 本函数),自身只向下调用
 // testrun / unit-commit / session-api 等层;**不得反向 import session / runner**。
 // 拆分自 src/runner.ts(docs/module-split-plan.md S7,纯搬运)。
@@ -15,11 +17,18 @@ import { log, vlog } from "./log"
 import type { Opts } from "./opts"
 import { handoffFile, renderStuckHint, renderTestWrapup, renderTestResult } from "./prompt"
 import { compactText, sameIssue, type ResolveEvent } from "./resolve"
-import { askHuman, contextLimits, describePart, formatTokens, isApproval } from "./session-api"
+import { askHuman, contextLimits, describePart, formatTokens, isApproval, probeSession } from "./session-api"
 import type { Usage } from "./stats"
 import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
 import { executeTest, resolveTestScript, testHandoverDue, type Steer, type TestRun } from "./testrun"
+
+// 失联探针参数(session-boundary-hardening-design.md D3): 周期缺省复用 idleTime
+// (10 分钟,与脚本看门狗同键同缺省,config.idleTime);**连续 2 次**未通才判半开
+// ——排除服务端瞬时抖动(GC 停顿等)造成的误判。单次探测的短超时(30 秒)见
+// session-api 的 PROBE_TIMEOUT_MS。
+const PROBE_INTERVAL_MS = 10 * 60_000
+const PROBE_MAX_FAILURES = 2
 
 export async function watch(
   client: OpencodeClient,
@@ -193,7 +202,63 @@ export async function watch(
   const seen = new Set<string>()
   // 模型上下文上限(providerID/modelID → limit.context),首次需要时拉取。
   let limits: Map<string, number> | undefined
-  for await (const raw of stream) {
+  // 在途失联探针(D3/§4.4): watching 期间每 idleTime 经独立短超时连接 GET 会话
+  // 元信息;连续 PROBE_MAX_FAILURES 次未通即判半开——记日志、trip 抢占事件等待,
+  // 收口处 abort 会话并按可重试会话错误返回(transient 归类,走既有重试阶梯与
+  // 降级环;新连接 fork 续跑)。探针成功即重置计数。attempt 在 prompt 下发前就启动
+  // 本函数,探针因此覆盖 POST 在途窗口;定时器随全部出口在下方生成器 finally 清理。
+  let probeFailures = 0
+  let halfOpen = false
+  // 探针链活跃标记: watch 收口(生成器 finally)后,在途 probe 的迟到回调不得再
+  // 续排定时器。
+  let probeActive = true
+  let probeTimer: ReturnType<typeof setTimeout> | undefined
+  // 探针判半开时抢占事件等待: 半开场景流上再无事件,对原流 for-await 会永远阻塞
+  // 在 next() 上,探针结果无从生效——故事件流套一层与 trip 竞速的迭代包装。
+  let trip!: () => void
+  const tripped = new Promise<void>((resolve) => (trip = resolve))
+  const scheduleProbe = () => {
+    probeTimer = setTimeout(() => {
+      probeTimer = undefined
+      void (async () => {
+        const ok = await probeSession(client, sessionID)
+        if (!probeActive || halfOpen) return
+        if (ok) {
+          probeFailures = 0
+        } else {
+          probeFailures += 1
+          log(`⚠ 失联探针第 ${probeFailures}/${PROBE_MAX_FAILURES} 次未通(会话 ${sessionID}),连接疑似半开`)
+          if (probeFailures >= PROBE_MAX_FAILURES) {
+            halfOpen = true
+            trip()
+            return
+          }
+        }
+        scheduleProbe()
+      })()
+    }, opts.idleMs ?? PROBE_INTERVAL_MS)
+  }
+  scheduleProbe()
+  const raced = (async function* () {
+    const inner = stream[Symbol.asyncIterator]()
+    try {
+      for (;;) {
+        const step = await Promise.race([inner.next(), tripped.then((): IteratorResult<unknown> => ({ done: true, value: undefined }))])
+        if (step.done) return
+        yield step.value
+      }
+    } finally {
+      probeActive = false
+      if (probeTimer !== undefined) clearTimeout(probeTimer)
+      // 本生成器只可能悬挂在 yield 上被消费方收尾(return 立即进 finally),清理
+      // 无时延。半开抢占出口内层留有悬挂的 next()(旧连接永不兑现),return() 会
+      // 排在它后面一并等死——跳过,由 attempt 的 sse.abort() 取消底层 reader 收尾;
+      // 其余出口无悬挂 next(),return() 促走内层 finally(释放 reader 锁),与裸
+      // for-await 行为一致。
+      if (!halfOpen) await inner.return?.().catch(() => {})
+    }
+  })()
+  for await (const raw of raced) {
     const event = raw as import("@opencode-ai/sdk/v2").Event
     if (event.type === "message.part.updated") {
       const part = event.properties.part
@@ -490,12 +555,18 @@ export async function watch(
     }
   }
   if (!settled) {
-    // SSE 断流: 中止 server 端可能仍在运行的孤儿回合,避免与重试的新会话并发改文件
-    // (abort 对已完成的会话无害;网络已断时调用静默失败)。会话错误经 attempt 包装
-    // 后走重试/阻塞路径,进度记录保持 active,下次运行复用本会话继续。
+    // 断流/半开收口: 中止 server 端可能仍在运行的孤儿回合,避免与重试的新会话并发
+    // 改文件(abort 对已完成的会话无害;网络已断时调用静默失败)。会话错误经 attempt
+    // 包装后走重试/阻塞路径,进度记录保持 active,下次运行复用本会话继续。
     await client.session.abort({ sessionID }).catch(() => {})
-    const msg = "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
+    // 探针判半开(D3)与 SSE 断流分案报文;半开报文带 network/timeout 判据喂给
+    // classifySessionError 归 transient——传输层故障走既有可重试阶梯与降级环,不
+    // 换模型;errorInfo 同步带上,使分类与上行报文有据。
+    const msg = halfOpen
+      ? `失联探针连续 ${PROBE_MAX_FAILURES} 次未通,判定连接半开(server 无响应或网络断开,half-open network timeout)`
+      : "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
     error = error ? `${error}\n${msg}` : msg
+    if (halfOpen) errorInfo = { ...(errorInfo ?? {}), message: errorInfo?.message ? `${errorInfo.message}\n${msg}` : msg }
   }
    return snapshot({
      error,
