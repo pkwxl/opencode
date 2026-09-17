@@ -14,6 +14,7 @@ import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import type { Plan, Task } from "./plan"
 import { renderTestContinue, renderTestWrapup, testHandoffFile, type TestRunInfo } from "./prompt"
+import { COMMIT_CLARIFY } from "./resume-gate"
 import { runSession } from "./session"
 import { forkSession, sessionAlive, sessionUsed } from "./session-api"
 import { autoSwitches } from "./switches"
@@ -162,7 +163,7 @@ export async function runExecSession(
       firstPrompt =
         ran && !record?.ran
           ? renderTestContinue({ handoffFile: archived, run: ran, stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined })
-          : "[driver] 上次运行在此中断,已从续跑会话分叉恢复;请接着中断点继续。"
+          : `[driver] 上次运行在此中断,已从续跑会话分叉恢复;请接着中断点继续。${COMMIT_CLARIFY}`
     }
     continuation = true
     await saveHandover(dir, {

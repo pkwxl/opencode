@@ -82,9 +82,10 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
 describe("resumeNote(中断恢复说明)", () => {
   const subtasks: Phase = { kind: "subtasks", index: 2 }
   const planStep: Phase = { kind: "step", step: "phase-plan", letter: "m" }
-  const ONE_LINE = "[driver] 会话曾中断,请继续当前工作直至本单元完成。"
+  const ONE_LINE =
+    "[driver] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 driver 统一提交进 Git——以 git log 核实,不要重做。"
 
-  test("严格恢复门禁在位 + 复用原会话 → 收敛为一句 continue(3.2)", () => {
+  test("严格恢复门禁在位 + 复用原会话 → 收敛为一句 continue(3.2),附带提交语义澄清", () => {
     expect(resumeNote(subtasks, true, true)).toBe(ONE_LINE)
     expect(resumeNote(planStep, true, true)).toBe(ONE_LINE)
     expect(resumeNote(undefined, true, true)).toBe(ONE_LINE)
@@ -104,5 +105,18 @@ describe("resumeNote(中断恢复说明)", () => {
     const step = resumeNote({ kind: "step", step: "phase-handover", letter: "t" }, false, true)
     expect(step).toContain("本阶段步骤")
     expect(step).toContain("四个必备小节")
+  })
+
+  test("提交语义澄清: 非一句 continue 的路径都说明「陌生提交/干净工作区 ≠ 修改丢失」", () => {
+    // 中断恢复时 AI 以 git 核对盘面,driver 统一提交(定版/交接/单元收口)或人工
+    // 处置提交会被误读为修改丢失而重做——澄清句必须在场(2026-09-17)。
+    for (const note of [
+      resumeNote(subtasks, true, false),
+      resumeNote(subtasks, false, false),
+      resumeNote({ kind: "step", step: "phase-plan", letter: "m" }, true, false),
+    ]) {
+      expect(note).toContain("不代表修改丢失")
+      expect(note).toContain("driver 统一提交")
+    }
   })
 })

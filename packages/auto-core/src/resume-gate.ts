@@ -103,24 +103,33 @@ export function phaseText(phase: Phase | undefined): string {
 // 不是裸开关——门禁关闭(dryrun)时没有单元基线也没有回滚兜底,"一句 continue"赖以
 // 成立的前提(不可保真即回滚重跑)不存在,故维持既有多行指引(设计 §4.1 ①/⑥)。
 // 缺省取 OPENCODE_AUTO_* 解析值,注入供单测。
+// 提交语义澄清(2026-09-17): 恢复会话以 git 核对盘面时,「工作区比预期干净 /
+// git log 出现陌生提交」会被误读为修改丢失而重做——中断前落盘的修改可能仍在
+// 工作区待提交(单元中途被打断),也可能已由 driver 统一提交(定版/交接/单元收口)
+// 或经人工处置提交进 Git(中断后重跑的 clean 门禁要求人工处置脏区)。两种形态
+// 都正常,以盘面为准继续,不要重做。
+export const COMMIT_CLARIFY =
+  `中断前落盘的修改可能仍在工作区待提交,也可能已由 driver 统一提交(或经人工处置)进 Git——` +
+  `git log 出现陌生提交、工作区比预期干净,都不代表修改丢失。`
+
 export function resumeNote(phase: Phase | undefined, reused: boolean, strictResume = autoSwitches().strictResume): string {
   if (reused && strictResume) {
-    return `[driver] 会话曾中断,请继续当前工作直至本单元完成。`
+    return `[driver] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 driver 统一提交进 Git——以 git log 核实,不要重做。`
   }
   const next = nextStepText(phase)
   if (phase?.kind === "step") {
     return (
       `[driver] 本阶段步骤此前的执行因应用中断而停止。` +
       (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
-      `以 git status / git diff 核对工作区实际状态。` +
-      `${next}不要重做已完成的工作。`
+      `以 git status / git diff 核对工作区实际状态。${COMMIT_CLARIFY}` +
+      `${next}提交由 driver 统一负责,你从不亲自提交;不要重做已完成的工作。`
     )
   }
   return (
     `[driver] 该任务(或其某个子任务)此前的执行因应用中断而停止。` +
     (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
-    `先读 CURRENT.md 了解当前任务与进度,并以 git status / git diff 核对工作区实际状态。` +
-    `${next}不要重做已完成的工作。`
+    `先读 CURRENT.md 了解当前任务与进度,并以 git status / git diff 核对工作区实际状态。${COMMIT_CLARIFY}` +
+    `${next}提交由 driver 统一负责,你从不亲自提交;不要重做已完成的工作。`
   )
 }
 
