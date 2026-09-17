@@ -6,6 +6,7 @@ import {
   forgetHandover,
   handoffComplete,
   handoffStatus,
+  handoverSeq,
   handoverStage,
   peekHandover,
   recallHandover,
@@ -85,6 +86,26 @@ describe("交接文档的完整判据(F1/F2)", () => {
     expect(handoffComplete("会话写到一半被打断", false)).toBe(false)
     expect(handoffComplete(undefined, true)).toBe(false)
     expect(handoffComplete("   \n", true)).toBe(false)
+  })
+})
+
+describe("handoverSeq(观测序号 vs 归档续号)", () => {
+  test("无在途记录: 观测与续号都回落盘扫描(存量现场)", () => {
+    expect(handoverSeq(undefined, 0)).toEqual({ observed: 0, nextBase: 0 })
+    expect(handoverSeq(undefined, 3)).toEqual({ observed: 3, nextBase: 3 })
+  })
+
+  test("记录在案即权威: 盘扫描更高号是命名族里的误写件,不作交接证据", () => {
+    // 现场: 交接 #1 已收口(testhandoff-1.md 落账),会话又自写 testhandoff-2.md——
+    // 观测仍认 #1 的归档份,阶段判为 test 而不是"交接 #2 已收口"。
+    expect(handoverSeq({ ...record, n: 1 }, 2)).toEqual({ observed: 1, nextBase: 2 })
+  })
+
+  test("续号取两侧最大: 不覆盖盘上误写件,也不覆盖记录所指归档", () => {
+    // 误写件占住 2 号位 → 下一次真交接归档为 -3,误写件原样保留。
+    expect(handoverSeq({ ...record, n: 1 }, 2).nextBase).toBe(2)
+    // 归档份被删(盘扫描倒退)而记录还在 → 续号跟着记录走,不倒退。
+    expect(handoverSeq({ ...record, n: 2 }, 0)).toEqual({ observed: 2, nextBase: 2 })
   })
 })
 

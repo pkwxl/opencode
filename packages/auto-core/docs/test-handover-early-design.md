@@ -383,3 +383,43 @@ invariant(见 session-error-retry-plan.md「2026-09-17 修正五」)同一口径
 (私有副本删除,改 import)、`src/runner.ts`(两处陈旧清理改用)、
 `test/git.test.ts`(`removeIfUntracked` 真实仓库用例)。`bun typecheck` 干净,
 `bun test` 全绿(778 pass)。
+
+## L. 修订(2026-09-17):归档命名族防伪——观测序号以在途记录为权威
+
+### L.1 现场(kernel-mig/virtio T-005 S06)
+
+交接 #1 正常收口后,续跑会话判读完探针 run 1,**自发**把判读结论与脚本修正落成
+`testhandoff-2.md`(产物 index.md 按交接文档约定要留到 b 探针之后,会话于是占用了
+归档命名族当落盘点),随后撞配额错误、人工 Ctrl+C,误写件留在脏区。下一次运行时
+恢复状态机的归档序号来自盘扫描 `latestHandoffSeq`:误写件占住 2 号位 → 观测指向
+`testhandoff-2.md` → 人工提交脏区过门禁后它「在盘且已落账」→ H3 误判
+「交接 #2 已收口」——一场从未发生的交接被当成事实,记录计数永久虚一,还会把
+已跑过的脚本再虚跑一次。
+
+### L.2 根因
+
+两层叠加:
+
+1. **提示词无排他条款**:三处测试执行协议模板只说「driver 有时会要求你写
+   {{testHandoffFile}}」,没有任何一处声明 testhandoff 命名族是 driver 交接时序的
+   观测量、会话不得自行创建/续号;doc-layout 还把 testhandoff.md 当中性存储路径
+   介绍。判读结论往哪落盘,提示词从未回答。
+2. **状态机信任命名族**:恢复观测 = 盘扫描最大号,盘上任何 `testhandoff-<n>.md`
+   都直接成为状态机输入,无防伪。
+
+### L.3 决策
+
+| # | 决策 | 理由 |
+|---|---|---|
+| L-D1 | 提示词补排他条款:只在 driver 明确要求时写当前份,不得自行创建/续号归档份;判读结论写入本执行范围既定产物文档或并入下一次交接 | 堵行为源头;三处模板(subtask/fix/whole)同文条款 |
+| L-D2 | 观测序号以在途记录的 n 为权威,盘扫描只在记录缺失时兜底(纯函数 `handoverSeq`) | 记录是 driver 在收口时写下的,指着真正收口的归档份;盘扫描可被会话落笔污染,不可信 |
+| L-D3 | 归档续号仍取「盘扫描与记录」两侧最大 | D4 不覆盖历史的语义保留,连误写件也不覆盖(文件本身是进度证据,只不再是状态机输入) |
+| L-D4 | 不做 Auto-Stage trailer 校验归档份归属 | 过度工程:记录权威化已足够,存量现场(记录缺失)仍需盘扫描兜底,trailer 校验会让存量现场无路可走 |
+
+### L.4 落地范围
+
+`packages/auto-core`:`src/handover.ts`(新增纯函数 `handoverSeq`)、
+`src/exec-session.ts`(观测序号/续号分离;H2/H3 恢复分支的收口号 `closedN`
+跟随真归档份,在途记录 n 与之一致)、`templates/prompts/subtask.md`/`fix.md`/
+`whole.md`(handoverTest 条款补排他规则)、`test/handover.test.ts`
+(`handoverSeq` 三组用例)。`bun typecheck` 干净,`bun test` 全绿(831 pass)。

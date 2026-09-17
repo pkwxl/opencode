@@ -103,6 +103,16 @@ export function handoffComplete(content: string | undefined, committed: boolean)
 // 还是退化为引用最近一次测试输出。
 export type HandoverStage = "none" | "wrapup" | "commit" | "test"
 
+// 恢复观测序号与归档续号基数(防伪: 会话在 testhandoff-<n>.md 命名族里的自行
+// 落笔不是交接证据)。阶段观测以在途记录的 n 为权威——记录由 driver 在交接收口
+// 时写下,指着真正收口的那份归档;记录缺失(机制上线前的存量现场)才回落盘扫描。
+// 归档续号取两侧最大: 盘上即使躺着误写件也不覆盖,续号跳过它(设计文档
+// test-handover-early-design.md §I,2026-09-17 修订)。
+export function handoverSeq(record: Handover | undefined, diskMax: number): { observed: number; nextBase: number } {
+  const observed = record?.n ?? diskMax
+  return { observed, nextBase: Math.max(diskMax, observed) }
+}
+
 export function handoverStage(observed: {
   // 在途记录(仅用于区分"收尾未完成"与"从来没交接过")。
   record?: Handover
