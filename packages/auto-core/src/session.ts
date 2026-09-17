@@ -190,11 +190,17 @@ export async function runSession(
     const sources: { id: string; used: number; why: string }[] = []
     if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
     if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
-    chain.failed = undefined
+    // chain.failed 在 fork 播种后刻意保留(不清空): 副本若 0-token 即死(配额连败
+    // 现场),attempt 的守卫不会拿报错桩顶替它,下一轮重试仍能从这个最有价值的会话
+    // 重新分叉;副本成功时由 attempt 收口清空。fork 已失效的死记录在此顺手清理,
+    // 避免后续轮次对着死会话重复 fork。
     sources.sort((a, b) => b.used - a.used)
     for (const source of sources) {
       const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 降级`)
-      if (forked === undefined) continue
+      if (forked === undefined) {
+        if (source.id === chain.failed?.id) chain.failed = undefined
+        continue
+      }
       // chain.id 清空、改由 pending 承载分叉会话:note 非空 + chain.id 非空会命中
       // attempt 的「中断恢复(resumed)复用原会话」分支而忽略 pending,故此处必须清 id,
       // 让降级 note 随分叉副本会话下发(副本已含真实累计消息)。
@@ -259,13 +265,17 @@ export async function runSession(
       // 「下发过本提示词的会话」:不可重试类被 attempt 晋升到 chain.id、可重试类记在
       // chain.failed——分到它即上下文完整,只带恢复说明;分到原会话/空白会话则本次
       // 尝试的部分产出不在上下文里,须带现场核对说明(见 retryNote)。
+      // chain.failed 在 fork 播种后刻意保留(与重试阶梯同一 invariant,见下方):
+      // 副本 0-token 即死时记录不被顶替,恢复重发仍能从它重新分叉。
       const failedID = chain.failed?.id ?? chain.id
-      chain.failed = undefined
       sources.sort((a, b) => b.used - a.used)
       let seeded = false
       for (const source of sources) {
         const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 恢复`)
-        if (forked === undefined) continue
+        if (forked === undefined) {
+          if (source.id === chain.failed?.id) chain.failed = undefined
+          continue
+        }
         log(`↻ ${task.id} 服务已恢复,从${source.why} ${source.id}(${formatTokens(source.used)} tokens)分叉副本重发任务`)
         // 清 chain.id、改由 pending 承载分叉会话(与 switchModel 同理: note + chain.id
         // 非空会命中 attempt 的 resumed 复用分支而忽略 pending)。
@@ -377,12 +387,18 @@ export async function runSession(
     const sources: { id: string; used: number; why: string }[] = []
     if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "失败会话" })
     if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "原会话" })
-    chain.failed = undefined
+    // chain.failed 在 fork 播种后刻意保留(不清空): 副本若 0-token 即死(配额连败
+    // 现场,2026-09-17 virtio T-005),attempt 的守卫不会拿报错桩顶替它,下一轮重试
+    // 仍能从这个最有价值的会话重新分叉;副本跑出内容(used > 0)则严格超集正常顶替,
+    // 成功时由 attempt 收口清空。fork 已失效的死记录在此顺手清理。
     sources.sort((a, b) => b.used - a.used)
     let seeded = false
     for (const source of sources) {
       const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} 重试`)
-      if (forked === undefined) continue
+      if (forked === undefined) {
+        if (source.id === chain.failed?.id) chain.failed = undefined
+        continue
+      }
       log(`↻ ${task.id} 遇到瞬时会话错误,从${source.why} ${source.id}(${formatTokens(source.used)} tokens)分叉副本重试(${nth}/${waits.length}):\n${result.question}`)
       chain.pending = forked
       chain.pct = 100

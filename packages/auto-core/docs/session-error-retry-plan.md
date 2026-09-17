@@ -474,3 +474,34 @@ pending 副本，不会误复用原会话（switchModel/awaitRecovery 的「必�
 纯报错桩分叉原会话的现场核对说明、空白回退的现场核对说明、降级 fork 失败的现场
 核对版降级说明、恢复期分叉失败的现场核对说明）。`bun typecheck` 干净，`bun test`
 全绿（778 pass）。
+
+## 2026-09-17 修正五：0-token 报错桩不顶替有内容的失败会话记录（chain.failed 更替 invariant）
+
+**现场**（virtio T-005 / spi-nor T-029，配额连败）：交接后的续跑会话跑到 41.3k 遇
+配额类会话错误，重试 1 从该失败会话分叉副本（41.3k 上下文随迁），副本下发即死
+（0 tokens）；旧簿记在 fork 播种时清空 `chain.failed`，副本失败又把它覆写为
+`{副本, used: 0}`——41.3k 会话仍在 server 上活着、内容完好，但链上不再有任何字段
+指向它。重试 2 起择源列表为空（0-token 桩按既有判据不进候选、`chain.id` 在测试交接
+收场时已按 §J 清空），退化为「从基点重新播种」的冷启动，且每轮都如此。
+
+**invariant**：`chain.failed` 只被 `used > 0` 的失败顶替（fork 副本带着旧前缀又跑出
+新内容，是旧记录的严格超集）；0-token 纯报错桩不顶替、也不进候选（既有判据不变）。
+为此两处配套：
+
+- `attempt()` 可重试分支：仅当 `result.used > 0` 或链上尚无记录时才写
+  `chain.failed`；
+- 三处择源点（重试阶梯 / `switchModel` 降级 / `awaitRecovery` 恢复重发）fork 播种后
+  **不再清空** `chain.failed`——记录存活到副本成功收口（`attempt` 晋升时清）或副本
+  跑出内容（正常顶替）；择源循环里 fork 已失效的死记录顺手清理，避免后续轮次对着
+  死会话重复 fork。
+
+行为变化仅限「连败且败在 0-token」场景：此前每轮丢失最佳分叉源，此后每轮重新 fork
+那个最有价值的会话；其余路径（单次失败、副本跑出内容、成功收口）逐字节等价。
+
+**验证**：`test/session.test.ts` 新增两例——配额连败三连后恢复（三次重试全部重新
+fork 最初的 41.3k 会话、不开空白新会话、重发说明保持「上下文完整」档）与副本跑出
+内容后正常顶替；既有 46 例不改自通。`bun typecheck` 干净，`bun test` 全绿。
+
+配套：同一现场的另一半——`handover.json` 的 `nextSession` 认领也被 0-token 桩逐个
+覆写——按同一 invariant 在 `attempt` 加「认领还原」，见
+test-handover-early-design.md §J.3。

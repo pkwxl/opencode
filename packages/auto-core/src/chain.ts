@@ -89,6 +89,11 @@ export type SessionChain = { id?: string; pct: number; used: number; at: number;
 // 从"本轮积累最多的会话"分叉: 超时类故障下,失败会话里那 100k+ 已核实研究是最
 // 值钱的资产,开空白会话等于把它扔掉再从零撞同一堵墙。副本不顶替恢复点(progress
 // 的还原逻辑不动,原会话仍是恢复点),晋升后即清。
+// 记录更替 invariant(2026-09-17,配额连败现场修复): 只被 used > 0 的失败顶替
+// (fork 副本带着旧前缀又跑出新内容,是严格超集);0-token 纯报错桩不顶替——否则
+// 副本下发即死时记录被它覆盖,下一轮重试丢失最有价值的分叉源,退化为基点冷播种。
+// fork 播种后记录刻意留存(不清空),直到副本成功收口(attempt 清)或跑出内容
+// (顶替);fork 已失效的死记录在择源循环顺手清理。
 export type FailedSession = { id: string; used: number }
 
 // fork 基点信息: id 为生效基点会话;used 为基点末端上下文用量(tokens,播种进

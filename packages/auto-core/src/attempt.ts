@@ -11,7 +11,7 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { resolveModel, roleOf, splitModel, REUSE_BELOW, REUSE_IDLE_MINUTES, REUSE_IDLE_MS, type SessionChain, type SessionResult } from "./chain"
 import { failbackOverride, stickyModel } from "./failback"
 import { commitTitle, unitBaseline } from "./git"
-import { recallHandover, saveHandover } from "./handover"
+import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { currentRound } from "./phases"
@@ -120,9 +120,16 @@ export async function attempt(
   // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
   // 下次运行从它分叉接回上下文。定版前的会话(记录里还留着待跑脚本与定版锚点)
   // 不认领,那一态的恢复靠定版点分叉。
+  // 认领同样遵循「下发即写 + 失败还原」: 起跑即写(半途被 kill 也有锚点),但会话
+  // 以 0-token 可重试错误收场时还原为认领前的记录——纯报错桩不配作恢复锚点,否则
+  // 配额连败现场里最后一个 0-token 桩会顶掉真正有内容的续跑会话(2026-09-17
+  // virtio T-005: 41.3k 会话的 nextSession 被重试 3 的 0-token 桩覆写),重启只能
+  // fork 空壳。与 chain.failed 的更替 invariant 同一口径。
+  let handoverClaimPrior: Handover | undefined
   if (test && opts.dir) {
     const inflight = await recallHandover(opts.dir, task.id, relative(test.dir, test.handoffFile))
     if (inflight && inflight.script === undefined && inflight.pinSession === undefined && inflight.nextSession !== sessionID) {
+      handoverClaimPrior = inflight
       await saveHandover(opts.dir, { ...inflight, nextSession: sessionID })
     }
   }
@@ -293,7 +300,15 @@ export async function attempt(
       chain.used = previousUsed
       chain.at = previousAt
       // 链状态还原,但失败会话本身留给重试环作首选分叉源(见 FailedSession)。
-      chain.failed = { id: sessionID, used: result.used }
+      // 0-token 的失败是纯报错桩(下发即失败,什么也没跑出来),不顶替链上仍有效
+      // 的有内容记录——否则下一轮重试将丢失最有价值的分叉源(2026-09-17 现场:
+      // 41.3k 失败会话被其 0-token fork 副本顶替,后续重试退化为基点冷播种);
+      // used > 0 的失败则是旧记录的严格超集(fork 副本带着旧前缀又跑出了新内容),
+      // 正常顶替。
+      if (result.used > 0 || chain.failed === undefined) chain.failed = { id: sessionID, used: result.used }
+      // 0-token 桩同时撤回对 handover.json nextSession 的认领(恢复锚点回到上一个
+      // 有内容的续跑会话);used > 0 的失败保留认领——该会话是旧锚点的严格超集。
+      if (result.used === 0 && handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
       if (opts.dir && chain.phase) {
         if (prior) await saveProgress(opts.dir, prior)
         else await forgetProgress(opts.dir)

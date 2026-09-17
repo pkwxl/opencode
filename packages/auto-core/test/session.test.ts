@@ -13,6 +13,7 @@ import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyMod
 import { recallHandover, saveHandover } from "../src/handover"
 import type { Interactive } from "../src/interactive"
 import { recallProgress, saveProgress } from "../src/resume"
+import { attempt } from "../src/attempt"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import type { TestRun } from "../src/testrun"
@@ -192,6 +193,40 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
     expect(chain.failed).toBeUndefined()
+  })
+
+  test("fork 副本 0-token 即死(配额连败): 不顶替有内容的失败会话,后续每轮仍从它重新分叉", async () => {
+    // 2026-09-17 virtio T-005 现场: 交接后续跑会话跑到 41.3k 遇配额连败——重试 1
+    // fork 失败会话(41.3k),副本下发即死(0 tokens);旧簿记把 chain.failed 顶替成
+    // 该 0-token 副本,重试 2 起失败会话引用丢失,退化为基点/空白冷播种。修复后:
+    // 0-token 报错桩不进候选也不顶替记录,每一轮重试都重新 fork 那 41.3k 会话。
+    const LADDER3 = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], [41_300])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER3)
+    expect(result.type).toBe("idle")
+    // 三次重试全部从最初那个 41.3k 失败会话重新分叉,不开空白新会话。
+    expect(calls.forks).toEqual(["ses_new_1", "ses_new_1", "ses_new_1"])
+    expect(calls.creates).toBe(1)
+    // 第 2/3 次重发仍判「上下文完整」档: 只解释重发,不带现场核对说明。
+    for (const p of [calls.prompts[2]!, calls.prompts[3]!]) {
+      const text = (p.parts[0] as { text: string }).text
+      expect(text).toContain("现已重试")
+      expect(text).not.toContain("git status")
+    }
+    expect(chain.failed).toBeUndefined()
+  })
+
+  test("fork 副本跑出内容后再失败(used > 0): 正常顶替记录(副本是旧记录的严格超集)", async () => {
+    // 副本带着旧前缀又跑出了新内容,失败时用量更大——记录应更新到副本,
+    // 下一轮从副本分叉而非回到旧会话。
+    const LADDER3 = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
+    const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"], [41_300, 52_000])
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER3)
+    expect(result.type).toBe("idle")
+    expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1"])
+    expect(calls.creates).toBe(1)
   })
 
   // ---- 重试说明: 重发同一提示词必须带一次性说明 ----
@@ -482,6 +517,39 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
       // 在途交接记录认领的同样是恢复后的续跑会话: 重启复用经它分叉接回,对象 =
       // 交接之后的会话。
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_new_5" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // ---- nextSession 认领的「下发即写 + 失败还原」(2026-09-17,virtio T-005 现场)----
+
+  test("续跑会话 0-token 即死(纯报错桩): 撤回 nextSession 认领,恢复锚点留在上一个有内容的会话", async () => {
+    // 现场: 41.3k 续跑会话遇配额连败,重试的 0-token 桩逐个覆写 nextSession,重启
+    // 只能 fork 空壳。修复后桩的认领被还原,锚点留在 41.3k 会话。
+    const { dir, tmp, handoffFile } = await makeDir("auto-handover-stub-")
+    try {
+      await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
+      const { client } = retryClient(["error-retryable"])
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect(result.type).toBe("blocked")
+      expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("续跑会话带着内容失败(used > 0): 保留认领,它成为新的恢复锚点", async () => {
+    const { dir, tmp, handoffFile } = await makeDir("auto-handover-content-")
+    try {
+      await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_old" })
+      const { client } = retryClient(["error-retryable"], [41_300])
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      expect(result.type).toBe("blocked")
+      // 41.3k 内容的失败会话比旧锚点更值钱(严格超集),认领不还原。
+      expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_new_1" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
