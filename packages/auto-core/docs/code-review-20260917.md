@@ -192,6 +192,8 @@
 
 - 2026-09-17(auto-core 分支):**H6 修复(原判崩溃路径经实证不成立,收敛为对称清理)**——复核时先实证报告的「`rl.prompt(true)` 抛 `ERR_USE_AFTER_CLOSE`」:Node 20 与 Bun 下 close 后 `prompt/pause/resume/write` 均不抛,仅 promises API 的 `question()` 抛而 log.ts 未调用,崩溃路径不成立。仍修真实存在的不对称:`interactive.ts` 显式 `close()` 会 `setInput(undefined)` 而 stdin 关闭的 `rl.on("close")` 路径漏了它,导致日志继续向已关闭的 readline 重绘提示符;已在 close 事件里补 `setInput(undefined)`。回归断言相应改为可观测行为(关闭后 log 不再向 output 重绘提示符,还原修复即失败),`bun typecheck` 干净、`bun test` 854 全绿。
 
+- 2026-09-17(auto-core 分支):**H7 已修复**——attempt 的同步 POST 挂上独立 AbortSignal 并与 watching 竞速:watch 带错误先回(半开判定/断流)即 `post.abort()` 联动作废悬挂的 POST,attempt 不再等它、直接按 watch 的会话错误收口(报文带 transient 归类,走既有重试阶梯与降级环);重试启动时点从 TURN_TIMEOUT(2h)提前到探针判定时刻(~2×idleTime),2h 退为纯兜底。POST error 属 abort 回声时跳过「下发任务失败」分支与进度认领(可重试分支照旧还原下发前快照);finally 兜底 abort 覆盖异常退出路径。回归测试 test/watch-probe.test.ts +1 例(POST 悬挂 + 事件流永不产事件的半开现场:探针尺度内按「连接半开」会话错误收口、不报「下发任务失败」、POST 信号已 abort、会话已 abort;夹具补 prompt 的 signal 捕获),`bun typecheck` 干净、`bun test` 855 全绿。设计文档 session-boundary-hardening-design.md §4.4 已补注。
+
 ## 核查后确认无问题的面(节选)
 - 异步资源管理严谨:attempt 的 SSE AbortController/finally 收段兜底、watch 探针定时器在生成器 finally 清理、step/waitBetween 的 readline 配对关闭。
 - git 调用全程 spawn 数组无注入面;pathspec 子树限定与嵌套仓库深度排序处理周到。

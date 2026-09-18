@@ -73,6 +73,34 @@ describe("在途失联探针(S4/D3)", () => {
     expect(gets).toBe(atSettle)
   })
 
+  test("H7: POST 悬挂在半开连接上时,探针判定即联动中止 POST 并按会话错误收口(不等 TURN_TIMEOUT)", async () => {
+    const { client, calls } = fakeClient({
+      get: () => {
+        return { error: { name: "UnknownError", data: {} } }
+      },
+      // H7 现场: 同步 POST 与 SSE 同挂半开连接,两侧都永不兑现。
+      prompt: () => new Promise(() => {}),
+      events: () =>
+        (async function* () {
+          await new Promise(() => {})
+        })(),
+    })
+    // 若仍押在 POST 上等 TURN_TIMEOUT,本用例会挂到测试超时;能在探针尺度
+    // (~2×idleMs)返回即证明联动生效。
+    const result = await attempt(client, task, "提示词", { idleMs: 20 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
+    expect(result.type).toBe("blocked")
+    const blocked = result as { question: string; retryable?: boolean; errorClass?: string }
+    // 按 watch 的半开会话错误收口,不得报成"下发任务失败"(abort 回声)。
+    expect(blocked.question).toContain("会话错误:")
+    expect(blocked.question).toContain("连接半开")
+    expect(blocked.question).not.toContain("下发任务失败")
+    expect(blocked.retryable).not.toBe(false)
+    expect(blocked.errorClass).toBe("transient")
+    // POST 携带中止信号,且随半开判定被 abort(真实链路即取消底层 fetch)。
+    expect(calls.promptSignals[0]?.aborted).toBe(true)
+    expect(calls.aborts).toContain("ses_new_1")
+  })
+
   test("probeSession 探测体: 超时无响应与请求异常同按未通计,正常响应为通", async () => {
     const hanging = { session: { get: () => new Promise(() => {}) } } as unknown as OpencodeClient
     expect(await probeSession(hanging, "ses_x", 20)).toBe(false)

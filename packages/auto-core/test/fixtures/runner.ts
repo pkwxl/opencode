@@ -42,6 +42,8 @@ export function fakeClient(
     updates: [] as { id: string; title: string }[],
     // 记录每次 prompt 下发参数,供模型路由断言(model 缺省时该属性不存在)。
     prompts: [] as { sessionID: string; agent?: string; model?: { providerID: string; modelID: string }; parts: unknown[] }[],
+    // 每次 prompt 的 options.signal(H7: 探针判半开联动中止 POST 的断言点)。
+    promptSignals: [] as (AbortSignal | undefined)[],
     // 记录 session.abort 调用的会话 id,供提前结算/断流清理断言(D.2 降级前必 abort)。
     aborts: [] as string[],
     // 提问答复/驳回(auto-resolve T-005): replies 记每次答复文案,rejects 记驳回的
@@ -76,8 +78,10 @@ export function fakeClient(
       },
       prompt: async (
         params: { sessionID: string; agent?: string; model?: { providerID: string; modelID: string }; parts: unknown[] },
+        options?: { signal?: AbortSignal },
       ) => {
         calls.prompts.push(params)
+        calls.promptSignals.push(options?.signal)
         return over.prompt ? over.prompt() : {}
       },
       promptAsync: async () => ({}),

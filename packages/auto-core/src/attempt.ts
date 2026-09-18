@@ -167,6 +167,10 @@ export async function attempt(
   // 持续积压,占满客户端并发池(Bun 缺省 256 条)后,后续所有请求在池内无限排队
   // 且无超时报错,表现为无声卡死。
   const sse = new AbortController()
+  // 同步 POST 的中止信号(H7): watch 判半开/断流等错误先于悬挂的 POST 返回时
+  // 联动 abort——POST 立即作废不再悬挂到 TURN_TIMEOUT(2h),重试阶梯在探针判定
+  // 时刻(~2×idleTime)即启动。
+  const post = new AbortController()
   // 统计收段幂等守卫(STATS_PLAN §2,T-003): 正常路径在 await watching 后收段;
   // 下发失败/异常等未走到正常收段的路径由 finally 兜底——AI 段不悬挂。
   let booked = false
@@ -175,12 +179,17 @@ export async function attempt(
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await client.event.subscribe(undefined, { signal: sse.signal })
-    // 失联探针判半开等错误收场(session-boundary-hardening §4.4)可能先于悬挂的
-    // POST 返回——同一死连接上的 POST 由 TURN_TIMEOUT(2h)最终兜底,watch 侧
-    // trip 后不再等它:带错误先回即提前断流,释放 SSE reader 与连接配额(对已
-    // 中止的订阅重复 abort 无害;正常结束路径此处无 effect)。
+    // 失联探针判半开等错误收场(session-boundary-hardening §4.4)先于悬挂的 POST
+    // 返回时: 提前断流释放 SSE reader 与连接配额,并联动中止 POST(下方竞速不再
+    // 等它,直接按本结果的会话错误收口)。对已中止的订阅重复 abort 无害;正常
+    // 结束路径此处无 effect。
+    let watchFailed = false
     const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck, switches).then((w) => {
-      if (w.error) sse.abort()
+      if (w.error) {
+        watchFailed = true
+        sse.abort()
+        post.abort()
+      }
       return w
     })
 
@@ -213,13 +222,27 @@ export async function attempt(
     // (伪任务 PLAN/AUTO,恢复点先例见 resume.ts)同此照记——statsTask 未设当前任务
     // 时 usage/sessions 仍入 phase+round 桶。
     await statsSessionBegin(opts.dir, task.id)
-    const prompt = await client.session.prompt({
-      sessionID,
-      agent: opts.agent,
-      ...(target ? { model: splitModel(target) } : {}),
-      parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
-    })
-    if (prompt.error) {
+    // 下发与事件流竞速(H7): 同步 POST 挂在半开连接上永不返回时,watch 的探针
+    // 判定先回——watch 带错误先回即由哨兵 null 接管(POST 已被上方 post.abort()
+    // 作废),不再等 POST 直接进下方 watching 的会话错误收口;watch 无错误则
+    // 透传 POST 自身结果。竞速落败后 prompting 的迟到结果无人消费,挂 catch
+    // 防未处理拒绝。
+    const prompting = client.session.prompt(
+      {
+        sessionID,
+        agent: opts.agent,
+        ...(target ? { model: splitModel(target) } : {}),
+        parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
+      },
+      { signal: post.signal },
+    )
+    prompting.catch(() => {})
+    const prompt = await Promise.race([prompting, watching.then((w) => (w.error ? null : prompting))])
+    // POST 因 watch 判错被联动中止时,其 error 只是 abort 回声,真实错误在
+    // watching 里——跳过下发失败分支与认领,由下方会话错误收口处置(可重试
+    // 分支会把进度记录还原为下发前快照)。
+    const dispatchEcho = watchFailed
+    if (prompt !== null && prompt.error && !dispatchEcho) {
       // 下发即失败: 刚认领的 nextSession 是什么都没收到的空会话,不配作恢复锚点
       // ——还原为认领前的记录(与下方 0-token 报错桩还原同一口径)。
       if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
@@ -229,7 +252,7 @@ export async function attempt(
     // 下发成功即认领在跑的会话: 此刻进程被 kill/Ctrl+C,progress.json 指向本会话,
     // 下次运行复用之(精确恢复的核心——回合进行中的会话不丢)。回合结束后再按
     // 结果刷新或还原(见下方可重试错误分支)。
-    await remember()
+    if (prompt !== null && !dispatchEcho) await remember()
 
     const result = await watching
     // 并发态(OPENCODE_AUTO_HANDOVER_CONCURRENT=on)交接期测试的统一收口: watch
@@ -351,8 +374,10 @@ export async function attempt(
     // 时 thisAiMs=0、usage 零值照记(stats.ts 既有语义,消耗真实发生不虚构)。
     if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage())
     // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
-    // 释放(对已结束的订阅重复中止无害)。
+    // 释放(对已结束的订阅重复中止无害);POST 信号兜底——异常退出等路径上仍在
+    // 途的下发一并作废。
     sse.abort()
+    post.abort()
     vlog(`▪ 已断开会话 ${sessionID} 的事件流订阅`)
   }
 }
