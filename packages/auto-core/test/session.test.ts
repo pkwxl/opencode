@@ -43,6 +43,30 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
     expect(chain.id).toBe("ses_new_1")
   })
 
+  test("◈ 模型播报: 复用同会话同模型不重复,新会话(复用关)每次播报", async () => {
+    resetServerModelCache()
+    const lines: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
+    try {
+      const fake = fakeClient({ current: "ses_new_1" })
+      // 未设路由: 经 config.get 回落播报服务端生效模型(同 test「未设路由」组)。
+      ;(fake.client as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
+      const chain = reusable()
+      await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, REUSE_ON)
+      // fake 事件流收段后 pct=100(上限未知);复位回复用阈值内,第二个提示词才真复用。
+      Object.assign(chain, { pct: 10, used: 100, at: Date.now() })
+      await runSession(fake.client, task, "提示词2", {}, chain, undefined, undefined, REUSE_ON)
+      await runSession(fake.client, task, "提示词3", {}, chain, undefined, undefined, REUSE_OFF)
+    } finally {
+      console.log = orig
+      resetServerModelCache()
+    }
+    const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
+    // 两次复用同一会话只播报一次;复用关后新开会话再播报一次(同模型)。
+    expect(shown.length).toBe(2)
+  })
+
   test("中断恢复接管(链上有会话且 note 待注入): 开关 off、阈值全不满足也进原会话;说明用后即清", async () => {
     const { client, calls } = fakeClient({ current: "ses_interrupted" })
     const chain: SessionChain = {
@@ -829,7 +853,7 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "y" })
   })
 
-  test("实际使用模型播报: ◈ 行含模型与来源,同链同模型不重复,降级切换后再播报", async () => {
+  test("实际使用模型播报: ◈ 行含模型与来源,新会话即播报(同模型亦然),同会话不重复", async () => {
     const lines: string[] = []
     const orig = console.log
     console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
@@ -843,15 +867,17 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
     // 首选 prov/a(路由)一次 + 降级 prov/b(降级候选)一次;第二次 runSession 模型
-    // 未变(prov/b 粘滞)不重复播报。
-    expect(shown.length).toBe(2)
+    // 未变(prov/b 粘滞)但复用关、新开会话——新会话恒播报,同模型也再来一行。
+    expect(shown.length).toBe(3)
     expect(shown[0]).toContain("prov/a")
     expect(shown[0]).toContain("路由")
     expect(shown[1]).toContain("prov/b")
     expect(shown[1]).toContain("降级候选")
+    expect(shown[2]).toContain("prov/b")
+    expect(shown[2]).toContain("降级候选")
   })
 
-  test("未设路由: 回落播报服务端生效模型(config.model),prompt 仍不带 model 键,同模型不重复", async () => {
+  test("未设路由: 回落播报服务端生效模型(config.model),prompt 仍不带 model 键,新会话再播报", async () => {
     resetServerModelCache()
     const lines: string[] = []
     const orig = console.log
@@ -871,9 +897,11 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
       resetServerModelCache()
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
-    expect(shown.length).toBe(1)
+    // 两次 runSession 各开新会话(复用关),同模型也逐会话播报。
+    expect(shown.length).toBe(2)
     expect(shown[0]).toContain("prov/default")
     expect(shown[0]).toContain("服务端缺省")
+    expect(shown[1]).toContain("prov/default")
     // 不变量 F: 播报归播报,下发依旧不带 model 键。
     expect(calls!.prompts.every((p) => p.model === undefined)).toBe(true)
   })

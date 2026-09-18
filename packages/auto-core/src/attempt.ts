@@ -203,13 +203,13 @@ export async function attempt(
     const override = failbackOverride()
     const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
     promptModel = target
-    // 实际使用模型上终端(前端可见): 新建/分叉会话或模型较上次 prompt 有变化时
-    // 播报一行(来源标注),同会话同模型的续跑 prompt 不重复。target 未定义(未设
-    // 路由)时回落服务端生效模型(agent 配置 > 全局 config.model > provider 缺省,
-    // 见 session-api.serverDefaultModel),仍取不到则静默;无论何种来源,prompt 是否
-    // 带 model 键的决定不变(不变量 F 不破)。
+    // 实际使用模型上终端(前端可见): 每个新会话(新建/分叉,即 !reuse)都播报一行
+    // (来源标注),模型较上次 prompt 有变化时亦播报;同会话同模型的续跑 prompt
+    // (复用/恢复接管)不重复。target 未定义(未设路由)时回落服务端生效模型
+    // (agent 配置 > 全局 config.model > provider 缺省,见 session-api.serverDefaultModel),
+    // 仍取不到则静默;无论何种来源,prompt 是否带 model 键的决定不变(不变量 F 不破)。
     const shown = target ?? (await serverDefaultModel(client, opts.agent))
-    if (shown !== undefined && shown !== chain.modelShown) {
+    if (shown !== undefined && (shown !== chain.modelShown || !reuse)) {
       const from =
         target === undefined
           ? "服务端缺省"

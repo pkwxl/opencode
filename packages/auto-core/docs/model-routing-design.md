@@ -262,7 +262,7 @@ RANK 思路,所取值及更粗的边界都重置;实现见 `src/failback.ts`):
   switchModel 的候选环与触发门禁同理取 `override.fallback ?? switches.model.fallback`——
   **不原地改 switches memo**(恒定约定不破)。覆写持续生效至进程结束或下一次带参 /failback。
 
-### D.8 实际使用模型上终端(2026-09-13 实施;2026-09-18 修订补服务端缺省回落)
+### D.8 实际使用模型上终端(2026-09-13 实施;2026-09-18 修订补服务端缺省回落与新会话恒播报)
 
 attempt 求值出 target 后播报 `◈ <任务> 使用模型 <prov/model>(<来源>)`,来源 ∈
 `路由` / `降级候选` / `降级候选·阶段内粘滞` / `/failback 指定`;经 `chain.modelShown`
@@ -272,7 +272,11 @@ attempt 求值出 target 后播报 `◈ <任务> 使用模型 <prov/model>(<来�
 agent 配置级 model(/agent)> 全局 config.model(/config)> 首个已连接 provider 的缺省
 模型(/provider 的 default 表;服务端的最近使用记录 model.json 不经 API 暴露,略过),
 实现为 session-api 的 `serverDefaultModel`(进程内按 agent 缓存,全取不到静默)。仅
-展示用途: prompt 是否带 model 键的决定不变,不变量 F 不破。
+展示用途: prompt 是否带 model 键的决定不变,不变量 F 不破。**2026-09-18 修订二**:
+新建会话恒播报落到实处——此前实现只按 `chain.modelShown` 对模型串去重,新会话
+(新建/分叉)沿用旧模型时不播报(本节「新建会话……再次播报」的既定语义未落地);
+现播报条件为「新会话(!reuse)或模型较上次有变化」,同会话同模型的续跑 prompt
+(复用/恢复接管)仍不重复。
 
 ## E. 决策记录(已确认)
 

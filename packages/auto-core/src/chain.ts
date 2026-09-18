@@ -78,7 +78,8 @@ export type SessionResult =
 // attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
 // 瞬时错误重试自然回落 create 路径。
 // modelShown 为终端展示的已播报模型(每次 prompt 求值出的 target——未设路由时回落
-// 服务端生效模型——与之比对,去重「◈ 使用模型」日志;仅内存态,不落盘)。
+// 服务端生效模型——与之比对,模型变化时再播报「◈ 使用模型」;新会话(新建/分叉)
+// 恒播报,同会话同模型的续跑 prompt 不重复;仅内存态,不落盘)。
 // baseline 为当前执行单元的 SHA 基线(严格恢复,session-recovery-fidelity-design.md
 // 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
 // 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
