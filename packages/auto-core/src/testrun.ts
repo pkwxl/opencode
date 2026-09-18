@@ -5,7 +5,7 @@
 // 环消解的落点:watch → testrun 单向,交接时序状态机另在 exec-session。
 // 拆分自 src/runner.ts(docs/module-split-plan.md S6,纯搬运)。
 
-import { mkdir, readdir, rename, rm } from "node:fs/promises"
+import { chmod, mkdir, readdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { archivedTestHandoff, latestHandoffSeq, legacyTaskDoc, taskDoc } from "./docpaths"
 import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
@@ -234,8 +234,10 @@ export async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInf
 // 请求标记的消费(定出本次要跑的脚本,占一个归档序号): tmp/test.sh 存在即请求,
 // 读完就删以便再次请求。内容有两种形态——
 // (1) 指向 test/ 下脚本的路径(相对工作目录,如 test/build.sh):直接运行该脚本
-// (脚本本身在 test/ 已进 git,无需另行归档);判据是**整份内容不含换行**,故带
-// 尾随换行的路径会落到形态 (2),结果等价(内联的一行路径由 bash 当命令执行);
+// (脚本本身在 test/ 已进 git,无需另行归档);判据是 **trim 后不含换行的单行**——
+// printf/echo 落盘常带尾随换行,不应因此掉进内联回落: 内联快照由 bash 把该路径
+// 当命令执行,脚本缺 +x 即退出码 126,AI 白白排查。路径形态顺带 best-effort
+// 补 +x——AI 忘 chmod 是常态,driver 自己加上,无需会话调试;
 // (2) 内联脚本(AI 未按协议固化到 test/ 时的回落):把内容整写为 tmp/test.<n>.sh,
 // 保留执行快照供审计。
 // 顺序态在定版那一刻先行调用——标记必须在会话继续收尾之前拿走(否则收尾期重写
@@ -244,10 +246,14 @@ export async function resolveTestScript(test: Pick<TestRun, "dir" | "tmp" | "seq
   const seq = ++test.seq
   const marker = join(test.tmp, "test.sh")
   const content = await Bun.file(marker).text()
-  const candidate = resolve(test.dir, content.trim())
+  const line = content.trim()
+  const candidate = resolve(test.dir, line)
   let script: string
-  // 单行内容且指向现存文件 → 运行该 test/ 脚本(协议首选);否则按内联脚本回落。
-  if (!content.includes("\n") && (await Bun.file(candidate).exists())) {
+  // trim 后单行且指向现存文件 → 运行该 test/ 脚本(协议首选);否则按内联脚本回落。
+  if (!line.includes("\n") && (await Bun.file(candidate).exists())) {
+    // best-effort 补执行位: 脚本缺 +x 时直接 exec 会 EACCES;失败(只读文件系统等)
+    // 静默——runVerifyScript 对不可执行脚本还有 exec bash 回落。
+    await chmod(candidate, 0o755).catch(() => {})
     script = candidate
   } else {
     script = join(test.tmp, `test.${seq}.sh`)

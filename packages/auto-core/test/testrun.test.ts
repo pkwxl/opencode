@@ -3,7 +3,7 @@
 // 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { changedFiles, commitTree } from "../src/git"
@@ -101,16 +101,27 @@ describe("resolveTestScript(消费 tmp/test.sh 请求标记)", () => {
     expect(await Bun.file(join(tmp, "test.1.sh")).exists()).toBe(false)
   })
 
-  // 现状固定(非本次改动引入): 判据是"整份内容不含换行",所以标记文件带尾随换行
-  // 时——AI 写文件的常态——走的是内联回落,tmp/test.<n>.sh 里是一行路径,由 bash
-  // 当命令执行。结果等价、脚本照跑,但 test/ 路径形态实际很少命中。
-  test("路径后带尾随换行: 现状走内联回落(整份内容含换行即判为内联)", async () => {
+  // 判据是"trim 后单行": printf/echo 落盘常带尾随换行——AI 写文件的常态——
+  // 不应因此掉进内联回落(内联快照由 bash 把该路径当命令执行,脚本缺 +x 即 126)。
+  test("路径后带尾随换行: 按 trim 后单行判定,仍走 test/ 路径形态", async () => {
     await mkdir(join(dir, "test"), { recursive: true })
     await writeFile(join(dir, "test", "build.sh"), "echo hi")
     await writeFile(join(tmp, "test.sh"), "test/build.sh\n")
     const pending = await resolveTestScript({ dir, tmp, seq: 0 })
-    expect(pending.script).toBe(join(tmp, "test.1.sh"))
-    expect(await Bun.file(pending.script).text()).toBe("test/build.sh\n")
+    expect(pending).toEqual({ script: join(dir, "test", "build.sh"), seq: 1 })
+    expect(await Bun.file(join(tmp, "test.1.sh")).exists()).toBe(false)
+  })
+
+  // AI 写脚本常忘 chmod +x: 路径形态由 driver best-effort 补上,会话无需为此排查。
+  test("test/ 路径形态: 脚本缺执行位时 driver 补 chmod +x", async () => {
+    await mkdir(join(dir, "test"), { recursive: true })
+    const target = join(dir, "test", "build.sh")
+    await writeFile(target, "echo hi", { mode: 0o644 })
+    await writeFile(join(tmp, "test.sh"), "test/build.sh")
+    const pending = await resolveTestScript({ dir, tmp, seq: 0 })
+    expect(pending.script).toBe(target)
+    const mode = (await stat(target)).mode & 0o777
+    expect(mode & 0o111).not.toBe(0)
   })
 
   test("内联形态回落: 整写为 tmp/test.<n>.sh 保留执行快照", async () => {
