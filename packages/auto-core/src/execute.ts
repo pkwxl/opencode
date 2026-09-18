@@ -20,7 +20,7 @@ import { declaredArtifacts, load, setForkBase, setSubtasks, subtasks, tick, type
 import { handoffFile, renderDecompose, renderSubtask, renderUnderstand, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
-import { formatTokens, seedForkSession } from "./session-api"
+import { formatTokens, forkEndedSession, seedForkSession } from "./session-api"
 import { autoSwitches } from "./switches"
 import { handoffSteer, handoverDue, removeHandoffChain } from "./testrun"
 import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
@@ -192,13 +192,18 @@ export async function ensureUnderstood(
   const subject = `${task.id} understand ${task.title}`
   chain.subject = subject
   let feedback = ""
+  // 形检/缺失重提示经 fork 刚结束的会话下发时(2026-09-18 修订),下一回合只带
+  // 反馈本身——副本已含完整提示词与全部工作上下文,重发整份只会诱导从头重做。
+  let shapeForked = false
   for (let i = 0; ; i++) {
     // taskContext(OPENCODE_AUTO_TASK_CONTEXT)透传理解提示词: 放宽 context.md
     // 的建议行数措辞(与 fine 透传分解提示词同一接线方式)。
+    const brief = shapeForked
+    shapeForked = false
     const result = await runSession(
       client,
       task,
-      renderUnderstand(plan, task, { ...opts, taskContext: autoSwitches().taskContext }) + feedback,
+      brief ? feedback.trimStart() : renderUnderstand(plan, task, { ...opts, taskContext: autoSwitches().taskContext }) + feedback,
       opts,
       chain,
     )
@@ -225,12 +230,15 @@ export async function ensureUnderstood(
           `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
       }
     }
-    log(`↻ ${task.id} 理解会话产出的 ${file} ${why},带反馈重试一次`)
     feedback = content
       ? `\n\n你上次结束会话但 ${file} 未过形检: ${problems.join("; ")}。这是硬性要求:` +
         `把理解结果按四节结构补全,并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
       : `\n\n你上次结束会话但未写出有效的 ${file}(缺失或为空)。这是硬性要求:` +
         `把理解结果按四节结构写入该文件后再结束会话(即使任务看起来很简单)。`
+    // 重提示基于刚结束的会话 fork 续做(带全部调研上下文);fork 不可用回退
+    // 全新会话 + 完整提示词。
+    shapeForked = await forkEndedSession(client, chain, subject)
+    log(`↻ ${task.id} 理解会话产出的 ${file} ${why},${shapeForked ? "已从原会话分叉、" : ""}带反馈重试一次`)
   }
 }
 
@@ -270,10 +278,21 @@ export async function ensureDecomposed(
   // ② 分解会话从基点分叉(先 fork 后渲染,设计 §4.3);无基点/失败 → 现状全新
   // 会话。种子链使分解会话不复用理解会话(基点保持纯净分叉点)。
   await seedForkSession(client, opts, chain, base, subject)
+  // 形检/缺失重提示经 fork 刚结束的会话下发时,下一回合只带反馈本身(同
+  // ensureUnderstood)。
+  let shapeForked = false
   for (let i = 0; ; i++) {
     // fine(OPENCODE_AUTO_DECOMPOSE_FINE=on)透传分解提示词: 注入细粒度准则段
     // (fork-decompose-design.md §5.1)。
-    const result = await runSession(client, task, renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine }) + feedback, opts, chain)
+    const brief = shapeForked
+    shapeForked = false
+    const result = await runSession(
+      client,
+      task,
+      brief ? feedback.trimStart() : renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine }) + feedback,
+      opts,
+      chain,
+    )
     if (result.type === "blocked") return result
     const raw = await readRaw()
     const items = subtasks(raw).map((item) => item.text)
@@ -299,12 +318,15 @@ export async function ensureDecomposed(
           `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
       }
     }
-    log(`↻ ${task.id} 分解会话产出的 ${file} ${why},带反馈重试一次`)
     feedback = items.length
       ? `\n\n你上次结束会话但 ${file} 未过形检: ${problems.join("; ")}。这是硬性要求:` +
         `补全内容并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
       : `\n\n你上次结束会话但未写出有效的 ${file}(缺失或无检查项)。这是硬性要求:` +
         `即使任务已完成或极简单,也必须写出该文件(原子任务写单个检查项即可)。`
+    // 重提示基于刚结束的会话 fork 续做(带全部调研上下文);fork 不可用回退
+    // 全新会话 + 完整提示词。
+    shapeForked = await forkEndedSession(client, chain, subject)
+    log(`↻ ${task.id} 分解会话产出的 ${file} ${why},${shapeForked ? "已从原会话分叉、" : ""}带反馈重试一次`)
   }
 }
 
@@ -375,6 +397,9 @@ export async function runSubtask(
     // 产物形检的重提示次数(D2): 与交接文档反馈的 retried 各自计数——两条环路
     // 各限一次,互不挤占对方的重试额度。
     let shapeRetried = false
+    // 形检重提示经 fork 刚结束的会话下发时(2026-09-18 修订),下一回合只带反馈
+    // 本身——副本已含完整提示词与全部工作上下文,重发整份只会诱导从头重做。
+    let shapeForked = false
     // 严格恢复的回滚重做(3.3 R3 收紧): 交接文档无效(含测试交接写核失败)一次即
     // 回滚到子任务基线、冷启动重做,不再带反馈重试;以一次为限,再失败按隐性阻塞
     // 上抛(现场已保全在 stash)。
@@ -401,11 +426,13 @@ export async function runSubtask(
       return "done"
     }
     for (;;) {
+      const brief = shapeForked
+      shapeForked = false
       const result = await runExecSession(
         client,
         plan,
         task,
-        renderSubtask(plan, task, text, { ...opts, continuation, index, warm }) + feedback,
+        brief ? feedback.trimStart() : renderSubtask(plan, task, text, { ...opts, continuation, index, warm }) + feedback,
         opts,
         chain,
         steer,
@@ -443,9 +470,13 @@ export async function runSubtask(
                   `请检查产出后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
               }
             }
-            log(`↻ ${task.id} 子任务 ${index} 自然结束但产物形检未过,带反馈重提示一次`)
             shapeRetried = true
             feedback = shapeFeedback(task, index, problems)
+            // 重提示基于刚结束的会话 fork 续做(2026-09-18 修订): 副本带着本会话的
+            // 全部工作上下文,下一回合只下发反馈本身;fork 不可用(会话已失效)回退
+            // 全新会话 + 完整提示词 + 反馈。
+            shapeForked = await forkEndedSession(client, chain, subject)
+            log(`↻ ${task.id} 子任务 ${index} 自然结束但产物形检未过,${shapeForked ? "已从原会话分叉、" : ""}带反馈重提示一次`)
             continue
           }
         }

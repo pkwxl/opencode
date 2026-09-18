@@ -30,6 +30,14 @@ import { executeTest, resolveTestScript, testHandoverDue, type Steer, type TestR
 const PROBE_INTERVAL_MS = 10 * 60_000
 const PROBE_MAX_FAILURES = 2
 
+// 输出截断续跑(2026-09-18,kernel-spi-nor T-030 S13 现场): 末步 step-finish 以
+// length 收场 = 模型回复被输出上限截断(推理流中段切断),服务端照常 idle——这不是
+// 自然结束,会话工作显然未完。此时 steer 一句「从截断处继续」让原会话接着做(上下文
+// 一分不丢),而不是按自然结束收口去走形检/勾选、再开空白会话重读全场。连续截断以
+// 3 次为限(防单条消息过长的退化形态空转),超限仍按自然结束收口,由既有产物形检环
+// 兜住;出现非 length 的步骤收场(续跑后恢复正常工作)即重置计数。
+const LENGTH_CONTINUE_MAX = 3
+
 export async function watch(
   client: OpencodeClient,
   sessionID: string,
@@ -206,6 +214,11 @@ export async function watch(
   }
   // 已记录的 part 与 message,避免同一 part 的多次更新事件重复输出。
   const seen = new Set<string>()
+  // 本会话最近一个 step-finish 的收场原因(截断续跑判据,见 LENGTH_CONTINUE_MAX):
+  // "length" = 回复被输出上限截断。已观测到 session.error 时禁用续跑——错误路径
+  // (可重试阶梯/降级环)优先,不与截断续跑争抢会话。
+  let lastFinish: string | undefined
+  let lengthContinued = 0
   // 模型上下文上限(providerID/modelID → limit.context),首次需要时拉取。
   let limits: Map<string, number> | undefined
   // 在途失联探针(D3/§4.4): watching 期间每 idleTime 经独立短超时连接 GET 会话
@@ -271,6 +284,12 @@ export async function watch(
       if (part.sessionID !== sessionID) continue
       idleHandled = false
       // step-finish 增量累加(T-003,唯一不重不漏口径): 同 part 重发不重计。
+      if (part.type === "step-finish") {
+        // 截断续跑判据(与计费去重无关,重发事件覆写同值无害): 非 length 收场
+        // (续跑后恢复正常工作)重置连续截断计数。
+        lastFinish = part.reason
+        if (part.reason !== "length") lengthContinued = 0
+      }
       if (part.type === "step-finish" && !billedSteps.has(part.id)) {
         billedSteps.add(part.id)
         usage.input += part.tokens.input
@@ -555,6 +574,22 @@ export async function watch(
               testHandoverInvalid: true,
             })
           }
+      }
+      // 输出截断续跑(LENGTH_CONTINUE_MAX): 末步 length 收场且未观测到会话错误时,
+      // 会话工作未完——steer 一句「从截断处继续」让原会话接着做,不按自然结束收口。
+      // 孪生 idle 去重(idleHandled)与 steer 回合的衔接同交接/测试 steer 路径。
+      if (lastFinish === "length" && !error && lengthContinued < LENGTH_CONTINUE_MAX) {
+        lengthContinued++
+        // 续跑回合自身的 step-finish 会刷新 lastFinish;steer 后先清掉,防新回合
+        // 无 step-finish 的边角形态对着陈旧判据重复续跑(上限兜底,最多空转到 MAX)。
+        lastFinish = undefined
+        log(`⚠ 会话回复因输出长度上限被截断(步骤结束 length),提示其从截断处继续(第 ${lengthContinued}/${LENGTH_CONTINUE_MAX} 次)`)
+        const ok = await steerText(
+          "[driver] 你的上一轮回复因输出长度上限被截断,请从截断处继续未完成的工作" +
+            "(不要重做已完成的部分;单次输出较长时请拆成多步/多次工具调用,避免再次触限)。",
+        )
+        if (!ok) return snapshot({ blocked: { type: "blocked", question: "steer 投递失败(截断续跑提示),无法继续会话,详见日志。" } })
+        continue
       }
       settled = true
       break

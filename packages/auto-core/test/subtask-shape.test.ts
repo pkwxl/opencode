@@ -280,6 +280,70 @@ describe("runSubtask 产物形检(D2/D4)", () => {
   })
 })
 
+// 形检重提示 fork 原会话(2026-09-18 修订,kernel-spi-nor T-030 S13 现场): 重提示
+// 基于刚结束的会话 fork 副本下发,只带形检反馈本身(副本已含完整提示词与全部工作
+// 上下文);fork 不可用回退全新会话 + 完整提示词 + 反馈。
+describe("runSubtask 形检重提示 fork 续做", () => {
+  test("fork 成功: 重提示只带形检反馈(不重发整份子任务提示词),补正后勾选", async () => {
+    const dir = await shapeRepo()
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n${filler}\n`)
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+        },
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toBeUndefined()
+      // 重提示会话 = 原会话的 fork 副本,且只带反馈(不含子任务正文/整份提示词)。
+      expect(calls.forks).toEqual(["ses_new_1"])
+      expect(calls.prompts.length).toBe(2)
+      expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
+      const feedback = promptText(calls.prompts[1]!)
+      expect(feedback).toContain("产物形检未过")
+      expect(feedback).toContain("末行终止符缺失")
+      expect(feedback).not.toContain("调研并落盘记录")
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("fork 失败: 回退全新会话 + 完整提示词 + 反馈(与修订前行为一致)", async () => {
+    const dir = await shapeRepo()
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n${filler}\n`)
+        },
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+        },
+      ])
+      // fork 路由不可用(旧版 server / 会话已失效)→ forkSession 回退 undefined。
+      const stubbed = {
+        ...client,
+        session: { ...client.session, fork: async () => ({ error: { message: "no fork" } }) },
+      } as unknown as Parameters<typeof runSubtask>[0]
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(stubbed, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(2)
+      // 全新会话重发完整提示词(含子任务正文)+ 反馈。
+      expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
+      const feedback = promptText(calls.prompts[1]!)
+      expect(feedback).toContain("调研并落盘记录")
+      expect(feedback).toContain("产物形检未过")
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("runSubtask 全量文档终止符扫描(D6)", () => {
   test("未声明的顺带文档截断(新建、缺终止符): 拦截,补正后勾选", async () => {
     const dir = await shapeRepo()

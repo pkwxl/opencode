@@ -83,10 +83,14 @@ describe("ensureUnderstood 理解摘要形检(D5)", () => {
       const result = await ensureUnderstood(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
+      // 重提示基于刚结束的理解会话 fork 下发,只带反馈本身(2026-09-18 修订)。
+      expect(calls.forks).toEqual(["ses_new_1"])
+      expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("未过形检")
       expect(feedback).toContain("末行终止符缺失")
       expect(feedback).toContain(EOF_MARK)
+      expect(feedback).not.toContain("相关文件与关键符号") // 不重发整份理解提示词
       const message = await git(dir, "log", "-1", "--format=%B")
       expect(message).toContain("Auto-Stage: understand")
     } finally {
@@ -213,6 +217,9 @@ describe("runWrapup 收尾报告门禁(D5,runner 主收尾与 review 修复轮�
       const result = await runWrapup(client, plan, plan.tasks[0]!, wrapOpts(dir), makeChain(), { solo: false, label: "收尾会话" })
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
+      // 重提示基于刚结束的收尾会话 fork 下发(2026-09-18 修订)。
+      expect(calls.forks).toEqual(["ses_new_1"])
+      expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("末行终止符缺失")
       expect(feedback).toContain(EOF_MARK)

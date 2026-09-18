@@ -52,6 +52,8 @@ export function fakeClient(
     rejects: [] as string[],
     // 每次 fork 传入的分叉锚点(undefined = 整份分叉),供定版点分叉断言。
     forkAnchors: [] as (string | undefined)[],
+    // 每次 promptAsync(steer)下发的文本,供截断续跑/交接 steer 断言。
+    steers: [] as string[],
   }
   let seq = 0
   let lastCreated = over.current ?? "ses_new_0"
@@ -84,7 +86,10 @@ export function fakeClient(
         calls.promptSignals.push(options?.signal)
         return over.prompt ? over.prompt() : {}
       },
-      promptAsync: async () => ({}),
+      promptAsync: async (params: { sessionID: string; parts: unknown[] }) => {
+        calls.steers.push(String((params.parts[0] as { text?: string } | undefined)?.text ?? ""))
+        return {}
+      },
       abort: async (params?: { sessionID: string }) => {
         if (params?.sessionID) calls.aborts.push(params.sessionID)
         return {}

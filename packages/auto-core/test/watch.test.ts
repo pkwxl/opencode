@@ -656,7 +656,109 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
   })
 })
 
-// ---- 测试交接: 定版后进程内重试不丢交接(watch 定版 steer 播种 resumeWrapup)----
+// ---- 输出截断续跑(2026-09-18,kernel-spi-nor T-030 S13 现场): 末步 step-finish
+// 以 length 收场 = 回复被输出上限截断,不作自然结束——steer「从截断处继续」让原会话
+// 接着做;连续截断以 LENGTH_CONTINUE_MAX(3)为限,非 length 收场重置计数;观测到
+// session.error 则不续跑(错误路径优先)。----
+
+describe("输出截断续跑(步骤结束 length 不作自然结束)", () => {
+  const stepFinish = (sid: string, id: string, reason: string) => ({
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id,
+        sessionID: sid,
+        messageID: "msg_1",
+        type: "step-finish",
+        reason,
+        cost: 0,
+        tokens: { input: 100, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 1 },
+      },
+    },
+  })
+  const idle = (sid: string) => ({ type: "session.idle", properties: { sessionID: sid } })
+
+  test("length 截断: steer 续跑一句(原会话接着做),下一回合 stop 正常结束", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield stepFinish(sid, "pt_1", "length")
+          yield idle(sid)
+          // 续跑回合: 正常工作并以 stop 收场。
+          yield stepFinish(sid, "pt_2", "stop")
+          yield idle(sid)
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    // 续跑经 steer(promptAsync)进原会话: 不新建会话、不重发提示词。
+    expect(calls.steers.length).toBe(1)
+    expect(calls.steers[0]).toContain("截断")
+    expect(calls.steers[0]).toContain("继续")
+    expect(calls.creates).toBe(1)
+    expect(calls.prompts.length).toBe(1)
+  })
+
+  test("连续截断超过 3 次: 不再续跑,按自然结束收口(交形检环处置)", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          for (let i = 0; i < 4; i++) {
+            yield stepFinish(sid, `pt_${i}`, "length")
+            yield idle(sid)
+          }
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.steers.length).toBe(3)
+  })
+
+  test("非 length 的步骤收场(续跑后恢复正常工作)重置连续截断计数", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield stepFinish(sid, "pt_1", "length")
+          yield idle(sid)
+          // 续跑后恢复了正常工作(工具步)……
+          yield stepFinish(sid, "pt_2", "tool-calls")
+          // ……而后又一次截断: 计数已重置,仍续跑。
+          yield stepFinish(sid, "pt_3", "length")
+          yield idle(sid)
+          yield stepFinish(sid, "pt_4", "stop")
+          yield idle(sid)
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    const result = await runSession(client, task, "提示词", {}, chain)
+    expect(result.type).toBe("idle")
+    expect(calls.steers.length).toBe(2)
+  })
+
+  test("已观测到 session.error: 截断不续跑,错误路径(重试阶梯)优先", async () => {
+    const { client, calls } = fakeClient({
+      events: (sid) =>
+        (async function* () {
+          yield stepFinish(sid, "pt_1", "length")
+          yield {
+            type: "session.error",
+            properties: { sessionID: sid, error: { name: "APIError", data: { message: "Internal Server Error", isRetryable: true, statusCode: 500 } } },
+          }
+          yield idle(sid)
+        })(),
+    })
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+    // 直驱 attempt 取单次结果(runSession 会把故障带进重试环)。
+    const result = await attempt(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
+    expect(result.type).toBe("blocked")
+    expect((result as { question: string }).question).toContain("会话错误:")
+    expect(calls.steers).toEqual([])
+  })
+})
+
 // testHandoverAsked 是 watch 实例状态;收尾途中会话出错被 runSession 重试环 fork
 // 续跑时新 attempt 建新 watch 实例——没有 resumeWrapup 播种,新实例会把收尾完成
 // 误判为自然结束,交接循环就此丢失(定版脚本永不执行、交接文档永不归档)。

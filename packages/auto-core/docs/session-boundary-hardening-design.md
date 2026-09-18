@@ -1,6 +1,8 @@
 # 会话边界加固:跨任务状态混淆防护、零落盘完成判定与在途失联探针
 
-> 状态: 2026-09-16 立项,S1–S5 已实施(2026-09-17),S6–S8 待办(见 §5 勾选表)。
+> 状态: 2026-09-16 立项,S1–S5 已实施(2026-09-17),S6–S8 待办(见 §5 勾选表);
+> 2026-09-18 修订(S9,见 §8):输出截断(length)不作自然结束、形检重提示 fork
+> 原会话只带反馈。
 > 起因:kernel-dm T-068 S01 会话静默事故(2026-09-16 15:07 run,旧版
 > migrate@c9af64969 构建)三层叠加:①子任务会话在 22 分钟只读调研中读入前序任务
 > T-067 的收尾叙事,误判"所有任务均已完成",零产物结束回合;②runSubtask 在
@@ -203,3 +205,43 @@
   环,无新开关、无新退出码。
 - config 的 idleTime:语义扩展为"脚本看门狗 + AI 会话探针"共用周期,配置键与
   缺省值(10min)不变。
+
+## 8. 2026-09-18 修订:输出截断续跑与形检重提示 fork 原会话
+
+> 起因:kernel-spi-nor T-030 S13 现场(2026-09-18 01:29 run,auto-migrate)——
+> 子任务会话的推理流在 `crate::spec::{SPINOR_OP_RDS` 处被输出上限**截断**
+> (step-finish reason=`length`),服务端照常 idle,driver 把「还在正常思考」的
+> 会话误判为自然结束 → 零落盘形检拦下 → 重提示却**开空白会话重发整份提示词**
+> (OPENCODE_AUTO_REUSE_SESSION 缺省 off),新会话 11.6k 起步重读全场,原会话
+> 133.9k 上下文全部丢弃。同型现场:T-029 S05(2026-09-17 12:41,顺带文档缺
+> 终止符被 D6 拦下后同样空白重启)。
+
+两项修复,均不改判定口径、无新开关:
+
+1. **输出截断不作自然结束(watch.ts)**:末步 step-finish 以 `length` 收场 =
+   模型回复被输出上限截断,会话工作显然未完——idle 结算前 steer 一句
+   「从截断处继续」让**原会话**接着做(上下文一分不丢,不用 fork)。连续截断
+   以 `LENGTH_CONTINUE_MAX`=3 为限(防单条消息过长的退化形态空转),超限仍按
+   自然结束收口、由既有 D2/D4 形检环兜住;出现非 length 的步骤收场(续跑后
+   恢复正常工作)即重置计数;已观测到 session.error 则不续跑——错误路径
+   (可重试阶梯/降级环)优先,不与截断续跑争抢会话。覆盖全部经 attempt→watch
+   的 AI 会话(含 verify-judge 等旁路),与测试执行协议的先后关系: idle 先
+   结算 test 协议(待执行请求/交接要求),再到截断判定。
+2. **形检重提示 fork 原会话、只带反馈本身(session-api.ts 新增
+   `forkEndedSession`,接线 runSubtask 的 D2/D4/D6 形检环与 understand/
+   decompose/wrapup 的 D5 重试环)**:重提示基于刚结束的会话 fork 副本下发——
+   副本带着全部工作上下文,一句反馈即可续做「做了一半」的现场;原会话保持
+   不动、仍是恢复点(与重试阶梯「一律 fork 副本而非直接复用」同一哲学)。
+   fork 不可用(链上无会话/会话已失效/fork 路由失败)回退全新会话 + 完整
+   提示词 + 反馈(修订前行为)。**交接文档反馈环不在此列**:那条环路触发时
+   会话已用满 2×cap,fork 会把逼近上限的前缀背进重试会话,维持整份重发。
+
+勾选表(随本修订落地):
+
+- [x] S9a watch.ts 截断续跑 + 单测 4 例(续跑后 stop 正常结束/连续 4 次截断
+  只续 3 次/非 length 收场重置计数/session.error 不续跑)(test/watch.test.ts)
+- [x] S9b forkEndedSession + runSubtask/ensureUnderstood/ensureDecomposed/
+  runWrapup 四处接线 + 单测(fork 成功只带反馈、fork 失败回退完整提示词)
+  (test/subtask-shape.test.ts、test/auto-doc-shape.test.ts)
+- [x] S9c 全套回归: `bun typecheck` 干净、`bun test` 874 全绿、packages/auto
+  typecheck 无感

@@ -81,6 +81,25 @@ export async function seedForkSession(
   return forked !== undefined
 }
 
+// 形检/检查未过的「带反馈重提示」的会话播种(session-boundary-hardening 设计
+// §4.3/§4.5,2026-09-18 修订): 基于刚结束的会话(链上当前会话)fork 副本下发——
+// 副本带着全部工作上下文,一句简短反馈即可接着做,而非开空白会话重发整份提示词
+// (重读全场、重做已完成的探查,还丢失「做了一半」的现场,kernel-spi-nor T-030 S13
+// 现场)。原会话保持不动、仍是恢复点(与重试阶梯「一律 fork 副本而非直接复用」同
+// 一哲学)。链上无会话/会话已失效/fork 失败返回 false,调用方回退全新会话 + 完整
+// 提示词。分叉前缀的用量即刚结束会话的用量,链上 pct/used/at 照留(attempt 在回合
+// 结束后以实测值刷新)。
+export async function forkEndedSession(client: OpencodeClient, chain: SessionChain, subject: string): Promise<boolean> {
+  if (chain.id === undefined || !(await sessionAlive(client, chain.id))) return false
+  const forked = await forkSession(client, chain.id, subject)
+  if (!forked) return false
+  // 与 seedForkSession 同形态: 清 id 让 attempt 消费 pending(reuse 判定要求链上
+  // 无会话,且 note + id 非空会命中 resumed 复用分支而忽略 pending)。
+  chain.id = undefined
+  chain.pending = forked
+  return true
+}
+
 // 会话末端上下文用量(tokens: input + cache.read)与占比重建: 经
 // client.session.messages **从末条往前**取第一条真正跑完过的 assistant 消息(不是
 // 字面末条,原因见 basis 注释),上限查 provider 表(与 watch 同口径: 取不到上限记

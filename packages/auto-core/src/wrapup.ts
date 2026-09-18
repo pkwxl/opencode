@@ -16,6 +16,7 @@ import type { Opts, UnitStop } from "./opts"
 import type { Plan, Task } from "./plan"
 import { renderWrapup } from "./prompt"
 import { runSession } from "./session"
+import { forkEndedSession } from "./session-api"
 import { afterSession, commitBlocked, wrapupResolves } from "./unit-commit"
 
 // report.md 形检问题清单(空 = 通过): 路径 driver 已知固定(wrapup 模板定死
@@ -45,11 +46,16 @@ export async function runWrapup(
   chain.subject = subject
   const resolves = await wrapupResolves(dir, task.id)
   let feedback = ""
+  // 形检重提示经 fork 刚结束的会话下发时(2026-09-18 修订),下一回合只带反馈
+  // 本身——副本已含完整提示词与全部收尾上下文,重发整份只会诱导从头重做。
+  let shapeForked = false
   for (let i = 0; ; i++) {
+    const brief = shapeForked
+    shapeForked = false
     const result = await runSession(
       client,
       task,
-      renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: input.solo, resolves }) + feedback,
+      brief ? feedback.trimStart() : renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: input.solo, resolves }) + feedback,
       opts,
       chain,
     )
@@ -69,9 +75,12 @@ export async function runWrapup(
           `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
       }
     }
-    log(`↻ ${task.id} 收尾会话产出的 ${rel} 未过检查,带反馈重试一次`)
     feedback =
       `\n\n你上次结束会话但 ${rel} 未过检查: ${problems.join("; ")}。这是硬性要求:` +
       `把任务报告写入该文件,内容完整并以 \`${EOF_MARK}\` 独占最后一行正文后再结束会话。`
+    // 重提示基于刚结束的会话 fork 续做(带全部收尾上下文);fork 不可用回退
+    // 全新会话 + 完整提示词。
+    shapeForked = await forkEndedSession(client, chain, subject)
+    log(`↻ ${task.id} 收尾会话产出的 ${rel} 未过检查,${shapeForked ? "已从原会话分叉、" : ""}带反馈重试一次`)
   }
 }
