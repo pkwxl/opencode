@@ -11,7 +11,7 @@ import type { ForkBaseInfo, SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { load } from "../src/plan"
 import { ensureForkBase } from "../src/session"
-import { askHuman, forkSession, seedForkSession, sessionUsage } from "../src/session-api"
+import { askHuman, forkSession, resetServerModelCache, seedForkSession, serverDefaultModel, sessionUsage } from "../src/session-api"
 import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { fakeClient } from "./fixtures/runner"
@@ -350,5 +350,72 @@ describe("askHuman 等待扣除(stats 接线,T-005)", () => {
     expect(await askHuman(5, "hint", fakeInteractive("", 1000))).toBeUndefined()
     // 非空回答(含空白)原样返回——与改动前对等行为。
     expect(await askHuman(5, "hint", fakeInteractive("allow", 1000))).toBe("allow")
+  })
+})
+
+// ---- 服务端生效模型解析(serverDefaultModel: 未设路由时 ◈ 播报的回落)----
+
+describe("serverDefaultModel(服务端生效模型解析)", () => {
+  // 进程内缓存会被本文件其他用例(ensureForkBase 经 attempt 的 ◈ 播报)以同键占据,
+  // 每个用例前后都清。
+  beforeEach(() => resetServerModelCache())
+  afterEach(() => resetServerModelCache())
+
+  test("agent 配置级 model 优先(指定 agent 命中;缺省取首个 primary)", async () => {
+    const client = {
+      app: {
+        agents: async () => ({
+          data: [
+            { name: "build", mode: "primary", model: { providerID: "p0", modelID: "m0" } },
+            { name: "auto", mode: "primary", model: { providerID: "p1", modelID: "m1" } },
+          ],
+        }),
+      },
+      config: { get: async () => ({ data: { model: "p2/m2" } }) },
+    } as unknown as OpencodeClient
+    expect(await serverDefaultModel(client, "auto")).toBe("p1/m1")
+    expect(await serverDefaultModel(client)).toBe("p0/m0")
+  })
+
+  test("agent 无 model 回落全局 config.model", async () => {
+    const client = {
+      app: { agents: async () => ({ data: [{ name: "auto", mode: "primary" }] }) },
+      config: { get: async () => ({ data: { model: "prov/cfg" } }) },
+    } as unknown as OpencodeClient
+    expect(await serverDefaultModel(client, "auto")).toBe("prov/cfg")
+  })
+
+  test("config 无 model 回落首个已连接 provider 的缺省模型", async () => {
+    const client = {
+      app: { agents: async () => ({ data: [{ name: "auto", mode: "primary" }] }) },
+      config: { get: async () => ({ data: {} }) },
+      provider: { list: async () => ({ data: { connected: ["zai", "openai"], default: { zai: "glm", openai: "gpt" } } }) },
+    } as unknown as OpencodeClient
+    expect(await serverDefaultModel(client, "auto")).toBe("zai/glm")
+  })
+
+  test("全取不到(表面缺失/请求失败)返回 undefined,不抛错", async () => {
+    expect(await serverDefaultModel({} as unknown as OpencodeClient, "auto")).toBeUndefined()
+    const failing = {
+      app: { agents: async () => Promise.reject(new Error("boom")) },
+      config: { get: async () => ({ error: { name: "UnknownError" } }) },
+      provider: { list: async () => ({ data: { connected: [], default: {} } }) },
+    } as unknown as OpencodeClient
+    expect(await serverDefaultModel(failing, "auto")).toBeUndefined()
+  })
+
+  test("进程内按 agent 缓存: 同键第二次不再请求", async () => {
+    let calls = 0
+    const client = {
+      config: {
+        get: async () => {
+          calls++
+          return { data: { model: "prov/cached" } }
+        },
+      },
+    } as unknown as OpencodeClient
+    expect(await serverDefaultModel(client, "auto")).toBe("prov/cached")
+    expect(await serverDefaultModel(client, "auto")).toBe("prov/cached")
+    expect(calls).toBe(1)
   })
 })

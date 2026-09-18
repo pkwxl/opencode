@@ -262,12 +262,17 @@ RANK 思路,所取值及更粗的边界都重置;实现见 `src/failback.ts`):
   switchModel 的候选环与触发门禁同理取 `override.fallback ?? switches.model.fallback`——
   **不原地改 switches memo**(恒定约定不破)。覆写持续生效至进程结束或下一次带参 /failback。
 
-### D.8 实际使用模型上终端(2026-09-13 实施)
+### D.8 实际使用模型上终端(2026-09-13 实施;2026-09-18 修订补服务端缺省回落)
 
 attempt 求值出 target 后播报 `◈ <任务> 使用模型 <prov/model>(<来源>)`,来源 ∈
 `路由` / `降级候选` / `降级候选·阶段内粘滞` / `/failback 指定`;经 `chain.modelShown`
 去重——同链同模型的续跑 prompt 不重复播报,新建会话或模型变化(降级切换、/failback 消费、
-粒度重置)时再次播报。target 未定义(路由与覆写均未设)时静默,不变量 F 不破。
+粒度重置)时再次播报。**2026-09-18 修订**: target 未定义(路由与覆写均未设)时回落
+播报服务端生效模型(来源 `服务端缺省`),解析与服务端 prompt 的模型回退链同序——
+agent 配置级 model(/agent)> 全局 config.model(/config)> 首个已连接 provider 的缺省
+模型(/provider 的 default 表;服务端的最近使用记录 model.json 不经 API 暴露,略过),
+实现为 session-api 的 `serverDefaultModel`(进程内按 agent 缓存,全取不到静默)。仅
+展示用途: prompt 是否带 model 键的决定不变,不变量 F 不破。
 
 ## E. 决策记录(已确认)
 
@@ -281,7 +286,8 @@ attempt 求值出 target 后播报 `◈ <任务> 使用模型 <prov/model>(<来�
   跨任务粘滞经 failback 模块 sticky holder 承载,不落盘(同 D5)。
 - **D8 /failback 与 /exit 同构但不停止**: 安全边界消费、不抛异常、不占退出码;带参 = 整体
   重定义首选+候选序,经运行期 override 层实现,switches memo 恒定约定不破。
-- **D9 使用模型播报走既有 log 通道**: 每次 prompt 求值处播报、按链去重;未设模型时静默。
+- **D9 使用模型播报走既有 log 通道**: 每次 prompt 求值处播报、按链去重;未设模型时
+  回落服务端生效模型(2026-09-18 修订,见 D.8),仍取不到才静默。
 
 ## F. 不变量(实现不得破坏)
 

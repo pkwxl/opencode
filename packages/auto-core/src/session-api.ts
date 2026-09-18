@@ -239,6 +239,49 @@ export function formatTokens(n: number): string {
   return String(n)
 }
 
+// 服务端生效模型解析(未设模型路由时 ◈ 播报的回落,docs/model-routing-design.md
+// D.8 2026-09-18 修订): 与服务端 prompt 的模型回退链同序——agent 配置级 model
+// (/agent 返回已归并 config.agent 的值)> 全局 config.model(/config)> 首个已连接
+// provider 的缺省模型(/provider 的 default 表,与服务端 defaultModel 的 sort-first
+// 同口径;服务端在此之前还会查最近使用记录 model.json,该状态不经 API 暴露,此处
+// 略过——纯展示用途的近似)。agent 缺省时取首个 primary agent(与服务端缺省 agent
+// 同向)。整段容错: 任一步取不到(旧版 server、请求失败、测试替身缺表面)继续回落,
+// 全取不到返回 undefined(调用方静默)。进程内按 agent 缓存: 配置在运行期间不变。
+const serverModelCache = new Map<string, string | undefined>()
+
+export async function serverDefaultModel(client: OpencodeClient, agent?: string): Promise<string | undefined> {
+  const key = agent ?? ""
+  if (!serverModelCache.has(key)) serverModelCache.set(key, await resolveServerModel(client, agent))
+  return serverModelCache.get(key)
+}
+
+// 单测用: 清进程内缓存(不同测试的替身 client 不应互相串味)。
+export function resetServerModelCache(): void {
+  serverModelCache.clear()
+}
+
+async function resolveServerModel(client: OpencodeClient, agent?: string): Promise<string | undefined> {
+  try {
+    const agents = await client.app.agents()
+    const list = agents?.data
+    const found = agent ? list?.find((a) => a.name === agent) : list?.find((a) => a.mode === "primary")
+    if (found?.model) return `${found.model.providerID}/${found.model.modelID}`
+  } catch {}
+  try {
+    const config = await client.config.get()
+    if (config?.data?.model) return config.data.model
+  } catch {}
+  try {
+    const response = await client.provider.list()
+    const data = response?.data
+    for (const id of data?.connected ?? []) {
+      const model = data?.default?.[id]
+      if (model) return `${id}/${model}`
+    }
+  } catch {}
+  return undefined
+}
+
 // 客户端错误可读化: fetch 异常(网络断开、请求超时中止等)返回的是 Error 实例,
 // JSON.stringify 只得 "{}";取其 message 才能让「请求超时」等字样进入阻塞问题
 // 文案,其余(服务端结构化错误体)照旧序列化。

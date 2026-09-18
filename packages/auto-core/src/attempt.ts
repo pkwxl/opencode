@@ -19,7 +19,7 @@ import { type Task } from "./plan"
 import { handoffFile } from "./prompt"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
-import { formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
+import { formatClientError, formatTokens, missingAgentHint, renameSession, serverDefaultModel, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
 import { createStuckTracker } from "./stuck"
 import { SWITCH_ENV, type Switches } from "./switches"
@@ -205,18 +205,23 @@ export async function attempt(
     promptModel = target
     // 实际使用模型上终端(前端可见): 新建/分叉会话或模型较上次 prompt 有变化时
     // 播报一行(来源标注),同会话同模型的续跑 prompt 不重复。target 未定义(未设
-    // 路由)时静默,保持不变量 F。
-    if (target !== undefined && target !== chain.modelShown) {
+    // 路由)时回落服务端生效模型(agent 配置 > 全局 config.model > provider 缺省,
+    // 见 session-api.serverDefaultModel),仍取不到则静默;无论何种来源,prompt 是否
+    // 带 model 键的决定不变(不变量 F 不破)。
+    const shown = target ?? (await serverDefaultModel(client, opts.agent))
+    if (shown !== undefined && shown !== chain.modelShown) {
       const from =
-        chain.model !== undefined
-          ? "降级候选"
-          : stickyModel() !== undefined
-            ? "降级候选·阶段内粘滞"
-            : override !== undefined
-              ? "/failback 指定"
-              : "路由"
-      log(`◈ ${task.id} 使用模型 ${target}(${from})`)
-      chain.modelShown = target
+        target === undefined
+          ? "服务端缺省"
+          : chain.model !== undefined
+            ? "降级候选"
+            : stickyModel() !== undefined
+              ? "降级候选·阶段内粘滞"
+              : override !== undefined
+                ? "/failback 指定"
+                : "路由"
+      log(`◈ ${task.id} 使用模型 ${shown}(${from})`)
+      chain.modelShown = shown
     }
     // 统计接线(STATS_PLAN §2,T-003): prompt 下发前开 AI 段并关联任务。旁路会话
     // (伪任务 PLAN/AUTO,恢复点先例见 resume.ts)同此照记——statsTask 未设当前任务

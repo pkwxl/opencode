@@ -13,6 +13,7 @@ import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyMod
 import { recallHandover, saveHandover } from "../src/handover"
 import type { Interactive } from "../src/interactive"
 import { recallProgress, saveProgress } from "../src/resume"
+import { resetServerModelCache } from "../src/session-api"
 import { attempt } from "../src/attempt"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -848,6 +849,33 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
     expect(shown[0]).toContain("路由")
     expect(shown[1]).toContain("prov/b")
     expect(shown[1]).toContain("降级候选")
+  })
+
+  test("未设路由: 回落播报服务端生效模型(config.model),prompt 仍不带 model 键,同模型不重复", async () => {
+    resetServerModelCache()
+    const lines: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
+    let calls: { prompts: { model?: unknown }[] }
+    try {
+      const fake = fakeClient()
+      calls = fake.calls
+      // fake client 缺省无 config/app/provider 表面——此处只补 config.get(全局
+      // config.model 回落档),验证 attempt 在 target undefined 时的服务端模型播报。
+      ;(fake.client as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
+      const chain: SessionChain = { pct: 100, used: 0, at: 0 }
+      await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
+      await runSession(fake.client, task, "提示词2", {}, chain, undefined, undefined, parseSwitches({}))
+    } finally {
+      console.log = orig
+      resetServerModelCache()
+    }
+    const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
+    expect(shown.length).toBe(1)
+    expect(shown[0]).toContain("prov/default")
+    expect(shown[0]).toContain("服务端缺省")
+    // 不变量 F: 播报归播报,下发依旧不带 model 键。
+    expect(calls!.prompts.every((p) => p.model === undefined)).toBe(true)
   })
 })
 
