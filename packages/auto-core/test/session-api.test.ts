@@ -83,7 +83,7 @@ describe("seedForkSession(阶段/子任务首个会话的播种)", () => {
   })
 })
 
-describe("ensureForkBase(基点确立与回退链: digest → session → 冷启动)", () => {
+describe("ensureForkBase(基点确立与回退链: digest 持久复用 → digest 重建 → session → 冷启动)", () => {
   let dir: string
   let path: string
   const digest = parseSwitches({})
@@ -100,14 +100,14 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
     await rm(dir, { recursive: true, force: true })
   })
 
-  async function setupTask(withForkBase: boolean) {
-    await Bun.write(path, `## T-001: 示例任务 [in_progress]\n${withForkBase ? "  - fork-base: ses_U\n" : ""}正文。\n`)
+  async function setupTask(forkBase?: string) {
+    await Bun.write(path, `## T-001: 示例任务 [in_progress]\n${forkBase ? `  - fork-base: ${forkBase}\n` : ""}正文。\n`)
     return (await load(path)).tasks[0]!
   }
 
-  test("digest 成功: 从 context.md 一次性链建基点会话,覆写 fork-base,返回基点", async () => {
+  test("digest 成功: 从 context.md 一次性链建基点会话,以 digest: 前缀落 fork-base 持久,返回基点", async () => {
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
-    const taskNoBase = await setupTask(false)
+    const taskNoBase = await setupTask()
     const { client, calls } = fakeClient()
     const base = await ensureForkBase(client, await load(path), taskNoBase, {}, chain, digest)
     expect(base).toEqual({ id: "ses_new_1", used: 0 })
@@ -115,21 +115,64 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
     expect(calls.creates).toBe(1)
     expect(calls.forks).toEqual([])
     expect(calls.updates).toEqual([])
-    // fork-base 覆写为新基点会话 id
-    expect(await Bun.file(path).text()).toContain("  - fork-base: ses_new_1")
+    // fork-base 以 digest: 前缀持久为新基点会话 id
+    expect(await Bun.file(path).text()).toContain("  - fork-base: digest:ses_new_1")
   })
 
   test("digest 读回落: 新路径缺失而旧平铺 docs/T-001.context.md 存在 → 同样建立基点", async () => {
     await Bun.write(join(dir, "docs", "T-001.context.md"), "## 相关文件与关键符号\n- a.ts\n")
-    const taskNoBase = await setupTask(false)
+    const taskNoBase = await setupTask()
     const { client } = fakeClient()
     const base = await ensureForkBase(client, await load(path), taskNoBase, {}, chain, digest)
     expect(base).toEqual({ id: "ses_new_1", used: 0 })
   })
 
+  test("digest 持久基点存活(中断后重跑/子任务未竟再运行): 复用同一基点会话,不重建、字段不动", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+    const taskPersisted = await setupTask("digest:ses_P")
+    const { client, calls } = fakeClient({
+      messages: () => ({ data: [{ info: { role: "user" } }, { info: { role: "assistant", tokens: { input: 400, cache: { read: 100 } } } }] }),
+    })
+    const base = await ensureForkBase(client, await load(path), taskPersisted, {}, chain, digest)
+    // 用量经 messages 末条 assistant 重建(400 + 100)
+    expect(base).toEqual({ id: "ses_P", used: 500 })
+    expect(calls.creates).toBe(0)
+    expect(await Bun.file(path).text()).toContain("  - fork-base: digest:ses_P")
+  })
+
+  test("digest 持久基点失效(存储清理): 从摘要重建并覆写字段", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+    const taskPersisted = await setupTask("digest:ses_dead")
+    const { client, calls } = fakeClient({ get: () => undefined })
+    const base = await ensureForkBase(client, await load(path), taskPersisted, {}, chain, digest)
+    expect(base).toEqual({ id: "ses_new_1", used: 0 })
+    expect(calls.creates).toBe(1)
+    expect(await Bun.file(path).text()).toContain("  - fork-base: digest:ses_new_1")
+  })
+
+  test("digest 持久基点失效 + 重建受阻(会话内阻塞提问): 不重复校验死基点,回退冷启动", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+    const taskPersisted = await setupTask("digest:ses_dead")
+    const gets: string[] = []
+    const { client } = fakeClient({
+      get: (id) => {
+        gets.push(id)
+        return undefined
+      },
+      events: (sid) =>
+        (async function* () {
+          yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
+        })(),
+    })
+    const stubbed = { ...client, permission: { reply: async () => ({}) } } as unknown as OpencodeClient
+    expect(await ensureForkBase(stubbed, await load(path), taskPersisted, {}, chain, digest)).toBeUndefined()
+    // 存活校验只对死基点做过一次;回退链不再拿 digest: 前缀值重复校验
+    expect(gets).toEqual(["ses_dead"])
+  })
+
   test("digest 基点会话受阻(会话内阻塞提问,非故障)→ 回退 session 基点: 校验存活并按 messages 重建用量", async () => {
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
-    const taskWithBase = await setupTask(true)
+    const taskWithBase = await setupTask("ses_U")
     // 权限提问且未设 --wait-answer → 会话以非故障的 blocked 收场(会话故障——错误/
     // 下发失败——自 2026-09-16 起在 runSession 内重试至恢复,不再走到回退)。
     const { client } = fakeClient({
@@ -147,7 +190,7 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
 
   test("digest 基点会话遇下发故障不回退: 会话故障经重试恢复后照样建立基点", async () => {
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
-    const taskNoBase = await setupTask(false)
+    const taskNoBase = await setupTask()
     let n = 0
     const { client } = fakeClient({
       prompt: () => {
@@ -157,11 +200,11 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
     })
     const base = await ensureForkBase(client, await load(path), taskNoBase, {}, chain, digest)
     expect(base).toEqual({ id: "ses_new_2", used: 0 })
-    expect(await Bun.file(path).text()).toContain("  - fork-base: ses_new_2")
+    expect(await Bun.file(path).text()).toContain("  - fork-base: digest:ses_new_2")
   })
 
   test("digest 摘要缺失 → 回退 session 基点", async () => {
-    const taskWithBase = await setupTask(true)
+    const taskWithBase = await setupTask("ses_U")
     const { client } = fakeClient({ messages: () => ({ data: [] }) })
     const base = await ensureForkBase(client, await load(path), taskWithBase, {}, chain, digest)
     // session 基点存活但用量取不到 → 按 0
@@ -169,13 +212,19 @@ describe("ensureForkBase(基点确立与回退链: digest → session → 冷启
   })
 
   test("session 模式基点失效(存储清理)→ 回退冷启动(undefined)", async () => {
-    const taskWithBase = await setupTask(true)
+    const taskWithBase = await setupTask("ses_U")
     const { client } = fakeClient({ get: () => undefined })
     expect(await ensureForkBase(client, await load(path), taskWithBase, {}, chain, session)).toBeUndefined()
   })
 
+  test("session 模式遇 digest: 前缀遗留(运行中途切换基点模式): 剥壳校验,存活即复用为暖前缀", async () => {
+    const taskPersisted = await setupTask("digest:ses_P")
+    const { client } = fakeClient({ messages: () => ({ data: [] }) })
+    expect(await ensureForkBase(client, await load(path), taskPersisted, {}, chain, session)).toEqual({ id: "ses_P", used: 0 })
+  })
+
   test("fork=off: 恒为 undefined(现状流水线)", async () => {
-    const taskWithBase = await setupTask(true)
+    const taskWithBase = await setupTask("ses_U")
     const { client } = fakeClient()
     const off = parseSwitches({ [SWITCH_ENV.fork]: "off" })
     expect(await ensureForkBase(client, await load(path), taskWithBase, {}, chain, off)).toBeUndefined()

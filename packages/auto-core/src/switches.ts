@@ -92,7 +92,8 @@ export type Switches = {
   // fork 三段式流水线总开关: off = 现状流水线(无理解会话、无分叉),行为零变化。
   fork: boolean
   // fork 基点模式(仅 fork=on 有意义): session = 理解会话末端;digest = 以
-  // context.md 摘要为输入新建基点会话(前缀瘦、可从磁盘确定性重建)。
+  // context.md 摘要为输入新建基点会话(前缀瘦、建立后跨运行持久复用、失效时可从
+  // 磁盘确定性重建)。
   forkBase: "session" | "digest"
   // 细粒度分解: decompose-<phase> 模板注入细粒度准则段(仍受下限保护约束)。
   fine: boolean

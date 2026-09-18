@@ -74,11 +74,11 @@ T-001(subtask=auto, fork=on)
 - **`session`**:基点 = 理解会话末端。
   - 优点:前缀含实际读过的源码与探索过程,分解与执行的接地最全,行级细节不丢失;
   - 缺点:前缀大小不受控(取决于探索量),逼近 `cap/2` 会触发冷启动防护;provider 缓存未命中时前缀全额计费;基点 sessionID 跨运行失效只能回退冷启动。
-- **`digest`(默认)**:理解完成后 driver 建一个**全新基点会话**——提示词 = context.md 全文 + 要求一句确认(模板见 §7),经 `runSession` 一次性链(`{ pct: 100, used: 0, at: 0, subject: "T-NNN ctxbase …" }`,不带 phase、不写进度记录)运行,结束后的 `chain.id` 即基点,`setForkBase` 覆写字段。
-  - 优点:前缀 = 紧凑摘要(大小可控可预估,cap 利用率最高,`cap/2` 防护基本不触发);**可从磁盘确定性重建**——恢复运行无条件重建(context.md 未变则前缀逐字一致,provider 缓存仍命中),「基点 sessionID 失效」这一回退场景在 digest 模式下不存在;
+- **`digest`(默认)**:理解完成后 driver 建一个**全新基点会话**——提示词 = context.md 全文 + 要求一句确认(模板见 §7),经 `runSession` 一次性链(`{ pct: 100, used: 0, at: 0, subject: "T-NNN ctxbase …" }`,不带 phase、不写进度记录)运行,结束后的 `chain.id` 即基点,`setForkBase` 以 `digest:` 前缀覆写字段。**(2026-09-18 修订)基点一经建立即跨运行持久**:此后每次运行(含中断恢复、子任务未全部完成时的重跑)先校验持久基点存活,存活即复用同一 sessionId 继续分叉,不再每次运行重建;仅失效(存储清理)才从 context.md 重建并覆写字段。基点会话建立后只被 fork、不再下发,前缀恒为摘要全文,复用不引入漂移(代价:运行间隙人工改 context.md 不再自动反映到基点,需删 `fork-base` 字段触发重建——原「无条件重建」语义对该场景顺带生效,属登记取舍)。
+  - 优点:前缀 = 紧凑摘要(大小可控可预估,cap 利用率最高,`cap/2` 防护基本不触发);**可从磁盘确定性重建**——基点 sessionID 失效时从 context.md 重建即恢复(context.md 未变则前缀逐字一致,provider 缓存仍命中),「基点失效」只退化一次重建开销,不构成降级;
   - 缺点:丢失探索过程的原始细节,子任务需要具体代码时须按摘要指引回读文件(定向回读远廉于盲目探索,但多一跳);
-  - 确认 turn 无工作区改动,`commitTree` 对无改动仓库自然跳过(不产生空提交);session 模式基点持久跨运行,digest 模式基点是**每次运行重建的易失指针**(重建后字段值更新,旧基点会话自然沉没)。
-- **回退链**:digest turn 失败(三次瞬时重试后仍会话错误)→ 回退 session 基点(本运行的理解会话仍存活)→ 再回退冷启动。
+  - 确认 turn 无工作区改动,`commitTree` 对无改动仓库自然跳过(不产生空提交);两种模式的基点均跨运行持久(2026-09-18 起 digest 同)。
+- **回退链**:持久 digest 基点存活 → 直接复用;失效/未建立 → digest 重建;digest turn 失败(三次瞬时重试后仍会话错误)→ 回退 session 基点(本运行的理解会话仍存活)→ 再回退冷启动。
 
 ### 4.3 fork 会话创建与回退
 
@@ -98,7 +98,7 @@ T-001(subtask=auto, fork=on)
 ### 4.4 链与上下文计量
 
 - **每阶段/每子任务新种子链**:`{ pct: 100, used: <基点用量>, at: 0, forkBase }` —— `pct:100` 强制首次不复用(fork 优先);`used` 播种使 `watch()` 的 2×cap steer 阈值按「前缀+新增」计算。
-- 基点用量来源:同次运行取基点会话 `chain.used`(session 模式 = 理解会话跟踪值,基点恰为链上会话时直接取跟踪值;digest 模式 = 基点确认会话跟踪值,≈ 摘要大小,极小)。恢复运行:session 模式经 `client.session.messages({ sessionID })` 取末条 assistant 消息 `tokens.input + tokens.cache.read` 重建(近似即可,首个 turn 的事件跟踪会自行校正;取不到按 0);digest 模式基点本就无条件重建,用量随建随取。
+- 基点用量来源:同次运行取基点会话 `chain.used`(session 模式 = 理解会话跟踪值,基点恰为链上会话时直接取跟踪值;digest 模式新建当年 = 基点确认会话跟踪值,≈ 摘要大小,极小)。恢复运行经 `client.session.messages({ sessionID })` 取末条 assistant 消息 `tokens.input + tokens.cache.read` 重建(近似即可,首个 turn 的事件跟踪会自行校正;取不到按 0)——2026-09-18 起 digest 持久基点复用同此口径。
 - 同一子任务内的反馈重试仍可自然复用当次会话(复用规则不变);**跨子任务不复用**,每项重新从基点分叉。wrapup 与 verify 修复轮不 fork:wrapup 沿用链内复用规则(可能复用末个子任务会话,与现状一致)。
 - 基点用量达到 `cap/2` 时驱动侧不起 fork,直接冷启动(防前缀逼近上限;digest 模式基本不触发)。
 - **steer 开关**(`OPENCODE_AUTO_STEER=off`):`runSubtask`/`executeWhole`(ondemand)不构造 steer——2×cap 交接提示不注入;**且会话结束后的 `used < 2×cap` 交接判定一并停用**(否则自然结束但用量超限的会话会被误要求补写交接文档)。停用后会话要么自然完成,要么由 provider 侧压缩/上限错误收场(错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响)。`--handover-test` 的测试交接是独立机制,不受此开关影响;`used`/`pct` 计量始终保留(复用决策与日志依据)。
@@ -106,7 +106,7 @@ T-001(subtask=auto, fork=on)
 ### 4.5 中断恢复
 
 - `PhaseKind` 增加 `"understand"`(persistStage/恢复路由对齐现有 decompose 处理)。
-- `.auto/progress.json` 语义不变(单 session 字段,逐会话 active);fork 基点持久在 PLAN.md 任务字段 `fork-base`,恢复运行据此重新获取基点:**digest 模式无条件从 context.md 重建**(不降级);session 模式校验存活,sessionID 失效(存储清理)→ 自动回退冷启动。
+- `.auto/progress.json` 语义不变(单 session 字段,逐会话 active);fork 基点持久在 PLAN.md 任务字段 `fork-base`(digest 基点带 `digest:` 前缀,与理解会话 id 区分),恢复运行据此重新获取基点:**digest 模式先校验持久基点存活,存活即复用、失效才从 context.md 重建**(2026-09-18 起,此前为无条件重建);session 模式校验存活,sessionID 失效(存储清理)→ 自动回退冷启动。session 模式遇 `digest:` 前缀遗留字段(运行中途切换基点模式)剥壳校验,存活的 digest 基点同样作暖前缀复用。
 - PLAN.md 字段行机制(`  - key: value` 紧跟标题且连续)自动承载新字段,解析规则零改动,`setForkBase()` 为 driver 独占写入。
 
 ### 4.6 运行开关:环境变量层(实验期)
@@ -317,7 +317,7 @@ docs/{{taskId}}.context.md,先读之了解任务背景再开始(不存在则按�
 | fork=off | 现状流程,零变化(无理解会话) |
 | fork 调用返回 error / 抛错(旧路由、基点被清理) | log 后全新会话 + 冷启动提示词 |
 | 基点用量 > cap/2 | 驱动侧不起 fork,直接冷启动(digest 基点极小,基本不触发) |
-| 恢复运行基点 sessionID 失效 | session 模式:回退冷启动;digest 模式:从 context.md 重建基点(不降级) |
+| 恢复运行基点 sessionID 失效 | session 模式:回退冷启动;digest 模式:从 context.md 重建基点(2026-09-18 起为失效时重建——存活则直接复用持久基点,不再每次运行重建) |
 | digest 基点会话建立失败(会话错误×3) | 回退 session 基点(本运行理解会话)→ 再回退冷启动 |
 | understand 两次未产出 context.md | 隐性阻塞(现有 requireArtifact 语义) |
 | context.md 缺失 + 冷启动 | 提示词已兜底(「不存在则按需自行阅读源码」) |

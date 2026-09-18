@@ -25,8 +25,9 @@ export type Task = {
   // FIELD 行通用解析,edit 重写时随全部字段行保留。
   final?: string
   // fork 分解流水线的分叉基点会话 id(fork-decompose 设计 §4.2): session 模式 =
-  // 理解会话 id,digest 模式 = 基点确认会话 id(每次运行从 context.md 重建覆写);
-  // driver 独占写入(setForkBase),跨运行持久。
+  // 理解会话 id;digest 模式 = 基点确认会话 id,带 `digest:` 前缀(一经建立即跨
+  // 运行持久,恢复运行存活即复用,失效才从 context.md 重建覆写);driver 独占写入
+  // (setForkBase),跨运行持久。
   forkBase?: string
   body: string
 }
@@ -267,7 +268,8 @@ export async function tick(path: string, id: string, text: string) {
 }
 
 // 记录 fork 分解流水线的分叉基点会话(fork-decompose 设计 §4.2): session 模式在
-// 理解会话成功后写入,digest 模式在基点确认会话建立后覆写;AI 会话不写此字段。
+// 理解会话成功后写入,digest 模式在基点确认会话建立后以 `digest:` 前缀覆写(持久
+// 基点,ensureForkBase 存活即复用);AI 会话不写此字段。
 export async function setForkBase(path: string, id: string, sessionID: string) {
   await edit(path, id, { fields: { "fork-base": sessionID } })
 }

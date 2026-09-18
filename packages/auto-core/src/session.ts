@@ -22,14 +22,16 @@ import { autoSwitches, type Switches } from "./switches"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { type Steer, type TestRun } from "./testrun"
 
-// fork 基点确立(fork-decompose 设计 §4.2): 返回生效基点,undefined = 冷启动。
-// digest 模式读 context.md 全文,经一次性链(subject `T-NNN ctxbase …`,不带
-// phase、不写进度记录;确认 turn 无工作区改动、commitTree 自然零提交)重建基点
-// 会话——前缀确定性 = 摘要全文,provider 缓存友好;每次运行无条件重建并覆写
-// fork-base(基点是每次运行重建的易失指针,旧基点会话自然沉没)。回退链:
-// digest 建立失败 → session 基点(PLAN.md 持久字段,校验存活,失效回退冷启动)
-// → 冷启动。session 模式基点跨运行持久,用量经 messages 末条消息重建(近似
-// 即可;同次运行且基点即链上会话时直接取跟踪值)。
+// fork 基点确立(fork-decompose 设计 §4.2,2026-09-18 持久化修订): 返回生效基点,
+// undefined = 冷启动。digest 模式基点**一经建立即跨运行持久**——setForkBase 以
+// `digest:` 前缀落 PLAN.md fork-base 字段,此后每次运行(含中断恢复、子任务未竟的
+// 重跑)先校验存活,存活即复用同一基点会话继续分叉,不再从 context.md 无条件重建;
+// 失效(存储清理)才经一次性链(subject `T-NNN ctxbase …`,不带 phase、不写进度
+// 记录;确认 turn 无工作区改动、commitTree 自然零提交)重建——前缀确定性 = 摘要全文,
+// provider 缓存友好。基点会话建立后只被 fork、不再下发,前缀恒为摘要全文,复用不
+// 引入漂移。回退链: 持久 digest 基点存活复用 → digest 重建 → session 基点(PLAN.md
+// 持久字段,校验存活,失效回退冷启动) → 冷启动。session 模式基点跨运行持久,用量
+// 经 messages 末条消息重建(近似即可;同次运行且基点即链上会话时直接取跟踪值)。
 export async function ensureForkBase(
   client: OpencodeClient,
   plan: Plan,
@@ -40,14 +42,25 @@ export async function ensureForkBase(
 ): Promise<ForkBaseInfo | undefined> {
   if (!switches.fork) return undefined
   const dir = opts.dir ?? dirname(plan.path)
+  // digest 持久基点以 `digest:` 前缀与理解会话 id(session 基点)区分——无前缀值在
+  // digest 模式下只是重建失败时的兜底,不参与「存活即复用」。
+  const persistID = task.forkBase?.startsWith("digest:") ? task.forkBase.slice("digest:".length) : undefined
   if (switches.forkBase === "digest") {
+    if (persistID !== undefined) {
+      if (await sessionAlive(client, persistID)) {
+        const used = await sessionUsed(client, persistID)
+        log(`⑂ ${task.id} digest 基点复用: 会话 ${persistID}(${formatTokens(used)} tokens)`)
+        return { id: persistID, used }
+      }
+      log(`↻ ${task.id} 持久 digest 基点 ${persistID} 已失效,从 ${taskDoc(task.id, "context")} 重建`)
+    }
     const digest = (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "context"))).text().catch(() => "")).trim()
     if (digest) {
       const subject = `${task.id} ctxbase ${task.title}`
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
       const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
       if (result.type === "idle" && base.id) {
-        await setForkBase(plan.path, task.id, base.id)
+        await setForkBase(plan.path, task.id, `digest:${base.id}`)
         log(`⑂ ${task.id} digest 基点就绪: 会话 ${base.id}(摘要前缀 ${formatTokens(base.used)} tokens)`)
         return { id: base.id, used: base.used }
       }
@@ -56,13 +69,17 @@ export async function ensureForkBase(
       log(`↻ ${task.id} 缺少 ${taskDoc(task.id, "context")} 摘要,digest 基点不可建立,回退 session 基点`)
     }
   }
-  if (task.forkBase) {
-    if (await sessionAlive(client, task.forkBase)) {
-      const used = task.forkBase === chain.id ? chain.used : await sessionUsed(client, task.forkBase)
-      log(`⑂ ${task.id} session 基点就绪: 会话 ${task.forkBase}(${formatTokens(used)} tokens)`)
-      return { id: task.forkBase, used }
+  // session 基点(理解会话): digest 模式下持久基点走到这里必已在上方判死(存活即
+  // 复用返回),不重复校验;session 模式遇 digest: 前缀遗留(运行中途切换基点模式)
+  // 剥壳校验——存活的 digest 基点同样是有效暖前缀。
+  const sessionID = persistID === undefined ? task.forkBase : switches.forkBase === "session" ? persistID : undefined
+  if (sessionID) {
+    if (await sessionAlive(client, sessionID)) {
+      const used = sessionID === chain.id ? chain.used : await sessionUsed(client, sessionID)
+      log(`⑂ ${task.id} session 基点就绪: 会话 ${sessionID}(${formatTokens(used)} tokens)`)
+      return { id: sessionID, used }
     }
-    log(`↻ ${task.id} session 基点 ${task.forkBase} 已失效,回退冷启动`)
+    log(`↻ ${task.id} session 基点 ${sessionID} 已失效,回退冷启动`)
   }
   return undefined
 }

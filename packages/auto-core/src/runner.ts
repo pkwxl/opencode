@@ -315,8 +315,9 @@ export async function runTask(
     // (不重跑整任务会话;auto 的分解/子任务循环本就幂等,无需特判)。
     const resumed = resume?.kind
     // fork 基点(fork-decompose 设计 §4.2): 仅 fork=on 的 auto 模式确立;digest
-    // 模式从 context.md 重建基点会话,session 模式沿用/校验 PLAN.md fork-base 字段,
-    // 失败沿回退链(digest → session → 冷启动)降级,undefined = 冷启动。
+    // 模式持久基点(PLAN.md fork-base 字段,digest: 前缀)存活即复用、失效才从
+    // context.md 重建,session 模式沿用/校验 fork-base 字段,失败沿回退链
+    // (digest → session → 冷启动)降级,undefined = 冷启动。
     let fork: ForkBaseInfo | undefined
     if (mode === "auto") {
       const sw = autoSwitches()
