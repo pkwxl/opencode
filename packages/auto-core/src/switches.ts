@@ -27,6 +27,7 @@ export const SWITCH_ENV = {
   recoveryWait: "OPENCODE_AUTO_RECOVERY_WAIT",
   strictResume: "OPENCODE_AUTO_STRICT_RESUME",
   handoverConcurrent: "OPENCODE_AUTO_HANDOVER_CONCURRENT",
+  hibernate: "OPENCODE_AUTO_HIBERNATE",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -154,7 +155,18 @@ export type Switches = {
   // 不 stash、不重跑、不阻塞(重测守卫已随本开关的引入退役,见
   // docs/test-handover-early-design.md §H)。
   handoverConcurrent: boolean
+  // 休眠时段(避开 LLM 高收费时段,docs/hibernate-design.md,缺省 undefined = 不休眠,
+  // 现状零变化): OPENCODE_AUTO_HIBERNATE="HH:MM+H"(UTC 每日窗口,H 小时允许小数)。
+  // 只在三处既有安全边界(phase/task/subtask,挂点同 step.ts)与启动时检查「现在是否
+  // 在窗口内」——在窗口内睡到窗口结束 + 固定随机 0~600 秒再继续;执行中的单元跑到
+  // 边界才停,天然实现「优雅等待到安全退出点再暂停」。不预判下一单元、不落盘。
+  hibernate: HibernateWindow | undefined
 }
+
+// 休眠窗口(OPENCODE_AUTO_HIBERNATE 归一化形态): startMin = UTC 窗口起点(当日分钟
+// 数,∈ [0,1440));durationMin = 时长(分钟,∈ (0,1440),允许小数)。跨午夜(如
+// 22:00+8)由消费侧取模处理。解析见 parseSwitches 的 hibernate 段。
+export type HibernateWindow = { startMin: number; durationMin: number }
 
 const SWITCH_DEFAULTS: Switches = {
   fork: true,
@@ -173,6 +185,7 @@ const SWITCH_DEFAULTS: Switches = {
   recoveryWait: 30,
   strictResume: false,
   handoverConcurrent: false,
+  hibernate: undefined,
 }
 
 // OPENCODE_AUTO_MODEL / _FALLBACK 归一化为 ModelPolicy(纯函数,供单测)。两形态:
@@ -248,6 +261,37 @@ function renderModelEnv(policy: ModelPolicy): string {
     if (value !== undefined) parts.push(`${role}=${value}`)
   }
   return parts.join(",")
+}
+
+// 休眠窗口的规范写法(启动日志与单测同一来源): HH:MM+H(HH 补零两位,H 为小时数、
+// 小数渲染原样);undefined(未设)返回空串(视同未设)。
+export function formatHibernate(window: HibernateWindow | undefined): string {
+  if (window === undefined) return ""
+  const hh = String(Math.floor(window.startMin / 60)).padStart(2, "0")
+  const mm = String(window.startMin % 60).padStart(2, "0")
+  return `${hh}:${mm}+${window.durationMin / 60}`
+}
+
+// OPENCODE_AUTO_HIBERNATE 解析(纯函数): "HH:MM+H"——UTC 每日窗口,H 为小时数(允许
+// 小数,如 6.5)。空串/未设 = undefined(不休眠);坏值严格失败: throw 中文报错(含
+// 变量名、期望值域与示例)。
+function parseHibernate(raw: string | undefined): HibernateWindow | undefined {
+  if (raw === undefined || raw === "") return undefined
+  const match = /^(\d{1,2}):(\d{2})\+(\d+(?:\.\d+)?)$/.exec(raw)
+  if (!match) {
+    throw new Error(
+      `环境变量 ${SWITCH_ENV.hibernate} 取值非法: "${raw}"(期望 HH:MM+H——UTC 起点 + 休眠小时数,如 04:00+6、22:00+8.5;空串视同未设,缺省不休眠)`,
+    )
+  }
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  const hours = Number(match[3])
+  if (hour > 23 || minute > 59 || !(hours > 0) || hours >= 24) {
+    throw new Error(
+      `环境变量 ${SWITCH_ENV.hibernate} 取值非法: "${raw}"(HH ∈ 00..23、MM ∈ 00..59、H ∈ (0,24) 小时;示例 04:00+6)`,
+    )
+  }
+  return { startMin: hour * 60 + minute, durationMin: hours * 60 }
 }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
@@ -331,6 +375,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     recoveryWait: minutes(SWITCH_ENV.recoveryWait, env[SWITCH_ENV.recoveryWait], SWITCH_DEFAULTS.recoveryWait),
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     handoverConcurrent: onOff(SWITCH_ENV.handoverConcurrent, env[SWITCH_ENV.handoverConcurrent], SWITCH_DEFAULTS.handoverConcurrent),
+    hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
   }
 }
 
@@ -366,6 +411,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
     switches.handoverConcurrent === SWITCH_DEFAULTS.handoverConcurrent
       ? undefined
       : `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
+    switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -390,6 +436,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.recoveryWait}=${switches.recoveryWait}`,
     `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
     `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
+    `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
   ].join(", ")
 }
 

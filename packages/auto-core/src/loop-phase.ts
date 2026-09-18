@@ -9,6 +9,7 @@ import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLin
 import { maybeExit } from "./exit"
 import { clearSticky, consumeFailback } from "./failback"
 import { commitPending, commitTree } from "./git"
+import { hibernatePause } from "./hibernate"
 import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
 import { banner, log } from "./log"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
@@ -318,6 +319,9 @@ export async function handoverWithStep(ctx: LoopCtx, phase: Phase): Promise<numb
   if (code !== 0) return code
   await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl, dir: directory })
   maybeExit("phase", `阶段 ${phase} ${phaseText(phase)} 交接`)
+  // 休眠窗口(phase 边界,OPENCODE_AUTO_HIBERNATE): 交接(归档+台账+提交)完成后的
+  // 安全落点检查,在窗口内睡到唤醒再进入下一阶段(docs/hibernate-design.md)。
+  await hibernatePause(`阶段 ${phase} ${phaseText(phase)} 交接边界`, { dir: directory })
   // failback 回试(phase 边界): 所有粒度都在阶段边界重置——phase 粒度的跨任务
   // sticky holder 在此清零;/failback 请求同点消费。
   clearSticky()

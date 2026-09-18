@@ -6,6 +6,7 @@ import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, rout
 import { maybeExit } from "./exit"
 import { consumeFailback } from "./failback"
 import { beginUnit, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
+import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
 import type { RunAllOpts } from "./loop-preflight"
 import { waitBetweenTasks } from "./loop-progress"
@@ -264,6 +265,9 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     // 路由与下一任务前硬暂停,回车放行。dir 传入使暂停等待从用时统计扣除。
     await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl, dir: directory })
     maybeExit("task", `任务 ${task.id} ${task.title}`)
+    // 休眠窗口(task 边界,OPENCODE_AUTO_HIBERNATE): 终态提交完成后的安全落点检查
+    // 「现在是否在窗口内」,在内则睡到窗口结束 + 随机延迟再继续(docs/hibernate-design.md)。
+    await hibernatePause(`任务 ${task.id} ${task.title} 边界`, { dir: directory })
     // /failback 消费点(task 边界): 链已随 runTask 销毁、无需清 chain.model;
     // 重置 phase 粒度 sticky holder 并应用模型序覆写(若有)。
     consumeFailback()

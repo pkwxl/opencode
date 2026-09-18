@@ -8,6 +8,7 @@ import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies } from "./failback"
 import { baselineIntact, commitTree, removeIfUntracked, unitBaseline } from "./git"
+import { hibernatePause } from "./hibernate"
 import { handoffStatus } from "./handover"
 import { log } from "./log"
 import { type Opts, type Outcome, type UnitStop } from "./opts"
@@ -477,6 +478,9 @@ export async function runTask(
           // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。
           await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive, dir })
           maybeExit("subtask", `${task.id} 子任务 ${index + 1}`)
+          // 休眠窗口(subtask 边界,OPENCODE_AUTO_HIBERNATE): 勾选+统一提交后的安全
+          // 落点检查,在窗口内睡到唤醒再继续(docs/hibernate-design.md)。
+          await hibernatePause(`${task.id} 子任务 ${index + 1} 边界`, { dir })
           // failback 回试(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): subtask/session 粒度
           // 在子任务边界清链上降级候选,下一子任务回试首选(task 粒度由链逐任务销毁
           // 天然承担);/failback 请求同点消费(可整体重定义模型序)。

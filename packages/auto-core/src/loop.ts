@@ -1,5 +1,6 @@
 import { join } from "node:path"
 import { ExitRequested } from "./exit"
+import { hibernatePause } from "./hibernate"
 // .gitignore 条目维护已上收至叶子模块 gitignore.ts(与 reset 成对);此处
 // 再导出以保持既有导入路径 @opencode-ai/auto-core/loop 不变。
 export { ensureGitignore } from "./gitignore"
@@ -40,6 +41,9 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
   const pre = await preflight(directory, path, opts)
   if ("exit" in pre) return pre.exit
   const { agentName, watcher, progress } = pre
+  // 休眠窗口启动检查(OPENCODE_AUTO_HIBERNATE,D4): 启动即处于窗口内则先睡到窗口
+  // 结束 + 随机延迟再继续,避免白做首个执行单元;dryrun 权限预检豁免(非烧钱路径)。
+  if (!opts.dryrun) await hibernatePause("启动", { dir: directory })
   let server: ServerHandle | undefined
   // --interactive 旁路输入控制器;server 就绪后创建,finally 中关闭。
   let repl: Interactive | undefined
