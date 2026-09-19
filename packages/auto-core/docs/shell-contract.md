@@ -1,51 +1,51 @@
-# 核心/外壳契约(拆包边界与合入流程)
+# Core/shell contract (package boundary and merge flow)
 
-> AGENTS.md 只保留导航;核心/外壳的边界、依赖方向、差异注入扩展点、分支合入流程与新壳接入清单集中在本文件。物理拆包(阶段二)起生效,后续新外壳分支按本文件接入。
+> AGENTS.md keeps only navigation; the core/shell boundary, dependency direction, difference-injection extension points, branch merge flow, and the new-shell onboarding checklist are concentrated in this file. Effective since the physical package split (phase two); later new shell branches onboard per this file.
 
-## A. 边界
+## A. Boundary
 
-| 包 | 角色 | 内容 |
+| Package | Role | Contents |
 |---|---|---|
-| `packages/auto-core`(`@opencode-ai/auto-core`,无 bin) | **核心** | 机制(runner/loop/resume/numbering/phases/plan/verify/final/git/protect/config/server/mode/prompt/template/knowledge/interactive/log/shell/check)+ 内置模板(`templates/`)+ 设计文档(`docs/`) |
-| `packages/auto`(`@opencode-ai/auto`,bin `opencode-auto`) | 通用 CLI 壳 | init/continue/run/check/status 子命令版 `src/index.ts`、构建脚本、CLI 解析/e2e 测试 |
-| `packages/<name>`(`@opencode-ai/<name>`,bin `<bin>`) | 简易 CLI 壳(各壳分支) | 形态与产物命名由各壳分支自定,以既有简易壳分支为参照;核心不记录具体名称 |
+| `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/verify/final/git/protect/config/server/mode/prompt/template/knowledge/interactive/log/shell/check) + built-in templates (`templates/`) + design documents (`docs/`) |
+| `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/continue/run/check/status subcommands, build scripts, CLI parsing/e2e tests |
+| `packages/<name>` (`@opencode-ai/<name>`, bin `<bin>`) | Simple CLI shell (per shell branch) | Shape and artifact naming are decided by each shell branch, using the existing simple shell branch as reference; the core does not record specific names |
 
-判断口径:会话流水线、状态文件协议、提示词渲染、验收/提交机制属于**核心**;CLI 形态(子命令与否、用法文本、参数解析与配置固化策略、构建产物命名)属于**壳**。
+Decision rule: session pipeline, state-file protocol, prompt rendering, acceptance/commit mechanisms belong to the **core**; CLI shape (subcommands or not, usage text, argument parsing and config fixation policy, build artifact naming) belongs to the **shell**.
 
-## B. 单向依赖
+## B. One-way dependency
 
-- 壳 import `@opencode-ai/auto-core/*`(核心 `package.json` 的 `exports`:`"./*": "./src/*.ts"`、`"./templates/*": "./templates/*"`);模板经 `@opencode-ai/auto-core/templates/<file>` 子路径 `with { type: "file" }` 导入(编译期嵌入二进制)。
-- **核心不知外壳**:packages/auto-core 不得 import 任何壳包;缺省行为 = 通用壳现状,不设置画像时核心报文与历史行为逐字节一致。
-- **壳间互不依赖**:各壳包互不 import,只共享核心。
-- 壳包必须自带 `src/templates.d.ts` shim(`*.md`/`*.json` 导入的路径字符串类型,缺则跨包模板 import 全红);`tsconfig.json` 的 `resolveJsonModule: false` 勿移除。
+- Shells import `@opencode-ai/auto-core/*` (core `package.json` `exports`: `"./*": "./src/*.ts"`, `"./templates/*": "./templates/*"`); templates are imported from `@opencode-ai/auto-core/templates/<file>` via `with { type: "file" }` (embedded into the binary at compile time).
+- **The core does not know shells**: packages/auto-core must not import any shell package; default behavior = the general shell's status quo — with no profile set, core messages are byte-identical to historical behavior.
+- **Shells never depend on each other**: shell packages never import one another; they share only the core.
+- Each shell package must ship its own `src/templates.d.ts` shim (path-string types for `*.md`/`*.json` imports; without it, cross-package template imports all go red); do not remove `resolveJsonModule: false` from `tsconfig.json`.
 
-## C. 差异注入(壳层扩展点)
+## C. Difference injection (shell extension points)
 
-外壳差异一律经以下扩展点注入,**壳分支不得改 packages/auto-core**;核心需求先到 auto-core 分支加扩展点:
+Shell differences are injected exclusively through the following extension points; **shell branches must not modify packages/auto-core** — core needs get their extension points added on the auto-core branch first:
 
-1. `setShellProfile`(src/shell.ts):报文程序名(program/bin)、agent 契约缺失恢复指引(agentRecovery: `"init"`|"startup"`)、日志审计语义(auditLog);壳层入口启动时设置一次。例:简易壳 `{ program: "<壳名>", bin: "<bin>", agentRecovery: "startup", auditLog: true }`。
-2. `registerTemplate`(src/template.ts):登记附加提示词模板与协议标记(markers),优先于内置、目标目录覆盖最高;`_partials` 拒绝注册。
-3. 参数透传:壳层 CLI 解析结果经 runAll Opts / runTool 入参传入(newSession、managed server 句柄、verify/testByDriver 等既有开关)。
+1. `setShellProfile` (src/shell.ts): message program name (program/bin), recovery guidance for a missing agent contract (agentRecovery: `"init"` | `"startup"`), log audit semantics (auditLog); set once at shell entry startup. Example for a simple shell: `{ program: "<shell name>", bin: "<bin>", agentRecovery: "startup", auditLog: true }`.
+2. `registerTemplate` (src/template.ts): registers additional prompt templates and protocol markers; takes precedence over built-ins, with target-directory overrides highest; `_partials` refuses registration.
+3. Parameter passing: shell CLI parsing results flow in via runAll Opts / runTool arguments (newSession, managed server handle, verify/testByDriver and other existing switches).
 
-## D. 分支与合入流程
+## D. Branches and merge flow
 
-| 分支 | 职责 |
+| Branch | Responsibility |
 |---|---|
-| `auto-core` | 核心开发分支(packages/auto-core + packages/auto 通用壳;通用壳随核心分支演进) |
-| `migrate` | 简易壳开发分支(auto-core 快照 + packages/auto + 简易壳包,包名见该分支) |
-| `auto` | 集成分支(三包并存;发布/tag 以 auto 为准) |
+| `auto-core` | Core development branch (packages/auto-core + packages/auto general shell; the general shell evolves with the core branch) |
+| `migrate` | Simple shell development branch (auto-core snapshot + packages/auto + simple shell package; package name on that branch) |
+| `auto` | Integration branch (all three packages; releases/tags are cut from auto) |
 
-- **核心改动只落 auto-core 分支**;migrate 壳改动落 migrate 分支。
-- 壳分支定期 `git merge auto-core` 刷新核心快照——packages/auto 两侧恒等(均取 auto-core 侧),按构造无冲突。
-- 兼容后 merge 进 `auto` 集成分支;发布与 tag 以 auto 分支为准。
+- **Core changes land only on the auto-core branch**; migrate shell changes land on the migrate branch.
+- Shell branches periodically `git merge auto-core` to refresh the core snapshot — packages/auto is identical on both sides (always taking the auto-core side), conflict-free by construction.
+- After compatibility, merge into the `auto` integration branch; releases and tags follow the auto branch.
 
-## E. 新壳接入清单
+## E. New-shell onboarding checklist
 
-新建 `packages/<name>`(bin 独立命名),以既有简易壳分支的壳包为参照:
+Create `packages/<name>` (bin named independently), using the existing simple shell branch's package as reference:
 
-1. `package.json`:name `@opencode-ai/<name>`、bin `<独立名>`、`dependencies: { "@opencode-ai/auto-core": "workspace:*" }`(壳若无 sdk 直接 import 则不加)、typecheck/test/build scripts。
-2. 入口 `setShellProfile({ program, bin, agentRecovery, auditLog })` 设置外壳画像。
-3. 自带 `src/templates.d.ts` shim 与 `tsconfig.json`(复制壳包版)。
-4. 自带 `script/build.ts`(产物 `dist/<bin>`);模板保持 `with { type: "file" }` 跨包导入。
-5. 附加提示词模板经 `registerTemplate` 登记(协议敏感模板提供 markers)。
-6. 根目录 `bun install` 刷新 lock;测试在包目录运行(仓库根目录不能跑测试)。
+1. `package.json`: name `@opencode-ai/<name>`, bin `<independent name>`, `dependencies: { "@opencode-ai/auto-core": "workspace:*" }` (omit if the shell does not import the sdk directly), typecheck/test/build scripts.
+2. Entry point calls `setShellProfile({ program, bin, agentRecovery, auditLog })` to set the shell profile.
+3. Ship its own `src/templates.d.ts` shim and `tsconfig.json` (copy the shell package's version).
+4. Ship its own `script/build.ts` (artifact `dist/<bin>`); templates keep the cross-package `with { type: "file" }` import.
+5. Additional prompt templates are registered via `registerTemplate` (protocol-sensitive templates provide markers).
+6. Run `bun install` at the repo root to refresh the lockfile; run tests inside package directories (tests cannot run at the repository root).

@@ -1,3 +1,5 @@
+> **Retired historical document (2026-09-19, M0.6 / D6 two-tier docs)**: moved verbatim from `docs/behavior.md` into `plans/` as a numbered plan-era record. It describes the runtime behavior contract imposed on target directories as of the auto-core era; much of it will change under the auto-next refactor (intent/phase/agent rework). **Not maintained — never aligned with later code changes.** When needed, distill still-valid content into fresh numbered plans/ documents as the migration progresses; new documents are written in English (D7). Original preserved untranslated (historical record).
+
 # 行为约定详述(路由自 AGENTS.md)
 
 > 本文件描述的是**本程序对目标目录施加的运行时行为契约**(PLAN.md/CURRENT.md/统一提交/verify 等均为目标目录侧的对象与机制),属于设计本程序功能所需的认知;AGENTS.md 只保留高频核心不变量。设计基准见 docs/ 下各设计文档。

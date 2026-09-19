@@ -1,39 +1,39 @@
 # AGENTS.md
 
-面向编码代理的包内说明,保持精简;核心机制文档在 `../auto-core` 包:文件级结构见 [../auto-core/docs/structure.md](../auto-core/docs/structure.md),行为契约见 [../auto-core/docs/behavior.md](../auto-core/docs/behavior.md),设计基准见 `../auto-core/docs/` 下各设计文档,核心/外壳契约(边界/依赖方向/合入流程)见 [../auto-core/docs/shell-contract.md](../auto-core/docs/shell-contract.md);用户使用文档见 [README.md](./README.md)。
+Package-level notes for coding agents, kept lean: the core-mechanism documentation lives in the `../auto-core` package — file-level structure index in [../auto-core/docs/structure.md](../auto-core/docs/structure.md), the core/shell contract (boundary / dependency direction / merge flow) in [../auto-core/docs/shell-contract.md](../auto-core/docs/shell-contract.md), the retired target-directory behavior contract (historical, not maintained) in [../auto-core/plans/0029-behavior-historical.md](../auto-core/plans/0029-behavior-historical.md), and design documents in numbered `../auto-core/plans/NNNN-*.md`; user documentation in [README.md](./README.md).
 
-## 概述
+## Overview
 
-`@opencode-ai/auto` 是通用 CLI 外壳(bin `opencode-auto`):init/continue/run/reset/check/status 六个子命令与参数解析集中在 `src/index.ts`,全部机制实现在核心库 `@opencode-ai/auto-core`(workspace 依赖,子路径导入,经 `@opencode-ai/sdk` 的 v2 接口驱动 opencode 逐任务自动执行)。注释与用户可见文案使用中文。
+`@opencode-ai/auto` is the general CLI shell (bin `opencode-auto`): the init/continue/run/reset/check/status subcommands and argument parsing are concentrated in `src/index.ts`, and all mechanisms are implemented in the core library `@opencode-ai/auto-core` (workspace dependency, subpath imports, driving opencode through its v2 SDK interface for per-task automated execution). Comments and user-facing messages are written in English.
 
-## 命令(在本包目录运行)
+## Commands (run inside this package directory)
 
-- `bun run dev -- <args>` — 直接以源码运行 CLI。
-- `bun run build [--target <平台>]` — 生成独立可执行文件 `dist/opencode-auto`。
-- `bun typecheck` — `tsgo --noEmit`。
-- `bun test` — 运行 `test/`(CLI 解析/e2e)。
+- `bun run dev -- <args>` — run the CLI directly from source.
+- `bun run build [--target <platform>]` — produce the standalone executable `dist/opencode-auto`.
+- `bun typecheck` — `tsgo --noEmit`.
+- `bun test` — runs `test/` (CLI parsing / e2e).
 
-## 拆包边界
+## Package boundary
 
-- 本包只含 CLI 外壳(`src/index.ts`)、构建脚本与 e2e 测试;核心 src、模板与设计文档在 `../auto-core`。
-- **核心不知外壳**:不得在本包复制核心逻辑;需求涉及核心扩展点时先改 `../auto-core`(外壳差异经 `setShellProfile` 画像或 `registerTemplate` 注入)。
+- This package contains only the CLI shell (`src/index.ts`), build scripts, and e2e tests; core src, templates, and design documents live in `../auto-core`.
+- **The core does not know shells**: never duplicate core logic here; when a need touches a core extension point, change `../auto-core` first (shell differences are injected via the `setShellProfile` profile or `registerTemplate`).
 
-## 构建约定(开发本程序)
+## Build conventions (developing this program)
 
-- **模板必须保持 `with { type: "file" }` 导入**(经 `@opencode-ai/auto-core/templates/*` 子路径),这是编译时嵌入二进制的唯一方式;新增 init 复制模板 → `src/index.ts` 的 `templates` 映射,提示词/模式模板 → 改在 `../auto-core` 包。
-- `src/templates.d.ts` 为 `*.md` / `*.json` 导入提供路径字符串类型;`tsconfig.json` 里 `resolveJsonModule: false` 勿移除。
+- **Templates must keep the `with { type: "file" }` import** (via the `@opencode-ai/auto-core/templates/*` subpath) — the only way to embed them into the binary at compile time. New init copy templates → the `templates` mapping in `src/index.ts`; prompt/mode templates are changed in the `../auto-core` package.
+- `src/templates.d.ts` provides path-string types for `*.md` / `*.json` imports; do not remove `resolveJsonModule: false` from `tsconfig.json`.
 
-## init / reset 的配置语义(改动前必读)
+## Config semantics of init / reset (read before changing)
 
-- `init` 缺省**无状态全量覆盖**:`.opencode/auto/config.json` 仅由本次参数决定,未给出的键回落 `CONFIG_DEFAULTS`。唯一分水岭是 `src/index.ts` 的 `base = amend ? existing : CONFIG_DEFAULTS`;`--amend` 与 `continue` 取既有配置作基线。
-- 阶段台账前缀护栏判的是**本次生效值**(`effectivePhases`)而非"是否显式给出 `--phases`"——否则无参 init 会把阶段化项目的 phases 静默重置为 `"m"`、毁掉轮次布局。新增任何影响 `phases` 的路径都要保持这条判定。
-- `reset` 的清理清单与边界口径在 `../auto-core/src/reset.ts` 的文件头注释,改清单前先读完那段:只清配置层,目录一律 `rmdir`(空才回收,绝不 `rm -r`),与主程序共用的 `opencode.json` 逐字节比对模板后才删。
-- 两条破坏性路径(`reset`、覆盖既有配置的 `init`)执行前过 `../auto-core/src/clean.ts` 的工作区干净度闸门与 `confirm.ts` 的交互确认,`-f/--force` 一并跳过;两者都必须排在第一个写盘点之前。
+- `init` defaults to **stateless full overwrite**: `.opencode/auto/config.json` is decided solely by the parameters given this time, with absent keys falling back to `CONFIG_DEFAULTS`. The only watershed is `base = amend ? existing : CONFIG_DEFAULTS` in `src/index.ts`; `--amend` and `continue` take the existing config as the baseline.
+- The phase-ledger prefix guard judges the **effective value of this run** (`effectivePhases`), not "whether `--phases` was explicitly given" — otherwise a no-arg init would silently reset a staged project's phases to `"m"` and destroy the round layout. Any new path that affects `phases` must preserve this rule.
+- The cleanup list and boundary rules of `reset` are documented in the header comment of `../auto-core/src/reset.ts` — read that entire comment before changing the list: only the config layer is cleaned, directories are always removed with `rmdir` (reclaimed only when empty, never `rm -r`), and the `opencode.json` shared with the main program is deleted only after a byte-for-byte comparison against the template.
+- The two destructive paths (`reset`, and `init` overwriting an existing config) pass through the worktree-cleanliness gate (`../auto-core/src/clean.ts`) and the interactive confirmation (`confirm.ts`) before executing; `-f/--force` skips both; both checks must run before the first write to disk.
 
-## 核心不变量(改动前必读)
+## Core invariants (read before changing)
 
-见 `../auto-core/AGENTS.md`(退出码、宪法级配置固化、driver 独占状态写入、统一提交、完成判定契约;其中 PLAN.md 解析规则改动需同步本包 e2e 与 README 格式说明)。
+See `../auto-core/AGENTS.md` (exit codes, constitutional config fixation, driver-exclusive state writes, unified commit, completion-decision contract; changes to the PLAN.md parse rule must be synced with this package's e2e tests and the README format description).
 
-## 本文档维护
+## Maintaining this document
 
-保持精简:新机制只在此加一行导航,细节写入 `../auto-core/docs/` 下对应文档。
+Keep it lean: new mechanisms add one navigation line here; details go into the corresponding `../auto-core/plans/` numbered document (stage-scoped) or `../auto-core/docs/` (durable architecture).
