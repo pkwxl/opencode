@@ -88,7 +88,7 @@ export async function loadProjectConfig(dir: string): Promise<ProjectConfig> {
   try {
     parsed = JSON.parse(text)
   } catch (error) {
-    throw new Error(`${CONFIG_FILE} 不是合法 JSON: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`${CONFIG_FILE} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
   return validateProjectConfig(parsed, dir)
 }
@@ -124,34 +124,34 @@ async function readLegacyMode(dir: string): Promise<string | undefined> {
 
 // run 启动横幅 / status 共用的一行配置摘要。
 export function formatProjectConfig(config: ProjectConfig): string {
-  const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "不设"}`
+  const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "unset"}`
   return (
-    `模式 ${config.mode} · agent ${config.agent} · 子任务 ${config.subtask} · 验收 ${config.verify ? "on" : "off"}` +
-    ` · 看门狗 ${watchdog} · 提交 ${config.commit ? "on" : "off"}` +
-    (config.testByDriver ? ` · 测试 driver on${config.handoverTest ? "(交接)" : ""}` : "") +
-    (config.autoNumber ? " · 自动编号 on" : "") +
-    (config.wrapup ? "" : " · 收尾 off") +
-    ` · 上下文上限 ${config.contextLimit}k · 阶段 ${config.phases}`
+    `mode ${config.mode} · agent ${config.agent} · subtask ${config.subtask} · verify ${config.verify ? "on" : "off"}` +
+    ` · watchdog ${watchdog} · commit ${config.commit ? "on" : "off"}` +
+    (config.testByDriver ? ` · test-by-driver on${config.handoverTest ? "(handover)" : ""}` : "") +
+    (config.autoNumber ? " · auto-number on" : "") +
+    (config.wrapup ? "" : " · wrapup off") +
+    ` · context-limit ${config.contextLimit}k · phases ${config.phases}`
   )
 }
 
 // 值域与 CLI 侧 parse* 一致;未知键忽略(前向兼容),缺失键回落缺省值。
 function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${CONFIG_FILE} 须为 JSON 对象`)
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${CONFIG_FILE} must be a JSON object`)
   const record = raw as Record<string, unknown>
   const pick = (key: keyof ProjectConfig) => (record[key] === undefined ? CONFIG_DEFAULTS[key] : record[key])
   const mode = stringOf("mode", pick("mode"))
   const modes = loadModes(dir)
   if (!modes[mode]) {
-    throw new Error(`${CONFIG_FILE} 的 mode 取值 "${mode}" 未注册(当前支持: ${Object.keys(modes).join(", ")})`)
+    throw new Error(`${CONFIG_FILE} mode value "${mode}" is not registered (currently supported: ${Object.keys(modes).join(", ")})`)
   }
   const contextLimit = pick("contextLimit")
   if (typeof contextLimit !== "number" || !Number.isInteger(contextLimit) || contextLimit < 1) {
-    throw new Error(`${CONFIG_FILE} 的 contextLimit 须为正整数(千 tokens)`)
+    throw new Error(`${CONFIG_FILE} contextLimit must be a positive integer (thousands of tokens)`)
   }
   const phases = pick("phases")
   if (typeof phases !== "string" || parsePhases(phases) === null) {
-    throw new Error(`${CONFIG_FILE} 的 phases 须为 admtvk 的子序列且包含 m(如 m、amt、admtvk)`)
+    throw new Error(`${CONFIG_FILE} phases must be a subsequence of admtvk and contain m (e.g. m, amt, admtvk)`)
   }
   // commit:false 已退役(2026-09-15,plans/0021-commit-boundary-design.md): 统一提交是
   // 完成条件,单元提交边界的 clean 门禁/SHA 基线与恢复保真的回滚锚点全部以"提交
@@ -159,12 +159,12 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   // 即报错交人工,不静默改写语义(代码侧的 opts.commit 门禁暂留,清理另立任务)。
   const commit = booleanOf("commit", pick("commit"))
   if (!commit) {
-    throw new Error(`${CONFIG_FILE} 的 commit: false 已退役(统一提交是完成条件,见 plans/0021-commit-boundary-design.md): 请删除该键或改为 true`)
+    throw new Error(`${CONFIG_FILE} commit: false is retired (unified commit is a completion condition, see plans/0021-commit-boundary-design.md): remove the key or set it to true`)
   }
   const testByDriver = booleanOf("testByDriver", pick("testByDriver"))
   const handoverTest = booleanOf("handoverTest", pick("handoverTest"))
   if (handoverTest && !testByDriver) {
-    throw new Error(`${CONFIG_FILE} 的 handoverTest 须搭配 testByDriver: true`)
+    throw new Error(`${CONFIG_FILE} handoverTest requires testByDriver: true`)
   }
   return {
     mode,
@@ -178,8 +178,8 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     wrapup: booleanOf("wrapup", pick("wrapup")),
     // 看门狗键由 verifyIdle/verifyMax 更名而来(现同时控制 verify 与 test 脚本
     // 执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init 自然固化新键。
-    idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "分钟"),
-    idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "分钟,0 为不设"),
+    idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "minutes"),
+    idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "minutes, 0 = unset"),
     commit,
     phases,
     source: sourceOf(record.source),
@@ -193,17 +193,17 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
 function sourceOf(value: unknown): { dir: string; path: string } | undefined {
   if (value === undefined) return undefined
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${CONFIG_FILE} 的 source 须为 { "dir": ..., "path": ... } 对象`)
+    throw new Error(`${CONFIG_FILE} source must be a { "dir": ..., "path": ... } object`)
   }
   const record = value as Record<string, unknown>
   const path = record.path
-  if (typeof path !== "string" || !path) throw new Error(`${CONFIG_FILE} 的 source.path 须为非空字符串`)
+  if (typeof path !== "string" || !path) throw new Error(`${CONFIG_FILE} source.path must be a non-empty string`)
   if (isAbsolute(path) || path.split(/[\\/]+/).includes("..")) {
-    throw new Error(`${CONFIG_FILE} 的 source.path 须为不含 .. 的相对路径(相对 source.dir)`)
+    throw new Error(`${CONFIG_FILE} source.path must be a relative path without .. (relative to source.dir)`)
   }
   const dir = stringOf("source.dir", record.dir)
   if (isAbsolute(dir) || dir.split(/[\\/]+/).includes("..")) {
-    throw new Error(`${CONFIG_FILE} 的 source.dir 须为不含 .. 的相对路径(相对工作目录)`)
+    throw new Error(`${CONFIG_FILE} source.dir must be a relative path without .. (relative to the working directory)`)
   }
   return { dir, path }
 }
@@ -214,31 +214,31 @@ function destDirOf(value: unknown): string | undefined {
   if (value === undefined) return undefined
   const dir = stringOf("destDir", value)
   if (isAbsolute(dir) || dir.split(/[\\/]+/).includes("..")) {
-    throw new Error(`${CONFIG_FILE} 的 destDir 须为不含 .. 的相对路径(相对工作目录)`)
+    throw new Error(`${CONFIG_FILE} destDir must be a relative path without .. (relative to the working directory)`)
   }
   return dir
 }
 
 function stringOf(key: string, value: unknown): string {
-  if (typeof value !== "string" || !value) throw new Error(`${CONFIG_FILE} 的 ${key} 须为非空字符串`)
+  if (typeof value !== "string" || !value) throw new Error(`${CONFIG_FILE} ${key} must be a non-empty string`)
   return value
 }
 
 function booleanOf(key: string, value: unknown): boolean {
-  if (typeof value !== "boolean") throw new Error(`${CONFIG_FILE} 的 ${key} 须为 true|false`)
+  if (typeof value !== "boolean") throw new Error(`${CONFIG_FILE} ${key} must be true|false`)
   return value
 }
 
 function intInRange(key: string, value: unknown, min: number, max: number, unit: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
-    throw new Error(`${CONFIG_FILE} 的 ${key} 须为 ${min}..${max} 的整数(${unit})`)
+    throw new Error(`${CONFIG_FILE} ${key} must be an integer in ${min}..${max} (${unit})`)
   }
   return value
 }
 
 function subtaskOf(value: unknown): SubtaskMode {
   if (value !== "off" && value !== "auto" && value !== "ondemand") {
-    throw new Error(`${CONFIG_FILE} 的 subtask 须为 off|auto|ondemand`)
+    throw new Error(`${CONFIG_FILE} subtask must be off|auto|ondemand`)
   }
   return value
 }

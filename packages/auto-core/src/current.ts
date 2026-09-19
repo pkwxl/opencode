@@ -11,18 +11,19 @@ import { allowWrite, reprotect } from "./protect"
 // the agent contract points sessions here only as a fallback: after context
 // compaction, or when a session doubts the current task/progress.
 // The server re-reads it on every provider turn, so no restart is needed.
-// remark: 非完成结局保留文件时附带的"中断备注"(退出原因/阶段/恢复方式)。
+// remark: the "interruption note" attached when the file is kept on a
+// non-completed outcome (exit reason / phase / how to resume).
 export async function writeCurrent(path: string, task: Task, solo = false, remark?: string) {
   const progress = countSubtasks(task.body)
   const content = [
-    `# 当前任务(由 opencode-auto 维护,请勿手工编辑)`,
+    `# Current task (maintained by opencode-auto, do not edit manually)`,
     ``,
     `## ${task.id}: ${task.title} [${task.status}]`,
     ...(task.verify ? [`  - verify: ${task.verify}`] : []),
     ``,
     task.body,
     ``,
-    progress.total ? `进度: 子任务 ${progress.done}/${progress.total}` : solo ? `进度: 单会话执行(无子任务划分)` : `进度: 分解中`,
+    progress.total ? `Progress: subtasks ${progress.done}/${progress.total}` : solo ? `Progress: single-session execution (no subtask split)` : `Progress: decomposing`,
     ``,
     ...(remark ? [remark, ""] : []),
   ].join("\n")

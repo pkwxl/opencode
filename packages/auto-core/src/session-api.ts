@@ -24,17 +24,17 @@ export async function forkSession(client: OpencodeClient, base: string, title: s
     // messageID 为分叉锚点: 服务端复制该消息**之前**的全部消息(缺省复制整条会话)。
     const forked = await client.session.fork({ sessionID: base, ...(messageID ? { messageID } : {}) })
     if (forked.error) {
-      log(`↻ fork 失败(${JSON.stringify(forked.error)}),回退全新会话`)
+      log(`↻ fork failed (${JSON.stringify(forked.error)}); falling back to a brand-new session`)
       return undefined
     }
     const id = forked.data.id
     // 分叉会话默认标题形如 "... (fork #N)";改名为本阶段提交标题,与 git 历史、
     // 任务进度对齐(改名失败仅记明细)。
     const renamed = await client.session.update({ sessionID: id, title: commitTitle(title) }).catch(() => undefined)
-    if (renamed?.error) vlog(`fork 会话改名失败: ${JSON.stringify(renamed.error)}`)
+    if (renamed?.error) vlog(`fork session rename failed: ${JSON.stringify(renamed.error)}`)
     return id
   } catch (error) {
-    log(`↻ fork 失败(${error instanceof Error ? error.message : String(error)}),回退全新会话`)
+    log(`↻ fork failed (${error instanceof Error ? error.message : String(error)}); falling back to a brand-new session`)
     return undefined
   }
 }
@@ -59,7 +59,7 @@ export async function seedForkSession(
   if (chain.id !== undefined && chain.note !== undefined) return true
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   if (base.used >= cap / 2) {
-    log(`↻ 基点用量 ${formatTokens(base.used)} 达到 ${formatTokens(cap / 2)} 上限,不起分叉(冷启动)`)
+    log(`↻ base usage ${formatTokens(base.used)} reached the ${formatTokens(cap / 2)} cap; not forking (cold start)`)
     chain.id = undefined
     chain.pending = undefined
     chain.pct = 100
@@ -77,7 +77,7 @@ export async function seedForkSession(
   chain.pct = 100
   chain.used = forked ? base.used : 0
   chain.at = 0
-  if (forked) log(`⑂ 从基点 ${base.id} 分叉新会话(前缀 ${formatTokens(base.used)} tokens)`)
+  if (forked) log(`⑂ forked a new session from base ${base.id} (prefix ${formatTokens(base.used)} tokens)`)
   return forked !== undefined
 }
 
@@ -148,7 +148,7 @@ export async function renameSession(client: OpencodeClient, chain: SessionChain,
   chain.subject = subject
   if (!chain.id) return
   const renamed = await client.session.update({ sessionID: chain.id, title: commitTitle(subject) }).catch(() => undefined)
-  if (renamed?.error) vlog(`会话改名失败: ${JSON.stringify(renamed.error)}`)
+  if (renamed?.error) vlog(`session rename failed: ${JSON.stringify(renamed.error)}`)
 }
 
 // 记忆会话是否仍存在于 server 上(opencode 会话持久化在项目存储,server 重启
@@ -189,9 +189,9 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
   const { program, bin, agentRecovery } = shellProfile()
   const recovery =
     agentRecovery === "startup"
-      ? `重新运行 ${program} 恢复(启动时按模板重建默认契约)后重跑`
-      : `运行 ${bin} init ${opts.dir} 恢复后重跑`
-  return `\n提示: 目标目录缺少 agent 契约文件 ${file},服务端会因此以 UnknownError 拒绝下发任务;${recovery}`
+      ? `re-run ${program} to restore (the default contracts are rebuilt from templates at startup), then re-run`
+      : `run ${bin} init ${opts.dir} to restore, then re-run`
+  return `\nhint: the target directory is missing the agent contract file ${file}; the server rejects task dispatches with UnknownError because of this; ${recovery}`
 }
 
 // 把非文本 part 转成一行可读输出(始终经 vlog 交给 log 层决定去留: --verbose 上
@@ -199,21 +199,21 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
 // 终态内容可输出(后续更新事件会再触发)。工具输出与推理原文较长,
 // 截断到与 verify 输出相同的 2000 字符上限。
 export function describePart(part: Part): string | undefined {
-  if (part.type === "reasoning") return part.time.end ? `  推理:\n${part.text.trim().slice(0, 2000)}` : undefined
+  if (part.type === "reasoning") return part.time.end ? `  reasoning:\n${part.text.trim().slice(0, 2000)}` : undefined
   if (part.type === "tool") {
-    if (part.state.status === "completed") return `  工具 ${part.tool}: ${part.state.title || "完成"}`
-    if (part.state.status === "error") return `  工具 ${part.tool} 出错: ${part.state.error.slice(0, 2000)}`
+    if (part.state.status === "completed") return `  tool ${part.tool}: ${part.state.title || "done"}`
+    if (part.state.status === "error") return `  tool ${part.tool} error: ${part.state.error.slice(0, 2000)}`
     return undefined
   }
-  if (part.type === "step-finish") return `  步骤结束(${part.reason}): 输入 ${formatTokens(part.tokens.input)} / 输出 ${formatTokens(part.tokens.output)} tokens`
-  if (part.type === "step-start") return `  步骤开始`
-  if (part.type === "file") return `  文件: ${part.filename ?? part.url}`
-  if (part.type === "subtask") return `  子任务(${part.agent}): ${part.description}`
-  if (part.type === "agent") return `  子代理: ${part.name}`
-  if (part.type === "patch") return `  补丁(${part.files.length} 个文件): ${part.files.join(", ")}`
-  if (part.type === "snapshot") return `  快照: ${part.snapshot}`
-  if (part.type === "retry") return `  ↻ 请求重试(第 ${part.attempt} 次)`
-  if (part.type === "compaction") return `  上下文压缩${part.auto ? "(自动)" : ""}`
+  if (part.type === "step-finish") return `  step finish (${part.reason}): input ${formatTokens(part.tokens.input)} / output ${formatTokens(part.tokens.output)} tokens`
+  if (part.type === "step-start") return `  step start`
+  if (part.type === "file") return `  file: ${part.filename ?? part.url}`
+  if (part.type === "subtask") return `  subtask (${part.agent}): ${part.description}`
+  if (part.type === "agent") return `  subagent: ${part.name}`
+  if (part.type === "patch") return `  patch (${part.files.length} files): ${part.files.join(", ")}`
+  if (part.type === "snapshot") return `  snapshot: ${part.snapshot}`
+  if (part.type === "retry") return `  ↻ request retry (attempt ${part.attempt})`
+  if (part.type === "compaction") return `  context compaction${part.auto ? " (auto)" : ""}`
   return undefined
 }
 
@@ -307,7 +307,7 @@ export async function askHuman(
   interactive?: Interactive,
   dir?: string,
 ): Promise<string | undefined> {
-  const promptText = `请在 ${minutes} 分钟内输入回答(回车确认,${hint}): `
+  const promptText = `enter your answer within ${minutes} minutes (Enter to confirm, ${hint}): `
   await statsWaitBegin(dir, "askHuman")
   try {
     if (interactive) return (await interactive.question(promptText, minutes)) || undefined

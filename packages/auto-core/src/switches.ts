@@ -204,14 +204,14 @@ function parseModelPolicy(rawModel: string | undefined, rawFallback: string | un
         const idx = entry.indexOf("=")
         if (idx < 0) {
           throw new Error(
-            `环境变量 ${SWITCH_ENV.model} 条目非法: "${entry}"(条目表形态每项须为 键=prov/model;示例 ${modelExample})`,
+            `env ${SWITCH_ENV.model} invalid entry: "${entry}" (entry-list form requires key=prov/model per item; example ${modelExample})`,
           )
         }
         const key = entry.slice(0, idx)
         const value = entry.slice(idx + 1)
         if (!value.includes("/")) {
           throw new Error(
-            `环境变量 ${SWITCH_ENV.model} 取值非法: "${value}"(键 "${key}" 的模型须为 provider/model 形态含斜杠;示例 ${modelExample})`,
+            `env ${SWITCH_ENV.model} invalid value: "${value}" (model for key "${key}" must be provider/model with a slash; example ${modelExample})`,
           )
         }
         if (key === "*") policy.wildcard = value
@@ -219,7 +219,7 @@ function parseModelPolicy(rawModel: string | undefined, rawFallback: string | un
         else if ((MODEL_ROLES as readonly string[]).includes(key)) policy.byRole[key as ModelRole] = value
         else {
           throw new Error(
-            `环境变量 ${SWITCH_ENV.model} 键非法: "${key}"(期望 *、阶段字母 ${MODEL_LETTERS.join("|")} 或角色词表 ${MODEL_ROLES.join("|")};示例 ${modelExample})`,
+            `env ${SWITCH_ENV.model} invalid key: "${key}" (expected *, a phase letter ${MODEL_LETTERS.join("|")}, or a role word ${MODEL_ROLES.join("|")}; example ${modelExample})`,
           )
         }
       }
@@ -227,7 +227,7 @@ function parseModelPolicy(rawModel: string | undefined, rawFallback: string | un
       // 裸值形态:全量覆盖。
       if (!modelRaw.includes("/")) {
         throw new Error(
-          `环境变量 ${SWITCH_ENV.model} 取值非法: "${modelRaw}"(裸值须为 provider/model 形态含斜杠,或改用条目表 键=prov/model;示例 ${modelExample})`,
+          `env ${SWITCH_ENV.model} invalid value: "${modelRaw}" (bare value must be provider/model with a slash, or use entry-list key=prov/model; example ${modelExample})`,
         )
       }
       policy.wildcard = modelRaw
@@ -239,7 +239,7 @@ function parseModelPolicy(rawModel: string | undefined, rawFallback: string | un
     for (const item of fallbackRaw.split(",")) {
       if (!item.includes("/")) {
         throw new Error(
-          `环境变量 ${SWITCH_ENV.modelFallback} 取值非法: "${item}"(候选须为 provider/model 形态、逗号分隔有序表;示例 prov/a,prov/b)`,
+          `env ${SWITCH_ENV.modelFallback} invalid value: "${item}" (candidates must be provider/model, a comma-separated ordered list; example prov/a,prov/b)`,
         )
       }
       policy.fallback.push(item)
@@ -281,7 +281,7 @@ function parseHibernate(raw: string | undefined): HibernateWindow | undefined {
   const match = /^(\d{1,2}):(\d{2})\+(\d+(?:\.\d+)?)$/.exec(raw)
   if (!match) {
     throw new Error(
-      `环境变量 ${SWITCH_ENV.hibernate} 取值非法: "${raw}"(期望 HH:MM+H——UTC 起点 + 休眠小时数,如 04:00+6、22:00+8.5;空串视同未设,缺省不休眠)`,
+      `env ${SWITCH_ENV.hibernate} invalid value: "${raw}" (expected HH:MM+H — UTC start + hibernate hours, e.g. 04:00+6, 22:00+8.5; empty string = unset, default no hibernation)`,
     )
   }
   const hour = Number(match[1])
@@ -289,7 +289,7 @@ function parseHibernate(raw: string | undefined): HibernateWindow | undefined {
   const hours = Number(match[3])
   if (hour > 23 || minute > 59 || !(hours > 0) || hours >= 24) {
     throw new Error(
-      `环境变量 ${SWITCH_ENV.hibernate} 取值非法: "${raw}"(HH ∈ 00..23、MM ∈ 00..59、H ∈ (0,24) 小时;示例 04:00+6)`,
+      `env ${SWITCH_ENV.hibernate} invalid value: "${raw}" (HH ∈ 00..23, MM ∈ 00..59, H ∈ (0,24) hours; example 04:00+6)`,
     )
   }
   return { startMin: hour * 60 + minute, durationMin: hours * 60 }
@@ -301,7 +301,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
   const onOff = (name: string, raw: string | undefined, fallback: boolean): boolean => {
     const value = raw === undefined || raw === "" ? (fallback ? "on" : "off") : raw
     if (value !== "on" && value !== "off") {
-      throw new Error(`环境变量 ${name} 取值非法: "${raw}"(期望 on|off;空串视同未设,缺省 ${fallback ? "on" : "off"})`)
+      throw new Error(`env ${name} invalid value: "${raw}" (expected on|off; empty string = unset, default ${fallback ? "on" : "off"})`)
     }
     return value === "on"
   }
@@ -314,7 +314,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     return parts.map((part) => {
       const value = Number(part)
       if (part === "" || !Number.isFinite(value) || value < 0) {
-        throw new Error(`环境变量 ${name} 取值非法: "${raw}"(期望 off 或逗号分隔的非负分钟数,如 0,1,2,4,8;空串视同未设)`)
+        throw new Error(`env ${name} invalid value: "${raw}" (expected off or comma-separated non-negative minutes, e.g. 0,1,2,4,8; empty string = unset)`)
       }
       return value
     })
@@ -323,27 +323,27 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     if (raw === undefined || raw === "") return fallback
     const value = Number(raw)
     if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`环境变量 ${name} 取值非法: "${raw}"(期望非负分钟数,0 = 不等待;空串视同未设,缺省 ${fallback})`)
+      throw new Error(`env ${name} invalid value: "${raw}" (expected non-negative minutes, 0 = no wait; empty string = unset, default ${fallback})`)
     }
     return value
   }
   const forkBaseRaw = env[SWITCH_ENV.forkBase]
   const forkBase = forkBaseRaw === undefined || forkBaseRaw === "" ? SWITCH_DEFAULTS.forkBase : forkBaseRaw
   if (forkBase !== "session" && forkBase !== "digest") {
-    throw new Error(`环境变量 ${SWITCH_ENV.forkBase} 取值非法: "${forkBaseRaw}"(期望 session|digest;空串视同未设,缺省 digest)`)
+    throw new Error(`env ${SWITCH_ENV.forkBase} invalid value: "${forkBaseRaw}" (expected session|digest; empty string = unset, default digest)`)
   }
   const stepRaw = env[SWITCH_ENV.step]
   const step = stepRaw === undefined || stepRaw === "" ? SWITCH_DEFAULTS.step : stepRaw
   if (step !== "off" && step !== "phase" && step !== "task" && step !== "subtask") {
     throw new Error(
-      `环境变量 ${SWITCH_ENV.step} 取值非法: "${stepRaw}"(期望 off|phase|task|subtask;空串视同未设,缺省 off)`,
+      `env ${SWITCH_ENV.step} invalid value: "${stepRaw}" (expected off|phase|task|subtask; empty string = unset, default off)`,
     )
   }
   const taskContextRaw = env[SWITCH_ENV.taskContext]
   const taskContext = taskContextRaw === undefined || taskContextRaw === "" ? SWITCH_DEFAULTS.taskContext : taskContextRaw
   if (taskContext !== "off" && taskContext !== "small" && taskContext !== "medium" && taskContext !== "large") {
     throw new Error(
-      `环境变量 ${SWITCH_ENV.taskContext} 取值非法: "${taskContextRaw}"(期望 off|small|medium|large;空串视同未设,缺省 off)`,
+      `env ${SWITCH_ENV.taskContext} invalid value: "${taskContextRaw}" (expected off|small|medium|large; empty string = unset, default off)`,
     )
   }
   const failbackScopeRaw = env[SWITCH_ENV.modelFailbackScope]
@@ -356,7 +356,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     modelFailbackScope !== "session"
   ) {
     throw new Error(
-      `环境变量 ${SWITCH_ENV.modelFailbackScope} 取值非法: "${failbackScopeRaw}"(期望 phase|task|subtask|session;空串视同未设,缺省 task)`,
+      `env ${SWITCH_ENV.modelFailbackScope} invalid value: "${failbackScopeRaw}" (expected phase|task|subtask|session; empty string = unset, default task)`,
     )
   }
   return {
@@ -450,7 +450,7 @@ export function autoSwitches(): Switches {
   if (memo) return memo
   memo = parseSwitches(process.env)
   const changed = nonDefaultSwitches(memo)
-  if (changed) log(`⚙ 实验开关(OPENCODE_AUTO_* 环境变量,仅本次运行生效): ${changed}`)
-  vlog(`⚙ 实验开关全量: ${formatSwitches(memo)}`)
+  if (changed) log(`⚙ experimental switches (OPENCODE_AUTO_* env vars, this run only): ${changed}`)
+  vlog(`⚙ experimental switches (full): ${formatSwitches(memo)}`)
   return memo
 }

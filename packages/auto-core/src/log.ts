@@ -113,17 +113,18 @@ function rule(char: string, text: string) {
 // 接线(删 runner.ts:79-88 与 loop.ts:879-884 私有副本、改 import)属 T-002/T-003,
 // 本收口只新增函数,不改任何现有调用点。
 
-// 中文式时长(loop.ts:879-884 版逐字保留 + 新增小时档): "N 秒" / "N 分 N 秒" /
-// "N 小时 N 分"。用于任务/阶段/轮次收口等结论行。
-// AUTO-DECISION: 小时档取 "N 小时 N 分"(舍秒): 小时级场景秒无意义,且与计划 §4
-// 报文草案("52 分"同样舍秒)风格一致;备选 "N 时 N 分 N 秒" 更精确但结论行偏长,否决。
+// Verbose duration (loop.ts:879-884 version kept verbatim + new hour tier):
+// "Ns" / "Nm Ns" / "Nh Nm". Used in task/phase/round conclusion lines.
+// AUTO-DECISION: hour tier is "Nh Nm" (seconds dropped): seconds are noise at
+// hour scale, consistent with the plan §4 draft ("52m" also drops seconds);
+// the more precise "Nh Nm Ns" was rejected as too long for conclusion lines.
 export function formatDuration(ms: number): string {
   const seconds = Math.round(ms / 1000)
   const minutes = Math.floor(seconds / 60)
-  if (!minutes) return `${seconds} 秒`
+  if (!minutes) return `${seconds}s`
   const hours = Math.floor(minutes / 60)
-  if (!hours) return `${minutes} 分 ${seconds % 60} 秒`
-  return `${hours} 小时 ${minutes % 60} 分`
+  if (!hours) return `${minutes}m ${seconds % 60}s`
+  return `${hours}h ${minutes % 60}m`
 }
 
 // 紧凑式时长(runner.ts:79-88 版逐字保持): "Nms" / "N.Ns" / "Nm" / "NmNs"。
@@ -167,12 +168,15 @@ export function formatCacheHit(cacheRead: number, input: number): string {
   return `${((cacheRead / total) * 100).toFixed(1)}%`
 }
 
-// tokens 分项行(STATS_PLAN §4 的统一 tokens 行格式,T-006 收口): T-004 ◉ 会话结束
-// 行 2 与 T-006 任务/阶段/轮次结论行共用同一构造函数,保证格式不漂移——
-// `tokens 入 N / 出 M[/ 思考 R] / 缓存读 C / 缓存写 W,命中率 H[,费用 $X]`。
-// 省略规则: reasoning=0 省略思考项(插在"出"与"缓存读"之间,与 Usage 分项声明序
-// 一致);cost=0 省略费用项(formatCost);命中率分母 0 显示 —(formatCacheHit)。
-// 需要"累计"后缀的调用方(如会话行的费用累计)在返回值后自行追加。
+// Token breakdown line (unified tokens-line format of STATS_PLAN §4, T-006):
+// shared by the T-004 ◉ session-end line 2 and the T-006 task/phase/round
+// conclusion lines so the format cannot drift —
+// `tokens in N / out M[/ reasoning R] / cache-read C / cache-write W, hit H[, cost $X]`.
+// Omission rules: reasoning=0 drops the reasoning item (inserted between "out"
+// and "cache-read", matching the Usage field declaration order); cost=0 drops
+// the cost item (formatCost); hit-rate denominator 0 shows — (formatCacheHit).
+// Callers needing a "cumulative" suffix (e.g. session-line running cost)
+// append it to the return value themselves.
 export function formatUsageLine(usage: {
   input: number
   output: number
@@ -183,10 +187,10 @@ export function formatUsageLine(usage: {
 }): string {
   const cost = formatCost(usage.cost)
   return (
-    `tokens 入 ${formatTokens(usage.input)} / 出 ${formatTokens(usage.output)}` +
-    `${usage.reasoning ? ` / 思考 ${formatTokens(usage.reasoning)}` : ""}` +
-    ` / 缓存读 ${formatTokens(usage.cacheRead)} / 缓存写 ${formatTokens(usage.cacheWrite)}` +
-    `,命中率 ${formatCacheHit(usage.cacheRead, usage.input)}` +
-    `${cost ? `,费用 ${cost}` : ""}`
+    `tokens in ${formatTokens(usage.input)} / out ${formatTokens(usage.output)}` +
+    `${usage.reasoning ? ` / reasoning ${formatTokens(usage.reasoning)}` : ""}` +
+    ` / cache-read ${formatTokens(usage.cacheRead)} / cache-write ${formatTokens(usage.cacheWrite)}` +
+    `, hit ${formatCacheHit(usage.cacheRead, usage.input)}` +
+    `${cost ? `, cost ${cost}` : ""}`
   )
 }

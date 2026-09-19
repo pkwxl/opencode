@@ -82,17 +82,17 @@ describe("log", () => {
 
 describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
   test("formatDuration 中文式: 秒 / 分秒 / 小时分", () => {
-    expect(formatDuration(0)).toBe("0 秒")
-    expect(formatDuration(999)).toBe("1 秒") // Math.round 进位,与 loop 原版一致
-    expect(formatDuration(45_000)).toBe("45 秒")
-    expect(formatDuration(59_499)).toBe("59 秒")
-    expect(formatDuration(59_500)).toBe("1 分 0 秒") // Math.round 进位后升档(loop 原版行为)
-    expect(formatDuration(60_000)).toBe("1 分 0 秒")
-    expect(formatDuration(24 * 60_000 + 31_000)).toBe("24 分 31 秒")
-    expect(formatDuration(59 * 60_000 + 59_000)).toBe("59 分 59 秒")
-    expect(formatDuration(60 * 60_000)).toBe("1 小时 0 分")
-    expect(formatDuration(52 * 60_000)).toBe("52 分 0 秒")
-    expect(formatDuration(2 * 3600_000 + 5 * 60_000 + 30_000)).toBe("2 小时 5 分")
+    expect(formatDuration(0)).toBe("0s")
+    expect(formatDuration(999)).toBe("1s") // Math.round 进位,与 loop 原版一致
+    expect(formatDuration(45_000)).toBe("45s")
+    expect(formatDuration(59_499)).toBe("59s")
+    expect(formatDuration(59_500)).toBe("1m 0s") // Math.round 进位后升档(loop 原版行为)
+    expect(formatDuration(60_000)).toBe("1m 0s")
+    expect(formatDuration(24 * 60_000 + 31_000)).toBe("24m 31s")
+    expect(formatDuration(59 * 60_000 + 59_000)).toBe("59m 59s")
+    expect(formatDuration(60 * 60_000)).toBe("1h 0m")
+    expect(formatDuration(52 * 60_000)).toBe("52m 0s")
+    expect(formatDuration(2 * 3600_000 + 5 * 60_000 + 30_000)).toBe("2h 5m")
   })
 
   test("formatDurationCompact 紧凑式: 与 runner.ts 私有副本逐字一致", () => {
@@ -134,15 +134,15 @@ describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
   // T-006 任务/阶段/轮次结论行共用。
   test("formatUsageLine: 思考项位次(出与缓存读之间)/cost=0 省略费用/命中率分母 0", () => {
     const base = { input: 1200, output: 340, reasoning: 0, cacheRead: 28_400, cacheWrite: 3100, cost: 0 }
-    expect(formatUsageLine(base)).toBe("tokens 入 1200 / 出 340 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%")
+    expect(formatUsageLine(base)).toBe("tokens in 1200 / out 340 / cache-read 28.4k / cache-write 3100, hit 95.9%")
     expect(formatUsageLine({ ...base, reasoning: 120 })).toBe(
-      "tokens 入 1200 / 出 340 / 思考 120 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%",
+      "tokens in 1200 / out 340 / reasoning 120 / cache-read 28.4k / cache-write 3100, hit 95.9%",
     )
     expect(formatUsageLine({ ...base, cost: 0.041 })).toBe(
-      "tokens 入 1200 / 出 340 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%,费用 $0.041",
+      "tokens in 1200 / out 340 / cache-read 28.4k / cache-write 3100, hit 95.9%, cost $0.041",
     )
     expect(formatUsageLine({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0 })).toBe(
-      "tokens 入 0 / 出 0 / 缓存读 0 / 缓存写 0,命中率 —",
+      "tokens in 0 / out 0 / cache-read 0 / cache-write 0, hit —",
     )
   })
 })

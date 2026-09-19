@@ -113,7 +113,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       const opts: Opts = { dir, commit: true }
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, opts, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
-      expect((result as { question: string }).question).toContain("零变更")
+      expect((result as { question: string }).question).toContain("zero disk writes")
       expect(calls.prompts.length).toBe(2)
       // 反馈复述权威状态(L1)并直指误判
       const feedback = promptText(calls.prompts[1]!)
@@ -144,7 +144,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
-      expect(promptText(calls.prompts[1]!)).toContain("docs/T-001/S01/record.md 不存在")
+      expect(promptText(calls.prompts[1]!)).toContain("declared artifact docs/T-001/S01/record.md does not exist")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -209,8 +209,8 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain("缺少章节「背景」")
-      expect(feedback).toContain("缺少章节「结论」")
+      expect(feedback).toContain('is missing section "背景"')
+      expect(feedback).toContain('is missing section "结论"')
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })

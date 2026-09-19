@@ -41,44 +41,51 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
   const pre = await preflight(directory, path, opts)
   if ("exit" in pre) return pre.exit
   const { agentName, watcher, progress } = pre
-  // 休眠窗口启动检查(OPENCODE_AUTO_HIBERNATE,D4): 启动即处于窗口内则先睡到窗口
-  // 结束 + 随机延迟再继续,避免白做首个执行单元;dryrun 权限预检豁免(非烧钱路径)。
-  if (!opts.dryrun) await hibernatePause("启动", { dir: directory })
+  // Hibernate window startup check (OPENCODE_AUTO_HIBERNATE, D4): when starting
+  // inside the window, sleep until window end + random delay before continuing,
+  // so the first execution unit isn't wasted; dryrun permission preflight is
+  // exempt (not a token-spending path).
+  if (!opts.dryrun) await hibernatePause("startup", { dir: directory })
   let server: ServerHandle | undefined
-  // --interactive 旁路输入控制器;server 就绪后创建,finally 中关闭。
+  // --interactive sideband input controller; created once the server is ready,
+  // closed in finally.
   let repl: Interactive | undefined
-  // 单次 Ctrl+C 不终止(运行期间事件流/子进程可能吞掉或挂起默认退出),
-  // 窗口期内连续第二次按下才强制终止:尽力恢复文件可写并关闭 server 后退出。
+  // A single Ctrl+C does not terminate (the event stream/subprocesses may
+  // swallow or hang the default exit during a run); a second press within the
+  // window force-terminates: best-effort restore file writability, close the
+  // server, exit.
   let sigintAt = 0
   const onSigint = () => {
     const now = Date.now()
     if (now - sigintAt > 3000) {
       sigintAt = now
-      log("⚠ 已捕获 Ctrl+C,3 秒内再次按下将强制终止运行")
+      log("⚠ Ctrl+C captured; press again within 3s to force-terminate the run")
       return
     }
-    log("✋ 收到连续 Ctrl+C,强制终止")
+    log("✋ consecutive Ctrl+C, force-terminating")
     server?.close()
     void unprotect(directory).finally(() => process.exit(130))
-    // 兜底:清理挂起时也要退出。
+    // Backstop: exit even if cleanup hangs.
     setTimeout(() => process.exit(130), 1000).unref()
   }
   process.on("SIGINT", onSigint)
   try {
-    // 阶段化流程: 台账非法为环境错误(H 节),提前于 server 启动求值一次路由,
-    // 免得白白拉起服务再退出;正式路由在阶段循环内逐轮重新求值(推导式状态)。
+    // Phased flow: an invalid ledger is an environment error (section H); route
+    // once ahead of server startup so we don't bring the service up just to
+    // exit; the real routing is re-evaluated per round inside the phase loop
+    // (derived state).
     const phases = opts.phases ?? "m"
     if (phases !== "m") {
       const pre = await routePhase(directory, await load(path), phases)
       if (pre.type === "blocked") {
-        log(`⏸ 阶段流程受阻: ${pre.reason}`)
+        log(`⏸ phase flow blocked: ${pre.reason}`)
         return 1
       }
     }
     server = opts.managed ?? (await manage(directory, opts.server))
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName)
-      log("💬 交互模式: 回车把输入作为额外消息发往当前会话(无活动会话时丢弃);输入 /exit 将在下一个安全边界处暂停退出,重新运行即可恢复")
+      log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
     }
     if (opts.dryrun) {
       const result = await runOnce(server.client, "权限预检", renderDryrun(), {
@@ -92,31 +99,35 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
         server,
       })
       if (result.type === "blocked") {
-        log(`⏸ 预检会话受阻:\n${result.question}`)
+        log(`⏸ preflight session blocked:\n${result.question}`)
         return 2
       }
-      log(`✓ 权限预检完成,报告已写入 .auto/dryrun.md,要点:\n\n${result.lastText}`)
+      log(`✓ permission preflight complete; report written to .auto/dryrun.md, highlights:\n\n${result.lastText}`)
       return 0
     }
-    // advanceFinal 闭包内引用会失去窄化,以 const 捕获已就绪的 server 句柄。
+    // The advanceFinal closure would lose narrowing; capture the ready server
+    // handle as const.
     const serverHandle = server
     const ctx: LoopCtx = { directory, path, opts, server: serverHandle, agentName, phases, repl, ran: 0 }
 
     if (phases === "m") {
-      // 非分阶段路径: 全程归 "m" 阶段桶(STATS_PLAN §3)。
+      // Non-phased path: attribute the whole run to the "m" phase bucket
+      // (STATS_PLAN §3).
       await statsPhase(directory, "m")
       return await runTaskLoop(ctx, "m")
     }
 
     return await runPhaseLoop(ctx)
   } catch (error) {
-    // /exit(设计文档 plans/0014-exit-resume-design.md): 三处安全边界(phase/task/
-    // subtask,后者经 runTask 从 runner.ts 一路上抛)命中后在此统一落地——已停
-    // 在该边界的正常收尾点(PLAN.md/CURRENT.md/.auto/progress.json 均已写好,
-    // 与该处真实 crash/kill 中断的现场同构),退出码 3 区别于 2(阻塞/pending
-    // 需人工介入):重新运行即可精确恢复,不需要任何人工操作。
+    // /exit (design doc plans/0014-exit-resume-design.md): the three safe
+    // boundaries (phase/task/subtask, the latter thrown up from runner.ts via
+    // runTask) land here uniformly — the run has stopped at that boundary's
+    // normal wrap-up point (PLAN.md/CURRENT.md/.auto/progress.json all
+    // written, isomorphic to a real crash/kill interruption at the same spot);
+    // exit code 3 differs from 2 (blocked/pending, needs manual action):
+    // re-running resumes precisely with no manual operation.
     if (error instanceof ExitRequested) {
-      log(`⏸ ${error.message},进度已保存,重新运行即可完整恢复`)
+      log(`⏸ ${error.message}, progress saved, re-run to resume fully`)
       return 3
     }
     throw error

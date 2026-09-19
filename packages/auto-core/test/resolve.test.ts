@@ -292,10 +292,10 @@ describe("resolveHighlight", () => {
         file: "src/prompt.ts:501",
       }),
     ])
-    expect(lines[0]).toBe("⚑ 本任务自动代答了 1 个本应由你确认的问题,请重点确认:")
+    expect(lines[0]).toBe("⚑ this task auto-answered 1 questions that should have been confirmed by you; please review:")
     expect(lines[1]).toBe("  1. 是否顺带收口第三份 formatTokens → 顺带收口(同层依赖,不引入反向 import)")
     expect(lines[2]).toBe("     src/prompt.ts:501")
-    expect(lines[3]).toBe(`  完整记录见 ${join("docs", "T-001", "report.md")} 的「自动代答问题」节`)
+    expect(lines[3]).toBe(`  full record in the "自动代答问题" section of ${join("docs", "T-001", "report.md")}`)
   })
 
   test("未配对 driver 项与 malformed agent 项各自带 ⚠", () => {
@@ -303,16 +303,16 @@ describe("resolveHighlight", () => {
       driverItem("验收口径是否包含并发场景"),
       agentItem("折旧是否同样钳制", { malformed: true }),
     ])
-    expect(lines[1]).toContain("⚠ 会话未按要求写出 AUTO-RESOLVE 标记")
-    expect(lines[2]).toContain("⚠ 格式不规范")
+    expect(lines[1]).toContain("⚠ session did not write the AUTO-RESOLVE marker as required")
+    expect(lines[2]).toContain("⚠ malformed marker")
   })
 
   test("超过 8 条只列前 8 条,末行给出剩余条数与报告路径", () => {
     const items = Array.from({ length: 11 }, (_, i) => agentItem(`问题 ${i}`, { option: "方案", reason: "理由" }))
     const lines = resolveHighlight(items)
-    expect(lines[0]).toContain("11 个")
+    expect(lines[0]).toContain("11 questions")
     expect(lines).toHaveLength(1 + 8 + 1)
-    expect(lines.at(-1)).toBe(`  …另有 3 条,全部见 ${join("docs", "T-001", "report.md")}`)
+    expect(lines.at(-1)).toBe(`  …and 3 more, all in ${join("docs", "T-001", "report.md")}`)
   })
 
   test("AUTO-DECISION 计数折进末行,且被截断为单行的长问题带省略号", () => {
@@ -322,7 +322,7 @@ describe("resolveHighlight", () => {
     })
     expect(lines[1]).toContain("…")
     expect(lines[1]).not.toContain("\n")
-    expect(lines.at(-1)).toBe("  另记录 AUTO-DECISION 5 条(已折叠,见任务报告)")
+    expect(lines.at(-1)).toBe("  plus 5 AUTO-DECISION entries (folded, see task report)")
   })
 
   test("阶段/轮次汇总只给一行计数,未标注项单独点名", () => {
@@ -332,10 +332,10 @@ describe("resolveHighlight", () => {
       agentItem("问题三", { option: "方案", reason: "理由" }),
     ]
     expect(resolveHighlight(items, { scope: "phase", id: "m" })).toEqual([
-      "⚑ 阶段 m 共自动代答 3 个待确认问题(其中 1 个未按要求标注),逐条见各任务报告",
+      "⚑ phase m: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
     ])
     expect(resolveHighlight([agentItem("问题一", { option: "方案", reason: "理由" })], { scope: "round", id: 2 })).toEqual([
-      "⚑ 第 2 轮共自动代答 1 个待确认问题,逐条见各任务报告",
+      "⚑ round 2: 1 questions awaiting confirmation were auto-answered; see task reports for details",
     ])
   })
 })

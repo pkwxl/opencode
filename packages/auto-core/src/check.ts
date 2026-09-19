@@ -65,7 +65,7 @@ export async function checkPrinciple(
     verifyOn = config.verify
     testOn = config.testByDriver
   } catch (error) {
-    notes.push(`⚠ 项目配置(.opencode/auto/config.json)非法,验证/测试原则检查按未启用处理: ${error instanceof Error ? error.message : String(error)}`)
+    notes.push(`⚠ project config (.opencode/auto/config.json) is invalid, verify/test principle checks treated as disabled: ${error instanceof Error ? error.message : String(error)}`)
   }
   const patterns = [
     ...(verifyOn ? VERIFY_PATTERNS : []),
@@ -77,8 +77,8 @@ export async function checkPrinciple(
     if (text === undefined) {
       notes.push(
         name === "PLAN.md"
-          ? `未找到 ${name},先运行 opencode-auto init ${dir} 生成`
-          : `${name} 不存在,可运行 opencode-auto init ${dir} 补写 opencode-auto 块`,
+          ? `${name} not found, run opencode-auto init ${dir} first to generate it`
+          : `${name} does not exist, run opencode-auto init ${dir} to add the opencode-auto block`,
       )
       continue
     }
@@ -92,14 +92,14 @@ export async function checkPrinciple(
     })
     if (name === "AGENTS.md") {
       if (!text.includes("opencode-auto:start")) {
-        notes.push("AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写")
+        notes.push("AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it")
       } else {
         if (!text.includes(renderAgentsBlock({ verify: verifyOn, testByDriver: testOn }))) {
-          notes.push("AGENTS.md 的 opencode-auto 块内容与当前配置不一致(过期),运行 opencode-auto init/run 可刷新")
+          notes.push("AGENTS.md opencode-auto block content is inconsistent with the current config (stale), run opencode-auto init/run to refresh")
         }
         const legacyCount = [...text.matchAll(LEGACY_BLOCK)].length
         if (legacyCount) {
-          notes.push(`AGENTS.md 中检测到 ${legacyCount} 个旧版/多余 opencode-auto 标记块,运行 opencode-auto init/run 可清理`)
+          notes.push(`AGENTS.md contains ${legacyCount} legacy/redundant opencode-auto marker blocks, run opencode-auto init/run to clean up`)
         }
       }
     }
@@ -108,7 +108,7 @@ export async function checkPrinciple(
     if (name === "AGENTS.md") {
       const lines = text.trimEnd().split("\n").length
       if (lines > AGENTS_LINE_LIMIT) {
-        notes.push(`AGENTS.md 当前 ${lines} 行,超过 ${AGENTS_LINE_LIMIT} 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/`)
+        notes.push(`AGENTS.md is ${lines} lines, over the ${AGENTS_LINE_LIMIT}-line limit (maintenance rule block item 1); consider trimming per the rules and routing details to docs/agents/`)
       }
     }
   }
@@ -119,7 +119,7 @@ export async function checkPrinciple(
     const docs = await activeDocs(dir)
     refs = docs.length ? await scanRefs(dir, docs) : []
     if (docs.length && !(await gitAvailable(dir))) {
-      notes.push("非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验")
+      notes.push("non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates")
     }
   }
   return { findings, notes, refs, verifyOn, testOn }

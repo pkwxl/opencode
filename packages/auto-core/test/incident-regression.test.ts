@@ -156,7 +156,7 @@ describe("I3 误判已完成零落盘(kernel-dm T-068 S01)", () => {
       const plan = await load(join(dir, "PLAN.md"))
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
-      expect((result as { question: string }).question).toContain("零变更")
+      expect((result as { question: string }).question).toContain("zero disk writes")
       // 首发 + 一次带反馈重提示,反馈复述权威状态(L1)防叙事误判。
       expect(calls.prompts.length).toBe(2)
       const feedback = String((calls.prompts[1]!.parts[0] as { text?: string })?.text ?? "")
@@ -269,7 +269,7 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
       // 子任务勾选、单元提交落账、工作区干净(删除已随提交落账,不留脏区撞下一单元门禁)。
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
-      expect(await git(dir, "log", "--format=%s")).toContain("测试交接 #1")
+      expect(await git(dir, "log", "--format=%s")).toContain("test handover #1")
       // 在途记录已作废(闭环即清)。
       expect(await recallHandover(dir, "T-001", "docs/T-001/S01/testhandoff.md")).toBeUndefined()
     } finally {

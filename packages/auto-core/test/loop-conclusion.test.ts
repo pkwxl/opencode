@@ -73,8 +73,8 @@ describe("taskEndLines 任务结束三态行", () => {
     await statsSessionEnd(dir, "ses_2", usage({ input: 800, output: 100 }))
     const lines = await taskEndLines(dir, "T-003")
     expect(lines).toEqual([
-      "用时 24 分 31 秒(AI 18 分 12 秒),会话 2 次",
-      "tokens 入 2000 / 出 440 / 缓存读 28.4k / 缓存写 3100,命中率 93.4%,费用 $0.041",
+      "elapsed 24m 31s (AI 18m 12s), 2 sessions",
+      "tokens in 2000 / out 440 / cache-read 28.4k / cache-write 3100, hit 93.4%, cost $0.041",
     ])
   })
 
@@ -89,7 +89,7 @@ describe("taskEndLines 任务结束三态行", () => {
     await statsTask(dir, "T-003")
     now += 6 * 60_000
     const lines = await taskEndLines(dir, "T-003")
-    expect(lines?.[0]).toBe("用时 24 分 0 秒(AI 0 秒,其中本进程 6 分 0 秒),会话 0 次")
+    expect(lines?.[0]).toBe("elapsed 24m 0s (AI 0s, this process 6m 0s), 0 sessions")
   })
 })
 
@@ -133,8 +133,8 @@ describe("phaseCloseLines 阶段收口行", () => {
     // 单记 waitMs(STATS_PLAN 已确认口径: 总用时排除纯人工等待)。
     const lines = await phaseCloseLines(dir, "t")
     expect(lines).toEqual([
-      "■ 阶段 t 测试 收口: 总用时 50 分 0 秒(含规划/交接/提交;AI 42 分 0 秒,人工等待 3 分 0 秒),任务 2 个 / 会话 3 次",
-      "tokens 入 9000 / 出 2200 / 缓存读 90.0k / 缓存写 0,命中率 90.9%,费用 $0.31",
+      "■ phase t 测试 closed: total 50m 0s (incl. plan/handover/commit; AI 42m 0s, human wait 3m 0s), 2 tasks / 3 sessions",
+      "tokens in 9000 / out 2200 / cache-read 90.0k / cache-write 0, hit 90.9%, cost $0.31",
     ])
   })
 
@@ -143,8 +143,8 @@ describe("phaseCloseLines 阶段收口行", () => {
     await statsTask(dir, "T-001")
     now += 5 * 60_000
     const lines = await phaseCloseLines(dir, "t")
-    expect(lines?.[0]).toBe("■ 阶段 t 测试 收口: 总用时 5 分 0 秒(含规划/交接/提交;AI 0 秒),任务 1 个 / 会话 0 次")
-    expect(lines?.[0]).not.toContain("人工等待")
+    expect(lines?.[0]).toBe("■ phase t 测试 closed: total 5m 0s (incl. plan/handover/commit; AI 0s), 1 tasks / 0 sessions")
+    expect(lines?.[0]).not.toContain("human wait")
     // 切换到下一阶段后,旧字母的收口行不再可信(桶已重置)
     await statsPhase(dir, "v")
     expect(await phaseCloseLines(dir, "t")).toBeUndefined()
@@ -178,12 +178,12 @@ describe("roundCompleteLines 轮次完成行", () => {
     // 分阶段路径(阶段数由调用方从台账读)
     const phased = await roundCompleteLines(dir, { phaseCount: 6 })
     expect(phased).toEqual([
-      "■ 第 1 轮完成: 总用时 52 分 0 秒(AI 30 分 0 秒),阶段 6 / 任务 1 / 会话 1",
-      "tokens 入 2000 / 出 500 / 缓存读 18.0k / 缓存写 0,命中率 90.0%,费用 $0.12",
+      "■ round 1 complete: total 52m 0s (AI 30m 0s), 6 phases / 1 tasks / 1 sessions",
+      "tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12",
     ])
     // 非分阶段路径(m 阶段汇总,无阶段段)
     const plain = await roundCompleteLines(dir)
-    expect(plain?.[0]).toBe("■ 第 1 轮完成: 总用时 52 分 0 秒(AI 30 分 0 秒),任务 1 / 会话 1")
+    expect(plain?.[0]).toBe("■ round 1 complete: total 52m 0s (AI 30m 0s), 1 tasks / 1 sessions")
     expect(plain).toHaveLength(2)
   })
 
@@ -211,10 +211,10 @@ describe("roundCompleteLines 轮次完成行", () => {
     await statsSessionEnd(dir, "ses_3", usage({ input: 500, output: 100, cost: 0.05 }))
     const lines = await roundCompleteLines(dir, { phaseCount: 5 })
     expect(lines).toEqual([
-      "■ 第 2 轮完成: 总用时 20 分 0 秒(AI 20 分 0 秒),阶段 5 / 任务 1 / 会话 1",
-      "tokens 入 500 / 出 100 / 缓存读 0 / 缓存写 0,命中率 0.0%,费用 $0.05",
-      "  历轮累计(1 轮): 总用时 40 分 0 秒(AI 40 分 0 秒),任务 1 / 会话 2",
-      "  历轮 tokens 入 2000 / 出 400 / 缓存读 0 / 缓存写 0,命中率 0.0%,费用 $0.2",
+      "■ round 2 complete: total 20m 0s (AI 20m 0s), 5 phases / 1 tasks / 1 sessions",
+      "tokens in 500 / out 100 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.05",
+      "  cumulative (1 rounds): total 40m 0s (AI 40m 0s), 1 tasks / 2 sessions",
+      "  cumulative tokens in 2000 / out 400 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.2",
     ])
   })
 
@@ -273,11 +273,11 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
       item({ question: "折旧入账是否同样过 MAX_TICK 钳制", option: "同样钳制", reason: "宁少不多" }),
     ])
     expect(await taskResolveLines(dir, "T-001")).toEqual([
-      "⚑ 本任务自动代答了 2 个本应由你确认的问题,请重点确认:",
+      "⚑ this task auto-answered 2 questions that should have been confirmed by you; please review:",
       "  1. 是否把 prompt.ts 的第三份 formatTokens 一并收口 → 顺带收口(同层依赖,不引入反向 import)",
       "     src/prompt.ts:501",
       "  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)",
-      `  完整记录见 ${taskDoc("T-001", "report")} 的「自动代答问题」节`,
+      `  full record in the "自动代答问题" section of ${taskDoc("T-001", "report")}`,
     ])
   })
 
@@ -288,8 +288,8 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
       item({ question: "折旧入账是否同样过 MAX_TICK 钳制", option: "同样钳制", reason: "宁少不多" }),
     ])
     const lines = await taskResolveLines(dir, "T-001")
-    expect(lines[0]).toBe("⚑ 本任务自动代答了 2 个本应由你确认的问题,请重点确认:")
-    expect(lines[1]).toBe("  1. 验收口径是否包含并发场景  ⚠ 会话未按要求写出 AUTO-RESOLVE 标记")
+    expect(lines[0]).toBe("⚑ this task auto-answered 2 questions that should have been confirmed by you; please review:")
+    expect(lines[1]).toBe("  1. 验收口径是否包含并发场景  ⚠ session did not write the AUTO-RESOLVE marker as required")
     expect(lines[2]).toBe("  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)")
   })
 
@@ -300,7 +300,7 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
     expect(await taskResolveLines(dir, "T-001")).toEqual([])
     await recordResolves(dir, [item({ question: "是否收窄本任务范围", option: "不收窄", reason: "计划已写死" })])
     const lines = await taskResolveLines(dir, "T-001")
-    expect(lines.at(-1)).toBe("  另记录 AUTO-DECISION 5 条(已折叠,见任务报告)")
+    expect(lines.at(-1)).toBe("  plus 5 AUTO-DECISION entries (folded, see task report)")
   })
 
   test("超 8 条截断为前 8 条 + 另有 N 条", async () => {
@@ -311,7 +311,7 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
     const lines = await taskResolveLines(dir, "T-001")
     expect(lines[1]).toBe("  1. 问题 1 → 方案(理由)")
     expect(lines[8]).toBe("  8. 问题 8 → 方案(理由)")
-    expect(lines.at(-1)).toBe(`  …另有 2 条,全部见 ${taskDoc("T-001", "report")}`)
+    expect(lines.at(-1)).toBe(`  …and 2 more, all in ${taskDoc("T-001", "report")}`)
   })
 
   test("阶段/轮次汇总: 只给计数与未标注数,不展示 AUTO-DECISION", async () => {
@@ -322,11 +322,11 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
     ])
     await recordDecisions(dir, "T-001", 9)
     expect(await phaseResolveLines(dir, "m")).toEqual([
-      "⚑ 阶段 m 共自动代答 3 个待确认问题(其中 1 个未按要求标注),逐条见各任务报告",
+      "⚑ phase m: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
     ])
     // 轮号取 currentRound 现查: 无 docs/R-NN 目录时为第 1 轮,与落账侧同源。
     expect(await roundResolveLines(dir)).toEqual([
-      "⚑ 第 1 轮共自动代答 3 个待确认问题(其中 1 个未按要求标注),逐条见各任务报告",
+      "⚑ round 1: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
     ])
   })
 
@@ -336,8 +336,8 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
       item({ task: "T-002", phase: "t", round: 2, question: "别桶问题", option: "方案", reason: "理由" }),
     ])
     expect(await taskResolveLines(dir, "T-002")).toHaveLength(3)
-    expect((await phaseResolveLines(dir, "m"))[0]).toContain("共自动代答 1 个")
-    expect((await roundResolveLines(dir))[0]).toContain("共自动代答 1 个")
+    expect((await phaseResolveLines(dir, "m"))[0]).toContain("1 questions awaiting confirmation were auto-answered")
+    expect((await roundResolveLines(dir))[0]).toContain("1 questions awaiting confirmation were auto-answered")
   })
 
   test("台账损坏: 吞成空块,不影响流程", async () => {

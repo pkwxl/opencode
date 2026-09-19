@@ -123,7 +123,7 @@ describe("timeoutFetch", () => {
   test("普通请求超限即中止,错误信息带「请求超时」可辨识", async () => {
     const fetch = timeoutFetch({ requestMs: 20 }, hangingFetch())
     const request = new Request("http://127.0.0.1:1/config")
-    await expect(fetch(request)).rejects.toThrow("请求超时")
+    await expect(fetch(request)).rejects.toThrow("request timed out")
   })
 
   test("同步 prompt(POST /session/{id}/message)不按普通请求超时,走回合宽上限", async () => {
@@ -138,13 +138,13 @@ describe("timeoutFetch", () => {
     // 普通请求上限(20ms)已过仍悬挂,证明未误用普通超时
     await new Promise((resolve) => setTimeout(resolve, 60))
     expect(settled).toBe(false)
-    await expect(pending).rejects.toThrow("请求超时")
+    await expect(pending).rejects.toThrow("request timed out")
   })
 
   test("GET 同名路径不豁免: /session/{id}/message 只对 POST 放宽", async () => {
     const fetch = timeoutFetch({ requestMs: 20, turnMs: 120 }, hangingFetch())
     const request = new Request("http://127.0.0.1:1/session/ses_1/message")
-    await expect(fetch(request)).rejects.toThrow("请求超时")
+    await expect(fetch(request)).rejects.toThrow("request timed out")
   })
 
   test("外部 AbortSignal 透传: 请求自带信号中止时立即透传拒绝", async () => {

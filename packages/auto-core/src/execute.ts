@@ -56,11 +56,11 @@ export async function executeWhole(
   // 状态=继续 → 以续跑提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
   const prior = ondemand ? handoffStatus(await readHandoff()) : undefined
   if (prior === "完成") {
-    log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记执行已完成,跳过整任务会话`)
+    log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks execution complete; skipping the whole-task session`)
     return undefined
   }
   let continuation = prior === "继续"
-  if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已交接 ${handoffFile(task)},新会话凭交接文档续跑`)
+  if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues from the handover document`)
   let feedback = ""
   let retried = false
   // 严格恢复的回滚重做(3.3 R3 收紧): 交接文档无效(含测试交接写核失败)一次即回滚
@@ -69,7 +69,7 @@ export async function executeWhole(
   let rolled = false
   const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
     if (!strict || !chain.baseline) return undefined
-    const done = await rollbackUnitState(dir, task, "执行会话", chain.baseline, {
+    const done = await rollbackUnitState(dir, task, "execution session", chain.baseline, {
       planPath: plan.path,
       progress: await peekProgress(dir),
       solo: (opts.subtask ?? "auto") !== "auto",
@@ -117,14 +117,14 @@ export async function executeWhole(
       await removeHandoffChain(planDir, legacyTaskDoc(task.id, "testhandoff"))
     }
     const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
-    if (committed.type === "failed") return commitBlocked(`${task.id} 执行会话`, committed)
+    if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
     if (!handoverDue(steer, chain.used)) return undefined
     const status = handoffStatus(await readHandoff())
     if (status === "完成") return undefined
     if (status === "继续") {
-      log(`↻ ${task.id} 上下文达到 ${formatTokens(cap * 2)} 上限,已交接 ${handoffFile(task)},新会话继续`)
+      log(`↻ ${task.id} context reached the ${formatTokens(cap * 2)} cap; handed over as ${handoffFile(task)}, continuing in a new session`)
       continuation = true
       feedback = ""
       continue
@@ -134,7 +134,7 @@ export async function executeWhole(
       const redone = await rollbackRedo()
       if (redone === "done") {
         rolled = true
-        log(`↻ ${task.id} 达到上下文上限但未产出有效交接文档 ${handoffFile(task)},严格恢复已回滚,冷启动重做`)
+        log(`↻ ${task.id} context cap reached but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting this task`)
         continue
       }
       if (redone) return redone
@@ -143,11 +143,11 @@ export async function executeWhole(
       return {
         type: "blocked",
         question:
-          `会话上下文达到上限但两次未写出有效交接文档 ${handoffFile(task)}(缺失或无状态行,隐性阻塞)。` +
-          `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+          `session hit the context cap but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
+          `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
       }
     }
-    log(`↻ ${task.id} 达到上下文上限但未产出 ${handoffFile(task)},带反馈重试一次`)
+    log(`↻ ${task.id} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
     retried = true
     feedback =
       `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`状态: 继续|完成\` 行)。` +
@@ -181,14 +181,14 @@ export async function ensureUnderstood(
   const readContext = async (): Promise<string> =>
     (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "context"))).text().catch(() => "")).trim()
   if (await readContext()) {
-    log(`↻ ${task.id} 理解摘要 ${file} 已存在,跳过理解会话`)
+    log(`↻ ${task.id} understanding digest ${file} already exists; skipping the understand session`)
     if (!task.forkBase && chain.id) {
       await setForkBase(plan.path, task.id, chain.id)
       task = requireTask(await load(plan.path), task.id)
     }
     return { type: "ok", task }
   }
-  autobanner(`${task.id} ${task.title}: 任务背景理解`)
+  autobanner(`${task.id} ${task.title}: task background understanding`)
   const subject = `${task.id} understand ${task.title}`
   chain.subject = subject
   let feedback = ""
@@ -218,16 +218,16 @@ export async function ensureUnderstood(
       if (chain.id) await setForkBase(plan.path, task.id, chain.id)
       task = requireTask(await load(plan.path), task.id)
       const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "understand", subject })
-      if (committed.type === "failed") return commitBlocked(`${task.id} 理解会话`, committed)
+      if (committed.type === "failed") return commitBlocked(`${task.id} understand session`, committed)
       return { type: "ok", task }
     }
-    const why = content ? `未过形检(${problems.join("; ")})` : "缺失或为空"
+    const why = content ? `failed shape check (${problems.join("; ")})` : "missing or empty"
     if (i === 1) {
       return {
         type: "blocked",
         question:
-          `理解会话两次结束但 ${file} ${why}(隐性阻塞)。` +
-          `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+          `understand session ended twice but ${file} ${why} (hidden blockage). ` +
+          `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
       }
     }
     feedback = content
@@ -238,7 +238,7 @@ export async function ensureUnderstood(
     // 重提示基于刚结束的会话 fork 续做(带全部调研上下文);fork 不可用回退
     // 全新会话 + 完整提示词。
     shapeForked = await forkEndedSession(client, chain, subject)
-    log(`↻ ${task.id} 理解会话产出的 ${file} ${why},${shapeForked ? "已从原会话分叉、" : ""}带反馈重试一次`)
+    log(`↻ ${task.id} understand session produced ${file} ${why}; ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }
 }
 
@@ -265,14 +265,14 @@ export async function ensureDecomposed(
   const readItems = async (): Promise<string[]> => subtasks(await readRaw()).map((item) => item.text)
   const existing = await readItems()
   if (existing.length) {
-    log(`↻ ${task.id} 分解结果 ${file} 已存在,直接注入检查项`)
+    log(`↻ ${task.id} decomposition result ${file} already exists; injecting checklist items directly`)
     await setSubtasks(plan.path, task.id, existing)
     return { type: "ok", task: requireTask(await load(plan.path), task.id) }
   }
   let feedback = ""
   // One automatic retry with feedback: a resumed session may have done the
   // work instead of writing the file; the file is a hard requirement.
-  autobanner(`${task.id} ${task.title}: 子任务分解`)
+  autobanner(`${task.id} ${task.title}: subtask decomposition`)
   const subject = `${task.id} decompose ${task.title}`
   chain.subject = subject
   // ② 分解会话从基点分叉(先 fork 后渲染,设计 §4.3);无基点/失败 → 现状全新
@@ -306,16 +306,16 @@ export async function ensureDecomposed(
       // decompose 提交,调用方随后的刷新即幂等空写。
       await writeCurrent(plan.path, requireTask(await load(plan.path), task.id))
       const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject })
-      if (committed.type === "failed") return commitBlocked(`${task.id} 分解会话`, committed)
+      if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)
       return { type: "ok", task: requireTask(await load(plan.path), task.id) }
     }
-    const why = items.length ? `未过形检(${problems.join("; ")})` : "缺失或无检查项"
+    const why = items.length ? `failed shape check (${problems.join("; ")})` : "missing or has no checklist items"
     if (i === 1) {
       return {
         type: "blocked",
         question:
-          `分解会话两次结束但 ${file} ${why}(隐性阻塞)。` +
-          `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+          `decompose session ended twice but ${file} ${why} (hidden blockage). ` +
+          `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
       }
     }
     feedback = items.length
@@ -326,7 +326,7 @@ export async function ensureDecomposed(
     // 重提示基于刚结束的会话 fork 续做(带全部调研上下文);fork 不可用回退
     // 全新会话 + 完整提示词。
     shapeForked = await forkEndedSession(client, chain, subject)
-    log(`↻ ${task.id} 分解会话产出的 ${file} ${why},${shapeForked ? "已从原会话分叉、" : ""}带反馈重试一次`)
+    log(`↻ ${task.id} decompose session produced ${file} ${why}; ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }
 }
 
@@ -353,7 +353,7 @@ export async function runSubtask(
   // 脏区是本单元自身进度(含交接文档),收口时一并落账(plans/0021-commit-boundary-design.md)。
   resumeUnit = false,
 ): Promise<UnitStop | undefined> {
-  subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
+  subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
   chain.subject = subject
   const dir = opts.dir ?? dirname(plan.path)
@@ -384,10 +384,10 @@ export async function runSubtask(
   // 提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
   const prior = handoffStatus(await readHandoff())
   if (prior === "完成") {
-    log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 标记子任务已完成,直接勾选`)
+    log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks the subtask complete; checking it off directly`)
   } else {
     let continuation = prior === "继续"
-    if (continuation) log(`↻ ${task.id} 恢复中断: 中断前已交接 ${handoffFile(task)},新会话凭交接文档续跑子任务`)
+    if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues the subtask from the handover document`)
     // ③ 子任务首个会话从基点分叉(与分解会话同一分叉点,先 fork 后渲染——warm/
     // cold 背景段据此选择);跨子任务不复用(种子链强制),交接续跑与带反馈重试
     // 沿用链内既有机制。无基点/失败 → 全新会话 + 冷启动提示词(读 context.md)。
@@ -406,7 +406,7 @@ export async function runSubtask(
     let rolled = false
     const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
       if (!strict || !baseline) return undefined
-      const done = await rollbackUnitState(dir, task, `子任务 ${index}`, baseline, {
+      const done = await rollbackUnitState(dir, task, `subtask ${index}`, baseline, {
         planPath: plan.path,
         progress: await peekProgress(dir),
         solo: (opts.subtask ?? "auto") !== "auto",
@@ -466,8 +466,8 @@ export async function runSubtask(
               return {
                 type: "blocked",
                 question:
-                  `子任务会话自然结束但产物形检未过(隐性阻塞): ${problems.join("; ")}。` +
-                  `请检查产出后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+                  `subtask session ended naturally but the artifact shape check failed (hidden blockage): ${problems.join("; ")}. ` +
+                  `Check the artifacts and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
               }
             }
             shapeRetried = true
@@ -476,7 +476,7 @@ export async function runSubtask(
             // 全部工作上下文,下一回合只下发反馈本身;fork 不可用(会话已失效)回退
             // 全新会话 + 完整提示词 + 反馈。
             shapeForked = await forkEndedSession(client, chain, subject)
-            log(`↻ ${task.id} 子任务 ${index} 自然结束但产物形检未过,${shapeForked ? "已从原会话分叉、" : ""}带反馈重提示一次`)
+            log(`↻ ${task.id} subtask ${index} ended naturally but the artifact shape check failed; ${shapeForked ? "forked from the original session, " : ""}re-prompting once with feedback`)
             continue
           }
         }
@@ -486,9 +486,9 @@ export async function runSubtask(
       if (status === "完成") break
       // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
       const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
-      if (committed.type === "failed") return commitBlocked(`${task.id} 子任务 ${index}`, committed)
+      if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
       if (status === "继续") {
-        log(`↻ ${task.id} 子任务 ${index} 上下文达到 ${formatTokens(cap * 2)} 上限,已交接 ${handoffFile(task)},新会话继续`)
+        log(`↻ ${task.id} subtask ${index} context reached the ${formatTokens(cap * 2)} cap; handed over as ${handoffFile(task)}, continuing in a new session`)
         continuation = true
         feedback = ""
         continue
@@ -498,7 +498,7 @@ export async function runSubtask(
         const redone = await rollbackRedo()
         if (redone === "done") {
           rolled = true
-          log(`↻ ${task.id} 子任务 ${index} 达到上下文上限但未产出有效交接文档 ${handoffFile(task)},严格恢复已回滚,冷启动重做`)
+          log(`↻ ${task.id} subtask ${index} context cap reached but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting`)
           continue
         }
         if (redone) return redone
@@ -507,11 +507,11 @@ export async function runSubtask(
         return {
           type: "blocked",
           question:
-            `子任务会话上下文达到上限但两次未写出有效交接文档 ${handoffFile(task)}(缺失或无状态行,隐性阻塞)。` +
-            `请检查该文件后重新运行。Agent 最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+            `subtask session hit the context cap but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
+            `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
         }
       }
-      log(`↻ ${task.id} 子任务 ${index} 达到上下文上限但未产出 ${handoffFile(task)},带反馈重试一次`)
+      log(`↻ ${task.id} subtask ${index} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
       retried = true
       feedback =
         `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`状态: 继续|完成\` 行)。` +
@@ -532,7 +532,7 @@ export async function runSubtask(
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
   // 单元收口: 带基线做提交区间校验——勾选与镜像未落账即不视为完成。
   const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject }, baseline)
-  if (committed.type === "failed") return commitBlocked(`${task.id} 子任务 ${index}`, committed)
+  if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
   log(`  ✓ ${text.slice(0, 60)}`)
   return undefined
 }
@@ -547,13 +547,13 @@ export async function runSubtask(
 // 豁免清单见 doccheck.ts。全部为确定性判据,零产物/截断的「自然结束」不构成完成。
 async function subtaskArtifactProblems(dir: string, text: string, baseline: UnitBaseline): Promise<string[]> {
   const problems: string[] = []
-  if (await unitQuiet(dir, baseline)) problems.push("工作区相对单元基线零变更(零落盘)")
+  if (await unitQuiet(dir, baseline)) problems.push("no changes relative to the unit baseline (zero disk writes)")
   const fresh = await untrackedFiles(dir)
   // ③ 已做过形检的路径,D6 扫描跳过(同一路径不重复成案)。
   const shaped = new Set<string>()
   for (const { path, sections } of declaredArtifacts(text)) {
     if (!(await Bun.file(join(dir, path)).exists())) {
-      problems.push(`声明产出 ${path} 不存在`)
+      problems.push(`declared artifact ${path} does not exist`)
       continue
     }
     if (!path.toLowerCase().endsWith(".md")) continue
@@ -563,7 +563,7 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
       shaped.add(path)
     }
     for (const section of sections) {
-      if (!content.includes(section)) problems.push(`声明产出 ${path} 缺少章节「${section}」`)
+      if (!content.includes(section)) problems.push(`declared artifact ${path} is missing section "${section}"`)
     }
   }
   // ⑤ 与 ② 互补: 存在性抓「该有的没有」(未创建的文件对 git 扫描不可见),全量

@@ -57,9 +57,9 @@ describe("loadProjectConfig", () => {
     const dir = tempDir()
     try {
       writeConfig(dir, "{ 非法")
-      await expect(loadProjectConfig(dir)).rejects.toThrow(/config\.json 不是合法 JSON/)
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/config\.json is not valid JSON/)
       writeConfig(dir, "[1, 2]")
-      await expect(loadProjectConfig(dir)).rejects.toThrow(/须为 JSON 对象/)
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/must be a JSON object/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -124,7 +124,7 @@ describe("loadProjectConfig", () => {
       writeConfig(dir, JSON.stringify({ commit: true }))
       expect((await loadProjectConfig(dir)).commit).toBe(true)
       writeConfig(dir, JSON.stringify({ commit: false }))
-      await expect(loadProjectConfig(dir)).rejects.toThrow(/commit: false 已退役/)
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/commit: false is retired/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -158,7 +158,7 @@ describe("loadProjectConfig", () => {
     const dir = tempDir()
     try {
       writeConfig(dir, JSON.stringify({ handoverTest: true }))
-      await expect(loadProjectConfig(dir)).rejects.toThrow(/handoverTest 须搭配 testByDriver/)
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/handoverTest requires testByDriver/)
       writeConfig(dir, JSON.stringify({ testByDriver: true, handoverTest: true }))
       const config = await loadProjectConfig(dir)
       expect(config.testByDriver).toBe(true)
@@ -191,7 +191,7 @@ describe("loadProjectConfig", () => {
     const dir = tempDir()
     try {
       writeConfig(dir, JSON.stringify({ mode: "optimize" }))
-      await expect(loadProjectConfig(dir)).rejects.toThrow(/mode 取值 "optimize" 未注册.*migrate/)
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/mode value "optimize" is not registered.*migrate/)
       registerMode(dir)
       expect((await loadProjectConfig(dir)).mode).toBe("optimize")
     } finally {
@@ -269,7 +269,7 @@ describe("看门狗键更名回落(verifyIdle/verifyMax → idleTime/idleMax)", 
       expect((await loadProjectConfig(dir)).idleTime).toBe(15)
       // 旧键的坏值同样被校验拦截(报错含新键名与期望值域)
       writeConfig(dir, JSON.stringify({ verifyIdle: 999 }))
-      await expect(loadProjectConfig(dir)).rejects.toThrow(/idleTime 须为 1\.\.120/)
+      await expect(loadProjectConfig(dir)).rejects.toThrow(/idleTime must be an integer in 1\..120/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -293,20 +293,20 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
 
   test("摘要一行含全部键的生效值(phases 追加在末尾)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "模式 migrate · agent auto · 子任务 auto · 验收 off · 看门狗 idle 10m/max 不设 · 提交 on · 自动编号 on · 上下文上限 64k · 阶段 m",
+      "mode migrate · agent auto · subtask auto · verify off · watchdog idle 10m/max unset · commit on · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "模式 migrate · agent custom · 子任务 auto · 验收 on · 看门狗 idle 10m/max 30m · 提交 on · 自动编号 on · 上下文上限 64k · 阶段 m",
+      "mode migrate · agent custom · subtask auto · verify on · watchdog idle 10m/max 30m · commit on · auto-number on · context-limit 64k · phases m",
     )
-    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("阶段 admtvk")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("phases admtvk")
     // 测试由 driver 执行键入摘要,交接修饰随 handoverTest
-    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true })).toContain("· 测试 driver on ·")
-    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true, handoverTest: true })).toContain("· 测试 driver on(交接) ·")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true })).toContain("· test-by-driver on ·")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, testByDriver: true, handoverTest: true })).toContain("· test-by-driver on(handover) ·")
     // 自动编号缺省启用入摘要(stable-refs D5);关闭时移除该段
-    expect(formatProjectConfig(CONFIG_DEFAULTS)).toContain("· 自动编号 on ·")
-    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, autoNumber: false })).not.toContain("自动编号")
+    expect(formatProjectConfig(CONFIG_DEFAULTS)).toContain("· auto-number on ·")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, autoNumber: false })).not.toContain("auto-number")
     // wrapup 缺省 true 不入摘要(现状零变化);关闭时摘要现"收尾 off"
-    expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("收尾")
-    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, wrapup: false })).toContain("· 收尾 off ·")
+    expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("wrapup")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, wrapup: false })).toContain("· wrapup off ·")
   })
 })

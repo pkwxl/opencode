@@ -82,20 +82,20 @@ export async function attempt(
   if (test) test.startUsed = reuse ? chain.used : 0
   // 恢复接管的复用已由 runTask 的恢复日志交代(含继承的上下文用量),不重复打印。
   if (reuse && !resumed) {
-    log(`♻ 复用会话(上下文 ${chain.pct}%,已用 ${formatTokens(chain.used)} tokens,${Math.round((Date.now() - chain.at) / 1000)} 秒前结束)`)
+    log(`♻ session reused (context ${chain.pct}%, used ${formatTokens(chain.used)} tokens, ended ${Math.round((Date.now() - chain.at) / 1000)}s ago)`)
   }
   if (!reuse && chain.id !== undefined) {
     const reason = !reuseSession
-      ? `会话复用已关闭(${SWITCH_ENV.reuseSession}=off,缺省)`
+      ? `session reuse disabled (${SWITCH_ENV.reuseSession}=off, default)`
       : chain.pct >= REUSE_BELOW
-        ? `上下文占比 ${chain.pct}% 达到 ${REUSE_BELOW}% 阈值`
+        ? `context share ${chain.pct}% reached the ${REUSE_BELOW}% threshold`
         : chain.used >= cap / 2
-          ? `已用 ${formatTokens(chain.used)} tokens 达到 ${formatTokens(cap / 2)} 上限(复用阈值)`
-          : `距上一会话结束已超过 ${REUSE_IDLE_MINUTES} 分钟(上下文已陈旧)`
+          ? `used ${formatTokens(chain.used)} tokens reached the ${formatTokens(cap / 2)} cap (reuse threshold)`
+          : `more than ${REUSE_IDLE_MINUTES} minutes since the last session ended (context stale)`
     // 复用关闭是缺省形态(链上每个会话都命中),只进明细日志;开启复用后的不
     // 复用原因是决策依据,照常上终端。
-    if (reuseSession) log(`▷ ${reason},开启新会话`)
-    else vlog(`▷ ${reason},开启新会话`)
+    if (reuseSession) log(`▷ ${reason}; starting a new session`)
+    else vlog(`▷ ${reason}; starting a new session`)
   }
   // fork 预创建会话(seedForkSession 从基点分叉所得)在 !reuse 时优先于 create,
   // 消费即清——瞬时错误重试时 pending 已清,自然回落 create 路径(设计 §4.3)。
@@ -109,7 +109,7 @@ export async function attempt(
   // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`;分叉会话已在 forkSession
   // 改名,不经 create。
   const session = reuse || forked ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
-  if (session?.error) return { type: "blocked", question: `创建会话失败: ${formatClientError(session.error)}` }
+  if (session?.error) return { type: "blocked", question: `session creation failed: ${formatClientError(session.error)}` }
   // failback 粒度 session(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): 每个全新会话起点
   // 都清链上降级候选、回试首选模型。仅 create 路径(会话复用与 fork 消费不动)——
   // 降级 fork 出的迁移会话经 pending 进入,若在此清零会把 failover 立即 undo 成震荡。
@@ -212,15 +212,15 @@ export async function attempt(
     if (shown !== undefined && (shown !== chain.modelShown || !reuse)) {
       const from =
         target === undefined
-          ? "服务端缺省"
+          ? "server default"
           : chain.model !== undefined
-            ? "降级候选"
+            ? "fallback candidate"
             : stickyModel() !== undefined
-              ? "降级候选·阶段内粘滞"
+              ? "fallback candidate (sticky within phase)"
               : override !== undefined
-                ? "/failback 指定"
-                : "路由"
-      log(`◈ ${task.id} 使用模型 ${shown}(${from})`)
+                ? "/failback override"
+                : "route"
+      log(`◈ ${task.id} using model ${shown} (${from})`)
       chain.modelShown = shown
     }
     // 统计接线(STATS_PLAN §2,T-003): prompt 下发前开 AI 段并关联任务。旁路会话
@@ -252,7 +252,7 @@ export async function attempt(
       // ——还原为认领前的记录(与下方 0-token 报错桩还原同一口径)。
       if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
       await remember()
-      return { type: "blocked", question: `下发任务失败: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
+      return { type: "blocked", question: `task dispatch failed: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
     }
     // 下发成功即认领在跑的会话: 此刻进程被 kill/Ctrl+C,progress.json 指向本会话,
     // 下次运行复用之(精确恢复的核心——回合进行中的会话不丢)。回合结束后再按
@@ -303,17 +303,17 @@ export async function attempt(
     // 规则;备选"省略本次保留累计"与规则文字冲突,否决。
     const usage = result.usage ?? zeroUsage()
     const rounds = report?.session.rounds ?? 1
-    const since = rounds > 1 ? `(累计 ${formatDurationCompact(report!.session.aiMs)} / ${rounds} 轮)` : ""
+    const since = rounds > 1 ? ` (cumulative ${formatDurationCompact(report!.session.aiMs)} / ${rounds} rounds)` : ""
     log(
-      `◉ 会话结束: 上下文 ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}),` +
-        `用时 ${formatDurationCompact(report?.thisAiMs ?? result.durationMs ?? 0)}${since}`,
+      `◉ session ended: context ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}), ` +
+        `elapsed ${formatDurationCompact(report?.thisAiMs ?? result.durationMs ?? 0)}${since}`,
     )
     // 行 2 复用 log.ts 的 formatUsageLine(T-006 收口,任务/阶段/轮次结论行同格式);
     // 会话特有的费用跨轮累计作为后缀追加(仅本次费用显示且跨轮时,见上方
     // AUTO-DECISION: cost=0 整项省略,不出现孤立的"(累计 $X)")。
     const cost = formatCost(usage.cost)
     const costSince = cost && rounds > 1 ? formatCost(report!.session.usage.cost) : undefined
-    log(formatUsageLine(usage) + (costSince ? `(累计 ${costSince})` : ""))
+    log(formatUsageLine(usage) + (costSince ? ` (cumulative ${costSince})` : ""))
     // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
     // 新建会话已在创建时命名,无需重复。
@@ -372,7 +372,7 @@ export async function attempt(
       return result.testHandoverInvalid ? { ...result.blocked, rollback: true } : result.blocked
     }
     if (result.error)
-      return { type: "blocked", question: `会话错误: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
+      return { type: "blocked", question: `session error: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
     // 统计兜底(T-003): 下发失败/异常等未走正常收段的路径同样收段——无配对 begin
@@ -383,6 +383,6 @@ export async function attempt(
     // 途的下发一并作废。
     sse.abort()
     post.abort()
-    vlog(`▪ 已断开会话 ${sessionID} 的事件流订阅`)
+    vlog(`▪ unsubscribed from the event stream of session ${sessionID}`)
   }
 }

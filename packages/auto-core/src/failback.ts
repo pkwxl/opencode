@@ -73,9 +73,9 @@ export function consumeFailback(chain?: { model?: string }): boolean {
   pending = undefined
   if (order !== undefined) {
     override = { wildcard: order[0]!, fallback: order.slice(1) }
-    log(`⇄ /failback 生效: 首选模型重定义为 ${override.wildcard},降级候选序 ${override.fallback.join(", ") || "(无)"};降级状态已重置`)
+    log(`⇄ /failback applied: primary model redefined as ${override.wildcard}, fallback order ${override.fallback.join(", ") || "(none)"}; fallback state reset`)
   } else {
-    log(`⇄ /failback 生效: 降级状态已重置,下一提示词重回首选模型`)
+    log(`⇄ /failback applied: fallback state reset, next prompt returns to the primary model`)
   }
   return true
 }

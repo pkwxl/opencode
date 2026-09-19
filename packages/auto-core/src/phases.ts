@@ -89,8 +89,8 @@ function parseLedger(text: string, file: string): Phase[] {
     const letter = LEDGER_ENTRY.exec(trimmed)?.[1]
     if (!letter || !PHASE_ORDER.includes(letter) || done.includes(letter as Phase)) {
       throw new Error(
-        `${file} 台账行无法解析或非法: ${trimmed}` +
-          `(行协议: - [done] <letter> <名称> → <归档目录>(交接: <handover>),交接指针为可选列;字母取 ${PHASE_ORDER} 中不重复的值;请人工修订该文件,回退规程见 README)`,
+        `${file} ledger line cannot be parsed or is invalid: ${trimmed}` +
+          `(line protocol: - [done] <letter> <名称> → <归档目录>(交接: <handover>), the handover pointer column is optional; letters are non-repeating values from ${PHASE_ORDER}; please fix the file manually, see README for the rollback procedure)`,
       )
     }
     done.push(letter as Phase)
@@ -189,8 +189,8 @@ export async function routePhase(dir: string, plan: Plan, phases: string): Promi
     return {
       type: "blocked",
       reason:
-        `${await ledgerPath(dir)} 台账记录了 phases(${phases})之外的阶段字母: ${outside.join("、")}。` +
-        "请人工修订该文件(回退规程见 README)后重新运行",
+        `${await ledgerPath(dir)} ledger records phase letters outside phases(${phases}): ${outside.join(", ")}. ` +
+        "Please fix the file manually (see README for the rollback procedure) and re-run",
     }
   }
   const phase = (PHASE_ORDER.split("") as Phase[]).find((letter) => declared.includes(letter) && !ledger.done.includes(letter))

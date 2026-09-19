@@ -40,7 +40,7 @@ export async function stepPause(
 ): Promise<void> {
   const step = opts.step ?? autoSwitches().step
   if (!stepApplies(step, boundary)) return
-  const promptText = `⏸ 步进暂停(step=${step}): ${label} 已完成,回车继续: `
+  const promptText = `⏸ step pause (step=${step}): ${label} done, press Enter to continue: `
   // 人工等待扣除: 等待期间关段(aiMs/wallMs 均不增长),结束后重开段;异常路径
   // 同样经 finally 配对 waitEnd,不留悬挂关段。
   await statsWaitBegin(opts.dir, `stepPause:${boundary}`)
@@ -63,5 +63,5 @@ export async function stepPause(
   } finally {
     await statsWaitEnd(opts.dir)
   }
-  log(`→ 步进放行: ${label}`)
+  log(`→ step released: ${label}`)
 }

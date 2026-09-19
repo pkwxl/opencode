@@ -279,8 +279,8 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
       })
       expect(typeof value === "object" && "type" in value && value.type).toBe("blocked")
       if (typeof value === "object" && "type" in value && value.type === "blocked") {
-        expect(value.question).toContain("统一提交失败")
-        expect(value.question).toContain("不视为完成")
+        expect(value.question).toContain("unified commit failed")
+        expect(value.question).toContain("not considered complete")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })

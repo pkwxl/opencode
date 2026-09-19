@@ -128,7 +128,7 @@ export async function restoreTestHandoffs(dir: string, task?: Task): Promise<voi
   for (const rel of deleted) {
     if (!/testhandoff(-\d+)?\.md$/.test(rel)) continue
     if (task && !rel.includes(task.id)) continue
-    if (await restoreFile(dir, rel)) log(`↻ 交接文档 ${rel} 曾被清理,已从提交复原`)
+    if (await restoreFile(dir, rel)) log(`↻ handover document ${rel} was previously cleaned up; restored from the commit`)
   }
 }
 
@@ -271,7 +271,7 @@ export async function runTestScript(test: TestRun, opts: Opts, script: string, s
   await mkdir(test.tmp, { recursive: true })
   const run = await runVerifyScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out })
   log(
-    `  ⚙ ${test.label} test 脚本退出码 ${run.code}${run.timedOut ? `(超时终止: ${run.timeoutReason === "max" ? "超过绝对时长上限" : "持续无输出"})` : ""},耗时 ${run.ms}ms,脚本: ${script},输出: ${out}`,
+    `  ⚙ ${test.label} test script exit code ${run.code}${run.timedOut ? ` (timed out: ${run.timeoutReason === "max" ? "absolute duration cap exceeded" : "no output for too long"})` : ""}, took ${run.ms}ms, script: ${script}, output: ${out}`,
   )
   const info: TestRunInfo = {
     script,

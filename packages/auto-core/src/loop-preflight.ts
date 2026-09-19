@@ -106,7 +106,7 @@ export async function preflight(
   opts: RunAllOpts,
 ): Promise<{ agentName: string; watcher?: { close(): void }; progress: { close(): void } } | { exit: number }> {
   if (!(await Bun.file(path).exists())) {
-    log(`未找到计划文件: ${path}`)
+    log(`plan file not found: ${path}`)
     return { exit: 1 }
   }
 
@@ -119,8 +119,9 @@ export async function preflight(
     return { exit: 1 }
   }
 
-  // --early 依赖 verify 脚本执行窗口;未启用 --verify 时窗口不存在,审核降级为串行。
-  if (opts.early && !opts.verify) log("ℹ 未启用 --verify,--early 的并行审核窗口不存在,质量审核改为串行执行")
+  // --early depends on the verify script execution window; without --verify
+  // the window does not exist and the review degrades to serial.
+  if (opts.early && !opts.verify) log("ℹ --verify is not enabled; --early's parallel review window does not exist, quality review runs serially")
 
   // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:
   // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出并按外壳
@@ -130,11 +131,11 @@ export async function preflight(
   const agentText = await Bun.file(agentFile).text().catch(() => undefined)
   const { program, bin, agentRecovery } = shellProfile()
   if (agentText === undefined) {
-    log(`⏸ 缺少 agent 契约文件: .opencode/agent/${agentName}.md(缺失会导致下发任务失败: UnknownError)`)
+    log(`⏸ agent contract file missing: .opencode/agent/${agentName}.md(its absence makes task dispatch fail: UnknownError)`)
     log(
       agentRecovery === "startup"
-        ? `  恢复方式: 重新运行 ${program}(启动时会按模板重建默认契约),或手工补回该文件`
-        : `  恢复方式: 运行 ${bin} init ${directory} 重建该文件(或手工补回),然后重新运行`,
+        ? `  recovery: re-run ${program}(the default contract is rebuilt from the template at startup), or restore the file manually`
+        : `  recovery: run ${bin} init ${directory} to rebuild the file (or restore it manually), then re-run`,
     )
     return { exit: 1 }
   }
@@ -142,8 +143,8 @@ export async function preflight(
   // 渲染(与原始模板全文比对会因 {{#if}} 标记恒不一致,口径同 renderAgentContract)。
   if (agentName === "auto" && agentText !== (await renderAgentContract(Boolean(opts.verify), Boolean(opts.testByDriver)))) {
     log(
-      `⚠ .opencode/agent/auto.md 与当前模板不一致(可能为旧版契约),` +
-        (agentRecovery === "startup" ? `重新运行 ${program} 会按模板刷新` : `可运行 ${bin} init ${directory} 刷新`),
+      `⚠ .opencode/agent/auto.md differs from the current template (possibly a legacy contract); ` +
+        (agentRecovery === "startup" ? `re-running ${program} refreshes it from the template` : `run ${bin} init ${directory} to refresh it`),
     )
   }
 
@@ -172,9 +173,9 @@ export async function preflight(
   // 路径退出(如单元门禁不净直接 return 2)会留下它们的写盘,那是 driver 自己的
   // 落账、不是人工改动,拦在这里只会让下一次运行永远起不来。
   if (opts.commit !== false && !opts.dryrun) {
-    const gate = await beginUnit(directory, opts, { id: "PLAN", title: "运行前基线收口" })
+    const gate = await beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
     if (gate.type === "dirty") {
-      log("⏸ 工作区存在未提交改动,为保证执行单元以干净基线启动,请先人工处置(提交或清理)后重新运行:")
+      log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
       for (const file of gate.files) log(`  ${file}`)
       return { exit: 2 }
     }
@@ -188,7 +189,7 @@ export async function preflight(
   // dryrun 不改任何状态文件,故整段跳过(与下方 dryrun 提前 return 的旧位置等价)。
   if (!opts.dryrun) {
     const stale = await resetInProgress(path)
-    if (stale.length) log(`↻ 恢复中断状态: ${stale.join(", ")} 从 in_progress 重置为 pending`)
+    if (stale.length) log(`↻ resuming interrupted state: ${stale.join(", ")} reset from in_progress to pending`)
     // 精确恢复: 进度记录在验收(verify,且 --review 启用)或质量审核(review)阶段
     // 中断的任务,验收通过时已被标 done——next() 会跳过它,审核永不补跑;置回
     // in_progress 使主循环重入该任务,runTask 依记录的阶段直接续跑。
@@ -198,7 +199,7 @@ export async function preflight(
       const pending = fresh.tasks.find((task) => task.id === record.task)
       if (pending?.status === "done") {
         await setStatus(path, pending.id, "in_progress")
-        log(`↻ ${pending.id} 上次中断于${record.phase.kind === "review" ? "质量审核" : "任务级验收"}阶段(任务已标 done),置回 in_progress 补跑`)
+        log(`↻ ${pending.id} was interrupted during the ${record.phase.kind === "review" ? "quality review" : "task-level verify"} phase (task already marked done); reverted to in_progress for a make-up run`)
       }
     }
   }
@@ -206,20 +207,20 @@ export async function preflight(
   // 内容与渲染不一致则整块替换、旧版/多余的带名标记块一律清理)。AGENTS.md 本身
   // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
   const ensured = await ensurePointer(directory, { verify: opts.verify, testByDriver: opts.testByDriver })
-  if (ensured.block === "inserted") log("已补写: AGENTS.md opencode-auto 块")
-  if (ensured.block === "replaced") log("已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)")
-  if (ensured.legacyRemoved) log(`已清理: AGENTS.md 中 ${ensured.legacyRemoved} 个旧版/多余 opencode-auto 标记块`)
-  if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
+  if (ensured.block === "inserted") log("inserted: AGENTS.md opencode-auto block")
+  if (ensured.block === "replaced") log("refreshed: AGENTS.md opencode-auto block (differed from the current config rendering)")
+  if (ensured.legacyRemoved) log(`cleaned: ${ensured.legacyRemoved} legacy/redundant opencode-auto marker block(s) in AGENTS.md`)
+  if (await ensureGitignore(directory)) log("updated: .gitignore now ignores tmp/ and .auto/(driver working directory and runtime state)")
   // housekeeping 收口提交: ensurePointer/ensureGitignore 的补写是 driver 改动,立即
   // 落账使首个执行单元启动时工作区 clean;提交失败按环境阻塞退出 2
   // (plans/0021-commit-boundary-design.md P3)。dryrun 不做任何提交。
   if (opts.commit !== false && !opts.dryrun && (await changedFiles(directory)).length) {
-    const settled = await commitTree(directory, { id: "PLAN", title: "运行前基线收口" }, {
+    const settled = await commitTree(directory, { id: "PLAN", title: "pre-run baseline close-out" }, {
       stage: "housekeeping",
-      subject: "PLAN housekeeping 运行前基线收口(AGENTS.md 指针块/.gitignore/中断状态复位)",
+      subject: "PLAN housekeeping pre-run baseline close-out (AGENTS.md pointer block/.gitignore/interrupted-state reset)",
     })
     if (!settled.ok) {
-      log(`⏸ 运行前基线收口提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")},请人工处理 git 后重新运行`)
+      log(`⏸ pre-run baseline close-out commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}, handle git manually and re-run`)
       return { exit: 2 }
     }
   }

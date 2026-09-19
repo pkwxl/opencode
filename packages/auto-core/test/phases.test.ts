@@ -104,7 +104,7 @@ describe("readLedger(阶段台账 docs/phases.md)", () => {
         await expect(readLedger(dir)).rejects.toThrow(/docs\/phases\.md/)
       }
       writeLedger(dir, "- [done] a 分析 → docs/phases/a-analysis/\n- [done] a 分析 → docs/phases/a-analysis/\n")
-      await expect(readLedger(dir)).rejects.toThrow(/重复|无法解析/)
+      await expect(readLedger(dir)).rejects.toThrow(/cannot be parsed/) 
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

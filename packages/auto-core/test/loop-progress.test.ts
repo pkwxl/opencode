@@ -50,10 +50,10 @@ describe("subtaskProgressLine 进度心跳", () => {
     await statsTask(dir, "T-001")
     now += 24 * 60_000
     const line = await subtaskProgressLine(path, dir)
-    expect(line).toContain("⏳ T-001 子任务进度 1/2")
-    expect(line).toContain("累计用时 24 分 0 秒")
-    expect(line).not.toContain("本进程") // 本进程 == 累计,省略
-    expect(line).toContain("预计剩余 24 分 0 秒") // 线性外推: 1/2 完成 → 剩余 = 已用
+    expect(line).toContain("⏳ T-001 subtask progress 1/2")
+    expect(line).toContain("elapsed 24m 0s")
+    expect(line).not.toContain("this process") // 本进程 == 累计,省略
+    expect(line).toContain("est. remaining 24m 0s") // 线性外推: 1/2 完成 → 剩余 = 已用
   })
 
   test("跨中断续接: 累计含上一进程,“本进程” ≠ 累计时输出", async () => {
@@ -67,8 +67,8 @@ describe("subtaskProgressLine 进度心跳", () => {
     await statsTask(dir, "T-001")
     now += 6 * 60_000
     const line = await subtaskProgressLine(path, dir)
-    expect(line).toContain("累计用时 24 分 0 秒(本进程 6 分 0 秒)")
-    expect(line).toContain("预计剩余 24 分 0 秒") // 外推基于累计口径
+    expect(line).toContain("elapsed 24m 0s (this process 6m 0s)")
+    expect(line).toContain("est. remaining 24m 0s") // 外推基于累计口径
   })
 })
 

@@ -47,33 +47,35 @@ async function advanceFinal(ctx: LoopCtx, plan: Plan, announce = false): Promise
   if (route.type === "wait" || route.type === "complete") return "idle"
   if (route.type === "block") {
     await block(path, route.task)
-    log(`⏸ ${route.task} 已阻塞(原因见本条,不再写入 PLAN.md):\n${route.question}`)
+    log(`⏸ ${route.task} is blocked (reason in this entry, not written to PLAN.md):\n${route.question}`)
     return "stopped"
   }
-  if (announce) banner("全部任务完成,进入终审闭环")
+  if (announce) banner("all tasks complete, entering the final-review loop")
   const append = async (proposal: FinalProposal) => {
     const id = await appendFinalTask(path, plan, route.stage, route.round, proposal)
-    // 追加是 driver 状态写入(PLAN.md),立即统一提交——下一个执行单元(终审
-    // 任务)的启动 clean 门禁据此成立;提交同时清扫"追加前中断"遗留的未提交
-    // 提案文件(③ 补账语义,plans/0021-commit-boundary-design.md P3)。失败 → stopped 交人工。
+    // The append is a driver state write (PLAN.md), committed immediately —
+    // the next execution unit's (final task's) startup clean gate depends on
+    // it; the commit also sweeps up uncommitted proposal files left by an
+    // interruption before the append (③ make-up semantics,
+    // plans/0021-commit-boundary-design.md P3). Failure → stopped, human.
     if (opts.commit !== false && !opts.dryrun) {
-      const settled = await commitTree(directory, { id: "PLAN", title: `终审任务追加(${stageText(route.stage)} 第 ${route.round} 轮)` }, {
+      const settled = await commitTree(directory, { id: "PLAN", title: `final task append (${stageText(route.stage)} round ${route.round})` }, {
         stage: "final-plan",
-        subject: `PLAN final-plan 追加终审任务 ${id}`,
+        subject: `PLAN final-plan append final task ${id}`,
       })
       if (!settled.ok) {
-        log(`⏸ 终审任务 ${id} 已追加但提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。请人工提交后重新运行`)
+        log(`⏸ final task ${id} appended but the commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Commit manually and re-run`)
         return "stopped" as const
       }
     }
-    log(`✓ 已追加终审任务 ${id}「${stageText(route.stage)}」,主循环继续执行`)
+    log(`✓ final task ${id} "${stageText(route.stage)}" appended, main loop continues`)
     return "appended" as const
   }
   if (route.type === "append") {
-    log(`↻ 终审提案 ${finalProposalFile(route.stage, route.round, finalIndex(plan))} 已产出(追加前中断),直接解析追加`)
+    log(`↻ final proposal ${finalProposalFile(route.stage, route.round, finalIndex(plan))} already produced (interrupted before append), parsing and appending directly`)
     return append(route.proposal)
   }
-  log(`▶ 终审闭环: 开生成会话规划「${stageText(route.stage)}」任务(第 ${route.round} 轮)`)
+  log(`▶ final-review loop: starting the generation session to plan "${stageText(route.stage)}" tasks (round ${route.round})`)
   const generated = await generateFinalTask(serverHandle.client, plan, route.stage, route.round, route.prior, {
     agent: agentName,
     dir: directory,
@@ -86,12 +88,12 @@ async function advanceFinal(ctx: LoopCtx, plan: Plan, announce = false): Promise
     mode: opts.mode,
   })
   if (generated.type === "dirty") {
-    log(`⏸ 终审任务生成会话启动前工作区不净,请人工处置(提交/清理)后重新运行:`)
+    log(`⏸ worktree not clean before starting the final-task generation session; handle it manually (commit/clean) and re-run:`)
     for (const file of generated.files) log(`  ${file}`)
     return "stopped"
   }
   if (generated.type === "blocked") {
-    log(`⏸ 终审任务生成会话受阻(隐性阻塞,请检查后重新运行):\n${generated.question}`)
+    log(`⏸ final-task generation session blocked (implicit block, investigate and re-run):\n${generated.question}`)
     return "stopped"
   }
   return append(generated.proposal)
@@ -110,14 +112,15 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     const plan = await load(path)
     const task = next(plan)
     if (!task) {
-      // --final-review: next() 为空且终审未完成 → 推进终审闭环(生成/追加下一
-      // 阶段任务后续跑循环);终审完成则照常退出。
+      // --final-review: next() is empty and the final review is incomplete →
+      // advance the final-review loop (generate/append the next stage's tasks,
+      // then continue the loop); when the final review is done, exit normally.
       if (finalGate && (opts.finalReview ?? 0) > 0) {
         const advanced = await advanceFinal(ctx, plan, true)
         if (advanced === "stopped") return 2
         if (advanced === "appended") continue
       }
-      log("✓ 全部任务已完成")
+      log("✓ all tasks complete")
       // 非分阶段路径的轮次完成行(STATS_PLAN §4.4,T-006): 阶段桶恒为 "m" 伪
       // 阶段,省略阶段段。分阶段路径由 runPhaseLoop 的 complete 路由统一打印,
       // 此处(phases !== "m" 时 runTaskLoop 只是单阶段执行)不重复。
@@ -132,7 +135,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
     if (ctx.ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
     if (task.status === "blocked") {
-      log(`↻ ${task.id} 此前被阻塞,直接续跑(阻塞原因见上次运行日志)`)
+      log(`↻ ${task.id} was blocked previously, resuming directly (block reason in the previous run's log)`)
     }
     // 任务单元提交边界(plans/0021-commit-boundary-design.md P3): 启动 clean 门禁 + SHA
     // 基线。active 进度记录 = 恢复续跑(工作区承载本单元自身进度,含交接文档)
@@ -146,7 +149,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       } else {
         const gate = await beginUnit(directory, opts, task)
         if (gate.type === "dirty") {
-          log(`⏸ ${task.id} 启动前工作区不净,为保证执行单元以干净基线启动,请人工处置(提交或清理)后重新运行:`)
+          log(`⏸ ${task.id} worktree not clean before startup; to ensure the execution unit starts on a clean baseline, handle it manually (commit or clean) and re-run:`)
           for (const file of gate.files) log(`  ${file}`)
           return 2
         }
@@ -154,7 +157,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       }
     }
     banner(`${task.id} ${task.title}`)
-    log(`▶ ${task.id} 开始执行(第 ${task.attempts + 1} 次尝试)`)
+    log(`▶ ${task.id} starting execution (attempt ${task.attempts + 1})`)
     // 任务切换挂点(STATS_PLAN §3): 重置 task 桶(id 变化时)、清空 per-session
     // 映射;同 id 幂等——中断续跑同任务不重置、不重复计数。
     await statsTask(directory, task.id)
@@ -183,15 +186,16 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       phase,
     })
     if (outcome.type === "dirty") {
-      // 单元启动 clean 门禁失败(runTask 内层): 不写 PLAN.md、不做清扫提交——
-      // git 状态的决定权在人工(plans/0021-commit-boundary-design.md)。
-      log(`⏸ ${task.id} 执行单元启动前工作区不净(疑似上次半途而废的现场或人工改动),请人工处置(提交/清理)后重新运行:`)
+      // Unit-startup clean gate failure (runTask inner layer): no PLAN.md
+      // write, no sweep-up commit — the git state decision belongs to the
+      // human (plans/0021-commit-boundary-design.md).
+      log(`⏸ ${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes); handle it manually (commit/clean) and re-run:`)
       for (const file of outcome.files) log(`  ${file}`)
       return 2
     }
     if (outcome.type === "blocked") {
       await block(path, task.id)
-      log(`⏸ ${task.id} 已阻塞(原因见本条,不再写入 PLAN.md):\n${outcome.question}`)
+      log(`⏸ ${task.id} is blocked (reason in this entry, not written to PLAN.md):\n${outcome.question}`)
       // 代答高亮块(plans/0020-auto-resolve-design.md §H-②,H5): 置顶于结论行之前。三态
       // 一律打印,且不受统计守卫影响(阻塞任务同样可能已被代答了若干问题)。
       for (const line of await taskResolveLines(directory, task.id)) log(line)
@@ -199,29 +203,31 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       // tokens 行(守卫失败时不打印,与 T-006 前行为一致——原本只有 done 有统计行)。
       const lines = await taskEndLines(directory, task.id)
       if (lines) {
-        log(`⏸ ${task.id} 阻塞: ${lines[0]}`)
+        log(`⏸ ${task.id} blocked: ${lines[0]}`)
         log(lines[1])
       }
-      // 中断现场也提交: 保存断点(阻塞问题、CURRENT.md 中断备注),支持回滚到断点。
-      // 提交失败(典型: 统一提交被环境拒绝)仅升级告警——已处在退出 2 的路上,
-      // 改动保留在工作区待人工处置。
+      // Commit the interruption scene too: preserve the breakpoint (block
+      // question, CURRENT.md interruption note) so it can be rolled back to.
+      // Commit failure (typically the unified commit rejected by the
+      // environment) is only escalated to a warning — already on the way to
+      // exit 2, changes stay in the worktree for manual handling.
       if (opts.commit !== false) {
         const settled = await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} blocked ${task.title}` })
-        if (!settled.ok) log(`⚠ 中断现场提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(改动保留在工作区,请人工处理)`)
+        if (!settled.ok) log(`⚠ interruption-scene commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
       }
       return 2
     }
     if (outcome.type === "incomplete") {
-      log(`⏸ ${task.id} 未完成,已回退为 pending。请改进 PLAN.md 中该任务的描述后重新运行:\n${outcome.reason}`)
+      log(`⏸ ${task.id} incomplete, reverted to pending. Improve this task's description in PLAN.md and re-run:\n${outcome.reason}`)
       for (const line of await taskResolveLines(directory, task.id)) log(line)
       const lines = await taskEndLines(directory, task.id)
       if (lines) {
-        log(`⏸ ${task.id} 未完成: ${lines[0]}`)
+        log(`⏸ ${task.id} incomplete: ${lines[0]}`)
         log(lines[1])
       }
       if (opts.commit !== false) {
         const settled = await commitTree(directory, task, { stage: "interrupted", subject: `${task.id} pending ${task.title}` })
-        if (!settled.ok) log(`⚠ 中断现场提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(改动保留在工作区,请人工处理)`)
+        if (!settled.ok) log(`⚠ interruption-scene commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}(changes kept in the worktree, handle manually)`)
       }
       return 2
     }
@@ -229,11 +235,12 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       for (const line of await taskResolveLines(directory, task.id)) log(line)
       const lines = await taskEndLines(directory, task.id)
       if (lines) {
-        log(`✓ ${task.id} 完成: ${lines[0]}`)
+        log(`✓ ${task.id} done: ${lines[0]}`)
         log(lines[1])
       } else {
-        // 守卫失败(统计未装载/桶身份不符)回落 T-006 前旧文案。
-        log(`✓ ${task.id} 完成(用时 ${formatDuration(Date.now() - start)})`)
+        // Guard failure (stats not loaded / bucket identity mismatch) falls
+        // back to the pre-T-006 wording.
+        log(`✓ ${task.id} done (took ${formatDuration(Date.now() - start)})`)
       }
     }
     ctx.ran++
@@ -247,15 +254,15 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       const settled = await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
       if (!settled.ok) {
         log(
-          `⏸ ${task.id} 已完成但终态统一提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。` +
-            `任务标记仍在工作区,请人工提交后重新运行`,
+          `⏸ ${task.id} completed but the final unified commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+            `The task mark is still in the worktree; commit manually and re-run`,
         )
         return 2
       }
       if (taskBaseline) {
         const violations = await unitViolations(directory, taskBaseline)
         if (violations.length) {
-          log(`⏸ ${task.id} 单元收口校验未通过(任务按已完成计,但隔离边界已被破坏,请人工核查):`)
+          log(`⏸ ${task.id} unit close-out check failed (task counts as done, but the isolation boundary has been violated; investigate manually):`)
           for (const problem of violations) log(`  ${problem}`)
           return 2
         }
@@ -263,11 +270,13 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     }
     // 步进暂停(task 边界,OPENCODE_AUTO_STEP ≥ task): 任务终态提交后、终审
     // 路由与下一任务前硬暂停,回车放行。dir 传入使暂停等待从用时统计扣除。
-    await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl, dir: directory })
-    maybeExit("task", `任务 ${task.id} ${task.title}`)
-    // 休眠窗口(task 边界,OPENCODE_AUTO_HIBERNATE): 终态提交完成后的安全落点检查
-    // 「现在是否在窗口内」,在内则睡到窗口结束 + 随机延迟再继续(plans/0027-hibernate-design.md)。
-    await hibernatePause(`任务 ${task.id} ${task.title} 边界`, { dir: directory })
+    await stepPause("task", `task ${task.id} ${task.title}`, { interactive: repl, dir: directory })
+    maybeExit("task", `task ${task.id} ${task.title}`)
+    // Hibernate window (task boundary, OPENCODE_AUTO_HIBERNATE): after the
+    // final commit, a safe spot to check "are we inside the window now"; if
+    // so, sleep until window end + random delay before continuing
+    // (plans/0027-hibernate-design.md).
+    await hibernatePause(`task ${task.id} ${task.title} boundary`, { dir: directory })
     // /failback 消费点(task 边界): 链已随 runTask 销毁、无需清 chain.model;
     // 重置 phase 粒度 sticky holder 并应用模型序覆写(若有)。
     consumeFailback()

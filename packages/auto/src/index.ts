@@ -115,12 +115,12 @@ const RESET_FLAGS = new Set(["force"])
 for (const key of flags.keys()) {
   if (command === "reset") {
     if (RESET_FLAGS.has(key)) continue
-    console.error(`未知选项 --${key}: reset 只接受目录参数与 -f/--force`)
+    console.error(`unknown option --${key}: reset only accepts a directory argument and -f/--force`)
     process.exit(1)
   }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
   const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-  console.error(`未知选项 --${key}${similar.length ? `(是否想用 ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status 只接受目录参数,不接受选项" : ";运行不带子命令的 opencode-auto 可查看用法"}`)
+  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status only accept a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
   process.exit(1)
 }
 const directory = resolve(positional[0] ?? ".")
@@ -134,7 +134,7 @@ if (command === "run") {
   for (const key of ["verify-idle", "verify-max"]) {
     if (flags.has(key)) {
       const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
-      console.error(`--${key} 已更名为 --${renamed}(现同时控制 verify 与 test 脚本执行的看门狗)。变更方式: opencode-auto init <dir> --${renamed} <值>,或直接编辑 .opencode/auto/config.json`)
+      console.error(`--${key} was renamed to --${renamed} (now controls the watchdog for both verify and test script execution). To change: opencode-auto init <dir> --${renamed} <value>, or edit .opencode/auto/config.json directly`)
       process.exit(1)
     }
   }
@@ -143,28 +143,28 @@ if (command === "run") {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
         key === "source-dir" || key === "source-path"
-          ? "opencode-auto init <dir> --source-dir <目录> --source-path <相对路径>"
+          ? "opencode-auto init <dir> --source-dir <dir> --source-path <relative-path>"
           : key === "auto-number" || key === "no-auto-number"
-            ? "opencode-auto init <dir> --auto-number(关闭用 --no-auto-number)"
+            ? "opencode-auto init <dir> --auto-number (use --no-auto-number to turn off)"
             : key === "wrapup" || key === "no-wrapup"
-              ? "opencode-auto init <dir> --wrapup(关闭用 --no-wrapup)"
-              : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <值>`
-      console.error(`${flag} 已在 init 固化(.opencode/auto/config.json)。变更方式: ${fix},或直接编辑该文件`)
+              ? "opencode-auto init <dir> --wrapup (use --no-wrapup to turn off)"
+              : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <value>`
+      console.error(`${flag} was frozen by init (.opencode/auto/config.json). To change: ${fix}, or edit that file directly`)
       process.exit(1)
     }
   }
   if (flags.has("commit-subtask")) {
-    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),且不再支持关闭(--commit false 已退役)")
+    console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
     process.exit(1)
   }
   // --amend/--force 是 init/reset 专用: 前者切回增量修订语义,后者跳过覆盖确认
   // 与工作区干净度闸门;run 不写配置、不做破坏性覆盖,两者都无意义。
   if (flags.has("amend")) {
-    console.error("--amend 是 init 专用选项(切回增量修订语义,只改命令行显式给出的键),run 不接受")
+    console.error("--amend is an init-only option (switches back to incremental amend semantics, only changing keys explicitly given on the command line); run does not accept it")
     process.exit(1)
   }
   if (flags.has("force")) {
-    console.error("-f/--force 是 init/reset 专用选项(跳过覆盖确认与工作区干净度检查),run 不接受")
+    console.error("-f/--force is an init/reset-only option (skips overwrite confirmation and worktree cleanliness checks); run does not accept it")
     process.exit(1)
   }
   // --implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项
@@ -172,13 +172,13 @@ if (command === "run") {
   // run 的选项。
   for (const key of ["implement-file", "implement-prompt"]) {
     if (flags.has(key)) {
-      console.error(`--${key} 是 init 专用的快捷模式选项: 用它生成 PLAN.md、人工审核无误后再调用 opencode-auto run ${directory} 执行,run 本身不接受该选项`)
+      console.error(`--${key} is an init-only shortcut-mode option: use it to generate PLAN.md, review it manually, then call opencode-auto run ${directory} to execute; run itself does not accept this option`)
       process.exit(1)
     }
   }
   // 续轮迁移是独立子命令(continue),不是任何命令的选项。
   if (flags.has("continue")) {
-    console.error("--continue 不是选项: 续轮迁移用独立子命令 opencode-auto continue <dir>(上一轮阶段化迁移全部完成后开启新一轮)")
+    console.error("--continue is not an option: round continuation uses the dedicated subcommand opencode-auto continue <dir> (starts a new round after the previous phased migration round fully completes)")
     process.exit(1)
   }
   const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
@@ -186,37 +186,37 @@ if (command === "run") {
   // 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
   const interactive = flags.has("interactive") && flags.get("interactive") !== "false"
   if (interactive && verbose) {
-    console.error("--interactive/-i 与 --verbose 互斥,只能选其一")
+    console.error("--interactive/-i and --verbose are mutually exclusive; pick one")
     process.exit(1)
   }
   setVerbose(verbose)
   if (interactive) setInteractive()
   // 每次 run 都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
-  log(`📝 日志文件: ${setLogFile(directory)}`)
+  log(`📝 log file: ${setLogFile(directory)}`)
   const waitAnswer = parseMinutes(flags.get("wait-answer"))
   if (waitAnswer === null) {
-    console.error("--wait-answer 取值范围为 1..60(分钟);不带值时默认为 1")
+    console.error("--wait-answer takes 1..60 (minutes); defaults to 1 when given without a value")
     process.exit(1)
   }
   const waitBetween = parseMinutes(flags.get("wait-between"))
   if (waitBetween === null) {
-    console.error("--wait-between 取值范围为 1..60(分钟);不带值时默认为 1")
+    console.error("--wait-between takes 1..60 (minutes); defaults to 1 when given without a value")
     process.exit(1)
   }
   const review = parseReviewLimit(flags.get("review"))
   if (review === null) {
-    console.error("--review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
+    console.error("--review takes 1..10 (quality review round cap); defaults to 3 when given without a value")
     process.exit(1)
   }
   // --early-review [n] 是 --review n --early 的快捷糖;与 --review 同时出现为
   // 用法错误(消除歧义)。
   const earlyReview = parseReviewLimit(flags.get("early-review"))
   if (earlyReview === null) {
-    console.error("--early-review 取值范围为 1..10(质量审核轮数上限);不带值时默认为 3")
+    console.error("--early-review takes 1..10 (quality review round cap); defaults to 3 when given without a value")
     process.exit(1)
   }
   if (flags.has("review") && flags.has("early-review")) {
-    console.error("--early-review 是 --review n --early 的快捷糖,不要与 --review 同时使用")
+    console.error("--early-review is shorthand for --review n --early; do not combine it with --review")
     process.exit(1)
   }
   // --early: 把 --review 的审核会话挪进 verify 脚本执行窗口并行(设计文档 F 节);
@@ -224,19 +224,19 @@ if (command === "run") {
   // 逐任务审核窗口,与 --final-review 终审闭环无交互、可同现。
   const early = (flags.has("early") && flags.get("early") !== "false") || earlyReview > 0
   if (early && review <= 0 && earlyReview <= 0) {
-    console.error("--early 需搭配 --review 一起使用(或改用快捷糖 --early-review)")
+    console.error("--early requires --review (or use the shorthand --early-review)")
     process.exit(1)
   }
   // --final-review: 终审闭环的审计轮上限(含首轮 audit,即 audit→remediate→
   // validate 的最大循环次数);可与 --review 组合(逐任务审核照常 + 终审闭环)。
   const finalReview = parseFinalReviewLimit(flags.get("final-review"))
   if (finalReview === null) {
-    console.error("--final-review 取值范围为 1..5(终审审计轮数上限);不带值时默认为 2")
+    console.error("--final-review takes 1..5 (final-review audit round cap); defaults to 2 when given without a value")
     process.exit(1)
   }
   const permission = parsePermission(flags.get("permission"))
   if (permission === null) {
-    console.error("--permission 取值为 auto-allow|ask-allow|ask-deny|ask-fail;缺省为 ask-deny")
+    console.error("--permission takes auto-allow|ask-allow|ask-deny|ask-fail; defaults to ask-deny")
     process.exit(1)
   }
   // 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
@@ -250,29 +250,29 @@ if (command === "run") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  if (await legacyModeFallback(directory)) log("ℹ 模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置")
+  if (await legacyModeFallback(directory)) log("ℹ mode taken from the legacy persisted value in .auto/config.json; re-run init to freeze the full config")
   if (config.testByDriver) {
     log(
-      `⚙ 测试由 driver 执行: 会话把脚本放 test/、把脚本路径写入 tmp/test.sh 请求执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 并反馈回会话判断` +
-        (config.handoverTest ? ";测试失败且上下文达上限时写交接文档换新会话" : ""),
+      `⚙ tests run by the driver: sessions put scripts in test/ and write the script path to tmp/test.sh to request execution; the driver merges stdout/stderr into tmp/test.<n>.out and feeds it back to the session` +
+        (config.handoverTest ? "; on test failure with context at its cap, a handover document switches to a fresh session" : ""),
     )
   }
   const modes = loadModeTable(directory)
   const mode = modes[config.mode]
   if (!mode) {
-    console.error(`配置的 mode "${config.mode}" 未注册(当前支持: ${Object.keys(modes).join(", ")});修订方式: opencode-auto init <dir> -m <值>,或直接编辑 .opencode/auto/config.json`)
+    console.error(`configured mode "${config.mode}" is not registered (currently supported: ${Object.keys(modes).join(", ")}); to fix: opencode-auto init <dir> -m <value>, or edit .opencode/auto/config.json directly`)
     process.exit(1)
   }
-  log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
+  log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   // 阶段进度行(B.2,与 status 共用 formatPhases;✓=台账已记录,▶=当前,其余=未
   // 开始);续轮(docs/R-NN 轮次目录最大号 > 1)时带轮次标注。台账非法仅提示,
   // runAll 的阶段路由会以环境错误退出 1。
   if (config.phases !== "m") {
     try {
       const round = await currentRound(directory)
-      log(`阶段${round > 1 ? `(第 ${round} 轮)` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
+      log(`phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
     } catch (error) {
-      log(`⚠ 阶段台账(${await ledgerPath(directory)})非法: ${error instanceof Error ? error.message : String(error)}`)
+      log(`⚠ phase ledger (${await ledgerPath(directory)}) is invalid: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   const code = await runAll(directory, {
@@ -418,7 +418,7 @@ if (command === "init" || command === "continue") {
   // (establishRound: 建 docs/R-(N+1)/、根 PLAN.md 链接重指轮内、AGENTS.md.bak
   // 快照);③ 迁移同一性选项(-m/--mode 与迁移参数)跨轮固定,显式给出即用法错误。
   if (command === "init" && flags.has("continue")) {
-    console.error("--continue 不是选项: 续轮迁移用独立子命令 opencode-auto continue <dir>(上一轮阶段化迁移全部完成后开启新一轮)")
+    console.error("--continue is not an option: round continuation uses the dedicated subcommand opencode-auto continue <dir> (starts a new round after the previous phased migration round fully completes)")
     process.exit(1)
   }
   const cont = command === "continue"
@@ -426,58 +426,58 @@ if (command === "init" || command === "continue") {
     for (const key of ["mode", "source-dir", "source-path", "dest-dir"]) {
       if (!flags.has(key)) continue
       console.error(
-        `${key === "mode" ? "-m/--mode" : `--${key}`} 跨轮固定,continue 时不可变更: 续轮是同一迁移的继续(上一轮结论以同一源、同一目标为前提)。` +
-          "如需更换迁移对象或场景,请在新目录 init 新项目",
+        `${key === "mode" ? "-m/--mode" : `--${key}`} is fixed across rounds and cannot change during continue: a continuation round continues the same migration (the previous round's conclusions assume the same source and target).` +
+          " To migrate something else, init a new project in a new directory",
       )
       process.exit(1)
     }
     if (flags.has("implement-file") || flags.has("implement-prompt")) {
-      console.error("--implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项: continue 用于阶段化流程续轮,不支持")
+      console.error("--implement-file/--implement-prompt are init-only single-phase (m) shortcut-mode options: continue is for phased-flow round continuation and does not support them")
       process.exit(1)
     }
   }
   if (flags.has("commit-subtask")) {
-    console.error("--commit-subtask 已移除: 提交现在由 driver 在每个会话结束后统一执行(收回 AI 提交权),且不再支持关闭(--commit false 已退役)")
+    console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
     process.exit(1)
   }
   // --implement-file/--implement-prompt(init 单阶段 m 快捷模式,设计见文件尾用法
   // 文本): 二选一,不与继续调用叠加使用;值须非空。文件存在性与 phases 兼容性
   // 校验放在 existing 配置装载之后(§下文)。
   if (flags.has("implement-file") && flags.has("implement-prompt")) {
-    console.error("--implement-file 与 --implement-prompt 二选一: 二者是同一快捷模式的两种输入来源,不要同时给出")
+    console.error("--implement-file and --implement-prompt are mutually exclusive: they are two input sources for the same shortcut mode; do not give both")
     process.exit(1)
   }
   if (flags.has("implement-file") && !flags.get("implement-file")?.trim()) {
-    console.error("--implement-file 需要非空的文件路径")
+    console.error("--implement-file requires a non-empty file path")
     process.exit(1)
   }
   if (flags.has("implement-prompt") && !flags.get("implement-prompt")?.trim()) {
-    console.error("--implement-prompt 需要非空的提示词文本")
+    console.error("--implement-prompt requires non-empty prompt text")
     process.exit(1)
   }
   for (const key of ["verify-idle", "verify-max"]) {
     if (flags.has(key)) {
       const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
-      console.error(`--${key} 已更名为 --${renamed}(现同时控制 verify 与 test 脚本执行的看门狗)`)
+      console.error(`--${key} was renamed to --${renamed} (now controls the watchdog for both verify and test script execution)`)
       process.exit(1)
     }
   }
   const commit = parseCommit(flags)
   if (commit === null) {
     console.error(
-      "--commit 取值只剩 true(缺省): --commit false(及旧别名 none)已退役——统一提交是完成条件" +
-        "(plans/0021-commit-boundary-design.md),driver 在每个会话结束后统一提交全部改动,不再支持关闭",
+      "--commit now only takes true (default): --commit false (and the old alias none) is retired — unified commits are the completion condition" +
+        " (plans/0021-commit-boundary-design.md); the driver commits all changes after every session ends; turning commits off is no longer supported",
     )
     process.exit(1)
   }
   const subtask = parseSubtask(flags.get("subtask"))
   if (subtask === null) {
-    console.error("--subtask 取值为 off|auto|ondemand;缺省为 auto")
+    console.error("--subtask takes off|auto|ondemand; defaults to auto")
     process.exit(1)
   }
   const contextLimit = parseContextLimit(flags.get("context-limit"))
   if (contextLimit === null) {
-    console.error("--context-limit 取值为正整数(单位: 千 tokens);缺省为 64")
+    console.error("--context-limit takes a positive integer (unit: k tokens); defaults to 64")
     process.exit(1)
   }
   // --idle-time: driver 托管脚本(verify 与 test)的无进度判定窗口(两个输出
@@ -485,12 +485,12 @@ if (command === "init" || command === "continue") {
   // 就永不限时)。
   const idleTime = parseIdleTime(flags.get("idle-time"))
   if (idleTime === null) {
-    console.error("--idle-time 取值范围为 1..120(分钟);缺省为 10")
+    console.error("--idle-time takes 1..120 (minutes); defaults to 10")
     process.exit(1)
   }
   const idleMax = parseIdleMax(flags.get("idle-max"))
   if (idleMax === null) {
-    console.error("--idle-max 取值范围为 1..1440(分钟);缺省不设上限")
+    console.error("--idle-max takes 1..1440 (minutes); no cap by default")
     process.exit(1)
   }
   // --phases: 阶段化流程(设计文档 plans/0006-phases-design.md);"m"(缺省)= 无阶段
@@ -500,7 +500,7 @@ if (command === "init" || command === "continue") {
   if (flags.has("phases")) {
     const parsed = parsePhases(flags.get("phases") ?? "")
     if (!parsed) {
-      console.error(`--phases 取值须为 admtvk 的子序列且包含 m(如 m、amt、admtvk),当前: "${flags.get("phases") ?? ""}"`)
+      console.error(`--phases must be a subsequence of admtvk containing m (e.g. m, amt, admtvk); got: "${flags.get("phases") ?? ""}"`)
       process.exit(1)
     }
     phases = parsed.join("")
@@ -514,27 +514,27 @@ if (command === "init" || command === "continue") {
   let source: { dir: string; path: string } | undefined
   if (flags.has("source-dir") || flags.has("source-path")) {
     if (!flags.has("source-dir") || !flags.has("source-path")) {
-      console.error("--source-dir 与 --source-path 必须成对给出: 源系统目录与源模块相对路径")
+      console.error("--source-dir and --source-path must be given as a pair: source-system directory and source-module relative path")
       process.exit(1)
     }
     const sourceDir = flags.get("source-dir")!
     const sourcePath = flags.get("source-path")!
     if (!sourceDir.trim() || !sourcePath.trim()) {
-      console.error("--source-dir 与 --source-path 须为非空值")
+      console.error("--source-dir and --source-path must be non-empty")
       process.exit(1)
     }
     if (isAbsolute(sourceDir) || sourceDir.split(/[\\/]+/).includes("..")) {
-      console.error("--source-dir 须为工作目录下的相对路径(不含 ..): 迁移源位于 <工作目录>/<source-dir>")
+      console.error("--source-dir must be a relative path under the working directory (no ..): the migration source lives at <workdir>/<source-dir>")
       process.exit(1)
     }
     if (isAbsolute(sourcePath) || sourcePath.split(/[\\/]+/).includes("..")) {
-      console.error("--source-path 须为不含 .. 的相对路径(相对 --source-dir)")
+      console.error("--source-path must be a relative path without .. (relative to --source-dir)")
       process.exit(1)
     }
     const dirIsDir = await stat(join(directory, sourceDir)).then((s) => s.isDirectory()).catch(() => false)
     const pathExists = await stat(join(directory, sourceDir, sourcePath)).then(() => true).catch(() => false)
     if (!dirIsDir || !pathExists) {
-      console.error(`--source-dir 须为工作目录下现存目录且 --source-path 在其下存在: ${sourceDir} 与 ${sourcePath}`)
+      console.error(`--source-dir must be an existing directory under the working directory and --source-path must exist under it: ${sourceDir} and ${sourcePath}`)
       process.exit(1)
     }
     source = { dir: sourceDir, path: sourcePath }
@@ -543,11 +543,11 @@ if (command === "init" || command === "continue") {
   if (flags.has("dest-dir")) {
     const dest = flags.get("dest-dir")!
     if (!dest.trim()) {
-      console.error("--dest-dir 须为非空值")
+      console.error("--dest-dir must be non-empty")
       process.exit(1)
     }
     if (isAbsolute(dest) || dest.split(/[\\/]+/).includes("..")) {
-      console.error("--dest-dir 须为工作目录下的相对路径(不含 ..): 迁移目标位于 <工作目录>/<dest-dir>")
+      console.error("--dest-dir must be a relative path under the working directory (no ..): the migration target lives at <workdir>/<dest-dir>")
       process.exit(1)
     }
     destDir = dest
@@ -573,7 +573,7 @@ if (command === "init" || command === "continue") {
   // --auto-number/--no-auto-number: 一对布尔开关(启用/关闭自动编号),同为布尔
   // 宪法级选项,经 explicit 合并(amend 语义);两者同现自相矛盾,为用法错误。
   if (flags.has("auto-number") && flags.has("no-auto-number") && flags.get("auto-number") !== "false" && flags.get("no-auto-number") !== "false") {
-    console.error("--auto-number 与 --no-auto-number 是一对互斥开关,不要同时使用")
+    console.error("--auto-number and --no-auto-number are a mutually exclusive pair; do not use both")
     process.exit(1)
   }
   if (flags.has("auto-number") && flags.get("auto-number") !== "false") explicit.autoNumber = true
@@ -581,7 +581,7 @@ if (command === "init" || command === "continue") {
   // --wrapup/--no-wrapup: 一对布尔开关(启用/关闭任务收尾会话),镜像
   // --auto-number/--no-auto-number 同款处理;两者同现自相矛盾,为用法错误。
   if (flags.has("wrapup") && flags.has("no-wrapup") && flags.get("wrapup") !== "false" && flags.get("no-wrapup") !== "false") {
-    console.error("--wrapup 与 --no-wrapup 是一对互斥开关,不要同时使用")
+    console.error("--wrapup and --no-wrapup are a mutually exclusive pair; do not use both")
     process.exit(1)
   }
   if (flags.has("wrapup") && flags.get("wrapup") !== "false") explicit.wrapup = true
@@ -614,9 +614,9 @@ if (command === "init" || command === "continue") {
   if (implementFile !== undefined || implementPrompt !== undefined) {
     if (effectivePhases !== "m") {
       console.error(
-        `--implement-file/--implement-prompt 仅用于单阶段(phases = "m")快捷模式,` +
-          `${phases !== undefined ? "本次给出的 --phases" : amend ? "既有配置 phases" : "本次生效的缺省 phases"} 为 "${effectivePhases}"。` +
-          `请先 opencode-auto init <dir> --phases m 切换(新项目不传 --phases 缺省即 m)后再使用该快捷模式`,
+        `--implement-file/--implement-prompt only apply to the single-phase (phases = "m") shortcut mode; ` +
+          `${phases !== undefined ? "the --phases given here" : amend ? "the existing config phases" : "the effective default phases"} is "${effectivePhases}". ` +
+          `switch first with opencode-auto init <dir> --phases m (new projects default to m when --phases is omitted), then use this shortcut mode`,
       )
       process.exit(1)
     }
@@ -624,7 +624,7 @@ if (command === "init" || command === "continue") {
       implementFilePath = resolve(implementFile)
       const fileOk = await stat(implementFilePath).then((s) => s.isFile()).catch(() => false)
       if (!fileOk) {
-        console.error(`--implement-file 指定的文件不存在或不是常规文件: ${implementFilePath}`)
+        console.error(`the file given to --implement-file does not exist or is not a regular file: ${implementFilePath}`)
         process.exit(1)
       }
     }
@@ -645,8 +645,8 @@ if (command === "init" || command === "continue") {
     const effectiveHandoverTest = explicit.handoverTest ?? base.handoverTest
     if (effectiveHandoverTest && !effectiveTestByDriver) {
       console.error(
-        `${explicit.handoverTest !== undefined ? "--handover-test" : "既有 handoverTest"} 需搭配 --test-by-driver 一起使用: ` +
-          "测试交接只在测试由 driver 执行时才有意义。修订方式: opencode-auto init <dir> --test-by-driver --handover-test,或直接编辑 .opencode/auto/config.json",
+        `${explicit.handoverTest !== undefined ? "--handover-test" : "the existing handoverTest"} requires --test-by-driver: ` +
+          "test handover only makes sense when tests run via the driver. To fix: opencode-auto init <dir> --test-by-driver --handover-test, or edit .opencode/auto/config.json directly",
       )
       process.exit(1)
     }
@@ -667,29 +667,29 @@ if (command === "init" || command === "continue") {
   if (cont) {
     if (existing.phases === "m") {
       console.error(
-        `continue 仅用于阶段化流程项目: 当前配置 phases = "m"(无阶段声明的单次运行,没有轮的概念)。` +
-          `可先 opencode-auto init <dir> --phases <admtvk 子序列含 m> 开启阶段化流程`,
+        `continue only applies to phased-flow projects: the current config has phases = "m" (a single run with no phase declaration, no rounds). ` +
+          `enable the phased flow first with opencode-auto init <dir> --phases <admtvk subsequence containing m>`,
       )
       process.exit(1)
     }
     if (phases === "m") {
-      console.error('continue 用于阶段化流程的续轮,--phases 不可为 "m"')
+      console.error('continue is for phased-flow round continuation; --phases cannot be "m"')
       process.exit(1)
     }
     const declared = [...existing.phases]
     const outside = [...ledgerDone].filter((letter) => !declared.includes(letter))
     if (outside.length) {
       console.error(
-        `continue 前置检查失败: ${await ledgerPath(directory)} 台账记录了 phases(${existing.phases})之外的阶段字母: ${outside.join("、")}。` +
-          "请人工修订该文件(回退规程见 README)后再续轮",
+        `continue precheck failed: the ledger at ${await ledgerPath(directory)} records phase letters outside phases (${existing.phases}): ${outside.join(", ")}. ` +
+          "fix that file manually (see README for the rollback procedure) before continuing to the next round",
       )
       process.exit(1)
     }
     const missing = declared.filter((letter) => !ledgerDone.includes(letter))
     if (missing.length) {
       console.error(
-        `continue 要求上一轮已全部完成: 阶段台账(${await ledgerPath(directory)})${ledgerDone ? "" : "为空"}、尚缺 ${missing.join("、")}(phases ${existing.phases})。` +
-          `请先运行 opencode-auto run ${directory} 完成本轮`,
+        `continue requires the previous round to be fully complete: the phase ledger (${await ledgerPath(directory)})${ledgerDone ? "" : " is empty"}, missing ${missing.join(", ")} (phases ${existing.phases}). ` +
+          `run opencode-auto run ${directory} first to finish this round`,
       )
       process.exit(1)
     }
@@ -702,10 +702,10 @@ if (command === "init" || command === "continue") {
   if (!cont && ledgerDone && !effectivePhases.startsWith(ledgerDone)) {
     console.error(
       flags.has("phases")
-        ? `--phases 新值 "${effectivePhases}" 与阶段台账(${await ledgerPath(directory)})不兼容: 台账已记录完成阶段 "${ledgerDone}",须构成新值的前缀。` +
-            "请改用以其为前缀的值,或按 README 的人工回退规程修订台账后再变更"
-        : `无参 init 以缺省值全量覆盖,phases 将被重置为 "${effectivePhases}",与阶段台账(${await ledgerPath(directory)})已记录的完成阶段 "${ledgerDone}" 不兼容(会毁掉轮次布局)。` +
-            `保留既有配置请用 opencode-auto init ${directory} --amend;确实要变更请显式给出以 "${ledgerDone}" 为前缀的 --phases`,
+        ? `the new --phases value "${effectivePhases}" is incompatible with the phase ledger (${await ledgerPath(directory)}): the ledger records completed phases "${ledgerDone}", which must be a prefix of the new value. ` +
+            "use a value prefixed by it, or fix the ledger via the README rollback procedure before changing it"
+        : `a no-flag init overwrites with defaults and would reset phases to "${effectivePhases}", incompatible with the completed phases "${ledgerDone}" recorded in the phase ledger (${await ledgerPath(directory)}) (it would destroy the round layout). ` +
+            `to keep the existing config use opencode-auto init ${directory} --amend; to really change it, pass --phases explicitly prefixed by "${ledgerDone}"`,
     )
     process.exit(1)
   }
@@ -714,7 +714,7 @@ if (command === "init" || command === "continue") {
   const modeName = flags.get("mode") ?? base.mode
   const modes = loadModeTable(directory)
   if (!modes[modeName]) {
-    console.error(`--mode 取值须为已注册的模式(当前支持: ${Object.keys(modes).join(", ")});缺省为 migrate`)
+    console.error(`--mode must be a registered mode (currently supported: ${Object.keys(modes).join(", ")}); defaults to migrate`)
     process.exit(1)
   }
   const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
@@ -727,36 +727,36 @@ if (command === "init" || command === "continue") {
   if (overwriting) {
     // ① 工作区干净度: init 会覆盖已落盘的配置,git 是用户唯一的撤销手段。
     //    非 TTY 同样生效——免掉的只是交互确认,不是这道拦截。
-    const dirty = await checkCleanTree(directory, "init 全量覆盖")
+    const dirty = await checkCleanTree(directory, "init full overwrite")
     if (dirty) {
       console.error(dirty)
       process.exit(1)
     }
     // ② 交互确认: 非 TTY 直接放行(confirm 内部判定)。
     const ok = await confirm(
-      "发现已存在的配置 .opencode/auto/config.json,init 将以本次参数全量覆盖(未给出的键回落默认值)。继续? [y/N] ",
+      "found an existing config .opencode/auto/config.json; init will fully overwrite it with these parameters (keys not given fall back to defaults). continue? [y/N] ",
     )
     if (!ok) {
-      console.log("已取消,未做任何改动")
+      console.log("cancelled; nothing was changed")
       process.exit(0)
     }
   }
   try {
     await saveProjectConfig(directory, config)
   } catch (error) {
-    console.error(`写出 .opencode/auto/config.json 失败: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(`failed to write .opencode/auto/config.json: ${error instanceof Error ? error.message : String(error)}`)
     process.exit(1)
   }
-  console.log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
+  console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   // v(验收)阶段与 config.verify 正交: v 阶段任务自身即检验、不受影响,但 m/t
   // 等阶段任务的任务级三段式验收依赖 config.verify;含 v 而未启用时提示一次,不强制。
   if (config.phases.includes("v") && !config.verify) {
-    console.log("ℹ phases 含 v(验收)阶段而任务级验收未启用: v 阶段任务自身即检验、不受影响,其余阶段任务将不做任务级三段式验收(如需启用: opencode-auto init <dir> --verify true)")
+    console.log("ℹ phases includes the v (acceptance) phase but task-level acceptance is off: v-phase tasks verify themselves and are unaffected, but tasks in other phases will skip task-level three-step acceptance (to enable: opencode-auto init <dir> --verify true)")
   }
   // 自动编号由阶段规划会话消费编号记录;phases = "m" 没有规划会话(PLAN.md 由
   // 人工维护),开关不产生效果,提示一次。
   if (config.autoNumber && config.phases === "m") {
-    console.log('ℹ 自动编号(--auto-number)在 phases = "m" 下无规划会话消费编号记录,开关不产生效果(PLAN.md 编号由人工维护)')
+    console.log('ℹ auto-numbering (--auto-number) has no planning session to consume the numbering record under phases = "m"; the switch has no effect (PLAN.md numbering is maintained manually)')
   }
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议校验失败即退出);
   // 无 -p 时不渲染提示词,提前装载可在 init 阶段就暴露覆盖问题。
@@ -775,7 +775,7 @@ if (command === "init" || command === "continue") {
       const linked = await Bun.file(rootPlan).text()
       await rm(rootPlan, { force: true })
       await Bun.write(rootPlan, linked)
-      console.log("已还原: PLAN.md(轮次符号链接 → 普通文件;轮次目录内容保留)")
+      console.log("restored: PLAN.md (round symlink → regular file; round directory contents kept)")
     }
   }
   // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。阶段化流程
@@ -794,24 +794,24 @@ if (command === "init" || command === "continue") {
     const content = file === "opencode.json" ? raw : renderText(raw, { verify: config.verify, testByDriver: config.testByDriver })
     const existing = await Bun.file(target).text().catch(() => undefined)
     if (existing !== undefined && (existing === content || file !== ".opencode/agent/auto.md")) {
-      console.log(`跳过已存在: ${file}`)
+      console.log(`already exists, skipped: ${file}`)
       continue
     }
     await Bun.write(target, content)
-    console.log(existing === undefined ? `已创建: ${file}` : `已替换(与模板不一致): ${file}`)
+    console.log(existing === undefined ? `created: ${file}` : `replaced (differed from the template): ${file}`)
   }
   // 幂等同步 AGENTS.md 的 opencode-auto 块: 按当前配置渲染,与文件中现有标准块比对
   // ——缺失则追加、内容不一致则整块替换、旧版/多余的带名标记块一律清理。
   const ensured = await ensurePointer(directory, { verify: config.verify, testByDriver: config.testByDriver })
   console.log(
     ensured.block === "inserted"
-      ? "已补写: AGENTS.md opencode-auto 块"
+      ? "appended: AGENTS.md opencode-auto block"
       : ensured.block === "replaced"
-        ? "已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)"
-        : "跳过已存在: AGENTS.md opencode-auto 块(已是最新)",
+        ? "refreshed: AGENTS.md opencode-auto block (differed from the current config render)"
+        : "already exists, skipped: AGENTS.md opencode-auto block (up to date)",
   )
-  if (ensured.legacyRemoved) console.log(`已清理: AGENTS.md 中 ${ensured.legacyRemoved} 个旧版/多余 opencode-auto 标记块`)
-  if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
+  if (ensured.legacyRemoved) console.log(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
+  if (await ensureGitignore(directory)) console.log("updated: .gitignore now ignores tmp/ and .auto/ (driver workdir and runtime state)")
 
   // 轮首建立(轮次专用目录 docs/R-NN,plans/0006-phases-design.md M 节;须在 ensurePointer
   // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
@@ -824,12 +824,12 @@ if (command === "init" || command === "continue") {
   if (config.phases !== "m") {
     const legacyInflight = !cont && !(await roundRoot(directory, await currentRound(directory))) && (await Bun.file(join(directory, "docs", "phases.md")).exists())
     if (legacyInflight) {
-      console.log("ℹ 旧布局轮次在途(根 docs/phases.md 台账仍在): 本轮维持旧布局,下次 continue 起进入轮次目录布局")
+      console.log("ℹ a legacy-layout round is in flight (root docs/phases.md ledger still present): this round keeps the legacy layout; the round-directory layout starts from the next continue")
       // 旧布局兜底: 根 PLAN.md 缺失(人工删除/中断现场)时仍补空模板,维持 amend 语义
       const rootPlan = resolve(directory, "PLAN.md")
       if (!(await Bun.file(rootPlan).exists())) {
         await Bun.write(rootPlan, renderPlanScaffold(config.verify))
-        console.log("已创建: PLAN.md(空模板,由阶段规划会话填充)")
+        console.log("created: PLAN.md (empty template, filled by the phase planning session)")
       }
     } else {
       // init 场景: 根 PLAN.md 为占位模板态(从未编辑的 <任务标题> 占位任务)时
@@ -848,14 +848,14 @@ if (command === "init" || command === "continue") {
           verify: config.verify,
         })
         newRound = cont ? established.round : undefined
-        console.log(`✓ 轮次目录: ${established.root}/(PLAN.md、阶段台账 phases.md、阶段归档与知识文档均落轮内,落盘即永久)`)
+        console.log(`✓ round directory: ${established.root}/ (PLAN.md, phase ledger phases.md, phase archives and knowledge docs all live inside the round; once written, permanent)`)
         console.log(
           established.linked
-            ? `✓ 根 PLAN.md → ${established.root}/PLAN.md(相对符号链接,单一事实源)`
-            : `⚠ 根 PLAN.md 符号链接创建失败,已兜底为轮内副本(写不联动,以 ${established.root}/PLAN.md 为准)`,
+            ? `✓ root PLAN.md → ${established.root}/PLAN.md (relative symlink, single source of truth)`
+            : `⚠ failed to create the root PLAN.md symlink; fell back to an in-round copy (writes do not link; ${established.root}/PLAN.md is authoritative)`,
         )
       } catch (error) {
-        console.error(`轮首建立失败: ${error instanceof Error ? error.message : String(error)}`)
+        console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
         process.exit(1)
       }
     }
@@ -868,11 +868,11 @@ if (command === "init" || command === "continue") {
   const promptText = flags.get("prompt")
   if (promptText !== undefined) {
     if (!promptText.trim()) {
-      console.error("-p/--prompt 需要非空的提示词文本")
+      console.error("-p/--prompt requires non-empty prompt text")
       process.exit(1)
     }
     await Bun.write(join(directory, ".opencode", "auto", "brief.md"), promptText.trimEnd() + "\n")
-    console.log("已写入: .opencode/auto/brief.md(项目意图,阶段规划会话消费;重复 init -p 覆盖重写)")
+    console.log("written: .opencode/auto/brief.md (project brief, consumed by phase planning sessions; repeated init -p overwrites it)")
   }
   // --implement-file/--implement-prompt 快捷模式(单阶段 m): 计划生成会话直接
   // 编辑填充 PLAN.md,与阶段规划会话同款机制——这是 init 唯一会启动 AI 会话的
@@ -883,13 +883,13 @@ if (command === "init" || command === "continue") {
     const currentPlan = await Bun.file(join(directory, "PLAN.md")).text().catch(() => undefined)
     if (currentPlan !== undefined && !isPristinePlan(currentPlan)) {
       console.error(
-        "PLAN.md 已包含正式任务,--implement-file/--implement-prompt 仅用于从空白/占位状态生成新计划: " +
-          "如需重新生成,请先备份并清空 PLAN.md(或删除后重新运行 init)",
+        "PLAN.md already contains real tasks; --implement-file/--implement-prompt only generate a new plan from a blank/placeholder state: " +
+          "to regenerate, back up and empty PLAN.md first (or delete it and re-run init)",
       )
       process.exit(1)
     }
     const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
-    console.log(`▶ 计划生成会话输入: ${implementFilePath !== undefined ? `计划文件 ${implementFilePath}` : "实施提示词"}`)
+    console.log(`▶ plan-generation session input: ${implementFilePath !== undefined ? `plan file ${implementFilePath}` : "implementation prompt"}`)
     const result = await implementPlan(
       directory,
       {
@@ -900,26 +900,26 @@ if (command === "init" || command === "continue") {
       { agent: config.agent, commit: config.commit, contextLimit: config.contextLimit * 1000, verify: config.verify, mode: modes[modeName] },
     )
     if (result.type === "blocked") {
-      console.error(`⏸ 计划生成会话受阻(隐性阻塞,请检查后重新运行):\n${result.question}`)
+      console.error(`⏸ plan-generation session blocked (hidden blockage; inspect and re-run):\n${result.question}`)
       process.exit(2)
     }
-    console.log(`✓ 计划生成完成: PLAN.md 已填入 ${result.count} 个任务`)
-    console.log(`人工审核 PLAN.md 无误后运行: opencode-auto run ${directory}`)
+    console.log(`✓ plan generation complete: PLAN.md filled with ${result.count} task(s)`)
+    console.log(`after reviewing PLAN.md, run: opencode-auto run ${directory}`)
     process.exit(0)
   }
   // 结束语按 phases 分两态: "m" 维持"编辑 PLAN.md"现状;阶段化流程下 PLAN.md
   // 由阶段规划会话填充,不提示手工编辑。continue 下新轮目录恒空(台账为空),首个
   // 阶段 = 新 phases 的第一个字母;另打新一轮横幅。
   if (config.phases === "m") {
-    console.log(promptText !== undefined ? `brief 已记录,运行: opencode-auto run ${directory} 开始任务规划` : `编辑 PLAN.md 填入任务后运行: opencode-auto run ${directory}`)
+    console.log(promptText !== undefined ? `brief recorded; run: opencode-auto run ${directory} to start task planning` : `edit PLAN.md to fill in tasks, then run: opencode-auto run ${directory}`)
     process.exit(0)
   }
   const current = parsePhases(config.phases)!.find((phase) => !(cont ? "" : ledgerDone).includes(phase))
   if (cont) {
-    console.log(`已开启第 ${newRound} 轮继续迁移: 在既有成果上让迁移结果与源更加完整、一致`)
+    console.log(`round ${newRound} of the migration started: making the migration result more complete and consistent with the source on top of existing progress`)
   }
   console.log(
-    `${promptText !== undefined ? "brief 已记录," : ""}运行: opencode-auto run ${directory}${current ? ` 开始 ${current}(${phaseText(current)})阶段规划` : "(全部阶段已完成)"}`,
+    `${promptText !== undefined ? "brief recorded; " : ""}run: opencode-auto run ${directory}${current ? ` to start ${current} (${phaseText(current)}) phase planning` : " (all phases complete)"}`,
   )
   process.exit(0)
 }
@@ -936,32 +936,32 @@ if (command === "reset") {
   const entries = await planReset(directory)
   const actionable = entries.filter((entry) => entry.action !== "keep")
   if (!actionable.length) {
-    console.log(`未发现 init 产物,无需 reset: ${directory}`)
+    console.log(`no init artifacts found; reset not needed: ${directory}`)
     process.exit(0)
   }
-  console.log(`将在 ${directory} 执行以下清理:`)
+  console.log(`the following cleanup will run in ${directory}:`)
   console.log(formatResetPlan(entries))
   const force = flags.has("force")
   if (!force) {
     // reset 恒为破坏性,干净度闸门无条件生效(不像 init 只在覆盖时才查)。
-    const dirty = await checkCleanTree(directory, "reset 反初始化")
+    const dirty = await checkCleanTree(directory, "reset deinit")
     if (dirty) {
       console.error(dirty)
       process.exit(1)
     }
-    const ok = await confirm(`以上 ${actionable.length} 项将被删除/还原,继续? [y/N] `)
+    const ok = await confirm(`the ${actionable.length} item(s) above will be deleted/restored; continue? [y/N] `)
     if (!ok) {
-      console.log("已取消,未做任何改动")
+      console.log("cancelled; nothing was changed")
       process.exit(0)
     }
   }
   try {
     await applyReset(directory, entries)
   } catch (error) {
-    console.error(`reset 失败: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(`reset failed: ${error instanceof Error ? error.message : String(error)}`)
     process.exit(1)
   }
-  console.log(`✓ 已还原至未初始化状态(PLAN.md、docs/、.auto/ 运行时状态与 tmp/ 未受影响)`)
+  console.log(`✓ restored to the uninitialized state (PLAN.md, docs/, .auto/ runtime state and tmp/ untouched)`)
   process.exit(0)
 }
 
@@ -972,36 +972,36 @@ if (command === "reset") {
 if (command === "check") {
   const { findings, notes, refs, verifyOn, testOn } = await checkPrinciple(directory)
   const active = [
-    ...(verifyOn ? ["验证"] : []),
-    ...(testOn ? ["测试"] : []),
-    "提交",
+    ...(verifyOn ? ["verify"] : []),
+    ...(testOn ? ["test"] : []),
+    "commit",
   ].join("/")
   const detail = [
-    ...(verifyOn ? [] : ["验证类未启用(任务级验收关闭)"]),
-    ...(testOn ? [] : ["测试类未启用(测试由 driver 执行关闭)"]),
+    ...(verifyOn ? [] : ["verify disabled (task-level acceptance off)"]),
+    ...(testOn ? [] : ["test disabled (driver-run tests off)"]),
   ].join(";")
-  console.log(`检查 ${directory}: ${active}执行权原则${detail ? `(${detail})` : ""} + 文档引用`)
+  console.log(`checking ${directory}: ${active} execution-rights principles${detail ? ` (${detail})` : ""} + doc references`)
   for (const note of notes) console.log(`ℹ ${note}`)
   if (!findings.length && !refs.length) {
-    console.log(`✓ 未发现与${active}原则相违背的描述,文档引用检查全部通过`)
+    console.log(`✓ no statements violating the ${active} principles; all doc reference checks passed`)
     process.exit(0)
   }
   for (const finding of findings) {
     console.log(`⚠ ${finding.file}${finding.task ? `(${finding.task})` : ""}:${finding.line}: ${finding.text}`)
   }
   for (const ref of refs) {
-    console.log(`⚠ 失效引用 ${ref.file}:${ref.line} → ${ref.path}(${ref.problem === "beyond-eof" ? "行号超出文件总行数" : "路径不存在"}): ${ref.text}`)
+    console.log(`⚠ stale reference ${ref.file}:${ref.line} → ${ref.path} (${ref.problem === "beyond-eof" ? "line beyond end of file" : "path not found"}): ${ref.text}`)
   }
   const summary = [
     ...(findings.length
       ? [
-          `${findings.length} 处可能违背原则的描述(启发式检查,请人工确认后修订` +
-            `${verifyOn ? ";验收标准统一写在任务的 verify 字段" : ""}${testOn ? ";编译/测试/构建/lint 等命令统一写成脚本放 test/ 由 driver 执行" : ""})`,
+          `${findings.length} statement(s) may violate the principles (heuristic check; review and fix manually` +
+            `${verifyOn ? "; put acceptance criteria in the task's verify field" : ""}${testOn ? "; write compile/test/build/lint commands as scripts in test/ for the driver to run" : ""})`,
         ]
       : []),
-    ...(refs.length ? [`${refs.length} 处失效引用(更新为现行路径,或行内标注 已删除/已归档/历史 豁免)`] : []),
+    ...(refs.length ? [`${refs.length} stale reference(s) (update to current paths, or exempt with the inline markers 已删除/已归档/历史)`] : []),
   ]
-  console.log(`发现 ${summary.join("与")}`)
+  console.log(`found ${summary.join(" and ")}`)
   process.exit(1)
 }
 
@@ -1011,17 +1011,17 @@ if (command === "status") {
   // 已记录,▶=当前,其余=未开始);台账缺失/非法同样仅提示不阻塞。
   try {
     const config = await loadProjectConfig(directory)
-    console.log(`⚙ 项目配置(.opencode/auto/config.json): ${formatProjectConfig(config)}`)
+    console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
     if (config.phases !== "m") {
       try {
         const round = await currentRound(directory)
-        console.log(`阶段${round > 1 ? `(第 ${round} 轮)` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
+        console.log(`phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
       } catch (error) {
-        console.log(`⚠ 阶段台账(${await ledgerPath(directory)})非法: ${error instanceof Error ? error.message : String(error)}`)
+        console.log(`⚠ phase ledger (${await ledgerPath(directory)}) is invalid: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
   } catch (error) {
-    console.log(`⚠ 项目配置(.opencode/auto/config.json) 非法: ${error instanceof Error ? error.message : String(error)}`)
+    console.log(`⚠ project config (.opencode/auto/config.json) is invalid: ${error instanceof Error ? error.message : String(error)}`)
   }
   const plan = await load(resolve(directory, "PLAN.md"))
   for (const task of plan.tasks) {
@@ -1043,34 +1043,34 @@ function isPristinePlan(text: string): boolean {
   }
 }
 
-console.error(`用法:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk 子序列含 m>] [--source-dir <dir> --source-path <相对路径>] [--dest-dir <相对路径>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
-  opencode-auto continue [dir] [--phases <admtvk 子序列含 m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
+console.error(`usage:
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m>] [--source-dir <dir> --source-path <relative-path>] [--dest-dir <relative-path>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
+  opencode-auto continue [dir] [--phases <admtvk subsequence with m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--verify [true|false]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--review [1-10]] [--early] [--early-review [1-10]] [--final-review [1-5]] [--dryrun [true|false]] [--new-session]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-选项: 项目宪法选项(-m/--mode、--agent、--context-limit、--subtask、--verify、--idle-time、--idle-max、--commit、--test-by-driver、--handover-test、--auto-number/--no-auto-number、--wrapup/--no-wrapup、--phases、--source-dir/--source-path、--dest-dir)经 init 固化到 .opencode/auto/config.json(版本化、随仓库共享、人工可编辑),run 出现即用法错误
-       init 缺省无状态全量覆盖: 产出仅由本次参数决定,未给出的键一律回落缺省值,不与磁盘上的旧配置合并——同一条 init 在任何环境下产出一致,无需前置清理
-       --amend 切回增量修订语义(只改显式给出的键,其余保留既有配置);continue 恒为 amend
-       -f/--force 跳过覆盖确认与工作区干净度检查(供 CI 与自动化脚本;init 与 reset 共用)
-       --new-session 中断恢复时不复用被中断的旧会话、开新会话继续(仅跳过会话复用,阶段精确重入不受影响;缺省复用存活的被中断会话)
-       -m/--mode 提示词级场景模式(内置 migrate;目标目录 .opencode/auto/modes/<name>.md 可新增或覆盖,新增模式无需改源码)
-       -p/--prompt 项目意图文本,写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
-       reset 反初始化(与 init 互逆): 移除 init 写出的配置层产物(.opencode/auto/config.json 与 brief.md、.opencode/agent/auto.md、旧版 .auto/config.json、AGENTS.md 的 opencode-auto 块、.gitignore 的 tmp/ 与 .auto/ 条目,以及内容未被修改过的 opencode.json);PLAN.md、docs/、.auto/ 运行时状态与 tmp/ 一律不动,空目录才回收(保住 .opencode/auto/prompts/ 与你自己的其他 agent 契约)
-       --phases <admtvk 子序列含 m> 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;"m" 缺省 = 单次运行;台账非空时修订须满足前缀护栏,详见 README)
-       --source-dir <dir> --source-path <相对路径> 迁移源参数(源系统目录 + 源模块相对路径,必须成对给出;两者均为相对 <dir> 的相对路径,init 时校验存在性)
-       --dest-dir <相对路径> 迁移目标目录(相对 <dir>): driver 工作目录与迁移目标经它隔离,迁移产出的代码写入 <dir>/<dest-dir>
-       --verify [true] 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标 done;--review 的质量审核改为串行执行)
-       --commit [true] 会话后统一提交(恒为启用: 任何会话结束且 driver 完成状态写入后,driver 递归提交全部改动,git 历史即 AI 变更的审计轨迹;--commit false 与旧别名 none 已退役——提交是完成条件,不再支持关闭)
-       --final-review [1-5] 任务全部完成后进入终审闭环(audit → remediate → validate → finalize,validate 差距回退 audit;值为审计轮上限,裸选项 2;可与 --review 组合;终审任务本身即检验,强制不做任务级验收与逐任务审核)
-       --test-by-driver [true] 编译/测试/构建/lint 等命令的执行权收归 driver(与 --verify 正交): 执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录、把脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落 tmp/test.<n>.out 后把退出码与输出文件反馈回会话由 AI 判断
-       --handover-test 需搭配 --test-by-driver: 会话上下文达到上限后,在它下一次发起测试的那一刻交接——driver 先提交定版固定脚本与源码,并要求 AI 把不依赖测试结果的剩余工作落盘、写出交接文档(子任务会话为 docs/<任务>/S<两位序号>/testhandoff.md,整任务/修复轮为 docs/<任务>/testhandoff.md)后结束会话;文档归档为 testhandoff-<n>.md 并再提交一次确认交接,随后才执行测试(被测的即该次提交的树),新会话据此判读测试结果续跑,防止在超大上下文中反复试错。交接途中被打断时,下次运行按交接文档的文件状态与提交状态定位断点续跑(收尾未写完则从定版点分叉会话重做收尾,已写完则补提交后跑脚本)。置 OPENCODE_AUTO_HANDOVER_CONCURRENT=on 可回到旧的并发时序(定版后即起跑测试、与会话收尾并行,测试面对的是定版快照)
-       --auto-number / --no-auto-number 自动编号开关(缺省 --auto-number = 启用,--no-auto-number 为关闭用退出开关): 任务编号(T-NNN)在目标目录永不重复——下一可用编号持久化在 .auto/next-task,阶段规划会话自该记录续接编号(不再每阶段从 T-001 重排);记录缺失(如 .auto/ 未随仓库共享的新克隆)时先经 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导下一编号并恢复记录,再继续规划
-       --wrapup / --no-wrapup 任务收尾会话开关(缺省 --wrapup = 启用,--no-wrapup 为关闭用退出开关): 关闭后每个任务的子任务/整任务执行完成后跳过收尾会话(含修复轮后的收尾)
-       --implement-file <file> / --implement-prompt <text> 单阶段(phases = "m")快捷模式,二选一: 依据指定的计划文件(全文注入)或直接给出的实施提示词,开一次性计划生成会话直接编辑填充 PLAN.md(与阶段规划会话同款机制,是 init 唯一会启动 AI 会话的路径);要求生效 phases 为 "m"(不兼容时先 --phases m 切换)且 PLAN.md 为占位/空模板态(已有正式任务时拒绝,防误覆盖);该模式下未显式给出 --subtask 时 subtask 缺省固化为 ondemand(单会话执行、上下文超限按需交接,不做逐任务分解),未显式给出 --wrapup/--no-wrapup 时 wrapup 缺省固化为 false(该模式只产出 PLAN.md,不进入任务执行循环,收尾会话不适用);生成完成后需人工审核 PLAN.md,再另行调用 opencode-auto run <dir> 执行——之后逐个任务按固化的 subtask/wrapup 档推进,run 不接受这两个选项
-       continue 子命令: 上一轮阶段化迁移全部完成后开启新一轮继续迁移(让迁移结果与源更加完整、一致)——轮首建立新一轮轮次目录 docs/R-NN/(本轮 PLAN.md、阶段台账、阶段归档与知识文档均落轮内,落盘即永久;根 PLAN.md 重建为指向轮内的相对符号链接,AGENTS.md 快照存轮内 AGENTS.md.bak),上一轮结论(最终阶段交接与迁移知识)注入新一轮首个阶段规划会话;-m/--mode 与迁移参数(--source-dir/--source-path/--dest-dir)跨轮固定、不可变更(出现即用法错误),--phases 与其余执行选项(含 --test-by-driver/--handover-test)、-p 可按轮修订(不受前缀护栏约束)
+options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --verify, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --source-dir/--source-path, --dest-dir) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
+       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed
+       --amend switches back to incremental amend semantics (only changes keys explicitly given; the rest keep their existing values); continue is always amend
+       -f/--force skips the overwrite confirmation and worktree cleanliness checks (for CI and automation; shared by init and reset)
+       --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
+       -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
+       -p/--prompt project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions)
+       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json and brief.md, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); PLAN.md, docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
+       --phases <admtvk subsequence with m> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = single run; when the ledger is non-empty, changes must satisfy the prefix guard — see README)
+       --source-dir <dir> --source-path <relative-path> migration source parameters (source-system directory + source-module relative path, always as a pair; both relative to <dir>; existence is checked at init)
+       --dest-dir <relative-path> migration target directory (relative to <dir>): isolates the driver workdir from the migration target; migrated code is written to <dir>/<dest-dir>
+       --verify [true] enables the driver's task-level three-step acceptance (off by default: tasks are marked done right after wrap-up; --review quality reviews become serial)
+       --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)
+       --final-review [1-5] after all tasks complete, enter the final-review loop (audit → remediate → validate → finalize; validate gaps loop back to audit; the value is the audit round cap, bare option = 2; combinable with --review; the final-review task verifies itself, task-level acceptance and per-task reviews are forcibly skipped)
+       --test-by-driver [true] moves compile/test/build/lint execution rights to the driver (orthogonal to --verify): execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge
+       --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task/fix rounds: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)
+       --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from archived PLAN/docs artifacts and git history, restores the record, and only then continues planning
+       --wrapup / --no-wrapup task wrap-up session switch (default --wrapup = on; --no-wrapup is the opt-out): when off, the wrap-up session is skipped after each task's subtasks/whole-task execution completes (including wrap-up after fix rounds)
+       --implement-file <file> / --implement-prompt <text> single-phase (phases = "m") shortcut mode, pick one: from the given plan file (injected in full) or the given implementation prompt, start a one-off plan-generation session that directly edits and fills PLAN.md (same mechanism as phase planning sessions; the only path where init starts an AI session); requires effective phases = "m" (switch with --phases m first if incompatible) and PLAN.md in placeholder/empty-template state (rejected when real tasks exist, to avoid clobbering); in this mode, without an explicit --subtask, subtask defaults to ondemand (single-session execution, hand over on demand when context runs out, no per-task decomposition), and without an explicit --wrapup/--no-wrapup, wrapup defaults to false (this mode only produces PLAN.md, never enters the task execution loop, so wrap-up does not apply); after generation, review PLAN.md manually and call opencode-auto run <dir> separately — from then on tasks proceed with the frozen subtask/wrapup settings; run does not accept these two options
+       continue subcommand: after the previous phased migration round fully completes, start a new round of continued migration (making the migration result more complete and consistent with the source) — at round start a new round directory docs/R-NN/ is created (this round's PLAN.md, phase ledger, phase archives and knowledge docs all live inside the round, permanent once written; the root PLAN.md is rebuilt as a relative symlink pointing into the round, with the AGENTS.md snapshot stored as AGENTS.md.bak inside the round), and the previous round's conclusions (final-phase handover and migration knowledge) are injected into the new round's first phase planning session; -m/--mode and the migration parameters (--source-dir/--source-path/--dest-dir) are fixed across rounds and cannot change (passing them is a usage error), while --phases and the remaining execution options (including --test-by-driver/--handover-test) and -p may be revised per round (not subject to the prefix guard)
 
-退出码: 0 全部完成,1 用法/环境错误(check 发现违背原则的描述时同),2 阻塞/未完成等待人工介入(含终审闭环熔断),130 被连续两次 Ctrl+C 强制终止`)
+exit codes: 0 all complete; 1 usage/environment error (same when check finds principle-violating statements); 2 blocked/incomplete awaiting human intervention (including final-review circuit-break); 130 force-terminated by two consecutive Ctrl+C`)
 process.exit(1)

@@ -160,12 +160,12 @@ describe("unitBaseline / unitViolations(单元收口校验)", () => {
       await git(dir, "commit", "-qm", "人工提交")
       const violations = await unitViolations(dir, baseline)
       expect(violations).toHaveLength(1)
-      expect(violations[0]).toContain("非 driver 提交")
+      expect(violations[0]).toContain("non-driver commit")
       // ③ 遗留未提交改动 → 检出
       await git(dir, "commit", "--amend", "-qm", "人工提交") // 把工作区复原为干净
       await writeFile(join(dir, "d.txt"), "d")
       const dirty = await unitViolations(dir, baseline)
-      expect(dirty.some((problem) => problem.includes("未提交改动"))).toBe(true)
+      expect(dirty.some((problem) => problem.includes("uncommitted changes"))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -303,13 +303,13 @@ describe("baselineIntact(恢复时的基线核对)", () => {
       // ③ 半途脏区正是恢复对象: 核对不看未提交改动(与 unitViolations 的关键差异)
       await writeFile(join(dir, "c.txt"), "c")
       expect(await baselineIntact(dir, baseline)).toEqual([])
-      expect((await unitViolations(dir, baseline)).some((problem) => problem.includes("未提交改动"))).toBe(true)
+      expect((await unitViolations(dir, baseline)).some((problem) => problem.includes("uncommitted changes"))).toBe(true)
       // ④ 外部提交(无 Auto-Stage trailer)混入 → 认知失真
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "人工提交")
       const problems = await baselineIntact(dir, baseline)
       expect(problems).toHaveLength(1)
-      expect(problems[0]).toContain("非 driver 提交")
+      expect(problems[0]).toContain("non-driver commit")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -321,7 +321,7 @@ describe("baselineIntact(恢复时的基线核对)", () => {
       expect(await baselineIntact(dir, [])).toEqual([])
       const problems = await baselineIntact(dir, [{ root: join(dir, "missing"), sha: "abc1234" }])
       expect(problems).toHaveLength(1)
-      expect(problems[0]).toContain("HEAD 不可读")
+      expect(problems[0]).toContain("HEAD unreadable")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -339,7 +339,7 @@ describe("baselineIntact(恢复时的基线核对)", () => {
       await writeFile(join(dir, "b.txt"), "b")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "人工提交")
-      expect((await baselineIntact(dir, baseline))[0]).toContain("非 driver 提交")
+      expect((await baselineIntact(dir, baseline))[0]).toContain("non-driver commit")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

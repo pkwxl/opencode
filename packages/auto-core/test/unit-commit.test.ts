@@ -65,7 +65,7 @@ describe("afterSession 完成条件门禁(plans/0021-commit-boundary-design.md)"
       await writeFile(join(dir, "a.txt"), "a")
       const failed = await afterSession(dir, {}, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
       expect(failed.type).toBe("failed")
-      if (failed.type === "failed") expect(failed.question).toContain("统一提交失败")
+      if (failed.type === "failed") expect(failed.question).toContain("unified commit failed")
       const off = await afterSession(dir, { commit: false }, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
       expect(off).toEqual({ type: "ok" })
       const none = await afterSession(undefined, {}, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })

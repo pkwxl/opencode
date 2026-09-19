@@ -160,34 +160,34 @@ describe("CLI 解析: run 侧选项与配置", () => {
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
         expect(run.code).toBe(1)
-        expect(run.err).toContain("已在 init 固化")
+        expect(run.err).toContain("was frozen by init")
         expect(run.err).toContain(".opencode/auto/config.json")
         expect(run.err).toContain("opencode-auto init <dir>")
       }
       // 自动编号两键的修订指引为成对形式
       const numbering = await runCli(["run", dir, "--auto-number"])
-      expect(numbering.err).toContain("--auto-number(关闭用 --no-auto-number)")
+      expect(numbering.err).toContain("--auto-number (use --no-auto-number to turn off)")
       // wrapup 两键的修订指引为成对形式
       const wrapup = await runCli(["run", dir, "--wrapup"])
-      expect(wrapup.err).toContain("--wrapup(关闭用 --no-wrapup)")
+      expect(wrapup.err).toContain("--wrapup (use --no-wrapup to turn off)")
       // 迁移源两键的修订指引为成对形式
       const source = await runCli(["run", dir, "--source-dir", "/tmp"])
-      expect(source.err).toContain("--source-dir <目录> --source-path <相对路径>")
+      expect(source.err).toContain("--source-dir <dir> --source-path <relative-path>")
       // -m/--mode 报文同型(短选项形式给出修订指引)
-      expect((await runCli(["run", dir, "-m", "migrate"])).err).toContain("-m/--mode 已在 init 固化")
+      expect((await runCli(["run", dir, "-m", "migrate"])).err).toContain("-m/--mode was frozen by init")
       // --commit-subtask 移除报文保留
       const removed = await runCli(["run", dir, "--commit-subtask"])
       expect(removed.code).toBe(1)
-      expect(removed.err).toContain("--commit-subtask 已移除")
+      expect(removed.err).toContain("--commit-subtask removed")
       // 看门狗旧名给出更名指引
       const renamed = await runCli(["run", dir, "--verify-idle", "10"])
       expect(renamed.code).toBe(1)
-      expect(renamed.err).toContain("已更名为 --idle-time")
-      expect((await runCli(["init", dir, "--verify-max", "30"])).err).toContain("已更名为 --idle-max")
+      expect(renamed.err).toContain("was renamed to --idle-time")
+      expect((await runCli(["init", dir, "--verify-max", "30"])).err).toContain("was renamed to --idle-max")
       // --handover-test 需搭配 --test-by-driver(init 侧宪法级校验,run 已整体拒绝)
       const lonely = await runCli(["init", dir, "--handover-test"])
       expect(lonely.code).toBe(1)
-      expect(lonely.err).toContain("--handover-test 需搭配 --test-by-driver")
+      expect(lonely.err).toContain("--handover-test requires --test-by-driver")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -208,9 +208,9 @@ describe("CLI 解析: run 侧选项与配置", () => {
         // 组合合法: 配置取缺省、解析全部通过后进入 runAll,因空目录缺少
         // PLAN.md 退出 1(driver 报文走 stdout,与用法错误的 stderr 区分)。
         expect(run.code).toBe(1)
-        expect(run.out).toContain("未找到计划文件")
+        expect(run.out).toContain("plan file not found")
         expect(run.err).toBe("")
-        expect(run.out).toContain("⚙ 项目配置(.opencode/auto/config.json)")
+        expect(run.out).toContain("⚙ project config (.opencode/auto/config.json)")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -223,22 +223,22 @@ describe("CLI 解析: run 侧选项与配置", () => {
       // init 侧: 拼错的旗标不再被静默忽略
       const typo = await runCli(["init", dir, "--next"])
       expect(typo.code).toBe(1)
-      expect(typo.err).toContain("未知选项 --next")
+      expect(typo.err).toContain("unknown option --next")
       // 前缀近似名给出提示
       const similar = await runCli(["init", dir, "--idle"])
-      expect(similar.err).toContain("未知选项 --idle")
+      expect(similar.err).toContain("unknown option --idle")
       expect(similar.err).toContain("--idle-time")
       expect(similar.err).toContain("--idle-max")
       // = 形式同样拦截;拦截发生在任何写盘之前(init 未固化配置)
       const eq = await runCli(["init", dir, "--nex=1"])
       expect(eq.code).toBe(1)
-      expect(eq.err).toContain("未知选项 --nex")
+      expect(eq.err).toContain("unknown option --nex")
       expect(await readdir(dir)).toEqual([])
       // check/status 只接受目录参数,出现旗标即拒绝
       const checkFlag = await runCli(["check", dir, "--verbose"])
       expect(checkFlag.code).toBe(1)
-      expect(checkFlag.err).toContain("未知选项 --verbose")
-      expect(checkFlag.err).toContain("只接受目录参数")
+      expect(checkFlag.err).toContain("unknown option --verbose")
+      expect(checkFlag.err).toContain("only accept a directory argument")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -250,7 +250,7 @@ describe("CLI 解析: run 侧选项与配置", () => {
       for (const value of ["0", "6", "x"]) {
         const run = await runCli(["run", dir, "--final-review", value])
         expect(run.code).toBe(1)
-        expect(run.err).toContain("--final-review 取值范围为 1..5")
+        expect(run.err).toContain("--final-review takes 1..5")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -262,8 +262,8 @@ describe("CLI 解析: run 侧选项与配置", () => {
     try {
       await Bun.write(join(dir, ".auto/config.json"), JSON.stringify({ mode: "migrate" }))
       const run = await runCli(["run", dir])
-      expect(run.out).toContain("模式沿用旧位置 .auto/config.json 的持久化值,重跑 init 可固化完整配置")
-      expect(run.out).toContain("未找到计划文件")
+      expect(run.out).toContain("mode taken from the legacy persisted value in .auto/config.json")
+      expect(run.out).toContain("plan file not found")
       expect(run.err).toBe("")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -288,7 +288,7 @@ describe("CLI 解析: run 侧选项与配置", () => {
     try {
       const init = await runCli(["init", dir, "--mode", "nope"])
       expect(init.code).toBe(1)
-      expect(init.err).toContain("--mode 取值须为已注册的模式")
+      expect(init.err).toContain("--mode must be a registered mode")
       expect(init.err).toContain("migrate")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -306,9 +306,9 @@ describe("CLI: init 固化项目配置", () => {
     try {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
-      expect(init.out).toContain("⚙ 项目配置(.opencode/auto/config.json)")
-      expect(init.out).toContain("自动编号 on")
-      expect(init.out).toContain("编辑 PLAN.md 填入任务后运行")
+      expect(init.out).toContain("⚙ project config (.opencode/auto/config.json)")
+      expect(init.out).toContain("auto-number on")
+      expect(init.out).toContain("edit PLAN.md to fill in tasks, then run")
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
         agent: "auto",
@@ -385,7 +385,7 @@ describe("CLI: init 固化项目配置", () => {
     try {
       const off = await runCli(["init", dir, "--commit", "false"])
       expect(off.code).toBe(1)
-      expect(off.err).toContain("已退役")
+      expect(off.err).toContain("is retired")
       expect((await runCli(["init", dir, "--commit", "none"])).code).toBe(1)
       // 缺省/显式 true 照常固化(提交恒开)
       expect((await runCli(["init", dir, "--commit", "true"])).code).toBe(0)
@@ -445,12 +445,12 @@ describe("CLI: init 固化项目配置", () => {
       const init = await runCli(["init", dir, "--auto-number"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
-      expect(init.out).toContain("自动编号 on")
-      expect(init.out).toContain("无规划会话消费编号记录")
+      expect(init.out).toContain("auto-number on")
+      expect(init.out).toContain("has no planning session to consume the numbering record")
       // 阶段化流程(phases 含规划会话)不打该提示
       const staged = await runCli(["init", dir, "--phases", "am"])
       expect(staged.code).toBe(0)
-      expect(staged.out).not.toContain("无规划会话消费编号记录")
+      expect(staged.out).not.toContain("has no planning session to consume the numbering record")
       // --no-auto-number 覆盖回 false;--amend 不给该键时保留,无 --amend 则回落缺省 true
       expect((await runCli(["init", dir, "--no-auto-number"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
@@ -464,10 +464,10 @@ describe("CLI: init 固化项目配置", () => {
       // 两开关同现且均未带 =false → 用法错误(init/continue 共用分支,continue 同样拦截)
       const both = await runCli(["init", dir, "--auto-number", "--no-auto-number"])
       expect(both.code).toBe(1)
-      expect(both.err).toContain("互斥")
+      expect(both.err).toContain("mutually exclusive pair")
       const contBoth = await runCli(["continue", dir, "--auto-number", "--no-auto-number"])
       expect(contBoth.code).toBe(1)
-      expect(contBoth.err).toContain("互斥")
+      expect(contBoth.err).toContain("mutually exclusive pair")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -483,7 +483,7 @@ describe("CLI: init 固化项目配置", () => {
       const off = await runCli(["init", dir, "--no-wrapup"])
       expect(off.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: false })
-      expect(off.out).toContain("收尾 off")
+      expect(off.out).toContain("wrapup off")
       // --amend 不给任一键时保留既有 false;无 --amend 的无参 init 则回落默认 true
       expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: false })
@@ -500,10 +500,10 @@ describe("CLI: init 固化项目配置", () => {
       // 两开关同现且均未带 =false → 用法错误(init/continue 共用分支,continue 同样拦截)
       const both = await runCli(["init", dir, "--wrapup", "--no-wrapup"])
       expect(both.code).toBe(1)
-      expect(both.err).toContain("互斥")
+      expect(both.err).toContain("mutually exclusive pair")
       const contBoth = await runCli(["continue", dir, "--wrapup", "--no-wrapup"])
       expect(contBoth.code).toBe(1)
-      expect(contBoth.err).toContain("互斥")
+      expect(contBoth.err).toContain("mutually exclusive pair")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -534,7 +534,7 @@ describe("CLI: init 固化项目配置", () => {
     try {
       const init = await runCli(["init", dir, "--test-by-driver", "--handover-test"])
       expect(init.code).toBe(0)
-      expect(init.out).toContain("已补写: AGENTS.md opencode-auto 块")
+      expect(init.out).toContain("appended: AGENTS.md opencode-auto block")
       expect(await readConfig(dir)).toMatchObject({ testByDriver: true, handoverTest: true })
       const agents = await Bun.file(join(dir, "AGENTS.md")).text()
       expect(agents).toContain("Test principle:")
@@ -549,7 +549,7 @@ describe("CLI: init 固化项目配置", () => {
       expect(await readConfig(dir)).toMatchObject({ testByDriver: true, handoverTest: false })
       const off = await runCli(["init", dir, "--amend", "--test-by-driver", "false"])
       expect(off.code).toBe(0)
-      expect(off.out).toContain("已刷新: AGENTS.md opencode-auto 块(与当前配置渲染不一致)")
+      expect(off.out).toContain("refreshed: AGENTS.md opencode-auto block (differed from the current config render)")
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).not.toContain("Test principle:")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -562,13 +562,13 @@ describe("CLI: init 固化项目配置", () => {
       expect((await runCli(["init", dir])).code).toBe(0)
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
-      expect(status.out).toContain("⚙ 项目配置(.opencode/auto/config.json): 模式 migrate · agent auto")
-      expect(status.out).toContain("阶段 m")
+      expect(status.out).toContain("⚙ project config (.opencode/auto/config.json): mode migrate · agent auto")
+      expect(status.out).toContain("phases m")
       expect(status.out).toContain("[pending] T-001")
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ subtask: "fast" }))
       const broken = await runCli(["status", dir])
       expect(broken.code).toBe(0)
-      expect(broken.out).toContain("⚠ 项目配置(.opencode/auto/config.json) 非法")
+      expect(broken.out).toContain("⚠ project config (.opencode/auto/config.json) is invalid")
       expect(broken.out).toContain("subtask")
       expect(broken.out).toContain("[pending] T-001")
     } finally {
@@ -596,7 +596,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       for (const value of ["tma", "adk", "mm", "x", ""]) {
         const init = await runCli(["init", dir, "--phases", value])
         expect(init.code).toBe(1)
-        expect(init.err).toContain("--phases 取值须为 admtvk 的子序列且包含 m")
+        expect(init.err).toContain("--phases must be a subsequence of admtvk containing m")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -609,8 +609,8 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const init = await runCli(["init", dir, "--phases", "admtvk"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
-      expect(init.out).toContain("阶段 admtvk")
-      expect(init.out).toContain("开始 a(分析)阶段规划")
+      expect(init.out).toContain("phases admtvk")
+      expect(init.out).toContain("to start a (分析) phase planning")
       expect(init.out).not.toContain("编辑 PLAN.md 填入任务")
       // --amend 无 --phases 保留既有值;显式给值可改
       expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
@@ -633,13 +633,13 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       // "ad" 不是 "amt" 的前缀 → 拒绝并指引人工修订台账
       const bad = await runCli(["init", dir, "--phases", "amt"])
       expect(bad.code).toBe(1)
-      expect(bad.err).toContain("阶段台账")
+      expect(bad.err).toContain("phase ledger")
       expect(bad.err).toContain("ad")
-      expect(bad.err).toContain("前缀")
+      expect(bad.err).toContain("prefix")
       // 兼容值通过;台账已完成的 a/d 之后,下一阶段提示 m(迁移实现)
       const ok = await runCli(["init", dir, "--phases", "admtk"])
       expect(ok.code).toBe(0)
-      expect(ok.out).toContain("开始 m(迁移实现)阶段规划")
+      expect(ok.out).toContain("to start m (迁移实现) phase planning")
       // 护栏判的是本次生效值,不是"是否显式给出": 无参 init 全量覆盖会把 phases
       // 回落为缺省 "m",与台账已完成的 "ad" 不兼容 → 拦在任何写盘之前,并指引 --amend
       const bare = await runCli(["init", dir])
@@ -665,23 +665,23 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     try {
       const onlyDir = await runCli(["init", dir, "--source-dir", "legacy"])
       expect(onlyDir.code).toBe(1)
-      expect(onlyDir.err).toContain("必须成对")
+      expect(onlyDir.err).toContain("must be given as a pair")
       const onlyPath = await runCli(["init", dir, "--source-path", "src/mod.ts"])
       expect(onlyPath.code).toBe(1)
-      expect(onlyPath.err).toContain("必须成对")
+      expect(onlyPath.err).toContain("must be given as a pair")
       // source-dir/dest-dir 均须为工作目录下的相对路径(绝对路径与 .. 逃逸拒绝)
       const absolute = await runCli(["init", dir, "--source-dir", dir, "--source-path", "src/mod.ts"])
       expect(absolute.code).toBe(1)
-      expect(absolute.err).toContain("工作目录下的相对路径")
+      expect(absolute.err).toContain("relative path under the working directory")
       const missing = await runCli(["init", dir, "--source-dir", "nope", "--source-path", "src/mod.ts"])
       expect(missing.code).toBe(1)
-      expect(missing.err).toContain("现存目录")
+      expect(missing.err).toContain("must be an existing directory under the working directory")
       const escape = await runCli(["init", dir, "--source-dir", "legacy", "--source-path", "../mod.ts"])
       expect(escape.code).toBe(1)
-      expect(escape.err).toContain("相对路径")
+      expect(escape.err).toContain("relative path")
       const destAbs = await runCli(["init", dir, "--dest-dir", join(dir, "target")])
       expect(destAbs.code).toBe(1)
-      expect(destAbs.err).toContain("--dest-dir 须为工作目录下的相对路径")
+      expect(destAbs.err).toContain("--dest-dir must be a relative path under the working directory")
       expect((await runCli(["init", dir, "--dest-dir", "../up"])).code).toBe(1)
       // 合法迁移参数: source 在 <dir>/<source-dir>/<source-path> 存在;dest-dir
       // 只固化路径、不校验存在性(目标目录常由迁移过程创建)
@@ -717,8 +717,8 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const brief = join(dir, ".opencode/auto/brief.md")
       const first = await runCli(["init", dir, "-p", "把 legacy 迁移到 bun"])
       expect(first.code).toBe(0)
-      expect(first.out).toContain("已写入: .opencode/auto/brief.md")
-      expect(first.out).toContain("brief 已记录")
+      expect(first.out).toContain("written: .opencode/auto/brief.md")
+      expect(first.out).toContain("brief recorded")
       expect(await Bun.file(brief).text()).toBe("把 legacy 迁移到 bun\n")
       // 无 -p 保留既有
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -728,11 +728,11 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       expect(await Bun.file(brief).text()).toBe("修订后的意图\n")
       const empty = await runCli(["init", dir, "-p", "  "])
       expect(empty.code).toBe(1)
-      expect(empty.err).toContain("-p/--prompt 需要非空的提示词文本")
+      expect(empty.err).toContain("-p/--prompt requires non-empty prompt text")
       // 阶段化流程下结束语引导开始首个阶段规划
       const staged = await runCli(["init", dir, "--phases", "am", "-p", "意图"])
-      expect(staged.out).toContain("brief 已记录")
-      expect(staged.out).toContain("开始 a(分析)阶段规划")
+      expect(staged.out).toContain("brief recorded")
+      expect(staged.out).toContain("to start a (分析) phase planning")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -743,7 +743,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     try {
       const init = await runCli(["init", dir, "--phases", "mvk"])
       expect(init.code).toBe(0)
-      expect(init.out).toContain("phases 含 v(验收)阶段而任务级验收未启用")
+      expect(init.out).toContain("phases includes the v (acceptance) phase but task-level acceptance is off")
       const enabled = await runCli(["init", dir, "--verify"])
       expect(enabled.code).toBe(0)
       expect(enabled.out).not.toContain("任务级验收未启用")
@@ -765,13 +765,13 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
     try {
       const both = await runCli(["init", dir, "--implement-file", "a.md", "--implement-prompt", "做点什么"])
       expect(both.code).toBe(1)
-      expect(both.err).toContain("二选一")
+      expect(both.err).toContain("mutually exclusive: they are two input sources")
       const emptyFile = await runCli(["init", dir, "--implement-file", ""])
       expect(emptyFile.code).toBe(1)
-      expect(emptyFile.err).toContain("--implement-file 需要非空的文件路径")
+      expect(emptyFile.err).toContain("--implement-file requires a non-empty file path")
       const emptyPrompt = await runCli(["init", dir, "--implement-prompt", "  "])
       expect(emptyPrompt.code).toBe(1)
-      expect(emptyPrompt.err).toContain("--implement-prompt 需要非空的提示词文本")
+      expect(emptyPrompt.err).toContain("--implement-prompt requires non-empty prompt text")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -782,13 +782,13 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
     try {
       const explicit = await runCli(["init", dir, "--phases", "am", "--implement-prompt", "做点什么"])
       expect(explicit.code).toBe(1)
-      expect(explicit.err).toContain('仅用于单阶段(phases = "m")快捷模式')
-      expect(explicit.err).toContain("本次给出的 --phases")
+      expect(explicit.err).toContain('only apply to the single-phase (phases = "m") shortcut mode')
+      expect(explicit.err).toContain("the --phases given here")
       // --amend 沿用既有配置的阶段化 phases,不显式给 --phases 同样拦截
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
       const implicit = await runCli(["init", dir, "--amend", "--implement-prompt", "做点什么"])
       expect(implicit.code).toBe(1)
-      expect(implicit.err).toContain("既有配置 phases")
+      expect(implicit.err).toContain("the existing config phases")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -799,10 +799,10 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
     try {
       const missing = await runCli(["init", dir, "--implement-file", join(dir, "no-such-plan.md")])
       expect(missing.code).toBe(1)
-      expect(missing.err).toContain("--implement-file 指定的文件不存在或不是常规文件")
+      expect(missing.err).toContain("does not exist or is not a regular file")
       const isDir = await runCli(["init", dir, "--implement-file", dir])
       expect(isDir.code).toBe(1)
-      expect(isDir.err).toContain("--implement-file 指定的文件不存在或不是常规文件")
+      expect(isDir.err).toContain("does not exist or is not a regular file")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -815,7 +815,7 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 已有任务 [pending]\n做点什么。\n")
       const blocked = await runCli(["init", dir, "--implement-prompt", "重新生成"])
       expect(blocked.code).toBe(1)
-      expect(blocked.err).toContain("PLAN.md 已包含正式任务")
+      expect(blocked.err).toContain("PLAN.md already contains real tasks")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -826,10 +826,10 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
     try {
       const cont = await runCli(["continue", dir, "--implement-file", "a.md"])
       expect(cont.code).toBe(1)
-      expect(cont.err).toContain("continue 用于阶段化流程续轮,不支持")
+      expect(cont.err).toContain("continue is for phased-flow round continuation and does not support")
       const run = await runCli(["run", dir, "--implement-prompt", "做点什么"])
       expect(run.code).toBe(1)
-      expect(run.err).toContain("init 专用的快捷模式选项")
+      expect(run.err).toContain("init-only shortcut-mode option")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -844,7 +844,7 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 已有任务 [pending]\n做点什么。\n")
       const blocked = await runCli(["init", dir, "--implement-prompt", "重新生成"])
       expect(blocked.code).toBe(1)
-      expect(blocked.err).toContain("PLAN.md 已包含正式任务")
+      expect(blocked.err).toContain("PLAN.md already contains real tasks")
       const config = JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
       expect(config.subtask).toBe("ondemand")
       expect(config.wrapup).toBe(false)
@@ -865,8 +865,8 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
     try {
       const init = await runCli(["init", dir, "--phases", "amt"])
       expect(init.code).toBe(0)
-      expect(init.out).toContain("✓ 轮次目录: docs/R-01/")
-      expect(init.out).toContain("✓ 根 PLAN.md → docs/R-01/PLAN.md(相对符号链接")
+      expect(init.out).toContain("✓ round directory: docs/R-01/")
+      expect(init.out).toContain("✓ root PLAN.md → docs/R-01/PLAN.md (relative symlink")
       // 根 PLAN.md 是指向轮内的相对符号链接;轮内 PLAN.md 为空模板(无任务)
       expect(await readlink(join(dir, "PLAN.md"))).toBe("docs/R-01/PLAN.md")
       const plan = await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()
@@ -876,12 +876,12 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
       expect((await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).text()).length).toBeGreaterThan(0)
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
-      expect(status.out).toContain("阶段: a▶ m t")
+      expect(status.out).toContain("phases: a▶ m t")
       // 空模板无任务,清单为空
       expect(status.out).not.toContain("[pending] T-001")
       // 台账推进后进度行随之更新(新布局: 轮内台账 docs/R-01/phases.md)
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] a 分析 → docs/R-01/a-analysis/(交接: docs/R-01/handovers/a-analysis.md)\n")
-      expect((await runCli(["status", dir])).out).toContain("阶段: a✓ m▶ t")
+      expect((await runCli(["status", dir])).out).toContain("phases: a✓ m▶ t")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -895,7 +895,7 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
       // 占位模板态(从未编辑)在切换 --phases 时视为缺失,轮内 PLAN 初值 = 空模板
       const staged = await runCli(["init", dir, "--phases", "am"])
       expect(staged.code).toBe(0)
-      expect(staged.out).toContain("✓ 轮次目录: docs/R-01/")
+      expect(staged.out).toContain("✓ round directory: docs/R-01/")
       expect(await readlink(join(dir, "PLAN.md"))).toBe("docs/R-01/PLAN.md")
       expect(await Bun.file(join(dir, "PLAN.md")).text()).not.toContain("## T-")
       // 已填真实任务的 PLAN.md(经根链接写入轮内)不被替换
@@ -915,20 +915,20 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] a\n")
       const broken = await runCli(["run", dir])
       expect(broken.code).toBe(1)
-      expect(broken.out).toContain("阶段流程受阻")
+      expect(broken.out).toContain("phase flow blocked")
       expect(broken.out).toContain("docs/R-01/phases.md")
       // 台账含 phases 外字母(k 不在 amt)→ 同为环境错误
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] k 知识提炼 → docs/R-01/k-knowledge/\n")
       const outside = await runCli(["run", dir])
       expect(outside.code).toBe(1)
-      expect(outside.out).toContain("之外的阶段字母")
+      expect(outside.out).toContain("phase letters outside")
       // 合法台账通过预检;阶段进度行在配置摘要后打印(删掉 PLAN.md 使 run 在
       // server 启动前退出,仅断言横幅)
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [done] a 分析 → docs/R-01/a-analysis/(交接: docs/R-01/handovers/a-analysis.md)\n")
       await rm(join(dir, "PLAN.md"))
       const banner = await runCli(["run", dir])
-      expect(banner.out).toContain("阶段: a✓ m▶ t")
-      expect(banner.out).toContain("未找到计划文件")
+      expect(banner.out).toContain("phases: a✓ m▶ t")
+      expect(banner.out).toContain("plan file not found")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -941,7 +941,7 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
       await Bun.write(join(dir, "docs/R-01/phases.md"), "随便一行\n")
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
-      expect(status.out).toContain("⚠ 阶段台账(docs/R-01/phases.md)非法")
+      expect(status.out).toContain("⚠ phase ledger (docs/R-01/phases.md) is invalid")
       // phases = m 的项目不打印阶段行(缺省单次运行,无阶段语义)
       const plain = await mkdtemp(join(tmpdir(), "auto-cli-"))
       try {
@@ -974,10 +974,10 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
     try {
       const init = await runCli(["init", dir, "--continue"])
       expect(init.code).toBe(1)
-      expect(init.err).toContain("独立子命令 opencode-auto continue")
+      expect(init.err).toContain("dedicated subcommand opencode-auto continue")
       const run = await runCli(["run", dir, "--continue"])
       expect(run.code).toBe(1)
-      expect(run.err).toContain("独立子命令 opencode-auto continue")
+      expect(run.err).toContain("dedicated subcommand opencode-auto continue")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -990,33 +990,33 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       expect((await runCli(["init", dir])).code).toBe(0)
       const plain = await runCli(["continue", dir])
       expect(plain.code).toBe(1)
-      expect(plain.err).toContain("continue 仅用于阶段化流程项目")
+      expect(plain.err).toContain("continue only applies to phased-flow projects")
       // 阶段化但台账为空(上一轮尚未开始/未完成)
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
       const empty = await runCli(["continue", dir])
       expect(empty.code).toBe(1)
-      expect(empty.err).toContain("为空")
-      expect(empty.err).toContain("尚缺 a、m")
+      expect(empty.err).toContain(" is empty")
+      expect(empty.err).toContain("missing a, m")
       // 台账半程
       await writeLedger(dir, ["a"])
       const partial = await runCli(["continue", dir])
       expect(partial.code).toBe(1)
-      expect(partial.err).toContain("尚缺 m")
+      expect(partial.err).toContain("missing m")
       // --phases m 显式给出
       const m = await runCli(["continue", dir, "--phases", "m"])
       expect(m.code).toBe(1)
-      expect(m.err).toContain('不可为 "m"')
+      expect(m.err).toContain('cannot be "m"')
       // 台账含 phases 之外字母 → 环境错误
       await writeLedger(dir, ["a", "m", "k"])
       const outside = await runCli(["continue", dir])
       expect(outside.code).toBe(1)
-      expect(outside.err).toContain("之外的阶段字母")
+      expect(outside.err).toContain("records phase letters outside phases")
       await writeLedger(dir, ["a", "m"])
       // 迁移同一性选项跨轮固定: -m 与迁移三键显式给出即用法错误
       for (const extra of [["-m", "migrate"], ["--mode", "migrate"], ["--source-dir", "legacy", "--source-path", "x"], ["--dest-dir", "target"]]) {
         const locked = await runCli(["continue", dir, ...extra])
         expect(locked.code).toBe(1)
-        expect(locked.err).toContain("跨轮固定")
+        expect(locked.err).toContain("fixed across rounds")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -1034,9 +1034,9 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       // 新 phases "admtvk" 不以台账 "am" 为前缀——新轮目录恒空,不受前缀护栏约束
       const cont = await runCli(["continue", dir, "--phases", "admtvk", "-p", "第二轮聚焦补齐差距", "--context-limit", "128"])
       expect(cont.code).toBe(0)
-      expect(cont.out).toContain("✓ 轮次目录: docs/R-02/")
-      expect(cont.out).toContain("已开启第 2 轮继续迁移")
-      expect(cont.out).toContain("开始 a(分析)阶段规划")
+      expect(cont.out).toContain("✓ round directory: docs/R-02/")
+      expect(cont.out).toContain("round 2 of the migration started")
+      expect(cont.out).toContain("to start a (分析) phase planning")
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk", contextLimit: 128 })
       // 上一轮轮次目录原样保留(绝不搬移/删除): 台账与轮末 PLAN 均在 R-01 内
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [done] a")
@@ -1054,11 +1054,11 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe("第二轮聚焦补齐差距\n")
       // status: 阶段进度行带轮次标注
       const status = await runCli(["status", dir])
-      expect(status.out).toContain("阶段(第 2 轮): a▶ d m t v k")
+      expect(status.out).toContain("phases (round 2): a▶ d m t v k")
       // 重复 continue: 新一轮台账为空(尚未开始)→ 拒绝并指引先跑 run
       const again = await runCli(["continue", dir])
       expect(again.code).toBe(1)
-      expect(again.err).toContain("尚缺 a、d、m、t、v、k")
+      expect(again.err).toContain("missing a, d, m, t, v, k")
       expect(again.err).toContain(`opencode-auto run ${dir}`)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -1073,11 +1073,11 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       const cont = await runCli(["continue", dir])
       expect(cont.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "am" })
-      expect(cont.out).toContain("开始 a(分析)阶段规划")
+      expect(cont.out).toContain("to start a (分析) phase planning")
       // run 启动横幅的阶段进度行带轮次标注(删除 PLAN.md 使 run 在 server 前退出)
       await rm(join(dir, "PLAN.md"))
       const banner = await runCli(["run", dir])
-      expect(banner.out).toContain("阶段(第 2 轮): a▶ m")
+      expect(banner.out).toContain("phases (round 2): a▶ m")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1104,9 +1104,9 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
       )
       const check = await runCli(["check", dir], REFCHECK_ON)
       expect(check.code).toBe(1)
-      expect(check.out).toContain("+ 文档引用")
-      expect(check.out).toContain("⚠ 失效引用 docs/T-001/report.md:2 → src/gone.ts(路径不存在): 失效引用 `src/gone.ts`。")
-      expect(check.out).toContain("1 处失效引用(更新为现行路径,或行内标注 已删除/已归档/历史 豁免)")
+      expect(check.out).toContain("+ doc references")
+      expect(check.out).toContain("⚠ stale reference docs/T-001/report.md:2 → src/gone.ts (path not found)")
+      expect(check.out).toContain("1 stale reference(s) (update to current paths, or exempt with the inline markers")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1116,7 +1116,7 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir])
-      expect(init.out).toContain("已补写: AGENTS.md opencode-auto 块")
+      expect(init.out).toContain("appended: AGENTS.md opencode-auto block")
       await Bun.write(
         join(dir, "PLAN.md"),
         ["## T-001: 任务 [pending]", "实现功能。", ""].join("\n"),
@@ -1125,7 +1125,7 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
       await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/mod.ts:1` 与 [计划](PLAN.md)。\n")
       const check = await runCli(["check", dir], REFCHECK_ON)
       expect(check.code).toBe(0)
-      expect(check.out).toContain("✓ 未发现与提交原则相违背的描述,文档引用检查全部通过")
+      expect(check.out).toContain("✓ no statements violating the commit principles; all doc reference checks passed")
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("Reference and storage conventions")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -1160,9 +1160,9 @@ describe("CLI: reset 反初始化", () => {
 
       const reset = await runCli(["reset", dir])
       expect(reset.code).toBe(0)
-      expect(reset.out).toContain("将在")
+      expect(reset.out).toContain("the following cleanup will run in")
       expect(reset.out).toContain(".opencode/auto/config.json")
-      expect(reset.out).toContain("已还原至未初始化状态")
+      expect(reset.out).toContain("restored to the uninitialized state")
 
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(false)
@@ -1200,7 +1200,7 @@ describe("CLI: reset 反初始化", () => {
       await writeFile(join(dir, "opencode.json"), '{"model":"我自己的配置"}\n')
       const reset = await runCli(["reset", dir])
       expect(reset.code).toBe(0)
-      expect(reset.out).toContain("保留: opencode.json")
+      expect(reset.out).toContain("keep: opencode.json")
       expect(await Bun.file(join(dir, "opencode.json")).text()).toBe('{"model":"我自己的配置"}\n')
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -1212,18 +1212,18 @@ describe("CLI: reset 反初始化", () => {
     try {
       const reset = await runCli(["reset", dir])
       expect(reset.code).toBe(0)
-      expect(reset.out).toContain("未发现 init 产物")
+      expect(reset.out).toContain("no init artifacts found")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("reset 只接受目录参数与 -f/--force", async () => {
+  test("reset only accepts a directory argument and -f/--force", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const bad = await runCli(["reset", dir, "--verify"])
       expect(bad.code).toBe(1)
-      expect(bad.err).toContain("reset 只接受目录参数与 -f/--force")
+      expect(bad.err).toContain("reset only accepts a directory argument and -f/--force")
       expect((await runCli(["reset", dir, "--force"])).code).toBe(0)
       expect((await runCli(["reset", dir, "-f"])).code).toBe(0)
     } finally {
@@ -1264,7 +1264,7 @@ describe("CLI: 工作区干净度闸门", () => {
       expect((await runCli(["init", dir])).code).toBe(0)
       const dirty = await runCli(["init", dir])
       expect(dirty.code).toBe(1)
-      expect(dirty.err).toContain("要求工作区干净")
+      expect(dirty.err).toContain("requires a clean worktree")
       expect(dirty.err).toContain("opencode.json")
       expect(dirty.err).toContain("-f/--force")
       // 拦截发生在任何写盘之前
@@ -1302,7 +1302,7 @@ describe("CLI: 工作区干净度闸门", () => {
       await writeFile(join(dir, "untracked.ts"), "export {}\n")
       const dirty = await runCli(["reset", dir])
       expect(dirty.code).toBe(1)
-      expect(dirty.err).toContain("要求工作区干净")
+      expect(dirty.err).toContain("requires a clean worktree")
       expect(dirty.err).toContain("untracked.ts")
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).exists()).toBe(true)
       expect((await runCli(["reset", dir, "-f"])).code).toBe(0)
@@ -1336,10 +1336,10 @@ describe("CLI: 工作区干净度闸门", () => {
     try {
       const amend = await runCli(["run", dir, "--amend"])
       expect(amend.code).toBe(1)
-      expect(amend.err).toContain("--amend 是 init 专用选项")
+      expect(amend.err).toContain("--amend is an init-only option")
       const force = await runCli(["run", dir, "-f"])
       expect(force.code).toBe(1)
-      expect(force.err).toContain("是 init/reset 专用选项")
+      expect(force.err).toContain("is an init/reset-only option")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

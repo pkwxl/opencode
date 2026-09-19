@@ -27,7 +27,7 @@ export async function implementPlan(
   const path = join(directory, "PLAN.md")
   const server = await manage(directory, opts.server)
   try {
-    log("▶ 开计划生成会话填充 PLAN.md")
+    log("▶ starting plan-generation session to fill PLAN.md")
     await allowWrite(path)
     try {
       const sessionOpts: Opts = {
@@ -55,7 +55,7 @@ export async function implementPlan(
           artifact: "已填充的 PLAN.md(至少一个任务)",
           detail: "缺失、无任务或任务格式无法解析",
           requirement: "必须直接编辑 PLAN.md,把任务按 `## T-NNN: <任务标题> [pending]` 格式写入(至少一个)。",
-          commit: { stage: "implement-plan", subject: "PLAN implement 计划生成" },
+          commit: { stage: "implement-plan", subject: "PLAN implement plan generation" },
           reset: async () => {
             await Bun.write(path, renderPlanScaffold(config.verify))
           },
@@ -72,7 +72,7 @@ export async function implementPlan(
           type: "blocked",
           question:
             planned.type === "dirty"
-              ? `计划生成前工作区不净,请人工处置(提交/清理)后重试:\n${planned.files.join("\n")}`
+              ? `worktree is not clean before plan generation; please handle it manually (commit/clean) and retry:\n${planned.files.join("\n")}`
               : planned.question,
         }
       }

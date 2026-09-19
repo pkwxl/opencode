@@ -117,7 +117,7 @@ export async function watch(
   const steerText = async (text: string): Promise<boolean> => {
     const sent = await client.session.promptAsync({ sessionID, parts: [{ type: "text", text }] }).catch(() => undefined)
     if (sent && !sent.error) return true
-    log(`⚠ steer 投递失败: ${sent?.error ? JSON.stringify(sent.error) : "请求异常"}`)
+    log(`⚠ steer dispatch failed: ${sent?.error ? JSON.stringify(sent.error) : "request error"}`)
     return false
   }
   const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string } | { type: "invalid" }> => {
@@ -140,8 +140,8 @@ export async function watch(
         return {
           type: "blocked",
           question:
-            `测试交接会话两次未写出有效的 ${test!.handoffFile}(缺失或缺少 \`状态: 继续|完成\` 行,隐性阻塞)。` +
-            `请检查该文件后重新运行。Agent 最后的输出:\n${lastText.trim().slice(-2000) || "(无输出)"}`,
+            `the test-handover session failed twice to produce a valid ${test!.handoffFile} (missing, or lacking a \`状态: 继续|完成\` status line; hidden blockage). ` +
+            `Check the file and re-run. Last agent output:\n${lastText.trim().slice(-2000) || "(no output)"}`,
         }
       }
       testHandoverRetried = true
@@ -149,7 +149,7 @@ export async function watch(
         `你上次结束会话但未写出有效的 ${test!.handoffFile}(缺失或缺少 \`状态: 继续|完成\` 行)。这是硬性要求: ` +
           `把进度、关键决策、失败测试上下文与后续步骤写入该文件,末行写出状态行后再结束会话。`,
       )
-      if (!ok) return { type: "blocked", question: `steer 投递失败(要求补写 ${test!.handoffFile}),无法继续会话,详见日志。` }
+      if (!ok) return { type: "blocked", question: `steer dispatch failed (asking to backfill ${test!.handoffFile}); cannot continue the session, see the log.` }
       return { type: "continue" }
     }
     const pending = join(test!.tmp, "test.sh")
@@ -161,17 +161,17 @@ export async function watch(
       testHandoverAsked = true
       const n = test!.handovers + 1
       log(
-        `⚠ ${test!.label} 上下文已用 ${formatTokens(used > 0 ? used : test!.startUsed)} tokens 达到 ${formatTokens(test!.limit)} 上限,` +
+        `⚠ ${test!.label} context used ${formatTokens(used > 0 ? used : test!.startUsed)} tokens reached the ${formatTokens(test!.limit)} cap; ` +
           (switches.handoverConcurrent
-            ? `提交定版后测试与会话收尾并发进行,要求写交接文档后换新会话`
-            : `提交定版后先交接、再跑测试,要求写交接文档后换新会话`),
+            ? `tests run concurrently with the session wrapup after the frozen commit; asking for a handover document before switching to a new session`
+            : `after the frozen commit, hand over first and then run the tests; asking for a handover document before switching to a new session`),
       )
       // 提交 #1(定版): 固定被测的脚本与源码。此刻会话处于 idle(本函数由 idle
       // 事件驱动),没有半写文件,是唯一安全的 mid-session 提交时点;走
       // afterSession 而非裸 commitTree,使代答采集与引用订正落在定版之内——
       // 订正会改文件,必须先于测试启动,三者才是同一份快照。单元尚未收口,
       // 不传 baseline。
-      const pinSubject = suffixedTitle(test!.subject, `测试交接 #${n} 定版`)
+      const pinSubject = suffixedTitle(test!.subject, `test handover #${n} freeze`)
       const pin = await afterSession(test!.dir, opts, test!.task, { stage: `${test!.unit} handoff-${n}-pin`, subject: pinSubject })
       if (pin.type === "failed") {
         return { type: "blocked", question: commitBlocked(pinSubject, pin).question }
@@ -197,7 +197,7 @@ export async function watch(
         pinMessage: lastMessage,
       })
       const ok = await steerText(renderTestWrapup({ handoffFile: test!.handoffFile }))
-      if (!ok) return { type: "blocked", question: "steer 投递失败(测试交接要求),无法继续会话,详见日志。" }
+      if (!ok) return { type: "blocked", question: "steer dispatch failed (test-handover request); cannot continue the session, see the log." }
       // 收尾要求已生效,播种 resumeWrapup: testHandoverAsked 是本 watch 实例的状态,
       // 收尾途中会话出错被 runSession 重试环/降级环 fork 续跑时,新 attempt 建新
       // watch 实例——没有这面旗标,新实例会把「收尾完成」误判为自然结束,交接循环
@@ -209,7 +209,7 @@ export async function watch(
     // 归档(存在即请求的协议标记,执行后移除以便再次请求)→ 执行 → 反馈。
     const run = await executeTest(test!, opts)
     const ok = await steerText(renderTestResult(run))
-    if (!ok) return { type: "blocked", question: "steer 投递失败(测试结果反馈),无法继续会话,详见日志。" }
+    if (!ok) return { type: "blocked", question: "steer dispatch failed (test result feedback); cannot continue the session, see the log." }
     return { type: "continue" }
   }
   // 已记录的 part 与 message,避免同一 part 的多次更新事件重复输出。
@@ -246,7 +246,7 @@ export async function watch(
           probeFailures = 0
         } else {
           probeFailures += 1
-          log(`⚠ 失联探针第 ${probeFailures}/${PROBE_MAX_FAILURES} 次未通(会话 ${sessionID}),连接疑似半开`)
+          log(`⚠ connectivity probe failure ${probeFailures}/${PROBE_MAX_FAILURES} (session ${sessionID}); connection suspected half-open`)
           if (probeFailures >= PROBE_MAX_FAILURES) {
             halfOpen = true
             trip()
@@ -352,8 +352,8 @@ export async function watch(
           })
           if (hit) {
             log(
-              `⚠ 检测到重复动作: ${hit.tool} 已 ${hit.count} 次${hit.kind === "error" ? "报同一个错" : "同参同果"},` +
-                `插入提示(第 ${hit.level}/${STUCK_MAX_HINTS} 次)`,
+              `⚠ repetitive action detected: ${hit.tool} has ${hit.count} consecutive ${hit.kind === "error" ? "identical errors" : "identical calls with identical results"}; ` +
+                `inserting a hint (level ${hit.level}/${STUCK_MAX_HINTS})`,
             )
             await steerText(renderStuckHint(hit))
           }
@@ -371,14 +371,14 @@ export async function watch(
         used = info.tokens.input + info.tokens.cache.read
         limit = limits.get(`${info.providerID}/${info.modelID}`)
         pct = limit ? Math.round((used / limit) * 100) : 100
-      vlog(`  上下文: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
+      vlog(`  context: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
       if (steer && !steerSent && used >= steer.limit) {
         steerSent = true
-        log(`⚠ 上下文已用 ${formatTokens(used)} tokens 达到 ${formatTokens(steer.limit)} 上限,插入交接提示`)
+        log(`⚠ context used ${formatTokens(used)} tokens reached the ${formatTokens(steer.limit)} cap; inserting a handover hint`)
         const ok = await steerText(steer.text)
         if (!ok) {
           return snapshot({
-            blocked: { type: "blocked", question: "steer 投递失败(交接提示),无法继续会话,详见日志。" },
+            blocked: { type: "blocked", question: "steer dispatch failed (handover hint); cannot continue the session, see the log." },
           })
         }
       }
@@ -395,8 +395,8 @@ export async function watch(
       // 直接阻塞(无人值守时不能替人工决定是否授权)。
       if (!repeated && (!permission || waitAnswer > 0)) {
         autoAnswered.push(text)
-        log(`❓ 收到${permission ? "权限" : "非权限"}提问:\n${text}`)
-        const human = waitAnswer > 0 ? await askHuman(waitAnswer, "超时将自动答复", opts.interactive, opts.dir) : undefined
+        log(`❓ received a ${permission ? "permission" : "non-permission"} question:\n${text}`)
+        const human = waitAnswer > 0 ? await askHuman(waitAnswer, "auto-answered on timeout", opts.interactive, opts.dir) : undefined
         const ask = autoSwitches().ask
         const fallback = autoAnswer(ask)
         const reply = human ?? fallback
@@ -404,13 +404,13 @@ export async function watch(
         // 自动答复才计——人工答了是真人做的决定,dryrun 预检不产生工程决策。回落时
         // 把原 `→ 自动答复: <长文案>` 换成两行高亮式(答复全文降为明细日志),
         // 让"driver 替用户做了主"在会话日志里一眼可见、事后可数。
-        if (human) log(`→ 人工答复: ${human}`)
-        else if (opts.dryrun) log(`→ 自动答复: ${fallback}`)
+        if (human) log(`→ human answer: ${human}`)
+        else if (opts.dryrun) log(`→ auto answer: ${fallback}`)
         else {
           resolves.push({ at: Date.now(), question: text, session: sessionID })
-          log(`⚑ 自动代答(AUTO-RESOLVE)第 ${resolves.length} 个: ${compactText(text)}`)
-          log(`  → 已代答,${ask ? "driver 已完整记录,本档不要求会话另行标注" : "要求会话以 AUTO-RESOLVE 标注决策"}`)
-          vlog(`  代答内容: ${fallback}`)
+          log(`⚑ auto-answer (AUTO-RESOLVE) #${resolves.length}: ${compactText(text)}`)
+          log(`  → answered; ${ask ? "the driver recorded it in full; this mode does not require the session to label it separately" : "asking the session to label the decision with AUTO-RESOLVE"}`)
+          vlog(`  answer content: ${fallback}`)
         }
         await client.question
           .reply({ requestID: asked.id, answers: asked.questions.map(() => [reply]) })
@@ -422,7 +422,7 @@ export async function watch(
       return snapshot({
         blocked: {
           type: "blocked",
-          question: permission ? text : `自动答复后仍就同一问题再次询问,需人工在会话外处理后重新运行:\n${text}`,
+          question: permission ? text : `asked again about the same question after auto-answer; handle it manually outside the session, then re-run:\n${text}`,
         },
       })
     }
@@ -431,7 +431,7 @@ export async function watch(
       if (asked.sessionID !== sessionID) continue
       // dryrun 预检: 自动拒绝但不中断会话,让 AI 记录受阻项后继续探查下一项。
       if (opts.dryrun) {
-        log(`🔐 预检探查被拒绝(记入报告): ${asked.permission} (${asked.patterns.join(", ")})`)
+        log(`🔐 preflight probe denied (recorded in the report): ${asked.permission} (${asked.patterns.join(", ")})`)
         await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
         continue
       }
@@ -439,7 +439,7 @@ export async function watch(
       const mode = opts.permission ?? "ask-deny"
       // auto-allow: 不等待人工,立即自动授权(always 放行本请求)。
       if (mode === "auto-allow") {
-        log(`🔐 收到权限请求,--permission auto-allow 自动授权: ${desc}`)
+        log(`🔐 permission request received; auto-allowed via --permission auto-allow: ${desc}`)
         await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
         continue
       }
@@ -449,34 +449,34 @@ export async function watch(
       // 授权、ask-deny 自动拒绝但会话继续、ask-fail 拒绝并退出运行。
       let human: string | undefined
       if (waitAnswer > 0) {
-        log(`🔐 收到权限请求: ${desc}`)
+        log(`🔐 permission request received: ${desc}`)
         human = await askHuman(
           waitAnswer,
-          `输入 allow/yes/y 确认授权,其余回答将拒绝该权限并继续,超时按 --permission ${mode} 处理`,
+          `enter allow/yes/y to approve; any other answer denies the permission and continues; on timeout handled as --permission ${mode}`,
           opts.interactive,
           opts.dir,
         )
       } else {
-        log(`🔐 收到权限请求(未设 --wait-answer 不等待人工,按 --permission ${mode} 处理): ${desc}`)
+        log(`🔐 permission request received (--wait-answer unset, not waiting for a human; handled as --permission ${mode}): ${desc}`)
       }
       if (human && isApproval(human)) {
-        log(`→ 人工授权: ${human}(always 放行)`)
+        log(`→ human allowed: ${human} (always)`)
         await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
         continue
       }
       if (human) {
-        log(`→ 人工未授权: ${human}(拒绝该权限,AI 无授权继续)`)
+        log(`→ human denied: ${human} (permission denied; the AI continues without it)`)
         await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
         continue
       }
       if (mode === "ask-allow") {
-        log(`→ 等待超时,--permission ask-allow 自动授权: ${desc}`)
+        log(`→ wait timed out; --permission ask-allow auto-allowed: ${desc}`)
         await client.permission.reply({ requestID: asked.id, reply: "always" }).catch(() => {})
         continue
       }
       await client.permission.reply({ requestID: asked.id, reply: "reject" }).catch(() => {})
       if (mode === "ask-deny") {
-        log(`→ 等待超时,--permission ask-deny 自动拒绝(AI 无授权继续): ${desc}`)
+        log(`→ wait timed out; --permission ask-deny auto-denied (the AI continues without it): ${desc}`)
         continue
       }
       // ask-fail: 拒绝并退出运行(阻塞停机,问题写入 PLAN.md)。
@@ -484,7 +484,7 @@ export async function watch(
       return snapshot({
         blocked: {
           type: "blocked",
-          question: `权限请求无人答复(--permission ask-fail): ${desc}。请在目标目录 opencode.json 的 permission 规则中放行后重新运行。`,
+          question: `permission request unanswered (--permission ask-fail): ${desc}. Allow it in the permission rules of the target directory's opencode.json, then re-run.`,
         },
       })
     }
@@ -568,8 +568,8 @@ export async function watch(
               blocked: {
                 type: "blocked",
                 question:
-                  `测试交接文档 ${test.handoffFile} 缺失或为空(严格恢复: 交接边界写核失败,不再补写重试,` +
-                  `本单元将回滚到基线重做)。Agent 最后的输出:\n${lastText.trim().slice(-2000) || "(无输出)"}`,
+                  `test handover document ${test.handoffFile} missing or empty (strict resume: the boundary write-verify failed; no more backfill retries; ` +
+                  `this unit will roll back to its baseline and redo). Last agent output:\n${lastText.trim().slice(-2000) || "(no output)"}`,
               },
               testHandoverInvalid: true,
             })
@@ -583,12 +583,12 @@ export async function watch(
         // 续跑回合自身的 step-finish 会刷新 lastFinish;steer 后先清掉,防新回合
         // 无 step-finish 的边角形态对着陈旧判据重复续跑(上限兜底,最多空转到 MAX)。
         lastFinish = undefined
-        log(`⚠ 会话回复因输出长度上限被截断(步骤结束 length),提示其从截断处继续(第 ${lengthContinued}/${LENGTH_CONTINUE_MAX} 次)`)
+        log(`⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (${lengthContinued}/${LENGTH_CONTINUE_MAX})`)
         const ok = await steerText(
           "[driver] 你的上一轮回复因输出长度上限被截断,请从截断处继续未完成的工作" +
             "(不要重做已完成的部分;单次输出较长时请拆成多步/多次工具调用,避免再次触限)。",
         )
-        if (!ok) return snapshot({ blocked: { type: "blocked", question: "steer 投递失败(截断续跑提示),无法继续会话,详见日志。" } })
+        if (!ok) return snapshot({ blocked: { type: "blocked", question: "steer dispatch failed (length-continuation hint); cannot continue the session, see the log." } })
         continue
       }
       settled = true
@@ -604,8 +604,8 @@ export async function watch(
     // classifySessionError 归 transient——传输层故障走既有可重试阶梯与降级环,不
     // 换模型;errorInfo 同步带上,使分类与上行报文有据。
     const msg = halfOpen
-      ? `失联探针连续 ${PROBE_MAX_FAILURES} 次未通,判定连接半开(server 无响应或网络断开,half-open network timeout)`
-      : "事件流中断(未收到会话结束事件,疑似 server 故障或网络断开)"
+      ? `connectivity probe failed ${PROBE_MAX_FAILURES} consecutive times; connection judged half-open (server unresponsive or network down, half-open network timeout)`
+      : "event stream interrupted (no session-end event received; suspected server failure or network down)"
     error = error ? `${error}\n${msg}` : msg
     if (halfOpen) errorInfo = { ...(errorInfo ?? {}), message: errorInfo?.message ? `${errorInfo.message}\n${msg}` : msg }
   }

@@ -106,16 +106,16 @@ export async function runExecSession(
   if (stage === "wrapup" && record) {
     // H1 收尾未完成: 定版提交已落账、会话没写完交接文档就被打断。从定版那一刻的
     // 会话状态 fork 出新会话重做收尾——收尾之后照常走归档 → 提交 #2 → 跑脚本。
-    if (await seedPinFork(client, chain, record, `${test.label} 测试交接 #${record.n} 收尾`)) {
+    if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`)) {
       if (record.script) test.pending = { script: record.script, seq: record.seq ?? ++test.seq }
       test.resumeWrapup = true
       firstPrompt = renderTestWrapup({ handoffFile: test.handoffFile })
-      log(`↻ ${test.label} 恢复中断: 测试交接 #${record.n} 定版已落账、收尾未完成,从定版点分叉会话重做收尾`)
+      log(`↻ ${test.label} resume after interruption: test handover #${record.n} committed the frozen tree but wrapup is unfinished; forking from the frozen point to redo the wrapup`)
     } else {
       // 定版会话已不可用: 收尾无从接续,丢掉在途记录冷启动重做本执行范围
       // (定版提交留在历史里,是一次无害的中间提交)。
       await forgetHandover(dir)
-      log(`↻ ${test.label} 恢复中断: 测试交接 #${record.n} 的定版会话已不可用,冷启动重做本执行范围`)
+      log(`↻ ${test.label} resume after interruption: the frozen session for test handover #${record.n} is no longer available; cold-starting this execution scope`)
     }
   } else if (stage === "commit" || stage === "test") {
     // H2 交接已写完未收口 / H3 已收口: 补齐缺的那几步(补状态行 → 归档 → 提交 #2
@@ -137,12 +137,12 @@ export async function runExecSession(
         // 幂等(已有状态行则不动),随提交 #2 一并落账。
         await fillHandoffStatus(join(dir, archived))
       }
-      const subject = suffixedTitle(test.subject, `测试交接 #${closedN}`)
+      const subject = suffixedTitle(test.subject, `test handover #${closedN}`)
       const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${closedN}`, subject })
       if (committed.type === "failed") return commitBlocked(subject, committed)
-      log(`↻ ${test.label} 恢复中断: 交接文档 ${archived} 已写完但未收口,已补提交`)
+      log(`↻ ${test.label} resume after interruption: handover document ${archived} was fully written but not closed out; committed as backfill`)
     } else {
-      log(`↻ ${test.label} 恢复中断: 测试交接 #${closedN} 已收口(${archived} 已落账)`)
+      log(`↻ ${test.label} resume after interruption: test handover #${closedN} closed out (${archived} archived)`)
     }
     // 脚本执行状态(F6 修订,2026-09-17,设计文档 §M): 定版脚本的执行结果在收口时
     // 随在途记录落盘(ran)——本地脚本除断电/强制终止外必然跑完,已执行即视为完成,
@@ -156,13 +156,13 @@ export async function runExecSession(
     } else {
       const script = record ? record.script : await latestTestScript(tmp)
       if (script) {
-        log(`↻ ${test.label} 恢复中断: 重跑定版时待执行的测试脚本 ${script}`)
+        log(`↻ ${test.label} resume after interruption: test script ${script} pending execution on the frozen rerun`)
         ran = await runTestScript(test, opts, script)
       }
     }
     // 续跑会话已经开过并被打断 → 从它分叉恢复,把那一轮已积累的上下文接回来。
-    if (record?.nextSession && (await seedSessionFork(client, chain, record.nextSession, `${test.label} 测试交接 #${closedN} 续跑`))) {
-      log(`↻ ${test.label} 恢复中断: 中断前的续跑会话 ${record.nextSession} 尚存,已分叉副本接回`)
+    if (record?.nextSession && (await seedSessionFork(client, chain, record.nextSession, `${test.label} test handover #${closedN} continuation`))) {
+      log(`↻ ${test.label} resume after interruption: the pre-interruption continuation session ${record.nextSession} is still alive; forked a copy to resume`)
       // fork 副本带着续跑会话的全部上下文(任务提示词与续跑说明在它开出时已下发),
       // 整份重发只会重复: 本次恢复有新跑的测试才把结果带给它,否则收敛为一句继续
       // (与恢复保真"复用会话的恢复说明收敛为一句 continue"同口径)。
@@ -212,8 +212,8 @@ export async function runExecSession(
       const drifted = await trackedSourceChanges(dir)
       if (drifted.length) {
         log(
-          `⚠ ${test.label} 并发态: 交接收尾期间改动了被测内容(${drifted.slice(0, 3).join(", ")}${drifted.length > 3 ? " 等" : ""}),` +
-            `本次测试跑的是定版快照,判读时以交接文档为准`,
+          `⚠ ${test.label} concurrent mode: the tested content changed during handover wrapup (${drifted.slice(0, 3).join(", ")}${drifted.length > 3 ? " etc." : ""}); ` +
+            `this test ran against the frozen snapshot — judge against the handover document`,
         )
       }
     }
@@ -221,7 +221,7 @@ export async function runExecSession(
     await archiveHandoff(dir, handoff, handoff, handovers)
     // 提交 #2(交接确认): 会话收尾落盘的成果 + 归档交接文档一并落账。单元尚未
     // 收口,不传 baseline。
-    const subject = suffixedTitle(test.subject, `测试交接 #${handovers}`)
+    const subject = suffixedTitle(test.subject, `test handover #${handovers}`)
     const committed = await afterSession(dir, opts, task, { stage: `${unit} handoff-${handovers}`, subject })
     if (committed.type === "failed") return commitBlocked(subject, committed)
     // 顺序态(缺省,E1): 交接收口之后才执行——被测的就是提交 #2 的那一份树。脚本
@@ -239,7 +239,7 @@ export async function runExecSession(
     // 随记录固化(ran,恢复不再重复执行);余下的身份信息只剩下一会儿要开的续跑
     // 会话(由 attempt 回填 nextSession)。
     await saveHandover(dir, { task: task.id, scope: handoff, unit, n: handovers, ...(ran ? { ran } : {}) })
-    log(`↻ ${test.label} 上下文达到上限,已交接 ${archived},新会话继续(第 ${handovers} 次测试交接)`)
+    log(`↻ ${test.label} context limit reached; handed over as ${archived}, continuing in a new session (test handover #${handovers})`)
     continuation = true
   }
 }

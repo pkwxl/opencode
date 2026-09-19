@@ -26,7 +26,7 @@ export class ExitRequested extends Error {
     readonly boundary: Boundary,
     readonly label: string,
   ) {
-    super(`/exit 已在 ${label} 边界生效`)
+    super(`/exit took effect at the ${label} boundary`)
   }
 }
 

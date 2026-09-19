@@ -29,8 +29,8 @@ describe("在途失联探针(S4/D3)", () => {
     const result = await attempt(client, task, "提示词", { idleMs: 20 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("blocked")
     const blocked = result as { question: string; retryable?: boolean; errorClass?: string }
-    expect(blocked.question).toContain("会话错误:")
-    expect(blocked.question).toContain("连接半开")
+    expect(blocked.question).toContain("session error: ")
+    expect(blocked.question).toContain("half-open")
     // 可重试(retryable 非 false)+ transient 归类(传输层故障,不换模型)。
     expect(blocked.retryable).not.toBe(false)
     expect(blocked.errorClass).toBe("transient")
@@ -91,9 +91,9 @@ describe("在途失联探针(S4/D3)", () => {
     expect(result.type).toBe("blocked")
     const blocked = result as { question: string; retryable?: boolean; errorClass?: string }
     // 按 watch 的半开会话错误收口,不得报成"下发任务失败"(abort 回声)。
-    expect(blocked.question).toContain("会话错误:")
-    expect(blocked.question).toContain("连接半开")
-    expect(blocked.question).not.toContain("下发任务失败")
+    expect(blocked.question).toContain("session error: ")
+    expect(blocked.question).toContain("half-open")
+    expect(blocked.question).not.toContain("task dispatch failed")
     expect(blocked.retryable).not.toBe(false)
     expect(blocked.errorClass).toBe("transient")
     // POST 携带中止信号,且随半开判定被 abort(真实链路即取消底层 fetch)。

@@ -412,22 +412,22 @@ export function resolveHighlight(items: ResolveItem[], opts?: HighlightOpts): st
   const scope = opts?.scope ?? "task"
   const unmarked = shown.filter((item) => item.source === "driver").length
   if (scope !== "task") {
-    const subject = scope === "phase" ? `阶段 ${opts?.id ?? ""} ` : `第 ${opts?.id ?? ""} 轮`
-    const note = unmarked ? `(其中 ${unmarked} 个未按要求标注)` : ""
-    return [`⚑ ${subject}共自动代答 ${shown.length} 个待确认问题${note},逐条见各任务报告`]
+    const subject = scope === "phase" ? `phase ${opts?.id ?? ""}` : `round ${opts?.id ?? ""}`
+    const note = unmarked ? ` (${unmarked} not marked as required)` : ""
+    return [`⚑ ${subject}: ${shown.length} questions awaiting confirmation were auto-answered${note}; see task reports for details`]
   }
   const report = taskDoc(shown[0]!.task || "T-NNN", "report")
-  const lines = [`⚑ 本任务自动代答了 ${shown.length} 个本应由你确认的问题,请重点确认:`]
+  const lines = [`⚑ this task auto-answered ${shown.length} questions that should have been confirmed by you; please review:`]
   for (const [i, item] of shown.slice(0, MAX_HIGHLIGHT).entries()) {
     lines.push(`  ${i + 1}. ${entryText(item)}`)
     if (item.file) lines.push(`     ${item.file}`)
   }
   if (shown.length > MAX_HIGHLIGHT) {
-    lines.push(`  …另有 ${shown.length - MAX_HIGHLIGHT} 条,全部见 ${report}`)
+    lines.push(`  …and ${shown.length - MAX_HIGHLIGHT} more, all in ${report}`)
   } else {
-    lines.push(`  完整记录见 ${report} 的「自动代答问题」节`)
+    lines.push(`  full record in the "自动代答问题" section of ${report}`)
   }
-  if (opts?.decisions) lines.push(`  另记录 AUTO-DECISION ${opts.decisions} 条(已折叠,见任务报告)`)
+  if (opts?.decisions) lines.push(`  plus ${opts.decisions} AUTO-DECISION entries (folded, see task report)`)
   return lines
 }
 
@@ -436,10 +436,10 @@ export function resolveHighlight(items: ResolveItem[], opts?: HighlightOpts): st
 // 但没按格式写)。
 function entryText(item: ResolveItem): string {
   const question = compactText(item.question)
-  if (item.source === "driver") return `${question}  ⚠ 会话未按要求写出 AUTO-RESOLVE 标记`
+  if (item.source === "driver") return `${question}  ⚠ session did not write the AUTO-RESOLVE marker as required`
   const option = item.option ? ` → ${compactText(item.option)}` : ""
   const reason = item.reason ? `(${compactText(item.reason)})` : ""
-  const warn = item.malformed ? "  ⚠ 格式不规范" : ""
+  const warn = item.malformed ? "  ⚠ malformed marker" : ""
   return `${question}${option}${reason}${warn}`
 }
 

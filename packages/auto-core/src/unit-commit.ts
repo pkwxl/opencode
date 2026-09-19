@@ -72,12 +72,12 @@ export async function afterSession(
   if (!result.ok) {
     return {
       type: "failed",
-      question: `统一提交失败: ${result.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。改动保留在工作区,请人工处理 git 后重新运行。`,
+      question: `unified commit failed: ${result.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Changes are left in the worktree; please handle git manually and re-run.`,
     }
   }
   if (baseline) {
     const violations = await unitViolations(dir, baseline)
-    if (violations.length) return { type: "failed", question: `单元收口校验未通过: ${violations.join("; ")}` }
+    if (violations.length) return { type: "failed", question: `unit close-out check failed: ${violations.join("; ")}` }
   }
   return { type: "ok" }
 }
@@ -86,7 +86,7 @@ export async function afterSession(
 // 提交失败即不视为完成,问题进 PLAN.md,由 loop 的 interrupted 提交重试一次落账,
 // 仍失败则留脏现场给人工(退出码 2)。
 export function commitBlocked(unit: string, commit: { type: "failed"; question: string }): { type: "blocked"; question: string } {
-  return { type: "blocked", question: `${unit}的产出未提交落账,不视为完成——${commit.question}` }
+  return { type: "blocked", question: `${unit}: output not committed, not considered complete — ${commit.question}` }
 }
 
 // H4 的采集体: 计数只进明细日志(vlog),不上终端——AUTO-DECISION 永不与
@@ -105,8 +105,8 @@ async function collectSessionMarks(
     round: await currentRound(dir).catch(() => 0),
   }).catch(() => undefined)
   if (!found) return
-  if (found.resolves) vlog(`⚑ ${task.id} ${stage}: 采集到 AUTO-RESOLVE 标记 ${found.resolves} 条`)
-  if (found.decisions) vlog(`ℹ ${task.id} ${stage}: 记录 AUTO-DECISION ${found.decisions} 条`)
+  if (found.resolves) vlog(`⚑ ${task.id} ${stage}: collected ${found.resolves} AUTO-RESOLVE marker(s)`)
+  if (found.decisions) vlog(`ℹ ${task.id} ${stage}: recorded ${found.decisions} AUTO-DECISION entries`)
 }
 
 // 收尾会话的代答清单(auto-resolve H7,plans/0020-auto-resolve-design.md §I): 本任务台账里
@@ -174,9 +174,9 @@ export async function rollbackUnitState(
     await writeCurrent(extra.planPath, task, extra.solo ?? false, remark)
   }
   log(
-    `↻ ${task.id} ${unit}已回滚到单元基线(stash ${rolled.stashes} 次` +
-      `${rolled.resets.length ? `,reset ${rolled.resets.join(", ")}` : ""}` +
-      `${rolled.skipped.length ? `;仅 stash 未 reset: ${rolled.skipped.join(", ")}` : ""}),新会话从干净基线重做本单元`,
+    `↻ ${task.id} ${unit} rolled back to unit baseline (stash ×${rolled.stashes}` +
+      `${rolled.resets.length ? `, reset ${rolled.resets.join(", ")}` : ""}` +
+      `${rolled.skipped.length ? `; stash only, no reset: ${rolled.skipped.join(", ")}` : ""}), re-running this unit from a clean baseline with a new session`,
   )
   return { type: "ok", remark }
 }
@@ -184,11 +184,11 @@ export async function rollbackUnitState(
 // CURRENT.md 的回滚备注(回滚重跑路径保留文件时写入): 现场去向与找回方式。
 function rollbackRemark(taskID: string, unit: string, rolled: RollbackResult): string {
   return [
-    `## 回滚备注(opencode-auto)`,
+    `## Rollback note (opencode-auto)`,
     ``,
-    `- 回滚时间: ${new Date().toISOString()}`,
-    `- 回滚单元: ${taskID} ${unit}`,
-    `- 现场保全: 未提交改动与被收回的本单元提交均在 git stash(信息含 auto-rollback 前缀),可用 git stash list 定位、git stash show -p 查看`,
-    `- 后续: 本单元将由新会话从基线重做;如需找回被回滚的部分工作,请人工检查 stash 后自行取舍`,
+    `- rolled back at: ${new Date().toISOString()}`,
+    `- rolled-back unit: ${taskID} ${unit}`,
+    `- state preserved: uncommitted changes and the reclaimed commits of this unit are in git stash (message contains the auto-rollback prefix); locate with git stash list, inspect with git stash show -p`,
+    `- next: this unit will be redone from baseline by a new session; to recover rolled-back work, inspect the stash manually and decide`,
   ].join("\n")
 }

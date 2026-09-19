@@ -15,7 +15,7 @@ import { log } from "./log"
 // - commitPending: 隐藏任务幂等入口的"产物已落盘未提交 → 补提交即完成"(③)。
 // --commit false / dryrun / 非 git 环境下门禁整体不生效。
 
-// 提交信息: 中文标题行(人读)+ 机器可读 trailer(脚本化定位回滚点)。
+// 提交信息: 英文标题行(人读,M0.6 起)+ 机器可读 trailer(脚本化定位回滚点)。
 // Auto-Task 任务编号(T-F*/PLAN 等)、Auto-Stage 阶段与序号(伪任务为旁路
 // 阶段标签: phase-plan/phase-handover/phase-transition/knowledge/numbering/
 // final-plan/doc-migrate/housekeeping/carryover 等);Auto-Stage 同时是"driver
@@ -70,8 +70,8 @@ export async function commitTree(dir: string, task: { id: string; title: string 
       if (!(await hasChanges(root))) continue
       const added = await git(root, ["add", "-A", "--", "."])
       if (added.code !== 0) {
-        const error = `git add 退出码 ${added.code}(${firstLine(added.err || added.out)})`
-        log(`  ⚠ git 提交失败(${rel}): ${error}`)
+        const error = `git add exit code ${added.code} (${firstLine(added.err || added.out)})`
+        log(`  ⚠ git commit failed (${rel}): ${error}`)
         failures.push({ rel, error })
         continue
       }
@@ -79,15 +79,15 @@ export async function commitTree(dir: string, task: { id: string; title: string 
       const nested = root === dir ? await nestedHeads(dir, roots) : undefined
       const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", message(subject, task, info.stage, nested)])
       if (committed.code !== 0) {
-        const error = firstLine(committed.err || committed.out) || `git commit 退出码 ${committed.code}`
-        log(`  ⚠ git 提交失败(${rel}): ${error}(改动保留在工作区)`)
+        const error = firstLine(committed.err || committed.out) || `git commit exit code ${committed.code}`
+        log(`  ⚠ git commit failed (${rel}): ${error} (changes left in the worktree)`)
         failures.push({ rel, error })
         continue
       }
-      log(`  ✓ git 提交(${rel}): ${subject}`)
+      log(`  ✓ git commit (${rel}): ${subject}`)
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
-      log(`  ⚠ git 提交失败(${rel}): ${text}`)
+      log(`  ⚠ git commit failed (${rel}): ${text}`)
       failures.push({ rel, error: firstLine(text) })
     }
   }
@@ -157,14 +157,14 @@ export async function unitViolations(dir: string, baseline: UnitBaseline): Promi
   const problems: string[] = []
   const dirty = await changedFiles(dir)
   if (dirty.length) {
-    problems.push(`工作区仍有未提交改动: ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? ` 等 ${dirty.length} 个文件` : ""}`)
+    problems.push(`worktree still has uncommitted changes: ${dirty.slice(0, 5).join(", ")}${dirty.length > 5 ? ` … (${dirty.length} files total)` : ""}`)
   }
   for (const { root, sha } of baseline) {
     const head = (await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined))?.out.trim()
     if (head === undefined || head === sha) continue
     const foreign = await foreignCommits(root, sha)
     if (foreign) {
-      problems.push(`${relative(dir, root) || "."}: 检测到 ${foreign} 个非 driver 提交(无 Auto-Stage trailer),单元期间存在外部提交`)
+      problems.push(`${relative(dir, root) || "."}: ${foreign} non-driver commit(s) detected (no Auto-Stage trailer); external commits occurred during the unit`)
     }
   }
   return problems
@@ -234,13 +234,13 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
     if (!head) {
       // HEAD 不可读: 基线也为空(单元启动时即无提交,现仍无提交)属正常,其余为异常。
       if (!sha) continue
-      problems.push(`${rel}: HEAD 不可读(仓库缺失或历史损坏),基线核对失败`)
+      problems.push(`${rel}: HEAD unreadable (repo missing or history corrupt), baseline check failed`)
       continue
     }
     if (head === sha) continue
     const foreign = await foreignCommits(root, sha)
     if (foreign > 0) {
-      problems.push(`${rel}: 基线以来存在 ${foreign} 个非 driver 提交(无 Auto-Stage trailer),外部提交已混入,会话上下文对现状的认知失真`)
+      problems.push(`${rel}: ${foreign} non-driver commit(s) since baseline (no Auto-Stage trailer); external commits mixed in, session context is stale`)
     }
   }
   return problems
@@ -280,7 +280,7 @@ export async function rollbackUnit(
       if (entry && head && head !== entry.sha) {
         const foreign = await foreignCommits(root, entry.sha)
         if (foreign > 0) {
-          result.failures.push({ rel, error: `检测到 ${foreign} 个非 driver 提交(无 Auto-Stage trailer),该仓库不回滚,请人工处置` })
+          result.failures.push({ rel, error: `${foreign} non-driver commit(s) detected (no Auto-Stage trailer); this repo is not rolled back, please handle manually` })
           continue
         }
       }
@@ -288,7 +288,7 @@ export async function rollbackUnit(
       if (await hasChanges(root)) {
         const stashed = await git(root, ["stash", "push", "-u", "-m", message, "--", "."])
         if (stashed.code !== 0) {
-          result.failures.push({ rel, error: `git stash 退出码 ${stashed.code}(${firstLine(stashed.err || stashed.out)})` })
+          result.failures.push({ rel, error: `git stash exit code ${stashed.code} (${firstLine(stashed.err || stashed.out)})` })
           continue
         }
         result.stashes++
@@ -299,31 +299,31 @@ export async function rollbackUnit(
       if (!sha || !head || head === sha) {
         if (!sha && head) {
           result.skipped.push(rel)
-          log(`  ⚠ ${rel}: 基线为空仓库或仓库不在基线中,仅 stash 不回退历史`)
+          log(`  ⚠ ${rel}: baseline is empty or repo not in baseline; stash only, history not rewound`)
         }
         continue
       }
       const upstream = await git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => undefined)
       if (upstream?.code === 0) {
         result.skipped.push(rel)
-        log(`  ⚠ ${rel}: 检测到 upstream(${upstream.out.trim()}),跳过 reset 只 stash(分支历史可能已被引用)`)
+        log(`  ⚠ ${rel}: upstream detected (${upstream.out.trim()}), skipping reset, stash only (branch history may be referenced)`)
         continue
       }
       const reset = await git(root, ["reset", "--soft", sha])
       if (reset.code !== 0) {
-        result.failures.push({ rel, error: `git reset --soft ${sha} 退出码 ${reset.code}(${firstLine(reset.err || reset.out)})` })
+        result.failures.push({ rel, error: `git reset --soft ${sha} exit code ${reset.code} (${firstLine(reset.err || reset.out)})` })
         continue
       }
       result.resets.push(rel)
       if (await hasChanges(root)) {
         const stashed = await git(root, ["stash", "push", "-u", "-m", `${message} (reset)`, "--", "."])
         if (stashed.code !== 0) {
-          result.failures.push({ rel, error: `git stash(reset 收回)退出码 ${stashed.code}(${firstLine(stashed.err || stashed.out)})` })
+          result.failures.push({ rel, error: `git stash (reset reclaim) exit code ${stashed.code} (${firstLine(stashed.err || stashed.out)})` })
           continue
         }
         result.stashes++
       }
-      log(`  ↻ ${rel}: 已回滚到基线 ${sha}`)
+      log(`  ↻ ${rel}: rolled back to baseline ${sha}`)
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
       result.failures.push({ rel, error: firstLine(text) })
@@ -350,9 +350,9 @@ export async function beginUnit(
   if (dirty.length) {
     const state = await driverStateFiles(dir)
     if (dirty.every((file) => state.includes(file))) {
-      const healed = await commitTree(dir, task, { stage: "carryover", subject: `${task.id} carryover 状态落账补提交` })
+      const healed = await commitTree(dir, task, { stage: "carryover", subject: `${task.id} carryover driver-state posting` })
       if (healed.ok) {
-        log(`  ✓ 检测到 driver 状态文件未落账(${dirty.join(", ")}),已补提交自愈`)
+        log(`  ✓ driver state files not posted (${dirty.join(", ")}), self-healed with a catch-up commit`)
         return { type: "ok", baseline: await unitBaseline(dir) }
       }
     }

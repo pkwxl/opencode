@@ -67,7 +67,7 @@ export function startInteractive(
     // /exit 的意图与是否已连上会话无关)。
     if (text === "/exit") {
       requestExit()
-      log("🚪 已收到 /exit: 将在下一个安全边界(阶段/任务/子任务交接完成处)暂停并退出,进度已持久化,重新运行即可完整恢复")
+      log("🚪 /exit received: will pause and exit at the next safe boundary (phase/task/subtask handover point); progress is persisted, re-run to resume exactly")
       rl.prompt()
       return
     }
@@ -79,29 +79,29 @@ export function startInteractive(
       const order = text.slice("/failback".length).trim().split(/\s+/).filter(Boolean)
       const bad = order.find((item) => !item.includes("/"))
       if (bad !== undefined) {
-        log(`⚠ /failback 参数非法: "${bad}"(模型须为 provider/model 形态含斜杠;用法 /failback [首选 prov/a 候选 prov/b ...])`)
+        log(`⚠ invalid /failback argument: "${bad}" (models must be provider/model with a slash; usage: /failback [primary prov/a candidate prov/b ...])`)
       } else {
         requestFailback(order)
         log(
           order.length
-            ? `⇄ 已收到 /failback: 将在下一个安全边界(阶段/任务/子任务交接完成处)重定义模型序——首选 ${order[0]},降级候选 ${order.slice(1).join(", ") || "(无)"},并重试首选`
-            : "⇄ 已收到 /failback: 将在下一个安全边界(阶段/任务/子任务交接完成处)重置降级状态,重新尝试首选模型",
+            ? `⇄ /failback received: model order will be redefined at the next safe boundary (phase/task/subtask handover point) — primary ${order[0]}, fallback candidates ${order.slice(1).join(", ") || "(none)"}, and the primary will be retried`
+            : "⇄ /failback received: fallback state will be reset at the next safe boundary (phase/task/subtask handover point), retrying the primary model",
         )
       }
       rl.prompt()
       return
     }
     if (!sessionID) {
-      log(`⚠ 当前无活动会话,输入已丢弃: ${text}`)
+      log(`⚠ no active session, input discarded: ${text}`)
       return
     }
-    log(`→ 已发送: ${text}`)
+    log(`→ sent: ${text}`)
     void client.session
       .promptAsync({ sessionID, agent, parts: [{ type: "text", text }] })
       .then((result) => {
-        if (result.error) log(`⚠ 发送失败: ${JSON.stringify(result.error)}`)
+        if (result.error) log(`⚠ send failed: ${JSON.stringify(result.error)}`)
       })
-      .catch((error: unknown) => log(`⚠ 发送失败: ${String(error)}`))
+      .catch((error: unknown) => log(`⚠ send failed: ${String(error)}`))
   })
   // stdin 关闭(管道结束等): 回落为非交互行为,等待中的 ask 按超时处理。
   // 同步清 log.ts 的常驻输入行引用——否则此后任何一条日志对已关闭的 rl 调

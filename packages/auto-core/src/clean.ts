@@ -18,10 +18,10 @@ export async function checkCleanTree(dir: string, action: string): Promise<strin
   const dirty = await changedFiles(dir)
   if (!dirty.length) return undefined
   const shown = dirty.slice(0, PREVIEW).map((file) => `  ${file}`)
-  if (dirty.length > PREVIEW) shown.push(`  …另有 ${dirty.length - PREVIEW} 个文件`)
+  if (dirty.length > PREVIEW) shown.push(`  …and ${dirty.length - PREVIEW} more files`)
   return [
-    `${action}会删改已落盘的文件,要求工作区干净(含目录树下全部嵌套仓库/子模块),当前有未提交改动:`,
+    `${action} will delete or modify files on disk and requires a clean worktree (including all nested repos/submodules in the tree); uncommitted changes found:`,
     ...shown,
-    "请先提交或 git stash 保存这些改动;确实要在脏工作区上执行请加 -f/--force 跳过检查",
+    "commit or git stash these changes first; to run on a dirty worktree anyway, pass -f/--force to skip this check",
   ].join("\n")
 }

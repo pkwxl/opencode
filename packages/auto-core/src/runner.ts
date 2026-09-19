@@ -205,11 +205,11 @@ export async function runTask(
     // 生效;回滚后记录转总结态(复用既有的"非恢复续跑"语义——pipeline 清理陈旧
     // 交接文档、下一单元以干净基线启动),新会话冷启动重做,不附恢复说明。
     if (handoffInvalid) {
-      const done = await rollbackUnitState(dir, task, "执行单元(交接文档无效)", recalled.baseline!, { progress: recalled })
+      const done = await rollbackUnitState(dir, task, "execution unit (invalid handover document)", recalled.baseline!, { progress: recalled })
       if (done.type !== "ok") return done
       rolledBack = done.remark
       recalled.active = false
-      log(`↻ ${task.id} 恢复中断: 交接文档 ${handoffFile(task)} 存在但无有效状态行,严格恢复判定不可保真,已回滚重跑`)
+      log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} exists but has no valid status line; strict resume judged unfaithful, rolled back and re-running`)
     } else if (strict && recalled.active === true && rerun && !handedOff && recalled.baseline) {
       const drift = await baselineIntact(dir, recalled.baseline)
       if (drift.length) {
@@ -220,17 +220,17 @@ export async function runTask(
       const modelOk = recalled.model !== undefined && recalled.model === modelNow
       if (!(alive && usage && !errorStub) || opts.newSession || !modelOk) {
         const why = opts.newSession
-          ? "--new-session 指定"
+          ? "--new-session specified"
           : !(alive && usage)
-            ? "原会话不可复用"
+            ? "original session not reusable"
             : errorStub
-              ? "原会话只挨了一记报错、无真实产出"
-              : `模型不一致(记录 ${recalled.model},当前 ${modelNow ?? "未配置路由"})`
-        const done = await rollbackUnitState(dir, task, "执行单元", recalled.baseline!, { progress: recalled })
+              ? "original session only hit an error, no real output"
+              : `model mismatch (recorded ${recalled.model}, current ${modelNow ?? "no routing configured"})`
+        const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
         if (done.type !== "ok") return done
         rolledBack = done.remark
         recalled.active = false
-        log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why}),严格恢复判定不可保真,已回滚到单元基线重做`)
+        log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${why}); strict resume judged unfaithful, rolled back to the unit baseline and redone`)
       }
     }
     if (!rolledBack) {
@@ -242,8 +242,8 @@ export async function runTask(
         chain.at = Date.now()
         chain.note = resumeNote(recalled.phase, true, strict)
         log(
-          `↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)},复用中断的会话 ${recalled.session} 继续(上下文不丢,` +
-            `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens,上限未知"})`,
+          `↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}, reusing the interrupted session ${recalled.session} to continue (context intact, ` +
+            `${formatTokens(usage.used)} used${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens, limit unknown"})`,
         )
       } else {
         // --new-session 显式放弃旧会话: 立即把记录转总结态,防止本次运行在无会话
@@ -253,17 +253,17 @@ export async function runTask(
         }
         chain.note = resumeNote(recalled.phase, false, strict)
         const why = !rerun
-          ? "中断会话所属的执行单元本次不会重跑(已完成或不再执行),其恢复点已淘汰,开新会话继续"
+          ? "the interrupted session's execution unit will not re-run this time (already done or no longer executing); its resume point is obsolete, starting a new session to continue"
           : handedOff
-            ? "中断前已写出交接文档,开新会话凭交接续跑"
+            ? "a handover document was written before the interruption; starting a new session to continue from the handover"
             : opts.newSession
-              ? "--new-session 指定,开新会话继续"
+              ? "--new-session specified; starting a new session to continue"
               : legacyRecord
-                ? "严格恢复启用前的旧记录无单元基线,无法严格核对,开新会话继续"
+                ? "the legacy record predates strict resume and has no unit baseline, so strict verification is impossible; starting a new session to continue"
                 : errorStub
-                  ? "原会话只挨了一记报错、无真实产出,开新会话继续"
-                  : "原会话不可复用,开新会话继续"
-        log(`↻ ${task.id} 恢复中断: ${phaseText(recalled.phase)}(${why})`)
+                  ? "the original session only hit an error with no real output; starting a new session to continue"
+                  : "the original session is not reusable; starting a new session to continue"
+        log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${why})`)
       }
     }
   }
@@ -298,7 +298,7 @@ export async function runTask(
   task = requireTask(await load(plan.path), task.id)
   await renameSession(client, chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
   await writeCurrent(plan.path, task, mode !== "auto", interruptionRemark(outcome, chain.phase))
-  if (!(outcome.type === "blocked" && outcome.question.startsWith("会话错误:"))) {
+  if (!(outcome.type === "blocked" && outcome.question.startsWith("session error: "))) {
     await persistStage(chain.phase ?? (mode === "auto" ? { kind: "decompose" } : { kind: "whole" }))
   }
   return outcome
@@ -416,11 +416,11 @@ export async function runTask(
       task = requireTask(await load(plan.path), task.id)
       await writeCurrent(plan.path, task, mode !== "auto")
       if (opts.commit !== false && !opts.dryrun) {
-        const committed = await commitTree(dir, task, { stage: "review-fix", subject: `${task.id} planfix ${task.title} 修复检查项注入` })
+        const committed = await commitTree(dir, task, { stage: "review-fix", subject: `${task.id} planfix ${task.title} fix-checklist injection` })
         if (!committed.ok) {
-          return commitBlocked(`${task.id} 修复检查项注入`, {
+          return commitBlocked(`${task.id} fix-checklist injection`, {
             type: "failed",
-            question: `统一提交失败: ${committed.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。改动保留在工作区,请人工处理 git 后重新运行。`,
+            question: `unified commit failed: ${committed.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Changes are kept in the worktree; handle git manually and re-run.`,
           })
         }
       }
@@ -433,7 +433,7 @@ export async function runTask(
       if (skipToInject) {
         // planfix 恢复: 规划会话已产出有效检查项文件,直接注入后进入 fixrun。
         skipToInject = false
-        log(`↻ ${task.id} 恢复中断: 修复检查项 ${fixFile} 已有效,直接注入(第 ${round}/${limit} 轮)`)
+        log(`↻ ${task.id} resume after interruption: fix checklist ${fixFile} is already valid, injecting directly (round ${round}/${limit})`)
         const injected = await injectFix(fixItems, round)
         if (injected) return injected
         continue
@@ -477,11 +477,12 @@ export async function runTask(
           // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
           // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
           // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。
-          await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive, dir })
-          maybeExit("subtask", `${task.id} 子任务 ${index + 1}`)
-          // 休眠窗口(subtask 边界,OPENCODE_AUTO_HIBERNATE): 勾选+统一提交后的安全
-          // 落点检查,在窗口内睡到唤醒再继续(plans/0027-hibernate-design.md)。
-          await hibernatePause(`${task.id} 子任务 ${index + 1} 边界`, { dir })
+          await stepPause("subtask", `${task.id} subtask ${index + 1}`, { interactive: opts.interactive, dir })
+          maybeExit("subtask", `${task.id} subtask ${index + 1}`)
+          // Hibernate window (subtask boundary, OPENCODE_AUTO_HIBERNATE): a safe
+          // spot to check after check-off + unified commit; sleep until wake
+          // inside the window before continuing (plans/0027-hibernate-design.md).
+          await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
           // failback 回试(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): subtask/session 粒度
           // 在子任务边界清链上降级候选,下一子任务回试首选(task 粒度由链逐任务销毁
           // 天然承担);/failback 请求同点消费(可整体重定义模型序)。
@@ -493,7 +494,7 @@ export async function runTask(
         // 形检门禁在 runWrapup 内(session-boundary-hardening §4.5 D5,S3b)。
         if (!skipWrapup && (opts.wrapup ?? true)) {
           await persistStage({ kind: "wrapup" })
-          const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "auto", label: "收尾会话" })
+          const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "auto", label: "wrapup session" })
           if (stopped) return stopped
         }
         skipWrapup = false
@@ -522,10 +523,10 @@ export async function runTask(
         } else {
           log(
             finalMark
-              ? `⏭ ${task.id} 终审任务不做任务级验收(该阶段本身即检验),直接完成`
+              ? `⏭ ${task.id} final-review tasks skip task-level verify (the stage itself is the check); completing directly`
               : opts.phase === "v"
-                ? `⏭ ${task.id} v(验收)阶段任务不做任务级验收(该阶段本身即检验),直接完成`
-                : `⏭ ${task.id} 未启用 --verify,略过任务级验收,直接完成`,
+                ? `⏭ ${task.id} v (verify) phase tasks skip task-level verify (the phase itself is the check); completing directly`
+                : `⏭ ${task.id} --verify is not enabled; skipping task-level verify, completing directly`,
           )
           await markDone(plan.path, task.id)
         }
@@ -546,12 +547,12 @@ export async function runTask(
       }
       round++
       if (round > limit) {
-        return { type: "blocked", question: `质量审核连续 ${limit} 轮修复后仍未通过:\n${audit.gap}` }
+        return { type: "blocked", question: `quality review still failing after ${limit} consecutive fix round(s):\n${audit.gap}` }
       }
       // verifyTask 通过时已把任务标 done;审核发现差距须先置回 in_progress,
       // 否则中断重跑时 next() 会跳过该任务,注入的 fix 检查项永不执行。
       await setStatus(plan.path, task.id, "in_progress")
-      log(`↻ ${task.id} 质量审核未通过,规划修复子任务后继续(第 ${round}/${limit} 轮):\n${audit.gap}`)
+      log(`↻ ${task.id} quality review failed; planning fix subtasks and continuing (round ${round}/${limit}):\n${audit.gap}`)
       await persistStage({ kind: "review", round, stage: "planfix" })
       const planned = await planReviewFix(client, plan, task, opts, audit.gap)
       if (planned.type !== "ok") return planned

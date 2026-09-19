@@ -50,7 +50,7 @@ describe("checkPrinciple", () => {
       expect(findings[2]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 12 })
       expect(findings[3]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 13 })
       // verify 字段行、否定句、driver 归属句均不计;缺 opencode-auto 块给出提示
-      expect(notes).toEqual([`AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写`])
+      expect(notes).toEqual([`AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -84,7 +84,7 @@ describe("checkPrinciple", () => {
       expect(findings[1]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 9 })
       expect(findings[2]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 10 })
       // 编写(非执行动词)与 driver 归属句不计;AGENTS.md 缺失给出提示
-      expect(notes).toEqual([`AGENTS.md 不存在,可运行 opencode-auto init ${dir} 补写 opencode-auto 块`])
+      expect(notes).toEqual([`AGENTS.md does not exist, run opencode-auto init ${dir} to add the opencode-auto block`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -110,7 +110,7 @@ describe("checkPrinciple", () => {
       )
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
-      expect(notes).toEqual([`AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写`])
+      expect(notes).toEqual([`AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -124,7 +124,7 @@ describe("checkPrinciple", () => {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n完成后 git commit -m 完成。\n")
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings.length).toBe(1)
-      expect(notes[0]).toContain("项目配置(.opencode/auto/config.json)非法,验证/测试原则检查按未启用处理")
+      expect(notes[0]).toContain("project config (.opencode/auto/config.json) is invalid, verify/test principle checks treated as disabled")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -245,8 +245,8 @@ describe("checkPrinciple", () => {
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
       expect(notes.length).toBe(2)
-      expect(notes[0]).toContain("AGENTS.md 不存在")
-      expect(notes[1]).toContain("未找到 PLAN.md")
+      expect(notes[0]).toContain("AGENTS.md does not exist")
+      expect(notes[1]).toContain("PLAN.md not found")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -265,7 +265,7 @@ describe("checkPrinciple", () => {
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
       expect(notes).toEqual([
-        `AGENTS.md 当前 ${lines} 行,超过 150 行上限(维护规则块第 1 条),建议按规则精简并把细节路由到 docs/agents/`,
+        `AGENTS.md is ${lines} lines, over the 150-line limit (maintenance rule block item 1); consider trimming per the rules and routing details to docs/agents/`,
       ])
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -286,8 +286,8 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
         { file: "docs/T-001/report.md", line: 1, text: "引用 `src/gone.ts`。", path: "src/gone.ts", problem: "missing" },
       ])
       expect(notes).toEqual([
-        "AGENTS.md 不存在,可运行 opencode-auto init " + dir + " 补写 opencode-auto 块",
-        "非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验",
+        "AGENTS.md does not exist, run opencode-auto init " + dir + " to add the opencode-auto block",
+        "non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates",
       ])
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -303,12 +303,12 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
       const first = await checkPrinciple(dir, REFCHECK_ON)
       expect(first.refs).toEqual([{ file: "docs/live.md", line: 1, text: "见 `src/mod.ts:99`。", path: "src/mod.ts", problem: "beyond-eof" }])
       // docs 存在而非 git → 给 auto-correct 不可用 note
-      expect(first.notes).toContain("非 git 目标目录: 提交前引用 auto-correct(rename 改写)不可用,引用检查仅做校验")
+      expect(first.notes).toContain("non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates")
       // docs/ 移除后: 无 refs、无非 git note
       await rm(join(dir, "docs"), { recursive: true, force: true })
       const second = await checkPrinciple(dir, REFCHECK_ON)
       expect(second.refs).toEqual([])
-      expect(second.notes.every((note) => !note.includes("非 git"))).toBe(true)
+      expect(second.notes.every((note) => !note.includes("non-git"))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -326,7 +326,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
       await proc.exited
       const before = await checkPrinciple(dir, REFCHECK_ON)
       expect(before.refs).toEqual([])
-      expect(before.notes).toEqual(["AGENTS.md 缺少 opencode-auto 块,运行 opencode-auto init 可补写"])
+      expect(before.notes).toEqual(["AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it"])
       await ensurePointer(dir)
       const after = await checkPrinciple(dir, REFCHECK_ON)
       expect(after.refs).toEqual([])

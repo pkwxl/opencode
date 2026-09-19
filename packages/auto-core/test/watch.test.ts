@@ -37,7 +37,7 @@ describe("SSE 订阅生命周期(会话结束即断开)", () => {
     const { client, state } = sseClient("ses_sse_2", { prompt: () => ({ error: { name: "UnknownError" } }) })
     const result = await attempt(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("blocked")
-    expect((result as { question: string }).question).toContain("下发任务失败")
+    expect((result as { question: string }).question).toContain("task dispatch failed")
     expect(state.signal?.aborted).toBe(true)
     // 失联探针的 trip 竞速包装(S4,watch.ts)让事件流生成器的收尾晚几个微任务才
     // 落定(本路径 attempt 不等 watching 即返回)——让出一个宏任务再断言流已收尾。
@@ -79,7 +79,7 @@ describe("错误信号接线: watch 三触发面 → attempt 出口(P3 仅分类
     expect(blocked.failover).toBe(true)
     expect(blocked.errorClass).toBe("quota")
     expect(blocked.retryable).toBe(false)
-    expect(blocked.question).toContain("会话错误:")
+    expect(blocked.question).toContain("session error: ")
     // D.2 核心:提前结算前必须 abort(不留孤儿 server 回合与 fork 并发改文件)。
     expect(calls.aborts).toContain("ses_new_1")
     expect(calls.creates).toBe(1)
@@ -350,7 +350,7 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
   }
   // 取一次运行输出的 ◉ 两行(行 1 以 ◉ 开头,行 2 以 "tokens 入" 开头)。
   const endLines = (lines: string[]) => {
-    const i = lines.findIndex((l) => l.startsWith("◉ 会话结束"))
+    const i = lines.findIndex((l) => l.startsWith("◉ session ended"))
     return i >= 0 ? [lines[i]!, lines[i + 1]!] : []
   }
   const stepFinish = (
@@ -387,10 +387,10 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       const lines = await captureLogs(() => runSession(client, task, "提示词", { dir }, chain))
       const [line1, line2] = endLines(lines)
-      expect(line1).toMatch(/^◉ 会话结束: 上下文 100% \(0 tokens\),用时 \S+$/)
+      expect(line1).toMatch(/^◉ session ended: context 100% \(0 tokens\), elapsed \S+$/)
       expect(line1).not.toContain("(累计")
       // 命中率 28400/(28400+1200) = 95.9%;reasoning=0 无思考项(formatTokens ≥10000 才缩写,3100 原样)。
-      expect(line2).toBe("tokens 入 1200 / 出 340 / 缓存读 28.4k / 缓存写 3100,命中率 95.9%,费用 $0.041")
+      expect(line2).toBe("tokens in 1200 / out 340 / cache-read 28.4k / cache-write 3100, hit 95.9%, cost $0.041")
     } finally {
       await flushStats(dir)
       await rm(dir, { recursive: true, force: true })
@@ -410,7 +410,7 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       const lines = await captureLogs(() => runSession(client, task, "提示词", { dir }, chain))
       const [, line2] = endLines(lines)
-      expect(line2).toBe("tokens 入 100 / 出 20 / 思考 120 / 缓存读 0 / 缓存写 0,命中率 0.0%")
+      expect(line2).toBe("tokens in 100 / out 20 / reasoning 120 / cache-read 0 / cache-write 0, hit 0.0%")
       expect(line2).not.toContain("费用") // cost=0 省略费用
     } finally {
       await flushStats(dir)
@@ -440,8 +440,8 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
       })
       expect((outcome as { type: string }).type).toBe("blocked")
       const [line1, line2] = endLines(lines)
-      expect(line1).toMatch(/^◉ 会话结束: 上下文 /)
-      expect(line2).toBe("tokens 入 0 / 出 0 / 缓存读 0 / 缓存写 0,命中率 —")
+      expect(line1).toMatch(/^◉ session ended: context /)
+      expect(line2).toBe("tokens in 0 / out 0 / cache-read 0 / cache-write 0, hit —")
     } finally {
       await flushStats(dir)
       await rm(dir, { recursive: true, force: true })
@@ -466,7 +466,7 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
       // 第 1 轮(单轮): 两处累计均省略。
       const [first1, first2] = endLines(first)
       expect(first1).not.toContain("(累计")
-      expect(first2).toContain("费用 $0.01")
+      expect(first2).toContain("cost $0.01")
       expect(first2).not.toContain("(累计")
       // 造可复用链(pct<50、used<cap/2、刚结束)→ 第 2 轮复用同一 sessionID。
       chain.pct = 10
@@ -475,9 +475,9 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
       roundUsage = { input: 200, output: 20, cost: 0.02 }
       const second = await captureLogs(() => runSession(client, task, "提示词", { dir, contextLimit: 100_000 }, chain, undefined, undefined, REUSE_ON))
       const [line1, line2] = endLines(second)
-      expect(line1).toMatch(/,用时 \S+\(累计 \S+ \/ 2 轮\)$/)
-      expect(line2).toContain("tokens 入 200 / 出 20")
-      expect(line2).toContain("费用 $0.02(累计 $0.03)")
+      expect(line1).toMatch(/, elapsed \S+ \(cumulative \S+ \/ 2 rounds\)$/)
+      expect(line2).toContain("tokens in 200 / out 20")
+      expect(line2).toContain("cost $0.02 (cumulative $0.03)")
     } finally {
       await flushStats(dir)
       await rm(dir, { recursive: true, force: true })
@@ -551,10 +551,10 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
       session: "ses_new_1",
       question: Q1,
     })
-    expect(lines.some((l) => l.startsWith(`⚑ 自动代答(AUTO-RESOLVE)第 1 个: ${Q1}`))).toBe(true)
-    expect(lines.some((l) => l.includes("要求会话以 AUTO-RESOLVE 标注决策"))).toBe(true)
+    expect(lines.some((l) => l.startsWith(`⚑ auto-answer (AUTO-RESOLVE) #1: ${Q1}`))).toBe(true)
+    expect(lines.some((l) => l.includes("asking the session to label the decision with AUTO-RESOLVE"))).toBe(true)
     // 旧的 `→ 自动答复: <长文案>` 不再上终端(降为 vlog),但答复本身照发。
-    expect(lines.some((l) => l.startsWith("→ 自动答复"))).toBe(false)
+    expect(lines.some((l) => l.startsWith("→ auto answer"))).toBe(false)
     expect(calls.replies).toHaveLength(1)
     expect(calls.replies[0]).toContain("AUTO-RESOLVE")
   })
@@ -572,7 +572,7 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items.map((item) => item.question)).toEqual([Q1, Q2])
     expect(items.every((item) => item.phase === "" && item.round === 1)).toBe(true)
-    expect(lines.some((l) => l.startsWith("⚑ 自动代答(AUTO-RESOLVE)第 2 个"))).toBe(true)
+    expect(lines.some((l) => l.startsWith("⚑ auto-answer (AUTO-RESOLVE) #2"))).toBe(true)
   })
 
   test("重复提问阻塞(blocked 出口): 已代答的第 1 条不丢,第 2 次不重复落账", async () => {
@@ -611,8 +611,8 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
       ),
     )
     expect(await resolvesOf(dir, "task", "T-001")).toEqual([])
-    expect(lines.some((l) => l.startsWith("→ 人工答复: 按方案 A 做"))).toBe(true)
-    expect(lines.some((l) => l.startsWith("⚑ 自动代答"))).toBe(false)
+    expect(lines.some((l) => l.startsWith("→ human answer: 按方案 A 做"))).toBe(true)
+    expect(lines.some((l) => l.startsWith("⚑ auto-answer"))).toBe(false)
     expect(calls.replies[0]).toBe("按方案 A 做")
   })
 
@@ -626,7 +626,7 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
     })
     const lines = await captureLogs(() => runSession(client, task, "提示词", { dir, dryrun: true }, { pct: 100, used: 0, at: 0 }))
     expect(await resolvesOf(dir, "task", "T-001")).toEqual([])
-    expect(lines.some((l) => l.startsWith("→ 自动答复:"))).toBe(true)
+    expect(lines.some((l) => l.startsWith("→ auto answer:"))).toBe(true)
     expect(calls.replies).toHaveLength(1)
   })
 
@@ -754,7 +754,7 @@ describe("输出截断续跑(步骤结束 length 不作自然结束)", () => {
     // 直驱 attempt 取单次结果(runSession 会把故障带进重试环)。
     const result = await attempt(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("blocked")
-    expect((result as { question: string }).question).toContain("会话错误:")
+    expect((result as { question: string }).question).toContain("session error: ")
     expect(calls.steers).toEqual([])
   })
 })

@@ -62,7 +62,7 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
       console.log = orig
       resetServerModelCache()
     }
-    const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
+    const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
     // 两次复用同一会话只播报一次;复用关后新开会话再播报一次(同模型)。
     expect(shown.length).toBe(2)
   })
@@ -606,7 +606,7 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
-      expect((result as { question: string }).question).toContain("下发任务失败")
+      expect((result as { question: string }).question).toContain("task dispatch failed")
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -865,16 +865,16 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
     } finally {
       console.log = orig
     }
-    const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
+    const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
     // 首选 prov/a(路由)一次 + 降级 prov/b(降级候选)一次;第二次 runSession 模型
     // 未变(prov/b 粘滞)但复用关、新开会话——新会话恒播报,同模型也再来一行。
     expect(shown.length).toBe(3)
     expect(shown[0]).toContain("prov/a")
-    expect(shown[0]).toContain("路由")
+    expect(shown[0]).toContain("route")
     expect(shown[1]).toContain("prov/b")
-    expect(shown[1]).toContain("降级候选")
+    expect(shown[1]).toContain("fallback candidate")
     expect(shown[2]).toContain("prov/b")
-    expect(shown[2]).toContain("降级候选")
+    expect(shown[2]).toContain("fallback candidate")
   })
 
   test("未设路由: 回落播报服务端生效模型(config.model),prompt 仍不带 model 键,新会话再播报", async () => {
@@ -896,11 +896,11 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
       console.log = orig
       resetServerModelCache()
     }
-    const shown = lines.filter((line) => line.includes("◈") && line.includes("使用模型"))
+    const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
     // 两次 runSession 各开新会话(复用关),同模型也逐会话播报。
     expect(shown.length).toBe(2)
     expect(shown[0]).toContain("prov/default")
-    expect(shown[0]).toContain("服务端缺省")
+    expect(shown[0]).toContain("server default")
     expect(shown[1]).toContain("prov/default")
     // 不变量 F: 播报归播报,下发依旧不带 model 键。
     expect(calls!.prompts.every((p) => p.model === undefined)).toBe(true)
@@ -942,7 +942,7 @@ describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候�
     // 一次性降级 note 已随该提示词下发并清除,文案点名触发原因。
     const text = (calls.prompts[3]!.parts[0] as { text: string }).text
     expect(text).toContain("[driver]")
-    expect(text).toContain("重试阶梯耗尽")
+    expect(text).toContain("retry ladder exhausted")
     expect(text).toContain("已切换模型")
     expect(chain.note).toBeUndefined()
     // chain.model 停在生效候选上(作用域:chain 由 runTask 逐任务新建,下一个任务自动

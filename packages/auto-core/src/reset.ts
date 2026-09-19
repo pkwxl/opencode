@@ -66,26 +66,26 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
     entries.push(
       current === template
         ? { path: "opencode.json", action: "remove" }
-        : { path: "opencode.json", action: "keep", reason: "内容已被修改,非 init 模板原样,保留" },
+        : { path: "opencode.json", action: "keep", reason: "content modified, not the init template original, kept" },
     )
   }
 
   const agents = join(dir, "AGENTS.md")
   if (await fileExists(agents)) {
     const preview = await removePointer(dir, { dryRun: true })
-    if (preview.emptied) entries.push({ path: "AGENTS.md", action: "remove", reason: "摘除标记块后仅剩空壳标题" })
-    else if (preview.removed) entries.push({ path: "AGENTS.md", action: "strip", reason: "摘除 opencode-auto 标记块" })
+    if (preview.emptied) entries.push({ path: "AGENTS.md", action: "remove", reason: "only an empty shell title remains after stripping the marker block" })
+    else if (preview.removed) entries.push({ path: "AGENTS.md", action: "strip", reason: "strip the opencode-auto marker block" })
   }
 
   const gitignore = join(dir, ".gitignore")
   if (await fileExists(gitignore)) {
     const preview = await removeGitignoreEntries(dir, { dryRun: true })
-    if (preview.emptied) entries.push({ path: ".gitignore", action: "remove", reason: "移除条目后文件为空" })
-    else if (preview.removed) entries.push({ path: ".gitignore", action: "strip", reason: "移除 tmp/ 与 .auto/ 条目" })
+    if (preview.emptied) entries.push({ path: ".gitignore", action: "remove", reason: "file is empty after removing the entries" })
+    else if (preview.removed) entries.push({ path: ".gitignore", action: "strip", reason: "remove the tmp/ and .auto/ entries" })
   }
 
   for (const rel of PRUNE_DIRS) {
-    if (await dirExists(join(dir, rel))) entries.push({ path: `${rel}/`, action: "rmdir", reason: "仅在为空时回收" })
+    if (await dirExists(join(dir, rel))) entries.push({ path: `${rel}/`, action: "rmdir", reason: "reclaim only when empty" })
   }
 
   return entries
@@ -116,6 +116,6 @@ export async function applyReset(dir: string, entries: ResetEntry[]): Promise<vo
 
 // 清单的人读渲染(CLI 与测试共用,保证「打印什么」与「删什么」同源)。
 export function formatResetPlan(entries: ResetEntry[]): string {
-  const label: Record<ResetAction, string> = { remove: "删除", strip: "还原", rmdir: "回收空目录", keep: "保留" }
+  const label: Record<ResetAction, string> = { remove: "remove", strip: "strip", rmdir: "rmdir-if-empty", keep: "keep" }
   return entries.map((entry) => `  ${label[entry.action]}: ${entry.path}${entry.reason ? ` (${entry.reason})` : ""}`).join("\n")
 }

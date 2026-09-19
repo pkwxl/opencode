@@ -54,8 +54,8 @@ export function timeoutFetch(
     const controller = new AbortController()
     const seconds = Math.round(timeoutMs / 1000)
     const timer = setTimeout(() => {
-      log(`⏱ opencode 请求超时(${seconds} 秒无响应): ${request.method} ${url.pathname},已中止(疑似 server 无响应或连接积压)`)
-      controller.abort(new Error(`opencode 请求超时(${seconds} 秒无响应): ${request.method} ${url.pathname}`))
+      log(`⏱ opencode request timed out (no response for ${seconds}s): ${request.method} ${url.pathname}, aborted (suspected unresponsive server or connection backlog)`)
+      controller.abort(new Error(`opencode request timed out (no response for ${seconds}s): ${request.method} ${url.pathname}`))
     }, timeoutMs)
     timer.unref?.()
     // 组合信号: 请求自带信号(Request.signal / init.signal,如 SSE 订阅)在响应体
@@ -102,11 +102,11 @@ export async function manage(
       const current = await agentsFingerprint(directory)
       if (JSON.stringify(current) === JSON.stringify(agents)) return
       agents = current
-      await handle.restart("AGENTS.md 已更新,重启 opencode server 后再开新会话")
+      await handle.restart("AGENTS.md updated, restarting opencode server before creating a new session")
     },
     async restart(reason) {
       if (external) {
-        log(`⚠ ${reason};但当前复用外部 server(${external}),实例不由本工具管理,保持原实例继续`)
+        log(`⚠ ${reason}; but an external server (${external}) is being reused and is not managed by this tool, keeping the current instance`)
         return false
       }
       log(`↻ ${reason}`)
@@ -134,7 +134,7 @@ async function defaultConnect(url: string, directory: string): Promise<Server> {
     (res) => res.ok,
     () => false,
   )
-  if (!healthy) throw new Error(`opencode server 不可用: ${url}`)
+  if (!healthy) throw new Error(`opencode server unavailable: ${url}`)
   return { client: createOpencodeClient({ baseUrl: url, directory, fetch: timeoutFetch() }), url, close: () => {} }
 }
 

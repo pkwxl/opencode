@@ -80,7 +80,7 @@ describe("stepPause(硬暂停等待)", () => {
       close: () => {},
     } as unknown as Interactive
     await stepPause("subtask", "T-001 子任务 2", { interactive, step: "subtask" })
-    expect(questions).toEqual([`⏸ 步进暂停(step=subtask): T-001 子任务 2 已完成,回车继续: `])
+    expect(questions).toEqual([`⏸ step pause (step=subtask): T-001 子任务 2 done, press Enter to continue: `])
     // 档位未覆盖的边界(interactive 下同样零行为): task 不覆盖 subtask
     await stepPause("subtask", "T-001 子任务 3", { interactive, step: "task" })
     expect(questions).toHaveLength(1)

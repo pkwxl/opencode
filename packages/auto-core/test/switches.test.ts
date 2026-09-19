@@ -160,7 +160,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "off" }).strictResume).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "" }).strictResume).toBe(false)
     expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/OPENCODE_AUTO_STRICT_RESUME/)
-    expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/default off/)
   })
 
   test("handoverConcurrent 值域: on/off 两档,缺省 off = 先交接后运行(plans/0023-test-handover-early-design.md §H)", () => {
@@ -169,7 +169,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "off" }).handoverConcurrent).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "" }).handoverConcurrent).toBe(false)
     expect(() => parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "yes" })).toThrow(/OPENCODE_AUTO_HANDOVER_CONCURRENT/)
-    expect(() => parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "yes" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "yes" })).toThrow(/default off/)
   })
 
   test("hibernate 值域: HH:MM+H(UTC 每日窗口,H 允许小数),缺省未设 = 不休眠(plans/0027-hibernate-design.md)", () => {
@@ -185,7 +185,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:60+6" })).toThrow(/MM ∈ 00\.\.59/)
     expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:00+0" })).toThrow(/H ∈ \(0,24\)/)
     expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:00+24" })).toThrow(/H ∈ \(0,24\)/)
-    expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:00-6" })).toThrow(/取值非法/)
+    expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:00-6" })).toThrow(/invalid value/)
   })
 
   test("重试阶梯: 逗号分隔的分钟表,off = 空表(不自动重试)", () => {
@@ -207,27 +207,27 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "step" })).toThrow(/OPENCODE_AUTO_STEP/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "Step" })).toThrow(/off\|phase\|task\|subtask/)
     expect(() => parseSwitches({ [SWITCH_ENV.refCheck]: "1" })).toThrow(/OPENCODE_AUTO_REF_CHECK/)
-    expect(() => parseSwitches({ [SWITCH_ENV.refCheck]: "1" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.refCheck]: "1" })).toThrow(/default off/)
     expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/OPENCODE_AUTO_REUSE_SESSION/)
-    expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/default off/)
     expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/OPENCODE_AUTO_STUCK/)
-    expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/缺省 on/)
+    expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/default on/)
     expect(() => parseSwitches({ [SWITCH_ENV.taskContext]: "big" })).toThrow(/OPENCODE_AUTO_TASK_CONTEXT/)
     expect(() => parseSwitches({ [SWITCH_ENV.taskContext]: "big" })).toThrow(/off\|small\|medium\|large/)
     expect(() => parseSwitches({ [SWITCH_ENV.ask]: "ask" })).toThrow(/OPENCODE_AUTO_ASK/)
     expect(() => parseSwitches({ [SWITCH_ENV.ask]: "ask" })).toThrow(/on\|off/)
-    expect(() => parseSwitches({ [SWITCH_ENV.ask]: "ask" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.ask]: "ask" })).toThrow(/default off/)
     expect(() => parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "turn" })).toThrow(/OPENCODE_AUTO_MODEL_FAILBACK_SCOPE/)
     expect(() => parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "turn" })).toThrow(/phase\|task\|subtask\|session/)
-    expect(() => parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "turn" })).toThrow(/缺省 task/)
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "turn" })).toThrow(/default task/)
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "1,-2" })).toThrow(/OPENCODE_AUTO_RETRY_WAITS/)
-    expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "1,,2" })).toThrow(/非负分钟数/)
+    expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "1,,2" })).toThrow(/non-negative minutes/)
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "soon" })).toThrow(/0,1,2,4,8/)
     expect(() => parseSwitches({ [SWITCH_ENV.recoveryWait]: "-1" })).toThrow(/OPENCODE_AUTO_RECOVERY_WAIT/)
-    expect(() => parseSwitches({ [SWITCH_ENV.recoveryWait]: "soon" })).toThrow(/非负分钟数/)
+    expect(() => parseSwitches({ [SWITCH_ENV.recoveryWait]: "soon" })).toThrow(/non-negative minutes/)
     // 报文提示空串语义与缺省值
-    expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/空串视同未设/)
-    expect(() => parseSwitches({ [SWITCH_ENV.step]: "1" })).toThrow(/缺省 off/)
+    expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/empty string = unset/)
+    expect(() => parseSwitches({ [SWITCH_ENV.step]: "1" })).toThrow(/default off/)
   })
 
   test("model 用例(1) 空串 = 缺省空策略(未设)", () => {
@@ -258,15 +258,15 @@ describe("parseSwitches(实验开关环境变量层)", () => {
 
   test("model 用例(4) 越界键 ⇒ 中文报错含变量名与越界键", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/OPENCODE_AUTO_MODEL/)
-    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/键非法/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/invalid key/)
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/"x"/)
   })
 
   test("model 用例(5) 值缺 / ⇒ 中文报错", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=kimik2" })).toThrow(/OPENCODE_AUTO_MODEL/)
-    expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=kimik2" })).toThrow(/取值非法/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=kimik2" })).toThrow(/invalid value/)
     // 裸值形态同样要求含 /
-    expect(() => parseSwitches({ [SWITCH_ENV.model]: "kimik2" })).toThrow(/取值非法/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "kimik2" })).toThrow(/invalid value/)
   })
 
   test("modelFallback 有序候选表 ⇒ fallback 数组按序", () => {
@@ -280,7 +280,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
 
   test("modelFallback 坏值(缺 /)⇒ 中文报错", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,bad" })).toThrow(/OPENCODE_AUTO_MODEL_FALLBACK/)
-    expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,bad" })).toThrow(/取值非法/)
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,bad" })).toThrow(/invalid value/)
   })
 })
 

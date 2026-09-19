@@ -58,12 +58,12 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
       mode: opts.mode,
     })
     if (numbering.type === "dirty") {
-      log(`⏸ 编号记录恢复前工作区不净,请人工处置(提交/清理)后重新运行:`)
+      log(`⏸ worktree not clean before restoring the numbering record; handle it manually (commit/clean) and re-run:`)
       for (const file of numbering.files) log(`  ${file}`)
       return 2
     }
     if (numbering.type === "blocked") {
-      log(`⏸ 编号记录恢复会话受阻(隐性阻塞,请检查后重新运行):\n${numbering.question}`)
+      log(`⏸ numbering-record restore session blocked (implicit block, investigate and re-run):\n${numbering.question}`)
       return 2
     }
     numberStart = numbering.next
@@ -99,9 +99,9 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
   if (!ledger.done.length) {
     const parts = [await priorKnowledgeDigest(directory), await prevRoundDigest(directory)].filter((part): part is string => Boolean(part?.trim()))
     prevRound = parts.length ? parts.join("\n\n") : undefined
-    if (prevRound) log("ℹ 注入既有迁移结论(前置知识与上一轮归档摘录)")
+    if (prevRound) log("ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)")
   }
-  log("▶ 开阶段规划会话填充 PLAN.md")
+  log("▶ starting the phase planning session to fill PLAN.md")
   await allowWrite(path)
   try {
     const planned = await requireArtifact(
@@ -162,10 +162,10 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
     )
     if (typeof planned !== "number") {
       if (planned.type === "dirty") {
-        log(`⏸ 阶段规划会话启动前工作区不净,请人工处置(提交/清理)后重新运行:`)
+        log(`⏸ worktree not clean before starting the phase planning session; handle it manually (commit/clean) and re-run:`)
         for (const file of planned.files) log(`  ${file}`)
       } else {
-        log(`⏸ 阶段规划会话受阻(隐性阻塞,请检查后重新运行):\n${planned.question}`)
+        log(`⏸ phase planning session blocked (implicit block, investigate and re-run):\n${planned.question}`)
       }
       return 2
     }
@@ -173,9 +173,9 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
     // 后续阶段/轮次的规划会话自该记录续接,编号在目标目录永不重复。
     if (numberStart !== undefined) {
       const next = await advanceNextTask(directory, (await load(path)).tasks.map((task) => task.id))
-      log(`✓ 编号记录推进: 下一可用任务编号 T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
+      log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
     }
-    log(`✓ 阶段规划完成: PLAN.md 已填入 ${planned} 个任务`)
+    log(`✓ phase planning complete: PLAN.md filled with ${planned} task(s)`)
     // 收口: 删除本步骤的 driver 侧恢复点(产物已校验、提交与编号推进均完成)。
     // 在此之前被 kill → 记录仍 active,下次运行经 openStep 重入规划并复用会话。
     await closeStep(directory, "phase-plan", phase)
@@ -196,8 +196,8 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
   const letters = [...phases] as Phase[]
   const nextLetter = letters[letters.indexOf(phase) + 1]
   const next = nextLetter ? `${nextLetter} ${phaseText(nextLetter)}` : undefined
-  const target = next ?? "流程完成"
-  banner(`阶段交接: ${phase} ${phaseText(phase)} → ${target}`)
+  const target = next ?? "flow complete"
+  banner(`phase handover: ${phase} ${phaseText(phase)} → ${target}`)
   // driver 先建 handovers/ 目录再开会话;handoverDoc 不在 protect 名单,无需 allowWrite。
   const round = await currentRound(directory)
   const handover = await handoverDoc(directory, round, phase)
@@ -214,14 +214,14 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
     const pending = await commitPending(directory, opts, distillTask, distillCommit, [handover])
     if (pending !== "clean") {
       if (!pending.ok) {
-        log(`⏸ 交接文档补提交失败: ${pending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")},请人工处理后重新运行`)
+        log(`⏸ handover document make-up commit failed: ${pending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}, handle it manually and re-run`)
         return 2
       }
-      log(`✓ 交接文档已产出但尚未提交,已补提交: ${handover}`)
+      log(`✓ handover document produced but not yet committed; make-up commit done: ${handover}`)
     }
-    log(`↻ 交接文档 ${handover} 已齐备,跳过蒸馏会话直接进入归档`)
+    log(`↻ handover document ${handover} is complete; skipping the distillation session, going straight to archiving`)
   } else {
-    log(`▶ 开交接蒸馏会话产出 ${handover}`)
+    log(`▶ starting the handover distillation session to produce ${handover}`)
     const distilled = await requireArtifact(
       serverHandle.client,
       distillTask,
@@ -258,10 +258,10 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
     )
     if (distilled !== true) {
       if (distilled.type === "dirty") {
-        log(`⏸ 交接蒸馏会话启动前工作区不净,请人工处置(提交/清理)后重新运行:`)
+        log(`⏸ worktree not clean before starting the handover distillation session; handle it manually (commit/clean) and re-run:`)
         for (const file of distilled.files) log(`  ${file}`)
       } else {
-        log(`⏸ 交接蒸馏会话受阻(隐性阻塞,请检查后重新运行):\n${distilled.question}`)
+        log(`⏸ handover distillation session blocked (implicit block, investigate and re-run):\n${distilled.question}`)
       }
       return 2
     }
@@ -276,24 +276,24 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
   await allowWrite(path)
   await Bun.write(path, renderPlanScaffold(opts.verify === true))
   await reprotect(path)
-  log("  本阶段 PLAN.md 已归档,PLAN.md 重置为空模板")
+  log("  this phase's PLAN.md archived; PLAN.md reset to the empty template")
   await appendLedger(directory, phase)
   // AGENTS.md 只校验不改写(F.2): 超 150 行在交接提交信息与终端 note 提示人工精简。
   const agentsLines = (await Bun.file(join(directory, "AGENTS.md")).text().catch(() => "")).trimEnd().split("\n").length
-  const fat = agentsLines > 150 ? `AGENTS.md ${agentsLines} 行超过 150 行上限,请人工精简` : undefined
+  const fat = agentsLines > 150 ? `AGENTS.md is ${agentsLines} lines, over the 150-line limit; trim it manually` : undefined
   if (fat) log(`ℹ ${fat}`)
   if (opts.commit !== false) {
     // 交接提交是阶段单元的收口落账(归档/重置/台账),提交失败 → 阻塞退出 2
     // 交人工: 台账已追加,重跑会按台账路由到下一阶段,遗留未提交改动由人工
     // 处置后继续(plans/0021-commit-boundary-design.md P3)。
-    const settled = await commitTree(directory, { id: "PLAN", title: `阶段交接(${phase} ${phaseText(phase)})` }, {
+    const settled = await commitTree(directory, { id: "PLAN", title: `phase handover (${phase} ${phaseText(phase)})` }, {
       stage: "phase-transition",
       subject: `PLAN transition ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
     })
     if (!settled.ok) {
       log(
-        `⏸ 阶段交接提交失败: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}。` +
-          `归档/台账改动保留在工作区(台账已追加),请人工提交后重新运行`,
+        `⏸ phase handover commit failed: ${settled.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. ` +
+          `The archive/ledger changes are kept in the worktree (ledger already appended); commit manually and re-run`,
       )
       return 2
     }
@@ -317,11 +317,13 @@ export async function handoverWithStep(ctx: LoopCtx, phase: Phase): Promise<numb
   const { directory, repl } = ctx
   const code = await handoverPhase(ctx, phase)
   if (code !== 0) return code
-  await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl, dir: directory })
-  maybeExit("phase", `阶段 ${phase} ${phaseText(phase)} 交接`)
-  // 休眠窗口(phase 边界,OPENCODE_AUTO_HIBERNATE): 交接(归档+台账+提交)完成后的
-  // 安全落点检查,在窗口内睡到唤醒再进入下一阶段(plans/0027-hibernate-design.md)。
-  await hibernatePause(`阶段 ${phase} ${phaseText(phase)} 交接边界`, { dir: directory })
+  await stepPause("phase", `phase ${phase} ${phaseText(phase)} handover`, { interactive: repl, dir: directory })
+  maybeExit("phase", `phase ${phase} ${phaseText(phase)} handover`)
+  // Hibernate window (phase boundary, OPENCODE_AUTO_HIBERNATE): a safe spot to
+  // check after the handover (archive+ledger+commit) completes; sleep until
+  // wake inside the window before entering the next phase
+  // (plans/0027-hibernate-design.md).
+  await hibernatePause(`phase ${phase} ${phaseText(phase)} handover boundary`, { dir: directory })
   // failback 回试(phase 边界): 所有粒度都在阶段边界重置——phase 粒度的跨任务
   // sticky holder 在此清零;/failback 请求同点消费。
   clearSticky()
@@ -332,16 +334,16 @@ export async function handoverWithStep(ctx: LoopCtx, phase: Phase): Promise<numb
 export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
   const { directory, path, opts, server: serverHandle, agentName, phases, repl } = ctx
   if ((opts.finalReview ?? 0) > 0) {
-    log("ℹ 终审闭环(--final-review)仅作用于 m(迁移实现)阶段,其余阶段完成时不进入")
+    log("ℹ the final-review loop (--final-review) applies only to the m (migration implementation) phase; other phases do not enter it on completion")
   }
   for (;;) {
     const route = await routePhase(directory, await load(path), phases)
     if (route.type === "blocked") {
-      log(`⏸ 阶段流程受阻: ${route.reason}`)
+      log(`⏸ phase flow blocked: ${route.reason}`)
       return 1
     }
     if (route.type === "complete") {
-      log("✓ 全部阶段已完成")
+      log("✓ all phases complete")
       for (const line of await roundResolveLines(directory)) log(line)
       // 轮次完成行(STATS_PLAN §4.4,T-006): 阶段数取台账 done 计数(本轮已
       // 交接阶段);历轮累计段在 history.rounds > 0 时由构造函数自行追加。
@@ -366,11 +368,11 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
         await closeStep(directory, open.step, open.letter)
       } else if (open.letter === route.phase) {
         log(
-          `↻ 会话恢复点优先: ${open.step === "phase-plan" ? "阶段规划" : "阶段交接"}会话` +
-            `(${open.letter} ${phaseText(open.letter)})未收口,重入该步骤续跑`,
+          `↻ session resume point takes precedence: the ${open.step === "phase-plan" ? "phase planning" : "phase handover"} session` +
+            `(${open.letter} ${phaseText(open.letter)}) was not closed out; re-entering that step to continue`,
         )
         if (open.step === "phase-plan") {
-          banner(`${open.letter} ${phaseText(open.letter)} 阶段规划`)
+          banner(`${open.letter} ${phaseText(open.letter)} phase planning`)
           const code = await planPhase(ctx, open.letter)
           if (code !== 0) return code
           continue
@@ -383,13 +385,13 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
           continue
         }
         log(
-          `⚠ 未收口的交接恢复点(${open.letter})与当前路由(${route.type})不一致` +
-            `(尚有未完成任务?),按文件推导路由继续,不重入交接以免丢失未完成任务`,
+          `⚠ unclosed handover resume point (${open.letter}) is inconsistent with the current route (${route.type})` +
+            `(unfinished tasks remain?); continuing with the file-derived route, not re-entering the handover to avoid losing unfinished tasks`,
         )
       } else {
         log(
-          `⚠ 未收口的阶段步骤恢复点(${open.step} ${open.letter})与当前路由阶段(${route.phase})不一致,` +
-            `按文件推导路由继续(如为人工回退请忽略;否则检查 .auto/progress.json)`,
+          `⚠ unclosed phase-step resume point (${open.step} ${open.letter}) is inconsistent with the current route phase (${route.phase}); ` +
+            `continuing with the file-derived route (ignore if this was a manual rollback; otherwise check .auto/progress.json)`,
         )
       }
     }
@@ -401,12 +403,12 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
         (await stat(join(directory, await phaseArchive(directory, await currentRound(directory), route.phase), "PLAN.md")).then(() => true, () => false)) &&
         !(await readLedger(directory)).done.includes(route.phase)
       if (interrupted) {
-        log(`↻ 恢复中断: ${route.phase} ${phaseText(route.phase)} 阶段交接已归档与重置,补写台账后进入下一阶段`)
+        log(`↻ resume after interruption: ${route.phase} ${phaseText(route.phase)} phase handover already archived and reset; appending the ledger entry, then moving to the next phase`)
         await appendLedger(directory, route.phase)
         if (opts.commit !== false) {
-          await commitTree(directory, { id: "PLAN", title: `阶段交接(${route.phase} ${phaseText(route.phase)})` }, {
+          await commitTree(directory, { id: "PLAN", title: `phase handover (${route.phase} ${phaseText(route.phase)})` }, {
             stage: "phase-transition",
-            subject: `PLAN transition ${route.phase} ${phaseText(route.phase)}(中断恢复补账)`,
+            subject: `PLAN transition ${route.phase} ${phaseText(route.phase)}(interruption recovery make-up)`,
           })
         }
         continue
@@ -418,7 +420,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       // 退出码(迁移成功不被文档生成失败反向污染);人工在 k 阶段自行向 PLAN.md
       // 填任务时走通用 execute/handover 路由,提取挂点不触发。
       if (route.phase === "k") {
-        banner("k 知识提炼: 迁移知识沉淀")
+        banner("k knowledge distillation: migration knowledge capture")
         const extracted = await extractKnowledge(serverHandle.client, directory, {
           agent: agentName,
           dir: directory,
@@ -431,26 +433,28 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
           server: serverHandle,
           mode: opts.mode,
         })
-        if (extracted.type === "ok") log(`✓ 迁移知识文档已产出: ${extracted.file}`)
-        else if (extracted.type === "skipped") log(`↻ 迁移知识文档已产出(${extracted.file}),跳过提取,直接进入交接`)
+        if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)
+        else if (extracted.type === "skipped") log(`↻ migration knowledge document already produced (${extracted.file}); skipping extraction, going straight to handover`)
         else if (extracted.type === "dirty") {
-          // dirty(plans/0021-commit-boundary-design.md ④ 推广): 工作区不净(上次提取半途而废
-          // 的现场、补提交失败或统一提交失败)必须停机交人工——照常交接会让下一个
-          // 单元在不干净的基线上启动,破坏提交边界。
-          log(`⏸ 迁移知识提取无法在干净基线上完成或收账,请人工处置(提交/清理)后重新运行:`)
+          // dirty (plans/0021-commit-boundary-design.md ④ generalization): an
+          // unclean worktree (leftover from an abandoned extraction, make-up
+          // commit failure or unified commit failure) must stop for the
+          // human — handing over anyway would start the next unit on an
+          // unclean baseline, breaking the commit boundary.
+          log(`⏸ migration knowledge extraction could not complete or post on a clean baseline; handle it manually (commit/clean) and re-run:`)
           for (const file of extracted.files) log(`  ${file}`)
           return 2
         } else {
           log(
-            `⚠ 迁移知识沉淀未完成(knowledge_extraction_error),退出码不受影响,k 阶段照常交接;` +
-              `可修复问题后按人工回退规程(删本轮台账 k 行与本轮迁移知识文档)重跑单独重试。受阻详情:\n${extracted.question}`,
+            `⚠ migration knowledge capture incomplete (knowledge_extraction_error); exit code unaffected, the k phase hands over as usual; ` +
+              `fix the issue, then retry separately per the manual rollback procedure (delete this round's k ledger line and this round's migration knowledge document). Block details:\n${extracted.question}`,
           )
         }
         const code = await handoverWithStep(ctx, "k")
         if (code !== 0) return code
         continue
       }
-      banner(`${route.phase} ${phaseText(route.phase)} 阶段规划`)
+      banner(`${route.phase} ${phaseText(route.phase)} phase planning`)
       const code = await planPhase(ctx, route.phase)
       if (code !== 0) return code
       continue

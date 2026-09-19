@@ -56,8 +56,8 @@ export async function hibernatePause(
   if (sleepMs <= 0) return
   const wakeAt = new Date(now + sleepMs)
   log(
-    `⏸ 休眠: ${label} 处于休眠窗口(UTC ${formatHibernate(window)}),` +
-      `预计 ${wakeAt.toISOString()}(本地 ${wakeAt.toLocaleString()})恢复(含随机延迟);连续两次 Ctrl+C 强制终止`,
+    `⏸ hibernating: ${label} is inside the hibernate window (UTC ${formatHibernate(window)}),` +
+      ` resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
   )
   // 人工/计划等待扣除(STATS_PLAN §3 同口径): 关段后 aiMs/wallMs 均不增长,waitMs
   // 单记;异常路径经 finally 配对 waitEnd,不留悬挂关段。
@@ -67,5 +67,5 @@ export async function hibernatePause(
   } finally {
     await statsWaitEnd(opts.dir)
   }
-  log(`→ 休眠结束: ${label} 之后继续`)
+  log(`→ hibernate over: continuing after ${label}`)
 }
