@@ -1,5 +1,5 @@
 // src/prompt.ts 与模板机制的单测: question-rule 片段、digest-rule 片段、模式注入、init 产物模板、agent 契约模板、渲染完整性。
-// 拆分自 test/prompt.test.ts(docs/module-split-plan.md S19,纯搬运)。
+// 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -34,7 +34,7 @@ import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "f
 import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import { listPlan, listTask, migrate, plan, resolveItem, task } from "./fixtures/prompt"
 
-describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,docs/auto-resolve-design.md §E)", () => {
+describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020-auto-resolve-design.md §E)", () => {
   const prompts = join(import.meta.dir, "..", "templates", "prompts")
   const consumers = readdirSync(prompts)
     .filter((name) => name.endsWith(".md") && name !== "_partials.md")
@@ -136,7 +136,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,docs/auto-
   })
 })
 
-describe("digest-rule 片段与跨任务引用纪律(L2,docs/session-boundary-hardening-design.md §4.2)", () => {
+describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-boundary-hardening-design.md §4.2)", () => {
   const prompts = join(import.meta.dir, "..", "templates", "prompts")
   const consumers = readdirSync(prompts)
     .filter((name) => name.endsWith(".md") && name !== "_partials.md")
@@ -181,7 +181,7 @@ describe("digest-rule 片段与跨任务引用纪律(L2,docs/session-boundary-ha
   })
 })
 
-describe("eof-rule 片段与文档终止符纪律(D4/D5,docs/session-boundary-hardening-design.md §4.3/§4.5)", () => {
+describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-boundary-hardening-design.md §4.3/§4.5)", () => {
   const prompts = join(import.meta.dir, "..", "templates", "prompts")
   const consumers = readdirSync(prompts)
     .filter((name) => name.endsWith(".md") && name !== "_partials.md")

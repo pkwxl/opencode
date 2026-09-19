@@ -2,7 +2,7 @@
 
 > 状态: 2026-09-14 立项,设计定稿;**2026-09-15 实施完成(S1/S2/S3 全部落地,
 > 开关 OPENCODE_AUTO_STRICT_RESUME 缺省 off 灰度中,见 §4 勾选表)**
-> (commit-boundary-design.md 决策 D6)。
+> (plans/0021-commit-boundary-design.md 决策 D6)。
 > 2026-09-15 依据双目标目录现场日志审计(kernel-spi-nor / kernel-dm,
 > 2026-09-10..15 约 23MB run 日志)实证修订:复用判据补 model 一致性(3.1 ④)、
 > R3 交接边界写核(3.3 新触发)、fork 基点独立性显性化(3.4)、相邻机制修正建议
@@ -12,7 +12,7 @@
 > 且**最多附加一句 `continue` prompt**,避免过多 prompt 干扰;记录可恢复 session id
 > 的标准极高——恢复后的工作须与未中断状态高度一致(含 AI 经 tool 完成的本地修改);
 > 若无法保证,应经 `git stash` 将状态恢复至过程启动时的初始状态,开新会话继续。
-> 回滚锚点 = commit-boundary-design.md 落地的单元 clean 基线(单元启动时工作区
+> 回滚锚点 = plans/0021-commit-boundary-design.md 落地的单元 clean 基线(单元启动时工作区
 > 恒干净、HEAD 即基线)。
 
 ## 1. 目标
@@ -143,7 +143,7 @@ Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 
 以下两条由现场审计得出(出处见根 docs/session-interruption-field-audit-20260915.md),
 登记给属主设计,避免散失:
 
-1. **交接触发解耦**(**已实施 2026-09-15**,见 docs/test-handover-early-design.md):现状
+1. **交接触发解耦**(**已实施 2026-09-15**,见 plans/0023-test-handover-early-design.md):现状
    交接仅在"测试失败 × 上下文达上限"双条件触发,现场会话普遍冲到上限 2–4 倍
    (64k/80k 上限 vs 实测 72.7k–264.3k)——测试连绿时会话无限增长,会话死亡时损失面
    随之放大,与恢复保真直接耦合。建议:上下文达上限单条件(在子任务安全边界)即交接。
@@ -154,8 +154,8 @@ Progress 结构加可选 `baseline` 与 `model` 字段(旧记录无此二字段 
    同时消解 §6 登记的"交接续跑脏区豁免"在这条路径上的局限。
 2. **配额类错误免烧新会话重试**:配额是账户级限制,换新会话重试结构性无效(现场 2 次
    重试 1 秒内同错返回)。classifySessionError 已归 quota 类,重试环应跳过新会话重试,
-   直接进降级环(未配置候选则阻塞)。属主: session-error-retry-plan.md /
-   model-routing-design.md。
+   直接进降级环(未配置候选则阻塞)。属主: plans/0015-session-error-retry-plan.md /
+   plans/0017-model-routing-design.md。
 
 ## 4. 分期实施(2026-09-15 全部完成)
 
@@ -253,7 +253,7 @@ e2e 52 通过(新增 --commit false 退役一例)。
    `strictResumeActive(opts, switches)`,不是裸开关——门禁不在位时没有单元基线也没有
    回滚兜底,"一句 continue"赖以成立的前提(不可保真即回滚重跑)不存在,故维持既有
    多行阶段指引。与 §4.1 ① 同一法理。
-7. **`--commit false` 退役**(2026-09-15 用户决策,commit-boundary-design.md D7):
+7. **`--commit false` 退役**(2026-09-15 用户决策,plans/0021-commit-boundary-design.md D7):
    提交关闭档与本设计(及提交边界)冲突——门禁关闭时严格恢复整体空转,却要求每个
    新机制都挂一条空转分支。已做入口层软退役: CLI `--commit false`/`none` 与配置
    `commit: false` 出现即用法错误/严格失败;`strictResumeActive` 的 `opts.commit !== false`

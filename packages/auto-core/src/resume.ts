@@ -18,7 +18,7 @@ import type { UnitBaseline } from "./git"
 //   已过执行阶段不再重跑整任务会话等)。
 // 记录在提示词下发成功时即写(认领在跑的会话——回合进行中被 kill 也不丢),回合
 // 结束后按结果刷新;可重试的会话错误把记录还原为下发前快照(被弃副本不顶替真实
-// 恢复点,见 session-error-retry-plan.md 第 4 点与 session-resume-precedence-design.md)。
+// 恢复点,见 plans/0015-session-error-retry-plan.md 第 4 点与 plans/0018-session-resume-precedence-design.md)。
 // 任务完成即删除记录。除执行链会话外,阶段级旁路步骤(phase-plan/phase-handover,
 // phase.kind = "step")也写记录: driver 收口(产物校验+提交+后处理)前保持 active,
 // 使中断后会话恢复优先于"凭 AI 写的文件推导路由"(后者会把未收口的规划/交接会话
@@ -46,7 +46,7 @@ export type PhaseLetter = "a" | "d" | "m" | "t" | "v" | "k"
 // 阶段级旁路步骤(driver 侧收口的流程步骤,非任务流水线阶段): phase-plan = 阶段
 // 规划会话(填充 PLAN.md),phase-handover = 阶段交接蒸馏会话(产出交接文档)。
 // 这两类会话此前不写恢复点,中断后流程仅凭 AI 写的文件(PLAN.md/交接文档)推导
-// 路由,把未收口的会话静默跳过——见 docs/session-resume-precedence-design.md。
+// 路由,把未收口的会话静默跳过——见 plans/0018-session-resume-precedence-design.md。
 export type StepKind = "phase-plan" | "phase-handover"
 
 // 任务流水线的阶段标记:
@@ -104,7 +104,7 @@ export type Progress = {
   // true = 会话半途未总结(kill/崩溃/网络故障),恢复时会话存活即复用。
   active: boolean
   phase?: Phase
-  // 单元基线(逐仓库 HEAD 短 SHA,session-recovery-fidelity-design.md 3.1 ③):
+  // 单元基线(逐仓库 HEAD 短 SHA,plans/0022-session-recovery-fidelity-design.md 3.1 ③):
   // 严格恢复(OPENCODE_AUTO_STRICT_RESUME)on 时由 attempt 随 active 记录写入,
   // 恢复时核对 各仓库 HEAD == 基线 或 基线..HEAD 全部带 Auto-Stage trailer;
   // 旧记录/开关关闭时缺失 → 严格恢复下视为不可复用(走回滚或新会话)。
@@ -146,7 +146,7 @@ export async function peekProgress(dir: string): Promise<Progress | undefined> {
 }
 
 // 当前未收口的阶段步骤恢复点: 记录为 active 的 step 变体时返回其步骤身份与会话
-// (供 loop 让会话恢复优先于文件推导路由,见 docs/session-resume-precedence-design.md);
+// (供 loop 让会话恢复优先于文件推导路由,见 plans/0018-session-resume-precedence-design.md);
 // 非 step 记录、已收口(active=false)或无记录返回 undefined。
 export async function openStep(dir: string): Promise<{ step: StepKind; letter: PhaseLetter; session?: string } | undefined> {
   const record = await peekProgress(dir)

@@ -358,7 +358,7 @@ describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交�
   })
 })
 
-describe("extractKnowledge 完成判定(③补提交/④dirty 推广,commit-boundary-design.md)", () => {
+describe("extractKnowledge 完成判定(③补提交/④dirty 推广,plans/0021-commit-boundary-design.md)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }

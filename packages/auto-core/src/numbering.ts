@@ -119,7 +119,7 @@ export async function ensureNumbering(
     {
       kind: "编号恢复",
       role: "number-recovery",
-      // 独立隐藏任务单元(commit-boundary-design.md)。产物 .auto/next-task 被
+      // 独立隐藏任务单元(plans/0021-commit-boundary-design.md)。产物 .auto/next-task 被
       // gitignore,不涉纳管文件修改,门禁主要覆盖收口校验与会话可能触碰的其他文件。
       unitStart: true,
       artifact: `有效编号记录 ${NEXT_TASK_FILE}(不小于 ${floor} 的正整数)`,

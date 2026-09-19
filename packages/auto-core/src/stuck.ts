@@ -2,7 +2,7 @@
 // ——同样的工具、同样的参数、同样的失败,或参数微调但报错一字不差——自己走不
 // 出来。driver 观察每个工具调用的终态,识别到这类重复即经 steer 主动向会话注入
 // 提示(src/runner.ts 的 watch 挂点,文案在 templates/prompts/stuck-hint.md),
-// 让模型换一种思路而不是继续空转。设计见 docs/stuck-loop-design.md。
+// 让模型换一种思路而不是继续空转。设计见 plans/0016-stuck-loop-design.md。
 //
 // 判据(两条,均以本会话为范围,不要求"连续"——A,B,A,B,A 这类交替重试同样是
 // 死循环,按签名累计即可识别):

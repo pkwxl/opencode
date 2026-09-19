@@ -1,4 +1,4 @@
-// 休眠时段(OPENCODE_AUTO_HIBERNATE,设计文档 docs/hibernate-design.md): 避开 LLM
+// 休眠时段(OPENCODE_AUTO_HIBERNATE,设计文档 plans/0027-hibernate-design.md): 避开 LLM
 // 高收费时段的每日 UTC 休眠窗口("HH:MM+H",如 04:00+6 = UTC 04:00 起休眠 6 小时)。
 // 触发语义: 只在三处既有安全边界(phase/task/subtask,挂点同 step.ts)与 run 启动时
 // 检查「现在是否在窗口内」——在窗口内睡到窗口结束、再固定随机延迟 0~600 秒后继续;

@@ -50,7 +50,7 @@ export async function implementPlan(
         {
           kind: "计划生成",
           role: "implement-scan",
-          // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(commit-boundary-design.md)。
+          // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(plans/0021-commit-boundary-design.md)。
           unitStart: true,
           artifact: "已填充的 PLAN.md(至少一个任务)",
           detail: "缺失、无任务或任务格式无法解析",

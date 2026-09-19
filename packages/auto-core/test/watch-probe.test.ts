@@ -1,4 +1,4 @@
-// 在途失联探针(session-boundary-hardening-design.md D3/§4.4,S4): watching 期间
+// 在途失联探针(plans/0026-session-boundary-hardening-design.md D3/§4.4,S4): watching 期间
 // 每 idleTime 经独立短超时连接探测会话活性——两连败判半开 → abort + 可重试会话
 // 错误(transient,走既有重试阶梯与降级环);探针恢复即重置计数、继续 watching;
 // 定时器随全部出口清理。半开形态用「永不产事件的事件流」复现(无 FIN/RST,客户端

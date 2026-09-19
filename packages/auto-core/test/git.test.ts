@@ -97,7 +97,7 @@ describe("commitTree", () => {
   })
 })
 
-// ---- 单元提交边界(commit-boundary-design.md)----
+// ---- 单元提交边界(plans/0021-commit-boundary-design.md)----
 
 // pre-commit hook 恒失败: 构造确定性的提交失败环境。
 async function failHooks(dir: string) {
@@ -285,7 +285,7 @@ describe("commitPending(隐藏任务 ③ 补提交)", () => {
   })
 })
 
-// ---- 恢复保真(session-recovery-fidelity-design.md 3.1 ③ / 3.3)----
+// ---- 恢复保真(plans/0022-session-recovery-fidelity-design.md 3.1 ③ / 3.3)----
 
 describe("baselineIntact(恢复时的基线核对)", () => {
   test("HEAD == 基线 / 区间全 driver 提交 → 通过;外部提交检出;**未提交脏区不报**", async () => {

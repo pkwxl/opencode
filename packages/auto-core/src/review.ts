@@ -2,7 +2,7 @@
 // 独立判定会话写结论,差距回灌执行链修复轮)+ reviewTask 质量审核会话 +
 // planReviewFix 审核差距转修复检查项。位于 exec-session/artifact/session 之上、
 // runner 之下;**不得反向 import runner**(§D.2)。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S11,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S11,纯搬运)。
 
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"

@@ -1,5 +1,5 @@
 // prompt 系单测的共享夹具: 示例计划 plan/task、带检查项的 listPlan/listTask、台账条目工厂 resolveItem、
-// migrate 模式。拆分自 test/prompt.test.ts(docs/module-split-plan.md S19,纯搬运);
+// migrate 模式。拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运);
 // 放 fixtures/ 子目录——bun test 只收 *.test.ts,本文件不会被当测试跑。
 
 import { loadModes } from "../../src/mode"

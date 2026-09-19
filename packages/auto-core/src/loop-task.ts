@@ -1,7 +1,7 @@
 // 终审闭环推进(advanceFinal)与主任务循环(runTaskLoop): runAll 原闭包转顶层函数,
 // 捕获量显式化为 LoopCtx;ran 跨 runTaskLoop 调用累积(决定 --wait-between 是否在后续
 // 阶段首个任务前暂停),故作可变字段进 ctx 而非降为局部。
-// 拆分自 src/loop.ts(docs/module-split-plan.md S15,纯搬运;§I D14)。不依赖 loop.ts。
+// 拆分自 src/loop.ts(plans/0024-module-split-plan.md S15,纯搬运;§I D14)。不依赖 loop.ts。
 import { appendFinalTask, finalIndex, finalProposalFile, generateFinalTask, routeFinal, type FinalProposal } from "./final"
 import { maybeExit } from "./exit"
 import { consumeFailback } from "./failback"
@@ -55,7 +55,7 @@ async function advanceFinal(ctx: LoopCtx, plan: Plan, announce = false): Promise
     const id = await appendFinalTask(path, plan, route.stage, route.round, proposal)
     // 追加是 driver 状态写入(PLAN.md),立即统一提交——下一个执行单元(终审
     // 任务)的启动 clean 门禁据此成立;提交同时清扫"追加前中断"遗留的未提交
-    // 提案文件(③ 补账语义,commit-boundary-design.md P3)。失败 → stopped 交人工。
+    // 提案文件(③ 补账语义,plans/0021-commit-boundary-design.md P3)。失败 → stopped 交人工。
     if (opts.commit !== false && !opts.dryrun) {
       const settled = await commitTree(directory, { id: "PLAN", title: `终审任务追加(${stageText(route.stage)} 第 ${route.round} 轮)` }, {
         stage: "final-plan",
@@ -101,7 +101,7 @@ async function advanceFinal(ctx: LoopCtx, plan: Plan, announce = false): Promise
 // 进度恢复零改动)。phase 为当前阶段字母(缺省单次运行取 "m"): ① finalGate
 // —— --final-review 终审闭环的挂接门控,阶段化流程下仅 m(迁移实现)阶段挂接
 // (G 节);② 透传 runTask,v(验收)阶段任务据此豁免任务级验收与 --review
-// (phases-design.md D.3)。返回 0 = 全部完成,2 = 阻塞/未完成(问题已写入
+// (plans/0006-phases-design.md D.3)。返回 0 = 全部完成,2 = 阻塞/未完成(问题已写入
 // PLAN.md)。
 export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
   const { directory, path, opts, server: serverHandle, agentName, phases, repl } = ctx
@@ -122,7 +122,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       // 阶段,省略阶段段。分阶段路径由 runPhaseLoop 的 complete 路由统一打印,
       // 此处(phases !== "m" 时 runTaskLoop 只是单阶段执行)不重复。
       if (phases === "m") {
-        // 轮次代答汇总(auto-resolve-design.md §H-③,H6): 置顶于 ■ 轮次行之前。
+        // 轮次代答汇总(plans/0020-auto-resolve-design.md §H-③,H6): 置顶于 ■ 轮次行之前。
         for (const line of await roundResolveLines(directory)) log(line)
         const lines = await roundCompleteLines(directory)
         if (lines) for (const line of lines) log(line)
@@ -134,7 +134,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     if (task.status === "blocked") {
       log(`↻ ${task.id} 此前被阻塞,直接续跑(阻塞原因见上次运行日志)`)
     }
-    // 任务单元提交边界(commit-boundary-design.md P3): 启动 clean 门禁 + SHA
+    // 任务单元提交边界(plans/0021-commit-boundary-design.md P3): 启动 clean 门禁 + SHA
     // 基线。active 进度记录 = 恢复续跑(工作区承载本单元自身进度,含交接文档)
     // 豁免 clean、仍记基线;done 终态提交后凭基线做收口校验(提交区间须全为
     // driver 提交)。driver 独占状态文件遗留由 beginUnit 以 carryover 自愈。
@@ -184,7 +184,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     })
     if (outcome.type === "dirty") {
       // 单元启动 clean 门禁失败(runTask 内层): 不写 PLAN.md、不做清扫提交——
-      // git 状态的决定权在人工(commit-boundary-design.md)。
+      // git 状态的决定权在人工(plans/0021-commit-boundary-design.md)。
       log(`⏸ ${task.id} 执行单元启动前工作区不净(疑似上次半途而废的现场或人工改动),请人工处置(提交/清理)后重新运行:`)
       for (const file of outcome.files) log(`  ${file}`)
       return 2
@@ -192,7 +192,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     if (outcome.type === "blocked") {
       await block(path, task.id)
       log(`⏸ ${task.id} 已阻塞(原因见本条,不再写入 PLAN.md):\n${outcome.question}`)
-      // 代答高亮块(auto-resolve-design.md §H-②,H5): 置顶于结论行之前。三态
+      // 代答高亮块(plans/0020-auto-resolve-design.md §H-②,H5): 置顶于结论行之前。三态
       // 一律打印,且不受统计守卫影响(阻塞任务同样可能已被代答了若干问题)。
       for (const line of await taskResolveLines(directory, task.id)) log(line)
       // 任务三态行(STATS_PLAN §4.2,T-006): blocked 同样输出累计统计段 +
@@ -240,7 +240,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     // 任务完成的终态提交: PLAN.md 的 [done]/verified 与 CURRENT.md 的删除在此
     // 一并落账(各会话产出已随会话提交,这里是收口);终审路由追加的下一任务
     // 改动归入其生成/执行会话的提交。
-    // 完成条件门禁(commit-boundary-design.md): 终态提交失败 → 退出 2 交人工
+    // 完成条件门禁(plans/0021-commit-boundary-design.md): 终态提交失败 → 退出 2 交人工
     // (任务标记已在工作区,人工提交后重跑,下一任务以干净基线启动);提交成功
     // 后凭任务基线做收口校验(提交区间须全为 driver 提交,外部提交即隔离破坏)。
     if (opts.commit !== false) {
@@ -266,7 +266,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
     await stepPause("task", `任务 ${task.id} ${task.title}`, { interactive: repl, dir: directory })
     maybeExit("task", `任务 ${task.id} ${task.title}`)
     // 休眠窗口(task 边界,OPENCODE_AUTO_HIBERNATE): 终态提交完成后的安全落点检查
-    // 「现在是否在窗口内」,在内则睡到窗口结束 + 随机延迟再继续(docs/hibernate-design.md)。
+    // 「现在是否在窗口内」,在内则睡到窗口结束 + 随机延迟再继续(plans/0027-hibernate-design.md)。
     await hibernatePause(`任务 ${task.id} ${task.title} 边界`, { dir: directory })
     // /failback 消费点(task 边界): 链已随 runTask 销毁、无需清 chain.model;
     // 重置 phase 粒度 sticky holder 并应用模型序覆写(若有)。

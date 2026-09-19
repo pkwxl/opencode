@@ -1,5 +1,5 @@
 // runner 系单测的共享夹具: 示例任务 task、fake client 族(fakeClient/sseClient/retryClient/idleStream)、
-// git 临时仓库助手(git/freshRepo)。拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运);
+// git 临时仓库助手(git/freshRepo)。拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运);
 // 放 fixtures/ 子目录——bun test 只收 *.test.ts,本文件不会被当测试跑。
 
 import { mkdtemp } from "node:fs/promises"

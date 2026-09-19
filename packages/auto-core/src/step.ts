@@ -1,4 +1,4 @@
-// 步进模式(OPENCODE_AUTO_STEP,设计文档 docs/step-mode-design.md): phase/task/
+// 步进模式(OPENCODE_AUTO_STEP,设计文档 plans/0012-step-mode-design.md): phase/task/
 // subtask 三级包含式粒度,在对应(及更粗)的流水线边界硬暂停——phase 交接完成后、
 // task 终态提交后、subtask 勾选提交后;任意输入行(含空回车)放行,无超时自动
 // 继续(区别于 --wait-between 的带超时暂停)。暂停等待期间 ^C 转发进程级处理器,

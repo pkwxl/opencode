@@ -10,8 +10,8 @@ import type { Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
 import { afterSession } from "./unit-commit"
 
-// k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(docs/fixme-knowledge-design.md
-// §D + docs/phases-design.md P4): 各阶段完成后,旁路一次性会话把最终验证过的迁移
+// k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(plans/0002-fixme-knowledge-design.md
+// §D + plans/0006-phases-design.md P4): 各阶段完成后,旁路一次性会话把最终验证过的迁移
 // 经验蒸馏为结构化知识文档。产出为永久路径(新布局 = 轮内固定名
 // docs/R-NN/migration-kb.md;旧布局存量项目 = docs/migration-kb/R<N>-migration-
 // <时间戳>.md),落定不移动。提取失败不污染退出码——会话受阻或两次未产出仅返回
@@ -52,7 +52,7 @@ export async function existingKnowledge(dir: string, round: number): Promise<str
 // PLAN 不进任务链、不写进度记录): collect 从宽——文件存在且非空即算产出(章节
 // 完整性是提示词级要求,过度结构校验会制造无意义重试);产出随会话统一提交
 // (stage=knowledge),docs/migration-kb/ 为永久路径、交接不搬移(R2)。
-// 完成判定含提交(commit-boundary-design.md ③④ 推广): ③ 幂等入口发现本轮文档
+// 完成判定含提交(plans/0021-commit-boundary-design.md ③④ 推广): ③ 幂等入口发现本轮文档
 // 已产出但仍在未提交清单 → 补提交后即完成;④ 文档缺失而工作区脏(上次提取半途
 // 而废的现场或人工改动)→ 返回 dirty 交人工处置后重跑——对 k 阶段"提取失败仅
 // ⚠ 不污染退出码"的既有语义,dirty 例外(工作区不净会污染后续所有单元的启动
@@ -92,7 +92,7 @@ export async function extractKnowledge(
     {
       kind: "知识提取",
       role: "knowledge",
-      // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(commit-boundary-design.md)。
+      // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(plans/0021-commit-boundary-design.md)。
       unitStart: true,
       artifact: `非空知识文档 ${file}`,
       detail: "缺失或为空",
@@ -251,7 +251,7 @@ export async function extractPriorKnowledge(
   const produced = await requireArtifact(client, task, renderPriorKnowledge({ file: temp, brief, mode: opts.mode, distilled }), opts, {
     kind: "前置知识提取",
     role: "prior-knowledge",
-    // 独立隐藏任务单元(commit-boundary-design.md)。注意统一提交不在此挂接:
+    // 独立隐藏任务单元(plans/0021-commit-boundary-design.md)。注意统一提交不在此挂接:
     // 收笔确认 → 改名 → 提交须按序进行,会话结束即提交会把未收笔的 temp-kb.md
     // 抢先落账;改名后的提交在下方由 driver 执行。
     unitStart: true,
@@ -271,7 +271,7 @@ export async function extractPriorKnowledge(
     return { type: "failed", question: produced.question }
   }
   // ② 收笔确认 → 改名转正并统一提交(commit 关闭时改名照做、提交跳过);提交
-  // 失败 → dirty 交人工(完成判定 = 产物落盘且已提交,commit-boundary-design.md)。
+  // 失败 → dirty 交人工(完成判定 = 产物落盘且已提交,plans/0021-commit-boundary-design.md)。
   await rename(join(dir, temp), join(dir, file))
   const committed = await afterSession(dir, opts, task, commit)
   if (committed.type === "failed") {

@@ -1,5 +1,5 @@
 // src/prompt.ts 阶段族渲染的单测: 终审任务/阶段规划/阶段交接/知识提取/编号恢复/implement 快捷模式。
-// 拆分自 test/prompt.test.ts(docs/module-split-plan.md S19,纯搬运)。
+// 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import { parse } from "../src/plan"

@@ -226,7 +226,7 @@ describe("roundCompleteLines 轮次完成行", () => {
   })
 })
 
-// ===== 代答高亮块(docs/auto-resolve-design.md §H,T-006 的 H5/H6)=====
+// ===== 代答高亮块(plans/0020-auto-resolve-design.md §H,T-006 的 H5/H6)=====
 // 台账经 recordResolves/recordDecisions 直接播种(不走 runner 接线,那是 T-005 的
 // 覆盖面),断言三个构造函数的置顶块文案、driver↔agent 合并、折叠计数与空转。
 describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLines", () => {

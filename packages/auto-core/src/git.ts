@@ -7,7 +7,7 @@ import { log } from "./log"
 // 使 git 历史成为 AI 变更的审计轨迹(追踪与回滚的粒度 = 会话)。会话不执行
 // git commit(AGENTS.md 提交原则块与 agent 契约同步约束)。
 
-// 提交边界(commit-boundary-design.md):git 提交是执行单元(任务/子任务/隐藏任务)
+// 提交边界(plans/0021-commit-boundary-design.md):git 提交是执行单元(任务/子任务/隐藏任务)
 // 完成条件的一部分——单元启动要求工作区 clean(依赖的信息全部由上一次提交固定),
 // 收口要求改动全部落账且提交区间内只有 driver 提交。本文件提供三件套:
 // - beginUnit: 单元启动门禁(clean 检查 + driver 独占状态文件遗留的自愈补提交 + 基线);
@@ -52,7 +52,7 @@ export function suffixedTitle(base: string, suffix: string): string {
   return `${base.slice(0, fit - 1)}… ${suffix}`
 }
 
-// 统一提交结果(commit-boundary-design.md P1): ok=false 时 failures 列出提交
+// 统一提交结果(plans/0021-commit-boundary-design.md P1): ok=false 时 failures 列出提交
 // 失败的仓库(相对目标目录路径 + 首行错误)。空数组 = 全部成功或无需提交。
 export type CommitResult = { ok: boolean; failures: { rel: string; error: string }[] }
 
@@ -114,7 +114,7 @@ export async function pendingChanges(dir: string): Promise<boolean> {
   return false
 }
 
-// —— 单元提交边界(commit-boundary-design.md)——
+// —— 单元提交边界(plans/0021-commit-boundary-design.md)——
 
 // driver 独占状态文件名(protect.ts 拦截 AI 写入): 单元启动遇脏时,脏区全属此
 // 清单 = 上次提交失败遗留的 driver 落账 → carryover 补提交自愈;其余脏区
@@ -219,7 +219,7 @@ async function foreignCommits(root: string, sha: string): Promise<number> {
     .filter((body) => !body.includes("Auto-Stage:")).length
 }
 
-// —— 恢复保真(session-recovery-fidelity-design.md)——
+// —— 恢复保真(plans/0022-session-recovery-fidelity-design.md)——
 
 // 恢复时的基线核对(设计 3.1 ③): 各仓库 HEAD == 基线,或 基线..HEAD 区间全部为
 // driver 提交(Auto-Stage trailer)——期间只有 driver 提交,会话上下文对现状的认知
@@ -413,7 +413,7 @@ function depth(path: string): number {
 // resolve.ts 的会话收尾扫描共用: 从 loop.ts 导出会造成 loop → runner → resolve →
 // loop 的循环依赖,在 resolve.ts 镜像一份则留下两份必须同步演进的仓库遍历;git.ts
 // 是叶子模块(只依赖 log.ts)且已持有 repoRoots 与同款 porcelain 解析。决策记录见
-// docs/auto-resolve-design.md §N。
+// plans/0020-auto-resolve-design.md §N。
 export async function changedFiles(dir: string): Promise<string[]> {
   const lists = await Promise.all((await repoRoots(dir)).map((root) => statusEntries(dir, root)))
   return lists.flat().map((entry) => entry.rel)

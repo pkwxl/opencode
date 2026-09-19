@@ -3,7 +3,7 @@
 // 代答台账的落账体 recordDriverResolves 只被本层调用,故一并归此。
 // 位于 session.ts 之下(其 runSession 的重试/降级环逐次调用本函数),自身只
 // 向下调用 watch / session-api / stats 等层;**不得反向 import session / runner**。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S8,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S8,纯搬运)。
 
 import { rm } from "node:fs/promises"
 import { join, relative } from "node:path"
@@ -135,10 +135,10 @@ export async function attempt(
   }
   // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
   // 据此精确恢复;无阶段的旁路会话(判定/审核/脚本生成/修复规划/dryrun/fork 基点)
-  // 不写,避免污染恢复记忆。session-resume-precedence-design.md: 下发成功即落盘
+  // 不写,避免污染恢复记忆。plans/0018-session-resume-precedence-design.md: 下发成功即落盘
   // 认领在跑的会话(此前只在回合结束后写,回合进行中被 kill 会丢失认领);可重试
   // 错误把记录还原为下发前快照,被弃的 fork 副本不顶替真实恢复点(保留
-  // session-error-retry-plan.md 第 4 点的保护,改为"下发即写 + 失败还原")。
+  // plans/0015-session-error-retry-plan.md 第 4 点的保护,改为"下发即写 + 失败还原")。
   // 本次提示词的生效模型(target 求值后回填,remember 写严格恢复记录用)。
   let promptModel: string | undefined
   const remember = async () => {
@@ -149,7 +149,7 @@ export async function attempt(
         at: Date.now(),
         active: true,
         phase: chain.phase,
-        // 严格恢复(session-recovery-fidelity-design.md 3.1): active 记录随带单元
+        // 严格恢复(plans/0022-session-recovery-fidelity-design.md 3.1): active 记录随带单元
         // 基线与本次生效模型(恢复时核对;model 未配置路由时无串可记,严格恢复下
         // 该记录视为不可复用)。基线缺 thread 时以当前 HEAD 兜底(窗口从现在起)。
         ...(strictResumeActive(opts, switches)
@@ -196,7 +196,7 @@ export async function attempt(
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note
     chain.note = undefined
-    // 本次模型(docs/model-routing-design.md C.3/E): 优先级 链上降级候选 >
+    // 本次模型(plans/0017-model-routing-design.md C.3/E): 优先级 链上降级候选 >
     // phase 粒度跨任务粘滞(sticky holder)> /failback 运行期覆写首选 > 路由表
     // (阶段字母 + 会话角色)。target 未定义时不带 model 键——两变量未设且无任何
     // 覆写时全链恒 undefined,逐字节等价现状(而非带 model: undefined)。
@@ -318,7 +318,7 @@ export async function attempt(
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
     // 新建会话已在创建时命名,无需重复。
     if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
-    // 可重试的会话错误(session-error-retry-plan.md): 半截失败态——链状态与
+    // 可重试的会话错误(plans/0015-session-error-retry-plan.md): 半截失败态——链状态与
     // progress.json 一并还原为本轮下发前的原会话/原记录,被弃的 fork 副本不顶替
     // 真实恢复点,交给 runSession 的重试循环从原会话重新 fork。不可重试的会话
     // 错误、非会话错误类阻塞与成功一律"晋升":chain.id 落在这一轮实际用过的会话

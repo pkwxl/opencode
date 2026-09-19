@@ -2,7 +2,7 @@
 // 循环,按「交接文档的文件状态 × 提交状态」从中断点续跑,定版点/续跑会话分叉
 // (seedPinFork/seedSessionFork)。位于 session 与 testrun 之上、review/execute 之下;
 // **不得反向 import runner**,testrun 亦不得反向 import 本模块(§D.2 环消解)。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S10,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S10,纯搬运)。
 
 import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
@@ -58,7 +58,7 @@ export async function runExecSession(
   // 陈旧清理可能把在途文档删掉。必须早于下面的归档编号扫描: 编号要基于复原后的
   // 现场,否则被删掉的归档份会让编号倒退、覆盖历史交接。
   await restoreTestHandoffs(dir, task)
-  // 中断恢复(测试交接中断恢复,docs/test-handover-early-design.md §I): 按
+  // 中断恢复(测试交接中断恢复,plans/0023-test-handover-early-design.md §I): 按
   // 「文件状态 × 提交状态」定出交接时序被打断的位置,再从该位置续跑。观测量是
   // 当前份 testhandoff.md、归档份 testhandoff-<n>.md 以及两者的落账情况;在途
   // 记录(.auto/handover.json)只补上文件和提交推不出来的身份信息(待跑脚本、
@@ -206,7 +206,7 @@ export async function runExecSession(
     test.handovers = handovers
     // 并发态的漂移登记(E3): 定版之后、提交 #2 之前比对**已跟踪**的非文档改动——
     // 非空即说明本次测试面对的定版快照与将要落账的树不是同一份。只记事实,不
-    // stash、不重跑、不阻塞(重测守卫已退役,见 docs/test-handover-early-design.md §H)。
+    // stash、不重跑、不阻塞(重测守卫已退役,见 plans/0023-test-handover-early-design.md §H)。
     // 必须在提交 #2 之前做: 提交之后 diff 恒空,什么也看不见。
     if (autoSwitches().handoverConcurrent) {
       const drifted = await trackedSourceChanges(dir)

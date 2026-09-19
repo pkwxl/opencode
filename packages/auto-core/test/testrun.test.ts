@@ -1,6 +1,6 @@
 // src/testrun.ts 的单测: 交接 steer 与判据(handoffSteer/handoverDue/testHandoverDue)、测试脚本定版(resolveTestScript)、
 // 交接文档清理与复原(cleanTestHandoffs/restoreTestHandoffs)。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises"

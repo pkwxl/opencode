@@ -1,11 +1,11 @@
 // 单次会话的事件流订阅与实时处置: 消费 SSE part/status 事件,做终端回显、
 // 上下文用量跟踪与交接 steer 插入、死循环提示、代答采集(AUTO-RESOLVE /
 // AUTO-DECISION)、测试请求的发起与收口、会话错误信号的归类上报;在途失联探针
-// (session-boundary-hardening-design.md D3/§4.4)周期探测会话活性,两连败判半开
+// (plans/0026-session-boundary-hardening-design.md D3/§4.4)周期探测会话活性,两连败判半开
 // 并收口为可重试会话错误。
 // 位于 session.ts 之下(其 attempt 起订阅后 await 本函数),自身只向下调用
 // testrun / unit-commit / session-api 等层;**不得反向 import session / runner**。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S7,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S7,纯搬运)。
 
 import { join, relative } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
@@ -23,7 +23,7 @@ import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
 import { executeTest, resolveTestScript, testHandoverDue, type Steer, type TestRun } from "./testrun"
 
-// 失联探针参数(session-boundary-hardening-design.md D3): 周期缺省复用 idleTime
+// 失联探针参数(plans/0026-session-boundary-hardening-design.md D3): 周期缺省复用 idleTime
 // (10 分钟,与脚本看门狗同键同缺省,config.idleTime);**连续 2 次**未通才判半开
 // ——排除服务端瞬时抖动(GC 停顿等)造成的误判。单次探测的短超时(30 秒)见
 // session-api 的 PROBE_TIMEOUT_MS。
@@ -53,10 +53,10 @@ export async function watch(
    const waitAnswer = opts.waitAnswer ?? 0
    let lastText = ""
    let error = ""
-   // 会话错误是否可重试(session-error-retry-plan.md): 只有 ApiError 携带
+   // 会话错误是否可重试(plans/0015-session-error-retry-plan.md): 只有 ApiError 携带
    // isRetryable,其余错误类型没有该字段,缺省按可重试处理(undefined)。
    let retryable: boolean | undefined = undefined
-   // 结构化错误累加器(model-routing-design.md D.2): 三条触发面(session.error、
+   // 结构化错误累加器(plans/0017-model-routing-design.md D.2): 三条触发面(session.error、
    // retry part、session.status retry)增量合并 message/statusCode/isRetryable/
    // responseBody(+attempt/next),既供分类又随错误结果上报;undefined 表示本回合
    // 未收到任何结构化错误信号。
@@ -130,7 +130,7 @@ export async function watch(
         testHandover = true
         return { type: "break" }
       }
-      // 交接边界写核(session-recovery-fidelity-design.md 3.3,严格恢复): 文档无效
+      // 交接边界写核(plans/0022-session-recovery-fidelity-design.md 3.3,严格恢复): 文档无效
       // 一次即判,不再 steer 补写重试——"完成判定不靠 agent 自报"同样适用于交接
       // 文档(S07 幻影档实证),发现时机就在交接边界。
       if (strictResumeActive(opts, switches)) {
@@ -400,7 +400,7 @@ export async function watch(
         const ask = autoSwitches().ask
         const fallback = autoAnswer(ask)
         const reply = human ?? fallback
-        // 代答观测(auto-resolve H1,docs/auto-resolve-design.md §G/§H-①): 仅回落
+        // 代答观测(auto-resolve H1,plans/0020-auto-resolve-design.md §G/§H-①): 仅回落
         // 自动答复才计——人工答了是真人做的决定,dryrun 预检不产生工程决策。回落时
         // 把原 `→ 自动答复: <长文案>` 换成两行高亮式(答复全文降为明细日志),
         // 让"driver 替用户做了主"在会话日志里一眼可见、事后可数。

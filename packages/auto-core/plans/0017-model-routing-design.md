@@ -8,7 +8,7 @@
 冒烟待有 provider 凭证的环境(`OPENCODE_AUTO_E2E=1`)。实验开关层
 (`OPENCODE_AUTO_MODEL` / `OPENCODE_AUTO_MODEL_FALLBACK` / `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`),
 缺省未设 = 现有行为零变化,CLI 壳零改动,不落盘、不进 `ProjectConfig`。
-**2026-09-16 修订:候选耗尽的终点从阻塞退出改为 session-error-retry-plan.md
+**2026-09-16 修订:候选耗尽的终点从阻塞退出改为 plans/0015-session-error-retry-plan.md
 「2026-09-16 修正三」的等待-探测环(半小时一次、全新临时会话探测、恢复后 fork 被
 中断的会话续跑)——本文 D.4 的「回落阻塞路径(退出码 2)」与不变量 F 中「无候选表时
 quota 直接阻塞」两条自此被取代;切换/fork/窗口钳制/note 机制不变。**
@@ -188,7 +188,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 | 重试阶梯耗尽后的回落(2026-09-13 接入) | `transient` / `unknown` | 阶梯跑完(2026-09-16 起不再等人工,直接回落) |
 
 第二个触发面补的是另一条出路: 阶梯对瞬时故障已无计可施(见
-`session-error-retry-plan.md`「2026-09-12 修正二」——上游退化以小时计,加码次数只是线性
+`plans/0015-session-error-retry-plan.md`「2026-09-12 修正二」——上游退化以小时计,加码次数只是线性
 烧钱),而换一个 provider 是阶梯之外唯一还没试过的手段。人工明确答 `exit` 时不降级:那是
 「停下来」的指令,不是「再想办法」。分支顺序不变——quota/auth/rate 三类照旧在阶梯之前
 立即换模型,本条只给 transient/unknown 加出路。
@@ -200,7 +200,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 原会话,真正攒着上下文的是 `chain.failed`,不看它就会把 100k+ 产出扔掉去开白板会话。
 
 上下文随迁是这里的收益而非意外: `session.fork` 逐条克隆消息
-(fork-decompose-design.md:341「fork 只搬消息,不复制 agent/model/permission」),而 prompt 级
+(plans/0003-fork-decompose-design.md:341「fork 只搬消息,不复制 agent/model/permission」),而 prompt 级
 `model` 优先级最高(B.2)——**换模型续跑不需要重做上下文**。日志形如
 `⇄ T-001 配额受限,链上下文保留,切换模型 a/x → b/y(候选 2/3)`。
 
@@ -211,7 +211,7 @@ role(会话角色)> letter(阶段字母)> "*"(兜底)> undefined(不带 model,�
 
 - 候选的 `limit.context`(B.5)已知且 `< opts.contextLimit` → 跳过该候选并 log 原因
   (防止降级后立刻撞上下文超限/交接预算,比原故障更糟)。上限未知(容错空映射)不过滤。
-- 候选耗尽 → **2026-09-16 起落入等待-探测环**(session-error-retry-plan.md「修正三」:
+- 候选耗尽 → **2026-09-16 起落入等待-探测环**(plans/0015-session-error-retry-plan.md「修正三」:
   以 OPENCODE_AUTO_RECOVERY_WAIT 缺省 30 分钟为间隔无限等待、全新临时会话探测、恢复后
   fork 被中断的会话续跑;等待日志列已试候选清单)——原「回落阻塞路径(退出码 2、回退
   pending)」自此退役。
@@ -246,7 +246,7 @@ RANK 思路,所取值及更粗的边界都重置;实现见 `src/failback.ts`):
 
 ### D.7 /failback 命令与运行期模型序覆写(2026-09-13 实施)
 
-与 `/exit`(docs/exit-resume-design.md)同构的人工接管通道,仅 `--interactive` 常驻输入行
+与 `/exit`(plans/0014-exit-resume-design.md)同构的人工接管通道,仅 `--interactive` 常驻输入行
 可用,等待回答(pending)状态下不识别:
 
 - **置位**(interactive.ts): `/failback` 精确匹配或 `/failback prov/a prov/b ...` 前缀匹配;
@@ -304,7 +304,7 @@ agent 配置级 model(/agent)> 全局 config.model(/config)> 首个已连接 pro
   降级路径写 PLAN.md/CURRENT.md。
 - 现有 `retryable === false` 的语义(换会话无用)在**无候选表**时必须保持原行为。
   (2026-09-16 起本条后半被取代:无候选表时不再阻塞,直接进等待-探测环,见状态段修订。)
-- 重试阶梯与人工裁决(`session-error-retry-plan.md`)在**无候选表**时必须保持原行为:
+- 重试阶梯与人工裁决(`plans/0015-session-error-retry-plan.md`)在**无候选表**时必须保持原行为:
   回落即阻塞,文案不提降级、不新增 fork、prompt 不带 `model`。(2026-09-16 起人工裁决
   退役、回落改入等待-探测环,无候选表时仍不降级、prompt 不带 `model`——这两点不变。)
 

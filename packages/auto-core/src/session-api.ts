@@ -2,7 +2,7 @@
 // 本层只与 opencode 服务端的会话接口及输出呈现打交道,不含任何会话驱动逻辑
 // (下发/重试/降级/订阅都在 session.ts 与 watch.ts),故位于依赖图底层,
 // 可被 watch/session/runner 各层自由调用;**不得反向 import 会话驱动层**。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S5,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S5,纯搬运)。
 
 import { createInterface } from "node:readline/promises"
 import { join } from "node:path"
@@ -121,7 +121,7 @@ export async function sessionUsage(client: OpencodeClient, id: string): Promise<
     (message) => message.info.role === "assistant" && message.info.tokens.input + message.info.tokens.cache.read > 0,
   )
   if (!basis || basis.info.role !== "assistant") {
-    // 整条会话从未有过真实产出:末条本身就是报错桩,即 session-error-retry-plan.md
+    // 整条会话从未有过真实产出:末条本身就是报错桩,即 plans/0015-session-error-retry-plan.md
     // 第 5 点要兜底的历史遗留形态(旧版"重试即换白板会话"留下的空会话)。
     return { used: 0, pct: 100, errorStub: last.info.error !== undefined }
   }
@@ -158,7 +158,7 @@ export async function sessionAlive(client: OpencodeClient, id: string): Promise<
   return got !== undefined && !got.error
 }
 
-// 失联探针的探测体(session-boundary-hardening-design.md D3/§4.4): 一条独立的
+// 失联探针的探测体(plans/0026-session-boundary-hardening-design.md D3/§4.4): 一条独立的
 // 短超时连接 GET 会话元信息——半开的旧连接(无 FIN/RST)不响应也不拒绝,但不影响
 // 新连接,故新请求的成败即传输层活性的可信信号;超时无响应与请求异常同按未通计。
 // 与 sessionAlive 同族,差别只在超时上界与调用场景(在途周期探测 vs 恢复前一次性核对)。
@@ -239,7 +239,7 @@ export function formatTokens(n: number): string {
   return String(n)
 }
 
-// 服务端生效模型解析(未设模型路由时 ◈ 播报的回落,docs/model-routing-design.md
+// 服务端生效模型解析(未设模型路由时 ◈ 播报的回落,plans/0017-model-routing-design.md
 // D.8 2026-09-18 修订): 与服务端 prompt 的模型回退链同序——agent 配置级 model
 // (/agent 返回已归并 config.agent 的值)> 全局 config.model(/config)> 首个已连接
 // provider 的缺省模型(/provider 的 default 表,与服务端 defaultModel 的 sort-first

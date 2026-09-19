@@ -35,7 +35,7 @@
 三处各自紧邻既有 `stepPause` 调用之后插入 `maybeExit(boundary, label)`——该处
 的 PLAN.md/CURRENT.md/`.auto/progress.json` 已经是这个边界的正常收尾结果,
 `maybeExit` 只是"提前停在这里",不做任何额外的保存动作。边界覆盖范围与
-step-mode-design.md §5 的边界情况完全一致(--subtask off/ondemand 无 subtask
+plans/0012-step-mode-design.md §5 的边界情况完全一致(--subtask off/ondemand 无 subtask
 落点、单阶段 `m` 模式无 phase 落点等)。
 
 ## 4. 传播与退出码

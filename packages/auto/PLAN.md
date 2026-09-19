@@ -4,7 +4,7 @@
 opencode serve 完成开发；遇阻即停、生成问题描述、等待人工介入后以新会话续跑，直到计划全部完成。
 
 历史任务（第一阶段..第四阶段，T-001..T-024）已全部完成，原文归档于
-[docs/plan-archive.md](./docs/plan-archive.md)；行为约定的权威文档为包内 AGENTS.md 与
+[packages/auto-core/plans/0007-plan-archive.md](../auto-core/plans/0007-plan-archive.md)；行为约定的权威文档为包内 AGENTS.md 与
 README.md。本文件只保留格式契约与当前阶段任务。
 
 ## 目标 PLAN.md 格式（driver 的解析对象，本文件自身亦遵循）
@@ -39,7 +39,7 @@ driver 状态机：`pending → in_progress → done | blocked`；`blocked` → 
 背景：不同场景（迁移/优化/新实现/测试）下提示词侧重不同，需要不影响 driver 调度状态机的
 轻量模式层；既有 `--review` 的终审只是最后一个任务的单会话全面审核、无修复闭环，需要
 任务驱动的多阶段终审流程（Audit → Refactor/Patch → Validate → Finalize，Validate 可回退
-Audit、审计轮上限熔断）。完整设计见 docs/mode-final-review-design.md（唯一设计基准，含
+Audit、审计轮上限熔断）。完整设计见 packages/auto-core/plans/0005-mode-final-review-design.md（唯一设计基准，含
 已确认决策、状态机与恢复规则、文件级改动清单；与其冲突的旧表述以该文档为准）。
 
 ## T-025: 模式层 src/mode.ts 与 CLI 接线 [done]

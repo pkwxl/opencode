@@ -1,4 +1,4 @@
-// 阶段注册表与阶段状态机(--phases 阶段化流程,设计文档 docs/phases-design.md
+// 阶段注册表与阶段状态机(--phases 阶段化流程,设计文档 plans/0006-phases-design.md
 // A/C/D/F 节):固定六字母内置注册表,不开放自定义——阶段有 driver 侧语义(产物
 // 约定、v 的验收豁免、终审挂接点),非纯提示词文案。阶段状态是推导式的:
 // 阶段台账(新布局 = 轮内 docs/R-NN/phases.md,旧布局 = 根 docs/phases.md,读
@@ -233,7 +233,7 @@ export function validHandover(text: string): boolean {
   return HANDOVER_SECTIONS.every((section) => text.split("\n").some((line) => line.trim() === section))
 }
 
-// —— 轮次(续轮迁移,设计文档 docs/phases-design.md M 节;轮次专用目录方案)——
+// —— 轮次(续轮迁移,设计文档 plans/0006-phases-design.md M 节;轮次专用目录方案)——
 
 // 旧布局轮次归档目录名(docs/phases/round-<N>/): 轮次专用目录方案前的完成轮
 // 归档,原地保留为读回落源(存量兼容 = 只读回落,绝不搬移旧文件)。

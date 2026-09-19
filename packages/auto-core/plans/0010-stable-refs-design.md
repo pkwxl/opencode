@@ -2,10 +2,10 @@
 
 > 状态:**设计定稿(2026-09-06)**。实施分 P1..P4 四期,建议每期一个独立会话;
 > P1 已实施(2026-09-07,见 §7);P1 的可执行规格、既定决策(P1-D1..D9)与会话切分
-> (P1-S1..S4)见 [stable-refs-p1-plan.md](./stable-refs-p1-plan.md)。
-> 开工会话先读本文件全文,再按需读 docs/phases-design.md(F/M 节)、docs/auto-number-design.md、
-> docs/fork-decompose-design.md(§产物命名)。每期完成后勾选 §5 清单并回写 §7 实施进度;
-> 实现与设计冲突时以实现为准回写本文对应小节并注明日期(镜像 verify-review-design.md 文首注记先例)。
+> (P1-S1..S4)见 [plans/0011-stable-refs-p1-plan.md](./0011-stable-refs-p1-plan.md)。
+> 开工会话先读本文件全文,再按需读 plans/0006-phases-design.md(F/M 节)、plans/0001-auto-number-design.md、
+> plans/0003-fork-decompose-design.md(§产物命名)。每期完成后勾选 §5 清单并回写 §7 实施进度;
+> 实现与设计冲突时以实现为准回写本文对应小节并注明日期(镜像 plans/0009-verify-review-design.md 文首注记先例)。
 
 ## 0. 问题背景
 
@@ -203,7 +203,7 @@ docs/
 ### 4.4 编号默认开启(P3:src/config.ts / src/index.ts)
 
 - `CONFIG_DEFAULTS.autoNumber = true`;formatProjectConfig 摘要逻辑不变(仍条件显示)。
-- init/run 文案、README、behavior.md 用法同步;auto-number-design.md 文首加修订注记
+- init/run 文案、README、behavior.md 用法同步;plans/0001-auto-number-design.md 文首加修订注记
   (缺省值翻转,机制零改动)。
 - e2e / config 测试快照更新。
 
@@ -285,7 +285,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 >   fix-docs 脚本一并退役;旧平铺布局原地保留,读回落永久保留,遗留引用失效改走
 >   git 历史追踪恢复(refcheck-scope-design §4,P2 已实施)。
 > - 检查范围收敛为三类(缺失恢复/提交前移动修正/范围再确认 `@sha` 版本标记,
->   P3 已实施——行号锚漂移课题的落地即此项,见 §8),详见 refcheck-scope-design.md
+>   P3 已实施——行号锚漂移课题的落地即此项,见 §8),详见 plans/0013-refcheck-scope-design.md
 >   D4 与 §4-§6。
 
 ## 5. 实施分期与清单(每期一个独立会话)
@@ -321,7 +321,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
       number-recovery——后者核对后零改动,见 §4.3 注记)
 - [x] 测试:phases / knowledge / prompt 快照(含 P2 前布局读回落用例;
       archivePriorKnowledge 测试随函数删除)
-- [x] 文档:phases-design.md F/M 节修订注记(另及 A.1/C.1/D.4/E 节)、behavior.md、
+- [x] 文档:plans/0006-phases-design.md F/M 节修订注记(另及 A.1/C.1/D.4/E 节)、behavior.md、
       structure.md、壳包 `packages/auto` README(归档布局变化)+ src/index.ts continue 文案
 - 收口:`bun typecheck` + `bun test` 全绿(2026-09-07,auto-core 340 pass + 壳包
   27 pass/2 skip);冒烟——完整 admtvk 一轮 + continue 续轮,验证轮前后
@@ -331,7 +331,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 ### P3 编号默认开启
 
 - [x] config.ts 缺省翻转 + config / e2e 快照
-- [x] index.ts / README / behavior 文案;auto-number-design.md 修订注记
+- [x] index.ts / README / behavior 文案;plans/0001-auto-number-design.md 修订注记
 - 收口:typecheck + test;init 冒烟确认缺省摘要「自动编号 on」
 
 ### P4 引用一致性三层
@@ -345,7 +345,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 - [x] verifyTask 确定性预扫(每个判定会话前;off 模式回退 pending,耗尽阻塞退出 2)
 - [x] ensurePointer 规范块(opencode-auto:refs)+ wrapup / verify-script-gen / fix 模板文案
 - [x] 测试:refcheck / check 新测试 + e2e(CLI check 引用命中退出 1 / 干净退出 0)
-- [x] 文档:behavior.md(检查契约)、structure.md、verify-review-design.md 注记、包 AGENTS.md 导航
+- [x] 文档:behavior.md(检查契约)、structure.md、plans/0009-verify-review-design.md 注记、包 AGENTS.md 导航
 - 收口:typecheck + test 全绿(2026-09-07,auto-core 351 pass + 壳包 29 pass/2 skip);冒烟——
   改代码文件名 → 活文档自动改写;删文件 → findings;check 命中退出 1(单测级覆盖,
   真实运行冒烟待 auto/ worktree 集成会话一并执行)
@@ -353,7 +353,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 ## 6. 会话交接约定
 
 - 每期开工:读本文件 + `git log --oneline -10` 确认前序已合入;P2 起加读
-  phases-design.md F/M 节(修订版)。
+  plans/0006-phases-design.md F/M 节(修订版)。
 - 每期收尾:勾选 §5 清单、回写 §7 实施进度(日期 / commit / 验证结果);conventional
   commit(`type(scope): summary`);**commit 前征得用户确认**(仓库约定)。
 - 偏差回写:实现与设计冲突时以实现为准回写本文对应小节并注明日期。
@@ -363,7 +363,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
 
 | 期 | 状态 | 日期 | 提交 | 验证 |
 |---|---|---|---|---|
-| P1 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): P1-S1..S4(四会话提交,见 stable-refs-p1-plan.md §8) | 本包 `bun typecheck` + `bun test` 全绿(340 pass);auto/ worktree 三包集成冒烟待执行 |
+| P1 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): P1-S1..S4(四会话提交,见 plans/0011-stable-refs-p1-plan.md §8) | 本包 `bun typecheck` + `bun test` 全绿(340 pass);auto/ worktree 三包集成冒烟待执行 |
 | P2 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P2 归档缩减(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);三包集成冒烟待执行(P1 冒烟一并补) |
 | P3 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P3 编号默认开启(单会话提交) | 本包 typecheck + test 全绿(340 pass);壳包 packages/auto typecheck + test 绿(27 pass/2 skip);init 冒烟确认缺省摘要「自动编号 on」与 phases="m" ℹ 提示;structure.md 同步缺省注记 |
 | P4 | 代码完成,集成冒烟待做 | 2026-09-07 | feat(refs): stable-refs P4 引用一致性三层(单会话提交) | 本包 typecheck + test 全绿(351 pass);壳包 packages/auto typecheck + test 绿(29 pass/2 skip);三层各就位(auto-correct 挂全部统一提交、check 子命令命中退出 1、verify 门禁进修复轮);真实运行冒烟待 auto/ worktree 集成会话执行(P1..P3 一并补) |
@@ -374,7 +374,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
   `:N`/`:N-M` 所指代的行号范围随内容偏移失真——现契约:改动文件的不一致行号锚在
   统一提交前自动追加 `@<sha>` 版本标记(保留原范围,语义 = 该范围仅对标记的历史版本
   有效,豁免行号上限校验;已标记引用不再更新,留待人工订正),见
-  refcheck-scope-design.md §6。内容位移的自动追踪(如锚行内容指纹)仍不纳入。
+  plans/0013-refcheck-scope-design.md §6。内容位移的自动追踪(如锚行内容指纹)仍不纳入。
   用户另确认:花括号
   展开(`{a,b}.rs`)、通配符(`*_test.rs`)与散文标识符(`.ctr` 等)非单路径引用,
   不纳入校验契约,失效清单仅作人工分拣入口且已收录键不重复警告(迁移冲突跳过
@@ -404,7 +404,7 @@ refcheck 核心(P1 先落 extract/rewrite 供迁移复用,P4 补齐):
   起即存在,P2 未改变其行为,如需修复应在后续单独设计(如台账在场时复用无 phases.md
   的既有 round-N 目录)。
 
-### P1 实施期既定裁决(2026-09-06,详见 stable-refs-p1-plan.md §3)
+### P1 实施期既定裁决(2026-09-06,详见 plans/0011-stable-refs-p1-plan.md §3)
 
 - **终审产物按产出任务锚定**:`k = final 字段任务数 + 1` 推导,同轮四阶段与跨轮各锚定
   自己的 `docs/T-F<k>/`(§3.1 的 T-F1/ 注释为文件名示意)。

@@ -110,7 +110,7 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
 
     return await runPhaseLoop(ctx)
   } catch (error) {
-    // /exit(设计文档 docs/exit-resume-design.md): 三处安全边界(phase/task/
+    // /exit(设计文档 plans/0014-exit-resume-design.md): 三处安全边界(phase/task/
     // subtask,后者经 runTask 从 runner.ts 一路上抛)命中后在此统一落地——已停
     // 在该边界的正常收尾点(PLAN.md/CURRENT.md/.auto/progress.json 均已写好,
     // 与该处真实 crash/kill 中断的现场同构),退出码 3 区别于 2(阻塞/pending

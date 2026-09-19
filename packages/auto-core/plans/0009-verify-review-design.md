@@ -105,7 +105,7 @@ gap  → 既有 renderFix 修复循环不变(FIX_ROUNDS=3);每轮修复后重跑
 > 差距,直接进上述 renderFix 修复循环、不消耗判定会话(off 模式回退 pending,
 > 耗尽阻塞退出 2);verify 未启用时无任务级验收,门禁不存在(退化为提交时
 > auto-correct 的 ⚠ 日志)。引用规范与三层检查的设计基准见
-> docs/stable-refs-design.md §3.3/§4.5。
+> plans/0010-stable-refs-design.md §3.3/§4.5。
 
 现有 `review()` 中"判定文件缺失带反馈重试一次"的骨架可抽为通用 helper 供生成会话
 与判定会话复用。会话链、dryrun、interactive、权限等待行为均不受影响。

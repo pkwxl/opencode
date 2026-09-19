@@ -28,7 +28,7 @@
 > OPENCODE_AUTO_RETRY_ASK 退役。详见文末「2026-09-16 修正三」一节。**
 >
 > **2026-09-10 追加:第 4 点("remember 不再抢先落盘")经
-> [session-resume-precedence-design.md](session-resume-precedence-design.md) 细化为
+> [plans/0018-session-resume-precedence-design.md](plans/0018-session-resume-precedence-design.md) 细化为
 > "下发即写 + 可重试失败还原为下发前快照"——第 4 点把落盘从"sessionID 刚确定"挪到
 > "回合结束后",修掉了中间失败态顶替真实会话,却顺带取走了"回合进行中被 kill 时对在跑
 > 会话的认领"(现场:decompose 会话累计 29.4k 被 Ctrl+C 杀死,记录却停在上一阶段边界
@@ -36,7 +36,7 @@
 > 错误把 progress.json 还原为下发前快照(被弃 fork 副本不顶替真实恢复点)——第 4 点要防的
 > 病理仍被防住,认领能力恢复。第 5 点判据不变。**
 >
-> 本计划修订 `precise-resume-plan.md` 中"维持现状"一条:「runSession 运行中瞬时
+> 本计划修订 `plans/0008-precise-resume-plan.md` 中"维持现状"一条:「runSession 运行中瞬时
 > 错误重试仍换新会话」——该现状已被证实是一个实际发生过的 bug 根因,不再维持。
 
 ## 问题现场(T-062 事故复盘)
@@ -143,15 +143,15 @@
   遇到一个只有报错桩、无真实产出的历史会话",断言恢复逻辑判定为不可复用(第 5
   点的兜底分支被触发)。
 - 全量:`bun typecheck && bun test`(包目录内运行,仓库根目录不能跑测试)。
-- 文档同步:本文件完成后,补一条决策行到 `docs/precise-resume-plan.md`(或直接
-  在其"维持现状"处打删除线注明"已被 session-error-retry-plan.md 取代"),避免
+- 文档同步:本文件完成后,补一条决策行到 `plans/0008-precise-resume-plan.md`(或直接
+  在其"维持现状"处打删除线注明"已被 plans/0015-session-error-retry-plan.md 取代"),避免
   未来读者以为现状仍是"重试即换白板会话"。
 
 ## 已知不改动的范围
 
 - `NETWORK_FAILURE` 正则触发的 `server.restart()` 逻辑不变(该重启针对的是
   server 进程级故障,和本文的会话级 fork-重试是两个维度,可以共存)。
-- fork 的 provider 前缀缓存友好特性(`fork-decompose-design.md` §4.2/4.3)不受
+- fork 的 provider 前缀缓存友好特性(`plans/0003-fork-decompose-design.md` §4.2/4.3)不受
   影响——本改造只是把"重试时开的新会话"从"空白"换成"fork 自 chain.id",复用
   的正是同一套 `forkSession()`/`seedForkSession()` 基础设施。
 
@@ -337,7 +337,7 @@ opencode 1.18.x 对所有 provider 强制生效的 300s `headerTimeout`/`chunkTi
 故公共基点与 `migrate` 上回落 = 阻塞。`auto-core` 上该接缝已接通：`decision === "fallback"`
 且候选表非空时，走与配额降级支同一段逻辑（`switchModel()`）切下一个候选、重开一轮阶梯，
 候选耗尽才阻塞（文案追加「降级已用尽候选: …」）。人工明确答 `exit` 时不降级——那是
-「停下来」的指令，不是「再想办法」。详见 `model-routing-design.md` D.3。
+「停下来」的指令，不是「再想办法」。详见 `plans/0017-model-routing-design.md` D.3。
 
 作用域天然满足「切备选仅在本次任务内有效」——`chain` 由 `runTask` 每个任务新建一条、
 任务内所有执行会话共享（`runner.ts` 的 "All execution sessions of a task share one chain"），
@@ -412,7 +412,7 @@ opencode 1.18.x 对所有 provider 强制生效的 300s `headerTimeout`/`chunkTi
 
 ### 与 model-routing 设计的关系
 
-`model-routing-design.md` 的不变量「无候选表时 quota 直接阻塞（逐字节等价现状）」与
+`plans/0017-model-routing-design.md` 的不变量「无候选表时 quota 直接阻塞（逐字节等价现状）」与
 D.4「候选耗尽回落阻塞路径（退出码 2）」自本修正起**被取代**：候选切换（立即换 provider
 续跑）仍是第一选择，但其耗尽态从阻塞改为等待恢复；切换/fork/窗口钳制/note 机制全部
 照旧。降级粘滞语义不变（恢复续跑沿用当时的 `chain.model`，任务边界照常回试首选）。
@@ -504,4 +504,4 @@ fork 最初的 41.3k 会话、不开空白新会话、重发说明保持「上�
 
 配套：同一现场的另一半——`handover.json` 的 `nextSession` 认领也被 0-token 桩逐个
 覆写——按同一 invariant 在 `attempt` 加「认领还原」，见
-test-handover-early-design.md §J.3。
+plans/0023-test-handover-early-design.md §J.3。

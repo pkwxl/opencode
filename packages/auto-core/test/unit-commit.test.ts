@@ -1,5 +1,5 @@
 // src/unit-commit.ts 的单测: refcheck 挂点门禁(gatedAutoCorrectRefs/gatedTaskRefGap)与 afterSession 完成条件门禁。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
@@ -54,7 +54,7 @@ describe("gatedAutoCorrectRefs / gatedTaskRefGap(OPENCODE_AUTO_REF_CHECK 挂点�
   })
 })
 
-describe("afterSession 完成条件门禁(commit-boundary-design.md)", () => {
+describe("afterSession 完成条件门禁(plans/0021-commit-boundary-design.md)", () => {
   test("提交失败(pre-commit 拒绝)→ failed 带问题文本;门禁关闭(--commit false)→ ok", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-after-gate-"))
     try {

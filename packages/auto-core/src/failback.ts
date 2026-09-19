@@ -1,4 +1,4 @@
-// 降级回试与 /failback(设计文档 docs/model-routing-design.md):
+// 降级回试与 /failback(设计文档 plans/0017-model-routing-design.md):
 // OPENCODE_AUTO_MODEL_FAILBACK_SCOPE 控制降级到候选模型后、在哪个流水线边界重置回
 // 首选模型——包含式粒度(与 step.ts 同一 RANK 思路): phase 仅阶段边界(降级跨任务
 // 粘滞,经本模块 sticky holder 承载);task(缺省)= 现状,链逐任务销毁天然归零,无

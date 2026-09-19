@@ -4,7 +4,7 @@
 **2026-09-15 修订(§H):测试时机由「真并发」改为「先交接、后运行」,重测守卫退役。**
 **2026-09-15 修订(§I):交接途中被打断的恢复——按文件状态 × 提交状态定位断点续跑;PLAN.md 阻塞记事退役。**
 **2026-09-16 修订(§J):交接收场即丢弃定版会话为重启复用/重试分叉锚点——记录不再指回交接之前的会话。**
-D2/D3/D5/D6 的原文保留在下,作为改造前的事实基线;现行行为以 §H 为准。上游登记:`session-recovery-fidelity-design.md` §3.5 ①「交接触发解耦」。
+D2/D3/D5/D6 的原文保留在下,作为改造前的事实基线;现行行为以 §H 为准。上游登记:`plans/0022-session-recovery-fidelity-design.md` §3.5 ①「交接触发解耦」。
 现场证据:`docs/session-interruption-field-audit-20260915.md`(仓库根,未纳入版本控制)。
 
 ## A. 事实基线(改造前)
@@ -79,7 +79,7 @@ if (failed && test.handover && used >= test.limit) { …要求写交接文档…
 - **与提交边界体系相容**:`unitViolations` 只校验区间内每个提交带 `Auto-Stage` trailer,
   不限提交个数,单元内多两笔 driver 提交合法。`rollbackUnit` 回滚到单元基线时一并丢弃
   交接提交,语义正确(整个单元重做)。
-- **消解一处已知局限**:`commit-boundary-design.md` 登记的「交接续跑期间工作区脏、clean
+- **消解一处已知局限**:`plans/0021-commit-boundary-design.md` 登记的「交接续跑期间工作区脏、clean
   门禁豁免」在测试交接这条路径上不再成立——交接点工作区已被两次提交清空。
 - **与交接边界写核共存**:测试交接文档的有效性判据仍是「非空」(不要求 `状态: 继续|完成`
   行)——判定发生在测试结果尚未判读时,会话无从判定「完成」,加了也只能恒为「继续」。
@@ -126,8 +126,8 @@ if (failed && test.handover && used >= test.limit) { …要求写交接文档…
 - [ ] ~~P6 灰度开关~~ —— 经评估不做,见 §F
 - [x] P7 测试 —— `prompt.test.ts` 反向断言、`runner.test.ts` 判据四档、`git.test.ts` 守卫
       五例(含嵌套仓库)、`docpaths.test.ts` 归档命名与编号接续
-- [x] P8 文档 —— 本文档、`behavior.md`、`structure.md`、`session-recovery-fidelity-design.md`
-      §3.5 ①、`commit-boundary-design.md`、`packages/auto/README.md`、CLI 帮助、导航与根 AGENTS.md
+- [x] P8 文档 —— 本文档、`behavior.md`、`structure.md`、`plans/0022-session-recovery-fidelity-design.md`
+      §3.5 ①、`plans/0021-commit-boundary-design.md`、`packages/auto/README.md`、CLI 帮助、导航与根 AGENTS.md
 - [ ] 真实冒烟(三包全量,在 `auto/` 集成 worktree;需有凭证的环境)
 
 ## H. 修订(2026-09-15):先交接、后运行
@@ -343,7 +343,7 @@ stage=test 分支)只能 fork 空壳,41.3k 会话虽活着却不再被任何记�
 **决策**:认领保留「起跑即写」(半途被 kill 也有锚点,§J.2 同源语义不变),但会话以
 **0-token 可重试错误**收场时,`attempt` 把认领还原为认领前的记录——纯报错桩不配作恢复
 锚点;`used > 0` 的失败保留认领(该会话是旧锚点的严格超集)。与 `chain.failed` 的更替
-invariant(见 session-error-retry-plan.md「2026-09-17 修正五」)同一口径、同批实施。
+invariant(见 plans/0015-session-error-retry-plan.md「2026-09-17 修正五」)同一口径、同批实施。
 单测:`test/session.test.ts` 新增两例(0-token 桩还原锚点 / 带内容失败保留认领)。
 
 ## K. 修订(2026-09-16):steer 交接文档 handoff.md 的陈旧清理同样只删未跟踪份

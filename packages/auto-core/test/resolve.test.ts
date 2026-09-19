@@ -386,7 +386,7 @@ describe("AUTO-DECISION 计数", () => {
     expect(await decisionsOf(dir, "T-007")).toBe(2)
     expect((await resolvesOf(dir, "task", "T-007")).map((item) => item.question)).toEqual(["是否收窄范围"])
     // 二次扫描(同一批改动仍未提交)累加计数,标记侧由去重键吸收——`--commit false`
-    // 下计数偏大是已接受边界(docs/auto-resolve-design.md §K)。
+    // 下计数偏大是已接受边界(plans/0020-auto-resolve-design.md §K)。
     await collectAgentResolves(dir, { task: "T-007", phase: "m", round: 1 })
     expect(await decisionsOf(dir, "T-007")).toBe(4)
     expect(await resolvesOf(dir, "task", "T-007")).toHaveLength(1)

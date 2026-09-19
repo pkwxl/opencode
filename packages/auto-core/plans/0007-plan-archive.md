@@ -2,8 +2,8 @@
 
 > 本文件是 packages/auto/PLAN.md 的历史归档(T-001..T-024,已全部完成),原样保留供追溯。
 > 当前任务与进行中计划见 [PLAN.md](../PLAN.md);行为约定的权威文档为包内 AGENTS.md 与 README.md。
-> 各阶段设计基准:第三/四阶段见 [verify-review-design.md](./verify-review-design.md),
-> 第五阶段(--mode 与 --final-review)见 [mode-final-review-design.md](./mode-final-review-design.md)。
+> 各阶段设计基准:第三/四阶段见 [plans/0009-verify-review-design.md](./0009-verify-review-design.md),
+> 第五阶段(--mode 与 --final-review)见 [plans/0005-mode-final-review-design.md](./0005-mode-final-review-design.md)。
 
 ---
 
@@ -31,7 +31,7 @@ opencode serve 完成开发；遇阻即停、生成问题描述、等待人工�
    对应的验证检查项（`- [ ]` → `- [x]`）；driver 只在会话外
    重新解析计划文件复核 `[done]` 标记，不再复跑 verify 命令；未标 done 而 idle 仍按
    隐性 blocked 处理。
-   （注:本条已被第三阶段 verify 三段式取代,见 docs/verify-review-design.md;原文保留供追溯。）
+   （注:本条已被第三阶段 verify 三段式取代,见 plans/0009-verify-review-design.md;原文保留供追溯。）
 5. driver 本身作为本 monorepo 新包 `packages/auto` 开发（Bun + TypeScript，遵循根 AGENTS.md
    与 packages/opencode/AGENTS.md 规范；测试从 `packages/auto` 目录运行，不在仓库根跑）。
 
@@ -213,7 +213,7 @@ README.md 与包内 AGENTS.md 同步新行为约定：driver 独占 PLAN.md/CURR
 影响，大输出时反复重跑；且缺少 verify 之外对实现忠实性与正确性的独立审核环节。本阶段把
 verify 改为"脚本准备 → driver 执行 → AI 判定"三段式（输出零截断、命令只执行一次、执行
 与判定分离），并新增 `--review` 审核循环（忠实性/正确性/验证有效性审核 + 驱动式 fix
-子任务闭环）。完整设计见 docs/verify-review-design.md（唯一设计基准，含已确认决策、
+子任务闭环）。完整设计见 plans/0009-verify-review-design.md（唯一设计基准，含已确认决策、
 接口约定与流水线伪代码）；包内 AGENTS.md 与 README 的旧行为约定将在 T-021 统一改写，
 此前任务一律以设计文档与本阶段任务描述为准，不要按旧约定"纠正"实现。
 
@@ -300,7 +300,7 @@ prompt/runner/plan/index 条目更新；行为约定节整体改写 verify 条�
 背景：verify 脚本执行阶段（runVerifyScript）是纯本地进程、不含任何 opencode 会话，把
 --review 的审核会话挪入该窗口并行执行，可节省约一个审核会话的墙钟时间；全局保持
 "任意时刻至多一个 LLM 会话"不变量，窗口内零代码改动（审核只审不改、差距只出计划），
-因此无需 worktree。设计基准为 docs/verify-review-design.md F 节（唯一基准，含已确认
+因此无需 worktree。设计基准为 plans/0009-verify-review-design.md F 节（唯一基准，含已确认
 决策、流水线伪代码与接口约定）。
 
 ## T-022: --early 选项解析与审核提示词适配 [done]
@@ -332,7 +332,7 @@ planReviewFix → appendSubtasks → 下一轮），不再独立调用 reviewTas
 同步两份文档与实现：README.md（run 选项表、"执行流水线"审核段改写为并行窗口描述、
 全局单会话不变量说明）。包内 AGENTS.md（结构节条目核对；行为约定节 --review 条目
 补充 early 两形态与窗口时序保证）。templates/ 与 PLAN.md 头部注释核对（预计不变）。
-docs/verify-review-design.md F 节如实现中有偏差一并修订。
+plans/0009-verify-review-design.md F 节如实现中有偏差一并修订。
 
 ---
 

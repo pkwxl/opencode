@@ -1,7 +1,7 @@
 // 恢复点的单元归属门禁与中断文案: 判定 active 会话所属执行单元本次是否重跑
 // (决定能否复用其会话),以及阶段描述 / 恢复说明 / CURRENT.md 中断备注三类
 // 面向人与 AI 的文案渲染。只依赖类型与开关,不依赖会话驱动层。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S4,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S4,纯搬运)。
 import { FIX_ROUNDS, REVERIFY_ROUNDS, type Outcome } from "./opts"
 import type { Phase } from "./resume"
 import { shellProfile } from "./shell"
@@ -95,7 +95,7 @@ export function phaseText(phase: Phase | undefined): string {
 // 中断恢复时随首个提示词注入的"[driver] 中断后的继续"说明: 按记录的阶段给出
 // 具体的下一步指引,使 AI 不重做已完成的工作。
 // 严格恢复(OPENCODE_AUTO_STRICT_RESUME=on)下复用会话(R1/R2)收敛为一句 continue
-// (session-recovery-fidelity-design.md 3.2): 现场实证表明恢复会话本就靠盘面自定位
+// (plans/0022-session-recovery-fidelity-design.md 3.2): 现场实证表明恢复会话本就靠盘面自定位
 // (读 CURRENT.md → git status → 首个未勾选项),阶段指引冗余;逐步骤的下一步指引
 // 保留在交接文档/状态文件里,不进恢复提示词。非复用路径(回滚后冷启动不带说明,
 // 优雅退出的总结态续跑)维持既有指引。

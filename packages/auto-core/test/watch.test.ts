@@ -3,7 +3,7 @@
 // 会话故障类出口(会话错误/下发失败)经 attempt 直驱——runSession 自 2026-09-16 起
 // 对故障不再返回 blocked(进入等待-探测环,见 test/session.test.ts),而 attempt 的
 // 返回值正是 watch 分类标记(P3)的直接出口面。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
@@ -46,7 +46,7 @@ describe("SSE 订阅生命周期(会话结束即断开)", () => {
   })
 })
 
-// ---- 错误信号接线 → attempt 出口(docs/model-routing-design.md D.2/CRITICAL 不变量,P3)----
+// ---- 错误信号接线 → attempt 出口(plans/0017-model-routing-design.md D.2/CRITICAL 不变量,P3)----
 describe("错误信号接线: watch 三触发面 → attempt 出口(P3 仅分类+标记,不做候选决策)", () => {
   // 零等待阶梯: 本块只验错误归类与出口标记,不该被重试退避拖成分钟级。
   const SIGNAL_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
@@ -485,7 +485,7 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
   })
 })
 
-// ---- driver 侧代答采集接线(docs/auto-resolve-design.md §G,T-005): H1..H4 ----
+// ---- driver 侧代答采集接线(plans/0020-auto-resolve-design.md §G,T-005): H1..H4 ----
 // H1 观测(question.asked 回落自动答复)→ H2 随 snapshot 出全部出口 → H3 收段落账
 // (补 task/phase/round/session)→ H4 会话收尾扫描 agent 标记。台账读回经
 // resolvesOf,模块本身的单测在 test/resolve.test.ts。

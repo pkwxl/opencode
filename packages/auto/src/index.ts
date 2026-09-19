@@ -311,7 +311,7 @@ if (command === "run") {
 }
 
 // --commit 缺省/裸选项/true = 启用(会话后统一提交)。false 与旧值 none 已于
-// 2026-09-15 退役(docs/commit-boundary-design.md): 统一提交是完成条件,单元基线、
+// 2026-09-15 退役(plans/0021-commit-boundary-design.md): 统一提交是完成条件,单元基线、
 // 恢复保真回滚等机制全部以"提交恒开"为前提,关闭档与之冲突——出现即用法错误。
 // 旧的 subtask/task/once 档已随"收回 AI 提交权、driver 统一提交"一并移除。
 // 返回 null 表示取值非法(含已退役的关闭档)。
@@ -411,7 +411,7 @@ if (command === "init" || command === "continue") {
   // --amend 显式切回旧的增量修订语义(只改命令行显式给出的键,其余保留既有配置),
   // 供「只想改一个字段又不想重述全部参数」的场景;continue 恒为 amend(下方 base)。
   //
-  // continue 子命令(续轮迁移,设计文档 docs/phases-design.md M 节)= init 的
+  // continue 子命令(续轮迁移,设计文档 plans/0006-phases-design.md M 节)= init 的
   // amend 语义 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
   // 让迁移结果与源更加完整、一致。复用 init 的解析/合并/模板与标记块维护,差异
   // 仅在: ① 前置校验(既有 phases ≠ "m" 且台账全覆盖);② 轮首建立
@@ -466,7 +466,7 @@ if (command === "init" || command === "continue") {
   if (commit === null) {
     console.error(
       "--commit 取值只剩 true(缺省): --commit false(及旧别名 none)已退役——统一提交是完成条件" +
-        "(docs/commit-boundary-design.md),driver 在每个会话结束后统一提交全部改动,不再支持关闭",
+        "(plans/0021-commit-boundary-design.md),driver 在每个会话结束后统一提交全部改动,不再支持关闭",
     )
     process.exit(1)
   }
@@ -493,7 +493,7 @@ if (command === "init" || command === "continue") {
     console.error("--idle-max 取值范围为 1..1440(分钟);缺省不设上限")
     process.exit(1)
   }
-  // --phases: 阶段化流程(设计文档 docs/phases-design.md);"m"(缺省)= 无阶段
+  // --phases: 阶段化流程(设计文档 plans/0006-phases-design.md);"m"(缺省)= 无阶段
   // 声明,单次运行,行为不变。台账非空时的前缀护栏见下(已完成的阶段必须构成
   // 新值的前缀,防止 amend 把流程状态打成不可推导)。
   let phases: string | undefined
@@ -813,7 +813,7 @@ if (command === "init" || command === "continue") {
   if (ensured.legacyRemoved) console.log(`已清理: AGENTS.md 中 ${ensured.legacyRemoved} 个旧版/多余 opencode-auto 标记块`)
   if (await ensureGitignore(directory)) console.log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
 
-  // 轮首建立(轮次专用目录 docs/R-NN,phases-design.md M 节;须在 ensurePointer
+  // 轮首建立(轮次专用目录 docs/R-NN,plans/0006-phases-design.md M 节;须在 ensurePointer
   // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
   // ——轮内 PLAN.md 已存在不重写,根链接重建不漂移),占位模板态 PLAN 以空模板
   // 作初值;continue 建新一轮 R-(N+1)(前置校验已过),轮内 PLAN.md 恒为空模板
@@ -863,7 +863,7 @@ if (command === "init" || command === "continue") {
 
   // -p/--prompt: 项目意图文本写入 .opencode/auto/brief.md(版本化、随仓库共享、
   // 人工可编辑,amend 语义——重复 init -p 覆盖重写),由每个阶段的规划会话消费。
-  // init 不再启动任何 AI 会话(设计文档 phases-design.md §B.1: 规划必须感知
+  // init 不再启动任何 AI 会话(设计文档 plans/0006-phases-design.md §B.1: 规划必须感知
   // 各阶段产物,从 init 挪到 run 的阶段边界)。
   const promptText = flags.get("prompt")
   if (promptText !== undefined) {

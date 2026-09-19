@@ -1,5 +1,5 @@
 // src/artifact.ts 的单测: requireArtifact 阶段步骤恢复(spec.step)、独立单元门禁(spec.unitStart)、严格恢复(STRICT_RESUME)。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
@@ -171,7 +171,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   })
 })
 
-// ---- requireArtifact 独立单元门禁(spec.unitStart,commit-boundary-design.md)----
+// ---- requireArtifact 独立单元门禁(spec.unitStart,plans/0021-commit-boundary-design.md)----
 
 describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
   // 复用 step 恢复块的 fake client 形态: 单会话 + idle 结算,记录 create/prompt;

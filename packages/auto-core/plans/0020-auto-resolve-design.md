@@ -6,7 +6,7 @@
 ② 记录 T-001 对计划所引全部代码位置的核实结果与**四处修正**(§J)。设计基准行号以
 auto-core 分支 `bf745fa94`(改造前)为准,§G 表末另附实施后的实际落点(T-008 回填)。
 
-体例仿 `docs/stats-timing-design.md`。台账与报文机制常态启用、零开关,持久化在目标
+体例仿 `plans/0019-stats-timing-design.md`。台账与报文机制常态启用、零开关,持久化在目标
 目录 `.auto/resolves.json`(gitignore 内、driver 独占写、不进 protect 名单);**唯一
 新增开关 `OPENCODE_AUTO_ASK` 管的是提问策略**,不是日志级别。
 
@@ -283,7 +283,7 @@ AUTO-RESOLVE 的解析对象是散落在文档与代码里的标记行,不是模
 计数本身仍有用:它是扫描确实跑过的证据,也是标注门槛是否失控的体感指标(每任务
 稳定在两位数 = 门槛没被遵守,该收紧 §C 的规则文案)。
 
-措辞体系与既有六处结论行(`docs/stats-timing-design.md` §F)一致:`✓/⏸/■/⏳/↻/◉`
+措辞体系与既有六处结论行(`plans/0019-stats-timing-design.md` §F)一致:`✓/⏸/■/⏳/↻/◉`
 各有归属,高亮块用**新前缀 `⚑`** 且只占置顶位,不侵占既有符号语义。
 
 ## I. 收尾闭环(H7)
@@ -324,7 +324,7 @@ driver 把本任务观测到的代答清单(优先列**未找到配对 agent 标
 1. **`watch()` 的 return 出口是 7 个,不是 8 个**(计划 §5 H2 写"8 个")。逐一清点
    `return snapshot(...)`:`src/runner.ts` 的 2530 / 2581 / 2610 / 2672 / 2727 /
    2752 / 2767,共 7 个(`handleIdleTest` 内的 `return { type: … }` 是另一类型,不
-   经 snapshot)。STATS_PLAN 犯过同一处错并已在 `docs/stats-timing-design.md` §G
+   经 snapshot)。STATS_PLAN 犯过同一处错并已在 `plans/0019-stats-timing-design.md` §G
    记录;本计划沿用了那个旧数字。**不硬凑数字,逐一清点为准**。
 2. **变更文件扫描必须走 `repoRoots`,不能用单次 `git -C dir status`**(计划 §3 写
    `git -C dir status --porcelain` + `git diff --name-only HEAD`)。本项目的目标

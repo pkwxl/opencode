@@ -1,5 +1,5 @@
 // OPENCODE_AUTO_* 实验开关注册表——环境变量层(fork 系开关设计文档
-// docs/fork-decompose-design.md §4.6,步进开关 docs/step-mode-design.md):
+// plans/0003-fork-decompose-design.md §4.6,步进开关 plans/0012-step-mode-design.md):
 // 实验期全部开关经 OPENCODE_AUTO_* 环境变量注入、核心内一次解析(memo)、全流水线
 // 一致,CLI 壳零改动(命名沿 OPENCODE_AUTO_SERVER 先例,src/server.ts)。不落盘:
 // 实验语义 = 本次运行,区别于宪法键的 init 固化,同一次运行内开关恒定;宪法键
@@ -47,7 +47,7 @@ export type FailbackScope = "phase" | "task" | "subtask" | "session"
 // (context.md 本就无硬性行数限制,超出建议行数不会被拒收)。
 export type TaskContextMode = "off" | "small" | "medium" | "large"
 
-// 会话角色词表(阶段化模型路由,见 docs/model-routing-design.md C.1):实验期固定、
+// 会话角色词表(阶段化模型路由,见 plans/0017-model-routing-design.md C.1):实验期固定、
 // 不做自由命名;与 B.5 执行链角色一一对应,`bypass` 为未显式给 role 的旁路会话兜底。
 // 导出为共享真源,后续 P2(resolveModel / roleOf)与旁路改造复用同一份。
 export const MODEL_ROLES = [
@@ -119,7 +119,7 @@ export type Switches = {
   // 的建议行数上限(见 src/prompt.ts 的 TASK_CONTEXT_LINES),供怀疑摘要因"建议
   // 200 行"措辞被过度压缩、信息丢失时调大预算验证。
   taskContext: TaskContextMode
-  // 提问策略(缺省 off,现状零变化;设计文档 docs/auto-resolve-design.md §E):
+  // 提问策略(缺省 off,现状零变化;设计文档 plans/0020-auto-resolve-design.md §E):
   // off = 压制——非权限问题一律不调 question 工具、自主决策,凡本应发问却未发问的
   // 分歧点强制以 AUTO-RESOLVE 标注,纯工程取舍以 AUTO-DECISION 标注;on = 允许——
   // 决定权属于用户的分歧点主动调 question 工具发问,纯实现手段自主决定且不要求
@@ -143,7 +143,7 @@ export type Switches = {
   // 等待,每轮用全新临时会话下发极小探测提示词;探测成功(服务恢复)后 fork 被中断
   // 的会话续跑。等待期间连按两次 Ctrl+C 经进程级 SIGINT 处理器强制退出(130)。
   recoveryWait: number
-  // 严格恢复(session-recovery-fidelity-design.md,缺省 off = 现状): on 时进度
+  // 严格恢复(plans/0022-session-recovery-fidelity-design.md,缺省 off = 现状): on 时进度
   // 记录补单元基线 baseline 与生效模型 model、恢复时核对(外部提交混入走 dirty、
   // 模型不一致/会话死亡/--new-session 回滚到单元基线重跑)、复用会话的恢复说明
   // 收敛为一句 continue、交接文档无效一次即回滚。门禁关闭(--commit false/dryrun)
@@ -154,9 +154,9 @@ export type Switches = {
   // 被测的就是提交 #2 的那一份树,收尾期没有并发写。on 恢复旧的真并发(定版后不 await
   // 测试即下发收尾),此时测试面对的是定版快照,收尾期若改了被测内容只打一行告警,
   // 不 stash、不重跑、不阻塞(重测守卫已随本开关的引入退役,见
-  // docs/test-handover-early-design.md §H)。
+  // plans/0023-test-handover-early-design.md §H)。
   handoverConcurrent: boolean
-  // 休眠时段(避开 LLM 高收费时段,docs/hibernate-design.md,缺省 undefined = 不休眠,
+  // 休眠时段(避开 LLM 高收费时段,plans/0027-hibernate-design.md,缺省 undefined = 不休眠,
   // 现状零变化): OPENCODE_AUTO_HIBERNATE="HH:MM+H"(UTC 每日窗口,H 小时允许小数)。
   // 只在三处既有安全边界(phase/task/subtask,挂点同 step.ts)与启动时检查「现在是否
   // 在窗口内」——在窗口内睡到窗口结束 + 固定随机 0~600 秒再继续;执行中的单元跑到

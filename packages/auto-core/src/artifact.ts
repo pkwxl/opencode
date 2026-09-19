@@ -3,7 +3,7 @@
 // (spec.step)与独立隐藏任务单元的提交边界(spec.unitStart)。被验收机具
 // (review 层)与 final/implement/numbering/knowledge/loop 消费,单独成文件使
 // 它们不必拉进整个 runner。位于 session 之上;**不得反向 import runner**。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S9,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S9,纯搬运)。
 
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { SessionChain } from "./chain"
@@ -25,7 +25,7 @@ import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictR
 // (会话结束即提交;判定会话的 PLAN.md 越权还原发生在提交之后时,还原差异由
 // 下一次提交清扫,历史中保留越权记录本身亦是审计事实)。
 //
-// spec.step(阶段级旁路步骤,docs/session-resume-precedence-design.md): 仅阶段
+// spec.step(阶段级旁路步骤,plans/0018-session-resume-precedence-design.md): 仅阶段
 // 规划/交接蒸馏会话声明。有值时:① 会话链携带 step 阶段,attempt 在提示词下发
 // 成功时写 active 记录(认领在跑的会话,回合进行中被 kill 也不丢);② 进入时若
 // 发现同一步骤的 active 记录(上次运行中断、driver 未收口)→ 续跑: 会话存活且非
@@ -33,7 +33,7 @@ import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictR
 // ③ 收口(删除记录)由调用方在后处理完成后经 closeStep 执行——requireArtifact 本身
 // 不删,避免"产物已校验但后处理(编号推进/台账/提交)未完成"时被 kill 丢失步骤认领。
 //
-// spec.unitStart(commit-boundary-design.md P2): 独立隐藏任务单元声明(阶段规划/
+// spec.unitStart(plans/0021-commit-boundary-design.md P2): 独立隐藏任务单元声明(阶段规划/
 // 交接蒸馏/知识提取/前置知识/编号恢复/终审任务生成)。有值时: ① 入口经 beginUnit
 // 做启动 clean 门禁并记 SHA 基线(恢复复用原会话时豁免 clean——脏区是本单元自身
 // 产物现场——但仍记基线);② spec.commit 失败 → blocked(不开反馈重试: git 故障
@@ -65,7 +65,7 @@ export async function requireArtifact<T>(
     // 阶段级旁路步骤身份(仅阶段规划/交接蒸馏会话声明);有值即启用 driver 侧
     // 恢复点与会话续跑(见函数头注释)。
     step?: { step: StepKind; letter: PhaseLetter }
-    // 会话角色(模型路由细键,docs/model-routing-design.md C.1):旁路一次性会话
+    // 会话角色(模型路由细键,plans/0017-model-routing-design.md C.1):旁路一次性会话
     // 显式声明(如 verify-judge / review-audit / knowledge);缺省 undefined →
     // roleOf 落 bypass。带 spec.step 的阶段步骤会话无需声明(roleOf 由 step 变体推导)。
     role?: ModelRole
@@ -78,7 +78,7 @@ export async function requireArtifact<T>(
   // 阶段步骤续跑判定: 上次运行在本步骤中断(driver 未收口)且原会话仍可复用 →
   // 首个提示词进原会话(保留产物现场);否则按全新步骤处理(重置 + 新会话)。
   // 严格恢复(OPENCODE_AUTO_STRICT_RESUME): 复用前核对单元基线与生效模型
-  // (session-recovery-fidelity-design.md 3.1);不可保真时回滚到基线后按全新步骤
+  // (plans/0022-session-recovery-fidelity-design.md 3.1);不可保真时回滚到基线后按全新步骤
   // 重做——外部提交混入直接 dirty 交人工(不动 git)。
   const strict = strictResumeActive(opts, switches)
   let resumedSession: string | undefined
@@ -148,7 +148,7 @@ export async function requireArtifact<T>(
     }
   }
   let feedback = ""
-  // 独立隐藏任务单元的提交边界(spec.unitStart,commit-boundary-design.md P2):
+  // 独立隐藏任务单元的提交边界(spec.unitStart,plans/0021-commit-boundary-design.md P2):
   // 恢复复用原会话(resumedSession)豁免 clean 检查——工作区脏区是本单元自身产物
   // 现场;全新进入要求 clean(driver 独占状态文件遗留自愈),两种情况都记 SHA 基线。
   let baseline: UnitBaseline | undefined

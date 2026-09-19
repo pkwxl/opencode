@@ -1,7 +1,7 @@
 # 精确断点恢复实施计划(交接文档)
 
 > 状态:**已实施完毕**。代码与文档同步均已完成(`bun typecheck` + `bun test` 全绿);
-> 设计真相已归入 verify-review-design.md H 节,本文件保留作实施记录。
+> 设计真相已归入 plans/0009-verify-review-design.md H 节,本文件保留作实施记录。
 
 ## 需求原文
 
@@ -25,7 +25,7 @@
 
 维持现状:退出码体系;优雅退出(阻塞/回退 pending)→ active=false 不复用。
 
-> **2026-09-10 追加**:恢复点落盘时机经 [session-resume-precedence-design.md](session-resume-precedence-design.md)
+> **2026-09-10 追加**:恢复点落盘时机经 [plans/0018-session-resume-precedence-design.md](plans/0018-session-resume-precedence-design.md)
 > 进一步细化——active 记录改为**提示词下发成功时即写**(认领回合进行中的会话,
 > 此前"回合结束后才写"会在回合中被 kill 时丢失认领),可重试会话错误还原为下发前
 > 快照;阶段级旁路步骤(规划/交接)也经 requireArtifact 的 spec.step 携带恢复点,
@@ -33,7 +33,7 @@
 > 覆盖面以该文档为准。
 
 ~~runSession 运行中瞬时错误重试仍换新会话~~ ——已被
-[session-error-retry-plan.md](session-error-retry-plan.md) 取代(2026-09-09 实施):
+[plans/0015-session-error-retry-plan.md](plans/0015-session-error-retry-plan.md) 取代(2026-09-09 实施):
 isRetryable:false 直接阻塞不重试;可重试错误改为 fork(chain.id) 重试,失败即弃、
 原会话不受影响,不再无差别清空 chain.id 换白板会话。
 
@@ -79,7 +79,7 @@ isRetryable:false 直接阻塞不重试;可重试错误改为 fork(chain.id) 重
 
 ## 待完成(仅文档同步)
 
-1. **docs/verify-review-design.md H 节**(约 294-318 行):
+1. **plans/0009-verify-review-design.md H 节**(约 294-318 行):
    - "会话内恢复"行:改为 active 且会话存活即复用(无时间窗;与 `opencode -r` 同构);
      补 `--new-session`(仅跳过复用)与交接文件优先规则。
    - "phase 阶段"行:verify stage 加 `fix`(含 gap 差距原文持久化)。
@@ -93,7 +93,7 @@ isRetryable:false 直接阻塞不重试;可重试错误改为 fork(chain.id) 重
    `src/resume.ts` 条目(RESUME_WINDOW_MS=30 分钟)同步。
 4. **README.md**:中断恢复章节(约 322-340 行,"30 分钟内"段落重写,补交接优先与
    --new-session 说明);run 选项表(约 151 行起)加 `--new-session` 行。
-5. **本文件**:全部完成后可删除(设计真相归 verify-review-design.md H 节)或标记已实施。
+5. **本文件**:全部完成后可删除(设计真相归 plans/0009-verify-review-design.md H 节)或标记已实施。
 6. AGENTS.md(包根)导航行"中断恢复 → src/resume.ts"仍准确,无需改;确认无 30 分钟
    残留表述即可。
 

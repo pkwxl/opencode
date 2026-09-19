@@ -1,7 +1,7 @@
 // 任务循环的结论报文: 启动续接横幅、任务/阶段/轮次三处代答高亮块与结论行
-// (docs/stats-timing-design.md §F、docs/auto-resolve-design.md §H)。
+// (plans/0019-stats-timing-design.md §F、plans/0020-auto-resolve-design.md §H)。
 // 只构造文案、不打印,loop 主体负责 log。纯叶子,不依赖 loop.ts。
-// 拆分自 src/loop.ts(docs/module-split-plan.md S13,纯搬运)。
+// 拆分自 src/loop.ts(plans/0024-module-split-plan.md S13,纯搬运)。
 import { formatDuration, formatUsageLine } from "./log"
 import { currentRound, phaseText, type Phase } from "./phases"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
@@ -20,7 +20,7 @@ export function resumeBanner(resumed: StatsResume): string {
   return `↻ 统计续接: ${parts.join(" / ")},上次进程止于 ${at}`
 }
 
-// ===== 代答高亮块(docs/auto-resolve-design.md §H,H5/H6)=====
+// ===== 代答高亮块(plans/0020-auto-resolve-design.md §H,H5/H6)=====
 // 三处置顶块与下面三处结论行一一配对: 高亮先打、结论行后打(§H-② 的版面顺序——
 // 用户先看见"系统替我做了什么主",再看统计)。构造与 log 分离的理由同结论行: 文案
 // 可单测直驱(test/loop-conclusion.test.ts),loop 主体只负责 log。

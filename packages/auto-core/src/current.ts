@@ -1,7 +1,7 @@
 // CURRENT.md(目标目录的当前任务镜像)的写入与删除。
 // 叶子模块: 只依赖 PLAN.md 解析与写保护,不依赖任何会话驱动代码——
 // unit-commit 的回滚备注与 runner 的任务流水线都要写它。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S3,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S3,纯搬运)。
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { countSubtasks, type Task } from "./plan"

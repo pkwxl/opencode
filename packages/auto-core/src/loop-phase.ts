@@ -1,7 +1,7 @@
 // 阶段循环(--phases): 阶段规划会话(planPhase)、阶段交接(handoverPhase + 步进包装
 // handoverWithStep)与阶段路由主循环(runPhaseLoop),runAll 原闭包转顶层函数,捕获量
 // 显式化为 LoopCtx(定义在 ./loop-task)。
-// 拆分自 src/loop.ts(docs/module-split-plan.md S16,纯搬运)。不依赖 loop.ts。
+// 拆分自 src/loop.ts(plans/0024-module-split-plan.md S16,纯搬运)。不依赖 loop.ts。
 import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
@@ -93,7 +93,7 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
   ).join("\n\n")
   // 本轮首个规划会话的额外注入(台账为空时): ① 前置知识(外壳启动时的已有
   // 迁移结果蒸馏,docs/prior-kb/,见 src/knowledge.ts);② 上一轮结论(轮次
-  // 归档存在时,phases-design.md M 节)。后续阶段照常走 handovers 蒸馏链,
+  // 归档存在时,plans/0006-phases-design.md M 节)。后续阶段照常走 handovers 蒸馏链,
   // 不重复注入。
   let prevRound: string | undefined
   if (!ledger.done.length) {
@@ -137,7 +137,7 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
         kind: "阶段规划",
         step: { step: "phase-plan", letter: phase },
         // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
-        // (commit-boundary-design.md;PLAN.md 遗留由 beginUnit carryover 自愈)。
+        // (plans/0021-commit-boundary-design.md;PLAN.md 遗留由 beginUnit carryover 自愈)。
         unitStart: true,
         artifact: "已填充的 PLAN.md(至少一个任务)",
         detail: "缺失、无任务、任务格式无法解析或任务编号复用了已占用的编号",
@@ -203,7 +203,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
   const handover = await handoverDoc(directory, round, phase)
   const handoverFile = join(directory, handover)
   await mkdir(dirname(handoverFile), { recursive: true })
-  // 蒸馏幂等跳过 + ③ 补提交(commit-boundary-design.md P4): 交接文档已齐备
+  // 蒸馏幂等跳过 + ③ 补提交(plans/0021-commit-boundary-design.md P4): 交接文档已齐备
   // (四小节经 validHandover 校验)时不再重开蒸馏会话——上次中断在"蒸馏已产出、
   // driver 未收口"区间的现场直接续跑归档/台账;文档仍在未提交清单则先补提交
   // (产物落盘且已提交才算完成)。部分写就(小节不全)照常走蒸馏: reset 清文件
@@ -241,7 +241,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
         kind: "交接蒸馏",
         step: { step: "phase-handover", letter: phase },
         // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
-        // (commit-boundary-design.md;部分写就的交接文档由 reset 清理重写)。
+        // (plans/0021-commit-boundary-design.md;部分写就的交接文档由 reset 清理重写)。
         unitStart: true,
         artifact: `有效交接文档 ${handover}(四个必备小节齐备)`,
         detail: "缺失或小节不全",
@@ -285,7 +285,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
   if (opts.commit !== false) {
     // 交接提交是阶段单元的收口落账(归档/重置/台账),提交失败 → 阻塞退出 2
     // 交人工: 台账已追加,重跑会按台账路由到下一阶段,遗留未提交改动由人工
-    // 处置后继续(commit-boundary-design.md P3)。
+    // 处置后继续(plans/0021-commit-boundary-design.md P3)。
     const settled = await commitTree(directory, { id: "PLAN", title: `阶段交接(${phase} ${phaseText(phase)})` }, {
       stage: "phase-transition",
       subject: `PLAN transition ${phase} ${phaseText(phase)} → ${target}${fat ? `(${fat})` : ""}`,
@@ -298,7 +298,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
       return 2
     }
   }
-  // 阶段代答汇总(auto-resolve-design.md §H-③,H6): 置顶于 ■ 收口行之前。
+  // 阶段代答汇总(plans/0020-auto-resolve-design.md §H-③,H6): 置顶于 ■ 收口行之前。
   for (const line of await phaseResolveLines(directory, phase)) log(line)
   // 阶段收口行(STATS_PLAN §4.3,T-006): commitTree 之后、return 0 之前——
   // 交接提交时长仍计入本阶段桶(读数实时外推,含当前开放段)。
@@ -320,7 +320,7 @@ export async function handoverWithStep(ctx: LoopCtx, phase: Phase): Promise<numb
   await stepPause("phase", `阶段 ${phase} ${phaseText(phase)} 交接`, { interactive: repl, dir: directory })
   maybeExit("phase", `阶段 ${phase} ${phaseText(phase)} 交接`)
   // 休眠窗口(phase 边界,OPENCODE_AUTO_HIBERNATE): 交接(归档+台账+提交)完成后的
-  // 安全落点检查,在窗口内睡到唤醒再进入下一阶段(docs/hibernate-design.md)。
+  // 安全落点检查,在窗口内睡到唤醒再进入下一阶段(plans/0027-hibernate-design.md)。
   await hibernatePause(`阶段 ${phase} ${phaseText(phase)} 交接边界`, { dir: directory })
   // failback 回试(phase 边界): 所有粒度都在阶段边界重置——phase 粒度的跨任务
   // sticky holder 在此清零;/failback 请求同点消费。
@@ -352,7 +352,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
     // 阶段切换挂点(STATS_PLAN §3): 字母变化重置 phase 桶;相同字母幂等。
     // blocked 已 return、complete 即将退出,均无需切换。
     await statsPhase(directory, route.phase)
-    // 会话恢复优先于文件推导路由(docs/session-resume-precedence-design.md):
+    // 会话恢复优先于文件推导路由(plans/0018-session-resume-precedence-design.md):
     // driver 侧仍有未收口的阶段步骤恢复点(上次运行的规划/交接会话被中断、driver
     // 未完成收口)→ 重入该步骤并复用中断的会话,即使 PLAN.md/台账已让文件推导路由
     // 前进。PLAN.md 任务与交接文档是 AI 写的(或会话中断后才由 driver 补的),不能
@@ -434,7 +434,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
         if (extracted.type === "ok") log(`✓ 迁移知识文档已产出: ${extracted.file}`)
         else if (extracted.type === "skipped") log(`↻ 迁移知识文档已产出(${extracted.file}),跳过提取,直接进入交接`)
         else if (extracted.type === "dirty") {
-          // dirty(commit-boundary-design.md ④ 推广): 工作区不净(上次提取半途而废
+          // dirty(plans/0021-commit-boundary-design.md ④ 推广): 工作区不净(上次提取半途而废
           // 的现场、补提交失败或统一提交失败)必须停机交人工——照常交接会让下一个
           // 单元在不干净的基线上启动,破坏提交边界。
           log(`⏸ 迁移知识提取无法在干净基线上完成或收账,请人工处置(提交/清理)后重新运行:`)

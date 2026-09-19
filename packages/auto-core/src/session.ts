@@ -2,9 +2,9 @@
 // 错误换新会话重试、网络故障重启 server、配额受限的模型降级环与窗口钳制、
 // 一切会话故障的最终归宿「等待-探测环」awaitRecovery),以及 fork 基点的确立
 // (ensureForkBase——它驱动一次性基点会话,属会话驱动而非 SDK 薄封装,故与
-// runSession 同层,见 docs/module-split-plan.md §I D9)。
+// runSession 同层,见 plans/0024-module-split-plan.md §I D9)。
 // 位于 attempt/watch 之上、runner 之下;**不得反向 import runner**。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S8,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S8,纯搬运)。
 
 import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
@@ -387,7 +387,7 @@ export async function runSession(
     //
     // 失败会话优先的理由: 超时/流中断类故障与会话内容无关(provider 侧停顿),
     // 会话里那 100k+ 已核实产出是本轮最值钱的资产,开空白会话等于把它扔掉、再从
-    // 零撞同一堵墙——session-error-retry-plan.md 事实基线第 4 点记过这种"比完全不
+    // 零撞同一堵墙——plans/0015-session-error-retry-plan.md 事实基线第 4 点记过这种"比完全不
     // 复用还差"的反例。代价是副本尾部带着那条 0-token 报错消息、重试提示词落在它
     // 后面;used 为 0 的失败会话则是纯报错桩(下发即失败,什么也没跑出来),没有
     // 值得保护的内容,不进候选(维持原设计判据)。

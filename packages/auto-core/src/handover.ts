@@ -1,7 +1,7 @@
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 
-// 测试交接(--handover-test)的中断恢复,见 docs/test-handover-early-design.md §I。
+// 测试交接(--handover-test)的中断恢复,见 plans/0023-test-handover-early-design.md §I。
 //
 // 一次测试交接的时序是: 定版提交 #1 → 会话收尾并写交接文档 → 归档为
 // testhandoff-<n>.md → 交接提交 #2 → 执行定版时消费出来的脚本 → 开续跑会话。
@@ -33,7 +33,7 @@ export type Handover = {
   nextSession?: string
   // 定版脚本的执行结果固化(F6 修订,2026-09-17): 收口执行落定即随记录写入——
   // 本地脚本除断电/强制终止外必然跑完,已执行即视为完成,恢复不再重复执行,
-  // 凭此引用落盘的输出(详见设计文档 test-handover-early-design.md §M)。
+  // 凭此引用落盘的输出(详见设计文档 plans/0023-test-handover-early-design.md §M)。
   // 结构与 TestRunInfo 一致(结构化声明避免 handover → prompt 的反向依赖)。
   ran?: {
     script: string
@@ -86,7 +86,7 @@ export async function forgetHandover(dir: string): Promise<void> {
 }
 
 // 交接文档的状态行(`状态: 继续|完成`): ondemand 的 handoff.md 与测试交接的
-// testhandoff.md 共用同一判据(交接边界写核,session-recovery-fidelity-design.md
+// testhandoff.md 共用同一判据(交接边界写核,plans/0022-session-recovery-fidelity-design.md
 // 3.3 R3)。undefined = 缺失/无效。
 //
 // 判据是整行锚定的状态行: 行首起、值恰为 继续|完成。不锚定的全文匹配会把正文
@@ -124,7 +124,7 @@ export type HandoverStage = "none" | "wrapup" | "commit" | "test"
 // 落笔不是交接证据)。阶段观测以在途记录的 n 为权威——记录由 driver 在交接收口
 // 时写下,指着真正收口的那份归档;记录缺失(机制上线前的存量现场)才回落盘扫描。
 // 归档续号取两侧最大: 盘上即使躺着误写件也不覆盖,续号跳过它(设计文档
-// test-handover-early-design.md §I,2026-09-17 修订)。
+// plans/0023-test-handover-early-design.md §I,2026-09-17 修订)。
 export function handoverSeq(record: Handover | undefined, diskMax: number): { observed: number; nextBase: number } {
   const observed = record?.n ?? diskMax
   return { observed, nextBase: Math.max(diskMax, observed) }

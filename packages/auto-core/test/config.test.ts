@@ -116,7 +116,7 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("commit: false 已退役 → 严格失败;true/缺失照常(commit-boundary-design.md 2026-09-15)", async () => {
+  test("commit: false 已退役 → 严格失败;true/缺失照常(plans/0021-commit-boundary-design.md 2026-09-15)", async () => {
     const dir = tempDir()
     try {
       expect(CONFIG_DEFAULTS.commit).toBe(true)

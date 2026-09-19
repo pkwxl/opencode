@@ -1,9 +1,9 @@
 // 会话后的统一提交与执行单元回滚: 代答标记采集、提交门禁与单元收口校验、
 // refcheck 挂点门禁、恢复保真(严格恢复生效判定/模型一致性求值)、回滚到
-// 单元基线的 runner 侧编排。设计见 docs/commit-boundary-design.md 与
-// docs/session-recovery-fidelity-design.md。
+// 单元基线的 runner 侧编排。设计见 plans/0021-commit-boundary-design.md 与
+// plans/0022-session-recovery-fidelity-design.md。
 // 位于会话驱动层之下: 不得 import session/watch/runner。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S3,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S3,纯搬运)。
 import { writeCurrent } from "./current"
 import { phaseToRole, resolveModel } from "./chain"
 import { failbackOverride, stickyModel } from "./failback"
@@ -21,7 +21,7 @@ import { autoSwitches, type Switches } from "./switches"
 // Questions get this autonomous reply when no human answers in time (or
 // --wait-answer was not given for non-permission questions); only a repeated
 // question on the same issue escalates to human intervention.
-// 文案按提问策略档位取用(OPENCODE_AUTO_ASK,docs/auto-resolve-design.md §G):
+// 文案按提问策略档位取用(OPENCODE_AUTO_ASK,plans/0020-auto-resolve-design.md §G):
 // 两档共同点明"这是一个被代答的提问"——本应由用户拍板的分歧点因无人值守由 driver
 // 代替用户闭环,让会话知道自己正在替用户做主,而不是当成一次普通的自主决策。
 // off 档(缺省)要求以 AUTO-RESOLVE 标注该决策并明确区别于 AUTO-DECISION(台账靠
@@ -61,7 +61,7 @@ export async function afterSession(
   baseline?: UnitBaseline,
 ): Promise<SessionCommit> {
   if (!dir) return { type: "ok" }
-  // 代答标记采集(auto-resolve H4,docs/auto-resolve-design.md §G): 提到 commit/
+  // 代答标记采集(auto-resolve H4,plans/0020-auto-resolve-design.md §G): 提到 commit/
   // dryrun 提前 return **之前**——采集是审计,不该受提交开关影响;on 档下它降级为
   // 兜底(driver 已在事件侧完整落账),但会话自愿标了就收。扫描本次会话的未提交
   // 变更文件,AUTO-RESOLVE 落台账、AUTO-DECISION 只回计数。
@@ -109,7 +109,7 @@ async function collectSessionMarks(
   if (found.decisions) vlog(`ℹ ${task.id} ${stage}: 记录 AUTO-DECISION ${found.decisions} 条`)
 }
 
-// 收尾会话的代答清单(auto-resolve H7,docs/auto-resolve-design.md §I): 本任务台账里
+// 收尾会话的代答清单(auto-resolve H7,plans/0020-auto-resolve-design.md §I): 本任务台账里
 // driver 观测到的代答问题,经 renderWrapup 注入收尾提示词,要求 report.md 单列「自动
 // 代答问题」一节——driver 看见的那部分因此被强制写进 git,持久记录不再依赖会话自觉。
 // 台账读失败一律吞成空(与 loop 侧三处置顶块同款): 审计永不影响流程与退出码。
@@ -130,7 +130,7 @@ export async function gatedTaskRefGap(dir: string, id: string, on: boolean): Pro
   return on ? formatRefGap(await taskRefFindings(dir, id)) : undefined
 }
 
-// —— 恢复保真(session-recovery-fidelity-design.md,OPENCODE_AUTO_STRICT_RESUME)——
+// —— 恢复保真(plans/0022-session-recovery-fidelity-design.md,OPENCODE_AUTO_STRICT_RESUME)——
 
 // 严格恢复是否生效: 开关 on 且提交门禁在位(--commit true 且非 dryrun)。门禁关闭
 // 时记录不带基线/模型字段、核对与回滚整体空转(逐字节等价现状)。switches 缺省取

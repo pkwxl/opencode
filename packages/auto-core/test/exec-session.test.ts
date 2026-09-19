@@ -1,5 +1,5 @@
 // src/exec-session.ts 的单测: seedPinFork 定版点分叉。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import type { SessionChain } from "../src/chain"

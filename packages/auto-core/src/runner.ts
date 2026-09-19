@@ -120,7 +120,7 @@ export async function runTask(
   task: Task,
   opts: Opts,
 ): Promise<Outcome> {
-  // 实验开关(OPENCODE_AUTO_* 环境变量层,fork-decompose-design.md §4.6): 入口
+  // 实验开关(OPENCODE_AUTO_* 环境变量层,plans/0003-fork-decompose-design.md §4.6): 入口
   // 解析一次(memo)——非法值在此抛出中文报错(CLI 侧退出码 1),非默认组合记入
   // 启动日志(默认组合静默,verbose 可查全量);fork/forkBase 由 fork 流水线消费,
   // 本层只做解析与既有机制接线(fine/steer);failback 粒度在子任务边界消费。
@@ -129,7 +129,7 @@ export async function runTask(
   const dir = opts.dir ?? dirname(plan.path)
   const mode = opts.subtask ?? "auto"
   const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
-  // 严格恢复(session-recovery-fidelity-design.md): on 时记录携带单元基线/生效模型、
+  // 严格恢复(plans/0022-session-recovery-fidelity-design.md): on 时记录携带单元基线/生效模型、
   // 恢复时核对、不可保真回滚重跑。此刻取任务级基线(与 loop 的 beginUnit 之间无
   // 提交,HEAD 相同;恢复续跑豁免 clean 的路径同样适用)——子任务/阶段边界会由
   // runSubtask/persistStage 刷新为更近的单元基线。
@@ -177,7 +177,7 @@ export async function runTask(
       mode !== "off" ? await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "handoff"))).text().catch(() => undefined) : undefined
     const handedOff =
       recalled.active === true && (handoffRaw !== undefined || (opts.handoverTest === true && (await testHandoffExists(dir, task))))
-    // 严格恢复(session-recovery-fidelity-design.md 3.3): 交接文档在场但无有效状态行
+    // 严格恢复(plans/0022-session-recovery-fidelity-design.md 3.3): 交接文档在场但无有效状态行
     // (低质)→ R3 触发,回滚重跑,不凭文档续跑;需基线在册才可回滚。
     const handoffInvalid =
       strict &&
@@ -194,7 +194,7 @@ export async function runTask(
     // 0/0 占位以保证首个提示词必定复用,代价是恢复后的日志与链内后续复用决策
     // 全用假值;首轮复用现由 attempt 的 resumed 判据保证,这里只取真实值。
     const usage = alive ? await sessionUsage(client, recalled.session!) : undefined
-    // 双保险(session-error-retry-plan.md 第 5 点): 历史遗留的 progress.json 可能
+    // 双保险(plans/0015-session-error-retry-plan.md 第 5 点): 历史遗留的 progress.json 可能
     // 记着一个只挨了一记报错、从未真正产出过内容的会话(旧版"重试即换白板会话"
     // 逻辑的残留:整条会话没有任何跑完过的 assistant 轮次,只有报错桩)。有了第
     // 3/4 点的修复后理论上不会再产生这种记录,此处仅兜底改造上线前生成的旧文件。
@@ -377,7 +377,7 @@ export async function runTask(
     // 终审任务(final 字段)与 v(验收)阶段任务本身即检验: 共用同一豁免路径,
     // 强制 review=0 且跳过三段式验收,不对检验再做检验(--early 随之自然失效);
     // v 豁免为内部标记(opts.phase),不写 final 字段、不污染 PLAN.md 协议
-    // (设计文档 B.6 与 phases-design.md D.3)。终审任务报告缺失/协议非法由路由时
+    // (设计文档 B.6 与 plans/0006-phases-design.md D.3)。终审任务报告缺失/协议非法由路由时
     // brokenReport 阻塞兜底。
     const finalMark = parseFinalMark(task.final)
     const exempt = Boolean(finalMark) || opts.phase === "v"
@@ -409,7 +409,7 @@ export async function runTask(
     let pendingVerify = resume?.kind === "verify" ? resume : undefined
     // 修复检查项注入是 driver 状态写入(PLAN.md 检查项 + CURRENT.md 镜像),注入后
     // 立即统一提交——下一个执行单元(fixrun 检查项)的启动 clean 门禁据此成立
-    // (commit-boundary-design.md P3);提交失败即阻塞,planfix 产物不算落账。
+    // (plans/0021-commit-boundary-design.md P3);提交失败即阻塞,planfix 产物不算落账。
     const injectFix = async (items: string[], round: number): Promise<{ type: "blocked"; question: string } | undefined> => {
       await appendSubtasks(plan.path, task.id, items)
       await persistStage({ kind: "review", round, stage: "fixrun" })
@@ -456,7 +456,7 @@ export async function runTask(
           const loopPhase: Phase = chain.phase?.kind === "review" ? chain.phase : { kind: "subtasks" }
           chain.phase = { ...loopPhase, index: index + 1 }
           // 恢复续跑判定(active 记录恰归属本检查项): 中断现场的工作区脏区是本单元
-          // 自身进度,runSubtask 的启动 clean 门禁据此豁免(commit-boundary-design.md)。
+          // 自身进度,runSubtask 的启动 clean 门禁据此豁免(plans/0021-commit-boundary-design.md)。
           const recalledPhase = recalled?.active === true ? recalled.phase : undefined
           const resumeUnit =
             recalledPhase !== undefined &&
@@ -480,7 +480,7 @@ export async function runTask(
           await stepPause("subtask", `${task.id} 子任务 ${index + 1}`, { interactive: opts.interactive, dir })
           maybeExit("subtask", `${task.id} 子任务 ${index + 1}`)
           // 休眠窗口(subtask 边界,OPENCODE_AUTO_HIBERNATE): 勾选+统一提交后的安全
-          // 落点检查,在窗口内睡到唤醒再继续(docs/hibernate-design.md)。
+          // 落点检查,在窗口内睡到唤醒再继续(plans/0027-hibernate-design.md)。
           await hibernatePause(`${task.id} 子任务 ${index + 1} 边界`, { dir })
           // failback 回试(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): subtask/session 粒度
           // 在子任务边界清链上降级候选,下一子任务回试首选(task 粒度由链逐任务销毁
@@ -576,7 +576,7 @@ function pseudoTask(id: string, title: string): Task {
   return { id, title, status: "in_progress", attempts: 0, body: "" }
 }
 
-// 壳包兼容再导出(docs/module-split-plan.md §D.3,S12 收敛): runner.ts 不再是万能入口,
+// 壳包兼容再导出(plans/0024-module-split-plan.md §D.3,S12 收敛): runner.ts 不再是万能入口,
 // 包内模块与单测一律从符号所在模块精确导入;此处只保留壳包经 `runner` 子路径的既有
 // 消费面(PermissionMode / SubtaskMode 类型与 requireArtifact),壳分支零改动。
 export type { PermissionMode, SubtaskMode } from "./opts"

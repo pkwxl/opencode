@@ -2,7 +2,7 @@
 // 模式以文件模板管理——内置 templates/modes/<name>.md(经 `with { type: "file" }`
 // 编译期嵌入,新增内置模式 = 加文件 + 一条导入),目标目录 .opencode/auto/modes/
 // <name>.md 可新增或覆盖同名内置模式,新增模式零源码改动。
-// ModeSpec 三段文案的注入点: init → 阶段规划会话的模式导语(phases-design.md
+// ModeSpec 三段文案的注入点: init → 阶段规划会话的模式导语(plans/0006-phases-design.md
 // E 节,P2 起消费);exec → 分解/整任务/子任务/收尾等执行类提示词的注意事项段;
 // final → 终审各阶段提示词的侧重(renderFinalTask 消费;remediate 阶段不注入)。
 import { readFileSync, readdirSync } from "node:fs"

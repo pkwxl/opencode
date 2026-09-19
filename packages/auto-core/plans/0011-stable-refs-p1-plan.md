@@ -1,6 +1,6 @@
 # stable-refs P1 实施设计:路径统一(行为等价改名 + 存量迁移)
 
-> 状态:**实施设计定稿(2026-09-06),未实施**。上游设计: [stable-refs-design.md](./stable-refs-design.md)
+> 状态:**实施设计定稿(2026-09-06),未实施**。上游设计: [plans/0010-stable-refs-design.md](./0010-stable-refs-design.md)
 > (§2 决策、§3 规范本体、§4.1/4.2/4.5 机制、§5 P1 清单);与上游冲突时以上游为准,实现侧
 > 偏差以本文件 §3 既定决策为准并回写上游。
 > 本文件 = P1 的可执行规格 + 会话切分 + **基点摘要**;按 §0 协议供多个独立实施会话执行。
@@ -285,7 +285,7 @@ testhandoff.md。这些路径一经创建即为永久路径——不移动、不
 
 `src/knowledge.ts`、`src/resume.ts`、`src/phases.ts`(快照/归档链路 = P2)、`src/check.ts`
 (P4 扩展)、`src/verify.ts`、`src/protect.ts`、`src/loop.ts` 的 `ensurePointer`(refs
-标记块 = P4)、`docs/phases-design.md`(P2 修订)、壳包 e2e。S2 落地后 `rg` 核对(§1.4)
+标记块 = P4)、`plans/0006-phases-design.md`(P2 修订)、壳包 e2e。S2 落地后 `rg` 核对(§1.4)
 仅余 docpaths 的 legacy 构造、runner 的兼容清扫/读回落与注释。
 
 ## 5. 会话切分(每会话独立收口全绿)
@@ -349,7 +349,7 @@ testhandoff.md。这些路径一经创建即为永久路径——不移动、不
 
 ## 7. 文档回写清单(S4)
 
-- `docs/stable-refs-design.md`:§5 P1 各项勾选;§7 进度行(日期/提交/验证);§8 追加
+- `plans/0010-stable-refs-design.md`:§5 P1 各项勾选;§7 进度行(日期/提交/验证);§8 追加
   P1-D1/D2/D5/D8 偏差注记;§3.1 `T-F1/` 注释处补"各终审任务锚定自己的 docs/T-F<k>/"。
 - `docs/behavior.md`:新增「任务文档路径契约(P1)」条(目录化布局、读回落、启动迁移
   doc-migrate、dryrun 跳过);统一提交 label 清单、--review、--test-by-driver、subtask

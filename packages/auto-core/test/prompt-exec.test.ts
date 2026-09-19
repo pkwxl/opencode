@@ -1,5 +1,5 @@
 // src/prompt.ts 执行族渲染的单测: 分解/理解/基点/子任务/收尾/修复/整任务/测试执行协议/死循环提示/dryrun。
-// 拆分自 test/prompt.test.ts(docs/module-split-plan.md S19,纯搬运)。
+// 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -384,7 +384,7 @@ describe("renderWrapup", () => {
     expect(text).not.toContain("S<NN>")
   })
 
-  // 收尾闭环 H7(docs/auto-resolve-design.md §I): driver 观测到的代答清单注入收尾
+  // 收尾闭环 H7(plans/0020-auto-resolve-design.md §I): driver 观测到的代答清单注入收尾
   // 提示词,要求 report.md 单列「自动代答问题」节。
   test("无代答(缺省/空清单)时代答段整体消失", () => {
     for (const text of [renderWrapup(plan, task), renderWrapup(plan, task, { resolves: [] })]) {

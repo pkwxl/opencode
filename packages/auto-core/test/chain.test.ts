@@ -1,11 +1,11 @@
 // src/chain.ts 的单测: 模型路由求值(resolveModel/splitModel)、角色推导(phaseToRole/roleOf)、会话错误归类(classifySessionError)。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import { classifySessionError, phaseToRole, resolveModel, roleOf, splitModel } from "../src/chain"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
-// ---- 阶段化模型路由(docs/model-routing-design.md C.1/C.3,P2)----
+// ---- 阶段化模型路由(plans/0017-model-routing-design.md C.1/C.3,P2)----
 
 describe("resolveModel(路由求值 role > letter > wildcard)", () => {
   const policy = (raw?: string) => parseSwitches(raw ? { [SWITCH_ENV.model]: raw } : {}).model
@@ -74,7 +74,7 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
   })
 })
 
-// ---- 会话错误分类器(docs/model-routing-design.md D.1,P3)----
+// ---- 会话错误分类器(plans/0017-model-routing-design.md D.1,P3)----
 // 固定报文样本驱动判据演进(设计 G.2):新 provider 措辞漏判时改这里并回归。
 // 分类问"换模型有没有用",与 opencode 自身 RETRYABLE 判据(换会话有没有用)不同。
 describe("classifySessionError(固定报文样本 → 类别)", () => {

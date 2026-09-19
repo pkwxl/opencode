@@ -1,6 +1,6 @@
 // src/session-api.ts 的单测: 基点分叉(forkSession/seedForkSession)、末端用量重建(sessionUsage)、askHuman 等待扣除;
 // 另含 src/session.ts 的 ensureForkBase(基点确立与回退链,经会话驱动,见 §F.2 归属)。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"

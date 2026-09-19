@@ -2,7 +2,7 @@
 
 > 状态:**已实施**(2026-09-10,`packages/auto-core`,分支 `auto-core`)。
 > `bun typecheck && bun test` 全绿(451→459 pass,+8 用例)。
-> 本文件是设计真相;`precise-resume-plan.md` / `session-error-retry-plan.md`
+> 本文件是设计真相;`plans/0008-precise-resume-plan.md` / `plans/0015-session-error-retry-plan.md`
 > 为前序工作,本文修订其中两处现状(见文末「与前序文档的关系」)。
 
 ## 需求原文(用户)
@@ -30,7 +30,7 @@
    `ses_f773ba946ffeWbMA0w0SEPRyta`(标题 `PLAN plan m 迁移实现`)于 `00:39`–
    `00:47` 工作,`00:47:47` 写出 PLAN.md(T-065..T-068 四个任务)后立刻撞上
    Kimi 周配额(`isRetryable:false`)。driver 按
-   `session-error-retry-plan.md` 第 1–3 点正确处置:`⛔ PLAN 遇到不可重试的会话
+   `plans/0015-session-error-retry-plan.md` 第 1–3 点正确处置:`⛔ PLAN 遇到不可重试的会话
    错误,直接阻塞`,不 fork、不换白板会话,`chain.id` 留在该会话上。该会话累计
    **196.8k tokens**(DB `session` 表实测),是真正干了活的会话。
 2. 但规划会话是**旁路一次性会话**(`requireArtifact` 骨架,伪任务 `PLAN`),
@@ -52,7 +52,7 @@
    active:false, phase:{kind:"decompose"}}`——`at` 比 decompose 会话的创建时刻还早
    8ms。即:记录停在**上一阶段边界**(理解会话结束、`persistStage(decompose)` 写
    `active:false`),真正在跑的分解会话既没被记为 `session`、也没被记为 `active`。
-3. 根因是 `session-error-retry-plan.md` 第 4 点把 `remember()` 从"sessionID 刚确定
+3. 根因是 `plans/0015-session-error-retry-plan.md` 第 4 点把 `remember()` 从"sessionID 刚确定
    (下发前)"挪到了"回合结束后":该改动修掉了"可重试中间失败态顶替真实会话"
    (T-062),却顺手取走了"回合进行中被 kill 时对在跑会话的认领"。下一次运行
    `active:false` → 不复用 → 分解从零重做。这就是用户说的"子任务会话仍未被真正
@@ -70,7 +70,7 @@
 | 决策点 | 结论 |
 | --- | --- |
 | 恢复点落盘时机(B) | 改为**提示词下发成功即写** `active` 记录(认领在跑的会话);回合结束后按结果刷新 |
-| 可重试错误(B) | 回合以可重试会话错误结束时,把 `progress.json` **还原为下发前快照**(被弃的 fork 副本/失败会话不顶替真实恢复点)——保留 `session-error-retry-plan.md` 第 4 点的保护,从"不抢先落盘"改为"下发即写 + 失败还原" |
+| 可重试错误(B) | 回合以可重试会话错误结束时,把 `progress.json` **还原为下发前快照**(被弃的 fork 副本/失败会话不顶替真实恢复点)——保留 `plans/0015-session-error-retry-plan.md` 第 4 点的保护,从"不抢先落盘"改为"下发即写 + 失败还原" |
 | `remember()` 门控(B) | 去掉 `task.id.startsWith("T-")`,只留 `chain.phase`——携带阶段的会话(执行链 + 阶段步骤旁路)都写;无阶段的一次性旁路(判定/审核/脚本生成/修复规划/dryrun/fork 基点)仍不写 |
 | 阶段步骤恢复点(A) | `resume.ts` 的 `Phase` 加 `step` 变体(`phase-plan`/`phase-handover` + 归属阶段字母);`requireArtifact` 加 `spec.step`,进入时若发现同一步骤的 `active` 记录 → 续跑 |
 | 续跑时是否复用会话(A) | 会话存活且非报错桩 → 复用原会话(保留产物现场,**不重置**);会话已死/`--new-session`/报错桩 → 开新会话并**照常重置**(等同全新步骤) |
@@ -131,8 +131,8 @@
 
 ### P6 文档同步
 - 本文件;`docs/behavior.md` 进度恢复条目与阶段循环条目;`docs/structure.md`
-  `resume.ts`/`runner.ts`/`loop.ts` 条目;`docs/phases-design.md` D/E 节;
-  `precise-resume-plan.md` / `session-error-retry-plan.md` 交叉引用;包根 AGENTS.md 导航行。
+  `resume.ts`/`runner.ts`/`loop.ts` 条目;`plans/0006-phases-design.md` D/E 节;
+  `plans/0008-precise-resume-plan.md` / `plans/0015-session-error-retry-plan.md` 交叉引用;包根 AGENTS.md 导航行。
 
 ## 验证
 
@@ -145,14 +145,14 @@ cd packages/auto-core && bun typecheck && bun test   # 458 pass / 0 fail
   复用该会话(196.8k 上下文不丢)续写/确认 PLAN.md → 编号推进 + 提交 + `closeStep`。
 - 现场二回放:分解会话下发即写 `{session: ses_f772f5aa6ffe, active:true,
   phase:decompose}`;Ctrl+C 强退后下次运行 `runTask` 复用该会话(29.4k 上下文不丢)。
-- 回归:`session-error-retry-plan.md` 的"可重试中间失败态不顶替真实记录"用例仍绿
+- 回归:`plans/0015-session-error-retry-plan.md` 的"可重试中间失败态不顶替真实记录"用例仍绿
   (改为下发即写 + 失败还原,终态不变);"不可重试阻塞正常落盘"仍绿。
 
 ## 与前序文档的关系
 
-- 修订 `precise-resume-plan.md`「维持现状」之外的实现细节:恢复点落盘时机从
+- 修订 `plans/0008-precise-resume-plan.md`「维持现状」之外的实现细节:恢复点落盘时机从
   "回合结束后"改为"下发成功即写 + 可重试失败还原"。
-- 修订 `session-error-retry-plan.md` 第 4 点:其"不再抢先落盘"被细化为"下发即写、
+- 修订 `plans/0015-session-error-retry-plan.md` 第 4 点:其"不再抢先落盘"被细化为"下发即写、
   可重试错误还原为下发前快照"——既保住第 4 点要防的"中间失败态顶替真实会话",
   又恢复"回合进行中被 kill 时认领在跑会话"(第 4 点改动顺带取走的能力)。
 - 第 5 点(`sessionUsage` 报错桩判据)不变;`requireArtifact` 续跑复用同款判据。

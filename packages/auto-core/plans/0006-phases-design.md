@@ -35,7 +35,7 @@
 | 跨阶段记忆通道 | **handover.md 是唯一通道,且由 driver 控制注入**:阶段规划会话输入 = brief.md + 各前序 handover.md + AGENTS.md + source/destDir 规范 + mode.init;**不注入前序阶段原始 docs/**。"精简场景"靠 driver 从输入侧掐断,不靠交接会话自觉 |
 | 交接重构形态 | **归档 + 重置 + 蒸馏**:driver 机械执行(docs 归档进轮次目录 `docs/R-NN/<letter>-<name>/`、PLAN.md 归档后重置模板、台账追加、统一提交);AI 只做一件事——旁路会话蒸馏产出 handover.md。AI 不改写契约文件,符合 driver 独占状态写入与维护规则块 |
 | PLAN.md 审计轨迹 | 交接时本阶段 PLAN.md 归档为 `docs/R-NN/<letter>-<name>/PLAN.md`(含 attempts/verified/阻塞问答)再重置;翻旧账不依赖 git 操作,与 docs/final/ 产物约定同构 |
-| k 阶段与 --extract-knowledge | k 阶段**整体认领** docs/fixme-knowledge-design.md 的 `--extract-knowledge` 设计(产出 docs/migration-kb/、提取失败不污染退出码),该选项不再单独存在;`--track-fixme` 不并入,保持独立演进 |
+| k 阶段与 --extract-knowledge | k 阶段**整体认领** plans/0002-fixme-knowledge-design.md 的 `--extract-knowledge` 设计(产出 docs/migration-kb/、提取失败不污染退出码),该选项不再单独存在;`--track-fixme` 不并入,保持独立演进 |
 | init 修订 phases 的护栏 | 台账非空时改 `--phases`,校验台账已有字母构成新串的前缀,否则报错并指引人工修订台账——防止 amend 把流程状态打成不可推导 |
 | phases 缺省值 | `"m"`(无阶段声明 = 单次运行,行为与现状完全一致;向后兼容的关键) |
 | status 增强 | 配置摘要后打印阶段进度行(derive 自台账,零成本):`阶段: a✓ d✓ m▶ t v k` |
@@ -167,7 +167,7 @@ currentPhase = phases 串中第一个未出现在台账字母集合中的字母
 peekProgress;阶段边界中断(归档完成但台账未写)由交接动作的幂等性兜底
 (归档目录存在即跳过移动,台账查重后追加)。
 
-**会话恢复优先于文件推导路由**(2026-09-10,docs/session-resume-precedence-design.md):
+**会话恢复优先于文件推导路由**(2026-09-10,plans/0018-session-resume-precedence-design.md):
 routePhase 的(台账, PLAN.md)推导仍是缺省路由,但对**阶段级旁路步骤**(规划/交接
 蒸馏)增加一层 driver 状态优先——这些会话经 requireArtifact 的 spec.step 在提示词
 下发时写 `.auto/progress.json` 的 step 恢复点(phase.kind="step"),driver 收口后
@@ -240,7 +240,7 @@ handover 路由前解析验收报告末行 `结论: 通过|差距`,本文预留�
 
 ### D.4 k 阶段:整体认领 --extract-knowledge(P4 已实现)
 
-k(知识提炼)阶段整体认领 docs/fixme-knowledge-design.md 的 `--extract-knowledge`
+k(知识提炼)阶段整体认领 plans/0002-fixme-knowledge-design.md 的 `--extract-knowledge`
 设计(该文档文首"P4 并入阶段化流程"修订节给出两设计的逐条映射),`--track-fixme`
 不并入、保持独立演进。k 阶段与通用阶段循环的关键差异:
 
@@ -350,7 +350,7 @@ renderPhasePlan({
   台账+提交);status 阶段行。蒸馏会话此期以模板占位(直接写最小 handover)。
 - **P3(蒸馏与注入)**:phase-handover.md 蒸馏会话;handovers 注入规划会话;
   v 阶段豁免接线;--final-review 仅 m 挂接的 note。
-- **P4(k 阶段,已实现)**:认领 docs/fixme-knowledge-design.md 的 --extract-knowledge
+- **P4(k 阶段,已实现)**:认领 plans/0002-fixme-knowledge-design.md 的 --extract-knowledge
   (docs/migration-kb/ 产出、失败不污染退出码,行为规格见 D.4);该文档文首已并入
   修订标注。
 
@@ -369,7 +369,7 @@ renderPhasePlan({
 | templates/prompts/phase-plan.md、phase-handover.md | **新增**;登记 src/template.ts embedded 注册表与协议敏感校验清单 |
 | src/protect.ts | 无改动(brief.md 不保护;确认清单) |
 | src/loop.ts(P4 增量) | runPhaseLoop 的 plan 路由接 k 分支: 提取(失败仅 ⚠)→ handoverPhase("k") → 台账推导 complete |
-| docs/fixme-knowledge-design.md | P4 修订标注已并入(文首"P4 并入阶段化流程"节):--extract-knowledge 并入 phases 设计 k 阶段 |
+| plans/0002-fixme-knowledge-design.md | P4 修订标注已并入(文首"P4 并入阶段化流程"节):--extract-knowledge 并入 phases 设计 k 阶段 |
 | README.md | 用法、--phases/source 选项、brief.md、人工回退规程(C.3) |
 | test/ | config/CLI 解析、台账推导与 routePhase 幂等、模板协议防漂移(prompt.test.ts 扩展) |
 

@@ -85,7 +85,7 @@
 | D3 | ③ 补提交推广至全部独立隐藏任务;④ dirty 阻塞同步推广 |
 | D4 | Auto-Nested 记全量嵌套仓库 + 外部提交检测(`Auto-Stage` trailer 判据) |
 | D5 | run 启动遇人工遗留脏区:阻塞(不再吸纳进 driver 提交);driver 独占状态文件(PLAN.md/CURRENT.md)遗留 → carryover 自愈补提交 |
-| D6 | 会话恢复保真(可恢复 session id 高标准 / 最多一句 continue / 不可保真时 stash 回滚重跑)为**独立后续专项**,本次仅交设计文档 docs/session-recovery-fidelity-design.md(以本机制的单元 clean 基线为回滚锚点) |
+| D6 | 会话恢复保真(可恢复 session id 高标准 / 最多一句 continue / 不可保真时 stash 回滚重跑)为**独立后续专项**,本次仅交设计文档 plans/0022-session-recovery-fidelity-design.md(以本机制的单元 clean 基线为回滚锚点) |
 | D7 | **`--commit false` 退役(2026-09-15,用户决策)**: 提交关闭档与本机制及其下游诸设计冲突——完成判定、单元 clean 门禁、SHA 基线、恢复保真的回滚锚点全部以"提交恒开"为前提,关闭档下它们整体空转,且每个新机制都要额外挂一条"门禁关闭即空转"的分支。本次做**入口层软退役**: CLI 的 `--commit false`(及旧别名 `none`)出现即用法错误退出 1(`--commit true` 仍接受,等同缺省),`.opencode/auto/config.json` 读到 `commit: false` 按坏文件严格失败(不静默改写语义);代码侧既有的 `opts.commit !== false` 门禁暂留、此后恒不可达,连同以 `{ commit: false }` 直呼核心函数的单测一并留给后续清理任务。门禁此后只在 dryrun 与非 git 环境不生效。 |
 
 ## 5. 步骤勾选表
@@ -104,7 +104,7 @@
   自身进度,不做 clean 门禁(否则恢复路径全断);该场景下外部与自有改动不可区分,
   由收口时的 trailer 校验兜底(提交层面),工作区层面维持既有"吸纳"语义——已知
   局限,记录于此。**2026-09-15 补:测试交接(--handover-test)这条路径上该局限已消解**
-  ——交接点做两次 driver 提交(定版 + 确认,见 docs/test-handover-early-design.md D3),
+  ——交接点做两次 driver 提交(定版 + 确认,见 plans/0023-test-handover-early-design.md D3),
   新会话面对的是干净工作区,不再有"外部与自有改动不可区分"的窗口;其余恢复路径不变。
 
 - **单元内的多笔 driver 提交是合法的**:`unitViolations` 只校验基线..HEAD 区间内每个

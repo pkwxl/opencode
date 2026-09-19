@@ -7,16 +7,16 @@
   阶段台账 docs/phases.md 非法或记录了 `phases` 之外的字母),`2` 阻塞或未完成为 pending、等待人工介入
   (阻塞问题写入 PLAN.md;pending 回退不写字段;含阶段规划会话受阻与 --final-review 终审闭环熔断),
   `3` `--interactive` 下收到 /exit、已在安全边界处暂停退出(不需要人工介入,重新
-  运行即可完整恢复,见下方 /exit 一条与设计文档 docs/exit-resume-design.md),
+  运行即可完整恢复,见下方 /exit 一条与设计文档 plans/0014-exit-resume-design.md),
   `130` 被连续两次 Ctrl+C 强制终止(单次 Ctrl+C 仅提示,3 秒窗口内第二次才退出,
   退出前尽力恢复文件可写并关闭 server)。
-- 项目配置固化(src/config.ts,设计文档 docs/init-config-agents-design.md 与
-  docs/phases-design.md A.2):宪法级选项
+- 项目配置固化(src/config.ts,设计文档 plans/0004-init-config-agents-design.md 与
+  plans/0006-phases-design.md A.2):宪法级选项
   -m/--agent/--context-limit/--subtask/--verify/--idle-time/--idle-max/--commit/--auto-number/--no-auto-number/--phases/--source-dir/--source-path/--dest-dir 仅
   init 接受(**init 缺省无状态全量覆盖**: 产出仅由本次参数决定,未给出的键回落
   CONFIG_DEFAULTS、可选键 source/destDir 直接消失——同一条 init 在任何环境下产出一致,
   单次即可得到确定状态;`--amend` 切回增量修订语义即"仅显式给出的键被改写、其余保留
-  既有值",continue 恒为 amend。设计文档 init-config-agents-design.md §B.1;
+  既有值",continue 恒为 amend。设计文档 plans/0004-init-config-agents-design.md §B.1;
   source 两键成对、任一给出即整体覆盖,init 时校验
   <工作目录>/join 后存在(经 stat 跟随软链接——source-dir 可为指向工作目录外的软链,
   断链按不存在拒绝);三迁移键均须为不含 .. 的相对路径,dest-dir 独立固化/修订、
@@ -44,14 +44,14 @@
   与 .opencode/agent/ 下其他 agent 契约因此完好。执行前先打印完整清单,再过与 init 同款的
   干净度闸门与交互确认(reset 恒为破坏性,闸门无条件生效)。init → reset → init 的产出
   与首次 init 逐字节一致;无任何 init 产物时打提示并以 0 退出。
-- init 去 AI 化(phases-design.md):init 不启动任何 AI 会话,`-p/--prompt` 整写覆盖
+- init 去 AI 化(plans/0006-phases-design.md):init 不启动任何 AI 会话,`-p/--prompt` 整写覆盖
   .opencode/auto/brief.md(项目意图,版本化、人工可编辑,阶段规划会话消费;无 -p 保留
   既有);结束语按 phases 分两态("m" 维持"编辑 PLAN.md"现状,其余提示开始首个未完成
   阶段规划);phases 含 v 而 verify 未启用时 init 打 note 一次(v 与 verify 正交);
   phases ≠ "m" 时 PLAN.md 以空模板(templates/PLAN.scaffold.md)产出,交给规划会话。
 - --auto-number/--no-auto-number(config.autoNumber,缺省 true,--no-auto-number 为退出
   开关;宪法级选项,init/continue 修订,run 拒绝;两开关同现且均未带 =false 为用法错误;
-  设计文档 docs/auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
+  设计文档 plans/0001-auto-number-design.md):启用后任务编号(T-NNN)在目标目录**永不重复**——下一可用
   编号持久化在 .auto/next-task(内容仅为一个正整数,driver 维护;.auto/ 已被 gitignore,
   新克隆天然缺失)。唯一消费点是阶段规划会话:planPhase 先 ensureNumbering 确保记录
   就位,把记录值作为编号起点注入规划提示词(替代"自 T-001 起"文案),collect 校验全部
@@ -63,7 +63,7 @@
   与 git 提交历史推导下一编号并写入记录(git 历史可发现产物已删除的编号),driver 以
   下限校验其产出(小于下限无效,重试一次仍失败隐性阻塞退出 2),恢复产物随会话统一
   提交(stage=numbering)。T-F<k> 终审编号是独立推导命名空间,不参与自动编号记录。
-- 阶段循环(config.phases ≠ "m",P1..P4 已接线;设计文档 phases-design.md D/E/F 节):阶段
+- 阶段循环(config.phases ≠ "m",P1..P4 已接线;设计文档 plans/0006-phases-design.md D/E/F 节):阶段
   状态是推导式的,routePhase 只读阶段台账(新布局轮内 docs/R-NN/phases.md,旧布局根
   docs/phases.md)与 PLAN.md(零新增持久化状态),
   run 据此循环——PLAN.md 为空模板 → 开阶段规划会话(旁路一次性,复用 requireArtifact
@@ -83,7 +83,7 @@
   stage=phase-transition;本阶段 docs/ 产物文档为永久路径,交接不搬移);
   台账覆盖 phases 全部字母 → 退出 0。`--final-review` 只在 m 阶段挂接(其余阶段
   打一次提示);AGENTS.md 超 150 行在交接时仅 note 提示、不改写。
-- k 阶段(P4,phases-design.md D.4;整体认领 fixme-knowledge-design.md 的
+- k 阶段(P4,plans/0006-phases-design.md D.4;整体认领 plans/0002-fixme-knowledge-design.md 的
   --extract-knowledge,该 CLI 选项不存在):plan 路由(PLAN.md 空模板态)不开
   规划会话、不填 PLAN.md,直接进入知识提取旁路会话(src/knowledge.ts
   extractKnowledge,requireArtifact 骨架)——通读阶段台账与各阶段交接文档
@@ -97,12 +97,12 @@
   自行向 PLAN.md 填任务时走通用 execute/handover 路由,提取挂点不触发;交接完成
   后重试提取 = 人工回退规程(删台账 k 行与 docs/migration-kb/ 内本轮 R<N>- 前缀
   文档后重跑)。
-- v 阶段验收豁免(phases-design.md D.3):runTask 依 loop 透传的 Opts.phase 在
+- v 阶段验收豁免(plans/0006-phases-design.md D.3):runTask 依 loop 透传的 Opts.phase 在
   当前阶段为 v 时强制 review=0 且跳过任务级三段式验收(收尾后直接 markDone、不写
   verified)——与终审任务的 final 字段共用同一豁免代码路径,内部标记、不写 final
   字段、不污染 PLAN.md 协议;v 阶段任务全 done 即交接、不因验收差距熔断(D.3
   预留了 handover 路由前解析验收报告结论的挂点备选,V1 不做)。
-- 续轮迁移(continue 子命令,phases-design.md M 节;2026-09-08 轮次专用目录
+- 续轮迁移(continue 子命令,plans/0006-phases-design.md M 节;2026-09-08 轮次专用目录
   方案):上一轮阶段化迁移全部完成(台账覆盖既有 phases 全部字母)后开启新一轮
   继续迁移,目标是让迁移结果与源更加完整、一致。continue = init 的 amend 机制 +
   establishRound 轮首建立新轮目录(docs/R-NN/,轮首即建、落盘即永久——PLAN.md/
@@ -134,7 +134,7 @@
   (docs/<id>.<role>.md 等)读点优先新路径、新缺失而旧存在回落旧路径,写目标恒为
   新路径;读回落永久保留、平铺旧布局原地保留(refcheck-scope-design D2 摒弃移动
   适配:2026-09-08 起 run 不再做存量目录化迁移,遗留引用失效走 git 历史恢复,
-  见 refcheck-scope-design.md §4)。**永久性全貌(stable-refs P2)**:docs/ 下文档
+  见 plans/0013-refcheck-scope-design.md §4)。**永久性全貌(stable-refs P2)**:docs/ 下文档
   (docs/T-*/、docs/handovers/、docs/migration-kb/、docs/prior-kb/)一经创建
   永不移动、永不改名——轮次专用目录方案(2026-09-08)起,每轮一个
   docs/R-NN/(轮首建立):阶段交接产出台账行内轮内 handovers/<字母>-<slug>.md
@@ -148,10 +148,10 @@
   文档引用;旧布局(docs/handovers/R<N>-*.md、docs/migration-kb|prior-kb/ 平铺、
   docs/phases/ 与 round-N/ 归档)原地保留为读回落,P2 前布局(交接在归档目录
   内、知识无前缀)各读点回落兼容。
- - 引用一致性三层(stable-refs P4,D6;设计文档 stable-refs-design.md §3.3;
+ - 引用一致性三层(stable-refs P4,D6;设计文档 plans/0010-stable-refs-design.md §3.3;
    **2026-09-08 起经实验开关 `OPENCODE_AUTO_REF_CHECK=on/off` 管控,缺省 off**
    ——off 时三层挂点全部空转、目标目录零引用检查行为,范围收敛与恢复设计见
-   refcheck-scope-design.md):引用唯一
+   plans/0013-refcheck-scope-design.md):引用唯一
   合法形态 = 目标目录根相对路径(反引号或 md 链接,可带 `:行号` 锚,锚可再带
   `@<sha>` 版本标记);校验语义 = 路径存在 + 行号 ≤ 文件总行数(带 `@<sha>` 标记的
   历史快照引用只查存在性、豁免行号上限);直接路径未命中时按段边界后缀在目标目录树内找唯一文件
@@ -205,7 +205,7 @@
    镜像刷新: 分解注入与子任务勾选先刷新镜像再提交),判定/审核/脚本生成/
    修复规划/终审规划等旁路会话在会话结束后,任务完成/阻塞/回退 pending 由 loop
    边界提交(中断现场也提交,支持回滚到断点);dryrun 不提交。
-  **提交是完成条件(commit-boundary-design.md,2026-09-14)**:任务/子任务/隐藏任务
+  **提交是完成条件(plans/0021-commit-boundary-design.md,2026-09-14)**:任务/子任务/隐藏任务
   (伪任务/旁路会话)只要修改了 Git 纳管内容,统一提交成功才算完成——提交失败
   一律**阻塞停机(退出码 2)待人工**,不再仅警告(commitTree 把失败清单上报给
   调用方);每个执行单元(任务/子任务/独立隐藏任务)启动时经 beginUnit 做
@@ -244,7 +244,7 @@
   权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复;报告写入
   .auto/dryrun.md 并打印,不执行任何任务。
 - 提问自动答复(question.asked)与代答审计(OPENCODE_AUTO_ASK,缺省 off;设计文档
-  docs/auto-resolve-design.md):非权限提问由 autoAnswer(ask) 自动答复,两档文案都点明
+  plans/0020-auto-resolve-design.md):非权限提问由 autoAnswer(ask) 自动答复,两档文案都点明
   "这是一个被代答的提问";--wait-answer 下先等人工 stdin 答复,超时回落自动答复;
   缺省 --wait-answer 时权限类提问(question 工具)直接阻塞;同一问题重复出现仍阻塞
   停机。决策标记分两类,判据是**这个分歧点的决定权本应属于谁**——属于用户(需求意图
@@ -265,7 +265,7 @@
   仅进 vlog),阶段/轮次汇总完全不展示。收尾会话被注入 driver 观测到的代答清单(只列
   driver 源、未配对的排在前、不截断),要求 docs/T-NNN/report.md 单列「自动代答问题」
   节——持久审计轨迹是进 git 的标记行与该节,台账只是 driver 的计数与高亮依据。
-- 死循环检测(OPENCODE_AUTO_STUCK,缺省 on;设计文档 docs/stuck-loop-design.md):
+- 死循环检测(OPENCODE_AUTO_STUCK,缺省 on;设计文档 plans/0016-stuck-loop-design.md):
   弱模型常连续多次以同一方式重复同一动作且始终不成功,自己走不出来;driver 在
   watch 中观察工具调用终态,两条会话级判据——同一工具 + 同一报错(**不含参数**,
   参数微调仍撞同一个坑)累计 3 次,或同一工具 + 同一参数 + 完全相同的输出累计
@@ -279,7 +279,7 @@
   第三级把收尾的决定权交回 AI,由既有流水线接管),steer 投递失败只记日志。
   dryrun 预检会话恒不检测(反复被拒探查权限是其正常形态)。
 - 阶段化模型路由与配额降级(OPENCODE_AUTO_MODEL / OPENCODE_AUTO_MODEL_FALLBACK,缺省
-  均未设 = 现状逐字节等价;设计文档 docs/model-routing-design.md):实验开关层按
+  均未设 = 现状逐字节等价;设计文档 plans/0017-model-routing-design.md):实验开关层按
   「(阶段字母, 会话角色) → 模型」逐次给每个提示词带 `model`——唯一注入点在 attempt 的
   `client.session.prompt`,求值为 undefined 时**不带 model 键**(而非带 `model: undefined`);
   逐次 prompt 级 model 优先级最高、会回写会话表供链上后续沿用,故不改 opencode.json、不按阶段
@@ -338,7 +338,7 @@
   (与步进模式 `OPENCODE_AUTO_STEP` 的三级边界同一批挂点,该处 PLAN.md/CURRENT.md/
   .auto/progress.json 均已由边界自身的常规收尾写好)以退出码 `3` 停机,不写任何
   阻塞/pending 标记,重新运行凭已持久化的进度精确恢复(与该处发生真实 crash/kill
-  中断的恢复路径完全同构)。详见设计文档 docs/exit-resume-design.md。
+  中断的恢复路径完全同构)。详见设计文档 plans/0014-exit-resume-design.md。
 - **driver 独占状态写入**:PLAN.md 的状态标记、检查项勾选、verified 字段与 CURRENT.md
   全部由 driver 写,agent 会话被禁止编辑这两个文件;`run` 期间这些文件(含 opencode.json
   与 .opencode/auto/config.json)
@@ -349,7 +349,7 @@
    状态/attempts/正文)整体还原。完成判定不靠
    agent 自报——任务级验收由 driver 执行 verify 脚本、旁路独立判定会话读输出判定,
    driver 只解析其判定文件;子任务会话结束后 driver 按可信勾选(验收统一在任务级进行)。
-   **完成判定以提交为条件(commit-boundary-design.md)**:任何单元(任务/子任务/
+   **完成判定以提交为条件(plans/0021-commit-boundary-design.md)**:任何单元(任务/子任务/
    隐藏任务)的产物或状态写入,统一提交成功落账才算完成——提交失败即阻塞退出 2;
    单元启动要求工作区 clean(SHA 基线),收口校验提交区间内只有 driver 提交
    (带 Auto-Stage trailer)。
@@ -362,7 +362,7 @@
   (renderText 条件渲染)、ensurePointer 不补写 AGENTS.md 验证原则块(已存在的移除)、
   各会话提示词(state-rule 片段等经 baseCtx 的 verify 变量)不含
   verify 相关描述——验收机制不存在,提示词不得提及。
-- --test-by-driver/--handover-test(config.testByDriver/handoverTest,缺省 false;宪法级选项,init --test-by-driver/--handover-test 修订,run 拒绝;与 verify 正交的测试执行协议): 前者把实现环节"编译/测试/构建/lint 等可能耗时长或产生大量输出的命令"的执行权收归 driver——执行类会话(子任务/整任务/验收修复轮;分解/收尾/判定/审核等旁路会话与 --dryrun 不适用)不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录(命名清晰、可执行、可复用,随仓库版本化),把脚本路径(相对工作目录)写入 tmp/test.sh 标记(存在即待执行请求,重写即再次请求),driver 在会话 idle 时检测标记:内容 trim 后单行且指向现存文件 → 直接运行该脚本并 best-effort 补 chmod +x(AI 常忘加执行位;test/ 内脚本已随统一提交版本化,不另归档);否则按内联脚本回落整写为 tmp/test.<n>.sh 后运行(保留执行快照供审计);两种形态均把 stdout/stderr 合并整写 tmp/test.<n>.out(单文件,编号跨运行接续,共用 idleTime/idleMax 看门狗),移除标记后退出码/耗时/脚本与输出路径经 steer 注入同一会话由 AI 直读文件判断(退出码非 0 不由 driver 判定;steer 一律经 promptAsync 投递——v2 同步 /message 端点会阻塞到回合结束,在 watch 事件循环内同步等待会卡死事件循环;投递失败记 log 并按隐性阻塞 blocked 处理,回合结束的孪生 idle 事件经 watch 去重,处理过一次后直到新会话事件出现前不再结算);重跑同一测试 = 把同一脚本路径再次写入 tmp/test.sh(脚本可先修改再重跑)。每个执行会话入口清除遗留待执行标记。后者(需前者,配置层与 init 均交叉校验;设计 docs/test-handover-early-design.md)把交接前置到测试之前,判定时点固定为**AI 发起测试的那一刻**(tmp/test.sh 出现时),判据解耦为单条件 used ≥ contextLimit(不再叠加测试失败;实时用量未到位时回落会话起跑值 startUsed——复用/恢复接管的会话取链上已用量,fork 与全新会话归零)。命中时 driver 在这一刻依次:① **提交定版**(afterSession,stage `<单元> handoff-<n>-pin`)固定被测的脚本与源码——此刻会话 idle,无半写文件;② **并发执行测试**(不 await,串行会把会话晾到缓存失效;收口统一在 attempt 于 watch 返回后做,测试进程不跨会话悬挂);③ steer 收尾+交接指令(test-wrapup 模板),要求 AI 把不依赖测试结果的剩余工作落盘、把与测试相关的部分写入测试交接文档后结束会话。会话结束后 **重测守卫**比对定版以来已跟踪的非文档改动(git.ts trackedSourceChanges,排除 docs/**、PLAN.md/CURRENT.md,未跟踪新增不计):非空即 stash -u → 对定版快照重跑同一脚本(runTestScript)→ stash pop,pop 冲突不吞(stash 条目保留、阻塞停机);随后交接文档**归档**为 testhandoff-<n>.md(docpaths archivedTestHandoff/latestHandoffSeq,编号跨会话/跨运行接续)并落**提交 #2**(stage `<单元> handoff-<n>`)确认交接——一次交接两次提交,提交之间源码与脚本无修改。文档按执行范围命名(子任务为 docs/<id>/S<两位序号>/testhandoff.md,整任务会话与验收修复轮为 docs/<id>/testhandoff.md),交接只对本执行范围生效、下一子任务不会误读上一子任务的遗留交接(缺失带反馈重试一次仍缺失隐性阻塞),driver 开新会话以续跑提示(先读归档交接文档、再判读那次测试的结果)继续,不设硬上限、连续超 10 次提醒评估是否陷入无法解决的问题(可 AUTO-FIXME 标注遗留后继续);执行范围完成时清除该范围的测试交接文档含全部归档份(removeHandoffChain,与 ondemand 交接同口径,下一子任务重新起算;历史交接内容由 git 提交记录承载),非恢复续跑时清除任务级与子任务级的陈旧交接链。提示词协议段经 subtask/whole/fix 模板的 testByDriver/handoverTest 条件块注入,steer 文案在 test-result/test-wrapup/test-continue 模板(无 driver 解析协议;test-wrapup 登记覆盖标记 {{handoffFile}} 与"不依赖本次测试结果")——**收尾文案刻意不提上下文/上限/tokens**:会话一旦知道自己上下文吃紧就会自行判定余量不足、省略本应完成的落盘工作(现场实证),也不写"不要改源码"(发起测试时它本就知道,真动了由定版提交 + 重测守卫兜底)。该执行权约定经 init 下沉:AGENTS.md 测试执行原则块(随 config.testByDriver 补写/移除,镜像验证原则块)与 agent 契约的 testByDriver 条件段;`check` 子命令在 testByDriver 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自运行编译/测试/构建/lint 的描述(TEST_PATTERNS,与验证类同构)。
+- --test-by-driver/--handover-test(config.testByDriver/handoverTest,缺省 false;宪法级选项,init --test-by-driver/--handover-test 修订,run 拒绝;与 verify 正交的测试执行协议): 前者把实现环节"编译/测试/构建/lint 等可能耗时长或产生大量输出的命令"的执行权收归 driver——执行类会话(子任务/整任务/验收修复轮;分解/收尾/判定/审核等旁路会话与 --dryrun 不适用)不在会话内直接运行这类命令,改为把命令写成脚本放 test/ 目录(命名清晰、可执行、可复用,随仓库版本化),把脚本路径(相对工作目录)写入 tmp/test.sh 标记(存在即待执行请求,重写即再次请求),driver 在会话 idle 时检测标记:内容 trim 后单行且指向现存文件 → 直接运行该脚本并 best-effort 补 chmod +x(AI 常忘加执行位;test/ 内脚本已随统一提交版本化,不另归档);否则按内联脚本回落整写为 tmp/test.<n>.sh 后运行(保留执行快照供审计);两种形态均把 stdout/stderr 合并整写 tmp/test.<n>.out(单文件,编号跨运行接续,共用 idleTime/idleMax 看门狗),移除标记后退出码/耗时/脚本与输出路径经 steer 注入同一会话由 AI 直读文件判断(退出码非 0 不由 driver 判定;steer 一律经 promptAsync 投递——v2 同步 /message 端点会阻塞到回合结束,在 watch 事件循环内同步等待会卡死事件循环;投递失败记 log 并按隐性阻塞 blocked 处理,回合结束的孪生 idle 事件经 watch 去重,处理过一次后直到新会话事件出现前不再结算);重跑同一测试 = 把同一脚本路径再次写入 tmp/test.sh(脚本可先修改再重跑)。每个执行会话入口清除遗留待执行标记。后者(需前者,配置层与 init 均交叉校验;设计 plans/0023-test-handover-early-design.md)把交接前置到测试之前,判定时点固定为**AI 发起测试的那一刻**(tmp/test.sh 出现时),判据解耦为单条件 used ≥ contextLimit(不再叠加测试失败;实时用量未到位时回落会话起跑值 startUsed——复用/恢复接管的会话取链上已用量,fork 与全新会话归零)。命中时 driver 在这一刻依次:① **提交定版**(afterSession,stage `<单元> handoff-<n>-pin`)固定被测的脚本与源码——此刻会话 idle,无半写文件;② **并发执行测试**(不 await,串行会把会话晾到缓存失效;收口统一在 attempt 于 watch 返回后做,测试进程不跨会话悬挂);③ steer 收尾+交接指令(test-wrapup 模板),要求 AI 把不依赖测试结果的剩余工作落盘、把与测试相关的部分写入测试交接文档后结束会话。会话结束后 **重测守卫**比对定版以来已跟踪的非文档改动(git.ts trackedSourceChanges,排除 docs/**、PLAN.md/CURRENT.md,未跟踪新增不计):非空即 stash -u → 对定版快照重跑同一脚本(runTestScript)→ stash pop,pop 冲突不吞(stash 条目保留、阻塞停机);随后交接文档**归档**为 testhandoff-<n>.md(docpaths archivedTestHandoff/latestHandoffSeq,编号跨会话/跨运行接续)并落**提交 #2**(stage `<单元> handoff-<n>`)确认交接——一次交接两次提交,提交之间源码与脚本无修改。文档按执行范围命名(子任务为 docs/<id>/S<两位序号>/testhandoff.md,整任务会话与验收修复轮为 docs/<id>/testhandoff.md),交接只对本执行范围生效、下一子任务不会误读上一子任务的遗留交接(缺失带反馈重试一次仍缺失隐性阻塞),driver 开新会话以续跑提示(先读归档交接文档、再判读那次测试的结果)继续,不设硬上限、连续超 10 次提醒评估是否陷入无法解决的问题(可 AUTO-FIXME 标注遗留后继续);执行范围完成时清除该范围的测试交接文档含全部归档份(removeHandoffChain,与 ondemand 交接同口径,下一子任务重新起算;历史交接内容由 git 提交记录承载),非恢复续跑时清除任务级与子任务级的陈旧交接链。提示词协议段经 subtask/whole/fix 模板的 testByDriver/handoverTest 条件块注入,steer 文案在 test-result/test-wrapup/test-continue 模板(无 driver 解析协议;test-wrapup 登记覆盖标记 {{handoffFile}} 与"不依赖本次测试结果")——**收尾文案刻意不提上下文/上限/tokens**:会话一旦知道自己上下文吃紧就会自行判定余量不足、省略本应完成的落盘工作(现场实证),也不写"不要改源码"(发起测试时它本就知道,真动了由定版提交 + 重测守卫兜底)。该执行权约定经 init 下沉:AGENTS.md 测试执行原则块(随 config.testByDriver 补写/移除,镜像验证原则块)与 agent 契约的 testByDriver 条件段;`check` 子命令在 testByDriver 启用时扫描 AGENTS.md/PLAN.md 中要求会话亲自运行编译/测试/构建/lint 的描述(TEST_PATTERNS,与验证类同构)。
 - verify 三段式(config.verify 启用时):verify 的处理权在 driver,验收只在任务级做一次——收尾会话后:
   ① 脚本准备(resolveVerifyScript 依 verifyCommand 三分支:`command:` 为单个存在
   且可执行的文件路径 → existing 直接使用;普通命令行 → wrapped,driver 包装
@@ -464,7 +464,7 @@
    **从已积累上下文最多的活会话分叉一份副本**重试——首选刚失败的会话本体(超时类
    故障与会话内容无关,里面的已核实产出是本轮最值钱的资产;用量为 0 的纯报错桩除外),
    其次链上原会话,链上无会话可分叉时回落 fork 基点重新播种,再不济才空白新会话
-   (session-error-retry-plan.md「2026-09-12 修正」)。
+   (plans/0015-session-error-retry-plan.md「2026-09-12 修正」)。
    重试次数与间隔由阶梯 `OPENCODE_AUTO_RETRY_WAITS` 描述(「2026-09-12 修正二」):
    每个元素是该次重试前的等待、元素个数即重试上限,**缺省 `0,1,2,4,8`** = 五次重试,
    首次立即(瞬时抖动常在下一回合就恢复),其后 1/2/4/8 分钟;退避从分钟起步而非
@@ -489,7 +489,7 @@
    进等待-探测环。quota/auth/rate 三类可降级错误在更上游就已换模型续跑。
    等待期间经 statsWaitBegin/End 从 AI 用时中扣除。
    每个会话结束都无条件打印两行统计(`◉ 会话结束`,设计
-   docs/stats-timing-design.md):行 1 `◉ 会话结束: 上下文 n% (用量/上限 tokens),
+   plans/0019-stats-timing-design.md):行 1 `◉ 会话结束: 上下文 n% (用量/上限 tokens),
    用时 X(累计 Y / N 轮)`(用时取纯 AI 口径,会话内 askHuman 挂起不计;单轮省略
    "(累计…)"),行 2 `tokens 入 … / 出 … [/ 思考 …] / 缓存读 … / 缓存写 …,
    命中率 …[,费用 $…(累计 $…)]`(reasoning=0 省略思考项、cost=0 省略费用、命中率
@@ -531,7 +531,7 @@
   脚本生成/修复规划/dryrun/fork 基点)不写;**阶段级旁路步骤**(phase-plan 规划 /
   phase-handover 交接蒸馏,phase.kind="step")经 requireArtifact 的 spec.step 同样
   写 active 记录,driver 收口(产物校验+提交+后处理)后经 closeStep 删除——见
-  docs/session-resume-precedence-design.md);runTask 开始时 recallProgress 读回——
+  plans/0018-session-resume-precedence-design.md);runTask 开始时 recallProgress 读回——
   active 且会话在 server 上仍存在 → 复用原会话继续(chain 直接 seed 该会话,
   与 `opencode -r` 同构,不设时间窗;该接管不受 OPENCODE_AUTO_REUSE_SESSION 与
   复用阈值约束——恢复语义即"接着被中断的那个会话继续",首个提示词进原会话,恢复
@@ -568,18 +568,18 @@
    driver 才补的),不能证明会话已收口,唯有 driver 恢复点被 closeStep 删除才算收口
    (阶段已入台账则清除陈旧记录,字母不一致则告警并让文件路由优先)。
    `.auto/` 另有 driver 独占写的统计文件 `.auto/stats.json`(src/stats.ts,设计
-   docs/stats-timing-design.md),与恢复判定完全无关:不参与 recallProgress/openStep
+   plans/0019-stats-timing-design.md),与恢复判定完全无关:不参与 recallProgress/openStep
    等任何判定,损坏或缺失只是统计从当下重开、不影响运行;它是本机运行足迹(换机/
    清 .auto/ 即丢失,跨中断经增量落盘与折旧续接);清零 = 人工 `rm .auto/stats.json`
    (人工回退重跑同一任务前的既定规程——重跑与中断续跑对统计不可区分)。代答台账
-   `.auto/resolves.json`(src/resolve.ts,设计 docs/auto-resolve-design.md)同族同契约:
+   `.auto/resolves.json`(src/resolve.ts,设计 plans/0020-auto-resolve-design.md)同族同契约:
    driver 独占写、gitignore 内、不进 protect 名单、不参与 recallProgress/openStep 等
    任何恢复判定,损坏或缺失只是高亮与计数从当下重开、不影响运行与退出码(写失败全
    静默);**独立成文件不并入 stats.json**——stats 有 30s 心跳高频写,塞进一个会增长的
    问题文本数组会让每次心跳重写全量文本;条目上限 512 FIFO 淘汰,清零同样是人工
    `rm .auto/resolves.json`。
 - 严格恢复(OPENCODE_AUTO_STRICT_RESUME,**缺省 off = 现状逐字节等价**;设计文档
-  docs/session-recovery-fidelity-design.md,2026-09-15 实施、灰度中):会话复用的判据
+  plans/0022-session-recovery-fidelity-design.md,2026-09-15 实施、灰度中):会话复用的判据
   从"会话还在"收紧为"恢复后行为可论证地等于未中断的延续",不满足即**回滚到单元基线
   重跑**,以浪费的半截工作换确定性。整体 gated 于"开关 on 且提交门禁在位"(dryrun 下
   空转——无基线即无回滚锚点)。① **记录标准**:active 进度记录随带 `baseline`(逐仓库

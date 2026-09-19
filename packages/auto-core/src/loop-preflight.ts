@@ -1,10 +1,10 @@
 // runAll 的运行前预检: PLAN.md 存在性、提示词库装载、agent 契约完整性检查、统计装载与
 // 进度心跳、driver 状态文件只读、交接文档复原、启动 clean 门禁、中断状态复位、
 // AGENTS.md/.gitignore 收口与 housekeeping 提交;另承接 runAll 的选项类型 RunAllOpts 与
-// agent 契约渲染(docs/phases-design.md、docs/commit-boundary-design.md P3)。
+// agent 契约渲染(plans/0006-phases-design.md、plans/0021-commit-boundary-design.md P3)。
 // 出口以 { exit } 回传、由 runAll 直接 return,不在此 process.exit;出口位于 runAll 的
-// try 之前、不经其 finally(docs/module-split-plan.md §I D13)。不依赖 loop.ts。
-// 拆分自 src/loop.ts(docs/module-split-plan.md S14,纯搬运)。
+// try 之前、不经其 finally(plans/0024-module-split-plan.md §I D13)。不依赖 loop.ts。
+// 拆分自 src/loop.ts(plans/0024-module-split-plan.md S14,纯搬运)。
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { resumeBanner } from "./conclusion"
@@ -64,10 +64,10 @@ export type RunAllOpts = {
   // -m/--mode 场景模式(缺省 migrate),透传给 runTask 的提示词渲染。
   mode?: ModeSpec
   // --final-review 终审闭环的审计轮上限(0 = 不启用,含首轮 audit): 任务全部
-  // 完成后按 docs/mode-final-review-design.md B/C 节推进——终审阶段是入
+  // 完成后按 plans/0005-mode-final-review-design.md B/C 节推进——终审阶段是入
   // PLAN.md 的 T-F 真任务,本循环只做"生成任务 → 跑任务 → 解析报告路由"。
   finalReview?: number
-  // --phases 阶段化流程(设计文档 docs/phases-design.md,来自配置): "m"(缺省)=
+  // --phases 阶段化流程(设计文档 plans/0006-phases-design.md,来自配置): "m"(缺省)=
   // 无阶段声明,走既有单次运行路径(零改动);其余值启用阶段循环(D 节)——
   // 推导当前阶段 → 规划会话填充 PLAN.md → 主循环执行 → 交接(归档+重置+台账+
   // 提交)→ 下一阶段。--final-review 仅 m(迁移实现)阶段挂接。
@@ -159,12 +159,12 @@ export async function preflight(
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
   await protect(directory)
-  // 交接文档的现场复原(测试交接中断恢复 F3,docs/test-handover-early-design.md §I):
+  // 交接文档的现场复原(测试交接中断恢复 F3,plans/0023-test-handover-early-design.md §I):
   // 必须早于启动 clean 门禁——上一次运行可能把已落账的在途交接文档删掉,那道删除
   // 本身就是脏区,门禁会在这里当场拦下整次运行。复原即消脏,随后的恢复状态机也
   // 才拿得到判定所需的文件。
   if (!opts.dryrun) await restoreTestHandoffs(directory)
-  // 启动 clean 门禁(commit-boundary-design.md P3): 提交启用时要求工作区 clean——
+  // 启动 clean 门禁(plans/0021-commit-boundary-design.md P3): 提交启用时要求工作区 clean——
   // 此后所有执行单元(任务/子任务/隐藏任务)依赖的信息全部由上一次提交固定。
   // 人工遗留脏区阻塞交人工(替代旧"⚠ 会被下一次提交吸纳"提示:吸纳会把人工改动
   // 混入 driver 审计轨迹,破坏提交即隔离边界);driver 独占状态文件(PLAN.md/
@@ -212,7 +212,7 @@ export async function preflight(
   if (await ensureGitignore(directory)) log("已更新: .gitignore 忽略 tmp/ 与 .auto/(driver 工作目录与运行时状态)")
   // housekeeping 收口提交: ensurePointer/ensureGitignore 的补写是 driver 改动,立即
   // 落账使首个执行单元启动时工作区 clean;提交失败按环境阻塞退出 2
-  // (commit-boundary-design.md P3)。dryrun 不做任何提交。
+  // (plans/0021-commit-boundary-design.md P3)。dryrun 不做任何提交。
   if (opts.commit !== false && !opts.dryrun && (await changedFiles(directory)).length) {
     const settled = await commitTree(directory, { id: "PLAN", title: "运行前基线收口" }, {
       stage: "housekeeping",

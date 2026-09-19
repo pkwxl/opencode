@@ -94,7 +94,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与各任务状态
 `T-001 decompose 修复登录`、`T-001 S2 编写 schema`、`T-001 wrapup 修复登录`、
 `T-001 done 修复登录`;trailer `Auto-Task` / `Auto-Stage`,目标仓库另以
 `Auto-Nested` 记录全部嵌套仓库的最终/最新 SHA),git 历史即 AI 变更的审计轨迹、
-回滚粒度 = 会话;**提交是完成条件**(auto-core docs/commit-boundary-design.md):
+回滚粒度 = 会话;**提交是完成条件**(auto-core plans/0021-commit-boundary-design.md):
 统一提交失败一律阻塞停机待人工,任务/子任务/隐藏任务以工作区 clean 基线启动,
 单元启动遇人工遗留脏区也会阻塞(先提交或清理再运行);
 opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 git commit
@@ -794,7 +794,7 @@ driver 两路采集:① 会话真发了问、被自动答复回落的(人工在 
     断点恢复)与单次运行完全一致(v 阶段任务的豁免见上)。
   - **k(知识提炼)阶段例外**:k 阶段不开规划会话、不向 `PLAN.md` 填任务——
     plan 路由直接进入**知识提取旁路会话**(整体认领原 `--extract-knowledge`
-    设计,见 `docs/fixme-knowledge-design.md` 文首修订节),通读阶段台账与各
+    设计,见 `packages/auto-core/plans/0002-fixme-knowledge-design.md` 文首修订节),通读阶段台账与各
     阶段交接文档(本轮轮内 `docs/R-NN/handovers/` 优先),把最终验证过的迁移
     经验蒸馏为轮内固定名 `docs/R-NN/migration-kb.md`(轮内落盘即永久;章节
     骨架:迁移概要/API 与类型映射/实现模式/坑点与边界情况/可复用规则/设计
@@ -885,7 +885,7 @@ opencode-auto run <dir>                       # 第 2 轮
 > 阶段化流程的 P1..P4 已全部接入:P3 起,交接文档由蒸馏会话产出并注入下一阶段
 > 规划会话,v 阶段任务豁免任务级验收;P4 起,k(知识提炼)阶段整体认领原
 > `--extract-knowledge` 设计(知识提取会话产出轮内 `migration-kb.md`,失败不污染
-> 退出码)。`--track-fixme` 仍独立演进(`docs/fixme-knowledge-design.md`),未实现。
+> 退出码)。`--track-fixme` 仍独立演进(`packages/auto-core/plans/0002-fixme-knowledge-design.md`),未实现。
 
 ## 终审闭环(--final-review)
 

@@ -1,5 +1,5 @@
 // src/prompt.ts 验收族渲染的单测: verify 脚本生成/判定(verifyScriptGen/verifyJudge)与审核(review/reviewFix)。
-// 拆分自 test/prompt.test.ts(docs/module-split-plan.md S19,纯搬运)。
+// 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import { dirname, join } from "node:path"

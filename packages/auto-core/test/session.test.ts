@@ -1,7 +1,7 @@
 // src/session.ts 的单测(经 runSession 驱动): 会话链复用开关、错误重试阶梯、
 // 等待-探测环(不可重试/阶梯耗尽/候选用尽一律不退出)、attempt 模型注入接线、
 // 配额降级 failover、failback 粒度与 /failback 覆写。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -86,7 +86,7 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
   })
 })
 
-// ---- 会话错误重试(session-error-retry-plan.md;2026-09-16 起耗尽不再阻塞)----
+// ---- 会话错误重试(plans/0015-session-error-retry-plan.md;2026-09-16 起耗尽不再阻塞)----
 
 describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测环", () => {
   // 阶梯夹具: 两次重试、零等待,探测间隔也压成零(等待-探测环的轮次在单测里即时)。

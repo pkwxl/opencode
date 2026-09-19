@@ -1,4 +1,4 @@
-// 任务文档路径的唯一构造点(stable-refs 设计 §4.1,docs/stable-refs-design.md):
+// 任务文档路径的唯一构造点(stable-refs 设计 §4.1,plans/0010-stable-refs-design.md):
 // 任务文档(七角色文件 + 子任务产物)只存在于 docs/T-NNN/ 内(R3 目录化),角色
 // 文件名固定(R4),路径一经创建即为永久路径(R2)——driver/提示词模板/读回落
 // 三方认知经本模块统一,调用方不得自行拼串。旧平铺布局(docs/<id>.<role>.md 等)

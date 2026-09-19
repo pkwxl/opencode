@@ -147,14 +147,14 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     }
   })
 
-  test("ask 值域: on/off 两档,缺省 off(提问策略开关,docs/auto-resolve-design.md §E)", () => {
+  test("ask 值域: on/off 两档,缺省 off(提问策略开关,plans/0020-auto-resolve-design.md §E)", () => {
     expect(parseSwitches({}).ask).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.ask]: "on" }).ask).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.ask]: "off" }).ask).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.ask]: "" }).ask).toBe(false)
   })
 
-  test("strictResume 值域: on/off 两档,缺省 off(严格恢复开关,docs/session-recovery-fidelity-design.md S3)", () => {
+  test("strictResume 值域: on/off 两档,缺省 off(严格恢复开关,plans/0022-session-recovery-fidelity-design.md S3)", () => {
     expect(parseSwitches({}).strictResume).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "on" }).strictResume).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "off" }).strictResume).toBe(false)
@@ -163,7 +163,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/缺省 off/)
   })
 
-  test("handoverConcurrent 值域: on/off 两档,缺省 off = 先交接后运行(docs/test-handover-early-design.md §H)", () => {
+  test("handoverConcurrent 值域: on/off 两档,缺省 off = 先交接后运行(plans/0023-test-handover-early-design.md §H)", () => {
     expect(parseSwitches({}).handoverConcurrent).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "on" }).handoverConcurrent).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "off" }).handoverConcurrent).toBe(false)
@@ -172,7 +172,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "yes" })).toThrow(/缺省 off/)
   })
 
-  test("hibernate 值域: HH:MM+H(UTC 每日窗口,H 允许小数),缺省未设 = 不休眠(docs/hibernate-design.md)", () => {
+  test("hibernate 值域: HH:MM+H(UTC 每日窗口,H 允许小数),缺省未设 = 不休眠(plans/0027-hibernate-design.md)", () => {
     expect(parseSwitches({}).hibernate).toBeUndefined()
     expect(parseSwitches({ [SWITCH_ENV.hibernate]: "" }).hibernate).toBeUndefined()
     expect(parseSwitches({ [SWITCH_ENV.hibernate]: "04:00+6" }).hibernate).toEqual({ startMin: 240, durationMin: 360 })

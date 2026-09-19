@@ -1,4 +1,4 @@
-// 代答决策台账(docs/auto-resolve-design.md): 把"本应询问用户、却被 driver 自动
+// 代答决策台账(plans/0020-auto-resolve-design.md): 把"本应询问用户、却被 driver 自动
 // 放行或代答的决策"(AUTO-RESOLVE)从"AI 本就该自己做的工程裁量"(AUTO-DECISION)
 // 里拆出来,给前者独立标记、独立台账与独立的高亮报文通道。判别硬判据是**分歧点的
 // 决定权本应属于谁**:属于用户(需求意图与范围取舍、对外契约、"什么算做完"的判定
@@ -26,7 +26,7 @@ import { basename, dirname, join } from "node:path"
 import { taskDoc } from "./docpaths"
 import { changedFiles } from "./git"
 
-// ===== schema(v:1,落盘 compact JSON;docs/auto-resolve-design.md §F)=====
+// ===== schema(v:1,落盘 compact JSON;plans/0020-auto-resolve-design.md §F)=====
 
 export type ResolveSource = "driver" | "agent"
 
@@ -266,7 +266,7 @@ export async function recordResolves(dir: string | undefined, items: ResolveItem
 // 未提交改动"(afterSession 扫描完即统一提交);`--commit false` 下改动跨会话堆积、
 // 同一批标记会被反复看见,计数偏大——AUTO-RESOLVE 侧由去重键吸收,计数侧不设行级
 // 明细故吸收不了。这是已接受边界: 该计数是"标注门槛是否失控"的体感指标,不是事实
-// 来源,而 `--commit false` 本身就已破坏该前提(见 docs/auto-resolve-design.md §K)。
+// 来源,而 `--commit false` 本身就已破坏该前提(见 plans/0020-auto-resolve-design.md §K)。
 function addDecisions(doc: ResolveDoc, task: string, count: number) {
   if (!task || count <= 0) return
   doc.decisions = { ...doc.decisions, [task]: (doc.decisions?.[task] ?? 0) + count }

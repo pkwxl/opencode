@@ -1,9 +1,9 @@
 // --test-by-driver 测试执行与 --handover-test 交接文档的文件操作: 测试请求标记的
 // 消费、脚本执行与输出归档、交接判据(steer / 测试两族)、交接文档的补状态行/
 // 归档/链式清理与恢复。**本模块不依赖任何会话驱动代码**(不得 import
-// session / watch / exec-session / runner)——这是 docs/module-split-plan.md §D.2
+// session / watch / exec-session / runner)——这是 plans/0024-module-split-plan.md §D.2
 // 环消解的落点:watch → testrun 单向,交接时序状态机另在 exec-session。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S6,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S6,纯搬运)。
 
 import { chmod, mkdir, readdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"

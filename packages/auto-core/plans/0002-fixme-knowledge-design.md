@@ -14,7 +14,7 @@
 > 阻塞人工核查,P1..P4 实现时按此基线调整。
 
 > **修订(P4 并入阶段化流程)**:`--extract-knowledge` 已由 `--phases` 的 k(知识
-> 提炼)阶段**整体认领**并实现(docs/phases-design.md D.4/J 节 P4),该 CLI 选项
+> 提炼)阶段**整体认领**并实现(plans/0006-phases-design.md D.4/J 节 P4),该 CLI 选项
 > 不再单独存在。§D 在 k 阶段的映射:
 > - 触发挂点(§D.2)→ k 阶段的 plan 路由(PLAN.md 空模板态)直接进入知识提取
 >   旁路会话,不开规划会话、不向 PLAN.md 填任务;人工在 k 阶段自行向 PLAN.md 填

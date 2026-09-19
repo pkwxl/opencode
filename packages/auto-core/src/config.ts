@@ -1,4 +1,4 @@
-// 项目配置层(设计文档 docs/init-config-agents-design.md §A): 宪法级选项——
+// 项目配置层(设计文档 plans/0004-init-config-agents-design.md §A): 宪法级选项——
 // 决定会话被如何告知、验收与提交语义如何运作的项目属性——在 init 固化到
 // .opencode/auto/config.json,版本化、随仓库共享、人工可编辑;未知键忽略
 // (前向兼容)。run 只控制本次执行,不再接受对应选项。旧版 .auto/config.json
@@ -43,7 +43,7 @@ export type ProjectConfig = {
   // --no-wrapup: 关闭任务收尾会话(renderWrapup,子任务/整任务执行完成后与
   // 修复轮后的收尾会话)。缺省 true(现状零变化)。
   wrapup: boolean
-  // admtvk 的子序列且含 m(设计文档 docs/phases-design.md §A);"m" = 无阶段声明,
+  // admtvk 的子序列且含 m(设计文档 plans/0006-phases-design.md §A);"m" = 无阶段声明,
   // 单次运行,行为与阶段化之前完全一致。
   phases: string
   // 迁移源参数(可选,非迁移场景缺省 undefined): dir = 源系统目录(相对工作目录、
@@ -153,13 +153,13 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof phases !== "string" || parsePhases(phases) === null) {
     throw new Error(`${CONFIG_FILE} 的 phases 须为 admtvk 的子序列且包含 m(如 m、amt、admtvk)`)
   }
-  // commit:false 已退役(2026-09-15,docs/commit-boundary-design.md): 统一提交是
+  // commit:false 已退役(2026-09-15,plans/0021-commit-boundary-design.md): 统一提交是
   // 完成条件,单元提交边界的 clean 门禁/SHA 基线与恢复保真的回滚锚点全部以"提交
   // 恒开"为前提,关闭档与之冲突。存量配置按"坏文件严格失败"口径处理——读到 false
   // 即报错交人工,不静默改写语义(代码侧的 opts.commit 门禁暂留,清理另立任务)。
   const commit = booleanOf("commit", pick("commit"))
   if (!commit) {
-    throw new Error(`${CONFIG_FILE} 的 commit: false 已退役(统一提交是完成条件,见 docs/commit-boundary-design.md): 请删除该键或改为 true`)
+    throw new Error(`${CONFIG_FILE} 的 commit: false 已退役(统一提交是完成条件,见 plans/0021-commit-boundary-design.md): 请删除该键或改为 true`)
   }
   const testByDriver = booleanOf("testByDriver", pick("testByDriver"))
   const handoverTest = booleanOf("handoverTest", pick("handoverTest"))

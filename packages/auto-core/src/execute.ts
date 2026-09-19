@@ -2,7 +2,7 @@
 // (ensureUnderstood)② 分解(ensureDecomposed)+ runSubtask 单个子任务会话,及
 // PLAN.md 重读小工具 requireTask。位于 exec-session/session 之上、runner 之下;
 // **不得反向 import runner**(§D.2)。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S12,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S12,纯搬运)。
 
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -283,7 +283,7 @@ export async function ensureDecomposed(
   let shapeForked = false
   for (let i = 0; ; i++) {
     // fine(OPENCODE_AUTO_DECOMPOSE_FINE=on)透传分解提示词: 注入细粒度准则段
-    // (fork-decompose-design.md §5.1)。
+    // (plans/0003-fork-decompose-design.md §5.1)。
     const brief = shapeForked
     shapeForked = false
     const result = await runSession(
@@ -350,7 +350,7 @@ export async function runSubtask(
   chain: SessionChain,
   base?: ForkBaseInfo,
   // 本子任务恢复续跑(active 进度记录归属本单元): 豁免启动 clean 门禁——工作区
-  // 脏区是本单元自身进度(含交接文档),收口时一并落账(commit-boundary-design.md)。
+  // 脏区是本单元自身进度(含交接文档),收口时一并落账(plans/0021-commit-boundary-design.md)。
   resumeUnit = false,
 ): Promise<UnitStop | undefined> {
   subbanner(`${task.id} 子任务 ${index}：${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)

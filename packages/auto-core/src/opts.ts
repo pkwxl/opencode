@@ -1,12 +1,12 @@
 // 会话级选项与执行结局类型: runTask/runOnce 与各旁路会话共用的透传参数、
 // 单元停机出口与提交结果联合,外加两个预算常量。纯类型 + 常量,无运行时依赖,
 // 位于依赖图底层——任何模块都可引入而不拉进会话驱动图。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S1,纯搬运)。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S1,纯搬运)。
 import type { Interactive } from "./interactive"
 import type { ModeSpec } from "./mode"
 import type { ServerControl } from "./server"
 
-// 任务结局。dirty(commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
+// 任务结局。dirty(plans/0021-commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
 // 出口: 不写 PLAN.md、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
 export type Outcome =
   | { type: "completed" }
@@ -26,7 +26,7 @@ export const FIX_ROUNDS = 3
 // 判定会话替换脚本的重验轮数上限(独立于修复轮预算)。
 export const REVERIFY_ROUNDS = 3
 
-// 完成条件门禁(commit-boundary-design.md P2): 返回 SessionCommit——统一提交
+// 完成条件门禁(plans/0021-commit-boundary-design.md P2): 返回 SessionCommit——统一提交
 // 失败或(baseline 给出时)单元收口校验不通过 → failed,调用方按"不视为完成"
 // 阻塞停机待人工;无 dir / 门禁关闭 → ok(旧行为)。baseline 仅在单元收口调用点
 // (子任务末次提交/隐藏任务 spec.commit)传入。
@@ -103,7 +103,7 @@ export type Opts = {
   // 阶段化流程下的当前阶段字母(loop 透传,缺省 undefined = 单次运行): "v"
   // (验收)阶段任务本身即检验,强制 review=0 且跳过任务级三段式验收——与终审
   // 任务的 final 字段共用同一豁免路径,为内部标记、不写 PLAN.md(设计文档
-  // phases-design.md D.3)。
+  // plans/0006-phases-design.md D.3)。
   phase?: "a" | "d" | "m" | "t" | "v" | "k"
   // --no-wrapup(config.wrapup 持久化,缺省 true): 关闭时每个任务的子任务/整
   // 任务执行完成后跳过收尾会话(renderWrapup),修复轮后的收尾同样跳过。

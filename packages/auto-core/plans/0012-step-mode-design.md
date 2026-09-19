@@ -71,4 +71,4 @@ phase < task < subtask 三级细度,**边界序 ≤ 档位序即暂停**:
 ## 7. 转正路径
 
 实验定型后升为 CLI 旗标 `--step=phase|task|subtask`(或宪法键固化,另议),
-路径同 fork-decompose-design.md §4.6:环境变量可保留为运行期覆盖通道或退役。
+路径同 plans/0003-fork-decompose-design.md §4.6:环境变量可保留为运行期覆盖通道或退役。

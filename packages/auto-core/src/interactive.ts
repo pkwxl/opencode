@@ -61,7 +61,7 @@ export function startInteractive(
       rl.prompt()
       return
     }
-    // /exit(设计文档 docs/exit-resume-design.md): 不发往会话,只置位——真正的
+    // /exit(设计文档 plans/0014-exit-resume-design.md): 不发往会话,只置位——真正的
     // 暂停延迟到下一个 phase/task/subtask 安全边界,进度届时已按常规收尾写好,
     // 下次运行精确恢复。不判断当前是否有活动会话(与消息转发的丢弃语义不同,
     // /exit 的意图与是否已连上会话无关)。
@@ -71,7 +71,7 @@ export function startInteractive(
       rl.prompt()
       return
     }
-    // /failback(设计文档 docs/model-routing-design.md E 节): 与 /exit 同构但不
+    // /failback(设计文档 plans/0017-model-routing-design.md E 节): 与 /exit 同构但不
     // 停止——置位后在下一个安全边界重置降级状态,回试首选模型;带参数(空格分隔的
     // provider/model 列表)时整体重定义模型序(首个为首选、其余为降级候选环)。
     // 与是否已连上会话无关,不发往会话。

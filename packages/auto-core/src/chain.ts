@@ -1,8 +1,8 @@
 // 会话链与模型路由求值: 任务内会话串链的状态载体(SessionChain / Watch /
 // SessionResult / FailedSession / ForkBaseInfo)、阶段→角色→模型的路由求值
 // (phaseToRole / roleOf / resolveModel / splitModel),以及会话错误归类
-// (classifySessionError)与会话复用阈值常量。见 docs/model-routing-design.md。
-// 拆分自 src/runner.ts(docs/module-split-plan.md S2,纯搬运)。
+// (classifySessionError)与会话复用阈值常量。见 plans/0017-model-routing-design.md。
+// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S2,纯搬运)。
 import { type UnitBaseline } from "./git"
 import { type ResolveEvent } from "./resolve"
 import { type Phase } from "./resume"
@@ -26,11 +26,11 @@ export type Watch = {
   // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
   // runExecSession 据此开新会话续跑。
   testHandover?: boolean
-  // session-error-retry-plan.md: 会话错误是否值得重试(仅 ApiError 携带
+  // plans/0015-session-error-retry-plan.md: 会话错误是否值得重试(仅 ApiError 携带
   // isRetryable;字段不存在或非 false 一律按可重试处理,保守缺省;多个
   // session.error 事件叠加取悲观口径,只要出现过一次 false 即不可重试)。
   retryable?: boolean
-  // model-routing-design.md D.2: 三条触发面增量累积的结构化错误数据(message/
+  // plans/0017-model-routing-design.md D.2: 三条触发面增量累积的结构化错误数据(message/
   // statusCode/isRetryable/responseBody,第 3 信号再带 attempt/next),供分类与上报。
   errorInfo?: ErrorInfo
   // 上述 errorInfo 经 classifySessionError 的归类结果(有错误信息时才有意义)。
@@ -43,11 +43,11 @@ export type Watch = {
   // session.tokens 含 fork 继承前缀,均不可直接求和,不得回退到这两个口径)。
   // attempt 在回合结束时据此 statsSessionEnd 入账。
   usage?: Usage
-  // 本回合被 driver 代答的提问(auto-resolve H1/H2,docs/auto-resolve-design.md §G):
+  // 本回合被 driver 代答的提问(auto-resolve H1/H2,plans/0020-auto-resolve-design.md §G):
   // 与 usage 完全同构——由 snapshot 统一带出,7 个 return 出口(含 error/blocked 提前
   // 结算口)一个不漏;attempt 在回合结束时补桶身份后 recordResolves 落账。
   resolves?: ResolveEvent[]
-  // 测试交接写核失败(严格恢复,session-recovery-fidelity-design.md 3.3): 会话被要求
+  // 测试交接写核失败(严格恢复,plans/0022-session-recovery-fidelity-design.md 3.3): 会话被要求
   // 写测试交接文档但文档缺失/为空,严格模式下不再补写重试——经 attempt 折成下方
   // SessionResult 的 rollback 标记,交单元所有者回滚后冷启动重做。
   testHandoverInvalid?: boolean
@@ -80,7 +80,7 @@ export type SessionResult =
 // modelShown 为终端展示的已播报模型(每次 prompt 求值出的 target——未设路由时回落
 // 服务端生效模型——与之比对,模型变化时再播报「◈ 使用模型」;新会话(新建/分叉)
 // 恒播报,同会话同模型的续跑 prompt 不重复;仅内存态,不落盘)。
-// baseline 为当前执行单元的 SHA 基线(严格恢复,session-recovery-fidelity-design.md
+// baseline 为当前执行单元的 SHA 基线(严格恢复,plans/0022-session-recovery-fidelity-design.md
 // 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
 // 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
 export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
@@ -102,7 +102,7 @@ export type FailedSession = { id: string; used: number }
 // 随后自行校正)。
 export type ForkBaseInfo = { id: string; used: number }
 
-// resume.Phase → 会话角色(模型路由的细键,见 docs/model-routing-design.md B.5/C.1)。
+// resume.Phase → 会话角色(模型路由的细键,见 plans/0017-model-routing-design.md B.5/C.1)。
 // 执行链各阶段映射同名角色;subtasks 取单数 subtask;verify/review 按 stage 细分;
 // step 变体的英文 slug 即 StepKind(phase-plan / phase-handover)。phase 缺省时返回
 // undefined——由 roleOf 落 bypass(裸链与无 phase 的旁路会话)。
@@ -158,7 +158,7 @@ export function splitModel(s: string): { providerID: string; modelID: string } {
   return { providerID: s.slice(0, idx), modelID: s.slice(idx + 1) }
 }
 
-// 会话错误归类(docs/model-routing-design.md D.1):换模型是否可能有用,是 failover
+// 会话错误归类(plans/0017-model-routing-design.md D.1):换模型是否可能有用,是 failover
 // (P4)的决策依据。与 opencode retry.ts 的 RETRYABLE 正则(问"重试有没有用")刻意
 // 不同——这里问"换候选模型有没有用"。缺省 unknown 表示拿不准,P4 保守不在其上换。
 export type ErrorClass = "quota" | "auth" | "rate" | "overflow" | "transient" | "unknown"

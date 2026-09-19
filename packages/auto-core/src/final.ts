@@ -7,7 +7,7 @@ import { renderFinalTask, stageText, type FinalStage } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
 
-// --final-review 终审闭环状态机(设计文档 docs/mode-final-review-design.md
+// --final-review 终审闭环状态机(设计文档 plans/0005-mode-final-review-design.md
 // B.2/C 节)。终审阶段是入 PLAN.md 的真任务(T-F<k> + `final: <stage>@<round>`
 // 字段),由主循环 next() 按文件顺序自然执行;本模块是(带 final 标记的任务及
 // 其状态,终审产物 docs/T-F<k>/)的路由函数——无新增持久化状态,中断恢复即重新
@@ -247,7 +247,7 @@ export async function generateFinalTask(
   const collected = await requireArtifact(client, planningTask(stage, round), renderFinalTask(plan, stage, round, prior, opts.mode), opts, {
     kind: "终审任务规划",
     role: "final-plan",
-    // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(commit-boundary-design.md)。
+    // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(plans/0021-commit-boundary-design.md)。
     unitStart: true,
     artifact: `有效提案文件 ${file}`,
     detail: "缺失、无标题或无正文",

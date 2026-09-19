@@ -1,7 +1,7 @@
 // 任务循环的进度与等待: 任务间人工暂停(--wait-between)、verbose 变更文件监视、
-// 子任务进度心跳及其文案(docs/stats-timing-design.md §F)。
+// 子任务进度心跳及其文案(plans/0019-stats-timing-design.md §F)。
 // 纯叶子,不依赖 loop.ts。
-// 拆分自 src/loop.ts(docs/module-split-plan.md S13,纯搬运)。
+// 拆分自 src/loop.ts(plans/0024-module-split-plan.md S13,纯搬运)。
 import { createInterface } from "node:readline/promises"
 import { changedFiles } from "./git"
 import type { Interactive } from "./interactive"

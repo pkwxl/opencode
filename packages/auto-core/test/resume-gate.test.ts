@@ -1,5 +1,5 @@
 // src/resume-gate.ts 的单测: 恢复点单元归属门禁(unitReruns/phaseText)与中断恢复说明(resumeNote)。
-// 拆分自 test/runner.test.ts(docs/module-split-plan.md S18,纯搬运)。
+// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
 import type { Phase } from "../src/resume"
@@ -77,7 +77,7 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
   })
 })
 
-// ---- 恢复保真(session-recovery-fidelity-design.md 3.2/3.1/3.3)----
+// ---- 恢复保真(plans/0022-session-recovery-fidelity-design.md 3.2/3.1/3.3)----
 
 describe("resumeNote(中断恢复说明)", () => {
   const subtasks: Phase = { kind: "subtasks", index: 2 }
