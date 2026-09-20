@@ -11,13 +11,14 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
 import { docShapeProblems, EOF_MARK, eofScanExempt, shapeCheckOn } from "./doccheck"
-import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, subtaskDoc, taskDoc } from "./docpaths"
+import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
+import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
 import { runExecSession } from "./exec-session"
 import { beginUnit, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { handoffStatus } from "./handover"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
-import { declaredArtifacts, load, setForkBase, setSubtasks, subtasks, tick, type Plan, type Task } from "./plan"
+import { load, setForkBase, setSubtasks, subtasks, tick, type Plan, type Task } from "./plan"
 import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
@@ -261,37 +262,20 @@ export async function ensureDecomposed(
   }
 }
 
-// 合并理解与分解会话的产物问题清单(空 = 通过): context.md / shared.md /
-// subtasks.md / 各子任务 todo.md 四组。返回的问题行含具体路径,直接进反馈文案。
+// Artifact problem list of the merged understand+decompose session (empty =
+// pass; spec-driven since M1.4): the four artifact groups (context.md /
+// shared.md / subtasks.md / per-subtask todo.md) are declared as a spec table
+// (document/spec.ts decomposeArtifactSpecs) and the mechanical checks
+// (non-empty + shape + the todo.md protocol section anchors) all run through
+// the generic checker — no per-document logic here. Checklist parseability
+// stays a driver-side check (it is the driver's own injection input,
+// plans/0034 D9): reported when the file has content but no parseable items.
+// Problem lines carry concrete paths and feed the retry feedback verbatim.
 async function decomposeArtifactProblems(dir: string, taskId: string): Promise<string[]> {
-  const problems: string[] = []
-  const checkDoc = async (rel: string, content: string, label: string) => {
-    if (!content) {
-      problems.push(`${rel} ${label} missing or empty`)
-      return
-    }
-    problems.push(...docShapeProblems(content, rel))
-  }
-  await checkDoc(
-    taskDoc(taskId, "context"),
-    (await Bun.file(join(dir, await resolveTaskDoc(dir, taskId, "context"))).text().catch(() => "")).trim(),
-    "understanding digest",
-  )
-  await checkDoc(taskDoc(taskId, "shared"), (await Bun.file(join(dir, taskDoc(taskId, "shared"))).text().catch(() => "")).trim(), "shared-context index")
-  const subtasksRel = taskDoc(taskId, "subtasks")
   const raw = (await Bun.file(join(dir, await resolveTaskDoc(dir, taskId, "subtasks"))).text().catch(() => "")).trim()
   const items = subtasks(raw)
-  if (!items.length) problems.push(`${subtasksRel} missing or has no checklist items`)
-  else problems.push(...docShapeProblems(raw, subtasksRel))
-  for (let k = 1; k <= items.length; k++) {
-    const rel = subtaskDoc(taskId, k, "todo")
-    const content = (await Bun.file(join(dir, rel)).text().catch(() => "")).trim()
-    if (!content) {
-      problems.push(`${rel} subtask scope file missing or empty`)
-      continue
-    }
-    problems.push(...docShapeProblems(content, rel))
-  }
+  const { problems } = await checkArtifactSpecs(decomposeArtifactSpecs(taskId, items.length), { dir, policy: "mandatory" })
+  if (raw && !items.length) problems.push(`${taskDoc(taskId, "subtasks")} has no checklist items`)
   return problems
 }
 
@@ -346,14 +330,16 @@ export async function runSubtask(
     Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
   // 子任务目录状态协议(M1.0,plans/0030 D8): done.md 已存在 = 本子任务已收口
   // (含中断恰好落在 rename 与统一提交之间的恢复盘面)——跳过会话直接进收口
-  // (勾选 + 提交)。文件存在性是进度事实,不凭会话叙事。
-  const stateDone = await Bun.file(join(planDir, subtaskDoc(task.id, index, "done"))).exists()
+  // (勾选 + 提交)。文件存在性是进度事实,不凭会话叙事。状态文件路径自 spec 数据
+  // (document/spec.ts subtaskStateSpec,M1.4)。
+  const stateSpec = subtaskStateSpec(task.id, index)
+  const stateDone = await Bun.file(join(planDir, stateSpec.complete.path)).exists()
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在且
   // 状态=完成 → 子任务在中断前已由交接会话完成,直接勾选;状态=继续 → 以续跑
   // 提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
   const prior = stateDone ? undefined : handoffStatus(await readHandoff())
   if (stateDone) {
-    log(`↻ ${task.id} subtask ${index}: ${subtaskDoc(task.id, index, "done")} already exists; skipping the session and closing out directly`)
+    log(`↻ ${task.id} subtask ${index}: ${stateSpec.complete.path} already exists; skipping the session and closing out directly`)
   } else if (prior === "完成") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks the subtask complete; checking it off directly`)
   } else {
@@ -512,38 +498,35 @@ export async function runSubtask(
   return undefined
 }
 
-// —— 子任务产物形检(D2/D4/D6,session-boundary-hardening 设计 §4.3/§4.6)——
+// —— Subtask artifact shape checks (D2/D4/D6, session-boundary-hardening §4.3/§4.6;
+// spec-driven since M1.4) ——
 
-// 形检清单: ① 零落盘(工作区相对单元基线零变更——beginUnit 保证基线时 clean,
-// HEAD 未动 + 无脏区即本单元至今零落盘);② 声明产出逐路径存在;③ 新建 .md 非
-// 平凡 + 末行终止符(未跟踪 = 本单元新建;修改型产物的存在性检查恒真,无害);
-// ④ 声明必填章节存在;⑤ D6 全量文档终止符——本单元 git 变更内所有 .md(新建或
-// 修改,含未声明的顺带文档与单元期间已随交接提交落账的份)非平凡 + 末行终止符,
-// 豁免清单见 doccheck.ts。全部为确定性判据,零产物/截断的「自然结束」不构成完成。
+// Check list: ① zero disk writes (the worktree is unchanged relative to the
+// unit baseline — beginUnit guarantees a clean baseline, so an unmoved HEAD
+// with no dirty area means this unit wrote nothing); ②③④ declared artifacts
+// run through the generic spec checker (document/spec.ts, "declared" policy):
+// existence per declared path, non-trivial + terminal eof for .md files new
+// (untracked) in this unit, and declared section anchors; ⑤ the whole-unit eof
+// scan — every .md in the unit's git changes (new or modified, incl. undeclared
+// side documents and copies already committed at a handover boundary) must be
+// non-trivial + end with the terminator; the exempt list lives in doccheck.ts.
+// All criteria are deterministic: a zero-write or truncated "natural end" is
+// never completion.
 async function subtaskArtifactProblems(dir: string, text: string, baseline: UnitBaseline): Promise<string[]> {
   const problems: string[] = []
   if (await unitQuiet(dir, baseline)) problems.push("no changes relative to the unit baseline (zero disk writes)")
   const fresh = await untrackedFiles(dir)
-  // ③ 已做过形检的路径,D6 扫描跳过(同一路径不重复成案)。
-  const shaped = new Set<string>()
-  for (const { path, sections } of declaredArtifacts(text)) {
-    if (!(await Bun.file(join(dir, path)).exists())) {
-      problems.push(`declared artifact ${path} does not exist`)
-      continue
-    }
-    if (!path.toLowerCase().endsWith(".md")) continue
-    const content = await Bun.file(join(dir, path)).text().catch(() => "")
-    if (fresh.has(path)) {
-      problems.push(...docShapeProblems(content, path))
-      shaped.add(path)
-    }
-    for (const section of sections) {
-      if (!content.includes(section)) problems.push(`declared artifact ${path} is missing section "${section}"`)
-    }
-  }
-  // ⑤ 与 ② 互补: 存在性抓「该有的没有」(未创建的文件对 git 扫描不可见),全量
-  // 扫描抓「写了的没写完」;修改既有文档后终止符不在末行同样不过(「追加在终止符
-  // 之后」的截断形态),重提示反馈指引恢复末行终止符。
+  const declared = await checkArtifactSpecs(declaredArtifacts(text), { dir, policy: "declared", fresh })
+  problems.push(...declared.problems)
+  // ③ Shape-checked paths are skipped by the ⑤ scan (one path never forms two
+  // cases).
+  const shaped = new Set(declared.shaped)
+  // ⑤ complements ②: existence catches "what should be there is missing"
+  // (uncreated files are invisible to the git scan), the whole-unit scan
+  // catches "what was written was not finished"; a modified document whose
+  // terminator is no longer the last line fails too (the "appended after the
+  // terminator" truncation shape), and the re-prompt feedback directs
+  // restoring the terminal terminator.
   for (const rel of await unitChangedFiles(dir, baseline)) {
     if (!rel.toLowerCase().endsWith(".md") || shaped.has(rel) || eofScanExempt(rel)) continue
     const content = await Bun.file(join(dir, rel)).text().catch(() => "")

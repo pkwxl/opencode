@@ -153,6 +153,27 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
     }
   })
 
+  test("todo.md 缺协议章节锚(M1.4 spec 驱动): 反馈点名缺失章节,补正后注入", async () => {
+    const dir = await docRepo()
+    try {
+      const todoNoList = `# S01: 子任务甲\n\n## 范围声明\n\n${filler}\n\n${EOF_MARK}\n`
+      const { client, calls } = scriptedClient([
+        async () => {
+          await writeMergedArtifacts(dir)
+          await Bun.write(join(dir, "docs/T-001/S01/todo.md"), todoNoList)
+        },
+        async () => writeMergedArtifacts(dir),
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
+      expect(result.type).toBe("ok")
+      expect(calls.prompts.length).toBe(2)
+      expect(promptText(calls.prompts[1]!)).toContain('docs/T-001/S01/todo.md is missing section "## 产出清单"')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("仍不补正 → blocked 引用未过关项,检查项不注入", async () => {
     const dir = await docRepo()
     try {

@@ -1,10 +1,11 @@
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { writeCurrent, removeCurrent } from "./current"
 import { ensureDecomposed, executeWhole, requireTask, runSubtask } from "./execute"
 import { commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
+import { subtaskStateSpec } from "./document/spec"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies } from "./failback"
 import { baselineIntact, commitTree, removeIfUntracked, unitBaseline } from "./git"
@@ -468,7 +469,14 @@ export async function runTask(
               type: "blocked",
               question:
                 `${task.id} subtask state files are illegal (${scan.illegal
-                  .map((v) => `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? "both todo.md and done.md exist" : "neither todo.md nor done.md exists"}`)
+                  .map((v) => {
+                    // State-file names come from the spec data (M1.4): the
+                    // message follows the protocol declaration, not literals.
+                    const spec = subtaskStateSpec(task.id, v.index)
+                    const pending = basename(spec.pending.path)
+                    const complete = basename(spec.complete.path)
+                    return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
+                  })
                   .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
             }
           }

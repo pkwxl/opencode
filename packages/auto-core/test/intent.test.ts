@@ -69,15 +69,17 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     // The decompose family's (b)-class content lives here, not in the core
     // templates: split granularity criteria (quality / ### decompose) and
     // per-phase duties; the subtask family's closing self-check sentences
-    // joined in M1.3 (quality / ### self-check-subtask + ### self-check-whole).
+    // joined in M1.3 (quality / ### self-check-subtask + ### self-check-whole);
+    // the subtask output-placement convention joined in M1.4 (artifact spec /
+    // ### subtask-output).
     expect(packSubsection(pack, "quality", "decompose")).toContain("分解粒度准则")
     expect(packSubsection(pack, "quality", "self-check-subtask")).toBe("自我检查该子任务是否真正完成")
     expect(packSubsection(pack, "quality", "self-check-whole")).toBe("完成整个任务后自我检查是否真正完成")
+    expect(packSubsection(pack, "artifactSpec", "subtask-output")).toContain("产出约定")
     expect(pack.phaseDuties).toContain("垂直薄切片优先")
     // Sections with no migrated content yet stay absent (zero-intent baseline).
     expect(pack.acceptance).toBeUndefined()
     expect(pack.governance).toBeUndefined()
-    expect(pack.artifactSpec).toBeUndefined()
   })
 
   test("a project file with a new name adds a pack; invalid file names are rejected", () => {

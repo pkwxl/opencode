@@ -111,76 +111,9 @@ export function countSubtasks(body: string): { done: number; total: number } {
   return { done: items.filter((item) => item.done).length, total: items.length }
 }
 
-// —— 子任务声明产出解析(session-boundary-hardening 设计 §4.3 D4)——
-
-// `产出:` 字段的结构化产物声明: 检查项文本内以「产出:」引出的路径清单,driver
-// 据此做存在性/形检(不硬编码 index.md 等工作区约定,清单全部来自声明)。语法
-// 与 decompose 提示词的「每项声明产出」约定对齐,容错宽进:
-//   - [ ] 调研 X 产出: docs/T-001/S01/record.md、src/y.ts
-//   - [ ] 写文档 产出: docs/T-001/S01/index.md(背景、结论)
-// 路径间以逗号/顿号/分号/空白分隔,路径后圆括号内为可选的必填章节标题清单
-// (紧跟或以独立括号项附于路径之后);反引号包裹的路径剥壳;不含 `/` 且无扩展名
-// 的字样(自然语言,如「调研结论」)不是路径,跳过——纯文字声明的零产物会话由
-// 零落盘判据另行兜住。
-export type DeclaredArtifact = { path: string; sections: string[] }
-
-export function declaredArtifacts(text: string): DeclaredArtifact[] {
-  const decl = /(?:^|\s)产出\s*[:：]\s*(.+)$/.exec(text)?.[1]
-  if (!decl) return []
-  const out: DeclaredArtifact[] = []
-  let current: DeclaredArtifact | undefined
-  for (const raw of splitTopLevel(decl)) {
-    const token = raw.replace(/^`+/, "").replace(/`+$/, "")
-    const attached = /^([^\s()（）]+)[(（]([^)）]*)[)）]$/.exec(token)
-    if (attached) {
-      current = declarePath(out, attached[1]!)
-      addSections(current, attached[2]!)
-    } else if (/^[(（][^)）]*[)）]$/.test(token)) {
-      addSections(current, token.slice(1, -1))
-    } else {
-      current = declarePath(out, token)
-    }
-  }
-  return out
-}
-
-// 顶层切词(圆括号内不切): 路径清单的逗号/顿号/分号/句号/空白分隔符不进括号内
-// 的章节标题;孤立的右括号属噪声,丢弃。
-function splitTopLevel(text: string): string[] {
-  const tokens: string[] = []
-  let depth = 0
-  let cur = ""
-  for (const ch of text) {
-    if (ch === "(" || ch === "（") depth++
-    else if (ch === ")" || ch === "）") {
-      if (depth > 0) depth--
-      else continue
-    }
-    if (depth === 0 && /[\s,，、;；。]/.test(ch)) {
-      if (cur) tokens.push(cur)
-      cur = ""
-      continue
-    }
-    cur += ch
-  }
-  if (cur) tokens.push(cur)
-  return tokens
-}
-
-// 路径样判据: 含 / 或带扩展名;不满足即自然语言字样,不构成声明。
-function declarePath(out: DeclaredArtifact[], token: string): DeclaredArtifact | undefined {
-  if (!/(\/|\.[A-Za-z0-9]+$)/.test(token)) return undefined
-  const item: DeclaredArtifact = { path: token, sections: [] }
-  out.push(item)
-  return item
-}
-
-function addSections(item: DeclaredArtifact | undefined, text: string) {
-  if (!item) return
-  for (const section of text.split(/[,，、;；|]/).map((part) => part.trim()).filter(Boolean)) {
-    item.sections.push(section)
-  }
-}
+// The `产出:` artifact-declaration parser lives in the document domain
+// (src/document/spec.ts declaredArtifacts, M1.4): the declaration format and
+// its mechanical check semantics are owned end to end by that domain.
 
 export async function begin(path: string, id: string) {
   const plan = await load(path)

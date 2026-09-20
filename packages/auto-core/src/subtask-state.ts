@@ -5,6 +5,11 @@
 // progress fact (state grounding — checklist ticks in PLAN.md follow the files,
 // never the other way around).
 //
+// Spec-driven since M1.4 (plans/0034 D6): the protocol's state semantics,
+// existence checks and illegal-state detection all consume the state-file spec
+// pair declared once in document/spec.ts (subtaskStateSpec) — this module holds
+// the protocol logic, the file names/anchors/labels live in the spec data.
+//
 // Activation: the protocol is active for a task iff ANY todo/done file exists
 // among its subtask directories. Legacy tasks (decomposed before this protocol,
 // human-written checklists, off/ondemand modes) have none and keep checklist
@@ -20,7 +25,7 @@
 import { mkdir, rename } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { EOF_MARK } from "./doccheck"
-import { subtaskDoc } from "./docpaths"
+import { SUBTASK_TODO_SECTIONS, subtaskStateSpec } from "./document/spec"
 
 export type SubtaskState = { index: number; todo: boolean; done: boolean }
 
@@ -38,10 +43,11 @@ const exists = async (dir: string, rel: string): Promise<boolean> => Bun.file(jo
 export async function scanSubtaskStates(dir: string, taskId: string, count: number): Promise<SubtaskStateScan> {
   const states: SubtaskState[] = []
   for (let k = 1; k <= count; k++) {
+    const spec = subtaskStateSpec(taskId, k)
     states.push({
       index: k,
-      todo: await exists(dir, subtaskDoc(taskId, k, "todo")),
-      done: await exists(dir, subtaskDoc(taskId, k, "done")),
+      todo: await exists(dir, spec.pending.path),
+      done: await exists(dir, spec.complete.path),
     })
   }
   const active = states.some((s) => s.todo || s.done)
@@ -70,27 +76,32 @@ export function effectiveDone(scan: SubtaskStateScan, items: { done: boolean }[]
 // when the protocol is inactive for this subtask (no todo.md) or the rename
 // already landed (done.md present — interruption between rename and commit).
 export async function renameTodoToDone(dir: string, taskId: string, index: number): Promise<void> {
-  const todo = join(dir, subtaskDoc(taskId, index, "todo"))
-  const done = join(dir, subtaskDoc(taskId, index, "done"))
+  const spec = subtaskStateSpec(taskId, index)
+  const todo = join(dir, spec.pending.path)
+  const done = join(dir, spec.complete.path)
   if (!(await Bun.file(todo).exists()) || (await Bun.file(done).exists())) return
   await rename(todo, done)
 }
 
 // DRIVER-authored minimal scope file for review-fix injected items (D9): the
 // checklist item text is the authority; the file exists to keep the
-// "every checklist item has exactly one state file" invariant uniform.
+// "every checklist item has exactly one state file" invariant uniform. The
+// section headings come from the same spec anchors the decompose checks
+// enforce (single source, M1.4).
 export async function writeInjectedTodo(dir: string, taskId: string, index: number, text: string): Promise<void> {
-  const rel = subtaskDoc(taskId, index, "todo")
+  const spec = subtaskStateSpec(taskId, index)
+  const rel = spec.pending.path
   if (await exists(dir, rel)) return
-  if (await exists(dir, subtaskDoc(taskId, index, "done"))) return
+  if (await exists(dir, spec.complete.path)) return
+  const [scopeHeading, listHeading] = SUBTASK_TODO_SECTIONS
   const body = [
     `# ${taskId} S${String(index).padStart(2, "0")}: ${text}`,
     ``,
-    `## 范围声明`,
+    scopeHeading,
     ``,
     `本子任务由质量审核修复轮注入,范围以 PLAN.md 中对应检查项的描述为准: ${text}`,
     ``,
-    `## 产出清单`,
+    listHeading,
     ``,
     `以检查项描述中的「产出:」声明为准(无声明时产出直接落于源码树)。`,
     ``,

@@ -233,6 +233,7 @@ export function renderSubtask(
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
   const index = at >= 0 ? String(at + 1) : undefined
   const ctx = baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined })
+  const outputFile = opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined)
   return renderPrompt("subtask", {
     // index 的推导值回灌 baseCtx: 测试交接文档命名(测试协议段)与本处注入的
     // 「第 N 项」同源,缺省推导(旧调用不传 index)时同样落子任务级目录命名。
@@ -244,6 +245,12 @@ export function renderSubtask(
     // active pack's `## quality` / `### self-check-subtask`; the guard drops
     // the wrap-up item cleanly when the pack omits it (zero-intent baseline).
     selfCheck: intentText("quality", "self-check-subtask", ctx),
+    // Output-placement convention (M1.4, plans/0034 D7/D8): (b)-class artifact
+    // convention from the active pack's `## artifact spec` / `### subtask-output`,
+    // pre-rendered with the output-file slot (the convention text references
+    // {{outputFile}}). Injected only when the slot exists (index given or
+    // derived); a pack omitting the subsection drops the block cleanly.
+    artifactConvention: outputFile ? intentText("artifactSpec", "subtask-output", { ...ctx, outputFile }) : undefined,
     // L1 接地块变量(ground-state 片段): 台账权威状态随每个子任务会话注入;
     // qualifiedId 仅在编号可知时给出(无检查项的旧形态任务没有 S 编号)。
     taskTitle: task.title,
@@ -253,7 +260,7 @@ export function renderSubtask(
     doneIds: doneIds(plan),
     index,
     subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.text}`).join("\n") : undefined),
-    outputFile: opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined),
+    outputFile,
     // 子任务目录状态协议(M1.0): 分解期写定的范围声明文件;旧形态任务无此文件,
     // 模板按「如存在」措辞条件化。
     todoFile: index !== undefined ? subtaskDoc(task.id, Number(index), "todo") : undefined,

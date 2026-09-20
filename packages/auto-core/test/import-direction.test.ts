@@ -42,7 +42,11 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // driver never reaches past them into the domain.
   intent: ["intent/types", "intent/load"],
   phases: ["phases/registry"],
-  document: ["document/types", "document/roles"],
+  // document: types = the frozen schema (M1.1); spec = the artifact-spec
+  // machinery (M1.4 — `产出:` declaration parser, decompose/state-file spec
+  // tables, generic spec-driven checker), the domain's published acquisition
+  // surface for artifact checks.
+  document: ["document/types", "document/roles", "document/spec"],
   agent: ["agent/types"],
 }
 

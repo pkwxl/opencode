@@ -247,6 +247,59 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
   })
 })
 
+describe("renderSubtask 产出约定意图外置(M1.4,artifact spec 节)", () => {
+  const subtask = "编写执行逻辑"
+
+  test("内置包: 有产出文件位(index 给定或推导)时注入约定段,无位时整段消失", () => {
+    const withFile = renderSubtask(listPlan, listTask, subtask, { index: 2 })
+    expect(withFile).toContain("产出约定")
+    expect(withFile).toContain("写入 docs/T-004/S02/index.md(独立文件,标题写在首行,不并入其他文档)")
+    expect(withFile).toContain("代码类产出直接落于源码树")
+    const noFile = renderSubtask(plan, task, "编写迁移脚本")
+    expect(noFile).not.toContain("产出约定")
+  })
+
+  test("项目覆盖 default 包即替换约定段,useIntentPacks 装载生效;包文本可用模板变量", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), "# default\n\n## artifact spec\n\n### subtask-output\n\nCUSTOM-CONVENTION 写入 {{outputFile}}\n")
+      useIntentPacks(dir)
+      const text = renderSubtask(listPlan, listTask, subtask, { index: 2 })
+      expect(text).toContain("CUSTOM-CONVENTION 写入 docs/T-004/S02/index.md")
+      // 整包替换(无合并): 内置约定消失
+      expect(text).not.toContain("产出约定")
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+    // 复位后内置包恢复生效
+    expect(renderSubtask(listPlan, listTask, subtask, { index: 2 })).toContain("产出约定")
+  })
+
+  test("零意图基线: 空 default 包覆盖时约定段消失,核心协议保留且无残渣", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), "# default\n")
+      useIntentPacks(dir)
+      const text = renderSubtask(listPlan, listTask, subtask, { index: 2 })
+      expect(text).not.toContain("产出约定")
+      // 核心协议不受影响: 状态文件指针与排他条款仍在(tier-1 面不随意图包消失)
+      expect(text).toContain("本子任务的范围声明见 docs/T-004/S02/todo.md")
+      expect(text).toContain("由 DRIVER 独占管理")
+      expect(text).toContain("约束:")
+      expect(text).not.toMatch(/\{\{|\}\}/)
+      expect(text).not.toMatch(/\n\n\n/)
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
   test("摘要全文逐字注入 + 一句确认 + 不读不写不展开", () => {
     const digest = "## 相关文件与关键符号\n- src/x.ts: 数据模型\n\n## 约束与前提\n- 只读目标目录"

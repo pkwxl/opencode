@@ -77,3 +77,7 @@
 ## governance
 
 ## artifact spec
+
+### subtask-output
+
+产出约定:本项若产出文档/分析/设计类内容,写入 {{outputFile}}(独立文件,标题写在首行,不并入其他文档);代码类产出直接落于源码树。

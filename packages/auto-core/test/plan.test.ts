@@ -8,7 +8,6 @@ import {
   begin,
   block,
   countSubtasks,
-  declaredArtifacts,
   load,
   markDone,
   next,
@@ -346,48 +345,5 @@ describe("verify 命令提取", () => {
     expect(verifyCommand(task("T-1", "command: bun test"))).toBe("bun test")
     expect(verifyCommand(task("T-2", " bun test 应通过"))).toBeUndefined()
     expect(verifyCommand(task("T-3"))).toBeUndefined()
-  })
-})
-
-describe("声明产出解析(产出: 字段,session-boundary-hardening §4.3 D4)", () => {
-  test("无声明 / 纯自然语言声明: 不构成产物清单", () => {
-    expect(declaredArtifacts("调研迁移策略并落盘")).toEqual([])
-    expect(declaredArtifacts("写文档 产出: 调研结论与建议")).toEqual([])
-    // 「投入:」一类字样不含「产出:」字段
-    expect(declaredArtifacts("投入: docs/a.md")).toEqual([])
-  })
-
-  test("单路径/多路径清单: 逗号、顿号、分号、空白、全角冒号均可分隔", () => {
-    expect(declaredArtifacts("调研 X 产出: docs/T-001/S01/record.md")).toEqual([{ path: "docs/T-001/S01/record.md", sections: [] }])
-    expect(declaredArtifacts("产出：docs/a.md、src/b.ts")).toEqual([
-      { path: "docs/a.md", sections: [] },
-      { path: "src/b.ts", sections: [] },
-    ])
-    expect(declaredArtifacts("产出: docs/a.md,src/b.ts;docs/c.md")).toEqual([
-      { path: "docs/a.md", sections: [] },
-      { path: "src/b.ts", sections: [] },
-      { path: "docs/c.md", sections: [] },
-    ])
-    expect(declaredArtifacts("产出: docs/a.md 和 src/b.ts。")).toEqual([
-      { path: "docs/a.md", sections: [] },
-      { path: "src/b.ts", sections: [] },
-    ])
-  })
-
-  test("可选章节清单: 路径后圆括号(紧跟或独立括号项),括号内分隔符不切断路径", () => {
-    expect(declaredArtifacts("产出: docs/T-001/S01/index.md(背景、结论)")).toEqual([
-      { path: "docs/T-001/S01/index.md", sections: ["背景", "结论"] },
-    ])
-    expect(declaredArtifacts("产出: docs/a.md (背景、结论) docs/b.md(风险)")).toEqual([
-      { path: "docs/a.md", sections: ["背景", "结论"] },
-      { path: "docs/b.md", sections: ["风险"] },
-    ])
-    // 无路径可归属的独立括号项: 忽略
-    expect(declaredArtifacts("产出: (背景)")).toEqual([])
-  })
-
-  test("markdown 反引号剥壳;带扩展名但无斜杠的路径是合法声明", () => {
-    expect(declaredArtifacts("产出: `docs/a.md`")).toEqual([{ path: "docs/a.md", sections: [] }])
-    expect(declaredArtifacts("产出: README.md")).toEqual([{ path: "README.md", sections: [] }])
   })
 })
