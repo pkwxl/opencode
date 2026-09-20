@@ -22,7 +22,7 @@ Distinguish two kinds of knowledge: `PLAN.md`/`CURRENT.md`/`.opencode/auto/confi
 
 ## Build conventions (developing this program)
 
-- **Templates must keep the `with { type: "file" }` import** — the only way shell packages embed them into the binary at compile time. When adding a built-in template, register it in the same change: prompt templates → the embedded registry in `src/template.ts` (shell-added templates go through `registerTemplate`), mode templates → `src/mode.ts`; init copy templates are registered by the shell.
+- **Templates must keep the `with { type: "file" }` import** — the only way shell packages embed them into the binary at compile time. When adding a built-in template, register it in the same change: prompt templates → the embedded registry in `src/template.ts` (shell-added templates go through `registerTemplate`), mode templates → `src/mode.ts`, intent packs → `src/intent/load.ts`; init copy templates are registered by the shell.
 - `src/templates.d.ts` provides path-string types for `*.md` / `*.json` imports; do not remove `resolveJsonModule: false` from `tsconfig.json`.
 - Shells reference this package's TS sources and template files directly via `package.json` `exports` (`"./*": "./src/*.ts"`, `"./templates/*"`); new src files need no exports registration. **The core does not know shells** (never import any shell package); shell differences are injected exclusively via the `src/shell.ts` profile or parameter passing.
 
@@ -39,6 +39,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Hibernate windows (OPENCODE_AUTO_HIBERNATE) → `src/hibernate.ts` + `src/switches.ts` (0027)
 - Acceptance/review → `src/review.ts` + `src/verify.ts` (0009); final-review loop → `src/final.ts` (0005)
 - Prompt copy → touch only `templates/prompts/*.md` (`src/prompt.ts` only assembles data); after changes run `bun test test/prompt-exec.test.ts test/prompt-verify.test.ts test/prompt-phase.test.ts test/prompt-template.test.ts`
+- Intent packs (frozen schema M1.1; content migrates per loop M1.2+) → `src/intent/types.ts` + `src/intent/load.ts` + `templates/intents/` (0031); document roles / artifact specs (frozen M1.1; consumers M1.4/M2.3) → `src/document/types.ts` (0031)
 - Test-handover front-loading (--handover-test) → `src/testrun.ts` + `src/watch.ts` handleIdleTest + `src/exec-session.ts` + `src/git.ts` trackedSourceChanges (0023)
 - Unified commit and the unit commit boundary → `src/git.ts` + `src/unit-commit.ts` + `src/artifact.ts` spec.unitStart (0021); interruption recovery and the unit-ownership gate → `src/resume.ts` + `src/resume-gate.ts` (0018; recovery fidelity OPENCODE_AUTO_STRICT_RESUME see 0022)
 - Auto numbering (--auto-number) → `src/numbering.ts` (0001)

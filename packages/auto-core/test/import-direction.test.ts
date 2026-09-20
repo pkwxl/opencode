@@ -37,7 +37,10 @@ const DOMAIN_DIRS: ReadonlySet<string> = new Set(["intent", "phases", "document"
 // import — the "only via interfaces" rule (D8). Extend deliberately as a domain
 // grows a published surface. Paths are src-relative keys without extension.
 const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
-  intent: ["intent/types"],
+  // intent: types = the frozen schema (M1.1); load = the pack-acquisition
+  // surface (built-in registry + project overlay). Published together so the
+  // driver never reaches past them into the domain.
+  intent: ["intent/types", "intent/load"],
   phases: ["phases/registry"],
   document: ["document/types", "document/roles"],
   agent: ["agent/types"],
