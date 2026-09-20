@@ -39,7 +39,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Hibernate windows (OPENCODE_AUTO_HIBERNATE) → `src/hibernate.ts` + `src/switches.ts` (0027)
 - Acceptance/review → `src/review.ts` + `src/verify.ts` (0009); final-review loop → `src/final.ts` (0005)
 - Prompt copy → touch only `templates/prompts/*.md` (`src/prompt.ts` only assembles data); after changes run `bun test test/prompt-exec.test.ts test/prompt-verify.test.ts test/prompt-phase.test.ts test/prompt-template.test.ts`
-- Intent packs (frozen schema M1.1; content migrates per loop M1.2+) → `src/intent/types.ts` + `src/intent/load.ts` + `templates/intents/` (0031); document roles / artifact specs (frozen M1.1; consumers M1.4/M2.3) → `src/document/types.ts` (0031)
+- Intent packs (schema frozen M1.1; first consumer M1.2: the decompose family's split criteria live in `templates/intents/default.md`, injected by `src/prompt.ts` renderDecompose as pre-rendered data; `useIntentPacks(dir)` loads the project overlay next to `usePromptLibrary`) → `src/intent/types.ts` + `src/intent/load.ts` + `templates/intents/` (0031, 0032); document roles / artifact specs (frozen M1.1; consumers M1.4/M2.3) → `src/document/types.ts` (0031)
 - Test-handover front-loading (--handover-test) → `src/testrun.ts` + `src/watch.ts` handleIdleTest + `src/exec-session.ts` + `src/git.ts` trackedSourceChanges (0023)
 - Unified commit and the unit commit boundary → `src/git.ts` + `src/unit-commit.ts` + `src/artifact.ts` spec.unitStart (0021); interruption recovery and the unit-ownership gate → `src/resume.ts` + `src/resume-gate.ts` (0018; recovery fidelity OPENCODE_AUTO_STRICT_RESUME see 0022)
 - Auto numbering (--auto-number) → `src/numbering.ts` (0001)

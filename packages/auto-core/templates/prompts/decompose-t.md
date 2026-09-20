@@ -21,13 +21,9 @@
 2. 构建公共上下文:把各子任务都需要共享的文件/代码以引用方式预取,写入
    docs/{{taskId}}/shared.md——每条目一行:路径(或符号) + 一两句定位说明。
    该文件是索引,不搬运全文;后续子任务会话按索引自行引用式阅读;
-{{> decompose-rule}}
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 按测试面/场景族切分:每项对应一个测试文件或一族紧密相关的场景;
-   - 写测试与修缺陷分离:测试暴露的实现缺陷作为独立修复项追加,不与写测试混在
-     一项;
-   - 测试执行遵守测试执行协议(启用 --test-by-driver 时脚本交 DRIVER 执行);
-5. 把分解结果写入 docs/{{taskId}}/subtasks.md(子任务索引),格式为 Markdown 检查项,
+{{#if decomposeRule}}{{decomposeRule}}
+{{/if}}{{#if phaseDuties}}{{phaseDuties}}
+{{/if}}5. 把分解结果写入 docs/{{taskId}}/subtasks.md(子任务索引),格式为 Markdown 检查项,
    描述要自包含(执行会话仅凭该描述、本子任务的 todo.md、公共上下文索引 shared.md
    与 docs/ 即可完成),并在描述末尾注明该项的产出:
 

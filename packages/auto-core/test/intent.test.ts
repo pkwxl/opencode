@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loadIntents, parseIntentFile, resolveIntent } from "../src/intent/load"
+import { loadIntents, parseIntentFile, resolveIntent, dutiesForPhase } from "../src/intent/load"
 import { DEFAULT_INTENT, INTENT_SECTIONS } from "../src/intent/types"
 
 function packText(name: string, sections: Record<string, string>): string {
@@ -61,12 +61,19 @@ describe("intent file protocol (parseIntentFile)", () => {
 })
 
 describe("built-in registry and project overlay (loadIntents)", () => {
-  test("the built-in registry ships the empty default pack (zero-intent baseline)", () => {
+  test("the built-in registry ships the default pack carrying the migrated decompose intent (M1.2)", () => {
     const packs = loadIntents()
     expect(Object.keys(packs)).toEqual([DEFAULT_INTENT])
     const pack = packs[DEFAULT_INTENT]!
     expect(pack.name).toBe(DEFAULT_INTENT)
-    for (const section of INTENT_SECTIONS) expect(pack[section]).toBeUndefined()
+    // The decompose family's (b)-class content lives here, not in the core
+    // templates: split granularity criteria (quality) and per-phase duties.
+    expect(pack.quality).toContain("分解粒度准则")
+    expect(pack.phaseDuties).toContain("垂直薄切片优先")
+    // Sections with no migrated content yet stay absent (zero-intent baseline).
+    expect(pack.acceptance).toBeUndefined()
+    expect(pack.governance).toBeUndefined()
+    expect(pack.artifactSpec).toBeUndefined()
   })
 
   test("a project file with a new name adds a pack; invalid file names are rejected", () => {
@@ -114,3 +121,40 @@ describe("degenerate composition (resolveIntent)", () => {
     expect(() => resolveIntent(loadIntents(), "nope")).toThrow(/unknown intent pack "nope".*default/)
   })
 })
+
+describe("per-phase duties addressing (dutiesForPhase)", () => {
+  const pack = parseIntentFile(
+    "x",
+    `# x
+
+## phase duties
+
+### a 分析
+
+duties for a.
+
+### m 迁移实现
+
+duties for m,
+two lines.
+`,
+  )
+
+  test("extracts the subsection body by key; headings may carry a suffix", () => {
+    expect(dutiesForPhase(pack, "a")).toBe("duties for a.")
+    expect(dutiesForPhase(pack, "m")).toBe("duties for m,\ntwo lines.")
+  })
+
+  test("unknown keys and absent sections yield undefined (zero-intent baseline)", () => {
+    expect(dutiesForPhase(pack, "k")).toBeUndefined()
+    expect(dutiesForPhase(parseIntentFile("y", "# y\n\n## quality\nq\n"), "m")).toBeUndefined()
+  })
+
+  test("the built-in default pack carries duties for all six letters (M1.2 migration)", () => {
+    const builtin = resolveIntent(loadIntents())
+    for (const letter of ["a", "d", "m", "t", "v", "k"]) {
+      expect(dutiesForPhase(builtin, letter)).toContain("本阶段({{phaseName}})的切分与产出准则")
+    }
+  })
+})
+

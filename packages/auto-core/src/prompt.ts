@@ -4,6 +4,8 @@
 // 的调用点不感知模板机制。
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
+import { dutiesForPhase, loadIntents, resolveIntent } from "./intent/load"
+import type { IntentPack } from "./intent/types"
 import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Status, type Task } from "./plan"
 import type { ResolveItem } from "./resolve"
@@ -12,6 +14,20 @@ import { phaseText, type Phase } from "./phases"
 import { autoSwitches, type TaskContextMode } from "./switches"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
+
+// The active intent pack (M1.2, plans/0032): the decompose family's (b)-class
+// content (split granularity criteria + per-phase duties) lives in the pack,
+// not in the core templates; the assembly point injects it as pre-rendered
+// data (decomposeRule/phaseDuties vars). Default state = the built-in preset;
+// loop-preflight calls useIntentPacks(dir) next to usePromptLibrary so the
+// project overlay (.opencode/auto/intents/) applies; invalid pack files throw
+// there as usage errors. Degenerate composition only (F8): one active pack,
+// a same-named project file overrides the built-in wholesale.
+let activeIntentPack: IntentPack = resolveIntent(loadIntents())
+
+export function useIntentPacks(dir: string | undefined): void {
+  activeIntentPack = resolveIntent(loadIntents(dir))
+}
 
 // verify: config.verify(任务级三段式验收开关)。false 时与 verify 相关的描述
 // 从会话提示词中整体消失(验收机制不存在,提示词不得提及)。
@@ -140,8 +156,19 @@ export function renderContextBase(task: Task, digest: string): string {
 // session must not touch PLAN.md.
 // 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
 // 开启细粒度档),库中无此名回退通用 decompose。
+// 意图注入(M1.2): 粒度准则与阶段职责段来自生效意图包(quality 节与
+// phaseDuties 的 `### <阶段字母>` 子节),先经 renderText 以本 ctx 求值
+// (fine/contextBudget/phaseName 随包内文本解析,与 modes 段同口径)再作为
+// 数据变量注入;包缺对应节时该段整体消失(零意图基线),核心模板只留角色
+// 边界、格式协议与 eof 纪律。
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
-  return renderPrompt(decomposeTemplateName(opts.phase, promptTemplateNames()), baseCtx(plan, task, opts))
+  const ctx = baseCtx(plan, task, opts)
+  const duties = dutiesForPhase(activeIntentPack, opts.phase ?? "m")
+  return renderPrompt(decomposeTemplateName(opts.phase, promptTemplateNames()), {
+    ...ctx,
+    decomposeRule: activeIntentPack.quality && renderText(activeIntentPack.quality, ctx),
+    phaseDuties: duties && renderText(duties, ctx),
+  })
 }
 
 // decompose 模板名解析(纯函数,便于单测): 阶段字母 → decompose-<phase>(缺省

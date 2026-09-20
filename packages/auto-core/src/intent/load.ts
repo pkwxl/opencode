@@ -11,6 +11,13 @@
 // migrates out of the core templates into packs per loop milestone (M1.2+);
 // the loader is consumed by the prompt assembly point from its first consumer
 // onward.
+//
+// Section bodies may use the prompt template syntax ({{var}}/{{#if}}), same
+// license as mode files (prompt.ts renders mode sections with the render
+// context); the assembly point renders them with the prompt context before
+// injecting them as data. The `## phase duties` section is addressed per
+// phase by `### <key>` subsections (dutiesForPhase); the M3 phase registry's
+// dutiesRef will point at these.
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DEFAULT_INTENT, INTENT_SECTIONS, type IntentPack, type IntentSection } from "./types"
@@ -70,6 +77,32 @@ export function resolveIntent(packs: Record<string, IntentPack>, name: string = 
     throw new Error(`unknown intent pack "${name}" (available: ${Object.keys(packs).sort().join(", ")})`)
   }
   return pack
+}
+
+// Per-phase duties addressing: the `## phase duties` section is subdivided by
+// `### <key>` subsections (key = phase letter today; the heading may carry a
+// human-readable suffix after the key, e.g. `### m 迁移实现`). Returns the
+// trimmed body of the matching subsection; undefined when the section or the
+// key is absent (zero-intent baseline: the template then renders no duties).
+// Text before the first `###` heading is not addressable and never injected.
+export function dutiesForPhase(pack: IntentPack, key: string): string | undefined {
+  const lines = pack.phaseDuties?.split("\n")
+  if (!lines) return undefined
+  const bodies = new Map<string, string[]>()
+  let current: string | undefined
+  for (const line of lines) {
+    const heading = /^###\s+(\S+)/.exec(line)
+    if (heading) {
+      current = heading[1]!
+      if (!bodies.has(current)) bodies.set(current, [])
+      continue
+    }
+    if (current !== undefined) bodies.get(current)!.push(line)
+  }
+  const body = bodies.get(key)
+  if (!body) return undefined
+  const text = trimBody(body).join("\n")
+  return text || undefined
 }
 
 // Parse a pack file; throws on a missing/mismatched title or an unknown

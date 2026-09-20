@@ -13,6 +13,7 @@ import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
+import { useIntentPacks } from "./prompt"
 import type { PermissionMode, SubtaskMode } from "./opts"
 import { load, resetInProgress, setStatus } from "./plan"
 import { protect } from "./protect"
@@ -112,8 +113,11 @@ export async function preflight(
 
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议敏感模板做关键
   // 内容校验,失败按用法错误退出)。之后 render* 同步渲染,无需再感知目录。
+  // 意图包同点装载(M1.2): 目标目录 .opencode/auto/intents/ 覆盖/新增,非法
+  // 意图包文件在此起即按用法错误报出。
   try {
     usePromptLibrary(directory)
+    useIntentPacks(directory)
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }

@@ -21,12 +21,9 @@
 2. 构建公共上下文:把各子任务都需要共享的文件/代码以引用方式预取,写入
    docs/{{taskId}}/shared.md——每条目一行:路径(或符号) + 一两句定位说明。
    该文件是索引,不搬运全文;后续子任务会话按索引自行引用式阅读;
-{{> decompose-rule}}
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 按验收维度切分(功能符合度、文档完备性、环境与运行、回归等),每维度一项;
-   - 每项产出一份核验记录(核验方式、证据、结论),写入 docs/ 独立文件;
-   - 只核验与记录,不做修复(差距走既有终审闭环);
-5. 把分解结果写入 docs/{{taskId}}/subtasks.md(子任务索引),格式为 Markdown 检查项,
+{{#if decomposeRule}}{{decomposeRule}}
+{{/if}}{{#if phaseDuties}}{{phaseDuties}}
+{{/if}}5. 把分解结果写入 docs/{{taskId}}/subtasks.md(子任务索引),格式为 Markdown 检查项,
    描述要自包含(执行会话仅凭该描述、本子任务的 todo.md、公共上下文索引 shared.md
    与 docs/ 即可完成),并在描述末尾注明该项的产出:
 

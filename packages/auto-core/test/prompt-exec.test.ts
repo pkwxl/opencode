@@ -23,6 +23,7 @@ import {
   renderWrapup,
   subtaskOutputFile,
   testHandoffFile,
+  useIntentPacks,
   type TestRunInfo,
 } from "../src/prompt"
 import { groundPlan, groundTask, listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
@@ -135,6 +136,50 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       expect(renderDecompose(plan, task, { phase: "a" })).toContain("按问题/疑点/子系统/风险面切分")
     } finally {
       usePromptLibrary(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("意图包外置(M1.2): 项目覆盖 default 包即替换分解意图,useIntentPacks 装载生效", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(
+        join(overlay, "default.md"),
+        "# default\n\n## quality\n\nCUSTOM-RULE {{contextBudget}}\n\n## phase duties\n\n### m 迁移实现\n\nCUSTOM-DUTIES {{phaseName}}\n",
+      )
+      useIntentPacks(dir)
+      const text = renderDecompose(plan, task)
+      expect(text).toContain("CUSTOM-RULE 32.0k")
+      expect(text).toContain("CUSTOM-DUTIES 迁移实现")
+      // 整包替换(无合并): 内置准则消失
+      expect(text).not.toContain("分解粒度准则")
+      expect(text).not.toContain("垂直薄切片优先")
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+    // 复位后内置包恢复生效
+    expect(renderDecompose(plan, task)).toContain("垂直薄切片优先")
+  })
+
+  test("零意图基线: 空 default 包覆盖时准则段整体消失,核心协议保留", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), "# default\n\n## quality\n\n## phase duties\n")
+      useIntentPacks(dir)
+      const text = renderDecompose(plan, task)
+      expect(text).not.toContain("分解粒度准则")
+      expect(text).not.toContain("本阶段(迁移实现)的切分与产出准则")
+      // 核心模板仍承载角色边界与格式协议
+      expect(text).toContain("任务背景理解与子任务分解,不写实现代码")
+      expect(text).toContain("- [ ] <子任务描述;末尾注明该项的产出>")
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    } finally {
+      useIntentPacks(undefined)
       rmSync(dir, { recursive: true, force: true })
     }
   })

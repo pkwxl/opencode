@@ -196,7 +196,10 @@ describe("内置模板注册表", () => {
 describe("分阶段分解模板 decompose-<phase>", () => {
   const six = ["a", "d", "m", "t", "v", "k"] as const
 
-  test("六份齐备: 均含检查项协议、粒度准则段与阶段准则句", () => {
+  // M1.2 意图外置后,粒度准则与阶段职责段不再由模板自带,而是 prompt.ts 以
+  // decomposeRule/phaseDuties 变量注入意图包内容;模板层只留角色边界、格式
+  // 协议与注入挂点。内容断言见 test/intent.test.ts 与 test/prompt-exec.test.ts。
+  test("六份齐备: 均含检查项协议与意图注入挂点,注入内容落位正确", () => {
     usePromptLibrary(undefined)
     for (const letter of six) {
       const text = renderTemplate(`decompose-${letter}`, {
@@ -204,30 +207,31 @@ describe("分阶段分解模板 decompose-<phase>", () => {
         taskBlock: "# T-001\n\n正文",
         phaseName: "阶段名",
         contextBudget: "32.0k",
-        fine: false,
+        decomposeRule: "RULE-SENTINEL",
+        phaseDuties: "DUTIES-SENTINEL",
       })
       expect(text).toContain("- [ ]")
       expect(text).toContain("任务背景理解与子任务分解,不写实现代码")
       expect(text).toContain("当前处于阶段 阶段名")
-      expect(text).toContain("分解粒度准则")
-      expect(text).toContain("以任务描述为基准")
+      expect(text).toContain("RULE-SENTINEL")
+      expect(text).toContain("DUTIES-SENTINEL")
+      // 注入点在检查项协议(5. 把分解结果写入…)之前
+      expect(text.indexOf("DUTIES-SENTINEL")).toBeLessThan(text.indexOf("5. 把分解结果写入"))
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
   })
 
-  test("fine 两态: 细粒度段按开关出现/消失(片段内条件段与模板同级求值)", () => {
+  test("零意图基线: 注入变量缺省时整段消失,不留空行残渣、不残留标签", () => {
     usePromptLibrary(undefined)
-    const ctx = { taskId: "T-001", taskBlock: "# T-001\n\n正文", phaseName: "分析", contextBudget: "32.0k" }
     for (const letter of six) {
-      const on = renderTemplate(`decompose-${letter}`, { ...ctx, fine: true })
-      expect(on).toContain("细粒度模式")
-      expect(on).toContain("宁细勿粗")
-      expect(on).toContain("约 32.0k tokens 量级")
-      expect(on).not.toMatch(/\{\{|\}\}/)
-      const off = renderTemplate(`decompose-${letter}`, { ...ctx, fine: false })
-      expect(off).not.toContain("细粒度模式")
-      expect(off).not.toContain("宁细勿粗")
-      expect(off).not.toMatch(/\{\{|\}\}/)
+      const text = renderTemplate(`decompose-${letter}`, {
+        taskId: "T-001",
+        taskBlock: "# T-001\n\n正文",
+        phaseName: "阶段名",
+      })
+      expect(text).toContain("- [ ]")
+      expect(text).not.toMatch(/\{\{|\}\}/)
+      expect(text).not.toMatch(/\n\n\n/)
     }
   })
 })
