@@ -22,7 +22,6 @@ import {
   renderTestContinue,
   renderTestResult,
   renderTestWrapup,
-  renderUnderstand,
   renderVerifyJudge,
   renderVerifyScriptGen,
   renderWhole,
@@ -41,8 +40,8 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 23 份(勘测结论 §J-3;新增引用需同步设计文档)", () => {
-    expect(consumers.length).toBe(23)
+  test("引用该片段的模板恰为 22 份(勘测结论 §J-3,M1.0 合并 understand 后 -1;新增引用需同步设计文档)", () => {
+    expect(consumers.length).toBe(22)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
@@ -143,7 +142,7 @@ describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-bound
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> digest-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 understand/decompose 基础+六阶段变体共 8 份", () => {
+  test("引用该片段的模板恰为 decompose 基础+六阶段变体共 7 份(M1.0 合并)", () => {
     expect(consumers).toEqual([
       "decompose-a.md",
       "decompose-d.md",
@@ -152,7 +151,6 @@ describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-bound
       "decompose-t.md",
       "decompose-v.md",
       "decompose.md",
-      "understand.md",
     ])
     // 执行类模板不引用:subtask/whole 会话不写 digest,防误读由 L1 ground-state 接地覆盖
     expect(consumers).not.toContain("subtask.md")
@@ -171,7 +169,7 @@ describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-bound
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("8 份消费模板渲染含纪律段且不残留模板标签(片段改动波及全部引用方)", () => {
+  test("7 份消费模板渲染含纪律段且不残留模板标签(片段改动波及全部引用方)", () => {
     for (const name of consumers) {
       const rendered = renderTemplate(name.replace(/\.md$/, ""), {})
       expect(rendered).toContain("跨任务引用纪律")
@@ -188,7 +186,7 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> eof-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 subtask + understand/decompose 基础+六阶段变体 + wrapup 共 10 份(S3/S3b)", () => {
+  test("引用该片段的模板恰为 subtask + decompose 基础+六阶段变体 + wrapup 共 9 份(S3/S3b,M1.0 合并)", () => {
     expect(consumers).toEqual([
       "decompose-a.md",
       "decompose-d.md",
@@ -198,7 +196,6 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
       "decompose-v.md",
       "decompose.md",
       "subtask.md",
-      "understand.md",
       "wrapup.md",
     ])
   })
@@ -211,10 +208,9 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("消费模板渲染含终止符纪律段(subtask/understand/decompose/wrapup 四类自动会话)", () => {
+  test("消费模板渲染含终止符纪律段(subtask/decompose/wrapup 三类自动会话,M1.0 合并)", () => {
     for (const rendered of [
       renderSubtask(plan, task, "编写迁移脚本的 schema 部分"),
-      renderUnderstand(plan, task),
       renderDecompose(plan, task),
       renderWrapup(plan, task),
     ]) {
@@ -258,7 +254,7 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
   test("verify 启用: PLAN.md 含 verify 字段示例与验证执行权原则", async () => {
     const text = renderText(await Bun.file(planTemplate).text(), { verify: true })
     expect(text).toContain("  - verify: command: <建议的验收命令,如 bun test>")
-    expect(text).toContain("验证脚本与验证命令的执行权在 driver")
+    expect(text).toContain("验证脚本与验证命令的执行权在 DRIVER")
     expect(text).not.toContain("opencode-auto check")
     expect(text).toContain("不要手工编写子任务")
   })

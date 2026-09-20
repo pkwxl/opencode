@@ -28,7 +28,7 @@
 
 ## 产物
 
-把交接文档写入 {{handover}}(driver 已建目录,永久路径——一经创建不移动、不改
+把交接文档写入 {{handover}}(DRIVER 已建目录,永久路径——一经创建不移动、不改
 名),必备四个小节,标题逐字一致、顺序如下:
 
 ## 关键决策
@@ -59,8 +59,8 @@
 ## 约束
 
 1. 本会话唯一可写的文件是 {{handover}};PLAN.md 与 CURRENT.md 等
-   状态文件由 driver 独占维护,不得编辑,也不要用 chmod 等方式改动文件权限;
-   git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。
+   状态文件由 DRIVER 独占维护,不得编辑,也不要用 chmod 等方式改动文件权限;
+   git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
 {{> question-rule}}
 3. 交接文档要自包含: 小节内引用产物时给出相对目标目录的永久路径
    (docs/T-NNN/…、docs/R-NN/handovers/…),读者不必反查本提示词即可定位。

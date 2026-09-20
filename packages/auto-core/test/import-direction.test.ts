@@ -54,10 +54,13 @@ const CLASSIFIED: Record<string, Domain> = {
   prompt: "intent",
   // phases (plan §3: phases.ts)
   phases: "phases",
-  // document (plan §3: docpaths.ts / doccheck.ts / protect.ts)
+  // document (plan §3: docpaths.ts / doccheck.ts / protect.ts; subtask-state.ts
+  // is the M1.0 subtask-dir state protocol, plans/0030 — roles/state semantics
+  // over the document layout)
   docpaths: "document",
   doccheck: "document",
   protect: "document",
+  "subtask-state": "document",
   // agent (plan §3: server.ts / session-api.ts SDK face)
   server: "agent",
   "session-api": "agent",

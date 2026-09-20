@@ -15,7 +15,8 @@ import { readdir } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 
 // 任务文档角色(R4: 角色文件名固定);index(子任务产物)只经 subtaskDoc 构造。
-export type TaskRole = "context" | "subtasks" | "report" | "audit" | "fix" | "handoff" | "testhandoff"
+// shared 为 M1.0 合并理解与分解会话的公共上下文引用索引(plans/0030 D3)。
+export type TaskRole = "context" | "shared" | "subtasks" | "report" | "audit" | "fix" | "handoff" | "testhandoff"
 
 // 子任务序号两位零填充(S2 → S02),三位自然进位(与既有 padStart(2,"0") 口径一致)。
 const pad2 = (k: number) => String(k).padStart(2, "0")
@@ -37,8 +38,11 @@ export function subtaskDir(id: string, k: number): string {
   return join(taskDir(id), `S${pad2(k)}`)
 }
 
-// docs/T-003/S04/index.md(子任务产物)与 docs/T-003/S02/testhandoff.md(子任务级测试交接)
-export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff"): string {
+// docs/T-003/S04/index.md(子任务产物)、docs/T-003/S02/testhandoff.md(子任务级测试交接)
+// 与 docs/T-003/S04/todo.md|done.md(子任务目录状态协议,M1.0 plans/0030: todo.md =
+// 分解期写定的范围声明,done.md = DRIVER 在子任务收口时改名而来的完成事实)。
+// todo/done 无旧布局形态(新协议),不进入 resolveSubtaskDoc 的读回落。
+export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff" | "todo" | "done"): string {
   return join(subtaskDir(id, k), `${role}.md`)
 }
 

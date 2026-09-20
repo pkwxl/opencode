@@ -1,4 +1,4 @@
-// src/prompt.ts 执行族渲染的单测: 分解/理解/基点/子任务/收尾/修复/整任务/测试执行协议/死循环提示/dryrun。
+// src/prompt.ts 执行族渲染的单测: 合并理解与分解/基点/子任务/收尾/修复/整任务/测试执行协议/死循环提示/dryrun。
 // 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
@@ -19,7 +19,6 @@ import {
   renderTestContinue,
   renderTestResult,
   renderTestWrapup,
-  renderUnderstand,
   renderWhole,
   renderWrapup,
   subtaskOutputFile,
@@ -29,13 +28,35 @@ import {
 import { groundPlan, groundTask, listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
 
 describe("renderDecompose", () => {
-  test("要求只读分析并产出 subtasks.md 检查项", () => {
+  test("合并会话(M1.0): 理解四节 + 公共上下文索引 + subtasks.md 检查项 + 各子任务 todo.md", () => {
     const text = renderDecompose(plan, task)
+    expect(text).toContain("任务背景理解与子任务分解,不写实现代码")
+    expect(text).toContain("docs/T-002/context.md")
+    expect(text).toContain("## 相关文件与关键符号")
+    expect(text).toContain("## 约束与前提")
+    expect(text).toContain("## 已有决策与现状")
+    expect(text).toContain("## 风险与未知")
+    expect(text).toContain("docs/T-002/shared.md")
+    expect(text).toContain("引用方式预取")
     expect(text).toContain("docs/T-002/subtasks.md")
     expect(text).toContain("- [ ] <子任务描述;末尾注明该项的产出>")
-    expect(text).toContain("只做任务分解,不写实现代码")
+    expect(text).toContain("docs/T-002/S<两位零填充序号>/todo.md")
+    expect(text).toContain("## 范围声明")
+    expect(text).toContain("## 产出清单")
     expect(text).toContain("不修改任何实现代码")
     expect(text).toContain("question 工具")
+    // 状态文件排他: todo.md/done.md 由 DRIVER 管理
+    expect(text).toContain("不得自行创建 done.md")
+    expect(text).toContain("文件会导致任务阻塞停机")
+    expect(text).toContain("写完文件后立即结束会话")
+  })
+
+  test("taskContext 档位: off 缺省 200 行,small/medium/large 放宽 300/400/500 行", () => {
+    expect(renderDecompose(plan, task)).toContain("建议 200 行")
+    expect(renderDecompose(plan, task, { taskContext: "off" })).toContain("建议 200 行")
+    expect(renderDecompose(plan, task, { taskContext: "small" })).toContain("建议 300 行")
+    expect(renderDecompose(plan, task, { taskContext: "medium" })).toContain("建议 400 行")
+    expect(renderDecompose(plan, task, { taskContext: "large" })).toContain("建议 500 行")
   })
 
   test("包含已完成任务、当前任务与状态文件只读规则,不再复述 PLAN.md 阻塞记事", () => {
@@ -47,7 +68,7 @@ describe("renderDecompose", () => {
     // 阻塞原因/解答已退役: 不再从 PLAN.md 读出来注入提示词
     expect(text).not.toContain("策略选 A 还是 B?")
     expect(text).not.toContain("此前被阻塞")
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("由 DRIVER 独占维护")
     // 自动答复要求记录决策过程并标注 AUTO-DECISION
     expect(text).toContain("记录决策过程")
     expect(text).toContain("AUTO-DECISION")
@@ -107,9 +128,9 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,丢了检查项协议")
       expect(() => usePromptLibrary(dir)).toThrow(/decompose-m\.md 缺少关键协议内容/)
       expect(() => usePromptLibrary(dir)).toThrow(/- \[ \]/)
-      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,保留协议: - [ ] 项")
+      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,保留协议: - [ ] 项,产物 context.md 与各 todo.md")
       usePromptLibrary(dir)
-      expect(renderDecompose(plan, task)).toBe("自定义分解提示词,保留协议: - [ ] 项")
+      expect(renderDecompose(plan, task)).toBe("自定义分解提示词,保留协议: - [ ] 项,产物 context.md 与各 todo.md")
       // 未覆盖的阶段模板仍取内置
       expect(renderDecompose(plan, task, { phase: "a" })).toContain("按问题/疑点/子系统/风险面切分")
     } finally {
@@ -119,49 +140,13 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
   })
 })
 
-describe("renderUnderstand(fork 流水线 ① 理解会话)", () => {
-  test("只读理解 + 摘要四节结构 + 硬性要求 + 写完即结束", () => {
-    const text = renderUnderstand(plan, task)
-    expect(text).toContain("只做任务背景理解,不写实现代码、不做任务分解")
-    expect(text).toContain("不修改任何实现代码")
-    expect(text).toContain("docs/T-002/context.md")
-    expect(text).toContain("## 相关文件与关键符号")
-    expect(text).toContain("## 约束与前提")
-    expect(text).toContain("## 已有决策与现状")
-    expect(text).toContain("## 风险与未知")
-    expect(text).toContain("不产出有效文件会导致任务阻塞停机")
-    expect(text).toContain("写完该文件后立即结束会话")
-    // 紧凑性约束(digest 模式下摘要成为全部分叉的前缀)
-    expect(text).toContain("写得紧凑、可检索")
-    expect(text).toContain("200 行")
-    // 状态文件只读规则
-    expect(text).toContain("由 driver 独占维护")
-    expect(text).toContain("[done] T-001: 搭建 schema")
-  })
-
-  test("优先选读任务正文点名的文件,不求全", () => {
-    const text = renderUnderstand(plan, task)
-    expect(text).toContain("有选择地阅读相关源码与 docs/")
-    expect(text).toContain("优先任务正文")
-    expect(text).toContain("点名的文件与直接相关模块,不求全")
-  })
-
-  test("taskContext 档位: off 缺省 200 行,small/medium/large 放宽 300/400/500 行", () => {
-    expect(renderUnderstand(plan, task)).toContain("建议 200 行")
-    expect(renderUnderstand(plan, task, { taskContext: "off" })).toContain("建议 200 行")
-    expect(renderUnderstand(plan, task, { taskContext: "small" })).toContain("建议 300 行")
-    expect(renderUnderstand(plan, task, { taskContext: "medium" })).toContain("建议 400 行")
-    expect(renderUnderstand(plan, task, { taskContext: "large" })).toContain("建议 500 行")
-  })
-})
-
 describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
   test("摘要全文逐字注入 + 一句确认 + 不读不写不展开", () => {
     const digest = "## 相关文件与关键符号\n- src/x.ts: 数据模型\n\n## 约束与前提\n- 只读目标目录"
     const text = renderContextBase(task, digest)
     expect(text).toContain("任务 T-002 理解阶段产出的背景摘要")
     expect(text).toContain("docs/T-002/context.md 全文")
-    expect(text).toContain("本会话由 driver 建立")
+    expect(text).toContain("本会话由 DRIVER 建立")
     expect(text).toContain(digest)
     expect(text).toContain("回复一句简短确认即可")
     expect(text).toContain("不要读取文件、不要展开分析")
@@ -181,8 +166,8 @@ describe("renderSubtask", () => {
     expect(text).toContain("整个任务的验收在最后由独立审核会话统一进行")
     expect(text).toContain("可新增但不要修改 docs/ 中的内容")
     expect(text).toContain("T-002: 实现迁移")
-    // 状态文件由 driver 维护,不再要求 agent 勾选
-    expect(text).toContain("由 driver 独占维护")
+    // 状态文件由 DRIVER 维护,不再要求 agent 勾选
+    expect(text).toContain("由 DRIVER 独占维护")
     expect(text).toContain("verified 字段")
     expect(text).not.toContain("改为 `- [x]`")
   })
@@ -196,17 +181,17 @@ describe("renderSubtask", () => {
     expect(text).not.toContain("verified 字段")
   })
 
-  test("不含会话内提交要求: 统一提交由 driver 在会话后执行", () => {
+  test("不含会话内提交要求: 统一提交由 DRIVER 在会话后执行", () => {
     const text = renderSubtask(plan, task, subtask)
     expect(text).not.toContain("git 提交全部未提交改动")
-    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(text).toContain("git 提交由 DRIVER 在会话结束后统一执行")
     expect(text).toContain("不要运行 git commit")
   })
 
   test("交接条款默认注入;continuation 要求先读交接文档", () => {
     const text = renderSubtask(plan, task, subtask)
     expect(text).toContain("docs/T-002/handoff.md")
-    expect(text).toContain("[driver] 上下文即将达到上限")
+    expect(text).toContain("[DRIVER] 上下文即将达到上限")
     expect(text).toContain("以本子任务是否完成计")
     expect(text).not.toContain("先读 docs/T-002/handoff.md")
     const cont = renderSubtask(plan, task, subtask, { continuation: true })
@@ -214,7 +199,7 @@ describe("renderSubtask", () => {
     expect(cont).toContain("据此继续")
   })
 
-  test("test-by-driver: 注入测试执行协议;未启用时整块消失", () => {
+  test("test-by-DRIVER: 注入测试执行协议;未启用时整块消失", () => {
     const on = renderSubtask(plan, task, subtask, { testByDriver: true })
     expect(on).toContain("测试执行协议(--test-by-driver)")
     expect(on).toContain("tmp/test.sh")
@@ -251,7 +236,7 @@ describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注
     expect(text).toContain("1. 编写 schema 部分\n2. 编写执行逻辑\n3. 编写文档")
     expect(text).toContain("你本次只负责其中的第 2 项")
     expect(text).toContain("- [ ] 编写执行逻辑")
-    // 产出约定: 文档类产出写 driver 机械命名的独立文件
+    // 产出约定: 文档类产出写 DRIVER 机械命名的独立文件
     expect(text).toContain("产出约定")
     expect(text).toContain("写入 docs/T-004/S02/index.md(独立文件,标题写在首行,不并入其他文档)")
     expect(text).toContain("代码类产出直接落于源码树")
@@ -291,17 +276,17 @@ describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注
 describe("renderSubtask(L1 权威状态接地 + L3 全限定编号,session-boundary-hardening §4.1)", () => {
   test("接地块注入: 当前任务状态 + 全限定编号 + 勾选快照 + 前序任务独立声明", () => {
     const text = renderSubtask(groundPlan, groundTask, "本任务子任务一", { index: 1 })
-    expect(text).toContain("driver 台账权威状态")
+    expect(text).toContain("DRIVER 台账权威状态")
     expect(text).toContain("当前任务: T-002「本任务」,状态: 进行中")
     expect(text).toContain("全限定编号: T-002.S01")
     expect(text).toContain("S01☐ S02☐ S03☐,已完成 0/3")
-    expect(text).toContain("勾选由 driver 在各子任务会话结束后统一维护")
+    expect(text).toContain("勾选由 DRIVER 在各子任务会话结束后统一维护")
     expect(text).toContain("前序已完成任务 T-001 是与本任务相互独立的任务")
     expect(text).toContain("与本任务进度无关")
     expect(text).toContain("仅可作格式/先例参考")
     // 接地块紧随 head 之后、任务块之前(会话先见权威状态再看任务正文)
-    expect(text.indexOf("driver 台账权威状态")).toBeGreaterThan(text.indexOf("不要执行。"))
-    expect(text.indexOf("driver 台账权威状态")).toBeLessThan(text.indexOf("# T-002: 本任务"))
+    expect(text.indexOf("DRIVER 台账权威状态")).toBeGreaterThan(text.indexOf("不要执行。"))
+    expect(text.indexOf("DRIVER 台账权威状态")).toBeLessThan(text.indexOf("# T-002: 本任务"))
   })
 
   test("勾选快照反映台账勾选状态: S 编号与全限定编号两位补零、已完成 k/n 如实计数", () => {
@@ -339,15 +324,15 @@ describe("renderWrapup", () => {
     expect(text).toContain("全部子任务已在之前的会话中逐一完成,不要重做")
     expect(text).toContain("docs/T-002/report.md")
     expect(text).not.toContain("git 提交全部未提交改动")
-    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("git 提交由 DRIVER 在会话结束后统一执行")
+    expect(text).toContain("由 DRIVER 独占维护")
     expect(text).not.toContain("把当前任务的状态标记改为 [done]")
   })
 
-  test("verify 处理权在 driver(verify 启用): 收尾不运行 verify、不下结论,由独立审核会话验收", () => {
+  test("verify 处理权在 DRIVER(verify 启用): 收尾不运行 verify、不下结论,由独立审核会话验收", () => {
     const text = renderWrapup(plan, task, { verify: true })
     expect(text).toContain("不要运行任务级 verify、不要下验收结论")
-    expect(text).toContain("verify 的处理权在 driver")
+    expect(text).toContain("verify 的处理权在 DRIVER")
     expect(text).toContain("独立审核会话")
     expect(text).toContain("verified 字段")
     expect(text).not.toContain("verified-command")
@@ -355,9 +340,9 @@ describe("renderWrapup", () => {
     expect(text).not.toContain("结论: 差距")
   })
 
-  test("verify 未启用: 收尾提示不涉及验收,任务状态由 driver 登记", () => {
+  test("verify 未启用: 收尾提示不涉及验收,任务状态由 DRIVER 登记", () => {
     const text = renderWrapup(plan, task)
-    expect(text).toContain("任务状态由 driver 在会话结束后统一登记")
+    expect(text).toContain("任务状态由 DRIVER 在会话结束后统一登记")
     expect(text).not.toContain("verify")
     expect(text).not.toContain("验收")
     expect(text).not.toContain("verified")
@@ -384,7 +369,7 @@ describe("renderWrapup", () => {
     expect(text).not.toContain("S<NN>")
   })
 
-  // 收尾闭环 H7(plans/0020-auto-resolve-design.md §I): driver 观测到的代答清单注入收尾
+  // 收尾闭环 H7(plans/0020-auto-resolve-design.md §I): DRIVER 观测到的代答清单注入收尾
   // 提示词,要求 report.md 单列「自动代答问题」节。
   test("无代答(缺省/空清单)时代答段整体消失", () => {
     for (const text of [renderWrapup(plan, task), renderWrapup(plan, task, { resolves: [] })]) {
@@ -396,7 +381,7 @@ describe("renderWrapup", () => {
 
   test("有代答时逐条列出原问题,并要求 report.md 单列「自动代答问题」节", () => {
     const text = renderWrapup(plan, task, { resolves: [resolveItem("是否把第三份 formatTokens 一并收口?")] })
-    expect(text).toContain("driver 自动代答了以下本应由你询问用户的问题")
+    expect(text).toContain("DRIVER 自动代答了以下本应由你询问用户的问题")
     expect(text).toContain("   - 是否把第三份 formatTokens 一并收口?")
     expect(text).toContain("请在 docs/T-002/report.md 中单列「自动代答问题」一节")
     expect(text).toContain("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")
@@ -406,7 +391,7 @@ describe("renderWrapup", () => {
     expect(text.indexOf("自动代答")).toBeLessThan(text.indexOf("以上全部完成前不要结束会话"))
   })
 
-  test("清单只列 driver 源(agent 源已由会话自行标注),未配对的排在前", () => {
+  test("清单只列 DRIVER 源(agent 源已由会话自行标注),未配对的排在前", () => {
     const text = renderWrapup(plan, task, {
       resolves: [
         { ...resolveItem("已配对的问题"), matched: true },
@@ -434,11 +419,11 @@ describe("renderFix", () => {
     expect(text).toContain("验收未通过")
     expect(text).toContain("只修复审核指出的差距")
     expect(text).toContain("不要运行任务级 verify")
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("由 DRIVER 独占维护")
     expect(text).not.toContain("verified-command")
   })
 
-  test("test-by-driver: 修复轮同样注入测试执行协议", () => {
+  test("test-by-DRIVER: 修复轮同样注入测试执行协议", () => {
     const text = renderFix(plan, task, "差距", { testByDriver: true })
     expect(text).toContain("测试执行协议(--test-by-driver)")
     expect(text).toContain("tmp/test.sh")
@@ -458,7 +443,7 @@ describe("renderWhole", () => {
   test("ondemand 模式: 附交接条款;continuation 要求先读交接文档", () => {
     const text = renderWhole(plan, task, { ondemand: true })
     expect(text).toContain("docs/T-002/handoff.md")
-    expect(text).toContain("[driver] 上下文即将达到上限")
+    expect(text).toContain("[DRIVER] 上下文即将达到上限")
     expect(text).not.toContain("先读 docs/T-002/handoff.md")
     const cont = renderWhole(plan, task, { ondemand: true, continuation: true })
     expect(cont).toContain("先读 docs/T-002/handoff.md")
@@ -467,7 +452,7 @@ describe("renderWhole", () => {
 
   test("不含会话内提交要求(state-rule 注入提交原则)", () => {
     expect(renderWhole(plan, task)).not.toContain("git 提交全部未提交改动")
-    expect(renderWhole(plan, task)).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(renderWhole(plan, task)).toContain("git 提交由 DRIVER 在会话结束后统一执行")
   })
 
   test("交接提示要求写出状态行", () => {
@@ -477,7 +462,7 @@ describe("renderWhole", () => {
     expect(steer).toContain("状态: 完成")
   })
 
-  test("test-by-driver: 注入测试执行协议(与 ondemand 交接条款可同现)", () => {
+  test("test-by-DRIVER: 注入测试执行协议(与 ondemand 交接条款可同现)", () => {
     const text = renderWhole(plan, task, { ondemand: true, testByDriver: true, handoverTest: true })
     expect(text).toContain("测试执行协议(--test-by-driver)")
     expect(text).toContain("tmp/test.sh")
@@ -521,14 +506,14 @@ describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
   test("收尾+交接要求: 落盘不依赖测试的剩余工作 + 交接文档硬性要求", () => {
     const text = renderTestWrapup({ handoffFile: "/tmp/pkg/docs/T-002/testhandoff.md" })
     // 对测试时机保持中性: 顺序态(缺省)交接收口后才跑,并发态此刻已在跑,一份文案两态都成立。
-    expect(text).toContain("将由 driver 执行")
+    expect(text).toContain("将由 DRIVER 执行")
     expect(text).not.toContain("并行执行")
     expect(text).toContain("不依赖本次测试结果")
     // 未完成事项必须随交接带走: 否则新会话无从知晓,会被当成已完成而永久遗漏
     expect(text).toContain("还没做完的事")
     expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("写完立即结束会话")
-    // 状态行(中断恢复 F1): driver 凭它分辨"写完了"与"driver 死在会话写文件途中的半截文件"
+    // 状态行(中断恢复 F1): DRIVER 凭它分辨"写完了"与"DRIVER 死在会话写文件途中的半截文件"
     expect(text).toContain("状态: 继续")
     // 测试结果恒由下一个会话判读,交接之后一定还有工作——测试交接没有"完成"这一态
     // (handoff.md 才有: 那边的交接只是建议,活干完了自然不交接)

@@ -50,8 +50,9 @@ export type TaskContextMode = "off" | "small" | "medium" | "large"
 // 会话角色词表(阶段化模型路由,见 plans/0017-model-routing-design.md C.1):实验期固定、
 // 不做自由命名;与 B.5 执行链角色一一对应,`bypass` 为未显式给 role 的旁路会话兜底。
 // 导出为共享真源,后续 P2(resolveModel / roleOf)与旁路改造复用同一份。
+// M1.0 起 understand/decompose 两会话合一(plans/0030 D12): 词表不再含 understand——
+// 合并会话路由在 decompose 角色下,旧配置里的 understand= 键按非法键严格失败。
 export const MODEL_ROLES = [
-  "understand",
   "decompose",
   "whole",
   "subtask",

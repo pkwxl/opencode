@@ -91,7 +91,7 @@ const NETWORK_FAILURE = /internal network failure|network error|fetch failed|eco
 // 等待-探测环的探测提示词: 极小负载,只求一次真实的 provider 往返判明服务是否
 // 恢复——绝不用被中断的会话探测(往真实会话塞探测轮次会污染上下文,分叉探测则
 // 每个等待轮次白烧一遍全量前缀,配额受限期间只会雪上加霜)。
-const RECOVERY_PROBE_PROMPT = "[driver] 服务可用性探测: 请只回复 ok,不要执行任何其他操作。"
+const RECOVERY_PROBE_PROMPT = "[DRIVER] 服务可用性探测: 请只回复 ok,不要执行任何其他操作。"
 
 // 重试/恢复后重发同一提示词时的一次性说明(经 chain.note 随下一个提示词带给 AI,
 // 用后即清)。两档按「接管的会话是否带着本次尝试的上下文」区分:
@@ -104,7 +104,7 @@ const RECOVERY_PROBE_PROMPT = "[driver] 服务可用性探测: 请只回复 ok,�
 //    resumeNote 同一口径: 现场核对 + 不要重做)。
 const WORKSPACE_CHECK =
   "工作区可能已包含本提示词对应的部分产出:先以 git status / git diff 核对现场,在此基础上续做剩余工作,不要重做已完成的部分。"
-const retryNote = (lead: string) => `[driver] ${lead}${WORKSPACE_CHECK}`
+const retryNote = (lead: string) => `[DRIVER] ${lead}${WORKSPACE_CHECK}`
 
 // Runs one prompt on the session chain (reusing the previous session when its
 // context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
@@ -230,7 +230,7 @@ export async function runSession(
       // 分到原会话(无本次尝试上下文)时改带现场核对版。
       chain.note =
         source.id === failedID
-          ? `[driver] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
+          ? `[DRIVER] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
           : retryNote(`因${why}已切换模型继续,但本会话未继承本次尝试的上下文。`)
       return true
     }
@@ -305,7 +305,7 @@ export async function runSession(
         // 改带现场核对版。
         chain.note =
           source.id === failedID
-            ? "[driver] 上次下发因服务/配额故障中断,现已恢复,请继续完成本次任务要求。"
+            ? "[DRIVER] 上次下发因服务/配额故障中断,现已恢复,请继续完成本次任务要求。"
             : retryNote("上次下发因服务/配额故障中断,现已恢复,但本会话未继承本次尝试的上下文。")
         seeded = true
         break
@@ -426,7 +426,7 @@ export async function runSession(
       // 消费 pending(resumed 判据要求 pending 为空),不会误复用原会话。
       chain.note =
         source.id === failedID
-          ? "[driver] 上次下发因瞬时会话错误中断,现已重试,请继续完成本次任务要求。"
+          ? "[DRIVER] 上次下发因瞬时会话错误中断,现已重试,请继续完成本次任务要求。"
           : retryNote("上次下发因瞬时会话错误中断,但本会话未继承本次尝试的上下文。")
       seeded = true
       break

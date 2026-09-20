@@ -22,7 +22,7 @@
    有效覆盖验收标准、没有漏验或形同虚设的检查;脚本运行结果的解读属独立判定会话
    的职责,你不要执行该脚本。
 
-driver 正在与本会话并行执行该任务的 verify 脚本(它正在当前目录运行):避免执行
+DRIVER 正在与本会话并行执行该任务的 verify 脚本(它正在当前目录运行):避免执行
 可能与之冲突的命令(如并发跑测试、构建),检查以读文件、git log 等只读方式为主。
 
 本次审核范围以本任务改动为限: 依 docs/T-002/report.md 与 git log/status
@@ -37,18 +37,20 @@ driver 正在与本会话并行执行该任务的 verify 脚本(它正在当前�
    正确性/验证有效性问题)。
 
 文档存放规范: 每个任务(T-NNN)的全部文档写入该任务自己的目录 docs/T-NNN/ 内(理解摘要
-context.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告 audit.md、修复检查项
-fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级测试交接写同目录
-testhandoff.md。这些路径一经创建即为永久路径——不移动、不改名;引用其他任务的文档时
-一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
+context.md、公共上下文索引 shared.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告
+audit.md、修复检查项 fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级
+测试交接写同目录 testhandoff.md;子任务状态文件 docs/T-NNN/S<两位序号>/todo.md 与
+done.md 由 DRIVER 独占管理(分解会话写定 todo.md,子任务完成时 DRIVER 改名为 done.md)
+——你不得自行创建、重命名或删除它们。这些路径一经创建即为永久路径——不移动、不改名;
+引用其他任务的文档时一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
 不属于任何单个任务的阶段级自由产物(勘测报告、设计批次、覆盖矩阵、核验记录等)写入
 本轮轮次目录 docs/R-NN/ 内的 phase-docs/<阶段字母>-<slug>/ 子目录(如 docs/R-03/
 phase-docs/a-analysis/r3-baseline.md)——同为永久路径,落定不移动;引用一律使用该
 永久路径。
 
 约束:
-1. 只审不改: 禁止修改任何实现代码与文档,唯一可写的文件是审计报告与结论文件;PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
-git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。
+1. 只审不改: 禁止修改任何实现代码与文档,唯一可写的文件是审计报告与结论文件;PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
+git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
 2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
    其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
    你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;

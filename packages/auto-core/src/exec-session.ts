@@ -169,7 +169,7 @@ export async function runExecSession(
       firstPrompt =
         ran && !record?.ran
           ? renderTestContinue({ handoffFile: archived, run: ran, stuck: handovers > TEST_HANDOVER_ADVISORY ? handovers : undefined })
-          : `[driver] 上次运行在此中断,已从续跑会话分叉恢复;请接着中断点继续。${COMMIT_CLARIFY}`
+          : `[DRIVER] 上次运行在此中断,已从续跑会话分叉恢复;请接着中断点继续。${COMMIT_CLARIFY}`
     }
     continuation = true
     await saveHandover(dir, {

@@ -42,7 +42,6 @@ import tplSubtask from "../templates/prompts/subtask.md" with { type: "file" }
 import tplTestContinue from "../templates/prompts/test-continue.md" with { type: "file" }
 import tplTestWrapup from "../templates/prompts/test-wrapup.md" with { type: "file" }
 import tplTestResult from "../templates/prompts/test-result.md" with { type: "file" }
-import tplUnderstand from "../templates/prompts/understand.md" with { type: "file" }
 import tplVerifyJudge from "../templates/prompts/verify-judge.md" with { type: "file" }
 import tplVerifyScriptGen from "../templates/prompts/verify-script-gen.md" with { type: "file" }
 import tplWhole from "../templates/prompts/whole.md" with { type: "file" }
@@ -86,7 +85,6 @@ const embedded: Record<string, string> = {
   "test-continue": tplTestContinue,
   "test-wrapup": tplTestWrapup,
   "test-result": tplTestResult,
-  understand: tplUnderstand,
   "verify-judge": tplVerifyJudge,
   "verify-script-gen": tplVerifyScriptGen,
   whole: tplWhole,
@@ -95,14 +93,16 @@ const embedded: Record<string, string> = {
 }
 
 // 协议敏感模板的必备内容: 目标目录覆盖这些模板时,装载期校验协议标记仍在。
+// decompose 一族(M1.0 合并理解与分解会话,plans/0030): 检查项格式 + context.md
+// 与 todo.md 产物路径是 driver 校验会话产出的依据。
 const PROTOCOL_MARKERS: Record<string, string[]> = {
-  decompose: ["- [ ]"],
-  "decompose-a": ["- [ ]"],
-  "decompose-d": ["- [ ]"],
-  "decompose-k": ["- [ ]"],
-  "decompose-m": ["- [ ]"],
-  "decompose-t": ["- [ ]"],
-  "decompose-v": ["- [ ]"],
+  decompose: ["- [ ]", "context.md", "todo.md"],
+  "decompose-a": ["- [ ]", "context.md", "todo.md"],
+  "decompose-d": ["- [ ]", "context.md", "todo.md"],
+  "decompose-k": ["- [ ]", "context.md", "todo.md"],
+  "decompose-m": ["- [ ]", "context.md", "todo.md"],
+  "decompose-t": ["- [ ]", "context.md", "todo.md"],
+  "decompose-v": ["- [ ]", "context.md", "todo.md"],
   "final-task": ["策略: 重构|修补|无", "结论: 通过", "结论: 差距"],
   "handoff-steer": ["状态: 继续", "状态: 完成"],
   "implement-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
@@ -113,7 +113,6 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   review: ["结论: 通过", "结论: 差距", ".auto/review.md"],
   "review-fix": ["- [ ]"],
   "test-wrapup": ["{{handoffFile}}", "不依赖本次测试结果"],
-  understand: ["context.md"],
   "verify-judge": ["结论: 通过", "结论: 差距", "结论: 重验", ".auto/verify.md", "verified-command"],
   "verify-script-gen": ["#!/usr/bin/env bash"],
 }

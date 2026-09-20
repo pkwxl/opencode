@@ -10,7 +10,6 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
     mode: "auto",
     fork: true,
     items: [{ text: "第一项", done: true }, { text: "第二项", done: false }, { text: "第三项", done: false }],
-    contextExists: false,
     subtasksFileItems: 0,
     wrapup: true,
     verify: true,
@@ -26,21 +25,15 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
     expect(unitReruns({ kind: "subtasks", index: 9 }, ctx())).toBe(false)
   })
 
-  test("understand/decompose: 产物已出现(摘要在位/检查项已注入)使单元幂等跳过 → 不复用", () => {
-    const noItems = ctx({ items: [] })
-    expect(unitReruns({ kind: "understand" }, noItems)).toBe(true)
-    expect(unitReruns({ kind: "understand" }, ctx({ items: [] }))).toBe(true)
-    expect(unitReruns({ kind: "understand" }, ctx({ items: [], contextExists: true }))).toBe(false)
-    expect(unitReruns({ kind: "understand" }, ctx({ items: [], fork: false }))).toBe(false)
-    expect(unitReruns({ kind: "understand" }, ctx({ items: [], mode: "off" }))).toBe(false)
-    // decompose: 理解单元将先跑(摘要缺失)时,分解会话不是首个消费链的单元
-    expect(unitReruns({ kind: "decompose" }, noItems)).toBe(false)
-    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], contextExists: true }))).toBe(true)
+  test("decompose(合并理解与分解单元,M1.0): 检查项已注入或 subtasks.md 已有检查项使单元幂等跳过 → 不复用", () => {
+    // 检查项未注入且 subtasks.md 无检查项 → 合并单元将重跑,允许复用(fork 开关无关)
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [] }))).toBe(true)
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [], fork: false }))).toBe(true)
-    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], subtasksFileItems: 3, contextExists: true }))).toBe(false)
-    // 已有检查项时两个前置单元都不再跑
-    expect(unitReruns({ kind: "understand" }, ctx())).toBe(false)
+    // subtasks.md 已有检查项 → 直注路径,合并会话不重跑
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], subtasksFileItems: 3 }))).toBe(false)
+    // 已有检查项 / 非 auto 模式 → 单元不跑
     expect(unitReruns({ kind: "decompose" }, ctx())).toBe(false)
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], mode: "off" }))).toBe(false)
   })
 
   test("whole/wrapup: 模式或配置使单元不跑 → 不复用;wrapup 要求检查项已全部勾完", () => {
@@ -83,7 +76,7 @@ describe("resumeNote(中断恢复说明)", () => {
   const subtasks: Phase = { kind: "subtasks", index: 2 }
   const planStep: Phase = { kind: "step", step: "phase-plan", letter: "m" }
   const ONE_LINE =
-    "[driver] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 driver 统一提交进 Git——以 git log 核实,不要重做。"
+    "[DRIVER] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 DRIVER 统一提交进 Git——以 git log 核实,不要重做。"
 
   test("严格恢复门禁在位 + 复用原会话 → 收敛为一句 continue(3.2),附带提交语义澄清", () => {
     expect(resumeNote(subtasks, true, true)).toBe(ONE_LINE)
@@ -116,7 +109,7 @@ describe("resumeNote(中断恢复说明)", () => {
       resumeNote({ kind: "step", step: "phase-plan", letter: "m" }, true, false),
     ]) {
       expect(note).toContain("不代表修改丢失")
-      expect(note).toContain("driver 统一提交")
+      expect(note).toContain("DRIVER 统一提交")
     }
   })
 })

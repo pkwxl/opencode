@@ -50,9 +50,10 @@ export type PhaseLetter = "a" | "d" | "m" | "t" | "v" | "k"
 export type StepKind = "phase-plan" | "phase-handover"
 
 // 任务流水线的阶段标记:
-// - understand: fork 流水线理解会话阶段(写 docs/<id>.context.md 摘要;fork=off
-//   不经过该阶段)
-// - decompose: auto 模式分解会话阶段(检查项尚未注入)
+// - decompose: auto 模式合并理解与分解会话阶段(M1.0 起 understand+decompose 合一,
+//   见 plans/0030-subtask-loop-entry-design.md;产物 = context.md + shared.md +
+//   subtasks.md + 各子任务 todo.md,检查项尚未注入)。旧版 "understand" 记录在
+//   parseProgress 读取时映射为本阶段(兼容读)。
 // - whole: off/ondemand 模式整任务单会话执行阶段
 // - subtasks: 逐子任务会话阶段(从首个未勾选项继续);index = 归属子任务的 1 起
 //   序号,仅子任务会话的 active 记录携带(间歇/总结态记录不带)
@@ -73,7 +74,6 @@ export type StepKind = "phase-plan" | "phase-handover"
 // 归属(老版本记录)时,记录转总结态、开新会话——恢复只发生在原单元重跑时,
 // 不让下一单元误续上一单元的中断会话。
 export type Phase =
-  | { kind: "understand" }
   | { kind: "decompose" }
   | { kind: "whole" }
   | { kind: "subtasks"; index?: number }
@@ -179,12 +179,21 @@ function parseProgress(raw: string): Progress | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<Progress>
     if (typeof parsed.task !== "string") return undefined
+    // Legacy "understand" records (pre-M1.0 split understand/decompose sessions)
+    // re-enter the merged understand+decompose unit (plans/0030 D2).
+    const rawKind: unknown = parsed.phase?.kind
+    const phase =
+      typeof rawKind !== "string"
+        ? undefined
+        : rawKind === "understand"
+          ? ({ kind: "decompose" } satisfies Phase)
+          : parsed.phase
     return {
       task: parsed.task,
       session: typeof parsed.session === "string" ? parsed.session : undefined,
       at: typeof parsed.at === "number" ? parsed.at : 0,
       active: parsed.active === true,
-      phase: typeof parsed.phase?.kind === "string" ? parsed.phase : undefined,
+      phase,
       baseline: Array.isArray(parsed.baseline)
         ? parsed.baseline.filter(
             (line): line is { root: string; sha: string } => typeof line?.root === "string" && typeof line?.sha === "string",

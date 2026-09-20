@@ -1,4 +1,4 @@
-[driver] 测试脚本已执行完毕(第 {{seq}} 次)。
+[DRIVER] 测试脚本已执行完毕(第 {{seq}} 次)。
 
 - 脚本: {{script}}
 - 退出码: {{code}};耗时 {{ms}}ms;超时: {{runTimeout}}

@@ -1,0 +1,102 @@
+// Subtask-directory state protocol (M1.0, plans/0030-subtask-loop-entry-design.md):
+// the merged understand+decompose session writes docs/T-NNN/S<nn>/todo.md (scope
+// statement + artifact list) per subtask; on completion DRIVER renames it to
+// done.md inside the unit commit boundary. File existence is the authoritative
+// progress fact (state grounding — checklist ticks in PLAN.md follow the files,
+// never the other way around).
+//
+// Activation: the protocol is active for a task iff ANY todo/done file exists
+// among its subtask directories. Legacy tasks (decomposed before this protocol,
+// human-written checklists, off/ondemand modes) have none and keep checklist
+// semantics unchanged (compatible read, plan D4).
+//
+// Illegal states (active protocol): both files present (ambiguous) or neither
+// present (drift) for a subtask — detected at the subtask loop entry and
+// surfaced as blocked for human attention.
+//
+// Interruption windows around the rename are absorbed by idempotency: the
+// rename is skipped when done.md already exists, and runSubtask short-circuits
+// to close-out when done.md is present at entry.
+import { mkdir, rename } from "node:fs/promises"
+import { dirname, join } from "node:path"
+import { EOF_MARK } from "./doccheck"
+import { subtaskDoc } from "./docpaths"
+
+export type SubtaskState = { index: number; todo: boolean; done: boolean }
+
+export type SubtaskStateScan = {
+  // true once any state file exists for the task's subtask range.
+  active: boolean
+  states: SubtaskState[]
+  // Active-protocol violations: both files or neither file for a subtask.
+  illegal: { index: number; kind: "both" | "neither" }[]
+}
+
+const exists = async (dir: string, rel: string): Promise<boolean> => Bun.file(join(dir, rel)).exists()
+
+// Scans docs/T-NNN/S<nn>/ for k = 1..count and classifies each subtask.
+export async function scanSubtaskStates(dir: string, taskId: string, count: number): Promise<SubtaskStateScan> {
+  const states: SubtaskState[] = []
+  for (let k = 1; k <= count; k++) {
+    states.push({
+      index: k,
+      todo: await exists(dir, subtaskDoc(taskId, k, "todo")),
+      done: await exists(dir, subtaskDoc(taskId, k, "done")),
+    })
+  }
+  const active = states.some((s) => s.todo || s.done)
+  const illegal: SubtaskStateScan["illegal"] = active
+    ? states.flatMap((s): SubtaskStateScan["illegal"] =>
+        s.todo && s.done ? [{ index: s.index, kind: "both" }] : !s.todo && !s.done ? [{ index: s.index, kind: "neither" }] : [],
+      )
+    : []
+  return { active, states, illegal }
+}
+
+// Effective done flags for the checklist: with the protocol active, done.md
+// existence overrides the PLAN.md tick (files are the progress fact). Illegal
+// states (reported via the scan's illegal list) degrade gracefully here:
+// both → done, neither → the PLAN.md tick.
+export function effectiveDone(scan: SubtaskStateScan, items: { done: boolean }[]): boolean[] {
+  if (!scan.active) return items.map((item) => item.done)
+  return items.map((item, i) => {
+    const s = scan.states[i]
+    if (!s) return item.done
+    return s.done || (s.todo ? false : item.done)
+  })
+}
+
+// DRIVER close-out rename (idempotent): todo.md → done.md. Skipped silently
+// when the protocol is inactive for this subtask (no todo.md) or the rename
+// already landed (done.md present — interruption between rename and commit).
+export async function renameTodoToDone(dir: string, taskId: string, index: number): Promise<void> {
+  const todo = join(dir, subtaskDoc(taskId, index, "todo"))
+  const done = join(dir, subtaskDoc(taskId, index, "done"))
+  if (!(await Bun.file(todo).exists()) || (await Bun.file(done).exists())) return
+  await rename(todo, done)
+}
+
+// DRIVER-authored minimal scope file for review-fix injected items (D9): the
+// checklist item text is the authority; the file exists to keep the
+// "every checklist item has exactly one state file" invariant uniform.
+export async function writeInjectedTodo(dir: string, taskId: string, index: number, text: string): Promise<void> {
+  const rel = subtaskDoc(taskId, index, "todo")
+  if (await exists(dir, rel)) return
+  if (await exists(dir, subtaskDoc(taskId, index, "done"))) return
+  const body = [
+    `# ${taskId} S${String(index).padStart(2, "0")}: ${text}`,
+    ``,
+    `## 范围声明`,
+    ``,
+    `本子任务由质量审核修复轮注入,范围以 PLAN.md 中对应检查项的描述为准: ${text}`,
+    ``,
+    `## 产出清单`,
+    ``,
+    `以检查项描述中的「产出:」声明为准(无声明时产出直接落于源码树)。`,
+    ``,
+    EOF_MARK,
+  ].join("\n")
+  const abs = join(dir, rel)
+  await mkdir(dirname(abs), { recursive: true })
+  await Bun.write(abs, `${body}\n`)
+}

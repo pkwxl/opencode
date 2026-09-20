@@ -109,7 +109,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     // 恢复重发落在分叉副本上,带一次性恢复说明。
     const text = (calls.prompts[3]!.parts[0] as { text: string }).text
     expect(text).toContain("提示词")
-    expect(text).toContain("[driver]")
+    expect(text).toContain("[DRIVER]")
     expect(text).toContain("恢复")
     expect(chain.note).toBeUndefined()
     expect(chain.id).toBe("ses_fork_1")
@@ -389,7 +389,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
   test("可重试的中间失败态不落盘 progress.json,不顶替之前的真实记录(等待期间亦然)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-remember-"))
     try {
-      const real: Awaited<ReturnType<typeof recallProgress>> = { task: "T-001", session: "ses_real_old", at: 1, active: true, phase: { kind: "understand" } }
+      const real: Awaited<ReturnType<typeof recallProgress>> = { task: "T-001", session: "ses_real_old", at: 1, active: true, phase: { kind: "decompose" } }
       await saveProgress(dir, real!)
       // 阶梯 0,0: 前三次尝试全部可重试失败 → 进入等待-探测(探测 1 仍失败)。
       // 在探测会话建立的瞬间窥探 progress.json: 应回复为 prior 真实记录,而不是
@@ -403,7 +403,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
         seen.push((await recallProgress(dir, "T-001"))?.session)
         return made
       }
-      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "understand" } }
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "decompose" } }
       const result = await runSession(client, task, "提示词", { dir }, chain, undefined, undefined, NO_WAIT)
       expect(result.type).toBe("idle")
       // 探测会话(create #4/#5)建立时,记录仍是 prior 的 ses_real_old。
@@ -429,7 +429,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
         seen.push((await recallProgress(dir, "T-001"))?.session)
         return made
       }
-      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "understand" } }
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "decompose" } }
       const result = await runSession(client, task, "提示词", { dir }, chain, undefined, undefined, NO_WAIT)
       expect(result.type).toBe("idle")
       // 首次致命失败后、探测会话建立时: 记录认领被中断的会话 ses_new_1(active)。
@@ -677,7 +677,7 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.forks).toContain("ses_new_1")
     // 降级 note(一次性)已随次轮提示词下发并自动清除。
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
-    expect(text).toContain("[driver]")
+    expect(text).toContain("[DRIVER]")
     expect(text).toContain("已切换模型")
     expect(chain.note).toBeUndefined()
     // 换模型续跑落在分叉出的会话上(ses_fork_1),而非白板新会话。
@@ -941,7 +941,7 @@ describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候�
     expect(calls.prompts[3]!.sessionID).toBe("ses_fork_3")
     // 一次性降级 note 已随该提示词下发并清除,文案点名触发原因。
     const text = (calls.prompts[3]!.parts[0] as { text: string }).text
-    expect(text).toContain("[driver]")
+    expect(text).toContain("[DRIVER]")
     expect(text).toContain("retry ladder exhausted")
     expect(text).toContain("已切换模型")
     expect(chain.note).toBeUndefined()

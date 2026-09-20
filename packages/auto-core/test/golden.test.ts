@@ -31,7 +31,6 @@ import {
   renderTestContinue,
   renderTestResult,
   renderTestWrapup,
-  renderUnderstand,
   renderVerifyJudge,
   renderVerifyScriptGen,
   renderWhole,
@@ -89,8 +88,7 @@ const stuck = (level: number): StuckHit => ({ kind: "repeat", tool: "bash", coun
 const execOpts = { verify: true, testByDriver: true, handoverTest: true, mode: migrate }
 
 describe("golden 渲染快照", () => {
-  test("理解与上下文", () => {
-    golden("understand", renderUnderstand(plan, task, execOpts))
+  test("分叉基点会话", () => {
     golden("context-base", renderContextBase(task, "前序蒸馏摘要(固定输入)。"))
   })
 

@@ -36,7 +36,7 @@ describe("renderFinalTask", () => {
     expect(text).toContain("只规划不实施")
     expect(text).toContain("产出该提案文件是硬性要求")
     // STATE_RULE / QUESTION_RULE
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("由 DRIVER 独占维护")
     expect(text).toContain("AUTO-DECISION")
     // 首轮不做回退重审措辞
     expect(text).not.toContain("不做全量重审")
@@ -128,7 +128,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("唯一可写的文件是 PLAN.md")
     expect(text).toContain("CURRENT.md 与其余")
     expect(text).toContain("不要用 chmod 等方式改动文件权限")
-    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(text).toContain("git 提交由 DRIVER 在会话结束后统一执行")
     expect(text).toContain("AUTO-DECISION")
     // 非 m 阶段不带终审预留提示
     expect(text).not.toContain("终审提醒")
@@ -279,7 +279,7 @@ describe("renderNumberRecovery(编号恢复会话)", () => {
     // 模板库可能被同进程其他用例覆盖过,复位为仅内置
     usePromptLibrary(undefined)
     const text = renderNumberRecovery({ floor: 5 })
-    // 协议敏感标记: driver 解析会话产出的依据
+    // 协议敏感标记: DRIVER 解析会话产出的依据
     expect(text).toContain(".auto/next-task")
     // 下限注入(原值与补零形式)
     expect(text).toContain("= 5")
@@ -310,8 +310,8 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     expect(text).toContain("只蒸馏、")
     expect(text).toContain("不改动任何既有产物")
     expect(text).toContain("AUTO-DECISION")
-    expect(text).toContain("由 driver 独占维护")
-    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(text).toContain("由 DRIVER 独占维护")
+    expect(text).toContain("git 提交由 DRIVER 在会话结束后统一执行")
   })
 
   test("k 阶段无下一阶段: 供后续查阅措辞,仍要求四小节", () => {
@@ -369,8 +369,8 @@ describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowled
     expect(text).toContain("可验证锚点")
     expect(text).toContain("已否决")
     expect(text).toContain("唯一可写的文件是 " + FILE)
-    expect(text).toContain("由 driver 独占维护")
-    expect(text).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(text).toContain("由 DRIVER 独占维护")
+    expect(text).toContain("git 提交由 DRIVER 在会话结束后统一执行")
     expect(text).toContain("只提炼、")
   })
 

@@ -267,6 +267,29 @@ export async function tick(path: string, id: string, text: string) {
   await edit(path, id, { body })
 }
 
+// Reconciles checklist ticks with the authoritative subtask state files
+// (M1.0, plans/0030 D10): done.md existence wins over the PLAN.md checkbox
+// (files are the progress fact; ticks are the display track). Item i's
+// checkbox is set to done[i]; only differing lines change.
+export async function syncSubtaskTicks(path: string, id: string, done: boolean[]) {
+  const plan = await load(path)
+  const task = require(plan, id)
+  let at = 0
+  let changed = false
+  const body = task.body
+    .split("\n")
+    .map((line) => {
+      const match = /^\s*- \[( |x|X)\]\s*(.*)$/.exec(line)
+      if (!match) return line
+      const want = done[at++]
+      if (want === undefined || want === (match[1]!.toLowerCase() === "x")) return line
+      changed = true
+      return line.replace(/- \[( |x|X)\]/, want ? "- [x]" : "- [ ]")
+    })
+    .join("\n")
+  if (changed) await edit(path, id, { body })
+}
+
 // 记录 fork 分解流水线的分叉基点会话(fork-decompose 设计 §4.2): session 模式在
 // 理解会话成功后写入,digest 模式在基点确认会话建立后以 `digest:` 前缀覆写(持久
 // 基点,ensureForkBase 存活即复用);AI 会话不写此字段。

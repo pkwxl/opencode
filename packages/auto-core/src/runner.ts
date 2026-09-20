@@ -2,7 +2,7 @@ import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { writeCurrent, removeCurrent } from "./current"
-import { ensureDecomposed, ensureUnderstood, executeWhole, requireTask, runSubtask } from "./execute"
+import { ensureDecomposed, executeWhole, requireTask, runSubtask } from "./execute"
 import { commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
 import { maybeExit } from "./exit"
@@ -23,12 +23,14 @@ import {
   parseFinalMark,
   setStatus,
   subtasks,
+  syncSubtaskTicks,
   type Plan,
   type Task,
 } from "./plan"
 import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
+import { effectiveDone, scanSubtaskStates, writeInjectedTodo } from "./subtask-state"
 import { autoSwitches } from "./switches"
 import { stepPause } from "./step"
 import { cleanTestHandoffs, restoreTestHandoffs, testHandoffExists } from "./testrun"
@@ -158,11 +160,15 @@ export async function runTask(
       const fresh = requireTask(await load(plan.path), task.id)
       const planDir = dirname(plan.path)
       const exempt = Boolean(parseFinalMark(fresh.final)) || opts.phase === "v"
+      const bodyItems = subtasks(fresh.body)
+      // 子任务目录状态协议激活时,单元归属判定按 done.md 存在性(进度事实)而非
+      // PLAN.md 勾选(展示轨)——plans/0030 D10。
+      const scan = await scanSubtaskStates(planDir, task.id, bodyItems.length)
+      const doneFlags = effectiveDone(scan, bodyItems)
       rerun = unitReruns(recalled.phase, {
         mode,
         fork: switches.fork,
-        items: subtasks(fresh.body),
-        contextExists: (await Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "context"))).text().catch(() => "")).trim().length > 0,
+        items: bodyItems.map((item, i) => ({ text: item.text, done: doneFlags[i] ?? item.done })),
         subtasksFileItems: subtasks(await Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "subtasks"))).text().catch(() => "")).length,
         wrapup: opts.wrapup ?? true,
         verify: opts.verify === true && !exempt,
@@ -321,21 +327,18 @@ export async function runTask(
     let fork: ForkBaseInfo | undefined
     if (mode === "auto") {
       const sw = autoSwitches()
-      // ① 理解阶段: 任务体无检查项且 fork=on 才进入(已有人工检查项的任务跳过,
-      // 现状不变);摘要文件已存在(中断恢复/上一轮遗留)时幂等跳过。
-      if (sw.fork && !subtasks(task.body).length) {
-        await persistStage({ kind: "understand" })
-        const understood = await ensureUnderstood(client, plan, task, opts, chain)
-        if (understood.type !== "ok") return understood
-        task = understood.task
-      }
-      // ①′(digest)/基点校验(session)——此后 decompose 与每个子任务都从同一
-      // 基点分叉(fork=off 时 fork 恒为 undefined,行为与现状零差异)。
-      fork = sw.fork ? await ensureForkBase(client, plan, task, opts, chain) : undefined
+      // 合并理解与分解会话(M1.0,plans/0030): 任务体无检查项时进入(已有人工
+      // 检查项的任务跳过,现状不变);单会话产出 context.md + shared.md +
+      // subtasks.md + 各子任务 todo.md;subtasks.md 已有检查项(中断恢复/旧版
+      // 遗留)时幂等直注。会话成功后 driver 记录 fork-base(session 模式即最终
+      // 基点;digest 模式随后由基点确认会话覆写)。
       await persistStage({ kind: "decompose" })
-      const decomposed = await ensureDecomposed(client, plan, task, opts, chain, fork)
+      const decomposed = await ensureDecomposed(client, plan, task, opts, chain)
       if (decomposed.type !== "ok") return decomposed
       task = decomposed.task
+      // ①′(digest)/基点校验(session)——此后每个子任务都从同一基点分叉
+      // (fork=off 时 fork 恒为 undefined,行为与现状零差异)。
+      fork = sw.fork ? await ensureForkBase(client, plan, task, opts, chain) : undefined
       // 子任务交接文档的陈旧清理(镜像 ondemand 语义): 非恢复续跑时清除上次尝试
       // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。只删未被 git
       // 跟踪的份(F4 同款): 已跟踪的 handoff.md 必属未收口的执行单元(单元收口时
@@ -411,7 +414,15 @@ export async function runTask(
     // 立即统一提交——下一个执行单元(fixrun 检查项)的启动 clean 门禁据此成立
     // (plans/0021-commit-boundary-design.md P3);提交失败即阻塞,planfix 产物不算落账。
     const injectFix = async (items: string[], round: number): Promise<{ type: "blocked"; question: string } | undefined> => {
+      const prevCount = subtasks(task.body).length
       await appendSubtasks(plan.path, task.id, items)
+      // 子任务目录状态协议(plans/0030 D9): 协议已激活的任务,为每个注入的修复
+      // 检查项补 DRIVER 侧最小 todo.md,维持「每个检查项恰有一个状态文件」不变量;
+      // 协议未激活(旧版分解/人工检查项)保持纯勾选语义。todo.md 随注入同一次提交
+      // 落账(下方 commitTree)。
+      if ((await scanSubtaskStates(dir, task.id, prevCount)).active) {
+        for (let k = 0; k < items.length; k++) await writeInjectedTodo(dir, task.id, prevCount + k + 1, items[k]!)
+      }
       await persistStage({ kind: "review", round, stage: "fixrun" })
       task = requireTask(await load(plan.path), task.id)
       await writeCurrent(plan.path, task, mode !== "auto")
@@ -448,8 +459,26 @@ export async function runTask(
         // off/ondemand 模式只有正文中人工编写的检查项。
         for (;;) {
           const items = subtasks(task.body)
-          const index = items.findIndex((item) => !item.done)
+          // 子任务目录状态协议(M1.0,plans/0030): 协议激活(任一 todo/done 文件
+          // 存在)时,done.md 存在性覆盖勾选成为进度事实;非法态(两者同存/同缺)
+          // 检出即阻塞交人工;勾选漂移按文件状态 reconcile(文件为准,展示轨跟随)。
+          const scan = await scanSubtaskStates(dir, task.id, items.length)
+          if (scan.illegal.length) {
+            return {
+              type: "blocked",
+              question:
+                `${task.id} subtask state files are illegal (${scan.illegal
+                  .map((v) => `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? "both todo.md and done.md exist" : "neither todo.md nor done.md exists"}`)
+                  .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
+            }
+          }
+          const doneFlags = effectiveDone(scan, items)
+          const index = doneFlags.findIndex((done) => !done)
           if (index === -1) break
+          if (scan.active && items.some((item, i) => item.done !== doneFlags[i])) {
+            await syncSubtaskTicks(plan.path, task.id, doneFlags)
+            task = requireTask(await load(plan.path), task.id)
+          }
           // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘,恢复时
           // 经单元归属门禁(unitReruns)仅当该子任务将重跑才复用其会话。review 修复轮
           // (fixrun)保持 review 阶段标记(round/stage 供精确重入),仅追加序号。

@@ -3,7 +3,7 @@
 当前缺失(例如 .auto/ 不随仓库共享的新克隆),你的唯一职责是通读目录内的
 历史证据,推导恰当的下一任务编号并恢复该记录。只恢复记录、不做任何其他改动。
 
-## 输入: 已用编号下限(driver 确定性扫描结果)
+## 输入: 已用编号下限(DRIVER 确定性扫描结果)
 
 现存文件(当前 PLAN.md、各阶段/轮次归档 PLAN、docs 产物文件名)中已用的最大
 编号 + 1 = 7(即自 T-007 起必定未被现存文件使用)。你推导
@@ -20,10 +20,12 @@
   产物已被删除、文件扫描看不到的编号。
 
 文档存放规范: 每个任务(T-NNN)的全部文档写入该任务自己的目录 docs/T-NNN/ 内(理解摘要
-context.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告 audit.md、修复检查项
-fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级测试交接写同目录
-testhandoff.md。这些路径一经创建即为永久路径——不移动、不改名;引用其他任务的文档时
-一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
+context.md、公共上下文索引 shared.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告
+audit.md、修复检查项 fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级
+测试交接写同目录 testhandoff.md;子任务状态文件 docs/T-NNN/S<两位序号>/todo.md 与
+done.md 由 DRIVER 独占管理(分解会话写定 todo.md,子任务完成时 DRIVER 改名为 done.md)
+——你不得自行创建、重命名或删除它们。这些路径一经创建即为永久路径——不移动、不改名;
+引用其他任务的文档时一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
 不属于任何单个任务的阶段级自由产物(勘测报告、设计批次、覆盖矩阵、核验记录等)写入
 本轮轮次目录 docs/R-NN/ 内的 phase-docs/<阶段字母>-<slug>/ 子目录(如 docs/R-03/
 phase-docs/a-analysis/r3-baseline.md)——同为永久路径,落定不移动;引用一律使用该
@@ -38,8 +40,8 @@ phase-docs/a-analysis/r3-baseline.md)——同为永久路径,落定不移动;�
 
 ## 约束
 
-1. 本次唯一可写的文件是 .auto/next-task,其余任何文件不得创建或修改;PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
-git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。
+1. 本次唯一可写的文件是 .auto/next-task,其余任何文件不得创建或修改;PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(状态、检查项勾选),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
+git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
 2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
    其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
    你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;

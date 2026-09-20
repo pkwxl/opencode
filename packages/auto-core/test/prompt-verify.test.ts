@@ -23,11 +23,11 @@ describe("renderVerifyScriptGen", () => {
     expect(text).toContain("只做验证类设计")
     expect(text).toContain("不修改任何实现代码")
     expect(text).toContain("禁止直接执行任何验证脚本或验证性命令")
-    expect(text).toContain("验证的执行权在 driver")
+    expect(text).toContain("验证的执行权在 DRIVER")
     expect(text).toContain("产出该脚本是硬性要求")
     expect(text).toContain('任务 verify 字段是"command: bun test"')
     expect(text).toContain("question 工具")
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("由 DRIVER 独占维护")
   })
 
   test("自然语言 verify 同样给出验收标准语义", () => {
@@ -61,9 +61,9 @@ describe("renderVerifyJudge", () => {
     expect(text).toContain("分段读取")
     expect(text).toContain("不直接判不通过")
     expect(text).toContain("禁止直接执行任何验证脚本或验证性命令")
-    expect(text).toContain("验证的执行权在 driver")
+    expect(text).toContain("验证的执行权在 DRIVER")
     expect(text).toContain("只读检查")
-    // 替换重验协议: 新脚本写指定路径,结论为重验,driver 执行后经同一输出文件回传
+    // 替换重验协议: 新脚本写指定路径,结论为重验,DRIVER 执行后经同一输出文件回传
     const replacement = join(verifyTmpDir(dirname(plan.path)), "verify.sh")
     expect(text).toContain(`编写新的验证脚本替换 ${replacement}`)
     expect(text).toContain("结论: 重验")
@@ -75,7 +75,7 @@ describe("renderVerifyJudge", () => {
     expect(text).toContain("verified-command")
     expect(text).toContain("docs/T-002/report.md")
     expect(text).toContain('任务 verify 字段是"command: bun test"')
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("由 DRIVER 独占维护")
     expect(text).toContain("不要重做")
   })
 
@@ -89,7 +89,7 @@ describe("renderVerifyJudge", () => {
     // 当前任务为 T-002: 现值清单只列后续未完成且带 verify 的 T-003。
     expect(text).toContain(`后续未完成任务的 verify 字段现值:\n   - T-003: API 返回 200;\n7.`)
     // CURRENT.md 仍禁改
-    expect(text).toContain("CURRENT.md 由 driver 独占维护,不得编辑")
+    expect(text).toContain("CURRENT.md 由 DRIVER 独占维护,不得编辑")
   })
 
   test("运行信息标注看门狗超时原因", () => {
@@ -114,7 +114,7 @@ describe("renderReview", () => {
     expect(text).toContain("只审不改")
     expect(text).toContain("结论: 通过")
     expect(text).toContain("结论: 差距")
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("由 DRIVER 独占维护")
     expect(text).not.toContain("docs/final-audit.md")
   })
 
@@ -144,7 +144,7 @@ describe("renderReview", () => {
     expect(plain).not.toContain(script)
     expect(plain).toContain("静态审核")
     expect(plain).toContain("不要执行验证脚本或")
-    expect(plain).toContain("验证的执行权在 driver")
+    expect(plain).toContain("验证的执行权在 DRIVER")
   })
 
   test("early 与 final 可组合: 终审措辞与并行窗口措辞并存", () => {
@@ -166,6 +166,6 @@ describe("renderReviewFix", () => {
     expect(text).toContain("只规划不修复")
     expect(text).toContain("唯一可写的文件是 docs/T-002/fix.md")
     expect(text).toContain("产出该文件是硬性要求")
-    expect(text).toContain("由 driver 独占维护")
+    expect(text).toContain("由 DRIVER 独占维护")
   })
 })

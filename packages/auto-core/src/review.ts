@@ -267,7 +267,7 @@ async function judge(
       role: "verify-judge",
       artifact: `有效判定文件 ${VERDICT_FILE}`,
       detail: "缺失或无结论行",
-      requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 driver 重新执行)。",
+      requirement: "无论审核结论如何,都必须写出该文件,且最后一行为 `结论: 通过`、`结论: 差距 <描述>` 或 `结论: 重验 <原因>`(替换指定验证脚本后交 DRIVER 重新执行)。",
       commit: { stage: "verify-judge", subject: `${task.id} judge ${task.title}` },
       reset: () => rm(file, { force: true }),
       collect: async () => parseVerdict(await Bun.file(file).text().catch(() => "")),

@@ -14,13 +14,13 @@ import { autoSwitches } from "./switches"
 // 记录)时返回 false——恢复只发生在原单元重跑时,防下一单元误续上一单元的
 // 中断会话。ctx 由调用方按当前 PLAN.md/文件状态预计算(文件 IO 不进本函数)。
 export type UnitRerunCtx = {
-  // 子任务模式(auto/off/ondemand)与 fork 开关(understand/decompose 单元的运行条件)
+  // 子任务模式(auto/off/ondemand)与 fork 开关(子任务分叉的运行条件)
   mode: "auto" | "off" | "ondemand"
   fork: boolean
-  // 当前 PLAN.md 检查项(含 review 注入的修复项)
+  // 当前 PLAN.md 检查项(含 review 注入的修复项);子任务目录状态协议激活时
+  // done 旗标已被调用方按 done.md 存在性覆盖(文件存在性即进度事实,plans/0030 D10)
   items: { text: string; done: boolean }[]
-  // docs/<id>/context.md 已有有效摘要 / subtasks.md 已有检查项(理解/分解单元将幂等跳过)
-  contextExists: boolean
+  // subtasks.md 已有检查项(合并理解与分解单元将幂等直注,不重开会话)
   subtasksFileItems: number
   // 收尾/验收/审核单元本轮是否会跑(配置与豁免已计入)
   wrapup: boolean
@@ -33,11 +33,10 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
   // 序号归属: 记录的检查项恰为当前首个未勾选项 = 该单元将重跑
   const atItem = (index: number | undefined) => index !== undefined && firstUnticked === index - 1
   switch (phase?.kind) {
-    case "understand":
-      return ctx.mode === "auto" && ctx.fork && ctx.items.length === 0 && !ctx.contextExists
     case "decompose":
-      // 理解单元先跑(fork 且摘要缺失)时,分解会话不是首个消费链的单元
-      return ctx.mode === "auto" && ctx.items.length === 0 && ctx.subtasksFileItems === 0 && !(ctx.fork && !ctx.contextExists)
+      // 合并理解与分解单元(M1.0,plans/0030 D2): 检查项未注入且 subtasks.md 无
+      // 检查项时重跑(旧版 understand 记录经 parseProgress 映射为本阶段)
+      return ctx.mode === "auto" && ctx.items.length === 0 && ctx.subtasksFileItems === 0
     case "whole":
       return ctx.mode !== "auto"
     case "subtasks":
@@ -63,10 +62,8 @@ export function phaseText(phase: Phase | undefined): string {
   switch (phase?.kind) {
     case undefined:
       return "未记录阶段(按默认流程)"
-    case "understand":
-      return "任务背景理解阶段(写 context.md 摘要)"
     case "decompose":
-      return "任务分解阶段(检查项尚未注入)"
+      return "任务理解与分解阶段(context.md/shared.md/subtasks.md 与子任务 todo.md,检查项尚未注入)"
     case "whole":
       return "整任务单会话执行阶段"
     case "subtasks":
@@ -109,27 +106,27 @@ export function phaseText(phase: Phase | undefined): string {
 // 或经人工处置提交进 Git(中断后重跑的 clean 门禁要求人工处置脏区)。两种形态
 // 都正常,以盘面为准继续,不要重做。
 export const COMMIT_CLARIFY =
-  `中断前落盘的修改可能仍在工作区待提交,也可能已由 driver 统一提交(或经人工处置)进 Git——` +
+  `中断前落盘的修改可能仍在工作区待提交,也可能已由 DRIVER 统一提交(或经人工处置)进 Git——` +
   `git log 出现陌生提交、工作区比预期干净,都不代表修改丢失。`
 
 export function resumeNote(phase: Phase | undefined, reused: boolean, strictResume = autoSwitches().strictResume): string {
   if (reused && strictResume) {
-    return `[driver] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 driver 统一提交进 Git——以 git log 核实,不要重做。`
+    return `[DRIVER] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 DRIVER 统一提交进 Git——以 git log 核实,不要重做。`
   }
   const next = nextStepText(phase)
   if (phase?.kind === "step") {
     return (
-      `[driver] 本阶段步骤此前的执行因应用中断而停止。` +
+      `[DRIVER] 本阶段步骤此前的执行因应用中断而停止。` +
       (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
       `以 git status / git diff 核对工作区实际状态。${COMMIT_CLARIFY}` +
-      `${next}提交由 driver 统一负责,你从不亲自提交;不要重做已完成的工作。`
+      `${next}提交由 DRIVER 统一负责,你从不亲自提交;不要重做已完成的工作。`
     )
   }
   return (
-    `[driver] 该任务(或其某个子任务)此前的执行因应用中断而停止。` +
+    `[DRIVER] 该任务(或其某个子任务)此前的执行因应用中断而停止。` +
     (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
     `先读 CURRENT.md 了解当前任务与进度,并以 git status / git diff 核对工作区实际状态。${COMMIT_CLARIFY}` +
-    `${next}提交由 driver 统一负责,你从不亲自提交;不要重做已完成的工作。`
+    `${next}提交由 DRIVER 统一负责,你从不亲自提交;不要重做已完成的工作。`
   )
 }
 
@@ -137,10 +134,8 @@ function nextStepText(phase: Phase | undefined): string {
   switch (phase?.kind) {
     case undefined:
       return ""
-    case "understand":
-      return `当前处于任务背景理解阶段:把理解结果写入 docs/ 下的 context.md 摘要文件(若尚未写出)后结束。`
     case "decompose":
-      return `当前处于任务分解阶段:检查项尚未注入 PLAN.md。`
+      return `当前处于任务理解与分解阶段:检查项尚未注入 PLAN.md;产物为 context.md、shared.md、subtasks.md 与各子任务目录的 todo.md(缺失的补齐,已存在且仍准确的不要重做)。`
     case "whole":
       return `当前处于整任务单会话执行阶段。`
     case "subtasks":
@@ -149,10 +144,10 @@ function nextStepText(phase: Phase | undefined): string {
       return `全部检查项已完成,当前处于收尾阶段(更新 docs/ 报告并提交)。`
     case "verify":
       return phase.stage === "fix"
-        ? `任务级验收发现差距,当前处于修复阶段:按反馈的差距继续修复,完成后由 driver 重新执行验证脚本并判定。`
+        ? `任务级验收发现差距,当前处于修复阶段:按反馈的差距继续修复,完成后由 DRIVER 重新执行验证脚本并判定。`
         : phase.run
-          ? `任务级验收的验证脚本已由 driver 执行完毕(输出在 tmp/verify.out),本会话为独立判定会话。`
-          : `当前处于任务级验收阶段:验证脚本由 driver 在会话外执行,你不要亲自运行。`
+          ? `任务级验收的验证脚本已由 DRIVER 执行完毕(输出在 tmp/verify.out),本会话为独立判定会话。`
+          : `当前处于任务级验收阶段:验证脚本由 DRIVER 在会话外执行,你不要亲自运行。`
     case "review":
       return phase.stage === "audit"
         ? `任务级验收已通过,当前处于质量审核阶段。`
@@ -179,7 +174,7 @@ export function interruptionRemark(outcome: Outcome, phase: Phase | undefined): 
     `- 退出时间: ${new Date().toISOString()}`,
     `- 退出原因: ${why}`,
     `- 中断阶段: ${phaseText(phase)}`,
-    `- 恢复方式: 处理上述原因后重新运行 ${shellProfile().program},driver 将按中断阶段精确继续;本备注要点会随恢复提示词带给 AI。`,
+    `- 恢复方式: 处理上述原因后重新运行 ${shellProfile().program},DRIVER 将按中断阶段精确继续;本备注要点会随恢复提示词带给 AI。`,
   ].join("\n")
 }
 

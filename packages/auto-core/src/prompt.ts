@@ -126,22 +126,18 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
   })
 }
 
-// 理解会话(fork 三段式 ①,fork-decompose 设计 §6): 只读理解 + 预算内选读 +
-// 写 docs/<id>/context.md 四节摘要;摘要同时是磁盘态兜底(fork 失败冷启动输入、
-// wrapup/后续任务低成本引用)与 digest 模式的基点原料(逐字注入基点会话)。
-export function renderUnderstand(plan: Plan, task: Task, opts: Opts = {}): string {
-  return renderPrompt("understand", baseCtx(plan, task, opts))
-}
-
 // digest 基点会话(①′,driver 主导,fork-decompose 设计 §7): 摘要全文 + 一句
-// 确认;会话结束即成为该任务全部分叉(decompose/子任务)的前缀基点。
+// 确认;会话结束即成为该任务全部分叉(子任务)的前缀基点。
 export function renderContextBase(task: Task, digest: string): string {
   return renderPrompt("context-base", { taskId: task.id, digest })
 }
 
-// Decomposition session: read-only analysis, then write the subtask list to
-// docs/<id>/subtasks.md. The driver parses it and injects the checklist into
-// PLAN.md itself, so the session must not touch PLAN.md.
+// Merged understand+decomposition session (M1.0, plans/0030): read-only
+// understanding (docs/<id>/context.md four sections) + shared-context
+// reference index (docs/<id>/shared.md) + subtask split (docs/<id>/subtasks.md
+// checklist) + one scope file per subtask (docs/<id>/S<nn>/todo.md). The
+// driver parses the checklist and injects it into PLAN.md itself, so the
+// session must not touch PLAN.md.
 // 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
 // 开启细粒度档),库中无此名回退通用 decompose。
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
@@ -214,6 +210,9 @@ export function renderSubtask(
     index,
     subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.text}`).join("\n") : undefined),
     outputFile: opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined),
+    // 子任务目录状态协议(M1.0): 分解期写定的范围声明文件;旧形态任务无此文件,
+    // 模板按「如存在」措辞条件化。
+    todoFile: index !== undefined ? subtaskDoc(task.id, Number(index), "todo") : undefined,
     warm: Boolean(opts.warm),
   })
 }
@@ -572,7 +571,7 @@ function formatTokens(n: number): string {
 
 // 理解摘要建议行数档位(OPENCODE_AUTO_TASK_CONTEXT,开关层见 src/switches.ts):
 // off 为现状(200,与改动前的硬编码措辞一致);small/medium/large 逐档放宽。
-// 仅改变提示词里的"建议行数"措辞——ensureUnderstood 只校验 context.md 非空,
+// 仅改变提示词里的"建议行数"措辞——ensureDecomposed 只校验 context.md 非空,
 // 不按行数截断或拒收,调大档位不改变任何校验行为。
 const TASK_CONTEXT_LINES: Record<TaskContextMode, number> = { off: 200, small: 300, medium: 400, large: 500 }
 

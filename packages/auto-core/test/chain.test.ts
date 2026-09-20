@@ -13,14 +13,14 @@ describe("resolveModel(路由求值 role > letter > wildcard)", () => {
   test("role 覆盖 letter 覆盖 wildcard", () => {
     const p = policy("*=kimi/k2,m=anthropic/c-4,verify-judge=kimi/k2-lite")
     expect(resolveModel(p, "m", "verify-judge")).toBe("kimi/k2-lite") // role 命中优先
-    expect(resolveModel(p, "m", "understand")).toBe("anthropic/c-4") // role 缺、letter 命中
-    expect(resolveModel(p, "t", "understand")).toBe("kimi/k2") // letter 缺、wildcard 兜底
+    expect(resolveModel(p, "m", "decompose")).toBe("anthropic/c-4") // role 缺、letter 命中
+    expect(resolveModel(p, "t", "decompose")).toBe("kimi/k2") // letter 缺、wildcard 兜底
   })
 
   test("未设(空策略): 任意 (letter, role) → undefined", () => {
     const p = policy()
     expect(resolveModel(p, undefined, "bypass")).toBeUndefined()
-    expect(resolveModel(p, "m", "understand")).toBeUndefined()
+    expect(resolveModel(p, "m", "decompose")).toBeUndefined()
   })
 
   test("仅字母: 命中字母取值,否则 undefined", () => {
@@ -47,7 +47,6 @@ describe("splitModel(prov/model → SDK model 参数,按首个 / 切分)", () =>
 
 describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
   test("phaseToRole: 执行链各阶段映射(subtasks→subtask,verify/review 按 stage,step 按 slug)", () => {
-    expect(phaseToRole({ kind: "understand" })).toBe("understand")
     expect(phaseToRole({ kind: "decompose" })).toBe("decompose")
     expect(phaseToRole({ kind: "whole" })).toBe("whole")
     expect(phaseToRole({ kind: "subtasks" })).toBe("subtask")

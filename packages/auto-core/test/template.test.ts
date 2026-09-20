@@ -42,17 +42,17 @@ describe("渲染器", () => {
 
   test("片段引用: 共享片段按当前上下文渲染(片段内可用变量)", () => {
     usePromptLibrary(undefined)
-    expect(renderText("{{> state-rule}}", {})).toContain("由 driver 独占维护")
-    expect(renderText("{{> state-rule}}", {})).toContain("git 提交由 driver 在会话结束后统一执行")
+    expect(renderText("{{> state-rule}}", {})).toContain("由 DRIVER 独占维护")
+    expect(renderText("{{> state-rule}}", {})).toContain("git 提交由 DRIVER 在会话结束后统一执行")
   })
 
   test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
     usePromptLibrary(undefined)
     const standalone = renderText("前:\n   {{> state-rule}}\n后", { verify: true })
-    expect(standalone.split("\n")[1]).toBe("   PLAN.md 与 CURRENT.md 由 driver 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。")
-    expect(standalone.split("\n")[2]).toBe("   git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。")
+    expect(standalone.split("\n")[1]).toBe("   PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。")
+    expect(standalone.split("\n")[2]).toBe("   git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。")
     const inline = renderText("前:\n   {{> state-rule}};尾", { verify: true })
-    expect(inline.split("\n").at(-1)).toBe("   git 提交由 driver 在会话结束后统一执行,你不要运行 git commit 等提交命令。;尾")
+    expect(inline.split("\n").at(-1)).toBe("   git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。;尾")
   })
 })
 
@@ -73,14 +73,14 @@ describe("共享片段解析", () => {
     expect(text).toContain("不要在 docs/ 顶层另建平铺任务文件")
     // 不含模板变量: phase-plan 等无 taskId 的模板同样可引用
     expect(text).not.toMatch(/\{\{|\}\}/)
-    // 引用渲染: understand(任务文档写者)与 phase-plan(无 taskId 的规划者)都带该段
-    expect(renderTemplate("understand", { taskId: "T-001", taskBlock: "x" })).toContain("文档存放规范")
+    // 引用渲染: decompose(任务文档写者)与 phase-plan(无 taskId 的规划者)都带该段
+    expect(renderTemplate("decompose", { taskId: "T-001", taskBlock: "x" })).toContain("文档存放规范")
     expect(renderTemplate("phase-plan", { phase: "a", phaseName: "分析" })).toContain("文档存放规范")
   })
 })
 
 describe("内置模板注册表", () => {
-  test("31 个会话模板与 _partials 齐备", () => {
+  test("30 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "context-base",
@@ -109,7 +109,6 @@ describe("内置模板注册表", () => {
       "test-continue",
       "test-result",
       "test-wrapup",
-      "understand",
       "verify-judge",
       "verify-script-gen",
       "whole",
@@ -208,7 +207,7 @@ describe("分阶段分解模板 decompose-<phase>", () => {
         fine: false,
       })
       expect(text).toContain("- [ ]")
-      expect(text).toContain("只做任务分解,不写实现代码")
+      expect(text).toContain("任务背景理解与子任务分解,不写实现代码")
       expect(text).toContain("当前处于阶段 阶段名")
       expect(text).toContain("分解粒度准则")
       expect(text).toContain("以任务描述为基准")
@@ -257,7 +256,7 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       writeFileSync(join(overlay, "verify-judge.md"), "随便写的判定提示词,没有结论协议")
       expect(() => usePromptLibrary(dir)).toThrow(/verify-judge\.md 缺少关键协议内容/)
       expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
-      // phase-handover 覆盖缺四个必备小节标题 → 同样报错;修复后再测 understand
+      // phase-handover 覆盖缺四个必备小节标题 → 同样报错;修复后再测 decompose
       writeFileSync(join(overlay, "phase-handover.md"), "自定义交接提示词,丢了小节协议")
       expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md 缺少关键协议内容/)
       expect(() => usePromptLibrary(dir)).toThrow(/## 关键决策/)
@@ -265,10 +264,11 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
         join(overlay, "phase-handover.md"),
         "自定义交接提示词,保留协议: ## 关键决策 ## 约束与坑 ## 下一阶段必读清单 ## 产物索引 写入 {{handover}}",
       )
-      // understand 覆盖丢 context.md 摘要文件协议 → 同样报错
-      writeFileSync(join(overlay, "understand.md"), "自定义理解提示词,丢了摘要文件协议")
-      expect(() => usePromptLibrary(dir)).toThrow(/understand\.md 缺少关键协议内容/)
+      // decompose 覆盖丢 context.md/todo.md 产物协议(M1.0 合并会话)→ 同样报错
+      writeFileSync(join(overlay, "decompose.md"), "自定义分解提示词,丢了产物协议与检查项格式")
+      expect(() => usePromptLibrary(dir)).toThrow(/decompose\.md 缺少关键协议内容/)
       expect(() => usePromptLibrary(dir)).toThrow(/context\.md/)
+      expect(() => usePromptLibrary(dir)).toThrow(/todo\.md/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

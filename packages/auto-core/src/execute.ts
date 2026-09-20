@@ -1,5 +1,6 @@
-// 任务执行阶段: executeWhole(off/ondemand 整任务会话)+ fork 流水线 ① 理解
-// (ensureUnderstood)② 分解(ensureDecomposed)+ runSubtask 单个子任务会话,及
+// 任务执行阶段: executeWhole(off/ondemand 整任务会话)+ 合并理解与分解
+// (ensureDecomposed,M1.0 起 understand+decompose 单会话合一,plans/0030)+
+// runSubtask 单个子任务会话(含子任务目录状态协议 todo.md→done.md),及
 // PLAN.md 重读小工具 requireTask。位于 exec-session/session 之上、runner 之下;
 // **不得反向 import runner**(§D.2)。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S12,纯搬运)。
@@ -10,17 +11,18 @@ import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
 import { docShapeProblems, EOF_MARK, eofScanExempt, shapeCheckOn } from "./doccheck"
-import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
+import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { runExecSession } from "./exec-session"
 import { beginUnit, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { handoffStatus } from "./handover"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
 import { declaredArtifacts, load, setForkBase, setSubtasks, subtasks, tick, type Plan, type Task } from "./plan"
-import { handoffFile, renderDecompose, renderSubtask, renderUnderstand, renderWhole, testHandoffFile } from "./prompt"
+import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
 import { formatTokens, forkEndedSession, seedForkSession } from "./session-api"
+import { renameTodoToDone } from "./subtask-state"
 import { autoSwitches } from "./switches"
 import { handoffSteer, handoverDue, removeHandoffChain } from "./testrun"
 import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
@@ -161,147 +163,78 @@ export function requireTask(plan: Plan, id: string): Task {
   return task
 }
 
-// fork 流水线 ① 理解阶段(fork-decompose 设计 §4.1): 理解会话只读探查并写
-// docs/<id>/context.md 四节摘要(requireArtifact 同款两次重试 + 隐性阻塞);成功后
-// driver 写任务字段 fork-base(session 模式下即最终基点;digest 模式随后被基点
-// 确认会话覆写)并按 "understand" 阶段统一提交。摘要已存在(中断恢复/上一轮
-// 遗留)时幂等跳过,仅补写缺失的 fork-base(中断恰好落在摘要写盘与 setForkBase
-// 之间的恢复路径)。
-export async function ensureUnderstood(
-  client: OpencodeClient,
-  plan: Plan,
-  task: Task,
-  opts: Opts,
-  chain: SessionChain,
-): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
-  // 摘要路径(目录化布局,stable-refs P1): 写目标恒为新路径;读点经 resolveTaskDoc
-  // 回落旧平铺 docs/<id>.context.md,存量项目中断恢复不受改名影响。
-  const dir = dirname(plan.path)
-  const file = join(dir, taskDoc(task.id, "context"))
-  const readContext = async (): Promise<string> =>
-    (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "context"))).text().catch(() => "")).trim()
-  if (await readContext()) {
-    log(`↻ ${task.id} understanding digest ${file} already exists; skipping the understand session`)
-    if (!task.forkBase && chain.id) {
-      await setForkBase(plan.path, task.id, chain.id)
-      task = requireTask(await load(plan.path), task.id)
-    }
-    return { type: "ok", task }
-  }
-  autobanner(`${task.id} ${task.title}: task background understanding`)
-  const subject = `${task.id} understand ${task.title}`
-  chain.subject = subject
-  let feedback = ""
-  // 形检/缺失重提示经 fork 刚结束的会话下发时(2026-09-18 修订),下一回合只带
-  // 反馈本身——副本已含完整提示词与全部工作上下文,重发整份只会诱导从头重做。
-  let shapeForked = false
-  for (let i = 0; ; i++) {
-    // taskContext(OPENCODE_AUTO_TASK_CONTEXT)透传理解提示词: 放宽 context.md
-    // 的建议行数措辞(与 fine 透传分解提示词同一接线方式)。
-    const brief = shapeForked
-    shapeForked = false
-    const result = await runSession(
-      client,
-      task,
-      brief ? feedback.trimStart() : renderUnderstand(plan, task, { ...opts, taskContext: autoSwitches().taskContext }) + feedback,
-      opts,
-      chain,
-    )
-    if (result.type === "blocked") return result
-    const content = await readContext()
-    // D5 形检(session-boundary-hardening §4.5,S3b): 存在性之外追加非平凡 + 末行
-    // 终止符,接入既有重试环;只查本次会话产出——上方「已存在即跳过」路径不受影响
-    // (不追溯存量,历史无终止符文档不会被卡)。
-    const problems = content ? docShapeProblems(content, taskDoc(task.id, "context")) : []
-    if (content && !problems.length) {
-      // 理解会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
-      if (chain.id) await setForkBase(plan.path, task.id, chain.id)
-      task = requireTask(await load(plan.path), task.id)
-      const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "understand", subject })
-      if (committed.type === "failed") return commitBlocked(`${task.id} understand session`, committed)
-      return { type: "ok", task }
-    }
-    const why = content ? `failed shape check (${problems.join("; ")})` : "missing or empty"
-    if (i === 1) {
-      return {
-        type: "blocked",
-        question:
-          `understand session ended twice but ${file} ${why} (hidden blockage). ` +
-          `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
-      }
-    }
-    feedback = content
-      ? `\n\n你上次结束会话但 ${file} 未过形检: ${problems.join("; ")}。这是硬性要求:` +
-        `把理解结果按四节结构补全,并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
-      : `\n\n你上次结束会话但未写出有效的 ${file}(缺失或为空)。这是硬性要求:` +
-        `把理解结果按四节结构写入该文件后再结束会话(即使任务看起来很简单)。`
-    // 重提示基于刚结束的会话 fork 续做(带全部调研上下文);fork 不可用回退
-    // 全新会话 + 完整提示词。
-    shapeForked = await forkEndedSession(client, chain, subject)
-    log(`↻ ${task.id} understand session produced ${file} ${why}; ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
-  }
-}
-
-// Ensures the task body has a checklist: tasks resuming with one (or with a
-// human-written one) are used as-is; otherwise a decomposition session writes
-// docs/<id>/subtasks.md and the driver injects the items into PLAN.md.
-// 中断恢复: 分解会话可能已写出文件但尚未注入——先直读文件,有效则直接注入,
-// 不再开会话。
+// Merged understand+decompose unit (M1.0, plans/0030-subtask-loop-entry-design.md):
+// one session produces the task background digest (docs/<id>/context.md, four
+// sections), the shared-context reference index (docs/<id>/shared.md), the
+// subtask checklist (docs/<id>/subtasks.md, parsed by the driver and injected
+// into PLAN.md) and one scope file per subtask (docs/<id>/S<nn>/todo.md).
+// All four artifact groups are hard requirements (existence + non-trivial +
+// terminal eof line), feeding one retry-with-feedback loop (re-prompt via
+// forkEndedSession of the just-ended session); still failing → blocked.
+// On success the session id is recorded as the session-mode fork base (digest
+// mode overwrites it in ensureForkBase afterwards) and everything lands in the
+// "decompose" unit commit.
+// 中断恢复/兼容读: 任务体已有检查项(含人工编写)直接跳过;subtasks.md 已有检查项
+// (上次分解已写文件但尚未注入,或旧版分解产物)直接注入、不再开会话——旧版产物
+// 没有 todo.md 状态文件,该任务保持台账勾选语义(协议未激活,plans/0030 D5)。
 export async function ensureDecomposed(
   client: OpencodeClient,
   plan: Plan,
   task: Task,
   opts: Opts,
   chain: SessionChain,
-  base?: ForkBaseInfo,
 ): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
   if (subtasks(task.body).length) return { type: "ok", task }
-  // 分解结果路径(目录化布局): 写目标恒为新路径;读点经 resolveTaskDoc 回落旧
-  // 平铺 docs/<id>.subtasks.md(中断恢复: 分解会话可能已写旧名文件但尚未注入)。
+  // 分解结果路径(目录化布局): 写目标恒为新路径;subtasks.md 读点经 resolveTaskDoc
+  // 回落旧平铺 docs/<id>.subtasks.md(存量项目中断恢复不受改名影响)。context.md 同。
   const dir = dirname(plan.path)
-  const file = join(dir, taskDoc(task.id, "subtasks"))
-  const readRaw = async (): Promise<string> =>
-    (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "subtasks"))).text().catch(() => "")).trim()
+  const contextFile = join(dir, taskDoc(task.id, "context"))
+  const sharedFile = join(dir, taskDoc(task.id, "shared"))
+  const subtasksFile = join(dir, taskDoc(task.id, "subtasks"))
+  const readDoc = async (role: "context" | "subtasks"): Promise<string> =>
+    (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, role))).text().catch(() => "")).trim()
+  const readRaw = async (): Promise<string> => readDoc("subtasks")
   const readItems = async (): Promise<string[]> => subtasks(await readRaw()).map((item) => item.text)
   const existing = await readItems()
   if (existing.length) {
-    log(`↻ ${task.id} decomposition result ${file} already exists; injecting checklist items directly`)
+    log(`↻ ${task.id} decomposition result ${subtasksFile} already exists; injecting checklist items directly`)
     await setSubtasks(plan.path, task.id, existing)
     return { type: "ok", task: requireTask(await load(plan.path), task.id) }
   }
   let feedback = ""
   // One automatic retry with feedback: a resumed session may have done the
-  // work instead of writing the file; the file is a hard requirement.
-  autobanner(`${task.id} ${task.title}: subtask decomposition`)
+  // work instead of writing the files; the files are a hard requirement.
+  autobanner(`${task.id} ${task.title}: task understanding + decomposition`)
   const subject = `${task.id} decompose ${task.title}`
   chain.subject = subject
-  // ② 分解会话从基点分叉(先 fork 后渲染,设计 §4.3);无基点/失败 → 现状全新
-  // 会话。种子链使分解会话不复用理解会话(基点保持纯净分叉点)。
-  await seedForkSession(client, opts, chain, base, subject)
-  // 形检/缺失重提示经 fork 刚结束的会话下发时,下一回合只带反馈本身(同
-  // ensureUnderstood)。
+  // 形检/缺失重提示经 fork 刚结束的会话下发时(2026-09-18 修订),下一回合只带
+  // 反馈本身——副本已含完整提示词与全部工作上下文,重发整份只会诱导从头重做。
   let shapeForked = false
   for (let i = 0; ; i++) {
     // fine(OPENCODE_AUTO_DECOMPOSE_FINE=on)透传分解提示词: 注入细粒度准则段
-    // (plans/0003-fork-decompose-design.md §5.1)。
+    // (plans/0003-fork-decompose-design.md §5.1);taskContext(OPENCODE_AUTO_TASK_CONTEXT)
+    // 透传 context.md 的建议行数措辞。
     const brief = shapeForked
     shapeForked = false
     const result = await runSession(
       client,
       task,
-      brief ? feedback.trimStart() : renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine }) + feedback,
+      brief
+        ? feedback.trimStart()
+        : renderDecompose(plan, task, { ...opts, fine: autoSwitches().fine, taskContext: autoSwitches().taskContext }) + feedback,
       opts,
       chain,
     )
     if (result.type === "blocked") return result
-    const raw = await readRaw()
-    const items = subtasks(raw).map((item) => item.text)
-    // D5 形检(session-boundary-hardening §4.5,S3b): 有检查项之外追加非平凡 + 末行
-    // 终止符,接入既有重试环;只查本次会话产出——上方「文件已存在即直接注入」路径
-    // 不受影响(不追溯存量)。
-    const problems = items.length ? docShapeProblems(raw, taskDoc(task.id, "subtasks")) : []
-    if (items.length && !problems.length) {
+    // 产物校验(全部硬性): context.md/shared.md 非空 + 形检;subtasks.md 有检查项 +
+    // 形检;每个子任务目录的 todo.md 存在 + 形检。只查本次会话产出——上方「文件已存在
+    // 即直接注入」路径不受影响(不追溯存量)。
+    const problems = await decomposeArtifactProblems(dir, task.id)
+    if (!problems.length) {
+      const items = await readItems()
       await setSubtasks(plan.path, task.id, items)
+      // 合并会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
+      if (chain.id) await setForkBase(plan.path, task.id, chain.id)
       // 镜像刷新同样先于统一提交(与子任务勾选同口径): 注入的检查项与镜像同入
       // decompose 提交,调用方随后的刷新即幂等空写。
       await writeCurrent(plan.path, requireTask(await load(plan.path), task.id))
@@ -309,25 +242,57 @@ export async function ensureDecomposed(
       if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)
       return { type: "ok", task: requireTask(await load(plan.path), task.id) }
     }
-    const why = items.length ? `failed shape check (${problems.join("; ")})` : "missing or has no checklist items"
     if (i === 1) {
       return {
         type: "blocked",
         question:
-          `decompose session ended twice but ${file} ${why} (hidden blockage). ` +
-          `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
+          `decompose session ended twice but its artifacts did not pass checks (${problems.join("; ")}; hidden blockage). ` +
+          `Check the files and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
       }
     }
-    feedback = items.length
-      ? `\n\n你上次结束会话但 ${file} 未过形检: ${problems.join("; ")}。这是硬性要求:` +
-        `补全内容并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
-      : `\n\n你上次结束会话但未写出有效的 ${file}(缺失或无检查项)。这是硬性要求:` +
-        `即使任务已完成或极简单,也必须写出该文件(原子任务写单个检查项即可)。`
+    feedback =
+      `\n\n你上次结束会话但合并理解与分解的产物未过检查: ${problems.join("; ")}。这是硬性要求:` +
+      `补齐 ${contextFile}(四节理解摘要)、${sharedFile}(公共上下文引用索引)、${subtasksFile}(检查项清单)与每个子任务的 todo.md,` +
+      `内容完整并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
     // 重提示基于刚结束的会话 fork 续做(带全部调研上下文);fork 不可用回退
     // 全新会话 + 完整提示词。
     shapeForked = await forkEndedSession(client, chain, subject)
-    log(`↻ ${task.id} decompose session produced ${file} ${why}; ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
+    log(`↻ ${task.id} decompose session artifacts failed checks (${problems.join("; ")}); ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }
+}
+
+// 合并理解与分解会话的产物问题清单(空 = 通过): context.md / shared.md /
+// subtasks.md / 各子任务 todo.md 四组。返回的问题行含具体路径,直接进反馈文案。
+async function decomposeArtifactProblems(dir: string, taskId: string): Promise<string[]> {
+  const problems: string[] = []
+  const checkDoc = async (rel: string, content: string, label: string) => {
+    if (!content) {
+      problems.push(`${rel} ${label} missing or empty`)
+      return
+    }
+    problems.push(...docShapeProblems(content, rel))
+  }
+  await checkDoc(
+    taskDoc(taskId, "context"),
+    (await Bun.file(join(dir, await resolveTaskDoc(dir, taskId, "context"))).text().catch(() => "")).trim(),
+    "understanding digest",
+  )
+  await checkDoc(taskDoc(taskId, "shared"), (await Bun.file(join(dir, taskDoc(taskId, "shared"))).text().catch(() => "")).trim(), "shared-context index")
+  const subtasksRel = taskDoc(taskId, "subtasks")
+  const raw = (await Bun.file(join(dir, await resolveTaskDoc(dir, taskId, "subtasks"))).text().catch(() => "")).trim()
+  const items = subtasks(raw)
+  if (!items.length) problems.push(`${subtasksRel} missing or has no checklist items`)
+  else problems.push(...docShapeProblems(raw, subtasksRel))
+  for (let k = 1; k <= items.length; k++) {
+    const rel = subtaskDoc(taskId, k, "todo")
+    const content = (await Bun.file(join(dir, rel)).text().catch(() => "")).trim()
+    if (!content) {
+      problems.push(`${rel} subtask scope file missing or empty`)
+      continue
+    }
+    problems.push(...docShapeProblems(content, rel))
+  }
+  return problems
 }
 
 // Runs one subtask session, then ticks the checklist item on trust: the
@@ -379,11 +344,17 @@ export async function runSubtask(
   const planDir = dirname(plan.path)
   const readHandoff = async (): Promise<string> =>
     Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
+  // 子任务目录状态协议(M1.0,plans/0030 D8): done.md 已存在 = 本子任务已收口
+  // (含中断恰好落在 rename 与统一提交之间的恢复盘面)——跳过会话直接进收口
+  // (勾选 + 提交)。文件存在性是进度事实,不凭会话叙事。
+  const stateDone = await Bun.file(join(planDir, subtaskDoc(task.id, index, "done"))).exists()
   // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在且
   // 状态=完成 → 子任务在中断前已由交接会话完成,直接勾选;状态=继续 → 以续跑
   // 提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
-  const prior = handoffStatus(await readHandoff())
-  if (prior === "完成") {
+  const prior = stateDone ? undefined : handoffStatus(await readHandoff())
+  if (stateDone) {
+    log(`↻ ${task.id} subtask ${index}: ${subtaskDoc(task.id, index, "done")} already exists; skipping the session and closing out directly`)
+  } else if (prior === "完成") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks the subtask complete; checking it off directly`)
   } else {
     let continuation = prior === "继续"
@@ -524,6 +495,10 @@ export async function runSubtask(
   await rm(join(planDir, legacyTaskDoc(task.id, "handoff")), { force: true })
   await removeHandoffChain(planDir, testHandoffFile(task, index))
   await removeHandoffChain(planDir, legacySubtaskTestHandoff(task.id, index))
+  // 子任务目录状态协议收口(plans/0030 D7): DRIVER 在提交边界内把 todo.md 改名为
+  // done.md——盘面文件存在性即进度事实;幂等(协议未激活无 todo.md、中断落在
+  // rename 之后 done.md 已存在,均跳过)。
+  await renameTodoToDone(planDir, task.id, index)
   await tick(plan.path, task.id, text)
   // 镜像刷新属本次状态写入,须在统一提交前落盘: 否则 PLAN.md 的勾选与 CURRENT.md
   // 的同一次刷新分属相邻两次提交(镜像永远落后一格,回滚到子任务提交取回的镜像

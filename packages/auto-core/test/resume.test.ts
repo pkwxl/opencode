@@ -36,10 +36,14 @@ describe("进度记录", () => {
     expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_old")
   })
 
-  test("understand 阶段记录(fork 流水线理解会话)随记录往返", async () => {
-    const progress: Progress = { task: "T-001", session: "ses_understand", at: Date.now(), active: true, phase: { kind: "understand" } }
-    await saveProgress(dir, progress)
-    expect(await recallProgress(dir, "T-001")).toEqual(progress)
+  test("旧版 understand 阶段记录(M1.0 前)读取时映射为合并的 decompose 阶段(plans/0030 D2)", async () => {
+    const { mkdir } = await import("node:fs/promises")
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(
+      join(dir, ".auto", "progress.json"),
+      JSON.stringify({ task: "T-001", session: "ses_understand", at: 7, active: true, phase: { kind: "understand" } }),
+    )
+    expect(await recallProgress(dir, "T-001")).toEqual({ task: "T-001", session: "ses_understand", at: 7, active: true, phase: { kind: "decompose" } })
   })
 
   test("subtasks 阶段记录的归属子任务序号 index 随记录往返", async () => {
