@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parsePartials, promptTemplateNames, registerTemplate, renderText, renderTemplate, usePromptLibrary } from "../src/template"
+import { parsePartials, promptTemplateNames, registerPartial, registerTemplate, renderText, renderTemplate, usePromptLibrary } from "../src/template"
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 
 // 每个用例后恢复仅内置,避免覆盖状态泄漏到其他测试文件。
@@ -278,15 +278,39 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     }
   })
 
-  test("_partials 覆盖按节名合并,未覆盖节保留内置", () => {
+  test("_partials 覆盖按节名合并,未覆盖节保留内置;被覆盖节须保留 tier-1 协议标记", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则。")
+      // state-rule 是 tier-1 协议敏感节: 覆盖须保留 PLAN.md / CURRENT.md 锚点
+      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则: PLAN.md 与 CURRENT.md 仍由 DRIVER 独占维护。")
       usePromptLibrary(dir)
-      expect(renderText("{{> state-rule}}", {})).toBe("自定义状态规则。")
+      expect(renderText("{{> state-rule}}", {})).toBe("自定义状态规则: PLAN.md 与 CURRENT.md 仍由 DRIVER 独占维护。")
       expect(renderText("{{> question-rule}}", {})).toContain("AUTO-DECISION")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("协议敏感片段节覆盖缺失 tier-1 标记时报错并指明节名(M1.3 双层化)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则,丢了状态文件锚点。")
+      expect(() => usePromptLibrary(dir)).toThrow(/state-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/PLAN\.md/)
+      writeFileSync(join(overlay, "_partials.md"), "## eof-rule\n写完就行,不用终止符。")
+      expect(() => usePromptLibrary(dir)).toThrow(/eof-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/<!-- auto: eof -->/)
+      writeFileSync(join(overlay, "_partials.md"), "## question-rule\n随意提问即可。")
+      expect(() => usePromptLibrary(dir)).toThrow(/question-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/AUTO-RESOLVE/)
+      // 未列名的节(如 digest-rule)非协议敏感,覆盖免标记
+      writeFileSync(join(overlay, "_partials.md"), "## digest-rule\n自定义引用纪律。")
+      usePromptLibrary(dir)
+      expect(renderText("{{> digest-rule}}", {})).toBe("自定义引用纪律。")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -341,9 +365,73 @@ describe("动态注册(registerTemplate)", () => {
     }
   })
 
-  test("空模板名 / 空内容 / _partials 注册拒绝", () => {
+  test("空模板名 / 空内容 / _partials 整份注册拒绝(按节走 registerPartial)", () => {
     expect(() => registerTemplate("", "内容")).toThrow("模板名不能为空")
     expect(() => registerTemplate("shell-empty", "   ")).toThrow("内容不能为空")
-    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow("不接受注册")
+    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow(/不接受整份注册/)
+    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow(/registerPartial/)
+  })
+})
+
+describe("片段按节注册(registerPartial,M1.3)", () => {
+  test("注册共享片段节: 即时可渲染并跨 usePromptLibrary 重载保留", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      registerPartial("shell-note", "外壳注记: {{topic}}")
+      expect(renderText("{{> shell-note}}", { topic: "甲" })).toBe("外壳注记: 甲")
+      usePromptLibrary(dir)
+      expect(renderText("{{> shell-note}}", { topic: "乙" })).toBe("外壳注记: 乙")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      usePromptLibrary(undefined)
+      registerPartial("shell-note", "复位")
+      usePromptLibrary(undefined)
+    }
+  })
+
+  test("与内置节同名时注册内容生效,目标目录 _partials.md 覆盖仍最高优先", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const builtin = renderText("{{> digest-rule}}", {})
+      registerPartial("digest-rule", "注册版引用纪律")
+      expect(renderText("{{> digest-rule}}", {})).toBe("注册版引用纪律")
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "_partials.md"), "## digest-rule\n用户覆盖版引用纪律。")
+      usePromptLibrary(dir)
+      expect(renderText("{{> digest-rule}}", {})).toBe("用户覆盖版引用纪律。")
+      // 复位内置节文案,防跨测试文件污染
+      usePromptLibrary(undefined)
+      registerPartial("digest-rule", builtin)
+      usePromptLibrary(undefined)
+      expect(renderText("{{> digest-rule}}", {})).toBe(builtin)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("带 markers 注册: 目标目录覆盖该节缺失标记时报错", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      registerPartial("shell-rule", "外壳协议片段: KEEP-ME", ["KEEP-ME"])
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "_partials.md"), "## shell-rule\n覆盖版丢了锚点。")
+      expect(() => usePromptLibrary(dir)).toThrow(/shell-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/KEEP-ME/)
+      writeFileSync(join(overlay, "_partials.md"), "## shell-rule\n覆盖版保留 KEEP-ME 锚点。")
+      usePromptLibrary(dir)
+      expect(renderText("{{> shell-rule}}", {})).toBe("覆盖版保留 KEEP-ME 锚点。")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      usePromptLibrary(undefined)
+      registerPartial("shell-rule", "复位")
+      usePromptLibrary(undefined)
+    }
+  })
+
+  test("空片段名 / 空内容拒绝", () => {
+    expect(() => registerPartial("", "内容")).toThrow("片段名不能为空")
+    expect(() => registerPartial("shell-empty-partial", "   ")).toThrow("内容不能为空")
   })
 })

@@ -4,8 +4,8 @@
 // 的调用点不感知模板机制。
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
-import { dutiesForPhase, loadIntents, resolveIntent } from "./intent/load"
-import type { IntentPack } from "./intent/types"
+import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
+import type { IntentPack, IntentSection } from "./intent/types"
 import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Status, type Task } from "./plan"
 import type { ResolveItem } from "./resolve"
@@ -15,18 +15,28 @@ import { autoSwitches, type TaskContextMode } from "./switches"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 import { verifyTmpDir } from "./verify"
 
-// The active intent pack (M1.2, plans/0032): the decompose family's (b)-class
-// content (split granularity criteria + per-phase duties) lives in the pack,
-// not in the core templates; the assembly point injects it as pre-rendered
-// data (decomposeRule/phaseDuties vars). Default state = the built-in preset;
-// loop-preflight calls useIntentPacks(dir) next to usePromptLibrary so the
-// project overlay (.opencode/auto/intents/) applies; invalid pack files throw
-// there as usage errors. Degenerate composition only (F8): one active pack,
-// a same-named project file overrides the built-in wholesale.
+// The active intent pack (M1.2/M1.3, plans/0032+0033): the (b)-class content
+// of the decompose family (split granularity criteria + per-phase duties) and
+// the subtask family's closing self-check sentences lives in the pack, not in
+// the core templates; the assembly point injects it as pre-rendered data
+// (decomposeRule/phaseDuties/selfCheck vars). Default state = the built-in
+// preset; loop-preflight calls useIntentPacks(dir) next to usePromptLibrary so
+// the project overlay (.opencode/auto/intents/) applies; invalid pack files
+// throw there as usage errors. Degenerate composition only (F8): one active
+// pack, a same-named project file overrides the built-in wholesale.
 let activeIntentPack: IntentPack = resolveIntent(loadIntents())
 
 export function useIntentPacks(dir: string | undefined): void {
   activeIntentPack = resolveIntent(loadIntents(dir))
+}
+
+// Pack-section injection helper: address a `### <key>` subsection of the
+// active pack and pre-render it with the session context (pack text may use
+// the template syntax, same license as mode files); absent section/key
+// yields undefined and the template guard drops the block cleanly.
+function intentText(section: IntentSection, key: string, ctx: Ctx): string | undefined {
+  const text = packSubsection(activeIntentPack, section, key)
+  return text && renderText(text, ctx)
 }
 
 // verify: config.verify(任务级三段式验收开关)。false 时与 verify 相关的描述
@@ -156,17 +166,19 @@ export function renderContextBase(task: Task, digest: string): string {
 // session must not touch PLAN.md.
 // 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
 // 开启细粒度档),库中无此名回退通用 decompose。
-// 意图注入(M1.2): 粒度准则与阶段职责段来自生效意图包(quality 节与
-// phaseDuties 的 `### <阶段字母>` 子节),先经 renderText 以本 ctx 求值
-// (fine/contextBudget/phaseName 随包内文本解析,与 modes 段同口径)再作为
-// 数据变量注入;包缺对应节时该段整体消失(零意图基线),核心模板只留角色
-// 边界、格式协议与 eof 纪律。
+// Intent injection (M1.2/M1.3): the granularity criteria and per-phase duties
+// come from the active pack (`### decompose` under `## quality`, and the
+// `### <letter>` subsection under `## phase duties`), pre-rendered with this
+// ctx (fine/contextBudget/phaseName resolve inside the pack text, same
+// license as mode sections) and injected as data; when the pack lacks the
+// subsection the block disappears entirely (zero-intent baseline) and the
+// core template keeps only role boundaries, format protocols, and eof.
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
   const ctx = baseCtx(plan, task, opts)
   const duties = dutiesForPhase(activeIntentPack, opts.phase ?? "m")
   return renderPrompt(decomposeTemplateName(opts.phase, promptTemplateNames()), {
     ...ctx,
-    decomposeRule: activeIntentPack.quality && renderText(activeIntentPack.quality, ctx),
+    decomposeRule: intentText("quality", "decompose", ctx),
     phaseDuties: duties && renderText(duties, ctx),
   })
 }
@@ -220,13 +232,18 @@ export function renderSubtask(
   const items = subtasks(task.body)
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
   const index = at >= 0 ? String(at + 1) : undefined
+  const ctx = baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined })
   return renderPrompt("subtask", {
     // index 的推导值回灌 baseCtx: 测试交接文档命名(测试协议段)与本处注入的
     // 「第 N 项」同源,缺省推导(旧调用不传 index)时同样落子任务级目录命名。
-    ...baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined }),
+    ...ctx,
     subtask,
     continuation: Boolean(opts.continuation),
     handoffFile: handoffFile(task),
+    // Closing self-check sentence (M1.3): (b)-class quality intent from the
+    // active pack's `## quality` / `### self-check-subtask`; the guard drops
+    // the wrap-up item cleanly when the pack omits it (zero-intent baseline).
+    selfCheck: intentText("quality", "self-check-subtask", ctx),
     // L1 接地块变量(ground-state 片段): 台账权威状态随每个子任务会话注入;
     // qualifiedId 仅在编号可知时给出(无检查项的旧形态任务没有 S 编号)。
     taskTitle: task.title,
@@ -551,11 +568,15 @@ export function renderWhole(
   task: Task,
   opts: Opts & { ondemand?: boolean; continuation?: boolean } = {},
 ): string {
+  const ctx = baseCtx(plan, task, opts)
   return renderPrompt("whole", {
-    ...baseCtx(plan, task, opts),
+    ...ctx,
     ondemand: Boolean(opts.ondemand),
     continuation: Boolean(opts.continuation),
     handoffFile: handoffFile(task),
+    // Closing self-check sentence (M1.3, same as renderSubtask but keyed to
+    // the whole-task scope): `## quality` / `### self-check-whole`.
+    selfCheck: intentText("quality", "self-check-whole", ctx),
   })
 }
 

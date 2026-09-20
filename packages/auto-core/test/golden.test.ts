@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { renderAgentContract } from "../src/loop-preflight"
-import { loadIntents, resolveIntent } from "../src/intent/load"
+import { loadIntents, packSubsection, resolveIntent } from "../src/intent/load"
 import { loadModes } from "../src/mode"
 import { parse } from "../src/plan"
 import {
@@ -98,9 +98,9 @@ describe("golden 渲染快照", () => {
       golden(`decompose-${phase}`, renderDecompose(plan, task, { ...execOpts, phase }))
     }
     // 通用 decompose 是内置库缺 decompose-<phase> 时的兜底,renderDecompose 到不了,
-    // 直接经 renderTemplate 渲染(ctx 与 baseCtx 同口径组装)。意图注入(M1.2)由
-    // renderDecompose 完成,此处手动复刻同一注入:内置 default 意图包的 quality 节
-    // 以同一 ctx 求值后作为 decomposeRule 注入。
+    // 直接经 renderTemplate 渲染(ctx 与 baseCtx 同口径组装)。意图注入(M1.2/M1.3)由
+    // renderDecompose 完成,此处手动复刻同一注入:内置 default 意图包 quality 节的
+    // ### decompose 子节以同一 ctx 求值后作为 decomposeRule 注入。
     const genericCtx = {
       ask: false,
       taskId: task.id,
@@ -115,11 +115,12 @@ describe("golden 渲染快照", () => {
       modeName: migrate.name,
     }
     const pack = resolveIntent(loadIntents())
+    const rule = packSubsection(pack, "quality", "decompose")
     golden(
       "decompose-generic",
       renderTemplate("decompose", {
         ...genericCtx,
-        decomposeRule: pack.quality && renderText(pack.quality, genericCtx),
+        decomposeRule: rule && renderText(rule, genericCtx),
       }),
     )
   })

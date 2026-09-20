@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loadIntents, parseIntentFile, resolveIntent, dutiesForPhase } from "../src/intent/load"
+import { loadIntents, packSubsection, parseIntentFile, resolveIntent, dutiesForPhase } from "../src/intent/load"
 import { DEFAULT_INTENT, INTENT_SECTIONS } from "../src/intent/types"
 
 function packText(name: string, sections: Record<string, string>): string {
@@ -67,8 +67,12 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     const pack = packs[DEFAULT_INTENT]!
     expect(pack.name).toBe(DEFAULT_INTENT)
     // The decompose family's (b)-class content lives here, not in the core
-    // templates: split granularity criteria (quality) and per-phase duties.
-    expect(pack.quality).toContain("分解粒度准则")
+    // templates: split granularity criteria (quality / ### decompose) and
+    // per-phase duties; the subtask family's closing self-check sentences
+    // joined in M1.3 (quality / ### self-check-subtask + ### self-check-whole).
+    expect(packSubsection(pack, "quality", "decompose")).toContain("分解粒度准则")
+    expect(packSubsection(pack, "quality", "self-check-subtask")).toBe("自我检查该子任务是否真正完成")
+    expect(packSubsection(pack, "quality", "self-check-whole")).toBe("完成整个任务后自我检查是否真正完成")
     expect(pack.phaseDuties).toContain("垂直薄切片优先")
     // Sections with no migrated content yet stay absent (zero-intent baseline).
     expect(pack.acceptance).toBeUndefined()
@@ -119,6 +123,47 @@ describe("degenerate composition (resolveIntent)", () => {
 
   test("unknown names fail with the available list", () => {
     expect(() => resolveIntent(loadIntents(), "nope")).toThrow(/unknown intent pack "nope".*default/)
+  })
+})
+
+describe("subsection addressing (packSubsection, M1.3 generalization)", () => {
+  const pack = parseIntentFile(
+    "x",
+    `# x
+
+## quality
+
+### decompose
+
+split criteria.
+
+### self-check-whole 整任务收尾自查
+
+check the whole task.
+
+## acceptance
+
+flat acceptance text, no subsections.
+`,
+  )
+
+  test("extracts any section's subsection body by key; headings may carry a suffix", () => {
+    expect(packSubsection(pack, "quality", "decompose")).toBe("split criteria.")
+    expect(packSubsection(pack, "quality", "self-check-whole")).toBe("check the whole task.")
+  })
+
+  test("unknown keys, flat sections, and absent sections yield undefined", () => {
+    expect(packSubsection(pack, "quality", "nope")).toBeUndefined()
+    // A section without ### subsections has no addressable keys (text before
+    // the first ### is never injected).
+    expect(packSubsection(pack, "acceptance", "decompose")).toBeUndefined()
+    expect(packSubsection(parseIntentFile("y", "# y\n\n## quality\nq\n"), "governance", "x")).toBeUndefined()
+  })
+
+  test("dutiesForPhase stays the phaseDuties-keyed wrapper (M3 dutiesRef target)", () => {
+    const withDuties = parseIntentFile("z", "# z\n\n## phase duties\n\n### m\n\nduties.\n")
+    expect(dutiesForPhase(withDuties, "m")).toBe("duties.")
+    expect(dutiesForPhase(withDuties, "v")).toBeUndefined()
   })
 })
 

@@ -1,9 +1,15 @@
-// 提示词模板装载与渲染(文案与逻辑分离)。全部会话提示词以文件模板管理: 内置
-// 模板在 templates/prompts/(经 `with { type: "file" }` 编译期嵌入二进制,
-// readFileSync 在编译产物中同样可读嵌入路径);目标目录 .opencode/auto/prompts/
-// 下同名 .md 可覆盖内置模板(_partials.md 按节名合并共享片段);外壳另可经
-// registerTemplate 登记附加模板(物理拆包后的壳层扩展点)。协议敏感模板覆盖时
-// 校验关键协议内容仍在,防止覆盖后丢失 driver 解析会话产出的依据。
+// Prompt-template loading and rendering (copy separated from logic). All
+// session prompts live as file templates: built-ins under templates/prompts/
+// (embedded into the binary at compile time via `with { type: "file" }`;
+// readFileSync resolves the embedded paths in the compiled artifact as well);
+// same-named .md files in the target directory's .opencode/auto/prompts/
+// override them (_partials.md merges shared partials per section); shells may
+// additionally register templates via registerTemplate and individual partial
+// sections via registerPartial (the shell extension points after the physical
+// package split). Overrides of protocol-sensitive templates/partial sections
+// are validated at load time for their tier-1 markers, so an override cannot
+// silently drop the anchors the driver parses session output against (the
+// two-tier marker model is documented above PROTOCOL_MARKERS).
 //
 // 模板语法(刻意保持最小;清单类数据由调用方预拼接为字符串,不做循环):
 //   {{var}}             变量: string 直接替换;boolean/undefined 渲染为空
@@ -92,9 +98,13 @@ const embedded: Record<string, string> = {
   _partials: tplPartials,
 }
 
-// 协议敏感模板的必备内容: 目标目录覆盖这些模板时,装载期校验协议标记仍在。
-// decompose 一族(M1.0 合并理解与分解会话,plans/0030): 检查项格式 + context.md
-// 与 todo.md 产物路径是 driver 校验会话产出的依据。
+// Protocol markers are two-tiered (M1.3, plans/0033; open question 3 of the
+// root plan): tier-1 = driver-enforced protocol anchors (the strings the
+// driver itself parses out of session output, or whose loss silently breaks
+// the driver↔session contract) — an override missing any of them is rejected
+// at load time as a usage error; tier-2 = intent content (quality bars,
+// duties, governance) — marker-free by definition, it lives in intent packs
+// and is never guarded here. Everything currently listed below is tier-1.
 const PROTOCOL_MARKERS: Record<string, string[]> = {
   decompose: ["- [ ]", "context.md", "todo.md"],
   "decompose-a": ["- [ ]", "context.md", "todo.md"],
@@ -116,12 +126,31 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "verify-judge": ["结论: 通过", "结论: 差距", "结论: 重验", ".auto/verify.md", "verified-command"],
   "verify-script-gen": ["#!/usr/bin/env bash"],
 }
+// (decompose family: the checklist format plus the context.md / todo.md
+// artifact paths are what the driver validates the session output against —
+// M1.0 merged understand+decompose session, plans/0030.)
 
-// 动态注册表: 外壳经 registerTemplate 登记的附加模板与协议标记。独立于 embedded
-// 存放,usePromptLibrary 重载(目标目录覆盖装载)后仍保留;与内置模板同名时注册
-// 内容生效(外壳可整体替换内置文案),目标目录覆盖始终为最高优先。
+// Tier-1 markers for shared partial sections (M1.3): the target directory's
+// _partials.md overlay merges per section; overriding one of these sections
+// must preserve the anchors the driver depends on — the eof doc-shape marker,
+// the state-file exclusivity surface, and the question/annotation protocol
+// (AUTO-RESOLVE/AUTO-DECISION lines are what src/resolve.ts scans for in the
+// session's documents). Sections not listed here are marker-free.
+const PARTIAL_MARKERS: Record<string, string[]> = {
+  "eof-rule": ["<!-- auto: eof -->"],
+  "state-rule": ["PLAN.md", "CURRENT.md"],
+  "question-rule": ["question 工具", "AUTO-RESOLVE", "AUTO-DECISION"],
+}
+
+// Dynamic registries: shells register additional templates (registerTemplate)
+// and individual shared-partial sections (registerPartial), each with optional
+// tier-1 markers. Stored apart from the built-ins so they survive
+// usePromptLibrary reloads; same-named registrations take precedence over
+// built-ins, and target-directory overrides always win over both.
 const registered: Record<string, string> = {}
 const registeredMarkers: Record<string, string[]> = {}
+const registeredPartials: Record<string, string> = {}
+const registeredPartialMarkers: Record<string, string[]> = {}
 
 type Library = { dir: string | undefined; templates: Record<string, string>; partials: Record<string, string> }
 
@@ -144,7 +173,8 @@ function loadLibrary(dir: string | undefined): Library {
   for (const [name, path] of Object.entries(embedded)) templates[name] = readTemplate(path)
   Object.assign(templates, registered)
   const markers = { ...PROTOCOL_MARKERS, ...registeredMarkers }
-  let partials = parsePartials(templates["_partials"]!)
+  const partialMarkers = { ...PARTIAL_MARKERS, ...registeredPartialMarkers }
+  let partials = { ...parsePartials(templates["_partials"]!), ...registeredPartials }
   if (dir) {
     const overlayDir = join(dir, ".opencode", "auto", "prompts")
     for (const file of readOverlayDir(overlayDir).sort()) {
@@ -152,7 +182,19 @@ function loadLibrary(dir: string | undefined): Library {
       const name = file.slice(0, -3)
       const content = readTemplate(join(overlayDir, file))
       if (name === "_partials") {
-        partials = { ...partials, ...parsePartials(content) }
+        // Per-section merge with tier-1 marker validation per overridden
+        // section (same enforcement as template-level markers).
+        const sections = parsePartials(content)
+        for (const [section, body] of Object.entries(sections)) {
+          const missing = (partialMarkers[section] ?? []).filter((marker) => !body.includes(marker))
+          if (missing.length) {
+            throw new Error(
+              `共享片段覆盖 ${join(".opencode", "auto", "prompts", file)} 的 ${section} 节缺少关键协议内容: ${missing.join("、")}` +
+                `(协议行是 driver 解析会话产出的依据,不能删除)`,
+            )
+          }
+        }
+        partials = { ...partials, ...sections }
         continue
       }
       const missing = (markers[name] ?? []).filter((marker) => !content.includes(marker))
@@ -179,13 +221,16 @@ export function usePromptLibrary(dir: string | undefined): void {
   cache.clear()
 }
 
-// 登记附加模板(外壳启动时调用): text 为模板全文(支持与内置相同的模板语法),
-// markers 为协议敏感模板的必备内容(目标目录覆盖时的校验依据,同 PROTOCOL_MARKERS,
-// 省略 = 非协议敏感)。重复注册以后者为准;_partials 走目标目录覆盖机制,不接受
-// 注册。注册即时生效并跨 usePromptLibrary 重载保留。
+// Register an additional template (called by shells at startup): text is the
+// full template body (same template syntax as built-ins); markers declare the
+// tier-1 protocol anchors a target-directory override must preserve (same
+// semantics as PROTOCOL_MARKERS; omitted = not protocol-sensitive). Re-
+// registering replaces the previous registration. `_partials` is rejected:
+// shared partials register per section via registerPartial. Registrations
+// take effect immediately and survive usePromptLibrary reloads.
 export function registerTemplate(name: string, text: string, markers?: string[]): void {
   if (!name) throw new Error("模板名不能为空")
-  if (name === "_partials") throw new Error("共享片段经目标目录 _partials.md 覆盖,不接受注册")
+  if (name === "_partials") throw new Error("共享片段按节注册(registerPartial)或经目标目录 _partials.md 覆盖,不接受整份注册")
   const content = text.trim()
   if (!content) throw new Error(`模板 ${name} 的内容不能为空`)
   registered[name] = content
@@ -193,6 +238,24 @@ export function registerTemplate(name: string, text: string, markers?: string[])
   else delete registeredMarkers[name]
   library.templates[name] = content
   cache.delete(name)
+}
+
+// Register one shared-partial section (M1.3, plans/0033): the registerTemplate
+// counterpart for the `_partials` surface. name is the section name
+// (`## <name>` in _partials.md); a same-named registration replaces the
+// built-in section. markers declare tier-1 anchors that a target-directory
+// _partials.md overlay must preserve when overriding this section. Takes
+// effect immediately and survives usePromptLibrary reloads; a target-directory
+// overlay of the section still wins over the registration.
+export function registerPartial(name: string, text: string, markers?: string[]): void {
+  if (!name) throw new Error("片段名不能为空")
+  const content = text.trim()
+  if (!content) throw new Error(`片段 ${name} 的内容不能为空`)
+  registeredPartials[name] = content
+  if (markers && markers.length) registeredPartialMarkers[name] = markers
+  else delete registeredPartialMarkers[name]
+  library.partials[name] = content
+  cache.delete(`@${name}`)
 }
 
 export function renderTemplate(name: string, ctx: Ctx): string {

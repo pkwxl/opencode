@@ -117,7 +117,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
       mkdirSync(overlay, { recursive: true })
       writeFileSync(
         join(overlay, "_partials.md"),
-        "# 覆盖\n\n## question-rule\n{{#if ask}}ASK-ON-BRANCH{{/if}}{{^ask}}ASK-OFF-BRANCH{{/if}}\n",
+        "# 覆盖\n\n## question-rule\nquestion 工具 AUTO-RESOLVE AUTO-DECISION {{#if ask}}ASK-ON-BRANCH{{/if}}{{^ask}}ASK-OFF-BRANCH{{/if}}\n",
       )
       usePromptLibrary(dir)
       // 测试进程未设 OPENCODE_AUTO_ASK,autoSwitches().ask === false —— 出口注入

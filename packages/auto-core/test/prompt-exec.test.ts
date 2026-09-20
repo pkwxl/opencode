@@ -147,7 +147,7 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       mkdirSync(overlay, { recursive: true })
       writeFileSync(
         join(overlay, "default.md"),
-        "# default\n\n## quality\n\nCUSTOM-RULE {{contextBudget}}\n\n## phase duties\n\n### m 迁移实现\n\nCUSTOM-DUTIES {{phaseName}}\n",
+        "# default\n\n## quality\n\n### decompose\n\nCUSTOM-RULE {{contextBudget}}\n\n## phase duties\n\n### m 迁移实现\n\nCUSTOM-DUTIES {{phaseName}}\n",
       )
       useIntentPacks(dir)
       const text = renderDecompose(plan, task)
@@ -178,6 +178,68 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       expect(text).toContain("任务背景理解与子任务分解,不写实现代码")
       expect(text).toContain("- [ ] <子任务描述;末尾注明该项的产出>")
       expect(text).not.toMatch(/\{\{|\}\}/)
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
+  const subtask = "编写迁移脚本的 schema 部分"
+
+  test("内置包: 子任务与整任务模板各自注入对应范围的自查句", () => {
+    expect(renderSubtask(plan, task, subtask)).toContain("自我检查该子任务是否真正完成")
+    expect(renderWhole(plan, task)).toContain("完成整个任务后自我检查是否真正完成")
+    // 两句不同文: 子任务句不带"完成整个任务后"前缀,整任务句不带"该子任务"
+    expect(renderSubtask(plan, task, subtask)).not.toContain("完成整个任务后自我检查")
+    expect(renderWhole(plan, task)).not.toContain("该子任务是否真正完成")
+  })
+
+  test("项目覆盖 default 包即替换自查句,useIntentPacks 装载生效", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(
+        join(overlay, "default.md"),
+        "# default\n\n## quality\n\n### self-check-subtask\n\nCUSTOM-SUBTASK-CHECK\n\n### self-check-whole\n\nCUSTOM-WHOLE-CHECK\n",
+      )
+      useIntentPacks(dir)
+      const sub = renderSubtask(plan, task, subtask, { verify: true })
+      expect(sub).toContain("CUSTOM-SUBTASK-CHECK")
+      expect(sub).not.toContain("自我检查该子任务是否真正完成")
+      // 核心协议不受影响: 验收交接描述与收尾步骤仍在
+      expect(sub).toContain("独立审核会话")
+      const whole = renderWhole(plan, task)
+      expect(whole).toContain("CUSTOM-WHOLE-CHECK")
+      expect(whole).not.toContain("完成整个任务后自我检查是否真正完成")
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+    expect(renderSubtask(plan, task, subtask)).toContain("自我检查该子任务是否真正完成")
+  })
+
+  test("零意图基线: 空 default 包覆盖时自查项整行消失,核心协议保留且无残渣", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), "# default\n\n## quality\n")
+      useIntentPacks(dir)
+      const sub = renderSubtask(plan, task, subtask, { verify: true })
+      expect(sub).not.toContain("自我检查")
+      // 收尾步骤仍在(b/c 项保留既有编号,0032 D4 的编号取舍同口径)
+      expect(sub).toContain("3. 收尾:")
+      expect(sub).toContain("可新增但不要修改 docs/ 中的内容")
+      const whole = renderWhole(plan, task, { verify: true })
+      expect(whole).not.toContain("自我检查")
+      expect(whole).toContain("约束:")
+      for (const text of [sub, whole]) {
+        expect(text).not.toMatch(/\{\{|\}\}/)
+        expect(text).not.toMatch(/\n\n\n/)
+      }
     } finally {
       useIntentPacks(undefined)
       rmSync(dir, { recursive: true, force: true })

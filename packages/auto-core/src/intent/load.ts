@@ -15,9 +15,11 @@
 // Section bodies may use the prompt template syntax ({{var}}/{{#if}}), same
 // license as mode files (prompt.ts renders mode sections with the render
 // context); the assembly point renders them with the prompt context before
-// injecting them as data. The `## phase duties` section is addressed per
-// phase by `### <key>` subsections (dutiesForPhase); the M3 phase registry's
-// dutiesRef will point at these.
+// injecting them as data. Sections are subdivided by `### <key>` subsections
+// (packSubsection): `## phase duties` is keyed by phase letter (the M3 phase
+// registry's dutiesRef will point at these), `## quality` carries the
+// decompose criteria (`### decompose`) and the closing self-check sentences
+// (`### self-check-subtask` / `### self-check-whole`, M1.3).
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DEFAULT_INTENT, INTENT_SECTIONS, type IntentPack, type IntentSection } from "./types"
@@ -79,14 +81,14 @@ export function resolveIntent(packs: Record<string, IntentPack>, name: string = 
   return pack
 }
 
-// Per-phase duties addressing: the `## phase duties` section is subdivided by
-// `### <key>` subsections (key = phase letter today; the heading may carry a
-// human-readable suffix after the key, e.g. `### m 迁移实现`). Returns the
-// trimmed body of the matching subsection; undefined when the section or the
-// key is absent (zero-intent baseline: the template then renders no duties).
-// Text before the first `###` heading is not addressable and never injected.
-export function dutiesForPhase(pack: IntentPack, key: string): string | undefined {
-  const lines = pack.phaseDuties?.split("\n")
+// Subsection addressing (generalized in M1.3, plans/0033): any section may be
+// subdivided by `### <key>` subsections (the heading may carry a human-readable
+// suffix after the key, e.g. `### m 迁移实现`). Returns the trimmed body of the
+// matching subsection; undefined when the section or the key is absent
+// (zero-intent baseline: the template then renders nothing for it). Text
+// before the first `###` heading is not addressable and never injected.
+export function packSubsection(pack: IntentPack, section: IntentSection, key: string): string | undefined {
+  const lines = pack[section]?.split("\n")
   if (!lines) return undefined
   const bodies = new Map<string, string[]>()
   let current: string | undefined
@@ -103,6 +105,12 @@ export function dutiesForPhase(pack: IntentPack, key: string): string | undefine
   if (!body) return undefined
   const text = trimBody(body).join("\n")
   return text || undefined
+}
+
+// Per-phase duties addressing (M1.2, plans/0032): `## phase duties` keyed by
+// phase letter; the M3 phase registry's dutiesRef will point at these.
+export function dutiesForPhase(pack: IntentPack, key: string): string | undefined {
+  return packSubsection(pack, "phaseDuties", key)
 }
 
 // Parse a pack file; throws on a missing/mismatched title or an unknown
