@@ -50,7 +50,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Question policy and proxy-answer audit (OPENCODE_AUTO_ASK, AUTO-RESOLVE/AUTO-DECISION) → `src/resolve.ts` + `templates/prompts/_partials.md` question-rule (0020)
 - Shell profile → `src/shell.ts`
 - Stable references, round directories (docs/R-NN), and reference checking → `src/docpaths.ts` + `src/refcheck.ts` (0010; refcheck scope narrowing see 0013)
-- Module split and dependency direction (lower layers must not import runner; testrun must not import the session-driving layer) → 0024 §D.2
+- Module split and dependency direction (lower layers must not import runner; testrun must not import the session-driving layer) → 0024 §D.2; direction rules (incl. D8 domain boundaries) are enforced by `test/import-direction.test.ts` — a new cross-module import may require a conscious table edit there
 - Full file inventory and mechanism details → docs/structure.md; the retired behavior contract (historical, not maintained) → plans/0029-behavior-historical.md
 
 ## Core invariants (read before changing)
