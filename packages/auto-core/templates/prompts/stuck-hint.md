@@ -1,20 +1,20 @@
-[DRIVER] 循环检测: {{#if repeatError}}工具 {{tool}} 已经 {{count}} 次以完全相同的报错失败。{{/if}}{{^repeatError}}工具 {{tool}} 已经 {{count}} 次以相同的参数得到完全相同的结果。{{/if}}
+[DRIVER] Loop detected: {{#if repeatError}}the tool {{tool}} has now failed {{count}} times with exactly the same error.{{/if}}{{^repeatError}}the tool {{tool}} has now returned exactly the same result {{count}} times for the same arguments.{{/if}}
 
-- 工具: {{tool}}
-- 参数: {{input}}
-- {{#if repeatError}}报错{{/if}}{{^repeatError}}输出{{/if}}: {{detail}}
+- Tool: {{tool}}
+- Arguments: {{input}}
+- {{#if repeatError}}Error{{/if}}{{^repeatError}}Output{{/if}}: {{detail}}
 
-重复同一个动作不会得到不同的结果,这一路已经走不通了。
+Repeating the same action will not produce a different result; this route is a dead end.
 {{#if level1}}
-先停下来核对前提再动手: 路径与文件是否真的存在?文件当前内容是否与你以为的一致(改之前先读一遍)?命令、参数、依赖是否可用?然后换一种手段——换工具、换定位方式(按内容搜索而非按行号)、把大改动拆成小步、或先补齐缺的前置条件。不要再以相同参数重复同一调用。
+Stop and check your premises before acting again: do the path and the file really exist? Is the file's current content what you believe it to be (read it before changing it)? Are the command, the arguments and the dependencies usable? Then switch means — use another tool, locate things another way (search by content rather than by line number), split a large change into small steps, or supply the missing precondition first. Do not repeat the same call with the same arguments.
 {{/if}}
 {{#if level2}}
-这已是第 {{level}} 次提醒,说明上一次换的思路仍在原地打转。先在回复里写清三件事,再动手:
-1. 你要达成的具体目标是什么;
-2. 已经试过哪些做法、各自失败在哪一步(引用真实报错,不要凭印象);
-3. 下一步换用哪一种此前没试过的做法,理由是什么。
-禁止在写清之前再次发起同一个调用。
+This is reminder number {{level}}, which means the approach you switched to last time is still going in circles. Write these three things out in your reply before acting:
+1. what exactly you are trying to achieve;
+2. which approaches you have already tried, and at which step each one failed (quote the real error, do not go by impression);
+3. which previously untried approach you will use next, and why.
+Do not issue the same call again before you have written these out.
 {{/if}}
 {{#if level3}}
-这是最后一次提醒,DRIVER 之后不再打扰。停止重试: 若这个问题当前确实解决不了,以 `AUTO-FIXME: <原因与计划>` 在相关代码注释或 docs/ 文档中标注遗留,把已完成与未完成的部分交代清楚后结束本次会话,由 DRIVER 推进后续流程;若还有明确未试过且有把握的方案,只试这一个,不成即按上面的方式收尾。
+This is the last reminder; the DRIVER will not interrupt again. Stop retrying: if this problem really cannot be solved right now, mark the leftover with `AUTO-FIXME: <reason and plan>` in the relevant code comment or in a document under docs/, state clearly which parts are done and which are not, and end this session so that the DRIVER can carry the process forward; if there is still one clearly untried approach you are confident in, try that one alone, and if it fails, close out as described above.
 {{/if}}

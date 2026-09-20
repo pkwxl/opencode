@@ -42,17 +42,17 @@ describe("渲染器", () => {
 
   test("片段引用: 共享片段按当前上下文渲染(片段内可用变量)", () => {
     usePromptLibrary(undefined)
-    expect(renderText("{{> state-rule}}", {})).toContain("由 DRIVER 独占维护")
-    expect(renderText("{{> state-rule}}", {})).toContain("git 提交由 DRIVER 在会话结束后统一执行")
+    expect(renderText("{{> state-rule}}", {})).toContain("are maintained by the DRIVER alone")
+    expect(renderText("{{> state-rule}}", {})).toContain("Git commits are made by the DRIVER in one pass after the session ends")
   })
 
   test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
     usePromptLibrary(undefined)
     const standalone = renderText("前:\n   {{> state-rule}}\n后", { verify: true })
-    expect(standalone.split("\n")[1]).toBe("   PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。")
-    expect(standalone.split("\n")[2]).toBe("   git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。")
+    expect(standalone.split("\n")[1]).toBe("   PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks, the verified field); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.")
+    expect(standalone.split("\n")[2]).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.")
     const inline = renderText("前:\n   {{> state-rule}};尾", { verify: true })
-    expect(inline.split("\n").at(-1)).toBe("   git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。;尾")
+    expect(inline.split("\n").at(-1)).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.;尾")
   })
 })
 
@@ -66,16 +66,16 @@ describe("共享片段解析", () => {
   test("doc-layout 节存在且不含模板变量;任务模板引用渲染为永久路径规范", () => {
     usePromptLibrary(undefined)
     const text = renderText("{{> doc-layout}}", {})
-    expect(text).toContain("文档存放规范")
+    expect(text).toContain("Document placement rules")
     expect(text).toContain("docs/T-NNN/")
-    expect(text).toContain("S<两位序号>/index.md")
-    expect(text).toContain("永久路径")
-    expect(text).toContain("不要在 docs/ 顶层另建平铺任务文件")
+    expect(text).toContain("S<two-digit index>/index.md")
+    expect(text).toContain("these paths are permanent")
+    expect(text).toContain("do not create flat task files at the top level of docs/")
     // 不含模板变量: phase-plan 等无 taskId 的模板同样可引用
     expect(text).not.toMatch(/\{\{|\}\}/)
     // 引用渲染: decompose(任务文档写者)与 phase-plan(无 taskId 的规划者)都带该段
-    expect(renderTemplate("decompose", { taskId: "T-001", taskBlock: "x" })).toContain("文档存放规范")
-    expect(renderTemplate("phase-plan", { phase: "a", phaseName: "分析" })).toContain("文档存放规范")
+    expect(renderTemplate("decompose", { taskId: "T-001", taskBlock: "x" })).toContain("Document placement rules")
+    expect(renderTemplate("phase-plan", { phase: "a", phaseName: "分析" })).toContain("Document placement rules")
   })
 })
 
@@ -211,12 +211,12 @@ describe("分阶段分解模板 decompose-<phase>", () => {
         phaseDuties: "DUTIES-SENTINEL",
       })
       expect(text).toContain("- [ ]")
-      expect(text).toContain("任务背景理解与子任务分解,不写实现代码")
-      expect(text).toContain("当前处于阶段 阶段名")
+      expect(text).toContain("This session completes the task-background understanding and the subtask decomposition; it writes no implementation code")
+      expect(text).toContain("The current phase is 阶段名")
       expect(text).toContain("RULE-SENTINEL")
       expect(text).toContain("DUTIES-SENTINEL")
       // 注入点在检查项协议(5. 把分解结果写入…)之前
-      expect(text.indexOf("DUTIES-SENTINEL")).toBeLessThan(text.indexOf("5. 把分解结果写入"))
+      expect(text.indexOf("DUTIES-SENTINEL")).toBeLessThan(text.indexOf("5. Write the decomposition into"))
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
   })
@@ -258,11 +258,11 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "verify-judge.md"), "随便写的判定提示词,没有结论协议")
-      expect(() => usePromptLibrary(dir)).toThrow(/verify-judge\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/verify-judge\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
       // phase-handover 覆盖缺四个必备小节标题 → 同样报错;修复后再测 decompose
       writeFileSync(join(overlay, "phase-handover.md"), "自定义交接提示词,丢了小节协议")
-      expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/## 关键决策/)
       writeFileSync(
         join(overlay, "phase-handover.md"),
@@ -270,7 +270,7 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       )
       // decompose 覆盖丢 context.md/todo.md 产物协议(M1.0 合并会话)→ 同样报错
       writeFileSync(join(overlay, "decompose.md"), "自定义分解提示词,丢了产物协议与检查项格式")
-      expect(() => usePromptLibrary(dir)).toThrow(/decompose\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/decompose\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/context\.md/)
       expect(() => usePromptLibrary(dir)).toThrow(/todo\.md/)
     } finally {
@@ -299,13 +299,13 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则,丢了状态文件锚点。")
-      expect(() => usePromptLibrary(dir)).toThrow(/state-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/section state-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/PLAN\.md/)
       writeFileSync(join(overlay, "_partials.md"), "## eof-rule\n写完就行,不用终止符。")
-      expect(() => usePromptLibrary(dir)).toThrow(/eof-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/section eof-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/<!-- auto: eof -->/)
       writeFileSync(join(overlay, "_partials.md"), "## question-rule\n随意提问即可。")
-      expect(() => usePromptLibrary(dir)).toThrow(/question-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/section question-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/AUTO-RESOLVE/)
       // 未列名的节(如 digest-rule)非协议敏感,覆盖免标记
       writeFileSync(join(overlay, "_partials.md"), "## digest-rule\n自定义引用纪律。")
@@ -355,7 +355,7 @@ describe("动态注册(registerTemplate)", () => {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "shell-protocol.md"), "覆盖版丢了协议行")
-      expect(() => usePromptLibrary(dir)).toThrow(/shell-protocol\.md 缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/shell-protocol\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
       writeFileSync(join(overlay, "shell-protocol.md"), "覆盖版保留协议行: 结论: 通过")
       usePromptLibrary(dir)
@@ -366,9 +366,9 @@ describe("动态注册(registerTemplate)", () => {
   })
 
   test("空模板名 / 空内容 / _partials 整份注册拒绝(按节走 registerPartial)", () => {
-    expect(() => registerTemplate("", "内容")).toThrow("模板名不能为空")
-    expect(() => registerTemplate("shell-empty", "   ")).toThrow("内容不能为空")
-    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow(/不接受整份注册/)
+    expect(() => registerTemplate("", "内容")).toThrow("template name must not be empty")
+    expect(() => registerTemplate("shell-empty", "   ")).toThrow("template shell-empty must not be empty")
+    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow(/whole-file registration is not accepted/)
     expect(() => registerTemplate("_partials", "## x\n内容")).toThrow(/registerPartial/)
   })
 })
@@ -417,7 +417,7 @@ describe("片段按节注册(registerPartial,M1.3)", () => {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "_partials.md"), "## shell-rule\n覆盖版丢了锚点。")
-      expect(() => usePromptLibrary(dir)).toThrow(/shell-rule 节缺少关键协议内容/)
+      expect(() => usePromptLibrary(dir)).toThrow(/section shell-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/KEEP-ME/)
       writeFileSync(join(overlay, "_partials.md"), "## shell-rule\n覆盖版保留 KEEP-ME 锚点。")
       usePromptLibrary(dir)
@@ -431,7 +431,7 @@ describe("片段按节注册(registerPartial,M1.3)", () => {
   })
 
   test("空片段名 / 空内容拒绝", () => {
-    expect(() => registerPartial("", "内容")).toThrow("片段名不能为空")
-    expect(() => registerPartial("shell-empty-partial", "   ")).toThrow("内容不能为空")
+    expect(() => registerPartial("", "内容")).toThrow("partial name must not be empty")
+    expect(() => registerPartial("shell-empty-partial", "   ")).toThrow("partial shell-empty-partial must not be empty")
   })
 })

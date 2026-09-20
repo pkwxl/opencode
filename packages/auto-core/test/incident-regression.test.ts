@@ -160,9 +160,9 @@ describe("I3 误判已完成零落盘(kernel-dm T-068 S01)", () => {
       // 首发 + 一次带反馈重提示,反馈复述权威状态(L1)防叙事误判。
       expect(calls.prompts.length).toBe(2)
       const feedback = String((calls.prompts[1]!.parts[0] as { text?: string })?.text ?? "")
-      expect(feedback).toContain("产物形检未过")
+      expect(feedback).toContain("artifacts did not pass the shape check")
       expect(feedback).toContain("T-001.S01")
-      expect(feedback).toContain("不要据此判断本子任务已完成")
+      expect(feedback).toContain("do not judge this subtask complete on that basis")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })

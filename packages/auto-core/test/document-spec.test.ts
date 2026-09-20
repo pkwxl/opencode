@@ -130,7 +130,7 @@ describe('checkArtifactSpecs(policy "declared",子任务循环声明产出)', ()
       { path: "docs/old.md", role: "artifact" },
     ]
     const result = await checkArtifactSpecs(specs, { dir, policy: "declared", fresh: new Set(["docs/new.md"]) })
-    expect(result.problems).toEqual(["docs/new.md: 末行终止符缺失(最后一行正文须为 <!-- auto: eof -->)"])
+    expect(result.problems).toEqual(["docs/new.md: missing last-line terminator (the last line of body text must be <!-- auto: eof -->)"])
     expect(result.shaped).toEqual(["docs/new.md"])
   })
 
@@ -172,8 +172,8 @@ describe('checkArtifactSpecs(policy "mandatory",合并分解会话单元产物)'
   test("无 label 时问题行只含路径;短内容/缺终止符走形检文案", async () => {
     await put("docs/a.md", "# 空壳\n\n(略)\n")
     const result = await checkArtifactSpecs([{ path: "docs/a.md", role: "artifact" }], { dir, policy: "mandatory" })
-    expect(result.problems.join("; ")).toContain("docs/a.md: 内容过短")
-    expect(result.problems.join("; ")).toContain("末行终止符缺失")
+    expect(result.problems.join("; ")).toContain("docs/a.md: content too short")
+    expect(result.problems.join("; ")).toContain("missing last-line terminator")
   })
 
   test("fallbackPath 回落读(D4): 规范路径缺失、旧平铺存在且合规 → 通过", async () => {

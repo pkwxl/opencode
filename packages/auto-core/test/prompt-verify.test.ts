@@ -26,8 +26,8 @@ describe("renderVerifyScriptGen", () => {
     expect(text).toContain("验证的执行权在 DRIVER")
     expect(text).toContain("产出该脚本是硬性要求")
     expect(text).toContain('任务 verify 字段是"command: bun test"')
-    expect(text).toContain("question 工具")
-    expect(text).toContain("由 DRIVER 独占维护")
+    expect(text).toContain("question tool")
+    expect(text).toContain("maintained by the DRIVER alone")
   })
 
   test("自然语言 verify 同样给出验收标准语义", () => {
@@ -114,7 +114,7 @@ describe("renderReview", () => {
     expect(text).toContain("只审不改")
     expect(text).toContain("结论: 通过")
     expect(text).toContain("结论: 差距")
-    expect(text).toContain("由 DRIVER 独占维护")
+    expect(text).toContain("maintained by the DRIVER alone")
     expect(text).not.toContain("docs/final-audit.md")
   })
 
@@ -166,6 +166,6 @@ describe("renderReviewFix", () => {
     expect(text).toContain("只规划不修复")
     expect(text).toContain("唯一可写的文件是 docs/T-002/fix.md")
     expect(text).toContain("产出该文件是硬性要求")
-    expect(text).toContain("由 DRIVER 独占维护")
+    expect(text).toContain("maintained by the DRIVER alone")
   })
 })

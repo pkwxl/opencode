@@ -32,21 +32,21 @@ describe("内置模式", () => {
     const mode = modes.migrate!
     expect(mode.name).toBe("migrate")
     // init 导语: 场景定义、任务排布原则、verify 侧重
-    expect(mode.init).toContain("外部行为不变")
-    expect(mode.init).toContain("基线确认")
-    expect(mode.init).toContain("迁移改造")
-    expect(mode.init).toContain("回归验证")
-    expect(mode.init).toContain("优先复用既有的测试/构建命令")
+    expect(mode.init).toContain("externally visible behaviour stays the same")
+    expect(mode.init).toContain("baseline confirmation")
+    expect(mode.init).toContain("migration work")
+    expect(mode.init).toContain("regression verification")
+    expect(mode.init).toContain("prefer reusing an existing test/build command")
     // exec 注记: 对等行为、兼容层与 AUTO-DECISION 标注要求
-    expect(mode.exec).toContain("对等行为")
-    expect(mode.exec).toContain("兼容层")
+    expect(mode.exec).toContain("behaviourally equivalent")
+    expect(mode.exec).toContain("compatibility layer")
     expect(mode.exec).toContain("AUTO-DECISION")
     // final 各阶段侧重
-    expect(mode.final.audit).toContain("行为对等")
-    expect(mode.final.audit).toContain("旧路径")
-    expect(mode.final.validate).toContain("回归覆盖")
-    expect(mode.final.finalize).toContain("旧实现的清理")
-    expect(mode.final.finalize).toContain("兼容层的收尾")
+    expect(mode.final.audit).toContain("behavioural equivalence")
+    expect(mode.final.audit).toContain("leftover old paths")
+    expect(mode.final.validate).toContain("cover the baseline behaviour adequately")
+    expect(mode.final.finalize).toContain("cleaning up the old implementation")
+    expect(mode.final.finalize).toContain("closing out the compatibility layers")
   })
 
   test("未注册名不在注册表中(optimize/implement/test 须由目标目录提供)", () => {
@@ -70,7 +70,7 @@ describe("目标目录模式扩展(.opencode/auto/modes/)", () => {
       expect(modes.optimize!.init).toContain("优化导语")
       // 同名覆盖: 内置 migrate 的文案被目标目录版本替换
       expect(modes.migrate!.init).toContain("自定义导语")
-      expect(modes.migrate!.init).not.toContain("外部行为不变")
+      expect(modes.migrate!.init).not.toContain("externally visible behaviour stays the same")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -85,12 +85,12 @@ describe("目标目录模式扩展(.opencode/auto/modes/)", () => {
       writeFileSync(join(overlay, "mismatch.md"), modeText("其他名字"))
       writeFileSync(join(overlay, "incomplete.md"), `# incomplete\n\n## init\n只有一节。\n`)
       writeFileSync(join(overlay, "unknown.md"), `${modeText("unknown")}\n## extra\n多余节。\n`)
-      expect(() => loadModes(dir)).toThrow(/Bad_Name\.md 不合法/)
-      expect(() => parseModeFile("mismatch", modeText("其他名字"))).toThrow(/首行须为 "# mismatch"/)
+      expect(() => loadModes(dir)).toThrow(/Bad_Name\.md is invalid/)
+      expect(() => parseModeFile("mismatch", modeText("其他名字"))).toThrow(/must start with "# mismatch"/)
       expect(() => parseModeFile("incomplete", `# incomplete\n\n## init\n只有一节。\n`)).toThrow(
-        /缺少节: ## exec、## final: audit/,
+        /is missing sections: ## exec, ## final: audit/,
       )
-      expect(() => parseModeFile("unknown", `${modeText("unknown")}\n## extra\n多余节。\n`)).toThrow(/未知节/)
+      expect(() => parseModeFile("unknown", `${modeText("unknown")}\n## extra\n多余节。\n`)).toThrow(/has unknown section/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -104,7 +104,7 @@ describe("目标目录模式扩展(.opencode/auto/modes/)", () => {
     expect(spec.init).toBe("导语。")
     expect(spec.final.finalize).toBe("c")
     expect(() => parseModeFile("y", `# y\n\n## init\n\n\n## exec\n注记。\n## final: audit\na\n## final: validate\nb\n## final: finalize\nc\n`)).toThrow(
-      /缺少节/,
+      /is missing sections/,
     )
   })
 })

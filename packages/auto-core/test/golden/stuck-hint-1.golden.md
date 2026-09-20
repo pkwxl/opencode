@@ -1,8 +1,8 @@
-[DRIVER] 循环检测: 工具 bash 已经 3 次以相同的参数得到完全相同的结果。
+[DRIVER] Loop detected: the tool bash has now returned exactly the same result 3 times for the same arguments.
 
-- 工具: bash
-- 参数: git status
-- 输出: (空)
+- Tool: bash
+- Arguments: git status
+- Output: (空)
 
-重复同一个动作不会得到不同的结果,这一路已经走不通了。
-先停下来核对前提再动手: 路径与文件是否真的存在?文件当前内容是否与你以为的一致(改之前先读一遍)?命令、参数、依赖是否可用?然后换一种手段——换工具、换定位方式(按内容搜索而非按行号)、把大改动拆成小步、或先补齐缺的前置条件。不要再以相同参数重复同一调用。
+Repeating the same action will not produce a different result; this route is a dead end.
+Stop and check your premises before acting again: do the path and the file really exist? Is the file's current content what you believe it to be (read it before changing it)? Are the command, the arguments and the dependencies usable? Then switch means — use another tool, locate things another way (search by content rather than by line number), split a large change into small steps, or supply the missing precondition first. Do not repeat the same call with the same arguments.

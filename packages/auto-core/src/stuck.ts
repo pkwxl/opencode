@@ -119,10 +119,11 @@ function stableJson(value: unknown): string {
   }
 }
 
-// 展示用摘要: 首尾去空白 + 超长截断(注入提示词,只为让模型认出是哪一次调用)。
+// Display summary: trimmed at both ends + truncated when overlong (injected into
+// the prompt, only so the model can recognize which call it was).
 function summarize(text: string, max: number): string {
   const trimmed = text.trim()
-  return trimmed.length > max ? `${trimmed.slice(0, max)}…(已截断)` : trimmed
+  return trimmed.length > max ? `${trimmed.slice(0, max)}… (truncated)` : trimmed
 }
 
 // FNV-1a 32 位: 只用于把长文本压成短签名键,不做安全用途。

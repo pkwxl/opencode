@@ -121,7 +121,7 @@ describe("createStuckTracker(边界)", () => {
     const hit = tracker.observe(fail({ input: { text: "x".repeat(5000) }, result: "y".repeat(5000) }))
     expect(hit!.input.length).toBeLessThan(400)
     expect(hit!.detail.length).toBeLessThan(900)
-    expect(hit!.detail).toContain("已截断")
+    expect(hit!.detail).toContain("… (truncated)")
   })
 
   test("循环引用的参数不抛异常", () => {

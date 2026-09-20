@@ -36,7 +36,7 @@ describe("renderFinalTask", () => {
     expect(text).toContain("只规划不实施")
     expect(text).toContain("产出该提案文件是硬性要求")
     // STATE_RULE / QUESTION_RULE
-    expect(text).toContain("由 DRIVER 独占维护")
+    expect(text).toContain("maintained by the DRIVER alone")
     expect(text).toContain("AUTO-DECISION")
     // 首轮不做回退重审措辞
     expect(text).not.toContain("不做全量重审")
@@ -61,7 +61,7 @@ describe("renderFinalTask", () => {
 
   test("audit 首轮注入 migrate 的终审侧重;不传模式时不注入", () => {
     expect(renderFinalTask(plan, "audit", 1, "", migrate)).toContain("场景模式侧重(migrate)")
-    expect(renderFinalTask(plan, "audit", 1, "", migrate)).toContain("行为对等")
+    expect(renderFinalTask(plan, "audit", 1, "", migrate)).toContain("behavioural equivalence")
     expect(renderFinalTask(plan, "audit", 1, "", undefined)).not.toContain("场景模式侧重")
     // 无 prior 时不带上游输入块
     expect(renderFinalTask(plan, "audit", 1, "", migrate)).not.toContain("上游输入(终审上游产物指针与残余差距原文)")
@@ -91,11 +91,11 @@ describe("renderFinalTask", () => {
     expect(validate).toContain("docs/T-F1/validate-r1.md")
     expect(validate).toContain("结论: 通过")
     expect(validate).toContain("结论: 差距 <描述>")
-    expect(validate).toContain("回归覆盖")
+    expect(validate).toContain("What regression means in a migration scenario")
     const finalize = renderFinalTask(plan, "finalize", 1, "docs/T-F3/validate-r1.md 末行: 结论: 通过", migrate)
     expect(finalize).toContain("docs/T-F1/plan-finalize-r1.md")
     expect(finalize).toContain("docs/T-F1/finalize.md")
-    expect(finalize).toContain("兼容层的收尾")
+    expect(finalize).toContain("closing out the compatibility layers")
   })
 })
 
@@ -369,15 +369,15 @@ describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowled
     expect(text).toContain("可验证锚点")
     expect(text).toContain("已否决")
     expect(text).toContain("唯一可写的文件是 " + FILE)
-    expect(text).toContain("由 DRIVER 独占维护")
-    expect(text).toContain("git 提交由 DRIVER 在会话结束后统一执行")
+    expect(text).toContain("maintained by the DRIVER alone")
+    expect(text).toContain("Git commits are made by the DRIVER in one pass after the session ends")
     expect(text).toContain("只提炼、")
   })
 
   test("注入 mode.exec 场景背景;不传模式时整块消失", () => {
     const text = renderKnowledge({ file: FILE, mode: migrate })
     expect(text).toContain("场景模式注记(migrate)")
-    expect(text).toContain("迁移/升级模式注意事项")
+    expect(text).toContain("Migration/upgrade mode notes")
     expect(renderKnowledge({ file: FILE })).not.toContain("场景模式注记")
   })
 

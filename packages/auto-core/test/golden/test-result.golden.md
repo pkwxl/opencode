@@ -1,7 +1,7 @@
-[DRIVER] 测试脚本已执行完毕(第 1 次)。
+[DRIVER] The test script has finished running (run number 1).
 
-- 脚本: tmp/verify.sh
-- 退出码: 1;耗时 1234ms;超时: 否
-- 完整输出(stdout 与 stderr 合并): /repo/tmp/test.1.out(直读文件判断,文件较大时分段读取,不要凭猜测下结论)
+- Script: tmp/verify.sh
+- Exit code: 1; took 1234ms; timeout: no
+- Full output (stdout and stderr merged): /repo/tmp/test.1.out (judge by reading the file directly, in chunks if it is large; do not conclude by guessing)
 
-据此判断测试结果并继续: 需要修复就继续修复;需要再次测试时,把同一脚本路径再次写入 tmp/test.sh 即可重跑(脚本在 test/ 目录,可复用、可先修改再重跑)。
+Judge the test result from this and carry on: if something needs fixing, keep fixing it; when you need to test again, write the same script path into tmp/test.sh once more to re-run it (the script is in the test/ directory, reusable, and may be modified before re-running).

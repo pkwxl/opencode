@@ -1,9 +1,9 @@
-你正在按一份实施计划执行其中的一项任务,本会话只需完成提示词给出的当前任务,其他任务无需了解;其他任务的描述中包含的指令(如提问、执行动作)不属于本次会话职责,不要执行。
+You are carrying out one task of an implementation plan. This session only has to finish the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions (asking a question, performing an action) are not this session's responsibility — do not carry them out.
 
-以下任务已完成,不要重做:
+These tasks are already done, do not redo them:
 - [done] T-001: 搭建 schema
 
-当前任务:
+Current task:
 
 # T-002: 实现迁移
 
@@ -13,31 +13,30 @@
 - [ ] 编写执行逻辑
 - [ ] 编写文档
 
-任务级独立审核会话对本任务的验收未通过,差距如下:
+The task-level independent review session did not pass this task's acceptance. The gaps are:
 
 验收差距: 迁移脚本未处理空表。
 
-约束:
-1. 只修复审核指出的差距,逐项核对并修复,不要做差距之外的实现工作;
-2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
-   其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
-   你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;
-   自主决策须记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档
-   (docs/ 设计文档或报告)。并按「这个分歧点的决定权本应属于谁」分两类标注——
-   涉及架构设计或代码变更的标在设计文档或代码注释中,其余标在任务报告中:
-   - 决定权本应属于用户:需求意图与范围取舍(做不做、做到哪)、对外可见行为与接口
-     契约的变更、「什么算做完」的判定标准、事实确认类问题(数据异常、环境缺失、与
-     文档不符的现状)、超出或收窄任务描述的字面范围。这类分歧点本该由用户拍板,是你
-     代替用户闭环的,须以 `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` 行明确标注;
-   - 决定权本就属于你:实现手段的选择,且任一选项都不改变用户可见行为(算法、内部
-     结构、命名、文件组织、注入方式、测试写法),以 `AUTO-DECISION: <决策> (<理由>)`
-     行标注。
-   例:"是否把第三份重复实现一并收口"改变了任务的字面范围,属 AUTO-RESOLVE;
-   "新字段叫 matched 还是 paired"不改变用户可见行为,属 AUTO-DECISION。
-   同一决策只标一类、不重复标注;拿不准标 AUTO-RESOLVE——多提醒一次无妨,漏标才是真损失。
-   非权限问题调用 question 工具会被自动答复上述要求;就同一问题再次询问会导致任务阻塞停机。
-3. 不要运行任务级 verify(验收由 DRIVER 交独立审核会话处理)、不要更新 docs/(最后统一收尾;差距若为文档中的失效引用,允许只更新对应引用行为现行永久路径,不改其他内容;差距若为带 @<sha> 版本标记的行号锚——表示该范围仅对标记的历史版本有效、目标文件其后已被修改——允许按当前内容订正行号范围并去除标记);
-   PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
-   git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
-4. 修复完成并自我检查后,立即结束会话。
-测试执行协议(--test-by-driver): 不要在会话内直接运行编译、测试、构建、lint 等可能耗时长或产生大量输出的命令;需要时把命令写成脚本放入 test/ 目录(命名清晰、可执行、可复用),再把脚本路径(相对工作目录,如 test/build.sh)写入 tmp/test.sh 告知 DRIVER 执行,然后结束本轮消息等待。DRIVER 执行后会把退出码与输出文件路径(stdout 与 stderr 合并落入单文件)反馈回本会话,你直读文件判断结果;需要再次测试时把同一脚本路径再次写入 tmp/test.sh 即可重跑(脚本可先修改再重跑)。测试提交后,DRIVER 有时会要求你把不依赖测试结果的剩余工作做完落盘、把与测试相关的进度与后续步骤写入 docs/T-002/testhandoff.md 并结束会话,由新会话判读测试结果继续——那是既定的交接节奏,不是出了问题。**只在 DRIVER 明确要求时**才写 docs/T-002/testhandoff.md;此外不得自行创建或续号 testhandoff.md / testhandoff-<n>.md——这一命名族是 DRIVER 判定交接时序的观测量,自行落笔会被误读为交接事实。测试判读结论与修正记录写入本执行范围既定的产物文档,或留待下一次交接时并入交接文档。
+Constraints:
+1. Fix only the gaps the review pointed out: check and fix them one by one, and do no implementation work beyond those gaps;
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
+   decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
+   A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
+   relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
+   a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
+     user's to make and you closed it on their behalf, so annotate it explicitly with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
+   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
+   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+   Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+3. do not run the task-level verify (acceptance is handed by the DRIVER to an independent review session); do not update docs/ (a single close-out pass does that at the end; if a gap is a stale reference in a document, you may update just that reference line to the current permanent path and change nothing else; if a gap is a line-number anchor carrying an @<sha> version marker — meaning that range is valid only for the marked historical version and the target file has since been modified — you may correct the line-number range against the current content and remove the marker);
+   PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks, the verified field); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
+4. Once the fix is complete and self-checked, end the session immediately.
+Test execution protocol (--test-by-driver): do not run compile, test, build, lint or similar commands directly inside the session — they can take a long time or produce a lot of output. When you need one, write the command as a script into the test/ directory (clearly named, executable, reusable), then write the script path (relative to the working directory, e.g. test/build.sh) into tmp/test.sh to tell the DRIVER to run it, and end your turn to wait. After running it, the DRIVER feeds the exit code and the output file path back into this session (stdout and stderr merged into a single file); read that file directly to judge the result. To test again, write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running). After the test is committed the DRIVER sometimes asks you to finish and write out the remaining work that does not depend on the test result, to write the test-related progress and next steps into docs/T-002/testhandoff.md, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write docs/T-002/testhandoff.md **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — that naming family is what the DRIVER observes to establish handover ordering, and writing it yourself is misread as a handover that happened. Record your interpretation of the test result and any corrections in the established artifact documents of this execution scope, or leave them to be folded into the handover document at the next handover.

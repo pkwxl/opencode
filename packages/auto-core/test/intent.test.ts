@@ -72,11 +72,11 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     // joined in M1.3 (quality / ### self-check-subtask + ### self-check-whole);
     // the subtask output-placement convention joined in M1.4 (artifact spec /
     // ### subtask-output).
-    expect(packSubsection(pack, "quality", "decompose")).toContain("分解粒度准则")
-    expect(packSubsection(pack, "quality", "self-check-subtask")).toBe("自我检查该子任务是否真正完成")
-    expect(packSubsection(pack, "quality", "self-check-whole")).toBe("完成整个任务后自我检查是否真正完成")
-    expect(packSubsection(pack, "artifactSpec", "subtask-output")).toContain("产出约定")
-    expect(pack.phaseDuties).toContain("垂直薄切片优先")
+    expect(packSubsection(pack, "quality", "decompose")).toContain("Decomposition granularity criteria")
+    expect(packSubsection(pack, "quality", "self-check-subtask")).toBe("check for yourself whether this subtask is genuinely complete")
+    expect(packSubsection(pack, "quality", "self-check-whole")).toBe("once the whole task is complete, check for yourself whether it is genuinely complete")
+    expect(packSubsection(pack, "artifactSpec", "subtask-output")).toContain("Artifact placement convention")
+    expect(pack.phaseDuties).toContain("Vertical thin slices first")
     // Sections with no migrated content yet stay absent (zero-intent baseline).
     expect(pack.acceptance).toBeUndefined()
     expect(pack.governance).toBeUndefined()
@@ -200,7 +200,7 @@ two lines.
   test("the built-in default pack carries duties for all six letters (M1.2 migration)", () => {
     const builtin = resolveIntent(loadIntents())
     for (const letter of ["a", "d", "m", "t", "v", "k"]) {
-      expect(dutiesForPhase(builtin, letter)).toContain("本阶段({{phaseName}})的切分与产出准则")
+      expect(dutiesForPhase(builtin, letter)).toContain("Splitting and artifact criteria for this phase ({{phaseName}})")
     }
   })
 })

@@ -116,10 +116,10 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
       expect(calls.forks).toEqual(["ses_new_1"])
       expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain("未过检查")
-      expect(feedback).toContain("末行终止符缺失")
+      expect(feedback).toContain("did not pass checks")
+      expect(feedback).toContain("missing last-line terminator")
       expect(feedback).toContain(EOF_MARK)
-      expect(feedback).not.toContain("相关文件与关键符号") // 不重发整份合并提示词
+      expect(feedback).not.toContain("Relevant files and key symbols") // 不重发整份合并提示词
       const reloaded = await load(join(dir, "PLAN.md"))
       expect(subtasks(reloaded.tasks[0]!.body).map((item) => item.text)).toEqual(["子任务甲 产出: docs/T-001/S01/index.md"])
       // 合并会话成功即记录 session 模式 fork 基点(plans/0030 D4)
@@ -234,7 +234,7 @@ describe("runWrapup 收尾报告门禁(D5,runner 主收尾与 review 修复轮�
       expect(calls.forks).toEqual(["ses_new_1"])
       expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain("末行终止符缺失")
+      expect(feedback).toContain("missing last-line terminator")
       expect(feedback).toContain(EOF_MARK)
       const message = await git(dir, "log", "-1", "--format=%B")
       expect(message).toContain("Auto-Stage: wrapup")

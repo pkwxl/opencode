@@ -1,28 +1,29 @@
 # migrate
 
 ## init
-本次计划属于迁移/升级场景,以保持外部行为不变为前提:
-- 任务按"基线确认 → 迁移改造 → 回归验证"排布: 先固化当前外部行为的基线
-  (既有测试、可复现的检查或行为快照),再做迁移改造,最后做回归验证;
+This plan belongs to a migration/upgrade scenario, on the premise that externally visible behaviour stays the same:
+- Arrange the tasks as "baseline confirmation → migration work → regression verification": first fix the baseline of the current external
+  behaviour (existing tests, reproducible checks or behaviour snapshots), then do the migration work, and do regression verification last;
 {{#if verify}}
-- 每个任务的 verify 字段优先复用既有的测试/构建命令,避免发明未运行过的检查;
+- For each task's verify field, prefer reusing an existing test/build command over inventing a check that has never been run;
 {{/if}}
-- 不夹带与迁移无关的功能变更或重构,确有必要时单独立项。
+- Do not smuggle in functional changes or refactoring unrelated to the migration; when one is genuinely needed, make it a task of its own.
 
 ## exec
-迁移/升级模式注意事项:
-- 新实现须与旧实现保持对等行为(输入输出、边界情形、错误路径均不得漂移);
-- 迁移期间引入的兼容层、临时分支或开关须注明用途与移除时机;
-- 凡为推进迁移而做出的取舍(暂留旧路径、简化某分支等)属于代码变更决策,
-  按 AUTO-DECISION 要求记录决策过程并标注。
+Migration/upgrade mode notes:
+- The new implementation must stay behaviourally equivalent to the old one (inputs and outputs, edge cases and error paths must not drift);
+- Any compatibility layer, temporary branch or switch introduced during the migration must state its purpose and when it is to be removed;
+- Every trade-off made to advance the migration (leaving an old path in place, simplifying a branch, and the like) is a code-change decision:
+  record how it was made and annotate it as AUTO-DECISION requires.
 
 ## final: audit
-迁移场景的终审侧重: 对照基线抽查新旧实现的行为对等性,排查残留的旧路径、
-死代码与未收尾的兼容层。
+What the final review of a migration scenario focuses on: spot-check the old and new implementations for behavioural equivalence against the
+baseline, and look for leftover old paths, dead code and compatibility layers that were never closed out.
 
 ## final: validate
-迁移场景的回归侧重: 既有测试/构建命令对基线行为的回归覆盖是否充分,
-未覆盖的行为差异是否已补充验证。
+What regression means in a migration scenario: whether the existing test/build commands cover the baseline behaviour adequately, and whether
+uncovered behavioural differences have been verified separately.
 
 ## final: finalize
-迁移场景的收尾侧重: 旧实现的清理与兼容层的收尾(移除、归档,或注明保留理由)。
+What closing out means in a migration scenario: cleaning up the old implementation and closing out the compatibility layers (removing them,
+archiving them, or stating why they are kept).

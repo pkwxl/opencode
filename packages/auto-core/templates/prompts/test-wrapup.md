@@ -1,15 +1,10 @@
-[DRIVER] 本轮工作到此收束: 你刚提交的测试脚本将由 DRIVER 执行,结果交由下一个会话判读。现在需要做交接并切换到新会话继续,请依次完成:
+[DRIVER] This round of work ends here: the test script you just submitted will be run by the DRIVER, and its result will be interpreted by the next session. A handover is needed now and the work switches to a new session, so complete the following in order:
 
-1. 把本执行范围内**不依赖本次测试结果**的剩余工作全部做完并落盘(代码、文档、产物)——不要因为要交接就省略,这些工作不做完,新会话要从头重做;
-2. 把以下内容写入 {{handoffFile}}(覆盖写),**只写与本次测试密切相关或依赖测试结果的部分**,其余已落盘的工作不必复述:
-   - 本次测试的意图、判读要点与预期;
-   - 与测试相关的当前进度、关键决策与已排除的方向;
-   - 后续步骤(新会话据此判读测试结果并继续修复与测试);
-   - **本执行范围内还没做完的事**: 第 1 步若有确实做不完的(要等这次测试结果才能定、
-     或需要新会话另起炉灶),在此逐条列出剩余项与各自的交接要点。这不是给省略工作
-     留口子——第 1 步该做完的仍要做完;没列出来的剩余工作,新会话无从知晓,会被当成
-     已完成而永久遗漏;
-   - **末行单起一行写 `状态: 继续`**——DRIVER 以该行判断交接文档是否写完,没有它会被
-     当成半截文件要求重写。这次测试的结果要由下一个会话判读,所以这里恒为"继续",
-     即便你已经把本执行范围的活全干完了。
-3. 写完立即结束会话,DRIVER 会开一个全新会话依据该文件与测试结果继续。
+1. Finish and write out all remaining work in this execution scope that is **not dependent on this test run's result** (code, documents, artifacts) — do not omit any of it because a handover is due, since whatever is left undone here the new session has to redo from scratch;
+2. Write the following into {{handoffFile}} (overwriting it), and **only the parts closely tied to this test run or dependent on its result** — the work already written out needs no restating:
+   - the intent of this test run, the points to read it by and what is expected of it;
+   - the current progress around the test, the key decisions and the directions already ruled out;
+   - the next steps (the new session interprets the test result from these and goes on fixing and testing);
+   - **what is still unfinished in this execution scope**: if step 1 has items that genuinely cannot be completed (they can only be settled once this test result is known, or they need a fresh start in the new session), list each remaining item here with its own handover notes. This is not a loophole for omitting work — what step 1 says to finish must still be finished; remaining work that you do not list here is invisible to the new session and is permanently lost as presumed done;
+   - **write `状态: 继续` alone on the last line** — the DRIVER uses that line to tell whether the handover document is finished, and without it the file is treated as half-written and sent back for a rewrite. The result of this test run is for the next session to interpret, so the value here is always `继续`, even if you have finished everything in this execution scope. That status line is a protocol string the driver parses: write it verbatim and untranslated.
+3. End the session as soon as the file is written; the DRIVER opens a brand-new session that continues from that file and the test result.

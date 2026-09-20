@@ -2,27 +2,27 @@
 
 {{> ground-state}}
 
-当前任务:
+Current task:
 
 {{taskBlock}}
 
-{{#if modeExec}}场景模式注意事项({{modeName}}):
+{{#if modeExec}}Scenario mode notes ({{modeName}}):
 {{modeExec}}
 
-{{/if}}{{#if subtaskList}}本任务的完整子任务列表(按序执行,其他项由其他会话完成,不要碰):
+{{/if}}{{#if subtaskList}}The complete subtask list of this task (executed in order; the other items belong to other sessions, do not touch them):
 
 {{subtaskList}}
 
-你本次只负责其中的第 {{index}} 项:
+You are responsible for item {{index}} of that list only:
 
-{{/if}}{{^subtaskList}}你本次只负责该任务的这一个子任务:
+{{/if}}{{^subtaskList}}You are responsible for this single subtask of the task only:
 
 {{/if}}- [ ] {{subtask}}
 {{#if continuation}}
-此前的会话因上下文限制中断,先读 {{handoffFile}} 了解进度与后续步骤,据此继续。
+The previous session was interrupted by the context limit. First read {{handoffFile}} to learn the progress and the next steps, then carry on from there.
 {{/if}}
-{{#if warm}}本会话已继承任务背景上下文(理解阶段的摘要与已加载内容),无需重读已在上下文中的文件;如仍缺背景,可读 docs/{{taskId}}/context.md 摘要。{{/if}}{{^warm}}如存在 docs/{{taskId}}/context.md,先读之了解任务背景再开始(不存在则按需自行阅读源码)。{{/if}}
-{{#if todoFile}}本子任务的范围声明见 {{todoFile}}(分解期写定,如存在先读之);{{/if}}如存在 docs/{{taskId}}/shared.md(公共上下文索引),按需引用式阅读其中列出的文件。todo.md/done.md 状态文件由 DRIVER 独占管理,你不得创建、重命名或删除它们——本子任务的完成判定与改名由 DRIVER 负责。
+{{#if warm}}This session has inherited the task-background context (the understanding stage's digest and loaded content), so do not re-read files that are already in context; if background is still missing, read the docs/{{taskId}}/context.md digest.{{/if}}{{^warm}}If docs/{{taskId}}/context.md exists, read it first to learn the task background before starting (if it does not exist, read the source yourself as needed).{{/if}}
+{{#if todoFile}}This subtask's scope declaration is in {{todoFile}} (written during decomposition — read it first if it exists). {{/if}}If docs/{{taskId}}/shared.md (the shared-context index) exists, read the files it lists on demand and by reference. The todo.md/done.md state files are managed by the DRIVER alone: you must not create, rename or delete them — the completion decision for this subtask and the rename belong to the DRIVER.
 
 {{> doc-layout}}
 
@@ -30,13 +30,13 @@
 
 {{#if artifactConvention}}{{artifactConvention}}
 
-{{/if}}约束:
-1. 严格只完成这一个子任务,完成后立即按下方步骤收尾并结束会话,以控制单次会话的上下文大小;
+{{/if}}Constraints:
+1. Complete this one subtask strictly, and as soon as it is done, close out with the steps below and end the session, so as to keep the context of a single session small;
 {{> question-rule}}
-3. 收尾:
-{{#if selfCheck}}   a. {{selfCheck}};{{#if verify}}整个任务的验收在最后由独立审核会话统一进行,
-      不通过会把差距反馈回来修复;{{/if}}
-{{/if}}   b. {{#if verify}}不要运行任务级 verify(验收由 DRIVER 交独立审核会话处理)、{{/if}}可新增但不要修改 docs/ 中的内容(若必须修改,{{^ask}}按 AUTO-DECISION 标注并{{/if}}记入相关文档);{{> state-rule}}
-   c. 如果 DRIVER 插入"[DRIVER] 上下文即将达到上限"的提示,立即按提示写出 {{handoffFile}}(末行 `状态: 继续|完成`,以本子任务是否完成计)并结束会话,由新会话凭交接文档继续;
+3. Close-out:
+{{#if selfCheck}}   a. {{selfCheck}};{{#if verify}} acceptance for the whole task happens at the very end in one independent review session,
+      and a failure sends the gaps back to be fixed;{{/if}}
+{{/if}}   b. {{#if verify}}do not run the task-level verify (acceptance is handed by the DRIVER to an independent review session); {{/if}}you may add to the content of docs/ but not modify it (if a modification is unavoidable, {{^ask}}annotate it as AUTO-DECISION and {{/if}}record it in the relevant document); {{> state-rule}}
+   c. If the DRIVER inserts a "[DRIVER] This session's context is about to reach the limit" notice, immediately write {{handoffFile}} as that notice instructs (last line `状态: 继续|完成`, counting whether this subtask is complete) and end the session, so that a new session can continue from the handover document;
 {{#if testByDriver}}
-测试执行协议(--test-by-driver): 不要在会话内直接运行编译、测试、构建、lint 等可能耗时长或产生大量输出的命令;需要时把命令写成脚本放入 test/ 目录(命名清晰、可执行、可复用),再把脚本路径(相对工作目录,如 test/build.sh)写入 tmp/test.sh 告知 DRIVER 执行,然后结束本轮消息等待。DRIVER 执行后会把退出码与输出文件路径(stdout 与 stderr 合并落入单文件)反馈回本会话,你直读文件判断结果;需要再次测试时把同一脚本路径再次写入 tmp/test.sh 即可重跑(脚本可先修改再重跑)。{{#if handoverTest}}测试提交后,DRIVER 有时会要求你把不依赖测试结果的剩余工作做完落盘、把与测试相关的进度与后续步骤写入 {{testHandoffFile}} 并结束会话,由新会话判读测试结果继续——那是既定的交接节奏,不是出了问题。**只在 DRIVER 明确要求时**才写 {{testHandoffFile}};此外不得自行创建或续号 testhandoff.md / testhandoff-<n>.md——这一命名族是 DRIVER 判定交接时序的观测量,自行落笔会被误读为交接事实。测试判读结论与修正记录写入本执行范围既定的产物文档,或留待下一次交接时并入交接文档。{{/if}}{{/if}}
+Test execution protocol (--test-by-driver): do not run compile, test, build, lint or similar commands directly inside the session — they can take a long time or produce a lot of output. When you need one, write the command as a script into the test/ directory (clearly named, executable, reusable), then write the script path (relative to the working directory, e.g. test/build.sh) into tmp/test.sh to tell the DRIVER to run it, and end your turn to wait. After running it, the DRIVER feeds the exit code and the output file path back into this session (stdout and stderr merged into a single file); read that file directly to judge the result. To test again, write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running).{{#if handoverTest}} After the test is committed the DRIVER sometimes asks you to finish and write out the remaining work that does not depend on the test result, to write the test-related progress and next steps into {{testHandoffFile}}, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write {{testHandoffFile}} **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — that naming family is what the DRIVER observes to establish handover ordering, and writing it yourself is misread as a handover that happened. Record your interpretation of the test result and any corrections in the established artifact documents of this execution scope, or leave them to be folded into the handover document at the next handover.{{/if}}{{/if}}

@@ -1,53 +1,67 @@
-// 文档形检的确定性判据(session-boundary-hardening 设计 §4.3/§4.5/§4.6): 子任务
-// 声明产物(D4)、自动会话产物(D5)与全量文档终止符扫描(D6)共用的「非平凡 +
-// 末行终止符」检查。纯函数叶子模块,不做任何 IO;eof 只证明「写完了」(机械
-// 可判定),质量归 verify/review。
+// Deterministic criteria for the document shape check (session-boundary-hardening
+// design §4.3/§4.5/§4.6): the "non-trivial + last-line terminator" check shared
+// by subtask declared artifacts (D4), automatic-session artifacts (D5) and the
+// whole-unit document terminator scan (D6). A pure leaf module doing no IO at
+// all; eof only proves "finished writing" (mechanically decidable) — quality
+// belongs to verify/review.
 
-// 非语义终止符: 与 handoff/testhandoff 的 `状态:` 行刻意异构——避免撞语义,也
-// 避免给 report 等跨任务叙事文件盖「完成」字样(D5 决策)。
+// Non-semantic terminator: deliberately a different shape from the `状态:` line
+// of handoff/testhandoff — avoiding a semantic collision, and avoiding stamping
+// a "done" wording on cross-task narrative files such as report (D5 decision).
 export const EOF_MARK = "<!-- auto: eof -->"
 
-// 非平凡阈值(保守,按去空白后字符数): 低于此长度的新建 .md 视为空壳/截断嫌疑。
+// Non-triviality threshold (conservative, counted in characters after trimming
+// whitespace): a new .md below this length is suspected of being a stub or a
+// truncation.
 export const MIN_DOC_CHARS = 120
 
-// 末行终止符判定: 最后一个非空行恰为终止符(其后只允许空行;终止符之后再有
-// 正文即不过——正是「追加在终止符之后」的截断形态)。
+// Last-line terminator test: the last non-empty line is exactly the terminator
+// (only blank lines may follow it; any body text after the terminator fails —
+// which is precisely the "appended after the terminator" truncation shape).
 export function endsWithEof(text: string): boolean {
   return text.trimEnd().split("\n").at(-1)?.trim() === EOF_MARK
 }
 
-// 单文档形检问题清单(空 = 通过): path 进问题文案供重提示反馈引用。
+// Shape problems of one document (empty = pass): path goes into the problem text
+// so the re-prompt feedback can cite it.
 export function docShapeProblems(text: string, path: string): string[] {
   const trimmed = text.trim()
   const problems: string[] = []
   if (trimmed.length < MIN_DOC_CHARS) {
-    problems.push(`${path}: 内容过短(${trimmed.length} 字符 < 阈值 ${MIN_DOC_CHARS}),疑似空壳或截断`)
+    problems.push(`${path}: content too short (${trimmed.length} chars < threshold ${MIN_DOC_CHARS}), suspected stub or truncation`)
   }
-  if (!endsWithEof(text)) problems.push(`${path}: 末行终止符缺失(最后一行正文须为 ${EOF_MARK})`)
+  if (!endsWithEof(text)) problems.push(`${path}: missing last-line terminator (the last line of body text must be ${EOF_MARK})`)
   return problems
 }
 
-// D6 全量扫描豁免清单(session-boundary-hardening §4.6,代码内具名常量): driver
-// 独占状态文件 PLAN.md/CURRENT.md(protect.ts 域;轮次专用目录布局下根 PLAN.md 是
-// 符号链接,git 报出的路径是链接目标 docs/R-NN/PLAN.md,故按文件名判)与 .auto/
-// 下状态文件。交接文档族(handoff/testhandoff)自带 `状态:` 终态契约,语义不混用,
-// 由 HANDOFF_NAME 一并覆盖(含归档份 testhandoff-<n>.md 与旧平铺名 <id>.handoff.md、
-// <id>(-S<n>).testhandoff(-<n>).md)。
+// Exemption list of the D6 whole-unit scan (session-boundary-hardening §4.6, a
+// named constant in code): the driver-exclusive state files PLAN.md/CURRENT.md
+// (protect.ts domain; under the round-directory layout the root PLAN.md is a
+// symlink and the path git reports is the link target docs/R-NN/PLAN.md, so the
+// test goes by file name) and the state files under .auto/. The handover
+// document family (handoff/testhandoff) carries its own `状态:` final-state
+// contract, so its semantics are not mixed in; HANDOFF_NAME covers it as a whole
+// (including archived testhandoff-<n>.md and the old flat names <id>.handoff.md,
+// <id>(-S<n>).testhandoff(-<n>).md).
 export const EOF_SCAN_EXEMPT_NAMES = ["PLAN.md", "CURRENT.md"]
 
 const HANDOFF_NAME = /^(?:.+\.)?(?:test)?handoff(?:-\d+)?\.md$/
 
-// 路径(相对目标目录)是否豁免 D6 全量文档终止符扫描。
+// Whether a path (relative to the target directory) is exempt from the D6
+// whole-unit document terminator scan.
 export function eofScanExempt(rel: string): boolean {
   if (rel === ".auto" || rel.startsWith(".auto/")) return true
   const name = rel.split("/").at(-1) ?? rel
   return EOF_SCAN_EXEMPT_NAMES.includes(name) || HANDOFF_NAME.test(name)
 }
 
-// D2/D4 形检是否启用(session-boundary-hardening §4.3): dryrun / 提交门禁关闭
-// (--commit false 已退役,防御性保留)/ 非 git(无基线)不判;测试交接收场会话
-// 豁免——其完成判据在 testhandoff.md,已由交接边界写核覆盖(现接线 runExecSession
-// 不把 testHandover 结果外透给 runSubtask,守卫按设计显式保留)。
+// Whether the D2/D4 shape check is on (session-boundary-hardening §4.3): not
+// judged under dryrun / commit gate off (`--commit false` is retired, kept
+// defensively) / non-git (no baseline); a test-handover closing session is
+// exempt — its completion criterion is testhandoff.md, already covered by the
+// handover-boundary write check (the current wiring does not leak the
+// testHandover result out of runExecSession to runSubtask, so the guard is
+// deliberately kept as designed).
 export function shapeCheckOn(
   opts: { dryrun?: boolean; commit?: boolean },
   baseline: { length: number } | undefined,

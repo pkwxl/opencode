@@ -146,8 +146,8 @@ export async function watch(
       }
       testHandoverRetried = true
       const ok = await steerText(
-        `你上次结束会话但未写出有效的 ${test!.handoffFile}(缺失或缺少 \`状态: 继续|完成\` 行)。这是硬性要求: ` +
-          `把进度、关键决策、失败测试上下文与后续步骤写入该文件,末行写出状态行后再结束会话。`,
+        `You ended the session last time without writing a valid ${test!.handoffFile} (missing, or lacking the \`状态: 继续|完成\` status line). This is a hard requirement: ` +
+          `write the progress, key decisions, failing-test context and next steps into that file, put the status line on the last line, and only then end the session.`,
       )
       if (!ok) return { type: "blocked", question: `steer dispatch failed (asking to backfill ${test!.handoffFile}); cannot continue the session, see the log.` }
       return { type: "continue" }

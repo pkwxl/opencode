@@ -57,27 +57,27 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
 
   test("off 档(缺省): 保留现状的不提问口径,并按归属判据要求两类标注", () => {
     const off = fragment(false)
-    expect(off).toContain("不要调用 question 工具")
-    expect(off).toContain("记录决策过程")
-    expect(off).toContain("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")
-    expect(off).toContain("AUTO-DECISION: <决策> (<理由>)")
+    expect(off).toContain("do not call the question tool")
+    expect(off).toContain("must leave a record of how it was made")
+    expect(off).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
+    expect(off).toContain("AUTO-DECISION: <decision> (<reason>)")
     // 判别硬判据与正反例(设计文档 §C): 拿不准倒向 AUTO-RESOLVE
-    expect(off).toContain("决定权本应属于用户")
-    expect(off).toContain("决定权本就属于你")
-    expect(off).toContain("拿不准标 AUTO-RESOLVE")
-    expect(off).toContain("matched 还是 paired")
+    expect(off).toContain("The call should have been the user's")
+    expect(off).toContain("The call was always yours")
+    expect(off).toContain("when unsure use AUTO-RESOLVE")
+    expect(off).toContain("matched or paired")
   })
 
   test("on 档: 归属于用户的分歧点主动发问,且全片段不出现 AUTO-DECISION 字样", () => {
     const on = fragment(true)
-    expect(on).toContain("直接发问,不要替用户拍板")
-    expect(on).toContain("决定权本应属于用户")
-    expect(on).toContain("无须为它留痕")
-    expect(on).toContain("拿不准就问")
+    expect(on).toContain("instead of deciding in the user's place")
+    expect(on).toContain("The call should have been the user's")
+    expect(on).toContain("decide it yourself, no record required")
+    expect(on).toContain("when unsure, ask")
     // 不提标注 = 不给会话出于惯性继续留痕的由头(设计文档 §K-4)
     expect(on).not.toContain("AUTO-DECISION")
     expect(on).not.toContain("AUTO-RESOLVE")
-    expect(on).not.toContain("不要调用 question 工具")
+    expect(on).not.toContain("do not call the question tool")
   })
 
   test("两档结构不变式: 各自恰好一条编号 2 的约束项,首尾不引入空行", () => {
@@ -95,7 +95,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     for (const ask of [false, true]) {
       for (const name of consumers) {
         const rendered = renderTemplate(name.replace(/\.md$/, ""), { ask })
-        expect(rendered).toContain("question 工具")
+        expect(rendered).toContain("question tool")
       }
     }
   })
@@ -106,7 +106,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     }
     // off 档下 whole/subtask 的 docs/ 修改条款仍点名 AUTO-DECISION(逐字保留现状口径)
     expect(renderTemplate("whole", { ask: false })).toContain("按 AUTO-DECISION 标注并记入相关文档")
-    expect(renderTemplate("subtask", { ask: false })).toContain("按 AUTO-DECISION 标注并记入相关文档")
+    expect(renderTemplate("subtask", { ask: false })).toContain("annotate it as AUTO-DECISION and record it in the relevant document")
     expect(renderTemplate("whole", { ask: true })).toContain("若必须修改,记入相关文档")
   })
 
@@ -117,7 +117,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
       mkdirSync(overlay, { recursive: true })
       writeFileSync(
         join(overlay, "_partials.md"),
-        "# 覆盖\n\n## question-rule\nquestion 工具 AUTO-RESOLVE AUTO-DECISION {{#if ask}}ASK-ON-BRANCH{{/if}}{{^ask}}ASK-OFF-BRANCH{{/if}}\n",
+        "# 覆盖\n\n## question-rule\nquestion tool AUTO-RESOLVE AUTO-DECISION {{#if ask}}ASK-ON-BRANCH{{/if}}{{^ask}}ASK-OFF-BRANCH{{/if}}\n",
       )
       usePromptLibrary(dir)
       // 测试进程未设 OPENCODE_AUTO_ASK,autoSwitches().ask === false —— 出口注入
@@ -159,21 +159,21 @@ describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-bound
 
   test("片段三条纪律: 跨任务引用只指阶段级单源 / 收尾产物仅作格式模板定性 / 摘录优先不整文回源", () => {
     const text = renderText("{{> digest-rule}}", {})
-    expect(text).toContain("跨任务引用只指阶段级单源(裁决/契约/台账)")
-    expect(text).toContain("已完成另一任务的产物,仅作格式模板")
-    expect(text).toContain("能摘录要点不整文回源")
+    expect(text).toContain("Point cross-task references only at phase-level single sources (rulings/contracts/ledger)")
+    expect(text).toContain("artifact of another, already completed task — format template only")
+    expect(text).toContain("Excerpt the points you need instead of sending the reader back to a whole document")
     // 定性义务点名前序任务级收尾产物族(report/批记录/testhandoff)
-    expect(text).toContain("report/批记录/testhandoff")
+    expect(text).toContain("report/batch record/testhandoff")
     // 背景行写明误读后果:前序完成叙事流入会被下游会话误读为本任务已完成
-    expect(text).toContain("误读为本任务已完成")
+    expect(text).toContain("misreads it as a sign that this task is already done")
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
   test("7 份消费模板渲染含纪律段且不残留模板标签(片段改动波及全部引用方)", () => {
     for (const name of consumers) {
       const rendered = renderTemplate(name.replace(/\.md$/, ""), {})
-      expect(rendered).toContain("跨任务引用纪律")
-      expect(rendered).toContain("仅作格式模板")
+      expect(rendered).toContain("Cross-task reference discipline")
+      expect(rendered).toContain("format template only")
       expect(rendered).not.toMatch(/\{\{|\}\}/)
     }
   })
@@ -203,8 +203,8 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
   test("片段内容: 终止符形态与独占末行要求,存量文档不回补", () => {
     const text = renderText("{{> eof-rule}}", {})
     expect(text).toContain("<!-- auto: eof -->")
-    expect(text).toContain("最后一行正文")
-    expect(text).toContain("存量文档无需回补")
+    expect(text).toContain("as its last line of body text")
+    expect(text).toContain("documents that already existed beforehand need no retrofit")
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
@@ -214,7 +214,7 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
       renderDecompose(plan, task),
       renderWrapup(plan, task),
     ]) {
-      expect(rendered).toContain("文档终止符纪律")
+      expect(rendered).toContain("Document terminator discipline")
       expect(rendered).toContain("<!-- auto: eof -->")
       expect(rendered).not.toMatch(/\{\{|\}\}/)
     }
@@ -229,12 +229,12 @@ describe("模式注入(-m/--mode)", () => {
       renderWrapup(plan, task, { mode: migrate }),
       renderWhole(plan, task, { mode: migrate }),
     ]) {
-      expect(text).toContain("场景模式注意事项(migrate)")
-      expect(text).toContain("对等行为")
+      expect(text).toContain("(migrate):")
+      expect(text).toContain("behaviourally equivalent")
       expect(text).toContain("AUTO-DECISION")
     }
-    expect(renderDecompose(plan, task)).not.toContain("场景模式注意事项")
-    expect(renderSubtask(plan, task, "编写迁移脚本的 schema 部分")).not.toContain("场景模式注意事项")
+    expect(renderDecompose(plan, task)).not.toContain("Scenario mode notes")
+    expect(renderSubtask(plan, task, "编写迁移脚本的 schema 部分")).not.toContain("Scenario mode notes")
     expect(renderWrapup(plan, task)).not.toContain("场景模式注意事项")
     expect(renderWhole(plan, task)).not.toContain("场景模式注意事项")
   })
@@ -242,10 +242,10 @@ describe("模式注入(-m/--mode)", () => {
   test("modeCtx: 共享模式变量组装(壳层自写 render* 的扩展点),verify 条件段与缺省形态", () => {
     const withVerify = modeCtx(migrate, { verify: true })
     expect(withVerify.modeName).toBe("migrate")
-    expect(withVerify.modeInit).toContain("优先复用既有的测试/构建命令")
+    expect(withVerify.modeInit).toContain("prefer reusing an existing test/build command")
     const without = modeCtx(migrate)
-    expect(without.modeInit).not.toContain("优先复用既有的测试/构建命令")
-    expect(without.modeExec).toContain("对等行为")
+    expect(without.modeInit).not.toContain("prefer reusing an existing test/build command")
+    expect(without.modeExec).toContain("behaviourally equivalent")
     expect(modeCtx()).toEqual({ modeName: undefined, modeInit: undefined, modeExec: undefined })
   })
 })

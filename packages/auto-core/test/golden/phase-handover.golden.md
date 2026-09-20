@@ -51,22 +51,21 @@
 1. 本会话唯一可写的文件是 docs/R-01/handovers/m-实现迁移.md;PLAN.md 与 CURRENT.md 等
    状态文件由 DRIVER 独占维护,不得编辑,也不要用 chmod 等方式改动文件权限;
    git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
-2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
-   其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
-   你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;
-   自主决策须记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档
-   (docs/ 设计文档或报告)。并按「这个分歧点的决定权本应属于谁」分两类标注——
-   涉及架构设计或代码变更的标在设计文档或代码注释中,其余标在任务报告中:
-   - 决定权本应属于用户:需求意图与范围取舍(做不做、做到哪)、对外可见行为与接口
-     契约的变更、「什么算做完」的判定标准、事实确认类问题(数据异常、环境缺失、与
-     文档不符的现状)、超出或收窄任务描述的字面范围。这类分歧点本该由用户拍板,是你
-     代替用户闭环的,须以 `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` 行明确标注;
-   - 决定权本就属于你:实现手段的选择,且任一选项都不改变用户可见行为(算法、内部
-     结构、命名、文件组织、注入方式、测试写法),以 `AUTO-DECISION: <决策> (<理由>)`
-     行标注。
-   例:"是否把第三份重复实现一并收口"改变了任务的字面范围,属 AUTO-RESOLVE;
-   "新字段叫 matched 还是 paired"不改变用户可见行为,属 AUTO-DECISION。
-   同一决策只标一类、不重复标注;拿不准标 AUTO-RESOLVE——多提醒一次无妨,漏标才是真损失。
-   非权限问题调用 question 工具会被自动答复上述要求;就同一问题再次询问会导致任务阻塞停机。
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
+   decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
+   A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
+   relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
+   a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
+     user's to make and you closed it on their behalf, so annotate it explicitly with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
+   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
+   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+   Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
 3. 交接文档要自包含: 小节内引用产物时给出相对目标目录的永久路径
    (docs/T-NNN/…、docs/R-NN/handovers/…),读者不必反查本提示词即可定位。

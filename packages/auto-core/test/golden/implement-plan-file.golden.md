@@ -29,34 +29,32 @@ docs/ 即可执行>
 1. 本会话唯一可写的文件是 PLAN.md(DRIVER 已临时放行写权限);CURRENT.md 与其余
    状态文件仍为只读,不得编辑,也不要用 chmod 等方式改动文件权限;git 提交由
    DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
-2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
-   其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
-   你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;
-   自主决策须记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档
-   (docs/ 设计文档或报告)。并按「这个分歧点的决定权本应属于谁」分两类标注——
-   涉及架构设计或代码变更的标在设计文档或代码注释中,其余标在任务报告中:
-   - 决定权本应属于用户:需求意图与范围取舍(做不做、做到哪)、对外可见行为与接口
-     契约的变更、「什么算做完」的判定标准、事实确认类问题(数据异常、环境缺失、与
-     文档不符的现状)、超出或收窄任务描述的字面范围。这类分歧点本该由用户拍板,是你
-     代替用户闭环的,须以 `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` 行明确标注;
-   - 决定权本就属于你:实现手段的选择,且任一选项都不改变用户可见行为(算法、内部
-     结构、命名、文件组织、注入方式、测试写法),以 `AUTO-DECISION: <决策> (<理由>)`
-     行标注。
-   例:"是否把第三份重复实现一并收口"改变了任务的字面范围,属 AUTO-RESOLVE;
-   "新字段叫 matched 还是 paired"不改变用户可见行为,属 AUTO-DECISION。
-   同一决策只标一类、不重复标注;拿不准标 AUTO-RESOLVE——多提醒一次无妨,漏标才是真损失。
-   非权限问题调用 question 工具会被自动答复上述要求;就同一问题再次询问会导致任务阻塞停机。
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
+   decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
+   A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
+   relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
+   a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
+     user's to make and you closed it on their behalf, so annotate it explicitly with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
+   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
+   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+   Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
 3. PLAN.md 至少要有一个任务: 即使认为无事可做,也必须写入一个说明性任务并在
    正文说明原因;不产出有效任务会导致阻塞停机。
 
-文档存放规范: 每个任务(T-NNN)的全部文档写入该任务自己的目录 docs/T-NNN/ 内(理解摘要
-context.md、公共上下文索引 shared.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告
-audit.md、修复检查项 fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级
-测试交接写同目录 testhandoff.md;子任务状态文件 docs/T-NNN/S<两位序号>/todo.md 与
-done.md 由 DRIVER 独占管理(分解会话写定 todo.md,子任务完成时 DRIVER 改名为 done.md)
-——你不得自行创建、重命名或删除它们。这些路径一经创建即为永久路径——不移动、不改名;
-引用其他任务的文档时一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
-不属于任何单个任务的阶段级自由产物(勘测报告、设计批次、覆盖矩阵、核验记录等)写入
-本轮轮次目录 docs/R-NN/ 内的 phase-docs/<阶段字母>-<slug>/ 子目录(如 docs/R-03/
-phase-docs/a-analysis/r3-baseline.md)——同为永久路径,落定不移动;引用一律使用该
-永久路径。
+Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md, audit report audit.md, fix checklist fix.md);
+subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
+the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
+todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
+these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
+do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
+batches, coverage matrices, verification records and the like) go into the phase-docs/<phase letter>-<slug>/ subdirectory of this round's
+directory docs/R-NN/ (e.g. docs/R-03/phase-docs/a-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference
+it by that permanent path.

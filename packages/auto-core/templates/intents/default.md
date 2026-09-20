@@ -4,73 +4,73 @@
 
 ### decompose
 
-3. 分解粒度准则(以任务描述为基准——在其规定的范围内选择粒度,不扩大、不缩小):
-   - 一个方面一个子任务:调研、实现、文档、接线等不同性质的工作不合并为一项;
-     任务描述点名的文件/模块/接口/行为/场景是天然的切分参考;
-{{#if fine}}   - 细粒度模式:按任务正文点名的文件/模块/接口/行为/场景等自然单元逐一
-     成项,宁细勿粗——fork 流水线已消除子任务间重复理解的固定开销,细项的边际
-     成本低;细项间显式排出可执行顺序,依赖前项的排在后;
-{{/if}}   - 每项自包含:仅凭该项描述、本子任务的 todo.md、任务背景摘要 context.md、
-     公共上下文索引 shared.md 与 docs/ 即可执行,并包含验证方式;
-   - 每项声明产出:文档类注明文件路径,代码类注明模块/文件范围;
-   - 上限导向:每项以单个会话用较小上下文(约 {{contextBudget}} tokens 量级)
-     可完成为宜;
+3. Decomposition granularity criteria (measured against the task description — choose the granularity within the scope it defines, neither wider nor narrower):
+   - One aspect per subtask: work of different natures (research, implementation, documentation, wiring) is not merged into a single item;
+     the files/modules/interfaces/behaviours/scenarios named in the task description are the natural splitting reference;
+{{#if fine}}   - Fine-grained mode: make one item per natural unit named in the task body (file, module, interface, behaviour, scenario) and
+     prefer finer over coarser — the fork pipeline has removed the fixed cost of re-understanding between subtasks, so a fine item's marginal
+     cost is low; order the fine items explicitly into an executable sequence, placing an item that depends on an earlier one after it;
+{{/if}}   - Each item self-contained: executable from the item description alone plus this subtask's todo.md, the task-background digest
+     context.md, the shared-context index shared.md and docs/, and including the way to verify it;
+   - Each item declares its artifacts: documents state the file path, code states the module/file range;
+   - Budget-oriented: each item should be completable by a single session with a smallish context (on the order of {{contextBudget}} tokens);
 
 ### self-check-subtask
 
-自我检查该子任务是否真正完成
+check for yourself whether this subtask is genuinely complete
 
 ### self-check-whole
 
-完成整个任务后自我检查是否真正完成
+once the whole task is complete, check for yourself whether it is genuinely complete
 
 ## phase duties
 
-### a 分析
+### a analysis
 
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 按问题/疑点/子系统/风险面切分:每项回答一个明确的问题(如"模块 X 的数据流是
-     什么"、"某类 API 差异清单"、"某风险是否存在");
-   - 每项产出一份独立分析文档,写入 docs/ 下独立文件;
-   - 本阶段只产出分析与结论,禁止修改任何实现代码;
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
+   - Split by problem/open question/subsystem/risk surface: each item answers one definite question (such as "what is the data flow of
+     module X", "the list of differences for a certain API", "does a given risk exist");
+   - Each item produces one standalone analysis document, written to its own file under docs/;
+   - This phase produces analysis and conclusions only; modifying any implementation code is forbidden;
 
-### d 设计
+### d design
 
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 按设计关注点切分:数据模型、API 契约、模块边界、错误处理、迁移策略等各自成项;
-   - 每项产出一份设计文档,含备选方案取舍与理由;
-   - 跨关注点一致性检查(各设计文档之间是否矛盾)必须作为独立的收尾子任务;
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
+   - Split by design concern: data model, API contract, module boundaries, error handling, migration strategy and the like each become an item;
+   - Each item produces one design document, including the alternatives considered and why one was chosen;
+   - A cross-concern consistency check (whether the design documents contradict each other) must be a standalone closing subtask;
 
-### m 迁移实现
+### m migration implementation
 
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 垂直薄切片优先:一条可调用路径端到端成项,不按水平层(先全部 schema 再全部
-     实现)切分;
-   - schema/接口、实现、接线、文档等不同方面分开成项;
-   - 下限保护:每项完成时源码树保持一致——可编译、既有测试不倒退;禁止拆出会留下
-     破损中间状态的碎片;
-   - 存在依赖顺序时按可执行顺序排列(依赖前项的排在后);
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
+   - Vertical thin slices first: one callable path end to end per item; do not split by horizontal layer (all the schema first, then all the
+     implementation);
+   - Keep different aspects apart — schema/interfaces, implementation, wiring and documentation each become their own item;
+   - Floor protection: the source tree stays consistent when an item completes — it compiles and existing tests do not regress; splitting out
+     a fragment that leaves a broken intermediate state is forbidden;
+   - Where there is a dependency order, arrange the items into an executable sequence (an item depending on an earlier one comes after it);
 
-### t 测试
+### t testing
 
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 按测试面/场景族切分:每项对应一个测试文件或一族紧密相关的场景;
-   - 写测试与修缺陷分离:测试暴露的实现缺陷作为独立修复项追加,不与写测试混在
-     一项;
-   - 测试执行遵守测试执行协议(启用 --test-by-driver 时脚本交 DRIVER 执行);
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
+   - Split by test surface / scenario family: each item corresponds to one test file or to one family of closely related scenarios;
+   - Keep writing tests apart from fixing defects: implementation defects that the tests expose are appended as separate fix items, not mixed
+     into the test-writing item;
+   - Test execution follows the test execution protocol (with --test-by-driver enabled, scripts are handed to the DRIVER to run);
 
-### v 验收
+### v acceptance
 
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 按验收维度切分(功能符合度、文档完备性、环境与运行、回归等),每维度一项;
-   - 每项产出一份核验记录(核验方式、证据、结论),写入 docs/ 独立文件;
-   - 只核验与记录,不做修复(差距走既有终审闭环);
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
+   - Split by acceptance dimension (functional conformance, documentation completeness, environment and runtime, regression and the like),
+     one item per dimension;
+   - Each item produces one verification record (how it was verified, the evidence, the conclusion), written to its own file under docs/;
+   - Verify and record only, do not fix anything (gaps go through the existing final-review loop);
 
-### k 知识提炼
+### k knowledge extraction
 
-4. 本阶段({{phaseName}})的切分与产出准则:
-   - 按知识产物切分:坑点清单、可复用模式、README/交接文档等各自成项;
-   - 每项产出一份独立文档,可被后续任务直接引用;
+4. Splitting and artifact criteria for this phase ({{phaseName}}):
+   - Split by knowledge artifact: pitfall lists, reusable patterns, README/handover documents and the like each become an item;
+   - Each item produces one standalone document that later tasks can reference directly;
 
 ## acceptance
 
@@ -80,4 +80,4 @@
 
 ### subtask-output
 
-产出约定:本项若产出文档/分析/设计类内容,写入 {{outputFile}}(独立文件,标题写在首行,不并入其他文档);代码类产出直接落于源码树。
+Artifact placement convention: if this item produces document/analysis/design content, write it into {{outputFile}} (a standalone file, title on the first line, not merged into another document); code artifacts go directly into the source tree.

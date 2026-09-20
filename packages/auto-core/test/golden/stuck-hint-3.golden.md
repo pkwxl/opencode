@@ -1,8 +1,8 @@
-[DRIVER] 循环检测: 工具 bash 已经 3 次以相同的参数得到完全相同的结果。
+[DRIVER] Loop detected: the tool bash has now returned exactly the same result 3 times for the same arguments.
 
-- 工具: bash
-- 参数: git status
-- 输出: (空)
+- Tool: bash
+- Arguments: git status
+- Output: (空)
 
-重复同一个动作不会得到不同的结果,这一路已经走不通了。
-这是最后一次提醒,DRIVER 之后不再打扰。停止重试: 若这个问题当前确实解决不了,以 `AUTO-FIXME: <原因与计划>` 在相关代码注释或 docs/ 文档中标注遗留,把已完成与未完成的部分交代清楚后结束本次会话,由 DRIVER 推进后续流程;若还有明确未试过且有把握的方案,只试这一个,不成即按上面的方式收尾。
+Repeating the same action will not produce a different result; this route is a dead end.
+This is the last reminder; the DRIVER will not interrupt again. Stop retrying: if this problem really cannot be solved right now, mark the leftover with `AUTO-FIXME: <reason and plan>` in the relevant code comment or in a document under docs/, state clearly which parts are done and which are not, and end this session so that the DRIVER can carry the process forward; if there is still one clearly untried approach you are confident in, try that one alone, and if it fails, close out as described above.

@@ -122,7 +122,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "phase-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
   review: ["结论: 通过", "结论: 差距", ".auto/review.md"],
   "review-fix": ["- [ ]"],
-  "test-wrapup": ["{{handoffFile}}", "不依赖本次测试结果"],
+  "test-wrapup": ["{{handoffFile}}", "not dependent on this test run's result"],
   "verify-judge": ["结论: 通过", "结论: 差距", "结论: 重验", ".auto/verify.md", "verified-command"],
   "verify-script-gen": ["#!/usr/bin/env bash"],
 }
@@ -139,7 +139,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
 const PARTIAL_MARKERS: Record<string, string[]> = {
   "eof-rule": ["<!-- auto: eof -->"],
   "state-rule": ["PLAN.md", "CURRENT.md"],
-  "question-rule": ["question 工具", "AUTO-RESOLVE", "AUTO-DECISION"],
+  "question-rule": ["question tool", "AUTO-RESOLVE", "AUTO-DECISION"],
 }
 
 // Dynamic registries: shells register additional templates (registerTemplate)
@@ -189,8 +189,8 @@ function loadLibrary(dir: string | undefined): Library {
           const missing = (partialMarkers[section] ?? []).filter((marker) => !body.includes(marker))
           if (missing.length) {
             throw new Error(
-              `共享片段覆盖 ${join(".opencode", "auto", "prompts", file)} 的 ${section} 节缺少关键协议内容: ${missing.join("、")}` +
-                `(协议行是 driver 解析会话产出的依据,不能删除)`,
+              `shared-partial overlay ${join(".opencode", "auto", "prompts", file)}: section ${section} is missing required protocol content: ${missing.join(", ")}` +
+                ` (protocol lines are what the driver parses session output by, and cannot be removed)`,
             )
           }
         }
@@ -200,8 +200,8 @@ function loadLibrary(dir: string | undefined): Library {
       const missing = (markers[name] ?? []).filter((marker) => !content.includes(marker))
       if (missing.length) {
         throw new Error(
-          `提示词模板覆盖 ${join(".opencode", "auto", "prompts", file)} 缺少关键协议内容: ${missing.join("、")}` +
-            `(协议行是 driver 解析会话产出的依据,不能删除)`,
+          `prompt template overlay ${join(".opencode", "auto", "prompts", file)} is missing required protocol content: ${missing.join(", ")}` +
+            ` (protocol lines are what the driver parses session output by, and cannot be removed)`,
         )
       }
       templates[name] = content
@@ -229,10 +229,10 @@ export function usePromptLibrary(dir: string | undefined): void {
 // shared partials register per section via registerPartial. Registrations
 // take effect immediately and survive usePromptLibrary reloads.
 export function registerTemplate(name: string, text: string, markers?: string[]): void {
-  if (!name) throw new Error("模板名不能为空")
-  if (name === "_partials") throw new Error("共享片段按节注册(registerPartial)或经目标目录 _partials.md 覆盖,不接受整份注册")
+  if (!name) throw new Error("template name must not be empty")
+  if (name === "_partials") throw new Error("shared partials register per section (registerPartial) or are overridden via the target directory's _partials.md; whole-file registration is not accepted")
   const content = text.trim()
-  if (!content) throw new Error(`模板 ${name} 的内容不能为空`)
+  if (!content) throw new Error(`template ${name} must not be empty`)
   registered[name] = content
   if (markers && markers.length) registeredMarkers[name] = markers
   else delete registeredMarkers[name]
@@ -248,9 +248,9 @@ export function registerTemplate(name: string, text: string, markers?: string[])
 // effect immediately and survives usePromptLibrary reloads; a target-directory
 // overlay of the section still wins over the registration.
 export function registerPartial(name: string, text: string, markers?: string[]): void {
-  if (!name) throw new Error("片段名不能为空")
+  if (!name) throw new Error("partial name must not be empty")
   const content = text.trim()
-  if (!content) throw new Error(`片段 ${name} 的内容不能为空`)
+  if (!content) throw new Error(`partial ${name} must not be empty`)
   registeredPartials[name] = content
   if (markers && markers.length) registeredPartialMarkers[name] = markers
   else delete registeredPartialMarkers[name]
@@ -260,22 +260,24 @@ export function registerPartial(name: string, text: string, markers?: string[]):
 
 export function renderTemplate(name: string, ctx: Ctx): string {
   const text = library.templates[name]
-  if (text === undefined) throw new Error(`未知提示词模板: ${name}`)
+  if (text === undefined) throw new Error(`unknown prompt template: ${name}`)
   return renderNodes(parseCached(name, text), ctx, 0)
 }
 
-// 渲染任意模板文本(不走注册表;片段引用当前库的共享片段)——测试与预览用。
+// Render arbitrary template text (bypasses the registry; partial references use
+// the current library's shared partials) — for tests and previews.
 export function renderText(text: string, ctx: Ctx): string {
   return renderNodes(parseTemplate(text), ctx, 0)
 }
 
-// 当前生效的模板名(测试断言内置齐备用)。
+// Template names currently in effect (tests assert the built-ins are complete).
 export function promptTemplateNames(): string[] {
   return Object.keys(library.templates).sort()
 }
 
-// _partials.md 的 `## <name>` 节解析为片段表;首行 H1 与节外的说明文字忽略,
-// 节体去除首尾空行。
+// Parse the `## <name>` sections of _partials.md into a partial table; the
+// leading H1 and any prose outside a section are ignored, and section bodies
+// have leading/trailing blank lines trimmed.
 export function parsePartials(text: string): Record<string, string> {
   const partials: Record<string, string> = {}
   let name: string | undefined

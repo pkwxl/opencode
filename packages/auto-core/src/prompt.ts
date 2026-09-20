@@ -106,7 +106,8 @@ export function testHandoffFile(task: Task, subtask?: number): string {
   return subtask !== undefined ? subtaskDoc(task.id, subtask, "testhandoff") : taskDoc(task.id, "testhandoff")
 }
 
-// 测试执行结果反馈(steer 注入执行会话): 退出码与输出文件路径,AI 直读文件判断。
+// Test execution result feedback (steered into the executing session): exit code
+// and output file path; the AI reads the file directly to judge.
 export function renderTestResult(run: TestRunInfo): string {
   return renderPrompt("test-result", {
     seq: String(run.seq),
@@ -114,8 +115,8 @@ export function renderTestResult(run: TestRunInfo): string {
     code: String(run.code),
     ms: String(run.ms),
     runTimeout: run.timedOut
-      ? `是(已被 driver 终止${run.timeoutReason === "max" ? ":超过绝对时长上限" : ":持续无输出,看门狗判定无进度"})`
-      : "否",
+      ? `yes (terminated by the driver${run.timeoutReason === "max" ? ": absolute duration limit exceeded" : ": no output throughout, the watchdog judged no progress"})`
+      : "no",
     out: run.out,
   })
 }
@@ -191,25 +192,32 @@ export function decomposeTemplateName(phase: Phase | undefined, names: string[])
   return names.includes(candidate) ? candidate : "decompose"
 }
 
-// L1 权威状态接地块(session-boundary-hardening 设计 §4.1): 子任务会话注入 driver 从
-// PLAN 台账生成的权威状态(任务状态/全限定编号/勾选快照/前序任务独立声明),使前序
-// 任务的完成叙事无法被读成本任务状态——数据在此组装,文案在 _partials.md 的
-// ground-state 片段。展示层(PLAN.md)保留 S01 短编号,全限定编号只进提示词(L3)。
-// 任务状态中文(driver 执行子任务会话时任务恒为进行中,其余态为完整性而如实呈现)。
-const STATUS_TEXT: Record<Status, string> = { pending: "待开始", in_progress: "进行中", blocked: "已阻塞", done: "已完成" }
+// The L1 authoritative grounded-state block (session-boundary-hardening design
+// §4.1): a subtask session is injected with the authoritative state the driver
+// derives from the PLAN ledger (task status / fully qualified id / tick snapshot
+// / declaration that prior tasks are independent), so a previous task's
+// completion narrative cannot be read as this task's state — the data is
+// assembled here, the wording lives in the ground-state partial of
+// _partials.md. The display layer (PLAN.md) keeps the short S01 numbering; the
+// fully qualified id only ever reaches the prompt (L3).
+// Task status wording (while the driver runs a subtask session the task is always
+// in progress; the other states are rendered faithfully for completeness).
+const STATUS_TEXT: Record<Status, string> = { pending: "not started", in_progress: "in progress", blocked: "blocked", done: "done" }
 
-// 勾选快照: S01☑ S02☐ …,已完成 k/n(勾选状态来自台账,正是会话读不到的权威信息)。
+// Tick snapshot: S01☑ S02☐ …, done k/n (the tick state comes from the ledger,
+// which is exactly the authoritative information the session cannot read).
 function subtaskSnapshot(items: { done: boolean }[]): string | undefined {
   if (!items.length) return undefined
   const ticks = items.map((item, i) => `S${String(i + 1).padStart(2, "0")}${item.done ? "☑" : "☐"}`).join(" ")
-  return `${ticks},已完成 ${items.filter((item) => item.done).length}/${items.length}`
+  return `${ticks}, done ${items.filter((item) => item.done).length}/${items.length}`
 }
 
-// 前序已完成任务 id 内联清单(与 head 的 doneList 同源;接地块声明行只内联 id,
-// 不复述标题清单,避免与 head 的已完成列表重复)。
+// Inline list of previously completed task ids (same source as head's doneList;
+// the grounded-state declaration line inlines ids only and does not restate the
+// title list, avoiding duplication with head's completed list).
 function doneIds(plan: Plan): string | undefined {
   const ids = plan.tasks.filter((item) => item.status === "done").map((item) => item.id)
-  return ids.length ? ids.join("、") : undefined
+  return ids.length ? ids.join(", ") : undefined
 }
 
 // Subtask session: exactly one checklist item. The session implements it and
@@ -551,16 +559,18 @@ export function renderHandoffSteer(task: Task): string {
   return renderPrompt("handoff-steer", { handoffFile: handoffFile(task) })
 }
 
-// 死循环提示(driver 在会话进行中检测到重复动作后经 steer 注入,src/stuck.ts):
-// level 决定提示的力度——1 换思路、2 先写诊断再动手、3 停止重试并收尾(会话内
-// 最多三次)。与交接 steer 同为 steer 注入,二者互不影响。
+// Stuck-loop hint (steered into a running session when the driver detects
+// repeated actions, src/stuck.ts): level sets the force of the hint — 1 switch
+// approach, 2 write the diagnosis before acting, 3 stop retrying and close out
+// (at most three per session). Injected by steer like the handover steer; the
+// two do not interfere.
 export function renderStuckHint(hit: StuckHit): string {
   return renderPrompt("stuck-hint", {
     tool: hit.tool,
     count: String(hit.count),
     level: String(hit.level),
-    input: hit.input || "(无参数)",
-    detail: hit.detail || "(空)",
+    input: hit.input || "(no arguments)",
+    detail: hit.detail || "(empty)",
     repeatError: hit.kind === "error",
     level1: hit.level === 1,
     level2: hit.level === 2,

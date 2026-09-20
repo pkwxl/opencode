@@ -1,38 +1,39 @@
 {{> head}}
 
-当前任务(完整内容同时见 CURRENT.md):
+Current task (its full content is also in CURRENT.md):
 
 {{taskBlock}}
 
-{{#if modeExec}}场景模式注意事项({{modeName}}):
+{{#if modeExec}}Scenario mode notes ({{modeName}}):
 {{modeExec}}
 
-{{/if}}你本次完成任务背景理解与子任务分解,不写实现代码。当前处于阶段 {{phaseName}}:
+{{/if}}This session completes the task-background understanding and the subtask decomposition; it writes no implementation code. The current phase is {{phaseName}}:
 
-1. 理解任务背景:围绕该任务的目标,有选择地阅读相关源码与 docs/(控制阅读总量,
-   优先任务正文点名的文件与直接相关模块,不求全);把理解结果写入
-   docs/{{taskId}}/context.md,包含四节:
-   ## 相关文件与关键符号(路径 + 为什么相关,一两句)
-   ## 约束与前提
-   ## 已有决策与现状
-   ## 风险与未知
-   写得紧凑、可检索(建议 {{contextLines}} 行以内);若该文件已存在且仍然准确
-   (中断恢复),在其基础上修订而非推倒重写;
-2. 构建公共上下文:把各子任务都需要共享的文件/代码以引用方式预取,写入
-   docs/{{taskId}}/shared.md——每条目一行:路径(或符号) + 一两句定位说明。
-   该文件是索引,不搬运全文;后续子任务会话按索引自行引用式阅读;
+1. Understand the task background: read the relevant source and docs/ selectively around this task's goal (keep the total reading volume down,
+   preferring the files named in the task body and the directly related modules over completeness); write what you understood into
+   docs/{{taskId}}/context.md, in four sections:
+   ## Relevant files and key symbols (path + why it is relevant, one or two sentences)
+   ## Constraints and premises
+   ## Existing decisions and current state
+   ## Risks and unknowns
+   Keep it compact and searchable (aim for {{contextLines}} lines or fewer); if the file already exists and is still accurate
+   (interruption recovery), revise it rather than rewriting it from scratch;
+2. Build the shared context: prefetch by reference the files/code that every subtask will need, into docs/{{taskId}}/shared.md — one line
+   per entry: path (or symbol) + one or two sentences saying where it sits. This file is an index, not a copy of the content; later subtask
+   sessions read the listed files themselves, on demand, following the index;
 {{#if decomposeRule}}{{decomposeRule}}
 {{/if}}{{#if phaseDuties}}{{phaseDuties}}
-{{/if}}5. 把分解结果写入 docs/{{taskId}}/subtasks.md(子任务索引),格式为 Markdown 检查项,
-   描述要自包含(执行会话仅凭该描述、本子任务的 todo.md、公共上下文索引 shared.md
-   与 docs/ 即可完成),并在描述末尾注明该项的产出:
+{{/if}}5. Write the decomposition into docs/{{taskId}}/subtasks.md (the subtask index) as Markdown checklist items. Each description must be
+   self-contained (the executing session can finish the item from that description alone, plus this subtask's todo.md, the shared-context
+   index shared.md and docs/), and must declare the item's artifacts at the end of the description with the literal token `产出:` — a
+   protocol string the driver parses, so write it verbatim and do not translate it:
 
-- [ ] <子任务描述;末尾注明该项的产出>
+- [ ] <subtask description; ends with 产出: <path list>>
 
-6. 为每个子任务写范围声明文件(第 N 项对应 docs/{{taskId}}/S<两位零填充序号>/todo.md,
-   如第 1 项为 S01),含两节:
-   ## 范围声明(该子任务做什么、不做什么)
-   ## 产出清单(与检查项「产出:」声明一致的路径列表)
+6. Write a scope file for each subtask (item N maps to docs/{{taskId}}/S<two-digit zero-padded index>/todo.md, e.g. S01 for item 1),
+   containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.
+   ## 范围声明 (what this subtask does and does not do)
+   ## 产出清单 (the path list, matching the checklist item's `产出:` declaration)
 
 {{> digest-rule}}
 
@@ -40,13 +41,13 @@
 
 {{> doc-layout}}
 
-约束:
-1. 只做理解与分解:不修改任何实现代码,也不执行任务正文中的执行期指令(如"调用
-   question 工具询问"、"写入某文件"等)——那些是后续子任务会话的职责;{{> state-rule}}
+Constraints:
+1. Understanding and decomposition only: modify no implementation code, and do not carry out the execution-time instructions in the task body
+   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; {{> state-rule}}
 {{> question-rule}}
-3. 写出全部文件是硬性要求:即使任务看起来已完成或极其简单,也必须写出 context.md、
-   shared.md、subtasks.md 与各 todo.md(原子任务分解为单个检查项即可);不产出有效
-   文件会导致任务阻塞停机;
-4. todo.md/done.md 状态文件由 DRIVER 管理:你只写 todo.md,不得自行创建 done.md
-   或重命名它们;
-5. 写完文件后立即结束会话。
+3. Writing out every file is a hard requirement: even if the task looks already done or extremely simple, you must write context.md,
+   shared.md, subtasks.md and each todo.md (an atomic task decomposes into a single checklist item); producing no valid file blocks the task
+   and stops the run;
+4. The todo.md/done.md state files are managed by the DRIVER: you write todo.md only, and must neither create done.md nor rename them
+   yourself;
+5. End the session as soon as the files are written.

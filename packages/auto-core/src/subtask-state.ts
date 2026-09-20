@@ -99,11 +99,11 @@ export async function writeInjectedTodo(dir: string, taskId: string, index: numb
     ``,
     scopeHeading,
     ``,
-    `本子任务由质量审核修复轮注入,范围以 PLAN.md 中对应检查项的描述为准: ${text}`,
+    `This subtask was injected by a quality-review fix round; its scope is the description of the corresponding checklist item in PLAN.md: ${text}`,
     ``,
     listHeading,
     ``,
-    `以检查项描述中的「产出:」声明为准(无声明时产出直接落于源码树)。`,
+    `The \`产出:\` declaration in the checklist item description is authoritative (with no declaration, the artifacts land directly in the source tree).`,
     ``,
     EOF_MARK,
   ].join("\n")

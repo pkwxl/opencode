@@ -1,12 +1,12 @@
-[DRIVER] 循环检测: 工具 bash 已经 3 次以相同的参数得到完全相同的结果。
+[DRIVER] Loop detected: the tool bash has now returned exactly the same result 3 times for the same arguments.
 
-- 工具: bash
-- 参数: git status
-- 输出: (空)
+- Tool: bash
+- Arguments: git status
+- Output: (空)
 
-重复同一个动作不会得到不同的结果,这一路已经走不通了。
-这已是第 2 次提醒,说明上一次换的思路仍在原地打转。先在回复里写清三件事,再动手:
-1. 你要达成的具体目标是什么;
-2. 已经试过哪些做法、各自失败在哪一步(引用真实报错,不要凭印象);
-3. 下一步换用哪一种此前没试过的做法,理由是什么。
-禁止在写清之前再次发起同一个调用。
+Repeating the same action will not produce a different result; this route is a dead end.
+This is reminder number 2, which means the approach you switched to last time is still going in circles. Write these three things out in your reply before acting:
+1. what exactly you are trying to achieve;
+2. which approaches you have already tried, and at which step each one failed (quote the real error, do not go by impression);
+3. which previously untried approach you will use next, and why.
+Do not issue the same call again before you have written these out.

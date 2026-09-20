@@ -252,11 +252,12 @@ export async function ensureDecomposed(
       }
     }
     feedback =
-      `\n\n你上次结束会话但合并理解与分解的产物未过检查: ${problems.join("; ")}。这是硬性要求:` +
-      `补齐 ${contextFile}(四节理解摘要)、${sharedFile}(公共上下文引用索引)、${subtasksFile}(检查项清单)与每个子任务的 todo.md,` +
-      `内容完整并以 \`${EOF_MARK}\` 独占最后一行正文收尾后再结束会话。`
-    // 重提示基于刚结束的会话 fork 续做(带全部调研上下文);fork 不可用回退
-    // 全新会话 + 完整提示词。
+      `\n\nThe last time you ended the session, the merged understanding+decomposition artifacts did not pass checks: ${problems.join("; ")}. This is a hard requirement: ` +
+      `complete ${contextFile} (the four-section understanding digest), ${sharedFile} (the shared-context reference index), ${subtasksFile} (the checklist) and every subtask's todo.md, ` +
+      `and end the session only once the content is complete and closed with \`${EOF_MARK}\` alone on the last line of body text.`
+    // The re-prompt continues from a fork of the session that just ended (carrying
+    // all its research context); when fork is unavailable it falls back to a
+    // brand-new session plus the full prompt.
     shapeForked = await forkEndedSession(client, chain, subject)
     log(`↻ ${task.id} decompose session artifacts failed checks (${problems.join("; ")}); ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }
@@ -471,8 +472,8 @@ export async function runSubtask(
       log(`↻ ${task.id} subtask ${index} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
       retried = true
       feedback =
-        `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`状态: 继续|完成\` 行)。` +
-        `这是硬性要求: 写出该文件后再结束会话。`
+        `\n\nThe last time you ended the session the context had reached its limit, but no valid ${handoffFile(task)} was written (missing, or lacking the \`状态: 继续|完成\` status line — a driver protocol string, write it verbatim). ` +
+        `This is a hard requirement: write that file before ending the session.`
     }
   }
   // 子任务完成: 清除交接文档(ondemand 交接与测试交接,下一子任务重新起算——
@@ -535,18 +536,20 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
   return problems
 }
 
-// D2 反馈文案: 复述 L1 权威状态(台账勾选快照)并逐项引用未过关项,直指误判——
-// 前序任务的完成叙事不是本任务状态(T-068 S01 事故形态)。
+// D2 feedback wording: restates the L1 authoritative state (the ledger tick
+// snapshot) and cites each failing item, pointing straight at the misjudgment —
+// a previous task's completion narrative is not this task's state (the T-068 S01
+// incident shape).
 function shapeFeedback(task: Task, index: number, problems: string[]): string {
   const items = subtasks(task.body)
   const done = items.filter((item) => item.done).length
   const sid = `S${String(index).padStart(2, "0")}`
   return (
-    `\n\n你上次结束了会话,但本子任务(${task.id}.${sid})的产物形检未过,不得视为完成:\n` +
+    `\n\nYou ended the session last time, but this subtask's (${task.id}.${sid}) artifacts did not pass the shape check, so it must not be treated as complete:\n` +
     `${problems.map((problem) => `- ${problem}`).join("\n")}\n` +
-    `权威状态: 任务 ${task.id}「${task.title}」进行中,子任务勾选 ${done}/${items.length},${sid} 尚未勾选;` +
-    `前序任务或其他文档中的完成叙事与本任务进度无关,不要据此判断本子任务已完成。` +
-    `请实际完成本子任务并把产出写入磁盘: 声明的产出文件必须存在;本单元新建或修改的 Markdown 文档须内容完整,` +
-    `并以 \`${EOF_MARK}\` 独占最后一行正文后再结束会话(修改既有文档时,终止符同样须保持在最后一行)。`
+    `Authoritative state: task ${task.id} "${task.title}" is in progress, subtask ticks ${done}/${items.length}, ${sid} is not ticked yet; ` +
+    `completion narratives in previous tasks or in other documents say nothing about this task's progress — do not judge this subtask complete on that basis. ` +
+    `Actually complete this subtask and write its artifacts to disk: every declared artifact file must exist; Markdown documents created or modified in this unit must be complete in content ` +
+    `and closed with \`${EOF_MARK}\` alone on the last line of body text before you end the session (when modifying an existing document, the terminator must likewise stay on the last line).`
   )
 }

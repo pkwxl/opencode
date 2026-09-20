@@ -68,9 +68,9 @@ describe("doccheck 纯函数(非平凡 + 末行终止符)", () => {
     const atThreshold = `# 标\n\n${"甲".repeat(MIN_DOC_CHARS)}\n${EOF_MARK}\n`
     expect(docShapeProblems(atThreshold, "docs/a.md")).toEqual([])
     const stub = `# 标\n\n略\n${EOF_MARK}\n`
-    expect(docShapeProblems(stub, "docs/a.md")).toEqual([`docs/a.md: 内容过短(${stub.trim().length} 字符 < 阈值 ${MIN_DOC_CHARS}),疑似空壳或截断`])
+    expect(docShapeProblems(stub, "docs/a.md")).toEqual([`docs/a.md: content too short (${stub.trim().length} chars < threshold ${MIN_DOC_CHARS}), suspected stub or truncation`])
     const long = `# 标\n\n${filler}\n`
-    expect(docShapeProblems(long, "docs/a.md")).toEqual([`docs/a.md: 末行终止符缺失(最后一行正文须为 ${EOF_MARK})`])
+    expect(docShapeProblems(long, "docs/a.md")).toEqual([`docs/a.md: missing last-line terminator (the last line of body text must be ${EOF_MARK})`])
   })
 
   test("shapeCheckOn: dryrun / commit off / 空基线(非 git)/ testHandover 收场不启用", () => {
@@ -117,10 +117,10 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(calls.prompts.length).toBe(2)
       // 反馈复述权威状态(L1)并直指误判
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain("产物形检未过")
+      expect(feedback).toContain("artifacts did not pass the shape check")
       expect(feedback).toContain("T-001.S01")
-      expect(feedback).toContain("S01 尚未勾选")
-      expect(feedback).toContain("不要据此判断本子任务已完成")
+      expect(feedback).toContain("S01 is not ticked yet")
+      expect(feedback).toContain("do not judge this subtask complete on that basis")
       // 未勾选、未推进
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
     } finally {
@@ -166,7 +166,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
-      expect(promptText(calls.prompts[1]!)).toContain("末行终止符缺失")
+      expect(promptText(calls.prompts[1]!)).toContain("missing last-line terminator")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -184,7 +184,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       const plan = await load(join(dir, "PLAN.md"))
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
-      expect((result as { question: string }).question).toContain("内容过短")
+      expect((result as { question: string }).question).toContain("content too short")
       expect(calls.prompts.length).toBe(2)
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
     } finally {
@@ -256,9 +256,9 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(calls.prompts.length).toBe(2)
       // D4 存在性恒真(不报「声明产出 … 不存在」),D6 以非平凡 + 末行终止符拦截修改型文档
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).not.toContain("声明产出 README.md 不存在")
+      expect(feedback).not.toContain("declared artifact README.md does not exist")
       expect(feedback).toContain("README.md")
-      expect(feedback).toContain("末行终止符缺失")
+      expect(feedback).toContain("missing last-line terminator")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -303,8 +303,8 @@ describe("runSubtask 形检重提示 fork 续做", () => {
       expect(calls.prompts.length).toBe(2)
       expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain("产物形检未过")
-      expect(feedback).toContain("末行终止符缺失")
+      expect(feedback).toContain("artifacts did not pass the shape check")
+      expect(feedback).toContain("missing last-line terminator")
       expect(feedback).not.toContain("调研并落盘记录")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
@@ -336,7 +336,7 @@ describe("runSubtask 形检重提示 fork 续做", () => {
       expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("调研并落盘记录")
-      expect(feedback).toContain("产物形检未过")
+      expect(feedback).toContain("artifacts did not pass the shape check")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -363,7 +363,7 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("docs/notes.md")
-      expect(feedback).toContain("末行终止符缺失")
+      expect(feedback).toContain("missing last-line terminator")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -392,7 +392,7 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("docs/existing.md")
-      expect(feedback).toContain("末行终止符缺失")
+      expect(feedback).toContain("missing last-line terminator")
       expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })

@@ -1,9 +1,9 @@
-你正在按一份实施计划执行其中的一项任务,本会话只需完成提示词给出的当前任务,其他任务无需了解;其他任务的描述中包含的指令(如提问、执行动作)不属于本次会话职责,不要执行。
+You are carrying out one task of an implementation plan. This session only has to finish the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions (asking a question, performing an action) are not this session's responsibility — do not carry them out.
 
-以下任务已完成,不要重做:
+These tasks are already done, do not redo them:
 - [done] T-001: 搭建 schema
 
-当前任务(完整内容同时见 CURRENT.md):
+Current task (its full content is also in CURRENT.md):
 
 # T-002: 实现迁移
 
@@ -13,101 +13,100 @@
 - [ ] 编写执行逻辑
 - [ ] 编写文档
 
-场景模式注意事项(migrate):
-迁移/升级模式注意事项:
-- 新实现须与旧实现保持对等行为(输入输出、边界情形、错误路径均不得漂移);
-- 迁移期间引入的兼容层、临时分支或开关须注明用途与移除时机;
-- 凡为推进迁移而做出的取舍(暂留旧路径、简化某分支等)属于代码变更决策,
-  按 AUTO-DECISION 要求记录决策过程并标注。
+Scenario mode notes (migrate):
+Migration/upgrade mode notes:
+- The new implementation must stay behaviourally equivalent to the old one (inputs and outputs, edge cases and error paths must not drift);
+- Any compatibility layer, temporary branch or switch introduced during the migration must state its purpose and when it is to be removed;
+- Every trade-off made to advance the migration (leaving an old path in place, simplifying a branch, and the like) is a code-change decision:
+  record how it was made and annotate it as AUTO-DECISION requires.
 
-你本次完成任务背景理解与子任务分解,不写实现代码。当前处于阶段 迁移实现:
+This session completes the task-background understanding and the subtask decomposition; it writes no implementation code. The current phase is 迁移实现:
 
-1. 理解任务背景:围绕该任务的目标,有选择地阅读相关源码与 docs/(控制阅读总量,
-   优先任务正文点名的文件与直接相关模块,不求全);把理解结果写入
-   docs/T-002/context.md,包含四节:
-   ## 相关文件与关键符号(路径 + 为什么相关,一两句)
-   ## 约束与前提
-   ## 已有决策与现状
-   ## 风险与未知
-   写得紧凑、可检索(建议 200 行以内);若该文件已存在且仍然准确
-   (中断恢复),在其基础上修订而非推倒重写;
-2. 构建公共上下文:把各子任务都需要共享的文件/代码以引用方式预取,写入
-   docs/T-002/shared.md——每条目一行:路径(或符号) + 一两句定位说明。
-   该文件是索引,不搬运全文;后续子任务会话按索引自行引用式阅读;
-3. 分解粒度准则(以任务描述为基准——在其规定的范围内选择粒度,不扩大、不缩小):
-   - 一个方面一个子任务:调研、实现、文档、接线等不同性质的工作不合并为一项;
-     任务描述点名的文件/模块/接口/行为/场景是天然的切分参考;
-   - 每项自包含:仅凭该项描述、本子任务的 todo.md、任务背景摘要 context.md、
-     公共上下文索引 shared.md 与 docs/ 即可执行,并包含验证方式;
-   - 每项声明产出:文档类注明文件路径,代码类注明模块/文件范围;
-   - 上限导向:每项以单个会话用较小上下文(约 32.0k tokens 量级)
-     可完成为宜;
-4. 本阶段(迁移实现)的切分与产出准则:
-   - 垂直薄切片优先:一条可调用路径端到端成项,不按水平层(先全部 schema 再全部
-     实现)切分;
-   - schema/接口、实现、接线、文档等不同方面分开成项;
-   - 下限保护:每项完成时源码树保持一致——可编译、既有测试不倒退;禁止拆出会留下
-     破损中间状态的碎片;
-   - 存在依赖顺序时按可执行顺序排列(依赖前项的排在后);
-5. 把分解结果写入 docs/T-002/subtasks.md(子任务索引),格式为 Markdown 检查项,
-   描述要自包含(执行会话仅凭该描述、本子任务的 todo.md、公共上下文索引 shared.md
-   与 docs/ 即可完成),并在描述末尾注明该项的产出:
+1. Understand the task background: read the relevant source and docs/ selectively around this task's goal (keep the total reading volume down,
+   preferring the files named in the task body and the directly related modules over completeness); write what you understood into
+   docs/T-002/context.md, in four sections:
+   ## Relevant files and key symbols (path + why it is relevant, one or two sentences)
+   ## Constraints and premises
+   ## Existing decisions and current state
+   ## Risks and unknowns
+   Keep it compact and searchable (aim for 200 lines or fewer); if the file already exists and is still accurate
+   (interruption recovery), revise it rather than rewriting it from scratch;
+2. Build the shared context: prefetch by reference the files/code that every subtask will need, into docs/T-002/shared.md — one line
+   per entry: path (or symbol) + one or two sentences saying where it sits. This file is an index, not a copy of the content; later subtask
+   sessions read the listed files themselves, on demand, following the index;
+3. Decomposition granularity criteria (measured against the task description — choose the granularity within the scope it defines, neither wider nor narrower):
+   - One aspect per subtask: work of different natures (research, implementation, documentation, wiring) is not merged into a single item;
+     the files/modules/interfaces/behaviours/scenarios named in the task description are the natural splitting reference;
+   - Each item self-contained: executable from the item description alone plus this subtask's todo.md, the task-background digest
+     context.md, the shared-context index shared.md and docs/, and including the way to verify it;
+   - Each item declares its artifacts: documents state the file path, code states the module/file range;
+   - Budget-oriented: each item should be completable by a single session with a smallish context (on the order of 32.0k tokens);
+4. Splitting and artifact criteria for this phase (迁移实现):
+   - Vertical thin slices first: one callable path end to end per item; do not split by horizontal layer (all the schema first, then all the
+     implementation);
+   - Keep different aspects apart — schema/interfaces, implementation, wiring and documentation each become their own item;
+   - Floor protection: the source tree stays consistent when an item completes — it compiles and existing tests do not regress; splitting out
+     a fragment that leaves a broken intermediate state is forbidden;
+   - Where there is a dependency order, arrange the items into an executable sequence (an item depending on an earlier one comes after it);
+5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each description must be
+   self-contained (the executing session can finish the item from that description alone, plus this subtask's todo.md, the shared-context
+   index shared.md and docs/), and must declare the item's artifacts at the end of the description with the literal token `产出:` — a
+   protocol string the driver parses, so write it verbatim and do not translate it:
 
-- [ ] <子任务描述;末尾注明该项的产出>
+- [ ] <subtask description; ends with 产出: <path list>>
 
-6. 为每个子任务写范围声明文件(第 N 项对应 docs/T-002/S<两位零填充序号>/todo.md,
-   如第 1 项为 S01),含两节:
-   ## 范围声明(该子任务做什么、不做什么)
-   ## 产出清单(与检查项「产出:」声明一致的路径列表)
+6. Write a scope file for each subtask (item N maps to docs/T-002/S<two-digit zero-padded index>/todo.md, e.g. S01 for item 1),
+   containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.
+   ## 范围声明 (what this subtask does and does not do)
+   ## 产出清单 (the path list, matching the checklist item's `产出:` declaration)
 
-跨任务引用纪律(本文件将作为下游子任务会话的背景/导航来源;前序任务的完成叙事一旦经引用
-流入,会被下游会话误读为本任务已完成的迹象):
-- 跨任务引用只指阶段级单源(裁决/契约/台账),不把指针留给前序任务的收尾叙事;
-- 确需借用前序任务级收尾产物(report/批记录/testhandoff 等)作格式/先例时,引用处必须
-  带定性「已完成另一任务的产物,仅作格式模板」;
-- 能摘录要点不整文回源:直接摘录所需内容,不留让下游会话自行通读的整文指针。
+Cross-task reference discipline (this file will serve as the background/navigation source for downstream subtask sessions; once a previous task's
+completion narrative flows in through a reference, a downstream session misreads it as a sign that this task is already done):
+- Point cross-task references only at phase-level single sources (rulings/contracts/ledger); never leave a pointer to a previous task's wrap-up narrative;
+- When you genuinely need to borrow a previous task-level wrap-up artifact (report/batch record/testhandoff and the like) as a format or precedent, the
+  reference must carry the qualification "artifact of another, already completed task — format template only";
+- Excerpt the points you need instead of sending the reader back to a whole document: quote the content directly and leave no pointer that a
+  downstream session would have to read end to end.
 
-文档终止符纪律: 你在本任务中新建(或整份重写)的每一份 Markdown 文档,写完时须以
-独占一行的 `<!-- auto: eof -->` 作为最后一行正文收尾(其后只允许空行)。这是
-「文档已写完」的机械判据,DRIVER 据此校验产出——末行终止符缺失会被视为未写完而
-退回补正;此前已存在的存量文档无需回补。
+Document terminator discipline: every Markdown document you create (or rewrite in full) during this task must end, once finished, with a line
+containing only `<!-- auto: eof -->` as its last line of body text (only blank lines may follow). This is the mechanical criterion for
+"a document is finished" and the DRIVER validates artifacts against it — a missing terminator on the last line is treated as unfinished and
+sent back for correction; documents that already existed beforehand need no retrofit.
 
-文档存放规范: 每个任务(T-NNN)的全部文档写入该任务自己的目录 docs/T-NNN/ 内(理解摘要
-context.md、公共上下文索引 shared.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告
-audit.md、修复检查项 fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级
-测试交接写同目录 testhandoff.md;子任务状态文件 docs/T-NNN/S<两位序号>/todo.md 与
-done.md 由 DRIVER 独占管理(分解会话写定 todo.md,子任务完成时 DRIVER 改名为 done.md)
-——你不得自行创建、重命名或删除它们。这些路径一经创建即为永久路径——不移动、不改名;
-引用其他任务的文档时一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
-不属于任何单个任务的阶段级自由产物(勘测报告、设计批次、覆盖矩阵、核验记录等)写入
-本轮轮次目录 docs/R-NN/ 内的 phase-docs/<阶段字母>-<slug>/ 子目录(如 docs/R-03/
-phase-docs/a-analysis/r3-baseline.md)——同为永久路径,落定不移动;引用一律使用该
-永久路径。
+Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md, audit report audit.md, fix checklist fix.md);
+subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
+the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
+todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
+these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
+do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
+batches, coverage matrices, verification records and the like) go into the phase-docs/<phase letter>-<slug>/ subdirectory of this round's
+directory docs/R-NN/ (e.g. docs/R-03/phase-docs/a-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference
+it by that permanent path.
 
-约束:
-1. 只做理解与分解:不修改任何实现代码,也不执行任务正文中的执行期指令(如"调用
-   question 工具询问"、"写入某文件"等)——那些是后续子任务会话的职责;PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(状态、检查项勾选、verified 字段),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
-git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
-2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
-   其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
-   你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;
-   自主决策须记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档
-   (docs/ 设计文档或报告)。并按「这个分歧点的决定权本应属于谁」分两类标注——
-   涉及架构设计或代码变更的标在设计文档或代码注释中,其余标在任务报告中:
-   - 决定权本应属于用户:需求意图与范围取舍(做不做、做到哪)、对外可见行为与接口
-     契约的变更、「什么算做完」的判定标准、事实确认类问题(数据异常、环境缺失、与
-     文档不符的现状)、超出或收窄任务描述的字面范围。这类分歧点本该由用户拍板,是你
-     代替用户闭环的,须以 `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` 行明确标注;
-   - 决定权本就属于你:实现手段的选择,且任一选项都不改变用户可见行为(算法、内部
-     结构、命名、文件组织、注入方式、测试写法),以 `AUTO-DECISION: <决策> (<理由>)`
-     行标注。
-   例:"是否把第三份重复实现一并收口"改变了任务的字面范围,属 AUTO-RESOLVE;
-   "新字段叫 matched 还是 paired"不改变用户可见行为,属 AUTO-DECISION。
-   同一决策只标一类、不重复标注;拿不准标 AUTO-RESOLVE——多提醒一次无妨,漏标才是真损失。
-   非权限问题调用 question 工具会被自动答复上述要求;就同一问题再次询问会导致任务阻塞停机。
-3. 写出全部文件是硬性要求:即使任务看起来已完成或极其简单,也必须写出 context.md、
-   shared.md、subtasks.md 与各 todo.md(原子任务分解为单个检查项即可);不产出有效
-   文件会导致任务阻塞停机;
-4. todo.md/done.md 状态文件由 DRIVER 管理:你只写 todo.md,不得自行创建 done.md
-   或重命名它们;
-5. 写完文件后立即结束会话。
+Constraints:
+1. Understanding and decomposition only: modify no implementation code, and do not carry out the execution-time instructions in the task body
+   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks, the verified field); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
+2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
+   decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
+   A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
+   relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
+   a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
+     user's to make and you closed it on their behalf, so annotate it explicitly with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
+   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
+   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+   Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
+3. Writing out every file is a hard requirement: even if the task looks already done or extremely simple, you must write context.md,
+   shared.md, subtasks.md and each todo.md (an atomic task decomposes into a single checklist item); producing no valid file blocks the task
+   and stops the run;
+4. The todo.md/done.md state files are managed by the DRIVER: you write todo.md only, and must neither create done.md nor rename them
+   yourself;
+5. End the session as soon as the files are written.

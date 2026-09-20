@@ -1,18 +1,18 @@
 {{> head}}
 
-当前任务:
+Current task:
 
 {{taskBlock}}
 
-任务级独立审核会话对本任务的验收未通过,差距如下:
+The task-level independent review session did not pass this task's acceptance. The gaps are:
 
 {{gap}}
 
-约束:
-1. 只修复审核指出的差距,逐项核对并修复,不要做差距之外的实现工作;
+Constraints:
+1. Fix only the gaps the review pointed out: check and fix them one by one, and do no implementation work beyond those gaps;
 {{> question-rule}}
-3. {{#if verify}}不要运行任务级 verify(验收由 DRIVER 交独立审核会话处理)、{{/if}}不要更新 docs/(最后统一收尾;差距若为文档中的失效引用,允许只更新对应引用行为现行永久路径,不改其他内容;差距若为带 @<sha> 版本标记的行号锚——表示该范围仅对标记的历史版本有效、目标文件其后已被修改——允许按当前内容订正行号范围并去除标记);
+3. {{#if verify}}do not run the task-level verify (acceptance is handed by the DRIVER to an independent review session); {{/if}}do not update docs/ (a single close-out pass does that at the end; if a gap is a stale reference in a document, you may update just that reference line to the current permanent path and change nothing else; if a gap is a line-number anchor carrying an @<sha> version marker — meaning that range is valid only for the marked historical version and the target file has since been modified — you may correct the line-number range against the current content and remove the marker);
    {{> state-rule}}
-4. 修复完成并自我检查后,立即结束会话。
+4. Once the fix is complete and self-checked, end the session immediately.
 {{#if testByDriver}}
-测试执行协议(--test-by-driver): 不要在会话内直接运行编译、测试、构建、lint 等可能耗时长或产生大量输出的命令;需要时把命令写成脚本放入 test/ 目录(命名清晰、可执行、可复用),再把脚本路径(相对工作目录,如 test/build.sh)写入 tmp/test.sh 告知 DRIVER 执行,然后结束本轮消息等待。DRIVER 执行后会把退出码与输出文件路径(stdout 与 stderr 合并落入单文件)反馈回本会话,你直读文件判断结果;需要再次测试时把同一脚本路径再次写入 tmp/test.sh 即可重跑(脚本可先修改再重跑)。{{#if handoverTest}}测试提交后,DRIVER 有时会要求你把不依赖测试结果的剩余工作做完落盘、把与测试相关的进度与后续步骤写入 {{testHandoffFile}} 并结束会话,由新会话判读测试结果继续——那是既定的交接节奏,不是出了问题。**只在 DRIVER 明确要求时**才写 {{testHandoffFile}};此外不得自行创建或续号 testhandoff.md / testhandoff-<n>.md——这一命名族是 DRIVER 判定交接时序的观测量,自行落笔会被误读为交接事实。测试判读结论与修正记录写入本执行范围既定的产物文档,或留待下一次交接时并入交接文档。{{/if}}{{/if}}
+Test execution protocol (--test-by-driver): do not run compile, test, build, lint or similar commands directly inside the session — they can take a long time or produce a lot of output. When you need one, write the command as a script into the test/ directory (clearly named, executable, reusable), then write the script path (relative to the working directory, e.g. test/build.sh) into tmp/test.sh to tell the DRIVER to run it, and end your turn to wait. After running it, the DRIVER feeds the exit code and the output file path back into this session (stdout and stderr merged into a single file); read that file directly to judge the result. To test again, write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running).{{#if handoverTest}} After the test is committed the DRIVER sometimes asks you to finish and write out the remaining work that does not depend on the test result, to write the test-related progress and next steps into {{testHandoffFile}}, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write {{testHandoffFile}} **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — that naming family is what the DRIVER observes to establish handover ordering, and writing it yourself is misread as a handover that happened. Record your interpretation of the test result and any corrections in the established artifact documents of this execution scope, or leave them to be folded into the handover document at the next handover.{{/if}}{{/if}}

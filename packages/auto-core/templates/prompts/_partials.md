@@ -1,77 +1,83 @@
-# 提示词共享片段
+# Shared prompt partials
 
-会话模板(templates/prompts/*.md 或目标目录 .opencode/auto/prompts/ 的覆盖)经
-`{{> 片段名}}` 引用这里的 `## <片段名>` 节;片段独占一行时,行首缩进会应用到片段
-的每一行。覆盖本文件时保持节名不变,否则引用它的模板会在渲染时报错。
-可选内容块(阻塞备注、模式注记等)不做成片段——条件段语义在空分支下整行吞掉,
-由各模板内联书写。
-条件段若在片段内给出两档整段替换文本(如 question-rule 的 ask 两档),开闭标签必须与
-内容同行相接(`…{{/if}}{{#if x}}…`):标签独占一行时整行连同换行被吞掉,而两个分支
-之间留下的换行会落在分支外无条件输出,使片段末尾多出空行、与调用处的下一行粘连。
+Session templates (`templates/prompts/*.md`, or overrides under the target directory's
+`.opencode/auto/prompts/`) reference the `## <name>` sections here through `{{> name}}`;
+when a reference sits on its own line, the leading indentation is applied to every line of
+the partial. Keep the section names unchanged when overriding this file, otherwise the
+templates that reference them fail at render time.
+Optional content blocks (blocking remarks, mode notes and the like) are deliberately not
+partials — a conditional section swallows the whole line on its empty branch, so each
+template writes those inline.
+When a conditional section carries two whole-branch replacement texts inside a partial
+(like the two `ask` branches of question-rule), the opening and closing tags must sit on the
+same line as the content (`…{{/if}}{{#if x}}…`): a tag alone on its line swallows that line
+together with its newline, while the newline left between the two branches falls outside both
+branches and is emitted unconditionally — leaving a trailing blank line at the end of the
+partial that glues onto the next line at the call site.
 
 ## head
-你正在按一份实施计划执行其中的一项任务,本会话只需完成提示词给出的当前任务,其他任务无需了解;其他任务的描述中包含的指令(如提问、执行动作)不属于本次会话职责,不要执行。
+You are carrying out one task of an implementation plan. This session only has to finish the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions (asking a question, performing an action) are not this session's responsibility — do not carry them out.
 
-{{#if doneList}}以下任务已完成,不要重做:
-{{doneList}}{{/if}}{{^doneList}}计划中尚无已完成的任务。{{/if}}
+{{#if doneList}}These tasks are already done, do not redo them:
+{{doneList}}{{/if}}{{^doneList}}No task in the plan is done yet.{{/if}}
 ## question-rule
-{{^ask}}2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
-   其他问题(需求歧义、多种合理方案、数据异常、环境缺失等)不要调用 question 工具,
-   你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段;
-   自主决策须记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档
-   (docs/ 设计文档或报告)。并按「这个分歧点的决定权本应属于谁」分两类标注——
-   涉及架构设计或代码变更的标在设计文档或代码注释中,其余标在任务报告中:
-   - 决定权本应属于用户:需求意图与范围取舍(做不做、做到哪)、对外可见行为与接口
-     契约的变更、「什么算做完」的判定标准、事实确认类问题(数据异常、环境缺失、与
-     文档不符的现状)、超出或收窄任务描述的字面范围。这类分歧点本该由用户拍板,是你
-     代替用户闭环的,须以 `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` 行明确标注;
-   - 决定权本就属于你:实现手段的选择,且任一选项都不改变用户可见行为(算法、内部
-     结构、命名、文件组织、注入方式、测试写法),以 `AUTO-DECISION: <决策> (<理由>)`
-     行标注。
-   例:"是否把第三份重复实现一并收口"改变了任务的字面范围,属 AUTO-RESOLVE;
-   "新字段叫 matched 还是 paired"不改变用户可见行为,属 AUTO-DECISION。
-   同一决策只标一类、不重复标注;拿不准标 AUTO-RESOLVE——多提醒一次无妨,漏标才是真损失。
-   非权限问题调用 question 工具会被自动答复上述要求;就同一问题再次询问会导致任务阻塞停机。{{/if}}{{#if ask}}2. 遇到权限相关问题(如需要访问受限目录),调用 question 工具报告并请求用户在 opencode.json 中放行;
-   其余问题按「这个分歧点的决定权本应属于谁」处理:
-   - 决定权本应属于用户:需求意图与范围取舍(做不做、做到哪)、对外可见行为与接口
-     契约的变更、「什么算做完」的判定标准、事实确认类问题(数据异常、环境缺失、与
-     文档不符的现状)、超出或收窄任务描述的字面范围。这类分歧点调用 question 工具
-     直接发问,不要替用户拍板;拿不准就问——问一次的代价远小于替用户做错一次主;
-   - 决定权本就属于你:实现手段的选择,且任一选项都不改变用户可见行为(算法、内部
-     结构、命名、文件组织、注入方式、测试写法),自主决定即可,无须为它留痕。
-   无人值守时你的提问会被自动答复,DRIVER 已完整记录该次代答,你据答复继续执行即可;
-   如果当前阶段已经完成,直接转下一个阶段。
-   就同一问题再次询问会导致任务阻塞停机——已被答复过的问题不要换个说法再问一遍。{{/if}}
+{{^ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
+   decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
+   A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
+   relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
+   a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
+     user's to make and you closed it on their behalf, so annotate it explicitly with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
+   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
+   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+   Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.{{/if}}{{#if ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   for anything else, proceed by "who should have owned this call":
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. For these, ask
+     directly with the question tool instead of deciding in the user's place; when unsure, ask — the cost of one question is far smaller than the
+     cost of one wrong decision made in the user's name;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — decide it yourself, no record required.
+   When nobody is at the keyboard your question is answered automatically; the DRIVER has recorded that proxy answer in full, so carry on according
+   to the reply, and if the current stage is already finished, move straight on to the next one.
+   Asking the same question again blocks the task and stops the run — do not rephrase and re-ask a question that has already been answered.{{/if}}
 ## state-rule
-PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(状态、检查项勾选{{#if verify}}、verified 字段{{/if}}),会话期间这两个文件为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
-git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
+PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks{{#if verify}}, the verified field{{/if}}); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 ## ground-state
-DRIVER 台账权威状态(本任务与本子任务的进度一律以此为准,不要从其他任务的文档、交接或 git 提交记录推断本任务是否完成):
-- 当前任务: {{taskId}}「{{taskTitle}}」,状态: {{taskStatusText}};{{#if qualifiedId}}
-- 本子任务全限定编号: {{qualifiedId}};其他任务文档/提交记录中出现的 S 编号属于那些任务,与本任务无关;{{/if}}{{#if subtaskSnapshot}}
-- 本任务子任务勾选快照: {{subtaskSnapshot}};勾选由 DRIVER 在各子任务会话结束后统一维护,会话期间不会变化;{{/if}}{{#if doneIds}}
-- 前序已完成任务 {{doneIds}} 是与本任务相互独立的任务,其收尾/完成叙事与本任务进度无关;其文档仅可作格式/先例参考,不得读作「本任务(或本子任务)已完成」的依据。{{/if}}
+Authoritative DRIVER ledger state (this is the only basis for the progress of this task and this subtask — never infer whether this task is done from other tasks' documents, handovers or git commit records):
+- Current task: {{taskId}} "{{taskTitle}}", status: {{taskStatusText}};{{#if qualifiedId}}
+- Fully qualified id of this subtask: {{qualifiedId}}; S-numbers appearing in other tasks' documents or commit records belong to those tasks and are unrelated to this one;{{/if}}{{#if subtaskSnapshot}}
+- Subtask tick snapshot for this task: {{subtaskSnapshot}}; ticks are maintained by the DRIVER once each subtask session ends and do not change during a session;{{/if}}{{#if doneIds}}
+- The previously completed tasks {{doneIds}} are independent of this task, and their wrap-up/completion narratives say nothing about this task's progress; their documents may be consulted only as a format/precedent reference, never as evidence that "this task (or this subtask) is done".{{/if}}
 ## digest-rule
-跨任务引用纪律(本文件将作为下游子任务会话的背景/导航来源;前序任务的完成叙事一旦经引用
-流入,会被下游会话误读为本任务已完成的迹象):
-- 跨任务引用只指阶段级单源(裁决/契约/台账),不把指针留给前序任务的收尾叙事;
-- 确需借用前序任务级收尾产物(report/批记录/testhandoff 等)作格式/先例时,引用处必须
-  带定性「已完成另一任务的产物,仅作格式模板」;
-- 能摘录要点不整文回源:直接摘录所需内容,不留让下游会话自行通读的整文指针。
+Cross-task reference discipline (this file will serve as the background/navigation source for downstream subtask sessions; once a previous task's
+completion narrative flows in through a reference, a downstream session misreads it as a sign that this task is already done):
+- Point cross-task references only at phase-level single sources (rulings/contracts/ledger); never leave a pointer to a previous task's wrap-up narrative;
+- When you genuinely need to borrow a previous task-level wrap-up artifact (report/batch record/testhandoff and the like) as a format or precedent, the
+  reference must carry the qualification "artifact of another, already completed task — format template only";
+- Excerpt the points you need instead of sending the reader back to a whole document: quote the content directly and leave no pointer that a
+  downstream session would have to read end to end.
 ## eof-rule
-文档终止符纪律: 你在本任务中新建(或整份重写)的每一份 Markdown 文档,写完时须以
-独占一行的 `<!-- auto: eof -->` 作为最后一行正文收尾(其后只允许空行)。这是
-「文档已写完」的机械判据,DRIVER 据此校验产出——末行终止符缺失会被视为未写完而
-退回补正;此前已存在的存量文档无需回补。
+Document terminator discipline: every Markdown document you create (or rewrite in full) during this task must end, once finished, with a line
+containing only `<!-- auto: eof -->` as its last line of body text (only blank lines may follow). This is the mechanical criterion for
+"a document is finished" and the DRIVER validates artifacts against it — a missing terminator on the last line is treated as unfinished and
+sent back for correction; documents that already existed beforehand need no retrofit.
 ## doc-layout
-文档存放规范: 每个任务(T-NNN)的全部文档写入该任务自己的目录 docs/T-NNN/ 内(理解摘要
-context.md、公共上下文索引 shared.md、分解检查项 subtasks.md、收尾报告 report.md、审核报告
-audit.md、修复检查项 fix.md);子任务产物写入 docs/T-NNN/S<两位序号>/index.md,子任务级
-测试交接写同目录 testhandoff.md;子任务状态文件 docs/T-NNN/S<两位序号>/todo.md 与
-done.md 由 DRIVER 独占管理(分解会话写定 todo.md,子任务完成时 DRIVER 改名为 done.md)
-——你不得自行创建、重命名或删除它们。这些路径一经创建即为永久路径——不移动、不改名;
-引用其他任务的文档时一律使用其 docs/T-NNN/… 永久路径,不要在 docs/ 顶层另建平铺任务文件。
-不属于任何单个任务的阶段级自由产物(勘测报告、设计批次、覆盖矩阵、核验记录等)写入
-本轮轮次目录 docs/R-NN/ 内的 phase-docs/<阶段字母>-<slug>/ 子目录(如 docs/R-03/
-phase-docs/a-analysis/r3-baseline.md)——同为永久路径,落定不移动;引用一律使用该
-永久路径。
+Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md, audit report audit.md, fix checklist fix.md);
+subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
+the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
+todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
+these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
+do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
+batches, coverage matrices, verification records and the like) go into the phase-docs/<phase letter>-<slug>/ subdirectory of this round's
+directory docs/R-NN/ (e.g. docs/R-03/phase-docs/a-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference
+it by that permanent path.

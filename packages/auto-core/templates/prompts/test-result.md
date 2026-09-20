@@ -1,7 +1,7 @@
-[DRIVER] 测试脚本已执行完毕(第 {{seq}} 次)。
+[DRIVER] The test script has finished running (run number {{seq}}).
 
-- 脚本: {{script}}
-- 退出码: {{code}};耗时 {{ms}}ms;超时: {{runTimeout}}
-- 完整输出(stdout 与 stderr 合并): {{out}}(直读文件判断,文件较大时分段读取,不要凭猜测下结论)
+- Script: {{script}}
+- Exit code: {{code}}; took {{ms}}ms; timeout: {{runTimeout}}
+- Full output (stdout and stderr merged): {{out}} (judge by reading the file directly, in chunks if it is large; do not conclude by guessing)
 
-据此判断测试结果并继续: 需要修复就继续修复;需要再次测试时,把同一脚本路径再次写入 tmp/test.sh 即可重跑(脚本在 test/ 目录,可复用、可先修改再重跑)。
+Judge the test result from this and carry on: if something needs fixing, keep fixing it; when you need to test again, write the same script path into tmp/test.sh once more to re-run it (the script is in the test/ directory, reusable, and may be modified before re-running).
