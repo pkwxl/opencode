@@ -160,15 +160,23 @@ export function p1Scope(rel: string): boolean {
 //
 // The two handovers use the line differently. handoff.md's steer only
 // *suggests* a handover; a session that genuinely finished needs none, so
-// `完成` is a real exit and runSubtask closes out on it. A test handover has
+// `done` is a real exit and runSubtask closes out on it. A test handover has
 // no such exit: the test result must be read by the next session, so there is
-// always work after the handover and `完成` is unreachable — test-wrapup.md
-// asks only for `状态: 继续`, and the driver consumes only "is the line there"
+// always work after the handover and `done` is unreachable — test-wrapup.md
+// asks only for `Status: continue`, and the driver consumes only "is the line there"
 // (handover.ts handoffComplete), never branching on the value. Parsing still
-// accepts both values: a session that wrote `完成` anyway is better treated as
+// accepts both values: a session that wrote `done` anyway is better treated as
 // finished than sent back to rewrite a supposedly half-written file.
-export function handoffStatus(text: string): string | undefined {
-  return /^[ \t]*状态[:：][ \t]*(继续|完成)[ \t]*$/m.exec(text)?.[1]
+export type HandoffStatus = "continue" | "done"
+
+// Dual-read (M2.4, plans/0035 D5): the English `Status: continue|done` is the
+// written form; the pre-flip `状态: 继续|完成` still parses because archived
+// handoff.md / testhandoff-<n>.md files are re-read on recovery. Both forms
+// normalize to the English value so no comparison site sees the old literals.
+export function handoffStatus(text: string): HandoffStatus | undefined {
+  const m = /^[ \t]*(?:Status|状态)[:：][ \t]*(continue|done|继续|完成)[ \t]*$/im.exec(text)
+  if (!m) return undefined
+  return /^(?:continue|继续)$/i.test(m[1]!) ? "continue" : "done"
 }
 
 // The four mandatory sections of a phase handover (F.1 protocol): shared by

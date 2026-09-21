@@ -60,11 +60,11 @@ export async function executeWhole(
   // active 恢复——中断前已交接。状态=完成 → 执行阶段已完成,跳过整任务会话;
   // 状态=继续 → 以续跑提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
   const prior = ondemand ? handoffStatus(await readHandoff()) : undefined
-  if (prior === "完成") {
+  if (prior === "done") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks execution complete; skipping the whole-task session`)
     return undefined
   }
-  let continuation = prior === "继续"
+  let continuation = prior === "continue"
   if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues from the handover document`)
   let feedback = ""
   let retried = false
@@ -127,8 +127,8 @@ export async function executeWhole(
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
     if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used, chain.hinted)) return undefined
     const status = handoffStatus(await readHandoff())
-    if (status === "完成") return undefined
-    if (status === "继续") {
+    if (status === "done") return undefined
+    if (status === "continue") {
       log(`↻ ${task.id} context reached the ${formatTokens(cap * 2)} cap; handed over as ${handoffFile(task)}, continuing in a new session`)
       continuation = true
       feedback = ""
@@ -155,7 +155,7 @@ export async function executeWhole(
     log(`↻ ${task.id} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
     retried = true
     feedback =
-      `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`状态: 继续|完成\` 行)。` +
+      `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`Status: continue|done\` 行)。` +
       `这是硬性要求: 写出该文件后再结束会话。`
   }
 }
@@ -287,7 +287,7 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
 // wrap-up report and its result line.
 // handoff-steer 同样适用于子任务会话(与 ondemand 整任务会话同机制、共用
 // docs/<id>/handoff.md): 会话进行中上下文已用量达到 2x --context-limit 时
-// driver steer 交接提示,会话写出交接文档(末行 `状态: 继续|完成`,以本子任务
+// driver steer 交接提示,会话写出交接文档(末行 `Status: continue|done`,以本子任务
 // 是否完成计)后换新会话凭交接续跑,直到自然完成或交接文档标记完成;子任务
 // 完成后清除交接文档,下一子任务重新起算。实验开关 OPENCODE_AUTO_STEER=off
 // 停用本机制(不注入交接提示、会话后不做交接判定,自然完成即收)。
@@ -342,10 +342,10 @@ export async function runSubtask(
   const prior = stateDone ? undefined : handoffStatus(await readHandoff())
   if (stateDone) {
     log(`↻ ${task.id} subtask ${index}: ${stateSpec.complete.path} already exists; skipping the session and closing out directly`)
-  } else if (prior === "完成") {
+  } else if (prior === "done") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks the subtask complete; checking it off directly`)
   } else {
-    let continuation = prior === "继续"
+    let continuation = prior === "continue"
     if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues the subtask from the handover document`)
     // ③ 子任务首个会话从基点分叉(与分解会话同一分叉点,先 fork 后渲染——warm/
     // cold 背景段据此选择);跨子任务不复用(种子链强制),交接续跑与带反馈重试
@@ -442,11 +442,11 @@ export async function runSubtask(
         break
       }
       const status = handoffStatus(await readHandoff())
-      if (status === "完成") break
+      if (status === "done") break
       // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
       const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
-      if (status === "继续") {
+      if (status === "continue") {
         log(`↻ ${task.id} subtask ${index} context reached the ${formatTokens(cap * 2)} cap; handed over as ${handoffFile(task)}, continuing in a new session`)
         continuation = true
         feedback = ""
@@ -473,7 +473,7 @@ export async function runSubtask(
       log(`↻ ${task.id} subtask ${index} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
       retried = true
       feedback =
-        `\n\nThe last time you ended the session the context had reached its limit, but no valid ${handoffFile(task)} was written (missing, or lacking the \`状态: 继续|完成\` status line — a driver protocol string, write it verbatim). ` +
+        `\n\nThe last time you ended the session the context had reached its limit, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
         `This is a hard requirement: write that file before ending the session.`
     }
   }

@@ -130,7 +130,7 @@ export async function watch(
     return false
   }
   const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string } | { type: "invalid" }> => {
-    // 交接要求已发出: 校验交接文档写完了(F1,末行 `状态: 继续|完成`)。判据由
+    // 交接要求已发出: 校验交接文档写完了(F1,末行 `Status: continue|done`)。判据由
     // "非空"收紧为状态行,是为了让中断恢复分得清"会话写完了"与"driver 死在会话
     // 写文件途中的半截文件"——后者要重做收尾,不能当成交接完成往下走。
     if (testHandoverAsked) {
@@ -149,13 +149,13 @@ export async function watch(
         return {
           type: "blocked",
           question:
-            `the test-handover session failed twice to produce a valid ${test!.handoffFile} (missing, or lacking a \`状态: 继续|完成\` status line; hidden blockage). ` +
+            `the test-handover session failed twice to produce a valid ${test!.handoffFile} (missing, or lacking a \`Status: continue|done\` status line; hidden blockage). ` +
             `Check the file and re-run. Last agent output:\n${lastText.trim().slice(-2000) || "(no output)"}`,
         }
       }
       testHandoverRetried = true
       const ok = await steerText(
-        `You ended the session last time without writing a valid ${test!.handoffFile} (missing, or lacking the \`状态: 继续|完成\` status line). This is a hard requirement: ` +
+        `You ended the session last time without writing a valid ${test!.handoffFile} (missing, or lacking the \`Status: continue|done\` status line). This is a hard requirement: ` +
           `write the progress, key decisions, failing-test context and next steps into that file, put the status line on the last line, and only then end the session.`,
       )
       if (!ok) return { type: "blocked", question: `steer dispatch failed (asking to backfill ${test!.handoffFile}); cannot continue the session, see the log.` }

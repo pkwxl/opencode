@@ -83,7 +83,7 @@ describe("spec 表构造(数据声明点)", () => {
   test("subtaskStateSpec: pending=todo.md(带锚与命名)/ complete=done.md(仅路径)", () => {
     const spec = subtaskStateSpec("T-001", 3)
     expect(spec.pending.path).toBe("docs/T-001/S03/todo.md")
-    expect(spec.pending.sectionAnchors).toEqual(["## 范围声明", "## 产出清单"])
+    expect(spec.pending.sectionAnchors).toEqual(["## Scope", "## Artifacts"])
     expect(spec.pending.label).toBe("subtask scope file")
     expect(spec.pending.role).toBe("artifact")
     expect(spec.complete).toEqual({ path: "docs/T-001/S03/done.md" })
@@ -185,11 +185,28 @@ describe('checkArtifactSpecs(policy "mandatory",合并分解会话单元产物)'
     expect(result.problems).toEqual([])
   })
 
+  test("English artifact declaration parses; legacy 产出: dual-read (M2.4)", () => {
+    expect(declaredArtifacts("write notes Artifacts: docs/a.md, src/b.ts")).toEqual([
+      { path: "docs/a.md", role: "artifact" },
+      { path: "src/b.ts", role: "artifact" },
+    ])
+    expect(declaredArtifacts("Artifacts: docs/a.md(background)")).toEqual([
+      { path: "docs/a.md", role: "artifact", sectionAnchors: ["background"] },
+    ])
+    expect(declaredArtifacts("写文档 产出: docs/a.md")).toEqual(declaredArtifacts("write Artifacts: docs/a.md"))
+  })
+
+  test("legacy todo.md headings satisfy the section anchors (M2.4 dual-read)", async () => {
+    await put("docs/T-001/S01/todo.md", `# S01\n\n## 范围声明\n\n${filler}\n\n## 产出清单\n\n- docs/x.md\n\n${EOF_MARK}\n`)
+    const result = await checkArtifactSpecs([subtaskStateSpec("T-001", 1).pending], { dir, policy: "mandatory" })
+    expect(result.problems).toEqual([])
+  })
+
   test("todo.md 协议章节锚: 缺锚成案,双锚齐备通过(0030 §4 的 M1.4 交接项)", async () => {
-    await put("docs/T-001/S01/todo.md", `# S01\n\n## 范围声明\n\n${filler}\n\n${EOF_MARK}\n`)
-    await put("docs/T-001/S02/todo.md", `# S02\n\n## 范围声明\n\n${filler}\n\n## 产出清单\n\n- docs/x.md\n\n${EOF_MARK}\n`)
+    await put("docs/T-001/S01/todo.md", `# S01\n\n## Scope\n\n${filler}\n\n${EOF_MARK}\n`)
+    await put("docs/T-001/S02/todo.md", `# S02\n\n## Scope\n\n${filler}\n\n## Artifacts\n\n- docs/x.md\n\n${EOF_MARK}\n`)
     const specs = [subtaskStateSpec("T-001", 1).pending, subtaskStateSpec("T-001", 2).pending]
     const result = await checkArtifactSpecs(specs, { dir, policy: "mandatory" })
-    expect(result.problems).toEqual(['declared artifact docs/T-001/S01/todo.md is missing section "## 产出清单"'])
+    expect(result.problems).toEqual(['declared artifact docs/T-001/S01/todo.md is missing section "## Artifacts"'])
   })
 })

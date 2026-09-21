@@ -53,7 +53,7 @@ const filler = "占位素材甲乙丙。".repeat(30)
 const contextProper = `# 理解\n\n## 相关文件与关键符号\n\n${filler}\n\n## 约束与前提\n\n无。\n\n## 已有决策与现状\n\n无。\n\n## 风险与未知\n\n无。\n\n${EOF_MARK}\n`
 const sharedProper = `# 公共上下文索引\n\n- src/x.ts: 数据模型入口。\n\n${filler}\n\n${EOF_MARK}\n`
 const subtasksProper = `# 分解\n\n- [ ] 子任务甲 产出: docs/T-001/S01/index.md\n\n${filler}\n\n${EOF_MARK}\n`
-const todoProper = `# S01: 子任务甲\n\n## 范围声明\n\n${filler}\n\n## 产出清单\n\n- docs/T-001/S01/index.md\n\n${EOF_MARK}\n`
+const todoProper = `# S01: 子任务甲\n\n## Scope\n\n${filler}\n\n## Artifacts\n\n- docs/T-001/S01/index.md\n\n${EOF_MARK}\n`
 const reportProper = `# 报告\n\n${filler}\n\n${EOF_MARK}\n`
 
 // 合并理解与分解会话(M1.0)的全部合规产物。
@@ -156,7 +156,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
   test("todo.md 缺协议章节锚(M1.4 spec 驱动): 反馈点名缺失章节,补正后注入", async () => {
     const dir = await docRepo()
     try {
-      const todoNoList = `# S01: 子任务甲\n\n## 范围声明\n\n${filler}\n\n${EOF_MARK}\n`
+      const todoNoList = `# S01: 子任务甲\n\n## Scope\n\n${filler}\n\n${EOF_MARK}\n`
       const { client, calls } = scriptedClient([
         async () => {
           await writeMergedArtifacts(dir)
@@ -168,7 +168,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
       const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
-      expect(promptText(calls.prompts[1]!)).toContain('docs/T-001/S01/todo.md is missing section "## 产出清单"')
+      expect(promptText(calls.prompts[1]!)).toContain('docs/T-001/S01/todo.md is missing section "## Artifacts"')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

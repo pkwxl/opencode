@@ -94,9 +94,18 @@ describe("在途交接记录的读写", () => {
 
 describe("交接文档的完整判据(F1/F2)", () => {
   test("状态行", () => {
-    expect(handoffStatus("正文\n\n状态: 继续\n")).toBe("继续")
-    expect(handoffStatus("正文\n\n状态：完成")).toBe("完成")
+    expect(handoffStatus("正文\n\n状态: 继续\n")).toBe("continue")
+    expect(handoffStatus("正文\n\n状态：完成")).toBe("done")
     expect(handoffStatus("正文,没有状态行")).toBeUndefined()
+  })
+
+  test("English status line, case-insensitive; legacy Chinese still dual-read (M2.4)", () => {
+    expect(handoffStatus("body\n\nStatus: continue\n")).toBe("continue")
+    expect(handoffStatus("body\nStatus: done")).toBe("done")
+    expect(handoffStatus("body\nstatus:  DONE  \n")).toBe("done")
+    expect(handoffStatus("body\nStatus: continue running\n")).toBeUndefined()
+    expect(handoffStatus("write Status: continue at the end")).toBeUndefined()
+    expect(handoffStatus("状态: 继续")).toBe("continue")
   })
 
   test("状态行须整行锚定: 正文复述提示词字样不得命中(2026-09-17 审查 H3)", () => {
@@ -107,9 +116,9 @@ describe("交接文档的完整判据(F1/F2)", () => {
     // 跨行不算(旧判据 \s 可吞换行)
     expect(handoffStatus("状态:\n继续\n")).toBeUndefined()
     // 行内允许前后空白
-    expect(handoffStatus("正文\n  状态:  继续  \n")).toBe("继续")
+    expect(handoffStatus("正文\n  状态:  继续  \n")).toBe("continue")
     // 全文多行命中时取第一个有效状态行即可(值只分 继续|完成)
-    expect(handoffStatus("状态: 继续\n状态: 完成\n")).toBe("继续")
+    expect(handoffStatus("状态: 继续\n状态: 完成\n")).toBe("continue")
   })
 
   test("有状态行即完整;缺状态行但已落账同样完整;半截文件不完整", () => {

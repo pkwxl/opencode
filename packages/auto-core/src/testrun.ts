@@ -87,11 +87,11 @@ export type TestRun = {
 export const TEST_HANDOVER_ADVISORY = 10
 
 // 交接文档补状态行(F2): 内容已落账或已带状态行时才会走到这里,缺行只是该内容
-// 写于状态行约定之前。补 `状态: 继续`——测试结果还没判读,本执行范围一定没完。
+// 写于状态行约定之前。补 `Status: continue`——测试结果还没判读,本执行范围一定没完。
 export async function fillHandoffStatus(path: string): Promise<void> {
   const text = await Bun.file(path).text().catch(() => "")
   if (!text.trim() || handoffStatus(text)) return
-  await Bun.write(path, `${text.trimEnd()}\n\n状态: 继续\n`)
+  await Bun.write(path, `${text.trimEnd()}\n\nStatus: continue\n`)
 }
 
 // tmp/ 下最新一份执行快照 tmp/test.<n>.sh: 在途记录缺失(本机制上线前的存量

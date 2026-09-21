@@ -42,6 +42,10 @@ export type ArtifactSpec = {
   // Section anchors the artifact must contain (heading strings or bare
   // words, matched as substrings of the content); absent = no anchor check.
   sectionAnchors?: string[]
+  // Pre-flip spellings still accepted for an anchor (M2.4 dual-read, plans/0035
+  // D5): canonical anchor → legacy alternates; an anchor is satisfied by
+  // either. Empty/absent = the canonical spelling only.
+  anchorAliases?: Record<string, string[]>
   // Human-readable name used in mandatory-artifact feedback (e.g.
   // "understanding digest"); absent = messages reference the path only.
   label?: string

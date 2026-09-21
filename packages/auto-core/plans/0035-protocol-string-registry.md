@@ -186,3 +186,26 @@ Parse points moved into the document domain, literals unchanged:
 `HANDOVER_SECTIONS` / `validHandover` (M3.4 ledger face) from `src/phases.ts`
 now live in `src/document/roles.ts`; `src/subtask-state.ts` is
 `src/document/state.ts`. Line numbers cited above predate the move.
+
+## Amendment (2026-09-21, M2.4): the §3 face flipped
+
+The three subtask-face literals flipped per §6, with dual-read (D5):
+
+| Old | New | Dual-read |
+|---|---|---|
+| `状态: 继续` / `状态: 完成` | `Status: continue` / `Status: done` | `handoffStatus` (`src/document/roles.ts`) accepts both spellings, case-insensitive on the English form, and returns the normalized `HandoffStatus = "continue" \| "done"`; all comparison sites (`src/execute.ts`) use the English values. `fillHandoffStatus` writes `Status: continue`. `PROTOCOL_MARKERS["handoff-steer"]` moved. |
+| `产出:` | `Artifacts:` | `declaredArtifacts` (`src/document/spec.ts`) regex accepts `Artifacts` or `产出`. |
+| `## 范围声明` / `## 产出清单` | `## Scope` / `## Artifacts` | `ArtifactSpec.anchorAliases` (new optional field) maps each canonical anchor to its legacy heading; `checkArtifactSpecs` accepts either. |
+
+Templates: seven decompose templates, `subtask.md`, `handoff-steer.md`,
+`test-wrapup.md`; goldens regenerated (10 files, diff = the literals only).
+
+Not flipped, by design: `parseVerdict` / `parseConclusion` / `parseStrategy`
+were retired with D13 (M2.2) and need no entry; the `自动代答问题` report-section
+title lives in `wrapup.md` (M2.1-externalized) and is not driver-parsed, so it
+is prose and rides that template's own translation. The driver-authored
+`review.md` `产出:` producer no longer exists (retired with review).
+`test-wrapup` and `handoff-steer` legacy-form files on disk are covered by the
+dual-read; tests that write legacy-form fixtures were left as the executable
+compatibility path. The dual-read layer's retirement is the M4 close-out decision.
+Verification: `bun typecheck` clean; auto-core 1038 tests pass, auto 52 pass.

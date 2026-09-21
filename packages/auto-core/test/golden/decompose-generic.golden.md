@@ -36,15 +36,15 @@ This session completes the task-background understanding and the subtask decompo
    - Budget-oriented: each item should be completable by a single session with a smallish context (on the order of 32.0k tokens);
 4. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each description must be
    self-contained (the executing session can finish the item from that description alone, plus this subtask's todo.md, the shared-context
-   index shared.md and docs/), and must declare the item's artifacts at the end of the description with the literal token `产出:` — a
+   index shared.md and docs/), and must declare the item's artifacts at the end of the description with the literal token `Artifacts:` — a
    protocol string the driver parses, so write it verbatim and do not translate it:
 
-- [ ] <subtask description; ends with 产出: <path list>>
+- [ ] <subtask description; ends with Artifacts: <path list>>
 
 5. Write a scope file for each subtask (item N maps to docs/T-002/S<two-digit zero-padded index>/todo.md, e.g. S01 for item 1),
    containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.
-   ## 范围声明 (what this subtask does and does not do)
-   ## 产出清单 (the path list, matching the checklist item's `产出:` declaration)
+   ## Scope (what this subtask does and does not do)
+   ## Artifacts (the path list, matching the checklist item's `Artifacts:` declaration)
 
 Cross-task reference discipline (this file will serve as the background/navigation source for downstream subtask sessions; once a previous task's
 completion narrative flows in through a reference, a downstream session misreads it as a sign that this task is already done):

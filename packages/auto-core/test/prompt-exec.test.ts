@@ -42,10 +42,10 @@ describe("renderDecompose", () => {
     expect(text).toContain("docs/T-002/shared.md")
     expect(text).toContain("prefetch by reference")
     expect(text).toContain("docs/T-002/subtasks.md")
-    expect(text).toContain("- [ ] <subtask description; ends with 产出: <path list>>")
+    expect(text).toContain("- [ ] <subtask description; ends with Artifacts: <path list>>")
     expect(text).toContain("docs/T-002/S<two-digit zero-padded index>/todo.md")
-    expect(text).toContain("## 范围声明")
-    expect(text).toContain("## 产出清单")
+    expect(text).toContain("## Scope")
+    expect(text).toContain("## Artifacts")
     expect(text).toContain("modify no implementation code")
     expect(text).toContain("question tool")
     // 状态文件排他: todo.md/done.md 由 DRIVER 管理
@@ -178,7 +178,7 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       expect(text).not.toContain("Splitting and artifact criteria for this phase (迁移实现)")
       // 核心模板仍承载角色边界与格式协议
       expect(text).toContain("This session completes the task-background understanding and the subtask decomposition; it writes no implementation code")
-      expect(text).toContain("- [ ] <subtask description; ends with 产出: <path list>>")
+      expect(text).toContain("- [ ] <subtask description; ends with Artifacts: <path list>>")
       expect(text).not.toMatch(/\{\{|\}\}/)
     } finally {
       useIntentPacks(undefined)
@@ -602,8 +602,8 @@ describe("renderWhole", () => {
   test("交接提示要求写出状态行", () => {
     const steer = renderHandoffSteer(task)
     expect(steer).toContain("docs/T-002/handoff.md")
-    expect(steer).toContain("状态: 继续")
-    expect(steer).toContain("状态: 完成")
+    expect(steer).toContain("Status: continue")
+    expect(steer).toContain("Status: done")
   })
 
   test("test-by-DRIVER: 注入测试执行协议(与 ondemand 交接条款可同现)", () => {
@@ -658,10 +658,10 @@ describe("测试执行协议(--test-by-driver)", () => {
     expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("End the session as soon as the file is written")
     // 状态行(中断恢复 F1): DRIVER 凭它分辨"写完了"与"DRIVER 死在会话写文件途中的半截文件"
-    expect(text).toContain("状态: 继续")
+    expect(text).toContain("Status: continue")
     // 测试结果恒由下一个会话判读,交接之后一定还有工作——测试交接没有"完成"这一态
     // (handoff.md 才有: 那边的交接只是建议,活干完了自然不交接)
-    expect(text).not.toContain("状态: 完成")
+    expect(text).not.toContain("Status: done")
   })
 
   // 文案硬约束(测试交接前置化设计 D2): 收尾提示词不得让会话知道"上下文吃紧"
@@ -859,7 +859,7 @@ describe("intent externalization, P1 and test-handover discipline (M2.3)", () =>
       expect(wrap).toContain("handover notes. Remaining work that you do not list here")
       expect(wrap).not.toContain("loophole")
       expect(wrap).toContain("docs/T-002/testhandoff.md")
-      expect(wrap).toContain("状态: 继续")
+      expect(wrap).toContain("Status: continue")
       expect(wrap).not.toMatch(/\{\{|\}\}/)
     })
   })

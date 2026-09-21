@@ -101,7 +101,7 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "decompose-m": ["- [ ]", "context.md", "todo.md"],
   "decompose-t": ["- [ ]", "context.md", "todo.md"],
   "decompose-v": ["- [ ]", "context.md", "todo.md"],
-  "handoff-steer": ["状态: 继续", "状态: 完成"],
+  "handoff-steer": ["Status: continue", "Status: done"],
   "implement-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
   "infer-source": ['"sourceDir"', '"blocked"'],
   "number-recovery": [".auto/next-task"],

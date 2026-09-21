@@ -104,7 +104,7 @@ export function countSubtasks(body: string): { done: number; total: number } {
   return { done: items.filter((item) => item.done).length, total: items.length }
 }
 
-// The `产出:` artifact-declaration parser lives in the document domain
+// The `Artifacts:` artifact-declaration parser lives in the document domain
 // (src/document/spec.ts declaredArtifacts, M1.4): the declaration format and
 // its mechanical check semantics are owned end to end by that domain.
 
