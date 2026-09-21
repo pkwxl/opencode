@@ -251,7 +251,8 @@ export async function runExecSession(
 export async function seedPinFork(client: AgentClient, chain: SessionChain, record: Handover, subject: string): Promise<boolean> {
   if (!record.pinSession || !(await sessionAlive(client, record.pinSession))) return false
   let anchor: string | undefined
-  if (record.pinMessage) {
+  // No readable history (MA.4): no anchor, whole-session fork (the fallback below).
+  if (record.pinMessage && client.capabilities.history) {
     const got = await client.messages(record.pinSession)
     const list = got.ok ? got.value : []
     const at = list.findIndex((message) => message.id === record.pinMessage)
@@ -280,7 +281,8 @@ async function seedSessionFork(client: AgentClient, chain: SessionChain, session
   chain.id = undefined
   chain.pending = forked
   chain.pct = 100
-  chain.used = await sessionUsed(client, session).catch(() => 0)
+  // Unknown (no readable history, MA.4) counts as 0 here, as a failed read does.
+  chain.used = (await sessionUsed(client, session).catch(() => 0)) ?? 0
   chain.at = 0
   return true
 }

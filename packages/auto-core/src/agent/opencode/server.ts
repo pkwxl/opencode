@@ -7,7 +7,7 @@
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
 import { createOpencodeClient, createOpencodeServer, type OpencodeClient } from "@opencode-ai/sdk/v2"
-import type { AgentHost } from "../types"
+import type { AgentHost, AgentHostFactory } from "../types"
 import { opencodeAgent } from "./client"
 
 export type Server = {
@@ -132,6 +132,11 @@ async function defaultSpawn(directory: string, log: Log): Promise<Server> {
     close: () => spawned.close(),
   }
 }
+
+// The built-in agent (MA.4, plans/0040): what a shell gets when its profile
+// names no other. opencode answers permission requests through events, so the
+// preset is not needed here.
+export const opencodeHost: AgentHostFactory = (directory, options) => manage(directory, options.server, { log: options.log })
 
 async function defaultConnect(url: string, directory: string, log: Log): Promise<Server> {
   const healthy = await fetch(new URL("/api/health", url)).then(

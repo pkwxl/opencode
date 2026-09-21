@@ -68,11 +68,14 @@ export async function attempt(
   // 回归常规复用规则。分叉会话(pending)在场时让位: runSession 的重试环会同时
   // 挂上 note(重试说明)与 pending(失败会话的副本)且刻意不清 chain.id(下次
   // 重试仍从原会话重新 fork),此刻要接管的是副本而非复用原会话。
-  const resumed = chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
+  // Without resumable sessions (MA.4) the chain's session never takes another
+  // prompt: recovery and reuse both open a new one.
+  const resumable = client.capabilities.resume
+  const resumed = resumable && chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
   // 链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控(缺省 off): off 时任务内每个
   // 提示词都开新会话,阈值(占比/用量/闲置)不再参与决策。
   const reuseSession = switches.reuseSession
-  const reuse = chain.id !== undefined && (resumed || (reuseSession && reuseAllowed(chain, cap, Date.now())))
+  const reuse = resumable && chain.id !== undefined && (resumed || (reuseSession && reuseAllowed(chain, cap, Date.now())))
   // 测试交接判据的回落值(D1): 复用/恢复接管的会话起跑就背着链上已用量,首个
   // message.updated 到达前的测试请求照样要判得出来;fork 与全新会话归零——
   // chain.used 是上一个会话的残值,照搬会让刚起跑的小会话在首次测试就误判超限、
@@ -83,13 +86,15 @@ export async function attempt(
     log(`♻ session reused (context ${chain.pct}%, used ${formatTokens(chain.used)} tokens, ended ${Math.round((Date.now() - chain.at) / 1000)}s ago)`)
   }
   if (!reuse && chain.id !== undefined) {
-    const reason = !reuseSession
-      ? `session reuse disabled (${SWITCH_ENV.reuseSession}=off, default)`
-      : chain.pct >= REUSE_BELOW
-        ? `context share ${chain.pct}% reached the ${REUSE_BELOW}% threshold`
-        : chain.used >= cap / 2
-          ? `used ${formatTokens(chain.used)} tokens reached the ${formatTokens(cap / 2)} cap (reuse threshold)`
-          : `more than ${REUSE_IDLE_MINUTES} minutes since the last session ended (context stale)`
+    const reason = !resumable
+      ? `the agent cannot resume sessions`
+      : !reuseSession
+        ? `session reuse disabled (${SWITCH_ENV.reuseSession}=off, default)`
+        : chain.pct >= REUSE_BELOW
+          ? `context share ${chain.pct}% reached the ${REUSE_BELOW}% threshold`
+          : chain.used >= cap / 2
+            ? `used ${formatTokens(chain.used)} tokens reached the ${formatTokens(cap / 2)} cap (reuse threshold)`
+            : `more than ${REUSE_IDLE_MINUTES} minutes since the last session ended (context stale)`
     // 复用关闭是缺省形态(链上每个会话都命中),只进明细日志;开启复用后的不
     // 复用原因是决策依据,照常上终端。
     if (reuseSession) log(`▷ ${reason}; starting a new session`)
@@ -273,10 +278,12 @@ export async function attempt(
     const previousId = chain.id
     const previousUsed = chain.used
     const previousAt = chain.at
+    const previousHinted = chain.hinted
     chain.id = sessionID
     chain.pct = result.pct
     chain.used = result.used
     chain.at = Date.now()
+    chain.hinted = result.hinted === true
     // ◉ 会话结束两行(STATS_PLAN §4.1,T-004): 无条件打印——所有经 attempt 的会话
     // (含 verify 判定/审核/阶段规划/交接蒸馏等旁路,复用会话同样打印)统一输出;
     // 行 1 上下文与用时,行 2 tokens 分项。省略规则: 单轮(session.rounds ≤ 1)
@@ -322,6 +329,7 @@ export async function attempt(
       chain.id = previousId
       chain.used = previousUsed
       chain.at = previousAt
+      chain.hinted = previousHinted
       // 链状态还原,但失败会话本身留给重试环作首选分叉源(见 FailedSession)。
       // 0-token 的失败是纯报错桩(下发即失败,什么也没跑出来),不顶替链上仍有效
       // 的有内容记录——否则下一轮重试将丢失最有价值的分叉源(2026-09-17 现场:

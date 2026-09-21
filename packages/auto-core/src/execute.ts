@@ -124,7 +124,7 @@ export async function executeWhole(
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
-    if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used)) return undefined
+    if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used, chain.hinted)) return undefined
     const status = handoffStatus(await readHandoff())
     if (status === "完成") return undefined
     if (status === "继续") {
@@ -417,7 +417,7 @@ export async function runSubtask(
       // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
       // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
       // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
-      if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used)) {
+      if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used, chain.hinted)) {
         if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
           const problems = await subtaskArtifactProblems(dir, text, baseline)
           if (problems.length) {

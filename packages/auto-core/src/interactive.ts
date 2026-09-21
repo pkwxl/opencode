@@ -95,6 +95,12 @@ export function startInteractive(
       log(`⚠ no active session, input discarded: ${text}`)
       return
     }
+    // An agent without steer (MA.4) takes no message into a running session;
+    // the run start said so once.
+    if (!client.capabilities.steer) {
+      log(`⚠ the agent takes no messages mid-turn, input discarded: ${text}`)
+      return
+    }
     log(`→ sent: ${text}`)
     void client.promptAsync({ session: sessionID, agent, text }).then((result) => {
       if (!result.ok) log(`⚠ send failed: ${result.error instanceof Error ? String(result.error) : JSON.stringify(result.error)}`)

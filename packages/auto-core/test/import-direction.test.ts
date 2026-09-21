@@ -79,6 +79,7 @@ const CLASSIFIED: Record<string, Domain> = {
   "agents-block": "driver",
   artifact: "driver",
   attempt: "driver",
+  capability: "driver",
   chain: "driver",
   check: "driver",
   clean: "driver",

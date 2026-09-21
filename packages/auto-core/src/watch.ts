@@ -92,6 +92,7 @@ export async function watch(
     durationMs: Date.now() - startTime,
     usage,
     resolves,
+    ...(steerSent ? { hinted: true } : {}),
     ...extra,
   })
   // steer 每会话只插入一次。
@@ -560,7 +561,9 @@ export async function watch(
       // 输出截断续跑(LENGTH_CONTINUE_MAX): 末步 length 收场且未观测到会话错误时,
       // 会话工作未完——steer 一句「从截断处继续」让原会话接着做,不按自然结束收口。
       // 孪生 idle 去重(idleHandled)与 steer 回合的衔接同交接/测试 steer 路径。
-      if (lastFinish === "length" && !error && lengthContinued < LENGTH_CONTINUE_MAX) {
+      // An agent that takes no further messages (MA.4: steer off) cannot be
+      // told to continue; the truncated turn ends as if the cap were used up.
+      if (lastFinish === "length" && !error && lengthContinued < LENGTH_CONTINUE_MAX && client.capabilities.steer) {
         lengthContinued++
         // 续跑回合自身的 step-finish 会刷新 lastFinish;steer 后先清掉,防新回合
         // 无 step-finish 的边角形态对着陈旧判据重复续跑(上限兜底,最多空转到 MAX)。

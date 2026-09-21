@@ -2,6 +2,7 @@
 // 设置一次,见 plans/AUTO_CORE_INTEGRATION_PLAN 阶段二)。核心代码只读本画像、不感知
 // 具体外壳——通用壳(auto)与简易壳(migrate)的行为差异(报文程序名、agent 契约
 // 恢复指引、日志审计语义)全部经此参数化,消除外壳对 runner/loop 文本的补丁。
+import type { AgentHostFactory } from "./agent/types"
 import { setAuditLog } from "./log"
 
 export type ShellProfile = {
@@ -15,6 +16,19 @@ export type ShellProfile = {
   // true = 日志文件始终完整记录(vlog 免 verbose 门控、逐行带时间戳),使 run 日志
   // 成为不依赖选项的完整审计记录(简易壳语义);false = 明细仅 --verbose 记录。
   auditLog: boolean
+  // Agent profile (MA.4, plans/0040): the coding agent this shell drives.
+  // Absent = the built-in opencode adapter (loop.ts falls back to it), so a
+  // shell that never sets it behaves exactly as before. What the agent can do
+  // is not declared here: it comes from the host's client capabilities and the
+  // driver degrades per flag at run start (src/capability.ts).
+  agent?: AgentProfile
+}
+
+export type AgentProfile = {
+  // Display name for the startup line (e.g. "opencode", "claude").
+  name: string
+  // Starts or connects the agent for a run.
+  host: AgentHostFactory
 }
 
 // 缺省 = 通用壳(auto)现状;未设置画像时核心报文与历史行为逐字节一致。

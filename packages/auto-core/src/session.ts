@@ -49,7 +49,7 @@ export async function ensureForkBase(
     if (persistID !== undefined) {
       if (await sessionAlive(client, persistID)) {
         const used = await sessionUsed(client, persistID)
-        log(`⑂ ${task.id} digest base reuse: session ${persistID} (${formatTokens(used)} tokens)`)
+        log(`⑂ ${task.id} digest base reuse: session ${persistID} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
         return { id: persistID, used }
       }
       log(`↻ ${task.id} persistent digest base ${persistID} is stale; rebuilding from ${taskDoc(task.id, "context")}`)
@@ -76,7 +76,7 @@ export async function ensureForkBase(
   if (sessionID) {
     if (await sessionAlive(client, sessionID)) {
       const used = sessionID === chain.id ? chain.used : await sessionUsed(client, sessionID)
-      log(`⑂ ${task.id} session base ready: session ${sessionID} (${formatTokens(used)} tokens)`)
+      log(`⑂ ${task.id} session base ready: session ${sessionID} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
       return { id: sessionID, used }
     }
     log(`↻ ${task.id} session base ${sessionID} is stale; falling back to cold start`)

@@ -13,7 +13,9 @@
 // Frozen in MA.1 and wired in MA.3 (plans/0039): the opencode adapter lives
 // in agent/opencode/; the driver holds an AgentClient everywhere it used to
 // hold the SDK client. MA.3 amended this file once, consciously (0031 D4):
-// AgentErrorPatterns / AgentClient.errorPatterns.
+// AgentErrorPatterns / AgentClient.errorPatterns. MA.4 (plans/0040) amended
+// it again: PermissionPreset / AgentHostOptions / AgentHostFactory, the path a
+// permission policy takes into an agent that has no permission events.
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -144,8 +146,8 @@ export type AgentEvent =
 // none = nothing is known and the driver assumes a full context.
 export type UsageTier = "events" | "reported" | "estimated" | "none"
 
-// What an adapter can do. The driver degrades per flag (MA.4); every flag
-// maps onto a fallback path that already exists today.
+// What an adapter can do. The driver degrades per flag (MA.4, src/capability.ts
+// and plans/0040); every flag maps onto a fallback path that already exists.
 export type AgentCapabilities = {
   // Sessions persist by id and accept further prompts (reuse, interruption
   // recovery). Off: every prompt starts a new session.
@@ -230,6 +232,27 @@ export interface AgentClient {
   // The model the agent uses when a prompt names none (display only).
   defaultModel(agent?: string): Promise<string | undefined>
 }
+
+// How an agent without permission events (`capabilities.permission` false)
+// settles permission requests on its own, fixed when the host starts (MA.4,
+// plans/0040; the driver derives it from --permission): allow = grant
+// everything; deny = refuse and let the session go on without it; block =
+// refuse and end the turn with a non-retryable error, so the run blocks for a
+// human. Adapters with permission events ignore it — the driver answers each
+// request itself.
+export type PermissionPreset = "allow" | "deny" | "block"
+
+export type AgentHostOptions = {
+  // An already running instance to connect to instead of starting one
+  // (opencode: --server <url>); absent = the adapter starts its own.
+  server?: string
+  permission: PermissionPreset
+  log: (line: string) => void
+}
+
+// Starts (or connects) the agent behind a run. A shell selects its agent by
+// handing one to setShellProfile (src/shell.ts `agent`); absent = opencode.
+export type AgentHostFactory = (directory: string, options: AgentHostOptions) => Promise<AgentHost>
 
 // Lifecycle of the process behind a client (opencode: a spawned or reused
 // server, src/server.ts; claude: a subprocess manager, MA.5).

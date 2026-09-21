@@ -16,10 +16,11 @@
 // |---------------------------------|--------|---------------|-----------|-------------|
 // | reuse (pct < 50, used < cap/2)  | today  | today         | estimate  | off         |
 // | steer handover (used >= 2·cap)  | today  | off (no live) | estimate  | off         |
-// | post-session handover check     | today  | off (no live) | estimate  | off         |
+// | post-session handover check     | today¹ | off (no live) | estimate¹ | off         |
 // | test handover (used >= cap)     | today  | today         | estimate  | off         |
 // | fork base guard (used < cap/2)  | today  | today         | estimate  | cold start  |
 // | failover window clamp           | window sizes, not usage: same in every tier  |
+// ¹ also due when the hint went out, whatever the final figure (plans/0040 D6)
 //
 // Wired in MA.3 (plans/0039): watch tracks the session through usageSource
 // and decides steer / test handover here, attempt decides reuse, execute the
@@ -137,8 +138,12 @@ export function steerDue(tier: UsageTier, used: number | undefined, limit: numbe
 // is a separate mechanism and never goes through this check. Only true where the
 // in-turn hint could have been sent — a `reported` session over the cap was
 // never asked, and demanding the document would misjudge a natural finish.
-export function sessionHandoverDue(tier: UsageTier, steer: { limit: number } | undefined, used: number | undefined): boolean {
-  return steer !== undefined && steerDue(tier, used, steer.limit)
+// `hinted` = the hint actually went out in this session (plans/0040 D6): the
+// final figure alone misses a session that compacted after the hint and ended
+// below 2·cap with a written `状态: 继续` handover (0038 §6 latent). OR-ed, so
+// every session judged due before still is.
+export function sessionHandoverDue(tier: UsageTier, steer: { limit: number } | undefined, used: number | undefined, hinted = false): boolean {
+  return steer !== undefined && (hinted || steerDue(tier, used, steer.limit))
 }
 
 // Test handover at the moment the session requests a test run (watch.ts; was

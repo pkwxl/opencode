@@ -455,3 +455,11 @@ export function autoSwitches(): Switches {
   vlog(`⚙ experimental switches (full): ${formatSwitches(memo)}`)
   return memo
 }
+
+// Capability degradation (MA.4, src/capability.ts): the run start forces off
+// the switches whose "on" side the agent cannot serve. Mutates the memoized
+// object in place, so every holder of autoSwitches() sees the values in force;
+// like the switches themselves, nothing is persisted.
+export function clampSwitches(patch: Partial<Switches>): void {
+  Object.assign(autoSwitches(), patch)
+}

@@ -25,8 +25,17 @@ import { forkBaseAllowed } from "./usage"
 // (外部旧版 --server 无此路由、基点被存储清理等)都属预期回退场景——log 后
 // 返回 undefined,调用方走全新会话 + 冷启动,不是错误。
 export async function forkSession(client: AgentClient, base: string, title: string, messageID?: string): Promise<string | undefined> {
+  // An agent that cannot fork takes the same fallback as a failed fork (MA.4,
+  // plans/0040); the run start already said so once, hence verbose only.
+  const { fork } = client.capabilities
+  if (fork === "none") {
+    vlog(`↻ the agent cannot fork sessions; falling back to a brand-new session`)
+    return undefined
+  }
   // messageID 为分叉锚点: 服务端复制该消息**之前**的全部消息(缺省复制整条会话)。
-  const forked = await client.fork(base, messageID)
+  // Without message-level forks the whole session is copied — the pin fork's
+  // own fallback when its anchor is gone (exec-session seedPinFork).
+  const forked = await client.fork(base, fork === "message" ? messageID : undefined)
   if (!forked.ok) {
     log(`↻ fork failed (${formatClientError(forked.error)}); falling back to a brand-new session`)
     return undefined
@@ -59,7 +68,11 @@ export async function seedForkSession(
   if (chain.id !== undefined && chain.note !== undefined) return true
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   if (!forkBaseAllowed(base.used, cap)) {
-    log(`↻ base usage ${formatTokens(base.used)} reached the ${formatTokens(cap / 2)} cap; not forking (cold start)`)
+    log(
+      base.used === undefined
+        ? `↻ base usage unknown; not forking (cold start)`
+        : `↻ base usage ${formatTokens(base.used)} reached the ${formatTokens(cap / 2)} cap; not forking (cold start)`,
+    )
     chain.id = undefined
     chain.pending = undefined
     chain.pct = 100
@@ -75,9 +88,11 @@ export async function seedForkSession(
   chain.pending = forked
   chain.forkBase = base.id
   chain.pct = 100
-  chain.used = forked ? base.used : 0
+  // forkBaseAllowed passed, so the figure is known.
+  const used = base.used ?? 0
+  chain.used = forked ? used : 0
   chain.at = 0
-  if (forked) log(`⑂ forked a new session from base ${base.id} (prefix ${formatTokens(base.used)} tokens)`)
+  if (forked) log(`⑂ forked a new session from base ${base.id} (prefix ${formatTokens(used)} tokens)`)
   return forked !== undefined
 }
 
@@ -106,6 +121,9 @@ export async function forkEndedSession(client: AgentClient, chain: SessionChain,
 // pct=100)。用于 fork 基点用量与中断恢复接管会话的用量继承。导出仅供单测直接驱动
 // 判据(与 ensureForkBase 同款,恢复决策本身落在 runTask,完整流水线由壳包 e2e 覆盖)。
 export async function sessionUsage(client: AgentClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
+  // No readable history (MA.4): the same unknown as a failed read — pct 100
+  // keeps the session from being reused on its figure.
+  if (!client.capabilities.history) return { used: 0, pct: 100, errorStub: false }
   const got = await client.messages(id)
   if (!got.ok) return { used: 0, pct: 100, errorStub: false }
   const data = got.value
@@ -128,8 +146,11 @@ export async function sessionUsage(client: AgentClient, id: string): Promise<{ u
   return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit, errorStub: false }
 }
 
-// 基点会话末端上下文用量(tokens);取不到按 0。
-export async function sessionUsed(client: AgentClient, id: string): Promise<number> {
+// 基点会话末端上下文用量(tokens);取不到按 0。Undefined when the agent keeps
+// no readable history (MA.4): the fork base guard then treats the base as full
+// and starts cold (plans/0038 G1) instead of trusting a made-up 0.
+export async function sessionUsed(client: AgentClient, id: string): Promise<number | undefined> {
+  if (!client.capabilities.history) return undefined
   return (await sessionUsage(client, id)).used
 }
 
@@ -151,7 +172,10 @@ export async function renameSession(client: AgentClient, chain: SessionChain, su
 
 // 记忆会话是否仍存在于 server 上(opencode 会话持久化在项目存储,server 重启
 // 不丢;拉取失败或不存在则视为不可复用)。
+// Without resumable sessions (MA.4) no remembered session counts as alive:
+// recovery, base reuse and every fork from a stored id start fresh instead.
 export async function sessionAlive(client: AgentClient, id: string): Promise<boolean> {
+  if (!client.capabilities.resume) return false
   return (await client.get(id)).ok
 }
 

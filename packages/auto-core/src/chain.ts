@@ -27,6 +27,9 @@ export type Watch = {
   // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
   // runExecSession 据此开新会话续跑。
   testHandover?: boolean
+  // The in-turn handover hint went out in this session (plans/0040 D6; set
+  // only when true). The post-session check reads it next to the final figure.
+  hinted?: boolean
   // plans/0015-session-error-retry-plan.md: 会话错误是否值得重试(仅 ApiError 携带
   // isRetryable;字段不存在或非 false 一律按可重试处理,保守缺省;多个
   // session.error 事件叠加取悲观口径,只要出现过一次 false 即不可重试)。
@@ -84,7 +87,9 @@ export type SessionResult =
 // baseline 为当前执行单元的 SHA 基线(严格恢复,plans/0022-session-recovery-fidelity-design.md
 // 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
 // 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
-export type SessionChain = { id?: string; pct: number; used: number; at: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
+// hinted: the chain's current session was sent the in-turn handover hint
+// (copied from its Watch by attempt; plans/0040 D6).
+export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
 
 // 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
 // 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能
@@ -100,8 +105,9 @@ export type FailedSession = { id: string; used: number }
 
 // fork 基点信息: id 为生效基点会话;used 为基点末端上下文用量(tokens,播种进
 // 分叉链使 watch() 的 2×cap 交接阈值按「前缀+新增」计算,首个 turn 的事件跟踪
-// 随后自行校正)。
-export type ForkBaseInfo = { id: string; used: number }
+// 随后自行校正)。undefined = unknown (an agent without readable history, MA.4):
+// seedForkSession then starts cold (plans/0038 G1).
+export type ForkBaseInfo = { id: string; used: number | undefined }
 
 // resume.Phase → 会话角色(模型路由的细键,见 plans/0017-model-routing-design.md B.5/C.1)。
 // 执行链各阶段映射同名角色(decompose 为 M1.0 合并理解与分解会话的角色,plans/0030 D12);

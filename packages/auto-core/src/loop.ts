@@ -14,7 +14,10 @@ import { renderDryrun } from "./prompt"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentHost } from "./agent/types"
-import { manage } from "./agent/opencode/server"
+import { opencodeHost } from "./agent/opencode/server"
+import { degrade, permissionPreset } from "./capability"
+import { shellProfile } from "./shell"
+import { autoSwitches, clampSwitches } from "./switches"
 import { flushStats, statsPhase } from "./stats"
 
 // AGENTS.md 的 opencode-auto 块(单一标记块,内容与幂等同步逻辑见 agents-block.ts):
@@ -83,7 +86,27 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
         return 1
       }
     }
-    server = opts.managed ?? (await manage(directory, opts.server, { log }))
+    // The shell's agent profile picks the adapter (absent = opencode). The
+    // permission preset reaches only agents without permission events (MA.4).
+    const agent = shellProfile().agent
+    server =
+      opts.managed ??
+      (await (agent?.host ?? opencodeHost)(directory, {
+        server: opts.server,
+        permission: permissionPreset(opts.permission, opts.dryrun),
+        log,
+      }))
+    if (agent) log(`◇ agent: ${agent.name}`)
+    // Capability degradation (MA.4, plans/0040): force off the switches this
+    // agent cannot serve before the first session; a configuration with no
+    // fallback stops here.
+    const degraded = degrade(server.client.capabilities, autoSwitches(), opts)
+    for (const note of degraded.notes) log(`⚙ ${note}`)
+    if (degraded.error) {
+      log(`⏸ ${degraded.error}`)
+      return 1
+    }
+    clampSwitches(degraded.switches)
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
