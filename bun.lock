@@ -102,7 +102,6 @@
       },
       "dependencies": {
         "@opencode-ai/auto-core": "workspace:*",
-        "@opencode-ai/sdk": "workspace:*",
       },
       "devDependencies": {
         "@tsconfig/bun": "catalog:",
