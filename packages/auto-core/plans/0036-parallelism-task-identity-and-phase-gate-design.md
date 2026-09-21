@@ -11,7 +11,13 @@
 > constrains all of them and should be read first, and a fourth requirement
 > **N4** — parallelism as a first-class capability with a concrete `--parallel`
 > / `--max-agents` interface (§1, designed in §6.4, interface choices in §11
-> questions 10–12).
+> questions 10–12). Revised again later on 2026-09-21 after verifying the
+> marker-lifecycle question: F21 restated, **F29–F31** added, **D11 narrowed to
+> a recommendation of (c)** and §9's marker-table warning corrected (the tier-1
+> table does not move). The root plan now points here (its D12, open question 15,
+> risk 12, the reserved `MP` track, and candidate-scope notes under M2–M4;
+> integration-repo commit `2884099`), so a session starting from the documented
+> entry point can find this document.
 > Stage-assisting document per D6: consumed by **M2.1** (marker wording — see
 > §9), **M2.2–M2.3** (governance intent section, document role model and
 > standardization boundary),
@@ -221,20 +227,29 @@ All paths relative to `packages/auto-core/`.
   `templates/prompts/test-continue.md:2`: mark a leftover with `AUTO-FIXME:
   <reason and plan>` "**in a code comment** or in a document under docs/"; the
   agent contract says the same (`templates/.opencode/agent/auto.md:40-41`).
-- **F21 — the durable record of a decision is, by stated intent, the marker line
-  inside the target tree.** `collectAgentResolves` scans the session's changed
-  files across nested repos for both markers (`src/resolve.ts:301-317`), and its
-  comment is explicit: `AUTO-DECISION` is only counted, not persisted line-wise,
-  because "its durable trace is precisely the marker line that goes into git"
-  (`src/resolve.ts:293-296`). `AUTO-RESOLVE` by contrast is ledgered to
-  `.auto/resolves.json` (`src/resolve.ts:80`) — which F19 shows is gitignored,
-  i.e. disposable. The asymmetry is the reverse of what §4.1 wants.
+- **F21 — the durable record of a decision is *one* marker line, and the target
+  tree is only one of its two permitted sites.** (Restated 2026-09-21 after
+  verification; the original wording — "by stated intent, the marker line inside
+  the target tree" — overstated the intent, see F29.) `collectAgentResolves`
+  scans the session's changed files across nested repos for both markers
+  (`src/resolve.ts:301-317`), and its comment is explicit: `AUTO-DECISION` is
+  only counted, not persisted line-wise, because "its durable trace is precisely
+  the marker line that goes into git" (`src/resolve.ts:293-296`) — but that
+  comment describes the *scanner's* bookkeeping, not the prompts' instruction,
+  and the scanner does not care which kind of changed file the line is in (F30).
+  `AUTO-RESOLVE` by contrast is ledgered to `.auto/resolves.json`
+  (`src/resolve.ts:80`) — which F19 shows is gitignored, i.e. disposable. The
+  genuine asymmetry is therefore narrower than first stated: it is that
+  `AUTO-DECISION` has no line-wise process-side ledger, not that its only record
+  is in the target tree.
 - **F22 — the k phase harvests markers back out of source comments.**
   `templates/prompts/knowledge.md:50-51` and `prior-knowledge.md:73-74` tell the
   distillation session to preferentially collect deviations and trade-offs
   "annotated in docs/ **and in code comments** as AUTO-DECISION". So the markers
   are load-bearing for the process: they cannot simply be banned without
-  providing an alternative carrier.
+  providing an alternative carrier — though note the `docs/` branch is already
+  listed first, and F29 shows the report side is mandatory rather than optional,
+  so the alternative carrier is not something option (c) has to invent.
 - **F23 — the marker vocabulary is already content-bearing, not path-bearing.**
   `AUTO-DECISION: <decision> (<reason>)` and `AUTO-RESOLVE: <original question>
   -> <chosen option> (<reason>)` are self-contained prose; no template asks a
@@ -243,6 +258,44 @@ All paths relative to `packages/auto-core/`.
   `src/conclusion.ts:43,87`, `src/log.ts:118`, `src/stats.ts:86,239,449`). The
   "restate, do not reference" half of §4.1 is therefore already the de facto
   form — it is unstated and unenforced rather than absent.
+- **F29 — the process-document carrier is already mandatory; the code comment is
+  a duplicate site the prompts themselves half-forbid.** (Verified 2026-09-21.)
+  `templates/prompts/_partials.md:27-29` makes the primary obligation "write the
+  reasoning and the alternatives you considered (and rejected) into the relevant
+  document (a design document or report under docs/)", and only then offers "the
+  design document **or in a code comment**" for the architecture-or-code-change
+  subclass. `src/unit-commit.ts:43-44` does the same in the ask=off tier (record
+  the reasoning and rejected alternatives in a document under `docs/`, *and*
+  annotate the decision "in the design document or a code comment").
+  `templates/prompts/wrapup.md:30-31` goes further and is unconditional: the
+  report must carry a dedicated 「自动代答问题」 section listing **every**
+  driver-proxied question as an `AUTO-RESOLVE:` line, original question copied
+  verbatim. Meanwhile `_partials.md:38` already warns "annotate a given decision
+  under one kind only, **never twice**" — yet today the same decision may
+  legitimately appear twice, once in the report and once in a code comment. So
+  P1 does not invert the tool's intent here; it deletes one disjunct of a
+  duplication the prompts already discourage.
+- **F30 — the scanner was built to accept markers in either location.**
+  `src/resolve.ts:94-95` states it outright: the two prefix forms are equally
+  legal — a code comment `// AUTO-RESOLVE: …` and a markdown list item
+  `- AUTO-RESOLVE: …` — so the parser locates by the marker itself and
+  constrains no line start. `collectAgentResolves` iterates `changedFiles` with
+  no extension filter (`:306-311`); `readScannable` (`:367-373`) skips only
+  directories, missing files, files over `MAX_SCAN_BYTES`, and NUL-bearing
+  binaries. Process documents under `docs/` are changed files of the unit and are
+  scanned exactly like source. `template.ts:137-138`'s comment already describes
+  the target as "the session's **documents**".
+- **F31 — under option (c) the tier-1 marker table does not move.**
+  `PARTIAL_MARKERS["question-rule"] = ["question tool", "AUTO-RESOLVE",
+  "AUTO-DECISION"]` (`src/template.ts:142`) exists because those tokens are what
+  `resolve.ts` scans for (F30) — and under (c) they still are, just only in
+  documents. So the table is **unchanged**, contradicting §9's original warning;
+  only the affected goldens flip, which is the M2.1 batch's normal cost. The
+  `decisionsOf` count also survives, since the report carrying the annotations is
+  itself a changed file — though per `src/conclusion.ts:43-45` that count is
+  folded into the proxy-answer highlight block's last line and never reaches the
+  terminal when there are no proxy answers, so its observability value was always
+  parasitic on `AUTO-RESOLVE`.
 
 ### Planning context
 
@@ -307,10 +360,15 @@ Formalized as an invariant plus a testable corollary:
   must leave the target tree building, passing its own tests, and readable — no
   comment loses its meaning, no build step or runtime read breaks. Today this
   holds **by accident rather than by decision**: no build step or runtime read
-  touches `docs/`, but nothing marks it as removable either (F19), and the
-  marker record inside the target tree is deliberately load-bearing for the
-  *process* (F21, F22) — so a well-meaning cleanup would silently destroy the
-  only durable trace of a round's decisions.
+  touches `docs/`, but nothing marks it as removable either (F19), and the marker
+  record is deliberately load-bearing for the *process* (F21, F22) — so a
+  well-meaning cleanup would silently destroy a round's decision trail.
+  Correction after F29–F31: that trail is **not** confined to the target tree,
+  since the report side is already mandatory; but this makes P1-b sharper rather
+  than softer, because under option (c) (D11) the *whole* trail is process-side
+  and disposability therefore removes all of it. That is exactly why D12's
+  restatement obligation is load-bearing rather than decorative: it is the only
+  thing that decides which rationales survive the removal P1-b permits.
 
 P1 does not contradict the thesis; it strengthens it. If target code carries no
 process references, then N1's "especially the comments in the target source"
@@ -320,15 +378,20 @@ about a project's own pre-existing `docs/`.
 
 **Four current tensions** (all four are design decisions made earlier, recorded
 here without judgement): F19 ships the process documents in the target repo;
-F20 instructs sessions to annotate decisions in code comments; F21 states that
-the durable trace of an `AUTO-DECISION` *is* the marker line committed into the
-target tree, while the `AUTO-RESOLVE` ledger sits in disposable `.auto/`; F22
-makes the k phase depend on reading those markers back out of the source.
+F20 instructs sessions to annotate decisions in code comments; F21 shows the
+target tree is one of two permitted annotation sites while `AUTO-DECISION` has no
+line-wise process-side ledger — and F29 shows the second site is not merely
+permitted but mandatory, so the code comment is a duplicate the prompts
+themselves discourage ("never twice"); F22 makes the k phase read those markers
+back out of the source, though its `docs/` branch already covers the alternative.
 
 **What already complies:** F23 — the marker vocabulary is self-contained prose,
 so "restate rather than reference" is already the de facto form. No template
-asks a session to cite a `docs/T-NNN/…` path from inside a source comment. The
-principle needs stating and enforcing far more than it needs retrofitting.
+asks a session to cite a `docs/T-NNN/…` path from inside a source comment. And
+F29–F30 — the process-document carrier is already mandatory and the scanner is
+already location-agnostic by design, so moving the markers out of source deletes
+one disjunct from three prompt strings rather than retrofitting a mechanism. The
+principle needs stating and enforcing far more than it needs building.
 
 **The cost P1 moves rather than removes:** if a decision's rationale is to
 outlive the process documents, it must be restated into the target project's
@@ -352,7 +415,7 @@ just an instruction.
 | D8 | The human's input gets a typed document role; the ledger stays the state machine | A per-phase acceptance document becomes a new `DocumentRole` (M2.3's `src/document/roles.ts`), so it inherits role-derived `eofScanExempt`, protect policy and shape checking rather than adding a bespoke exemption list. `appendLedger` refuses to record the phase until that document carries an acceptance marker. Rounds reuse the `stage@round` precedent (F16); pause points reuse `stepPause` / `waitBetweenTasks` (F15). No new hidden state: `routePhase` remains a pure function of (ledger, PLAN.md). |
 | D9 | The source-side face is a **prohibition** check, not a resolution check (revised 2026-09-21, supersedes the original D9) | The original D9 proposed resolving `docs/…` references found in changed source files. Under P1 that is the wrong mechanism: such a reference should not exist at all, so there is nothing to resolve. The check becomes a scan of the unit's changed non-process files (the set is already available — `changedFiles`, used at `src/resolve.ts:306`) for **tool-owned path shapes** (`docs/T-`, `docs/R-`, `docs/phases/`, root `PLAN.md`, `.auto/`) → violation. Bare `T-NNN` id mentions are a **warning** only: too many plausible false positives (register names, hardware designators, unrelated project conventions). Keying on tool-owned shapes rather than the bare word `docs/` is what makes this safe in a tree that has its own documentation directory. Scope is the unit's changes, never the existing tree — the same non-retroactive scoping the shape checks already use. |
 | D10 | Adopt P1; its durable homes are the standardization-boundary clause and the governance intent | P1 is a documentation-regime principle, so it belongs in M2.3's "standardization boundary" section (which already delimits what the protocol-marker minimal set constrains) rather than only in this stage-assisting document. Its prompt-side enforcement belongs in the intent pack's `## governance` section — M2.2's target, currently empty (`templates/intents/default.md`), which is a natural fit: governance is exactly "rules about how the work is recorded", and an intent-pack section makes it replaceable per project instead of hardcoded. |
-| D11 | Marker lifecycle must be decided; three options, recommend (b) or (c) | F20–F22 mean `AUTO-DECISION`/`AUTO-FIXME`/`AUTO-RESOLVE` lines inside target source are process protocol embedded in the deliverable, and the k phase currently reads them back. **(a)** keep them permanently (status quo; defensible under F23 since they are self-contained prose, but `AUTO-FIXME` shipping in delivered code is process state, not code documentation). **(b)** treat them as a *transport* form — harvested by the k phase, then stripped at round close, leaving an ordinary prose comment; this matches an existing idiom (a marker is consumed then transformed: `todo.md` → `done.md`, `testhandoff.md` → `testhandoff-<n>.md`). **(c)** never let them enter source: decisions are recorded only in process documents and the code comment is ordinary prose from the start — the strictest reading of P1. Under (b) and (c), F21's asymmetry must be fixed: `AUTO-DECISION` needs a durable **process-side** home (the task report under `docs/T-NNN/`, which `_partials.md:29` already half-specifies) so that stripping the marker does not destroy the only record. |
+| D11 | Marker lifecycle: recommend **(c) never in source**, as governance intent rather than core code (revised 2026-09-21; previously "recommend (b) or (c)") | F20–F22 mean `AUTO-DECISION`/`AUTO-FIXME`/`AUTO-RESOLVE` lines inside target source are process protocol embedded in the deliverable, and the k phase currently reads them back. **(a)** keep them permanently (status quo; defensible under F23 since they are self-contained prose, but `AUTO-FIXME` shipping in delivered code is process state, not code documentation — a delivered one means the leftover was never closed, which is a defect rather than a comment). **(b)** treat them as a *transport* form — harvested by the k phase, then stripped at round close, leaving an ordinary prose comment; this matches an existing idiom (a marker is consumed then transformed: `todo.md` → `done.md`, `testhandoff.md` → `testhandoff-<n>.md`). **(c)** never let them enter source: the decision's **content** is restated as ordinary prose in the code comment (P1's restatement clause) while the *marker line* lives only in process documents. **Recommend (c)**, because verification changed the cost picture (F29–F31): the process-document carrier is already mandatory (`wrapup.md:30-31` requires the report's 「自动代答问题」 section verbatim; `_partials.md:27-29` and `unit-commit.ts:43-44` make the document the primary record), the scanner is location-agnostic by design (`resolve.ts:94-95` treats a code comment and a markdown list item as equally legal, and `collectAgentResolves` filters by size and NUL, never by extension), and `PARTIAL_MARKERS["question-rule"]` **does not move** because both tokens remain the driver's scan targets. So (c) does not require fixing an asymmetry — the alternative carrier F22 demands already exists. **Concrete edit surface: delete one disjunct in four strings** — `_partials.md:29`, `unit-commit.ts:44` (both "or in a code comment"), `test-continue.md:2`'s "in a code comment or" for `AUTO-FIXME` (the unconditional case), and the agent contract `templates/.opencode/agent/auto.md:40-41` (F20). `agents-block.ts:34` is **not** an edit site — MAINT_RULE item 4 already routes one-off decisions to "the relevant document", so the AGENTS.md injection block complies with (c) today. **The one real loss** is a greppable in-code decision trail, and P1's own restatement clause covers it: the reasoning stays in the code as prose, only the token goes. **Reject (b)**: it builds a round-close stripper to undo what the prompts instructed, needs its own commit stage (F8's unit range admits only that unit's `Auto-Stage:` commits), risks mangling comments and string literals, and its single advantage — keeping the cheap signal during the run — is worth nothing, because the signal never required the marker to be in source. **Framing**: express the discipline as the intent pack's `## governance` section (M2.2's target, currently empty) rather than as core code, so (c) is the strict built-in default and a project that genuinely wants an in-code audit trail overrides one section to obtain (a) — which turns "pick a letter" into "pick a default", per D1/D8. |
 | D12 | A disposability gate at round close, carrying the restatement obligation | P1-b becomes real only if something tests it. At round close — M4's human gate, which already exists — run once over the whole tree: the D9 prohibition scan (whole-tree, not changed-files, since this is the one moment it is worth the cost) plus the project's own build. Failure means the round is not closed. The gate is also where the restatement obligation of §4.1 is checked: a decision whose rationale must outlive the process documents has to have landed in the target project's own documentation, and the k phase is the natural producer of that landing. |
 | D13 | `--parallel` is **intent**; `--max-agents` is **mechanism** — **[confirmed 2026-09-21]** | The two flags answer different questions and must not be conflated. `--parallel <level>` tells the *planning and decomposition sessions* how to arrange work — how hard to try to make items independent, and how much merge overhead to accept — so it is intent-pack content: a `## parallelism` section with `### high` / `### medium` / `### low` subsections addressed by `packSubsection` (F28), injected into the phase-plan and decompose prompts the way `ModeSpec.init`/`exec` are injected today. `--max-agents <N>` bounds the scheduler and affects no prompt. The split makes `--parallel high --max-agents 1` coherent and useful: plan for parallelism, execute serially — which is exactly how the feature should be rolled out and how it can be tested by golden and dryrun without ever launching two sessions. **The user confirmed this reading of the levels on 2026-09-21** (question 11); it is the only decision in this table confirmed so far. |
 | D14 | Dependencies are **declared**, never inferred — and two declarations are needed | Inference from file paths after the fact is too late (the sessions are already running) and inference by an AI at plan time is unverifiable. So the plan carries an explicit dependency field on each task record (F27 shows the change is known-shaped: parse, render, contiguity rule) and each subtask declares what it **touches**, not only what it **produces** — `产出:` lists artifacts, and a subtask that modifies `src/foo.c` does not thereby produce it, so `declaredArtifacts` alone cannot support a disjointness check. Both literals are driver-parsed protocol strings and go through 0035. Semantics must stay shallow: a dependency edge means "start after", not a data-flow contract, because the driver has no way to verify anything deeper. |
@@ -572,7 +635,7 @@ optional shows compatibility awareness. Four shortcomings decide it:
 |---|---|---|
 | D9 prohibition check | M2.3 | Document domain, next to `checkArtifactSpecs`; gated with the unit close-out shape checks, **not** behind `OPENCODE_AUTO_REF_CHECK` (§6.1) |
 | D10 P1 principle text | M2.3 (standardization-boundary clause) + M2.2 (`## governance` intent section) | The clause and the intent section are both already scheduled and currently empty of this content |
-| D11 marker lifecycle | M2.1 (the `question-rule` / AUTO-DECISION wording lives in the understanding/wrapup/knowledge family) | Touches `_partials.md`, `test-continue.md`, `knowledge.md`, `prior-knowledge.md`, `agents-block.ts` and `src/resolve.ts`'s durable-trace comment; decide (a)/(b)/(c) first |
+| D11 marker lifecycle | M2.1 (the `question-rule` / AUTO-DECISION wording lives in the understanding/wrapup/knowledge family) + M2.2 (the `## governance` section carries the discipline) | Under the recommended (c) the edit is **delete one disjunct in four places**: `_partials.md:29`, `unit-commit.ts:43-44` (missed by the original list), `test-continue.md:2` (`AUTO-FIXME`), and `templates/.opencode/agent/auto.md:40-41`. `knowledge.md:50-51` / `prior-knowledge.md:73-74` need no change beyond dropping "and in code comments" — their `docs/` branch is already listed first (F22). `agents-block.ts:34` (MAINT_RULE item 4) needs **no change at all**: it already routes one-off decisions to "an `AUTO-DECISION` entry **in the relevant document**", so the AGENTS.md injection block complies with (c) today — further evidence that the document side is the intended default and the code comment is the outlier. `src/resolve.ts:293-296`'s durable-trace comment needs **restating**, not the mechanism changing (F21, F30). Marker table unchanged (F31). |
 | D12 disposability gate | M4.1–M4.2 | M4.1 inventories the human-intervention surface, M4.2 converges the release criteria — the gate is a release criterion |
 | D3 id namespace (A or B) | M2.3, with F18's `destDir` | Any id-shape change goes through §9 |
 | D6 path-scoped staging | M2 (its declared range already includes the commit boundary) | Independent value; can ship before any parallelism |
@@ -609,9 +672,16 @@ lowered D3-A's cost considerably.
 
 One interaction worth flagging early: D11's marker-lifecycle work necessarily
 edits `question-rule`, a **tier-1** partial in `PARTIAL_MARKERS` whose markers
-M1.5 just reworded. Per 0035 D6 the marker table must move in the same commit,
-and the affected golden files flip a second time — so D11 should not be
-scheduled as a casual wording tweak inside M2.1.
+M1.5 just reworded, so the affected golden files flip a second time and D11
+should not be scheduled as a casual wording tweak inside M2.1. **Correction
+(2026-09-21, F31):** this paragraph originally also warned that per 0035 D6 the
+marker table must move in the same commit. It must not — under the recommended
+option (c) both `AUTO-RESOLVE` and `AUTO-DECISION` remain what `src/resolve.ts`
+scans for, so `PARTIAL_MARKERS["question-rule"]` keeps all three anchors and a
+project overriding that partial is still required to preserve them. Only the
+prose changes, which is the M2.1 batch's normal golden cost. The table would
+shrink only if the marker *vocabulary* were retired outright, which no option
+here proposes.
 
 ## 10. How we would know it worked
 
@@ -667,13 +737,21 @@ scheduled as a casual wording tweak inside M2.1.
    pre-fill the document and the human only sign the marker? (The latter fits
    `final: stage@round`'s existing shape.)
 7. **D11 marker lifecycle: (a) keep, (b) transport-then-strip, or (c) never in
-   source?** This is the most time-sensitive question in the document, because
-   `question-rule` is a tier-1 partial in the M2.1 batch (§9): choosing (b) or
-   (c) changes wording that M1.5 just reworded, and the marker table plus the
-   affected goldens have to move in the same commit. Choosing (a) is a real
-   option — F23 shows the markers are self-contained prose — but then P1 needs
-   an explicit carve-out saying that process *markers* in target code are
-   acceptable while process *references* are not.
+   source?** — **recommendation recorded 2026-09-21: (c), expressed as
+   governance intent** (see D11 for the full argument; F29–F31 for the evidence
+   that changed the cost picture). Still open for adjudication. This is the most
+   time-sensitive question in the document, because `question-rule` is a tier-1
+   partial in the M2.1 batch (§9): choosing (b) or (c) changes wording that M1.5
+   just reworded, so the affected goldens flip a second time — **but the marker
+   table does not move**, contrary to what this question originally claimed
+   (F31: both tokens remain the driver's scan targets, only their location
+   changes). Choosing (a) is a real option — F23 shows the markers are
+   self-contained prose, and F29 shows a project may legitimately want a greppable
+   in-code audit trail — but then P1 needs an explicit carve-out saying that
+   process *markers* in target code are acceptable while process *references* are
+   not. Under the recommended framing that carve-out is not needed, because (a)
+   becomes a per-project `## governance` override rather than the built-in
+   default.
 8. **F19: should process documents be detached at project close?** They are
    committed into the target repo today, and nothing marks them removable. Three
    shapes: leave them committed permanently (status quo); archive them to a
@@ -710,10 +788,22 @@ Written 2026-09-20; revised 2026-09-21 to add the governing principle P1 (§4.1)
 and the fourth requirement N4 (§1), after the user proposed both — together with
 facts F19–F28, decisions D10–D18, the §6.4 design, a revised D9 (prohibition
 instead of resolution) and open questions 7–12. Question 11 was answered the
-same day, confirming D13's level semantics. Otherwise proposal only: no code
-changed, no other decision confirmed, no milestone updated. If the user confirms
-a further subset, the root plan's affected milestone entries (M2.1, M2.2, M2.3,
-M3, M4.1–M4.2, plus a new orchestration milestone for N2's tier 2 and N4) should
-be amended to point here, and §11's answers recorded in §5 before any
-implementation step is scheduled. Of the remaining questions, only **question 7**
-(marker lifecycle) gates already-scheduled work — the M2.1 batch.
+same day, confirming D13's level semantics. Revised a second time on 2026-09-21
+after verifying the marker-lifecycle question against the templates and
+`src/resolve.ts`: **F21 restated**, **F29–F31 added**, **D11 narrowed from
+"recommend (b) or (c)" to a specific recommendation of (c)** with its edit
+surface and framing, and **§9's marker-table warning corrected**. The
+verification made (c) cheaper than this document originally claimed, not dearer:
+the process-document carrier is already mandatory, the scanner is already
+location-agnostic, and the tier-1 marker table does not move.
+
+Otherwise proposal only: no code changed, and D13 remains the single confirmed
+decision. **The root-plan amendment this section called for has been made**
+(integration repo `master`, commit `2884099`): D12 records P1, M2.1/M2.2/M2.3,
+the M2 and M3 preambles, M4.1 and M4.2 carry candidate-scope pointers here, the
+reserved `MP` track is the home of N2's tier 2 and all of N4, and open question
+15 plus risk 12 are the tracking entries. Question 7 now carries a recommendation
+but is **still open** — it is the only question gating already-scheduled work
+(the M2.1 batch), so it should be adjudicated before M2.1 starts. If the user
+confirms a further subset, §11's answers get recorded in §5 before any
+implementation step is scheduled.
