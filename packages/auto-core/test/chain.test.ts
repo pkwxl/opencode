@@ -2,7 +2,8 @@
 // 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
-import { classifySessionError, phaseToRole, resolveModel, roleOf, splitModel } from "../src/chain"
+import { OPENCODE_ERROR_PATTERNS, splitModel } from "../src/agent/opencode/client"
+import { classifySessionError, phaseToRole, resolveModel, roleOf } from "../src/chain"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // ---- 阶段化模型路由(plans/0017-model-routing-design.md C.1/C.3,P2)----
@@ -36,7 +37,7 @@ describe("resolveModel(路由求值 role > letter > wildcard)", () => {
   })
 })
 
-describe("splitModel(prov/model → SDK model 参数,按首个 / 切分)", () => {
+describe("splitModel(prov/model → SDK model 参数,按首个 / 切分;MA.3 起在 opencode 适配器)", () => {
   test("基本切分", () => {
     expect(splitModel("anthropic/c-4")).toEqual({ providerID: "anthropic", modelID: "c-4" })
   })
@@ -115,11 +116,23 @@ describe("classifySessionError(固定报文样本 → 类别)", () => {
   test("非 rate: 429 且 next<=60s → unknown", () => {
     expect(classifySessionError({ statusCode: 429, message: "too many requests", next: 30_000 })).toBe("unknown")
   })
-  test("overflow: 报文含 ContextOverflowError", () => {
-    expect(classifySessionError({ message: "ContextOverflowError: prompt is too long" })).toBe("overflow")
+  test("overflow: 报文含 ContextOverflowError(opencode 适配器的错误名表)", () => {
+    expect(classifySessionError({ message: "ContextOverflowError: prompt is too long" }, OPENCODE_ERROR_PATTERNS)).toBe("overflow")
   })
   test("overflow 优先: 与 isRetryable:false 同时出现仍判 overflow", () => {
-    expect(classifySessionError({ message: "ContextOverflowError", isRetryable: false })).toBe("overflow")
+    expect(classifySessionError({ message: "ContextOverflowError", isRetryable: false }, OPENCODE_ERROR_PATTERNS)).toBe("overflow")
+  })
+  test("adapter patterns (MA.3): agent error names are the adapter's; the neutral table does not know them", () => {
+    // Without the opencode table the name is just text: no overflow class, and
+    // ProviderAuthError without a 401/403 is not auth.
+    expect(classifySessionError({ message: "ContextOverflowError: prompt is too long" })).toBe("unknown")
+    expect(classifySessionError({ message: "ProviderAuthError: rejected key" })).toBe("unknown")
+    expect(classifySessionError({ message: "ProviderAuthError: rejected key" }, OPENCODE_ERROR_PATTERNS)).toBe("auth")
+    // Another adapter extends any class with its own wording; neutral patterns still apply.
+    const other = { transient: /upstream hiccup/i, rate: /slow down/i }
+    expect(classifySessionError({ message: "upstream hiccup" }, other)).toBe("transient")
+    expect(classifySessionError({ message: "please slow down", attempt: 3 }, other)).toBe("rate")
+    expect(classifySessionError({ message: "service unavailable" }, other)).toBe("transient")
   })
   test("transient: overloaded_error", () => {
     expect(classifySessionError({ message: "overloaded_error: engine busy" })).toBe("transient")

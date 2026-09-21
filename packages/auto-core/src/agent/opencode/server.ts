@@ -1,7 +1,14 @@
+// opencode server lifecycle (moved from src/server.ts in MA.3, design
+// plans/0039): spawn or connect, restart, AGENTS.md sync, and the request
+// timeout guard. `manage` returns the AgentHost the driver holds; its client
+// is the AgentClient adapter over a proxy that always targets the current
+// server instance. Logging is injected (`log`): a physically-placed agent
+// domain file must not import the driver (import-direction rule 6).
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
 import { createOpencodeClient, createOpencodeServer, type OpencodeClient } from "@opencode-ai/sdk/v2"
-import { log } from "./log"
+import type { AgentHost } from "../types"
+import { opencodeAgent } from "./client"
 
 export type Server = {
   client: OpencodeClient
@@ -9,20 +16,11 @@ export type Server = {
   close: () => void
 }
 
-// runner 经此句柄管理会话服务: 新建会话前同步 AGENTS.md(有更新则重启 spawn 的
-// server 再开新会话),网络类会话错误时重启换新实例后重试。
-export type ServerControl = {
-  syncAgents(): Promise<void>
-  // 杀死当前 spawn 的 server 并启动新实例;复用外部 server 时不可重启,返回 false。
-  restart(reason: string): Promise<boolean>
-}
+// AgentHost plus the server URL (opencode-specific, not part of the driver's
+// interface; tests and diagnostics read it).
+export type OpencodeHost = AgentHost & { readonly url: string }
 
-export type ServerHandle = ServerControl & {
-  // 指向当前活动 server 的代理客户端——restart 换实例后,既有引用自动指向新 server。
-  client: OpencodeClient
-  url: string
-  close: () => void
-}
+type Log = (line: string) => void
 
 // 普通请求的连接与响应头上限: 到点未取得响应头即中止并告警,禁止请求在客户端
 // 连接池无限排队(无声死锁)。覆盖 session.create / question.reply 等短交互;
@@ -41,6 +39,7 @@ const TURN_TIMEOUT_MS = 2 * 60 * 60_000
 export function timeoutFetch(
   timeouts: { requestMs?: number; turnMs?: number } = {},
   underlying: typeof fetch = ((...args: Parameters<typeof fetch>) => fetch(...args)) as typeof fetch,
+  log: Log = () => {},
 ): typeof fetch {
   const requestMs = timeouts.requestMs ?? REQUEST_TIMEOUT_MS
   const turnMs = timeouts.turnMs ?? TURN_TIMEOUT_MS
@@ -75,35 +74,40 @@ export function timeoutFetch(
 // 任意目标目录。
 export async function manage(
   directory: string,
-  url?: string,
-  launch: {
+  url: string | undefined,
+  options: {
+    log: Log
     spawn?: (directory: string) => Promise<Server>
     connect?: (url: string, directory: string) => Promise<Server>
-  } = {},
-): Promise<ServerHandle> {
+  },
+): Promise<OpencodeHost> {
+  const { log } = options
   const external = url ?? process.env.OPENCODE_AUTO_SERVER
-  const spawn = launch.spawn ?? defaultSpawn
-  const connect = launch.connect ?? defaultConnect
+  const spawn = options.spawn ?? ((dir: string) => defaultSpawn(dir, log))
+  const connect = options.connect ?? ((target: string, dir: string) => defaultConnect(target, dir, log))
   let server = external ? await connect(external, directory) : await spawn(directory)
   let agents = await agentsFingerprint(directory)
-  const handle: ServerHandle = {
-    client: new Proxy({} as OpencodeClient, {
-      get: (_target, prop) => {
-        const value = Reflect.get(server.client, prop)
-        return typeof value === "function" ? value.bind(server.client) : value
-      },
-    }),
+  // 指向当前活动 server 的代理 SDK 客户端——restart 换实例后,既有引用自动指向新 server。
+  const sdk = new Proxy({} as OpencodeClient, {
+    get: (_target, prop) => {
+      const value = Reflect.get(server.client, prop)
+      return typeof value === "function" ? value.bind(server.client) : value
+    },
+  })
+  const handle: OpencodeHost = {
+    client: opencodeAgent(sdk),
     get url() {
       return server.url
     },
     // AGENTS.md 是 system context,更新后新会话必须看到最新内容: 指纹(mtime+size)
     // 变化即重启 server。外部 server 不受管理,仅提示。
-    async syncAgents() {
+    async syncContext() {
       const current = await agentsFingerprint(directory)
       if (JSON.stringify(current) === JSON.stringify(agents)) return
       agents = current
       await handle.restart("AGENTS.md updated, restarting opencode server before creating a new session")
     },
+    // 杀死当前 spawn 的 server 并启动新实例;复用外部 server 时不可重启,返回 false。
     async restart(reason) {
       if (external) {
         log(`⚠ ${reason}; but an external server (${external}) is being reused and is not managed by this tool, keeping the current instance`)
@@ -120,22 +124,22 @@ export async function manage(
   return handle
 }
 
-async function defaultSpawn(directory: string): Promise<Server> {
+async function defaultSpawn(directory: string, log: Log): Promise<Server> {
   const spawned = await createOpencodeServer({ port: 0 })
   return {
-    client: createOpencodeClient({ baseUrl: spawned.url, directory, fetch: timeoutFetch() }),
+    client: createOpencodeClient({ baseUrl: spawned.url, directory, fetch: timeoutFetch({}, undefined, log) }),
     url: spawned.url,
     close: () => spawned.close(),
   }
 }
 
-async function defaultConnect(url: string, directory: string): Promise<Server> {
+async function defaultConnect(url: string, directory: string, log: Log): Promise<Server> {
   const healthy = await fetch(new URL("/api/health", url)).then(
     (res) => res.ok,
     () => false,
   )
   if (!healthy) throw new Error(`opencode server unavailable: ${url}`)
-  return { client: createOpencodeClient({ baseUrl: url, directory, fetch: timeoutFetch() }), url, close: () => {} }
+  return { client: createOpencodeClient({ baseUrl: url, directory, fetch: timeoutFetch({}, undefined, log) }), url, close: () => {} }
 }
 
 // AGENTS.md 变更指纹(mtime + size);文件不存在记 null。

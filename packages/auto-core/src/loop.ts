@@ -13,7 +13,8 @@ import { routePhase } from "./phases"
 import { renderDryrun } from "./prompt"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
-import { manage, type ServerHandle } from "./server"
+import type { AgentHost } from "./agent/types"
+import { manage } from "./agent/opencode/server"
 import { flushStats, statsPhase } from "./stats"
 
 // AGENTS.md 的 opencode-auto 块(单一标记块,内容与幂等同步逻辑见 agents-block.ts):
@@ -46,7 +47,7 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
   // so the first execution unit isn't wasted; dryrun permission preflight is
   // exempt (not a token-spending path).
   if (!opts.dryrun) await hibernatePause("startup", { dir: directory })
-  let server: ServerHandle | undefined
+  let server: AgentHost | undefined
   // --interactive sideband input controller; created once the server is ready,
   // closed in finally.
   let repl: Interactive | undefined
@@ -82,7 +83,7 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
         return 1
       }
     }
-    server = opts.managed ?? (await manage(directory, opts.server))
+    server = opts.managed ?? (await manage(directory, opts.server, { log }))
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")

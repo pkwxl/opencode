@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import type { ForkBaseInfo, SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { load } from "../src/plan"
@@ -154,7 +155,7 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
     const taskPersisted = await setupTask("digest:ses_dead")
     const gets: string[] = []
-    const { client } = fakeClient({
+    const { sdk } = fakeClient({
       get: (id) => {
         gets.push(id)
         return undefined
@@ -164,7 +165,7 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
           yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
         })(),
     })
-    const stubbed = { ...client, permission: { reply: async () => ({}) } } as unknown as OpencodeClient
+    const stubbed = opencodeAgent({ ...sdk, permission: { reply: async () => ({}) } } as unknown as OpencodeClient)
     expect(await ensureForkBase(stubbed, await load(path), taskPersisted, {}, chain, digest)).toBeUndefined()
     // 存活校验只对死基点做过一次;回退链不再拿 digest: 前缀值重复校验
     expect(gets).toEqual(["ses_dead"])
@@ -175,14 +176,14 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
     const taskWithBase = await setupTask("ses_U")
     // 权限提问且未设 --wait-answer → 会话以非故障的 blocked 收场(会话故障——错误/
     // 下发失败——自 2026-09-16 起在 runSession 内重试至恢复,不再走到回退)。
-    const { client } = fakeClient({
+    const { sdk } = fakeClient({
       events: (sid) =>
         (async function* () {
           yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
         })(),
       messages: () => ({ data: [{ info: { role: "user" } }, { info: { role: "assistant", tokens: { input: 700, cache: { read: 300 } } } }] }),
     })
-    const stubbed = { ...client, permission: { reply: async () => ({}) } } as unknown as OpencodeClient
+    const stubbed = opencodeAgent({ ...sdk, permission: { reply: async () => ({}) } } as unknown as OpencodeClient)
     const base = await ensureForkBase(stubbed, await load(path), taskWithBase, {}, chain, digest)
     expect(base).toEqual({ id: "ses_U", used: 1000 })
     expect(await Bun.file(path).text()).toContain("  - fork-base: ses_U")
@@ -248,12 +249,12 @@ describe("sessionUsage(恢复复用判据)", () => {
   })
   const limit = 262_100
   const client = (messages: unknown[] | { error: unknown }) =>
-    ({
+    opencodeAgent(({
       session: {
         messages: async () => (Array.isArray(messages) ? { data: messages } : messages),
       },
       provider: { list: async () => ({ data: { all: [{ id: "kimi", models: { k2: { limit: { context: limit } } } }] } }) },
-    }) as unknown as OpencodeClient
+    }) as unknown as OpencodeClient)
 
   test("末条是 0-token 报错桩、此前有真实产出: 用量取真实末端,不判为报错桩(T-063 现场)", async () => {
     // 第 1–4 点刻意把这个会话留在 progress.json 里:跑了很多活,最后一轮撞 isRetryable:false
@@ -292,7 +293,7 @@ describe("sessionUsage(恢复复用判据)", () => {
 
   test("messages 拉取失败或返回 error: 退化为用量 0 且不判报错桩(不因查询故障牺牲会话)", async () => {
     expect(await sessionUsage(client({ error: { name: "UnknownError" } }), "ses_x")).toEqual({ used: 0, pct: 100, errorStub: false })
-    const broken = { session: { messages: async () => { throw new Error("fetch failed") } } } as unknown as OpencodeClient
+    const broken = opencodeAgent({ session: { messages: async () => { throw new Error("fetch failed") } } } as unknown as OpencodeClient)
     expect(await sessionUsage(broken, "ses_x")).toEqual({ used: 0, pct: 100, errorStub: false })
   })
 })
@@ -362,7 +363,7 @@ describe("serverDefaultModel(服务端生效模型解析)", () => {
   afterEach(() => resetServerModelCache())
 
   test("agent 配置级 model 优先(指定 agent 命中;缺省取首个 primary)", async () => {
-    const client = {
+    const client = opencodeAgent({
       app: {
         agents: async () => ({
           data: [
@@ -372,48 +373,48 @@ describe("serverDefaultModel(服务端生效模型解析)", () => {
         }),
       },
       config: { get: async () => ({ data: { model: "p2/m2" } }) },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     expect(await serverDefaultModel(client, "auto")).toBe("p1/m1")
     expect(await serverDefaultModel(client)).toBe("p0/m0")
   })
 
   test("agent 无 model 回落全局 config.model", async () => {
-    const client = {
+    const client = opencodeAgent({
       app: { agents: async () => ({ data: [{ name: "auto", mode: "primary" }] }) },
       config: { get: async () => ({ data: { model: "prov/cfg" } }) },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     expect(await serverDefaultModel(client, "auto")).toBe("prov/cfg")
   })
 
   test("config 无 model 回落首个已连接 provider 的缺省模型", async () => {
-    const client = {
+    const client = opencodeAgent({
       app: { agents: async () => ({ data: [{ name: "auto", mode: "primary" }] }) },
       config: { get: async () => ({ data: {} }) },
       provider: { list: async () => ({ data: { connected: ["zai", "openai"], default: { zai: "glm", openai: "gpt" } } }) },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     expect(await serverDefaultModel(client, "auto")).toBe("zai/glm")
   })
 
   test("全取不到(表面缺失/请求失败)返回 undefined,不抛错", async () => {
-    expect(await serverDefaultModel({} as unknown as OpencodeClient, "auto")).toBeUndefined()
-    const failing = {
+    expect(await serverDefaultModel(opencodeAgent({} as unknown as OpencodeClient), "auto")).toBeUndefined()
+    const failing = opencodeAgent({
       app: { agents: async () => Promise.reject(new Error("boom")) },
       config: { get: async () => ({ error: { name: "UnknownError" } }) },
       provider: { list: async () => ({ data: { connected: [], default: {} } }) },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     expect(await serverDefaultModel(failing, "auto")).toBeUndefined()
   })
 
   test("进程内按 agent 缓存: 同键第二次不再请求", async () => {
     let calls = 0
-    const client = {
+    const client = opencodeAgent({
       config: {
         get: async () => {
           calls++
           return { data: { model: "prov/cached" } }
         },
       },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     expect(await serverDefaultModel(client, "auto")).toBe("prov/cached")
     expect(await serverDefaultModel(client, "auto")).toBe("prov/cached")
     expect(calls).toBe(1)

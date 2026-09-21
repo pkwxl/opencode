@@ -3,13 +3,19 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { manage, timeoutFetch, type Server } from "../src/server"
+import { manage, timeoutFetch, type Server } from "../src/agent/opencode/server"
 
-// 可注入的假 server: 记录 close 次数,client 用可区分的标记对象。
+// src/agent/opencode/server.ts (moved from src/server.ts in MA.3): server
+// lifecycle behind AgentHost, and the request timeout guard.
+
+const log = () => {}
+
+// 可注入的假 server: 记录 close 次数;client 的 session.get 回显本实例 url,经
+// AgentClient 调用即可辨认请求落到了哪个实例。
 function fakeServer(url: string) {
   let closed = 0
   const server: Server = {
-    client: { marker: url } as unknown as OpencodeClient,
+    client: { session: { get: async () => ({ data: { id: url } }) } } as unknown as OpencodeClient,
     url,
     close: () => {
       closed++
@@ -35,10 +41,11 @@ describe("manage", () => {
     if (envServer !== undefined) process.env.OPENCODE_AUTO_SERVER = envServer
   })
 
-  test("缺省 spawn 并托管;client 代理转发到当前实例", async () => {
+  test("缺省 spawn 并托管;client(AgentClient)经代理转发到当前实例", async () => {
     const first = fakeServer("http://127.0.0.1:1")
     let spawns = 0
     const handle = await manage(dir, undefined, {
+      log,
       spawn: async () => {
         spawns++
         return first.server
@@ -46,7 +53,7 @@ describe("manage", () => {
     })
     expect(spawns).toBe(1)
     expect(handle.url).toBe("http://127.0.0.1:1")
-    expect((handle.client as unknown as { marker: string }).marker).toBe("http://127.0.0.1:1")
+    expect(await handle.client.get("ses_x")).toEqual({ ok: true, value: { id: "http://127.0.0.1:1" } })
     handle.close()
     expect(first.closed).toBe(1)
   })
@@ -57,6 +64,7 @@ describe("manage", () => {
     const spawned = [first.server, second.server]
     let index = 0
     const handle = await manage(dir, undefined, {
+      log,
       spawn: async () => spawned[index++]!,
     })
     const client = handle.client
@@ -64,24 +72,25 @@ describe("manage", () => {
     expect(first.closed).toBe(1)
     expect(second.closed).toBe(0)
     expect(handle.url).toBe("http://127.0.0.1:2")
-    expect((client as unknown as { marker: string }).marker).toBe("http://127.0.0.1:2")
+    expect(await client.get("ses_x")).toEqual({ ok: true, value: { id: "http://127.0.0.1:2" } })
   })
 
-  test("syncAgents: AGENTS.md 更新后触发重启,未更新则不动", async () => {
+  test("syncContext: AGENTS.md 更新后触发重启,未更新则不动", async () => {
     await writeFile(join(dir, "AGENTS.md"), "v1\n")
     const first = fakeServer("http://127.0.0.1:1")
     const second = fakeServer("http://127.0.0.1:2")
     const spawned = [first.server, second.server]
     let index = 0
     const handle = await manage(dir, undefined, {
+      log,
       spawn: async () => spawned[index++]!,
     })
-    await handle.syncAgents()
+    await handle.syncContext()
     expect(first.closed).toBe(0)
     // 等 mtime 分辨率窗口后写入新内容,确保指纹变化。
     await new Promise((resolve) => setTimeout(resolve, 10))
     await writeFile(join(dir, "AGENTS.md"), "v2\n")
-    await handle.syncAgents()
+    await handle.syncContext()
     expect(first.closed).toBe(1)
     expect(second.closed).toBe(0)
   })
@@ -91,11 +100,12 @@ describe("manage", () => {
     let spawns = 0
     let connects = 0
     const handle = await manage(dir, "http://127.0.0.1:9", {
+      log,
       spawn: async () => {
         spawns++
         return external.server
       },
-      connect: async (url) => {
+      connect: async (url: string) => {
         connects++
         return { client: external.server.client, url, close: () => {} }
       },

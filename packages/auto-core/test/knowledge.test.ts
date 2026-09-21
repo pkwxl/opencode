@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, extractKnowledge, extractPriorKnowledge, knowledgeFile, priorKnowledgeComplete, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
 
 async function git(dir: string, ...args: string[]) {
@@ -304,7 +305,7 @@ describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交�
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
   // 本组只覆盖不启动会话的分支(skipped/dirty),client 不会被触达。
-  const client = {} as OpencodeClient
+  const client = opencodeAgent({} as OpencodeClient)
 
   test("产物已存在且已提交 → skipped,不产生新提交", async () => {
     const dir = tempDir()
@@ -363,7 +364,7 @@ describe("extractKnowledge 完成判定(③补提交/④dirty 推广,plans/0021-
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
   // 本组只覆盖不启动会话的分支(skipped/dirty),client 不会被触达。
-  const client = {} as OpencodeClient
+  const client = opencodeAgent({} as OpencodeClient)
 
   test("③ 本轮文档已产出但尚未提交 → 补提交后 skipped(完成判定以提交为准)", async () => {
     const dir = tempDir()

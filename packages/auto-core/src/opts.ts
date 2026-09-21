@@ -4,7 +4,7 @@
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S1,纯搬运)。
 import type { Interactive } from "./interactive"
 import type { ModeSpec } from "./mode"
-import type { ServerControl } from "./server"
+import type { AgentHost } from "./agent/types"
 
 // 任务结局。dirty(plans/0021-commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
 // 出口: 不写 PLAN.md、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
@@ -76,9 +76,10 @@ export type Opts = {
   // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
   // ask 的人工等待也改由它接收(语义不变)。
   interactive?: Interactive
-  // server 控制句柄: 新会话前 syncAgents(AGENTS.md 有更新则重启 server)、
-  // 网络类会话错误 restart 换新实例后重试。
-  server?: ServerControl
+  // Agent host control (AgentHost minus client/close): syncContext before a new
+  // session (opencode restarts its server when AGENTS.md changed), restart on
+  // a network-class session error before retrying.
+  server?: Pick<AgentHost, "syncContext" | "restart">
   // driver 托管脚本的看门狗: 持续无输出的判定窗口(缺省 10 分钟)与绝对时长上限
   // (缺省不设;config 的 idleTime / idleMax 以分钟设定,verify 与 test 脚本共用)。
   idleMs?: number

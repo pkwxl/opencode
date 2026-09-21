@@ -8,6 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import type { SessionChain } from "../src/chain"
 import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
 import { recallHandover, saveHandover } from "../src/handover"
@@ -51,7 +52,7 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
     try {
       const fake = fakeClient({ current: "ses_new_1" })
       // 未设路由: 经 config.get 回落播报服务端生效模型(同 test「未设路由」组)。
-      ;(fake.client as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
+      ;(fake.sdk as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
       const chain = reusable()
       await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, REUSE_ON)
       // fake 事件流收段后 pct=100(上限未知);复位回复用阈值内,第二个提示词才真复用。
@@ -370,8 +371,8 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     // prompt 首次抛异常(SDK 层面)、第二次返回错误体、第三次成功——三次都是
     // 「会话故障」面,一律重试,绝不向上抛 blocked。
     let n = 0
-    const { client, calls } = fakeClient()
-    const raw = client as unknown as { session: { prompt: (p: unknown) => Promise<unknown> } }
+    const { client, calls, sdk } = fakeClient()
+    const raw = sdk as unknown as { session: { prompt: (p: unknown) => Promise<unknown> } }
     raw.session.prompt = async (p: unknown) => {
       calls.prompts.push(p as { sessionID: string; parts: unknown[] })
       n++
@@ -395,8 +396,8 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
       // 在探测会话建立的瞬间窥探 progress.json: 应回复为 prior 真实记录,而不是
       // 被任何失败会话(含探测本身)的认领顶替。
       const seen: (string | undefined)[] = []
-      const { client } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"])
-      const raw = client as unknown as { session: { create: () => Promise<unknown> } }
+      const { client, sdk } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"])
+      const raw = sdk as unknown as { session: { create: () => Promise<unknown> } }
       const origCreate = raw.session.create.bind(raw.session)
       raw.session.create = async () => {
         const made = await origCreate()
@@ -421,8 +422,8 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     const dir = await mkdtemp(join(tmpdir(), "auto-remember-fatal-"))
     try {
       const seen: (string | undefined)[] = []
-      const { client } = retryClient(["error-fatal", "error-fatal", "ok", "ok"])
-      const raw = client as unknown as { session: { create: () => Promise<unknown> } }
+      const { client, sdk } = retryClient(["error-fatal", "error-fatal", "ok", "ok"])
+      const raw = sdk as unknown as { session: { create: () => Promise<unknown> } }
       const origCreate = raw.session.create.bind(raw.session)
       raw.session.create = async () => {
         const made = await origCreate()
@@ -741,10 +742,10 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
   })
 
   test("候选窗口钳制:prov/b 上下文窗口 < cap 被跳过,首个生效切换为窗口足够的 prov2/c", async () => {
-    const { client, calls } = fakeClient({ events: quotaThenIdleEvents() })
+    const { sdk, calls } = fakeClient({ events: quotaThenIdleEvents() })
     // 扩展 provider 表面:prov/b 窗口 1000 < 显式 cap 5000(跳过),prov2/c 窗口 1_000_000(可用)。
-    const clamped = {
-      ...client,
+    const clamped = opencodeAgent({
+      ...sdk,
       provider: {
         list: async () => ({
           data: {
@@ -755,7 +756,7 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
           },
         }),
       },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     const CLAMP = parseSwitches({ [SWITCH_ENV.modelFallback]: "prov/b,prov2/c" })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(clamped, task, "提示词", { contextLimit: 5000 }, chain, undefined, undefined, CLAMP)
@@ -888,7 +889,7 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
       calls = fake.calls
       // fake client 缺省无 config/app/provider 表面——此处只补 config.get(全局
       // config.model 回落档),验证 attempt 在 target undefined 时的服务端模型播报。
-      ;(fake.client as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
+      ;(fake.sdk as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
       await runSession(fake.client, task, "提示词2", {}, chain, undefined, undefined, parseSwitches({}))
@@ -974,15 +975,15 @@ describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候�
   })
 
   test("候选窗口钳制同样生效:窗口不足的候选被跳过,不作为回落目标下发", async () => {
-    const { client: base, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], 50_000, TRANSIENT)
-    const clamped = {
+    const { sdk: base, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], 50_000, TRANSIENT)
+    const clamped = opencodeAgent({
       ...base,
       provider: {
         list: async () => ({
           data: { all: [{ id: "prov", models: { b: { limit: { context: 1000 } } } }, { id: "prov2", models: { c: { limit: { context: 1_000_000 } } } }] },
         }),
       },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     const CLAMP = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0", [SWITCH_ENV.modelFallback]: "prov/b,prov2/c" })
     const result = await runSession(clamped, task, "提示词", { contextLimit: 5000 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, CLAMP)
     expect(result.type).toBe("idle")

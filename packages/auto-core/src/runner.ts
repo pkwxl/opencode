@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { writeCurrent, removeCurrent } from "./current"
 import { ensureDecomposed, executeWhole, requireTask, runSubtask } from "./execute"
@@ -118,7 +118,7 @@ import { runWrapup } from "./wrapup"
 // question on the same issue, exhausted transient session errors, a failed
 // verification, or an ask-fail permission timeout.
 export async function runTask(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -602,7 +602,7 @@ export async function runTask(
 // --dryrun 的单次独立会话: 不属于任何任务,不进任何链,也不做会话后提交
 // (预检不改动工作区)。
 export async function runOnce(
-  client: OpencodeClient,
+  client: AgentClient,
   title: string,
   promptText: string,
   opts: Opts,

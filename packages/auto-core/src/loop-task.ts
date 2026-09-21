@@ -17,7 +17,7 @@ import type { Phase } from "./phases"
 import { stageText } from "./prompt"
 import { recallProgress } from "./resume"
 import { runTask } from "./runner"
-import type { ServerHandle } from "./server"
+import type { AgentHost } from "./agent/types"
 import { statsTask } from "./stats"
 import { stepPause } from "./step"
 
@@ -25,7 +25,7 @@ export type LoopCtx = {
   directory: string
   path: string
   opts: RunAllOpts
-  server: ServerHandle
+  server: AgentHost
   agentName: string
   phases: string
   repl?: Interactive

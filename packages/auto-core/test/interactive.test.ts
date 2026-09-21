@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { PassThrough, Writable } from "node:stream"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import { exitRequested, resetExitRequest } from "../src/exit"
 import { consumeFailback, failbackOverride, failbackRequested, resetFailback } from "../src/failback"
 import { startInteractive, type Interactive } from "../src/interactive"
@@ -18,14 +19,14 @@ function setup() {
     },
   })
   const sent: Array<{ sessionID: string; text: string }> = []
-  const client = {
+  const client = opencodeAgent({
     session: {
       promptAsync: (params: { sessionID: string; parts?: Array<{ type: string; text?: string }> }) => {
         sent.push({ sessionID: params.sessionID, text: params.parts?.[0]?.text ?? "" })
         return Promise.resolve({ data: undefined, error: undefined, request: undefined, response: undefined })
       },
     },
-  } as unknown as OpencodeClient
+  } as unknown as OpencodeClient)
   const repl = startInteractive(client, undefined, { input, output })
   return { input, sent, repl, chunks }
 }

@@ -1,11 +1,11 @@
 // MA.2 (plans/0038): the usage-source tiers and the behavior matrix of the
-// usage-driven mechanisms. The `events` rows are checked against today's
-// inline rules (testrun.ts predicates, attempt.ts reuse, seedForkSession's
-// guard) so MA.3 can swap them in without a behavior change.
+// usage-driven mechanisms. The `events` rows are checked against the pre-MA.3
+// inline rules (testrun.ts handoverDue/testHandoverDue, attempt.ts reuse,
+// seedForkSession's guard — all restated here since MA.3 replaced them with
+// these functions), so the swap is behavior-preserving for opencode.
 import { describe, expect, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
 import { REUSE_BELOW, REUSE_IDLE_MS } from "../src/chain"
-import { handoverDue as todayHandoverDue, testHandoverDue as todayTestHandoverDue } from "../src/testrun"
 import {
   estimateTokens,
   forkBaseAllowed,
@@ -66,6 +66,11 @@ describe("usage source", () => {
     expect([liveUsage("events"), liveUsage("reported"), liveUsage("estimated"), liveUsage("none")]).toEqual([true, false, true, false])
   })
 })
+
+// Pre-MA.3 testrun.ts predicates, verbatim.
+const todayHandoverDue = (steer: { limit: number } | undefined, used: number) => steer !== undefined && used >= steer.limit
+const todayTestHandoverDue = (test: { handover: boolean; limit: number; startUsed: number }, used: number) =>
+  test.handover && (used > 0 ? used : test.startUsed) >= test.limit
 
 describe("behavior matrix: events row equals today", () => {
   const cap = 64_000

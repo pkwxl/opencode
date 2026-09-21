@@ -21,8 +21,10 @@
 // | fork base guard (used < cap/2)  | today  | today         | estimate  | cold start  |
 // | failover window clamp           | window sizes, not usage: same in every tier  |
 //
-// Shipped unwired (0031 D4 path): MA.3 routes watch/attempt/testrun/session
-// through it; for opencode (`events`) every decision equals today's.
+// Wired in MA.3 (plans/0039): watch tracks the session through usageSource
+// and decides steer / test handover here, attempt decides reuse, execute the
+// post-session check, session-api the fork base guard. For opencode (`events`)
+// every decision equals the pre-MA.3 inline rules.
 import type { AgentEvent, AgentPart, UsageTier } from "./agent/types"
 import { REUSE_BELOW, REUSE_IDLE_MS } from "./chain"
 
@@ -128,18 +130,25 @@ export function steerDue(tier: UsageTier, used: number | undefined, limit: numbe
   return liveUsage(tier) && used !== undefined && used >= limit
 }
 
-// Post-session handover check (testrun.ts handoverDue): "the session was over
-// the cap, so it was asked for a handover document". Only true where the
+// Post-session handover check (execute.ts; was testrun.ts handoverDue): "the
+// session was over the cap, so it was asked for a handover document". Without
+// a steer (OPENCODE_AUTO_STEER=off, or the off-mode whole-task session) a
+// natural finish is accepted and no document is demanded; the test handover
+// is a separate mechanism and never goes through this check. Only true where the
 // in-turn hint could have been sent — a `reported` session over the cap was
 // never asked, and demanding the document would misjudge a natural finish.
 export function sessionHandoverDue(tier: UsageTier, steer: { limit: number } | undefined, used: number | undefined): boolean {
   return steer !== undefined && steerDue(tier, used, steer.limit)
 }
 
-// Test handover at the moment the session requests a test run (testrun.ts
-// testHandoverDue). The request is read at idle, so a turn-end figure is
-// already in (`reported` works). Before any figure arrives the session's
-// starting occupancy decides; both unknown → no handover.
+// Test handover at the moment the session requests a test run (watch.ts; was
+// testrun.ts testHandoverDue; plans/0023 D1): context at the cap alone
+// decides, no longer combined with a failing test, and the moment is fixed at
+// the test request (tmp/test.sh appears) — the one naturally clean cut, as
+// requesting a test usually means the related work is done. The request is
+// read at idle, so a turn-end figure is already in (`reported` works). Before
+// any figure arrives the session's starting occupancy decides; both unknown →
+// no handover.
 export function testHandoverDue(
   test: { handover: boolean; limit: number; startUsed: number | undefined },
   used: number | undefined,

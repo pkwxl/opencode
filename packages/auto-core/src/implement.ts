@@ -16,7 +16,7 @@ import { renderImplementPlan } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 import type { Opts, PermissionMode } from "./opts"
 import { requireArtifact } from "./artifact"
-import { manage } from "./server"
+import { manage } from "./agent/opencode/server"
 
 export async function implementPlan(
   directory: string,
@@ -25,7 +25,7 @@ export async function implementPlan(
   opts: { server?: string; verbose?: boolean; waitAnswer?: number; permission?: PermissionMode; interactive?: Interactive } = {},
 ): Promise<{ type: "ok"; count: number } | { type: "blocked"; question: string }> {
   const path = join(directory, "PLAN.md")
-  const server = await manage(directory, opts.server)
+  const server = await manage(directory, opts.server, { log })
   try {
     log("▶ starting plan-generation session to fill PLAN.md")
     await allowWrite(path)

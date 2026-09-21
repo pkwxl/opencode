@@ -7,7 +7,7 @@
 // 依赖方向: 位于 session/unit-commit 之上、runner 与 review 之下(module-split-plan §D.2)。
 
 import { dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import type { SessionChain } from "./chain"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
@@ -33,7 +33,7 @@ async function reportProblems(dir: string, task: Task): Promise<string[]> {
 // 修复轮「修复后收尾会话」);solo 为 off/ondemand 整任务模式(报告为产出摘要而非
 // 索引式)。返回 undefined = 收尾完成。
 export async function runWrapup(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,

@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import { finalDoc } from "./docpaths"
 import { appendTask, parseFinalMark, type Plan, type Task } from "./plan"
 import { renderFinalTask, stageText, type FinalStage } from "./prompt"
@@ -235,7 +235,7 @@ export async function appendFinalTask(
 // 残余差距原文,mode 注入各阶段侧重。产出提案后由调用方经 appendFinalTask
 // 追加为真任务。
 export async function generateFinalTask(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   stage: FinalStage,
   round: number,

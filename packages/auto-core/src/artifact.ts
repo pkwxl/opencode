@@ -5,7 +5,7 @@
 // 它们不必拉进整个 runner。位于 session 之上;**不得反向 import runner**。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S9,纯搬运)。
 
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import type { SessionChain } from "./chain"
 import { baselineIntact, beginUnit, unitBaseline, type UnitBaseline } from "./git"
 import { log } from "./log"
@@ -41,7 +41,7 @@ import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictR
 // 验收机具会话(judge/review/planfix/脚本生成)不声明——它们运行在任务单元内层,
 // 提交义务由 afterSession 门禁覆盖。
 export async function requireArtifact<T>(
-  client: OpencodeClient,
+  client: AgentClient,
   task: Task,
   promptText: string,
   opts: Opts,

@@ -6,7 +6,7 @@
 
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import { requireArtifact } from "./artifact"
 import type { SessionChain } from "./chain"
 import { legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
@@ -55,7 +55,7 @@ import { runWrapup } from "./wrapup"
 // 直接(early 且审核结论缺失时补跑审核会话后)进入判定会话;修复轮进行中被中断
 // (stage=fix,差距原文随记录持久化)时凭差距重新下发修复提示续跑,不重复判定。
 export async function verifyTask(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -195,7 +195,7 @@ export type Verdict = { type: "pass"; command?: string } | { type: "gap"; gap: s
 // 审核会话,与脚本执行并行;脚本执行完毕先 join 审核(blocked 立即上抛),随后
 // 才进入判定会话。每次脚本执行(含修复轮重跑)重开一次新审核。
 async function executeVerifyScript(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -250,7 +250,7 @@ async function executeVerifyScript(
 // verify 字段外的结构性内容(任务集合/状态/attempts/正文)被改动时,整体还原
 // 会话前快照,越权编辑不被信任。
 async function judge(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -299,7 +299,7 @@ async function checkPlanEdit(planFile: string, before: string) {
 // Natural-language or missing verify: a one-shot side session writes the
 // executable script (retry/blockage policy shared via requireArtifact).
 async function generateScript(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -325,7 +325,7 @@ async function generateScript(
 // --early 下同一会话经挂点在 verify 脚本执行窗口并行启动(F.3): 提示词用
 // early 措辞(静态审核脚本内容、以只读检查为主),横幅随窗口启动打印。
 export async function reviewTask(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -353,7 +353,7 @@ export async function reviewTask(
 // 审核差距 → 旁路修复规划会话(设计文档 B.4): 产出 docs/<id>/fix.md 检查项,
 // 调用方经 appendSubtasks 注入 PLAN.md,交既有子任务会话机制执行。
 export async function planReviewFix(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,

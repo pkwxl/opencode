@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import { requireArtifact } from "../src/artifact"
 import { clearSticky, resetFailback } from "../src/failback"
 import { changedFiles, unitBaseline } from "../src/git"
@@ -22,7 +23,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   // "当前会话"(新建则随之更新,复用则保持)发一个 idle 让 watch 正常结算。
   function artifactClient(current?: string) {
     const state = { creates: 0, prompts: [] as string[], current }
-    const client = {
+    const sdk = {
       session: {
         create: async () => {
           state.creates++
@@ -54,7 +55,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
         }),
       },
     } as unknown as OpencodeClient
-    return { client, state }
+    return { client: opencodeAgent(sdk), state, sdk }
   }
 
   const planTask = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
@@ -108,8 +109,8 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-dead-"))
     try {
       await saveProgress(dir, { task: "PLAN", session: "ses_dead", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
-      const { client, state } = artifactClient("ses_dead")
-      ;(client as unknown as { session: { get: unknown } }).session.get = async () => ({ error: { name: "NotFound" } })
+      const { client, state, sdk } = artifactClient("ses_dead")
+      ;(sdk as unknown as { session: { get: unknown } }).session.get = async () => ({ error: { name: "NotFound" } })
       let resetCalled = false
       const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
       expect(value).toBe(4)
@@ -136,7 +137,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
         }
         queue.push({ type: "session.idle", properties: { sessionID: id } })
       }
-      const client = {
+      const client = opencodeAgent({
         session: {
           create: async () => {
             const id = `ses_new_${++seq}`
@@ -157,7 +158,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
         },
         provider: { list: async () => ({ data: { all: [] } }) },
         event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
-      } as unknown as OpencodeClient
+      } as unknown as OpencodeClient)
       const result = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}), STEP_NO_WAIT)
       expect(result).toBe(4)
       // 中途失败从未删除步骤认领(openStep 全程可重入本步骤);成功后由调用方收口,
@@ -178,7 +179,7 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
   // produce 使会话回合内落一个文件(模拟 AI 写产物,供统一提交有物可提)。
   function unitClient(produce?: () => Promise<void>) {
     const state = { creates: 0, prompts: [] as string[] }
-    const client = {
+    const client = opencodeAgent({
       session: {
         create: async () => {
           state.creates++
@@ -204,7 +205,7 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
           })(),
         }),
       },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     return { client, state }
   }
 
@@ -295,7 +296,7 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
       await writeFile(join(dir, "docs-kb.md"), "半途产物")
       await saveProgress(dir, { task: "PLAN", session: "ses_alive", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
       const state = { creates: 0, prompts: [] as string[] }
-      const client = {
+      const client = opencodeAgent({
         session: {
           create: async () => {
             state.creates++
@@ -325,7 +326,7 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
             })(),
           }),
         },
-      } as unknown as OpencodeClient
+      } as unknown as OpencodeClient)
       const value = await requireArtifact(client, planTask, "续跑提示词", { dir }, {
         ...unitSpec,
         step: { step: "phase-plan", letter: "m" },
@@ -389,7 +390,7 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
 
   function stepClient(current?: string, alive = true) {
     const state = { creates: 0, prompts: [] as string[], current }
-    const client = {
+    const client = opencodeAgent({
       session: {
         create: async () => {
           state.creates++
@@ -420,7 +421,7 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
           })(),
         }),
       },
-    } as unknown as OpencodeClient
+    } as unknown as OpencodeClient)
     return { client, state }
   }
 

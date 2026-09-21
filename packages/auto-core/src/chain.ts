@@ -1,8 +1,9 @@
 // 会话链与模型路由求值: 任务内会话串链的状态载体(SessionChain / Watch /
 // SessionResult / FailedSession / ForkBaseInfo)、阶段→角色→模型的路由求值
-// (phaseToRole / roleOf / resolveModel / splitModel),以及会话错误归类
+// (phaseToRole / roleOf / resolveModel),以及会话错误归类
 // (classifySessionError)与会话复用阈值常量。见 plans/0017-model-routing-design.md。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S2,纯搬运)。
+import type { AgentErrorPatterns } from "./agent/types"
 import { type UnitBaseline } from "./git"
 import { type ResolveEvent } from "./resolve"
 import { type Phase } from "./resume"
@@ -150,13 +151,6 @@ export function resolveModel(policy: ModelPolicy, letter: ModelLetter | undefine
   return policy.byRole[role] ?? (letter ? policy.byLetter[letter] : undefined) ?? policy.wildcard
 }
 
-// "prov/model" → SDK prompt 的 model 参数(按首个 "/" 切分: providerID 在前、
-// modelID 为其余,后者可含冒号)。与 parseModelPolicy「值必含 /」约定一致,idx 恒 ≥0。
-export function splitModel(s: string): { providerID: string; modelID: string } {
-  const idx = s.indexOf("/")
-  return { providerID: s.slice(0, idx), modelID: s.slice(idx + 1) }
-}
-
 // 会话错误归类(plans/0017-model-routing-design.md D.1):换模型是否可能有用,是 failover
 // (P4)的决策依据。与 opencode retry.ts 的 RETRYABLE 正则(问"重试有没有用")刻意
 // 不同——这里问"换候选模型有没有用"。缺省 unknown 表示拿不准,P4 保守不在其上换。
@@ -174,11 +168,14 @@ export type ErrorInfo = {
   next?: number
 }
 
-// 分类判据集中于此(设计 G.2:新 provider 措辞漏判时,正则在此演进并由 test/runner.test.ts
+// 分类判据集中于此(设计 G.2:新 provider 措辞漏判时,正则在此演进并由 test/chain.test.ts
 // 的固定报文样本回归)。分类器问"换模型有没有用",与 opencode 自身的重试分类器不同。
-const OVERFLOW_RE = /contextoverflowerror/i
+// Neutral wording only (MA.3, plans/0039): an agent's own error type names
+// (opencode ContextOverflowError / ProviderAuthError) come from its adapter's
+// AgentClient.errorPatterns and are OR-ed in per class. Overflow has no
+// neutral pattern: it is recognized by agent-specific names alone.
 const QUOTA_RE = /insufficient_quota|quota|balance|credit|usage limit/i
-const AUTH_RE = /providerautherror|unauthorized|forbidden/i
+const AUTH_RE = /unauthorized|forbidden/i
 const RATE_RE = /rate limit|resource exhausted/i
 // 数字状态码须带数字/小数点边界: 裸 500|502|503|504 会把 "Error 1500"、
 // "code 5042"、版本号 "5.0.4" 误归 transient(2026-09-17 审查 H4)。长号码里的
@@ -191,21 +188,22 @@ const RATE_ATTEMPTS = 3
 const RATE_WAIT_MS = 60_000
 
 // 归类优先级(自上而下,首个命中即返回,与设计 D.1 判据表一致):
-//   1. overflow   —— 报文含 ContextOverflowError(交接/handover 机制管,明确不换)。
+//   1. overflow   —— 报文含上下文溢出错误名(opencode: ContextOverflowError;交接/handover 机制管,明确不换)。
 //   2. quota      —— 服务端明说不可重试、或配额/余额/额度文案、或 402。
 //   3. auth       —— 401/403 或认证/越权文案(provider 不可用)。
 //   4. rate       —— 429/限流文案且达到重试次数或下次等待超阈值。
 //   5. transient  —— 已知瞬时错误(走现有重试路径,不换模型)。
 //   6. unknown    —— 保守缺省(拿不准不换)。
-export function classifySessionError(info: ErrorInfo): ErrorClass {
+export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns = {}): ErrorClass {
   const hay = `${info.message ?? ""}\n${info.responseBody ?? ""}`
-  if (OVERFLOW_RE.test(hay)) return "overflow"
-  if (info.isRetryable === false || QUOTA_RE.test(hay) || info.statusCode === QUOTA_STATUS) return "quota"
-  if (info.statusCode === 401 || info.statusCode === 403 || AUTH_RE.test(hay)) return "auth"
-  const rateSignal = info.statusCode === 429 || RATE_RE.test(hay)
+  const hit = (neutral: RegExp | undefined, own: RegExp | undefined) => (neutral?.test(hay) ?? false) || (own?.test(hay) ?? false)
+  if (hit(undefined, extra.overflow)) return "overflow"
+  if (info.isRetryable === false || hit(QUOTA_RE, extra.quota) || info.statusCode === QUOTA_STATUS) return "quota"
+  if (info.statusCode === 401 || info.statusCode === 403 || hit(AUTH_RE, extra.auth)) return "auth"
+  const rateSignal = info.statusCode === 429 || hit(RATE_RE, extra.rate)
   const rateThreshold = (info.attempt ?? 0) >= RATE_ATTEMPTS || (info.next ?? 0) > RATE_WAIT_MS
   if (rateSignal && rateThreshold) return "rate"
-  if (TRANSIENT_RE.test(hay)) return "transient"
+  if (hit(TRANSIENT_RE, extra.transient)) return "transient"
   return "unknown"
 }
 

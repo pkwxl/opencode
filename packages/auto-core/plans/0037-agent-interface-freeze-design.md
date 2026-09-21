@@ -25,6 +25,10 @@ Nothing is wired: no driver module imports the new files yet. The first
 consumer is MA.3 (0031 D4 path: the first real consumer may amend the frozen
 shape as a conscious architecture event).
 
+> **MA.3 update (plans/0039):** wired. The one amendment is
+> `AgentErrorPatterns` / `AgentClient.errorPatterns` (0039 D4). The D2
+> alignment item resolved with no production delta (0039 D2).
+
 ## 2. Decisions
 
 | # | Decision | Content |

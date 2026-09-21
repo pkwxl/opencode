@@ -1,5 +1,5 @@
 // --test-by-driver 测试执行与 --handover-test 交接文档的文件操作: 测试请求标记的
-// 消费、脚本执行与输出归档、交接判据(steer / 测试两族)、交接文档的补状态行/
+// 消费、脚本执行与输出归档、交接文档的补状态行/
 // 归档/链式清理与恢复。**本模块不依赖任何会话驱动代码**(不得 import
 // session / watch / exec-session / runner)——这是 plans/0024-module-split-plan.md §D.2
 // 环消解的落点:watch → testrun 单向,交接时序状态机另在 exec-session。
@@ -27,14 +27,10 @@ export function handoffSteer(on: boolean, cap: number, task: Task): Steer | unde
   return on ? { limit: cap * 2, text: renderHandoffSteer(task) } : undefined
 }
 
-// 会话结束后的交接判定(与 steer 构造同开关联动;导出纯函数供单测): 仅当交接
-// steer 生效(开关 on 且模式启用)且会话已用上下文达到其阈值(2×cap)时才要求
-// 交接文档/续跑;steer 未构造(off 模式整任务会话,或 OPENCODE_AUTO_STEER=off)
-// 时会话自然完成即收,不索要交接文档。--handover-test 的测试交接是独立机制
-// (watch 的 test 协议),不经此判定。
-export function handoverDue(steer: Steer | undefined, used: number): boolean {
-  return steer !== undefined && used >= steer.limit
-}
+// The two handover predicates — the post-session check (was handoverDue) and
+// the test-handover check at the test request (was testHandoverDue) — moved to
+// src/usage.ts in MA.3 (plans/0039) as sessionHandoverDue / testHandoverDue:
+// they read the usage figure, and the usage tier decides them (plans/0038).
 
 // --test-by-driver 的测试执行协议状态(watch 与 runExecSession 共享,跨会话/
 // 跨运行持续): tmp 为目标目录下 driver 工作目录(tmp/);seq 为按序归档编号
@@ -83,16 +79,6 @@ export type TestRun = {
   // idle 时都直接校验交接文档,而不是当成普通结束。用后即清(runExecSession 在
   // 每次 runSession 返回后复位)。
   resumeWrapup?: boolean
-}
-
-// 测试交接判据(交接触发解耦,测试交接前置化设计 D1): 不再叠加"测试失败"——
-// 上下文达 contextLimit 单条件即交接,判定时点固定为"AI 发起测试的那一刻"
-// (tmp/test.sh 出现时)。那是唯一天然干净的分割点: 发起测试通常意味着相关工作
-// 已做完、正要验证;越过这一刻上下文就开始变化,不再好切。
-// used 为本会话实时用量;这一刻还没收到任何 message.updated(仍为 0,或
-// contextLimits 拉取失败)时,回落到起跑时已知的 startUsed 决策。
-export function testHandoverDue(test: { handover: boolean; limit: number; startUsed: number }, used: number): boolean {
-  return test.handover && (used > 0 ? used : test.startUsed) >= test.limit
 }
 
 // 测试交接连续超过该次数时,continuation 提示附带"是否陷入无法解决的问题"评估

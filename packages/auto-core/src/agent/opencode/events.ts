@@ -77,7 +77,7 @@ export function mapMessage(info: Message): AgentMessage {
   return {
     id: info.id,
     role: "assistant",
-    completed: Boolean(info.time.completed),
+    completed: Boolean(info.time?.completed),
     model: `${info.providerID}/${info.modelID}`,
     contextUsed: info.tokens.input + info.tokens.cache.read,
     failed: info.error !== undefined,

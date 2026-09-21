@@ -9,6 +9,8 @@ import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
+import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import type { SessionChain } from "../src/chain"
 import { docShapeProblems, endsWithEof, EOF_MARK, eofScanExempt, MIN_DOC_CHARS, shapeCheckOn } from "../src/doccheck"
 import { runSubtask } from "../src/execute"
@@ -315,7 +317,7 @@ describe("runSubtask 形检重提示 fork 续做", () => {
   test("fork 失败: 回退全新会话 + 完整提示词 + 反馈(与修订前行为一致)", async () => {
     const dir = await shapeRepo()
     try {
-      const { client, calls } = scriptedClient([
+      const { sdk, calls } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n${filler}\n`)
         },
@@ -324,10 +326,10 @@ describe("runSubtask 形检重提示 fork 续做", () => {
         },
       ])
       // fork 路由不可用(旧版 server / 会话已失效)→ forkSession 回退 undefined。
-      const stubbed = {
-        ...client,
-        session: { ...client.session, fork: async () => ({ error: { message: "no fork" } }) },
-      } as unknown as Parameters<typeof runSubtask>[0]
+      const stubbed = opencodeAgent({
+        ...sdk,
+        session: { ...sdk.session, fork: async () => ({ error: { message: "no fork" } }) },
+      } as unknown as OpencodeClient)
       const plan = await load(join(dir, "PLAN.md"))
       const result = await runSubtask(stubbed, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()

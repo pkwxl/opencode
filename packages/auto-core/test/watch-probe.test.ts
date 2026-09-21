@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import { attempt } from "../src/attempt"
 import { runSession } from "../src/session"
 import { probeSession } from "../src/session-api"
@@ -102,13 +103,13 @@ describe("在途失联探针(S4/D3)", () => {
   })
 
   test("probeSession 探测体: 超时无响应与请求异常同按未通计,正常响应为通", async () => {
-    const hanging = { session: { get: () => new Promise(() => {}) } } as unknown as OpencodeClient
+    const hanging = opencodeAgent({ session: { get: () => new Promise(() => {}) } } as unknown as OpencodeClient)
     expect(await probeSession(hanging, "ses_x", 20)).toBe(false)
-    const throwing = { session: { get: () => Promise.reject(new Error("boom")) } } as unknown as OpencodeClient
+    const throwing = opencodeAgent({ session: { get: () => Promise.reject(new Error("boom")) } } as unknown as OpencodeClient)
     expect(await probeSession(throwing, "ses_x", 20)).toBe(false)
-    const failing = { session: { get: async () => ({ error: { name: "UnknownError" } }) } } as unknown as OpencodeClient
+    const failing = opencodeAgent({ session: { get: async () => ({ error: { name: "UnknownError" } }) } } as unknown as OpencodeClient)
     expect(await probeSession(failing, "ses_x", 20)).toBe(false)
-    const ok = { session: { get: async () => ({ data: { id: "ses_x" } }) } } as unknown as OpencodeClient
+    const ok = opencodeAgent({ session: { get: async () => ({ data: { id: "ses_x" } }) } } as unknown as OpencodeClient)
     expect(await probeSession(ok, "ses_x", 20)).toBe(true)
   })
 })

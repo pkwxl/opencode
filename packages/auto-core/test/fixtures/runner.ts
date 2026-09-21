@@ -6,6 +6,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../../src/agent/opencode/client"
 import { parse } from "../../src/plan"
 
 export const task = parse(
@@ -57,7 +58,7 @@ export function fakeClient(
   }
   let seq = 0
   let lastCreated = over.current ?? "ses_new_0"
-  const client = {
+  const sdk = {
     session: {
       create: async () => {
         calls.creates++
@@ -108,7 +109,9 @@ export function fakeClient(
     },
     event: { subscribe: async () => ({ stream: over.events ? over.events(lastCreated) : idleStream(lastCreated) }) },
   } as unknown as OpencodeClient
-  return { client, calls }
+  // client = the driver's view (AgentClient via the opencode adapter); sdk =
+  // the raw fake, for tests that patch one SDK surface and re-wrap.
+  return { client: opencodeAgent(sdk), calls, sdk }
 }
 
 // 带 signal 透传的 fake 订阅: 记录 subscribe 收到的 AbortSignal;事件流先发一个
@@ -120,7 +123,7 @@ export function sseClient(
   over: { prompt?: () => unknown } = {},
 ) {
   const state = { signal: undefined as AbortSignal | undefined, closed: false }
-  const client = {
+  const sdk = {
     session: {
       create: async () => ({ data: { id } }),
       prompt: async () => (over.prompt ? over.prompt() : {}),
@@ -140,7 +143,7 @@ export function sseClient(
       },
     },
   } as unknown as OpencodeClient
-  return { client, state }
+  return { client: opencodeAgent(sdk), state }
 }
 
 // 构造一个只发 session.error(可选 isRetryable)+ session.idle 的事件流,喂给
@@ -185,7 +188,7 @@ export function retryClient(outcomes: Outcome[], used: number[] | number = [], m
     }
     queue.push({ type: "session.idle", properties: { sessionID: id } })
   }
-  const client = {
+  const sdk = {
     session: {
       create: async () => {
         calls.creates++
@@ -211,7 +214,9 @@ export function retryClient(outcomes: Outcome[], used: number[] | number = [], m
     },
     event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
   } as unknown as OpencodeClient
-  return { client, calls }
+  // client = the driver's view (AgentClient via the opencode adapter); sdk =
+  // the raw fake, for tests that patch one SDK surface and re-wrap.
+  return { client: opencodeAgent(sdk), calls, sdk }
 }
 
 export async function git(dir: string, ...args: string[]) {

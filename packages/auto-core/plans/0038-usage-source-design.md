@@ -18,7 +18,9 @@
 
 Nothing is wired (0031 D4 path): MA.3 routes watch / attempt / testrun /
 session through these functions when it moves them onto the unified event
-stream. `src/usage.ts` is a driver module (the mechanisms are driver
+stream. **MA.3 update (plans/0039 D5):** wired, with `events` byte-equal. The
+G2 fix is live for `reported`. The estimated tier's inherited start and
+initial prompt are not fed yet (0039 §5). `src/usage.ts` is a driver module (the mechanisms are driver
 behavior; the tier is the adapter's `capabilities.usage`), registered as
 such in the import-direction table.
 

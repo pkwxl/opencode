@@ -10,6 +10,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import { opencodeAgent } from "../src/agent/opencode/client"
 import { attempt } from "../src/attempt"
 import type { SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
@@ -258,7 +259,7 @@ describe("会话边界统计接线(T-003): Watch.usage 与 statsSessionBegin/End
   test("blocked 出口 usage 不丢(阻塞前已累加的 step 照常入账)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
     try {
-      const { client } = fakeClient({
+      const { sdk } = fakeClient({
         events: (sid) =>
           (async function* () {
             yield stepFinish(sid, "pt_sf1", { input: 1200, output: 300 })
@@ -267,11 +268,11 @@ describe("会话边界统计接线(T-003): Watch.usage 与 statsSessionBegin/End
           })(),
       })
       // fakeClient 未覆盖 question/permission 表面,补桩(拒绝+中止即返回)。
-      const stubbed = {
-        ...client,
+      const stubbed = opencodeAgent({
+        ...sdk,
         question: { reply: async () => ({}), reject: async () => ({}) },
         permission: { reply: async () => ({}) },
-      } as unknown as OpencodeClient
+      } as unknown as OpencodeClient)
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       const result = await runSession(stubbed, task, "提示词", { dir }, chain)
       expect(result.type).toBe("blocked")
@@ -421,18 +422,18 @@ describe("◉ 会话结束两行报文(T-004): 无条件打印与省略规则", 
   test("零用量: 命中率分母 0 显示 —;blocked 出口同样无条件打印两行", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-endline-"))
     try {
-      const { client } = fakeClient({
+      const { sdk } = fakeClient({
         events: (sid) =>
           (async function* () {
             // 权限提问且未设 --wait-answer → 立即阻塞(无任何 step-finish)。
             yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
           })(),
       })
-      const stubbed = {
-        ...client,
+      const stubbed = opencodeAgent({
+        ...sdk,
         question: { reply: async () => ({}), reject: async () => ({}) },
         permission: { reply: async () => ({}) },
-      } as unknown as OpencodeClient
+      } as unknown as OpencodeClient)
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       let outcome: unknown
       const lines = await captureLogs(async () => {

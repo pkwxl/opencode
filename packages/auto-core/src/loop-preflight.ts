@@ -18,7 +18,7 @@ import type { PermissionMode, SubtaskMode } from "./opts"
 import { load, resetInProgress, setStatus } from "./plan"
 import { protect } from "./protect"
 import { peekProgress } from "./resume"
-import type { ServerHandle } from "./server"
+import type { AgentHost } from "./agent/types"
 import { shellProfile } from "./shell"
 import { loadStats } from "./stats"
 import { renderText, usePromptLibrary } from "./template"
@@ -80,7 +80,7 @@ export type RunAllOpts = {
   destDir?: string
   // 调用方已托管的 server 句柄(外壳的前置会话与主循环共用一个实例): 提供
   // 时不再自行 manage/close,生命周期归调用方。
-  managed?: ServerHandle
+  managed?: AgentHost
   // --new-session: 中断恢复时跳过会话复用(仅放弃旧会话上下文,阶段精确重入
   // 保留),透传给 runTask。
   newSession?: boolean

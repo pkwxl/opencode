@@ -1,4 +1,5 @@
-// src/testrun.ts 的单测: 交接 steer 与判据(handoffSteer/handoverDue/testHandoverDue)、测试脚本定版(resolveTestScript)、
+// src/testrun.ts 的单测: 交接 steer 构造(handoffSteer)与交接判据(MA.3 起在 src/usage.ts:
+// sessionHandoverDue/testHandoverDue,此处按 opencode 的 events 档断言)、测试脚本定版(resolveTestScript)、
 // 交接文档清理与复原(cleanTestHandoffs/restoreTestHandoffs)。
 // 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
@@ -12,17 +13,16 @@ import { parse } from "../src/plan"
 import {
   cleanTestHandoffs,
   handoffSteer,
-  handoverDue,
   resolveTestScript,
   restoreTestHandoffs,
-  testHandoverDue,
 } from "../src/testrun"
+import { sessionHandoverDue, testHandoverDue } from "../src/usage"
 import { task } from "./fixtures/runner"
 
 // 交接 steer 构造与交接判定的纯函数单测(接线在 executeWhole/runSubtask;完整
 // 流水线行为由 packages/auto 的 e2e 覆盖)。
 
-describe("handoffSteer / handoverDue(OPENCODE_AUTO_STEER 接线)", () => {
+describe("handoffSteer / sessionHandoverDue(OPENCODE_AUTO_STEER 接线)", () => {
   const cap = 64_000
 
   test("steer=on: 构造 2×cap 交接 steer,提示文案指向交接文档", () => {
@@ -37,15 +37,15 @@ describe("handoffSteer / handoverDue(OPENCODE_AUTO_STEER 接线)", () => {
   })
 
   test("steer=off: 会话自然完成即收——用量远超 2×cap 也不索要交接文档(交接判定停用)", () => {
-    expect(handoverDue(undefined, cap * 10)).toBe(false)
+    expect(sessionHandoverDue("events", undefined, cap * 10)).toBe(false)
   })
 
   test("steer=on: 用量达到 2×cap 才要求交接,阈值下自然完成", () => {
     const steer = handoffSteer(true, cap, task)!
-    expect(handoverDue(steer, steer.limit)).toBe(true)
-    expect(handoverDue(steer, steer.limit + 1)).toBe(true)
-    expect(handoverDue(steer, steer.limit - 1)).toBe(false)
-    expect(handoverDue(steer, 0)).toBe(false)
+    expect(sessionHandoverDue("events", steer, steer.limit)).toBe(true)
+    expect(sessionHandoverDue("events", steer, steer.limit + 1)).toBe(true)
+    expect(sessionHandoverDue("events", steer, steer.limit - 1)).toBe(false)
+    expect(sessionHandoverDue("events", steer, 0)).toBe(false)
   })
 })
 

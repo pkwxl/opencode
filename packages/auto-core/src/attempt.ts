@@ -7,8 +7,8 @@
 
 import { rm } from "node:fs/promises"
 import { join, relative } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { resolveModel, roleOf, splitModel, REUSE_BELOW, REUSE_IDLE_MINUTES, REUSE_IDLE_MS, type SessionChain, type SessionResult } from "./chain"
+import type { AgentClient } from "./agent/types"
+import { resolveModel, roleOf, REUSE_BELOW, REUSE_IDLE_MINUTES, type SessionChain, type SessionResult } from "./chain"
 import { failbackOverride, stickyModel } from "./failback"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
@@ -25,6 +25,7 @@ import { createStuckTracker } from "./stuck"
 import { SWITCH_ENV, type Switches } from "./switches"
 import { type Steer, type TestRun } from "./testrun"
 import { strictResumeActive } from "./unit-commit"
+import { reuseAllowed } from "./usage"
 import { watch } from "./watch"
 
 // H3 的落账体: 回合内观测到的代答补上 task/phase/round/session 后落台账。无观测即
@@ -48,7 +49,7 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
 
 
 export async function attempt(
-  client: OpencodeClient,
+  client: AgentClient,
   task: Task,
   promptText: string,
   opts: Opts,
@@ -71,10 +72,7 @@ export async function attempt(
   // 链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控(缺省 off): off 时任务内每个
   // 提示词都开新会话,阈值(占比/用量/闲置)不再参与决策。
   const reuseSession = switches.reuseSession
-  const reuse =
-    chain.id !== undefined &&
-    (resumed ||
-      (reuseSession && chain.pct < REUSE_BELOW && chain.used < cap / 2 && Date.now() - chain.at <= REUSE_IDLE_MS))
+  const reuse = chain.id !== undefined && (resumed || (reuseSession && reuseAllowed(chain, cap, Date.now())))
   // 测试交接判据的回落值(D1): 复用/恢复接管的会话起跑就背着链上已用量,首个
   // message.updated 到达前的测试请求照样要判得出来;fork 与全新会话归零——
   // chain.used 是上一个会话的残值,照搬会让刚起跑的小会话在首次测试就误判超限、
@@ -104,17 +102,17 @@ export async function attempt(
   // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
   // system context(AGENTS.md 每个 provider turn 现场重读,重启兜底缓存场景)。
   // 分叉会话已在 seedForkSession 分叉前同步过。
-  if (!reuse && !forked) await opts.server?.syncAgents()
+  if (!reuse && !forked) await opts.server?.syncContext()
   // 显式标题: 新建会话直接以本阶段提交标题命名(短标签,如 `T-001 S2 编写 schema`),
   // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`;分叉会话已在 forkSession
   // 改名,不经 create。
-  const session = reuse || forked ? undefined : await client.session.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
-  if (session?.error) return { type: "blocked", question: `session creation failed: ${formatClientError(session.error)}` }
+  const session = reuse || forked ? undefined : await client.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
+  if (session && !session.ok) return { type: "blocked", question: `session creation failed: ${formatClientError(session.error)}` }
   // failback 粒度 session(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): 每个全新会话起点
   // 都清链上降级候选、回试首选模型。仅 create 路径(会话复用与 fork 消费不动)——
   // 降级 fork 出的迁移会话经 pending 进入,若在此清零会把 failover 立即 undo 成震荡。
   if (session !== undefined && switches.modelFailbackScope === "session") chain.model = undefined
-  const sessionID = forked ?? session?.data.id ?? chain.id!
+  const sessionID = forked ?? session?.value.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
   // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
@@ -178,13 +176,13 @@ export async function attempt(
   // ——它本就靠反复被拒探查权限,重复报错是其正常形态,不是死循环。
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
-    const events = await client.event.subscribe(undefined, { signal: sse.signal })
+    const events = await client.events(sse.signal)
     // 失联探针判半开等错误收场(session-boundary-hardening §4.4)先于悬挂的 POST
     // 返回时: 提前断流释放 SSE reader 与连接配额,并联动中止 POST(下方竞速不再
     // 等它,直接按本结果的会话错误收口)。对已中止的订阅重复 abort 无害;正常
     // 结束路径此处无 effect。
     let watchFailed = false
-    const watching = watch(client, sessionID, events.stream, opts, steer, test, stuck, switches).then((w) => {
+    const watching = watch(client, sessionID, events, opts, steer, test, stuck, switches).then((w) => {
       if (w.error) {
         watchFailed = true
         sse.abort()
@@ -230,24 +228,18 @@ export async function attempt(
     // 下发与事件流竞速(H7): 同步 POST 挂在半开连接上永不返回时,watch 的探针
     // 判定先回——watch 带错误先回即由哨兵 null 接管(POST 已被上方 post.abort()
     // 作废),不再等 POST 直接进下方 watching 的会话错误收口;watch 无错误则
-    // 透传 POST 自身结果。竞速落败后 prompting 的迟到结果无人消费,挂 catch
-    // 防未处理拒绝。
-    const prompting = client.session.prompt(
-      {
-        sessionID,
-        agent: opts.agent,
-        ...(target ? { model: splitModel(target) } : {}),
-        parts: [{ type: "text", text: note ? `${promptText}\n\n${note}` : promptText }],
-      },
-      { signal: post.signal },
+    // 透传 POST 自身结果。竞速落败后 prompting 的迟到结果无人消费(dispatch
+    // never rejects, 0037 D2, so nothing to catch).
+    const prompting = client.prompt(
+      { session: sessionID, agent: opts.agent, ...(target ? { model: target } : {}), text: note ? `${promptText}\n\n${note}` : promptText },
+      post.signal,
     )
-    prompting.catch(() => {})
     const prompt = await Promise.race([prompting, watching.then((w) => (w.error ? null : prompting))])
     // POST 因 watch 判错被联动中止时,其 error 只是 abort 回声,真实错误在
     // watching 里——跳过下发失败分支与认领,由下方会话错误收口处置(可重试
     // 分支会把进度记录还原为下发前快照)。
     const dispatchEcho = watchFailed
-    if (prompt !== null && prompt.error && !dispatchEcho) {
+    if (prompt !== null && !prompt.ok && !dispatchEcho) {
       // 下发即失败: 刚认领的 nextSession 是什么都没收到的空会话,不配作恢复锚点
       // ——还原为认领前的记录(与下方 0-token 报错桩还原同一口径)。
       if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)

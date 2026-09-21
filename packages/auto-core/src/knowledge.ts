@@ -1,6 +1,6 @@
 import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import { knowledgeDoc, legacyKnowledgeDoc, legacyPriorKnowledgeDoc, priorKnowledgeDoc, roundDirName, TEMP_KB_NAME, tempPriorKnowledgeDoc } from "./docpaths"
 import { changedFiles, commitPending, commitTree } from "./git"
 import { log } from "./log"
@@ -59,7 +59,7 @@ export async function existingKnowledge(dir: string, round: number): Promise<str
 // 基线,必须先停下)。提交失败(requireArtifact 的 blocked)同样按 dirty 口径
 // 上抛,由调用方停机。
 export async function extractKnowledge(
-  client: OpencodeClient,
+  client: AgentClient,
   dir: string,
   opts: Opts,
 ): Promise<
@@ -216,7 +216,7 @@ async function existingRoundDoc(dir: string, root: string, round: number, allowL
 // ⑤依赖的干净基线由外壳在轮次目录初建后统一提交(stage=round-start)提供。
 // failed(会话受阻/两次未产出)由调用方转阻塞停机,人工处置后重新运行重启本阶段。
 export async function extractPriorKnowledge(
-  client: OpencodeClient,
+  client: AgentClient,
   dir: string,
   opts: Opts,
   brief?: string,

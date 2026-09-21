@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises"
 import { basename, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import { parse } from "./plan"
 import { renderNumberRecovery } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
@@ -100,7 +100,7 @@ export async function advanceNextTask(dir: string, ids: string[]): Promise<numbe
 // 任务链、不写进度记录),产物 = AI 写入的有效 .auto/next-task,driver 以
 // 确定性下限校验(小于下限视为无效产出,带反馈重试一次,仍失败隐性阻塞)。
 export async function ensureNumbering(
-  client: OpencodeClient,
+  client: AgentClient,
   dir: string,
   opts: Opts,
 ): Promise<{ type: "ok"; next: number } | UnitStop> {

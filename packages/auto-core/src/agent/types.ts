@@ -10,9 +10,10 @@
 // import the driver domain (import-direction rule 6), so shapes the driver
 // also has (token usage, error info) are restated here structurally.
 //
-// Shipped unwired (same path as 0031 D4): the first consumer is MA.3's
-// opencode adapterization, which may amend this file as a conscious
-// architecture event, not as drift.
+// Frozen in MA.1 and wired in MA.3 (plans/0039): the opencode adapter lives
+// in agent/opencode/; the driver holds an AgentClient everywhere it used to
+// hold the SDK client. MA.3 amended this file once, consciously (0031 D4):
+// AgentErrorPatterns / AgentClient.errorPatterns.
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -44,6 +45,20 @@ export type AgentError = {
   // the driver treats as retryable (plans/0015).
   isRetryable?: boolean
   responseBody?: string
+}
+
+// Agent-specific wording for the driver's error classes (chain.ts
+// classifySessionError). The classifier keeps provider-neutral patterns (quota
+// wording, HTTP statuses, network failures); an adapter adds what only its
+// agent says — typically its own error type names (opencode:
+// ContextOverflowError, ProviderAuthError). Each pattern is tested against the
+// merged message + response body, like the neutral ones.
+export type AgentErrorPatterns = {
+  overflow?: RegExp
+  quota?: RegExp
+  auth?: RegExp
+  rate?: RegExp
+  transient?: RegExp
 }
 
 // The pieces of an assistant turn, as far as the driver needs them.
@@ -175,6 +190,9 @@ export type PermissionReply = "once" | "always" | "reject"
 // watch.ts, session-api.ts, exec-session.ts, interactive.ts).
 export interface AgentClient {
   readonly capabilities: AgentCapabilities
+  // Extra classifier patterns for this agent's error wording; absent = the
+  // neutral patterns only.
+  readonly errorPatterns?: AgentErrorPatterns
   // New session titled `title`.
   create(input: { title: string }): Promise<AgentResult<{ id: string }>>
   // Dispatches a prompt. Resolution timing is the adapter's business (opencode

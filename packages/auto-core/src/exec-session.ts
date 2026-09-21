@@ -5,7 +5,7 @@
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S10,纯搬运)。
 
 import { dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import type { SessionChain, SessionResult } from "./chain"
 import { archivedTestHandoff, latestHandoffSeq, resolveSubtaskDoc, resolveTaskDoc } from "./docpaths"
 import { fileCommitted, suffixedTitle, trackedSourceChanges } from "./git"
@@ -40,7 +40,7 @@ import { verifyTmpDir } from "./verify"
 // 会话传入): 交接文档按执行范围命名(子任务级 docs/<id>/S<两位序号>/
 // testhandoff.md),防下一子任务误读上一子任务的遗留交接;整任务/修复轮为任务级命名。
 export async function runExecSession(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   promptText: string,
@@ -248,14 +248,14 @@ export async function runExecSession(
 // 被打断的交接收尾。server 的 fork 语义是"复制 target **之前**的消息",故锚点取
 // 定版时观测到的末条消息的**后一条**;取不到(消息已被清理、锚点就是末条)时整份
 // 分叉——收尾提示词重下一遍,会话至多把收尾做两遍,不会丢东西。
-export async function seedPinFork(client: OpencodeClient, chain: SessionChain, record: Handover, subject: string): Promise<boolean> {
+export async function seedPinFork(client: AgentClient, chain: SessionChain, record: Handover, subject: string): Promise<boolean> {
   if (!record.pinSession || !(await sessionAlive(client, record.pinSession))) return false
   let anchor: string | undefined
   if (record.pinMessage) {
-    const got = await client.session.messages({ sessionID: record.pinSession }).catch(() => undefined)
-    const list = got && !got.error ? got.data : []
-    const at = list.findIndex((message) => message.info.id === record.pinMessage)
-    anchor = at >= 0 ? list[at + 1]?.info.id : undefined
+    const got = await client.messages(record.pinSession)
+    const list = got.ok ? got.value : []
+    const at = list.findIndex((message) => message.id === record.pinMessage)
+    anchor = at >= 0 ? list[at + 1]?.id : undefined
   }
   const forked = await forkSession(client, record.pinSession, subject, anchor)
   if (!forked) return false
@@ -273,7 +273,7 @@ export async function seedPinFork(client: OpencodeClient, chain: SessionChain, r
 
 // 整份分叉一个尚存的会话(F5,续跑会话被打断时接回其上下文);不可用返回 false,
 // 调用方按冷启动继续。
-async function seedSessionFork(client: OpencodeClient, chain: SessionChain, session: string, subject: string): Promise<boolean> {
+async function seedSessionFork(client: AgentClient, chain: SessionChain, session: string, subject: string): Promise<boolean> {
   if (!(await sessionAlive(client, session))) return false
   const forked = await forkSession(client, session, subject)
   if (!forked) return false

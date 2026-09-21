@@ -7,7 +7,7 @@
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S8,纯搬运)。
 
 import { dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { attempt } from "./attempt"
 import { resolveTaskDoc, taskDoc } from "./docpaths"
@@ -17,7 +17,7 @@ import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { setForkBase, type Plan, type Task } from "./plan"
 import { renderContextBase } from "./prompt"
 import { firstLine } from "./resume-gate"
-import { contextLimits, forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
+import { forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
 import { autoSwitches, type Switches } from "./switches"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { type Steer, type TestRun } from "./testrun"
@@ -33,7 +33,7 @@ import { type Steer, type TestRun } from "./testrun"
 // 持久字段,校验存活,失效回退冷启动) → 冷启动。session 模式基点跨运行持久,用量
 // 经 messages 末条消息重建(近似即可;同次运行且基点即链上会话时直接取跟踪值)。
 export async function ensureForkBase(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -119,7 +119,7 @@ const retryNote = (lead: string) => `[DRIVER] ${lead}${WORKSPACE_CHECK}`
 // 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效);
 // switches 缺省取 OPENCODE_AUTO_* 解析值(复用开关),注入供单测。
 export async function runSession(
-  client: OpencodeClient,
+  client: AgentClient,
   task: Task,
   promptText: string,
   opts: Opts,
@@ -136,7 +136,7 @@ export async function runSession(
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const tried: string[] = []
   const clipped: string[] = []
-  let limits: Map<string, number> | undefined
+  let limits: ReadonlyMap<string, number> | undefined
   // 重试阶梯(OPENCODE_AUTO_RETRY_WAITS,缺省 0,1,2,4,8): waits 的每个元素是该次
   // 重试前的等待分钟数,元素个数即重试次数上限。首次重试立即——瞬时抖动确实会在
   // 下一回合就恢复(DB 里有「尝试 1 静默 300s 被中止、尝试 2 成功」的实例);其后
@@ -159,7 +159,7 @@ export async function runSession(
   // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方落入等待-探测环)。
   // why 为触发原因的中文短语,进日志与降级 note。
   const switchModel = async (why: string): Promise<boolean> => {
-    limits ??= await contextLimits(client)
+    limits ??= await client.contextLimits()
     const fallback = fallbackRing()
     // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
     // 更糟);窗口未知(不在映射)不过滤。

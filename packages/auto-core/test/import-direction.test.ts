@@ -47,7 +47,11 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // tables, generic spec-driven checker), the domain's published acquisition
   // surface for artifact checks.
   document: ["document/types", "document/roles", "document/spec"],
-  agent: ["agent/types"],
+  // agent: types = the frozen interface (MA.1); opencode/server = the opencode
+  // host factory (MA.3: `manage` → AgentHost), the one adapter-specific module
+  // the driver may name — only to construct the host; everything after that
+  // goes through the AgentClient/AgentHost types. MA.5 adds the claude host.
+  agent: ["agent/types", "agent/opencode/server"],
 }
 
 // Classification of flat src/ files (allowlist). Per plan §3 the provider
@@ -68,9 +72,9 @@ const CLASSIFIED: Record<string, Domain> = {
   doccheck: "document",
   protect: "document",
   "subtask-state": "document",
-  // agent (plan §3: server.ts / session-api.ts SDK face)
-  server: "agent",
-  "session-api": "agent",
+  // agent: none left flat — MA.3 moved server.ts into agent/opencode/ and
+  // session-api.ts became a driver module (its SDK calls moved into the
+  // adapter; what remains seeds chains and formats output over AgentClient).
   // driver (orchestration plane)
   "agents-block": "driver",
   artifact: "driver",
@@ -110,6 +114,7 @@ const CLASSIFIED: Record<string, Domain> = {
   resume: "driver",
   review: "driver",
   runner: "driver",
+  "session-api": "driver",
   session: "driver",
   shell: "driver",
   stats: "driver",
@@ -138,8 +143,6 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
   docpaths: [],
   doccheck: [],
   protect: [],
-  server: ["log"],
-  "session-api": ["chain", "git", "interactive", "log", "opts", "shell", "stats"],
 }
 
 // Session-driving chain, bottom → top (0024 §D.2): imports between ranked

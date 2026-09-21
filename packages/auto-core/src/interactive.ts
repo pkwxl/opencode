@@ -5,7 +5,7 @@
 // 接收(提示语、超时、回落语义不变),ask 结束后输入行恢复为发消息模式。
 // 不改动任何既有处理逻辑: 无 --wait-answer 时提问仍自动答复,权限仍阻塞。
 import { createInterface } from "node:readline/promises"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import { requestExit } from "./exit"
 import { requestFailback } from "./failback"
 import { log, setInput } from "./log"
@@ -23,7 +23,7 @@ const PROMPT = "💬 "
 const ASK_PROMPT = "❓ "
 
 export function startInteractive(
-  client: OpencodeClient,
+  client: AgentClient,
   agent?: string,
   io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream },
 ): Interactive {
@@ -96,12 +96,9 @@ export function startInteractive(
       return
     }
     log(`→ sent: ${text}`)
-    void client.session
-      .promptAsync({ sessionID, agent, parts: [{ type: "text", text }] })
-      .then((result) => {
-        if (result.error) log(`⚠ send failed: ${JSON.stringify(result.error)}`)
-      })
-      .catch((error: unknown) => log(`⚠ send failed: ${String(error)}`))
+    void client.promptAsync({ session: sessionID, agent, text }).then((result) => {
+      if (!result.ok) log(`⚠ send failed: ${result.error instanceof Error ? String(result.error) : JSON.stringify(result.error)}`)
+    })
   })
   // stdin 关闭(管道结束等): 回落为非交互行为,等待中的 ask 按超时处理。
   // 同步清 log.ts 的常驻输入行引用——否则此后任何一条日志对已关闭的 rl 调

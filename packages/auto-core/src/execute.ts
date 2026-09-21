@@ -7,7 +7,7 @@
 
 import { rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import type { OpencodeClient } from "@opencode-ai/sdk/v2"
+import type { AgentClient } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
 import { docShapeProblems, EOF_MARK, eofScanExempt, shapeCheckOn } from "./doccheck"
@@ -25,7 +25,8 @@ import { runSession } from "./session"
 import { formatTokens, forkEndedSession, seedForkSession } from "./session-api"
 import { renameTodoToDone } from "./subtask-state"
 import { autoSwitches } from "./switches"
-import { handoffSteer, handoverDue, removeHandoffChain } from "./testrun"
+import { handoffSteer, removeHandoffChain } from "./testrun"
+import { sessionHandoverDue } from "./usage"
 import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // off/ondemand 的执行阶段: off 单会话完成整个任务;ondemand 会话进行中上下文
@@ -33,7 +34,7 @@ import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } fr
 // 续跑,直到自然完成或交接文档标记完成。返回 undefined 表示执行阶段完成。
 // 上次尝试遗留交接文档的清理由调用方(pipeline)在做恢复判定后进行。
 export async function executeWhole(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -50,7 +51,7 @@ export async function executeWhole(
   const readHandoff = async (): Promise<string> =>
     Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
-  // (见 handoverDue);off 模式本就不构造。
+  // (见 usage.ts sessionHandoverDue);off 模式本就不构造。
   const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
   chain.subject = subject
@@ -123,7 +124,7 @@ export async function executeWhole(
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
-    if (!handoverDue(steer, chain.used)) return undefined
+    if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used)) return undefined
     const status = handoffStatus(await readHandoff())
     if (status === "完成") return undefined
     if (status === "继续") {
@@ -179,7 +180,7 @@ export function requireTask(plan: Plan, id: string): Task {
 // (上次分解已写文件但尚未注入,或旧版分解产物)直接注入、不再开会话——旧版产物
 // 没有 todo.md 状态文件,该任务保持台账勾选语义(协议未激活,plans/0030 D5)。
 export async function ensureDecomposed(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -291,7 +292,7 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
 // 完成后清除交接文档,下一子任务重新起算。实验开关 OPENCODE_AUTO_STEER=off
 // 停用本机制(不注入交接提示、会话后不做交接判定,自然完成即收)。
 export async function runSubtask(
-  client: OpencodeClient,
+  client: AgentClient,
   plan: Plan,
   task: Task,
   text: string,
@@ -322,7 +323,7 @@ export async function runSubtask(
   const strict = strictResumeActive(opts)
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
-  // (见 handoverDue);--handover-test 的测试交接是独立机制,不受影响。
+  // (见 usage.ts sessionHandoverDue);--handover-test 的测试交接是独立机制,不受影响。
   const steer = handoffSteer(autoSwitches().steer, cap, task)
   // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径(提示词经 handoffFile
   // 注入),读点优先新路径、旧平铺存在则回落。
@@ -416,7 +417,7 @@ export async function runSubtask(
       // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
       // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
       // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
-      if (!handoverDue(steer, chain.used)) {
+      if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used)) {
         if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
           const problems = await subtaskArtifactProblems(dir, text, baseline)
           if (problems.length) {

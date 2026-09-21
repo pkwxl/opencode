@@ -1,12 +1,16 @@
-// 会话 SDK 薄封装(分叉/用量/存活/改名)+ 终端输出格式化 + 人工问答等待。
-// 本层只与 opencode 服务端的会话接口及输出呈现打交道,不含任何会话驱动逻辑
-// (下发/重试/降级/订阅都在 session.ts 与 watch.ts),故位于依赖图底层,
-// 可被 watch/session/runner 各层自由调用;**不得反向 import 会话驱动层**。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S5,纯搬运)。
+// Session helpers over the AgentClient (fork/usage/liveness/rename) + terminal
+// formatting + waiting for human answers. Since MA.3 (plans/0039) this file
+// holds no SDK call: every agent request goes through the AgentClient, and
+// the SDK-facing half moved into src/agent/opencode/. It is a driver module
+// (it seeds chains, reads opts, logs). It contains no session-driving logic
+// (dispatch/retry/failover/subscription live in session.ts and watch.ts), so
+// it sits at the bottom of the graph: watch/session/runner may call it freely;
+// **it must not import the session-driving layer**.
+// Split from src/runner.ts (plans/0024-module-split-plan.md S5).
 
 import { createInterface } from "node:readline/promises"
 import { join } from "node:path"
-import type { OpencodeClient, Part } from "@opencode-ai/sdk/v2"
+import type { AgentClient, AgentPart } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { commitTitle } from "./git"
 import type { Interactive } from "./interactive"
@@ -14,29 +18,25 @@ import { log, vlog } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { shellProfile } from "./shell"
 import { statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
+import { forkBaseAllowed } from "./usage"
 
-// 封装 client.session.fork(fork-decompose 设计 §4.3;client 可注入 fake 单测):
+// 封装 client.fork(fork-decompose 设计 §4.3;client 可注入 fake 单测):
 // 在基点末端复制消息前缀为新会话并改名为本阶段短标签标题。{error} 或任何异常
 // (外部旧版 --server 无此路由、基点被存储清理等)都属预期回退场景——log 后
 // 返回 undefined,调用方走全新会话 + 冷启动,不是错误。
-export async function forkSession(client: OpencodeClient, base: string, title: string, messageID?: string): Promise<string | undefined> {
-  try {
-    // messageID 为分叉锚点: 服务端复制该消息**之前**的全部消息(缺省复制整条会话)。
-    const forked = await client.session.fork({ sessionID: base, ...(messageID ? { messageID } : {}) })
-    if (forked.error) {
-      log(`↻ fork failed (${JSON.stringify(forked.error)}); falling back to a brand-new session`)
-      return undefined
-    }
-    const id = forked.data.id
-    // 分叉会话默认标题形如 "... (fork #N)";改名为本阶段提交标题,与 git 历史、
-    // 任务进度对齐(改名失败仅记明细)。
-    const renamed = await client.session.update({ sessionID: id, title: commitTitle(title) }).catch(() => undefined)
-    if (renamed?.error) vlog(`fork session rename failed: ${JSON.stringify(renamed.error)}`)
-    return id
-  } catch (error) {
-    log(`↻ fork failed (${error instanceof Error ? error.message : String(error)}); falling back to a brand-new session`)
+export async function forkSession(client: AgentClient, base: string, title: string, messageID?: string): Promise<string | undefined> {
+  // messageID 为分叉锚点: 服务端复制该消息**之前**的全部消息(缺省复制整条会话)。
+  const forked = await client.fork(base, messageID)
+  if (!forked.ok) {
+    log(`↻ fork failed (${formatClientError(forked.error)}); falling back to a brand-new session`)
     return undefined
   }
+  const id = forked.value.id
+  // 分叉会话默认标题形如 "... (fork #N)";改名为本阶段提交标题,与 git 历史、
+  // 任务进度对齐(改名失败仅记明细)。
+  const renamed = await client.rename(id, commitTitle(title))
+  if (!renamed.ok) vlog(`fork session rename failed: ${JSON.stringify(renamed.error)}`)
+  return id
 }
 
 // 阶段/子任务首个会话的 fork 播种(fork-decompose 设计 §4.3/§4.4): 有基点即
@@ -48,7 +48,7 @@ export async function forkSession(client: OpencodeClient, base: string, title: s
 // 返回 warm(= 本会话已继承任务背景)供提示词选择背景段;无基点(fork=off/
 // 从未确立)不动链,行为与现状完全一致。
 export async function seedForkSession(
-  client: OpencodeClient,
+  client: AgentClient,
   opts: Opts,
   chain: SessionChain,
   base: ForkBaseInfo | undefined,
@@ -58,7 +58,7 @@ export async function seedForkSession(
   // 恢复续跑优先于分叉: 中断会话仍在链上且恢复说明(note)待注入 → 复用之。
   if (chain.id !== undefined && chain.note !== undefined) return true
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  if (base.used >= cap / 2) {
+  if (!forkBaseAllowed(base.used, cap)) {
     log(`↻ base usage ${formatTokens(base.used)} reached the ${formatTokens(cap / 2)} cap; not forking (cold start)`)
     chain.id = undefined
     chain.pending = undefined
@@ -69,7 +69,7 @@ export async function seedForkSession(
   }
   // 新会话前同步 AGENTS.md(与 create 路径同款;分叉会话的 system context 继承
   // 自基点,基点前缀与最新契约的一致性在此保证)。
-  await opts.server?.syncAgents()
+  await opts.server?.syncContext()
   const forked = await forkSession(client, base.id, subject)
   chain.id = undefined
   chain.pending = forked
@@ -89,7 +89,7 @@ export async function seedForkSession(
 // 一哲学)。链上无会话/会话已失效/fork 失败返回 false,调用方回退全新会话 + 完整
 // 提示词。分叉前缀的用量即刚结束会话的用量,链上 pct/used/at 照留(attempt 在回合
 // 结束后以实测值刷新)。
-export async function forkEndedSession(client: OpencodeClient, chain: SessionChain, subject: string): Promise<boolean> {
+export async function forkEndedSession(client: AgentClient, chain: SessionChain, subject: string): Promise<boolean> {
   if (chain.id === undefined || !(await sessionAlive(client, chain.id))) return false
   const forked = await forkSession(client, chain.id, subject)
   if (!forked) return false
@@ -100,38 +100,36 @@ export async function forkEndedSession(client: OpencodeClient, chain: SessionCha
   return true
 }
 
-// 会话末端上下文用量(tokens: input + cache.read)与占比重建: 经
-// client.session.messages **从末条往前**取第一条真正跑完过的 assistant 消息(不是
+// 会话末端上下文用量(AgentMessage.contextUsed;opencode = input + cache.read)与占比重建: 经
+// client.messages **从末条往前**取第一条真正跑完过的 assistant 消息(不是
 // 字面末条,原因见 basis 注释),上限查 provider 表(与 watch 同口径: 取不到上限记
 // pct=100)。用于 fork 基点用量与中断恢复接管会话的用量继承。导出仅供单测直接驱动
 // 判据(与 ensureForkBase 同款,恢复决策本身落在 runTask,完整流水线由壳包 e2e 覆盖)。
-export async function sessionUsage(client: OpencodeClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
-  const got = await client.session.messages({ sessionID: id }).catch(() => undefined)
-  const data = got && !got.error ? got.data : undefined
-  if (!data) return { used: 0, pct: 100, errorStub: false }
-  const last = data.findLast((message) => message.info.role === "assistant")
-  if (!last || last.info.role !== "assistant") return { used: 0, pct: 100, errorStub: false }
-  // 用量基准 = 从末条往前第一条"真正跑完过"的 assistant 消息(tokens 非 0)。provider
+export async function sessionUsage(client: AgentClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
+  const got = await client.messages(id)
+  if (!got.ok) return { used: 0, pct: 100, errorStub: false }
+  const data = got.value
+  const last = data.findLast((message) => message.role === "assistant")
+  if (!last) return { used: 0, pct: 100, errorStub: false }
+  // 用量基准 = 从末条往前第一条"真正跑完过"的 assistant 消息(用量非 0)。provider
   // 报错时服务端会追加一条 tokens 全 0 的 assistant 行(prompt.ts 先建行、processor
   // .halt() 只写 error,step-finish 从未发生),被中断的轮次同样留下 0 tokens 的残行;
   // 直接取末条会把"累积了十万级上下文、最后一轮撞限流"的会话读成 0 用量。基准不排除
   // error 行:step-finish 之后才判定的错误(输出超限、内容过滤等)带真实 tokens,正是
   // 末端用量的最佳估计。
-  const basis = data.findLast(
-    (message) => message.info.role === "assistant" && message.info.tokens.input + message.info.tokens.cache.read > 0,
-  )
-  if (!basis || basis.info.role !== "assistant") {
+  const basis = data.findLast((message) => message.role === "assistant" && (message.contextUsed ?? 0) > 0)
+  if (!basis) {
     // 整条会话从未有过真实产出:末条本身就是报错桩,即 plans/0015-session-error-retry-plan.md
     // 第 5 点要兜底的历史遗留形态(旧版"重试即换白板会话"留下的空会话)。
-    return { used: 0, pct: 100, errorStub: last.info.error !== undefined }
+    return { used: 0, pct: 100, errorStub: last.failed }
   }
-  const used = basis.info.tokens.input + basis.info.tokens.cache.read
-  const limit = (await contextLimits(client)).get(`${basis.info.providerID}/${basis.info.modelID}`)
+  const used = basis.contextUsed!
+  const limit = basis.model !== undefined ? (await client.contextLimits()).get(basis.model) : undefined
   return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit, errorStub: false }
 }
 
 // 基点会话末端上下文用量(tokens);取不到按 0。
-export async function sessionUsed(client: OpencodeClient, id: string): Promise<number> {
+export async function sessionUsed(client: AgentClient, id: string): Promise<number> {
   return (await sessionUsage(client, id)).used
 }
 
@@ -144,18 +142,17 @@ export function zeroUsage(): Usage {
 // label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/pending/
 // blocked/done 等),会话结束与任务终态时把链上会话改名为最新标签,标题前缀即任务
 // 进度;改名失败仅记录明细,不影响流程。
-export async function renameSession(client: OpencodeClient, chain: SessionChain, subject: string): Promise<void> {
+export async function renameSession(client: AgentClient, chain: SessionChain, subject: string): Promise<void> {
   chain.subject = subject
   if (!chain.id) return
-  const renamed = await client.session.update({ sessionID: chain.id, title: commitTitle(subject) }).catch(() => undefined)
-  if (renamed?.error) vlog(`session rename failed: ${JSON.stringify(renamed.error)}`)
+  const renamed = await client.rename(chain.id, commitTitle(subject))
+  if (!renamed.ok) vlog(`session rename failed: ${JSON.stringify(renamed.error)}`)
 }
 
 // 记忆会话是否仍存在于 server 上(opencode 会话持久化在项目存储,server 重启
 // 不丢;拉取失败或不存在则视为不可复用)。
-export async function sessionAlive(client: OpencodeClient, id: string): Promise<boolean> {
-  const got = await client.session.get({ sessionID: id }).catch(() => undefined)
-  return got !== undefined && !got.error
+export async function sessionAlive(client: AgentClient, id: string): Promise<boolean> {
+  return (await client.get(id)).ok
 }
 
 // 失联探针的探测体(plans/0026-session-boundary-hardening-design.md D3/§4.4): 一条独立的
@@ -163,11 +160,11 @@ export async function sessionAlive(client: OpencodeClient, id: string): Promise<
 // 新连接,故新请求的成败即传输层活性的可信信号;超时无响应与请求异常同按未通计。
 // 与 sessionAlive 同族,差别只在超时上界与调用场景(在途周期探测 vs 恢复前一次性核对)。
 export const PROBE_TIMEOUT_MS = 30_000
-export async function probeSession(client: OpencodeClient, sessionID: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+export async function probeSession(client: AgentClient, sessionID: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
-      client.session.get({ sessionID }).then((got) => !got.error),
+      client.get(sessionID).then((got) => got.ok),
       new Promise<false>((resolve) => {
         timer = setTimeout(() => resolve(false), timeoutMs)
       }),
@@ -197,41 +194,20 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
 // 把非文本 part 转成一行可读输出(始终经 vlog 交给 log 层决定去留: --verbose 上
 // 终端并记录,外壳画像 auditLog 时写入日志文件);返回 undefined 表示该 part 尚无
 // 终态内容可输出(后续更新事件会再触发)。工具输出与推理原文较长,
-// 截断到与 verify 输出相同的 2000 字符上限。
-export function describePart(part: Part): string | undefined {
-  if (part.type === "reasoning") return part.time.end ? `  reasoning:\n${part.text.trim().slice(0, 2000)}` : undefined
-  if (part.type === "tool") {
-    if (part.state.status === "completed") return `  tool ${part.tool}: ${part.state.title || "done"}`
-    if (part.state.status === "error") return `  tool ${part.tool} error: ${part.state.error.slice(0, 2000)}`
+// 截断到与 verify 输出相同的 2000 字符上限。display-only pieces arrive as
+// notes already rendered by the adapter (0037 D6); the retry line is watch's
+// (retry signals are events, not parts).
+export function describePart(part: AgentPart): string | undefined {
+  if (part.kind === "reasoning") return part.final ? `  reasoning:\n${part.text.trim().slice(0, 2000)}` : undefined
+  if (part.kind === "tool") {
+    if (part.status === "completed") return `  tool ${part.tool}: ${part.title || "done"}`
+    if (part.status === "error") return `  tool ${part.tool} error: ${(part.error ?? "").slice(0, 2000)}`
     return undefined
   }
-  if (part.type === "step-finish") return `  step finish (${part.reason}): input ${formatTokens(part.tokens.input)} / output ${formatTokens(part.tokens.output)} tokens`
-  if (part.type === "step-start") return `  step start`
-  if (part.type === "file") return `  file: ${part.filename ?? part.url}`
-  if (part.type === "subtask") return `  subtask (${part.agent}): ${part.description}`
-  if (part.type === "agent") return `  subagent: ${part.name}`
-  if (part.type === "patch") return `  patch (${part.files.length} files): ${part.files.join(", ")}`
-  if (part.type === "snapshot") return `  snapshot: ${part.snapshot}`
-  if (part.type === "retry") return `  ↻ request retry (attempt ${part.attempt})`
-  if (part.type === "compaction") return `  context compaction${part.auto ? " (auto)" : ""}`
+  if (part.kind === "step-finish") return `  step finish (${part.reason}): input ${formatTokens(part.tokens.input)} / output ${formatTokens(part.tokens.output)} tokens`
+  if (part.kind === "step-start") return `  step start`
+  if (part.kind === "note") return `  ${part.text}`
   return undefined
-}
-
-// 拉取一次 provider 列表,建立 providerID/modelID → 上下文上限的映射;
-// 失败时返回空映射,上下文行退化为只显示用量不显示百分比。
-export async function contextLimits(client: OpencodeClient): Promise<Map<string, number>> {
-  const limits = new Map<string, number>()
-  // 整段容错: 请求失败(网络/旧版 server)、错误响应体与客户端不具备该表面
-  // (测试替身)都退化为空映射,由调用方按"上限未知"处理。
-  try {
-    const response = await client.provider.list()
-    for (const provider of response?.data?.all ?? []) {
-      for (const [id, model] of Object.entries(provider.models)) {
-        limits.set(`${provider.id}/${id}`, model.limit.context)
-      }
-    }
-  } catch {}
-  return limits
 }
 
 export function formatTokens(n: number): string {
@@ -239,47 +215,22 @@ export function formatTokens(n: number): string {
   return String(n)
 }
 
-// 服务端生效模型解析(未设模型路由时 ◈ 播报的回落,plans/0017-model-routing-design.md
-// D.8 2026-09-18 修订): 与服务端 prompt 的模型回退链同序——agent 配置级 model
-// (/agent 返回已归并 config.agent 的值)> 全局 config.model(/config)> 首个已连接
-// provider 的缺省模型(/provider 的 default 表,与服务端 defaultModel 的 sort-first
-// 同口径;服务端在此之前还会查最近使用记录 model.json,该状态不经 API 暴露,此处
-// 略过——纯展示用途的近似)。agent 缺省时取首个 primary agent(与服务端缺省 agent
-// 同向)。整段容错: 任一步取不到(旧版 server、请求失败、测试替身缺表面)继续回落,
-// 全取不到返回 undefined(调用方静默)。进程内按 agent 缓存: 配置在运行期间不变。
+// 服务端生效模型(未设模型路由时 ◈ 播报的回落,plans/0017-model-routing-design.md
+// D.8 2026-09-18 修订): the resolution chain is the adapter's (AgentClient
+// defaultModel; opencode: agent config > config.model > provider default).
+// Cached per agent for the process: the configuration does not change during a
+// run. undefined when nothing resolves (the caller stays silent).
 const serverModelCache = new Map<string, string | undefined>()
 
-export async function serverDefaultModel(client: OpencodeClient, agent?: string): Promise<string | undefined> {
+export async function serverDefaultModel(client: AgentClient, agent?: string): Promise<string | undefined> {
   const key = agent ?? ""
-  if (!serverModelCache.has(key)) serverModelCache.set(key, await resolveServerModel(client, agent))
+  if (!serverModelCache.has(key)) serverModelCache.set(key, await client.defaultModel(agent).catch(() => undefined))
   return serverModelCache.get(key)
 }
 
 // 单测用: 清进程内缓存(不同测试的替身 client 不应互相串味)。
 export function resetServerModelCache(): void {
   serverModelCache.clear()
-}
-
-async function resolveServerModel(client: OpencodeClient, agent?: string): Promise<string | undefined> {
-  try {
-    const agents = await client.app.agents()
-    const list = agents?.data
-    const found = agent ? list?.find((a) => a.name === agent) : list?.find((a) => a.mode === "primary")
-    if (found?.model) return `${found.model.providerID}/${found.model.modelID}`
-  } catch {}
-  try {
-    const config = await client.config.get()
-    if (config?.data?.model) return config.data.model
-  } catch {}
-  try {
-    const response = await client.provider.list()
-    const data = response?.data
-    for (const id of data?.connected ?? []) {
-      const model = data?.default?.[id]
-      if (model) return `${id}/${model}`
-    }
-  } catch {}
-  return undefined
 }
 
 // 客户端错误可读化: fetch 异常(网络断开、请求超时中止等)返回的是 Error 实例,
