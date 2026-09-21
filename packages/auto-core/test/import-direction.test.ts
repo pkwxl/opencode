@@ -119,6 +119,7 @@ const CLASSIFIED: Record<string, Domain> = {
   "templates.d": "driver",
   testrun: "driver",
   "unit-commit": "driver",
+  usage: "driver",
   verify: "driver",
   watch: "driver",
   wrapup: "driver",
