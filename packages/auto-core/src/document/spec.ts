@@ -40,7 +40,9 @@ import type { ArtifactSpec } from "./types"
 // covered separately by the zero-disk-writes criterion (unit baseline diff).
 export function declaredArtifacts(text: string): ArtifactSpec[] {
   // Dual-read (M2.4): `产出:` is the pre-flip spelling, still present in PLAN.md task bodies written before it.
-  const decl = /(?:^|\s)(?:Artifacts|产出)\s*[:：]\s*(.+)$/.exec(text)?.[1]
+  // Case-insensitive on the English token: a session writing `artifacts:` must
+  // not silently yield zero specs (plans/0035 D2).
+  const decl = /(?:^|\s)(?:Artifacts|产出)\s*[:：]\s*(.+)$/i.exec(text)?.[1]
   if (!decl) return []
   const out: ArtifactSpec[] = []
   let current: ArtifactSpec | undefined

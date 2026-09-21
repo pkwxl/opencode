@@ -140,7 +140,7 @@ export function steerDue(tier: UsageTier, used: number | undefined, limit: numbe
 // never asked, and demanding the document would misjudge a natural finish.
 // `hinted` = the hint actually went out in this session (plans/0040 D6): the
 // final figure alone misses a session that compacted after the hint and ended
-// below 2·cap with a written `状态: 继续` handover (0038 §6 latent). OR-ed, so
+// below 2·cap with a written `Status: continue` handover (0038 §6 latent). OR-ed, so
 // every session judged due before still is.
 export function sessionHandoverDue(tier: UsageTier, steer: { limit: number } | undefined, used: number | undefined, hinted = false): boolean {
   return steer !== undefined && (hinted || steerDue(tier, used, steer.limit))

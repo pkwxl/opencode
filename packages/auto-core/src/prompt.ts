@@ -483,7 +483,7 @@ export function renderInferSource(input: { file: string; brief?: string; priorKb
 
 // 交接文档(相对目标目录): ondemand 整任务会话与 auto 子任务会话共用——driver 在
 // 上下文达到 2x --context-limit 时插入交接提示,会话把进度写入该文件,末行
-// `状态: 继续|完成` 由 driver 解析。子任务场景的状态以该子任务是否完成计。
+// `Status: continue|done` 由 driver 解析。子任务场景的状态以该子任务是否完成计。
 // 构造经 docpaths(任务目录化布局),读点回落由 runner 经 resolveTaskDoc 处理。
 export function handoffFile(task: Task): string {
   return taskDoc(task.id, "handoff")

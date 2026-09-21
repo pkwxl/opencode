@@ -117,8 +117,9 @@ describe("交接文档的完整判据(F1/F2)", () => {
     expect(handoffStatus("状态:\n继续\n")).toBeUndefined()
     // 行内允许前后空白
     expect(handoffStatus("正文\n  状态:  继续  \n")).toBe("continue")
-    // 全文多行命中时取第一个有效状态行即可(值只分 继续|完成)
-    expect(handoffStatus("状态: 继续\n状态: 完成\n")).toBe("continue")
+    // Several matching lines: the last one wins (the protocol puts it last)
+    expect(handoffStatus("状态: 继续\n状态: 完成\n")).toBe("done")
+    expect(handoffStatus("## Step 2\nStatus: done\n\nnext steps…\n\nStatus: continue\n")).toBe("continue")
   })
 
   test("有状态行即完整;缺状态行但已落账同样完整;半截文件不完整", () => {

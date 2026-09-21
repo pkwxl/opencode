@@ -16,7 +16,7 @@
 //
 // Standardization boundary. The driver's protocol markers constrain exactly
 // two kinds of file: the index and state files it parses (PLAN.md, the phase
-// ledger, subtasks.md checklist items and their `产出:` declarations, the
+// ledger, subtasks.md checklist items and their `Artifacts:` declarations, the
 // todo.md section anchors, the report result line) and the handoff documents
 // (status line, four handover sections). Everything else an AI session writes
 // under docs/T-NNN/ — context.md, subtask artifacts under S<nn>/, free phase
@@ -147,16 +147,18 @@ export function p1Scope(rel: string): boolean {
 
 // —— handoff role: protocol checks ——
 
-// The session handoff status line (`状态: 继续|完成`): ondemand handoff.md and
-// test-handover testhandoff.md share one criterion (handover-boundary write
-// check, plans/0022-session-recovery-fidelity-design.md 3.3 R3). undefined =
-// missing/invalid.
+// The session handoff status line (`Status: continue|done`): ondemand
+// handoff.md and test-handover testhandoff.md share one criterion
+// (handover-boundary write check, plans/0022-session-recovery-fidelity-design.md
+// 3.3 R3). undefined = missing/invalid.
 //
 // The criterion is a whole-line anchored status line: from line start, value
-// exactly 继续|完成. An unanchored full-text match would mistake body text
-// quoting the prompt (e.g. "write the last line 状态: 继续 and end") for a
-// finished file — the prompt itself contains that instruction and sessions
-// often restate it (2026-09-17 review H3).
+// exactly continue|done. An unanchored full-text match would mistake body text
+// quoting the prompt (e.g. "write the last line Status: continue and end") for
+// a finished file — the prompt itself contains that instruction and sessions
+// often restate it (2026-09-17 review H3). The protocol puts the line last, so
+// the last matching line wins: a bare `Status: done` earlier in the body (a
+// per-step note) must not override the closing `Status: continue`.
 //
 // The two handovers use the line differently. handoff.md's steer only
 // *suggests* a handover; a session that genuinely finished needs none, so
@@ -174,7 +176,7 @@ export type HandoffStatus = "continue" | "done"
 // handoff.md / testhandoff-<n>.md files are re-read on recovery. Both forms
 // normalize to the English value so no comparison site sees the old literals.
 export function handoffStatus(text: string): HandoffStatus | undefined {
-  const m = /^[ \t]*(?:Status|状态)[:：][ \t]*(continue|done|继续|完成)[ \t]*$/im.exec(text)
+  const m = [...text.matchAll(/^[ \t]*(?:Status|状态)[:：][ \t]*(continue|done|继续|完成)[ \t]*$/gim)].at(-1)
   if (!m) return undefined
   return /^(?:continue|继续)$/i.test(m[1]!) ? "continue" : "done"
 }

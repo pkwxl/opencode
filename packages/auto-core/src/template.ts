@@ -114,6 +114,18 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
 // artifact paths are what the driver validates the session output against —
 // M1.0 merged understand+decompose session, plans/0030.)
 
+// Pre-flip spellings a target-directory override may still carry in place of
+// a flipped marker (M2.4 dual-read, plans/0035 D5/D6): the parser still reads
+// the old form, so an override written before the flip keeps loading. Retired
+// together with the parser-side dual-read (M4 close-out).
+const LEGACY_MARKERS: Record<string, string> = {
+  "Status: continue": "状态: 继续",
+  "Status: done": "状态: 完成",
+}
+
+const lacksMarker = (content: string) => (marker: string) =>
+  !content.includes(marker) && !(LEGACY_MARKERS[marker] !== undefined && content.includes(LEGACY_MARKERS[marker]))
+
 // Tier-1 markers for shared partial sections (M1.3): the target directory's
 // _partials.md overlay merges per section; overriding one of these sections
 // must preserve the anchors the driver depends on — the eof doc-shape marker,
@@ -170,7 +182,7 @@ function loadLibrary(dir: string | undefined): Library {
         // section (same enforcement as template-level markers).
         const sections = parsePartials(content)
         for (const [section, body] of Object.entries(sections)) {
-          const missing = (partialMarkers[section] ?? []).filter((marker) => !body.includes(marker))
+          const missing = (partialMarkers[section] ?? []).filter(lacksMarker(body))
           if (missing.length) {
             throw new Error(
               `shared-partial overlay ${join(".opencode", "auto", "prompts", file)}: section ${section} is missing required protocol content: ${missing.join(", ")}` +
@@ -181,7 +193,7 @@ function loadLibrary(dir: string | undefined): Library {
         partials = { ...partials, ...sections }
         continue
       }
-      const missing = (markers[name] ?? []).filter((marker) => !content.includes(marker))
+      const missing = (markers[name] ?? []).filter(lacksMarker(content))
       if (missing.length) {
         throw new Error(
           `prompt template overlay ${join(".opencode", "auto", "prompts", file)} is missing required protocol content: ${missing.join(", ")}` +

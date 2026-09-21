@@ -155,8 +155,8 @@ export async function executeWhole(
     log(`↻ ${task.id} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
     retried = true
     feedback =
-      `\n\n你上次结束会话时上下文已达上限,但未写出有效的 ${handoffFile(task)}(缺失或缺少 \`Status: continue|done\` 行)。` +
-      `这是硬性要求: 写出该文件后再结束会话。`
+      `\n\nThe last time you ended the session the context had reached its limit, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
+      `This is a hard requirement: write that file before ending the session.`
   }
 }
 

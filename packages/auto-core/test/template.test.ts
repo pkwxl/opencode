@@ -246,6 +246,25 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     }
   })
 
+  test("handoff-steer override: pre-flip status literals still load, neither form is rejected (M2.4 dual-read)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "handoff-steer.md"), "交接: 写 {{handoffFile}},末行 `状态: 继续` 或 `状态: 完成`")
+      usePromptLibrary(dir)
+      expect(renderTemplate("handoff-steer", { handoffFile: "h.md" })).toContain("状态: 继续")
+      usePromptLibrary(undefined)
+      writeFileSync(join(overlay, "handoff-steer.md"), "handover: write {{handoffFile}}, last line `Status: continue` or `Status: done`")
+      usePromptLibrary(dir)
+      usePromptLibrary(undefined)
+      writeFileSync(join(overlay, "handoff-steer.md"), "handover without any status line")
+      expect(() => usePromptLibrary(dir)).toThrow(/handoff-steer\.md is missing required protocol content: Status: continue, Status: done/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("协议敏感模板覆盖缺失协议行时报错并指明文件", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {

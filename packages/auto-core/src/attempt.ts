@@ -349,7 +349,7 @@ export async function attempt(
       // 0-token 还原对不可重试错误同样适用(§J.3 只覆盖可重试分支的补齐):
       // 首发即死的报错桩(会话里只有一条用户消息、没有任何产出)不配作恢复锚点。
       if (result.error && result.used === 0 && handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
-      // 测试交接收场(testhandoff.md 写出 `状态: 继续`): 该会话的任务即告完成,作为
+      // 测试交接收场(testhandoff.md 写出 `Status: continue`): 该会话的任务即告完成,作为
       // 重启复用/重试分叉的锚点一并丢弃——链 id 清空(此后续跑会话出错,重试分叉源
       // 只剩续跑谱系 chain.failed,不再可能 fork 回上下文已用满的定版前旧会话);
       // progress 同步转「无会话在途态」: session 丢弃(下次运行无会话可复用,恢复经

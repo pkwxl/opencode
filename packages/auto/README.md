@@ -310,7 +310,7 @@ driver 对每个任务执行流水线,**PLAN.md 与 CURRENT.md 只由 driver 写
    清零即删除该文件);
     子任务会话进行中上下文已用量达到配置的 `contextLimit` 的 2 倍时,driver
     同样插入交接提示,AI 把本子任务进度写入 `docs/T-NNN/handoff.md`(末行
-    `状态: 继续|完成`,以该子任务是否完成计)后结束,新会话凭交接文档续跑
+    `Status: continue|done`,以该子任务是否完成计)后结束,新会话凭交接文档续跑
     该子任务;子任务完成后 driver 删除该文件,下一子任务重新起算;
     子任务会话自我检查自己的工作,会话结束后 driver 直接勾选检查项。
 3. **收尾**:见下方公共部分。
@@ -321,7 +321,7 @@ driver 对每个任务执行流水线,**PLAN.md 与 CURRENT.md 只由 driver 写
 
 `subtask: ondemand`(按需交接):先按单会话执行;会话进行中上下文已用量达到
 配置的 `contextLimit` 的 2 倍时,driver 向该会话插入交接提示,AI 把进度与后续步骤写入
-`docs/T-NNN/handoff.md`(末行 `状态: 继续|完成`)后结束,driver 开新会话从交接
+`docs/T-NNN/handoff.md`(末行 `Status: continue|done`;旧版 `状态: 继续|完成` 仍可读)后结束,driver 开新会话从交接
 文档续跑,直到任务完成。
 
 公共部分(**收尾**):一个会话统一更新 docs/、`docs/T-NNN/report.md`(各子任务

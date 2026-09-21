@@ -1,7 +1,7 @@
 // Document domain — frozen interface (D8; root plans/AUTO_NEXT_REFACTOR_PLAN.md
 // M1.1 freeze; design plans/0031). Amended at first-consumer time (M1.4,
 // plans/0034 D2): the draft's singular sectionAnchor could not express the
-// multi-section `产出:` declarations the parser actually produces, and the
+// multi-section `Artifacts:` declarations the parser actually produces, and the
 // checker needs the D4 fallback-read path and the feedback label as data.
 // Process documents and phase output documents are explicitly distinguished
 // by role. The driver's mechanical checks (existence, non-triviality, eof
@@ -30,7 +30,7 @@
 export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "artifact" | "freeform"
 
 // A declared artifact of a task/subtask (the structured form of the
-// `产出:` line, M1.4). The driver derives its mechanical checks from this
+// `Artifacts:` line, M1.4). The driver derives its mechanical checks from this
 // data; the intent layer's artifactSpec section declares the conventions.
 export type ArtifactSpec = {
   // Repository-relative path of the artifact (the canonical permanent

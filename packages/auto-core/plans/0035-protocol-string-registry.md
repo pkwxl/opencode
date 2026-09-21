@@ -122,7 +122,7 @@ lose track of it.
 Each belongs to the batch that owns the template it serves; leaving them is D1,
 not an oversight:
 
-- `src/execute.ts:156` — `executeWhole`'s handover-retry feedback. Twin of the
+- ~~`src/execute.ts:156`~~ (closed at M2.4 review, see the amendment below) — `executeWhole`'s handover-retry feedback. Twin of the
   already-translated `runSubtask` feedback at :475, but serves `whole.md` (M2).
 - `src/prompt.ts:333` — `renderVerifyJudge`'s `runTimeout` value, feeds
   `verify-judge.md` (M2).
@@ -209,3 +209,35 @@ is prose and rides that template's own translation. The driver-authored
 dual-read; tests that write legacy-form fixtures were left as the executable
 compatibility path. The dual-read layer's retirement is the M4 close-out decision.
 Verification: `bun typecheck` clean; auto-core 1038 tests pass, auto 52 pass.
+
+### Review follow-ups (2026-09-21, same day)
+
+- **Tier-1 guard dual-reads too** (D6 refined): `PROTOCOL_MARKERS["handoff-steer"]`
+  flipped English-only, so a target-directory `handoff-steer.md` override still
+  carrying `状态: 继续|完成` failed at `usePromptLibrary` even though the parser
+  reads it — a startup break for in-flight projects, against D5.
+  `src/template.ts LEGACY_MARKERS` now maps each flipped marker to its pre-flip
+  spelling; either satisfies the guard. D6's hazard (an override passing with a
+  literal the driver *no longer parses*) does not arise while dual-read lives;
+  the map retires with the parser-side dual-read at M4 close-out.
+- **`Artifacts:` is case-insensitive**, matching `handoffStatus`: a lower-cased
+  `artifacts:` would otherwise parse to zero specs, the silent-disable failure
+  D2 exists to prevent.
+- **`handoffStatus` takes the last matching line** (was the first): the
+  protocol puts the status line last, and a bare English `Status: done` is a
+  natural per-step note in a handover body that must not override the closing
+  `Status: continue`.
+- **§8 seam closed**: `executeWhole`'s handover-retry feedback
+  (`src/execute.ts`) is English now, identical in form to the `runSubtask` twin,
+  instead of a Chinese sentence carrying the English token.
+- **Compatibility-path evidence, stated precisely**: there is no golden for the
+  compatibility path. It is proven by the dual-read parser tests plus the
+  pre-existing tests whose fixtures still carry the old literals
+  (`subtask-shape.test.ts` drives `runSubtask` with `产出:` task bodies and an
+  old-form `handoff.md`; `git.test.ts` handover fixtures), and by the override
+  test in `template.test.ts`.
+- Stale comments quoting the old literals updated (`document/roles.ts`,
+  `document/types.ts`, `prompt.ts`, `attempt.ts`, `usage.ts`), plus the package
+  `AGENTS.md` navigation line and `packages/auto/README.md` (user-facing).
+  `docs/structure.md` stays as is until M6.2.
+- Verification: `bun typecheck` clean; auto-core 1039 pass, auto 52 pass 2 skip.

@@ -194,6 +194,8 @@ describe('checkArtifactSpecs(policy "mandatory",合并分解会话单元产物)'
       { path: "docs/a.md", role: "artifact", sectionAnchors: ["background"] },
     ])
     expect(declaredArtifacts("写文档 产出: docs/a.md")).toEqual(declaredArtifacts("write Artifacts: docs/a.md"))
+    // A lower-cased token must not silently yield zero specs (0035 D2)
+    expect(declaredArtifacts("write notes artifacts: docs/a.md")).toEqual([{ path: "docs/a.md", role: "artifact" }])
   })
 
   test("legacy todo.md headings satisfy the section anchors (M2.4 dual-read)", async () => {
