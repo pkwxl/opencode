@@ -50,8 +50,10 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // agent: types = the frozen interface (MA.1); opencode/server = the opencode
   // host factory (MA.3: `manage` → AgentHost), the one adapter-specific module
   // the driver may name — only to construct the host; everything after that
-  // goes through the AgentClient/AgentHost types. MA.5 adds the claude host.
-  agent: ["agent/types", "agent/opencode/server"],
+  // goes through the AgentClient/AgentHost types. claude/host = the claude
+  // headless host factory (MA.5, plans/0041), same role: loop.ts names it only
+  // to construct the host when OPENCODE_AUTO_AGENT=claude.
+  agent: ["agent/types", "agent/opencode/server", "agent/claude/host"],
 }
 
 // Classification of flat src/ files (allowlist). Per plan §3 the provider

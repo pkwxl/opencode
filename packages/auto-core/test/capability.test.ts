@@ -22,7 +22,8 @@ const without = (client: AgentClient, caps: Partial<AgentCapabilities>): AgentCl
   capabilities: { ...client.capabilities, ...caps },
 })
 
-// A claude-headless-like profile (MA.5 settles the real one).
+// A heavily degraded headless profile (no steer, turn-end usage) that exercises
+// every degradation row; the real claude adapter measured more (plans/0041 D2).
 const HEADLESS: AgentCapabilities = {
   resume: true,
   fork: "session",

@@ -15,6 +15,7 @@ import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentHost } from "./agent/types"
 import { opencodeHost } from "./agent/opencode/server"
+import { claudeHost } from "./agent/claude/host"
 import { degrade, permissionPreset } from "./capability"
 import { shellProfile } from "./shell"
 import { autoSwitches, clampSwitches } from "./switches"
@@ -86,9 +87,10 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
         return 1
       }
     }
-    // The shell's agent profile picks the adapter (absent = opencode). The
+    // The shell's agent profile picks the adapter; absent, OPENCODE_AUTO_AGENT
+    // may pick the built-in claude adapter (MA.5), else opencode. The
     // permission preset reaches only agents without permission events (MA.4).
-    const agent = shellProfile().agent
+    const agent = shellProfile().agent ?? (autoSwitches().agent === "claude" ? { name: "claude", host: claudeHost } : undefined)
     server =
       opts.managed ??
       (await (agent?.host ?? opencodeHost)(directory, {

@@ -28,6 +28,7 @@ export const SWITCH_ENV = {
   strictResume: "OPENCODE_AUTO_STRICT_RESUME",
   handoverConcurrent: "OPENCODE_AUTO_HANDOVER_CONCURRENT",
   hibernate: "OPENCODE_AUTO_HIBERNATE",
+  agent: "OPENCODE_AUTO_AGENT",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
@@ -163,7 +164,13 @@ export type Switches = {
   // 在窗口内」——在窗口内睡到窗口结束 + 固定随机 0~600 秒再继续;执行中的单元跑到
   // 边界才停,天然实现「优雅等待到安全退出点再暂停」。不预判下一单元、不落盘。
   hibernate: HibernateWindow | undefined
+  // Built-in coding agent behind the run (MA.5, plans/0041): opencode (default,
+  // unchanged) or claude (the headless adapter, src/agent/claude/). A shell
+  // whose profile names an agent (setShellProfile `agent`) overrides it.
+  agent: AgentChoice
 }
+
+export type AgentChoice = "opencode" | "claude"
 
 // 休眠窗口(OPENCODE_AUTO_HIBERNATE 归一化形态): startMin = UTC 窗口起点(当日分钟
 // 数,∈ [0,1440));durationMin = 时长(分钟,∈ (0,1440),允许小数)。跨午夜(如
@@ -188,6 +195,7 @@ const SWITCH_DEFAULTS: Switches = {
   strictResume: false,
   handoverConcurrent: false,
   hibernate: undefined,
+  agent: "opencode",
 }
 
 // OPENCODE_AUTO_MODEL / _FALLBACK 归一化为 ModelPolicy(纯函数,供单测)。两形态:
@@ -360,6 +368,11 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
       `env ${SWITCH_ENV.modelFailbackScope} invalid value: "${failbackScopeRaw}" (expected phase|task|subtask|session; empty string = unset, default task)`,
     )
   }
+  const agentRaw = env[SWITCH_ENV.agent]
+  const agent = agentRaw === undefined || agentRaw === "" ? SWITCH_DEFAULTS.agent : agentRaw
+  if (agent !== "opencode" && agent !== "claude") {
+    throw new Error(`env ${SWITCH_ENV.agent} invalid value: "${agentRaw}" (expected opencode|claude; empty string = unset, default opencode)`)
+  }
   return {
     fork: onOff(SWITCH_ENV.fork, env[SWITCH_ENV.fork], SWITCH_DEFAULTS.fork),
     forkBase: forkBase as Switches["forkBase"],
@@ -378,6 +391,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     strictResume: onOff(SWITCH_ENV.strictResume, env[SWITCH_ENV.strictResume], SWITCH_DEFAULTS.strictResume),
     handoverConcurrent: onOff(SWITCH_ENV.handoverConcurrent, env[SWITCH_ENV.handoverConcurrent], SWITCH_DEFAULTS.handoverConcurrent),
     hibernate: parseHibernate(env[SWITCH_ENV.hibernate]),
+    agent,
   }
 }
 
@@ -414,6 +428,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
       ? undefined
       : `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
     switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
+    switches.agent === SWITCH_DEFAULTS.agent ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }
@@ -439,6 +454,7 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.strictResume}=${switches.strictResume ? "on" : "off"}`,
     `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
     `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
+    `${SWITCH_ENV.agent}=${switches.agent}`,
   ].join(", ")
 }
 
