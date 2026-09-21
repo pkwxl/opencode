@@ -30,6 +30,8 @@ The previous session was interrupted by the context limit. First read {{handoffF
 
 {{#if artifactConvention}}{{artifactConvention}}
 
+{{/if}}{{#if processRefs}}{{processRefs}}
+
 {{/if}}Constraints:
 1. Complete this one subtask strictly, and as soon as it is done, close out with the steps below and end the session, so as to keep the context of a single session small;
 {{> question-rule}}

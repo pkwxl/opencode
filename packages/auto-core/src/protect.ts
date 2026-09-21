@@ -1,5 +1,6 @@
 import { chmod } from "node:fs/promises"
 import { join } from "node:path"
+import { PROTECTED_FILES } from "./document/roles"
 
 // Read-only guard for driver-owned files: during `run`, PLAN.md, CURRENT.md,
 // opencode.json and the persisted project config are chmod'd 0o444 so agent
@@ -10,7 +11,9 @@ import { join } from "node:path"
 // before starting sessions. Driver writes call allowWrite / reprotect around
 // each mutation; runAll restores writability in a finally block so a human can
 // edit the files (including manual config amendments) after the driver stops.
-const FILES = ["PLAN.md", "CURRENT.md", "opencode.json", ".opencode/auto/config.json"]
+// The file list is the driverState role's fixed-location files
+// (document/roles.ts PROTECTED_FILES, M2.3).
+const FILES = PROTECTED_FILES
 
 let enabled = false
 

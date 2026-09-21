@@ -10,12 +10,14 @@ import { dirname, join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
-import { docShapeProblems, EOF_MARK, eofScanExempt, shapeCheckOn } from "./doccheck"
+import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
+import { processReferenceScan } from "./document/process-refs"
+import { eofScanExempt, handoffStatus } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
+import { renameTodoToDone } from "./document/state"
 import { runExecSession } from "./exec-session"
-import { beginUnit, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
-import { handoffStatus } from "./handover"
+import { beginUnit, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
 import { load, setForkBase, setSubtasks, subtasks, tick, type Plan, type Task } from "./plan"
@@ -23,7 +25,6 @@ import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFi
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
 import { formatTokens, forkEndedSession, seedForkSession } from "./session-api"
-import { renameTodoToDone } from "./subtask-state"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
 import { sessionHandoverDue } from "./usage"
@@ -510,9 +511,12 @@ export async function runSubtask(
 // (untracked) in this unit, and declared section anchors; ⑤ the whole-unit eof
 // scan — every .md in the unit's git changes (new or modified, incl. undeclared
 // side documents and copies already committed at a handover boundary) must be
-// non-trivial + end with the terminator; the exempt list lives in doccheck.ts.
-// All criteria are deterministic: a zero-write or truncated "natural end" is
-// never completion.
+// non-trivial + end with the terminator; exemptions derive from document roles
+// (document/roles.ts eofScanExempt); ⑥ the P1 prohibition scan (M2.3,
+// plans/0045) — lines the unit added to deliverable files must not reference
+// process documents (document/process-refs.ts; bare task ids are logged as
+// warnings only). All criteria are deterministic: a zero-write or truncated
+// "natural end" is never completion.
 async function subtaskArtifactProblems(dir: string, text: string, baseline: UnitBaseline): Promise<string[]> {
   const problems: string[] = []
   if (await unitQuiet(dir, baseline)) problems.push("no changes relative to the unit baseline (zero disk writes)")
@@ -533,6 +537,9 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
     const content = await Bun.file(join(dir, rel)).text().catch(() => "")
     problems.push(...docShapeProblems(content, rel))
   }
+  const refs = processReferenceScan(await unitAddedLines(dir, baseline))
+  for (const warning of refs.warnings) log(`  ⚠ ${warning}`)
+  problems.push(...refs.problems)
   return problems
 }
 

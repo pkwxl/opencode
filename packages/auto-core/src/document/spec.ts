@@ -137,9 +137,9 @@ export const SUBTASK_TODO_SECTIONS = ["## 范围声明", "## 产出清单"]
 // the protocol is active (both/neither = illegal). `pending` doubles as the
 // creation-time artifact spec (the decompose session writes it; shape and
 // anchors checked there, plans/0030 D11); `complete` is the DRIVER rename
-// target — content carried over unchanged, never re-checked. Final
-// DocumentRole assignments for the state semantics land with the M2.3 role
-// model; M1.4 roles the pair through this spec data.
+// target — content carried over unchanged, never re-checked. Both files play
+// the artifact role (roles.ts, M2.3); the state is which one exists, read by
+// document/state.ts.
 export type SubtaskStateSpec = {
   pending: ArtifactSpec
   complete: { path: string }
@@ -190,8 +190,8 @@ export async function checkArtifactSpecs(specs: readonly ArtifactSpec[], check: 
   const problems: string[] = []
   const shaped: string[] = []
   for (const spec of specs) {
-    // M1.4 checks the artifact role only; handoff/driverState/ledger/freeform
-    // policies derive from the M2.3 role model.
+    // Specs declare artifacts; every other role carries its own policy in
+    // roles.ts (handoff protocol checks, eof exemption, protect list).
     if (spec.role !== "artifact") continue
     const isMd = spec.path.toLowerCase().endsWith(".md")
     if (check.policy === "declared") {

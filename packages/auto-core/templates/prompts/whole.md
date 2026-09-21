@@ -9,7 +9,9 @@
 
 {{/if}}你本次负责整个任务,在单个会话内完成,不做子任务分解。{{#if continuation}}此前的会话因上下文限制中断,先读 {{handoffFile}} 了解进度与后续步骤,据此继续。{{/if}}
 
-约束:
+{{#if processRefs}}{{processRefs}}
+
+{{/if}}约束:
 {{#if selfCheck}}1. {{selfCheck}};
 {{/if}}{{> question-rule}}
 3. 可新增但不要修改 docs/ 中的内容(若必须修改,{{^ask}}按 AUTO-DECISION 标注并{{/if}}记入相关文档);{{#if ondemand}}

@@ -7,20 +7,27 @@
 // by role. The driver's mechanical checks (existence, non-triviality, eof
 // terminator, declared section anchors) are driven by ArtifactSpec data, not
 // by hardcoded document names — the machinery lives in document/spec.ts
-// (M1.4); the role-model close-out (eof-exempt lists, protect policy, handoff
-// shape checks derived from roles) lands in M2.3.
+// (M1.4). The role model itself (M2.3, plans/0045) lives in document/roles.ts:
+// the path → role classifier, the per-role policies (eof scan, protect, the
+// process/deliverable split) and the handoff role's protocol checks.
 
-// The role of a document in the target directory's docs/ tree:
-// - driverState:  driver-exclusive state (PLAN.md/CURRENT.md/.auto/*); AI
-//                 sessions must never write these (protect.ts).
-// - ledger:       append-only progress facts (phases.md ledger lines).
-// - handoff:      session-boundary handoff documents (handoff/testhandoff
-//                 family); protocol-shaped, eof-exempt.
-// - artifact:     AI-produced deliverables consumed by later stages;
-//                 shape-checked (non-trivial + eof terminator).
-// - freeform:     everything else; the standardization boundary must not
-//                 constrain AI freedom here (no schema beyond placement).
-export type DocumentRole = "driverState" | "ledger" | "handoff" | "artifact" | "freeform"
+// The role of a path in the target directory (classified by roles.ts roleOf):
+// - driverState:     driver-exclusive state (PLAN.md/CURRENT.md/.auto/*,
+//                    opencode.json, the project config); AI sessions must
+//                    never write these (read-only during a run, protect.ts).
+// - ledger:          append-only progress facts (phases.md ledger lines).
+// - handoff:         boundary handoff documents — the session handoff family
+//                    (handoff/testhandoff, status line) and the phase handover
+//                    distillations (four sections); protocol-shaped, eof-exempt.
+// - phaseAcceptance: the human's per-phase acceptance record (0036 D8; the
+//                    role since M2.3, the gate that reads it in M3).
+// - artifact:        AI-produced process documents consumed by later stages
+//                    (task, round and phase documents under docs/);
+//                    shape-checked (non-trivial + eof terminator).
+// - freeform:        everything else — the deliverable itself and the
+//                    project's own documents; the standardization boundary
+//                    places no schema on it beyond the P1 prohibition.
+export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "artifact" | "freeform"
 
 // A declared artifact of a task/subtask (the structured form of the
 // `产出:` line, M1.4). The driver derives its mechanical checks from this
@@ -38,7 +45,13 @@ export type ArtifactSpec = {
   // Human-readable name used in mandatory-artifact feedback (e.g.
   // "understanding digest"); absent = messages reference the path only.
   label?: string
-  // The role this artifact plays; drives which checks apply. M1.4 checks
-  // role "artifact"; the other roles' policies land with the M2.3 role model.
+  // The role this artifact plays; drives which checks apply. The spec
+  // checker handles role "artifact"; the other roles carry their own
+  // policies in roles.ts.
   role: DocumentRole
 }
+
+// A line a unit added to a file: 1-based line number in the current file +
+// the line's text. Produced by the driver from git (git.ts unitAddedLines),
+// consumed by the P1 prohibition scan (process-refs.ts).
+export type AddedLine = { line: number; text: string }

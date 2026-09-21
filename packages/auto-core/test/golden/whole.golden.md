@@ -22,6 +22,8 @@ Migration/upgrade mode notes:
 
 你本次负责整个任务,在单个会话内完成,不做子任务分解。
 
+Process documents are the DRIVER's record of this long-running work — PLAN.md, CURRENT.md, .auto/, and the task, round and phase documents under docs/T-*, docs/R-* and docs/phases/. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, and no task ids used as pointers. When a comment needs a decision or constraint that a process document records, restate that content in the comment itself, so the code still stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line must carry its own question, decision and reason and never point at a process document.
+
 约束:
 1. once the whole task is complete, check for yourself whether it is genuinely complete;
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;

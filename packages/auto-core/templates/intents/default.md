@@ -148,6 +148,18 @@ AGENTS.md maintenance rules (this file is a workflow entry point, not a knowledg
 3. Update, don't append: before adding anything new, check whether an existing rule or routing entry should be revised instead; retire stale content rather than accumulating historical notes.
 4. Only durable workflow knowledge belongs here: record only conventions that affect how most future tasks are carried out; temporary debugging state, one-off decisions, and conversation history do not belong here (log one-off decisions as an `AUTO-DECISION` entry in the relevant document instead — and when the call was one the user should have made, such as scope, externally visible behaviour, an interface contract or an acceptance criterion, and you closed it yourself because nobody was there to ask, mark it `AUTO-RESOLVE` rather than `AUTO-DECISION`).
 
+### process-references
+
+Process documents are the DRIVER's record of this long-running work — PLAN.md, CURRENT.md, .auto/, and the task, round and phase documents under docs/T-*, docs/R-* and docs/phases/. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, and no task ids used as pointers. When a comment needs a decision or constraint that a process document records, restate that content in the comment itself, so the code still stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line must carry its own question, decision and reason and never point at a process document.
+
+### test-handover-finish
+
+do not omit any of it because a handover is due, since whatever is left undone here the new session has to redo from scratch
+
+### test-handover-leftover
+
+This is not a loophole for omitting work — what step 1 says to finish must still be finished;
+
 ## artifact spec
 
 ### subtask-output

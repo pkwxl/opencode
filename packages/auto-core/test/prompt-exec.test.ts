@@ -824,3 +824,43 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
     )
   })
 })
+
+describe("intent externalization, P1 and test-handover discipline (M2.3)", () => {
+  function withPack(text: string, fn: () => void) {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), text)
+      useIntentPacks(dir)
+      fn()
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("built-in pack: the P1 discipline reaches subtask and whole sessions; test-wrapup keeps its wording", () => {
+    for (const text of [renderSubtask(plan, task, "编写迁移脚本的 schema 部分"), renderWhole(plan, task)]) {
+      expect(text).toContain("Process documents are the DRIVER's record of this long-running work")
+      expect(text).toContain("each line must carry its own question, decision and reason and never point at a process document")
+    }
+    const wrap = renderTestWrapup({ handoffFile: "docs/T-002/testhandoff.md" })
+    expect(wrap).toContain("(code, documents, artifacts) — do not omit any of it because a handover is due")
+    expect(wrap).toContain("handover notes. This is not a loophole for omitting work — what step 1 says to finish must still be finished; remaining work that you do not list here")
+  })
+
+  test("zero-intent baseline: the discipline drops out, the handover protocol stays", () => {
+    withPack("# default\n", () => {
+      expect(renderSubtask(plan, task, "编写迁移脚本的 schema 部分")).not.toContain("Process documents are")
+      expect(renderWhole(plan, task)).not.toContain("Process documents are")
+      const wrap = renderTestWrapup({ handoffFile: "docs/T-002/testhandoff.md" })
+      expect(wrap).toContain("(code, documents, artifacts);\n")
+      expect(wrap).toContain("handover notes. Remaining work that you do not list here")
+      expect(wrap).not.toContain("loophole")
+      expect(wrap).toContain("docs/T-002/testhandoff.md")
+      expect(wrap).toContain("状态: 继续")
+      expect(wrap).not.toMatch(/\{\{|\}\}/)
+    })
+  })
+})

@@ -45,8 +45,11 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // document: types = the frozen schema (M1.1); spec = the artifact-spec
   // machinery (M1.4 — `产出:` declaration parser, decompose/state-file spec
   // tables, generic spec-driven checker), the domain's published acquisition
-  // surface for artifact checks.
-  document: ["document/types", "document/roles", "document/spec"],
+  // surface for artifact checks; roles = the role model (M2.3 — classifier,
+  // per-role policies, protect list, handoff protocol checks); state = the
+  // todo.md/done.md subtask state protocol (M2.3 move from subtask-state.ts);
+  // process-refs = the P1 prohibition scan (M2.3).
+  document: ["document/types", "document/roles", "document/spec", "document/state", "document/process-refs"],
   // agent: types = the frozen interface (MA.1); opencode/server = the opencode
   // host factory (MA.3: `manage` → AgentHost), the one adapter-specific module
   // the driver may name — only to construct the host; everything after that
@@ -67,13 +70,11 @@ const CLASSIFIED: Record<string, Domain> = {
   prompt: "intent",
   // phases (plan §3: phases.ts)
   phases: "phases",
-  // document (plan §3: docpaths.ts / doccheck.ts / protect.ts; subtask-state.ts
-  // is the M1.0 subtask-dir state protocol, plans/0030 — roles/state semantics
-  // over the document layout)
+  // document (plan §3: docpaths.ts / doccheck.ts / protect.ts; the M1.0
+  // subtask state protocol moved into document/state.ts in M2.3)
   docpaths: "document",
   doccheck: "document",
   protect: "document",
-  "subtask-state": "document",
   // agent: none left flat — MA.3 moved server.ts into agent/opencode/ and
   // session-api.ts became a driver module (its SDK calls moved into the
   // adapter; what remains seeds chains and formats output over AgentClient).
@@ -143,7 +144,7 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
   phases: ["docpaths", "plan", "template"],
   docpaths: [],
   doccheck: [],
-  protect: [],
+  protect: ["document/roles"],
 }
 
 // Session-driving chain, bottom → top (0024 §D.2): imports between ranked

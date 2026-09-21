@@ -6,6 +6,7 @@ import { mkdir, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
+import { validHandover } from "./document/roles"
 import { maybeExit } from "./exit"
 import { clearSticky, consumeFailback } from "./failback"
 import { commitPending, commitTree } from "./git"
@@ -24,7 +25,6 @@ import {
   readLedger,
   renderPlanScaffold,
   routePhase,
-  validHandover,
   type Phase,
 } from "./phases"
 import { load } from "./plan"

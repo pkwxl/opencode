@@ -84,6 +84,12 @@ export function tempPriorKnowledgeDoc(final: string): string {
   return join(dirname(final), TEMP_KB_NAME)
 }
 
+// File name of a phase's acceptance record (the phaseAcceptance role, M2.3,
+// plans/0045): one per phase per round inside the phase's free-artifact
+// directory (phases.ts phaseAcceptanceDoc builds the path — the directory
+// depends on the phase slug table). Written by a human, read by the M3 gate.
+export const PHASE_ACCEPTANCE_NAME = "acceptance.md"
+
 // 旧平铺形态(读回落常量化,存量项目原地保留、绝不搬移):
 // docs/migration-kb/R2-migration-2026-09-07_01-02-03.md
 export function legacyKnowledgeDoc(round: number, stamp: string): string {

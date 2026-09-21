@@ -144,8 +144,19 @@ export function renderTestResult(run: TestRunInfo): string {
 // 结果的剩余工作做完,但会话并不总能做完(它也不知道自己为什么要交接);没列出来
 // 的剩余工作在交接处静默消失——新会话读不到、也不知道有,会当成已完成而永久遗漏。
 // 入参只有交接文档路径——此刻测试尚未出结果,退出码/输出都还不存在。
+//
+// The completeness discipline is split out (M2.3, plans/0045 D9): the
+// protocol — what to write, where, the status line — stays in the template;
+// the two sentences that forbid leaving work undone come from the active
+// pack's `## governance` / `### test-handover-finish` and
+// `### test-handover-leftover`, and drop out cleanly when a pack omits them.
 export function renderTestWrapup(info: { handoffFile: string }): string {
-  return renderPrompt("test-wrapup", { handoffFile: info.handoffFile })
+  const ctx: Ctx = { handoffFile: info.handoffFile }
+  return renderPrompt("test-wrapup", {
+    ...ctx,
+    finishRule: intentText("governance", "test-handover-finish", ctx),
+    leftoverRule: intentText("governance", "test-handover-leftover", ctx),
+  })
 }
 
 // 测试交接后的新会话续跑说明(追加到执行提示词): 先读交接文档(归档份
@@ -269,6 +280,10 @@ export function renderSubtask(
     // {{outputFile}}). Injected only when the slot exists (index given or
     // derived); a pack omitting the subsection drops the block cleanly.
     artifactConvention: outputFile ? intentText("artifactSpec", "subtask-output", { ...ctx, outputFile }) : undefined,
+    // P1 discipline (M2.3, plans/0045): the deliverable must not reference
+    // process documents — `## governance` / `### process-references`; the
+    // DRIVER's prohibition scan at close-out is the mechanical side.
+    processRefs: intentText("governance", "process-references", ctx),
     // L1 接地块变量(ground-state 片段): 台账权威状态随每个子任务会话注入;
     // qualifiedId 仅在编号可知时给出(无检查项的旧形态任务没有 S 编号)。
     taskTitle: task.title,
@@ -526,6 +541,8 @@ export function renderWhole(
     // Closing self-check sentence (M1.3, same as renderSubtask but keyed to
     // the whole-task scope): `## quality` / `### self-check-whole`.
     selfCheck: intentText("quality", "self-check-whole", ctx),
+    // P1 discipline (M2.3), same subsection as renderSubtask.
+    processRefs: intentText("governance", "process-references", ctx),
   })
 }
 

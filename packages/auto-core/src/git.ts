@@ -1,5 +1,6 @@
 import { readdir, realpath, rm } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
+import type { AddedLine } from "./document/types"
 import { log } from "./log"
 
 // driver 统一提交机制: 收回 AI 会话的提交权——任何会话结束后由 driver 递归提交
@@ -204,6 +205,81 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Pro
   }
   for (const rel of await untrackedFiles(dir)) files.add(rel)
   return files
+}
+
+// Lines this unit added, per file relative to the target directory (M2.3, the
+// P1 prohibition scan's input, plans/0045): the `+` lines of the baseline..
+// worktree diff of tracked files, plus every line of the untracked (new-in-
+// unit) files. The scan's scope is what the unit wrote, never what a file
+// already held — a unit touching a file with older references is not blamed
+// for them. Deletions contribute nothing; binary files neither (git prints no
+// hunks for them; untracked files with NUL bytes or over 1 MiB are skipped).
+// Nested repositories are covered per baseline root, like unitChangedFiles.
+export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promise<Map<string, AddedLine[]>> {
+  const added = new Map<string, AddedLine[]>()
+  const push = (rel: string, line: number, text: string) => {
+    const list = added.get(rel) ?? []
+    list.push({ line, text })
+    added.set(rel, list)
+  }
+  for (const { root, sha } of baseline) {
+    const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
+    const toplevel = top?.code === 0 ? top.out.trim() : ""
+    if (!toplevel) continue
+    const diff = await git(root, [
+      "-c",
+      "core.quotePath=false",
+      "diff",
+      "-U0",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-renames",
+      "--diff-filter=d",
+      "--ignore-submodules=all",
+      sha || EMPTY_TREE,
+      "--",
+      ".",
+    ])
+    if (diff.code !== 0) continue
+    // A file header runs from `diff --git` to the first hunk; only there is a
+    // `+++ ` line the new-side path (an added content line "++ x" also starts
+    // with "+++ ").
+    let file: string | undefined
+    let header = false
+    let line = 0
+    for (const raw of diff.out.split("\n")) {
+      if (raw.startsWith("diff --git ")) {
+        header = true
+        file = undefined
+        continue
+      }
+      if (header) {
+        if (raw.startsWith("+++ ")) {
+          const path = raw.slice(4).replace(/^"(.*)"$/, "$1")
+          file = path.startsWith("b/") ? relative(dir, join(toplevel, path.slice(2))) : undefined
+        }
+        const hunk = /^@@ -\S+ \+(\d+)/.exec(raw)
+        if (!hunk) continue
+        header = false
+        line = Number(hunk[1])
+        continue
+      }
+      const hunk = /^@@ -\S+ \+(\d+)/.exec(raw)
+      if (hunk) {
+        line = Number(hunk[1])
+        continue
+      }
+      if (file && raw.startsWith("+")) push(file, line++, raw.slice(1))
+    }
+  }
+  for (const rel of await untrackedFiles(dir)) {
+    const handle = Bun.file(join(dir, rel))
+    if (handle.size > 1 << 20) continue
+    const text = await handle.text().catch(() => "")
+    if (text.includes("\0")) continue
+    text.split("\n").forEach((content, i) => push(rel, i + 1, content))
+  }
+  return added
 }
 
 // git 空树哈希(固定常量): 无提交仓库的「相对基线 diff」以此为空基线端。

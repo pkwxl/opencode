@@ -178,3 +178,11 @@ not an oversight:
 - No parser regex, spec table, marker key, template variable name, section
   heading of a pack file, or control-flow branch changed in this batch: the
   diff is string literals, comments and template prose only (D1).
+
+## Amendment (2026-09-21, M2.3 / plans/0045 D5)
+
+Parse points moved into the document domain, literals unchanged:
+`handoffStatus` (row `状态: 继续|完成`) from `src/handover.ts` and
+`HANDOVER_SECTIONS` / `validHandover` (M3.4 ledger face) from `src/phases.ts`
+now live in `src/document/roles.ts`; `src/subtask-state.ts` is
+`src/document/state.ts`. Line numbers cited above predate the move.

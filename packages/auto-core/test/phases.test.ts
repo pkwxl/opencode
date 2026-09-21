@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, renameSync, rmSync, wr
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { roundDir } from "../src/docpaths"
+import { validHandover } from "../src/document/roles"
 import { parse } from "../src/plan"
 import {
   appendLedger,
@@ -21,8 +22,8 @@ import {
   prevRoundDigest,
   readLedger,
   renderPlanScaffold,
+  phaseAcceptanceDoc,
   routePhase,
-  validHandover,
   type Phase,
 } from "../src/phases"
 

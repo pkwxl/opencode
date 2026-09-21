@@ -1,4 +1,4 @@
-// src/subtask-state.ts 子任务状态协议(M1.0)的单测:扫描三态(无状态文件=旧版路径/
+// src/document/state.ts 子任务状态协议(M1.0)的单测:扫描三态(无状态文件=旧版路径/
 // todo=待办/done=完成;激活后双文件或同缺=非法)、effectiveDone 双轨合并、改名幂等、
 // 注入写定的跳过规则。
 
@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { effectiveDone, renameTodoToDone, scanSubtaskStates } from "../src/subtask-state"
+import { effectiveDone, renameTodoToDone, scanSubtaskStates } from "../src/document/state"
 
 let dir: string
 

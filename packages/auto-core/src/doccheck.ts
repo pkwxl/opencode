@@ -34,26 +34,8 @@ export function docShapeProblems(text: string, path: string): string[] {
   return problems
 }
 
-// Exemption list of the D6 whole-unit scan (session-boundary-hardening §4.6, a
-// named constant in code): the driver-exclusive state files PLAN.md/CURRENT.md
-// (protect.ts domain; under the round-directory layout the root PLAN.md is a
-// symlink and the path git reports is the link target docs/R-NN/PLAN.md, so the
-// test goes by file name) and the state files under .auto/. The handover
-// document family (handoff/testhandoff) carries its own `状态:` final-state
-// contract, so its semantics are not mixed in; HANDOFF_NAME covers it as a whole
-// (including archived testhandoff-<n>.md and the old flat names <id>.handoff.md,
-// <id>(-S<n>).testhandoff(-<n>).md).
-export const EOF_SCAN_EXEMPT_NAMES = ["PLAN.md", "CURRENT.md"]
-
-const HANDOFF_NAME = /^(?:.+\.)?(?:test)?handoff(?:-\d+)?\.md$/
-
-// Whether a path (relative to the target directory) is exempt from the D6
-// whole-unit document terminator scan.
-export function eofScanExempt(rel: string): boolean {
-  if (rel === ".auto" || rel.startsWith(".auto/")) return true
-  const name = rel.split("/").at(-1) ?? rel
-  return EOF_SCAN_EXEMPT_NAMES.includes(name) || HANDOFF_NAME.test(name)
-}
+// The D6 whole-unit scan's exemptions derive from document roles
+// (document/roles.ts eofScanExempt, M2.3).
 
 // Whether the D2/D4 shape check is on (session-boundary-hardening §4.3): not
 // judged under dryrun / commit gate off (`--commit false` is retired, kept

@@ -14,7 +14,7 @@
 import { lstat, mkdir, readdir, rm, stat, symlink } from "node:fs/promises"
 import { readFileSync } from "node:fs"
 import { join, relative } from "node:path"
-import { roundDir } from "./docpaths"
+import { PHASE_ACCEPTANCE_NAME, roundDir } from "./docpaths"
 import type { Plan } from "./plan"
 import { renderText } from "./template"
 import templateScaffold from "../templates/PLAN.scaffold.md" with { type: "file" }
@@ -153,6 +153,14 @@ export function legacyPhaseDocsDir(round: number, phase: Phase): string {
   return `docs/phase-docs/R${round}-${phase}-${PHASE_SLUGS[phase]}`
 }
 
+// A phase's acceptance record (the phaseAcceptance role, M2.3, plans/0045 D6):
+// <phaseDocsDir>/acceptance.md — one per phase per round, the round already
+// expressed by the directory. Written by a human; no reader until the M3
+// acceptance gate (0036 D8), which also owns the acceptance marker literal.
+export async function phaseAcceptanceDoc(dir: string, round: number, phase: Phase): Promise<string> {
+  return `${await phaseDocsDir(dir, round, phase)}/${PHASE_ACCEPTANCE_NAME}`
+}
+
 // 台账追加(交接完成后、统一提交前调用;C.1 行协议)。查重后追加,重复调用幂等
 // ——交接在"台账追加之前"中断时,恢复路径安全补写。文件缺失时带头部注释创建。
 // 台账路径 = ledgerPath(新布局轮内 phases.md,旧布局根 phases.md);交接指针 =
@@ -221,16 +229,6 @@ export function formatPhases(phases: string, done: Phase[]): string {
 // phases ≠ "m" 的项目亦以此为 PLAN.md 模板(B.1)。
 export function renderPlanScaffold(): string {
   return renderText(readFileSync(templateScaffold, "utf8"), {})
-}
-
-// 交接文档的四个必备小节(F.1 协议): 蒸馏会话产物的 collect 校验与提示词模板
-// 的协议标记(phase-handover.md 内联同一组标题)共用。
-export const HANDOVER_SECTIONS = ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]
-
-// 校验 handover.md 四小节齐备: 标题须为逐字匹配的独立行(次级标题 ### 不算数,
-// "### 关键决策"包含子串但不是合规标题)。
-export function validHandover(text: string): boolean {
-  return HANDOVER_SECTIONS.every((section) => text.split("\n").some((line) => line.trim() === section))
 }
 
 // —— 轮次(续轮迁移,设计文档 plans/0006-phases-design.md M 节;轮次专用目录方案)——

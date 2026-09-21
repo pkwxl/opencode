@@ -12,7 +12,8 @@ import { describe, expect, test } from "bun:test"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
 import type { SessionChain } from "../src/chain"
-import { docShapeProblems, endsWithEof, EOF_MARK, eofScanExempt, MIN_DOC_CHARS, shapeCheckOn } from "../src/doccheck"
+import { docShapeProblems, endsWithEof, EOF_MARK, MIN_DOC_CHARS, shapeCheckOn } from "../src/doccheck"
+import { eofScanExempt } from "../src/document/roles"
 import { runSubtask } from "../src/execute"
 import { unitBaseline, unitChangedFiles } from "../src/git"
 import type { Opts } from "../src/opts"
@@ -475,5 +476,57 @@ describe("unitChangedFiles(D6 取数)", () => {
 
   test("空基线(非 git 环境/门禁关闭)返回空集", async () => {
     expect(await unitChangedFiles(join(tmpdir(), "nonexistent-dir"), [])).toEqual(new Set())
+  })
+})
+
+describe("runSubtask P1 prohibition scan (M2.3)", () => {
+  test("a process-document path added to a deliverable file: re-prompt, removed → ticked; a pre-existing one is not blamed", async () => {
+    const dir = await shapeRepo()
+    try {
+      // Pre-existing reference in a tracked file: outside the unit's scope.
+      await Bun.write(join(dir, "src/old.c"), "// legacy note: docs/T-000/report.md\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-q", "-m", "legacy")
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+          await Bun.write(join(dir, "src/a.c"), "// layout: see docs/T-001/S01/record.md\nint a;\n")
+          await Bun.write(join(dir, "src/old.c"), "// legacy note: docs/T-000/report.md\nint touched;\n")
+        },
+        async () => {
+          await Bun.write(join(dir, "src/a.c"), "// layout: a 64-entry ring, head at index 0\nint a;\n")
+        },
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(2)
+      const feedback = promptText(calls.prompts[1]!)
+      expect(feedback).toContain('src/a.c:1 references "docs/T-001/S01/record.md"')
+      expect(feedback).toContain("restate the needed content in place")
+      expect(feedback).not.toContain("src/old.c")
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the reference stays after the re-prompt → blocked, not ticked", async () => {
+    const dir = await shapeRepo()
+    try {
+      const { client } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+          await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n\nStatus is tracked in PLAN.md.\n")
+        },
+      ])
+      const plan = await load(join(dir, "PLAN.md"))
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
+      expect(result).toMatchObject({ type: "blocked" })
+      expect((result as { question: string }).question).toContain('README.md:5 references "PLAN.md"')
+      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
