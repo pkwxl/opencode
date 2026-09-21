@@ -752,6 +752,22 @@ here proposes.
    not. Under the recommended framing that carve-out is not needed, because (a)
    becomes a per-project `## governance` override rather than the built-in
    default.
+   **[ruled 2026-09-21 by the user: (a), refined — (c) and (b) rejected.]**
+   The markers (`AUTO-DECISION` / `AUTO-FIXME` / `AUTO-RESOLVE`, and the
+   `AUTO-TODO` idiom the phase-plan template mentions) are an important
+   *result* of the process and a key quality-assurance device; their place in
+   target code is justified because later development iterations are meant to
+   work them off, and they must stand **self-consistently** in the source. So
+   this is exactly the carve-out named above: process *markers* in target code
+   are legitimate, process *references* are not — a marker line states its
+   question/decision/reason in full and never points into `docs/T-…` or other
+   process documents (D12's restatement duty applies to the marker itself, and
+   D9's forbidden-shape check still covers it). Lifecycle = debt retired by
+   ordinary later iterations, not by a tool (so (b)'s stripper stays rejected).
+   Consequences: the four "or in a code comment" disjuncts stay; M2.1 moved the
+   decision catalog into `## governance` unchanged (package plans/0043); the
+   self-containment wording for markers is prompt-side P1 work and lands with
+   M2.2's `## governance` text.
 8. **F19: should process documents be detached at project close?** They are
    committed into the target repo today, and nothing marks them removable. Three
    shapes: leave them committed permanently (status quo); archive them to a

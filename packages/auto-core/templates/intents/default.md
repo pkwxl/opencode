@@ -23,6 +23,31 @@ check for yourself whether this subtask is genuinely complete
 
 once the whole task is complete, check for yourself whether it is genuinely complete
 
+### knowledge
+
+1. 最终状态优先: 只记录最终验证过的知识;过程中被推翻或被验收/终审否决的方案
+   不得记为当前方案,仅可作为明确标注「已否决」的通用教训;
+2. 去重: 同一知识点只出现一次,归入最贴切的章节;
+3. 不照抄会话对话、运行日志或中间推理过程——只留结论与锚点;
+4. 每条重要知识附至少一个可验证锚点(文件路径/API/设计文档/commit/测试/报告)。
+
+### prior-knowledge
+
+1. 最终状态优先: 只记录最终验证过的知识;过程中被推翻或被验收否决的方案不得
+   记为当前方案,仅可作为明确标注「已否决」的通用教训;
+2. 去重: 同一知识点只出现一次,归入最贴切的章节;已有蒸馏产物(见上方清单,
+   若提供)覆盖的知识点以一行引用代替摘抄,跨文档去重;
+3. 不照抄会话对话、运行日志或中间推理过程——只留结论与锚点;
+4. 每条重要知识附至少一个可验证锚点(文件路径/API/设计文档/commit/测试/报告)。
+
+### stuck-reflection
+
+Write these three things out in your reply before acting:
+1. what exactly you are trying to achieve;
+2. which approaches you have already tried, and at which step each one failed (quote the real error, do not go by impression);
+3. which previously untried approach you will use next, and why.
+Do not issue the same call again before you have written these out.
+
 ## phase duties
 
 ### a analysis
@@ -76,8 +101,65 @@ once the whole task is complete, check for yourself whether it is genuinely comp
 
 ## governance
 
+### decisions-unattended
+
+   A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
+   relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
+   a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
+     user's to make and you closed it on their behalf, so annotate it explicitly with an {{resolveFormat}} line;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — annotate it with an {{decisionFormat}} line.
+   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
+   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
+   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+
+### decisions-ask
+
+   for anything else, proceed by "who should have owned this call":
+   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
+     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
+     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. For these, ask
+     directly with the question tool instead of deciding in the user's place; when unsure, ask — the cost of one question is far smaller than the
+     cost of one wrong decision made in the user's name;
+   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
+     naming, file organisation, injection method, how tests are written) — decide it yourself, no record required.
+
+### wrapup-audit
+
+你自主识别到的其他代答决策(本应
+   由用户拍板、由你替他闭环的分歧点)一并列入,纯实现取舍不要混进这一节。
+
+### agents-maintenance
+
+AGENTS.md maintenance rules (this file is a workflow entry point, not a knowledge base):
+1. Stay concise: the whole file must not exceed 150 lines; do not record implementation details, long explanations, command output, or single-task knowledge.
+2. Route, don't duplicate: module-, phase-, or task-specific information goes into `docs/agents/<topic>.md`; this file keeps only a one-line routing entry (topic → path).
+3. Update, don't append: before adding anything new, check whether an existing rule or routing entry should be revised instead; retire stale content rather than accumulating historical notes.
+4. Only durable workflow knowledge belongs here: record only conventions that affect how most future tasks are carried out; temporary debugging state, one-off decisions, and conversation history do not belong here (log one-off decisions as an `AUTO-DECISION` entry in the relevant document instead — and when the call was one the user should have made, such as scope, externally visible behaviour, an interface contract or an acceptance criterion, and you closed it yourself because nobody was there to ask, mark it `AUTO-RESOLVE` rather than `AUTO-DECISION`).
+
 ## artifact spec
 
 ### subtask-output
 
 Artifact placement convention: if this item produces document/analysis/design content, write it into {{outputFile}} (a standalone file, title on the first line, not merged into another document); code artifacts go directly into the source tree.
+
+### context-digest
+
+in four sections:
+   ## Relevant files and key symbols (path + why it is relevant, one or two sentences)
+   ## Constraints and premises
+   ## Existing decisions and current state
+   ## Risks and unknowns
+
+### report-indexed
+
+索引式报告——逐子任务一行(序号 + 一句话结论 +
+   产物路径 docs/{{taskId}}/S<NN>/index.md 或代码位置),不复制或改写子任务产物的内容,只新增
+   整体结论与遗留问题两节,
+
+### report-solo
+
+产出摘要(改动了什么、关键决策与遗留事项),

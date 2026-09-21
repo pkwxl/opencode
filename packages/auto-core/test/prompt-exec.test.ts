@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Phase } from "../src/phases"
+import { renderAgentsBlock } from "../src/agents-block"
 import { usePromptLibrary } from "../src/template"
 import {
   decomposeTemplateName,
@@ -14,6 +15,8 @@ import {
   renderDryrun,
   renderFix,
   renderHandoffSteer,
+  renderKnowledge,
+  renderPriorKnowledge,
   renderStuckHint,
   renderSubtask,
   renderTestContinue,
@@ -766,5 +769,77 @@ describe("renderDryrun", () => {
     expect(text).toContain("只读探查")
     expect(text).toContain(".auto/dryrun.md")
     expect(text).toContain("不修改任何实现代码")
+  })
+})
+
+describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", () => {
+  const stuck = { kind: "repeat" as const, tool: "bash", count: 3, level: 2, input: "ls", detail: "x" }
+  const driverResolve = resolveItem("策略选 A 还是 B?")
+
+  function withPack(text: string, fn: () => void) {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), text)
+      useIntentPacks(dir)
+      fn()
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("built-in pack: every moved segment reaches its session", () => {
+    expect(renderDecompose(plan, task)).toContain("in four sections:")
+    const wrapup = renderWrapup(plan, task, { resolves: [driverResolve] })
+    expect(wrapup).toContain("索引式报告")
+    expect(wrapup).toContain("上面每一条都必须出现;你自主识别到的其他代答决策")
+    expect(renderWrapup(plan, task, { solo: true })).toContain("产出摘要(改动了什么、关键决策与遗留事项),\n   供后续会话")
+    expect(renderKnowledge({ file: "kb.md" })).toContain("## 质量约束(硬性要求)\n\n1. 最终状态优先")
+    expect(renderPriorKnowledge({ file: "kb.md" })).toContain("跨文档去重")
+    expect(renderStuckHint(stuck)).toContain("still going in circles. Write these three things out")
+    expect(renderStuckHint({ ...stuck, level: 1 })).not.toContain("Write these three things out")
+    expect(renderAgentsBlock()).toContain("AGENTS.md maintenance rules")
+  })
+
+  test("zero-intent baseline: an empty pack drops each segment cleanly, core protocol stays", () => {
+    withPack("# default\n", () => {
+      const decompose = renderDecompose(plan, task)
+      expect(decompose).not.toContain("four sections")
+      expect(decompose).toContain("docs/T-002/context.md\n   Keep it compact")
+      const wrapup = renderWrapup(plan, task, { resolves: [driverResolve] })
+      expect(wrapup).not.toContain("索引式报告")
+      expect(wrapup).toContain("docs/T-002/report.md:供后续会话")
+      expect(wrapup).toContain("上面每一条都必须出现。")
+      expect(renderWrapup(plan, task, { solo: true })).toContain("report.md:\n   供后续会话")
+      const knowledge = renderKnowledge({ file: "kb.md" })
+      expect(knowledge).not.toContain("质量约束")
+      expect(knowledge).toMatch(/`>>\n\n## 步骤/)
+      expect(renderPriorKnowledge({ file: "kb.md" })).not.toContain("质量约束")
+      const hint = renderStuckHint(stuck)
+      expect(hint).toContain("still going in circles.\n")
+      expect(hint).not.toContain("Write these three things out")
+      const block = renderAgentsBlock()
+      expect(block).not.toContain("maintenance rules")
+      expect(block).toContain("Summary principle")
+      // question-rule falls back to the core minimum: protocol + marker formats
+      const subtask = renderSubtask(plan, task, "编写迁移脚本的 schema 部分")
+      expect(subtask).not.toContain("The call should have been the user's")
+      expect(subtask).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
+      for (const text of [decompose, wrapup, knowledge, hint, subtask]) expect(text).not.toMatch(/\{\{|\}\}/)
+    })
+  })
+
+  test("a project pack replaces the governance catalog; marker formats stay core-owned", () => {
+    withPack(
+      "# default\n\n## governance\n\n### decisions-unattended\n\n   CUSTOM-CATALOG: mark user-owned calls with {{resolveFormat}}.\n\n### agents-maintenance\n\nCUSTOM-MAINT\n",
+      () => {
+        const subtask = renderSubtask(plan, task, "编写迁移脚本的 schema 部分")
+        expect(subtask).toContain("   CUSTOM-CATALOG: mark user-owned calls with `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)`.")
+        expect(subtask).not.toContain("A decision of your own must leave a record in the relevant document")
+        expect(renderAgentsBlock()).toContain("CUSTOM-MAINT")
+      },
+    )
   })
 })

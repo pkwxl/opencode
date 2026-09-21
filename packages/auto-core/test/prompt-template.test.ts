@@ -7,7 +7,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { renderAgentContract } from "../src/loop-preflight"
 import {
+  DECISION_FORMAT,
   modeCtx,
+  promptCtx,
+  RESOLVE_FORMAT,
   renderDecompose,
   renderDryrun,
   renderFinalTask,
@@ -49,7 +52,9 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     expect(consumers).not.toContain("wrapup.md")
   })
 
-  const fragment = (ask: boolean) => renderText("{{> question-rule}}", { ask })
+  // Rendered through the exit's context completion (M2.1): the ownership catalog
+  // and recording discipline come from the built-in pack's `## governance`.
+  const fragment = (ask: boolean) => renderText("{{> question-rule}}", promptCtx({ ask }))
 
   // 历史标记读取方模板: 它们要求会话汇总既有文档里 AUTO-DECISION 标记的决策,
   // 与"本次是否留痕"无关(历史标记在 git 里恒存),故 on 档下照常出现该字样。
@@ -78,6 +83,23 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     expect(on).not.toContain("AUTO-DECISION")
     expect(on).not.toContain("AUTO-RESOLVE")
     expect(on).not.toContain("do not call the question tool")
+  })
+
+  // M2.1 zero-intent baseline: with no `## governance` catalog, the partial's
+  // core fallback still carries the tool protocol and — off only — the two
+  // driver-scanned marker formats (tier-1), which must equal the formats the
+  // pack text receives as variables, so there is one wording of each.
+  test("zero-intent fallback (M2.1): governance hook absent keeps protocol + marker formats", () => {
+    const off = renderText("{{> question-rule}}", { ask: false })
+    expect(off).toContain("do not call the question tool")
+    expect(off).toContain(RESOLVE_FORMAT)
+    expect(off).toContain(DECISION_FORMAT)
+    expect(off).not.toContain("The call should have been the user's")
+    const on = renderText("{{> question-rule}}", { ask: true })
+    expect(on).toContain("ask with the question tool when the call should have been the user's")
+    expect(on).not.toContain("AUTO-")
+    expect(fragment(false)).toContain(RESOLVE_FORMAT)
+    expect(fragment(false)).toContain(DECISION_FORMAT)
   })
 
   test("两档结构不变式: 各自恰好一条编号 2 的约束项,首尾不引入空行", () => {

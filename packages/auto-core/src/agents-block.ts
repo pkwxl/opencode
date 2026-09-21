@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
+import { activeIntentText } from "./prompt"
 
 // AGENTS.md 的 opencode-auto 块: 单一标记块,内容 = 指针 + 验证原则(verify 开关)+
 // 测试执行原则(testByDriver 开关)+ 提交原则 + 摘要原则(非交互场景不产出会话末尾
@@ -7,6 +8,9 @@ import { join } from "node:path"
 // (\n\n 分隔),不走 template.ts 的 {{#if}} 引擎——标签独占一行吞掉整行换行的语义
 // 会在开关关闭时让相邻段落粘连、丢失分隔空行,数组拼接不依赖该语义,恒为一个
 // 空行分隔。
+// The maintenance rules paragraph is decision/knowledge governance (M2.1,
+// plans/0043): it comes from the active intent pack (`## governance` /
+// `### agents-maintenance`) and drops out when the pack lacks it.
 export const AGENTS_BLOCK_START = "<!-- opencode-auto:start -->"
 export const AGENTS_BLOCK_END = "<!-- opencode-auto:end -->"
 
@@ -27,12 +31,6 @@ const COMMIT_PRINCIPLE = `Commit principle: after a session ends, DRIVER perform
 
 const SUMMARY_PRINCIPLE = `Summary principle: do not produce a closing summary or wrap-up narration in your final chat turn when a session finishes. DRIVER is non-interactive and never reads chat text, and this system runs many unattended agent sessions back-to-back, so a spoken summary at the end of each one is pure wasted tokens with no reader. Anything worth keeping belongs in \`docs/\` files (or the task's report, where applicable) — once the required file writes are done, end the turn. Task descriptions and project conventions must not contain instructions that contradict this.`
 
-const MAINT_RULE = `AGENTS.md maintenance rules (this file is a workflow entry point, not a knowledge base):
-1. Stay concise: the whole file must not exceed 150 lines; do not record implementation details, long explanations, command output, or single-task knowledge.
-2. Route, don't duplicate: module-, phase-, or task-specific information goes into \`docs/agents/<topic>.md\`; this file keeps only a one-line routing entry (topic → path).
-3. Update, don't append: before adding anything new, check whether an existing rule or routing entry should be revised instead; retire stale content rather than accumulating historical notes.
-4. Only durable workflow knowledge belongs here: record only conventions that affect how most future tasks are carried out; temporary debugging state, one-off decisions, and conversation history do not belong here (log one-off decisions as an \`AUTO-DECISION\` entry in the relevant document instead — and when the call was one the user should have made, such as scope, externally visible behaviour, an interface contract or an acceptance criterion, and you closed it yourself because nobody was there to ask, mark it \`AUTO-RESOLVE\` rather than \`AUTO-DECISION\`).`
-
 const REFS_SPEC = `Reference and storage conventions (stable references; see the stable-refs design document for the full rationale):
 1. Storage: task documents live only under \`docs/T-NNN/\` (\`context\`/\`subtasks\`/\`report\`/\`audit\`/\`fix\`/\`handoff\`/\`testhandoff.md\`); subtask artifacts live only under \`docs/T-NNN/S<2-digit-seq>/\` (\`index.md\`, \`testhandoff.md\`); final-review artifacts live under \`docs/T-F<k>/\`; each round has one round directory \`docs/R-NN/\` (created at the start of the round, never moved afterward): the phase ledger \`phases.md\`, phase archives \`<letter>-<slug>/\`, phase handovers \`handovers/<letter>-<slug>.md\`, phase-level artifacts \`phase-docs/<letter>-<slug>/\`, migration knowledge \`migration-kb.md\`, and prior knowledge \`prior-kb.md\` all live inside the round directory. Once created, these paths are permanent — never move them, never rename them.
 2. References: references between documents, and references into code, are always written as paths relative to the target directory root (for example \`docs/T-003/S04/index.md\`, \`src/runner.ts:120\`, in backticks or as links), optionally with a \`:line\` anchor; the anchor may further carry an \`@<sha>\` version marker (for example \`src/runner.ts:120@abc1234\`, meaning that range is valid only for that historical revision and is exempt from line-number checking). Do not reference state files inside round directories (the \`phases.md\` ledger, or PLAN snapshots inside phase archives); differences across rounds are expressed through separate \`docs/R-NN/\` directories, not by moving or renaming directories.
@@ -45,7 +43,7 @@ export function renderAgentsBlock(opts: { verify?: boolean; testByDriver?: boole
     opts.testByDriver ? TEST_PRINCIPLE : undefined,
     COMMIT_PRINCIPLE,
     SUMMARY_PRINCIPLE,
-    MAINT_RULE,
+    activeIntentText("governance", "agents-maintenance"),
     REFS_SPEC,
   ].filter((p): p is string => Boolean(p))
   return `${AGENTS_BLOCK_START}\n${paragraphs.join("\n\n")}\n${AGENTS_BLOCK_END}`

@@ -24,27 +24,9 @@ You are carrying out one task of an implementation plan. This session only has t
 {{^ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
-   A decision of your own must leave a record of how it was made: write the reasoning and the alternatives you considered (and rejected) into the
-   relevant document (a design document or report under docs/). Classify each into one of two kinds by "who should have owned this call" —
-   a call touching architecture or code changes is annotated in the design document or in a code comment, everything else in the task report:
-   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
-     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
-     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. Such a call was the
-     user's to make and you closed it on their behalf, so annotate it explicitly with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line;
-   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
-     naming, file organisation, injection method, how tests are written) — annotate it with an `AUTO-DECISION: <decision> (<reason>)` line.
-   Example: "whether to close out the third duplicate implementation as well" changes the literal scope of the task, so it is AUTO-RESOLVE;
-   "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
-   Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
+{{#if decisionsUnattended}}{{decisionsUnattended}}{{/if}}{{^decisionsUnattended}}   A decision of your own must leave a record in the relevant document or code comment: a call that should have been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other call an `AUTO-DECISION: <decision> (<reason>)` line.{{/if}}
    Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.{{/if}}{{#if ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
-   for anything else, proceed by "who should have owned this call":
-   - The call should have been the user's: requirement intent and scope trade-offs (whether to do it, how far to go), changes to externally visible
-     behaviour or to interface contracts, the criteria for "what counts as done", factual confirmations (anomalous data, a missing environment, a
-     reality that contradicts the documents), and anything beyond or narrower than the literal scope of the task description. For these, ask
-     directly with the question tool instead of deciding in the user's place; when unsure, ask — the cost of one question is far smaller than the
-     cost of one wrong decision made in the user's name;
-   - The call was always yours: the choice of implementation means where no option changes user-visible behaviour (algorithm, internal structure,
-     naming, file organisation, injection method, how tests are written) — decide it yourself, no record required.
+{{#if decisionsAsk}}{{decisionsAsk}}{{/if}}{{^decisionsAsk}}   for anything else, ask with the question tool when the call should have been the user's, and decide it yourself when it was always yours.{{/if}}
    When nobody is at the keyboard your question is answered automatically; the DRIVER has recorded that proxy answer in full, so carry on according
    to the reply, and if the current stage is already finished, move straight on to the next one.
    Asking the same question again blocks the task and stops the run — do not rephrase and re-ask a question that has already been answered.{{/if}}

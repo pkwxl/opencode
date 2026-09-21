@@ -77,9 +77,22 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     expect(packSubsection(pack, "quality", "self-check-whole")).toBe("once the whole task is complete, check for yourself whether it is genuinely complete")
     expect(packSubsection(pack, "artifactSpec", "subtask-output")).toContain("Artifact placement convention")
     expect(pack.phaseDuties).toContain("Vertical thin slices first")
+    // M2.1: the understand/wrap-up/knowledge family — context.md layout and
+    // report forms (artifact spec), knowledge quality bars and the stuck-hint
+    // reflection (quality), question-rule's decision catalog, the wrap-up audit
+    // scope and the AGENTS.md maintenance rules (governance).
+    expect(packSubsection(pack, "artifactSpec", "context-digest")).toContain("## Risks and unknowns")
+    expect(packSubsection(pack, "artifactSpec", "report-indexed")).toContain("索引式报告")
+    expect(packSubsection(pack, "artifactSpec", "report-solo")).toContain("产出摘要")
+    expect(packSubsection(pack, "quality", "knowledge")).toContain("最终状态优先")
+    expect(packSubsection(pack, "quality", "prior-knowledge")).toContain("跨文档去重")
+    expect(packSubsection(pack, "quality", "stuck-reflection")).toContain("Write these three things out")
+    expect(packSubsection(pack, "governance", "decisions-unattended")).toContain("{{resolveFormat}}")
+    expect(packSubsection(pack, "governance", "decisions-ask")).toContain("instead of deciding in the user's place")
+    expect(packSubsection(pack, "governance", "wrapup-audit")).toContain("纯实现取舍")
+    expect(packSubsection(pack, "governance", "agents-maintenance")).toContain("AGENTS.md maintenance rules")
     // Sections with no migrated content yet stay absent (zero-intent baseline).
     expect(pack.acceptance).toBeUndefined()
-    expect(pack.governance).toBeUndefined()
   })
 
   test("a project file with a new name adds a pack; invalid file names are rejected", () => {

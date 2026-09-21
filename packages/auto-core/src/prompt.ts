@@ -67,8 +67,27 @@ type Opts = {
 // 透传 opts 会在新增模板时静默漏档,故在出口统一注入而非照搬 fine 的逐函数透传
 // (fine 只服务 decompose-<phase> 一族,透传面可控)。ctx 显式给出的 ask 优先,
 // 供单测直驱两档(镜像 src/step.ts:41 的 `opts.x ?? autoSwitches().x` 口径)。
+//
+// The same exit feeds question-rule's governance hooks (M2.1, plans/0043): the
+// "who should have owned this call" catalog and the recording discipline live
+// in the active pack (`## governance` / `### decisions-unattended` and
+// `### decisions-ask`), pre-rendered here for the branch ask selects. The
+// marker line formats stay core-owned (the driver scans for them, src/resolve.ts)
+// and reach the pack text as the resolveFormat/decisionFormat variables; the
+// partial keeps a literal zero-intent fallback so its tier-1 anchors hold.
+export const RESOLVE_FORMAT = "`AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)`"
+export const DECISION_FORMAT = "`AUTO-DECISION: <decision> (<reason>)`"
+
+// The exit's context completion, exported so tests that render the shared
+// partials directly (renderText/renderTemplate) see what every session sees.
+export function promptCtx(ctx: Ctx): Ctx {
+  const full: Ctx = { ask: autoSwitches().ask, resolveFormat: RESOLVE_FORMAT, decisionFormat: DECISION_FORMAT, ...ctx }
+  const key = full.ask ? "decisionsAsk" : "decisionsUnattended"
+  return { ...full, [key]: intentText("governance", full.ask ? "decisions-ask" : "decisions-unattended", full) }
+}
+
 function renderPrompt(name: string, ctx: Ctx): string {
-  return renderTemplate(name, { ask: autoSwitches().ask, ...ctx })
+  return renderTemplate(name, promptCtx(ctx))
 }
 
 // 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
@@ -181,6 +200,8 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
     ...ctx,
     decomposeRule: intentText("quality", "decompose", ctx),
     phaseDuties: duties && renderText(duties, ctx),
+    // context.md section layout (M2.1): `## artifact spec` / `### context-digest`.
+    contextDigest: intentText("artifactSpec", "context-digest", ctx),
   })
 }
 
@@ -289,11 +310,20 @@ export function subtaskOutputFile(task: Task, index: number): string {
 // 清单,注入后要求 report.md 单列「自动代答问题」一节——持久审计轨迹由此不再依赖会话
 // 自觉标注,driver 看见的那部分被强制写进 git。本层是同步纯函数(prompt.ts 只做数据
 // 组装),清单由调用点(runner 的两处收尾)先 resolvesOf 读台账再传入。
+// Intent injection (M2.1, plans/0043): the report's content form comes from
+// `## artifact spec` (`### report-indexed` for the subtask form, `### report-solo`
+// for the single-session form), and the audit's scope beyond the driver-listed
+// items (which session-identified proxy calls also belong in the section) from
+// `## governance` / `### wrapup-audit`. The driver-listed items and their
+// "every one must appear" demand stay core: they are the persistent audit trail.
 export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boolean; resolves?: ResolveItem[] } = {}): string {
+  const ctx = baseCtx(plan, task, opts)
   return renderPrompt("wrapup", {
-    ...baseCtx(plan, task, opts),
+    ...ctx,
     solo: Boolean(opts.solo),
     resolveList: resolveList(opts.resolves),
+    reportForm: intentText("artifactSpec", opts.solo ? "report-solo" : "report-indexed", ctx),
+    auditScope: intentText("governance", "wrapup-audit", ctx),
   })
 }
 
@@ -504,11 +534,10 @@ export function renderPhaseHandover(input: { phase: Phase; handover: string; nex
 // (本轮轮次目录 docs/R-NN/ 内),蒸馏出最终验证过的迁移知识文档(永久路径:
 // 新布局轮内 migration-kb.md,旧布局 docs/migration-kb/R<N>-…)。file 为输出路径
 // (相对目标目录);mode.exec 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
+// The quality hard constraints (M2.1) come from `## quality` / `### knowledge`.
 export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
-  return renderPrompt("knowledge", {
-    file: input.file,
-    ...modeCtx(input.mode),
-  })
+  const ctx = { file: input.file, ...modeCtx(input.mode) }
+  return renderPrompt("knowledge", { ...ctx, qualityRules: intentText("quality", "knowledge", ctx) })
 }
 
 // 前置知识提取会话(外壳的二次迁移编排,src/knowledge.ts extractPriorKnowledge):
@@ -520,14 +549,16 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
 // 原文(可空);distilled 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,
 // 非空时模板注入引用化条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的
 // 差分增量)。
+// The quality hard constraints (M2.1) come from `## quality` / `### prior-knowledge`.
 export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
   const distilled = input.distilled?.filter(Boolean) ?? []
-  return renderPrompt("prior-knowledge", {
+  const ctx = {
     file: input.file,
     brief: input.brief?.trim() || undefined,
     distilled: distilled.length ? distilled.map((path) => `- ${path}`).join("\n") : undefined,
     ...modeCtx(input.mode),
-  })
+  }
+  return renderPrompt("prior-knowledge", { ...ctx, qualityRules: intentText("quality", "prior-knowledge", ctx) })
 }
 
 // 参数推断会话(外壳的二次迁移编排): config.source/destDir 缺失时,依据前置知识
@@ -564,8 +595,10 @@ export function renderHandoffSteer(task: Task): string {
 // approach, 2 write the diagnosis before acting, 3 stop retrying and close out
 // (at most three per session). Injected by steer like the handover steer; the
 // two do not interfere.
+// The level-2 reflection discipline (M2.1) comes from `## quality` /
+// `### stuck-reflection`; the reminder framing stays core.
 export function renderStuckHint(hit: StuckHit): string {
-  return renderPrompt("stuck-hint", {
+  const ctx: Ctx = {
     tool: hit.tool,
     count: String(hit.count),
     level: String(hit.level),
@@ -575,7 +608,15 @@ export function renderStuckHint(hit: StuckHit): string {
     level1: hit.level === 1,
     level2: hit.level === 2,
     level3: hit.level >= 3,
-  })
+  }
+  return renderPrompt("stuck-hint", { ...ctx, reflection: hit.level === 2 ? intentText("quality", "stuck-reflection", ctx) : undefined })
+}
+
+// Raw (unrendered) subsection of the active intent pack, for consumers outside
+// the prompt templates — the AGENTS.md block's maintenance rules (M2.1,
+// `## governance` / `### agents-maintenance`).
+export function activeIntentText(section: IntentSection, key: string): string | undefined {
+  return packSubsection(activeIntentPack, section, key)
 }
 
 // --subtask off/ondemand: 单会话完成整个任务(不做子任务分解)。ondemand 额外附带

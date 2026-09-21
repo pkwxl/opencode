@@ -11,11 +11,7 @@ Current task (its full content is also in CURRENT.md):
 
 1. Understand the task background: read the relevant source and docs/ selectively around this task's goal (keep the total reading volume down,
    preferring the files named in the task body and the directly related modules over completeness); write what you understood into
-   docs/{{taskId}}/context.md, in four sections:
-   ## Relevant files and key symbols (path + why it is relevant, one or two sentences)
-   ## Constraints and premises
-   ## Existing decisions and current state
-   ## Risks and unknowns
+   docs/{{taskId}}/context.md{{#if contextDigest}}, {{contextDigest}}{{/if}}
    Keep it compact and searchable (aim for {{contextLines}} lines or fewer); if the file already exists and is still accurate
    (interruption recovery), revise it rather than rewriting it from scratch;
 2. Build the shared context: prefetch by reference the files/code that every subtask will need, into docs/{{taskId}}/shared.md — one line

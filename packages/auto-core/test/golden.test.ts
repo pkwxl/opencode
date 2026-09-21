@@ -12,6 +12,7 @@ import { loadIntents, packSubsection, resolveIntent } from "../src/intent/load"
 import { loadModes } from "../src/mode"
 import { parse } from "../src/plan"
 import {
+  promptCtx,
   renderContextBase,
   renderDecompose,
   renderDryrun,
@@ -116,12 +117,19 @@ describe("golden 渲染快照", () => {
     }
     const pack = resolveIntent(loadIntents())
     const rule = packSubsection(pack, "quality", "decompose")
+    // M2.1: context.md section layout (artifact spec / ### context-digest) and
+    // question-rule's governance hook (promptCtx, the render exit's completion).
+    const digest = packSubsection(pack, "artifactSpec", "context-digest")
     golden(
       "decompose-generic",
-      renderTemplate("decompose", {
-        ...genericCtx,
-        decomposeRule: rule && renderText(rule, genericCtx),
-      }),
+      renderTemplate(
+        "decompose",
+        promptCtx({
+          ...genericCtx,
+          decomposeRule: rule && renderText(rule, genericCtx),
+          contextDigest: digest && renderText(digest, genericCtx),
+        }),
+      ),
     )
   })
 

@@ -18,8 +18,9 @@ import { autoSwitches, type Switches } from "./switches"
 // 给 note。受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省
 // off 静默空转,refs 恒空、不给引用相关 note)。
 
-// AGENTS.md 维护规则(见 agents-block.ts MAINT_RULE)第 1 条的行数上限;超限由
-// check 输出 note 提示精简。
+// Line cap from rule 1 of the AGENTS.md maintenance rules (built-in intent pack
+// `## governance` / `### agents-maintenance`); over the cap, check emits a note
+// asking for trimming.
 const AGENTS_LINE_LIMIT = 150
 
 // 一处违背描述: 文件、行号、原文(PLAN.md 附任务 ID)。
