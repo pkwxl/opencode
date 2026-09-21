@@ -6,6 +6,14 @@ only; nothing here is implemented yet. The four open-question-15 sub-items MP.1
 depends on were ruled by the user on 2026-09-21 (§1); everything else is a
 proposal for review.
 
+> **Status (2026-09-21): partly superseded by `0047-unit-layout-design.md`.**
+> PLAN.md is retired there, so D1's carrier (PLAN.md task fields) is replaced
+> by the unit `todo.md` field block (0047 §7). D4 (checks) and D7 (dependency
+> order) are implemented generically in root M3.1/M3.5, and D3 carries over as
+> 0047 G3. S1 is deferred and handed to M3. D8–D12 (`--parallel`,
+> `--max-sessions`, the `parallelism` intent section, the planning-template
+> block) remain MP.1's scope, now scheduled after M3.
+
 ## 1. Rulings (root open question 15, 2026-09-21)
 
 | # | Question (0036 §11) | Ruling |
@@ -86,7 +94,7 @@ existing project's behaviour does not change.
 
 ## 5. Steps
 
-- [ ] S1 `plan.ts`: parse `depends`/`touches` (D1, D3), `planProblems` (D4), `next(plan, { deps })` (D7); unit tests (grammar, each error class, cycle path text, dependency order, `blocked` still selectable, `deps: false` identical to today).
+- [ ] ~~S1~~ (handed to root M3.1/M3.5 via 0047) `plan.ts`: parse `depends`/`touches` (D1, D3), `planProblems` (D4), `next(plan, { deps })` (D7); unit tests (grammar, each error class, cycle path text, dependency order, `blocked` still selectable, `deps: false` identical to today).
 - [ ] S2 Config + shell: optional `parallel` in `ProjectConfig` with validation (D8); `--parallel` on `init`, usage error on `run`; `--max-sessions` on `run` with the D9 rules; help text; banner line. Tests in both packages.
 - [ ] S3 Intent: `parallelism` section (types + heading map + `default.md` text) (D10); interface-amendment note in the types header (0031 D4).
 - [ ] S4 Templates: guarded block in `phase-plan.md` and `implement-plan.md` (D11); `renderPhasePlan` / `renderImplementPlan` take the level. New goldens for one planning render per template at a level above `none`; existing goldens unchanged.
