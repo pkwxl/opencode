@@ -86,7 +86,7 @@ it by that permanent path.
 
 Constraints:
 1. Understanding and decomposition only: modify no implementation code, and do not carry out the execution-time instructions in the task body
-   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks, the verified field); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —

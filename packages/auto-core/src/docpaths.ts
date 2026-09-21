@@ -16,7 +16,7 @@ import { basename, dirname, join } from "node:path"
 
 // 任务文档角色(R4: 角色文件名固定);index(子任务产物)只经 subtaskDoc 构造。
 // shared 为 M1.0 合并理解与分解会话的公共上下文引用索引(plans/0030 D3)。
-export type TaskRole = "context" | "shared" | "subtasks" | "report" | "audit" | "fix" | "handoff" | "testhandoff"
+export type TaskRole = "context" | "shared" | "subtasks" | "report" | "handoff" | "testhandoff"
 
 // 子任务序号两位零填充(S2 → S02),三位自然进位(与既有 padStart(2,"0") 口径一致)。
 const pad2 = (k: number) => String(k).padStart(2, "0")
@@ -44,16 +44,6 @@ export function subtaskDir(id: string, k: number): string {
 // todo/done 无旧布局形态(新协议),不进入 resolveSubtaskDoc 的读回落。
 export function subtaskDoc(id: string, k: number, role: "index" | "testhandoff" | "todo" | "done"): string {
   return join(subtaskDir(id, k), `${role}.md`)
-}
-
-// docs/T-F1(终审产物按产出任务锚定,各终审任务锚定自己的 docs/T-F<k>/,P1-D1)
-export function finalDir(index: number): string {
-  return join("docs", `T-F${index}`)
-}
-
-// docs/T-F1/audit-r1.md
-export function finalDoc(index: number, name: string): string {
-  return join(finalDir(index), name)
 }
 
 // —— 永久知识文档路径(轮次专用目录 docs/R-NN,轮首即建、落盘即永久)——

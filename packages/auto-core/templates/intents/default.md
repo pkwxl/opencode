@@ -25,7 +25,7 @@ once the whole task is complete, check for yourself whether it is genuinely comp
 
 ### knowledge
 
-1. 最终状态优先: 只记录最终验证过的知识;过程中被推翻或被验收/终审否决的方案
+1. 最终状态优先: 只记录最终验证过的知识;过程中被推翻或被验收否决的方案
    不得记为当前方案,仅可作为明确标注「已否决」的通用教训;
 2. 去重: 同一知识点只出现一次,归入最贴切的章节;
 3. 不照抄会话对话、运行日志或中间推理过程——只留结论与锚点;
@@ -89,7 +89,7 @@ Do not issue the same call again before you have written these out.
    - Split by acceptance dimension (functional conformance, documentation completeness, environment and runtime, regression and the like),
      one item per dimension;
    - Each item produces one verification record (how it was verified, the evidence, the conclusion), written to its own file under docs/;
-   - Verify and record only, do not fix anything (gaps go through the existing final-review loop);
+   - Verify and record only, do not fix anything (a gap is reported through the task report's result line — `Result: FAIL` stops the run for a person to plan the fix);
 
 ### k knowledge extraction
 
@@ -98,6 +98,14 @@ Do not issue the same call again before you have written these out.
    - Each item produces one standalone document that later tasks can reference directly;
 
 ## acceptance
+
+### result-line
+
+Write it when this task's description asks you to check, test, validate or accept work (an acceptance task), and whenever
+   you found that the task's goal was not met. `Result: PASS` means every check the task asked for was actually run or observed
+   and passed, with the evidence written in this report; `Result: FAIL` means a required check failed, could not be run, or the
+   goal is not met — say why in one line. Never write PASS for a check you did not run or observe. A task that is not an
+   acceptance task and met its goal may omit the line.
 
 ## governance
 

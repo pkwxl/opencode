@@ -111,7 +111,7 @@ export type ForkBaseInfo = { id: string; used: number | undefined }
 
 // resume.Phase → 会话角色(模型路由的细键,见 plans/0017-model-routing-design.md B.5/C.1)。
 // 执行链各阶段映射同名角色(decompose 为 M1.0 合并理解与分解会话的角色,plans/0030 D12);
-// subtasks 取单数 subtask;verify/review 按 stage 细分;
+// subtasks 取单数 subtask;closeout 无会话(落 bypass);
 // step 变体的英文 slug 即 StepKind(phase-plan / phase-handover)。phase 缺省时返回
 // undefined——由 roleOf 落 bypass(裸链与无 phase 的旁路会话)。
 export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
@@ -125,20 +125,8 @@ export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
       return "subtask"
     case "wrapup":
       return "wrapup"
-    case "verify":
-      return phase.stage === "generate"
-        ? "verify-generate"
-        : phase.stage === "exec"
-          ? "verify-exec"
-          : phase.stage === "judge"
-            ? "verify-judge"
-            : "verify-fix"
-    case "review":
-      return phase.stage === "audit"
-        ? "review-audit"
-        : phase.stage === "planfix"
-          ? "review-planfix"
-          : "review-fixrun"
+    case "closeout":
+      return undefined
     case "step":
       return phase.step === "phase-plan" ? "phase-plan" : "phase-handover"
   }
@@ -217,7 +205,6 @@ export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns 
 export const REUSE_BELOW = 50
 
 // 会话复用的间隔上限(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效): 距上一会话结束
-// 超过该值即视为上下文陈旧(driver 侧工作如 verify 脚本执行、判定/审核会话可能
-// 耗时很久),不复用、开新会话。
+// 超过该值即视为上下文陈旧(driver 侧工作如测试脚本执行可能耗时很久),不复用、开新会话。
 export const REUSE_IDLE_MS = 5 * 60 * 1000
 export const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000

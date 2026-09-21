@@ -91,8 +91,7 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     expect(packSubsection(pack, "governance", "decisions-ask")).toContain("instead of deciding in the user's place")
     expect(packSubsection(pack, "governance", "wrapup-audit")).toContain("纯实现取舍")
     expect(packSubsection(pack, "governance", "agents-maintenance")).toContain("AGENTS.md maintenance rules")
-    // Sections with no migrated content yet stay absent (zero-intent baseline).
-    expect(pack.acceptance).toBeUndefined()
+    expect(packSubsection(pack, "acceptance", "result-line")).toContain("Never write PASS for a check you did not run or observe")
   })
 
   test("a project file with a new name adds a pack; invalid file names are rejected", () => {

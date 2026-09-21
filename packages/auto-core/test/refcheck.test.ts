@@ -6,12 +6,10 @@ import {
   activeDocs,
   autoCorrectRefs,
   extractRefs,
-  formatRefGap,
   gitAvailable,
   renamePairs,
   rewriteRefs,
   scanRefs,
-  taskRefFindings,
   validateRefs,
   recordOnce,
   renameHistory,
@@ -365,20 +363,10 @@ describe("activeDocs / validateRefs / scanRefs", () => {
     }
   })
 
-  test("gitAvailable: 非 git 目录 false;taskRefFindings: 范围限定 docs/T-<id>/**,formatRefGap 组装差距文案", async () => {
+  test("gitAvailable: 非 git 目录 false", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
     try {
       expect(await gitAvailable(dir)).toBe(false)
-      await Bun.write(join(dir, "docs/T-001/report.md"), "失效 `docs/gone.md`。")
-      await Bun.write(join(dir, "docs/T-002/report.md"), "同样失效 `docs/gone.md`。")
-      const findings = await taskRefFindings(dir, "T-001")
-      expect(findings).toHaveLength(1)
-      expect(findings[0]).toMatchObject({ file: "docs/T-001/report.md", path: "docs/gone.md", problem: "missing" })
-      const gap = formatRefGap(findings)!
-      expect(gap).toContain("任务产物文档存在失效引用")
-      expect(gap).toContain("- docs/T-001/report.md:1 → docs/gone.md(路径不存在)")
-      expect(gap).toContain("修复要求")
-      expect(formatRefGap([])).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

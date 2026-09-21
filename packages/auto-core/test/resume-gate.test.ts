@@ -12,8 +12,6 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
     items: [{ text: "第一项", done: true }, { text: "第二项", done: false }, { text: "第三项", done: false }],
     subtasksFileItems: 0,
     wrapup: true,
-    verify: true,
-    review: true,
     ...over,
   })
 
@@ -46,17 +44,8 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
     expect(unitReruns({ kind: "wrapup" }, ctx({ items: [], wrapup: false }))).toBe(false)
   })
 
-  test("verify/review: active 记录只会是链上修复会话;旁路阶段与开关关闭均不复用", () => {
-    const fix = { kind: "verify", stage: "fix", round: 1, rechecks: 0, replaced: false } as const
-    expect(unitReruns(fix, ctx())).toBe(true)
-    expect(unitReruns(fix, ctx({ verify: false }))).toBe(false)
-    expect(unitReruns({ kind: "verify", stage: "judge", round: 1, rechecks: 0, replaced: false }, ctx())).toBe(false)
-    const fixrun = { kind: "review", round: 1, stage: "fixrun", index: 2 } as const
-    expect(unitReruns(fixrun, ctx())).toBe(true)
-    expect(unitReruns(fixrun, ctx({ review: false }))).toBe(false)
-    expect(unitReruns({ kind: "review", round: 1, stage: "fixrun", index: 1 }, ctx())).toBe(false)
-    expect(unitReruns({ kind: "review", round: 1, stage: "fixrun" }, ctx())).toBe(false) // 老记录无序号
-    expect(unitReruns({ kind: "review", round: 1, stage: "audit" }, ctx())).toBe(false) // 旁路会话重跑恒新建
+  test("closeout: 结论行检查与完成标记由 driver 承担,没有可复用的会话", () => {
+    expect(unitReruns({ kind: "closeout" }, ctx({ items: [{ text: "唯一项", done: true }] }))).toBe(false)
   })
 
   test("无阶段(旧版 session.json)无法判定归属 → 不复用;step 记录不归本门禁", () => {

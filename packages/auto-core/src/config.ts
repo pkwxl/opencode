@@ -1,5 +1,5 @@
 // 项目配置层(设计文档 plans/0004-init-config-agents-design.md §A): 宪法级选项——
-// 决定会话被如何告知、验收与提交语义如何运作的项目属性——在 init 固化到
+// 决定会话被如何告知、提交语义如何运作的项目属性——在 init 固化到
 // .opencode/auto/config.json,版本化、随仓库共享、人工可编辑;未知键忽略
 // (前向兼容)。run 只控制本次执行,不再接受对应选项。旧版 .auto/config.json
 // (仅 mode)只在新文件缺失时回落读取,新文件一经写出即不再读取;它不会被 run
@@ -18,8 +18,7 @@ export type ProjectConfig = {
   // 千 tokens(与 CLI 单位一致;run 侧 ×1000 注入 Opts)。
   contextLimit: number
   subtask: SubtaskMode
-  verify: boolean
-  // 分钟,1..120。driver 执行脚本的通用看门狗(verify 与 test 脚本共用)。
+  // 分钟,1..120。driver 执行脚本(--test-by-driver 的 test 脚本)的通用看门狗。
   idleTime: number
   // 分钟,0 = 不设,1..1440。
   idleMax: number
@@ -27,7 +26,7 @@ export type ProjectConfig = {
   // 条件,读到 commit: false 的存量配置一律严格失败(见 validateProjectConfig);
   // 字段本身与代码侧的 opts.commit 门禁暂留,清理另立任务。
   commit: boolean
-  // --test-by-driver: 测试/编译/构建等命令的执行权收归 driver(与 verify 正交)。
+  // --test-by-driver: 测试/编译/构建等命令的执行权收归 driver。
   // 启用时执行类会话不直接运行这类命令,改为把命令写成脚本放 test/ 目录、把
   // 脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落单文件
   // 后把退出码与输出文件反馈回会话。
@@ -61,7 +60,6 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   agent: "auto",
   contextLimit: 64,
   subtask: "auto",
-  verify: false,
   idleTime: 10,
   idleMax: 0,
   commit: true,
@@ -126,7 +124,7 @@ async function readLegacyMode(dir: string): Promise<string | undefined> {
 export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "unset"}`
   return (
-    `mode ${config.mode} · agent ${config.agent} · subtask ${config.subtask} · verify ${config.verify ? "on" : "off"}` +
+    `mode ${config.mode} · agent ${config.agent} · subtask ${config.subtask}` +
     ` · watchdog ${watchdog} · commit ${config.commit ? "on" : "off"}` +
     (config.testByDriver ? ` · test-by-driver on${config.handoverTest ? "(handover)" : ""}` : "") +
     (config.autoNumber ? " · auto-number on" : "") +
@@ -161,6 +159,14 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (!commit) {
     throw new Error(`${CONFIG_FILE} commit: false is retired (unified commit is a completion condition, see plans/0021-commit-boundary-design.md): remove the key or set it to true`)
   }
+  // verify 已退役(D13,2026-09-21,plans/0044 D2): 任务级验收改为规划出的验收任务
+  // (v 阶段)。verify: true 的存量配置严格失败——该项目要求的验收已不再运行,静默
+  // 忽略会掩盖这一点;false(init 历来写入的值)与其余取值按未知键忽略。
+  if (record.verify === true) {
+    throw new Error(
+      `${CONFIG_FILE} verify is retired (task-level acceptance was removed; plan acceptance work as tasks or use the v phase): remove the key`,
+    )
+  }
   const testByDriver = booleanOf("testByDriver", pick("testByDriver"))
   const handoverTest = booleanOf("handoverTest", pick("handoverTest"))
   if (handoverTest && !testByDriver) {
@@ -171,13 +177,13 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     agent: stringOf("agent", pick("agent")),
     contextLimit,
     subtask: subtaskOf(pick("subtask")),
-    verify: booleanOf("verify", pick("verify")),
     testByDriver,
     handoverTest,
     autoNumber: booleanOf("autoNumber", pick("autoNumber")),
     wrapup: booleanOf("wrapup", pick("wrapup")),
-    // 看门狗键由 verifyIdle/verifyMax 更名而来(现同时控制 verify 与 test 脚本
-    // 执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init 自然固化新键。
+    // 看门狗键由 verifyIdle/verifyMax 更名而来(旧名沿用自已退役的 verify 脚本,
+    // 现控制 test 脚本执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init
+    // 自然固化新键。
     idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "minutes"),
     idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "minutes, 0 = unset"),
     commit,

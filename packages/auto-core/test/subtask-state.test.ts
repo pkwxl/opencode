@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { effectiveDone, renameTodoToDone, scanSubtaskStates, writeInjectedTodo } from "../src/subtask-state"
+import { effectiveDone, renameTodoToDone, scanSubtaskStates } from "../src/subtask-state"
 
 let dir: string
 
@@ -109,24 +109,5 @@ describe("renameTodoToDone", () => {
   test("协议未激活(无 todo.md): 静默跳过不报错", async () => {
     await renameTodoToDone(dir, "T-001", 1)
     expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).exists()).toBe(false)
-  })
-})
-
-describe("writeInjectedTodo", () => {
-  test("目录不存在时先创建,写定范围声明与产出清单两节", async () => {
-    await writeInjectedTodo(dir, "T-001", 3, "子任务丙 产出: docs/T-001/S03/index.md")
-    const text = await Bun.file(join(dir, "docs/T-001/S03/todo.md")).text()
-    expect(text).toContain("# T-001 S03: 子任务丙 产出: docs/T-001/S03/index.md")
-    expect(text).toContain("## 范围声明")
-    expect(text).toContain("## 产出清单")
-  })
-
-  test("todo 或 done 已存在(双轨重复写/已完成): 静默跳过不覆盖", async () => {
-    await put("docs/T-001/S01/todo.md", "既有\n")
-    await writeInjectedTodo(dir, "T-001", 1, "子任务甲")
-    expect(await Bun.file(join(dir, "docs/T-001/S01/todo.md")).text()).toBe("既有\n")
-    await put("docs/T-001/S02/done.md", "完成\n")
-    await writeInjectedTodo(dir, "T-001", 2, "子任务乙")
-    expect(await Bun.file(join(dir, "docs/T-001/S02/todo.md")).exists()).toBe(false)
   })
 })

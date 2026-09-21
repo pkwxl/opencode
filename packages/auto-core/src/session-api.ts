@@ -160,7 +160,7 @@ export function zeroUsage(): Usage {
 }
 
 // 会话进度改名: 会话标题与提交标题共用同一短标签方案(`T-NNN <label> <标题/子任务>`,
-// label ∈ decompose/S<n>/exec/wrapup/fix<n>/judge/script/review/final/planfix/pending/
+// label ∈ decompose/S<n>/exec/wrapup/pending/
 // blocked/done 等),会话结束与任务终态时把链上会话改名为最新标签,标题前缀即任务
 // 进度;改名失败仅记录明细,不影响流程。
 export async function renameSession(client: AgentClient, chain: SessionChain, subject: string): Promise<void> {
@@ -218,7 +218,7 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
 // 把非文本 part 转成一行可读输出(始终经 vlog 交给 log 层决定去留: --verbose 上
 // 终端并记录,外壳画像 auditLog 时写入日志文件);返回 undefined 表示该 part 尚无
 // 终态内容可输出(后续更新事件会再触发)。工具输出与推理原文较长,
-// 截断到与 verify 输出相同的 2000 字符上限。display-only pieces arrive as
+// 截断到 2000 字符上限。display-only pieces arrive as
 // notes already rendered by the adapter (0037 D6); the retry line is watch's
 // (retry signals are events, not parts).
 export function describePart(part: AgentPart): string | undefined {

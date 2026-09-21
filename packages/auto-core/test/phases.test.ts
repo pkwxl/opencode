@@ -246,14 +246,11 @@ describe("formatPhases(阶段进度行)", () => {
 })
 
 describe("阶段空模板(renderPlanScaffold)", () => {
-  test("不含任何任务(routePhase 据此推导 plan 路由),verify 条件渲染", () => {
-    for (const verify of [true, false]) {
-      const text = renderPlanScaffold(verify)
-      expect(parse("PLAN.md", text).tasks).toEqual([])
-      expect(text).not.toMatch(/\{\{|\}\}/)
-    }
-    expect(renderPlanScaffold(true)).toContain("verify 字段")
-    expect(renderPlanScaffold(false)).not.toContain("verify")
+  test("不含任何任务(routePhase 据此推导 plan 路由),不含 verify 描述", () => {
+    const text = renderPlanScaffold()
+    expect(parse("PLAN.md", text).tasks).toEqual([])
+    expect(text).not.toMatch(/\{\{|\}\}/)
+    expect(text).not.toContain("verify")
   })
 })
 
@@ -417,7 +414,7 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     const dir = tempDir()
     try {
       writeFileSync(join(dir, "AGENTS.md"), "# AGENTS\n\n工作流入口\n")
-      const result = await establishRound(dir, { verify: true })
+      const result = await establishRound(dir)
       expect(result).toEqual({ round: 1, root: roundDir(1), linked: true })
       // 轮内 PLAN.md 为空模板(无任务),根 PLAN.md 是指向它的相对符号链接
       expect(parse("PLAN.md", await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).tasks).toEqual([])

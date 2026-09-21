@@ -1,7 +1,7 @@
 // 旁路会话"必须产出文件"的通用骨架(requireArtifact): 下发 → 采集产物 → 缺失
 // 带反馈重试一次 → 仍缺失按隐性阻塞停机;兼管阶段级旁路步骤的恢复点续跑
-// (spec.step)与独立隐藏任务单元的提交边界(spec.unitStart)。被验收机具
-// (review 层)与 final/implement/numbering/knowledge/loop 消费,单独成文件使
+// (spec.step)与独立隐藏任务单元的提交边界(spec.unitStart)。被
+// implement/numbering/knowledge/loop 消费,单独成文件使
 // 它们不必拉进整个 runner。位于 session 之上;**不得反向 import runner**。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S9,纯搬运)。
 
@@ -19,11 +19,9 @@ import { autoSwitches, type ModelRole, type Switches } from "./switches"
 import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // “旁路会话必须产出文件”的通用骨架(设计文档 A.4): 会话结束但产物缺失或无效时
-// 带反馈重试一次,仍失败按隐性阻塞停机(人工检查后重新运行续跑)。脚本生成、
-// 判定、质量审核、修复规划与终审任务生成(src/final.ts)会话共用;collect 返回
-// undefined 表示该次会话未产出有效产物。spec.commit 声明该类会话的统一提交信息
-// (会话结束即提交;判定会话的 PLAN.md 越权还原发生在提交之后时,还原差异由
-// 下一次提交清扫,历史中保留越权记录本身亦是审计事实)。
+// 带反馈重试一次,仍失败按隐性阻塞停机(人工检查后重新运行续跑)。阶段规划、
+// 交接蒸馏、知识提取等旁路会话共用;collect 返回 undefined 表示该次会话未产出
+// 有效产物。spec.commit 声明该类会话的统一提交信息(会话结束即提交)。
 //
 // spec.step(阶段级旁路步骤,plans/0018-session-resume-precedence-design.md): 仅阶段
 // 规划/交接蒸馏会话声明。有值时:① 会话链携带 step 阶段,attempt 在提示词下发
@@ -34,19 +32,17 @@ import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictR
 // 不删,避免"产物已校验但后处理(编号推进/台账/提交)未完成"时被 kill 丢失步骤认领。
 //
 // spec.unitStart(plans/0021-commit-boundary-design.md P2): 独立隐藏任务单元声明(阶段规划/
-// 交接蒸馏/知识提取/前置知识/编号恢复/终审任务生成)。有值时: ① 入口经 beginUnit
+// 交接蒸馏/知识提取/前置知识/编号恢复)。有值时: ① 入口经 beginUnit
 // 做启动 clean 门禁并记 SHA 基线(恢复复用原会话时豁免 clean——脏区是本单元自身
 // 产物现场——但仍记基线);② spec.commit 失败 → blocked(不开反馈重试: git 故障
-// 重开会话无意义),提交后做单元收口校验(提交区间须全为 driver 提交)。任务内部的
-// 验收机具会话(judge/review/planfix/脚本生成)不声明——它们运行在任务单元内层,
-// 提交义务由 afterSession 门禁覆盖。
+// 重开会话无意义),提交后做单元收口校验(提交区间须全为 driver 提交)。
 export async function requireArtifact<T>(
   client: AgentClient,
   task: Task,
   promptText: string,
   opts: Opts,
   spec: {
-    // 会话类型,用于日志与阻塞信息(如“审核”、“脚本生成”)。
+    // 会话类型,用于日志与阻塞信息(如“收尾”、“阶段规划”)。
     kind: string
     // 产物描述(如 `有效判定文件 ${VERDICT_FILE}`)。
     artifact: string
@@ -66,7 +62,7 @@ export async function requireArtifact<T>(
     // 恢复点与会话续跑(见函数头注释)。
     step?: { step: StepKind; letter: PhaseLetter }
     // 会话角色(模型路由细键,plans/0017-model-routing-design.md C.1):旁路一次性会话
-    // 显式声明(如 verify-judge / review-audit / knowledge);缺省 undefined →
+    // 显式声明(如 knowledge / number-recovery);缺省 undefined →
     // roleOf 落 bypass。带 spec.step 的阶段步骤会话无需声明(roleOf 由 step 变体推导)。
     role?: ModelRole
   },

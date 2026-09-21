@@ -2,7 +2,7 @@
 // 代码的路径引用(反引号 span 与 md 链接),rewriteRefs 做旧→新路径的机械改写
 // (提交前 auto-correct 与 fix-refs 手动脚本共用本原语);P4 补齐 validateRefs
 // (存在性 + 段边界后缀唯一匹配消解 + 行号上限)、renamePairs(git rename 配对)、
-// 活文档枚举与 scanRefs 全量扫描,供 check 子命令与 verify 门禁消费;
+// 活文档枚举与 scanRefs 全量扫描,供 check 子命令消费;
 // autoCorrectRefs 另维护 .auto/invalid-refs.md 失效清单,仅对新出现的失效引用输出
 // ⚠ 日志;refcheck-scope P2 补齐 renameHistory(git 历史 rename 地图)与缺失
 // 恢复(失效确认在先、恢复在后: missing finding 的目标在历史中曾存在且链式解析
@@ -603,8 +603,7 @@ async function recordInvalidRefs(dir: string, findings: RefFinding[]): Promise<v
 // (refcheck-scope P3: 改动文件的行号锚不一致就追加 @<sha> 版本标记,改写后
 // 再复扫——带标记的历史快照引用豁免行号上限校验,不再进失效清单)→ 记录失效
 // 清单 .auto/invalid-refs.md(只登记未恢复的失效引用;键已收录的不再 ⚠,仅对
-// 新出现的失效引用输出警告日志);verify 启用时任务产物文档(docs/T-NNN/**)的
-// 失效引用另由 verifyTask 门禁拦截进修复轮,未启用时即止于本日志(宽松契约)。
+// 新出现的失效引用输出警告日志),止于本日志(宽松契约)。
 // 返回复扫 findings(恢复与再确认后)。
 export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
   const pairs = await renamePairs(dir)
@@ -634,26 +633,4 @@ export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
   }
   await recordInvalidRefs(dir, findings)
   return findings
-}
-
-// —— P4: verify 门禁的任务产物文档预扫(§3.3 第三层) ——
-// 任务产物文档范围 = docs/T-<id>/**(终审任务 T-F<k> 同法);verifyTask 在判定
-// 会话前调用,findings 非空 = 确定性差距,直接进修复轮、不消耗判定会话。
-export async function taskRefFindings(dir: string, id: string): Promise<RefFinding[]> {
-  const docs: string[] = []
-  for await (const file of new Bun.Glob(join("docs", id, "**", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
-    docs.push(file.split(sep).join("/"))
-  }
-  return docs.length ? await scanRefs(dir, docs) : []
-}
-
-// 预扫 findings → 修复轮差距文案(纯函数,供单测)。
-export function formatRefGap(findings: RefFinding[]): string | undefined {
-  if (!findings.length) return undefined
-  const lines = findings.map((finding) => `- ${finding.file}:${finding.line} → ${finding.path}(${problemLabel(finding.problem)}): ${finding.text}`)
-  return [
-    "任务产物文档存在失效引用(driver 确定性预扫,引用门禁):",
-    ...lines,
-    "修复要求: 把失效引用更新为现行路径(目标目录根相对路径,docs/ 文档用 docs/T-NNN/… 永久路径);描述已删除/已归档/历史状态的引用行,在行内标注「已删除」「已归档」或「历史」即豁免。",
-  ].join("\n")
 }

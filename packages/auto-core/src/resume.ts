@@ -13,31 +13,16 @@ import type { UnitBaseline } from "./git"
 // - 优雅退出(阻塞/回退 pending)由 driver 在退出前写好总结(CURRENT.md 中断备注
 //   + active=false 的记录),恢复时开新会话凭总结继续,不复用旧会话——人工介入
 //   可能耗时数小时且会改动环境,旧会话上下文已不可信;
-// - 记录同时携带阶段(phase): 恢复时按阶段重入流水线(verify 已执行的脚本运行
-//   记录直接交判定会话,不重跑;修复轮中断凭持久化的差距文本续跑修复;off/ondemand
-//   已过执行阶段不再重跑整任务会话等)。
+// - 记录同时携带阶段(phase): 恢复时按阶段重入流水线(off/ondemand 已过执行阶段
+//   不再重跑整任务会话、closeout 跳过收尾等)。
 // 记录在提示词下发成功时即写(认领在跑的会话——回合进行中被 kill 也不丢),回合
 // 结束后按结果刷新;可重试的会话错误把记录还原为下发前快照(被弃副本不顶替真实
 // 恢复点,见 plans/0015-session-error-retry-plan.md 第 4 点与 plans/0018-session-resume-precedence-design.md)。
 // 任务完成即删除记录。除执行链会话外,阶段级旁路步骤(phase-plan/phase-handover,
 // phase.kind = "step")也写记录: driver 收口(产物校验+提交+后处理)前保持 active,
 // 使中断后会话恢复优先于"凭 AI 写的文件推导路由"(后者会把未收口的规划/交接会话
-// 静默跳过)。无阶段的一次性旁路会话(判定/审核/脚本生成/修复规划/dryrun/fork 基点)
-// 仍不写记录,避免污染恢复记忆。
-
-// verify 阶段持久化的脚本运行记录(结构兼容 prompt.VerifyRun):脚本已由 driver
-// 执行完毕时随阶段保存,恢复时跳过执行直接进入判定会话(脚本可能很长)。
-type RunRecord = {
-  script: string
-  code: number
-  ms: number
-  timedOut: boolean
-  timeoutReason?: "idle" | "max"
-  out: string
-}
-
-// early 并行审核的结论(结构兼容 runner 的 Verdict)。
-export type AuditVerdict = { type: "pass"; command?: string } | { type: "gap"; gap: string } | { type: "reverify"; gap: string }
+// 静默跳过)。无阶段的一次性旁路会话(dryrun/fork 基点等)仍不写记录,避免污染
+// 恢复记忆。
 
 // 阶段字母(与 phases.ts 的 Phase 同值域;此处内联避免 resume→phases 反向依赖,
 // 阶段步骤恢复点用它标注归属阶段)。
@@ -58,18 +43,13 @@ export type StepKind = "phase-plan" | "phase-handover"
 // - subtasks: 逐子任务会话阶段(从首个未勾选项继续);index = 归属子任务的 1 起
 //   序号,仅子任务会话的 active 记录携带(间歇/总结态记录不带)
 // - wrapup: 收尾会话阶段
-// - verify: 任务级验收;stage = generate(脚本生成)/ exec(脚本执行)/ judge(判定)/
-//   fix(修复轮进行中,gap 为判定差距原文,中断恢复时凭它重新下发修复提示);
-//   round/rechecks/replaced 为修复轮与重验轮计数,run 为已执行的脚本运行记录,
-//   audit 为 early 并行审核已得出的结论
-// - review: 质量审核外层循环;round 为当前轮,stage = audit(审核会话)/
-//   planfix(修复规划,docs/<id>.fix.md 可能已产出)/ fixrun(修复检查项执行中);
-//   fixrun 检查项会话的 active 记录携带 index(归属检查项的 1 起序号)
+// - closeout: 收尾已完成,只剩任务报告结论行检查与完成标记(无会话);恢复时跳过
+//   收尾。已退役的 verify/review 记录(D13,二者只出现在收尾之后)读取时映射为本阶段
 // - step: 阶段级旁路步骤(phase-plan/phase-handover),letter 标注归属阶段;
 //   driver 收口前记录保持 active,中断后据此让会话恢复优先于文件推导路由
 //
 // 单元归属门禁(runner.unitReruns): active 记录的会话属于某个具体执行单元
-// (任务级阶段/子任务#N/修复检查项#N),恢复时仅当本次运行将重跑该单元才允许
+// (任务级阶段/子任务#N),恢复时仅当本次运行将重跑该单元才允许
 // 复用其会话;单元已过、配置/开关变更使其不再执行、或记录缺失序号无法判定
 // 归属(老版本记录)时,记录转总结态、开新会话——恢复只发生在原单元重跑时,
 // 不让下一单元误续上一单元的中断会话。
@@ -78,19 +58,7 @@ export type Phase =
   | { kind: "whole" }
   | { kind: "subtasks"; index?: number }
   | { kind: "wrapup" }
-  | {
-      kind: "verify"
-      stage: "generate" | "exec" | "judge" | "fix"
-      round: number
-      rechecks: number
-      replaced: boolean
-      run?: RunRecord
-      audit?: AuditVerdict
-      // stage = fix 时持久化的判定差距原文: 修复会话中断后恢复,凭它重新下发
-      // renderFix 续跑修复(执行链会话被复用时上下文不丢,差距文本仍随记录恢复)。
-      gap?: string
-    }
-  | { kind: "review"; round: number; stage: "audit" | "planfix" | "fixrun"; index?: number }
+  | { kind: "closeout" }
   | { kind: "step"; step: StepKind; letter: PhaseLetter }
 
 export type Progress = {
@@ -139,8 +107,7 @@ export async function recallProgress(dir: string, task: string): Promise<Progres
   return record
 }
 
-// 读取当前进度记录(不分任务): loop 启动时用于把验收/审核阶段中断、已被标 done
-// 的任务置回 in_progress,否则 next() 会跳过它、收尾永不补跑。
+// 读取当前进度记录(不分任务)。
 export async function peekProgress(dir: string): Promise<Progress | undefined> {
   return readProgress(dir)
 }
@@ -180,14 +147,19 @@ function parseProgress(raw: string): Progress | undefined {
     const parsed = JSON.parse(raw) as Partial<Progress>
     if (typeof parsed.task !== "string") return undefined
     // Legacy "understand" records (pre-M1.0 split understand/decompose sessions)
-    // re-enter the merged understand+decompose unit (plans/0030 D2).
+    // re-enter the merged understand+decompose unit (plans/0030 D2). Legacy
+    // "verify"/"review" records (retired, plans/0044 D5) only ever followed the
+    // wrap-up, so they re-enter at closeout: no wrap-up rerun, straight to the
+    // result check and the done commit.
     const rawKind: unknown = parsed.phase?.kind
     const phase =
       typeof rawKind !== "string"
         ? undefined
         : rawKind === "understand"
           ? ({ kind: "decompose" } satisfies Phase)
-          : parsed.phase
+          : rawKind === "verify" || rawKind === "review"
+            ? ({ kind: "closeout" } satisfies Phase)
+            : parsed.phase
     return {
       task: parsed.task,
       session: typeof parsed.session === "string" ? parsed.session : undefined,

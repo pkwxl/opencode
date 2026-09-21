@@ -5,8 +5,8 @@
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
 
-// driver 工作目录: tmp/(verify 脚本与输出,位于目标目录内)与 .auto/(运行
-// 日志、进度恢复记录与判定文件等运行时状态)。
+// driver 工作目录: tmp/(driver 执行的测试脚本请求与输出,位于目标目录内)与 .auto/(运行
+// 日志、进度恢复记录等运行时状态)。
 const ENTRIES = ["tmp/", ".auto/"]
 
 // 行归一化后的等价比对: 前导 / 与尾随 / 均不计入(`/tmp`、`tmp/`、`tmp` 等价)。

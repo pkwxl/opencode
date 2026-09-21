@@ -2,13 +2,13 @@
 // (决定能否复用其会话),以及阶段描述 / 恢复说明 / CURRENT.md 中断备注三类
 // 面向人与 AI 的文案渲染。只依赖类型与开关,不依赖会话驱动层。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S4,纯搬运)。
-import { FIX_ROUNDS, REVERIFY_ROUNDS, type Outcome } from "./opts"
+import type { Outcome } from "./opts"
 import type { Phase } from "./resume"
 import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
 
 // 恢复点的单元归属门禁: active 记录的中断会话属于某个具体执行单元(任务级
-// 阶段/子任务#N/修复检查项#N),仅当本次运行将重跑该单元时返回 true(允许
+// 阶段/子任务#N),仅当本次运行将重跑该单元时返回 true(允许
 // 复用其会话)。单元已过(检查项序号错位:中断发生在子任务收口后的间歇)、
 // 配置/实验开关变更使该单元不再执行、或记录缺失序号无法判定归属(老版本
 // 记录)时返回 false——恢复只发生在原单元重跑时,防下一单元误续上一单元的
@@ -17,15 +17,13 @@ export type UnitRerunCtx = {
   // 子任务模式(auto/off/ondemand)与 fork 开关(子任务分叉的运行条件)
   mode: "auto" | "off" | "ondemand"
   fork: boolean
-  // 当前 PLAN.md 检查项(含 review 注入的修复项);子任务目录状态协议激活时
+  // 当前 PLAN.md 检查项;子任务目录状态协议激活时
   // done 旗标已被调用方按 done.md 存在性覆盖(文件存在性即进度事实,plans/0030 D10)
   items: { text: string; done: boolean }[]
   // subtasks.md 已有检查项(合并理解与分解单元将幂等直注,不重开会话)
   subtasksFileItems: number
-  // 收尾/验收/审核单元本轮是否会跑(配置与豁免已计入)
+  // 收尾单元本轮是否会跑(配置已计入)
   wrapup: boolean
-  verify: boolean
-  review: boolean
 }
 
 export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean {
@@ -43,12 +41,9 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
       return atItem(phase.index)
     case "wrapup":
       return ctx.wrapup && firstUnticked === -1
-    case "verify":
-      // active 的 verify 记录只会是修复轮执行会话(generate 为旁路、exec 由 driver 承担)
-      return phase.stage === "fix" && ctx.verify
-    case "review":
-      // 审核/修复规划是独立旁路会话(重跑恒新建);active 记录只会是 fixrun 检查项会话
-      return phase.stage === "fixrun" && ctx.review && atItem(phase.index)
+    case "closeout":
+      // 结论行检查与完成标记由 driver 承担,没有归属本单元的会话
+      return false
     case "step":
       // step 恢复点由 loop 经 openStep 判定归属,不经任务流水线复用
       return true
@@ -70,20 +65,8 @@ export function phaseText(phase: Phase | undefined): string {
       return `逐子任务执行阶段(${phase.index !== undefined ? `中断于子任务 ${phase.index},` : ""}从首个未勾选项继续)`
     case "wrapup":
       return "收尾阶段(docs 报告与提交)"
-    case "verify":
-      return `任务级验收(修复轮 ${phase.round}/${FIX_ROUNDS - 1}${phase.rechecks ? `,重验轮 ${phase.rechecks}/${REVERIFY_ROUNDS}` : ""},${
-        phase.stage === "fix"
-          ? "修复轮进行中(差距反馈已下发)"
-          : phase.run
-            ? "脚本已执行完毕待判定"
-            : phase.stage === "generate"
-              ? "待生成验证脚本"
-              : phase.stage === "judge"
-                ? "待判定"
-                : "待执行验证脚本"
-      })`
-    case "review":
-      return `质量审核(第 ${phase.round} 轮,${{ audit: "审核会话", planfix: "修复规划", fixrun: "修复检查项执行" }[phase.stage]})`
+    case "closeout":
+      return "收尾已完成(待检查任务报告结论行并登记完成)"
     case "step":
       return phase.step === "phase-plan" ? `阶段规划步骤(${phase.letter} 阶段,填充 PLAN.md)` : `阶段交接步骤(${phase.letter} 阶段,产出交接文档)`
   }
@@ -142,16 +125,8 @@ function nextStepText(phase: Phase | undefined): string {
       return `当前处于逐子任务执行阶段:从 PLAN.md 检查项中首个未勾选项继续。`
     case "wrapup":
       return `全部检查项已完成,当前处于收尾阶段(更新 docs/ 报告并提交)。`
-    case "verify":
-      return phase.stage === "fix"
-        ? `任务级验收发现差距,当前处于修复阶段:按反馈的差距继续修复,完成后由 DRIVER 重新执行验证脚本并判定。`
-        : phase.run
-          ? `任务级验收的验证脚本已由 DRIVER 执行完毕(输出在 tmp/verify.out),本会话为独立判定会话。`
-          : `当前处于任务级验收阶段:验证脚本由 DRIVER 在会话外执行,你不要亲自运行。`
-    case "review":
-      return phase.stage === "audit"
-        ? `任务级验收已通过,当前处于质量审核阶段。`
-        : `当前处于质量审核差距的修复阶段:按 PLAN.md 中未勾选的修复检查项继续。`
+    case "closeout":
+      return `收尾已完成,只剩 DRIVER 登记任务完成。`
     case "step":
       return phase.step === "phase-plan"
         ? `当前处于阶段规划步骤:先读 PLAN.md 现状(上次会话可能已写入部分任务),在其基础上补全/修正本阶段任务,不要重复已存在的任务编号,完成后结束会话。`

@@ -7,6 +7,8 @@
 //   I3 误判已完成零落盘 —— kernel-dm T-068 S01(读入前任务收尾叙事误判,session-boundary-hardening D2)
 //   I4 测试脚本原地改写 —— kernel-spi-nor T-028(rustfmt apply,test-handover-early §H:先交接后运行,无 stash)
 //   I5 交接链收口       —— test-handover-early §N F4(单元完成必清链,不留恢复误判面)
+//   I6 验收结论 FAIL    —— plans/0044 §3.3(D13 退役 verify/review/final-review 后唯一的完成侧判定:
+//                          报告结论行 Result: FAIL 即阻塞停跑,报告已提交,不标 done)
 
 import { describe, expect, test } from "bun:test"
 import { rm } from "node:fs/promises"
@@ -16,6 +18,8 @@ import type { SessionChain } from "../src/chain"
 import { EOF_MARK } from "../src/doccheck"
 import { runExecSession } from "../src/exec-session"
 import { runSubtask } from "../src/execute"
+import { recallProgress } from "../src/resume"
+import { runTask } from "../src/runner"
 import { recallHandover } from "../src/handover"
 import { load, subtasks } from "../src/plan"
 import { runSession } from "../src/session"
@@ -272,6 +276,54 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
       expect(await git(dir, "log", "--format=%s")).toContain("test handover #1")
       // 在途记录已作废(闭环即清)。
       expect(await recallHandover(dir, "T-001", "docs/T-001/S01/testhandoff.md")).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("I6 验收结论 FAIL 停跑(plans/0044 §3.3)", () => {
+  const filler = "Acceptance evidence line. ".repeat(20)
+  // Round 1 = whole-task session (off mode): a source change. Round 2 = the
+  // wrap-up session: the task report, ending in the given result line.
+  const scenario = (dir: string, resultLine: string) =>
+    scriptedClient([
+      async () => {
+        await Bun.write(join(dir, "src.ts"), "// 源码基线\nexport const x = 1\n")
+      },
+      async () => {
+        await Bun.write(join(dir, "docs/T-001/report.md"), `# T-001 report\n\n${filler}\n\n${resultLine}\n\n${EOF_MARK}\n`)
+      },
+    ])
+
+  test("Result: FAIL → blocked with the reason, task not done, report committed, phase rewound to wrapup", async () => {
+    const dir = await incidentRepo(`## T-001: 验收 [pending]\n\n检查 x。\n\n## T-002: 后续 [pending]\n\n后续工作。\n`)
+    try {
+      const { client } = scenario(dir, "Result: FAIL x is not exported under the expected name")
+      const plan = await load(join(dir, "PLAN.md"))
+      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, commit: true, subtask: "off" })
+      expect(outcome).toMatchObject({ type: "blocked" })
+      expect((outcome as { question: string }).question).toContain("Result: FAIL (x is not exported under the expected name)")
+      const after = await load(join(dir, "PLAN.md"))
+      expect(after.tasks[0]!.status).not.toBe("done")
+      expect(after.tasks[1]!.status).toBe("pending")
+      // The wrap-up commit already carries the report and the work (iii).
+      expect(await git(dir, "ls-files")).toContain("docs/T-001/report.md")
+      expect(await git(dir, "show", "HEAD:docs/T-001/report.md")).toContain("Result: FAIL")
+      expect((await recallProgress(dir, "T-001"))?.phase).toEqual({ kind: "wrapup" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("Result: PASS → completed and marked done", async () => {
+    const dir = await incidentRepo(`## T-001: 验收 [pending]\n\n检查 x。\n`)
+    try {
+      const { client } = scenario(dir, "Result: PASS")
+      const plan = await load(join(dir, "PLAN.md"))
+      const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, commit: true, subtask: "off" })
+      expect(outcome).toEqual({ type: "completed" })
+      expect((await load(join(dir, "PLAN.md"))).tasks[0]!.status).toBe("done")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

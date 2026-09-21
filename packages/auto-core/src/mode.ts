@@ -5,11 +5,10 @@
 // add the file + one import), and the target directory's
 // .opencode/auto/modes/<name>.md may add a mode or override a same-named
 // built-in, so a new mode needs zero source changes.
-// Injection points of the three ModeSpec texts: init → the mode preamble of the
+// Injection points of the two ModeSpec texts: init → the mode preamble of the
 // phase-planning session (plans/0006-phases-design.md §E, consumed from P2);
 // exec → the notes section of execution-class prompts (decompose / whole task /
-// subtask / wrapup); final → the emphasis of each final-review stage prompt
-// (consumed by renderFinalTask; not injected for the remediate stage).
+// subtask / wrapup).
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import builtinMigrate from "../templates/modes/migrate.md" with { type: "file" }
@@ -17,18 +16,20 @@ import builtinMigrate from "../templates/modes/migrate.md" with { type: "file" }
 export type ModeSpec = {
   name: string
   // Mode preamble of the phase-planning session: scenario definition, task
-  // arrangement principles, verify emphasis.
+  // arrangement principles.
   init: string
   // Mode notes appended to execution-class prompts (decompose / whole task /
   // subtask / wrapup).
   exec: string
-  // Emphasis of each final-review stage prompt.
-  final: { audit: string; validate: string; finalize: string }
 }
 
-// Mode file protocol: first line `# <name>` (must match the file name), all five
+// Mode file protocol: first line `# <name>` (must match the file name), both
 // sections present, no unknown section.
-const SECTIONS = ["init", "exec", "final: audit", "final: validate", "final: finalize"]
+const SECTIONS = ["init", "exec"]
+
+// Sections of the retired final-review loop (plans/0044 D1): a project mode
+// file written before the retirement still loads; their bodies are ignored.
+const RETIRED_SECTIONS = ["final: audit", "final: validate", "final: finalize"]
 
 // Mode name constraint: lowercase letter followed by letters/digits/hyphens
 // (same rule as the CLI value).
@@ -72,6 +73,10 @@ export function parseModeFile(name: string, text: string): ModeSpec {
     const heading = /^##\s+(.+?)\s*$/.exec(line)
     if (heading) {
       section = heading[1]
+      if (RETIRED_SECTIONS.includes(section)) {
+        section = undefined
+        continue
+      }
       if (!SECTIONS.includes(section)) {
         throw new Error(`mode file ${name}.md has unknown section "## ${section}" (available: ${SECTIONS.map((key) => `## ${key}`).join(", ")})`)
       }
@@ -89,7 +94,6 @@ export function parseModeFile(name: string, text: string): ModeSpec {
     name,
     init: body("init"),
     exec: body("exec"),
-    final: { audit: body("final: audit"), validate: body("final: validate"), finalize: body("final: finalize") },
   }
 }
 

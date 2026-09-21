@@ -14,17 +14,14 @@ import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto
 const E2E = process.env.OPENCODE_AUTO_E2E === "1"
 
 const PLAN = `## T-001: 创建 hello.txt [pending]
-  - verify: command: test -f hello.txt && grep -q hello hello.txt
 在当前目录创建 hello.txt,内容为 "hello"。
 
 ## T-002: 请求写权限并写入 greeting.txt [pending]
-  - verify: command: test -f greeting.txt
 这个任务需要先获得用户授权。调用 question 工具询问用户:
 "是否允许在 opencode.json 中放行 greeting.txt 的写权限?"
 拿到肯定答复后把问候语 "hello" 写入 greeting.txt。
 
 ## T-003: 汇总 [pending]
-  - verify: command: test -f SUMMARY.md
 创建 SUMMARY.md,列出生成的文件。
 `
 
@@ -66,21 +63,19 @@ test.skipIf(!E2E)(
   { timeout: 600_000 },
 )
 
-// 阶段化流程 P3 端到端(phases=mv,台账已记录 m): v(验收)阶段任务豁免任务级
-// 验收与 --review(与终审任务共路径),交接由蒸馏会话产出 handover.md(四小节
-// 协议),归档重置后台账推进,全部阶段完成退出 0。
+// 阶段化流程 P3 端到端(phases=mv,台账已记录 m): v(验收)阶段任务照常执行,
+// 交接由蒸馏会话产出 handover.md(四小节协议),归档重置后台账推进,全部阶段完成
+// 退出 0。
 test.skipIf(!E2E)(
-  "端到端: v 阶段验收豁免与蒸馏交接(phases=mv)",
+  "端到端: v 阶段任务与蒸馏交接(phases=mv)",
   async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-e2e-phase-"))
     try {
-      // 台账记录 m 已完成 → 当前阶段 v;PLAN.md 预填 v 阶段任务(带 verify 字段,
-      // 用于证明豁免: 即使 verify/review 启用也不做任务级验收)。
+      // 台账记录 m 已完成 → 当前阶段 v;PLAN.md 预填 v 阶段任务。
       await Bun.write(join(dir, "docs/phases.md"), "- [done] m 迁移实现 → docs/phases/m-migrate/(交接: docs/phases/m-migrate/handover.md)\n")
       await Bun.write(
         join(dir, "PLAN.md"),
         `## T-001: 验收通过性检查 [pending]
-  - verify: command: test -f acceptance.md
 在当前目录创建 acceptance.md,内容为 "accepted"。
 `,
       )
@@ -90,18 +85,12 @@ test.skipIf(!E2E)(
       )
       await Bun.write(
         join(dir, ".opencode/agent/auto.md"),
-        renderText(await Bun.file(templateAgent).text(), { verify: true }),
+        renderText(await Bun.file(templateAgent).text(), {}),
       )
 
-      expect(await runAll(dir, { phases: "mv", verify: true, review: 3 })).toBe(0)
-      // v 阶段任务被标 done 但未写 verified 字段(豁免任务级验收),也没有跑
-      // verify 脚本与质量审核的产物。
+      expect(await runAll(dir, { phases: "mv" })).toBe(0)
       const archived = await Bun.file(join(dir, "docs/phases/v-acceptance/PLAN.md")).text()
       expect(archived).toContain("[done]")
-      expect(archived).not.toContain("verified:")
-      expect(await Bun.file(join(dir, "tmp/verify.sh")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, ".auto/verify.md")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, ".auto/review.md")).exists()).toBe(false)
       // 蒸馏交接: handover.md 四小节齐备;台账推进 v 后根目录 PLAN.md 重置空模板。
       const handover = await Bun.file(join(dir, "docs/phases/v-acceptance/handover.md")).text()
       for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
@@ -141,8 +130,6 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--agent", "auto"],
         ["--context-limit", "64"],
         ["--subtask", "auto"],
-        ["--verify"],
-        ["--verify=false"],
         ["--idle-time", "10"],
         ["--idle-max", "0"],
         ["--commit", "true"],
@@ -197,9 +184,6 @@ describe("CLI 解析: run 侧选项与配置", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const combos = [
-        ["--final-review", "2", "--review", "3"],
-        ["--final-review", "2", "--early-review", "2"],
-        ["--final-review", "2", "--review", "3", "--early"],
         ["--permission", "ask-allow", "--wait-answer", "5", "--wait-between", "2"],
         ["--dryrun"],
       ]
@@ -244,14 +228,20 @@ describe("CLI 解析: run 侧选项与配置", () => {
     }
   })
 
-  test("--final-review 显式值须为 1..5 整数,否则用法错误(退出码 1)", async () => {
+  test("完成侧三机制退役: 五个旗标在 init/continue/run 一律用法错误(退出码 1)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      for (const value of ["0", "6", "x"]) {
-        const run = await runCli(["run", dir, "--final-review", value])
-        expect(run.code).toBe(1)
-        expect(run.err).toContain("--final-review takes 1..5")
+      const retired = [["--verify"], ["--verify=false"], ["--review", "3"], ["--early"], ["--early-review", "2"], ["--final-review", "2"]]
+      for (const command of ["init", "continue", "run"]) {
+        for (const extra of retired) {
+          const run = await runCli([command, dir, ...extra])
+          expect(run.code).toBe(1)
+          expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
+          expect(run.err).toContain("Result: FAIL")
+        }
       }
+      // 拦截发生在任何写盘之前
+      expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -314,7 +304,6 @@ describe("CLI: init 固化项目配置", () => {
         agent: "auto",
         contextLimit: 64,
         subtask: "auto",
-        verify: false,
         idleTime: 10,
         idleMax: 0,
         commit: true,
@@ -334,7 +323,6 @@ describe("CLI: init 固化项目配置", () => {
     agent: "auto",
     contextLimit: 64,
     subtask: "auto",
-    verify: false,
     idleTime: 10,
     idleMax: 0,
     commit: true,
@@ -349,11 +337,11 @@ describe("CLI: init 固化项目配置", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["init", dir, "--amend", "--verify", "--context-limit", "128", "--subtask", "ondemand"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, subtask: "ondemand" })
+      expect((await runCli(["init", dir, "--amend", "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand" })
       // 再 amend 一个无关键: 上一轮改过的三个键原样保留
       expect((await runCli(["init", dir, "--amend", "--agent", "custom"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, subtask: "ondemand", agent: "custom" })
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "custom" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -362,8 +350,8 @@ describe("CLI: init 固化项目配置", () => {
   test("init 缺省全量覆盖: 未给出的键强制回落默认值,与干净环境无参 init 一致", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--verify", "--context-limit", "128", "--subtask", "ondemand", "--agent", "custom"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, verify: true, subtask: "ondemand", agent: "custom" })
+      expect((await runCli(["init", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand", "--agent", "custom"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "custom" })
       // 无参 init: 上面改过的四个键全部回到默认值
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
@@ -399,12 +387,12 @@ describe("CLI: init 固化项目配置", () => {
   test("init 幂等: 相同参数连续多次执行产物恒定", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--verify", "--subtask", "ondemand"])).code).toBe(0)
+      expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "ondemand"])).code).toBe(0)
       const first = await readConfig(dir)
       const agentFirst = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       const agentsFirst = await Bun.file(join(dir, "AGENTS.md")).text()
       for (let i = 0; i < 2; i++) {
-        expect((await runCli(["init", dir, "--verify", "--subtask", "ondemand"])).code).toBe(0)
+        expect((await runCli(["init", dir, "--test-by-driver", "--subtask", "ondemand"])).code).toBe(0)
       }
       expect(await readConfig(dir)).toEqual(first)
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(agentFirst)
@@ -431,8 +419,8 @@ describe("CLI: init 固化项目配置", () => {
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
       // --amend 则保留
       expect((await runCli(["init", dir, "--source-dir", "src-sys", "--source-path", "mod"])).code).toBe(0)
-      expect((await runCli(["init", dir, "--amend", "--verify"])).code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: "src-sys", path: "mod" }, verify: true })
+      expect((await runCli(["init", dir, "--amend", "--test-by-driver"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ source: { dir: "src-sys", path: "mod" }, testByDriver: true })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -738,22 +726,24 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
-  test("phases 含 v 而 verify 未启用时 init 打 note;启用后不再打", async () => {
+  test("config.json verify 键退役: true 严格失败,false(存量 init 产物)接受并在下次 init 时消失", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const init = await runCli(["init", dir, "--phases", "mvk"])
-      expect(init.code).toBe(0)
-      expect(init.out).toContain("phases includes the v (acceptance) phase but task-level acceptance is off")
-      const enabled = await runCli(["init", dir, "--verify"])
-      expect(enabled.code).toBe(0)
-      expect(enabled.out).not.toContain("任务级验收未启用")
-      // 不含 v 时不提示
-      const plain = await runCli(["init", dir, "--phases", "am"])
-      expect(plain.out).not.toContain("任务级验收未启用")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const file = join(dir, ".opencode/auto/config.json")
+      const config = await readConfig(dir)
+      await Bun.write(file, JSON.stringify({ ...config, verify: true }, null, 2) + "\n")
+      const on = await runCli(["run", dir])
+      expect(on.code).toBe(1)
+      expect(on.err).toContain("verify is retired")
+      await Bun.write(file, JSON.stringify({ ...config, verify: false }, null, 2) + "\n")
+      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual(config)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
 })
 
 // 快捷模式用例只覆盖起会话前的用法校验(二选一/非空/phases 兼容/文件存在性/
@@ -1221,7 +1211,7 @@ describe("CLI: reset 反初始化", () => {
   test("reset only accepts a directory argument and -f/--force", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const bad = await runCli(["reset", dir, "--verify"])
+      const bad = await runCli(["reset", dir, "--test-by-driver"])
       expect(bad.code).toBe(1)
       expect(bad.err).toContain("reset only accepts a directory argument and -f/--force")
       expect((await runCli(["reset", dir, "--force"])).code).toBe(0)
@@ -1286,8 +1276,8 @@ describe("CLI: 工作区干净度闸门", () => {
     try {
       await git(dir, "init")
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["init", dir, "--amend", "--verify"])).code).toBe(0)
-      expect(await readConfigAt(dir)).toMatchObject({ verify: true })
+      expect((await runCli(["init", dir, "--amend", "--test-by-driver"])).code).toBe(0)
+      expect(await readConfigAt(dir)).toMatchObject({ testByDriver: true })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

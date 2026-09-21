@@ -93,7 +93,6 @@ const CLASSIFIED: Record<string, Domain> = {
   execute: "driver",
   exit: "driver",
   failback: "driver",
-  final: "driver",
   gitignore: "driver",
   git: "driver",
   handover: "driver",
@@ -115,8 +114,8 @@ const CLASSIFIED: Record<string, Domain> = {
   resolve: "driver",
   "resume-gate": "driver",
   resume: "driver",
-  review: "driver",
   runner: "driver",
+  script: "driver",
   "session-api": "driver",
   session: "driver",
   shell: "driver",
@@ -128,7 +127,6 @@ const CLASSIFIED: Record<string, Domain> = {
   testrun: "driver",
   "unit-commit": "driver",
   usage: "driver",
-  verify: "driver",
   watch: "driver",
   wrapup: "driver",
 }
@@ -141,7 +139,7 @@ const CLASSIFIED: Record<string, Domain> = {
 const FROZEN_IMPORTS: Record<string, string[]> = {
   mode: [],
   template: [],
-  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "plan", "resolve", "stuck", "switches", "template", "verify"],
+  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "plan", "resolve", "stuck", "switches", "template"],
   phases: ["docpaths", "plan", "template"],
   docpaths: [],
   doccheck: [],
@@ -157,7 +155,6 @@ const RANK: Record<string, number> = {
   artifact: 3,
   "exec-session": 3,
   execute: 4,
-  review: 4,
   runner: 6,
 }
 
@@ -166,12 +163,12 @@ const RANK: Record<string, number> = {
 const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
   {
     from: "testrun",
-    to: ["session", "attempt", "watch", "exec-session", "review", "execute", "runner"],
+    to: ["session", "attempt", "watch", "exec-session", "execute", "runner"],
     why: "testrun is test execution + handoff file ops, a leaf; letting it reach the session-driving layer re-forms the watch↔runExecSession cycle the 0024 split resolved",
   },
   {
     from: "unit-commit",
-    to: ["session", "attempt", "watch", "exec-session", "review", "execute", "runner"],
+    to: ["session", "attempt", "watch", "exec-session", "execute", "runner"],
     why: "the commit boundary sits below watch; it must not depend on the session-driving layer (0024 §D.2)",
   },
   {
@@ -180,13 +177,8 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     why: "artifact → session is the sanctioned direction (requireArtifact calls runSession); nothing in session may call back into artifact",
   },
   {
-    from: "exec-session",
-    to: ["review"],
-    why: "review calls exec-session (verifyTask drives handover sessions), never the reverse (0024 §D.2)",
-  },
-  {
     from: "watch",
-    to: ["attempt", "session", "exec-session", "review", "execute", "runner"],
+    to: ["attempt", "session", "exec-session", "execute", "runner"],
     why: "watch is the bottom of the session-driving chain (plan §2.5); lower layers must not import upward",
   },
 ]

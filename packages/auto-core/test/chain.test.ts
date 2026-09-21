@@ -12,8 +12,8 @@ describe("resolveModel(路由求值 role > letter > wildcard)", () => {
   const policy = (raw?: string) => parseSwitches(raw ? { [SWITCH_ENV.model]: raw } : {}).model
 
   test("role 覆盖 letter 覆盖 wildcard", () => {
-    const p = policy("*=kimi/k2,m=anthropic/c-4,verify-judge=kimi/k2-lite")
-    expect(resolveModel(p, "m", "verify-judge")).toBe("kimi/k2-lite") // role 命中优先
+    const p = policy("*=kimi/k2,m=anthropic/c-4,wrapup=kimi/k2-lite")
+    expect(resolveModel(p, "m", "wrapup")).toBe("kimi/k2-lite") // role 命中优先
     expect(resolveModel(p, "m", "decompose")).toBe("anthropic/c-4") // role 缺、letter 命中
     expect(resolveModel(p, "t", "decompose")).toBe("kimi/k2") // letter 缺、wildcard 兜底
   })
@@ -47,18 +47,12 @@ describe("splitModel(prov/model → SDK model 参数,按首个 / 切分;MA.3 起
 })
 
 describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
-  test("phaseToRole: 执行链各阶段映射(subtasks→subtask,verify/review 按 stage,step 按 slug)", () => {
+  test("phaseToRole: 执行链各阶段映射(subtasks→subtask,closeout 无会话,step 按 slug)", () => {
     expect(phaseToRole({ kind: "decompose" })).toBe("decompose")
     expect(phaseToRole({ kind: "whole" })).toBe("whole")
     expect(phaseToRole({ kind: "subtasks" })).toBe("subtask")
     expect(phaseToRole({ kind: "wrapup" })).toBe("wrapup")
-    expect(phaseToRole({ kind: "verify", stage: "generate", round: 1, rechecks: 0, replaced: false })).toBe("verify-generate")
-    expect(phaseToRole({ kind: "verify", stage: "exec", round: 1, rechecks: 0, replaced: false })).toBe("verify-exec")
-    expect(phaseToRole({ kind: "verify", stage: "judge", round: 1, rechecks: 0, replaced: false })).toBe("verify-judge")
-    expect(phaseToRole({ kind: "verify", stage: "fix", round: 1, rechecks: 0, replaced: false })).toBe("verify-fix")
-    expect(phaseToRole({ kind: "review", round: 1, stage: "audit" })).toBe("review-audit")
-    expect(phaseToRole({ kind: "review", round: 1, stage: "planfix" })).toBe("review-planfix")
-    expect(phaseToRole({ kind: "review", round: 1, stage: "fixrun" })).toBe("review-fixrun")
+    expect(phaseToRole({ kind: "closeout" })).toBeUndefined()
     expect(phaseToRole({ kind: "step", step: "phase-plan", letter: "a" })).toBe("phase-plan")
     expect(phaseToRole({ kind: "step", step: "phase-handover", letter: "m" })).toBe("phase-handover")
     expect(phaseToRole(undefined)).toBeUndefined()
@@ -67,8 +61,8 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
   test("roleOf: 显式 role 优先 > phase 推导 > bypass 兜底", () => {
     expect(roleOf({ pct: 100, used: 0, at: 0, role: "knowledge" })).toBe("knowledge")
     expect(
-      roleOf({ pct: 100, used: 0, at: 0, role: "verify-judge", phase: { kind: "review", round: 1, stage: "audit" } }),
-    ).toBe("verify-judge")
+      roleOf({ pct: 100, used: 0, at: 0, role: "knowledge", phase: { kind: "wrapup" } }),
+    ).toBe("knowledge")
     expect(roleOf({ pct: 100, used: 0, at: 0, phase: { kind: "wrapup" } })).toBe("wrapup")
     expect(roleOf({ pct: 100, used: 0, at: 0 })).toBe("bypass")
   })

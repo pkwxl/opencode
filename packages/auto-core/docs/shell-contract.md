@@ -6,7 +6,7 @@
 
 | Package | Role | Contents |
 |---|---|---|
-| `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/verify/final/git/protect/config/server/mode/prompt/template/knowledge/interactive/log/shell/check) + built-in templates (`templates/`) + design documents (`docs/`) |
+| `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/script/git/protect/config/server/mode/prompt/template/knowledge/interactive/log/shell/check) + built-in templates (`templates/`) + design documents (`docs/`) |
 | `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/continue/run/check/status subcommands, build scripts, CLI parsing/e2e tests |
 | `packages/<name>` (`@opencode-ai/<name>`, bin `<bin>`) | Simple CLI shell (per shell branch) | Shape and artifact naming are decided by each shell branch, using the existing simple shell branch as reference; the core does not record specific names |
 
@@ -25,7 +25,7 @@ Shell differences are injected exclusively through the following extension point
 
 1. `setShellProfile` (src/shell.ts): message program name (program/bin), recovery guidance for a missing agent contract (agentRecovery: `"init"` | `"startup"`), log audit semantics (auditLog), and the agent profile (agent: `{ name, host }` — the `AgentHostFactory` that starts the shell's coding agent; absent = the built-in adapter chosen by `OPENCODE_AUTO_AGENT` — opencode by default, or the claude headless adapter `claudeHost` from `agent/claude/host`, plans/0041; what the agent cannot do is read from its client capabilities and degraded by the core at run start, plans/0040); set once at shell entry startup. Example for a simple shell: `{ program: "<shell name>", bin: "<bin>", agentRecovery: "startup", auditLog: true }`.
 2. `registerTemplate` (src/template.ts): registers additional prompt templates and tier-1 protocol markers; takes precedence over built-ins, with target-directory overrides highest; `_partials` refuses wholesale registration — individual shared-partial sections register via `registerPartial(name, text, markers?)`, and target-directory `_partials.md` overlays of protocol-sensitive sections are validated against tier-1 markers (same enforcement as template-level markers). Project-local override surfaces need no shell code: `.opencode/auto/prompts/` (templates), `.opencode/auto/modes/` (modes), `.opencode/auto/intents/` (intent packs, since M1; loaded by the core at preflight, same-named file replaces the whole built-in pack).
-3. Parameter passing: shell CLI parsing results flow in via runAll Opts / runTool arguments (newSession, managed server handle, verify/testByDriver and other existing switches).
+3. Parameter passing: shell CLI parsing results flow in via runAll Opts / runTool arguments (newSession, managed server handle, testByDriver/handoverTest and other existing switches).
 
 ## D. Branches and merge flow
 

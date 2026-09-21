@@ -15,9 +15,8 @@ import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import { useIntentPacks } from "./prompt"
 import type { PermissionMode, SubtaskMode } from "./opts"
-import { load, resetInProgress, setStatus } from "./plan"
+import { resetInProgress } from "./plan"
 import { protect } from "./protect"
-import { peekProgress } from "./resume"
 import type { AgentHost } from "./agent/types"
 import { shellProfile } from "./shell"
 import { loadStats } from "./stats"
@@ -39,39 +38,26 @@ export type RunAllOpts = {
   dryrun?: boolean
   // 上下文预算基线(tokens;会话复用的已用量阈值为其一半),缺省由 runner 按 64k 处理。
   contextLimit?: number
-  // --review 质量审核轮数上限(0 = 不启用),透传给 runTask。
-  review?: number
-  // --verify: 启用 driver 的任务级三段式验收(缺省不启用,任务收尾后直接标
-  // done),透传给 runTask。
-  verify?: boolean
-  // --early: 审核会话与 driver 执行 verify 脚本并行(需 review 已启用),透传给
-  // runTask;窗口时序见设计文档 F 节。
-  early?: boolean
   // --permission: 权限请求的处理策略(缺省 ask-deny),透传给 runner 的会话监听。
   permission?: PermissionMode
   // --interactive: 常驻 stdin 旁路接收人工输入注入当前会话(与 --verbose 互斥,
   // 终端明细静默,日志文件保持完整记录)。
   interactive?: boolean
-  // driver 托管脚本(verify 与 test)的看门狗: 持续无输出的判定窗口与绝对时长
-  // 上限(毫秒),透传给 runner 的 runVerifyScript(config 的 idleTime / idleMax
-  // 以分钟设定)。
+  // driver 托管脚本(test)的看门狗: 持续无输出的判定窗口与绝对时长上限(毫秒),
+  // 透传给 runScript(config 的 idleTime / idleMax 以分钟设定)。
   idleMs?: number
   maxMs?: number
-  // --test-by-driver: 测试执行协议(与 verify 正交)——执行类会话把测试脚本写入
+  // --test-by-driver: 测试执行协议——执行类会话把测试脚本写入
   // tmp/test.sh 由 driver 执行,输出反馈回会话;--handover-test: 测试失败且上下文
   // 达上限时交接新会话续跑。均透传给 runTask。
   testByDriver?: boolean
   handoverTest?: boolean
   // -m/--mode 场景模式(缺省 migrate),透传给 runTask 的提示词渲染。
   mode?: ModeSpec
-  // --final-review 终审闭环的审计轮上限(0 = 不启用,含首轮 audit): 任务全部
-  // 完成后按 plans/0005-mode-final-review-design.md B/C 节推进——终审阶段是入
-  // PLAN.md 的 T-F 真任务,本循环只做"生成任务 → 跑任务 → 解析报告路由"。
-  finalReview?: number
   // --phases 阶段化流程(设计文档 plans/0006-phases-design.md,来自配置): "m"(缺省)=
   // 无阶段声明,走既有单次运行路径(零改动);其余值启用阶段循环(D 节)——
   // 推导当前阶段 → 规划会话填充 PLAN.md → 主循环执行 → 交接(归档+重置+台账+
-  // 提交)→ 下一阶段。--final-review 仅 m(迁移实现)阶段挂接。
+  // 提交)→ 下一阶段。
   phases?: string
   // config.source 迁移源参数(可选),注入阶段规划会话。
   source?: { dir: string; path: string }
@@ -92,11 +78,11 @@ export type RunAllOpts = {
   wrapup?: boolean
 }
 
-// agent 契约渲染文本: 按 verify/testByDriver 两态渲染内置模板。外壳的契约维护
+// agent 契约渲染文本: 按 testByDriver 两态渲染内置模板。外壳的契约维护
 // 写入与 runAll 的完整性检查共用本函数,防止写入与比对口径漂移(模板含
 // {{#if}} 条件块,拿原始文本比对渲染后的文件必然不一致)。
-export async function renderAgentContract(verify: boolean, testByDriver: boolean): Promise<string> {
-  return renderText(await Bun.file(templateAgent).text(), { verify, testByDriver })
+export async function renderAgentContract(testByDriver: boolean): Promise<string> {
+  return renderText(await Bun.file(templateAgent).text(), { testByDriver })
 }
 
 // 预检段: 产出 runAll 后续仍用的 agentName 与两个计时器句柄(finally 中关闭);
@@ -123,10 +109,6 @@ export async function preflight(
     return { exit: 1 }
   }
 
-  // --early depends on the verify script execution window; without --verify
-  // the window does not exist and the review degrades to serial.
-  if (opts.early && !opts.verify) log("ℹ --verify is not enabled; --early's parallel review window does not exist, quality review runs serially")
-
   // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:
   // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出并按外壳
   // 画像提示恢复方式(src/shell.ts);与模板不一致仅警告。
@@ -143,9 +125,9 @@ export async function preflight(
     )
     return { exit: 1 }
   }
-  // init 写入的是按当时 verify/testByDriver 渲染后的契约,比对须用当前配置同样
+  // init 写入的是按当时 testByDriver 渲染后的契约,比对须用当前配置同样
   // 渲染(与原始模板全文比对会因 {{#if}} 标记恒不一致,口径同 renderAgentContract)。
-  if (agentName === "auto" && agentText !== (await renderAgentContract(Boolean(opts.verify), Boolean(opts.testByDriver)))) {
+  if (agentName === "auto" && agentText !== (await renderAgentContract(Boolean(opts.testByDriver)))) {
     log(
       `⚠ .opencode/agent/auto.md differs from the current template (possibly a legacy contract); ` +
         (agentRecovery === "startup" ? `re-running ${program} refreshes it from the template` : `run ${bin} init ${directory} to refresh it`),
@@ -194,23 +176,11 @@ export async function preflight(
   if (!opts.dryrun) {
     const stale = await resetInProgress(path)
     if (stale.length) log(`↻ resuming interrupted state: ${stale.join(", ")} reset from in_progress to pending`)
-    // 精确恢复: 进度记录在验收(verify,且 --review 启用)或质量审核(review)阶段
-    // 中断的任务,验收通过时已被标 done——next() 会跳过它,审核永不补跑;置回
-    // in_progress 使主循环重入该任务,runTask 依记录的阶段直接续跑。
-    const record = await peekProgress(directory)
-    if (record?.phase && (record.phase.kind === "review" || (record.phase.kind === "verify" && (opts.review ?? 0) > 0))) {
-      const fresh = await load(path)
-      const pending = fresh.tasks.find((task) => task.id === record.task)
-      if (pending?.status === "done") {
-        await setStatus(path, pending.id, "in_progress")
-        log(`↻ ${pending.id} was interrupted during the ${record.phase.kind === "review" ? "quality review" : "task-level verify"} phase (task already marked done); reverted to in_progress for a make-up run`)
-      }
-    }
   }
   // 启动会话前确保 AGENTS.md 的 opencode-auto 块与当前配置渲染一致(缺失则追加、
   // 内容与渲染不一致则整块替换、旧版/多余的带名标记块一律清理)。AGENTS.md 本身
   // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
-  const ensured = await ensurePointer(directory, { verify: opts.verify, testByDriver: opts.testByDriver })
+  const ensured = await ensurePointer(directory, { testByDriver: opts.testByDriver })
   if (ensured.block === "inserted") log("inserted: AGENTS.md opencode-auto block")
   if (ensured.block === "replaced") log("refreshed: AGENTS.md opencode-auto block (differed from the current config rendering)")
   if (ensured.legacyRemoved) log(`cleaned: ${ensured.legacyRemoved} legacy/redundant opencode-auto marker block(s) in AGENTS.md`)

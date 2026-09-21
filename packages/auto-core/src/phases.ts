@@ -1,6 +1,6 @@
 // 阶段注册表与阶段状态机(--phases 阶段化流程,设计文档 plans/0006-phases-design.md
 // A/C/D/F 节):固定六字母内置注册表,不开放自定义——阶段有 driver 侧语义(产物
-// 约定、v 的验收豁免、终审挂接点),非纯提示词文案。阶段状态是推导式的:
+// 约定),非纯提示词文案。阶段状态是推导式的:
 // 阶段台账(新布局 = 轮内 docs/R-NN/phases.md,旧布局 = 根 docs/phases.md,读
 // 回落)记录已完成阶段,当前阶段 = phases 串中第一个未在台账出现的字母,零新增
 // 易腐状态;routePhase 由(台账, PLAN.md)两文件推导路由,无隐藏状态,中断恢复
@@ -216,11 +216,11 @@ export function formatPhases(phases: string, done: Phase[]): string {
     .join(" ")
 }
 
-// 阶段空模板(PLAN.scaffold.md,verify 条件渲染): 阶段化流程下 PLAN.md 的初始态
+// 阶段空模板(PLAN.scaffold.md): 阶段化流程下 PLAN.md 的初始态
 // 与交接重置态——不含任何任务,routePhase 由此推导出 plan 路由(D.2)。init 对
 // phases ≠ "m" 的项目亦以此为 PLAN.md 模板(B.1)。
-export function renderPlanScaffold(verify: boolean): string {
-  return renderText(readFileSync(templateScaffold, "utf8"), { verify })
+export function renderPlanScaffold(): string {
+  return renderText(readFileSync(templateScaffold, "utf8"), {})
 }
 
 // 交接文档的四个必备小节(F.1 协议): 蒸馏会话产物的 collect 校验与提示词模板
@@ -292,7 +292,7 @@ export async function roundRoot(dir: string, round: number): Promise<string | un
 // 轮号缺省 = currentRound(init/首跑场景);开启新一轮时调用方传 nextRound。
 export async function establishRound(
   dir: string,
-  opts: { round?: number; plan?: string; verify?: boolean } = {},
+  opts: { round?: number; plan?: string } = {},
 ): Promise<{ round: number; root: string; linked: boolean }> {
   const round = opts.round ?? (await currentRound(dir))
   const root = roundDir(round)
@@ -303,7 +303,7 @@ export async function establishRound(
     // 根 PLAN.md 是指向某轮目录的符号链接时,其内容即该轮 PLAN,不作为初值来源。
     const isLink = await lstat(rootPlan).then((s) => s.isSymbolicLink(), () => false)
     const existing = isLink ? undefined : await Bun.file(rootPlan).text().catch(() => undefined)
-    await Bun.write(join(dir, planFile), opts.plan ?? existing ?? renderPlanScaffold(opts.verify ?? false))
+    await Bun.write(join(dir, planFile), opts.plan ?? existing ?? renderPlanScaffold())
   }
   // 重建根链接: 目标内容 = 轮内 PLAN.md 现状(幂等——重复建立不漂移)。
   const content = await Bun.file(join(dir, planFile)).text()

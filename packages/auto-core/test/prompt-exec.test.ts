@@ -13,7 +13,6 @@ import {
   renderContextBase,
   renderDecompose,
   renderDryrun,
-  renderFix,
   renderHandoffSteer,
   renderKnowledge,
   renderPriorKnowledge,
@@ -209,11 +208,11 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
         "# default\n\n## quality\n\n### self-check-subtask\n\nCUSTOM-SUBTASK-CHECK\n\n### self-check-whole\n\nCUSTOM-WHOLE-CHECK\n",
       )
       useIntentPacks(dir)
-      const sub = renderSubtask(plan, task, subtask, { verify: true })
+      const sub = renderSubtask(plan, task, subtask)
       expect(sub).toContain("CUSTOM-SUBTASK-CHECK")
       expect(sub).not.toContain("check for yourself whether this subtask is genuinely complete")
-      // 核心协议不受影响: 验收交接描述与收尾步骤仍在
-      expect(sub).toContain("independent review session")
+      // 核心协议不受影响: 收尾步骤仍在
+      expect(sub).toContain("you may add to the content of docs/ but not modify it")
       const whole = renderWhole(plan, task)
       expect(whole).toContain("CUSTOM-WHOLE-CHECK")
       expect(whole).not.toContain("once the whole task is complete, check for yourself whether it is genuinely complete")
@@ -231,12 +230,12 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "default.md"), "# default\n\n## quality\n")
       useIntentPacks(dir)
-      const sub = renderSubtask(plan, task, subtask, { verify: true })
+      const sub = renderSubtask(plan, task, subtask)
       expect(sub).not.toContain("check for yourself")
       // 收尾步骤仍在(b/c 项保留既有编号,0032 D4 的编号取舍同口径)
       expect(sub).toContain("3. Close-out:")
       expect(sub).toContain("you may add to the content of docs/ but not modify it")
-      const whole = renderWhole(plan, task, { verify: true })
+      const whole = renderWhole(plan, task)
       expect(whole).not.toContain("check for yourself")
       expect(whole).toContain("约束:")
       for (const text of [sub, whole]) {
@@ -321,24 +320,16 @@ describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
 describe("renderSubtask", () => {
   const subtask = "编写迁移脚本的 schema 部分"
 
-  test("只做一个子任务并自我检查,验收交给任务级审核(verify 启用)", () => {
-    const text = renderSubtask(plan, task, subtask, { verify: true })
+  test("只做一个子任务并自我检查;不含任务级验收与 verify 描述(verify 已退役)", () => {
+    const text = renderSubtask(plan, task, subtask)
     expect(text).toContain(subtask)
     expect(text).toContain("Complete this one subtask strictly")
     expect(text).toContain("check for yourself whether this subtask is genuinely complete")
-    expect(text).toContain("acceptance for the whole task happens at the very end in one independent review session")
     expect(text).toContain("you may add to the content of docs/ but not modify it")
     expect(text).toContain("T-002: 实现迁移")
     // 状态文件由 DRIVER 维护,不再要求 agent 勾选
     expect(text).toContain("are maintained by the DRIVER alone")
-    expect(text).toContain("the verified field")
     expect(text).not.toContain("change it to `- [x]`")
-  })
-
-  test("verify 未启用: 不含任务级验收与 verify 描述,仍要求不更新 docs/", () => {
-    const text = renderSubtask(plan, task, subtask)
-    expect(text).toContain("check for yourself whether this subtask is genuinely complete")
-    expect(text).toContain("you may add to the content of docs/ but not modify it")
     expect(text).not.toContain("verify")
     expect(text).not.toContain("acceptance")
     expect(text).not.toContain("the verified field")
@@ -492,23 +483,32 @@ describe("renderWrapup", () => {
     expect(text).not.toContain("把当前任务的状态标记改为 [done]")
   })
 
-  test("verify 处理权在 DRIVER(verify 启用): 收尾不运行 verify、不下结论,由独立审核会话验收", () => {
-    const text = renderWrapup(plan, task, { verify: true })
-    expect(text).toContain("不要运行任务级 verify、不要下验收结论")
-    expect(text).toContain("verify 的处理权在 DRIVER")
-    expect(text).toContain("独立审核会话")
-    expect(text).toContain("the verified field")
-    expect(text).not.toContain("verified-command")
-    expect(text).not.toContain("结论: 通过")
-    expect(text).not.toContain("结论: 差距")
-  })
-
-  test("verify 未启用: 收尾提示不涉及验收,任务状态由 DRIVER 登记", () => {
+  test("收尾: 任务状态由 DRIVER 登记;结论行协议(Result: PASS|FAIL)落 report.md,写作纪律来自意图包", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("任务状态由 DRIVER 在会话结束后统一登记")
-    expect(text).not.toContain("verify")
-    expect(text).not.toContain("验收")
+    expect(text).toContain("`Result: PASS` 或 `Result: FAIL <一句话原因>`")
+    expect(text).toContain(`docs/${task.id}/report.md 最后一行正文`)
+    // (b) 类纪律来自内置意图包 ## acceptance / ### result-line
+    expect(text).toContain("Never write PASS for a check you did not run or observe")
     expect(text).not.toContain("verified")
+    expect(text).not.toContain("结论: 通过")
+  })
+
+  test("零意图基线: 意图包缺 ### result-line 时结论行指令整段消失(从不因结论停机)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "intents")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "default.md"), "# default\n\n## acceptance\n")
+      useIntentPacks(dir)
+      const text = renderWrapup(plan, task)
+      expect(text).not.toContain("Result:")
+      expect(text).toContain("任务状态由 DRIVER 在会话结束后统一登记")
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    } finally {
+      useIntentPacks(undefined)
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   test("solo 模式(off/ondemand)不提及子任务", () => {
@@ -575,25 +575,6 @@ describe("renderWrapup", () => {
   })
 })
 
-describe("renderFix", () => {
-  test("把审核差距反馈回执行会话: 只修差距、不运行 verify、不下结论", () => {
-    const text = renderFix(plan, task, "迁移脚本缺少回滚逻辑", { verify: true })
-    expect(text).toContain("迁移脚本缺少回滚逻辑")
-    expect(text).toContain("did not pass this task's acceptance")
-    expect(text).toContain("Fix only the gaps the review pointed out")
-    expect(text).toContain("do not run the task-level verify")
-    expect(text).toContain("are maintained by the DRIVER alone")
-    expect(text).not.toContain("verified-command")
-  })
-
-  test("test-by-DRIVER: 修复轮同样注入测试执行协议", () => {
-    const text = renderFix(plan, task, "差距", { testByDriver: true })
-    expect(text).toContain("Test execution protocol (--test-by-driver)")
-    expect(text).toContain("tmp/test.sh")
-    expect(renderFix(plan, task, "差距")).not.toContain("tmp/test.sh")
-  })
-})
-
 describe("renderWhole", () => {
   test("off 模式: 单会话完成整个任务,不含交接条款", () => {
     const text = renderWhole(plan, task)
@@ -635,7 +616,7 @@ describe("renderWhole", () => {
   })
 })
 
-describe("测试执行协议(--test-by-driver,与 verify 正交)", () => {
+describe("测试执行协议(--test-by-driver)", () => {
   const run: TestRunInfo = {
     seq: 3,
     script: "/tmp/pkg/test/build.sh",

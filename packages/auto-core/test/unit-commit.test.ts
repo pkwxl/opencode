@@ -1,4 +1,4 @@
-// src/unit-commit.ts 的单测: refcheck 挂点门禁(gatedAutoCorrectRefs/gatedTaskRefGap)与 afterSession 完成条件门禁。
+// src/unit-commit.ts 的单测: refcheck 挂点门禁(gatedAutoCorrectRefs)与 afterSession 完成条件门禁。
 // 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
@@ -7,13 +7,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { commitTree, unitBaseline } from "../src/git"
 import { recallHandover, saveHandover } from "../src/handover"
-import { afterSession, gatedAutoCorrectRefs, gatedTaskRefGap, rollbackUnitState } from "../src/unit-commit"
+import { afterSession, gatedAutoCorrectRefs, rollbackUnitState } from "../src/unit-commit"
 import { git, freshRepo, task } from "./fixtures/runner"
 
 // ---- refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off)----
 
-describe("gatedAutoCorrectRefs / gatedTaskRefGap(OPENCODE_AUTO_REF_CHECK 挂点门禁)", () => {
-  test("off(缺省): 提交前 auto-correct 与 verify 门禁预扫空转,目标目录零引用检查行为", async () => {
+describe("gatedAutoCorrectRefs(OPENCODE_AUTO_REF_CHECK 挂点门禁)", () => {
+  test("off(缺省): 提交前 auto-correct 空转,目标目录零引用检查行为", async () => {
     const dir = await freshRepo()
     try {
       await Bun.write(join(dir, "src/old.ts"), "code\n")
@@ -27,14 +27,12 @@ describe("gatedAutoCorrectRefs / gatedTaskRefGap(OPENCODE_AUTO_REF_CHECK 挂点�
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(before)
       // 不扫失效引用、不产生失效清单
       expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
-      // verify 门禁预扫空转: 无差距(门禁不存在)
-      expect(await gatedTaskRefGap(dir, "T-001", false)).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("on: auto-correct 按 rename 配对改写并落失效清单;verify 门禁产出差距文案", async () => {
+  test("on: auto-correct 按 rename 配对改写并落失效清单", async () => {
     const dir = await freshRepo()
     try {
       await Bun.write(join(dir, "src/old.ts"), "code\n")
@@ -45,9 +43,6 @@ describe("gatedAutoCorrectRefs / gatedTaskRefGap(OPENCODE_AUTO_REF_CHECK 挂点�
       await gatedAutoCorrectRefs(dir, true)
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe("见 `src/new.ts` 与 `docs/gone.md`。\n")
       expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(true)
-      const gap = await gatedTaskRefGap(dir, "T-001", true)
-      expect(gap).toContain("任务产物文档存在失效引用")
-      expect(gap).toContain("docs/gone.md")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

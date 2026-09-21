@@ -4,14 +4,13 @@ import { loadProjectConfig } from "./config"
 import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
 import { autoSwitches, type Switches } from "./switches"
 
-// check 命令的检查逻辑: ①原则检查——扫描目标目录的 AGENTS.md 与 PLAN.md,报告与"验证执行权
-// 在 driver""测试/编译等命令执行权在 driver"及"提交执行权在 driver"原则(见
-// agents-block.ts 的 opencode-auto 单一标记块)相违背的描述——即要求会话/AI 亲自
-// 运行验证脚本或验证命令、自行下验收结论,或要求会话直接运行编译/测试/构建/lint
+// check 命令的检查逻辑: ①原则检查——扫描目标目录的 AGENTS.md 与 PLAN.md,报告与
+// "测试/编译等命令执行权在 driver"及"提交执行权在 driver"原则(见 agents-block.ts
+// 的 opencode-auto 单一标记块)相违背的描述——即要求会话直接运行编译/测试/构建/lint
 // 等命令,或要求会话执行 git 提交的语句。原则性/否定句("不要运行…")与归属
-// driver 的语句不报告;匹配为启发式,报告供人工确认,不修改文件。验证原则仅在
-// config.verify 启用时成立,测试执行原则仅在 config.testByDriver 启用时成立
-// (未启用时相关检查也按未启用渲染比对,不影响块存在性);提交原则始终成立。
+// driver 的语句不报告;匹配为启发式,报告供人工确认,不修改文件。测试执行原则仅在
+// config.testByDriver 启用时成立(未启用时块比对也按未启用渲染,不影响块存在性);
+// 提交原则始终成立。
 // ②引用检查(stable-refs P4,D6 第二层): 全量活文档(docs/**/*.md,排除
 // docs/phases/**)扫描失效引用(路径不存在 / 行号超出文件总行数),命中经 refs
 // 并入 CLI 报文(退出码 1);目标目录缺 opencode-auto 块或非 git(auto-correct 不可用)
@@ -30,20 +29,13 @@ export type Finding = { file: string; task?: string; line: number; text: string 
 // 及可能残留的旧版带名块)整体跳过——块内容本身就是原则表述。
 const AUTO_BLOCK = /<!--\s*opencode-auto:[^\n]*?start\s*-->[\s\S]*?<!--\s*opencode-auto:[^\n]*?end\s*-->/g
 
-// PLAN.md 的字段行(verify/verified/question/answer 等): verify 字段本身就是交给
-// driver 执行的验收标准,不属于违背。
+// PLAN.md 的字段行(attempts/fork-base 及已退役的 verify/verified 等): 字段值是
+// driver 状态,不属于违背。
 const FIELD_LINE = /^\s*-\s+[\w-]+\s*:/
 
-// 验证类违背特征(仅 config.verify 启用时检查): 执行动词 + 验证语义(中文/英文)。
-// 动词与验证词的距离收得很紧,避免"执行会话链…验收""执行权原则…验证原则块"这类
-// 同句误报;排除"可执行(文件)"中的执行与 runVerifyScript 这类标识符内的 verify。
-const VERIFY_PATTERNS: RegExp[] = [
-  /(?<!可)(运行|执行|跑)[^。\n]{0,8}(验证|验收|(?<!\w)verify)/i,
-  /\b(run|execute|perform)\b[^.\n]{0,40}\b(verify|verification|acceptance)\b/i,
-]
-
 // 测试/编译类违背特征(仅 config.testByDriver 启用时检查): 执行动词 + 编译/测试/
-// 构建/lint 语义。与验证类同距离收紧,避免同句误报。
+// 构建/lint 语义。动词与对象词的距离收得很紧,避免同句误报;排除"可执行(文件)"
+// 中的执行。
 const TEST_PATTERNS: RegExp[] = [
   /(?<!可)(运行|执行|跑)[^。\n]{0,8}(编译|测试|单元测试|构建|lint)/i,
   /\b(run|execute|perform)\b[^.\n]{0,40}\b(build|compile|tests?|lint)\b/i,
@@ -56,20 +48,17 @@ const COMMIT_PATTERNS: RegExp[] = [/\bgit\s+(add|commit)\b/i, /提交(全部|所
 export async function checkPrinciple(
   dir: string,
   switches: Switches = autoSwitches(),
-): Promise<{ findings: Finding[]; notes: string[]; refs: RefFinding[]; verifyOn: boolean; testOn: boolean }> {
+): Promise<{ findings: Finding[]; notes: string[]; refs: RefFinding[]; testOn: boolean }> {
   const findings: Finding[] = []
   const notes: string[] = []
-  let verifyOn = false
   let testOn = false
   try {
     const config = await loadProjectConfig(dir)
-    verifyOn = config.verify
     testOn = config.testByDriver
   } catch (error) {
-    notes.push(`⚠ project config (.opencode/auto/config.json) is invalid, verify/test principle checks treated as disabled: ${error instanceof Error ? error.message : String(error)}`)
+    notes.push(`⚠ project config (.opencode/auto/config.json) is invalid, test principle checks treated as disabled: ${error instanceof Error ? error.message : String(error)}`)
   }
   const patterns = [
-    ...(verifyOn ? VERIFY_PATTERNS : []),
     ...(testOn ? TEST_PATTERNS : []),
     ...COMMIT_PATTERNS,
   ]
@@ -95,7 +84,7 @@ export async function checkPrinciple(
       if (!text.includes("opencode-auto:start")) {
         notes.push("AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it")
       } else {
-        if (!text.includes(renderAgentsBlock({ verify: verifyOn, testByDriver: testOn }))) {
+        if (!text.includes(renderAgentsBlock({ testByDriver: testOn }))) {
           notes.push("AGENTS.md opencode-auto block content is inconsistent with the current config (stale), run opencode-auto init/run to refresh")
         }
         const legacyCount = [...text.matchAll(LEGACY_BLOCK)].length
@@ -123,11 +112,11 @@ export async function checkPrinciple(
       notes.push("non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates")
     }
   }
-  return { findings, notes, refs, verifyOn, testOn }
+  return { findings, notes, refs, testOn }
 }
 
-// 一行是否与原则相违背: 命中"执行动词 + 验证语义"(verify 启用时)或"会话执行
-// git 提交",且不是否定句、不归属 driver、不是 PLAN.md 字段行。
+// 一行是否与原则相违背: 命中"执行动词 + 编译/测试语义"(testByDriver 启用时)或
+// "会话执行 git 提交",且不是否定句、不归属 driver、不是 PLAN.md 字段行。
 function violates(line: string, patterns: RegExp[]): boolean {
   if (FIELD_LINE.test(line)) return false
   // 归属 driver 的语句是合规的(原则本身就在描述 driver 的执行权)。

@@ -1,5 +1,6 @@
 # 结构详述(路由自 AGENTS.md)
 
+> **Stale until the M6.2 rebuild:** verify / review / final-review (`src/verify.ts`, `src/review.ts`, `src/final.ts`, `--verify`, `--review`, `--early`, `--final-review`, the `verified`/`final` fields, T-F tasks) were retired in M2.2 — see `plans/0044-completion-side-retirement-design.md`; `src/verify.ts` survives as `src/script.ts` (driver script runner). Entries below that describe them no longer apply.
 > AGENTS.md 只保留导航与速览;各文件职责与机制细节集中在本文件,改动源码结构时同步更新这里。
 > 本文件路径相对 `packages/auto-core`(核心库包);CLI 外壳(子命令版 `src/index.ts`、`script/build.ts`、e2e 测试)在壳包 `packages/auto`(`@opencode-ai/auto`,bin `opencode-auto`),经 `@opencode-ai/auto-core/<模块>` 子路径导入本包。
 

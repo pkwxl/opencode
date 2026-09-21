@@ -14,7 +14,7 @@ import { log } from "./log"
 import type { Opts } from "./opts"
 import type { Task } from "./plan"
 import { handoffFile, renderHandoffSteer, type TestRunInfo } from "./prompt"
-import { runVerifyScript } from "./verify"
+import { runScript } from "./script"
 
 // steer: 会话进行中已用上下文达到 limit 时,driver 向该会话插入一次 text
 // (handoff-steer 交接提示;v2 prompt 默认 steer,在下一个 provider turn 边界生效)。
@@ -211,7 +211,7 @@ export async function cleanTestHandoffs(planPath: string, task: Task): Promise<v
 // --test-by-driver 的单次测试执行 = 消费请求标记 + 执行。两步拆开是因为顺序态的
 // 测试交接要在定版那一刻先消费标记、把脚本定下来,执行推迟到交接收口之后。
 // stdout+stderr 合并整写 tmp/test.<n>.out(共用 idleTime/idleMax 看门狗);退出码
-// 非 0 不在此判定——判断权在 AI(与 verify 哲学一致,机制正交)。
+// 非 0 不在此判定——判断权在 AI。
 export async function executeTest(test: TestRun, opts: Opts): Promise<TestRunInfo> {
   const pending = await resolveTestScript(test)
   return runTestScript(test, opts, pending.script, pending.seq)
@@ -238,7 +238,7 @@ export async function resolveTestScript(test: Pick<TestRun, "dir" | "tmp" | "seq
   // trim 后单行且指向现存文件 → 运行该 test/ 脚本(协议首选);否则按内联脚本回落。
   if (!line.includes("\n") && (await Bun.file(candidate).exists())) {
     // best-effort 补执行位: 脚本缺 +x 时直接 exec 会 EACCES;失败(只读文件系统等)
-    // 静默——runVerifyScript 对不可执行脚本还有 exec bash 回落。
+    // 静默——runScript 对不可执行脚本还有 exec bash 回落。
     await chmod(candidate, 0o755).catch(() => {})
     script = candidate
   } else {
@@ -255,7 +255,7 @@ export async function resolveTestScript(test: Pick<TestRun, "dir" | "tmp" | "seq
 export async function runTestScript(test: TestRun, opts: Opts, script: string, seq = ++test.seq): Promise<TestRunInfo> {
   const out = join(test.tmp, `test.${seq}.out`)
   await mkdir(test.tmp, { recursive: true })
-  const run = await runVerifyScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out })
+  const run = await runScript(test.dir, script, { idleMs: opts.idleMs, maxMs: opts.maxMs, out })
   log(
     `  ⚙ ${test.label} test script exit code ${run.code}${run.timedOut ? ` (timed out: ${run.timeoutReason === "max" ? "absolute duration cap exceeded" : "no output for too long"})` : ""}, took ${run.ms}ms, script: ${script}, output: ${out}`,
   )

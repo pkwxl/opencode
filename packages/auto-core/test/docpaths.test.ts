@@ -4,8 +4,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   archivedTestHandoff,
-  finalDir,
-  finalDoc,
   knowledgeDoc,
   latestHandoffSeq,
   legacyKnowledgeDoc,
@@ -42,12 +40,6 @@ describe("新布局构造器", () => {
     expect(subtaskDir("T-003", 123)).toBe(join("docs", "T-003", "S123"))
     expect(subtaskDoc("T-003", 4, "index")).toBe(join("docs", "T-003", "S04", "index.md"))
     expect(subtaskDoc("T-003", 2, "testhandoff")).toBe(join("docs", "T-003", "S02", "testhandoff.md"))
-  })
-
-  test("finalDir/finalDoc: 终审锚定目录", () => {
-    expect(finalDir(1)).toBe(join("docs", "T-F1"))
-    expect(finalDoc(1, "audit-r1.md")).toBe(join("docs", "T-F1", "audit-r1.md"))
-    expect(finalDoc(3, "plan-audit-r2.md")).toBe(join("docs", "T-F3", "plan-audit-r2.md"))
   })
 })
 

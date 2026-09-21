@@ -48,10 +48,10 @@ describe("渲染器", () => {
 
   test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
     usePromptLibrary(undefined)
-    const standalone = renderText("前:\n   {{> state-rule}}\n后", { verify: true })
-    expect(standalone.split("\n")[1]).toBe("   PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks, the verified field); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.")
+    const standalone = renderText("前:\n   {{> state-rule}}\n后", {})
+    expect(standalone.split("\n")[1]).toBe("   PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.")
     expect(standalone.split("\n")[2]).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.")
-    const inline = renderText("前:\n   {{> state-rule}};尾", { verify: true })
+    const inline = renderText("前:\n   {{> state-rule}};尾", {})
     expect(inline.split("\n").at(-1)).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.;尾")
   })
 })
@@ -80,7 +80,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("30 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose)", () => {
+  test("24 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "context-base",
@@ -92,8 +92,6 @@ describe("内置模板注册表", () => {
       "decompose-t",
       "decompose-v",
       "dryrun",
-      "final-task",
-      "fix",
       "handoff-steer",
       "implement-plan",
       "infer-source",
@@ -102,15 +100,11 @@ describe("内置模板注册表", () => {
       "phase-handover",
       "phase-plan",
       "prior-knowledge",
-      "review",
-      "review-fix",
       "stuck-hint",
       "subtask",
       "test-continue",
       "test-result",
       "test-wrapup",
-      "verify-judge",
-      "verify-script-gen",
       "whole",
       "wrapup",
     ])
@@ -257,9 +251,10 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "verify-judge.md"), "随便写的判定提示词,没有结论协议")
-      expect(() => usePromptLibrary(dir)).toThrow(/verify-judge\.md is missing required protocol content/)
-      expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
+      writeFileSync(join(overlay, "wrapup.md"), "随便写的收尾提示词,没有结论行协议")
+      expect(() => usePromptLibrary(dir)).toThrow(/wrapup\.md is missing required protocol content/)
+      expect(() => usePromptLibrary(dir)).toThrow(/Result: PASS/)
+      rmSync(join(overlay, "wrapup.md"))
       // phase-handover 覆盖缺四个必备小节标题 → 同样报错;修复后再测 decompose
       writeFileSync(join(overlay, "phase-handover.md"), "自定义交接提示词,丢了小节协议")
       expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md is missing required protocol content/)

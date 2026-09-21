@@ -31,7 +31,7 @@ describe("进度记录", () => {
       session: "ses_old",
       at: 0,
       active: true,
-      phase: { kind: "verify", stage: "judge", round: 1, rechecks: 0, replaced: false },
+      phase: { kind: "wrapup" },
     })
     expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_old")
   })
@@ -52,16 +52,16 @@ describe("进度记录", () => {
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
   })
 
-  test("verify 修复轮记录(stage=fix)的差距原文 gap 随记录往返", async () => {
-    const progress: Progress = {
-      task: "T-001",
-      session: "ses_fix",
-      at: Date.now(),
-      active: true,
-      phase: { kind: "verify", stage: "fix", round: 2, rechecks: 0, replaced: false, gap: "构建失败: 缺少依赖 x" },
+  test("已退役的 verify/review 阶段记录(plans/0044 D5)读取时映射为 closeout: 收尾已完成,只剩结论行检查与完成", async () => {
+    const { mkdir } = await import("node:fs/promises")
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    for (const phase of [
+      { kind: "verify", stage: "fix", round: 2, rechecks: 0, replaced: false, gap: "构建失败" },
+      { kind: "review", round: 1, stage: "fixrun", index: 2 },
+    ]) {
+      await Bun.write(join(dir, ".auto", "progress.json"), JSON.stringify({ task: "T-001", session: "ses_fix", at: 7, active: true, phase }))
+      expect(await recallProgress(dir, "T-001")).toEqual({ task: "T-001", session: "ses_fix", at: 7, active: true, phase: { kind: "closeout" } })
     }
-    await saveProgress(dir, progress)
-    expect(await recallProgress(dir, "T-001")).toEqual(progress)
   })
 
   test("严格恢复字段(baseline/model)随记录往返;缺字段的旧记录两字段为 undefined", async () => {
@@ -129,8 +129,8 @@ describe("进度记录", () => {
 
   test("peek 不分任务返回当前记录;缺失时为 undefined", async () => {
     expect(await peekProgress(dir)).toBeUndefined()
-    await saveProgress(dir, { task: "T-003", at: Date.now(), active: false, phase: { kind: "review", round: 2, stage: "planfix" } })
-    expect(await peekProgress(dir)).toEqual({ task: "T-003", session: undefined, at: expect.any(Number), active: false, phase: { kind: "review", round: 2, stage: "planfix" } })
+    await saveProgress(dir, { task: "T-003", at: Date.now(), active: false, phase: { kind: "closeout" } })
+    expect(await peekProgress(dir)).toEqual({ task: "T-003", session: undefined, at: expect.any(Number), active: false, phase: { kind: "closeout" } })
   })
 
   test("forget 对缺失文件无害", async () => {

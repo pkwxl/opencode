@@ -1,6 +1,6 @@
 // 执行类会话的交接时序状态机(runExecSession): --test-by-driver 下包装测试交接
 // 循环,按「交接文档的文件状态 × 提交状态」从中断点续跑,定版点/续跑会话分叉
-// (seedPinFork/seedSessionFork)。位于 session 与 testrun 之上、review/execute 之下;
+// (seedPinFork/seedSessionFork)。位于 session 与 testrun 之上、execute 之下;
 // **不得反向 import runner**,testrun 亦不得反向 import 本模块(§D.2 环消解)。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S10,纯搬运)。
 
@@ -30,7 +30,7 @@ import {
   type TestRun,
 } from "./testrun"
 import { afterSession, commitBlocked } from "./unit-commit"
-import { verifyTmpDir } from "./verify"
+import { scriptTmpDir } from "./script"
 
 // 执行类会话(子任务/整任务/修复轮)的统一入口: --test-by-driver 未启用时直通
 // runSession;启用时包装测试交接循环——会话因测试失败且上下文达上限交结束后,
@@ -52,7 +52,7 @@ export async function runExecSession(
 ): Promise<SessionResult> {
   if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
   const dir = opts.dir ?? dirname(plan.path)
-  const tmp = verifyTmpDir(dir)
+  const tmp = scriptTmpDir(dir)
   const handoff = testHandoffFile(task, subtask)
   // 现场复原(中断恢复 F3): 已落账却不在工作区的交接文档先取回——上一次运行的
   // 陈旧清理可能把在途文档删掉。必须早于下面的归档编号扫描: 编号要基于复原后的

@@ -13,7 +13,7 @@ import { log, vlog } from "./log"
 import type { Opts, SessionCommit, UnitStop } from "./opts"
 import { currentRound } from "./phases"
 import type { Task } from "./plan"
-import { autoCorrectRefs, formatRefGap, taskRefFindings } from "./refcheck"
+import { autoCorrectRefs } from "./refcheck"
 import { collectAgentResolves, resolvesOf, type ResolveItem } from "./resolve"
 import { saveProgress, type Phase, type Progress } from "./resume"
 import { autoSwitches, type Switches } from "./switches"
@@ -118,16 +118,11 @@ export async function wrapupResolves(dir: string | undefined, taskID: string): P
 }
 
 // refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off):
-// off 时提交前 auto-correct 与 verify 门禁预扫空转——目标目录零引用检查行为;
+// off 时提交前 auto-correct 空转——目标目录零引用检查行为;
 // check 子命令的引用扫描段在 check.ts 同款门控;script/fix-refs.ts 手动脚本不经
 // 门禁(人工显式执行等价于显式开启)。导出供单测(parseSwitches 纯函数注入)。
 export async function gatedAutoCorrectRefs(dir: string, on: boolean): Promise<void> {
   if (on) await autoCorrectRefs(dir)
-}
-
-// verify 门禁预扫(D6 第三层)的门禁同款: off 时无差距(门禁不存在)。
-export async function gatedTaskRefGap(dir: string, id: string, on: boolean): Promise<string | undefined> {
-  return on ? formatRefGap(await taskRefFindings(dir, id)) : undefined
 }
 
 // —— 恢复保真(plans/0022-session-recovery-fidelity-design.md,OPENCODE_AUTO_STRICT_RESUME)——

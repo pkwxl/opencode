@@ -31,9 +31,16 @@ Migration/upgrade mode notes:
    修改而漂移,DRIVER 会对不一致的锚自动追加 @<sha> 版本标记(该范围仅对标记的历史版本
    有效),已带标记的引用不要自行改动;不要引用轮次目录 docs/R-NN/ 内的状态文件
    (台账 phases.md、阶段归档内的 PLAN 快照);
-3. 不要运行任务级 verify、不要下验收结论: verify 的处理权在 DRIVER,任务级
-   验收由它启动的独立审核会话在你结束会话后进行,不通过会把差距反馈回执行会话修复。PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks, the verified field); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+3. 任务状态由 DRIVER 在会话结束后统一登记。PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
+   结论行:Write it when this task's description asks you to check, test, validate or accept work (an acceptance task), and whenever
+   you found that the task's goal was not met. `Result: PASS` means every check the task asked for was actually run or observed
+   and passed, with the evidence written in this report; `Result: FAIL` means a required check failed, could not be run, or the
+   goal is not met — say why in one line. Never write PASS for a check you did not run or observe. A task that is not an
+   acceptance task and met its goal may omit the line.
+   结论行写在 docs/T-002/report.md 最后一行正文(终止符之前)、独占一行,只能是
+   `Result: PASS` 或 `Result: FAIL <一句话原因>`——这是 DRIVER 协议串,照原样书写,不要翻译、
+   不要加粗或加列表符号;DRIVER 读到 `Result: FAIL` 即把本任务置为阻塞、停止运行交人工处理。
 4. 本任务执行期间 DRIVER 自动代答了以下本应由你询问用户的问题(无人值守下 DRIVER 代替
    用户把它们闭环了,你当时收到的是自动答复):
 

@@ -259,14 +259,20 @@ describe("parseSwitches(实验开关环境变量层)", () => {
   test("model 用例(3) 条目表 ⇒ wildcard/字母/角色三项填充(分隔符 =,值可含冒号)", () => {
     expect(
       parseSwitches({
-        [SWITCH_ENV.model]: "*=kimi/k2,m=anthropic/c-4,t=kimi/k2-lite,verify-judge=kimi/k2-lite,decompose=anthropic/c-4",
+        [SWITCH_ENV.model]: "*=kimi/k2,m=anthropic/c-4,t=kimi/k2-lite,wrapup=kimi/k2-lite,decompose=anthropic/c-4",
       }).model,
     ).toEqual({
       wildcard: "kimi/k2",
       byLetter: { m: "anthropic/c-4", t: "kimi/k2-lite" },
-      byRole: { "verify-judge": "kimi/k2-lite", decompose: "anthropic/c-4" },
+      byRole: { wrapup: "kimi/k2-lite", decompose: "anthropic/c-4" },
       fallback: [],
     })
+  })
+
+  test("model: 已退役会话的角色键(verify-*/review-*/final-plan,plans/0044 D1)按越界键严格失败", () => {
+    for (const role of ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"]) {
+      expect(() => parseSwitches({ [SWITCH_ENV.model]: `${role}=kimi/k2` })).toThrow(/invalid key/)
+    }
   })
 
   test("model 用例(4) 越界键 ⇒ 中文报错含变量名与越界键", () => {

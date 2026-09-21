@@ -623,10 +623,10 @@ describe("attempt 接线: runSession 依注入策略带/不带 model(不依赖 a
     expect(calls.prompts[0]!.model).toEqual({ providerID: "anthropic", modelID: "c-4" })
   })
 
-  test("旁路角色: chain.role=verify-judge → role 覆盖 wildcard", async () => {
+  test("旁路角色: chain.role=knowledge → role 覆盖 wildcard", async () => {
     const { client, calls } = fakeClient()
-    const chain: SessionChain = { pct: 100, used: 0, at: 0, role: "verify-judge" }
-    await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "verify-judge=kimi/k2-lite,*=kimi/k2" }))
+    const chain: SessionChain = { pct: 100, used: 0, at: 0, role: "knowledge" }
+    await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "knowledge=kimi/k2-lite,*=kimi/k2" }))
     expect(calls.prompts[0]!.model).toEqual({ providerID: "kimi", modelID: "k2-lite" })
   })
 

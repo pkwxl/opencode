@@ -3,8 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  appendSubtasks,
-  appendTask,
   begin,
   block,
   countSubtasks,
@@ -18,7 +16,6 @@ import {
   setSubtasks,
   subtasks,
   tick,
-  verifyCommand,
 } from "../src/plan"
 
 const SAMPLE = `# 示例计划
@@ -54,16 +51,15 @@ describe("parse", () => {
     ])
   })
 
-  test("解析字段与正文", () => {
+  test("解析字段与正文;已退役的 verify 字段行不进 Task(plans/0044 D3)", () => {
     const task = plan.tasks[1]!
-    expect(task.verify).toBe("bun test test/migrate.test.ts")
+    expect("verify" in task).toBe(false)
     expect(task.attempts).toBe(1)
     expect(task.body).toBe("编写迁移脚本。")
   })
 
   test("无字段任务", () => {
     const task = plan.tasks[2]!
-    expect(task.verify).toBeUndefined()
     expect(task.attempts).toBe(0)
     expect(task.body).toBe("REST 接口。")
   })
@@ -147,8 +143,8 @@ describe("edit", () => {
     expect(text).not.toContain("question:")
     expect(text).not.toContain("answer:")
     expect(text).not.toContain("blocked-at:")
-    // 其它字段与其它任务不受影响
-    expect(task.verify).toBe("bun test test/migrate.test.ts")
+    // 其它字段(含遗留的 verify 行)与其它任务不受影响
+    expect(text).toContain("  - verify: bun test test/migrate.test.ts")
     expect((await load(path)).tasks[0]!.status).toBe("done")
   })
 
@@ -157,7 +153,7 @@ describe("edit", () => {
     const task = (await load(path)).tasks[1]!
     expect(task.status).toBe("done")
     expect(task.body).toBe("编写迁移脚本。")
-    expect(task.verify).toBe("bun test test/migrate.test.ts")
+    expect(await Bun.file(path).text()).toContain("  - verify: bun test test/migrate.test.ts")
   })
 
   test("操作不存在的任务报错", async () => {
@@ -190,99 +186,35 @@ describe("edit", () => {
     expect(tick(path, "T-003", "丙")).rejects.toThrow("no unticked subtask")
   })
 
-  test("appendSubtasks 在既有检查项块之后追加", async () => {
-    await setSubtasks(path, "T-003", ["甲", "乙"])
-    await tick(path, "T-003", "甲")
-    await appendSubtasks(path, "T-003", ["修复 A", "修复 B"])
-    const task = (await load(path)).tasks[2]!
-    expect(task.body).toBe("REST 接口。\n\n- [x] 甲\n- [ ] 乙\n- [ ] 修复 A\n- [ ] 修复 B")
-  })
-
-  test("appendSubtasks 无检查项时接正文末", async () => {
-    await appendSubtasks(path, "T-003", ["修复 A"])
-    const task = (await load(path)).tasks[2]!
-    expect(task.body).toBe("REST 接口。\n\n- [ ] 修复 A")
-  })
-
-  test("appendSubtasks 检查项后有正文时插在检查项块之后而非正文末", async () => {
-    await Bun.write(path, "## T-001: a [pending]\n描述\n\n- [x] 已完成\n\n结语\n")
-    await appendSubtasks(path, "T-001", ["修复"])
-    const task = (await load(path)).tasks[0]!
-    expect(task.body).toBe("描述\n\n- [x] 已完成\n- [ ] 修复\n\n结语")
-  })
-
-  test("markDone 标 done 并按有无 verified 写/清字段", async () => {
-    await markDone(path, "T-003", "bun test")
-    const done = (await load(path)).tasks[2]!
-    expect(done.status).toBe("done")
-    expect(done.verified).toBe("bun test")
-    // 无命令的路径清除 verified,不残留旧记录
+  test("markDone 只改状态;遗留的 verify/verified 字段行原样保留(plans/0044 D3)", async () => {
+    await Bun.write(path, "## T-001: a [pending]\n  - verify: bun test\n  - verified: bun test\n正文。\n")
     await markDone(path, "T-001")
-    const cleared = (await load(path)).tasks[0]!
-    expect(cleared.status).toBe("done")
-    expect(cleared.verified).toBeUndefined()
-    expect(cleared.verify).toBe("bun test")
+    const text = await Bun.file(path).text()
+    expect(text).toBe("## T-001: a [done]\n  - verify: bun test\n  - verified: bun test\n正文。\n")
   })
 })
 
-describe("final 字段与 appendTask", () => {
+describe("遗留字段与终审编号(plans/0044 D3/D4)", () => {
   let dir: string
   let path: string
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "auto-plan-final-"))
+    dir = await mkdtemp(join(tmpdir(), "auto-plan-legacy-"))
     path = join(dir, "PLAN.md")
     await Bun.write(path, SAMPLE)
   })
 
   afterEach(() => rm(dir, { recursive: true, force: true }))
 
-  test("parse 解析 final 字段", () => {
-    const task = parse("p", "## T-F1: 终审审计 [pending]\n  - final: audit@1\n  - verify: command: test -s a.md\n正文。\n").tasks[0]!
-    expect(task.final).toBe("audit@1")
-    expect(parse("p", "## T-001: a [pending]\n正文。\n").tasks[0]!.final).toBeUndefined()
-  })
-
-  test("appendTask 在文件尾追加完整任务块,重复解析往返", async () => {
-    await appendTask(path, {
-      id: "T-F1",
-      title: "终审审计(第 1 轮)",
-      status: "pending",
-      final: "audit@1",
-      verify: "command: test -s docs/final/audit-r1.md",
-      attempts: 0,
-      body: "通读全部任务,产出审计报告。",
-    })
+  test("未完成的 T-F<k> 终审任务按普通任务解析与执行;final 字段行经 begin/markDone 原样保留", async () => {
+    await Bun.write(path, "## T-001: a [done]\n正文。\n\n## T-F1: 终审审计(第 1 轮) [pending]\n  - final: audit@1\n审计。\n")
     const plan = await load(path)
-    expect(plan.tasks.map((t) => t.id)).toEqual(["T-001", "T-002", "T-003", "T-F1"])
-    const task = plan.tasks[3]!
-    expect(task.title).toBe("终审审计(第 1 轮)")
-    expect(task.status).toBe("pending")
-    expect(task.final).toBe("audit@1")
-    expect(task.verify).toBe("command: test -s docs/final/audit-r1.md")
-    expect(task.attempts).toBe(0)
-    expect(task.body).toBe("通读全部任务,产出审计报告。")
-    // next() 按文件顺序自然拾取追加的终审任务
-    expect(next(plan)?.id).toBe("T-002")
-    expect(await Bun.file(path).text()).toContain("## T-F1: 终审审计(第 1 轮) [pending]\n  - final: audit@1")
-  })
-
-  test("appendTask 后经 begin/edit 重写保留 final 字段(往返)", async () => {
-    await appendTask(path, {
-      id: "T-F1",
-      title: "终审审计(第 1 轮)",
-      status: "pending",
-      final: "audit@1",
-      attempts: 0,
-      body: "审计。",
-    })
+    expect(next(plan)?.id).toBe("T-F1")
+    expect("final" in plan.tasks[1]!).toBe(false)
     await begin(path, "T-F1")
-    await markDone(path, "T-F1", "command: test -s docs/final/audit-r1.md")
-    const task = (await load(path)).tasks[3]!
-    expect(task.status).toBe("done")
-    expect(task.attempts).toBe(1)
-    expect(task.final).toBe("audit@1")
-    expect(task.verified).toBe("command: test -s docs/final/audit-r1.md")
+    await markDone(path, "T-F1")
+    const text = await Bun.file(path).text()
+    expect(text).toContain("## T-F1: 终审审计(第 1 轮) [done]\n  - final: audit@1\n  - attempts: 1\n")
   })
 
   test("edit 重写时未知字段行同样保留", async () => {
@@ -291,14 +223,6 @@ describe("final 字段与 appendTask", () => {
     const text = await Bun.file(path).text()
     expect(text).toContain("  - note: 自定义")
     expect(text).toContain("[done]")
-  })
-
-  test("appendTask 重复 ID 报错且不写文件", async () => {
-    const before = await Bun.file(path).text()
-    await expect(
-      appendTask(path, { id: "T-001", title: "重复", status: "pending", attempts: 0, body: "x" }),
-    ).rejects.toThrow("already exists")
-    expect(await Bun.file(path).text()).toBe(before)
   })
 })
 
@@ -335,15 +259,5 @@ describe("fork-base 字段(fork 分解流水线)", () => {
     expect(task.forkBase).toBe("ses_ctxbase")
     expect(task.attempts).toBe(1)
     expect((await Bun.file(path).text())).toContain("  - fork-base: ses_ctxbase")
-  })
-})
-
-describe("verify 命令提取", () => {
-  test("verifyCommand 只认 command: 前缀", () => {
-    const task = (id: string, verify?: string) =>
-      parse("p", `## ${id}: t [pending]\n${verify ? `  - verify: ${verify}\n` : ""}正文。\n`).tasks[0]!
-    expect(verifyCommand(task("T-1", "command: bun test"))).toBe("bun test")
-    expect(verifyCommand(task("T-2", " bun test 应通过"))).toBeUndefined()
-    expect(verifyCommand(task("T-3"))).toBeUndefined()
   })
 })

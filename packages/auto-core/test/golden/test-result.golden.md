@@ -1,6 +1,6 @@
 [DRIVER] The test script has finished running (run number 1).
 
-- Script: tmp/verify.sh
+- Script: test/check.sh
 - Exit code: 1; took 1234ms; timeout: no
 - Full output (stdout and stderr merged): /repo/tmp/test.1.out (judge by reading the file directly, in chunks if it is large; do not conclude by guessing)
 

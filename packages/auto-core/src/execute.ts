@@ -95,7 +95,7 @@ export async function executeWhole(
       client,
       plan,
       task,
-      renderWhole(plan, task, { mode: opts.mode, verify: opts.verify, ondemand, continuation }) + feedback,
+      renderWhole(plan, task, { mode: opts.mode, ondemand, continuation }) + feedback,
       opts,
       chain,
       steer,
@@ -282,9 +282,8 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
 }
 
 // Runs one subtask session, then ticks the checklist item on trust: the
-// session self-checks its own work, and acceptance of the whole task is
-// deferred to the single task-level review after wrap-up (a gap there
-// appends a fix subtask).
+// session self-checks its own work; the whole task is accounted for by the
+// wrap-up report and its result line.
 // handoff-steer 同样适用于子任务会话(与 ondemand 整任务会话同机制、共用
 // docs/<id>/handoff.md): 会话进行中上下文已用量达到 2x --context-limit 时
 // driver steer 交接提示,会话写出交接文档(末行 `状态: 继续|完成`,以本子任务

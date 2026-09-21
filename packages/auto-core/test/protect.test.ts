@@ -58,11 +58,10 @@ describe("protect", () => {
     await setSubtasks(path, "T-001", ["甲"])
     expect(await writable(path)).toBe(false)
     await tick(path, "T-001", "甲")
-    await markDone(path, "T-001", "bun test")
+    await markDone(path, "T-001")
     expect(await writable(path)).toBe(false)
     const task = (await load(path)).tasks[0]!
     expect(task.status).toBe("done")
-    expect(task.verified).toBe("bun test")
     expect(task.body).toContain("- [x] 甲")
   })
 

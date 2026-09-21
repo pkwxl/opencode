@@ -10,7 +10,6 @@
 This plan belongs to a migration/upgrade scenario, on the premise that externally visible behaviour stays the same:
 - Arrange the tasks as "baseline confirmation → migration work → regression verification": first fix the baseline of the current external
   behaviour (existing tests, reproducible checks or behaviour snapshots), then do the migration work, and do regression verification last;
-- For each task's verify field, prefer reusing an existing test/build command over inventing a check that has never been run;
 - Do not smuggle in functional changes or refactoring unrelated to the migration; when one is genuinely needed, make it a task of its own.
 
 ## 输入: 前序阶段交接
@@ -37,20 +36,13 @@ docs/T-NNN/S<两位序号>/index.md),路径一经创建即为永久路径,不随
    贴合本阶段的计划标题,清掉占位说明,按执行顺序写入本阶段全部任务。任务格式:
 
 ## T-NNN: <任务标题> [pending]
-  - verify: <验收标准: `command: <具体命令>` 或自然语言描述>
 <任务正文: 目标、范围、关键约束与必要上下文——自包含,仅凭它、CURRENT.md 与 docs/ 即可执行>
 
 3. 任务编号自 T-005 起连续递增(自动编号: 编号在目标目录
    永不重复,更早的编号已被历史任务占用,不得复用);
    每个任务聚焦一个可独立交付的成果;不要手工编写子任务
-   检查项(执行时由 DRIVER 的分解会话生成);验收标准统一写在 verify
-   字段,任务正文不要要求执行者亲自运行验证命令/脚本或自行下验收结论(验证的执行权
-   在 DRIVER);
+   检查项(执行时由 DRIVER 的分解会话生成);
 4. 规划完成、写出有效的 PLAN.md 后立即结束会话。
-
-终审提醒: 终审闭环已启用(--final-review,审计轮上限 2)。任务排布
-预留终审空间即可,终审任务由 DRIVER 在本阶段任务全部完成后自动追加与推进,不要
-把终审内容规划进任务。
 ## 约束
 
 1. 本会话唯一可写的文件是 PLAN.md(DRIVER 已临时放行写权限);CURRENT.md 与其余

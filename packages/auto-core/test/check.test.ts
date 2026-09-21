@@ -12,50 +12,6 @@ import { parseSwitches, SWITCH_ENV } from "../src/switches"
 const REFCHECK_ON = parseSwitches({ [SWITCH_ENV.refCheck]: "on" })
 
 describe("checkPrinciple", () => {
-  test("verify 启用: 标记要求会话亲自运行验证/执行提交的描述,放行合规语句", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
-    try {
-      await mkdir(join(dir, ".opencode/auto"), { recursive: true })
-      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ verify: true }))
-      await Bun.write(
-        join(dir, "PLAN.md"),
-        [
-          "# 计划",
-          "",
-          "## T-001: 正常任务 [pending]",
-          "  - verify: command: bun test",
-          "实现功能并自行编写单元测试。",
-          "该执行权原则经 init 下沉到 AGENTS.md 验证原则块。",
-          "中断后不再复跑 verify 命令,由 driver 重新执行。",
-          "",
-          "## T-002: 违规任务 [pending]",
-          "  - verify: 验收标准描述",
-          "完成后运行验收命令确认全部通过。",
-          "请执行 verify 脚本并把结果贴在报告里。",
-          "run the verification suite to accept the task.",
-          "不要运行任务级 verify(验收由 driver 负责)。",
-          "",
-        ].join("\n"),
-      )
-      await Bun.write(
-        join(dir, "AGENTS.md"),
-        ["# AGENTS.md", "", "会话结束时执行验证脚本并记录退出码。", "driver 在会话外执行 verify 脚本,会话不得执行。", ""].join("\n"),
-      )
-      const { findings, notes } = await checkPrinciple(dir)
-      // 四处违规: AGENTS 执行验证脚本 1 处 + PLAN 运行验收命令 / 执行 verify 脚本 /
-      // run the verification 各 1 处
-      expect(findings.length).toBe(4)
-      expect(findings[0]).toMatchObject({ file: "AGENTS.md", line: 3, text: "会话结束时执行验证脚本并记录退出码。" })
-      expect(findings[1]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 11, text: "完成后运行验收命令确认全部通过。" })
-      expect(findings[2]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 12 })
-      expect(findings[3]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 13 })
-      // verify 字段行、否定句、driver 归属句均不计;缺 opencode-auto 块给出提示
-      expect(notes).toEqual([`AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it`])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
   test("testByDriver 启用: 标记要求会话亲自运行编译/测试/构建/lint 的描述,未启用时不检查", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
@@ -90,7 +46,7 @@ describe("checkPrinciple", () => {
     }
   })
 
-  test("verify 未启用: 验证类描述不算违背,也不提示补写验证原则块", async () => {
+  test("验证类描述不属于原则检查(verify 已退役,plans/0044): 不算违背,也不提示补写验证原则块", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await Bun.write(
@@ -124,7 +80,7 @@ describe("checkPrinciple", () => {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n完成后 git commit -m 完成。\n")
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings.length).toBe(1)
-      expect(notes[0]).toContain("project config (.opencode/auto/config.json) is invalid, verify/test principle checks treated as disabled")
+      expect(notes[0]).toContain("project config (.opencode/auto/config.json) is invalid, test principle checks treated as disabled")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -159,15 +115,15 @@ describe("checkPrinciple", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await mkdir(join(dir, ".opencode/auto"), { recursive: true })
-      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ verify: true, testByDriver: true }))
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n  - verify: command: bun test\n实现功能。\n")
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ testByDriver: true }))
+      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n  - attempts: 1\n实现功能。\n")
       const before = await checkPrinciple(dir)
       expect(before.findings).toEqual([])
       expect(before.notes.length).toBe(1)
-      // init 补写 opencode-auto 块(含验证/测试/提交/摘要/维护规则/引用规范全部段落)后,
+      // init 补写 opencode-auto 块(含测试/提交/摘要/维护规则/引用规范全部段落)后,
       // 块内的 driver 执行表述不再触发提示;ensurePointer 的开关取自同一份 config.json,
       // 与 checkPrinciple 渲染比对时的口径一致
-      const ensured = await ensurePointer(dir, { verify: true, testByDriver: true })
+      const ensured = await ensurePointer(dir, { testByDriver: true })
       expect(ensured).toEqual({ block: "inserted", legacyRemoved: 0 })
       const after = await checkPrinciple(dir)
       expect(after.findings).toEqual([])
@@ -177,7 +133,7 @@ describe("checkPrinciple", () => {
     }
   })
 
-  test("verify 关闭: 渲染内容不含验证段落;旧版验证子块作为多余标记块被清理", async () => {
+  test("渲染内容不含验证段落(verify 已退役);旧版验证子块作为多余标记块被清理", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     const legacy = "<!-- opencode-auto:verify:start -->\n验证原则: 验证由 driver 执行。\n<!-- opencode-auto:verify:end -->"
     try {
@@ -223,16 +179,16 @@ describe("checkPrinciple", () => {
     try {
       await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
       await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${stale}\n\n后文。\n`)
-      const ensured = await ensurePointer(dir, { verify: true, testByDriver: true })
+      const ensured = await ensurePointer(dir, { testByDriver: true })
       expect(ensured).toEqual({ block: "replaced", legacyRemoved: 0 })
       const written = await Bun.file(join(dir, "AGENTS.md")).text()
       expect(written).not.toContain("过期内容。")
-      expect(written).toContain("Verify principle:")
+      expect(written).not.toContain("Verify principle:")
       expect(written).toContain("Test principle:")
       expect(written).toMatch(/前文。\n\n<!-- opencode-auto:start -->/)
       expect(written).toMatch(/opencode-auto:end -->\n\n后文。/)
       // 幂等: 内容已与渲染一致,再次运行不改动文件
-      const second = await ensurePointer(dir, { verify: true, testByDriver: true })
+      const second = await ensurePointer(dir, { testByDriver: true })
       expect(second).toEqual({ block: "unchanged", legacyRemoved: 0 })
     } finally {
       await rm(dir, { recursive: true, force: true })

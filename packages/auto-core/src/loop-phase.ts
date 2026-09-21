@@ -115,8 +115,6 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
         source: opts.source,
         destDir: opts.destDir,
         mode: opts.mode,
-        verify: opts.verify,
-        finalReview: opts.finalReview,
         // 生效 phases 经 --phases 裁剪(无独立 a/d 阶段)→ m 阶段规划注入裁剪注记
         trimmedPhases: !phases.includes("a") && !phases.includes("d"),
         numberStart,
@@ -149,7 +147,7 @@ export async function planPhase(ctx: LoopCtx, phase: Phase): Promise<number> {
             : `任务编号必须自 T-${String(numberStart).padStart(3, "0")} 起连续递增——更早的编号已被历史任务占用,复用视为无效产出。`),
         commit: { stage: "phase-plan", subject: `PLAN plan ${phase} ${phaseText(phase)}` },
         reset: async () => {
-          await Bun.write(path, renderPlanScaffold(opts.verify === true))
+          await Bun.write(path, renderPlanScaffold())
         },
         collect: async () => {
           const fresh = await load(path).catch(() => undefined)
@@ -225,7 +223,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
     const distilled = await requireArtifact(
       serverHandle.client,
       distillTask,
-      renderPhaseHandover({ phase, handover, next, verify: opts.verify }),
+      renderPhaseHandover({ phase, handover, next }),
       {
         agent: agentName,
         dir: directory,
@@ -274,7 +272,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
   await mkdir(dirname(archivedPlan), { recursive: true })
   await Bun.write(archivedPlan, await Bun.file(path).text())
   await allowWrite(path)
-  await Bun.write(path, renderPlanScaffold(opts.verify === true))
+  await Bun.write(path, renderPlanScaffold())
   await reprotect(path)
   log("  this phase's PLAN.md archived; PLAN.md reset to the empty template")
   await appendLedger(directory, phase)
@@ -309,8 +307,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: Phase): Promise<number>
 
 // --phases 阶段循环(D.1): 推导 currentPhase → PLAN.md 空则开规划会话 → 主循环
 // 执行 → 本阶段任务全 done 交接 → 台账追加推导下一阶段;全部阶段完成退出 0。
-// 台账非法等环境错误退出 1(H 节)。--final-review 终审闭环仅 m 阶段挂接
-// (runTaskLoop 的 finalGate),其余阶段忽略并提示。
+// 台账非法等环境错误退出 1(H 节)。
 // 步进暂停(phase 边界,OPENCODE_AUTO_STEP ≥ phase): 交接(归档+台账+提交)
 // 完成后、下一轮路由前硬暂停——最后一个阶段暂停后回车即「全部阶段已完成」退出。
 export async function handoverWithStep(ctx: LoopCtx, phase: Phase): Promise<number> {
@@ -333,9 +330,6 @@ export async function handoverWithStep(ctx: LoopCtx, phase: Phase): Promise<numb
 
 export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
   const { directory, path, opts, server: serverHandle, agentName, phases, repl } = ctx
-  if ((opts.finalReview ?? 0) > 0) {
-    log("ℹ the final-review loop (--final-review) applies only to the m (migration implementation) phase; other phases do not enter it on completion")
-  }
   for (;;) {
     const route = await routePhase(directory, await load(path), phases)
     if (route.type === "blocked") {

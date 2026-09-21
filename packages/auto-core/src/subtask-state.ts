@@ -82,32 +82,3 @@ export async function renameTodoToDone(dir: string, taskId: string, index: numbe
   if (!(await Bun.file(todo).exists()) || (await Bun.file(done).exists())) return
   await rename(todo, done)
 }
-
-// DRIVER-authored minimal scope file for review-fix injected items (D9): the
-// checklist item text is the authority; the file exists to keep the
-// "every checklist item has exactly one state file" invariant uniform. The
-// section headings come from the same spec anchors the decompose checks
-// enforce (single source, M1.4).
-export async function writeInjectedTodo(dir: string, taskId: string, index: number, text: string): Promise<void> {
-  const spec = subtaskStateSpec(taskId, index)
-  const rel = spec.pending.path
-  if (await exists(dir, rel)) return
-  if (await exists(dir, spec.complete.path)) return
-  const [scopeHeading, listHeading] = SUBTASK_TODO_SECTIONS
-  const body = [
-    `# ${taskId} S${String(index).padStart(2, "0")}: ${text}`,
-    ``,
-    scopeHeading,
-    ``,
-    `This subtask was injected by a quality-review fix round; its scope is the description of the corresponding checklist item in PLAN.md: ${text}`,
-    ``,
-    listHeading,
-    ``,
-    `The \`产出:\` declaration in the checklist item description is authoritative (with no declaration, the artifacts land directly in the source tree).`,
-    ``,
-    EOF_MARK,
-  ].join("\n")
-  const abs = join(dir, rel)
-  await mkdir(dirname(abs), { recursive: true })
-  await Bun.write(abs, `${body}\n`)
-}

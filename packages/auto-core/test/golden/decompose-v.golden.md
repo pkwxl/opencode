@@ -45,7 +45,7 @@ This session completes the task-background understanding and the subtask decompo
    - Split by acceptance dimension (functional conformance, documentation completeness, environment and runtime, regression and the like),
      one item per dimension;
    - Each item produces one verification record (how it was verified, the evidence, the conclusion), written to its own file under docs/;
-   - Verify and record only, do not fix anything (gaps go through the existing final-review loop);
+   - Verify and record only, do not fix anything (a gap is reported through the task report's result line — `Result: FAIL` stops the run for a person to plan the fix);
 5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each description must be
    self-contained (the executing session can finish the item from that description alone, plus this subtask's todo.md, the shared-context
    index shared.md and docs/), and must declare the item's artifacts at the end of the description with the literal token `产出:` — a
@@ -84,7 +84,7 @@ it by that permanent path.
 
 Constraints:
 1. Understanding and decomposition only: modify no implementation code, and do not carry out the execution-time instructions in the task body
-   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks, the verified field); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —

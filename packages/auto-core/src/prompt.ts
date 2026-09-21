@@ -1,19 +1,18 @@
 // 提示词上下文组装层: 文案全部在 templates/prompts/*.md(共享片段见 _partials.md,
 // 经 src/template.ts 渲染;目标目录 .opencode/auto/prompts/ 可覆盖),这里只负责
-// 把 plan/task/运行信息组装为模板变量。render* 签名保持稳定,runner/loop/final
+// 把 plan/task/运行信息组装为模板变量。render* 签名保持稳定,runner/loop
 // 的调用点不感知模板机制。
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
 import type { IntentPack, IntentSection } from "./intent/types"
-import { finalDoc, subtaskDoc, taskDoc } from "./docpaths"
+import { subtaskDoc, taskDoc } from "./docpaths"
 import { subtasks, type Plan, type Status, type Task } from "./plan"
 import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
 import { autoSwitches, type TaskContextMode } from "./switches"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
-import { verifyTmpDir } from "./verify"
 
 // The active intent pack (M1.2/M1.3, plans/0032+0033): the (b)-class content
 // of the decompose family (split granularity criteria + per-phase duties) and
@@ -39,10 +38,8 @@ function intentText(section: IntentSection, key: string, ctx: Ctx): string | und
   return text && renderText(text, ctx)
 }
 
-// verify: config.verify(任务级三段式验收开关)。false 时与 verify 相关的描述
-// 从会话提示词中整体消失(验收机制不存在,提示词不得提及)。
-// testByDriver/handoverTest: --test-by-driver 测试执行协议(与 verify 正交,
-// run 级开关)。true 时执行类模板(subtask/whole/fix)注入协议段。
+// testByDriver/handoverTest: --test-by-driver 测试执行协议(run 级开关)。true 时
+// 执行类模板(subtask/whole)注入协议段。
 // phase/contextLimit/fine: 阶段化流程的当前阶段字母、上下文预算基线(tokens)与
 // 细粒度分解开关(OPENCODE_AUTO_DECOMPOSE_FINE,开关层接线见
 // plans/0003-fork-decompose-design.md §4.6)——分解模板 decompose-<phase> 据此选择与渲染
@@ -52,7 +49,6 @@ function intentText(section: IntentSection, key: string, ctx: Ctx): string | und
 // 硬性截断)。
 type Opts = {
   mode?: ModeSpec
-  verify?: boolean
   testByDriver?: boolean
   handoverTest?: boolean
   phase?: Phase
@@ -90,18 +86,11 @@ function renderPrompt(name: string, ctx: Ctx): string {
   return renderTemplate(name, promptCtx(ctx))
 }
 
-// 审核会话的判定文件(相对目标目录);driver 在审核会话结束后解析其结论行。
-export const VERDICT_FILE = ".auto/verify.md"
-
-// --review 质量审核会话的结论文件(相对目标目录);协议同 VERDICT_FILE,
-// driver 复用同一解析逻辑读取其末行结论。
-export const REVIEW_FILE = ".auto/review.md"
-
-// 三段式 verify 的运行信息:driver 执行脚本后交判定会话。out 为 stdout 与
-// stderr 合并整写的绝对路径(单文件),内容由判定会话直读,不经工具输出截断
-// (这正是三段式的目的)。timeoutReason: idle = 持续无输出被看门狗终止;
-// max = 超过绝对时长上限被终止。
-export type VerifyRun = {
+// Run info of a driver-executed script, relayed to the session: out is the
+// absolute path of the merged stdout+stderr file, read by the session directly
+// (never truncated by tool output). timeoutReason: idle = killed by the
+// no-output watchdog; max = killed after the absolute run-time cap.
+export type ScriptRun = {
   script: string
   code: number
   ms: number
@@ -110,15 +99,15 @@ export type VerifyRun = {
   out: string
 }
 
-// --test-by-driver 的单次测试执行信息(VerifyRun + 按序归档编号): driver 执行
+// --test-by-driver 的单次测试执行信息(ScriptRun + 按序归档编号): driver 执行
 // AI 指定的 test/ 脚本后经 steer 注入执行会话,AI 直读合并输出文件判断。
-export type TestRunInfo = VerifyRun & { seq: number }
+export type TestRunInfo = ScriptRun & { seq: number }
 
 // --handover-test 的测试交接文档(相对目标目录): 上下文达到上限时(判定时点固定
 // 为"AI 发起测试的那一刻",不再叠加测试失败),会话把进度与后续步骤写入该文件后
 // 结束,driver 归档为 testhandoff-<n>.md 并开新会话以 continuation 提示续跑。
 // 文件按执行范围命名: 子任务会话写 docs/<id>/S<两位序号>/testhandoff.md,整任务
-// 会话与验收修复轮为任务级(docs/<id>/testhandoff.md)——交接文档只对本执行范围
+// 会话为任务级(docs/<id>/testhandoff.md)——交接文档只对本执行范围
 // 生效,防止下一子任务误读上一子任务的遗留交接。路径构造经 docpaths(目录化
 // 布局的唯一构造点),导出名与签名保持稳定,runner 调用面零改动。
 export function testHandoffFile(task: Task, subtask?: number): string {
@@ -324,6 +313,11 @@ export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boole
     resolveList: resolveList(opts.resolves),
     reportForm: intentText("artifactSpec", opts.solo ? "report-solo" : "report-indexed", ctx),
     auditScope: intentText("governance", "wrapup-audit", ctx),
+    // Result-line discipline (plans/0044 §3.1): when to write the line and what
+    // counts as FAIL is intent (`## acceptance` / `### result-line`); the literal
+    // and its placement stay core. A pack without the subsection drops the
+    // whole instruction — no result line, the run never stops on a verdict.
+    resultRule: intentText("acceptance", "result-line", ctx),
   })
 }
 
@@ -341,102 +335,6 @@ function resolveList(items: ResolveItem[] | undefined): string | undefined {
   return lines.length ? lines.join("\n") : undefined
 }
 
-// Verify script generation session (fresh side session): translate the verify
-// field's acceptance semantics into an executable script at tmp/verify.sh.
-export function renderVerifyScriptGen(plan: Plan, task: Task, scriptPath: string, opts: Opts = {}): string {
-  return renderPrompt("verify-script-gen", { ...baseCtx(plan, task, opts), scriptPath, verifyState: verifyState(task) })
-}
-
-// Verify judge session (fresh side session): the driver already executed the
-// script — the prompt injects the run info and the later-verify list; the
-// session only reads files and code to reach a verdict (protocol details in
-// templates/prompts/verify-judge.md).
-export function renderVerifyJudge(plan: Plan, task: Task, run: VerifyRun, opts: Opts = {}): string {
-  const later = plan.tasks.filter((item) => item.id !== task.id && item.status !== "done" && item.verify)
-  return renderPrompt("verify-judge", {
-    ...baseCtx(plan, task, opts),
-    verifyState: verifyState(task),
-    runScript: run.script,
-    runCode: String(run.code),
-    runMs: String(run.ms),
-    runTimeout: run.timedOut
-      ? `是(已被 driver 终止${run.timeoutReason === "max" ? ":超过绝对时长上限" : ":持续无输出,看门狗判定无进度"})`
-      : "否",
-    runOut: run.out,
-    replacement: join(verifyTmpDir(dirname(plan.path)), "verify.sh"),
-    laterVerifyList: later.length ? later.map((item) => `   - ${item.id}: ${item.verify}`).join("\n") : "   (无)",
-  })
-}
-
-// Fix round after a failed task-level review: send the gap back and resume the
-// execution session chain with it.
-export function renderFix(plan: Plan, task: Task, gap: string, opts: Opts = {}): string {
-  return renderPrompt("fix", { ...baseCtx(plan, task, opts), gap })
-}
-
-// --review quality-audit session (fresh side session); variants for final and
-// early live in templates/prompts/review.md.
-export function renderReview(plan: Plan, task: Task, opts: Opts & { final: boolean; early?: boolean }): string {
-  return renderPrompt("review", {
-    ...baseCtx(plan, task, opts),
-    final: opts.final,
-    early: Boolean(opts.early),
-    scriptPath: join(verifyTmpDir(dirname(plan.path)), "verify.sh"),
-  })
-}
-
-// --review fix-planning session (fresh side session): turn the audit gap into
-// self-contained fix checklist items in docs/<id>/fix.md.
-export function renderReviewFix(plan: Plan, task: Task, gap: string, opts: Opts = {}): string {
-  return renderPrompt("review-fix", { ...baseCtx(plan, task, opts), gap })
-}
-
-// --final-review 终审四阶段(audit → remediate → validate → finalize,
-// validate 差距回退 audit,设计文档 B.2)。
-export type FinalStage = "audit" | "remediate" | "validate" | "finalize"
-
-// --final-review 终审任务生成会话(旁路一次性,复用 requireArtifact 骨架);四阶段
-// 的职责与报告产出要求以条件段内联在 templates/prompts/final-task.md。
-export function renderFinalTask(plan: Plan, stage: FinalStage, round: number, prior: string, mode?: ModeSpec): string {
-  // 终审产物按产出任务锚定(stable-refs P1-D1): 本会话产出的提案与后续报告都
-  // 落即将追加的 T-F<k> 任务自己的目录(k = finalIndex 同口径,函数内推导——
-  // 为避免 prompt↔final 循环依赖在此内联计数,构造经 docpaths 的 finalDoc)。
-  const index = plan.tasks.filter((task) => task.final).length + 1
-  // 终审任务强制跳过任务级验收: verify 恒为 false(state-rule 的 verified 字段
-  // 表述不出现;模式文本同经渲染,可自带条件段)。
-  const emphasis = stage === "remediate" ? undefined : mode && modeText(mode.final[stage], {})
-  return renderPrompt("final-task", {
-    doneList: doneList(plan),
-    prior,
-    emphasis,
-    modeName: mode?.name,
-    verify: false,
-    round: String(round),
-    stageName: stageText(stage),
-    finalTask: `T-F${index}`,
-    proposalFile: finalDoc(index, `plan-${stage}-r${round}.md`),
-    reaudit: stage === "audit" && round >= 2,
-    stageAudit: stage === "audit",
-    stageRemediate: stage === "remediate",
-    stageValidate: stage === "validate",
-    stageFinalize: stage === "finalize",
-  })
-}
-
-// 终审四阶段的中文名(横幅/标题/提示词共用,loop 与 final 的日志亦用)。
-export function stageText(stage: FinalStage): string {
-  switch (stage) {
-    case "audit":
-      return "终审审计"
-    case "remediate":
-      return "修复"
-    case "validate":
-      return "回归验证"
-    case "finalize":
-      return "终审收尾"
-  }
-}
-
 // 阶段规划会话(设计文档 plans/0006-phases-design.md E 节): 旁路一次性,产物 = 直接编辑填充
 // 的 PLAN.md(会话被 driver 专门授权写它)。brief 为 .opencode/auto/brief.md 原文
 // (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
@@ -444,7 +342,6 @@ export function stageText(stage: FinalStage): string {
 // prevRound 为上一轮迁移结论摘录(plans/0006-phases-design.md M 节,loop 侧组装: 归档索引/
 // 最终交接/迁移知识),仅续轮(新一轮轮目录建立后)的新一轮首个规划会话注入。
 // source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
-// finalReview 仅 m 阶段且启用时生效(模板提示任务排布预留终审空间),其余阶段忽略。
 // trimmedPhases 仅 m 阶段生效(生效 phases 经 --phases 裁剪、不含独立 a/d 阶段时由
 // loop 传入,模板注入「流程裁剪注记」——勘察设计并入首批任务,底线保障不省)。
 // numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
@@ -457,8 +354,6 @@ export function renderPhasePlan(input: {
   source?: { dir: string; path: string }
   destDir?: string
   mode?: ModeSpec
-  verify?: boolean
-  finalReview?: number
   trimmedPhases?: boolean
   numberStart?: number
 }): string {
@@ -473,9 +368,7 @@ export function renderPhasePlan(input: {
     sourcePath: input.source?.path,
     destDir: input.destDir,
     modeName: input.mode?.name,
-    modeInit: input.mode && modeText(input.mode.init, { verify: input.verify }),
-    verify: input.verify,
-    finalReview: phase === "m" && input.finalReview ? String(input.finalReview) : undefined,
+    modeInit: input.mode && modeText(input.mode.init),
     trimmedPhases: phase === "m" && input.trimmedPhases ? true : undefined,
     numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
     phaseA: phase === "a",
@@ -494,13 +387,12 @@ export function renderPhasePlan(input: {
 // 「计划文件」呈现 content(源文件全文,path 供报文引用),否则按「实施提示词」
 // 呈现(content = 提示词原文);brief 为 .opencode/auto/brief.md 原文(可空,与
 // -p/--prompt 同给时一并注入,供规划会话感知项目意图)。
-export function renderImplementPlan(input: { file?: string; content: string; brief?: string; verify?: boolean }): string {
+export function renderImplementPlan(input: { file?: string; content: string; brief?: string }): string {
   return renderPrompt("implement-plan", {
     fromFile: input.file !== undefined,
     filePath: input.file,
     content: input.content,
     brief: input.brief?.trim() || undefined,
-    verify: input.verify,
   })
 }
 
@@ -519,13 +411,12 @@ export function renderNumberRecovery(input: { floor: number }): string {
 // handover = handoverDoc(dir, round, phase)(src/phases.ts,新布局轮内
 // docs/R-NN/handovers/<字母>-<slug>.md,旧布局 docs/handovers/R<N>-<字母>-<slug>.md);
 // next 为下一阶段"字母 中文名"或 undefined(k 阶段无下一阶段,仍写 handover 供后续查阅)。
-export function renderPhaseHandover(input: { phase: Phase; handover: string; next?: string; verify?: boolean }): string {
+export function renderPhaseHandover(input: { phase: Phase; handover: string; next?: string }): string {
   return renderPrompt("phase-handover", {
     phase: input.phase,
     phaseName: phaseText(input.phase),
     handover: input.handover,
     next: input.next,
-    verify: input.verify,
   })
 }
 
@@ -645,13 +536,13 @@ export function renderDryrun(): string {
 
 // 模式注记上下文(baseCtx 的模式部分,独立导出): 旁路一次性会话(knowledge 等)
 // 与外壳自写的 render* 函数共用同口径的模式变量组装,壳层不必改 prompt.ts。
-// 模式文本先经模板引擎渲染(模式文件可用 {{#if verify}} 条件段)再作为变量注入;
-// 不传模式时三个变量均为 undefined(模板条件段整体消失)。
-export function modeCtx(mode?: ModeSpec, opts: { verify?: boolean } = {}): Ctx {
+// 模式文本先经模板引擎渲染再作为变量注入;不传模式时三个变量均为 undefined
+// (模板条件段整体消失)。
+export function modeCtx(mode?: ModeSpec): Ctx {
   return {
     modeName: mode?.name,
-    modeInit: mode && modeText(mode.init, opts),
-    modeExec: mode && modeText(mode.exec, opts),
+    modeInit: mode && modeText(mode.init),
+    modeExec: mode && modeText(mode.exec),
   }
 }
 
@@ -684,15 +575,14 @@ const TASK_CONTEXT_LINES: Record<TaskContextMode, number> = { off: 200, small: 3
 function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): Ctx {
   const phase = opts.phase ?? "m"
   return {
-    ...modeCtx(opts.mode, opts),
+    ...modeCtx(opts.mode),
     taskId: task.id,
     taskBlock: `# ${task.id}: ${task.title}\n\n${task.body}`,
     doneList: doneList(plan),
-    verify: opts.verify,
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),
     // 测试交接文档按执行范围命名: index(仅 renderSubtask 传入,子任务序号)存在
-    // 时落子任务级目录(docs/<id>/S<kk>/testhandoff.md),整任务/修复轮为任务级命名。
+    // 时落子任务级目录(docs/<id>/S<kk>/testhandoff.md),整任务为任务级命名。
     testHandoffFile: opts.testByDriver ? testHandoffFile(task, opts.index) : undefined,
     phase,
     phaseName: phaseText(phase),
@@ -702,11 +592,6 @@ function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): 
   }
 }
 
-function modeText(text: string, opts: Opts): string {
-  return renderText(text, { verify: Boolean(opts.verify) })
-}
-
-// verify 字段在提示词中的两种形态: `是"<原文字段>"` 或 `未声明`。
-function verifyState(task: Task): string {
-  return task.verify ? `是"${task.verify}"` : "未声明"
+function modeText(text: string): string {
+  return renderText(text, {})
 }

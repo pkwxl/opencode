@@ -17,8 +17,11 @@
    修改而漂移,DRIVER 会对不一致的锚自动追加 @<sha> 版本标记(该范围仅对标记的历史版本
    有效),已带标记的引用不要自行改动;不要引用轮次目录 docs/R-NN/ 内的状态文件
    (台账 phases.md、阶段归档内的 PLAN 快照);
-3. {{#if verify}}不要运行任务级 verify、不要下验收结论: verify 的处理权在 DRIVER,任务级
-   验收由它启动的独立审核会话在你结束会话后进行,不通过会把差距反馈回执行会话修复。{{/if}}{{^verify}}任务状态由 DRIVER 在会话结束后统一登记。{{/if}}{{> state-rule}}
+3. 任务状态由 DRIVER 在会话结束后统一登记。{{> state-rule}}{{#if resultRule}}
+   结论行:{{resultRule}}
+   结论行写在 docs/{{taskId}}/report.md 最后一行正文(终止符之前)、独占一行,只能是
+   `Result: PASS` 或 `Result: FAIL <一句话原因>`——这是 DRIVER 协议串,照原样书写,不要翻译、
+   不要加粗或加列表符号;DRIVER 读到 `Result: FAIL` 即把本任务置为阻塞、停止运行交人工处理。{{/if}}
 {{#if resolveList}}
 4. 本任务执行期间 DRIVER 自动代答了以下本应由你询问用户的问题(无人值守下 DRIVER 代替
    用户把它们闭环了,你当时收到的是自动答复):

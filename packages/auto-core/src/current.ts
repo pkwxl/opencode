@@ -19,7 +19,6 @@ export async function writeCurrent(path: string, task: Task, solo = false, remar
     `# Current task (maintained by opencode-auto, do not edit manually)`,
     ``,
     `## ${task.id}: ${task.title} [${task.status}]`,
-    ...(task.verify ? [`  - verify: ${task.verify}`] : []),
     ``,
     task.body,
     ``,

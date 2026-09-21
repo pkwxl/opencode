@@ -3,39 +3,27 @@ import type { AgentClient } from "./agent/types"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { writeCurrent, removeCurrent } from "./current"
 import { ensureDecomposed, executeWhole, requireTask, runSubtask } from "./execute"
-import { commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
+import { resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
 import { subtaskStateSpec } from "./document/spec"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies } from "./failback"
-import { baselineIntact, commitTree, removeIfUntracked, unitBaseline } from "./git"
+import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { handoffStatus } from "./handover"
 import { log } from "./log"
 import { type Opts, type Outcome, type UnitStop } from "./opts"
 import { interruptionRemark, phaseText, resumeNote, unitReruns } from "./resume-gate"
-import { planReviewFix, reviewTask, verifyTask, type Verdict } from "./review"
 import { ensureForkBase, runSession } from "./session"
-import {
-  appendSubtasks,
-  begin,
-  load,
-  markDone,
-  parseFinalMark,
-  setStatus,
-  subtasks,
-  syncSubtaskTicks,
-  type Plan,
-  type Task,
-} from "./plan"
+import { begin, load, markDone, subtasks, syncSubtaskTicks, type Plan, type Task } from "./plan"
 import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
-import { effectiveDone, scanSubtaskStates, writeInjectedTodo } from "./subtask-state"
+import { effectiveDone, scanSubtaskStates } from "./subtask-state"
 import { autoSwitches } from "./switches"
 import { stepPause } from "./step"
 import { cleanTestHandoffs, restoreTestHandoffs, testHandoffExists } from "./testrun"
-import { runWrapup } from "./wrapup"
+import { reportResult, runWrapup } from "./wrapup"
 
 // 会话耗时显示用紧凑式时长: 已收口至 src/log.ts 的 formatDurationCompact
 // (STATS_PLAN §5,T-001 上收、本任务删本处私有副本并改 import)。
@@ -43,41 +31,15 @@ import { runWrapup } from "./wrapup"
 // Runs one task through the pipeline; the driver owns all state
 // writes to PLAN.md and CURRENT.md, sessions never edit them.
 // --subtask auto (default): decompose (when the task body has no checklist) →
-// one session per subtask (driver ticks on trust) → wrap-up → verify.
-// --subtask off: a single whole-task session → wrap-up → verify; any gap
-// sends the task back to pending for a human to refine and re-run (no fix
-// subtasks).
+// one session per subtask (driver ticks on trust) → wrap-up → closeout.
+// --subtask off: a single whole-task session → wrap-up → closeout.
 // --subtask ondemand: like off, but when the running session's context usage
 // reaches 2x --context-limit the driver steers in a handoff prompt; the session
 // writes docs/<id>/handoff.md and a fresh session continues from it.
-// The execution phase (decompose / whole-task session) runs only on the first
-// round; every round then is: subtask sessions for the unticked checklist →
-// wrap-up session → three-stage task-level acceptance (the driver resolves
-// and runs the verify script itself, output dumped to tmp/ files, never
-// truncated; an independent judge session reads the results and writes the
-// verdict; a gap feeds the verdict back into the execution chain for a fix
-// round, max FIX_ROUNDS, except off mode).
-// With --review n > 0 a quality-audit round follows each acceptance pass:
-// an independent audit session (final = every task after this one is done)
-// writes an audit report plus the REVIEW_FILE conclusion. A gap in off mode
-// reverts the task to pending like a verify gap; otherwise the driver plans
-// fix checklist items in a side session, appends them into PLAN.md and runs
-// the whole round again (up to n fix rounds, then blocked).
-// --early moves that audit session into the verify-script execution window
-// (design doc F): verifyTask starts it right before executing the script,
-// joins it before the judge session and returns its verdict together with the
-// done result, so the audit below consumes it instead of opening a
-// separate serial audit session.
-// --verify off (the default) skips the three-stage acceptance entirely: the
-// driver marks the task done right after wrap-up (no verified record — nothing
-// ran), and a --review audit, if enabled, runs serially at that point (--early
-// has no execution window to hook into and degrades to the serial audit).
-// Final-review tasks (final field, appended by src/final.ts under
-// --final-review) run through this same pipeline but force BOTH review=0 AND
-// verify off regardless of the flags — the final-review stage is itself the
-// inspection; inspecting the inspection is skipped entirely. A missing or
-// malformed stage report surfaces later at routeFinal as a brokenReport
-// block (exit code 2, human check).
+// Closeout reads the result line of the task report (docs/<id>/report.md):
+// `Result: FAIL` blocks the task and stops the run; PASS or no result line
+// marks the task done. There is no driver-run acceptance, audit or final
+// review — checking is planned work (acceptance tasks, the v phase).
 // All execution sessions of a task share one chain: the next session reuses
 // the previous one when its context usage ended below REUSE_BELOW, its used
 // tokens below 50% of contextLimit (default 32k) and it went idle within
@@ -88,35 +50,33 @@ import { runWrapup } from "./wrapup"
 // interruption remark when the task ends blocked/incomplete (the next run's
 // first prompt carries the essence via the resume note), and deleted only
 // when the task completes.
-// Interruption recovery (进度记录 .auto/progress.json, design doc H): the
-// driver persists the current phase at every pipeline boundary and the
-// execution-chain session as active while a session is in flight. On re-run:
-// an active record with a live session resumes that session (unsummarized
-// in-flight work — equivalent to `opencode -r <session-id>`), unless a handoff
-// document was written before the interruption (the old session's context was
-// exhausted and the handoff carries the state — a fresh session continues from
-// it) or --new-session was given (skip reuse only; the recorded phase still
-// re-enters the pipeline precisely). Anything else starts a fresh session
-// guided by the recorded phase (graceful exits leave a summarized record with
-// active=false); the phase also re-enters the pipeline precisely — a persisted
-// verify run skips script re-execution, an interrupted fix round re-issues the
-// persisted gap to the execution chain, off/ondemand past the execution phase
-// never re-runs the whole-task session, a valid fix checklist file is
-// injected without a new planning session. Network-failure blockades keep the
-// active record (the session is in-flight and unsummarized); every other
-// blocked/incomplete exit finalizes the summary (CURRENT.md remark) and drops
-// reuse eligibility. Session reuse is gated by unit attribution (unitReruns):
-// the interrupted session belongs to one concrete execution unit (pipeline
-// stage / subtask #N / review-fix item #N) and is resumed only when that unit
-// will actually rerun — a unit already passed, disabled by config/switches, or
-// unattributable (legacy record without index) seals the record and starts a
-// fresh session, so the next unit never inherits a stranger's session.
+// Interruption recovery (.auto/progress.json): the driver persists the current
+// phase at every pipeline boundary and the execution-chain session as active
+// while a session is in flight. On re-run: an active record with a live
+// session resumes that session (unsummarized in-flight work — equivalent to
+// `opencode -r <session-id>`), unless a handoff document was written before
+// the interruption (the old session's context was exhausted and the handoff
+// carries the state — a fresh session continues from it) or --new-session was
+// given (skip reuse only; the recorded phase still re-enters the pipeline
+// precisely). Anything else starts a fresh session guided by the recorded
+// phase (graceful exits leave a summarized record with active=false); the
+// phase also re-enters the pipeline precisely — off/ondemand past the
+// execution phase never re-run the whole-task session, a closeout record
+// skips the wrap-up. Network-failure blockades keep the active record (the
+// session is in-flight and unsummarized); every other blocked/incomplete exit
+// finalizes the summary (CURRENT.md remark) and drops reuse eligibility.
+// Session reuse is gated by unit attribution (unitReruns): the interrupted
+// session belongs to one concrete execution unit (pipeline stage / subtask #N)
+// and is resumed only when that unit will actually rerun — a unit already
+// passed, disabled by config/switches, or unattributable (legacy record
+// without index) seals the record and starts a fresh session, so the next
+// unit never inherits a stranger's session.
 // Permission requests follow --permission (default
 // ask-deny): auto-allow grants immediately; ask-* wait for a human (per
 // --wait-answer) and time out into auto-allow / auto-deny (session
 // continues) / abort+block (ask-fail). Blocking happens on a repeated
-// question on the same issue, exhausted transient session errors, a failed
-// verification, or an ask-fail permission timeout.
+// question on the same issue, exhausted transient session errors, a FAIL
+// result line, or an ask-fail permission timeout.
 export async function runTask(
   client: AgentClient,
   plan: Plan,
@@ -160,7 +120,6 @@ export async function runTask(
     if (recalled.active === true) {
       const fresh = requireTask(await load(plan.path), task.id)
       const planDir = dirname(plan.path)
-      const exempt = Boolean(parseFinalMark(fresh.final)) || opts.phase === "v"
       const bodyItems = subtasks(fresh.body)
       // 子任务目录状态协议激活时,单元归属判定按 done.md 存在性(进度事实)而非
       // PLAN.md 勾选(展示轨)——plans/0030 D10。
@@ -172,8 +131,6 @@ export async function runTask(
         items: bodyItems.map((item, i) => ({ text: item.text, done: doneFlags[i] ?? item.done })),
         subtasksFileItems: subtasks(await Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "subtasks"))).text().catch(() => "")).length,
         wrapup: opts.wrapup ?? true,
-        verify: opts.verify === true && !exempt,
-        review: !exempt && (opts.review ?? 0) > 0,
       })
       if (!rerun) {
         await saveProgress(dir, { ...recalled, active: false })
@@ -254,7 +211,7 @@ export async function runTask(
         )
       } else {
         // --new-session 显式放弃旧会话: 立即把记录转总结态,防止本次运行在无会话
-        // 阶段(如 verify 脚本执行)中断后,下次运行误复用与已推进阶段错位的旧会话。
+        // 阶段中断后,下次运行误复用与已推进阶段错位的旧会话。
         if (opts.newSession && recalled.active) {
           await saveProgress(dir, { ...recalled, active: false })
         }
@@ -311,8 +268,7 @@ export async function runTask(
   return outcome
 
   // 任务流水线(闭包,持 client/plan/task/opts/chain): resume 为恢复记录的阶段
-  // 标记,用于精确重入;一次性旗标(enterAudit/skipWrapup/fastFix/pendingVerify)
-  // 仅影响恢复后的首轮,之后回归常规循环。
+  // 标记,用于精确重入。
   async function pipeline(resume?: Phase): Promise<Outcome> {
     // 交接文档的现场复原(测试交接中断恢复 F3): 必须无条件、且早于任何执行单元的
     // clean 门禁——上一次运行的陈旧清理可能把已落账的在途交接文档删掉,那道删除
@@ -356,7 +312,7 @@ export async function runTask(
         // 不进整任务分支,清理须在此覆盖,否则陈旧交接会被下一子任务误读续跑。
         if (opts.testByDriver) await cleanTestHandoffs(plan.path, task)
       }
-    } else if (resumed !== "wrapup" && resumed !== "verify" && resumed !== "review") {
+    } else if (resumed !== "wrapup" && resumed !== "closeout") {
       // 非恢复续跑才清除上次尝试遗留的交接文档;恢复时保留(其中是中断会话的进度
       // 总结,executeWhole 依其 `状态:` 行决定续跑)。同样只删未被 git 跟踪的份
       // (理由同 auto 分支: 已跟踪的属未收口单元的在途状态,删它即脏区)。
@@ -375,227 +331,104 @@ export async function runTask(
       if (blocked) return blocked
       task = requireTask(await load(plan.path), task.id)
     }
-    await persistStage({ kind: "subtasks" })
     await writeCurrent(plan.path, task, mode !== "auto")
 
-    // 终审任务(final 字段)与 v(验收)阶段任务本身即检验: 共用同一豁免路径,
-    // 强制 review=0 且跳过三段式验收,不对检验再做检验(--early 随之自然失效);
-    // v 豁免为内部标记(opts.phase),不写 final 字段、不污染 PLAN.md 协议
-    // (设计文档 B.6 与 plans/0006-phases-design.md D.3)。终审任务报告缺失/协议非法由路由时
-    // brokenReport 阻塞兜底。
-    const finalMark = parseFinalMark(task.final)
-    const exempt = Boolean(finalMark) || opts.phase === "v"
-    const limit = exempt ? 0 : (opts.review ?? 0)
-    // --verify 未启用(或豁免强制关闭): 略过三段式验收(early 依赖的脚本执行
-    // 窗口随之不存在),收尾后由 driver 直接标 done;--review 的质量审核改为此时
-    // 串行执行。
-    const verifyOn = opts.verify === true && !exempt
-    // --early(设计文档 F.2/F.5): review 启用时把审核会话挪进 verify 脚本执行
-    // 窗口并行,verifyTask 经挂点启动并随 done 带回 audit 结论。
-    const early = opts.early && limit > 0 && verifyOn
-    // 恢复重入旗标(仅首轮生效):
-    // - review/audit → 验收已过,直接补跑审核会话;
-    // - verify → verifyTask 内部按 stage/run 精确恢复;
-    // - review/planfix 且修复检查项文件已有效 → 跳到注入分支(round 已是记录值);
-    //   文件无效(规划会话半途中断,差距原文已丢失)→ 退回重跑审核重新发现差距,
-    //   round 回退 1 使审核后的 round++ 回到记录值。
-    const resumedReview = resume?.kind === "review" ? resume : undefined
-    // 修复检查项文件(目录化布局,读回落兼容旧平铺 docs/<id>.fix.md)。
-    const fixFile = join(dirname(plan.path), await resolveTaskDoc(dirname(plan.path), task.id, "fix"))
-    const fixItems = subtasks(await Bun.file(fixFile).text().catch(() => "")).map((item) => item.text)
-    const fixReady = resumedReview?.stage === "planfix" && fixItems.length > 0
-    const replan = resumedReview?.stage === "planfix" && !fixReady
-    // limit=0(--review 未启用或终审任务强制关闭)时补跑审核没有意义: 陈旧的
-    // review 阶段恢复记录不再开审核会话,按常规循环走完直接完成。
-    let enterAudit = limit > 0 && resumedReview !== undefined && (resumedReview.stage === "audit" || replan)
-    let skipToInject = fixReady
-    let skipWrapup = resume?.kind === "verify" || enterAudit
-    let pendingVerify = resume?.kind === "verify" ? resume : undefined
-    // 修复检查项注入是 driver 状态写入(PLAN.md 检查项 + CURRENT.md 镜像),注入后
-    // 立即统一提交——下一个执行单元(fixrun 检查项)的启动 clean 门禁据此成立
-    // (plans/0021-commit-boundary-design.md P3);提交失败即阻塞,planfix 产物不算落账。
-    const injectFix = async (items: string[], round: number): Promise<{ type: "blocked"; question: string } | undefined> => {
-      const prevCount = subtasks(task.body).length
-      await appendSubtasks(plan.path, task.id, items)
-      // 子任务目录状态协议(plans/0030 D9): 协议已激活的任务,为每个注入的修复
-      // 检查项补 DRIVER 侧最小 todo.md,维持「每个检查项恰有一个状态文件」不变量;
-      // 协议未激活(旧版分解/人工检查项)保持纯勾选语义。todo.md 随注入同一次提交
-      // 落账(下方 commitTree)。
-      if ((await scanSubtaskStates(dir, task.id, prevCount)).active) {
-        for (let k = 0; k < items.length; k++) await writeInjectedTodo(dir, task.id, prevCount + k + 1, items[k]!)
-      }
-      await persistStage({ kind: "review", round, stage: "fixrun" })
-      task = requireTask(await load(plan.path), task.id)
-      await writeCurrent(plan.path, task, mode !== "auto")
-      if (opts.commit !== false && !opts.dryrun) {
-        const committed = await commitTree(dir, task, { stage: "review-fix", subject: `${task.id} planfix ${task.title} fix-checklist injection` })
-        if (!committed.ok) {
-          return commitBlocked(`${task.id} fix-checklist injection`, {
-            type: "failed",
-            question: `unified commit failed: ${committed.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}. Changes are kept in the worktree; handle git manually and re-run.`,
-          })
+    // closeout resume: the wrap-up already finished before the interruption
+    // (or the record is a legacy verify/review one, which only ever followed
+    // wrap-up) — only the result check and completion remain.
+    if (resume?.kind !== "closeout") {
+      await persistStage({ kind: "subtasks" })
+      // auto 模式此处执行分解出的检查项;off/ondemand 模式只有正文中人工编写的检查项。
+      for (;;) {
+        const items = subtasks(task.body)
+        // 子任务目录状态协议(M1.0,plans/0030): 协议激活(任一 todo/done 文件
+        // 存在)时,done.md 存在性覆盖勾选成为进度事实;非法态(两者同存/同缺)
+        // 检出即阻塞交人工;勾选漂移按文件状态 reconcile(文件为准,展示轨跟随)。
+        const scan = await scanSubtaskStates(dir, task.id, items.length)
+        if (scan.illegal.length) {
+          return {
+            type: "blocked",
+            question:
+              `${task.id} subtask state files are illegal (${scan.illegal
+                .map((v) => {
+                  // State-file names come from the spec data (M1.4): the
+                  // message follows the protocol declaration, not literals.
+                  const spec = subtaskStateSpec(task.id, v.index)
+                  const pending = basename(spec.pending.path)
+                  const complete = basename(spec.complete.path)
+                  return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
+                })
+                .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
+          }
         }
-      }
-      return undefined
-    }
-    for (
-      let round = resumedReview ? (replan ? resumedReview.round - 1 : resumedReview.round) : 0;
-      ;
-    ) {
-      if (skipToInject) {
-        // planfix 恢复: 规划会话已产出有效检查项文件,直接注入后进入 fixrun。
-        skipToInject = false
-        log(`↻ ${task.id} resume after interruption: fix checklist ${fixFile} is already valid, injecting directly (round ${round}/${limit})`)
-        const injected = await injectFix(fixItems, round)
-        if (injected) return injected
-        continue
-      }
-      let audit: Verdict | UnitStop
-      if (enterAudit) {
-        // review/audit 恢复: 任务级验收已通过(任务可能已被 loop 置回 in_progress),
-        // 直接补跑质量审核会话。
-        audit = await reviewTask(client, plan, task, opts)
-      } else {
-        // auto 模式此处执行分解出的检查项(含 review 注入的 fix 检查项);
-        // off/ondemand 模式只有正文中人工编写的检查项。
-        for (;;) {
-          const items = subtasks(task.body)
-          // 子任务目录状态协议(M1.0,plans/0030): 协议激活(任一 todo/done 文件
-          // 存在)时,done.md 存在性覆盖勾选成为进度事实;非法态(两者同存/同缺)
-          // 检出即阻塞交人工;勾选漂移按文件状态 reconcile(文件为准,展示轨跟随)。
-          const scan = await scanSubtaskStates(dir, task.id, items.length)
-          if (scan.illegal.length) {
-            return {
-              type: "blocked",
-              question:
-                `${task.id} subtask state files are illegal (${scan.illegal
-                  .map((v) => {
-                    // State-file names come from the spec data (M1.4): the
-                    // message follows the protocol declaration, not literals.
-                    const spec = subtaskStateSpec(task.id, v.index)
-                    const pending = basename(spec.pending.path)
-                    const complete = basename(spec.complete.path)
-                    return `S${String(v.index).padStart(2, "0")}: ${v.kind === "both" ? `both ${pending} and ${complete} exist` : `neither ${pending} nor ${complete} exists`}`
-                  })
-                  .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
-            }
-          }
-          const doneFlags = effectiveDone(scan, items)
-          const index = doneFlags.findIndex((done) => !done)
-          if (index === -1) break
-          if (scan.active && items.some((item, i) => item.done !== doneFlags[i])) {
-            await syncSubtaskTicks(plan.path, task.id, doneFlags)
-            task = requireTask(await load(plan.path), task.id)
-          }
-          // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘,恢复时
-          // 经单元归属门禁(unitReruns)仅当该子任务将重跑才复用其会话。review 修复轮
-          // (fixrun)保持 review 阶段标记(round/stage 供精确重入),仅追加序号。
-          const loopPhase: Phase = chain.phase?.kind === "review" ? chain.phase : { kind: "subtasks" }
-          chain.phase = { ...loopPhase, index: index + 1 }
-          // 恢复续跑判定(active 记录恰归属本检查项): 中断现场的工作区脏区是本单元
-          // 自身进度,runSubtask 的启动 clean 门禁据此豁免(plans/0021-commit-boundary-design.md)。
-          const recalledPhase = recalled?.active === true ? recalled.phase : undefined
-          const resumeUnit =
-            recalledPhase !== undefined &&
-            recalledPhase.kind !== "step" &&
-            "index" in recalledPhase &&
-            recalledPhase.index === index + 1 &&
-            (recalledPhase.kind === "subtasks"
-              ? loopPhase.kind === "subtasks"
-              : recalledPhase.kind === "review" && loopPhase.kind === "review" && recalledPhase.stage === "fixrun")
-          const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit)
-          if (blocked) return blocked
-          // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。
+        const doneFlags = effectiveDone(scan, items)
+        const index = doneFlags.findIndex((done) => !done)
+        if (index === -1) break
+        if (scan.active && items.some((item, i) => item.done !== doneFlags[i])) {
+          await syncSubtaskTicks(plan.path, task.id, doneFlags)
           task = requireTask(await load(plan.path), task.id)
-          // 子任务已收口(勾选+统一提交): 进度记录刷新为总结态(active=false,剥离
-          // 序号)——子任务间歇(步进暂停/回试处理)期间中断不再遗留"半途未总结"的
-          // 上一单元会话,恢复时不会被下一单元误续。
-          await persistStage(loopPhase)
-          // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
-          // 提交完成后、下一检查项前硬暂停(review 注入的 fix 检查项同循环,一并覆盖)。
-          // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。
-          await stepPause("subtask", `${task.id} subtask ${index + 1}`, { interactive: opts.interactive, dir })
-          maybeExit("subtask", `${task.id} subtask ${index + 1}`)
-          // Hibernate window (subtask boundary, OPENCODE_AUTO_HIBERNATE): a safe
-          // spot to check after check-off + unified commit; sleep until wake
-          // inside the window before continuing (plans/0027-hibernate-design.md).
-          await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
-          // failback 回试(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): subtask/session 粒度
-          // 在子任务边界清链上降级候选,下一子任务回试首选(task 粒度由链逐任务销毁
-          // 天然承担);/failback 请求同点消费(可整体重定义模型序)。
-          if (failbackApplies(switches.modelFailbackScope, "subtask")) chain.model = undefined
-          consumeFailback(chain)
         }
-        // 收尾会话: verify/review(audit) 阶段恢复时跳过(此前已完成,重跑纯浪费);
-        // config.wrapup=false(--no-wrapup,缺省 true)时整体关闭。report.md 存在性 +
-        // 形检门禁在 runWrapup 内(session-boundary-hardening §4.5 D5,S3b)。
-        if (!skipWrapup && (opts.wrapup ?? true)) {
-          await persistStage({ kind: "wrapup" })
-          const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "auto", label: "wrapup session" })
-          if (stopped) return stopped
-        }
-        skipWrapup = false
-        let auditFromVerify: Verdict | undefined
-        if (verifyOn) {
-          // 三段式验收自带修复轮(差距反馈回执行会话链,≤ FIX_ROUNDS);
-          // gap 只在 off 模式出现(该模式不修复,回退 pending 等人工改进)。
-          // early 时审核挂点并行进脚本执行窗口,结论随 done 带回。
-          const verdict = await verifyTask(
-            client,
-            plan,
-            task,
-            opts,
-            chain,
-            early ? () => reviewTask(client, plan, task, opts, true) : undefined,
-            persistStage,
-            pendingVerify,
-          )
-          pendingVerify = undefined
-          if (verdict.type === "blocked" || verdict.type === "dirty") return verdict
-          if (verdict.type === "gap") {
-            await setStatus(plan.path, task.id, "pending")
-            return { type: "incomplete", reason: verdict.gap }
-          }
-          auditFromVerify = verdict.audit
-        } else {
-          log(
-            finalMark
-              ? `⏭ ${task.id} final-review tasks skip task-level verify (the stage itself is the check); completing directly`
-              : opts.phase === "v"
-                ? `⏭ ${task.id} v (verify) phase tasks skip task-level verify (the phase itself is the check); completing directly`
-                : `⏭ ${task.id} --verify is not enabled; skipping task-level verify, completing directly`,
-          )
-          await markDone(plan.path, task.id)
-        }
-        if (limit <= 0) return { type: "completed" }
-        await persistStage({ kind: "review", round, stage: "audit" })
-        // early 的审核结论已随 verifyTask 带回(挂点在每次脚本执行前重开,done 必有
-        // 结论);其余情况(未启用 --verify 或非 early)在此时串行开审核会话。
-        audit = auditFromVerify ?? (await reviewTask(client, plan, task, opts))
+        // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘,恢复时
+        // 经单元归属门禁(unitReruns)仅当该子任务将重跑才复用其会话。
+        const loopPhase: Phase = { kind: "subtasks" }
+        chain.phase = { ...loopPhase, index: index + 1 }
+        // 恢复续跑判定(active 记录恰归属本检查项): 中断现场的工作区脏区是本单元
+        // 自身进度,runSubtask 的启动 clean 门禁据此豁免(plans/0021-commit-boundary-design.md)。
+        const recalledPhase = recalled?.active === true ? recalled.phase : undefined
+        const resumeUnit = recalledPhase?.kind === "subtasks" && recalledPhase.index === index + 1
+        const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit)
+        if (blocked) return blocked
+        // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。
+        task = requireTask(await load(plan.path), task.id)
+        // 子任务已收口(勾选+统一提交): 进度记录刷新为总结态(active=false,剥离
+        // 序号)——子任务间歇(步进暂停/回试处理)期间中断不再遗留"半途未总结"的
+        // 上一单元会话,恢复时不会被下一单元误续。
+        await persistStage(loopPhase)
+        // 步进暂停(subtask 边界,OPENCODE_AUTO_STEP=subtask): 检查项勾选与统一
+        // 提交完成后、下一检查项前硬暂停。
+        // dir 传入使暂停等待从用时统计扣除(STATS_PLAN §3)。
+        await stepPause("subtask", `${task.id} subtask ${index + 1}`, { interactive: opts.interactive, dir })
+        maybeExit("subtask", `${task.id} subtask ${index + 1}`)
+        // Hibernate window (subtask boundary, OPENCODE_AUTO_HIBERNATE): a safe
+        // spot to check after check-off + unified commit; sleep until wake
+        // inside the window before continuing (plans/0027-hibernate-design.md).
+        await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
+        // failback 回试(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): subtask/session 粒度
+        // 在子任务边界清链上降级候选,下一子任务回试首选(task 粒度由链逐任务销毁
+        // 天然承担);/failback 请求同点消费(可整体重定义模型序)。
+        if (failbackApplies(switches.modelFailbackScope, "subtask")) chain.model = undefined
+        consumeFailback(chain)
       }
-      enterAudit = false
-      if (audit.type === "blocked" || audit.type === "dirty") return audit
-      if (audit.type === "pass") return { type: "completed" }
-
-      // off 模式不做审核修复循环: 与该模式 verify 失败语义一致。
-      if (mode === "off") {
-        await setStatus(plan.path, task.id, "pending")
-        return { type: "incomplete", reason: audit.gap }
+      // 收尾会话: config.wrapup=false(--no-wrapup,缺省 true)时整体关闭。report.md
+      // 存在性 + 形检门禁在 runWrapup 内(session-boundary-hardening §4.5 D5,S3b)。
+      if (opts.wrapup ?? true) {
+        await persistStage({ kind: "wrapup" })
+        const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "auto", label: "wrapup session" })
+        if (stopped) return stopped
       }
-      round++
-      if (round > limit) {
-        return { type: "blocked", question: `quality review still failing after ${limit} consecutive fix round(s):\n${audit.gap}` }
-      }
-      // verifyTask 通过时已把任务标 done;审核发现差距须先置回 in_progress,
-      // 否则中断重跑时 next() 会跳过该任务,注入的 fix 检查项永不执行。
-      await setStatus(plan.path, task.id, "in_progress")
-      log(`↻ ${task.id} quality review failed; planning fix subtasks and continuing (round ${round}/${limit}):\n${audit.gap}`)
-      await persistStage({ kind: "review", round, stage: "planfix" })
-      const planned = await planReviewFix(client, plan, task, opts, audit.gap)
-      if (planned.type !== "ok") return planned
-      const injected = await injectFix(planned.items, round)
-      if (injected) return injected
     }
+    // Result line of the task report (FAIL stops the run): the report and the
+    // work are already committed by the wrap-up session, so a FAIL only has
+    // to block — the loop's blocked path marks [blocked] and commits the
+    // interruption scene. A person then edits PLAN.md: marking the task
+    // [done] accepts the result; inserting fix tasks before it gets the gap
+    // fixed first (a hand-added checklist item is illegal subtask state in
+    // auto mode, so fixes are planned as tasks). The phase is rewound to
+    // wrapup, so re-running the task itself only re-runs the wrap-up, which
+    // rewrites the result line. No report or no result line = no stop.
+    await persistStage({ kind: "closeout" })
+    const result = await reportResult(dir, task)
+    if (result?.type === "fail") {
+      chain.phase = { kind: "wrapup" }
+      return {
+        type: "blocked",
+        question:
+          `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
+          `edit PLAN.md (mark the task [done] to accept the result, or insert fix tasks before it) and re-run.`,
+      }
+    }
+    await markDone(plan.path, task.id)
+    return { type: "completed" }
   }
 }
 

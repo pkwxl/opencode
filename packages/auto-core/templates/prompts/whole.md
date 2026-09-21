@@ -10,9 +10,9 @@
 {{/if}}你本次负责整个任务,在单个会话内完成,不做子任务分解。{{#if continuation}}此前的会话因上下文限制中断,先读 {{handoffFile}} 了解进度与后续步骤,据此继续。{{/if}}
 
 约束:
-{{#if selfCheck}}1. {{selfCheck}};{{#if verify}}整个任务的验收在最后由独立审核会话统一进行;{{/if}}
+{{#if selfCheck}}1. {{selfCheck}};
 {{/if}}{{> question-rule}}
-3. {{#if verify}}不要运行任务级 verify、{{/if}}可新增但不要修改 docs/ 中的内容(若必须修改,{{^ask}}按 AUTO-DECISION 标注并{{/if}}记入相关文档);{{#if ondemand}}
+3. 可新增但不要修改 docs/ 中的内容(若必须修改,{{^ask}}按 AUTO-DECISION 标注并{{/if}}记入相关文档);{{#if ondemand}}
    如果 DRIVER 插入"[DRIVER] 上下文即将达到上限"的提示,立即按提示写出 {{handoffFile}} 并结束会话;{{/if}}
    {{> state-rule}}
 {{#if testByDriver}}

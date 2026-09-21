@@ -1,10 +1,10 @@
-// 任务收尾会话(wrapup): runner 主收尾与 review 修复轮收尾两处调用点共用。
+// 任务收尾会话(wrapup)与任务报告的结论行(Result: PASS|FAIL)解析。
 // 会话后的 report.md 存在性 + 形检门禁(session-boundary-hardening 设计 §4.5 D5,
 // S3b)——此前 wrapup 会话后无任何产物校验(runSession 结束直接 afterSession 提交),
 // 空壳/截断报告静默通过;report.md 是跨任务收尾叙事载体(L2 压制对象),截断/空壳
 // 在此直接放大事故面。存在/非平凡/末行终止符任一不过 → 带反馈重提示一次 → 仍不过
 // → blocked(隐性阻塞)。只查本次会话产出,不追溯存量。
-// 依赖方向: 位于 session/unit-commit 之上、runner 与 review 之下(module-split-plan §D.2)。
+// 依赖方向: 位于 session/unit-commit 之上、runner 之下(module-split-plan §D.2)。
 
 import { dirname, join } from "node:path"
 import type { AgentClient } from "./agent/types"
@@ -29,9 +29,8 @@ async function reportProblems(dir: string, task: Task): Promise<string[]> {
 }
 
 // 跑一次任务收尾会话并收口: 横幅/subject/resolves 组装 + runSession + report.md
-// 门禁 + 统一提交。label 为提交失败时的单元名(runner 主收尾「收尾会话」/review
-// 修复轮「修复后收尾会话」);solo 为 off/ondemand 整任务模式(报告为产出摘要而非
-// 索引式)。返回 undefined = 收尾完成。
+// 门禁 + 统一提交。label 为提交失败时的单元名;solo 为 off/ondemand 整任务模式
+// (报告为产出摘要而非索引式)。返回 undefined = 收尾完成。
 export async function runWrapup(
   client: AgentClient,
   plan: Plan,
@@ -55,7 +54,7 @@ export async function runWrapup(
     const result = await runSession(
       client,
       task,
-      brief ? feedback.trimStart() : renderWrapup(plan, task, { mode: opts.mode, verify: opts.verify, solo: input.solo, resolves }) + feedback,
+      brief ? feedback.trimStart() : renderWrapup(plan, task, { mode: opts.mode, solo: input.solo, resolves }) + feedback,
       opts,
       chain,
     )
@@ -83,4 +82,29 @@ export async function runWrapup(
     shapeForked = await forkEndedSession(client, chain, subject)
     log(`↻ ${task.id} 收尾会话产出的 ${rel} 未过检查,${shapeForked ? "已从原会话分叉、" : ""}带反馈重试一次`)
   }
+}
+
+// Result line of the task report — the driver's only completion-side verdict
+// (FAIL stops the run). Protocol: `Result: PASS` or `Result: FAIL <reason>`,
+// written verbatim by the wrap-up session (when to write it is intent content,
+// `## acceptance` / `### result-line`). The last line starting with `Result:`
+// decides; a value other than PASS/FAIL there, or no such line, is no verdict
+// (the run does not stop). Case-sensitive like the other protocol lines.
+export type ReportResult = { type: "pass" } | { type: "fail"; reason: string }
+
+export function parseResult(text: string): ReportResult | undefined {
+  const lines = text.split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (!line.startsWith("Result:")) continue
+    const match = /^Result:[ \t]*(PASS|FAIL)(?![\w-])[ \t:—-]*(.*)$/.exec(line)
+    if (!match) return undefined
+    return match[1] === "PASS" ? { type: "pass" } : { type: "fail", reason: match[2]!.trim() }
+  }
+  return undefined
+}
+
+// Reads docs/<id>/report.md; a missing report is no verdict.
+export async function reportResult(dir: string, task: Task): Promise<ReportResult | undefined> {
+  return parseResult(await Bun.file(join(dir, taskDoc(task.id, "report"))).text().catch(() => ""))
 }

@@ -3,7 +3,7 @@
 // by subtask declared artifacts (D4), automatic-session artifacts (D5) and the
 // whole-unit document terminator scan (D6). A pure leaf module doing no IO at
 // all; eof only proves "finished writing" (mechanically decidable) — quality
-// belongs to verify/review.
+// belongs to planned acceptance work.
 
 // Non-semantic terminator: deliberately a different shape from the `状态:` line
 // of handoff/testhandoff — avoiding a semantic collision, and avoiding stamping

@@ -115,7 +115,7 @@ const retryNote = (lead: string) => `[DRIVER] ${lead}${WORKSPACE_CHECK}`
 // etc.) and ladder exhaustion fall into the recovery wait-probe loop instead
 // of blocking — a session fault never terminates the run.
 // 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启、等待-探测环);
-// 导出供 src/final.ts 的终审任务生成会话等旁路复用。test 为 --test-by-driver 的协议
+// 导出供旁路会话复用。test 为 --test-by-driver 的协议
 // 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效);
 // switches 缺省取 OPENCODE_AUTO_* 解析值(复用开关),注入供单测。
 export async function runSession(

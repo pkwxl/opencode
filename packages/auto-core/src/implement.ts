@@ -21,7 +21,7 @@ import { manage } from "./agent/opencode/server"
 export async function implementPlan(
   directory: string,
   input: { file?: string; content: string; brief?: string },
-  config: { agent?: string; commit?: boolean; contextLimit: number; verify: boolean; mode?: ModeSpec },
+  config: { agent?: string; commit?: boolean; contextLimit: number; mode?: ModeSpec },
   opts: { server?: string; verbose?: boolean; waitAnswer?: number; permission?: PermissionMode; interactive?: Interactive } = {},
 ): Promise<{ type: "ok"; count: number } | { type: "blocked"; question: string }> {
   const path = join(directory, "PLAN.md")
@@ -45,7 +45,7 @@ export async function implementPlan(
       const planned = await requireArtifact(
         server.client,
         { id: "PLAN", title: "计划生成(implement)", status: "in_progress", attempts: 0, body: "" },
-        renderImplementPlan({ file: input.file, content: input.content, brief: input.brief, verify: config.verify }),
+        renderImplementPlan({ file: input.file, content: input.content, brief: input.brief }),
         sessionOpts,
         {
           kind: "计划生成",
@@ -57,7 +57,7 @@ export async function implementPlan(
           requirement: "必须直接编辑 PLAN.md,把任务按 `## T-NNN: <任务标题> [pending]` 格式写入(至少一个)。",
           commit: { stage: "implement-plan", subject: "PLAN implement plan generation" },
           reset: async () => {
-            await Bun.write(path, renderPlanScaffold(config.verify))
+            await Bun.write(path, renderPlanScaffold())
           },
           collect: async () => {
             const fresh = await load(path).catch(() => undefined)

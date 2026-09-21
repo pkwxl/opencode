@@ -42,12 +42,13 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("未知键忽略(前向兼容),缺失键回落缺省", async () => {
+  test("未知键忽略(前向兼容),缺失键回落缺省;已退役的 verify 键取 false(存量 init 产物)同样忽略", async () => {
     const dir = tempDir()
     try {
-      writeConfig(dir, `{"verify": true, "futureKey": {"nested": 1}}`)
+      writeConfig(dir, `{"subtask": "off", "verify": false, "futureKey": {"nested": 1}}`)
       const config = await loadProjectConfig(dir)
-      expect(config).toEqual({ ...CONFIG_DEFAULTS, verify: true })
+      expect(config).toEqual({ ...CONFIG_DEFAULTS, subtask: "off" })
+      expect("verify" in config).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -77,7 +78,8 @@ describe("loadProjectConfig", () => {
         ["contextLimit", 0],
         ["contextLimit", 64.5],
         ["subtask", "fast"],
-        ["verify", "yes"],
+        // verify 已退役(plans/0044 D2): true 严格失败,报文含键名
+        ["verify", true],
         ["commit", 1],
         ["agent", ""],
         ["mode", 123],
@@ -204,7 +206,6 @@ describe("loadProjectConfig", () => {
     try {
       const config: ProjectConfig = {
         ...CONFIG_DEFAULTS,
-        verify: true,
         contextLimit: 128,
         testByDriver: true,
         phases: "admtvk",
@@ -277,7 +278,7 @@ describe("看门狗键更名回落(verifyIdle/verifyMax → idleTime/idleMax)", 
 })
 
 describe("mergeProjectConfig 与 formatProjectConfig", () => {
-  const existing: ProjectConfig = { ...CONFIG_DEFAULTS, verify: true, idleMax: 30, agent: "custom" }
+  const existing: ProjectConfig = { ...CONFIG_DEFAULTS, idleMax: 30, agent: "custom" }
 
   test("合并: 仅显式给出的键覆盖,undefined 视同未给出", () => {
     expect(mergeProjectConfig(existing, { subtask: "off" })).toEqual({ ...existing, subtask: "off" })
@@ -293,10 +294,10 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
 
   test("摘要一行含全部键的生效值(phases 追加在末尾)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "mode migrate · agent auto · subtask auto · verify off · watchdog idle 10m/max unset · commit on · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent auto · subtask auto · watchdog idle 10m/max unset · commit on · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "mode migrate · agent custom · subtask auto · verify on · watchdog idle 10m/max 30m · commit on · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent custom · subtask auto · watchdog idle 10m/max 30m · commit on · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("phases admtvk")
     // 测试由 driver 执行键入摘要,交接修饰随 handoverTest

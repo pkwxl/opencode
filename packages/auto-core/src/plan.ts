@@ -1,6 +1,5 @@
 import { realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
-import type { FinalStage } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 
 // 落笔目标解析(轮次专用目录方案): 阶段化流程下根 PLAN.md 是指向轮次目录
@@ -18,12 +17,7 @@ export type Task = {
   id: string
   title: string
   status: Status
-  verify?: string
-  verified?: string
   attempts: number
-  // 终审阶段标记(--final-review 追加的 T-F 任务): <stage>@<round>,如 audit@1。
-  // FIELD 行通用解析,edit 重写时随全部字段行保留。
-  final?: string
   // fork 分解流水线的分叉基点会话 id(fork-decompose 设计 §4.2): session 模式 =
   // 理解会话 id;digest 模式 = 基点确认会话 id,带 `digest:` 前缀(一经建立即跨
   // 运行持久,恢复运行存活即复用,失效才从 context.md 重建覆写);driver 独占写入
@@ -41,7 +35,9 @@ export type Plan = {
 // 容忍状态标记前缺空格(## T-001: 标题[pending])——否则该标题会被静默
 // 吞进上一任务正文,任务从解析结果中消失,next() 直接跳到更后面的任务。
 const HEADING = /^## (T-[\w-]+): (.+?)\s*\[(pending|in_progress|blocked|done)\]\s*$/
-//   - verify: bun test
+//   - attempts: 2
+// Unknown field lines (including the retired verify/verified/final) are kept
+// verbatim by edit() and otherwise ignored.
 const FIELD = /^\s+- ([\w-]+): (.*)$/
 
 export async function load(path: string): Promise<Plan> {
@@ -81,10 +77,7 @@ export function parse(path: string, text: string): Plan {
       id: id!,
       title: title!.trim(),
       status: status as Status,
-      verify: fields.get("verify"),
-      verified: fields.get("verified"),
       attempts: Number(fields.get("attempts") ?? 0),
-      final: fields.get("final"),
       forkBase: fields.get("fork-base"),
       body: body.join("\n").trim(),
     })
@@ -161,25 +154,6 @@ export async function setSubtasks(path: string, id: string, items: string[]) {
   await edit(path, id, { body: description ? `${description}\n\n${checklist}` : checklist })
 }
 
-// Appends unticked checklist items after the task body's existing checklist
-// block (at the end of the body when it has none). Review-fix items go
-// through this so the regular subtask sessions execute them.
-export async function appendSubtasks(path: string, id: string, items: string[]) {
-  const plan = await load(path)
-  const task = require(plan, id)
-  const checklist = items.map((item) => `- [ ] ${item}`).join("\n")
-  const lines = task.body.split("\n")
-  const last = lines.findLastIndex((line) => /^\s*- \[( |x|X)\]/.test(line))
-  await edit(path, id, {
-    body:
-      last === -1
-        ? task.body
-          ? `${task.body}\n\n${checklist}`
-          : checklist
-        : [...lines.slice(0, last + 1), checklist, ...lines.slice(last + 1)].join("\n"),
-  })
-}
-
 // Ticks one checklist item (driver-side; the agent never edits PLAN.md).
 export async function tick(path: string, id: string, text: string) {
   const plan = await load(path)
@@ -230,54 +204,9 @@ export async function setForkBase(path: string, id: string, sessionID: string) {
   await edit(path, id, { fields: { "fork-base": sessionID } })
 }
 
-// Marks the task [done]. A passing verify run records its command in the
-// `verified` field; without one the field is cleared (no stale record).
-export async function markDone(path: string, id: string, verified?: string) {
-  await edit(path, id, { status: "done", fields: { verified } })
-}
-
-// 文件尾追加完整任务块(标题行 + 字段行 + 正文;终审 T-F 任务经 src/final.ts
-// 使用,主循环 next() 按文件顺序自然拾取)。原子写,复用 edit 的
-// allowWrite/reprotect 流程;重复 ID 直接报错,避免写出不可解析的计划文件。
-export async function appendTask(path: string, task: Task) {
-  const text = await Bun.file(path).text()
-  if (parse(path, text).tasks.some((existing) => existing.id === task.id)) {
-    throw new Error(`${path}: task ${task.id} already exists`)
-  }
-  const fields = [
-    ...(task.final ? [`  - final: ${task.final}`] : []),
-    ...(task.verify ? [`  - verify: ${task.verify}`] : []),
-    ...(task.verified ? [`  - verified: ${task.verified}`] : []),
-    ...(task.attempts ? [`  - attempts: ${task.attempts}`] : []),
-  ]
-  const block = [`## ${task.id}: ${task.title} [${task.status}]`, ...fields, task.body].join("\n")
-  const target = await writeTarget(path)
-  const tmp = join(dirname(target), `.${basename(target)}.${process.pid}.tmp`)
-  await allowWrite(target)
-  await Bun.write(tmp, `${text.trimEnd()}\n\n${block}\n`)
-  await rename(tmp, target)
-  await reprotect(target)
-}
-
-// Task-level verify convention: a "command: <cmd>" prefix declares a concrete
-// command; anything else is natural language. resolveVerifyScript uses it to
-// pick the script source (existing file / wrapped verify.sh / generation
-// session); the judge session interprets the field as the acceptance standard
-// and what actually ran is recorded in the task's `verified` field.
-export function verifyCommand(task: Task): string | undefined {
-  const match = /^command:\s*(.+)$/.exec(task.verify?.trim() ?? "")
-  return match?.[1]?.trim() || undefined
-}
-
-// 终审阶段标记解析(--final-review 追加的 T-F 任务): `<stage>@<round>`,如
-// audit@1;缺失、格式或阶段名非法、轮数非正返回 undefined。
-export function parseFinalMark(final: string | undefined): { stage: FinalStage; round: number } | undefined {
-  const match = /^(\w+)@(\d+)$/.exec(final?.trim() ?? "")
-  if (!match) return undefined
-  const stage = match[1]!
-  if (stage !== "audit" && stage !== "remediate" && stage !== "validate" && stage !== "finalize") return undefined
-  const round = Number(match[2]!)
-  return round >= 1 ? { stage: stage as FinalStage, round } : undefined
+// Marks the task [done].
+export async function markDone(path: string, id: string) {
+  await edit(path, id, { status: "done" })
 }
 
 function require(plan: Plan, id: string): Task {

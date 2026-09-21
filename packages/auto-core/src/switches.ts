@@ -52,22 +52,15 @@ export type TaskContextMode = "off" | "small" | "medium" | "large"
 // 不做自由命名;与 B.5 执行链角色一一对应,`bypass` 为未显式给 role 的旁路会话兜底。
 // 导出为共享真源,后续 P2(resolveModel / roleOf)与旁路改造复用同一份。
 // M1.0 起 understand/decompose 两会话合一(plans/0030 D12): 词表不再含 understand——
-// 合并会话路由在 decompose 角色下,旧配置里的 understand= 键按非法键严格失败。
+// 合并会话路由在 decompose 角色下,旧配置里的 understand= 键按非法键严格失败;
+// verify-*/review-*/final-plan 随三机制退役出表(plans/0044 D1),同样严格失败。
 export const MODEL_ROLES = [
   "decompose",
   "whole",
   "subtask",
   "wrapup",
-  "verify-generate",
-  "verify-exec",
-  "verify-judge",
-  "verify-fix",
-  "review-audit",
-  "review-planfix",
-  "review-fixrun",
   "phase-plan",
   "phase-handover",
-  "final-plan",
   "knowledge",
   "prior-knowledge",
   "implement-scan",
@@ -104,8 +97,8 @@ export type Switches = {
   steer: boolean
   // 步进模式: phase/task/subtask 在对应(及更粗)边界硬暂停等回车放行。
   step: StepMode
-  // refcheck 总开关(refcheck-scope-design D3,缺省 off): off 时三层挂点
-  // (提交前 auto-correct、check 引用扫描、verify 门禁预扫)全部空转,目标目录
+  // refcheck 总开关(refcheck-scope-design D3,缺省 off): off 时两处挂点
+  // (提交前 auto-correct、check 引用扫描)全部空转,目标目录
   // 零引用检查行为;fix-refs 手动脚本不受约束(人工显式执行等价于显式开启)。
   refCheck: boolean
   // 会话链复用总开关(缺省 off): off = 任务内每个提示词都开新会话(链上只留
@@ -204,7 +197,7 @@ const SWITCH_DEFAULTS: Switches = {
 // 含 /;空串视同未设。坏值严格失败: throw 中文报错(含变量名、示例、越界键/坏值)。
 function parseModelPolicy(rawModel: string | undefined, rawFallback: string | undefined): ModelPolicy {
   const policy: ModelPolicy = { byLetter: {}, byRole: {}, fallback: [] }
-  const modelExample = "*=kimi/k2,m=anthropic/c-4,verify-judge=kimi/k2-lite"
+  const modelExample = "*=kimi/k2,m=anthropic/c-4,wrapup=kimi/k2-lite"
   const modelRaw = rawModel === undefined || rawModel === "" ? undefined : rawModel
   if (modelRaw !== undefined) {
     if (modelRaw.includes("=")) {

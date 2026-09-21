@@ -118,7 +118,7 @@ export async function attempt(
   // 降级 fork 出的迁移会话经 pending 进入,若在此清零会把 failover 立即 undo 成震荡。
   if (session !== undefined && switches.modelFailbackScope === "session") chain.model = undefined
   const sessionID = forked ?? session?.value.id ?? chain.id!
-  // 交互旁路: 此后人工输入发往本会话(审核/收尾等旁路会话同样覆盖)。
+  // 交互旁路: 此后人工输入发往本会话(收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
   // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
   // 下次运行从它分叉接回上下文。定版前的会话(记录里还留着待跑脚本与定版锚点)
@@ -137,7 +137,7 @@ export async function attempt(
     }
   }
   // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
-  // 据此精确恢复;无阶段的旁路会话(判定/审核/脚本生成/修复规划/dryrun/fork 基点)
+  // 据此精确恢复;无阶段的旁路会话(dryrun/fork 基点等)
   // 不写,避免污染恢复记忆。plans/0018-session-resume-precedence-design.md: 下发成功即落盘
   // 认领在跑的会话(此前只在回合结束后写,回合进行中被 kill 会丢失认领);可重试
   // 错误把记录还原为下发前快照,被弃的 fork 副本不顶替真实恢复点(保留
@@ -285,7 +285,7 @@ export async function attempt(
     chain.at = Date.now()
     chain.hinted = result.hinted === true
     // ◉ 会话结束两行(STATS_PLAN §4.1,T-004): 无条件打印——所有经 attempt 的会话
-    // (含 verify 判定/审核/阶段规划/交接蒸馏等旁路,复用会话同样打印)统一输出;
+    // (含阶段规划/交接蒸馏等旁路,复用会话同样打印)统一输出;
     // 行 1 上下文与用时,行 2 tokens 分项。省略规则: 单轮(session.rounds ≤ 1)
     // 省略"(累计…)";reasoning=0 省略思考项;cost=0 省略费用;命中率分母 0 显示 —
     // (formatCacheHit 口径)。report 仅 dir 缺失时为 undefined,按单轮处理,用时

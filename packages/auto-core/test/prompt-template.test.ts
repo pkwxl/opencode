@@ -13,20 +13,14 @@ import {
   RESOLVE_FORMAT,
   renderDecompose,
   renderDryrun,
-  renderFinalTask,
-  renderFix,
   renderHandoffSteer,
   renderInferSource,
   renderKnowledge,
   renderPriorKnowledge,
-  renderReview,
-  renderReviewFix,
   renderSubtask,
   renderTestContinue,
   renderTestResult,
   renderTestWrapup,
-  renderVerifyJudge,
-  renderVerifyScriptGen,
   renderWhole,
   renderWrapup,
 } from "../src/prompt"
@@ -43,8 +37,8 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 22 份(勘测结论 §J-3,M1.0 合并 understand 后 -1;新增引用需同步设计文档)", () => {
-    expect(consumers.length).toBe(22)
+  test("引用该片段的模板恰为 16 份(勘测结论 §J-3,M1.0 合并 understand 后 -1,M2.2 退役六份 -6;新增引用需同步设计文档)", () => {
+    expect(consumers.length).toBe(16)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
@@ -261,38 +255,30 @@ describe("模式注入(-m/--mode)", () => {
     expect(renderWhole(plan, task)).not.toContain("场景模式注意事项")
   })
 
-  test("modeCtx: 共享模式变量组装(壳层自写 render* 的扩展点),verify 条件段与缺省形态", () => {
-    const withVerify = modeCtx(migrate, { verify: true })
-    expect(withVerify.modeName).toBe("migrate")
-    expect(withVerify.modeInit).toContain("prefer reusing an existing test/build command")
-    const without = modeCtx(migrate)
-    expect(without.modeInit).not.toContain("prefer reusing an existing test/build command")
-    expect(without.modeExec).toContain("behaviourally equivalent")
+  test("modeCtx: 共享模式变量组装(壳层自写 render* 的扩展点)与缺省形态", () => {
+    const ctx = modeCtx(migrate)
+    expect(ctx.modeName).toBe("migrate")
+    expect(ctx.modeInit).toContain("baseline confirmation")
+    expect(ctx.modeInit).not.toContain("verify field")
+    expect(ctx.modeExec).toContain("behaviourally equivalent")
     expect(modeCtx()).toEqual({ modeName: undefined, modeInit: undefined, modeExec: undefined })
   })
 })
 
 describe("init 产物模板(PLAN.md / agent 契约)", () => {
-  test("verify 启用: PLAN.md 含 verify 字段示例与验证执行权原则", async () => {
-    const text = renderText(await Bun.file(planTemplate).text(), { verify: true })
-    expect(text).toContain("  - verify: command: <建议的验收命令,如 bun test>")
-    expect(text).toContain("验证脚本与验证命令的执行权在 DRIVER")
-    expect(text).not.toContain("opencode-auto check")
-    expect(text).toContain("不要手工编写子任务")
-  })
-
-  test("verify 未启用: PLAN.md 不含 verify 字段示例与验证原则描述", async () => {
-    const text = renderText(await Bun.file(planTemplate).text(), { verify: false })
+  test("PLAN.md 不含 verify 字段示例与验证原则描述(verify 已退役)", async () => {
+    const text = renderText(await Bun.file(planTemplate).text(), {})
     expect(text).toContain("## T-001: <任务标题> [pending]")
     expect(text).toContain("<任务描述:目标、范围、关键约束。")
     expect(text).toContain("不要手工编写子任务")
     expect(text).not.toContain("verify")
     expect(text).not.toContain("验证")
+    expect(text).not.toContain("opencode-auto check")
   })
 
-  test("verify 未启用: agent 契约不含验收/验证描述,标记块列举相应收窄", async () => {
+  test("agent 契约不含验收/验证描述,标记块列举相应收窄(testByDriver 关闭)", async () => {
     const raw = await Bun.file(agentTemplate).text()
-    const off = renderText(raw, { verify: false })
+    const off = renderText(raw, { testByDriver: false })
     expect(off).toContain("AGENTS.md 不在只读之列")
     expect(off).toContain("不得删除或改写 opencode-auto")
     expect(off).toContain("标记块(指针/提交/摘要/维护规则/引用规范")
@@ -305,25 +291,24 @@ describe("init 产物模板(PLAN.md / agent 契约)", () => {
 })
 
 describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
-  test("一致性比对口径 = 写入口径:两态渲染文本与原始模板互不相等(含条件块),四组渲染与 renderText 直渲一致", async () => {
+  test("一致性比对口径 = 写入口径:两态渲染文本与原始模板互不相等(含条件块),两态渲染与 renderText 直渲一致", async () => {
     const raw = await Bun.file(agentTemplate).text()
-    expect(raw).toContain("{{#if verify}}")
-    for (const verify of [true, false]) {
-      for (const testByDriver of [true, false]) {
-        const rendered = await renderAgentContract(verify, testByDriver)
-        expect(rendered).toBe(renderText(raw, { verify, testByDriver }))
-        expect(rendered).not.toBe(raw)
-      }
+    expect(raw).toContain("{{#if testByDriver}}")
+    expect(raw).not.toContain("{{#if verify}}")
+    for (const testByDriver of [true, false]) {
+      const rendered = await renderAgentContract(testByDriver)
+      expect(rendered).toBe(renderText(raw, { testByDriver }))
+      expect(rendered).not.toBe(raw)
     }
   })
-  test("AGENTS.md 条款覆盖 opencode-auto 单一标记块并引用维护规则(防漂移,verify 启用)", async () => {
+  test("AGENTS.md 条款覆盖 opencode-auto 单一标记块并引用维护规则(防漂移,testByDriver 启用)", async () => {
     const raw = await Bun.file(agentTemplate).text()
-    const text = renderText(raw, { verify: true, testByDriver: true })
+    const text = renderText(raw, { testByDriver: true })
     expect(text).toContain("AGENTS.md 不在只读之列")
-    // 不得删除或改写 opencode-auto 标记块(指针/验证/测试/提交/摘要/维护规则/引用规范),
+    // 不得删除或改写 opencode-auto 标记块(指针/测试/提交/摘要/维护规则/引用规范),
     // 合并为单一 start/end 块,而非旧版按名各自独立的多个标记块
     expect(text).toContain("不得删除或改写 opencode-auto")
-    expect(text).toContain("标记块(指针/验证/测试/提交/摘要/维护规则/引用规范")
+    expect(text).toContain("标记块(指针/测试/提交/摘要/维护规则/引用规范")
     expect(text).toContain("<!-- opencode-auto:start -->")
     expect(text).toContain("<!-- opencode-auto:end -->")
     expect(text).not.toContain("<!-- opencode-auto:*:start -->")
@@ -351,14 +336,6 @@ describe("模板渲染完整性", () => {
       renderWrapup(plan, task, { solo: true, mode: migrate }),
       renderWrapup(plan, task, { resolves: [resolveItem("是否把第三份实现一并收口?")] }),
       renderWhole(plan, task, { ondemand: true, continuation: true, mode: migrate }),
-      renderVerifyScriptGen(plan, task, "/tmp/auto/verify.sh"),
-      renderVerifyJudge(plan, task, { script: "/s", code: 1, ms: 2, timedOut: true, timeoutReason: "idle", out: "/o" }),
-      renderFix(plan, task, "差距"),
-      renderReview(plan, task, { final: false }),
-      renderReview(plan, task, { final: true, early: true }),
-      renderReviewFix(plan, task, "差距"),
-      renderFinalTask(plan, "audit", 2, "残余差距", migrate),
-      renderFinalTask(plan, "finalize", 1, "", undefined),
       renderHandoffSteer(task),
       renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
       renderTestWrapup({ handoffFile: "/h" }),
@@ -376,12 +353,10 @@ describe("模板渲染完整性", () => {
     for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("init 产物模板按 verify/testByDriver 两态渲染后不残留模板标签", async () => {
+  test("init 产物模板按 testByDriver 两态渲染后不残留模板标签", async () => {
     for (const raw of [await Bun.file(planTemplate).text(), await Bun.file(agentTemplate).text()]) {
-      for (const verify of [true, false]) {
-        for (const testByDriver of [true, false]) {
-          expect(renderText(raw, { verify, testByDriver })).not.toMatch(/\{\{|\}\}/)
-        }
+      for (const testByDriver of [true, false]) {
+        expect(renderText(raw, { testByDriver })).not.toMatch(/\{\{|\}\}/)
       }
     }
   })

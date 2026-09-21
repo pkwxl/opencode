@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadModes, parseModeFile } from "../src/mode"
 
-// 合法模式文件样例: 标题与文件名一致、五节齐备。
+// 合法模式文件样例: 标题与文件名一致、两节齐备。
 function modeText(name: string, marker = "默认"): string {
   return `# ${name}
 
@@ -13,40 +13,24 @@ ${marker}导语。
 
 ## exec
 ${marker}注记。
-
-## final: audit
-${marker}审计侧重。
-
-## final: validate
-${marker}回归侧重。
-
-## final: finalize
-${marker}收尾侧重。
 `
 }
 
 describe("内置模式", () => {
-  test("内置仅注册 migrate,三段文案齐备(逐字迁移自旧注册表)", () => {
+  test("内置仅注册 migrate,两段文案齐备(逐字迁移自旧注册表)", () => {
     const modes = loadModes()
     expect(Object.keys(modes)).toEqual(["migrate"])
     const mode = modes.migrate!
     expect(mode.name).toBe("migrate")
-    // init 导语: 场景定义、任务排布原则、verify 侧重
+    // init 导语: 场景定义、任务排布原则
     expect(mode.init).toContain("externally visible behaviour stays the same")
     expect(mode.init).toContain("baseline confirmation")
     expect(mode.init).toContain("migration work")
     expect(mode.init).toContain("regression verification")
-    expect(mode.init).toContain("prefer reusing an existing test/build command")
     // exec 注记: 对等行为、兼容层与 AUTO-DECISION 标注要求
     expect(mode.exec).toContain("behaviourally equivalent")
     expect(mode.exec).toContain("compatibility layer")
     expect(mode.exec).toContain("AUTO-DECISION")
-    // final 各阶段侧重
-    expect(mode.final.audit).toContain("behavioural equivalence")
-    expect(mode.final.audit).toContain("leftover old paths")
-    expect(mode.final.validate).toContain("cover the baseline behaviour adequately")
-    expect(mode.final.finalize).toContain("cleaning up the old implementation")
-    expect(mode.final.finalize).toContain("closing out the compatibility layers")
   })
 
   test("未注册名不在注册表中(optimize/implement/test 须由目标目录提供)", () => {
@@ -88,7 +72,7 @@ describe("目标目录模式扩展(.opencode/auto/modes/)", () => {
       expect(() => loadModes(dir)).toThrow(/Bad_Name\.md is invalid/)
       expect(() => parseModeFile("mismatch", modeText("其他名字"))).toThrow(/must start with "# mismatch"/)
       expect(() => parseModeFile("incomplete", `# incomplete\n\n## init\n只有一节。\n`)).toThrow(
-        /is missing sections: ## exec, ## final: audit/,
+        /is missing sections: ## exec$/,
       )
       expect(() => parseModeFile("unknown", `${modeText("unknown")}\n## extra\n多余节。\n`)).toThrow(/has unknown section/)
     } finally {
@@ -102,9 +86,8 @@ describe("目标目录模式扩展(.opencode/auto/modes/)", () => {
       `# x\n\n## init\n\n\n导语。\n\n\n## exec\n注记。\n## final: audit\na\n## final: validate\nb\n## final: finalize\n\n\nc\n`,
     )
     expect(spec.init).toBe("导语。")
-    expect(spec.final.finalize).toBe("c")
-    expect(() => parseModeFile("y", `# y\n\n## init\n\n\n## exec\n注记。\n## final: audit\na\n## final: validate\nb\n## final: finalize\nc\n`)).toThrow(
-      /is missing sections/,
-    )
+    // 已退役的 final: 三节(plans/0044 D1)仍可解析,节体被忽略、不进 ModeSpec
+    expect(spec).toEqual({ name: "x", init: "导语。", exec: "注记。" })
+    expect(() => parseModeFile("y", `# y\n\n## init\n\n\n## exec\n注记。\n`)).toThrow(/is missing sections/)
   })
 })
