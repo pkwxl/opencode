@@ -53,8 +53,8 @@ describe("extractRefs", () => {
     expect(extractRefs(text)).toEqual([{ path: "docs/T-001/context.md", at: 4 }])
   })
 
-  test("标记行豁免(已删除|已归档|历史)", () => {
-    const text = ["旧路径 `docs/T-001.context.md` 已删除。", "`docs/T-002.audit.md` 是历史产物。", "现行 `docs/T-002/audit.md`。"].join("\n")
+  test("标记行豁免(deleted|archived|historical)", () => {
+    const text = ["Old path `docs/T-001.context.md` deleted.", "`docs/T-002.audit.md` is a historical artifact.", "现行 `docs/T-002/audit.md`。"].join("\n")
     expect(extractRefs(text)).toEqual([{ path: "docs/T-002/audit.md", at: 3 }])
   })
 
@@ -80,9 +80,9 @@ describe("rewriteRefs", () => {
   })
 
   test("围栏与标记行豁免", () => {
-    const text = ["```", "docs/T-1.md", "```", "`docs/T-1.md` 已归档。", "`docs/T-1.md`"].join("\n")
+    const text = ["```", "docs/T-1.md", "```", "`docs/T-1.md` archived.", "`docs/T-1.md`"].join("\n")
     const result = rewriteRefs(text, [pair])
-    expect(result.text).toBe(["```", "docs/T-1.md", "```", "`docs/T-1.md` 已归档。", "`docs/T-1/report.md`"].join("\n"))
+    expect(result.text).toBe(["```", "docs/T-1.md", "```", "`docs/T-1.md` archived.", "`docs/T-1/report.md`"].join("\n"))
     expect(result.count).toBe(1)
   })
 
@@ -229,7 +229,7 @@ describe("activeDocs / validateRefs / scanRefs", () => {
         [
           "正常引用 `docs/T-001/context.md`(缺失,missing)。",
           "行号越界 `src/mod.ts:99`。",
-          "豁免: `docs/gone.md` 已删除,`docs/old.md` 是历史路径。",
+          "豁免: `docs/gone.md` deleted, `docs/old.md` is a historical path.",
           "```",
           "围栏内 `docs/gone-fenced.md` 不检查。",
           "```",

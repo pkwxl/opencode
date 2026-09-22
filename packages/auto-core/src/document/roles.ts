@@ -180,11 +180,19 @@ export function handoffStatus(text: string): HandoffStatus | undefined {
 
 // The four mandatory sections of a phase handover (F.1 protocol): shared by
 // the distillation session's collect check and the prompt template's tier-1
-// markers (phase-handover.md inlines the same headings).
-export const HANDOVER_SECTIONS = ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]
+// markers (phase-handover.md inlines the same headings). Driver protocol
+// strings (0035 §4 phase face), flipped from the Chinese headings in M3.8 with
+// no dual-read.
+export const HANDOVER_SECTIONS = ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]
+
+// The closing mark of the prior-knowledge document: its last non-empty line
+// (src/knowledge.ts priorKnowledgeComplete; prior-knowledge.md tier-1 marker).
+// Driver protocol string (0035 §4 phase face), flipped from `完成` in M3.8 with
+// no dual-read.
+export const PRIOR_KB_DONE = "DONE"
 
 // Whether a phase handover has all four sections: each heading must be an
-// exact standalone line (a ### subheading does not count — "### 关键决策"
+// exact standalone line (a ### subheading does not count — "### Key decisions"
 // contains the substring but is not a compliant heading).
 export function validHandover(text: string): boolean {
   return HANDOVER_SECTIONS.every((section) => text.split("\n").some((line) => line.trim() === section))

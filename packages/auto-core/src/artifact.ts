@@ -1,9 +1,11 @@
-// 旁路会话"必须产出文件"的通用骨架(requireArtifact): 下发 → 采集产物 → 缺失
-// 带反馈重试一次 → 仍缺失按隐性阻塞停机;兼管阶段级旁路步骤的恢复点续跑
-// (spec.step)与独立隐藏任务单元的提交边界(spec.unitStart)。被
-// implement/numbering/knowledge/loop 消费,单独成文件使
-// 它们不必拉进整个 runner。位于 session 之上;**不得反向 import runner**。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S9,纯搬运)。
+// The generic skeleton of a bypass session that "must produce a file"
+// (requireArtifact): dispatch → collect the artifact → missing: retry once with
+// feedback → still missing: stop as an implicit block. It also runs the resume
+// point of phase-level bypass steps (spec.step) and the commit boundary of
+// independent hidden task units (spec.unitStart). Consumed by
+// implement/numbering/knowledge/loop; kept in its own file so they need not pull
+// in the whole runner. Sits above session; **must not import runner**.
+// Split out of src/runner.ts (plans/0024-module-split-plan.md S9, pure move).
 
 import type { AgentClient } from "./agent/types"
 import type { SessionChain } from "./chain"
@@ -18,64 +20,81 @@ import { formatTokens, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
 import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
-// “旁路会话必须产出文件”的通用骨架(设计文档 A.4): 会话结束但产物缺失或无效时
-// 带反馈重试一次,仍失败按隐性阻塞停机(人工检查后重新运行续跑)。阶段规划、
-// 交接蒸馏、知识提取等旁路会话共用;collect 返回 undefined 表示该次会话未产出
-// 有效产物。spec.commit 声明该类会话的统一提交信息(会话结束即提交)。
+// The generic "bypass session must produce a file" skeleton (design doc A.4):
+// when a session ends with its artifact missing or invalid, retry once with
+// feedback; a second failure stops as an implicit block (a human investigates
+// and re-runs to resume). Shared by phase planning, handover distillation,
+// knowledge extraction and the other bypass sessions; collect returning
+// undefined means that session produced no valid artifact. spec.commit declares
+// the unified commit of this session kind (committed as soon as the session ends).
 //
-// spec.step(阶段级旁路步骤,plans/0018-session-resume-precedence-design.md): 仅阶段
-// 规划/交接蒸馏会话声明。有值时:① 会话链携带 step 阶段,attempt 在提示词下发
-// 成功时写 active 记录(认领在跑的会话,回合进行中被 kill 也不丢);② 进入时若
-// 发现同一步骤的 active 记录(上次运行中断、driver 未收口)→ 续跑: 会话存活且非
-// 报错桩则复用原会话(保留产物现场,不重置),否则开新会话重做本步骤(照常重置);
-// ③ 收口(删除记录)由调用方在后处理完成后经 closeStep 执行——requireArtifact 本身
-// 不删,避免"产物已校验但后处理(编号推进/台账/提交)未完成"时被 kill 丢失步骤认领。
+// spec.step (phase-level bypass steps, plans/0018-session-resume-precedence-design.md):
+// declared only by phase planning / handover distillation sessions. When set:
+// ① the session chain carries the step phase, and attempt writes the active
+// record once the prompt is dispatched (claiming the running session, so a kill
+// mid-turn loses nothing); ② on entry, an active record of the same step (the
+// last run was interrupted before the driver closed it) → resume: reuse the
+// original session when it is alive and not an error stub (keeping the artifact
+// state, no reset), otherwise redo the step in a new session (reset as usual);
+// ③ the caller closes the step (deletes the record) via closeStep once its
+// post-processing is done — requireArtifact itself does not delete it, so a
+// kill between "artifact validated" and "post-processing (numbering / index /
+// commit) finished" does not lose the step claim.
 //
-// spec.unitStart(plans/0021-commit-boundary-design.md P2): 独立隐藏任务单元声明(阶段规划/
-// 交接蒸馏/知识提取/前置知识/编号恢复)。有值时: ① 入口经 beginUnit
-// 做启动 clean 门禁并记 SHA 基线(恢复复用原会话时豁免 clean——脏区是本单元自身
-// 产物现场——但仍记基线);② spec.commit 失败 → blocked(不开反馈重试: git 故障
-// 重开会话无意义),提交后做单元收口校验(提交区间须全为 driver 提交)。
+// spec.unitStart (plans/0021-commit-boundary-design.md P2): declares an
+// independent hidden task unit (phase planning / handover distillation /
+// knowledge extraction / prior knowledge / numbering recovery). When set:
+// ① entry runs the clean gate via beginUnit and records the SHA baseline (a
+// resume that reuses the original session is exempt from clean — the dirty area
+// is this unit's own artifact state — but still records the baseline);
+// ② a spec.commit failure → blocked (no feedback retry: reopening a session
+// cannot fix a git fault), and after the commit the unit close-out check runs
+// (every commit in the range must be a driver commit).
 export async function requireArtifact<T>(
   client: AgentClient,
   task: Task,
   promptText: string,
   opts: Opts,
   spec: {
-    // 会话类型,用于日志与阻塞信息(如“收尾”、“阶段规划”)。
+    // Session kind, for logs and block messages (e.g. "phase planning").
     kind: string
-    // 产物描述(如 `有效判定文件 ${VERDICT_FILE}`)。
+    // Artifact description (e.g. `a valid task index ${taskIndex}`).
     artifact: string
-    // 阻塞信息中的缺失原因补充(如“缺失或无结论行”)。
+    // Why the artifact counts as missing, appended to the block message (e.g. "missing or empty").
     detail?: string
-    // 重试反馈中的硬性要求。
+    // The hard requirement restated in the retry feedback.
     requirement: string
-    // 每次会话前清理旧产物,避免会话未写出时被误当作本次产出。
+    // Clears stale artifacts before each session, so an old file is never taken for this session's output.
     reset?: () => Promise<void>
-    // 会话结束后采集产物。
+    // Collects the artifact after the session ends.
     collect: () => Promise<T | undefined>
-    // 会话后统一提交的信息(阶段 trailer 与标题行;缺省不提交)。
+    // The unified commit after the session (stage trailer and subject; absent = no commit).
     commit?: { stage: string; subject: string }
-    // 独立隐藏任务单元声明(启动 clean 门禁 + SHA 基线 + 收口校验,见函数头注释)。
+    // Independent hidden task unit (entry clean gate + SHA baseline + close-out check; see the header comment).
     unitStart?: boolean
-    // 阶段级旁路步骤身份(仅阶段规划/交接蒸馏会话声明);有值即启用 driver 侧
-    // 恢复点与会话续跑(见函数头注释)。
+    // Phase-level bypass step identity (declared only by phase planning / handover
+    // distillation); when set, the driver-side resume point and session reuse are on
+    // (see the header comment).
     step?: { step: StepKind; unit: string }
-    // 会话角色(模型路由细键,plans/0017-model-routing-design.md C.1):旁路一次性会话
-    // 显式声明(如 knowledge / number-recovery);缺省 undefined →
-    // roleOf 落 bypass。带 spec.step 的阶段步骤会话无需声明(roleOf 由 step 变体推导)。
+    // Session role (model-routing key, plans/0017-model-routing-design.md C.1): one-shot
+    // bypass sessions declare it (e.g. knowledge / number-recovery); undefined →
+    // roleOf falls to bypass. Phase-step sessions with spec.step need not declare it
+    // (roleOf derives it from the step variant).
     role?: ModelRole
   },
-  // 缺省取 OPENCODE_AUTO_* 解析值,透传给 runSession(与其同款注入点,供单测把
-  // 重试阶梯压成零等待)。
+  // Defaults to the parsed OPENCODE_AUTO_* values; passed through to runSession
+  // (the same injection point, so tests can collapse the retry ladder to zero wait).
   switches: Switches = autoSwitches(),
 ): Promise<T | UnitStop> {
   const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, unit: spec.step.unit } : undefined
-  // 阶段步骤续跑判定: 上次运行在本步骤中断(driver 未收口)且原会话仍可复用 →
-  // 首个提示词进原会话(保留产物现场);否则按全新步骤处理(重置 + 新会话)。
-  // 严格恢复(OPENCODE_AUTO_STRICT_RESUME): 复用前核对单元基线与生效模型
-  // (plans/0022-session-recovery-fidelity-design.md 3.1);不可保真时回滚到基线后按全新步骤
-  // 重做——外部提交混入直接 dirty 交人工(不动 git)。
+  // Phase-step resume: the last run was interrupted in this step (driver did not
+  // close it) and the original session is still reusable → the first prompt goes
+  // into the original session (keeping the artifact state); otherwise treat it as
+  // a fresh step (reset + new session).
+  // Strict resume (OPENCODE_AUTO_STRICT_RESUME): check the unit baseline and the
+  // effective model before reuse (plans/0022-session-recovery-fidelity-design.md 3.1);
+  // when fidelity cannot be kept, roll back to the baseline and redo as a fresh
+  // step — foreign commits mixed in go straight to dirty for a human (git untouched).
   const strict = strictResumeActive(opts, switches)
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
@@ -90,7 +109,7 @@ export async function requireArtifact<T>(
       const candidate = !opts.newSession ? recalled!.session : undefined
       const alive = candidate !== undefined ? await sessionAlive(client, candidate) : false
       const usage = alive ? await sessionUsage(client, candidate!) : undefined
-      // 报错桩(整条会话无真实产出)不复用——与 runTask 跨进程恢复同款双保险。
+      // An error stub (the whole session produced nothing real) is never reused — the same double check as runTask's cross-process resume.
       const usable = alive && usage && !(usage.used === 0 && usage.errorStub)
       const legacyRecord = strict && recalled!.baseline === undefined
       if (strict && recalled!.baseline) {
@@ -101,52 +120,56 @@ export async function requireArtifact<T>(
           resumedSession = candidate
           resumedUsage = usage
           log(
-            `↻ ${task.id} ${spec.kind}会话恢复中断点,复用会话 ${candidate} 继续(上下文不丢,` +
-              `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens"})`,
+            `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
+              `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
           )
         } else {
           const why = opts.newSession
-            ? "--new-session 指定"
+            ? "--new-session given"
             : !usable
-              ? "原会话不可复用"
+              ? "the original session is not reusable"
               : recalled!.model === undefined
-                ? "记录无生效模型(严格恢复启用前的旧记录)"
-                : `模型不一致(记录 ${recalled!.model},当前 ${modelNow ?? "未配置路由"})`
-          const done = await rollbackUnitState(opts.dir, task, `${spec.kind}步骤`, recalled!.baseline, { progress: recalled })
+                ? "the record has no effective model (an old record from before strict resume)"
+                : `model mismatch (recorded ${recalled!.model}, now ${modelNow ?? "no routing configured"})`
+          const done = await rollbackUnitState(opts.dir, task, `${spec.kind} step`, recalled!.baseline, { progress: recalled })
           if (done.type !== "ok") return done
-          log(`↻ ${task.id} ${spec.kind}会话恢复中断点(${why},严格恢复已回滚,重做本步骤)`)
+          log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${why}; strict resume rolled back, redoing this step)`)
         }
       } else if (usable && !legacyRecord) {
         resumedSession = candidate
         resumedUsage = usage
         log(
-          `↻ ${task.id} ${spec.kind}会话恢复中断点,复用会话 ${candidate} 继续(上下文不丢,` +
-            `已用 ${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens,${usage.pct}%` : " tokens"})`,
+          `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
+            `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
         )
       } else {
         const why = opts.newSession
-          ? "--new-session 指定"
+          ? "--new-session given"
           : candidate === undefined
-            ? "记录无会话"
+            ? "the record has no session"
             : legacyRecord
-              ? "严格恢复启用前的旧记录无单元基线,无法严格核对"
+              ? "an old record from before strict resume has no unit baseline and cannot be checked strictly"
               : alive
-                ? "原会话只挨了一记报错、无真实产出"
-                : "原会话不可复用"
-        log(`↻ ${task.id} ${spec.kind}会话恢复中断点(${why},开新会话重做本步骤)`)
+                ? "the original session only took an error and produced nothing real"
+                : "the original session is not reusable"
+        log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${why}; redoing this step in a new session)`)
       }
     } else {
-      // 全新步骤(或记录不属于本步骤): 先写一个 session 未定的 active 恢复点,使
-      // attempt 的下发前快照(prior)恒非空——可重试会话错误还原时保留步骤认领而非
-      // 删除记录,避免"可重试错误耗尽 → 无记录 → 下次运行凭半成品产物跳过本
-      // 步骤"。会话 id 由首个提示词下发时的 remember 落实。
+      // A fresh step (or a record of another step): write an active resume point
+      // with no session yet, so attempt's pre-dispatch snapshot (prior) is never
+      // empty — restoring after a retryable session error keeps the step claim
+      // instead of deleting the record, which avoids "retryable errors exhausted →
+      // no record → the next run skips this step on a half-written artifact". The
+      // session id is filled in by remember when the first prompt is dispatched.
       await saveProgress(opts.dir, { task: task.id, session: undefined, at: Date.now(), active: true, phase: stepPhase })
     }
   }
   let feedback = ""
-  // 独立隐藏任务单元的提交边界(spec.unitStart,plans/0021-commit-boundary-design.md P2):
-  // 恢复复用原会话(resumedSession)豁免 clean 检查——工作区脏区是本单元自身产物
-  // 现场;全新进入要求 clean(driver 独占状态文件遗留自愈),两种情况都记 SHA 基线。
+  // Commit boundary of an independent hidden task unit (spec.unitStart,
+  // plans/0021-commit-boundary-design.md P2): a resume reusing the original session
+  // (resumedSession) is exempt from the clean check — the dirty area is this unit's
+  // own artifact state; a fresh entry requires clean (driver-owned state file
+  // leftovers self-heal). Both record the SHA baseline.
   let baseline: UnitBaseline | undefined
   if (spec.unitStart && opts.dir && opts.commit !== false && !opts.dryrun) {
     if (resumedSession) {
@@ -158,8 +181,10 @@ export async function requireArtifact<T>(
     }
   }
   for (let i = 0; ; i++) {
-    // 续跑复用原会话时保留产物现场(上次会话可能已写入部分产物,重置会毁掉它);
-    // 其余情况(全新步骤、反馈重试)照常重置,避免会话未写出时被误当作本次产出。
+    // A resume reusing the original session keeps the artifact state (the last
+    // session may have written part of it; a reset would destroy that); every
+    // other case (fresh step, feedback retry) resets as usual, so a stale file is
+    // never taken for this session's output.
     const resume = i === 0 && resumedSession !== undefined
     if (!resume) await spec.reset?.()
     const chain: SessionChain = {
@@ -169,12 +194,13 @@ export async function requireArtifact<T>(
       subject: spec.commit?.subject,
       phase: stepPhase,
       role: spec.role,
-      // 单元基线上链(严格恢复: attempt 写 active 记录时随记)。
+      // The unit baseline rides on the chain (strict resume: attempt records it with the active record).
       baseline,
     }
     if (resume) {
-      // attempt 的 resumed 判据(链上有会话且 note 待注入)使首个提示词必进原会话,
-      // 不受复用开关与阈值约束;note 用后即清。
+      // attempt's resumed test (a session on the chain and a pending note) sends
+      // the first prompt into the original session regardless of the reuse switch
+      // and threshold; the note is cleared once used.
       chain.id = resumedSession
       chain.note = resumeNote(stepPhase, true, strict)
     }
@@ -182,7 +208,7 @@ export async function requireArtifact<T>(
     if (result.type === "blocked") return result
     if (spec.commit) {
       const committed = await afterSession(opts.dir, opts, task, spec.commit, baseline)
-      if (committed.type === "failed") return commitBlocked(`${task.id} ${spec.kind}会话`, committed)
+      if (committed.type === "failed") return commitBlocked(`${task.id} ${spec.kind} session`, committed)
     }
     const value = await spec.collect()
     if (value !== undefined) return value
@@ -190,14 +216,15 @@ export async function requireArtifact<T>(
       return {
         type: "blocked",
         question:
-          `${spec.kind}会话两次结束但未产出${spec.artifact}${spec.detail ? `(${spec.detail})` : ""}(隐性阻塞)。` +
-          `请检查后重新运行。${spec.kind}会话最后的输出:\n${result.lastText.trim().slice(-2000) || "(无输出)"}`,
+          `The ${spec.kind} session ended twice without producing ${spec.artifact}${spec.detail ? ` (${spec.detail})` : ""} (implicit block). ` +
+          `Investigate and re-run. Last output of the ${spec.kind} session:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
       }
     }
-    log(`↻ ${task.id} ${spec.kind}会话未产出${spec.artifact},带反馈重试一次`)
-    feedback = `\n\n你上次结束会话但未产出${spec.artifact}。这是硬性要求:${spec.requirement}`
-    // 反馈重试不再复用原会话(它已结束本轮却未产出有效产物): 清续跑标记,下一轮
-    // 重置产物并开新会话。
+    log(`↻ ${task.id} ${spec.kind} session did not produce ${spec.artifact}; retrying once with feedback`)
+    feedback = `\n\nThe last time you ended the session, ${spec.artifact} was not produced. This is a hard requirement: ${spec.requirement}`
+    // The feedback retry no longer reuses the original session (it ended its turn
+    // without a valid artifact): clear the resume marks, so the next round resets
+    // the artifact and opens a new session.
     resumedSession = undefined
     resumedUsage = undefined
   }

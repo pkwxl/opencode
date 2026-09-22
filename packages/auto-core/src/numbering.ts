@@ -91,18 +91,19 @@ export async function ensureNumbering(
   }
   const recovered = await requireArtifact(
     client,
-    { id: "PLAN", title: "任务编号记录恢复", status: "in_progress", attempts: 0, body: "" },
+    { id: "PLAN", title: "task numbering record recovery", status: "in_progress", attempts: 0, body: "" },
     renderNumberRecovery({ floor }),
     opts,
     {
-      kind: "编号恢复",
+      kind: "numbering recovery",
       role: "number-recovery",
-      // 独立隐藏任务单元(plans/0021-commit-boundary-design.md)。产物 .auto/next-task 被
-      // gitignore,不涉纳管文件修改,门禁主要覆盖收口校验与会话可能触碰的其他文件。
+      // Independent hidden task unit (plans/0021-commit-boundary-design.md). The artifact
+      // .auto/next-task is gitignored and touches no tracked file; the gate mainly covers
+      // the close-out check and any other file the session might touch.
       unitStart: true,
-      artifact: `有效编号记录 ${NEXT_TASK_FILE}(不小于 ${floor} 的正整数)`,
-      detail: "缺失、非正整数或小于已用编号下限",
-      requirement: `必须把推导出的下一可用任务编号写入 ${NEXT_TASK_FILE}: 文件内容仅为一个不小于 ${floor} 的正整数(可带换行),不要写任何其他内容。`,
+      artifact: `a valid numbering record ${NEXT_TASK_FILE} (a positive integer not below ${floor})`,
+      detail: "missing, not a positive integer, or below the used-number floor",
+      requirement: `write the derived next available task number to ${NEXT_TASK_FILE}: the file holds only a positive integer not below ${floor} (a trailing newline is fine), nothing else.`,
       commit: { stage: "numbering", subject: "PLAN numbering next-task record recovery" },
       reset: () => rm(join(dir, NEXT_TASK_FILE), { force: true }),
       collect: async () => {

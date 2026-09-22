@@ -349,3 +349,57 @@ explicit and never silent. Removed:
 
 The phase-face strings that flip in M3.8 get no dual-read either. They flip
 in lockstep, parser and templates in one commit.
+
+## Amendment (2026-09-22, M3.8 / root plan open question 17 (a)): the §4 phase face flipped
+
+The remaining §4 M3.4-row entries flip, no dual-read (M3.7's ruling applies).
+Flipped in one commit — templates and parsers together:
+
+- `HANDOVER_SECTIONS` (`src/document/roles.ts`): `## 关键决策` / `## 约束与坑`
+  / `## 下一阶段必读清单` / `## 产物索引` → `## Key decisions` /
+  `## Constraints and pitfalls` / `## Required reading for the next phase` /
+  `## Artifact index`. `templates/prompts/phase-handover.md` (producer,
+  rewritten to English) and `src/template.ts PROTOCOL_MARKERS["phase-handover"]`
+  (tier-1 guard) carry literal copies rather than importing the constant —
+  `template` is a frozen-import leaf (`FROZEN_IMPORTS.template: []` in
+  `test/import-direction.test.ts`), so the guard's copy and the parser's
+  constant are kept in lockstep by the golden/prompt tests, not by a shared
+  import.
+- `PHASE_NAMES` / `phaseText` vocabulary (`src/phases/registry.ts`
+  `BUILTIN_PHASE_TYPES[].name`): 分析/设计/迁移实现/测试/验收/知识提炼 →
+  Analysis/Design/Implementation/Testing/Acceptance/Knowledge distillation.
+  Consumed by `resume-gate.ts`'s `phaseText` interjection and every template
+  that renders `{{phaseName}}`.
+- Knowledge-doc terminator (`src/knowledge.ts priorKnowledgeComplete`):
+  `完成` → `DONE`, on its own line at the end of a round's prior-knowledge
+  file; `templates/prompts/prior-knowledge.md` and `knowledge.md` updated to
+  match (the latter already mostly English from an earlier milestone).
+- Refcheck inline exemption markers (`src/refcheck.ts` `已删除|已归档|历史`
+  regex) → `deleted|archived|historical`; the shell-side hint string in
+  `packages/auto/src/index.ts` (the stale-reference CLI message) updated to
+  match, since it names the markers verbatim for the human operator.
+- The resume-gate / `COMMIT_CLARIFY` interjection family
+  (`src/exec-session.ts` / `src/resume-gate.ts`): all remaining Chinese
+  prose (`"你在原会话、被中断处继续。"`, the four-mandatory-sections note,
+  the commit-clarification paragraph) → English. No parser reads this face;
+  it is operator-facing prose, tier-1 guarded only where it doubles as a
+  template (`PARTIAL_MARKERS`/`PROTOCOL_MARKERS` do not cover it — it is
+  generated text, not a template file).
+
+Prose-only template rewrites in the same batch (not protocol strings, so not
+individually registered here, but they carry the same PROTOCOL_MARKERS /
+tier-1 literals listed above): `phase-plan.md`, `implement-plan.md`,
+`infer-source.md`, `number-recovery.md`, `context-base.md`, and the six
+`plan-duties-<a,d,m,t,v,k>` sections of `_partials.md`.
+
+Test-coverage additions (M3.8 exit criteria): a real-agent
+`test.skipIf(!E2E)` end-to-end test for a project-defined custom phase type
+running the full plan→execute→handover pipeline, and one for the new unit
+layout across a full `phases=adm` round (`P01-analysis`/`P02-design`/
+`P03-implement`, `tasks.md` + `docs/T-NNN/todo.md`, renames committed
+alongside the driver's own commits, round completion read off each phase
+directory's `done.md` with no separate flag) — both in
+`packages/auto/test/e2e.test.ts`, opt-in via `OPENCODE_AUTO_E2E=1` per the
+existing convention (not run by the default `bun test`). The legacy-layout
+usage-error requirement was already covered by the M3.7 test at
+`packages/auto/test/e2e.test.ts` ("旧布局退役(M3.7)…").

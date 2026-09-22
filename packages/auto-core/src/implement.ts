@@ -49,22 +49,22 @@ export async function implementPlan(
     let problems: string[] = []
     const planned = await requireArtifact(
       server.client,
-      { id: "PLAN", title: "计划生成(implement)", status: "in_progress", attempts: 0, body: "" },
+      { id: "PLAN", title: "plan generation (implement)", status: "in_progress", attempts: 0, body: "" },
       renderImplementPlan({ file: input.file, content: input.content, brief: input.brief, phaseId, taskIndex, numberStart }),
       sessionOpts,
       {
-        kind: "计划生成",
+        kind: "plan generation",
         role: "implement-scan",
-        // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(plans/0021-commit-boundary-design.md)。
+        // Independent hidden task unit: entry clean gate + SHA baseline + close-out check (plans/0021-commit-boundary-design.md).
         unitStart: true,
-        artifact: `有效的任务索引 ${taskIndex} 与各任务文档(至少一个任务)`,
-        detail: "缺失、无任务、任务文档不合格或任务编号复用了已占用的编号",
+        artifact: `a valid task index ${taskIndex} with its task documents (at least one task)`,
+        detail: "missing, no task, a non-compliant task document, or a task number reusing a taken number",
         get requirement() {
           return (
-            `必须写出任务索引 ${taskIndex}(每个任务一行 \`- [ ] T-NNN <任务标题>\`,至少一个)` +
-            `与每个任务的 docs/T-NNN/todo.md(标题行 \`# T-NNN: <任务标题>\`、字段行 \`Phase: ${phaseId}\`、` +
-            `\`## Goal\` / \`## Scope\` / \`## Acceptance\` 三节,末行 \`<!-- auto: eof -->\`)。` +
-            (problems.length ? `上次的问题: ${problems.join("; ")}。` : "")
+            `write the task index ${taskIndex} (one line per task, \`- [ ] T-NNN <task title>\`, at least one) ` +
+            `and each task's docs/T-NNN/todo.md (title line \`# T-NNN: <task title>\`, field line \`Phase: ${phaseId}\`, ` +
+            `the three sections \`## Goal\` / \`## Scope\` / \`## Acceptance\`, last line \`<!-- auto: eof -->\`).` +
+            (problems.length ? ` Problems last time: ${problems.join("; ")}.` : "")
           )
         },
         commit: { stage: "implement-plan", subject: "PLAN implement plan generation" },

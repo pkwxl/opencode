@@ -16,7 +16,7 @@ Migration/upgrade mode notes:
   directory docs/R-NN/P<nn>-<type>/;
 - Each phase's handover document docs/R-NN/P<nn>-<type>/handover.md: read these closely first (they are the phase's distilled
   conclusions); each phase directory also holds that phase's task index tasks.md — when you need more
-  detail, fetch the original artifacts through the handover document's `## 产物索引` (artifact index) section (permanent paths,
+  detail, fetch the original artifacts through the handover document's `## Artifact index` section (permanent paths,
   docs/T-NNN/…);
 - A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough; no need to expand each
   entry).

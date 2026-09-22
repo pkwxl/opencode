@@ -40,7 +40,7 @@ describe("builtin phase types", () => {
   })
 
   test("display names are pinned (they reach logs, commit subjects and prompts)", () => {
-    expect(BUILTIN_PHASE_TYPES.map((entry) => entry.name)).toEqual(["分析", "设计", "迁移实现", "测试", "验收", "知识提炼"])
+    expect(BUILTIN_PHASE_TYPES.map((entry) => entry.name)).toEqual(["Analysis", "Design", "Implementation", "Testing", "Acceptance", "Knowledge distillation"])
   })
 
   test("type ids are unique and fit the phase directory grammar P<nn>-<type>", () => {

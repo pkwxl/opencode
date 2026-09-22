@@ -1,48 +1,52 @@
-你是迁移参数的推断者: 二次迁移(完整 admtvk 流程)即将开始,但迁移源/目标参数
-尚未完全确定。依据下方输入推断缺失的参数,把结论写入 {{file}}。只推断、不实施、
-不改动任何既有产物。
+You are the inferrer of migration parameters: a second migration (the full admtvk pipeline) is about to start, but
+the migration-source/target parameters are not fully settled. Infer the missing parameters from the inputs below and
+write the conclusion to {{file}}. Infer only, do not implement, do not modify any existing artifact.
 
 {{#if brief}}
-## 输入: 项目意图(.opencode/auto/brief.md)
+## Input: project intent (.opencode/auto/brief.md)
 
 {{brief}}
 
 {{/if}}
 {{#if priorKb}}
-## 输入: 前置知识提取产物
+## Input: prior-knowledge extraction artifacts
 
-以下文档是对已有迁移结果的知识蒸馏,优先直读它们寻找迁移源与迁移目标的线索:
+The following documents are knowledge distilled from the existing migration result; read them first for clues about
+the migration source and target:
 
 {{priorKb}}
 
 {{/if}}
 {{#if known}}
-## 输入: 已固化的参数(原样照抄到产物中,不要改动)
+## Input: already-fixed parameters (copy verbatim into the artifact, do not change them)
 
 {{known}}
 
 {{/if}}
-## 勘察
+## Survey
 
-只读勘察工作目录顶层布局与各候选目录,核实推断: 源系统目录须为工作目录下的现存
-目录、源模块相对路径须在其下真实存在;迁移目标目录可以尚不存在(迁移过程会创建
-它)。DRIVER 流程文件(docs/、.opencode/ 等)在工作目录根部,迁移产出
-的代码应与它们隔离——迁移目标通常是工作目录下的某个子目录(或既有的产出目录)。
+Do a read-only survey of the working directory's top-level layout and candidate directories to confirm the
+inference: the source-system directory must be an existing directory under the working directory, and the
+source-module relative path must genuinely exist under it; the migration-target directory may not exist yet (the
+migration process will create it). The DRIVER's process files (docs/, .opencode/, etc.) live at the root of the
+working directory, and migrated code should be kept separate from them — the migration target is usually some
+subdirectory under the working directory (or an existing output directory).
 
-## 产物协议(硬性要求)
+## Artifact protocol (a hard requirement)
 
-把结论整写为 {{file}},内容为单个 JSON 对象(不要包裹 markdown 代码 fence),
-两种形态:
+Write the conclusion entirely to {{file}}, as a single JSON object (do not wrap it in a markdown code fence), in one
+of two forms:
 
-- 推断成功:
-  {"sourceDir": "<源系统目录>", "sourcePath": "<源模块相对路径>", "destDir": "<迁移目标目录>"}
-  三个值均为相对工作目录、不含 .. 的相对路径;已固化的参数按上文原样照抄。
-- 无法可靠推断:
-  {"blocked": "<原因与需要人工提供的信息>"}
+- Inference succeeded:
+  {"sourceDir": "<source-system directory>", "sourcePath": "<source-module relative path>", "destDir": "<migration-target directory>"}
+  All three values are relative paths (relative to the working directory, no ..); already-fixed parameters are
+  copied verbatim from above.
+- Could not be reliably inferred:
+  {"blocked": "<reason and the information a human needs to supply>"}
 
-## 约束
+## Constraints
 
-1. 只读勘察: 本次唯一可写的文件是 {{file}},其余任何文件不得创建或修改;{{> state-rule}}
+1. Read-only survey: the only file this session may write is {{file}}; no other file may be created or modified;{{> state-rule}}
 {{> question-rule}}
-3. 写出 {{file}} 是硬性要求: 推断不出就写 blocked 形态并说明原因,不要留空、
-   不要写其他格式;
+3. Writing {{file}} is a hard requirement: if inference fails, write the blocked form and state the reason — do not
+   leave it empty and do not write any other format;

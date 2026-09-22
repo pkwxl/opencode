@@ -6,7 +6,7 @@ import { mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
-import { validHandover } from "./document/roles"
+import { HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { maybeExit } from "./exit"
 import { clearSticky, consumeFailback } from "./failback"
 import { commitPending, commitTree } from "./git"
@@ -113,7 +113,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   log(`▶ starting the phase planning session to write ${taskIndex} and the task documents`)
   const planned = await requireArtifact(
     serverHandle.client,
-    { id: "PLAN", title: `阶段规划(${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
+    { id: "PLAN", title: `phase planning (${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
     renderPhasePlan({
       phase: phase.entry,
       phaseId,
@@ -141,19 +141,19 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       mode: opts.mode,
     },
     {
-      kind: "阶段规划",
+      kind: "phase planning",
       step: { step: "phase-plan", unit: phaseKey(phase).id },
-      // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
-      // (plans/0021-commit-boundary-design.md)。
+      // Independent hidden task unit: entry clean gate + SHA baseline + close-out
+      // check (plans/0021-commit-boundary-design.md).
       unitStart: true,
-      artifact: `有效的任务索引 ${taskIndex} 与各任务文档(至少一个任务)`,
-      detail: "缺失、无任务、任务文档不合格或任务编号复用了已占用的编号",
+      artifact: `a valid task index ${taskIndex} with its task documents (at least one task)`,
+      detail: "missing, no task, a non-compliant task document, or a task number reusing a taken number",
       get requirement() {
         return (
-          `必须写出任务索引 ${taskIndex}(每个任务一行 \`- [ ] T-NNN <任务标题>\`,至少一个;即使认为本阶段无事可做,也要写入一个说明性任务)` +
-          `与每个任务的 docs/T-NNN/todo.md(标题行 \`# T-NNN: <任务标题>\`、字段行 \`Phase: ${phaseId}\`、` +
-          `\`## Goal\` / \`## Scope\` / \`## Acceptance\` 三节,末行 \`<!-- auto: eof -->\`)。` +
-          (problems.length ? `上次的问题: ${problems.join("; ")}。` : "")
+          `write the task index ${taskIndex} (one line per task, \`- [ ] T-NNN <task title>\`, at least one; even if you believe this phase has nothing to do, write one explanatory task) ` +
+          `and each task's docs/T-NNN/todo.md (title line \`# T-NNN: <task title>\`, field line \`Phase: ${phaseId}\`, ` +
+          `the three sections \`## Goal\` / \`## Scope\` / \`## Acceptance\`, last line \`<!-- auto: eof -->\`).` +
+          (problems.length ? ` Problems last time: ${problems.join("; ")}.` : "")
         )
       },
       commit: { stage: "phase-plan", subject: `PLAN plan ${phaseTitle(phase)}` },
@@ -209,7 +209,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   // driver 未收口"区间的现场直接续跑快照/完成改名;文档仍在未提交清单则先补提交
   // (产物落盘且已提交才算完成)。部分写就(小节不全)照常走蒸馏: reset 清文件
   // 重来,step 恢复点(openStep)仍可复用原会话续写。
-  const distillTask = { id: "PLAN", title: `阶段交接蒸馏(${phaseTitle(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
+  const distillTask = { id: "PLAN", title: `phase handover distillation (${phaseTitle(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
   const distillCommit = { stage: "phase-handover", subject: `PLAN handover ${phaseTitle(phase)}` }
   if (validHandover(await Bun.file(handoverFile).text().catch(() => ""))) {
     const pending = await commitPending(directory, opts, distillTask, distillCommit, [handover])
@@ -239,16 +239,17 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
         server: serverHandle,
       },
       {
-        kind: "交接蒸馏",
+        kind: "handover distillation",
         step: { step: "phase-handover", unit: phaseKey(phase).id },
-        // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
-        // (plans/0021-commit-boundary-design.md;部分写就的交接文档由 reset 清理重写)。
+        // Independent hidden task unit: entry clean gate + SHA baseline + close-out
+        // check (plans/0021-commit-boundary-design.md; a partly written handover is
+        // cleared by reset and rewritten).
         unitStart: true,
-        artifact: `有效交接文档 ${handover}(四个必备小节齐备)`,
-        detail: "缺失或小节不全",
+        artifact: `a valid handover document ${handover} (all four mandatory sections)`,
+        detail: "missing or sections incomplete",
         requirement:
-          `必须把交接文档写入 ${handover},并包含标题逐字为` +
-          "「## 关键决策」「## 约束与坑」「## 下一阶段必读清单」「## 产物索引」的四个小节。",
+          `write the handover document to ${handover} with four sections whose headings are exactly ` +
+          `${HANDOVER_SECTIONS.map((section) => `\`${section}\``).join(" / ")} (driver protocol strings, write them verbatim).`,
         commit: distillCommit,
         reset: () => rm(handoverFile, { force: true }),
         collect: async () => {

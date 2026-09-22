@@ -102,11 +102,14 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "decompose-t": ["- [ ]", "context.md", "todo.md"],
   "decompose-v": ["- [ ]", "context.md", "todo.md"],
   "handoff-steer": ["Status: continue", "Status: done"],
-  "implement-plan": ["# T-NNN: <任务标题>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <任务标题>", "{{taskIndex}}"],
+  "implement-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "infer-source": ['"sourceDir"', '"blocked"'],
   "number-recovery": [".auto/next-task"],
-  "phase-handover": ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引", "{{handover}}"],
-  "phase-plan": ["# T-NNN: <任务标题>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <任务标题>", "{{taskIndex}}"],
+  // Literal copies of document/roles HANDOVER_SECTIONS / PRIOR_KB_DONE (template
+  // is intent-domain with frozen imports; test/template.test.ts pins the match).
+  "phase-handover": ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index", "{{handover}}"],
+  "phase-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
+  "prior-knowledge": ["DONE", "{{file}}"],
   "test-wrapup": ["{{handoffFile}}", "not dependent on this test run's result"],
   wrapup: ["Result: PASS", "Result: FAIL"],
 }

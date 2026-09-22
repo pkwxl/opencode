@@ -30,7 +30,7 @@ target.
 - The whole docs/ tree: the document artifacts of the existing migration; inside earlier rounds' directories docs/R-NN/, the
   phase handover documents (P<nn>-<type>/handover.md), the migration knowledge (P<nn>-knowledge/kb.md) and earlier rounds'
   prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first; the task indexes
-  tasks.md inside the phase directories only list the tasks — when you need detail, fetch it through the handover document's `## 产物索引` (artifact index) section;
+  tasks.md inside the phase directories only list the tasks — when you need detail, fetch it through the handover document's `## Artifact index` section;
 - The migrated code itself (the current state on the target side): check the final state against the documents; where documents
   and code disagree, the code wins, and note the discrepancy in the document;
 - The migration source (if it exists inside the working directory): work out its layout and module boundaries, and record
@@ -42,7 +42,7 @@ target.
 
 Write the knowledge document to docs/R-01/temp-kb.md (overwrite), organised by the following section skeleton (headings exactly as given, in
 this order; keep the heading of a section with little information and explain why — do not delete sections). docs/R-01/temp-kb.md is an
-intermediate artifact path: once every section is written, put the line `完成` on a line of its own at the very end of the document
+intermediate artifact path: once every section is written, put the line `DONE` on a line of its own at the very end of the document
 as the closing mark — this is a DRIVER-parsed protocol string: write it verbatim, do not translate it. The DRIVER accepts only a
 document carrying that mark, and only after confirming it does it promote the file to the official prior-knowledge document and
 commit it; never write that line before every section is complete.
@@ -99,7 +99,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
    yet;
 2. Distil into writing: write the knowledge document along the section skeleton — distil rather than enumerate; one-off process
    details and temporary state do not belong in it;
-3. End the session as soon as a valid docs/R-01/temp-kb.md (with the closing `完成` mark at the end) is written.
+3. End the session as soon as a valid docs/R-01/temp-kb.md (with the closing `DONE` mark at the end) is written.
 
 ## Constraints
 
@@ -122,5 +122,5 @@ Git commits are made by the DRIVER in one pass after the session ends; do not ru
    Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
 3. Writing that document is a hard requirement: even if the existing migration results are sparse, write out the full section
-   skeleton and explain why; producing no document, or a document missing the closing `完成` mark at the end, makes the
+   skeleton and explain why; producing no document, or a document missing the closing `DONE` mark at the end, makes the
    prior-knowledge extraction fail;

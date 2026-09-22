@@ -272,10 +272,10 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       // phase-handover 覆盖缺四个必备小节标题 → 同样报错;修复后再测 decompose
       writeFileSync(join(overlay, "phase-handover.md"), "自定义交接提示词,丢了小节协议")
       expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md is missing required protocol content/)
-      expect(() => usePromptLibrary(dir)).toThrow(/## 关键决策/)
+      expect(() => usePromptLibrary(dir)).toThrow(/## Key decisions/)
       writeFileSync(
         join(overlay, "phase-handover.md"),
-        "自定义交接提示词,保留协议: ## 关键决策 ## 约束与坑 ## 下一阶段必读清单 ## 产物索引 写入 {{handover}}",
+        "自定义交接提示词,保留协议: ## Key decisions ## Constraints and pitfalls ## Required reading for the next phase ## Artifact index 写入 {{handover}}",
       )
       // decompose 覆盖丢 context.md/todo.md 产物协议(M1.0 合并会话)→ 同样报错
       writeFileSync(join(overlay, "decompose.md"), "自定义分解提示词,丢了产物协议与检查项格式")

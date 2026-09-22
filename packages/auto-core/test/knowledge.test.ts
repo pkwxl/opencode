@@ -189,16 +189,16 @@ describe("priorKnowledgeDigest(前置知识摘要,跨轮累积注入)", () => {
 })
 
 describe("priorKnowledgeComplete(收笔标记判定)", () => {
-  test("最后一个非空行恰为「完成」→ true;空文档/无标记/标记带尾巴 → false", () => {
+  test("最后一个非空行恰为「DONE」→ true;空文档/无标记/标记带尾巴 → false", () => {
     expect(priorKnowledgeComplete("")).toBe(false)
     expect(priorKnowledgeComplete("  \n")).toBe(false)
-    expect(priorKnowledgeComplete("完成")).toBe(true)
-    expect(priorKnowledgeComplete("# 知识库\n\n正文\n\n完成")).toBe(true)
-    expect(priorKnowledgeComplete("正文\n完成\n\n  \n")).toBe(true)
-    expect(priorKnowledgeComplete("正文\n  完成  \n")).toBe(true)
+    expect(priorKnowledgeComplete("DONE")).toBe(true)
+    expect(priorKnowledgeComplete("# 知识库\n\n正文\n\nDONE")).toBe(true)
+    expect(priorKnowledgeComplete("正文\nDONE\n\n  \n")).toBe(true)
+    expect(priorKnowledgeComplete("正文\n  DONE  \n")).toBe(true)
     expect(priorKnowledgeComplete("正文,已完成。")).toBe(false)
-    expect(priorKnowledgeComplete("正文\n完成。")).toBe(false)
-    expect(priorKnowledgeComplete("完成\n再补一段正文")).toBe(false)
+    expect(priorKnowledgeComplete("正文\nDONE。")).toBe(false)
+    expect(priorKnowledgeComplete("DONE\n再补一段正文")).toBe(false)
   })
 })
 
@@ -214,7 +214,7 @@ describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交�
     try {
       await git(dir, "init", "-q")
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\n完成\n")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\nDONE\n")
       await git(dir, "add", "-A")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
       const result = await extractPriorKnowledge(client, dir, { dir })
@@ -231,7 +231,7 @@ describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交�
       await git(dir, "init", "-q")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\n完成\n")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\nDONE\n")
       const result = await extractPriorKnowledge(client, dir, { dir })
       expect(result).toEqual({ type: "skipped", file: join("docs", "R-01", "prior-kb.md") })
       // 已补提交: 工作区干净,提交带 prior-knowledge 阶段标记

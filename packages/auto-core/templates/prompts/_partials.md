@@ -16,8 +16,7 @@ branches and is emitted unconditionally — leaving a trailing blank line at the
 partial that glues onto the next line at the call site.
 The `plan-duties-<key>` sections are the phase-plan duty paragraphs, one per phase type; the
 phase-type registry (`src/phases/registry.ts`, `dutiesRef`) picks the section, so a new type
-adds a section here instead of a branch in phase-plan. Their text stays Chinese until the M3
-template-translation batch.
+adds a section here instead of a branch in phase-plan.
 
 ## head
 You are carrying out one task of an implementation plan. This session only has to finish the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions (asking a question, performing an action) are not this session's responsibility — do not carry them out.
@@ -85,27 +84,33 @@ lists what it will change (no absolute paths, no `..`). Both field names are pro
 empty value, a subtask depending on itself and a dependency cycle are rejected.
 ## plan-duties-a
 
-- 摸清源系统与源模块的外部行为、依赖与边界,为后续阶段提供行为基线;产物
-  按任务锚定写入 docs/T-NNN/(分析结论、依赖清单等)。
-- 本阶段是首个阶段: 把对源系统的勘察计划排为首批任务。
+- Establish the source system's and source module's external behaviour, dependencies and boundaries, giving later
+  phases a behaviour baseline; artifacts are anchored per task, written into docs/T-NNN/ (analysis conclusions,
+  dependency lists, etc.).
+- This is the first phase: put the survey plan of the source system as the first batch of tasks.
 
 ## plan-duties-d
 
-- 完成目标系统侧的模块设计(接口、数据结构、适配点);设计产物按任务锚定写入 docs/T-NNN/。
+- Complete the module design on the target-system side (interfaces, data structures, adaptation points); design
+  artifacts are anchored per task, written into docs/T-NNN/.
 
 ## plan-duties-m
 
-- 完成代码迁移与改造;产物为源码改动与 docs/T-NNN/ 下的任务报告。
+- Complete the code migration and rework; artifacts are the source-code changes plus the task reports under
+  docs/T-NNN/.
 
 ## plan-duties-t
 
-- 完成测试体系迁移/补齐,对基线行为做回归覆盖;产物为测试代码与 docs/T-NNN/ 任务产物。
+- Complete the migration/backfill of the test suite, giving the baseline behaviour regression coverage; artifacts
+  are the test code plus the task artifacts under docs/T-NNN/.
 
 ## plan-duties-v
 
-- 对照基线与需求完成整体验收;验收结论按任务锚定写入 docs/T-NNN/。
+- Complete overall acceptance against the baseline and requirements; the acceptance verdict is anchored per task,
+  written into docs/T-NNN/.
 
 ## plan-duties-k
 
-- 完成迁移知识沉淀: 知识文档由 DRIVER 旁路提取会话产出
-  docs/R-NN/P<nn>-knowledge/kb.md(本阶段目录内的类型标准产物,永久路径,本阶段不经规划会话排任务)。
+- Complete the migration-knowledge distillation: the knowledge document is produced by the DRIVER's side-channel
+  extraction session at docs/R-NN/P<nn>-knowledge/kb.md (this phase directory's standard artifact for the type, a
+  permanent path; this phase does not go through a planning session, no tasks are laid out for it).

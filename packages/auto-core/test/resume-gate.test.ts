@@ -64,8 +64,8 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
   })
 
   test("phaseText 的 subtasks 文案带归属序号", () => {
-    expect(phaseText({ kind: "subtasks", index: 2 })).toBe("逐子任务执行阶段(中断于子任务 2,从首个未勾选项继续)")
-    expect(phaseText({ kind: "subtasks" })).toBe("逐子任务执行阶段(从首个未勾选项继续)")
+    expect(phaseText({ kind: "subtasks", index: 2 })).toBe("per-subtask execution (interrupted at subtask 2, continuing from the first unticked item)")
+    expect(phaseText({ kind: "subtasks" })).toBe("per-subtask execution (continuing from the first unticked item)")
   })
 })
 
@@ -75,7 +75,7 @@ describe("resumeNote(中断恢复说明)", () => {
   const subtasks: Phase = { kind: "subtasks", index: 2 }
   const planStep: Phase = { kind: "step", step: "phase-plan", unit: "R-01.P01" }
   const ONE_LINE =
-    "[DRIVER] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 DRIVER 统一提交进 Git——以 git log 核实,不要重做。"
+    "[DRIVER] The session was interrupted; continue the current work until this unit is complete. Changes written before the interruption that are no longer in the worktree were committed to Git by the DRIVER — check with git log, do not redo them."
 
   test("严格恢复门禁在位 + 复用原会话 → 收敛为一句 continue(3.2),附带提交语义澄清", () => {
     expect(resumeNote(subtasks, true, true)).toBe(ONE_LINE)
@@ -86,17 +86,17 @@ describe("resumeNote(中断恢复说明)", () => {
   test("门禁不在位(缺省 off / dryrun)→ 复用路径维持既有按阶段指引", () => {
     const note = resumeNote(subtasks, true, false)
     expect(note).not.toBe(ONE_LINE)
-    expect(note).toContain("你正在原来中断的会话中继续")
-    expect(note).toContain("首个未完成项")
+    expect(note).toContain("You are continuing in the original, interrupted session.")
+    expect(note).toContain("first unfinished item")
   })
 
   test("非复用路径(总结态续跑)恒给按阶段指引,不受严格恢复影响", () => {
     const note = resumeNote(subtasks, false, true)
-    expect(note).toContain("部分工作可能已完成")
-    expect(note).toContain("首个未完成项")
+    expect(note).toContain("Part of the work may already be done.")
+    expect(note).toContain("first unfinished item")
     const step = resumeNote({ kind: "step", step: "phase-handover", unit: "R-01.P01" }, false, true)
-    expect(step).toContain("本阶段步骤")
-    expect(step).toContain("四个必备小节")
+    expect(step).toContain("phase handover step")
+    expect(step).toContain("four mandatory sections")
   })
 
   test("提交语义澄清: 非一句 continue 的路径都说明「陌生提交/干净工作区 ≠ 修改丢失」", () => {
@@ -107,8 +107,8 @@ describe("resumeNote(中断恢复说明)", () => {
       resumeNote(subtasks, false, false),
       resumeNote({ kind: "step", step: "phase-plan", unit: "R-01.P01" }, true, false),
     ]) {
-      expect(note).toContain("不代表修改丢失")
-      expect(note).toContain("DRIVER 统一提交")
+      expect(note).toContain("do not mean the changes were lost")
+      expect(note).toContain("committed to Git by the DRIVER")
     }
   })
 })

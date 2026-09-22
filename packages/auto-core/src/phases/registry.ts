@@ -65,7 +65,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "analysis",
     letter: "a",
-    name: "分析",
+    name: "Analysis",
     dutiesRef: "a",
     decomposeTemplate: "decompose-a",
     phaseArtifacts: [artifact("findings.md", "analysis findings")],
@@ -77,7 +77,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "design",
     letter: "d",
-    name: "设计",
+    name: "Design",
     dutiesRef: "d",
     decomposeTemplate: "decompose-d",
     phaseArtifacts: [artifact("design.md", "phase design"), artifact("decisions.md", "design decisions")],
@@ -89,7 +89,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "implement",
     letter: "m",
-    name: "迁移实现",
+    name: "Implementation",
     dutiesRef: "m",
     decomposeTemplate: "decompose-m",
     phaseArtifacts: [],
@@ -101,7 +101,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "test",
     letter: "t",
-    name: "测试",
+    name: "Testing",
     dutiesRef: "t",
     decomposeTemplate: "decompose-t",
     phaseArtifacts: [artifact("test-report.md", "test report")],
@@ -113,7 +113,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "acceptance",
     letter: "v",
-    name: "验收",
+    name: "Acceptance",
     dutiesRef: "v",
     decomposeTemplate: "decompose-v",
     phaseArtifacts: [artifact("verdict.md", "acceptance verdict")],
@@ -125,7 +125,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "knowledge",
     letter: "k",
-    name: "知识提炼",
+    name: "Knowledge distillation",
     dutiesRef: "k",
     decomposeTemplate: "decompose-k",
     phaseArtifacts: [artifact("kb.md", "knowledge base")],

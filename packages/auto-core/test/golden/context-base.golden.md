@@ -1,8 +1,8 @@
-以下内容是任务 T-002 理解阶段产出的背景摘要(docs/T-002/context.md 全文)。
-本会话由 DRIVER 建立,将作为该任务后续会话(分解、子任务执行)的分叉基点——后续
-会话带着这份摘要上下文继续工作。
+The following is the background digest produced by task T-002's understanding phase (the full text of
+docs/T-002/context.md). This session was established by the DRIVER and will serve as the fork point for the
+task's later sessions (decomposition, subtask execution) — those sessions continue with this digest as their context.
 
 前序蒸馏摘要(固定输入)。
 
-请通读上述摘要并确认已理解:回复一句简短确认即可。不要读取文件、不要展开分析、
-不要修改任何内容,确认后立即结束会话。
+Read the digest above in full and confirm you understand it: a short acknowledgement reply is enough. Do not read
+any file, do not expand any analysis, do not modify anything — end the session immediately once you have acknowledged it.

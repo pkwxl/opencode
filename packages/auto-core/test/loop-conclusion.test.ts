@@ -141,7 +141,7 @@ describe("phaseCloseLines 阶段收口行", () => {
     // 单记 waitMs(STATS_PLAN 已确认口径: 总用时排除纯人工等待)。
     const lines = await phaseCloseLines(dir, unit("t"))
     expect(lines).toEqual([
-      "■ phase P01-test 测试 closed: total 50m 0s (incl. plan/handover/commit; AI 42m 0s, human wait 3m 0s), 2 tasks / 3 sessions",
+      "■ phase P01-test Testing closed: total 50m 0s (incl. plan/handover/commit; AI 42m 0s, human wait 3m 0s), 2 tasks / 3 sessions",
       "tokens in 9000 / out 2200 / cache-read 90.0k / cache-write 0, hit 90.9%, cost $0.31",
     ])
   })
@@ -151,7 +151,7 @@ describe("phaseCloseLines 阶段收口行", () => {
     await statsTask(dir, "T-001")
     now += 5 * 60_000
     const lines = await phaseCloseLines(dir, unit("t"))
-    expect(lines?.[0]).toBe("■ phase P01-test 测试 closed: total 5m 0s (incl. plan/handover/commit; AI 0s), 1 tasks / 0 sessions")
+    expect(lines?.[0]).toBe("■ phase P01-test Testing closed: total 5m 0s (incl. plan/handover/commit; AI 0s), 1 tasks / 0 sessions")
     expect(lines?.[0]).not.toContain("human wait")
     // After switching to the next phase the old phase's close line is no longer trustworthy (bucket reset)
     await statsPhase(dir, "R-01.P02")

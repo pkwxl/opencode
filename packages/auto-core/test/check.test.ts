@@ -220,7 +220,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
-      await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/gone.ts`。\n行内含 已删除 标记的 `docs/old.md` 豁免。\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/gone.ts`。\nLine with a deleted marker exempts `docs/old.md`.\n")
       const { findings, notes, refs } = await checkPrinciple(dir, REFCHECK_ON)
       expect(findings).toEqual([])
       expect(refs).toEqual([

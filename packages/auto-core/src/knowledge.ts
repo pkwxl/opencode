@@ -2,6 +2,7 @@ import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
+import { PRIOR_KB_DONE } from "./document/roles"
 import { parsePhaseDir } from "./document/unit"
 import { changedFiles, commitPending, commitTree } from "./git"
 import { log } from "./log"
@@ -72,13 +73,13 @@ export async function extractKnowledge(
     renderKnowledge({ file, mode: opts.mode }),
     opts,
     {
-      kind: "知识提取",
+      kind: "knowledge extraction",
       role: "knowledge",
-      // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验(plans/0021-commit-boundary-design.md)。
+      // Independent hidden task unit: entry clean gate + SHA baseline + close-out check (plans/0021-commit-boundary-design.md).
       unitStart: true,
-      artifact: `非空知识文档 ${file}`,
-      detail: "缺失或为空",
-      requirement: `必须把知识文档写入 ${file}(按提示词给出的章节骨架写全;信息稀少也要写出骨架并说明原因)。`,
+      artifact: `a non-empty knowledge document ${file}`,
+      detail: "missing or empty",
+      requirement: `write the knowledge document to ${file} (fill in the full section skeleton given in the prompt; when information is scarce, still write the skeleton and say why).`,
       commit,
       reset: () => rm(join(dir, file), { force: true }),
       collect: async () => {
@@ -186,17 +187,18 @@ export async function extractPriorKnowledge(
   const distilled = await existingDistilledDocs(dir, round)
   log(`▶ opening prior-knowledge extraction session (writes ${temp}, renamed to ${file} once the closing mark is confirmed${distilled.length ? "; existing distilled artifacts referenced, not restated" : ""})`)
   const produced = await requireArtifact(client, task, renderPriorKnowledge({ file: temp, brief, mode: opts.mode, distilled }), opts, {
-    kind: "前置知识提取",
+    kind: "prior-knowledge extraction",
     role: "prior-knowledge",
-    // 独立隐藏任务单元(plans/0021-commit-boundary-design.md)。注意统一提交不在此挂接:
-    // 收笔确认 → 改名 → 提交须按序进行,会话结束即提交会把未收笔的 temp-kb.md
-    // 抢先落账;改名后的提交在下方由 driver 执行。
+    // Independent hidden task unit (plans/0021-commit-boundary-design.md). The unified
+    // commit is deliberately not hooked here: closing-mark check → rename → commit must
+    // run in order, and committing at session end would book an unclosed temp-kb.md
+    // first; the driver commits after the rename, below.
     unitStart: true,
-    artifact: `带收笔标记的知识文档 ${temp}`,
-    detail: "缺失、为空或末尾缺少「完成」收笔标记",
+    artifact: `a knowledge document ${temp} with its closing mark`,
+    detail: `missing, empty, or lacking the closing \`${PRIOR_KB_DONE}\` mark at the end`,
     requirement:
-      `必须把知识文档写入 ${temp}(按提示词给出的章节骨架写全;已有迁移结果稀少也要写出骨架并说明原因),` +
-      `全文写完后在文档末尾独占一行写「完成」作为收笔标记——缺少该标记一律视为未完成。`,
+      `write the knowledge document to ${temp} (fill in the full section skeleton given in the prompt; when existing migration results are scarce, still write the skeleton and say why), ` +
+      `and once the whole document is written put the line \`${PRIOR_KB_DONE}\` on a line of its own at the very end as the closing mark (a driver protocol string, write it verbatim) — without it the document always counts as unfinished.`,
     reset: () => rm(join(dir, temp), { force: true }),
     collect: async () => {
       const text = await Bun.file(join(dir, temp)).text().catch(() => "")
@@ -218,12 +220,14 @@ export async function extractPriorKnowledge(
   return { type: "ok", file }
 }
 
-// 收笔标记判定(纯函数,导出供单测): 文档非空且最后一个非空行恰为「完成」。
-// AI 明确声明工作完成的协议标记;章节未写全前 AI 被要求绝不写该行。
+// Closing-mark check (pure, exported for tests): the document is non-empty and
+// its last non-empty line is exactly PRIOR_KB_DONE — the AI's explicit
+// declaration that the work is finished; the prompt forbids writing it before
+// every section is written.
 export function priorKnowledgeComplete(text: string): boolean {
   const trimmed = text.trimEnd()
   if (!trimmed) return false
-  return trimmed.split("\n").pop()!.trim() === "完成"
+  return trimmed.split("\n").pop()!.trim() === PRIOR_KB_DONE
 }
 
 // 前置知识摘要(注入本轮首个阶段规划会话与参数推断会话): 历轮前置知识按路径排序

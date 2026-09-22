@@ -94,7 +94,7 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
       expect(index).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n- [ ] P03 test\n")
       const todo = await read(dir, "docs/R-01/P01-analysis/todo.md")
       expect(todo).toBe(renderPhaseTodo(units[0]!))
-      expect(todo.startsWith("# R-01.P01: 分析\n\nType: analysis\n")).toBe(true)
+      expect(todo.startsWith("# R-01.P01: Analysis\n\nType: analysis\n")).toBe(true)
       expect(todo.trimEnd().endsWith("<!-- auto: eof -->")).toBe(true)
       const state = (await readPhases(dir))!
       expect(state.round).toBe(1)
@@ -318,35 +318,35 @@ describe("phase directory paths", () => {
 
 describe("validHandover(蒸馏会话产物校验,交接蒸馏受阻路径的判定依据)", () => {
   const HANDOVER = [
-    "# a 分析 阶段交接",
+    "# a Analysis phase handover",
     "",
-    "## 关键决策",
+    "## Key decisions",
     "- 决策甲",
     "",
-    "## 约束与坑",
+    "## Constraints and pitfalls",
     "- 坑乙",
     "",
-    "## 下一阶段必读清单",
+    "## Required reading for the next phase",
     "- docs/analysis/baseline.md: 行为基线",
     "",
-    "## 产物索引",
+    "## Artifact index",
     "- docs/analysis/: 分析产物",
   ].join("\n")
 
   test("四小节齐备(标题行逐字匹配,容忍行首空白)→ 有效", () => {
     expect(validHandover(HANDOVER)).toBe(true)
-    expect(validHandover(HANDOVER.replace("## 关键决策", "   ## 关键决策"))).toBe(true)
+    expect(validHandover(HANDOVER.replace("## Key decisions", "   ## Key decisions"))).toBe(true)
   })
 
   test("缺任一小节 / 标题被改写 / 空文档 → 无效(蒸馏产物缺失走隐性阻塞)", () => {
     for (const bad of [
-      HANDOVER.replace("## 约束与坑", "## 约束与陷阱"),
-      HANDOVER.replace("## 产物索引\n- docs/analysis/: 分析产物", ""),
+      HANDOVER.replace("## Constraints and pitfalls", "## Constraints and traps"),
+      HANDOVER.replace("## Artifact index\n- docs/analysis/: 分析产物", ""),
       "",
     ]) {
       expect(validHandover(bad)).toBe(false)
     }
-    // 次级标题不算数: "### 关键决策"包含协议子串但不是逐字的 ## 标题行
+    // 次级标题不算数: "### Key decisions"包含协议子串但不是逐字的 ## 标题行
     expect(validHandover(HANDOVER.replace(/^## /gm, "### "))).toBe(false)
   })
 })

@@ -16,7 +16,7 @@ Migration/upgrade mode notes:
 - Every trade-off made to advance the migration (leaving an old path in place, simplifying a branch, and the like) is a code-change decision:
   record how it was made and annotate it as AUTO-DECISION requires.
 
-This session completes the task-background understanding and the subtask decomposition; it writes no implementation code. The current phase is 知识提炼:
+This session completes the task-background understanding and the subtask decomposition; it writes no implementation code. The current phase is Knowledge distillation:
 
 1. Understand the task background: read the relevant source and docs/ selectively around this task's goal (keep the total reading volume down,
    preferring the files named in the task body and the directly related modules over completeness); write what you understood into
@@ -37,7 +37,7 @@ This session completes the task-background understanding and the subtask decompo
      context.md, the shared-context index shared.md and docs/, and including the way to verify it;
    - Each item declares its artifacts: documents state the file path, code states the module/file range;
    - Budget-oriented: each item should be completable by a single session with a smallish context (on the order of 32.0k tokens);
-4. Splitting and artifact criteria for this phase (知识提炼):
+4. Splitting and artifact criteria for this phase (Knowledge distillation):
    - Split by knowledge artifact: pitfall lists, reusable patterns, README/handover documents and the like each become an item;
    - Each item produces one standalone document that later tasks can reference directly;
 5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each description must be

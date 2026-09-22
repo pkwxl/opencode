@@ -83,12 +83,12 @@ describe("renderDecompose", () => {
 
 describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
   const phaseCases: Array<[PhaseLetter, string, string]> = [
-    ["a", "分析", "Split by problem/open question/subsystem/risk surface"],
-    ["d", "设计", "Split by design concern"],
-    ["m", "迁移实现", "Vertical thin slices first"],
-    ["t", "测试", "Split by test surface / scenario family"],
-    ["v", "验收", "Split by acceptance dimension"],
-    ["k", "知识提炼", "Split by knowledge artifact"],
+    ["a", "Analysis", "Split by problem/open question/subsystem/risk surface"],
+    ["d", "Design", "Split by design concern"],
+    ["m", "Implementation", "Vertical thin slices first"],
+    ["t", "Testing", "Split by test surface / scenario family"],
+    ["v", "Acceptance", "Split by acceptance dimension"],
+    ["k", "Knowledge distillation", "Split by knowledge artifact"],
   ]
 
   test("各阶段渲染: 注入阶段名与该阶段的切分准则段", () => {
@@ -119,7 +119,7 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
 
   test("m 默认: 未传 phase 时选择 decompose-m", () => {
     const text = renderDecompose(plan, task)
-    expect(text).toContain("The current phase is 迁移实现")
+    expect(text).toContain("The current phase is Implementation")
     expect(text).toContain("Vertical thin slices first")
   })
 
@@ -166,12 +166,12 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       mkdirSync(overlay, { recursive: true })
       writeFileSync(
         join(overlay, "default.md"),
-        "# default\n\n## quality\n\n### decompose\n\nCUSTOM-RULE {{contextBudget}}\n\n## phase duties\n\n### m 迁移实现\n\nCUSTOM-DUTIES {{phaseName}}\n",
+        "# default\n\n## quality\n\n### decompose\n\nCUSTOM-RULE {{contextBudget}}\n\n## phase duties\n\n### m Implementation\n\nCUSTOM-DUTIES {{phaseName}}\n",
       )
       useIntentPacks(dir)
       const text = renderDecompose(plan, task)
       expect(text).toContain("CUSTOM-RULE 32.0k")
-      expect(text).toContain("CUSTOM-DUTIES 迁移实现")
+      expect(text).toContain("CUSTOM-DUTIES Implementation")
       // 整包替换(无合并): 内置准则消失
       expect(text).not.toContain("Decomposition granularity criteria")
       expect(text).not.toContain("Vertical thin slices first")
@@ -323,14 +323,14 @@ describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
   test("摘要全文逐字注入 + 一句确认 + 不读不写不展开", () => {
     const digest = "## 相关文件与关键符号\n- src/x.ts: 数据模型\n\n## 约束与前提\n- 只读目标目录"
     const text = renderContextBase(task, digest)
-    expect(text).toContain("任务 T-002 理解阶段产出的背景摘要")
-    expect(text).toContain("docs/T-002/context.md 全文")
-    expect(text).toContain("本会话由 DRIVER 建立")
+    expect(text).toContain("task T-002's understanding phase")
+    expect(text).toContain("docs/T-002/context.md). This session")
+    expect(text).toContain("established by the DRIVER")
     expect(text).toContain(digest)
-    expect(text).toContain("回复一句简短确认即可")
-    expect(text).toContain("不要读取文件、不要展开分析")
-    expect(text).toContain("不要修改任何内容")
-    expect(text).toContain("确认后立即结束会话")
+    expect(text).toContain("a short acknowledgement reply is enough")
+    expect(text).toContain("do not expand any analysis")
+    expect(text).toContain("do not modify anything")
+    expect(text).toContain("once you have acknowledged it")
   })
 })
 

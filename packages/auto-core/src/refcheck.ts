@@ -23,8 +23,15 @@ import { log } from "./log"
 // at = 引用所在行号(1 起)。
 export type Ref = { path: string; line?: number; at: number; ver?: string }
 
-// 行候选掩码(单趟状态机): ``` / ~~~ 围栏内的行豁免,含 已删除|已归档|历史 的
-// 标记行豁免——代码块内与已声明失效的引用不参与提取与改写;围栏开关行自身同样豁免。
+// Candidate-line mask (single-pass state machine): lines inside ``` / ~~~
+// fences are exempt, and so are lines carrying an inline exemption marker
+// (REFCHECK_EXEMPT: deleted / archived / historical, whole words, any case) —
+// references in code blocks and references declared stale take no part in
+// extraction or rewriting; the fence lines themselves are exempt too.
+// The markers are a protocol string (0035 §4 phase face), flipped from
+// 已删除|已归档|历史 in M3.8 with no dual-read.
+export const REFCHECK_EXEMPT = /\b(?:deleted|archived|historical)\b/i
+
 function candidateMask(text: string): boolean[] {
   let fenced = false
   return text.split("\n").map((line) => {
@@ -32,7 +39,7 @@ function candidateMask(text: string): boolean[] {
       fenced = !fenced
       return false
     }
-    return !fenced && !/已删除|已归档|历史/.test(line)
+    return !fenced && !REFCHECK_EXEMPT.test(line)
   })
 }
 

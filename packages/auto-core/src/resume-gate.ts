@@ -1,7 +1,10 @@
-// 恢复点的单元归属门禁与中断文案: 判定 active 会话所属执行单元本次是否重跑
-// (决定能否复用其会话),以及阶段描述 / 恢复说明 / CURRENT.md 中断备注三类
-// 面向人与 AI 的文案渲染。只依赖类型与开关,不依赖会话驱动层。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S4,纯搬运)。
+// The unit-ownership gate of a resume point and the interruption wording:
+// whether the unit an active session belongs to reruns this time (deciding
+// whether its session may be reused), plus rendering of the three texts for
+// humans and the AI — phase description / resume note / CURRENT.md interruption
+// remark. Depends only on types and switches, not on the session layer.
+// Split out of src/runner.ts (plans/0024-module-split-plan.md S4, pure move).
+import { HANDOVER_SECTIONS } from "./document/roles"
 import { nextChecklistIndex, type DeclaredItem } from "./document/state"
 import type { Outcome } from "./opts"
 import type { Phase } from "./resume"
@@ -55,64 +58,75 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
       return false
   }
 }
-// 阶段的人类可读描述(恢复日志与 CURRENT.md 中断备注共用)。
+// Human-readable description of a phase (shared by resume logs and the
+// CURRENT.md interruption remark).
 export function phaseText(phase: Phase | undefined): string {
   switch (phase?.kind) {
     case undefined:
-      return "未记录阶段(按默认流程)"
+      return "no phase recorded (default flow)"
     case "decompose":
-      return "任务理解与分解阶段(context.md/shared.md/subtasks.md 与子任务 todo.md,检查项尚未注入)"
+      return "task understanding and decomposition (context.md/shared.md/subtasks.md and the subtask todo.md files; checklist not yet injected)"
     case "whole":
-      return "整任务单会话执行阶段"
+      return "whole-task single-session execution"
     case "subtasks":
-      return `逐子任务执行阶段(${phase.index !== undefined ? `中断于子任务 ${phase.index},` : ""}从首个未勾选项继续)`
+      return `per-subtask execution (${phase.index !== undefined ? `interrupted at subtask ${phase.index}, ` : ""}continuing from the first unticked item)`
     case "wrapup":
-      return "收尾阶段(docs 报告与提交)"
+      return "wrap-up (docs report and commit)"
     case "closeout":
-      return "收尾已完成(待检查任务报告结论行并登记完成)"
+      return "wrap-up finished (task report result line to check and completion to record)"
     case "step":
-      return phase.step === "phase-plan" ? `阶段规划步骤(${phase.unit} 阶段,写任务索引与任务文档)` : `阶段交接步骤(${phase.unit} 阶段,产出交接文档)`
+      return phase.step === "phase-plan"
+        ? `phase planning step (phase ${phase.unit}, writing the task index and task documents)`
+        : `phase handover step (phase ${phase.unit}, producing the handover document)`
   }
 }
 
-// 中断恢复时随首个提示词注入的"[driver] 中断后的继续"说明: 按记录的阶段给出
-// 具体的下一步指引,使 AI 不重做已完成的工作。
-// 严格恢复(OPENCODE_AUTO_STRICT_RESUME=on)下复用会话(R1/R2)收敛为一句 continue
-// (plans/0022-session-recovery-fidelity-design.md 3.2): 现场实证表明恢复会话本就靠盘面自定位
-// (读 CURRENT.md → git status → 首个未勾选项),阶段指引冗余;逐步骤的下一步指引
-// 保留在交接文档/状态文件里,不进恢复提示词。非复用路径(回滚后冷启动不带说明,
-// 优雅退出的总结态续跑)维持既有指引。
-// strictResume 由调用方传入**门禁值**(strictResumeActive: 开关 on 且提交门禁在位),
-// 不是裸开关——门禁关闭(dryrun)时没有单元基线也没有回滚兜底,"一句 continue"赖以
-// 成立的前提(不可保真即回滚重跑)不存在,故维持既有多行指引(设计 §4.1 ①/⑥)。
-// 缺省取 OPENCODE_AUTO_* 解析值,注入供单测。
-// 提交语义澄清(2026-09-17): 恢复会话以 git 核对盘面时,「工作区比预期干净 /
-// git log 出现陌生提交」会被误读为修改丢失而重做——中断前落盘的修改可能仍在
-// 工作区待提交(单元中途被打断),也可能已由 driver 统一提交(定版/交接/单元收口)
-// 或经人工处置提交进 Git(中断后重跑的 clean 门禁要求人工处置脏区)。两种形态
-// 都正常,以盘面为准继续,不要重做。
+// The "[DRIVER] continuing after an interruption" note injected with the first
+// prompt on resume: step-specific guidance per recorded phase, so the AI does
+// not redo finished work.
+// Under strict resume (OPENCODE_AUTO_STRICT_RESUME=on) a reused session (R1/R2)
+// gets a single continue line (plans/0022-session-recovery-fidelity-design.md 3.2):
+// field evidence shows a resumed session locates itself from the disk anyway
+// (CURRENT.md → git status → first unticked item), so the phase guidance is
+// redundant; per-step guidance stays in the handover/state files, not in the
+// resume prompt. Non-reuse paths (cold start after rollback carries no note; a
+// graceful-exit summary resume) keep the existing guidance.
+// strictResume is the caller's **gate value** (strictResumeActive: switch on and
+// the commit gate in place), not the bare switch — with the gate off (dryrun)
+// there is no unit baseline and no rollback fallback, so the premise of the
+// single continue line (unfaithful → roll back and rerun) does not hold and the
+// multi-line guidance stays (design §4.1 ①/⑥).
+// Defaults to the parsed OPENCODE_AUTO_* value; injectable for tests.
+// Commit-semantics clarification (2026-09-17): a resumed session checking the
+// disk with git misreads "the worktree is cleaner than expected / git log shows
+// unfamiliar commits" as lost changes and redoes them — changes written before
+// the interruption may still sit uncommitted in the worktree (a unit interrupted
+// midway), or may already be committed by the driver (freeze / handover / unit
+// close-out) or by a human (the clean gate of the rerun after an interruption
+// requires the human to handle the dirty area). Both forms are normal: continue
+// from the disk state, do not redo.
 export const COMMIT_CLARIFY =
-  `中断前落盘的修改可能仍在工作区待提交,也可能已由 DRIVER 统一提交(或经人工处置)进 Git——` +
-  `git log 出现陌生提交、工作区比预期干净,都不代表修改丢失。`
+  `Changes written before the interruption may still be uncommitted in the worktree, or may already have been committed to Git by the DRIVER (or by a human) — ` +
+  `unfamiliar commits in git log or a worktree cleaner than expected do not mean the changes were lost.`
 
 export function resumeNote(phase: Phase | undefined, reused: boolean, strictResume = autoSwitches().strictResume): string {
   if (reused && strictResume) {
-    return `[DRIVER] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 DRIVER 统一提交进 Git——以 git log 核实,不要重做。`
+    return `[DRIVER] The session was interrupted; continue the current work until this unit is complete. Changes written before the interruption that are no longer in the worktree were committed to Git by the DRIVER — check with git log, do not redo them.`
   }
   const next = nextStepText(phase)
   if (phase?.kind === "step") {
     return (
-      `[DRIVER] 本阶段步骤此前的执行因应用中断而停止。` +
-      (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
-      `以 git status / git diff 核对工作区实际状态。${COMMIT_CLARIFY}` +
-      `${next}提交由 DRIVER 统一负责,你从不亲自提交;不要重做已完成的工作。`
+      `[DRIVER] The earlier run of this phase step stopped because the application was interrupted. ` +
+      (reused ? `You are continuing in the original, interrupted session. ` : `Part of the work may already be done. `) +
+      `Check the actual worktree state with git status / git diff. ${COMMIT_CLARIFY} ` +
+      `${next}Commits are the DRIVER's job, you never commit yourself; do not redo finished work.`
     )
   }
   return (
-    `[DRIVER] 该任务(或其某个子任务)此前的执行因应用中断而停止。` +
-    (reused ? `你正在原来中断的会话中继续。` : `部分工作可能已完成。`) +
-    `先读 CURRENT.md 了解当前任务与进度,并以 git status / git diff 核对工作区实际状态。${COMMIT_CLARIFY}` +
-    `${next}提交由 DRIVER 统一负责,你从不亲自提交;不要重做已完成的工作。`
+    `[DRIVER] The earlier run of this task (or one of its subtasks) stopped because the application was interrupted. ` +
+    (reused ? `You are continuing in the original, interrupted session. ` : `Part of the work may already be done. `) +
+    `First read CURRENT.md for the current task and progress, and check the actual worktree state with git status / git diff. ${COMMIT_CLARIFY} ` +
+    `${next}Commits are the DRIVER's job, you never commit yourself; do not redo finished work.`
   )
 }
 
@@ -121,38 +135,40 @@ function nextStepText(phase: Phase | undefined): string {
     case undefined:
       return ""
     case "decompose":
-      return `当前处于任务理解与分解阶段:检查项尚未写出;产物为 context.md、shared.md、subtasks.md 与各子任务目录的 todo.md(缺失的补齐,已存在且仍准确的不要重做)。`
+      return `You are in task understanding and decomposition: the checklist is not written yet; the artifacts are context.md, shared.md, subtasks.md and each subtask directory's todo.md (fill in what is missing; do not redo what exists and is still accurate). `
     case "whole":
-      return `当前处于整任务单会话执行阶段。`
+      return `You are in whole-task single-session execution. `
     case "subtasks":
-      return `当前处于逐子任务执行阶段:从 subtasks.md 检查项中首个未完成项继续。`
+      return `You are in per-subtask execution: continue from the first unfinished item of the subtasks.md checklist. `
     case "wrapup":
-      return `全部检查项已完成,当前处于收尾阶段(更新 docs/ 报告并提交)。`
+      return `Every checklist item is done; you are in wrap-up (update the docs/ report and commit). `
     case "closeout":
-      return `收尾已完成,只剩 DRIVER 登记任务完成。`
+      return `Wrap-up is finished; only the DRIVER's completion record remains. `
     case "step":
       return phase.step === "phase-plan"
-        ? `当前处于阶段规划步骤:先读本阶段任务索引 tasks.md 与已写出的任务文档现状(上次会话可能已写入部分任务),在其基础上补全/修正本阶段任务,不要重复已存在的任务编号,完成后结束会话。`
-        : `当前处于阶段交接步骤:先读交接文档现状(上次会话可能已写入部分内容),补全四个必备小节(关键决策/约束与坑/下一阶段必读清单/产物索引),不要重做已完成的部分,完成后结束会话。`
+        ? `You are in the phase planning step: first read this phase's task index tasks.md and the task documents written so far (the last session may have written some tasks), complete or correct this phase's tasks on that basis without repeating an existing task number, then end the session. `
+        : `You are in the phase handover step: first read the handover document as it stands (the last session may have written part of it), complete the four mandatory sections (${HANDOVER_SECTIONS.join(" / ")}) without redoing finished parts, then end the session. `
   }
 }
 
-// CURRENT.md 的中断备注(非完成结局保留文件时写入): 退出原因、阶段快照与恢复
-// 方式;下次运行重建镜像时,要点经恢复提示词(resumeNote)带给 AI。
+// The CURRENT.md interruption remark (written when a non-completion outcome
+// keeps the file): exit reason, phase snapshot and how to resume; when the next
+// run rebuilds the mirror, its gist reaches the AI through the resume prompt
+// (resumeNote).
 export function interruptionRemark(outcome: Outcome, phase: Phase | undefined): string {
   const why =
     outcome.type === "blocked"
-      ? `阻塞: ${firstLine(outcome.question)}`
+      ? `blocked: ${firstLine(outcome.question)}`
       : outcome.type === "incomplete"
-        ? `未完成回退 pending: ${firstLine(outcome.reason)}`
-        : `完成`
+        ? `incomplete, back to pending: ${firstLine(outcome.reason)}`
+        : `done`
   return [
-    `## 中断备注(opencode-auto)`,
+    `## Interruption remark (opencode-auto)`,
     ``,
-    `- 退出时间: ${new Date().toISOString()}`,
-    `- 退出原因: ${why}`,
-    `- 中断阶段: ${phaseText(phase)}`,
-    `- 恢复方式: 处理上述原因后重新运行 ${shellProfile().program},DRIVER 将按中断阶段精确继续;本备注要点会随恢复提示词带给 AI。`,
+    `- Exited at: ${new Date().toISOString()}`,
+    `- Exit reason: ${why}`,
+    `- Interrupted phase: ${phaseText(phase)}`,
+    `- How to resume: handle the reason above and re-run ${shellProfile().program}; the DRIVER continues exactly from the interrupted phase, and the gist of this remark reaches the AI with the resume prompt.`,
   ].join("\n")
 }
 
