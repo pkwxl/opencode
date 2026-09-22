@@ -14,6 +14,7 @@ import {
   formatPhases,
   legacyLayoutProblem,
   nextRound,
+  roundEstablishing,
   parsePhases,
   phaseAcceptanceDoc,
   phaseArtifacts,
@@ -113,10 +114,10 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
       expect(units.map(phaseLabel)).toEqual(["P01-review", "P02-implement", "P03-review"])
       expect(await read(dir, "docs/R-01/P03-review/todo.md")).toContain("# R-01.P03: Review\n")
       const state = (await readPhases(dir))!
-      expect(state.phases.map((unit) => [unit.id, unit.entry.origin, unit.entry.gate])).toEqual([
-        ["P01", "project", "verdict"],
-        ["P02", "builtin", "none"],
-        ["P03", "project", "verdict"],
+      expect(state.phases.map((unit) => [unit.id, unit.entry.origin, unit.entry.gates])).toEqual([
+        ["P01", "project", ["verdict"]],
+        ["P02", "builtin", []],
+        ["P03", "project", ["verdict"]],
       ])
       await completePhase(dir, units[0]!)
       expect(doneTypes((await readPhases(dir))!)).toEqual(["review"])
@@ -371,7 +372,7 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("nextRound: 当前轮目录已建 → 当前轮 + 1;未建 = 当前推导值;旧根台账不算占用(M3.7)", async () => {
+  test("nextRound: 当前轮已建(有索引)→ 当前轮 + 1;未建或建轮中断(目录无索引)= 当前推导值;旧根台账不算占用(M3.7, 0049 G6)", async () => {
     const dir = tempDir()
     try {
       expect(await nextRound(dir)).toBe(1)
@@ -379,8 +380,14 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
       writeFileSync(join(dir, "docs/phases.md"), "# 阶段台账\n")
       expect(await nextRound(dir)).toBe(1)
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      expect(await roundEstablishing(dir, 1)).toBe(true)
+      expect(await nextRound(dir)).toBe(1)
+      writeFileSync(join(dir, "docs/R-01/phases.md"), "# Phases (R-01)\n")
+      expect(await roundEstablishing(dir, 1)).toBe(false)
       expect(await nextRound(dir)).toBe(2)
       mkdirSync(join(dir, "docs/R-06"), { recursive: true })
+      expect(await nextRound(dir)).toBe(6)
+      writeFileSync(join(dir, "docs/R-06/phases.md"), "# Phases (R-06)\n")
       expect(await nextRound(dir)).toBe(7)
     } finally {
       rmSync(dir, { recursive: true, force: true })

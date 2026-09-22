@@ -108,6 +108,9 @@ empty value, a subtask depending on itself and a dependency cycle are rejected.
 
 - Complete overall acceptance against the baseline and requirements; the acceptance verdict is anchored per task,
   written into docs/T-NNN/.
+- Lay out a closing task that writes this phase's verdict to verdict.md in this phase directory, ending with the result
+  line `Result: PASS` or `Result: FAIL <reason>` (a driver protocol string, verbatim): `Result: FAIL` holds the phase
+  open for a person to plan the fix.
 
 ## plan-duties-k
 

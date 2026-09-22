@@ -14,6 +14,18 @@ Not provided (brief.md missing or empty). Proceed by the migration-source parame
 intent is indispensable for planning, ask a human to write .opencode/auto/brief.md and rerun.
 
 {{/if}}
+{{#if round}}
+## Input: round brief (this round's round.md)
+
+The human's statement of what this round is for. Plan this phase's tasks toward its goal and criteria.
+
+{{round}}
+
+{{#if roundRules}}
+{{roundRules}}
+
+{{/if}}
+{{/if}}
 {{#if sourceDir}}
 ## Input: migration-source parameters
 

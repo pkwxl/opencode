@@ -381,6 +381,8 @@ export function renderPhasePlan(input: {
   phaseId: string
   taskIndex: string
   brief?: string
+  // The round brief docs/R-NN/round.md, comments stripped (plans/0049 G3).
+  round?: string
   handovers?: string
   prevRound?: string
   source?: { dir: string; path: string }
@@ -396,6 +398,9 @@ export function renderPhasePlan(input: {
     phaseId: input.phaseId,
     taskIndex: input.taskIndex,
     brief: input.brief?.trim() || undefined,
+    round: input.round?.trim() || undefined,
+    // How to plan against the brief is intent (M4.2, `## acceptance` / `### round-brief`).
+    roundRules: input.round?.trim() ? intentText("acceptance", "round-brief", {}) : undefined,
     handovers: input.handovers?.trim() || undefined,
     prevRound: input.prevRound?.trim() || undefined,
     sourceDir: input.source?.dir,
@@ -447,12 +452,17 @@ export function renderNumberRecovery(input: { floor: number }): string {
 // handover = phaseHandoverDoc(unit)(src/phases.ts,阶段目录内
 // docs/R-NN/P<nn>-<type>/handover.md);next 为下一阶段"P<nn>-<type> 中文名"或
 // undefined(最后一个阶段无下一阶段,仍写 handover 供后续查阅)。
-export function renderPhaseHandover(input: { phase: PhaseTypeEntry; handover: string; next?: string }): string {
+// acceptance = the phase's acceptance.md when its acceptance gate is on
+// (plans/0049 G7): the session also drafts it; what the draft holds is intent
+// (`## acceptance` / `### phase-acceptance-draft`).
+export function renderPhaseHandover(input: { phase: PhaseTypeEntry; handover: string; next?: string; acceptance?: string }): string {
   return renderPrompt("phase-handover", {
     phase: phaseTag(input.phase),
     phaseName: input.phase.name,
     handover: input.handover,
     next: input.next,
+    acceptance: input.acceptance,
+    acceptanceRules: input.acceptance ? intentText("acceptance", "phase-acceptance-draft", { acceptance: input.acceptance }) : undefined,
   })
 }
 

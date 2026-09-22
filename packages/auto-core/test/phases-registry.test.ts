@@ -51,7 +51,7 @@ describe("builtin phase types", () => {
 
   test("only knowledge runs without tasks; only acceptance carries the verdict gate", () => {
     expect(BUILTIN_PHASE_TYPES.filter((entry) => !entry.hasTasks).map((entry) => entry.type)).toEqual(["knowledge"])
-    expect(BUILTIN_PHASE_TYPES.filter((entry) => entry.gate === "verdict").map((entry) => entry.type)).toEqual(["acceptance"])
+    expect(BUILTIN_PHASE_TYPES.filter((entry) => entry.gates.includes("verdict")).map((entry) => entry.type)).toEqual(["acceptance"])
   })
 
   test("standard artifacts follow plans/0047 §5", () => {

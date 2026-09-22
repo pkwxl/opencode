@@ -28,6 +28,9 @@ does not move with the phase/round.
 
 - Complete overall acceptance against the baseline and requirements; the acceptance verdict is anchored per task,
   written into docs/T-NNN/.
+- Lay out a closing task that writes this phase's verdict to verdict.md in this phase directory, ending with the result
+  line `Result: PASS` or `Result: FAIL <reason>` (a driver protocol string, verbatim): `Result: FAIL` holds the phase
+  open for a person to plan the fix.
 ## Tasks
 
 1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/ content;

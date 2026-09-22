@@ -7,7 +7,7 @@
 //   # Security review                 title = display name
 //
 //   Tasks: yes                        optional; only yes (task-less types stay builtin)
-//   Gate: none                        optional; none | verdict
+//   Gate: none                        optional; none | verdict | acceptance | verdict, acceptance
 //   Phase-artifacts: threat-model.md  optional; standard artifacts in the phase dir
 //   Task-artifacts: review.md         optional; standard artifacts in each task dir
 //
@@ -26,7 +26,7 @@
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { parseUnitDoc } from "../document/unit"
-import { BUILTIN_PHASE_TYPES, PRESET_FORM, type PhaseGate, type PhaseTypeEntry } from "./registry"
+import { BUILTIN_PHASE_TYPES, PHASE_GATES, PRESET_FORM, type PhaseGate, type PhaseTypeEntry } from "./registry"
 
 export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
 
@@ -84,8 +84,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
     throw new Error(`${where}: Tasks: no is not supported (a custom phase type always plans and runs tasks; task-less phases are builtin only)`)
   }
   if (tasks !== "yes") throw new Error(`${where}: Tasks must be yes; got "${doc.fields.tasks}"`)
-  const gate = (doc.fields.gate ?? "none").toLowerCase()
-  if (gate !== "none" && gate !== "verdict") throw new Error(`${where}: Gate must be none or verdict; got "${doc.fields.gate}"`)
+  const gates = gateList(where, doc.fields.gate)
   const phaseArtifacts = artifactList(where, "Phase-artifacts", doc.fields["phase-artifacts"], RESERVED_PHASE_FILES)
   const taskArtifacts = artifactList(where, "Task-artifacts", doc.fields["task-artifacts"], RESERVED_TASK_FILES)
   const sections = parseSections(where, lines)
@@ -100,9 +99,21 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
     phaseArtifacts,
     taskArtifacts,
     hasTasks: true,
-    gate: gate as PhaseGate,
+    gates,
     origin: "project",
   }
+}
+
+// `Gate:` — none, or a comma list of distinct gates (M4.2, plans/0049 G7).
+function gateList(where: string, raw: string | undefined): PhaseGate[] {
+  const value = (raw ?? "none").trim().toLowerCase()
+  if (value === "none") return []
+  const items = value.split(",").map((item) => item.trim())
+  const bad = items.filter((item) => !(PHASE_GATES as readonly string[]).includes(item))
+  if (bad.length || new Set(items).size !== items.length) {
+    throw new Error(`${where}: Gate must be none or a comma list of distinct ${PHASE_GATES.join(" / ")}; got "${raw}"`)
+  }
+  return items as PhaseGate[]
 }
 
 // undefined = usable as a custom type id. Model-routing role words are reserved

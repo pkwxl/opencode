@@ -51,6 +51,21 @@ pitfalls the next phase would step in>
 
 <an index of all this phase's artifacts, one line per item: `- <path relative to the target directory>: <one-line note>`>
 
+{{#if acceptance}}
+## Artifact: acceptance draft
+
+This phase waits for a human reviewer's acceptance before it is marked done. Also write the acceptance draft to
+{{acceptance}}: the reviewer reads it together with the handover document and signs it or sends the phase back for
+rework. If the file already exists, a reviewer sent this phase back: keep the reviewer's notes as they are and update
+the rest of the draft.
+
+{{#if acceptanceRules}}
+{{acceptanceRules}}
+
+{{/if}}
+Never write a line starting with `Accepted:` — the sign-off `Accepted: yes` is written only by the human reviewer.
+
+{{/if}}
 ## Steps
 
 1. Read-only survey: read this phase's task index and task units in full (skip if there is no task index) and this
@@ -58,11 +73,11 @@ pitfalls the next phase would step in>
 2. Distill into the document: write the handover document by the four sections — distill, do not enumerate; each
    piece of information's admission bar is "the next phase can use this"; do not write one-off process detail or
    transient state;
-3. End the session immediately once a valid {{handover}} is written.
+3. End the session immediately once a valid {{handover}}{{#if acceptance}} and the acceptance draft are{{/if}}{{^acceptance}} is{{/if}} written.
 
 ## Constraints
 
-1. The only file this session may write is {{handover}}; the task and phase indexes, todo.md/done.md and CURRENT.md
+1. The only file{{#if acceptance}}s{{/if}} this session may write {{#if acceptance}}are {{handover}} and {{acceptance}}{{/if}}{{^acceptance}}is {{handover}}{{/if}}; the task and phase indexes, todo.md/done.md and CURRENT.md
    and the other state files are maintained exclusively by the DRIVER — do not edit them, and do not change file
    permissions via chmod or the like; git commits are made by the DRIVER after the session ends, do not run git
    commit or similar commands yourself.

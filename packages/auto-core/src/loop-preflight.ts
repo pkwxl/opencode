@@ -8,10 +8,11 @@
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { resumeBanner } from "./conclusion"
-import { beginUnit, changedFiles, commitTree } from "./git"
+import { beginUnit, changedFiles, commitTree, fileTracked } from "./git"
 import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
-import { legacyLayoutProblem } from "./phases"
+import { currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
+import { roundBriefPath } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
@@ -80,6 +81,12 @@ export type RunAllOpts = {
   autoNumber?: boolean
   // --no-wrapup(config.wrapup,缺省 true): 关闭任务收尾会话,透传给 runTask。
   wrapup?: boolean
+  // config.acceptanceGate: phase types gated on a human's acceptance
+  // (plans/0049 G7).
+  acceptanceGate?: string[]
+  // config.build: the target's build command for the round-close report at the
+  // complete route (plans/0049 G8).
+  build?: string
 }
 
 // agent 契约渲染文本: 按 testByDriver 两态渲染内置模板。外壳的契约维护
@@ -173,7 +180,20 @@ export async function preflight(
   if (opts.commit !== false && !opts.dryrun) {
     const gate = await beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
     if (gate.type === "dirty") {
-      log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
+      // The round-start gate (plans/0049 G1): init/continue leave the round
+      // setup uncommitted on purpose — committing it is the human's review of
+      // the round. Its mark is a phase index that git has never seen.
+      const round = await currentRound(directory)
+      const index = phaseIndexPath(round)
+      if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
+        const phased = opts.phases !== undefined && opts.phases !== "m"
+        log(
+          `⏸ round-start gate: the setup of round ${round} is not committed yet. Review it` +
+            `${phased ? `, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria)` : ""}, commit, and re-run:`,
+        )
+      } else {
+        log("⏸ the worktree has uncommitted changes; to ensure execution units start on a clean baseline, handle them manually (commit or clean) and re-run:")
+      }
       for (const file of gate.files) log(`  ${file}`)
       return { exit: 2 }
     }

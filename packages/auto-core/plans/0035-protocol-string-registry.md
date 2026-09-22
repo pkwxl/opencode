@@ -403,3 +403,35 @@ directory's `done.md` with no separate flag) — both in
 existing convention (not run by the default `bun test`). The legacy-layout
 usage-error requirement was already covered by the M3.7 test at
 `packages/auto/test/e2e.test.ts` ("旧布局退役(M3.7)…").
+
+## Amendment (2026-09-22, M4.2 / plans/0049): human-gate literals
+
+New English protocol literals, registered as new rather than flipped, so they
+have no dual-read:
+
+- the round brief `docs/R-NN/round.md` (`src/docpaths.ts ROUND_BRIEF_NAME`,
+  role `roundBrief` in `src/document/roles.ts`) and its heading `## Close`
+  (`src/round-brief.ts ROUND_CLOSE_HEADING`), whose non-empty body the
+  round-close gate requires. The stub's other headings (`## Goal`,
+  `## Acceptance criteria`, `## Release criteria`) are scaffolding, not
+  protocol;
+- the sign-off line `Accepted: yes` (`src/document/roles.ts ACCEPTED_MARK`)
+  in a phase's `acceptance.md`. `acceptanceMark` reads the last line
+  starting with `Accepted:` (case-sensitive), and it must equal the mark
+  exactly after trimming. The distillation session is told never to write an
+  `Accepted:` line (`templates/prompts/phase-handover.md`);
+- the `Gate:` field of a custom phase type file gains the value `acceptance`
+  and the list form (`Gate: verdict, acceptance`; `none` is still the empty
+  list), parsed by `gateList` in `src/phases/custom.ts`;
+- the verdict line `Result: PASS` / `Result: FAIL <reason>` in a phase's
+  `verdict.md`, read by the existing `parseResult` (moved from `wrapup.ts`
+  to `src/document/roles.ts`; `wrapup.ts` re-exports it). The `plan-duties-v`
+  partial now asks for the closing task that writes it;
+- the config keys `acceptanceGate` (a list of distinct known phase type ids)
+  and `build` (a shell command run from the target directory) in
+  `.opencode/auto/config.json`, validated by `loadProjectConfig`
+  (`src/config.ts`).
+
+No tier-1 marker is added. `phase-handover.md` renders the acceptance block
+only when the gate is on, so a template override that drops it disables the
+draft, not the gate. The gate reads the human's sign-off, never the draft.

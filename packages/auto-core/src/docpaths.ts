@@ -78,8 +78,17 @@ export function tempPriorKnowledgeDoc(final: string): string {
 // File name of a phase's acceptance record (the phaseAcceptance role, M2.3,
 // plans/0045): one per phase inside the phase directory docs/R-NN/P<nn>-<type>/
 // (phases.ts phaseAcceptanceDoc builds the path). Written by a human, read by
-// the acceptance gate (0036 D8) once it exists.
+// the acceptance gate (0036 D8, M4.2).
 export const PHASE_ACCEPTANCE_NAME = "acceptance.md"
+
+// The round brief (roundBrief role, M4.2, plans/0049 G2): docs/R-NN/round.md,
+// stubbed at round start and written by a human. Planning sessions read it; the
+// round-close gate reads its `## Close` section.
+export const ROUND_BRIEF_NAME = "round.md"
+
+export function roundBriefPath(round: number): string {
+  return join(roundDir(round), ROUND_BRIEF_NAME)
+}
 
 // —— 测试交接文档的归档份(测试交接前置化设计 D4)——
 //

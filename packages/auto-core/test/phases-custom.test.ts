@@ -46,14 +46,20 @@ describe("parsePhaseTypeFile", () => {
       ],
       taskArtifacts: [{ path: "review.md", label: "review.md", role: "artifact" }],
       hasTasks: true,
-      gate: "verdict",
+      gates: ["verdict"],
       origin: "project",
     })
   })
 
+  test("Gate takes a comma list (plans/0049 G7)", () => {
+    const entry = parsePhaseTypeFile("review", "# Review\n\nGate: verdict, acceptance\n\n## plan duties\n\nx\n")
+    expect(entry.gates).toEqual(["verdict", "acceptance"])
+    expect(parsePhaseTypeFile("review", "# Review\n\nGate: none\n\n## plan duties\n\nx\n").gates).toEqual([])
+  })
+
   test("minimal file → defaults: tasks, no gate, no artifacts, no decompose duties", () => {
     const entry = parsePhaseTypeFile("review", MINIMAL)
-    expect(entry).toMatchObject({ hasTasks: true, gate: "none", phaseArtifacts: [], taskArtifacts: [] })
+    expect(entry).toMatchObject({ hasTasks: true, gates: [], phaseArtifacts: [], taskArtifacts: [] })
     expect(entry.decomposeDuties).toBeUndefined()
     expect(entry.letter).toBeUndefined()
   })
@@ -63,7 +69,8 @@ describe("parsePhaseTypeFile", () => {
       ["no title\n\n## plan duties\n\nx\n", /must start with a title line/],
       ["# R\n\nTasks: no\n\n## plan duties\n\nx\n", /Tasks: no is not supported/],
       ["# R\n\nTasks: maybe\n\n## plan duties\n\nx\n", /Tasks must be yes/],
-      ["# R\n\nGate: strict\n\n## plan duties\n\nx\n", /Gate must be none or verdict/],
+      ["# R\n\nGate: strict\n\n## plan duties\n\nx\n", /Gate must be none or a comma list/],
+      ["# R\n\nGate: verdict, verdict\n\n## plan duties\n\nx\n", /Gate must be none or a comma list/],
       ["# R\n\nOwner: me\n\n## plan duties\n\nx\n", /unknown field\(s\) owner/],
       ["# R\n\nPhase-artifacts: ../out.md\n\n## plan duties\n\nx\n", /must be relative to the unit directory/],
       ["# R\n\nPhase-artifacts: /abs.md\n\n## plan duties\n\nx\n", /must be relative/],

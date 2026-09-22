@@ -6,7 +6,7 @@ import { mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
-import { HANDOVER_SECTIONS, validHandover } from "./document/roles"
+import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { maybeExit } from "./exit"
 import { clearSticky, consumeFailback } from "./failback"
 import { commitPending, commitTree } from "./git"
@@ -17,6 +17,8 @@ import { runTaskLoop, type LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE } from "./numbering"
 import {
   completePhase,
+  phaseAcceptanceDoc,
+  phaseGates,
   phaseHandoverDoc,
   phaseKey,
   phaseLabel,
@@ -28,6 +30,8 @@ import {
   type PhaseUnit,
 } from "./phases"
 import { renderPhaseHandover, renderPhasePlan } from "./prompt"
+import { roundBriefText } from "./round-brief"
+import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { plannedTaskProblems, qualifiedPhase, resetPlanning, takenTaskIds, taskIndexPath } from "./tasks"
 import { closeStep, openStep } from "./resume"
 import { statsPhase } from "./stats"
@@ -98,12 +102,18 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // 迁移结果蒸馏,docs/R-NN/prior-kb.md,见 src/knowledge.ts);② 上一轮结论(上一轮
   // 轮次目录存在时,plans/0006-phases-design.md M 节)。后续阶段照常走 handovers 蒸馏链,
   // 不重复注入。
+  // "First" = no completed phase of this round has tasks (plans/0049 G4): a
+  // leading task-less knowledge phase has no planning session and must not
+  // swallow the digest.
   let prevRound: string | undefined
-  if (!state.done.size) {
+  if (!state.phases.some((unit) => state.done.has(unit.id) && unit.entry.hasTasks)) {
     const parts = [await priorKnowledgeDigest(directory), await prevRoundDigest(directory)].filter((part): part is string => Boolean(part?.trim()))
     prevRound = parts.length ? parts.join("\n\n") : undefined
     if (prevRound) log("ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)")
   }
+  // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
+  // plans against the round's goal and criteria; an untouched stub injects nothing.
+  const round = await roundBriefText(directory, state.round)
   const taskIndex = taskIndexPath(phase)
   const phaseId = qualifiedPhase(phase)
   // 已占用的任务编号: 其他阶段任务索引列出的与已完成的任务(本阶段规划自身的遗留
@@ -119,6 +129,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       phaseId,
       taskIndex,
       brief,
+      round,
       handovers,
       prevRound,
       source: opts.source,
@@ -204,6 +215,22 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   const handover = phaseHandoverDoc(phase)
   const handoverFile = join(directory, handover)
   await mkdir(dirname(handoverFile), { recursive: true })
+  // Phase gates (plans/0049 G7). With the acceptance gate on, the distillation
+  // also drafts acceptance.md for the human to sign; the draft must never carry
+  // an `Accepted:` line, which only a human writes.
+  const gates = phaseGates(phase, opts.acceptanceGate)
+  const acceptance = gates.includes("acceptance") ? phaseAcceptanceDoc(phase) : undefined
+  const acceptanceFile = acceptance ? join(directory, acceptance) : undefined
+  // fresh = the output of this distillation session: it must not be signed. An
+  // existing draft on the idempotent skip path may carry the human's sign-off.
+  const draftProblem = async (fresh: boolean): Promise<string | undefined> => {
+    if (!acceptance) return undefined
+    const text = await Bun.file(acceptanceFile!).text().catch(() => undefined)
+    if (text === undefined) return `${acceptance} is missing`
+    if (fresh && acceptanceMark(text).present) return `${acceptance} carries an \`Accepted:\` line; only the human reviewer writes it — remove it`
+    if (!text.split("\n").some((line) => line.trim() && !/^#{1,6}\s/.test(line.trim()))) return `${acceptance} has no content`
+    return undefined
+  }
   // 蒸馏幂等跳过 + ③ 补提交(plans/0021-commit-boundary-design.md P4): 交接文档已齐备
   // (四小节经 validHandover 校验)时不再重开蒸馏会话——上次中断在"蒸馏已产出、
   // driver 未收口"区间的现场直接续跑快照/完成改名;文档仍在未提交清单则先补提交
@@ -211,8 +238,8 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   // 重来,step 恢复点(openStep)仍可复用原会话续写。
   const distillTask = { id: "PLAN", title: `phase handover distillation (${phaseTitle(phase)})`, status: "in_progress" as const, attempts: 0, body: "" }
   const distillCommit = { stage: "phase-handover", subject: `PLAN handover ${phaseTitle(phase)}` }
-  if (validHandover(await Bun.file(handoverFile).text().catch(() => ""))) {
-    const pending = await commitPending(directory, opts, distillTask, distillCommit, [handover])
+  if (validHandover(await Bun.file(handoverFile).text().catch(() => "")) && !(await draftProblem(false))) {
+    const pending = await commitPending(directory, opts, distillTask, distillCommit, acceptance ? [handover, acceptance] : [handover])
     if (pending !== "clean") {
       if (!pending.ok) {
         log(`⏸ handover document make-up commit failed: ${pending.failures.map((failure) => `${failure.rel}: ${failure.error}`).join("; ")}, handle it manually and re-run`)
@@ -222,11 +249,12 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     }
     log(`↻ handover document ${handover} is complete; skipping the distillation session, going straight to archiving`)
   } else {
-    log(`▶ starting the handover distillation session to produce ${handover}`)
+    log(`▶ starting the handover distillation session to produce ${handover}${acceptance ? ` and the acceptance draft ${acceptance}` : ""}`)
+    let draftIssue: string | undefined
     const distilled = await requireArtifact(
       serverHandle.client,
       distillTask,
-      renderPhaseHandover({ phase: phase.entry, handover, next }),
+      renderPhaseHandover({ phase: phase.entry, handover, next, acceptance }),
       {
         agent: agentName,
         dir: directory,
@@ -245,16 +273,24 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
         // check (plans/0021-commit-boundary-design.md; a partly written handover is
         // cleared by reset and rewritten).
         unitStart: true,
-        artifact: `a valid handover document ${handover} (all four mandatory sections)`,
-        detail: "missing or sections incomplete",
-        requirement:
-          `write the handover document to ${handover} with four sections whose headings are exactly ` +
-          `${HANDOVER_SECTIONS.map((section) => `\`${section}\``).join(" / ")} (driver protocol strings, write them verbatim).`,
+        artifact: `a valid handover document ${handover} (all four mandatory sections)${acceptance ? ` and an acceptance draft ${acceptance}` : ""}`,
+        detail: acceptance ? "missing, sections incomplete, or the acceptance draft missing, empty or signed" : "missing or sections incomplete",
+        get requirement() {
+          return (
+            `write the handover document to ${handover} with four sections whose headings are exactly ` +
+            `${HANDOVER_SECTIONS.map((section) => `\`${section}\``).join(" / ")} (driver protocol strings, write them verbatim).` +
+            (acceptance ? ` Also write the acceptance draft ${acceptance} for the human reviewer, without any \`Accepted:\` line.` : "") +
+            (draftIssue ? ` Problem last time: ${draftIssue}.` : "")
+          )
+        },
         commit: distillCommit,
+        // The acceptance draft is not reset: on a rejected phase it holds the
+        // reviewer's notes, which the new draft must keep.
         reset: () => rm(handoverFile, { force: true }),
         collect: async () => {
           const text = await Bun.file(handoverFile).text().catch(() => "")
-          return validHandover(text) || undefined
+          draftIssue = await draftProblem(true)
+          return (validHandover(text) && !draftIssue) || undefined
         },
       },
     )
@@ -272,7 +308,11 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   // 侧恢复点。其后的完成改名与提交为幂等的 driver 记账,中断后重跑经上方的交接
   // 文档齐备跳过补完,不再依赖会话恢复。
   await closeStep(directory, "phase-handover", phaseKey(phase).id)
-  await completePhase(directory, phase)
+  const gated = await completePhase(directory, phase, gates)
+  if (gated.length) {
+    logGateStop(phase, gated, acceptance)
+    return 2
+  }
   // AGENTS.md 只校验不改写(F.2): 超 150 行在交接提交信息与终端 note 提示人工精简。
   const agentsLines = (await Bun.file(join(directory, "AGENTS.md")).text().catch(() => "")).trimEnd().split("\n").length
   const fat = agentsLines > 150 ? `AGENTS.md is ${agentsLines} lines, over the 150-line limit; trim it manually` : undefined
@@ -302,6 +342,23 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   return 0
 }
 
+// A phase gate holds (plans/0049 G7): the phase stays on its handover route,
+// and the next run re-checks. The human's two ways on — sign or reject — are
+// both plain file edits plus a commit, so they are spelled out here.
+function logGateStop(phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
+  const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
+  log(`⏸ phase ${phaseTitle(phase)} ${waiting ? "awaits acceptance" : "is held by its gate"}:`)
+  for (const problem of problems) log(`  ${problem}`)
+  const handover = phaseHandoverDoc(phase)
+  if (acceptance) {
+    log(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)
+  }
+  log(
+    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks to ${phase.dir}/tasks.md (each with its docs/T-NNN/todo.md), ` +
+      `delete ${handover}, commit, re-run — the fix tasks run and the handover is distilled again`,
+  )
+}
+
 // 阶段循环(D.1;无阶段模式亦走此循环,plans/0047 L2): 推导当前阶段 → 任务索引
 // 无任务则开规划会话 → 主循环执行 → 本阶段任务全 done 交接 → 阶段完成改名推导
 // 下一阶段;全部阶段完成退出 0。阶段/任务索引缺失或非法等环境错误退出 1(H 节)。
@@ -328,6 +385,18 @@ export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<
   return 0
 }
 
+// Phase planning plus the plan-review pause (plans/0049 G5): at
+// OPENCODE_AUTO_STEP ≥ phase the run holds after the planning commit, before
+// the first task, so tasks.md and the task documents can be reviewed; /exit
+// takes effect at the same point.
+async function planWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+  const code = await planPhase(ctx, phase)
+  if (code !== 0) return code
+  await stepPause("phase", `phase ${phaseTitle(phase)} planning`, { interactive: ctx.repl, dir: ctx.directory })
+  maybeExit("phase", `phase ${phaseTitle(phase)} planning`)
+  return 0
+}
+
 export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
   const { directory, opts, server: serverHandle, agentName, repl } = ctx
   for (;;) {
@@ -341,8 +410,12 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       for (const line of await roundResolveLines(directory)) log(line)
       // 轮次完成行(STATS_PLAN §4.4,T-006): 阶段数取阶段索引 done 计数(本轮
       // 已交接阶段);历轮累计段在 history.rounds > 0 时由构造函数自行追加。
-      const lines = await roundCompleteLines(directory, { phaseCount: (await phaseState(directory)).done.size })
+      const state = await phaseState(directory)
+      const lines = await roundCompleteLines(directory, { phaseCount: state.done.size })
       if (lines) for (const line of lines) log(line)
+      // Round-close report (plans/0049 G8, anchor a): the checks continue will
+      // enforce, reported on every complete run; the exit code is unaffected.
+      for (const line of roundCloseLines(await roundCloseProblems(directory, state.round, { build: opts.build }))) log(line)
       return 0
     }
     // 人工模式(无阶段): 没有任务可跑即收场——任务索引为空提示补写,任务全部
@@ -389,7 +462,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
         )
         if (open.step === "phase-plan") {
           banner(`${phaseTitle(route.phase)} phase planning`)
-          const code = await planPhase(ctx, route.phase)
+          const code = await planWithStep(ctx, route.phase)
           if (code !== 0) return code
           continue
         }
@@ -456,7 +529,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
         continue
       }
       banner(`${phaseTitle(route.phase)} phase planning`)
-      const code = await planPhase(ctx, route.phase)
+      const code = await planWithStep(ctx, route.phase)
       if (code !== 0) return code
       continue
     }

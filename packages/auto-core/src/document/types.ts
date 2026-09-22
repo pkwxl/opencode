@@ -21,15 +21,20 @@
 // - handoff:         boundary handoff documents — the session handoff family
 //                    (handoff/testhandoff, status line) and the phase handover
 //                    distillations (four sections); protocol-shaped, eof-exempt.
-// - phaseAcceptance: the human's per-phase acceptance record (0036 D8; the
-//                    role since M2.3, the gate that reads it in M3).
+// - phaseAcceptance: the per-phase acceptance record (0036 D8): drafted by the
+//                    handover session, signed by a human with `Accepted: yes`,
+//                    read by the acceptance gate (M4.2, plans/0049 G7).
+// - roundBrief:      the human's round brief docs/R-NN/round.md (goal,
+//                    acceptance and release criteria, close listing; M4.2,
+//                    plans/0049 G2); stubbed at round start, read by planning
+//                    and the round-close gate.
 // - artifact:        AI-produced process documents consumed by later stages
 //                    (task, round and phase documents under docs/);
 //                    shape-checked (non-trivial + eof terminator).
 // - freeform:        everything else — the deliverable itself and the
 //                    project's own documents; the standardization boundary
 //                    places no schema on it beyond the P1 prohibition.
-export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "artifact" | "freeform"
+export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "artifact" | "freeform"
 
 // A declared artifact of a task/subtask (the structured form of the
 // `Artifacts:` line, M1.4). The driver derives its mechanical checks from this

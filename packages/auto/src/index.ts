@@ -21,11 +21,14 @@ import {
   phaseIndexPath,
   phaseLabel,
   readPhases,
+  roundEstablishing,
   type PhaseState,
 } from "@opencode-ai/auto-core/phases"
 import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
 import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/auto-core/phases/registry"
 import { renderStatus } from "@opencode-ai/auto-core/status"
+import { roundBriefPath } from "@opencode-ai/auto-core/docpaths"
+import { roundCloseLines, roundCloseProblems } from "@opencode-ai/auto-core/round-close"
 import { loadPlan } from "@opencode-ai/auto-core/tasks"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
@@ -296,6 +299,8 @@ if (command === "run") {
     handoverTest: config.handoverTest,
     autoNumber: config.autoNumber,
     wrapup: config.wrapup,
+    acceptanceGate: config.acceptanceGate,
+    build: config.build,
     // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
     newSession: flags.has("new-session") && flags.get("new-session") !== "false",
   })
@@ -582,7 +587,10 @@ if (command === "init" || command === "continue") {
   // 可选键 source/destDir 无须特判: CONFIG_DEFAULTS 不含这两个键,mergeProjectConfig
   // 过滤 undefined 后展开,无参 init 写出的 config.json 里它们自然消失。
   const amend = cont || flags.has("amend")
-  const base: ProjectConfig = amend ? existing : CONFIG_DEFAULTS
+  // acceptanceGate/build (plans/0049 G9) have no flag, so they are only ever
+  // hand-edited: a full-overwrite init keeps them rather than silently erasing them.
+  const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
+  const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
   // 本次生效的 phases: 显式给出即用之,否则取基线值(全量覆盖下 = 缺省 "m",
   // --amend/continue 下 = 既有配置值)。下方快捷模式校验与阶段索引前缀护栏共用。
   const effectivePhases = phases ?? base.phases
@@ -635,14 +643,19 @@ if (command === "init" || command === "continue") {
   // 阶段索引(当前轮 docs/R-NN/phases.md + 各阶段目录 todo.md/done.md,M3.3)是
   // 推导式状态载体;非法即环境错误退出 1(报文给人工修订指引)。已完成阶段的类型
   // 序列(索引序,M3.6 起取代预置字母串): 非空时显式改 --phases 须满足前缀护栏。
+  // An interrupted continue leaves the new round's directory without an index
+  // (plans/0049 G6): continue then judges the previous round, and re-running
+  // it finishes establishing the new one on the same number (nextRound).
+  const liveRound = await currentRound(directory)
+  const stateRound = cont && liveRound > 1 && (await roundEstablishing(directory, liveRound)) ? liveRound - 1 : liveRound
   let phaseState: PhaseState | undefined
   try {
-    phaseState = await readPhases(directory)
+    phaseState = await readPhases(directory, stateRound)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  const indexPath = phaseIndexPath(await currentRound(directory))
+  const indexPath = phaseIndexPath(stateRound)
   const completedPhases = phaseState ? doneTypes(phaseState) : []
   // 生效 phases 与既有配置 phases 展开为类型序列(均已校验合法)。
   const typesOf = (value: string) => parsePhases(value, directory)!.map((entry) => entry.type)
@@ -680,6 +693,15 @@ if (command === "init" || command === "continue") {
       )
       process.exit(1)
     }
+    // Round-close gate (plans/0049 G8, anchor b): the whole-tree P1 scan, the
+    // target build and round.md's close listing must pass before a new round.
+    const close = await roundCloseProblems(directory, stateRound, { build: existing.build })
+    if (close.problems.length) {
+      console.error(`continue refused: round ${stateRound} does not pass its round-close checks`)
+      for (const line of roundCloseLines(close)) console.error(line)
+      process.exit(1)
+    }
+    for (const warning of close.warnings) console.log(`⚠ ${warning}`)
   }
   // 前缀护栏判定的是**本次生效值**而非「是否显式给出」: 全量覆盖下无参 init 会把
   // phases 回落为缺省 "m",若项目已跑在阶段化流程中途(已有完成阶段),这会静默毁掉
@@ -788,12 +810,14 @@ if (command === "init" || command === "continue") {
   // (前置校验已过;上一轮结论经 prevRoundDigest 注入新一轮首个阶段规划会话)。无阶段
   // 模式("m")同样建立,唯一阶段为 P01-implement(plans/0047 L2)。
   let newRound: number | undefined
+  let roundNumber = 0
   try {
     const established = await establishRound(directory, {
       phases: config.phases,
       round: cont ? await nextRound(directory) : undefined,
     })
     newRound = cont ? established.round : undefined
+    roundNumber = established.round
     console.log(`✓ round directory: ${established.root}/ (the phase index phases.md and one P<nn>-<type>/ directory per phase, each with its task index tasks.md once planned; once written, permanent)`)
   } catch (error) {
     console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -860,8 +884,13 @@ if (command === "init" || command === "continue") {
   if (cont) {
     console.log(`round ${newRound} of the migration started: making the migration result more complete and consistent with the source on top of existing progress`)
   }
+  // The round-start gate (plans/0049 G1): the setup stays uncommitted until the
+  // human has reviewed it; run's clean gate refuses to start before that.
   console.log(
-    `${promptText !== undefined ? "brief recorded; " : ""}run: opencode-auto run ${directory}${current ? ` to start ${current.type} (${current.name}) phase planning` : " (all phases complete)"}`,
+    `next (round-start gate): review the round setup, fill in ${roundBriefPath(roundNumber)} (goal, acceptance and release criteria), and commit it`,
+  )
+  console.log(
+    `${promptText !== undefined ? "brief recorded; " : ""}then run: opencode-auto run ${directory}${current ? ` to start ${current.type} (${current.name}) phase planning` : " (all phases complete)"}`,
   )
   process.exit(0)
 }

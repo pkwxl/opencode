@@ -79,6 +79,8 @@ const CLASSIFIED: Record<string, Domain> = {
   // subtask state protocol moved into document/state.ts in M2.3)
   docpaths: "document",
   doccheck: "document",
+  // The round brief docs/R-NN/round.md: stub and section readers (M4.2, plans/0049 G2).
+  "round-brief": "document",
   protect: "document",
   // agent: none left flat — MA.3 moved server.ts into agent/opencode/ and
   // session-api.ts became a driver module (its SDK calls moved into the
@@ -119,6 +121,8 @@ const CLASSIFIED: Record<string, Domain> = {
   resolve: "driver",
   "resume-gate": "driver",
   resume: "driver",
+  // The round-close gate (M4.2, plans/0049 G8): whole-tree P1 scan, build, close listing.
+  "round-close": "driver",
   runner: "driver",
   script: "driver",
   "session-api": "driver",
@@ -153,7 +157,9 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
   // M3.4: routing loads the current phase's tasks (tasks) and no longer
   // renders the retired PLAN.md scaffold (template).
   // M3.6: phase types load per project (phases/custom).
-  phases: ["docpaths", "document/unit", "phases/custom", "phases/registry", "tasks"],
+  // M4.2: completePhase checks the phase gates (document/roles: result line,
+  // acceptance mark); establishRound writes the round brief stub (round-brief).
+  phases: ["docpaths", "document/roles", "document/unit", "phases/custom", "phases/registry", "round-brief", "tasks"],
   docpaths: [],
   doccheck: [],
   protect: ["document/roles"],

@@ -18,7 +18,13 @@ import type { ArtifactSpec } from "../document/types"
 export const PHASE_LETTERS = ["a", "d", "m", "t", "v", "k"] as const
 export type PhaseLetter = (typeof PHASE_LETTERS)[number]
 
-export type PhaseGate = "none" | "verdict"
+// Completion gates a phase type may carry (M4.2, plans/0049 G7), checked
+// before the phase is marked done (phases.ts completePhase):
+// - verdict: the phase directory's verdict.md result line; `Result: FAIL` blocks;
+// - acceptance: the phase directory's acceptance.md must carry the human's
+//   `Accepted: yes`. Builtin types get it from config `acceptanceGate`.
+export const PHASE_GATES = ["verdict", "acceptance"] as const
+export type PhaseGate = (typeof PHASE_GATES)[number]
 
 export type PhaseTypeEntry = {
   // Type id: the `<type>` of a phase directory `P<nn>-<type>` (M3.3).
@@ -48,9 +54,8 @@ export type PhaseTypeEntry = {
   // false = the phase runs one direct driver session instead of planning and
   // executing tasks (knowledge).
   hasTasks: boolean
-  // verdict = the phase's verdict.md `Result: FAIL` is meant to stop the round;
-  // declared only, nothing reads it yet (plans/0048 R5, M4.2).
-  gate: PhaseGate
+  // The type's own completion gates (PHASE_GATES); empty = none.
+  gates: PhaseGate[]
   // Where the entry comes from; a project file is `.opencode/auto/phases/<type>.md`.
   origin: "builtin" | "project"
 }
@@ -72,7 +77,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     phaseArtifacts: [artifact("findings.md", "analysis findings")],
     taskArtifacts: [artifact("analysis.md", "task analysis")],
     hasTasks: true,
-    gate: "none",
+    gates: [],
     origin: "builtin",
   },
   {
@@ -84,7 +89,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     phaseArtifacts: [artifact("design.md", "phase design"), artifact("decisions.md", "design decisions")],
     taskArtifacts: [artifact("design.md", "task design")],
     hasTasks: true,
-    gate: "none",
+    gates: [],
     origin: "builtin",
   },
   {
@@ -96,7 +101,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     phaseArtifacts: [],
     taskArtifacts: [],
     hasTasks: true,
-    gate: "none",
+    gates: [],
     origin: "builtin",
   },
   {
@@ -108,7 +113,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     phaseArtifacts: [artifact("test-report.md", "test report")],
     taskArtifacts: [artifact("test-log.md", "test log")],
     hasTasks: true,
-    gate: "none",
+    gates: [],
     origin: "builtin",
   },
   {
@@ -120,7 +125,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     phaseArtifacts: [artifact("verdict.md", "acceptance verdict")],
     taskArtifacts: [artifact("verification.md", "task verification")],
     hasTasks: true,
-    gate: "verdict",
+    gates: ["verdict"],
     origin: "builtin",
   },
   {
@@ -132,7 +137,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     phaseArtifacts: [artifact("kb.md", "knowledge base")],
     taskArtifacts: [],
     hasTasks: false,
-    gate: "none",
+    gates: [],
     origin: "builtin",
   },
 ]

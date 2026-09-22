@@ -107,6 +107,20 @@ Write it when this task's description asks you to check, test, validate or accep
    goal is not met — say why in one line. Never write PASS for a check you did not run or observe. A task that is not an
    acceptance task and met its goal may omit the line.
 
+### round-brief
+
+Treat the round brief's goal and acceptance criteria as the measure of this phase's plan: every task should move the
+round toward its goal, and work the brief puts out of scope stays out. Where the brief and the project intent disagree,
+the brief is the newer word for this round. The brief belongs to the human — never edit round.md.
+
+### phase-acceptance-draft
+
+Write the draft for a reviewer who has not followed the phase: what the phase set out to do and what it delivered,
+checked against the round brief's acceptance criteria where it has them; the decisions the reviewer should confirm or
+overturn; open risks and anything left undone. Link the handover and the task reports by path rather than copying them.
+List any decision whose rationale must outlive the process documents, and say whether it was restated in the
+target's own documentation.
+
 ## governance
 
 ### decisions-unattended

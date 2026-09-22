@@ -16,6 +16,7 @@ import type { AgentClient } from "./agent/types"
 import type { SessionChain } from "./chain"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
+import { parseResult, type ReportResult } from "./document/roles"
 import { autobanner, log } from "./log"
 import type { Opts, UnitStop } from "./opts"
 import type { Plan, Task } from "./tasks"
@@ -94,25 +95,10 @@ export async function runWrapup(
   }
 }
 
-// Result line of the task report — the driver's only completion-side verdict
-// (FAIL stops the run). Protocol: `Result: PASS` or `Result: FAIL <reason>`,
-// written verbatim by the wrap-up session (when to write it is intent content,
-// `## acceptance` / `### result-line`). The last line starting with `Result:`
-// decides; a value other than PASS/FAIL there, or no such line, is no verdict
-// (the run does not stop). Case-sensitive like the other protocol lines.
-export type ReportResult = { type: "pass" } | { type: "fail"; reason: string }
-
-export function parseResult(text: string): ReportResult | undefined {
-  const lines = text.split("\n")
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!.trim()
-    if (!line.startsWith("Result:")) continue
-    const match = /^Result:[ \t]*(PASS|FAIL)(?![\w-])[ \t:—-]*(.*)$/.exec(line)
-    if (!match) return undefined
-    return match[1] === "PASS" ? { type: "pass" } : { type: "fail", reason: match[2]!.trim() }
-  }
-  return undefined
-}
+// Result line of the task report (FAIL stops the run): the parser lives in the
+// document domain (roles.ts parseResult) since the phase verdict gate reads the
+// same line (M4.2, plans/0049 G7).
+export { parseResult, type ReportResult }
 
 // Reads docs/<id>/report.md; a missing report is no verdict.
 export async function reportResult(dir: string, task: Task): Promise<ReportResult | undefined> {

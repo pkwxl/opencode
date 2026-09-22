@@ -40,7 +40,7 @@
 // intent (`## governance` / `### process-references`), the mechanical side is
 // the prohibition scan at unit close-out (process-refs.ts), and the whole-tree
 // scan at round close belongs to M4.
-import { PHASE_ACCEPTANCE_NAME } from "../docpaths"
+import { PHASE_ACCEPTANCE_NAME, ROUND_BRIEF_NAME } from "../docpaths"
 import type { DocumentRole } from "./types"
 
 export type RolePolicy = {
@@ -61,8 +61,11 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   ledger: { eofScan: false, process: true },
   // Carries its own final-state contract (status line / four sections).
   handoff: { eofScan: false, process: true },
-  // Human-written; the M3 gate reads its acceptance marker, not a terminator.
+  // Drafted by the handover session, signed by a human; the acceptance gate
+  // reads its marker, not a terminator.
   phaseAcceptance: { eofScan: false, process: true },
+  // Human-written round brief; no terminator (plans/0049 G2).
+  roundBrief: { eofScan: false, process: true },
   artifact: { eofScan: true, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
@@ -100,6 +103,9 @@ const PHASE_HANDOVER = new RegExp(`^docs/${PHASE_DIR}/handover\\.md$`)
 // change.
 const PHASE_ACCEPTANCE = new RegExp(`^docs/${PHASE_DIR}/${PHASE_ACCEPTANCE_NAME.replace(".md", "")}(?:-r\\d+)?\\.md$`)
 
+// The round brief: docs/R-NN/round.md (plans/0049 G2).
+const ROUND_BRIEF = new RegExp(`^docs/R-\\d+/${ROUND_BRIEF_NAME.replace(".", "\\.")}$`)
+
 // Everything else the tool keeps under docs/: task directories (the task
 // unit's todo.md / done.md included) and round directories (phase directories
 // with their state files, task index tasks.md and standard artifacts included).
@@ -118,6 +124,7 @@ export function roleOf(rel: string): DocumentRole {
   if (LEDGER.test(path)) return "ledger"
   if (PHASE_HANDOVER.test(path)) return "handoff"
   if (PHASE_ACCEPTANCE.test(path)) return "phaseAcceptance"
+  if (ROUND_BRIEF.test(path)) return "roundBrief"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }
@@ -130,10 +137,12 @@ export function eofScanExempt(rel: string): boolean {
 
 // Agent-contract surfaces: freeform by role (the project owns them), but
 // they legitimately name process paths — the AGENTS.md pointer block tells
-// sessions where CURRENT.md and docs/T-NNN live, and .opencode/ holds the agent
-// contract and the project's prompt/mode/intent overlays. Outside P1 scope.
+// sessions where CURRENT.md and docs/T-NNN live, .opencode/ holds the agent
+// contract and the project's prompt/mode/intent overlays, and the driver
+// writes `.auto/` into .gitignore (gitignore.ts). Outside P1 scope; the
+// whole-tree scan at round close (round-close.ts) would otherwise trip on them.
 function contractSurface(path: string): boolean {
-  return path === "AGENTS.md" || path.startsWith(".opencode/")
+  return path === "AGENTS.md" || path === ".gitignore" || path.startsWith(".opencode/")
 }
 
 // Whether a path belongs to the deliverable side P1 protects: a non-process
@@ -196,4 +205,42 @@ export const PRIOR_KB_DONE = "DONE"
 // contains the substring but is not a compliant heading).
 export function validHandover(text: string): boolean {
   return HANDOVER_SECTIONS.every((section) => text.split("\n").some((line) => line.trim() === section))
+}
+
+// —— result line ——
+
+// The result line — the driver's only completion-side verdict: the task
+// report's (FAIL stops the run) and, since M4.2, an acceptance-type phase's
+// verdict.md (the verdict gate, plans/0049 G7). Protocol: `Result: PASS` or
+// `Result: FAIL <reason>`, written verbatim by the wrap-up session (when to write it is intent content,
+// `## acceptance` / `### result-line`). The last line starting with `Result:`
+// decides; a value other than PASS/FAIL there, or no such line, is no verdict
+// (the run does not stop). Case-sensitive like the other protocol lines.
+export type ReportResult = { type: "pass" } | { type: "fail"; reason: string }
+
+export function parseResult(text: string): ReportResult | undefined {
+  const lines = text.split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim()
+    if (!line.startsWith("Result:")) continue
+    const match = /^Result:[ \t]*(PASS|FAIL)(?![\w-])[ \t:—-]*(.*)$/.exec(line)
+    if (!match) return undefined
+    return match[1] === "PASS" ? { type: "pass" } : { type: "fail", reason: match[2]!.trim() }
+  }
+  return undefined
+}
+
+// —— phaseAcceptance role: the sign-off marker ——
+
+// The human's sign-off line in a phase's acceptance.md (0036 D8, plans/0049
+// G7). Driver protocol string; the handover session drafts the file but must
+// never write this line.
+export const ACCEPTED_MARK = "Accepted: yes"
+
+// Whether an acceptance record carries an `Accepted:` line at all (a draft
+// holding one is a forged sign-off) and whether the last such line is exactly
+// the sign-off. Whole-line, case-sensitive, like the other protocol lines.
+export function acceptanceMark(text: string): { present: boolean; accepted: boolean } {
+  const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("Accepted:"))
+  return { present: lines.length > 0, accepted: lines.at(-1) === ACCEPTED_MARK }
 }

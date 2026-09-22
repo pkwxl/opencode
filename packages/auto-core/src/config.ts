@@ -57,6 +57,15 @@ export type ProjectConfig = {
   // 不含 ..。driver 工作目录(流程文件 CURRENT.md/docs/ 等)与迁移目标经它隔离;
   // 不校验存在性(目标目录常由迁移过程创建)。
   destDir?: string
+  // Phase types whose phases wait for a human's `Accepted: yes` in their
+  // acceptance.md before they are marked done (M4.2, plans/0049 G7/G9; a
+  // custom type can carry the gate itself with `Gate: acceptance`). Optional,
+  // hand-edited; absent = no builtin type is gated.
+  acceptanceGate?: string[]
+  // The target's own build command, run in the target directory by the
+  // round-close gate (M4.2, plans/0049 G8/G9). Optional, hand-edited; absent =
+  // the build check is skipped.
+  build?: string
 }
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
@@ -133,7 +142,9 @@ export function formatProjectConfig(config: ProjectConfig): string {
     (config.testByDriver ? ` · test-by-driver on${config.handoverTest ? "(handover)" : ""}` : "") +
     (config.autoNumber ? " · auto-number on" : "") +
     (config.wrapup ? "" : " · wrapup off") +
-    ` · context-limit ${config.contextLimit}k · phases ${config.phases}`
+    ` · context-limit ${config.contextLimit}k · phases ${config.phases}` +
+    (config.acceptanceGate?.length ? ` · acceptance gate ${config.acceptanceGate.join(",")}` : "") +
+    (config.build ? " · build set" : "")
   )
 }
 
@@ -199,7 +210,21 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     phases,
     source: sourceOf(record.source),
     destDir: destDirOf(record.destDir),
+    acceptanceGate: acceptanceGateOf(record.acceptanceGate, types.map((entry) => entry.type)),
+    build: record.build === undefined ? undefined : stringOf("build", record.build),
   }
+}
+
+// acceptanceGate: an array of distinct known phase type ids; absent or [] = none.
+function acceptanceGateOf(value: unknown, known: readonly string[]): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`${CONFIG_FILE} acceptanceGate must be an array of phase type ids`)
+  }
+  const unknown = value.filter((item) => !known.includes(item))
+  if (unknown.length) throw new Error(`${CONFIG_FILE} acceptanceGate names unknown phase type(s) ${unknown.join(", ")} (known: ${known.join(", ")})`)
+  if (new Set(value).size !== value.length) throw new Error(`${CONFIG_FILE} acceptanceGate lists a phase type twice`)
+  return value.length ? value : undefined
 }
 
 // source 缺省 undefined(非迁移场景);存在时 dir 须为相对工作目录的不含 .. 相对

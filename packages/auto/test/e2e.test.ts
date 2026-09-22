@@ -80,6 +80,12 @@ async function completeLetters(dir: string, letters: string[]) {
   for (const unit of (await readPhases(dir))!.phases) if (letters.includes(unit.entry.letter ?? "")) await completePhase(dir, unit)
 }
 
+// Fill in the round brief's `## Close` restatement listing, which the
+// round-close gate requires before continue (plans/0049 G8).
+async function fillClose(dir: string, round = "R-01") {
+  await Bun.write(join(dir, `docs/${round}/round.md`), `# Round ${round}\n\n## Close\n\n- Restated: none needed.\n- Accepted as lost: none.\n`)
+}
+
 // 阶段化流程 P3 端到端(phases=mv,m 阶段已完成): v(验收)阶段任务照常执行,
 // 交接由蒸馏会话产出阶段目录内 handover.md(四小节协议),阶段 done.md 推进,
 // 全部阶段完成退出 0。
@@ -1210,6 +1216,12 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       // 不随续轮移动
       await Bun.write(join(dir, "docs/R-01/P02-implement/tasks.md"), "# Tasks\n\n- [ ] T-009 轮后手工任务\n")
       await Bun.write(join(dir, "docs/T-009/todo.md"), "# T-009: 轮后手工任务\nPhase: R-01.P02\n\n## Goal\n\n正文\n")
+      // round-close gate (plans/0049 G8): the untouched stub's empty `## Close` blocks continue
+      const unclosed = await runCli(["continue", dir])
+      expect(unclosed.code).toBe(1)
+      expect(unclosed.err).toContain("docs/R-01/round.md `## Close` is empty")
+      expect(await stat(join(dir, "docs/R-02")).catch(() => undefined)).toBeUndefined()
+      await fillClose(dir)
       // 新 phases "admtvk" 不以已完成的 "am" 为前缀——新一轮从头规划,不受前缀护栏约束
       const cont = await runCli(["continue", dir, "--phases", "admtvk", "-p", "第二轮聚焦补齐差距", "--context-limit", "128"])
       expect(cont.code).toBe(0)
@@ -1251,6 +1263,7 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
       await completeLetters(dir, ["a", "m"])
+      await fillClose(dir)
       const cont = await runCli(["continue", dir])
       expect(cont.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "am" })

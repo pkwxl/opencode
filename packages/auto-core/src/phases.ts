@@ -25,7 +25,8 @@
 // session runs, and the phase stays open so tasks can be appended and re-run.
 import { mkdir, readdir, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
-import { PHASE_ACCEPTANCE_NAME, roundDir, roundDirName } from "./docpaths"
+import { PHASE_ACCEPTANCE_NAME, roundBriefPath, roundDir, roundDirName } from "./docpaths"
+import { acceptanceMark, ACCEPTED_MARK, parseResult } from "./document/roles"
 import {
   nextReady,
   parseIndex,
@@ -40,6 +41,7 @@ import {
   type UnitDecl,
   type UnitRef,
 } from "./document/unit"
+import { renderRoundBrief } from "./round-brief"
 import { loadPlan, qualifiedPhase, tickIndexLine, type Plan } from "./tasks"
 import { loadPhaseTypes } from "./phases/custom"
 import {
@@ -47,6 +49,7 @@ import {
   phaseType,
   resolvePhases,
   unitArtifactSpecs,
+  type PhaseGate,
   type PhaseKey,
   type PhaseTypeEntry,
 } from "./phases/registry"
@@ -109,9 +112,12 @@ const phaseId = (position: number) => `P${String(position).padStart(2, "0")}`
 
 // Paths inside a phase directory (repository-relative, permanent once written).
 export const phaseHandoverDoc = (unit: PhaseUnit): string => join(unit.dir, "handover.md")
-// The human's acceptance record (phaseAcceptance role, M2.3); no reader until
-// the acceptance gate (0036 D8), which also owns the marker literal.
+// The acceptance record (phaseAcceptance role): drafted by the handover session,
+// signed by a human; read by the acceptance gate (plans/0049 G7).
 export const phaseAcceptanceDoc = (unit: PhaseUnit): string => join(unit.dir, PHASE_ACCEPTANCE_NAME)
+// The verdict of a verdict-gated phase (the builtin acceptance type's standard
+// artifact), read by the verdict gate.
+export const phaseVerdictDoc = (unit: PhaseUnit): string => join(unit.dir, "verdict.md")
 // The phase type's standard artifacts resolved into this phase's directory.
 export const phaseArtifacts = (unit: PhaseUnit) => unitArtifactSpecs(unit.entry.phaseArtifacts, unit.dir)
 
@@ -241,14 +247,47 @@ export async function syncPhaseIndex(dir: string, round: number, phases: string)
   return units
 }
 
+// The gates a phase must pass before it is marked done (plans/0049 G7): its
+// type's own, plus acceptance when config `acceptanceGate` lists the type.
+export function phaseGates(unit: PhaseUnit, acceptanceGate: readonly string[] = []): PhaseGate[] {
+  const gates = [...unit.entry.gates]
+  if (acceptanceGate.includes(unit.type) && !gates.includes("acceptance")) gates.push("acceptance")
+  return gates
+}
+
+// Why a phase may not be marked done yet; empty = every gate passes.
+// - verdict: verdict.md `Result: FAIL` blocks; no file or no result line
+//   passes, like a task report without one (the run does not stop);
+// - acceptance: acceptance.md must end its `Accepted:` lines with the
+//   human's `Accepted: yes`.
+export async function phaseGateProblems(dir: string, unit: PhaseUnit, gates: readonly PhaseGate[]): Promise<string[]> {
+  const problems: string[] = []
+  if (gates.includes("verdict")) {
+    const doc = phaseVerdictDoc(unit)
+    const result = parseResult(await Bun.file(join(dir, doc)).text().catch(() => ""))
+    if (result?.type === "fail") problems.push(`verdict: ${doc} concludes Result: FAIL${result.reason ? ` (${result.reason})` : ""}`)
+  }
+  if (gates.includes("acceptance")) {
+    const doc = phaseAcceptanceDoc(unit)
+    const text = await Bun.file(join(dir, doc)).text().catch(() => undefined)
+    if (text === undefined) problems.push(`acceptance: ${doc} is missing`)
+    else if (!acceptanceMark(text).accepted) problems.push(`acceptance: ${doc} has no \`${ACCEPTED_MARK}\` line`)
+  }
+  return problems
+}
+
 // Record a phase as complete: rename its todo.md to done.md and tick its index
 // line (U2/U3). This is the single choke point for phase completion — the
-// handover path and its interruption recovery both go through it — so a future
-// precondition (the 0036 D8 acceptance gate) belongs inside it, where neither
-// path can bypass it. Idempotent.
-export async function completePhase(dir: string, unit: PhaseUnit): Promise<void> {
+// handover path and its interruption recovery both go through it — so the
+// phase gates (0036 D8, plans/0049 G7) are checked here, where neither path
+// can bypass them. Returns the gate problems; when there are any, nothing is
+// renamed and the phase stays on its handover route. Idempotent.
+export async function completePhase(dir: string, unit: PhaseUnit, gates: readonly PhaseGate[] = []): Promise<string[]> {
+  const problems = await phaseGateProblems(dir, unit, gates)
+  if (problems.length) return problems
   await renameUnitDone(dir, phaseRef(unit))
   await tickIndexLine(join(dir, "docs", unit.round, PHASE_INDEX_NAME), unit.id)
+  return []
 }
 
 // Phase routing (D.2): blocked = an environment error such as an invalid or
@@ -318,11 +357,21 @@ export async function currentRound(dir: string): Promise<number> {
   return Math.max(max, 1)
 }
 
-// Number of a new round (for round start): the current round + 1 when its
-// R-NN directory exists, otherwise the current derived value (a new project = 1).
+// Number of a new round (for round start): the current round + 1 once it is
+// established (its phase index exists), otherwise the current derived value —
+// a new project is 1, and a round directory left without an index by an
+// interrupted continue is still being established, so continue re-runs on the
+// same number (plans/0049 G6).
 export async function nextRound(dir: string): Promise<number> {
   const round = await currentRound(dir)
-  return (await roundRoot(dir, round)) ? round + 1 : round
+  return (await roundEstablishing(dir, round)) || !(await roundRoot(dir, round)) ? round : round + 1
+}
+
+// Whether a round's directory exists without its phase index: an interrupted
+// establishRound (continue crashed between mkdir and the index write).
+export async function roundEstablishing(dir: string, round: number): Promise<boolean> {
+  if (!(await roundRoot(dir, round))) return false
+  return !(await Bun.file(join(dir, phaseIndexPath(round))).exists())
 }
 
 // Legacy layout detection (M3.7, plans/0047 R3): old-layout projects are not
@@ -360,7 +409,10 @@ export async function roundRoot(dir: string, round: number): Promise<string | un
 // ① create the round directory (existing = idempotent resume, contents kept);
 // ② the phase index and phase directories from `phases` (syncPhaseIndex);
 // ③ a snapshot of the root AGENTS.md as AGENTS.md.bak (the suffix keeps it from
-//    loading as instructions; written once).
+//    loading as instructions; written once);
+// ④ the round brief stub round.md (written once; a human fills it in and
+//    commits it with the rest of the setup — the round-start gate, plans/0049
+//    G1/G2); phased flows only.
 // The no-phase mode ("m") establishes R-01 with its single implement phase the
 // same way. The round defaults to currentRound (init / first run); a new round
 // passes nextRound.
@@ -374,6 +426,9 @@ export async function establishRound(dir: string, opts: { phases: string; round?
     const agents = await Bun.file(join(dir, "AGENTS.md")).text().catch(() => undefined)
     if (agents !== undefined) await Bun.write(join(dir, agentsFile), agents)
   }
+  // The no-phase mode has no round loop (plans/0048 §2), so no brief.
+  const brief = join(dir, roundBriefPath(round))
+  if (opts.phases !== "m" && !(await Bun.file(brief).exists())) await Bun.write(brief, renderRoundBrief(round))
   return { round, root }
 }
 
