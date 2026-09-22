@@ -144,15 +144,13 @@ async function freshRepo() {
 }
 
 describe("activeDocs / validateRefs / scanRefs", () => {
-  test("活文档枚举: docs/**/*.md,排除 docs/phases/**,排序输出", async () => {
+  test("活文档枚举: docs/**/*.md 全量(M3.7 起无旧布局排除),排序输出", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
     try {
-      await mkdir(join(dir, "docs/phases/a-analysis"), { recursive: true })
       await Bun.write(join(dir, "docs/T-002/S01/index.md"), "x")
       await Bun.write(join(dir, "docs/T-002/report.md"), "x")
-      await Bun.write(join(dir, "docs/phases/a-analysis/PLAN.md"), "x")
-      await Bun.write(join(dir, "docs/phases.md"), "台账(docs/phases.md 属活文档,仅 docs/phases/ 目录排除)")
-      expect(await activeDocs(dir)).toEqual(["docs/T-002/S01/index.md", "docs/T-002/report.md", "docs/phases.md"])
+      await Bun.write(join(dir, "docs/phases/notes.md"), "x")
+      expect(await activeDocs(dir)).toEqual(["docs/T-002/S01/index.md", "docs/T-002/report.md", "docs/phases/notes.md"])
       expect(await activeDocs(dir)).toEqual((await activeDocs(dir)).slice().sort())
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -168,7 +166,7 @@ describe("activeDocs / validateRefs / scanRefs", () => {
       await Bun.write(join(dir, "docs/R-01/P01-analysis/done.md"), "x")
       await Bun.write(join(dir, "docs/R-01/P01-analysis/handover.md"), "x")
       await Bun.write(join(dir, "docs/R-01/P01-analysis/findings.md"), "x")
-      await Bun.write(join(dir, "docs/R-01/phases.md"), "x") // 阶段索引(活文档,与根 phases.md 同款)
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "x") // 阶段索引(活文档)
       await Bun.write(join(dir, "docs/R-01/PLAN.md"), "x")
       await Bun.write(join(dir, "docs/R-01/prior-kb.md"), "x")
       await mkdir(join(dir, "docs/R-01/P02-knowledge"), { recursive: true })

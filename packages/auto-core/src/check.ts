@@ -12,8 +12,7 @@ import { autoSwitches, type Switches } from "./switches"
 // driver 的语句不报告;匹配为启发式,报告供人工确认,不修改文件。测试执行原则仅在
 // config.testByDriver 启用时成立(未启用时块比对也按未启用渲染,不影响块存在性);
 // 提交原则始终成立。
-// ②引用检查(stable-refs P4,D6 第二层): 全量活文档(docs/**/*.md,排除
-// docs/phases/**)扫描失效引用(路径不存在 / 行号超出文件总行数),命中经 refs
+// ②引用检查(stable-refs P4,D6 第二层): 全量活文档(docs/**/*.md)扫描失效引用(路径不存在 / 行号超出文件总行数),命中经 refs
 // 并入 CLI 报文(退出码 1);目标目录缺 opencode-auto 块或非 git(auto-correct 不可用)
 // 给 note。受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省
 // off 静默空转,refs 恒空、不给引用相关 note)。

@@ -7,7 +7,7 @@
 import { dirname, join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import type { SessionChain, SessionResult } from "./chain"
-import { archivedTestHandoff, latestHandoffSeq, resolveSubtaskDoc, resolveTaskDoc } from "./docpaths"
+import { archivedTestHandoff, latestHandoffSeq } from "./docpaths"
 import { fileCommitted, suffixedTitle, trackedSourceChanges } from "./git"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
@@ -62,7 +62,7 @@ export async function runExecSession(
   // 「文件状态 × 提交状态」定出交接时序被打断的位置,再从该位置续跑。观测量是
   // 当前份 testhandoff.md、归档份 testhandoff-<n>.md 以及两者的落账情况;在途
   // 记录(.auto/handover.json)只补上文件和提交推不出来的身份信息(待跑脚本、
-  // 已执行结果、可 fork 的会话)。文件按执行范围命名,只认本范围的交接;旧平铺名经 resolve 读回落。
+  // 已执行结果、可 fork 的会话)。文件按执行范围命名,只认本范围的交接。
   const record = await recallHandover(dir, task.id, handoff)
   // 观测序号与归档续号分离(handoverSeq): 观测以在途记录为权威、盘扫描兜底——
   // 盘扫描会被会话在归档命名族里的自行落笔污染,把从未发生的交接误判为已收口。
@@ -85,16 +85,13 @@ export async function runExecSession(
     handovers,
     startUsed: 0,
   }
-  const seeded = subtask !== undefined
-    ? await resolveSubtaskDoc(dir, task.id, subtask, "testhandoff")
-    : await resolveTaskDoc(dir, task.id, "testhandoff")
-  const current = await Bun.file(join(dir, seeded)).text().catch(() => undefined)
+  const current = await Bun.file(join(dir, handoff)).text().catch(() => undefined)
   const archivedRel = seq.observed > 0 ? archivedTestHandoff(handoff, seq.observed) : handoff
   const hasArchived = seq.observed > 0 && (await Bun.file(join(dir, archivedRel)).exists())
   const stage = handoverStage({
     record,
     current,
-    currentCommitted: current !== undefined && (await fileCommitted(dir, seeded)),
+    currentCommitted: current !== undefined && (await fileCommitted(dir, handoff)),
     archived: hasArchived,
     archivedCommitted: hasArchived && (await fileCommitted(dir, archivedRel)),
   })
@@ -126,12 +123,12 @@ export async function runExecSession(
       if (!hasArchived) {
         // F2 补标记: 内容按构造是完整的(已落账,或带状态行),缺的那一行由 driver
         // 补上——归档份本身要自证"这是写完的交接",随提交 #2 一并落账。
-        await fillHandoffStatus(join(dir, seeded))
+        await fillHandoffStatus(join(dir, handoff))
         handovers++
         test.handovers = handovers
         closedN = handovers
         archived = archivedTestHandoff(handoff, closedN)
-        await archiveHandoff(dir, seeded, handoff, closedN)
+        await archiveHandoff(dir, handoff, closedN)
       } else {
         // 归档在盘但未落账: 存量现场可能缺状态行(归档发生于状态行约定之前),补写
         // 幂等(已有状态行则不动),随提交 #2 一并落账。
@@ -218,7 +215,7 @@ export async function runExecSession(
       }
     }
     archived = archivedTestHandoff(handoff, handovers)
-    await archiveHandoff(dir, handoff, handoff, handovers)
+    await archiveHandoff(dir, handoff, handovers)
     // 提交 #2(交接确认): 会话收尾落盘的成果 + 归档交接文档一并落账。单元尚未
     // 收口,不传 baseline。
     const subject = suffixedTitle(test.subject, `test handover #${handovers}`)

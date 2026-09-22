@@ -13,8 +13,7 @@
 ## 可用证据(只读)
 
 - 各轮各阶段的任务索引(轮次目录 docs/R-NN/ 下各阶段目录 P<nn>-<type>/ 内的 tasks.md);
-- docs/ 下的任务目录与产物(T-NNN/todo.md|done.md、T-NNN/<用途>.md 与 T-NNN/S<NN>/index.md,如 T-001/subtasks.md;旧平铺
-  T-NNN.<用途>.md 与归档目录内的同样有效);
+- docs/ 下的任务目录与产物(T-NNN/todo.md|done.md、T-NNN/<用途>.md 与 T-NNN/S<NN>/index.md,如 T-001/subtasks.md);
 - git 提交历史: 提交信息携带任务编号(git log --oneline 概览即可),可发现
   产物已被删除、文件扫描看不到的编号。
 

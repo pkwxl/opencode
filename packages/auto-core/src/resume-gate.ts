@@ -51,7 +51,7 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
       // step 恢复点由 loop 经 openStep 判定归属,不经任务流水线复用
       return true
     case undefined:
-      // 旧版无阶段记录(session.json): 无法判定单元归属,不复用(恢复走默认流程)
+      // 无阶段记录: 无法判定单元归属,不复用(恢复走默认流程)
       return false
   }
 }

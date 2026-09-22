@@ -114,17 +114,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
 // artifact paths are what the driver validates the session output against —
 // M1.0 merged understand+decompose session, plans/0030.)
 
-// Pre-flip spellings a target-directory override may still carry in place of
-// a flipped marker (M2.4 dual-read, plans/0035 D5/D6): the parser still reads
-// the old form, so an override written before the flip keeps loading. Retired
-// together with the parser-side dual-read (M4 close-out).
-const LEGACY_MARKERS: Record<string, string> = {
-  "Status: continue": "状态: 继续",
-  "Status: done": "状态: 完成",
-}
-
-const lacksMarker = (content: string) => (marker: string) =>
-  !content.includes(marker) && !(LEGACY_MARKERS[marker] !== undefined && content.includes(LEGACY_MARKERS[marker]))
+// An override still carrying a pre-flip spelling (`状态: 继续`, …) fails here:
+// the dual-read layer was retired with the legacy layouts (M3.7, root open
+// question 17), so the old spelling would be dead text the parser never reads.
+const lacksMarker = (content: string) => (marker: string) => !content.includes(marker)
 
 // Tier-1 markers for shared partial sections (M1.3): the target directory's
 // _partials.md overlay merges per section; overriding one of these sections

@@ -525,7 +525,7 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
     try {
       await mkdir(join(dir, "docs", "T-028", "S03"), { recursive: true })
       const rel = join("docs", "T-028", "S03", "testhandoff.md")
-      await writeFile(join(dir, rel), "交接正文\n\n状态: 继续\n")
+      await writeFile(join(dir, rel), "交接正文\n\nStatus: continue\n")
       await commitTree(dir, task, { stage: "subtask 3 handoff-1", subject: "T-001 测试交接 #1" })
       expect(await fileTracked(dir, rel)).toBe(true)
       expect(await fileCommitted(dir, rel)).toBe(true)
@@ -537,7 +537,7 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
       expect(await changedFiles(dir)).toEqual([rel])
 
       expect(await restoreFile(dir, rel)).toBe(true)
-      expect(await Bun.file(join(dir, rel)).text()).toBe("交接正文\n\n状态: 继续\n")
+      expect(await Bun.file(join(dir, rel)).text()).toBe("交接正文\n\nStatus: continue\n")
       expect(await changedFiles(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -564,7 +564,7 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
     try {
       const rel = join("docs", "T-028", "handoff.md")
       await mkdir(join(dir, "docs", "T-028"), { recursive: true })
-      await writeFile(join(dir, rel), "交接正文\n\n状态: 继续\n")
+      await writeFile(join(dir, rel), "交接正文\n\nStatus: continue\n")
       await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "subtask 1 handoff", subject: "T-028 S1 交接" })
       await removeIfUntracked(dir, rel)
       expect(await Bun.file(join(dir, rel)).exists()).toBe(true)

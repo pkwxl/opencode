@@ -262,6 +262,25 @@ describe("CLI 解析: run 侧选项与配置", () => {
     }
   })
 
+  test("旧布局退役(M3.7): 根 PLAN.md 或无阶段目录的 docs/R-NN → init/continue/status/run 用法错误退出 1,不写盘;check 照常", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      await Bun.write(join(dir, "PLAN.md"), "# plan\n")
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "# phases\n")
+      for (const command of ["init", "continue", "status", "run"]) {
+        const run = await runCli([command, dir])
+        expect(run.code, command).toBe(1)
+        expect(run.err).toContain("legacy layout: start a new project")
+        expect(run.err).toContain("root PLAN.md, docs/R-01/ without phase directories")
+      }
+      expect((await readdir(dir)).sort()).toEqual(["PLAN.md", "docs"])
+      expect(await readdir(join(dir, "docs"))).toEqual(["R-01"])
+      expect((await runCli(["check", dir])).err).not.toContain("legacy layout")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("旧项目回落: 仅 .auto/config.json 有 mode 时 run 提示沿用旧位置", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {

@@ -5,14 +5,12 @@
 // hold no per-document check logic and no hardcoded role names.
 //
 // Three spec surfaces:
-//   1. declaredArtifacts — the `产出:` declaration parser (moved from plan.ts;
-//      the document domain owns the declaration format end to end: syntax +
-//      check semantics). The `产出:` token itself is a driver protocol string
-//      (English translation registers with M1.5, dual-read per plan open
-//      question 11).
+//   1. declaredArtifacts — the `Artifacts:` declaration parser (moved from
+//      plan.ts; the document domain owns the declaration format end to end:
+//      syntax + check semantics). The token is a driver protocol string; the
+//      pre-flip `产出:` spelling is no longer read (M3.7, open question 17).
 //   2. decomposeArtifactSpecs — the merged understand+decompose session's four
-//      artifact groups (plans/0030 D3) as a spec table, incl. the D4 legacy
-//      fallback-read paths for the pre-directory layout.
+//      artifact groups (plans/0030 D3) as a spec table.
 //   3. subtaskStateSpec — the subtask-directory state protocol (M1.0) as spec
 //      data: pending (todo.md, written by the decompose session, anchor-
 //      checked) / complete (done.md, DRIVER rename target). State semantics,
@@ -23,13 +21,13 @@
 //      the mandatory policy (non-trivial, eof, the three section anchors).
 import { join } from "node:path"
 import { docShapeProblems } from "../doccheck"
-import { legacyTaskDoc, subtaskDoc, taskDoc } from "../docpaths"
+import { subtaskDoc, taskDoc } from "../docpaths"
 import type { ArtifactSpec } from "./types"
 
 // —— 1. `Artifacts:` declaration parsing (session-boundary-hardening §4.3 D4) ——
 
 // Structured artifact declaration inside a checklist item: a path list led by
-// `Artifacts:` (legacy `产出:` still read). The driver checks existence/shape from these specs (no hardcoded
+// `Artifacts:`. The driver checks existence/shape from these specs (no hardcoded
 // workspace conventions like index.md — the list comes entirely from the
 // declaration). Syntax aligns with the decompose prompt's "declare artifacts
 // per item" convention, parsed leniently:
@@ -42,10 +40,9 @@ import type { ArtifactSpec } from "./types"
 // are not paths and are skipped — a pure-prose declaration leaves zero specs,
 // covered separately by the zero-disk-writes criterion (unit baseline diff).
 export function declaredArtifacts(text: string): ArtifactSpec[] {
-  // Dual-read (M2.4): `产出:` is the pre-flip spelling, still present in PLAN.md task bodies written before it.
   // Case-insensitive on the English token: a session writing `artifacts:` must
   // not silently yield zero specs (plans/0035 D2).
-  const decl = /(?:^|\s)(?:Artifacts|产出)\s*[:：]\s*(.+)$/i.exec(text)?.[1]
+  const decl = /(?:^|\s)Artifacts\s*[:：]\s*(.+)$/i.exec(text)?.[1]
   if (!decl) return []
   const out: ArtifactSpec[] = []
   let current: ArtifactSpec | undefined
@@ -110,24 +107,12 @@ function addSections(item: ArtifactSpec | undefined, text: string) {
 // The four artifact groups of the merged understand+decompose session as spec
 // data: understanding digest, shared-context index, subtask checklist (the
 // checklist-items requirement itself stays a driver-side parse-input check in
-// execute.ts, plans/0034 D9) and one scope file per subtask. context.md and
-// subtasks.md carry the legacy flat-layout fallback read (D4; the write target
-// is always the canonical path).
+// execute.ts, plans/0034 D9) and one scope file per subtask.
 export function decomposeArtifactSpecs(taskId: string, subtaskCount: number): ArtifactSpec[] {
   return [
-    {
-      path: taskDoc(taskId, "context"),
-      fallbackPath: legacyTaskDoc(taskId, "context"),
-      label: "understanding digest",
-      role: "artifact",
-    },
+    { path: taskDoc(taskId, "context"), label: "understanding digest", role: "artifact" },
     { path: taskDoc(taskId, "shared"), label: "shared-context index", role: "artifact" },
-    {
-      path: taskDoc(taskId, "subtasks"),
-      fallbackPath: legacyTaskDoc(taskId, "subtasks"),
-      label: "subtask checklist",
-      role: "artifact",
-    },
+    { path: taskDoc(taskId, "subtasks"), label: "subtask checklist", role: "artifact" },
     ...Array.from({ length: subtaskCount }, (_, i) => subtaskStateSpec(taskId, i + 1).pending),
   ]
 }
@@ -138,13 +123,6 @@ export function decomposeArtifactSpecs(taskId: string, subtaskCount: number): Ar
 // DRIVER-authored injected files write them; the decompose template instructs
 // them). One source for checks, injected writes and (via basename) messages.
 export const SUBTASK_TODO_SECTIONS = ["## Scope", "## Artifacts"]
-
-// Pre-flip headings still accepted in pending todo.md files written before
-// the M2.4 flip (dual-read, plans/0035 D5).
-const SUBTASK_TODO_SECTION_ALIASES: Record<string, string[]> = {
-  "## Scope": ["## 范围声明"],
-  "## Artifacts": ["## 产出清单"],
-}
 
 // The state-file pair of one subtask: exactly one of the two paths exists once
 // the protocol is active (both/neither = illegal). `pending` doubles as the
@@ -163,7 +141,6 @@ export function subtaskStateSpec(taskId: string, index: number): SubtaskStateSpe
     pending: {
       path: subtaskDoc(taskId, index, "todo"),
       sectionAnchors: [...SUBTASK_TODO_SECTIONS],
-      anchorAliases: SUBTASK_TODO_SECTION_ALIASES,
       label: "subtask scope file",
       role: "artifact",
     },
@@ -230,35 +207,19 @@ export async function checkArtifactSpecs(specs: readonly ArtifactSpec[], check: 
         shaped.push(spec.path)
       }
       for (const section of spec.sectionAnchors ?? []) {
-        if (!hasSection(content, spec, section)) problems.push(missingSection(spec.path, section))
+        if (!content.includes(section)) problems.push(missingSection(spec.path, section))
       }
       continue
     }
-    const content = (await readSpec(check.dir, spec)).trim()
+    const content = (await Bun.file(join(check.dir, spec.path)).text().catch(() => "")).trim()
     if (!content) {
       problems.push(`${spec.path}${spec.label ? ` ${spec.label}` : ""} missing or empty`)
       continue
     }
     if (isMd) problems.push(...docShapeProblems(content, spec.path))
     for (const section of spec.sectionAnchors ?? []) {
-      if (!hasSection(content, spec, section)) problems.push(missingSection(spec.path, section))
+      if (!content.includes(section)) problems.push(missingSection(spec.path, section))
     }
   }
   return { problems, shaped }
-}
-
-const hasSection = (content: string, spec: ArtifactSpec, section: string): boolean =>
-  content.includes(section) || (spec.anchorAliases?.[section] ?? []).some((alias) => content.includes(alias))
-
-// Content read with the D4 fallback: canonical path first, legacy flat path
-// when the canonical is absent (mirrors docpaths.resolveTaskDoc for the specs
-// that carry a fallbackPath).
-async function readSpec(dir: string, spec: ArtifactSpec): Promise<string> {
-  const primary = Bun.file(join(dir, spec.path))
-  if (await primary.exists()) return await primary.text().catch(() => "")
-  if (spec.fallbackPath) {
-    const fallback = Bun.file(join(dir, spec.fallbackPath))
-    if (await fallback.exists()) return await fallback.text().catch(() => "")
-  }
-  return ""
 }

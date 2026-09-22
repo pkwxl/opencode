@@ -205,7 +205,7 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
 - [x] M3.4 Task units: `T-NNN/todo.md|done.md` + `tasks.md`, planning sessions rewritten, runtime state to `.auto/units.json`, `numbering.ts` floor over task dirs, `## T-NNN` heading protocol retired, no-phase mode as P01 with the loops merged, CLI `status`. (2026-09-22; notes in §11.)
 - [x] M3.5 Dependencies at all three levels: `nextReady` at every selection point, `unitProblems` in the planning/decompose `collect` and on loop load, template syntax text. (2026-09-22; notes in §11.)
 - [x] M3.6 Custom phase types (was M3.3): the project-level registry entries. (2026-09-22; notes in §11.)
-- [ ] M3.7 Legacy removal (§6 R3) + legacy-layout usage error; dual-read per open question 17.
+- [x] M3.7 Legacy removal (§6 R3) + legacy-layout usage error; dual-read per open question 17. (2026-09-22; notes in §11.)
 - [ ] M3.8 Template translation, verification, merge-back #3.
 
 ## 10. Verification
@@ -348,5 +348,36 @@ New module `src/phases/custom.ts`, published as a second phases-domain entry (th
   - The help text documents the list form.
 - **Unchanged:** the phase index protocol, routing, rounds, the handover and knowledge steps, and the phase gate (`gate` is now also settable by a custom type).
 - Verification: auto-core 1092 pass / 0 fail + typecheck clean; packages/auto 53 pass + 2 skip + typecheck clean. Builtin goldens are unchanged.
+
+### M3.7 (2026-09-22)
+
+- **Legacy-layout usage error.** `legacyLayoutProblem(dir)` in `src/phases.ts` finds two things:
+  - a root `PLAN.md`;
+  - a non-empty `docs/R-NN/` with no `P<nn>-<type>/` directory.
+
+  An empty round directory is not flagged, because that is the crash window between `establishRound` ① and ②, which a rerun heals. The message is `legacy layout: start a new project (found …; …finish them on the auto-core release they started with)`. There are two call sites:
+  - the first check of `runAll`'s preflight (exit 1, before any read or write, for every shell);
+  - `packages/auto` before `init` / `continue` / `status` / `run` touch the disk.
+
+  `reset` and `check` stay available on an old tree.
+- **Removed read fallbacks:**
+  - docpaths `legacyTaskDoc` / `legacySubtaskTestHandoff` / `legacySubtaskArtifact` / `legacyPriorKnowledgeDoc` and `resolveTaskDoc` / `resolveSubtaskDoc`. Every caller uses `taskDoc` / `subtaskDoc` directly;
+  - the flat testhandoff branches in `testrun.ts`;
+  - the flat `docs/migration-kb/`, `docs/handovers/` and `docs/prior-kb/` readers in `knowledge.ts`;
+  - `currentRound`'s `round-<N>` count (`LEGACY_ROUND_RE`) and `nextRound`'s root `docs/phases.md` check;
+  - the flat `docs/**/T-*.md` number floor;
+  - the `.auto/session.json` read and cleanup in `resume.ts`.
+- **Open question 17 ruled (a): the dual-read layer is removed with M3.7.** This covers `状态:` / `产出:` / `## 范围声明` / `## 产出清单` and `LEGACY_MARKERS`. A pre-flip override template now fails the tier-1 marker check at startup. 0035 has the amendment.
+- **Roles.** The legacy shapes are gone: flat `T-NNN.<role>.md`, `-S<k>.testhandoff`, `docs/handovers/`, `docs/phase-docs/`, root `docs/phases.md` and `PLAN.md` as `driverState`. They classify as `freeform`, like any project file. `PROCESS_DOCS` is `docs/T-*` and `docs/R-*`.
+- **Deviations from the step text:**
+  - The P1 process-reference scan no longer matches `PLAN.md` or `docs/phases/`. Without the legacy layout they are ordinary project names, and flagging them would reject a deliverable's own `PLAN.md`. The prompt's process-document sentence now names only `docs/T-*` and `docs/R-*`, which regenerated the subtask and whole goldens.
+  - Signatures narrowed:
+    - `priorKnowledgeFile(round)` is sync, with the directory argument dropped;
+    - `archiveHandoff(dir, handoff, n)` takes the handoff path instead of resolving it;
+    - D8-frozen `ArtifactSpec` lost the optional `fallbackPath` and `anchorAliases`.
+  - `refcheck` no longer excludes `docs/phases/` from the active documents.
+  - Left alone because they are not layout fallbacks: `.auto/config.json`'s legacy `mode` fallback and the AGENTS.md `LEGACY_BLOCK` rewrite.
+- **Templates.** number-recovery, prior-knowledge and the default intent pack lost their flat-layout clauses. Four goldens were regenerated (number-recovery, prior-knowledge, subtask, whole).
+- Verification: auto-core 1079 pass / 0 fail + typecheck clean. The drop from 1092 is the deleted legacy cases; new cases cover `legacyLayoutProblem`, the preflight exit and the no-read assertions. packages/auto 54 pass + 2 skip + typecheck clean, with a new CLI case: an old-layout tree exits 1 on all four commands and nothing is written.
 
 <!-- auto: eof -->

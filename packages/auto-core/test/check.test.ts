@@ -216,12 +216,11 @@ describe("checkPrinciple", () => {
 })
 
 describe("checkPrinciple 引用检查(stable-refs P4)", () => {
-  test("活文档失效引用进 refs;非 git 目录给 auto-correct 不可用 note;phases 状态文件排除", async () => {
+  test("活文档失效引用进 refs;非 git 目录给 auto-correct 不可用 note", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/gone.ts`。\n行内含 已删除 标记的 `docs/old.md` 豁免。\n")
-      await Bun.write(join(dir, "docs/phases/a-analysis/PLAN.md"), "状态文件引用 `src/also-gone.ts` 不检查。\n")
       const { findings, notes, refs } = await checkPrinciple(dir, REFCHECK_ON)
       expect(findings).toEqual([])
       expect(refs).toEqual([

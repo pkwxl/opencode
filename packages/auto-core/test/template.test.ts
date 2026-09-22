@@ -241,17 +241,17 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     }
   })
 
-  test("handoff-steer override: pre-flip status literals still load, neither form is rejected (M2.4 dual-read)", () => {
+  test("handoff-steer override: pre-flip status literals are rejected, English loads (M3.7, open question 17)", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "handoff-steer.md"), "交接: 写 {{handoffFile}},末行 `状态: 继续` 或 `状态: 完成`")
-      usePromptLibrary(dir)
-      expect(renderTemplate("handoff-steer", { handoffFile: "h.md" })).toContain("状态: 继续")
+      expect(() => usePromptLibrary(dir)).toThrow(/handoff-steer\.md is missing required protocol content: Status: continue, Status: done/)
       usePromptLibrary(undefined)
       writeFileSync(join(overlay, "handoff-steer.md"), "handover: write {{handoffFile}}, last line `Status: continue` or `Status: done`")
       usePromptLibrary(dir)
+      expect(renderTemplate("handoff-steer", { handoffFile: "h.md" })).toContain("Status: continue")
       usePromptLibrary(undefined)
       writeFileSync(join(overlay, "handoff-steer.md"), "handover without any status line")
       expect(() => usePromptLibrary(dir)).toThrow(/handoff-steer\.md is missing required protocol content: Status: continue, Status: done/)

@@ -52,7 +52,7 @@ const promptText = (call: { parts: unknown[] }): string => String((call.parts[0]
 const filler = "占位素材甲乙丙。".repeat(30)
 const contextProper = `# 理解\n\n## 相关文件与关键符号\n\n${filler}\n\n## 约束与前提\n\n无。\n\n## 已有决策与现状\n\n无。\n\n## 风险与未知\n\n无。\n\n${EOF_MARK}\n`
 const sharedProper = `# 公共上下文索引\n\n- src/x.ts: 数据模型入口。\n\n${filler}\n\n${EOF_MARK}\n`
-const subtasksProper = `# 分解\n\n- [ ] 子任务甲 产出: docs/T-001/S01/index.md\n\n${filler}\n\n${EOF_MARK}\n`
+const subtasksProper = `# 分解\n\n- [ ] 子任务甲 Artifacts: docs/T-001/S01/index.md\n\n${filler}\n\n${EOF_MARK}\n`
 const todoProper = `# S01: 子任务甲\n\n## Scope\n\n${filler}\n\n## Artifacts\n\n- docs/T-001/S01/index.md\n\n${EOF_MARK}\n`
 const reportProper = `# 报告\n\n${filler}\n\n${EOF_MARK}\n`
 
@@ -91,7 +91,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(1)
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual([
-        "子任务甲 产出: docs/T-001/S01/index.md",
+        "子任务甲 Artifacts: docs/T-001/S01/index.md",
       ])
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -121,7 +121,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
       expect(feedback).toContain(EOF_MARK)
       expect(feedback).not.toContain("Relevant files and key symbols") // 不重发整份合并提示词
       const reloaded = await reloadUnits(dir)
-      expect((reloaded.tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual(["子任务甲 产出: docs/T-001/S01/index.md"])
+      expect((reloaded.tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual(["子任务甲 Artifacts: docs/T-001/S01/index.md"])
       // 合并会话成功即记录 session 模式 fork 基点(plans/0030 D4)
       expect(reloaded.tasks[0]!.forkBase).toBe("ses_fork_1")
       const message = await git(dir, "log", "-1", "--format=%B")

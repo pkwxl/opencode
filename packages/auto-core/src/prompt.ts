@@ -443,7 +443,7 @@ export function renderNumberRecovery(input: { floor: number }): string {
 }
 
 // 阶段交接蒸馏会话(设计文档 plans/0006-phases-design.md F.1 步骤 1): 旁路一次性,通读本阶段
-// PLAN.md 与 docs/ 产物,蒸馏出永久路径交接文档(四个必备小节协议在模板内联)。
+// 任务索引与 docs/ 产物,蒸馏出永久路径交接文档(四个必备小节协议在模板内联)。
 // handover = phaseHandoverDoc(unit)(src/phases.ts,阶段目录内
 // docs/R-NN/P<nn>-<type>/handover.md);next 为下一阶段"P<nn>-<type> 中文名"或
 // undefined(最后一个阶段无下一阶段,仍写 handover 供后续查阅)。
@@ -469,8 +469,7 @@ export function renderKnowledge(input: { file: string; mode?: ModeSpec }): strin
 
 // 前置知识提取会话(外壳的二次迁移编排,src/knowledge.ts extractPriorKnowledge):
 // 旁路一次性,通读已有迁移结果(不限于此前轮次——docs/ 全树、历轮轮次目录
-// docs/R-NN/、旧布局阶段/轮次归档、产出代码与 git 历史),蒸馏出前置知识文档
-// (新布局轮内 docs/R-NN/prior-kb.md,旧布局 docs/prior-kb/R<N>-…),作为二次迁移
+// docs/R-NN/、产出代码与 git 历史),蒸馏出前置知识文档(轮内 docs/R-NN/prior-kb.md),作为二次迁移
 // 与参数推断的输入。file 为中间产物 temp-kb.md 的输出路径(相对目标目录;收笔
 // 标记经 driver 确认后才改名转正,完成判定协议见 knowledge.ts);brief 为项目意图
 // 原文(可空);distilled 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,
@@ -505,7 +504,7 @@ export function renderInferSource(input: { file: string; brief?: string; priorKb
 // 交接文档(相对目标目录): ondemand 整任务会话与 auto 子任务会话共用——driver 在
 // 上下文达到 2x --context-limit 时插入交接提示,会话把进度写入该文件,末行
 // `Status: continue|done` 由 driver 解析。子任务场景的状态以该子任务是否完成计。
-// 构造经 docpaths(任务目录化布局),读点回落由 runner 经 resolveTaskDoc 处理。
+// 构造经 docpaths(任务目录化布局)。
 export function handoffFile(task: Task): string {
   return taskDoc(task.id, "handoff")
 }

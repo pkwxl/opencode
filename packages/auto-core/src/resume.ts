@@ -82,8 +82,6 @@ export type Progress = {
 }
 
 const FILE = join(".auto", "progress.json")
-// 旧版会话记忆文件: 无阶段信息,按"半途会话"兼容读取(恢复走默认流程)。
-const LEGACY = join(".auto", "session.json")
 
 export async function saveProgress(dir: string, progress: Progress) {
   await mkdir(join(dir, ".auto"), { recursive: true })
@@ -91,10 +89,8 @@ export async function saveProgress(dir: string, progress: Progress) {
 }
 
 // 任务完成(任何 Outcome 下的 completed)即删除;force 使缺失时也无害。
-// 连同旧版 session.json 一起清理。
 export async function forgetProgress(dir: string) {
   await rm(join(dir, FILE), { force: true })
-  await rm(join(dir, LEGACY), { force: true })
 }
 
 // 读取属于该任务的进度记录(不校验会话存活——存活判定在 runner)。任务不符、
@@ -132,12 +128,7 @@ export async function closeStep(dir: string, step: StepKind, unit: string): Prom
 
 async function readProgress(dir: string): Promise<Progress | undefined> {
   const raw = await Bun.file(join(dir, FILE)).text().catch(() => undefined)
-  if (raw) return parseProgress(raw)
-  const legacy = await Bun.file(join(dir, LEGACY)).text().catch(() => undefined)
-  if (!legacy) return undefined
-  const parsed = parseProgress(legacy)
-  // 旧版 {task, session, at}: 视为半途会话,无阶段信息(恢复走默认流程)。
-  return parsed ? { ...parsed, active: true } : undefined
+  return raw ? parseProgress(raw) : undefined
 }
 
 function parseProgress(raw: string): Progress | undefined {

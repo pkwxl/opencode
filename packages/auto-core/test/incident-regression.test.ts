@@ -150,7 +150,7 @@ describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
 })
 
 describe("I3 误判已完成零落盘(kernel-dm T-068 S01)", () => {
-  const BODY = "调研并落盘记录 产出: docs/T-001/S01/record.md"
+  const BODY = "调研并落盘记录 Artifacts: docs/T-001/S01/record.md"
 
   test("会话零产物收场: 带反馈重提示一次(复述权威状态)→ 仍零 → blocked,不勾选", async () => {
     const dir = await incidentRepo(`## T-001: 示例任务 [in_progress]\n\n- [ ] ${BODY}\n`)
@@ -180,7 +180,7 @@ describe("I4 测试脚本原地改写源码(kernel-spi-nor T-028)", () => {
     const dir = await incidentRepo(`## T-001: 示例任务 [in_progress]\n\n- [ ] 实现逻辑\n`)
     try {
       // 回合 1: 用量超限 → 发起测试(脚本原地改写 src.ts,rustfmt apply 形态)→ 定版;
-      // 收尾写出交接文档(状态: 继续)→ testHandover 收场。回合 2(续跑): 自然结束。
+      // 收尾写出交接文档(Status: continue)→ testHandover 收场。回合 2(续跑): 自然结束。
       // 逐事件编排与 session.test.ts handoverStream 同款。
       let round = 0
       const { client: driver, calls } = fakeClient({
@@ -190,7 +190,7 @@ describe("I4 测试脚本原地改写源码(kernel-spi-nor T-028)", () => {
               yield usageMsg(sid, "m_limit", 2000)
               await Bun.write(join(dir, "tmp", "test.sh"), "echo '// 格式化改写' >> src.ts")
               yield { type: "session.idle", properties: { sessionID: sid } }
-              await Bun.write(join(dir, HANDOFF), "# 交接\n\n进度与后续步骤。\n\n状态: 继续\n")
+              await Bun.write(join(dir, HANDOFF), "# 交接\n\n进度与后续步骤。\n\nStatus: continue\n")
               yield usageMsg(sid, "m_wrapup", 2100)
               yield { type: "session.idle", properties: { sessionID: sid } }
             } else {
@@ -230,7 +230,7 @@ describe("I4 测试脚本原地改写源码(kernel-spi-nor T-028)", () => {
 })
 
 describe("I5 交接链收口(test-handover-early §N F4)", () => {
-  const BODY = "调研并落盘记录 产出: docs/T-001/S01/record.md"
+  const BODY = "调研并落盘记录 Artifacts: docs/T-001/S01/record.md"
   const filler = "占位素材甲乙丙。".repeat(30)
 
   test("单元完成必清链: 交接发生、续跑完成 → testhandoff 全链删除并随单元提交落账,工作区干净", async () => {
@@ -244,7 +244,7 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
               yield usageMsg(sid, "m_limit", 2000)
               await Bun.write(join(dir, "tmp", "test.sh"), "echo ok")
               yield { type: "session.idle", properties: { sessionID: sid } }
-              await Bun.write(join(dir, "docs/T-001/S01/testhandoff.md"), "# 交接\n\n进度。\n\n状态: 继续\n")
+              await Bun.write(join(dir, "docs/T-001/S01/testhandoff.md"), "# 交接\n\n进度。\n\nStatus: continue\n")
               yield usageMsg(sid, "m_wrapup", 2100)
               yield { type: "session.idle", properties: { sessionID: sid } }
             } else {

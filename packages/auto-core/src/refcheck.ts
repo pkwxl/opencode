@@ -110,15 +110,13 @@ function escapeRegexp(text: string): string {
 }
 
 // —— P4: 活文档枚举与校验 ——
-// 活文档范围(stable-refs §3.3): docs/**/*.md,排除旧布局归档 docs/phases/**;
-// 阶段目录内的交接、产物、任务索引 tasks.md 与 todo.md/done.md,任务单元,以及
-// 轮内阶段索引 phases.md 与根 docs/phases.md 同款属活文档;排序保证扫描与日志输出确定。
+// 活文档范围(stable-refs §3.3): docs/**/*.md——阶段目录内的交接、产物、任务索引
+// tasks.md 与 todo.md/done.md,任务单元,以及轮内阶段索引 phases.md;排序保证扫描与
+// 日志输出确定。
 export async function activeDocs(dir: string): Promise<string[]> {
   const files: string[] = []
   for await (const file of new Bun.Glob(join("docs", "**", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
-    const segments = file.split(/[\\/]/)
-    if (segments[1] === "phases") continue
-    files.push(segments.join("/"))
+    files.push(file.split(/[\\/]/).join("/"))
   }
   return files.sort()
 }

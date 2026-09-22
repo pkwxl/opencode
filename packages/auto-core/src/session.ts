@@ -10,7 +10,7 @@ import { dirname, join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { attempt } from "./attempt"
-import { resolveTaskDoc, taskDoc } from "./docpaths"
+import { taskDoc } from "./docpaths"
 import { failbackOverride, setSticky, stickyModel } from "./failback"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
@@ -54,7 +54,7 @@ export async function ensureForkBase(
       }
       log(`↻ ${task.id} persistent digest base ${persistID} is stale; rebuilding from ${taskDoc(task.id, "context")}`)
     }
-    const digest = (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, "context"))).text().catch(() => "")).trim()
+    const digest = (await Bun.file(join(dir, taskDoc(task.id, "context"))).text().catch(() => "")).trim()
     if (digest) {
       const subject = `${task.id} ctxbase ${task.title}`
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject }

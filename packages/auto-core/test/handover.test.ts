@@ -94,36 +94,37 @@ describe("在途交接记录的读写", () => {
 
 describe("交接文档的完整判据(F1/F2)", () => {
   test("状态行", () => {
-    expect(handoffStatus("正文\n\n状态: 继续\n")).toBe("continue")
-    expect(handoffStatus("正文\n\n状态：完成")).toBe("done")
+    expect(handoffStatus("正文\n\nStatus: continue\n")).toBe("continue")
+    expect(handoffStatus("正文\n\nStatus：done")).toBe("done")
     expect(handoffStatus("正文,没有状态行")).toBeUndefined()
   })
 
-  test("English status line, case-insensitive; legacy Chinese still dual-read (M2.4)", () => {
+  test("English status line, case-insensitive; pre-flip Chinese no longer read (M3.7)", () => {
     expect(handoffStatus("body\n\nStatus: continue\n")).toBe("continue")
     expect(handoffStatus("body\nStatus: done")).toBe("done")
     expect(handoffStatus("body\nstatus:  DONE  \n")).toBe("done")
     expect(handoffStatus("body\nStatus: continue running\n")).toBeUndefined()
     expect(handoffStatus("write Status: continue at the end")).toBeUndefined()
-    expect(handoffStatus("状态: 继续")).toBe("continue")
+    expect(handoffStatus("状态: 继续")).toBeUndefined()
+    expect(handoffStatus("状态: 完成")).toBeUndefined()
   })
 
   test("状态行须整行锚定: 正文复述提示词字样不得命中(2026-09-17 审查 H3)", () => {
     // 句中出现状态字样(会话复述提示词指令的常见形态)
-    expect(handoffStatus("完成后请写出 状态: 继续 行")).toBeUndefined()
-    // 值带尾巴(如"继续执行剩余工作")不算有效状态行
-    expect(handoffStatus("正文\n状态: 继续执行剩余工作\n")).toBeUndefined()
+    expect(handoffStatus("完成后请写出 Status: continue 行")).toBeUndefined()
+    // 值带尾巴(如"continue with the rest")不算有效状态行
+    expect(handoffStatus("正文\nStatus: continue with the rest\n")).toBeUndefined()
     // 跨行不算(旧判据 \s 可吞换行)
-    expect(handoffStatus("状态:\n继续\n")).toBeUndefined()
+    expect(handoffStatus("Status:\ncontinue\n")).toBeUndefined()
     // 行内允许前后空白
-    expect(handoffStatus("正文\n  状态:  继续  \n")).toBe("continue")
+    expect(handoffStatus("正文\n  Status:  continue  \n")).toBe("continue")
     // Several matching lines: the last one wins (the protocol puts it last)
-    expect(handoffStatus("状态: 继续\n状态: 完成\n")).toBe("done")
+    expect(handoffStatus("Status: continue\nStatus: done\n")).toBe("done")
     expect(handoffStatus("## Step 2\nStatus: done\n\nnext steps…\n\nStatus: continue\n")).toBe("continue")
   })
 
   test("有状态行即完整;缺状态行但已落账同样完整;半截文件不完整", () => {
-    expect(handoffComplete("正文\n状态: 继续", false)).toBe(true)
+    expect(handoffComplete("正文\nStatus: continue", false)).toBe(true)
     // 已落账 = 提交那一刻文件是整的,缺行只是写于状态行约定之前
     expect(handoffComplete("状态行约定之前写的正文", true)).toBe(true)
     expect(handoffComplete("会话写到一半被打断", false)).toBe(false)
@@ -167,7 +168,7 @@ describe("handoverStage(文件状态 × 提交状态)", () => {
   })
 
   test("H2 文档写完但未归档 → commit", () => {
-    expect(handoverStage({ ...base, record, current: "正文\n状态: 继续" })).toBe("commit")
+    expect(handoverStage({ ...base, record, current: "正文\nStatus: continue" })).toBe("commit")
     // 已落账的历史格式文档(无状态行)同样算写完
     expect(handoverStage({ ...base, record, current: "老格式正文", currentCommitted: true })).toBe("commit")
   })

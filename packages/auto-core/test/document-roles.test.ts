@@ -16,39 +16,36 @@ import { freshRepo, git } from "./fixtures/runner"
 
 describe("roleOf", () => {
   const table: [string, string][] = [
-    ["PLAN.md", "driverState"],
     ["CURRENT.md", "driverState"],
-    ["docs/R-01/PLAN.md", "driverState"], // round-layout symlink target
-    ["docs/R-01/P03-implement/PLAN.md", "driverState"], // phase PLAN snapshot
     [".auto/progress.json", "driverState"],
     [".auto", "driverState"],
     ["opencode.json", "driverState"],
     [".opencode/auto/config.json", "driverState"],
     ["docs/R-01/phases.md", "ledger"], // phase index
-    ["docs/phases.md", "ledger"], // legacy root ledger
     ["docs/T-001/handoff.md", "handoff"],
     ["docs/T-001/S02/testhandoff-3.md", "handoff"],
-    ["docs/T-001.handoff.md", "handoff"], // legacy flat
-    ["docs/T-001-S2.testhandoff-1.md", "handoff"], // legacy flat archive
     ["docs/R-02/P02-design/handover.md", "handoff"], // phase handover
     ["docs/R-100/P12-custom-type/handover.md", "handoff"],
-    ["docs/handovers/R1-a-analysis.md", "handoff"], // legacy phase handover
-    ["docs/phases/m-migrate/handover.md", "handoff"], // pre-P2 placement
     ["docs/R-01/P05-acceptance/acceptance.md", "phaseAcceptance"],
     ["docs/R-01/P05-acceptance/acceptance-r2.md", "phaseAcceptance"],
-    ["docs/phase-docs/R1-d-design/acceptance.md", "phaseAcceptance"], // legacy layout
     ["docs/T-001/context.md", "artifact"],
     ["docs/T-001/S01/index.md", "artifact"],
     ["docs/T-001/S01/todo.md", "artifact"],
     ["docs/T-001/S01/done.md", "artifact"],
-    ["docs/T-001.context.md", "artifact"], // legacy flat
     ["docs/R-01/P01-analysis/todo.md", "artifact"], // phase state files
     ["docs/R-01/P01-analysis/done.md", "artifact"],
     ["docs/R-01/P06-knowledge/kb.md", "artifact"], // type-standard artifact
     ["docs/R-01/P01-analysis/survey.md", "artifact"], // free phase artifact
     ["docs/R-01/P01-analysis/sub/handover.md", "artifact"], // not the phase handover
-    ["docs/phases/round-2/m-migrate/notes.md", "artifact"],
-    ["docs/prior-kb/R1-prior-2026-09-07_01-02-03.md", "artifact"],
+    // Retired layouts have no shapes (M3.7): the paths are plain project files.
+    ["PLAN.md", "freeform"],
+    ["docs/phases.md", "freeform"],
+    ["docs/T-001.context.md", "freeform"],
+    ["docs/T-001.handoff.md", "freeform"],
+    ["docs/T-001-S2.testhandoff-1.md", "freeform"],
+    ["docs/handovers/R1-a-analysis.md", "freeform"],
+    ["docs/phase-docs/R1-d-design/acceptance.md", "freeform"],
+    ["docs/prior-kb/R1-prior-2026-09-07_01-02-03.md", "freeform"],
     ["README.md", "freeform"],
     ["docs/guide.md", "freeform"], // the project's own docs/
     ["docs/agents/build.md", "freeform"],
@@ -92,7 +89,7 @@ describe("roleOf", () => {
 
 describe("role-derived policies", () => {
   test("eofScanExempt follows the role policy", () => {
-    for (const rel of ["PLAN.md", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md"]) {
+    for (const rel of ["CURRENT.md", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md"]) {
       expect(eofScanExempt(rel), rel).toBe(true)
     }
     for (const rel of ["docs/T-001/S01/todo.md", "docs/T-001/report.md", "README.md"]) {
@@ -111,7 +108,7 @@ describe("role-derived policies", () => {
 
   test("p1Scope: deliverable files in, process documents and agent-contract surfaces out", () => {
     for (const rel of ["src/main.c", "README.md", "docs/guide.md", "test/build.sh", "docs/agents/build.md"]) expect(p1Scope(rel), rel).toBe(true)
-    for (const rel of ["docs/T-001/report.md", "PLAN.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md"]) {
+    for (const rel of ["docs/T-001/report.md", "CURRENT.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md"]) {
       expect(p1Scope(rel), rel).toBe(false)
     }
   })
@@ -125,17 +122,14 @@ describe("processReferenceScan", () => {
       new Map([
         ["src/a.c", lines("// see docs/T-003/S01/index.md for the layout")],
         ["src/b.c", lines("x", "/* per docs/R-02/P02-design/handover.md */")],
-        ["src/c.py", lines("# ledger in docs/phases/round-1/")],
-        ["README.md", lines("Progress lives in PLAN.md.")],
         ["tools/run.sh", lines('cat ./.auto/progress.json')],
       ]),
     )
-    expect(problems).toHaveLength(5)
+    expect(problems).toHaveLength(3)
     const a = problems.find((p) => p.startsWith("src/a.c"))
     expect(a).toContain('src/a.c:1 references "docs/T-003/S01/index.md"')
     expect(a).toContain("must not reference process documents")
     expect(problems.find((p) => p.startsWith("src/b.c"))).toContain('src/b.c:2 references "docs/R-02/P02-design/handover.md"')
-    expect(problems.find((p) => p.startsWith("README.md"))).toContain('README.md:1 references "PLAN.md"')
     expect(problems.find((p) => p.startsWith("tools/run.sh"))).toContain('".auto/progress.json"')
   })
 
@@ -144,7 +138,15 @@ describe("processReferenceScan", () => {
       new Map([
         [
           "src/a.c",
-          lines("see docs/guide.md", "mydocs/T-1 is unrelated", "x.auto/ is a build dir", "MYPLAN.md", "docs/Tutorial.md", "PLAN.mdx"),
+          lines(
+            "see docs/guide.md",
+            "mydocs/T-1 is unrelated",
+            "x.auto/ is a build dir",
+            "docs/Tutorial.md",
+            // Retired layouts (M3.7): a project's own PLAN.md or docs/phases/ is no process document.
+            "Progress lives in PLAN.md.",
+            "# notes in docs/phases/round-1/",
+          ),
         ],
       ]),
     )
@@ -155,7 +157,7 @@ describe("processReferenceScan", () => {
     const { problems } = processReferenceScan(
       new Map([
         ["docs/T-001/report.md", lines("see docs/T-001/S01/index.md")],
-        ["AGENTS.md", lines("Read PLAN.md first")],
+        ["AGENTS.md", lines("Read .auto/progress.json first")],
         [".opencode/auto/prompts/subtask.md", lines("read docs/{{taskId}}/context.md and docs/T-001/x")],
       ]),
     )

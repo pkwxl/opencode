@@ -80,9 +80,9 @@ describe("taskNumberFloor", () => {
       // 上一轮的任务索引同样覆盖;坏行不中断扫描
       await Bun.write(join(dir, "docs/R-02/P01-analysis/tasks.md"), "- [ ] bad line\n- [ ] T-015 下一轮任务\n")
       expect(await taskNumberFloor(dir)).toBe(16)
-      // docs 产物文件名(旧平铺,M3.7 前兼容)
-      await Bun.write(join(dir, "docs/phases/m-migrate/T-020.handoff.md"), "x\n")
-      expect(await taskNumberFloor(dir)).toBe(21)
+      // 旧平铺产物文件名不再占号(M3.7 退役)
+      await Bun.write(join(dir, "docs/T-020.handoff.md"), "x\n")
+      expect(await taskNumberFloor(dir)).toBe(16)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

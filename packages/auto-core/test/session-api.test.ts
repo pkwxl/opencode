@@ -117,14 +117,6 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_1"')
   })
 
-  test("digest 读回落: 新路径缺失而旧平铺 docs/T-001.context.md 存在 → 同样建立基点", async () => {
-    await Bun.write(join(dir, "docs", "T-001.context.md"), "## 相关文件与关键符号\n- a.ts\n")
-    const taskNoBase = await setupTask()
-    const { client } = fakeClient()
-    const base = await ensureForkBase(client, await reloadUnits(dir), taskNoBase, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_new_1", used: 0 })
-  })
-
   test("digest 持久基点存活(中断后重跑/子任务未竟再运行): 复用同一基点会话,不重建、字段不动", async () => {
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
     const taskPersisted = await setupTask("digest:ses_P")

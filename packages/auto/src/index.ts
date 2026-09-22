@@ -15,6 +15,7 @@ import {
   doneTypes,
   establishRound,
   formatPhases,
+  legacyLayoutProblem,
   nextRound,
   parsePhases,
   phaseIndexPath,
@@ -145,6 +146,18 @@ for (const key of RETIRED_FLAGS) {
   }
 }
 const directory = resolve(positional[0] ?? ".")
+
+// Legacy layout (M3.7, auto-core plans/0047 R3): an old-layout project is a
+// usage error before init/continue writes anything, status reads anything or
+// run starts (runAll repeats the check for other shells). reset and check stay
+// available so an old tree can still be de-initialized or inspected.
+if (command === "init" || command === "continue" || command === "status" || command === "run") {
+  const legacy = await legacyLayoutProblem(directory)
+  if (legacy) {
+    console.error(legacy)
+    process.exit(1)
+  }
+}
 
 if (command === "run") {
   // 已固化选项(设计文档 §C): 宪法级项目属性经 init 固化到
@@ -895,7 +908,7 @@ if (command === "reset") {
 }
 
 // 等命令执行权在 driver"原则)相违背的描述;②引用检查(stable-refs P4)——
-// 全量活文档(docs/**/*.md,排除 docs/phases/**)扫描失效引用(路径不存在 /
+// 全量活文档(docs/**/*.md)扫描失效引用(路径不存在 /
 // 行号超出文件总行数)。任一命中退出码 1,供人工修订。测试类检查是否启用由
 // checkPrinciple 依配置决定,testOn 仅用于调整报文措辞。
 if (command === "check") {

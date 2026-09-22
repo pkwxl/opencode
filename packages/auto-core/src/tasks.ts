@@ -28,7 +28,7 @@
 import { mkdir, rename, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { EOF_MARK } from "./doccheck"
-import { resolveTaskDoc } from "./docpaths"
+import { taskDoc } from "./docpaths"
 import { checkArtifactSpecs, taskTodoSpec } from "./document/spec"
 import { effectiveDone, scanSubtaskStates, subtaskId } from "./document/state"
 import {
@@ -119,7 +119,7 @@ export function countSubtasks(items: readonly ChecklistItem[] = []): { done: num
 // A task's checklist with effective done flags (files win once active) and
 // each subtask's declared dependencies.
 export async function readChecklist(dir: string, id: string): Promise<ChecklistItem[]> {
-  const text = await Bun.file(join(dir, await resolveTaskDoc(dir, id, "subtasks"))).text().catch(() => "")
+  const text = await Bun.file(join(dir, taskDoc(id, "subtasks"))).text().catch(() => "")
   const items = subtasks(text)
   if (!items.length) return items
   const done = effectiveDone(await scanSubtaskStates(dir, id, items.length), items)
@@ -143,7 +143,7 @@ export async function readChecklist(dir: string, id: string): Promise<ChecklistI
 // subtask close-out, inside its commit). Idempotent; a missing file or item is
 // left alone — the state files are the progress fact, the tick only a view.
 export async function tickSubtask(dir: string, id: string, index: number): Promise<void> {
-  const file = join(dir, await resolveTaskDoc(dir, id, "subtasks"))
+  const file = join(dir, taskDoc(id, "subtasks"))
   const text = await Bun.file(file).text().catch(() => undefined)
   if (text === undefined) return
   let at = 0

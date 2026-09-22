@@ -20,7 +20,7 @@ import type { Opts } from "../src/opts"
 import { reloadUnits, seedUnits } from "./fixtures/units"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
 
-const BODY = "调研并落盘记录 产出: docs/T-001/S01/record.md"
+const BODY = "调研并落盘记录 Artifacts: docs/T-001/S01/record.md"
 
 // 干净 git 仓库 + 已提交的任务单元(subtasks.md 含声明产出的检查项)与 README;tmp/ 与
 // .auto/ 按 loop-preflight 的 ensureGitignore 口径忽略,统计落盘不污染 clean 门禁。
@@ -86,22 +86,20 @@ describe("doccheck 纯函数(非平凡 + 末行终止符)", () => {
     expect(shapeCheckOn({}, baseline, true)).toBe(false)
   })
 
-  test("eofScanExempt: driver 状态文件(含轮次布局链接目标)/ .auto/ / 交接文档族豁免,普通文档不豁免", () => {
+  test("eofScanExempt: driver 状态文件 / 阶段索引 / .auto/ / 交接文档族豁免,普通文档不豁免", () => {
     for (const rel of [
-      "PLAN.md",
       "CURRENT.md",
-      "docs/R-01/PLAN.md", // 轮次专用目录布局下根 PLAN.md 的符号链接目标
+      "docs/R-01/phases.md",
       ".auto/state.md",
       "docs/T-001/handoff.md",
       "docs/T-001/testhandoff.md",
       "docs/T-001/testhandoff-2.md",
       "docs/T-001/S01/testhandoff.md",
-      "docs/T-001.testhandoff.md", // 旧平铺名
-      "docs/T-001-S2.testhandoff-3.md", // 旧平铺归档份
     ]) {
       expect(eofScanExempt(rel), rel).toBe(true)
     }
-    for (const rel of ["docs/T-001/report.md", "docs/T-001/S01/record.md", "README.md", "docs/notes.md"]) {
+    // Retired layouts carry no exemption any more (M3.7): PLAN.md and the old flat handoff names are plain files.
+    for (const rel of ["docs/T-001/report.md", "docs/T-001/S01/record.md", "README.md", "docs/notes.md", "PLAN.md", "docs/T-001.testhandoff.md"]) {
       expect(eofScanExempt(rel), rel).toBe(false)
     }
   })
@@ -196,7 +194,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
   })
 
   test("声明必填章节缺失 → 同环;补齐后勾选", async () => {
-    const body = "写记录 产出: docs/T-001/S01/record.md(背景、结论)"
+    const body = "写记录 Artifacts: docs/T-001/S01/record.md(背景、结论)"
     const dir = await shapeRepo(body)
     try {
       const { client, calls } = scriptedClient([
@@ -242,7 +240,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
   })
 
   test("修改型声明产物(已跟踪): 存在性恒真,但受 D6 全量扫描约束——改写后缺终止符 → 重提示补正 → 勾选", async () => {
-    const body = "更新说明 产出: README.md"
+    const body = "更新说明 Artifacts: README.md"
     const dir = await shapeRepo(body)
     try {
       const { client, calls } = scriptedClient([
@@ -409,9 +407,8 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
           // 豁免清单内的文件短且无终止符,不得触发形检
-          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# 交接\n\n状态: 继续\n")
+          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# 交接\n\nStatus: continue\n")
           await Bun.write(join(dir, "docs/T-001/testhandoff-1.md"), "# 测试交接归档\n")
-          await Bun.write(join(dir, "docs/R-01/PLAN.md"), "# 轮次台账\n")
         },
       ])
       const plan = await reloadUnits(dir)
@@ -517,13 +514,13 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
       const { client } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
-          await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n\nStatus is tracked in PLAN.md.\n")
+          await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n\nStatus is tracked in .auto/units.json.\n")
         },
       ])
       const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
-      expect((result as { question: string }).question).toContain('README.md:5 references "PLAN.md"')
+      expect((result as { question: string }).question).toContain('README.md:5 references ".auto/units.json"')
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })

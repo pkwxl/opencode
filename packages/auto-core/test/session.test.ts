@@ -452,7 +452,7 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
   const NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
 
   // 驱动一次完整的测试交接(--handover-test 顺序态): 上下文超限 + AI 请求测试(tmp/
-  // test.sh)→ 定版 + 收尾 steer → AI 写出交接文档(状态: 继续)→ 会话以 testHandover
+  // test.sh)→ 定版 + 收尾 steer → AI 写出交接文档(Status: continue)→ 会话以 testHandover
   // 收场。替 AI 落盘的两步写在事件流生成器里,与真实链路同一批事件驱动 watch。
   const handoverStream =
     (tmp: string, handoffFile: string) =>
@@ -475,7 +475,7 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
         yield msg("m_limit", 2000)
         await Bun.write(join(tmp, "test.sh"), "echo ok")
         yield { type: "session.idle", properties: { sessionID: sid } }
-        await Bun.write(handoffFile, "# 交接\n\n状态: 继续\n")
+        await Bun.write(handoffFile, "# 交接\n\nStatus: continue\n")
         yield msg("m_wrapup", 2100)
         yield { type: "session.idle", properties: { sessionID: sid } }
       })()

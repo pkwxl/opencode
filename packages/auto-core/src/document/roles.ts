@@ -10,9 +10,8 @@
 //     phase handover four sections) are checked here;
 //   - the P1 prohibition scan (process-refs.ts) targets exactly the paths
 //     whose role is not a process role (p1Scope).
-// Legacy flat-layout names classify like their directory-layout successors
-// (D4 compat read): docs/T-003.context.md is an artifact, docs/T-003.handoff.md
-// a handoff.
+// Legacy layouts have no shapes here (M3.7, plans/0047 R3): an old project is
+// a usage error before any path is classified.
 //
 // Standardization boundary. The driver's protocol markers constrain exactly
 // two kinds of file: the index and state files it parses (the phase and task
@@ -76,46 +75,35 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
 // guarded by the prompt contract alone.
 const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json"]
 
-// CURRENT.md classifies by file name. PLAN.md (retired in M3.4) keeps the role
-// until the legacy removal (M3.7), so an old-layout file is never mistaken for
-// an artifact.
-const DRIVER_STATE_NAMES = ["PLAN.md", "CURRENT.md"]
+// CURRENT.md classifies by file name.
+const DRIVER_STATE_NAMES = ["CURRENT.md"]
 
 // Read-only during a run (protect.ts). Every entry must classify as
 // driverState — asserted by test/document-roles.test.ts.
 export const PROTECTED_FILES = ["CURRENT.md", "opencode.json", ".opencode/auto/config.json"] as const
 
-// The session handoff family by file name: handoff.md, testhandoff.md, the
-// archived testhandoff-<n>.md and the old flat names <id>.handoff.md,
-// <id>(-S<n>).testhandoff(-<n>).md.
-const HANDOFF_NAME = /^(?:.+\.)?(?:test)?handoff(?:-\d+)?\.md$/
+// The session handoff family by file name: handoff.md, testhandoff.md and the
+// archived testhandoff-<n>.md.
+const HANDOFF_NAME = /^(?:test)?handoff(?:-\d+)?\.md$/
 
-// Phase index: docs/R-NN/phases.md (M3.3); the legacy root ledger
-// docs/phases.md classifies the same until the legacy removal (M3.7).
-const LEDGER = /^docs\/(?:R-\d+\/)?phases\.md$/
+// Phase index: docs/R-NN/phases.md (M3.3).
+const LEDGER = /^docs\/R-\d+\/phases\.md$/
 
 // A phase directory docs/R-NN/P<nn>-<type> (plans/0047 §4).
 const PHASE_DIR = "R-\\d+/P\\d{2,}-[a-z][a-z0-9-]*"
 
-// Phase handover distillations: docs/R-NN/P<nn>-<type>/handover.md; legacy
-// docs/handovers/R<N>-<letter>-<slug>.md and the pre-P2 placement inside the
-// legacy phase archive docs/phases/<letter>-<slug>/handover.md (M3.7).
-const PHASE_HANDOVER = new RegExp(`^docs/(?:${PHASE_DIR}/handover|handovers/[^/]+|phases/[a-z]-[^/]+/handover)\\.md$`)
+// Phase handover distillations: docs/R-NN/P<nn>-<type>/handover.md.
+const PHASE_HANDOVER = new RegExp(`^docs/${PHASE_DIR}/handover\\.md$`)
 
-// Phase acceptance records inside the phase directory (legacy
-// docs/phase-docs/R<N>-<letter>-<slug>/ until M3.7). `acceptance-r<n>.md` is
+// Phase acceptance records inside the phase directory. `acceptance-r<n>.md` is
 // accepted too, leaving per-iteration naming open to the gate without a role
 // change.
-const PHASE_ACCEPTANCE = new RegExp(
-  `^docs/(?:${PHASE_DIR}|phase-docs/R\\d+-[a-z]-[^/]+)/${PHASE_ACCEPTANCE_NAME.replace(".md", "")}(?:-r\\d+)?\\.md$`,
-)
+const PHASE_ACCEPTANCE = new RegExp(`^docs/${PHASE_DIR}/${PHASE_ACCEPTANCE_NAME.replace(".md", "")}(?:-r\\d+)?\\.md$`)
 
-// Everything else the tool keeps under docs/: task documents (directory and
-// legacy flat names; the task unit's todo.md / done.md included), round
-// directories (phase directories with their state files, task index tasks.md
-// and standard artifacts included), and the legacy phase archives,
-// handovers, free phase documents and knowledge-document directories.
-const PROCESS_DOCS = /^docs\/(?:T-[^/]+|R-\d+|phases|handovers|phase-docs|migration-kb|prior-kb)(?:\/|$)/
+// Everything else the tool keeps under docs/: task directories (the task
+// unit's todo.md / done.md included) and round directories (phase directories
+// with their state files, task index tasks.md and standard artifacts included).
+const PROCESS_DOCS = /^docs\/(?:T-\d+|R-\d+)(?:\/|$)/
 
 // The role of a path relative to the target directory. Pure: classification
 // is by path shape only, never by content or existence.
@@ -181,14 +169,13 @@ export function p1Scope(rel: string): boolean {
 // finished than sent back to rewrite a supposedly half-written file.
 export type HandoffStatus = "continue" | "done"
 
-// Dual-read (M2.4, plans/0035 D5): the English `Status: continue|done` is the
-// written form; the pre-flip `状态: 继续|完成` still parses because archived
-// handoff.md / testhandoff-<n>.md files are re-read on recovery. Both forms
-// normalize to the English value so no comparison site sees the old literals.
+// The last `Status: continue|done` line wins. The pre-flip `状态: 继续|完成`
+// spelling is no longer read (M3.7, root open question 17: legacy projects are
+// a usage error, and an old-spelling override template fails its marker check).
 export function handoffStatus(text: string): HandoffStatus | undefined {
-  const m = [...text.matchAll(/^[ \t]*(?:Status|状态)[:：][ \t]*(continue|done|继续|完成)[ \t]*$/gim)].at(-1)
+  const m = [...text.matchAll(/^[ \t]*Status[:：][ \t]*(continue|done)[ \t]*$/gim)].at(-1)
   if (!m) return undefined
-  return /^(?:continue|继续)$/i.test(m[1]!) ? "continue" : "done"
+  return m[1]!.toLowerCase() === "continue" ? "continue" : "done"
 }
 
 // The four mandatory sections of a phase handover (F.1 protocol): shared by

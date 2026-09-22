@@ -10,7 +10,7 @@ import type { AgentClient } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
-import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, taskDoc } from "./docpaths"
+import { taskDoc } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, handoffStatus } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
@@ -44,12 +44,8 @@ export async function executeWhole(
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const dir = opts.dir ?? plan.dir
   const strict = strictResumeActive(opts)
-  // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径 docs/<id>/handoff.md
-  // (提示词经 handoffFile 注入),读点优先新路径、旧平铺存在则回落——存量项目
-  // 中断恢复续跑不受改名影响。
   const planDir = plan.dir
-  const readHandoff = async (): Promise<string> =>
-    Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
+  const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
   // (见 usage.ts sessionHandoverDue);off 模式本就不构造。
   const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
@@ -118,7 +114,6 @@ export async function executeWhole(
     // 统一提交落账。
     if (opts.testByDriver) {
       await removeHandoffChain(planDir, taskDoc(task.id, "testhandoff"))
-      await removeHandoffChain(planDir, legacyTaskDoc(task.id, "testhandoff"))
     }
     const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
@@ -181,14 +176,12 @@ export async function ensureDecomposed(
   chain: SessionChain,
 ): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
   if (task.checklist?.length) return { type: "ok", task }
-  // 分解结果路径(目录化布局): 写目标恒为新路径;subtasks.md 读点经 resolveTaskDoc
-  // 回落旧平铺 docs/<id>.subtasks.md(存量项目中断恢复不受改名影响)。context.md 同。
   const dir = plan.dir
   const contextFile = join(dir, taskDoc(task.id, "context"))
   const sharedFile = join(dir, taskDoc(task.id, "shared"))
   const subtasksFile = join(dir, taskDoc(task.id, "subtasks"))
   const readDoc = async (role: "context" | "subtasks"): Promise<string> =>
-    (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, role))).text().catch(() => "")).trim()
+    (await Bun.file(join(dir, taskDoc(task.id, role))).text().catch(() => "")).trim()
   const readRaw = async (): Promise<string> => readDoc("subtasks")
   const existing = subtasks(await readRaw())
   if (existing.length) {
@@ -265,7 +258,7 @@ export async function ensureDecomposed(
 // plans/0034 D9): reported when the file has content but no parseable items.
 // Problem lines carry concrete paths and feed the retry feedback verbatim.
 async function decomposeArtifactProblems(dir: string, taskId: string): Promise<string[]> {
-  const raw = (await Bun.file(join(dir, await resolveTaskDoc(dir, taskId, "subtasks"))).text().catch(() => "")).trim()
+  const raw = (await Bun.file(join(dir, taskDoc(taskId, "subtasks"))).text().catch(() => "")).trim()
   const items = subtasks(raw)
   const { problems } = await checkArtifactSpecs(decomposeArtifactSpecs(taskId, items.length), { dir, policy: "mandatory" })
   if (raw && !items.length) problems.push(`${taskDoc(taskId, "subtasks")} has no checklist items`)
@@ -320,11 +313,8 @@ export async function runSubtask(
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
   // (见 usage.ts sessionHandoverDue);--handover-test 的测试交接是独立机制,不受影响。
   const steer = handoffSteer(autoSwitches().steer, cap, task)
-  // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径(提示词经 handoffFile
-  // 注入),读点优先新路径、旧平铺存在则回落。
   const planDir = plan.dir
-  const readHandoff = async (): Promise<string> =>
-    Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
+  const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
   // 子任务目录状态协议(M1.0,plans/0030 D8): done.md 已存在 = 本子任务已收口
   // (含中断恰好落在 rename 与统一提交之间的恢复盘面)——跳过会话直接进收口
   // (勾选 + 提交)。文件存在性是进度事实,不凭会话叙事。状态文件路径自 spec 数据
@@ -473,11 +463,9 @@ export async function runSubtask(
     }
   }
   // 子任务完成: 清除交接文档(ondemand 交接与测试交接,下一子任务重新起算——
-  // 测试交接按子任务命名,这里移除本子任务的文件),新旧两处一并清(driver 勾选后统一提交)。
+  // 测试交接按子任务命名,这里移除本子任务的文件;driver 勾选后统一提交)。
   await rm(join(planDir, handoffFile(task)), { force: true })
-  await rm(join(planDir, legacyTaskDoc(task.id, "handoff")), { force: true })
   await removeHandoffChain(planDir, testHandoffFile(task, index))
-  await removeHandoffChain(planDir, legacySubtaskTestHandoff(task.id, index))
   // 子任务目录状态协议收口(plans/0030 D7): DRIVER 在提交边界内把 todo.md 改名为
   // done.md——盘面文件存在性即进度事实;幂等(协议未激活无 todo.md、中断落在
   // rename 之后 done.md 已存在,均跳过)。

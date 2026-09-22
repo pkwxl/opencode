@@ -1,11 +1,11 @@
 import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentClient } from "./agent/types"
-import { legacyPriorKnowledgeDoc, priorKnowledgeDoc, roundDirName, TEMP_KB_NAME, tempPriorKnowledgeDoc } from "./docpaths"
+import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
 import { parsePhaseDir } from "./document/unit"
 import { changedFiles, commitPending, commitTree } from "./git"
 import { log } from "./log"
-import { currentRound, phaseArtifacts, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
+import { currentRound, phaseArtifacts, roundKnowledgeDocs, type PhaseUnit } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
@@ -14,19 +14,9 @@ import { afterSession } from "./unit-commit"
 // k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(plans/0002-fixme-knowledge-design.md
 // §D + plans/0006-phases-design.md P4): 各阶段完成后,旁路一次性会话把最终验证过的迁移
 // 经验蒸馏为结构化知识文档。产出为 knowledge 阶段目录内的类型标准产物
-// docs/R-NN/P<nn>-knowledge/kb.md(M3.3, plans/0047 §5;原轮内 migration-kb.md 与
-// 旧平铺 docs/migration-kb/ 不再写),落定不移动。提取失败不污染退出码——会话受阻或
+// docs/R-NN/P<nn>-knowledge/kb.md(M3.3, plans/0047 §5),落定不移动。提取失败不污染退出码——会话受阻或
 // 两次未产出仅返回 failed,由调用方打 ⚠ 警告后照常推进阶段交接(迁移成功不被文档
 // 生成失败反向污染)。
-
-// 旧布局知识文档目录(相对目标目录,永久;existingDistilledDocs 存量读回落,M3.7 退役)。
-const KB_DIR = join("docs", "migration-kb")
-
-// 时间戳(旧布局前置知识输出路径用;与 .auto/logs/run-<时间戳>.log 同款,log.ts
-// setLogFile 格式)。
-function timestamp(): string {
-  return new Date().toISOString().slice(0, 19).replace("T", "_").replaceAll(":", "-")
-}
 
 // 输出路径: 该 knowledge 阶段的标准产物(注册表 phaseArtifacts,阶段目录内 kb.md)。
 export function knowledgeFile(phase: PhaseUnit): string {
@@ -109,52 +99,25 @@ export async function extractKnowledge(
 
 // —— 前置知识提取(专用二次迁移工具,docs/specialized-tool-design.md §3)——
 
-// 旧布局前置知识文档目录(相对目标目录,永久;存量读回落): 已有迁移结果(不限于
-// 本工具此前的轮次)的蒸馏产物。新布局 = 轮内固定名 docs/R-NN/prior-kb.md——新轮
-// 轮目录恒空,前置知识必重新蒸馏(原"旧轮文档误判本轮已提取"缺陷结构性消除);
-// 与 k 阶段知识文档分离——各自的幂等检查只认本轮产物,前几轮产物不会被误认为
-// 本轮知识。
-const PRIOR_KB_DIR = join("docs", "prior-kb")
-
-// 输出路径(布局感知,与 knowledgeFile 同款): 新布局 = 轮内 docs/R-NN/prior-kb.md;
-// 旧布局 = docs/prior-kb/R<N>-prior-<时间戳>.md。
-export async function priorKnowledgeFile(dir: string, round: number): Promise<string> {
-  return (await roundRoot(dir, round)) ? priorKnowledgeDoc(round) : legacyPriorKnowledgeDoc(round, timestamp())
+// 输出路径: 轮内固定名 docs/R-NN/prior-kb.md——新轮轮目录恒空,前置知识必重新
+// 蒸馏;与 k 阶段知识文档分离,各自的幂等检查只认本轮产物。
+export function priorKnowledgeFile(round: number): string {
+  return priorKnowledgeDoc(round)
 }
 
-// 幂等检查(新布局轮内固定名 + 旧平铺"本轮前缀"守卫;另含新旧机制过渡回落):
-// 本轮阶段已推进(阶段索引已有完成阶段)而无本轮文档,说明本轮开工于前缀守卫
-// 引入之前——旧判据"目录非空即跳过"使旧机制轮次一直以无前缀存量续命、从未产出
-// 本轮 R 文档,严格按前缀判定会把每次中断重跑都拖回轮首重开提取会话,无法直接
-// 恢复断点。故已推进时回落接受无前缀非空文档(与第 1 轮读回落同款)。
-// 新一轮开工时阶段全未完成,不受回落影响,自然重新蒸馏。索引缺失/非法按未推进
-// 处理(严格失败属 readPhases 调用方职责)。
+// 幂等检查: 本轮 prior-kb.md 非空即已提取。
 export async function existingPriorKnowledge(dir: string, round: number): Promise<string | undefined> {
-  if (await roundRoot(dir, round)) {
-    const modern = priorKnowledgeDoc(round)
-    if ((await Bun.file(join(dir, modern)).text().catch(() => "")).trim()) return modern
-  }
-  const advanced =
-    round === 1 || (await readPhases(dir, round).then((state) => (state?.done.size ?? 0) > 0, () => false))
-  return existingRoundDoc(dir, PRIOR_KB_DIR, round, advanced)
+  const file = priorKnowledgeDoc(round)
+  return (await Bun.file(join(dir, file)).text().catch(() => "")).trim() ? file : undefined
 }
 
 // 已有蒸馏产物清单(extractPriorKnowledge 的引用化输入): 此前蒸馏的结论性文档
-// ——迁移知识(旧平铺 KB_DIR + 历轮 knowledge 阶段目录的 kb.md)、阶段交接(旧平铺
-// docs/handovers/ + 历轮各阶段目录的 handover.md)与历轮前置知识(旧平铺
-// PRIOR_KB_DIR + 历轮 docs/R-*/prior-kb.md,本轮的排除)。清单非空时提取会话被要求对已覆盖的
+// ——迁移知识(历轮 knowledge 阶段目录的 kb.md)、阶段交接(历轮各阶段目录的
+// handover.md)与历轮前置知识(历轮 docs/R-*/prior-kb.md,本轮的排除)。清单非空时提取会话被要求对已覆盖的
 // 知识点只引用不复述(引用目标同场可达: priorKnowledgeDigest 与 prevRoundDigest
 // 注入全文)。各目录缺失或仅空文件 → 空数组(模板条件段消失,行为同全量蒸馏)。
 export async function existingDistilledDocs(dir: string, round: number): Promise<string[]> {
   const found = new Set<string>()
-  for (const root of [KB_DIR, join("docs", "handovers"), PRIOR_KB_DIR]) {
-    for (const name of await readdir(join(dir, root)).catch(() => [] as string[])) {
-      if (!name.endsWith(".md") || name === TEMP_KB_NAME) continue
-      if (root === PRIOR_KB_DIR && name.startsWith(`R${round}-`)) continue
-      if (!(await Bun.file(join(dir, root, name)).text().catch(() => "")).trim()) continue
-      found.add(join(root, name))
-    }
-  }
   // 轮次专用目录: 历轮 docs/R-*/ 的前置知识、各阶段目录的交接与 knowledge 阶段知识文档。
   for (const entry of await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])) {
     const number = /^R-(\d+)$/.exec(entry.name)
@@ -170,22 +133,6 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
     }
   }
   return [...found].sort()
-}
-
-// 目录内本轮 R<round>- 前缀的非空 .md → 首个(字典序);allowLegacy 时再回落无
-// R 前缀的非空 .md(第 1 轮的 P2 前存量读回落,及 prior-kb 的旧机制轮次续跑,
-// 见 existingPriorKnowledge);空文件与非 .md 不算;temp-kb.md(提取中间产物,
-// 未收笔态)永远不算既有产物。
-async function existingRoundDoc(dir: string, root: string, round: number, allowLegacy: boolean): Promise<string | undefined> {
-  const names = await readdir(join(dir, root)).catch(() => [] as string[])
-  const prefix = `R${round}-`
-  const modern = names.filter((name) => name.startsWith(prefix)).sort()
-  const legacy = (allowLegacy ? names.filter((name) => !/^R\d+-/.test(name)) : []).sort()
-  for (const name of [...modern, ...legacy]) {
-    if (!name.endsWith(".md") || name === TEMP_KB_NAME) continue
-    if ((await Bun.file(join(dir, root, name)).text()).trim()) return join(root, name)
-  }
-  return undefined
 }
 
 // 前置知识提取编排(与 extractKnowledge 同一 requireArtifact 骨架)。
@@ -229,7 +176,7 @@ export async function extractPriorKnowledge(
     }
     return { type: "skipped", file: existing }
   }
-  const file = await priorKnowledgeFile(dir, round)
+  const file = priorKnowledgeFile(round)
   const temp = tempPriorKnowledgeDoc(file)
   // ④ 半途而废现场检测: 产物缺失 + 工作区脏 → 交人工清理,不主动动 git。
   if (opts.commit !== false) {
@@ -280,15 +227,11 @@ export function priorKnowledgeComplete(text: string): boolean {
 }
 
 // 前置知识摘要(注入本轮首个阶段规划会话与参数推断会话): 历轮前置知识按路径排序
-// 拼接全文——新布局历轮 docs/R-*/prior-kb.md + 旧平铺 docs/prior-kb/ 全部非空
-// 文档(双布局跨轮累积注入)。无产物 → undefined。
+// 拼接全文——历轮 docs/R-*/prior-kb.md 的非空文档(跨轮累积注入)。无产物 → undefined。
 export async function priorKnowledgeDigest(dir: string): Promise<string | undefined> {
   const files: string[] = []
   for (const entry of await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])) {
     if (entry.isDirectory() && /^R-\d+$/.test(entry.name)) files.push(join("docs", entry.name, "prior-kb.md"))
-  }
-  for (const name of await readdir(join(dir, PRIOR_KB_DIR)).catch(() => [] as string[])) {
-    if (name.endsWith(".md") && name !== TEMP_KB_NAME) files.push(join(PRIOR_KB_DIR, name))
   }
   const parts: string[] = []
   for (const file of files.sort()) {

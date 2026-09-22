@@ -298,43 +298,55 @@ export function formatPhases(state: Pick<PhaseState, "phases" | "done">): string
 
 // —— Rounds (plans/0006-phases-design.md §M; round-directory plan) ——
 
-// Pre-round-directory archive name (docs/phases/round-<N>/), still counted for
-// round numbering until the legacy removal (M3.7).
-const LEGACY_ROUND_RE = /^round-(\d+)$/
-
 // Round directory name docs/R-NN/: two-digit zero padding, natural carry;
 // created at round start.
 const ROUND_DIR_RE = /^R-(\d+)$/
 
+// Phase directory name P<nn>-<type> inside a round directory.
+const PHASE_DIR_RE = /^P\d{2,}-[a-z][a-z0-9-]*$/
+
 // Current round (derived, no persisted state): round directories are created
-// at round start, so with any R-NN present the current round is the highest
-// (no +1); without one, the legacy count (docs/phases/round-<N> max + 1)
-// applies — a brand-new project is round 1.
+// at round start, so the current round is the highest R-NN (no +1); a
+// brand-new project is round 1.
 export async function currentRound(dir: string): Promise<number> {
   const entries = await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])
-  let modern = 0
+  let max = 0
   for (const entry of entries) {
     const round = ROUND_DIR_RE.exec(entry.name)
-    if (round) modern = Math.max(modern, Number(round[1]))
-  }
-  if (modern > 0) return modern
-  const legacy = await readdir(join(dir, "docs", "phases"), { withFileTypes: true }).catch(() => [])
-  let max = 0
-  for (const entry of legacy) {
-    const round = LEGACY_ROUND_RE.exec(entry.name)
     if (round) max = Math.max(max, Number(round[1]))
   }
-  return max + 1
+  return Math.max(max, 1)
 }
 
-// Number of a new round (for round start): the current round + 1 when it is
-// taken (its R-NN directory exists, or a legacy root ledger is present),
-// otherwise the current derived value (a new project = 1).
+// Number of a new round (for round start): the current round + 1 when its
+// R-NN directory exists, otherwise the current derived value (a new project = 1).
 export async function nextRound(dir: string): Promise<number> {
   const round = await currentRound(dir)
-  if (await roundRoot(dir, round)) return round + 1
-  const occupied = await Bun.file(join(dir, "docs", "phases.md")).exists()
-  return occupied ? round + 1 : round
+  return (await roundRoot(dir, round)) ? round + 1 : round
+}
+
+// Legacy layout detection (M3.7, plans/0047 R3): old-layout projects are not
+// read — no compatibility read, no migration. Two shapes mark one:
+// - a root PLAN.md (every pre-M3.4 layout had one, file or symlink);
+// - a round directory docs/R-NN that holds entries but no P<nn>-<type>/
+//   phase directory (the letter layout's handovers/, phase-docs/, PLAN.md).
+// An empty round directory is not legacy: establishRound creates it right
+// before the phase directories, so a crash in between leaves exactly that.
+// Returns the usage-error message, or undefined for a new-layout (or empty)
+// project.
+export async function legacyLayoutProblem(dir: string): Promise<string | undefined> {
+  const found: string[] = []
+  if (await stat(join(dir, "PLAN.md")).then(() => true, () => false)) found.push("root PLAN.md")
+  const entries = await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !ROUND_DIR_RE.test(entry.name)) continue
+    const inner = await readdir(join(dir, "docs", entry.name), { withFileTypes: true }).catch(() => [])
+    if (inner.length && !inner.some((item) => item.isDirectory() && PHASE_DIR_RE.test(item.name))) {
+      found.push(`docs/${entry.name}/ without phase directories`)
+    }
+  }
+  if (!found.length) return undefined
+  return `legacy layout: start a new project (found ${found.join(", ")}; old-layout projects are not supported by this version — finish them on the auto-core release they started with)`
 }
 
 // A round's directory (repository-relative) when it exists.

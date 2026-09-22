@@ -12,6 +12,7 @@ import {
   doneTypes,
   establishRound,
   formatPhases,
+  legacyLayoutProblem,
   nextRound,
   parsePhases,
   phaseAcceptanceDoc,
@@ -355,15 +356,12 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     return await Bun.file(path).exists()
   }
 
-  test("currentRound: 全新 = 1;R 系目录最大号(无 +1);无 R 系回落旧语义 round-<N> + 1;混合自然续号", async () => {
+  test("currentRound: 全新 = 1;R 系目录最大号(无 +1);旧 docs/phases/round-<N> 不参与(M3.7)", async () => {
     const dir = tempDir()
     try {
       expect(await currentRound(dir)).toBe(1)
-      mkdirSync(join(dir, "docs/phases/round-1"), { recursive: true })
-      expect(await currentRound(dir)).toBe(2)
       mkdirSync(join(dir, "docs/phases/round-3"), { recursive: true })
-      expect(await currentRound(dir)).toBe(4)
-      // 混合项目: 旧 round-1..3 归档 + 新 R-04 → R 系优先,当前轮 = 4(无 +1)
+      expect(await currentRound(dir)).toBe(1)
       mkdirSync(join(dir, "docs/R-04"), { recursive: true })
       expect(await currentRound(dir)).toBe(4)
       mkdirSync(join(dir, "docs/R-07"), { recursive: true })
@@ -373,20 +371,55 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("nextRound: 轮次占用判定(R 系目录 / 旧布局根台账)→ 当前轮 + 1;皆无 = 当前推导值", async () => {
+  test("nextRound: 当前轮目录已建 → 当前轮 + 1;未建 = 当前推导值;旧根台账不算占用(M3.7)", async () => {
     const dir = tempDir()
     try {
       expect(await nextRound(dir)).toBe(1)
-      // 旧布局: round-1..4 归档(台账已随归档搬离)→ 第 5 轮
-      for (const n of [1, 2, 3, 4]) mkdirSync(join(dir, `docs/phases/round-${n}`), { recursive: true })
-      expect(await nextRound(dir)).toBe(5)
-      // 旧布局本轮已开工(根台账存在)→ 下一轮
-      writeFileSync(join(dir, "docs/phases.md"), "# 阶段台账\n\n- [done] a 分析 → docs/phases/a-analysis/\n")
-      expect(await currentRound(dir)).toBe(5)
-      expect(await nextRound(dir)).toBe(6)
-      // 新布局: R-06 已建 → 第 7 轮
+      mkdirSync(join(dir, "docs"), { recursive: true })
+      writeFileSync(join(dir, "docs/phases.md"), "# 阶段台账\n")
+      expect(await nextRound(dir)).toBe(1)
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      expect(await nextRound(dir)).toBe(2)
       mkdirSync(join(dir, "docs/R-06"), { recursive: true })
       expect(await nextRound(dir)).toBe(7)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("legacyLayoutProblem: 根 PLAN.md / 无阶段目录的 R-NN → 用法错误文案;新布局与空 R-NN(建轮崩溃窗口)不算(M3.7)", async () => {
+    const dir = tempDir()
+    try {
+      expect(await legacyLayoutProblem(dir)).toBeUndefined()
+      // 空轮次目录: establishRound 在 ① 与 ② 之间崩溃的窗口,续跑自愈
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      expect(await legacyLayoutProblem(dir)).toBeUndefined()
+      // 新布局: 轮次目录内有阶段目录
+      await establishRound(dir, { phases: "amk" })
+      expect(await legacyLayoutProblem(dir)).toBeUndefined()
+      // 旧轮次专用目录: 只有平铺文档、没有 P*-<type> 阶段目录
+      mkdirSync(join(dir, "docs/R-02"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-02/PLAN.md"), "# plan\n")
+      const round = await legacyLayoutProblem(dir)
+      expect(round).toStartWith("legacy layout: start a new project")
+      expect(round).toContain("docs/R-02/ without phase directories")
+      expect(round).not.toContain("R-01")
+      // 根 PLAN.md
+      writeFileSync(join(dir, "PLAN.md"), "# plan\n")
+      expect(await legacyLayoutProblem(dir)).toContain("found root PLAN.md, docs/R-02/")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("runAll 预检: 旧布局在任何读写之前即用法错误退出 1(外壳之外的入口同样拦截)", async () => {
+    const { readdirSync } = await import("node:fs")
+    const { runAll } = await import("../src/loop")
+    const dir = tempDir()
+    try {
+      writeFileSync(join(dir, "PLAN.md"), "# plan\n")
+      expect(await runAll(dir, {})).toBe(1)
+      expect(readdirSync(dir)).toEqual(["PLAN.md"])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

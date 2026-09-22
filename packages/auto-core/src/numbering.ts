@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { parseIndex } from "./document/unit"
 import { renderNumberRecovery } from "./prompt"
@@ -36,8 +36,8 @@ export async function writeNextTask(dir: string, n: number): Promise<void> {
 }
 
 // 已用编号的确定性下限: 扫描各轮各阶段的任务索引(docs/R-*/P*/tasks.md,M3.4)与
-// docs 任务文档(双布局: 目录化 docs/**/T-*/*.md 取路径段——任务单元的 todo.md/
-// done.md 即在其中;旧平铺 docs/**/T-*.md 取文件名,M3.7 前兼容),取最大编号 + 1;
+// 任务目录(docs/**/T-*/*.md 取路径段——任务单元的 todo.md/done.md 即在其中),
+// 取最大编号 + 1;
 // 无证据 = 1。只能看到现存文件——已被删除产物占用的编号需 AI 恢复会话查 git 历史补全。
 export async function taskNumberFloor(dir: string): Promise<number> {
   let max = 0
@@ -48,10 +48,6 @@ export async function taskNumberFloor(dir: string): Promise<number> {
   for await (const file of new Bun.Glob(join("docs", "R-*", "P*", "tasks.md")).scan({ cwd: dir, onlyFiles: true })) {
     const text = await Bun.file(join(dir, file)).text().catch(() => "")
     for (const entry of parseIndex(text, "task").entries) seen(entry.id)
-  }
-  // 旧平铺布局(兼容期): docs/**/T-*.md,取文件名的任务编号段。
-  for await (const file of new Bun.Glob(join("docs", "**", "T-*.md")).scan({ cwd: dir, onlyFiles: true })) {
-    seen(basename(file, ".md").split(".")[0]!)
   }
   // 目录化布局: docs/**/T-*/*.md,取首个 T-<纯数字> 路径段(T-F<k> 锚定段被
   // taskNumber 自然过滤)。

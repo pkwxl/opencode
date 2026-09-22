@@ -11,6 +11,7 @@ import { resumeBanner } from "./conclusion"
 import { beginUnit, changedFiles, commitTree } from "./git"
 import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
+import { legacyLayoutProblem } from "./phases"
 import { loadPhaseTypes } from "./phases/custom"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
@@ -94,6 +95,13 @@ export async function preflight(
   directory: string,
   opts: RunAllOpts,
 ): Promise<{ agentName: string; watcher?: { close(): void }; progress: { close(): void } } | { exit: number }> {
+  // Legacy layout (M3.7, plans/0047 R3): an old-layout project is a usage error
+  // before anything is read or written — no compatibility read, no migration.
+  const legacy = await legacyLayoutProblem(directory)
+  if (legacy) {
+    log(legacy)
+    return { exit: 1 }
+  }
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议敏感模板做关键
   // 内容校验,失败按用法错误退出)。之后 render* 同步渲染,无需再感知目录。
   // 意图包同点装载(M1.2): 目标目录 .opencode/auto/intents/ 覆盖/新增,非法

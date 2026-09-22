@@ -823,7 +823,7 @@ describe("测试交接: 定版 steer 投递成功即播种 resumeWrapup", () => 
           yield { type: "session.idle", properties: { sessionID: sid } }
           // 定版 + 收尾 steer 已发生;会话收尾写出交接文档后再次 idle。
           await mkdir(dirname(handoffPath), { recursive: true })
-          await writeFile(handoffPath, "# 交接\n\n状态: 继续\n")
+          await writeFile(handoffPath, "# 交接\n\nStatus: continue\n")
           yield msg(sid, `${sid}_m2`)
           yield { type: "session.idle", properties: { sessionID: sid } }
         })(),

@@ -95,7 +95,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     )
   ).join("\n\n")
   // 本轮首个规划会话的额外注入(本轮尚无完成阶段时): ① 前置知识(外壳启动时的已有
-  // 迁移结果蒸馏,docs/prior-kb/,见 src/knowledge.ts);② 上一轮结论(上一轮
+  // 迁移结果蒸馏,docs/R-NN/prior-kb.md,见 src/knowledge.ts);② 上一轮结论(上一轮
   // 轮次目录存在时,plans/0006-phases-design.md M 节)。后续阶段照常走 handovers 蒸馏链,
   // 不重复注入。
   let prevRound: string | undefined

@@ -7,7 +7,7 @@
 
 import { chmod, mkdir, readdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { archivedTestHandoff, latestHandoffSeq, legacyTaskDoc, taskDoc } from "./docpaths"
+import { archivedTestHandoff, latestHandoffSeq, taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
 import { peekHandover } from "./handover"
@@ -119,14 +119,11 @@ export async function restoreTestHandoffs(dir: string, task?: Task): Promise<voi
   }
 }
 
-// 交接文档归档: from(可能是旧平铺名,经 resolve 选出的实际读点)重命名为**新路径
-// 家族**的 testhandoff-<n>.md——与 docpaths 的"写目标恒为新路径、读点经 resolve
-// 选址"同一口径,归档份因此只有一族,编号接续只需扫新路径同目录。旧平铺项目的
-// 目标目录可能还不存在,先建。
-export async function archiveHandoff(dir: string, from: string, handoff: string, n: number): Promise<void> {
+// 交接文档归档: 当前份重命名为同目录的 testhandoff-<n>.md,编号接续只需扫同目录。
+export async function archiveHandoff(dir: string, handoff: string, n: number): Promise<void> {
   const target = join(dir, archivedTestHandoff(handoff, n))
   await mkdir(dirname(target), { recursive: true })
-  await rename(join(dir, from), target)
+  await rename(join(dir, handoff), target)
 }
 
 // 一份交接文档及其全部归档份(testhandoff.md + testhandoff-<n>.md)是否在盘。
@@ -159,31 +156,24 @@ export async function latestTestSeq(tmp: string): Promise<number> {
 }
 
 // 该任务的测试交接文档是否留有任一执行范围的遗留(任务级 docs/<id>/testhandoff.md
-// 或子任务级 docs/<id>/S<kk>/testhandoff.md;兼容期旧平铺 docs/<id>.testhandoff.md
-// 与 docs/<id>-S<n>.testhandoff.md 同样认定): 中断恢复判定用——文件在手说明中断前
+// 或子任务级 docs/<id>/S<kk>/testhandoff.md): 中断恢复判定用——文件在手说明中断前
 // 会话已写出交接,旧会话上下文已用满,不得复用(开新会话凭交接续跑)。
 export async function testHandoffExists(dir: string, task: Task): Promise<boolean> {
   // 当前份与归档份(testhandoff-<n>.md)同样认定: 归档只是 driver 收口时的重命名,
   // 交接这件事已经发生——本单元闭环前不得复用旧会话(单元完成时随 removeHandoffChain
   // 一并清除,陈旧归档不会永久否决复用)。
-  // 任务级: 目录化新路径与旧平铺两处。
   if (await handoffChainExists(dir, taskDoc(task.id, "testhandoff"))) return true
-  if (await handoffChainExists(dir, legacyTaskDoc(task.id, "testhandoff"))) return true
   // 子任务级: 任务目录内任意层级 testhandoff*.md(** 匹配零段,任务级同名文件已被
   // 上面覆盖,此处聚焦子任务目录;范围收窄到本任务)。
   for await (const _ of new Bun.Glob(join("docs", task.id, "**", "testhandoff*.md")).scan({ cwd: dir, onlyFiles: true })) {
     return true
-  }
-  // 兼容期旧平铺 docs/<id>-S<n>.testhandoff.md(含归档份)前缀扫描。
-  for (const name of await readdir(join(dir, "docs")).catch(() => [] as string[])) {
-    if (name.startsWith(`${task.id}-S`) && /\.testhandoff(-\d+)?\.md$/.test(name)) return true
   }
   return false
 }
 
 // 测试交接文档的陈旧清理(非恢复续跑): 任务级与全部子任务级一并移除——交接
 // 循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态,留给下一执行范围
-// 会被误读为续跑依据。目录化新布局与兼容期旧平铺两处同清。
+// 会被误读为续跑依据。
 //
 // 两道收窄(中断恢复 F4): ① 本任务有在途交接记录时整段跳过——那不是遗留,是
 // 被打断的在途状态,判定权在恢复状态机;② 只删**未被 git 跟踪**的份。已落账的
@@ -193,15 +183,8 @@ export async function testHandoffExists(dir: string, task: Task): Promise<boolea
 export async function cleanTestHandoffs(dir: string, task: Task): Promise<void> {
   if (await peekHandover(dir, task.id)) return
   await removeHandoffChain(dir, taskDoc(task.id, "testhandoff"), true)
-  await removeHandoffChain(dir, legacyTaskDoc(task.id, "testhandoff"), true)
   for await (const file of new Bun.Glob(join("docs", task.id, "S*", "testhandoff*.md")).scan({ cwd: dir, onlyFiles: true })) {
     await removeIfUntracked(dir, file)
-  }
-  const docs = join(dir, "docs")
-  for (const name of await readdir(docs).catch(() => [] as string[])) {
-    if (name.startsWith(`${task.id}-S`) && /\.testhandoff(-\d+)?\.md$/.test(name)) {
-      await removeIfUntracked(dir, join("docs", name))
-    }
   }
 }
 

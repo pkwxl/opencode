@@ -31,8 +31,7 @@ target.
 
 - The whole docs/ tree: the document artifacts of the existing migration; inside earlier rounds' directories docs/R-NN/, the
   phase handover documents (P<nn>-<type>/handover.md), the migration knowledge (P<nn>-knowledge/kb.md) and earlier rounds'
-  prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first (the R<N>- prefixed files of the
-  old flat layout docs/handovers/, docs/migration-kb/, docs/prior-kb/ are equally valid existing material); the task indexes
+  prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first; the task indexes
   tasks.md inside the phase directories only list the tasks — when you need detail, fetch it through the handover document's `## 产物索引` (artifact index) section;
 - The migrated code itself (the current state on the target side): check the final state against the documents; where documents
   and code disagree, the code wins, and note the discrepancy in the document;

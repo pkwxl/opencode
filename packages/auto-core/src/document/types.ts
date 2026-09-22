@@ -12,7 +12,7 @@
 // process/deliverable split) and the handoff role's protocol checks.
 
 // The role of a path in the target directory (classified by roles.ts roleOf):
-// - driverState:     driver-exclusive state (PLAN.md/CURRENT.md/.auto/*,
+// - driverState:     driver-exclusive state (CURRENT.md/.auto/*,
 //                    opencode.json, the project config); AI sessions must
 //                    never write these (read-only during a run, protect.ts).
 // - ledger:          the round's phase index phases.md (order and membership;
@@ -38,16 +38,9 @@ export type ArtifactSpec = {
   // Repository-relative path of the artifact (the canonical permanent
   // location; the write target is always this path).
   path: string
-  // Legacy flat-layout fallback read path (D4 compat read; consulted only
-  // when `path` does not exist). Absent = no fallback.
-  fallbackPath?: string
   // Section anchors the artifact must contain (heading strings or bare
   // words, matched as substrings of the content); absent = no anchor check.
   sectionAnchors?: string[]
-  // Pre-flip spellings still accepted for an anchor (M2.4 dual-read, plans/0035
-  // D5): canonical anchor → legacy alternates; an anchor is satisfied by
-  // either. Empty/absent = the canonical spelling only.
-  anchorAliases?: Record<string, string[]>
   // Human-readable name used in mandatory-artifact feedback (e.g.
   // "understanding digest"); absent = messages reference the path only.
   label?: string

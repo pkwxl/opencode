@@ -328,3 +328,24 @@ have no dual-read. The driver parses them in `src/phases/custom.ts`
 - the step resume record field `unit` (`progress.json`,
   `{kind: "step", step, unit: "R-NN.P<nn>"}`), which replaces `letter`. The
   old field is not read (plans/0047 §11 M3.6 gives the reason).
+
+## Amendment (2026-09-22, M3.7 / root plan open question 17 (a)): dual-read retired
+
+The dual-read layer is gone, ahead of the M4 close-out that D5 had named.
+With D14 ③ no old-layout document is read at all, so the layer served only
+project override templates that still carry the pre-flip spellings. The user
+ruled (a): such an override fails at startup as a usage error, which is
+explicit and never silent. Removed:
+
+- `状态: 继续|完成` in `handoffStatus` (`src/document/roles.ts`), which now
+  reads only `Status: continue|done`;
+- `产出:` in `declaredArtifacts` (`src/document/spec.ts`), which now reads
+  only `Artifacts:`;
+- `ArtifactSpec.anchorAliases` and `fallbackPath` (`src/document/types.ts`),
+  so `## 范围声明` / `## 产出清单` no longer satisfy `## Scope` /
+  `## Artifacts`;
+- `LEGACY_MARKERS` (`src/template.ts`). A tier-1 marker is now satisfied only
+  by its registered literal.
+
+The phase-face strings that flip in M3.8 get no dual-read either. They flip
+in lockstep, parser and templates in one commit.
