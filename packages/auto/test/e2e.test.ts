@@ -108,7 +108,7 @@ test.skipIf(!E2E)(
       expect(await Bun.file(join(dir, "docs/T-001/done.md")).exists()).toBe(true)
       // 蒸馏交接: handover.md 四小节齐备;阶段 done.md 推进。
       const handover = await Bun.file(join(dir, "docs/R-01/P02-acceptance/handover.md")).text()
-      for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
+      for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
         expect(handover).toContain(section)
       }
       expect(await Bun.file(join(dir, "docs/R-01/P02-acceptance/done.md")).exists()).toBe(true)
@@ -119,6 +119,121 @@ test.skipIf(!E2E)(
     }
   },
   { timeout: 600_000 },
+)
+
+// 自定义阶段类型端到端(M3.8): 项目自定义类型经完整 plan→execute→handover 跑通,
+// 证明阶段注册表化不只服务内置 admtvk——.opencode/auto/phases/<type>.md 声明的
+// 规划职责驱动阶段规划会话,任务照常执行,交接蒸馏同样产出四小节协议文档。
+test.skipIf(!E2E)(
+  "端到端: 自定义阶段类型的完整流水线(plan→execute→handover)",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-e2e-custom-phase-"))
+    try {
+      await mkdir(join(dir, ".opencode/auto/phases"), { recursive: true })
+      await Bun.write(
+        join(dir, ".opencode/auto/phases/security-review.md"),
+        "# Security review\n\n## plan duties\n\nPlan exactly one task: create a file security-review.md in the current\n" +
+          'directory containing the word "reviewed".\n',
+      )
+      await establishRound(dir, { phases: "security-review,implement" })
+      await Bun.write(
+        join(dir, "opencode.json"),
+        await Bun.file(templateConfig).text(),
+      )
+      await Bun.write(
+        join(dir, ".opencode/agent/auto.md"),
+        renderText(await Bun.file(templateAgent).text(), {}),
+      )
+
+      // P01-security-review has no pre-listed tasks.md: the phase-planning
+      // session must write both the task index and the task document itself.
+      expect(await runAll(dir, { phases: "security-review,implement" })).toBe(0)
+      expect(await Bun.file(join(dir, "docs/R-01/P01-security-review/tasks.md")).exists()).toBe(true)
+      expect((await Bun.file(join(dir, "security-review.md")).text())).toContain("reviewed")
+      const handover = await Bun.file(join(dir, "docs/R-01/P01-security-review/handover.md")).text()
+      for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
+        expect(handover).toContain(section)
+      }
+      expect(await Bun.file(join(dir, "docs/R-01/P01-security-review/done.md")).exists()).toBe(true)
+      // The second phase (builtin implement, still task-less at round start)
+      // gets planned and executed the same way, proving the custom and
+      // builtin types share one pipeline.
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/done.md")).exists()).toBe(true)
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P02 implement")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+  { timeout: 600_000 },
+)
+
+// 新布局三阶段端到端(M3.8): phases=adm 走满 P01-analysis/P02-design/P03-implement
+// 一整轮,证明单元布局(D14/0047)全链路成立——阶段轮内局部编号目录、tasks.md +
+// 任务永久平铺于 docs/T-NNN/todo.md(不嵌入阶段目录)、todo.md→done.md 改名随
+// driver 收口提交(工作区跑完后干净,不留手工提交动作)、轮次完成不设独立标记,
+// 由三个阶段目录各自的 done.md 存在性推出。
+test.skipIf(!E2E)(
+  "端到端: 新布局三阶段(phases=adm)——P01-P03、tasks.md/T-*/todo.md、改名随提交、由 done.md 推导轮次完成",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-e2e-adm-"))
+    try {
+      const git = async (...args: string[]) => {
+        const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "ignore", stderr: "ignore" })
+        expect(await proc.exited).toBe(0)
+      }
+      await git("init")
+
+      await establishRound(dir, { phases: "adm" })
+      await listTasks(dir, "docs/R-01/P01-analysis", "R-01.P01", [
+        ["T-001", "勘察产出", '在当前目录创建 analysis.md,内容为 "surveyed"。'],
+      ])
+      await listTasks(dir, "docs/R-01/P02-design", "R-01.P02", [
+        ["T-002", "设计产出", '在当前目录创建 design.md,内容为 "designed"。'],
+      ])
+      await listTasks(dir, "docs/R-01/P03-implement", "R-01.P03", [
+        ["T-003", "实现产出", '在当前目录创建 implement.md,内容为 "implemented"。'],
+      ])
+      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
+      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(await Bun.file(templateAgent).text(), {}))
+      // 建轮脚手架一次性提交为基线,使首个执行单元启动时工作区 clean
+      // (0021 P3 启动门禁,非 git 目录的既有用例不受此约束,这里特意起了 git 仓库来验)。
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "round baseline")
+
+      expect(await runAll(dir, { phases: "adm" })).toBe(0)
+
+      // 阶段轮内局部编号目录 + 该阶段自己的 tasks.md;任务内容永久平铺于
+      // docs/T-NNN/,不嵌进阶段目录。
+      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("- [x] T-001")
+      expect(await Bun.file(join(dir, "docs/R-01/P02-design/tasks.md")).text()).toContain("- [x] T-002")
+      expect(await Bun.file(join(dir, "docs/R-01/P03-implement/tasks.md")).text()).toContain("- [x] T-003")
+      for (const id of ["T-001", "T-002", "T-003"]) {
+        expect(await Bun.file(join(dir, "docs", id, "done.md")).exists()).toBe(true)
+        expect(await Bun.file(join(dir, "docs", id, "todo.md")).exists()).toBe(false)
+      }
+      expect(await Bun.file(join(dir, "analysis.md")).text()).toContain("surveyed")
+      expect(await Bun.file(join(dir, "design.md")).text()).toContain("designed")
+      expect(await Bun.file(join(dir, "implement.md")).text()).toContain("implemented")
+
+      // 改名随提交: 全程跑完后工作区干净,todo→done 的改名没有留手工提交步骤。
+      const status = Bun.spawn(["git", "-C", dir, "status", "--porcelain"], { stdout: "pipe" })
+      expect((await new Response(status.stdout).text()).trim()).toBe("")
+      expect(await status.exited).toBe(0)
+
+      // 轮次完成不设独立标记,由三个阶段目录各自的 done.md 推导。
+      for (const phaseDir of ["P01-analysis", "P02-design", "P03-implement"]) {
+        expect(await Bun.file(join(dir, "docs/R-01", phaseDir, "done.md")).exists()).toBe(true)
+        expect(await Bun.file(join(dir, "docs/R-01", phaseDir, "todo.md")).exists()).toBe(false)
+      }
+      const phasesIndex = await Bun.file(join(dir, "docs/R-01/phases.md")).text()
+      expect(phasesIndex).toContain("- [x] P01 analysis")
+      expect(phasesIndex).toContain("- [x] P02 design")
+      expect(phasesIndex).toContain("- [x] P03 implement")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+  { timeout: 900_000 },
 )
 
 // CLI 解析用例不需要 opencode 与 provider 凭证,始终运行: 以子进程运行源码入口,
@@ -627,7 +742,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
       expect(init.out).toContain("phases admtvk")
-      expect(init.out).toContain("to start analysis (分析) phase planning")
+      expect(init.out).toContain("to start analysis (Analysis) phase planning")
       expect(init.out).not.toContain("list tasks in")
       // --amend 无 --phases 保留既有值;显式给值可改
       expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
@@ -657,7 +772,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       // 下一阶段提示 m(迁移实现)
       const ok = await runCli(["init", dir, "--phases", "admtk"])
       expect(ok.code).toBe(0)
-      expect(ok.out).toContain("to start implement (迁移实现) phase planning")
+      expect(ok.out).toContain("to start implement (Implementation) phase planning")
       expect((await runCli(["status", dir])).out).toContain("  [✓] P01-analysis\n  [✓] P02-design\n  [▶] P03-implement\n  [ ] P04-test\n  [ ] P05-knowledge\n")
       expect(await stat(join(dir, "docs/R-01/P05-acceptance")).catch(() => undefined)).toBeUndefined()
       // 护栏判的是本次生效值,不是"是否显式给出": 无参 init 全量覆盖会把 phases
@@ -695,7 +810,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const init = await runCli(["init", dir, "--phases", "analysis, security-review ,implement,security-review"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "analysis,security-review,implement,security-review" })
-      expect(init.out).toContain("to start analysis (分析) phase planning")
+      expect(init.out).toContain("to start analysis (Analysis) phase planning")
       expect((await runCli(["status", dir])).out).toContain(
         "  [▶] P01-analysis\n  [ ] P02-security-review\n  [ ] P03-implement\n  [ ] P04-security-review\n",
       )
@@ -786,7 +901,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       // 阶段化流程下结束语引导开始首个阶段规划
       const staged = await runCli(["init", dir, "--phases", "am", "-p", "意图"])
       expect(staged.out).toContain("brief recorded")
-      expect(staged.out).toContain("to start analysis (分析) phase planning")
+      expect(staged.out).toContain("to start analysis (Analysis) phase planning")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1069,7 +1184,7 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       await completeLetters(dir, ["m"])
       const index = await Bun.file(join(dir, "docs/R-01/phases.md")).text()
       await Bun.write(join(dir, "docs/R-01/phases.md"), index + "- [x] P03 knowledge\n")
-      await Bun.write(join(dir, "docs/R-01/P03-knowledge/done.md"), "# R-01.P03: 知识提炼\n")
+      await Bun.write(join(dir, "docs/R-01/P03-knowledge/done.md"), "# R-01.P03: Knowledge distillation\n")
       const outside = await runCli(["continue", dir])
       expect(outside.code).toBe(1)
       expect(outside.err).toContain("records completed phases outside phases (am): k")
@@ -1100,7 +1215,7 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       expect(cont.code).toBe(0)
       expect(cont.out).toContain("✓ round directory: docs/R-02/")
       expect(cont.out).toContain("round 2 of the migration started")
-      expect(cont.out).toContain("to start analysis (分析) phase planning")
+      expect(cont.out).toContain("to start analysis (Analysis) phase planning")
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk", contextLimit: 128 })
       // 上一轮轮次目录原样保留(绝不搬移/删除): 阶段索引、阶段目录与任务索引均在 R-01 内
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis")
@@ -1139,7 +1254,7 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       const cont = await runCli(["continue", dir])
       expect(cont.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "am" })
-      expect(cont.out).toContain("to start analysis (分析) phase planning")
+      expect(cont.out).toContain("to start analysis (Analysis) phase planning")
       // run 启动横幅的阶段进度行带轮次标注(删除 agent 契约文件使 run 在 server 前退出)
       await rm(join(dir, ".opencode/agent/auto.md"))
       const banner = await runCli(["run", dir])
@@ -1163,7 +1278,7 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
       await Bun.write(join(dir, "docs/T-001/todo.md"), ["# T-001: 任务", "实现功能。", ""].join("\n"))
       await Bun.write(
         join(dir, "docs/T-001/report.md"),
-        ["正常引用 `docs/T-001/todo.md`。", "失效引用 `src/gone.ts`。", "已删除 的 `docs/old.md` 豁免。"].join("\n"),
+        ["正常引用 `docs/T-001/todo.md`。", "失效引用 `src/gone.ts`。", "deleted 的 `docs/old.md` 豁免。"].join("\n"),
       )
       const check = await runCli(["check", dir], REFCHECK_ON)
       expect(check.code).toBe(1)

@@ -934,7 +934,7 @@ if (command === "check") {
             `${testOn ? "; write compile/test/build/lint commands as scripts in test/ for the driver to run" : ""})`,
         ]
       : []),
-    ...(refs.length ? [`${refs.length} stale reference(s) (update to current paths, or exempt with the inline markers 已删除/已归档/历史)`] : []),
+    ...(refs.length ? [`${refs.length} stale reference(s) (update to current paths, or exempt with the inline markers deleted/archived/historical)`] : []),
   ]
   console.log(`found ${summary.join(" and ")}`)
   process.exit(1)
