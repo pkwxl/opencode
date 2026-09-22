@@ -23,6 +23,16 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
     expect(unitReruns({ kind: "subtasks", index: 9 }, ctx())).toBe(false)
   })
 
+  test("subtasks (M3.5): ownership follows the dependency order, not the first unticked item", () => {
+    const items = [
+      { text: "one", done: true },
+      { text: "two", done: false, depends: ["S03"] },
+      { text: "three", done: false, depends: "none" as const },
+    ]
+    expect(unitReruns({ kind: "subtasks", index: 3 }, ctx({ items }))).toBe(true)
+    expect(unitReruns({ kind: "subtasks", index: 2 }, ctx({ items }))).toBe(false)
+  })
+
   test("decompose(合并理解与分解单元,M1.0): 检查项已注入或 subtasks.md 已有检查项使单元幂等跳过 → 不复用", () => {
     // 检查项未注入且 subtasks.md 无检查项 → 合并单元将重跑,允许复用(fork 开关无关)
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [] }))).toBe(true)

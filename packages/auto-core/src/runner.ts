@@ -7,7 +7,7 @@ import { resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-co
 import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
-import { scanSubtaskStates } from "./document/state"
+import { checklistProblems, nextChecklistIndex, scanSubtaskStates } from "./document/state"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies } from "./failback"
 import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
@@ -359,7 +359,17 @@ export async function runTask(
                 .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
           }
         }
-        const index = items.findIndex((item) => !item.done)
+        // Dependency order (M3.5, plans/0047 G5): the next ready subtask by the
+        // `Depends:` fields of the S<nn>/todo.md files (none = the first
+        // unticked item); a bad graph blocks for a human fix.
+        const graph = checklistProblems(items)
+        if (graph.length) {
+          return {
+            type: "blocked",
+            question: `${task.id} subtask dependencies are invalid (${graph.join("; ")}). Fix the \`Depends:\` lines in docs/${task.id}/S<nn>/todo.md manually and re-run.`,
+          }
+        }
+        const index = nextChecklistIndex(items)
         if (index === -1) break
         // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘,恢复时
         // 经单元归属门禁(unitReruns)仅当该子任务将重跑才复用其会话。

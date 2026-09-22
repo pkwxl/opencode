@@ -52,6 +52,11 @@ This session completes the task-background understanding and the subtask decompo
    containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.
    ## Scope (what this subtask does and does not do)
    ## Artifacts (the path list, matching the checklist item's `Artifacts:` declaration)
+   Optional dependency fields, placed as the first lines of a subtask's todo.md (before `## Scope`): `Depends: S01, S03` means the subtask
+   starts only after the listed subtasks of this task are done — item N of the checklist is S<two-digit N>; without the field a subtask depends
+   on the item before it (serial order), and `Depends: none` declares a subtask with no prerequisite. `Touches: <repository-relative paths>`
+   lists what it will change (no absolute paths, no `..`). Both field names are protocol strings the DRIVER parses — write them verbatim; an
+   empty value, a subtask depending on itself and a dependency cycle are rejected.
 
 Cross-task reference discipline (this file will serve as the background/navigation source for downstream subtask sessions; once a previous task's
 completion narrative flows in through a reference, a downstream session misreads it as a sign that this task is already done):

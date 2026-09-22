@@ -135,6 +135,8 @@ const lacksMarker = (content: string) => (marker: string) =>
 const PARTIAL_MARKERS: Record<string, string[]> = {
   "eof-rule": ["<!-- auto: eof -->"],
   "state-rule": ["CURRENT.md"],
+  "task-depends": ["Depends:", "Depends: none", "Touches:"],
+  "subtask-depends": ["Depends:", "Depends: none", "Touches:"],
   "question-rule": ["question tool", "AUTO-RESOLVE", "AUTO-DECISION"],
 }
 

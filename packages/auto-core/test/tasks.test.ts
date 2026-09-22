@@ -10,6 +10,7 @@ import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
 import {
   begin,
   block,
+  doneTaskIds,
   countSubtasks,
   loadPlan,
   markDone,
@@ -116,6 +117,54 @@ describe("loadPlan", () => {
   })
 })
 
+describe("dependencies (M3.5)", () => {
+  const withFields = async (id: string, fields: string) => {
+    const file = join(dir, "docs", id, "todo.md")
+    const text = await Bun.file(file).text()
+    const stripped = text.replace(/^(Depends|Touches):.*\n/gm, "")
+    await Bun.write(file, stripped.replace("Phase: R-01.P01\n", `Phase: R-01.P01\n${fields}\n`))
+  }
+  const THREE = "## T-001: a [pending]\nA.\n\n## T-002: b [pending]\nB.\n\n## T-003: c [pending]\nC.\n"
+
+  test("without Depends the order is the index order", async () => {
+    expect(next(await seedUnits(dir, THREE))!.id).toBe("T-001")
+  })
+
+  test("Depends reorders selection; Touches is read", async () => {
+    await seedUnits(dir, THREE)
+    await withFields("T-001", "Depends: T-003")
+    await withFields("T-003", "Depends: none\nTouches: src/c.ts")
+    const plan = await loadPlan(dir, phase)
+    expect(plan.tasks[2]).toMatchObject({ depends: "none", touches: ["src/c.ts"] })
+    expect(next(plan)!.id).toBe("T-003")
+  })
+
+  test("a completed task of another phase may be named; an unknown or cyclic dependency makes the index invalid", async () => {
+    await seedUnits(dir, THREE)
+    await mkdir(join(dir, "docs/T-000"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-000/done.md"), "# T-000: earlier\n")
+    expect([...(await doneTaskIds(dir))]).toEqual(["T-000"])
+    await withFields("T-001", "Depends: T-000")
+    expect(next(await loadPlan(dir, phase))!.id).toBe("T-001")
+    await withFields("T-002", "Depends: T-009")
+    await expect(loadPlan(dir, phase)).rejects.toThrow("T-002 depends on unknown T-009")
+    await withFields("T-002", "Depends: T-003")
+    await expect(loadPlan(dir, phase)).rejects.toThrow("dependency cycle")
+  })
+
+  test("the subtask checklist carries each S<nn>/todo.md's Depends", async () => {
+    await seedUnits(dir, SAMPLE)
+    await mkdir(join(dir, "docs/T-003/S01"), { recursive: true })
+    await mkdir(join(dir, "docs/T-003/S02"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-003/S01/done.md"), "## Scope\n")
+    await Bun.write(join(dir, "docs/T-003/S02/todo.md"), "Depends: none\nTouches: src/auth/\n\n## Scope\n")
+    expect(await readChecklist(dir, "T-003")).toEqual([
+      { text: "路由", done: true },
+      { text: "鉴权", done: false, depends: "none", touches: ["src/auth/"] },
+    ])
+  })
+})
+
 describe("runtime state (.auto/units.json)", () => {
   test("begin sets in_progress and counts attempts; resetInProgress clears only the status", async () => {
     await seedUnits(dir, SAMPLE)
@@ -193,6 +242,17 @@ describe("planning output", () => {
     expect(problems.some((p) => p.includes("docs/T-001/todo.md") && p.includes("## Scope"))).toBe(true)
     expect(problems.some((p) => p.includes("docs/T-002/todo.md must carry the field line `Phase: R-01.P01`"))).toBe(true)
     expect(problems.some((p) => p.startsWith("T-003 is already used"))).toBe(true)
+  })
+
+  test("reports dependency problems among the planned tasks", async () => {
+    await Bun.write(join(dir, phase.dir, "tasks.md"), renderTaskIndex("R-01.P01", [{ id: "T-001", title: "a" }, { id: "T-002", title: "b" }]))
+    await writeTask("T-001", { depends: "T-002" })
+    await writeTask("T-002", { depends: "", touches: "/etc/x" })
+    const { problems } = await plannedTaskProblems(dir, phase, { before: new Set() })
+    expect(problems).toContain("docs/R-01/P01-implement/tasks.md: T-002 has an empty Depends value (write `Depends: none` for no prerequisite)")
+    expect(problems.some((p) => p.includes("touches an absolute path: /etc/x"))).toBe(true)
+    await writeTask("T-002", { depends: "T-001" })
+    expect((await plannedTaskProblems(dir, phase, { before: new Set() })).problems.some((p) => p.includes("dependency cycle: T-001 -> T-002 -> T-001"))).toBe(true)
   })
 
   test("the numbering start rejects lower ids", async () => {

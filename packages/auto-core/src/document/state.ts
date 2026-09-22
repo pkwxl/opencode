@@ -30,9 +30,44 @@
 // Since M3.1 (plans/0047) the scan and the rename are the subtask level of the
 // unified unit model (document/unit.ts scanUnitStates / renameUnitDone); this
 // module keeps the subtask-specific activation rule and checklist merge.
-import { renameUnitDone, scanUnitStates, type UnitRef } from "./unit"
+//
+// Dependencies (M3.5, plans/0047 §7): a subtask's id is its position — item n
+// of subtasks.md is S<nn> (the decompose template's established mapping), so
+// the checklist lines carry no ids. Its `Depends:` / `Touches:` fields sit at
+// the top of S<nn>/todo.md (a subtask scope file has no title line), and
+// selection is nextReady over the positional ids; without fields the default
+// serial order is the old "first unticked item".
+import { nextReady, renameUnitDone, scanUnitStates, unitProblems, type UnitDecl, type UnitRef } from "./unit"
 
 export type SubtaskState = { index: number; todo: boolean; done: boolean }
+
+// Positional subtask id of the 1-based item n: S01, S02, …
+export const subtaskId = (n: number): string => `S${String(n).padStart(2, "0")}`
+
+// A checklist item as dependency selection sees it.
+export type DeclaredItem = { done: boolean; depends?: string[] | "none"; touches?: string[] }
+
+const checklistDecls = (items: readonly DeclaredItem[]): UnitDecl[] =>
+  items.map((item, i) => ({
+    id: subtaskId(i + 1),
+    ...(item.depends !== undefined ? { depends: item.depends } : {}),
+    ...(item.touches !== undefined ? { touches: item.touches } : {}),
+  }))
+
+// 0-based index of the next subtask to run (nextReady over the positional
+// ids); -1 = nothing ready (all done, or a dependency problem that
+// checklistProblems reports).
+export function nextChecklistIndex(items: readonly DeclaredItem[]): number {
+  const done = new Set(items.flatMap((item, i) => (item.done ? [subtaskId(i + 1)] : [])))
+  const id = nextReady(checklistDecls(items), done)
+  return id === undefined ? -1 : Number(id.slice(1)) - 1
+}
+
+// Dependency problems of a task's subtasks (G4, subtask scope: S<nn> within
+// the task only).
+export function checklistProblems(items: readonly DeclaredItem[]): string[] {
+  return unitProblems("subtask", checklistDecls(items))
+}
 
 export type SubtaskStateScan = {
   // true once any state file exists for the task's subtask range.
@@ -42,7 +77,7 @@ export type SubtaskStateScan = {
   illegal: { index: number; kind: "both" | "neither" }[]
 }
 
-const subtaskRef = (taskId: string, k: number): UnitRef => ({ level: "subtask", id: `S${String(k).padStart(2, "0")}`, task: taskId })
+const subtaskRef = (taskId: string, k: number): UnitRef => ({ level: "subtask", id: subtaskId(k), task: taskId })
 
 // Scans docs/T-NNN/S<nn>/ for k = 1..count and classifies each subtask.
 export async function scanSubtaskStates(dir: string, taskId: string, count: number): Promise<SubtaskStateScan> {

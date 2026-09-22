@@ -14,12 +14,12 @@ import { legacySubtaskTestHandoff, legacyTaskDoc, resolveTaskDoc, taskDoc } from
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, handoffStatus } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
-import { renameTodoToDone } from "./document/state"
+import { checklistProblems, renameTodoToDone } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { beginUnit, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
-import { reloadTask, setForkBase, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
+import { readChecklist, reloadTask, setForkBase, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
 import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
@@ -269,6 +269,11 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
   const items = subtasks(raw)
   const { problems } = await checkArtifactSpecs(decomposeArtifactSpecs(taskId, items.length), { dir, policy: "mandatory" })
   if (raw && !items.length) problems.push(`${taskDoc(taskId, "subtasks")} has no checklist items`)
+  // Subtask dependency graph (M3.5, plans/0047 G6): the `Depends:` / `Touches:`
+  // fields at the top of the S<nn>/todo.md files, S<nn> = checklist item n.
+  if (items.length) {
+    for (const problem of checklistProblems(await readChecklist(dir, taskId))) problems.push(`docs/${taskId}/S<nn>/todo.md: ${problem}`)
+  }
   return problems
 }
 

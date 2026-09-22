@@ -2,6 +2,7 @@
 // (决定能否复用其会话),以及阶段描述 / 恢复说明 / CURRENT.md 中断备注三类
 // 面向人与 AI 的文案渲染。只依赖类型与开关,不依赖会话驱动层。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S4,纯搬运)。
+import { nextChecklistIndex, type DeclaredItem } from "./document/state"
 import type { Outcome } from "./opts"
 import type { Phase } from "./resume"
 import { shellProfile } from "./shell"
@@ -19,7 +20,7 @@ export type UnitRerunCtx = {
   fork: boolean
   // 当前检查项(subtasks.md);子任务目录状态协议激活时
   // done 旗标已被调用方按 done.md 存在性覆盖(文件存在性即进度事实,plans/0030 D10)
-  items: { text: string; done: boolean }[]
+  items: (DeclaredItem & { text: string })[]
   // subtasks.md 已有检查项(合并理解与分解单元将幂等直注,不重开会话)
   subtasksFileItems: number
   // 收尾单元本轮是否会跑(配置已计入)
@@ -27,7 +28,9 @@ export type UnitRerunCtx = {
 }
 
 export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean {
-  const firstUnticked = ctx.items.findIndex((item) => !item.done)
+  // The subtask the loop would run next (dependency order, M3.5; without
+  // `Depends:` fields the first unticked item).
+  const firstUnticked = nextChecklistIndex(ctx.items)
   // 序号归属: 记录的检查项恰为当前首个未勾选项 = 该单元将重跑
   const atItem = (index: number | undefined) => index !== undefined && firstUnticked === index - 1
   switch (phase?.kind) {

@@ -25,7 +25,20 @@
 import { mkdir, readdir, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { PHASE_ACCEPTANCE_NAME, roundDir, roundDirName } from "./docpaths"
-import { nextReady, parseIndex, parsePhaseDir, renameUnitDone, scanUnitStates, UNIT_PENDING, unitDir, type UnitRef } from "./document/unit"
+import {
+  nextReady,
+  parseIndex,
+  parsePhaseDir,
+  parseUnitDoc,
+  renameUnitDone,
+  scanUnitStates,
+  unitProblems,
+  unitStatePaths,
+  UNIT_PENDING,
+  unitDir,
+  type UnitDecl,
+  type UnitRef,
+} from "./document/unit"
 import { loadPlan, tickIndexLine, type Plan } from "./tasks"
 import {
   BUILTIN_PHASE_TYPES,
@@ -64,6 +77,9 @@ export type PhaseUnit = {
   type: string
   letter: Phase
   dir: string
+  // `Depends:` in the phase's todo.md / done.md (absent = the previous phase in
+  // the index; phases of the same round only).
+  depends?: string[] | "none"
 }
 
 export function phaseRef(unit: PhaseUnit): UnitRef {
@@ -155,19 +171,30 @@ export async function readPhases(dir: string, round?: number): Promise<PhaseStat
     const unit = phases.find((item) => item.id === bad.id)!
     problems.push(`${unit.dir}/ has ${bad.kind === "both" ? "both todo.md and done.md" : "neither todo.md nor done.md"}`)
   }
+  for (const unit of phases) {
+    const paths = unitStatePaths(phaseRef(unit))
+    const doc = await Bun.file(join(dir, scan.done.has(unit.id) ? paths.complete : paths.pending)).text().catch(() => "")
+    const depends = parseUnitDoc(doc).depends
+    if (depends !== undefined) unit.depends = depends
+  }
+  if (!problems.length) problems.push(...unitProblems("phase", phases.map(phaseDecl)))
   if (problems.length) {
     throw new Error(
       `phase index ${index} is invalid: ${problems.join("; ")}. ` +
-        "Index lines are `- [ ] P<nn> <type>`, each with a directory P<nn>-<type>/ holding exactly one of todo.md / done.md; fix it manually and re-run",
+        "Index lines are `- [ ] P<nn> <type>`, each with a directory P<nn>-<type>/ holding exactly one of todo.md / done.md " +
+        "(`Depends:` in it names phases of this round); fix it manually and re-run",
     )
   }
   return { round: n, index, phases, done: scan.done }
 }
 
-// The phase to work on: the first ready one (nextReady over the index with its
-// default serial dependencies). undefined = every phase is done.
+const phaseDecl = (unit: PhaseUnit): UnitDecl => ({ id: unit.id, ...(unit.depends !== undefined ? { depends: unit.depends } : {}) })
+
+// The phase to work on: the first ready one (nextReady over the index and the
+// phases' `Depends:` fields; without them the serial order). undefined = every
+// phase is done.
 export function currentPhase(state: Pick<PhaseState, "phases" | "done">): PhaseUnit | undefined {
-  const id = nextReady(state.phases.map((unit) => ({ id: unit.id })), state.done)
+  const id = nextReady(state.phases.map(phaseDecl), state.done)
   return state.phases.find((unit) => unit.id === id)
 }
 

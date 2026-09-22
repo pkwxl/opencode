@@ -203,7 +203,7 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
 - [x] M3.2 Phase-type registry (§5) + letter presets + `parsePhases` → registry validation, without weakening existing guards. (2026-09-22; notes in §11.)
 - [x] M3.3 Phase directories: `phases.md`, `P<nn>-<type>/` with todo/done, derived ledger, handover and acceptance moved in, `roles.ts` shapes updated; `LEDGER_ENTRY` retired (0035 §4 note). (2026-09-22; notes in §11.)
 - [x] M3.4 Task units: `T-NNN/todo.md|done.md` + `tasks.md`, planning sessions rewritten, runtime state to `.auto/units.json`, `numbering.ts` floor over task dirs, `## T-NNN` heading protocol retired, no-phase mode as P01 with the loops merged, CLI `status`. (2026-09-22; notes in §11.)
-- [ ] M3.5 Dependencies at all three levels: `nextReady` at every selection point, `unitProblems` in the planning/decompose `collect` and on loop load, template syntax text.
+- [x] M3.5 Dependencies at all three levels: `nextReady` at every selection point, `unitProblems` in the planning/decompose `collect` and on loop load, template syntax text. (2026-09-22; notes in §11.)
 - [ ] M3.6 Custom phase types (was M3.3): the project-level registry entries.
 - [ ] M3.7 Legacy removal (§6 R3) + legacy-layout usage error; dual-read per open question 17.
 - [ ] M3.8 Template translation, verification, merge-back #3.
@@ -290,5 +290,21 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
   - **`check`** scans `AGENTS.md` and `docs/T-*/todo.md`, taking the task id from the path.
   - **`refcheck`** has lost its phase-snapshot exclusion.
 - Verification: auto-core 1066 pass / 0 fail + typecheck clean; packages/auto 52 pass + 2 skip + typecheck clean. The count drop from M3.3 is the deleted PLAN parser suite. The two opt-in E2E cases were rewritten over task units but not run (they need opencode and credentials).
+
+### M3.5 (2026-09-22)
+
+The unit model of M3.1 is now wired at every level. No new module was added; the changes are in `src/document/state.ts`, `src/tasks.ts`, `src/phases.ts`, `src/runner.ts`, `src/resume-gate.ts`, `src/execute.ts` and `src/template.ts`, plus two partial sections and one line each in the two planning templates and the seven decompose templates. Tests: 11 new cases in `tasks.test.ts`, `phases.test.ts`, `document-state.test.ts` and `resume-gate.test.ts`. 15 goldens were regenerated; the only change in each is the inserted partial text.
+
+- **Phases.** `readPhases` reads `Depends:` from each phase's `todo.md` (or `done.md`) into `PhaseUnit.depends` and runs `unitProblems("phase")`. A problem makes the index invalid, like any other index problem. `currentPhase` is `nextReady` over the declared dependencies. The driver-written phase `todo.md` declares none, so the order stays serial unless a human adds one.
+- **Tasks.** `loadPlan` parses `Depends:` / `Touches:` of every listed task and runs `unitProblems("task", …, { external: doneTaskIds })`. A task may name a task of its own index or any **completed** task (a `docs/T-*/done.md`). It may not name an unfinished task of another phase, because that task could never become ready inside this phase. `next(plan)` is `nextReady`. Because of the load-time check, a dependency outside the index can only be a completed task, so `next` counts it as done. Blocked tasks remain candidates, as before. `plannedTaskProblems` runs the same graph check once every listed task has passed its document checks, so the planning session's retry names the problem.
+- **Subtasks.** **Deviation from the M3.1 note: subtask ids are positional.** Item n of `subtasks.md` is `S<nn>`, the mapping the decompose template already used, so the checklist lines carry no ids. Adding ids would have changed the checklist text that goes into commit subjects, prompts and `CURRENT.md`, for no gain. `readChecklist` attaches `depends` / `touches` from the field block at the top of each `S<nn>/todo.md` (or `done.md`); a subtask scope file has no title line. `document/state.ts` adds the pure `subtaskId`, `nextChecklistIndex` and `checklistProblems`. They are used at the three places that pick the next subtask:
+  - the runner loop, which blocks with exit 2 and names the fix on a bad graph;
+  - `unitReruns`, so recovery ownership follows the same order;
+  - the decompose collect, whose one retry names the problem.
+- **Exit codes (deviation from G6's "exits 2").** A bad graph found on load in a phase index or task index is an invalid index. It goes through the existing `routePhase` blocked route and exits 1 with fix-it guidance, the same as the M3.4 index problems, because the fix is a manual edit of the index files. A bad subtask graph blocks the task and exits 2, the same as the illegal subtask state files next to it.
+- **Touches** is parsed and checked (empty value, absolute path, `..`) at every level, and shown in the loaded `Task`. It takes no part in selection; that starts with the MP.3 scheduler.
+- **Templates.** The partials `task-depends` and `subtask-depends` are in English (0035 M3.5 amendment) and have tier-1 markers. The planning templates keep their Chinese prose until M3.8. `status` already showed task `Depends`.
+- **Known limitation, unchanged:** `doneLetters` (the shells' `continue` prefix guard) lists completed phases in index order. A round whose phases finish out of order through `Depends:` still passes `continue`, because that requires every phase to be done.
+- Verification: auto-core 1077 pass / 0 fail + typecheck clean; packages/auto 52 pass + 2 skip + typecheck clean.
 
 <!-- auto: eof -->

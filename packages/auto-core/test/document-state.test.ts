@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { effectiveDone, renameTodoToDone, scanSubtaskStates } from "../src/document/state"
+import { checklistProblems, effectiveDone, nextChecklistIndex, renameTodoToDone, scanSubtaskStates, subtaskId } from "../src/document/state"
 
 let dir: string
 
@@ -109,5 +109,30 @@ describe("renameTodoToDone", () => {
   test("协议未激活(无 todo.md): 静默跳过不报错", async () => {
     await renameTodoToDone(dir, "T-001", 1)
     expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).exists()).toBe(false)
+  })
+})
+
+describe("subtask dependencies (M3.5)", () => {
+  test("positional ids: item n is S<nn>", () => {
+    expect([1, 9, 10, 100].map(subtaskId)).toEqual(["S01", "S09", "S10", "S100"])
+  })
+
+  test("without Depends fields the next subtask is the first unticked item", () => {
+    expect(nextChecklistIndex([{ done: true }, { done: false }, { done: false }])).toBe(1)
+    expect(nextChecklistIndex([{ done: true }, { done: true }])).toBe(-1)
+  })
+
+  test("Depends reorders: a root later in the list runs before an item waiting on it", () => {
+    const items = [{ done: false, depends: ["S03"] }, { done: false }, { done: false, depends: "none" as const }]
+    expect(checklistProblems(items)).toEqual([])
+    expect(nextChecklistIndex(items)).toBe(2)
+    expect(nextChecklistIndex([items[0]!, items[1]!, { ...items[2]!, done: true }])).toBe(0)
+  })
+
+  test("checklistProblems reports unknown ids, other levels, cycles and empty values", () => {
+    expect(checklistProblems([{ done: false, depends: ["S05"] }])).toEqual(["S01 depends on unknown S05"])
+    expect(checklistProblems([{ done: false }, { done: false, depends: ["T-001"] }])[0]).toContain("not a subtask id")
+    expect(checklistProblems([{ done: false, depends: ["S02"] }, { done: false }]).some((p) => p.startsWith("dependency cycle"))).toBe(true)
+    expect(checklistProblems([{ done: false, touches: [] }])[0]).toContain("empty Touches")
   })
 })

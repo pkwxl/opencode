@@ -29,6 +29,7 @@ Current task (its full content is also in CURRENT.md):
    containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.
    ## Scope (what this subtask does and does not do)
    ## Artifacts (the path list, matching the checklist item's `Artifacts:` declaration)
+   {{> subtask-depends}}
 
 {{> digest-rule}}
 

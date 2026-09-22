@@ -94,6 +94,22 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
   )
 
   test(
+    "phase Depends (M3.5): read from todo.md, reorders currentPhase, bad graphs make the index invalid",
+    withDir(async (dir) => {
+      const units = await syncPhaseIndex(dir, 1, "amt")
+      const todo = join(dir, "docs/R-01/P01-analysis/todo.md")
+      const original = await read(dir, "docs/R-01/P01-analysis/todo.md")
+      writeFileSync(todo, original.replace("Type: analysis\n", "Type: analysis\nDepends: P03\n"))
+      writeFileSync(join(dir, "docs/R-01/P03-test/todo.md"), renderPhaseTodo(units[2]!).replace("Type: test\n", "Type: test\nDepends: none\n"))
+      const state = (await readPhases(dir))!
+      expect(state.phases[0]!.depends).toEqual(["P03"])
+      expect(currentPhase(state)!.id).toBe("P03")
+      writeFileSync(todo, original.replace("Type: analysis\n", "Type: analysis\nDepends: P09\n"))
+      await expect(readPhases(dir)).rejects.toThrow("P01 depends on unknown P09")
+    }),
+  )
+
+  test(
     "no index → undefined (round never established)",
     withDir(async (dir) => {
       expect(await readPhases(dir)).toBeUndefined()

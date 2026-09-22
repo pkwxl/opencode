@@ -55,6 +55,12 @@ Phase: R-01.P02
 
    标题行、`Phase:` 字段行、三个小节标题、索引行与末行终止符由 DRIVER 解析,照上面的
    原样写,不要翻译或改写;
+   Optional dependency fields, placed right after the `Phase:` line of a task document: `Depends: T-011, T-012` means the task starts only
+   after the listed tasks are done — name tasks of this phase's index or already completed tasks of earlier phases, by id only; without the
+   field a task depends on the task before it in the index (serial order), and `Depends: none` declares a task with no prerequisite.
+   `Touches: src/dma/, include/dma.h` lists the repository-relative paths the task will change (no absolute paths, no `..`); without it the
+   task may touch anything. Both field names are protocol strings the DRIVER parses — write them verbatim; an empty value, a task depending on
+   itself and a dependency cycle are rejected.
 3. 任务编号自 T-001 连续递增;
    每个任务聚焦一个可独立交付的成果;不要手工编写子任务
    检查项(执行时由 DRIVER 的分解会话生成);

@@ -292,3 +292,21 @@ Tier-1 markers changed to match (`src/template.ts`):
 The placeholder titles inside those markers are Chinese prompt prose and flip
 with their templates in M3.8. `PLAN.md` survives only as a role-table name
 (`driverState`) until M3.7 retires the legacy layout.
+
+## Amendment (2026-09-22, M3.5 / plans/0047 §7): dependency fields
+
+New English protocol literals, registered as new rather than flipped, so they
+have no dual-read:
+
+- the field names `Depends:` and `Touches:` and the value `none`
+  (`Depends: none`), read case-insensitively by `parseUnitDoc`
+  (`src/document/unit.ts`) at all three levels;
+- where they sit: after `Phase:` in a task's `todo.md`, after `Type:` in a
+  phase's `todo.md`, and as the first lines of a subtask's `S<nn>/todo.md`.
+
+Subtask ids are positional (item n of `subtasks.md` is `S<nn>`), so the
+checklist line grammar `- [ ] <description>` does not change and gains no id.
+The syntax text lives in two new English partial sections, `task-depends` and
+`subtask-depends` (`templates/prompts/_partials.md`). Each is tier-1 guarded
+by the markers `Depends:`, `Depends: none` and `Touches:` (`src/template.ts`
+`PARTIAL_MARKERS`).
