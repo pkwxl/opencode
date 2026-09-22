@@ -240,7 +240,7 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       usePromptLibrary(dir)
       expect(renderTemplate("subtask", { subtask: "任务甲" })).toBe("自定义子任务提示词: 任务甲")
       // 未覆盖的模板仍取内置
-      expect(renderTemplate("dryrun", {})).toContain("权限预检")
+      expect(renderTemplate("dryrun", {})).toContain("permission pre-check")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

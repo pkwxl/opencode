@@ -277,7 +277,7 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
       "  1. 是否把 prompt.ts 的第三份 formatTokens 一并收口 → 顺带收口(同层依赖,不引入反向 import)",
       "     src/prompt.ts:501",
       "  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)",
-      `  full record in the "自动代答问题" section of ${taskDoc("T-001", "report")}`,
+      `  full record in the "Proxy-answered questions" section of ${taskDoc("T-001", "report")}`,
     ])
   })
 

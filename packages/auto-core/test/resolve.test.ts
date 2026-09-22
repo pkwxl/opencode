@@ -295,7 +295,7 @@ describe("resolveHighlight", () => {
     expect(lines[0]).toBe("⚑ this task auto-answered 1 questions that should have been confirmed by you; please review:")
     expect(lines[1]).toBe("  1. 是否顺带收口第三份 formatTokens → 顺带收口(同层依赖,不引入反向 import)")
     expect(lines[2]).toBe("     src/prompt.ts:501")
-    expect(lines[3]).toBe(`  full record in the "自动代答问题" section of ${join("docs", "T-001", "report.md")}`)
+    expect(lines[3]).toBe(`  full record in the "Proxy-answered questions" section of ${join("docs", "T-001", "report.md")}`)
   })
 
   test("未配对 driver 项与 malformed agent 项各自带 ⚠", () => {

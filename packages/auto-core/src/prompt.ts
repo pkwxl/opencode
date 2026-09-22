@@ -311,7 +311,7 @@ export function subtaskOutputFile(task: Task, index: number): string {
 // Wrap-up session: every subtask is already ticked by the driver. Only docs
 // and the output-summary report remain.
 // resolves(收尾闭环 H7,plans/0020-auto-resolve-design.md §I): driver 本任务观测到的代答
-// 清单,注入后要求 report.md 单列「自动代答问题」一节——持久审计轨迹由此不再依赖会话
+// 清单,注入后要求 report.md 单列「Proxy-answered questions」一节——持久审计轨迹由此不再依赖会话
 // 自觉标注,driver 看见的那部分被强制写进 git。本层是同步纯函数(prompt.ts 只做数据
 // 组装),清单由调用点(runner 的两处收尾)先 resolvesOf 读台账再传入。
 // Intent injection (M2.1, plans/0043): the report's content form comes from

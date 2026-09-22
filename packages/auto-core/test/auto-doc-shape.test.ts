@@ -205,9 +205,9 @@ describe("runWrapup 收尾报告门禁(D5,runner 主收尾与 review 修复轮�
       const plan = await load(join(dir, "PLAN.md"))
       const result = await runWrapup(client, plan, plan.tasks[0]!, wrapOpts(dir), makeChain(), { solo: false, label: "收尾会话" })
       expect(result).toMatchObject({ type: "blocked" })
-      expect((result as { question: string }).question).toContain("docs/T-001/report.md 缺失或为空")
+      expect((result as { question: string }).question).toContain("docs/T-001/report.md missing or empty")
       expect(calls.prompts.length).toBe(2)
-      expect(promptText(calls.prompts[1]!)).toContain("未过检查")
+      expect(promptText(calls.prompts[1]!)).toContain("did not pass checks")
       // 未收口提交: HEAD 仍在 init
       expect((await git(dir, "log", "-1", "--format=%s")).trim()).toBe("init")
     } finally {

@@ -15,7 +15,7 @@
 // 名单),与 `.auto/stats.json` 同族但独立成文件——stats 有 30s 心跳高频写,把会增长
 // 的问题文本数组塞进去会让每次心跳重写全量文本。台账只是 driver 的计数与高亮依据,
 // 丢了不影响正确性: 持久审计轨迹是进 git 的两样东西——标记行本身与
-// docs/T-NNN/report.md 的「自动代答问题」节。
+// docs/T-NNN/report.md 的「Proxy-answered questions」节。
 //
 // 健壮性照抄 src/stats.ts: 原子写(.tmp → rename + 写队列串行化)、逐字段宽容解析
 // (坏 = 缺失不 throw)、所有写失败 catch 静默——审计永不影响流程与退出码。公共 API
@@ -425,7 +425,7 @@ export function resolveHighlight(items: ResolveItem[], opts?: HighlightOpts): st
   if (shown.length > MAX_HIGHLIGHT) {
     lines.push(`  …and ${shown.length - MAX_HIGHLIGHT} more, all in ${report}`)
   } else {
-    lines.push(`  full record in the "自动代答问题" section of ${report}`)
+    lines.push(`  full record in the "Proxy-answered questions" section of ${report}`)
   }
   if (opts?.decisions) lines.push(`  plus ${opts.decisions} AUTO-DECISION entries (folded, see task report)`)
   return lines

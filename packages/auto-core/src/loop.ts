@@ -114,7 +114,7 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
     }
     if (opts.dryrun) {
-      const result = await runOnce(server.client, "权限预检", renderDryrun(), {
+      const result = await runOnce(server.client, "permission preflight", renderDryrun(), {
         agent: agentName,
         dir: directory,
         verbose: opts.verbose,

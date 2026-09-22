@@ -25,20 +25,20 @@ once the whole task is complete, check for yourself whether it is genuinely comp
 
 ### knowledge
 
-1. 最终状态优先: 只记录最终验证过的知识;过程中被推翻或被验收否决的方案
-   不得记为当前方案,仅可作为明确标注「已否决」的通用教训;
-2. 去重: 同一知识点只出现一次,归入最贴切的章节;
-3. 不照抄会话对话、运行日志或中间推理过程——只留结论与锚点;
-4. 每条重要知识附至少一个可验证锚点(文件路径/API/设计文档/commit/测试/报告)。
+1. Final state first: record only knowledge that was finally verified; an approach overturned during the process or rejected at
+   acceptance must not be recorded as the current approach, only as a general lesson explicitly labelled "rejected";
+2. Deduplicate: each piece of knowledge appears once, under the section it fits best;
+3. Do not copy session dialogue, run logs or intermediate reasoning — keep only conclusions and anchors;
+4. Attach at least one verifiable anchor to every important piece of knowledge (file path/API/design document/commit/test/report).
 
 ### prior-knowledge
 
-1. 最终状态优先: 只记录最终验证过的知识;过程中被推翻或被验收否决的方案不得
-   记为当前方案,仅可作为明确标注「已否决」的通用教训;
-2. 去重: 同一知识点只出现一次,归入最贴切的章节;已有蒸馏产物(见上方清单,
-   若提供)覆盖的知识点以一行引用代替摘抄,跨文档去重;
-3. 不照抄会话对话、运行日志或中间推理过程——只留结论与锚点;
-4. 每条重要知识附至少一个可验证锚点(文件路径/API/设计文档/commit/测试/报告)。
+1. Final state first: record only knowledge that was finally verified; an approach overturned during the process or rejected at
+   acceptance must not be recorded as the current approach, only as a general lesson explicitly labelled "rejected";
+2. Deduplicate: each piece of knowledge appears once, under the section it fits best; knowledge already covered by an existing
+   distilled artifact (see the list above, if given) gets a one-line reference instead of an excerpt — deduplicate across documents;
+3. Do not copy session dialogue, run logs or intermediate reasoning — keep only conclusions and anchors;
+4. Attach at least one verifiable anchor to every important piece of knowledge (file path/API/design document/commit/test/report).
 
 ### stuck-reflection
 
@@ -137,8 +137,8 @@ Write it when this task's description asks you to check, test, validate or accep
 
 ### wrapup-audit
 
-你自主识别到的其他代答决策(本应
-   由用户拍板、由你替他闭环的分歧点)一并列入,纯实现取舍不要混进这一节。
+also list any other proxy decisions you identified on your own (points of divergence that should have
+   been the user's call and that you closed on the user's behalf); do not mix pure implementation trade-offs into this section.
 
 ### agents-maintenance
 
@@ -176,10 +176,10 @@ in four sections:
 
 ### report-indexed
 
-索引式报告——逐子任务一行(序号 + 一句话结论 +
-   产物路径 docs/{{taskId}}/S<NN>/index.md 或代码位置),不复制或改写子任务产物的内容,只新增
-   整体结论与遗留问题两节,
+an indexed report — one line per subtask (number + one-sentence conclusion +
+   artifact path docs/{{taskId}}/S<NN>/index.md or code location); do not copy or rewrite the content of the subtask artifacts, add only
+   two sections of your own, overall conclusion and open issues,
 
 ### report-solo
 
-产出摘要(改动了什么、关键决策与遗留事项),
+a summary of the output (what changed, key decisions and open items),

@@ -1,16 +1,16 @@
-你正在为一个自动化执行计划做权限预检。完整计划位于当前目录的 PLAN.md,先读它;当前目录的 opencode.json 中是已授权的 permission 规则,也要读。
+You are running a permission pre-check for an automated execution plan. The full plan is in PLAN.md in the current directory — read it first; opencode.json in the current directory holds the permission rules already granted — read it too.
 
-任务:
-1. 通读 PLAN.md 中全部未完成任务,结合仓库结构与 docs/,分析执行这些任务可能需要
-   访问的、超出 opencode.json 已授权范围的目录与操作(项目目录之外的路径、网络访问、
-   特殊 bash 命令等),列出候选清单;
-2. 对候选清单逐项做只读探查确认(如 ls、test -r、读取文件等无害操作),确认哪些
-   访问确实会被拒绝——被拒绝的探查不会中断你,记录下来继续探查下一项;
-3. 把结论写入 .auto/dryrun.md(覆盖写):确认受阻的访问清单,以及建议加入
-   opencode.json permission 的放行规则;若无授权外访问需求,也要写明。
+Task:
+1. Read through every unfinished task in PLAN.md and, together with the repository structure and docs/, work out which directories
+   and operations beyond what opencode.json already grants these tasks may need (paths outside the project directory, network access,
+   special bash commands and the like); list them as candidates;
+2. Confirm the candidates one by one with read-only probes (harmless operations such as ls, test -r, reading a file) to establish
+   which accesses really are denied — a denied probe does not interrupt you: record it and move on to the next one;
+3. Write the conclusion to .auto/dryrun.md (overwrite): the list of accesses confirmed as blocked, and the allow rules you recommend
+   adding to the opencode.json permission block; if no access beyond the granted scope is needed, say so explicitly.
 
-约束:
-1. 只做只读探查,不修改任何实现代码,不执行 PLAN.md 中的任务;
+Constraints:
+1. Only perform read-only probes; do not modify any implementation code and do not carry out the tasks in PLAN.md;
 2. PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
-3. 写出报告后立即结束会话,最终消息复述报告要点。
+3. End the session as soon as the report is written; your final message restates the report's key points.

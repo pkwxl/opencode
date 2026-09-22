@@ -42,7 +42,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
-    // wrapup 不引用该片段(收尾会话不提问);T-007 的「自动代答问题」节是独立条件段
+    // wrapup 不引用该片段(收尾会话不提问);T-007 的 "Proxy-answered questions" 节是独立条件段
     expect(consumers).not.toContain("wrapup.md")
   })
 
@@ -121,9 +121,9 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
       expect(renderTemplate(name.replace(/\.md$/, ""), { ask: true })).not.toContain("AUTO-DECISION")
     }
     // off 档下 whole/subtask 的 docs/ 修改条款仍点名 AUTO-DECISION(逐字保留现状口径)
-    expect(renderTemplate("whole", { ask: false })).toContain("按 AUTO-DECISION 标注并记入相关文档")
+    expect(renderTemplate("whole", { ask: false })).toContain("annotate it as AUTO-DECISION and record it in the relevant document")
     expect(renderTemplate("subtask", { ask: false })).toContain("annotate it as AUTO-DECISION and record it in the relevant document")
-    expect(renderTemplate("whole", { ask: true })).toContain("若必须修改,记入相关文档")
+    expect(renderTemplate("whole", { ask: true })).toContain("if a modification is unavoidable, record it in the relevant document")
   })
 
   test("渲染出口注入 ask: 覆盖片段后按开关取值渲染条件段(缺省 off 走 off 分支)", () => {

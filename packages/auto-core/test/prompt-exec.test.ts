@@ -237,7 +237,7 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
       expect(sub).toContain("you may add to the content of docs/ but not modify it")
       const whole = renderWhole(plan, task)
       expect(whole).not.toContain("check for yourself")
-      expect(whole).toContain("约束:")
+      expect(whole).toContain("Constraints:")
       for (const text of [sub, whole]) {
         expect(text).not.toMatch(/\{\{|\}\}/)
         expect(text).not.toMatch(/\n\n\n/)
@@ -475,7 +475,7 @@ describe("renderSubtask(L1 权威状态接地 + L3 全限定编号,session-bound
 describe("renderWrapup", () => {
   test("只执行收尾: docs、report.md,不标 done、不提交", () => {
     const text = renderWrapup(plan, task)
-    expect(text).toContain("全部子任务已在之前的会话中逐一完成,不要重做")
+    expect(text).toContain("All subtasks of this task were completed one by one in earlier sessions; do not redo them")
     expect(text).toContain("docs/T-002/report.md")
     expect(text).not.toContain("git 提交全部未提交改动")
     expect(text).toContain("Git commits are made by the DRIVER in one pass after the session ends")
@@ -485,9 +485,9 @@ describe("renderWrapup", () => {
 
   test("收尾: 任务状态由 DRIVER 登记;结论行协议(Result: PASS|FAIL)落 report.md,写作纪律来自意图包", () => {
     const text = renderWrapup(plan, task)
-    expect(text).toContain("任务状态由 DRIVER 在会话结束后统一登记")
-    expect(text).toContain("`Result: PASS` 或 `Result: FAIL <一句话原因>`")
-    expect(text).toContain(`docs/${task.id}/report.md 最后一行正文`)
+    expect(text).toContain("The task status is recorded by the DRIVER in one pass after the session ends")
+    expect(text).toContain("`Result: PASS` or `Result: FAIL <one-sentence reason>`")
+    expect(text).toContain(`last line of body text of docs/${task.id}/report.md`)
     // (b) 类纪律来自内置意图包 ## acceptance / ### result-line
     expect(text).toContain("Never write PASS for a check you did not run or observe")
     expect(text).not.toContain("verified")
@@ -503,7 +503,7 @@ describe("renderWrapup", () => {
       useIntentPacks(dir)
       const text = renderWrapup(plan, task)
       expect(text).not.toContain("Result:")
-      expect(text).toContain("任务状态由 DRIVER 在会话结束后统一登记")
+      expect(text).toContain("The task status is recorded by the DRIVER in one pass after the session ends")
       expect(text).not.toMatch(/\{\{|\}\}/)
     } finally {
       useIntentPacks(undefined)
@@ -512,46 +512,48 @@ describe("renderWrapup", () => {
   })
 
   test("solo 模式(off/ondemand)不提及子任务", () => {
-    expect(renderWrapup(plan, task, { solo: true })).toContain("实现已在之前的会话中完成")
-    expect(renderWrapup(plan, task)).toContain("全部子任务已在之前的会话中逐一完成")
+    expect(renderWrapup(plan, task, { solo: true })).toContain("The implementation of this task was completed in earlier sessions")
+    expect(renderWrapup(plan, task, { solo: true })).not.toContain("All subtasks")
+    expect(renderWrapup(plan, task)).toContain("All subtasks of this task were completed one by one")
   })
 
   test("索引式报告(auto 模式): 逐子任务一行引用产物路径,不复制产物内容", () => {
     const text = renderWrapup(plan, task)
-    expect(text).toContain("索引式报告")
-    expect(text).toContain("逐子任务一行")
-    expect(text).toContain("docs/T-002/S<NN>/index.md 或代码位置")
-    expect(text).toContain("不复制或改写子任务产物的内容")
-    expect(text).toContain("整体结论与遗留问题两节")
+    expect(text).toContain("an indexed report")
+    expect(text).toContain("one line per subtask")
+    expect(text).toContain("docs/T-002/S<NN>/index.md or code location")
+    expect(text).toContain("do not copy or rewrite the content of the subtask artifacts")
+    expect(text).toContain("overall conclusion and open issues, so that later sessions")
   })
 
   test("solo 模式保持摘要式报告,不带索引式协议", () => {
     const text = renderWrapup(plan, task, { solo: true })
-    expect(text).not.toContain("索引式")
-    expect(text).toContain("产出摘要(改动了什么、关键决策与遗留事项)")
+    expect(text).not.toContain("indexed")
+    expect(text).toContain("a summary of the output (what changed, key decisions and open items),\n   so that later sessions")
     expect(text).not.toContain("S<NN>")
   })
 
   // 收尾闭环 H7(plans/0020-auto-resolve-design.md §I): DRIVER 观测到的代答清单注入收尾
-  // 提示词,要求 report.md 单列「自动代答问题」节。
+  // 提示词,要求 report.md 单列 "Proxy-answered questions" 节。
   test("无代答(缺省/空清单)时代答段整体消失", () => {
     for (const text of [renderWrapup(plan, task), renderWrapup(plan, task, { resolves: [] })]) {
-      expect(text).not.toContain("自动代答")
+      expect(text).not.toContain("auto-answered")
+      expect(text).not.toContain("Proxy-answered")
       expect(text).not.toContain("AUTO-RESOLVE")
       expect(text).not.toContain("resolveList")
     }
   })
 
-  test("有代答时逐条列出原问题,并要求 report.md 单列「自动代答问题」节", () => {
+  test("有代答时逐条列出原问题,并要求 report.md 单列 Proxy-answered questions 节", () => {
     const text = renderWrapup(plan, task, { resolves: [resolveItem("是否把第三份 formatTokens 一并收口?")] })
-    expect(text).toContain("DRIVER 自动代答了以下本应由你询问用户的问题")
+    expect(text).toContain("the DRIVER auto-answered the following questions that you should have asked the user")
     expect(text).toContain("   - 是否把第三份 formatTokens 一并收口?")
-    expect(text).toContain("请在 docs/T-002/report.md 中单列「自动代答问题」一节")
-    expect(text).toContain("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")
-    expect(text).toContain("上面每一条都必须出现")
+    expect(text).toContain('In docs/T-002/report.md give these their own section, "Proxy-answered questions"')
+    expect(text).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
+    expect(text).toContain("Every item above must appear")
     // 置于三项固定收尾要求之后、"以上全部完成前不要结束会话"之前
-    expect(text.indexOf("自动代答")).toBeGreaterThan(text.indexOf("report.md:"))
-    expect(text.indexOf("自动代答")).toBeLessThan(text.indexOf("以上全部完成前不要结束会话"))
+    expect(text.indexOf("auto-answered")).toBeGreaterThan(text.indexOf("report.md:"))
+    expect(text.indexOf("auto-answered")).toBeLessThan(text.indexOf("Do not end the session before all of the above is done"))
   })
 
   test("清单只列 DRIVER 源(agent 源已由会话自行标注),未配对的排在前", () => {
@@ -578,7 +580,7 @@ describe("renderWrapup", () => {
 describe("renderWhole", () => {
   test("off 模式: 单会话完成整个任务,不含交接条款", () => {
     const text = renderWhole(plan, task)
-    expect(text).toContain("你本次负责整个任务,在单个会话内完成,不做子任务分解")
+    expect(text).toContain("You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks")
     expect(text).toContain("T-002: 实现迁移")
     expect(text).not.toContain("handoff.md")
     expect(text).not.toContain("git 提交全部未提交改动")
@@ -587,11 +589,11 @@ describe("renderWhole", () => {
   test("ondemand 模式: 附交接条款;continuation 要求先读交接文档", () => {
     const text = renderWhole(plan, task, { ondemand: true })
     expect(text).toContain("docs/T-002/handoff.md")
-    expect(text).toContain("[DRIVER] 上下文即将达到上限")
-    expect(text).not.toContain("先读 docs/T-002/handoff.md")
+    expect(text).toContain("[DRIVER] This session's context is about to reach the limit")
+    expect(text).not.toContain("First read docs/T-002/handoff.md")
     const cont = renderWhole(plan, task, { ondemand: true, continuation: true })
-    expect(cont).toContain("先读 docs/T-002/handoff.md")
-    expect(cont).toContain("据此继续")
+    expect(cont).toContain("First read docs/T-002/handoff.md")
+    expect(cont).toContain("then carry on from there")
   })
 
   test("不含会话内提交要求(state-rule 注入提交原则)", () => {
@@ -608,11 +610,11 @@ describe("renderWhole", () => {
 
   test("test-by-DRIVER: 注入测试执行协议(与 ondemand 交接条款可同现)", () => {
     const text = renderWhole(plan, task, { ondemand: true, testByDriver: true, handoverTest: true })
-    expect(text).toContain("测试执行协议(--test-by-driver)")
+    expect(text).toContain("Test execution protocol (--test-by-driver)")
     expect(text).toContain("tmp/test.sh")
     expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("docs/T-002/testhandoff.md")
-    expect(renderWhole(plan, task)).not.toContain("测试执行协议")
+    expect(renderWhole(plan, task)).not.toContain("Test execution protocol")
   })
 })
 
@@ -745,11 +747,11 @@ describe("renderStuckHint(死循环提示)", () => {
 describe("renderDryrun", () => {
   test("权限预检: 列出授权外访问并逐只读探查,报告写入 .auto/dryrun.md", () => {
     const text = renderDryrun()
-    expect(text).toContain("权限预检")
+    expect(text).toContain("permission pre-check")
     expect(text).toContain("opencode.json")
-    expect(text).toContain("只读探查")
+    expect(text).toContain("read-only probes")
     expect(text).toContain(".auto/dryrun.md")
-    expect(text).toContain("不修改任何实现代码")
+    expect(text).toContain("do not modify any implementation code")
   })
 })
 
@@ -774,11 +776,11 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
   test("built-in pack: every moved segment reaches its session", () => {
     expect(renderDecompose(plan, task)).toContain("in four sections:")
     const wrapup = renderWrapup(plan, task, { resolves: [driverResolve] })
-    expect(wrapup).toContain("索引式报告")
-    expect(wrapup).toContain("上面每一条都必须出现;你自主识别到的其他代答决策")
-    expect(renderWrapup(plan, task, { solo: true })).toContain("产出摘要(改动了什么、关键决策与遗留事项),\n   供后续会话")
-    expect(renderKnowledge({ file: "kb.md" })).toContain("## 质量约束(硬性要求)\n\n1. 最终状态优先")
-    expect(renderPriorKnowledge({ file: "kb.md" })).toContain("跨文档去重")
+    expect(wrapup).toContain("an indexed report")
+    expect(wrapup).toContain("Every item above must appear; also list any other proxy decisions you identified on your own")
+    expect(renderWrapup(plan, task, { solo: true })).toContain("a summary of the output (what changed, key decisions and open items),\n   so that later sessions")
+    expect(renderKnowledge({ file: "kb.md" })).toContain("## Quality constraints (hard requirements)\n\n1. Final state first")
+    expect(renderPriorKnowledge({ file: "kb.md" })).toContain("deduplicate across documents")
     expect(renderStuckHint(stuck)).toContain("still going in circles. Write these three things out")
     expect(renderStuckHint({ ...stuck, level: 1 })).not.toContain("Write these three things out")
     expect(renderAgentsBlock()).toContain("AGENTS.md maintenance rules")
@@ -790,14 +792,14 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
       expect(decompose).not.toContain("four sections")
       expect(decompose).toContain("docs/T-002/context.md\n   Keep it compact")
       const wrapup = renderWrapup(plan, task, { resolves: [driverResolve] })
-      expect(wrapup).not.toContain("索引式报告")
-      expect(wrapup).toContain("docs/T-002/report.md:供后续会话")
-      expect(wrapup).toContain("上面每一条都必须出现。")
-      expect(renderWrapup(plan, task, { solo: true })).toContain("report.md:\n   供后续会话")
+      expect(wrapup).not.toContain("an indexed report")
+      expect(wrapup).toContain("docs/T-002/report.md: so that later sessions")
+      expect(wrapup).toContain("Every item above must appear.")
+      expect(renderWrapup(plan, task, { solo: true })).toContain("report.md:\n   so that later sessions")
       const knowledge = renderKnowledge({ file: "kb.md" })
-      expect(knowledge).not.toContain("质量约束")
-      expect(knowledge).toMatch(/`>>\n\n## 步骤/)
-      expect(renderPriorKnowledge({ file: "kb.md" })).not.toContain("质量约束")
+      expect(knowledge).not.toContain("Quality constraints")
+      expect(knowledge).toMatch(/`>\n\n## Steps/)
+      expect(renderPriorKnowledge({ file: "kb.md" })).not.toContain("Quality constraints")
       const hint = renderStuckHint(stuck)
       expect(hint).toContain("still going in circles.\n")
       expect(hint).not.toContain("Write these three things out")

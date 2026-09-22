@@ -66,14 +66,14 @@ export async function extractKnowledge(
   { type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }
 > {
   const round = await currentRound(dir)
-  const task = { id: "PLAN", title: "迁移知识提炼(k 知识提炼)", status: "in_progress" as const, attempts: 0, body: "" }
-  const commit = { stage: "knowledge", subject: "PLAN knowledge 迁移知识沉淀" }
+  const task = { id: "PLAN", title: "migration knowledge distillation (k phase)", status: "in_progress" as const, attempts: 0, body: "" }
+  const commit = { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }
   const existing = await existingKnowledge(dir, round)
   if (existing) {
     // ③ 补提交: 文档已落盘但仍在未提交改动清单中 → 提交后完成。
     const pending = await commitPending(dir, opts, task, commit, [existing])
     if (pending !== "clean") {
-      log(pending.ok ? `✓ 知识文档已产出但尚未提交,已补提交: ${existing}` : `⚠ 知识文档补提交失败: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
+      log(pending.ok ? `✓ knowledge document was produced but not committed; committed now: ${existing}` : `⚠ knowledge document make-up commit failed: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
       if (!pending.ok) return { type: "dirty", files: [existing] }
     }
     return { type: "skipped", file: existing }
@@ -222,8 +222,8 @@ export async function extractPriorKnowledge(
   brief?: string,
 ): Promise<{ type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }> {
   const round = await currentRound(dir)
-  const task = { id: "PLAN", title: "前置知识提取(已有迁移结果复盘)", status: "in_progress" as const, attempts: 0, body: "" }
-  const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb 前置知识提取" }
+  const task = { id: "PLAN", title: "prior-knowledge extraction (retrospective of existing migration results)", status: "in_progress" as const, attempts: 0, body: "" }
+  const commit = { stage: "prior-knowledge", subject: "PLAN prior-kb prior-knowledge extraction" }
   const existing = await existingPriorKnowledge(dir, round)
   if (existing) {
     // ③ 补提交: 文档已落盘但仍在未提交改动清单中 → 提交后完成(与全部隐藏任务
@@ -231,9 +231,9 @@ export async function extractPriorKnowledge(
     const pending = await commitPending(dir, opts, task, commit, [existing])
     if (pending !== "clean") {
       if (pending.ok) {
-        log(`✓ 前置知识文档已产出但尚未提交,已补提交: ${existing}`)
+        log(`✓ prior-knowledge document was produced but not committed; committed now: ${existing}`)
       } else {
-        log(`⚠ 前置知识文档补提交失败: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
+        log(`⚠ prior-knowledge document make-up commit failed: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
         return { type: "dirty", files: [existing] }
       }
     }
@@ -247,7 +247,7 @@ export async function extractPriorKnowledge(
     if (dirty.length) return { type: "dirty", files: dirty }
   }
   const distilled = await existingDistilledDocs(dir, round)
-  log(`▶ 开前置知识提取会话(产出 ${temp},收笔标记确认后改名 ${file}${distilled.length ? ";已有蒸馏产物引用化" : ""})`)
+  log(`▶ opening prior-knowledge extraction session (writes ${temp}, renamed to ${file} once the closing mark is confirmed${distilled.length ? "; existing distilled artifacts referenced, not restated" : ""})`)
   const produced = await requireArtifact(client, task, renderPriorKnowledge({ file: temp, brief, mode: opts.mode, distilled }), opts, {
     kind: "前置知识提取",
     role: "prior-knowledge",
@@ -275,7 +275,7 @@ export async function extractPriorKnowledge(
   await rename(join(dir, temp), join(dir, file))
   const committed = await afterSession(dir, opts, task, commit)
   if (committed.type === "failed") {
-    log(`⚠ 前置知识文档已转正但提交失败: ${committed.question}`)
+    log(`⚠ prior-knowledge document was promoted but the commit failed: ${committed.question}`)
     return { type: "dirty", files: [file] }
   }
   return { type: "ok", file }
