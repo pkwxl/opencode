@@ -11,7 +11,8 @@
 // carried over unchanged by the rename. The *state* is not a role: it is which
 // of the pair exists, and this module is its only interpreter. The file names,
 // anchors and labels come from the spec pair declared once in document/spec.ts
-// (subtaskStateSpec, M1.4 D6).
+// (subtaskStateSpec, M1.4 D6); its paths equal the unit model's state paths
+// (asserted in test/document-unit.test.ts).
 //
 // Activation: the protocol is active for a task iff ANY todo/done file exists
 // among its subtask directories. Legacy tasks (decomposed before this protocol,
@@ -25,9 +26,11 @@
 // Interruption windows around the rename are absorbed by idempotency: the
 // rename is skipped when done.md already exists, and runSubtask short-circuits
 // to close-out when done.md is present at entry.
-import { rename } from "node:fs/promises"
-import { join } from "node:path"
-import { subtaskStateSpec } from "./spec"
+//
+// Since M3.1 (plans/0047) the scan and the rename are the subtask level of the
+// unified unit model (document/unit.ts scanUnitStates / renameUnitDone); this
+// module keeps the subtask-specific activation rule and checklist merge.
+import { renameUnitDone, scanUnitStates, type UnitRef } from "./unit"
 
 export type SubtaskState = { index: number; todo: boolean; done: boolean }
 
@@ -39,23 +42,23 @@ export type SubtaskStateScan = {
   illegal: { index: number; kind: "both" | "neither" }[]
 }
 
-const exists = async (dir: string, rel: string): Promise<boolean> => Bun.file(join(dir, rel)).exists()
+const subtaskRef = (taskId: string, k: number): UnitRef => ({ level: "subtask", id: `S${String(k).padStart(2, "0")}`, task: taskId })
 
 // Scans docs/T-NNN/S<nn>/ for k = 1..count and classifies each subtask.
 export async function scanSubtaskStates(dir: string, taskId: string, count: number): Promise<SubtaskStateScan> {
-  const states: SubtaskState[] = []
-  for (let k = 1; k <= count; k++) {
-    const spec = subtaskStateSpec(taskId, k)
-    states.push({
-      index: k,
-      todo: await exists(dir, spec.pending.path),
-      done: await exists(dir, spec.complete.path),
-    })
-  }
+  const scan = await scanUnitStates(
+    dir,
+    Array.from({ length: count }, (_, i) => subtaskRef(taskId, i + 1)),
+  )
+  const states: SubtaskState[] = scan.states.map((s, i) => ({
+    index: i + 1,
+    todo: s.state === "todo" || s.state === "both",
+    done: s.state === "done" || s.state === "both",
+  }))
   const active = states.some((s) => s.todo || s.done)
   const illegal: SubtaskStateScan["illegal"] = active
-    ? states.flatMap((s): SubtaskStateScan["illegal"] =>
-        s.todo && s.done ? [{ index: s.index, kind: "both" }] : !s.todo && !s.done ? [{ index: s.index, kind: "neither" }] : [],
+    ? scan.states.flatMap((s, i): SubtaskStateScan["illegal"] =>
+        s.state === "both" || s.state === "neither" ? [{ index: i + 1, kind: s.state }] : [],
       )
     : []
   return { active, states, illegal }
@@ -78,9 +81,5 @@ export function effectiveDone(scan: SubtaskStateScan, items: { done: boolean }[]
 // when the protocol is inactive for this subtask (no todo.md) or the rename
 // already landed (done.md present — interruption between rename and commit).
 export async function renameTodoToDone(dir: string, taskId: string, index: number): Promise<void> {
-  const spec = subtaskStateSpec(taskId, index)
-  const todo = join(dir, spec.pending.path)
-  const done = join(dir, spec.complete.path)
-  if (!(await Bun.file(todo).exists()) || (await Bun.file(done).exists())) return
-  await rename(todo, done)
+  await renameUnitDone(dir, subtaskRef(taskId, index))
 }

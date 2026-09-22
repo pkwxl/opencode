@@ -198,8 +198,8 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
 
 ## 9. Steps (root plan M3)
 
-- [ ] M3.0 This document; root plan regrouped (D14, M3.0–M3.8, MP.1 re-scoped, open question 17).
-- [ ] M3.1 Unit model, `src/document/unit.ts`, interface first: `UnitRef` / `UnitLevel`, generalized state scan, index parser, `unitProblems`, `nextReady`. Pure; unit tests first.
+- [x] M3.0 This document; root plan regrouped (D14, M3.0–M3.8, MP.1 re-scoped, open question 17).
+- [x] M3.1 Unit model, `src/document/unit.ts`, interface first: `UnitRef` / `UnitLevel`, generalized state scan, index parser, `unitProblems`, `nextReady`. Pure; unit tests first. (2026-09-22; notes in §11.)
 - [ ] M3.2 Phase-type registry (§5) + letter presets + `parsePhases` → registry validation, without weakening existing guards.
 - [ ] M3.3 Phase directories: `phases.md`, `P<nn>-<type>/` with todo/done, derived ledger, handover and acceptance moved in, `roles.ts` shapes updated; `LEDGER_ENTRY` retired (0035 §4 note).
 - [ ] M3.4 Task units: `T-NNN/todo.md|done.md` + `tasks.md`, planning sessions rewritten, runtime state to `.auto/units.json`, `numbering.ts` floor over task dirs, `## T-NNN` heading protocol retired, no-phase mode as P01 with the loops merged, CLI `status`.
@@ -219,5 +219,18 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
   - each unit's todo→done rename lands in its commit;
   - round completion derives from the phases' `done.md`.
 - Negative cases: a dependency cycle, an out-of-scope reference, an empty `Touches`.
+
+## 11. Implementation notes
+
+### M3.1 (2026-09-22)
+
+`src/document/unit.ts`, tested by `test/document-unit.test.ts` (30 cases). Nothing calls it yet except the subtask protocol; wiring is M3.3–M3.5.
+
+- **Refs.** `UnitRef` is a union by level: a phase carries `round` and `type` (its directory is `P<nn>-<type>`), a task is bare, a subtask carries `task`. `qualifiedId` / `unitDir` / `unitStatePaths` / `parsePhaseDir` derive from it. Local id shapes: `P<nn>`, `T-NNN`, `S<nn>` (two or three digits minimum, open-ended).
+- **State scan.** `scanUnitStates` reports `todo | done | both | neither` per unit, the illegal pair, and a `done` set in which `both` counts as done (files win, as in `effectiveDone`). `renameUnitDone` is the idempotent rename. `document/state.ts` now delegates its scan and rename to these; its activation rule and checklist merge stay subtask-specific until M3.4 retires the PLAN.md checklist. A test asserts the unit state paths equal `subtaskStateSpec`'s.
+- **Index.** `parseIndex(text, level)`: members are top-level checklist lines `- [ ] <id> <title>` (`*` bullets, `[x]`/`[X]`, a colon after the id tolerated). Indented checklist lines and prose are ignored; a top-level checklist line whose first token is not an id of the level, and a repeated id, are problems (first occurrence kept). Today's `subtasks.md` lines carry no ids (F5); M3.5 adds them to the decompose template, so the subtask index is not read through this parser before then.
+- **Field block.** `parseUnitDoc`: the run of `Key: value` lines right after the title line (blank lines before the first field allowed; without a title line, from the top). Keys are case-insensitive and stored lower-cased. `Depends` is tri-state: absent (`undefined`, G3 default), `"none"` (explicit root), or a list, where an empty value parses to `[]` so the checks can reject it; `Touches` is absent or a list, backticks stripped.
+- **Checks.** `unitProblems(level, units, { external })` in this order: duplicate units; per unit, empty `Depends`, self-dependency, out-of-scope id (not the level's shape), unknown id; empty `Touches`, absolute path, `..` segment; then cycles. `external` names ids outside this index that may be referenced (a task depending on an earlier phase's task). Cycles are found over the *effective* graph (`resolveDepends`, defaults included), so an explicit edge that closes a loop with a default edge is caught; each cycle is reported once with its path.
+- **Selection.** `nextReady(units, done)`: first unit in index order not done whose effective prerequisites are all in `done` (which may hold external ids). No blocked handling: blocked is runtime state (R1), and today's loops resume a blocked task directly.
 
 <!-- auto: eof -->
