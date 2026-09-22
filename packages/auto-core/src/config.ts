@@ -10,7 +10,7 @@ import { loadModes } from "./mode"
 import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import type { SubtaskMode } from "./opts"
-import { phaseTypeRoleProblems } from "./switches"
+import { phaseTypeRoleProblems, type AgentChoice } from "./switches"
 import { PARALLEL_LEVELS, type ParallelLevel } from "./intent/types"
 
 export { PARALLEL_LEVELS, type ParallelLevel }
@@ -18,8 +18,11 @@ export { PARALLEL_LEVELS, type ParallelLevel }
 export type ProjectConfig = {
   // 须为 loadModes(dir) 已注册名。
   mode: string
-  // 缺省 "auto";存在性仍由 run 前完整性检查兜底。
-  agent: string
+  // The coding agent the project runs on (M6.1): opencode (absent, the
+  // default — no key is written) or claude. Until M6.1 this key named the agent
+  // contract; that name is fixed to `auto` now (opts.ts CONTRACT_AGENT), and a
+  // stored contract name fails loading with a hint.
+  agent?: AgentChoice
   // 千 tokens(与 CLI 单位一致;run 侧 ×1000 注入 Opts)。
   contextLimit: number
   subtask: SubtaskMode
@@ -78,7 +81,6 @@ export type ProjectConfig = {
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
   mode: "migrate",
-  agent: "auto",
   contextLimit: 64,
   subtask: "auto",
   idleTime: 10,
@@ -145,7 +147,7 @@ async function readLegacyMode(dir: string): Promise<string | undefined> {
 export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "unset"}`
   return (
-    `mode ${config.mode} · agent ${config.agent} · subtask ${config.subtask}` +
+    `mode ${config.mode} · agent ${config.agent ?? "opencode"} · subtask ${config.subtask}` +
     ` · watchdog ${watchdog} · commit ${config.commit ? "on" : "off"}` +
     (config.testByDriver ? ` · test-by-driver on${config.handoverTest ? "(handover)" : ""}` : "") +
     (config.autoNumber ? " · auto-number on" : "") +
@@ -203,7 +205,7 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   }
   return {
     mode,
-    agent: stringOf("agent", pick("agent")),
+    agent: agentOf(record.agent),
     contextLimit,
     subtask: subtaskOf(pick("subtask")),
     testByDriver,
@@ -223,6 +225,18 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     build: record.build === undefined ? undefined : stringOf("build", record.build),
     parallel: parallelOf(record.parallel),
   }
+}
+
+// agent: opencode|claude; absent and "opencode" both mean opencode (undefined),
+// so the default is never written. Any other string is a pre-M6.1 contract name.
+export function agentOf(value: unknown): AgentChoice | undefined {
+  if (value === undefined || value === "opencode") return undefined
+  if (value === "claude") return value
+  const retired =
+    typeof value === "string"
+      ? ` ("${value}" looks like an agent contract name: that setting is retired — the contract is always .opencode/agent/auto.md; delete the key, or set "claude")`
+      : ""
+  throw new Error(`${CONFIG_FILE} agent must be opencode|claude${retired}`)
 }
 
 // parallel: none|low|medium|high; absent and "none" both mean none (undefined),

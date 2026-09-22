@@ -17,20 +17,22 @@ import { loadPhaseTypes } from "./phases/custom"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import { activeIntentText, useIntentPacks } from "./prompt"
-import type { PermissionMode, SubtaskMode } from "./opts"
+import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
 import type { ParallelLevel } from "./intent/types"
 import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
 import { shellProfile } from "./shell"
-import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems } from "./switches"
+import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, type AgentChoice } from "./switches"
 import { loadStats } from "./stats"
 import { renderText, usePromptLibrary } from "./template"
 import { restoreTestHandoffs } from "./testrun"
 import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 export type RunAllOpts = {
-  agent?: string
+  // The coding agent (M6.1, config `agent`; absent = opencode). The shell
+  // profile's agent and OPENCODE_AUTO_AGENT take precedence (src/agent-choice.ts).
+  agent?: AgentChoice
   server?: string
   verbose?: boolean
   waitAnswer?: number
@@ -146,10 +148,11 @@ export async function preflight(
     log(`⚠ parallel ${opts.parallel}: the active intent pack has no \`## parallelism\` / \`### ${opts.parallel}\` subsection; planning sessions get no parallelism guidance`)
   }
 
-  // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:
-  // agent 契约文件缺失时服务端只回 UnknownError(不含根因),此处提前报出并按外壳
-  // 画像提示恢复方式(src/shell.ts);与模板不一致仅警告。
-  const agentName = opts.agent ?? "auto"
+  // The agent contract written by init (CONTRACT_AGENT); pre-run integrity
+  // check: with the contract file missing the server only answers UnknownError
+  // (no root cause), so report it here with the shell profile's recovery hint
+  // (src/shell.ts); a contract differing from the template only warns.
+  const agentName = CONTRACT_AGENT
   const agentFile = join(directory, ".opencode/agent", `${agentName}.md`)
   const agentText = await Bun.file(agentFile).text().catch(() => undefined)
   const { program, bin, agentRecovery } = shellProfile()
@@ -164,7 +167,7 @@ export async function preflight(
   }
   // init 写入的是按当时 testByDriver 渲染后的契约,比对须用当前配置同样
   // 渲染(与原始模板全文比对会因 {{#if}} 标记恒不一致,口径同 renderAgentContract)。
-  if (agentName === "auto" && agentText !== (await renderAgentContract(Boolean(opts.testByDriver)))) {
+  if (agentText !== (await renderAgentContract(Boolean(opts.testByDriver)))) {
     log(
       `⚠ .opencode/agent/auto.md differs from the current template (possibly a legacy contract); ` +
         (agentRecovery === "startup" ? `re-running ${program} refreshes it from the template` : `run ${bin} init ${directory} to refresh it`),

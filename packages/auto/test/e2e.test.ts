@@ -263,7 +263,7 @@ describe("CLI 解析: run 侧选项与配置", () => {
       const fixed = [
         ["-m", "migrate"],
         ["--mode", "migrate"],
-        ["--agent", "auto"],
+        ["--agent", "claude"],
         ["--context-limit", "64"],
         ["--subtask", "auto"],
         ["--idle-time", "10"],
@@ -457,7 +457,6 @@ describe("CLI: init 固化项目配置", () => {
       expect(init.out).toContain("list tasks in docs/R-01/P01-implement/tasks.md")
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
-        agent: "auto",
         contextLimit: 64,
         subtask: "auto",
         idleTime: 10,
@@ -476,7 +475,6 @@ describe("CLI: init 固化项目配置", () => {
 
   const DEFAULT_CONFIG = {
     mode: "migrate",
-    agent: "auto",
     contextLimit: 64,
     subtask: "auto",
     idleTime: 10,
@@ -496,8 +494,8 @@ describe("CLI: init 固化项目配置", () => {
       expect((await runCli(["init", dir, "--amend", "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand"])).code).toBe(0)
       expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand" })
       // 再 amend 一个无关键: 上一轮改过的三个键原样保留
-      expect((await runCli(["init", dir, "--amend", "--agent", "custom"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "custom" })
+      expect((await runCli(["init", dir, "--amend", "--agent", "claude"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "claude" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -506,8 +504,8 @@ describe("CLI: init 固化项目配置", () => {
   test("init 缺省全量覆盖: 未给出的键强制回落默认值,与干净环境无参 init 一致", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand", "--agent", "custom"])).code).toBe(0)
-      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "custom" })
+      expect((await runCli(["init", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand", "--agent", "claude"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "claude" })
       // 无参 init: 上面改过的四个键全部回到默认值
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
@@ -653,6 +651,36 @@ describe("CLI: init 固化项目配置", () => {
     }
   })
 
+  test("init --agent freezes the coding agent; opencode drops the key; a contract name is refused (M6.1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const plain = await runCli(["init", dir])
+      expect(plain.code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("agent")
+      expect(plain.out).toContain("· agent opencode ·")
+      const claude = await runCli(["init", dir, "--agent", "claude"])
+      expect(claude.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ agent: "claude" })
+      expect(claude.out).toContain("· agent claude ·")
+      // --amend keeps it; --amend --agent opencode removes it
+      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ agent: "claude" })
+      expect((await runCli(["init", dir, "--amend", "--agent", "opencode"])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("agent")
+      // the retired contract-name use of --agent is a usage error
+      const named = await runCli(["init", dir, "--agent", "auto"])
+      expect(named.code).toBe(1)
+      expect(named.err).toContain("--agent takes opencode|claude")
+      // a pre-M6.1 config holding a contract name fails loading with a hint
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ agent: "auto" }))
+      const run = await runCli(["run", dir])
+      expect(run.code).toBe(1)
+      expect(`${run.out}${run.err}`).toContain("looks like an agent contract name")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("init --parallel freezes the planning level; none drops the key; run --max-sessions is reserved (MP.1)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
@@ -748,7 +776,7 @@ describe("CLI: init 固化项目配置", () => {
       await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 示例任务\nPhase: R-01.P01\n\n## Goal\n\n示例。\n")
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
-      expect(status.out).toContain("⚙ project config (.opencode/auto/config.json): mode migrate · agent auto")
+      expect(status.out).toContain("⚙ project config (.opencode/auto/config.json): mode migrate · agent opencode")
       expect(status.out).toContain("phases m")
       expect(status.out).toContain("[▶] P01-implement")
       expect(status.out).toContain("[ ] T-001 示例任务")
@@ -1499,14 +1527,14 @@ describe("CLI: 工作区干净度闸门", () => {
       expect(dirty.err).toContain("opencode.json")
       expect(dirty.err).toContain("-f/--force")
       // 拦截发生在任何写盘之前
-      expect(await readConfigAt(dir)).toMatchObject({ agent: "auto" })
+      expect(await readConfigAt(dir)).not.toHaveProperty("agent")
       // -f 跳过
-      expect((await runCli(["init", dir, "-f", "--agent", "custom"])).code).toBe(0)
-      expect(await readConfigAt(dir)).toMatchObject({ agent: "custom" })
+      expect((await runCli(["init", dir, "-f", "--agent", "claude"])).code).toBe(0)
+      expect(await readConfigAt(dir)).toMatchObject({ agent: "claude" })
       // 提交后不再拦截
       await commitAll(dir)
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect(await readConfigAt(dir)).toMatchObject({ agent: "auto" })
+      expect(await readConfigAt(dir)).not.toHaveProperty("agent")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

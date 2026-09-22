@@ -444,9 +444,3 @@ export async function runOnce(
 function pseudoTask(id: string, title: string): Task {
   return { id, title, status: "in_progress", attempts: 0, body: "" }
 }
-
-// 壳包兼容再导出(plans/0024-module-split-plan.md §D.3,S12 收敛): runner.ts 不再是万能入口,
-// 包内模块与单测一律从符号所在模块精确导入;此处只保留壳包经 `runner` 子路径的既有
-// 消费面(PermissionMode / SubtaskMode 类型与 requireArtifact),壳分支零改动。
-export type { PermissionMode, SubtaskMode } from "./opts"
-export { requireArtifact } from "./artifact"

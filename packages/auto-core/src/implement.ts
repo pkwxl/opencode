@@ -12,17 +12,18 @@ import type { Interactive } from "./interactive"
 import { log } from "./log"
 import type { ModeSpec } from "./mode"
 import type { ParallelLevel } from "./intent/types"
+import type { AgentChoice } from "./switches"
 import { currentPhase, readPhases } from "./phases"
 import { renderImplementPlan } from "./prompt"
-import type { Opts, PermissionMode } from "./opts"
+import { CONTRACT_AGENT, type Opts, type PermissionMode } from "./opts"
 import { requireArtifact } from "./artifact"
-import { manage } from "./agent/opencode/server"
+import { startAgent } from "./agent-choice"
 import { plannedTaskProblems, qualifiedPhase, resetPlanning, takenTaskIds, taskIndexPath } from "./tasks"
 
 export async function implementPlan(
   directory: string,
   input: { file?: string; content: string; brief?: string },
-  config: { agent?: string; commit?: boolean; contextLimit: number; mode?: ModeSpec; parallel?: ParallelLevel },
+  config: { agent?: AgentChoice; commit?: boolean; contextLimit: number; mode?: ModeSpec; parallel?: ParallelLevel },
   opts: { server?: string; verbose?: boolean; waitAnswer?: number; permission?: PermissionMode; interactive?: Interactive } = {},
 ): Promise<{ type: "ok"; count: number } | { type: "blocked"; question: string }> {
   const state = await readPhases(directory)
@@ -32,11 +33,14 @@ export async function implementPlan(
   const phaseId = qualifiedPhase(phase)
   const taken = await takenTaskIds(directory, phase)
   const numberStart = Math.max(0, ...[...taken].map((id) => Number(/^T-(\d+)$/.exec(id)?.[1] ?? 0))) + 1
-  const server = await manage(directory, opts.server, { log })
+  // The project's coding agent, as runAll picks it (src/agent-choice.ts).
+  const started = await startAgent(directory, { agent: config.agent, server: opts.server, permission: opts.permission, interactive: Boolean(opts.interactive) })
+  const server = started.host
   try {
+    if (started.error) return { type: "blocked", question: started.error }
     log(`▶ starting plan-generation session to write ${taskIndex} and the task documents`)
     const sessionOpts: Opts = {
-      agent: config.agent,
+      agent: CONTRACT_AGENT,
       dir: directory,
       verbose: opts.verbose,
       waitAnswer: opts.waitAnswer,

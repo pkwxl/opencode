@@ -21,7 +21,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       strictResume: false,
       handoverConcurrent: false,
       hibernate: undefined,
-      agent: "opencode",
+      agent: undefined,
     })
   })
 
@@ -66,7 +66,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       strictResume: false,
       handoverConcurrent: false,
       hibernate: undefined,
-      agent: "opencode",
+      agent: undefined,
     })
   })
 
@@ -129,7 +129,6 @@ describe("parseSwitches(实验开关环境变量层)", () => {
         [SWITCH_ENV.modelFailbackScope]: "task",
         [SWITCH_ENV.strictResume]: "off",
         [SWITCH_ENV.handoverConcurrent]: "off",
-        [SWITCH_ENV.agent]: "opencode",
       }),
     ).toEqual(parseSwitches({}))
   })
@@ -179,7 +178,9 @@ describe("parseSwitches(实验开关环境变量层)", () => {
   })
 
   test("agent: opencode (default) | claude, a shell profile overrides it (MA.5, plans/0041)", () => {
-    expect(parseSwitches({}).agent).toBe("opencode")
+    expect(parseSwitches({}).agent).toBeUndefined()
+    expect(parseSwitches({ [SWITCH_ENV.agent]: "opencode" }).agent).toBe("opencode")
+    expect(nonDefaultSwitches(parseSwitches({ [SWITCH_ENV.agent]: "opencode" }))).toBe("OPENCODE_AUTO_AGENT=opencode")
     expect(parseSwitches({ [SWITCH_ENV.agent]: "claude" }).agent).toBe("claude")
     expect(nonDefaultSwitches(parseSwitches({ [SWITCH_ENV.agent]: "claude" }))).toBe("OPENCODE_AUTO_AGENT=claude")
     expect(() => parseSwitches({ [SWITCH_ENV.agent]: "codex" })).toThrow(/OPENCODE_AUTO_AGENT.*expected opencode\|claude/)
@@ -324,7 +325,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=opencode",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
     )
   })
 
@@ -332,7 +333,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "off" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=off")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=opencode",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=off, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "on" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=on")

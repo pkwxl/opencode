@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { renderAgentsBlock } from "../src/agents-block"
 import { checkPrinciple } from "../src/check"
-import { ensurePointer } from "../src/loop"
+import { ensurePointer } from "../src/agents-block"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 // refcheck 开关(refcheck-scope-design D3): 引用检查挂点测试在注入 on 的开关下

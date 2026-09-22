@@ -75,7 +75,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → �
 | 键 | 值域 | 缺省 | 说明 |
 | --- | --- | --- | --- |
 | `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
-| `agent` | 非空字符串 | `auto` | 执行会话使用的 agent(`init` 生成的契约 agent),存在性由 run 前完整性检查兜底,见[agent 选择](#opencode-server-与-agent-选择) |
+| `agent` | `opencode` / `claude` | `opencode`(不写键) | 驱动全部会话的编码 agent(M6.1);`OPENCODE_AUTO_AGENT` 可按次覆盖。旧版本此键为契约名(如 `auto`),读到即报错并提示删除该键——契约恒为 `.opencode/agent/auto.md`。见[agent 选择](#opencode-server-与-agent-选择) |
 | `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用(需 `OPENCODE_AUTO_REUSE_SESSION=on`)的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
 | `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线);`--implement-file`/`--implement-prompt` 快捷模式缺省 `ondemand` |
 | `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(test 脚本)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取 |
@@ -146,7 +146,7 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 | --- | --- |
 | `-p` / `--prompt <文本>` | 项目意图文本,整写覆盖到 `.opencode/auto/brief.md`(版本化、人工可编辑,重复 `init -p` 覆盖重写;无 `-p` 时保留既有文件),由每个阶段的规划会话消费;init 不启动任何 AI 会话 |
 | `-m` / `--mode <name>` | 场景模式,写入配置的 `mode` 键(优先级: 显式值 > 既有配置值 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
-| `--agent <name>` | 执行会话使用的 agent,写入配置的 `agent` 键(缺省 `auto`);不做存在性校验,由 run 前完整性检查兜底;见[agent 选择](#opencode-server-与-agent-选择) |
+| `--agent opencode\|claude` | 驱动会话的编码 agent,写入配置的 `agent` 键(缺省 `opencode`,不写键;`--amend --agent opencode` 删除该键);其他取值为用法错误;见[agent 选择](#opencode-server-与-agent-选择) |
 | `--phases <admtvk 子序列含 m \| 阶段类型列表>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);已有完成阶段时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工回退阶段索引。见[阶段化流程](#阶段化流程--phases) |
 | `--source-dir <dir> --source-path <相对路径>` | 迁移源参数,写入配置的 `source` 键;两参数必须成对给出、`dir` 须为工作目录下的相对路径(不含 `..`,迁移源位于 `<工作目录>/<dir>`)、`path` 须为相对 `dir` 的相对路径(不含 `..`),init 时校验 `<工作目录>/<dir>/<path>` 存在(环境错误退出码 1);任一给出即整体覆盖既有 `source`。`dir` 接受软链接——存在性校验跟随链接解析,可把源系统大树留在工作目录外、在工作目录内以链接接入 |
 | `--dest-dir <相对路径>` | 迁移目标目录,写入配置的 `destDir` 键(相对工作目录、不含 `..`,可独立于 source 修订);driver 工作目录的流程文件与迁移产出的代码经它隔离——规划会话据此把代码任务指向 `<工作目录>/<dest-dir>`;不校验存在性(目标目录常由迁移过程创建) |
@@ -272,19 +272,23 @@ T-009 实现迁移: 子任务分解
 
 ### agent 的含义与选择
 
-opencode 的 agent 由目标目录 `.opencode/agent/<name>.md` 定义(frontmatter 指定
-描述/mode/权限,正文是该 agent 的系统提示词),会话用它决定行为契约与默认模型。
-执行会话使用的 agent 由项目配置的 `agent` 键选择(`init --agent <name>` 修订),
-差异如下:
+`agent` 键选择**驱动会话的编码 agent**(`init --agent opencode|claude`,M6.1):
 
-| 选择 | 适用场景 | 说明 |
-| --- | --- | --- |
-| `auto`(缺省) | 无人值守自动执行 | `init` 生成并维护的契约 agent(`.opencode/agent/auto.md`,与内置模板不一致时 `init` 会替换):非交互工作契约——每会话先读 CURRENT.md、严格只做本次角色、状态文件只读、验证执行权在 driver、权限问题走 question 工具其余自主决策并记录决策过程。**opencode-auto 的运行语义依赖该契约,通常保持缺省** |
-| 自定义 agent | 有特殊需求 | 目标目录 `.opencode/agent/` 下你自行定义的 agent(如绑定特定模型、限制工具集),经 `init --agent <name>` 写入配置。注意:该文件缺失会导致下发任务失败(run 前完整性检查会拦截并提示先 init);契约与 `auto` 不一致时,无人值守期间的自动答复、验收与恢复语义可能偏离预期 |
-| (不可选)内置 agent | 直接交互使用 opencode | opencode 内置的交互 agent(如 build/plan)面向有人对话场景,没有"只做本次角色、状态文件只读"等约束,不适合无人值守驱动,本工具不提供该选项 |
+| 选择 | 说明 |
+| --- | --- |
+| `opencode`(缺省) | 托管或复用 `opencode serve`(见上节),能力全集 |
+| `claude` | Claude Code headless(`claude -p --output-format stream-json`,要求 PATH 上有 `claude` CLI);每个工作会话一个子进程,`--server` 被忽略。缺失的能力(fork、提问等)在 run 启动时自动降级并逐条打印 |
 
-`init` 生成的 `auto` 契约会随后续版本演进,`init` 对 `.opencode/agent/auto.md`
-总是替换为最新模板;`run` 启动时发现它与模板不一致会给出刷新提示。
+优先级:外壳画像指定的 agent > 环境变量 `OPENCODE_AUTO_AGENT`(按次覆盖,空串 = 不覆盖)
+> 配置 `agent` 键 > `opencode`。`init --implement-file/--implement-prompt` 的计划生成
+会话同样使用该 agent。
+
+**agent 契约**恒为 `init` 生成并维护的 `.opencode/agent/auto.md`(M6.1 起不再可选;旧版
+`--agent <name>` 的契约名语义已退役):非交互工作契约——严格只做本次角色、状态文件
+只读、验证执行权在 driver、权限问题走 question 工具其余自主决策并记录决策过程。
+opencode 把它作为会话 agent;claude 把其正文追加到系统提示词、把 `opencode.json`
+的权限规则转写为 claude 设置。契约与内置模板不一致时 `init` 总是替换为最新模板,
+`run` 启动时发现不一致会给出刷新提示;文件缺失时 run 前完整性检查拦截并提示先 init。
 
 ## 执行流水线
 

@@ -10,6 +10,11 @@ import { activeIntentText } from "./prompt"
 // The maintenance rules paragraph is decision/knowledge governance (M2.1,
 // plans/0043): it comes from the active intent pack (`## governance` /
 // `### agents-maintenance`) and drops out when the pack lacks it.
+// The block does not make every session read CURRENT.md (the prompt inlines the
+// task; CURRENT.md is the fallback after context compaction). AGENTS.md is
+// system context reread on every provider turn, and the driver restarts the
+// server before the next new session when it changes. AGENTS.md is not made
+// read-only (tasks may update it); run/init only keep this block in sync.
 export const AGENTS_BLOCK_START = "<!-- opencode-auto:start -->"
 export const AGENTS_BLOCK_END = "<!-- opencode-auto:end -->"
 

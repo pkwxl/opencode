@@ -1,8 +1,5 @@
 import { ExitRequested } from "./exit"
 import { hibernatePause } from "./hibernate"
-// .gitignore 条目维护已上收至叶子模块 gitignore.ts(与 reset 成对);此处
-// 再导出以保持既有导入路径 @opencode-ai/auto-core/loop 不变。
-export { ensureGitignore } from "./gitignore"
 import { startInteractive, type Interactive } from "./interactive"
 import type { LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
@@ -12,27 +9,12 @@ import { renderDryrun } from "./prompt"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentHost } from "./agent/types"
-import { opencodeHost } from "./agent/opencode/server"
-import { claudeHost } from "./agent/claude/host"
-import { degrade, permissionPreset } from "./capability"
-import { shellProfile } from "./shell"
-import { autoSwitches, clampSwitches } from "./switches"
+import { startAgent } from "./agent-choice"
 import { flushStats } from "./stats"
 
-// AGENTS.md 的 opencode-auto 块(单一标记块,内容与幂等同步逻辑见 agents-block.ts):
-// CURRENT.md 由 driver 整文件重写,块本身按当前配置渲染比对、不一致才整块替换。
-// 块不强制每会话开读 CURRENT.md: 提示词已内联当前任务、子任务会话另有 context.md
-// 背景摘要,无条件重读是纯开销;CURRENT.md 保留为上下文压缩后的兜底入口。
-// AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失;
-// 它有更新时 driver 会在下一个新会话前重启 server,使新会话必定加载最新内容。
-// AGENTS.md 不置只读(任务可更新它),run/init 只确保该块与当前配置渲染一致。
-import { ensurePointer, renderAgentsBlock } from "./agents-block"
-export { ensurePointer, renderAgentsBlock }
-
-// agent 契约渲染与 RunAllOpts 随预检段下沉至 loop-preflight.ts;此处再导出以保持
-// 既有导入路径 @opencode-ai/auto-core/loop 不变(migrate 壳取 renderAgentContract)。
+// RunAllOpts is runAll's signature; the preflight segment owns it.
 import { preflight, type RunAllOpts } from "./loop-preflight"
-export { renderAgentContract, type RunAllOpts } from "./loop-preflight"
+export type { RunAllOpts }
 
 // Exit codes: 0 = all tasks done, 1 = usage/setup error, 2 = blocked, waiting
 // for a human to resolve the issue outside the session and re-run,
@@ -85,28 +67,14 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
         return 1
       }
     }
-    // The shell's agent profile picks the adapter; absent, OPENCODE_AUTO_AGENT
-    // may pick the built-in claude adapter (MA.5), else opencode. The
-    // permission preset reaches only agents without permission events (MA.4).
-    const agent = shellProfile().agent ?? (autoSwitches().agent === "claude" ? { name: "claude", host: claudeHost } : undefined)
-    server =
-      opts.managed ??
-      (await (agent?.host ?? opencodeHost)(directory, {
-        server: opts.server,
-        permission: permissionPreset(opts.permission, opts.dryrun),
-        log,
-      }))
-    if (agent) log(`◇ agent: ${agent.name}`)
-    // Capability degradation (MA.4, plans/0040): force off the switches this
-    // agent cannot serve before the first session; a configuration with no
-    // fallback stops here.
-    const degraded = degrade(server.client.capabilities, autoSwitches(), opts)
-    for (const note of degraded.notes) log(`⚙ ${note}`)
-    if (degraded.error) {
-      log(`⏸ ${degraded.error}`)
+    // Start the project's agent (src/agent-choice.ts) and degrade the switches
+    // it cannot serve; a configuration with no fallback stops here.
+    const started = await startAgent(directory, opts)
+    server = started.host
+    if (started.error) {
+      log(`⏸ ${started.error}`)
       return 1
     }
-    clampSwitches(degraded.switches)
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")

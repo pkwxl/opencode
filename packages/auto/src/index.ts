@@ -7,7 +7,9 @@ import { confirm } from "@opencode-ai/auto-core/confirm"
 import { CONFIG_DEFAULTS, PARALLEL_LEVELS, formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { implementPlan } from "@opencode-ai/auto-core/implement"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
-import { ensureGitignore, ensurePointer, runAll } from "@opencode-ai/auto-core/loop"
+import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
+import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
+import { runAll } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
@@ -30,7 +32,7 @@ import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundBriefPath } from "@opencode-ai/auto-core/docpaths"
 import { roundCloseLines, roundCloseProblems } from "@opencode-ai/auto-core/round-close"
 import { loadPlan } from "@opencode-ai/auto-core/tasks"
-import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
+import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/opts"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
@@ -289,8 +291,8 @@ if (command === "run") {
   // runAll 的阶段路由会以环境错误退出 1。
   if (config.phases !== "m") log(await phasesLine(directory))
   const code = await runAll(directory, {
-    // agent 契约、提交语义、上下文预算等来自配置文件(init 生成);
-    // agent 缺省为 init 生成的自主执行契约,存在性由 run 前完整性检查兜底。
+    // The coding agent, commit semantics, context budget etc. come from the
+    // config file (written by init); OPENCODE_AUTO_AGENT still overrides the agent.
     agent: config.agent,
     server: flags.get("server"),
     // interactive 隐含 verbose 记录级别(watch/变更文件监视照常运行并写入日志)。
@@ -466,6 +468,13 @@ if (command === "init" || command === "continue") {
     console.error("--max-sessions is a run option (concurrent AI sessions for this run); init/continue do not accept it")
     process.exit(1)
   }
+  // --agent (M6.1): the coding agent, frozen like every project attribute;
+  // opencode = the key is absent from config.json.
+  const agent = flags.get("agent")
+  if (agent !== undefined && agent !== "opencode" && agent !== "claude") {
+    console.error(`--agent takes opencode|claude (the coding agent that runs the sessions); defaults to opencode. The agent contract is always .opencode/agent/auto.md`)
+    process.exit(1)
+  }
   // --parallel (auto-core plans/0046 D8): planning-guidance level, frozen like
   // every project attribute; none = the key is absent from config.json.
   const parallel = flags.get("parallel")
@@ -576,7 +585,7 @@ if (command === "init" || command === "continue") {
   // 仅显式给出的键进入合并: --commit/--subtask 等裸选项取各自缺省档,
   // 未出现的选项不覆盖既有配置。
   const explicit: Partial<ProjectConfig> = {}
-  if (flags.has("agent")) explicit.agent = flags.get("agent")
+  if (agent === "claude") explicit.agent = agent
   if (flags.has("commit")) explicit.commit = commit
   if (flags.has("subtask")) explicit.subtask = subtask
   if (flags.has("context-limit")) explicit.contextLimit = contextLimit
@@ -763,8 +772,10 @@ if (command === "init" || command === "continue") {
     process.exit(1)
   }
   const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
-  // --parallel none drops the key (an amend would otherwise keep the old level).
+  // --parallel none / --agent opencode drop their keys (an amend would
+  // otherwise keep the old value).
   if (parallel === "none") delete config.parallel
+  if (agent === "opencode") delete config.agent
   // 防误触闸门: 只在「已存在配置、且本次是全量覆盖」时生效——全新目录没有可覆盖
   // 的东西,--amend 也不会丢弃任何既有键。两道闸都必须排在第一个写盘点
   // (saveProjectConfig)之前,现有 e2e 断言「旗标校验通过前目录为空」的不变式
@@ -1034,8 +1045,8 @@ if (command === "status") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--source-dir <dir> --source-path <relative-path>] [--dest-dir <relative-path>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
-  opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--source-dir <dir> --source-path <relative-path>] [--dest-dir <relative-path>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
+  opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
@@ -1057,6 +1068,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task sessions: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)
        --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from the task indexes, docs artifacts and git history, restores the record, and only then continues planning
        --wrapup / --no-wrapup task wrap-up session switch (default --wrapup = on; --no-wrapup is the opt-out): when off, the wrap-up session is skipped after each task's subtasks/whole-task execution completes (including wrap-up after fix rounds)
+       --agent opencode|claude the coding agent that runs every session (default opencode; claude = Claude Code headless, needs the claude CLI on PATH). The agent contract is always .opencode/agent/auto.md; the env var OPENCODE_AUTO_AGENT overrides the configured agent for a run
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
        --implement-file <file> / --implement-prompt <text> single-phase (phases = "m") shortcut mode, pick one: from the given plan file (injected in full) or the given implementation prompt, start a one-off plan-generation session that writes the task index docs/R-01/P01-implement/tasks.md and one docs/T-NNN/todo.md per task (same mechanism as phase planning sessions; the only path where init starts an AI session); requires effective phases = "m" (switch with --phases m first if incompatible) and an empty task index (rejected when tasks are listed, to avoid clobbering); in this mode, without an explicit --subtask, subtask defaults to ondemand (single-session execution, hand over on demand when context runs out, no per-task decomposition), and without an explicit --wrapup/--no-wrapup, wrapup defaults to false (this mode only produces the task units, never enters the task execution loop, so wrap-up does not apply); after generation, review the task documents manually and call opencode-auto run <dir> separately — from then on tasks proceed with the frozen subtask/wrapup settings; run does not accept these two options

@@ -1,5 +1,6 @@
 // claude headless host (MA.5, plans/0041): the AgentHostFactory a shell hands
-// to setShellProfile, or that OPENCODE_AUTO_AGENT=claude selects. Where the
+// to setShellProfile, or that the project config `agent: "claude"` (or
+// OPENCODE_AUTO_AGENT=claude) selects via src/agent-choice.ts. Where the
 // opencode host keeps one server alive, there is nothing long-lived here: the
 // client starts one `claude -p` process per working session and lets it exit
 // at idle. The host checks the CLI is there, and kills whatever still runs at

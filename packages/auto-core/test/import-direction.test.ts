@@ -59,8 +59,8 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // host factory (MA.3: `manage` → AgentHost), the one adapter-specific module
   // the driver may name — only to construct the host; everything after that
   // goes through the AgentClient/AgentHost types. claude/host = the claude
-  // headless host factory (MA.5, plans/0041), same role: loop.ts names it only
-  // to construct the host when OPENCODE_AUTO_AGENT=claude.
+  // headless host factory (MA.5, plans/0041), same role: src/agent-choice.ts names it only
+  // to construct the host when the project (or OPENCODE_AUTO_AGENT) picks claude.
   agent: ["agent/types", "agent/opencode/server", "agent/claude/host"],
 }
 
@@ -86,6 +86,7 @@ const CLASSIFIED: Record<string, Domain> = {
   // session-api.ts became a driver module (its SDK calls moved into the
   // adapter; what remains seeds chains and formats output over AgentClient).
   // driver (orchestration plane)
+  "agent-choice": "driver",
   "agents-block": "driver",
   artifact: "driver",
   attempt: "driver",

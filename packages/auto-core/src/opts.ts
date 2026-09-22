@@ -37,8 +37,15 @@ export type SubtaskMode = "off" | "auto" | "ondemand"
 // 继续(AI 无授权绕开) / ask-fail 拒绝并退出运行(阻塞停机)。
 export type PermissionMode = "auto-allow" | "ask-allow" | "ask-deny" | "ask-fail"
 
+// The agent contract every session runs under: `.opencode/agent/auto.md`,
+// written by init. Its name is fixed since M6.1 (`--agent` now picks the coding
+// agent, see ProjectConfig.agent); opencode takes it as the session's agent,
+// the claude adapter appends its body to the system prompt.
+export const CONTRACT_AGENT = "auto"
+
 // 会话级选项: runTask/runOnce 与各旁路会话共用的透传参数。
 export type Opts = {
+  // The contract name (CONTRACT_AGENT) — not the coding agent choice.
   agent?: string
   // 目标目录;用于下发失败时检测 agent 契约文件缺失并给出恢复提示。
   dir?: string

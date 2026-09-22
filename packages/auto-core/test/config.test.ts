@@ -82,6 +82,7 @@ describe("loadProjectConfig", () => {
         ["verify", true],
         ["commit", 1],
         ["agent", ""],
+        ["agent", 1],
         ["mode", 123],
         ["phases", ""],
         ["phases", "tma"],
@@ -299,7 +300,7 @@ describe("看门狗键更名回落(verifyIdle/verifyMax → idleTime/idleMax)", 
 })
 
 describe("mergeProjectConfig 与 formatProjectConfig", () => {
-  const existing: ProjectConfig = { ...CONFIG_DEFAULTS, idleMax: 30, agent: "custom" }
+  const existing: ProjectConfig = { ...CONFIG_DEFAULTS, idleMax: 30, agent: "claude" }
 
   test("合并: 仅显式给出的键覆盖,undefined 视同未给出", () => {
     expect(mergeProjectConfig(existing, { subtask: "off" })).toEqual({ ...existing, subtask: "off" })
@@ -315,10 +316,10 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
 
   test("摘要一行含全部键的生效值(phases 追加在末尾)", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).toBe(
-      "mode migrate · agent auto · subtask auto · watchdog idle 10m/max unset · commit on · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent opencode · subtask auto · watchdog idle 10m/max unset · commit on · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig(existing)).toBe(
-      "mode migrate · agent custom · subtask auto · watchdog idle 10m/max 30m · commit on · auto-number on · context-limit 64k · phases m",
+      "mode migrate · agent claude · subtask auto · watchdog idle 10m/max 30m · commit on · auto-number on · context-limit 64k · phases m",
     )
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, phases: "admtvk" })).toContain("phases admtvk")
     // 测试由 driver 执行键入摘要,交接修饰随 handoverTest
@@ -330,6 +331,39 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
     // wrapup 缺省 true 不入摘要(现状零变化);关闭时摘要现"收尾 off"
     expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("wrapup")
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, wrapup: false })).toContain("· wrapup off ·")
+  })
+})
+
+describe("config key agent (M6.1: the coding agent)", () => {
+  test("absent and opencode load as undefined; claude reads back; a retired contract name throws with a hint", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, "{}")
+      expect((await loadProjectConfig(dir)).agent).toBeUndefined()
+      writeConfig(dir, JSON.stringify({ agent: "opencode" }))
+      expect((await loadProjectConfig(dir)).agent).toBeUndefined()
+      writeConfig(dir, JSON.stringify({ agent: "claude" }))
+      expect((await loadProjectConfig(dir)).agent).toBe("claude")
+      writeConfig(dir, JSON.stringify({ agent: "auto" }))
+      expect(loadProjectConfig(dir)).rejects.toThrow(/agent must be opencode\|claude \("auto" looks like an agent contract name/)
+      writeConfig(dir, JSON.stringify({ agent: 2 }))
+      expect(loadProjectConfig(dir)).rejects.toThrow(/agent must be opencode\|claude$/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("opencode writes no key", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ agent: "opencode" }))
+      await saveProjectConfig(dir, await loadProjectConfig(dir))
+      expect(await Bun.file(join(dir, ".opencode", "auto", "config.json")).text()).not.toContain("agent")
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, agent: "claude" })
+      expect((await loadProjectConfig(dir)).agent).toBe("claude")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
