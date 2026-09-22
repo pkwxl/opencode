@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Package-level notes for coding agents, kept lean: the per-file index of module → responsibility → key files lives in [docs/structure.md](./docs/structure.md), and the core/shell contract in [docs/shell-contract.md](./docs/shell-contract.md); the CLI shell is the `../auto` package.
+Package-level notes for coding agents, kept lean: the index of module → responsibility → key files lives in [docs/structure.md](./docs/structure.md), and the core/shell contract in [docs/shell-contract.md](./docs/shell-contract.md); the CLI shell is the `../auto` package.
 
 ## Overview
 
@@ -58,7 +58,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Shell profile → `src/shell.ts`
 - Stable references, round directories (docs/R-NN), and reference checking → `src/docpaths.ts` + `src/refcheck.ts` (0010; refcheck scope narrowing see 0013)
 - Module split and dependency direction (lower layers must not import runner; testrun must not import the session-driving layer) → 0024 §D.2; direction rules (incl. D8 domain boundaries) are enforced by `test/import-direction.test.ts` — a new cross-module import may require a conscious table edit there
-- Full file inventory and mechanism details → docs/structure.md; the retired behavior contract (historical, not maintained) → plans/0029-behavior-historical.md
+- Full module index (module → responsibility → key files) → docs/structure.md; mechanism details → each module's header comment + the plans/ pointer there; retired historical detail (not maintained) → plans/0029-behavior-historical.md (behavior contract), plans/0050-structure-historical.md (former per-file structure detail)
 
 ## Core invariants (read before changing)
 
