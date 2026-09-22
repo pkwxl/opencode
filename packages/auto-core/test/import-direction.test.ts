@@ -140,8 +140,8 @@ const CLASSIFIED: Record<string, Domain> = {
 const FROZEN_IMPORTS: Record<string, string[]> = {
   mode: [],
   template: [],
-  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "plan", "resolve", "stuck", "switches", "template"],
-  phases: ["docpaths", "plan", "template"],
+  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "phases/registry", "plan", "resolve", "stuck", "switches", "template"],
+  phases: ["docpaths", "phases/registry", "plan", "template"],
   docpaths: [],
   doccheck: [],
   protect: ["document/roles"],

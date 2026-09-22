@@ -5,6 +5,7 @@
 import type { Interactive } from "./interactive"
 import type { ModeSpec } from "./mode"
 import type { AgentHost } from "./agent/types"
+import type { PhaseLetter } from "./phases/registry"
 
 // 任务结局。dirty(plans/0021-commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
 // 出口: 不写 PLAN.md、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
@@ -84,7 +85,7 @@ export type Opts = {
   newSession?: boolean
   // 阶段化流程下的当前阶段字母(loop 透传,缺省 undefined = 单次运行): 模型路由
   // 的字母键与分解模板的阶段选择据此求值。
-  phase?: "a" | "d" | "m" | "t" | "v" | "k"
+  phase?: PhaseLetter
   // --no-wrapup(config.wrapup 持久化,缺省 true): 关闭时每个任务的子任务/整
   // 任务执行完成后跳过收尾会话(renderWrapup)。
   wrapup?: boolean

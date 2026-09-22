@@ -11,6 +11,7 @@ import { subtasks, type Plan, type Status, type Task } from "./plan"
 import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
+import { phaseTypeOfLetter, planDutiesPartial } from "./phases/registry"
 import { autoSwitches, type TaskContextMode } from "./switches"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 
@@ -195,7 +196,7 @@ export function renderContextBase(task: Task, digest: string): string {
 // core template keeps only role boundaries, format protocols, and eof.
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
   const ctx = baseCtx(plan, task, opts)
-  const duties = dutiesForPhase(activeIntentPack, opts.phase ?? "m")
+  const duties = dutiesForPhase(activeIntentPack, phaseTypeOfLetter(opts.phase ?? "m").dutiesRef)
   return renderPrompt(decomposeTemplateName(opts.phase, promptTemplateNames()), {
     ...ctx,
     decomposeRule: intentText("quality", "decompose", ctx),
@@ -205,11 +206,11 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
   })
 }
 
-// decompose 模板名解析(纯函数,便于单测): 阶段字母 → decompose-<phase>(缺省
-// m);names 为当前生效模板名清单(promptTemplateNames()),无此名时回退通用
-// decompose。
+// decompose 模板名解析(纯函数,便于单测): 阶段字母 → 注册表条目的
+// decomposeTemplate(缺省 m);names 为当前生效模板名清单(promptTemplateNames()),
+// 无此名时回退通用 decompose。
 export function decomposeTemplateName(phase: Phase | undefined, names: string[]): string {
-  const candidate = `decompose-${phase ?? "m"}`
+  const candidate = phaseTypeOfLetter(phase ?? "m").decomposeTemplate
   return names.includes(candidate) ? candidate : "decompose"
 }
 
@@ -373,6 +374,7 @@ export function renderPhasePlan(input: {
   numberStart?: number
 }): string {
   const { phase } = input
+  const type = phaseTypeOfLetter(phase)
   return renderPrompt("phase-plan", {
     phase,
     phaseName: phaseText(phase),
@@ -384,14 +386,11 @@ export function renderPhasePlan(input: {
     destDir: input.destDir,
     modeName: input.mode?.name,
     modeInit: input.mode && modeText(input.mode.init),
-    trimmedPhases: phase === "m" && input.trimmedPhases ? true : undefined,
+    trimmedPhases: type.type === "implement" && input.trimmedPhases ? true : undefined,
     numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
-    phaseA: phase === "a",
-    phaseD: phase === "d",
-    phaseM: phase === "m",
-    phaseT: phase === "t",
-    phaseV: phase === "v",
-    phaseK: phase === "k",
+    // The duty paragraph comes from the type's shared partial (registry
+    // dutiesRef, M3.2), rendered through the active library so overlays apply.
+    planDuties: renderText(`{{> ${planDutiesPartial(type)}}}`, {}).trimEnd(),
   })
 }
 

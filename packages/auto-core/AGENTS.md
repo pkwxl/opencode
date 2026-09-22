@@ -33,7 +33,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 ## Navigation (locate by change; NNNN = numbered plans/NNNN-*.md document)
 
 - Project configuration → `src/config.ts` (0004)
-- Task pipeline → `src/runner.ts` + `src/execute.ts`; session driving → `src/chain.ts` → `src/session.ts` → `src/attempt.ts` → `src/watch.ts`; bypass-session skeleton → `src/artifact.ts`; phase loop → `src/loop.ts` + `src/loop-task.ts` + `src/loop-phase.ts` + `src/phases.ts` (0006); preflight → `src/loop-preflight.ts`
+- Task pipeline → `src/runner.ts` + `src/execute.ts`; session driving → `src/chain.ts` → `src/session.ts` → `src/attempt.ts` → `src/watch.ts`; bypass-session skeleton → `src/artifact.ts`; phase loop → `src/loop.ts` + `src/loop-task.ts` + `src/loop-phase.ts` + `src/phases.ts` (0006); phase types (M3.2: the registry of builtin types with their preset letters, names, slugs, decompose template, duties key, standard artifacts, `hasTasks` and gate; `--phases` letters expand through it, and the phase-plan duty paragraph is the `plan-duties-<key>` shared partial) → `src/phases/registry.ts` (0047); preflight → `src/loop-preflight.ts`
 - Fork decomposition and experiment switches → `src/execute.ts` + `src/session.ts` ensureForkBase + `src/session-api.ts` + `src/switches.ts` (0003)
 - Step mode (OPENCODE_AUTO_STEP) → `src/step.ts` (0012); `/exit` graceful exit → `src/exit.ts` (0014)
 - Hibernate windows (OPENCODE_AUTO_HIBERNATE) → `src/hibernate.ts` + `src/switches.ts` (0027)

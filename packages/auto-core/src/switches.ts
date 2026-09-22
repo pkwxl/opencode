@@ -7,6 +7,7 @@
 // 值域),经 runner 入口(runTask)抛出、CLI 侧转退出码 1——与配置「坏文件严格
 // 失败」哲学一致。
 import { log, vlog } from "./log"
+import { PHASE_LETTERS, type PhaseLetter } from "./phases/registry"
 
 // 开关的环境变量名(解析、启动日志与测试引用同一来源)。
 export const SWITCH_ENV = {
@@ -69,9 +70,10 @@ export const MODEL_ROLES = [
 ] as const
 export type ModelRole = (typeof MODEL_ROLES)[number]
 
-// 阶段字母键(OPENCODE_AUTO_MODEL 条目表的字母键值域,见 runner 的 opts.phase)。
-const MODEL_LETTERS = ["a", "d", "m", "t", "v", "k"] as const
-export type ModelLetter = (typeof MODEL_LETTERS)[number]
+// 阶段字母键(OPENCODE_AUTO_MODEL 条目表的字母键值域 = 阶段类型注册表的预置字母,
+// 见 runner 的 opts.phase)。
+const MODEL_LETTERS = PHASE_LETTERS
+export type ModelLetter = PhaseLetter
 
 // 归一化后的模型路由策略(P1 只解析并持有,实际求值 resolveModel 落 P2)。缺省
 // wildcard=undefined / byLetter={} / byRole={} / fallback=[] 即「未设」——两变量

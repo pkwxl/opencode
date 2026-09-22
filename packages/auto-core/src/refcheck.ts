@@ -17,6 +17,7 @@ import type { Stats } from "node:fs"
 import { join, relative, sep, dirname } from "node:path"
 import { repoRoots } from "./git"
 import { log } from "./log"
+import { PHASE_LETTERS } from "./phases/registry"
 
 // path = 剥离可选 `@<sha>` 版本标记与 `:行号` 尾锚后的引用路径;line = 尾锚行号
 // (存在时);ver = `@<sha>` 版本标记(存在时——历史快照引用,行号上限校验豁免);
@@ -119,7 +120,7 @@ export async function activeDocs(dir: string): Promise<string[]> {
   for await (const file of new Bun.Glob(join("docs", "**", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
     const segments = file.split(/[\\/]/)
     if (segments[1] === "phases") continue
-    if (/^R-\d+$/.test(segments[1] ?? "") && /^[admtvk]-/.test(segments[2] ?? "")) continue
+    if (/^R-\d+$/.test(segments[1] ?? "") && new RegExp(`^[${PHASE_LETTERS.join("")}]-`).test(segments[2] ?? "")) continue
     files.push(segments.join("/"))
   }
   return files.sort()

@@ -28,6 +28,7 @@ import {
   type Phase,
 } from "./phases"
 import { load } from "./plan"
+import { phaseTypeOfLetter } from "./phases/registry"
 import { renderPhaseHandover, renderPhasePlan } from "./prompt"
 import { allowWrite, reprotect } from "./protect"
 import { closeStep, openStep } from "./resume"
@@ -413,7 +414,9 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       // 本轮文档已产出则幂等跳过),随后照常交接。提取失败只打 ⚠ 警告、不污染
       // 退出码(迁移成功不被文档生成失败反向污染);人工在 k 阶段自行向 PLAN.md
       // 填任务时走通用 execute/handover 路由,提取挂点不触发。
-      if (route.phase === "k") {
+      // 判据为注册表 hasTasks: false(M3.2);直连会话本身仍是知识提取专属——
+      // 内置类型中仅 knowledge 无任务,自定义类型(M3.6)接入时再泛化会话选择。
+      if (!phaseTypeOfLetter(route.phase).hasTasks) {
         banner("k knowledge distillation: migration knowledge capture")
         const extracted = await extractKnowledge(serverHandle.client, directory, {
           agent: agentName,

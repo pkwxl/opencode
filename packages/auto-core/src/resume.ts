@@ -1,6 +1,7 @@
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { UnitBaseline } from "./git"
+import type { PhaseLetter as RegistryLetter } from "./phases/registry"
 
 // 进度恢复记录: run 期间 driver 把任务流水线的当前阶段与执行链会话持久化到目标
 // 目录 .auto/progress.json。应用崩溃/被强制终止后重新运行时据此精确恢复:
@@ -24,9 +25,9 @@ import type { UnitBaseline } from "./git"
 // 静默跳过)。无阶段的一次性旁路会话(dryrun/fork 基点等)仍不写记录,避免污染
 // 恢复记忆。
 
-// 阶段字母(与 phases.ts 的 Phase 同值域;此处内联避免 resume→phases 反向依赖,
-// 阶段步骤恢复点用它标注归属阶段)。
-export type PhaseLetter = "a" | "d" | "m" | "t" | "v" | "k"
+// 阶段字母(阶段类型注册表的预置字母;注册表是阶段域入口、无状态叶子模块,取自它
+// 不形成 resume→phases 状态机的反向依赖。阶段步骤恢复点用它标注归属阶段)。
+export type PhaseLetter = RegistryLetter
 
 // 阶段级旁路步骤(driver 侧收口的流程步骤,非任务流水线阶段): phase-plan = 阶段
 // 规划会话(填充 PLAN.md),phase-handover = 阶段交接蒸馏会话(产出交接文档)。

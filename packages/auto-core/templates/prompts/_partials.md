@@ -14,6 +14,10 @@ same line as the content (`…{{/if}}{{#if x}}…`): a tag alone on its line swa
 together with its newline, while the newline left between the two branches falls outside both
 branches and is emitted unconditionally — leaving a trailing blank line at the end of the
 partial that glues onto the next line at the call site.
+The `plan-duties-<key>` sections are the phase-plan duty paragraphs, one per phase type; the
+phase-type registry (`src/phases/registry.ts`, `dutiesRef`) picks the section, so a new type
+adds a section here instead of a branch in phase-plan. Their text stays Chinese until the M3
+template-translation batch.
 
 ## head
 You are carrying out one task of an implementation plan. This session only has to finish the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions (asking a question, performing an action) are not this session's responsibility — do not carry them out.
@@ -63,3 +67,31 @@ do not create flat task files at the top level of docs/. Phase-level free artifa
 batches, coverage matrices, verification records and the like) go into the phase-docs/<phase letter>-<slug>/ subdirectory of this round's
 directory docs/R-NN/ (e.g. docs/R-03/phase-docs/a-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference
 it by that permanent path.
+
+
+## plan-duties-a
+
+- 摸清源系统与源模块的外部行为、依赖与边界,为后续阶段提供行为基线;产物
+  按任务锚定写入 docs/T-NNN/(分析结论、依赖清单等)。
+- 本阶段是首个阶段: 把对源系统的勘察计划排为首批任务。
+
+## plan-duties-d
+
+- 完成目标系统侧的模块设计(接口、数据结构、适配点);设计产物按任务锚定写入 docs/T-NNN/。
+
+## plan-duties-m
+
+- 完成代码迁移与改造;产物为源码改动与 docs/T-NNN/ 下的任务报告。
+
+## plan-duties-t
+
+- 完成测试体系迁移/补齐,对基线行为做回归覆盖;产物为测试代码与 docs/T-NNN/ 任务产物。
+
+## plan-duties-v
+
+- 对照基线与需求完成整体验收;验收结论按任务锚定写入 docs/T-NNN/。
+
+## plan-duties-k
+
+- 完成迁移知识沉淀: 知识文档由 DRIVER 旁路提取会话产出
+  docs/R-NN/migration-kb.md(本轮轮次目录内固定名,永久路径,本阶段不经规划会话排任务)。

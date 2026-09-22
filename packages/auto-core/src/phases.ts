@@ -1,6 +1,7 @@
-// 阶段注册表与阶段状态机(--phases 阶段化流程,设计文档 plans/0006-phases-design.md
-// A/C/D/F 节):固定六字母内置注册表,不开放自定义——阶段有 driver 侧语义(产物
-// 约定),非纯提示词文案。阶段状态是推导式的:
+// 阶段状态机(--phases 阶段化流程,设计文档 plans/0006-phases-design.md A/C/D/F 节)。
+// 阶段类型本身(名称、目录 slug、分解模板、职责、产物约定)归阶段类型注册表
+// src/phases/registry.ts(M3.2, plans/0047 §5);本模块在字母布局退役(M3.3)前仍以
+// 预置字母标识阶段。阶段状态是推导式的:
 // 阶段台账(新布局 = 轮内 docs/R-NN/phases.md,旧布局 = 根 docs/phases.md,读
 // 回落)记录已完成阶段,当前阶段 = phases 串中第一个未在台账出现的字母,零新增
 // 易腐状态;routePhase 由(台账, PLAN.md)两文件推导路由,无隐藏状态,中断恢复
@@ -17,40 +18,22 @@ import { join, relative } from "node:path"
 import { PHASE_ACCEPTANCE_NAME, roundDir } from "./docpaths"
 import type { Plan } from "./plan"
 import { renderText } from "./template"
+import { PHASE_LETTERS, expandPhases, phaseTypeOfLetter, type PhaseLetter } from "./phases/registry"
 import templateScaffold from "../templates/PLAN.scaffold.md" with { type: "file" }
 
-export type Phase = "a" | "d" | "m" | "t" | "v" | "k"
+export type Phase = PhaseLetter
 
-// 唯一合法顺序;校验与推导共用。
-export const PHASE_ORDER = "admtvk"
-
-const PHASE_NAMES: Record<Phase, string> = {
-  a: "分析",
-  d: "设计",
-  m: "迁移实现",
-  t: "测试",
-  v: "验收",
-  k: "知识提炼",
-}
+// 唯一合法顺序(注册表预置字母序);校验与推导共用。
+export const PHASE_ORDER = PHASE_LETTERS.join("")
 
 export function phaseText(phase: Phase): string {
-  return PHASE_NAMES[phase]
+  return phaseTypeOfLetter(phase).name
 }
 
-// 校验 phases 取值: 非空、字母 ∈ admtvk、不重复、含 m、为 admtvk 的子序列
-// (顺序是语义的一部分,自由排列只产生无意义组合);非法返回 null(CLI 转退出码 1)。
-// 严格递增的下标遍历同时覆盖"子序列"与"不重复"两个约束。
+// 校验 phases 取值: 注册表预置展开(expandPhases)——非空、字母均为预置、按预置序
+// 严格递增(子序列且不重复)、含 implement(m);非法返回 null(CLI 转退出码 1)。
 export function parsePhases(raw: string): Phase[] | null {
-  if (!raw) return null
-  let prev = -1
-  let hasM = false
-  for (const ch of raw) {
-    const index = PHASE_ORDER.indexOf(ch)
-    if (index === -1 || index <= prev) return null
-    prev = index
-    if (ch === "m") hasM = true
-  }
-  return hasM ? ([...raw] as Phase[]) : null
+  return expandPhases(raw)?.map((entry) => entry.letter!) ?? null
 }
 
 // 阶段台账(新布局 = 轮内 docs/R-NN/phases.md;旧布局 = 根 docs/phases.md,存量
@@ -98,44 +81,37 @@ function parseLedger(text: string, file: string): Phase[] {
   return done
 }
 
-// 各阶段归档目录英文名(A.1 产物约定的目录化;台账行、归档目录与交接文档共用)。
-const PHASE_SLUGS: Record<Phase, string> = {
-  a: "analysis",
-  d: "design",
-  m: "migrate",
-  t: "testing",
-  v: "acceptance",
-  k: "knowledge",
-}
+// 各阶段归档目录英文名(注册表 slug;台账行、归档目录与交接文档共用)。
+const slug = (phase: Phase): string => phaseTypeOfLetter(phase).slug
 
 // 阶段归档目录(相对目标目录): 新布局 = 轮内 docs/R-NN/<letter>-<slug>/;旧布局
 // = docs/phases/<letter>-<slug>/(legacyPhaseArchive,存量读回落)。只收过期状态
 // 文件(阶段 PLAN.md 快照)。
 export async function phaseArchive(dir: string, round: number, phase: Phase): Promise<string> {
   const root = await roundRoot(dir, round)
-  return root ? `${root}/${phase}-${PHASE_SLUGS[phase]}` : legacyPhaseArchive(phase)
+  return root ? `${root}/${phase}-${slug(phase)}` : legacyPhaseArchive(phase)
 }
 
 // 旧布局阶段归档目录(读回落): docs/phases/<letter>-<slug>/
 export function legacyPhaseArchive(phase: Phase): string {
-  return `docs/phases/${phase}-${PHASE_SLUGS[phase]}`
+  return `docs/phases/${phase}-${slug(phase)}`
 }
 
 // 阶段交接文档路径(相对目标目录,永久,落定不移动): 新布局 = 轮内
 // docs/R-NN/handovers/<letter>-<slug>.md(文件名去 R<N>- 前缀——轮次已由轮目录
 // 表达);旧布局 = docs/handovers/R<N>-<letter>-<slug>.md(legacyHandoverDoc,
 // 存量读回落)。构造点在本文件而非 docpaths.ts: 文件名依赖阶段 slug 表
-// (PHASE_SLUGS 归本模块所有,避免 docpaths→phases 反向依赖)。P2 前的交接位于
+// (slug 表归阶段域,避免 docpaths→phases 反向依赖)。P2 前的交接位于
 // 阶段归档目录 <letter>-<slug>/handover.md,读点经读回落兼容(prevRoundDigest/
 // planPhase,迁移完成后自然消亡)。
 export async function handoverDoc(dir: string, round: number, phase: Phase): Promise<string> {
   const root = await roundRoot(dir, round)
-  return root ? `${root}/handovers/${phase}-${PHASE_SLUGS[phase]}.md` : legacyHandoverDoc(round, phase)
+  return root ? `${root}/handovers/${phase}-${slug(phase)}.md` : legacyHandoverDoc(round, phase)
 }
 
 // 旧布局交接文档(读回落): docs/handovers/R<N>-<letter>-<slug>.md
 export function legacyHandoverDoc(round: number, phase: Phase): string {
-  return `docs/handovers/R${round}-${phase}-${PHASE_SLUGS[phase]}.md`
+  return `docs/handovers/R${round}-${phase}-${slug(phase)}.md`
 }
 
 // 阶段级自由产物目录(永久,落定不移动): a/d/t/v 阶段中不属于任何单个任务的
@@ -145,12 +121,12 @@ export function legacyHandoverDoc(round: number, phase: Phase): string {
 // (蒸馏 = <slug>.md,原始产物 = 同名目录)。构造点在本文件(同 handoverDoc)。
 export async function phaseDocsDir(dir: string, round: number, phase: Phase): Promise<string> {
   const root = await roundRoot(dir, round)
-  return root ? `${root}/phase-docs/${phase}-${PHASE_SLUGS[phase]}` : legacyPhaseDocsDir(round, phase)
+  return root ? `${root}/phase-docs/${phase}-${slug(phase)}` : legacyPhaseDocsDir(round, phase)
 }
 
 // 旧布局阶段级自由产物目录(读回落): docs/phase-docs/R<N>-<letter>-<slug>/
 export function legacyPhaseDocsDir(round: number, phase: Phase): string {
-  return `docs/phase-docs/R${round}-${phase}-${PHASE_SLUGS[phase]}`
+  return `docs/phase-docs/R${round}-${phase}-${slug(phase)}`
 }
 
 // A phase's acceptance record (the phaseAcceptance role, M2.3, plans/0045 D6):
@@ -342,11 +318,11 @@ async function prevRoundModernDigest(dir: string, root: string, prev: number): P
   const abs = join(dir, root)
   const done = await roundDoneLetters(abs)
   const dirs = (await readdir(abs, { withFileTypes: true }).catch(() => []))
-    .filter((entry) => entry.isDirectory() && /^[admtvk]-/.test(entry.name))
+    .filter((entry) => entry.isDirectory() && new RegExp(`^[${PHASE_ORDER}]-`).test(entry.name))
     .map((entry) => entry.name)
     .sort()
   const last = done[done.length - 1]
-  const handover = last ? `${root}/handovers/${last}-${PHASE_SLUGS[last]}.md` : undefined
+  const handover = last ? `${root}/handovers/${last}-${slug(last)}.md` : undefined
   const handoverText = handover ? await Bun.file(join(dir, handover)).text().catch(() => undefined) : undefined
   const knowledge = `${root}/migration-kb.md`
   const knowledgeText = await Bun.file(join(dir, knowledge)).text().catch(() => "")
