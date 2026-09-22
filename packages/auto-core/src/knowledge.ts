@@ -151,7 +151,8 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
 //    不主动清理(git 状态的决定权在人工),返回 dirty 由调用方请人工处置后重跑。
 // ③④ 以 git 为准,仅在统一提交启用(opts.commit !== false)时生效;提交关闭时
 // 维持旧语义(文档存在即完成,脏检查跳过)。
-// ⑤依赖的干净基线由外壳在轮次目录初建后统一提交(stage=round-start)提供。
+// ⑤ The clean baseline this relies on is the round-start commit, which a human
+//    makes after init/continue — no shell commits it (plans/0048 R1).
 // failed(会话受阻/两次未产出)由调用方转阻塞停机,人工处置后重新运行重启本阶段。
 export async function extractPriorKnowledge(
   client: AgentClient,

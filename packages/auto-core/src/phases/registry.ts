@@ -48,7 +48,8 @@ export type PhaseTypeEntry = {
   // false = the phase runs one direct driver session instead of planning and
   // executing tasks (knowledge).
   hasTasks: boolean
-  // verdict = the phase's verdict.md `Result: FAIL` stops the round (M3.3).
+  // verdict = the phase's verdict.md `Result: FAIL` is meant to stop the round;
+  // declared only, nothing reads it yet (plans/0048 R5, M4.2).
   gate: PhaseGate
   // Where the entry comes from; a project file is `.opencode/auto/phases/<type>.md`.
   origin: "builtin" | "project"
