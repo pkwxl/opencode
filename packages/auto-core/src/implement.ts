@@ -11,6 +11,7 @@ import { join } from "node:path"
 import type { Interactive } from "./interactive"
 import { log } from "./log"
 import type { ModeSpec } from "./mode"
+import type { ParallelLevel } from "./intent/types"
 import { currentPhase, readPhases } from "./phases"
 import { renderImplementPlan } from "./prompt"
 import type { Opts, PermissionMode } from "./opts"
@@ -21,7 +22,7 @@ import { plannedTaskProblems, qualifiedPhase, resetPlanning, takenTaskIds, taskI
 export async function implementPlan(
   directory: string,
   input: { file?: string; content: string; brief?: string },
-  config: { agent?: string; commit?: boolean; contextLimit: number; mode?: ModeSpec },
+  config: { agent?: string; commit?: boolean; contextLimit: number; mode?: ModeSpec; parallel?: ParallelLevel },
   opts: { server?: string; verbose?: boolean; waitAnswer?: number; permission?: PermissionMode; interactive?: Interactive } = {},
 ): Promise<{ type: "ok"; count: number } | { type: "blocked"; question: string }> {
   const state = await readPhases(directory)
@@ -50,7 +51,7 @@ export async function implementPlan(
     const planned = await requireArtifact(
       server.client,
       { id: "PLAN", title: "plan generation (implement)", status: "in_progress", attempts: 0, body: "" },
-      renderImplementPlan({ file: input.file, content: input.content, brief: input.brief, phaseId, taskIndex, numberStart }),
+      renderImplementPlan({ file: input.file, content: input.content, brief: input.brief, phaseId, taskIndex, numberStart, parallel: config.parallel }),
       sessionOpts,
       {
         kind: "plan generation",

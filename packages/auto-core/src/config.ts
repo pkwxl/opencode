@@ -11,6 +11,9 @@ import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
 import type { SubtaskMode } from "./opts"
 import { phaseTypeRoleProblems } from "./switches"
+import { PARALLEL_LEVELS, type ParallelLevel } from "./intent/types"
+
+export { PARALLEL_LEVELS, type ParallelLevel }
 
 export type ProjectConfig = {
   // 须为 loadModes(dir) 已注册名。
@@ -66,6 +69,11 @@ export type ProjectConfig = {
   // round-close gate (M4.2, plans/0049 G8/G9). Optional, hand-edited; absent =
   // the build check is skipped.
   build?: string
+  // How hard planning sessions work to make tasks independent (MP.1, plans/0046
+  // D8/D10): the level picks the `## parallelism` intent subsection injected
+  // into the planning templates. Absent = none (nothing injected, today's
+  // prompts byte for byte). Planning guidance only: tasks still run one at a time.
+  parallel?: ParallelLevel
 }
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
@@ -144,7 +152,8 @@ export function formatProjectConfig(config: ProjectConfig): string {
     (config.wrapup ? "" : " · wrapup off") +
     ` · context-limit ${config.contextLimit}k · phases ${config.phases}` +
     (config.acceptanceGate?.length ? ` · acceptance gate ${config.acceptanceGate.join(",")}` : "") +
-    (config.build ? " · build set" : "")
+    (config.build ? " · build set" : "") +
+    (config.parallel ? ` · parallel ${config.parallel}` : "")
   )
 }
 
@@ -212,7 +221,18 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     destDir: destDirOf(record.destDir),
     acceptanceGate: acceptanceGateOf(record.acceptanceGate, types.map((entry) => entry.type)),
     build: record.build === undefined ? undefined : stringOf("build", record.build),
+    parallel: parallelOf(record.parallel),
   }
+}
+
+// parallel: none|low|medium|high; absent and "none" both mean none (undefined),
+// so a config without the key and one saying "none" load the same.
+export function parallelOf(value: unknown): ParallelLevel | undefined {
+  if (value === undefined || value === "none") return undefined
+  if (typeof value !== "string" || !(PARALLEL_LEVELS as readonly string[]).includes(value)) {
+    throw new Error(`${CONFIG_FILE} parallel must be none|${PARALLEL_LEVELS.join("|")}`)
+  }
+  return value as ParallelLevel
 }
 
 // acceptanceGate: an array of distinct known phase type ids; absent or [] = none.

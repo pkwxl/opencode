@@ -16,8 +16,9 @@ import { roundBriefPath } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
-import { useIntentPacks } from "./prompt"
+import { activeIntentText, useIntentPacks } from "./prompt"
 import type { PermissionMode, SubtaskMode } from "./opts"
+import type { ParallelLevel } from "./intent/types"
 import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
@@ -87,6 +88,12 @@ export type RunAllOpts = {
   // config.build: the target's build command for the round-close report at the
   // complete route (plans/0049 G8).
   build?: string
+  // config.parallel (MP.1, plans/0046 D8): the planning-guidance level injected
+  // into the planning sessions; absent = none.
+  parallel?: ParallelLevel
+  // --max-sessions (plans/0046 D9): concurrent AI sessions. Reserved until the
+  // MP.3 scheduler exists: only 1 (the default) is accepted.
+  maxSessions?: number
 }
 
 // agent 契约渲染文本: 按 testByDriver 两态渲染内置模板。外壳的契约维护
@@ -126,6 +133,17 @@ export async function preflight(
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }
+  }
+  // --max-sessions is reserved (plans/0046 D9): there is no scheduler yet, so a
+  // request for concurrent sessions is refused instead of silently run serially.
+  if (opts.maxSessions !== undefined && opts.maxSessions !== 1) {
+    log(`max sessions ${opts.maxSessions}: concurrent execution is not supported yet (only 1)`)
+    return { exit: 1 }
+  }
+  // A project intent pack without the level's subsection injects nothing; say so
+  // once rather than let the setting silently do nothing.
+  if (opts.parallel && !activeIntentText("parallelism", opts.parallel)) {
+    log(`⚠ parallel ${opts.parallel}: the active intent pack has no \`## parallelism\` / \`### ${opts.parallel}\` subsection; planning sessions get no parallelism guidance`)
   }
 
   // --agent 缺省取 auto 契约 agent(init 生成的自主执行契约);run 前完整性检查:

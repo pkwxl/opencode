@@ -83,6 +83,16 @@ the necessary survey and design points into this phase's first batch of tasks. T
 before baseline, the guard/flip/exclude/per-batch-update checklist, AUTO-TODO reconciliation, tallies, etc.) must not
 be dropped because of pipeline trimming.
 {{/if}}
+{{#if parallelRules}}
+
+## Parallelism ({{parallel}})
+
+This project plans for parallel execution: a task whose dependencies are done can run side by side with any other
+task whose `Touches:` paths it does not overlap. Plan for that as follows:
+
+{{parallelRules}}
+
+{{/if}}
 ## Tasks
 
 1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/ content;

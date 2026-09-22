@@ -147,6 +147,19 @@ describe("golden 渲染快照", () => {
         }),
       )
     }
+    // MP.1: one render above parallel none (the level block); every golden
+    // above renders at none and stays byte-identical.
+    golden(
+      "phase-plan-m-parallel-high",
+      renderPhasePlan({
+        phase: phaseTypeOfLetter("m"),
+        brief: "项目意图(固定输入)。",
+        mode: migrate,
+        phaseId: "R-01.P02",
+        taskIndex: "docs/R-01/P02-implement/tasks.md",
+        parallel: "high",
+      }),
+    )
     golden(
       "phase-handover",
       renderPhaseHandover({ phase: phaseTypeOfLetter("m"), handover: "docs/R-01/P02-implement/handover.md", next: "P03-test 测试" }),
@@ -164,6 +177,10 @@ describe("golden 渲染快照", () => {
 
   test("旁路族(计划生成/编号恢复/交接steer/死循环/干跑)", () => {
     golden("implement-plan", renderImplementPlan({ content: "实施提示词全文(固定输入)。", brief: "项目意图。", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md" }))
+    golden(
+      "implement-plan-parallel-medium",
+      renderImplementPlan({ content: "实施提示词全文(固定输入)。", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", parallel: "medium" }),
+    )
     golden("implement-plan-file", renderImplementPlan({ file: "spec.md", content: "计划文件全文(固定输入)。", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", numberStart: 4 }))
     golden("number-recovery", renderNumberRecovery({ floor: 7 }))
     golden("handoff-steer", renderHandoffSteer(task))

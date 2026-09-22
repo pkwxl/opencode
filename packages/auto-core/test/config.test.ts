@@ -332,3 +332,43 @@ describe("mergeProjectConfig 与 formatProjectConfig", () => {
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, wrapup: false })).toContain("· wrapup off ·")
   })
 })
+
+describe("config key parallel (MP.1, plans/0046 D8)", () => {
+  test("absent and none load as undefined; low/medium/high read back; anything else throws", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, "{}")
+      expect((await loadProjectConfig(dir)).parallel).toBeUndefined()
+      writeConfig(dir, JSON.stringify({ parallel: "none" }))
+      expect((await loadProjectConfig(dir)).parallel).toBeUndefined()
+      for (const level of ["low", "medium", "high"] as const) {
+        writeConfig(dir, JSON.stringify({ parallel: level }))
+        expect((await loadProjectConfig(dir)).parallel).toBe(level)
+      }
+      writeConfig(dir, JSON.stringify({ parallel: "max" }))
+      expect(loadProjectConfig(dir)).rejects.toThrow("parallel must be none|low|medium|high")
+      writeConfig(dir, JSON.stringify({ parallel: 2 }))
+      expect(loadProjectConfig(dir)).rejects.toThrow("parallel must be none|low|medium|high")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("none writes no key: a loaded config without the level saves without it", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ parallel: "none" }))
+      await saveProjectConfig(dir, await loadProjectConfig(dir))
+      expect(await Bun.file(join(dir, ".opencode", "auto", "config.json")).text()).not.toContain("parallel")
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, parallel: "high" })
+      expect((await loadProjectConfig(dir)).parallel).toBe("high")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the summary line mentions the level only above none", () => {
+    expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("parallel")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, parallel: "medium" })).toEndWith(" · parallel medium")
+  })
+})

@@ -140,6 +140,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       // 本轮阶段索引无独立 analysis/design 阶段 → implement 阶段规划注入裁剪注记
       trimmedPhases: !state.phases.some((unit) => unit.type === "analysis" || unit.type === "design"),
       numberStart,
+      parallel: opts.parallel,
     }),
     {
       agent: agentName,

@@ -5,7 +5,7 @@
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
-import type { IntentPack, IntentSection } from "./intent/types"
+import type { IntentPack, IntentSection, ParallelLevel } from "./intent/types"
 import { subtaskDoc, taskDoc } from "./docpaths"
 import type { Plan, Status, Task } from "./tasks"
 import type { ResolveItem } from "./resolve"
@@ -390,6 +390,8 @@ export function renderPhasePlan(input: {
   mode?: ModeSpec
   trimmedPhases?: boolean
   numberStart?: number
+  // config.parallel (MP.1): absent = none, nothing injected.
+  parallel?: ParallelLevel
 }): string {
   const type = input.phase
   return renderPrompt("phase-plan", {
@@ -414,7 +416,16 @@ export function renderPhasePlan(input: {
     // type's shared partial (registry dutiesRef, M3.2), rendered through the
     // active library so overlays apply.
     planDuties: renderText(type.planDuties ?? `{{> ${planDutiesPartial(type)}}}`, {}).trimEnd(),
+    ...parallelism(input.parallel),
   })
+}
+
+// Planning parallelism guidance (MP.1, plans/0046 D10/D11): the level's
+// `## parallelism` intent subsection. At none, or when the pack lacks the
+// subsection, both keys are undefined and the template's block renders nothing.
+function parallelism(level: ParallelLevel | undefined): { parallel?: string; parallelRules?: string } {
+  const rules = level ? intentText("parallelism", level, {}) : undefined
+  return rules ? { parallel: level, parallelRules: rules } : {}
 }
 
 // 计划生成会话(packages/auto 的 init 快捷模式 --implement-file/--implement-prompt):
@@ -425,7 +436,15 @@ export function renderPhasePlan(input: {
 // 「计划文件」呈现 content(源文件全文,path 供报文引用),否则按「实施提示词」
 // 呈现(content = 提示词原文);brief 为 .opencode/auto/brief.md 原文(可空,与
 // -p/--prompt 同给时一并注入,供规划会话感知项目意图)。
-export function renderImplementPlan(input: { file?: string; content: string; brief?: string; phaseId: string; taskIndex: string; numberStart?: number }): string {
+export function renderImplementPlan(input: {
+  file?: string
+  content: string
+  brief?: string
+  phaseId: string
+  taskIndex: string
+  numberStart?: number
+  parallel?: ParallelLevel
+}): string {
   return renderPrompt("implement-plan", {
     phaseId: input.phaseId,
     taskIndex: input.taskIndex,
@@ -434,6 +453,7 @@ export function renderImplementPlan(input: { file?: string; content: string; bri
     filePath: input.file,
     content: input.content,
     brief: input.brief?.trim() || undefined,
+    ...parallelism(input.parallel),
   })
 }
 

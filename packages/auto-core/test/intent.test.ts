@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadIntents, packSubsection, parseIntentFile, resolveIntent, dutiesForPhase } from "../src/intent/load"
-import { DEFAULT_INTENT, INTENT_SECTIONS } from "../src/intent/types"
+import { DEFAULT_INTENT, INTENT_SECTIONS, PARALLEL_LEVELS } from "../src/intent/types"
 
 function packText(name: string, sections: Record<string, string>): string {
   const parts = [`# ${name}`]
@@ -15,7 +15,7 @@ function packText(name: string, sections: Record<string, string>): string {
 }
 
 describe("intent file protocol (parseIntentFile)", () => {
-  test("a full pack captures all five sections in canonical order", () => {
+  test("a full pack captures all six sections in canonical order", () => {
     const pack = parseIntentFile(
       "x",
       packText("x", {
@@ -24,6 +24,7 @@ describe("intent file protocol (parseIntentFile)", () => {
         acceptance: "acceptance semantics.",
         governance: "decision discipline.",
         "artifact spec": "artifact conventions.",
+        parallelism: "planning width.",
       }),
     )
     expect(pack.name).toBe("x")
@@ -32,6 +33,7 @@ describe("intent file protocol (parseIntentFile)", () => {
     expect(pack.acceptance).toBe("acceptance semantics.")
     expect(pack.governance).toBe("decision discipline.")
     expect(pack.artifactSpec).toBe("artifact conventions.")
+    expect(pack.parallelism).toBe("planning width.")
     expect(Object.keys(pack)).toEqual(["name", ...INTENT_SECTIONS])
   })
 
@@ -92,6 +94,10 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     expect(packSubsection(pack, "governance", "wrapup-audit")).toContain("pure implementation trade-offs")
     expect(packSubsection(pack, "governance", "agents-maintenance")).toContain("AGENTS.md maintenance rules")
     expect(packSubsection(pack, "acceptance", "result-line")).toContain("Never write PASS for a check you did not run or observe")
+    // MP.1: planning guidance per parallel level; none has no subsection.
+    for (const level of PARALLEL_LEVELS) expect(packSubsection(pack, "parallelism", level)).toContain("Touches:")
+    expect(packSubsection(pack, "parallelism", "high")).toContain("split aggressively")
+    expect(packSubsection(pack, "parallelism", "none")).toBeUndefined()
   })
 
   test("a project file with a new name adds a pack; invalid file names are rejected", () => {

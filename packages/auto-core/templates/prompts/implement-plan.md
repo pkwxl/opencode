@@ -20,6 +20,15 @@ only, do not implement — do not modify any file other than the task index and 
 {{brief}}
 
 {{/if}}
+{{#if parallelRules}}
+## Parallelism ({{parallel}})
+
+This project plans for parallel execution: a task whose dependencies are done can run side by side with any other
+task whose `Touches:` paths it does not overlap. Plan for that as follows:
+
+{{parallelRules}}
+
+{{/if}}
 ## Tasks
 
 1. Do a read-only survey of the target directory's current state, the relevant source code and existing docs/

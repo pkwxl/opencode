@@ -279,6 +279,7 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--no-auto-number"],
         ["--wrapup"],
         ["--no-wrapup"],
+        ["--parallel", "low"],
       ]
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
@@ -647,6 +648,46 @@ describe("CLI: init 固化项目配置", () => {
       const contBoth = await runCli(["continue", dir, "--wrapup", "--no-wrapup"])
       expect(contBoth.code).toBe(1)
       expect(contBoth.err).toContain("mutually exclusive pair")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init --parallel freezes the planning level; none drops the key; run --max-sessions is reserved (MP.1)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // default: no key written, no summary mention
+      const plain = await runCli(["init", dir])
+      expect(plain.code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("parallel")
+      expect(plain.out).not.toContain("parallel")
+      // a level is frozen and shown in the summary
+      const high = await runCli(["init", dir, "--parallel", "high"])
+      expect(high.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ parallel: "high" })
+      expect(high.out).toContain("· parallel high")
+      // --amend keeps it; --amend --parallel none removes it; a plain init falls back to none
+      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ parallel: "high" })
+      expect((await runCli(["init", dir, "--amend", "--parallel", "none"])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("parallel")
+      expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("parallel")
+      // bad level, and --max-sessions outside run, are usage errors
+      const bad = await runCli(["init", dir, "--parallel", "max"])
+      expect(bad.code).toBe(1)
+      expect(bad.err).toContain("--parallel takes none|low|medium|high")
+      const initSessions = await runCli(["init", dir, "--max-sessions", "1"])
+      expect(initSessions.code).toBe(1)
+      expect(initSessions.err).toContain("--max-sessions is a run option")
+      // run: above 1 is not supported yet; a non-integer is a usage error
+      const two = await runCli(["run", dir, "--max-sessions", "2"])
+      expect(two.code).toBe(1)
+      expect(two.err).toContain("concurrent execution is not supported yet")
+      const zero = await runCli(["run", dir, "--max-sessions", "0"])
+      expect(zero.code).toBe(1)
+      expect(zero.err).toContain("--max-sessions takes a positive integer")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

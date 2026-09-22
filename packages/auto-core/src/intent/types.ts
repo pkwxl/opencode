@@ -10,11 +10,16 @@
 // Composition algebra (multi-pack merge, richer precedence) is deliberately
 // not modeled here; it generalizes when a second real consumer appears
 // (open questions 1/2 of the plan).
+//
+// Interface amendments (0031 D4: each driven by a real consumer):
+// - `parallelism` (MP.1, plans/0046 D10): planning guidance for the
+//   init-frozen `parallel` level, `### low|medium|high` subsections injected
+//   into the planning templates. No `### none`: at none nothing is injected.
 
 // Section keys of an intent pack, in canonical document order. The parser
 // (load.ts) and future rendering iterate this list; the pack file protocol
 // uses the human-readable headings mapped in load.ts.
-export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec"] as const
+export const INTENT_SECTIONS = ["quality", "phaseDuties", "acceptance", "governance", "artifactSpec", "parallelism"] as const
 
 export type IntentSection = (typeof INTENT_SECTIONS)[number]
 
@@ -32,7 +37,16 @@ export type IntentPack = {
   governance?: string
   // Artifact declaration conventions; feeds the document domain (M1.4).
   artifactSpec?: string
+  // How hard planning sessions work to make tasks independent, keyed by the
+  // config's `parallel` level (MP.1).
+  parallelism?: string
 }
+
+// The `### <level>` keys of `## parallelism`, i.e. the values of the config's
+// `parallel` (plans/0046 D8). `none` is the absence of the key: accepted on
+// input, never stored, never a subsection.
+export const PARALLEL_LEVELS = ["low", "medium", "high"] as const
+export type ParallelLevel = (typeof PARALLEL_LEVELS)[number]
 
 // Provenance of a loaded pack. Materializes in selection/diagnostics once
 // composition grows beyond the degenerate form; frozen here so the loader

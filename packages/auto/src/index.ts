@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from "node:path"
 import { checkPrinciple } from "@opencode-ai/auto-core/check"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm } from "@opencode-ai/auto-core/confirm"
-import { CONFIG_DEFAULTS, formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
+import { CONFIG_DEFAULTS, PARALLEL_LEVELS, formatProjectConfig, legacyModeFallback, loadProjectConfig, mergeProjectConfig, saveProjectConfig, type ProjectConfig } from "@opencode-ai/auto-core/config"
 import { implementPlan } from "@opencode-ai/auto-core/implement"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensureGitignore, ensurePointer, runAll } from "@opencode-ai/auto-core/loop"
@@ -42,7 +42,8 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--permission/--idle-time/--idle-max/--mode/--phases/--source-dir/
-// --source-path/--dest-dir/--implement-file/--implement-prompt 带值(吞掉下一个
+// --source-path/--dest-dir/--implement-file/--implement-prompt/--parallel/
+// --max-sessions 带值(吞掉下一个
 // token);--verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
 // 是布尔选项,出现即
@@ -68,6 +69,8 @@ const VALUE_FLAGS = new Set([
   "dest-dir",
   "implement-file",
   "implement-prompt",
+  "parallel",
+  "max-sessions",
 ])
 const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force"])
 for (let i = 1; i < args.length; i++) {
@@ -175,7 +178,7 @@ if (command === "run") {
       process.exit(1)
     }
   }
-  for (const key of ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "source-dir", "source-path", "dest-dir"]) {
+  for (const key of ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "source-dir", "source-path", "dest-dir", "parallel"]) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
@@ -245,6 +248,17 @@ if (command === "run") {
     console.error("--permission takes auto-allow|ask-allow|ask-deny|ask-fail; defaults to ask-deny")
     process.exit(1)
   }
+  // --max-sessions (auto-core plans/0046 D9): concurrent AI sessions, reserved
+  // until the MP.3 scheduler exists — only 1 is accepted. Unrelated to --agent.
+  const maxSessions = parseMaxSessions(flags.get("max-sessions"))
+  if (maxSessions === null) {
+    console.error("--max-sessions takes a positive integer (concurrent AI sessions, unrelated to --agent); defaults to 1")
+    process.exit(1)
+  }
+  if (maxSessions > 1) {
+    console.error(`--max-sessions ${maxSessions}: concurrent execution is not supported yet; only 1 is accepted (init --parallel plans for parallelism, tasks still run one at a time)`)
+    process.exit(1)
+  }
   // 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
   // 错误退出 1(严格失败优于静默回落)。文件缺失取缺省并做 legacy 回落
   // (.auto/config.json 的 mode,仅提示、不迁移)。testByDriver/handoverTest 同为
@@ -301,6 +315,8 @@ if (command === "run") {
     wrapup: config.wrapup,
     acceptanceGate: config.acceptanceGate,
     build: config.build,
+    parallel: config.parallel,
+    maxSessions,
     // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
     newSession: flags.has("new-session") && flags.get("new-session") !== "false",
   })
@@ -316,6 +332,13 @@ function parseCommit(flags: Map<string, string>): boolean | null {
   const raw = flags.get("commit")
   if (raw === undefined || raw === "" || raw === "true") return true
   return null
+}
+
+// --max-sessions 缺省 = 1;须为正整数,返回 null 表示取值非法。
+function parseMaxSessions(raw: string | undefined): number | null {
+  if (raw === undefined) return 1
+  const value = Number(raw)
+  return /^\d+$/.test(raw) && value >= 1 ? value : null
 }
 
 // --subtask 缺省/裸选项 = auto;返回 null 表示取值非法。
@@ -439,6 +462,17 @@ if (command === "init" || command === "continue") {
       process.exit(1)
     }
   }
+  if (flags.has("max-sessions")) {
+    console.error("--max-sessions is a run option (concurrent AI sessions for this run); init/continue do not accept it")
+    process.exit(1)
+  }
+  // --parallel (auto-core plans/0046 D8): planning-guidance level, frozen like
+  // every project attribute; none = the key is absent from config.json.
+  const parallel = flags.get("parallel")
+  if (parallel !== undefined && parallel !== "none" && !(PARALLEL_LEVELS as readonly string[]).includes(parallel)) {
+    console.error(`--parallel takes none|${PARALLEL_LEVELS.join("|")}; defaults to none`)
+    process.exit(1)
+  }
   const commit = parseCommit(flags)
   if (commit === null) {
     console.error(
@@ -551,6 +585,7 @@ if (command === "init" || command === "continue") {
   if (phases !== undefined) explicit.phases = phases
   if (source !== undefined) explicit.source = source
   if (destDir !== undefined) explicit.destDir = destDir
+  if (parallel !== undefined && parallel !== "none") explicit.parallel = parallel as ProjectConfig["parallel"]
   // --test-by-driver / --handover-test: 布尔宪法级选项,init/continue
   // 接受(裸选项或 true 启用、false 关闭),经 explicit 合并(amend 语义)。二者不属
   // 迁移同一性选项,continue 可按轮修订。
@@ -728,6 +763,8 @@ if (command === "init" || command === "continue") {
     process.exit(1)
   }
   const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
+  // --parallel none drops the key (an amend would otherwise keep the old level).
+  if (parallel === "none") delete config.parallel
   // 防误触闸门: 只在「已存在配置、且本次是全量覆盖」时生效——全新目录没有可覆盖
   // 的东西,--amend 也不会丢弃任何既有键。两道闸都必须排在第一个写盘点
   // (saveProjectConfig)之前,现有 e2e 断言「旗标校验通过前目录为空」的不变式
@@ -862,7 +899,7 @@ if (command === "init" || command === "continue") {
         content: implementFilePath !== undefined ? await Bun.file(implementFilePath).text() : implementPrompt!,
         brief,
       },
-      { agent: config.agent, commit: config.commit, contextLimit: config.contextLimit * 1000, mode: modes[modeName] },
+      { agent: config.agent, commit: config.commit, contextLimit: config.contextLimit * 1000, mode: modes[modeName], parallel: config.parallel },
     )
     if (result.type === "blocked") {
       console.error(`⏸ plan-generation session blocked (hidden blockage; inspect and re-run):\n${result.question}`)
@@ -997,14 +1034,14 @@ if (command === "status") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--source-dir <dir> --source-path <relative-path>] [--dest-dir <relative-path>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
-  opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
-  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--source-dir <dir> --source-path <relative-path>] [--dest-dir <relative-path>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
+  opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
+  opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
-options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --source-dir/--source-path, --dest-dir) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
+options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --source-dir/--source-path, --dest-dir, --parallel) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed
        --amend switches back to incremental amend semantics (only changes keys explicitly given; the rest keep their existing values); continue is always amend
        -f/--force skips the overwrite confirmation and worktree cleanliness checks (for CI and automation; shared by init and reset)
@@ -1020,6 +1057,8 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task sessions: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)
        --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from the task indexes, docs artifacts and git history, restores the record, and only then continues planning
        --wrapup / --no-wrapup task wrap-up session switch (default --wrapup = on; --no-wrapup is the opt-out): when off, the wrap-up session is skipped after each task's subtasks/whole-task execution completes (including wrap-up after fix rounds)
+       --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
+       --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
        --implement-file <file> / --implement-prompt <text> single-phase (phases = "m") shortcut mode, pick one: from the given plan file (injected in full) or the given implementation prompt, start a one-off plan-generation session that writes the task index docs/R-01/P01-implement/tasks.md and one docs/T-NNN/todo.md per task (same mechanism as phase planning sessions; the only path where init starts an AI session); requires effective phases = "m" (switch with --phases m first if incompatible) and an empty task index (rejected when tasks are listed, to avoid clobbering); in this mode, without an explicit --subtask, subtask defaults to ondemand (single-session execution, hand over on demand when context runs out, no per-task decomposition), and without an explicit --wrapup/--no-wrapup, wrapup defaults to false (this mode only produces the task units, never enters the task execution loop, so wrap-up does not apply); after generation, review the task documents manually and call opencode-auto run <dir> separately — from then on tasks proceed with the frozen subtask/wrapup settings; run does not accept these two options
        continue subcommand: after the previous phased migration round fully completes, start a new round of continued migration (making the migration result more complete and consistent with the source) — at round start a new round directory docs/R-NN/ is created (the phase index phases.md and one P<nn>-<type>/ directory per phase — with its task index, handover and knowledge docs — all live inside the round, permanent once written, with the AGENTS.md snapshot stored as AGENTS.md.bak inside the round), and the previous round's conclusions (final-phase handover and migration knowledge) are injected into the new round's first phase planning session; -m/--mode and the migration parameters (--source-dir/--source-path/--dest-dir) are fixed across rounds and cannot change (passing them is a usage error), while --phases and the remaining execution options (including --test-by-driver/--handover-test) and -p may be revised per round (not subject to the prefix guard)
 

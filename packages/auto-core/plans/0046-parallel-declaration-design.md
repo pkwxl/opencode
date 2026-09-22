@@ -2,9 +2,9 @@
 
 Root plan item MP.1 (`plans/AUTO_NEXT_REFACTOR_PLAN.md`, MP track, "declaration
 only, no concurrency"), stage 1 of the rollout in `plans/0036` §6.4. Design
-only; nothing here is implemented yet. The four open-question-15 sub-items MP.1
-depends on were ruled by the user on 2026-09-21 (§1); everything else is a
-proposal for review.
+only at first; D8–D12 were implemented on 2026-09-22 (§8). The four
+open-question-15 sub-items MP.1 depends on were ruled by the user on 2026-09-21
+(§1).
 
 > **Status (2026-09-21): partly superseded by `0047-unit-layout-design.md`.**
 > PLAN.md is retired there, so D1's carrier (PLAN.md task fields) is replaced
@@ -13,6 +13,9 @@ proposal for review.
 > 0047 G3. S1 is deferred and handed to M3. D8–D12 (`--parallel`,
 > `--max-sessions`, the `parallelism` intent section, the planning-template
 > block) remain MP.1's scope, now scheduled after M3.
+>
+> **Status (2026-09-22): D8–D12 implemented (S2–S6), see §8.** With D1–D7
+> already delivered by M3.1/M3.5 in generalized form, MP.1 is complete.
 
 ## 1. Rulings (root open question 15, 2026-09-21)
 
@@ -95,11 +98,11 @@ existing project's behaviour does not change.
 ## 5. Steps
 
 - [ ] ~~S1~~ (handed to root M3.1/M3.5 via 0047) `plan.ts`: parse `depends`/`touches` (D1, D3), `planProblems` (D4), `next(plan, { deps })` (D7); unit tests (grammar, each error class, cycle path text, dependency order, `blocked` still selectable, `deps: false` identical to today).
-- [ ] S2 Config + shell: optional `parallel` in `ProjectConfig` with validation (D8); `--parallel` on `init`, usage error on `run`; `--max-sessions` on `run` with the D9 rules; help text; banner line. Tests in both packages.
-- [ ] S3 Intent: `parallelism` section (types + heading map + `default.md` text) (D10); interface-amendment note in the types header (0031 D4).
-- [ ] S4 Templates: guarded block in `phase-plan.md` and `implement-plan.md` (D11); `renderPhasePlan` / `renderImplementPlan` take the level. New goldens for one planning render per template at a level above `none`; existing goldens unchanged.
-- [ ] S5 Wiring: `requireArtifact` dynamic `requirement` (D6); planning `collect` runs `planProblems` (D5 ①); task loop check + exit 2 (D5 ②); `next` callers pass `deps`. Tests: planning retry names the problem; hand-edited cycle stops the loop; dependency order drives task selection in a scripted run.
-- [ ] S6 Records: 0035 §3 rows for `depends:` / `touches:` (new English literals, no dual-read); shell-contract option list; package AGENTS.md navigation line; root plan MP.1 check-off + open question 15 rulings.
+- [x] S2 Config + shell: optional `parallel` in `ProjectConfig` with validation (D8); `--parallel` on `init`, usage error on `run`; `--max-sessions` on `run` with the D9 rules; help text; banner line. Tests in both packages.
+- [x] S3 Intent: `parallelism` section (types + heading map + `default.md` text) (D10); interface-amendment note in the types header (0031 D4).
+- [x] S4 Templates: guarded block in `phase-plan.md` and `implement-plan.md` (D11); `renderPhasePlan` / `renderImplementPlan` take the level. New goldens for one planning render per template at a level above `none`; existing goldens unchanged.
+- [x] S5 Wiring (reduced, §8): `requireArtifact` dynamic `requirement` (D6); planning `collect` runs `planProblems` (D5 ①); task loop check + exit 2 (D5 ②); `next` callers pass `deps`. Tests: planning retry names the problem; hand-edited cycle stops the loop; dependency order drives task selection in a scripted run.
+- [x] S6 Records (reduced, §8): 0035 §3 rows for `depends:` / `touches:` (new English literals, no dual-read); shell-contract option list; package AGENTS.md navigation line; root plan MP.1 check-off + open question 15 rulings.
 
 ## 6. Verification
 
@@ -115,5 +118,55 @@ existing project's behaviour does not change.
 - Subtask-level `Touches:` token and decompose-side guidance (after R1's task-level stage proves out).
 - Disjointness *enforcement* (path-scoped staging, 0036 D6).
 - Id namespace D3-A/B and configurable `destDir` (R5, MP.3).
+
+## 8. Implementation notes (2026-09-22)
+
+What landed, and where it departs from §3–§6 (mostly because 0047 and M3.5
+already delivered the generic half):
+
+- **D8.** `ProjectConfig.parallel?: ParallelLevel` (`src/config.ts`); `none`
+  and absence both load as `undefined` and nothing is written. The level type
+  and `PARALLEL_LEVELS` live in `src/intent/types.ts`, since the levels are the
+  `### <level>` keys of the intent section; `config.ts` re-exports them.
+  `src/prompt.ts` imports the type from there because its import set is frozen
+  (M0.7 guard). Shell: `init`/`continue --parallel none|low|medium|high`
+  (`--amend --parallel none` deletes the key); `run --parallel` joins the
+  frozen-attribute usage error. The banner summary appends ` · parallel <level>`
+  only above `none`.
+- **D9.** `run --max-sessions <n>` (positive integer, default 1); above 1 is a
+  usage error in the shell, and `runAll`'s preflight refuses it too (exit 1,
+  before anything is read or written) for shells that skip the check. `init` /
+  `continue` reject the flag as run-only. `RunAllOpts.maxSessions` carries it.
+  The "above 1 with `parallel: none`" rule is subsumed: any value above 1 fails.
+- **D10.** `parallelism` appended to `INTENT_SECTIONS` (interface-amendment note
+  in the types header) with the heading `## parallelism`; `default.md` gains
+  `### low` / `### medium` / `### high` from §6.4 of 0036. Preflight warns once
+  when the active pack lacks the configured level's subsection.
+- **D11.** One `{{#if parallelRules}}` block before `## Tasks` in
+  `phase-plan.md` and `implement-plan.md`: a two-line framing sentence plus the
+  level text. The field syntax is **not** repeated there: since M3.5 the
+  `task-depends` partial describes `Depends:` / `Touches:` unconditionally.
+  `renderPhasePlan` / `renderImplementPlan` take `parallel`; `loop-phase.ts`
+  passes `opts.parallel`, `implementPlan` passes the config's. New goldens
+  `phase-plan-m-parallel-high` and `implement-plan-parallel-medium`; every
+  existing golden is unchanged.
+- **D12.** The gap closed itself: the field literals sit in the unconditional
+  `task-depends` partial, which carries the tier-1 markers `Depends:`,
+  `Depends: none`, `Touches:` (M3.5). The guarded block holds no protocol
+  string, so an override that drops it loses only guidance, not a parser input.
+- **D5/D6/D7 (S5).** Already generic and unconditional since M3.5 (0047 G3–G5):
+  plan checks run at every level, the planning retry names the problems (the
+  `requirement` getter), and selection follows `Depends:` with the serial
+  default. So `none` is byte-identical to the post-M3 baseline in prompts and
+  config, which is the baseline the root plan fixed for the exit criterion.
+- **Known limit.** The `init --implement-*` shortcut renders with the built-in
+  intent pack (project intent overlays are loaded only by `runAll`'s
+  preflight), so a project override of `## parallelism` does not reach that
+  one session. This predates MP.1 and applies to every intent section there.
+- **Verification.** Both packages typecheck; auto-core 1101 pass / 0 fail,
+  packages/auto 55 pass + 4 skip / 0 fail. The §6 dryrun under
+  `init --parallel high` + `--max-sessions 1` needs a live agent and moves to
+  the M6 field window; offline, the new goldens, the `runAll` refusal and the
+  CLI tests cover the same surface.
 
 <!-- auto: eof -->
