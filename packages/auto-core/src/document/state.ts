@@ -4,7 +4,7 @@
 // docs/T-NNN/S<nn>/todo.md (scope statement + artifact list) per subtask; on
 // completion DRIVER renames it to done.md inside the unit commit boundary. File
 // existence is the authoritative progress fact (state grounding — checklist
-// ticks in PLAN.md follow the files, never the other way around).
+// ticks in subtasks.md follow the files, never the other way around).
 //
 // Role model (M2.3): both files play the `artifact` role — their *content* is
 // the decompose session's scope statement, shape-checked once at creation and
@@ -65,9 +65,9 @@ export async function scanSubtaskStates(dir: string, taskId: string, count: numb
 }
 
 // Effective done flags for the checklist: with the protocol active, done.md
-// existence overrides the PLAN.md tick (files are the progress fact). Illegal
+// existence overrides the subtasks.md tick (files are the progress fact). Illegal
 // states (reported via the scan's illegal list) degrade gracefully here:
-// both → done, neither → the PLAN.md tick.
+// both → done, neither → the subtasks.md tick.
 export function effectiveDone(scan: SubtaskStateScan, items: { done: boolean }[]): boolean[] {
   if (!scan.active) return items.map((item) => item.done)
   return items.map((item, i) => {

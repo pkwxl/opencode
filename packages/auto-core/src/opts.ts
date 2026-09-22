@@ -8,14 +8,14 @@ import type { AgentHost } from "./agent/types"
 import type { PhaseLetter } from "./phases/registry"
 
 // 任务结局。dirty(plans/0021-commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
-// 出口: 不写 PLAN.md、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
+// 出口: 不写运行时状态、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
 export type Outcome =
   | { type: "completed" }
   | { type: "blocked"; question: string }
   | { type: "incomplete"; reason: string }
   | { type: "dirty"; files: string[] }
 
-// 单元停机出口(blocked = 问题写 PLAN.md + interrupted 清扫提交;dirty = 不写不扫,
+// 单元停机出口(blocked = 状态记 .auto/units.json + interrupted 清扫提交;dirty = 不写不扫,
 // 人工处置 git 后重跑)。供各执行函数的返回联合引用,替代原 `Outcome & {type:"blocked"}`。
 export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; files: string[] }
 

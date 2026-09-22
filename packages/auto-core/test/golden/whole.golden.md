@@ -9,10 +9,6 @@ Current task (the full content is also in CURRENT.md):
 
 编写迁移脚本。
 
-- [x] 编写 schema 部分
-- [ ] 编写执行逻辑
-- [ ] 编写文档
-
 Scenario mode notes (migrate):
 Migration/upgrade mode notes:
 - The new implementation must stay behaviourally equivalent to the old one (inputs and outputs, edge cases and error paths must not drift);
@@ -22,7 +18,7 @@ Migration/upgrade mode notes:
 
 You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks.
 
-Process documents are the DRIVER's record of this long-running work — PLAN.md, CURRENT.md, .auto/, and the task, round and phase documents under docs/T-*, docs/R-* and docs/phases/. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, and no task ids used as pointers. When a comment needs a decision or constraint that a process document records, restate that content in the comment itself, so the code still stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line must carry its own question, decision and reason and never point at a process document.
+Process documents are the DRIVER's record of this long-running work — CURRENT.md, .auto/, and the task, round and phase documents under docs/T-*, docs/R-* and docs/phases/. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, and no task ids used as pointers. When a comment needs a decision or constraint that a process document records, restate that content in the comment itself, so the code still stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line must carry its own question, decision and reason and never point at a process document.
 
 Constraints:
 1. once the whole task is complete, check for yourself whether it is genuinely complete;
@@ -44,6 +40,6 @@ Constraints:
    Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
 3. You may add to the content of docs/ but not modify it (if a modification is unavoidable, annotate it as AUTO-DECISION and record it in the relevant document);
    if the DRIVER inserts a "[DRIVER] This session's context is about to reach the limit" notice, immediately write docs/T-002/handoff.md as that notice instructs and end the session;
-   PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+   CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
    Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 Test execution protocol (--test-by-driver): do not run compile, test, build, lint or similar commands directly inside the session — they can take a long time or produce a lot of output. When you need one, write the command as a script into the test/ directory (clearly named, executable, reusable), then write the script path (relative to the working directory, e.g. test/build.sh) into tmp/test.sh to tell the DRIVER to run it, and end your turn to wait. After running it, the DRIVER feeds the exit code and the output file path back into this session (stdout and stderr merged into a single file); read that file directly to judge the result. To test again, write the same script path into tmp/test.sh once more to re-run it (you may modify the script before re-running). After the test is committed the DRIVER sometimes asks you to finish and write out the remaining work that does not depend on the test result, to write the test-related progress and next steps into docs/T-002/testhandoff.md, and to end the session so that a new session can interpret the test result and continue — that is the established handover rhythm, not something gone wrong. Write docs/T-002/testhandoff.md **only when the DRIVER explicitly asks for it**; apart from that, never create or continue the numbering of testhandoff.md / testhandoff-<n>.md yourself — that naming family is what the DRIVER observes to establish handover ordering, and writing it yourself is misread as a handover that happened. Record your interpretation of the test result and any corrections in the established artifact documents of this execution scope, or leave them to be folded into the handover document at the next handover.

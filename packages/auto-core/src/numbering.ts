@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises"
 import { basename, join } from "node:path"
 import type { AgentClient } from "./agent/types"
-import { parse } from "./plan"
+import { parseIndex } from "./document/unit"
 import { renderNumberRecovery } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
@@ -10,7 +10,7 @@ import { requireArtifact } from "./artifact"
 // 永不重复,下一可用编号持久化在 .auto/next-task(driver 维护的状态文件;.auto/
 // 已被 gitignore,新克隆天然缺失)。阶段规划会话自该记录续接编号(不再每阶段从
 // T-001 重排);记录缺失时先恢复再继续——无任何历史证据(全新项目)直接写 1,
-// 有历史证据时开旁路一次性 AI 恢复会话通读归档 PLAN/docs 产物/git 历史推导
+// 有历史证据时开旁路一次性 AI 恢复会话通读任务索引/docs 产物/git 历史推导
 // 下一编号(git 历史中可能存在产物已被删除的编号,纯文件扫描看不到),driver
 // 以确定性扫描的下限校验其产出。--no-auto-number(退出开关)下本文件整体不生效。
 
@@ -35,37 +35,19 @@ export async function writeNextTask(dir: string, n: number): Promise<void> {
   await Bun.write(join(dir, NEXT_TASK_FILE), `${n}\n`)
 }
 
-// 已用编号的确定性下限: 扫描当前 PLAN.md、阶段/轮次归档 PLAN(旧布局
-// docs/phases/**/PLAN.md;新布局轮次目录 docs/R-*/PLAN.md 与轮内阶段归档
-// docs/R-*/**/PLAN.md)与 docs 任务文档(双布局: 目录化 docs/**/T-*/*.md 取
-// 路径段,旧平铺 docs/**/T-*.md 取文件名——兼容期两者并存,归档目录内的同样
-// 覆盖),取最大编号 + 1;无证据 = 1。只能看到现存文件——已被删除产物占用的
-// 编号需 AI 恢复会话查 git 历史补全。
+// 已用编号的确定性下限: 扫描各轮各阶段的任务索引(docs/R-*/P*/tasks.md,M3.4)与
+// docs 任务文档(双布局: 目录化 docs/**/T-*/*.md 取路径段——任务单元的 todo.md/
+// done.md 即在其中;旧平铺 docs/**/T-*.md 取文件名,M3.7 前兼容),取最大编号 + 1;
+// 无证据 = 1。只能看到现存文件——已被删除产物占用的编号需 AI 恢复会话查 git 历史补全。
 export async function taskNumberFloor(dir: string): Promise<number> {
   let max = 0
   const seen = (id: string) => {
     const n = taskNumber(id)
     if (n !== undefined) max = Math.max(max, n)
   }
-  const scanPlan = async (path: string) => {
-    const text = await Bun.file(path).text().catch(() => undefined)
-    if (text === undefined) return
-    // 解析失败(如重复编号)不中断扫描,退化为正则提取标题行编号。
-    try {
-      for (const task of parse(path, text).tasks) seen(task.id)
-      return
-    } catch {
-      for (const line of text.split("\n")) {
-        const heading = /^## (T-\d+): /.exec(line)
-        if (heading) seen(heading[1]!)
-      }
-    }
-  }
-  await scanPlan(join(dir, "PLAN.md"))
-  for (const pattern of [join("docs", "phases", "**", "PLAN.md"), join("docs", "R-*", "PLAN.md"), join("docs", "R-*", "**", "PLAN.md")]) {
-    for await (const file of new Bun.Glob(pattern).scan({ cwd: dir, onlyFiles: true })) {
-      await scanPlan(join(dir, file))
-    }
+  for await (const file of new Bun.Glob(join("docs", "R-*", "P*", "tasks.md")).scan({ cwd: dir, onlyFiles: true })) {
+    const text = await Bun.file(join(dir, file)).text().catch(() => "")
+    for (const entry of parseIndex(text, "task").entries) seen(entry.id)
   }
   // 旧平铺布局(兼容期): docs/**/T-*.md,取文件名的任务编号段。
   for await (const file of new Bun.Glob(join("docs", "**", "T-*.md")).scan({ cwd: dir, onlyFiles: true })) {
@@ -84,7 +66,7 @@ export async function taskNumberFloor(dir: string): Promise<number> {
   return max + 1
 }
 
-// 规划会话产出后推进编号记录: 取本次 PLAN.md 中最大编号 + 1(只增不减;
+// 规划会话产出后推进编号记录: 取本次任务索引中最大编号 + 1(只增不减;
 // 编号小于既有记录不动——collect 已拦下该情况,这里仅作兜底)。
 export async function advanceNextTask(dir: string, ids: string[]): Promise<number> {
   const used = Math.max(0, ...ids.map((id) => taskNumber(id) ?? 0))

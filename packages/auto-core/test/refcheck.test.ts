@@ -159,12 +159,12 @@ describe("activeDocs / validateRefs / scanRefs", () => {
     }
   })
 
-  test("活文档枚举: 阶段目录内 PLAN 快照排除,阶段索引/交接/产物/状态文件与知识文档属活文档", async () => {
+  test("活文档枚举: 阶段索引/任务索引/交接/产物/状态文件与知识文档属活文档", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
     try {
       await mkdir(join(dir, "docs/R-01/P01-analysis/sub"), { recursive: true })
-      await Bun.write(join(dir, "docs/R-01/P01-analysis/PLAN.md"), "x") // 阶段 PLAN 快照(状态文件)
-      await Bun.write(join(dir, "docs/R-01/P01-analysis/sub/PLAN.md"), "x") // 非快照位置: 照常检查
+      await Bun.write(join(dir, "docs/R-01/P01-analysis/tasks.md"), "x") // 任务索引
+      await Bun.write(join(dir, "docs/R-01/P01-analysis/sub/PLAN.md"), "x")
       await Bun.write(join(dir, "docs/R-01/P01-analysis/done.md"), "x")
       await Bun.write(join(dir, "docs/R-01/P01-analysis/handover.md"), "x")
       await Bun.write(join(dir, "docs/R-01/P01-analysis/findings.md"), "x")
@@ -178,6 +178,7 @@ describe("activeDocs / validateRefs / scanRefs", () => {
         "docs/R-01/P01-analysis/findings.md",
         "docs/R-01/P01-analysis/handover.md",
         "docs/R-01/P01-analysis/sub/PLAN.md",
+        "docs/R-01/P01-analysis/tasks.md",
         "docs/R-01/P02-knowledge/kb.md",
         "docs/R-01/PLAN.md",
         "docs/R-01/phases.md",

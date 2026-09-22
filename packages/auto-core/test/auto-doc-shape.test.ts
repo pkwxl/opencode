@@ -14,17 +14,17 @@ import type { SessionChain } from "../src/chain"
 import { EOF_MARK } from "../src/doccheck"
 import { ensureDecomposed } from "../src/execute"
 import type { Opts } from "../src/opts"
-import { load, subtasks } from "../src/plan"
+import { reloadUnits, seedUnits } from "./fixtures/units"
 import { runWrapup } from "../src/wrapup"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
 
-// 干净 git 仓库 + 已提交的 PLAN.md(无检查项的正文)与 README;.auto/ 忽略,
+// 干净 git 仓库 + 已提交的任务单元(无检查项的正文)与 README;.auto/ 忽略,
 // 统计/进度落盘不污染提交。
 async function docRepo(): Promise<string> {
   const dir = await freshRepo()
   await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
   await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n")
-  await Bun.write(join(dir, "PLAN.md"), "## T-001: 示例任务 [in_progress]\n\n正文。\n")
+  await seedUnits(dir, "## T-001: 示例任务 [in_progress]\n\n正文。\n")
   await git(dir, "add", "-A")
   await git(dir, "commit", "-q", "-m", "init")
   return dir
@@ -70,12 +70,12 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
     try {
       await Bun.write(join(dir, "docs/T-001/subtasks.md"), "# 分解\n\n- [ ] 子任务甲\n")
       const { client, calls } = scriptedClient([])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(0)
-      const reloaded = await load(join(dir, "PLAN.md"))
-      expect(subtasks(reloaded.tasks[0]!.body).map((item) => item.text)).toEqual(["子任务甲"])
+      const reloaded = await reloadUnits(dir)
+      expect((reloaded.tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual(["子任务甲"])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -86,11 +86,11 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
     try {
       await Bun.write(join(dir, "docs/T-001/context.md"), contextProper)
       const { client, calls } = scriptedClient([async () => writeMergedArtifacts(dir)])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(1)
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body).map((item) => item.text)).toEqual([
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual([
         "子任务甲 产出: docs/T-001/S01/index.md",
       ])
     } finally {
@@ -108,7 +108,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
         },
         async () => writeMergedArtifacts(dir),
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
@@ -120,8 +120,8 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
       expect(feedback).toContain("missing last-line terminator")
       expect(feedback).toContain(EOF_MARK)
       expect(feedback).not.toContain("Relevant files and key symbols") // 不重发整份合并提示词
-      const reloaded = await load(join(dir, "PLAN.md"))
-      expect(subtasks(reloaded.tasks[0]!.body).map((item) => item.text)).toEqual(["子任务甲 产出: docs/T-001/S01/index.md"])
+      const reloaded = await reloadUnits(dir)
+      expect((reloaded.tasks[0]!.checklist ?? []).map((item) => item.text)).toEqual(["子任务甲 产出: docs/T-001/S01/index.md"])
       // 合并会话成功即记录 session 模式 fork 基点(plans/0030 D4)
       expect(reloaded.tasks[0]!.forkBase).toBe("ses_fork_1")
       const message = await git(dir, "log", "-1", "--format=%B")
@@ -141,7 +141,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
         },
         async () => writeMergedArtifacts(dir),
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
@@ -164,7 +164,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
         },
         async () => writeMergedArtifacts(dir),
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("ok")
       expect(calls.prompts.length).toBe(2)
@@ -174,7 +174,7 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
     }
   })
 
-  test("仍不补正 → blocked 引用未过关项,检查项不注入", async () => {
+  test("仍不补正 → blocked 引用未过关项,不提交", async () => {
     const dir = await docRepo()
     try {
       const { client, calls } = scriptedClient([
@@ -182,13 +182,13 @@ describe("ensureDecomposed 合并理解与分解产物形检(D5,M1.0)", () => {
           await Bun.write(join(dir, "docs/T-001/subtasks.md"), `# 分解\n\n- [ ] 子任务甲\n\n${filler}\n`)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await ensureDecomposed(client, plan, plan.tasks[0]!, { dir, commit: true }, makeChain())
       expect(result.type).toBe("blocked")
       expect((result as { question: string }).question).toContain("context.md")
       expect(calls.prompts.length).toBe(2)
-      const reloaded = await load(join(dir, "PLAN.md"))
-      expect(subtasks(reloaded.tasks[0]!.body).length).toBe(0)
+      // subtasks.md 即检查项本体(M3.4):未过关的会话产出留在工作区,不入 decompose 提交
+      expect(await git(dir, "log", "--format=%B")).not.toContain("Auto-Stage: decompose")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -202,7 +202,7 @@ describe("runWrapup 收尾报告门禁(D5,runner 主收尾与 review 修复轮�
     const dir = await docRepo()
     try {
       const { client, calls } = scriptedClient([async () => {}])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runWrapup(client, plan, plan.tasks[0]!, wrapOpts(dir), makeChain(), { solo: false, label: "收尾会话" })
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("docs/T-001/report.md missing or empty")
@@ -226,7 +226,7 @@ describe("runWrapup 收尾报告门禁(D5,runner 主收尾与 review 修复轮�
           await Bun.write(join(dir, "docs/T-001/report.md"), reportProper)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runWrapup(client, plan, plan.tasks[0]!, wrapOpts(dir), makeChain(), { solo: false, label: "收尾会话" })
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
@@ -251,7 +251,7 @@ describe("runWrapup 收尾报告门禁(D5,runner 主收尾与 review 修复轮�
           await Bun.write(join(dir, "docs/T-001/report.md"), reportProper)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runWrapup(client, plan, plan.tasks[0]!, wrapOpts(dir), makeChain(), { solo: true, label: "修复后收尾会话" })
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)

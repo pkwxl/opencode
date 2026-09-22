@@ -2,7 +2,7 @@ import { chmod } from "node:fs/promises"
 import { join } from "node:path"
 import { PROTECTED_FILES } from "./document/roles"
 
-// Read-only guard for driver-owned files: during `run`, PLAN.md, CURRENT.md,
+// Read-only guard for driver-owned files: during `run`, CURRENT.md,
 // opencode.json and the persisted project config are chmod'd 0o444 so agent
 // sessions cannot modify them by mistake (defense in depth on top of the
 // prompt contract — a same-user process could still chmod them back via bash,

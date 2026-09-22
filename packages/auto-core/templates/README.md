@@ -1,12 +1,16 @@
 # opencode-auto 目标目录模板
 
-把本目录的三个文件复制到目标项目根目录:
+把本目录的两个文件复制到目标项目根目录(init 会连同轮次目录一并生成):
 
-- `PLAN.md` — 实施计划,driver 的状态源。每个任务一个 `## T-NNN:` 段,状态标记
-  `[pending|in_progress|blocked|done]`,任务收尾后由 driver 标 done。验收工作规划成
-  任务(如 v 验收阶段):任务报告 `docs/T-NNN/report.md` 的结论行写 `Result: FAIL`
-  时 driver 提交后把该任务置为阻塞并停止运行,交人工调整 PLAN.md 后重跑。
-  子任务检查项由分解会话生成、由 driver 直接勾选。
+- 任务单元(不是模板文件,由规划会话或人工写出): 每轮一个 `docs/R-NN/`,其下每个
+  阶段一个 `P<nn>-<type>/`,阶段的任务索引 `tasks.md` 每个任务一行 `- [ ] T-NNN <标题>`;
+  任务内容在 `docs/T-NNN/todo.md`(标题行、`Phase:` 字段行、`## Goal` / `## Scope` /
+  `## Acceptance` 三节、末行 `<!-- auto: eof -->`)。任务完成由 driver 把 `todo.md`
+  改名为 `done.md` 并勾选索引行;in_progress/blocked/attempts 是运行态,记在
+  `.auto/units.json`(不入 git)。验收工作规划成任务(如 v 验收阶段):任务报告
+  `docs/T-NNN/report.md` 的结论行写 `Result: FAIL` 时 driver 提交后把该任务置为阻塞
+  并停止运行,交人工处置(改名 done.md 接受结论,或在 tasks.md 中其前插入修复任务)
+  后重跑。子任务清单在 `docs/T-NNN/subtasks.md`,由分解会话生成、由 driver 勾选。
 - `opencode.json` — 权限白名单:安全的只读/构建/测试命令自动放行,其余 bash 命令
   升级为人工审批(触发阻塞流程)。
 - `.opencode/agent/auto.md` — 非交互执行 agent 契约。
@@ -31,16 +35,16 @@ opencode-auto run <dir> --agent auto --interactive
 # 实现子任务级别的变动历史追踪与按会话回滚。提交是完成条件,`--commit false` 已于
 # 2026-09-15 退役(出现即用法错误);该键与其他宪法键一样只在 init 固化:
 opencode-auto init <dir> --commit true
-# new-session-subtask: 严格按一个子任务一次全新会话执行(任务正文需用 - [ ] 检查项列出子任务),
+# new-session-subtask: 严格按一个子任务一次全新会话执行(子任务以 docs/T-NNN/subtasks.md 的 - [ ] 检查项列出),
 # 控制单次会话的最大上下文大小;每个子任务会话结束以其检查项勾选为准,
-# 全部子任务完成后再开一个收尾会话统一更新 docs、提交剩余改动,随后由 driver 标 [done]:
+# 全部子任务完成后再开一个收尾会话统一更新 docs、提交剩余改动,随后由 driver 改名 done.md:
 opencode-auto run <dir> --agent auto --new-session-subtask
 ```
 
 ## 人工介入流程
 
 1. driver 遇阻(权限相关 question / 权限审批 / 会话错误重试耗尽 / 未标记完成就结束)会自动停机,
-   退出码为 2,问题写入 `PLAN.md` 对应任务的 `question` 字段。
+   退出码为 2,问题记录在运行日志中。
    非权限的 question 会被 driver 自动答复("你根据情况来自主决策如何做即可,...")并继续执行;
    只有就同一问题再次询问时才会停机等待人工介入。
    若运行时带 `--wait-answer [1-60]`(不带值默认 1 分钟),提问(含权限提问与
@@ -48,10 +52,9 @@ opencode-auto run <dir> --agent auto --new-session-subtask
    即授权放行并继续,超时或其余回答才拒绝并阻塞;非权限提问超时无响应则自动答复;
    不带此选项则非权限提问立即自动答复、权限请求直接阻塞。
 2. 阻塞的问题不是提问,而是需要在会话外处理的事务(如放行权限、修复环境)。
-   人工排查处理后**无需填写 `answer` 字段**,直接重新运行即可,driver 会为该任务开启
-   全新会话并告知 agent 问题已在会话外解决、不要重问。
-   (可选:如需给 agent 补充说明,仍可填写 `answer` 字段,会一并注入上下文。)
+   人工排查处理后直接重新运行即可,driver 会为该任务开启全新会话并告知 agent
+   问题已在会话外解决、不要重问。
 3. 重新运行 `opencode-auto run <dir>`,driver 会为该任务开启全新会话并携带历史继续。
-4. 全部任务标记 `[done]` 后,driver 退出码为 0。
+4. 全部任务完成(`done.md`)后,driver 退出码为 0。
 
 查看进度:`opencode-auto status <dir>`

@@ -261,3 +261,34 @@ The rest of the old "M3.4 ledger face" is reassigned: the `## T-NNN` plan
 heading retires with PLAN.md in M3.4; `HANDOVER_SECTIONS`, the `phaseText`
 vocabulary, the knowledge-doc `完成` terminator, refcheck's exemption markers
 and the resume-gate interjection family flip in M3.8.
+
+## Amendment (2026-09-22, M3.4 / plans/0047): the task heading is retired, not flipped
+
+The `## T-NNN: <title> [pending|in_progress|blocked|done]` plan heading, the
+`  - attempts:` / `  - fork-base:` field lines and the PLAN.md task-body
+checklist retire together with PLAN.md itself. Nothing parses or writes them
+any more, so they get no flip and no dual-read. A task is now a task unit
+(0047 §3–§4). The task protocol literals below are English from the start:
+
+- the phase task index `docs/R-NN/P<nn>-<type>/tasks.md` with
+  `- [ ] T-NNN <title>` lines (read through `parseIndex(…, "task")`)
+- the task state files `docs/T-NNN/todo.md` / `done.md`
+- the task document's title `# T-NNN: <title>`, its `Phase: R-NN.P<nn>` field
+  line and its mandatory sections `## Goal` / `## Scope` / `## Acceptance`
+  (`TASK_TODO_SECTIONS`)
+- the checklist file `docs/T-NNN/subtasks.md`, which is now the only home of
+  the subtask checklist
+- the runtime state file `.auto/units.json`
+
+The M3.3 interim `PLAN.md` handover-snapshot literal is retired with it.
+Tier-1 markers changed to match (`src/template.ts`):
+
+- `phase-plan` and `implement-plan` now guard the task-document skeleton and
+  the index line (`# T-NNN: <任务标题>`, `Phase: {{phaseId}}`, the three
+  section headings, `- [ ] T-NNN <任务标题>`, `{{taskIndex}}`).
+- The `state-rule` partial's marker is `CURRENT.md`, which is now the only
+  driver-owned plan-side file it names.
+
+The placeholder titles inside those markers are Chinese prompt prose and flip
+with their templates in M3.8. `PLAN.md` survives only as a role-table name
+(`driverState`) until M3.7 retires the legacy layout.

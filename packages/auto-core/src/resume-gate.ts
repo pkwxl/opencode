@@ -12,12 +12,12 @@ import { autoSwitches } from "./switches"
 // 复用其会话)。单元已过(检查项序号错位:中断发生在子任务收口后的间歇)、
 // 配置/实验开关变更使该单元不再执行、或记录缺失序号无法判定归属(老版本
 // 记录)时返回 false——恢复只发生在原单元重跑时,防下一单元误续上一单元的
-// 中断会话。ctx 由调用方按当前 PLAN.md/文件状态预计算(文件 IO 不进本函数)。
+// 中断会话。ctx 由调用方按当前 subtasks.md/文件状态预计算(文件 IO 不进本函数)。
 export type UnitRerunCtx = {
   // 子任务模式(auto/off/ondemand)与 fork 开关(子任务分叉的运行条件)
   mode: "auto" | "off" | "ondemand"
   fork: boolean
-  // 当前 PLAN.md 检查项;子任务目录状态协议激活时
+  // 当前检查项(subtasks.md);子任务目录状态协议激活时
   // done 旗标已被调用方按 done.md 存在性覆盖(文件存在性即进度事实,plans/0030 D10)
   items: { text: string; done: boolean }[]
   // subtasks.md 已有检查项(合并理解与分解单元将幂等直注,不重开会话)
@@ -68,7 +68,7 @@ export function phaseText(phase: Phase | undefined): string {
     case "closeout":
       return "收尾已完成(待检查任务报告结论行并登记完成)"
     case "step":
-      return phase.step === "phase-plan" ? `阶段规划步骤(${phase.letter} 阶段,填充 PLAN.md)` : `阶段交接步骤(${phase.letter} 阶段,产出交接文档)`
+      return phase.step === "phase-plan" ? `阶段规划步骤(${phase.letter} 阶段,写任务索引与任务文档)` : `阶段交接步骤(${phase.letter} 阶段,产出交接文档)`
   }
 }
 
@@ -118,18 +118,18 @@ function nextStepText(phase: Phase | undefined): string {
     case undefined:
       return ""
     case "decompose":
-      return `当前处于任务理解与分解阶段:检查项尚未注入 PLAN.md;产物为 context.md、shared.md、subtasks.md 与各子任务目录的 todo.md(缺失的补齐,已存在且仍准确的不要重做)。`
+      return `当前处于任务理解与分解阶段:检查项尚未写出;产物为 context.md、shared.md、subtasks.md 与各子任务目录的 todo.md(缺失的补齐,已存在且仍准确的不要重做)。`
     case "whole":
       return `当前处于整任务单会话执行阶段。`
     case "subtasks":
-      return `当前处于逐子任务执行阶段:从 PLAN.md 检查项中首个未勾选项继续。`
+      return `当前处于逐子任务执行阶段:从 subtasks.md 检查项中首个未完成项继续。`
     case "wrapup":
       return `全部检查项已完成,当前处于收尾阶段(更新 docs/ 报告并提交)。`
     case "closeout":
       return `收尾已完成,只剩 DRIVER 登记任务完成。`
     case "step":
       return phase.step === "phase-plan"
-        ? `当前处于阶段规划步骤:先读 PLAN.md 现状(上次会话可能已写入部分任务),在其基础上补全/修正本阶段任务,不要重复已存在的任务编号,完成后结束会话。`
+        ? `当前处于阶段规划步骤:先读本阶段任务索引 tasks.md 与已写出的任务文档现状(上次会话可能已写入部分任务),在其基础上补全/修正本阶段任务,不要重复已存在的任务编号,完成后结束会话。`
         : `当前处于阶段交接步骤:先读交接文档现状(上次会话可能已写入部分内容),补全四个必备小节(关键决策/约束与坑/下一阶段必读清单/产物索引),不要重做已完成的部分,完成后结束会话。`
   }
 }

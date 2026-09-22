@@ -5,16 +5,15 @@
 
 ## 输入: 已用编号下限(DRIVER 确定性扫描结果)
 
-现存文件(当前 PLAN.md、各阶段/轮次归档 PLAN、docs 产物文件名)中已用的最大
+现存文件(各阶段任务索引 tasks.md、docs 任务目录与产物文件名)中已用的最大
 编号 + 1 = {{floor}}(即自 T-{{floorPadded}} 起必定未被现存文件使用)。你推导
 的结果不得小于它;若 git 提交历史等证据表明存在产物已被删除的更大编号,应取
 更大的安全值——编号宁可跳过、不可重复。
 
 ## 可用证据(只读)
 
-- 当前 PLAN.md 与各阶段/轮次归档(轮次目录 docs/R-NN/ 内的 PLAN.md 与各阶段目录
-  P<nn>-<type>/ 内的 PLAN 快照;旧布局为 docs/phases/ 下各归档目录内的 PLAN.md);
-- docs/ 下的任务产物(T-NNN/<用途>.md 与 T-NNN/S<NN>/index.md,如 T-001/subtasks.md;旧平铺
+- 各轮各阶段的任务索引(轮次目录 docs/R-NN/ 下各阶段目录 P<nn>-<type>/ 内的 tasks.md);
+- docs/ 下的任务目录与产物(T-NNN/todo.md|done.md、T-NNN/<用途>.md 与 T-NNN/S<NN>/index.md,如 T-001/subtasks.md;旧平铺
   T-NNN.<用途>.md 与归档目录内的同样有效);
 - git 提交历史: 提交信息携带任务编号(git log --oneline 概览即可),可发现
   产物已被删除、文件扫描看不到的编号。

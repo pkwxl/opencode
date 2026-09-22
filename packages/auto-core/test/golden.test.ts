@@ -1,7 +1,7 @@
 // golden 渲染快照(M0.2,plans/AUTO_NEXT_REFACTOR_PLAN.md): 固定 plan/task/opts 输入,
 // 渲染全部会话模板 + agent 契约,产物固化在 test/golden/*.golden.md。
 // 意图外置(M1-M4)的纯搬移段以此做逐字节等价校验(F9);更新快照: UPDATE_GOLDEN=1 bun test test/golden.test.ts。
-// 确定性口径: plan.path 用固定绝对路径 /repo/PLAN.md,
+// 确定性口径: plan.dir 用固定绝对路径 /repo(任务单元,M3.4),
 // switches 走缺省(env 未设),mode 用内置 migrate 预置。
 
 import { describe, expect, test } from "bun:test"
@@ -10,7 +10,7 @@ import { join } from "node:path"
 import { renderAgentContract } from "../src/loop-preflight"
 import { loadIntents, packSubsection, resolveIntent } from "../src/intent/load"
 import { loadModes } from "../src/mode"
-import { parse } from "../src/plan"
+import { planOf } from "./fixtures/units"
 import {
   promptCtx,
   renderContextBase,
@@ -37,6 +37,7 @@ import type { ResolveItem } from "../src/resolve"
 import type { StuckHit } from "../src/stuck"
 import { renderTemplate, renderText } from "../src/template"
 import type { Phase } from "../src/phases"
+import { phaseTypeOfLetter } from "../src/phases/registry"
 
 const UPDATE = process.env.UPDATE_GOLDEN === "1"
 const GOLDEN_DIR = join(import.meta.dir, "golden")
@@ -54,8 +55,7 @@ function golden(name: string, actual: string) {
 
 // —— 固定输入夹具(本文件自持,不依赖 fixtures/prompt.ts 的相对路径计划)——
 
-const plan = parse(
-  "/repo/PLAN.md",
+const plan = planOf(
   `## T-001: 搭建 schema [done]
 建模。
 
@@ -71,6 +71,7 @@ const plan = parse(
   - verify: API 返回 200
 REST 接口。
 `,
+  "/repo",
 )
 const task = plan.tasks[1]!
 
@@ -141,6 +142,8 @@ describe("golden 渲染快照", () => {
           brief: "项目意图(固定输入)。",
           handovers: "前序阶段交接(固定输入)。",
           mode: migrate,
+          phaseId: "R-01.P02",
+          taskIndex: `docs/R-01/P02-${phaseTypeOfLetter(phase).type}/tasks.md`,
           ...(phase === "m" ? { trimmedPhases: true, numberStart: 5 } : {}),
         }),
       )
@@ -161,8 +164,8 @@ describe("golden 渲染快照", () => {
   })
 
   test("旁路族(计划生成/编号恢复/交接steer/死循环/干跑)", () => {
-    golden("implement-plan", renderImplementPlan({ content: "实施提示词全文(固定输入)。", brief: "项目意图。" }))
-    golden("implement-plan-file", renderImplementPlan({ file: "spec.md", content: "计划文件全文(固定输入)。" }))
+    golden("implement-plan", renderImplementPlan({ content: "实施提示词全文(固定输入)。", brief: "项目意图。", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md" }))
+    golden("implement-plan-file", renderImplementPlan({ file: "spec.md", content: "计划文件全文(固定输入)。", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", numberStart: 4 }))
     golden("number-recovery", renderNumberRecovery({ floor: 7 }))
     golden("handoff-steer", renderHandoffSteer(task))
     golden("stuck-hint-1", renderStuckHint(stuck(1)))

@@ -7,7 +7,7 @@ import type { ModeSpec } from "./mode"
 import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
 import type { IntentPack, IntentSection } from "./intent/types"
 import { subtaskDoc, taskDoc } from "./docpaths"
-import { subtasks, type Plan, type Status, type Task } from "./plan"
+import type { Plan, Status, Task } from "./tasks"
 import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
 import { phaseText, type Phase } from "./phases"
@@ -183,8 +183,7 @@ export function renderContextBase(task: Task, digest: string): string {
 // understanding (docs/<id>/context.md four sections) + shared-context
 // reference index (docs/<id>/shared.md) + subtask split (docs/<id>/subtasks.md
 // checklist) + one scope file per subtask (docs/<id>/S<nn>/todo.md). The
-// driver parses the checklist and injects it into PLAN.md itself, so the
-// session must not touch PLAN.md.
+// driver reads the checklist from subtasks.md and ticks it itself.
 // 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
 // 开启细粒度档),库中无此名回退通用 decompose。
 // Intent injection (M1.2/M1.3): the granularity criteria and per-phase duties
@@ -216,18 +215,18 @@ export function decomposeTemplateName(phase: Phase | undefined, names: string[])
 
 // The L1 authoritative grounded-state block (session-boundary-hardening design
 // §4.1): a subtask session is injected with the authoritative state the driver
-// derives from the PLAN ledger (task status / fully qualified id / tick snapshot
+// derives from the unit state (task status / fully qualified id / tick snapshot
 // / declaration that prior tasks are independent), so a previous task's
 // completion narrative cannot be read as this task's state — the data is
 // assembled here, the wording lives in the ground-state partial of
-// _partials.md. The display layer (PLAN.md) keeps the short S01 numbering; the
-// fully qualified id only ever reaches the prompt (L3).
+// _partials.md. The display layer (subtasks.md) keeps the short S01 numbering;
+// the fully qualified id only ever reaches the prompt (L3).
 // Task status wording (while the driver runs a subtask session the task is always
 // in progress; the other states are rendered faithfully for completeness).
 const STATUS_TEXT: Record<Status, string> = { pending: "not started", in_progress: "in progress", blocked: "blocked", done: "done" }
 
-// Tick snapshot: S01☑ S02☐ …, done k/n (the tick state comes from the ledger,
-// which is exactly the authoritative information the session cannot read).
+// Tick snapshot: S01☑ S02☐ …, done k/n (effective done flags — the state files
+// win — which is exactly the authoritative information the session cannot read).
 function subtaskSnapshot(items: { done: boolean }[]): string | undefined {
   if (!items.length) return undefined
   const ticks = items.map((item, i) => `S${String(i + 1).padStart(2, "0")}${item.done ? "☑" : "☐"}`).join(" ")
@@ -251,7 +250,7 @@ function doneIds(plan: Plan): string | undefined {
 // index/subtaskList/outputFile/warm(fork 三段式流水线,fork-decompose 设计
 // §8): 注入全量检查项列表与「你本次只负责其中的第 N 项」、文档类产出的独立
 // 落盘文件(driver 机械命名)、warm=会话从分叉基点继承了任务背景上下文(冷启动
-// 则提示先读 context.md 摘要)。缺省时由任务正文检查项推导 index/列表/产出文件
+// 则提示先读 context.md 摘要)。缺省时由任务检查项(subtasks.md)推导 index/列表/产出文件
 // (与 runner 子任务循环同口径),旧调用不传参仍渲染完整提示词。
 export function renderSubtask(
   plan: Plan,
@@ -259,7 +258,7 @@ export function renderSubtask(
   subtask: string,
   opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean } = {},
 ): string {
-  const items = subtasks(task.body)
+  const items = task.checklist ?? []
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
   const index = at >= 0 ? String(at + 1) : undefined
   const ctx = baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined })
@@ -351,8 +350,9 @@ function resolveList(items: ResolveItem[] | undefined): string | undefined {
   return lines.length ? lines.join("\n") : undefined
 }
 
-// 阶段规划会话(设计文档 plans/0006-phases-design.md E 节): 旁路一次性,产物 = 直接编辑填充
-// 的 PLAN.md(会话被 driver 专门授权写它)。brief 为 .opencode/auto/brief.md 原文
+// 阶段规划会话(设计文档 plans/0006-phases-design.md E 节): 旁路一次性,产物 = 本阶段任务
+// 索引 taskIndex(<阶段目录>/tasks.md)+ 各任务的 docs/T-NNN/todo.md(M3.4,plans/0047
+// L3;phaseId 为阶段限定编号,写入任务文档的 `Phase:` 字段)。brief 为 .opencode/auto/brief.md 原文
 // (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
 // (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
 // prevRound 为上一轮迁移结论摘录(plans/0006-phases-design.md M 节,loop 侧组装: 归档索引/
@@ -364,6 +364,8 @@ function resolveList(items: ResolveItem[] | undefined): string | undefined {
 // 由 loop 在规划会话前经 ensureNumbering 确保就位),未启用时缺省——编号自 T-001 起。
 export function renderPhasePlan(input: {
   phase: Phase
+  phaseId: string
+  taskIndex: string
   brief?: string
   handovers?: string
   prevRound?: string
@@ -378,6 +380,8 @@ export function renderPhasePlan(input: {
   return renderPrompt("phase-plan", {
     phase,
     phaseName: phaseText(phase),
+    phaseId: input.phaseId,
+    taskIndex: input.taskIndex,
     brief: input.brief?.trim() || undefined,
     handovers: input.handovers?.trim() || undefined,
     prevRound: input.prevRound?.trim() || undefined,
@@ -395,14 +399,18 @@ export function renderPhasePlan(input: {
 }
 
 // 计划生成会话(packages/auto 的 init 快捷模式 --implement-file/--implement-prompt):
-// 旁路一次性,产物 = 直接编辑填充的 PLAN.md(会话被 driver 专门授权写它),复用
-// 与 renderPhasePlan 同款任务格式约定,但不含阶段/轮次/交接等阶段化流程概念——
-// 该快捷模式仅用于 phases = "m" 项目(调用方校验)。输入二选一: file 给出时按
+// 旁路一次性,产物 = 单阶段 P01-implement 的任务索引 + 各任务文档,复用与
+// renderPhasePlan 同款任务单元格式约定,但不含阶段/轮次/交接等阶段化流程概念——
+// 该快捷模式仅用于 phases = "m" 项目(调用方校验)。numberStart 为编号起点(三位
+// 零填充前的数值;缺省 1)。输入二选一: file 给出时按
 // 「计划文件」呈现 content(源文件全文,path 供报文引用),否则按「实施提示词」
 // 呈现(content = 提示词原文);brief 为 .opencode/auto/brief.md 原文(可空,与
 // -p/--prompt 同给时一并注入,供规划会话感知项目意图)。
-export function renderImplementPlan(input: { file?: string; content: string; brief?: string }): string {
+export function renderImplementPlan(input: { file?: string; content: string; brief?: string; phaseId: string; taskIndex: string; numberStart?: number }): string {
   return renderPrompt("implement-plan", {
+    phaseId: input.phaseId,
+    taskIndex: input.taskIndex,
+    numberStart: String(input.numberStart ?? 1).padStart(3, "0"),
     fromFile: input.file !== undefined,
     filePath: input.file,
     content: input.content,

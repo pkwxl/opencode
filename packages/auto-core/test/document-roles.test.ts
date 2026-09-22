@@ -11,7 +11,7 @@ import { eofScanExempt, p1Scope, PROTECTED_FILES, roleOf, ROLE_POLICIES } from "
 import { subtaskStateSpec } from "../src/document/spec"
 import type { AddedLine } from "../src/document/types"
 import { unitAddedLines, unitBaseline } from "../src/git"
-import { phaseAcceptanceDoc, phaseArchivedPlan, phaseArtifacts, phaseHandoverDoc, phaseIndexPath, syncPhaseIndex } from "../src/phases"
+import { phaseAcceptanceDoc, phaseArtifacts, phaseHandoverDoc, phaseIndexPath, syncPhaseIndex } from "../src/phases"
 import { freshRepo, git } from "./fixtures/runner"
 
 describe("roleOf", () => {
@@ -80,7 +80,6 @@ describe("roleOf", () => {
       for (const unit of await syncPhaseIndex(dir, 2, "admtvk")) {
         expect(roleOf(phaseAcceptanceDoc(unit))).toBe("phaseAcceptance")
         expect(roleOf(phaseHandoverDoc(unit))).toBe("handoff")
-        expect(roleOf(phaseArchivedPlan(unit))).toBe("driverState")
         expect(roleOf(`${unit.dir}/todo.md`)).toBe("artifact")
         for (const spec of phaseArtifacts(unit)) expect(roleOf(spec.path)).toBe("artifact")
       }

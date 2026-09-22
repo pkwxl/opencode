@@ -1,6 +1,6 @@
 你是本次实施计划的规划者: 通读下方输入,把要完成的全部工作规划成一组循序渐进、
-可独立交付的任务,直接编辑填充 PLAN.md。只规划、不实施——除 PLAN.md 外不要修改
-任何文件。
+可独立交付的任务,写成任务索引与各任务的任务文档。只规划、不实施——除任务索引与
+任务文档外不要修改任何文件。
 
 ## 输入: 实施提示词
 
@@ -13,23 +13,41 @@
 ## 任务
 
 1. 只读勘察目标目录现状、相关源码与 docs/ 已有内容,充分理解上述输入;
-2. 直接编辑 PLAN.md——本会话被 DRIVER 专门授权写它(通常它只读): 清掉占位说明,
-   把输入拆解为一组任务写入。任务格式:
+2. 把输入拆解为一组任务,按执行顺序写成任务单元——每个任务一份任务文档,外加任务索引中
+   的一行:
+   - 任务文档 docs/T-NNN/todo.md(每个任务一个目录),格式:
 
-## T-NNN: <任务标题> [pending]
-<任务正文: 目标、范围、关键约束与必要上下文——自包含,仅凭它、CURRENT.md 与
-docs/ 即可执行>
+# T-NNN: <任务标题>
+Phase: R-01.P01
 
-3. 任务编号自 T-001 连续递增;每个任务聚焦一个可独立交付的成果,颗粒度以单个会话
-   在较小上下文预算内可完成为宜;不要手工编写子任务检查项(执行时由 DRIVER 的
-   分解会话自动生成);存在依赖顺序时按可执行顺序排列(依赖前项的排在后)。
-4. 规划完成、写出有效的 PLAN.md 后立即结束会话。
+## Goal
+<目标: 该任务交付什么>
+
+## Scope
+<范围: 涉及的模块/文件、关键约束与必要上下文——自包含,仅凭它、CURRENT.md 与 docs/ 即可执行>
+
+## Acceptance
+<完成判据: 怎样算完成>
+
+<!-- auto: eof -->
+
+   - 任务索引 docs/R-01/P01-implement/tasks.md,按执行顺序每个任务一行:
+
+- [ ] T-NNN <任务标题>
+
+   标题行、`Phase:` 字段行、三个小节标题、索引行与末行终止符由 DRIVER 解析,照上面的
+   原样写,不要翻译或改写;
+3. 任务编号自 T-001 连续递增,不得复用已有任务目录的编号;每个任务聚焦一个
+   可独立交付的成果,颗粒度以单个会话在较小上下文预算内可完成为宜;不要手工编写
+   子任务检查项(执行时由 DRIVER 的分解会话自动生成);存在依赖顺序时按可执行顺序排列(依赖前项的排在后)。
+4. 规划完成、写出任务索引与全部任务文档后立即结束会话。
 
 ## 约束
 
-1. 本会话唯一可写的文件是 PLAN.md(DRIVER 已临时放行写权限);CURRENT.md 与其余
-   状态文件仍为只读,不得编辑,也不要用 chmod 等方式改动文件权限;git 提交由
-   DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
+1. 本会话只写任务索引 docs/R-01/P01-implement/tasks.md 与各任务的 docs/T-NNN/todo.md;不要创建 done.md
+   (完成改名由 DRIVER 执行);CURRENT.md 与其余状态文件为只读,不得编辑,
+   也不要用 chmod 等方式改动文件权限;git 提交由 DRIVER 在会话结束后统一执行,
+   你不要运行 git commit 等提交命令。
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
@@ -46,8 +64,8 @@ docs/ 即可执行>
    "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
    Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
-3. PLAN.md 至少要有一个任务: 即使认为无事可做,也必须写入一个说明性任务并在
-   正文说明原因;不产出有效任务会导致阻塞停机。
+3. 任务索引至少要有一个任务: 即使认为无事可做,也必须写入一个说明性任务并在其
+   任务文档中说明原因;不产出有效任务会导致阻塞停机。
 
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
 shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);

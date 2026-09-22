@@ -111,7 +111,6 @@ const CLASSIFIED: Record<string, Domain> = {
   loop: "driver",
   numbering: "driver",
   opts: "driver",
-  plan: "driver",
   refcheck: "driver",
   reset: "driver",
   resolve: "driver",
@@ -123,9 +122,12 @@ const CLASSIFIED: Record<string, Domain> = {
   session: "driver",
   shell: "driver",
   stats: "driver",
+  status: "driver",
   step: "driver",
   stuck: "driver",
   switches: "driver",
+  // The task store (M3.4): task units + runtime state; replaced plan.ts.
+  tasks: "driver",
   "templates.d": "driver",
   testrun: "driver",
   "unit-commit": "driver",
@@ -135,15 +137,17 @@ const CLASSIFIED: Record<string, Domain> = {
 }
 
 // Transition-era guard (rule 7): provider-tagged flat files freeze their exact
-// src-import set. Today prompt.ts imports plan.ts etc. because concerns are
+// src-import set. Today prompt.ts imports tasks.ts etc. because concerns are
 // still physically mixed; before this refactor lands them in domain dirs, any
 // import change in these files must be a conscious edit here, so the (a)/(b)
 // untangling (M1-M4, MA) cannot silently re-couple the domains.
 const FROZEN_IMPORTS: Record<string, string[]> = {
   mode: [],
   template: [],
-  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "phases/registry", "plan", "resolve", "stuck", "switches", "template"],
-  phases: ["docpaths", "document/unit", "phases/registry", "plan", "template"],
+  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "phases/registry", "resolve", "stuck", "switches", "tasks", "template"],
+  // M3.4: routing loads the current phase's tasks (tasks) and no longer
+  // renders the retired PLAN.md scaffold (template).
+  phases: ["docpaths", "document/unit", "phases/registry", "tasks"],
   docpaths: [],
   doccheck: [],
   protect: ["document/roles"],

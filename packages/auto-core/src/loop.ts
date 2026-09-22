@@ -1,14 +1,12 @@
-import { join } from "node:path"
 import { ExitRequested } from "./exit"
 import { hibernatePause } from "./hibernate"
 // .gitignore 条目维护已上收至叶子模块 gitignore.ts(与 reset 成对);此处
 // 再导出以保持既有导入路径 @opencode-ai/auto-core/loop 不变。
 export { ensureGitignore } from "./gitignore"
 import { startInteractive, type Interactive } from "./interactive"
-import { runTaskLoop, type LoopCtx } from "./loop-task"
+import type { LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
-import { load } from "./plan"
 import { routePhase } from "./phases"
 import { renderDryrun } from "./prompt"
 import { unprotect } from "./protect"
@@ -19,7 +17,7 @@ import { claudeHost } from "./agent/claude/host"
 import { degrade, permissionPreset } from "./capability"
 import { shellProfile } from "./shell"
 import { autoSwitches, clampSwitches } from "./switches"
-import { flushStats, statsPhase } from "./stats"
+import { flushStats } from "./stats"
 
 // AGENTS.md 的 opencode-auto 块(单一标记块,内容与幂等同步逻辑见 agents-block.ts):
 // CURRENT.md 由 driver 整文件重写,块本身按当前配置渲染比对、不一致才整块替换。
@@ -42,8 +40,7 @@ export { renderAgentContract, type RunAllOpts } from "./loop-preflight"
 // task needs no `answer`: re-running resumes it directly.
 
 export async function runAll(directory: string, opts: RunAllOpts): Promise<number> {
-  const path = join(directory, "PLAN.md")
-  const pre = await preflight(directory, path, opts)
+  const pre = await preflight(directory, opts)
   if ("exit" in pre) return pre.exit
   const { agentName, watcher, progress } = pre
   // Hibernate window startup check (OPENCODE_AUTO_HIBERNATE, D4): when starting
@@ -75,13 +72,14 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
   }
   process.on("SIGINT", onSigint)
   try {
-    // Phased flow: a missing or invalid phase index is an environment error
+    // A missing or invalid phase or task index is an environment error
     // (section H); route once ahead of server startup so we don't bring the
     // service up just to exit; the real routing is re-evaluated per round
-    // inside the phase loop (derived state).
+    // inside the phase loop (derived state). The no-phase mode ("m") is the
+    // manual single phase R-01/P01-implement and routes the same way.
     const phases = opts.phases ?? "m"
-    if (phases !== "m") {
-      const pre = await routePhase(directory, await load(path))
+    if (!opts.dryrun) {
+      const pre = await routePhase(directory)
       if (pre.type === "blocked") {
         log(`⏸ phase flow blocked: ${pre.reason}`)
         return 1
@@ -134,21 +132,13 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
     // The advanceFinal closure would lose narrowing; capture the ready server
     // handle as const.
     const serverHandle = server
-    const ctx: LoopCtx = { directory, path, opts, server: serverHandle, agentName, phases, repl, ran: 0 }
-
-    if (phases === "m") {
-      // Non-phased path: attribute the whole run to the "m" phase bucket
-      // (STATS_PLAN §3).
-      await statsPhase(directory, "m")
-      return await runTaskLoop(ctx, "m")
-    }
-
+    const ctx: LoopCtx = { directory, opts, server: serverHandle, agentName, phases, manual: phases === "m", repl, ran: 0 }
     return await runPhaseLoop(ctx)
   } catch (error) {
     // /exit (design doc plans/0014-exit-resume-design.md): the three safe
     // boundaries (phase/task/subtask, the latter thrown up from runner.ts via
     // runTask) land here uniformly — the run has stopped at that boundary's
-    // normal wrap-up point (PLAN.md/CURRENT.md/.auto/progress.json all
+    // normal wrap-up point (unit state files/CURRENT.md/.auto/progress.json all
     // written, isomorphic to a real crash/kill interruption at the same spot);
     // exit code 3 differs from 2 (blocked/pending, needs manual action):
     // re-running resumes precisely with no manual operation.

@@ -11,18 +11,13 @@ import { flushStats, loadStats, setStatsClock, statsTask, statsTotals } from "..
 
 describe("subtaskProgressLine 进度心跳", () => {
   let dir: string
-  let path: string
   let now: number
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-loop-"))
-    path = join(dir, "PLAN.md")
     now = 1_000_000
     setStatsClock(() => now)
-    await Bun.write(
-      path,
-      ["# 计划", "", "## T-001: 第一任务 [in_progress]", "", "- [x] 已完成子任务", "- [ ] 待办子任务", ""].join("\n"),
-    )
+    await Bun.write(join(dir, "docs/T-001/subtasks.md"), ["- [x] 已完成子任务", "- [ ] 待办子任务", ""].join("\n"))
   })
 
   afterEach(async () => {
@@ -34,12 +29,12 @@ describe("subtaskProgressLine 进度心跳", () => {
   test("statsId 守卫: 桶身份与当前任务不一致时不信 statsTotals,跳过上报", async () => {
     await loadStats(dir)
     await statsTask(dir, "T-999") // 桶身份是别的任务
-    expect(await subtaskProgressLine(path, dir)).toBeUndefined()
+    expect(await subtaskProgressLine(dir)).toBeUndefined()
     // 未装载句柄(目录从未 loadStats)同样守卫失败
     const fresh = await mkdtemp(join(tmpdir(), "auto-loop-fresh-"))
     try {
-      await Bun.write(join(fresh, "PLAN.md"), await Bun.file(path).text())
-      expect(await subtaskProgressLine(join(fresh, "PLAN.md"), fresh)).toBeUndefined()
+      await Bun.write(join(fresh, "docs/T-001/subtasks.md"), await Bun.file(join(dir, "docs/T-001/subtasks.md")).text())
+      expect(await subtaskProgressLine(fresh)).toBeUndefined()
     } finally {
       await rm(fresh, { recursive: true, force: true })
     }
@@ -49,7 +44,7 @@ describe("subtaskProgressLine 进度心跳", () => {
     await loadStats(dir)
     await statsTask(dir, "T-001")
     now += 24 * 60_000
-    const line = await subtaskProgressLine(path, dir)
+    const line = await subtaskProgressLine(dir)
     expect(line).toContain("⏳ T-001 subtask progress 1/2")
     expect(line).toContain("elapsed 24m 0s")
     expect(line).not.toContain("this process") // 本进程 == 累计,省略
@@ -66,7 +61,7 @@ describe("subtaskProgressLine 进度心跳", () => {
     expect(await loadStats(dir)).toBeDefined() // 有旧文档 → 续接信息
     await statsTask(dir, "T-001")
     now += 6 * 60_000
-    const line = await subtaskProgressLine(path, dir)
+    const line = await subtaskProgressLine(dir)
     expect(line).toContain("elapsed 24m 0s (this process 6m 0s)")
     expect(line).toContain("est. remaining 24m 0s") // 外推基于累计口径
   })

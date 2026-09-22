@@ -17,7 +17,7 @@ Current task:
    references are caught by the DRIVER's reference check; line anchors can drift as the target file changes, and the DRIVER appends an
    @<sha> version marker to any anchor that no longer matches (the range is then valid only for the marked historical version) — do
    not alter references that already carry a marker yourself; do not reference the state files inside the round directory docs/R-NN/
-   (the phase index phases.md, the phase state files todo.md/done.md and the PLAN snapshots in the phase directories);
+   (the phase index phases.md, the task indexes tasks.md in the phase directories and the phase state files todo.md/done.md);
 3. The task status is recorded by the DRIVER in one pass after the session ends. {{> state-rule}}{{#if resultRule}}
    Result line: {{resultRule}}
    Write the result line as the last line of body text of docs/{{taskId}}/report.md (before the terminator), on a line of its own; it

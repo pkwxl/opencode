@@ -18,27 +18,21 @@ describe("checkPrinciple", () => {
       await mkdir(join(dir, ".opencode/auto"), { recursive: true })
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ testByDriver: true }))
       await Bun.write(
-        join(dir, "PLAN.md"),
-        [
-          "# 计划",
-          "",
-          "## T-001: 正常任务 [pending]",
-          "实现功能并自行编写单元测试。",
-          "测试脚本放 test/ 目录,脚本路径写入 tmp/test.sh,由 driver 执行。",
-          "",
-          "## T-002: 违规任务 [pending]",
-          "完成后运行单元测试确认全部通过。",
-          "请执行编译确认无类型错误。",
-          "run the tests before finishing.",
-          "",
-        ].join("\n"),
+        join(dir, "docs/T-001/todo.md"),
+        ["# T-001: 正常任务", "", "实现功能并自行编写单元测试。", "测试脚本放 test/ 目录,脚本路径写入 tmp/test.sh,由 driver 执行。", ""].join("\n"),
       )
+      await Bun.write(
+        join(dir, "docs/T-002/todo.md"),
+        ["# T-002: 违规任务", "", "完成后运行单元测试确认全部通过。", "请执行编译确认无类型错误。", "run the tests before finishing.", ""].join("\n"),
+      )
+      // 已完成任务(done.md)不再检查
+      await Bun.write(join(dir, "docs/T-000/done.md"), "# T-000: 旧任务\n\n完成后运行单元测试确认全部通过。\n")
       const { findings, notes } = await checkPrinciple(dir)
       // 三处违规: 运行单元测试 / 执行编译 / run the tests 各 1 处
       expect(findings.length).toBe(3)
-      expect(findings[0]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 8 })
-      expect(findings[1]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 9 })
-      expect(findings[2]).toMatchObject({ file: "PLAN.md", task: "T-002", line: 10 })
+      expect(findings[0]).toMatchObject({ file: "docs/T-002/todo.md", task: "T-002", line: 3 })
+      expect(findings[1]).toMatchObject({ file: "docs/T-002/todo.md", task: "T-002", line: 4 })
+      expect(findings[2]).toMatchObject({ file: "docs/T-002/todo.md", task: "T-002", line: 5 })
       // 编写(非执行动词)与 driver 归属句不计;AGENTS.md 缺失给出提示
       expect(notes).toEqual([`AGENTS.md does not exist, run opencode-auto init ${dir} to add the opencode-auto block`])
     } finally {
@@ -50,15 +44,8 @@ describe("checkPrinciple", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await Bun.write(
-        join(dir, "PLAN.md"),
-        [
-          "# 计划",
-          "",
-          "## T-001: 任务 [pending]",
-          "完成后运行验收命令确认全部通过。",
-          "请执行 verify 脚本并把结果贴在报告里。",
-          "",
-        ].join("\n"),
+        join(dir, "docs/T-001/todo.md"),
+        ["# T-001: 任务", "", "完成后运行验收命令确认全部通过。", "请执行 verify 脚本并把结果贴在报告里。", ""].join("\n"),
       )
       await Bun.write(
         join(dir, "AGENTS.md"),
@@ -77,7 +64,7 @@ describe("checkPrinciple", () => {
     try {
       await mkdir(join(dir, ".opencode/auto"), { recursive: true })
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ idleTime: 999 }))
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n完成后 git commit -m 完成。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n完成后 git commit -m 完成。\n")
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings.length).toBe(1)
       expect(notes[0]).toContain("project config (.opencode/auto/config.json) is invalid, test principle checks treated as disabled")
@@ -90,11 +77,11 @@ describe("checkPrinciple", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await Bun.write(
-        join(dir, "PLAN.md"),
+        join(dir, "docs/T-001/todo.md"),
         [
-          "# 计划",
+          "# T-001: 违规任务",
+          "Phase: R-01.P01",
           "",
-          "## T-001: 违规任务 [pending]",
           "完成后 git add -A 并 git commit -m 完成。",
           "每完成一个模块提交全部未提交改动。",
           "不要执行 git commit,统一提交由 driver 负责。",
@@ -104,8 +91,8 @@ describe("checkPrinciple", () => {
       )
       const { findings } = await checkPrinciple(dir)
       expect(findings.length).toBe(2)
-      expect(findings[0]).toMatchObject({ file: "PLAN.md", task: "T-001", line: 4 })
-      expect(findings[1]).toMatchObject({ file: "PLAN.md", task: "T-001", line: 5 })
+      expect(findings[0]).toMatchObject({ file: "docs/T-001/todo.md", task: "T-001", line: 4 })
+      expect(findings[1]).toMatchObject({ file: "docs/T-001/todo.md", task: "T-001", line: 5 })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -116,7 +103,7 @@ describe("checkPrinciple", () => {
     try {
       await mkdir(join(dir, ".opencode/auto"), { recursive: true })
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ testByDriver: true }))
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n  - attempts: 1\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       const before = await checkPrinciple(dir)
       expect(before.findings).toEqual([])
       expect(before.notes.length).toBe(1)
@@ -137,7 +124,7 @@ describe("checkPrinciple", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     const legacy = "<!-- opencode-auto:verify:start -->\n验证原则: 验证由 driver 执行。\n<!-- opencode-auto:verify:end -->"
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${legacy}\n\n后文。\n`)
       const ensured = await ensurePointer(dir)
       expect(ensured.block).toBe("inserted")
@@ -159,7 +146,7 @@ describe("checkPrinciple", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     const legacy = "<!-- opencode-auto:test:start -->\n测试执行原则: 编译/测试由 driver 执行。\n<!-- opencode-auto:test:end -->"
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${legacy}\n\n后文。\n`)
       const ensured = await ensurePointer(dir)
       expect(ensured.block).toBe("inserted")
@@ -177,7 +164,7 @@ describe("checkPrinciple", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     const stale = "<!-- opencode-auto:start -->\n过期内容。\n<!-- opencode-auto:end -->"
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "AGENTS.md"), `# AGENTS.md\n\n前文。\n\n${stale}\n\n后文。\n`)
       const ensured = await ensurePointer(dir, { testByDriver: true })
       expect(ensured).toEqual({ block: "replaced", legacyRemoved: 0 })
@@ -195,14 +182,13 @@ describe("checkPrinciple", () => {
     }
   })
 
-  test("PLAN.md 缺失时给出提示", async () => {
+  test("无任务文档时只提示 AGENTS.md 缺失(PLAN.md 已退役,M3.4)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
-      expect(notes.length).toBe(2)
+      expect(notes.length).toBe(1)
       expect(notes[0]).toContain("AGENTS.md does not exist")
-      expect(notes[1]).toContain("PLAN.md not found")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -211,7 +197,7 @@ describe("checkPrinciple", () => {
   test("AGENTS.md 超过 150 行输出精简提示(note 不进 findings)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       const filler = Array.from({ length: 155 }, (_, i) => `规则条目 ${i + 1}: 与工作流相关的持久约定。`).join("\n")
       // 与 checkPrinciple 默认(verify/testByDriver 均未启用)渲染出的块内容完全一致,
       // 避免额外触发"内容不一致"的过期提示,只保留行数超限提示。
@@ -233,7 +219,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
   test("活文档失效引用进 refs;非 git 目录给 auto-correct 不可用 note;phases 状态文件排除", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "docs/T-001/report.md"), "引用 `src/gone.ts`。\n行内含 已删除 标记的 `docs/old.md` 豁免。\n")
       await Bun.write(join(dir, "docs/phases/a-analysis/PLAN.md"), "状态文件引用 `src/also-gone.ts` 不检查。\n")
       const { findings, notes, refs } = await checkPrinciple(dir, REFCHECK_ON)
@@ -253,7 +239,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
   test("行号超出总行数计 beyond-eof;docs/ 缺失时不扫描、无非 git note", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "src/mod.ts"), "l1\nl2\n")
       await Bun.write(join(dir, "docs/live.md"), "见 `src/mod.ts:99`。\n")
       const first = await checkPrinciple(dir, REFCHECK_ON)
@@ -275,9 +261,9 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
     try {
       await mkdir(join(dir, ".opencode/auto"), { recursive: true })
       await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({}))
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "AGENTS.md"), "# AGENTS.md\n")
-      await Bun.write(join(dir, "docs/ok.md"), "引用 `PLAN.md`。\n")
+      await Bun.write(join(dir, "docs/ok.md"), "引用 `docs/T-001/todo.md`。\n")
       const proc = Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "ignore", stderr: "ignore" })
       await proc.exited
       const before = await checkPrinciple(dir, REFCHECK_ON)
@@ -295,7 +281,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
   test("缺省 off(refcheck-scope D3): 引用检查空转——refs 恒空、无非 git note、目标目录零改动", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n实现功能。\n")
+      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       await Bun.write(join(dir, "docs/live.md"), "引用 `docs/gone.md`。\n")
       const before = await Bun.file(join(dir, "docs/live.md")).text()
       // 缺省开关(autoSwitches 读 process.env,测试环境未设 → refCheck=off)

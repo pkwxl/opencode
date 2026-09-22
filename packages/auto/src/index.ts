@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { lstat, rm, stat } from "node:fs/promises"
+import { stat } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { checkPrinciple } from "@opencode-ai/auto-core/check"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
@@ -9,7 +9,6 @@ import { implementPlan } from "@opencode-ai/auto-core/implement"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensureGitignore, ensurePointer, runAll } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
-import { load, parse } from "@opencode-ai/auto-core/plan"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
   currentRound,
@@ -22,13 +21,12 @@ import {
   phaseLabel,
   phaseText,
   readPhases,
-  renderPlanScaffold,
-  roundRoot,
   type PhaseState,
 } from "@opencode-ai/auto-core/phases"
+import { renderStatus } from "@opencode-ai/auto-core/status"
+import { loadPlan } from "@opencode-ai/auto-core/tasks"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
-import templatePlan from "@opencode-ai/auto-core/templates/PLAN.md" with { type: "file" }
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
 
@@ -190,11 +188,11 @@ if (command === "run") {
     process.exit(1)
   }
   // --implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项
-  // (计划生成会话是一次性的,产物 PLAN.md 经人工审核后另行调用 run 执行),不是
+  // (计划生成会话是一次性的,产物任务单元经人工审核后另行调用 run 执行),不是
   // run 的选项。
   for (const key of ["implement-file", "implement-prompt"]) {
     if (flags.has(key)) {
-      console.error(`--${key} is an init-only shortcut-mode option: use it to generate PLAN.md, review it manually, then call opencode-auto run ${directory} to execute; run itself does not accept this option`)
+      console.error(`--${key} is an init-only shortcut-mode option: use it to generate the task units (tasks.md + docs/T-NNN/todo.md), review them manually, then call opencode-auto run ${directory} to execute; run itself does not accept this option`)
       process.exit(1)
     }
   }
@@ -375,7 +373,7 @@ if (command === "init" || command === "continue") {
   // amend 语义 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
   // 让迁移结果与源更加完整、一致。复用 init 的解析/合并/模板与标记块维护,差异
   // 仅在: ① 前置校验(既有 phases ≠ "m" 且阶段索引全部完成);② 轮首建立
-  // (establishRound: 建 docs/R-(N+1)/、根 PLAN.md 链接重指轮内、AGENTS.md.bak
+  // (establishRound: 建 docs/R-(N+1)/ 与阶段索引、各阶段目录、AGENTS.md.bak
   // 快照);③ 迁移同一性选项(-m/--mode 与迁移参数)跨轮固定,显式给出即用法错误。
   if (command === "init" && flags.has("continue")) {
     console.error("--continue is not an option: round continuation uses the dedicated subcommand opencode-auto continue <dir> (starts a new round after the previous phased migration round fully completes)")
@@ -467,7 +465,7 @@ if (command === "init" || command === "continue") {
   }
   // --source-dir/--source-path/--dest-dir: 迁移参数。布局约定: 位置参数是 driver
   // 工作目录,迁移源在 <工作目录>/<source-dir>(source-path 为其下的模块相对路径)、
-  // 迁移目标在 <工作目录>/<dest-dir>——driver 流程文件(PLAN.md/docs/ 等)与迁移
+  // 迁移目标在 <工作目录>/<dest-dir>——driver 流程文件(docs/ 等)与迁移
   // 产出经 dest-dir 隔离。source 两键必须成对给出(拒绝 <src-dir>/<src-path> 拼接
   // 形式);存在性只在 init 校验,run 不再校验(源系统可能已下线)。dest-dir 独立
   // 固化/修订(不校验存在性,目标目录常由迁移过程创建)。
@@ -591,7 +589,7 @@ if (command === "init" || command === "continue") {
     // (计划生成会话产出整任务计划后以单会话执行为主、上下文超限再交接续跑,
     // 不经逐任务分解);显式 --subtask 优先。
     if (!flags.has("subtask")) explicit.subtask = "ondemand"
-    // 快捷模式缺省关闭收尾会话: 该模式只产出 PLAN.md(计划生成会话),不进入
+    // 快捷模式缺省关闭收尾会话: 该模式只产出任务单元(计划生成会话),不进入
     // 任务执行循环,未显式给出 --wrapup/--no-wrapup 时 wrapup 固化为 false
     // (镜像 subtask 固化 ondemand 的同款处理);显式给出优先。
     if (!flags.has("wrapup") && !flags.has("no-wrapup")) explicit.wrapup = false
@@ -658,7 +656,7 @@ if (command === "init" || command === "continue") {
   }
   // 前缀护栏判定的是**本次生效值**而非「是否显式给出」: 全量覆盖下无参 init 会把
   // phases 回落为缺省 "m",若项目已跑在阶段化流程中途(已有完成阶段),这会静默毁掉
-  // 轮次布局(下方 phases === "m" 分支把根 PLAN.md 的轮次符号链接还原成普通文件)。
+  // 已完成阶段(syncPhaseIndex 拒绝丢弃已完成阶段,但报错发生在配置写盘之后)。
   // 判生效值即可把这种情形拦在任何写盘之前。--amend/continue 下生效值 = 既有配置
   // 值,天然满足前缀条件,旧行为不变。
   if (!cont && completedPhases && !effectivePhases.startsWith(completedPhases)) {
@@ -710,10 +708,10 @@ if (command === "init" || command === "continue") {
     process.exit(1)
   }
   console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  // 自动编号由阶段规划会话消费编号记录;phases = "m" 没有规划会话(PLAN.md 由
-  // 人工维护),开关不产生效果,提示一次。
+  // 自动编号由阶段规划会话消费编号记录;phases = "m" 没有规划会话(任务由人工或
+  // init 快捷模式写出),开关不产生效果,提示一次。
   if (config.autoNumber && config.phases === "m") {
-    console.log('ℹ auto-numbering (--auto-number) has no planning session to consume the numbering record under phases = "m"; the switch has no effect (PLAN.md numbering is maintained manually)')
+    console.log('ℹ auto-numbering (--auto-number) has no planning session to consume the numbering record under phases = "m"; the switch has no effect (task numbering is maintained manually)')
   }
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议校验失败即退出);
   // 无 -p 时不渲染提示词,提前装载可在 init 阶段就暴露覆盖问题。
@@ -723,23 +721,10 @@ if (command === "init" || command === "continue") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  // 阶段化 → m 互切: 根 PLAN.md 若是轮次符号链接,还原为普通文件(内容 = 链接
-  // 目标现状;轮内文件不动)——phases = "m" 纯人工模式无轮次概念,根 PLAN.md
-  // 维持普通文件。
-  if (config.phases === "m") {
-    const rootPlan = resolve(directory, "PLAN.md")
-    if (await lstat(rootPlan).then((s) => s.isSymbolicLink(), () => false)) {
-      const linked = await Bun.file(rootPlan).text()
-      await rm(rootPlan, { force: true })
-      await Bun.write(rootPlan, linked)
-      console.log("restored: PLAN.md (round symlink → regular file; round directory contents kept)")
-    }
-  }
-  // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。阶段化流程
-  // (phases ≠ "m")下 PLAN.md 不在此写——由下方 establishRound 建轮次目录并以
-  // 空模板作轮内 PLAN.md 初值(规划会话填充,B.1),根 PLAN.md 为轮内符号链接。
+  // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。任务不在此写(PLAN.md
+  // 已退役,M3.4): 由下方 establishRound 建轮次目录与阶段目录,任务单元由规划会话、
+  // init 快捷模式或人工写出。
   const templates: Record<string, string> = {
-    ...(config.phases === "m" ? { "PLAN.md": templatePlan } : {}),
     "opencode.json": templateConfig,
     ".opencode/agent/auto.md": templateAgent,
   }
@@ -771,50 +756,20 @@ if (command === "init" || command === "continue") {
 
   // 轮首建立(轮次专用目录 docs/R-NN,plans/0006-phases-design.md M 节;须在 ensurePointer
   // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
-  // ——轮内 PLAN.md 已存在不重写,根链接重建不漂移),占位模板态 PLAN 以空模板
-  // 作初值;continue 建新一轮 R-(N+1)(前置校验已过),轮内 PLAN.md 恒为空模板
-  // (新轮目录恒空,上一轮结论经 prevRoundDigest 注入新一轮首个阶段规划会话)。
-  // 旧布局在途轮次(根 docs/phases.md 台账仍在、本轮无轮目录)不打断: 跳过建立,
-  // 本轮维持旧布局,下次 continue 起进入新布局。
+  // ——已有阶段索引按预置同步,只重写未开始的尾部阶段);continue 建新一轮 R-(N+1)
+  // (前置校验已过;上一轮结论经 prevRoundDigest 注入新一轮首个阶段规划会话)。无阶段
+  // 模式("m")同样建立,唯一阶段为 P01-implement(plans/0047 L2)。
   let newRound: number | undefined
-  if (config.phases !== "m") {
-    const legacyInflight = !cont && !(await roundRoot(directory, await currentRound(directory))) && (await Bun.file(join(directory, "docs", "phases.md")).exists())
-    if (legacyInflight) {
-      console.log("ℹ a legacy-layout round is in flight (root docs/phases.md ledger still present): this round keeps the legacy layout; the round-directory layout starts from the next continue")
-      // 旧布局兜底: 根 PLAN.md 缺失(人工删除/中断现场)时仍补空模板,维持 amend 语义
-      const rootPlan = resolve(directory, "PLAN.md")
-      if (!(await Bun.file(rootPlan).exists())) {
-        await Bun.write(rootPlan, renderPlanScaffold())
-        console.log("created: PLAN.md (empty template, filled by the phase planning session)")
-      }
-    } else {
-      // init 场景: 根 PLAN.md 为占位模板态(从未编辑的 <任务标题> 占位任务)时
-      // 以空模板作轮内初值;真实任务内容拷贝为初值(模式互切 m → 阶段化)。
-      let plan: string | undefined
-      if (!cont) {
-        const rootPlan = resolve(directory, "PLAN.md")
-        const isLink = await lstat(rootPlan).then((s) => s.isSymbolicLink(), () => false)
-        const existing = isLink ? undefined : await Bun.file(rootPlan).text().catch(() => undefined)
-        if (existing !== undefined && isPristinePlan(existing)) plan = renderPlanScaffold()
-      }
-      try {
-        const established = await establishRound(directory, {
-          phases: config.phases,
-          round: cont ? await nextRound(directory) : undefined,
-          plan: cont ? renderPlanScaffold() : plan,
-        })
-        newRound = cont ? established.round : undefined
-        console.log(`✓ round directory: ${established.root}/ (PLAN.md, the phase index phases.md and one P<nn>-<type>/ directory per phase all live inside the round; once written, permanent)`)
-        console.log(
-          established.linked
-            ? `✓ root PLAN.md → ${established.root}/PLAN.md (relative symlink, single source of truth)`
-            : `⚠ failed to create the root PLAN.md symlink; fell back to an in-round copy (writes do not link; ${established.root}/PLAN.md is authoritative)`,
-        )
-      } catch (error) {
-        console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
-        process.exit(1)
-      }
-    }
+  try {
+    const established = await establishRound(directory, {
+      phases: config.phases,
+      round: cont ? await nextRound(directory) : undefined,
+    })
+    newRound = cont ? established.round : undefined
+    console.log(`✓ round directory: ${established.root}/ (the phase index phases.md and one P<nn>-<type>/ directory per phase, each with its task index tasks.md once planned; once written, permanent)`)
+  } catch (error) {
+    console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
   }
 
   // -p/--prompt: 项目意图文本写入 .opencode/auto/brief.md(版本化、随仓库共享、
@@ -830,17 +785,19 @@ if (command === "init" || command === "continue") {
     await Bun.write(join(directory, ".opencode", "auto", "brief.md"), promptText.trimEnd() + "\n")
     console.log("written: .opencode/auto/brief.md (project brief, consumed by phase planning sessions; repeated init -p overwrites it)")
   }
-  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 计划生成会话直接
-  // 编辑填充 PLAN.md,与阶段规划会话同款机制——这是 init 唯一会启动 AI 会话的
-  // 路径(§B.1 的"init 不启动会话"原则对通常路径不变,此快捷模式是显式选择)。
-  // PLAN.md 当前必须是占位/空模板态: 会话开始前 reset 会无条件清空 PLAN.md,已
-  // 有正式任务时拒绝执行,防止误覆盖人工或此前生成的计划。
+  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 计划生成会话写出
+  // P01-implement 的任务索引与各任务文档,与阶段规划会话同款机制——这是 init 唯一
+  // 会启动 AI 会话的路径(§B.1 的"init 不启动会话"原则对通常路径不变,此快捷模式是
+  // 显式选择)。任务索引当前必须尚无任务: 会话开始前 reset 会清除任务索引,已有
+  // 任务时拒绝执行,防止误覆盖人工或此前生成的计划。
   if (implementFile !== undefined || implementPrompt !== undefined) {
-    const currentPlan = await Bun.file(join(directory, "PLAN.md")).text().catch(() => undefined)
-    if (currentPlan !== undefined && !isPristinePlan(currentPlan)) {
+    const state = await readPhases(directory).catch(() => undefined)
+    const phase = state?.phases[0]
+    const listed = phase ? await loadPlan(directory, phase).catch(() => undefined) : undefined
+    if (!phase || !listed || listed.tasks.length) {
       console.error(
-        "PLAN.md already contains real tasks; --implement-file/--implement-prompt only generate a new plan from a blank/placeholder state: " +
-          "to regenerate, back up and empty PLAN.md first (or delete it and re-run init)",
+        `${listed?.index ?? "the task index"} already lists tasks (or is unreadable); --implement-file/--implement-prompt only generate a new plan into an empty task index: ` +
+          "to regenerate, back up and remove the task index and its task directories first",
       )
       process.exit(1)
     }
@@ -859,15 +816,15 @@ if (command === "init" || command === "continue") {
       console.error(`⏸ plan-generation session blocked (hidden blockage; inspect and re-run):\n${result.question}`)
       process.exit(2)
     }
-    console.log(`✓ plan generation complete: PLAN.md filled with ${result.count} task(s)`)
-    console.log(`after reviewing PLAN.md, run: opencode-auto run ${directory}`)
+    console.log(`✓ plan generation complete: ${listed.index} lists ${result.count} task(s)`)
+    console.log(`after reviewing the task documents (docs/T-NNN/todo.md), run: opencode-auto run ${directory}`)
     process.exit(0)
   }
-  // 结束语按 phases 分两态: "m" 维持"编辑 PLAN.md"现状;阶段化流程下 PLAN.md
-  // 由阶段规划会话填充,不提示手工编辑。continue 下新一轮阶段全未完成,首个
+  // 结束语按 phases 分两态: "m" 提示人工写任务单元;阶段化流程下任务由阶段规划
+  // 会话写出,不提示手工编辑。continue 下新一轮阶段全未完成,首个
   // 阶段 = 新 phases 的第一个字母;另打新一轮横幅。
   if (config.phases === "m") {
-    console.log(promptText !== undefined ? `brief recorded; run: opencode-auto run ${directory} to start task planning` : `edit PLAN.md to fill in tasks, then run: opencode-auto run ${directory}`)
+    console.log(promptText !== undefined ? `brief recorded; run: opencode-auto run ${directory} to start task planning` : `list tasks in docs/R-01/P01-implement/tasks.md (one line \`- [ ] T-NNN <title>\` each, content in docs/T-NNN/todo.md), then run: opencode-auto run ${directory}`)
     process.exit(0)
   }
   const current = parsePhases(config.phases)!.find((phase) => !(cont ? "" : completedPhases).includes(phase))
@@ -880,12 +837,12 @@ if (command === "init" || command === "continue") {
   process.exit(0)
 }
 
-// check: ①启发式检查 AGENTS.md 与 PLAN.md 中是否有与"提交执行权在 driver"原则
+// check: ①启发式检查 AGENTS.md 与未完成任务的任务文档中是否有与"提交执行权在 driver"原则
 // (及 testByDriver 启用时的"测试/编译
 // reset 子命令(反初始化 / 卸载): 与 init 互逆,精确移除 init 写出的配置层产物,
 // 把工作区还原到未初始化状态,消除配置残留对 opencode 主程序与其他扩展组件的
 // 干扰。清单与执行都在 auto-core/reset.ts(边界口径写在那里的文件头注释):只清
-// 配置层,不碰 .auto/ 运行时状态、PLAN.md、docs/ 与 tmp/;与主程序共用的
+// 配置层,不碰 .auto/ 运行时状态、docs/ 与 tmp/;与主程序共用的
 // opencode.json 逐字节比对模板后才删,AGENTS.md 只摘除 opencode-auto 标记块;
 // 目录一律 rmdir(空才回收),保住 .opencode/auto/prompts/ 与用户其他 agent 契约。
 if (command === "reset") {
@@ -917,7 +874,7 @@ if (command === "reset") {
     console.error(`reset failed: ${error instanceof Error ? error.message : String(error)}`)
     process.exit(1)
   }
-  console.log(`✓ restored to the uninitialized state (PLAN.md, docs/, .auto/ runtime state and tmp/ untouched)`)
+  console.log(`✓ restored to the uninitialized state (docs/, .auto/ runtime state and tmp/ untouched)`)
   process.exit(0)
 }
 
@@ -968,34 +925,17 @@ async function phasesLine(directory: string): Promise<string> {
 }
 
 if (command === "status") {
-  // 任务清单前打印配置摘要;配置非法仅提示、不阻塞任务列表(缺失取缺省,
-  // 同样打印摘要)。阶段化流程(phases ≠ "m")另打印阶段进度行(B.3,✓=已
-  // 完成,▶=当前,其余=未开始);阶段索引缺失/非法同样仅提示不阻塞。
+  // 配置摘要,随后是当前轮的只读总览树(轮 → 阶段 → 任务 → 子任务,状态与依赖;
+  // plans/0047 L1/R2)。配置非法仅提示、不阻塞总览;阶段/任务索引缺失或非法以
+  // ⚠ 行呈现。
   try {
     const config = await loadProjectConfig(directory)
     console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-    if (config.phases !== "m") console.log(await phasesLine(directory))
   } catch (error) {
     console.log(`⚠ project config (.opencode/auto/config.json) is invalid: ${error instanceof Error ? error.message : String(error)}`)
   }
-  const plan = await load(resolve(directory, "PLAN.md"))
-  for (const task of plan.tasks) {
-    const extra = task.attempts ? ` (attempts: ${task.attempts})` : ""
-    console.log(`[${task.status}] ${task.id} ${task.title}${extra}`)
-  }
+  for (const line of await renderStatus(directory)) console.log(line)
   process.exit(0)
-}
-
-// 占位模板态判定(B.1): PLAN.md 仅含从未编辑的占位任务(标题仍为 <任务标题>、
-// 全部 pending、零 attempts、无任何字段写入)——阶段化流程切换 --phases 时把该
-// 状态视为缺失,替换为空模板交阶段规划会话填充。解析失败同样视为非占位态(保留)。
-function isPristinePlan(text: string): boolean {
-  try {
-    const tasks = parse("PLAN.md", text).tasks
-    return tasks.length > 0 && tasks.every((task) => task.title === "<任务标题>" && task.status === "pending" && !task.attempts)
-  } catch {
-    return false
-  }
 }
 
 console.error(`usage:
@@ -1013,17 +953,17 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions)
-       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json and brief.md, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); PLAN.md, docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
-       --phases <admtvk subsequence with m> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = single run; when the ledger is non-empty, changes must satisfy the prefix guard — see README)
+       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json and brief.md, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
+       --phases <admtvk subsequence with m> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; once phases are complete, changes must satisfy the prefix guard — see README)
        --source-dir <dir> --source-path <relative-path> migration source parameters (source-system directory + source-module relative path, always as a pair; both relative to <dir>; existence is checked at init)
        --dest-dir <relative-path> migration target directory (relative to <dir>): isolates the driver workdir from the migration target; migrated code is written to <dir>/<dest-dir>
        --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)
        --test-by-driver [true] moves compile/test/build/lint execution rights to the driver: execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge
        --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task sessions: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)
-       --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from archived PLAN/docs artifacts and git history, restores the record, and only then continues planning
+       --auto-number / --no-auto-number auto-numbering switch (default --auto-number = on; --no-auto-number is the opt-out): task numbers (T-NNN) never repeat in the target directory — the next free number is persisted in .auto/next-task and phase planning sessions continue from that record (no longer restarting from T-001 each phase); if the record is missing (e.g. a fresh clone without .auto/ shared), an AI recovery session first derives the next number from the task indexes, docs artifacts and git history, restores the record, and only then continues planning
        --wrapup / --no-wrapup task wrap-up session switch (default --wrapup = on; --no-wrapup is the opt-out): when off, the wrap-up session is skipped after each task's subtasks/whole-task execution completes (including wrap-up after fix rounds)
-       --implement-file <file> / --implement-prompt <text> single-phase (phases = "m") shortcut mode, pick one: from the given plan file (injected in full) or the given implementation prompt, start a one-off plan-generation session that directly edits and fills PLAN.md (same mechanism as phase planning sessions; the only path where init starts an AI session); requires effective phases = "m" (switch with --phases m first if incompatible) and PLAN.md in placeholder/empty-template state (rejected when real tasks exist, to avoid clobbering); in this mode, without an explicit --subtask, subtask defaults to ondemand (single-session execution, hand over on demand when context runs out, no per-task decomposition), and without an explicit --wrapup/--no-wrapup, wrapup defaults to false (this mode only produces PLAN.md, never enters the task execution loop, so wrap-up does not apply); after generation, review PLAN.md manually and call opencode-auto run <dir> separately — from then on tasks proceed with the frozen subtask/wrapup settings; run does not accept these two options
-       continue subcommand: after the previous phased migration round fully completes, start a new round of continued migration (making the migration result more complete and consistent with the source) — at round start a new round directory docs/R-NN/ is created (this round's PLAN.md, phase ledger, phase archives and knowledge docs all live inside the round, permanent once written; the root PLAN.md is rebuilt as a relative symlink pointing into the round, with the AGENTS.md snapshot stored as AGENTS.md.bak inside the round), and the previous round's conclusions (final-phase handover and migration knowledge) are injected into the new round's first phase planning session; -m/--mode and the migration parameters (--source-dir/--source-path/--dest-dir) are fixed across rounds and cannot change (passing them is a usage error), while --phases and the remaining execution options (including --test-by-driver/--handover-test) and -p may be revised per round (not subject to the prefix guard)
+       --implement-file <file> / --implement-prompt <text> single-phase (phases = "m") shortcut mode, pick one: from the given plan file (injected in full) or the given implementation prompt, start a one-off plan-generation session that writes the task index docs/R-01/P01-implement/tasks.md and one docs/T-NNN/todo.md per task (same mechanism as phase planning sessions; the only path where init starts an AI session); requires effective phases = "m" (switch with --phases m first if incompatible) and an empty task index (rejected when tasks are listed, to avoid clobbering); in this mode, without an explicit --subtask, subtask defaults to ondemand (single-session execution, hand over on demand when context runs out, no per-task decomposition), and without an explicit --wrapup/--no-wrapup, wrapup defaults to false (this mode only produces the task units, never enters the task execution loop, so wrap-up does not apply); after generation, review the task documents manually and call opencode-auto run <dir> separately — from then on tasks proceed with the frozen subtask/wrapup settings; run does not accept these two options
+       continue subcommand: after the previous phased migration round fully completes, start a new round of continued migration (making the migration result more complete and consistent with the source) — at round start a new round directory docs/R-NN/ is created (the phase index phases.md and one P<nn>-<type>/ directory per phase — with its task index, handover and knowledge docs — all live inside the round, permanent once written, with the AGENTS.md snapshot stored as AGENTS.md.bak inside the round), and the previous round's conclusions (final-phase handover and migration knowledge) are injected into the new round's first phase planning session; -m/--mode and the migration parameters (--source-dir/--source-path/--dest-dir) are fixed across rounds and cannot change (passing them is a usage error), while --phases and the remaining execution options (including --test-by-driver/--handover-test) and -p may be revised per round (not subject to the prefix guard)
 
 exit codes: 0 all complete; 1 usage/environment error (same when check finds principle-violating statements); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)
 process.exit(1)

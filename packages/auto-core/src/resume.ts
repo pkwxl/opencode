@@ -30,8 +30,8 @@ import type { PhaseLetter as RegistryLetter } from "./phases/registry"
 export type PhaseLetter = RegistryLetter
 
 // 阶段级旁路步骤(driver 侧收口的流程步骤,非任务流水线阶段): phase-plan = 阶段
-// 规划会话(填充 PLAN.md),phase-handover = 阶段交接蒸馏会话(产出交接文档)。
-// 这两类会话此前不写恢复点,中断后流程仅凭 AI 写的文件(PLAN.md/交接文档)推导
+// 规划会话(写任务索引与任务文档),phase-handover = 阶段交接蒸馏会话(产出交接文档)。
+// 这两类会话此前不写恢复点,中断后流程仅凭 AI 写的文件(任务单元/交接文档)推导
 // 路由,把未收口的会话静默跳过——见 plans/0018-session-resume-precedence-design.md。
 export type StepKind = "phase-plan" | "phase-handover"
 

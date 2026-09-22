@@ -30,8 +30,8 @@ target.
 - The whole docs/ tree: the document artifacts of the existing migration; inside earlier rounds' directories docs/R-NN/, the
   phase handover documents (P<nn>-<type>/handover.md), the migration knowledge (P<nn>-knowledge/kb.md) and earlier rounds'
   prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first (the R<N>- prefixed files of the
-  old flat layout docs/handovers/, docs/migration-kb/, docs/prior-kb/ are equally valid existing material); the PLAN.md
-  snapshots inside the phase directories hold only stale state — when you need detail, fetch it through the handover document's `## 产物索引` (artifact index) section;
+  old flat layout docs/handovers/, docs/migration-kb/, docs/prior-kb/ are equally valid existing material); the task indexes
+  tasks.md inside the phase directories only list the tasks — when you need detail, fetch it through the handover document's `## 产物索引` (artifact index) section;
 - The migrated code itself (the current state on the target side): check the final state against the documents; where documents
   and code disagree, the code wins, and note the discrepancy in the document;
 - The migration source (if it exists inside the working directory): work out its layout and module boundaries, and record
@@ -104,7 +104,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Constraints
 
-1. Read-only analysis: the only file you may write this time is docs/R-01/temp-kb.md; do not create or modify any other file; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+1. Read-only analysis: the only file you may write this time is docs/R-01/temp-kb.md; do not create or modify any other file; CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —

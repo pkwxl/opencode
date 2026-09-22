@@ -9,10 +9,10 @@ import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
 import type { RunAllOpts } from "./loop-preflight"
 import { waitBetweenTasks } from "./loop-progress"
-import { roundCompleteLines, roundResolveLines, taskEndLines, taskResolveLines } from "./conclusion"
+import { taskEndLines, taskResolveLines } from "./conclusion"
 import { banner, formatDuration, log } from "./log"
-import { block, load, next } from "./plan"
-import type { Phase } from "./phases"
+import { block, loadPlan, next } from "./tasks"
+import type { PhaseUnit } from "./phases"
 import { recallProgress } from "./resume"
 import { runTask } from "./runner"
 import type { AgentHost } from "./agent/types"
@@ -21,36 +21,30 @@ import { stepPause } from "./step"
 
 export type LoopCtx = {
   directory: string
-  path: string
   opts: RunAllOpts
   server: AgentHost
   agentName: string
   phases: string
+  // The no-phase mode (phases = "m"): the single phase P01-implement is manual —
+  // no planning or handover session, the phase stays open (plans/0047 L2).
+  manual: boolean
   repl?: Interactive
   // runTaskLoop 跨调用累积的已跑任务数(§I D14): 决定 --wait-between 是否在后续阶段
   // 首个任务前暂停,降为函数局部会每次清零(行为改动),故作可变字段进 ctx。
   ran: number
 }
 
-// 主任务循环: 依次执行 PLAN.md 中全部任务(子任务/收尾/统一提交/进度恢复)。
-// phase 为当前阶段字母(缺省单次运行取 "m"),透传 runTask(模型路由字母键、分解
-// 模板选择)。返回 0 = 全部完成,2 = 阻塞/未完成(原因在运行日志)。
-export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
-  const { directory, path, opts, server: serverHandle, agentName, phases, repl } = ctx
+// 主任务循环: 依次执行当前阶段任务索引(tasks.md)中的全部任务(子任务/收尾/
+// 统一提交/进度恢复)。phase 为当前阶段单元,其预置字母透传 runTask(模型路由字母
+// 键、分解模板选择)。返回 0 = 本阶段任务全部完成(阶段收口由 runPhaseLoop 路由),
+// 2 = 阻塞/未完成(原因在运行日志)。
+export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
+  const { directory, opts, server: serverHandle, agentName, repl } = ctx
   for (;;) {
-    const plan = await load(path)
+    const plan = await loadPlan(directory, phase)
     const task = next(plan)
     if (!task) {
       log("✓ all tasks complete")
-      // 非分阶段路径的轮次完成行(STATS_PLAN §4.4,T-006): 阶段桶恒为 "m" 伪
-      // 阶段,省略阶段段。分阶段路径由 runPhaseLoop 的 complete 路由统一打印,
-      // 此处(phases !== "m" 时 runTaskLoop 只是单阶段执行)不重复。
-      if (phases === "m") {
-        // 轮次代答汇总(plans/0020-auto-resolve-design.md §H-③,H6): 置顶于 ■ 轮次行之前。
-        for (const line of await roundResolveLines(directory)) log(line)
-        const lines = await roundCompleteLines(directory)
-        if (lines) for (const line of lines) log(line)
-      }
       return 0
     }
     // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
@@ -101,10 +95,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       mode: opts.mode,
       newSession: opts.newSession,
       wrapup: opts.wrapup,
-      phase,
+      phase: phase.letter,
     })
     if (outcome.type === "dirty") {
-      // Unit-startup clean gate failure (runTask inner layer): no PLAN.md
+      // Unit-startup clean gate failure (runTask inner layer): no state
       // write, no sweep-up commit — the git state decision belongs to the
       // human (plans/0021-commit-boundary-design.md).
       log(`⏸ ${task.id} worktree not clean before the execution unit starts (suspected leftover from an abandoned run or manual changes); handle it manually (commit/clean) and re-run:`)
@@ -112,8 +106,8 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       return 2
     }
     if (outcome.type === "blocked") {
-      await block(path, task.id)
-      log(`⏸ ${task.id} is blocked (reason in this entry, not written to PLAN.md):\n${outcome.question}`)
+      await block(directory, task.id)
+      log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${outcome.question}`)
       // 代答高亮块(plans/0020-auto-resolve-design.md §H-②,H5): 置顶于结论行之前。三态
       // 一律打印,且不受统计守卫影响(阻塞任务同样可能已被代答了若干问题)。
       for (const line of await taskResolveLines(directory, task.id)) log(line)
@@ -136,7 +130,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       return 2
     }
     if (outcome.type === "incomplete") {
-      log(`⏸ ${task.id} incomplete, reverted to pending. Improve this task's description in PLAN.md and re-run:\n${outcome.reason}`)
+      log(`⏸ ${task.id} incomplete, reverted to pending. Improve this task's description in docs/${task.id}/todo.md and re-run:\n${outcome.reason}`)
       for (const line of await taskResolveLines(directory, task.id)) log(line)
       const lines = await taskEndLines(directory, task.id)
       if (lines) {
@@ -162,7 +156,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: Phase): Promise<number> {
       }
     }
     ctx.ran++
-    // 任务完成的终态提交: PLAN.md 的 [done] 与 CURRENT.md 的删除在此一并落账
+    // 任务完成的终态提交: todo.md → done.md 改名、tasks.md 勾选与 CURRENT.md 的删除在此一并落账
     // (各会话产出已随会话提交,这里是收口)。
     // 完成条件门禁(plans/0021-commit-boundary-design.md): 终态提交失败 → 退出 2 交人工
     // (任务标记已在工作区,人工提交后重跑,下一任务以干净基线启动);提交成功

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { roundDir } from "../src/docpaths"
 import { validHandover } from "../src/document/roles"
-import { parse } from "../src/plan"
+import { renderTaskIndex, renderTaskTodo } from "../src/tasks"
 import {
   completePhase,
   currentPhase,
@@ -15,7 +15,6 @@ import {
   nextRound,
   parsePhases,
   phaseAcceptanceDoc,
-  phaseArchivedPlan,
   phaseArtifacts,
   phaseHandoverDoc,
   phaseIndexPath,
@@ -24,7 +23,6 @@ import {
   prevRoundDigest,
   readPhases,
   renderPhaseTodo,
-  renderPlanScaffold,
   routePhase,
   syncPhaseIndex,
   type Phase,
@@ -181,21 +179,27 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
 })
 
 describe("routePhase(阶段路由,D.2)", () => {
-  function planOf(text: string) {
-    return parse("PLAN.md", text)
+  // The current phase's task index with one task T-001 in the given state.
+  async function seedTask(dir: string, unit: { dir: string; round: string; id: string }, done: boolean) {
+    writeFileSync(join(dir, unit.dir, "tasks.md"), renderTaskIndex(`${unit.round}.${unit.id}`, [{ id: "T-001", title: "任务", done }]))
+    mkdirSync(join(dir, "docs/T-001"), { recursive: true })
+    rmSync(join(dir, "docs/T-001", done ? "todo.md" : "done.md"), { force: true })
+    writeFileSync(join(dir, "docs/T-001", done ? "done.md" : "todo.md"), renderTaskTodo({ id: "T-001", title: "任务" }))
+  }
+  const route = async (dir: string) => {
+    const r = await routePhase(dir)
+    return r.type === "plan" || r.type === "execute" || r.type === "handover" ? { type: r.type, phase: r.phase, tasks: r.plan.tasks.length } : r
   }
 
-  const EMPTY = "# 实施计划\n"
-  const PENDING = "## T-001: 任务 [pending]\n正文\n"
-  const DONE = "## T-001: 任务 [done]\n正文\n"
-
   test(
-    "PLAN 空 → plan;有未完成任务 → execute;全 done → handover",
+    "no task index → plan; a task not done → execute; all done → handover (the route carries the loaded plan)",
     withDir(async (dir) => {
       const [first] = await syncPhaseIndex(dir, 1, "amt")
-      expect(await routePhase(dir, planOf(EMPTY))).toEqual({ type: "plan", phase: first! })
-      expect(await routePhase(dir, planOf(PENDING))).toEqual({ type: "execute", phase: first! })
-      expect(await routePhase(dir, planOf(DONE))).toEqual({ type: "handover", phase: first! })
+      expect(await route(dir)).toEqual({ type: "plan", phase: first!, tasks: 0 })
+      await seedTask(dir, first!, false)
+      expect(await route(dir)).toEqual({ type: "execute", phase: first!, tasks: 1 })
+      await seedTask(dir, first!, true)
+      expect(await route(dir)).toEqual({ type: "handover", phase: first!, tasks: 1 })
     }),
   )
 
@@ -205,21 +209,25 @@ describe("routePhase(阶段路由,D.2)", () => {
       const units = await syncPhaseIndex(dir, 1, "amt")
       await completePhase(dir, units[0]!)
       await completePhase(dir, units[1]!)
-      expect(await routePhase(dir, planOf(EMPTY))).toEqual({ type: "plan", phase: units[2]! })
-      expect(await routePhase(dir, planOf(PENDING))).toEqual({ type: "execute", phase: units[2]! })
+      expect(await route(dir)).toEqual({ type: "plan", phase: units[2]!, tasks: 0 })
+      await seedTask(dir, units[2]!, false)
+      expect(await route(dir)).toEqual({ type: "execute", phase: units[2]!, tasks: 1 })
       await completePhase(dir, units[2]!)
-      expect(await routePhase(dir, planOf(EMPTY))).toEqual({ type: "complete" })
+      expect(await routePhase(dir)).toEqual({ type: "complete" })
     }),
   )
 
   test(
-    "missing or invalid index → blocked (environment error with guidance)",
+    "missing or invalid phase or task index → blocked (environment error with guidance)",
     withDir(async (dir) => {
-      const missing = await routePhase(dir, planOf(EMPTY))
+      const missing = await routePhase(dir)
       expect(missing).toEqual({ type: "blocked", reason: expect.stringContaining("phase index docs/R-01/phases.md is missing") })
-      await syncPhaseIndex(dir, 1, "am")
+      const [first] = await syncPhaseIndex(dir, 1, "am")
+      writeFileSync(join(dir, first!.dir, "tasks.md"), "- [ ] T-001 lost\n")
+      const lost = await routePhase(dir)
+      expect(lost).toEqual({ type: "blocked", reason: expect.stringContaining("docs/T-001/ has neither todo.md nor done.md") })
       writeFileSync(join(dir, "docs/R-01/phases.md"), "- [ ] P01 nonsense\n")
-      const broken = await routePhase(dir, planOf(EMPTY))
+      const broken = await routePhase(dir)
       expect(broken.type).toBe("blocked")
       if (broken.type === "blocked") expect(broken.reason).toContain("docs/R-01/phases.md")
     }),
@@ -247,27 +255,17 @@ describe("formatPhases / currentPhase(阶段进度行)", () => {
 
 describe("phase directory paths", () => {
   test(
-    "handover / acceptance / PLAN snapshot / standard artifacts live in the phase directory",
+    "handover / acceptance / standard artifacts live in the phase directory",
     withDir(async (dir) => {
       const units = await syncPhaseIndex(dir, 2, "admtvk")
       const byType = (type: string) => units.find((unit) => unit.type === type)!
       expect(phaseHandoverDoc(byType("design"))).toBe("docs/R-02/P02-design/handover.md")
       expect(phaseAcceptanceDoc(byType("acceptance"))).toBe("docs/R-02/P05-acceptance/acceptance.md")
-      expect(phaseArchivedPlan(byType("implement"))).toBe("docs/R-02/P03-implement/PLAN.md")
       expect(phaseArtifacts(byType("knowledge")).map((spec) => spec.path)).toEqual(["docs/R-02/P06-knowledge/kb.md"])
       expect(phaseArtifacts(byType("design")).map((spec) => spec.path)).toEqual(["docs/R-02/P02-design/design.md", "docs/R-02/P02-design/decisions.md"])
       expect(phaseArtifacts(byType("implement"))).toEqual([])
     }),
   )
-})
-
-describe("阶段空模板(renderPlanScaffold)", () => {
-  test("不含任何任务(routePhase 据此推导 plan 路由),不含 verify 描述", () => {
-    const text = renderPlanScaffold()
-    expect(parse("PLAN.md", text).tasks).toEqual([])
-    expect(text).not.toMatch(/\{\{|\}\}/)
-    expect(text).not.toContain("verify")
-  })
 })
 
 describe("validHandover(蒸馏会话产物校验,交接蒸馏受阻路径的判定依据)", () => {
@@ -310,10 +308,6 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     return await Bun.file(path).exists()
   }
 
-  function isLink(path: string) {
-    return lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false
-  }
-
   test("currentRound: 全新 = 1;R 系目录最大号(无 +1);无 R 系回落旧语义 round-<N> + 1;混合自然续号", async () => {
     const dir = tempDir()
     try {
@@ -351,22 +345,17 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("establishRound: 建轮目录 + 轮内 PLAN 空模板 + 根符号链接 + AGENTS.md.bak 快照", async () => {
+  test("establishRound: 建轮目录 + 阶段索引与阶段目录 + AGENTS.md.bak 快照;不写 PLAN.md(M3.4 退役)", async () => {
     const dir = tempDir()
     try {
       writeFileSync(join(dir, "AGENTS.md"), "# AGENTS\n\n工作流入口\n")
       const result = await establishRound(dir, { phases: "amt" })
-      expect(result).toEqual({ round: 1, root: roundDir(1), linked: true })
+      expect(result).toEqual({ round: 1, root: roundDir(1) })
       // 阶段索引与阶段目录随轮首建立
       expect((await readPhases(dir))!.phases.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
       expect(await exists(join(dir, "docs/R-01/P03-test/todo.md"))).toBe(true)
-      // 轮内 PLAN.md 为空模板(无任务),根 PLAN.md 是指向它的相对符号链接
-      expect(parse("PLAN.md", await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).tasks).toEqual([])
-      expect(isLink(join(dir, "PLAN.md"))).toBe(true)
-      expect(readlinkSync(join(dir, "PLAN.md"))).toBe(join("docs", "R-01", "PLAN.md"))
-      // 经链接读写落轮内(单一事实源)
-      writeFileSync(join(dir, "PLAN.md"), "## T-001: 任务 [pending]\n正文\n")
-      expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).toContain("T-001")
+      expect(await exists(join(dir, "PLAN.md"))).toBe(false)
+      expect(await exists(join(dir, "docs/R-01/PLAN.md"))).toBe(false)
       // AGENTS.md 快照改名 .bak(不当指令加载),根文件保留
       expect(await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).text()).toContain("工作流入口")
       expect(await exists(join(dir, "AGENTS.md"))).toBe(true)
@@ -375,41 +364,35 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("establishRound 模式互切: 根既有普通 PLAN.md 内容拷贝为 R-01/PLAN.md 初值后根改链接", async () => {
+  test("establishRound 无阶段模式: phases = m 建隐式单阶段 R-01/P01-implement(plans/0047 L2)", async () => {
     const dir = tempDir()
     try {
-      writeFileSync(join(dir, "PLAN.md"), "## T-003: 人工任务 [pending]\n正文\n")
-      const result = await establishRound(dir, { phases: "mt" })
-      expect(result.round).toBe(1)
-      expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).toContain("T-003")
-      expect(isLink(join(dir, "PLAN.md"))).toBe(true)
-      expect(parse("PLAN.md", await Bun.file(join(dir, "PLAN.md")).text()).tasks[0]!.id).toBe("T-003")
+      await establishRound(dir, { phases: "m" })
+      expect((await readPhases(dir))!.phases.map(phaseLabel)).toEqual(["P01-implement"])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("establishRound 幂等续跑: 轮目录已存在不重写既有内容,链接重建;显式轮号开新一轮", async () => {
+  test("establishRound 幂等续跑: 阶段完成态与阶段目录内容保留;显式轮号开新一轮", async () => {
     const dir = tempDir()
     try {
       await establishRound(dir, { phases: "amt" })
-      writeFileSync(join(dir, "docs/R-01/PLAN.md"), "## T-001: 已填任务 [pending]\n")
+      writeFileSync(join(dir, "docs/R-01/P01-analysis/tasks.md"), "- [x] T-001 已完成任务\n")
       await completePhase(dir, (await readPhases(dir))!.phases[0]!)
-      // 幂等: 重复建立当前轮不重写轮内 PLAN,阶段完成态保留
+      // 幂等: 重复建立当前轮不重写阶段目录,阶段完成态保留
       const again = await establishRound(dir, { phases: "amt" })
       expect(doneLetters((await readPhases(dir))!)).toBe("a")
       expect(again.round).toBe(1)
-      expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).toContain("已填任务")
-      expect(isLink(join(dir, "PLAN.md"))).toBe(true)
+      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("已完成任务")
       // 新一轮: 显式轮号(nextRound)
       const next = await establishRound(dir, { phases: "am", round: await nextRound(dir) })
       expect(next.round).toBe(2)
       // 新一轮阶段全未完成
       expect(formatPhases((await readPhases(dir))!)).toBe("P01-analysis▶ P02-implement")
-      expect(readlinkSync(join(dir, "PLAN.md"))).toBe(join("docs", "R-02", "PLAN.md"))
       expect(await currentRound(dir)).toBe(2)
       // 上一轮内容不受影响(落盘即永久)
-      expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).text()).toContain("已填任务")
+      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("已完成任务")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

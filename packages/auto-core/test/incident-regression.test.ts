@@ -21,7 +21,7 @@ import { runSubtask } from "../src/execute"
 import { recallProgress } from "../src/resume"
 import { runTask } from "../src/runner"
 import { recallHandover } from "../src/handover"
-import { load, subtasks } from "../src/plan"
+import { planOf, reloadUnits, seedUnits } from "./fixtures/units"
 import { runSession } from "../src/session"
 import { parseSwitches } from "../src/switches"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
@@ -48,7 +48,7 @@ async function incidentRepo(planText: string): Promise<string> {
   const dir = await freshRepo()
   await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
   await Bun.write(join(dir, "src.ts"), "// 源码基线\n")
-  await Bun.write(join(dir, "PLAN.md"), planText)
+  await seedUnits(dir, planText)
   await git(dir, "add", "-A")
   await git(dir, "commit", "-q", "-m", "init")
   return dir
@@ -88,10 +88,9 @@ describe("I1 半开连接悬挂(kernel-dm T-068)", () => {
   })
 })
 
-// attempt 只需要一个 Task;经 load 落盘太重,直接 parse。
-import { parse } from "../src/plan"
+// attempt 只需要一个 Task;落盘太重,直接用内存计划。
 async function loadFromText() {
-  return parse("PLAN.md", "## T-001: 示例任务 [pending]\n正文。\n")
+  return planOf("## T-001: 示例任务 [pending]\n正文。\n")
 }
 
 describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
@@ -157,7 +156,7 @@ describe("I3 误判已完成零落盘(kernel-dm T-068 S01)", () => {
     const dir = await incidentRepo(`## T-001: 示例任务 [in_progress]\n\n- [ ] ${BODY}\n`)
     try {
       const { client, calls } = scriptedClient([async () => {}])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("zero disk writes")
@@ -167,7 +166,7 @@ describe("I3 误判已完成零落盘(kernel-dm T-068 S01)", () => {
       expect(feedback).toContain("artifacts did not pass the shape check")
       expect(feedback).toContain("T-001.S01")
       expect(feedback).toContain("do not judge this subtask complete on that basis")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -199,7 +198,7 @@ describe("I4 测试脚本原地改写源码(kernel-spi-nor T-028)", () => {
             }
           })(),
       })
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const chain: SessionChain = { pct: 100, used: 0, at: 0, subject: "T-001 S1 实现逻辑", phase: { kind: "subtasks", index: 1 } }
       const result = await runExecSession(
         driver,
@@ -255,7 +254,7 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
             }
           })(),
       })
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(
         client,
         plan,
@@ -271,7 +270,7 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
       expect(tracked).not.toContain("testhandoff")
       expect(await Bun.file(join(dir, "docs/T-001/S01/testhandoff.md")).exists()).toBe(false)
       // 子任务勾选、单元提交落账、工作区干净(删除已随提交落账,不留脏区撞下一单元门禁)。
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       expect(await git(dir, "log", "--format=%s")).toContain("test handover #1")
       // 在途记录已作废(闭环即清)。
@@ -300,11 +299,11 @@ describe("I6 验收结论 FAIL 停跑(plans/0044 §3.3)", () => {
     const dir = await incidentRepo(`## T-001: 验收 [pending]\n\n检查 x。\n\n## T-002: 后续 [pending]\n\n后续工作。\n`)
     try {
       const { client } = scenario(dir, "Result: FAIL x is not exported under the expected name")
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, commit: true, subtask: "off" })
       expect(outcome).toMatchObject({ type: "blocked" })
       expect((outcome as { question: string }).question).toContain("Result: FAIL (x is not exported under the expected name)")
-      const after = await load(join(dir, "PLAN.md"))
+      const after = await reloadUnits(dir)
       expect(after.tasks[0]!.status).not.toBe("done")
       expect(after.tasks[1]!.status).toBe("pending")
       // The wrap-up commit already carries the report and the work (iii).
@@ -320,10 +319,10 @@ describe("I6 验收结论 FAIL 停跑(plans/0044 §3.3)", () => {
     const dir = await incidentRepo(`## T-001: 验收 [pending]\n\n检查 x。\n`)
     try {
       const { client } = scenario(dir, "Result: PASS")
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const outcome = await runTask(client, plan, plan.tasks[0]!, { dir, commit: true, subtask: "off" })
       expect(outcome).toEqual({ type: "completed" })
-      expect((await load(join(dir, "PLAN.md"))).tasks[0]!.status).toBe("done")
+      expect((await reloadUnits(dir)).tasks[0]!.status).toBe("done")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

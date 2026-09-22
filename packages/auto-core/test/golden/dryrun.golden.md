@@ -1,7 +1,7 @@
-You are running a permission pre-check for an automated execution plan. The full plan is in PLAN.md in the current directory — read it first; opencode.json in the current directory holds the permission rules already granted — read it too.
+You are running a permission pre-check for an automated execution plan. The plan is the current phase's task index (docs/R-NN/P<nn>-<type>/tasks.md, the highest round and the first phase whose directory still holds todo.md) with one task document docs/T-NNN/todo.md per task — read them first; opencode.json in the current directory holds the permission rules already granted — read it too.
 
 Task:
-1. Read through every unfinished task in PLAN.md and, together with the repository structure and docs/, work out which directories
+1. Read through every unfinished task (a task directory still holding todo.md) and, together with the repository structure and docs/, work out which directories
    and operations beyond what opencode.json already grants these tasks may need (paths outside the project directory, network access,
    special bash commands and the like); list them as candidates;
 2. Confirm the candidates one by one with read-only probes (harmless operations such as ls, test -r, reading a file) to establish
@@ -10,7 +10,7 @@ Task:
    adding to the opencode.json permission block; if no access beyond the granted scope is needed, say so explicitly.
 
 Constraints:
-1. Only perform read-only probes; do not modify any implementation code and do not carry out the tasks in PLAN.md;
-2. PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+1. Only perform read-only probes; do not modify any implementation code and do not carry out the planned tasks;
+2. CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 3. End the session as soon as the report is written; your final message restates the report's key points.

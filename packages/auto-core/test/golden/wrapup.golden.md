@@ -9,10 +9,6 @@ Current task:
 
 编写迁移脚本。
 
-- [x] 编写 schema 部分
-- [ ] 编写执行逻辑
-- [ ] 编写文档
-
 Scenario mode notes (migrate):
 Migration/upgrade mode notes:
 - The new implementation must stay behaviourally equivalent to the old one (inputs and outputs, edge cases and error paths must not drift);
@@ -31,8 +27,8 @@ All subtasks of this task were completed one by one in earlier sessions; do not 
    references are caught by the DRIVER's reference check; line anchors can drift as the target file changes, and the DRIVER appends an
    @<sha> version marker to any anchor that no longer matches (the range is then valid only for the marked historical version) — do
    not alter references that already carry a marker yourself; do not reference the state files inside the round directory docs/R-NN/
-   (the phase index phases.md, the phase state files todo.md/done.md and the PLAN snapshots in the phase directories);
-3. The task status is recorded by the DRIVER in one pass after the session ends. PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+   (the phase index phases.md, the task indexes tasks.md in the phase directories and the phase state files todo.md/done.md);
+3. The task status is recorded by the DRIVER in one pass after the session ends. CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
    Result line: Write it when this task's description asks you to check, test, validate or accept work (an acceptance task), and whenever
    you found that the task's goal was not met. `Result: PASS` means every check the task asked for was actually run or observed

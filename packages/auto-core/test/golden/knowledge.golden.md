@@ -15,7 +15,7 @@ Migration/upgrade mode notes:
 - The phase index docs/R-NN/phases.md (inside this round's directory): this round's phases in order, each with its own phase
   directory docs/R-NN/P<nn>-<type>/;
 - Each phase's handover document docs/R-NN/P<nn>-<type>/handover.md: read these closely first (they are the phase's distilled
-  conclusions); each phase directory also holds a snapshot of that phase's PLAN.md (tasks and acceptance) — when you need more
+  conclusions); each phase directory also holds that phase's task index tasks.md — when you need more
   detail, fetch the original artifacts through the handover document's `## 产物索引` (artifact index) section (permanent paths,
   docs/T-NNN/…);
 - A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough; no need to expand each
@@ -72,7 +72,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 ## Steps
 
 1. Read-only survey: read the phase index phases.md in this round's directory docs/R-NN/ and the handover.md in each phase
-   directory to grasp the whole migration; when you need detail, fetch the PLAN snapshot and the original artifacts through the
+   directory to grasp the whole migration; when you need detail, fetch the task index and the original artifacts through the
    artifact index — do not skip a phase you have not read yet;
 2. Distil into writing: write the knowledge document along the section skeleton — distil rather than enumerate; one-off process
    details and temporary state do not belong in it;
@@ -80,7 +80,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Constraints
 
-1. Read-only analysis: the only file you may write this time is docs/R-01/P04-knowledge/kb.md; do not create or modify any other file; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+1. Read-only analysis: the only file you may write this time is docs/R-01/P04-knowledge/kb.md; do not create or modify any other file; CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —

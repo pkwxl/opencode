@@ -7,7 +7,7 @@ import { createInterface } from "node:readline/promises"
 import { changedFiles } from "./git"
 import type { Interactive } from "./interactive"
 import { formatDuration, log, vlog } from "./log"
-import { countSubtasks, load, next } from "./plan"
+import { countSubtasks, readChecklist } from "./tasks"
 import { statsBoot, statsId, statsTotals, statsWaitBegin, statsWaitEnd } from "./stats"
 
 // --wait-between: after a task completes, pause for human confirmation before
@@ -63,12 +63,12 @@ export function watchFiles(directory: string) {
   return { close: () => clearInterval(timer) }
 }
 
-// Re-read PLAN.md every 10 minutes and report the current task's subtask
-// checkbox progress with a remaining-time estimate (linear extrapolation from
+// Every 10 minutes report the current task's subtask progress (subtasks.md
+// with the state files winning) with a remaining-time estimate (linear extrapolation from
 // completed items; precision bounded by this check interval).
-export function trackSubtasks(path: string, directory: string) {
+export function trackSubtasks(directory: string) {
   const timer = setInterval(() => {
-    void subtaskProgressLine(path, directory)
+    void subtaskProgressLine(directory)
       .then((line) => line && log(line))
       .catch(() => {}) // stats never affect flow: read/parse failures stay silent, retried next heartbeat
   }, 10 * 60_000)
@@ -81,22 +81,22 @@ export function trackSubtasks(path: string, directory: string) {
 // trustworthy from the first extrapolation after a process restart.
 // Returns the full message line; undefined when there is nothing to report
 // (no task / no subtasks) or the guard fails.
-// Guards on statsId === task.id: readings are trustworthy only when the task
-// bucket identity matches the current task (during the window before statsTask
-// switches, or when no handle is loaded, statsId is undefined).
+// The current task is the stats task bucket's identity (statsTask sets it
+// when a task starts): readings are trustworthy only for that task (during the
+// window before statsTask switches, or when no handle is loaded, statsId is
+// undefined and nothing is reported).
 // AUTO-DECISION: on guard failure skip this report (return undefined), no
 // in-memory-since fallback. The "fall back to in-memory timing" alternative
 // would return to the old extrapolation distortion during the guard vacuum
 // after a cross-interruption restart, and dual calibers would make the text
 // drift between cumulative and this-process-only readings; the heartbeat runs
 // every 10 minutes, skipping one beats caliber distortion — rejected.
-export async function subtaskProgressLine(path: string, directory: string): Promise<string | undefined> {
-  const plan = await load(path).catch(() => undefined)
-  const task = plan && (plan.tasks.find((t) => t.status === "in_progress") ?? next(plan))
-  if (!task) return undefined
-  const { done, total } = countSubtasks(task.body)
+export async function subtaskProgressLine(directory: string): Promise<string | undefined> {
+  const id = statsId(directory)
+  if (!id) return undefined
+  const { done, total } = countSubtasks(await readChecklist(directory, id).catch(() => []))
   if (!total) return undefined
-  if (statsId(directory) !== task.id) return undefined
+  const task = { id }
   const totals = await statsTotals(directory, "task")
   const boot = await statsBoot(directory)
   if (!totals || !boot) return undefined

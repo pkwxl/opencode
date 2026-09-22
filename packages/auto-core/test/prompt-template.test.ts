@@ -27,7 +27,6 @@ import {
 import { autoSwitches } from "../src/switches"
 import { renderTemplate, renderText, usePromptLibrary } from "../src/template"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
-import planTemplate from "../templates/PLAN.md" with { type: "file" }
 import { listPlan, listTask, migrate, plan, resolveItem, task } from "./fixtures/prompt"
 
 describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020-auto-resolve-design.md §E)", () => {
@@ -265,17 +264,7 @@ describe("模式注入(-m/--mode)", () => {
   })
 })
 
-describe("init 产物模板(PLAN.md / agent 契约)", () => {
-  test("PLAN.md 不含 verify 字段示例与验证原则描述(verify 已退役)", async () => {
-    const text = renderText(await Bun.file(planTemplate).text(), {})
-    expect(text).toContain("## T-001: <任务标题> [pending]")
-    expect(text).toContain("<任务描述:目标、范围、关键约束。")
-    expect(text).toContain("不要手工编写子任务")
-    expect(text).not.toContain("verify")
-    expect(text).not.toContain("验证")
-    expect(text).not.toContain("opencode-auto check")
-  })
-
+describe("init 产物模板(agent 契约;PLAN.md 模板随 M3.4 退役)", () => {
   test("agent 契约不含验收/验证描述,标记块列举相应收窄(testByDriver 关闭)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const off = renderText(raw, { testByDriver: false })
@@ -354,7 +343,7 @@ describe("模板渲染完整性", () => {
   })
 
   test("init 产物模板按 testByDriver 两态渲染后不残留模板标签", async () => {
-    for (const raw of [await Bun.file(planTemplate).text(), await Bun.file(agentTemplate).text()]) {
+    for (const raw of [await Bun.file(agentTemplate).text()]) {
       for (const testByDriver of [true, false]) {
         expect(renderText(raw, { testByDriver })).not.toMatch(/\{\{|\}\}/)
       }

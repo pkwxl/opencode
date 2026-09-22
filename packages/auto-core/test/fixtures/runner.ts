@@ -7,10 +7,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../../src/agent/opencode/client"
-import { parse } from "../../src/plan"
+import { planOf } from "./units"
 
-export const task = parse(
-  "PLAN.md",
+export const task = planOf(
   `## T-001: 示例任务 [pending]
 正文。
 `,

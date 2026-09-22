@@ -14,7 +14,7 @@ import { resolveTaskDoc, taskDoc } from "./docpaths"
 import { failbackOverride, setSticky, stickyModel } from "./failback"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
-import { setForkBase, type Plan, type Task } from "./plan"
+import { setForkBase, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
 import { firstLine } from "./resume-gate"
 import { forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
@@ -24,12 +24,12 @@ import { type Steer, type TestRun } from "./testrun"
 
 // fork 基点确立(fork-decompose 设计 §4.2,2026-09-18 持久化修订): 返回生效基点,
 // undefined = 冷启动。digest 模式基点**一经建立即跨运行持久**——setForkBase 以
-// `digest:` 前缀落 PLAN.md fork-base 字段,此后每次运行(含中断恢复、子任务未竟的
+// `digest:` 前缀落运行态 .auto/units.json 的 forkBase,此后每次运行(含中断恢复、子任务未竟的
 // 重跑)先校验存活,存活即复用同一基点会话继续分叉,不再从 context.md 无条件重建;
 // 失效(存储清理)才经一次性链(subject `T-NNN ctxbase …`,不带 phase、不写进度
 // 记录;确认 turn 无工作区改动、commitTree 自然零提交)重建——前缀确定性 = 摘要全文,
 // provider 缓存友好。基点会话建立后只被 fork、不再下发,前缀恒为摘要全文,复用不
-// 引入漂移。回退链: 持久 digest 基点存活复用 → digest 重建 → session 基点(PLAN.md
+// 引入漂移。回退链: 持久 digest 基点存活复用 → digest 重建 → session 基点(units.json
 // 持久字段,校验存活,失效回退冷启动) → 冷启动。session 模式基点跨运行持久,用量
 // 经 messages 末条消息重建(近似即可;同次运行且基点即链上会话时直接取跟踪值)。
 export async function ensureForkBase(
@@ -41,7 +41,7 @@ export async function ensureForkBase(
   switches: Switches = autoSwitches(),
 ): Promise<ForkBaseInfo | undefined> {
   if (!switches.fork) return undefined
-  const dir = opts.dir ?? dirname(plan.path)
+  const dir = opts.dir ?? plan.dir
   // digest 持久基点以 `digest:` 前缀与理解会话 id(session 基点)区分——无前缀值在
   // digest 模式下只是重建失败时的兜底,不参与「存活即复用」。
   const persistID = task.forkBase?.startsWith("digest:") ? task.forkBase.slice("digest:".length) : undefined
@@ -60,7 +60,7 @@ export async function ensureForkBase(
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
       const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
       if (result.type === "idle" && base.id) {
-        await setForkBase(plan.path, task.id, `digest:${base.id}`)
+        await setForkBase(dir, task.id, `digest:${base.id}`)
         log(`⑂ ${task.id} digest base ready: session ${base.id} (digest prefix ${formatTokens(base.used)} tokens)`)
         return { id: base.id, used: base.used }
       }

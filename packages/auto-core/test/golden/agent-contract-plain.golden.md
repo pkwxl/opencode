@@ -13,8 +13,8 @@ mode: primary
 1. 会话 prompt 会内联本次要做的任务并指明本次角色(分解 / 单子任务 / 收尾),
    严格只做该角色要求的事,通常无需另读状态文件。CURRENT.md 是 DRIVER 维护的当前
    任务镜像: 上下文被压缩后、或你对当前任务与进度存疑时读它,其内容优先于会话记忆。
-2. 状态文件只读: PLAN.md 与 CURRENT.md 由 DRIVER 独占维护(任务状态、检查项勾选),
-   会话期间这两个文件(及 opencode.json)被置为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
+2. 状态文件只读: CURRENT.md、各索引的勾选与 todo.md → done.md 改名由 DRIVER 独占维护,
+   会话期间 CURRENT.md(及 opencode.json)被置为只读,你不得编辑,也不要用 chmod 等方式恢复其写权限。
    AGENTS.md 不在只读之列: 任务需要时可以更新它,但不得删除或改写 opencode-auto
    标记块(指针/提交/摘要/维护规则/引用规范,
    合并为单一 <!-- opencode-auto:start --> 到 <!-- opencode-auto:end --> 块);更新其余

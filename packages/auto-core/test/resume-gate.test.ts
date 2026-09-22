@@ -77,13 +77,13 @@ describe("resumeNote(中断恢复说明)", () => {
     const note = resumeNote(subtasks, true, false)
     expect(note).not.toBe(ONE_LINE)
     expect(note).toContain("你正在原来中断的会话中继续")
-    expect(note).toContain("首个未勾选项")
+    expect(note).toContain("首个未完成项")
   })
 
   test("非复用路径(总结态续跑)恒给按阶段指引,不受严格恢复影响", () => {
     const note = resumeNote(subtasks, false, true)
     expect(note).toContain("部分工作可能已完成")
-    expect(note).toContain("首个未勾选项")
+    expect(note).toContain("首个未完成项")
     const step = resumeNote({ kind: "step", step: "phase-handover", letter: "t" }, false, true)
     expect(step).toContain("本阶段步骤")
     expect(step).toContain("四个必备小节")

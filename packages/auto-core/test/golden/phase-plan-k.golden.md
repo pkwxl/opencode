@@ -1,5 +1,5 @@
 你是「知识提炼」阶段(k)的规划者: 通读下方输入,把本阶段要做的全部
-工作规划成一组可执行的任务,直接编辑填充 PLAN.md。只规划、不实施。
+工作规划成一组可执行的任务,写成本阶段的任务索引与各任务的任务文档。只规划、不实施。
 
 ## 输入: 项目意图(.opencode/auto/brief.md)
 
@@ -30,21 +30,40 @@ docs/T-NNN/S<两位序号>/index.md),路径一经创建即为永久路径,不随
 ## 任务
 
 1. 只读勘察目标目录现状、相关源码与 docs/ 已有内容;
-2. 直接编辑 PLAN.md——本会话被 DRIVER 专门授权写它(通常它只读): 把首行标题改为
-   贴合本阶段的计划标题,清掉占位说明,按执行顺序写入本阶段全部任务。任务格式:
+2. 把本阶段全部任务按执行顺序写成任务单元——每个任务一份任务文档,外加本阶段任务
+   索引中的一行:
+   - 任务文档 docs/T-NNN/todo.md(每个任务一个目录),格式:
 
-## T-NNN: <任务标题> [pending]
-<任务正文: 目标、范围、关键约束与必要上下文——自包含,仅凭它、CURRENT.md 与 docs/ 即可执行>
+# T-NNN: <任务标题>
+Phase: R-01.P02
 
+## Goal
+<目标: 该任务交付什么>
+
+## Scope
+<范围: 涉及的模块/文件、关键约束与必要上下文——自包含,仅凭它、CURRENT.md 与 docs/ 即可执行>
+
+## Acceptance
+<完成判据: 怎样算完成>
+
+<!-- auto: eof -->
+
+   - 任务索引 docs/R-01/P02-knowledge/tasks.md,按执行顺序每个任务一行:
+
+- [ ] T-NNN <任务标题>
+
+   标题行、`Phase:` 字段行、三个小节标题、索引行与末行终止符由 DRIVER 解析,照上面的
+   原样写,不要翻译或改写;
 3. 任务编号自 T-001 连续递增;
    每个任务聚焦一个可独立交付的成果;不要手工编写子任务
    检查项(执行时由 DRIVER 的分解会话生成);
-4. 规划完成、写出有效的 PLAN.md 后立即结束会话。
+4. 规划完成、写出任务索引与全部任务文档后立即结束会话。
 ## 约束
 
-1. 本会话唯一可写的文件是 PLAN.md(DRIVER 已临时放行写权限);CURRENT.md 与其余
-   状态文件仍为只读,不得编辑,也不要用 chmod 等方式改动文件权限;
-   git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
+1. 本会话只写任务索引 docs/R-01/P02-knowledge/tasks.md 与各任务的 docs/T-NNN/todo.md;不要创建 done.md
+   (完成改名由 DRIVER 执行);CURRENT.md 与其余状态文件为只读,不得编辑,
+   也不要用 chmod 等方式改动文件权限;git 提交由 DRIVER 在会话结束后统一执行,
+   你不要运行 git commit 等提交命令。
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
@@ -61,8 +80,8 @@ docs/T-NNN/S<两位序号>/index.md),路径一经创建即为永久路径,不随
    "whether the new field is called matched or paired" changes no user-visible behaviour, so it is AUTO-DECISION.
    Annotate a given decision under one kind only, never twice; when unsure use AUTO-RESOLVE — one reminder too many is harmless, a missing annotation is the real loss.
    Calling the question tool for a non-permission problem gets an automatic reply stating the above; asking the same question again blocks the task and stops the run.
-3. PLAN.md 至少要有一个任务: 即使认为本阶段无事可做,也必须写入一个说明性任务
-   并在正文说明原因;不产出有效任务会导致阻塞停机。
+3. 任务索引至少要有一个任务: 即使认为本阶段无事可做,也必须写入一个说明性任务
+   并在其任务文档中说明原因;不产出有效任务会导致阻塞停机。
 
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
 shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);

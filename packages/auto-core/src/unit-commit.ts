@@ -12,7 +12,7 @@ import { forgetHandover } from "./handover"
 import { log, vlog } from "./log"
 import type { Opts, SessionCommit, UnitStop } from "./opts"
 import { currentRound } from "./phases"
-import type { Task } from "./plan"
+import type { Task } from "./tasks"
 import { autoCorrectRefs } from "./refcheck"
 import { collectAgentResolves, resolvesOf, type ResolveItem } from "./resolve"
 import { saveProgress, type Phase, type Progress } from "./resume"
@@ -83,7 +83,7 @@ export async function afterSession(
 }
 
 // afterSession 门禁失败 → blocked 出口(unit 描述本单元,如「T-001 子任务 2」):
-// 提交失败即不视为完成,问题进 PLAN.md,由 loop 的 interrupted 提交重试一次落账,
+// 提交失败即不视为完成,阻塞原因进运行日志,由 loop 的 interrupted 提交重试一次落账,
 // 仍失败则留脏现场给人工(退出码 2)。
 export function commitBlocked(unit: string, commit: { type: "failed"; question: string }): { type: "blocked"; question: string } {
   return { type: "blocked", question: `${unit}: output not committed, not considered complete — ${commit.question}` }
@@ -142,7 +142,7 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
 }
 
 // 回滚协议的 runner 侧编排(设计 3.3): rollbackUnit(stash 保全 + soft reset 收回
-// driver 提交)→ 进度记录转总结态(清基线/模型)→ CURRENT.md 写回滚备注(planPath
+// driver 提交)→ 进度记录转总结态(清基线/模型)→ CURRENT.md 写回滚备注(current
 // 给出时;runTask 恢复路径不在此写,由随后的任务镜像统一携带)。回滚失败返回
 // dirty(git 状态的决定权在人工);成功返回备注文本,调用方以冷启动(不附
 // resumeNote)重做本单元。
@@ -151,7 +151,7 @@ export async function rollbackUnitState(
   task: Task,
   unit: string,
   baseline: UnitBaseline,
-  extra: { planPath?: string; progress?: Progress; solo?: boolean } = {},
+  extra: { current?: boolean; progress?: Progress; solo?: boolean } = {},
 ): Promise<{ type: "ok"; remark: string } | UnitStop> {
   const rolled = await rollbackUnit(dir, baseline, { task: task.id, unit })
   if (!rolled.ok) {
@@ -165,8 +165,8 @@ export async function rollbackUnitState(
     await saveProgress(dir, { ...extra.progress, active: false, baseline: undefined, model: undefined })
   }
   const remark = rollbackRemark(task.id, unit, rolled)
-  if (extra.planPath) {
-    await writeCurrent(extra.planPath, task, extra.solo ?? false, remark)
+  if (extra.current) {
+    await writeCurrent(dir, task, extra.solo ?? false, remark)
   }
   log(
     `↻ ${task.id} ${unit} rolled back to unit baseline (stash ×${rolled.stashes}` +

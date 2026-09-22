@@ -18,7 +18,7 @@ import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
 import { autobanner, log } from "./log"
 import type { Opts, UnitStop } from "./opts"
-import type { Plan, Task } from "./plan"
+import type { Plan, Task } from "./tasks"
 import { renderWrapup } from "./prompt"
 import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
@@ -46,7 +46,7 @@ export async function runWrapup(
   chain: SessionChain,
   input: { solo: boolean; label: string },
 ): Promise<UnitStop | undefined> {
-  const dir = opts.dir ?? dirname(plan.path)
+  const dir = opts.dir ?? plan.dir
   autobanner(`${task.id} ${task.title}: wrap-up`)
   const subject = `${task.id} wrapup ${task.title}`
   chain.subject = subject

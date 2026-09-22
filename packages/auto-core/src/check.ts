@@ -4,7 +4,8 @@ import { loadProjectConfig } from "./config"
 import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
 import { autoSwitches, type Switches } from "./switches"
 
-// check 命令的检查逻辑: ①原则检查——扫描目标目录的 AGENTS.md 与 PLAN.md,报告与
+// check 命令的检查逻辑: ①原则检查——扫描目标目录的 AGENTS.md 与未完成任务的任务
+// 文档(docs/T-NNN/todo.md,M3.4 取代 PLAN.md 的任务正文),报告与
 // "测试/编译等命令执行权在 driver"及"提交执行权在 driver"原则(见 agents-block.ts
 // 的 opencode-auto 单一标记块)相违背的描述——即要求会话直接运行编译/测试/构建/lint
 // 等命令,或要求会话执行 git 提交的语句。原则性/否定句("不要运行…")与归属
@@ -22,15 +23,14 @@ import { autoSwitches, type Switches } from "./switches"
 // asking for trimming.
 const AGENTS_LINE_LIMIT = 150
 
-// 一处违背描述: 文件、行号、原文(PLAN.md 附任务 ID)。
+// 一处违背描述: 文件、行号、原文(任务文档附任务 ID)。
 export type Finding = { file: string; task?: string; line: number; text: string }
 
 // AGENTS.md 中 driver 维护的 opencode-auto 块(单一标记块 `opencode-auto:start`,
 // 及可能残留的旧版带名块)整体跳过——块内容本身就是原则表述。
 const AUTO_BLOCK = /<!--\s*opencode-auto:[^\n]*?start\s*-->[\s\S]*?<!--\s*opencode-auto:[^\n]*?end\s*-->/g
 
-// PLAN.md 的字段行(attempts/fork-base 及已退役的 verify/verified 等): 字段值是
-// driver 状态,不属于违背。
+// 列表式字段行(`- key: value`): 字段值是状态记录,不属于违背。
 const FIELD_LINE = /^\s*-\s+[\w-]+\s*:/
 
 // 测试/编译类违背特征(仅 config.testByDriver 启用时检查): 执行动词 + 编译/测试/
@@ -62,22 +62,18 @@ export async function checkPrinciple(
     ...(testOn ? TEST_PATTERNS : []),
     ...COMMIT_PATTERNS,
   ]
-  for (const name of ["AGENTS.md", "PLAN.md"]) {
+  const taskDocs: string[] = []
+  for await (const file of new Bun.Glob(join("docs", "T-*", "todo.md")).scan({ cwd: dir, onlyFiles: true })) taskDocs.push(file.replaceAll("\\", "/"))
+  for (const name of ["AGENTS.md", ...taskDocs.sort()]) {
     const text = await Bun.file(join(dir, name)).text().catch(() => undefined)
     if (text === undefined) {
-      notes.push(
-        name === "PLAN.md"
-          ? `${name} not found, run opencode-auto init ${dir} first to generate it`
-          : `${name} does not exist, run opencode-auto init ${dir} to add the opencode-auto block`,
-      )
+      notes.push(`${name} does not exist, run opencode-auto init ${dir} to add the opencode-auto block`)
       continue
     }
     // 跳过 driver 维护的 opencode-auto 块后再逐行检查。
     const cleaned = name === "AGENTS.md" ? text.replaceAll(AUTO_BLOCK, "") : text
-    let task: string | undefined
+    const task = /^docs\/(T-[\w-]+)\//.exec(name)?.[1]
     cleaned.split("\n").forEach((line, index) => {
-      const heading = /^## (T-[\w-]+):/.exec(line)
-      if (heading) task = heading[1]
       if (violates(line, patterns)) findings.push({ file: name, task, line: index + 1, text: line.trim() })
     })
     if (name === "AGENTS.md") {
@@ -116,7 +112,7 @@ export async function checkPrinciple(
 }
 
 // 一行是否与原则相违背: 命中"执行动词 + 编译/测试语义"(testByDriver 启用时)或
-// "会话执行 git 提交",且不是否定句、不归属 driver、不是 PLAN.md 字段行。
+// "会话执行 git 提交",且不是否定句、不归属 driver、不是列表式字段行。
 function violates(line: string, patterns: RegExp[]): boolean {
   if (FIELD_LINE.test(line)) return false
   // 归属 driver 的语句是合规的(原则本身就在描述 driver 的执行权)。

@@ -17,7 +17,6 @@ import type { Stats } from "node:fs"
 import { join, relative, sep, dirname } from "node:path"
 import { repoRoots } from "./git"
 import { log } from "./log"
-import { parsePhaseDir } from "./document/unit"
 
 // path = 剥离可选 `@<sha>` 版本标记与 `:行号` 尾锚后的引用路径;line = 尾锚行号
 // (存在时);ver = `@<sha>` 版本标记(存在时——历史快照引用,行号上限校验豁免);
@@ -111,16 +110,14 @@ function escapeRegexp(text: string): string {
 }
 
 // —— P4: 活文档枚举与校验 ——
-// 活文档范围(stable-refs §3.3): docs/**/*.md,排除旧布局归档 docs/phases/** 与
-// 阶段目录 docs/R-NN/P<nn>-<type>/ 内的 PLAN.md 快照(R5 过期状态文件不被任何
-// 文档引用,也不参与检查);阶段目录内的交接、产物与 todo.md/done.md,以及轮内
-// 阶段索引 phases.md 与根 docs/phases.md 同款属活文档;排序保证扫描与日志输出确定。
+// 活文档范围(stable-refs §3.3): docs/**/*.md,排除旧布局归档 docs/phases/**;
+// 阶段目录内的交接、产物、任务索引 tasks.md 与 todo.md/done.md,任务单元,以及
+// 轮内阶段索引 phases.md 与根 docs/phases.md 同款属活文档;排序保证扫描与日志输出确定。
 export async function activeDocs(dir: string): Promise<string[]> {
   const files: string[] = []
   for await (const file of new Bun.Glob(join("docs", "**", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
     const segments = file.split(/[\\/]/)
     if (segments[1] === "phases") continue
-    if (/^R-\d+$/.test(segments[1] ?? "") && parsePhaseDir(segments[2] ?? "") && segments[3] === "PLAN.md" && segments.length === 4) continue
     files.push(segments.join("/"))
   }
   return files.sort()

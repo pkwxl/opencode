@@ -102,11 +102,11 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "decompose-t": ["- [ ]", "context.md", "todo.md"],
   "decompose-v": ["- [ ]", "context.md", "todo.md"],
   "handoff-steer": ["Status: continue", "Status: done"],
-  "implement-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
+  "implement-plan": ["# T-NNN: <任务标题>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <任务标题>", "{{taskIndex}}"],
   "infer-source": ['"sourceDir"', '"blocked"'],
   "number-recovery": [".auto/next-task"],
   "phase-handover": ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引", "{{handover}}"],
-  "phase-plan": ["## T-NNN: <任务标题> [pending]", "PLAN.md"],
+  "phase-plan": ["# T-NNN: <任务标题>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <任务标题>", "{{taskIndex}}"],
   "test-wrapup": ["{{handoffFile}}", "not dependent on this test run's result"],
   wrapup: ["Result: PASS", "Result: FAIL"],
 }
@@ -134,7 +134,7 @@ const lacksMarker = (content: string) => (marker: string) =>
 // session's documents). Sections not listed here are marker-free.
 const PARTIAL_MARKERS: Record<string, string[]> = {
   "eof-rule": ["<!-- auto: eof -->"],
-  "state-rule": ["PLAN.md", "CURRENT.md"],
+  "state-rule": ["CURRENT.md"],
   "question-rule": ["question tool", "AUTO-RESOLVE", "AUTO-DECISION"],
 }
 

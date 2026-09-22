@@ -13,7 +13,7 @@ import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
 import { peekHandover } from "./handover"
 import { log } from "./log"
 import type { Opts } from "./opts"
-import type { Task } from "./plan"
+import type { Task } from "./tasks"
 import { handoffFile, renderHandoffSteer, type TestRunInfo } from "./prompt"
 import { runScript } from "./script"
 
@@ -190,8 +190,7 @@ export async function testHandoffExists(dir: string, task: Task): Promise<boolea
 // 交接文档必然属于在途交接(单元正常完成时由 removeHandoffChain 在单元内删除、
 // 随单元提交落账),在这里删它只会制造脏区,把下一个执行单元的 clean 门禁撞停
 // ——kernel-spi-nor T-028 现场正是如此。
-export async function cleanTestHandoffs(planPath: string, task: Task): Promise<void> {
-  const dir = dirname(planPath)
+export async function cleanTestHandoffs(dir: string, task: Task): Promise<void> {
   if (await peekHandover(dir, task.id)) return
   await removeHandoffChain(dir, taskDoc(task.id, "testhandoff"), true)
   await removeHandoffChain(dir, legacyTaskDoc(task.id, "testhandoff"), true)

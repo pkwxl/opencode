@@ -10,7 +10,7 @@ import type { SessionChain } from "./chain"
 import { baselineIntact, beginUnit, unitBaseline, type UnitBaseline } from "./git"
 import { log } from "./log"
 import type { Opts, UnitStop } from "./opts"
-import type { Task } from "./plan"
+import type { Task } from "./tasks"
 import { recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
 import { resumeNote } from "./resume-gate"
 import { runSession } from "./session"
@@ -138,7 +138,7 @@ export async function requireArtifact<T>(
     } else {
       // 全新步骤(或记录不属于本步骤): 先写一个 session 未定的 active 恢复点,使
       // attempt 的下发前快照(prior)恒非空——可重试会话错误还原时保留步骤认领而非
-      // 删除记录,避免"可重试错误耗尽 → 无记录 → 下次运行凭半成品 PLAN.md 跳过本
+      // 删除记录,避免"可重试错误耗尽 → 无记录 → 下次运行凭半成品产物跳过本
       // 步骤"。会话 id 由首个提示词下发时的 remember 落实。
       await saveProgress(opts.dir, { task: task.id, session: undefined, at: Date.now(), active: true, phase: stepPhase })
     }

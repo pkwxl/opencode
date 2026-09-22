@@ -9,7 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { changedFiles, commitTree } from "../src/git"
 import { saveHandover } from "../src/handover"
-import { parse } from "../src/plan"
+import { planOf } from "./fixtures/units"
 import {
   cleanTestHandoffs,
   handoffSteer,
@@ -156,14 +156,14 @@ describe("resolveTestScript(消费 tmp/test.sh 请求标记)", () => {
 // 测试交接文档的陈旧清理与现场复原(中断恢复 F3/F4): 真实临时 git 仓库驱动
 // ——判据本身就是"被 git 跟踪与否",替身无法覆盖。
 describe("cleanTestHandoffs / restoreTestHandoffs(测试交接中断恢复)", () => {
-  const t028 = parse("PLAN.md", `## T-028: 落码 [in_progress]\n正文。\n`).tasks[0]!
+  const t028 = planOf(`## T-028: 落码 [in_progress]\n正文。\n`).tasks[0]!
 
   async function fixture() {
     const dir = await mkdtemp(join(tmpdir(), "auto-handover-runner-"))
     const proc = Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "ignore", stderr: "ignore" })
     await proc.exited
     await mkdir(join(dir, "docs", "T-028", "S03"), { recursive: true })
-    await writeFile(join(dir, "PLAN.md"), "# PLAN\n")
+    await writeFile(join(dir, "README.md"), "# README\n")
     return dir
   }
 
@@ -173,7 +173,7 @@ describe("cleanTestHandoffs / restoreTestHandoffs(测试交接中断恢复)", ()
       const rel = join("docs", "T-028", "S03", "testhandoff.md")
       await writeFile(join(dir, rel), "交接正文\n\n状态: 继续\n")
       await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "subtask 3 handoff-1", subject: "T-028 测试交接 #1" })
-      await cleanTestHandoffs(join(dir, "PLAN.md"), t028)
+      await cleanTestHandoffs(dir, t028)
       expect(await Bun.file(join(dir, rel)).exists()).toBe(true)
       expect(await changedFiles(dir)).toEqual([])
     } finally {
@@ -184,11 +184,11 @@ describe("cleanTestHandoffs / restoreTestHandoffs(测试交接中断恢复)", ()
   test("未跟踪的遗留照删", async () => {
     const dir = await fixture()
     try {
-      await writeFile(join(dir, "PLAN.md"), "# PLAN\n")
+      await writeFile(join(dir, "README.md"), "# README\n")
       await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "execute", subject: "T-028 基线" })
       const rel = join("docs", "T-028", "S03", "testhandoff.md")
       await writeFile(join(dir, rel), "上一次尝试的遗留")
-      await cleanTestHandoffs(join(dir, "PLAN.md"), t028)
+      await cleanTestHandoffs(dir, t028)
       expect(await Bun.file(join(dir, rel)).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -201,7 +201,7 @@ describe("cleanTestHandoffs / restoreTestHandoffs(测试交接中断恢复)", ()
       const rel = join("docs", "T-028", "S03", "testhandoff.md")
       await writeFile(join(dir, rel), "会话正在写")
       await saveHandover(dir, { task: "T-028", scope: rel, unit: "subtask 3", n: 1 })
-      await cleanTestHandoffs(join(dir, "PLAN.md"), t028)
+      await cleanTestHandoffs(dir, t028)
       expect(await Bun.file(join(dir, rel)).exists()).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })

@@ -1,13 +1,13 @@
-import { basename, dirname, join } from "node:path"
+import { basename, join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { writeCurrent, removeCurrent } from "./current"
-import { ensureDecomposed, executeWhole, requireTask, runSubtask } from "./execute"
+import { ensureDecomposed, executeWhole, runSubtask } from "./execute"
 import { resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { legacyTaskDoc, resolveTaskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
-import { effectiveDone, scanSubtaskStates } from "./document/state"
+import { scanSubtaskStates } from "./document/state"
 import { maybeExit } from "./exit"
 import { consumeFailback, failbackApplies } from "./failback"
 import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
@@ -16,7 +16,7 @@ import { log } from "./log"
 import { type Opts, type Outcome, type UnitStop } from "./opts"
 import { interruptionRemark, phaseText, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, runSession } from "./session"
-import { begin, load, markDone, subtasks, syncSubtaskTicks, type Plan, type Task } from "./plan"
+import { begin, markDone, reloadTask, type Plan, type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
@@ -28,9 +28,10 @@ import { reportResult, runWrapup } from "./wrapup"
 // 会话耗时显示用紧凑式时长: 已收口至 src/log.ts 的 formatDurationCompact
 // (STATS_PLAN §5,T-001 上收、本任务删本处私有副本并改 import)。
 
-// Runs one task through the pipeline; the driver owns all state
-// writes to PLAN.md and CURRENT.md, sessions never edit them.
-// --subtask auto (default): decompose (when the task body has no checklist) →
+// Runs one task through the pipeline; the driver owns all state writes (the
+// todo.md → done.md renames, index ticks, CURRENT.md, .auto/), sessions never
+// make them.
+// --subtask auto (default): decompose (when subtasks.md has no checklist) →
 // one session per subtask (driver ticks on trust) → wrap-up → closeout.
 // --subtask off: a single whole-task session → wrap-up → closeout.
 // --subtask ondemand: like off, but when the running session's context usage
@@ -88,8 +89,8 @@ export async function runTask(
   // 启动日志(默认组合静默,verbose 可查全量);fork/forkBase 由 fork 流水线消费,
   // 本层只做解析与既有机制接线(fine/steer);failback 粒度在子任务边界消费。
   const switches = autoSwitches()
-  await begin(plan.path, task.id)
-  const dir = opts.dir ?? dirname(plan.path)
+  const dir = opts.dir ?? plan.dir
+  await begin(dir, task.id)
   const mode = opts.subtask ?? "auto"
   const chain: SessionChain = { pct: 100, used: 0, at: Date.now() }
   // 严格恢复(plans/0022-session-recovery-fidelity-design.md): on 时记录携带单元基线/生效模型、
@@ -118,18 +119,15 @@ export async function runTask(
     // ——防已进入下一单元时误续上一单元的中断会话。
     let rerun = true
     if (recalled.active === true) {
-      const fresh = requireTask(await load(plan.path), task.id)
-      const planDir = dirname(plan.path)
-      const bodyItems = subtasks(fresh.body)
-      // 子任务目录状态协议激活时,单元归属判定按 done.md 存在性(进度事实)而非
-      // PLAN.md 勾选(展示轨)——plans/0030 D10。
-      const scan = await scanSubtaskStates(planDir, task.id, bodyItems.length)
-      const doneFlags = effectiveDone(scan, bodyItems)
+      // 检查项取自 subtasks.md,done 为有效值(状态文件激活时 done.md 存在性即
+      // 进度事实,勾选只是展示轨——plans/0030 D10)。
+      const fresh = await reloadTask(plan, task.id)
+      const items = fresh.checklist ?? []
       rerun = unitReruns(recalled.phase, {
         mode,
         fork: switches.fork,
-        items: bodyItems.map((item, i) => ({ text: item.text, done: doneFlags[i] ?? item.done })),
-        subtasksFileItems: subtasks(await Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "subtasks"))).text().catch(() => "")).length,
+        items,
+        subtasksFileItems: items.length,
         wrapup: opts.wrapup ?? true,
       })
       if (!rerun) {
@@ -233,8 +231,8 @@ export async function runTask(
   }
   // Mirror the task into CURRENT.md before the first session: the agent
   // contract requires every session to read it first.
-  task = requireTask(await load(plan.path), task.id)
-  await writeCurrent(plan.path, task, mode !== "auto", rolledBack)
+  task = await reloadTask(plan, task.id)
+  await writeCurrent(dir, task, mode !== "auto", rolledBack)
   // 阶段持久化: 每个阶段边界推进记录(active=false,总结态);执行链会话开始/结束
   // 时由 attempt 刷新为 active=true(半途态)——此刻中断按"未总结"复用会话。
   // 严格恢复时同步刷新链上单元基线: 回滚锚点跟随阶段边界收紧(基线..HEAD 只含
@@ -250,7 +248,7 @@ export async function runTask(
   if (outcome.type === "completed") {
     // 终态改名: 链上最后一个会话标题指向 done 标签(与 loop 的终态提交同题)。
     await renameSession(client, chain, `${task.id} done ${task.title}`)
-    await removeCurrent(plan.path)
+    await removeCurrent(dir)
     await forgetProgress(dir)
     return outcome
   }
@@ -259,9 +257,9 @@ export async function runTask(
   // 会话错误类(网络重试耗尽)保持 active 记录供恢复复用(会话半途无法总结);
   // 其余清除复用资格(进度已总结,人工介入可能耗时且改动环境,旧会话上下文不可信),
   // 阶段信息保留供精确重入。会话标题同步改名为中断状态(与 loop 边界提交同题)。
-  task = requireTask(await load(plan.path), task.id)
+  task = await reloadTask(plan, task.id)
   await renameSession(client, chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
-  await writeCurrent(plan.path, task, mode !== "auto", interruptionRemark(outcome, chain.phase))
+  await writeCurrent(dir, task, mode !== "auto", interruptionRemark(outcome, chain.phase))
   if (!(outcome.type === "blocked" && outcome.question.startsWith("session error: "))) {
     await persistStage(chain.phase ?? (mode === "auto" ? { kind: "decompose" } : { kind: "whole" }))
   }
@@ -278,14 +276,14 @@ export async function runTask(
     // (不重跑整任务会话;auto 的分解/子任务循环本就幂等,无需特判)。
     const resumed = resume?.kind
     // fork 基点(fork-decompose 设计 §4.2): 仅 fork=on 的 auto 模式确立;digest
-    // 模式持久基点(PLAN.md fork-base 字段,digest: 前缀)存活即复用、失效才从
+    // 模式持久基点(.auto/units.json 的 forkBase,digest: 前缀)存活即复用、失效才从
     // context.md 重建,session 模式沿用/校验 fork-base 字段,失败沿回退链
     // (digest → session → 冷启动)降级,undefined = 冷启动。
     let fork: ForkBaseInfo | undefined
     if (mode === "auto") {
       const sw = autoSwitches()
-      // 合并理解与分解会话(M1.0,plans/0030): 任务体无检查项时进入(已有人工
-      // 检查项的任务跳过,现状不变);单会话产出 context.md + shared.md +
+      // 合并理解与分解会话(M1.0,plans/0030): subtasks.md 无检查项时进入(已有
+      // 检查项——人工编写或上次分解遗留——的任务跳过);单会话产出 context.md + shared.md +
       // subtasks.md + 各子任务 todo.md;subtasks.md 已有检查项(中断恢复/旧版
       // 遗留)时幂等直注。会话成功后 driver 记录 fork-base(session 模式即最终
       // 基点;digest 模式随后由基点确认会话覆写)。
@@ -303,47 +301,47 @@ export async function runTask(
       // 未勾选项),保留给重跑的子任务凭交接续跑——无条件删它只会制造脏区,把下一
       // 单元的 clean 门禁撞停后陷入"人工恢复→再删→再阻塞"的循环(T-028 同类现场)。
       if (recalled?.active !== true) {
-        await removeIfUntracked(dirname(plan.path), handoffFile(task))
+        await removeIfUntracked(dir, handoffFile(task))
         // 旧平铺交接文档(docs/<id>.handoff.md)兼容清扫: 写目标已目录化,遗留
         // 旧文件一并移除,防读回落误续跑陈旧交接。
-        await removeIfUntracked(dirname(plan.path), legacyTaskDoc(task.id, "handoff"))
+        await removeIfUntracked(dir, legacyTaskDoc(task.id, "handoff"))
         // --handover-test 的测试交接文档同理(任务级与子任务级一并清): runExecSession
         // 的交接循环在一次 runTask 调用内闭环,跨调用的遗留文档属陈旧状态;auto 模式
         // 不进整任务分支,清理须在此覆盖,否则陈旧交接会被下一子任务误读续跑。
-        if (opts.testByDriver) await cleanTestHandoffs(plan.path, task)
+        if (opts.testByDriver) await cleanTestHandoffs(dir, task)
       }
     } else if (resumed !== "wrapup" && resumed !== "closeout") {
       // 非恢复续跑才清除上次尝试遗留的交接文档;恢复时保留(其中是中断会话的进度
       // 总结,executeWhole 依其 `状态:` 行决定续跑)。同样只删未被 git 跟踪的份
       // (理由同 auto 分支: 已跟踪的属未收口单元的在途状态,删它即脏区)。
       if (mode === "ondemand" && recalled?.active !== true) {
-        await removeIfUntracked(dirname(plan.path), handoffFile(task))
+        await removeIfUntracked(dir, handoffFile(task))
         // 旧平铺交接文档兼容清扫(与 auto 分支同语义)。
-        await removeIfUntracked(dirname(plan.path), legacyTaskDoc(task.id, "handoff"))
+        await removeIfUntracked(dir, legacyTaskDoc(task.id, "handoff"))
       }
       // --handover-test 的测试交接文档同理: 非恢复续跑时清除上次尝试遗留
       // (任务级与子任务级一并清;恢复续跑(active 记录)时保留,由续跑会话消费)。
       if (opts.testByDriver && recalled?.active !== true) {
-        await cleanTestHandoffs(plan.path, task)
+        await cleanTestHandoffs(dir, task)
       }
       await persistStage({ kind: "whole" })
       const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
       if (blocked) return blocked
-      task = requireTask(await load(plan.path), task.id)
+      task = await reloadTask(plan, task.id)
     }
-    await writeCurrent(plan.path, task, mode !== "auto")
+    await writeCurrent(dir, task, mode !== "auto")
 
     // closeout resume: the wrap-up already finished before the interruption
     // (or the record is a legacy verify/review one, which only ever followed
     // wrap-up) — only the result check and completion remain.
     if (resume?.kind !== "closeout") {
       await persistStage({ kind: "subtasks" })
-      // auto 模式此处执行分解出的检查项;off/ondemand 模式只有正文中人工编写的检查项。
+      // auto 模式此处执行分解出的检查项;off/ondemand 模式只有人工编写在 subtasks.md 的检查项。
       for (;;) {
-        const items = subtasks(task.body)
+        const items = task.checklist ?? []
         // 子任务目录状态协议(M1.0,plans/0030): 协议激活(任一 todo/done 文件
-        // 存在)时,done.md 存在性覆盖勾选成为进度事实;非法态(两者同存/同缺)
-        // 检出即阻塞交人工;勾选漂移按文件状态 reconcile(文件为准,展示轨跟随)。
+        // 存在)时,done.md 存在性覆盖勾选成为进度事实(items 的 done 即有效值);
+        // 非法态(两者同存/同缺)检出即阻塞交人工。
         const scan = await scanSubtaskStates(dir, task.id, items.length)
         if (scan.illegal.length) {
           return {
@@ -361,13 +359,8 @@ export async function runTask(
                 .join("; ")}). Resolve the docs/${task.id}/S<nn>/ state files manually and re-run.`,
           }
         }
-        const doneFlags = effectiveDone(scan, items)
-        const index = doneFlags.findIndex((done) => !done)
+        const index = items.findIndex((item) => !item.done)
         if (index === -1) break
-        if (scan.active && items.some((item, i) => item.done !== doneFlags[i])) {
-          await syncSubtaskTicks(plan.path, task.id, doneFlags)
-          task = requireTask(await load(plan.path), task.id)
-        }
         // 进度记录标注归属子任务(1 起序号): attempt 下发成功即随记录落盘,恢复时
         // 经单元归属门禁(unitReruns)仅当该子任务将重跑才复用其会话。
         const loopPhase: Phase = { kind: "subtasks" }
@@ -379,7 +372,7 @@ export async function runTask(
         const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit)
         if (blocked) return blocked
         // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。
-        task = requireTask(await load(plan.path), task.id)
+        task = await reloadTask(plan, task.id)
         // 子任务已收口(勾选+统一提交): 进度记录刷新为总结态(active=false,剥离
         // 序号)——子任务间歇(步进暂停/回试处理)期间中断不再遗留"半途未总结"的
         // 上一单元会话,恢复时不会被下一单元误续。
@@ -409,11 +402,11 @@ export async function runTask(
     }
     // Result line of the task report (FAIL stops the run): the report and the
     // work are already committed by the wrap-up session, so a FAIL only has
-    // to block — the loop's blocked path marks [blocked] and commits the
-    // interruption scene. A person then edits PLAN.md: marking the task
-    // [done] accepts the result; inserting fix tasks before it gets the gap
-    // fixed first (a hand-added checklist item is illegal subtask state in
-    // auto mode, so fixes are planned as tasks). The phase is rewound to
+    // to block — the loop's blocked path marks it blocked and commits the
+    // interruption scene. A person then decides: renaming the task's todo.md
+    // to done.md accepts the result; listing fix tasks before it in tasks.md
+    // gets the gap fixed first (a hand-added checklist item is illegal subtask
+    // state in auto mode, so fixes are planned as tasks). The phase is rewound to
     // wrapup, so re-running the task itself only re-runs the wrap-up, which
     // rewrites the result line. No report or no result line = no stop.
     await persistStage({ kind: "closeout" })
@@ -424,10 +417,10 @@ export async function runTask(
         type: "blocked",
         question:
           `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
-          `edit PLAN.md (mark the task [done] to accept the result, or insert fix tasks before it) and re-run.`,
+          `rename docs/${task.id}/todo.md to done.md to accept the result, or list fix tasks before it in ${plan.index}, and re-run.`,
       }
     }
-    await markDone(plan.path, task.id)
+    await markDone(plan, task.id)
     return { type: "completed" }
   }
 }

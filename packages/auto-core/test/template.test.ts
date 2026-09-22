@@ -49,7 +49,7 @@ describe("渲染器", () => {
   test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
     usePromptLibrary(undefined)
     const standalone = renderText("前:\n   {{> state-rule}}\n后", {})
-    expect(standalone.split("\n")[1]).toBe("   PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.")
+    expect(standalone.split("\n")[1]).toBe("   CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.")
     expect(standalone.split("\n")[2]).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.")
     const inline = renderText("前:\n   {{> state-rule}};尾", {})
     expect(inline.split("\n").at(-1)).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.;尾")
@@ -292,10 +292,10 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      // state-rule 是 tier-1 协议敏感节: 覆盖须保留 PLAN.md / CURRENT.md 锚点
-      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则: PLAN.md 与 CURRENT.md 仍由 DRIVER 独占维护。")
+      // state-rule 是 tier-1 协议敏感节: 覆盖须保留 CURRENT.md 锚点
+      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则: CURRENT.md 仍由 DRIVER 独占维护。")
       usePromptLibrary(dir)
-      expect(renderText("{{> state-rule}}", {})).toBe("自定义状态规则: PLAN.md 与 CURRENT.md 仍由 DRIVER 独占维护。")
+      expect(renderText("{{> state-rule}}", {})).toBe("自定义状态规则: CURRENT.md 仍由 DRIVER 独占维护。")
       expect(renderText("{{> question-rule}}", {})).toContain("AUTO-DECISION")
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -309,7 +309,7 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则,丢了状态文件锚点。")
       expect(() => usePromptLibrary(dir)).toThrow(/section state-rule is missing required protocol content/)
-      expect(() => usePromptLibrary(dir)).toThrow(/PLAN\.md/)
+      expect(() => usePromptLibrary(dir)).toThrow(/CURRENT\.md/)
       writeFileSync(join(overlay, "_partials.md"), "## eof-rule\n写完就行,不用终止符。")
       expect(() => usePromptLibrary(dir)).toThrow(/section eof-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/<!-- auto: eof -->/)

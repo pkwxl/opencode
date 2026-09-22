@@ -35,7 +35,7 @@ You are carrying out one task of an implementation plan. This session only has t
    to the reply, and if the current stage is already finished, move straight on to the next one.
    Asking the same question again blocks the task and stops the run — do not rephrase and re-ask a question that has already been answered.{{/if}}
 ## state-rule
-PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 ## ground-state
 Authoritative DRIVER ledger state (this is the only basis for the progress of this task and this subtask — never infer whether this task is done from other tasks' documents, handovers or git commit records):

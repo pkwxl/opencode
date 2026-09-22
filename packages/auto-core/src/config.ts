@@ -50,7 +50,7 @@ export type ProjectConfig = {
   // init 时另校验存在性;run 不再校验(源系统可能已下线)。
   source?: { dir: string; path: string }
   // 迁移目标目录(可选,缺省 undefined = 迁移产出直接落在工作目录): 相对工作目录、
-  // 不含 ..。driver 工作目录(流程文件 PLAN.md/docs/ 等)与迁移目标经它隔离;
+  // 不含 ..。driver 工作目录(流程文件 CURRENT.md/docs/ 等)与迁移目标经它隔离;
   // 不校验存在性(目标目录常由迁移过程创建)。
   destDir?: string
 }

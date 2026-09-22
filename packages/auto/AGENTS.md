@@ -32,7 +32,7 @@ Package-level notes for coding agents, kept lean: the core-mechanism documentati
 
 ## Core invariants (read before changing)
 
-See `../auto-core/AGENTS.md` (exit codes, constitutional config fixation, driver-exclusive state writes, unified commit, completion-decision contract; changes to the PLAN.md parse rule must be synced with this package's e2e tests and the README format description).
+See `../auto-core/AGENTS.md` (exit codes, constitutional config fixation, driver-exclusive state writes, unified commit, completion-decision contract; changes to the task-unit format must be synced with this package's e2e tests and the README format description).
 
 ## Maintaining this document
 

@@ -68,35 +68,20 @@ describe("taskNumberFloor", () => {
     }
   })
 
-  test("当前 PLAN.md / 归档 PLAN / docs 产物文件名共同取最大编号 + 1", async () => {
+  test("各阶段任务索引 tasks.md 与任务目录共同取最大编号 + 1(M3.4)", async () => {
     const dir = await tempDir()
     try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-003: 当前任务 [pending]\n正文\n")
+      // 任务单元: 目录 docs/T-NNN/ 内的 todo.md / done.md
+      await Bun.write(join(dir, "docs/T-003/todo.md"), "# T-003: 当前任务\n")
       expect(await taskNumberFloor(dir)).toBe(4)
-      // 阶段归档 PLAN(docs/phases/**/PLAN.md)
-      await Bun.write(join(dir, "docs/phases/m-migrate/PLAN.md"), "## T-010: 归档任务 [done]\n")
+      // 任务索引列出而任务目录已不在(被人工移除)的编号同样占用
+      await Bun.write(join(dir, "docs/R-01/P02-implement/tasks.md"), "- [x] T-010 已完成任务\n")
       expect(await taskNumberFloor(dir)).toBe(11)
-      // docs 产物文件名(归档目录内的同样覆盖)
-      await Bun.write(join(dir, "docs/T-005.subtasks.md"), "x\n")
-      expect(await taskNumberFloor(dir)).toBe(11)
-      await Bun.write(join(dir, "docs/phases/m-migrate/T-020.handoff.md"), "x\n")
-      expect(await taskNumberFloor(dir)).toBe(21)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("轮次目录(新布局): docs/R-NN/PLAN.md 与轮内阶段归档 PLAN 同样覆盖", async () => {
-    const dir = await tempDir()
-    try {
-      // 轮内 PLAN(根 PLAN.md 是指向它的符号链接,两路扫描同内容取最大不重复计入)
-      await Bun.write(join(dir, "docs/R-01/PLAN.md"), "## T-006: 本轮任务 [pending]\n")
-      expect(await taskNumberFloor(dir)).toBe(7)
-      // 轮内阶段归档 PLAN 快照
-      await Bun.write(join(dir, "docs/R-01/m-migrate/PLAN.md"), "## T-015: 归档任务 [done]\n")
+      // 上一轮的任务索引同样覆盖;坏行不中断扫描
+      await Bun.write(join(dir, "docs/R-02/P01-analysis/tasks.md"), "- [ ] bad line\n- [ ] T-015 下一轮任务\n")
       expect(await taskNumberFloor(dir)).toBe(16)
-      // 与旧布局归档并存: 共同取最大
-      await Bun.write(join(dir, "docs/phases/round-1/PLAN.md"), "## T-020: 旧轮任务 [done]\n")
+      // docs 产物文件名(旧平铺,M3.7 前兼容)
+      await Bun.write(join(dir, "docs/phases/m-migrate/T-020.handoff.md"), "x\n")
       expect(await taskNumberFloor(dir)).toBe(21)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -121,16 +106,6 @@ describe("taskNumberFloor", () => {
       await Bun.write(join(dir, "docs/T-002.subtasks.md"), "x\n")
       await Bun.write(join(dir, "docs/T-007/context.md"), "x\n")
       expect(await taskNumberFloor(dir)).toBe(8)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("PLAN 解析失败(重复编号)退化为标题行正则提取,不中断扫描", async () => {
-    const dir = await tempDir()
-    try {
-      await Bun.write(join(dir, "PLAN.md"), "## T-008: a [pending]\n## T-008: b [pending]\n")
-      expect(await taskNumberFloor(dir)).toBe(9)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

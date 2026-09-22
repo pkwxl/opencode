@@ -13,9 +13,15 @@ import {
 import { usePromptLibrary } from "../src/template"
 import { migrate, plan } from "./fixtures/prompt"
 
+// The unit coordinates every planning render needs (M3.4); tests vary the rest.
+const phasePlan = (input: Omit<Parameters<typeof renderPhasePlan>[0], "phaseId" | "taskIndex">) =>
+  renderPhasePlan({ phaseId: "R-01.P02", taskIndex: "docs/R-01/P02-implement/tasks.md", ...input })
+const implementPlan = (input: Omit<Parameters<typeof renderImplementPlan>[0], "phaseId" | "taskIndex">) =>
+  renderImplementPlan({ phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", ...input })
+
 describe("renderPhasePlan(阶段规划会话,E 节)", () => {
-  test("注入 brief/迁移源与目标/模式导语与任务格式协议;授权直接编辑 PLAN.md", () => {
-    const text = renderPhasePlan({
+  test("注入 brief/迁移源与目标/模式导语与任务单元格式协议;只写任务索引与任务文档", () => {
+    const text = phasePlan({
       phase: "a",
       brief: "把 legacy 迁移到 bun",
       source: { dir: "legacy", path: "src/mod.ts" },
@@ -34,12 +40,16 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("文档存放以任务为锚")
     expect(text).toContain("行为基线")
     expect(text).toContain("勘察计划排为首批任务")
-    // 任务格式协议(协议敏感标记)
-    expect(text).toContain("## T-NNN: <任务标题> [pending]")
+    // 任务单元格式协议(协议敏感标记,M3.4): 任务文档标题行、Phase 字段、三节与索引行
+    for (const marker of ["# T-NNN: <任务标题>", "Phase: R-01.P02", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <任务标题>", "<!-- auto: eof -->"]) {
+      expect(text).toContain(marker)
+    }
     expect(text).not.toContain("- verify:")
-    // 本会话被授权直接编辑 PLAN.md(通常只读),其余状态文件仍禁改
-    expect(text).toContain("唯一可写的文件是 PLAN.md")
-    expect(text).toContain("CURRENT.md 与其余")
+    expect(text).not.toContain("PLAN.md")
+    // 本会话只写任务索引与任务文档,不建 done.md;其余状态文件禁改
+    expect(text).toContain("本会话只写任务索引 docs/R-01/P02-implement/tasks.md 与各任务的 docs/T-NNN/todo.md")
+    expect(text).toContain("不要创建 done.md")
+    expect(text).toContain("CURRENT.md 与其余状态文件为只读")
     expect(text).toContain("不要用 chmod 等方式改动文件权限")
     expect(text).toContain("git 提交由 DRIVER 在会话结束后统一执行")
     expect(text).toContain("AUTO-DECISION")
@@ -47,18 +57,18 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   })
 
   test("brief 缺失 → 未提供提示段;各阶段职责条件注入(任务锚定,k 为永久路径知识文档)", () => {
-    const missing = renderPhasePlan({ phase: "d" })
+    const missing = phasePlan({ phase: "d" })
     expect(missing).toContain("未提供(brief.md 缺失或为空)")
     expect(missing).toContain("模块设计")
     expect(missing).not.toContain("行为基线")
-    expect(renderPhasePlan({ phase: "m" })).toContain("代码迁移与改造")
-    expect(renderPhasePlan({ phase: "t" })).toContain("回归覆盖")
-    expect(renderPhasePlan({ phase: "v" })).toContain("整体验收")
-    expect(renderPhasePlan({ phase: "k" })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
+    expect(phasePlan({ phase: "m" })).toContain("代码迁移与改造")
+    expect(phasePlan({ phase: "t" })).toContain("回归覆盖")
+    expect(phasePlan({ phase: "v" })).toContain("整体验收")
+    expect(phasePlan({ phase: "k" })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
   })
 
   test("handovers 注入两态: 有前序交接则注入清单(标注阶段目录内 handover.md 永久路径),无则整块消失", () => {
-    const text = renderPhasePlan({
+    const text = phasePlan({
       phase: "m",
       handovers: "### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)\n\n- 决策甲: 选型 X",
     })
@@ -68,11 +78,11 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)")
     expect(text).toContain("- 决策甲: 选型 X")
     // 首阶段无前序交接: 交接块整块消失
-    expect(renderPhasePlan({ phase: "a" })).not.toContain("前序阶段交接")
+    expect(phasePlan({ phase: "a" })).not.toContain("前序阶段交接")
   })
 
   test("prevRound 注入两态: 续轮结论块出现/整块消失(仅新一轮首个规划会话由 loop 传入)", () => {
-    const text = renderPhasePlan({
+    const text = phasePlan({
       phase: "a",
       prevRound: "### 上一轮(第 1 轮)阶段目录索引(docs/R-01/)\n\n- docs/R-01/P01-implement/",
     })
@@ -82,52 +92,52 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("永久路径")
     expect(text).toContain("- docs/R-01/P01-implement/")
     // 非续轮(无 prevRound): 结论块整块消失
-    expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
+    expect(phasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
   })
 
   test("m 阶段经 trimmedPhases 注入流程裁剪注记(--phases 裁剪 → 勘察设计并入首批任务,底线不省),缺省与其余阶段无", () => {
-    const m = renderPhasePlan({ phase: "m", trimmedPhases: true })
+    const m = phasePlan({ phase: "m", trimmedPhases: true })
     expect(m).toContain("流程裁剪注记")
     expect(m).toContain("--phases 裁剪")
     expect(m).toContain("并入本阶段首批任务")
     expect(m).toContain("底线保障")
     // 缺省(完整流程)不注入;非 m 阶段即使传入也不注入(门控在函数内)
-    expect(renderPhasePlan({ phase: "m" })).not.toContain("流程裁剪注记")
-    expect(renderPhasePlan({ phase: "a", trimmedPhases: true })).not.toContain("流程裁剪注记")
+    expect(phasePlan({ phase: "m" })).not.toContain("流程裁剪注记")
+    expect(phasePlan({ phase: "a", trimmedPhases: true })).not.toContain("流程裁剪注记")
   })
 
   test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
-    const withSource = renderPhasePlan({ phase: "m", source: { dir: "legacy", path: "pkg" } })
+    const withSource = phasePlan({ phase: "m", source: { dir: "legacy", path: "pkg" } })
     expect(withSource).toContain("## 输入: 迁移源参数")
     expect(withSource).not.toContain("## 输入: 迁移目标参数")
-    const bare = renderPhasePlan({ phase: "m" })
+    const bare = phasePlan({ phase: "m" })
     expect(bare).not.toContain("## 输入: 迁移源参数")
     expect(bare).not.toContain("## 输入: 迁移目标参数")
   })
 
   test("不含 verify 字段与验收执行权描述(verify 已退役,m 阶段)", () => {
-    const text = renderPhasePlan({ phase: "m" })
+    const text = phasePlan({ phase: "m" })
     expect(text).not.toContain("verify")
     expect(text).not.toContain("验收")
   })
 
   test("numberStart 两态: 自动编号起点注入 / 缺省自 T-001 起", () => {
-    const text = renderPhasePlan({ phase: "m", numberStart: 4 })
+    const text = phasePlan({ phase: "m", numberStart: 4 })
     expect(text).toContain("任务编号自 T-004 起连续递增")
     expect(text).toContain("不得复用")
     expect(text).not.toContain("任务编号自 T-001")
     // 未启用自动编号(缺省): 维持历史文案
-    const bare = renderPhasePlan({ phase: "m" })
+    const bare = phasePlan({ phase: "m" })
     expect(bare).toContain("任务编号自 T-001 连续递增")
     expect(bare).not.toContain("不得复用")
   })
 
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
-      renderPhasePlan({ phase: "a" }),
-      renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, numberStart: 12 }),
-      renderPhasePlan({ phase: "a", prevRound: "### 上一轮(第 1 轮)阶段目录索引\n\n- docs/R-01/P01-implement/" }),
-      renderPhasePlan({ phase: "k" }),
+      phasePlan({ phase: "a" }),
+      phasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, numberStart: 12 }),
+      phasePlan({ phase: "a", prevRound: "### 上一轮(第 1 轮)阶段目录索引\n\n- docs/R-01/P01-implement/" }),
+      phasePlan({ phase: "k" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
@@ -136,42 +146,45 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
 
 describe("renderImplementPlan(init 快捷模式 --implement-file/--implement-prompt)", () => {
   test("file 给出: 按「计划文件」呈现,注入路径与全文;任务格式协议与授权文案同 phase-plan", () => {
-    const text = renderImplementPlan({ file: "/tmp/rough-plan.md", content: "先做 A,再做 B" })
+    const text = implementPlan({ file: "/tmp/rough-plan.md", content: "先做 A,再做 B" })
     expect(text).toContain("## 输入: 计划文件(/tmp/rough-plan.md)")
     expect(text).toContain("先做 A,再做 B")
     expect(text).not.toContain("## 输入: 实施提示词")
-    expect(text).toContain("## T-NNN: <任务标题> [pending]")
+    expect(text).toContain("# T-NNN: <任务标题>")
+    expect(text).toContain("Phase: R-01.P01")
+    expect(text).toContain("docs/R-01/P01-implement/tasks.md")
+    expect(text).toContain("任务编号自 T-001 连续递增")
     expect(text).not.toContain("- verify:")
-    expect(text).toContain("唯一可写的文件是 PLAN.md")
+    expect(text).not.toContain("PLAN.md")
     expect(text).toContain("不要用 chmod 等方式改动文件权限")
     expect(text).toContain("AUTO-DECISION")
   })
 
   test("file 未给出: 按「实施提示词」呈现同一 content", () => {
-    const text = renderImplementPlan({ content: "实现一个登录页面" })
+    const text = implementPlan({ content: "实现一个登录页面" })
     expect(text).toContain("## 输入: 实施提示词")
     expect(text).toContain("实现一个登录页面")
     expect(text).not.toContain("## 输入: 计划文件")
   })
 
   test("brief 两态: 给出则注入项目意图段,未给出/空白则整块消失", () => {
-    const withBrief = renderImplementPlan({ content: "x", brief: "把 legacy 迁移到 bun" })
+    const withBrief = implementPlan({ content: "x", brief: "把 legacy 迁移到 bun" })
     expect(withBrief).toContain("## 输入: 项目意图(.opencode/auto/brief.md)")
     expect(withBrief).toContain("把 legacy 迁移到 bun")
-    expect(renderImplementPlan({ content: "x" })).not.toContain("## 输入: 项目意图")
-    expect(renderImplementPlan({ content: "x", brief: "   " })).not.toContain("## 输入: 项目意图")
+    expect(implementPlan({ content: "x" })).not.toContain("## 输入: 项目意图")
+    expect(implementPlan({ content: "x", brief: "   " })).not.toContain("## 输入: 项目意图")
   })
 
   test("不含 verify 字段与验收执行权描述(verify 已退役)", () => {
-    const text = renderImplementPlan({ content: "x" })
+    const text = implementPlan({ content: "x" })
     expect(text).not.toContain("verify")
     expect(text).not.toContain("验收")
   })
 
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
-      renderImplementPlan({ content: "提示词" }),
-      renderImplementPlan({ file: "docs/rough.md", content: "计划全文", brief: "意图" }),
+      implementPlan({ content: "提示词" }),
+      implementPlan({ file: "docs/rough.md", content: "计划全文", brief: "意图" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
@@ -189,9 +202,10 @@ describe("renderNumberRecovery(编号恢复会话)", () => {
     expect(text).toContain("= 5")
     expect(text).toContain("T-005")
     expect(text).toContain("不得小于它")
-    // 证据清单含 git 历史(发现产物已删除的编号)与归档 PLAN
+    // 证据清单含 git 历史(发现产物已删除的编号)与各阶段任务索引
     expect(text).toContain("git log --oneline")
-    expect(text).toContain("docs/phases/")
+    expect(text).toContain("tasks.md")
+    expect(text).not.toContain("PLAN")
     // 硬性产出协议: 内容仅为不小于下限的正整数
     expect(text).toContain("正整数")
     expect(text).toContain("不要写任何其他内容")
@@ -225,11 +239,11 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
-    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以本阶段 kb.md 产物为准
-    expect(text).toContain("PLAN.md 为空模板")
+    // 无任务清单阶段(k)的兜底表述: 无任务索引/CURRENT.md 缺失属预期,蒸馏以本阶段 kb.md 产物为准
+    expect(text).toContain("没有任务索引 tasks.md")
     expect(text).toContain("CURRENT.md 不存在,属预期")
     expect(text).toContain("本阶段目录内的 kb.md")
-    expect(text).toContain("无任务清单时跳过")
+    expect(text).toContain("无任务索引时跳过")
     // 有下一阶段时不带收尾措辞
     const withNext = renderPhaseHandover({ phase: "a", handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" })
     expect(withNext).not.toContain("无下一阶段")

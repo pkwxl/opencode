@@ -1,12 +1,11 @@
 // 任务执行阶段: executeWhole(off/ondemand 整任务会话)+ 合并理解与分解
 // (ensureDecomposed,M1.0 起 understand+decompose 单会话合一,plans/0030)+
-// runSubtask 单个子任务会话(含子任务目录状态协议 todo.md→done.md),及
-// PLAN.md 重读小工具 requireTask。位于 exec-session/session 之上、runner 之下;
+// runSubtask 单个子任务会话(含子任务目录状态协议 todo.md→done.md)。位于 exec-session/session 之上、runner 之下;
 // **不得反向 import runner**(§D.2)。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S12,纯搬运)。
 
 import { rm } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { writeCurrent } from "./current"
@@ -20,7 +19,7 @@ import { runExecSession } from "./exec-session"
 import { beginUnit, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
-import { load, setForkBase, setSubtasks, subtasks, tick, type Plan, type Task } from "./plan"
+import { reloadTask, setForkBase, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
 import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
@@ -43,12 +42,12 @@ export async function executeWhole(
   ondemand: boolean,
 ): Promise<UnitStop | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const dir = opts.dir ?? dirname(plan.path)
+  const dir = opts.dir ?? plan.dir
   const strict = strictResumeActive(opts)
   // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径 docs/<id>/handoff.md
   // (提示词经 handoffFile 注入),读点优先新路径、旧平铺存在则回落——存量项目
   // 中断恢复续跑不受改名影响。
-  const planDir = dirname(plan.path)
+  const planDir = plan.dir
   const readHandoff = async (): Promise<string> =>
     Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
   // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
@@ -75,7 +74,7 @@ export async function executeWhole(
   const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
     if (!strict || !chain.baseline) return undefined
     const done = await rollbackUnitState(dir, task, "execution session", chain.baseline, {
-      planPath: plan.path,
+      current: true,
       progress: await peekProgress(dir),
       solo: (opts.subtask ?? "auto") !== "auto",
     })
@@ -160,26 +159,20 @@ export async function executeWhole(
   }
 }
 
-export function requireTask(plan: Plan, id: string): Task {
-  const task = plan.tasks.find((task) => task.id === id)
-  if (!task) throw new Error(`${plan.path}: task ${id} not found`)
-  return task
-}
-
 // Merged understand+decompose unit (M1.0, plans/0030-subtask-loop-entry-design.md):
 // one session produces the task background digest (docs/<id>/context.md, four
 // sections), the shared-context reference index (docs/<id>/shared.md), the
-// subtask checklist (docs/<id>/subtasks.md, parsed by the driver and injected
-// into PLAN.md) and one scope file per subtask (docs/<id>/S<nn>/todo.md).
+// subtask checklist (docs/<id>/subtasks.md, the task's subtask index read by
+// the driver) and one scope file per subtask (docs/<id>/S<nn>/todo.md).
 // All four artifact groups are hard requirements (existence + non-trivial +
 // terminal eof line), feeding one retry-with-feedback loop (re-prompt via
 // forkEndedSession of the just-ended session); still failing → blocked.
 // On success the session id is recorded as the session-mode fork base (digest
 // mode overwrites it in ensureForkBase afterwards) and everything lands in the
 // "decompose" unit commit.
-// 中断恢复/兼容读: 任务体已有检查项(含人工编写)直接跳过;subtasks.md 已有检查项
-// (上次分解已写文件但尚未注入,或旧版分解产物)直接注入、不再开会话——旧版产物
-// 没有 todo.md 状态文件,该任务保持台账勾选语义(协议未激活,plans/0030 D5)。
+// 中断恢复/兼容读: subtasks.md 已有检查项(上次分解已写文件、人工编写的清单,或
+// 旧版分解产物)直接沿用、不再开会话——没有 todo.md 状态文件的清单保持勾选语义
+// (协议未激活,plans/0030 D5)。
 export async function ensureDecomposed(
   client: AgentClient,
   plan: Plan,
@@ -187,22 +180,20 @@ export async function ensureDecomposed(
   opts: Opts,
   chain: SessionChain,
 ): Promise<({ type: "ok" } & { task: Task }) | UnitStop> {
-  if (subtasks(task.body).length) return { type: "ok", task }
+  if (task.checklist?.length) return { type: "ok", task }
   // 分解结果路径(目录化布局): 写目标恒为新路径;subtasks.md 读点经 resolveTaskDoc
   // 回落旧平铺 docs/<id>.subtasks.md(存量项目中断恢复不受改名影响)。context.md 同。
-  const dir = dirname(plan.path)
+  const dir = plan.dir
   const contextFile = join(dir, taskDoc(task.id, "context"))
   const sharedFile = join(dir, taskDoc(task.id, "shared"))
   const subtasksFile = join(dir, taskDoc(task.id, "subtasks"))
   const readDoc = async (role: "context" | "subtasks"): Promise<string> =>
     (await Bun.file(join(dir, await resolveTaskDoc(dir, task.id, role))).text().catch(() => "")).trim()
   const readRaw = async (): Promise<string> => readDoc("subtasks")
-  const readItems = async (): Promise<string[]> => subtasks(await readRaw()).map((item) => item.text)
-  const existing = await readItems()
+  const existing = subtasks(await readRaw())
   if (existing.length) {
-    log(`↻ ${task.id} decomposition result ${subtasksFile} already exists; injecting checklist items directly`)
-    await setSubtasks(plan.path, task.id, existing)
-    return { type: "ok", task: requireTask(await load(plan.path), task.id) }
+    log(`↻ ${task.id} decomposition result ${subtasksFile} already exists; using its checklist directly`)
+    return { type: "ok", task: await reloadTask(plan, task.id) }
   }
   let feedback = ""
   // One automatic retry with feedback: a resumed session may have done the
@@ -234,16 +225,15 @@ export async function ensureDecomposed(
     // 即直接注入」路径不受影响(不追溯存量)。
     const problems = await decomposeArtifactProblems(dir, task.id)
     if (!problems.length) {
-      const items = await readItems()
-      await setSubtasks(plan.path, task.id, items)
       // 合并会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
-      if (chain.id) await setForkBase(plan.path, task.id, chain.id)
-      // 镜像刷新同样先于统一提交(与子任务勾选同口径): 注入的检查项与镜像同入
+      if (chain.id) await setForkBase(dir, task.id, chain.id)
+      // 镜像刷新同样先于统一提交(与子任务勾选同口径): 检查项与镜像同入
       // decompose 提交,调用方随后的刷新即幂等空写。
-      await writeCurrent(plan.path, requireTask(await load(plan.path), task.id))
-      const committed = await afterSession(opts.dir ?? dirname(plan.path), opts, task, { stage: "decompose", subject })
+      const fresh = await reloadTask(plan, task.id)
+      await writeCurrent(dir, fresh)
+      const committed = await afterSession(opts.dir ?? dir, opts, task, { stage: "decompose", subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)
-      return { type: "ok", task: requireTask(await load(plan.path), task.id) }
+      return { type: "ok", task: fresh }
     }
     if (i === 1) {
       return {
@@ -307,7 +297,7 @@ export async function runSubtask(
   subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
   chain.subject = subject
-  const dir = opts.dir ?? dirname(plan.path)
+  const dir = opts.dir ?? plan.dir
   // 子任务单元提交边界: 启动 clean 门禁 + SHA 基线(收口时校验提交区间全为 driver
   // 提交);driver 独占状态文件遗留由 beginUnit 内部 carryover 自愈。基线同时上链
   // (严格恢复: active 记录携带、回滚锚点)。
@@ -327,7 +317,7 @@ export async function runSubtask(
   const steer = handoffSteer(autoSwitches().steer, cap, task)
   // 交接文档读回落(stable-refs P1): 会话写目标恒为新路径(提示词经 handoffFile
   // 注入),读点优先新路径、旧平铺存在则回落。
-  const planDir = dirname(plan.path)
+  const planDir = plan.dir
   const readHandoff = async (): Promise<string> =>
     Bun.file(join(planDir, await resolveTaskDoc(planDir, task.id, "handoff"))).text().catch(() => "")
   // 子任务目录状态协议(M1.0,plans/0030 D8): done.md 已存在 = 本子任务已收口
@@ -366,7 +356,7 @@ export async function runSubtask(
     const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
       if (!strict || !baseline) return undefined
       const done = await rollbackUnitState(dir, task, `subtask ${index}`, baseline, {
-        planPath: plan.path,
+        current: true,
         progress: await peekProgress(dir),
         solo: (opts.subtask ?? "auto") !== "auto",
       })
@@ -487,11 +477,11 @@ export async function runSubtask(
   // done.md——盘面文件存在性即进度事实;幂等(协议未激活无 todo.md、中断落在
   // rename 之后 done.md 已存在,均跳过)。
   await renameTodoToDone(planDir, task.id, index)
-  await tick(plan.path, task.id, text)
-  // 镜像刷新属本次状态写入,须在统一提交前落盘: 否则 PLAN.md 的勾选与 CURRENT.md
+  await tickSubtask(planDir, task.id, index)
+  // 镜像刷新属本次状态写入,须在统一提交前落盘: 否则 subtasks.md 的勾选与 CURRENT.md
   // 的同一次刷新分属相邻两次提交(镜像永远落后一格,回滚到子任务提交取回的镜像
-  // 与 PLAN.md 不一致;步进暂停现场亦会残留未提交改动)。
-  await writeCurrent(plan.path, requireTask(await load(plan.path), task.id), (opts.subtask ?? "auto") !== "auto")
+  // 与盘面不一致;步进暂停现场亦会残留未提交改动)。
+  await writeCurrent(planDir, await reloadTask(plan, task.id), (opts.subtask ?? "auto") !== "auto")
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
   // 单元收口: 带基线做提交区间校验——勾选与镜像未落账即不视为完成。
   const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject }, baseline)
@@ -543,12 +533,11 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
   return problems
 }
 
-// D2 feedback wording: restates the L1 authoritative state (the ledger tick
-// snapshot) and cites each failing item, pointing straight at the misjudgment —
+// D2 feedback wording: restates the L1 authoritative state (the tick snapshot) and cites each failing item, pointing straight at the misjudgment —
 // a previous task's completion narrative is not this task's state (the T-068 S01
 // incident shape).
 function shapeFeedback(task: Task, index: number, problems: string[]): string {
-  const items = subtasks(task.body)
+  const items = task.checklist ?? []
   const done = items.filter((item) => item.done).length
   const sid = `S${String(index).padStart(2, "0")}`
   return (

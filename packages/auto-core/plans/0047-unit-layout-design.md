@@ -202,7 +202,7 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
 - [x] M3.1 Unit model, `src/document/unit.ts`, interface first: `UnitRef` / `UnitLevel`, generalized state scan, index parser, `unitProblems`, `nextReady`. Pure; unit tests first. (2026-09-22; notes in §11.)
 - [x] M3.2 Phase-type registry (§5) + letter presets + `parsePhases` → registry validation, without weakening existing guards. (2026-09-22; notes in §11.)
 - [x] M3.3 Phase directories: `phases.md`, `P<nn>-<type>/` with todo/done, derived ledger, handover and acceptance moved in, `roles.ts` shapes updated; `LEDGER_ENTRY` retired (0035 §4 note). (2026-09-22; notes in §11.)
-- [ ] M3.4 Task units: `T-NNN/todo.md|done.md` + `tasks.md`, planning sessions rewritten, runtime state to `.auto/units.json`, `numbering.ts` floor over task dirs, `## T-NNN` heading protocol retired, no-phase mode as P01 with the loops merged, CLI `status`.
+- [x] M3.4 Task units: `T-NNN/todo.md|done.md` + `tasks.md`, planning sessions rewritten, runtime state to `.auto/units.json`, `numbering.ts` floor over task dirs, `## T-NNN` heading protocol retired, no-phase mode as P01 with the loops merged, CLI `status`. (2026-09-22; notes in §11.)
 - [ ] M3.5 Dependencies at all three levels: `nextReady` at every selection point, `unitProblems` in the planning/decompose `collect` and on loop load, template syntax text.
 - [ ] M3.6 Custom phase types (was M3.3): the project-level registry entries.
 - [ ] M3.7 Legacy removal (§6 R3) + legacy-layout usage error; dual-read per open question 17.
@@ -257,5 +257,38 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
 - **Roles.** The `ledger` role keeps its name and now means the phase index (policy unchanged: driver-owned format, no terminator). The handover and acceptance shapes are `docs/R-NN/P<nn>-<type>/handover.md` and `…/acceptance(-r<n>)?.md`; phase `todo.md` / `done.md` and standard artifacts classify as `artifact` through the round-directory prefix. The letter-layout shapes (`R-NN/handovers/`, `R-NN/phase-docs/`) are gone; the pre-round legacy shapes stay until M3.7.
 - **Prompts.** `knowledge`, `wrapup`, `prior-knowledge`, `phase-plan`, `phase-handover`, `number-recovery`, the `doc-layout` and `plan-duties-k` partials, and the AGENTS.md pointer block point at the phase directory. The D13 leftover in `doc-layout` (`audit.md` / `fix.md`) is removed in the same edit. 21 goldens regenerated, with no other drift.
 - Verification: auto-core 1077 pass / 0 fail + typecheck clean; packages/auto 52 pass + 2 skip + typecheck clean.
+
+### M3.4 (2026-09-22)
+
+`src/plan.ts` is deleted and replaced by `src/tasks.ts`; `src/status.ts` is new. Rewired: `phases.ts`, `loop.ts`, `loop-task.ts`, `loop-phase.ts`, `loop-preflight.ts`, `loop-progress.ts`, `implement.ts`, `runner.ts`, `execute.ts`, `current.ts`, `numbering.ts`, `git.ts`, `check.ts`, `document/roles.ts`, `refcheck.ts`, the prompt layer, and the shell (`packages/auto/src/index.ts`). `templates/PLAN.md` and `templates/PLAN.scaffold.md` are removed. Tests: `test/tasks.test.ts` (16 cases) replaces `test/plan.test.ts`. The shared fixture `test/fixtures/units.ts` turns the old compact `## T-NNN: title [status]` notation into an in-memory `Plan` (`planOf`) or into units on disk (`seedUnits`), so the session-driving suites kept their scenarios. The incident-regression set runs over task units and stays green.
+
+- **Store.** A `Plan` is now the current phase's view `{dir, phase, index, tasks}`. `loadPlan(dir, phase)` reads the phase's `tasks.md` with `parseIndex(…, "task")` and scans `docs/T-NNN/` with `scanUnitStates`. A missing index is an empty plan. A problem line, or a task with both state files or with neither, throws with fix-it guidance, and `routePhase` turns that into `blocked` (exit 1). `Task.body` is the `todo.md`/`done.md` text without the title, the field block and the terminator. `Task.depends` is parsed but not yet used for selection: `next` is still the first task that is not done, and M3.5 switches it to `nextReady`.
+- **Runtime state (R1).** Status (`in_progress` / `blocked`), `attempts` and `forkBase` live in `.auto/units.json` (`{tasks: {id: {…}}}`). Updates go through a serialized, atomic queue; an unreadable file falls back to the defaults. A task's status is `done` exactly when `done.md` exists, and `markDone` drops its entry. `resetInProgress(dir)` clears only `in_progress`. The PLAN.md field lines (`attempts`, `fork-base`) are gone.
+- **Completion.** `markDone(plan, id)` renames `todo.md` → `done.md`, ticks the index line (`tickIndexLine`, shared with `completePhase`) and drops the runtime entry. It is idempotent and lands inside the unit's commit. The FAIL-verdict message tells the human to rename `done.md` back or list fix tasks in the phase index.
+- **Checklist.** The subtask checklist lives only in `docs/T-NNN/subtasks.md`. `readChecklist` returns its items with `effectiveDone` applied (the S<nn> files win), and the driver ticks line *n* with `tickSubtask` when a subtask completes. `setSubtasks`, `syncSubtaskTicks` and checklist injection into the task body are retired. `ensureDecomposed` skips the session when the checklist is non-empty and reuses an existing `subtasks.md`. `CURRENT.md` and the progress heartbeat read the same checklist.
+- **Planning.** The phase-plan and implement-plan sessions write the phase's `tasks.md` plus one `docs/T-NNN/todo.md` per task. The skeleton is `requireArtifact`:
+  - `reset` = `resetPlanning`: removes the listed task dirs that are not taken, then the index.
+  - `collect` = `plannedTaskProblems`: index missing or empty; an id that is taken, or below the numbering start; a stray `done.md`; `checkArtifactSpecs(taskTodoSpec(id))` under the mandatory policy (field block, `## Goal` / `## Scope` / `## Acceptance`, the terminator); and a `Phase:` field that is not the qualified phase id.
+  - It returns the ids, and numbering advances past them.
+
+  Taken ids are the ids in other phases' `tasks.md` plus every `docs/T-*/done.md` (`takenTaskIds`). A new tier-1 marker set guards both templates. `implement.ts` reuses the same mechanism on the implicit `P01-implement`, with numbering start = max taken + 1.
+- **No-phase mode = the implicit phase `R-01/P01-implement`** (user ruling: keep the m semantics). `establishRound` always runs, so `init` writes `docs/R-01/phases.md` with one `implement` phase in every mode, and one loop serves both modes (`runPhaseLoop`; `ctx.manual` for `m`). In manual mode the run starts no planning and no handover session. The plan route prints how to list tasks and exits 0. When all tasks are done, the run prints `✓ all tasks complete` and exits 0, and P01 stays open (`todo.md`), so more tasks can be appended to the same phase later. Tasks come from the init shortcut or a hand-written `tasks.md`/`todo.md`.
+- **Handover.** The phase `PLAN.md` snapshot and the reset to the scaffold are gone. The index stays in the phase directory, so the handover is `closeStep` → `completePhase` → commit, and the snapshot-keyed interruption-recovery branch is removed. The M3.3 deviation is closed.
+- **Numbering floor.** `taskNumberFloor` scans `docs/R-*/P*/tasks.md` through `parseIndex` plus the task directories, where before it scanned PLAN.md files.
+- **Carryover and protection.** `driverStateFile` matches:
+  - `CURRENT.md`
+  - `docs/R-NN/phases.md`
+  - `docs/R-NN/P<nn>-<type>/(tasks|todo|done).md`
+  - `docs/T-NNN/(todo|done).md`
+
+  So a failed commit's index tick or rename self-heals through carryover. `documentOnly` no longer lists PLAN.md. `PROTECTED_FILES` is `CURRENT.md`, `opencode.json` and the project config. **Decision: `tasks.md` is not chmod-protected**, because the planning sessions author it; the driver owns only its ticks, and the `state-rule` partial now says so.
+- **Roles.** `tasks.md` and the task state files classify as `artifact` (session-authored content, driver-owned ticks and renames). `PLAN.md` keeps the `driverState` role by name until M3.7, so leftover files in old projects stay exempt from the eof scan.
+- **CLI `status`** (L1, R2) prints the config summary, then `renderStatus`: R-NN → phases `[✓/▶]` → tasks (mark, `Depends`, subtask count, attempts) → the subtasks of unfinished tasks. Index problems become `⚠` lines, and nothing is written. The run banner keeps its one-line phase progress.
+- **Deviations and decisions:**
+  - **Removed early, not in M3.7:** the shell's legacy-in-flight branch (a root PLAN.md alongside the round directory), because `establishRound` no longer writes PLAN.md or a symlink. An old project now stops at the missing or invalid phase or task index (exit 1). The dedicated legacy-layout usage error stays M3.7.
+  - **Dryrun skips the pre-route:** the permission preflight session needs no task index.
+  - **`check`** scans `AGENTS.md` and `docs/T-*/todo.md`, taking the task id from the path.
+  - **`refcheck`** has lost its phase-snapshot exclusion.
+- Verification: auto-core 1066 pass / 0 fail + typecheck clean; packages/auto 52 pass + 2 skip + typecheck clean. The count drop from M3.3 is the deleted PLAN parser suite. The two opt-in E2E cases were rewritten over task units but not run (they need opencode and credentials).
 
 <!-- auto: eof -->

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { baselineIntact, beginUnit, changedFiles, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, removeIfUntracked, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
@@ -197,12 +197,18 @@ describe("beginUnit(单元启动门禁)", () => {
     }
   })
 
-  test("driver 独占状态文件(PLAN.md/CURRENT.md)遗留 → carryover 补提交自愈", async () => {
+  test("driver 独占状态写入(CURRENT.md、索引勾选、单元 todo→done 改名)遗留 → carryover 补提交自愈", async () => {
     const dir = await fresh()
     try {
-      await writeFile(join(dir, "seed.txt"), "s")
+      await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
+      await mkdir(join(dir, "docs/T-001"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 示例\n")
+      await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: 示例\n")
       await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
-      await writeFile(join(dir, "PLAN.md"), "## T-001: 示例 [done]\n")
+      // markDone 之后、终态提交之前中断的现场
+      await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [x] T-001 示例\n")
       await writeFile(join(dir, "CURRENT.md"), "镜像\n")
       const gate = await beginUnit(dir, {}, task)
       expect(gate.type).toBe("ok")
@@ -227,34 +233,16 @@ describe("beginUnit(单元启动门禁)", () => {
     }
   })
 
-  test("轮次专用目录布局: 根 PLAN.md 为符号链接时,链接目标遗留同样 carryover 自愈", async () => {
+  test("轮次与任务目录内的非状态文件脏区仍 dirty 交人工(子任务状态文件不属 carryover)", async () => {
     const dir = await fresh()
     try {
-      await mkdir(join(dir, "docs/R-01"), { recursive: true })
-      await writeFile(join(dir, "docs/R-01/PLAN.md"), "## T-001: 示例 [in_progress]\n")
-      await symlink("docs/R-01/PLAN.md", join(dir, "PLAN.md"))
+      await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
+      await mkdir(join(dir, "docs/T-001/S01"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
       await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
-      // plan.ts 的原子写经 realpath 落到链接目标,git 报出的脏区是 docs/R-01/PLAN.md。
-      await writeFile(join(dir, "docs/R-01/PLAN.md"), "## T-001: 示例 [pending]\n")
-      expect(await changedFiles(dir)).toEqual(["docs/R-01/PLAN.md"])
-      const gate = await beginUnit(dir, {}, task)
-      expect(gate.type).toBe("ok")
-      expect(await changedFiles(dir)).toEqual([])
-      expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: carryover")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("轮次专用目录布局: 轮内非状态文件的脏区仍 dirty 交人工", async () => {
-    const dir = await fresh()
-    try {
-      await mkdir(join(dir, "docs/R-01"), { recursive: true })
-      await writeFile(join(dir, "docs/R-01/PLAN.md"), "## T-001: 示例 [pending]\n")
-      await symlink("docs/R-01/PLAN.md", join(dir, "PLAN.md"))
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
-      await writeFile(join(dir, "docs/R-01/phases.md"), "a\n")
-      expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: ["docs/R-01/phases.md"] })
+      await writeFile(join(dir, "docs/R-01/P01-implement/handover.md"), "a\n")
+      await writeFile(join(dir, "docs/T-001/S01/done.md"), "a\n")
+      expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: ["docs/R-01/P01-implement/handover.md", "docs/T-001/S01/done.md"] })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -491,13 +479,13 @@ describe("交接漂移登记: trackedSourceChanges", () => {
       await writeFile(join(dir, "src.ts"), "v1")
       await writeFile(join(dir, "test", "build.sh"), "echo v1")
       await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "旧")
-      await writeFile(join(dir, "PLAN.md"), "计划")
+      await writeFile(join(dir, "CURRENT.md"), "镜像")
       await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
       expect(await trackedSourceChanges(dir)).toEqual([])
 
-      // 文档面改动(docs/** 与 PLAN.md/CURRENT.md)不计。
+      // 文档面改动(docs/** 与 CURRENT.md)不计。
       await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "新")
-      await writeFile(join(dir, "PLAN.md"), "计划 2")
+      await writeFile(join(dir, "CURRENT.md"), "镜像 2")
       // 未跟踪新增不计(已知取舍)。
       await writeFile(join(dir, "fresh.ts"), "新文件")
       expect(await trackedSourceChanges(dir)).toEqual([])

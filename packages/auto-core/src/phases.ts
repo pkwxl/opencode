@@ -15,16 +15,18 @@
 // most once per round for now.
 //
 // Rounds: one docs/R-NN/ per round, created at round start (establishRound);
-// everything written inside is permanent. Until task units land (M3.4) the root
-// PLAN.md is still a symlink to the round's PLAN.md, and a phase handover keeps
-// a PLAN.md snapshot in the phase directory as the phase's task record.
-import { lstat, mkdir, readdir, rm, stat, symlink } from "node:fs/promises"
-import { readFileSync } from "node:fs"
+// everything written inside is permanent. A phase's tasks are listed in its
+// task index P<nn>-<type>/tasks.md (M3.4, src/tasks.ts); the phase directory is
+// its own archive, so a handover neither snapshots nor resets anything.
+//
+// The no-phase mode (phases = "m") is the implicit single phase R-01/P01-implement
+// (plans/0047 L2): same layout, same loop, but manual — no planning or handover
+// session runs, and the phase stays open so tasks can be appended and re-run.
+import { mkdir, readdir, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { PHASE_ACCEPTANCE_NAME, roundDir, roundDirName } from "./docpaths"
 import { nextReady, parseIndex, parsePhaseDir, renameUnitDone, scanUnitStates, UNIT_PENDING, unitDir, type UnitRef } from "./document/unit"
-import type { Plan } from "./plan"
-import { renderText } from "./template"
+import { loadPlan, tickIndexLine, type Plan } from "./tasks"
 import {
   BUILTIN_PHASE_TYPES,
   PHASE_LETTERS,
@@ -35,7 +37,6 @@ import {
   type PhaseLetter,
   type PhaseTypeEntry,
 } from "./phases/registry"
-import templateScaffold from "../templates/PLAN.scaffold.md" with { type: "file" }
 
 export type Phase = PhaseLetter
 
@@ -87,9 +88,6 @@ export const phaseHandoverDoc = (unit: PhaseUnit): string => join(unit.dir, "han
 // The human's acceptance record (phaseAcceptance role, M2.3); no reader until
 // the acceptance gate (0036 D8), which also owns the marker literal.
 export const phaseAcceptanceDoc = (unit: PhaseUnit): string => join(unit.dir, PHASE_ACCEPTANCE_NAME)
-// Snapshot of the phase's PLAN.md, written at handover. Interim: PLAN.md is
-// still the task carrier until M3.4 replaces it with the phase's tasks.md.
-export const phaseArchivedPlan = (unit: PhaseUnit): string => join(unit.dir, "PLAN.md")
 // The phase type's standard artifacts resolved into this phase's directory.
 export const phaseArtifacts = (unit: PhaseUnit) => unitArtifactSpecs(phaseTypeOfLetter(unit.letter).phaseArtifacts, unit.dir)
 
@@ -222,28 +220,26 @@ export async function syncPhaseIndex(dir: string, round: number, phases: string)
 // path can bypass it. Idempotent.
 export async function completePhase(dir: string, unit: PhaseUnit): Promise<void> {
   await renameUnitDone(dir, phaseRef(unit))
-  const index = join(dir, "docs", unit.round, PHASE_INDEX_NAME)
-  const text = await Bun.file(index).text().catch(() => undefined)
-  if (text === undefined) return
-  const line = new RegExp(`^([-*] \\[) (\\]\\s+${unit.id}(?::|\\s|$))`, "m")
-  if (line.test(text)) await Bun.write(index, text.replace(line, "$1x$2"))
+  await tickIndexLine(join(dir, "docs", unit.round, PHASE_INDEX_NAME), unit.id)
 }
 
 // Phase routing (D.2): blocked = an environment error such as an invalid or
-// missing index (the CLI turns it into exit 1 with fix-it guidance).
+// missing phase or task index (the CLI turns it into exit 1 with fix-it
+// guidance). The routes carry the current phase's plan, loaded once here.
 export type PhaseRoute =
   | { type: "complete" } // every phase done
-  | { type: "plan"; phase: PhaseUnit } // PLAN.md empty (scaffold / reset) → planning session
-  | { type: "execute"; phase: PhaseUnit } // tasks left to run
-  | { type: "handover"; phase: PhaseUnit } // all of this phase's tasks done → handover
+  | { type: "plan"; phase: PhaseUnit; plan: Plan } // no tasks listed yet → planning session
+  | { type: "execute"; phase: PhaseUnit; plan: Plan } // tasks left to run
+  | { type: "handover"; phase: PhaseUnit; plan: Plan } // all of this phase's tasks done → handover
   | { type: "blocked"; reason: string }
 
-export async function routePhase(dir: string, plan: Plan): Promise<PhaseRoute> {
+export async function routePhase(dir: string): Promise<PhaseRoute> {
+  const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
   let state: PhaseState | undefined
   try {
     state = await readPhases(dir)
   } catch (error) {
-    return { type: "blocked", reason: error instanceof Error ? error.message : String(error) }
+    return { type: "blocked", reason: reason(error) }
   }
   if (!state) {
     return {
@@ -253,9 +249,15 @@ export async function routePhase(dir: string, plan: Plan): Promise<PhaseRoute> {
   }
   const phase = currentPhase(state)
   if (!phase) return { type: "complete" }
-  if (plan.tasks.some((task) => task.status !== "done")) return { type: "execute", phase }
-  if (plan.tasks.length) return { type: "handover", phase }
-  return { type: "plan", phase }
+  let plan: Plan
+  try {
+    plan = await loadPlan(dir, phase)
+  } catch (error) {
+    return { type: "blocked", reason: reason(error) }
+  }
+  if (plan.tasks.some((task) => task.status !== "done")) return { type: "execute", phase, plan }
+  if (plan.tasks.length) return { type: "handover", phase, plan }
+  return { type: "plan", phase, plan }
 }
 
 // Phase progress line (run banner and status): ✓ = done, ▶ = current.
@@ -264,13 +266,6 @@ export function formatPhases(state: Pick<PhaseState, "phases" | "done">): string
   return state.phases
     .map((unit) => `${phaseLabel(unit)}${state.done.has(unit.id) ? "✓" : unit === current ? "▶" : ""}`)
     .join(" ")
-}
-
-// Empty phase template (PLAN.scaffold.md): PLAN.md's initial and post-handover
-// state under the phased flow — no tasks, so routePhase derives the plan route
-// (D.2). init also uses it as the PLAN.md template when phases ≠ "m" (B.1).
-export function renderPlanScaffold(): string {
-  return renderText(readFileSync(templateScaffold, "utf8"), {})
 }
 
 // —— Rounds (plans/0006-phases-design.md §M; round-directory plan) ——
@@ -324,47 +319,22 @@ export async function roundRoot(dir: string, round: number): Promise<string | un
 // permanent — never renamed, moved or deleted):
 // ① create the round directory (existing = idempotent resume, contents kept);
 // ② the phase index and phase directories from `phases` (syncPhaseIndex);
-// ③ the round's PLAN.md initial value = opts.plan ?? the root PLAN.md's content
-//    (a regular file — the m → phased switch copies it) ?? the empty scaffold;
-// ④ the root PLAN.md re-created as a relative symlink to the round's PLAN.md
-//    (one source of truth; sessions and protect keep addressing "PLAN.md"; a
-//    failed symlink falls back to a copy, reported as linked = false);
-// ⑤ a snapshot of the root AGENTS.md as AGENTS.md.bak (the suffix keeps it from
+// ③ a snapshot of the root AGENTS.md as AGENTS.md.bak (the suffix keeps it from
 //    loading as instructions; written once).
-// Not called for phases = "m" (no rounds; the root PLAN.md stays a regular file).
-// The round defaults to currentRound (init / first run); a new round passes nextRound.
-export async function establishRound(
-  dir: string,
-  opts: { phases: string; round?: number; plan?: string },
-): Promise<{ round: number; root: string; linked: boolean }> {
+// The no-phase mode ("m") establishes R-01 with its single implement phase the
+// same way. The round defaults to currentRound (init / first run); a new round
+// passes nextRound.
+export async function establishRound(dir: string, opts: { phases: string; round?: number }): Promise<{ round: number; root: string }> {
   const round = opts.round ?? (await currentRound(dir))
   const root = roundDir(round)
   await mkdir(join(dir, root), { recursive: true })
   await syncPhaseIndex(dir, round, opts.phases)
-  const planFile = join(root, "PLAN.md")
-  if (!(await Bun.file(join(dir, planFile)).exists())) {
-    const rootPlan = join(dir, "PLAN.md")
-    // A root PLAN.md that is a symlink into some round is that round's plan, not an initial value.
-    const isLink = await lstat(rootPlan).then((s) => s.isSymbolicLink(), () => false)
-    const existing = isLink ? undefined : await Bun.file(rootPlan).text().catch(() => undefined)
-    await Bun.write(join(dir, planFile), opts.plan ?? existing ?? renderPlanScaffold())
-  }
-  // Re-create the root link; the target content is the round's PLAN.md (idempotent).
-  const content = await Bun.file(join(dir, planFile)).text()
-  await rm(join(dir, "PLAN.md"), { force: true })
-  let linked = true
-  try {
-    await symlink(planFile, join(dir, "PLAN.md"))
-  } catch {
-    linked = false
-    await Bun.write(join(dir, "PLAN.md"), content)
-  }
   const agentsFile = join(root, "AGENTS.md.bak")
   if (!(await Bun.file(join(dir, agentsFile)).exists())) {
     const agents = await Bun.file(join(dir, "AGENTS.md")).text().catch(() => undefined)
     if (agents !== undefined) await Bun.write(join(dir, agentsFile), agents)
   }
-  return { round, root, linked }
+  return { round, root }
 }
 
 // Knowledge documents of a round: the standard artifacts of its knowledge

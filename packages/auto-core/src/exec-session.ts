@@ -12,7 +12,7 @@ import { fileCommitted, suffixedTitle, trackedSourceChanges } from "./git"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
-import type { Plan, Task } from "./plan"
+import type { Plan, Task } from "./tasks"
 import { renderTestContinue, renderTestWrapup, testHandoffFile, type TestRunInfo } from "./prompt"
 import { COMMIT_CLARIFY } from "./resume-gate"
 import { runSession } from "./session"
@@ -51,7 +51,7 @@ export async function runExecSession(
   unit = subtask !== undefined ? `subtask ${subtask}` : "execute",
 ): Promise<SessionResult> {
   if (!opts.testByDriver || opts.dryrun) return runSession(client, task, promptText, opts, chain, steer)
-  const dir = opts.dir ?? dirname(plan.path)
+  const dir = opts.dir ?? plan.dir
   const tmp = scriptTmpDir(dir)
   const handoff = testHandoffFile(task, subtask)
   // 现场复原(中断恢复 F3): 已落账却不在工作区的交接文档先取回——上一次运行的

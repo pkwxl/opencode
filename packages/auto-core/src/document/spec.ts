@@ -18,6 +18,9 @@
 //      checked) / complete (done.md, DRIVER rename target). State semantics,
 //      existence checks and illegal-state detection all consume this pair;
 //      the file names have one source.
+//   4. taskTodoSpec — a planned task's content document docs/T-NNN/todo.md
+//      (M3.4, plans/0047 L3): written by the planning session, checked under
+//      the mandatory policy (non-trivial, eof, the three section anchors).
 import { join } from "node:path"
 import { docShapeProblems } from "../doccheck"
 import { legacyTaskDoc, subtaskDoc, taskDoc } from "../docpaths"
@@ -166,6 +169,16 @@ export function subtaskStateSpec(taskId: string, index: number): SubtaskStateSpe
     },
     complete: { path: subtaskDoc(taskId, index, "done") },
   }
+}
+
+// —— 4. Task documents (M3.4) ——
+
+// Section anchors of a task's todo.md: new English protocol literals (plans/0035
+// §3), no dual-read — there is no pre-flip spelling.
+export const TASK_TODO_SECTIONS = ["## Goal", "## Scope", "## Acceptance"] as const
+
+export function taskTodoSpec(taskId: string): ArtifactSpec {
+  return { path: join("docs", taskId, "todo.md"), sectionAnchors: [...TASK_TODO_SECTIONS], label: "task document", role: "artifact" }
 }
 
 // —— Generic spec-driven checks ——

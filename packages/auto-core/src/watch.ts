@@ -460,7 +460,7 @@ export async function watch(
         log(`→ wait timed out; --permission ask-deny auto-denied (the AI continues without it): ${desc}`)
         continue
       }
-      // ask-fail: 拒绝并退出运行(阻塞停机,问题写入 PLAN.md)。
+      // ask-fail: 拒绝并退出运行(阻塞停机,问题记入运行日志)。
       await client.abort(sessionID)
       return snapshot({
         blocked: {

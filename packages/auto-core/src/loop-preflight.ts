@@ -1,4 +1,4 @@
-// runAll 的运行前预检: PLAN.md 存在性、提示词库装载、agent 契约完整性检查、统计装载与
+// runAll 的运行前预检: 提示词库装载、agent 契约完整性检查、统计装载与
 // 进度心跳、driver 状态文件只读、交接文档复原、启动 clean 门禁、中断状态复位、
 // AGENTS.md/.gitignore 收口与 housekeeping 提交;另承接 runAll 的选项类型 RunAllOpts 与
 // agent 契约渲染(plans/0006-phases-design.md、plans/0021-commit-boundary-design.md P3)。
@@ -15,7 +15,7 @@ import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import { useIntentPacks } from "./prompt"
 import type { PermissionMode, SubtaskMode } from "./opts"
-import { resetInProgress } from "./plan"
+import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
 import { shellProfile } from "./shell"
@@ -54,10 +54,11 @@ export type RunAllOpts = {
   handoverTest?: boolean
   // -m/--mode 场景模式(缺省 migrate),透传给 runTask 的提示词渲染。
   mode?: ModeSpec
-  // --phases 阶段化流程(设计文档 plans/0006-phases-design.md,来自配置): "m"(缺省)=
-  // 无阶段声明,走既有单次运行路径(零改动);其余值启用阶段循环(D 节)——
-  // 推导当前阶段 → 规划会话填充 PLAN.md → 主循环执行 → 交接(快照+重置+阶段
-  // 完成改名+提交)→ 下一阶段。
+  // --phases (plans/0006, config): "m" (default) = the manual single phase
+  // R-01/P01-implement (no planning or handover session, plans/0047 L2); any
+  // other value runs the phase loop — current phase → planning session writes
+  // tasks.md + task units → task loop → handover (distill + completion rename +
+  // commit) → next phase.
   phases?: string
   // config.source 迁移源参数(可选),注入阶段规划会话。
   source?: { dir: string; path: string }
@@ -89,14 +90,8 @@ export async function renderAgentContract(testByDriver: boolean): Promise<string
 // 报错出口回传 { exit },时序与副作用残留同搬运前(见文件头)。
 export async function preflight(
   directory: string,
-  path: string,
   opts: RunAllOpts,
 ): Promise<{ agentName: string; watcher?: { close(): void }; progress: { close(): void } } | { exit: number }> {
-  if (!(await Bun.file(path).exists())) {
-    log(`plan file not found: ${path}`)
-    return { exit: 1 }
-  }
-
   // 提示词库: 装载目标目录 .opencode/auto/prompts/ 覆盖(协议敏感模板做关键
   // 内容校验,失败按用法错误退出)。之后 render* 同步渲染,无需再感知目录。
   // 意图包同点装载(M1.2): 目标目录 .opencode/auto/intents/ 覆盖/新增,非法
@@ -140,8 +135,8 @@ export async function preflight(
   // 数依赖已装载句柄与 statsTask 设定的桶身份)。
   const resumed = await loadStats(directory)
   if (resumed) log(resumeBanner(resumed))
-  // 每 10 分钟上报当前任务的子任务进度与预计剩余时间(基于 PLAN.md 勾选状态)。
-  const progress = trackSubtasks(path, directory)
+  // 每 10 分钟上报当前任务的子任务进度与预计剩余时间(subtasks.md,状态文件为准)。
+  const progress = trackSubtasks(directory)
   // Driver-owned files go read-only for the whole run; driver writes
   // re-apply it, and the finally below restores writability so a human can
   // edit the files (e.g. opencode.json after a permission block).
@@ -154,8 +149,8 @@ export async function preflight(
   // 启动 clean 门禁(plans/0021-commit-boundary-design.md P3): 提交启用时要求工作区 clean——
   // 此后所有执行单元(任务/子任务/隐藏任务)依赖的信息全部由上一次提交固定。
   // 人工遗留脏区阻塞交人工(替代旧"⚠ 会被下一次提交吸纳"提示:吸纳会把人工改动
-  // 混入 driver 审计轨迹,破坏提交即隔离边界);driver 独占状态文件(PLAN.md/
-  // CURRENT.md)的遗留走 beginUnit 的 carryover 补提交自愈——上一次运行以非提交
+  // 混入 driver 审计轨迹,破坏提交即隔离边界);driver 独占状态文件(CURRENT.md、
+  // 索引勾选)的遗留走 beginUnit 的 carryover 补提交自愈——上一次运行以非提交
   // 路径退出(如单元门禁不净直接 return 2)会留下它们的写盘,那是 driver 自己的
   // 落账、不是人工改动,拦在这里只会让下一次运行永远起不来。
   if (opts.commit !== false && !opts.dryrun) {
@@ -166,15 +161,12 @@ export async function preflight(
       return { exit: 2 }
     }
   }
-  // 中断恢复(必须早于下方运行前基线收口提交): 上次运行被 kill/Ctrl+C 可能遗留
-  // in_progress 标记(无会话在跑),重置为 pending;主循环经 next() 照样续跑,
-  // attempts 保留。距中断较近时链上会话的进度记录(.auto/progress.json)使 runTask
-  // 复用原会话继续。这两段写的是 driver 独占状态文件 PLAN.md——放在 housekeeping
-  // 收口之前,其写盘随该次提交一并落账,首个执行单元启动时工作区本就 clean
-  // (否则要么白耗一次 carryover 自愈提交,要么在阶段化布局下直接撞 clean 门禁)。
-  // dryrun 不改任何状态文件,故整段跳过(与下方 dryrun 提前 return 的旧位置等价)。
+  // 中断恢复: 上次运行被 kill/Ctrl+C 可能遗留 in_progress 标记(无会话在跑),
+  // 重置为 pending;主循环经 next() 照样续跑,attempts 保留。距中断较近时链上
+  // 会话的进度记录(.auto/progress.json)使 runTask 复用原会话继续。标记是运行态
+  // (.auto/units.json,不入 git,M3.4),不产生提交。dryrun 不改任何状态文件。
   if (!opts.dryrun) {
-    const stale = await resetInProgress(path)
+    const stale = await resetInProgress(directory)
     if (stale.length) log(`↻ resuming interrupted state: ${stale.join(", ")} reset from in_progress to pending`)
   }
   // 启动会话前确保 AGENTS.md 的 opencode-auto 块与当前配置渲染一致(缺失则追加、

@@ -17,18 +17,18 @@ import { eofScanExempt } from "../src/document/roles"
 import { runSubtask } from "../src/execute"
 import { unitBaseline, unitChangedFiles } from "../src/git"
 import type { Opts } from "../src/opts"
-import { load, subtasks } from "../src/plan"
+import { reloadUnits, seedUnits } from "./fixtures/units"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
 
 const BODY = "调研并落盘记录 产出: docs/T-001/S01/record.md"
 
-// 干净 git 仓库 + 已提交的 PLAN.md(含声明产出的检查项)与 README;tmp/ 与
+// 干净 git 仓库 + 已提交的任务单元(subtasks.md 含声明产出的检查项)与 README;tmp/ 与
 // .auto/ 按 loop-preflight 的 ensureGitignore 口径忽略,统计落盘不污染 clean 门禁。
 async function shapeRepo(item: string = BODY): Promise<string> {
   const dir = await freshRepo()
   await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
   await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n")
-  await Bun.write(join(dir, "PLAN.md"), `## T-001: 示例任务 [in_progress]\n\n- [ ] ${item}\n`)
+  await seedUnits(dir, `## T-001: 示例任务 [in_progress]\n\n- [ ] ${item}\n`)
   await git(dir, "add", "-A")
   await git(dir, "commit", "-q", "-m", "init")
   return dir
@@ -112,7 +112,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([async () => {}])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const opts: Opts = { dir, commit: true }
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, opts, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
@@ -125,7 +125,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(feedback).toContain("S01 is not ticked yet")
       expect(feedback).toContain("do not judge this subtask complete on that basis")
       // 未勾选、未推进
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -143,12 +143,12 @@ describe("runSubtask 产物形检(D2/D4)", () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       expect(promptText(calls.prompts[1]!)).toContain("declared artifact docs/T-001/S01/record.md does not exist")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -165,12 +165,12 @@ describe("runSubtask 产物形检(D2/D4)", () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       expect(promptText(calls.prompts[1]!)).toContain("missing last-line terminator")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -184,12 +184,12 @@ describe("runSubtask 产物形检(D2/D4)", () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n(略)\n${EOF_MARK}\n`)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("content too short")
       expect(calls.prompts.length).toBe(2)
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -207,14 +207,14 @@ describe("runSubtask 产物形检(D2/D4)", () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n背景: 见正文。\n结论: 如上。\n${filler}\n${EOF_MARK}\n`)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain('is missing section "背景"')
       expect(feedback).toContain('is missing section "结论"')
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -228,11 +228,11 @@ describe("runSubtask 产物形检(D2/D4)", () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
       // 单元收口提交发生且带 Auto-Stage trailer
       const message = await git(dir, "log", "-1", "--format=%B")
       expect(message).toContain("Auto-Stage: subtask 1")
@@ -253,7 +253,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
           await Bun.write(join(dir, "README.md"), `# 示例\n\n背景说明。\n\n${filler}\n\n${EOF_MARK}\n`)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
@@ -262,7 +262,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(feedback).not.toContain("declared artifact README.md does not exist")
       expect(feedback).toContain("README.md")
       expect(feedback).toContain("missing last-line terminator")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -272,11 +272,11 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([async () => {}])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, dryrun: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -298,7 +298,7 @@ describe("runSubtask 形检重提示 fork 续做", () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       // 重提示会话 = 原会话的 fork 副本,且只带反馈(不含子任务正文/整份提示词)。
@@ -309,7 +309,7 @@ describe("runSubtask 形检重提示 fork 续做", () => {
       expect(feedback).toContain("artifacts did not pass the shape check")
       expect(feedback).toContain("missing last-line terminator")
       expect(feedback).not.toContain("调研并落盘记录")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -331,7 +331,7 @@ describe("runSubtask 形检重提示 fork 续做", () => {
         ...sdk,
         session: { ...sdk.session, fork: async () => ({ error: { message: "no fork" } }) },
       } as unknown as OpencodeClient)
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(stubbed, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
@@ -340,7 +340,7 @@ describe("runSubtask 形检重提示 fork 续做", () => {
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("调研并落盘记录")
       expect(feedback).toContain("artifacts did not pass the shape check")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -360,14 +360,14 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
           await Bun.write(join(dir, "docs/notes.md"), `# 顺带分析\n\n${filler}\n\n${EOF_MARK}\n`)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("docs/notes.md")
       expect(feedback).toContain("missing last-line terminator")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -389,14 +389,14 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
           await Bun.write(join(dir, "docs/existing.md"), `# 既有\n\n${filler}\n\n## 追加\n\n后续内容。\n\n${EOF_MARK}\n`)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("docs/existing.md")
       expect(feedback).toContain("missing last-line terminator")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -414,11 +414,11 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
           await Bun.write(join(dir, "docs/R-01/PLAN.md"), "# 轮次台账\n")
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -440,12 +440,12 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
           await Bun.write(join(dir, "docs/committed.md"), `# 落账文档\n\n${filler}\n\n${EOF_MARK}\n`)
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       expect(promptText(calls.prompts[1]!)).toContain("docs/committed.md")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -497,7 +497,7 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
           await Bun.write(join(dir, "src/a.c"), "// layout: a 64-entry ring, head at index 0\nint a;\n")
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
@@ -505,7 +505,7 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
       expect(feedback).toContain('src/a.c:1 references "docs/T-001/S01/record.md"')
       expect(feedback).toContain("restate the needed content in place")
       expect(feedback).not.toContain("src/old.c")
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(true)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -520,11 +520,11 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
           await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n\nStatus is tracked in PLAN.md.\n")
         },
       ])
-      const plan = await load(join(dir, "PLAN.md"))
+      const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain('README.md:5 references "PLAN.md"')
-      expect(subtasks((await load(join(dir, "PLAN.md"))).tasks[0]!.body)[0]!.done).toBe(false)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

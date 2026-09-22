@@ -15,9 +15,10 @@
 // a handoff.
 //
 // Standardization boundary. The driver's protocol markers constrain exactly
-// two kinds of file: the index and state files it parses (PLAN.md, the phase
-// index, subtasks.md checklist items and their `Artifacts:` declarations, the
-// todo.md section anchors, the report result line) and the handoff documents
+// two kinds of file: the index and state files it parses (the phase and task
+// indexes, the task todo.md title line and field block, subtasks.md checklist
+// items and their `Artifacts:` declarations, the todo.md section anchors, the
+// report result line) and the handoff documents
 // (status line, four handover sections). Everything else an AI session writes
 // under docs/T-NNN/ — context.md, subtask artifacts under S<nn>/, free phase
 // documents — is free content: the only mechanical demands on it are the
@@ -69,19 +70,20 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   freeform: { eofScan: true, process: false },
 }
 
-// Fixed-location driverState files besides PLAN.md/CURRENT.md. With those two
-// they form PROTECTED_FILES; .auto/ is driverState too but is rewritten
-// continuously by the driver, so it is guarded by the prompt contract alone.
+// Fixed-location driverState files besides CURRENT.md. With it they form
+// PROTECTED_FILES; .auto/ is driverState too (units.json runtime state,
+// progress.json, …) but is rewritten continuously by the driver, so it is
+// guarded by the prompt contract alone.
 const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json"]
 
-// PLAN.md/CURRENT.md classify by file name: under the round-directory layout
-// the root PLAN.md is a symlink and git reports the link target
-// docs/R-NN/PLAN.md, and phase archives keep PLAN.md snapshots.
+// CURRENT.md classifies by file name. PLAN.md (retired in M3.4) keeps the role
+// until the legacy removal (M3.7), so an old-layout file is never mistaken for
+// an artifact.
 const DRIVER_STATE_NAMES = ["PLAN.md", "CURRENT.md"]
 
 // Read-only during a run (protect.ts). Every entry must classify as
 // driverState — asserted by test/document-roles.test.ts.
-export const PROTECTED_FILES = ["PLAN.md", "CURRENT.md", "opencode.json", ".opencode/auto/config.json"] as const
+export const PROTECTED_FILES = ["CURRENT.md", "opencode.json", ".opencode/auto/config.json"] as const
 
 // The session handoff family by file name: handoff.md, testhandoff.md, the
 // archived testhandoff-<n>.md and the old flat names <id>.handoff.md,
@@ -109,8 +111,9 @@ const PHASE_ACCEPTANCE = new RegExp(
 )
 
 // Everything else the tool keeps under docs/: task documents (directory and
-// legacy flat names), round directories (phase directories with their state
-// files and standard artifacts included), and the legacy phase archives,
+// legacy flat names; the task unit's todo.md / done.md included), round
+// directories (phase directories with their state files, task index tasks.md
+// and standard artifacts included), and the legacy phase archives,
 // handovers, free phase documents and knowledge-document directories.
 const PROCESS_DOCS = /^docs\/(?:T-[^/]+|R-\d+|phases|handovers|phase-docs|migration-kb|prior-kb)(?:\/|$)/
 
@@ -139,7 +142,7 @@ export function eofScanExempt(rel: string): boolean {
 
 // Agent-contract surfaces: freeform by role (the project owns them), but
 // they legitimately name process paths — the AGENTS.md pointer block tells
-// sessions where PLAN.md and docs/T-NNN live, and .opencode/ holds the agent
+// sessions where CURRENT.md and docs/T-NNN live, and .opencode/ holds the agent
 // contract and the project's prompt/mode/intent overlays. Outside P1 scope.
 function contractSurface(path: string): boolean {
   return path === "AGENTS.md" || path.startsWith(".opencode/")

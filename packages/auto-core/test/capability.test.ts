@@ -228,6 +228,7 @@ describe("run start: the shell's agent profile", () => {
     const { mkdir, rm, writeFile } = await import("node:fs/promises")
     const { join } = await import("node:path")
     const { freshRepo, git } = await import("./fixtures/runner")
+    const { seedUnits } = await import("./fixtures/units")
     const { runAll } = await import("../src/loop")
     const { setShellProfile } = await import("../src/shell")
     const dir = await freshRepo()
@@ -244,7 +245,7 @@ describe("run start: the shell's agent profile", () => {
       },
     })
     try {
-      await writeFile(join(dir, "PLAN.md"), "## T-001: 示例任务 [pending]\n正文。\n")
+      await seedUnits(dir, "## T-001: 示例任务 [pending]\n正文。\n")
       await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
       await writeFile(join(dir, ".opencode", "agent", "auto.md"), "contract\n")
       // As init leaves it: the driver's work dirs ignored, so the clean gate passes.
