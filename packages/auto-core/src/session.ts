@@ -88,22 +88,28 @@ export async function ensureForkBase(
 // 再换新会话重试,避免对着同一坏实例反复失败。
 const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
 
-// 等待-探测环的探测提示词: 极小负载,只求一次真实的 provider 往返判明服务是否
-// 恢复——绝不用被中断的会话探测(往真实会话塞探测轮次会污染上下文,分叉探测则
-// 每个等待轮次白烧一遍全量前缀,配额受限期间只会雪上加霜)。
-const RECOVERY_PROBE_PROMPT = "[DRIVER] 服务可用性探测: 请只回复 ok,不要执行任何其他操作。"
+// Probe prompt of the wait-and-probe loop: a minimal payload that only needs one
+// real provider round trip to tell whether service is back. Never probe with the
+// interrupted session (a probe turn in a real session pollutes its context, and a
+// forked probe burns the full prefix on every wait round, which only makes a
+// quota squeeze worse).
+const RECOVERY_PROBE_PROMPT = "[DRIVER] Service availability probe: reply with just ok and do nothing else."
 
-// 重试/恢复后重发同一提示词时的一次性说明(经 chain.note 随下一个提示词带给 AI,
-// 用后即清)。两档按「接管的会话是否带着本次尝试的上下文」区分:
-// ① 上下文完整(分叉失败会话本体): 副本尾部带着当初的报错消息,同一提示词再次
-//    出现需要一句解释,避免 AI 把重发当作重复要求从头重做(与 awaitRecovery 的
-//    恢复说明同一动机);
-// ② 上下文不完整(回退空白新会话 / 基点重播种 / 分叉链上原会话): 本次尝试已落盘
-//    的部分产出不在新会话的上下文里,必须引导 AI 先核对工作区再续做——否则新会话
-//    对着半成品从头重做,追加式产物重复、已完成的步骤被重执行(与跨运行恢复的
-//    resumeNote 同一口径: 现场核对 + 不要重做)。
+// One-off note when the same prompt is re-sent after a retry or recovery
+// (carried to the AI with the next prompt via chain.note, cleared once used). Two
+// forms, keyed on whether the session taking over carries this attempt's context:
+// ① full context (a fork of the failed session itself): the copy ends with the
+//    original error message, so a repeated prompt needs a word of explanation or
+//    the AI treats the re-send as a repeated request and starts over (same motive
+//    as awaitRecovery's note);
+// ② partial context (blank new session / re-seeded from the base / a fork of the
+//    chain's original session): the attempt's partial output on disk is not in
+//    the new session's context, so the AI must check the worktree before going on,
+//    or it redoes half-finished work, duplicating appended output and re-running
+//    finished steps (same wording as the cross-run resumeNote: check the disk
+//    state, do not redo).
 const WORKSPACE_CHECK =
-  "工作区可能已包含本提示词对应的部分产出:先以 git status / git diff 核对现场,在此基础上续做剩余工作,不要重做已完成的部分。"
+  " The worktree may already hold part of this prompt's output: check it with git status / git diff first, then continue the remaining work from there without redoing what is finished."
 const retryNote = (lead: string) => `[DRIVER] ${lead}${WORKSPACE_CHECK}`
 
 // Runs one prompt on the session chain (reusing the previous session when its
@@ -157,7 +163,7 @@ export async function runSession(
   // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选,换 chain.model、挂一次性
   // 降级 note、fork 副本带上下文随迁,并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
   // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方落入等待-探测环)。
-  // why 为触发原因的中文短语,进日志与降级 note。
+  // why is a short phrase naming the trigger; it goes into the log and the failover note.
   const switchModel = async (why: string): Promise<boolean> => {
     limits ??= await client.contextLimits()
     const fallback = fallbackRing()
@@ -225,20 +231,23 @@ export async function runSession(
       chain.pending = forked
       chain.pct = 100
       chain.used = source.used
-      // 一次性降级说明(设计 D.3):随下一个提示词经 attempt 的 note 机制带给 AI、用后即
-      // 清,提示换模型续跑时沿用前文产物格式与协议(与 stuck-hint 为弱模型兜底同一哲学);
-      // 分到原会话(无本次尝试上下文)时改带现场核对版。
+      // One-off failover note: carried to the AI with the next prompt via attempt's
+      // note mechanism and cleared once used, telling the new model to keep the
+      // earlier output formats and protocol (same idea as the stuck hint's weak-model
+      // backstop); a fork of the original session (no context from this attempt)
+      // gets the worktree-check form instead.
       chain.note =
         source.id === failedID
-          ? `[DRIVER] 因${why}已切换模型继续,请沿用前文的产物格式与协议。`
-          : retryNote(`因${why}已切换模型继续,但本会话未继承本次尝试的上下文。`)
+          ? `[DRIVER] Switched model to continue (${why}); keep the output formats and protocol used earlier in this session.`
+          : retryNote(`Switched model to continue (${why}), but this session did not inherit this attempt's context.`)
       return true
     }
     if (sources.length) log(`↻ failover fork copies failed; the switch still takes effect, falling back to a blank new session (no context inherited)`)
     else log(`↻ no session context on the chain to inherit; the switch still takes effect, starting a blank new session`)
-    // 回退空白新会话:上下文一分不剩——「请沿用前文」对没有前文的会话是误导,降级说明
-    // 换成现场核对版(工作区可能有本次尝试的部分产出)。
-    chain.note = retryNote(`因${why}已切换模型继续,但本会话未继承此前会话的上下文。`)
+    // Falling back to a blank new session leaves no context at all: "keep what was
+    // used earlier" would mislead a session with nothing earlier, so the note
+    // becomes the worktree-check form (the worktree may hold this attempt's output).
+    chain.note = retryNote(`Switched model to continue (${why}), but this session did not inherit the earlier session's context.`)
     chain.id = undefined
     chain.pct = 100
     return true
@@ -300,20 +309,22 @@ export async function runSession(
         chain.pending = forked
         chain.pct = 100
         chain.used = source.used
-        // 一次性恢复说明: 分叉副本尾部带着当初的报错消息,同一提示词再次出现需要
-        // 一句解释,避免 AI 把重发当作重复要求;分到原会话(无本次尝试上下文)时
-        // 改带现场核对版。
+        // One-off recovery note: the forked copy ends with the original error
+        // message, so a repeated prompt needs a word of explanation or the AI treats
+        // it as a repeated request; a fork of the original session (no context from
+        // this attempt) gets the worktree-check form instead.
         chain.note =
           source.id === failedID
-            ? "[DRIVER] 上次下发因服务/配额故障中断,现已恢复,请继续完成本次任务要求。"
-            : retryNote("上次下发因服务/配额故障中断,现已恢复,但本会话未继承本次尝试的上下文。")
+            ? "[DRIVER] The previous dispatch was interrupted by a service/quota failure; service has recovered, so continue with what this task asks."
+            : retryNote("The previous dispatch was interrupted by a service/quota failure; service has recovered, but this session did not inherit this attempt's context.")
         seeded = true
         break
       }
       if (!seeded) {
         if (sources.length) log(`↻ ${task.id} service recovered, but all forked copies of the interrupted session failed; falling back to a blank new session to re-dispatch the task`)
-        // 空白新会话对本次尝试的产出一无所知,重发必须带现场核对说明。
-        chain.note = retryNote("上次下发因服务/配额故障中断,现已恢复,但未能继承此前会话的上下文。")
+        // A blank new session knows nothing of this attempt's output; the re-send
+        // must carry the worktree-check note.
+        chain.note = retryNote("The previous dispatch was interrupted by a service/quota failure; service has recovered, but the earlier session's context could not be inherited.")
         chain.id = undefined
         chain.pct = 100
       }
@@ -420,14 +431,16 @@ export async function runSession(
       chain.pending = forked
       chain.pct = 100
       chain.used = source.used
-      // 一次性重试说明: 副本尾部带着报错消息,同一提示词再次出现需要一句解释,避免
-      // AI 把重发当作重复要求(与 awaitRecovery 的恢复说明同一动机)。原会话保留在
-      // chain.id 不动(下次重试仍从它重新 fork);note 与 pending 并存时 attempt 优先
-      // 消费 pending(resumed 判据要求 pending 为空),不会误复用原会话。
+      // One-off retry note: the copy ends with the error message, so a repeated
+      // prompt needs a word of explanation or the AI treats the re-send as a repeated
+      // request (same motive as awaitRecovery's note). The original session stays in
+      // chain.id (the next retry forks from it again); with both note and pending set,
+      // attempt consumes pending first (the resumed check requires pending to be
+      // empty), so the original session is never reused by mistake.
       chain.note =
         source.id === failedID
-          ? "[DRIVER] 上次下发因瞬时会话错误中断,现已重试,请继续完成本次任务要求。"
-          : retryNote("上次下发因瞬时会话错误中断,但本会话未继承本次尝试的上下文。")
+          ? "[DRIVER] The previous dispatch was interrupted by a transient session error and is being retried now; continue with what this task asks."
+          : retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context.")
       seeded = true
       break
     }
@@ -441,7 +454,7 @@ export async function runSession(
       const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(client, chain.forkBase) }
       if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} retry`)) {
         log(`↻ ${task.id} transient session error; no session on the chain to fork, re-seeded from the base for retry (${nth}/${waits.length}):\n${result.question}`)
-        chain.note = retryNote("上次下发因瞬时会话错误中断,但本会话未继承本次尝试的上下文。")
+        chain.note = retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context.")
         continue
       }
     }
@@ -450,6 +463,6 @@ export async function runSession(
     // 重发必须带现场核对说明,否则新会话对着半成品从头重做。
     chain.id = undefined
     chain.pct = 100
-    chain.note = retryNote("上次下发因瞬时会话错误中断,但本会话未继承此前会话的上下文。")
+    chain.note = retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit the earlier session's context.")
   }
 }

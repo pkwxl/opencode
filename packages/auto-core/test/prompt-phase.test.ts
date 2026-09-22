@@ -86,7 +86,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   test("prevRound 注入两态: 续轮结论块出现/整块消失(仅新一轮首个规划会话由 loop 传入)", () => {
     const text = phasePlan({
       phase: L("a"),
-      prevRound: "### 上一轮(第 1 轮)阶段目录索引(docs/R-01/)\n\n- docs/R-01/P01-implement/",
+      prevRound: "### Previous round (round 1) phase directory index (docs/R-01/)\n\n- docs/R-01/P01-implement/",
     })
     expect(text).toContain("prior-round migration conclusions (continuation round)")
     expect(text).toContain("fuller agreement")
@@ -138,7 +138,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     for (const text of [
       phasePlan({ phase: L("a") }),
       phasePlan({ phase: L("m"), brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, numberStart: 12 }),
-      phasePlan({ phase: L("a"), prevRound: "### 上一轮(第 1 轮)阶段目录索引\n\n- docs/R-01/P01-implement/" }),
+      phasePlan({ phase: L("a"), prevRound: "### Previous round (round 1) phase directory index\n\n- docs/R-01/P01-implement/" }),
       phasePlan({ phase: L("k") }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)

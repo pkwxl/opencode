@@ -682,9 +682,9 @@ describe("CLI: init 固化项目配置", () => {
       const agents = await Bun.file(join(dir, "AGENTS.md")).text()
       expect(agents).toContain("Test principle:")
       expect(agents).toContain("build, test, compile, and lint")
-      // agent 契约同步带测试协议段(内联在工作契约第 2 条)
+      // The agent contract carries the test protocol too (inline in contract item 2)
       const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
-      expect(agent).toContain("编译、测试、构建、lint 等可能耗时长")
+      expect(agent).toContain("Build, test, compile, lint and other commands that can be slow")
       expect(agent).toContain("tmp/test.sh")
       // --amend 关闭 handover-test 保留 test-by-driver;再关闭 test-by-driver 时块内容
       // 与渲染不一致(测试段落应消失),整块刷新

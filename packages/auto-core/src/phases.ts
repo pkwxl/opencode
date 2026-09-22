@@ -470,14 +470,14 @@ export async function prevRoundDigest(dir: string): Promise<string | undefined> 
     if (text.trim()) knowledge.push({ file, text })
   }
   if (!dirs.length && !handoverText?.trim() && !knowledge.length) return undefined
-  const parts = [`### 上一轮(第 ${prev} 轮)阶段目录索引(${root}/)\n`]
+  const parts = [`### Previous round (round ${prev}) phase directory index (${root}/)\n`]
   parts.push(dirs.map((name) => `- ${root}/${name}/`).join("\n"))
   if (handover && handoverText?.trim()) {
-    parts.push(`\n### 上一轮最终交接(${handover})\n`)
+    parts.push(`\n### Previous round final handover (${handover})\n`)
     parts.push(handoverText.trim())
   }
   for (const doc of knowledge) {
-    parts.push(`\n### 上一轮迁移知识(${doc.file})\n`)
+    parts.push(`\n### Previous round migration knowledge (${doc.file})\n`)
     parts.push(doc.text.trim())
   }
   return parts.join("\n")

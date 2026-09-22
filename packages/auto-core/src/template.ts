@@ -348,13 +348,13 @@ export function parseTemplate(text: string): Node[] {
             : lineBreak + 1
         : end + 2
       if (marker === "/") {
-        if (tag !== "/if" && tag !== "/") throw new Error(`未知闭合标签: {{${tag}}}(只支持 {{/if}})`)
-        if (!stack.pop()) throw new Error("多余的 {{/if}}")
+        if (tag !== "/if" && tag !== "/") throw new Error(`unknown closing tag: {{${tag}}} (only {{/if}} is supported)`)
+        if (!stack.pop()) throw new Error("unmatched {{/if}}")
         continue
       }
       let name = tag.slice(1).trim()
       if (marker === "#" && name.startsWith("if ")) name = name.slice(3).trim()
-      if (!name) throw new Error(`空标签名: {{${tag}}}`)
+      if (!name) throw new Error(`empty tag name: {{${tag}}}`)
       if (marker === ">") {
         emit({ kind: "partial", name, indent: /^[ \t]*$/.test(before) ? before : "", standalone: alone })
         continue
@@ -365,12 +365,12 @@ export function parseTemplate(text: string): Node[] {
       continue
     }
     emit({ kind: "text", text: text.slice(pos, start) })
-    if (!tag) throw new Error("空标签名: {{}}")
+    if (!tag) throw new Error("empty tag name: {{}}")
     emit({ kind: "var", name: tag })
     pos = end + 2
   }
   const open = stack[stack.length - 1]
-  if (open) throw new Error(`未闭合的 {{${open.negated ? "^" : "#if"}} ${open.name}}}`)
+  if (open) throw new Error(`unclosed {{${open.negated ? "^" : "#if"}} ${open.name}}}`)
   return roots
 }
 
@@ -388,9 +388,9 @@ function renderNodes(nodes: Node[], ctx: Ctx, depth: number): string {
 }
 
 function renderPartial(node: Extract<Node, { kind: "partial" }>, ctx: Ctx, depth: number): string {
-  if (depth > 8) throw new Error(`片段嵌套过深(疑似循环引用): ${node.name}`)
+  if (depth > 8) throw new Error(`partials nested too deep (likely a circular reference): ${node.name}`)
   const body = library.partials[node.name]
-  if (body === undefined) throw new Error(`未知提示词片段: ${node.name}(检查 _partials.md 的节名)`)
+  if (body === undefined) throw new Error(`unknown prompt partial: ${node.name} (check the section names in _partials.md)`)
   const text = renderNodes(parseCached(`@${node.name}`, body), ctx, depth + 1)
   if (!node.indent) return text
   const indented = text.split("\n").join(`\n${node.indent}`)

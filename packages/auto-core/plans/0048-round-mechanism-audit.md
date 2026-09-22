@@ -138,4 +138,16 @@ Protected during a run (read-only, restored at the end): `CURRENT.md`, `opencode
 
 Comment-only changes to two source files. `packages/auto-core`: typecheck clean, 1079 pass / 0 fail (unchanged from M3.8).
 
+## 7. M4.3 follow-up (2026-09-22)
+
+R4 is closed. `prevRoundDigest`'s three headings and `planPhase`'s `(no handover document)` placeholder are now English. No golden renders them: they arrive as slot values, so only the test literals changed.
+
+With the user's agreement, M4.3 also cleared the Chinese that no later milestone owned. It treats M4.3 as the last translation step before the final merge-back.
+- The agent contract `templates/.opencode/agent/auto.md` is translated with its meaning unchanged (its two goldens are regenerated with the same line count). `templates/README.md` is translated too.
+- The driver's inline AI-facing messages are English: the question auto-answer (`unit-commit.ts`), the truncation steer (`watch.ts`), and the probe prompt and retry/recovery/failover notes (`session.ts`). Their wording follows the already-English `question-rule` partial and `COMMIT_CLARIFY`.
+- Human-facing text that M0.6 missed is English: refcheck logs and the `.auto/invalid-refs.md` header (the list's dedup key format is unchanged, so listed entries are not warned again), and the template engine's parse errors.
+- Some Chinese stays on purpose: patterns that recognise Chinese input (`check.ts` wording heuristics, the `permission` regex in `watch.ts`, and the approval answers in `session-api.ts`). Chinese comments are also left in place, per the M0.6 translate-on-touch rule; the comments next to the changed lines were translated.
+
+Verification: typecheck is clean in both packages. `packages/auto-core` 1095 pass / 0 fail; `packages/auto` 54 pass / 4 skip / 0 fail.
+
 <!-- auto: eof -->

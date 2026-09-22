@@ -485,7 +485,7 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("prevRoundDigest: 上一轮阶段目录索引 + 最后完成阶段的交接 + knowledge 阶段 kb.md;无上一轮/空白轮 → undefined", async () => {
+  test("prevRoundDigest: previous round's phase directory index + last done phase's handover + knowledge phase kb.md; no previous round / blank round → undefined", async () => {
     const fresh = tempDir()
     try {
       expect(await prevRoundDigest(fresh)).toBeUndefined()
@@ -504,15 +504,15 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
       await syncPhaseIndex(dir, 2, "am")
       const digest = await prevRoundDigest(dir)
       expect(digest).toBeDefined()
-      expect(digest).toContain("### 上一轮(第 1 轮)阶段目录索引(docs/R-01/)")
+      expect(digest).toContain("### Previous round (round 1) phase directory index (docs/R-01/)")
       expect(digest).toContain("- docs/R-01/P01-analysis/")
       expect(digest).toContain("- docs/R-01/P03-knowledge/")
-      expect(digest).toContain("### 上一轮最终交接(docs/R-01/P02-implement/handover.md)")
+      expect(digest).toContain("### Previous round final handover (docs/R-01/P02-implement/handover.md)")
       expect(digest).toContain("迁移决策乙")
       expect(digest).not.toContain("决策甲") // 仅注入最后完成阶段的交接
-      expect(digest).toContain("### 上一轮迁移知识(docs/R-01/P03-knowledge/kb.md)")
+      expect(digest).toContain("### Previous round migration knowledge (docs/R-01/P03-knowledge/kb.md)")
       expect(digest).toContain("API 映射结论。")
-      // 上一轮索引不可用: 目录索引与知识照常,交接省略(提示词输入从宽)
+      // Previous round's index unusable: directory index and knowledge as usual, handover dropped (prompt input is lenient)
       writeFileSync(join(dir, "docs/R-01/phases.md"), "垃圾\n- [ ] P01 nonsense\n")
       const lenient = await prevRoundDigest(dir)
       expect(lenient).toContain("- docs/R-01/P01-analysis/")

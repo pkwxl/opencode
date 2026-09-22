@@ -126,8 +126,8 @@ describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
     expect(result.type).toBe("idle")
     // 续跑经 steer 进原会话: 不新建会话、不重发提示词。
     expect(calls.steers.length).toBe(1)
-    expect(calls.steers[0]).toContain("截断")
-    expect(calls.steers[0]).toContain("继续")
+    expect(calls.steers[0]).toContain("cut off by the output length limit")
+    expect(calls.steers[0]).toContain("continue the unfinished work")
     expect(calls.creates).toBe(1)
     expect(calls.prompts.length).toBe(1)
   })

@@ -584,17 +584,17 @@ function invalidRefKey(finding: RefFinding): string {
 }
 
 function problemLabel(problem: "missing" | "beyond-eof"): string {
-  return problem === "beyond-eof" ? "行号超出文件总行数" : "路径不存在"
+  return problem === "beyond-eof" ? "line beyond end of file" : "path not found"
 }
 
 async function recordInvalidRefs(dir: string, findings: RefFinding[]): Promise<void> {
   await recordOnce(
     dir,
     INVALID_REFS_FILE,
-    "# 失效引用清单(auto 维护,供人工核验订正;已收录项不再重复警告,修复后自动移除)\n",
+    "# Stale references (maintained by auto for manual review and correction; listed entries are not warned again and drop out once fixed)\n",
     findings.map((finding) => ({
       key: invalidRefKey(finding),
-      warn: `失效引用 ${finding.file}:${finding.line} → ${finding.path}(${problemLabel(finding.problem)}): ${finding.text}`,
+      warn: `stale reference ${finding.file}:${finding.line} → ${finding.path} (${problemLabel(finding.problem)}): ${finding.text}`,
     })),
   )
 }
@@ -621,17 +621,17 @@ export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
         rewritten += count
       }
     }
-    if (rewritten) log(`  ↻ 引用 auto-correct: ${pairs.length} 组 rename 配对,改写活文档引用 ${rewritten} 处`)
+    if (rewritten) log(`  ↻ reference auto-correct: ${pairs.length} rename pair(s), rewrote ${rewritten} reference(s) in live documents`)
   }
   let findings = await scanRefs(dir)
   const recovered = await recoverMissingRefs(dir, findings)
   if (recovered) {
-    log(`  ↻ 缺失引用恢复: git 历史追踪改写 ${recovered} 处`)
+    log(`  ↻ missing-reference recovery: rewrote ${recovered} reference(s) by tracing git history`)
     findings = await scanRefs(dir)
   }
   const reconfirmed = await reconfirmAnchors(dir)
   if (reconfirmed) {
-    log(`  ↻ 引用范围再确认: ${reconfirmed} 处行号锚追加 @sha 版本标记(范围仅对标记的历史版本有效)`)
+    log(`  ↻ reference range reconfirmation: appended an @sha version marker to ${reconfirmed} line anchor(s) (the range holds only for the marked historical version)`)
     findings = await scanRefs(dir)
   }
   await recordInvalidRefs(dir, findings)

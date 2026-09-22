@@ -634,12 +634,12 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
     expect(calls.replies).toHaveLength(1)
   })
 
-  test("autoAnswer 两档文案: 都点明被代答;off 要求标注 AUTO-RESOLVE,on 不提标注", () => {
+  test("autoAnswer texts: both say answered on the user's behalf; off requires AUTO-RESOLVE, on asks for no marking", () => {
     const off = autoAnswer(false)
     const on = autoAnswer(true)
-    expect(off).toContain("这是一个被代答的提问")
-    expect(on).toContain("这是一个被代答的提问")
-    expect(off).toContain("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")
+    expect(off).toContain("This question was answered on the user's behalf")
+    expect(on).toContain("This question was answered on the user's behalf")
+    expect(off).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
     expect(off).toContain("AUTO-DECISION")
     expect(on).not.toContain("AUTO-DECISION")
     expect(on).not.toContain("AUTO-RESOLVE")
@@ -699,8 +699,8 @@ describe("输出截断续跑(步骤结束 length 不作自然结束)", () => {
     expect(result.type).toBe("idle")
     // 续跑经 steer(promptAsync)进原会话: 不新建会话、不重发提示词。
     expect(calls.steers.length).toBe(1)
-    expect(calls.steers[0]).toContain("截断")
-    expect(calls.steers[0]).toContain("继续")
+    expect(calls.steers[0]).toContain("cut off by the output length limit")
+    expect(calls.steers[0]).toContain("continue the unfinished work")
     expect(calls.creates).toBe(1)
     expect(calls.prompts.length).toBe(1)
   })

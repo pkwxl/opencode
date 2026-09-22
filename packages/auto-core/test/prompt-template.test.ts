@@ -265,22 +265,22 @@ describe("模式注入(-m/--mode)", () => {
 })
 
 describe("init 产物模板(agent 契约;PLAN.md 模板随 M3.4 退役)", () => {
-  test("agent 契约不含验收/验证描述,标记块列举相应收窄(testByDriver 关闭)", async () => {
+  test("agent contract has no acceptance/verification text and the block list narrows accordingly (testByDriver off)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const off = renderText(raw, { testByDriver: false })
-    expect(off).toContain("AGENTS.md 不在只读之列")
-    expect(off).toContain("不得删除或改写 opencode-auto")
-    expect(off).toContain("标记块(指针/提交/摘要/维护规则/引用规范")
+    expect(off).toContain("AGENTS.md is not read-only")
+    expect(off).toContain("must not delete or rewrite the opencode-auto")
+    expect(off).toContain("marker block (pointer/commit/summary/maintenance rules/reference conventions")
     expect(off).toContain("<!-- opencode-auto:start -->")
     expect(off).toContain("<!-- opencode-auto:end -->")
-    expect(off).toContain("遵守块内的 AGENTS.md 维护规则")
+    expect(off).toContain("follow the AGENTS.md maintenance rules inside the block")
     expect(off).not.toContain("verify")
-    expect(off).not.toContain("验证")
+    expect(off).not.toContain("verification")
   })
 })
 
-describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
-  test("一致性比对口径 = 写入口径:两态渲染文本与原始模板互不相等(含条件块),两态渲染与 renderText 直渲一致", async () => {
+describe("agent contract template (templates/.opencode/agent/auto.md)", () => {
+  test("consistency check matches the write path: both renders differ from the raw template (it has a conditional block) and equal a direct renderText", async () => {
     const raw = await Bun.file(agentTemplate).text()
     expect(raw).toContain("{{#if testByDriver}}")
     expect(raw).not.toContain("{{#if verify}}")
@@ -290,24 +290,26 @@ describe("agent 契约模板(templates/.opencode/agent/auto.md)", () => {
       expect(rendered).not.toBe(raw)
     }
   })
-  test("AGENTS.md 条款覆盖 opencode-auto 单一标记块并引用维护规则(防漂移,testByDriver 启用)", async () => {
+  test("the AGENTS.md clause covers the single opencode-auto block and cites the maintenance rules (drift guard, testByDriver on)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const text = renderText(raw, { testByDriver: true })
-    expect(text).toContain("AGENTS.md 不在只读之列")
-    // 不得删除或改写 opencode-auto 标记块(指针/测试/提交/摘要/维护规则/引用规范),
-    // 合并为单一 start/end 块,而非旧版按名各自独立的多个标记块
-    expect(text).toContain("不得删除或改写 opencode-auto")
-    expect(text).toContain("标记块(指针/测试/提交/摘要/维护规则/引用规范")
+    expect(text).toContain("AGENTS.md is not read-only")
+    // Must not delete or rewrite the opencode-auto block (pointer/test/commit/summary/
+    // maintenance rules/reference conventions), one merged start/end block rather
+    // than the legacy per-name blocks
+    expect(text).toContain("must not delete or rewrite the opencode-auto")
+    expect(text).toContain("marker block (pointer/test/commit/summary/maintenance rules/reference conventions")
     expect(text).toContain("<!-- opencode-auto:start -->")
     expect(text).toContain("<!-- opencode-auto:end -->")
     expect(text).not.toContain("<!-- opencode-auto:*:start -->")
-    expect(text).not.toContain("不得删除 opencode-auto 指针块")
-    // 更新其余内容时遵守块内的维护规则(精简/路由/更新不追加/只沉淀持久知识)
-    expect(text).toContain("遵守块内的 AGENTS.md 维护规则")
+    expect(text).not.toContain("must not delete the opencode-auto pointer block")
+    // Updating the rest follows the in-block maintenance rules (concise / route /
+    // update rather than append / durable knowledge only)
+    expect(text).toContain("follow the AGENTS.md maintenance rules inside the block")
     expect(text).toContain("docs/agents/")
-    expect(text).toContain("保持精简")
-    expect(text).toContain("更新不追加")
-    expect(text).toContain("只沉淀持久工作流知识")
+    expect(text).toContain("keep it concise")
+    expect(text).toContain("update rather than append")
+    expect(text).toContain("record only durable workflow knowledge")
   })
 })
 

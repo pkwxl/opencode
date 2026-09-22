@@ -570,8 +570,8 @@ export async function watch(
         lastFinish = undefined
         log(`⚠ session reply truncated by the output length limit (step-finish reason=length); prompting it to continue from the cut-off point (${lengthContinued}/${LENGTH_CONTINUE_MAX})`)
         const ok = await steerText(
-          "[DRIVER] 你的上一轮回复因输出长度上限被截断,请从截断处继续未完成的工作" +
-            "(不要重做已完成的部分;单次输出较长时请拆成多步/多次工具调用,避免再次触限)。",
+          "[DRIVER] Your previous reply was cut off by the output length limit; continue the unfinished work from the cut-off point " +
+            "(do not redo what is finished; split long output into several steps / tool calls so you don't hit the limit again).",
         )
         if (!ok) return snapshot({ blocked: { type: "blocked", question: "steer dispatch failed (length-continuation hint); cannot continue the session, see the log." } })
         continue

@@ -22,27 +22,31 @@ import { autoSwitches, type Switches } from "./switches"
 // --wait-answer was not given for non-permission questions); only a repeated
 // question on the same issue escalates to human intervention.
 // 文案按提问策略档位取用(OPENCODE_AUTO_ASK,plans/0020-auto-resolve-design.md §G):
-// 两档共同点明"这是一个被代答的提问"——本应由用户拍板的分歧点因无人值守由 driver
-// 代替用户闭环,让会话知道自己正在替用户做主,而不是当成一次普通的自主决策。
-// off 档(缺省)要求以 AUTO-RESOLVE 标注该决策并明确区别于 AUTO-DECISION(台账靠
-// 会话自觉标注补全);on 档下提问本身即流经 driver 的事件、已被完整落账,故不要求
-// 任何标注——此档文案不出现 AUTO-DECISION 字样,避免会话出于惯性继续留痕。
-// 导出供单测直驱两档文案(与 gatedAutoCorrectRefs 同款: 内部接线的可测出口)。
+// Both modes state that "this question was answered on the user's behalf": a
+// divergence the user should have decided is closed by the driver because nobody
+// is watching, so the session knows it is deciding for the user rather than
+// making an ordinary decision of its own. Off (default) requires the decision to
+// be marked AUTO-RESOLVE and kept distinct from AUTO-DECISION (the ledger relies
+// on the session marking it); on, the question itself is a driver event and is
+// fully logged, so no marking is asked for, and the text never says AUTO-DECISION
+// so the session does not keep leaving marks out of habit.
+// Exported so tests drive both texts directly (same pattern as
+// gatedAutoCorrectRefs: a testable exit for internal wiring).
 export function autoAnswer(ask: boolean): string {
   const head =
-    "这是一个被代答的提问: 它本应由用户拍板,因无人值守由 driver 代替用户闭环。" +
-    "你根据情况来自主决策如何做即可,如果当前阶段已经完成,直接转下一个阶段。"
+    "This question was answered on the user's behalf: it was the user's call, but nobody is watching, so the driver closes it for them. " +
+    "Decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one. "
   if (ask) {
     return (
       head +
-      "本次运行允许发问,driver 已完整记录这次代答,你无须为它另行留痕,按答复继续执行即可。"
+      "This run allows questions and the driver has fully logged this answer, so you need not record it anywhere; just carry on as answered."
     )
   }
   return (
     head +
-    "请记录决策过程:把决策理由与考虑过(并否决)的备选方案写入相关文档(docs/ 设计文档或报告);" +
-    "该决策须在设计文档或代码注释中以 `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` 行明确标注," +
-    "不要记成 `AUTO-DECISION`——后者只用于决定权本就属于你的纯实现取舍。"
+    "Record the decision: write its reasoning and the alternatives you considered (and rejected) into the relevant document (a docs/ design document or report); " +
+    "mark the decision in a design document or code comment with an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, " +
+    "not as `AUTO-DECISION` — that one is only for pure implementation choices that were always yours."
   )
 }
 

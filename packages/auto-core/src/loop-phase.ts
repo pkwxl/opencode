@@ -81,10 +81,11 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     numberStart = numbering.next
   }
   const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
-  // 前序阶段交接注入(E 节注入纪律): 只注入 handover 蒸馏产物,不注入前序
-  // 原始 docs/。阶段索引中早于当前阶段且已 done 的各阶段逐个拼接;交接文档为
-  // 阶段目录内的永久路径 P<nn>-<type>/handover.md;缺 handover 的阶段在清单中
-  // 标注"(无交接文档)"。
+  // Earlier phases' handovers (injection discipline): only the distilled
+  // handovers are injected, never the earlier phases' raw docs/. Each done phase
+  // that precedes this one in the phase index is appended in order; the handover
+  // is the permanent P<nn>-<type>/handover.md in the phase directory, and a phase
+  // without one is listed as "(no handover document)".
   const state = await phaseState(directory)
   const earlier = state.phases.slice(0, state.phases.findIndex((unit) => unit.id === phase.id))
   const handovers = (
@@ -94,14 +95,15 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
         .map(async (unit) => {
           const doc = phaseHandoverDoc(unit)
           const text = await Bun.file(join(directory, doc)).text().catch(() => undefined)
-          return [`### ${phaseTitle(unit)}(${doc})`, "", text?.trim() || "(无交接文档)"].join("\n")
+          return [`### ${phaseTitle(unit)}(${doc})`, "", text?.trim() || "(no handover document)"].join("\n")
         }),
     )
   ).join("\n\n")
-  // 本轮首个规划会话的额外注入(本轮尚无完成阶段时): ① 前置知识(外壳启动时的已有
-  // 迁移结果蒸馏,docs/R-NN/prior-kb.md,见 src/knowledge.ts);② 上一轮结论(上一轮
-  // 轮次目录存在时,plans/0006-phases-design.md M 节)。后续阶段照常走 handovers 蒸馏链,
-  // 不重复注入。
+  // Extra injection for the round's first planning session: ① prior knowledge
+  // (the shell's startup distillation of existing migration results,
+  // docs/R-NN/prior-kb.md, see src/knowledge.ts); ② the previous round's
+  // conclusions (when a previous round directory exists). Later phases follow the
+  // handover chain and get neither again.
   // "First" = no completed phase of this round has tasks (plans/0049 G4): a
   // leading task-less knowledge phase has no planning session and must not
   // swallow the digest.

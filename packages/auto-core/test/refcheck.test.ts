@@ -444,7 +444,7 @@ describe("renamePairs / autoCorrectRefs", () => {
       await git(dir, "commit", "-qm", "init")
       // 首轮: 两条新失效引用各警告一次,清单落盘(键排序,不含行号与原文)
       await autoCorrectRefs(dir)
-      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(2)
+      expect(seen.filter((line) => line.includes("⚠ stale reference"))).toHaveLength(2)
       const list = await Bun.file(join(dir, ".auto/invalid-refs.md")).text()
       expect(list.split("\n").slice(1)).toEqual([
         "- docs/live.md → docs/gone.md(missing)",
@@ -454,13 +454,13 @@ describe("renamePairs / autoCorrectRefs", () => {
       // 次轮: 清单已收录,不再重复警告
       seen.length = 0
       await autoCorrectRefs(dir)
-      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(0)
+      expect(seen.filter((line) => line.includes("⚠ stale reference"))).toHaveLength(0)
       // 新增第三条 → 只警告新出现的
       await Bun.write(join(dir, "docs/live.md"), "引用 `docs/gone.md` 与 `docs/lost.md` 与 `docs/vanished.md`。")
       seen.length = 0
       await autoCorrectRefs(dir)
-      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(1)
-      expect(seen.find((line) => line.includes("⚠ 失效引用"))).toContain("docs/vanished.md")
+      expect(seen.filter((line) => line.includes("⚠ stale reference"))).toHaveLength(1)
+      expect(seen.find((line) => line.includes("⚠ stale reference"))).toContain("docs/vanished.md")
       // 全部修复 → 清单移除
       await Bun.write(join(dir, "docs/gone.md"), "x")
       await Bun.write(join(dir, "docs/lost.md"), "x")
@@ -471,7 +471,7 @@ describe("renamePairs / autoCorrectRefs", () => {
       await rm(join(dir, "docs/gone.md"))
       seen.length = 0
       await autoCorrectRefs(dir)
-      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(1)
+      expect(seen.filter((line) => line.includes("⚠ stale reference"))).toHaveLength(1)
     } finally {
       console.log = original
       await rm(dir, { recursive: true, force: true })
@@ -516,7 +516,7 @@ describe("缺失引用恢复(refcheck-scope P2,git 历史追踪)", () => {
       // gone 纯删除 → 不自动恢复,保留 finding
       const report = "见 `src/chain-c.ts:2`、`src/victim.ts` 与 `src/gone.ts`。"
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
-      expect(seen.filter((line) => line.includes("缺失引用恢复"))).toHaveLength(1)
+      expect(seen.filter((line) => line.includes("missing-reference recovery"))).toHaveLength(1)
       expect(findings).toEqual([
         { file: "docs/T-001/report.md", line: 1, text: report, path: "src/victim.ts", problem: "missing" },
         { file: "docs/T-001/report.md", line: 1, text: report, path: "src/gone.ts", problem: "missing" },
@@ -530,8 +530,8 @@ describe("缺失引用恢复(refcheck-scope P2,git 历史追踪)", () => {
       seen.length = 0
       expect(await autoCorrectRefs(dir)).toEqual(findings)
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
-      expect(seen.filter((line) => line.includes("缺失引用恢复"))).toHaveLength(0)
-      expect(seen.filter((line) => line.includes("⚠ 失效引用"))).toHaveLength(0)
+      expect(seen.filter((line) => line.includes("missing-reference recovery"))).toHaveLength(0)
+      expect(seen.filter((line) => line.includes("⚠ stale reference"))).toHaveLength(0)
       expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).text()).toBe(list)
     } finally {
       console.log = original
@@ -603,7 +603,7 @@ describe("引用范围再确认(refcheck-scope P3,@sha 版本标记)", () => {
       // :1(新增文件)无版本可钉跳过;:2@deadbeef 已标记不再更新
       const report = `见 \`src/mod.ts:3-4\`、\`src/mod.ts:1-2@${sha1}\`、\`src/mod.ts:1-9@${sha1}\`、\`src/new.ts:1\` 与 \`src/mod.ts:2@deadbeef\`。`
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
-      expect(seen.filter((line) => line.includes("引用范围再确认"))).toHaveLength(1)
+      expect(seen.filter((line) => line.includes("reference range reconfirmation"))).toHaveLength(1)
       // 复扫: 带标记的历史快照引用豁免行号上限校验 → 无 findings、无失效清单
       expect(findings).toEqual([])
       expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
@@ -611,7 +611,7 @@ describe("引用范围再确认(refcheck-scope P3,@sha 版本标记)", () => {
       seen.length = 0
       expect(await autoCorrectRefs(dir)).toEqual([])
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(report)
-      expect(seen.filter((line) => line.includes("引用范围再确认"))).toHaveLength(0)
+      expect(seen.filter((line) => line.includes("reference range reconfirmation"))).toHaveLength(0)
       // 新一轮: 提交后 mod.ts 第 3 行再改 → :3-4 追加新 HEAD 标记;已标记引用不更新
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "round-1")

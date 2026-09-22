@@ -108,13 +108,13 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(calls.prompts.map((p) => p.sessionID)).toEqual(["ses_new_1", "ses_new_2", "ses_new_3", "ses_fork_1"])
     // 探测提示词是极小探测文案,不是任务提示词。
     for (const probe of [calls.prompts[1]!, calls.prompts[2]!]) {
-      expect((probe.parts[0] as { text: string }).text).toContain("服务可用性探测")
+      expect((probe.parts[0] as { text: string }).text).toContain("Service availability probe")
     }
     // 恢复重发落在分叉副本上,带一次性恢复说明。
     const text = (calls.prompts[3]!.parts[0] as { text: string }).text
     expect(text).toContain("提示词")
     expect(text).toContain("[DRIVER]")
-    expect(text).toContain("恢复")
+    expect(text).toContain("service has recovered")
     expect(chain.note).toBeUndefined()
     expect(chain.id).toBe("ses_fork_1")
   })
@@ -240,7 +240,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     // 第 2/3 次重发仍判「上下文完整」档: 只解释重发,不带现场核对说明。
     for (const p of [calls.prompts[2]!, calls.prompts[3]!]) {
       const text = (p.parts[0] as { text: string }).text
-      expect(text).toContain("现已重试")
+      expect(text).toContain("being retried now")
       expect(text).not.toContain("git status")
     }
     expect(chain.failed).toBeUndefined()
@@ -275,7 +275,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
     expect(text).toContain("提示词")
-    expect(text).toContain("现已重试")
+    expect(text).toContain("being retried now")
     expect(text).not.toContain("git status")
     expect(chain.note).toBeUndefined()
   })
@@ -289,7 +289,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
     expect(text).toContain("git status")
-    expect(text).toContain("不要重做")
+    expect(text).toContain("without redoing")
   })
 
   test("链上无可分叉内容回退空白新会话: 重发带现场核对说明(工作区可能有部分产出)", async () => {
@@ -301,7 +301,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
     expect(text).toContain("git status")
-    expect(text).toContain("不要重做")
+    expect(text).toContain("without redoing")
     expect(chain.note).toBeUndefined()
   })
 
@@ -356,7 +356,7 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(asked).toBe(0)
     // 三次阶梯尝试(全任务提示词)+ 两次探测 + 一次恢复重发 = 6 次下发。
     expect(calls.prompts.length).toBe(6)
-    expect(calls.prompts.filter((p) => (p.parts[0] as { text: string }).text.includes("服务可用性探测")).length).toBe(2)
+    expect(calls.prompts.filter((p) => (p.parts[0] as { text: string }).text.includes("Service availability probe")).length).toBe(2)
   })
 
   test("waits=off: 首次失败即进等待-探测环,不做阶梯重试", async () => {
@@ -682,7 +682,7 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     // 降级 note(一次性)已随次轮提示词下发并自动清除。
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
     expect(text).toContain("[DRIVER]")
-    expect(text).toContain("已切换模型")
+    expect(text).toContain("Switched model")
     expect(chain.note).toBeUndefined()
     // 换模型续跑落在分叉出的会话上(ses_fork_1),而非白板新会话。
     expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
@@ -700,9 +700,9 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
-    expect(text).toContain("已切换模型")
+    expect(text).toContain("Switched model")
     expect(text).toContain("git status")
-    expect(text).toContain("不要重做")
+    expect(text).toContain("without redoing")
     expect(chain.note).toBeUndefined()
   })
 
@@ -719,7 +719,7 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.prompts[2]!.sessionID).toBe("ses_new_3")
     const text = (calls.prompts[2]!.parts[0] as { text: string }).text
     expect(text).toContain("git status")
-    expect(text).toContain("不要重做")
+    expect(text).toContain("without redoing")
   })
 
   test("候选耗尽(首选与两候选全配额受限): 不再阻塞——等待-探测环等恢复,探测沿用末个候选,恢复后从被中断会话分叉续跑", async () => {
@@ -736,10 +736,10 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "c" })
     expect(calls.prompts[4]!.model).toEqual({ providerID: "prov", modelID: "c" })
     // 第 4 次下发是探测(极小提示词、全新会话),第 5 次是恢复重发(任务提示词 + 恢复说明)。
-    expect((calls.prompts[3]!.parts[0] as { text: string }).text).toContain("服务可用性探测")
+    expect((calls.prompts[3]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     const text = (calls.prompts[4]!.parts[0] as { text: string }).text
     expect(text).toContain("提示词")
-    expect(text).toContain("恢复")
+    expect(text).toContain("service has recovered")
     expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1", "ses_fork_2"])
     expect(chain.model).toBe("prov/c")
   })
@@ -779,7 +779,7 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(calls.prompts.every((p) => !("model" in p))).toBe(true)
     expect(calls.forks).toEqual(["ses_new_1"])
     expect(calls.prompts.length).toBe(3)
-    expect((calls.prompts[1]!.parts[0] as { text: string }).text).toContain("服务可用性探测")
+    expect((calls.prompts[1]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     expect((calls.prompts[2]!.parts[0] as { text: string }).text).toContain("提示词")
   })
 })
@@ -947,7 +947,7 @@ describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候�
     const text = (calls.prompts[3]!.parts[0] as { text: string }).text
     expect(text).toContain("[DRIVER]")
     expect(text).toContain("retry ladder exhausted")
-    expect(text).toContain("已切换模型")
+    expect(text).toContain("Switched model")
     expect(chain.note).toBeUndefined()
     // chain.model 停在生效候选上(作用域:chain 由 runTask 逐任务新建,下一个任务自动
     // 回首选模型,无需退回逻辑)。
@@ -968,7 +968,7 @@ describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候�
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "b" })
     expect(calls.prompts[6]!.model).toEqual({ providerID: "prov", modelID: "c" })
     expect(calls.prompts[9]!.model).toEqual({ providerID: "prov", modelID: "c" })
-    expect((calls.prompts[9]!.parts[0] as { text: string }).text).toContain("服务可用性探测")
+    expect((calls.prompts[9]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     expect((calls.prompts[10]!.parts[0] as { text: string }).text).toContain("提示词")
     // 恢复重发落在被中断会话(末个失败会话 ses_fork_8,50k 前缀)的分叉副本上;
     // 探测走全新临时会话(第 2 次 create)。
@@ -1004,7 +1004,7 @@ describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候�
     expect(calls.prompts.length).toBe(5)
     expect(calls.prompts.every((p) => !("model" in p))).toBe(true)
     expect(chain.model).toBeUndefined()
-    expect((calls.prompts[3]!.parts[0] as { text: string }).text).toContain("服务可用性探测")
+    expect((calls.prompts[3]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     expect(calls.prompts[4]!.sessionID).toBe("ses_fork_3")
   })
 })

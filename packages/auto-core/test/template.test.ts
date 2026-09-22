@@ -34,10 +34,10 @@ describe("渲染器", () => {
     expect(renderText(text, {})).toBe("前\n\n后")
   })
 
-  test("未闭合/多余的闭合标签抛错", () => {
-    expect(() => renderText("{{#if x}}内容", { x: true })).toThrow("未闭合")
-    expect(() => renderText("{{/if}}", {})).toThrow("多余的 {{/if}}")
-    expect(() => renderText("{{#if x}}内容{{/each}}", { x: true })).toThrow("未知闭合标签")
+  test("unclosed / unmatched closing tags throw", () => {
+    expect(() => renderText("{{#if x}}内容", { x: true })).toThrow("unclosed")
+    expect(() => renderText("{{/if}}", {})).toThrow("unmatched {{/if}}")
+    expect(() => renderText("{{#if x}}内容{{/each}}", { x: true })).toThrow("unknown closing tag")
   })
 
   test("片段引用: 共享片段按当前上下文渲染(片段内可用变量)", () => {
@@ -159,7 +159,7 @@ describe("内置模板注册表", () => {
       phaseName: "分析",
       brief: "项目意图",
       handovers: "### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)",
-      prevRound: "### 上一轮(第 1 轮)阶段目录索引",
+      prevRound: "### Previous round (round 1) phase directory index",
       archive: "docs/R-01/P01-analysis",
       next: "P02-implement 迁移实现",
       sourceDir: "/legacy",
