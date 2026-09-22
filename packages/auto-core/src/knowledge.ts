@@ -1,10 +1,11 @@
 import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentClient } from "./agent/types"
-import { knowledgeDoc, legacyKnowledgeDoc, legacyPriorKnowledgeDoc, priorKnowledgeDoc, roundDirName, TEMP_KB_NAME, tempPriorKnowledgeDoc } from "./docpaths"
+import { legacyPriorKnowledgeDoc, priorKnowledgeDoc, roundDirName, TEMP_KB_NAME, tempPriorKnowledgeDoc } from "./docpaths"
+import { parsePhaseDir } from "./document/unit"
 import { changedFiles, commitPending, commitTree } from "./git"
 import { log } from "./log"
-import { currentRound, readLedger, roundRoot } from "./phases"
+import { currentRound, phaseArtifacts, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
@@ -12,46 +13,37 @@ import { afterSession } from "./unit-commit"
 
 // k(知识提炼)阶段对 --extract-knowledge 设计的整体认领(plans/0002-fixme-knowledge-design.md
 // §D + plans/0006-phases-design.md P4): 各阶段完成后,旁路一次性会话把最终验证过的迁移
-// 经验蒸馏为结构化知识文档。产出为永久路径(新布局 = 轮内固定名
-// docs/R-NN/migration-kb.md;旧布局存量项目 = docs/migration-kb/R<N>-migration-
-// <时间戳>.md),落定不移动。提取失败不污染退出码——会话受阻或两次未产出仅返回
-// failed,由调用方打 ⚠ 警告后照常推进阶段交接(迁移成功不被文档生成失败反向污染)。
+// 经验蒸馏为结构化知识文档。产出为 knowledge 阶段目录内的类型标准产物
+// docs/R-NN/P<nn>-knowledge/kb.md(M3.3, plans/0047 §5;原轮内 migration-kb.md 与
+// 旧平铺 docs/migration-kb/ 不再写),落定不移动。提取失败不污染退出码——会话受阻或
+// 两次未产出仅返回 failed,由调用方打 ⚠ 警告后照常推进阶段交接(迁移成功不被文档
+// 生成失败反向污染)。
 
-// 旧布局知识文档目录(相对目标目录,永久;存量读回落)。
+// 旧布局知识文档目录(相对目标目录,永久;existingDistilledDocs 存量读回落,M3.7 退役)。
 const KB_DIR = join("docs", "migration-kb")
 
-// 时间戳(旧布局输出路径用;与 .auto/logs/run-<时间戳>.log 同款,log.ts
+// 时间戳(旧布局前置知识输出路径用;与 .auto/logs/run-<时间戳>.log 同款,log.ts
 // setLogFile 格式)。
 function timestamp(): string {
   return new Date().toISOString().slice(0, 19).replace("T", "_").replaceAll(":", "-")
 }
 
-// 输出路径(布局感知): 新布局 = 轮内固定名 docs/R-NN/migration-kb.md(轮目录恒在
-// 轮首建立,无需时间戳区分);旧布局(存量项目本轮无轮目录)=
-// docs/migration-kb/R<N>-migration-<时间戳>.md。round 由 extractKnowledge 经
-// currentRound 推导后传入,每次提取固定一个路径,requireArtifact 的重试/reset 围绕
-// 同一路径进行。
-export async function knowledgeFile(dir: string, round: number): Promise<string> {
-  return (await roundRoot(dir, round)) ? knowledgeDoc(round) : legacyKnowledgeDoc(round, timestamp())
+// 输出路径: 该 knowledge 阶段的标准产物(注册表 phaseArtifacts,阶段目录内 kb.md)。
+export function knowledgeFile(phase: PhaseUnit): string {
+  return phaseArtifacts(phase)[0]!.path
 }
 
-// 本轮幂等检查: 新布局查轮内 docs/R-NN/migration-kb.md(非空即已提取);旧平铺
-// 回落 docs/migration-kb/ 内本轮 R<round>- 前缀的非空 .md(前几轮的 R<M>- 文档不
-// 算本轮已提取;第 1 轮时无 R 前缀的存量按读回落视为本轮产物,避免中轮升级触发
-// 重复提取)。台账 k 行 done 后提取挂点本就不触发(routePhase 只在 k 未 done 时
-// 进入提取),无需读台账。
-export async function existingKnowledge(dir: string, round: number): Promise<string | undefined> {
-  if (await roundRoot(dir, round)) {
-    const modern = knowledgeDoc(round)
-    if ((await Bun.file(join(dir, modern)).text().catch(() => "")).trim()) return modern
-  }
-  return existingRoundDoc(dir, KB_DIR, round, round === 1)
+// 幂等检查: 该阶段的知识文档非空即已提取。阶段 done 后提取挂点本就不触发
+// (routePhase 只路由未完成阶段)。
+export async function existingKnowledge(dir: string, phase: PhaseUnit): Promise<string | undefined> {
+  const file = knowledgeFile(phase)
+  return (await Bun.file(join(dir, file)).text().catch(() => "")).trim() ? file : undefined
 }
 
 // 知识提取编排(镜像 final.ts generateFinalTask 的 requireArtifact 骨架,伪任务
 // PLAN 不进任务链、不写进度记录): collect 从宽——文件存在且非空即算产出(章节
 // 完整性是提示词级要求,过度结构校验会制造无意义重试);产出随会话统一提交
-// (stage=knowledge),docs/migration-kb/ 为永久路径、交接不搬移(R2)。
+// (stage=knowledge),阶段目录内为永久路径、交接不搬移(R2)。
 // 完成判定含提交(plans/0021-commit-boundary-design.md ③④ 推广): ③ 幂等入口发现本轮文档
 // 已产出但仍在未提交清单 → 补提交后即完成;④ 文档缺失而工作区脏(上次提取半途
 // 而废的现场或人工改动)→ 返回 dirty 交人工处置后重跑——对 k 阶段"提取失败仅
@@ -62,13 +54,13 @@ export async function extractKnowledge(
   client: AgentClient,
   dir: string,
   opts: Opts,
+  phase: PhaseUnit,
 ): Promise<
   { type: "ok"; file: string } | { type: "skipped"; file: string } | { type: "dirty"; files: string[] } | { type: "failed"; question: string }
 > {
-  const round = await currentRound(dir)
   const task = { id: "PLAN", title: "migration knowledge distillation (k phase)", status: "in_progress" as const, attempts: 0, body: "" }
   const commit = { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }
-  const existing = await existingKnowledge(dir, round)
+  const existing = await existingKnowledge(dir, phase)
   if (existing) {
     // ③ 补提交: 文档已落盘但仍在未提交改动清单中 → 提交后完成。
     const pending = await commitPending(dir, opts, task, commit, [existing])
@@ -83,7 +75,7 @@ export async function extractKnowledge(
     const dirty = await changedFiles(dir)
     if (dirty.length) return { type: "dirty", files: dirty }
   }
-  const file = await knowledgeFile(dir, round)
+  const file = knowledgeFile(phase)
   const produced = await requireArtifact(
     client,
     task,
@@ -131,26 +123,26 @@ export async function priorKnowledgeFile(dir: string, round: number): Promise<st
 }
 
 // 幂等检查(新布局轮内固定名 + 旧平铺"本轮前缀"守卫;另含新旧机制过渡回落):
-// 本轮阶段已推进(台账已有完成阶段)而无本轮文档,说明本轮开工于前缀守卫引入
-// 之前——旧判据"目录非空即跳过"使旧机制轮次一直以无前缀存量续命、从未产出
+// 本轮阶段已推进(阶段索引已有完成阶段)而无本轮文档,说明本轮开工于前缀守卫
+// 引入之前——旧判据"目录非空即跳过"使旧机制轮次一直以无前缀存量续命、从未产出
 // 本轮 R 文档,严格按前缀判定会把每次中断重跑都拖回轮首重开提取会话,无法直接
-// 恢复断点。故台账已推进时回落接受无前缀非空文档(与第 1 轮读回落同款)。
-// 新一轮开工时轮目录/台账恒为空,不受回落影响,自然重新蒸馏。台账非法按未推进
-// 处理(严格失败属 readLedger 调用方职责)。
+// 恢复断点。故已推进时回落接受无前缀非空文档(与第 1 轮读回落同款)。
+// 新一轮开工时阶段全未完成,不受回落影响,自然重新蒸馏。索引缺失/非法按未推进
+// 处理(严格失败属 readPhases 调用方职责)。
 export async function existingPriorKnowledge(dir: string, round: number): Promise<string | undefined> {
   if (await roundRoot(dir, round)) {
     const modern = priorKnowledgeDoc(round)
     if ((await Bun.file(join(dir, modern)).text().catch(() => "")).trim()) return modern
   }
   const advanced =
-    round === 1 || (await readLedger(dir).then((ledger) => ledger.done.length > 0, () => false))
+    round === 1 || (await readPhases(dir, round).then((state) => (state?.done.size ?? 0) > 0, () => false))
   return existingRoundDoc(dir, PRIOR_KB_DIR, round, advanced)
 }
 
 // 已有蒸馏产物清单(extractPriorKnowledge 的引用化输入): 此前蒸馏的结论性文档
-// ——迁移知识(旧平铺 KB_DIR + 历轮 docs/R-*/migration-kb.md)、阶段交接(旧平铺
-// docs/handovers/ + 历轮 docs/R-*/handovers/)与历轮前置知识(旧平铺 PRIOR_KB_DIR
-// + 历轮 docs/R-*/prior-kb.md,本轮的排除)。清单非空时提取会话被要求对已覆盖的
+// ——迁移知识(旧平铺 KB_DIR + 历轮 knowledge 阶段目录的 kb.md)、阶段交接(旧平铺
+// docs/handovers/ + 历轮各阶段目录的 handover.md)与历轮前置知识(旧平铺
+// PRIOR_KB_DIR + 历轮 docs/R-*/prior-kb.md,本轮的排除)。清单非空时提取会话被要求对已覆盖的
 // 知识点只引用不复述(引用目标同场可达: priorKnowledgeDigest 与 prevRoundDigest
 // 注入全文)。各目录缺失或仅空文件 → 空数组(模板条件段消失,行为同全量蒸馏)。
 export async function existingDistilledDocs(dir: string, round: number): Promise<string[]> {
@@ -163,19 +155,17 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
       found.add(join(root, name))
     }
   }
-  // 轮次专用目录(新布局): 历轮 docs/R-*/ 内的固定名知识文档与交接。
+  // 轮次专用目录: 历轮 docs/R-*/ 的前置知识、各阶段目录的交接与 knowledge 阶段知识文档。
   for (const entry of await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])) {
-    if (!entry.isDirectory() || !/^R-\d+$/.test(entry.name)) continue
+    const number = /^R-(\d+)$/.exec(entry.name)
+    if (!entry.isDirectory() || !number) continue
     const root = join("docs", entry.name)
-    const current = entry.name === roundDirName(round)
-    for (const name of ["migration-kb.md", "prior-kb.md"]) {
-      if (current && name === "prior-kb.md") continue
-      const file = join(root, name)
-      if ((await Bun.file(join(dir, file)).text().catch(() => "")).trim()) found.add(file)
+    const files = await roundKnowledgeDocs(dir, Number(number[1]))
+    if (entry.name !== roundDirName(round)) files.push(join(root, "prior-kb.md"))
+    for (const phase of await readdir(join(dir, root), { withFileTypes: true }).catch(() => [])) {
+      if (phase.isDirectory() && parsePhaseDir(phase.name)) files.push(join(root, phase.name, "handover.md"))
     }
-    for (const name of await readdir(join(dir, root, "handovers")).catch(() => [] as string[])) {
-      if (!name.endsWith(".md")) continue
-      const file = join(root, "handovers", name)
+    for (const file of files) {
       if ((await Bun.file(join(dir, file)).text().catch(() => "")).trim()) found.add(file)
     }
   }

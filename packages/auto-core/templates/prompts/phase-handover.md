@@ -14,17 +14,17 @@
 
 本阶段是流程的最后一个阶段,无下一阶段: 本文档供后续轮次与人工查阅,同样
 按协议写全四个小节。若本阶段为知识提炼类无任务阶段,蒸馏以本轮迁移知识文档
-(docs/R-NN/migration-kb.md)与 docs/ 实际产物为主要输入,不必寻找 PLAN.md
+(本阶段目录内的 kb.md)与 docs/ 实际产物为主要输入,不必寻找 PLAN.md
 任务清单。
 {{/if}}
 ## 输入(只读)
 
 - 本阶段任务清单与执行轨迹: PLAN.md(含状态、attempts、阻塞问答;
   若 PLAN.md 为空模板(本阶段无任务清单),跳过此项,以本阶段 docs/ 实际产物为准);
-- 本阶段 docs/ 产物与本轮轮次目录 docs/R-NN/(阶段归档 <字母>-<slug>/ 内是
-  阶段 PLAN.md 快照等过期状态,不必细读);上游阶段的交接文档在本轮轮次目录的
-  handovers/ 内(永久路径);
-- 阶段台账: 本轮轮次目录内的 phases.md(docs/R-NN/phases.md)。
+- 本阶段 docs/ 产物与本轮轮次目录 docs/R-NN/(各阶段目录 P<nn>-<type>/ 内的
+  PLAN.md 是阶段快照等过期状态,不必细读);上游阶段的交接文档在各自阶段目录的
+  handover.md(永久路径);
+- 阶段索引: 本轮轮次目录内的 phases.md(docs/R-NN/phases.md)。
 
 ## 产物
 
@@ -63,4 +63,4 @@
    git 提交由 DRIVER 在会话结束后统一执行,你不要运行 git commit 等提交命令。
 {{> question-rule}}
 3. 交接文档要自包含: 小节内引用产物时给出相对目标目录的永久路径
-   (docs/T-NNN/…、docs/R-NN/handovers/…),读者不必反查本提示词即可定位。
+   (docs/T-NNN/…、docs/R-NN/P<nn>-<type>/…),读者不必反查本提示词即可定位。

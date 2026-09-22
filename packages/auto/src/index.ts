@@ -11,7 +11,21 @@ import { ensureGitignore, ensurePointer, runAll } from "@opencode-ai/auto-core/l
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { load, parse } from "@opencode-ai/auto-core/plan"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
-import { currentRound, establishRound, formatPhases, ledgerPath, nextRound, parsePhases, phaseText, readLedger, renderPlanScaffold, roundRoot } from "@opencode-ai/auto-core/phases"
+import {
+  currentRound,
+  doneLetters,
+  establishRound,
+  formatPhases,
+  nextRound,
+  parsePhases,
+  phaseIndexPath,
+  phaseLabel,
+  phaseText,
+  readPhases,
+  renderPlanScaffold,
+  roundRoot,
+  type PhaseState,
+} from "@opencode-ai/auto-core/phases"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
 import templatePlan from "@opencode-ai/auto-core/templates/PLAN.md" with { type: "file" }
@@ -241,17 +255,10 @@ if (command === "run") {
     process.exit(1)
   }
   log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  // 阶段进度行(B.2,与 status 共用 formatPhases;✓=台账已记录,▶=当前,其余=未
-  // 开始);续轮(docs/R-NN 轮次目录最大号 > 1)时带轮次标注。台账非法仅提示,
+  // 阶段进度行(B.2,与 status 共用 phasesLine;✓=已完成,▶=当前,其余=未开始);
+  // 续轮(docs/R-NN 轮次目录最大号 > 1)时带轮次标注。阶段索引缺失/非法仅提示,
   // runAll 的阶段路由会以环境错误退出 1。
-  if (config.phases !== "m") {
-    try {
-      const round = await currentRound(directory)
-      log(`phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
-    } catch (error) {
-      log(`⚠ phase ledger (${await ledgerPath(directory)}) is invalid: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
+  if (config.phases !== "m") log(await phasesLine(directory))
   const code = await runAll(directory, {
     // agent 契约、提交语义、上下文预算等来自配置文件(init 生成);
     // agent 缺省为 init 生成的自主执行契约,存在性由 run 前完整性检查兜底。
@@ -367,7 +374,7 @@ if (command === "init" || command === "continue") {
   // continue 子命令(续轮迁移,设计文档 plans/0006-phases-design.md M 节)= init 的
   // amend 语义 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
   // 让迁移结果与源更加完整、一致。复用 init 的解析/合并/模板与标记块维护,差异
-  // 仅在: ① 前置校验(既有 phases ≠ "m" 且台账全覆盖);② 轮首建立
+  // 仅在: ① 前置校验(既有 phases ≠ "m" 且阶段索引全部完成);② 轮首建立
   // (establishRound: 建 docs/R-(N+1)/、根 PLAN.md 链接重指轮内、AGENTS.md.bak
   // 快照);③ 迁移同一性选项(-m/--mode 与迁移参数)跨轮固定,显式给出即用法错误。
   if (command === "init" && flags.has("continue")) {
@@ -447,7 +454,7 @@ if (command === "init" || command === "continue") {
     process.exit(1)
   }
   // --phases: 阶段化流程(设计文档 plans/0006-phases-design.md);"m"(缺省)= 无阶段
-  // 声明,单次运行,行为不变。台账非空时的前缀护栏见下(已完成的阶段必须构成
+  // 声明,单次运行,行为不变。已有完成阶段时的前缀护栏见下(已完成的阶段必须构成
   // 新值的前缀,防止 amend 把流程状态打成不可推导)。
   let phases: string | undefined
   if (flags.has("phases")) {
@@ -555,7 +562,7 @@ if (command === "init" || command === "continue") {
   const amend = cont || flags.has("amend")
   const base: ProjectConfig = amend ? existing : CONFIG_DEFAULTS
   // 本次生效的 phases: 显式给出即用之,否则取基线值(全量覆盖下 = 缺省 "m",
-  // --amend/continue 下 = 既有配置值)。下方快捷模式校验与阶段台账前缀护栏共用。
+  // --amend/continue 下 = 既有配置值)。下方快捷模式校验与阶段索引前缀护栏共用。
   const effectivePhases = phases ?? base.phases
   // --implement-file/--implement-prompt 快捷模式(单阶段 m): 依赖生效 phases 才能
   // 算出,故校验放在基线装载之后;--implement-file 的文件存在性同样在此校验
@@ -603,19 +610,21 @@ if (command === "init" || command === "continue") {
       process.exit(1)
     }
   }
-  // 阶段台账(ledgerPath: 新布局轮内 docs/R-NN/phases.md,旧布局根 docs/phases.md)
-  // 是推导式状态载体;非法即环境错误退出 1(报文给人工修订指引)。台账非空时显式
-  // 改 --phases 须满足前缀护栏。
-  let ledgerDone: string
+  // 阶段索引(当前轮 docs/R-NN/phases.md + 各阶段目录 todo.md/done.md,M3.3)是
+  // 推导式状态载体;非法即环境错误退出 1(报文给人工修订指引)。已完成阶段的预置
+  // 字母串(索引序)取代原台账字母串: 非空时显式改 --phases 须满足前缀护栏。
+  let phaseState: PhaseState | undefined
   try {
-    ledgerDone = (await readLedger(directory)).done.join("")
+    phaseState = await readPhases(directory)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
+  const indexPath = phaseIndexPath(await currentRound(directory))
+  const completedPhases = phaseState ? doneLetters(phaseState) : ""
   // continue 前置校验(按既有配置判定,不看向新 --phases 值): 仅阶段化项目、且
-  // 上一轮已全部完成——台账覆盖既有 phases 的全部字母。轮首建立后新一轮台账
-  // 为空(新轮目录恒空),新一轮 --phases 不受前缀护栏约束(从头规划,任何合法值可改)。
+  // 上一轮已全部完成——阶段索引存在且其中每个阶段都已完成(done.md)。轮首建立后
+  // 新一轮阶段全未完成,新一轮 --phases 不受前缀护栏约束(从头规划,任何合法值可改)。
   if (cont) {
     if (existing.phases === "m") {
       console.error(
@@ -629,35 +638,36 @@ if (command === "init" || command === "continue") {
       process.exit(1)
     }
     const declared = [...existing.phases]
-    const outside = [...ledgerDone].filter((letter) => !declared.includes(letter))
+    const outside = [...completedPhases].filter((letter) => !declared.includes(letter))
     if (outside.length) {
       console.error(
-        `continue precheck failed: the ledger at ${await ledgerPath(directory)} records phase letters outside phases (${existing.phases}): ${outside.join(", ")}. ` +
-          "fix that file manually (see README for the rollback procedure) before continuing to the next round",
+        `continue precheck failed: the phase index ${indexPath} records completed phases outside phases (${existing.phases}): ${outside.join(", ")}. ` +
+          "fix the index manually before continuing to the next round",
       )
       process.exit(1)
     }
-    const missing = declared.filter((letter) => !ledgerDone.includes(letter))
-    if (missing.length) {
+    const pending = phaseState ? phaseState.phases.filter((unit) => !phaseState.done.has(unit.id)).map(phaseLabel) : []
+    if (!phaseState || pending.length) {
       console.error(
-        `continue requires the previous round to be fully complete: the phase ledger (${await ledgerPath(directory)})${ledgerDone ? "" : " is empty"}, missing ${missing.join(", ")} (phases ${existing.phases}). ` +
+        `continue requires the previous round to be fully complete: the phase index ${indexPath} ` +
+          `${phaseState ? `still has pending phases ${pending.join(", ")}` : "is missing"} (phases ${existing.phases}). ` +
           `run opencode-auto run ${directory} first to finish this round`,
       )
       process.exit(1)
     }
   }
   // 前缀护栏判定的是**本次生效值**而非「是否显式给出」: 全量覆盖下无参 init 会把
-  // phases 回落为缺省 "m",若项目已跑在阶段化流程中途(台账非空),这会静默毁掉
+  // phases 回落为缺省 "m",若项目已跑在阶段化流程中途(已有完成阶段),这会静默毁掉
   // 轮次布局(下方 phases === "m" 分支把根 PLAN.md 的轮次符号链接还原成普通文件)。
   // 判生效值即可把这种情形拦在任何写盘之前。--amend/continue 下生效值 = 既有配置
   // 值,天然满足前缀条件,旧行为不变。
-  if (!cont && ledgerDone && !effectivePhases.startsWith(ledgerDone)) {
+  if (!cont && completedPhases && !effectivePhases.startsWith(completedPhases)) {
     console.error(
       flags.has("phases")
-        ? `the new --phases value "${effectivePhases}" is incompatible with the phase ledger (${await ledgerPath(directory)}): the ledger records completed phases "${ledgerDone}", which must be a prefix of the new value. ` +
-            "use a value prefixed by it, or fix the ledger via the README rollback procedure before changing it"
-        : `a no-flag init overwrites with defaults and would reset phases to "${effectivePhases}", incompatible with the completed phases "${ledgerDone}" recorded in the phase ledger (${await ledgerPath(directory)}) (it would destroy the round layout). ` +
-            `to keep the existing config use opencode-auto init ${directory} --amend; to really change it, pass --phases explicitly prefixed by "${ledgerDone}"`,
+        ? `the new --phases value "${effectivePhases}" is incompatible with the phase index (${indexPath}): its completed phases are "${completedPhases}", which must be a prefix of the new value. ` +
+            "use a value prefixed by it, or roll the index back manually (rename done.md to todo.md) before changing it"
+        : `a no-flag init overwrites with defaults and would reset phases to "${effectivePhases}", incompatible with the completed phases "${completedPhases}" in the phase index (${indexPath}) (it would destroy the round layout). ` +
+            `to keep the existing config use opencode-auto init ${directory} --amend; to really change it, pass --phases explicitly prefixed by "${completedPhases}"`,
     )
     process.exit(1)
   }
@@ -789,11 +799,12 @@ if (command === "init" || command === "continue") {
       }
       try {
         const established = await establishRound(directory, {
+          phases: config.phases,
           round: cont ? await nextRound(directory) : undefined,
           plan: cont ? renderPlanScaffold() : plan,
         })
         newRound = cont ? established.round : undefined
-        console.log(`✓ round directory: ${established.root}/ (PLAN.md, phase ledger phases.md, phase archives and knowledge docs all live inside the round; once written, permanent)`)
+        console.log(`✓ round directory: ${established.root}/ (PLAN.md, the phase index phases.md and one P<nn>-<type>/ directory per phase all live inside the round; once written, permanent)`)
         console.log(
           established.linked
             ? `✓ root PLAN.md → ${established.root}/PLAN.md (relative symlink, single source of truth)`
@@ -853,13 +864,13 @@ if (command === "init" || command === "continue") {
     process.exit(0)
   }
   // 结束语按 phases 分两态: "m" 维持"编辑 PLAN.md"现状;阶段化流程下 PLAN.md
-  // 由阶段规划会话填充,不提示手工编辑。continue 下新轮目录恒空(台账为空),首个
+  // 由阶段规划会话填充,不提示手工编辑。continue 下新一轮阶段全未完成,首个
   // 阶段 = 新 phases 的第一个字母;另打新一轮横幅。
   if (config.phases === "m") {
     console.log(promptText !== undefined ? `brief recorded; run: opencode-auto run ${directory} to start task planning` : `edit PLAN.md to fill in tasks, then run: opencode-auto run ${directory}`)
     process.exit(0)
   }
-  const current = parsePhases(config.phases)!.find((phase) => !(cont ? "" : ledgerDone).includes(phase))
+  const current = parsePhases(config.phases)!.find((phase) => !(cont ? "" : completedPhases).includes(phase))
   if (cont) {
     console.log(`round ${newRound} of the migration started: making the migration result more complete and consistent with the source on top of existing progress`)
   }
@@ -943,21 +954,27 @@ if (command === "check") {
   process.exit(1)
 }
 
+// 阶段进度行(run 横幅与 status 共用): 当前轮阶段索引 → P01-analysis✓ P02-design▶ …;
+// 索引缺失/非法只给提示行,不阻塞调用方。
+async function phasesLine(directory: string): Promise<string> {
+  const round = await currentRound(directory)
+  try {
+    const state = await readPhases(directory)
+    if (!state) return `⚠ phase index (${phaseIndexPath(round)}) is missing; run opencode-auto init to establish the round`
+    return `phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(state)}`
+  } catch (error) {
+    return `⚠ phase index (${phaseIndexPath(round)}) is invalid: ${error instanceof Error ? error.message : String(error)}`
+  }
+}
+
 if (command === "status") {
   // 任务清单前打印配置摘要;配置非法仅提示、不阻塞任务列表(缺失取缺省,
-  // 同样打印摘要)。阶段化流程(phases ≠ "m")另打印阶段进度行(B.3,✓=台账
-  // 已记录,▶=当前,其余=未开始);台账缺失/非法同样仅提示不阻塞。
+  // 同样打印摘要)。阶段化流程(phases ≠ "m")另打印阶段进度行(B.3,✓=已
+  // 完成,▶=当前,其余=未开始);阶段索引缺失/非法同样仅提示不阻塞。
   try {
     const config = await loadProjectConfig(directory)
     console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-    if (config.phases !== "m") {
-      try {
-        const round = await currentRound(directory)
-        console.log(`phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(config.phases, (await readLedger(directory)).done)}`)
-      } catch (error) {
-        console.log(`⚠ phase ledger (${await ledgerPath(directory)}) is invalid: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
+    if (config.phases !== "m") console.log(await phasesLine(directory))
   } catch (error) {
     console.log(`⚠ project config (.opencode/auto/config.json) is invalid: ${error instanceof Error ? error.message : String(error)}`)
   }

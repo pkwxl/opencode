@@ -4,9 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   archivedTestHandoff,
-  knowledgeDoc,
   latestHandoffSeq,
-  legacyKnowledgeDoc,
   legacyPriorKnowledgeDoc,
   legacySubtaskArtifact,
   legacySubtaskTestHandoff,
@@ -51,8 +49,7 @@ describe("轮次专用目录与轮内知识文档(新布局,R-NN 两位零填充
     expect(roundDir(3)).toBe(join("docs", "R-03"))
   })
 
-  test("knowledgeDoc/priorKnowledgeDoc: 轮内固定名(原时间戳名取消)", () => {
-    expect(knowledgeDoc(1)).toBe(join("docs", "R-01", "migration-kb.md"))
+  test("priorKnowledgeDoc: 轮内固定名(原时间戳名取消;k 阶段知识文档改为阶段目录内 kb.md,见 phases.test)", () => {
     expect(priorKnowledgeDoc(5)).toBe(join("docs", "R-05", "prior-kb.md"))
   })
 
@@ -61,8 +58,7 @@ describe("轮次专用目录与轮内知识文档(新布局,R-NN 两位零填充
     expect(tempPriorKnowledgeDoc(legacyPriorKnowledgeDoc(1, "2026-09-07_01-02-03"))).toBe(join("docs", "prior-kb", "temp-kb.md"))
   })
 
-  test("legacyKnowledgeDoc/legacyPriorKnowledgeDoc: 旧平铺形态(读回落常量化)", () => {
-    expect(legacyKnowledgeDoc(2, "2026-09-07_01-02-03")).toBe(join("docs", "migration-kb", "R2-migration-2026-09-07_01-02-03.md"))
+  test("legacyPriorKnowledgeDoc: 旧平铺形态(读回落常量化)", () => {
     expect(legacyPriorKnowledgeDoc(1, "2026-09-07_01-02-03")).toBe(join("docs", "prior-kb", "R1-prior-2026-09-07_01-02-03.md"))
   })
 })

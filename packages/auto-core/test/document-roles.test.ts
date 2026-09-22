@@ -11,7 +11,7 @@ import { eofScanExempt, p1Scope, PROTECTED_FILES, roleOf, ROLE_POLICIES } from "
 import { subtaskStateSpec } from "../src/document/spec"
 import type { AddedLine } from "../src/document/types"
 import { unitAddedLines, unitBaseline } from "../src/git"
-import { phaseAcceptanceDoc } from "../src/phases"
+import { phaseAcceptanceDoc, phaseArchivedPlan, phaseArtifacts, phaseHandoverDoc, phaseIndexPath, syncPhaseIndex } from "../src/phases"
 import { freshRepo, git } from "./fixtures/runner"
 
 describe("roleOf", () => {
@@ -19,30 +19,34 @@ describe("roleOf", () => {
     ["PLAN.md", "driverState"],
     ["CURRENT.md", "driverState"],
     ["docs/R-01/PLAN.md", "driverState"], // round-layout symlink target
-    ["docs/R-01/m-migrate/PLAN.md", "driverState"], // phase archive snapshot
+    ["docs/R-01/P03-implement/PLAN.md", "driverState"], // phase PLAN snapshot
     [".auto/progress.json", "driverState"],
     [".auto", "driverState"],
     ["opencode.json", "driverState"],
     [".opencode/auto/config.json", "driverState"],
-    ["docs/R-01/phases.md", "ledger"],
+    ["docs/R-01/phases.md", "ledger"], // phase index
     ["docs/phases.md", "ledger"], // legacy root ledger
     ["docs/T-001/handoff.md", "handoff"],
     ["docs/T-001/S02/testhandoff-3.md", "handoff"],
     ["docs/T-001.handoff.md", "handoff"], // legacy flat
     ["docs/T-001-S2.testhandoff-1.md", "handoff"], // legacy flat archive
-    ["docs/R-02/handovers/d-design.md", "handoff"], // phase handover
+    ["docs/R-02/P02-design/handover.md", "handoff"], // phase handover
+    ["docs/R-100/P12-custom-type/handover.md", "handoff"],
     ["docs/handovers/R1-a-analysis.md", "handoff"], // legacy phase handover
-    ["docs/R-01/a-analysis/handover.md", "handoff"], // pre-P2 placement
-    ["docs/R-01/phase-docs/v-acceptance/acceptance.md", "phaseAcceptance"],
-    ["docs/R-01/phase-docs/v-acceptance/acceptance-r2.md", "phaseAcceptance"],
+    ["docs/phases/m-migrate/handover.md", "handoff"], // pre-P2 placement
+    ["docs/R-01/P05-acceptance/acceptance.md", "phaseAcceptance"],
+    ["docs/R-01/P05-acceptance/acceptance-r2.md", "phaseAcceptance"],
     ["docs/phase-docs/R1-d-design/acceptance.md", "phaseAcceptance"], // legacy layout
     ["docs/T-001/context.md", "artifact"],
     ["docs/T-001/S01/index.md", "artifact"],
     ["docs/T-001/S01/todo.md", "artifact"],
     ["docs/T-001/S01/done.md", "artifact"],
     ["docs/T-001.context.md", "artifact"], // legacy flat
-    ["docs/R-01/migration-kb.md", "artifact"],
-    ["docs/R-01/phase-docs/a-analysis/survey.md", "artifact"],
+    ["docs/R-01/P01-analysis/todo.md", "artifact"], // phase state files
+    ["docs/R-01/P01-analysis/done.md", "artifact"],
+    ["docs/R-01/P06-knowledge/kb.md", "artifact"], // type-standard artifact
+    ["docs/R-01/P01-analysis/survey.md", "artifact"], // free phase artifact
+    ["docs/R-01/P01-analysis/sub/handover.md", "artifact"], // not the phase handover
     ["docs/phases/round-2/m-migrate/notes.md", "artifact"],
     ["docs/prior-kb/R1-prior-2026-09-07_01-02-03.md", "artifact"],
     ["README.md", "freeform"],
@@ -70,15 +74,17 @@ describe("roleOf", () => {
     expect(spec.pending.role).toBe("artifact")
   })
 
-  test("phaseAcceptanceDoc builds a path the classifier reads as phaseAcceptance", async () => {
+  test("the phase directory builders produce paths the classifier reads correctly", async () => {
     const dir = await freshRepo()
     try {
-      // Legacy layout (no docs/R-NN yet) and modern layout both classify.
-      expect(roleOf(await phaseAcceptanceDoc(dir, 1, "v"))).toBe("phaseAcceptance")
-      await Bun.write(join(dir, "docs/R-02/.keep"), "")
-      const modern = await phaseAcceptanceDoc(dir, 2, "d")
-      expect(modern).toBe("docs/R-02/phase-docs/d-design/acceptance.md")
-      expect(roleOf(modern)).toBe("phaseAcceptance")
+      for (const unit of await syncPhaseIndex(dir, 2, "admtvk")) {
+        expect(roleOf(phaseAcceptanceDoc(unit))).toBe("phaseAcceptance")
+        expect(roleOf(phaseHandoverDoc(unit))).toBe("handoff")
+        expect(roleOf(phaseArchivedPlan(unit))).toBe("driverState")
+        expect(roleOf(`${unit.dir}/todo.md`)).toBe("artifact")
+        for (const spec of phaseArtifacts(unit)) expect(roleOf(spec.path)).toBe("artifact")
+      }
+      expect(roleOf(phaseIndexPath(2))).toBe("ledger")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -87,7 +93,7 @@ describe("roleOf", () => {
 
 describe("role-derived policies", () => {
   test("eofScanExempt follows the role policy", () => {
-    for (const rel of ["PLAN.md", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/handovers/m-migrate.md", "docs/R-01/phase-docs/v-acceptance/acceptance.md"]) {
+    for (const rel of ["PLAN.md", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md"]) {
       expect(eofScanExempt(rel), rel).toBe(true)
     }
     for (const rel of ["docs/T-001/S01/todo.md", "docs/T-001/report.md", "README.md"]) {
@@ -119,7 +125,7 @@ describe("processReferenceScan", () => {
     const { problems } = processReferenceScan(
       new Map([
         ["src/a.c", lines("// see docs/T-003/S01/index.md for the layout")],
-        ["src/b.c", lines("x", "/* per docs/R-02/handovers/d-design.md */")],
+        ["src/b.c", lines("x", "/* per docs/R-02/P02-design/handover.md */")],
         ["src/c.py", lines("# ledger in docs/phases/round-1/")],
         ["README.md", lines("Progress lives in PLAN.md.")],
         ["tools/run.sh", lines('cat ./.auto/progress.json')],
@@ -129,7 +135,7 @@ describe("processReferenceScan", () => {
     const a = problems.find((p) => p.startsWith("src/a.c"))
     expect(a).toContain('src/a.c:1 references "docs/T-003/S01/index.md"')
     expect(a).toContain("must not reference process documents")
-    expect(problems.find((p) => p.startsWith("src/b.c"))).toContain('src/b.c:2 references "docs/R-02/handovers/d-design.md"')
+    expect(problems.find((p) => p.startsWith("src/b.c"))).toContain('src/b.c:2 references "docs/R-02/P02-design/handover.md"')
     expect(problems.find((p) => p.startsWith("README.md"))).toContain('README.md:1 references "PLAN.md"')
     expect(problems.find((p) => p.startsWith("tools/run.sh"))).toContain('".auto/progress.json"')
   })

@@ -159,21 +159,27 @@ describe("activeDocs / validateRefs / scanRefs", () => {
     }
   })
 
-  test("活文档枚举: 轮次目录(新布局)内阶段归档排除,台账/交接/知识文档属活文档", async () => {
+  test("活文档枚举: 阶段目录内 PLAN 快照排除,阶段索引/交接/产物/状态文件与知识文档属活文档", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-refcheck-"))
     try {
-      await mkdir(join(dir, "docs/R-01/a-analysis"), { recursive: true })
-      await Bun.write(join(dir, "docs/R-01/a-analysis/PLAN.md"), "x") // 阶段归档(状态文件)
-      await Bun.write(join(dir, "docs/R-01/phases.md"), "x") // 台账(活文档,与根 phases.md 同款)
+      await mkdir(join(dir, "docs/R-01/P01-analysis/sub"), { recursive: true })
+      await Bun.write(join(dir, "docs/R-01/P01-analysis/PLAN.md"), "x") // 阶段 PLAN 快照(状态文件)
+      await Bun.write(join(dir, "docs/R-01/P01-analysis/sub/PLAN.md"), "x") // 非快照位置: 照常检查
+      await Bun.write(join(dir, "docs/R-01/P01-analysis/done.md"), "x")
+      await Bun.write(join(dir, "docs/R-01/P01-analysis/handover.md"), "x")
+      await Bun.write(join(dir, "docs/R-01/P01-analysis/findings.md"), "x")
+      await Bun.write(join(dir, "docs/R-01/phases.md"), "x") // 阶段索引(活文档,与根 phases.md 同款)
       await Bun.write(join(dir, "docs/R-01/PLAN.md"), "x")
-      await Bun.write(join(dir, "docs/R-01/migration-kb.md"), "x")
       await Bun.write(join(dir, "docs/R-01/prior-kb.md"), "x")
-      await mkdir(join(dir, "docs/R-01/handovers"), { recursive: true })
-      await Bun.write(join(dir, "docs/R-01/handovers/a-analysis.md"), "x")
+      await mkdir(join(dir, "docs/R-01/P02-knowledge"), { recursive: true })
+      await Bun.write(join(dir, "docs/R-01/P02-knowledge/kb.md"), "x")
       expect(await activeDocs(dir)).toEqual([
+        "docs/R-01/P01-analysis/done.md",
+        "docs/R-01/P01-analysis/findings.md",
+        "docs/R-01/P01-analysis/handover.md",
+        "docs/R-01/P01-analysis/sub/PLAN.md",
+        "docs/R-01/P02-knowledge/kb.md",
         "docs/R-01/PLAN.md",
-        "docs/R-01/handovers/a-analysis.md",
-        "docs/R-01/migration-kb.md",
         "docs/R-01/phases.md",
         "docs/R-01/prior-kb.md",
       ])

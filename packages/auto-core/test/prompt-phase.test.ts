@@ -54,18 +54,18 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(renderPhasePlan({ phase: "m" })).toContain("代码迁移与改造")
     expect(renderPhasePlan({ phase: "t" })).toContain("回归覆盖")
     expect(renderPhasePlan({ phase: "v" })).toContain("整体验收")
-    expect(renderPhasePlan({ phase: "k" })).toContain("docs/R-NN/migration-kb.md")
+    expect(renderPhasePlan({ phase: "k" })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
   })
 
-  test("handovers 注入两态: 有前序交接则注入清单(标注 docs/handovers/ 永久路径),无则整块消失", () => {
+  test("handovers 注入两态: 有前序交接则注入清单(标注阶段目录内 handover.md 永久路径),无则整块消失", () => {
     const text = renderPhasePlan({
       phase: "m",
-      handovers: "### a 分析(docs/handovers/R1-a-analysis.md)\n\n- 决策甲: 选型 X",
+      handovers: "### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)\n\n- 决策甲: 选型 X",
     })
     expect(text).toContain("前序阶段交接")
     expect(text).toContain("唯一通道")
-    expect(text).toContain("docs/handovers/")
-    expect(text).toContain("### a 分析(docs/handovers/R1-a-analysis.md)")
+    expect(text).toContain("P<nn>-<type>/handover.md")
+    expect(text).toContain("### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)")
     expect(text).toContain("- 决策甲: 选型 X")
     // 首阶段无前序交接: 交接块整块消失
     expect(renderPhasePlan({ phase: "a" })).not.toContain("前序阶段交接")
@@ -74,13 +74,13 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   test("prevRound 注入两态: 续轮结论块出现/整块消失(仅新一轮首个规划会话由 loop 传入)", () => {
     const text = renderPhasePlan({
       phase: "a",
-      prevRound: "### 上一轮(第 1 轮)阶段归档索引(docs/phases/round-1/)\n\n- docs/phases/round-1/m-migrate/",
+      prevRound: "### 上一轮(第 1 轮)阶段目录索引(docs/R-01/)\n\n- docs/R-01/P01-implement/",
     })
     expect(text).toContain("上一轮迁移结论(续轮)")
     expect(text).toContain("完整、一致")
     expect(text).toContain("不要重做已完成")
     expect(text).toContain("永久路径")
-    expect(text).toContain("- docs/phases/round-1/m-migrate/")
+    expect(text).toContain("- docs/R-01/P01-implement/")
     // 非续轮(无 prevRound): 结论块整块消失
     expect(renderPhasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
   })
@@ -126,7 +126,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     for (const text of [
       renderPhasePlan({ phase: "a" }),
       renderPhasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, numberStart: 12 }),
-      renderPhasePlan({ phase: "a", prevRound: "### 上一轮(第 1 轮)阶段归档索引\n\n- docs/phases/round-1/m-migrate/" }),
+      renderPhasePlan({ phase: "a", prevRound: "### 上一轮(第 1 轮)阶段目录索引\n\n- docs/R-01/P01-implement/" }),
       renderPhasePlan({ phase: "k" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
@@ -202,15 +202,15 @@ describe("renderNumberRecovery(编号恢复会话)", () => {
 
 describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
   test("注入阶段/交接永久路径/四小节协议与唯一可写文件约束", () => {
-    const text = renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })
+    const text = renderPhaseHandover({ phase: "a", handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" })
     expect(text).toContain("「分析」阶段(a)")
     expect(text).toContain("交接蒸馏者")
-    expect(text).toContain("docs/handovers/R1-a-analysis.md")
+    expect(text).toContain("docs/R-01/P01-analysis/handover.md")
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
     expect(text).toContain("下一阶段为「m 迁移实现」")
-    expect(text).toContain("唯一可写的文件是 docs/handovers/R1-a-analysis.md")
+    expect(text).toContain("唯一可写的文件是 docs/R-01/P01-analysis/handover.md")
     expect(text).toContain("只蒸馏、")
     expect(text).toContain("不改动任何既有产物")
     expect(text).toContain("AUTO-DECISION")
@@ -219,31 +219,31 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
   })
 
   test("k 阶段无下一阶段: 供后续查阅措辞,仍要求四小节", () => {
-    const text = renderPhaseHandover({ phase: "k", handover: "docs/handovers/R1-k-knowledge.md" })
+    const text = renderPhaseHandover({ phase: "k", handover: "docs/R-01/P03-knowledge/handover.md" })
     expect(text).toContain("无下一阶段")
     expect(text).toContain("供后续轮次与人工查阅")
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
       expect(text).toContain(section)
     }
-    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以本轮 migration-kb 产物为准
+    // 无任务清单阶段(k)的兜底表述: 空 PLAN.md/CURRENT.md 缺失属预期,蒸馏以本阶段 kb.md 产物为准
     expect(text).toContain("PLAN.md 为空模板")
     expect(text).toContain("CURRENT.md 不存在,属预期")
-    expect(text).toContain("docs/R-NN/migration-kb.md")
+    expect(text).toContain("本阶段目录内的 kb.md")
     expect(text).toContain("无任务清单时跳过")
     // 有下一阶段时不带收尾措辞
-    const withNext = renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" })
+    const withNext = renderPhaseHandover({ phase: "a", handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" })
     expect(withNext).not.toContain("无下一阶段")
-    expect(withNext).not.toContain("migration-kb")
+    expect(withNext).not.toContain("kb.md")
   })
 
   test("不含 verified 字段描述(verify 已退役)", () => {
-    expect(renderPhaseHandover({ phase: "m", handover: "docs/handovers/R1-m-migrate.md" })).not.toContain("verified")
+    expect(renderPhaseHandover({ phase: "m", handover: "docs/R-01/P02-implement/handover.md" })).not.toContain("verified")
   })
 
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
-      renderPhaseHandover({ phase: "a", handover: "docs/handovers/R1-a-analysis.md", next: "m 迁移实现" }),
-      renderPhaseHandover({ phase: "k", handover: "docs/handovers/R1-k-knowledge.md" }),
+      renderPhaseHandover({ phase: "a", handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" }),
+      renderPhaseHandover({ phase: "k", handover: "docs/R-01/P03-knowledge/handover.md" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
@@ -251,15 +251,15 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
 })
 
 describe("renderKnowledge(k 阶段知识提取会话,P4 认领 --extract-knowledge)", () => {
-  const FILE = "docs/migration-kb/R1-migration-2026-01-01_00-00-00.md"
+  const FILE = "docs/R-01/P03-knowledge/kb.md"
 
   test("注入输出路径、来源清单与章节骨架;只读分析、唯一可写文件为输出路径", () => {
     const text = renderKnowledge({ file: FILE })
     expect(text).toContain(FILE)
-    // 来源指针(本轮轮次目录内的阶段台账与各阶段交接文档,归档目录内是阶段 PLAN 快照)
+    // 来源指针(本轮轮次目录内的阶段索引与各阶段目录的交接文档,阶段目录内另有 PLAN 快照)
     expect(text).toContain("docs/R-NN/phases.md")
-    expect(text).toContain("docs/R-NN/handovers/")
-    expect(text).toContain("docs/R-NN/<letter>-<name>/")
+    expect(text).toContain("docs/R-NN/P<nn>-<type>/handover.md")
+    expect(text).toContain("docs/R-NN/P<nn>-<type>/")
     expect(text).toContain("git log")
     // 章节骨架(规格书 §13 的本仓库化,Design Deviations 改以 AUTO-DECISION 为来源)
     for (const section of ["## Migration summary", "## API and type mapping", "## Implementation patterns", "## Pitfalls and edge cases", "## Reusable rules", "## Design deviations and key decisions", "## Verification evidence", "## References"]) {
@@ -298,12 +298,12 @@ describe("renderPriorKnowledge(前置知识提取会话)", () => {
     const withList = renderPriorKnowledge({
       file: "docs/prior-kb/R2-prior-x.md",
       brief: "意图",
-      distilled: ["docs/handovers/R1-m-migrate.md", "docs/migration-kb/R1-migration-a.md"],
+      distilled: ["docs/R-01/P02-implement/handover.md", "docs/R-01/P03-knowledge/kb.md"],
     })
     expect(withList).toContain("## Input: existing distilled artifacts (reference, do not restate)")
     expect(withList).toContain("must not be restated in this")
-    expect(withList).toContain("- docs/handovers/R1-m-migrate.md")
-    expect(withList).toContain("- docs/migration-kb/R1-migration-a.md")
+    expect(withList).toContain("- docs/R-01/P02-implement/handover.md")
+    expect(withList).toContain("- docs/R-01/P03-knowledge/kb.md")
     // 引用化同款约束: 已覆盖知识点以一行引用代替摘抄
     expect(withList).toContain("gets a one-line reference instead of an excerpt")
     const bare = renderPriorKnowledge({ file: "docs/prior-kb/R1-prior-x.md" })

@@ -14,7 +14,7 @@ This plan belongs to a migration/upgrade scenario, on the premise that externall
 
 ## 输入: 前序阶段交接
 
-以下是各前序阶段的交接蒸馏文档(位于本轮轮次目录 handovers/ 内,永久路径),是跨阶段
+以下是各前序阶段的交接蒸馏文档(位于本轮各阶段目录 P<nn>-<type>/handover.md,永久路径),是跨阶段
 记忆的唯一通道(代替前序原始 docs/,规划时不要试图读取它们;需要更多细节时按其中的
 产物索引自行取用):
 
@@ -66,12 +66,13 @@ docs/T-NNN/S<两位序号>/index.md),路径一经创建即为永久路径,不随
    并在正文说明原因;不产出有效任务会导致阻塞停机。
 
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
-shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md, audit report audit.md, fix checklist fix.md);
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);
 subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
 the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
 todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
 these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
 do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
-batches, coverage matrices, verification records and the like) go into the phase-docs/<phase letter>-<slug>/ subdirectory of this round's
-directory docs/R-NN/ (e.g. docs/R-03/phase-docs/a-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference
-it by that permanent path.
+batches, coverage matrices, verification records and the like) go into the current phase's directory docs/R-NN/P<nn>-<type>/ inside this
+round's directory (e.g. docs/R-03/P01-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference it by that
+permanent path. The phase index docs/R-NN/phases.md and each phase directory's todo.md / done.md are managed by the DRIVER alone — you must
+not create, rename or edit them.

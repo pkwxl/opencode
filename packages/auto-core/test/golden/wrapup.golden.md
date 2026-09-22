@@ -31,7 +31,7 @@ All subtasks of this task were completed one by one in earlier sessions; do not 
    references are caught by the DRIVER's reference check; line anchors can drift as the target file changes, and the DRIVER appends an
    @<sha> version marker to any anchor that no longer matches (the range is then valid only for the marked historical version) — do
    not alter references that already carry a marker yourself; do not reference the state files inside the round directory docs/R-NN/
-   (the ledger phases.md, the PLAN snapshots in the phase archives);
+   (the phase index phases.md, the phase state files todo.md/done.md and the PLAN snapshots in the phase directories);
 3. The task status is recorded by the DRIVER in one pass after the session ends. PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
    Result line: Write it when this task's description asks you to check, test, validate or accept work (an acceptance task), and whenever
@@ -60,12 +60,13 @@ containing only `<!-- auto: eof -->` as its last line of body text (only blank l
 sent back for correction; documents that already existed beforehand need no retrofit.
 
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
-shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md, audit report audit.md, fix checklist fix.md);
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);
 subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
 the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
 todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
 these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
 do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
-batches, coverage matrices, verification records and the like) go into the phase-docs/<phase letter>-<slug>/ subdirectory of this round's
-directory docs/R-NN/ (e.g. docs/R-03/phase-docs/a-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference
-it by that permanent path.
+batches, coverage matrices, verification records and the like) go into the current phase's directory docs/R-NN/P<nn>-<type>/ inside this
+round's directory (e.g. docs/R-03/P01-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference it by that
+permanent path. The phase index docs/R-NN/phases.md and each phase directory's todo.md / done.md are managed by the DRIVER alone — you must
+not create, rename or edit them.

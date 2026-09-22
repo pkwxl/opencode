@@ -147,9 +147,9 @@ describe("golden 渲染快照", () => {
     }
     golden(
       "phase-handover",
-      renderPhaseHandover({ phase: "m", handover: "docs/R-01/handovers/m-实现迁移.md", next: "t 测试验证" }),
+      renderPhaseHandover({ phase: "m", handover: "docs/R-01/P02-implement/handover.md", next: "P03-test 测试" }),
     )
-    golden("knowledge", renderKnowledge({ file: "docs/R-01/migration-kb.md", mode: migrate }))
+    golden("knowledge", renderKnowledge({ file: "docs/R-01/P04-knowledge/kb.md", mode: migrate }))
     golden(
       "prior-knowledge",
       renderPriorKnowledge({ file: "docs/R-01/temp-kb.md", brief: "二次迁移意图。", mode: migrate, distilled: ["docs/R-00/prior-kb.md"] }),

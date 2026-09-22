@@ -16,7 +16,7 @@
 //
 // Standardization boundary. The driver's protocol markers constrain exactly
 // two kinds of file: the index and state files it parses (PLAN.md, the phase
-// ledger, subtasks.md checklist items and their `Artifacts:` declarations, the
+// index, subtasks.md checklist items and their `Artifacts:` declarations, the
 // todo.md section anchors, the report result line) and the handoff documents
 // (status line, four handover sections). Everything else an AI session writes
 // under docs/T-NNN/ — context.md, subtask artifacts under S<nn>/, free phase
@@ -55,7 +55,9 @@ export type RolePolicy = {
 export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   // Driver-written state; no terminator (the driver owns the format).
   driverState: { eofScan: false, process: true },
-  // Driver-appended line protocol; a terminator would break append-only.
+  // The phase index (M3.3: replaced the append-only ledger under the same
+  // role): driver-written at round start, ticked at phase completion; the
+  // driver owns the format, so no terminator.
   ledger: { eofScan: false, process: true },
   // Carries its own final-state contract (status line / four sections).
   handoff: { eofScan: false, process: true },
@@ -86,25 +88,30 @@ export const PROTECTED_FILES = ["PLAN.md", "CURRENT.md", "opencode.json", ".open
 // <id>(-S<n>).testhandoff(-<n>).md.
 const HANDOFF_NAME = /^(?:.+\.)?(?:test)?handoff(?:-\d+)?\.md$/
 
-// Phase ledger: docs/R-NN/phases.md, legacy root docs/phases.md.
+// Phase index: docs/R-NN/phases.md (M3.3); the legacy root ledger
+// docs/phases.md classifies the same until the legacy removal (M3.7).
 const LEDGER = /^docs\/(?:R-\d+\/)?phases\.md$/
 
-// Phase handover distillations: docs/R-NN/handovers/<letter>-<slug>.md, legacy
-// docs/handovers/R<N>-<letter>-<slug>.md, and the pre-P2 placement inside the
-// phase archive (<archive>/handover.md, still read by the fallback ladder).
-const PHASE_HANDOVER = /^docs\/(?:(?:R-\d+\/)?handovers\/[^/]+|(?:R-\d+|phases)\/[a-z]-[^/]+\/handover)\.md$/
+// A phase directory docs/R-NN/P<nn>-<type> (plans/0047 §4).
+const PHASE_DIR = "R-\\d+/P\\d{2,}-[a-z][a-z0-9-]*"
 
-// Phase acceptance records inside a phase's free-artifact directory (modern
-// docs/R-NN/phase-docs/<letter>-<slug>/, legacy docs/phase-docs/R<N>-<letter>-<slug>/).
-// `acceptance-r<n>.md` is accepted too, leaving per-iteration naming open to
-// the M3 gate without a role change.
+// Phase handover distillations: docs/R-NN/P<nn>-<type>/handover.md; legacy
+// docs/handovers/R<N>-<letter>-<slug>.md and the pre-P2 placement inside the
+// legacy phase archive docs/phases/<letter>-<slug>/handover.md (M3.7).
+const PHASE_HANDOVER = new RegExp(`^docs/(?:${PHASE_DIR}/handover|handovers/[^/]+|phases/[a-z]-[^/]+/handover)\\.md$`)
+
+// Phase acceptance records inside the phase directory (legacy
+// docs/phase-docs/R<N>-<letter>-<slug>/ until M3.7). `acceptance-r<n>.md` is
+// accepted too, leaving per-iteration naming open to the gate without a role
+// change.
 const PHASE_ACCEPTANCE = new RegExp(
-  `^docs/(?:R-\\d+/phase-docs/[a-z]-[^/]+|phase-docs/R\\d+-[a-z]-[^/]+)/${PHASE_ACCEPTANCE_NAME.replace(".md", "")}(?:-r\\d+)?\\.md$`,
+  `^docs/(?:${PHASE_DIR}|phase-docs/R\\d+-[a-z]-[^/]+)/${PHASE_ACCEPTANCE_NAME.replace(".md", "")}(?:-r\\d+)?\\.md$`,
 )
 
 // Everything else the tool keeps under docs/: task documents (directory and
-// legacy flat names), round directories, legacy phase archives, handovers,
-// free phase documents and the legacy knowledge-document directories.
+// legacy flat names), round directories (phase directories with their state
+// files and standard artifacts included), and the legacy phase archives,
+// handovers, free phase documents and knowledge-document directories.
 const PROCESS_DOCS = /^docs\/(?:T-[^/]+|R-\d+|phases|handovers|phase-docs|migration-kb|prior-kb)(?:\/|$)/
 
 // The role of a path relative to the target directory. Pure: classification

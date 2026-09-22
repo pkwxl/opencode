@@ -15,7 +15,9 @@
 // - driverState:     driver-exclusive state (PLAN.md/CURRENT.md/.auto/*,
 //                    opencode.json, the project config); AI sessions must
 //                    never write these (read-only during a run, protect.ts).
-// - ledger:          append-only progress facts (phases.md ledger lines).
+// - ledger:          the round's phase index phases.md (order and membership;
+//                    driver-written, ticked on completion; M3.3 replaced the
+//                    append-only ledger lines under this role).
 // - handoff:         boundary handoff documents — the session handoff family
 //                    (handoff/testhandoff, status line) and the phase handover
 //                    distillations (four sections); protocol-shaped, eof-exempt.

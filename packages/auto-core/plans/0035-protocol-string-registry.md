@@ -241,3 +241,23 @@ Verification: `bun typecheck` clean; auto-core 1038 tests pass, auto 52 pass.
   `AGENTS.md` navigation line and `packages/auto/README.md` (user-facing).
   `docs/structure.md` stays as is until M6.2.
 - Verification: `bun typecheck` clean; auto-core 1039 pass, auto 52 pass 2 skip.
+
+## Amendment (2026-09-22, M3.3 / plans/0047 L4): the ledger line is retired, not flipped
+
+Root decision D14 regrouped M3 (0047 §9): the `- [done] <letter> …` ledger line
+(`LEDGER_ENTRY`) has no parser and no writer any more. Phase completion is the
+driver's `todo.md` → `done.md` rename in the phase directory
+`docs/R-NN/P<nn>-<type>/`, and `docs/R-NN/phases.md` is a phase index of
+`- [ ] P<nn> <type>` lines read by the unit-model index parser
+(`src/document/unit.ts parseIndex`). That line grammar is new English protocol
+from the start, so no dual-read exists for it. New file-name literals
+registered by the phase layout: `phases.md` (index), `todo.md` / `done.md`
+(phase state files), `handover.md`, `acceptance.md`, `PLAN.md` (the handover
+snapshot, interim until M3.4) and the type-standard artifact names of
+`src/phases/registry.ts` (`findings.md`, `design.md`, `decisions.md`,
+`test-report.md`, `verdict.md`, `kb.md` and the task-level ones).
+
+The rest of the old "M3.4 ledger face" is reassigned: the `## T-NNN` plan
+heading retires with PLAN.md in M3.4; `HANDOVER_SECTIONS`, the `phaseText`
+vocabulary, the knowledge-doc `完成` terminator, refcheck's exemption markers
+and the resume-gate interjection family flip in M3.8.

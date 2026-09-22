@@ -56,8 +56,8 @@ export type RunAllOpts = {
   mode?: ModeSpec
   // --phases 阶段化流程(设计文档 plans/0006-phases-design.md,来自配置): "m"(缺省)=
   // 无阶段声明,走既有单次运行路径(零改动);其余值启用阶段循环(D 节)——
-  // 推导当前阶段 → 规划会话填充 PLAN.md → 主循环执行 → 交接(归档+重置+台账+
-  // 提交)→ 下一阶段。
+  // 推导当前阶段 → 规划会话填充 PLAN.md → 主循环执行 → 交接(快照+重置+阶段
+  // 完成改名+提交)→ 下一阶段。
   phases?: string
   // config.source 迁移源参数(可选),注入阶段规划会话。
   source?: { dir: string; path: string }

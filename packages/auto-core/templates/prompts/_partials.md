@@ -58,15 +58,16 @@ containing only `<!-- auto: eof -->` as its last line of body text (only blank l
 sent back for correction; documents that already existed beforehand need no retrofit.
 ## doc-layout
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
-shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md, audit report audit.md, fix checklist fix.md);
+shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);
 subtask artifacts go to docs/T-NNN/S<two-digit index>/index.md, and a subtask-level test handover goes to testhandoff.md in the same directory;
 the subtask state files docs/T-NNN/S<two-digit index>/todo.md and done.md are managed by the DRIVER alone (the decompose session writes
 todo.md, and the DRIVER renames it to done.md when the subtask completes) — you must not create, rename or delete them yourself. Once created,
 these paths are permanent: never move or rename them. When referencing another task's documents, always use their permanent docs/T-NNN/… path;
 do not create flat task files at the top level of docs/. Phase-level free artifacts belonging to no single task (survey reports, design
-batches, coverage matrices, verification records and the like) go into the phase-docs/<phase letter>-<slug>/ subdirectory of this round's
-directory docs/R-NN/ (e.g. docs/R-03/phase-docs/a-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference
-it by that permanent path.
+batches, coverage matrices, verification records and the like) go into the current phase's directory docs/R-NN/P<nn>-<type>/ inside this
+round's directory (e.g. docs/R-03/P01-analysis/r3-baseline.md) — likewise a permanent path, fixed once written; always reference it by that
+permanent path. The phase index docs/R-NN/phases.md and each phase directory's todo.md / done.md are managed by the DRIVER alone — you must
+not create, rename or edit them.
 
 
 ## plan-duties-a
@@ -94,4 +95,4 @@ it by that permanent path.
 ## plan-duties-k
 
 - 完成迁移知识沉淀: 知识文档由 DRIVER 旁路提取会话产出
-  docs/R-NN/migration-kb.md(本轮轮次目录内固定名,永久路径,本阶段不经规划会话排任务)。
+  docs/R-NN/P<nn>-knowledge/kb.md(本阶段目录内的类型标准产物,永久路径,本阶段不经规划会话排任务)。

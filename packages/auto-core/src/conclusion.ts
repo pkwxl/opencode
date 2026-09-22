@@ -132,8 +132,8 @@ export async function phaseCloseLines(directory: string | undefined, letter: Pha
 
 // Round-complete line (§4.4): this round [`■ round N complete: total W (AI
 // A[, human wait Z]), [P phases / ] T tasks / S sessions`, tokens line];
-// phaseCount is only provided on the phased path (ledger done count = phases
-// handed over this round); the non-phased path omits the phase segment (it is
+// phaseCount is only provided on the phased path (the phase index done count =
+// phases handed over this round); the non-phased path omits the phase segment (it is
 // the single pseudo-phase "m" throughout, a count carries no information).
 // When history.rounds > 0, two cross-round cumulative lines are appended
 // (indented two spaces, "cumulative" prefix distinguishes them from the

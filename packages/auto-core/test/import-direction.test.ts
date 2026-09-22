@@ -48,8 +48,10 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // surface for artifact checks; roles = the role model (M2.3 — classifier,
   // per-role policies, protect list, handoff protocol checks); state = the
   // todo.md/done.md subtask state protocol (M2.3 move from subtask-state.ts);
-  // process-refs = the P1 prohibition scan (M2.3).
-  document: ["document/types", "document/roles", "document/spec", "document/state", "document/process-refs"],
+  // process-refs = the P1 prohibition scan (M2.3); unit = the unified unit
+  // model (M3.1 — refs, state scan, index parser, dependency checks), first
+  // consumed by the phase directory layout (M3.3).
+  document: ["document/types", "document/roles", "document/spec", "document/state", "document/process-refs", "document/unit"],
   // agent: types = the frozen interface (MA.1); opencode/server = the opencode
   // host factory (MA.3: `manage` → AgentHost), the one adapter-specific module
   // the driver may name — only to construct the host; everything after that
@@ -141,7 +143,7 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
   mode: [],
   template: [],
   prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "phases/registry", "plan", "resolve", "stuck", "switches", "template"],
-  phases: ["docpaths", "phases/registry", "plan", "template"],
+  phases: ["docpaths", "document/unit", "phases/registry", "plan", "template"],
   docpaths: [],
   doccheck: [],
   protect: ["document/roles"],

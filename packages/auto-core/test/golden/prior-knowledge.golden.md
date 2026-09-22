@@ -28,10 +28,10 @@ target.
 ## Inputs (read-only)
 
 - The whole docs/ tree: the document artifacts of the existing migration; inside earlier rounds' directories docs/R-NN/, the
-  handover documents (handovers/), the migration knowledge (migration-kb.md) and earlier rounds' prior knowledge (prior-kb.md)
-  are previously distilled conclusions — read them closely first (the R<N>- prefixed files of the old flat layout
-  docs/handovers/, docs/migration-kb/, docs/prior-kb/ are equally valid existing material); the phase archives inside the round
-  directories hold only stale state (phase PLAN snapshots) — when you need detail, fetch it through the handover document's `## 产物索引` (artifact index) section;
+  phase handover documents (P<nn>-<type>/handover.md), the migration knowledge (P<nn>-knowledge/kb.md) and earlier rounds'
+  prior knowledge (prior-kb.md) are previously distilled conclusions — read them closely first (the R<N>- prefixed files of the
+  old flat layout docs/handovers/, docs/migration-kb/, docs/prior-kb/ are equally valid existing material); the PLAN.md
+  snapshots inside the phase directories hold only stale state — when you need detail, fetch it through the handover document's `## 产物索引` (artifact index) section;
 - The migrated code itself (the current state on the target side): check the final state against the documents; where documents
   and code disagree, the code wins, and note the discrepancy in the document;
 - The migration source (if it exists inside the working directory): work out its layout and module boundaries, and record
@@ -95,7 +95,7 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Steps
 
-1. Read-only survey: read the handover/knowledge documents in docs/ and in each archive directory to grasp the whole existing
+1. Read-only survey: read the handover/knowledge documents in docs/ and in each round's phase directories to grasp the whole existing
    migration; when you need detail, fetch the archived artifacts through the artifact index — do not skip a part you have not read
    yet;
 2. Distil into writing: write the knowledge document along the section skeleton — distil rather than enumerate; one-off process

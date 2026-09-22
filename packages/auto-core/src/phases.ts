@@ -1,225 +1,292 @@
-// 阶段状态机(--phases 阶段化流程,设计文档 plans/0006-phases-design.md A/C/D/F 节)。
-// 阶段类型本身(名称、目录 slug、分解模板、职责、产物约定)归阶段类型注册表
-// src/phases/registry.ts(M3.2, plans/0047 §5);本模块在字母布局退役(M3.3)前仍以
-// 预置字母标识阶段。阶段状态是推导式的:
-// 阶段台账(新布局 = 轮内 docs/R-NN/phases.md,旧布局 = 根 docs/phases.md,读
-// 回落)记录已完成阶段,当前阶段 = phases 串中第一个未在台账出现的字母,零新增
-// 易腐状态;routePhase 由(台账, PLAN.md)两文件推导路由,无隐藏状态,中断恢复
-// 即重新求值。
-// 轮次专用目录(2026-09-08 方案,plans/ROUND_WORKDIR_PLAN.md):每轮一个
-// docs/R-NN/(轮首 establishRound 即建,其中一切落盘即永久——不改名、不改路径、
-// 不删除),取代"共用目录 + 文件名前缀 + 轮末搬移归档"(archiveRound 已删除)。
-// 存量兼容 = 只读回落:旧平铺 docs/handovers/R<N>-*.md、docs/prior-kb|migration-kb/
-// 平铺、docs/phases/round-N/ 旧归档与根 docs/phases.md 旧台账原地保留为读回落源;
-// 写只写新布局。
+// Phase state machine (--phases flow) over the phase directory layout (M3.3,
+// plans/0047 §3–§4; design lineage plans/0006-phases-design.md). A round
+// docs/R-NN/ holds a phase index phases.md (order and membership only, one line
+// `- [ ] P01 analysis` per phase) and one directory per phase, P<nn>-<type>/,
+// whose todo.md → done.md rename is the phase's completion (U2). Phase state is
+// derived: the current phase is the first index entry not done whose
+// prerequisites are done (nextReady; serial by default). There is no hidden
+// state, so an interrupted run simply re-evaluates. The index replaces the old
+// ledger and its `- [done] <letter> …` line protocol, which is retired.
+//
+// Phase *types* (name, duties, standard artifacts, gate) live in the registry
+// src/phases/registry.ts. Until custom types arrive (M3.6) every phase is a
+// builtin type with a preset letter, and the letter stays the runtime key of
+// model routing, stats buckets and step resume points — so a type occurs at
+// most once per round for now.
+//
+// Rounds: one docs/R-NN/ per round, created at round start (establishRound);
+// everything written inside is permanent. Until task units land (M3.4) the root
+// PLAN.md is still a symlink to the round's PLAN.md, and a phase handover keeps
+// a PLAN.md snapshot in the phase directory as the phase's task record.
 import { lstat, mkdir, readdir, rm, stat, symlink } from "node:fs/promises"
 import { readFileSync } from "node:fs"
-import { join, relative } from "node:path"
-import { PHASE_ACCEPTANCE_NAME, roundDir } from "./docpaths"
+import { join } from "node:path"
+import { PHASE_ACCEPTANCE_NAME, roundDir, roundDirName } from "./docpaths"
+import { nextReady, parseIndex, parsePhaseDir, renameUnitDone, scanUnitStates, UNIT_PENDING, unitDir, type UnitRef } from "./document/unit"
 import type { Plan } from "./plan"
 import { renderText } from "./template"
-import { PHASE_LETTERS, expandPhases, phaseTypeOfLetter, type PhaseLetter } from "./phases/registry"
+import {
+  BUILTIN_PHASE_TYPES,
+  PHASE_LETTERS,
+  expandPhases,
+  phaseType,
+  phaseTypeOfLetter,
+  unitArtifactSpecs,
+  type PhaseLetter,
+  type PhaseTypeEntry,
+} from "./phases/registry"
 import templateScaffold from "../templates/PLAN.scaffold.md" with { type: "file" }
 
 export type Phase = PhaseLetter
 
-// 唯一合法顺序(注册表预置字母序);校验与推导共用。
+// The only legal preset order (registry letter order); validation and derivation share it.
 export const PHASE_ORDER = PHASE_LETTERS.join("")
 
 export function phaseText(phase: Phase): string {
   return phaseTypeOfLetter(phase).name
 }
 
-// 校验 phases 取值: 注册表预置展开(expandPhases)——非空、字母均为预置、按预置序
-// 严格递增(子序列且不重复)、含 implement(m);非法返回 null(CLI 转退出码 1)。
+// Validate a phases value by registry preset expansion (expandPhases):
+// non-empty, preset letters only, strictly increasing in preset order, and
+// containing implement (m). null = invalid (the CLI turns it into exit 1).
 export function parsePhases(raw: string): Phase[] | null {
   return expandPhases(raw)?.map((entry) => entry.letter!) ?? null
 }
 
-// 阶段台账(新布局 = 轮内 docs/R-NN/phases.md;旧布局 = 根 docs/phases.md,存量
-// 读回落): 版本化、随仓库提交、人工可编辑。每行一个已完成阶段,
-// 行协议 `- [done] <letter> <名称> → <归档目录>(交接: <handover>)`,driver 只读
-// 字母一列,其余为人工可读信息;P2 前的旧行(交接指针指向归档目录内 handover.md)
-// 同样容忍。容忍空行与 # 注释/标题。文件缺失 = 流程尚未开始。台账行无法解析 /
-// 字母越界 / 重复 → throw(环境错误退出 1,报文给人工修订指引,见设计文档 C.3
-// 回退规程)。
-export type Ledger = { done: Phase[] }
+// —— Phase units ——
 
-const LEDGER_ENTRY = /^-\s*\[done\]\s+([a-z])\s+\S+\s+→\s+\S/
-
-// 阶段台账路径(相对目标目录): 本轮为新布局(docs/R-NN/ 已建)→ 轮内 phases.md;
-// 否则根 docs/phases.md(旧布局,轮末不再搬移、原地保留)。
-export async function ledgerPath(dir: string): Promise<string> {
-  const root = await roundRoot(dir, await currentRound(dir))
-  return root ? join(root, "phases.md") : join("docs", "phases.md")
+// One phase of a round: its unit identity (round + local id + type → the
+// directory docs/R-NN/P<nn>-<type>) plus the preset letter of its type.
+export type PhaseUnit = {
+  round: string
+  id: string
+  type: string
+  letter: Phase
+  dir: string
 }
 
-export async function readLedger(dir: string): Promise<Ledger> {
-  const file = await ledgerPath(dir)
-  const text = await Bun.file(join(dir, file)).text().catch(() => undefined)
-  if (text === undefined) return { done: [] }
-  return { done: parseLedger(text, file) }
+export function phaseRef(unit: PhaseUnit): UnitRef {
+  return { level: "phase", id: unit.id, round: unit.round, type: unit.type }
 }
 
-// 台账文本解析(readLedger 与轮次归档内 phases.md 共用): 容忍空行与 # 注释/标题,
-// 行协议 LEDGER_ENTRY(新旧两种交接指针形态均命中——正则只约束到归档目录列);
-// 字母越界/重复/协议行无法解析 → throw(人工修订指引)。
-function parseLedger(text: string, file: string): Phase[] {
-  const done: Phase[] = []
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith("#")) continue
-    const letter = LEDGER_ENTRY.exec(trimmed)?.[1]
-    if (!letter || !PHASE_ORDER.includes(letter) || done.includes(letter as Phase)) {
-      throw new Error(
-        `${file} ledger line cannot be parsed or is invalid: ${trimmed}` +
-          `(line protocol: - [done] <letter> <名称> → <归档目录>(交接: <handover>), the handover pointer column is optional; letters are non-repeating values from ${PHASE_ORDER}; please fix the file manually, see README for the rollback procedure)`,
-      )
+// Display label and directory name: P02-design.
+export function phaseLabel(unit: PhaseUnit): string {
+  return `${unit.id}-${unit.type}`
+}
+
+function makeUnit(round: string, id: string, entry: PhaseTypeEntry): PhaseUnit {
+  const unit = { round, id, type: entry.type, letter: entry.letter!, dir: "" }
+  unit.dir = unitDir(phaseRef(unit))
+  return unit
+}
+
+const phaseId = (position: number) => `P${String(position).padStart(2, "0")}`
+
+// Paths inside a phase directory (repository-relative, permanent once written).
+export const phaseHandoverDoc = (unit: PhaseUnit): string => join(unit.dir, "handover.md")
+// The human's acceptance record (phaseAcceptance role, M2.3); no reader until
+// the acceptance gate (0036 D8), which also owns the marker literal.
+export const phaseAcceptanceDoc = (unit: PhaseUnit): string => join(unit.dir, PHASE_ACCEPTANCE_NAME)
+// Snapshot of the phase's PLAN.md, written at handover. Interim: PLAN.md is
+// still the task carrier until M3.4 replaces it with the phase's tasks.md.
+export const phaseArchivedPlan = (unit: PhaseUnit): string => join(unit.dir, "PLAN.md")
+// The phase type's standard artifacts resolved into this phase's directory.
+export const phaseArtifacts = (unit: PhaseUnit) => unitArtifactSpecs(phaseTypeOfLetter(unit.letter).phaseArtifacts, unit.dir)
+
+// —— Phase index (docs/R-NN/phases.md) ——
+
+export const PHASE_INDEX_NAME = "phases.md"
+
+export function phaseIndexPath(round: number): string {
+  return join(roundDir(round), PHASE_INDEX_NAME)
+}
+
+const INDEX_NOTE =
+  "Phase index (opencode-auto): order and membership only. A phase is complete when its directory holds done.md; the driver ticks the line when it renames todo.md."
+
+export function renderPhaseIndex(round: string, units: readonly PhaseUnit[], done: ReadonlySet<string> = new Set()): string {
+  const lines = units.map((unit) => `- [${done.has(unit.id) ? "x" : " "}] ${unit.id} ${unit.type}`)
+  return [`# Phases (${round})`, "", INDEX_NOTE, "", ...lines, ""].join("\n")
+}
+
+// A phase's todo.md as written at round start: the qualified id and display
+// name as the title, the field block (Type), the eof terminator.
+export function renderPhaseTodo(unit: PhaseUnit): string {
+  return [`# ${unit.round}.${unit.id}: ${phaseText(unit.letter)}`, "", `Type: ${unit.type}`, "", "<!-- auto: eof -->", ""].join("\n")
+}
+
+export type PhaseState = {
+  round: number
+  index: string
+  phases: PhaseUnit[]
+  // Ids whose done.md exists.
+  done: Set<string>
+}
+
+// Read a round's phase index and the state files of its phases (round defaults
+// to the current round). undefined = no index (the round was never
+// established). Throws with fix-it guidance when the index is unusable: a
+// problem line, an unknown type, a type listed twice, or a phase directory with
+// both or neither of todo.md / done.md.
+export async function readPhases(dir: string, round?: number): Promise<PhaseState | undefined> {
+  const n = round ?? (await currentRound(dir))
+  const index = phaseIndexPath(n)
+  const text = await Bun.file(join(dir, index)).text().catch(() => undefined)
+  if (text === undefined) return undefined
+  const parsed = parseIndex(text, "phase")
+  const problems = [...parsed.problems]
+  const phases: PhaseUnit[] = []
+  const seen = new Set<string>()
+  for (const entry of parsed.entries) {
+    const type = entry.title.split(/\s+/)[0] ?? ""
+    const found = phaseType(type)
+    if (!found?.letter) {
+      problems.push(`${entry.id}: unknown phase type "${type}" (known: ${BUILTIN_PHASE_TYPES.map((item) => item.type).join(", ")})`)
+      continue
     }
-    done.push(letter as Phase)
+    if (seen.has(type)) {
+      problems.push(`${entry.id}: phase type ${type} is listed twice (a repeated type needs custom phase types, not supported yet)`)
+      continue
+    }
+    seen.add(type)
+    phases.push(makeUnit(roundDirName(n), entry.id, found))
   }
-  return done
+  if (!phases.length && !problems.length) problems.push("no phases listed")
+  const scan = await scanUnitStates(dir, phases.map(phaseRef))
+  for (const bad of scan.illegal) {
+    const unit = phases.find((item) => item.id === bad.id)!
+    problems.push(`${unit.dir}/ has ${bad.kind === "both" ? "both todo.md and done.md" : "neither todo.md nor done.md"}`)
+  }
+  if (problems.length) {
+    throw new Error(
+      `phase index ${index} is invalid: ${problems.join("; ")}. ` +
+        "Index lines are `- [ ] P<nn> <type>`, each with a directory P<nn>-<type>/ holding exactly one of todo.md / done.md; fix it manually and re-run",
+    )
+  }
+  return { round: n, index, phases, done: scan.done }
 }
 
-// 各阶段归档目录英文名(注册表 slug;台账行、归档目录与交接文档共用)。
-const slug = (phase: Phase): string => phaseTypeOfLetter(phase).slug
-
-// 阶段归档目录(相对目标目录): 新布局 = 轮内 docs/R-NN/<letter>-<slug>/;旧布局
-// = docs/phases/<letter>-<slug>/(legacyPhaseArchive,存量读回落)。只收过期状态
-// 文件(阶段 PLAN.md 快照)。
-export async function phaseArchive(dir: string, round: number, phase: Phase): Promise<string> {
-  const root = await roundRoot(dir, round)
-  return root ? `${root}/${phase}-${slug(phase)}` : legacyPhaseArchive(phase)
+// The phase to work on: the first ready one (nextReady over the index with its
+// default serial dependencies). undefined = every phase is done.
+export function currentPhase(state: Pick<PhaseState, "phases" | "done">): PhaseUnit | undefined {
+  const id = nextReady(state.phases.map((unit) => ({ id: unit.id })), state.done)
+  return state.phases.find((unit) => unit.id === id)
 }
 
-// 旧布局阶段归档目录(读回落): docs/phases/<letter>-<slug>/
-export function legacyPhaseArchive(phase: Phase): string {
-  return `docs/phases/${phase}-${slug(phase)}`
+// Letters of the completed phases in index order (the shells' continue
+// precheck and prefix guard compare it against letter presets).
+export function doneLetters(state: Pick<PhaseState, "phases" | "done">): string {
+  return state.phases
+    .filter((unit) => state.done.has(unit.id))
+    .map((unit) => unit.letter)
+    .join("")
 }
 
-// 阶段交接文档路径(相对目标目录,永久,落定不移动): 新布局 = 轮内
-// docs/R-NN/handovers/<letter>-<slug>.md(文件名去 R<N>- 前缀——轮次已由轮目录
-// 表达);旧布局 = docs/handovers/R<N>-<letter>-<slug>.md(legacyHandoverDoc,
-// 存量读回落)。构造点在本文件而非 docpaths.ts: 文件名依赖阶段 slug 表
-// (slug 表归阶段域,避免 docpaths→phases 反向依赖)。P2 前的交接位于
-// 阶段归档目录 <letter>-<slug>/handover.md,读点经读回落兼容(prevRoundDigest/
-// planPhase,迁移完成后自然消亡)。
-export async function handoverDoc(dir: string, round: number, phase: Phase): Promise<string> {
-  const root = await roundRoot(dir, round)
-  return root ? `${root}/handovers/${phase}-${slug(phase)}.md` : legacyHandoverDoc(round, phase)
+// Write or update a round's phase index from a phases preset: the index plus a
+// directory with todo.md per phase. Idempotent. On an existing index the
+// matching prefix (same position, same type) is kept; the rest is replaced,
+// which is allowed only for phases that are not done and whose directory holds
+// nothing but todo.md — anything else throws before a file is touched.
+export async function syncPhaseIndex(dir: string, round: number, phases: string): Promise<PhaseUnit[]> {
+  const desired = expandPhases(phases)
+  if (!desired) throw new Error(`invalid phases value "${phases}"`)
+  const name = roundDirName(round)
+  const units = desired.map((entry, i) => makeUnit(name, phaseId(i + 1), entry))
+  const existing = await readPhases(dir, round)
+  let keep = 0
+  if (existing) {
+    while (keep < existing.phases.length && keep < units.length && existing.phases[keep]!.dir === units[keep]!.dir) keep++
+    for (const stale of existing.phases.slice(keep)) {
+      if (existing.done.has(stale.id)) throw new Error(`phases "${phases}" would drop the completed phase ${stale.dir}/ from ${existing.index}`)
+      const held = (await readdir(join(dir, stale.dir)).catch(() => [] as string[])).filter((file) => file !== UNIT_PENDING)
+      if (held.length) {
+        throw new Error(`phases "${phases}" would drop ${stale.dir}/ from ${existing.index}, but it already holds work (${held.join(", ")}); move it away manually first`)
+      }
+    }
+    if (keep === existing.phases.length && keep === units.length) return existing.phases
+    for (const stale of existing.phases.slice(keep)) await rm(join(dir, stale.dir), { recursive: true, force: true })
+  }
+  for (const unit of units.slice(keep)) {
+    await mkdir(join(dir, unit.dir), { recursive: true })
+    const todo = join(dir, unit.dir, UNIT_PENDING)
+    if (!(await Bun.file(todo).exists())) await Bun.write(todo, renderPhaseTodo(unit))
+  }
+  await Bun.write(join(dir, phaseIndexPath(round)), renderPhaseIndex(name, units, existing?.done))
+  return units
 }
 
-// 旧布局交接文档(读回落): docs/handovers/R<N>-<letter>-<slug>.md
-export function legacyHandoverDoc(round: number, phase: Phase): string {
-  return `docs/handovers/R${round}-${phase}-${slug(phase)}.md`
+// Record a phase as complete: rename its todo.md to done.md and tick its index
+// line (U2/U3). This is the single choke point for phase completion — the
+// handover path and its interruption recovery both go through it — so a future
+// precondition (the 0036 D8 acceptance gate) belongs inside it, where neither
+// path can bypass it. Idempotent.
+export async function completePhase(dir: string, unit: PhaseUnit): Promise<void> {
+  await renameUnitDone(dir, phaseRef(unit))
+  const index = join(dir, "docs", unit.round, PHASE_INDEX_NAME)
+  const text = await Bun.file(index).text().catch(() => undefined)
+  if (text === undefined) return
+  const line = new RegExp(`^([-*] \\[) (\\]\\s+${unit.id}(?::|\\s|$))`, "m")
+  if (line.test(text)) await Bun.write(index, text.replace(line, "$1x$2"))
 }
 
-// 阶段级自由产物目录(永久,落定不移动): a/d/t/v 阶段中不属于任何单个任务的
-// 勘测/设计/覆盖矩阵/验收记录类文档。新布局 = 轮内 docs/R-NN/phase-docs/
-// <letter>-<slug>/;旧布局 = docs/phase-docs/R<N>-<letter>-<slug>/
-// (legacyPhaseDocsDir,存量读回落)。与 handoverDoc 交接蒸馏按同名对位
-// (蒸馏 = <slug>.md,原始产物 = 同名目录)。构造点在本文件(同 handoverDoc)。
-export async function phaseDocsDir(dir: string, round: number, phase: Phase): Promise<string> {
-  const root = await roundRoot(dir, round)
-  return root ? `${root}/phase-docs/${phase}-${slug(phase)}` : legacyPhaseDocsDir(round, phase)
-}
-
-// 旧布局阶段级自由产物目录(读回落): docs/phase-docs/R<N>-<letter>-<slug>/
-export function legacyPhaseDocsDir(round: number, phase: Phase): string {
-  return `docs/phase-docs/R${round}-${phase}-${slug(phase)}`
-}
-
-// A phase's acceptance record (the phaseAcceptance role, M2.3, plans/0045 D6):
-// <phaseDocsDir>/acceptance.md — one per phase per round, the round already
-// expressed by the directory. Written by a human; no reader until the M3
-// acceptance gate (0036 D8), which also owns the acceptance marker literal.
-export async function phaseAcceptanceDoc(dir: string, round: number, phase: Phase): Promise<string> {
-  return `${await phaseDocsDir(dir, round, phase)}/${PHASE_ACCEPTANCE_NAME}`
-}
-
-// 台账追加(交接完成后、统一提交前调用;C.1 行协议)。查重后追加,重复调用幂等
-// ——交接在"台账追加之前"中断时,恢复路径安全补写。文件缺失时带头部注释创建。
-// 台账路径 = ledgerPath(新布局轮内 phases.md,旧布局根 phases.md);交接指针 =
-// 本轮永久路径 handoverDoc(currentRound, phase)。
-export async function appendLedger(dir: string, phase: Phase): Promise<void> {
-  if ((await readLedger(dir)).done.includes(phase)) return
-  const round = await currentRound(dir)
-  const file = await ledgerPath(dir)
-  const existing = await Bun.file(join(dir, file)).text().catch(() => undefined)
-  const header = "# 阶段台账(opencode-auto 维护;人工修订见 README)"
-  const line = `- [done] ${phase} ${phaseText(phase)} → ${await phaseArchive(dir, round, phase)}/(交接: ${await handoverDoc(dir, round, phase)})`
-  await Bun.write(join(dir, file), `${(existing ?? header).trimEnd()}\n\n${line}\n`)
-}
-
-// 阶段路由(D.2,镜像 routeFinal 风格的纯路由函数): blocked = 台账非法等环境
-// 错误(CLI 转退出码 1,报文给人工修订指引)。
+// Phase routing (D.2): blocked = an environment error such as an invalid or
+// missing index (the CLI turns it into exit 1 with fix-it guidance).
 export type PhaseRoute =
-  | { type: "complete" } // 全部阶段完成
-  | { type: "plan"; phase: Phase } // PLAN.md 空(模板态/已重置)→ 开规划会话
-  | { type: "execute"; phase: Phase } // 主循环有任务可跑
-  | { type: "handover"; phase: Phase } // 本阶段任务全 done → 进入交接
+  | { type: "complete" } // every phase done
+  | { type: "plan"; phase: PhaseUnit } // PLAN.md empty (scaffold / reset) → planning session
+  | { type: "execute"; phase: PhaseUnit } // tasks left to run
+  | { type: "handover"; phase: PhaseUnit } // all of this phase's tasks done → handover
   | { type: "blocked"; reason: string }
 
-export async function routePhase(dir: string, plan: Plan, phases: string): Promise<PhaseRoute> {
-  let ledger: Ledger
+export async function routePhase(dir: string, plan: Plan): Promise<PhaseRoute> {
+  let state: PhaseState | undefined
   try {
-    ledger = await readLedger(dir)
+    state = await readPhases(dir)
   } catch (error) {
     return { type: "blocked", reason: error instanceof Error ? error.message : String(error) }
   }
-  const declared = [...phases] as Phase[]
-  const outside = ledger.done.filter((letter) => !declared.includes(letter))
-  if (outside.length) {
+  if (!state) {
     return {
       type: "blocked",
-      reason:
-        `${await ledgerPath(dir)} ledger records phase letters outside phases(${phases}): ${outside.join(", ")}. ` +
-        "Please fix the file manually (see README for the rollback procedure) and re-run",
+      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with opencode-auto init (or continue) first`,
     }
   }
-  const phase = (PHASE_ORDER.split("") as Phase[]).find((letter) => declared.includes(letter) && !ledger.done.includes(letter))
+  const phase = currentPhase(state)
   if (!phase) return { type: "complete" }
   if (plan.tasks.some((task) => task.status !== "done")) return { type: "execute", phase }
   if (plan.tasks.length) return { type: "handover", phase }
   return { type: "plan", phase }
 }
 
-// 阶段进度行(B.2/B.3,run 启动横幅与 status 共用): ✓ = 台账已记录,▶ = 当前
-// 阶段,其余字母 = 未开始。
-export function formatPhases(phases: string, done: Phase[]): string {
-  let current = true
-  return ([...phases] as Phase[])
-    .map((letter) => {
-      if (done.includes(letter)) return `${letter}✓`
-      if (current) {
-        current = false
-        return `${letter}▶`
-      }
-      return letter
-    })
+// Phase progress line (run banner and status): ✓ = done, ▶ = current.
+export function formatPhases(state: Pick<PhaseState, "phases" | "done">): string {
+  const current = currentPhase(state)
+  return state.phases
+    .map((unit) => `${phaseLabel(unit)}${state.done.has(unit.id) ? "✓" : unit === current ? "▶" : ""}`)
     .join(" ")
 }
 
-// 阶段空模板(PLAN.scaffold.md): 阶段化流程下 PLAN.md 的初始态
-// 与交接重置态——不含任何任务,routePhase 由此推导出 plan 路由(D.2)。init 对
-// phases ≠ "m" 的项目亦以此为 PLAN.md 模板(B.1)。
+// Empty phase template (PLAN.scaffold.md): PLAN.md's initial and post-handover
+// state under the phased flow — no tasks, so routePhase derives the plan route
+// (D.2). init also uses it as the PLAN.md template when phases ≠ "m" (B.1).
 export function renderPlanScaffold(): string {
   return renderText(readFileSync(templateScaffold, "utf8"), {})
 }
 
-// —— 轮次(续轮迁移,设计文档 plans/0006-phases-design.md M 节;轮次专用目录方案)——
+// —— Rounds (plans/0006-phases-design.md §M; round-directory plan) ——
 
-// 旧布局轮次归档目录名(docs/phases/round-<N>/): 轮次专用目录方案前的完成轮
-// 归档,原地保留为读回落源(存量兼容 = 只读回落,绝不搬移旧文件)。
+// Pre-round-directory archive name (docs/phases/round-<N>/), still counted for
+// round numbering until the legacy removal (M3.7).
 const LEGACY_ROUND_RE = /^round-(\d+)$/
 
-// 新布局轮次专用目录名(docs/R-NN/): R 后两位零填充,自然进位;轮首即建。
+// Round directory name docs/R-NN/: two-digit zero padding, natural carry;
+// created at round start.
 const ROUND_DIR_RE = /^R-(\d+)$/
 
-// 当前轮次(推导式,零新增持久化状态): 轮次专用目录 docs/R-NN/ 轮首即建,故存在
-// R 系目录时当前轮 = R 系目录最大号(无 +1);无 R 系目录时按旧语义回落
-// (docs/phases/round-<N> 归档最大号 + 1)——混合项目(旧 round-1..4 归档 + 新
-// R-05)自然续号,全新项目(两者皆无)= 第 1 轮。
+// Current round (derived, no persisted state): round directories are created
+// at round start, so with any R-NN present the current round is the highest
+// (no +1); without one, the legacy count (docs/phases/round-<N> max + 1)
+// applies — a brand-new project is round 1.
 export async function currentRound(dir: string): Promise<number> {
   const entries = await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])
   let modern = 0
@@ -237,9 +304,9 @@ export async function currentRound(dir: string): Promise<number> {
   return max + 1
 }
 
-// 新一轮轮号(轮首建立用): 当前轮已被占用(R-NN 目录已建,或旧布局根台账已在)
-// = 当前轮 + 1;否则当前推导值即新一轮(全新项目 = 1,旧归档已搬走的完成轮自然
-// 续号)。
+// Number of a new round (for round start): the current round + 1 when it is
+// taken (its R-NN directory exists, or a legacy root ledger is present),
+// otherwise the current derived value (a new project = 1).
 export async function nextRound(dir: string): Promise<number> {
   const round = await currentRound(dir)
   if (await roundRoot(dir, round)) return round + 1
@@ -247,39 +314,42 @@ export async function nextRound(dir: string): Promise<number> {
   return occupied ? round + 1 : round
 }
 
-// 轮次布局根(相对目标目录): 轮次专用目录 docs/R-NN/ 存在 = 该轮为新布局(轮内
-// 路径);否则为旧布局(平铺 + docs/phases/),读点回落旧路径。
+// A round's directory (repository-relative) when it exists.
 export async function roundRoot(dir: string, round: number): Promise<string | undefined> {
   const root = roundDir(round)
   return (await stat(join(dir, root)).then((s) => s.isDirectory(), () => false)) ? root : undefined
 }
 
-// 轮首建立(轮次专用目录 docs/R-NN,轮首即建、其中一切落盘即永久——不改名、不改
-// 路径、不删除): ① 建轮目录(已存在 = 幂等续跑,既有内容不重写);② 轮内
-// PLAN.md 初值 = opts.plan ?? 根 PLAN.md 现状(普通文件——模式互切(m → 阶段化)
-// 场景拷贝为初值) ?? 阶段空模板;③ 根 PLAN.md 重建为指向轮内 PLAN.md 的相对
-// 符号链接(单一事实源、零漂移,会话与 runner/protect 的 "PLAN.md" 路径认知零改动,
-// 写经链接落轮内;创建失败的环境兜底为副本,linked = false 由调用方日志说明);
-// ④ 根 AGENTS.md 快照写入轮内 AGENTS.md.bak(.bak 后缀避免访问轮目录文档时被当
-// 指令自动加载;轮首一次性写入,已存在不重写)。
-// phases = "m" 纯人工模式(无轮次)不调用本函数,根 PLAN.md 维持普通文件。
-// 轮号缺省 = currentRound(init/首跑场景);开启新一轮时调用方传 nextRound。
+// Round start (docs/R-NN, created at round start; everything inside is
+// permanent — never renamed, moved or deleted):
+// ① create the round directory (existing = idempotent resume, contents kept);
+// ② the phase index and phase directories from `phases` (syncPhaseIndex);
+// ③ the round's PLAN.md initial value = opts.plan ?? the root PLAN.md's content
+//    (a regular file — the m → phased switch copies it) ?? the empty scaffold;
+// ④ the root PLAN.md re-created as a relative symlink to the round's PLAN.md
+//    (one source of truth; sessions and protect keep addressing "PLAN.md"; a
+//    failed symlink falls back to a copy, reported as linked = false);
+// ⑤ a snapshot of the root AGENTS.md as AGENTS.md.bak (the suffix keeps it from
+//    loading as instructions; written once).
+// Not called for phases = "m" (no rounds; the root PLAN.md stays a regular file).
+// The round defaults to currentRound (init / first run); a new round passes nextRound.
 export async function establishRound(
   dir: string,
-  opts: { round?: number; plan?: string } = {},
+  opts: { phases: string; round?: number; plan?: string },
 ): Promise<{ round: number; root: string; linked: boolean }> {
   const round = opts.round ?? (await currentRound(dir))
   const root = roundDir(round)
   await mkdir(join(dir, root), { recursive: true })
+  await syncPhaseIndex(dir, round, opts.phases)
   const planFile = join(root, "PLAN.md")
   if (!(await Bun.file(join(dir, planFile)).exists())) {
     const rootPlan = join(dir, "PLAN.md")
-    // 根 PLAN.md 是指向某轮目录的符号链接时,其内容即该轮 PLAN,不作为初值来源。
+    // A root PLAN.md that is a symlink into some round is that round's plan, not an initial value.
     const isLink = await lstat(rootPlan).then((s) => s.isSymbolicLink(), () => false)
     const existing = isLink ? undefined : await Bun.file(rootPlan).text().catch(() => undefined)
     await Bun.write(join(dir, planFile), opts.plan ?? existing ?? renderPlanScaffold())
   }
-  // 重建根链接: 目标内容 = 轮内 PLAN.md 现状(幂等——重复建立不漂移)。
+  // Re-create the root link; the target content is the round's PLAN.md (idempotent).
   const content = await Bun.file(join(dir, planFile)).text()
   await rm(join(dir, "PLAN.md"), { force: true })
   let linked = true
@@ -297,124 +367,53 @@ export async function establishRound(
   return { round, root, linked }
 }
 
-// 上一轮结论摘录(注入新一轮首个阶段规划会话,本轮台账为空时): ① 各阶段归档目录
-// 索引;② 最终完成阶段的交接文档全文(新布局读轮内 handovers/,旧布局读永久路径
-// docs/handovers/,P2 前的轮次在归档目录内,逐级读回落);③ 迁移知识文档全文
-// (新布局读轮内 migration-kb.md;旧布局 docs/migration-kb/ 的 R<N>- 前缀文件,
-// 无前缀存量宽松归入上一轮,P2 前轮次归档内 migration-kb/ 一并读回落收集)。
-// 与"蒸馏产物是唯一通道"的注入纪律一致: 原始产物不注入,会话可按索引自行取用
-// (归档/轮目录就在工作目录内)。无上一轮痕迹 → undefined。
+// Knowledge documents of a round: the standard artifacts of its knowledge
+// phase directories (P<nn>-knowledge/kb.md), repository-relative.
+export async function roundKnowledgeDocs(dir: string, round: number): Promise<string[]> {
+  const root = roundDir(round)
+  const knowledge = phaseType("knowledge")!
+  const names = (await readdir(join(dir, root), { withFileTypes: true }).catch(() => []))
+    .filter((entry) => entry.isDirectory() && parsePhaseDir(entry.name)?.type === knowledge.type)
+    .map((entry) => entry.name)
+    .sort()
+  return names.flatMap((name) => unitArtifactSpecs(knowledge.phaseArtifacts, join(root, name)).map((spec) => spec.path))
+}
+
+// Previous round's conclusions (injected into the new round's first phase
+// planning session): ① an index of its phase directories; ② the full handover
+// of its last completed phase; ③ its knowledge documents in full. Only
+// distilled documents are injected; the session can open anything else from
+// the index. No previous round directory, or nothing in it → undefined.
+// Lenient: an unusable index only drops ②, since a digest is prompt input and
+// strict failure belongs to the loop's own readPhases.
 export async function prevRoundDigest(dir: string): Promise<string | undefined> {
   const prev = (await currentRound(dir)) - 1
   if (prev < 1) return undefined
-  const modern = await roundRoot(dir, prev)
-  if (modern) return prevRoundModernDigest(dir, modern, prev)
-  return prevRoundLegacyDigest(dir, prev)
-}
-
-// 新布局上一轮摘录: 轮目录 docs/R-NN/ 自包含——台账、阶段归档、交接与知识文档
-// 全部在轮内,无需任何回落。
-async function prevRoundModernDigest(dir: string, root: string, prev: number): Promise<string | undefined> {
-  const abs = join(dir, root)
-  const done = await roundDoneLetters(abs)
-  const dirs = (await readdir(abs, { withFileTypes: true }).catch(() => []))
-    .filter((entry) => entry.isDirectory() && new RegExp(`^[${PHASE_ORDER}]-`).test(entry.name))
+  const root = await roundRoot(dir, prev)
+  if (!root) return undefined
+  const dirs = (await readdir(join(dir, root), { withFileTypes: true }).catch(() => []))
+    .filter((entry) => entry.isDirectory() && parsePhaseDir(entry.name))
     .map((entry) => entry.name)
     .sort()
-  const last = done[done.length - 1]
-  const handover = last ? `${root}/handovers/${last}-${slug(last)}.md` : undefined
+  const state = await readPhases(dir, prev).catch(() => undefined)
+  const last = state?.phases.filter((unit) => state.done.has(unit.id)).at(-1)
+  const handover = last ? phaseHandoverDoc(last) : undefined
   const handoverText = handover ? await Bun.file(join(dir, handover)).text().catch(() => undefined) : undefined
-  const knowledge = `${root}/migration-kb.md`
-  const knowledgeText = await Bun.file(join(dir, knowledge)).text().catch(() => "")
-  if (!dirs.length && !handoverText?.trim() && !knowledgeText.trim()) return undefined
-  const parts = [`### 上一轮(第 ${prev} 轮)阶段归档索引(${root}/)\n`]
+  const knowledge: Array<{ file: string; text: string }> = []
+  for (const file of await roundKnowledgeDocs(dir, prev)) {
+    const text = await Bun.file(join(dir, file)).text().catch(() => "")
+    if (text.trim()) knowledge.push({ file, text })
+  }
+  if (!dirs.length && !handoverText?.trim() && !knowledge.length) return undefined
+  const parts = [`### 上一轮(第 ${prev} 轮)阶段目录索引(${root}/)\n`]
   parts.push(dirs.map((name) => `- ${root}/${name}/`).join("\n"))
   if (handover && handoverText?.trim()) {
     parts.push(`\n### 上一轮最终交接(${handover})\n`)
     parts.push(handoverText.trim())
   }
-  if (knowledgeText.trim()) {
-    parts.push(`\n### 上一轮迁移知识(${knowledge})\n`)
-    parts.push(knowledgeText.trim())
-  }
-  return parts.join("\n")
-}
-
-// 旧布局上一轮摘录(存量读回落): 轮次归档 docs/phases/round-<N>/ 索引 + 永久路径
-// 交接(归档目录内读回落)+ 平铺知识文档收集。
-async function prevRoundLegacyDigest(dir: string, prev: number): Promise<string | undefined> {
-  const root = join(dir, "docs", "phases", `round-${prev}`)
-  const done = await roundDoneLetters(root)
-  const dirs = (await readdir(root, { withFileTypes: true }).catch(() => []))
-    .filter((entry) => entry.isDirectory() && !LEGACY_ROUND_RE.test(entry.name))
-    .map((entry) => entry.name)
-    .sort()
-  const knowledge = await collectRoundKnowledge(dir, root, prev)
-  if (!done.length && !dirs.length && !knowledge.length) return undefined
-  const rel = join("docs", "phases", `round-${prev}`)
-  const parts = [`### 上一轮(第 ${prev} 轮)阶段归档索引(${rel}/)\n`]
-  parts.push(dirs.map((name) => `- ${rel}/${name}/`).join("\n"))
-  const last = done[done.length - 1]
-  if (last) {
-    // 最终交接自永久路径读取(D3);缺失时回落 P2 前的归档目录内 handover.md。
-    const handover = legacyHandoverDoc(prev, last)
-    let text = await Bun.file(join(dir, handover)).text().catch(() => undefined)
-    if (text === undefined) {
-      const lastDir = dirs.find((name) => name.startsWith(`${last}-`))
-      if (lastDir) text = await Bun.file(join(root, lastDir, "handover.md")).text().catch(() => undefined)
-    }
-    if (text?.trim()) {
-      parts.push(`\n### 上一轮最终交接(${handover})\n`)
-      parts.push(text.trim())
-    }
-  }
   for (const doc of knowledge) {
-    parts.push(`\n### 上一轮迁移知识(${doc.rel})\n`)
+    parts.push(`\n### 上一轮迁移知识(${doc.file})\n`)
     parts.push(doc.text.trim())
   }
   return parts.join("\n")
-}
-
-// 归档内台账的完成字母(宽松解析: 坏行忽略不 throw——digest 是提示词输入,严格
-// 失败属于读 Ledger 的职责,这里不应让规划会话因归档笔误而中断)。
-async function roundDoneLetters(root: string): Promise<Phase[]> {
-  const text = await Bun.file(join(root, "phases.md")).text().catch(() => "")
-  const done: Phase[] = []
-  for (const line of text.split("\n")) {
-    const letter = LEDGER_ENTRY.exec(line.trim())?.[1]
-    if (letter && PHASE_ORDER.includes(letter) && !done.includes(letter as Phase)) done.push(letter as Phase)
-  }
-  return done
-}
-
-// 迁移知识文档收集(上一轮): ① docs/migration-kb/(永久路径)内 R<prev>- 前缀的
-// 非空 .md——本轮次知识;无 R<N>- 前缀的存量(P2 前布局)宽松归入上一轮一并收集;
-// 前几轮(R<M>-,M ≠ prev)不收集,其结论已蒸馏进上一轮知识。② P2 前的轮次归档
-// 内 migration-kb/(交接归档/中断残留两处)读回落收集——新轮次归档不再含
-// migration-kb,自然空集。
-async function collectRoundKnowledge(dir: string, root: string, prev: number): Promise<Array<{ rel: string; text: string }>> {
-  const docs: Array<{ rel: string; text: string }> = []
-  const kbRoot = join(dir, "docs", "migration-kb")
-  const prefix = `R${prev}-`
-  for (const name of (await readdir(kbRoot).catch(() => [] as string[])).sort()) {
-    if (!name.endsWith(".md") || (!name.startsWith(prefix) && /^R\d+-/.test(name))) continue
-    const text = await Bun.file(join(kbRoot, name)).text().catch(() => "")
-    if (text.trim()) docs.push({ rel: join("docs", "migration-kb", name), text })
-  }
-  const pending = [root]
-  while (pending.length) {
-    const current = pending.pop()!
-    for (const entry of await readdir(current, { withFileTypes: true }).catch(() => [])) {
-      const abs = join(current, entry.name)
-      if (entry.isDirectory()) {
-        pending.push(abs)
-        continue
-      }
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue
-      if (!relative(root, current).split(/[\\/]+/).includes("migration-kb")) continue
-      const text = await Bun.file(abs).text()
-      if (text.trim()) docs.push({ rel: relative(dir, abs), text })
-    }
-  }
-  return docs.sort((a, b) => a.rel.localeCompare(b.rel))
 }

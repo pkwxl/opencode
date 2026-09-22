@@ -422,9 +422,9 @@ export function renderNumberRecovery(input: { floor: number }): string {
 
 // 阶段交接蒸馏会话(设计文档 plans/0006-phases-design.md F.1 步骤 1): 旁路一次性,通读本阶段
 // PLAN.md 与 docs/ 产物,蒸馏出永久路径交接文档(四个必备小节协议在模板内联)。
-// handover = handoverDoc(dir, round, phase)(src/phases.ts,新布局轮内
-// docs/R-NN/handovers/<字母>-<slug>.md,旧布局 docs/handovers/R<N>-<字母>-<slug>.md);
-// next 为下一阶段"字母 中文名"或 undefined(k 阶段无下一阶段,仍写 handover 供后续查阅)。
+// handover = phaseHandoverDoc(unit)(src/phases.ts,阶段目录内
+// docs/R-NN/P<nn>-<type>/handover.md);next 为下一阶段"P<nn>-<type> 中文名"或
+// undefined(最后一个阶段无下一阶段,仍写 handover 供后续查阅)。
 export function renderPhaseHandover(input: { phase: Phase; handover: string; next?: string }): string {
   return renderPrompt("phase-handover", {
     phase: input.phase,
@@ -435,9 +435,9 @@ export function renderPhaseHandover(input: { phase: Phase; handover: string; nex
 }
 
 // k(知识提炼)阶段的知识提取会话(plans/0006-phases-design.md P4,整体认领
-// plans/0002-fixme-knowledge-design.md §D.3): 旁路一次性,通读阶段台账与各阶段交接文档
+// plans/0002-fixme-knowledge-design.md §D.3): 旁路一次性,通读阶段索引与各阶段交接文档
 // (本轮轮次目录 docs/R-NN/ 内),蒸馏出最终验证过的迁移知识文档(永久路径:
-// 新布局轮内 migration-kb.md,旧布局 docs/migration-kb/R<N>-…)。file 为输出路径
+// knowledge 阶段目录内 kb.md)。file 为输出路径
 // (相对目标目录);mode.exec 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
 // The quality hard constraints (M2.1) come from `## quality` / `### knowledge`.
 export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {

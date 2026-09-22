@@ -75,13 +75,13 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
   }
   process.on("SIGINT", onSigint)
   try {
-    // Phased flow: an invalid ledger is an environment error (section H); route
-    // once ahead of server startup so we don't bring the service up just to
-    // exit; the real routing is re-evaluated per round inside the phase loop
-    // (derived state).
+    // Phased flow: a missing or invalid phase index is an environment error
+    // (section H); route once ahead of server startup so we don't bring the
+    // service up just to exit; the real routing is re-evaluated per round
+    // inside the phase loop (derived state).
     const phases = opts.phases ?? "m"
     if (phases !== "m") {
-      const pre = await routePhase(directory, await load(path), phases)
+      const pre = await routePhase(directory, await load(path))
       if (pre.type === "blocked") {
         log(`⏸ phase flow blocked: ${pre.reason}`)
         return 1

@@ -6,9 +6,9 @@
 // legacyModeFallback 先例)——refcheck-scope-design D2 摒弃移动适配:不再以搬移
 // 文件适配新布局(原 migrateLegacyDocs 存量迁移已退役),遗留引用失效走
 // refcheck-scope §4 的 git 历史恢复机制。轮次专用目录(roundDir/roundDirName,
-// docs/R-NN)与轮内永久知识文档路径(knowledgeDoc/priorKnowledgeDoc,轮内固定名;
-// 旧平铺形态 legacyKnowledgeDoc/legacyPriorKnowledgeDoc 常量化保留为读回落)亦在
-// 此构造;handoverDoc 依赖阶段 slug 表,落在 src/phases.ts
+// docs/R-NN)与轮内前置知识文档路径(priorKnowledgeDoc,轮内固定名;旧平铺形态
+// legacyPriorKnowledgeDoc 常量化保留为读回落)亦在此构造;阶段目录内的路径
+// (交接、验收、k 阶段知识文档 kb.md)依赖阶段单元,落在 src/phases.ts
 // (偏差注记见设计文档 §4.1);上游条款: R1 编号唯一、R2 永久性、R3 目录化、
 // R4 角色文件名、R5 归档语义、R6 临时文件、R7 阶段差异表达。
 import { readdir } from "node:fs/promises"
@@ -60,12 +60,6 @@ export function roundDir(round: number): string {
   return join("docs", roundDirName(round))
 }
 
-// docs/R-NN/migration-kb.md(k 阶段知识文档;轮内固定名,原时间戳名取消;
-// R2 永久路径,轮次经 R-NN 目录表达)。
-export function knowledgeDoc(round: number): string {
-  return join(roundDir(round), "migration-kb.md")
-}
-
 // docs/R-NN/prior-kb.md(前置知识文档;轮内固定名——新一轮轮目录恒空,前置
 // 知识必重新蒸馏,取代旧的轮次前缀守卫)。
 export function priorKnowledgeDoc(round: number): string {
@@ -85,17 +79,12 @@ export function tempPriorKnowledgeDoc(final: string): string {
 }
 
 // File name of a phase's acceptance record (the phaseAcceptance role, M2.3,
-// plans/0045): one per phase per round inside the phase's free-artifact
-// directory (phases.ts phaseAcceptanceDoc builds the path — the directory
-// depends on the phase slug table). Written by a human, read by the M3 gate.
+// plans/0045): one per phase inside the phase directory docs/R-NN/P<nn>-<type>/
+// (phases.ts phaseAcceptanceDoc builds the path). Written by a human, read by
+// the acceptance gate (0036 D8) once it exists.
 export const PHASE_ACCEPTANCE_NAME = "acceptance.md"
 
 // 旧平铺形态(读回落常量化,存量项目原地保留、绝不搬移):
-// docs/migration-kb/R2-migration-2026-09-07_01-02-03.md
-export function legacyKnowledgeDoc(round: number, stamp: string): string {
-  return join("docs", "migration-kb", `R${round}-migration-${stamp}.md`)
-}
-
 // docs/prior-kb/R1-prior-2026-09-07_01-02-03.md
 export function legacyPriorKnowledgeDoc(round: number, stamp: string): string {
   return join("docs", "prior-kb", `R${round}-prior-${stamp}.md`)

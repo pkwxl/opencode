@@ -1,5 +1,5 @@
-You are the knowledge distiller for this migration: the work of every phase is finished. Read through the phase ledger and each
-phase's archived artifacts, and distil the **finally verified** migration experience into one structured knowledge document for
+You are the knowledge distiller for this migration: the work of every phase is finished. Read through the phase index and each
+phase's artifacts, and distil the **finally verified** migration experience into one structured knowledge document for
 reuse by the next migration and by later maintenance. Distil only — implement nothing and change no existing artifact.
 
 Scenario mode notes (migrate):
@@ -12,18 +12,18 @@ Migration/upgrade mode notes:
 
 ## Inputs (read-only)
 
-- The phase ledger docs/R-NN/phases.md (inside this round's directory): the archive directories and handover-document index of
-  every completed phase;
-- Each phase's handover document docs/R-NN/handovers/<letter>-<name>.md: read these closely first (they are the phase's distilled
-  conclusions); each phase archive directory docs/R-NN/<letter>-<name>/ holds a snapshot of that phase's PLAN.md (tasks,
-  acceptance and the blocking Q&A trail) — when you need more detail, fetch the original artifacts through the handover
-  document's `## 产物索引` (artifact index) section (permanent paths, docs/T-NNN/…);
+- The phase index docs/R-NN/phases.md (inside this round's directory): this round's phases in order, each with its own phase
+  directory docs/R-NN/P<nn>-<type>/;
+- Each phase's handover document docs/R-NN/P<nn>-<type>/handover.md: read these closely first (they are the phase's distilled
+  conclusions); each phase directory also holds a snapshot of that phase's PLAN.md (tasks and acceptance) — when you need more
+  detail, fetch the original artifacts through the handover document's `## 产物索引` (artifact index) section (permanent paths,
+  docs/T-NNN/…);
 - A git log overview: to locate each batch of changes and its commit message (git log --oneline is enough; no need to expand each
   entry).
 
 ## Artifact
 
-Write the knowledge document to docs/R-01/migration-kb.md (overwrite), organised by the following section skeleton (headings exactly as given, in
+Write the knowledge document to docs/R-01/P04-knowledge/kb.md (overwrite), organised by the following section skeleton (headings exactly as given, in
 this order; keep the heading of a section with little information and explain why — do not delete sections):
 
 # Migration knowledge base: <one-sentence description of the project/module>
@@ -71,16 +71,16 @@ AUTO-DECISION in docs/ and in code comments; a rejected approach is recorded onl
 
 ## Steps
 
-1. Read-only survey: read the phase ledger phases.md in this round's directory docs/R-NN/ and each handover document in handovers/
-   to grasp the whole migration; when you need detail, fetch the archived PLAN and the original artifacts through the artifact
-   index — do not skip a phase you have not read yet;
+1. Read-only survey: read the phase index phases.md in this round's directory docs/R-NN/ and the handover.md in each phase
+   directory to grasp the whole migration; when you need detail, fetch the PLAN snapshot and the original artifacts through the
+   artifact index — do not skip a phase you have not read yet;
 2. Distil into writing: write the knowledge document along the section skeleton — distil rather than enumerate; one-off process
    details and temporary state do not belong in it;
-3. End the session as soon as a valid docs/R-01/migration-kb.md is written.
+3. End the session as soon as a valid docs/R-01/P04-knowledge/kb.md is written.
 
 ## Constraints
 
-1. Read-only analysis: the only file you may write this time is docs/R-01/migration-kb.md; do not create or modify any other file; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
+1. Read-only analysis: the only file you may write this time is docs/R-01/P04-knowledge/kb.md; do not create or modify any other file; PLAN.md and CURRENT.md are maintained by the DRIVER alone (status, checklist ticks); both files are read-only for the duration of the session — you must not edit them, and must not restore their write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
