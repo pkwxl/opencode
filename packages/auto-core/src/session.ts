@@ -183,7 +183,7 @@ export async function runSession(
     // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
     // 一并标记已试(防被再选)。与 attempt 的 target 求值同一优先级链(chain.model >
     // sticky > /failback 覆写 > 路由表)。
-    const from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    const from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
     if (from !== undefined && !tried.includes(from)) tried.push(from)
     tried.push(candidate)
     chain.model = candidate

@@ -33,7 +33,7 @@ export type ResolveSource = "driver" | "agent"
 export type ResolveItem = {
   at: number
   task: string // T-NNN;旁路会话为伪任务 PLAN/AUTO(pseudoTask,runner.ts)
-  phase: string // 阶段字母,未知为 ""
+  phase: string // qualified phase id R-NN.P<nn>; "" when unknown
   round: number
   session?: string // driver 源携带会话 id
   source: ResolveSource
@@ -377,9 +377,11 @@ async function readScannable(path: string): Promise<string | undefined> {
 
 export type ResolveScope = "task" | "phase" | "round"
 
-// 按桶身份过滤读回(task = T-NNN / phase = 阶段字母 / round = 轮号)。读之前先等本
-// 目录的写队列排空,保证刚落账的条目可见。dir === undefined 或 id 为空返回空数组
-// ——空 id 会匹配上所有"阶段未知"的条目,那是桶身份不可信的窗口期,不如不给。
+// Read back filtered by bucket identity (task = T-NNN / phase = qualified id
+// R-NN.P<nn> / round = round number). Waits for this directory's write queue to
+// drain first so entries just posted are visible. dir === undefined or an empty
+// id returns [] — an empty id would match every "phase unknown" entry, the
+// window where bucket identity is untrustworthy, so better to return nothing.
 export async function resolvesOf(
   dir: string | undefined,
   scope: ResolveScope,
@@ -399,7 +401,7 @@ export async function resolvesOf(
 
 export type HighlightOpts = {
   scope?: ResolveScope // 缺省 task
-  id?: string | number // phase 字母 / 轮号(scope !== "task" 的文案用)
+  id?: string | number // phase label P<nn>-<type> / round number (wording when scope !== "task")
   decisions?: number // 本任务 AUTO-DECISION 计数(有代答时折进末行)
 }
 

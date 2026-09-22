@@ -5,7 +5,7 @@
 import type { Interactive } from "./interactive"
 import type { ModeSpec } from "./mode"
 import type { AgentHost } from "./agent/types"
-import type { PhaseLetter } from "./phases/registry"
+import type { PhaseKey } from "./phases/registry"
 
 // 任务结局。dirty(plans/0021-commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
 // 出口: 不写运行时状态、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
@@ -83,9 +83,10 @@ export type Opts = {
   // --new-session: 中断恢复时跳过会话复用(即使被中断的会话仍存活也开新会话);
   // 阶段精确重入不受影响——仅放弃旧会话上下文,进度记录的 phase 照常指导续跑。
   newSession?: boolean
-  // 阶段化流程下的当前阶段字母(loop 透传,缺省 undefined = 单次运行): 模型路由
-  // 的字母键与分解模板的阶段选择据此求值。
-  phase?: PhaseLetter
+  // Current phase (loop passes it; undefined = a bare run outside the phase
+  // loop): the qualified id keys resolve records, the type entry drives model
+  // routing and the decompose template and duties (M3.6).
+  phase?: PhaseKey
   // --no-wrapup(config.wrapup 持久化,缺省 true): 关闭时每个任务的子任务/整
   // 任务执行完成后跳过收尾会话(renderWrapup)。
   wrapup?: boolean

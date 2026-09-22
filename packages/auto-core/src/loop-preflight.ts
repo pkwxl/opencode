@@ -11,6 +11,7 @@ import { resumeBanner } from "./conclusion"
 import { beginUnit, changedFiles, commitTree } from "./git"
 import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
+import { loadPhaseTypes } from "./phases/custom"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import { useIntentPacks } from "./prompt"
@@ -19,6 +20,7 @@ import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
 import { shellProfile } from "./shell"
+import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems } from "./switches"
 import { loadStats } from "./stats"
 import { renderText, usePromptLibrary } from "./template"
 import { restoreTestHandoffs } from "./testrun"
@@ -96,9 +98,16 @@ export async function preflight(
   // 内容校验,失败按用法错误退出)。之后 render* 同步渲染,无需再感知目录。
   // 意图包同点装载(M1.2): 目标目录 .opencode/auto/intents/ 覆盖/新增,非法
   // 意图包文件在此起即按用法错误报出。
+  // 自定义阶段类型(M3.6,.opencode/auto/phases/)同点校验: 非法类型文件与
+  // OPENCODE_AUTO_MODEL 中不存在的阶段类型键均按用法错误退出。
   try {
     usePromptLibrary(directory)
     useIntentPacks(directory)
+    const loaded = loadPhaseTypes(directory)
+    const custom = loaded.filter((entry) => entry.origin === "project").map((entry) => entry.type)
+    const types = loaded.map((entry) => entry.type)
+    const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types)]
+    if (problems.length) throw new Error(problems.join("\n"))
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }

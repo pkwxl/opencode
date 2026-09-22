@@ -204,7 +204,7 @@ Ids do not change shape: `T-NNN` and the `Auto-Task:` trailer stay as they are, 
 - [x] M3.3 Phase directories: `phases.md`, `P<nn>-<type>/` with todo/done, derived ledger, handover and acceptance moved in, `roles.ts` shapes updated; `LEDGER_ENTRY` retired (0035 §4 note). (2026-09-22; notes in §11.)
 - [x] M3.4 Task units: `T-NNN/todo.md|done.md` + `tasks.md`, planning sessions rewritten, runtime state to `.auto/units.json`, `numbering.ts` floor over task dirs, `## T-NNN` heading protocol retired, no-phase mode as P01 with the loops merged, CLI `status`. (2026-09-22; notes in §11.)
 - [x] M3.5 Dependencies at all three levels: `nextReady` at every selection point, `unitProblems` in the planning/decompose `collect` and on loop load, template syntax text. (2026-09-22; notes in §11.)
-- [ ] M3.6 Custom phase types (was M3.3): the project-level registry entries.
+- [x] M3.6 Custom phase types (was M3.3): the project-level registry entries. (2026-09-22; notes in §11.)
 - [ ] M3.7 Legacy removal (§6 R3) + legacy-layout usage error; dual-read per open question 17.
 - [ ] M3.8 Template translation, verification, merge-back #3.
 
@@ -306,5 +306,47 @@ The unit model of M3.1 is now wired at every level. No new module was added; the
 - **Templates.** The partials `task-depends` and `subtask-depends` are in English (0035 M3.5 amendment) and have tier-1 markers. The planning templates keep their Chinese prose until M3.8. `status` already showed task `Depends`.
 - **Known limitation, unchanged:** `doneLetters` (the shells' `continue` prefix guard) lists completed phases in index order. A round whose phases finish out of order through `Depends:` still passes `continue`, because that requires every phase to be done.
 - Verification: auto-core 1077 pass / 0 fail + typecheck clean; packages/auto 52 pass + 2 skip + typecheck clean.
+
+### M3.6 (2026-09-22)
+
+New module `src/phases/custom.ts`, published as a second phases-domain entry (the import-direction table now lists `phases/registry` and `phases/custom`). Rewired: `phases.ts`, `phases/registry.ts`, `config.ts`, `loop-preflight.ts`, `loop-phase.ts`, `loop-task.ts`, `conclusion.ts`, `resume.ts`, `resume-gate.ts`, `artifact.ts`, `attempt.ts`, `session.ts`, `unit-commit.ts`, `chain.ts`, `switches.ts`, `prompt.ts`, `stats.ts` (comment only), and the shell. Tests: `test/phases-custom.test.ts` (9 cases) is new. Custom cases were added to the phases, config, prompt, switches and chain suites and to the shell e2e suite.
+
+- **Definition file (user ruling, open question 6: one `.md` file per type).** `.opencode/auto/phases/<type>.md` holds the whole registry entry:
+  - the title line, which is the display name;
+  - an optional field block: `Tasks: yes`, `Gate: none|verdict`, `Phase-artifacts:` and `Task-artifacts:` (relative paths, comma- or space-separated);
+  - a required `## plan duties` section;
+  - an optional `## decompose duties` section;
+  - an optional eof marker.
+
+  Unknown fields or sections are errors. So are `Tasks: no` (task-less phases stay builtin, F8), an absolute path or a path with `..`, and a driver-owned file name in an artifact list. The file name is the type id. It must fit the directory grammar and must not be:
+  - a builtin id;
+  - preset-shaped (only `admtvk` letters, so the two forms of the phases value never overlap);
+  - a model-routing role word (checked by the driver, see below).
+
+  An invalid file is a usage error that names the file. There is no global registry. `loadPhaseTypes(dir)` is synchronous and stateless (builtins plus project files, the same shape as `loadModes`), and every `PhaseUnit` carries its resolved `entry`.
+- **Entry shape.** `slug` is gone, because the letter layout was retired in M3.3. New fields:
+  - `origin: "builtin" | "project"`;
+  - `planDuties` / `decomposeDuties`, the custom duty text that overrides the `plan-duties-<ref>` partial and the pack's `### <ref>` subsection.
+
+  A custom type renders `decompose-m`, the phase-generic body that takes `phaseName` / `phaseDuties`, and its `dutiesRef` is its own id. The `{{phase}}` prompt var is `letter ?? type`, which keeps the builtin goldens byte-identical.
+- **Config reference (user ruling: type-id list, tasks required).** `phases` has two forms:
+  - a letter preset, which keeps the unchanged whitelist rule;
+  - a comma-separated list of type ids, which may be in any order, may repeat, must contain `implement`, and ignores spaces.
+
+  config.json also accepts a JSON array and joins it with `,`. Only the string `m` is manual mode; the list `implement` is a phased flow. `resolvePhases` / `phasesProblem` in the registry serve config, `--phases`, `readPhases` and `syncPhaseIndex` alike.
+- **Runtime keys moved from the letter to the phase unit.** This is what lets a type repeat within a round, and the M3.3 "at most once per round" rule is dropped. The qualified id `R-NN.P<nn>` is now the key of:
+  - step resume points (`progress.json` `{kind: "step", step, unit}`, which was `letter`);
+  - the stats phase bucket;
+  - the resolve records' `phase`.
+
+  The session layer's `opts.phase` is a `PhaseKey` `{id, entry}`. Close and resolve lines print the label (`■ phase P02-design 设计 closed`). No dual-read for the old `letter` step records: a pre-M3.6 in-flight step record simply fails to match and the step reruns, the same outcome as a lost record. M3.7 retires old layouts anyway.
+- **Model routing.** An `OPENCODE_AUTO_MODEL` key that is neither `*`, a letter, nor a role word is a type-id key (`byType`). Precedence is role > type id > preset letter > wildcard. The type is known only once the project is loaded, so the run preflight rejects unknown type keys with exit 1 (`modelTypeProblems`). Retired role words still fail at parse time. A project type id that is a live or retired role word is refused where the driver loads types, in config load and the run preflight (`phaseTypeRoleProblems` in `switches.ts`). That check lives in the driver so `phases/custom` stays free of driver imports (D8). The builtin `knowledge` type shares its id with the knowledge role by design.
+- **Shell.**
+  - `--phases` takes either form and normalises the list form (trimmed, joined with `,`).
+  - The prefix guard and the "completed phase outside phases" check compare type arrays (`doneTypes`, which replaces `doneLetters`).
+  - The closing hint names the type (`to start analysis (分析) phase planning`).
+  - The help text documents the list form.
+- **Unchanged:** the phase index protocol, routing, rounds, the handover and knowledge steps, and the phase gate (`gate` is now also settable by a custom type).
+- Verification: auto-core 1092 pass / 0 fail + typecheck clean; packages/auto 53 pass + 2 skip + typecheck clean. Builtin goldens are unchanged.
 
 <!-- auto: eof -->

@@ -71,7 +71,7 @@ export function phaseText(phase: Phase | undefined): string {
     case "closeout":
       return "收尾已完成(待检查任务报告结论行并登记完成)"
     case "step":
-      return phase.step === "phase-plan" ? `阶段规划步骤(${phase.letter} 阶段,写任务索引与任务文档)` : `阶段交接步骤(${phase.letter} 阶段,产出交接文档)`
+      return phase.step === "phase-plan" ? `阶段规划步骤(${phase.unit} 阶段,写任务索引与任务文档)` : `阶段交接步骤(${phase.unit} 阶段,产出交接文档)`
   }
 }
 

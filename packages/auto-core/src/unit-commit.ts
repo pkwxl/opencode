@@ -101,7 +101,7 @@ async function collectSessionMarks(
 ): Promise<void> {
   const found = await collectAgentResolves(dir, {
     task: task.id,
-    phase: opts.phase ?? "",
+    phase: opts.phase?.id ?? "",
     round: await currentRound(dir).catch(() => 0),
   }).catch(() => undefined)
   if (!found) return
@@ -138,7 +138,7 @@ export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches
 // 链一致(链上降级候选在恢复时不存在,取 sticky > /failback 覆写 > 路由表)。返回
 // undefined = 当前未配置模型路由(此时记录也无可记,核对按不匹配处理)。
 export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined): string | undefined {
-  return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase, phaseToRole(phase) ?? "bypass")
+  return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, phaseToRole(phase) ?? "bypass")
 }
 
 // 回滚协议的 runner 侧编排(设计 3.3): rollbackUnit(stash 保全 + soft reset 收回

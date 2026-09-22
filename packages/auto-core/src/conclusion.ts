@@ -5,7 +5,7 @@
 // dependency on loop.ts.
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S13, pure move).
 import { formatDuration, formatUsageLine } from "./log"
-import { currentRound, phaseText, type Phase } from "./phases"
+import { currentRound, phaseKey, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
 import { statsBoot, statsHistory, statsId, statsTotals, type StatsResume } from "./stats"
 
@@ -52,9 +52,11 @@ export async function taskResolveLines(directory: string | undefined, taskID: st
 
 // Phase pinned block (H6): printed before the ■ phase-close line, counts only
 // (itemized entries were already shown at each task end).
-export async function phaseResolveLines(directory: string | undefined, letter: Phase): Promise<string[]> {
-  const items = await resolvesOf(directory, "phase", letter).catch(() => [])
-  return resolveHighlight(items, { scope: "phase", id: letter })
+// Records are keyed by the qualified phase id (Opts.phase.id); the text names
+// the phase by its label.
+export async function phaseResolveLines(directory: string | undefined, phase: PhaseUnit): Promise<string[]> {
+  const items = await resolvesOf(directory, "phase", phaseKey(phase).id).catch(() => [])
+  return resolveHighlight(items, { scope: "phase", id: phaseLabel(phase) })
 }
 
 // Round pinned block (H6): printed before the ■ round-complete line. The round
@@ -113,18 +115,19 @@ export async function taskEndLines(directory: string | undefined, taskID: string
 // wait Z]), T tasks / S sessions`, tokens line]. The phase bucket includes
 // bypass sessions such as plan/handover distillation (bypasses post to the
 // phase+round buckets, see the wiring comment in stats.ts), matching the
-// "incl. plan/handover/commit" wording. Guards on bucket id === letter (a
-// mismatch means the bucket was already reset by a later phase; do not print).
+// "incl. plan/handover/commit" wording. Guards on bucket id === the qualified
+// phase id (a mismatch means the bucket was already reset by a later phase; do
+// not print).
 // AUTO-DECISION: the human-wait segment is only emitted when waitMs > 0 (same
 // for the round line) — same style as the 0-omission rules for cost/reasoning;
 // "human wait 0s" is pure noise. The draft example (waitMs = 3m) did not cover
 // 0; handled per the existing omission convention.
-export async function phaseCloseLines(directory: string | undefined, letter: Phase): Promise<string[] | undefined> {
+export async function phaseCloseLines(directory: string | undefined, phase: PhaseUnit): Promise<string[] | undefined> {
   const totals = await statsTotals(directory, "phase")
-  if (!totals || totals.id !== letter) return undefined
+  if (!totals || totals.id !== phaseKey(phase).id) return undefined
   const wait = totals.waitMs ? `, human wait ${formatDuration(totals.waitMs)}` : ""
   return [
-    `■ phase ${letter} ${phaseText(letter)} closed: total ${formatDuration(totals.wallMs)}` +
+    `■ phase ${phaseLabel(phase)} ${phaseName(phase)} closed: total ${formatDuration(totals.wallMs)}` +
       ` (incl. plan/handover/commit; AI ${formatDuration(totals.aiMs)}${wait}), ${totals.tasks} tasks / ${totals.sessions} sessions`,
     formatUsageLine(totals.usage),
   ]

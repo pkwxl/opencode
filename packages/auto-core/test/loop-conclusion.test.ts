@@ -25,6 +25,14 @@ import {
   statsWaitEnd,
   type Usage,
 } from "../src/stats"
+import type { PhaseUnit } from "../src/phases"
+import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
+
+// A phase unit of round R-01 (qualified id R-01.<id>) for a builtin letter.
+function unit(letter: PhaseLetter, id = "P01"): PhaseUnit {
+  const entry = phaseTypeOfLetter(letter)
+  return { round: "R-01", id, type: entry.type, entry, dir: `docs/R-01/${id}-${entry.type}` }
+}
 
 // T-006: 任务三态行 / 阶段收口行 / 轮次完成行的报文构造(plans/STATS_PLAN.md
 // §4.2/4.3/4.4)——注入 stats 句柄(loadStats + 注入时钟)直驱 loop.ts 的三个
@@ -111,7 +119,7 @@ describe("phaseCloseLines 阶段收口行", () => {
   })
 
   test("全量口径: 总用时(含规划/交接/提交;AI,人工等待),任务 N 个 / 会话 M 次 + tokens 行", async () => {
-    await statsPhase(dir, "t")
+    await statsPhase(dir, "R-01.P01")
     // 两个任务(statsTask 各计 1)、三次会话(含旁路,同归 phase 桶)、一次人工等待。
     await statsTask(dir, "T-001")
     await statsSessionBegin(dir, "T-001")
@@ -131,23 +139,23 @@ describe("phaseCloseLines 阶段收口行", () => {
     now += 8 * 60_000 // 归档/台账/提交等 driver 墙钟
     // 总用时 50 分 = 20+21+1(AI 段)+ 8(driver 墙钟);3 分人工等待从总用时扣除、
     // 单记 waitMs(STATS_PLAN 已确认口径: 总用时排除纯人工等待)。
-    const lines = await phaseCloseLines(dir, "t")
+    const lines = await phaseCloseLines(dir, unit("t"))
     expect(lines).toEqual([
-      "■ phase t 测试 closed: total 50m 0s (incl. plan/handover/commit; AI 42m 0s, human wait 3m 0s), 2 tasks / 3 sessions",
+      "■ phase P01-test 测试 closed: total 50m 0s (incl. plan/handover/commit; AI 42m 0s, human wait 3m 0s), 2 tasks / 3 sessions",
       "tokens in 9000 / out 2200 / cache-read 90.0k / cache-write 0, hit 90.9%, cost $0.31",
     ])
   })
 
   test("省略与守卫: waitMs=0 省略人工等待段;桶 id 不符(已切换阶段)返回 undefined", async () => {
-    await statsPhase(dir, "t")
+    await statsPhase(dir, "R-01.P01")
     await statsTask(dir, "T-001")
     now += 5 * 60_000
-    const lines = await phaseCloseLines(dir, "t")
-    expect(lines?.[0]).toBe("■ phase t 测试 closed: total 5m 0s (incl. plan/handover/commit; AI 0s), 1 tasks / 0 sessions")
+    const lines = await phaseCloseLines(dir, unit("t"))
+    expect(lines?.[0]).toBe("■ phase P01-test 测试 closed: total 5m 0s (incl. plan/handover/commit; AI 0s), 1 tasks / 0 sessions")
     expect(lines?.[0]).not.toContain("human wait")
-    // 切换到下一阶段后,旧字母的收口行不再可信(桶已重置)
-    await statsPhase(dir, "v")
-    expect(await phaseCloseLines(dir, "t")).toBeUndefined()
+    // After switching to the next phase the old phase's close line is no longer trustworthy (bucket reset)
+    await statsPhase(dir, "R-01.P02")
+    expect(await phaseCloseLines(dir, unit("t"))).toBeUndefined()
   })
 })
 
@@ -221,7 +229,7 @@ describe("roundCompleteLines 轮次完成行", () => {
   test("dir 缺省/未装载: 空转返回 undefined,不落盘", async () => {
     expect(await roundCompleteLines(undefined)).toBeUndefined()
     expect(await taskEndLines(undefined, "T-001")).toBeUndefined()
-    expect(await phaseCloseLines(undefined, "m")).toBeUndefined()
+    expect(await phaseCloseLines(undefined, unit("m"))).toBeUndefined()
     expect(await Bun.file(join(dir, ".auto", "stats.json")).exists()).toBe(false)
   })
 })
@@ -235,7 +243,7 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
   const item = (partial: Partial<ResolveItem> & { question: string }): ResolveItem => ({
     at: 1_000_000,
     task: "T-001",
-    phase: "m",
+    phase: "R-01.P01",
     round: 1,
     source: "agent",
     ...partial,
@@ -251,13 +259,13 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
 
   test("无代答: 三处一律返回空数组,不占版面", async () => {
     expect(await taskResolveLines(dir, "T-001")).toEqual([])
-    expect(await phaseResolveLines(dir, "m")).toEqual([])
+    expect(await phaseResolveLines(dir, unit("m"))).toEqual([])
     expect(await roundResolveLines(dir)).toEqual([])
   })
 
   test("dir 缺省: 空转返回空数组,不落盘", async () => {
     expect(await taskResolveLines(undefined, "T-001")).toEqual([])
-    expect(await phaseResolveLines(undefined, "m")).toEqual([])
+    expect(await phaseResolveLines(undefined, unit("m"))).toEqual([])
     expect(await roundResolveLines(undefined)).toEqual([])
     expect(await Bun.file(join(dir, ".auto", "resolves.json")).exists()).toBe(false)
   })
@@ -321,8 +329,8 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
       item({ task: "T-002", source: "driver", question: "问题丙" }),
     ])
     await recordDecisions(dir, "T-001", 9)
-    expect(await phaseResolveLines(dir, "m")).toEqual([
-      "⚑ phase m: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
+    expect(await phaseResolveLines(dir, unit("m"))).toEqual([
+      "⚑ phase P01-implement: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
     ])
     // 轮号取 currentRound 现查: 无 docs/R-NN 目录时为第 1 轮,与落账侧同源。
     expect(await roundResolveLines(dir)).toEqual([
@@ -332,11 +340,11 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
 
   test("桶身份过滤: 别的任务/阶段/轮次的条目不串台", async () => {
     await recordResolves(dir, [
-      item({ task: "T-001", phase: "m", round: 1, question: "本桶问题", option: "方案", reason: "理由" }),
-      item({ task: "T-002", phase: "t", round: 2, question: "别桶问题", option: "方案", reason: "理由" }),
+      item({ task: "T-001", phase: "R-01.P01", round: 1, question: "本桶问题", option: "方案", reason: "理由" }),
+      item({ task: "T-002", phase: "R-02.P01", round: 2, question: "别桶问题", option: "方案", reason: "理由" }),
     ])
     expect(await taskResolveLines(dir, "T-002")).toHaveLength(3)
-    expect((await phaseResolveLines(dir, "m"))[0]).toContain("1 questions awaiting confirmation were auto-answered")
+    expect((await phaseResolveLines(dir, unit("m")))[0]).toContain("1 questions awaiting confirmation were auto-answered")
     expect((await roundResolveLines(dir))[0]).toContain("1 questions awaiting confirmation were auto-answered")
   })
 
@@ -344,7 +352,7 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
     await mkdir(join(dir, ".auto"), { recursive: true })
     await Bun.write(join(dir, ".auto", "resolves.json"), "{ 坏文件")
     expect(await taskResolveLines(dir, "T-001")).toEqual([])
-    expect(await phaseResolveLines(dir, "m")).toEqual([])
+    expect(await phaseResolveLines(dir, unit("m"))).toEqual([])
     expect(await roundResolveLines(dir)).toEqual([])
   })
 })

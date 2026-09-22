@@ -12,7 +12,7 @@ import { waitBetweenTasks } from "./loop-progress"
 import { taskEndLines, taskResolveLines } from "./conclusion"
 import { banner, formatDuration, log } from "./log"
 import { block, loadPlan, next } from "./tasks"
-import type { PhaseUnit } from "./phases"
+import { phaseKey, type PhaseUnit } from "./phases"
 import { recallProgress } from "./resume"
 import { runTask } from "./runner"
 import type { AgentHost } from "./agent/types"
@@ -95,7 +95,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       mode: opts.mode,
       newSession: opts.newSession,
       wrapup: opts.wrapup,
-      phase: phase.letter,
+      phase: phaseKey(phase),
     })
     if (outcome.type === "dirty") {
       // Unit-startup clean gate failure (runTask inner layer): no state

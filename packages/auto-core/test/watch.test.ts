@@ -21,6 +21,9 @@ import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import type { TestRun } from "../src/testrun"
 import { afterSession, autoAnswer } from "../src/unit-commit"
 import { task, fakeClient, freshRepo, sseClient } from "./fixtures/runner"
+import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
+
+const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
 
 // ---- SSE 订阅生命周期(attempt 会话结束即断流,根治长连接泄漏)----
 
@@ -541,13 +544,13 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
           yield idle(sid)
         })(),
     })
-    const lines = await captureLogs(() => runSession(client, task, "提示词", { dir, phase: "m" }, { pct: 100, used: 0, at: 0 }))
+    const lines = await captureLogs(() => runSession(client, task, "提示词", { dir, phase: key("m") }, { pct: 100, used: 0, at: 0 }))
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({
       source: "driver",
       task: "T-001",
-      phase: "m",
+      phase: "R-01.P01",
       round: 3,
       session: "ses_new_1",
       question: Q1,
@@ -650,10 +653,10 @@ describe("代答采集接线(AUTO-RESOLVE,T-005)", () => {
       join(dir, "report.md"),
       ["## 自动代答问题", "", "- AUTO-RESOLVE: 是否顺带收口 -> 顺带收口 (同层依赖)", "- AUTO-DECISION: 字段命名取 matched (与 schema 一致)", ""].join("\n"),
     )
-    await afterSession(dir, { commit: false, phase: "t" }, { id: "T-001", title: "示例任务" }, { stage: "wrapup", subject: "T-001 wrapup 示例任务" })
+    await afterSession(dir, { commit: false, phase: key("t") }, { id: "T-001", title: "示例任务" }, { stage: "wrapup", subject: "T-001 wrapup 示例任务" })
     const items = await resolvesOf(dir, "task", "T-001")
     expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({ source: "agent", phase: "t", round: 2, question: "是否顺带收口", file: "report.md:3" })
+    expect(items[0]).toMatchObject({ source: "agent", phase: "R-01.P01", round: 2, question: "是否顺带收口", file: "report.md:3" })
   })
 })
 

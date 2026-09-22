@@ -9,10 +9,11 @@
 // ledger and its `- [done] <letter> …` line protocol, which is retired.
 //
 // Phase *types* (name, duties, standard artifacts, gate) live in the registry
-// src/phases/registry.ts. Until custom types arrive (M3.6) every phase is a
-// builtin type with a preset letter, and the letter stays the runtime key of
-// model routing, stats buckets and step resume points — so a type occurs at
-// most once per round for now.
+// src/phases/registry.ts; a project adds its own in .opencode/auto/phases/
+// (src/phases/custom.ts, M3.6). Every phase unit carries its resolved type
+// entry. The runtime keys a phase by its qualified id R-NN.P<nn> (step resume
+// points, stats buckets, resolve records) and routes models by type, so a type
+// may occur more than once in a round.
 //
 // Rounds: one docs/R-NN/ per round, created at round start (establishRound);
 // everything written inside is permanent. A phase's tasks are listed in its
@@ -39,43 +40,38 @@ import {
   type UnitDecl,
   type UnitRef,
 } from "./document/unit"
-import { loadPlan, tickIndexLine, type Plan } from "./tasks"
+import { loadPlan, qualifiedPhase, tickIndexLine, type Plan } from "./tasks"
+import { loadPhaseTypes } from "./phases/custom"
 import {
-  BUILTIN_PHASE_TYPES,
   PHASE_LETTERS,
-  expandPhases,
   phaseType,
-  phaseTypeOfLetter,
+  resolvePhases,
   unitArtifactSpecs,
-  type PhaseLetter,
+  type PhaseKey,
   type PhaseTypeEntry,
 } from "./phases/registry"
-
-export type Phase = PhaseLetter
 
 // The only legal preset order (registry letter order); validation and derivation share it.
 export const PHASE_ORDER = PHASE_LETTERS.join("")
 
-export function phaseText(phase: Phase): string {
-  return phaseTypeOfLetter(phase).name
-}
-
-// Validate a phases value by registry preset expansion (expandPhases):
-// non-empty, preset letters only, strictly increasing in preset order, and
-// containing implement (m). null = invalid (the CLI turns it into exit 1).
-export function parsePhases(raw: string): Phase[] | null {
-  return expandPhases(raw)?.map((entry) => entry.letter!) ?? null
+// Validate a phases value — a letter preset (`adm`) or a comma-separated type
+// id list (`analysis,security-review,implement`), see resolvePhases — against
+// the builtins plus, with dir, the project's custom types. null = invalid (the
+// CLI turns it into exit 1; phasesProblem says why). Throws on an invalid
+// custom type file.
+export function parsePhases(raw: string, dir?: string): PhaseTypeEntry[] | null {
+  return resolvePhases(raw, loadPhaseTypes(dir))
 }
 
 // —— Phase units ——
 
 // One phase of a round: its unit identity (round + local id + type → the
-// directory docs/R-NN/P<nn>-<type>) plus the preset letter of its type.
+// directory docs/R-NN/P<nn>-<type>) plus its resolved type entry.
 export type PhaseUnit = {
   round: string
   id: string
   type: string
-  letter: Phase
+  entry: PhaseTypeEntry
   dir: string
   // `Depends:` in the phase's todo.md / done.md (absent = the previous phase in
   // the index; phases of the same round only).
@@ -91,8 +87,20 @@ export function phaseLabel(unit: PhaseUnit): string {
   return `${unit.id}-${unit.type}`
 }
 
+// The type's display name (logs, commit subjects, the phaseName prompt var).
+export function phaseName(unit: PhaseUnit): string {
+  return unit.entry.name
+}
+
+// The session layer's view of a phase (Opts.phase): the qualified id R-NN.P<nn>
+// (unique across rounds; the runtime key of step resume points, stats buckets
+// and resolve records) and the type entry.
+export function phaseKey(unit: PhaseUnit): PhaseKey {
+  return { id: qualifiedPhase(unit), entry: unit.entry }
+}
+
 function makeUnit(round: string, id: string, entry: PhaseTypeEntry): PhaseUnit {
-  const unit = { round, id, type: entry.type, letter: entry.letter!, dir: "" }
+  const unit = { round, id, type: entry.type, entry, dir: "" }
   unit.dir = unitDir(phaseRef(unit))
   return unit
 }
@@ -105,7 +113,7 @@ export const phaseHandoverDoc = (unit: PhaseUnit): string => join(unit.dir, "han
 // the acceptance gate (0036 D8), which also owns the marker literal.
 export const phaseAcceptanceDoc = (unit: PhaseUnit): string => join(unit.dir, PHASE_ACCEPTANCE_NAME)
 // The phase type's standard artifacts resolved into this phase's directory.
-export const phaseArtifacts = (unit: PhaseUnit) => unitArtifactSpecs(phaseTypeOfLetter(unit.letter).phaseArtifacts, unit.dir)
+export const phaseArtifacts = (unit: PhaseUnit) => unitArtifactSpecs(unit.entry.phaseArtifacts, unit.dir)
 
 // —— Phase index (docs/R-NN/phases.md) ——
 
@@ -126,7 +134,7 @@ export function renderPhaseIndex(round: string, units: readonly PhaseUnit[], don
 // A phase's todo.md as written at round start: the qualified id and display
 // name as the title, the field block (Type), the eof terminator.
 export function renderPhaseTodo(unit: PhaseUnit): string {
-  return [`# ${unit.round}.${unit.id}: ${phaseText(unit.letter)}`, "", `Type: ${unit.type}`, "", "<!-- auto: eof -->", ""].join("\n")
+  return [`# ${qualifiedPhase(unit)}: ${phaseName(unit)}`, "", `Type: ${unit.type}`, "", "<!-- auto: eof -->", ""].join("\n")
 }
 
 export type PhaseState = {
@@ -140,29 +148,25 @@ export type PhaseState = {
 // Read a round's phase index and the state files of its phases (round defaults
 // to the current round). undefined = no index (the round was never
 // established). Throws with fix-it guidance when the index is unusable: a
-// problem line, an unknown type, a type listed twice, or a phase directory with
-// both or neither of todo.md / done.md.
+// problem line, an unknown type (builtin or .opencode/auto/phases/), or a
+// phase directory with both or neither of todo.md / done.md; an invalid custom
+// type file throws its own message. A type may be listed more than once.
 export async function readPhases(dir: string, round?: number): Promise<PhaseState | undefined> {
   const n = round ?? (await currentRound(dir))
   const index = phaseIndexPath(n)
   const text = await Bun.file(join(dir, index)).text().catch(() => undefined)
   if (text === undefined) return undefined
+  const types = loadPhaseTypes(dir)
   const parsed = parseIndex(text, "phase")
   const problems = [...parsed.problems]
   const phases: PhaseUnit[] = []
-  const seen = new Set<string>()
   for (const entry of parsed.entries) {
     const type = entry.title.split(/\s+/)[0] ?? ""
-    const found = phaseType(type)
-    if (!found?.letter) {
-      problems.push(`${entry.id}: unknown phase type "${type}" (known: ${BUILTIN_PHASE_TYPES.map((item) => item.type).join(", ")})`)
+    const found = phaseType(type, types)
+    if (!found) {
+      problems.push(`${entry.id}: unknown phase type "${type}" (known: ${types.map((item) => item.type).join(", ")})`)
       continue
     }
-    if (seen.has(type)) {
-      problems.push(`${entry.id}: phase type ${type} is listed twice (a repeated type needs custom phase types, not supported yet)`)
-      continue
-    }
-    seen.add(type)
     phases.push(makeUnit(roundDirName(n), entry.id, found))
   }
   if (!phases.length && !problems.length) problems.push("no phases listed")
@@ -198,22 +202,19 @@ export function currentPhase(state: Pick<PhaseState, "phases" | "done">): PhaseU
   return state.phases.find((unit) => unit.id === id)
 }
 
-// Letters of the completed phases in index order (the shells' continue
-// precheck and prefix guard compare it against letter presets).
-export function doneLetters(state: Pick<PhaseState, "phases" | "done">): string {
-  return state.phases
-    .filter((unit) => state.done.has(unit.id))
-    .map((unit) => unit.letter)
-    .join("")
+// Types of the completed phases in index order (the shells' continue
+// precheck and prefix guard compare it against the resolved phases value).
+export function doneTypes(state: Pick<PhaseState, "phases" | "done">): string[] {
+  return state.phases.filter((unit) => state.done.has(unit.id)).map((unit) => unit.type)
 }
 
-// Write or update a round's phase index from a phases preset: the index plus a
+// Write or update a round's phase index from a phases value: the index plus a
 // directory with todo.md per phase. Idempotent. On an existing index the
 // matching prefix (same position, same type) is kept; the rest is replaced,
 // which is allowed only for phases that are not done and whose directory holds
 // nothing but todo.md — anything else throws before a file is touched.
 export async function syncPhaseIndex(dir: string, round: number, phases: string): Promise<PhaseUnit[]> {
-  const desired = expandPhases(phases)
+  const desired = resolvePhases(phases, loadPhaseTypes(dir))
   if (!desired) throw new Error(`invalid phases value "${phases}"`)
   const name = roundDirName(round)
   const units = desired.map((entry, i) => makeUnit(name, phaseId(i + 1), entry))

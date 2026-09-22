@@ -77,7 +77,7 @@ test.skipIf(!E2E)(
 // Mark the current round's phases of these preset letters complete, the way
 // the driver does (completePhase: todo.md → done.md + index tick).
 async function completeLetters(dir: string, letters: string[]) {
-  for (const unit of (await readPhases(dir))!.phases) if (letters.includes(unit.letter)) await completePhase(dir, unit)
+  for (const unit of (await readPhases(dir))!.phases) if (letters.includes(unit.entry.letter ?? "")) await completePhase(dir, unit)
 }
 
 // 阶段化流程 P3 端到端(phases=mv,m 阶段已完成): v(验收)阶段任务照常执行,
@@ -594,7 +594,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       for (const value of ["tma", "adk", "mm", "x", ""]) {
         const init = await runCli(["init", dir, "--phases", value])
         expect(init.code).toBe(1)
-        expect(init.err).toContain("--phases must be a subsequence of admtvk containing m")
+        expect(init.err).toContain("--phases is invalid")
       }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -608,7 +608,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
       expect(init.out).toContain("phases admtvk")
-      expect(init.out).toContain("to start a (分析) phase planning")
+      expect(init.out).toContain("to start analysis (分析) phase planning")
       expect(init.out).not.toContain("list tasks in")
       // --amend 无 --phases 保留既有值;显式给值可改
       expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
@@ -632,13 +632,13 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const bad = await runCli(["init", dir, "--phases", "amt"])
       expect(bad.code).toBe(1)
       expect(bad.err).toContain("phase index")
-      expect(bad.err).toContain("ad")
+      expect(bad.err).toContain("analysis,design")
       expect(bad.err).toContain("prefix")
       // 兼容值通过: 已完成的 P01/P02 与相同前缀保留,尾部待开始阶段按新值重写;
       // 下一阶段提示 m(迁移实现)
       const ok = await runCli(["init", dir, "--phases", "admtk"])
       expect(ok.code).toBe(0)
-      expect(ok.out).toContain("to start m (迁移实现) phase planning")
+      expect(ok.out).toContain("to start implement (迁移实现) phase planning")
       expect((await runCli(["status", dir])).out).toContain("  [✓] P01-analysis\n  [✓] P02-design\n  [▶] P03-implement\n  [ ] P04-test\n  [ ] P05-knowledge\n")
       expect(await stat(join(dir, "docs/R-01/P05-acceptance")).catch(() => undefined)).toBeUndefined()
       // 护栏判的是本次生效值,不是"是否显式给出": 无参 init 全量覆盖会把 phases
@@ -646,7 +646,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const bare = await runCli(["init", dir])
       expect(bare.code).toBe(1)
       expect(bare.err).toContain("--amend")
-      expect(bare.err).toContain("ad")
+      expect(bare.err).toContain("analysis,design")
       expect(await readConfig(dir)).toMatchObject({ phases: "admtk" })
       // --amend 下生效值 = 既有配置值,天然满足前缀条件
       expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
@@ -656,6 +656,40 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const broken = await runCli(["init", dir, "--amend", "--phases", "admtvk"])
       expect(broken.code).toBe(1)
       expect(broken.err).toContain("docs/R-01/phases.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init --phases type-id list: custom types from .opencode/auto/phases, repeats allowed, prefix guard by type", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      // Unknown custom id → usage error listing the known types
+      const unknown = await runCli(["init", dir, "--phases", "analysis,security-review,implement"])
+      expect(unknown.code).toBe(1)
+      expect(unknown.err).toContain("security-review")
+      await mkdir(join(dir, ".opencode/auto/phases"), { recursive: true })
+      await Bun.write(
+        join(dir, ".opencode/auto/phases/security-review.md"),
+        "# Security review\n\nGate: verdict\nTask-artifacts: review.md\n\n## plan duties\n\nList the review tasks.\n",
+      )
+      const init = await runCli(["init", dir, "--phases", "analysis, security-review ,implement,security-review"])
+      expect(init.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "analysis,security-review,implement,security-review" })
+      expect(init.out).toContain("to start analysis (分析) phase planning")
+      expect((await runCli(["status", dir])).out).toContain(
+        "  [▶] P01-analysis\n  [ ] P02-security-review\n  [ ] P03-implement\n  [ ] P04-security-review\n",
+      )
+      // Completed analysis → a list not starting with analysis is refused
+      await completeLetters(dir, ["a"])
+      const bad = await runCli(["init", dir, "--phases", "security-review,implement"])
+      expect(bad.code).toBe(1)
+      expect(bad.err).toContain("prefix")
+      // An invalid type file is a usage error naming the file
+      await Bun.write(join(dir, ".opencode/auto/phases/broken.md"), "# Broken\n\nTasks: no\n\n## plan duties\n\nx\n")
+      const broken = await runCli(["init", dir, "--amend"])
+      expect(broken.code).toBe(1)
+      expect(broken.err).toContain("broken.md")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -733,7 +767,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       // 阶段化流程下结束语引导开始首个阶段规划
       const staged = await runCli(["init", dir, "--phases", "am", "-p", "意图"])
       expect(staged.out).toContain("brief recorded")
-      expect(staged.out).toContain("to start a (分析) phase planning")
+      expect(staged.out).toContain("to start analysis (分析) phase planning")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1047,7 +1081,7 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       expect(cont.code).toBe(0)
       expect(cont.out).toContain("✓ round directory: docs/R-02/")
       expect(cont.out).toContain("round 2 of the migration started")
-      expect(cont.out).toContain("to start a (分析) phase planning")
+      expect(cont.out).toContain("to start analysis (分析) phase planning")
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk", contextLimit: 128 })
       // 上一轮轮次目录原样保留(绝不搬移/删除): 阶段索引、阶段目录与任务索引均在 R-01 内
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis")
@@ -1086,7 +1120,7 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       const cont = await runCli(["continue", dir])
       expect(cont.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "am" })
-      expect(cont.out).toContain("to start a (分析) phase planning")
+      expect(cont.out).toContain("to start analysis (分析) phase planning")
       // run 启动横幅的阶段进度行带轮次标注(删除 agent 契约文件使 run 在 server 前退出)
       await rm(join(dir, ".opencode/agent/auto.md"))
       const banner = await runCli(["run", dir])

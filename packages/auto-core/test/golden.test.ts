@@ -36,8 +36,7 @@ import {
 import type { ResolveItem } from "../src/resolve"
 import type { StuckHit } from "../src/stuck"
 import { renderTemplate, renderText } from "../src/template"
-import type { Phase } from "../src/phases"
-import { phaseTypeOfLetter } from "../src/phases/registry"
+import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
 const UPDATE = process.env.UPDATE_GOLDEN === "1"
 const GOLDEN_DIR = join(import.meta.dir, "golden")
@@ -90,8 +89,8 @@ describe("golden 渲染快照", () => {
   })
 
   test("分解族(六阶段 + 通用兜底)", () => {
-    for (const phase of ["a", "d", "m", "t", "v", "k"] as Phase[]) {
-      golden(`decompose-${phase}`, renderDecompose(plan, task, { ...execOpts, phase }))
+    for (const phase of ["a", "d", "m", "t", "v", "k"] as PhaseLetter[]) {
+      golden(`decompose-${phase}`, renderDecompose(plan, task, { ...execOpts, phase: { id: "R-01.P02", entry: phaseTypeOfLetter(phase) } }))
     }
     // 通用 decompose 是内置库缺 decompose-<phase> 时的兜底,renderDecompose 到不了,
     // 直接经 renderTemplate 渲染(ctx 与 baseCtx 同口径组装)。意图注入(M1.2/M1.3)由
@@ -134,11 +133,11 @@ describe("golden 渲染快照", () => {
   })
 
   test("阶段循环族(规划/交接/知识)", () => {
-    for (const phase of ["a", "d", "m", "t", "v", "k"] as Phase[]) {
+    for (const phase of ["a", "d", "m", "t", "v", "k"] as PhaseLetter[]) {
       golden(
         `phase-plan-${phase}`,
         renderPhasePlan({
-          phase,
+          phase: phaseTypeOfLetter(phase),
           brief: "项目意图(固定输入)。",
           handovers: "前序阶段交接(固定输入)。",
           mode: migrate,
@@ -150,7 +149,7 @@ describe("golden 渲染快照", () => {
     }
     golden(
       "phase-handover",
-      renderPhaseHandover({ phase: "m", handover: "docs/R-01/P02-implement/handover.md", next: "P03-test 测试" }),
+      renderPhaseHandover({ phase: phaseTypeOfLetter("m"), handover: "docs/R-01/P02-implement/handover.md", next: "P03-test 测试" }),
     )
     golden("knowledge", renderKnowledge({ file: "docs/R-01/P04-knowledge/kb.md", mode: migrate }))
     golden(

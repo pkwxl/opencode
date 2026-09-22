@@ -1,7 +1,6 @@
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { UnitBaseline } from "./git"
-import type { PhaseLetter as RegistryLetter } from "./phases/registry"
 
 // 进度恢复记录: run 期间 driver 把任务流水线的当前阶段与执行链会话持久化到目标
 // 目录 .auto/progress.json。应用崩溃/被强制终止后重新运行时据此精确恢复:
@@ -25,10 +24,6 @@ import type { PhaseLetter as RegistryLetter } from "./phases/registry"
 // 静默跳过)。无阶段的一次性旁路会话(dryrun/fork 基点等)仍不写记录,避免污染
 // 恢复记忆。
 
-// 阶段字母(阶段类型注册表的预置字母;注册表是阶段域入口、无状态叶子模块,取自它
-// 不形成 resume→phases 状态机的反向依赖。阶段步骤恢复点用它标注归属阶段)。
-export type PhaseLetter = RegistryLetter
-
 // 阶段级旁路步骤(driver 侧收口的流程步骤,非任务流水线阶段): phase-plan = 阶段
 // 规划会话(写任务索引与任务文档),phase-handover = 阶段交接蒸馏会话(产出交接文档)。
 // 这两类会话此前不写恢复点,中断后流程仅凭 AI 写的文件(任务单元/交接文档)推导
@@ -46,7 +41,9 @@ export type StepKind = "phase-plan" | "phase-handover"
 // - wrapup: 收尾会话阶段
 // - closeout: 收尾已完成,只剩任务报告结论行检查与完成标记(无会话);恢复时跳过
 //   收尾。已退役的 verify/review 记录(D13,二者只出现在收尾之后)读取时映射为本阶段
-// - step: 阶段级旁路步骤(phase-plan/phase-handover),letter 标注归属阶段;
+// - step: 阶段级旁路步骤(phase-plan/phase-handover),unit 为归属阶段的限定编号
+//   R-NN.P<nn>(M3.6 前为预置字母;旧记录缺 unit,与任何阶段都不匹配,loop 告警后
+//   按文件路由继续);
 //   driver 收口前记录保持 active,中断后据此让会话恢复优先于文件推导路由
 //
 // 单元归属门禁(runner.unitReruns): active 记录的会话属于某个具体执行单元
@@ -60,7 +57,7 @@ export type Phase =
   | { kind: "subtasks"; index?: number }
   | { kind: "wrapup" }
   | { kind: "closeout" }
-  | { kind: "step"; step: StepKind; letter: PhaseLetter }
+  | { kind: "step"; step: StepKind; unit: string }
 
 export type Progress = {
   task: string
@@ -116,19 +113,19 @@ export async function peekProgress(dir: string): Promise<Progress | undefined> {
 // 当前未收口的阶段步骤恢复点: 记录为 active 的 step 变体时返回其步骤身份与会话
 // (供 loop 让会话恢复优先于文件推导路由,见 plans/0018-session-resume-precedence-design.md);
 // 非 step 记录、已收口(active=false)或无记录返回 undefined。
-export async function openStep(dir: string): Promise<{ step: StepKind; letter: PhaseLetter; session?: string } | undefined> {
+export async function openStep(dir: string): Promise<{ step: StepKind; unit: string; session?: string } | undefined> {
   const record = await peekProgress(dir)
   if (record?.active && record.phase?.kind === "step") {
-    return { step: record.phase.step, letter: record.phase.letter, session: record.session }
+    return { step: record.phase.step, unit: record.phase.unit, session: record.session }
   }
   return undefined
 }
 
 // 阶段步骤收口: 仅当当前记录正是该步骤时删除之(driver 已完成产物校验/提交/
 // 后处理,恢复点不再需要)。记录不匹配(已被任务记录覆盖等)时不动,避免误清。
-export async function closeStep(dir: string, step: StepKind, letter: PhaseLetter): Promise<void> {
+export async function closeStep(dir: string, step: StepKind, unit: string): Promise<void> {
   const record = await peekProgress(dir)
-  if (record?.phase?.kind === "step" && record.phase.step === step && record.phase.letter === letter) {
+  if (record?.phase?.kind === "step" && record.phase.step === step && record.phase.unit === unit) {
     await forgetProgress(dir)
   }
 }

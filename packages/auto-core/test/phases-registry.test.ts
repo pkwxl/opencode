@@ -39,17 +39,6 @@ describe("builtin phase types", () => {
     expect(PHASE_LETTERS.join("")).toBe("admtvk")
   })
 
-  test("legacy directory slugs are pinned (letter layout lives until M3.3)", () => {
-    expect(Object.fromEntries(BUILTIN_PHASE_TYPES.map((entry) => [entry.letter, entry.slug]))).toEqual({
-      a: "analysis",
-      d: "design",
-      m: "migrate",
-      t: "testing",
-      v: "acceptance",
-      k: "knowledge",
-    })
-  })
-
   test("display names are pinned (they reach logs, commit subjects and prompts)", () => {
     expect(BUILTIN_PHASE_TYPES.map((entry) => entry.name)).toEqual(["分析", "设计", "迁移实现", "测试", "验收", "知识提炼"])
   })

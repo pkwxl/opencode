@@ -10,8 +10,7 @@ import { subtaskDoc, taskDoc } from "./docpaths"
 import type { Plan, Status, Task } from "./tasks"
 import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
-import { phaseText, type Phase } from "./phases"
-import { phaseTypeOfLetter, planDutiesPartial } from "./phases/registry"
+import { phaseType, planDutiesPartial, REQUIRED_TYPE, type PhaseKey, type PhaseTypeEntry } from "./phases/registry"
 import { autoSwitches, type TaskContextMode } from "./switches"
 import { promptTemplateNames, renderTemplate, renderText, type Ctx } from "./template"
 
@@ -39,20 +38,23 @@ function intentText(section: IntentSection, key: string, ctx: Ctx): string | und
   return text && renderText(text, ctx)
 }
 
-// testByDriver/handoverTest: --test-by-driver 测试执行协议(run 级开关)。true 时
-// 执行类模板(subtask/whole)注入协议段。
-// phase/contextLimit/fine: 阶段化流程的当前阶段字母、上下文预算基线(tokens)与
-// 细粒度分解开关(OPENCODE_AUTO_DECOMPOSE_FINE,开关层接线见
-// plans/0003-fork-decompose-design.md §4.6)——分解模板 decompose-<phase> 据此选择与渲染
-// (phaseName 注入阶段名;contextBudget = 半预算的粒度上限描述;fine 注入
-// 细粒度准则段)。taskContext: 理解摘要行数档位(OPENCODE_AUTO_TASK_CONTEXT,
-// 见 src/switches.ts),理解会话模板据此渲染 contextLines(建议行数措辞,不是
-// 硬性截断)。
+// testByDriver/handoverTest: the --test-by-driver test execution protocol (a
+// run-level switch); when true the execution templates (subtask/whole) inject
+// the protocol section.
+// phase/contextLimit/fine: the phased flow's current phase (PhaseKey: the
+// qualified id plus the type entry), the context budget baseline (tokens) and
+// the fine-grained decompose switch (OPENCODE_AUTO_DECOMPOSE_FINE, wiring in
+// plans/0003-fork-decompose-design.md §4.6) — the entry's decompose template is
+// chosen and rendered from these (phaseName = the display name; contextBudget =
+// the half-budget granularity ceiling; fine injects the fine-grained criteria).
+// taskContext: the understanding digest's line-count tier
+// (OPENCODE_AUTO_TASK_CONTEXT, see src/switches.ts); the understand template
+// renders contextLines from it (suggested wording, not a hard cut).
 type Opts = {
   mode?: ModeSpec
   testByDriver?: boolean
   handoverTest?: boolean
-  phase?: Phase
+  phase?: PhaseKey
   contextLimit?: number
   fine?: boolean
   taskContext?: TaskContextMode
@@ -195,8 +197,11 @@ export function renderContextBase(task: Task, digest: string): string {
 // core template keeps only role boundaries, format protocols, and eof.
 export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string {
   const ctx = baseCtx(plan, task, opts)
-  const duties = dutiesForPhase(activeIntentPack, phaseTypeOfLetter(opts.phase ?? "m").dutiesRef)
-  return renderPrompt(decomposeTemplateName(opts.phase, promptTemplateNames()), {
+  const entry = phaseEntry(opts.phase)
+  // A custom type's own `## decompose duties` wins; otherwise the active
+  // pack's `### <dutiesRef>` subsection.
+  const duties = entry.decomposeDuties ?? dutiesForPhase(activeIntentPack, entry.dutiesRef)
+  return renderPrompt(decomposeTemplateName(entry, promptTemplateNames()), {
     ...ctx,
     decomposeRule: intentText("quality", "decompose", ctx),
     phaseDuties: duties && renderText(duties, ctx),
@@ -205,13 +210,22 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
   })
 }
 
-// decompose 模板名解析(纯函数,便于单测): 阶段字母 → 注册表条目的
-// decomposeTemplate(缺省 m);names 为当前生效模板名清单(promptTemplateNames()),
-// 无此名时回退通用 decompose。
-export function decomposeTemplateName(phase: Phase | undefined, names: string[]): string {
-  const candidate = phaseTypeOfLetter(phase ?? "m").decomposeTemplate
+// decompose 模板名解析(纯函数,便于单测): 阶段类型条目 → decomposeTemplate(缺省
+// implement);names 为当前生效模板名清单(promptTemplateNames()),无此名时回退通用
+// decompose。
+export function decomposeTemplateName(entry: PhaseTypeEntry | undefined, names: string[]): string {
+  const candidate = (entry ?? phaseEntry(undefined)).decomposeTemplate
   return names.includes(candidate) ? candidate : "decompose"
 }
+
+// The current phase's type entry; outside the phase loop, implement.
+function phaseEntry(phase: PhaseKey | undefined): PhaseTypeEntry {
+  return phase?.entry ?? phaseType(REQUIRED_TYPE)!
+}
+
+// The `{{phase}}` prompt var: the preset letter of a builtin type, the type id
+// of a custom one.
+const phaseTag = (entry: PhaseTypeEntry): string => entry.letter ?? entry.type
 
 // The L1 authoritative grounded-state block (session-boundary-hardening design
 // §4.1): a subtask session is injected with the authoritative state the driver
@@ -363,7 +377,7 @@ function resolveList(items: ResolveItem[] | undefined): string | undefined {
 // numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
 // 由 loop 在规划会话前经 ensureNumbering 确保就位),未启用时缺省——编号自 T-001 起。
 export function renderPhasePlan(input: {
-  phase: Phase
+  phase: PhaseTypeEntry
   phaseId: string
   taskIndex: string
   brief?: string
@@ -375,11 +389,10 @@ export function renderPhasePlan(input: {
   trimmedPhases?: boolean
   numberStart?: number
 }): string {
-  const { phase } = input
-  const type = phaseTypeOfLetter(phase)
+  const type = input.phase
   return renderPrompt("phase-plan", {
-    phase,
-    phaseName: phaseText(phase),
+    phase: phaseTag(type),
+    phaseName: type.name,
     phaseId: input.phaseId,
     taskIndex: input.taskIndex,
     brief: input.brief?.trim() || undefined,
@@ -392,9 +405,10 @@ export function renderPhasePlan(input: {
     modeInit: input.mode && modeText(input.mode.init),
     trimmedPhases: type.type === "implement" && input.trimmedPhases ? true : undefined,
     numberStart: input.numberStart === undefined ? undefined : String(input.numberStart).padStart(3, "0"),
-    // The duty paragraph comes from the type's shared partial (registry
-    // dutiesRef, M3.2), rendered through the active library so overlays apply.
-    planDuties: renderText(`{{> ${planDutiesPartial(type)}}}`, {}).trimEnd(),
+    // The duty paragraph: a custom type's own `## plan duties` (M3.6), else the
+    // type's shared partial (registry dutiesRef, M3.2), rendered through the
+    // active library so overlays apply.
+    planDuties: renderText(type.planDuties ?? `{{> ${planDutiesPartial(type)}}}`, {}).trimEnd(),
   })
 }
 
@@ -433,10 +447,10 @@ export function renderNumberRecovery(input: { floor: number }): string {
 // handover = phaseHandoverDoc(unit)(src/phases.ts,阶段目录内
 // docs/R-NN/P<nn>-<type>/handover.md);next 为下一阶段"P<nn>-<type> 中文名"或
 // undefined(最后一个阶段无下一阶段,仍写 handover 供后续查阅)。
-export function renderPhaseHandover(input: { phase: Phase; handover: string; next?: string }): string {
+export function renderPhaseHandover(input: { phase: PhaseTypeEntry; handover: string; next?: string }): string {
   return renderPrompt("phase-handover", {
-    phase: input.phase,
-    phaseName: phaseText(input.phase),
+    phase: phaseTag(input.phase),
+    phaseName: input.phase.name,
     handover: input.handover,
     next: input.next,
   })
@@ -597,7 +611,7 @@ function formatTokens(n: number): string {
 const TASK_CONTEXT_LINES: Record<TaskContextMode, number> = { off: 200, small: 300, medium: 400, large: 500 }
 
 function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): Ctx {
-  const phase = opts.phase ?? "m"
+  const entry = phaseEntry(opts.phase)
   return {
     ...modeCtx(opts.mode),
     taskId: task.id,
@@ -608,8 +622,8 @@ function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): 
     // 测试交接文档按执行范围命名: index(仅 renderSubtask 传入,子任务序号)存在
     // 时落子任务级目录(docs/<id>/S<kk>/testhandoff.md),整任务为任务级命名。
     testHandoffFile: opts.testByDriver ? testHandoffFile(task, opts.index) : undefined,
-    phase,
-    phaseName: phaseText(phase),
+    phase: phaseTag(entry),
+    phaseName: entry.name,
     contextBudget: formatTokens((opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 2),
     fine: Boolean(opts.fine),
     contextLines: String(TASK_CONTEXT_LINES[opts.taskContext ?? "off"]),

@@ -20,6 +20,9 @@ import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import type { TestRun } from "../src/testrun"
 import { task, fakeClient, retryClient, type Outcome } from "./fixtures/runner"
+import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
+
+const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
 
 // ---- 会话链复用(OPENCODE_AUTO_REUSE_SESSION,缺省 off)----
 
@@ -619,7 +622,7 @@ describe("attempt 接线: runSession 依注入策略带/不带 model(不依赖 a
   test("字母命中: opts.phase=m → anthropic/c-4 进 prompt.model", async () => {
     const { client, calls } = fakeClient()
     const chain: SessionChain = { pct: 100, used: 0, at: 0 } // 无 role/phase → bypass;letter m 命中
-    await runSession(client, task, "提示词", { phase: "m" }, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "m=anthropic/c-4,*=kimi/k2" }))
+    await runSession(client, task, "提示词", { phase: key("m") }, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "m=anthropic/c-4,*=kimi/k2" }))
     expect(calls.prompts[0]!.model).toEqual({ providerID: "anthropic", modelID: "c-4" })
   })
 
@@ -633,7 +636,7 @@ describe("attempt 接线: runSession 依注入策略带/不带 model(不依赖 a
   test("未设策略: prompt 参数里没有 model 键(逐字节等价现状)", async () => {
     const { client, calls } = fakeClient()
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词", { phase: "m" }, chain, undefined, undefined, parseSwitches({}))
+    await runSession(client, task, "提示词", { phase: key("m") }, chain, undefined, undefined, parseSwitches({}))
     expect("model" in calls.prompts[0]!).toBe(false)
   })
 })

@@ -18,15 +18,15 @@ import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE } from "./numbering"
 import {
   completePhase,
   phaseHandoverDoc,
+  phaseKey,
   phaseLabel,
-  phaseText,
+  phaseName,
   prevRoundDigest,
   readPhases,
   routePhase,
   type PhaseState,
   type PhaseUnit,
 } from "./phases"
-import { phaseTypeOfLetter } from "./phases/registry"
 import { renderPhaseHandover, renderPhasePlan } from "./prompt"
 import { plannedTaskProblems, qualifiedPhase, resetPlanning, takenTaskIds, taskIndexPath } from "./tasks"
 import { closeStep, openStep } from "./resume"
@@ -39,7 +39,7 @@ async function phaseState(directory: string): Promise<PhaseState> {
 }
 
 // 阶段显示名(日志/提交标题): P02-design 设计
-const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseText(unit.letter)}`
+const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(unit)}`
 
 // 阶段规划会话(E 节): 旁路一次性,复用 requireArtifact 骨架,产物 = 本阶段任务索引
 // <阶段目录>/tasks.md + 各任务的 docs/T-NNN/todo.md(M3.4,plans/0047 L3),collect 按
@@ -115,7 +115,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     serverHandle.client,
     { id: "PLAN", title: `阶段规划(${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
     renderPhasePlan({
-      phase: phase.letter,
+      phase: phase.entry,
       phaseId,
       taskIndex,
       brief,
@@ -142,7 +142,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     },
     {
       kind: "阶段规划",
-      step: { step: "phase-plan", letter: phase.letter },
+      step: { step: "phase-plan", unit: phaseKey(phase).id },
       // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
       // (plans/0021-commit-boundary-design.md)。
       unitStart: true,
@@ -183,7 +183,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   log(`✓ phase planning complete: ${taskIndex} lists ${planned.length} task(s)`)
   // 收口: 删除本步骤的 driver 侧恢复点(产物已校验、提交与编号推进均完成)。
   // 在此之前被 kill → 记录仍 active,下次运行经 openStep 重入规划并复用会话。
-  await closeStep(directory, "phase-plan", phase.letter)
+  await closeStep(directory, "phase-plan", phaseKey(phase).id)
   return 0
 }
 
@@ -226,7 +226,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     const distilled = await requireArtifact(
       serverHandle.client,
       distillTask,
-      renderPhaseHandover({ phase: phase.letter, handover, next }),
+      renderPhaseHandover({ phase: phase.entry, handover, next }),
       {
         agent: agentName,
         dir: directory,
@@ -240,7 +240,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
       },
       {
         kind: "交接蒸馏",
-        step: { step: "phase-handover", letter: phase.letter },
+        step: { step: "phase-handover", unit: phaseKey(phase).id },
         // 独立隐藏任务单元: 启动 clean 门禁 + SHA 基线 + 收口校验
         // (plans/0021-commit-boundary-design.md;部分写就的交接文档由 reset 清理重写)。
         unitStart: true,
@@ -270,7 +270,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   // 收口: 蒸馏会话(本步骤唯一的 AI 环节)已产出有效交接文档并提交,删除 driver
   // 侧恢复点。其后的完成改名与提交为幂等的 driver 记账,中断后重跑经上方的交接
   // 文档齐备跳过补完,不再依赖会话恢复。
-  await closeStep(directory, "phase-handover", phase.letter)
+  await closeStep(directory, "phase-handover", phaseKey(phase).id)
   await completePhase(directory, phase)
   // AGENTS.md 只校验不改写(F.2): 超 150 行在交接提交信息与终端 note 提示人工精简。
   const agentsLines = (await Bun.file(join(directory, "AGENTS.md")).text().catch(() => "")).trimEnd().split("\n").length
@@ -293,10 +293,10 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     }
   }
   // 阶段代答汇总(plans/0020-auto-resolve-design.md §H-③,H6): 置顶于 ■ 收口行之前。
-  for (const line of await phaseResolveLines(directory, phase.letter)) log(line)
+  for (const line of await phaseResolveLines(directory, phase)) log(line)
   // 阶段收口行(STATS_PLAN §4.3,T-006): commitTree 之后、return 0 之前——
   // 交接提交时长仍计入本阶段桶(读数实时外推,含当前开放段)。
-  const closing = await phaseCloseLines(directory, phase.letter)
+  const closing = await phaseCloseLines(directory, phase)
   if (closing) for (const line of closing) log(line)
   return 0
 }
@@ -359,24 +359,29 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       if (lines) for (const line of lines) log(line)
       return 0
     }
-    // 阶段切换挂点(STATS_PLAN §3): 字母变化重置 phase 桶;相同字母幂等。
+    // 阶段切换挂点(STATS_PLAN §3): 阶段限定编号变化重置 phase 桶;相同编号幂等。
     // blocked 已 return、complete 即将退出,均无需切换。
-    await statsPhase(directory, route.phase.letter)
-    // 会话恢复优先于文件推导路由(plans/0018-session-resume-precedence-design.md):
-    // driver 侧仍有未收口的阶段步骤恢复点(上次运行的规划/交接会话被中断、driver
-    // 未完成收口)→ 重入该步骤并复用中断的会话,即使任务/阶段索引已让文件推导路由
-    // 前进。任务单元与交接文档是 AI 写的(或会话中断后才由 driver 补的),不能
-    // 证明会话已收口;唯有 driver 的恢复点被 closeStep 删除才算收口。仅当步骤归属
-    // 阶段 == 当前路由阶段且该阶段未完成时生效: 字母不一致(人工回退/陈旧记录)
-    // 让文件路由优先并告警,阶段已完成则清除陈旧记录。恢复点以阶段类型的预置字母
-    // 为键(同一轮内类型不重复,M3.6 前成立)。
+    await statsPhase(directory, phaseKey(route.phase).id)
+    // Session resume takes precedence over file-derived routing
+    // (plans/0018-session-resume-precedence-design.md): an unclosed phase-step
+    // resume point on the driver side (the last run's planning/handover session
+    // was interrupted before the driver closed it out) → re-enter that step and
+    // reuse the interrupted session, even if the task/phase index has already
+    // moved file routing on. Task units and handover docs are written by the AI
+    // (or patched by the driver after the interruption) and cannot prove the
+    // session closed out; only closeStep deleting the resume point does. It
+    // applies only when the step's phase is the current routed phase and is not
+    // done: another phase (manual rollback, stale record) lets file routing win,
+    // and a done phase clears the stale record. The point is keyed by the
+    // qualified phase id R-NN.P<nn> (a type may repeat within a round); a record
+    // without one (pre-M3.6 `letter`) matches no phase and file routing wins.
     const open = await openStep(directory)
     if (open) {
       const state = await phaseState(directory)
-      const owner = state.phases.find((unit) => unit.letter === open.letter)
+      const owner = state.phases.find((unit) => phaseKey(unit).id === open.unit)
       if (owner && state.done.has(owner.id)) {
-        await closeStep(directory, open.step, open.letter)
-      } else if (open.letter === route.phase.letter) {
+        await closeStep(directory, open.step, open.unit)
+      } else if (open.unit === phaseKey(route.phase).id) {
         log(
           `↻ session resume point takes precedence: the ${open.step === "phase-plan" ? "phase planning" : "phase handover"} session` +
             `(${phaseTitle(route.phase)}) was not closed out; re-entering that step to continue`,
@@ -395,12 +400,12 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
           continue
         }
         log(
-          `⚠ unclosed handover resume point (${open.letter}) is inconsistent with the current route (${route.type})` +
+          `⚠ unclosed handover resume point (${open.unit}) is inconsistent with the current route (${route.type})` +
             `(unfinished tasks remain?); continuing with the file-derived route, not re-entering the handover to avoid losing unfinished tasks`,
         )
       } else {
         log(
-          `⚠ unclosed phase-step resume point (${open.step} ${open.letter}) is inconsistent with the current route phase (${phaseTitle(route.phase)}); ` +
+          `⚠ unclosed phase-step resume point (${open.step} ${open.unit ?? "unrecorded phase"}) is inconsistent with the current route phase (${phaseTitle(route.phase)}); ` +
             `continuing with the file-derived route (ignore if this was a manual rollback; otherwise check .auto/progress.json)`,
         )
       }
@@ -411,9 +416,10 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       // 的类型标准产物 P<nn>-knowledge/kb.md;已产出则幂等跳过),随后照常交接。提取失败只打 ⚠ 警告、不污染
       // 退出码(迁移成功不被文档生成失败反向污染);人工在 k 阶段自行写任务索引
       // 时走通用 execute/handover 路由,提取挂点不触发。
-      // 判据为注册表 hasTasks: false(M3.2);直连会话本身仍是知识提取专属——
-      // 内置类型中仅 knowledge 无任务,自定义类型(M3.6)接入时再泛化会话选择。
-      if (!phaseTypeOfLetter(route.phase.letter).hasTasks) {
+      // 判据为注册表 hasTasks: false(M3.2);直连会话是知识提取专属——内置类型中
+      // 仅 knowledge 无任务,自定义类型恒有任务(M3.6,src/phases/custom.ts),故
+      // 会话选择无需泛化。
+      if (!route.phase.entry.hasTasks) {
         banner("k knowledge distillation: migration knowledge capture")
         const extracted = await extractKnowledge(serverHandle.client, directory, {
           agent: agentName,

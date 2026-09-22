@@ -75,12 +75,43 @@ export type ModelRole = (typeof MODEL_ROLES)[number]
 const MODEL_LETTERS = PHASE_LETTERS
 export type ModelLetter = PhaseLetter
 
+// Shape of a phase-type key (the phase directory grammar's type part).
+const TYPE_KEY = /^[a-z][a-z0-9-]*$/
+
+// Role words of retired sessions (plans/0044 D1): still a strict parse failure,
+// not read as phase type ids. Custom type ids may not take them either.
+export const RETIRED_MODEL_ROLES = ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"] as const
+
+// Custom (project) phase type ids that are role words (live or retired; the
+// builtin knowledge type shares its id with the knowledge role by design): as an
+// OPENCODE_AUTO_MODEL key such an id reads as the role, so the type could never
+// be routed by id. The driver checks this where it loads project types (config
+// load, run preflight); [] = none.
+export function phaseTypeRoleProblems(types: readonly string[]): string[] {
+  const words: readonly string[] = [...MODEL_ROLES, ...RETIRED_MODEL_ROLES]
+  return types
+    .filter((type) => words.includes(type))
+    .map((type) => `phase type "${type}" is a model-routing role word (${SWITCH_ENV.model} keys); rename .opencode/auto/phases/${type}.md`)
+}
+
+// Phase-type keys of a model policy that name no known type (run preflight,
+// after the project's custom types are loaded); [] = all known.
+export function modelTypeProblems(policy: ModelPolicy, types: readonly string[]): string[] {
+  return Object.keys(policy.byType)
+    .filter((key) => !types.includes(key))
+    .map((key) => `env ${SWITCH_ENV.model} key "${key}" names no phase type (known: ${types.join(", ")})`)
+}
+
 // 归一化后的模型路由策略(P1 只解析并持有,实际求值 resolveModel 落 P2)。缺省
 // wildcard=undefined / byLetter={} / byRole={} / fallback=[] 即「未设」——两变量
 // 均未设时 resolveModel 必须据此起「不带 model」(逐字节等价现状)。
 export type ModelPolicy = {
   wildcard?: string
   byLetter: Partial<Record<ModelLetter, string>>
+  // Phase-type keys (M3.6): builtin type ids and project custom types. A key
+  // is accepted here by shape; the run preflight rejects keys that name no
+  // known type (modelTypeProblems), since custom types load per project.
+  byType: Record<string, string>
   byRole: Partial<Record<ModelRole, string>>
   fallback: string[]
 }
@@ -183,7 +214,7 @@ const SWITCH_DEFAULTS: Switches = {
   stuck: true,
   taskContext: "off",
   ask: false,
-  model: { byLetter: {}, byRole: {}, fallback: [] },
+  model: { byLetter: {}, byType: {}, byRole: {}, fallback: [] },
   modelFailbackScope: "task",
   retryWaits: [0, 1, 2, 4, 8],
   recoveryWait: 30,
@@ -198,7 +229,7 @@ const SWITCH_DEFAULTS: Switches = {
 // {* ∪ 阶段字母 ∪ 角色词表},条目内分隔符用 = 而非 :(model id 可能含冒号)。值必须
 // 含 /;空串视同未设。坏值严格失败: throw 中文报错(含变量名、示例、越界键/坏值)。
 function parseModelPolicy(rawModel: string | undefined, rawFallback: string | undefined): ModelPolicy {
-  const policy: ModelPolicy = { byLetter: {}, byRole: {}, fallback: [] }
+  const policy: ModelPolicy = { byLetter: {}, byType: {}, byRole: {}, fallback: [] }
   const modelExample = "*=kimi/k2,m=anthropic/c-4,wrapup=kimi/k2-lite"
   const modelRaw = rawModel === undefined || rawModel === "" ? undefined : rawModel
   if (modelRaw !== undefined) {
@@ -221,9 +252,10 @@ function parseModelPolicy(rawModel: string | undefined, rawFallback: string | un
         if (key === "*") policy.wildcard = value
         else if ((MODEL_LETTERS as readonly string[]).includes(key)) policy.byLetter[key as ModelLetter] = value
         else if ((MODEL_ROLES as readonly string[]).includes(key)) policy.byRole[key as ModelRole] = value
+        else if (TYPE_KEY.test(key) && !(RETIRED_MODEL_ROLES as readonly string[]).includes(key)) policy.byType[key] = value
         else {
           throw new Error(
-            `env ${SWITCH_ENV.model} invalid key: "${key}" (expected *, a phase letter ${MODEL_LETTERS.join("|")}, or a role word ${MODEL_ROLES.join("|")}; example ${modelExample})`,
+            `env ${SWITCH_ENV.model} invalid key: "${key}" (expected *, a phase letter ${MODEL_LETTERS.join("|")}, a role word ${MODEL_ROLES.join("|")}, or a phase type id; example ${modelExample})`,
           )
         }
       }
@@ -261,6 +293,7 @@ function renderModelEnv(policy: ModelPolicy): string {
     const value = policy.byLetter[letter]
     if (value !== undefined) parts.push(`${letter}=${value}`)
   }
+  for (const [type, value] of Object.entries(policy.byType)) parts.push(`${type}=${value}`)
   for (const role of MODEL_ROLES) {
     const value = policy.byRole[role]
     if (value !== undefined) parts.push(`${role}=${value}`)

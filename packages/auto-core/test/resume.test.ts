@@ -150,14 +150,14 @@ describe("阶段步骤恢复点(openStep/closeStep)", () => {
   })
 
   test("step 记录往返;openStep 返回未收口步骤的身份与会话", async () => {
-    const progress: Progress = { task: "PLAN", session: "ses_plan", at: 5, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } }
+    const progress: Progress = { task: "PLAN", session: "ses_plan", at: 5, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } }
     await saveProgress(dir, progress)
     expect(await recallProgress(dir, "PLAN")).toEqual(progress)
-    expect(await openStep(dir)).toEqual({ step: "phase-plan", letter: "m", session: "ses_plan" })
+    expect(await openStep(dir)).toEqual({ step: "phase-plan", unit: "R-01.P01", session: "ses_plan" })
   })
 
   test("openStep: 已收口(active=false)、非 step 记录、无记录均返回 undefined", async () => {
-    await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: false, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+    await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: false, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
     expect(await openStep(dir)).toBeUndefined()
     await saveProgress(dir, { task: "T-001", session: "s", at: 1, active: true, phase: { kind: "subtasks" } })
     expect(await openStep(dir)).toBeUndefined()
@@ -165,13 +165,15 @@ describe("阶段步骤恢复点(openStep/closeStep)", () => {
     expect(await openStep(dir)).toBeUndefined()
   })
 
-  test("closeStep: 步骤/字母匹配才删除;不匹配则保留", async () => {
-    await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
-    await closeStep(dir, "phase-handover", "m")
+  test("closeStep: 步骤/阶段单元匹配才删除;不匹配则保留", async () => {
+    await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
+    await closeStep(dir, "phase-handover", "R-01.P01")
     expect(await openStep(dir)).toBeDefined()
-    await closeStep(dir, "phase-plan", "d")
+    // Same type in another phase or round is another unit (M3.6: types may repeat)
+    await closeStep(dir, "phase-plan", "R-01.P03")
+    await closeStep(dir, "phase-plan", "R-02.P01")
     expect(await openStep(dir)).toBeDefined()
-    await closeStep(dir, "phase-plan", "m")
+    await closeStep(dir, "phase-plan", "R-01.P01")
     expect(await openStep(dir)).toBeUndefined()
     expect(await peekProgress(dir)).toBeUndefined()
   })

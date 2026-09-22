@@ -11,7 +11,7 @@ import { baselineIntact, beginUnit, unitBaseline, type UnitBaseline } from "./gi
 import { log } from "./log"
 import type { Opts, UnitStop } from "./opts"
 import type { Task } from "./tasks"
-import { recallProgress, saveProgress, type Phase, type PhaseLetter, type StepKind } from "./resume"
+import { recallProgress, saveProgress, type Phase, type StepKind } from "./resume"
 import { resumeNote } from "./resume-gate"
 import { runSession } from "./session"
 import { formatTokens, sessionAlive, sessionUsage } from "./session-api"
@@ -60,7 +60,7 @@ export async function requireArtifact<T>(
     unitStart?: boolean
     // 阶段级旁路步骤身份(仅阶段规划/交接蒸馏会话声明);有值即启用 driver 侧
     // 恢复点与会话续跑(见函数头注释)。
-    step?: { step: StepKind; letter: PhaseLetter }
+    step?: { step: StepKind; unit: string }
     // 会话角色(模型路由细键,plans/0017-model-routing-design.md C.1):旁路一次性会话
     // 显式声明(如 knowledge / number-recovery);缺省 undefined →
     // roleOf 落 bypass。带 spec.step 的阶段步骤会话无需声明(roleOf 由 step 变体推导)。
@@ -70,7 +70,7 @@ export async function requireArtifact<T>(
   // 重试阶梯压成零等待)。
   switches: Switches = autoSwitches(),
 ): Promise<T | UnitStop> {
-  const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, letter: spec.step.letter } : undefined
+  const stepPhase: Phase | undefined = spec.step ? { kind: "step", step: spec.step.step, unit: spec.step.unit } : undefined
   // 阶段步骤续跑判定: 上次运行在本步骤中断(driver 未收口)且原会话仍可复用 →
   // 首个提示词进原会话(保留产物现场);否则按全新步骤处理(重置 + 新会话)。
   // 严格恢复(OPENCODE_AUTO_STRICT_RESUME): 复用前核对单元基线与生效模型
@@ -85,7 +85,7 @@ export async function requireArtifact<T>(
       recalled?.active === true &&
       recalled.phase?.kind === "step" &&
       recalled.phase.step === spec.step!.step &&
-      recalled.phase.letter === spec.step!.letter
+      recalled.phase.unit === spec.step!.unit
     if (sameStep) {
       const candidate = !opts.newSession ? recalled!.session : undefined
       const alive = candidate !== undefined ? await sessionAlive(client, candidate) : false

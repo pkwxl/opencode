@@ -57,7 +57,7 @@ export type SessionStat = {
 export type StatsDoc = {
   v: 1
   round: number // 装载时 currentRound(dir) 快照
-  phase: string // 当前阶段字母(statsPhase 维护)
+  phase: string // current phase, qualified id R-NN.P<nn> (maintained by statsPhase)
   open?: { at: number; ai: boolean } // 至多一个进行中的段
   lastWriteAt: number // 任一写入刷新 = 上一进程死亡时刻的代理
   taskB: Bucket
@@ -429,16 +429,19 @@ function extrapolate(doc: StatsDoc, bucket: Bucket): Bucket {
   return copy
 }
 
-// 阶段切换(runPhaseLoop routePhase 后/非分阶段 "m"): fold 当前段(计入旧桶)后,
-// 字母变化时重置 phaseB(id=letter, since=now)并落盘;相同字母幂等(不重置、累计
-// 继续)。boot.phase 随桶重置归零,保持"本进程增量"口径对齐当前桶。
-export async function statsPhase(dir: string | undefined, letter: string): Promise<void> {
+// Phase switch (runPhaseLoop after routePhase / the non-phased "m" run): fold
+// the current segment into the old bucket, then, when the phase id changes,
+// reset phaseB (id = the qualified phase id R-NN.P<nn>, since = now) and
+// persist; the same id is idempotent (no reset, keeps accumulating). The id is
+// per phase unit, not per type (M3.6: a type may repeat within a round).
+// boot.phase resets with the bucket, keeping "this process's increment" aligned.
+export async function statsPhase(dir: string | undefined, phase: string): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
   fold(handle)
-  if (handle.doc.phaseB.id === letter) return
-  handle.doc.phase = letter
-  handle.doc.phaseB = emptyBucket(letter, clock())
+  if (handle.doc.phaseB.id === phase) return
+  handle.doc.phase = phase
+  handle.doc.phaseB = emptyBucket(phase, clock())
   handle.boot.phase = emptyTotals()
   queueWrite(dir, handle)
 }

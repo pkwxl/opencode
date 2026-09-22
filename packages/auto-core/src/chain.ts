@@ -8,7 +8,8 @@ import { type UnitBaseline } from "./git"
 import { type ResolveEvent } from "./resolve"
 import { type Phase } from "./resume"
 import { type Usage } from "./stats"
-import { type ModelLetter, type ModelPolicy, type ModelRole } from "./switches"
+import type { PhaseTypeEntry } from "./phases/registry"
+import { type ModelPolicy, type ModelRole } from "./switches"
 
 export type Watch = {
   // 会话内阻塞(askHuman 超时回落/权限拒绝)恒为 blocked 形态,不含 dirty——
@@ -138,11 +139,16 @@ export function roleOf(chain: SessionChain): ModelRole {
   return chain.role ?? phaseToRole(chain.phase) ?? "bypass"
 }
 
-// 路由求值(设计 C.1,优先级由细到粗): role > letter > wildcard;均未命中返回
-// undefined(= 不带 model)。两变量未设时空策略对任意 (letter, role) 恒 undefined,
-// 保证 prompt 逐字节等价现状。
-export function resolveModel(policy: ModelPolicy, letter: ModelLetter | undefined, role: ModelRole): string | undefined {
-  return policy.byRole[role] ?? (letter ? policy.byLetter[letter] : undefined) ?? policy.wildcard
+// 路由求值(设计 C.1,优先级由细到粗): role > phase type id > preset letter >
+// wildcard;均未命中返回 undefined(= 不带 model)。两变量未设时空策略对任意
+// (phase, role) 恒 undefined,保证 prompt 逐字节等价现状。phase 为当前阶段的类型
+// 条目(M3.6: 自定义类型只有类型键,内置类型两种键都认)。
+export function resolveModel(policy: ModelPolicy, phase: PhaseTypeEntry | undefined, role: ModelRole): string | undefined {
+  return (
+    policy.byRole[role] ??
+    (phase ? (policy.byType[phase.type] ?? (phase.letter ? policy.byLetter[phase.letter] : undefined)) : undefined) ??
+    policy.wildcard
+  )
 }
 
 // 会话错误归类(plans/0017-model-routing-design.md D.1):换模型是否可能有用,是 failover

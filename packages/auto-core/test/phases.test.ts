@@ -9,7 +9,7 @@ import {
   completePhase,
   currentPhase,
   currentRound,
-  doneLetters,
+  doneTypes,
   establishRound,
   formatPhases,
   nextRound,
@@ -19,37 +19,47 @@ import {
   phaseHandoverDoc,
   phaseIndexPath,
   phaseLabel,
-  phaseText,
   prevRoundDigest,
   readPhases,
   renderPhaseTodo,
   routePhase,
   syncPhaseIndex,
-  type Phase,
 } from "../src/phases"
 
 describe("parsePhases", () => {
+  const letters = (raw: string) => parsePhases(raw)?.map((entry) => entry.letter)
+  const types = (raw: string, dir?: string) => parsePhases(raw, dir)?.map((entry) => entry.type)
+
   test("admtvk 的子序列且含 m → 按给出顺序返回", () => {
-    expect(parsePhases("m")).toEqual<Phase[]>(["m"])
-    expect(parsePhases("amt")).toEqual<Phase[]>(["a", "m", "t"])
-    expect(parsePhases("admtvk")).toEqual<Phase[]>(["a", "d", "m", "t", "v", "k"])
-    expect(parsePhases("dmvk")).toEqual<Phase[]>(["d", "m", "v", "k"])
+    expect(letters("m")).toEqual(["m"])
+    expect(letters("amt")).toEqual(["a", "m", "t"])
+    expect(letters("admtvk")).toEqual(["a", "d", "m", "t", "v", "k"])
+    expect(letters("dmvk")).toEqual(["d", "m", "v", "k"])
   })
+
+  test("type-id list (M3.6): any order, repeats allowed, spaces trimmed, must contain implement", () => {
+    expect(types("implement")).toEqual(["implement"])
+    expect(types("test,implement,test")).toEqual(["test", "implement", "test"])
+    expect(types(" analysis , implement ")).toEqual(["analysis", "implement"])
+    for (const raw of ["analysis,design", "implement,,test", "implement,nope", "implement,a"]) expect(parsePhases(raw)).toBeNull()
+  })
+
+  test(
+    "type-id list resolves the project's custom types from dir",
+    withDir(async (dir) => {
+      expect(parsePhases("security-review,implement", dir)).toBeNull()
+      mkdirSync(join(dir, ".opencode/auto/phases"), { recursive: true })
+      writeFileSync(join(dir, ".opencode/auto/phases/security-review.md"), "# Security review\n\n## plan duties\n\nList the review tasks.\n")
+      expect(types("security-review,implement", dir)).toEqual(["security-review", "implement"])
+      expect(parsePhases("security-review,implement", dir)![0]!.origin).toBe("project")
+    }),
+  )
 
   test("非法取值 → null(乱序/缺 m/越界字母/重复/空串)", () => {
     for (const raw of ["", "tma", "adk", "mm", "ama", "mx", "M", "amtkv ", "admtvkx"]) {
       expect(parsePhases(raw)).toBeNull()
     }
   })
-})
-
-test("phaseText 六阶段中文名", () => {
-  expect(phaseText("a")).toBe("分析")
-  expect(phaseText("d")).toBe("设计")
-  expect(phaseText("m")).toBe("迁移实现")
-  expect(phaseText("t")).toBe("测试")
-  expect(phaseText("v")).toBe("验收")
-  expect(phaseText("k")).toBe("知识提炼")
 })
 
 function tempDir() {
@@ -76,7 +86,7 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
     withDir(async (dir) => {
       const units = await syncPhaseIndex(dir, 1, "amt")
       expect(units.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
-      expect(units.map((unit) => unit.letter)).toEqual<Phase[]>(["a", "m", "t"])
+      expect(units.map((unit) => unit.entry.letter)).toEqual(["a", "m", "t"])
       expect(units[1]!.dir).toBe("docs/R-01/P02-implement")
       const index = await read(dir, "docs/R-01/phases.md")
       expect(index).toContain("# Phases (R-01)")
@@ -90,6 +100,28 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
       expect(state.index).toBe(phaseIndexPath(1))
       expect(state.phases).toEqual(units)
       expect([...state.done]).toEqual([])
+    }),
+  )
+
+  test(
+    "custom and repeated types (M3.6): one directory per phase, readPhases resolves the project type",
+    withDir(async (dir) => {
+      mkdirSync(join(dir, ".opencode/auto/phases"), { recursive: true })
+      writeFileSync(join(dir, ".opencode/auto/phases/review.md"), "# Review\n\nGate: verdict\n\n## plan duties\n\nPlan the review.\n")
+      const units = await syncPhaseIndex(dir, 1, "review,implement,review")
+      expect(units.map(phaseLabel)).toEqual(["P01-review", "P02-implement", "P03-review"])
+      expect(await read(dir, "docs/R-01/P03-review/todo.md")).toContain("# R-01.P03: Review\n")
+      const state = (await readPhases(dir))!
+      expect(state.phases.map((unit) => [unit.id, unit.entry.origin, unit.entry.gate])).toEqual([
+        ["P01", "project", "verdict"],
+        ["P02", "builtin", "none"],
+        ["P03", "project", "verdict"],
+      ])
+      await completePhase(dir, units[0]!)
+      expect(doneTypes((await readPhases(dir))!)).toEqual(["review"])
+      // The type file gone → the index names an unknown type and reads as invalid
+      rmSync(join(dir, ".opencode/auto/phases/review.md"))
+      await expect(readPhases(dir)).rejects.toThrow(/unknown phase type "review"/)
     }),
   )
 
@@ -156,7 +188,7 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
       expect(await read(dir, "docs/R-01/phases.md")).toContain("- [ ] P01 analysis\n- [x] P02 implement\n- [ ] P03 test\n")
       const state = (await readPhases(dir))!
       expect([...state.done]).toEqual(["P02"])
-      expect(doneLetters(state)).toBe("m")
+      expect(doneTypes(state)).toEqual(["implement"])
     }),
   )
 
@@ -170,7 +202,7 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
   )
 
   test(
-    "invalid index → throw with fix-it guidance: bad line, unknown type, repeated type, both / neither state files",
+    "invalid index → throw with fix-it guidance: bad line, unknown type, both / neither state files",
     withDir(async (dir) => {
       await syncPhaseIndex(dir, 1, "am")
       const index = join(dir, "docs/R-01/phases.md")
@@ -178,7 +210,6 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
       for (const [bad, pattern] of [
         [good + "- [ ] X9 analysis\n", /"X9" is not a phase id/],
         [good + "- [ ] P03 review\n", /unknown phase type "review"/],
-        [good + "- [ ] P03 analysis\n", /phase type analysis is listed twice/],
         ["# Phases\n", /no phases listed/],
       ] as const) {
         writeFileSync(index, bad)
@@ -398,7 +429,7 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
       await completePhase(dir, (await readPhases(dir))!.phases[0]!)
       // 幂等: 重复建立当前轮不重写阶段目录,阶段完成态保留
       const again = await establishRound(dir, { phases: "amt" })
-      expect(doneLetters((await readPhases(dir))!)).toBe("a")
+      expect(doneTypes((await readPhases(dir))!)).toEqual(["analysis"])
       expect(again.round).toBe(1)
       expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("已完成任务")
       // 新一轮: 显式轮号(nextRound)

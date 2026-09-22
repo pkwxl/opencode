@@ -60,7 +60,7 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
 
   test("无阶段(旧版 session.json)无法判定归属 → 不复用;step 记录不归本门禁", () => {
     expect(unitReruns(undefined, ctx())).toBe(false)
-    expect(unitReruns({ kind: "step", step: "phase-plan", letter: "m" }, ctx())).toBe(true)
+    expect(unitReruns({ kind: "step", step: "phase-plan", unit: "R-01.P01" }, ctx())).toBe(true)
   })
 
   test("phaseText 的 subtasks 文案带归属序号", () => {
@@ -73,7 +73,7 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
 
 describe("resumeNote(中断恢复说明)", () => {
   const subtasks: Phase = { kind: "subtasks", index: 2 }
-  const planStep: Phase = { kind: "step", step: "phase-plan", letter: "m" }
+  const planStep: Phase = { kind: "step", step: "phase-plan", unit: "R-01.P01" }
   const ONE_LINE =
     "[DRIVER] 会话曾中断,请继续当前工作直至本单元完成。中断前落盘的修改若已不在工作区,即已由 DRIVER 统一提交进 Git——以 git log 核实,不要重做。"
 
@@ -94,7 +94,7 @@ describe("resumeNote(中断恢复说明)", () => {
     const note = resumeNote(subtasks, false, true)
     expect(note).toContain("部分工作可能已完成")
     expect(note).toContain("首个未完成项")
-    const step = resumeNote({ kind: "step", step: "phase-handover", letter: "t" }, false, true)
+    const step = resumeNote({ kind: "step", step: "phase-handover", unit: "R-01.P01" }, false, true)
     expect(step).toContain("本阶段步骤")
     expect(step).toContain("四个必备小节")
   })
@@ -105,7 +105,7 @@ describe("resumeNote(中断恢复说明)", () => {
     for (const note of [
       resumeNote(subtasks, true, false),
       resumeNote(subtasks, false, false),
-      resumeNote({ kind: "step", step: "phase-plan", letter: "m" }, true, false),
+      resumeNote({ kind: "step", step: "phase-plan", unit: "R-01.P01" }, true, false),
     ]) {
       expect(note).toContain("不代表修改丢失")
       expect(note).toContain("DRIVER 统一提交")

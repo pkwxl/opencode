@@ -189,6 +189,27 @@ describe("loadProjectConfig", () => {
     }
   })
 
+  test("phases type-id list (M3.6): string or JSON array (joined), custom types from .opencode/auto/phases", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ phases: ["analysis", "implement", "test"] }))
+      expect((await loadProjectConfig(dir)).phases).toBe("analysis,implement,test")
+      writeConfig(dir, JSON.stringify({ phases: "review,implement" }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow("unknown phase type(s) review")
+      mkdirSync(join(dir, ".opencode/auto/phases"), { recursive: true })
+      writeFileSync(join(dir, ".opencode/auto/phases/review.md"), "# Review\n\n## plan duties\n\nPlan the review.\n")
+      expect((await loadProjectConfig(dir)).phases).toBe("review,implement")
+      writeConfig(dir, JSON.stringify({ phases: ["review", 1] }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow("list of phase type ids")
+      // A project type named after a model-routing role word is refused
+      writeFileSync(join(dir, ".opencode/auto/phases/wrapup.md"), "# Wrapup\n\n## plan duties\n\nx\n")
+      writeConfig(dir, JSON.stringify({ phases: "m" }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow('phase type "wrapup" is a model-routing role word')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("mode 未注册 → throw 并列出支持的模式", async () => {
     const dir = tempDir()
     try {

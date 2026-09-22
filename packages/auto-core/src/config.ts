@@ -7,8 +7,10 @@
 import { chmod } from "node:fs/promises"
 import { isAbsolute, join } from "node:path"
 import { loadModes } from "./mode"
-import { parsePhases } from "./phases"
+import { loadPhaseTypes } from "./phases/custom"
+import { phasesProblem, resolvePhases } from "./phases/registry"
 import type { SubtaskMode } from "./opts"
+import { phaseTypeRoleProblems } from "./switches"
 
 export type ProjectConfig = {
   // 须为 loadModes(dir) 已注册名。
@@ -42,8 +44,10 @@ export type ProjectConfig = {
   // --no-wrapup: 关闭任务收尾会话(renderWrapup,子任务/整任务执行完成后与
   // 修复轮后的收尾会话)。缺省 true(现状零变化)。
   wrapup: boolean
-  // admtvk 的子序列且含 m(设计文档 plans/0006-phases-design.md §A);"m" = 无阶段声明,
-  // 单次运行,行为与阶段化之前完全一致。
+  // 字母预置(admtvk 的子序列且含 m,设计文档 plans/0006-phases-design.md §A)或
+  // 逗号分隔的阶段类型 id 列表(含 .opencode/auto/phases/ 的自定义类型,须含
+  // implement,M3.6);"m" = 无阶段声明,单次运行。config.json 里也可写 JSON 数组,
+  // 读取时规范化为逗号串。
   phases: string
   // 迁移源参数(可选,非迁移场景缺省 undefined): dir = 源系统目录(相对工作目录、
   // 不含 ..,源树与流程文件同在工作目录下),path = 源模块相对路径(相对 dir)。
@@ -147,10 +151,15 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof contextLimit !== "number" || !Number.isInteger(contextLimit) || contextLimit < 1) {
     throw new Error(`${CONFIG_FILE} contextLimit must be a positive integer (thousands of tokens)`)
   }
-  const phases = pick("phases")
-  if (typeof phases !== "string" || parsePhases(phases) === null) {
-    throw new Error(`${CONFIG_FILE} phases must be a subsequence of admtvk and contain m (e.g. m, amt, admtvk)`)
+  const rawPhases = pick("phases")
+  const phases = Array.isArray(rawPhases) && rawPhases.every((item) => typeof item === "string") ? rawPhases.join(",") : rawPhases
+  if (typeof phases !== "string") {
+    throw new Error(`${CONFIG_FILE} phases must be a letter preset (e.g. m, amt, admtvk) or a list of phase type ids (e.g. "analysis,security-review,implement")`)
   }
+  const types = loadPhaseTypes(dir)
+  const clashes = phaseTypeRoleProblems(types.filter((entry) => entry.origin === "project").map((entry) => entry.type))
+  if (clashes.length) throw new Error(clashes.join("\n"))
+  if (resolvePhases(phases, types) === null) throw new Error(`${CONFIG_FILE} phases is invalid: ${phasesProblem(phases, types)}`)
   // commit:false 已退役(2026-09-15,plans/0021-commit-boundary-design.md): 统一提交是
   // 完成条件,单元提交边界的 clean 门禁/SHA 基线与恢复保真的回滚锚点全部以"提交
   // 恒开"为前提,关闭档与之冲突。存量配置按"坏文件严格失败"口径处理——读到 false

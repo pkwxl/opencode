@@ -2,13 +2,15 @@
 // A phase *type* is a registry entry, not a hard-coded letter. The six builtin
 // types keep their admtvk letters only as `--phases` presets: `adm` expands to
 // analysis, design, implement. Everything that used to be a per-letter literal
-// table (names, directory slugs, decompose template, plan duties, the k-phase
-// special case) reads from here.
+// table (names, decompose template, plan duties, the k-phase special case)
+// reads from here.
 //
-// Until the phase-directory layout lands (M3.3) the runtime still identifies a
-// phase by its letter: the ledger, archive paths and model-routing keys are
-// letter-keyed, so `letter` and `slug` stay load-bearing for now. The artifact
-// lists and the gate are declared here but have no reader before M3.3/M3.4.
+// Custom types (M3.6) come from the project's .opencode/auto/phases/<type>.md
+// (src/phases/custom.ts, loadPhaseTypes). The registry itself stays stateless:
+// every lookup takes the type list it searches, and a phase unit carries its
+// resolved entry, so nothing depends on a process-wide install step. The
+// runtime keys a phase by its qualified id (R-NN.P<nn>) and its type, never by
+// the preset letter, so a type may occur more than once in a round.
 import type { ArtifactSpec } from "../document/types"
 
 // The preset letters in canonical order. The order is semantic: a preset
@@ -21,21 +23,22 @@ export type PhaseGate = "none" | "verdict"
 export type PhaseTypeEntry = {
   // Type id: the `<type>` of a phase directory `P<nn>-<type>` (M3.3).
   type: string
-  // Preset letter for `--phases` (builtin types only; custom types, M3.6,
-  // have none).
+  // Preset letter for `--phases` (builtin types only; custom types have none).
   letter?: PhaseLetter
-  // Directory slug of the letter layout (`<letter>-<slug>/`, handovers,
-  // phase-docs). Differs from `type` for m (migrate) and t (testing); retired
-  // with the letter layout (M3.3/M3.7).
-  slug: string
   // Human-readable name: logs, commit subjects, the `phaseName` prompt var.
-  // Chinese until the M3.8 translation batch.
+  // Builtins are Chinese until the M3.8 translation batch; a custom type's is
+  // its file's title line.
   name: string
   // Key of this type's duty text: the `### <key>` subsection under an intent
   // pack's `## phase duties` (decompose), and the `plan-duties-<key>` shared
   // partial (phase-plan). Builtins use their letter, so existing packs and
-  // overlays keep resolving.
+  // overlays keep resolving; a custom type uses its type id.
   dutiesRef: string
+  // Duty text carried by a custom type's own file (`## plan duties` /
+  // `## decompose duties`). When present it replaces the dutiesRef lookup
+  // for that session; builtins carry none.
+  planDuties?: string
+  decomposeDuties?: string
   // Prompt template of this type's decompose session.
   decomposeTemplate: string
   // Standard artifacts, paths relative to the unit directory (the phase dir
@@ -47,7 +50,14 @@ export type PhaseTypeEntry = {
   hasTasks: boolean
   // verdict = the phase's verdict.md `Result: FAIL` stops the round (M3.3).
   gate: PhaseGate
+  // Where the entry comes from; a project file is `.opencode/auto/phases/<type>.md`.
+  origin: "builtin" | "project"
 }
+
+// A phase as the session layer sees it (Opts.phase): the qualified phase id
+// R-NN.P<nn> (resolve records, stats bucket) and the resolved type entry
+// (model routing, decompose template and duties).
+export type PhaseKey = { id: string; entry: PhaseTypeEntry }
 
 const artifact = (path: string, label: string): ArtifactSpec => ({ path, label, role: "artifact" })
 
@@ -55,7 +65,6 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "analysis",
     letter: "a",
-    slug: "analysis",
     name: "分析",
     dutiesRef: "a",
     decomposeTemplate: "decompose-a",
@@ -63,11 +72,11 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("analysis.md", "task analysis")],
     hasTasks: true,
     gate: "none",
+    origin: "builtin",
   },
   {
     type: "design",
     letter: "d",
-    slug: "design",
     name: "设计",
     dutiesRef: "d",
     decomposeTemplate: "decompose-d",
@@ -75,11 +84,11 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("design.md", "task design")],
     hasTasks: true,
     gate: "none",
+    origin: "builtin",
   },
   {
     type: "implement",
     letter: "m",
-    slug: "migrate",
     name: "迁移实现",
     dutiesRef: "m",
     decomposeTemplate: "decompose-m",
@@ -87,11 +96,11 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [],
     hasTasks: true,
     gate: "none",
+    origin: "builtin",
   },
   {
     type: "test",
     letter: "t",
-    slug: "testing",
     name: "测试",
     dutiesRef: "t",
     decomposeTemplate: "decompose-t",
@@ -99,11 +108,11 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("test-log.md", "test log")],
     hasTasks: true,
     gate: "none",
+    origin: "builtin",
   },
   {
     type: "acceptance",
     letter: "v",
-    slug: "acceptance",
     name: "验收",
     dutiesRef: "v",
     decomposeTemplate: "decompose-v",
@@ -111,11 +120,11 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("verification.md", "task verification")],
     hasTasks: true,
     gate: "verdict",
+    origin: "builtin",
   },
   {
     type: "knowledge",
     letter: "k",
-    slug: "knowledge",
     name: "知识提炼",
     dutiesRef: "k",
     decomposeTemplate: "decompose-k",
@@ -123,19 +132,22 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [],
     hasTasks: false,
     gate: "none",
+    origin: "builtin",
   },
 ]
 
-// The type every preset must contain: a phased flow without implementation is
-// meaningless, and "m" alone is the no-phase single run.
-const REQUIRED_TYPE = "implement"
+// The type every phase sequence must contain: a phased flow without
+// implementation is meaningless, and "m" alone is the no-phase single run.
+export const REQUIRED_TYPE = "implement"
 
 export function isPhaseLetter(value: string): value is PhaseLetter {
   return (PHASE_LETTERS as readonly string[]).includes(value)
 }
 
-export function phaseType(type: string): PhaseTypeEntry | undefined {
-  return BUILTIN_PHASE_TYPES.find((entry) => entry.type === type)
+// Look a type up in a type list (default: the builtins; pass loadPhaseTypes(dir)
+// to include the project's custom types).
+export function phaseType(type: string, types: readonly PhaseTypeEntry[] = BUILTIN_PHASE_TYPES): PhaseTypeEntry | undefined {
+  return types.find((entry) => entry.type === type)
 }
 
 export function phaseTypeOfLetter(letter: PhaseLetter): PhaseTypeEntry {
@@ -158,6 +170,45 @@ export function expandPhases(raw: string): PhaseTypeEntry[] | null {
     entries.push(phaseTypeOfLetter(ch as PhaseLetter))
   }
   return entries.some((entry) => entry.type === REQUIRED_TYPE) ? entries : null
+}
+
+// A phases value in preset form: a non-empty run of preset letters. Any other
+// value is a comma-separated list of type ids. Custom type ids may not take
+// this shape (custom.ts), so the two forms never overlap.
+export const PRESET_FORM = /^[admtvk]+$/
+
+// Resolve a phases value (config.json `phases`, CLI `--phases`) into registry
+// entries; null = invalid. Two forms:
+// - a letter preset (`adm`): expandPhases, the unchanged whitelist rule;
+// - a comma-separated list of type ids (`analysis,security-review,implement`):
+//   every id known to `types`, in any order, repeats allowed, containing the
+//   required type at least once. Spaces around ids are ignored.
+// "m" (the no-phase single run) is a preset; the list `implement` is a phased
+// flow with a planning session, not the manual mode.
+export function resolvePhases(raw: string, types: readonly PhaseTypeEntry[] = BUILTIN_PHASE_TYPES): PhaseTypeEntry[] | null {
+  if (PRESET_FORM.test(raw)) return expandPhases(raw)
+  const ids = raw.split(",").map((id) => id.trim())
+  if (!ids.length || ids.some((id) => !id)) return null
+  const entries: PhaseTypeEntry[] = []
+  for (const id of ids) {
+    const entry = phaseType(id, types)
+    if (!entry) return null
+    entries.push(entry)
+  }
+  return entries.some((entry) => entry.type === REQUIRED_TYPE) ? entries : null
+}
+
+// Why a phases value is invalid, for usage errors (resolvePhases returned null).
+export function phasesProblem(raw: string, types: readonly PhaseTypeEntry[] = BUILTIN_PHASE_TYPES): string {
+  const known = types.map((entry) => entry.type).join(", ")
+  if (PRESET_FORM.test(raw)) return `a letter preset must be a subsequence of admtvk containing m (e.g. m, amt, admtvk); got "${raw}"`
+  const unknown = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id && !phaseType(id, types))
+  if (unknown.length) return `unknown phase type(s) ${unknown.join(", ")} (known: ${known})`
+  if (raw.split(",").some((id) => !id.trim())) return `a phase type list is comma-separated type ids without empty items; got "${raw}"`
+  return `a phase type list must contain ${REQUIRED_TYPE}; got "${raw}"`
 }
 
 // Shared-partial section holding this type's phase-plan duty paragraph.

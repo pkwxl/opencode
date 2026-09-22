@@ -12,17 +12,18 @@ import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
   currentRound,
-  doneLetters,
+  doneTypes,
   establishRound,
   formatPhases,
   nextRound,
   parsePhases,
   phaseIndexPath,
   phaseLabel,
-  phaseText,
   readPhases,
   type PhaseState,
 } from "@opencode-ai/auto-core/phases"
+import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
+import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/auto-core/phases/registry"
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { loadPlan } from "@opencode-ai/auto-core/tasks"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/runner"
@@ -454,14 +455,24 @@ if (command === "init" || command === "continue") {
   // --phases: 阶段化流程(设计文档 plans/0006-phases-design.md);"m"(缺省)= 无阶段
   // 声明,单次运行,行为不变。已有完成阶段时的前缀护栏见下(已完成的阶段必须构成
   // 新值的前缀,防止 amend 把流程状态打成不可推导)。
+  // 取值二形态(M3.6): 字母预置(admtvk 子序列含 m)或逗号分隔的阶段类型 id 列表
+  // (含 .opencode/auto/phases/ 的自定义类型,须含 implement);列表形态规范化为
+  // 无空格的逗号串写入 config。
   let phases: string | undefined
   if (flags.has("phases")) {
-    const parsed = parsePhases(flags.get("phases") ?? "")
-    if (!parsed) {
-      console.error(`--phases must be a subsequence of admtvk containing m (e.g. m, amt, admtvk); got: "${flags.get("phases") ?? ""}"`)
+    const raw = flags.get("phases") ?? ""
+    let parsed: PhaseTypeEntry[] | null
+    try {
+      parsed = parsePhases(raw, directory)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
       process.exit(1)
     }
-    phases = parsed.join("")
+    if (!parsed) {
+      console.error(`--phases is invalid: ${phasesProblem(raw, loadPhaseTypes(directory))}`)
+      process.exit(1)
+    }
+    phases = PRESET_FORM.test(raw) ? raw : parsed.map((entry) => entry.type).join(",")
   }
   // --source-dir/--source-path/--dest-dir: 迁移参数。布局约定: 位置参数是 driver
   // 工作目录,迁移源在 <工作目录>/<source-dir>(source-path 为其下的模块相对路径)、
@@ -609,8 +620,8 @@ if (command === "init" || command === "continue") {
     }
   }
   // 阶段索引(当前轮 docs/R-NN/phases.md + 各阶段目录 todo.md/done.md,M3.3)是
-  // 推导式状态载体;非法即环境错误退出 1(报文给人工修订指引)。已完成阶段的预置
-  // 字母串(索引序)取代原台账字母串: 非空时显式改 --phases 须满足前缀护栏。
+  // 推导式状态载体;非法即环境错误退出 1(报文给人工修订指引)。已完成阶段的类型
+  // 序列(索引序,M3.6 起取代预置字母串): 非空时显式改 --phases 须满足前缀护栏。
   let phaseState: PhaseState | undefined
   try {
     phaseState = await readPhases(directory)
@@ -619,7 +630,10 @@ if (command === "init" || command === "continue") {
     process.exit(1)
   }
   const indexPath = phaseIndexPath(await currentRound(directory))
-  const completedPhases = phaseState ? doneLetters(phaseState) : ""
+  const completedPhases = phaseState ? doneTypes(phaseState) : []
+  // 生效 phases 与既有配置 phases 展开为类型序列(均已校验合法)。
+  const typesOf = (value: string) => parsePhases(value, directory)!.map((entry) => entry.type)
+  const effectiveTypes = typesOf(effectivePhases)
   // continue 前置校验(按既有配置判定,不看向新 --phases 值): 仅阶段化项目、且
   // 上一轮已全部完成——阶段索引存在且其中每个阶段都已完成(done.md)。轮首建立后
   // 新一轮阶段全未完成,新一轮 --phases 不受前缀护栏约束(从头规划,任何合法值可改)。
@@ -627,7 +641,7 @@ if (command === "init" || command === "continue") {
     if (existing.phases === "m") {
       console.error(
         `continue only applies to phased-flow projects: the current config has phases = "m" (a single run with no phase declaration, no rounds). ` +
-          `enable the phased flow first with opencode-auto init <dir> --phases <admtvk subsequence containing m>`,
+          `enable the phased flow first with opencode-auto init <dir> --phases <admtvk subsequence containing m | type-id list containing implement>`,
       )
       process.exit(1)
     }
@@ -635,8 +649,8 @@ if (command === "init" || command === "continue") {
       console.error('continue is for phased-flow round continuation; --phases cannot be "m"')
       process.exit(1)
     }
-    const declared = [...existing.phases]
-    const outside = [...completedPhases].filter((letter) => !declared.includes(letter))
+    const declared = typesOf(existing.phases)
+    const outside = completedPhases.filter((type) => !declared.includes(type))
     if (outside.length) {
       console.error(
         `continue precheck failed: the phase index ${indexPath} records completed phases outside phases (${existing.phases}): ${outside.join(", ")}. ` +
@@ -659,13 +673,14 @@ if (command === "init" || command === "continue") {
   // 已完成阶段(syncPhaseIndex 拒绝丢弃已完成阶段,但报错发生在配置写盘之后)。
   // 判生效值即可把这种情形拦在任何写盘之前。--amend/continue 下生效值 = 既有配置
   // 值,天然满足前缀条件,旧行为不变。
-  if (!cont && completedPhases && !effectivePhases.startsWith(completedPhases)) {
+  const completedText = completedPhases.join(",")
+  if (!cont && completedPhases.length && !completedPhases.every((type, i) => effectiveTypes[i] === type)) {
     console.error(
       flags.has("phases")
-        ? `the new --phases value "${effectivePhases}" is incompatible with the phase index (${indexPath}): its completed phases are "${completedPhases}", which must be a prefix of the new value. ` +
+        ? `the new --phases value "${effectivePhases}" is incompatible with the phase index (${indexPath}): its completed phases are "${completedText}", which must be a prefix of the new value's phase types. ` +
             "use a value prefixed by it, or roll the index back manually (rename done.md to todo.md) before changing it"
-        : `a no-flag init overwrites with defaults and would reset phases to "${effectivePhases}", incompatible with the completed phases "${completedPhases}" in the phase index (${indexPath}) (it would destroy the round layout). ` +
-            `to keep the existing config use opencode-auto init ${directory} --amend; to really change it, pass --phases explicitly prefixed by "${completedPhases}"`,
+        : `a no-flag init overwrites with defaults and would reset phases to "${effectivePhases}", incompatible with the completed phases "${completedText}" in the phase index (${indexPath}) (it would destroy the round layout). ` +
+            `to keep the existing config use opencode-auto init ${directory} --amend; to really change it, pass --phases explicitly prefixed by "${completedText}"`,
     )
     process.exit(1)
   }
@@ -827,12 +842,13 @@ if (command === "init" || command === "continue") {
     console.log(promptText !== undefined ? `brief recorded; run: opencode-auto run ${directory} to start task planning` : `list tasks in docs/R-01/P01-implement/tasks.md (one line \`- [ ] T-NNN <title>\` each, content in docs/T-NNN/todo.md), then run: opencode-auto run ${directory}`)
     process.exit(0)
   }
-  const current = parsePhases(config.phases)!.find((phase) => !(cont ? "" : completedPhases).includes(phase))
+  // 首个未完成阶段: 前缀护栏保证已完成阶段恰为生效类型序列的前缀。
+  const current = parsePhases(config.phases, directory)![cont ? 0 : completedPhases.length]
   if (cont) {
     console.log(`round ${newRound} of the migration started: making the migration result more complete and consistent with the source on top of existing progress`)
   }
   console.log(
-    `${promptText !== undefined ? "brief recorded; " : ""}run: opencode-auto run ${directory}${current ? ` to start ${current} (${phaseText(current)}) phase planning` : " (all phases complete)"}`,
+    `${promptText !== undefined ? "brief recorded; " : ""}run: opencode-auto run ${directory}${current ? ` to start ${current.type} (${current.name}) phase planning` : " (all phases complete)"}`,
   )
   process.exit(0)
 }
@@ -939,8 +955,8 @@ if (command === "status") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m>] [--source-dir <dir> --source-path <relative-path>] [--dest-dir <relative-path>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
-  opencode-auto continue [dir] [--phases <admtvk subsequence with m>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--source-dir <dir> --source-path <relative-path>] [--dest-dir <relative-path>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
+  opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent <name>] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
@@ -954,7 +970,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions)
        reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json and brief.md, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
-       --phases <admtvk subsequence with m> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; once phases are complete, changes must satisfy the prefix guard — see README)
+       --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md; once phases are complete, changes must satisfy the prefix guard — see README)
        --source-dir <dir> --source-path <relative-path> migration source parameters (source-system directory + source-module relative path, always as a pair; both relative to <dir>; existence is checked at init)
        --dest-dir <relative-path> migration target directory (relative to <dir>): isolates the driver workdir from the migration target; migrated code is written to <dir>/<dest-dir>
        --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)

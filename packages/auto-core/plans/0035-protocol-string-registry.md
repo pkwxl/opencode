@@ -310,3 +310,21 @@ The syntax text lives in two new English partial sections, `task-depends` and
 `subtask-depends` (`templates/prompts/_partials.md`). Each is tier-1 guarded
 by the markers `Depends:`, `Depends: none` and `Touches:` (`src/template.ts`
 `PARTIAL_MARKERS`).
+
+## Amendment (2026-09-22, M3.6 / plans/0047 §11): custom phase type files
+
+New English protocol literals, registered as new rather than flipped, so they
+have no dual-read. The driver parses them in `src/phases/custom.ts`
+(`parsePhaseTypeFile`):
+
+- the directory `.opencode/auto/phases/`, holding one `<type>.md` per type;
+- the field names `Tasks:`, `Gate:`, `Phase-artifacts:` and `Task-artifacts:`,
+  read case-insensitively by `parseUnitDoc`, with the values `yes` (Tasks)
+  and `none` / `verdict` (Gate);
+- the section headings `## plan duties` and `## decompose duties`, matched
+  case-insensitively;
+- the phases value's list form, comma-separated type ids
+  (`analysis,security-review,implement`), beside the unchanged letter preset;
+- the step resume record field `unit` (`progress.json`,
+  `{kind: "step", step, unit: "R-NN.P<nn>"}`), which replaces `letter`. The
+  old field is not read (plans/0047 §11 M3.6 gives the reason).

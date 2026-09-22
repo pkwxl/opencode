@@ -61,7 +61,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   const planTask = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
   const spec = (reset: () => void) => ({
     kind: "阶段规划",
-    step: { step: "phase-plan" as const, letter: "m" as const },
+    step: { step: "phase-plan" as const, unit: "R-01.P01" },
     artifact: "已填充的 PLAN.md",
     requirement: "写入 PLAN.md",
     reset: async () => {
@@ -73,7 +73,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   test("未收口 step 记录 + 会话存活: 复用原会话、不重置产物、提示词进原会话", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-resume-"))
     try {
-      await saveProgress(dir, { task: "PLAN", session: "ses_plan_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+      await saveProgress(dir, { task: "PLAN", session: "ses_plan_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const { client, state } = artifactClient("ses_plan_old")
       let resetCalled = false
       const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
@@ -99,7 +99,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
       const rec = await recallProgress(dir, "PLAN")
       expect(rec?.active).toBe(true)
       expect(rec?.session).toBe("ses_new_1")
-      expect(rec?.phase).toEqual({ kind: "step", step: "phase-plan", letter: "m" })
+      expect(rec?.phase).toEqual({ kind: "step", step: "phase-plan", unit: "R-01.P01" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -108,7 +108,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   test("step 记录存在但会话已死(get 失败): 不复用,重置并开新会话", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-dead-"))
     try {
-      await saveProgress(dir, { task: "PLAN", session: "ses_dead", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+      await saveProgress(dir, { task: "PLAN", session: "ses_dead", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const { client, state, sdk } = artifactClient("ses_dead")
       ;(sdk as unknown as { session: { get: unknown } }).session.get = async () => ({ error: { name: "NotFound" } })
       let resetCalled = false
@@ -165,7 +165,7 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
       // 此处直接验证记录仍指向本步骤的会话谱系而非被删。
       const open = await openStep(dir)
       expect(open?.step).toBe("phase-plan")
-      expect(open?.letter).toBe("m")
+      expect(open?.unit).toBe("R-01.P01")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -294,7 +294,7 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
       await git(dir, "init", "-q")
       // 半途产物 + active step 记录 + 存活会话 → 复用续跑而非 dirty 阻塞
       await writeFile(join(dir, "docs-kb.md"), "半途产物")
-      await saveProgress(dir, { task: "PLAN", session: "ses_alive", at: 1, active: true, phase: { kind: "step", step: "phase-plan", letter: "m" } })
+      await saveProgress(dir, { task: "PLAN", session: "ses_alive", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const state = { creates: 0, prompts: [] as string[] }
       const client = opencodeAgent({
         session: {
@@ -329,7 +329,7 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
       } as unknown as OpencodeClient)
       const value = await requireArtifact(client, planTask, "续跑提示词", { dir }, {
         ...unitSpec,
-        step: { step: "phase-plan", letter: "m" },
+        step: { step: "phase-plan", unit: "R-01.P01" },
       })
       expect(value).toBe("产出")
       expect(state.prompts).toEqual(["ses_alive"]) // 复用原会话,未因脏区分叉
@@ -381,7 +381,7 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
       session: "ses_plan_old",
       at: 1,
       active: true,
-      phase: { kind: "step", step: "phase-plan", letter: "m" },
+      phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" },
       ...(record.withBaseline === false ? {} : { baseline }),
       ...(record.model === undefined ? {} : { model: record.model }),
     })
@@ -428,7 +428,7 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
   const planTask = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
   const spec = (reset: () => void) => ({
     kind: "阶段规划",
-    step: { step: "phase-plan" as const, letter: "m" as const },
+    step: { step: "phase-plan" as const, unit: "R-01.P01" },
     artifact: "已填充的 PLAN.md",
     requirement: "写入 PLAN.md",
     reset: async () => {

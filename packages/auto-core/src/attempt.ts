@@ -38,7 +38,7 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
     events.map((event) => ({
       at: event.at,
       task: taskID,
-      phase: opts.phase ?? "",
+      phase: opts.phase?.id ?? "",
       round,
       session: event.session,
       source: "driver" as const,
@@ -199,12 +199,14 @@ export async function attempt(
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note
     chain.note = undefined
-    // 本次模型(plans/0017-model-routing-design.md C.3/E): 优先级 链上降级候选 >
-    // phase 粒度跨任务粘滞(sticky holder)> /failback 运行期覆写首选 > 路由表
-    // (阶段字母 + 会话角色)。target 未定义时不带 model 键——两变量未设且无任何
-    // 覆写时全链恒 undefined,逐字节等价现状(而非带 model: undefined)。
+    // This session's model (plans/0017-model-routing-design.md C.3/E): chain
+    // fallback candidate > phase-scoped cross-task sticky (sticky holder) >
+    // /failback runtime override > the routing table (role > phase type id >
+    // preset letter > wildcard, resolveModel). An undefined target sends no model
+    // key: with both variables unset and no override the whole chain stays
+    // undefined, byte-identical to the unrouted call (not model: undefined).
     const override = failbackOverride()
-    const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase, roleOf(chain))
+    const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
     promptModel = target
     // 实际使用模型上终端(前端可见): 每个新会话(新建/分叉,即 !reuse)都播报一行
     // (来源标注),模型较上次 prompt 有变化时亦播报;同会话同模型的续跑 prompt

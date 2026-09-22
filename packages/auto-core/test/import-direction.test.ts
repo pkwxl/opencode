@@ -41,7 +41,10 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // surface (built-in registry + project overlay). Published together so the
   // driver never reaches past them into the domain.
   intent: ["intent/types", "intent/load"],
-  phases: ["phases/registry"],
+  // phases: registry = the type registry and phases-value resolution; custom =
+  // the project type loader (M3.6, .opencode/auto/phases/<type>.md), which the
+  // driver calls where it validates config and preflights a run.
+  phases: ["phases/registry", "phases/custom"],
   // document: types = the frozen schema (M1.1); spec = the artifact-spec
   // machinery (M1.4 — `产出:` declaration parser, decompose/state-file spec
   // tables, generic spec-driven checker), the domain's published acquisition
@@ -144,10 +147,13 @@ const CLASSIFIED: Record<string, Domain> = {
 const FROZEN_IMPORTS: Record<string, string[]> = {
   mode: [],
   template: [],
-  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases", "phases/registry", "resolve", "stuck", "switches", "tasks", "template"],
+  // M3.6: the phase view is a PhaseKey / type entry (phases/registry), no
+  // longer the phases.ts letter helpers.
+  prompt: ["docpaths", "intent/load", "intent/types", "mode", "phases/registry", "resolve", "stuck", "switches", "tasks", "template"],
   // M3.4: routing loads the current phase's tasks (tasks) and no longer
   // renders the retired PLAN.md scaffold (template).
-  phases: ["docpaths", "document/unit", "phases/registry", "tasks"],
+  // M3.6: phase types load per project (phases/custom).
+  phases: ["docpaths", "document/unit", "phases/custom", "phases/registry", "tasks"],
   docpaths: [],
   doccheck: [],
   protect: ["document/roles"],

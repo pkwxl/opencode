@@ -12,6 +12,8 @@ import {
 } from "../src/prompt"
 import { usePromptLibrary } from "../src/template"
 import { migrate, plan } from "./fixtures/prompt"
+import { parsePhaseTypeFile } from "../src/phases/custom"
+import { phaseTypeOfLetter as L } from "../src/phases/registry"
 
 // The unit coordinates every planning render needs (M3.4); tests vary the rest.
 const phasePlan = (input: Omit<Parameters<typeof renderPhasePlan>[0], "phaseId" | "taskIndex">) =>
@@ -22,7 +24,7 @@ const implementPlan = (input: Omit<Parameters<typeof renderImplementPlan>[0], "p
 describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   test("注入 brief/迁移源与目标/模式导语与任务单元格式协议;只写任务索引与任务文档", () => {
     const text = phasePlan({
-      phase: "a",
+      phase: L("a"),
       brief: "把 legacy 迁移到 bun",
       source: { dir: "legacy", path: "src/mod.ts" },
       destDir: "target",
@@ -57,19 +59,19 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   })
 
   test("brief 缺失 → 未提供提示段;各阶段职责条件注入(任务锚定,k 为永久路径知识文档)", () => {
-    const missing = phasePlan({ phase: "d" })
+    const missing = phasePlan({ phase: L("d") })
     expect(missing).toContain("未提供(brief.md 缺失或为空)")
     expect(missing).toContain("模块设计")
     expect(missing).not.toContain("行为基线")
-    expect(phasePlan({ phase: "m" })).toContain("代码迁移与改造")
-    expect(phasePlan({ phase: "t" })).toContain("回归覆盖")
-    expect(phasePlan({ phase: "v" })).toContain("整体验收")
-    expect(phasePlan({ phase: "k" })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
+    expect(phasePlan({ phase: L("m") })).toContain("代码迁移与改造")
+    expect(phasePlan({ phase: L("t") })).toContain("回归覆盖")
+    expect(phasePlan({ phase: L("v") })).toContain("整体验收")
+    expect(phasePlan({ phase: L("k") })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
   })
 
   test("handovers 注入两态: 有前序交接则注入清单(标注阶段目录内 handover.md 永久路径),无则整块消失", () => {
     const text = phasePlan({
-      phase: "m",
+      phase: L("m"),
       handovers: "### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)\n\n- 决策甲: 选型 X",
     })
     expect(text).toContain("前序阶段交接")
@@ -78,12 +80,12 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)")
     expect(text).toContain("- 决策甲: 选型 X")
     // 首阶段无前序交接: 交接块整块消失
-    expect(phasePlan({ phase: "a" })).not.toContain("前序阶段交接")
+    expect(phasePlan({ phase: L("a") })).not.toContain("前序阶段交接")
   })
 
   test("prevRound 注入两态: 续轮结论块出现/整块消失(仅新一轮首个规划会话由 loop 传入)", () => {
     const text = phasePlan({
-      phase: "a",
+      phase: L("a"),
       prevRound: "### 上一轮(第 1 轮)阶段目录索引(docs/R-01/)\n\n- docs/R-01/P01-implement/",
     })
     expect(text).toContain("上一轮迁移结论(续轮)")
@@ -92,55 +94,65 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(text).toContain("永久路径")
     expect(text).toContain("- docs/R-01/P01-implement/")
     // 非续轮(无 prevRound): 结论块整块消失
-    expect(phasePlan({ phase: "a" })).not.toContain("上一轮迁移结论")
+    expect(phasePlan({ phase: L("a") })).not.toContain("上一轮迁移结论")
   })
 
   test("m 阶段经 trimmedPhases 注入流程裁剪注记(--phases 裁剪 → 勘察设计并入首批任务,底线不省),缺省与其余阶段无", () => {
-    const m = phasePlan({ phase: "m", trimmedPhases: true })
+    const m = phasePlan({ phase: L("m"), trimmedPhases: true })
     expect(m).toContain("流程裁剪注记")
     expect(m).toContain("--phases 裁剪")
     expect(m).toContain("并入本阶段首批任务")
     expect(m).toContain("底线保障")
     // 缺省(完整流程)不注入;非 m 阶段即使传入也不注入(门控在函数内)
-    expect(phasePlan({ phase: "m" })).not.toContain("流程裁剪注记")
-    expect(phasePlan({ phase: "a", trimmedPhases: true })).not.toContain("流程裁剪注记")
+    expect(phasePlan({ phase: L("m") })).not.toContain("流程裁剪注记")
+    expect(phasePlan({ phase: L("a"), trimmedPhases: true })).not.toContain("流程裁剪注记")
   })
 
   test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
-    const withSource = phasePlan({ phase: "m", source: { dir: "legacy", path: "pkg" } })
+    const withSource = phasePlan({ phase: L("m"), source: { dir: "legacy", path: "pkg" } })
     expect(withSource).toContain("## 输入: 迁移源参数")
     expect(withSource).not.toContain("## 输入: 迁移目标参数")
-    const bare = phasePlan({ phase: "m" })
+    const bare = phasePlan({ phase: L("m") })
     expect(bare).not.toContain("## 输入: 迁移源参数")
     expect(bare).not.toContain("## 输入: 迁移目标参数")
   })
 
   test("不含 verify 字段与验收执行权描述(verify 已退役,m 阶段)", () => {
-    const text = phasePlan({ phase: "m" })
+    const text = phasePlan({ phase: L("m") })
     expect(text).not.toContain("verify")
     expect(text).not.toContain("验收")
   })
 
   test("numberStart 两态: 自动编号起点注入 / 缺省自 T-001 起", () => {
-    const text = phasePlan({ phase: "m", numberStart: 4 })
+    const text = phasePlan({ phase: L("m"), numberStart: 4 })
     expect(text).toContain("任务编号自 T-004 起连续递增")
     expect(text).toContain("不得复用")
     expect(text).not.toContain("任务编号自 T-001")
     // 未启用自动编号(缺省): 维持历史文案
-    const bare = phasePlan({ phase: "m" })
+    const bare = phasePlan({ phase: L("m") })
     expect(bare).toContain("任务编号自 T-001 连续递增")
     expect(bare).not.toContain("不得复用")
   })
 
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
-      phasePlan({ phase: "a" }),
-      phasePlan({ phase: "m", brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, numberStart: 12 }),
-      phasePlan({ phase: "a", prevRound: "### 上一轮(第 1 轮)阶段目录索引\n\n- docs/R-01/P01-implement/" }),
-      phasePlan({ phase: "k" }),
+      phasePlan({ phase: L("a") }),
+      phasePlan({ phase: L("m"), brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, numberStart: 12 }),
+      phasePlan({ phase: L("a"), prevRound: "### 上一轮(第 1 轮)阶段目录索引\n\n- docs/R-01/P01-implement/" }),
+      phasePlan({ phase: L("k") }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
+  })
+
+  test("custom type (M3.6): the file's plan duties and display name replace the builtin duty paragraph", () => {
+    const custom = parsePhaseTypeFile("security-review", "# Security review\n\n## plan duties\n\nPlan one review task per trust boundary.\n")
+    const text = phasePlan({ phase: custom })
+    expect(text).toContain("「Security review」阶段(security-review)")
+    expect(text).toContain("Plan one review task per trust boundary.")
+    expect(text).not.toContain("代码迁移与改造")
+    expect(text).not.toMatch(/\{\{|\}\}/)
+    expect(renderPhaseHandover({ phase: custom, handover: "docs/R-01/P02-security-review/handover.md" })).toContain("Security review")
   })
 })
 
@@ -216,7 +228,7 @@ describe("renderNumberRecovery(编号恢复会话)", () => {
 
 describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
   test("注入阶段/交接永久路径/四小节协议与唯一可写文件约束", () => {
-    const text = renderPhaseHandover({ phase: "a", handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" })
+    const text = renderPhaseHandover({ phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" })
     expect(text).toContain("「分析」阶段(a)")
     expect(text).toContain("交接蒸馏者")
     expect(text).toContain("docs/R-01/P01-analysis/handover.md")
@@ -233,7 +245,7 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
   })
 
   test("k 阶段无下一阶段: 供后续查阅措辞,仍要求四小节", () => {
-    const text = renderPhaseHandover({ phase: "k", handover: "docs/R-01/P03-knowledge/handover.md" })
+    const text = renderPhaseHandover({ phase: L("k"), handover: "docs/R-01/P03-knowledge/handover.md" })
     expect(text).toContain("无下一阶段")
     expect(text).toContain("供后续轮次与人工查阅")
     for (const section of ["## 关键决策", "## 约束与坑", "## 下一阶段必读清单", "## 产物索引"]) {
@@ -245,19 +257,19 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     expect(text).toContain("本阶段目录内的 kb.md")
     expect(text).toContain("无任务索引时跳过")
     // 有下一阶段时不带收尾措辞
-    const withNext = renderPhaseHandover({ phase: "a", handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" })
+    const withNext = renderPhaseHandover({ phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" })
     expect(withNext).not.toContain("无下一阶段")
     expect(withNext).not.toContain("kb.md")
   })
 
   test("不含 verified 字段描述(verify 已退役)", () => {
-    expect(renderPhaseHandover({ phase: "m", handover: "docs/R-01/P02-implement/handover.md" })).not.toContain("verified")
+    expect(renderPhaseHandover({ phase: L("m"), handover: "docs/R-01/P02-implement/handover.md" })).not.toContain("verified")
   })
 
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
-      renderPhaseHandover({ phase: "a", handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" }),
-      renderPhaseHandover({ phase: "k", handover: "docs/R-01/P03-knowledge/handover.md" }),
+      renderPhaseHandover({ phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" }),
+      renderPhaseHandover({ phase: L("k"), handover: "docs/R-01/P03-knowledge/handover.md" }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }

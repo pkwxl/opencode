@@ -85,7 +85,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → �
 | `testByDriver` | `true` / `false` | `false` | 编译/测试/构建/lint 等命令由 driver 执行(会话经 `test/` 脚本 + `tmp/test.sh` 标记请求),见[测试执行协议](#测试执行协议--test-by-driver) |
 | `handoverTest` | `true` / `false` | `false` | 测试失败且上下文达限时写交接文档换新会话续跑;须搭配 `testByDriver: true`,否则配置校验失败(退出码 1) |
 | `autoNumber` | `true` / `false` | `true` | 自动编号(缺省启用,`--no-auto-number` 关闭):任务编号(T-NNN)在目标目录永不重复,下一可用编号持久化在 `.auto/next-task`,由阶段规划会话消费,记录缺失时先恢复再继续——见[阶段化流程](#阶段化流程--phases)一节末尾 |
-| `phases` | `admtvk` 的子序列且含 `m` | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼);`"m"` = 无阶段声明,即隐式单阶段 `docs/R-01/P01-implement`,不开规划与交接会话,任务由人工或 init 快捷模式列出。见[阶段化流程](#阶段化流程--phases) |
+| `phases` | `admtvk` 的子序列且含 `m`,或含 `implement` 的阶段类型 id 列表(逗号分隔字符串或 JSON 数组) | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;列表形态可引用 `.opencode/auto/phases/` 下的自定义类型);`"m"` = 无阶段声明,即隐式单阶段 `docs/R-01/P01-implement`,不开规划与交接会话,任务由人工或 init 快捷模式列出。见[阶段化流程](#阶段化流程--phases) |
 | `source` | `{ "dir", "path" }` 或缺省 | 无 | 迁移源参数: `dir` 源系统目录(相对工作目录、不含 `..`)+ `path` 源模块相对路径(相对 `dir`);init 时校验 `join` 后存在,run 不再校验(源系统可能已下线) |
 | `destDir` | 相对路径(不含 `..`)或缺省 | 无 | 迁移目标目录(相对工作目录): driver 工作目录的流程文件(docs/ 等)与迁移产出的代码经它隔离,产物写入 `<工作目录>/<destDir>`;不校验存在性(目标目录常由迁移过程创建),缺省 = 迁移产出直接落在工作目录 |
 
@@ -147,7 +147,7 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 | `-p` / `--prompt <文本>` | 项目意图文本,整写覆盖到 `.opencode/auto/brief.md`(版本化、人工可编辑,重复 `init -p` 覆盖重写;无 `-p` 时保留既有文件),由每个阶段的规划会话消费;init 不启动任何 AI 会话 |
 | `-m` / `--mode <name>` | 场景模式,写入配置的 `mode` 键(优先级: 显式值 > 既有配置值 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
 | `--agent <name>` | 执行会话使用的 agent,写入配置的 `agent` 键(缺省 `auto`);不做存在性校验,由 run 前完整性检查兜底;见[agent 选择](#opencode-server-与-agent-选择) |
-| `--phases <admtvk 子序列含 m>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);已有完成阶段时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工回退阶段索引。见[阶段化流程](#阶段化流程--phases) |
+| `--phases <admtvk 子序列含 m \| 阶段类型列表>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);已有完成阶段时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工回退阶段索引。见[阶段化流程](#阶段化流程--phases) |
 | `--source-dir <dir> --source-path <相对路径>` | 迁移源参数,写入配置的 `source` 键;两参数必须成对给出、`dir` 须为工作目录下的相对路径(不含 `..`,迁移源位于 `<工作目录>/<dir>`)、`path` 须为相对 `dir` 的相对路径(不含 `..`),init 时校验 `<工作目录>/<dir>/<path>` 存在(环境错误退出码 1);任一给出即整体覆盖既有 `source`。`dir` 接受软链接——存在性校验跟随链接解析,可把源系统大树留在工作目录外、在工作目录内以链接接入 |
 | `--dest-dir <相对路径>` | 迁移目标目录,写入配置的 `destDir` 键(相对工作目录、不含 `..`,可独立于 source 修订);driver 工作目录的流程文件与迁移产出的代码经它隔离——规划会话据此把代码任务指向 `<工作目录>/<dest-dir>`;不校验存在性(目标目录常由迁移过程创建) |
 | `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`;`--implement-file`/`--implement-prompt` 快捷模式下未显式给出时缺省 `ondemand`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
@@ -639,13 +639,43 @@ driver 两路采集:① 会话真发了问、被自动答复回落的(人工在 
 
 ## 阶段化流程(--phases)
 
-`--phases <admtvk 子序列含 m>`(仅 `init` 接受,写入配置的 `phases` 键;缺省
-`"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致)把迁移类长流程拆为固定
-六阶段:**a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼**。取值
-必须为 `admtvk` 的子序列且包含 `m`(如 `m`、`amt`、`admtvk` 合法;`tma`、`adk`、
-重复字母、空串非法)——顺序是语义的一部分,一行校验消除一整类误用。阶段注册表
-固定内置,不开放自定义(阶段有 driver 侧语义:产物约定、阶段交接,非纯提示词
-文案)。
+`--phases <admtvk 子序列含 m | 阶段类型列表>`(`init` / `continue` 接受,写入配置的
+`phases` 键;缺省 `"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致)把迁移类
+长流程拆为阶段。取值有两种形态:
+
+- **字母预置**:六个内置阶段 **a 分析(analysis) → d 设计(design) → m 迁移实现
+  (implement) → t 测试(test) → v 验收(acceptance) → k 知识提炼(knowledge)**
+  的子序列且包含 `m`(如 `m`、`amt`、`admtvk` 合法;`tma`、`adk`、重复字母、空串
+  非法)。
+- **阶段类型列表**:逗号分隔的类型 id(如 `analysis,security-review,implement`),
+  顺序任意、可重复、须含 `implement`;config.json 里也可写成 JSON 数组。注意只有
+  字符串 `"m"` 是单次运行,列表 `implement` 是带规划会话的阶段化流程。
+
+**自定义阶段类型**:在 `.opencode/auto/phases/<type>.md` 一类型一文件定义(文件名即
+类型 id,不得与内置类型、字母预置形态或模型路由角色词重名),在类型列表里按 id 引用:
+
+```markdown
+# Security review
+
+Gate: verdict
+Phase-artifacts: threat-model.md
+Task-artifacts: review.md
+
+## plan duties
+
+Plan one review task per trust boundary.
+
+## decompose duties
+
+Split by attack surface.
+```
+
+标题行为显示名;字段块可选(`Tasks:` 只接受 `yes`——自定义类型恒有任务,无任务的
+知识提炼阶段只内置;`Gate:` 取 `none` / `verdict`;产物路径相对阶段/任务目录);
+`## plan duties` 必填(阶段规划会话的职责段),`## decompose duties` 可选(分解会话
+的职责段)。非法文件按用法错误报出并指明文件。`OPENCODE_AUTO_MODEL` 可按类型 id
+路由模型(`security-review=prov/model`,优先级 角色 > 类型 id > 预置字母 > `*`),
+未知类型键在 run 启动时报用法错误。
 
 - **brief.md**:`init -p "<项目意图>"` 写入 `.opencode/auto/brief.md`(版本化、
   人工可编辑,重复 `init -p` 覆盖重写,无 `-p` 时保留既有文件),由每个阶段的

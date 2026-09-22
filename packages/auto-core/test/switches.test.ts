@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { autoSwitches, formatSwitches, nonDefaultSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
+import { autoSwitches, formatSwitches, modelTypeProblems, nonDefaultSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
 
 describe("parseSwitches(实验开关环境变量层)", () => {
   test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate 未设)", () => {
@@ -14,7 +14,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       stuck: true,
       taskContext: "off",
       ask: false,
-      model: { byLetter: {}, byRole: {}, fallback: [] },
+      model: { byLetter: {}, byType: {}, byRole: {}, fallback: [] },
       modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
       recoveryWait: 30,
@@ -59,7 +59,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       stuck: true,
       taskContext: "off",
       ask: false,
-      model: { byLetter: {}, byRole: {}, fallback: [] },
+      model: { byLetter: {}, byType: {}, byRole: {}, fallback: [] },
       modelFailbackScope: "task",
       retryWaits: [0, 1, 2, 4, 8],
       recoveryWait: 30,
@@ -102,7 +102,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
       stuck: false,
       taskContext: "large",
       ask: true,
-      model: { byLetter: {}, byRole: {}, fallback: [] },
+      model: { byLetter: {}, byType: {}, byRole: {}, fallback: [] },
       modelFailbackScope: "subtask",
       retryWaits: [0, 3],
       recoveryWait: 5,
@@ -244,13 +244,14 @@ describe("parseSwitches(实验开关环境变量层)", () => {
   })
 
   test("model 用例(1) 空串 = 缺省空策略(未设)", () => {
-    expect(parseSwitches({ [SWITCH_ENV.model]: "" }).model).toEqual({ byLetter: {}, byRole: {}, fallback: [] })
+    expect(parseSwitches({ [SWITCH_ENV.model]: "" }).model).toEqual({ byLetter: {}, byType: {}, byRole: {}, fallback: [] })
   })
 
   test("model 用例(2) 裸值 prov/model ⇒ 全量覆盖 wildcard", () => {
     expect(parseSwitches({ [SWITCH_ENV.model]: "kimi/k2" }).model).toEqual({
       wildcard: "kimi/k2",
       byLetter: {},
+      byType: {},
       byRole: {},
       fallback: [],
     })
@@ -264,6 +265,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     ).toEqual({
       wildcard: "kimi/k2",
       byLetter: { m: "anthropic/c-4", t: "kimi/k2-lite" },
+      byType: {},
       byRole: { wrapup: "kimi/k2-lite", decompose: "anthropic/c-4" },
       fallback: [],
     })
@@ -276,9 +278,23 @@ describe("parseSwitches(实验开关环境变量层)", () => {
   })
 
   test("model 用例(4) 越界键 ⇒ 中文报错含变量名与越界键", () => {
-    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/OPENCODE_AUTO_MODEL/)
-    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/invalid key/)
-    expect(() => parseSwitches({ [SWITCH_ENV.model]: "x=kimi/k2" })).toThrow(/"x"/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "X=kimi/k2" })).toThrow(/OPENCODE_AUTO_MODEL/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "X=kimi/k2" })).toThrow(/invalid key/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "X=kimi/k2" })).toThrow(/"X"/)
+  })
+
+  test("model type-id keys (M3.6): parsed into byType, checked against the loaded types by modelTypeProblems", () => {
+    const model = parseSwitches({ [SWITCH_ENV.model]: "m=anthropic/c-4,implement=openai/g-5,security-review=kimi/k2" }).model
+    expect(model.byLetter).toEqual({ m: "anthropic/c-4" })
+    expect(model.byType).toEqual({ implement: "openai/g-5", "security-review": "kimi/k2" })
+    expect(modelTypeProblems(model, ["implement", "security-review"])).toEqual([])
+    const problems = modelTypeProblems(model, ["implement"])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('"security-review"')
+    // The startup line renders the type keys between letters and roles
+    expect(formatSwitches(parseSwitches({ [SWITCH_ENV.model]: "m=anthropic/c-4,implement=openai/g-5,wrapup=kimi/k2" }))).toContain(
+      "OPENCODE_AUTO_MODEL=m=anthropic/c-4,implement=openai/g-5,wrapup=kimi/k2",
+    )
   })
 
   test("model 用例(5) 值缺 / ⇒ 中文报错", () => {

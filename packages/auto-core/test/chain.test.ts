@@ -4,36 +4,49 @@
 import { describe, expect, test } from "bun:test"
 import { OPENCODE_ERROR_PATTERNS, splitModel } from "../src/agent/opencode/client"
 import { classifySessionError, phaseToRole, resolveModel, roleOf } from "../src/chain"
+import { parsePhaseTypeFile } from "../src/phases/custom"
+import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
+
+const L = (letter: PhaseLetter) => phaseTypeOfLetter(letter)
 
 // ---- 阶段化模型路由(plans/0017-model-routing-design.md C.1/C.3,P2)----
 
-describe("resolveModel(路由求值 role > letter > wildcard)", () => {
+describe("resolveModel(路由求值 role > type > letter > wildcard)", () => {
   const policy = (raw?: string) => parseSwitches(raw ? { [SWITCH_ENV.model]: raw } : {}).model
 
   test("role 覆盖 letter 覆盖 wildcard", () => {
     const p = policy("*=kimi/k2,m=anthropic/c-4,wrapup=kimi/k2-lite")
-    expect(resolveModel(p, "m", "wrapup")).toBe("kimi/k2-lite") // role 命中优先
-    expect(resolveModel(p, "m", "decompose")).toBe("anthropic/c-4") // role 缺、letter 命中
-    expect(resolveModel(p, "t", "decompose")).toBe("kimi/k2") // letter 缺、wildcard 兜底
+    expect(resolveModel(p, L("m"), "wrapup")).toBe("kimi/k2-lite") // role 命中优先
+    expect(resolveModel(p, L("m"), "decompose")).toBe("anthropic/c-4") // role 缺、letter 命中
+    expect(resolveModel(p, L("t"), "decompose")).toBe("kimi/k2") // letter 缺、wildcard 兜底
   })
 
   test("未设(空策略): 任意 (letter, role) → undefined", () => {
     const p = policy()
     expect(resolveModel(p, undefined, "bypass")).toBeUndefined()
-    expect(resolveModel(p, "m", "decompose")).toBeUndefined()
+    expect(resolveModel(p, L("m"), "decompose")).toBeUndefined()
   })
 
   test("仅字母: 命中字母取值,否则 undefined", () => {
     const p = policy("m=anthropic/c-4")
-    expect(resolveModel(p, "m", "subtask")).toBe("anthropic/c-4")
-    expect(resolveModel(p, "t", "subtask")).toBeUndefined()
+    expect(resolveModel(p, L("m"), "subtask")).toBe("anthropic/c-4")
+    expect(resolveModel(p, L("t"), "subtask")).toBeUndefined()
   })
 
   test("仅通配(裸值形态): 全量命中", () => {
     const p = policy("kimi/k2")
     expect(resolveModel(p, undefined, "bypass")).toBe("kimi/k2")
-    expect(resolveModel(p, "m", "subtask")).toBe("kimi/k2")
+    expect(resolveModel(p, L("m"), "subtask")).toBe("kimi/k2")
+  })
+
+  test("type-id keys (M3.6): type beats letter, role beats type; custom types route by id only", () => {
+    const p = policy("*=kimi/k2,m=anthropic/c-4,implement=openai/g-5,security-review=kimi/k2-sec,decompose=kimi/k2-lite")
+    const custom = parsePhaseTypeFile("security-review", "# Security review\n\n## plan duties\n\nx\n")
+    expect(resolveModel(p, L("m"), "subtask")).toBe("openai/g-5")
+    expect(resolveModel(p, L("m"), "decompose")).toBe("kimi/k2-lite")
+    expect(resolveModel(p, custom, "subtask")).toBe("kimi/k2-sec")
+    expect(resolveModel(p, L("t"), "subtask")).toBe("kimi/k2")
   })
 })
 
@@ -53,8 +66,8 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
     expect(phaseToRole({ kind: "subtasks" })).toBe("subtask")
     expect(phaseToRole({ kind: "wrapup" })).toBe("wrapup")
     expect(phaseToRole({ kind: "closeout" })).toBeUndefined()
-    expect(phaseToRole({ kind: "step", step: "phase-plan", letter: "a" })).toBe("phase-plan")
-    expect(phaseToRole({ kind: "step", step: "phase-handover", letter: "m" })).toBe("phase-handover")
+    expect(phaseToRole({ kind: "step", step: "phase-plan", unit: "R-01.P01" })).toBe("phase-plan")
+    expect(phaseToRole({ kind: "step", step: "phase-handover", unit: "R-01.P01" })).toBe("phase-handover")
     expect(phaseToRole(undefined)).toBeUndefined()
   })
 

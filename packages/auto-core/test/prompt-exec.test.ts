@@ -5,7 +5,10 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { Phase } from "../src/phases"
+import { parsePhaseTypeFile } from "../src/phases/custom"
+import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
+
+const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
 import { renderAgentsBlock } from "../src/agents-block"
 import { usePromptLibrary } from "../src/template"
 import {
@@ -79,7 +82,7 @@ describe("renderDecompose", () => {
 })
 
 describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
-  const phaseCases: Array<[Phase, string, string]> = [
+  const phaseCases: Array<[PhaseLetter, string, string]> = [
     ["a", "分析", "Split by problem/open question/subsystem/risk surface"],
     ["d", "设计", "Split by design concern"],
     ["m", "迁移实现", "Vertical thin slices first"],
@@ -90,7 +93,7 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
 
   test("各阶段渲染: 注入阶段名与该阶段的切分准则段", () => {
     for (const [phase, name, rule] of phaseCases) {
-      const text = renderDecompose(plan, task, { phase })
+      const text = renderDecompose(plan, task, { phase: key(phase) })
       expect(text).toContain(`The current phase is ${name}`)
       expect(text).toContain(rule)
       // 共通粒度准则段(decompose-rule)与检查项协议
@@ -98,6 +101,20 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       expect(text).toContain("measured against the task description")
       expect(text).toContain("- [ ]")
     }
+  })
+
+  test("custom type (M3.6): the phase-generic body with the file's decompose duties, or none", () => {
+    const withDuties = parsePhaseTypeFile("security-review", "# Security review\n\n## plan duties\n\nx\n\n## decompose duties\n\nSplit by attack surface.\n")
+    const text = renderDecompose(plan, task, { phase: { id: "R-01.P02", entry: withDuties } })
+    expect(text).toContain("The current phase is Security review")
+    expect(text).toContain("Split by attack surface.")
+    expect(text).not.toContain("Vertical thin slices first")
+    expect(text).toContain("- [ ]")
+    const bare = parsePhaseTypeFile("review", "# Review\n\n## plan duties\n\nx\n")
+    const plain = renderDecompose(plan, task, { phase: { id: "R-01.P02", entry: bare } })
+    expect(plain).toContain("The current phase is Review")
+    expect(plain).not.toContain("Vertical thin slices first")
+    expect(plain).not.toMatch(/\{\{|\}\}/)
   })
 
   test("m 默认: 未传 phase 时选择 decompose-m", () => {
@@ -117,9 +134,9 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
   })
 
   test("回退: 库中无 decompose-<phase> 时回退通用 decompose(缺省按 m 查名)", () => {
-    expect(decomposeTemplateName("m", ["decompose"])).toBe("decompose")
+    expect(decomposeTemplateName(phaseTypeOfLetter("m"), ["decompose"])).toBe("decompose")
     expect(decomposeTemplateName(undefined, ["decompose"])).toBe("decompose")
-    expect(decomposeTemplateName("v", ["decompose", "decompose-v"])).toBe("decompose-v")
+    expect(decomposeTemplateName(phaseTypeOfLetter("v"), ["decompose", "decompose-v"])).toBe("decompose-v")
     expect(decomposeTemplateName(undefined, ["decompose", "decompose-m"])).toBe("decompose-m")
   })
 
@@ -135,7 +152,7 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       usePromptLibrary(dir)
       expect(renderDecompose(plan, task)).toBe("自定义分解提示词,保留协议: - [ ] 项,产物 context.md 与各 todo.md")
       // 未覆盖的阶段模板仍取内置
-      expect(renderDecompose(plan, task, { phase: "a" })).toContain("Split by problem/open question/subsystem/risk surface")
+      expect(renderDecompose(plan, task, { phase: key("a") })).toContain("Split by problem/open question/subsystem/risk surface")
     } finally {
       usePromptLibrary(undefined)
       rmSync(dir, { recursive: true, force: true })
