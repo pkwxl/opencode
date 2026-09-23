@@ -507,7 +507,12 @@ Each step ends with `bun typecheck` and `bun test` in `packages/auto-core` and `
     - `phaseState` and `phaseTitle` moved with the planner and are exported from `loop-plan`, which `loop-phase` imports. The direction is `loop-phase` → `loop-plan` → `loop-task`, with no cycle.
     - `prompt-plan` renders through `prompt.ts`'s own helpers, now exported (`renderPrompt`, `intentText`, `phaseTag`, `modeText`), so there is still one render exit. `prompt.ts` keeps its import set, so its `FROZEN_IMPORTS` entry is unchanged.
     - No re-exports are left. The four tests that render the planning prompts import `prompt-plan`, and the goldens are byte-identical.
-  - [ ] A3 `plan-input.ts`, role `planningInput`, the `phase-plan.md` input block, the missing-slot warning (D9–D11).
+  - [x] A3 `plan-input.ts`, role `planningInput`, the `phase-plan.md` input block, the missing-slot warning (D9–D11). Implementation notes:
+    - `PLAN_INPUT_NAME` lives in `docpaths.ts`, next to `ROUND_BRIEF_NAME`: the role pattern in `document/roles` needs it, and the document domain must not import a driver module. `plan-input.ts` holds the path, read, persist and commit.
+    - A changed input does not set `newSession`. Under strict resume, `newSession` rolls the open step back to its recorded baseline, which predates the input commit, so the rollback would stash the new input away. `requireArtifact` takes `spec.restart` (a reason) instead: the open record is replaced as for a fresh step, with no reuse and no rollback, and the unit's clean gate records a new baseline after the input commit.
+    - `LoopCtx.input` is the consumable input: `planPhase` persists it, then clears it. Nothing sets it until A5 seeds it from `RunAllOpts.planInput`, so for now a planning step only reads an existing `plan-input.md`.
+    - The missing-slot warning fires whenever the step plans against an input, new or persisted: either way the session would not see it. `templateRenders` (`template.ts`) walks the active template and the partials it references.
+    - The §8 items that need no loop harness landed with the step: `test/plan-input.test.ts`, the role rows, `templateRenders`, the input block's render test, and `spec.restart` in `artifact.test.ts` (strict resume included). The loop-level cases stay in A7.
   - [ ] A4 m-mode planning on `planPhase`; open-step order; `resumeModelNow` role; delete `implement.ts`; retire `--implement-*` (D12–D13).
   - [ ] A5 `stopBefore` in `runAll`/`runPhaseLoop`; `planPrelude` rows 1–2 and 4–9 (D4–D8).
   - [ ] A6 The shell's `plan`; shared run-options builder; usage text; README `plan` section; glossary rows made live (D14–D15).

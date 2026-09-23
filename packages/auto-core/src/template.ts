@@ -261,6 +261,31 @@ export function renderText(text: string, ctx: Ctx): string {
   return renderNodes(parseTemplate(text), ctx, 0)
 }
 
+// Whether the active template `name` renders variable `variable`, directly or
+// through a partial it references. An optional slot added after overrides
+// existed is not a tier-1 marker, so an older override keeps loading without
+// it; a caller about to fill such a slot asks here and warns when the
+// project's override would drop the value (plans/0053 D11, `{{input}}` in
+// phase-plan).
+export function templateRenders(name: string, variable: string): boolean {
+  const text = library.templates[name]
+  if (text === undefined) throw new Error(`unknown prompt template: ${name}`)
+  return nodesRender(parseCached(name, text), variable, 0)
+}
+
+function nodesRender(nodes: Node[], variable: string, depth: number): boolean {
+  if (depth > 8) return false
+  return nodes.some((node) => {
+    if (node.kind === "var") return node.name === variable
+    if (node.kind === "block") return nodesRender(node.children, variable, depth)
+    if (node.kind === "partial") {
+      const body = library.partials[node.name]
+      return body !== undefined && nodesRender(parseCached(`@${node.name}`, body), variable, depth + 1)
+    }
+    return false
+  })
+}
+
 // Template names currently in effect (tests assert the built-ins are complete).
 export function promptTemplateNames(): string[] {
   return Object.keys(library.templates).sort()

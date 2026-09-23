@@ -10,6 +10,7 @@ import { opencodeAgent } from "../src/agent/opencode/client"
 import { requireArtifact } from "../src/artifact"
 import { clearSticky, resetFailback } from "../src/failback"
 import { changedFiles, unitBaseline } from "../src/git"
+import { readPlanInput, savePlanInput } from "../src/plan-input"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
@@ -117,6 +118,24 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
       expect(resetCalled).toBe(true) // 会话不可复用 → 重置重做
       expect(state.creates).toBe(1)
       expect(state.prompts).toEqual(["ses_new_1"])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("spec.restart (plans/0053 D9): an open record with a live session is not reused; the step starts afresh", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-step-restart-"))
+    try {
+      await saveProgress(dir, { task: "PLAN", session: "ses_plan_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
+      const { client, state } = artifactClient("ses_plan_old")
+      let resetCalled = false
+      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, { ...spec(() => (resetCalled = true)), restart: "the planning input changed" })
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.prompts).toEqual(["ses_new_1"])
+      const rec = await recallProgress(dir, "PLAN")
+      expect(rec?.session).toBe("ses_new_1")
+      expect(rec?.active).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -521,6 +540,41 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
       expect(state.creates).toBe(0)
       expect(state.prompts).toEqual(["ses_plan_old"])
       expect(await git(dir, "stash", "list")).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("spec.restart after a planning-input commit: no rollback, the input commit stays, a new session plans (plans/0053 D9)", async () => {
+    const { dir } = await seeded({ model: "kimi/k2" })
+    try {
+      await git(dir, "config", "user.email", "t@t")
+      await git(dir, "config", "user.name", "t")
+      await writeFile(join(dir, ".gitignore"), ".auto/\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "ignore .auto", "-m", "Auto-Stage: housekeeping")
+      // The recorded baseline predates the input commit: a rollback to it
+      // would reset past the commit and stash the input away.
+      const phase = { round: "R-01", id: "P01", dir: join("docs", "R-01", "P01-implement") }
+      expect(await savePlanInput(dir, phase, { text: "A changed input." }, "P01-implement Implementation")).toEqual({ type: "saved" })
+      const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
+      const { client, state } = stepClient("ses_plan_old")
+      let resetCalled = false
+      const value = await requireArtifact(
+        client,
+        planTask,
+        "planning prompt",
+        { dir },
+        { ...spec(() => (resetCalled = true)), unitStart: true, restart: "the planning input changed" },
+        STRICT,
+      )
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(true)
+      expect(state.prompts).toEqual(["ses_new_1"])
+      expect((await git(dir, "rev-parse", "--short", "HEAD")).trim()).toBe(head)
+      expect(await git(dir, "stash", "list")).toBe("")
+      expect(await readPlanInput(dir, phase)).toBe("A changed input.\n")
+      expect(await changedFiles(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

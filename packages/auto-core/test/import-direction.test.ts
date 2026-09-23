@@ -125,6 +125,8 @@ const CLASSIFIED: Record<string, Domain> = {
   loop: "driver",
   numbering: "driver",
   opts: "driver",
+  // The planning input plan-input.md: read, persist, commit (plans/0053 D9).
+  "plan-input": "driver",
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
   "prompt-plan": "driver",
   refcheck: "driver",

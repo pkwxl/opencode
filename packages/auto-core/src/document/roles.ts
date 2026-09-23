@@ -40,7 +40,7 @@
 // intent (`## governance` / `### process-references`), the mechanical side is
 // the prohibition scan at unit close-out (process-refs.ts), and the whole-tree
 // scan at round close belongs to M4.
-import { PHASE_ACCEPTANCE_NAME, ROUND_BRIEF_NAME } from "../docpaths"
+import { PHASE_ACCEPTANCE_NAME, PLAN_INPUT_NAME, ROUND_BRIEF_NAME } from "../docpaths"
 import type { DocumentRole } from "./types"
 
 export type RolePolicy = {
@@ -66,6 +66,9 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   phaseAcceptance: { eofScan: false, process: true },
   // Human-written round brief; no terminator (plans/0049 G2).
   roundBrief: { eofScan: false, process: true },
+  // A phase's planning input, the human's text kept verbatim by the driver;
+  // no terminator, like the round brief (plans/0053 D10).
+  planningInput: { eofScan: false, process: true },
   artifact: { eofScan: true, process: true },
   // The deliverable and the project's own documents: .md files changed in a
   // unit still carry the terminator (the D6 whole-unit scan predates roles).
@@ -106,6 +109,9 @@ const PHASE_ACCEPTANCE = new RegExp(`^docs/${PHASE_DIR}/${PHASE_ACCEPTANCE_NAME.
 // The round brief: docs/R-NN/round.md (plans/0049 G2).
 const ROUND_BRIEF = new RegExp(`^docs/R-\\d+/${ROUND_BRIEF_NAME.replace(".", "\\.")}$`)
 
+// A phase's planning input: docs/R-NN/P<nn>-<type>/plan-input.md (plans/0053 D10).
+const PLANNING_INPUT = new RegExp(`^docs/${PHASE_DIR}/${PLAN_INPUT_NAME.replace(".", "\\.")}$`)
+
 // Everything else the tool keeps under docs/: task directories (the task
 // unit's todo.md / done.md included) and round directories (phase directories
 // with their state files, task index tasks.md and standard artifacts included).
@@ -125,6 +131,7 @@ export function roleOf(rel: string): DocumentRole {
   if (PHASE_HANDOVER.test(path)) return "handoff"
   if (PHASE_ACCEPTANCE.test(path)) return "phaseAcceptance"
   if (ROUND_BRIEF.test(path)) return "roundBrief"
+  if (PLANNING_INPUT.test(path)) return "planningInput"
   if (PROCESS_DOCS.test(path)) return "artifact"
   return "freeform"
 }

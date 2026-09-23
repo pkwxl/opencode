@@ -1,9 +1,9 @@
 // Phase planning: the planning session (planPhase) and its step wrapper
 // (planWithStep), plus the phase-state helpers the phase loop shares
-// (phaseState, phaseTitle). Moved out of src/loop-phase.ts unchanged
-// (plans/0053 A2) so the P3 planning additions do not push that file past 600
-// lines. Direction: loop-phase → loop-plan → loop-task; never imports
-// loop-phase or loop.
+// (phaseState, phaseTitle). Moved out of src/loop-phase.ts (plans/0053 A2) so
+// the P3 planning additions, starting with the persisted planning input (A3,
+// src/plan-input.ts), do not push that file past 600 lines. Direction:
+// loop-phase → loop-plan → loop-task; never imports loop-phase or loop.
 import { join } from "node:path"
 import { requireArtifact } from "./artifact"
 import { projectBriefText } from "./brief"
@@ -13,11 +13,13 @@ import { log } from "./log"
 import type { LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE } from "./numbering"
 import { phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
+import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { renderPhasePlan } from "./prompt-plan"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
 import { stepPause } from "./step"
 import { plannedTaskProblems, qualifiedPhase, resetPlanning, takenTaskIds, taskIndexPath } from "./tasks"
+import { templateRenders } from "./template"
 
 // 阶段索引(路由已校验过;此处再读只为取完成集与前后序,缺失/非法按空处理)。
 export async function phaseState(directory: string): Promise<PhaseState> {
@@ -61,6 +63,37 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       return 2
     }
     numberStart = numbering.next
+  }
+  // The planning input (plans/0053 D9): a new text is persisted to the phase's
+  // plan-input.md and committed on its own before the planning unit starts;
+  // without one the step plans against the persisted file, so an interrupted
+  // or blocked step resumes with its input under plan and run alike. A
+  // different text restarts an open step in a new session: the latest input
+  // wins, and no reused session plans against a text it never saw.
+  let restart: string | undefined
+  if (ctx.input) {
+    const saved = await savePlanInput(directory, phase, ctx.input, phaseTitle(phase))
+    if (saved.type === "dirty") {
+      log(`⏸ worktree not clean before saving the planning input; handle it manually (commit/clean) and re-run:`)
+      for (const file of saved.files) log(`  ${file}`)
+      return 2
+    }
+    if (saved.type === "failed") {
+      log(`⏸ ${saved.question}`)
+      return 2
+    }
+    ctx.input = undefined
+    if (saved.type === "saved") {
+      log(`✓ planning input saved to ${planInputPath(phase)}`)
+      restart = "the planning input changed"
+    }
+  }
+  const input = (await readPlanInput(directory, phase))?.trim() || undefined
+  if (input && !restart) log(`ℹ planning against the persisted input ${planInputPath(phase)}`)
+  // An optional slot, not a tier-1 marker (D11): an override that predates it
+  // still loads, and would silently drop the input.
+  if (input && !templateRenders("phase-plan", "input")) {
+    log("⚠ the project's phase-plan template does not render {{input}}; the planning session will not see the input")
   }
   // The project brief (plans/0052 D9), comments stripped: an untouched stub injects nothing.
   const brief = await projectBriefText(directory)
@@ -115,6 +148,8 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       taskIndex,
       brief,
       round,
+      input,
+      inputPath: planInputPath(phase),
       handovers,
       prevRound,
       mode: opts.mode,
@@ -138,6 +173,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     {
       kind: "phase planning",
       step: { step: "phase-plan", unit: phaseKey(phase).id },
+      restart,
       // Independent hidden task unit: entry clean gate + SHA baseline + close-out
       // check (plans/0021-commit-boundary-design.md).
       unitStart: true,

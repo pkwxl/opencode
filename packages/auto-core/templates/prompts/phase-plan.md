@@ -26,6 +26,15 @@ The human's statement of what this round is for. Plan this phase's tasks toward 
 
 {{/if}}
 {{/if}}
+{{#if input}}
+## Input: planning input ({{inputPath}})
+
+The person who started this planning step asked for the following. Plan this phase's tasks to cover it, within
+the phase duties below.
+
+{{input}}
+
+{{/if}}
 {{#if modeInit}}
 ## Input: scenario-mode preamble ({{modeName}})
 

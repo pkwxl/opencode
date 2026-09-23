@@ -28,13 +28,17 @@
 //                    acceptance and release criteria, close listing; M4.2,
 //                    plans/0049 G2); stubbed at round start, read by planning
 //                    and the round-close gate.
+// - planningInput:   a phase's planning input docs/R-NN/P<nn>-<type>/
+//                    plan-input.md (plans/0053 D9–D10): the human's `plan`
+//                    text verbatim, committed by the driver before the
+//                    planning unit, read by the planning session's prompt.
 // - artifact:        AI-produced process documents consumed by later stages
 //                    (task, round and phase documents under docs/);
 //                    shape-checked (non-trivial + eof terminator).
 // - freeform:        everything else — the deliverable itself and the
 //                    project's own documents; the standardization boundary
 //                    places no schema on it beyond the P1 prohibition.
-export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "artifact" | "freeform"
+export type DocumentRole = "driverState" | "ledger" | "handoff" | "phaseAcceptance" | "roundBrief" | "planningInput" | "artifact" | "freeform"
 
 // A declared artifact of a task/subtask (the structured form of the
 // `Artifacts:` line, M1.4). The driver derives its mechanical checks from this

@@ -1,7 +1,7 @@
 // Planning-session prompts: the phase planning session (renderPhasePlan) and
 // the m-mode plan generation session (renderImplementPlan). Moved out of
-// src/prompt.ts unchanged (plans/0053 A2) so the P3 planning additions do not
-// grow that file; the copy stays in templates/prompts/phase-plan.md and
+// src/prompt.ts (plans/0053 A2) so the P3 planning additions do not grow that
+// file; the copy stays in templates/prompts/phase-plan.md and
 // implement-plan.md, and rendering goes through prompt.ts's single exit
 // (renderPrompt) and its intent-pack helpers.
 import type { ModeSpec } from "./mode"
@@ -30,6 +30,10 @@ export function renderPhasePlan(input: {
   brief?: string
   // The round brief docs/R-NN/round.md, comments stripped (plans/0049 G3).
   round?: string
+  // The phase's planning input (plans/0053 D11): the text of its plan-input.md
+  // and that file's path; absent = no input block.
+  input?: string
+  inputPath?: string
   handovers?: string
   prevRound?: string
   mode?: ModeSpec
@@ -48,6 +52,8 @@ export function renderPhasePlan(input: {
     round: input.round?.trim() || undefined,
     // How to plan against the brief is intent (M4.2, `## acceptance` / `### round-brief`).
     roundRules: input.round?.trim() ? intentText("acceptance", "round-brief", {}) : undefined,
+    input: input.input?.trim() || undefined,
+    inputPath: input.inputPath,
     handovers: input.handovers?.trim() || undefined,
     prevRound: input.prevRound?.trim() || undefined,
     modeName: input.mode?.name,

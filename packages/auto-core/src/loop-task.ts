@@ -9,6 +9,7 @@ import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
 import type { RunAllOpts } from "./loop-preflight"
 import { waitBetweenTasks } from "./loop-progress"
+import type { PlanInput } from "./plan-input"
 import { taskEndLines, taskResolveLines } from "./conclusion"
 import { banner, formatDuration, log } from "./log"
 import { block, loadPlan, next } from "./tasks"
@@ -32,6 +33,9 @@ export type LoopCtx = {
   // runTaskLoop 跨调用累积的已跑任务数(§I D14): 决定 --wait-between 是否在后续阶段
   // 首个任务前暂停,降为函数局部会每次清零(行为改动),故作可变字段进 ctx。
   ran: number
+  // The planning input this run was given (plans/0053 D9), consumed by the
+  // first planning step, which persists it to its phase's plan-input.md.
+  input?: PlanInput
 }
 
 // 主任务循环: 依次执行当前阶段任务索引(tasks.md)中的全部任务(子任务/收尾/

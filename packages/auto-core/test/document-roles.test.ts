@@ -12,6 +12,7 @@ import { subtaskStateSpec } from "../src/document/spec"
 import type { AddedLine } from "../src/document/types"
 import { unitAddedLines, unitBaseline } from "../src/git"
 import { phaseAcceptanceDoc, phaseArtifacts, phaseHandoverDoc, phaseIndexPath, syncPhaseIndex } from "../src/phases"
+import { planInputPath } from "../src/plan-input"
 import { freshRepo, git } from "./fixtures/runner"
 
 describe("roleOf", () => {
@@ -28,6 +29,9 @@ describe("roleOf", () => {
     ["docs/R-100/P12-custom-type/handover.md", "handoff"],
     ["docs/R-01/P05-acceptance/acceptance.md", "phaseAcceptance"],
     ["docs/R-01/P05-acceptance/acceptance-r2.md", "phaseAcceptance"],
+    ["docs/R-01/P02-implement/plan-input.md", "planningInput"], // planning input (plans/0053 D10)
+    ["docs/R-01/P02-implement/sub/plan-input.md", "artifact"], // not the phase's planning input
+    ["docs/T-001/plan-input.md", "artifact"],
     ["docs/T-001/context.md", "artifact"],
     ["docs/T-001/S01/index.md", "artifact"],
     ["docs/T-001/S01/todo.md", "artifact"],
@@ -77,6 +81,7 @@ describe("roleOf", () => {
       for (const unit of await syncPhaseIndex(dir, 2, "admtvk")) {
         expect(roleOf(phaseAcceptanceDoc(unit))).toBe("phaseAcceptance")
         expect(roleOf(phaseHandoverDoc(unit))).toBe("handoff")
+        expect(roleOf(planInputPath(unit))).toBe("planningInput")
         expect(roleOf(`${unit.dir}/todo.md`)).toBe("artifact")
         for (const spec of phaseArtifacts(unit)) expect(roleOf(spec.path)).toBe("artifact")
       }
@@ -89,7 +94,7 @@ describe("roleOf", () => {
 
 describe("role-derived policies", () => {
   test("eofScanExempt follows the role policy", () => {
-    for (const rel of ["CURRENT.md", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md"]) {
+    for (const rel of ["CURRENT.md", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md", "docs/R-01/P03-implement/plan-input.md"]) {
       expect(eofScanExempt(rel), rel).toBe(true)
     }
     for (const rel of ["docs/T-001/S01/todo.md", "docs/T-001/report.md", "README.md"]) {
@@ -108,7 +113,7 @@ describe("role-derived policies", () => {
 
   test("p1Scope: deliverable files in, process documents and agent-contract surfaces out", () => {
     for (const rel of ["src/main.c", "README.md", "docs/guide.md", "test/build.sh", "docs/agents/build.md"]) expect(p1Scope(rel), rel).toBe(true)
-    for (const rel of ["docs/T-001/report.md", "CURRENT.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md"]) {
+    for (const rel of ["docs/T-001/report.md", "CURRENT.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
       expect(p1Scope(rel), rel).toBe(false)
     }
   })

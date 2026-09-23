@@ -90,6 +90,12 @@ export function roundBriefPath(round: number): string {
   return join(roundDir(round), ROUND_BRIEF_NAME)
 }
 
+// File name of a phase's planning input (planningInput role, plans/0053 D9–D10):
+// one per phase directory docs/R-NN/P<nn>-<type>/, the latest `plan -p` /
+// `--file` text verbatim, written and committed by the driver before the
+// planning unit (src/plan-input.ts builds the path and owns the file).
+export const PLAN_INPUT_NAME = "plan-input.md"
+
 // —— 测试交接文档的归档份(测试交接前置化设计 D4)——
 //
 // 当前份恒为 testhandoff.md(会话的写目标),driver 在交接收口时把它重命名为

@@ -56,6 +56,18 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(phasePlan({ phase: L("k") })).toContain("docs/R-NN/P<nn>-knowledge/kb.md")
   })
 
+  test("planning input (plans/0053 D11): its block follows the round brief and precedes the mode preamble; absent or blank, nothing renders", () => {
+    const inputPath = "docs/R-01/P02-implement/plan-input.md"
+    const text = phasePlan({ phase: L("m"), round: "Goal: ship the parser.", input: "Port the lexer first.\n", inputPath, mode: migrate })
+    expect(text).toContain(`## Input: planning input (${inputPath})\n\nThe person who started this planning step asked for the following.`)
+    expect(text).toContain("within\nthe phase duties below.\n\nPort the lexer first.\n\n## Input: scenario-mode preamble (migrate)")
+    expect(text.indexOf("## Input: round brief")).toBeLessThan(text.indexOf("## Input: planning input"))
+    expect(text.indexOf("## Input: planning input")).toBeLessThan(text.indexOf("## Phase duties"))
+    for (const input of [undefined, " \n"]) {
+      expect(phasePlan({ phase: L("m"), input, inputPath })).not.toContain("planning input")
+    }
+  })
+
   test("handovers 注入两态: 有前序交接则注入清单(标注阶段目录内 handover.md 永久路径),无则整块消失", () => {
     const text = phasePlan({
       phase: L("m"),

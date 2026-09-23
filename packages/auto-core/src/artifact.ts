@@ -36,6 +36,7 @@ import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictR
 // last run was interrupted before the driver closed it) → resume: reuse the
 // original session when it is alive and not an error stub (keeping the artifact
 // state, no reset), otherwise redo the step in a new session (reset as usual);
+// spec.restart skips the resume and starts the step afresh;
 // ③ the caller closes the step (deletes the record) via closeStep once its
 // post-processing is done — requireArtifact itself does not delete it, so a
 // kill between "artifact validated" and "post-processing (numbering / index /
@@ -76,6 +77,12 @@ export async function requireArtifact<T>(
     // distillation); when set, the driver-side resume point and session reuse are on
     // (see the header comment).
     step?: { step: StepKind; unit: string }
+    // Start the step afresh even when its resume record is open, naming why
+    // (plans/0053 D9: the planning input changed, so the recorded session
+    // planned against another text). The record is replaced as for a fresh
+    // step: no session reuse and, under strict resume, no rollback — the
+    // rollback would reset past the input commit made just before this call.
+    restart?: string
     // Session role (model-routing key, plans/0017-model-routing-design.md C.1): one-shot
     // bypass sessions declare it (e.g. knowledge / number-recovery); undefined →
     // roleOf falls to bypass. Phase-step sessions with spec.step need not declare it
@@ -100,11 +107,13 @@ export async function requireArtifact<T>(
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
   if (stepPhase && opts.dir) {
     const recalled = await recallProgress(opts.dir, task.id)
-    const sameStep =
+    const openRecord =
       recalled?.active === true &&
       recalled.phase?.kind === "step" &&
       recalled.phase.step === spec.step!.step &&
       recalled.phase.unit === spec.step!.unit
+    if (openRecord && spec.restart) log(`↻ ${task.id} ${spec.kind} step restarting in a new session (${spec.restart})`)
+    const sameStep = openRecord && !spec.restart
     if (sameStep) {
       const candidate = !opts.newSession ? recalled!.session : undefined
       const alive = candidate !== undefined ? await sessionAlive(client, candidate) : false
