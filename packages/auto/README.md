@@ -40,6 +40,7 @@ opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode
 opencode-auto amend [dir] --<键选项> <值> ...   # 只改写给出的配置键,其余保留(至少一个键;无配置即拒绝),见"修订(amend)"
 opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名/迁入 brief.md,契约、AGENTS.md 块、.gitignore 与配置对齐,见"配置修复(fix)"
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后建立新一轮轮次目录、开启新一轮(见"阶段化流程")
+opencode-auto plan [dir] [-p "<规划输入>" | --file <路径>]   # 规划当前阶段的任务并停在执行前供人工评审;轮未建立时先建轮(打印轮首门禁),轮完成后经轮关闭检查开下一轮(见"规划与轮次生命周期(plan)")
 opencode-auto run [dir]      # 按当前阶段的任务索引逐任务自动执行(agent/提交等语义来自项目配置)
 opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
 opencode-auto check [dir]    # 检查 AGENTS.md 与任务文档中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 行数超限
@@ -306,17 +307,19 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 | `--dryrun [true]` | 权限预检:只调用一次 AI,列出执行任务可能需要的 opencode.json 授权之外的目录/操作并逐只读探查确认,报告写入 `.auto/dryrun.md` 并打印到终端;不执行任何任务 |
 | `--new-session` | 中断恢复时强制开新会话:跳过会话复用(旧会话上下文已陈旧时的逃生阀),阶段级精确重入仍按进度记录执行;仅对本次运行生效,不写入配置。详见[中断恢复](#中断恢复) |
 
-每次 `run` 都会在目标目录的 `.auto/logs/run-<时间戳>.log` 新建日志文件,
+每次 `run`(以及进入循环的 `plan`)都会在目标目录的 `.auto/logs/run-<时间戳>.log` 新建日志文件,
 终端的全部输出同步写入该文件(逐条直写,进程中断也不丢已输出内容);
 `--interactive` 下日志文件额外包含 verbose 明细(会话部件、上下文用量、变更文件),与 `--verbose` 运行时的记录一致。
 
 同一目录同一时刻只允许一个 driver 进程工作:`run` 启动时取得**运行锁**(run lock)
 `.auto/run.lock`(JSON:进程号 `pid`、主机名 `host`、命令 `command`、起始时间 `started`),
-运行结束(含 Ctrl+C 强制退出)即删除。另一进程持锁期间,`run` 以退出码 `1` 拒绝并报出持锁者;
+运行结束(含 Ctrl+C 强制退出)即删除;`plan` 同样持锁(command 记为 `plan`,内部经
+`runAll` 重入)。另一进程持锁期间,`run` 与 `plan` 以退出码 `1` 拒绝并报出持锁者;
 `init`、`continue`、`amend`、`fix`、`reset` 会改写运行中的 driver 所读的文件,同样以 `1` 拒绝
 (`-f` 不越过运行锁);`check` 与 `status` 从不取锁,`status` 把活锁打印在首行
-(`▶ run in progress (pid 1234 on build-3, since …)`)。持锁进程已不存在(如被 `kill -9`)的
-本机锁视为失效,下一次 `run` 自动移除并打印一行说明;记录在其他主机上的锁无法探查进程,
+(`▶ run in progress (pid 1234 on build-3, since …)`、`plan` 持锁时为
+`▶ plan in progress (…)`)。持锁进程已不存在(如被 `kill -9`)的
+本机锁视为失效,下一次 `run` 或 `plan` 自动移除并打印一行说明;记录在其他主机上的锁无法探查进程,
 一律视为有效。锁文件无法解析时同样视为有效,确认无进程在跑后手工删除 `.auto/run.lock`。
 
 退出码:`0` 全部完成(阶段化流程下 = 全部阶段完成);`1` 用法/环境错误(含阶段索引
@@ -343,6 +346,46 @@ T-009 子任务 1：编写迁移脚本的 schema 部分
 ............................................................
 T-009 实现迁移: 子任务分解
 ```
+
+### 规划与轮次生命周期(plan)
+
+`plan [dir] [-p|--prompt <文本> | --file <路径>]` 是**规划命令**:它与 `run` 共用同一状态机,
+多一个**停止条件**——任一规划步骤成功(或轮次走到本该执行任务的位置)即停下,供人工
+评审任务清单;之后 `run` 照常执行(auto-core plans/0053 D4–D14)。
+
+```sh
+opencode-auto plan <dir>            # 轮未建立 → 建轮并停在轮首门禁;否则规划当前阶段并停在执行前
+opencode-auto plan <dir> -p "…"     # 带规划输入:存为本阶段的 plan-input.md 后再规划
+opencode-auto plan <dir> --file plan-brief.md   # 规划输入取自文件(-p 与 --file 互斥)
+opencode-auto run <dir>             # 评审(可直接编辑/勾销任务)后执行
+```
+
+- **不需要 AI 的路由先行(plan prelude)**,在取运行锁之后、启动任何会话之前裁决:
+  - **建轮**:当前轮 `docs/R-NN/` 未建立时,先(对上一轮)跑轮关闭检查,再建立本轮
+    目录并打印轮首门禁提示(next 行),退出码 `0`。`phases = "m"` 时同样建
+    `R-01/P01-implement`。
+  - **开下一轮**:上一轮全部完成时,先跑轮关闭检查(G8):不过 → 打印问题清单,
+    退出码 `2`;过 → 打印警告、建立新一轮并停在轮首门禁,退出码 `0`。
+    (此前 `continue` 承担开轮;`plan` 覆盖同一入口,`continue` 将于后续版本退役。)
+  - **提示即退出**:路由阻塞 → 退出码 `1`;阶段已规划完(`run` 去执行;无输入时
+    退出码 `0`,保持 `plan && run` 可连写)或 `m` 模式任务索引为空(提示手工列任务
+    或改用 `-p`/`--file`)→ 打印提示退出。轮完成且本轮无需规划时,提示填
+    `## Close` 后再 `plan` 开下一轮。
+  - **输入拒绝(任何写盘之前,退出码 `1`)**:轮未建立、轮已完成待开新轮,或目标
+    阶段已列有任务时,给出的规划输入不会被消费——报文指明「先无输入 `plan` 建轮、
+    提交设置、再带输入」。
+- **规划输入(planning input)**:`-p` 文本或 `--file` 文件内容(非空、二者互斥,
+  `--file` 须为常规文件),由 driver 原样写入阶段目录的
+  `docs/R-NN/P<nn>-<type>/plan-input.md`,**在规划单元开始前单独提交**;规划会话经
+  phase-plan 模板的 `{{input}}` 块读到它。一个阶段一个文件、始终存最新一份(历史在
+  git);输入变更会使在途规划步骤重开新会话。要无输入规划,删除该文件并提交即可。
+- **`m` 模式**:`plan -p`/`--file` 即「由 AI 规划任务」的入口(原 `--implement-*`
+  已退役),见[由 AI 规划任务](#由-ai-规划任务)。
+- **选项**:接受 `run` 的会话选项(`--server`、`--verbose`、`--interactive/-i`、
+  `--wait-answer`、`--permission`、`--new-session`);拒绝一切配置类选项(报文同
+  `run`)与 `--dryrun`、`--wait-between`、`--max-sessions`、`-f`、`--amend`、
+  `--continue`(`run` 反过来拒绝 `-p`/`--file`)。持运行锁(command 记为 `plan`);
+  进入循环时同样在 `.auto/logs/` 建日志文件。退出码同 `run`(另:轮关闭检查不过为 `2`)。
 
 ## opencode server 与 agent 选择
 
@@ -924,6 +967,9 @@ opencode-auto run <dir>                       # 第 2 轮
   照常 amend。**跨轮固定**:`-m/--mode` 显式给出即用法错误——换模式不是"同一
   迁移的继续",请在新目录 init 新项目。迁移源与目标在 brief.md 里,换它们同样
   应另起新项目。
+- **与 `plan` 的关系**:轮完成后,`plan` 同样先跑轮关闭检查、再开下一轮并停在轮首
+  门禁(不带 `--phases`/`-p` 等参数修订;要按轮改参数仍用 `continue`,`continue`
+  将于后续版本退役并入 `plan`)。
 - **轮次推导**:当前轮 = `docs/` 下 `R-NN` 轮次目录最大编号(轮首即建,无 +1),
   零新增持久化状态;无 `R-NN` 目录时按旧语义回落(`docs/phases/round-<N>` 归档
   最大号 + 1),混合项目自然续号;`run` 的阶段进度行带轮次标注(如上),`status` 的树以 `R-NN` 开头。
@@ -1038,7 +1084,8 @@ Phase: R-01.P01
 
 `init --implement-file` / `--implement-prompt` 快捷模式已退役(auto-core plans/0053 D13):
 任何命令出现这两个选项即用法错误(退出码 1),报文指向
-`opencode-auto plan <dir> -p <text> | --file <path>`(先 `init` 并提交轮首设置)。
+`opencode-auto plan <dir> -p <text> | --file <path>`(先 `init` 并提交轮首设置;
+见[规划与轮次生命周期(plan)](#规划与轮次生命周期plan))。
 `init` 不再启动 AI 会话,也不再因这两个选项把 `subtask` 缺省为 `ondemand`、`wrapup`
 缺省为关闭。
 

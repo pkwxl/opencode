@@ -1475,7 +1475,9 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(brief).toContain("`app`")
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(true)
       expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
-      expect((await runCli(["run", dir, "--dryrun"])).err).not.toContain("retired")
+      // --server 指向关闭端口:不依赖本机 opencode 服务(修复后的配置与契约全部
+      // 装载通过,只在连接处快速失败),证明 run 不再因退役键拒绝。
+      expect((await runCli(["run", dir, "--dryrun", "--server", "http://127.0.0.1:1"])).err).not.toContain("retired")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1559,6 +1561,140 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
       const status = await runCli(["status", dir])
       expect(status.out).not.toContain("in progress")
       expect(status.out.split("\n")[0]).toStartWith("⚙ project config")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// plan (auto-core plans/0053 D14–D15): every route the prelude settles without
+// an agent — the refusals, establishing a round, the round-close gate, the
+// notices — plus the argument checks. The loop paths (planning itself, the
+// stop after it) need an agent and live in the A7 loop harness / the
+// OPENCODE_AUTO_E2E block.
+describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
+  test("argument refusals: the input flags, run-only and config options, the unconfigured directory; nothing is written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const refusals: [string[], string][] = [
+        [["plan", dir, "-p", "text", "--file", "f.md"], "-p/--prompt and --file are mutually exclusive"],
+        [["plan", dir, "-p", "  "], "-p/--prompt requires non-empty text"],
+        [["plan", dir, "--file"], "--file requires a path"],
+        [["plan", dir, "--file", join(dir, "nope.md")], "no such file"],
+        [["plan", dir, "--phases", "am"], "--phases was frozen by init"],
+        [["plan", dir, "--dryrun"], "--dryrun is a run option"],
+        [["plan", dir, "--wait-between", "2"], "--wait-between is a run option"],
+        [["plan", dir, "--max-sessions", "1"], "--max-sessions is a run option"],
+        [["plan", dir, "-f"], "-f/--force is an init/reset/fix option"],
+        // 无 config.json:拒绝规划而不是用缺省建轮
+        [["plan", dir], `nothing to plan: ${dir} has no .opencode/auto/config.json; run opencode-auto init`],
+        [["run", dir, "-p", "text"], "-p/--prompt is a plan option: run takes no planning input"],
+        [["init", dir, "--file", "f.md"], "--file is a plan option"],
+      ]
+      for (const [args, notice] of refusals) {
+        const refused = await runCli(args)
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain(notice)
+      }
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("establishes a missing round (m) with the round-start gate; input on it is refused before any write; re-runs show the empty-index notice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      // init 建过 R-01;移除后即「轮未建立」态(中断建轮/人工删除)
+      await rm(join(dir, "docs"), { recursive: true, force: true })
+      // D5:建轮路由上的输入先拒绝,任何写盘之前
+      const refused = await runCli(["plan", dir, "-p", "输入"])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain(`round R-01 is not established yet: run opencode-auto plan ${dir} without input to establish it, commit the setup, then pass the input.`)
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      const made = await runCli(["plan", dir])
+      expect(made.code).toBe(0)
+      expect(made.out).toContain("✓ round R-01 established: single phase P01-implement")
+      expect(made.out).toContain(`next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, or run: opencode-auto plan ${dir} -p <text> | --file <path>`)
+      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
+      // 再跑:任务索引为空、无输入 → 提示手工列任务或带输入规划(D15)
+      const again = await runCli(["plan", dir])
+      expect(again.code).toBe(0)
+      expect(again.out).toContain(`ℹ no tasks listed in docs/R-01/P01-implement/tasks.md yet: list them there by hand (docs/T-NNN/todo.md per task), or run: opencode-auto plan ${dir} -p <text> | --file <path>`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("m mode with tasks listed: the run notice without input, the append pointer with input", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await listTasks(dir, "docs/R-01/P01-implement", "R-01.P01", [["T-001", "任务", "正文"]])
+      const notice = await runCli(["plan", dir])
+      expect(notice.code).toBe(0)
+      expect(notice.out).toContain(`ℹ docs/R-01/P01-implement/tasks.md lists 1 task(s) (1 pending); next: opencode-auto run ${dir}`)
+      const withInput = await runCli(["plan", dir, "-p", "再加点"])
+      expect(withInput.code).toBe(1)
+      expect(withInput.err).toContain("docs/R-01/P01-implement/tasks.md already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("phased, execute route: the planned notice without input; input is a mistake (D7)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      await completeLetters(dir, ["a"])
+      await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "任务", "正文"]])
+      const notice = await runCli(["plan", dir])
+      expect(notice.code).toBe(0)
+      expect(notice.out).toContain(`ℹ R-01.P02 implement is planned (1 of 1 tasks pending); next: opencode-auto run ${dir}`)
+      const withInput = await runCli(["plan", dir, "-p", "输入"])
+      expect(withInput.code).toBe(1)
+      expect(withInput.err).toContain("R-01.P02 implement already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a complete round: the round-close gate fails with exit 2 (input refused too); passing opens R-02 with the G1 lines", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "am", "-p", "第一轮意图"])).code).toBe(0)
+      await completeLetters(dir, ["a", "m"])
+      // 轮完成:G8 不过(`## Close` 未填)→ 退出码 2(D4;continue 时代是 1)
+      const fail = await runCli(["plan", dir])
+      expect(fail.code).toBe(2)
+      expect(fail.err).toContain("round R-01 does not pass its round-close checks, so round R-02 cannot open yet")
+      expect(fail.err).toContain("`## Close` is empty")
+      expect(fail.err).toContain(`then re-run: opencode-auto plan ${dir}`)
+      expect(await stat(join(dir, "docs/R-02")).catch(() => undefined)).toBeUndefined()
+      // 完成路由上的输入同样在任何写盘前拒绝
+      const withInput = await runCli(["plan", dir, "-p", "输入"])
+      expect(withInput.code).toBe(1)
+      expect(withInput.err).toContain("round R-01 is complete and round R-02 is not established yet")
+      await fillClose(dir)
+      const pass = await runCli(["plan", dir])
+      expect(pass.code).toBe(0)
+      expect(pass.out).toContain("✓ round R-02 established: P01-analysis, P02-implement")
+      expect(pass.out).toContain(`then run: opencode-auto plan ${dir} to plan R-02.P01 analysis (or run to plan and execute)`)
+      expect(await Bun.file(join(dir, "docs/R-02/phases.md")).text()).toContain("- [ ] P01 analysis")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("plan refuses while another process holds the run lock", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
+      const refused = await runCli(["plan", dir])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain(`⏸ another opencode-auto process holds the run lock of ${dir}: run, pid ${process.pid} on ${hostname()}`)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

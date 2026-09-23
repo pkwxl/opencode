@@ -538,7 +538,14 @@ Each step ends with `bun typecheck` and `bun test` in `packages/auto-core` and `
       - `runPhaseLoop` warns once, on any exit, when the input was never used. This is D8's backstop, and it also covers a gate or a blocked step.
     - `run`'s m-mode empty-index line is now `emptyIndexNotice`, which names `plan -p | --file` (D15). Otherwise `run` is unchanged.
     - Tests: `test/plan.test.ts` covers every prelude row (git fixtures for G8) and the stop lines. The loop-level cases (stopping after planning, through a handover, on an execute route) stay in A7.
-  - [ ] A6 The shell's `plan`; shared run-options builder; usage text; README `plan` section; glossary rows made live (D14–D15).
+  - [x] A6 The shell's `plan`; shared run-options builder; usage text; README `plan` section; glossary rows made live (D14–D15). Implementation notes:
+    - The option machinery is shared, not duplicated: `refuseFrozenFlags`, `parseSessionFlags`, `loadRunConfig` (strict load + mode check), `logRunBanner` and `runOptions` serve `run` and `plan` alike; `run` keeps its own `--wait-between` / `--max-sessions` parsing and `--dryrun`, `plan` its prelude. Order inside `plan`: flags → input (`-p`/`--file` mutually exclusive, non-empty, `--file` a regular readable file) → session flags → config → lock `"plan"` → prelude → `runAll` with `stopBefore` + `planInput`.
+    - `plan` refuses a directory without `config.json` ("nothing to plan") rather than planning with defaults: the prelude would otherwise write a round setup into a tree `init` never configured (run's default-tolerant load stays — it writes nothing itself).
+    - `-p`/`--file` are refused on `run` (the input is plan's; `-p` was silently ignored before), and `--file` on init/continue/amend. `reset`/`fix`/`check`/`status` refuse them through their existing flag whitelists.
+    - A prelude stop prints code-0 lines on stdout and failures on stderr, exits with its code, and releases the lock before exiting; the loop path starts the log file and banner after the prelude (a stop never creates `.auto/logs/`).
+    - The retired `--implement-*` notice now names a command that exists.
+    - Docs: README gains the plan section (usage list, run-lock paragraph, continue cross-note, AI-planning pointer); glossary rows run lock / lifecycle command / plan prelude / stop condition / planning input are live (`close` stays planned); shell-contract §A and §C (A6 entry; the MP.1 entry's stale `implementPlan` reference fixed); `packages/auto/AGENTS.md` navigation line.
+    - Tests: the §8 items needing no agent landed with the step — every prelude stop over CLI fixtures (establish m/phased via the G8-pass path, input refusals before any write, G8 fail → 2 / pass → R-02, the m and phased notices, the lock refusal, the argument refusals). The pre-existing flake in the `fix` e2e test (its trailing `run --dryrun` reached a live local `opencode` server) is made deterministic with `--server http://127.0.0.1:1`; the loop-level paths stay in A7.
   - [ ] A7 Tests (§8, P3a parts), including the loop harness.
 - [ ] **P3b**
   - [ ] B1 Closed readers (D16).

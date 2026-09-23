@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { renderProjectBrief, BRIEF_FILE } from "@opencode-ai/auto-core/brief"
 import { checkPrinciple } from "@opencode-ai/auto-core/check"
@@ -18,12 +19,14 @@ import {
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
-import { liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
+import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
-import { runAll } from "@opencode-ai/auto-core/loop"
+import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
+import { planPrelude } from "@opencode-ai/auto-core/plan"
+import type { PlanInput } from "@opencode-ai/auto-core/plan-input"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
 import {
   currentRound,
@@ -59,7 +62,7 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
+// --prompt/--file/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
 // --max-sessions 带值(吞掉下一个 token;已退役的 --implement-file/--implement-prompt
 // 同样吞值,其参数不被当作目录,auto-core plans/0053 D13);
 // --verbose/--interactive/--dryrun/--test-by-driver/
@@ -77,6 +80,7 @@ const VALUE_FLAGS = new Set([
   "commit",
   "subtask",
   "prompt",
+  "file",
   "permission",
   "idle-time",
   "idle-max",
@@ -137,7 +141,7 @@ for (let i = 1; i < args.length; i++) {
   flags.set(key, "")
 }
 // 未知选项拦截: 白名单之外的旗标一律报错退出 1,防拼错被静默忽略。宪法级与
-// 历史选项对 init/continue/run 有专属拦截报文,此处放行交由其后各自处理;
+// 历史选项对 init/continue/run/plan 有专属拦截报文,此处放行交由其后各自处理;
 // check/status 不接受任何选项,出现旗标即拒绝。
 // Retired flags are usage errors with their own notice (mirroring the --commit
 // false retirement), let through the whitelist so the notice replaces "unknown
@@ -191,11 +195,11 @@ for (const [key, notice] of Object.entries(RETIRED_FLAGS)) {
 const directory = resolve(positional[0] ?? ".")
 
 // Legacy layout (M3.7, auto-core plans/0047 R3): an old-layout project is a
-// usage error before init/continue/amend writes anything, status reads anything
-// or run starts (runAll repeats the check for other shells). reset, fix and
-// check stay available so an old tree can still be de-initialized, repaired or
-// inspected (fix touches only the config layer).
-if (command === "init" || command === "continue" || command === "amend" || command === "status" || command === "run") {
+// usage error before init/continue/amend/plan writes anything, status reads
+// anything or run starts (runAll and planPrelude repeat the check for other
+// shells). reset, fix and check stay available so an old tree can still be
+// de-initialized, repaired or inspected (fix touches only the config layer).
+if (command === "init" || command === "continue" || command === "amend" || command === "plan" || command === "status" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -206,7 +210,8 @@ if (command === "init" || command === "continue" || command === "amend" || comma
 // The run lock (auto-core plans/0053 D3): these commands write what a running
 // driver reads (config.json, the agent contract, the AGENTS.md block, the round
 // setup), so they refuse while another process holds .auto/run.lock; -f does
-// not override it. run takes the lock inside runAll.
+// not override it. run takes the lock inside runAll; plan takes it itself
+// before its prelude and re-enters it through runAll.
 if (command === "init" || command === "continue" || command === "amend" || command === "fix" || command === "reset") {
   const holder = liveRunLock(directory)
   if (holder) {
@@ -216,11 +221,106 @@ if (command === "init" || command === "continue" || command === "amend" || comma
 }
 
 if (command === "run") {
-  // 已固化选项(设计文档 §C): 宪法级项目属性经 init 固化到
-  // .opencode/auto/config.json,run 出现即用法错误(镜像 --commit-subtask
-  // 移除的既有先例);修订走 amend(plans/0052 D25)或直接编辑配置文件。
-  // 看门狗键已由 --verify-idle/--verify-max 更名为 --idle-time/--idle-max(现控制
-  // test 脚本执行),旧名出现即单独提示更名。
+  refuseFrozenFlags("run")
+  // The planning input is plan's (auto-core plans/0053 D14): run never reads
+  // it, so it is refused rather than silently ignored.
+  for (const key of ["prompt", "file"]) {
+    if (flags.has(key)) {
+      console.error(
+        `${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option: run takes no planning input. Plan with opencode-auto plan <dir> -p <text> | --file <path>, then run`,
+      )
+      process.exit(1)
+    }
+  }
+  const session = parseSessionFlags()
+  const waitBetween = parseMinutes(flags.get("wait-between"))
+  if (waitBetween === null) {
+    console.error("--wait-between takes 1..60 (minutes); defaults to 1 when given without a value")
+    process.exit(1)
+  }
+  // --max-sessions (auto-core plans/0046 D9): concurrent AI sessions, reserved
+  // until the MP.3 scheduler exists — only 1 is accepted. Unrelated to --agent.
+  const maxSessions = parseMaxSessions(flags.get("max-sessions"))
+  if (maxSessions === null) {
+    console.error("--max-sessions takes a positive integer (concurrent AI sessions, unrelated to --agent); defaults to 1")
+    process.exit(1)
+  }
+  if (maxSessions > 1) {
+    console.error(`--max-sessions ${maxSessions}: concurrent execution is not supported yet; only 1 is accepted (init --parallel plans for parallelism, tasks still run one at a time)`)
+    process.exit(1)
+  }
+  startRunLog(directory, session)
+  const { config, mode } = await loadRunConfig(directory)
+  await logRunBanner(directory, config)
+  const code = await runAll(directory, {
+    ...runOptions(config, mode, session),
+    waitBetween,
+    dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
+    maxSessions,
+  })
+  process.exit(code)
+}
+
+// plan (auto-core plans/0053 D14): plan the current phase and stop before
+// execution, for review. It is run with a stop condition: the same options
+// (the builder is shared), preceded by the prelude that settles every route
+// needing no agent — establishing a round, the round-close gate before the
+// next one, the notices and the input refusals (planPrelude, D4). Order: the
+// flags and the planning input, the strict config load and the mode check,
+// then the run lock ("plan", held across the prelude; runAll re-enters it),
+// the prelude, and runAll. A prelude stop prints its lines and exits with its
+// code; runAll's exit codes are run's.
+if (command === "plan") {
+  refuseFrozenFlags("plan")
+  // run's options for the task loop: plan stops before any task runs.
+  for (const [key, flag, what] of [
+    ["dryrun", "--dryrun", "the permission preflight: opencode-auto run <dir> --dryrun"],
+    ["wait-between", "--wait-between", "the pause between tasks, and plan runs none"],
+    ["max-sessions", "--max-sessions", "concurrent sessions of the task loop"],
+  ] as const) {
+    if (flags.has(key)) {
+      console.error(`${flag} is a run option (${what}); plan does not accept it`)
+      process.exit(1)
+    }
+  }
+  const input = await parsePlanInput()
+  const session = parseSessionFlags()
+  // plan writes the round setup, which follows the config (phases): a
+  // directory init never configured is refused rather than planned with the
+  // defaults.
+  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
+    const legacy = await legacyModeFallback(directory)
+    console.error(
+      `nothing to plan: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
+        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
+    )
+    process.exit(1)
+  }
+  const { config, mode } = await loadRunConfig(directory)
+  const lock = acquireRunLock(directory, "plan")
+  if (!lock.ok) {
+    for (const line of lockLines(directory, lock.holder)) console.error(line)
+    process.exit(1)
+  }
+  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, input })
+  if (prelude.type === "stop") {
+    for (const line of prelude.lines) (prelude.code === 0 ? console.log : console.error)(line)
+    lock.release()
+    process.exit(prelude.code)
+  }
+  startRunLog(directory, session)
+  await logRunBanner(directory, config)
+  const code = await runAll(directory, { ...runOptions(config, mode, session), stopBefore: "execute", planInput: input })
+  lock.release()
+  process.exit(code)
+}
+
+// The options run and plan refuse alike (auto-core plans/0053 D14). 已固化选项
+// (设计文档 §C): 宪法级项目属性经 init 固化到 .opencode/auto/config.json,出现即
+// 用法错误(镜像 --commit-subtask 移除的既有先例);修订走 amend(plans/0052 D25)
+// 或直接编辑配置文件。看门狗键已由 --verify-idle/--verify-max 更名为
+// --idle-time/--idle-max(现控制 test 脚本执行),旧名出现即单独提示更名。
+function refuseFrozenFlags(command: "run" | "plan") {
   for (const key of ["verify-idle", "verify-max"]) {
     if (flags.has(key)) {
       const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
@@ -246,14 +346,14 @@ if (command === "run") {
     process.exit(1)
   }
   // --amend 是 init 专用(切回增量修订语义,单改一个键用 amend 子命令);-f/--force
-  // 是 init/reset/fix 专用(跳过覆盖确认与工作区干净度闸门);run 不写配置、不做
-  // 破坏性覆盖,两者都无意义。
+  // 是 init/reset/fix 专用(跳过覆盖确认与工作区干净度闸门);run 与 plan 不写配置、
+  // 不做破坏性覆盖,两者都无意义。
   if (flags.has("amend")) {
-    console.error("--amend is an init-only option (to change individual keys use opencode-auto amend <dir> --<key> <value>); run does not accept it")
+    console.error(`--amend is an init-only option (to change individual keys use opencode-auto amend <dir> --<key> <value>); ${command} does not accept it`)
     process.exit(1)
   }
   if (flags.has("force")) {
-    console.error("-f/--force is an init/reset/fix option (skips the confirmation and the worktree cleanliness check); run does not accept it")
+    console.error(`-f/--force is an init/reset/fix option (skips the confirmation and the worktree cleanliness check); ${command} does not accept it`)
     process.exit(1)
   }
   // 续轮迁移是独立子命令(continue),不是任何命令的选项。
@@ -261,6 +361,13 @@ if (command === "run") {
     console.error("--continue is not an option: round continuation uses the dedicated subcommand opencode-auto continue <dir> (starts a new round after the previous phased migration round fully completes)")
     process.exit(1)
   }
+}
+
+// The session flags of run and plan (auto-core plans/0053 §2): they shape this
+// run's sessions, not the project.
+type SessionFlags = { verbose: boolean; interactive: boolean; waitAnswer: number; permission: PermissionMode; newSession: boolean }
+
+function parseSessionFlags(): SessionFlags {
   const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
   // --interactive/-i: 旁路交互(与 --verbose 互斥);文件保持 verbose 级完整记录,
   // 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
@@ -269,18 +376,9 @@ if (command === "run") {
     console.error("--interactive/-i and --verbose are mutually exclusive; pick one")
     process.exit(1)
   }
-  setVerbose(verbose)
-  if (interactive) setInteractive()
-  // 每次 run 都在目标目录 .auto/logs/ 下新建日志文件,同步记录全部输出。
-  log(`📝 log file: ${setLogFile(directory)}`)
   const waitAnswer = parseMinutes(flags.get("wait-answer"))
   if (waitAnswer === null) {
     console.error("--wait-answer takes 1..60 (minutes); defaults to 1 when given without a value")
-    process.exit(1)
-  }
-  const waitBetween = parseMinutes(flags.get("wait-between"))
-  if (waitBetween === null) {
-    console.error("--wait-between takes 1..60 (minutes); defaults to 1 when given without a value")
     process.exit(1)
   }
   const permission = parsePermission(flags.get("permission"))
@@ -288,21 +386,58 @@ if (command === "run") {
     console.error("--permission takes auto-allow|ask-allow|ask-deny|ask-fail; defaults to ask-deny")
     process.exit(1)
   }
-  // --max-sessions (auto-core plans/0046 D9): concurrent AI sessions, reserved
-  // until the MP.3 scheduler exists — only 1 is accepted. Unrelated to --agent.
-  const maxSessions = parseMaxSessions(flags.get("max-sessions"))
-  if (maxSessions === null) {
-    console.error("--max-sessions takes a positive integer (concurrent AI sessions, unrelated to --agent); defaults to 1")
+  // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
+  return { verbose, interactive, waitAnswer, permission, newSession: flags.has("new-session") && flags.get("new-session") !== "false" }
+}
+
+// plan's planning input (auto-core plans/0053 D14): the -p/--prompt text or
+// the --file contents, one of the two and non-empty; undefined when neither
+// is given. Checked before the lock, so a bad input writes nothing.
+async function parsePlanInput(): Promise<PlanInput | undefined> {
+  const text = flags.get("prompt")
+  const file = flags.get("file")
+  if (text !== undefined && file !== undefined) {
+    console.error("-p/--prompt and --file are mutually exclusive: give the planning input one way")
     process.exit(1)
   }
-  if (maxSessions > 1) {
-    console.error(`--max-sessions ${maxSessions}: concurrent execution is not supported yet; only 1 is accepted (init --parallel plans for parallelism, tasks still run one at a time)`)
+  if (text !== undefined) {
+    if (!text.trim()) {
+      console.error("-p/--prompt requires non-empty text (the planning input)")
+      process.exit(1)
+    }
+    return { text }
+  }
+  if (file === undefined) return undefined
+  if (!file) {
+    console.error("--file requires a path: the file holding the planning input")
     process.exit(1)
   }
-  // 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
-  // 错误退出 1(严格失败优于静默回落)。文件缺失取缺省并做 legacy 回落
-  // (.auto/config.json 的 mode,仅提示、不迁移)。testByDriver/handoverTest 同为
-  // 宪法级选项,run 不再接受(已在上文拒绝清单拦截),这里从 config 读取。
+  const path = resolve(file)
+  const info = await stat(path).catch(() => undefined)
+  if (!info?.isFile()) {
+    console.error(`--file ${file}: ${info ? "not a regular file" : "no such file"}; it names the file holding the planning input`)
+    process.exit(1)
+  }
+  const content = await Bun.file(path).text()
+  if (!content.trim()) {
+    console.error(`--file ${file} is empty: the planning input must not be empty`)
+    process.exit(1)
+  }
+  return { text: content, source: path }
+}
+
+// 每次 run(与 plan 进入循环时)都在目标目录 .auto/logs/ 下新建日志文件,同步
+// 记录全部输出。
+function startRunLog(directory: string, session: SessionFlags) {
+  setVerbose(session.verbose)
+  if (session.interactive) setInteractive()
+  log(`📝 log file: ${setLogFile(directory)}`)
+}
+
+// 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
+// 错误退出 1(严格失败优于静默回落,附 fix 提示)。文件缺失取缺省并做 legacy 回落
+// (.auto/config.json 的 mode,仅提示、不迁移)。配置的模式须已注册。
+async function loadRunConfig(directory: string): Promise<{ config: ProjectConfig; mode: ModeSpec }> {
   let config: ProjectConfig
   try {
     config = await loadProjectConfig(directory)
@@ -312,6 +447,18 @@ if (command === "run") {
     if (hint) console.error(hint)
     process.exit(1)
   }
+  const modes = loadModeTable(directory)
+  const mode = modes[config.mode]
+  if (!mode) {
+    console.error(`configured mode "${config.mode}" is not registered (currently supported: ${Object.keys(modes).join(", ")}); to fix: opencode-auto amend <dir> -m <value>, or edit .opencode/auto/config.json directly`)
+    process.exit(1)
+  }
+  return { config, mode }
+}
+
+// The banner of run and plan: the legacy-mode note, the driver-run tests line,
+// the config summary and, when phased, the phase progress line.
+async function logRunBanner(directory: string, config: ProjectConfig) {
   if (await legacyModeFallback(directory)) log(`ℹ mode taken from the legacy persisted value in .auto/config.json; run opencode-auto fix ${directory} to write the full config`)
   if (config.testByDriver) {
     log(
@@ -319,32 +466,30 @@ if (command === "run") {
         (config.handoverTest ? "; on test failure with context at its cap, a handover document switches to a fresh session" : ""),
     )
   }
-  const modes = loadModeTable(directory)
-  const mode = modes[config.mode]
-  if (!mode) {
-    console.error(`configured mode "${config.mode}" is not registered (currently supported: ${Object.keys(modes).join(", ")}); to fix: opencode-auto amend <dir> -m <value>, or edit .opencode/auto/config.json directly`)
-    process.exit(1)
-  }
   log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   // 阶段进度行(B.2,与 status 共用 phasesLine;✓=已完成,▶=当前,其余=未开始);
   // 续轮(docs/R-NN 轮次目录最大号 > 1)时带轮次标注。阶段索引缺失/非法仅提示,
   // runAll 的阶段路由会以环境错误退出 1。
   if (config.phases !== "m") log(await phasesLine(directory))
-  const code = await runAll(directory, {
+}
+
+// The runAll options run and plan share (auto-core plans/0053 D14): the config
+// init froze plus this run's session flags. run adds --wait-between, --dryrun
+// and --max-sessions; plan adds its stop condition and planning input.
+function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags): RunAllOpts {
+  return {
     // The coding agent, commit semantics, context budget etc. come from the
     // config file (written by init); OPENCODE_AUTO_AGENT still overrides the agent.
     agent: config.agent,
     server: flags.get("server"),
     // interactive 隐含 verbose 记录级别(watch/变更文件监视照常运行并写入日志)。
-    verbose: verbose || interactive,
-    waitAnswer,
-    waitBetween,
+    verbose: session.verbose || session.interactive,
+    waitAnswer: session.waitAnswer,
     commit: config.commit,
     subtask: config.subtask,
-    dryrun: flags.has("dryrun") && flags.get("dryrun") !== "false",
     contextLimit: config.contextLimit * 1000,
-    permission,
-    interactive,
+    permission: session.permission,
+    interactive: session.interactive,
     idleMs: config.idleTime * 60_000,
     maxMs: config.idleMax > 0 ? config.idleMax * 60_000 : undefined,
     mode,
@@ -356,11 +501,8 @@ if (command === "run") {
     acceptanceGate: config.acceptanceGate,
     build: config.build,
     parallel: config.parallel,
-    maxSessions,
-    // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
-    newSession: flags.has("new-session") && flags.get("new-session") !== "false",
-  })
-  process.exit(code)
+    newSession: session.newSession,
+  }
 }
 
 // --commit 缺省/裸选项/true = 启用(会话后统一提交)。false 与旧值 none 已于
@@ -611,6 +753,12 @@ if (command === "init" || command === "continue" || command === "amend") {
       )
       process.exit(1)
     }
+  }
+  // --file is plan's planning input (auto-core plans/0053 D14); init's -p is
+  // the brief, a different thing, so --file is refused rather than ignored.
+  if (flags.has("file")) {
+    console.error(`--file is a plan option (the planning input: opencode-auto plan <dir> --file <path>); ${command} does not accept it`)
+    process.exit(1)
   }
   if (cont) {
     if (flags.has("mode")) {
@@ -1084,6 +1232,7 @@ console.error(`usage:
   opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--amend] [-f|--force]
   opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
+  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto fix [dir] [-f|--force]
   opencode-auto reset [dir] [-f|--force]
@@ -1095,10 +1244,11 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block, and re-syncs the current round's unstarted phases after a --phases change. init --amend does the same and stays until plan takes over init's round step; continue is always amend
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
-       run lock: run holds .auto/run.lock while it works; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run
+       plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
+       run lock: run and plan hold .auto/run.lock while they work; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run or plan
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
-       -p/--prompt project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired
+       -p/--prompt on init: project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions; on plan, -p is the planning input); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired
        reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, brief.md while it is the untouched stub, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
        --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md; once phases are complete, changes must satisfy the prefix guard — see README)
        --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)
