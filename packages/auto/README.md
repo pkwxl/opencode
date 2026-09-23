@@ -39,8 +39,6 @@ opencode-auto init [dir]     # 建立轮次目录 docs/R-01/(阶段索引 + 阶�
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
 opencode-auto amend [dir] --<键选项> <值> ...   # 只改写给出的配置键,其余保留(至少一个键;无配置即拒绝),见"修订(amend)"
 opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名/迁入 brief.md,契约、AGENTS.md 块、.gitignore 与配置对齐,见"配置修复(fix)"
-opencode-auto init [dir] --implement-file <file>       # 单阶段(m)快捷模式: 依据计划文件开一次性计划生成会话,直接生成任务索引与任务文档(见"任务单元格式"一节)
-opencode-auto init [dir] --implement-prompt "<text>"   # 单阶段(m)快捷模式: 依据实施提示词生成任务,同上
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后建立新一轮轮次目录、开启新一轮(见"阶段化流程")
 opencode-auto run [dir]      # 按当前阶段的任务索引逐任务自动执行(agent/提交等语义来自项目配置)
 opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
@@ -64,9 +62,8 @@ opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → �
 `--handover-test`、`--auto-number`、`--no-auto-number`、`--phases`、`--parallel`
 ——任一出现即用法错误(退出码 1),报文
 给出修订指引(`opencode-auto amend <dir> --<flag> <值>`,或直接编辑配置文件);这些
-选项已固化为项目属性,见下节。`run` 同样不接受 `--implement-file`/`--implement-prompt`
-——二者是 `init` 专用的单阶段快捷模式选项(见[任务单元格式](#任务单元格式)一节),
-产物任务文档经人工审核后才用 `run` 执行。
+选项已固化为项目属性,见下节。`--implement-file`/`--implement-prompt` 已退役,任何命令
+出现即用法错误,见[由 AI 规划任务](#由-ai-规划任务)。
 
 ## 项目配置(.opencode/auto/config.json)
 
@@ -81,7 +78,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → �
 | `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
 | `agent` | `opencode` / `claude` | `opencode`(不写键) | 驱动全部会话的编码 agent(M6.1);`OPENCODE_AUTO_AGENT` 可按次覆盖。旧版本此键为契约名(如 `auto`),读到即报错并提示删除该键(`fix` 代删)——契约恒为 `.opencode/agent/auto.md`。见[agent 选择](#opencode-server-与-agent-选择) |
 | `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用(需 `OPENCODE_AUTO_REUSE_SESSION=on`)的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
-| `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线);`--implement-file`/`--implement-prompt` 快捷模式缺省 `ondemand` |
+| `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线) |
 | `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(test 脚本)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取(`fix` 就地更名) |
 | `idleMax` | 0..1440(分钟,0 = 不设) | `0` | driver 托管脚本的绝对时长上限;旧键名 `verifyMax` 在新键缺失时回落读取(`fix` 就地更名) |
 | `verify` | **已退役** | — | 任务级验收已退役(2026-09-21):存量配置写着 `verify: true` 读入即报错退出 1(删该键——`fix` 代删——把验收规划成任务或用 v 阶段);`false` 或缺省忽略 |
@@ -89,7 +86,7 @@ opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → �
 | `testByDriver` | `true` / `false` | `false` | 编译/测试/构建/lint 等命令由 driver 执行(会话经 `test/` 脚本 + `tmp/test.sh` 标记请求),见[测试执行协议](#测试执行协议--test-by-driver) |
 | `handoverTest` | `true` / `false` | `false` | 测试失败且上下文达限时写交接文档换新会话续跑;须搭配 `testByDriver: true`,否则配置校验失败(退出码 1) |
 | `autoNumber` | `true` / `false` | `true` | 自动编号(缺省启用,`--no-auto-number` 关闭):任务编号(T-NNN)在目标目录永不重复,下一可用编号持久化在 `.auto/next-task`,由阶段规划会话消费,记录缺失时先恢复再继续——见[阶段化流程](#阶段化流程--phases)一节末尾 |
-| `phases` | `admtvk` 的子序列且含 `m`,或含 `implement` 的阶段类型 id 列表(逗号分隔字符串或 JSON 数组) | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;列表形态可引用 `.opencode/auto/phases/` 下的自定义类型);`"m"` = 无阶段声明,即隐式单阶段 `docs/R-01/P01-implement`,不开规划与交接会话,任务由人工或 init 快捷模式列出。见[阶段化流程](#阶段化流程--phases) |
+| `phases` | `admtvk` 的子序列且含 `m`,或含 `implement` 的阶段类型 id 列表(逗号分隔字符串或 JSON 数组) | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;列表形态可引用 `.opencode/auto/phases/` 下的自定义类型);`"m"` = 无阶段声明,即隐式单阶段 `docs/R-01/P01-implement`,不开交接会话,任务由人工列出或按规划输入规划(见[由 AI 规划任务](#由-ai-规划任务))。见[阶段化流程](#阶段化流程--phases) |
 | `source` / `destDir` | **已退役** | — | 迁移源与目标是意图、不是配置(2026-09-23,auto-core plans/0052 D2/D3):写进 `.opencode/auto/brief.md`,由规划会话读取。存量配置写着任一键(任何值)读入即报错退出 1,报文给出原值与修法(抄进 brief.md 后删键——`fix` 代为迁入 `## Source` / `## Target` 节并删键);无参 `init` 全量覆盖会丢弃并逐个打印原值。两个键名永久占位,不再复用 |
 
 **统一提交**(`commit: true`,缺省):任何会话结束且 driver 完成状态写入(如勾选
@@ -135,9 +132,8 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 `fix: opencode-auto fix <dir>`,`status` 在 ⚠ 行下同样打印这一行。
 
 **init 先全量校验、再写盘**(auto-core plans/0052 D7):选项取值、空 `-p`、模式、
-前缀护栏、阶段目录同步(不丢已完成阶段、不删已有工作的阶段目录)、快捷模式的
-任务索引已列任务、目标目录提示词库覆盖件(`.opencode/auto/prompts/`)与意图包的
-校验全部在第一次写盘之前完成——任一失败即退出码 1,配置层原样不动(不写
+前缀护栏、阶段目录同步(不丢已完成阶段、不删已有工作的阶段目录)、目标目录提示词库
+覆盖件(`.opencode/auto/prompts/`)与意图包的校验全部在第一次写盘之前完成——任一失败即退出码 1,配置层原样不动(不写
 config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间该文件
 与 CURRENT.md、opencode.json 一起置为只读,人工修订请在 run 外进行。
 
@@ -171,7 +167,7 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 | `-m` / `--mode <name>` | 场景模式,写入配置的 `mode` 键(优先级: 显式值 > 既有配置值 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
 | `--agent opencode\|claude` | 驱动会话的编码 agent,写入配置的 `agent` 键(缺省 `opencode`,不写键;`--amend --agent opencode` 删除该键);其他取值为用法错误;见[agent 选择](#opencode-server-与-agent-选择) |
 | `--phases <admtvk 子序列含 m \| 阶段类型列表>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);已有完成阶段时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工回退阶段索引。见[阶段化流程](#阶段化流程--phases) |
-| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`;`--implement-file`/`--implement-prompt` 快捷模式下未显式给出时缺省 `ondemand`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
+| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
 | `--idle-time [1-120]` | driver 托管脚本的无进度判定窗口(分钟,缺省/裸选项 10;旧名 `--verify-idle` 已更名,出现即报错指引):driver 轮询输出文件(`tmp/test.<n>.out`,stdout/stderr 合并单文件)的大小,持续无增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
 | `--idle-max [1-1440]` | driver 托管脚本的绝对运行时长上限(分钟,缺省/裸选项不设;旧名 `--verify-max` 已更名):兜底防止脚本无限循环输出;设为正整数时无论是否有输出,总时长超限即终止 |
 | `--commit [true]` | 会话后统一提交,写入配置(缺省/裸选项 `true`)。**`false` 与旧别名 `none` 已于 2026-09-15 退役**——统一提交是完成条件(单元 clean 门禁/SHA 基线/恢复回滚均以提交恒开为前提),出现即用法错误退出 1;存量配置里的 `commit: false` 按坏文件严格失败,请删该键或改 `true` |
@@ -180,7 +176,7 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 | `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
 | `--amend` | 切回增量修订语义:只改写命令行显式给出的键,其余保留既有配置(不给 `--amend` 时 init 为全量覆盖)。与 [`amend` 子命令](#修订amend)同义,保留到 `plan` 接管 init 的建轮职责为止(auto-core plans/0052 P3c);`continue` 恒为 amend,无须给该选项;`amend` 子命令给出即用法错误(冗余);`run` 出现即用法错误 |
 | `-f` / `--force` | 跳过覆盖确认与工作区干净度检查,供 CI 与自动化脚本(与 `reset` / `fix` 共用);`amend` / `run` 出现即用法错误(amend 不丢弃任何键,无覆盖确认可跳) |
-| `--auto-number` / `--no-auto-number` | 自动编号开关,写入配置的 `autoNumber` 键(缺省 `--auto-number` = 启用,`--no-auto-number` 为关闭用退出开关;两开关同现且均未带 `=false` 为用法错误):启用后任务编号(T-NNN)在目标目录永不重复,阶段规划会话自 `.auto/next-task` 记录续接编号,记录缺失时先恢复再继续。`phases = "m"` 无规划会话消费编号记录,开关不产生效果(init 打一次提示)。详见[阶段化流程](#阶段化流程--phases) |
+| `--auto-number` / `--no-auto-number` | 自动编号开关,写入配置的 `autoNumber` 键(缺省 `--auto-number` = 启用,`--no-auto-number` 为关闭用退出开关;两开关同现且均未带 `=false` 为用法错误):启用后任务编号(T-NNN)在目标目录永不重复,阶段规划会话自 `.auto/next-task` 记录续接编号,记录缺失时先恢复再继续。`phases = "m"` 的规划会话(见[由 AI 规划任务](#由-ai-规划任务))同样自该记录续接。详见[阶段化流程](#阶段化流程--phases) |
 
 以上写入配置的选项在缺省(全量覆盖)下"未给出即回落缺省值",加 `--amend` 后才是
 "显式给出的键才被改写";`-p` 的 brief.md 是独立文件,恒为整写覆盖且无 `-p` 时保留
@@ -202,9 +198,8 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 校验、`handoverTest` 搭配校验、阶段索引前缀护栏与 init 同源。
 
 - **只收配置键**:`-p` 用法错误(brief 不是配置,直接编辑 `.opencode/auto/brief.md`);
-  `--implement-file` / `--implement-prompt` 用法错误(它们开规划会话,保留既有配置
-  请用 `init <dir> --amend --implement-…`);`-f` 用法错误(amend 不丢弃任何键,
-  无覆盖确认与干净度闸门可跳);`--amend` 用法错误(冗余)。
+  `-f` 用法错误(amend 不丢弃任何键,无覆盖确认与干净度闸门可跳);`--amend` 用法错误
+  (冗余)。
 - **至少一个键**:一个键选项都没给即用法错误,报文指向 `fix`(只想把契约 /
   AGENTS.md 块刷新到与现有配置一致,用 `fix`)。
 - **无配置即拒绝**:目标目录没有 `.opencode/auto/config.json` 时退出码 1、指向
@@ -381,8 +376,8 @@ T-009 实现迁移: 子任务分解
 | `claude` | Claude Code headless(`claude -p --output-format stream-json`,要求 PATH 上有 `claude` CLI);每个工作会话一个子进程,`--server` 被忽略。缺失的能力(fork、提问等)在 run 启动时自动降级并逐条打印 |
 
 优先级:外壳画像指定的 agent > 环境变量 `OPENCODE_AUTO_AGENT`(按次覆盖,空串 = 不覆盖)
-> 配置 `agent` 键 > `opencode`。`init --implement-file/--implement-prompt` 的计划生成
-会话同样使用该 agent。
+> 配置 `agent` 键 > `opencode`。所有会话(m 模式的规划会话在内)都由 `run` 的
+driver 发起,同样使用该 agent。
 
 **agent 契约**恒为 `init` 生成并维护的 `.opencode/agent/auto.md`(M6.1 起不再可选;旧版
 `--agent <name>` 的契约名语义已退役):非交互工作契约——严格只做本次角色、状态文件
@@ -1039,30 +1034,24 @@ Phase: R-01.P01
 - 验收标准写进 `## Acceptance`(或规划成独立的验收任务、v 阶段);结论经任务报告的
   结论行上报,见[验收结论行](#验收结论行result-passfail)。
 
-### 快捷模式:由 AI 生成任务(--implement-file / --implement-prompt)
+### 由 AI 规划任务
 
-手工编写任务单元之外,`init` 提供一个专用于 `phases = "m"`(单阶段、无轮次概念)
-项目的快捷模式:不自己拆任务,而是给一份粗略的计划文件或一句实施提示词,由一次性
-的**计划生成会话**把详细、分步的任务写进 `docs/R-01/P01-implement/tasks.md` 与各
-`docs/T-NNN/todo.md`(与阶段化流程的阶段规划会话同款机制——这是 `init` 唯一会启动
-AI 会话的路径,其余路径下 `init` 不启动会话)。
+`init --implement-file` / `--implement-prompt` 快捷模式已退役(auto-core plans/0053 D13):
+任何命令出现这两个选项即用法错误(退出码 1),报文指向
+`opencode-auto plan <dir> -p <text> | --file <path>`(先 `init` 并提交轮首设置)。
+`init` 不再启动 AI 会话,也不再因这两个选项把 `subtask` 缺省为 `ondemand`、`wrapup`
+缺省为关闭。
 
-```sh
-opencode-auto init [dir] --implement-file <file>       # 依据指定的计划文件(全文注入会话)生成任务
-opencode-auto init [dir] --implement-prompt "<text>"    # 直接依据实施提示词生成任务
-```
+`phases = "m"` 的规划与阶段化流程共用同一个阶段规划会话(auto-core plans/0053 D12):
 
-- 二者二选一(同时给出为用法错误),值须非空;要求生效 `phases` 为 `"m"`(既有配置
-  或本次 `--phases` 给出的值不是 `"m"` 时报错,提示先 `--phases m` 切换)。
-- 任务索引当前必须尚无任务,已有任务时拒绝执行(防止误覆盖已有或此前生成的计划)。
-- 该模式下未显式给出 `--subtask` 时,`subtask` 缺省固化为 `ondemand`(计划生成会话
-  产出整任务计划后以单会话执行为主、上下文超限再交接续跑,不经逐任务分解);显式
-  `--subtask` 优先。
-- 生成完成后打印任务数并退出(不进入执行);**需人工审核 `docs/T-NNN/todo.md`**,确认
-  任务拆分与描述无误后再另行调用 `opencode-auto run [dir]` 执行——逐个任务按固化的
-  `subtask` 档推进(见[执行流水线](#执行流水线)),与手写任务的正常流程完全一致。
-- 计划生成会话受阻(隐性阻塞)时退出码 `2`,报文同其余旁路一次性会话;`run` 不接受
-  这两个选项(它们只属于 `init`)。
+- 输入原样存为阶段目录下的 `plan-input.md`(`docs/R-01/P01-implement/plan-input.md`),
+  在规划会话之前单独提交;规划会话按「计划文件」读取它,写出任务索引与各
+  `docs/T-NNN/todo.md`,完成即统一提交(`Auto-Stage: phase-plan`)。
+- 模型路由沿用 `implement-scan` 角色,已有的路由配置无需改动。
+- 编号:`autoNumber` 开启时自 `.auto/next-task` 续接并在规划后推进;关闭时从已占用的
+  最大编号之后开始。
+- 规划会话被中断时,下一次 `run`(或 `plan`)先完成这一步骤、再执行任务;与阶段化
+  流程的规划步骤一样复用未收口的会话。
 
 ## 原则检查(check)
 

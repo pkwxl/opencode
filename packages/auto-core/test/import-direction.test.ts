@@ -110,7 +110,6 @@ const CLASSIFIED: Record<string, Domain> = {
   git: "driver",
   handover: "driver",
   hibernate: "driver",
-  implement: "driver",
   interactive: "driver",
   knowledge: "driver",
   // The run lock .auto/run.lock (plans/0053 D1–D3).

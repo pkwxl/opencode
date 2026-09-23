@@ -1,13 +1,15 @@
 // src/unit-commit.ts 的单测: refcheck 挂点门禁(gatedAutoCorrectRefs)与 afterSession 完成条件门禁。
 // 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
 
-import { describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { clearSticky, resetFailback } from "../src/failback"
 import { commitTree, unitBaseline } from "../src/git"
 import { recallHandover, saveHandover } from "../src/handover"
-import { afterSession, gatedAutoCorrectRefs, rollbackUnitState } from "../src/unit-commit"
+import { parseSwitches, SWITCH_ENV } from "../src/switches"
+import { afterSession, gatedAutoCorrectRefs, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
 import { git, freshRepo, task } from "./fixtures/runner"
 
 // ---- refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off)----
@@ -98,5 +100,20 @@ describe("rollbackUnitState(单元回滚编排)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("resumeModelNow (strict-resume model check)", () => {
+  const switches = parseSwitches({ [SWITCH_ENV.model]: "implement-scan=kimi/scan,*=kimi/k2" })
+  const step = { kind: "step" as const, step: "phase-plan" as const, unit: "R-01.P01" }
+  // sticky / /failback overrides precede the routing table (src/failback.ts module state).
+  beforeEach(() => {
+    clearSticky()
+    resetFailback()
+  })
+
+  test("an explicit role wins over the phase, as it does at dispatch (plans/0053 D12)", () => {
+    expect(resumeModelNow({}, switches, step)).toBe("kimi/k2")
+    expect(resumeModelNow({}, switches, step, "implement-scan")).toBe("kimi/scan")
   })
 })

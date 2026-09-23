@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-import { stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { projectBriefText, renderProjectBrief, BRIEF_FILE } from "@opencode-ai/auto-core/brief"
+import { renderProjectBrief, BRIEF_FILE } from "@opencode-ai/auto-core/brief"
 import { checkPrinciple } from "@opencode-ai/auto-core/check"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm } from "@opencode-ai/auto-core/confirm"
@@ -19,7 +18,6 @@ import {
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
-import { implementPlan } from "@opencode-ai/auto-core/implement"
 import { liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
@@ -48,7 +46,7 @@ import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/au
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundBriefPath } from "@opencode-ai/auto-core/docpaths"
 import { roundCloseLines, roundCloseProblems } from "@opencode-ai/auto-core/round-close"
-import { loadPlan, taskIndexPath } from "@opencode-ai/auto-core/tasks"
+import { taskIndexPath } from "@opencode-ai/auto-core/tasks"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/opts"
 import { useIntentPacks } from "@opencode-ai/auto-core/prompt"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
@@ -61,9 +59,10 @@ const command = args[0]
 const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
-// --prompt/--permission/--idle-time/--idle-max/--mode/--phases/--implement-file/
-// --implement-prompt/--parallel/--max-sessions 带值(吞掉下一个
-// token);--verbose/--interactive/--dryrun/--test-by-driver/
+// --prompt/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
+// --max-sessions 带值(吞掉下一个 token;已退役的 --implement-file/--implement-prompt
+// 同样吞值,其参数不被当作目录,auto-core plans/0053 D13);
+// --verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
 // 是布尔选项,出现即
 // true,仅当紧随字面量 true/false 时才吞掉它。均支持
@@ -142,13 +141,15 @@ for (let i = 1; i < args.length; i++) {
 // check/status 不接受任何选项,出现旗标即拒绝。
 // Retired flags are usage errors with their own notice (mirroring the --commit
 // false retirement), let through the whitelist so the notice replaces "unknown
-// option": the completion-side mechanisms (D13, auto-core plans/0044) and the
-// migration parameters, which are intent rather than configuration (plans/0052 D1).
+// option": the completion-side mechanisms (D13, auto-core plans/0044), the
+// migration parameters, which are intent rather than configuration (plans/0052 D1),
+// and init's m-mode planning shortcut, whose session is now plan's (plans/0053 D13).
 const COMPLETION_RETIRED =
   "is retired: the driver no longer runs task-level acceptance, quality review or a final review. " +
   'Plan the checking as tasks (for example the v acceptance phase); a task report whose result line reads "Result: FAIL" stops the run'
 const MIGRATION_RETIRED =
   "is retired: the migration source and target are intent, not configuration — state them in .opencode/auto/brief.md, which planning sessions read"
+const IMPLEMENT_RETIRED = "is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after init and the round-start commit)"
 const RETIRED_FLAGS: Record<string, string> = {
   verify: COMPLETION_RETIRED,
   review: COMPLETION_RETIRED,
@@ -158,6 +159,8 @@ const RETIRED_FLAGS: Record<string, string> = {
   "source-dir": MIGRATION_RETIRED,
   "source-path": MIGRATION_RETIRED,
   "dest-dir": MIGRATION_RETIRED,
+  "implement-file": IMPLEMENT_RETIRED,
+  "implement-prompt": IMPLEMENT_RETIRED,
 }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
 // The config flags: the project attributes init freezes into config.json and
@@ -252,15 +255,6 @@ if (command === "run") {
   if (flags.has("force")) {
     console.error("-f/--force is an init/reset/fix option (skips the confirmation and the worktree cleanliness check); run does not accept it")
     process.exit(1)
-  }
-  // --implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项
-  // (计划生成会话是一次性的,产物任务单元经人工审核后另行调用 run 执行),不是
-  // run 的选项。
-  for (const key of ["implement-file", "implement-prompt"]) {
-    if (flags.has(key)) {
-      console.error(`--${key} is an init-only shortcut-mode option: use it to generate the task units (tasks.md + docs/T-NNN/todo.md), review them manually, then call opencode-auto run ${directory} to execute; run itself does not accept this option`)
-      process.exit(1)
-    }
   }
   // 续轮迁移是独立子命令(continue),不是任何命令的选项。
   if (flags.has("continue")) {
@@ -594,13 +588,11 @@ if (command === "init" || command === "continue" || command === "amend") {
       console.error(
         key === "prompt"
           ? `-p/--prompt is not an amend option: the brief is not config — edit ${BRIEF_FILE} directly`
-          : key === "implement-file" || key === "implement-prompt"
-            ? `--${key} is not an amend option: it starts a planning session; to keep the existing config use opencode-auto init <dir> --amend --${key} …`
-            : key === "force"
-              ? "-f/--force is not an amend option: amend discards no key, so there is no overwrite confirmation or worktree check to skip"
-              : key === "amend"
-                ? "--amend is redundant: the amend command always keeps the keys it is not given"
-                : `--${key} is not an amend option: amend takes only config flags (${CONFIG_FLAGS.map((name) => (name === "mode" ? "-m/--mode" : `--${name}`)).join(", ")})`,
+          : key === "force"
+            ? "-f/--force is not an amend option: amend discards no key, so there is no overwrite confirmation or worktree check to skip"
+            : key === "amend"
+              ? "--amend is redundant: the amend command always keeps the keys it is not given"
+              : `--${key} is not an amend option: amend takes only config flags (${CONFIG_FLAGS.map((name) => (name === "mode" ? "-m/--mode" : `--${name}`)).join(", ")})`,
       )
       process.exit(1)
     }
@@ -628,28 +620,9 @@ if (command === "init" || command === "continue" || command === "amend") {
       )
       process.exit(1)
     }
-    if (flags.has("implement-file") || flags.has("implement-prompt")) {
-      console.error("--implement-file/--implement-prompt are init-only single-phase (m) shortcut-mode options: continue is for phased-flow round continuation and does not support them")
-      process.exit(1)
-    }
   }
   if (flags.has("commit-subtask")) {
     console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
-    process.exit(1)
-  }
-  // --implement-file/--implement-prompt(init 单阶段 m 快捷模式,设计见文件尾用法
-  // 文本): 二选一,不与继续调用叠加使用;值须非空。文件存在性与 phases 兼容性
-  // 校验放在 existing 配置装载之后(§下文)。
-  if (flags.has("implement-file") && flags.has("implement-prompt")) {
-    console.error("--implement-file and --implement-prompt are mutually exclusive: they are two input sources for the same shortcut mode; do not give both")
-    process.exit(1)
-  }
-  if (flags.has("implement-file") && !flags.get("implement-file")?.trim()) {
-    console.error("--implement-file requires a non-empty file path")
-    process.exit(1)
-  }
-  if (flags.has("implement-prompt") && !flags.get("implement-prompt")?.trim()) {
-    console.error("--implement-prompt requires non-empty prompt text")
     process.exit(1)
   }
   const promptText = flags.get("prompt")
@@ -696,40 +669,8 @@ if (command === "init" || command === "continue" || command === "amend") {
   const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
   const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
   // 本次生效的 phases: 显式给出即用之,否则取基线值(全量覆盖下 = 缺省 "m",
-  // --amend/continue 下 = 既有配置值)。下方快捷模式校验与阶段索引前缀护栏共用。
+  // --amend/continue 下 = 既有配置值)。阶段索引前缀护栏使用。
   const effectivePhases = phases ?? base.phases
-  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 依赖生效 phases 才能
-  // 算出,故校验放在基线装载之后;--implement-file 的文件存在性同样在此校验
-  // (读盘前的用法校验已尽量前置,存在性判断天然需要 I/O)。
-  const implementFile = flags.get("implement-file")
-  const implementPrompt = flags.get("implement-prompt")
-  let implementFilePath: string | undefined
-  if (implementFile !== undefined || implementPrompt !== undefined) {
-    if (effectivePhases !== "m") {
-      console.error(
-        `--implement-file/--implement-prompt only apply to the single-phase (phases = "m") shortcut mode; ` +
-          `${phases !== undefined ? "the --phases given here" : amend ? "the existing config phases" : "the effective default phases"} is "${effectivePhases}". ` +
-          `switch first with opencode-auto amend <dir> --phases m (new projects default to m when --phases is omitted), then use this shortcut mode`,
-      )
-      process.exit(1)
-    }
-    if (implementFile !== undefined) {
-      implementFilePath = resolve(implementFile)
-      const fileOk = await stat(implementFilePath).then((s) => s.isFile()).catch(() => false)
-      if (!fileOk) {
-        console.error(`the file given to --implement-file does not exist or is not a regular file: ${implementFilePath}`)
-        process.exit(1)
-      }
-    }
-    // 快捷模式缺省按需交接: 未显式给出 --subtask 时 subtask 固化为 ondemand
-    // (计划生成会话产出整任务计划后以单会话执行为主、上下文超限再交接续跑,
-    // 不经逐任务分解);显式 --subtask 优先。
-    if (!flags.has("subtask")) explicit.subtask = "ondemand"
-    // 快捷模式缺省关闭收尾会话: 该模式只产出任务单元(计划生成会话),不进入
-    // 任务执行循环,未显式给出 --wrapup/--no-wrapup 时 wrapup 固化为 false
-    // (镜像 subtask 固化 ondemand 的同款处理);显式给出优先。
-    if (!flags.has("wrapup") && !flags.has("no-wrapup")) explicit.wrapup = false
-  }
   // handoverTest 须搭配 testByDriver: 显式给出时按本次生效值校验(未显式给出
   // test-by-driver 则回落既有配置值);amend 关闭 test-by-driver 而保留既有
   // handoverTest=true 亦在此拦截。
@@ -849,23 +790,9 @@ if (command === "init" || command === "continue" || command === "amend") {
     console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
     process.exit(1)
   }
-  // --implement-file/--implement-prompt: the session's reset clears the task
-  // index it plans into, so that index must list no tasks yet — refused
-  // otherwise, to protect a hand-written or earlier generated plan. A missing
-  // index is empty (a fresh project's round is established below).
-  if (implementFile !== undefined || implementPrompt !== undefined) {
-    const listed = await loadPlan(directory, units[0]!).catch(() => undefined)
-    if (!listed || listed.tasks.length) {
-      console.error(
-        `${listed?.index ?? "the task index"} already lists tasks (or is unreadable); --implement-file/--implement-prompt only generate a new plan into an empty task index: ` +
-          "to regenerate, back up and remove the task index and its task directories first",
-      )
-      process.exit(1)
-    }
-  }
   // 提示词库与意图包: 装载目标目录 .opencode/auto/prompts/ 与 .opencode/auto/intents/
-  // 覆盖(协议校验失败即退出);无快捷模式时不渲染提示词,提前装载可在 init 阶段就
-  // 暴露覆盖问题。
+  // 覆盖(协议校验失败即退出);init 不渲染提示词,提前装载可在 init 阶段就暴露
+  // 覆盖问题。
   try {
     usePromptLibrary(directory)
     useIntentPacks(directory)
@@ -904,14 +831,9 @@ if (command === "init" || command === "continue" || command === "amend") {
     process.exit(1)
   }
   console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  // 自动编号由阶段规划会话消费编号记录;phases = "m" 没有规划会话(任务由人工或
-  // init 快捷模式写出),开关不产生效果,提示一次。
-  if (config.autoNumber && config.phases === "m") {
-    console.log('ℹ auto-numbering (--auto-number) has no planning session to consume the numbering record under phases = "m"; the switch has no effect (task numbering is maintained manually)')
-  }
   // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。任务不在此写(PLAN.md
-  // 已退役,M3.4): 由下方 establishRound 建轮次目录与阶段目录,任务单元由规划会话、
-  // init 快捷模式或人工写出。amend writes only what renders from the config (the
+  // 已退役,M3.4): 由下方 establishRound 建轮次目录与阶段目录,任务单元由规划会话
+  // 或人工写出。amend writes only what renders from the config (the
   // contract); opencode.json may hold a person's edits and is init's and fix's.
   const templates: Record<string, string> = amendCommand
     ? { ".opencode/agent/auto.md": templateAgent }
@@ -977,31 +899,7 @@ if (command === "init" || command === "continue" || command === "amend") {
     await Bun.write(join(directory, BRIEF_FILE), promptText.trimEnd() + "\n")
     console.log(`written: ${BRIEF_FILE} (project brief, consumed by phase planning sessions; repeated init -p overwrites it)`)
   }
-  // --implement-file/--implement-prompt 快捷模式(单阶段 m): 计划生成会话写出
-  // P01-implement 的任务索引与各任务文档,与阶段规划会话同款机制——这是 init 唯一
-  // 会启动 AI 会话的路径(§B.1 的"init 不启动会话"原则对通常路径不变,此快捷模式是
-  // 显式选择)。任务索引尚无任务已在写盘前校验(见上)。
   const taskIndex = taskIndexPath(units[0]!)
-  if (implementFile !== undefined || implementPrompt !== undefined) {
-    const brief = await projectBriefText(directory)
-    console.log(`▶ plan-generation session input: ${implementFilePath !== undefined ? `plan file ${implementFilePath}` : "implementation prompt"}`)
-    const result = await implementPlan(
-      directory,
-      {
-        file: implementFilePath,
-        content: implementFilePath !== undefined ? await Bun.file(implementFilePath).text() : implementPrompt!,
-        brief,
-      },
-      { agent: config.agent, commit: config.commit, contextLimit: config.contextLimit * 1000, mode: modes[modeName], parallel: config.parallel },
-    )
-    if (result.type === "blocked") {
-      console.error(`⏸ plan-generation session blocked (hidden blockage; inspect and re-run):\n${result.question}`)
-      process.exit(2)
-    }
-    console.log(`✓ plan generation complete: ${taskIndex} lists ${result.count} task(s)`)
-    console.log(`after reviewing the task documents (docs/T-NNN/todo.md), run: opencode-auto run ${directory}`)
-    process.exit(0)
-  }
   // 结束语按 phases 分两态: "m" 提示人工写任务单元(run 在 m 下不规划,-p 写下的
   // brief 只供日后的规划会话);阶段化流程下任务由阶段规划会话写出,不提示手工编辑。
   // continue 下新一轮阶段全未完成,首个阶段 = 新 phases 的第一个字母;另打新一轮横幅。
@@ -1183,7 +1081,7 @@ if (command === "status") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
+  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--amend] [-f|--force]
   opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
@@ -1211,7 +1109,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --agent opencode|claude the coding agent that runs every session (default opencode; claude = Claude Code headless, needs the claude CLI on PATH). The agent contract is always .opencode/agent/auto.md; the env var OPENCODE_AUTO_AGENT overrides the configured agent for a run
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
-       --implement-file <file> / --implement-prompt <text> single-phase (phases = "m") shortcut mode, pick one: from the given plan file (injected in full) or the given implementation prompt, start a one-off plan-generation session that writes the task index docs/R-01/P01-implement/tasks.md and one docs/T-NNN/todo.md per task (same mechanism as phase planning sessions; the only path where init starts an AI session); requires effective phases = "m" (switch with --phases m first if incompatible) and an empty task index (rejected when tasks are listed, to avoid clobbering); in this mode, without an explicit --subtask, subtask defaults to ondemand (single-session execution, hand over on demand when context runs out, no per-task decomposition), and without an explicit --wrapup/--no-wrapup, wrapup defaults to false (this mode only produces the task units, never enters the task execution loop, so wrap-up does not apply); after generation, review the task documents manually and call opencode-auto run <dir> separately — from then on tasks proceed with the frozen subtask/wrapup settings; run does not accept these two options
+       --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after init and the round-start commit)
        continue subcommand: after the previous phased migration round fully completes, start a new round of continued migration (making the migration result more complete and consistent with the source) — at round start a new round directory docs/R-NN/ is created (the phase index phases.md and one P<nn>-<type>/ directory per phase — with its task index, handover and knowledge docs — all live inside the round, permanent once written, with the AGENTS.md snapshot stored as AGENTS.md.bak inside the round), and the previous round's conclusions (final-phase handover and migration knowledge) are injected into the new round's first phase planning session; -m/--mode is fixed across rounds and cannot change (passing it is a usage error), while --phases and the remaining execution options (including --test-by-driver/--handover-test) and -p may be revised per round (not subject to the prefix guard)
 
 exit codes: 0 all complete; 1 usage/environment error (same when check finds principle-violating statements); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)

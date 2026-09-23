@@ -17,6 +17,7 @@ import { banner, log } from "./log"
 import { phaseState, phaseTitle, planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
 import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, routePhase, type PhaseUnit } from "./phases"
+import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
@@ -188,8 +189,9 @@ function logGateStop(phase: PhaseUnit, problems: string[], acceptance: string | 
 // 无任务则开规划会话 → 主循环执行 → 本阶段任务全 done 交接 → 阶段完成改名推导
 // 下一阶段;全部阶段完成退出 0。阶段/任务索引缺失或非法等环境错误退出 1(H 节)。
 // 无阶段模式(ctx.manual,phases = "m"): 唯一阶段 P01-implement 为人工模式——
-// 不开规划会话(任务由 init 快捷模式或人工写入)、不交接、阶段保持未完成(追加
-// 任务后重跑即续),任务全部完成即打印轮次完成行退出 0。
+// 任务由人工写入,规划会话只在给了规划输入或规划步骤未收口时开(planPhase,
+// plans/0053 D12)、不交接、阶段保持未完成(追加任务后重跑即续),任务全部完成
+// 即打印轮次完成行退出 0。
 // 步进暂停(phase 边界,OPENCODE_AUTO_STEP ≥ phase): 交接(完成+提交)
 // 完成后、下一轮路由前硬暂停——最后一个阶段暂停后回车即「全部阶段已完成」退出。
 export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
@@ -231,21 +233,6 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       for (const line of roundCloseLines(await roundCloseProblems(directory, state.round, { build: opts.build }))) log(line)
       return 0
     }
-    // 人工模式(无阶段): 没有任务可跑即收场——任务索引为空提示补写,任务全部
-    // 完成打印轮次完成行;均退出 0,阶段保持未完成。
-    if (ctx.manual && route.type !== "execute") {
-      if (route.type === "plan") {
-        log(`ℹ no tasks listed in ${route.plan.index}; add task lines there (with docs/T-NNN/todo.md per task) and re-run`)
-        return 0
-      }
-      log("✓ all tasks complete")
-      // 轮次代答汇总(plans/0020-auto-resolve-design.md §H-③,H6): 置顶于 ■ 轮次行之前。
-      for (const line of await roundResolveLines(directory)) log(line)
-      // 非分阶段路径的轮次完成行(STATS_PLAN §4.4,T-006): 阶段桶恒为 "m" 伪阶段,省略阶段段。
-      const lines = await roundCompleteLines(directory)
-      if (lines) for (const line of lines) log(line)
-      return 0
-    }
     // 阶段切换挂点(STATS_PLAN §3): 阶段限定编号变化重置 phase 桶;相同编号幂等。
     // blocked 已 return、complete 即将退出,均无需切换。
     await statsPhase(directory, phaseKey(route.phase).id)
@@ -262,11 +249,27 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
     // and a done phase clears the stale record. The point is keyed by the
     // qualified phase id R-NN.P<nn> (a type may repeat within a round); a record
     // without one (pre-M3.6 `letter`) matches no phase and file routing wins.
+    // The check precedes the m-mode branch below (plans/0053 D12), so an
+    // interrupted m-mode planning step is finished by whichever command runs
+    // next, from its persisted planning input; a record with no input to plan
+    // against (it predates the input) is closed, and file routing continues.
     const open = await openStep(directory)
     if (open) {
       const state = await phaseState(directory)
       const owner = state.phases.find((unit) => phaseKey(unit).id === open.unit)
       if (owner && state.done.has(owner.id)) {
+        await closeStep(directory, open.step, open.unit)
+      } else if (
+        ctx.manual &&
+        open.step === "phase-plan" &&
+        open.unit === phaseKey(route.phase).id &&
+        !ctx.input &&
+        !(await readPlanInput(directory, route.phase))?.trim()
+      ) {
+        log(
+          `⚠ unclosed m-mode planning resume point (${open.unit}) has no planning input (${planInputPath(route.phase)}) to plan against; ` +
+            `closing it and continuing with the file-derived route`,
+        )
         await closeStep(directory, open.step, open.unit)
       } else if (open.unit === phaseKey(route.phase).id) {
         log(
@@ -296,6 +299,23 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
             `continuing with the file-derived route (ignore if this was a manual rollback; otherwise check .auto/progress.json)`,
         )
       }
+    }
+    // 人工模式(无阶段): 没有任务可跑即收场——任务索引为空提示补写,任务全部
+    // 完成打印轮次完成行;均退出 0,阶段保持未完成。A planning input handed to
+    // this run (ctx.input) is the exception: m mode then plans on planPhase
+    // like a phase (plans/0053 D12).
+    if (ctx.manual && route.type !== "execute" && !(route.type === "plan" && ctx.input)) {
+      if (route.type === "plan") {
+        log(`ℹ no tasks listed in ${route.plan.index}; add task lines there (with docs/T-NNN/todo.md per task) and re-run`)
+        return 0
+      }
+      log("✓ all tasks complete")
+      // 轮次代答汇总(plans/0020-auto-resolve-design.md §H-③,H6): 置顶于 ■ 轮次行之前。
+      for (const line of await roundResolveLines(directory)) log(line)
+      // 非分阶段路径的轮次完成行(STATS_PLAN §4.4,T-006): 阶段桶恒为 "m" 伪阶段,省略阶段段。
+      const lines = await roundCompleteLines(directory)
+      if (lines) for (const line of lines) log(line)
+      return 0
     }
     if (route.type === "plan") {
       // k(知识提炼)阶段整体认领 --extract-knowledge 设计(P4): 不开规划会话、

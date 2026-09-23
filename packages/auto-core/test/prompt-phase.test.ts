@@ -1,4 +1,4 @@
-// src/prompt.ts + src/prompt-plan.ts 阶段族渲染的单测: 阶段规划/阶段交接/知识提取/编号恢复/implement 快捷模式。
+// src/prompt.ts + src/prompt-plan.ts 阶段族渲染的单测: 阶段规划/阶段交接/知识提取/编号恢复/m-mode planning。
 // 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
@@ -153,10 +153,11 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   })
 })
 
-describe("renderImplementPlan(init 快捷模式 --implement-file/--implement-prompt)", () => {
+describe("renderImplementPlan (m-mode planning, plans/0053 D12)", () => {
   test("file 给出: 按「计划文件」呈现,注入路径与全文;任务格式协议与授权文案同 phase-plan", () => {
-    const text = implementPlan({ file: "/tmp/rough-plan.md", content: "先做 A,再做 B" })
-    expect(text).toContain("## Input: plan file (/tmp/rough-plan.md)")
+    // planPhase passes the phase's persisted planning input as the file (D11).
+    const text = implementPlan({ file: "docs/R-01/P01-implement/plan-input.md", content: "先做 A,再做 B" })
+    expect(text).toContain("## Input: plan file (docs/R-01/P01-implement/plan-input.md)")
     expect(text).toContain("先做 A,再做 B")
     expect(text).not.toContain("## Input: implementation prompt")
     expect(text).toContain("# T-NNN: <task title>")

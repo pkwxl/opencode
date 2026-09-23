@@ -615,19 +615,17 @@ describe("CLI: init 固化项目配置", () => {
     }
   })
 
-  test("init --auto-number/--no-auto-number 固化与 amend;两开关同现为用法错误;phases = m 打提示", async () => {
+  test("init --auto-number/--no-auto-number 固化与 amend;两开关同现为用法错误", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      // 启用: 固化 true,摘要含自动编号段;phases = m(缺省)无规划会话 → ℹ 提示
+      // 启用: 固化 true,摘要含自动编号段。m-mode planning consumes the numbering
+      // record too (auto-core plans/0053 D12), so phases = m gets no "no effect" note.
       const init = await runCli(["init", dir, "--auto-number"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
       expect(init.out).toContain("auto-number on")
-      expect(init.out).toContain("has no planning session to consume the numbering record")
-      // 阶段化流程(phases 含规划会话)不打该提示
-      const staged = await runCli(["init", dir, "--phases", "am"])
-      expect(staged.code).toBe(0)
-      expect(staged.out).not.toContain("has no planning session to consume the numbering record")
+      expect(init.out).not.toContain("numbering record")
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
       // --no-auto-number 覆盖回 false;--amend 不给该键时保留,无 --amend 则回落缺省 true
       expect((await runCli(["init", dir, "--no-auto-number"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
@@ -1016,111 +1014,28 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
 
 })
 
-// 快捷模式用例只覆盖起会话前的用法校验(二选一/非空/phases 兼容/文件存在性/
-// 任务索引覆盖防护/子命令拦截),不触发真实计划生成会话——那需要 opencode 与
-// provider 凭证,按仓库既有约定归入顶部的 OPENCODE_AUTO_E2E 门控端到端用例。
-describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式)", () => {
-  test("二选一: 同时给出为用法错误;值须非空", async () => {
+// The init shortcut retired with auto-core's implement.ts (plans/0053 D13): its
+// planning session is plan's now (-p | --file). The flags stay value-parsed and
+// every command refuses them with the retired notice before it writes anything.
+describe("CLI: --implement-file/--implement-prompt retired (plans/0053 D13)", () => {
+  test("every command refuses them with the retired notice; nothing is written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const both = await runCli(["init", dir, "--implement-file", "a.md", "--implement-prompt", "做点什么"])
-      expect(both.code).toBe(1)
-      expect(both.err).toContain("mutually exclusive: they are two input sources")
-      const emptyFile = await runCli(["init", dir, "--implement-file", ""])
-      expect(emptyFile.code).toBe(1)
-      expect(emptyFile.err).toContain("--implement-file requires a non-empty file path")
-      const emptyPrompt = await runCli(["init", dir, "--implement-prompt", "  "])
-      expect(emptyPrompt.code).toBe(1)
-      expect(emptyPrompt.err).toContain("--implement-prompt requires non-empty prompt text")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("仅用于单阶段(phases = m): 与非 m 的 --phases 组合(显式给出或既有配置)为用法错误", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const explicit = await runCli(["init", dir, "--phases", "am", "--implement-prompt", "做点什么"])
-      expect(explicit.code).toBe(1)
-      expect(explicit.err).toContain('only apply to the single-phase (phases = "m") shortcut mode')
-      expect(explicit.err).toContain("the --phases given here")
-      // --amend 沿用既有配置的阶段化 phases,不显式给 --phases 同样拦截
-      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      const implicit = await runCli(["init", dir, "--amend", "--implement-prompt", "做点什么"])
-      expect(implicit.code).toBe(1)
-      expect(implicit.err).toContain("the existing config phases")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("--implement-file 指定的文件必须存在且为常规文件", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const missing = await runCli(["init", dir, "--implement-file", join(dir, "no-such-plan.md")])
-      expect(missing.code).toBe(1)
-      expect(missing.err).toContain("does not exist or is not a regular file")
-      const isDir = await runCli(["init", dir, "--implement-file", dir])
-      expect(isDir.code).toBe(1)
-      expect(isDir.err).toContain("does not exist or is not a regular file")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  // 隐式阶段 R-01/P01-implement 已列一个任务(索引行 + todo.md)。
-  async function listTask(dir: string) {
-    await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), "# Tasks\n\n- [ ] T-001 已有任务\n")
-    await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 已有任务\nPhase: R-01.P01\n\n## Goal\n\n做点什么。\n")
-  }
-
-  test("任务索引已列任务时拒绝快捷模式(防误覆盖已有计划)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      await listTask(dir)
-      const blocked = await runCli(["init", dir, "--implement-prompt", "重新生成"])
-      expect(blocked.code).toBe(1)
-      expect(blocked.err).toContain("docs/R-01/P01-implement/tasks.md already lists tasks")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("continue 与 run 均不接受这两个选项", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const cont = await runCli(["continue", dir, "--implement-file", "a.md"])
-      expect(cont.code).toBe(1)
-      expect(cont.err).toContain("continue is for phased-flow round continuation and does not support")
-      const run = await runCli(["run", dir, "--implement-prompt", "做点什么"])
-      expect(run.code).toBe(1)
-      expect(run.err).toContain("init-only shortcut-mode option")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  // Validate-then-write (plans/0052 D7, inverting the pre-D7 assertion that
-  // the shortcut's defaults were already written when the guard refused): a
-  // refused shortcut leaves config.json and the rest of the config layer as they were.
-  test("the task-index guard refuses before any write: config.json unchanged, --subtask/--wrapup defaults not applied", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      await listTask(dir)
-      const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
-      const agents = await Bun.file(join(dir, "AGENTS.md")).text()
-      await rm(join(dir, ".opencode/agent/auto.md"))
-      for (const extra of [[], ["--subtask", "off", "--no-wrapup", "--context-limit", "32"]]) {
-        const blocked = await runCli(["init", dir, "-f", "--implement-prompt", "重新生成", "-p", "意图", ...extra])
-        expect(blocked.code).toBe(1)
-        expect(blocked.err).toContain("docs/R-01/P01-implement/tasks.md already lists tasks")
-        expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+      for (const [flag, args] of [
+        ["implement-prompt", ["init", dir, "--implement-prompt", "做点什么"]],
+        ["implement-file", ["init", dir, "--phases", "am", "--implement-file", "plan.md"]],
+        ["implement-prompt", ["init", dir, "--amend", "--implement-prompt", "做点什么"]],
+        ["implement-file", ["amend", dir, "--phases", "m", "--implement-file", "plan.md"]],
+        ["implement-file", ["continue", dir, "--implement-file", "plan.md"]],
+        ["implement-prompt", ["run", dir, "--implement-prompt", "做点什么"]],
+      ] as const) {
+        const refused = await runCli([...args])
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain(
+          `--${flag} is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after init and the round-start commit)`,
+        )
       }
-      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe(agents)
-      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe(renderProjectBrief())
+      expect(await readdir(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1444,7 +1359,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
       expect(none.err).toContain(`opencode-auto fix ${dir}`)
       const refused: [string[], string][] = [
         [["-p", "意图"], "-p/--prompt is not an amend option: the brief is not config — edit .opencode/auto/brief.md directly"],
-        [["--implement-prompt", "计划"], "--implement-prompt is not an amend option"],
+        [["--implement-prompt", "计划"], "--implement-prompt is retired: plan tasks with opencode-auto plan <dir>"],
         [["-f", "--phases", "am"], "-f/--force is not an amend option"],
         [["--amend", "--phases", "am"], "--amend is redundant"],
         [["--server", "http://x", "--phases", "am"], "--server is not an amend option: amend takes only config flags (-m/--mode, --agent,"],

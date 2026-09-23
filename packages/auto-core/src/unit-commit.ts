@@ -16,7 +16,7 @@ import type { Task } from "./tasks"
 import { autoCorrectRefs } from "./refcheck"
 import { collectAgentResolves, resolvesOf, type ResolveItem } from "./resolve"
 import { saveProgress, type Phase, type Progress } from "./resume"
-import { autoSwitches, type Switches } from "./switches"
+import { autoSwitches, type ModelRole, type Switches } from "./switches"
 
 // Questions get this autonomous reply when no human answers in time (or
 // --wait-answer was not given for non-permission questions); only a repeated
@@ -141,8 +141,12 @@ export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches
 // 恢复时的模型一致性求值(设计 3.1 ④): 与 attempt 为复用会话计算 target 的优先级
 // 链一致(链上降级候选在恢复时不存在,取 sticky > /failback 覆写 > 路由表)。返回
 // undefined = 当前未配置模型路由(此时记录也无可记,核对按不匹配处理)。
-export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined): string | undefined {
-  return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, phaseToRole(phase) ?? "bypass")
+// role is the session's explicit routing role (requireArtifact's spec.role,
+// such as m-mode planning's implement-scan, plans/0053 D12). The dispatch
+// routed by it, since an explicit role wins over the phase (roleOf), so the
+// check must derive the same role; absent = derived from the phase.
+export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined, role?: ModelRole): string | undefined {
+  return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, role ?? phaseToRole(phase) ?? "bypass")
 }
 
 // 回滚协议的 runner 侧编排(设计 3.3): rollbackUnit(stash 保全 + soft reset 收回

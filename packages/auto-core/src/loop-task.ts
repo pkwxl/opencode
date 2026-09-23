@@ -27,7 +27,8 @@ export type LoopCtx = {
   agentName: string
   phases: string
   // The no-phase mode (phases = "m"): the single phase P01-implement is manual —
-  // no planning or handover session, the phase stays open (plans/0047 L2).
+  // no handover session, the phase stays open (plans/0047 L2), and a planning
+  // session runs only on a planning input (plans/0053 D12).
   manual: boolean
   repl?: Interactive
   // runTaskLoop 跨调用累积的已跑任务数(§I D14): 决定 --wait-between 是否在后续阶段

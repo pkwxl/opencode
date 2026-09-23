@@ -1,9 +1,9 @@
-// Planning-session prompts: the phase planning session (renderPhasePlan) and
-// the m-mode plan generation session (renderImplementPlan). Moved out of
-// src/prompt.ts (plans/0053 A2) so the P3 planning additions do not grow that
-// file; the copy stays in templates/prompts/phase-plan.md and
-// implement-plan.md, and rendering goes through prompt.ts's single exit
-// (renderPrompt) and its intent-pack helpers.
+// Planning-session prompts: phased planning (renderPhasePlan) and m-mode
+// planning (renderImplementPlan), both rendered by planPhase (src/loop-plan.ts,
+// plans/0053 D12). Moved out of src/prompt.ts (plans/0053 A2) so the P3
+// planning additions do not grow that file; the copy stays in
+// templates/prompts/phase-plan.md and implement-plan.md, and rendering goes
+// through prompt.ts's single exit (renderPrompt) and its intent-pack helpers.
 import type { ModeSpec } from "./mode"
 import type { ParallelLevel } from "./intent/types"
 import { planDutiesPartial, type PhaseTypeEntry } from "./phases/registry"
@@ -76,14 +76,15 @@ function parallelism(level: ParallelLevel | undefined): { parallel?: string; par
   return rules ? { parallel: level, parallelRules: rules } : {}
 }
 
-// 计划生成会话(packages/auto 的 init 快捷模式 --implement-file/--implement-prompt):
-// 旁路一次性,产物 = 单阶段 P01-implement 的任务索引 + 各任务文档,复用与
-// renderPhasePlan 同款任务单元格式约定,但不含阶段/轮次/交接等阶段化流程概念——
-// 该快捷模式仅用于 phases = "m" 项目(调用方校验)。numberStart 为编号起点(三位
-// 零填充前的数值;缺省 1)。输入二选一: file 给出时按
-// 「计划文件」呈现 content(源文件全文,path 供报文引用),否则按「实施提示词」
-// 呈现(content = 提示词原文);brief 为 .opencode/auto/brief.md 原文(可空,与
-// -p/--prompt 同给时一并注入,供规划会话感知项目意图)。
+// m-mode planning (phases = "m", plans/0053 D12; formerly the init shortcut
+// --implement-file/--implement-prompt): 旁路一次性,产物 = 单阶段 P01-implement 的
+// 任务索引 + 各任务文档,复用与 renderPhasePlan 同款任务单元格式约定,但不含阶段/
+// 轮次/交接等阶段化流程概念。numberStart 为编号起点(三位零填充前的数值;缺省 1)。
+// 输入二选一: file 给出时按「计划文件」呈现 content(源文件全文,path 供报文引用),
+// 否则按「实施提示词」呈现(content = 提示词原文)。planPhase always passes the
+// phase's persisted planning input as the file (plan-input.md, D11), so the
+// prompt branch is unused by the core. brief 为 .opencode/auto/brief.md 原文(可空,
+// 供规划会话感知项目意图)。
 export function renderImplementPlan(input: {
   file?: string
   content: string

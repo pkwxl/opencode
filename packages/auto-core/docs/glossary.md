@@ -96,7 +96,7 @@ Unit and outcome states:
 | 整体执行 | whole-task session | `whole.md`: a task run without subtasks |
 | 收尾 | wrap-up | The AI session that writes the task report; `wrapup.md`, `src/wrapup.ts` |
 | 收口 | close-out | The driver's mechanical checks and commit after a unit; runner `closeout` step |
-| 阶段规划 | phase planning | `phase-plan.md` |
+| 阶段规划 | phase planning | `phase-plan.md`; in no-phase mode `implement-plan.md` over the planning input, on the same step (`planPhase`, `plans/0053` D12) |
 | 阶段交接 | phase handover | `phase-handover.md` |
 | 交接提炼 | handover distillation | The bypass session that writes the phase handover |
 | 旁路会话 | bypass session | A session outside the task pipeline that must produce a file (`requireArtifact`) |

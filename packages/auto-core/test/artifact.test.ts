@@ -545,6 +545,31 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     }
   })
 
+  test("spec.role reaches the model check (plans/0053 D12): an m-mode planning record routed under implement-scan is reused", async () => {
+    // The dispatch routed by the explicit role (roleOf), so the recorded model
+    // is implement-scan's; derived from the step alone, the check would expect
+    // phase-plan's model, report a mismatch and roll back.
+    const routed = parseSwitches({
+      [SWITCH_ENV.strictResume]: "on",
+      [SWITCH_ENV.model]: "implement-scan=kimi/scan,*=kimi/k2",
+      [SWITCH_ENV.retryWaits]: "0,0",
+      [SWITCH_ENV.recoveryWait]: "0",
+    })
+    const { dir } = await seeded({ model: "kimi/scan" })
+    try {
+      const { client, state } = stepClient("ses_plan_old")
+      let resetCalled = false
+      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, { ...spec(() => (resetCalled = true)), role: "implement-scan" }, routed)
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(false)
+      expect(state.creates).toBe(0)
+      expect(state.prompts).toEqual(["ses_plan_old"])
+      expect(await git(dir, "stash", "list")).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("spec.restart after a planning-input commit: no rollback, the input commit stays, a new session plans (plans/0053 D9)", async () => {
     const { dir } = await seeded({ model: "kimi/k2" })
     try {

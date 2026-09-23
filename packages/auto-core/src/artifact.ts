@@ -3,7 +3,7 @@
 // feedback → still missing: stop as an implicit block. It also runs the resume
 // point of phase-level bypass steps (spec.step) and the commit boundary of
 // independent hidden task units (spec.unitStart). Consumed by
-// implement/numbering/knowledge/loop; kept in its own file so they need not pull
+// numbering/knowledge/loop; kept in its own file so they need not pull
 // in the whole runner. Sits above session; **must not import runner**.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S9, pure move).
 
@@ -86,7 +86,9 @@ export async function requireArtifact<T>(
     // Session role (model-routing key, plans/0017-model-routing-design.md C.1): one-shot
     // bypass sessions declare it (e.g. knowledge / number-recovery); undefined →
     // roleOf falls to bypass. Phase-step sessions with spec.step need not declare it
-    // (roleOf derives it from the step variant).
+    // (roleOf derives it from the step variant); one that does (m-mode planning,
+    // implement-scan, plans/0053 D12) is routed by it, and strict resume checks
+    // the recorded model under the same role.
     role?: ModelRole
   },
   // Defaults to the parsed OPENCODE_AUTO_* values; passed through to runSession
@@ -124,7 +126,7 @@ export async function requireArtifact<T>(
       if (strict && recalled!.baseline) {
         const drift = await baselineIntact(opts.dir, recalled!.baseline)
         if (drift.length) return { type: "dirty", files: drift }
-        const modelNow = resumeModelNow(opts, switches, recalled!.phase)
+        const modelNow = resumeModelNow(opts, switches, recalled!.phase, spec.role)
         if (usable && !legacyRecord && recalled!.model !== undefined && recalled!.model === modelNow) {
           resumedSession = candidate
           resumedUsage = usage

@@ -1,8 +1,9 @@
 // Which coding agent a run drives, and starting it (M6.1). Precedence: the
 // shell profile's agent (setShellProfile `agent`) > OPENCODE_AUTO_AGENT (an
-// override for trials) > the project config's `agent` key > opencode. Both
-// session entry points — runAll and the init-time implementPlan session — go
-// through startAgent, so a project's agent choice holds for every session.
+// override for trials) > the project config's `agent` key > opencode. The
+// session entry point, runAll, goes through startAgent, so a project's agent
+// choice holds for every session (m-mode planning included, which ran in its
+// own init-time session until plans/0053 D12).
 import type { AgentHost } from "./agent/types"
 import { opencodeHost } from "./agent/opencode/server"
 import { claudeHost } from "./agent/claude/host"
