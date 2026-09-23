@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { renderAgentContract } from "../src/loop-preflight"
+import { renderAgentContract } from "../src/config-fix"
 import { loadIntents, packSubsection, resolveIntent } from "../src/intent/load"
 import { loadModes } from "../src/mode"
 import { planOf } from "./fixtures/units"

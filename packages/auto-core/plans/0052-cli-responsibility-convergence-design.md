@@ -1,6 +1,6 @@
 # 0052 — CLI responsibility convergence: config-only `init`, migration parameters as intent, `plan` and `close` (design)
 
-Status: **design, ruled** (2026-09-23, rulings U1–U6). **P1 implemented** (2026-09-23, auto-core branch; notes under §6); P2 onward not started. Source: user proposal of 2026-09-23 (§0), with a same-day follow-up (§0 item 4, rulings U5–U6). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
+Status: **design, ruled** (2026-09-23, rulings U1–U6). **P1 and P2 implemented** (2026-09-23, auto-core branch; notes under §6); P3 not started. Source: user proposal of 2026-09-23 (§0), with a same-day follow-up (§0 item 4, rulings U5–U6). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
 
 ## 0. The proposal
 
@@ -384,7 +384,15 @@ Each step is verified with `bun typecheck` and `bun test` in `packages/auto-core
   - `init` now calls `useIntentPacks` next to `usePromptLibrary`. Validating the packs is D7; as a side effect, the `--implement-*` session now sees the project's intent overlays, as `run` does.
   - D7's inverted test (`e2e.test.ts`, "the task-index guard refuses before any write") asserts that `config.json`, `AGENTS.md`, the contract and `brief.md` are untouched. The shortcut's `ondemand` / `wrapup: false` defaults are now written only on a real session path, so the e2e suite no longer covers them outside `OPENCODE_AUTO_E2E`.
   - D8's "package notes" are `auto-core/AGENTS.md` (there is no `CLAUDE.md`); `packages/auto/AGENTS.md` gained the D4 baseline and D7 ordering notes. Glossary rows added: retired key, tombstone key name, validate-then-write.
-- [ ] **P2** D9–D11, D25: brief stub and reset comparison, `config-fix.ts`, the `fix` and `amend` commands, `fix` hints in `run`/`status`/preflight/`check`, `amend` hints (DF8).
+- [x] **P2** D9–D11, D25: brief stub and reset comparison, `config-fix.ts`, the `fix` and `amend` commands, `fix` hints in `run`/`status`/preflight/`check`, `amend` hints (DF8).
+  - Done 2026-09-23 on auto-core. `auto-core` 1125 pass; `packages/auto` 65 pass, 4 skip (the `OPENCODE_AUTO_E2E` real-agent tests).
+  - D9: the stub is `src/brief.ts` (`renderProjectBrief`, `projectBriefText`); the comment stripping is `round-brief.ts` `stubbedText`, shared by both briefs. `init` without `-p` writes the stub only when the file is missing.
+  - D10: `planFix` computes findings and writes without touching disk; `applyFix` runs exactly those writes, so the plan the shell prints is the change it makes. The artifact rules preview through new `dryRun` options on `ensurePointer` and `ensureGitignore`. Beyond D10's table: invalid JSON and a non-object file are manual findings, and intent packs that do not load are a manual finding for the AGENTS.md block (the block renders from them).
+  - `renderAgentContract` moved from `loop-preflight.ts` to `config-fix.ts`, so `check` and `config-fix` do not pull in the driver chain. Shell-visible; recorded in the shell contract §C.
+  - D11: beyond the named sites, the missing-agent hint in `session-api.ts` and the `run` legacy-mode note also name `fix`, and `amend`, `continue` and `init --amend` append the `fix` hint to a strict failure (`fixHint`), as `run` and `status` do.
+  - D25: `amend` shares `init`'s block (`amendCommand`) and the config-flag list (`CONFIG_FLAGS`, also used by `run`'s frozen-flag loop). It writes config.json, the contract, the AGENTS.md block and the round step; `opencode.json`, `.gitignore` and the brief stub stay with `init` and `fix`.
+  - Q8 decided: `check` does not list `fix`'s findings (§8.4).
+  - Glossary: "brief" became "project brief"; rows added for the project brief stub and fixable / manual; the amend and config fix rows now point at the commands.
 - [ ] **P3 design pass**: a detailed design document for P3 with 0035 registrations (§7) before any code.
 - [ ] **P3a** D12–D16: run lock, `plan` as a stop condition, route table, `implementPlan` merged into `planPhase`, persisted planning input.
 - [ ] **P3b** D17–D19: `closeUnit` and `close`, `plan --append`, `plan --force-close`.
@@ -459,7 +467,7 @@ These do not depend on this design. Each is scheduled in a stage.
 - **Q5** m mode has no `round.md`: how should the G1 message and the `plan` stop line read there?
 - **Q6** Is a `reopen <ref>` command worth having, or is `git revert` of the close commit enough?
 - **Q7** `mode` and `parallel` stay config as intent selectors (§3). Revisit if intent packs gain their own selection mechanism.
-- **Q8** Should `check` also list `fix`'s findings, read-only? `fix` already prints its plan before it asks. Decide in P2.
+- **Q8** Should `check` also list `fix`'s findings, read-only? `fix` already prints its plan before it asks. **Decided in P2: no.** `check` keeps one note for a config that does not load and appends the `fix` hint when a key rule applies; its AGENTS.md-block notes name `fix`. The full list is `fix` itself, which changes nothing unless confirmed. Two listings of one rule table would drift.
 
 ## 9. Relationship to other designs
 

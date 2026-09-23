@@ -81,6 +81,8 @@ const CLASSIFIED: Record<string, Domain> = {
   doccheck: "document",
   // The round brief docs/R-NN/round.md: stub and section readers (M4.2, plans/0049 G2).
   "round-brief": "document",
+  // The project brief .opencode/auto/brief.md: stub and reader (plans/0052 D9).
+  brief: "document",
   protect: "document",
   // agent: none left flat — MA.3 moved server.ts into agent/opencode/ and
   // session-api.ts became a driver module (its SDK calls moved into the
@@ -96,6 +98,8 @@ const CLASSIFIED: Record<string, Domain> = {
   clean: "driver",
   conclusion: "driver",
   config: "driver",
+  // Config fix: the rule table behind `fix` (plans/0052 D10).
+  "config-fix": "driver",
   confirm: "driver",
   current: "driver",
   "exec-session": "driver",

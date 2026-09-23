@@ -30,6 +30,7 @@ import {
   type PhaseUnit,
 } from "./phases"
 import { renderPhaseHandover, renderPhasePlan } from "./prompt"
+import { projectBriefText } from "./brief"
 import { roundBriefText } from "./round-brief"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { plannedTaskProblems, qualifiedPhase, resetPlanning, takenTaskIds, taskIndexPath } from "./tasks"
@@ -80,7 +81,8 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     }
     numberStart = numbering.next
   }
-  const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
+  // The project brief (plans/0052 D9), comments stripped: an untouched stub injects nothing.
+  const brief = await projectBriefText(directory)
   // Earlier phases' handovers (injection discipline): only the distilled
   // handovers are injected, never the earlier phases' raw docs/. Each done phase
   // that precedes this one in the phase index is appended in order; the handover

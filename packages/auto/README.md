@@ -35,8 +35,10 @@ bun run packages/auto/src/index.ts <子命令> ...
 ## 使用
 
 ```sh
-opencode-auto init [dir]     # 建立轮次目录 docs/R-01/(阶段索引 + 阶段目录),生成 opencode.json、.opencode/agent/auto.md 模板,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等同步单一 opencode-auto 标记块
+opencode-auto init [dir]     # 建立轮次目录 docs/R-01/(阶段索引 + 阶段目录),生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等同步单一 opencode-auto 标记块
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+opencode-auto amend [dir] --<键选项> <值> ...   # 只改写给出的配置键,其余保留(至少一个键;无配置即拒绝),见"修订(amend)"
+opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名/迁入 brief.md,契约、AGENTS.md 块、.gitignore 与配置对齐,见"配置修复(fix)"
 opencode-auto init [dir] --implement-file <file>       # 单阶段(m)快捷模式: 依据计划文件开一次性计划生成会话,直接生成任务索引与任务文档(见"任务单元格式"一节)
 opencode-auto init [dir] --implement-prompt "<text>"   # 单阶段(m)快捷模式: 依据实施提示词生成任务,同上
 opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后建立新一轮轮次目录、开启新一轮(见"阶段化流程")
@@ -53,13 +55,15 @@ opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → �
 传入的参数决定,未给出的键一律回落内置缺省,不与磁盘上的旧配置做增量合并。于是
 "干净环境跑一次无参 `init`"与"带参 `init` 之后再跑一次无参 `init`"产出逐字节一致
 ——单次 `init` 即可得到确定状态,无需前置清理;相同参数连跑多次结果恒定。想只改一
-两个键而保留其余既有值,用 `init --amend`(见[init 的选项](#init-的选项固化与修订))。
+两个键而保留其余既有值,用 `amend` 子命令(见[修订(amend)](#修订amend));只想把
+契约 / AGENTS.md 块刷新到与现有配置一致、或清掉已退役键,用 `fix`(见
+[配置修复(fix)](#配置修复fix))——二者都不会把其余键重置为缺省。
 
 **breaking 变更**:`run` 不再接受 `-m/--mode`、`--agent`、`--context-limit`、
 `--subtask`、`--idle-time`、`--idle-max`、`--commit`、`--test-by-driver`、
 `--handover-test`、`--auto-number`、`--no-auto-number`、`--phases`、`--parallel`
 ——任一出现即用法错误(退出码 1),报文
-给出修订指引(`opencode-auto init <dir> --<flag> <值>`,或直接编辑配置文件);这些
+给出修订指引(`opencode-auto amend <dir> --<flag> <值>`,或直接编辑配置文件);这些
 选项已固化为项目属性,见下节。`run` 同样不接受 `--implement-file`/`--implement-prompt`
 ——二者是 `init` 专用的单阶段快捷模式选项(见[任务单元格式](#任务单元格式)一节),
 产物任务文档经人工审核后才用 `run` 执行。
@@ -75,18 +79,18 @@ opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → �
 | 键 | 值域 | 缺省 | 说明 |
 | --- | --- | --- | --- |
 | `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
-| `agent` | `opencode` / `claude` | `opencode`(不写键) | 驱动全部会话的编码 agent(M6.1);`OPENCODE_AUTO_AGENT` 可按次覆盖。旧版本此键为契约名(如 `auto`),读到即报错并提示删除该键——契约恒为 `.opencode/agent/auto.md`。见[agent 选择](#opencode-server-与-agent-选择) |
+| `agent` | `opencode` / `claude` | `opencode`(不写键) | 驱动全部会话的编码 agent(M6.1);`OPENCODE_AUTO_AGENT` 可按次覆盖。旧版本此键为契约名(如 `auto`),读到即报错并提示删除该键(`fix` 代删)——契约恒为 `.opencode/agent/auto.md`。见[agent 选择](#opencode-server-与-agent-选择) |
 | `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用(需 `OPENCODE_AUTO_REUSE_SESSION=on`)的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
 | `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线);`--implement-file`/`--implement-prompt` 快捷模式缺省 `ondemand` |
-| `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(test 脚本)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取 |
-| `idleMax` | 0..1440(分钟,0 = 不设) | `0` | driver 托管脚本的绝对时长上限;旧键名 `verifyMax` 在新键缺失时回落读取 |
-| `verify` | **已退役** | — | 任务级验收已退役(2026-09-21):存量配置写着 `verify: true` 读入即报错退出 1(删该键,把验收规划成任务或用 v 阶段);`false` 或缺省忽略 |
-| `commit` | `true`(**`false` 已退役**) | `true` | 会话后统一提交(git 历史即 AI 变更的审计轨迹);提交是完成条件,写着 `false` 的存量配置读入即报错退出 1 |
+| `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(test 脚本)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取(`fix` 就地更名) |
+| `idleMax` | 0..1440(分钟,0 = 不设) | `0` | driver 托管脚本的绝对时长上限;旧键名 `verifyMax` 在新键缺失时回落读取(`fix` 就地更名) |
+| `verify` | **已退役** | — | 任务级验收已退役(2026-09-21):存量配置写着 `verify: true` 读入即报错退出 1(删该键——`fix` 代删——把验收规划成任务或用 v 阶段);`false` 或缺省忽略 |
+| `commit` | `true`(**`false` 已退役**) | `true` | 会话后统一提交(git 历史即 AI 变更的审计轨迹);提交是完成条件,写着 `false` 的存量配置读入即报错退出 1(`fix` 删除该键) |
 | `testByDriver` | `true` / `false` | `false` | 编译/测试/构建/lint 等命令由 driver 执行(会话经 `test/` 脚本 + `tmp/test.sh` 标记请求),见[测试执行协议](#测试执行协议--test-by-driver) |
 | `handoverTest` | `true` / `false` | `false` | 测试失败且上下文达限时写交接文档换新会话续跑;须搭配 `testByDriver: true`,否则配置校验失败(退出码 1) |
 | `autoNumber` | `true` / `false` | `true` | 自动编号(缺省启用,`--no-auto-number` 关闭):任务编号(T-NNN)在目标目录永不重复,下一可用编号持久化在 `.auto/next-task`,由阶段规划会话消费,记录缺失时先恢复再继续——见[阶段化流程](#阶段化流程--phases)一节末尾 |
 | `phases` | `admtvk` 的子序列且含 `m`,或含 `implement` 的阶段类型 id 列表(逗号分隔字符串或 JSON 数组) | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;列表形态可引用 `.opencode/auto/phases/` 下的自定义类型);`"m"` = 无阶段声明,即隐式单阶段 `docs/R-01/P01-implement`,不开规划与交接会话,任务由人工或 init 快捷模式列出。见[阶段化流程](#阶段化流程--phases) |
-| `source` / `destDir` | **已退役** | — | 迁移源与目标是意图、不是配置(2026-09-23,auto-core plans/0052 D2/D3):写进 `.opencode/auto/brief.md`,由规划会话读取。存量配置写着任一键(任何值)读入即报错退出 1,报文给出原值与修法(抄进 brief.md 后删键);无参 `init` 全量覆盖会丢弃并逐个打印原值。两个键名永久占位,不再复用 |
+| `source` / `destDir` | **已退役** | — | 迁移源与目标是意图、不是配置(2026-09-23,auto-core plans/0052 D2/D3):写进 `.opencode/auto/brief.md`,由规划会话读取。存量配置写着任一键(任何值)读入即报错退出 1,报文给出原值与修法(抄进 brief.md 后删键——`fix` 代为迁入 `## Source` / `## Target` 节并删键);无参 `init` 全量覆盖会丢弃并逐个打印原值。两个键名永久占位,不再复用 |
 
 **统一提交**(`commit: true`,缺省):任何会话结束且 driver 完成状态写入(如勾选
 子任务)后,由 driver 递归提交全部改动——先嵌套 `.git` 子仓库、后目标目录所在
@@ -104,7 +108,7 @@ git rename 配对成功的新旧路径机械改写活文档中的旧引用(只�
 rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本次提交落账;非 git
 目录空转)。`false` 关闭后改动留在工作区。
 
-写入通道有三条:
+写入通道有四条:
 
 1. **init(缺省,全量覆盖)**:`opencode-auto init <dir> [--<flag> <值> ...]`——产出
    仅由本次参数决定,未给出的键强制回落缺省值(无选项的手编键 `acceptanceGate` /
@@ -112,15 +116,23 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
    `agent`、`source`、`destDir`)反正会被覆盖掉,故基线读取容忍它们:init 逐个打印
    `⚠ full overwrite drops the retired key <键> = <原值>` 后照常写出(auto-core
    plans/0052 D4)——存量 `commit: false` 不再挡住清除它的那次 init;
-2. **init --amend(增量修订)**:`opencode-auto init <dir> --amend --<flag> <值>`——
-   仅命令行显式给出的键被改写,其余保留既有值;裸选项取该键缺省档(如
-   `init --amend --test-by-driver` 即 `testByDriver: true`)。`continue` 恒为 amend。
-   amend 会把已退役键原样带过去,故严格装载,遇之即失败;
-3. **直接编辑** `.opencode/auto/config.json`(init 每次写出全量键,人工编辑同样
+2. **amend(增量修订)**:`opencode-auto amend <dir> --<flag> <值>`——仅命令行显式
+   给出的键被改写,其余保留既有值;裸选项取该键缺省档(如 `amend --test-by-driver`
+   即 `testByDriver: true`),见[修订(amend)](#修订amend)。旧写法
+   `init <dir> --amend --<flag> <值>` 语义相同,保留到 `plan` 接管 init 的建轮职责
+   为止(auto-core plans/0052 P3c);`continue` 恒为 amend。amend 会把已退役键原样
+   带过去,故严格装载,遇之即失败并指向 `fix`;
+3. **fix(按规则修复)**:`opencode-auto fix <dir>`——只修"读不进来或会悄悄失义"
+   的键(已退役键删除/更名/迁入 brief.md),其余键原样保留,见
+   [配置修复(fix)](#配置修复fix);
+4. **直接编辑** `.opencode/auto/config.json`(init 每次写出全量键,人工编辑同样
    合法)。
 
 坏 JSON / 键值越界 / `mode` 未注册 → `run` 与 `init` 均以退出码 1 失败,报错指明
-键名与期望值域(严格失败优于静默回落);未知键忽略(前向兼容)。
+键名与期望值域(严格失败优于静默回落);未知键忽略(前向兼容)。严格失败若属
+`fix` 能修的一类(已退役键、旧键名、仅有旧版 `.auto/config.json`),`run` /
+`amend` / `continue` / `init --amend` 的报文末尾追加一行
+`fix: opencode-auto fix <dir>`,`status` 在 ⚠ 行下同样打印这一行。
 
 **init 先全量校验、再写盘**(auto-core plans/0052 D7):选项取值、空 `-p`、模式、
 前缀护栏、阶段目录同步(不丢已完成阶段、不删已有工作的阶段目录)、快捷模式的
@@ -133,21 +145,21 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 
 | 场景 | 行为 |
 | --- | --- |
-| 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"重跑 init 可固化完整配置";init 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没,由 `reset` 一并清理) |
+| 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"运行 `fix` 写出完整配置"(`fix` 以旧 mode + 缺省值写出新文件);init / fix 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没,由 `reset` 一并清理) |
 | 旧脚本 `run -m xxx` / `run --commit` 等 | 退出码 1 + 修订指引(breaking) |
 | 已退役选项 `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | init/continue/run 出现即退出码 1 + 退役说明(验收改为规划出的任务,报告结论行 `Result: FAIL` 停跑) |
 | 已退役选项 `--source-dir` / `--source-path` / `--dest-dir` | init/continue/run 出现即退出码 1 + 退役说明(迁移源与目标是意图,写进 `.opencode/auto/brief.md`) |
-| 存量配置含 `source` / `destDir` | `run` / `init --amend` / `continue` 严格失败(`status` 打 ⚠ 行),报文给出原值与修法(抄进 brief.md 后删键);无参 `init` 丢弃并打印原值后照常覆盖 |
-| 未知的 `--` 选项(含拼错,如 `--next`) | 退出码 1 + 近似名提示(breaking;此前被静默忽略)。`check` / `status` 只接受目录参数,出现任何选项即拒绝 |
+| 存量配置含 `source` / `destDir` | `run` / `amend` / `init --amend` / `continue` 严格失败(`status` 打 ⚠ 行),报文给出原值与修法(抄进 brief.md 后删键)并指向 `fix`——`fix` 把原值迁入 brief.md 的 `## Source` / `## Target` 节后删键;无参 `init` 丢弃并打印原值后照常覆盖 |
+| 未知的 `--` 选项(含拼错,如 `--next`) | 退出码 1 + 近似名提示(breaking;此前被静默忽略)。`check` / `status` 只接受目录参数,出现任何选项即拒绝;`reset` / `fix` 只接受目录参数与 `-f` |
 | 重复 `init`(无参数) | **全键回落缺省值**(breaking:此前为"配置不变");模板与标记块照常幂等 |
 | `init --test-by-driver true` 等带参 init | 给出的键按值写入,**未给出的键回落缺省** |
-| `init --amend --test-by-driver true` | 仅改写显式给出的键,其余保留(旧的 amend 语义) |
+| `amend --test-by-driver true`(或 `init --amend …`) | 仅改写显式给出的键,其余保留 |
 | 覆盖已存在配置且工作区脏 | 退出码 1 + 未提交文件清单(含嵌套仓库/子模块);`-f`/`--force` 跳过 |
 | 覆盖已存在配置且在交互式终端 | 提示确认 `[y/N]`,非 `y` 即取消且不做任何改动;非 TTY(CI/脚本)直接覆盖 |
 | 存量 PLAN.md(含 `verify:` / `verified:` / `final:` 字段行、`T-F<k>` 任务) | M3.4 起不再读取;把任务迁为任务单元(见[任务单元格式](#任务单元格式))后继续 |
 | 中途切换 `subtask` | 已注入检查项的任务照旧从勾选状态续跑(进度按任务记录,不跨任务混淆);新任务按新档执行;不建议中途切换 |
 | 中途换 `mode` | 仅提示词文案变化(模式不进调度状态机) |
-| 中途 `commit` off | 已不可能:`commit: false` 于 2026-09-15 退役,读到即报错退出 1(请删该键或改 `true`,或直接无参 `init` 全量覆盖——丢弃并打印该键) |
+| 中途 `commit` off | 已不可能:`commit: false` 于 2026-09-15 退役,读到即报错退出 1(`fix` 删除该键且保留其余键;或手删/改 `true`,或无参 `init` 全量覆盖——丢弃并打印该键) |
 
 组合要点:`--dryrun` 读配置的 `agent` / `contextLimit`,commit / subtask 不参与。
 
@@ -155,7 +167,7 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 
 | 选项 | 说明 |
 | --- | --- |
-| `-p` / `--prompt <文本>` | 项目意图文本,整写覆盖到 `.opencode/auto/brief.md`(版本化、人工可编辑,重复 `init -p` 覆盖重写;无 `-p` 时保留既有文件),由每个阶段的规划会话消费;init 不启动任何 AI 会话。迁移源与目标也写在这里——`--source-dir` / `--source-path` / `--dest-dir` 已退役,出现即用法错误 |
+| `-p` / `--prompt <文本>` | 项目意图文本,整写覆盖到 `.opencode/auto/brief.md`(版本化、人工可编辑,重复 `init -p` 覆盖重写;无 `-p` 时文件缺失才写项目简报桩,既有文件保留),由每个阶段的规划会话消费;init 不启动任何 AI 会话。迁移源与目标也写在这里——`--source-dir` / `--source-path` / `--dest-dir` 已退役,出现即用法错误 |
 | `-m` / `--mode <name>` | 场景模式,写入配置的 `mode` 键(优先级: 显式值 > 既有配置值 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
 | `--agent opencode\|claude` | 驱动会话的编码 agent,写入配置的 `agent` 键(缺省 `opencode`,不写键;`--amend --agent opencode` 删除该键);其他取值为用法错误;见[agent 选择](#opencode-server-与-agent-选择) |
 | `--phases <admtvk 子序列含 m \| 阶段类型列表>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);已有完成阶段时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工回退阶段索引。见[阶段化流程](#阶段化流程--phases) |
@@ -166,19 +178,90 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 | `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
 | `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(缺省/裸选项 `false`),写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
 | `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
-| `--amend` | 切回增量修订语义:只改写命令行显式给出的键,其余保留既有配置(不给 `--amend` 时 init 为全量覆盖)。`continue` 恒为 amend,无须给该选项;`run` 出现即用法错误 |
-| `-f` / `--force` | 跳过覆盖确认与工作区干净度检查,供 CI 与自动化脚本(与 `reset` 共用);`run` 出现即用法错误 |
+| `--amend` | 切回增量修订语义:只改写命令行显式给出的键,其余保留既有配置(不给 `--amend` 时 init 为全量覆盖)。与 [`amend` 子命令](#修订amend)同义,保留到 `plan` 接管 init 的建轮职责为止(auto-core plans/0052 P3c);`continue` 恒为 amend,无须给该选项;`amend` 子命令给出即用法错误(冗余);`run` 出现即用法错误 |
+| `-f` / `--force` | 跳过覆盖确认与工作区干净度检查,供 CI 与自动化脚本(与 `reset` / `fix` 共用);`amend` / `run` 出现即用法错误(amend 不丢弃任何键,无覆盖确认可跳) |
 | `--auto-number` / `--no-auto-number` | 自动编号开关,写入配置的 `autoNumber` 键(缺省 `--auto-number` = 启用,`--no-auto-number` 为关闭用退出开关;两开关同现且均未带 `=false` 为用法错误):启用后任务编号(T-NNN)在目标目录永不重复,阶段规划会话自 `.auto/next-task` 记录续接编号,记录缺失时先恢复再继续。`phases = "m"` 无规划会话消费编号记录,开关不产生效果(init 打一次提示)。详见[阶段化流程](#阶段化流程--phases) |
 
 以上写入配置的选项在缺省(全量覆盖)下"未给出即回落缺省值",加 `--amend` 后才是
 "显式给出的键才被改写";`-p` 的 brief.md 是独立文件,恒为整写覆盖且无 `-p` 时保留
-既有(不随配置的全量覆盖被清空),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
+既有(不随配置的全量覆盖被清空;文件缺失时写项目简报桩),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
 
 `continue` 子命令(续轮迁移)恒为 amend 语义,复用同一套模板/标记块维护,差异见
 [续轮迁移](#续轮迁移-continue):`--phases`、`-p` 与其余执行选项
 (`--agent`/`--context-limit`/`--subtask`/`--idle-time`/`--idle-max`/
 `--commit`/`--test-by-driver`/`--handover-test`/`--auto-number`/`--no-auto-number`)可按轮修订;`-m/--mode`
 跨轮固定,显式给出即用法错误(退出码 1)。
+
+### 修订(amend)
+
+`opencode-auto amend [dir] --<键选项> <值> ...` 改写给出的配置键,其余键保留既有值
+(auto-core plans/0052 D25)——即 `init --amend` 的独立命令形态,接受的键选项与取值
+同 init(`-m/--mode`、`--agent`、`--subtask`、`--idle-time`、`--idle-max`、`--commit`、
+`--context-limit`、`--phases`、`--test-by-driver`、`--handover-test`、
+`--auto-number`/`--no-auto-number`、`--wrapup`/`--no-wrapup`、`--parallel`),值域
+校验、`handoverTest` 搭配校验、阶段索引前缀护栏与 init 同源。
+
+- **只收配置键**:`-p` 用法错误(brief 不是配置,直接编辑 `.opencode/auto/brief.md`);
+  `--implement-file` / `--implement-prompt` 用法错误(它们开规划会话,保留既有配置
+  请用 `init <dir> --amend --implement-…`);`-f` 用法错误(amend 不丢弃任何键,
+  无覆盖确认与干净度闸门可跳);`--amend` 用法错误(冗余)。
+- **至少一个键**:一个键选项都没给即用法错误,报文指向 `fix`(只想把契约 /
+  AGENTS.md 块刷新到与现有配置一致,用 `fix`)。
+- **无配置即拒绝**:目标目录没有 `.opencode/auto/config.json` 时退出码 1、指向
+  `init`(仅有旧版 `.auto/config.json` 时另指向 `fix`,它按旧 mode 写出完整配置)。
+- **严格装载**:既有配置读不进来(已退役键、越界值等)即失败,不会把坏键带过去;
+  属 `fix` 能修的一类时报文末尾追加 `fix:` 行。
+- **写什么**:config.json、agent 契约与 AGENTS.md 标记块(二者由配置渲染),并在
+  改了 `--phases` 时照常同步当前轮次尚未开始的阶段目录;`opencode.json`、
+  `.gitignore` 与 brief.md 桩归 `init` / `fix` 管,amend 不碰。
+- 成功时打印 `✓ amended (<给出的选项>)`,改动留在工作区,不提交——审阅后自行提交。
+
+### 配置修复(fix)
+
+`opencode-auto fix [dir] [-f]` 按规则修复配置层(auto-core plans/0052 D10/D11):
+`.opencode/auto/config.json` 与 init 按它写出的产物。基线是磁盘上的既有配置
+(按原始记录读,不经严格校验),不接受任何配置键选项,**从不把任何键重置为缺省**
+——未知键与规则未点名的键一律原样保留。规则只修"读不进来或会悄悄失义"的键,
+合法的替代写法(数组形态的 `phases`、`parallel: "none"`、`agent: "opencode"`)不动;
+阶段索引的不一致不归 fix(归后续的 `plan`)。
+
+发现分两类:**可修复**(fix)——确定且不改变含义,按下表执行;**需人工**(manual)
+——只报告、不猜(如 `handoverTest: true` 而 `testByDriver: false`,改哪一边是人的
+决定)。
+
+| 对象 | 发现 | 动作 |
+| --- | --- | --- |
+| `config.json` 缺失、旧版 `.auto/config.json` 有 mode | 可修复 | 以旧 mode + 缺省值写出新文件 |
+| `commit: false` / `verify`(任何值)/ 契约名 `agent`(如 `auto`) | 可修复 | 删键 |
+| `verifyIdle` / `verifyMax` | 可修复 | 更名为 `idleTime` / `idleMax`(键序不变);新键已存在则删旧键 |
+| `source` / `destDir` | 可修复 | 原值迁入 brief.md 的 `## Source` / `## Target` 节末尾(节缺失则在文末补节;brief.md 缺失则以桩为底),然后删键 |
+| `config.json` 不是合法 JSON / 不是对象 | 需人工 | —— |
+| 应用上述规则后配置仍装载失败(越界值、未注册 mode、搭配冲突…) | 需人工 | 报文照录;下方产物规则整体跳过(`skipped:` 行) |
+| agent 契约 `.opencode/agent/auto.md` 缺失 / 与按 `testByDriver` 渲染的模板不一致 | 可修复 | 按模板重写 |
+| AGENTS.md 标记块缺失 / 与当前配置渲染不一致 / 残留旧版或游离标记块 | 可修复 | 写入当前块并清理其余标记块(正文不动) |
+| 意图包装载失败(标记块无从渲染) | 需人工 | —— |
+| `.gitignore` 缺 `tmp/` 或 `.auto/` 条目 | 可修复 | 追加缺失条目 |
+| `opencode.json` 缺失 | 可修复 | 写内置模板(已存在即不动,可能含人工改动) |
+| brief.md 缺失 | 可修复 | 写项目简报桩(已存在即不动) |
+
+产物规则由配置渲染,故只在配置(应用键规则之后)能严格装载时执行。
+
+交互同 `reset`:先打印发现清单(`fix:` / `manual:` / `skipped:` 行),有可修复项时
+过工作区干净度闸门、再问一次 `[y/N]`(非 TTY 免提示;`-f`/`--force` 两道闸一并
+跳过),然后按清单写盘并逐条打印 `fixed:` 行。fix 不提交,改动留在工作区供审阅。
+
+| 情形 | 退出码 |
+| --- | --- |
+| 无配置、也无旧版 mode(未初始化,应先 `init`) | 1 |
+| 无任何发现(配置层与配置一致) | 0 |
+| 可修复项全部应用、无需人工项 | 0 |
+| 有需人工项(可修复项照常应用) | 1 |
+| 工作区脏(未给 `-f`) | 1,不做任何改动 |
+| 确认时回答非 `y` | 0,不做任何改动 |
+
+`run` / `status` / `check` 以及 amend 路径上的严格失败,在 fix 的键规则能修时附带
+`fix: opencode-auto fix <dir>` 一行;契约缺失、AGENTS.md 块过期等恢复提示同样指向
+`fix`(此前指向会重置其余键的无参 `init`)。
 
 ### 反初始化(reset)
 
@@ -190,7 +273,7 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 | 目标 | 动作 |
 | --- | --- |
 | `.opencode/auto/config.json` | 删除 |
-| `.opencode/auto/brief.md` | 删除 |
+| `.opencode/auto/brief.md` | **逐字节等于项目简报桩时才删**;填写过则保留(人的意图,不是 init 产物)并在清单中说明原因 |
 | `.auto/config.json` | 删除(旧版仅含 `mode` 的残留配置) |
 | `.opencode/agent/auto.md` | 删除(`init` 本就无条件按模板覆盖它,是纯 auto 产物) |
 | `opencode.json` | **逐字节等于内置模板时才删**;被改过则保留并在清单中说明原因 |
@@ -296,8 +379,9 @@ T-009 实现迁移: 子任务分解
 `--agent <name>` 的契约名语义已退役):非交互工作契约——严格只做本次角色、状态文件
 只读、验证执行权在 driver、权限问题走 question 工具其余自主决策并记录决策过程。
 opencode 把它作为会话 agent;claude 把其正文追加到系统提示词、把 `opencode.json`
-的权限规则转写为 claude 设置。契约与内置模板不一致时 `init` 总是替换为最新模板,
-`run` 启动时发现不一致会给出刷新提示;文件缺失时 run 前完整性检查拦截并提示先 init。
+的权限规则转写为 claude 设置。契约与内置模板不一致时 `init` / `amend` / `fix` 总是替换为最新模板,
+`run` 启动时发现不一致会给出刷新提示;文件缺失时 run 前完整性检查拦截——二者都指向
+`opencode-auto fix <dir>`(按现有配置重写契约,不动任何键)。
 
 ## 执行流水线
 
@@ -690,15 +774,20 @@ Split by attack surface.
 路由模型(`security-review=prov/model`,优先级 角色 > 类型 id > 预置字母 > `*`),
 未知类型键在 run 启动时报用法错误。
 
-- **brief.md**:`init -p "<项目意图>"` 写入 `.opencode/auto/brief.md`(版本化、
-  人工可编辑,重复 `init -p` 覆盖重写,无 `-p` 时保留既有文件),由每个阶段的
-  规划会话消费——它是项目级意图,a 阶段定下的基调 k 阶段同样需要。init 不启动
-  任何 AI 会话(规划从 init 挪到 run 的阶段边界,规划会话才能感知各阶段产物)。
+- **brief.md**:项目简报 `.opencode/auto/brief.md`(版本化、人工可编辑),由每个
+  阶段的规划会话消费——它是项目级意图,a 阶段定下的基调 k 阶段同样需要。无 `-p`
+  的 `init` 在文件缺失时写一份**项目简报桩**(`## Goal` / `## Source` / `## Target`
+  / `## Constraints` 四节,各节只有 HTML 注释提示;既有文件保留),人直接编辑填写;
+  注入规划会话前剥掉注释,原样未填的桩不注入任何内容。各节标题只是脚手架,driver
+  不解析。`init -p "<项目意图>"` 则以该文本整写覆盖(重复 `init -p` 覆盖重写)。
+  `reset` 只在它逐字节等于桩时删除,填写过即保留。init 不启动任何 AI 会话(规划从
+  init 挪到 run 的阶段边界,规划会话才能感知各阶段产物)。
 - **迁移源与目标**:属项目意图,写进 brief.md(如「把 `legacy/pkg` 迁移到
   `app/`」),规划会话读 brief 时一并得到——不再是配置(auto-core plans/0052
   D1–D3,2026-09-23)。原 `--source-dir` / `--source-path` / `--dest-dir` 选项与
   配置键 `source` / `destDir` 已退役:选项出现即用法错误,存量键读入即严格失败并
-  给出原值,请抄进 brief.md 后删键(或无参 `init` 全量覆盖丢弃)。源系统大树仍可
+  给出原值,请抄进 brief.md 后删键——`fix` 代为迁入 `## Source` / `## Target` 节
+  并删键(或无参 `init` 全量覆盖丢弃)。源系统大树仍可
   经软链接入工作目录,在 brief 里写链接路径即可。
 - **轮次专用目录 `docs/R-NN/`**:阶段化流程(`phases ≠ "m"`)的每一轮是一个自
   包含轮次容器(R 后两位零填充,如 `R-01`,自然进位),轮首即建(init 建 `R-01`,
@@ -847,7 +936,7 @@ opencode-auto run <dir>                       # 第 2 轮
 
 ## AGENTS.md 标记块与维护规则
 
-`init` / `run` 在目标目录 AGENTS.md 中幂等同步单一 opencode-auto 标记块
+`init` / `amend` / `fix` / `run` 在目标目录 AGENTS.md 中幂等同步单一 opencode-auto 标记块
 (`<!-- opencode-auto:start -->` 到 `<!-- opencode-auto:end -->`,内容为英文):
 按当前配置渲染后与文件中现有的标准块比对,一致则不动、不一致则整块替换、缺失则
 追加;文件中任何其他 `opencode-auto:<name>:start/end` 标记块(旧版六块格式,或
@@ -976,8 +1065,10 @@ opencode-auto init [dir] --implement-prompt "<text>"    # 直接依据实施提�
 匹配为启发式,报告供人工确认。测试类描述的检查仅在 `testByDriver: true` 时进行,
 提交类检查始终进行。`check` 另输出提示(note,不影响退出码):缺少 opencode-auto 块、块内容与
 当前配置渲染不一致(过期)、残留旧版/多余的带名标记块、AGENTS.md 超 150 行
-(维护规则段落第 1 条,建议精简并把细节路由到 `docs/agents/`)。`init` 会在
-AGENTS.md 幂等同步该标记块。
+(维护规则段落第 1 条,建议精简并把细节路由到 `docs/agents/`);标记块类提示指向
+`fix`(`init` / `run` / `fix` 都会幂等同步该标记块)。配置读不进来时 `check` 只报
+一条 note,属 `fix` 的键规则能修的一类时追加 `fix:` 提示;`check` 不列出 `fix` 的
+逐条发现——完整清单跑 `fix` 看(不确认即不改动)。
 
 `check` 同时做**引用检查**(稳定引用规范,stable-refs;实验开关
 `OPENCODE_AUTO_REF_CHECK=on` 时启用,缺省 off 不扫描):全量扫描活文档

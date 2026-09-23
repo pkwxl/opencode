@@ -27,7 +27,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 |---|---|---|
 | intent | `src/intent/types.ts`, `src/intent/load.ts` | `src/mode.ts`, `src/template.ts`, `src/prompt.ts` |
 | phases | `src/phases/registry.ts`, `src/phases/custom.ts` | `src/phases.ts` |
-| document | `src/document/{types,roles,spec,state,process-refs,unit}.ts` | `src/docpaths.ts`, `src/doccheck.ts`, `src/protect.ts`, `src/round-brief.ts` |
+| document | `src/document/{types,roles,spec,state,process-refs,unit}.ts` | `src/docpaths.ts`, `src/doccheck.ts`, `src/protect.ts`, `src/round-brief.ts`, `src/brief.ts` |
 | agent | `src/agent/types.ts`, `src/agent/opencode/server.ts`, `src/agent/claude/host.ts` | the rest of `src/agent/opencode/` and `src/agent/claude/` |
 | driver | — (orchestration; no outward interface) | every other `src/*.ts` |
 
@@ -62,6 +62,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Shape check | Non-trivial + `<!-- auto: eof -->` last-line criterion (pure) | `src/doccheck.ts` (0026) |
 | Read-only guard | chmod driver-owned files during `run` | `src/protect.ts` |
 | Round brief | `docs/R-NN/round.md` stub and readers | `src/round-brief.ts` (0049) |
+| Project brief | `.opencode/auto/brief.md` stub and planning-input reader | `src/brief.ts` (0052 D9) |
 
 ### agent — talking to a coding agent
 
@@ -137,11 +138,12 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Project config | Constitutional options fixed by init in `.opencode/auto/config.json` | `src/config.ts` (0004) |
+| Config fix | The rule table behind `fix`: fixable/manual findings over the raw config and the config-layer artifacts, planned then applied; `renderAgentContract` | `src/config-fix.ts` (0052 D10–D11) |
 | Experiment switches | `OPENCODE_AUTO_*` registry, parsed once, never persisted | `src/switches.ts` (0003) |
 | Shell profile | `setShellProfile`: program name, recovery hints, log audit, agent | `src/shell.ts` |
 | AGENTS.md block | The opencode-auto marker block written into the target's AGENTS.md | `src/agents-block.ts` |
 | check command | Principle scan of AGENTS.md and open task documents | `src/check.ts` |
-| reset command | Remove init's configuration artifacts | `src/reset.ts` |
+| reset command | Remove init's configuration artifacts (the project brief only while it is the untouched stub) | `src/reset.ts` |
 | Destructive-op guards | Interactive confirmation; clean-worktree gate | `src/confirm.ts`, `src/clean.ts` |
 
 ### Run-time controls

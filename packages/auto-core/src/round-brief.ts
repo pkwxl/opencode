@@ -52,7 +52,12 @@ function stripComments(text: string): string {
 // section holds any body text (an untouched stub, an empty file, no file).
 export async function roundBriefText(dir: string, round: number): Promise<string | undefined> {
   const raw = await Bun.file(join(dir, roundBriefPath(round))).text().catch(() => undefined)
-  if (raw === undefined) return undefined
+  return raw === undefined ? undefined : stubbedText(raw)
+}
+
+// A stubbed document as planning input: comments stripped, undefined when no
+// line outside the headings holds text. Shared with the project brief (brief.ts).
+export function stubbedText(raw: string): string | undefined {
   const text = stripComments(raw)
   const body = text.split("\n").filter((line) => line.trim() && !/^#{1,6}\s/.test(line.trim()))
   return body.length ? text.replace(/\n{3,}/g, "\n\n").trim() : undefined

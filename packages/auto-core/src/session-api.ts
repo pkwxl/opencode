@@ -211,7 +211,7 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
   const recovery =
     agentRecovery === "startup"
       ? `re-run ${program} to restore (the default contracts are rebuilt from templates at startup), then re-run`
-      : `run ${bin} init ${opts.dir} to restore, then re-run`
+      : `run ${bin} fix ${opts.dir} to restore, then re-run`
   return `\nhint: the target directory is missing the agent contract file ${file}; the server rejects task dispatches with UnknownError because of this; ${recovery}`
 }
 

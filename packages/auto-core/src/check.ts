@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { LEGACY_BLOCK, renderAgentsBlock } from "./agents-block"
 import { loadProjectConfig } from "./config"
+import { fixHint } from "./config-fix"
 import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
 import { autoSwitches, type Switches } from "./switches"
 
@@ -55,7 +56,11 @@ export async function checkPrinciple(
     const config = await loadProjectConfig(dir)
     testOn = config.testByDriver
   } catch (error) {
-    notes.push(`⚠ project config (.opencode/auto/config.json) is invalid, test principle checks treated as disabled: ${error instanceof Error ? error.message : String(error)}`)
+    const hint = await fixHint(dir)
+    notes.push(
+      `⚠ project config (.opencode/auto/config.json) is invalid, test principle checks treated as disabled: ${error instanceof Error ? error.message : String(error)}` +
+        (hint ? `; ${hint}` : ""),
+    )
   }
   const patterns = [
     ...(testOn ? TEST_PATTERNS : []),
@@ -66,7 +71,7 @@ export async function checkPrinciple(
   for (const name of ["AGENTS.md", ...taskDocs.sort()]) {
     const text = await Bun.file(join(dir, name)).text().catch(() => undefined)
     if (text === undefined) {
-      notes.push(`${name} does not exist, run opencode-auto init ${dir} to add the opencode-auto block`)
+      notes.push(`${name} does not exist, run opencode-auto fix ${dir} to add the opencode-auto block`)
       continue
     }
     // 跳过 driver 维护的 opencode-auto 块后再逐行检查。
@@ -77,14 +82,14 @@ export async function checkPrinciple(
     })
     if (name === "AGENTS.md") {
       if (!text.includes("opencode-auto:start")) {
-        notes.push("AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it")
+        notes.push("AGENTS.md is missing the opencode-auto block, run opencode-auto fix to add it")
       } else {
         if (!text.includes(renderAgentsBlock({ testByDriver: testOn }))) {
-          notes.push("AGENTS.md opencode-auto block content is inconsistent with the current config (stale), run opencode-auto init/run to refresh")
+          notes.push("AGENTS.md opencode-auto block content is inconsistent with the current config (stale), run opencode-auto fix (or run) to refresh")
         }
         const legacyCount = [...text.matchAll(LEGACY_BLOCK)].length
         if (legacyCount) {
-          notes.push(`AGENTS.md contains ${legacyCount} legacy/redundant opencode-auto marker blocks, run opencode-auto init/run to clean up`)
+          notes.push(`AGENTS.md contains ${legacyCount} legacy/redundant opencode-auto marker blocks, run opencode-auto fix (or run) to clean up`)
         }
       }
     }

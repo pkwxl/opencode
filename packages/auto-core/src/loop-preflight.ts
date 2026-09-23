@@ -7,6 +7,7 @@
 // 拆分自 src/loop.ts(plans/0024-module-split-plan.md S14,纯搬运)。
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
+import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
 import { beginUnit, changedFiles, commitTree, fileTracked } from "./git"
 import { ensureGitignore } from "./gitignore"
@@ -25,9 +26,8 @@ import type { AgentHost } from "./agent/types"
 import { shellProfile } from "./shell"
 import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, type AgentChoice } from "./switches"
 import { loadStats } from "./stats"
-import { renderText, usePromptLibrary } from "./template"
+import { usePromptLibrary } from "./template"
 import { restoreTestHandoffs } from "./testrun"
-import templateAgent from "../templates/.opencode/agent/auto.md" with { type: "file" }
 
 export type RunAllOpts = {
   // The coding agent (M6.1, config `agent`; absent = opencode). The shell
@@ -93,13 +93,6 @@ export type RunAllOpts = {
   maxSessions?: number
 }
 
-// agent 契约渲染文本: 按 testByDriver 两态渲染内置模板。外壳的契约维护
-// 写入与 runAll 的完整性检查共用本函数,防止写入与比对口径漂移(模板含
-// {{#if}} 条件块,拿原始文本比对渲染后的文件必然不一致)。
-export async function renderAgentContract(testByDriver: boolean): Promise<string> {
-  return renderText(await Bun.file(templateAgent).text(), { testByDriver })
-}
-
 // 预检段: 产出 runAll 后续仍用的 agentName 与两个计时器句柄(finally 中关闭);
 // 报错出口回传 { exit },时序与副作用残留同搬运前(见文件头)。
 export async function preflight(
@@ -156,7 +149,7 @@ export async function preflight(
     log(
       agentRecovery === "startup"
         ? `  recovery: re-run ${program}(the default contract is rebuilt from the template at startup), or restore the file manually`
-        : `  recovery: run ${bin} init ${directory} to rebuild the file (or restore it manually), then re-run`,
+        : `  recovery: run ${bin} fix ${directory} to rebuild the file (or restore it manually), then re-run`,
     )
     return { exit: 1 }
   }
@@ -165,7 +158,7 @@ export async function preflight(
   if (agentText !== (await renderAgentContract(Boolean(opts.testByDriver)))) {
     log(
       `⚠ .opencode/agent/auto.md differs from the current template (possibly a legacy contract); ` +
-        (agentRecovery === "startup" ? `re-running ${program} refreshes it from the template` : `run ${bin} init ${directory} to refresh it`),
+        (agentRecovery === "startup" ? `re-running ${program} refreshes it from the template` : `run ${bin} fix ${directory} to refresh it`),
     )
   }
 

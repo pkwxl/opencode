@@ -11,10 +11,13 @@
 //      与 .opencode/agent/ 下用户自己的其他 agent 契约。
 //   4. 与主程序共用的文件逐字节比对后才动: opencode.json 只在内容等于模板时
 //      删除,被改过就保留;AGENTS.md 只摘除 opencode-auto 标记块。
+//   5. The project brief holds human intent: it is removed only while it equals
+//      the stub init wrote, a filled brief is kept (plans/0052 D9, DF6).
 import { rm, rmdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { removePointer } from "./agents-block"
+import { BRIEF_FILE, renderProjectBrief } from "./brief"
 import { removeGitignoreEntries } from "./gitignore"
 
 export type ResetAction = "remove" | "strip" | "rmdir" | "keep"
@@ -29,7 +32,6 @@ export type ResetEntry = {
 
 // init 写出的配置层产物,按与写入互逆的顺序。
 const CONFIG_JSON = join(".opencode", "auto", "config.json")
-const BRIEF_MD = join(".opencode", "auto", "brief.md")
 // 旧版仅含 mode 的配置(config.ts 的 LEGACY_FILE): 虽落在 .auto/ 下,性质是
 // 配置而非运行时状态,属清理范围;.auto/ 其余内容不动。
 const LEGACY_CONFIG = join(".auto", "config.json")
@@ -50,9 +52,16 @@ async function dirExists(path: string): Promise<boolean> {
 export async function planReset(dir: string): Promise<ResetEntry[]> {
   const entries: ResetEntry[] = []
 
-  for (const rel of [CONFIG_JSON, BRIEF_MD, LEGACY_CONFIG]) {
-    if (await fileExists(join(dir, rel))) entries.push({ path: rel, action: "remove" })
+  if (await fileExists(join(dir, CONFIG_JSON))) entries.push({ path: CONFIG_JSON, action: "remove" })
+  const brief = await Bun.file(join(dir, BRIEF_FILE)).text().catch(() => undefined)
+  if (brief !== undefined) {
+    entries.push(
+      brief === renderProjectBrief()
+        ? { path: BRIEF_FILE, action: "remove" }
+        : { path: BRIEF_FILE, action: "keep", reason: "filled in, not the init stub, kept" },
+    )
   }
+  if (await fileExists(join(dir, LEGACY_CONFIG))) entries.push({ path: LEGACY_CONFIG, action: "remove" })
 
   // agent 契约不比对: init 本就无条件按模板覆盖它(内容不一致即替换),
   // 它是纯 auto 产物,手改不具备「用户自有内容」的地位。

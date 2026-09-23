@@ -55,9 +55,10 @@ export function renderAgentsBlock(opts: { testByDriver?: boolean } = {}): string
 // 追加;文件中其余带 name 段的 opencode-auto 块(旧六块格式或任何游离标记块)一律
 // 删除。旧格式的裸指针块本身就匹配标准块正则,因此会走替换分支被新合并内容取代,
 // 其余五个带名块由删除分支清理——这就是从旧格式到新格式的迁移路径。
+// dryRun computes the result without writing, so `fix` can print its plan first.
 export async function ensurePointer(
   directory: string,
-  opts: { testByDriver?: boolean } = {},
+  opts: { testByDriver?: boolean; dryRun?: boolean } = {},
 ): Promise<{ block: "inserted" | "replaced" | "unchanged"; legacyRemoved: number }> {
   const agentsFile = join(directory, "AGENTS.md")
   const existing = await Bun.file(agentsFile).text().catch(() => "")
@@ -84,7 +85,7 @@ export async function ensurePointer(
     block = "replaced"
   }
 
-  if (text !== existing) await Bun.write(agentsFile, text)
+  if (!opts.dryRun && text !== existing) await Bun.write(agentsFile, text)
   return { block, legacyRemoved }
 }
 

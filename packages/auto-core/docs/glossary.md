@@ -163,7 +163,8 @@ Unit and outcome states:
 | 结论 | verdict | |
 | 自报 | self-report | Never a completion criterion |
 | 轮简报 | round brief | `docs/R-NN/round.md` |
-| 简报 | brief | `.opencode/auto/brief.md` |
+| 简报、项目简报 | project brief | `.opencode/auto/brief.md` (`src/brief.ts`); "the brief" when the round brief is not in play |
+| 项目简报桩 | project brief stub | What `init` writes when `brief.md` is missing: section headings with comment hints only, so it injects nothing into planning; `reset` removes the brief only while it equals the stub (`renderProjectBrief`, `plans/0052` D9) |
 
 ## Git, completion and gates
 
@@ -262,8 +263,9 @@ Unit and outcome states:
 | 已退役键 | retired key | A config key that fails loading strictly: `commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir` (`RETIRED_KEYS` in `src/config.ts`) |
 | 墓碑键名 | tombstone key name | A retired key's name, reserved for good and never reused with a new meaning: `source`, `destDir` (`plans/0052` D3) |
 | 先校验后写盘 | validate, then write | `init` finishes every check before its first write (`plans/0052` D7) |
-| 增量修订 | amend | Change the named config keys, keep the rest: today `init --amend`, planned as the `amend` command (`plans/0052` D25) |
-| 配置修复 | config fix | The `fix` command: repair the config layer by rule (planned, `plans/0052` D10–D11) |
+| 增量修订 | amend | Change the named config keys, keep the rest: the `amend` command (`plans/0052` D25); `init --amend` does the same until P3c |
+| 配置修复 | config fix | The `fix` command: repair the config layer by rule, never resetting a key (`src/config-fix.ts`, `plans/0052` D10–D11) |
+| 可修复 / 需人工 | fixable / manual | The two classes of a config-fix finding: deterministic and meaning-preserving, applied by `fix` / reported only, left to a person (`FixFinding.class`) |
 | 强制关闭 | force-close | `close`, `plan --force-close` (planned) |
 | 并行编排 | parallel orchestration | Deferred; design in `plans/0036` |
 | 声明面 | declaration surface | `--parallel`, `--max-sessions` (`plans/0046`) |

@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/p
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadPlan } from "@opencode-ai/auto-core/tasks"
+import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
+import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
 import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-core/phases"
 import { renderText } from "@opencode-ai/auto-core/template"
@@ -283,7 +285,7 @@ describe("CLI 解析: run 侧选项与配置", () => {
         expect(run.code).toBe(1)
         expect(run.err).toContain("was frozen by init")
         expect(run.err).toContain(".opencode/auto/config.json")
-        expect(run.err).toContain("opencode-auto init <dir>")
+        expect(run.err).toContain("opencode-auto amend <dir>")
       }
       // 自动编号两键的修订指引为成对形式
       const numbering = await runCli(["run", dir, "--auto-number"])
@@ -585,14 +587,18 @@ describe("CLI: init 固化项目配置", () => {
       const run = await runCli(["run", dir])
       expect(run.code).toBe(1)
       expect(run.err).toContain("commit: false is retired")
+      // a key rule repairs it, so the strict failure names fix (plans/0052 D11)
+      expect(run.err).toContain(`fix: opencode-auto fix ${dir}`)
       delete (stored as { commit?: boolean }).commit
       await Bun.write(file, JSON.stringify(stored, null, 2) + "\n")
       const status = await runCli(["status", dir])
       expect(status.out).toContain('source is retired (the migration source and target are intent, not configuration): copy its value {"dir":"legacy","path":"pkg"} into .opencode/auto/brief.md, then remove the key')
+      expect(status.out).toContain(`  fix: opencode-auto fix ${dir}`)
       // an amend would carry the keys over, so it stays strict
       const amend = await runCli(["init", dir, "--amend", "--test-by-driver"])
       expect(amend.code).toBe(1)
       expect(amend.err).toContain("source is retired")
+      expect(amend.err).toContain(`fix: opencode-auto fix ${dir}`)
       expect(await readConfig(dir)).toEqual(stored)
       // the full overwrite discards them anyway: it succeeds (no longer blocked by a
       // stored retired key, DF2) and names each discarded key with its value
@@ -880,10 +886,11 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       expect((await runCli(["status", dir])).out).toContain("  [✓] P01-analysis\n  [✓] P02-design\n  [▶] P03-implement\n  [ ] P04-test\n  [ ] P05-knowledge\n")
       expect(await stat(join(dir, "docs/R-01/P05-acceptance")).catch(() => undefined)).toBeUndefined()
       // 护栏判的是本次生效值,不是"是否显式给出": 无参 init 全量覆盖会把 phases
-      // 回落为缺省 "m",与台账已完成的 "ad" 不兼容 → 拦在任何写盘之前,并指引 --amend
+      // 回落为缺省 "m",与台账已完成的 "ad" 不兼容 → 拦在任何写盘之前,并指引 amend / fix (plans/0052 DF8)
       const bare = await runCli(["init", dir])
       expect(bare.code).toBe(1)
-      expect(bare.err).toContain("--amend")
+      expect(bare.err).toContain(`opencode-auto amend ${dir} --<key> <value>`)
+      expect(bare.err).toContain(`opencode-auto fix ${dir}`)
       expect(bare.err).toContain("analysis,design")
       expect(await readConfig(dir)).toMatchObject({ phases: "admtk" })
       // --amend 下生效值 = 既有配置值,天然满足前缀条件
@@ -954,7 +961,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const overwrite = await runCli(["init", dir, "-f", "--context-limit", "32", "-p", "意图"])
       expect(overwrite.code).toBe(1)
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
-      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe(renderProjectBrief())
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1113,7 +1120,7 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
       }
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe(agents)
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
-      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe(renderProjectBrief())
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1417,6 +1424,207 @@ describe("CLI: check 引用检查(stable-refs P4)", () => {
   })
 })
 
+describe("CLI: amend (plans/0052 D25)", () => {
+  async function readConfig(dir: string) {
+    return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
+  }
+
+  test("refusals: no config.json, no key, and every non-config option", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const fresh = await runCli(["amend", dir, "--phases", "am"])
+      expect(fresh.code).toBe(1)
+      expect(fresh.err).toContain(`nothing to amend: ${dir} has no .opencode/auto/config.json; run opencode-auto init ${dir}`)
+      expect(await readdir(dir)).toEqual([])
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const config = await readConfig(dir)
+      const none = await runCli(["amend", dir])
+      expect(none.code).toBe(1)
+      expect(none.err).toContain("name at least one key to change")
+      expect(none.err).toContain(`opencode-auto fix ${dir}`)
+      const refused: [string[], string][] = [
+        [["-p", "意图"], "-p/--prompt is not an amend option: the brief is not config — edit .opencode/auto/brief.md directly"],
+        [["--implement-prompt", "计划"], "--implement-prompt is not an amend option"],
+        [["-f", "--phases", "am"], "-f/--force is not an amend option"],
+        [["--amend", "--phases", "am"], "--amend is redundant"],
+        [["--server", "http://x", "--phases", "am"], "--server is not an amend option: amend takes only config flags (-m/--mode, --agent,"],
+        [["--max-sessions", "1", "--phases", "am"], "--max-sessions is not an amend option"],
+        [["--source-dir", "legacy"], "--source-dir is retired"],
+      ]
+      for (const [args, message] of refused) {
+        const result = await runCli(["amend", dir, ...args])
+        expect(result.code).toBe(1)
+        expect(result.err).toContain(message)
+      }
+      expect(await readConfig(dir)).toEqual(config)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("changes the named keys only, re-renders the contract and the AGENTS.md block, re-syncs the round tail", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--context-limit", "32", "--phases", "am", "--parallel", "low", "--agent", "claude"])).code).toBe(0)
+      await rm(join(dir, "opencode.json"))
+      await rm(join(dir, ".opencode/auto/brief.md"))
+      const amended = await runCli(["amend", dir, "--test-by-driver", "--phases", "amt", "--parallel", "none", "--agent", "opencode"])
+      expect(amended.code).toBe(0)
+      expect(amended.out).toContain("✓ amended (--agent --test-by-driver --phases --parallel); the other keys are unchanged")
+      const config = await readConfig(dir)
+      expect(config).toMatchObject({ contextLimit: 32, phases: "amt", testByDriver: true })
+      expect(config).not.toHaveProperty("parallel")
+      expect(config).not.toHaveProperty("agent")
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(renderText(await Bun.file(templateAgent).text(), { testByDriver: true }))
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("tmp/test.sh")
+      expect(await stat(join(dir, "docs/R-01/P03-test")).then((entry) => entry.isDirectory())).toBe(true)
+      // amend writes only what renders from the config: the rest is init's and fix's
+      expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("same checks as init, before any write: bad values, handoverTest ⇒ testByDriver, the prefix guard, a stored retired key", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "adm"])).code).toBe(0)
+      await completeLetters(dir, ["a"])
+      const config = await readConfig(dir)
+      for (const [args, message] of [
+        [["--subtask", "sometimes"], "--subtask takes off|auto|ondemand"],
+        [["--handover-test"], "--handover-test requires --test-by-driver"],
+        [["-m", "nope"], "--mode must be a registered mode"],
+        [["--phases", "dm"], 'the new --phases value "dm" is incompatible with the phase index'],
+      ] as [string[], string][]) {
+        const result = await runCli(["amend", dir, ...args])
+        expect(result.code).toBe(1)
+        expect(result.err).toContain(message)
+        expect(await readConfig(dir)).toEqual(config)
+      }
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ ...config, destDir: "app" }, null, 2) + "\n")
+      const retired = await runCli(["amend", dir, "--context-limit", "32"])
+      expect(retired.code).toBe(1)
+      expect(retired.err).toContain("destDir is retired")
+      expect(retired.err).toContain(`fix: opencode-auto fix ${dir}`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("CLI: fix (plans/0052 D10/D11)", () => {
+  async function readConfig(dir: string) {
+    return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
+  }
+
+  test("uninitialized refuses, a consistent layer has nothing to fix, options are refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const fresh = await runCli(["fix", dir])
+      expect(fresh.code).toBe(1)
+      expect(fresh.err).toContain(`nothing to fix: ${dir} has no .opencode/auto/config.json; run opencode-auto init ${dir}`)
+      expect(await readdir(dir)).toEqual([])
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const clean = await runCli(["fix", dir])
+      expect(clean.code).toBe(0)
+      expect(clean.out).toContain("✓ nothing to fix")
+      const bad = await runCli(["fix", dir, "--phases", "am"])
+      expect(bad.code).toBe(1)
+      expect(bad.err).toContain("fix only accepts a directory argument and -f/--force")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("repairs retired keys and missing artifacts, keeps the other keys, is idempotent; run works again", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--context-limit", "128"])).code).toBe(0)
+      const { commit: _, ...kept } = await readConfig(dir)
+      const stored = { ...kept, commit: false, verifyIdle: 20, source: { dir: "legacy", path: "pkg" }, destDir: "app" }
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify(stored, null, 2) + "\n")
+      await rm(join(dir, ".opencode/agent/auto.md"))
+      const fix = await runCli(["fix", dir])
+      expect(fix.code).toBe(0)
+      expect(fix.out).toContain("  fix: .opencode/auto/config.json: commit: false is retired")
+      expect(fix.out).toContain("fixed: .opencode/auto/config.json: move its value into .opencode/auto/brief.md under ## Target, then drop the key")
+      expect(fix.out).toContain("verifyIdle was renamed to idleTime, which is also set → drop the key")
+      expect(fix.out).toContain("fixed: .opencode/agent/auto.md: write it from the template")
+      expect(fix.out).toContain("✓ config layer repaired")
+      // every key no rule names survives; commit falls back to its default (on)
+      expect(await readConfig(dir)).toEqual(kept)
+      const brief = await Bun.file(join(dir, ".opencode/auto/brief.md")).text()
+      expect(brief).toContain("`legacy`")
+      expect(brief).toContain("`app`")
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(true)
+      expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
+      expect((await runCli(["run", dir, "--dryrun"])).err).not.toContain("retired")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("manual findings exit 1 after the fixable ones are applied; artifact checks wait for a loadable config", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ ...CONFIG_DEFAULTS, verify: true, handoverTest: true }, null, 2) + "\n")
+      await rm(join(dir, ".opencode/agent/auto.md"))
+      const fix = await runCli(["fix", dir])
+      expect(fix.code).toBe(1)
+      expect(fix.out).toContain("  manual: .opencode/auto/config.json: handoverTest requires testByDriver: true")
+      expect(fix.out).toContain("  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (.opencode/auto/config.json does not load)")
+      expect(fix.err).toContain("1 finding(s) need a person")
+      expect(await readConfig(dir)).not.toHaveProperty("verify")
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the worktree gate refuses a dirty tree before any write; -f skips it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await rm(join(dir, ".opencode/agent/auto.md"))
+      const dirty = await runCli(["fix", dir])
+      expect(dirty.code).toBe(1)
+      expect(dirty.err).toContain("fix will delete or modify files on disk and requires a clean worktree")
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
+      expect((await runCli(["fix", dir, "-f"])).code).toBe(0)
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("CLI: the project brief stub (plans/0052 D9)", () => {
+  test("init writes the stub only when brief.md is missing; -p replaces it; reset removes only the untouched stub", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const brief = join(dir, ".opencode/auto/brief.md")
+      const first = await runCli(["init", dir])
+      expect(first.out).toContain("created: .opencode/auto/brief.md (project brief stub")
+      expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
+      await Bun.write(brief, `${renderProjectBrief()}\nMigrate legacy/pkg to app/.\n`)
+      expect((await runCli(["init", dir])).out).toContain("already exists, skipped: .opencode/auto/brief.md")
+      expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
+      const reset = await runCli(["reset", dir])
+      expect(reset.out).toContain("keep: .opencode/auto/brief.md (filled in, not the init stub, kept)")
+      expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
+      await rm(brief)
+      expect((await runCli(["init", dir, "-p", "意图"])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe("意图\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("CLI: reset 反初始化", () => {
   test("reset 移除配置层产物,docs/ 任务单元 / .auto/ 运行时状态不受影响", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
@@ -1609,7 +1817,7 @@ describe("CLI: 工作区干净度闸门", () => {
       expect(amend.err).toContain("--amend is an init-only option")
       const force = await runCli(["run", dir, "-f"])
       expect(force.code).toBe(1)
-      expect(force.err).toContain("is an init/reset-only option")
+      expect(force.err).toContain("is an init/reset/fix option")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

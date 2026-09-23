@@ -30,14 +30,16 @@ async function insideWorkTree(directory: string): Promise<boolean> {
 
 // 确保 .gitignore 忽略 driver 工作目录。统一提交会提交全部未提交改动,不忽略
 // 会把它们带进提交。已有等价条目则跳过;非 git 环境(不在任何 work tree 内且
-// 无 .gitignore)不做任何事。返回是否追加了条目。
-export async function ensureGitignore(directory: string): Promise<boolean> {
+// 无 .gitignore)不做任何事。返回是否追加了条目。dryRun only reports whether
+// it would append (for `fix`'s plan).
+export async function ensureGitignore(directory: string, opts: { dryRun?: boolean } = {}): Promise<boolean> {
   const file = join(directory, ".gitignore")
   const existing = await Bun.file(file).text().catch(() => undefined)
   if (existing === undefined && !(await insideWorkTree(directory))) return false
   const lines = existing ? existing.split("\n") : []
   const missing = ENTRIES.filter((entry) => !lines.some((line) => normalize(line) === normalize(entry)))
   if (!missing.length) return false
+  if (opts.dryRun) return true
   await Bun.write(file, `${existing ? `${existing.trimEnd()}\n` : ""}${missing.join("\n")}\n`)
   return true
 }

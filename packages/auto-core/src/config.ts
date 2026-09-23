@@ -85,8 +85,8 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
   phases: "m",
 }
 
-const CONFIG_FILE = join(".opencode", "auto", "config.json")
-const LEGACY_FILE = join(".auto", "config.json")
+export const CONFIG_FILE = join(".opencode", "auto", "config.json")
+export const LEGACY_FILE = join(".auto", "config.json")
 
 // 读取 + 校验: 文件缺失 → 缺省 + legacy 回落(.auto/config.json 的 mode);
 // 坏 JSON / 键值越界 / mode 未注册(loadModes)→ throw(中文报错含键名与期望),
@@ -165,6 +165,12 @@ const RETIRED_KEYS: Record<string, { retired: (value: unknown) => boolean; why: 
   destDir: migrationParameter("destDir"),
 }
 
+// Whether a stored key holds a retired value (the rules above); `fix` drops or
+// moves exactly these (config-fix.ts).
+export function retiredValue(key: string, value: unknown): boolean {
+  return RETIRED_KEYS[key]?.retired(value) ?? false
+}
+
 function migrationParameter(key: string) {
   return {
     retired: (value: unknown) => value !== undefined,
@@ -187,9 +193,15 @@ export function mergeProjectConfig(existing: ProjectConfig, explicit: Partial<Pr
 // 强杀时该位会残留,而 allowWrite 靠模块级状态、在新进程里帮不上忙——不解除
 // 会让此后所有 init 以 EACCES 失败。
 export async function saveProjectConfig(dir: string, config: ProjectConfig): Promise<void> {
+  await saveConfigRecord(dir, config)
+}
+
+// Writes a raw config record as it is (`fix` rewrites the file from its own
+// record, so unknown keys and keys no rule names survive).
+export async function saveConfigRecord(dir: string, record: object): Promise<void> {
   const file = join(dir, CONFIG_FILE)
   await chmod(file, 0o644).catch(() => {})
-  await Bun.write(file, JSON.stringify(config, null, 2) + "\n")
+  await Bun.write(file, JSON.stringify(record, null, 2) + "\n")
 }
 
 // run 启动提示用: 新文件缺失而旧版 .auto/config.json 仍有持久化 mode(生效
@@ -221,7 +233,7 @@ export function formatProjectConfig(config: ProjectConfig): string {
 }
 
 // 值域与 CLI 侧 parse* 一致;未知键忽略(前向兼容),缺失键回落缺省值。
-function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
+export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${CONFIG_FILE} must be a JSON object`)
   const record = raw as Record<string, unknown>
   for (const [key, rule] of Object.entries(RETIRED_KEYS)) {

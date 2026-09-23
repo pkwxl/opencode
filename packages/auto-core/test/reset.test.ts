@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { ensurePointer } from "../src/agents-block"
+import { renderProjectBrief } from "../src/brief"
 import { ensureGitignore, removeGitignoreEntries } from "../src/gitignore"
 import { applyReset, planReset, type ResetEntry } from "../src/reset"
 
@@ -12,7 +13,7 @@ async function seedInit(dir: string) {
   await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
   await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
   await writeFile(join(dir, ".opencode", "auto", "config.json"), '{"mode":"migrate"}\n')
-  await writeFile(join(dir, ".opencode", "auto", "brief.md"), "把 legacy 迁到 bun\n")
+  await writeFile(join(dir, ".opencode", "auto", "brief.md"), renderProjectBrief())
   await writeFile(join(dir, ".opencode", "agent", "auto.md"), "# auto agent\n")
   await writeFile(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
   await ensurePointer(dir)
@@ -81,6 +82,15 @@ describe("reset: 边界安全", () => {
   })
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true })
+  })
+
+  // plans/0052 D9 (DF6): the brief is human intent; only the untouched stub is init's.
+  test("a filled brief.md is kept; the untouched stub is removed", async () => {
+    await writeFile(join(dir, ".opencode", "auto", "brief.md"), `${renderProjectBrief()}\nMigrate legacy/pkg to app/.\n`)
+    const entries = await reset(dir)
+    expect(entries.find((entry) => entry.path === ".opencode/auto/brief.md")).toMatchObject({ action: "keep", reason: "filled in, not the init stub, kept" })
+    expect(await Bun.file(join(dir, ".opencode", "auto", "brief.md")).text()).toContain("Migrate legacy/pkg to app/.")
+    expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(false)
   })
 
   test("opencode.json 被修改过则保留(逐字节比对模板)", async () => {

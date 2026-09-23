@@ -6,8 +6,8 @@
 
 | Package | Role | Contents |
 |---|---|---|
-| `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/script/git/protect/config/server/mode/prompt/template/knowledge/interactive/log/shell/check) + built-in templates (`templates/`) + design documents (`docs/`) |
-| `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/continue/run/reset/check/status subcommands, build scripts, CLI parsing/e2e tests |
+| `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/script/git/protect/config/config-fix/brief/server/mode/prompt/template/knowledge/interactive/log/shell/check) + built-in templates (`templates/`) + design documents (`docs/`) |
+| `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/continue/amend/run/fix/reset/check/status subcommands, build scripts, CLI parsing/e2e tests |
 | `packages/<name>` (`@opencode-ai/<name>`, bin `<bin>`) | Simple CLI shell (per shell branch) | Shape and artifact naming are decided by each shell branch, using the existing simple shell branch as reference; the core does not record specific names |
 
 Decision rule: session pipeline, state-file protocol, prompt rendering, acceptance/commit mechanisms belong to the **core**; CLI shape (subcommands or not, usage text, argument parsing and config fixation policy, build artifact naming) belongs to the **shell**.
@@ -45,6 +45,14 @@ Shell differences are injected exclusively through the following extension point
 - **Validate, then write** (D7): `plannedPhaseUnits(dir, round, phases)` (`auto-core/phases`) is the read-only half of `syncPhaseIndex` — the same refusals (dropping a completed phase, a phase directory that holds work) with no write — so a shell can finish every check before its first write.
 - **`infer-source` removed** (D5): the template, `renderInferSource` and its tier-1 markers are gone (`plans/0035` Amendment). A target-directory `.opencode/auto/prompts/infer-source.md` is now an unused overlay.
 
+**Changes shells must absorb when refreshing the core snapshot (CLI convergence P2, `plans/0052`, 2026-09-23):**
+
+- **Project brief stub** (D9): `auto-core/brief` owns `.opencode/auto/brief.md` — `BRIEF_FILE`, `renderProjectBrief()` (the stub: Goal/Source/Target/Constraints, comment hints only), `projectBriefText(dir)` (comments stripped; undefined for a missing file or an untouched stub, as `roundBriefText` does for the round brief) and `appendToSection`. The phase-planning session now reads the brief through `projectBriefText`, so an untouched stub injects nothing. A shell that writes config should write the stub when the file is missing (`packages/auto` `init` without `-p`); `reset` (`planReset`) removes the brief only while it equals the stub and keeps a filled one.
+- **Config fix** (D10/D11): `auto-core/config-fix` holds the rule table — `planFix(dir)` computes findings (`fixable` / `manual`) and the writes behind them without touching disk, `applyFix(plan)` applies exactly those writes, `formatFixPlan(plan)` renders the listing, and `fixHint(dir)` returns the `fix: <bin> fix <dir>` line when a key rule would repair a strict config failure (undefined otherwise). A shell exposing a `fix` command wraps these with its own gate and confirmation (`packages/auto` `fix` does reset's: plan, `checkCleanTree(dir, "fix")`, `[y/N]`, `-f` skips both).
+- **Hints name `fix`** (D11, DF8): with `agentRecovery: "init"`, the core's missing-contract and stale-contract recovery hints (`loop-preflight`, `session-api`) now say `<bin> fix <dir>`, and `check`'s AGENTS.md-block notes say `opencode-auto fix`. A shell on that recovery mode must provide a `fix` subcommand, or set `agentRecovery: "startup"`.
+- **Moved and new exports**: `renderAgentContract` moved from `auto-core/loop-preflight` to `auto-core/config-fix` (with `CONTRACT_FILE`), so config-layer code no longer pulls in the driver chain. `auto-core/config` newly exports `CONFIG_FILE`, `LEGACY_FILE`, `retiredValue`, `saveConfigRecord` (writes a raw record, keeping unknown keys) and `validateProjectConfig`. `ensurePointer` (`auto-core/agents-block`) and `ensureGitignore` (`auto-core/gitignore`) take `dryRun` to report the change without writing.
+- **`amend` as a command** (D25) is shell-only: `packages/auto` `amend [dir] --<key> <value>…` takes config flags only, refuses without config.json or without a key, loads strictly (naming `fix` via `fixHint`) and writes config.json, the contract and the AGENTS.md block. `init --amend` stays until P3c.
+
 ## D. Branches and merge flow
 
 | Branch | Responsibility |
@@ -67,7 +75,7 @@ Create `packages/<name>` (bin named independently), using the existing simple sh
 4. Ship its own `script/build.ts` (artifact `dist/<bin>`); templates keep the cross-package `with { type: "file" }` import.
 5. Additional prompt templates are registered via `registerTemplate` (protocol-sensitive templates provide markers).
 6. Run `bun install` at the repo root to refresh the lockfile; run tests inside package directories (tests cannot run at the repository root).
-7. If the shell writes config, finish every check before the first write (`plans/0052` D7; `plannedPhaseUnits` for the phase sync) and use `loadOverwriteBaseline` for a full-overwrite baseline, `loadProjectConfig` for an amend. The migration source and target are intent (`brief.md`), not flags.
+7. If the shell writes config, finish every check before the first write (`plans/0052` D7; `plannedPhaseUnits` for the phase sync) and use `loadOverwriteBaseline` for a full-overwrite baseline, `loadProjectConfig` for an amend. The migration source and target are intent (`brief.md`, stub from `renderProjectBrief`), not flags. With `agentRecovery: "init"`, provide a `fix` command over `auto-core/config-fix` (the core's recovery hints name it) and append `fixHint(dir)` to strict config failures; an amend command, if any, keeps the other keys and never offers `-f`.
 
 ## F. Agent adapter onboarding checklist
 

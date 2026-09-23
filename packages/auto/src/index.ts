@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
 import { stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { projectBriefText, renderProjectBrief, BRIEF_FILE } from "@opencode-ai/auto-core/brief"
 import { checkPrinciple } from "@opencode-ai/auto-core/check"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm } from "@opencode-ai/auto-core/confirm"
 import {
   CONFIG_DEFAULTS,
+  CONFIG_FILE,
   PARALLEL_LEVELS,
   formatProjectConfig,
   legacyModeFallback,
@@ -16,6 +18,7 @@ import {
   type ProjectConfig,
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
+import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
 import { implementPlan } from "@opencode-ai/auto-core/implement"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
@@ -156,13 +159,18 @@ const RETIRED_FLAGS: Record<string, string> = {
   "dest-dir": MIGRATION_RETIRED,
 }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
+// The config flags: the project attributes init freezes into config.json and
+// amend changes one by one (plans/0052 D25); run refuses every one of them.
+const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel"]
 const FLAGLESS = command === "check" || command === "status"
 // reset 是反初始化,没有可配置项: 只接受 -f/--force(跳过确认与工作区干净度闸门)。
+// fix takes its baseline from the existing config and no config flags, so it
+// accepts the same (plans/0052 D11).
 const RESET_FLAGS = new Set(["force"])
 for (const key of flags.keys()) {
-  if (command === "reset") {
+  if (command === "reset" || command === "fix") {
     if (RESET_FLAGS.has(key)) continue
-    console.error(`unknown option --${key}: reset only accepts a directory argument and -f/--force`)
+    console.error(`unknown option --${key}: ${command} only accepts a directory argument and -f/--force`)
     process.exit(1)
   }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
@@ -179,10 +187,11 @@ for (const [key, notice] of Object.entries(RETIRED_FLAGS)) {
 const directory = resolve(positional[0] ?? ".")
 
 // Legacy layout (M3.7, auto-core plans/0047 R3): an old-layout project is a
-// usage error before init/continue writes anything, status reads anything or
-// run starts (runAll repeats the check for other shells). reset and check stay
-// available so an old tree can still be de-initialized or inspected.
-if (command === "init" || command === "continue" || command === "status" || command === "run") {
+// usage error before init/continue/amend writes anything, status reads anything
+// or run starts (runAll repeats the check for other shells). reset, fix and
+// check stay available so an old tree can still be de-initialized, repaired or
+// inspected (fix touches only the config layer).
+if (command === "init" || command === "continue" || command === "amend" || command === "status" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -193,25 +202,25 @@ if (command === "init" || command === "continue" || command === "status" || comm
 if (command === "run") {
   // 已固化选项(设计文档 §C): 宪法级项目属性经 init 固化到
   // .opencode/auto/config.json,run 出现即用法错误(镜像 --commit-subtask
-  // 移除的既有先例);修订走 init amend 或直接编辑配置文件。
+  // 移除的既有先例);修订走 amend(plans/0052 D25)或直接编辑配置文件。
   // 看门狗键已由 --verify-idle/--verify-max 更名为 --idle-time/--idle-max(现控制
   // test 脚本执行),旧名出现即单独提示更名。
   for (const key of ["verify-idle", "verify-max"]) {
     if (flags.has(key)) {
       const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
-      console.error(`--${key} was renamed to --${renamed} (the driver-run script watchdog). To change: opencode-auto init <dir> --${renamed} <value>, or edit .opencode/auto/config.json directly`)
+      console.error(`--${key} was renamed to --${renamed} (the driver-run script watchdog). To change: opencode-auto amend <dir> --${renamed} <value>, or edit .opencode/auto/config.json directly`)
       process.exit(1)
     }
   }
-  for (const key of ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel"]) {
+  for (const key of CONFIG_FLAGS) {
     if (flags.has(key)) {
       const flag = key === "mode" ? "-m/--mode" : `--${key}`
       const fix =
         key === "auto-number" || key === "no-auto-number"
-          ? "opencode-auto init <dir> --auto-number (use --no-auto-number to turn off)"
+          ? "opencode-auto amend <dir> --auto-number (use --no-auto-number to turn off)"
           : key === "wrapup" || key === "no-wrapup"
-            ? "opencode-auto init <dir> --wrapup (use --no-wrapup to turn off)"
-            : `opencode-auto init <dir> ${key === "mode" ? "-m" : `--${key}`} <value>`
+            ? "opencode-auto amend <dir> --wrapup (use --no-wrapup to turn off)"
+            : `opencode-auto amend <dir> ${key === "mode" ? "-m" : `--${key}`} <value>`
       console.error(`${flag} was frozen by init (.opencode/auto/config.json). To change: ${fix}, or edit that file directly`)
       process.exit(1)
     }
@@ -220,14 +229,15 @@ if (command === "run") {
     console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
     process.exit(1)
   }
-  // --amend/--force 是 init/reset 专用: 前者切回增量修订语义,后者跳过覆盖确认
-  // 与工作区干净度闸门;run 不写配置、不做破坏性覆盖,两者都无意义。
+  // --amend 是 init 专用(切回增量修订语义,单改一个键用 amend 子命令);-f/--force
+  // 是 init/reset/fix 专用(跳过覆盖确认与工作区干净度闸门);run 不写配置、不做
+  // 破坏性覆盖,两者都无意义。
   if (flags.has("amend")) {
-    console.error("--amend is an init-only option (switches back to incremental amend semantics, only changing keys explicitly given on the command line); run does not accept it")
+    console.error("--amend is an init-only option (to change individual keys use opencode-auto amend <dir> --<key> <value>); run does not accept it")
     process.exit(1)
   }
   if (flags.has("force")) {
-    console.error("-f/--force is an init/reset-only option (skips overwrite confirmation and worktree cleanliness checks); run does not accept it")
+    console.error("-f/--force is an init/reset/fix option (skips the confirmation and the worktree cleanliness check); run does not accept it")
     process.exit(1)
   }
   // --implement-file/--implement-prompt 是 init 专用的单阶段(m)快捷模式选项
@@ -291,9 +301,11 @@ if (command === "run") {
     config = await loadProjectConfig(directory)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
+    const hint = await fixHint(directory)
+    if (hint) console.error(hint)
     process.exit(1)
   }
-  if (await legacyModeFallback(directory)) log("ℹ mode taken from the legacy persisted value in .auto/config.json; re-run init to freeze the full config")
+  if (await legacyModeFallback(directory)) log(`ℹ mode taken from the legacy persisted value in .auto/config.json; run opencode-auto fix ${directory} to write the full config`)
   if (config.testByDriver) {
     log(
       `⚙ tests run by the driver: sessions put scripts in test/ and write the script path to tmp/test.sh to request execution; the driver merges stdout/stderr into tmp/test.<n>.out and feeds it back to the session` +
@@ -303,7 +315,7 @@ if (command === "run") {
   const modes = loadModeTable(directory)
   const mode = modes[config.mode]
   if (!mode) {
-    console.error(`configured mode "${config.mode}" is not registered (currently supported: ${Object.keys(modes).join(", ")}); to fix: opencode-auto init <dir> -m <value>, or edit .opencode/auto/config.json directly`)
+    console.error(`configured mode "${config.mode}" is not registered (currently supported: ${Object.keys(modes).join(", ")}); to fix: opencode-auto amend <dir> -m <value>, or edit .opencode/auto/config.json directly`)
     process.exit(1)
   }
   log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
@@ -422,78 +434,11 @@ function loadModeTable(directory: string): Record<string, ModeSpec> {
   }
 }
 
-if (command === "init" || command === "continue") {
-  // 项目宪法选项在 init 固化(设计文档 §B): 缺省为**无状态全量覆盖**——产出的
-  // config.json 仅由本次执行传入的参数决定,未给出的键一律回落内置缺省,不与磁盘
-  // 上的旧配置做任何增量合并。于是「干净环境跑一次无参 init」与「带参 init 之后
-  // 再跑一次无参 init」产出逐字节一致,单次 init 即可得到确定状态,无需前置清理。
-  // 值域校验复用既有 parse*(与配置文件侧 validateProjectConfig 同源)。
-  //
-  // --amend 显式切回旧的增量修订语义(只改命令行显式给出的键,其余保留既有配置),
-  // 供「只想改一个字段又不想重述全部参数」的场景;continue 恒为 amend(下方 base)。
-  //
-  // continue 子命令(续轮迁移,设计文档 plans/0006-phases-design.md M 节)= init 的
-  // amend 语义 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
-  // 让迁移结果与源更加完整、一致。复用 init 的解析/合并/模板与标记块维护,差异
-  // 仅在: ① 前置校验(既有 phases ≠ "m" 且阶段索引全部完成);② 轮首建立
-  // (establishRound: 建 docs/R-(N+1)/ 与阶段索引、各阶段目录、AGENTS.md.bak
-  // 快照);③ -m/--mode 跨轮固定,显式给出即用法错误。
-  //
-  // Every check runs before the first write (plans/0052 D7): a refused init
-  // leaves config.json, the templates, AGENTS.md and docs/ untouched.
-  if (command === "init" && flags.has("continue")) {
-    console.error("--continue is not an option: round continuation uses the dedicated subcommand opencode-auto continue <dir> (starts a new round after the previous phased migration round fully completes)")
-    process.exit(1)
-  }
-  const cont = command === "continue"
-  if (cont) {
-    if (flags.has("mode")) {
-      console.error(
-        "-m/--mode is fixed across rounds and cannot change during continue: a continuation round continues the same work (the previous round's conclusions assume the same mode)." +
-          " To change it, init a new project in a new directory",
-      )
-      process.exit(1)
-    }
-    if (flags.has("implement-file") || flags.has("implement-prompt")) {
-      console.error("--implement-file/--implement-prompt are init-only single-phase (m) shortcut-mode options: continue is for phased-flow round continuation and does not support them")
-      process.exit(1)
-    }
-  }
-  if (flags.has("commit-subtask")) {
-    console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
-    process.exit(1)
-  }
-  // --implement-file/--implement-prompt(init 单阶段 m 快捷模式,设计见文件尾用法
-  // 文本): 二选一,不与继续调用叠加使用;值须非空。文件存在性与 phases 兼容性
-  // 校验放在 existing 配置装载之后(§下文)。
-  if (flags.has("implement-file") && flags.has("implement-prompt")) {
-    console.error("--implement-file and --implement-prompt are mutually exclusive: they are two input sources for the same shortcut mode; do not give both")
-    process.exit(1)
-  }
-  if (flags.has("implement-file") && !flags.get("implement-file")?.trim()) {
-    console.error("--implement-file requires a non-empty file path")
-    process.exit(1)
-  }
-  if (flags.has("implement-prompt") && !flags.get("implement-prompt")?.trim()) {
-    console.error("--implement-prompt requires non-empty prompt text")
-    process.exit(1)
-  }
-  const promptText = flags.get("prompt")
-  if (promptText !== undefined && !promptText.trim()) {
-    console.error("-p/--prompt requires non-empty prompt text")
-    process.exit(1)
-  }
-  for (const key of ["verify-idle", "verify-max"]) {
-    if (flags.has(key)) {
-      const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
-      console.error(`--${key} was renamed to --${renamed} (the driver-run script watchdog)`)
-      process.exit(1)
-    }
-  }
-  if (flags.has("max-sessions")) {
-    console.error("--max-sessions is a run option (concurrent AI sessions for this run); init/continue do not accept it")
-    process.exit(1)
-  }
+// The config flags of init/continue/amend, parsed once (plans/0052 D25): the
+// value checks, and the keys explicitly given (`explicit`, merged over the
+// baseline). --agent opencode and --parallel none are returned separately,
+// since they drop their key instead of setting it. A bad value exits 1.
+function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>; phases?: string; agent?: string; parallel?: string } {
   // --agent (M6.1): the coding agent, frozen like every project attribute;
   // opencode = the key is absent from config.json.
   const agent = flags.get("agent")
@@ -593,6 +538,124 @@ if (command === "init" || command === "continue") {
   }
   if (flags.has("wrapup") && flags.get("wrapup") !== "false") explicit.wrapup = true
   if (flags.has("no-wrapup") && flags.get("no-wrapup") !== "false") explicit.wrapup = false
+  return { explicit, phases, agent, parallel }
+}
+
+if (command === "init" || command === "continue" || command === "amend") {
+  // 项目宪法选项在 init 固化(设计文档 §B): 缺省为**无状态全量覆盖**——产出的
+  // config.json 仅由本次执行传入的参数决定,未给出的键一律回落内置缺省,不与磁盘
+  // 上的旧配置做任何增量合并。于是「干净环境跑一次无参 init」与「带参 init 之后
+  // 再跑一次无参 init」产出逐字节一致,单次 init 即可得到确定状态,无需前置清理。
+  // 值域校验复用既有 parse*(与配置文件侧 validateProjectConfig 同源)。
+  //
+  // --amend 显式切回旧的增量修订语义(只改命令行显式给出的键,其余保留既有配置),
+  // 供「只想改一个字段又不想重述全部参数」的场景;continue 恒为 amend(下方 base)。
+  //
+  // The amend command (plans/0052 D25) is that amend as a command of its own:
+  // it takes the config flags only, refuses without config.json or without a
+  // key, and writes config.json plus the artifacts rendered from it (the agent
+  // contract and the AGENTS.md block). Until P3c it also runs the round step,
+  // so moving from `init --amend` loses nothing (the tail re-sync after a
+  // --phases change); opencode.json, .gitignore and the brief stub are left to
+  // init and `fix`. `init --amend` keeps working until P3c (D20).
+  //
+  // continue 子命令(续轮迁移,设计文档 plans/0006-phases-design.md M 节)= init 的
+  // amend 语义 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
+  // 让迁移结果与源更加完整、一致。复用 init 的解析/合并/模板与标记块维护,差异
+  // 仅在: ① 前置校验(既有 phases ≠ "m" 且阶段索引全部完成);② 轮首建立
+  // (establishRound: 建 docs/R-(N+1)/ 与阶段索引、各阶段目录、AGENTS.md.bak
+  // 快照);③ -m/--mode 跨轮固定,显式给出即用法错误。
+  //
+  // Every check runs before the first write (plans/0052 D7): a refused init
+  // leaves config.json, the templates, AGENTS.md and docs/ untouched.
+  if (command === "init" && flags.has("continue")) {
+    console.error("--continue is not an option: round continuation uses the dedicated subcommand opencode-auto continue <dir> (starts a new round after the previous phased migration round fully completes)")
+    process.exit(1)
+  }
+  const cont = command === "continue"
+  const amendCommand = command === "amend"
+  if (amendCommand) {
+    const allowed = new Set([...CONFIG_FLAGS, "verify-idle", "verify-max", "commit-subtask"])
+    for (const key of flags.keys()) {
+      if (allowed.has(key)) continue
+      console.error(
+        key === "prompt"
+          ? `-p/--prompt is not an amend option: the brief is not config — edit ${BRIEF_FILE} directly`
+          : key === "implement-file" || key === "implement-prompt"
+            ? `--${key} is not an amend option: it starts a planning session; to keep the existing config use opencode-auto init <dir> --amend --${key} …`
+            : key === "force"
+              ? "-f/--force is not an amend option: amend discards no key, so there is no overwrite confirmation or worktree check to skip"
+              : key === "amend"
+                ? "--amend is redundant: the amend command always keeps the keys it is not given"
+                : `--${key} is not an amend option: amend takes only config flags (${CONFIG_FLAGS.map((name) => (name === "mode" ? "-m/--mode" : `--${name}`)).join(", ")})`,
+      )
+      process.exit(1)
+    }
+    if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
+      const legacy = await legacyModeFallback(directory)
+      console.error(
+        `nothing to amend: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}` +
+          (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
+      )
+      process.exit(1)
+    }
+    if (!CONFIG_FLAGS.some((key) => flags.has(key))) {
+      console.error(
+        `name at least one key to change (for example: opencode-auto amend ${directory} --phases amt); ` +
+          `to refresh the agent contract and the AGENTS.md block without changing a key, run opencode-auto fix ${directory}`,
+      )
+      process.exit(1)
+    }
+  }
+  if (cont) {
+    if (flags.has("mode")) {
+      console.error(
+        "-m/--mode is fixed across rounds and cannot change during continue: a continuation round continues the same work (the previous round's conclusions assume the same mode)." +
+          " To change it, init a new project in a new directory",
+      )
+      process.exit(1)
+    }
+    if (flags.has("implement-file") || flags.has("implement-prompt")) {
+      console.error("--implement-file/--implement-prompt are init-only single-phase (m) shortcut-mode options: continue is for phased-flow round continuation and does not support them")
+      process.exit(1)
+    }
+  }
+  if (flags.has("commit-subtask")) {
+    console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
+    process.exit(1)
+  }
+  // --implement-file/--implement-prompt(init 单阶段 m 快捷模式,设计见文件尾用法
+  // 文本): 二选一,不与继续调用叠加使用;值须非空。文件存在性与 phases 兼容性
+  // 校验放在 existing 配置装载之后(§下文)。
+  if (flags.has("implement-file") && flags.has("implement-prompt")) {
+    console.error("--implement-file and --implement-prompt are mutually exclusive: they are two input sources for the same shortcut mode; do not give both")
+    process.exit(1)
+  }
+  if (flags.has("implement-file") && !flags.get("implement-file")?.trim()) {
+    console.error("--implement-file requires a non-empty file path")
+    process.exit(1)
+  }
+  if (flags.has("implement-prompt") && !flags.get("implement-prompt")?.trim()) {
+    console.error("--implement-prompt requires non-empty prompt text")
+    process.exit(1)
+  }
+  const promptText = flags.get("prompt")
+  if (promptText !== undefined && !promptText.trim()) {
+    console.error("-p/--prompt requires non-empty prompt text")
+    process.exit(1)
+  }
+  for (const key of ["verify-idle", "verify-max"]) {
+    if (flags.has(key)) {
+      const renamed = key === "verify-idle" ? "idle-time" : "idle-max"
+      console.error(`--${key} was renamed to --${renamed} (the driver-run script watchdog)`)
+      process.exit(1)
+    }
+  }
+  if (flags.has("max-sessions")) {
+    console.error(`--max-sessions is a run option (concurrent AI sessions for this run); ${command} does not accept it`)
+    process.exit(1)
+  }
+  const { explicit, phases, agent, parallel } = parseConfigFlags(directory)
   // 全量覆盖 vs 增量修订的唯一分水岭: 缺省取内置缺省表作基线(未给出的键回落
   // 默认值),--amend 取磁盘上的既有配置作基线(未给出的键保留原值)。continue
   // 恒为 amend——续轮迁移依赖既有配置,跨轮固定项(mode)已在上方前置守卫拒绝
@@ -602,7 +665,8 @@ if (command === "init" || command === "continue") {
   // overwrite discards them anyway, so its baseline read tolerates them and
   // names each one before the overwrite (plans/0052 D4) — otherwise a stored
   // `commit: false` or `source` would block the very re-init that clears it.
-  const amend = cont || flags.has("amend")
+  // From P2 the strict failure names `fix` when a rule repairs it (D4, D11).
+  const amend = cont || amendCommand || flags.has("amend")
   let existing: ProjectConfig
   let discarded: RetiredKey[] = []
   try {
@@ -610,6 +674,8 @@ if (command === "init" || command === "continue") {
     else ({ config: existing, retired: discarded } = await loadOverwriteBaseline(directory))
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
+    const hint = await fixHint(directory)
+    if (hint) console.error(hint)
     process.exit(1)
   }
   // acceptanceGate/build (plans/0049 G9) have no flag, so they are only ever
@@ -630,7 +696,7 @@ if (command === "init" || command === "continue") {
       console.error(
         `--implement-file/--implement-prompt only apply to the single-phase (phases = "m") shortcut mode; ` +
           `${phases !== undefined ? "the --phases given here" : amend ? "the existing config phases" : "the effective default phases"} is "${effectivePhases}". ` +
-          `switch first with opencode-auto init <dir> --phases m (new projects default to m when --phases is omitted), then use this shortcut mode`,
+          `switch first with opencode-auto amend <dir> --phases m (new projects default to m when --phases is omitted), then use this shortcut mode`,
       )
       process.exit(1)
     }
@@ -660,7 +726,7 @@ if (command === "init" || command === "continue") {
     if (effectiveHandoverTest && !effectiveTestByDriver) {
       console.error(
         `${explicit.handoverTest !== undefined ? "--handover-test" : "the existing handoverTest"} requires --test-by-driver: ` +
-          "test handover only makes sense when tests run via the driver. To fix: opencode-auto init <dir> --test-by-driver --handover-test, or edit .opencode/auto/config.json directly",
+          "test handover only makes sense when tests run via the driver. To fix: give --test-by-driver as well (or --handover-test false), e.g. opencode-auto amend <dir> --test-by-driver --handover-test; or edit .opencode/auto/config.json directly",
       )
       process.exit(1)
     }
@@ -692,7 +758,7 @@ if (command === "init" || command === "continue") {
     if (existing.phases === "m") {
       console.error(
         `continue only applies to phased-flow projects: the current config has phases = "m" (a single run with no phase declaration, no rounds). ` +
-          `enable the phased flow first with opencode-auto init <dir> --phases <admtvk subsequence containing m | type-id list containing implement>`,
+          `enable the phased flow first with opencode-auto amend <dir> --phases <admtvk subsequence containing m | type-id list containing implement>`,
       )
       process.exit(1)
     }
@@ -740,7 +806,8 @@ if (command === "init" || command === "continue") {
         ? `the new --phases value "${effectivePhases}" is incompatible with the phase index (${indexPath}): its completed phases are "${completedText}", which must be a prefix of the new value's phase types. ` +
             "use a value prefixed by it, or roll the index back manually (rename done.md to todo.md) before changing it"
         : `a no-flag init overwrites with defaults and would reset phases to "${effectivePhases}", incompatible with the completed phases "${completedText}" in the phase index (${indexPath}) (it would destroy the round layout). ` +
-            `to keep the existing config use opencode-auto init ${directory} --amend; to really change it, pass --phases explicitly prefixed by "${completedText}"`,
+            `to change individual keys and keep the rest use opencode-auto amend ${directory} --<key> <value> (opencode-auto fix ${directory} refreshes the agent contract and AGENTS.md block); ` +
+            `to really change phases, pass --phases explicitly prefixed by "${completedText}"`,
     )
     process.exit(1)
   }
@@ -810,7 +877,7 @@ if (command === "init" || command === "continue") {
     }
     // ② 交互确认: 非 TTY 直接放行(confirm 内部判定)。
     const ok = await confirm(
-      "found an existing config .opencode/auto/config.json; init will fully overwrite it with these parameters (keys not given fall back to defaults). continue? [y/N] ",
+      "found an existing config .opencode/auto/config.json; init will fully overwrite it with these parameters (keys not given fall back to defaults; to change individual keys instead, use opencode-auto amend). continue? [y/N] ",
     )
     if (!ok) {
       console.log("cancelled; nothing was changed")
@@ -831,11 +898,11 @@ if (command === "init" || command === "continue") {
   }
   // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。任务不在此写(PLAN.md
   // 已退役,M3.4): 由下方 establishRound 建轮次目录与阶段目录,任务单元由规划会话、
-  // init 快捷模式或人工写出。
-  const templates: Record<string, string> = {
-    "opencode.json": templateConfig,
-    ".opencode/agent/auto.md": templateAgent,
-  }
+  // init 快捷模式或人工写出。amend writes only what renders from the config (the
+  // contract); opencode.json may hold a person's edits and is init's and fix's.
+  const templates: Record<string, string> = amendCommand
+    ? { ".opencode/agent/auto.md": templateAgent }
+    : { "opencode.json": templateConfig, ".opencode/agent/auto.md": templateAgent }
   for (const [file, source] of Object.entries(templates)) {
     const target = resolve(directory, file)
     const raw = await Bun.file(source).text()
@@ -849,6 +916,15 @@ if (command === "init" || command === "continue") {
     await Bun.write(target, content)
     console.log(existing === undefined ? `created: ${file}` : `replaced (differed from the template): ${file}`)
   }
+  // The project brief stub (plans/0052 D9): written only when the file is
+  // missing and no -p text replaces it below; a person's brief is never touched.
+  if (!amendCommand && promptText === undefined) {
+    if (await Bun.file(join(directory, BRIEF_FILE)).exists()) console.log(`already exists, skipped: ${BRIEF_FILE}`)
+    else {
+      await Bun.write(join(directory, BRIEF_FILE), renderProjectBrief())
+      console.log(`created: ${BRIEF_FILE} (project brief stub: fill in the goal, the migration source and target, and constraints; every planning session reads it)`)
+    }
+  }
   // 幂等同步 AGENTS.md 的 opencode-auto 块: 按当前配置渲染,与文件中现有标准块比对
   // ——缺失则追加、内容不一致则整块替换、旧版/多余的带名标记块一律清理。
   const ensured = await ensurePointer(directory, { testByDriver: config.testByDriver })
@@ -860,7 +936,7 @@ if (command === "init" || command === "continue") {
         : "already exists, skipped: AGENTS.md opencode-auto block (up to date)",
   )
   if (ensured.legacyRemoved) console.log(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
-  if (await ensureGitignore(directory)) console.log("updated: .gitignore now ignores tmp/ and .auto/ (driver workdir and runtime state)")
+  if (!amendCommand && (await ensureGitignore(directory))) console.log("updated: .gitignore now ignores tmp/ and .auto/ (driver workdir and runtime state)")
 
   // 轮首建立(轮次专用目录 docs/R-NN,plans/0006-phases-design.md M 节;须在 ensurePointer
   // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
@@ -874,14 +950,19 @@ if (command === "init" || command === "continue") {
     console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
     process.exit(1)
   }
+  if (amendCommand) {
+    const given = CONFIG_FLAGS.filter((key) => flags.has(key)).map((key) => (key === "mode" ? "-m" : `--${key}`))
+    console.log(`✓ amended (${given.join(" ")}); the other keys are unchanged. Review the change and commit it`)
+    process.exit(0)
+  }
 
   // -p/--prompt: 项目意图文本写入 .opencode/auto/brief.md(版本化、随仓库共享、
   // 人工可编辑,amend 语义——重复 init -p 覆盖重写),由每个阶段的规划会话消费。
   // init 不再启动任何 AI 会话(设计文档 plans/0006-phases-design.md §B.1: 规划必须感知
   // 各阶段产物,从 init 挪到 run 的阶段边界)。
   if (promptText !== undefined) {
-    await Bun.write(join(directory, ".opencode", "auto", "brief.md"), promptText.trimEnd() + "\n")
-    console.log("written: .opencode/auto/brief.md (project brief, consumed by phase planning sessions; repeated init -p overwrites it)")
+    await Bun.write(join(directory, BRIEF_FILE), promptText.trimEnd() + "\n")
+    console.log(`written: ${BRIEF_FILE} (project brief, consumed by phase planning sessions; repeated init -p overwrites it)`)
   }
   // --implement-file/--implement-prompt 快捷模式(单阶段 m): 计划生成会话写出
   // P01-implement 的任务索引与各任务文档,与阶段规划会话同款机制——这是 init 唯一
@@ -889,7 +970,7 @@ if (command === "init" || command === "continue") {
   // 显式选择)。任务索引尚无任务已在写盘前校验(见上)。
   const taskIndex = taskIndexPath(units[0]!)
   if (implementFile !== undefined || implementPrompt !== undefined) {
-    const brief = await Bun.file(join(directory, ".opencode", "auto", "brief.md")).text().catch(() => undefined)
+    const brief = await projectBriefText(directory)
     console.log(`▶ plan-generation session input: ${implementFilePath !== undefined ? `plan file ${implementFilePath}` : "implementation prompt"}`)
     const result = await implementPlan(
       directory,
@@ -974,6 +1055,56 @@ if (command === "reset") {
   process.exit(0)
 }
 
+// fix (plans/0052 D10/D11): repairs the config layer by rule — retired or
+// renamed keys in config.json, and config-layer artifacts that are missing or
+// out of step with the config. The rule table and its boundary are in
+// auto-core/config-fix.ts. Its baseline is the existing config, read raw; it
+// takes no config flags and never resets a key. The interaction is reset's:
+// print the plan, then the worktree cleanliness gate and the confirmation
+// (-f skips both), then apply. It never commits: the diff is left for review.
+if (command === "fix") {
+  const plan = await planFix(directory)
+  if (plan.uninitialized) {
+    console.error(`nothing to fix: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory}`)
+    process.exit(1)
+  }
+  if (!plan.findings.length) {
+    console.log(`✓ nothing to fix: the config layer of ${directory} is consistent with its config`)
+    process.exit(0)
+  }
+  const fixable = plan.findings.filter((finding) => finding.class === "fixable")
+  const manual = plan.findings.filter((finding) => finding.class === "manual")
+  console.log(`config-layer findings in ${directory}:`)
+  console.log(formatFixPlan(plan))
+  if (fixable.length) {
+    if (!flags.has("force")) {
+      const dirty = await checkCleanTree(directory, "fix")
+      if (dirty) {
+        console.error(dirty)
+        process.exit(1)
+      }
+      const ok = await confirm(`apply the ${fixable.length} fix(es) above? [y/N] `)
+      if (!ok) {
+        console.log("cancelled; nothing was changed")
+        process.exit(0)
+      }
+    }
+    try {
+      await applyFix(plan)
+    } catch (error) {
+      console.error(`fix failed: ${error instanceof Error ? error.message : String(error)}`)
+      process.exit(1)
+    }
+    for (const finding of fixable) console.log(`fixed: ${finding.path}: ${finding.change}`)
+  }
+  if (manual.length) {
+    console.error(`${manual.length} finding(s) need a person (listed as manual above): edit the file by hand, then re-run opencode-auto fix ${directory}`)
+    process.exit(1)
+  }
+  console.log("✓ config layer repaired; review the change and commit it")
+  process.exit(0)
+}
+
 // 等命令执行权在 driver"原则)相违背的描述;②引用检查(stable-refs P4)——
 // 全量活文档(docs/**/*.md)扫描失效引用(路径不存在 /
 // 行号超出文件总行数)。任一命中退出码 1,供人工修订。测试类检查是否启用由
@@ -1029,6 +1160,8 @@ if (command === "status") {
     console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   } catch (error) {
     console.log(`⚠ project config (.opencode/auto/config.json) is invalid: ${error instanceof Error ? error.message : String(error)}`)
+    const hint = await fixHint(directory)
+    if (hint) console.log(`  ${hint}`)
   }
   for (const line of await renderStatus(directory)) console.log(line)
   process.exit(0)
@@ -1038,18 +1171,21 @@ console.error(`usage:
   opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--implement-file <file>|--implement-prompt <text>] [--amend] [-f|--force]
   opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
+  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
+  opencode-auto fix [dir] [-f|--force]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
   opencode-auto status [dir]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed
-       --amend switches back to incremental amend semantics (only changes keys explicitly given; the rest keep their existing values); continue is always amend
-       -f/--force skips the overwrite confirmation and worktree cleanliness checks (for CI and automation; shared by init and reset)
+       amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block, and re-syncs the current round's unstarted phases after a --phases change. init --amend does the same and stays until plan takes over init's round step; continue is always amend
+       fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
+       -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
-       -p/--prompt project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions); state the migration source and target here — --source-dir/--source-path/--dest-dir are retired
-       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json and brief.md, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
+       -p/--prompt project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired
+       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, brief.md while it is the untouched stub, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
        --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md; once phases are complete, changes must satisfy the prefix guard — see README)
        --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)
        --test-by-driver [true] moves compile/test/build/lint execution rights to the driver: execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge

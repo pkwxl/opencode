@@ -34,7 +34,7 @@ describe("checkPrinciple", () => {
       expect(findings[1]).toMatchObject({ file: "docs/T-002/todo.md", task: "T-002", line: 4 })
       expect(findings[2]).toMatchObject({ file: "docs/T-002/todo.md", task: "T-002", line: 5 })
       // 编写(非执行动词)与 driver 归属句不计;AGENTS.md 缺失给出提示
-      expect(notes).toEqual([`AGENTS.md does not exist, run opencode-auto init ${dir} to add the opencode-auto block`])
+      expect(notes).toEqual([`AGENTS.md does not exist, run opencode-auto fix ${dir} to add the opencode-auto block`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -53,7 +53,7 @@ describe("checkPrinciple", () => {
       )
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
-      expect(notes).toEqual([`AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it`])
+      expect(notes).toEqual([`AGENTS.md is missing the opencode-auto block, run opencode-auto fix to add it`])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -227,7 +227,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
         { file: "docs/T-001/report.md", line: 1, text: "引用 `src/gone.ts`。", path: "src/gone.ts", problem: "missing" },
       ])
       expect(notes).toEqual([
-        "AGENTS.md does not exist, run opencode-auto init " + dir + " to add the opencode-auto block",
+        "AGENTS.md does not exist, run opencode-auto fix " + dir + " to add the opencode-auto block",
         "non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates",
       ])
     } finally {
@@ -267,7 +267,7 @@ describe("checkPrinciple 引用检查(stable-refs P4)", () => {
       await proc.exited
       const before = await checkPrinciple(dir, REFCHECK_ON)
       expect(before.refs).toEqual([])
-      expect(before.notes).toEqual(["AGENTS.md is missing the opencode-auto block, run opencode-auto init to add it"])
+      expect(before.notes).toEqual(["AGENTS.md is missing the opencode-auto block, run opencode-auto fix to add it"])
       await ensurePointer(dir)
       const after = await checkPrinciple(dir, REFCHECK_ON)
       expect(after.refs).toEqual([])
