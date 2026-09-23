@@ -14,7 +14,6 @@ import {
   renderDecompose,
   renderDryrun,
   renderHandoffSteer,
-  renderInferSource,
   renderKnowledge,
   renderPriorKnowledge,
   renderSubtask,
@@ -36,8 +35,8 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 16 份(勘测结论 §J-3,M1.0 合并 understand 后 -1,M2.2 退役六份 -6;新增引用需同步设计文档)", () => {
-    expect(consumers.length).toBe(16)
+  test("引用该片段的模板恰为 15 份(勘测结论 §J-3,M1.0 合并 understand 后 -1,M2.2 退役六份 -6,plans/0052 D5 删 infer-source -1;新增引用需同步设计文档)", () => {
+    expect(consumers.length).toBe(15)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
@@ -335,8 +334,6 @@ describe("模板渲染完整性", () => {
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "意图", mode: migrate }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md" }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", distilled: ["docs/R-01/P02-implement/handover.md"] }),
-      renderInferSource({ file: ".auto/infer.json", brief: "意图", priorKb: "- docs/prior-kb/prior-x.md", known: "- 迁移目标目录: target" }),
-      renderInferSource({ file: ".auto/infer.json" }),
       renderDryrun(),
       renderDecompose(plan, solo),
       renderHandoffSteer(solo),

@@ -7,7 +7,7 @@
 | Package | Role | Contents |
 |---|---|---|
 | `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/script/git/protect/config/server/mode/prompt/template/knowledge/interactive/log/shell/check) + built-in templates (`templates/`) + design documents (`docs/`) |
-| `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/continue/run/check/status subcommands, build scripts, CLI parsing/e2e tests |
+| `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/continue/run/reset/check/status subcommands, build scripts, CLI parsing/e2e tests |
 | `packages/<name>` (`@opencode-ai/<name>`, bin `<bin>`) | Simple CLI shell (per shell branch) | Shape and artifact naming are decided by each shell branch, using the existing simple shell branch as reference; the core does not record specific names |
 
 Decision rule: session pipeline, state-file protocol, prompt rendering, acceptance/commit mechanisms belong to the **core**; CLI shape (subcommands or not, usage text, argument parsing and config fixation policy, build artifact naming) belongs to the **shell**.
@@ -38,6 +38,13 @@ Shell differences are injected exclusively through the following extension point
 - **`agent` is the coding agent; the contract name is fixed; path-preserving re-exports removed** (M6.1): the config key and `RunAllOpts.agent` / `implementPlan`'s `config.agent` now take `opencode|claude` (`AgentChoice` from `auto-core/switches`; absent = opencode, written as no key, `agentOf` from `auto-core/config` validates). The contract is always `.opencode/agent/auto.md` (`CONTRACT_AGENT` from `auto-core/opts`); a stored contract name (the pre-M6.1 meaning, e.g. `"agent": "auto"`) fails config loading with a hint to delete the key. `OPENCODE_AUTO_AGENT` is now an override (unset = the config decides) instead of carrying the default. `implementPlan` starts the project's agent too (before M6.1 it always ran on opencode). Removed re-exports — import from the owning module: `ensureGitignore` (`auto-core/gitignore`), `ensurePointer` / `renderAgentsBlock` (`auto-core/agents-block`), `renderAgentContract` (`auto-core/loop-preflight`), `PermissionMode` / `SubtaskMode` (`auto-core/opts`), `requireArtifact` (`auto-core/artifact`); `auto-core/loop` keeps `runAll` and `type RunAllOpts`. `packages/auto` is the reference (`init --agent opencode|claude`, frozen on `run`; `--amend --agent opencode` drops the key).
 - **Parallel planning level and reserved session count** (MP.1, `plans/0046` §8): the optional config key `parallel` (`none|low|medium|high`, absent = none, `PARALLEL_LEVELS` from `auto-core/config`) selects the `## parallelism` intent subsection injected into the planning prompts; pass it to `runAll` as `parallel` and to `implementPlan` in its config. `RunAllOpts.maxSessions` is reserved: `runAll` exits 1 for anything but 1. A shell that exposes neither needs no change — absence is today's behaviour. `packages/auto` is the reference (`init --parallel`, frozen on `run`; `run --max-sessions`).
 
+**Changes shells must absorb when refreshing the core snapshot (CLI convergence P1, `plans/0052`, 2026-09-23):**
+
+- **Migration parameters retired** (D1–D3): the config keys `source` / `destDir`, `sourceOf` / `destDirOf`, `RunAllOpts.source` / `destDir` and the `renderPhasePlan` inputs of the same names are gone. A stored `source` or `destDir` (any value) fails config loading with the fix: copy the value into `.opencode/auto/brief.md`, then remove the key. Both key names are permanent tombstones — a future process-document root (`plans/0036` F18) needs another name. A shell carrying `--source-dir` / `--source-path` / `--dest-dir` must drop the parsing and treat the flags as retired; `packages/auto` (`RETIRED_FLAGS`, now a flag → notice map) is the reference.
+- **Full-overwrite baseline** (D4): `loadOverwriteBaseline(dir)` (`auto-core/config`) reads the config the way a full overwrite needs it — retired keys (`commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir`) are removed and returned as `RetiredKey[]` for the shell to name, instead of failing. Use it only where the stored keys are discarded; an amend-style baseline keeps `loadProjectConfig` (strict).
+- **Validate, then write** (D7): `plannedPhaseUnits(dir, round, phases)` (`auto-core/phases`) is the read-only half of `syncPhaseIndex` — the same refusals (dropping a completed phase, a phase directory that holds work) with no write — so a shell can finish every check before its first write.
+- **`infer-source` removed** (D5): the template, `renderInferSource` and its tier-1 markers are gone (`plans/0035` Amendment). A target-directory `.opencode/auto/prompts/infer-source.md` is now an unused overlay.
+
 ## D. Branches and merge flow
 
 | Branch | Responsibility |
@@ -60,6 +67,7 @@ Create `packages/<name>` (bin named independently), using the existing simple sh
 4. Ship its own `script/build.ts` (artifact `dist/<bin>`); templates keep the cross-package `with { type: "file" }` import.
 5. Additional prompt templates are registered via `registerTemplate` (protocol-sensitive templates provide markers).
 6. Run `bun install` at the repo root to refresh the lockfile; run tests inside package directories (tests cannot run at the repository root).
+7. If the shell writes config, finish every check before the first write (`plans/0052` D7; `plannedPhaseUnits` for the phase sync) and use `loadOverwriteBaseline` for a full-overwrite baseline, `loadProjectConfig` for an amend. The migration source and target are intent (`brief.md`), not flags.
 
 ## F. Agent adapter onboarding checklist
 

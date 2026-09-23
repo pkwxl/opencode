@@ -67,11 +67,6 @@ export type RunAllOpts = {
   // tasks.md + task units → task loop → handover (distill + completion rename +
   // commit) → next phase.
   phases?: string
-  // config.source 迁移源参数(可选),注入阶段规划会话。
-  source?: { dir: string; path: string }
-  // config.destDir 迁移目标目录(可选,相对工作目录),注入阶段规划会话——
-  // driver 流程文件与迁移产出经它隔离。
-  destDir?: string
   // 调用方已托管的 server 句柄(外壳的前置会话与主循环共用一个实例): 提供
   // 时不再自行 manage/close,生命周期归调用方。
   managed?: AgentHost

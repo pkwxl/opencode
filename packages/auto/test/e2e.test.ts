@@ -270,9 +270,6 @@ describe("CLI 解析: run 侧选项与配置", () => {
         ["--idle-max", "0"],
         ["--commit", "true"],
         ["--phases", "admtvk"],
-        ["--source-dir", "/tmp"],
-        ["--source-path", "src/mod.ts"],
-        ["--dest-dir", "target"],
         ["--test-by-driver"],
         ["--handover-test"],
         ["--auto-number"],
@@ -294,9 +291,6 @@ describe("CLI 解析: run 侧选项与配置", () => {
       // wrapup 两键的修订指引为成对形式
       const wrapup = await runCli(["run", dir, "--wrapup"])
       expect(wrapup.err).toContain("--wrapup (use --no-wrapup to turn off)")
-      // 迁移源两键的修订指引为成对形式
-      const source = await runCli(["run", dir, "--source-dir", "/tmp"])
-      expect(source.err).toContain("--source-dir <dir> --source-path <relative-path>")
       // -m/--mode 报文同型(短选项形式给出修订指引)
       expect((await runCli(["run", dir, "-m", "migrate"])).err).toContain("-m/--mode was frozen by init")
       // --commit-subtask 移除报文保留
@@ -375,6 +369,25 @@ describe("CLI 解析: run 侧选项与配置", () => {
           expect(run.code).toBe(1)
           expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
           expect(run.err).toContain("Result: FAIL")
+        }
+      }
+      // 拦截发生在任何写盘之前
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("migration parameters retired (plans/0052 D1): --source-dir/--source-path/--dest-dir are usage errors on init/continue/run, pointing to brief.md", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const retired = [["--source-dir", "legacy"], ["--source-path", "src/mod.ts"], ["--dest-dir=target"], ["--source-dir", "legacy", "--source-path", "pkg"]]
+      for (const command of ["init", "continue", "run"]) {
+        for (const extra of retired) {
+          const run = await runCli([command, dir, ...extra])
+          expect(run.code).toBe(1)
+          expect(run.err).toContain(`${extra[0]!.split("=")[0]} is retired`)
+          expect(run.err).toContain("state them in .opencode/auto/brief.md")
         }
       }
       // 拦截发生在任何写盘之前
@@ -562,19 +575,35 @@ describe("CLI: init 固化项目配置", () => {
     }
   })
 
-  test("init 全量覆盖清除可选键 source/destDir", async () => {
+  test("stored retired keys (plans/0052 D3/D4): run and --amend fail strictly; a full-overwrite init drops them and names each with its value", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      await mkdir(join(dir, "src-sys", "mod"), { recursive: true })
-      expect((await runCli(["init", dir, "--source-dir", "src-sys", "--source-path", "mod", "--dest-dir", "out"])).code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: "src-sys", path: "mod" }, destDir: "out" })
-      // 无参 init: 两个可选键直接消失(CONFIG_DEFAULTS 不含它们)
-      expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["init", dir, "--context-limit", "128"])).code).toBe(0)
+      const file = join(dir, ".opencode/auto/config.json")
+      const stored = { ...(await readConfig(dir)), source: { dir: "legacy", path: "pkg" }, destDir: "app", commit: false }
+      await Bun.write(file, JSON.stringify(stored, null, 2) + "\n")
+      const run = await runCli(["run", dir])
+      expect(run.code).toBe(1)
+      expect(run.err).toContain("commit: false is retired")
+      delete (stored as { commit?: boolean }).commit
+      await Bun.write(file, JSON.stringify(stored, null, 2) + "\n")
+      const status = await runCli(["status", dir])
+      expect(status.out).toContain('source is retired (the migration source and target are intent, not configuration): copy its value {"dir":"legacy","path":"pkg"} into .opencode/auto/brief.md, then remove the key')
+      // an amend would carry the keys over, so it stays strict
+      const amend = await runCli(["init", dir, "--amend", "--test-by-driver"])
+      expect(amend.code).toBe(1)
+      expect(amend.err).toContain("source is retired")
+      expect(await readConfig(dir)).toEqual(stored)
+      // the full overwrite discards them anyway: it succeeds (no longer blocked by a
+      // stored retired key, DF2) and names each discarded key with its value
+      await Bun.write(file, JSON.stringify({ ...stored, commit: false }, null, 2) + "\n")
+      const init = await runCli(["init", dir])
+      expect(init.code).toBe(0)
+      expect(init.out).toContain("full overwrite drops the retired key commit = false")
+      expect(init.out).toContain('full overwrite drops the retired key source = {"dir":"legacy","path":"pkg"}: the migration source and target are intent — state them in .opencode/auto/brief.md')
+      expect(init.out).toContain('full overwrite drops the retired key destDir = "app"')
       expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
-      // --amend 则保留
-      expect((await runCli(["init", dir, "--source-dir", "src-sys", "--source-path", "mod"])).code).toBe(0)
-      expect((await runCli(["init", dir, "--amend", "--test-by-driver"])).code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: "src-sys", path: "mod" }, testByDriver: true })
+      expect((await runCli(["init", dir])).out).not.toContain("retired key")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -904,52 +933,28 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
-  test("init --source-dir/--source-path 必须成对、须为工作目录下相对路径并校验存在性;--dest-dir 固化", async () => {
+  test("init validates before it writes (plans/0052 D7): empty -p or a broken prompt override leaves the config layer untouched", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      const onlyDir = await runCli(["init", dir, "--source-dir", "legacy"])
-      expect(onlyDir.code).toBe(1)
-      expect(onlyDir.err).toContain("must be given as a pair")
-      const onlyPath = await runCli(["init", dir, "--source-path", "src/mod.ts"])
-      expect(onlyPath.code).toBe(1)
-      expect(onlyPath.err).toContain("must be given as a pair")
-      // source-dir/dest-dir 均须为工作目录下的相对路径(绝对路径与 .. 逃逸拒绝)
-      const absolute = await runCli(["init", dir, "--source-dir", dir, "--source-path", "src/mod.ts"])
-      expect(absolute.code).toBe(1)
-      expect(absolute.err).toContain("relative path under the working directory")
-      const missing = await runCli(["init", dir, "--source-dir", "nope", "--source-path", "src/mod.ts"])
-      expect(missing.code).toBe(1)
-      expect(missing.err).toContain("must be an existing directory under the working directory")
-      const escape = await runCli(["init", dir, "--source-dir", "legacy", "--source-path", "../mod.ts"])
-      expect(escape.code).toBe(1)
-      expect(escape.err).toContain("relative path")
-      const destAbs = await runCli(["init", dir, "--dest-dir", join(dir, "target")])
-      expect(destAbs.code).toBe(1)
-      expect(destAbs.err).toContain("--dest-dir must be a relative path under the working directory")
-      expect((await runCli(["init", dir, "--dest-dir", "../up"])).code).toBe(1)
-      // 合法迁移参数: source 在 <dir>/<source-dir>/<source-path> 存在;dest-dir
-      // 只固化路径、不校验存在性(目标目录常由迁移过程创建)
-      const sourcePath = "src/mod.ts"
-      await Bun.write(join(dir, "legacy", sourcePath), "export {}\n")
-      const ok = await runCli(["init", dir, "--source-dir", "legacy", "--source-path", sourcePath, "--dest-dir", "target"])
-      expect(ok.code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: "legacy", path: sourcePath }, destDir: "target" })
-      // --amend 不给迁移参数则保留既有值;--dest-dir 单独修订
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: "legacy", path: sourcePath }, destDir: "target" })
-      expect((await runCli(["init", dir, "--amend", "--dest-dir", "app"])).code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: "legacy", path: sourcePath }, destDir: "app" })
-      // source-dir 接受软链接: 存在性校验经 stat 跟随解析,可把源系统大树留在
-      // 工作目录外、以链接接入(断链仍按不存在拒绝)
-      const outside = await mkdtemp(join(tmpdir(), "auto-cli-src-"))
-      await Bun.write(join(outside, "pkg/legacy.ts"), "export {}\n")
-      await symlink(outside, join(dir, "linked"))
-      const linked = await runCli(["init", dir, "--amend", "--source-dir", "linked", "--source-path", "pkg/legacy.ts"])
-      expect(linked.code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ source: { dir: "linked", path: "pkg/legacy.ts" } })
-      await symlink(join(dir, "nowhere"), join(dir, "broken"))
-      expect((await runCli(["init", dir, "--source-dir", "broken", "--source-path", "x"])).code).toBe(1)
-      await rm(outside, { recursive: true, force: true })
+      const empty = await runCli(["init", dir, "-p", "  "])
+      expect(empty.code).toBe(1)
+      expect(await readdir(dir)).toEqual([])
+      await mkdir(join(dir, ".opencode/auto/prompts"), { recursive: true })
+      await Bun.write(join(dir, ".opencode/auto/prompts/decompose.md"), "Decompose the task.\n")
+      const fresh = await runCli(["init", dir, "-p", "意图"])
+      expect(fresh.code).toBe(1)
+      expect(fresh.err).toContain("decompose.md")
+      expect(await readdir(join(dir, ".opencode/auto"))).toEqual(["prompts"])
+      expect(await readdir(dir)).toEqual([".opencode"])
+      await rm(join(dir, ".opencode/auto/prompts"), { recursive: true })
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
+      await mkdir(join(dir, ".opencode/auto/prompts"), { recursive: true })
+      await Bun.write(join(dir, ".opencode/auto/prompts/decompose.md"), "Decompose the task.\n")
+      const overwrite = await runCli(["init", dir, "-f", "--context-limit", "32", "-p", "意图"])
+      expect(overwrite.code).toBe(1)
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -962,7 +967,9 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const first = await runCli(["init", dir, "-p", "把 legacy 迁移到 bun"])
       expect(first.code).toBe(0)
       expect(first.out).toContain("written: .opencode/auto/brief.md")
-      expect(first.out).toContain("brief recorded")
+      // m mode: run executes listed tasks, it does not plan them (plans/0052 DF3)
+      expect(first.out).toContain("brief recorded; list tasks in docs/R-01/P01-implement/tasks.md")
+      expect(first.out).not.toContain("task planning")
       expect(await Bun.file(brief).text()).toBe("把 legacy 迁移到 bun\n")
       // 无 -p 保留既有
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -1087,24 +1094,26 @@ describe("CLI: init --implement-file/--implement-prompt(单阶段 m 快捷模式
     }
   })
 
-  // config 固化先于任务索引覆盖防护与计划生成会话,故经防护拦截路径即可验证
-  // 缺省档(不触发真实 AI 会话)。
-  test("快捷模式下 --subtask 缺省固化为 ondemand、wrapup 缺省固化为 false;显式给出时按给出值", async () => {
+  // Validate-then-write (plans/0052 D7, inverting the pre-D7 assertion that
+  // the shortcut's defaults were already written when the guard refused): a
+  // refused shortcut leaves config.json and the rest of the config layer as they were.
+  test("the task-index guard refuses before any write: config.json unchanged, --subtask/--wrapup defaults not applied", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
       await listTask(dir)
-      const blocked = await runCli(["init", dir, "--implement-prompt", "重新生成"])
-      expect(blocked.code).toBe(1)
-      expect(blocked.err).toContain("docs/R-01/P01-implement/tasks.md already lists tasks")
-      const config = JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
-      expect(config.subtask).toBe("ondemand")
-      expect(config.wrapup).toBe(false)
-      const explicit = await runCli(["init", dir, "--implement-prompt", "重新生成", "--subtask", "auto", "--wrapup"])
-      expect(explicit.code).toBe(1)
-      const explicitConfig = JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
-      expect(explicitConfig.subtask).toBe("auto")
-      expect(explicitConfig.wrapup).toBe(true)
+      const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
+      const agents = await Bun.file(join(dir, "AGENTS.md")).text()
+      await rm(join(dir, ".opencode/agent/auto.md"))
+      for (const extra of [[], ["--subtask", "off", "--no-wrapup", "--context-limit", "32"]]) {
+        const blocked = await runCli(["init", dir, "-f", "--implement-prompt", "重新生成", "-p", "意图", ...extra])
+        expect(blocked.code).toBe(1)
+        expect(blocked.err).toContain("docs/R-01/P01-implement/tasks.md already lists tasks")
+        expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+      }
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe(agents)
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1155,6 +1164,8 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
       expect(refused.code).toBe(1)
       expect(refused.err).toContain("already holds work (tasks.md)")
       expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("真实任务")
+      // refused before any write (plans/0052 D7): config.json keeps the old phases
+      expect(JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())).toMatchObject({ phases: "am" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1265,8 +1276,8 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       expect(outside.err).toContain("records completed phases outside phases (am): k")
       await Bun.write(join(dir, "docs/R-01/phases.md"), index)
       await rm(join(dir, "docs/R-01/P03-knowledge"), { recursive: true })
-      // 迁移同一性选项跨轮固定: -m 与迁移三键显式给出即用法错误
-      for (const extra of [["-m", "migrate"], ["--mode", "migrate"], ["--source-dir", "legacy", "--source-path", "x"], ["--dest-dir", "target"]]) {
+      // -m/--mode 跨轮固定: 显式给出即用法错误
+      for (const extra of [["-m", "migrate"], ["--mode", "migrate"]]) {
         const locked = await runCli(["continue", dir, ...extra])
         expect(locked.code).toBe(1)
         expect(locked.err).toContain("fixed across rounds")

@@ -6,6 +6,7 @@ import {
   CONFIG_DEFAULTS,
   formatProjectConfig,
   legacyModeFallback,
+  loadOverwriteBaseline,
   loadProjectConfig,
   mergeProjectConfig,
   saveProjectConfig,
@@ -90,19 +91,6 @@ describe("loadProjectConfig", () => {
         ["phases", "mm"],
         ["phases", "mx"],
         ["phases", 42],
-        ["source", "dir"],
-        ["source", { dir: "src" }],
-        ["source", { path: "mod" }],
-        ["source", { dir: "", path: "mod" }],
-        ["source", { dir: "src", path: "" }],
-        ["source", { dir: "src", path: "../mod" }],
-        ["source", { dir: "src", path: "/abs/mod" }],
-        ["source", { dir: "../legacy", path: "mod" }],
-        ["source", { dir: "/abs/legacy", path: "mod" }],
-        ["destDir", ""],
-        ["destDir", "/abs/target"],
-        ["destDir", "../up"],
-        ["destDir", 42],
         ["testByDriver", "yes"],
         ["handoverTest", 1],
         ["autoNumber", "yes"],
@@ -112,7 +100,7 @@ describe("loadProjectConfig", () => {
       ]
       for (const [key, value] of bad) {
         writeConfig(dir, JSON.stringify({ [key]: value }))
-        await expect(loadProjectConfig(dir)).rejects.toThrow(key === "source" ? "source" : key)
+        await expect(loadProjectConfig(dir)).rejects.toThrow(key)
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -173,18 +161,28 @@ describe("loadProjectConfig", () => {
     }
   })
 
-  test("phases / source / destDir 合法取值原样读回;source 与 destDir 缺省 undefined", async () => {
+  test("phases 合法取值原样读回", async () => {
     const dir = tempDir()
     try {
-      writeConfig(dir, JSON.stringify({ phases: "admtvk", source: { dir: "legacy", path: "src/mod.ts" }, destDir: "target" }))
-      const config = await loadProjectConfig(dir)
-      expect(config.phases).toBe("admtvk")
-      expect(config.source).toEqual({ dir: "legacy", path: "src/mod.ts" })
-      expect(config.destDir).toBe("target")
-      writeConfig(dir, JSON.stringify({ phases: "dmvk" }))
-      const absent = await loadProjectConfig(dir)
-      expect(absent.source).toBeUndefined()
-      expect(absent.destDir).toBeUndefined()
+      writeConfig(dir, JSON.stringify({ phases: "admtvk" }))
+      expect((await loadProjectConfig(dir)).phases).toBe("admtvk")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("source / destDir are retired (plans/0052 D3): any stored value fails strictly, naming brief.md and the value", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ phases: "admtvk", source: { dir: "legacy", path: "src/mod.ts" } }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow(
+        'source is retired (the migration source and target are intent, not configuration): copy its value {"dir":"legacy","path":"src/mod.ts"} into .opencode/auto/brief.md, then remove the key',
+      )
+      writeConfig(dir, JSON.stringify({ destDir: "target" }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow('destDir is retired (the migration source and target are intent, not configuration): copy its value "target"')
+      // an invalid value is refused as retired too, not validated as a path
+      writeConfig(dir, JSON.stringify({ destDir: 42 }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow("destDir is retired")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -231,11 +229,49 @@ describe("loadProjectConfig", () => {
         contextLimit: 128,
         testByDriver: true,
         phases: "admtvk",
-        source: { dir: "legacy", path: "packages/core" },
-        destDir: "target",
       }
       await saveProjectConfig(dir, config)
       expect(await loadProjectConfig(dir)).toEqual(config)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("loadOverwriteBaseline (plans/0052 D4: the full-overwrite init baseline)", () => {
+  test("retired keys are returned with their values instead of failing; the rest loads as loadProjectConfig does", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(
+        dir,
+        JSON.stringify({ commit: false, verify: true, agent: "auto", source: { dir: "legacy", path: "pkg" }, destDir: "app", contextLimit: 128, build: "make" }),
+      )
+      await expect(loadProjectConfig(dir)).rejects.toThrow("commit: false is retired")
+      const { config, retired } = await loadOverwriteBaseline(dir)
+      expect(config).toEqual({ ...CONFIG_DEFAULTS, contextLimit: 128, build: "make" })
+      expect(retired.map(({ key, value }) => [key, value])).toEqual([
+        ["commit", false],
+        ["verify", true],
+        ["agent", "auto"],
+        ["source", { dir: "legacy", path: "pkg" }],
+        ["destDir", "app"],
+      ])
+      expect(retired.find((item) => item.key === "source")!.why).toContain(".opencode/auto/brief.md")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("values that are not the retired use stay strict; no file or no retired key → empty list", async () => {
+    const dir = tempDir()
+    try {
+      expect(await loadOverwriteBaseline(dir)).toEqual({ config: CONFIG_DEFAULTS, retired: [] })
+      writeConfig(dir, JSON.stringify({ verify: false, agent: "claude" }))
+      expect(await loadOverwriteBaseline(dir)).toEqual({ config: { ...CONFIG_DEFAULTS, agent: "claude" }, retired: [] })
+      writeConfig(dir, JSON.stringify({ source: "legacy", contextLimit: 0 }))
+      await expect(loadOverwriteBaseline(dir)).rejects.toThrow("contextLimit must be a positive integer")
+      writeConfig(dir, JSON.stringify({ agent: 2 }))
+      await expect(loadOverwriteBaseline(dir)).rejects.toThrow(/agent must be opencode\|claude$/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

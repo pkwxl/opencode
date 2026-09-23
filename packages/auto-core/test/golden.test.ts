@@ -18,7 +18,6 @@ import {
   renderDryrun,
   renderHandoffSteer,
   renderImplementPlan,
-  renderInferSource,
   renderKnowledge,
   renderNumberRecovery,
   renderPhaseHandover,
@@ -168,10 +167,6 @@ describe("golden 渲染快照", () => {
     golden(
       "prior-knowledge",
       renderPriorKnowledge({ file: "docs/R-01/temp-kb.md", brief: "二次迁移意图。", mode: migrate, distilled: ["docs/R-00/prior-kb.md"] }),
-    )
-    golden(
-      "infer-source",
-      renderInferSource({ file: ".auto/infer.json", brief: "项目意图。", priorKb: "docs/R-01/prior-kb.md", known: "destDir 已配置为 dest/" }),
     )
   })
 

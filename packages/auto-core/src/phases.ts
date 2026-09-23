@@ -220,6 +220,32 @@ export function doneTypes(state: Pick<PhaseState, "phases" | "done">): string[] 
 // which is allowed only for phases that are not done and whose directory holds
 // nothing but todo.md — anything else throws before a file is touched.
 export async function syncPhaseIndex(dir: string, round: number, phases: string): Promise<PhaseUnit[]> {
+  const { units, existing, keep } = await phaseSync(dir, round, phases)
+  const name = roundDirName(round)
+  if (existing) {
+    if (keep === existing.phases.length && keep === units.length) return existing.phases
+    for (const stale of existing.phases.slice(keep)) await rm(join(dir, stale.dir), { recursive: true, force: true })
+  }
+  for (const unit of units.slice(keep)) {
+    await mkdir(join(dir, unit.dir), { recursive: true })
+    const todo = join(dir, unit.dir, UNIT_PENDING)
+    if (!(await Bun.file(todo).exists())) await Bun.write(todo, renderPhaseTodo(unit))
+  }
+  await Bun.write(join(dir, phaseIndexPath(round)), renderPhaseIndex(name, units, existing?.done))
+  return units
+}
+
+// The phase units syncPhaseIndex would leave in the round, found without
+// writing: it throws exactly what the sync would throw. Lets init validate
+// before its first write (plans/0052 D7).
+export async function plannedPhaseUnits(dir: string, round: number, phases: string): Promise<PhaseUnit[]> {
+  const { units, existing, keep } = await phaseSync(dir, round, phases)
+  return existing && keep === existing.phases.length && keep === units.length ? existing.phases : units
+}
+
+// syncPhaseIndex's read and check half: the desired units, the current index
+// and the length of their shared prefix.
+async function phaseSync(dir: string, round: number, phases: string): Promise<{ units: PhaseUnit[]; existing: PhaseState | undefined; keep: number }> {
   const desired = resolvePhases(phases, loadPhaseTypes(dir))
   if (!desired) throw new Error(`invalid phases value "${phases}"`)
   const name = roundDirName(round)
@@ -235,16 +261,8 @@ export async function syncPhaseIndex(dir: string, round: number, phases: string)
         throw new Error(`phases "${phases}" would drop ${stale.dir}/ from ${existing.index}, but it already holds work (${held.join(", ")}); move it away manually first`)
       }
     }
-    if (keep === existing.phases.length && keep === units.length) return existing.phases
-    for (const stale of existing.phases.slice(keep)) await rm(join(dir, stale.dir), { recursive: true, force: true })
   }
-  for (const unit of units.slice(keep)) {
-    await mkdir(join(dir, unit.dir), { recursive: true })
-    const todo = join(dir, unit.dir, UNIT_PENDING)
-    if (!(await Bun.file(todo).exists())) await Bun.write(todo, renderPhaseTodo(unit))
-  }
-  await Bun.write(join(dir, phaseIndexPath(round)), renderPhaseIndex(name, units, existing?.done))
-  return units
+  return { units, existing, keep }
 }
 
 // The gates a phase must pass before it is marked done (plans/0049 G7): its

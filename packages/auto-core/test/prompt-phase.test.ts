@@ -22,21 +22,14 @@ const implementPlan = (input: Omit<Parameters<typeof renderImplementPlan>[0], "p
   renderImplementPlan({ phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", ...input })
 
 describe("renderPhasePlan(阶段规划会话,E 节)", () => {
-  test("注入 brief/迁移源与目标/模式导语与任务单元格式协议;只写任务索引与任务文档", () => {
+  test("注入 brief/模式导语与任务单元格式协议;只写任务索引与任务文档", () => {
     const text = phasePlan({
       phase: L("a"),
       brief: "把 legacy 迁移到 bun",
-      source: { dir: "legacy", path: "src/mod.ts" },
-      destDir: "target",
       mode: migrate,
     })
     expect(text).toContain("\"Analysis\" phase (a)")
     expect(text).toContain("把 legacy 迁移到 bun")
-    expect(text).toContain("legacy")
-    expect(text).toContain("src/mod.ts")
-    // 迁移目标参数: dest-dir 隔离流程文件与迁移产出
-    expect(text).toContain("Migration-target directory (relative to the working directory): target")
-    expect(text).toContain("do not mix migrated code into it")
     expect(text).toContain("scenario-mode preamble (migrate)")
     // a 阶段职责(任务锚定产物约定)与首批勘察要求
     expect(text).toContain("Document placement is anchored to tasks")
@@ -108,13 +101,11 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     expect(phasePlan({ phase: L("a"), trimmedPhases: true })).not.toContain("Pipeline-trimming note")
   })
 
-  test("迁移参数注入两态: destDir 未给出则目标参数段整块消失", () => {
-    const withSource = phasePlan({ phase: L("m"), source: { dir: "legacy", path: "pkg" } })
-    expect(withSource).toContain("## Input: migration-source parameters")
-    expect(withSource).not.toContain("## Input: migration-target parameters")
+  test("migration parameters are retired (plans/0052 D2): no parameter sections, and the missing-brief note does not mention them", () => {
     const bare = phasePlan({ phase: L("m") })
-    expect(bare).not.toContain("## Input: migration-source parameters")
-    expect(bare).not.toContain("## Input: migration-target parameters")
+    expect(bare).not.toContain("migration-source")
+    expect(bare).not.toContain("migration-target")
+    expect(bare).toContain("Not provided (brief.md missing or empty). Proceed by the phase duties")
   })
 
   test("不含 verify 字段与验收执行权描述(verify 已退役,m 阶段)", () => {
@@ -137,7 +128,7 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
   test("代表性参数组合渲染后不残留模板标签", () => {
     for (const text of [
       phasePlan({ phase: L("a") }),
-      phasePlan({ phase: L("m"), brief: "意图", handovers: "### a 分析(x)\n\n- 决策", source: { dir: "legacy", path: "pkg" }, destDir: "target", mode: migrate, numberStart: 12 }),
+      phasePlan({ phase: L("m"), brief: "意图", handovers: "### a 分析(x)\n\n- 决策", mode: migrate, numberStart: 12 }),
       phasePlan({ phase: L("a"), prevRound: "### Previous round (round 1) phase directory index\n\n- docs/R-01/P01-implement/" }),
       phasePlan({ phase: L("k") }),
     ]) {

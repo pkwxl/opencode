@@ -435,3 +435,16 @@ have no dual-read:
 No tier-1 marker is added. `phase-handover.md` renders the acceptance block
 only when the gate is on, so a template override that drops it disables the
 draft, not the gate. The gate reads the human's sign-off, never the draft.
+
+## Amendment (2026-09-23, plans/0052 D5): `infer-source` removed
+
+The `infer-source` template (`templates/prompts/infer-source.md`) and its
+renderer `renderInferSource` are deleted together with their tier-1
+`PROTOCOL_MARKERS` entry (`"sourceDir"`, `"blocked"`). No code rendered the
+template since the migration parameters became optional, and plans/0052
+retires them outright: the migration source and target are intent, stated in
+`.opencode/auto/brief.md` (D1–D3). No protocol string is flipped or added,
+and no other template's markers change. A target-directory overlay
+`.opencode/auto/prompts/infer-source.md` is no longer validated or used. The
+M3.8 amendment's list of prose-only rewrites above still names
+`infer-source.md`; that is history, not a live registration.

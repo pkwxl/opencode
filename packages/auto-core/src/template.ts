@@ -32,7 +32,6 @@ import tplContextBase from "../templates/prompts/context-base.md" with { type: "
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
 import tplImplementPlan from "../templates/prompts/implement-plan.md" with { type: "file" }
-import tplInferSource from "../templates/prompts/infer-source.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
@@ -70,7 +69,6 @@ const embedded: Record<string, string> = {
   dryrun: tplDryrun,
   "handoff-steer": tplHandoffSteer,
   "implement-plan": tplImplementPlan,
-  "infer-source": tplInferSource,
   knowledge: tplKnowledge,
   "number-recovery": tplNumberRecovery,
   "phase-handover": tplPhaseHandover,
@@ -103,7 +101,6 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "decompose-v": ["- [ ]", "context.md", "todo.md"],
   "handoff-steer": ["Status: continue", "Status: done"],
   "implement-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
-  "infer-source": ['"sourceDir"', '"blocked"'],
   "number-recovery": [".auto/next-task"],
   // Literal copies of document/roles HANDOVER_SECTIONS / PRIOR_KB_DONE (template
   // is intent-domain with frozen imports; test/template.test.ts pins the match).

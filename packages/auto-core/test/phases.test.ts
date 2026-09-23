@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { roundDir } from "../src/docpaths"
@@ -21,6 +21,7 @@ import {
   phaseHandoverDoc,
   phaseIndexPath,
   phaseLabel,
+  plannedPhaseUnits,
   prevRoundDigest,
   readPhases,
   renderPhaseTodo,
@@ -176,6 +177,23 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
       writeFileSync(join(dir, "docs/R-01/P03-test/notes.md"), "draft\n")
       await expect(syncPhaseIndex(dir, 1, "am")).rejects.toThrow(/already holds work \(notes\.md\)/)
       expect((await readPhases(dir))!.phases.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
+    }),
+  )
+
+  test(
+    "plannedPhaseUnits (plans/0052 D7): the units a sync would leave and the sync's refusals, without writing",
+    withDir(async (dir) => {
+      expect((await plannedPhaseUnits(dir, 1, "am")).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement"])
+      expect(existsSync(join(dir, "docs/R-01"))).toBe(false)
+      const units = await syncPhaseIndex(dir, 1, "amt")
+      expect((await plannedPhaseUnits(dir, 1, "amvk")).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-acceptance", "P04-knowledge"])
+      expect(await plannedPhaseUnits(dir, 1, "amt")).toEqual(units)
+      await completePhase(dir, units[0]!)
+      await expect(plannedPhaseUnits(dir, 1, "mt")).rejects.toThrow(/completed phase docs\/R-01\/P01-analysis/)
+      writeFileSync(join(dir, "docs/R-01/P03-test/notes.md"), "draft\n")
+      await expect(plannedPhaseUnits(dir, 1, "am")).rejects.toThrow(/already holds work \(notes\.md\)/)
+      expect((await readPhases(dir))!.phases.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
+      expect(existsSync(join(dir, "docs/R-01/P04-knowledge"))).toBe(false)
     }),
   )
 

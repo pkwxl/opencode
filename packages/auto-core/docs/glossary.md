@@ -258,7 +258,10 @@ Unit and outcome states:
 | 运行锁 | run lock | Planned, `plans/0052` D12 |
 | 生命周期命令 | lifecycle command | `plan` / `close` (planned, `plans/0052`) |
 | 配置层 | config layer | What `init` writes and `reset` removes |
-| 全量覆盖 | full overwrite | `init` without `--amend` |
+| 全量覆盖 | full overwrite | `init` without `--amend`; its baseline read drops retired keys and names them (`loadOverwriteBaseline`, `plans/0052` D4) |
+| 已退役键 | retired key | A config key that fails loading strictly: `commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir` (`RETIRED_KEYS` in `src/config.ts`) |
+| 墓碑键名 | tombstone key name | A retired key's name, reserved for good and never reused with a new meaning: `source`, `destDir` (`plans/0052` D3) |
+| 先校验后写盘 | validate, then write | `init` finishes every check before its first write (`plans/0052` D7) |
 | 增量修订 | amend | Change the named config keys, keep the rest: today `init --amend`, planned as the `amend` command (`plans/0052` D25) |
 | 配置修复 | config fix | The `fix` command: repair the config layer by rule (planned, `plans/0052` D10–D11) |
 | 强制关闭 | force-close | `close`, `plan --force-close` (planned) |

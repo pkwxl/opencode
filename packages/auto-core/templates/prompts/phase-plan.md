@@ -10,8 +10,8 @@ this phase into a set of executable tasks, and write this phase's task index and
 {{^brief}}
 ## Input: project intent
 
-Not provided (brief.md missing or empty). Proceed by the migration-source parameters and phase duties; if the project
-intent is indispensable for planning, ask a human to write .opencode/auto/brief.md and rerun.
+Not provided (brief.md missing or empty). Proceed by the phase duties; if the project intent is indispensable for
+planning, ask a human to write .opencode/auto/brief.md and rerun.
 
 {{/if}}
 {{#if round}}
@@ -25,22 +25,6 @@ The human's statement of what this round is for. Plan this phase's tasks toward 
 {{roundRules}}
 
 {{/if}}
-{{/if}}
-{{#if sourceDir}}
-## Input: migration-source parameters
-
-- Source-system directory (relative to the working directory): {{sourceDir}}
-- Source-module relative path (relative to the source-system directory): {{sourcePath}}
-
-Everything touching the source system follows these.
-
-{{/if}}
-{{#if destDir}}
-## Input: migration-target parameters
-
-- Migration-target directory (relative to the working directory): {{destDir}} — migrated code is written here; the root
-  of the working directory holds process files (docs/, .opencode/, etc.), do not mix migrated code into it.
-
 {{/if}}
 {{#if modeInit}}
 ## Input: scenario-mode preamble ({{modeName}})

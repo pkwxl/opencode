@@ -134,8 +134,6 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       round,
       handovers,
       prevRound,
-      source: opts.source,
-      destDir: opts.destDir,
       mode: opts.mode,
       // 本轮阶段索引无独立 analysis/design 阶段 → implement 阶段规划注入裁剪注记
       trimmedPhases: !state.phases.some((unit) => unit.type === "analysis" || unit.type === "design"),

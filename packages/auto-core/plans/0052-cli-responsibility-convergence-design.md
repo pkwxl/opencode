@@ -1,6 +1,6 @@
 # 0052 — CLI responsibility convergence: config-only `init`, migration parameters as intent, `plan` and `close` (design)
 
-Status: **design, ruled** (2026-09-23, rulings U1–U6). **Not implemented**: every step in §6 is unticked. Source: user proposal of 2026-09-23 (§0), with a same-day follow-up (§0 item 4, rulings U5–U6). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
+Status: **design, ruled** (2026-09-23, rulings U1–U6). **P1 implemented** (2026-09-23, auto-core branch; notes under §6); P2 onward not started. Source: user proposal of 2026-09-23 (§0), with a same-day follow-up (§0 item 4, rulings U5–U6). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
 
 ## 0. The proposal
 
@@ -378,7 +378,12 @@ Order: P1 → P2 → P3a → P3b → P3c.
 
 Each step is verified with `bun typecheck` and `bun test` in `packages/auto-core` and `packages/auto`.
 
-- [ ] **P1** D1–D8: retire the three flags and the two keys, drop `infer-source`, make `init` validate-then-write, fix the m-mode `-p` message, update the docs.
+- [x] **P1** D1–D8: retire the three flags and the two keys, drop `infer-source`, make `init` validate-then-write, fix the m-mode `-p` message, update the docs.
+  - Done 2026-09-23 on auto-core. `auto-core` 1110 pass; `packages/auto` 57 pass, 4 skip (the `OPENCODE_AUTO_E2E` real-agent tests).
+  - Beyond D7's list: the phase-directory sync refusals (dropping a completed phase, a directory that holds work) also moved before the first write. `plannedPhaseUnits` (`phases.ts`) is the read-only half of `syncPhaseIndex`.
+  - `init` now calls `useIntentPacks` next to `usePromptLibrary`. Validating the packs is D7; as a side effect, the `--implement-*` session now sees the project's intent overlays, as `run` does.
+  - D7's inverted test (`e2e.test.ts`, "the task-index guard refuses before any write") asserts that `config.json`, `AGENTS.md`, the contract and `brief.md` are untouched. The shortcut's `ondemand` / `wrapup: false` defaults are now written only on a real session path, so the e2e suite no longer covers them outside `OPENCODE_AUTO_E2E`.
+  - D8's "package notes" are `auto-core/AGENTS.md` (there is no `CLAUDE.md`); `packages/auto/AGENTS.md` gained the D4 baseline and D7 ordering notes. Glossary rows added: retired key, tombstone key name, validate-then-write.
 - [ ] **P2** D9–D11, D25: brief stub and reset comparison, `config-fix.ts`, the `fix` and `amend` commands, `fix` hints in `run`/`status`/preflight/`check`, `amend` hints (DF8).
 - [ ] **P3 design pass**: a detailed design document for P3 with 0035 registrations (§7) before any code.
 - [ ] **P3a** D12–D16: run lock, `plan` as a stop condition, route table, `implementPlan` merged into `planPhase`, persisted planning input.

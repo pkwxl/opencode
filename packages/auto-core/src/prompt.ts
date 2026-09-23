@@ -371,7 +371,8 @@ function resolveList(items: ResolveItem[] | undefined): string | undefined {
 // (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
 // prevRound 为上一轮迁移结论摘录(plans/0006-phases-design.md M 节,loop 侧组装: 归档索引/
 // 最终交接/迁移知识),仅续轮(新一轮轮目录建立后)的新一轮首个规划会话注入。
-// source/destDir 为迁移参数(相对工作目录,会话 cwd 即工作目录,相对路径直接可用)。
+// The migration source and target are intent and reach planning through the
+// brief (plans/0052 D2); there are no separate parameters.
 // trimmedPhases 仅 m 阶段生效(生效 phases 经 --phases 裁剪、不含独立 a/d 阶段时由
 // loop 传入,模板注入「流程裁剪注记」——勘察设计并入首批任务,底线保障不省)。
 // numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
@@ -385,8 +386,6 @@ export function renderPhasePlan(input: {
   round?: string
   handovers?: string
   prevRound?: string
-  source?: { dir: string; path: string }
-  destDir?: string
   mode?: ModeSpec
   trimmedPhases?: boolean
   numberStart?: number
@@ -405,9 +404,6 @@ export function renderPhasePlan(input: {
     roundRules: input.round?.trim() ? intentText("acceptance", "round-brief", {}) : undefined,
     handovers: input.handovers?.trim() || undefined,
     prevRound: input.prevRound?.trim() || undefined,
-    sourceDir: input.source?.dir,
-    sourcePath: input.source?.path,
-    destDir: input.destDir,
     modeName: input.mode?.name,
     modeInit: input.mode && modeText(input.mode.init),
     trimmedPhases: type.type === "implement" && input.trimmedPhases ? true : undefined,
@@ -515,20 +511,6 @@ export function renderPriorKnowledge(input: { file: string; brief?: string; mode
     ...modeCtx(input.mode),
   }
   return renderPrompt("prior-knowledge", { ...ctx, qualityRules: intentText("quality", "prior-knowledge", ctx) })
-}
-
-// 参数推断会话(外壳的二次迁移编排): config.source/destDir 缺失时,依据前置知识
-// 产物与目录勘察推断迁移源/目标,结论以 JSON 协议整写 file(.auto/infer.json;
-// {"sourceDir","sourcePath","destDir"} 或 {"blocked": 原因}),driver 校验后仅采纳
-// 缺失键。priorKb 为 prior-kb 文档路径清单(预拼接,会话直读);known 为已固化
-// 参数的人类可读描述(预拼接,可空)。
-export function renderInferSource(input: { file: string; brief?: string; priorKb?: string; known?: string }): string {
-  return renderPrompt("infer-source", {
-    file: input.file,
-    brief: input.brief?.trim() || undefined,
-    priorKb: input.priorKb?.trim() || undefined,
-    known: input.known?.trim() || undefined,
-  })
 }
 
 // 交接文档(相对目标目录): ondemand 整任务会话与 auto 子任务会话共用——driver 在

@@ -5,7 +5,7 @@
 // (仅 mode)只在新文件缺失时回落读取,新文件一经写出即不再读取;它不会被 run
 // 清理(留在 gitignore 内自然沉没),但属配置层,由 reset 一并移除。
 import { chmod } from "node:fs/promises"
-import { isAbsolute, join } from "node:path"
+import { join } from "node:path"
 import { loadModes } from "./mode"
 import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
@@ -55,14 +55,6 @@ export type ProjectConfig = {
   // implement,M3.6);"m" = 无阶段声明,单次运行。config.json 里也可写 JSON 数组,
   // 读取时规范化为逗号串。
   phases: string
-  // 迁移源参数(可选,非迁移场景缺省 undefined): dir = 源系统目录(相对工作目录、
-  // 不含 ..,源树与流程文件同在工作目录下),path = 源模块相对路径(相对 dir)。
-  // init 时另校验存在性;run 不再校验(源系统可能已下线)。
-  source?: { dir: string; path: string }
-  // 迁移目标目录(可选,缺省 undefined = 迁移产出直接落在工作目录): 相对工作目录、
-  // 不含 ..。driver 工作目录(流程文件 CURRENT.md/docs/ 等)与迁移目标经它隔离;
-  // 不校验存在性(目标目录常由迁移过程创建)。
-  destDir?: string
   // Phase types whose phases wait for a human's `Accepted: yes` in their
   // acceptance.md before they are marked done (M4.2, plans/0049 G7/G9; a
   // custom type can carry the gate itself with `Gate: acceptance`). Optional,
@@ -100,18 +92,87 @@ const LEGACY_FILE = join(".auto", "config.json")
 // 坏 JSON / 键值越界 / mode 未注册(loadModes)→ throw(中文报错含键名与期望),
 // CLI 侧转退出码 1。run 与 init 均经此入口。
 export async function loadProjectConfig(dir: string): Promise<ProjectConfig> {
+  return validateProjectConfig(await readConfigRecord(dir), dir)
+}
+
+// A retired key found in config.json, with the value it held and why it is gone.
+export type RetiredKey = { key: string; value: unknown; why: string }
+
+// The baseline of a full-overwrite init (plans/0052 D4). The overwrite drops
+// retired keys anyway, so they are returned for the caller to report instead
+// of failing the load — a stored `commit: false` or `source` would otherwise
+// block the very re-init that clears it. Every other key is validated as
+// strictly as loadProjectConfig does; an amend still loads strictly, since it
+// would carry the retired keys over.
+export async function loadOverwriteBaseline(dir: string): Promise<{ config: ProjectConfig; retired: RetiredKey[] }> {
+  const raw = await readConfigRecord(dir)
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { config: validateProjectConfig(raw, dir), retired: [] }
+  const record = { ...(raw as Record<string, unknown>) }
+  const retired: RetiredKey[] = []
+  for (const [key, rule] of Object.entries(RETIRED_KEYS)) {
+    if (!rule.retired(record[key])) continue
+    retired.push({ key, value: record[key], why: rule.why })
+    delete record[key]
+  }
+  return { config: validateProjectConfig(record, dir), retired }
+}
+
+// The parsed config.json, or the defaults (plus the legacy mode) when it is missing.
+async function readConfigRecord(dir: string): Promise<unknown> {
   const text = await Bun.file(join(dir, CONFIG_FILE)).text().catch(() => undefined)
   if (text === undefined) {
     const legacy = await readLegacyMode(dir)
-    return validateProjectConfig(legacy === undefined ? { ...CONFIG_DEFAULTS } : { ...CONFIG_DEFAULTS, mode: legacy }, dir)
+    return legacy === undefined ? { ...CONFIG_DEFAULTS } : { ...CONFIG_DEFAULTS, mode: legacy }
   }
-  let parsed: unknown
   try {
-    parsed = JSON.parse(text)
+    return JSON.parse(text)
   } catch (error) {
     throw new Error(`${CONFIG_FILE} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
   }
-  return validateProjectConfig(parsed, dir)
+}
+
+// Retired keys (tombstones). A stored retired value fails loading strictly
+// with its own fix: ignoring it like an unknown key would hide that its meaning
+// is gone. The names stay reserved forever — no future key may reuse one, or a
+// stale config would be quietly reinterpreted (plans/0052 D3; the process-doc
+// root of plans/0036 F18 therefore needs a name other than destDir).
+const RETIRED_KEYS: Record<string, { retired: (value: unknown) => boolean; why: string; message: (value: unknown) => string }> = {
+  // 2026-09-15, plans/0021-commit-boundary-design.md D7: the unit-commit clean
+  // gate, SHA baseline and recovery rollback anchor all assume commits are on.
+  commit: {
+    retired: (value) => value === false,
+    why: "unified commit is a completion condition",
+    message: () =>
+      "commit: false is retired (unified commit is a completion condition, see plans/0021-commit-boundary-design.md): remove the key or set it to true",
+  },
+  // D13, 2026-09-21, plans/0044 D2: the acceptance a stored `true` asks for no
+  // longer runs. `false`, which init used to write, is ignored like any unknown key.
+  verify: {
+    retired: (value) => value === true,
+    why: "task-level acceptance was removed",
+    message: () => "verify is retired (task-level acceptance was removed; plan acceptance work as tasks or use the v phase): remove the key",
+  },
+  // M6.1: before it named the coding agent, the key named the agent contract.
+  agent: {
+    retired: (value) => typeof value === "string" && value !== "opencode" && value !== "claude",
+    why: "the key once named the agent contract, which is always .opencode/agent/auto.md",
+    message: (value) =>
+      `agent must be opencode|claude ("${value}" looks like an agent contract name: that setting is retired — the contract is always .opencode/agent/auto.md; delete the key, or set "claude")`,
+  },
+  // plans/0052 D3: the migration parameters were only ever forwarded into the
+  // phase-planning prompt, so they are intent and belong in brief.md.
+  source: migrationParameter("source"),
+  destDir: migrationParameter("destDir"),
+}
+
+function migrationParameter(key: string) {
+  return {
+    retired: (value: unknown) => value !== undefined,
+    why: "the migration source and target are intent — state them in .opencode/auto/brief.md",
+    message: (value: unknown) =>
+      `${key} is retired (the migration source and target are intent, not configuration): ` +
+      `copy its value ${JSON.stringify(value)} into .opencode/auto/brief.md, then remove the key`,
+  }
 }
 
 // init 用: 仅显式给出的键覆盖既有值,其余保留(undefined 的键视同未给出);
@@ -163,6 +224,9 @@ export function formatProjectConfig(config: ProjectConfig): string {
 function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${CONFIG_FILE} must be a JSON object`)
   const record = raw as Record<string, unknown>
+  for (const [key, rule] of Object.entries(RETIRED_KEYS)) {
+    if (rule.retired(record[key])) throw new Error(`${CONFIG_FILE} ${rule.message(record[key])}`)
+  }
   const pick = (key: keyof ProjectConfig) => (record[key] === undefined ? CONFIG_DEFAULTS[key] : record[key])
   const mode = stringOf("mode", pick("mode"))
   const modes = loadModes(dir)
@@ -182,22 +246,9 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   const clashes = phaseTypeRoleProblems(types.filter((entry) => entry.origin === "project").map((entry) => entry.type))
   if (clashes.length) throw new Error(clashes.join("\n"))
   if (resolvePhases(phases, types) === null) throw new Error(`${CONFIG_FILE} phases is invalid: ${phasesProblem(phases, types)}`)
-  // commit:false 已退役(2026-09-15,plans/0021-commit-boundary-design.md): 统一提交是
-  // 完成条件,单元提交边界的 clean 门禁/SHA 基线与恢复保真的回滚锚点全部以"提交
-  // 恒开"为前提,关闭档与之冲突。存量配置按"坏文件严格失败"口径处理——读到 false
-  // 即报错交人工,不静默改写语义(代码侧的 opts.commit 门禁暂留,清理另立任务)。
+  // commit: false was refused above (RETIRED_KEYS); the opts.commit gate in the
+  // code stays for now, its cleanup is a separate task.
   const commit = booleanOf("commit", pick("commit"))
-  if (!commit) {
-    throw new Error(`${CONFIG_FILE} commit: false is retired (unified commit is a completion condition, see plans/0021-commit-boundary-design.md): remove the key or set it to true`)
-  }
-  // verify 已退役(D13,2026-09-21,plans/0044 D2): 任务级验收改为规划出的验收任务
-  // (v 阶段)。verify: true 的存量配置严格失败——该项目要求的验收已不再运行,静默
-  // 忽略会掩盖这一点;false(init 历来写入的值)与其余取值按未知键忽略。
-  if (record.verify === true) {
-    throw new Error(
-      `${CONFIG_FILE} verify is retired (task-level acceptance was removed; plan acceptance work as tasks or use the v phase): remove the key`,
-    )
-  }
   const testByDriver = booleanOf("testByDriver", pick("testByDriver"))
   const handoverTest = booleanOf("handoverTest", pick("handoverTest"))
   if (handoverTest && !testByDriver) {
@@ -219,8 +270,6 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
     idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "minutes, 0 = unset"),
     commit,
     phases,
-    source: sourceOf(record.source),
-    destDir: destDirOf(record.destDir),
     acceptanceGate: acceptanceGateOf(record.acceptanceGate, types.map((entry) => entry.type)),
     build: record.build === undefined ? undefined : stringOf("build", record.build),
     parallel: parallelOf(record.parallel),
@@ -232,11 +281,8 @@ function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
 export function agentOf(value: unknown): AgentChoice | undefined {
   if (value === undefined || value === "opencode") return undefined
   if (value === "claude") return value
-  const retired =
-    typeof value === "string"
-      ? ` ("${value}" looks like an agent contract name: that setting is retired — the contract is always .opencode/agent/auto.md; delete the key, or set "claude")`
-      : ""
-  throw new Error(`${CONFIG_FILE} agent must be opencode|claude${retired}`)
+  const rule = RETIRED_KEYS.agent!
+  throw new Error(`${CONFIG_FILE} ${rule.retired(value) ? rule.message(value) : "agent must be opencode|claude"}`)
 }
 
 // parallel: none|low|medium|high; absent and "none" both mean none (undefined),
@@ -259,38 +305,6 @@ function acceptanceGateOf(value: unknown, known: readonly string[]): string[] | 
   if (unknown.length) throw new Error(`${CONFIG_FILE} acceptanceGate names unknown phase type(s) ${unknown.join(", ")} (known: ${known.join(", ")})`)
   if (new Set(value).size !== value.length) throw new Error(`${CONFIG_FILE} acceptanceGate lists a phase type twice`)
   return value.length ? value : undefined
-}
-
-// source 缺省 undefined(非迁移场景);存在时 dir 须为相对工作目录的不含 .. 相对
-// 路径、path 须为相对 dir 的非空相对路径(均防目录逃逸——会话 cwd 是工作目录,
-// 相对路径即直接可用)。存在性校验只在 init 做(run 侧源系统可能已下线)。
-function sourceOf(value: unknown): { dir: string; path: string } | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${CONFIG_FILE} source must be a { "dir": ..., "path": ... } object`)
-  }
-  const record = value as Record<string, unknown>
-  const path = record.path
-  if (typeof path !== "string" || !path) throw new Error(`${CONFIG_FILE} source.path must be a non-empty string`)
-  if (isAbsolute(path) || path.split(/[\\/]+/).includes("..")) {
-    throw new Error(`${CONFIG_FILE} source.path must be a relative path without .. (relative to source.dir)`)
-  }
-  const dir = stringOf("source.dir", record.dir)
-  if (isAbsolute(dir) || dir.split(/[\\/]+/).includes("..")) {
-    throw new Error(`${CONFIG_FILE} source.dir must be a relative path without .. (relative to the working directory)`)
-  }
-  return { dir, path }
-}
-
-// destDir 缺省 undefined(迁移产出直接落在工作目录);存在时须为相对工作目录的
-// 不含 .. 相对路径。不做存在性校验(目标目录常由迁移过程创建)。
-function destDirOf(value: unknown): string | undefined {
-  if (value === undefined) return undefined
-  const dir = stringOf("destDir", value)
-  if (isAbsolute(dir) || dir.split(/[\\/]+/).includes("..")) {
-    throw new Error(`${CONFIG_FILE} destDir must be a relative path without .. (relative to the working directory)`)
-  }
-  return dir
 }
 
 function stringOf(key: string, value: unknown): string {
