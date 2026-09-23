@@ -1,7 +1,8 @@
-// 阶段循环(--phases): 阶段规划会话(planPhase)、阶段交接(handoverPhase + 步进包装
-// handoverWithStep)与阶段路由主循环(runPhaseLoop),runAll 原闭包转顶层函数,捕获量
-// 显式化为 LoopCtx(定义在 ./loop-task)。
-// 拆分自 src/loop.ts(plans/0024-module-split-plan.md S16,纯搬运)。不依赖 loop.ts。
+// Phase loop (--phases): the phase handover (handoverPhase and its step wrapper
+// handoverWithStep) and the phase routing loop (runPhaseLoop), runAll's former
+// closures as top-level functions with their captures made explicit as LoopCtx
+// (defined in ./loop-task). Phase planning lives in ./loop-plan (plans/0053 A2).
+// Split out of src/loop.ts (plans/0024-module-split-plan.md S16, pure move). Does not depend on loop.ts.
 import { mkdir, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { requireArtifact } from "./artifact"
@@ -11,195 +12,16 @@ import { maybeExit } from "./exit"
 import { clearSticky, consumeFailback } from "./failback"
 import { commitPending, commitTree } from "./git"
 import { hibernatePause } from "./hibernate"
-import { extractKnowledge, priorKnowledgeDigest } from "./knowledge"
+import { extractKnowledge } from "./knowledge"
 import { banner, log } from "./log"
+import { phaseState, phaseTitle, planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
-import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE } from "./numbering"
-import {
-  completePhase,
-  phaseAcceptanceDoc,
-  phaseGates,
-  phaseHandoverDoc,
-  phaseKey,
-  phaseLabel,
-  phaseName,
-  prevRoundDigest,
-  readPhases,
-  routePhase,
-  type PhaseState,
-  type PhaseUnit,
-} from "./phases"
-import { renderPhaseHandover, renderPhasePlan } from "./prompt"
-import { projectBriefText } from "./brief"
-import { roundBriefText } from "./round-brief"
+import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, routePhase, type PhaseUnit } from "./phases"
+import { renderPhaseHandover } from "./prompt"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
-import { plannedTaskProblems, qualifiedPhase, resetPlanning, takenTaskIds, taskIndexPath } from "./tasks"
 import { closeStep, openStep } from "./resume"
 import { statsPhase } from "./stats"
 import { stepPause } from "./step"
-
-// 阶段索引(路由已校验过;此处再读只为取完成集与前后序,缺失/非法按空处理)。
-async function phaseState(directory: string): Promise<PhaseState> {
-  return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set() }
-}
-
-// 阶段显示名(日志/提交标题): P02-design 设计
-const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(unit)}`
-
-// 阶段规划会话(E 节): 旁路一次性,复用 requireArtifact 骨架,产物 = 本阶段任务索引
-// <阶段目录>/tasks.md + 各任务的 docs/T-NNN/todo.md(M3.4,plans/0047 L3),collect 按
-// mandatory 策略形检(plannedTaskProblems)。伪任务 PLAN 不进任务链、不写进度记录。
-// 返回 0 = 规划完成。
-export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const { directory, opts, server: serverHandle, agentName, repl } = ctx
-  // 自动编号(config.autoNumber): 规划会话的编号起点来自 .auto/next-task
-  // 记录;记录缺失先恢复(无历史证据直接写 1,有证据开 AI 推导会话,见
-  // src/numbering.ts),恢复受阻即退出 2。恢复会话本身会产生一次统一提交
-  // (stage=numbering),先于规划会话。
-  let numberStart: number | undefined
-  if (opts.autoNumber) {
-    const numbering = await ensureNumbering(serverHandle.client, directory, {
-      agent: agentName,
-      dir: directory,
-      verbose: opts.verbose,
-      waitAnswer: opts.waitAnswer,
-      commit: opts.commit,
-      contextLimit: opts.contextLimit,
-      permission: opts.permission,
-      interactive: repl,
-      server: serverHandle,
-      mode: opts.mode,
-    })
-    if (numbering.type === "dirty") {
-      log(`⏸ worktree not clean before restoring the numbering record; handle it manually (commit/clean) and re-run:`)
-      for (const file of numbering.files) log(`  ${file}`)
-      return 2
-    }
-    if (numbering.type === "blocked") {
-      log(`⏸ numbering-record restore session blocked (implicit block, investigate and re-run):\n${numbering.question}`)
-      return 2
-    }
-    numberStart = numbering.next
-  }
-  // The project brief (plans/0052 D9), comments stripped: an untouched stub injects nothing.
-  const brief = await projectBriefText(directory)
-  // Earlier phases' handovers (injection discipline): only the distilled
-  // handovers are injected, never the earlier phases' raw docs/. Each done phase
-  // that precedes this one in the phase index is appended in order; the handover
-  // is the permanent P<nn>-<type>/handover.md in the phase directory, and a phase
-  // without one is listed as "(no handover document)".
-  const state = await phaseState(directory)
-  const earlier = state.phases.slice(0, state.phases.findIndex((unit) => unit.id === phase.id))
-  const handovers = (
-    await Promise.all(
-      earlier
-        .filter((unit) => state.done.has(unit.id))
-        .map(async (unit) => {
-          const doc = phaseHandoverDoc(unit)
-          const text = await Bun.file(join(directory, doc)).text().catch(() => undefined)
-          return [`### ${phaseTitle(unit)}(${doc})`, "", text?.trim() || "(no handover document)"].join("\n")
-        }),
-    )
-  ).join("\n\n")
-  // Extra injection for the round's first planning session: ① prior knowledge
-  // (the shell's startup distillation of existing migration results,
-  // docs/R-NN/prior-kb.md, see src/knowledge.ts); ② the previous round's
-  // conclusions (when a previous round directory exists). Later phases follow the
-  // handover chain and get neither again.
-  // "First" = no completed phase of this round has tasks (plans/0049 G4): a
-  // leading task-less knowledge phase has no planning session and must not
-  // swallow the digest.
-  let prevRound: string | undefined
-  if (!state.phases.some((unit) => state.done.has(unit.id) && unit.entry.hasTasks)) {
-    const parts = [await priorKnowledgeDigest(directory), await prevRoundDigest(directory)].filter((part): part is string => Boolean(part?.trim()))
-    prevRound = parts.length ? parts.join("\n\n") : undefined
-    if (prevRound) log("ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)")
-  }
-  // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
-  // plans against the round's goal and criteria; an untouched stub injects nothing.
-  const round = await roundBriefText(directory, state.round)
-  const taskIndex = taskIndexPath(phase)
-  const phaseId = qualifiedPhase(phase)
-  // 已占用的任务编号: 其他阶段任务索引列出的与已完成的任务(本阶段规划自身的遗留
-  // 不算——中断续跑/反馈重试会再写同一批编号)。
-  const taken = await takenTaskIds(directory, phase)
-  let problems: string[] = []
-  log(`▶ starting the phase planning session to write ${taskIndex} and the task documents`)
-  const planned = await requireArtifact(
-    serverHandle.client,
-    { id: "PLAN", title: `phase planning (${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
-    renderPhasePlan({
-      phase: phase.entry,
-      phaseId,
-      taskIndex,
-      brief,
-      round,
-      handovers,
-      prevRound,
-      mode: opts.mode,
-      // 本轮阶段索引无独立 analysis/design 阶段 → implement 阶段规划注入裁剪注记
-      trimmedPhases: !state.phases.some((unit) => unit.type === "analysis" || unit.type === "design"),
-      numberStart,
-      parallel: opts.parallel,
-    }),
-    {
-      agent: agentName,
-      dir: directory,
-      verbose: opts.verbose,
-      waitAnswer: opts.waitAnswer,
-      commit: opts.commit,
-      contextLimit: opts.contextLimit,
-      permission: opts.permission,
-      interactive: repl,
-      server: serverHandle,
-      mode: opts.mode,
-    },
-    {
-      kind: "phase planning",
-      step: { step: "phase-plan", unit: phaseKey(phase).id },
-      // Independent hidden task unit: entry clean gate + SHA baseline + close-out
-      // check (plans/0021-commit-boundary-design.md).
-      unitStart: true,
-      artifact: `a valid task index ${taskIndex} with its task documents (at least one task)`,
-      detail: "missing, no task, a non-compliant task document, or a task number reusing a taken number",
-      get requirement() {
-        return (
-          `write the task index ${taskIndex} (one line per task, \`- [ ] T-NNN <task title>\`, at least one; even if you believe this phase has nothing to do, write one explanatory task) ` +
-          `and each task's docs/T-NNN/todo.md (title line \`# T-NNN: <task title>\`, field line \`Phase: ${phaseId}\`, ` +
-          `the three sections \`## Goal\` / \`## Scope\` / \`## Acceptance\`, last line \`<!-- auto: eof -->\`).` +
-          (problems.length ? ` Problems last time: ${problems.join("; ")}.` : "")
-        )
-      },
-      commit: { stage: "phase-plan", subject: `PLAN plan ${phaseTitle(phase)}` },
-      reset: () => resetPlanning(directory, phase),
-      collect: async () => {
-        const checked = await plannedTaskProblems(directory, phase, { before: taken, numberStart })
-        problems = checked.problems
-        return problems.length ? undefined : checked.ids
-      },
-    },
-  )
-  if (!Array.isArray(planned)) {
-    if (planned.type === "dirty") {
-      log(`⏸ worktree not clean before starting the phase planning session; handle it manually (commit/clean) and re-run:`)
-      for (const file of planned.files) log(`  ${file}`)
-    } else {
-      log(`⏸ phase planning session blocked (implicit block, investigate and re-run):\n${planned.question}`)
-    }
-    return 2
-  }
-  // 自动编号: 规划成功即把编号记录推进到本次最大编号 + 1(只增不减),
-  // 后续阶段/轮次的规划会话自该记录续接,编号在目标目录永不重复。
-  if (numberStart !== undefined) {
-    const next = await advanceNextTask(directory, planned)
-    log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
-  }
-  log(`✓ phase planning complete: ${taskIndex} lists ${planned.length} task(s)`)
-  // 收口: 删除本步骤的 driver 侧恢复点(产物已校验、提交与编号推进均完成)。
-  // 在此之前被 kill → 记录仍 active,下次运行经 openStep 重入规划并复用会话。
-  await closeStep(directory, "phase-plan", phaseKey(phase).id)
-  return 0
-}
 
 // 阶段交接(F 节,docs 永不移动): ① 蒸馏会话(AI 唯一职责,旁路一次性)产出
 // 阶段目录内的永久交接文档 docs/R-NN/P<nn>-<type>/handover.md(落定不移动)→
@@ -385,18 +207,6 @@ export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<
   // sticky holder 在此清零;/failback 请求同点消费。
   clearSticky()
   consumeFailback()
-  return 0
-}
-
-// Phase planning plus the plan-review pause (plans/0049 G5): at
-// OPENCODE_AUTO_STEP ≥ phase the run holds after the planning commit, before
-// the first task, so tasks.md and the task documents can be reviewed; /exit
-// takes effect at the same point.
-async function planWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
-  const code = await planPhase(ctx, phase)
-  if (code !== 0) return code
-  await stepPause("phase", `phase ${phaseTitle(phase)} planning`, { interactive: ctx.repl, dir: ctx.directory })
-  maybeExit("phase", `phase ${phaseTitle(phase)} planning`)
   return 0
 }
 

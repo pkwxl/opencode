@@ -17,11 +17,9 @@ import {
   renderDecompose,
   renderDryrun,
   renderHandoffSteer,
-  renderImplementPlan,
   renderKnowledge,
   renderNumberRecovery,
   renderPhaseHandover,
-  renderPhasePlan,
   renderPriorKnowledge,
   renderStuckHint,
   renderSubtask,
@@ -32,6 +30,7 @@ import {
   renderWrapup,
   type ScriptRun,
 } from "../src/prompt"
+import { renderImplementPlan, renderPhasePlan } from "../src/prompt-plan"
 import type { ResolveItem } from "../src/resolve"
 import type { StuckHit } from "../src/stuck"
 import { renderTemplate, renderText } from "../src/template"

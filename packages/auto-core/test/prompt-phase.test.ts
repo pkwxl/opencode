@@ -1,15 +1,9 @@
-// src/prompt.ts 阶段族渲染的单测: 阶段规划/阶段交接/知识提取/编号恢复/implement 快捷模式。
+// src/prompt.ts + src/prompt-plan.ts 阶段族渲染的单测: 阶段规划/阶段交接/知识提取/编号恢复/implement 快捷模式。
 // 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
 
 import { describe, expect, test } from "bun:test"
-import {
-  renderImplementPlan,
-  renderKnowledge,
-  renderNumberRecovery,
-  renderPhaseHandover,
-  renderPhasePlan,
-  renderPriorKnowledge,
-} from "../src/prompt"
+import { renderKnowledge, renderNumberRecovery, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
+import { renderImplementPlan, renderPhasePlan } from "../src/prompt-plan"
 import { usePromptLibrary } from "../src/template"
 import { migrate, plan } from "./fixtures/prompt"
 import { parsePhaseTypeFile } from "../src/phases/custom"

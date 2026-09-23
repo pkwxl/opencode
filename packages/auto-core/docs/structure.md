@@ -38,7 +38,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Intent packs | Frozen schema of the (b)-class content (quality bars, phase duties, acceptance semantics, decision governance, artifact conventions); built-in packs + the project overlay | `src/intent/types.ts`, `src/intent/load.ts`, `templates/intents/default.md` (0031–0034, 0043) |
 | Modes | `-m/--mode` scenario guidance, sectioned-file templates | `src/mode.ts`, `templates/modes/` |
 | Template engine | Load/render prompt templates, partials, project overrides in `.opencode/auto/prompts/`, protocol-marker tiers | `src/template.ts`, `templates/prompts/_partials.md` (0033) |
-| Prompt assembly | Turns task/run data into template variables; all copy lives in `templates/prompts/*.md` | `src/prompt.ts`, `templates/prompts/` |
+| Prompt assembly | Turns task/run data into template variables; all copy lives in `templates/prompts/*.md` | `src/prompt.ts`, `src/prompt-plan.ts` (planning renderers, 0053), `templates/prompts/` |
 
 ### phases — what a phase is
 
@@ -82,7 +82,8 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 |---|---|---|
 | Run entry | `runAll`: preflight, agent start, interactive input, Ctrl+C handling, exit codes | `src/loop.ts` |
 | Preflight | Prompt library, agent-contract check, stats, read-only guard, handover restore, clean gate, housekeeping commit; `RunAllOpts` | `src/loop-preflight.ts` |
-| Phase loop | Phase planning session, phase handover, phase routing | `src/loop-phase.ts` (0006, 0047) |
+| Phase loop | Phase handover, phase routing | `src/loop-phase.ts` (0006, 0047) |
+| Phase planning | Phase planning session and its plan-review pause; the phase-state helpers the phase loop shares | `src/loop-plan.ts` (0006, 0047, 0053) |
 | Task loop | Iterates a phase's tasks; `LoopCtx` | `src/loop-task.ts` |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |
 | Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only) | `src/conclusion.ts` (0019, 0020) |

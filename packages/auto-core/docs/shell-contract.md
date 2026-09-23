@@ -56,6 +56,7 @@ Shell differences are injected exclusively through the following extension point
 **Changes shells must absorb when refreshing the core snapshot (CLI convergence P3a, `plans/0053`, 2026-09-23):**
 
 - **Run lock** (D1–D3): `runAll` takes `.auto/run.lock` before preflight and returns 1, logging the holder, while another process holds it, so every shell's `run` is covered with no change. `auto-core/lock` exports `acquireRunLock(dir, command)` (re-entrant per process: a shell command holding the lock can still call `runAll`), `liveRunLock(dir)` (the holder, `"unreadable"`, or undefined for none or a stale one; read-only), `lockLines(dir, holder)` (the refusal) and `lockStatusLine(holder)`; the texts use the profile's `bin`. A shell whose commands write the config layer or the round setup should refuse them with exit 1 while `liveRunLock` returns a holder, and print `lockStatusLine` first in its status view. `packages/auto` is the reference (`init`, `continue`, `amend`, `fix`, `reset` refuse; `-f` does not override; `status` shows the lock first).
+- **Moved exports** (A2, unchanged code, no re-exports left): `renderPhasePlan` and `renderImplementPlan` moved from `auto-core/prompt` to `auto-core/prompt-plan`; `planPhase` moved from `auto-core/loop-phase` to `auto-core/loop-plan`.
 
 ## D. Branches and merge flow
 

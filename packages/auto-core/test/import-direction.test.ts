@@ -117,12 +117,16 @@ const CLASSIFIED: Record<string, Domain> = {
   lock: "driver",
   log: "driver",
   "loop-phase": "driver",
+  // Phase planning, moved out of loop-phase (plans/0053 A2).
+  "loop-plan": "driver",
   "loop-preflight": "driver",
   "loop-progress": "driver",
   "loop-task": "driver",
   loop: "driver",
   numbering: "driver",
   opts: "driver",
+  // The planning renderers, moved out of prompt.ts (plans/0053 A2).
+  "prompt-plan": "driver",
   refcheck: "driver",
   reset: "driver",
   resolve: "driver",

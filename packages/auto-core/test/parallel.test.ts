@@ -5,7 +5,8 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { phaseTypeOfLetter } from "../src/phases/registry"
-import { renderImplementPlan, renderPhasePlan, useIntentPacks } from "../src/prompt"
+import { useIntentPacks } from "../src/prompt"
+import { renderImplementPlan, renderPhasePlan } from "../src/prompt-plan"
 
 const dirs: string[] = []
 function tempDir() {

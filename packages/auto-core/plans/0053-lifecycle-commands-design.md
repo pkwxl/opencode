@@ -503,7 +503,10 @@ Each step ends with `bun typecheck` and `bun test` in `packages/auto-core` and `
     - `continue` refuses too, until C2 retires it: it writes the config and the round setup.
     - When acquiring creates `.auto/`, release removes it again while it is empty, so a run refused in preflight leaves the directory as it found it.
     - The §8 lock items landed with the step: `test/lock.test.ts`, and the shell e2e for the refusals and the `status` line.
-  - [ ] A2 Pure moves: `planPhase`/`planWithStep` → `loop-plan.ts`; planning renderers → `prompt-plan.ts`.
+  - [x] A2 Pure moves: `planPhase`/`planWithStep` → `loop-plan.ts`; planning renderers → `prompt-plan.ts`. Implementation notes:
+    - `phaseState` and `phaseTitle` moved with the planner and are exported from `loop-plan`, which `loop-phase` imports. The direction is `loop-phase` → `loop-plan` → `loop-task`, with no cycle.
+    - `prompt-plan` renders through `prompt.ts`'s own helpers, now exported (`renderPrompt`, `intentText`, `phaseTag`, `modeText`), so there is still one render exit. `prompt.ts` keeps its import set, so its `FROZEN_IMPORTS` entry is unchanged.
+    - No re-exports are left. The four tests that render the planning prompts import `prompt-plan`, and the goldens are byte-identical.
   - [ ] A3 `plan-input.ts`, role `planningInput`, the `phase-plan.md` input block, the missing-slot warning (D9–D11).
   - [ ] A4 m-mode planning on `planPhase`; open-step order; `resumeModelNow` role; delete `implement.ts`; retire `--implement-*` (D12–D13).
   - [ ] A5 `stopBefore` in `runAll`/`runPhaseLoop`; `planPrelude` rows 1–2 and 4–9 (D4–D8).
