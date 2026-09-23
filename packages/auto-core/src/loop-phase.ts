@@ -17,6 +17,7 @@ import { banner, log } from "./log"
 import { phaseState, phaseTitle, planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
 import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, routePhase, type PhaseUnit } from "./phases"
+import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
 import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
@@ -194,6 +195,10 @@ function logGateStop(phase: PhaseUnit, problems: string[], acceptance: string | 
 // 即打印轮次完成行退出 0。
 // 步进暂停(phase 边界,OPENCODE_AUTO_STEP ≥ phase): 交接(完成+提交)
 // 完成后、下一轮路由前硬暂停——最后一个阶段暂停后回车即「全部阶段已完成」退出。
+// plan runs the same loop under its stop condition (opts.stopBefore,
+// plans/0053 D6): it goes through handovers and knowledge phases as run does,
+// and stops after a successful planning step or where an execute route would
+// start, printing what to review; the complete route adds the next step (D8).
 export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, repl } = ctx
   const code = await handoverPhase(ctx, phase)
@@ -213,6 +218,17 @@ export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<
 }
 
 export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
+  try {
+    return await phaseLoop(ctx)
+  } finally {
+    // plan's input backstop (plans/0053 D8): the prelude refuses an input no
+    // phase would take, so this fires only where the loop stopped short of a
+    // planning step (a gate, a block, a phase whose tasks were listed by hand).
+    if (ctx.input) log("⚠ the planning input was not used: no planning step ran on it, so it was not saved; pass it again to a later plan")
+  }
+}
+
+async function phaseLoop(ctx: LoopCtx): Promise<number> {
   const { directory, opts, server: serverHandle, agentName, repl } = ctx
   for (;;) {
     const route = await routePhase(directory)
@@ -228,9 +244,13 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       const state = await phaseState(directory)
       const lines = await roundCompleteLines(directory, { phaseCount: state.done.size })
       if (lines) for (const line of lines) log(line)
-      // Round-close report (plans/0049 G8, anchor a): the checks continue will
-      // enforce, reported on every complete run; the exit code is unaffected.
+      // Round-close report (plans/0049 G8, anchor a): the checks the next
+      // round's start enforces, reported on every complete run; the exit code
+      // is unaffected.
       for (const line of roundCloseLines(await roundCloseProblems(directory, state.round, { build: opts.build }))) log(line)
+      // plan does not open the next round here (plans/0053 D8): the round's
+      // ## Close cannot be filled in yet, so the round-close checks would fail.
+      if (opts.stopBefore === "execute") log(roundCompleteNext(directory, state.round))
       return 0
     }
     // 阶段切换挂点(STATS_PLAN §3): 阶段限定编号变化重置 phase 桶;相同编号幂等。
@@ -279,7 +299,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
         if (open.step === "phase-plan") {
           banner(`${phaseTitle(route.phase)} phase planning`)
           const code = await planWithStep(ctx, route.phase)
-          if (code !== 0) return code
+          if (code !== 0 || opts.stopBefore === "execute") return code
           continue
         }
         // 交接重入仅当文件路由也是 handover(本阶段任务全部 done): 否则(尚有
@@ -306,7 +326,7 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
     // like a phase (plans/0053 D12).
     if (ctx.manual && route.type !== "execute" && !(route.type === "plan" && ctx.input)) {
       if (route.type === "plan") {
-        log(`ℹ no tasks listed in ${route.plan.index}; add task lines there (with docs/T-NNN/todo.md per task) and re-run`)
+        for (const line of emptyIndexNotice(directory, route.plan.index)) log(line)
         return 0
       }
       log("✓ all tasks complete")
@@ -363,10 +383,19 @@ export async function runPhaseLoop(ctx: LoopCtx): Promise<number> {
       }
       banner(`${phaseTitle(route.phase)} phase planning`)
       const code = await planWithStep(ctx, route.phase)
-      if (code !== 0) return code
+      // plan's stop condition (plans/0053 D6): a planning step that succeeded
+      // is where plan stops; planWithStep printed the summary.
+      if (code !== 0 || opts.stopBefore === "execute") return code
       continue
     }
     if (route.type === "execute") {
+      // plan's stop condition (plans/0053 D6, D7): an execute route this run
+      // did not plan (planning stops the run itself), e.g. a next phase whose
+      // tasks were listed by hand. An input left over is plan's usage error.
+      if (opts.stopBefore === "execute") {
+        for (const line of executeNotice(directory, route, ctx.manual)) log(line)
+        return ctx.input ? 1 : 0
+      }
       const code = await runTaskLoop(ctx, route.phase)
       if (code !== 0) return code
       continue

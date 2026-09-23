@@ -82,9 +82,10 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 |---|---|---|
 | Run entry | `runAll`: preflight, agent start, interactive input, Ctrl+C handling, exit codes | `src/loop.ts` |
 | Preflight | Prompt library, agent-contract check, stats, read-only guard, handover restore, clean gate, housekeeping commit; `RunAllOpts` | `src/loop-preflight.ts` |
-| Phase loop | Phase handover, phase routing | `src/loop-phase.ts` (0006, 0047) |
+| Phase loop | Phase handover, phase routing; plan's stop condition (`stopBefore`) | `src/loop-phase.ts` (0006, 0047, 0053) |
 | Phase planning | The one planner: phased and m-mode planning sessions and their plan-review pause; the phase-state helpers the phase loop shares | `src/loop-plan.ts` (0006, 0047, 0053) |
 | Planning input | A phase's `plan-input.md`: read, persist, and commit before the planning unit | `src/plan-input.ts` (0053 D9) |
+| Plan prelude | `planPrelude`: the routes `plan` settles without an agent (establish a round, the round-close gate, notices, input refusals); the lines `plan` prints where its loop stops | `src/plan.ts` (0053 D4–D8, D15) |
 | Task loop | Iterates a phase's tasks; `LoopCtx` | `src/loop-task.ts` |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |
 | Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only) | `src/conclusion.ts` (0019, 0020) |

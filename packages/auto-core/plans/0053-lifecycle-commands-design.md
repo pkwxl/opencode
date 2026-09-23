@@ -522,7 +522,22 @@ Each step ends with `bun typecheck` and `bun test` in `packages/auto-core` and `
     - Shell: `--implement-file` / `--implement-prompt` are `RETIRED_FLAGS` entries, still value-parsed. The run, continue and amend messages, init's checks, its task-index guard, the `subtask`/`wrapup` defaults and the `implementPlan` call are gone. init's note that `--auto-number` has no effect under `phases = "m"` went too, since m-mode planning now consumes the record.
     - README: the shortcut section became "由 AI 规划任务" (the retirement and how m-mode planning works); A6 adds the `plan` section. Until A6 the retired notice names a `plan` command that does not exist yet.
     - Tests: the strict-resume role pass-through (`artifact.test.ts`, `unit-commit.test.ts`); one e2e test of the retired notice replaces the shortcut block; the amend refusal and auto-number e2e tests are updated. The loop-level m-mode cases stay in A7.
-  - [ ] A5 `stopBefore` in `runAll`/`runPhaseLoop`; `planPrelude` rows 1–2 and 4–9 (D4–D8).
+  - [x] A5 `stopBefore` in `runAll`/`runPhaseLoop`; `planPrelude` rows 1–2 and 4–9 (D4–D8). Implementation notes:
+    - `planPrelude(dir, { phases, build, input })` lives in `src/plan.ts`. `append` joins it with row 10 (B3). `<bin>` comes from the shell profile, as in preflight, not from an option. The prelude runs the legacy-layout check itself, so it never writes into an old layout, whoever calls it.
+    - Row 1 means the current round's phase index is missing. For R-(N>1) the previous round must also be complete, as `continue` required, before its G8 re-runs; otherwise exit 1 with nothing written.
+    - Row 6's input check follows the loop. The target is the current phase when it plans tasks; otherwise it is the first phase after the handover, skipping task-less phases. A target whose index already lists tasks also refuses the input, because the loop would stop on its execute route.
+    - A G8 failure exits 2, printing `roundCloseLines` between a heading and a `next:` line. `roundCloseLines`' failure heading no longer names `continue`: "the next round cannot open until these are fixed".
+    - The stop lines live in `plan.ts` (`executeNotice`, `emptyIndexNotice`, `plannedLines`, `roundCompleteNext`). The prelude and the loop share them, so `plan` says the same thing wherever it stops. Pointers to commands that do not exist yet are left out: `plan --append` and `close` join the execute notice and the planned lines in P3b (B3, B5). Until then, the refusal of input on a planned phase says appending arrives with `plan --append`.
+    - Loop:
+      - `LoopCtx.input` is seeded from `planInput`.
+      - `LoopCtx.planned` holds the ids of the last planning step, not a count, because m mode's summary names the id span.
+      - Under `stopBefore`:
+        - `planWithStep` prints the summary instead of the G5 pause, and both of its call sites return.
+        - An execute route prints the notice and returns 0, or 1 when the input was never used.
+        - The complete route adds D8's `next:` line.
+      - `runPhaseLoop` warns once, on any exit, when the input was never used. This is D8's backstop, and it also covers a gate or a blocked step.
+    - `run`'s m-mode empty-index line is now `emptyIndexNotice`, which names `plan -p | --file` (D15). Otherwise `run` is unchanged.
+    - Tests: `test/plan.test.ts` covers every prelude row (git fixtures for G8) and the stop lines. The loop-level cases (stopping after planning, through a handover, on an execute route) stay in A7.
   - [ ] A6 The shell's `plan`; shared run-options builder; usage text; README `plan` section; glossary rows made live (D14–D15).
   - [ ] A7 Tests (§8, P3a parts), including the loop harness.
 - [ ] **P3b**

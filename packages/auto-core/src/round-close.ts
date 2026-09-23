@@ -1,6 +1,6 @@
 // Round-close gate (M4.2, plans/0049 G8; root plan D12 ③, 0036 D12, open
 // question 15-⑦ ruled "middle form"): whether a round whose phases are all
-// done may be closed, i.e. whether `continue` may start the next round. Three
+// done may be closed, i.e. whether the next round may start. Three
 // checks, all read-only:
 //   1. the whole-tree P1 prohibition scan — the unit close-out scan
 //      (document/process-refs.ts) widened from "lines the unit added" to every
@@ -12,8 +12,9 @@
 //      were accepted as lost. The gate checks presence, not content — no
 //      mechanical criterion tells which rationale had to survive.
 // Two anchors: the complete route reports it on every run (loop-phase.ts), and
-// the shells' continue precheck blocks on it. No state is written, so routing
-// stays a pure function of the files.
+// the next round's start blocks on it: plan's prelude (plan.ts, exit 2,
+// plans/0053 D4) and the shells' continue precheck until continue retires. No
+// state is written, so routing stays a pure function of the files.
 import { join } from "node:path"
 import { roundBriefPath } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
@@ -21,14 +22,14 @@ import { repoRoots, unitAddedLines } from "./git"
 import { closeSection, ROUND_CLOSE_HEADING } from "./round-brief"
 
 // The build's wall-clock cap: generous for a real target build, but a hung
-// build must not hang continue forever.
+// build must not hang the round start forever.
 const BUILD_TIMEOUT_MS = 30 * 60 * 1000
 
 // Lines of build output kept in a failure message.
 const BUILD_TAIL_LINES = 20
 
 export type RoundClose = {
-  // Blocking: continue refuses while any is listed.
+  // Blocking: the next round does not start while any is listed.
   problems: string[]
   // Advisory: bare task-id mentions, a skipped build.
   warnings: string[]
@@ -86,7 +87,7 @@ export function roundCloseLines(close: RoundClose): string[] {
     return ["✓ round close checks passed", ...close.warnings.map((warning) => `  ⚠ ${warning}`)]
   }
   return [
-    "⚠ round close checks: continue will refuse until these are fixed",
+    "⚠ round close checks: the next round cannot open until these are fixed",
     ...close.problems.map((problem) => `  ✗ ${problem}`),
     ...close.warnings.map((warning) => `  ⚠ ${warning}`),
   ]

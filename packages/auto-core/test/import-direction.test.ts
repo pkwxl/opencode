@@ -124,6 +124,8 @@ const CLASSIFIED: Record<string, Domain> = {
   loop: "driver",
   numbering: "driver",
   opts: "driver",
+  // plan's prelude and stop lines (plans/0053 D4–D8); never imports the loop.
+  plan: "driver",
   // The planning input plan-input.md: read, persist, commit (plans/0053 D9).
   "plan-input": "driver",
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
@@ -206,6 +208,11 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "session",
     to: ["artifact"],
     why: "artifact → session is the sanctioned direction (requireArtifact calls runSession); nothing in session may call back into artifact",
+  },
+  {
+    from: "plan",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session"],
+    why: "plan's prelude decides the routes that need no AI before any agent starts (plans/0053 D4); the loop imports plan for its stop lines, never the reverse",
   },
   {
     from: "watch",

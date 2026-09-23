@@ -14,6 +14,7 @@ import { log } from "./log"
 import type { LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
+import { plannedLines } from "./plan"
 import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { renderImplementPlan, renderPhasePlan } from "./prompt-plan"
 import { closeStep } from "./resume"
@@ -190,6 +191,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
   }
   log(`✓ phase planning complete: ${taskIndex} lists ${planned.length} task(s)`)
+  ctx.planned = planned
   // 收口: 删除本步骤的 driver 侧恢复点(产物已校验、提交与编号推进均完成)。
   // 在此之前被 kill → 记录仍 active,下次运行经 openStep 重入规划并复用会话。
   await closeStep(directory, "phase-plan", phaseKey(phase).id)
@@ -261,10 +263,16 @@ async function phasePlanPrompt(
 // Phase planning plus the plan-review pause (plans/0049 G5): at
 // OPENCODE_AUTO_STEP ≥ phase the run holds after the planning commit, before
 // the first task, so tasks.md and the task documents can be reviewed; /exit
-// takes effect at the same point.
+// takes effect at the same point. Under plan's stop condition (plans/0053 D6)
+// the run ends here instead, and that stop is the review point: the summary
+// replaces the pause, and the caller returns.
 export async function planWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const code = await planPhase(ctx, phase)
   if (code !== 0) return code
+  if (ctx.opts.stopBefore === "execute") {
+    for (const line of plannedLines(ctx.directory, phase, ctx.planned ?? [], ctx.manual)) log(line)
+    return 0
+  }
   await stepPause("phase", `phase ${phaseTitle(phase)} planning`, { interactive: ctx.repl, dir: ctx.directory })
   maybeExit("phase", `phase ${phaseTitle(phase)} planning`)
   return 0

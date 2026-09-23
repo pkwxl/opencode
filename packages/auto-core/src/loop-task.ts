@@ -37,6 +37,9 @@ export type LoopCtx = {
   // The planning input this run was given (plans/0053 D9), consumed by the
   // first planning step, which persists it to its phase's plan-input.md.
   input?: PlanInput
+  // The task ids the last planning step wrote, for plan's summary when it
+  // stops after that step (plans/0053 D6).
+  planned?: string[]
 }
 
 // 主任务循环: 依次执行当前阶段任务索引(tasks.md)中的全部任务(子任务/收尾/

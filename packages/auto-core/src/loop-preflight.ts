@@ -17,6 +17,7 @@ import { roundBriefPath } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
+import type { PlanInput } from "./plan-input"
 import { activeIntentText, useIntentPacks } from "./prompt"
 import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
 import type { ParallelLevel } from "./intent/types"
@@ -91,6 +92,13 @@ export type RunAllOpts = {
   // --max-sessions (plans/0046 D9): concurrent AI sessions. Reserved until the
   // MP.3 scheduler exists: only 1 (the default) is accepted.
   maxSessions?: number
+  // plan's stop condition (plans/0053 D6): the run stops once a planning step
+  // has succeeded, or where an execute route would start, and prints what to
+  // review. Absent = run: the loop goes on through execution.
+  stopBefore?: "execute"
+  // The planning input plan hands the run (plans/0053 D9): the first planning
+  // step persists it to its phase's plan-input.md and plans against it.
+  planInput?: PlanInput
 }
 
 // 预检段: 产出 runAll 后续仍用的 agentName 与两个计时器句柄(finally 中关闭);

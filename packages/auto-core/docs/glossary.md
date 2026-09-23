@@ -269,8 +269,8 @@ Unit and outcome states:
 | 强制关闭 | force-close | `close`, `plan --force-close` (planned, `plans/0053` D17–D22, D28) |
 | 已关闭(单元) | closed (unit) | A `done.md` whose field block carries `Closed: <reason>`: done for scheduling, not delivered (planned, `plans/0053` D16); not the same as round close or close-out |
 | 机械交接桩 | mechanical handover | The driver-written `handover.md` of a closed phase: the four sections, no session (planned, `plans/0053` D18) |
-| 规划前置 | plan prelude | The routes `plan` settles without an agent before its loop: establish a round, the round-close gate, notices (planned, `planPrelude`, `plans/0053` D4) |
-| 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute"`: `plan` runs the loop and stops after the planning step (planned, `plans/0053` D6) |
+| 规划前置 | plan prelude | The routes `plan` settles without an agent before its loop: establish a round, the round-close gate, notices, input refusals; the `plan` command that calls it is planned (`planPrelude`, `src/plan.ts`, `plans/0053` D4) |
+| 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute"`: the loop stops after a successful planning step, or where an execute route would start; `plan` passes it (planned) (`src/loop-phase.ts`, `plans/0053` D6) |
 | 规划输入 | planning input | A phase's `plan-input.md` (role `planningInput`): the latest input verbatim, committed on its own before the planning unit and rendered into the planning prompt; a changed text restarts an open planning step in a new session; `plan -p` / `--file` supply it (planned) (`src/plan-input.ts`, `plans/0053` D9–D11) |
 | 追加规划 | append planning | `plan --append`: add tasks after the current phase's existing ones; step kind `phase-append` (planned, `plans/0053` D23–D27) |
 | 并行编排 | parallel orchestration | Deferred; design in `plans/0036` |
