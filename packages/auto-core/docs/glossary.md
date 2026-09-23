@@ -259,6 +259,8 @@ Unit and outcome states:
 | 生命周期命令 | lifecycle command | `plan` / `close` (planned, `plans/0052`) |
 | 配置层 | config layer | What `init` writes and `reset` removes |
 | 全量覆盖 | full overwrite | `init` without `--amend` |
+| 增量修订 | amend | Change the named config keys, keep the rest: today `init --amend`, planned as the `amend` command (`plans/0052` D25) |
+| 配置修复 | config fix | The `fix` command: repair the config layer by rule (planned, `plans/0052` D10–D11) |
 | 强制关闭 | force-close | `close`, `plan --force-close` (planned) |
 | 并行编排 | parallel orchestration | Deferred; design in `plans/0036` |
 | 声明面 | declaration surface | `--parallel`, `--max-sessions` (`plans/0046`) |

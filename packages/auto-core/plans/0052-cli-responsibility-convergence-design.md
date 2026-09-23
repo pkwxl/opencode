@@ -1,12 +1,13 @@
 # 0052 — CLI responsibility convergence: config-only `init`, migration parameters as intent, `plan` and `close` (design)
 
-Status: **design, ruled** (2026-09-23, rulings U1–U4). **Not implemented**: every step in §6 is unticked. Source: user proposal of 2026-09-23 (§0). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
+Status: **design, ruled** (2026-09-23, rulings U1–U6). **Not implemented**: every step in §6 is unticked. Source: user proposal of 2026-09-23 (§0), with a same-day follow-up (§0 item 4, rulings U5–U6). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
 
 ## 0. The proposal
 
 1. Converge `init` on initializing configuration only. A later `init --auto-fix` repairs conflicting or inconsistent configuration by rule.
 2. Remove `--dest-dir`, `--source-dir` and `--source-path`. What they express is user intent, not configuration.
 3. A future `plan` command starts an AI session that plans the next step from the current state. Its `--force-close` option forcibly ends the previous round, phase or task, so work continues on the new plan.
+4. **Follow-up (same day).** Replace `init --auto-fix` with a `fix` command: `init` reads as setting everything up again and could overwrite existing settings. Likewise, turn `--amend` into an `amend` command, which says plainly that it changes individual existing settings.
 
 The request: weigh the strengths and weaknesses, name what can be improved, and propose a better plan.
 
@@ -18,6 +19,8 @@ The request: weigh the strengths and weaknesses, name what can be improved, and 
 | U2 | Shape of `--force-close` | **A standalone `close` primitive.** It is a core `closeUnit` plus a `close <ref> --reason` subcommand, with no AI. `plan --force-close <ref>` is only a shortcut for "close, then plan". |
 | U3 | `continue` | **Fold it into `plan` and retire it.** Opening the next round becomes a `plan` route. |
 | U4 | Target boundary of `init` | **Config layer only.** `init` writes exactly what `reset` removes. Round establishment, `-p` and `--implement-*` move to `plan`. |
+| U5 | Shape and scope of auto-fix | **A standalone `fix` command** (`fix [dir] [-f]`) instead of `init --auto-fix`. It covers the whole config layer: broken `config.json` keys, and config-layer artifacts that are missing or out of step with the current config. |
+| U6 | Shape of `--amend` | **A standalone `amend` command** (`amend [dir] --<key> <value>…`). It is added in P2. `init --amend` is retired in P3c, together with `-p` and `--implement-*`. |
 
 ## 2. Fact baseline
 
@@ -61,6 +64,11 @@ The request: weigh the strengths and weaknesses, name what can be improved, and 
 - **F10 — no run lock.** `protect.ts` only chmods the config files to 0444 during `run`.
 - **F11 — shell contract.** CLI shape belongs to the shell, mechanisms to the core (`docs/shell-contract.md` §A:13). §A's command list omits `reset` (drift).
 - **F12 — the round-start gate G1.** `init`/`continue` leave the round setup uncommitted. `run`'s preflight names the gate when the current `phases.md` has never been committed (`loop-preflight.ts:201-220`).
+- **F13 — `--amend` and refreshing the config layer.**
+  - **A flag that flips the baseline.** `--amend` changes only the baseline, from `CONFIG_DEFAULTS` to the existing config (`index.ts:633-637`). `continue` is always amend. With no `config.json`, `loadProjectConfig` returns the defaults (`config.ts:102-107`), so `init --amend` in a fresh directory is plain `init`.
+  - **The overwrite guard** (clean tree, then confirm) applies only to a full overwrite (`index.ts:783-801`). In a non-TTY the confirm passes.
+  - **Hints name the full overwrite.** Messages that tell a person how to change one key name `init <dir> --<key>`, which resets every other key: `index.ts:179`, `:186-193`, `:285`, `:652`, `:682` and `:714`. Only `:762` names `--amend` (DF8).
+  - **Refresh.** `run`'s preflight rewrites the AGENTS.md block and `.gitignore` and commits them (`loop-preflight.ts:233-247`). A missing or differing agent contract only stops or warns there, naming `init` to rebuild or refresh it (`:158-175`). `check`'s AGENTS.md notes name `init` too (`check.ts:69-87`). Refreshing the contract without restating every key takes `init --amend` with no keys.
 
 ## 3. Classification criterion
 
@@ -68,7 +76,7 @@ A setting's home is decided by **what the driver does with its value**:
 
 | Layer | Test | Carrier | Examples |
 |---|---|---|---|
-| **Config** | The driver *interprets* the value: it branches on it, runs it, or checks it against disk | `.opencode/auto/config.json`, written by `init` | `agent`, `contextLimit`, `subtask`, `idleTime`/`idleMax`, `testByDriver`, `handoverTest`, `autoNumber`, `wrapup`, `phases`, `acceptanceGate`, `build` |
+| **Config** | The driver *interprets* the value: it branches on it, runs it, or checks it against disk | `.opencode/auto/config.json`, written by `init` or `amend`, repaired by `fix` | `agent`, `contextLimit`, `subtask`, `idleTime`/`idleMax`, `testByDriver`, `handoverTest`, `autoNumber`, `wrapup`, `phases`, `acceptanceGate`, `build` |
 | **Intent: selectors** | An enumerated value that picks which intent-pack text is injected | Stays in config | `mode`, `parallel` |
 | **Intent: content** | The driver only *forwards* the value word for word into a prompt | Human-edited documents: `brief.md` (project), `round.md` (round), planning input (one planning step) | migration source/target (today's `source`/`destDir`) |
 | **Lifecycle** | A transition of process state | `plan`, `run`, `close` | round establishment, planning, execution, closing |
@@ -114,17 +122,24 @@ Consequences:
 - **Carrier choice.** Use `brief.md`, not `round.md`: a new round gets a fresh stub, so a target written into `round.md` would be lost in round 2.
 - **Name collision.** F18's future process-doc root must not reuse `destDir`. Otherwise a stale key would be quietly reinterpreted. `source` and `destDir` become permanent tombstones (D3).
 
-### 4.3 `init --auto-fix`: valuable, with rules
+### 4.3 `fix` (was `init --auto-fix`): valuable, with rules
 
 - **Value.** Every key retirement so far has only been an error text telling a person what to edit: `commit: false`, `verify`, the contract name in `agent`, `verifyIdle`/`verifyMax`, and now `source`/`destDir`. A rule table turns each retirement into a migration step that can be executed.
+- **A command, not an `init` flag** (U5).
+  - `init` means "declare the whole config", and a plain `init` *is* a full overwrite. A person reading `init --auto-fix` has reason to fear a re-initialization.
+  - As a flag it had to exclude every other `init` option. An option that excludes all the others is another command.
+  - `fix` must read the raw JSON leniently, because the strict load failure is what it repairs. As its own command, that loading path stays out of `init`.
+  - Its interaction matches `reset`: print the plan, apply the clean-tree gate, confirm, apply. `-f` skips the gate and the confirmation.
+  - **Cost: `fix` is a broad word.** In an AI coding tool it can read as "have the AI fix the code", and a top-level `fix` invites scope creep. The usage text therefore states the scope, the config layer, and phase-index repair stays with `plan` (D22). No existing term is called `fix` (checked against the glossary and `src/`).
 - **Rules for the rules.**
-  - Config layer only. Phase-index inconsistencies belong to `plan` (D22).
+  - Config layer only: `config.json` and the artifacts `init` writes from it. Phase-index inconsistencies belong to `plan` (D22).
   - Two classes. **fixable** means deterministic and meaning-preserving. **manual** means report only, never guess (for example `handoverTest` without `testByDriver`: which side to change is a human decision).
   - Only keys that fail to load or silently lose their meaning are "broken". Valid alternative spellings are not rewritten: a `phases` array, `parallel: "none"`, `agent: "opencode"`.
-  - The read-only 0444 residue left by a killed run needs no rule: `saveProjectConfig` already chmods (`config.ts:128-131`). Without a lock, auto-fix also could not tell residue from a live run.
-  - Starts from the existing config and never resets other keys. Exclusive with every config flag and with `--amend`.
-  - Prints each change, applies the clean-tree gate unless `-f`, and is idempotent.
-  - `run`/`status` add the hint "fix: `init --auto-fix`" to a strict failure when the rule is fixable.
+  - A config-layer artifact that is missing, or differs from what the current config renders, is fixable (U5). Refreshing therefore has a home once `amend` requires a key (D25). Files a person may have edited (`opencode.json`, `brief.md`) are only written when missing, as `init` does.
+  - The read-only 0444 residue left by a killed run needs no rule: `saveProjectConfig` already chmods (`config.ts:128-131`). Without a lock, `fix` also could not tell residue from a live run.
+  - Starts from the existing config, never resets other keys, and takes no config flags.
+  - Prints each change and is idempotent.
+  - `run`/`status` add the hint "fix: `opencode-auto fix <dir>`" to a strict failure when the rule is fixable.
 
 ### 4.4 `plan`: a real need, defined by the current route
 
@@ -163,6 +178,30 @@ Consequences:
   - clearing every resumable record;
   - keeping the round-close integrity gates.
 
+### 4.6 `--amend` → standalone `amend` (U6)
+
+- **Strengths.**
+  - **One command, one contract.** `init` declares the whole config: stateless and reproducible. `amend` changes the named keys and keeps the rest. Today a single flag flips the baseline of the same command (F13).
+  - **A stricter contract becomes possible.** `amend` can refuse without a `config.json` (today `init --amend` there is plain `init`, F13), require at least one key, and load strictly.
+  - **Hints can name the right command.** Every "change one key" hint names `amend` instead of a full overwrite (DF8).
+  - **The timing fits.** Once D21 retires `continue`, "`continue` is always amend" is gone and nothing else shares the amend path.
+- **Costs.**
+  - **A breaking CLI change.** It touches the README, messages, e2e tests and the shell contract's §C mention of `--amend --agent opencode`. By precedent, `--amend` becomes a usage error that names `amend`.
+  - **Shared flag parsing.** `init` and `amend` accept the same config flags, so the parsing leaves the `init` block for one shared function.
+  - `git commit --amend` is a precedent for a flag, but there the verb is still "commit". Under `--amend` the verb is no longer "init".
+- **Transition.** Until P3c, `init --amend -p` and `init --amend --implement-*` are the only way to use `init`'s lifecycle flags without resetting the config.
+  - `-p` has a replacement: edit `brief.md`.
+  - `--implement-*` has none before `plan -p`. Retiring `--amend` in P2 would open a gap for m-mode projects that already have a config.
+
+  So `amend` arrives in P2, and every hint names it from then on. `init --amend` stays until P3c and retires with `-p` and `--implement-*` (D20).
+- **Resulting command surface.**
+  - Config layer: `init`, `amend`, `fix`, `reset`.
+  - Lifecycle: `plan`, `close`, `run`.
+  - Read-only: `check`, `status`.
+  - `continue` is retired (D21).
+
+  CLI shape belongs to the shell (F11): the commands live in `packages/auto`, and the core adds only `config-fix.ts` and message text. The frozen migrate shell is unaffected.
+
 ## 5. Decisions
 
 ### P1 — retire the migration parameters; `init` validates before it writes
@@ -178,7 +217,7 @@ Consequences:
 
   The phase-plan goldens pass a brief and no `sourceDir`, so they should stay byte-identical; confirm during implementation.
 - **D3** A stored `source` or `destDir` fails strictly, like `verify: true`. The message gives the exact fix: copy the value into `brief.md`, then delete the key. The two names are permanent tombstones: no future key reuses them, so F18's process-doc root needs another name.
-- **D4** The full-overwrite baseline read in `init` tolerates retired keys. The overwrite discards them anyway, but it prints each discarded retired key with its value, so a stored `source` is never lost without notice. `--amend` still fails strictly, because it would carry them over. This also removes the latent trap that a stored `commit: false` blocks every re-init.
+- **D4** The full-overwrite baseline read in `init` tolerates retired keys. The overwrite discards them anyway, but it prints each discarded retired key with its value, so a stored `source` is never lost without notice. `init --amend` (and `amend` from P2) still fails strictly, because it would carry them over. From P2 that message names `fix`. This also removes the latent trap that a stored `commit: false` blocks every re-init.
 - **D5** Delete `infer-source`:
   - the template and `renderInferSource`;
   - its registration and tier-1 markers (`template.ts:35/73/106`);
@@ -202,13 +241,13 @@ Consequences:
   - **0035:** update the registry for the removed marker entry.
   - **Message fix:** the m-mode closing line of `init -p` (`index.ts:927`) says "run … to start task planning", but `run` never plans in m mode.
 
-### P2 — the brief stub and `init --auto-fix`
+### P2 — the brief stub, `fix` and `amend`
 
 - **D9** `brief.md` becomes an intent document with a stub, modelled on `round.md`.
   - `init` writes the stub when the file is missing. It has sections `## Goal`, `## Source`, `## Target` and `## Constraints`, each holding only an HTML-comment hint. The hints carry the "keep deliverables out of `docs/` and `.opencode/`" discipline.
   - Planning strips the comments before injecting, reusing the `round-brief.ts` logic. An untouched stub injects nothing.
   - `reset` removes `brief.md` only while it equals the stub, as it does for `opencode.json`. A filled brief is kept.
-- **D10** `src/config-fix.ts` holds a rule table over the raw JSON, returning findings of class `fixable` or `manual`. `validateProjectConfig` stays strict.
+- **D10** `src/config-fix.ts` holds a rule table over the raw JSON and the config-layer artifacts, returning findings of class `fixable` or `manual`. `validateProjectConfig` stays strict.
 
   | Class | Rule | Fix |
   |---|---|---|
@@ -218,13 +257,42 @@ Consequences:
   | fixable | `verifyIdle` / `verifyMax` | rename when the new key is absent, drop when it is present |
   | fixable | `source` / `destDir` | append to `brief.md` under `## Source` / `## Target` (adding the headings if absent), then drop the keys |
   | fixable | legacy `.auto/config.json` mode with no `config.json` | write `config.json` |
+  | fixable | agent contract missing, or differing from the render for the current `testByDriver` | rewrite it (`renderAgentContract`) |
+  | fixable | AGENTS.md block missing, stale, or with legacy/stray marker blocks | `ensurePointer` |
+  | fixable | `.gitignore` lacks the `tmp/` or `.auto/` entry | `ensureGitignore` |
+  | fixable | `opencode.json` or the `brief.md` stub missing | write it; never overwrite (both may hold a person's edits) |
   | manual | anything else `validateProjectConfig` rejects | report only |
-- **D11** `init --auto-fix`:
-  - Its baseline is the existing config. It is exclusive with every config flag and with `--amend`.
-  - It prints each change and applies the clean-tree gate unless `-f`.
-  - It applies all fixable findings, then exits 1 if manual findings remain.
+
+  The artifact rules render from the config, so they run only when the config loads strictly after the key rules. Otherwise they are reported as skipped.
+- **D11** `fix [dir] [-f]` (U5), in place of `init --auto-fix`:
+  - Its baseline is the existing config, read raw. It takes no config flags: any option but `-f` is a usage error, as for `reset`.
+  - Like `reset`, it prints the plan, then applies the clean-tree gate and the confirmation unless `-f`. With nothing to fix it says so and exits 0.
+  - It applies all fixable findings and prints each change, then exits 1 if manual findings remain.
+  - It does not commit: like `init`, it leaves the diff for review.
   - It is idempotent.
-  - `run` and `status` end a strict failure with "fix: `opencode-auto init <dir> --auto-fix`" when the failing rule is fixable.
+  - **Hints.**
+    - `run` and `status` end a strict failure with "fix: `opencode-auto fix <dir>`" when the failing rule is fixable.
+    - The contract hints in preflight (`loop-preflight.ts:158-175`) and the AGENTS.md notes in `check.ts:69-87` name `fix` instead of `init`.
+    - The shell-profile value `agentRecovery: "init"` keeps its name; only the text changes.
+- **D25** `amend [dir] --<key> <value>…` (U6):
+  - **Flags.** It accepts exactly the config flags `init` accepts (`-m`, `--agent`, `--phases`, …), parsed by one shared function. `-p`, `--implement-*`, `-f` and `--amend` are usage errors.
+  - **Refusals.**
+    - Without `config.json`: "nothing to amend; run `init`".
+    - With no key flag: "name at least one key". Refreshing is `fix`.
+  - **Load.** It loads the existing config strictly; a retired key fails with the `fix` hint.
+  - **Checks.** The same as `init`'s, on the effective values: flag values, the mode, handoverTest ⇒ testByDriver, and the prefix guard. It validates, then writes (D7).
+  - **Writes.**
+    - `config.json`, plus the artifacts rendered from it (the agent contract and the AGENTS.md block), since `testByDriver` changes them.
+    - Until P3c it also runs `init`'s round step (`establishRound`, which re-syncs the unstarted tail after a `--phases` change), so moving from `init --amend` loses nothing. P3c removes the step from both (D20, D22).
+    - No overwrite guard, since nothing is discarded. No commit.
+  - **Key removal.** `--parallel none` and `--agent opencode` drop their keys, as today.
+  - **Hints (DF8).** Every "change one key" hint names `amend`: `index.ts:179`, `:186-193`, `:285`, `:652`, `:682` and `:714`. `:762` moves from `init --amend` to `amend`.
+  - **Transition.** `init --amend` keeps working until P3c (D20).
+  - **Docs, with D11.**
+    - The README.
+    - The shell contract's §A command list, which gains `fix` and `amend`.
+    - The config-semantics section of `packages/auto/AGENTS.md`: its watershed `base = amend ? existing : CONFIG_DEFAULTS` becomes the split between the two commands.
+    - The glossary.
 
 ### P3 — lifecycle commands (detailed design and 0035 registration come before code)
 
@@ -283,10 +351,10 @@ Consequences:
 
 **P3c — lifecycle leaves `init`**
 
-- **D20** `init` writes the config layer only: `config.json`, the contract, `opencode.json`, the AGENTS.md block, `.gitignore` and the brief stub. `establishRound`, `-p` and `--implement-*` leave it; each becomes a usage error with a hint (`plan`, or edit `brief.md`).
+- **D20** `init` writes the config layer only: `config.json`, the contract, `opencode.json`, the AGENTS.md block, `.gitignore` and the brief stub. `establishRound`, `-p` and `--implement-*` leave it; each becomes a usage error with a hint (`plan`, or edit `brief.md`). `--amend` retires in the same step, as a usage error that names `amend` (D25), and `amend` drops its round step.
 - **D21** `continue` is retired: a usage error pointing to `plan`.
 - **D22 — phases sync.** When the current round's unstarted tail differs from `config.phases`, `plan` re-syncs it (`syncPhaseIndex` with the prefix guard). `run` detects the mismatch and stops with exit 1, pointing to `plan` (see Q4). `init` keeps a read-only prefix-guard check so a bad value fails at `init`; the check is relaxed when the current round is complete.
-- **D23 — messages.** Messages that say "run init to establish the round" point to `plan`: `phases.ts:314`, `status.ts:27` and `packages/auto/src/index.ts:1026` (`implement.ts:31` goes away with D15). The AGENTS.md-block notes in `check.ts:69-87` are config-layer and keep pointing to `init`.
+- **D23 — messages.** Messages that say "run init to establish the round" point to `plan`: `phases.ts:314`, `status.ts:27` and `packages/auto/src/index.ts:1026` (`implement.ts:31` goes away with D15). The config-layer hints (the AGENTS.md-block notes in `check.ts:69-87` and the contract hints in preflight) already name `fix` from P2 (D11).
 - **D24 — the new-project flow, documented.**
   1. `init`
   2. `plan` (R-01, stops at G1)
@@ -311,11 +379,11 @@ Order: P1 → P2 → P3a → P3b → P3c.
 Each step is verified with `bun typecheck` and `bun test` in `packages/auto-core` and `packages/auto`.
 
 - [ ] **P1** D1–D8: retire the three flags and the two keys, drop `infer-source`, make `init` validate-then-write, fix the m-mode `-p` message, update the docs.
-- [ ] **P2** D9–D11: brief stub and reset comparison, `config-fix.ts`, `init --auto-fix`, fix hints in `run`/`status`.
+- [ ] **P2** D9–D11, D25: brief stub and reset comparison, `config-fix.ts`, the `fix` and `amend` commands, `fix` hints in `run`/`status`/preflight/`check`, `amend` hints (DF8).
 - [ ] **P3 design pass**: a detailed design document for P3 with 0035 registrations (§7) before any code.
 - [ ] **P3a** D12–D16: run lock, `plan` as a stop condition, route table, `implementPlan` merged into `planPhase`, persisted planning input.
 - [ ] **P3b** D17–D19: `closeUnit` and `close`, `plan --append`, `plan --force-close`.
-- [ ] **P3c** D20–D24: `init` config-only, `continue` retired, phases sync owned by `plan`, messages and README flow.
+- [ ] **P3c** D20–D24: `init` config-only (`-p`, `--implement-*` and `--amend` retired), `continue` retired, phases sync owned by `plan`, messages and README flow.
 
 ## 7. Protocol-string impact (0035 registration, P3 design pass)
 
@@ -323,7 +391,7 @@ Each step is verified with `bun typecheck` and `bun test` in `packages/auto-core
 - **`Auto-Stage: force-close`** — a new commit trailer stage. An append planning commit needs its own stage too, for example `phase-append`.
 - **`plan-input.md`** — a new process-document name and role.
 - **`phase-append`** — a new step kind in `.auto/progress.json`. Driver-internal, not visible to sessions.
-- **The `brief.md` stub headings** (`## Source`, `## Target`, …) are scaffolding the driver does not parse, like the non-`## Close` headings of `round.md`. Auto-fix *writes* them; it never reads them back.
+- **The `brief.md` stub headings** (`## Source`, `## Target`, …) are scaffolding the driver does not parse, like the non-`## Close` headings of `round.md`. `fix` *writes* them; it never reads them back.
 - **`.auto/run.lock`** — driver-internal, not visible to sessions.
 - **Removed:** the `infer-source` tier-1 markers (`"sourceDir"`, `"blocked"`).
 
@@ -375,6 +443,7 @@ These do not depend on this design. Each is scheduled in a stage.
 - **DF5 (inferred from code, not reproduced).** A first-time `init --implement-*` in a git repository leaves `init`'s own writes uncommitted. The planning unit's clean gate (`implement.ts:64` `unitStart`) then refuses, and the refusal is reported as blocked (`implement.ts:84-94`). The e2e suite never creates a git repository, so this is untested. → moot after D15/D20.
 - **DF6.** `reset` deletes a human-written `brief.md` (`reset.ts:53-55`). → D9.
 - **DF7.** Shell-contract §A omits `reset`. → D8.
+- **DF8.** Hints that tell a person how to change one key name `init <dir> --<key>`, a full overwrite that resets every other key: `index.ts:179`, `:186-193`, `:285`, `:652`, `:682`, `:714` (F13). In a TTY the overwrite asks first; in CI it passes silently. The contract and AGENTS.md-block hints (`loop-preflight.ts:158-175`, `check.ts:69-87`) name `init` for a refresh. → D25 and D11.
 
 ### 8.4 Open questions (for the P3 design pass)
 
@@ -385,10 +454,11 @@ These do not depend on this design. Each is scheduled in a stage.
 - **Q5** m mode has no `round.md`: how should the G1 message and the `plan` stop line read there?
 - **Q6** Is a `reopen <ref>` command worth having, or is `git revert` of the close commit enough?
 - **Q7** `mode` and `parallel` stay config as intent selectors (§3). Revisit if intent packs gain their own selection mechanism.
+- **Q8** Should `check` also list `fix`'s findings, read-only? `fix` already prints its plan before it asks. Decide in P2.
 
 ## 9. Relationship to other designs
 
-- **0004 (init config) / 0006 (phases, `continue`)**: this document narrows `init` and retires `continue`. Both are historical and not updated.
+- **0004 (init config) / 0006 (phases, `continue`)**: this document narrows `init`, splits `--amend` into the `amend` command and retires `continue`. Both are historical and not updated.
 - **0036 F18/D4, 0013 MP.3**: `destDir` there is the process-doc root, a different concept, and needs a new key name (D3). The run lock and `close`/`--append` state their MP.3 behaviour (D12, D17, D18).
 - **0047**: the two-file-state invariant holds. `Closed:` is a field, not a state (D17).
 - **0049**: G1, G7 and G8 are preserved. `plan` gives the G5 review point a command, and the environment switch stays.
