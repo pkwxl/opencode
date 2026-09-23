@@ -1,6 +1,6 @@
 # 0052 — CLI responsibility convergence: config-only `init`, migration parameters as intent, `plan` and `close` (design)
 
-Status: **design, ruled** (2026-09-23, rulings U1–U6). **P1 and P2 implemented** (2026-09-23, auto-core branch; notes under §6); P3 not started. Source: user proposal of 2026-09-23 (§0), with a same-day follow-up (§0 item 4, rulings U5–U6). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
+Status: **design, ruled** (2026-09-23, rulings U1–U6). **P1 and P2 implemented** (2026-09-23, auto-core branch; notes under §6). **P3 design pass done** (2026-09-23): `plans/0053-lifecycle-commands-design.md`, awaiting rulings on its §9; P3 code not started. Source: user proposal of 2026-09-23 (§0), with a same-day follow-up (§0 item 4, rulings U5–U6). Line numbers are as of auto-core `d9e563234`; search by symbol if they drift. A read-only design review of the same day (§8.1) is folded in.
 
 ## 0. The proposal
 
@@ -393,7 +393,9 @@ Each step is verified with `bun typecheck` and `bun test` in `packages/auto-core
   - D25: `amend` shares `init`'s block (`amendCommand`) and the config-flag list (`CONFIG_FLAGS`, also used by `run`'s frozen-flag loop). It writes config.json, the contract, the AGENTS.md block and the round step; `opencode.json`, `.gitignore` and the brief stub stay with `init` and `fix`.
   - Q8 decided: `check` does not list `fix`'s findings (§8.4).
   - Glossary: "brief" became "project brief"; rows added for the project brief stub and fixable / manual; the amend and config fix rows now point at the commands.
-- [ ] **P3 design pass**: a detailed design document for P3 with 0035 registrations (§7) before any code.
+- [x] **P3 design pass**: a detailed design document for P3 with 0035 registrations (§7) before any code.
+  - Done 2026-09-23: `plans/0053-lifecycle-commands-design.md` (decisions D1–D36; Q1–Q6 answered and the departures from this document listed for ruling in its §9). 0035 amendment "lifecycle-command literals"; glossary rows marked planned.
+  - From here the P3 steps are tracked in 0053 §10; the three lines below stay as the summary.
 - [ ] **P3a** D12–D16: run lock, `plan` as a stop condition, route table, `implementPlan` merged into `planPhase`, persisted planning input.
 - [ ] **P3b** D17–D19: `closeUnit` and `close`, `plan --append`, `plan --force-close`.
 - [ ] **P3c** D20–D24: `init` config-only (`-p`, `--implement-*` and `--amend` retired), `continue` retired, phases sync owned by `plan`, messages and README flow.
@@ -466,6 +468,7 @@ These do not depend on this design. Each is scheduled in a stage.
 - **Q4** D22: should `run` itself re-sync an unstarted tail? The sync is deterministic, but it is a lifecycle step, and U4 gives lifecycle to `plan`.
 - **Q5** m mode has no `round.md`: how should the G1 message and the `plan` stop line read there?
 - **Q6** Is a `reopen <ref>` command worth having, or is `git revert` of the close commit enough?
+- Q1–Q6 are answered in `plans/0053` §9 (recommendations awaiting rulings).
 - **Q7** `mode` and `parallel` stay config as intent selectors (§3). Revisit if intent packs gain their own selection mechanism.
 - **Q8** Should `check` also list `fix`'s findings, read-only? `fix` already prints its plan before it asks. **Decided in P2: no.** `check` keeps one note for a config that does not load and appends the `fix` hint when a key rule applies; its AGENTS.md-block notes name `fix`. The full list is `fix` itself, which changes nothing unless confirmed. Two listings of one rule table would drift.
 

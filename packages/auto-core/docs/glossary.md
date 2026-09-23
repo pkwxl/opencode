@@ -256,8 +256,8 @@ Unit and outcome states:
 | 自动编号 | auto numbering | `--auto-number` |
 | 统计 | stats | `.auto/stats.json` |
 | 只读保护 | read-only guard | `src/protect.ts` |
-| 运行锁 | run lock | Planned, `plans/0052` D12 |
-| 生命周期命令 | lifecycle command | `plan` / `close` (planned, `plans/0052`) |
+| 运行锁 | run lock | `.auto/run.lock`, held by `run` / `plan` / `close`; `init` / `amend` / `fix` / `reset` refuse while it is live (planned, `src/lock.ts`, `plans/0053` D1–D3) |
+| 生命周期命令 | lifecycle command | `plan` / `close` (planned, `plans/0052`, `plans/0053`) |
 | 配置层 | config layer | What `init` writes and `reset` removes |
 | 全量覆盖 | full overwrite | `init` without `--amend`; its baseline read drops retired keys and names them (`loadOverwriteBaseline`, `plans/0052` D4) |
 | 已退役键 | retired key | A config key that fails loading strictly: `commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir` (`RETIRED_KEYS` in `src/config.ts`) |
@@ -266,7 +266,13 @@ Unit and outcome states:
 | 增量修订 | amend | Change the named config keys, keep the rest: the `amend` command (`plans/0052` D25); `init --amend` does the same until P3c |
 | 配置修复 | config fix | The `fix` command: repair the config layer by rule, never resetting a key (`src/config-fix.ts`, `plans/0052` D10–D11) |
 | 可修复 / 需人工 | fixable / manual | The two classes of a config-fix finding: deterministic and meaning-preserving, applied by `fix` / reported only, left to a person (`FixFinding.class`) |
-| 强制关闭 | force-close | `close`, `plan --force-close` (planned) |
+| 强制关闭 | force-close | `close`, `plan --force-close` (planned, `plans/0053` D17–D22, D28) |
+| 已关闭(单元) | closed (unit) | A `done.md` whose field block carries `Closed: <reason>`: done for scheduling, not delivered (planned, `plans/0053` D16); not the same as round close or close-out |
+| 机械交接桩 | mechanical handover | The driver-written `handover.md` of a closed phase: the four sections, no session (planned, `plans/0053` D18) |
+| 规划前置 | plan prelude | The routes `plan` settles without an agent before its loop: establish a round, the round-close gate, notices (planned, `planPrelude`, `plans/0053` D4) |
+| 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute"`: `plan` runs the loop and stops after the planning step (planned, `plans/0053` D6) |
+| 规划输入 | planning input | The text of `plan -p` / `--file`, kept as `plan-input.md` in the phase directory and committed before the planning unit (planned, `plans/0053` D9) |
+| 追加规划 | append planning | `plan --append`: add tasks after the current phase's existing ones; step kind `phase-append` (planned, `plans/0053` D23–D27) |
 | 并行编排 | parallel orchestration | Deferred; design in `plans/0036` |
 | 声明面 | declaration surface | `--parallel`, `--max-sessions` (`plans/0046`) |
 | 调度器 | scheduler | |
@@ -323,6 +329,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 | 降级 | **failover** for models under quota; **capability degradation** for missing agent capabilities. |
 | failover / failback / fallback | Away from the preferred model / back to it / any generic next option. |
 | wrap-up / close-out | AI session writing the report / driver checks and commit after it. |
+| 关闭 / 轮关闭 / 收口 | **close** a unit (a person's `close`: done without delivering, `Closed:`) / **round close** (the G8 gate before the next round) / **close-out** (the driver's checks and commit after every unit). |
 | artifact / deliverable / process document | Anything a unit produces / what the project ships / driver-facing records the deliverable must not reference. |
 | unit / task | "Unit" is the generic term; "task" means `T-NNN` only. |
 | 阶段 | Always **phase**. "Stage" is not a term (it appears only in `Auto-Stage` and "stage-assist document"). |

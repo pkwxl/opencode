@@ -448,3 +448,49 @@ and no other template's markers change. A target-directory overlay
 `.opencode/auto/prompts/infer-source.md` is no longer validated or used. The
 M3.8 amendment's list of prose-only rewrites above still names
 `infer-source.md`; that is history, not a live registration.
+
+## Amendment (2026-09-23, plans/0053): lifecycle-command literals
+
+Registered with the P3 design of plans/0052 (the lifecycle commands `plan`
+and `close`). Every literal below is new and English, so none needs dual-read.
+Each lands with its P3 stage, not before; until then this is a reservation.
+
+- the unit field `Closed: <reason>` in a task's or phase's `done.md`,
+  written only by `closeUnit` (`src/close.ts`, P3b). `parseUnitDoc` already
+  reads it (key `closed`, case-insensitive like `Depends:`);
+  `scanUnitStates`, `loadPlan` and `readPhases` report it. A `Closed:` line
+  in a `todo.md` means nothing (plans/0053 D16);
+- the process document `plan-input.md` in a phase directory
+  (`docs/R-NN/P<nn>-<type>/plan-input.md`, P3a): the latest planning input,
+  verbatim, written and committed by the driver before the planning unit.
+  Its role `planningInput` (`src/document/roles.ts`) is a process document
+  with no terminator (plans/0053 D9–D10);
+- the step kind `phase-append` in `.auto/progress.json` (driver-internal,
+  P3b), next to `phase-plan` and `phase-handover`; its model role is
+  `phase-plan` (plans/0053 D23);
+- the driver-internal lock file `.auto/run.lock`, JSON
+  `{pid, host, command, started}` (`src/lock.ts`, P3a, plans/0053 D1–D2);
+- the `Auto-Stage` values `plan-input` (P3a), `phase-append` and
+  `force-close` (P3b). Stage values are not parsed; only the trailer's
+  presence is. m-mode planning commits with `phase-plan`, and the value
+  `implement-plan` retires with `src/implement.ts` (P3a). The close commit
+  gains a body (`commitTree` option), which is not parsed either;
+- the template `templates/prompts/phase-append.md` (P3b), with a tier-1
+  `PROTOCOL_MARKERS` entry: the task-document skeleton literals that
+  `phase-plan` already requires, plus `{{taskIndex}}`, `{{existingTasks}}`
+  and `{{input}}` (plans/0053 D27).
+
+Not markers: the optional blocks `{{#if input}}` in `phase-plan.md` (P3a) and
+`{{#if closedTasks}}` in `phase-handover.md` (P3b). A template override that
+predates them keeps loading. When input is given and the active `phase-plan`
+template does not render `{{input}}`, the driver warns. `implement-plan.md`
+is unchanged: m-mode planning renders it with `fromFile` over the persisted
+`plan-input.md`. Also not protocol: the `[closed]` label in the done list,
+the mechanical handover's prose (its four headings are the existing
+`HANDOVER_SECTIONS`) and the `[DRIVER]` note on closed prerequisites.
+
+The P2 project brief `.opencode/auto/brief.md` (`src/brief.ts`) needs no
+registration: it is injected whole, and its headings (`## Goal`,
+`## Source`, `## Target`, `## Constraints`) are scaffolding the driver never
+parses. `BRIEF_SOURCE_HEADING` / `BRIEF_TARGET_HEADING` are only written,
+when init moves retired keys into the brief.
