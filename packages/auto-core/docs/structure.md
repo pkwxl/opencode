@@ -15,7 +15,7 @@ src/
   *.ts         driver (orchestration plane) + the flat intent/phases/document modules
 templates/     prompts, intent packs, modes, and init copy templates (embedded via `with { type: "file" }`)
 test/          one suite per module + fixtures/ + golden/ + import-direction.test.ts
-docs/          durable docs: this index, shell-contract.md
+docs/          durable docs: this index, shell-contract.md, glossary.md
 plans/         numbered design/plan history (stage-assist, not maintained after it goes stale)
 ```
 

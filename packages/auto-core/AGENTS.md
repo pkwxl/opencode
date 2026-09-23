@@ -4,7 +4,7 @@ Package-level notes for coding agents, kept lean: the index of module → respon
 
 ## Overview
 
-`@opencode-ai/auto-core` is the core library of the auto tool family (no bin): task pipeline, phase loop, prompt templates, configuration, auto numbering, interruption recovery, unified commit, and other mechanisms are concentrated here and exported via subpaths (`@opencode-ai/auto-core/<module>`) for shell packages to consume. Comments and user-facing messages are written in English.
+`@opencode-ai/auto-core` is the core library of the auto tool family (no bin): task pipeline, phase loop, prompt templates, configuration, auto numbering, interruption recovery, unified commit, and other mechanisms are concentrated here and exported via subpaths (`@opencode-ai/auto-core/<module>`) for shell packages to consume. Comments and user-facing messages are written in English, using the terms in [docs/glossary.md](./docs/glossary.md) (Chinese ↔ English).
 
 Distinguish two kinds of knowledge: the task units (`docs/R-NN/P<nn>-<type>/tasks.md`, `docs/T-NNN/`)/`CURRENT.md`/`.opencode/auto/config.json`/`docs/agents/` etc. are normative objects the program imposes on the **target directory** at runtime, not file conventions of this repository itself.
 
@@ -12,7 +12,7 @@ Distinguish two kinds of knowledge: the task units (`docs/R-NN/P<nn>-<type>/task
 
 - **Code and comments are the first carrier of design**: structure, invariants, and decision rationale travel with the code.
 - `plans/NNNN-<slug>.md` — numbered design/plan document history (ordered by first git commit date): stage-assist documents that only support development during a specific stage, **retired once obsolete and never maintained to track later changes**; originals are preserved untranslated (historical record); new design documents default to English.
-- `docs/` — only durable overall architecture, design principles, and code-location indexes (currently shell-contract / structure); updating them requires good reason. The former `docs/behavior.md` (target-directory runtime behavior contract) was retired verbatim to `plans/0029-behavior-historical.md` (historical record, not maintained).
+- `docs/` — only durable overall architecture, design principles, and code-location indexes (currently shell-contract / structure / glossary); updating them requires good reason. The former `docs/behavior.md` (target-directory runtime behavior contract) was retired verbatim to `plans/0029-behavior-historical.md` (historical record, not maintained).
 - This file records only high-frequency invariants + pointers; mechanism details belong to the numbered plans/ documents.
 
 ## Commands (run inside this package directory)
