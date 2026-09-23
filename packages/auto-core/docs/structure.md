@@ -150,6 +150,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Module | Responsibility | Key files |
 |---|---|---|
+| Run lock | `.auto/run.lock`: one driver process per directory; re-entrant, stale-pid detection, refusal and status lines | `src/lock.ts` (0053 D1–D3) |
 | Step mode | `OPENCODE_AUTO_STEP` pauses at phase/task/subtask boundaries | `src/step.ts` (0012) |
 | Graceful exit | `/exit` at the next safe boundary | `src/exit.ts` (0014) |
 | Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window | `src/hibernate.ts` (0027) |

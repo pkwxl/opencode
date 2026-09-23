@@ -1,6 +1,7 @@
 import { ExitRequested } from "./exit"
 import { hibernatePause } from "./hibernate"
 import { startInteractive, type Interactive } from "./interactive"
+import { acquireRunLock, lockLines } from "./lock"
 import type { LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
@@ -22,6 +23,24 @@ export type { RunAllOpts }
 // task needs no `answer`: re-running resumes it directly.
 
 export async function runAll(directory: string, opts: RunAllOpts): Promise<number> {
+  // The run lock (plans/0053 D3): taken before preflight's first write and held
+  // to the end, so no second process runs or rewrites the config here
+  // meanwhile; a caller already holding it re-enters. preflight's exits sit
+  // outside runLocked's try/finally (plans/0024 §I D13), hence this one of its
+  // own.
+  const lock = acquireRunLock(directory, "run")
+  if (!lock.ok) {
+    for (const line of lockLines(directory, lock.holder)) log(line)
+    return 1
+  }
+  try {
+    return await runLocked(directory, opts)
+  } finally {
+    lock.release()
+  }
+}
+
+async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
   const pre = await preflight(directory, opts)
   if ("exit" in pre) return pre.exit
   const { agentName, watcher, progress } = pre

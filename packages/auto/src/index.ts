@@ -20,6 +20,7 @@ import {
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
 import { implementPlan } from "@opencode-ai/auto-core/implement"
+import { liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
 import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
@@ -195,6 +196,18 @@ if (command === "init" || command === "continue" || command === "amend" || comma
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
+    process.exit(1)
+  }
+}
+
+// The run lock (auto-core plans/0053 D3): these commands write what a running
+// driver reads (config.json, the agent contract, the AGENTS.md block, the round
+// setup), so they refuse while another process holds .auto/run.lock; -f does
+// not override it. run takes the lock inside runAll.
+if (command === "init" || command === "continue" || command === "amend" || command === "fix" || command === "reset") {
+  const holder = liveRunLock(directory)
+  if (holder) {
+    for (const line of lockLines(directory, holder)) console.error(line)
     process.exit(1)
   }
 }
@@ -1154,7 +1167,9 @@ async function phasesLine(directory: string): Promise<string> {
 if (command === "status") {
   // 配置摘要,随后是当前轮的只读总览树(轮 → 阶段 → 任务 → 子任务,状态与依赖;
   // plans/0047 L1/R2)。配置非法仅提示、不阻塞总览;阶段/任务索引缺失或非法以
-  // ⚠ 行呈现。
+  // ⚠ 行呈现。A live run lock comes first (plans/0053 D3).
+  const holder = liveRunLock(directory)
+  if (holder) console.log(lockStatusLine(holder))
   try {
     const config = await loadProjectConfig(directory)
     console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
@@ -1182,6 +1197,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block, and re-syncs the current round's unstarted phases after a --phases change. init --amend does the same and stays until plan takes over init's round step; continue is always amend
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
+       run lock: run holds .auto/run.lock while it works; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired

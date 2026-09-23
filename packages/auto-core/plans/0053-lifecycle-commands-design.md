@@ -498,7 +498,11 @@ Each step ends with `bun typecheck` and `bun test` in `packages/auto-core` and `
 
 - [x] **Design pass** (this document; the 0035 amendment; planned glossary rows).
 - [ ] **P3a**
-  - [ ] A1 `src/lock.ts`; `runAll` acquires; `init`/`amend`/`fix`/`reset` refuse; `status` line (D1–D3).
+  - [x] A1 `src/lock.ts`; `runAll` acquires; `init`/`amend`/`fix`/`reset` refuse; `status` line (D1–D3). Implementation notes:
+    - `lockStatusLine(holder)` renders `status`'s first line; the shell prints it before the config line.
+    - `continue` refuses too, until C2 retires it: it writes the config and the round setup.
+    - When acquiring creates `.auto/`, release removes it again while it is empty, so a run refused in preflight leaves the directory as it found it.
+    - The §8 lock items landed with the step: `test/lock.test.ts`, and the shell e2e for the refusals and the `status` line.
   - [ ] A2 Pure moves: `planPhase`/`planWithStep` → `loop-plan.ts`; planning renderers → `prompt-plan.ts`.
   - [ ] A3 `plan-input.ts`, role `planningInput`, the `phase-plan.md` input block, the missing-slot warning (D9–D11).
   - [ ] A4 m-mode planning on `planPhase`; open-step order; `resumeModelNow` role; delete `implement.ts`; retire `--implement-*` (D12–D13).

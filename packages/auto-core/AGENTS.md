@@ -37,6 +37,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Fork decomposition and experiment switches → `src/execute.ts` + `src/session.ts` ensureForkBase + `src/session-api.ts` + `src/switches.ts` (0003)
 - Step mode (OPENCODE_AUTO_STEP) → `src/step.ts` (0012); `/exit` graceful exit → `src/exit.ts` (0014)
 - Hibernate windows (OPENCODE_AUTO_HIBERNATE) → `src/hibernate.ts` + `src/switches.ts` (0027)
+- Run lock `.auto/run.lock` (one driver process per directory; `runAll` takes it before preflight, re-entrant per process; the shell's config commands refuse while it is live) → `src/lock.ts` (0053 D1–D3)
 - Completion side (verify/review/final-review retired M2.2; the only verdict left is the task report result line `Result: PASS|FAIL` — FAIL blocks the run after the work is committed) → `src/wrapup.ts` parseResult/reportResult + `src/runner.ts` closeout phase (0044); driver script runner (watchdog, output capture) → `src/script.ts`
 - Prompt copy → touch only `templates/prompts/*.md` (`src/prompt.ts` only assembles data); after changes run `bun test test/prompt-exec.test.ts test/prompt-phase.test.ts test/prompt-template.test.ts`
 - Driver protocol strings (the literals the driver parses out of session output — still Chinese until their owning lockstep batch flips them; never translate one inside a prose batch) → registry + flip procedure in `plans/0035-protocol-string-registry.md`

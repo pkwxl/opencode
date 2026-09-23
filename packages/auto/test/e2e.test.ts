@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadPlan } from "@opencode-ai/auto-core/tasks"
 import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
@@ -1596,6 +1596,54 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
       expect((await runCli(["fix", dir, "-f"])).code).toBe(0)
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
+  // A lock held by this test process: alive, and not the CLI child's own pid.
+  async function plantLock(dir: string, pid = process.pid) {
+    await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid, host: hostname(), command: "plan", started: "2026-09-23T10:00:00.000Z" }))
+  }
+
+  test("init, continue, amend, fix, reset and run refuse while another process holds it; status shows it first", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
+      await plantLock(dir)
+      const refusal = `⏸ another opencode-auto process holds the run lock of ${dir}: plan, pid ${process.pid} on ${hostname()}, since 2026-09-23T10:00:00.000Z.`
+      for (const args of [["init", dir], ["init", dir, "-f"], ["continue", dir], ["amend", dir, "--context-limit", "64"], ["fix", dir, "-f"], ["reset", dir, "-f"]]) {
+        const refused = await runCli(args)
+        expect(refused.code).toBe(1)
+        expect(refused.err).toContain(refusal)
+      }
+      const run = await runCli(["run", dir])
+      expect(run.code).toBe(1)
+      expect(run.out).toContain(refusal)
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
+      const status = await runCli(["status", dir])
+      expect(status.code).toBe(0)
+      expect(status.out.split("\n")[0]).toBe(`▶ plan in progress (pid ${process.pid} on ${hostname()}, since 2026-09-23T10:00:00.000Z)`)
+      expect(status.out).toContain("⚙ project config")
+      expect((await runCli(["check", dir])).err).not.toContain("run lock")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a lock whose process is gone is not live: init proceeds and status does not show it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const gone = Bun.spawn(["true"])
+      await gone.exited
+      await plantLock(dir, gone.pid)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const status = await runCli(["status", dir])
+      expect(status.out).not.toContain("in progress")
+      expect(status.out.split("\n")[0]).toStartWith("⚙ project config")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

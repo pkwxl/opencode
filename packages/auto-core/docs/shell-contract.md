@@ -53,6 +53,10 @@ Shell differences are injected exclusively through the following extension point
 - **Moved and new exports**: `renderAgentContract` moved from `auto-core/loop-preflight` to `auto-core/config-fix` (with `CONTRACT_FILE`), so config-layer code no longer pulls in the driver chain. `auto-core/config` newly exports `CONFIG_FILE`, `LEGACY_FILE`, `retiredValue`, `saveConfigRecord` (writes a raw record, keeping unknown keys) and `validateProjectConfig`. `ensurePointer` (`auto-core/agents-block`) and `ensureGitignore` (`auto-core/gitignore`) take `dryRun` to report the change without writing.
 - **`amend` as a command** (D25) is shell-only: `packages/auto` `amend [dir] --<key> <value>…` takes config flags only, refuses without config.json or without a key, loads strictly (naming `fix` via `fixHint`) and writes config.json, the contract and the AGENTS.md block. `init --amend` stays until P3c.
 
+**Changes shells must absorb when refreshing the core snapshot (CLI convergence P3a, `plans/0053`, 2026-09-23):**
+
+- **Run lock** (D1–D3): `runAll` takes `.auto/run.lock` before preflight and returns 1, logging the holder, while another process holds it, so every shell's `run` is covered with no change. `auto-core/lock` exports `acquireRunLock(dir, command)` (re-entrant per process: a shell command holding the lock can still call `runAll`), `liveRunLock(dir)` (the holder, `"unreadable"`, or undefined for none or a stale one; read-only), `lockLines(dir, holder)` (the refusal) and `lockStatusLine(holder)`; the texts use the profile's `bin`. A shell whose commands write the config layer or the round setup should refuse them with exit 1 while `liveRunLock` returns a holder, and print `lockStatusLine` first in its status view. `packages/auto` is the reference (`init`, `continue`, `amend`, `fix`, `reset` refuse; `-f` does not override; `status` shows the lock first).
+
 ## D. Branches and merge flow
 
 | Branch | Responsibility |
@@ -75,7 +79,7 @@ Create `packages/<name>` (bin named independently), using the existing simple sh
 4. Ship its own `script/build.ts` (artifact `dist/<bin>`); templates keep the cross-package `with { type: "file" }` import.
 5. Additional prompt templates are registered via `registerTemplate` (protocol-sensitive templates provide markers).
 6. Run `bun install` at the repo root to refresh the lockfile; run tests inside package directories (tests cannot run at the repository root).
-7. If the shell writes config, finish every check before the first write (`plans/0052` D7; `plannedPhaseUnits` for the phase sync) and use `loadOverwriteBaseline` for a full-overwrite baseline, `loadProjectConfig` for an amend. The migration source and target are intent (`brief.md`, stub from `renderProjectBrief`), not flags. With `agentRecovery: "init"`, provide a `fix` command over `auto-core/config-fix` (the core's recovery hints name it) and append `fixHint(dir)` to strict config failures; an amend command, if any, keeps the other keys and never offers `-f`.
+7. If the shell writes config, finish every check before the first write (`plans/0052` D7; `plannedPhaseUnits` for the phase sync) and use `loadOverwriteBaseline` for a full-overwrite baseline, `loadProjectConfig` for an amend. The migration source and target are intent (`brief.md`, stub from `renderProjectBrief`), not flags. With `agentRecovery: "init"`, provide a `fix` command over `auto-core/config-fix` (the core's recovery hints name it) and append `fixHint(dir)` to strict config failures; an amend command, if any, keeps the other keys and never offers `-f`. Config-writing commands refuse while the run lock is live (`liveRunLock`, `plans/0053` D3).
 
 ## F. Agent adapter onboarding checklist
 

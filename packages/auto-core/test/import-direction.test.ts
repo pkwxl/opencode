@@ -113,6 +113,8 @@ const CLASSIFIED: Record<string, Domain> = {
   implement: "driver",
   interactive: "driver",
   knowledge: "driver",
+  // The run lock .auto/run.lock (plans/0053 D1–D3).
+  lock: "driver",
   log: "driver",
   "loop-phase": "driver",
   "loop-preflight": "driver",

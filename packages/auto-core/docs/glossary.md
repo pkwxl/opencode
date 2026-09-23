@@ -256,7 +256,7 @@ Unit and outcome states:
 | 自动编号 | auto numbering | `--auto-number` |
 | 统计 | stats | `.auto/stats.json` |
 | 只读保护 | read-only guard | `src/protect.ts` |
-| 运行锁 | run lock | `.auto/run.lock`, held by `run` / `plan` / `close`; `init` / `amend` / `fix` / `reset` refuse while it is live (planned, `src/lock.ts`, `plans/0053` D1–D3) |
+| 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run` for the whole run (`runAll`); `init` / `continue` / `amend` / `fix` / `reset` refuse while it is live, `status` shows it first; a same-host lock whose process is gone is stale; `plan` / `close` hold it too (planned) (`src/lock.ts`, `plans/0053` D1–D3) |
 | 生命周期命令 | lifecycle command | `plan` / `close` (planned, `plans/0052`, `plans/0053`) |
 | 配置层 | config layer | What `init` writes and `reset` removes |
 | 全量覆盖 | full overwrite | `init` without `--amend`; its baseline read drops retired keys and names them (`loadOverwriteBaseline`, `plans/0052` D4) |
