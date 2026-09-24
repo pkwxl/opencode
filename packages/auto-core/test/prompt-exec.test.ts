@@ -79,6 +79,22 @@ describe("renderDecompose", () => {
     expect(text).toContain("must leave a record of how it was made")
     expect(text).toContain("AUTO-DECISION")
   })
+
+  test("closed 任务(plans/0053 D16): done 清单里标 [closed] 并带原因,仍在「already done」之下", () => {
+    const closedPlan = {
+      ...plan,
+      tasks: plan.tasks.map((t) => (t.id === "T-001" ? { ...t, closed: "superseded" } : t)),
+      closed: new Map([["T-001", "superseded"]]),
+    }
+    const text = renderDecompose(closedPlan, closedPlan.tasks[1]!)
+    const line = "- [closed] T-001: 搭建 schema (closed without completing: superseded)"
+    expect(text).toContain(line)
+    expect(text).not.toContain("[done] T-001")
+    expect(text.indexOf("These tasks are already done, do not redo them:")).toBeLessThan(text.indexOf(line))
+    // 无 closure 的原夹具仍渲染 [done] 行
+    expect(renderDecompose(plan, task)).toContain("- [done] T-001: 搭建 schema")
+    expect(renderDecompose(plan, task)).not.toContain("[closed]")
+  })
 })
 
 describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {

@@ -508,10 +508,17 @@ export function modeCtx(mode?: ModeSpec): Ctx {
   }
 }
 
+// A closed task (plans/0053 D16) is done for scheduling but not delivered: it
+// stays in the "already done" list, labelled `[closed]` with its reason. The
+// label is session-facing prose, not a protocol string.
 function doneList(plan: Plan): string {
   return plan.tasks
     .filter((t) => t.status === "done")
-    .map((t) => `- [done] ${t.id}: ${t.title}`)
+    .map((t) =>
+      t.closed !== undefined
+        ? `- [closed] ${t.id}: ${t.title} (closed without completing: ${t.closed})`
+        : `- [done] ${t.id}: ${t.title}`,
+    )
     .join("\n")
 }
 
