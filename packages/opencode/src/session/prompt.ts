@@ -611,7 +611,19 @@ const layer = Layer.effect(
       return yield* Effect.die(err)
     })
 
+    const resolvable = Effect.fnUntraced(function* (model: {
+      providerID: ProviderV2.ID
+      modelID: ModelV2.ID
+      variant?: string
+    }) {
+      const exit = yield* provider.getModel(model.providerID, model.modelID).pipe(Effect.exit)
+      if (Exit.isFailure(exit) && Provider.ModelNotFoundError.isInstance(Cause.squash(exit.cause))) return undefined
+      return model
+    })
+
     const currentModel = Effect.fnUntraced(function* (sessionID: SessionID) {
+      const cfg = yield* config.get()
+      if (cfg.model) return Provider.parseModel(cfg.model)
       const current = yield* db
         .select({ model: SessionTable.model })
         .from(SessionTable)
@@ -619,16 +631,20 @@ const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (current?.model) {
-        return {
+        const found = yield* resolvable({
           providerID: ProviderV2.ID.make(current.model.providerID),
           modelID: ModelV2.ID.make(current.model.id),
           ...(current.model.variant && current.model.variant !== "default" ? { variant: current.model.variant } : {}),
-        }
+        })
+        if (found) return found
       }
       const match = yield* sessions
         .findMessage(sessionID, (m) => m.info.role === "user" && !!m.info.model)
         .pipe(Effect.orDie)
-      if (Option.isSome(match) && match.value.info.role === "user") return match.value.info.model
+      if (Option.isSome(match) && match.value.info.role === "user") {
+        const found = yield* resolvable(match.value.info.model)
+        if (found) return found
+      }
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 

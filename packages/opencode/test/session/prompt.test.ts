@@ -626,6 +626,114 @@ it.instance("legacy prompt emits message events without session.next events", ()
     expect(seen).toContain(MessageV2.Event.PartUpdated.type)
     expect(seen.filter((type) => type.startsWith("session.next."))).toEqual([])
   }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "prompt prefers the configured model over the session's stored model",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned", model: { providerID: ref.providerID, id: ref.modelID } })
+
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+
+      expect(result.info.role).toBe("user")
+      if (result.info.role === "user") {
+        expect(result.info.model.providerID).toBe(ref.providerID)
+        expect(result.info.model.modelID).toBe("other-model")
+      }
+      expect(yield* sessions.get(chat.id)).toMatchObject({
+        model: { providerID: ref.providerID, id: "other-model" },
+      })
+    }),
+  {
+    config: {
+      ...cfg,
+      model: "test/other-model",
+      provider: {
+        test: {
+          ...cfg.provider.test,
+          models: {
+            ...cfg.provider.test.models,
+            "other-model": {
+              ...cfg.provider.test.models["test-model"],
+              id: "other-model",
+              name: "Other Model",
+            },
+          },
+        },
+      },
+    },
+  },
+)
+
+noLLMServer.instance(
+  "prompt falls back to the provider default when the session's stored model no longer exists",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        model: { providerID: ProviderV2.ID.make("gone"), id: ModelV2.ID.make("gone-model") },
+      })
+
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+
+      expect(result.info.role).toBe("user")
+      if (result.info.role === "user") {
+        expect(result.info.model.providerID).toBe(ref.providerID)
+        expect(result.info.model.modelID).toBe(ref.modelID)
+      }
+      expect(yield* sessions.get(chat.id)).toMatchObject({
+        model: { providerID: ref.providerID, id: ref.modelID },
+      })
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "prompt falls back to the provider default when the last user message's model no longer exists",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: { providerID: ProviderV2.ID.make("gone"), modelID: ModelV2.ID.make("gone-model") },
+        time: { created: Date.now() },
+      })
+
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "again" }],
+      })
+
+      expect(result.info.role).toBe("user")
+      if (result.info.role === "user") {
+        expect(result.info.model.providerID).toBe(ref.providerID)
+        expect(result.info.model.modelID).toBe(ref.modelID)
+      }
+    }),
+  { config: cfg },
 )
 
 it.instance("loop surfaces content-filter finishes as session errors", () =>
