@@ -253,8 +253,10 @@ async function phasePlanPrompt(
     handovers,
     prevRound,
     mode: opts.mode,
-    // 本轮阶段索引无独立 analysis/design 阶段 → implement 阶段规划注入裁剪注记
-    trimmedPhases: !state.phases.some((unit) => unit.type === "analysis" || unit.type === "design"),
+    // No analysis/design phase delivered in this round's index → the implement
+    // phase's planning gets the pipeline-trimming note. A closed analysis/design
+    // phase (plans/0053 D16: done for scheduling, not delivered) counts as absent.
+    trimmedPhases: !state.phases.some((unit) => (unit.type === "analysis" || unit.type === "design") && !state.closed.has(unit.id)),
     numberStart: parts.numberStart,
     parallel: opts.parallel,
   })

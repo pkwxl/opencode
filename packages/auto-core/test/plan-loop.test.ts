@@ -120,6 +120,39 @@ describe("plan's stop condition (plans/0053 D6)", () => {
   )
 })
 
+describe("closed phases in phase planning (plans/0053 D16)", () => {
+  // Archive a phase as completePhase does; with a reason, its done.md field
+  // block also carries `Closed: <reason>` (closed: done, not delivered).
+  async function finishPhase(f: LoopFixture, unit: PhaseUnit, closed?: string) {
+    expect(await completePhase(f.dir, unit)).toEqual([])
+    if (closed === undefined) return
+    const done = join(f.dir, unit.dir, "done.md")
+    const text = await Bun.file(done).text()
+    await Bun.write(done, text.replace(`Type: ${unit.type}\n`, `Type: ${unit.type}\nClosed: ${closed}\n`))
+  }
+
+  for (const closed of [true, false]) {
+    test(
+      closed
+        ? "closed analysis and design phases count as trimmed: the implement planning prompt carries the note"
+        : "delivered analysis and design phases: no pipeline-trimming note",
+      async () => {
+        const f = await fixture("adm")
+        await finishPhase(f, await f.phase(0), closed ? "superseded by the upstream survey" : undefined)
+        await finishPhase(f, await f.phase(1), closed ? "design reused from the previous round" : undefined)
+        await f.commit("earlier phases archived")
+        const implement = await f.phase(2)
+        const { code, lines } = await f.run({ stopBefore: "execute" })
+        expect(code).toBe(0)
+        expect(lines).toContain(`✓ planned ${qualifiedPhase(implement)} implement: 1 task(s) in ${join(implement.dir, "tasks.md")}`)
+        const prompts = planners(f)
+        expect(prompts).toHaveLength(1)
+        expect(prompts[0]!.text.includes("Pipeline-trimming note")).toBe(closed)
+      },
+    )
+  }
+})
+
 describe("m-mode planning (plans/0053 D9, D12)", () => {
   test(
     "the input is persisted on its own commit before the planning unit, and the numbering record advances",
