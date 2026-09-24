@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadPlan, taskStatePaths } from "@opencode-ai/auto-core/tasks"
@@ -248,10 +248,16 @@ test.skipIf(!E2E)(
 // CLI 解析用例不需要 opencode 与 provider 凭证,始终运行: 以子进程运行源码入口,
 // 用法错误经 stderr 报文与退出码 1 断言;合法组合以空目录"未找到计划文件"退出
 // (解析全部通过、在 spawn server 之前),证明未误报组合用法错误。
+// The subprocess never inherits the ambient OPENCODE_AUTO_* layer (this test
+// process's own driver environment — a hibernate window would make every run
+// sleep, a model policy would reroute): the base is a scrubbed copy, and a
+// case that wants a switch passes it in `env`, merged on top.
+const CLI_ENV_BASE = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)))
+
 async function runCli(args: string[], env?: Record<string, string>) {
   const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "src", "index.ts"), ...args], {
     cwd: join(import.meta.dir, ".."),
-    env: env ? { ...process.env, ...env } : undefined,
+    env: env ? { ...CLI_ENV_BASE, ...env } : CLI_ENV_BASE,
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -1856,6 +1862,52 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  // The phase target of close (plans/0053 D18): its open tasks close with it,
+  // the mechanical handover stands in for the distillation, and the phase
+  // index is ticked — the close-side counterpart of the force-close phase
+  // test, which reaches the same closeUnit through plan.
+  test("closes a phase on a git fixture: the tasks close with it, the mechanical handover is written, phases.md is ticked", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-close-phase-"))
+    const git = gitOf(dir)
+    try {
+      await git("init")
+      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      await completeLetters(dir, ["a"])
+      await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "被跳过的任务", "正文"]])
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+
+      const closed = await runCli(["close", "R-01.P02", dir, "--reason", "skipped this round"])
+      expect(closed.err).toBe("")
+      expect(closed.code).toBe(0)
+      expect(closed.out).toContain("✓ closed T-001: skipped this round")
+      expect(closed.out).toContain("✓ closed R-01.P02 implement: skipped this round")
+      expect(closed.out).toContain("ℹ mechanical handover written: docs/R-01/P02-implement/handover.md")
+      const sha = (await git("rev-parse", "--short", "HEAD")).trim()
+      expect(closed.out).toContain(`to undo before anything else runs: git revert ${sha}`)
+      // The phase state: closed done.md (task and phase), the four handover
+      // sections, the phase index tick, and P03 untouched.
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/done.md")).text()).toContain("Closed: skipped this round")
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/todo.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).text()).toContain("Closed: skipped this round")
+      const handover = await Bun.file(join(dir, "docs/R-01/P02-implement/handover.md")).text()
+      for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
+        expect(handover).toContain(section)
+      }
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P02 implement")
+      expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
+      // One close commit covering both units, then a clean tree.
+      const message = await git("log", "-1", "--pretty=%B")
+      expect(message).toContain("R-01.P02 closed: skipped this round")
+      expect(message).toContain("Units closed:\n- T-001\n- R-01.P02 (gates skipped:")
+      expect(message).toContain("Auto-Task: R-01.P02")
+      expect(message).toContain("Auto-Stage: force-close")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // plan --force-close (auto-core plans/0053 D28): close a unit and continue
@@ -2039,6 +2091,138 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+})
+
+// plan --append end to end (auto-core plans/0053 §8, B6): the leftover CLI
+// loop-level flows, driven deterministically over a fake `claude` CLI on PATH
+// (test/fixtures/fake-claude.ts; OPENCODE_AUTO_AGENT=claude selects the claude
+// adapter, so plan's appending session runs with no provider credentials).
+// The agent-driving logic itself is auto-core's loop harness
+// (test/append-loop.test.ts); what these cases pin is the shell flow: the
+// input commit → append unit commit → appended tasks with the snapshot prefix
+// unchanged, the combined --force-close --append (replace a task), and the
+// plain phase close (its mechanical handover is closeUnit's, so it needs no
+// agent and lives in the close describe).
+describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () => {
+  // A git helper over the fixture dir: asserts exit 0 and returns stdout.
+  const gitOf = (dir: string) => {
+    return async (...args: string[]) => {
+      const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+      const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+      expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
+      return out
+    }
+  }
+
+  // The fake agent's environment: a PATH with the fake `claude` first, plus
+  // the adapter selection. runCli's scrubbed base keeps the ambient
+  // OPENCODE_AUTO_* switches out, so the subprocess's experiment switches are
+  // deterministic.
+  async function fakeClaude() {
+    const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
+    await Bun.write(
+      join(binDir, "claude"),
+      `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`,
+    )
+    await chmod(join(binDir, "claude"), 0o755)
+    const env: Record<string, string> = { PATH: `${binDir}:${process.env.PATH ?? ""}`, OPENCODE_AUTO_AGENT: "claude" }
+    const run = (args: string[]) => runCli(args, env)
+    return { run, done: () => rm(binDir, { recursive: true, force: true }) }
+  }
+
+  // A task document that passes the planning shape checks.
+  const doc = (id: string, phase: string) => `# ${id}: task ${id}\nPhase: ${phase}\n\n## Goal\n\ndeliver it.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nholds.\n\n<!-- auto: eof -->\n`
+
+  test("plan --append on a phased execute route: input commit → append unit commit → tasks appended, the snapshot prefix unchanged", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-append-"))
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    try {
+      await git("init")
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      // P01 done, P02 current with one pending task (the execute route).
+      await completeLetters(dir, ["a"])
+      await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "既有任务", "正文"]])
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+      const seededIndex = await Bun.file(join(dir, "docs/R-01/P02-implement/tasks.md")).text()
+      const seededDoc = await Bun.file(join(dir, "docs/T-001/todo.md")).text()
+
+      const run = await agent.run(["plan", dir, "--append", "-p", "Add a fix task for the retry policy."])
+      expect(run.err).toBe("")
+      expect(run.code).toBe(0)
+      // The step ran end to end: the input saved on its own commit, the
+      // appending session, the summary over the appended task.
+      expect(run.out).toContain("✓ planning input saved to docs/R-01/P02-implement/plan-input.md")
+      expect(run.out).toContain("▶ starting the task-append session to append to docs/R-01/P02-implement/tasks.md")
+      expect(run.out).toContain("✓ task append complete: docs/R-01/P02-implement/tasks.md gained 1 task(s)")
+      expect(run.out).toContain("✓ planned R-01.P02 implement: 1 task(s) in docs/R-01/P02-implement/tasks.md")
+      // The input commit, then the append unit commit.
+      const subjects = (await git("log", "--format=%s", "-2")).trim().split("\n")
+      expect(subjects).toEqual(["PLAN append P02-implement Implementation", "PLAN plan-input P02-implement Implementation"])
+      const bodies = await git("log", "--format=%B", "-2")
+      expect(bodies).toContain("Auto-Stage: phase-append")
+      expect(bodies).toContain("Auto-Stage: plan-input")
+      // The snapshot prefix is unchanged: the existing line and document are
+      // byte-identical, the new task follows them, the input is verbatim.
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/tasks.md")).text()).toBe(`${seededIndex}- [ ] T-002 task T-002\n`)
+      expect(await Bun.file(join(dir, "docs/T-001/todo.md")).text()).toBe(seededDoc)
+      expect(await Bun.file(join(dir, "docs/T-002/todo.md")).text()).toContain("Phase: R-01.P02")
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/plan-input.md")).text()).toBe("Add a fix task for the retry policy.\n")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("plan --force-close --append replaces a task: the close commit lands, the cleared resume point lets the append run, the exit code is plan's", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fc-append-"))
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    try {
+      await git("init")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      await listTasks(dir, P01.dir, "R-01.P01", [
+        ["T-001", "被取代的任务", "正文"],
+        ["T-002", "后继任务", "正文"],
+      ])
+      // T-001 mid-pipeline: a plain append stops on D26's guard; the
+      // force-close clears the record, so the append runs in the same process.
+      await Bun.write(join(dir, ".auto/progress.json"), JSON.stringify({ task: "T-001", at: 1, active: true }))
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+
+      const run = await agent.run(["plan", dir, "--force-close", "T-001", "--reason", "superseded by the redesign", "--append", "-p", "Do X instead."])
+      expect(run.err).toBe("")
+      expect(run.code).toBe(0)
+      // closeUnit's lines first: the closed task, the implicit dependent, the
+      // undo pointer naming the close commit.
+      expect(run.out).toContain("✓ closed T-001: superseded by the redesign")
+      expect(run.out).toContain("ℹ T-002 has no Depends: field, so its prerequisite T-001 counts as satisfied; do not assume T-001's deliverables exist")
+      expect(run.out).toMatch(/to undo before anything else runs: git revert [0-9a-f]+/)
+      // Then the append: input saved, one replacement task appended (the
+      // closed number is never reused), plan's m-mode summary.
+      expect(run.out).toContain("✓ planning input saved to docs/R-01/P01-implement/plan-input.md")
+      expect(run.out).toContain("✓ task append complete: docs/R-01/P01-implement/tasks.md gained 1 task(s)")
+      expect(run.out).toContain("✓ planned 1 task(s) (T-003) into docs/R-01/P01-implement/tasks.md")
+      // The close commit, then plan's two.
+      const subjects = (await git("log", "--format=%s", "-3")).trim().split("\n")
+      expect(subjects).toEqual(["PLAN append P01-implement Implementation", "PLAN plan-input P01-implement Implementation", "T-001 closed: superseded by the redesign"])
+      // The mid-pipeline record is gone (the close cleared it), the closed
+      // task carries its field, and the replacement task follows the index.
+      expect(await Bun.file(join(dir, ".auto/progress.json")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).text()).toContain("Closed: superseded by the redesign")
+      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toBe(
+        "# Tasks\n\n- [x] T-001 被取代的任务\n- [ ] T-002 后继任务\n- [ ] T-003 task T-003\n",
+      )
+      expect(await Bun.file(join(dir, "docs/T-003/todo.md")).text()).toContain("Phase: R-01.P01")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
 
 describe("CLI: the project brief stub (plans/0052 D9)", () => {

@@ -7,12 +7,15 @@
 // (F14: no core test drives the loop with a real agent): a planning turn
 // writes the phase's task index and task documents, a handover turn writes the
 // four-section handover document; both then take the default turn, whose idle
-// event settles the session. OPENCODE_AUTO_* environment is scrubbed around
-// each run and console.log is captured, so the loop's switches (step pauses,
-// strict resume, hibernation) default deterministically and its printed lines
-// are assertable.
+// event settles the session. The append turns (§8, B6) do the same for the
+// appending session: a good turn appends one index line with its task
+// document, and a bad first turn edits an existing line and document so the
+// collect's feedback retry and the snapshot reset are exercisable.
+// OPENCODE_AUTO_* environment is scrubbed around each run and console.log is
+// captured, so the loop's switches (step pauses, strict resume, hibernation)
+// default deterministically and its printed lines are assertable.
 
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { spyOn } from "bun:test"
 import type { AgentHost, AgentMessage } from "../../src/agent/types"
@@ -26,6 +29,16 @@ import { fakeAgent, type FakeAgent, type FakeAgentOptions, type TurnContext, typ
 import { freshRepo, git } from "./runner"
 
 const PHASE_DIR = "docs/R-\\d+/P\\d{2,}-[a-z][a-z0-9-]*"
+
+// The phase directory a planning or appending prompt names (its task index
+// path); undefined when the prompt carries none.
+export const promptPhaseDir = (text: string): string | undefined => new RegExp(`(${PHASE_DIR})/tasks\\.md`).exec(text)?.[1]
+
+// The qualified phase id (R-NN.P<nn>) of a phase directory path.
+export const phaseDirId = (phaseDir: string): string => {
+  const round = /^docs\/(R-\d+)\//.exec(phaseDir)![1]!
+  return `${round}.${/\/(P\d{2,})-/.exec(phaseDir)![1]!}`
+}
 
 const padTask = (n: number) => `T-${String(n).padStart(3, "0")}`
 
@@ -104,15 +117,85 @@ export const artifactTurns = (dir: string): TurnScript => (ctx: TurnContext) => 
   const index = new RegExp(`(${PHASE_DIR})/tasks\\.md`).exec(ctx.text)
   if (index) {
     const phaseDir = index[1]!
-    const round = /^docs\/(R-\d+)\//.exec(phaseDir)![1]!
-    const id = /\/(P\d{2,})-/.exec(phaseDir)![1]!
-    const qualified = `${round}.${id}`
     const task = padTask(nextTaskNumber(dir))
     mkdirSync(join(dir, "docs", task), { recursive: true })
-    writeFileSync(join(dir, phaseDir, "tasks.md"), renderTaskIndex(qualified, [{ id: task, title: `task ${task}` }]))
-    writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, qualified))
+    writeFileSync(join(dir, phaseDir, "tasks.md"), renderTaskIndex(phaseDirId(phaseDir), [{ id: task, title: `task ${task}` }]))
+    writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
   }
   return undefined
+}
+
+// —— Append turns (plans/0053 §8, B6) ——
+// The appending prompt is told apart from the fresh planning prompts by its
+// unique "the task index as it stands" heading: both name the phase's task
+// index, but only the append session is shown the index it must build on.
+
+const APPEND_MARK = "## Input: the task index as it stands"
+
+// One accepted append: a single new line goes after the index's last line and
+// the new task's document is written — nothing else is touched (D24's
+// contract). The new number is the highest on disk + 1 (the append prompt's
+// fallback start without the numbering record).
+export const appendTurn = (dir: string): TurnScript => (ctx: TurnContext) => {
+  if (!ctx.text.includes(APPEND_MARK)) return undefined
+  const phaseDir = promptPhaseDir(ctx.text)
+  if (phaseDir) appendOneTask(dir, phaseDir)
+  return undefined
+}
+
+function appendOneTask(dir: string, phaseDir: string): string {
+  const file = join(dir, phaseDir, "tasks.md")
+  const task = padTask(nextTaskNumber(dir))
+  const line = `- [ ] ${task} task ${task}`
+  // The existing text stays byte-identical: the new line goes after its last
+  // line, in front of the final newline.
+  const text = readFileSync(file, "utf8")
+  writeFileSync(file, `${text.endsWith("\n") ? text.slice(0, -1) : text}\n${line}\n`)
+  mkdirSync(join(dir, "docs", task), { recursive: true })
+  writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
+  return task
+}
+
+// A first appending session that misbehaves (plans/0053 §8, "a session that
+// edits an existing line"): it renames the first existing index line, edits
+// the last existing task's document and leaves a stray file next to the new
+// task's document. The collect refuses (the edited line and the changed
+// document are exactly what D24's prefix and file-identity checks look for),
+// the retry requirement carries the problems, and the reset must restore the
+// snapshot — index text, existing files, the stray directory — before the
+// retry turn, which then appends cleanly (the good turn above).
+export const badAppendTurns = (dir: string): TurnScript => {
+  let misbehaved = false
+  return (ctx: TurnContext) => {
+    if (!ctx.text.includes(APPEND_MARK)) return undefined
+    if (misbehaved) {
+      const phaseDir = promptPhaseDir(ctx.text)
+      if (phaseDir) appendOneTask(dir, phaseDir)
+      return undefined
+    }
+    misbehaved = true
+    const phaseDir = promptPhaseDir(ctx.text)
+    if (!phaseDir) return undefined
+    const index = readFileSync(join(dir, phaseDir, "tasks.md"), "utf8")
+    const lines = index.split("\n")
+    // Rename the first task line while appending the new one.
+    const first = lines.findIndex((line) => /^- \[.\] T-\d{3} /.test(line))
+    if (first >= 0) lines[first] = lines[first]!.replace(/^(- \[.\] T-\d{3}) .*$/, "$1 renamed by the session")
+    const file = join(dir, phaseDir, "tasks.md")
+    const task = padTask(nextTaskNumber(dir))
+    writeFileSync(file, `${lines.join("\n").slice(0, -1)}\n- [ ] ${task} task ${task}\n`)
+    // The new task's directory: a valid document plus a stray file the reset
+    // must remove with it.
+    mkdirSync(join(dir, "docs", task), { recursive: true })
+    writeFileSync(join(dir, "docs", task, "todo.md"), taskDoc(task, phaseDirId(phaseDir)))
+    writeFileSync(join(dir, "docs", task, "stray.md"), "left by the failed attempt\n")
+    // Edit the last existing task's pending document.
+    const listed = [...index.matchAll(/^- \[.\] (T-\d{3}) /gm)].map((m) => m[1]!)
+    const last = listed[listed.length - 1]
+    const doc = last ? join(dir, "docs", last, "todo.md") : undefined
+    if (doc && existsSync(doc)) writeFileSync(doc, readFileSync(doc, "utf8").replace("## Goal", "## 目标"))
+    return undefined
+  }
 }
 
 // A completed past assistant message with real context usage, so a session id
@@ -161,12 +244,19 @@ async function withQuietConsole(run: () => Promise<number>): Promise<LoopRunResu
   }
 }
 
-export async function loopFixture(phases: string, agentOptions: FakeAgentOptions = {}): Promise<LoopFixture> {
+// agentOptions may be a factory over the fixture directory, so a turn script
+// that writes into the repository (appendTurn and friends) can be built before
+// the agent exists.
+export async function loopFixture(
+  phases: string,
+  agentOptions: FakeAgentOptions | ((dir: string) => FakeAgentOptions) = {},
+): Promise<LoopFixture> {
   const dir = await freshRepo()
   await Bun.write(join(dir, ".gitignore"), ".auto/\ntmp/\n")
   await git(dir, "add", "-A")
   await git(dir, "commit", "-qm", "setup")
-  const agent = fakeAgent({ ...agentOptions, turn: agentOptions.turn ?? artifactTurns(dir) })
+  const options = typeof agentOptions === "function" ? agentOptions(dir) : agentOptions
+  const agent = fakeAgent({ ...options, turn: options.turn ?? artifactTurns(dir) })
   const host: AgentHost = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
   return {
     dir,
@@ -179,7 +269,7 @@ export async function loopFixture(phases: string, agentOptions: FakeAgentOptions
       await git(dir, "commit", "-qm", subject)
     },
     async run(opts = {}) {
-      const { planInput, ...rest } = opts
+      const { planInput, append, ...rest } = opts
       const ctx: LoopCtx = {
         directory: dir,
         opts: { phases, ...rest },
@@ -189,6 +279,8 @@ export async function loopFixture(phases: string, agentOptions: FakeAgentOptions
         manual: phases === "m",
         ran: 0,
         input: planInput,
+        // plan --append rides the ctx (loop.ts seeds it from RunAllOpts).
+        ...(append ? { append: true } : {}),
       }
       return withQuietConsole(() => runPhaseLoop(ctx))
     },
