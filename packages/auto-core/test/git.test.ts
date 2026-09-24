@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { baselineIntact, beginUnit, changedFiles, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, removeIfUntracked, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
+import { baselineIntact, beginUnit, changedFiles, commitIdentityProblem, commitPending, commitTitle, commitTree, deletedFiles, fileCommitted, fileTracked, pendingChanges, removeIfUntracked, restoreFile, rollbackUnit, suffixedTitle, trackedSourceChanges, unitBaseline, unitViolations } from "../src/git"
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -91,6 +91,43 @@ describe("commitTree", () => {
       const subject = (await git(dir, "log", "-1", "--pretty=%s")).trimEnd()
       expect(subject.length).toBe(101)
       expect(subject.endsWith("…")).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("commitIdentityProblem(init's prerequisite: the repository must be able to commit)", () => {
+  test("a non-git directory needs no check: undefined", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
+    try {
+      expect(await commitIdentityProblem(dir)).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a repository with a configured identity: undefined", async () => {
+    const dir = await fresh()
+    try {
+      await git(dir, "config", "user.name", "t")
+      await git(dir, "config", "user.email", "t@t")
+      expect(await commitIdentityProblem(dir)).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a repository with an empty identity (user.name/user.email locally blanked): the missing identity is reported", async () => {
+    const dir = await fresh()
+    try {
+      // Same trick as the "empty identity" commitTree case: a locally blanked
+      // value overrides any global config, so a commit would fail for sure.
+      await git(dir, "config", "user.name", "")
+      await git(dir, "config", "user.email", "")
+      const problem = await commitIdentityProblem(dir)
+      expect(problem).toContain("identity unknown")
+      expect(problem).toContain("ident")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

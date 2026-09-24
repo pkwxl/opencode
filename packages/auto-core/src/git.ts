@@ -572,6 +572,24 @@ async function hasChanges(root: string): Promise<boolean> {
   return status.out.split("\0").some((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
 }
 
+// init's prerequisite check: when the target directory is inside a git work
+// tree, a commit identity must resolve (user.name/user.email config or the
+// GIT_*_NAME/GIT_*_EMAIL env vars; judged via `git var`, the same resolution a
+// commit applies) — the unified commit is the completion condition, so a
+// missing identity means every later commit fails. A non-git directory (where
+// the driver never commits) returns undefined.
+export async function commitIdentityProblem(dir: string): Promise<string | undefined> {
+  const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
+    .then((result) => result.code === 0)
+    .catch(() => false)
+  if (!inRepo) return undefined
+  for (const [variable, role] of [["GIT_AUTHOR_IDENT", "author"], ["GIT_COMMITTER_IDENT", "committer"]] as const) {
+    const result = await git(dir, ["var", variable]).catch(() => undefined)
+    if (result?.code !== 0) return `${role} identity unknown (${result?.err.trim().split("\n").at(-1) ?? "git is not available"})`
+  }
+  return undefined
+}
+
 // git 身份兜底: 仓库未配置 user.email 时以固定身份提交,避免全新环境提交失败
 // (-c 仅对该次调用生效,已配置的仓库不受影响)。
 async function identityArgs(root: string): Promise<string[]> {

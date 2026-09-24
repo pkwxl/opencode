@@ -5,7 +5,7 @@ import { join } from "node:path"
 import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { ensurePointer } from "../src/agents-block"
 import { renderProjectBrief } from "../src/brief"
-import { ensureGitignore, removeGitignoreEntries } from "../src/gitignore"
+import { ensureGitignore, ensureInitGitignore, removeGitignoreEntries } from "../src/gitignore"
 import { applyReset, planReset, type ResetEntry } from "../src/reset"
 
 // init 产物的最小复刻(不跑真 CLI): 配置层四件 + 共用文件两件 + gitignore 条目。
@@ -189,5 +189,21 @@ describe("removeGitignoreEntries", () => {
     expect(await ensureGitignore(dir)).toBe(true)
     await removeGitignoreEntries(dir)
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n")
+  })
+
+  test("the init entries are removed too (local-only files and nested repository entries); the user's own entries are kept", async () => {
+    await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
+    await mkdir(join(dir, "pkg"))
+    await Bun.spawn(["git", "-C", join(dir, "pkg"), "init", "-q"]).exited
+    await writeFile(join(dir, ".gitignore"), "node_modules/\n")
+    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/pkg/"])
+    expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: false })
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n")
+  })
+
+  test("a file holding only init entries is deleted whole", async () => {
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n")
+    expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: true })
+    expect(await exists(join(dir, ".gitignore"))).toBe(false)
   })
 })

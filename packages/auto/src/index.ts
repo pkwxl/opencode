@@ -23,7 +23,8 @@ import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
-import { ensureGitignore } from "@opencode-ai/auto-core/gitignore"
+import { commitIdentityProblem } from "@opencode-ai/auto-core/git"
+import { ensureGitignore, ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { planPrelude } from "@opencode-ai/auto-core/plan"
@@ -1196,6 +1197,20 @@ if (command === "init" || command === "continue" || command === "amend") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
+  // Commit capability prerequisite (plain init only; --amend/continue retire
+  // with P3c and are not covered): the unified commit is the completion
+  // condition, so a repository whose git cannot commit (no user.name /
+  // user.email, nothing to fall back to) is refused before any write.
+  if (command === "init" && !amend) {
+    const problem = await commitIdentityProblem(directory)
+    if (problem) {
+      console.error(
+        `git cannot commit in ${directory}: ${problem}. The driver commits after every session, so init requires a repository that can commit; ` +
+          `configure an identity first, e.g. git config --global user.name <name> and git config --global user.email <email> (drop --global to configure this repository only)`,
+      )
+      process.exit(1)
+    }
+  }
   for (const item of discarded) console.log(`⚠ full overwrite drops the retired key ${item.key} = ${JSON.stringify(item.value)}: ${item.why}`)
   // 防误触闸门: 只在「已存在配置、且本次是全量覆盖」时生效——全新目录没有可覆盖
   // 的东西,--amend 也不会丢弃任何既有键。两道闸都必须排在第一个写盘点
@@ -1267,7 +1282,16 @@ if (command === "init" || command === "continue" || command === "amend") {
         : "already exists, skipped: AGENTS.md opencode-auto block (up to date)",
   )
   if (ensured.legacyRemoved) console.log(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
-  if (!amendCommand && (await ensureGitignore(directory))) console.log("updated: .gitignore now ignores tmp/ and .auto/ (driver workdir and runtime state)")
+  // Plain init writes the full ignore set in one pass (the driver workdir, the
+  // local-only files and every nested git repository in the tree — see
+  // auto-core/gitignore.ts); --amend/continue (retiring with P3c) keep the
+  // original ensureGitignore scope, and the amend command never touches it.
+  if (command === "init" && !amend) {
+    const appended = await ensureInitGitignore(directory)
+    if (appended.length) console.log(`updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories)`)
+  } else if (!amendCommand && (await ensureGitignore(directory))) {
+    console.log("updated: .gitignore now ignores tmp/ and .auto/ (driver workdir and runtime state)")
+  }
 
   // 轮首建立(轮次专用目录 docs/R-NN,plans/0006-phases-design.md M 节;须在 ensurePointer
   // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
@@ -1489,7 +1513,7 @@ console.error(`usage:
   opencode-auto status [dir]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
-       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed
+       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block, and re-syncs the current round's unstarted phases after a --phases change. init --amend does the same and stays until plan takes over init's round step; continue is always amend
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
@@ -1500,7 +1524,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt on init: project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions; on plan, -p is the planning input); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired
-       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, brief.md while it is the untouched stub, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the tmp/ and .auto/ entries in .gitignore, plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
+       reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, brief.md while it is the untouched stub, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
        --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md; once phases are complete, changes must satisfy the prefix guard — see README)
        --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)
        --test-by-driver [true] moves compile/test/build/lint execution rights to the driver: execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge

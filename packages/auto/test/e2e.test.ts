@@ -1019,6 +1019,38 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
+  test("init prerequisite: a git repository whose identity cannot commit is refused before any write; once configured, init proceeds and writes the full ignore rules", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    const home = await mkdtemp(join(tmpdir(), "auto-cli-home-"))
+    try {
+      const git = (...args: string[]) => Bun.spawn(["git", "-C", dir, ...args], { stdout: "ignore", stderr: "ignore" }).exited
+      await git("init", "-q")
+      // Shield the subprocess from the global/system git config, so the
+      // repository has no identity source at all (its commits would fail).
+      const env = { HOME: home, XDG_CONFIG_HOME: join(home, "xdg"), GIT_CONFIG_NOSYSTEM: "1" }
+      const refused = await runCli(["init", dir], env)
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain("git cannot commit")
+      expect(refused.err).toContain("user.email")
+      // The check runs before any write (validate-then-write, plans/0052 D7)
+      expect(await readdir(dir)).toEqual([".git"])
+      // With an identity configured, init proceeds and writes the full ignore
+      // rules (the driver workdir + the local-only files).
+      await git("config", "user.name", "t")
+      await git("config", "user.email", "t@t")
+      const init = await runCli(["init", dir], env)
+      expect(init.code).toBe(0)
+      expect(init.out).toContain("updated: .gitignore")
+      const gitignore = await Bun.file(join(dir, ".gitignore")).text()
+      for (const entry of ["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json"]) {
+        expect(gitignore).toContain(`${entry}\n`)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
 })
 
 // The init shortcut retired with auto-core's implement.ts (plans/0053 D13): its
@@ -2366,7 +2398,9 @@ describe("CLI: 工作区干净度闸门", () => {
       const dirty = await runCli(["init", dir])
       expect(dirty.code).toBe(1)
       expect(dirty.err).toContain("requires a clean worktree")
-      expect(dirty.err).toContain("opencode.json")
+      expect(dirty.err).toContain(".opencode/auto/config.json")
+      // init's ignore rules keep the local-only files out of the dirty list
+      expect(dirty.err).not.toContain("opencode.json")
       expect(dirty.err).toContain("-f/--force")
       // 拦截发生在任何写盘之前
       expect(await readConfigAt(dir)).not.toHaveProperty("agent")

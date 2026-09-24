@@ -35,7 +35,7 @@ bun run packages/auto/src/index.ts <子命令> ...
 ## 使用
 
 ```sh
-opencode-auto init [dir]     # 建立轮次目录 docs/R-01/(阶段索引 + 阶段目录),生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,把项目配置固化到 .opencode/auto/config.json,并在 AGENTS.md 幂等同步单一 opencode-auto 标记块
+opencode-auto init [dir]     # 建立轮次目录 docs/R-01/(阶段索引 + 阶段目录),生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,把项目配置固化到 .opencode/auto/config.json,在 AGENTS.md 幂等同步单一 opencode-auto 标记块,并把 driver 工作目录(tmp/、.auto/)、本地私有文件(/.gitignore、/.env、/AGENTS.md、/opencode.json)与目录树内的嵌套 git 仓库写进 .gitignore 忽略规则
 opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
 opencode-auto amend [dir] --<键选项> <值> ...   # 只改写给出的配置键,其余保留(至少一个键;无配置即拒绝),见"修订(amend)"
 opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名/迁入 brief.md,契约、AGENTS.md 块、.gitignore 与配置对齐,见"配置修复(fix)"
@@ -135,7 +135,10 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 **init 先全量校验、再写盘**(auto-core plans/0052 D7):选项取值、空 `-p`、模式、
 前缀护栏、阶段目录同步(不丢已完成阶段、不删已有工作的阶段目录)、目标目录提示词库
 覆盖件(`.opencode/auto/prompts/`)与意图包的校验全部在第一次写盘之前完成——任一失败即退出码 1,配置层原样不动(不写
-config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间该文件
+config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。目标目录在 git 仓库内时还有
+一道**提交能力前置校验**:统一提交是完成条件,仓库无法提交(未配置
+user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方法)——先
+`git config --global user.name/user.email`(或仓库内去掉 `--global`)再重跑。`run` 期间该文件
 与 CURRENT.md、opencode.json 一起置为只读,人工修订请在 run 外进行。
 
 兼容与迁移:
@@ -274,7 +277,7 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 | `.opencode/agent/auto.md` | 删除(`init` 本就无条件按模板覆盖它,是纯 auto 产物) |
 | `opencode.json` | **逐字节等于内置模板时才删**;被改过则保留并在清单中说明原因 |
 | `AGENTS.md` | 只摘除 `opencode-auto` 标记块,其余正文原样保留;摘除后仅剩空壳标题(即该文件本就是 init 建的)则整个删除 |
-| `.gitignore` | 只移除 `tmp/` 与 `.auto/` 两条,用户自有条目保留;移除后文件为空则整个删除 |
+| `.gitignore` | 只移除 init 写出的条目(`tmp/`、`.auto/`、本地私有文件 `/.gitignore`/`/.env`/`/AGENTS.md`/`/opencode.json` 与现存的嵌套 git 仓库条目),用户自有条目保留;移除后文件为空则整个删除 |
 | `.opencode/auto/`、`.opencode/agent/`、`.opencode/` | **仅在为空时**回收(`rmdir`,非空即跳过) |
 
 **明确不动**:`docs/`(含轮次目录 `R-NN` 与任务目录 `T-NNN`)、`.auto/` 除
@@ -1203,3 +1206,5 @@ auto-correct 不可用)时输出 note(非 git note 仅在开关 on 时)。引用
   (此时按提示在目标目录 `opencode.json` 的 `permission` 规则中放行后重跑);
 - **其他问题**:在会话外处理(或在 `answer` 字段填写解答),然后重新运行
   `opencode-auto run` 即可从阻塞处续跑。
+
+<!-- auto: eof -->

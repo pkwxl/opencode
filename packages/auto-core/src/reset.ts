@@ -90,7 +90,7 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
   if (await fileExists(gitignore)) {
     const preview = await removeGitignoreEntries(dir, { dryRun: true })
     if (preview.emptied) entries.push({ path: ".gitignore", action: "remove", reason: "file is empty after removing the entries" })
-    else if (preview.removed) entries.push({ path: ".gitignore", action: "strip", reason: "remove the tmp/ and .auto/ entries" })
+    else if (preview.removed) entries.push({ path: ".gitignore", action: "strip", reason: "remove the entries init wrote (tmp/, .auto/, the local-only files and nested git repositories)" })
   }
 
   for (const rel of PRUNE_DIRS) {

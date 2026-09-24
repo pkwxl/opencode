@@ -1,24 +1,49 @@
-// .gitignore 中 driver 工作目录条目的维护(与 reset 成对,故上收为叶子模块:
-// 从 loop.ts 导出会让 reset.ts 拖进 loop → runner → … 整条依赖链,与 git.ts
-// 上收 changedFiles 的理由同源)。loop.ts 再导出 ensureGitignore 保持既有
-// 导入路径 @opencode-ai/auto-core/loop 不变。
+// Maintenance of the driver's .gitignore entries (paired with reset, hence a
+// near-leaf module — its only internal dependency is git.ts's repository
+// discovery: exporting from loop.ts would drag reset.ts into the whole
+// loop → runner → … chain, the same reason changedFiles was lifted into
+// git.ts). loop.ts re-exports ensureGitignore so the existing import path
+// @opencode-ai/auto-core/loop stays valid.
 import { rm } from "node:fs/promises"
-import { join } from "node:path"
+import { join, relative, sep } from "node:path"
+import { repoRoots } from "./git"
 
-// driver 工作目录: tmp/(driver 执行的测试脚本请求与输出,位于目标目录内)与 .auto/(运行
-// 日志、进度恢复记录等运行时状态)。
+// The driver workdir: tmp/ (the driver-run test script requests and outputs,
+// inside the target directory) and .auto/ (run logs, progress recovery records
+// and other runtime state).
 const ENTRIES = ["tmp/", ".auto/"]
 
-// 行归一化后的等价比对: 前导 / 与尾随 / 均不计入(`/tmp`、`tmp/`、`tmp` 等价)。
+// The local-only entries init writes on top of the workdir entries:
+// .gitignore itself (the ignore rules are a local arrangement), .env
+// (secrets), and AGENTS.md / opencode.json (agent instructions and session
+// configuration) are not committed.
+const INIT_ENTRIES = ["/.gitignore", "/.env", "/AGENTS.md", "/opencode.json"]
+
+// Line-normalized equivalence: a leading / and a trailing / are both
+// disregarded (`/tmp`, `tmp/`, `tmp` are equivalent).
 function normalize(line: string): string {
   return line.trim().replace(/^\//, "").replace(/\/$/, "")
 }
 
-// 是否在 git work tree 内。判据与 git.ts repoRoots 同口径(git rev-parse
-// --is-inside-work-tree): 目标目录可能嵌于更大仓库的子目录(.git 在上级),
-// 仅查本目录 .git 会漏判——漏判的代价是 .auto/ 与 tmp/ 被统一提交带进父仓库,
-// 且 stats 心跳持续改写已跟踪的 stats.json,每个单元启动都被自己制造的脏区
-// 阻塞(2026-09-17 审查 H5)。
+// The nested git repositories inside the target tree (including
+// worktrees/submodules whose .git is a file), as root-anchored directory
+// entries. Ignoring them keeps the parent repository from absorbing a nested
+// repository as a gitlink; nested repositories are still committed on their
+// own by the unified commit (git.ts repoRoots discovers them on the
+// filesystem, unaffected by ignore rules).
+async function nestedRepoEntries(directory: string): Promise<string[]> {
+  return (await repoRoots(directory))
+    .filter((root) => root !== directory)
+    .map((root) => `/${relative(directory, root).split(sep).join("/")}/`)
+}
+
+// Whether the directory is inside a git work tree. Same criterion as git.ts
+// repoRoots (git rev-parse --is-inside-work-tree): the target directory may be
+// a subdirectory of a larger repository (.git above it), so checking only for
+// a local .git misjudges — the cost of a miss is .auto/ and tmp/ being carried
+// into the parent repository by the unified commit, and the stats heartbeat
+// rewriting the tracked stats.json, blocking every unit start with a dirty
+// area of the driver's own making (2026-09-17 review H5).
 async function insideWorkTree(directory: string): Promise<boolean> {
   const proc = Bun.spawn(["git", "-C", directory, "rev-parse", "--is-inside-work-tree"], {
     stdout: "pipe",
@@ -28,25 +53,42 @@ async function insideWorkTree(directory: string): Promise<boolean> {
   return (await proc.exited) === 0 && out.trim() === "true"
 }
 
-// 确保 .gitignore 忽略 driver 工作目录。统一提交会提交全部未提交改动,不忽略
-// 会把它们带进提交。已有等价条目则跳过;非 git 环境(不在任何 work tree 内且
-// 无 .gitignore)不做任何事。返回是否追加了条目。dryRun only reports whether
-// it would append (for `fix`'s plan).
-export async function ensureGitignore(directory: string, opts: { dryRun?: boolean } = {}): Promise<boolean> {
+// The shared append logic: entries with an existing equivalent line are
+// skipped; outside git (not in any work tree and no .gitignore) nothing is
+// done. Returns the entries actually appended (or, under dryRun, that would
+// be appended).
+async function appendEntries(directory: string, entries: string[], opts: { dryRun?: boolean }): Promise<string[]> {
   const file = join(directory, ".gitignore")
   const existing = await Bun.file(file).text().catch(() => undefined)
-  if (existing === undefined && !(await insideWorkTree(directory))) return false
+  if (existing === undefined && !(await insideWorkTree(directory))) return []
   const lines = existing ? existing.split("\n") : []
-  const missing = ENTRIES.filter((entry) => !lines.some((line) => normalize(line) === normalize(entry)))
-  if (!missing.length) return false
-  if (opts.dryRun) return true
-  await Bun.write(file, `${existing ? `${existing.trimEnd()}\n` : ""}${missing.join("\n")}\n`)
-  return true
+  const missing = [...new Set(entries)].filter((entry) => !lines.some((line) => normalize(line) === normalize(entry)))
+  if (!missing.length) return []
+  if (!opts.dryRun) await Bun.write(file, `${existing ? `${existing.trimEnd()}\n` : ""}${missing.join("\n")}\n`)
+  return missing
 }
 
-// ensureGitignore 的逆操作(reset 用): 移除 tmp/ 与 .auto/ 条目,用户自有条目
-// 原样保留。移除后文件只剩空白则整个删除(该文件是 init 建的)。dryRun 只算
-// 结果不落盘,供 reset 先打印清单再确认。
+// Ensure .gitignore ignores the driver workdir. The unified commit commits all
+// uncommitted changes, so without the entries they would be carried along.
+// Returns whether entries were appended. dryRun only reports whether
+// it would append (for `fix`'s plan).
+export async function ensureGitignore(directory: string, opts: { dryRun?: boolean } = {}): Promise<boolean> {
+  return (await appendEntries(directory, ENTRIES, opts)).length > 0
+}
+
+// init's .gitignore initialization: on top of the driver workdir entries,
+// append the local-only entries (INIT_ENTRIES) and an entry per nested git
+// repository in the target tree. Returns the appended entries (for the log line).
+export async function ensureInitGitignore(directory: string): Promise<string[]> {
+  return appendEntries(directory, [...ENTRIES, ...INIT_ENTRIES, ...(await nestedRepoEntries(directory))], {})
+}
+
+// The inverse of ensureGitignore/ensureInitGitignore (for reset): removes every
+// entry init wrote (the workdir, the local-only entries and the currently
+// present nested repository entries); the user's own entries are kept as they
+// are. If only blank remains after the removal the file is deleted (init
+// created it). dryRun computes the result without writing, so reset can print
+// the plan before asking.
 export async function removeGitignoreEntries(
   directory: string,
   opts: { dryRun?: boolean } = {},
@@ -54,7 +96,7 @@ export async function removeGitignoreEntries(
   const file = join(directory, ".gitignore")
   const existing = await Bun.file(file).text().catch(() => undefined)
   if (existing === undefined) return { removed: false, emptied: false }
-  const targets = ENTRIES.map(normalize)
+  const targets = [...ENTRIES, ...INIT_ENTRIES, ...(await nestedRepoEntries(directory))].map(normalize)
   const kept = existing.split("\n").filter((line) => !targets.includes(normalize(line)))
   const removed = kept.length !== existing.split("\n").length
   const text = kept.join("\n").trim()
