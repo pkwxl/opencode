@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { syncPhaseIndex, type PhaseUnit } from "../src/phases"
+import { renderStatus } from "../src/status"
 import {
   begin,
   block,
@@ -166,13 +167,13 @@ describe("dependencies (M3.5)", () => {
   })
 })
 
-describe("closed tasks (plans/0053 D16)", () => {
-  // Add a line to a seeded task document's field block (after `Phase:`).
-  const withField = async (id: string, file: "todo.md" | "done.md", field: string) => {
-    const path = join(dir, "docs", id, file)
-    await Bun.write(path, (await Bun.file(path).text()).replace("Phase: R-01.P01\n", `Phase: R-01.P01\n${field}\n`))
-  }
+// Add a line to a seeded task document's field block (after `Phase:`).
+const withField = async (id: string, file: "todo.md" | "done.md", field: string) => {
+  const path = join(dir, "docs", id, file)
+  await Bun.write(path, (await Bun.file(path).text()).replace("Phase: R-01.P01\n", `Phase: R-01.P01\n${field}\n`))
+}
 
+describe("closed tasks (plans/0053 D16)", () => {
   test("an own closed task stays done and carries its reason", async () => {
     await seedUnits(dir, SAMPLE)
     await withField("T-001", "done.md", "Closed: superseded by T-002")
@@ -216,6 +217,48 @@ describe("closed tasks (plans/0053 D16)", () => {
     await seedUnits(dir, "## T-001: a [done]\nA.\n\n## T-002: b [pending]\nB.\n")
     await withField("T-001", "done.md", "Closed: dropped")
     expect(next(await loadPlan(dir, phase))!.id).toBe("T-002")
+  })
+})
+
+describe("renderStatus closed marks (plans/0053 D16)", () => {
+  const TASKS = "## T-001: a [done]\nA.\n\n## T-002: b [done]\nB.\n\n## T-003: c [pending]\nC.\n"
+
+  test("without closures the lines are unchanged", async () => {
+    await seedUnits(dir, TASKS)
+    expect(await renderStatus(dir)).toEqual([
+      "R-01 (0/1 phases done)",
+      "  [▶] P01-implement",
+      "      [✓] T-001 a",
+      "      [✓] T-002 b",
+      "      [ ] T-003 c",
+    ])
+  })
+
+  test("a closed task shows ⊘; another done task keeps ✓", async () => {
+    await seedUnits(dir, TASKS)
+    await withField("T-001", "done.md", "Closed: superseded")
+    expect(await renderStatus(dir)).toEqual([
+      "R-01 (0/1 phases done)",
+      "  [▶] P01-implement",
+      "      [⊘] T-001 a",
+      "      [✓] T-002 b",
+      "      [ ] T-003 c",
+    ])
+  })
+
+  test("a closed phase shows ⊘ and still counts as done", async () => {
+    await seedUnits(dir, TASKS)
+    const phaseDir = join(dir, phase.dir)
+    const todo = await Bun.file(join(phaseDir, "todo.md")).text()
+    await Bun.write(join(phaseDir, "done.md"), todo.replace("Type: implement\n", "Type: implement\nClosed: out of scope\n"))
+    await rm(join(phaseDir, "todo.md"))
+    expect(await renderStatus(dir)).toEqual([
+      "R-01 (1/1 phases done)",
+      "  [⊘] P01-implement",
+      "      [✓] T-001 a",
+      "      [✓] T-002 b",
+      "      [ ] T-003 c",
+    ])
   })
 })
 

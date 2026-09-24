@@ -2,11 +2,16 @@
 // subtask tree of the current round with states and declared dependencies,
 // rendered from the unit files and the runtime state. It replaces reading
 // PLAN.md by eye; nothing is written, and no summary file exists (one source
-// of truth). Shells print it from their `status` subcommand.
+// of truth). Shells print it from their `status` subcommand. Marks: ✓ done,
+// ⊘ closed (plans/0053 D16: done for scheduling, not delivered), ▶ current /
+// in progress, ⏸ blocked.
 import { currentPhase, currentRound, phaseIndexPath, phaseLabel, readPhases } from "./phases"
 import { loadPlan, type Task } from "./tasks"
 
 const TASK_MARK: Record<Task["status"], string> = { pending: " ", in_progress: "▶", blocked: "⏸", done: "✓" }
+
+// A closed task stays done; ⊘ overrides its ✓.
+const taskMark = (task: Task) => (task.closed !== undefined ? "⊘" : TASK_MARK[task.status])
 
 function depends(task: Task): string {
   if (task.depends === undefined) return ""
@@ -28,7 +33,8 @@ export async function renderStatus(dir: string): Promise<string[]> {
   const current = currentPhase(state)
   lines.push(`R-${String(round).padStart(2, "0")} (${state.done.size}/${state.phases.length} phases done)`)
   for (const phase of state.phases) {
-    const mark = state.done.has(phase.id) ? "✓" : phase === current ? "▶" : " "
+    // Closed before done, as in formatPhases: the two views agree.
+    const mark = state.closed.has(phase.id) ? "⊘" : state.done.has(phase.id) ? "✓" : phase === current ? "▶" : " "
     lines.push(`  [${mark}] ${phaseLabel(phase)}`)
     let tasks: Task[]
     try {
@@ -41,7 +47,7 @@ export async function renderStatus(dir: string): Promise<string[]> {
       const checklist = task.checklist ?? []
       const count = checklist.length ? ` [subtasks ${checklist.filter((item) => item.done).length}/${checklist.length}]` : ""
       const attempts = task.attempts && task.status !== "done" ? ` (attempts: ${task.attempts})` : ""
-      lines.push(`      [${TASK_MARK[task.status]}] ${task.id} ${task.title}${depends(task)}${count}${attempts}`)
+      lines.push(`      [${taskMark(task)}] ${task.id} ${task.title}${depends(task)}${count}${attempts}`)
       if (task.status === "done") continue
       checklist.forEach((item, i) => {
         lines.push(`          [${item.done ? "✓" : " "}] S${String(i + 1).padStart(2, "0")} ${item.text}`)
