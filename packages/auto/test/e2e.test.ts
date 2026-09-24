@@ -266,6 +266,33 @@ async function runCli(args: string[], env?: Record<string, string>) {
   return { code: await proc.exited, out, err }
 }
 
+// A git helper over a fixture dir: asserts exit 0 and returns stdout. The
+// close / --force-close / new-project-flow fixtures all commit through it.
+const gitOf = (dir: string) => {
+  return async (...args: string[]) => {
+    const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+    expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
+    return out
+  }
+}
+
+// The fake agent's environment (the B6/C5 convention): a PATH with the fake
+// `claude` first, plus the adapter selection. runCli's scrubbed base keeps the
+// ambient OPENCODE_AUTO_* switches out, so the subprocess's experiment
+// switches are deterministic.
+async function fakeClaude() {
+  const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
+  await Bun.write(
+    join(binDir, "claude"),
+    `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`,
+  )
+  await chmod(join(binDir, "claude"), 0o755)
+  const env: Record<string, string> = { PATH: `${binDir}:${process.env.PATH ?? ""}`, OPENCODE_AUTO_AGENT: "claude" }
+  const run = (args: string[]) => runCli(args, env)
+  return { run, done: () => rm(binDir, { recursive: true, force: true }) }
+}
+
 describe("CLI 解析: run 侧选项与配置", () => {
   test("run 拒绝已固化选项(退出码 1 + 修订指引)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
@@ -1117,8 +1144,12 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
-      // 只写配置层:docs/ 下没有任何产物,brief 桩照写
+      // 只写配置层:docs/ 下没有任何产物(无轮目录、无 round.md 桩、无
+      // AGENTS.md.bak 快照——轮次产物全是 plan 的),brief 桩照写
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      expect(await stat(join(dir, "docs/R-01")).catch(() => undefined)).toBeUndefined()
+      expect(await Bun.file(join(dir, "docs/R-01/round.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).exists()).toBe(false)
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(true)
       // 覆盖型 init(轮未建立):同一结束语,仍不建轮
       const overwrite = await runCli(["init", dir, "--phases", "amt"])
@@ -1265,7 +1296,7 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
   const NOTICE =
     "continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run opencode-auto plan <dir> — it runs the round-close checks and opens the next round\n"
 
-  test("--continue 不是选项: init/run 出现即指向 plan", async () => {
+  test("--continue 不是选项: init/run/plan 出现即指向 plan", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--continue"])
@@ -1277,6 +1308,12 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
       expect(run.code).toBe(1)
       expect(run.err).toContain("--continue is not an option")
       expect(run.err).toContain("run opencode-auto plan <dir> (it runs the round-close checks and opens the next round)")
+      // plan shares run's option machinery (refuseFrozenFlags), so its
+      // --continue message names plan the same way.
+      const plan = await runCli(["plan", dir, "--continue"])
+      expect(plan.code).toBe(1)
+      expect(plan.err).toContain("--continue is not an option")
+      expect(plan.err).toContain("run opencode-auto plan <dir> (it runs the round-close checks and opens the next round)")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1785,6 +1822,56 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
   })
 })
 
+// The phase-index drift at CLI level (auto-core plans/0053 D34): a hand-edited
+// docs/R-NN/phases.md whose unstarted tail disagrees with config `phases`. run
+// never re-syncs (lifecycle is plan's — a silent re-sync would start work on a
+// phase list nobody reviewed) and exits 1 naming plan; plan re-syncs the tail,
+// leaves the change uncommitted like any round setup and stops for review.
+// Both stops precede any agent, so no fixture agent is needed.
+describe("CLI: the phase-index drift (auto-core plans/0053 D34)", () => {
+  test("run exits 1 naming plan on a hand-edited index and writes nothing; plan re-syncs it with its exit-0 line", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-drift-"))
+    try {
+      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      // A person drops the unstarted test phase from the index by hand (its
+      // directory stays): the index's unstarted tail no longer matches config.
+      const edited = "- [ ] P01 analysis\n- [ ] P02 implement\n"
+      await Bun.write(join(dir, "docs/R-01/phases.md"), edited)
+      const stopped = await runCli(["run", dir])
+      expect(stopped.code).toBe(1)
+      expect(stopped.out).toContain(
+        `⏸ the phase index of round R-01 (P01-analysis, P02-implement) differs from config phases ` +
+          `(P01-analysis, P02-implement, P03-test): run opencode-auto plan ${dir} to re-sync its unstarted phases`,
+      )
+      // run wrote nothing: the index keeps the hand edit, the phase directory stays.
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
+      expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
+      // Input on the drift route is refused before any write (D5): the
+      // re-synced tail must be reviewed before anything plans into it.
+      const refused = await runCli(["plan", dir, "-p", "输入"])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain(
+        `the phase index of round R-01 differs from config phases: run opencode-auto plan ${dir} without input to re-sync it, commit the change, then pass the input.`,
+      )
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toBe(edited)
+      // plan without input re-syncs the tail and stops for review (exit 0),
+      // the change left uncommitted like any round setup. The re-synced index
+      // is the canonical render again, done ticks preserved.
+      const resync = await runCli(["plan", dir])
+      expect(resync.code).toBe(0)
+      expect(resync.out).toContain(
+        `✓ phase index of round R-01 re-synced to config phases (+ P03-test); ` +
+          `review docs/R-01/phases.md, commit, then re-run: opencode-auto plan ${dir}`,
+      )
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n- [ ] P03 test\n")
+      expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 // close (auto-core plans/0053 D22): the shell half — the argument order (the
 // ref first, the directory second), the flag whitelist, the run lock, and one
 // happy-path task close on a git fixture (exit code, output lines, the close
@@ -1793,16 +1880,6 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
 // handover, the cleared records) are closeUnit's and live in auto-core's
 // close.test.ts.
 describe("CLI: close (auto-core plans/0053 D22)", () => {
-  // A git helper over the fixture dir: asserts exit 0 and returns stdout.
-  const gitOf = (dir: string) => {
-    return async (...args: string[]) => {
-      const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-      const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-      expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
-      return out
-    }
-  }
-
   // An initialized m-mode git fixture with two open tasks, all committed, so
   // a refused close leaves a byte-identical tree.
   async function closeFixture() {
@@ -1975,16 +2052,6 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
 // close, the combined --force-close --append) need an agent and stay with the
 // B6 loop-harness / OPENCODE_AUTO_E2E cases.
 describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
-  // A git helper over the fixture dir: asserts exit 0 and returns stdout.
-  const gitOf = (dir: string) => {
-    return async (...args: string[]) => {
-      const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-      const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-      expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
-      return out
-    }
-  }
-
   // An initialized m-mode git fixture with two open tasks, all committed, so
   // a refused force-close leaves a byte-identical tree.
   async function forceCloseFixture() {
@@ -2162,32 +2229,6 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
 // plain phase close (its mechanical handover is closeUnit's, so it needs no
 // agent and lives in the close describe).
 describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () => {
-  // A git helper over the fixture dir: asserts exit 0 and returns stdout.
-  const gitOf = (dir: string) => {
-    return async (...args: string[]) => {
-      const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-      const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-      expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
-      return out
-    }
-  }
-
-  // The fake agent's environment: a PATH with the fake `claude` first, plus
-  // the adapter selection. runCli's scrubbed base keeps the ambient
-  // OPENCODE_AUTO_* switches out, so the subprocess's experiment switches are
-  // deterministic.
-  async function fakeClaude() {
-    const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
-    await Bun.write(
-      join(binDir, "claude"),
-      `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`,
-    )
-    await chmod(join(binDir, "claude"), 0o755)
-    const env: Record<string, string> = { PATH: `${binDir}:${process.env.PATH ?? ""}`, OPENCODE_AUTO_AGENT: "claude" }
-    const run = (args: string[]) => runCli(args, env)
-    return { run, done: () => rm(binDir, { recursive: true, force: true }) }
-  }
-
   // A task document that passes the planning shape checks.
   const doc = (id: string, phase: string) => `# ${id}: task ${id}\nPhase: ${phase}\n\n## Goal\n\ndeliver it.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nholds.\n\n<!-- auto: eof -->\n`
 
@@ -2278,6 +2319,124 @@ describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () =>
       )
       expect(await Bun.file(join(dir, "docs/T-003/todo.md")).text()).toContain("Phase: R-01.P01")
       expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+})
+
+// The new-project flow end to end (auto-core plans/0053 §8, C5): the P3c
+// lifecycle in one pass per mode — init writes the config layer only, plan
+// establishes the round and stops at the round-start gate, a person commits
+// the setup, plan -p runs the planning session (over the fake `claude` on
+// PATH, the B6 fixture convention: no provider credentials, the ambient
+// OPENCODE_AUTO_* layer scrubbed) and stops for review, and the follow-up
+// plan lands on the execute-route notice. What these cases pin is the shell
+// flow and the stop lines; the planning logic itself is the core loop
+// harness's (test/plan-loop.test.ts).
+describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", () => {
+  test("m mode: init → plan establishes R-01 (G1) → commit → plan -p plans T-001 and stops → plan shows the execute notice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-flow-m-"))
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    try {
+      await git("init")
+      // init writes the config layer only; the closing line names plan
+      const init = await runCli(["init", dir])
+      expect(init.code).toBe(0)
+      expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      // plan establishes the round and stops at the round-start gate (G1)
+      const made = await agent.run(["plan", dir])
+      expect(made.code).toBe(0)
+      expect(made.out).toContain("✓ round R-01 established: single phase P01-implement")
+      expect(made.out).toContain(
+        `next (round-start gate): review the setup and commit it; then list tasks in docs/R-01/P01-implement/tasks.md by hand, ` +
+          `or run: opencode-auto plan ${dir} -p <text> | --file <path>`,
+      )
+      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
+      // The gate: a person reviews and commits the setup
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "round setup")
+      // plan -p: the input is committed on its own, the planning session
+      // writes the index and one task document, and plan stops for review
+      const planned = await agent.run(["plan", dir, "-p", "Add a hello task."])
+      expect(planned.err).toBe("")
+      expect(planned.code).toBe(0)
+      expect(planned.out).toContain("✓ planning input saved to docs/R-01/P01-implement/plan-input.md")
+      expect(planned.out).toContain("▶ starting the phase planning session to write docs/R-01/P01-implement/tasks.md and the task documents")
+      expect(planned.out).toContain("✓ phase planning complete: docs/R-01/P01-implement/tasks.md lists 1 task(s)")
+      expect(planned.out).toContain("✓ planned 1 task(s) (T-001) into docs/R-01/P01-implement/tasks.md")
+      expect(planned.out).toContain(`next: review them, then run: opencode-auto run ${dir}`)
+      // The artifacts: the input verbatim, the index with one task, the task
+      // document carrying the phase field, the numbering record advanced.
+      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/plan-input.md")).text()).toBe("Add a hello task.\n")
+      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toBe("# Tasks (R-01.P01)\n\n- [ ] T-001 task T-001\n")
+      expect(await Bun.file(join(dir, "docs/T-001/todo.md")).text()).toContain("Phase: R-01.P01")
+      expect(await Bun.file(join(dir, ".auto/next-task")).text()).toBe("2\n")
+      // The input commit, then the planning unit commit; the tree is clean.
+      const subjects = (await git("log", "--format=%s", "-3")).trim().split("\n")
+      expect(subjects).toEqual(["PLAN plan P01-implement Implementation", "PLAN plan-input P01-implement Implementation", "round setup"])
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+      // The follow-up plan (no input) lands on the execute-route notice
+      const again = await runCli(["plan", dir])
+      expect(again.code).toBe(0)
+      expect(again.out).toContain(
+        `ℹ docs/R-01/P01-implement/tasks.md lists 1 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
+          `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
+      )
+    } finally {
+      await agent.done()
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  test("phased (am): init → plan establishes R-01 (G1) → fill round.md and commit → plan -p plans P01 and stops → plan shows the execute notice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-flow-am-"))
+    const agent = await fakeClaude()
+    const git = gitOf(dir)
+    try {
+      await git("init")
+      const init = await runCli(["init", dir, "--phases", "am"])
+      expect(init.code).toBe(0)
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      // plan establishes the round and stops at the round-start gate (G1)
+      const made = await agent.run(["plan", dir])
+      expect(made.code).toBe(0)
+      expect(made.out).toContain("✓ round R-01 established: P01-analysis, P02-implement")
+      expect(made.out).toContain(
+        `next (round-start gate): review the round setup, fill in docs/R-01/round.md (goal, acceptance and release criteria), and commit it; ` +
+          `then run: opencode-auto plan ${dir} to plan R-01.P01 analysis (or run to plan and execute)`,
+      )
+      // The gate: a person fills in the round brief and commits the setup
+      await Bun.write(join(dir, "docs/R-01/round.md"), "# Round R-01\n\n## Goal\n\nSurvey the target.\n")
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "round setup")
+      // plan -p: the phased planning session plans P01-analysis and plan
+      // stops for review (the stop is the review point of the round's tasks)
+      const planned = await agent.run(["plan", dir, "-p", "Add a survey task."])
+      expect(planned.err).toBe("")
+      expect(planned.code).toBe(0)
+      expect(planned.out).toContain("✓ planning input saved to docs/R-01/P01-analysis/plan-input.md")
+      expect(planned.out).toContain("▶ starting the phase planning session to write docs/R-01/P01-analysis/tasks.md and the task documents")
+      expect(planned.out).toContain("✓ phase planning complete: docs/R-01/P01-analysis/tasks.md lists 1 task(s)")
+      expect(planned.out).toContain("✓ planned R-01.P01 analysis: 1 task(s) in docs/R-01/P01-analysis/tasks.md")
+      expect(planned.out).toContain(`next: review them (edit, close, or plan --append), then run: opencode-auto run ${dir}`)
+      // The artifacts: the index with one task, the task document, the commits.
+      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/plan-input.md")).text()).toBe("Add a survey task.\n")
+      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toBe("# Tasks (R-01.P01)\n\n- [ ] T-001 task T-001\n")
+      expect(await Bun.file(join(dir, "docs/T-001/todo.md")).text()).toContain("Phase: R-01.P01")
+      const subjects = (await git("log", "--format=%s", "-3")).trim().split("\n")
+      expect(subjects).toEqual(["PLAN plan P01-analysis Analysis", "PLAN plan-input P01-analysis Analysis", "round setup"])
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+      // The follow-up plan (no input) lands on the phased execute notice
+      const again = await runCli(["plan", dir])
+      expect(again.code).toBe(0)
+      expect(again.out).toContain(
+        `ℹ R-01.P01 analysis is planned (1 of 1 tasks pending); next: opencode-auto run ${dir} ` +
+          `— or add tasks with opencode-auto plan ${dir} --append -p <text>, or close units with opencode-auto close <ref>`,
+      )
     } finally {
       await agent.done()
       await rm(dir, { recursive: true, force: true })
