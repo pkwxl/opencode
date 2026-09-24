@@ -31,6 +31,7 @@ import {
   useIntentPacks,
   type TestRunInfo,
 } from "../src/prompt"
+import { prerequisites } from "../src/tasks"
 import { groundPlan, groundTask, listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
 
 describe("renderDecompose", () => {
@@ -94,6 +95,62 @@ describe("renderDecompose", () => {
     // 无 closure 的原夹具仍渲染 [done] 行
     expect(renderDecompose(plan, task)).toContain("- [done] T-001: 搭建 schema")
     expect(renderDecompose(plan, task)).not.toContain("[closed]")
+  })
+
+  // 任务块的 closed 前置注记(plans/0053 D16): 每个已 closed 的有效前置(显式或隐式)追加一行 DRIVER 注记。
+  const note = (id: string, reason: string) =>
+    `[DRIVER] Prerequisite ${id} was closed without completing (${reason}); do not assume its deliverables exist.`
+
+  test("closed 前置注记: 隐式前置(无 Depends:,前一任务)closed → 任务块正文后空一行追加注记", () => {
+    const closedPlan = {
+      ...plan,
+      tasks: plan.tasks.map((t) => (t.id === "T-001" ? { ...t, closed: "superseded" } : t)),
+      closed: new Map([["T-001", "superseded"]]),
+    }
+    const current = closedPlan.tasks[1]!
+    expect(prerequisites(closedPlan, current.id)).toEqual(["T-001"])
+    const text = renderDecompose(closedPlan, current)
+    expect(text).toContain(`# T-002: 实现迁移\n\n${current.body}\n\n${note("T-001", "superseded")}`)
+    expect(text.split("[DRIVER] Prerequisite").length - 1).toBe(1)
+  })
+
+  test("closed 前置注记: 显式外部前置 closed → 按 Depends: 顺序每个一行;非前置的 closed 任务不注记", () => {
+    const closedPlan = {
+      ...plan,
+      tasks: plan.tasks.map((t) => (t.id === "T-003" ? { ...t, depends: ["T-050", "T-060", "T-001"] } : t)),
+      closed: new Map([
+        ["T-050", "scope dropped"],
+        ["T-001", "superseded"],
+      ]),
+    }
+    const current = closedPlan.tasks[2]!
+    const text = renderDecompose(closedPlan, current)
+    // T-060 是前置但未 closed,不注记
+    expect(text).toContain(`${current.body}\n\n${note("T-050", "scope dropped")}\n${note("T-001", "superseded")}`)
+    expect(text).not.toContain("Prerequisite T-060")
+    // T-002 的有效前置只有隐式的 T-001;T-050 虽 closed 但不是它的前置
+    const other = renderDecompose(closedPlan, closedPlan.tasks[1]!)
+    expect(other).toContain(note("T-001", "superseded"))
+    expect(other).not.toContain("Prerequisite T-050")
+  })
+
+  test("closed 前置注记: closed 任务不是当前任务的前置 → 无注记;无 closure 时任务块逐字节不变", () => {
+    // T-003 无 Depends:,隐式前置是 T-002(未 closed);closed 的 T-001 不是它的前置
+    const closedPlan = {
+      ...plan,
+      tasks: plan.tasks.map((t) => (t.id === "T-001" ? { ...t, closed: "superseded" } : t)),
+      closed: new Map([["T-001", "superseded"]]),
+    }
+    expect(prerequisites(closedPlan, "T-003")).toEqual(["T-002"])
+    expect(renderDecompose(closedPlan, closedPlan.tasks[2]!)).not.toContain("[DRIVER] Prerequisite")
+    // 首个任务没有前置
+    expect(prerequisites(closedPlan, "T-001")).toEqual([])
+    expect(renderDecompose(closedPlan, closedPlan.tasks[0]!)).not.toContain("[DRIVER] Prerequisite")
+    // 无 closure: 任务块即标题 + 正文,其后不追加任何内容
+    const text = renderDecompose(plan, task)
+    expect(text).not.toContain("[DRIVER] Prerequisite")
+    expect(text).toContain(`# T-002: 实现迁移\n\n${task.body}`)
+    expect(text).not.toContain(`${task.body}\n\n[DRIVER]`)
   })
 })
 

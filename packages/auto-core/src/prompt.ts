@@ -7,7 +7,7 @@ import type { ModeSpec } from "./mode"
 import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
 import type { IntentPack, IntentSection } from "./intent/types"
 import { subtaskDoc, taskDoc } from "./docpaths"
-import type { Plan, Status, Task } from "./tasks"
+import { prerequisites, type Plan, type Status, type Task } from "./tasks"
 import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
 import { phaseType, REQUIRED_TYPE, type PhaseKey, type PhaseTypeEntry } from "./phases/registry"
@@ -541,12 +541,27 @@ function formatTokens(n: number): string {
 // 不按行数截断或拒收,调大档位不改变任何校验行为。
 const TASK_CONTEXT_LINES: Record<TaskContextMode, number> = { off: 200, small: 300, medium: 400, large: 500 }
 
+// Driver notes appended to the task block (plans/0053 D16): one line per
+// effective prerequisite (explicit or implicit) that was closed, so the
+// session does not build on deliverables that never landed. Empty without
+// closures, keeping the task block byte-identical.
+function closedPrerequisiteNotes(plan: Plan, task: Task): string {
+  return prerequisites(plan, task.id)
+    .filter((id) => plan.closed.has(id))
+    .map(
+      (id) =>
+        `[DRIVER] Prerequisite ${id} was closed without completing (${plan.closed.get(id)}); do not assume its deliverables exist.`,
+    )
+    .join("\n")
+}
+
 function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): Ctx {
   const entry = phaseEntry(opts.phase)
+  const notes = closedPrerequisiteNotes(plan, task)
   return {
     ...modeCtx(opts.mode),
     taskId: task.id,
-    taskBlock: `# ${task.id}: ${task.title}\n\n${task.body}`,
+    taskBlock: `# ${task.id}: ${task.title}\n\n${task.body}${notes ? `\n\n${notes}` : ""}`,
     doneList: doneList(plan),
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),

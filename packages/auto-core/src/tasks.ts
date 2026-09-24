@@ -37,6 +37,7 @@ import {
   parseIndex,
   parseUnitDoc,
   renameUnitDone,
+  resolveDepends,
   scanUnitStates,
   unitProblems,
   unitStatePaths,
@@ -343,6 +344,17 @@ function taskDecl(id: string, doc: string): UnitDecl {
 }
 
 const declOf = (task: Task): UnitDecl => ({ id: task.id, ...(task.depends !== undefined ? { depends: task.depends } : {}) })
+
+// The effective prerequisites of one task of the plan: its `Depends:` list,
+// none for `none`, else the previous task of the index (the first task has
+// none). Ids outside the index are external prerequisites (done tasks of
+// other phases).
+// AUTO-DECISION: exported here rather than calling resolveDepends from
+// prompt.ts, so prompt.ts keeps its frozen src-import set (FROZEN_IMPORTS in
+// test/import-direction.test.ts); a direct document/unit import would drift it.
+export function prerequisites(plan: Plan, id: string): string[] {
+  return resolveDepends(plan.tasks.map(declOf)).get(id) ?? []
+}
 
 // The next task to run: the first one in index order that is not done and
 // whose prerequisites are done (nextReady). A prerequisite outside this index
