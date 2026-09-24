@@ -469,14 +469,20 @@ describe("CLI: init 固化项目配置", () => {
     return JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())
   }
 
-  test("init 写出完整 config(全键缺省)并打印摘要", async () => {
+  test("init 写出完整 config(全键缺省)并打印摘要;只写配置层,结束语指向 plan", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain("⚙ project config (.opencode/auto/config.json)")
       expect(init.out).toContain("auto-number on")
-      expect(init.out).toContain("list tasks in docs/R-01/P01-implement/tasks.md")
+      // config-only init (auto-core plans/0053 D31): plan owns the rounds, so
+      // init writes nothing under docs/ and points at plan's establish route.
+      expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
+      expect(init.out).not.toContain("list tasks in")
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      // the brief stub is still init's (written when missing)
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(true)
       expect(await readConfig(dir)).toEqual({
         mode: "migrate",
         contextLimit: 64,
@@ -509,14 +515,14 @@ describe("CLI: init 固化项目配置", () => {
     phases: "m",
   }
 
-  test("init --amend 仅改写显式给出的键,未给出的键保留既有配置", async () => {
+  test("amend 仅改写显式给出的键,未给出的键保留既有配置(init --amend 已退役)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["init", dir, "--amend", "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--test-by-driver", "--context-limit", "128", "--subtask", "ondemand"])).code).toBe(0)
       expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand" })
       // 再 amend 一个无关键: 上一轮改过的三个键原样保留
-      expect((await runCli(["init", dir, "--amend", "--agent", "claude"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--agent", "claude"])).code).toBe(0)
       expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, testByDriver: true, subtask: "ondemand", agent: "claude" })
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -602,7 +608,7 @@ describe("CLI: init 固化项目配置", () => {
       expect(status.out).toContain('source is retired (the migration source and target are intent, not configuration): copy its value {"dir":"legacy","path":"pkg"} into .opencode/auto/brief.md, then remove the key')
       expect(status.out).toContain(`  fix: opencode-auto fix ${dir}`)
       // an amend would carry the keys over, so it stays strict
-      const amend = await runCli(["init", dir, "--amend", "--test-by-driver"])
+      const amend = await runCli(["amend", dir, "--test-by-driver"])
       expect(amend.code).toBe(1)
       expect(amend.err).toContain("source is retired")
       expect(amend.err).toContain(`fix: opencode-auto fix ${dir}`)
@@ -633,10 +639,10 @@ describe("CLI: init 固化项目配置", () => {
       expect(init.out).toContain("auto-number on")
       expect(init.out).not.toContain("numbering record")
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      // --no-auto-number 覆盖回 false;--amend 不给该键时保留,无 --amend 则回落缺省 true
+      // --no-auto-number 覆盖回 false;amend 不给该键时保留,无 amend 则回落缺省 true
       expect((await runCli(["init", dir, "--no-auto-number"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: false })
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ autoNumber: true })
@@ -666,8 +672,8 @@ describe("CLI: init 固化项目配置", () => {
       expect(off.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: false })
       expect(off.out).toContain("wrapup off")
-      // --amend 不给任一键时保留既有 false;无 --amend 的无参 init 则回落默认 true
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      // amend 不给任一键时保留既有 false;无 amend 的无参 init 则回落默认 true
+      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: false })
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ wrapup: true })
@@ -702,10 +708,10 @@ describe("CLI: init 固化项目配置", () => {
       expect(claude.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ agent: "claude" })
       expect(claude.out).toContain("· agent claude ·")
-      // --amend keeps it; --amend --agent opencode removes it
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      // amend keeps it; amend --agent opencode removes it
+      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ agent: "claude" })
-      expect((await runCli(["init", dir, "--amend", "--agent", "opencode"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--agent", "opencode"])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("agent")
       // the retired contract-name use of --agent is a usage error
       const named = await runCli(["init", dir, "--agent", "auto"])
@@ -734,10 +740,10 @@ describe("CLI: init 固化项目配置", () => {
       expect(high.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ parallel: "high" })
       expect(high.out).toContain("· parallel high")
-      // --amend keeps it; --amend --parallel none removes it; a plain init falls back to none
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      // amend keeps it; amend --parallel none removes it; a plain init falls back to none
+      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ parallel: "high" })
-      expect((await runCli(["init", dir, "--amend", "--parallel", "none"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--parallel", "none"])).code).toBe(0)
       expect(await readConfig(dir)).not.toHaveProperty("parallel")
       expect((await runCli(["init", dir, "--parallel", "low"])).code).toBe(0)
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -795,11 +801,11 @@ describe("CLI: init 固化项目配置", () => {
       const agent = await Bun.file(join(dir, ".opencode/agent/auto.md")).text()
       expect(agent).toContain("Build, test, compile, lint and other commands that can be slow")
       expect(agent).toContain("tmp/test.sh")
-      // --amend 关闭 handover-test 保留 test-by-driver;再关闭 test-by-driver 时块内容
+      // amend 关闭 handover-test 保留 test-by-driver;再关闭 test-by-driver 时块内容
       // 与渲染不一致(测试段落应消失),整块刷新
-      expect((await runCli(["init", dir, "--amend", "--handover-test", "false"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--handover-test", "false"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ testByDriver: true, handoverTest: false })
-      const off = await runCli(["init", dir, "--amend", "--test-by-driver", "false"])
+      const off = await runCli(["amend", dir, "--test-by-driver", "false"])
       expect(off.code).toBe(0)
       expect(off.out).toContain("refreshed: AGENTS.md opencode-auto block (differed from the current config render)")
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).not.toContain("Test principle:")
@@ -812,6 +818,8 @@ describe("CLI: init 固化项目配置", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      // init no longer establishes the round (plans/0053 D31); plan does
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), "# Tasks\n\n- [ ] T-001 示例任务\n")
       await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 示例任务\nPhase: R-01.P01\n\n## Goal\n\n示例。\n")
       const status = await runCli(["status", dir])
@@ -850,21 +858,24 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
-  test("init --phases 合法值固化进 config;摘要含阶段;结束语按 phases 分两态", async () => {
+  test("init --phases 合法值固化进 config;摘要含阶段;结束语统一指向 plan", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "admtvk"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
       expect(init.out).toContain("phases admtvk")
-      expect(init.out).toContain("to start analysis (Analysis) phase planning")
-      expect(init.out).not.toContain("list tasks in")
-      // --amend 无 --phases 保留既有值;显式给值可改
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      // config-only init (plans/0053 D31): 结束语不再按 phases 分两态,统一指向
+      // plan 的建轮路由;docs/ 下不写任何东西
+      expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
+      expect(init.out).not.toContain("to start analysis")
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      // amend 无 --phases 保留既有值;init 显式给值可改
+      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
-      // 无 --amend 的无参 init 全量覆盖: phases 回落缺省 "m"(台账为空,不受前缀护栏约束)
+      // 无 amend 的无参 init 全量覆盖: phases 回落缺省 "m"(无完成阶段,不受前缀护栏约束)
       expect((await runCli(["init", dir])).code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "m" })
     } finally {
@@ -872,38 +883,50 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
-  test("init 前缀护栏: 已有完成阶段时改 --phases 须以已完成阶段为前缀", async () => {
+  test("init/amend 前缀护栏: 轮中改 --phases 不得丢弃已完成阶段;本轮完成后放开(plans/0053 D31–D32)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--phases", "admtvk"])).code).toBe(0)
-      await completeLetters(dir, ["a", "d"])
-      // "ad" 不是 "amt" 的前缀 → 拒绝并指引人工回退阶段索引
-      const bad = await runCli(["init", dir, "--phases", "amt"])
+      expect((await runCli(["init", dir, "--phases", "adm"])).code).toBe(0)
+      // init 不建轮:plan 建立当前轮后才有阶段索引可判
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      await completeLetters(dir, ["a"])
+      // "d" 开头的值会丢弃已完成的 P01-analysis → 拒绝(plannedPhaseUnits 的
+      // 只读检查,任何写盘之前)
+      const bad = await runCli(["init", dir, "--phases", "dmt"])
       expect(bad.code).toBe(1)
-      expect(bad.err).toContain("phase index")
-      expect(bad.err).toContain("analysis,design")
-      expect(bad.err).toContain("prefix")
-      // 兼容值通过: 已完成的 P01/P02 与相同前缀保留,尾部待开始阶段按新值重写;
-      // 下一阶段提示 m(迁移实现)
-      const ok = await runCli(["init", dir, "--phases", "admtk"])
+      expect(bad.err).toContain('phases "dmt" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md')
+      expect(bad.err).toContain("once the current round is complete, any value applies to the next round")
+      const badAmend = await runCli(["amend", dir, "--phases", "dmt"])
+      expect(badAmend.code).toBe(1)
+      expect(badAmend.err).toContain("would drop the completed phase docs/R-01/P01-analysis/")
+      // 兼容值通过:已完成阶段保留;init/amend 不再重写尾部阶段——新值与索引的
+      // 差异表现为 drift,由 plan 的重同步路由处理(其行为属 D34)
+      const ok = await runCli(["init", dir, "--phases", "admt"])
       expect(ok.code).toBe(0)
-      expect(ok.out).toContain("to start implement (Implementation) phase planning")
-      expect((await runCli(["status", dir])).out).toContain("  [✓] P01-analysis\n  [✓] P02-design\n  [▶] P03-implement\n  [ ] P04-test\n  [ ] P05-knowledge\n")
-      expect(await stat(join(dir, "docs/R-01/P05-acceptance")).catch(() => undefined)).toBeUndefined()
-      // 护栏判的是本次生效值,不是"是否显式给出": 无参 init 全量覆盖会把 phases
-      // 回落为缺省 "m",与台账已完成的 "ad" 不兼容 → 拦在任何写盘之前,并指引 amend / fix (plans/0052 DF8)
+      expect(await readConfig(dir)).toMatchObject({ phases: "admt" })
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis\n- [ ] P02 design\n- [ ] P03 implement\n")
+      // 覆盖型 init(轮已建立)结束语为纯 plan 指针,不再声称建立 R-01
+      expect(ok.out).toContain(`next: opencode-auto plan ${dir}`)
+      expect(ok.out).not.toContain("establishes round")
+      // 护栏判的是本次生效值: 无参 init 全量覆盖会把 phases 回落为 "m",
+      // 与已完成的 "a" 不兼容 → 拦在任何写盘之前
       const bare = await runCli(["init", dir])
       expect(bare.code).toBe(1)
-      expect(bare.err).toContain(`opencode-auto amend ${dir} --<key> <value>`)
-      expect(bare.err).toContain(`opencode-auto fix ${dir}`)
-      expect(bare.err).toContain("analysis,design")
-      expect(await readConfig(dir)).toMatchObject({ phases: "admtk" })
-      // --amend 下生效值 = 既有配置值,天然满足前缀条件
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
-      expect(await readConfig(dir)).toMatchObject({ phases: "admtk" })
-      // 阶段索引非法时 init 报环境错误并给人工修订指引
+      expect(bare.err).toContain('phases "m" would drop the completed phase docs/R-01/P01-analysis/')
+      expect(await readConfig(dir)).toMatchObject({ phases: "admt" })
+      // 本轮完成后护栏放开: 任何合法值适用于 plan 建立的下一轮(D32)
+      await completeLetters(dir, ["d", "m"])
+      const fresh = await runCli(["init", dir, "--phases", "amt"])
+      expect(fresh.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "amt" })
+      const relaxed = await runCli(["amend", dir, "--phases", "admtvk"])
+      expect(relaxed.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ phases: "admtvk" })
+      // 完成轮的索引原样保留(绝不改写)
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01 analysis\n- [x] P02 design\n- [x] P03 implement\n")
+      // 阶段索引非法时 init/amend 报环境错误并给人工修订指引
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [ ] X1 analysis\n")
-      const broken = await runCli(["init", dir, "--amend", "--phases", "admtvk"])
+      const broken = await runCli(["amend", dir, "--phases", "admtvk"])
       expect(broken.code).toBe(1)
       expect(broken.err).toContain("docs/R-01/phases.md")
     } finally {
@@ -926,7 +949,9 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const init = await runCli(["init", dir, "--phases", "analysis, security-review ,implement,security-review"])
       expect(init.code).toBe(0)
       expect(await readConfig(dir)).toMatchObject({ phases: "analysis,security-review,implement,security-review" })
-      expect(init.out).toContain("to start analysis (Analysis) phase planning")
+      expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01`)
+      // plan 建轮后 status 打印阶段树(按索引)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       expect((await runCli(["status", dir])).out).toContain(
         "  [▶] P01-analysis\n  [ ] P02-security-review\n  [ ] P03-implement\n  [ ] P04-security-review\n",
       )
@@ -934,10 +959,10 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       await completeLetters(dir, ["a"])
       const bad = await runCli(["init", dir, "--phases", "security-review,implement"])
       expect(bad.code).toBe(1)
-      expect(bad.err).toContain("prefix")
+      expect(bad.err).toContain('phases "security-review,implement" would drop the completed phase docs/R-01/P01-analysis/')
       // An invalid type file is a usage error naming the file
       await Bun.write(join(dir, ".opencode/auto/phases/broken.md"), "# Broken\n\nTasks: no\n\n## plan duties\n\nx\n")
-      const broken = await runCli(["init", dir, "--amend"])
+      const broken = await runCli(["amend", dir, "--commit", "true"])
       expect(broken.code).toBe(1)
       expect(broken.err).toContain("broken.md")
     } finally {
@@ -945,15 +970,16 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
-  test("init validates before it writes (plans/0052 D7): empty -p or a broken prompt override leaves the config layer untouched", async () => {
+  test("init validates before it writes (plans/0052 D7): the retired -p or a broken prompt override leaves the config layer untouched", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const empty = await runCli(["init", dir, "-p", "  "])
       expect(empty.code).toBe(1)
+      expect(empty.err).toContain("--prompt is retired")
       expect(await readdir(dir)).toEqual([])
       await mkdir(join(dir, ".opencode/auto/prompts"), { recursive: true })
       await Bun.write(join(dir, ".opencode/auto/prompts/decompose.md"), "Decompose the task.\n")
-      const fresh = await runCli(["init", dir, "-p", "意图"])
+      const fresh = await runCli(["init", dir])
       expect(fresh.code).toBe(1)
       expect(fresh.err).toContain("decompose.md")
       expect(await readdir(join(dir, ".opencode/auto"))).toEqual(["prompts"])
@@ -963,7 +989,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       const config = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
       await mkdir(join(dir, ".opencode/auto/prompts"), { recursive: true })
       await Bun.write(join(dir, ".opencode/auto/prompts/decompose.md"), "Decompose the task.\n")
-      const overwrite = await runCli(["init", dir, "-f", "--context-limit", "32", "-p", "意图"])
+      const overwrite = await runCli(["init", dir, "-f", "--context-limit", "32"])
       expect(overwrite.code).toBe(1)
       expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(config)
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).text()).toBe(renderProjectBrief())
@@ -972,30 +998,22 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
     }
   })
 
-  test("init -p 写 brief.md(覆盖重写),无 -p 保留既有;init 不启动 AI 会话", async () => {
+  test("init -p 已退役(plans/0053 D31): 报文指向 brief.md 与 plan -p;人工 brief 不被触碰", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const brief = join(dir, ".opencode/auto/brief.md")
-      const first = await runCli(["init", dir, "-p", "把 legacy 迁移到 bun"])
-      expect(first.code).toBe(0)
-      expect(first.out).toContain("written: .opencode/auto/brief.md")
-      // m mode: run executes listed tasks, it does not plan them (plans/0052 DF3)
-      expect(first.out).toContain("brief recorded; list tasks in docs/R-01/P01-implement/tasks.md")
-      expect(first.out).not.toContain("task planning")
-      expect(await Bun.file(brief).text()).toBe("把 legacy 迁移到 bun\n")
-      // 无 -p 保留既有
       expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
+      // 人工改写 brief 后,带 -p 的 init 一律退役报文退出,文件原样保留
+      await Bun.write(brief, "把 legacy 迁移到 bun\n")
+      const refused = await runCli(["init", dir, "-p", "修订后的意图"])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toBe("--prompt is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p\n")
       expect(await Bun.file(brief).text()).toBe("把 legacy 迁移到 bun\n")
-      // 重复 init -p 覆盖重写(amend 语义);空文本为用法错误
-      expect((await runCli(["init", dir, "-p", "修订后的意图"])).code).toBe(0)
-      expect(await Bun.file(brief).text()).toBe("修订后的意图\n")
-      const empty = await runCli(["init", dir, "-p", "  "])
-      expect(empty.code).toBe(1)
-      expect(empty.err).toContain("-p/--prompt requires non-empty prompt text")
-      // 阶段化流程下结束语引导开始首个阶段规划
-      const staged = await runCli(["init", dir, "--phases", "am", "-p", "意图"])
-      expect(staged.out).toContain("brief recorded")
-      expect(staged.out).toContain("to start analysis (Analysis) phase planning")
+      // continue 的 -p 仍是按轮 brief 文本(子命令退役前保持)
+      const cont = await runCli(["continue", dir, "-p", "x"])
+      expect(cont.code).toBe(1)
+      expect(cont.err).not.toContain("--prompt is retired")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1012,7 +1030,8 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       expect(on.code).toBe(1)
       expect(on.err).toContain("verify is retired")
       await Bun.write(file, JSON.stringify({ ...config, verify: false }, null, 2) + "\n")
-      expect((await runCli(["init", dir, "--amend"])).code).toBe(0)
+      // amend 重写既有键(verify:false 为存量产物被静默丢弃);--commit true 是无变化键
+      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
       expect(await readConfig(dir)).toEqual(config)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -1081,13 +1100,69 @@ describe("CLI: --implement-file/--implement-prompt retired (plans/0053 D13)", ()
   })
 })
 
+// init config-only and amend without the round step (auto-core plans/0053
+// D31–D32, C1): init's -p and --amend retire with notices naming their
+// replacements, init writes the config layer only and points at plan (fresh
+// and overwrite alike), and amend never touches the rounds.
+describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () => {
+  test("init -p and init --amend print their retired notices on every command that has no use for them; nothing is written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const prompt = await runCli(["init", dir, "-p", "意图"])
+      expect(prompt.code).toBe(1)
+      expect(prompt.err).toBe("--prompt is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p\n")
+      const flag = await runCli(["init", dir, "--amend"])
+      expect(flag.code).toBe(1)
+      expect(flag.err).toBe("--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>\n")
+      // plan 的 -p 照常解析(规划输入),continue 的 -p 也不受影响(子命令退役前保持)
+      expect((await runCli(["plan", dir, "-p", "text", "--file", "f.md"])).err).toContain("-p/--prompt and --file are mutually exclusive")
+      expect((await runCli(["continue", dir, "-p", "x"])).err).not.toContain("--prompt is retired")
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init writes the config layer only (fresh and overwrite) and prints the plan-pointing closing line", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const init = await runCli(["init", dir])
+      expect(init.code).toBe(0)
+      expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
+      // 只写配置层:docs/ 下没有任何产物,brief 桩照写
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(true)
+      // 覆盖型 init(轮未建立):同一结束语,仍不建轮
+      const overwrite = await runCli(["init", dir, "--phases", "amt"])
+      expect(overwrite.code).toBe(0)
+      expect(overwrite.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      // plan 建轮后,覆盖型 init 的结束语为纯 plan 指针(不再声称建立 R-01)
+      expect((await runCli(["plan", dir])).code).toBe(0)
+      const again = await runCli(["init", dir])
+      expect(again.code).toBe(0)
+      expect(again.out).toContain(`next: opencode-auto plan ${dir}`)
+      expect(again.out).not.toContain("establishes round")
+      // 既有轮原样保留
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n- [ ] P03 test\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账预检)", () => {
-  test("init --phases amt → 轮首建立 R-01(阶段索引 + 阶段目录,无 PLAN.md);status 打印阶段树", async () => {
+  test("init --phases amt 只写配置层;plan 轮首建立 R-01(阶段索引 + 阶段目录,无 PLAN.md);status 打印阶段树", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const init = await runCli(["init", dir, "--phases", "amt"])
       expect(init.code).toBe(0)
-      expect(init.out).toContain("✓ round directory: docs/R-01/")
+      // init 不建轮(plans/0053 D31):docs/ 不存在,结束语指向 plan
+      expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
+      expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
+      const made = await runCli(["plan", dir])
+      expect(made.code).toBe(0)
+      expect(made.out).toContain("✓ round R-01 established: P01-analysis, P02-implement, P03-test")
       // 任务单元布局(M3.4): 不再有根/轮内 PLAN.md
       expect(await Bun.file(join(dir, "PLAN.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).exists()).toBe(false)
@@ -1109,22 +1184,25 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
     }
   })
 
-  test("phases = m 即隐式阶段 R-01/P01-implement;切换 --phases 重写未开工阶段,已列任务的阶段拒绝丢弃", async () => {
+  test("phases = m 即隐式阶段 R-01/P01-implement;init 改 --phases 不再重写轮,持工作的阶段目录拒绝丢弃", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 implement\n")
       expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
-      // 未开工的隐式阶段随 --phases 切换重写
+      // 未开工的隐式阶段目录仍在(无任务、无 done):init --phases am 允许(值兼容),
+      // 但索引不再被重写——差异表现为 drift,由 plan 处理(D31/D34)
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
-      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n")
-      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(false)
-      // 已列任务的阶段目录不被静默删除
-      await Bun.write(join(dir, "docs/R-01/P01-analysis/tasks.md"), "# Tasks\n\n- [ ] T-001 真实任务\n")
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 implement\n")
+      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/todo.md")).exists()).toBe(true)
+      expect(JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())).toMatchObject({ phases: "am" })
+      // 已列任务的阶段目录不被静默丢弃(前缀护栏的 plannedPhaseUnits 检查)
+      await Bun.write(join(dir, "docs/R-01/P01-implement/tasks.md"), "# Tasks\n\n- [ ] T-001 真实任务\n")
       const refused = await runCli(["init", dir, "--phases", "dmt"])
       expect(refused.code).toBe(1)
       expect(refused.err).toContain("already holds work (tasks.md)")
-      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("真实任务")
+      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain("真实任务")
       // refused before any write (plans/0052 D7): config.json keeps the old phases
       expect(JSON.parse(await Bun.file(join(dir, ".opencode/auto/config.json")).text())).toMatchObject({ phases: "am" })
     } finally {
@@ -1136,6 +1214,7 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       const index = await Bun.file(join(dir, "docs/R-01/phases.md")).text()
       // 索引行非法 → 预检退出 1,报文给人工修订指引
       await Bun.write(join(dir, "docs/R-01/phases.md"), "- [ ] P01 nonsense\n")
@@ -1166,6 +1245,7 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await Bun.write(join(dir, "docs/R-01/phases.md"), "随便一行\n")
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
@@ -1174,6 +1254,7 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
       const plain = await mkdtemp(join(tmpdir(), "auto-cli-"))
       try {
         expect((await runCli(["init", plain])).code).toBe(0)
+        expect((await runCli(["plan", plain])).code).toBe(0)
         const out = (await runCli(["status", plain])).out
         expect(out).not.toContain("phases: ")
         expect(out).toContain("[▶] P01-implement")
@@ -1213,8 +1294,9 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
       const plain = await runCli(["continue", dir])
       expect(plain.code).toBe(1)
       expect(plain.err).toContain("continue only applies to phased-flow projects")
-      // 阶段化但尚无完成阶段(上一轮尚未开始/未完成)
+      // 阶段化但尚无完成阶段(上一轮尚未开始/未完成);init 不建轮,plan 建立 R-01
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       const empty = await runCli(["continue", dir])
       expect(empty.code).toBe(1)
       expect(empty.err).toContain("still has pending phases P01-analysis, P02-implement")
@@ -1251,7 +1333,8 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
   test("上一轮全部完成 → 轮首建立 R-02 + 参数按轮修订 + 新一轮状态正确", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--phases", "am", "-p", "第一轮意图"])).code).toBe(0)
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await completeLetters(dir, ["a", "m"])
       // 轮后手工留下的任务留在上一轮的阶段任务索引与任务目录里,落盘即永久,
       // 不随续轮移动
@@ -1303,6 +1386,7 @@ describe("CLI: continue 子命令(续轮迁移,M 节)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await completeLetters(dir, ["a", "m"])
       await fillClose(dir)
       const cont = await runCli(["continue", dir])
@@ -1400,7 +1484,8 @@ describe("CLI: amend (plans/0052 D25)", () => {
         [["-p", "意图"], "-p/--prompt is not an amend option: the brief is not config — edit .opencode/auto/brief.md directly"],
         [["--implement-prompt", "计划"], "--implement-prompt is retired: plan tasks with opencode-auto plan <dir>"],
         [["-f", "--phases", "am"], "-f/--force is not an amend option"],
-        [["--amend", "--phases", "am"], "--amend is redundant"],
+        // --amend 旗标已全局退役(init 不再接受它,没有任何命令接受)
+        [["--amend", "--phases", "am"], "--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>"],
         [["--server", "http://x", "--phases", "am"], "--server is not an amend option: amend takes only config flags (-m/--mode, --agent,"],
         [["--max-sessions", "1", "--phases", "am"], "--max-sessions is not an amend option"],
         [["--source-dir", "legacy"], "--source-dir is retired"],
@@ -1416,10 +1501,12 @@ describe("CLI: amend (plans/0052 D25)", () => {
     }
   })
 
-  test("changes the named keys only, re-renders the contract and the AGENTS.md block, re-syncs the round tail", async () => {
+  test("changes the named keys only, re-renders the contract and the AGENTS.md block, leaves the rounds alone (D32)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--context-limit", "32", "--phases", "am", "--parallel", "low", "--agent", "claude"])).code).toBe(0)
+      // plan 建立当前轮;amend 只写配置层,不再重同步阶段尾部
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await rm(join(dir, "opencode.json"))
       await rm(join(dir, ".opencode/auto/brief.md"))
       const amended = await runCli(["amend", dir, "--test-by-driver", "--phases", "amt", "--parallel", "none", "--agent", "opencode"])
@@ -1431,7 +1518,11 @@ describe("CLI: amend (plans/0052 D25)", () => {
       expect(config).not.toHaveProperty("agent")
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).text()).toBe(renderText(await Bun.file(templateAgent).text(), { testByDriver: true }))
       expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("tmp/test.sh")
-      expect(await stat(join(dir, "docs/R-01/P03-test")).then((entry) => entry.isDirectory())).toBe(true)
+      // the round step is gone (plans/0053 D32): the new value's extra phase is
+      // NOT created — the index keeps "am" and the difference is a drift for
+      // plan to reconcile
+      expect(await stat(join(dir, "docs/R-01/P03-test")).catch(() => undefined)).toBeUndefined()
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [ ] P01 analysis\n- [ ] P02 implement\n")
       // amend writes only what renders from the config: the rest is init's and fix's
       expect(await Bun.file(join(dir, "opencode.json")).exists()).toBe(false)
       expect(await Bun.file(join(dir, ".opencode/auto/brief.md")).exists()).toBe(false)
@@ -1444,13 +1535,14 @@ describe("CLI: amend (plans/0052 D25)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "adm"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await completeLetters(dir, ["a"])
       const config = await readConfig(dir)
       for (const [args, message] of [
         [["--subtask", "sometimes"], "--subtask takes off|auto|ondemand"],
         [["--handover-test"], "--handover-test requires --test-by-driver"],
         [["-m", "nope"], "--mode must be a registered mode"],
-        [["--phases", "dm"], 'the new --phases value "dm" is incompatible with the phase index'],
+        [["--phases", "dm"], 'phases "dm" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md'],
       ] as [string[], string][]) {
         const result = await runCli(["amend", dir, ...args])
         expect(result.code).toBe(1)
@@ -1651,8 +1743,7 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      // init 建过 R-01;移除后即「轮未建立」态(中断建轮/人工删除)
-      await rm(join(dir, "docs"), { recursive: true, force: true })
+      // init 只写配置层,轮本就未建立(config-only init,plans/0053 D31)
       // D5:建轮路由上的输入先拒绝,任何写盘之前
       const refused = await runCli(["plan", dir, "-p", "输入"])
       expect(refused.code).toBe(1)
@@ -1676,6 +1767,7 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await listTasks(dir, "docs/R-01/P01-implement", "R-01.P01", [["T-001", "任务", "正文"]])
       const notice = await runCli(["plan", dir])
       expect(notice.code).toBe(0)
@@ -1704,6 +1796,7 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "任务", "正文"]])
       const notice = await runCli(["plan", dir])
@@ -1726,7 +1819,8 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
   test("a complete round: the round-close gate fails with exit 2 (input refused too); passing opens R-02 with the G1 lines", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir, "--phases", "am", "-p", "第一轮意图"])).code).toBe(0)
+      expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await completeLetters(dir, ["a", "m"])
       // 轮完成:G8 不过(`## Close` 未填)→ 退出码 2(D4;continue 时代是 1)
       const fail = await runCli(["plan", dir])
@@ -1789,6 +1883,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
     const git = gitOf(dir)
     await git("init")
     expect((await runCli(["init", dir])).code).toBe(0)
+    expect((await runCli(["plan", dir])).code).toBe(0)
     await listTasks(dir, P01.dir, "R-01.P01", [
       ["T-001", "被取代的任务", "正文"],
       ["T-002", "隐式依赖者", "正文"],
@@ -1851,6 +1946,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await listTasks(dir, P01.dir, "R-01.P01", [["T-001", "任务", "正文"]])
       await Bun.write(join(dir, RUN_LOCK_FILE), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
       const refused = await runCli(["close", "T-001", dir, "--reason", "r"])
@@ -1905,6 +2001,7 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
     try {
       await git("init")
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "被跳过的任务", "正文"]])
       await git("add", "-A")
@@ -1968,6 +2065,7 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
     const git = gitOf(dir)
     await git("init")
     expect((await runCli(["init", dir])).code).toBe(0)
+    expect((await runCli(["plan", dir])).code).toBe(0)
     await listTasks(dir, P01.dir, "R-01.P01", [
       ["T-001", "被取代的任务", "正文"],
       ["T-002", "隐式依赖者", "正文"],
@@ -2080,6 +2178,7 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
     try {
       await git("init")
       expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       // P01 done, P02 current with a task to skip over, P03 already planned
       // (its tasks listed by hand), so the follow-up planning stops on the
       // deterministic execute notice naming P03.
@@ -2172,6 +2271,7 @@ describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () =>
     try {
       await git("init")
       expect((await runCli(["init", dir, "--phases", "am"])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       // P01 done, P02 current with one pending task (the execute route).
       await completeLetters(dir, ["a"])
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "既有任务", "正文"]])
@@ -2215,6 +2315,7 @@ describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () =>
     try {
       await git("init")
       expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await listTasks(dir, P01.dir, "R-01.P01", [
         ["T-001", "被取代的任务", "正文"],
         ["T-002", "后继任务", "正文"],
@@ -2258,7 +2359,7 @@ describe("CLI: plan --append end to end (auto-core plans/0053 D23–D25)", () =>
 })
 
 describe("CLI: the project brief stub (plans/0052 D9)", () => {
-  test("init writes the stub only when brief.md is missing; -p replaces it; reset removes only the untouched stub", async () => {
+  test("init writes the stub only when brief.md is missing; -p is retired; reset removes only the untouched stub", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const brief = join(dir, ".opencode/auto/brief.md")
@@ -2271,9 +2372,13 @@ describe("CLI: the project brief stub (plans/0052 D9)", () => {
       const reset = await runCli(["reset", dir])
       expect(reset.out).toContain("keep: .opencode/auto/brief.md (filled in, not the init stub, kept)")
       expect(await Bun.file(brief).text()).toContain("Migrate legacy/pkg to app/.")
+      // init 的 -p 已退役(plans/0053 D31):桩在,人工直接编辑;带 -p 一律拒绝
       await rm(brief)
-      expect((await runCli(["init", dir, "-p", "意图"])).code).toBe(0)
-      expect(await Bun.file(brief).text()).toBe("意图\n")
+      const refused = await runCli(["init", dir, "-p", "意图"])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain("--prompt is retired")
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await Bun.file(brief).text()).toBe(renderProjectBrief())
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2285,6 +2390,7 @@ describe("CLI: reset 反初始化", () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
+      expect((await runCli(["plan", dir])).code).toBe(0)
       await mkdir(join(dir, ".auto", "logs"), { recursive: true })
       await writeFile(join(dir, ".auto", "logs", "run.log"), "日志\n")
       await mkdir(join(dir, "docs", "T-001"), { recursive: true })
@@ -2416,12 +2522,12 @@ describe("CLI: 工作区干净度闸门", () => {
     }
   })
 
-  test("--amend 不是全量覆盖,不受闸门约束", async () => {
+  test("amend 不是全量覆盖,不受闸门约束", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       await git(dir, "init")
       expect((await runCli(["init", dir])).code).toBe(0)
-      expect((await runCli(["init", dir, "--amend", "--test-by-driver"])).code).toBe(0)
+      expect((await runCli(["amend", dir, "--test-by-driver"])).code).toBe(0)
       expect(await readConfigAt(dir)).toMatchObject({ testByDriver: true })
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -2466,12 +2572,12 @@ describe("CLI: 工作区干净度闸门", () => {
     }
   })
 
-  test("run 拒绝 --amend 与 -f/--force", async () => {
+  test("run 拒绝已退役的 --amend 与 -f/--force", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       const amend = await runCli(["run", dir, "--amend"])
       expect(amend.code).toBe(1)
-      expect(amend.err).toContain("--amend is an init-only option")
+      expect(amend.err).toContain("--amend is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>")
       const force = await runCli(["run", dir, "-f"])
       expect(force.code).toBe(1)
       expect(force.err).toContain("is an init/reset/fix option")

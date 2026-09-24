@@ -44,14 +44,12 @@ import {
   readPhases,
   roundEstablishing,
   type PhaseState,
-  type PhaseUnit,
 } from "@opencode-ai/auto-core/phases"
 import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
 import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/auto-core/phases/registry"
 import { renderStatus } from "@opencode-ai/auto-core/status"
-import { roundBriefPath } from "@opencode-ai/auto-core/docpaths"
+import { roundBriefPath, roundDirName } from "@opencode-ai/auto-core/docpaths"
 import { roundCloseLines, roundCloseProblems } from "@opencode-ai/auto-core/round-close"
-import { taskIndexPath } from "@opencode-ai/auto-core/tasks"
 import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/opts"
 import { useIntentPacks } from "@opencode-ai/auto-core/prompt"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
@@ -68,7 +66,7 @@ const positional: string[] = []
 // --max-sessions/--reason(close 与 plan --force-close 共用)/--force-close
 // (plan 专用)带值(吞掉下一个 token;已退役的
 // --implement-file/--implement-prompt 同样吞值,其参数不被当作目录,
-// auto-core plans/0053 D13);
+// auto-core plans/0053 D13;init 的 -p/--prompt 退役后同理仍吞值,plans/0053 D31);
 // --verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
 // 以及 --cascade/--commit-changes/--stash-changes(close 与 plan --force-close
@@ -176,16 +174,24 @@ if (command !== "plan" && flags.has("force-close")) {
 }
 // Retired flags are usage errors with their own notice (mirroring the --commit
 // false retirement), let through the whitelist so the notice replaces "unknown
-// option": the completion-side mechanisms (D13, auto-core plans/0044), the
-// migration parameters, which are intent rather than configuration (plans/0052 D1),
-// and init's m-mode planning shortcut, whose session is now plan's (plans/0053 D13).
+// option": the completion-side mechanisms (plans/0044 D13), the migration
+// parameters — intent, not configuration (plans/0052 D1) — init's m-mode
+// planning shortcut, whose session is now plan's (plans/0053 D13), and init's
+// -p and --amend, since init writes the config layer only (plans/0053 D31:
+// the brief is edited by hand, per-key revision is the amend command's). An
+// entry is a notice string (retired on every command) or { command, notice } (that command alone): -p stays plan's input — and continue's per-round brief until that subcommand retires — so it is scoped to init; --amend has no live command left and retires everywhere, one notice naming `amend <dir> --<key> <value>` (replacing run/plan's "init-only option" refusal and the amend command's "redundant" note: same exit 1, one wording).
+// AUTO-DECISION (scoping): command-scoped entries here rather than a second init-only refusal inside the init block — the generic loop fires ahead of every command block, staying ordering-safe with the whitelist, the per-command refusals and the close whitelist pass-through.
 const COMPLETION_RETIRED =
   "is retired: the driver no longer runs task-level acceptance, quality review or a final review. " +
   'Plan the checking as tasks (for example the v acceptance phase); a task report whose result line reads "Result: FAIL" stops the run'
 const MIGRATION_RETIRED =
   "is retired: the migration source and target are intent, not configuration — state them in .opencode/auto/brief.md, which planning sessions read"
 const IMPLEMENT_RETIRED = "is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after init and the round-start commit)"
-const RETIRED_FLAGS: Record<string, string> = {
+const INIT_PROMPT_RETIRED =
+  "is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p"
+const AMEND_FLAG_RETIRED =
+  "is retired: init is the stateless full overwrite; to change individual keys use opencode-auto amend <dir> --<key> <value>"
+const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }> = {
   verify: COMPLETION_RETIRED,
   review: COMPLETION_RETIRED,
   early: COMPLETION_RETIRED,
@@ -196,6 +202,8 @@ const RETIRED_FLAGS: Record<string, string> = {
   "dest-dir": MIGRATION_RETIRED,
   "implement-file": IMPLEMENT_RETIRED,
   "implement-prompt": IMPLEMENT_RETIRED,
+  prompt: { command: "init", notice: INIT_PROMPT_RETIRED },
+  amend: AMEND_FLAG_RETIRED,
 }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
 // The config flags: the project attributes init freezes into config.json and
@@ -220,8 +228,10 @@ for (const key of flags.keys()) {
   }
   if (command === "close") {
     if (CLOSE_FLAGS.has(key)) continue
-    // Retired flags keep their own notices below (they exit there).
-    if (key in RETIRED_FLAGS) continue
+    // Globally retired flags keep their own notices below (they exit there);
+    // a scoped entry (init's -p) does not fire for close, so it must not be
+    // waved through here either — close's own refusals take it.
+    if (typeof RETIRED_FLAGS[key] === "string") continue
     if (key === "commit") {
       console.error(
         "--commit is a config flag frozen by init (run's commit semantics; to change: opencode-auto amend <dir> --commit <value>, or edit that file directly) " +
@@ -246,11 +256,11 @@ for (const key of flags.keys()) {
   console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status only accept a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
   process.exit(1)
 }
-for (const [key, notice] of Object.entries(RETIRED_FLAGS)) {
-  if (flags.has(key)) {
-    console.error(`--${key} ${notice}`)
-    process.exit(1)
-  }
+for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
+  if (!flags.has(key)) continue
+  if (typeof entry !== "string" && command !== entry.command) continue
+  console.error(`--${key} ${typeof entry === "string" ? entry : entry.notice}`)
+  process.exit(1)
 }
 
 // close (auto-core plans/0053 D22): the ref is required, so it comes first —
@@ -594,13 +604,9 @@ function refuseFrozenFlags(command: "run" | "plan") {
     console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
     process.exit(1)
   }
-  // --amend 是 init 专用(切回增量修订语义,单改一个键用 amend 子命令);-f/--force
-  // 是 init/reset/fix 专用(跳过覆盖确认与工作区干净度闸门);run 与 plan 不写配置、
-  // 不做破坏性覆盖,两者都无意义。
-  if (flags.has("amend")) {
-    console.error(`--amend is an init-only option (to change individual keys use opencode-auto amend <dir> --<key> <value>); ${command} does not accept it`)
-    process.exit(1)
-  }
+  // --amend 已全局退役(上方 RETIRED_FLAGS:init 不再接受该旗标后没有任何命令接受它)。
+  // -f/--force 是 init/reset/fix 专用(跳过覆盖确认与工作区干净度闸门);run 与 plan
+  // 不写配置、不做破坏性覆盖,无意义。
   if (flags.has("force")) {
     console.error(`-f/--force is an init/reset/fix option (skips the confirmation and the worktree cleanliness check); ${command} does not accept it`)
     process.exit(1)
@@ -946,16 +952,15 @@ if (command === "init" || command === "continue" || command === "amend") {
   // 再跑一次无参 init」产出逐字节一致,单次 init 即可得到确定状态,无需前置清理。
   // 值域校验复用既有 parse*(与配置文件侧 validateProjectConfig 同源)。
   //
-  // --amend 显式切回旧的增量修订语义(只改命令行显式给出的键,其余保留既有配置),
-  // 供「只想改一个字段又不想重述全部参数」的场景;continue 恒为 amend(下方 base)。
-  //
-  // The amend command (plans/0052 D25) is that amend as a command of its own:
+  // The amend command (plans/0052 D25) is the per-key revision of its own:
   // it takes the config flags only, refuses without config.json or without a
-  // key, and writes config.json plus the artifacts rendered from it (the agent
-  // contract and the AGENTS.md block). Until P3c it also runs the round step,
-  // so moving from `init --amend` loses nothing (the tail re-sync after a
-  // --phases change); opencode.json, .gitignore and the brief stub are left to
-  // init and `fix`. `init --amend` keeps working until P3c (D20).
+  // key, and writes config.json plus the artifacts rendered from it (the
+  // agent contract and the AGENTS.md block). Since plan owns the rounds
+  // (auto-core plans/0053 D31–D32), neither init nor amend runs the round
+  // step; each keeps one read-only prefix-guard check below, so a --phases
+  // change that keeps the completed phases is allowed and surfaces as a
+  // drift for plan to reconcile instead of a silent index rewrite.
+  // opencode.json, .gitignore and the brief stub are left to init and `fix`.
   //
   // continue 子命令(续轮迁移,设计文档 plans/0006-phases-design.md M 节)= init 的
   // amend 语义 + 轮首建立新一轮轮次目录: 上一轮阶段化迁移全部完成后开启新一轮,
@@ -981,9 +986,7 @@ if (command === "init" || command === "continue" || command === "amend") {
           ? `-p/--prompt is not an amend option: the brief is not config — edit ${BRIEF_FILE} directly`
           : key === "force"
             ? "-f/--force is not an amend option: amend discards no key, so there is no overwrite confirmation or worktree check to skip"
-            : key === "amend"
-              ? "--amend is redundant: the amend command always keeps the keys it is not given"
-              : `--${key} is not an amend option: amend takes only config flags (${CONFIG_FLAGS.map((name) => (name === "mode" ? "-m/--mode" : `--${name}`)).join(", ")})`,
+            : `--${key} is not an amend option: amend takes only config flags (${CONFIG_FLAGS.map((name) => (name === "mode" ? "-m/--mode" : `--${name}`)).join(", ")})`,
       )
       process.exit(1)
     }
@@ -1049,7 +1052,7 @@ if (command === "init" || command === "continue" || command === "amend") {
   // names each one before the overwrite (plans/0052 D4) — otherwise a stored
   // `commit: false` or `source` would block the very re-init that clears it.
   // From P2 the strict failure names `fix` when a rule repairs it (D4, D11).
-  const amend = cont || amendCommand || flags.has("amend")
+  const amend = cont || amendCommand
   let existing: ProjectConfig
   let discarded: RetiredKey[] = []
   try {
@@ -1065,9 +1068,6 @@ if (command === "init" || command === "continue" || command === "amend") {
   // hand-edited: a full-overwrite init keeps them rather than silently erasing them.
   const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
   const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
-  // 本次生效的 phases: 显式给出即用之,否则取基线值(全量覆盖下 = 缺省 "m",
-  // --amend/continue 下 = 既有配置值)。阶段索引前缀护栏使用。
-  const effectivePhases = phases ?? base.phases
   // handoverTest 须搭配 testByDriver: 显式给出时按本次生效值校验(未显式给出
   // test-by-driver 则回落既有配置值);amend 关闭 test-by-driver 而保留既有
   // handoverTest=true 亦在此拦截。
@@ -1101,7 +1101,6 @@ if (command === "init" || command === "continue" || command === "amend") {
   const completedPhases = phaseState ? doneTypes(phaseState) : []
   // 生效 phases 与既有配置 phases 展开为类型序列(均已校验合法)。
   const typesOf = (value: string) => parsePhases(value, directory)!.map((entry) => entry.type)
-  const effectiveTypes = typesOf(effectivePhases)
   // continue 前置校验(按既有配置判定,不看向新 --phases 值): 仅阶段化项目、且
   // 上一轮已全部完成——阶段索引存在且其中每个阶段都已完成(done.md)。轮首建立后
   // 新一轮阶段全未完成,新一轮 --phases 不受前缀护栏约束(从头规划,任何合法值可改)。
@@ -1145,25 +1144,8 @@ if (command === "init" || command === "continue" || command === "amend") {
     }
     for (const warning of close.warnings) console.log(`⚠ ${warning}`)
   }
-  // 前缀护栏判定的是**本次生效值**而非「是否显式给出」: 全量覆盖下无参 init 会把
-  // phases 回落为缺省 "m",若项目已跑在阶段化流程中途(已有完成阶段),这会静默毁掉
-  // 已完成阶段(syncPhaseIndex 拒绝丢弃已完成阶段,但报错发生在配置写盘之后)。
-  // 判生效值即可把这种情形拦在任何写盘之前。--amend/continue 下生效值 = 既有配置
-  // 值,天然满足前缀条件,旧行为不变。
-  const completedText = completedPhases.join(",")
-  if (!cont && completedPhases.length && !completedPhases.every((type, i) => effectiveTypes[i] === type)) {
-    console.error(
-      flags.has("phases")
-        ? `the new --phases value "${effectivePhases}" is incompatible with the phase index (${indexPath}): its completed phases are "${completedText}", which must be a prefix of the new value's phase types. ` +
-            "use a value prefixed by it, or roll the index back manually (rename done.md to todo.md) before changing it"
-        : `a no-flag init overwrites with defaults and would reset phases to "${effectivePhases}", incompatible with the completed phases "${completedText}" in the phase index (${indexPath}) (it would destroy the round layout). ` +
-            `to change individual keys and keep the rest use opencode-auto amend ${directory} --<key> <value> (opencode-auto fix ${directory} refreshes the agent contract and AGENTS.md block); ` +
-            `to really change phases, pass --phases explicitly prefixed by "${completedText}"`,
-    )
-    process.exit(1)
-  }
   // -m/--mode 解析(缩减版,init 侧): 优先级 显式值 > 基线值(全量覆盖下即缺省,
-  // --amend/continue 下为既有配置值);未注册名为用法错误(报文列出当前支持的模式)。
+  // amend 命令/continue 下为既有配置值);未注册名为用法错误(报文列出当前支持的模式)。
   const modeName = flags.get("mode") ?? base.mode
   const modes = loadModeTable(directory)
   if (!modes[modeName]) {
@@ -1175,17 +1157,33 @@ if (command === "init" || command === "continue" || command === "amend") {
   // otherwise keep the old value).
   if (parallel === "none") delete config.parallel
   if (agent === "opencode") delete config.agent
-  // The round this run establishes (continue: the next one) and the phase units
-  // the index sync will leave there. The sync's own refusals (dropping a
-  // completed phase, or a phase directory that holds work) surface here,
-  // before anything is written.
+  // The round continue establishes (the next one; init and amend establish
+  // none — plan owns round establishment, auto-core plans/0053 D31–D32).
   const round = cont ? await nextRound(directory) : liveRound
-  let units: PhaseUnit[]
-  try {
-    units = await plannedPhaseUnits(directory, round, config.phases)
-  } catch (error) {
-    console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
+  // The read-only prefix guard, one per command (plans/0053 D31–D32): init
+  // and amend no longer re-sync the index, so the guard only keeps the config
+  // reconcilable with the current round. plannedPhaseUnits is the sync's check
+  // half: a value that would drop a completed phase or a directory holding
+  // work could never be re-synced, so it is refused before any write, while a
+  // mid-round value that keeps the completed phases is allowed and shows up
+  // as a drift for plan to reconcile. Skipped when the current round is
+  // complete — the value then applies to the next round plan establishes,
+  // what continue offered (0052 §4.1 addition 3). It judges this run's
+  // effective value (config.phases), so a no-flag overwrite that would reset
+  // a staged project to "m" is caught here too.
+  // AUTO-DECISION (one guard): the shells' completed-types prefix check was removed — plannedPhaseUnits is the single guard, refusing every value it refused (a completed phase survives only when its directory matches positionally, the same prefix; a hand-edited index whose done phases are not an index prefix is allowed now: the directories still match, and the sync judges directories).
+  const roundComplete = !!phaseState && phaseState.phases.every((unit) => phaseState.done.has(unit.id))
+  if (!roundComplete) {
+    try {
+      await plannedPhaseUnits(directory, liveRound, config.phases)
+    } catch (error) {
+      console.error(
+        `${error instanceof Error ? error.message : String(error)}. ` +
+          "A mid-round phases change must keep the current round's completed phases and the phase directories that hold work; " +
+          "once the current round is complete, any value applies to the next round plan establishes",
+      )
+      process.exit(1)
+    }
   }
   // 提示词库与意图包: 装载目标目录 .opencode/auto/prompts/ 与 .opencode/auto/intents/
   // 覆盖(协议校验失败即退出);init 不渲染提示词,提前装载可在 init 阶段就暴露
@@ -1197,10 +1195,11 @@ if (command === "init" || command === "continue" || command === "amend") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  // Commit capability prerequisite (plain init only; --amend/continue retire
-  // with P3c and are not covered): the unified commit is the completion
-  // condition, so a repository whose git cannot commit (no user.name /
-  // user.email, nothing to fall back to) is refused before any write.
+  // Commit capability prerequisite (plain init only; the amend command and
+  // continue are not covered — they touch an already-working project): the
+  // unified commit is the completion condition, so a repository whose git
+  // cannot commit (no user.name / user.email, nothing to fall back to) is
+  // refused before any write.
   if (command === "init" && !amend) {
     const problem = await commitIdentityProblem(directory)
     if (problem) {
@@ -1213,7 +1212,7 @@ if (command === "init" || command === "continue" || command === "amend") {
   }
   for (const item of discarded) console.log(`⚠ full overwrite drops the retired key ${item.key} = ${JSON.stringify(item.value)}: ${item.why}`)
   // 防误触闸门: 只在「已存在配置、且本次是全量覆盖」时生效——全新目录没有可覆盖
-  // 的东西,--amend 也不会丢弃任何既有键。两道闸都必须排在第一个写盘点
+  // 的东西,amend 命令也不会丢弃任何既有键。两道闸都必须排在第一个写盘点
   // (saveProjectConfig)之前,现有 e2e 断言「旗标校验通过前目录为空」的不变式
   // 依赖于此;先拦截再询问,避免用户答完 y 才看到报错。
   const force = flags.has("force")
@@ -1243,9 +1242,9 @@ if (command === "init" || command === "continue" || command === "amend") {
   }
   console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
   // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。任务不在此写(PLAN.md
-  // 已退役,M3.4): 由下方 establishRound 建轮次目录与阶段目录,任务单元由规划会话
-  // 或人工写出。amend writes only what renders from the config (the
-  // contract); opencode.json may hold a person's edits and is init's and fix's.
+  // 已退役,M3.4): 轮次目录与阶段目录由 plan 的建轮路由建立(continue 建新一轮),
+  // 任务单元由规划会话或人工写出。amend writes only what renders from the config
+  // (the contract); opencode.json may hold a person's edits and is init's and fix's.
   const templates: Record<string, string> = amendCommand
     ? { ".opencode/agent/auto.md": templateAgent }
     : { "opencode.json": templateConfig, ".opencode/agent/auto.md": templateAgent }
@@ -1284,8 +1283,8 @@ if (command === "init" || command === "continue" || command === "amend") {
   if (ensured.legacyRemoved) console.log(`cleaned: removed ${ensured.legacyRemoved} legacy/stray opencode-auto marker block(s) from AGENTS.md`)
   // Plain init writes the full ignore set in one pass (the driver workdir, the
   // local-only files and every nested git repository in the tree — see
-  // auto-core/gitignore.ts); --amend/continue (retiring with P3c) keep the
-  // original ensureGitignore scope, and the amend command never touches it.
+  // auto-core/gitignore.ts); continue keeps the original ensureGitignore
+  // scope, and the amend command never touches it.
   if (command === "init" && !amend) {
     const appended = await ensureInitGitignore(directory)
     if (appended.length) console.log(`updated: .gitignore now ignores ${appended.join(", ")} (driver workdir, local-only files and nested git repositories)`)
@@ -1294,16 +1293,18 @@ if (command === "init" || command === "continue" || command === "amend") {
   }
 
   // 轮首建立(轮次专用目录 docs/R-NN,plans/0006-phases-design.md M 节;须在 ensurePointer
-  // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): init 建当前轮(全新项目 = R-01,幂等
-  // ——已有阶段索引按预置同步,只重写未开始的尾部阶段);continue 建新一轮 R-(N+1)
+  // 之后,AGENTS.md.bak 快照才含 opencode-auto 块): continue 建新一轮 R-(N+1)
   // (前置校验已过;上一轮结论经 prevRoundDigest 注入新一轮首个阶段规划会话)。无阶段
-  // 模式("m")同样建立,唯一阶段为 P01-implement(plans/0047 L2)。
-  try {
-    const established = await establishRound(directory, { phases: config.phases, round })
-    console.log(`✓ round directory: ${established.root}/ (the phase index phases.md and one P<nn>-<type>/ directory per phase, each with its task index tasks.md once planned; once written, permanent)`)
-  } catch (error) {
-    console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
+  // 模式("m")同样建立,唯一阶段为 P01-implement(plans/0047 L2)。init 与 amend 自
+  // plans/0053 D31–D32 起不再建轮——全新项目的轮由 plan 的建轮路由建立。
+  if (cont) {
+    try {
+      const established = await establishRound(directory, { phases: config.phases, round })
+      console.log(`✓ round directory: ${established.root}/ (the phase index phases.md and one P<nn>-<type>/ directory per phase, each with its task index tasks.md once planned; once written, permanent)`)
+    } catch (error) {
+      console.error(`round establishment failed: ${error instanceof Error ? error.message : String(error)}`)
+      process.exit(1)
+    }
   }
   if (amendCommand) {
     const given = CONFIG_FLAGS.filter((key) => flags.has(key)).map((key) => (key === "mode" ? "-m" : `--${key}`))
@@ -1311,36 +1312,34 @@ if (command === "init" || command === "continue" || command === "amend") {
     process.exit(0)
   }
 
-  // -p/--prompt: 项目意图文本写入 .opencode/auto/brief.md(版本化、随仓库共享、
-  // 人工可编辑,amend 语义——重复 init -p 覆盖重写),由每个阶段的规划会话消费。
-  // init 不再启动任何 AI 会话(设计文档 plans/0006-phases-design.md §B.1: 规划必须感知
-  // 各阶段产物,从 init 挪到 run 的阶段边界)。
+  // -p/--prompt: continue 的按轮意图文本写入 .opencode/auto/brief.md(版本化、随仓库
+  // 共享、人工可编辑,重复传入覆盖重写),由每个阶段的规划会话消费。init 的 -p 已退役
+  // (plans/0053 D31: 人工直接编辑该文件);plan 的 -p 是规划输入,另一个东西。init
+  // 不启动任何 AI 会话(plans/0006-phases-design.md §B.1: 规划必须感知各阶段产物)。
   if (promptText !== undefined) {
     await Bun.write(join(directory, BRIEF_FILE), promptText.trimEnd() + "\n")
-    console.log(`written: ${BRIEF_FILE} (project brief, consumed by phase planning sessions; repeated init -p overwrites it)`)
+    console.log(`written: ${BRIEF_FILE} (project brief, consumed by phase planning sessions; repeated -p overwrites it)`)
   }
-  const taskIndex = taskIndexPath(units[0]!)
-  // 结束语按 phases 分两态: "m" 提示人工写任务单元(run 在 m 下不规划,-p 写下的
-  // brief 只供日后的规划会话);阶段化流程下任务由阶段规划会话写出,不提示手工编辑。
-  // continue 下新一轮阶段全未完成,首个阶段 = 新 phases 的第一个字母;另打新一轮横幅。
-  if (config.phases === "m") {
+  if (cont) {
+    // 新一轮阶段全未完成,首个阶段 = 新 phases 的第一个;另打新一轮横幅。
+    const current = parsePhases(config.phases, directory)![0]!
+    console.log(`round ${round} of the migration started: making the migration result more complete and consistent with the source on top of existing progress`)
+    // The round-start gate (plans/0049 G1): the setup stays uncommitted until the
+    // human has reviewed it; run's clean gate refuses to start before that.
     console.log(
-      `${promptText !== undefined ? "brief recorded; " : ""}list tasks in ${taskIndex} (one line \`- [ ] T-NNN <title>\` each, content in docs/T-NNN/todo.md), then run: opencode-auto run ${directory}`,
+      `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it`,
+    )
+    console.log(
+      `${promptText !== undefined ? "brief recorded; " : ""}then run: opencode-auto run ${directory} to start ${current.type} (${current.name}) phase planning`,
     )
     process.exit(0)
   }
-  // 首个未完成阶段: 前缀护栏保证已完成阶段恰为生效类型序列的前缀。
-  const current = parsePhases(config.phases, directory)![cont ? 0 : completedPhases.length]
-  if (cont) {
-    console.log(`round ${round} of the migration started: making the migration result more complete and consistent with the source on top of existing progress`)
-  }
-  // The round-start gate (plans/0049 G1): the setup stays uncommitted until the
-  // human has reviewed it; run's clean gate refuses to start before that.
+  // init's closing line (plans/0053 D31): plan owns the rounds; init points at it and writes nothing under docs/ itself.
+  // AUTO-RESOLVE: the design pins one line — "next: <bin> plan <dir> (establishes round R-01 and stops at the round-start gate)"; print it verbatim on an overwrite init whose round is already established? -> no: the parenthetical is dropped there (it would state a falsehood over an existing round; both states keep a plan-pointing line, which is what the acceptance asks of fresh and overwrite init alike).
   console.log(
-    `next (round-start gate): review the round setup, fill in ${roundBriefPath(round)} (goal, acceptance and release criteria), and commit it`,
-  )
-  console.log(
-    `${promptText !== undefined ? "brief recorded; " : ""}then run: opencode-auto run ${directory}${current ? ` to start ${current.type} (${current.name}) phase planning` : " (all phases complete)"}`,
+    phaseState
+      ? `next: opencode-auto plan ${directory}`
+      : `next: opencode-auto plan ${directory} (establishes round ${roundDirName(liveRound)} and stops at the round-start gate)`,
   )
   process.exit(0)
 }
@@ -1501,7 +1500,7 @@ if (command === "status") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--amend] [-f|--force]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [-f|--force]
   opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
@@ -1513,8 +1512,8 @@ console.error(`usage:
   opencode-auto status [dir]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
-       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
-       amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block, and re-syncs the current round's unstarted phases after a --phases change. init --amend does the same and stays until plan takes over init's round step; continue is always amend
+       init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
+       amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with. continue is always amend
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
          plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
@@ -1523,9 +1522,9 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
         run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), and close holds it around its writes; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
-       -p/--prompt on init: project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions; on plan, -p is the planning input); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired
+       -p/--prompt is the planning input of plan (-p <text> | --file <path>) and the per-round brief text of continue; on init it is retired — init no longer writes the project brief: edit .opencode/auto/brief.md directly (init writes a stub there when the file is missing: ## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning; every planning session reads it). State the migration source and target there — --source-dir/--source-path/--dest-dir are retired
        reset de-initialization (inverse of init): removes the config-layer artifacts init wrote (.opencode/auto/config.json, brief.md while it is the untouched stub, .opencode/agent/auto.md, legacy .auto/config.json, the AGENTS.md opencode-auto block, the .gitignore entries init wrote (tmp/, .auto/, the local-only files and nested git repositories), plus opencode.json if unmodified); docs/, .auto/ runtime state and tmp/ are never touched; empty directories only are reclaimed (preserving .opencode/auto/prompts/ and your other agent contracts)
-       --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md; once phases are complete, changes must satisfy the prefix guard — see README)
+       --phases <admtvk subsequence with m | type-id list> phased flow (a analysis → d design → m migration implementation → t test → v acceptance → k knowledge distillation; "m" default = the manual single phase P01-implement, no planning or handover session; alternatively a comma-separated list of phase type ids in any order, repeats allowed, containing implement (e.g. analysis,security-review,implement), where custom types are defined one per file in .opencode/auto/phases/<type>.md). Changing it mid-round must keep the completed phases and the directories holding work (the prefix guard init and amend apply); once the current round is complete any value applies to the next round plan establishes
        --commit [true] unified commit after sessions (always on: after any session ends and the driver writes completion state, the driver recursively commits all changes — git history is the audit trail of AI changes; --commit false and the old alias none are retired — committing is the completion condition, it can no longer be turned off)
        --test-by-driver [true] moves compile/test/build/lint execution rights to the driver: execution-type sessions no longer run such commands in-session; instead they write the commands as scripts into test/ and put the script path in tmp/test.sh for the driver, which merges stdout/stderr into tmp/test.<n>.out and feeds the exit code and output file back to the session for the AI to judge
        --handover-test requires --test-by-driver: when a session's context reaches its cap, hand over at the moment it next initiates a test — the driver first commits the finalized pinned script and sources, and has the AI write remaining work that does not depend on test results to disk plus a handover document (subtask sessions: docs/<task>/S<two-digit>/testhandoff.md; whole-task sessions: docs/<task>/testhandoff.md) before ending the session; the document is archived as testhandoff-<n>.md with one more commit to confirm the handover, and only then does the test run (what gets tested is exactly that commit's tree); a new session reads the results and continues, avoiding repeated trial-and-error in an oversized context. If the handover is interrupted, the next run locates the breakpoint from the document's file and commit state (wrap-up unfinished → fork from the finalized point and redo the wrap-up; written → add the missing commit and run the script). Set OPENCODE_AUTO_HANDOVER_CONCURRENT=on to restore the old concurrent timing (tests start right after finalization, parallel to the session wrap-up, testing the finalized snapshot)
