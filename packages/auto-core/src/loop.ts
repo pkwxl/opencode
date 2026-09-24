@@ -5,12 +5,14 @@ import { acquireRunLock, lockLines } from "./lock"
 import type { LoopCtx } from "./loop-task"
 import { runPhaseLoop } from "./loop-phase"
 import { log } from "./log"
-import { routePhase } from "./phases"
+import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
+import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentHost } from "./agent/types"
 import { startAgent } from "./agent-choice"
+import { shellProfile } from "./shell"
 import { flushStats } from "./stats"
 
 // RunAllOpts is runAll's signature; the preflight segment owns it.
@@ -83,6 +85,29 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       const pre = await routePhase(directory)
       if (pre.type === "blocked") {
         log(`⏸ phase flow blocked: ${pre.reason}`)
+        return 1
+      }
+      // A phase-index drift (plans/0053 D34): the phases value (config
+      // `phases`) changed after the round was established, so the index's
+      // unstarted tail no longer matches it. run does not re-sync (Q4): the
+      // sync is a lifecycle step, and lifecycle belongs to plan — a silent
+      // re-sync here would start work on a phase list nobody reviewed. A
+      // value the sync would refuse (dropping a completed phase, a directory
+      // that holds work) stops the same way, with plannedPhaseUnits's own
+      // error.
+      const { bin } = shellProfile()
+      const sides = (units: readonly PhaseUnit[]) => units.map(phaseLabel).join(", ")
+      try {
+        const drift = await phaseTailDrift(directory, await currentRound(directory), phases)
+        if (drift) {
+          log(
+            `⏸ the phase index of round ${roundDirName(drift.round)} (${sides(drift.index)}) differs from config phases (${sides(drift.planned)}): ` +
+              `run ${bin} plan ${directory} to re-sync its unstarted phases`,
+          )
+          return 1
+        }
+      } catch (error) {
+        log(`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`)
         return 1
       }
     }

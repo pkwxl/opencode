@@ -1,16 +1,30 @@
-// The plan command's core (plans/0053 D4–D8, D15, D23, D26): the prelude that
-// decides every route needing no AI before an agent starts, and the lines plan
-// prints where it stops. The prelude runs under the run lock the shell holds,
-// before runAll, so it works on the dirty tree a fresh round setup leaves and
-// starts no server just to print a notice; it must never import the loop. The
-// loop (loop-phase, loop-plan) prints the same stop lines through the helpers
-// here, so plan says the same thing wherever it stops.
+// The plan command's core (plans/0053 D4–D8, D15, D23, D26, D34): the prelude
+// that decides every route needing no AI before an agent starts, and the lines
+// plan prints where it stops. The prelude runs under the run lock the shell
+// holds, before runAll, so it works on the dirty tree a fresh round setup
+// leaves and starts no server just to print a notice; it must never import the
+// loop. The loop (loop-phase, loop-plan) prints the same stop lines through the
+// helpers here, so plan says the same thing wherever it stops.
 //
-// Pointer texts name the lifecycle commands that exist (plans/0053 D29); the
-// phase-index drift row (3) arrives in P3c.
+// Pointer texts name the lifecycle commands that exist (plans/0053 D29).
 import { join } from "node:path"
 import { roundBriefPath, roundDirName } from "./docpaths"
-import { currentPhase, currentRound, establishRound, legacyLayoutProblem, phaseIndexPath, phaseLabel, readPhases, routePhase, type PhaseRoute, type PhaseState, type PhaseUnit } from "./phases"
+import {
+  currentPhase,
+  currentRound,
+  establishRound,
+  legacyLayoutProblem,
+  phaseIndexPath,
+  phaseLabel,
+  phaseTailDrift,
+  readPhases,
+  routePhase,
+  syncPhaseIndex,
+  type PhaseRoute,
+  type PhaseState,
+  type PhaseTailDrift,
+  type PhaseUnit,
+} from "./phases"
 import type { PlanInput } from "./plan-input"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
@@ -20,10 +34,11 @@ import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths } from "./tasks
 type PlanStop = { type: "stop"; code: number; lines: string[] }
 export type PlanPrelude = { type: "loop" } | PlanStop
 
-// The routes the prelude decides, first match wins (plans/0053 D4; row 3
-// arrives in P3c):
+// The routes the prelude decides, first match wins (plans/0053 D4):
 //   1. the current round is not established → (G8 of the previous round) + establish, G1 lines;
 //   2. the round is complete → G8; pass = establish the next round, fail = exit 2;
+//   3. the round's phase index drifted from the phases value → re-sync the
+//      unstarted tail (uncommitted), stop for review;
 //   4. the route is blocked → exit 1;
 //   5. an open step record → the loop finishes it first;
 //   6. phased, plan or handover without --append → the loop (input: a phase must be left to plan it);
@@ -31,9 +46,9 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 //   8. m mode, empty task index → input: the loop; else a notice;
 //   9. m mode, tasks listed → input: the loop (an append, D23; --append implied, the flag redundant); else a notice;
 //  10. phased, --append on execute or handover → the loop (an append to the phase the route names now, D23).
-// Input is refused before any write on the round-setup rows (D5); rows 9 and
-// 10 apply the progress-record guard (D26); --append without input is a usage
-// error everywhere.
+// Input is refused before any write on the round-setup rows (D5, rows 1–3);
+// rows 9 and 10 apply the progress-record guard (D26); --append without input
+// is a usage error everywhere.
 export async function planPrelude(dir: string, opts: { phases: string; build?: string; input?: PlanInput; append?: boolean }): Promise<PlanPrelude> {
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return stop(1, [legacy])
@@ -77,6 +92,29 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     const close = await roundCloseProblems(dir, round, { build: opts.build })
     if (close.problems.length) return stop(2, closeRefusal(dir, round, close))
     return establish(dir, round + 1, opts.phases, roundCloseLines(close))
+  }
+  // Row 3 (plans/0053 D34): the phase index drifted from the phases value —
+  // config `phases` changed after the round was established. plan owns the
+  // re-sync (run refuses to, Q4): syncPhaseIndex replaces the unstarted tail,
+  // the change stays uncommitted like any round setup, and the stop asks for
+  // the review. Input is refused before the write (D5): the input would plan
+  // into a tail nobody has reviewed yet. A value the sync refuses (dropping a
+  // completed phase, a directory that holds work) surfaces as the error
+  // plannedPhaseUnits throws.
+  let drift: PhaseTailDrift | undefined
+  try {
+    drift = await phaseTailDrift(dir, round, opts.phases)
+  } catch (error) {
+    return stop(1, [`⏸ phase flow blocked: ${error instanceof Error ? error.message : String(error)}`])
+  }
+  if (drift) {
+    if (opts.input) return stop(1, [driftInputLine(dir, drift)])
+    try {
+      await syncPhaseIndex(dir, round, opts.phases)
+    } catch (error) {
+      return stop(1, [`phase-index re-sync failed: ${error instanceof Error ? error.message : String(error)}`])
+    }
+    return stop(0, [resyncLine(dir, drift)])
   }
   // Row 4.
   if (route.type === "blocked") return stop(1, [`⏸ phase flow blocked: ${route.reason}`])
@@ -178,6 +216,37 @@ function closeRefusal(dir: string, round: number, close: RoundClose): string[] {
     ...roundCloseLines(close),
     `next: fix them, commit, then re-run: ${bin} plan ${dir}`,
   ]
+}
+
+// The re-sync line's drift pairs (row 3, D34): each position of the unstarted
+// tail as old → new; a position only the value fills shows the added phase,
+// one only the index filled the dropped phase.
+function driftPairs(drift: PhaseTailDrift): string {
+  const current = drift.index.slice(drift.keep)
+  const planned = drift.planned.slice(drift.keep)
+  const pairs = planned.map((unit, i) => (current[i] ? `${phaseLabel(current[i]!)} → ${phaseLabel(unit)}` : `+ ${phaseLabel(unit)}`))
+  for (const dropped of current.slice(planned.length)) pairs.push(`${phaseLabel(dropped)} dropped`)
+  return pairs.join(", ")
+}
+
+// Row 3's stop line (D34): what the re-sync changed, then the same
+// review-and-commit gate a round setup stops at.
+function resyncLine(dir: string, drift: PhaseTailDrift): string {
+  const { bin } = shellProfile()
+  return (
+    `✓ phase index of round ${roundDirName(drift.round)} re-synced to config phases (${driftPairs(drift)}); ` +
+    `review ${phaseIndexPath(drift.round)}, commit, then re-run: ${bin} plan ${dir}`
+  )
+}
+
+// Row 3's input refusal (D5): the re-synced tail must be reviewed and
+// committed before anything plans into it.
+function driftInputLine(dir: string, drift: PhaseTailDrift): string {
+  const { bin } = shellProfile()
+  return (
+    `the phase index of round ${roundDirName(drift.round)} differs from config phases: ` +
+    `run ${bin} plan ${dir} without input to re-sync it, commit the change, then pass the input.`
+  )
 }
 
 // Establish a round (no AI, left uncommitted for the round-start gate G1)

@@ -1,12 +1,15 @@
-// plan's prelude (plans/0053 D4–D5, D7, D15, D23, D26): every route that
+// plan's prelude (plans/0053 D4–D5, D7, D15, D23, D26, D34): every route that
 // needs no AI, decided over docs-tree fixtures before any agent starts; git
-// fixtures where the round-close check (G8) runs. The loop side of the stop
-// condition (D6, D8) needs the loop harness (plans/0053 A7, B6).
-import { describe, expect, test } from "bun:test"
+// fixtures where the round-close check (G8) or the row-3 re-sync's
+// uncommitted change is asserted. The loop side of the stop condition (D6,
+// D8) needs the loop harness (plans/0053 A7, B6); run's drift stop (D34)
+// lands here too — it precedes startAgent, so runAll drives it without an
+// agent over the same fixtures.
+import { describe, expect, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { completePhase, currentRound, establishRound, readPhases, type PhaseUnit } from "../src/phases"
+import { completePhase, currentRound, establishRound, phaseLabel, phaseTailDrift, readPhases, type PhaseUnit } from "../src/phases"
 import { planPrelude, plannedLines, roundCompleteNext } from "../src/plan"
 import { saveProgress } from "../src/resume"
 import { qualifiedPhase, renderTaskIndex } from "../src/tasks"
@@ -26,8 +29,9 @@ function withDir(fn: (dir: string) => Promise<void>) {
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
-  const [err, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited])
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
   if (code !== 0) throw new Error(`git ${args.join(" ")} exited ${code}: ${err}`)
+  return out
 }
 
 async function commitAll(dir: string) {
@@ -40,6 +44,8 @@ async function commitAll(dir: string) {
 }
 
 const exists = (dir: string, path: string) => Bun.file(join(dir, path)).exists()
+
+const read = async (dir: string, path: string) => Bun.file(join(dir, path)).text()
 
 const phasesOf = async (dir: string) => (await readPhases(dir))!.phases
 
@@ -198,6 +204,132 @@ describe("planPrelude: round setup (rows 1–2, D5)", () => {
       expect(result.type === "stop" && result.code).toBe(1)
       expect(result.type === "stop" && result.lines[0]).toStartWith("legacy layout:")
       expect(await exists(dir, "docs")).toBe(false)
+    }),
+  )
+})
+
+describe("phaseTailDrift (D34)", () => {
+  test(
+    "detects exactly the unstarted-tail drift: in sync, replace, shrink, extend; no index is no drift",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "amt" })
+      expect(await phaseTailDrift(dir, 1, "amt")).toBeUndefined()
+      const replace = await phaseTailDrift(dir, 1, "amv")
+      expect(replace && [replace.round, replace.keep]).toEqual([1, 2])
+      expect(replace && replace.index.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
+      expect(replace && replace.planned.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-acceptance"])
+      const shrink = await phaseTailDrift(dir, 1, "am")
+      expect(shrink && [shrink.keep, shrink.planned.length]).toEqual([2, 2])
+      const extend = await phaseTailDrift(dir, 1, "amvk")
+      expect(extend && extend.planned.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-acceptance", "P04-knowledge"])
+      expect(await exists(dir, "docs/R-01/P04-knowledge")).toBe(false)
+      // m mode returns before any read, so a phased round that would drift
+      // still yields no drift for "m".
+      expect(await phaseTailDrift(dir, 1, "m")).toBeUndefined()
+    }),
+  )
+
+  test(
+    "no index and a complete round never drift — even for a value the sync would refuse",
+    withDir(async (dir) => {
+      expect(await phaseTailDrift(dir, 1, "am")).toBeUndefined()
+      await completeRound(dir, "amt")
+      // "dm" would drop the completed phases mid-round; a complete round's
+      // index is history, so no drift is reported for it.
+      expect(await phaseTailDrift(dir, 1, "dm")).toBeUndefined()
+    }),
+  )
+
+  test(
+    "a value the sync refuses throws plannedPhaseUnits's own error",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "amt" })
+      await completePhase(dir, (await phasesOf(dir))[0]!)
+      await expect(phaseTailDrift(dir, 1, "mt")).rejects.toThrow(/would drop the completed phase docs\/R-01\/P01-analysis/)
+      writeFileSync(join(dir, "docs/R-01/P03-test/notes.md"), "draft\n")
+      await expect(phaseTailDrift(dir, 1, "am")).rejects.toThrow(/already holds work \(notes\.md\)/)
+    }),
+  )
+})
+
+describe("planPrelude: row 3, the phase-index drift (D34)", () => {
+  test(
+    "re-syncs the unstarted tail, leaves the change uncommitted and stops for review (exit 0)",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "amt" })
+      await completePhase(dir, (await phasesOf(dir))[0]!)
+      await commitAll(dir)
+      const result = await planPrelude(dir, { phases: "amv" })
+      expect(result).toEqual({
+        type: "stop",
+        code: 0,
+        lines: [
+          `✓ phase index of round R-01 re-synced to config phases (P03-test → P03-acceptance); ` +
+            `review docs/R-01/phases.md, commit, then re-run: opencode-auto plan ${dir}`,
+        ],
+      })
+      expect(await read(dir, "docs/R-01/phases.md")).toContain("- [x] P01 analysis\n- [ ] P02 implement\n- [ ] P03 acceptance\n")
+      expect(await exists(dir, "docs/R-01/P03-test")).toBe(false)
+      // Uncommitted like any round setup: the re-sync is what git reports.
+      expect(await git(dir, "status", "--porcelain")).toContain("docs/R-01/phases.md")
+    }),
+  )
+
+  test(
+    "the extend and shrink tails render their pairs; the done prefix keeps its ticks",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "am" })
+      const extended = await planPrelude(dir, { phases: "amk" })
+      expect(extended.type === "stop" && extended.lines[0]).toContain("re-synced to config phases (+ P03-knowledge)")
+      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-knowledge"])
+      const shrunk = await planPrelude(dir, { phases: "am" })
+      expect(shrunk.type === "stop" && shrunk.lines[0]).toContain("re-synced to config phases (P03-knowledge dropped)")
+      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement"])
+    }),
+  )
+
+  test(
+    "input is refused before any write (D5)",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "amt" })
+      const before = await read(dir, "docs/R-01/phases.md")
+      const result = await planPrelude(dir, { phases: "amv", input: INPUT })
+      expect(result).toEqual({
+        type: "stop",
+        code: 1,
+        lines: [
+          `the phase index of round R-01 differs from config phases: ` +
+            `run opencode-auto plan ${dir} without input to re-sync it, commit the change, then pass the input.`,
+        ],
+      })
+      expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
+      expect(await exists(dir, "docs/R-01/P03-acceptance")).toBe(false)
+    }),
+  )
+
+  test(
+    "a value the sync refuses stops with plannedPhaseUnits's own error, writing nothing",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "amt" })
+      await completePhase(dir, (await phasesOf(dir))[0]!)
+      const result = await planPrelude(dir, { phases: "mt" })
+      expect(result.type === "stop" && result.code).toBe(1)
+      expect(result.type === "stop" && result.lines[0]).toBe(
+        '⏸ phase flow blocked: phases "mt" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md',
+      )
+      expect(await read(dir, "docs/R-01/phases.md")).toContain("- [ ] P03 test")
+    }),
+  )
+
+  test(
+    "no drift: the loop decides as before",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "amt" })
+      expect(await planPrelude(dir, { phases: "amt" })).toEqual({ type: "loop" })
+      // m mode never re-syncs (D34): its value is not compared with the
+      // index, so the untouched round routes on.
+      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
+      expect((await phasesOf(dir)).map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
     }),
   )
 })
@@ -439,4 +571,54 @@ describe("plan's stop lines (D8, D15)", () => {
   test("a round completed inside plan: the next round opens on the next plan", () => {
     expect(roundCompleteNext("/p", 1)).toBe("next: fill in ## Close of docs/R-01/round.md, commit, then run opencode-auto plan /p to open round R-02")
   })
+})
+
+describe("run's drift stop (D34)", () => {
+  // The OPENCODE_AUTO_* environment is scrubbed and console.log captured
+  // around each runAll (the loop harness's conventions): hibernation windows
+  // and ambient switches stay out, and the stop line is assertable.
+  async function runQuiet(run: () => Promise<number>): Promise<{ code: number; lines: string[] }> {
+    const saved = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
+    for (const [key] of saved) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      return { code: await run(), lines }
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of saved) if (value !== undefined) process.env[key] = value
+    }
+  }
+
+  // The fixture preflight needs: a git repository as init leaves it, with the
+  // agent contract and a committed round — the stop the drift check makes
+  // precedes startAgent, so no agent has to exist.
+  test(
+    "runAll exits 1 naming plan and writes nothing; a value the sync refuses stops with the guard's error",
+    withDir(async (dir) => {
+      const { runAll } = await import("../src/loop")
+      await establishRound(dir, { phases: "amt" })
+      await completePhase(dir, (await phasesOf(dir))[0]!)
+      mkdirSync(join(dir, ".opencode", "agent"), { recursive: true })
+      writeFileSync(join(dir, ".opencode", "agent", "auto.md"), "contract\n")
+      await commitAll(dir)
+      const before = await read(dir, "docs/R-01/phases.md")
+      const stopped = await runQuiet(() => runAll(dir, { phases: "amv" }))
+      expect(stopped.code).toBe(1)
+      expect(stopped.lines).toContain(
+        `⏸ the phase index of round R-01 (P01-analysis, P02-implement, P03-test) differs from config phases ` +
+          `(P01-analysis, P02-implement, P03-acceptance): run opencode-auto plan ${dir} to re-sync its unstarted phases`,
+      )
+      expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
+      expect(await exists(dir, "docs/R-01/P03-acceptance")).toBe(false)
+      expect(await exists(dir, "docs/R-01/P03-test/todo.md")).toBe(true)
+      const refused = await runQuiet(() => runAll(dir, { phases: "mt" }))
+      expect(refused.code).toBe(1)
+      expect(refused.lines).toContain(
+        '⏸ phase flow blocked: phases "mt" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md',
+      )
+    }),
+  )
 })

@@ -247,6 +247,39 @@ export async function plannedPhaseUnits(dir: string, round: number, phases: stri
   return existing && keep === existing.phases.length && keep === units.length ? existing.phases : units
 }
 
+// The drift between a round's established phase index and a phases value
+// (plans/0053 D34): the index's unstarted tail vs the units a sync would
+// leave. The stop lines render from the struct — run shows the two full
+// phase lists, plan pairs the tails after `keep`. undefined = nothing to
+// re-sync: m mode has no phase lifecycle to drift (checked first, before
+// any read); a missing index is an establish, not a drift; a complete
+// round's index is history, the value then applies to the next round plan
+// establishes (checked before the sync, so a value that would drop
+// completed phases still returns undefined here); and an index in sync
+// with the value matches plannedPhaseUnits exactly. A value the sync
+// refuses (dropping a completed phase, a directory that holds work)
+// surfaces as the error plannedPhaseUnits throws — the callers stop with
+// it instead of re-syncing.
+export type PhaseTailDrift = {
+  round: number
+  // The index's phases, and the units the sync would leave, in full.
+  index: PhaseUnit[]
+  planned: PhaseUnit[]
+  // The length of the shared prefix (same position, same directory) the
+  // sync keeps; the tails after it are the drift.
+  keep: number
+}
+
+export async function phaseTailDrift(dir: string, round: number, phases: string): Promise<PhaseTailDrift | undefined> {
+  if (phases === "m") return undefined
+  const existing = await readPhases(dir, round)
+  if (!existing) return undefined
+  if (existing.phases.every((unit) => existing.done.has(unit.id))) return undefined
+  const { units, keep } = await phaseSync(dir, round, phases)
+  if (keep === existing.phases.length && keep === units.length) return undefined
+  return { round, index: existing.phases, planned: units, keep }
+}
+
 // syncPhaseIndex's read and check half: the desired units, the current index
 // and the length of their shared prefix.
 async function phaseSync(dir: string, round: number, phases: string): Promise<{ units: PhaseUnit[]; existing: PhaseState | undefined; keep: number }> {
