@@ -1849,6 +1849,183 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
   })
 })
 
+// plan --force-close (auto-core plans/0053 D28): close a unit and continue
+// planning in the same process, under one lock. The shell half validated
+// here: the argument checks (close's flag set on plan), the refusal contract
+// (exit 1, nothing written), and the two deterministic follow-ups — a task
+// force-close whose exit code is plan's notice route, and a phase force-close
+// skipping into the next phase. The loop-level paths (planning after the
+// close, the combined --force-close --append) need an agent and stay with the
+// B6 loop-harness / OPENCODE_AUTO_E2E cases.
+describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
+  // A git helper over the fixture dir: asserts exit 0 and returns stdout.
+  const gitOf = (dir: string) => {
+    return async (...args: string[]) => {
+      const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
+      const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+      expect(code, `git ${args.join(" ")}: ${err}`).toBe(0)
+      return out
+    }
+  }
+
+  // An initialized m-mode git fixture with two open tasks, all committed, so
+  // a refused force-close leaves a byte-identical tree.
+  async function forceCloseFixture() {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fc-"))
+    const git = gitOf(dir)
+    await git("init")
+    expect((await runCli(["init", dir])).code).toBe(0)
+    await listTasks(dir, P01.dir, "R-01.P01", [
+      ["T-001", "被取代的任务", "正文"],
+      ["T-002", "隐式依赖者", "正文"],
+    ])
+    await git("add", "-A")
+    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+    return { dir, git }
+  }
+
+  test("argument errors: the ref shape, the reason, the change pair, the close-family flags without --force-close, other commands refusing --force-close; nothing is written", async () => {
+    const { dir, git } = await forceCloseFixture()
+    try {
+      const refusals: [string[], string][] = [
+        // The ref is a value: missing (the bare flag) or not one of the three
+        // canonical shapes is a usage error before anything is read.
+        [["plan", dir, "--force-close"], "--force-close requires a unit reference"],
+        [["plan", dir, "--force-close", "T-5"], "T-5: not a unit reference"],
+        [["plan", dir, "--force-close", "T-001.S01", "--reason", "r"], "T-001.S01: not a unit reference"],
+        [["plan", dir, "--force-close", "T-001"], "--force-close requires --reason <text>"],
+        [["plan", dir, "--force-close", "T-001", "--reason", "  "], "--reason requires non-empty text"],
+        [["plan", dir, "--force-close", "T-001", "--reason", "two\nlines"], "--reason must be one line"],
+        [["plan", dir, "--force-close", "T-001", "--reason", "r", "--commit-changes", "--stash-changes"], "--commit-changes and --stash-changes are mutually exclusive"],
+        // The close-family flags belong to the close step only: on plan they
+        // are meaningless without --force-close.
+        [["plan", dir, "--reason", "r"], '--reason is a close option of "plan --force-close <ref> --reason <text>"'],
+        [["plan", dir, "--cascade"], "--cascade is a close option of"],
+        [["plan", dir, "--stash-changes"], "--stash-changes is a close option of"],
+        // --force-close is plan's alone: every other command points at plan
+        // (close keeps its positional ref).
+        [["run", dir, "--force-close", "T-001", "--reason", "r"], "--force-close is a plan option: run takes no --force-close"],
+        [["init", dir, "--force-close", "T-001"], "--force-close is a plan option"],
+        [["fix", dir, "--force-close", "T-001"], "--force-close is a plan option"],
+        [["close", "T-001", dir, "--reason", "r", "--force-close", "T-002"], "--force-close is a plan option: close takes no --force-close"],
+      ]
+      for (const [args, notice] of refusals) {
+        const refused = await runCli(args)
+        expect(refused.code, args.join(" ")).toBe(1)
+        expect(refused.err, args.join(" ")).toContain(notice)
+      }
+      // Nothing was written and nothing committed: both tasks untouched.
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").pending)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, taskStatePaths("T-002").pending)).exists()).toBe(true)
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a refused close exits 1 with nothing written (the dirty tree), and the lock is released with it", async () => {
+    const { dir, git } = await forceCloseFixture()
+    try {
+      await Bun.write(join(dir, "stray.ts"), "export {}\n")
+      const refused = await runCli(["plan", dir, "--force-close", "T-001", "--reason", "superseded"])
+      expect(refused.code).toBe(1)
+      expect(refused.err).toContain("the worktree has changes beyond the driver's own state files")
+      expect(refused.err).toContain("stray.ts")
+      // closeUnit refuses before any write: the task untouched, no close
+      // commit, the stray file kept.
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").pending)).exists()).toBe(true)
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).exists()).toBe(false)
+      expect((await git("log", "--oneline")).trim().split("\n")).toHaveLength(1)
+      // The single lock plan took is gone with the process (.auto/ was
+      // created for it alone and removed empty on release).
+      expect(await stat(join(dir, ".auto")).catch(() => undefined)).toBeUndefined()
+      expect(await Bun.file(join(dir, "stray.ts")).text()).toBe("export {}\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("force-closes a task and continues planning: the close commit lands and the exit code is plan's (the m notice)", async () => {
+    const { dir, git } = await forceCloseFixture()
+    try {
+      const run = await runCli(["plan", dir, "--force-close", "T-001", "--reason", "superseded by a follow-up"])
+      expect(run.err).toBe("")
+      // Plan's stop (the m-mode notice over the remaining task) is exit 0 —
+      // plan's code, not close's.
+      expect(run.code).toBe(0)
+      // closeUnit's lines print first: the closed task, the implicit
+      // dependent, the undo pointer.
+      expect(run.out).toContain("✓ closed T-001: superseded by a follow-up")
+      expect(run.out).toContain("ℹ T-002 has no Depends: field, so its prerequisite T-001 counts as satisfied; do not assume T-001's deliverables exist")
+      expect(run.out).toMatch(/to undo before anything else runs: git revert [0-9a-f]+/)
+      // Then plan's own stop: the notice over the listed tasks (1 pending).
+      expect(run.out).toContain(`ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}`)
+      // The close commit: subject, body and the force-close trailers.
+      const message = await git("log", "-1", "--pretty=%B")
+      expect(message).toContain("T-001 closed: superseded by a follow-up")
+      expect(message).toContain("Units closed:\n- T-001")
+      expect(message).toContain("Auto-Task: T-001")
+      expect(message).toContain("Auto-Stage: force-close")
+      // State: the Closed: field with the rename, the index tick, the other
+      // task still pending, and a clean tree (the close commit took it all).
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").complete)).text()).toContain("Closed: superseded by a follow-up")
+      expect(await Bun.file(join(dir, taskStatePaths("T-001").pending)).exists()).toBe(false)
+      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).text()).toContain("- [x] T-001")
+      expect(await Bun.file(join(dir, taskStatePaths("T-002").pending)).exists()).toBe(true)
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("force-closes a phase and skips to the next phase: the mechanical handover is written and plan stops on the next phase's notice", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-fc-phase-"))
+    const git = gitOf(dir)
+    try {
+      await git("init")
+      expect((await runCli(["init", dir, "--phases", "amt"])).code).toBe(0)
+      // P01 done, P02 current with a task to skip over, P03 already planned
+      // (its tasks listed by hand), so the follow-up planning stops on the
+      // deterministic execute notice naming P03.
+      await completeLetters(dir, ["a"])
+      await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "被跳过的任务", "正文"]])
+      await listTasks(dir, "docs/R-01/P03-test", "R-01.P03", [["T-002", "下一阶段任务", "正文"]])
+      await git("add", "-A")
+      await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+      const run = await runCli(["plan", dir, "--force-close", "R-01.P02", "--reason", "skipped this round"])
+      expect(run.err).toBe("")
+      expect(run.code).toBe(0)
+      // The phase's open task closes with it, then the phase itself, with
+      // the mechanical handover close writes for a closed phase.
+      expect(run.out).toContain("✓ closed T-001: skipped this round")
+      expect(run.out).toContain("✓ closed R-01.P02 implement: skipped this round")
+      expect(run.out).toContain("ℹ mechanical handover written: docs/R-01/P02-implement/handover.md")
+      // Plan continues in the same process: the next phase is current now,
+      // and its planned state is the notice plan stops on (exit 0, plan's).
+      expect(run.out).toContain(`ℹ R-01.P03 test is planned (1 of 1 tasks pending); next: opencode-auto run ${dir}`)
+      // Phase state: closed done.md, the four handover sections, the index
+      // tick, P03 untouched.
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/done.md")).text()).toContain("Closed: skipped this round")
+      expect(await Bun.file(join(dir, "docs/R-01/P02-implement/todo.md")).exists()).toBe(false)
+      const handover = await Bun.file(join(dir, "docs/R-01/P02-implement/handover.md")).text()
+      for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
+        expect(handover).toContain(section)
+      }
+      expect(await Bun.file(join(dir, "docs/R-01/phases.md")).text()).toContain("- [x] P02 implement")
+      expect(await Bun.file(join(dir, "docs/R-01/P03-test/todo.md")).exists()).toBe(true)
+      // The close commit covers both units; the tree is clean after it.
+      const message = await git("log", "-1", "--pretty=%B")
+      expect(message).toContain("R-01.P02 closed: skipped this round")
+      expect(message).toContain("Units closed:\n- T-001\n- R-01.P02 (gates skipped:")
+      expect(message).toContain("Auto-Task: R-01.P02")
+      expect(message).toContain("Auto-Stage: force-close")
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("CLI: the project brief stub (plans/0052 D9)", () => {
   test("init writes the stub only when brief.md is missing; -p replaces it; reset removes only the untouched stub", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))

@@ -64,19 +64,20 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--file/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
-// --max-sessions/--reason(close 专用)带值(吞掉下一个 token;已退役的
+// --max-sessions/--reason(close 与 plan --force-close 共用)/--force-close
+// (plan 专用)带值(吞掉下一个 token;已退役的
 // --implement-file/--implement-prompt 同样吞值,其参数不被当作目录,
 // auto-core plans/0053 D13);
 // --verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
-// 以及 --cascade/--commit-changes/--stash-changes(close 专用)、--append(plan 专用)
-// 是布尔选项,出现即
+// 以及 --cascade/--commit-changes/--stash-changes(close 与 plan --force-close
+// 共用)、--append(plan 专用)是布尔选项,出现即
 // true,仅当紧随字面量 true/false 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
 // --mode 另有短选项 -m(镜像 -p 的吞值规则)。解析按整名精确匹配:--commit-changes
-// 与配置旗标 --commit 名字不同,互不误吞;close 的 ref 恒在前(positional[0]),
-// --commit 即使吞值也吞不到它(auto-core plans/0053 D20/F8,close 侧再以其配置旗标
-// 报文拦截)。
+// 与配置旗标 --commit、--force-close 与 -f/--force 名字均不同,互不误吞;close 的
+// ref 恒在前(positional[0]),--commit 即使吞值也吞不到它
+// (auto-core plans/0053 D20/F8,close 侧再以其配置旗标报文拦截)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -88,6 +89,7 @@ const VALUE_FLAGS = new Set([
   "prompt",
   "file",
   "reason",
+  "force-close",
   "permission",
   "idle-time",
   "idle-max",
@@ -157,6 +159,18 @@ for (let i = 1; i < args.length; i++) {
 // or command block runs.
 if (command !== "plan" && flags.has("append")) {
   console.error(`--append is a plan option: ${command ?? "this command"} takes no --append. Append tasks with opencode-auto plan <dir> --append -p <text> | --file <path>`)
+  process.exit(1)
+}
+// --force-close is plan's alone too (auto-core plans/0053 D28): closing a unit
+// and continuing planning in the same process is a plan route, so every other
+// command refuses the flag with a pointer to plan — run's -p/--file refusal
+// pattern — before any whitelist or command block runs (close keeps its own
+// positional ref).
+if (command !== "plan" && flags.has("force-close")) {
+  console.error(
+    `--force-close is a plan option: ${command ?? "this command"} takes no --force-close. ` +
+      `Close a unit and keep planning with opencode-auto plan <dir> --force-close <ref> --reason <text>; to only close, opencode-auto close <ref> [dir] --reason <text>`,
+  )
   process.exit(1)
 }
 // Retired flags are usage errors with their own notice (mirroring the --commit
@@ -274,8 +288,7 @@ if (command === "close") {
     console.error("--reason must be one line (it is the Closed: value and the close commit subject's tail); longer context belongs in the round brief or the plan")
     process.exit(1)
   }
-  const on = (key: string) => flags.has(key) && flags.get(key) !== "false"
-  if (on("commit-changes") && on("stash-changes")) {
+  if (flagOn("commit-changes") && flagOn("stash-changes")) {
     console.error("--commit-changes and --stash-changes are mutually exclusive: pick one way to handle the uncommitted changes (folded into the close commit, or stashed)")
     process.exit(1)
   }
@@ -351,16 +364,18 @@ if (command === "run") {
   process.exit(code)
 }
 
-// plan (auto-core plans/0053 D14, D23): plan the current phase and stop
+// plan (auto-core plans/0053 D14, D23, D28): plan the current phase and stop
 // before execution, for review. It is run with a stop condition: the same
 // options (the builder is shared), preceded by the prelude that settles every
 // route needing no agent — establishing a round, the round-close gate before
 // the next one, the notices and the input refusals (planPrelude, D4). Order:
 // the flags and the planning input, then --append (which rides an input and
-// appends the tasks it plans to the current phase), the strict config load
-// and the mode check, then the run lock ("plan", held across the prelude;
-// runAll re-enters it), the prelude, and runAll. A prelude stop prints its
-// lines and exits with its code; runAll's exit codes are run's.
+// appends the tasks it plans to the current phase), then --force-close (D28:
+// close a unit and keep planning in this process), the strict config load
+// and the mode check, then the run lock ("plan", held across a force-close,
+// the prelude and the loop; runAll re-enters it), the prelude, and runAll.
+// A prelude stop prints its lines and exits with its code; runAll's exit
+// codes are run's.
 if (command === "plan") {
   refuseFrozenFlags("plan")
   // run's options for the task loop: plan stops before any task runs.
@@ -372,6 +387,61 @@ if (command === "plan") {
     if (flags.has(key)) {
       console.error(`${flag} is a run option (${what}); plan does not accept it`)
       process.exit(1)
+    }
+  }
+  // --force-close <ref> (auto-core plans/0053 D28): close a unit, then keep
+  // planning in this process — replace a task (--force-close T-005 --reason
+  // "…" --append -p "do X instead") or skip a phase into the next one
+  // (--force-close R-01.P02 --reason "…"). The argument checks mirror close's
+  // (D22) so both commands validate the same flag set: the three canonical
+  // ref shapes — a subtask-shaped ref stops here as a usage error naming the
+  // shapes, like close, keeping closeUnit's friendlier "close the task
+  // instead" refusal for core-level callers — the required non-empty
+  // one-line --reason, and the mutually exclusive change pair. They fire
+  // before the lock and before the input is read.
+  const forceClose = flags.get("force-close")
+  if (forceClose !== undefined) {
+    if (!forceClose) {
+      console.error("--force-close requires a unit reference: a round R-NN, a phase R-NN.P<nn> or a task T-NNN (usage: opencode-auto plan <dir> --force-close <ref> --reason <text>)")
+      process.exit(1)
+    }
+    if (!CLOSE_REF.test(forceClose)) {
+      console.error(`${forceClose}: not a unit reference; expected a round R-NN, a phase R-NN.P<nn> or a task T-NNN (usage: opencode-auto plan <dir> --force-close <ref> --reason <text>)`)
+      process.exit(1)
+    }
+    const reason = flags.get("reason")
+    if (reason === undefined) {
+      console.error("--force-close requires --reason <text>: the one-line reason recorded in the Closed: field, the close commit and the phase handover")
+      process.exit(1)
+    }
+    if (!reason.trim()) {
+      console.error("--reason requires non-empty text (the close reason; the explicit ref and the reason are the confirmation — neither command asks for another)")
+      process.exit(1)
+    }
+    if (reason.includes("\n")) {
+      console.error("--reason must be one line (it is the Closed: value and the close commit subject's tail); longer context belongs in the round brief or the plan")
+      process.exit(1)
+    }
+    if (flagOn("commit-changes") && flagOn("stash-changes")) {
+      console.error("--commit-changes and --stash-changes are mutually exclusive: pick one way to handle the uncommitted changes (folded into the close commit, or stashed)")
+      process.exit(1)
+    }
+  } else {
+    // AUTO-RESOLVE: should plan accept the close-family flags
+    // (--reason/--cascade/--commit-changes/--stash-changes) without
+    // --force-close, silently ignoring them as it did before D28? -> no:
+    // they are usage errors pointing at --force-close (silently ignoring a
+    // close attempt would let a person believe a unit was closed when
+    // nothing happened; "validate both commands' flag sets" only makes sense
+    // when the group is meaningful, which is under --force-close alone).
+    for (const key of ["reason", "cascade", "commit-changes", "stash-changes"]) {
+      if (flags.has(key)) {
+        console.error(
+          `--${key} is a close option of "plan --force-close <ref> --reason <text>": pass --force-close <ref> to close a unit and keep planning, ` +
+            `or close only with opencode-auto close <ref> [dir] --reason <text>`,
+        )
+        process.exit(1)
+      }
     }
   }
   const input = await parsePlanInput()
@@ -401,6 +471,27 @@ if (command === "plan") {
   if (!lock.ok) {
     for (const line of lockLines(directory, lock.holder)) console.error(line)
     process.exit(1)
+  }
+  // --force-close (auto-core plans/0053 D28): one lock held across the close
+  // and the planning — the lock above, not a second one. closeUnit's lines
+  // print first (stdout when closed, stderr otherwise); a refused close exits
+  // 1 with nothing done (closeUnit refuses before writes), a failed close
+  // commit or close-out check exits 2, and a successful close falls through
+  // to the normal plan flow (prelude → runAll), whose exit code is plan's.
+  if (forceClose !== undefined) {
+    const changes: CloseChanges | undefined = flagOn("commit-changes") ? "commit" : flagOn("stash-changes") ? "stash" : undefined
+    const closed = await closeUnit(directory, forceClose, {
+      reason: flags.get("reason")!,
+      cascade: flagOn("cascade"),
+      changes,
+      phases: config.phases,
+      acceptanceGate: config.acceptanceGate,
+    })
+    for (const line of closed.lines) (closed.type === "closed" ? console.log : console.error)(line)
+    if (closed.type !== "closed") {
+      lock.release()
+      process.exit(closed.type === "refused" ? 1 : 2)
+    }
   }
   const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, input, append })
   if (prelude.type === "stop") {
@@ -451,14 +542,10 @@ if (command === "close") {
     process.exit(1)
   }
   const changes: CloseChanges | undefined =
-    flags.has("commit-changes") && flags.get("commit-changes") !== "false"
-      ? "commit"
-      : flags.has("stash-changes") && flags.get("stash-changes") !== "false"
-        ? "stash"
-        : undefined
+    flagOn("commit-changes") ? "commit" : flagOn("stash-changes") ? "stash" : undefined
   const result = await closeUnit(directory, closeRef!, {
     reason: flags.get("reason")!,
-    cascade: flags.has("cascade") && flags.get("cascade") !== "false",
+    cascade: flagOn("cascade"),
     changes,
     phases: config.phases,
     acceptanceGate: config.acceptanceGate,
@@ -475,6 +562,12 @@ function amendHint(key: string): string {
   if (key === "auto-number" || key === "no-auto-number") return "opencode-auto amend <dir> --auto-number (use --no-auto-number to turn off)"
   if (key === "wrapup" || key === "no-wrapup") return "opencode-auto amend <dir> --wrapup (use --no-wrapup to turn off)"
   return `opencode-auto amend <dir> ${key === "mode" ? "-m" : `--${key}`} <value>`
+}
+
+// A boolean flag's on-state: present and not explicitly false. Shared by the
+// close and plan --force-close argument checks and option reads.
+function flagOn(key: string): boolean {
+  return flags.has(key) && flags.get(key) !== "false"
 }
 
 // The options run and plan refuse alike (auto-core plans/0053 D14). 已固化选项
@@ -1387,7 +1480,7 @@ console.error(`usage:
   opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--amend] [-f|--force]
   opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
-  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
+  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto fix [dir] [-f|--force]
@@ -1401,8 +1494,9 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
          plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
+         plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
         close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
-        run lock: run and plan hold .auto/run.lock while they work, and close holds it around its writes; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
+        run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), and close holds it around its writes; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt on init: project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions; on plan, -p is the planning input); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired
