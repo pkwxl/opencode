@@ -276,12 +276,17 @@ describe("planPrelude: routes (rows 4–9)", () => {
     withDir(async (dir) => {
       await establishRound(dir, { phases: "am" })
       await listTasks(dir, (await phasesOf(dir))[0]!, [["T-001", true], ["T-002", false]])
-      const notice = `ℹ R-01.P01 analysis is planned (1 of 2 tasks pending); next: opencode-auto run ${dir}`
+      const notice =
+        `ℹ R-01.P01 analysis is planned (1 of 2 tasks pending); next: opencode-auto run ${dir} ` +
+        `— or add tasks with opencode-auto plan ${dir} --append -p <text>, or close units with opencode-auto close <ref>`
       expect(await planPrelude(dir, { phases: "am" })).toEqual({ type: "stop", code: 0, lines: [notice] })
       expect(await planPrelude(dir, { phases: "am", input: INPUT })).toEqual({
         type: "stop",
         code: 1,
-        lines: ["R-01.P01 analysis already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append", notice],
+        lines: [
+          `R-01.P01 analysis already lists tasks, so the planning input would not be used; add tasks with opencode-auto plan ${dir} --append -p <text> | --file <path>`,
+          notice,
+        ],
       })
     }),
   )
@@ -308,7 +313,9 @@ describe("planPrelude: routes (rows 4–9)", () => {
       await establishRound(dir, { phases: "m" })
       const [implement] = await phasesOf(dir)
       await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
-      const notice = `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}`
+      const notice =
+        `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
+        `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`
       expect(await planPrelude(dir, { phases: "m" })).toEqual({ type: "stop", code: 0, lines: [notice] })
       // In m mode the input on a non-empty index is an append (D23): the flag
       // is implied, and an explicit one accepted as redundant.
@@ -319,7 +326,10 @@ describe("planPrelude: routes (rows 4–9)", () => {
       expect(await planPrelude(dir, { phases: "m" })).toEqual({
         type: "stop",
         code: 0,
-        lines: [`ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (0 pending); next: opencode-auto run ${dir}`],
+        lines: [
+          `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (0 pending); next: opencode-auto run ${dir}, ` +
+            `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
+        ],
       })
       expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual({ type: "loop" })
     }),
@@ -419,7 +429,7 @@ describe("plan's stop lines (D8, D15)", () => {
       const [analysis] = await phasesOf(dir)
       expect(plannedLines("/p", analysis!, ["T-004", "T-005"], false)).toEqual([
         "✓ planned R-01.P01 analysis: 2 task(s) in docs/R-01/P01-analysis/tasks.md",
-        "next: review them, then run: opencode-auto run /p",
+        "next: review them (edit, close, or plan --append), then run: opencode-auto run /p",
       ])
       expect(plannedLines("/p", analysis!, ["T-012", "T-013", "T-015"], true)[0]).toBe("✓ planned 3 task(s) (T-012…T-015) into docs/R-01/P01-analysis/tasks.md")
       expect(plannedLines("/p", analysis!, ["T-012"], true)[0]).toBe("✓ planned 1 task(s) (T-012) into docs/R-01/P01-analysis/tasks.md")

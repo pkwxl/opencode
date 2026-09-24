@@ -38,7 +38,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Intent packs | Frozen schema of the (b)-class content (quality bars, phase duties, acceptance semantics, decision governance, artifact conventions); built-in packs + the project overlay | `src/intent/types.ts`, `src/intent/load.ts`, `templates/intents/default.md` (0031–0034, 0043) |
 | Modes | `-m/--mode` scenario guidance, sectioned-file templates | `src/mode.ts`, `templates/modes/` |
 | Template engine | Load/render prompt templates, partials, project overrides in `.opencode/auto/prompts/`, protocol-marker tiers | `src/template.ts`, `templates/prompts/_partials.md` (0033) |
-| Prompt assembly | Turns task/run data into template variables; all copy lives in `templates/prompts/*.md` | `src/prompt.ts`, `src/prompt-plan.ts` (planning renderers, 0053), `templates/prompts/` |
+| Prompt assembly | Turns task/run data into template variables; all copy lives in `templates/prompts/*.md` | `src/prompt.ts`, `src/prompt-plan.ts` (planning renderers: `renderPhasePlan`, `renderImplementPlan`, `renderPhaseAppend`, 0053), `templates/prompts/` |
 
 ### phases — what a phase is
 
@@ -54,7 +54,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 |---|---|---|
 | Frozen schema | Artifact-spec and role types | `src/document/types.ts` (0031) |
 | Role model | `roleOf` path classifier + per-role policies (eof-scan exemption, protect list, handoff checks) | `src/document/roles.ts` (0045) |
-| Unit model | Phase/task/subtask refs and paths, todo/done scan and rename, index parsing, `Depends:`/`Touches:` fields, `nextReady` selection | `src/document/unit.ts` (0047) |
+| Unit model | Phase/task/subtask refs and paths, todo/done scan and rename, index parsing, `Depends:`/`Touches:` fields, the `closed` map read from `Closed:` lines, `nextReady` selection | `src/document/unit.ts` (0047, 0053 D16) |
 | Subtask state protocol | `docs/T-NNN/S<nn>/todo.md` → `done.md` | `src/document/state.ts` (0030, 0045) |
 | Artifact specs | `Artifacts:` declaration parsing, spec tables, spec-driven mechanical checks | `src/document/spec.ts` (0034) |
 | P1 prohibition scan | Deliverables must not reference process documents | `src/document/process-refs.ts` (0045) |
@@ -83,9 +83,10 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Run entry | `runAll`: preflight, agent start, interactive input, Ctrl+C handling, exit codes | `src/loop.ts` |
 | Preflight | Prompt library, agent-contract check, stats, read-only guard, handover restore, clean gate, housekeeping commit; `RunAllOpts` | `src/loop-preflight.ts` |
 | Phase loop | Phase handover, phase routing; plan's stop condition (`stopBefore`) | `src/loop-phase.ts` (0006, 0047, 0053) |
-| Phase planning | The one planner: phased and m-mode planning sessions and their plan-review pause; the phase-state helpers the phase loop shares | `src/loop-plan.ts` (0006, 0047, 0053) |
+| Phase planning | The one planner: phased and m-mode planning sessions, their plan-review pause, and the append step `appendPlan` (snapshot → reset → collect, stale-handover removal); the phase-state helpers the phase loop shares | `src/loop-plan.ts` (0006, 0047, 0053) |
 | Planning input | A phase's `plan-input.md`: read, persist, and commit before the planning unit | `src/plan-input.ts` (0053 D9) |
 | Plan prelude | `planPrelude`: the routes `plan` settles without an agent (establish a round, the round-close gate, notices, input refusals); the lines `plan` prints where its loop stops | `src/plan.ts` (0053 D4–D8, D15) |
+| Close | `closeUnit`: close a task/phase/round without completing it — the `Closed:` field, the mechanical handover of a closed phase, per-unit record clearing, the close commit | `src/close.ts` (0053 D17–D22) |
 | Task loop | Iterates a phase's tasks; `LoopCtx` | `src/loop-task.ts` |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |
 | Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only) | `src/conclusion.ts` (0019, 0020) |
@@ -114,7 +115,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Task store | Phase `tasks.md` index + `docs/T-NNN/` units, `.auto/units.json` runtime state, no-phase mode | `src/tasks.ts` (0047) |
+| Task store | Phase `tasks.md` index + `docs/T-NNN/` units, `.auto/units.json` runtime state, `newTaskProblems` (the planning/appending collect's per-task checks) and `forgetUnits` (record clearing for closed tasks), no-phase mode | `src/tasks.ts` (0047, 0053) |
 | Status tree | Read-only round → phase → task → subtask view | `src/status.ts` |
 | CURRENT.md | Write/remove the current-task mirror | `src/current.ts` |
 | Progress record | `.auto/progress.json`, session reuse on resume | `src/resume.ts` (0018, 0022) |
@@ -166,7 +167,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Path | Contents |
 |---|---|
-| `templates/prompts/` | One file per session prompt (decompose, subtask, whole, wrapup, phase-plan, phase-handover, knowledge, test-*, …) + `_partials.md`; registered in `src/template.ts` |
+| `templates/prompts/` | One file per session prompt (decompose, subtask, whole, wrapup, phase-plan, phase-append, phase-handover, knowledge, test-*, …) + `_partials.md`; registered in `src/template.ts` |
 | `templates/intents/` | Built-in intent packs (`default.md`); registered in `src/intent/load.ts` |
 | `templates/modes/` | Built-in modes; registered in `src/mode.ts` |
 | `templates/.opencode/agent/auto.md`, `templates/opencode.json` | Agent contract and permission allowlist that init copies into the target (registered by the shell); `templates/README.md` describes them |

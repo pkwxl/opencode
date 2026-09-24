@@ -1641,7 +1641,10 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
       await listTasks(dir, "docs/R-01/P01-implement", "R-01.P01", [["T-001", "任务", "正文"]])
       const notice = await runCli(["plan", dir])
       expect(notice.code).toBe(0)
-      expect(notice.out).toContain(`ℹ docs/R-01/P01-implement/tasks.md lists 1 task(s) (1 pending); next: opencode-auto run ${dir}`)
+      expect(notice.out).toContain(
+        `ℹ docs/R-01/P01-implement/tasks.md lists 1 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
+          `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
+      )
       // --append 挂在规划输入上(D23): 无输入即用法错误。
       const bare = await runCli(["plan", dir, "--append"])
       expect(bare.code).toBe(1)
@@ -1667,10 +1670,16 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
       await listTasks(dir, "docs/R-01/P02-implement", "R-01.P02", [["T-001", "任务", "正文"]])
       const notice = await runCli(["plan", dir])
       expect(notice.code).toBe(0)
-      expect(notice.out).toContain(`ℹ R-01.P02 implement is planned (1 of 1 tasks pending); next: opencode-auto run ${dir}`)
+      expect(notice.out).toContain(
+        `ℹ R-01.P02 implement is planned (1 of 1 tasks pending); next: opencode-auto run ${dir} ` +
+          `— or add tasks with opencode-auto plan ${dir} --append -p <text>, or close units with opencode-auto close <ref>`,
+      )
       const withInput = await runCli(["plan", dir, "-p", "输入"])
       expect(withInput.code).toBe(1)
-      expect(withInput.err).toContain("R-01.P02 implement already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append")
+      expect(withInput.err).toContain(
+        `R-01.P02 implement already lists tasks, so the planning input would not be used; ` +
+          `add tasks with opencode-auto plan ${dir} --append -p <text> | --file <path>`,
+      )
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1959,7 +1968,10 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
       expect(run.out).toContain("ℹ T-002 has no Depends: field, so its prerequisite T-001 counts as satisfied; do not assume T-001's deliverables exist")
       expect(run.out).toMatch(/to undo before anything else runs: git revert [0-9a-f]+/)
       // Then plan's own stop: the notice over the listed tasks (1 pending).
-      expect(run.out).toContain(`ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}`)
+      expect(run.out).toContain(
+        `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}, ` +
+          `or add tasks with opencode-auto plan ${dir} -p <text> | --file <path>`,
+      )
       // The close commit: subject, body and the force-close trailers.
       const message = await git("log", "-1", "--pretty=%B")
       expect(message).toContain("T-001 closed: superseded by a follow-up")
@@ -2002,7 +2014,10 @@ describe("CLI: plan --force-close (auto-core plans/0053 D28)", () => {
       expect(run.out).toContain("ℹ mechanical handover written: docs/R-01/P02-implement/handover.md")
       // Plan continues in the same process: the next phase is current now,
       // and its planned state is the notice plan stops on (exit 0, plan's).
-      expect(run.out).toContain(`ℹ R-01.P03 test is planned (1 of 1 tasks pending); next: opencode-auto run ${dir}`)
+      expect(run.out).toContain(
+        `ℹ R-01.P03 test is planned (1 of 1 tasks pending); next: opencode-auto run ${dir} ` +
+          `— or add tasks with opencode-auto plan ${dir} --append -p <text>, or close units with opencode-auto close <ref>`,
+      )
       // Phase state: closed done.md, the four handover sections, the index
       // tick, P03 untouched.
       expect(await Bun.file(join(dir, "docs/R-01/P02-implement/done.md")).text()).toContain("Closed: skipped this round")

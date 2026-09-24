@@ -22,6 +22,7 @@ import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
+import { shellProfile } from "./shell"
 import { statsPhase } from "./stats"
 import { stepPause } from "./step"
 import { loadPlan } from "./tasks"
@@ -142,7 +143,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
   await closeStep(directory, "phase-handover", phaseKey(phase).id)
   const gated = await completePhase(directory, phase, gates)
   if (gated.length) {
-    logGateStop(phase, gated, acceptance)
+    logGateStop(directory, phase, gated, acceptance)
     return 2
   }
   // AGENTS.md 只校验不改写(F.2): 超 150 行在交接提交信息与终端 note 提示人工精简。
@@ -175,9 +176,12 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
 }
 
 // A phase gate holds (plans/0049 G7): the phase stays on its handover route,
-// and the next run re-checks. The human's two ways on — sign or reject — are
-// both plain file edits plus a commit, so they are spelled out here.
-function logGateStop(phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
+// and the next run re-checks. The human's ways on — sign, rework through an
+// append, or close without the gate — are spelled out here as commands: the
+// append removes the stale handover itself (plans/0053 D25) and replans the
+// distillation after the fix tasks.
+function logGateStop(directory: string, phase: PhaseUnit, problems: string[], acceptance: string | undefined): void {
+  const { bin } = shellProfile()
   const waiting = problems.every((problem) => problem.startsWith("acceptance:"))
   log(`⏸ phase ${phaseTitle(phase)} ${waiting ? "awaits acceptance" : "is held by its gate"}:`)
   for (const problem of problems) log(`  ${problem}`)
@@ -186,9 +190,10 @@ function logGateStop(phase: PhaseUnit, problems: string[], acceptance: string | 
     log(`  to accept: review ${handover} and ${acceptance}, add the line \`${ACCEPTED_MARK}\` to ${acceptance}, commit, re-run`)
   }
   log(
-    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks to ${phase.dir}/tasks.md (each with its docs/T-NNN/todo.md), ` +
-      `delete ${handover}, commit, re-run — the fix tasks run and the handover is distilled again`,
+    `  to rework: ${acceptance ? `write your notes in ${acceptance}, ` : ""}append fix tasks with ${bin} plan ${directory} --append -p <text> ` +
+      `(the stale handover is removed and distilled again after them)`,
   )
+  log(`  to close the phase without its gate: ${bin} close ${phaseKey(phase).id} ${directory} --reason <text>`)
 }
 
 // 阶段循环(D.1;无阶段模式亦走此循环,plans/0047 L2): 推导当前阶段 → 任务索引

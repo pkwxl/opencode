@@ -21,6 +21,7 @@ import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches } from "./switches"
+import { shellProfile } from "./shell"
 import { stepPause } from "./step"
 import { cleanTestHandoffs, restoreTestHandoffs, testHandoffExists } from "./testrun"
 import { reportResult, runWrapup } from "./wrapup"
@@ -408,21 +409,26 @@ export async function runTask(
     // Result line of the task report (FAIL stops the run): the report and the
     // work are already committed by the wrap-up session, so a FAIL only has
     // to block — the loop's blocked path marks it blocked and commits the
-    // interruption scene. A person then decides: renaming the task's todo.md
-    // to done.md accepts the result; listing fix tasks before it in tasks.md
-    // gets the gap fixed first (a hand-added checklist item is illegal subtask
-    // state in auto mode, so fixes are planned as tasks). The phase is rewound to
-    // wrapup, so re-running the task itself only re-runs the wrap-up, which
-    // rewrites the result line. No report or no result line = no stop.
+    // interruption scene. A person then decides: `close` accepts the result
+    // (the Closed: field records why); `plan --force-close … --append -p`
+    // replaces the task with a better one; listing fix tasks before it in
+    // tasks.md gets the gap fixed first (a hand-added checklist item is
+    // illegal subtask state in auto mode, so fixes are planned as tasks).
+    // The phase is rewound to wrapup, so re-running the task itself only
+    // re-runs the wrap-up, which rewrites the result line. No report or no
+    // result line = no stop.
     await persistStage({ kind: "closeout" })
     const result = await reportResult(dir, task)
     if (result?.type === "fail") {
+      const { bin } = shellProfile()
       chain.phase = { kind: "wrapup" }
       return {
         type: "blocked",
         question:
           `the task report concluded Result: FAIL${result.reason ? ` (${result.reason})` : ""}. The report and the work are committed; ` +
-          `rename docs/${task.id}/todo.md to done.md to accept the result, or list fix tasks before it in ${plan.index}, and re-run.`,
+          `accept the result with ${bin} close ${task.id} --reason <text>; ` +
+          `or replace the task with ${bin} plan --force-close ${task.id} --reason <text> --append -p <what to do instead>; ` +
+          `or list fix tasks before it in ${plan.index} by hand; then re-run.`,
       }
     }
     await markDone(plan, task.id)

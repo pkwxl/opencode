@@ -256,8 +256,8 @@ Unit and outcome states:
 | 自动编号 | auto numbering | `--auto-number` |
 | 统计 | stats | `.auto/stats.json` |
 | 只读保护 | read-only guard | `src/protect.ts` |
-| 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run` and `plan` for the whole run (`runAll` re-enters the shell's lock); `init` / `continue` / `amend` / `fix` / `reset` refuse while it is live, `status` shows it first; a same-host lock whose process is gone is stale; `close` will hold it too (planned) (`src/lock.ts`, `plans/0053` D1–D3) |
-| 生命周期命令 | lifecycle command | `plan` (live), `close` (planned, P3b) (`plans/0052`, `plans/0053`) |
+| 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run`, `plan` and `close` for the whole run (`runAll` re-enters the shell's lock); `init` / `continue` / `amend` / `fix` / `reset` refuse while it is live, `status` shows it first; a same-host lock whose process is gone is stale (`src/lock.ts`, `plans/0053` D1–D3) |
+| 生命周期命令 | lifecycle command | `plan` and `close` (with `plan --append` / `--force-close`): the commands that move a round's lifecycle (`plans/0052`, `plans/0053`) |
 | 配置层 | config layer | What `init` writes and `reset` removes |
 | 全量覆盖 | full overwrite | `init` without `--amend`; its baseline read drops retired keys and names them (`loadOverwriteBaseline`, `plans/0052` D4) |
 | 已退役键 | retired key | A config key that fails loading strictly: `commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir` (`RETIRED_KEYS` in `src/config.ts`) |
@@ -266,13 +266,13 @@ Unit and outcome states:
 | 增量修订 | amend | Change the named config keys, keep the rest: the `amend` command (`plans/0052` D25); `init --amend` does the same until P3c |
 | 配置修复 | config fix | The `fix` command: repair the config layer by rule, never resetting a key (`src/config-fix.ts`, `plans/0052` D10–D11) |
 | 可修复 / 需人工 | fixable / manual | The two classes of a config-fix finding: deterministic and meaning-preserving, applied by `fix` / reported only, left to a person (`FixFinding.class`) |
-| 强制关闭 | force-close | `close`, `plan --force-close` (planned, `plans/0053` D17–D22, D28) |
-| 已关闭(单元) | closed (unit) | A `done.md` whose field block carries `Closed: <reason>`: done for scheduling, not delivered (planned, `plans/0053` D16); not the same as round close or close-out |
-| 机械交接桩 | mechanical handover | The driver-written `handover.md` of a closed phase: the four sections, no session (planned, `plans/0053` D18) |
+| 强制关闭 | force-close | `plan --force-close <ref> --reason <text>`: close a unit inside `plan`, then continue planning in the same process (`plans/0053` D28) |
+| 已关闭(单元) | closed (unit) | A `done.md` whose field block carries `Closed: <reason>`: done for scheduling, not delivered (`closeUnit`, `src/close.ts`, `plans/0053` D16); not the same as round close or close-out |
+| 机械交接桩 | mechanical handover | The driver-written `handover.md` of a closed phase: the four sections, no session (`src/close.ts`, `plans/0053` D18) |
 | 规划前置 | plan prelude | The routes `plan` settles without an agent before its loop: establish a round, the round-close gate, notices, input refusals; the `plan` command calls it under the run lock before `runAll` (`planPrelude`, `src/plan.ts`, `plans/0053` D4) |
 | 停止条件 | stop condition | `RunAllOpts.stopBefore: "execute"`: the loop stops after a successful planning step, or where an execute route would start; `plan` passes it (`src/loop-phase.ts`, `plans/0053` D6) |
 | 规划输入 | planning input | A phase's `plan-input.md` (role `planningInput`): the latest input verbatim, committed on its own before the planning unit and rendered into the planning prompt; a changed text restarts an open planning step in a new session; `plan -p` / `--file` supply it (`src/plan-input.ts`, `plans/0053` D9–D11) |
-| 追加规划 | append planning | `plan --append`: add tasks after the current phase's existing ones; step kind `phase-append` (planned, `plans/0053` D23–D27) |
+| 追加规划 | append planning | `plan --append`: add tasks after the current phase's existing ones; step kind `phase-append` (`appendPlan`, `src/loop-plan.ts`, `plans/0053` D23–D27) |
 | 并行编排 | parallel orchestration | Deferred; design in `plans/0036` |
 | 声明面 | declaration surface | `--parallel`, `--max-sessions` (`plans/0046`) |
 | 调度器 | scheduler | |
@@ -314,7 +314,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 - Artifact declaration and subtask `todo.md` headings: `Artifacts:`, `## Scope`, `## Artifacts`
 - Task report: `Result: PASS` / `Result: FAIL`
 - Phase handover sections: `## Key decisions`, `## Constraints and pitfalls`, `## Required reading for the next phase`, `## Artifact index`
-- Unit field block: `Phase: R-NN.P<nn>`, `Depends:`, `Touches:`; custom phase type `Gate: acceptance`
+- Unit field block: `Phase: R-NN.P<nn>`, `Depends:`, `Touches:`, `Closed: <reason>` (written by `closeUnit` only); custom phase type `Gate: acceptance`
 - Knowledge-doc terminator `DONE`; refcheck exemption markers `deleted` / `archived` / `historical`
 - Language-neutral: `<!-- auto: eof -->`, `- [ ]` / `- [x]`, `AUTO-RESOLVE:`, `AUTO-DECISION:`, `AUTO-FIXME:`, `[DRIVER]`, `Auto-Stage:` / `Auto-Nested:` trailers
 - File and directory names: `todo.md` / `done.md`, `tasks.md`, `phases.md`, `subtasks.md`, `context.md`, `report.md`, `round.md`, `CURRENT.md`, `handoff.md` / `testhandoff-<n>.md`, `.auto/*`, `docs/T-NNN/`, `docs/R-NN/`, `S<nn>`

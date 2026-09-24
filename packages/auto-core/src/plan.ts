@@ -6,9 +6,8 @@
 // loop (loop-phase, loop-plan) prints the same stop lines through the helpers
 // here, so plan says the same thing wherever it stops.
 //
-// Pointer texts that name later commands are staged with them: the `close`
-// pointers join the notices in P3b B5 (plans/0053 D29), and the phase-index
-// drift row (3) in P3c.
+// Pointer texts name the lifecycle commands that exist (plans/0053 D29); the
+// phase-index drift row (3) arrives in P3c.
 import { join } from "node:path"
 import { roundBriefPath, roundDirName } from "./docpaths"
 import { currentPhase, currentRound, establishRound, legacyLayoutProblem, phaseIndexPath, phaseLabel, readPhases, routePhase, type PhaseRoute, type PhaseState, type PhaseUnit } from "./phases"
@@ -114,7 +113,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     }
     // Row 7 (D7): exit 0 without input keeps `plan && run` usable; input on
     // a planned phase is a real mistake.
-    return opts.input ? stop(1, [inputUnusedLine(route), ...executeNotice(dir, route, false)]) : stop(0, executeNotice(dir, route, false))
+    return opts.input ? stop(1, [inputUnusedLine(dir, route), ...executeNotice(dir, route, false)]) : stop(0, executeNotice(dir, route, false))
   }
   // Row 8.
   if (route.type === "plan") return opts.input ? { type: "loop" } : stop(0, emptyIndexNotice(dir, route.plan.index))
@@ -231,19 +230,32 @@ async function planTarget(dir: string, route: Extract<PhaseRoute, { type: "plan"
 export const phaseRefText = (phase: PhaseUnit): string => `${qualifiedPhase(phase)} ${phase.type}`
 
 // A route with tasks left or all done: what plan says instead of planning
-// (plans/0053 D7, D15).
+// (plans/0053 D7, D15). The pointers name the lifecycle commands a person
+// can go on with: run the phase, add more tasks (an append on a planned
+// index), or close units that will not run.
 export function executeNotice(dir: string, route: Extract<PhaseRoute, { type: "execute" | "handover" }>, manual: boolean): string[] {
   const { bin } = shellProfile()
   const total = route.plan.tasks.length
   const pending = route.plan.tasks.filter((task) => task.status !== "done").length
-  if (manual) return [`ℹ ${route.plan.index} lists ${total} task(s) (${pending} pending); next: ${bin} run ${dir}`]
-  return [`ℹ ${phaseRefText(route.phase)} is planned (${pending} of ${total} tasks pending); next: ${bin} run ${dir}`]
+  // In m mode input on a non-empty index is an append already (D23), so the
+  // pointer is plan's plain input form.
+  if (manual) {
+    return [`ℹ ${route.plan.index} lists ${total} task(s) (${pending} pending); next: ${bin} run ${dir}, or add tasks with ${bin} plan ${dir} -p <text> | --file <path>`]
+  }
+  return [
+    `ℹ ${phaseRefText(route.phase)} is planned (${pending} of ${total} tasks pending); next: ${bin} run ${dir} ` +
+      `— or add tasks with ${bin} plan ${dir} --append -p <text>, or close units with ${bin} close <ref>`,
+  ]
 }
 
 // Input on a planned phase without --append (row 7): nothing would plan it —
 // appending is what the input is for.
-function inputUnusedLine(route: Extract<PhaseRoute, { type: "execute" | "handover" }>): string {
-  return `${phaseRefText(route.phase)} already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append`
+function inputUnusedLine(dir: string, route: Extract<PhaseRoute, { type: "execute" | "handover" }>): string {
+  const { bin } = shellProfile()
+  return (
+    `${phaseRefText(route.phase)} already lists tasks, so the planning input would not be used; ` +
+    `add tasks with ${bin} plan ${dir} --append -p <text> | --file <path>`
+  )
 }
 
 // m mode with nothing listed and no input (plans/0053 D15).
@@ -253,11 +265,15 @@ export function emptyIndexNotice(dir: string, index: string): string[] {
 }
 
 // A planning step that just ran under plan's stop condition (plans/0053 D6,
-// D15): what was planned, and the review before run.
+// D15): what was planned, and the review before run. Phased, the review can
+// also edit lines, close a task, or append more (m mode's index is edited by
+// hand and its tasks close the same way, so its line stays plain).
 export function plannedLines(dir: string, phase: PhaseUnit, ids: readonly string[], manual: boolean): string[] {
   const { bin } = shellProfile()
   const index = taskIndexPath(phase)
-  const next = `next: review them, then run: ${bin} run ${dir}`
+  const next = manual
+    ? `next: review them, then run: ${bin} run ${dir}`
+    : `next: review them (edit, close, or plan --append), then run: ${bin} run ${dir}`
   if (manual) {
     const span = ids.length > 1 ? `${ids[0]}…${ids[ids.length - 1]}` : (ids[0] ?? "")
     return [`✓ planned ${ids.length} task(s) (${span}) into ${index}`, next]

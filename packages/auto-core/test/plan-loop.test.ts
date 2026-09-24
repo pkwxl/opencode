@@ -49,7 +49,7 @@ describe("plan's stop condition (plans/0053 D6)", () => {
       const { code, lines } = await f.run({ stopBefore: "execute" })
       expect(code).toBe(0)
       expect(lines).toContain("✓ planned R-01.P01 analysis: 1 task(s) in docs/R-01/P01-analysis/tasks.md")
-      expect(lines).toContain(`next: review them, then run: opencode-auto run ${f.dir}`)
+      expect(lines).toContain(`next: review them (edit, close, or plan --append), then run: opencode-auto run ${f.dir}`)
       // The planning step's outputs are on disk, committed, and its resume
       // point is closed; the loop stopped before the next phase's planning.
       expect(has(f, "docs/R-01/P01-analysis/tasks.md")).toBe(true)
@@ -93,7 +93,10 @@ describe("plan's stop condition (plans/0053 D6)", () => {
       await f.commit("analysis tasks")
       const stopped = await f.run({ stopBefore: "execute" })
       expect(stopped.code).toBe(0)
-      expect(stopped.lines).toContain(`ℹ R-01.P01 analysis is planned (1 of 2 tasks pending); next: opencode-auto run ${f.dir}`)
+      expect(stopped.lines).toContain(
+        `ℹ R-01.P01 analysis is planned (1 of 2 tasks pending); next: opencode-auto run ${f.dir} ` +
+          `— or add tasks with opencode-auto plan ${f.dir} --append -p <text>, or close units with opencode-auto close <ref>`,
+      )
       expect(f.agent.calls).toEqual([])
       const refused = await f.run({ stopBefore: "execute", planInput: { text: "More analysis." } })
       expect(refused.code).toBe(1)

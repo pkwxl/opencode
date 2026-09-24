@@ -314,11 +314,12 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。`run` 期间
 同一目录同一时刻只允许一个 driver 进程工作:`run` 启动时取得**运行锁**(run lock)
 `.auto/run.lock`(JSON:进程号 `pid`、主机名 `host`、命令 `command`、起始时间 `started`),
 运行结束(含 Ctrl+C 强制退出)即删除;`plan` 同样持锁(command 记为 `plan`,内部经
-`runAll` 重入)。另一进程持锁期间,`run` 与 `plan` 以退出码 `1` 拒绝并报出持锁者;
+`runAll` 重入),`close` 亦持锁(command 记为 `close`)。另一进程持锁期间,`run`、
+`plan` 与 `close` 以退出码 `1` 拒绝并报出持锁者;
 `init`、`continue`、`amend`、`fix`、`reset` 会改写运行中的 driver 所读的文件,同样以 `1` 拒绝
 (`-f` 不越过运行锁);`check` 与 `status` 从不取锁,`status` 把活锁打印在首行
-(`▶ run in progress (pid 1234 on build-3, since …)`、`plan` 持锁时为
-`▶ plan in progress (…)`)。持锁进程已不存在(如被 `kill -9`)的
+(`▶ run in progress (pid 1234 on build-3, since …)`、`plan`/`close` 持锁时为
+`▶ plan in progress (…)`/`▶ close in progress (…)`)。持锁进程已不存在(如被 `kill -9`)的
 本机锁视为失效,下一次 `run` 或 `plan` 自动移除并打印一行说明;记录在其他主机上的锁无法探查进程,
 一律视为有效。锁文件无法解析时同样视为有效,确认无进程在跑后手工删除 `.auto/run.lock`。
 
@@ -386,6 +387,71 @@ opencode-auto run <dir>             # 评审(可直接编辑/勾销任务)后执
   `run`)与 `--dryrun`、`--wait-between`、`--max-sessions`、`-f`、`--amend`、
   `--continue`(`run` 反过来拒绝 `-p`/`--file`)。持运行锁(command 记为 `plan`);
   进入循环时同样在 `.auto/logs/` 建日志文件。退出码同 `run`(另:轮关闭检查不过为 `2`)。
+
+追加任务(`--append`)与关闭单元(`close`、`plan --force-close`)见下面两节。
+
+### 追加规划(plan --append)
+
+`plan [dir] --append -p <文本> | --file <路径>` 向**当前阶段**追加任务:任务索引里
+已有的行一个不动,新任务按规划输入追加在既有行之后,编号续接(`autoNumber` 开启时自
+`.auto/next-task` 续接并推进,否则从已占用或已列出的最大编号 + 1 起)。它从不切换阶段——
+路由此刻指向哪个阶段,就追加到哪个阶段,包括交接路由上交接文档已写出、或被阶段门禁拦下的
+阶段。`m` 模式下索引非空时,带输入的 `plan` 本身就是追加,`--append` 可省(显式给出
+亦算冗余)。
+
+- **既有内容保持不动**:追加步骤(步骤种类 `phase-append`)进入时先对任务索引与各
+  既有任务文档做快照;会话改写了既有行或既有任务文档即拒绝并要求重试。步骤中断后
+  人工提交的半成品,重跑时按快照口径计入既有部分,只校验其后的新任务。
+- **旧交接文档会被移除**:追加成功后,阶段内已写出的 `handover.md` 由 driver 在独立
+  提交中删除,新任务跑完后重新蒸馏交接(acceptance.md / verdict.md 保留,由下一次
+  蒸馏重写)。
+- **任务流水线进行中不可追加**:某任务的恢复点还在 `.auto/progress.json` 里(任务
+  执行到一半或刚被阻塞)时,`--append` 以退出码 `1` 拒绝——先 `run` 完成它,或
+  `close` 关闭它。新任务本来也排在一个受阻任务之后,帮不上它。
+- `--append` 不带输入即用法错误(追加的正是按输入规划出的任务);轮未建立、轮已完成
+  待开新轮等路由上,输入的拒绝规则与普通规划输入一致。
+
+### 关闭单元(close 与 plan --force-close)
+
+`close <ref> [dir] --reason <文本> [--cascade] [--commit-changes | --stash-changes]`
+把一个单元**关闭**(closed)而非完成:调度上按收口处理(`todo.md` → `done.md` 改名
+与索引勾选照做),但**未交付**——原因写进该单元 `done.md` 字段块的 `Closed:` 字段,
+状态树(`⊘` 标记)、已完成清单、规划提示与交接蒸馏都会标注「已关闭、未交付,不要假设
+其产物存在」。目标 `ref` 必须属于当前轮且处于打开状态,三种形态:`T-NNN`(任务)、
+`R-NN.P<nn>`(阶段)、`R-NN`(整轮,仅阶段化流程;`m` 模式的唯一阶段不可关闭,关闭
+其中的任务即可)。`--reason` 必填且单行,它同时是 `Closed:` 的值与关闭提交主题的尾;
+显式的 ref 加必填原因即是确认,`close` 不再二次询问。
+
+- **提交与记录**:关闭改动落在一个独立提交里(主题 `<ref> closed: <原因>`,trailer
+  `Auto-Stage: force-close`,正文列出全部被关闭单元、各阶段被跳过的门禁与并入/ stash
+  的文件);被关闭的阶段由 driver 写出**机械交接桩**(四小节齐全的 handover.md,记录
+  关闭原因与各任务的 done/closed 状态,不开蒸馏会话);`.auto/` 中**只清除被关闭单元
+  自身**的运行记录(units.json 条目、进度记录、会话交接、CURRENT.md)。`.auto/next-task`
+  不回退——已关闭的编号永不复用。
+- **依赖**:`Depends:` 显式指向被关闭单元的打开任务会阻止关闭并逐一列出;`--cascade`
+  把它们一并关闭(原因标注 cascade 来源,迭代到闭包)。缺省 `Depends:`(隐式认前序)
+  视为已满足,输出会点名这些任务。子任务不参与级联关闭——其状态文件是任务进行到哪
+  的记录。
+- **脏工作区**:超出 driver 自身状态文件的未提交改动会使 `close` 拒绝(退出码 `1`,
+  列出文件);`--commit-changes` 把改动并入关闭提交,`--stash-changes` 在每个仓库根
+  `git stash push --include-untracked`(嵌套仓库先行,逐个打印)。
+- **退出码**:`0` 已关闭;`1` 拒绝或用法错误;`2` 关闭提交或收口校验失败。
+- **撤销即 `git revert`,没有 `reopen`**:`close` 的输出末尾打印
+  `to undo before anything else runs: git revert <sha>`。revert 恢复 `todo.md`、去掉
+  `Closed:` 字段、取消索引勾选并移除机械交接桩;被清除的运行记录**不**恢复,重开的
+  任务从零开始——这正是重开该有的结果。限制在「任何后续工作开始之前」:一旦后续工作
+  已建立在关闭之上(比如下一阶段已在新状态下规划),revert 会留下两个打开的阶段,
+  `reopen` 也无济于事。
+- **`plan --force-close <ref> --reason <文本> [上述关闭选项]`**:同一进程内先关闭、再
+  接着走 `plan` 的正常流程(共用 `plan` 的运行锁;关闭被拒 → 退出码 `1` 且无任何
+  写盘,提交失败 → `2`,关闭成功后退出码即 `plan` 的)。关闭类选项(`--reason`、
+  `--cascade`、`--commit-changes`、`--stash-changes`)不带 `--force-close` 出现在
+  `plan` 上即用法错误;其他命令不接受 `--force-close`。典型用法:
+
+```sh
+opencode-auto plan <dir> --force-close T-005 --reason "方向已换" --append -p "改做 X"   # 换掉一个任务
+opencode-auto plan <dir> --force-close R-01.P02 --reason "本轮跳过"                     # 跳过该阶段,直接规划下一个
+```
 
 ## opencode server 与 agent 选择
 
