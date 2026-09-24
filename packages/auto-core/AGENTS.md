@@ -59,7 +59,7 @@ This package is the core; shell packages (`packages/auto`, the general CLI with 
 - Session-failure wait-and-probe loop (OPENCODE_AUTO_RECOVERY_WAIT) → `src/session.ts` awaitRecovery (0015)
 - Liveness probe, truncated-output resume, shape-check re-prompt fork → `src/watch.ts` + `src/session-api.ts` probeSession/forkEndedSession (0026)
 - Cross-interruption cumulative stats → `src/stats.ts` + `src/conclusion.ts` + `src/loop-progress.ts` (0019)
-- Question policy and proxy-answer audit (OPENCODE_AUTO_ASK, AUTO-RESOLVE/AUTO-DECISION) → `src/resolve.ts` + `templates/prompts/_partials.md` question-rule (0020)
+- Question policy and proxy-answer audit (OPENCODE_AUTO_ASK, AUTO-RESOLVE/AUTO-DECISION) → `src/resolve.ts` + `templates/prompts/_partials.md` question-rule (0020); plan's sessions (stopBefore `"execute"`) never proxy-answer — a non-permission question waits for the human with no timeout, blocking only on a closed input (`Opts.humanQuestions` in `src/opts.ts` + the watch.ts question branch + `useHumanQuestions` in `src/prompt.ts`, set in preflight)
 - Shell profile → `src/shell.ts`
 - Stable references, round directories (docs/R-NN), and reference checking → `src/docpaths.ts` + `src/refcheck.ts` (0010; refcheck scope narrowing see 0013)
 - Module split and dependency direction (lower layers must not import runner; testrun must not import the session-driving layer) → 0024 §D.2; direction rules (incl. D8 domain boundaries) are enforced by `test/import-direction.test.ts` — a new cross-module import may require a conscious table edit there

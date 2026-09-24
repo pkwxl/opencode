@@ -272,17 +272,23 @@ export function isApproval(answer: string): boolean {
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns
 // undefined on timeout or empty input, in which case the caller falls back to
 // autoAnswer() (questions) or the --permission fallback (permission requests).
+// minutes === undefined = no timeout (plan's humanQuestions path: the run
+// waits for the human's answer indefinitely, never falling back); undefined
+// then means only that the input channel closed.
 // --interactive 下改由常驻输入行接收回答(提示语、超时与回落语义不变)。
 // dir 传入时等待区间(含 interactive.question 路径)经 statsWaitBegin/End 从会话
 // 用时与 AI 用时中同步扣除、单记 waitMs(STATS_PLAN §2/§3: AI 段关-开);导出供
 // 单测直驱(对齐 runSession 等内部接线测试)。
 export async function askHuman(
-  minutes: number,
+  minutes: number | undefined,
   hint: string,
   interactive?: Interactive,
   dir?: string,
 ): Promise<string | undefined> {
-  const promptText = `enter your answer within ${minutes} minutes (Enter to confirm, ${hint}): `
+  const promptText =
+    minutes === undefined
+      ? `enter your answer (Enter to confirm, ${hint}): `
+      : `enter your answer within ${minutes} minutes (Enter to confirm, ${hint}): `
   await statsWaitBegin(dir, "askHuman")
   try {
     if (interactive) return (await interactive.question(promptText, minutes)) || undefined
@@ -292,12 +298,15 @@ export async function askHuman(
     rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      const answer = await Promise.race([
-        rl.question(promptText),
-        new Promise<undefined>((resolve) => {
-          timer = setTimeout(() => resolve(undefined), minutes * 60_000)
-        }),
-      ])
+      const answer =
+        minutes === undefined
+          ? await rl.question(promptText)
+          : await Promise.race([
+              rl.question(promptText),
+              new Promise<undefined>((resolve) => {
+                timer = setTimeout(() => resolve(undefined), minutes * 60_000)
+              }),
+            ])
       return answer?.trim() || undefined
     } finally {
       clearTimeout(timer)

@@ -15,6 +15,7 @@ import type { AgentEvent } from "../src/agent/types"
 import { attempt } from "../src/attempt"
 import { degrade } from "../src/capability"
 import type { SessionChain } from "../src/chain"
+import type { Interactive } from "../src/interactive"
 import type { Opts } from "../src/opts"
 import { forkSession, probeSession, resetServerModelCache, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
@@ -174,6 +175,45 @@ describe("questions and permissions", () => {
     const result = await watch(agent.client, "s", stream([ev.question("other", "q", "?"), ev.text("other", "t", "not mine"), ev.idle("s")]), opts)
     expect(result.lastText).toBe("")
     expect(agent.argsOf("replyQuestion")).toEqual([])
+  })
+
+  // plan's sessions (Opts.humanQuestions): a question is the human's call —
+  // the driver waits for the answer with no timeout and never proxy-answers
+  // (no AUTO-RESOLVE); a closed input or a repeated question blocks.
+  const line = (answer: string | undefined): Interactive =>
+    ({ attach: () => {}, question: async () => answer, close: () => {} }) as unknown as Interactive
+
+  test("plan's sessions (humanQuestions): the human answers; no proxy answer, no resolve recorded", async () => {
+    const agent = make()
+    const result = await watch(agent.client, "s", stream([ev.question("s", "q1", "which db?"), ev.idle("s")]), {
+      humanQuestions: true,
+      interactive: line("use postgres"),
+    })
+    expect(result.blocked).toBeUndefined()
+    expect(result.resolves).toEqual([])
+    expect(agent.argsOf("replyQuestion")).toEqual([["q1", [["use postgres"]]]])
+  })
+
+  test("plan's sessions (humanQuestions): a closed input blocks; the same question again blocks", async () => {
+    const closed = make()
+    const blocked = await watch(closed.client, "s", stream([ev.question("s", "q1", "which db?"), ev.idle("s")]), {
+      humanQuestions: true,
+      interactive: line(undefined),
+    })
+    expect(blocked.blocked?.question).toContain("which db?")
+    expect(closed.argsOf("replyQuestion")).toEqual([])
+    expect(closed.argsOf("rejectQuestion")).toEqual([["q1"]])
+    expect(closed.argsOf("abort")).toEqual([["s"]])
+    const attended = make()
+    const again = await watch(
+      attended.client,
+      "s",
+      stream([ev.question("s", "q1", "which db?"), ev.question("s", "q2", "which db?"), ev.idle("s")]),
+      { humanQuestions: true, interactive: line("use postgres") },
+    )
+    expect(attended.argsOf("replyQuestion")).toEqual([["q1", [["use postgres"]]]])
+    expect(again.blocked?.question).toContain("asked again about the same question after the human's answer")
+    expect(attended.argsOf("rejectQuestion")).toEqual([["q2"]])
   })
 })
 

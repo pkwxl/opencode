@@ -385,11 +385,17 @@ opencode-auto run <dir>             # 评审(可直接编辑/勾销任务)后执
   git);输入变更会使在途规划步骤重开新会话。要无输入规划,删除该文件并提交即可。
 - **`m` 模式**:`plan -p`/`--file` 即「由 AI 规划任务」的入口(原 `--implement-*`
   已退役),见[由 AI 规划任务](#由-ai-规划任务)。
-- **选项**:接受 `run` 的会话选项(`--server`、`--verbose`、`--interactive/-i`、
+ - **选项**:接受 `run` 的会话选项(`--server`、`--verbose`、`--interactive/-i`、
   `--wait-answer`、`--permission`、`--new-session`);拒绝一切配置类选项(报文同
   `run`)与 `--dryrun`、`--wait-between`、`--max-sessions`、`-f`、`--amend`、
   `--continue`(`run` 反过来拒绝 `-p`/`--file`)。持运行锁(command 记为 `plan`);
   进入循环时同样在 `.auto/logs/` 建日志文件。退出码同 `run`(另:轮关闭检查不过为 `2`)。
+- **提问即问人(无 AUTO-RESOLVE)**:plan 为执行前的人工审阅而跑,其会话里的非权限
+  提问一律由人工回答——driver **无超时等待**(`-i` 常驻输入行,未给 `-i` 时为 stdin
+  提问),`--wait-answer` 的超时代答回落在此不生效,会话也不要求 AUTO-RESOLVE 标注
+  (见[提问策略与代答审计(AUTO-RESOLVE)](#提问策略与代答审计auto-resolve))。
+  输入渠道不可达(stdin 关闭或空回答)或同一问题重复询问,则阻塞交人工(退出码 `2`),
+  在会话外处理后再跑。
 
 追加任务(`--append`)与关闭单元(`close`、`plan --force-close`)见下面两节。
 
@@ -793,6 +799,10 @@ driver 两路采集:① 会话真发了问、被自动答复回落的(人工在 
 台账落在目标目录 `.auto/resolves.json`(已被 gitignore,driver 独占写),与恢复判定完全
 无关:损坏或缺失只是计数从当下重开,不影响运行。人工回退重跑同一任务前 `rm` 掉它即可
 清零(与 `.auto/stats.json` 同款规程)。
+
+**例外:`plan` 的会话不代答。** plan 为执行前的人工审阅而跑,非权限提问一律等人工
+回答(无超时,`-i` 常驻输入行或 stdin),不产生 AUTO-RESOLVE 代答与标注;答不上来
+(输入关闭)或同题重问即阻塞交人工。`run` 的会话(含 `run` 发起的规划会话)口径不变。
 
 ## 提示词模板与自定义
 

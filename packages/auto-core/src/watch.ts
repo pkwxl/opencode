@@ -375,6 +375,31 @@ export async function watch(
       // dryrun 预检会话一律自动答复,不因提问阻塞。
       const permission = opts.dryrun ? false : /权限|permission/i.test(text)
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
+      // plan 的会话(opts.humanQuestions): 非权限提问是人工的决定——plan 为执行前
+      // 的人工审阅而跑,driver 无超时等待人工答复(-i 常驻输入行或 stdin),绝不代答
+      // (无 AUTO-RESOLVE);人工答不上来(输入渠道关闭)或同题重问才阻塞交人工。
+      if (!opts.dryrun && opts.humanQuestions && !permission) {
+        if (!repeated) {
+          autoAnswered.push(text)
+          log(`❓ received a non-permission question (waiting for your answer; plan never proxy-answers):\n${text}`)
+          const human = await askHuman(undefined, "no timeout and no automatic answer under plan", opts.interactive, opts.dir)
+          if (human) {
+            log(`→ human answer: ${human}`)
+            await client.replyQuestion(event.request, event.questions.map(() => [human]))
+            continue
+          }
+        }
+        await client.rejectQuestion(event.request)
+        await client.abort(sessionID)
+        return snapshot({
+          blocked: {
+            type: "blocked",
+            question: repeated
+              ? `asked again about the same question after the human's answer; handle it manually outside the session, then re-run:\n${text}`
+              : `the session asked for a human decision, but no answer could be received (the input channel is closed); answer it outside the session, then re-run:\n${text}`,
+          },
+        })
+      }
       // 权限与非权限提问在 --wait-answer 下都先等人工答复,超时一律回落
       // autoAnswer 让 AI 自主决策继续;仅缺省 --wait-answer 时的权限提问
       // 直接阻塞(无人值守时不能替人工决定是否授权)。

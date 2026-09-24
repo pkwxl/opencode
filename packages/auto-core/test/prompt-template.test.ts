@@ -22,6 +22,7 @@ import {
   renderTestWrapup,
   renderWhole,
   renderWrapup,
+  useHumanQuestions,
 } from "../src/prompt"
 import { autoSwitches } from "../src/switches"
 import { renderTemplate, renderText, usePromptLibrary } from "../src/template"
@@ -103,6 +104,32 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
       // 片段落在各模板的 "1." 与 "3." 之间,顶格编号行必须只有这一条
       expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)
       expect(text).not.toContain("\n\n")
+    }
+  })
+
+  // plan 的会话(RunAllOpts.stopBefore === "execute" 时 preflight 置位
+  // useHumanQuestions): 提问等人工答复,无自动代答口径、无标注要求;同一条
+  // 编号 2 的不变式照常成立。模块态须复位,否则污染同进程其余用例。
+  test("humanQuestions 档(plan 的会话): 等人工、无代理答复,结构不变式同样成立", () => {
+    useHumanQuestions(true)
+    try {
+      for (const ask of [false, true]) {
+        const text = fragment(ask)
+        expect(text).toContain("waits for the answer with no timeout")
+        expect(text).toContain("never decide in the user's place")
+        expect(text).toContain("question tool")
+        expect(text).not.toContain("do not call the question tool")
+        expect(text).not.toContain("answered automatically")
+        expect(text.startsWith("2. ")).toBe(true)
+        expect(text.endsWith("\n")).toBe(false)
+        expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)
+        expect(text).not.toContain("\n\n")
+      }
+      // 复位后两档文案与未置位时逐字一致(run 的渲染不受 plan 影响)。
+      useHumanQuestions(false)
+      expect(fragment(false)).toBe(renderText("{{> question-rule}}", promptCtx({ ask: false })))
+    } finally {
+      useHumanQuestions(false)
     }
   })
 

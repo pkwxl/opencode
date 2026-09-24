@@ -29,6 +29,18 @@ export function useIntentPacks(dir: string | undefined): void {
   activeIntentPack = resolveIntent(loadIntents(dir))
 }
 
+// plan's sessions (RunAllOpts.stopBefore === "execute"): a human is attending,
+// so the question-rule partial renders its human-answer branch — the session
+// asks, the driver waits for the human's answer with no timeout, and no
+// AUTO-RESOLVE proxy answer or labeling applies. Set once in preflight next to
+// usePromptLibrary/useIntentPacks (same per-process load point), read by
+// promptCtx below; run sets it false and renders exactly as before.
+let humanQuestions = false
+
+export function useHumanQuestions(on: boolean): void {
+  humanQuestions = on
+}
+
 // Pack-section injection helper: address a `### <key>` subsection of the
 // active pack and pre-render it with the session context (pack text may use
 // the template syntax, same license as mode files); absent section/key
@@ -82,7 +94,7 @@ export const DECISION_FORMAT = "`AUTO-DECISION: <decision> (<reason>)`"
 // The exit's context completion, exported so tests that render the shared
 // partials directly (renderText/renderTemplate) see what every session sees.
 export function promptCtx(ctx: Ctx): Ctx {
-  const full: Ctx = { ask: autoSwitches().ask, resolveFormat: RESOLVE_FORMAT, decisionFormat: DECISION_FORMAT, ...ctx }
+  const full: Ctx = { ask: autoSwitches().ask, humanQuestions, resolveFormat: RESOLVE_FORMAT, decisionFormat: DECISION_FORMAT, ...ctx }
   const key = full.ask ? "decisionsAsk" : "decisionsUnattended"
   return { ...full, [key]: intentText("governance", full.ask ? "decisions-ask" : "decisions-unattended", full) }
 }

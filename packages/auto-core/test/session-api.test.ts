@@ -341,6 +341,35 @@ describe("askHuman 等待扣除(stats 接线,T-005)", () => {
     // 非空回答(含空白)原样返回——与改动前对等行为。
     expect(await askHuman(5, "hint", fakeInteractive("allow", 1000))).toBe("allow")
   })
+
+  test("无超时等待(minutes undefined,plan 的 humanQuestions 路径): 提示语不带分钟数与限时,回答直达", async () => {
+    let seen: { prompt: string; minutes?: number } | undefined
+    const line: Interactive = {
+      attach: () => {},
+      question: async (prompt: string, minutes?: number) => {
+        seen = { prompt, minutes }
+        now += 60_000
+        return "按方案 A 做"
+      },
+      close: () => {},
+    } as unknown as Interactive
+    const dir = await mkdtemp(join(tmpdir(), "auto-ask-"))
+    try {
+      await loadStats(dir)
+      await statsSessionBegin(dir, "T-001")
+      expect(await askHuman(undefined, "no timeout under plan", line, dir)).toBe("按方案 A 做")
+      expect(seen?.minutes).toBeUndefined()
+      expect(seen?.prompt).toContain("enter your answer (Enter to confirm, no timeout under plan): ")
+      expect(seen?.prompt).not.toContain("within")
+      // 等待扣除口径不变: 无超时的等待同样单记 waitMs、不计 AI 用时。
+      const report = await statsSessionEnd(dir, "s1", { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 })
+      expect(report?.thisAiMs).toBe(0)
+      expect(report?.session.wallMs).toBe(60_000)
+    } finally {
+      await flushStats(dir)
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ---- 服务端生效模型解析(serverDefaultModel: 未设路由时 ◈ 播报的回落)----

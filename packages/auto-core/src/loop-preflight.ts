@@ -18,7 +18,7 @@ import { loadPhaseTypes } from "./phases/custom"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import type { PlanInput } from "./plan-input"
-import { activeIntentText, useIntentPacks } from "./prompt"
+import { activeIntentText, useHumanQuestions, useIntentPacks } from "./prompt"
 import { CONTRACT_AGENT, type PermissionMode, type SubtaskMode } from "./opts"
 import type { ParallelLevel } from "./intent/types"
 import { resetInProgress } from "./tasks"
@@ -128,6 +128,11 @@ export async function preflight(
   try {
     usePromptLibrary(directory)
     useIntentPacks(directory)
+    // plan's sessions (stopBefore === "execute") render question-rule's
+    // human-answer branch: a person attends plan, so questions wait for the
+    // human with no timeout and never get an AUTO-RESOLVE proxy answer (the
+    // driver side of the same rule is Opts.humanQuestions, watch.ts).
+    useHumanQuestions(opts.stopBefore === "execute")
     const loaded = loadPhaseTypes(directory)
     const custom = loaded.filter((entry) => entry.origin === "project").map((entry) => entry.type)
     const types = loaded.map((entry) => entry.type)

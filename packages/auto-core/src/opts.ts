@@ -97,6 +97,11 @@ export type Opts = {
   // --no-wrapup(config.wrapup 持久化,缺省 true): 关闭时每个任务的子任务/整
   // 任务执行完成后跳过收尾会话(renderWrapup)。
   wrapup?: boolean
+  // plan 的会话(RunAllOpts.stopBefore === "execute" 时由 loop 注入): 非权限
+  // 提问是人工的决定——plan 的存在就是为了执行前人工审阅,driver 无超时等待
+  // 人工答复,绝不代答(无 AUTO-RESOLVE);仅输入渠道不可及(stdin 关闭)才阻塞。
+  // 规划类模板的 question-rule 分支同口径(prompt.ts useHumanQuestions)。
+  humanQuestions?: boolean
 }
 
 // 上下文预算默认基线(tokens);--context-limit n 以千 tokens 覆盖。会话复用阈值

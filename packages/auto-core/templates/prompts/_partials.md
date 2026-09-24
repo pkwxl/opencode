@@ -24,7 +24,11 @@ You are carrying out one task of an implementation plan. This session only has t
 {{#if doneList}}These tasks are already done, do not redo them:
 {{doneList}}{{/if}}{{^doneList}}No task in the plan is done yet.{{/if}}
 ## question-rule
-{{^ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+{{#if humanQuestions}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
+   for anything else where the call is the user's to make (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment), ask with the question tool —
+   a human is attending this planning run and the DRIVER waits for the answer with no timeout; there is no automatic proxy answer, so never decide in the user's place and never leave
+   an `AUTO-RESOLVE` marker in this session. Plain engineering trade-offs that were always yours remain yours, no record required.
+   Asking the same question again after it was answered blocks the task and stops the run.{{/if}}{{^humanQuestions}}{{^ask}}2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —
    decide how to proceed on your own, and if the current stage is already finished, move straight on to the next one.
 {{#if decisionsUnattended}}{{decisionsUnattended}}{{/if}}{{^decisionsUnattended}}   A decision of your own must leave a record in the relevant document or code comment: a call that should have been the user's gets an `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` line, any other call an `AUTO-DECISION: <decision> (<reason>)` line.{{/if}}
@@ -32,7 +36,7 @@ You are carrying out one task of an implementation plan. This session only has t
 {{#if decisionsAsk}}{{decisionsAsk}}{{/if}}{{^decisionsAsk}}   for anything else, ask with the question tool when the call should have been the user's, and decide it yourself when it was always yours.{{/if}}
    When nobody is at the keyboard your question is answered automatically; the DRIVER has recorded that proxy answer in full, so carry on according
    to the reply, and if the current stage is already finished, move straight on to the next one.
-   Asking the same question again blocks the task and stops the run — do not rephrase and re-ask a question that has already been answered.{{/if}}
+   Asking the same question again blocks the task and stops the run — do not rephrase and re-ask a question that has already been answered.{{/if}}{{/if}}
 ## state-rule
 CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
