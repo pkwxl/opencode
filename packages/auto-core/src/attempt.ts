@@ -19,7 +19,7 @@ import { type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
-import { formatClientError, formatTokens, missingAgentHint, renameSession, serverDefaultModel, zeroUsage } from "./session-api"
+import { formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
 import { createStuckTracker } from "./stuck"
 import { SWITCH_ENV, type Switches } from "./switches"
@@ -182,12 +182,58 @@ export async function attempt(
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await client.events(sse.signal)
+    // This session's model (plans/0017-model-routing-design.md C.3/E): chain
+    // fallback candidate > phase-scoped cross-task sticky (sticky holder) >
+    // /failback runtime override > the routing table (role > phase type id >
+    // preset letter > wildcard, resolveModel). An undefined target sends no model
+    // key: with both variables unset and no override the whole chain stays
+    // undefined, byte-identical to the unrouted call (not model: undefined).
+    const override = failbackOverride()
+    const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
+    promptModel = target
+    // 实际使用模型上终端(前端可见): 路由/降级给出显式 target 时下发即锁定该模型,
+    // 直接按来源播报;未设路由(target undefined)时播报不再猜服务端默认(会话粘住
+    // 模型等会让猜测失真),改由 watch 观测本会话首个带模型的消息(user 消息带着服务
+    // 端实际解析结果)后播报真实生效模型。每个新会话(新建/分叉,即 !reuse)都播报
+    // 一行,模型较上次 prompt 有变化时亦播报;同会话同模型的续跑 prompt(复用/恢复
+    // 接管)不重复。无论何种来源,prompt 是否带 model 键的决定不变(不变量 F 不破)。
+    if (target !== undefined) {
+      const from =
+        chain.model !== undefined
+          ? "fallback candidate"
+          : stickyModel() !== undefined
+            ? "fallback candidate (sticky within phase)"
+            : override !== undefined
+              ? "/failback override"
+              : "route"
+      if (target !== chain.modelShown || !reuse) {
+        log(`◈ ${task.id} using model ${target} (${from})`)
+        chain.modelShown = target
+      }
+    }
     // 失联探针判半开等错误收场(session-boundary-hardening §4.4)先于悬挂的 POST
     // 返回时: 提前断流释放 SSE reader 与连接配额,并联动中止 POST(下方竞速不再
     // 等它,直接按本结果的会话错误收口)。对已中止的订阅重复 abort 无害;正常
     // 结束路径此处无 effect。
     let watchFailed = false
-    const watching = watch(client, sessionID, events, opts, steer, test, stuck, switches).then((w) => {
+    const watching = watch(
+      client,
+      sessionID,
+      events,
+      opts,
+      steer,
+      test,
+      stuck,
+      switches,
+      target === undefined
+        ? (model) => {
+            if (model !== chain.modelShown || !reuse) {
+              log(`◈ ${task.id} using model ${model} (server resolved)`)
+              chain.modelShown = model
+            }
+          }
+        : undefined,
+    ).then((w) => {
       if (w.error) {
         watchFailed = true
         sse.abort()
@@ -199,35 +245,6 @@ export async function attempt(
     // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
     const note = chain.note
     chain.note = undefined
-    // This session's model (plans/0017-model-routing-design.md C.3/E): chain
-    // fallback candidate > phase-scoped cross-task sticky (sticky holder) >
-    // /failback runtime override > the routing table (role > phase type id >
-    // preset letter > wildcard, resolveModel). An undefined target sends no model
-    // key: with both variables unset and no override the whole chain stays
-    // undefined, byte-identical to the unrouted call (not model: undefined).
-    const override = failbackOverride()
-    const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
-    promptModel = target
-    // 实际使用模型上终端(前端可见): 每个新会话(新建/分叉,即 !reuse)都播报一行
-    // (来源标注),模型较上次 prompt 有变化时亦播报;同会话同模型的续跑 prompt
-    // (复用/恢复接管)不重复。target 未定义(未设路由)时回落服务端生效模型
-    // (agent 配置 > 全局 config.model > provider 缺省,见 session-api.serverDefaultModel),
-    // 仍取不到则静默;无论何种来源,prompt 是否带 model 键的决定不变(不变量 F 不破)。
-    const shown = target ?? (await serverDefaultModel(client, opts.agent))
-    if (shown !== undefined && (shown !== chain.modelShown || !reuse)) {
-      const from =
-        target === undefined
-          ? "server default"
-          : chain.model !== undefined
-            ? "fallback candidate"
-            : stickyModel() !== undefined
-              ? "fallback candidate (sticky within phase)"
-              : override !== undefined
-                ? "/failback override"
-                : "route"
-      log(`◈ ${task.id} using model ${shown} (${from})`)
-      chain.modelShown = shown
-    }
     // 统计接线(STATS_PLAN §2,T-003): prompt 下发前开 AI 段并关联任务。旁路会话
     // (伪任务 PLAN/AUTO,恢复点先例见 resume.ts)同此照记——statsTask 未设当前任务
     // 时 usage/sessions 仍入 phase+round 桶。

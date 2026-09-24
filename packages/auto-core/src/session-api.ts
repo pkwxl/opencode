@@ -239,24 +239,6 @@ export function formatTokens(n: number): string {
   return String(n)
 }
 
-// 服务端生效模型(未设模型路由时 ◈ 播报的回落,plans/0017-model-routing-design.md
-// D.8 2026-09-18 修订): the resolution chain is the adapter's (AgentClient
-// defaultModel; opencode: agent config > config.model > provider default).
-// Cached per agent for the process: the configuration does not change during a
-// run. undefined when nothing resolves (the caller stays silent).
-const serverModelCache = new Map<string, string | undefined>()
-
-export async function serverDefaultModel(client: AgentClient, agent?: string): Promise<string | undefined> {
-  const key = agent ?? ""
-  if (!serverModelCache.has(key)) serverModelCache.set(key, await client.defaultModel(agent).catch(() => undefined))
-  return serverModelCache.get(key)
-}
-
-// 单测用: 清进程内缓存(不同测试的替身 client 不应互相串味)。
-export function resetServerModelCache(): void {
-  serverModelCache.clear()
-}
-
 // 客户端错误可读化: fetch 异常(网络断开、请求超时中止等)返回的是 Error 实例,
 // JSON.stringify 只得 "{}";取其 message 才能让「请求超时」等字样进入阻塞问题
 // 文案,其余(服务端结构化错误体)照旧序列化。

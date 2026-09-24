@@ -9,8 +9,8 @@
 // clients, test doubles), so every call resolves (0037 D2).
 //
 // What stays opencode-only here: the "provider/model" split of the model
-// string, the SSE → AgentEvent mapping (events.ts), the default-model
-// resolution chain, and opencode's own error type names for the classifier.
+// string, the SSE → AgentEvent mapping, and opencode's own error type names
+// for the classifier.
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { AgentCapabilities, AgentClient, AgentErrorPatterns, AgentEvent, AgentResult, PromptInput } from "../types"
 import { mapEvent, mapMessage } from "./events"
@@ -132,39 +132,5 @@ export function opencodeAgent(sdk: OpencodeClient): AgentClient {
       } catch {}
       return limits
     },
-    defaultModel: (agent) => resolveDefaultModel(sdk, agent),
   }
-}
-
-// The model the server uses when a prompt names none (display only; plans/0017
-// D.8 2026-09-18 revision), in the server's own fallback order: the agent's
-// configured model (/agent returns config.agent merged) > global config.model
-// (/config) > the first connected provider's default (/provider's default
-// table, the server's sort-first defaultModel). The server consults its
-// recently-used record (model.json) before the last step; that state is not
-// exposed over the API, so it is skipped — an approximation good enough for
-// display. Without `agent` the first primary agent counts (the server's
-// default agent). Every step tolerates failure (old server, request error,
-// test double without the surface) and falls through; undefined when nothing
-// resolves.
-async function resolveDefaultModel(sdk: OpencodeClient, agent?: string): Promise<string | undefined> {
-  try {
-    const agents = await sdk.app.agents()
-    const list = agents?.data
-    const found = agent ? list?.find((a) => a.name === agent) : list?.find((a) => a.mode === "primary")
-    if (found?.model) return `${found.model.providerID}/${found.model.modelID}`
-  } catch {}
-  try {
-    const config = await sdk.config.get()
-    if (config?.data?.model) return config.data.model
-  } catch {}
-  try {
-    const response = await sdk.provider.list()
-    const data = response?.data
-    for (const id of data?.connected ?? []) {
-      const model = data?.default?.[id]
-      if (model) return `${id}/${model}`
-    }
-  } catch {}
-  return undefined
 }

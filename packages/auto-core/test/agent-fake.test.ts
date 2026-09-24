@@ -17,7 +17,7 @@ import { degrade } from "../src/capability"
 import type { SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import type { Opts } from "../src/opts"
-import { forkSession, probeSession, resetServerModelCache, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
+import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { watch } from "../src/watch"
@@ -43,11 +43,9 @@ async function* stream(events: AgentEvent[]) {
   for (const event of events) yield event
 }
 
-beforeEach(() => resetServerModelCache())
-
 describe("dispatch and settle", () => {
   test("a new session: subscribe before dispatch, the closing words, usage and window from the agent", async () => {
-    const agent = make({ defaultModel: "fake/default" })
+    const agent = make()
     const chain = fresh()
     const result = await runSession(agent.client, task, "do it", { agent: "build" }, chain, undefined, undefined, DEFAULTS)
     expect(result).toEqual({ type: "idle", lastText: "done: do it", testHandover: false })
@@ -55,9 +53,9 @@ describe("dispatch and settle", () => {
     const order = names(agent)
     expect(order.indexOf("create")).toBeLessThan(order.indexOf("events"))
     expect(order.indexOf("events")).toBeLessThan(order.indexOf("prompt"))
-    // No model routed: the prompt carries no model key; the agent's default is shown only.
+    // No model routed: the prompt carries no model key; the model the agent
+    // reports on its messages is what the driver displays.
     expect(agent.prompts).toEqual([{ session: "ses_1", agent: "build", text: "do it" }])
-    expect(agent.argsOf("defaultModel")).toEqual([["build"]])
     // The completed message measured 1000 tokens against the model's window.
     expect(chain.id).toBe("ses_1")
     expect(chain.used).toBe(1000)
@@ -69,7 +67,6 @@ describe("dispatch and settle", () => {
     const switches = parseSwitches({ [SWITCH_ENV.model]: "fake/model-2" })
     await runSession(agent.client, task, "p", {}, fresh(), undefined, undefined, switches)
     expect(agent.prompts[0]!.model).toBe("fake/model-2")
-    expect(agent.argsOf("defaultModel")).toEqual([])
   })
 
   test("create or dispatch failing: blocked with the agent's error, never thrown", async () => {
@@ -339,9 +336,8 @@ describe("the barest agent", () => {
       { type: "idle", lastText: "done: one", testHandover: false },
       { type: "idle", lastText: "done: two", testHandover: false },
     ])
-    // One session per prompt, nothing but the three calls a one-shot agent needs
-    // (plus the display-only default-model lookup, cached per agent name).
-    expect(new Set(names(agent))).toEqual(new Set<AgentCall>(["create", "events", "prompt", "defaultModel"]))
+    // One session per prompt, nothing but the three calls a one-shot agent needs.
+    expect(new Set(names(agent))).toEqual(new Set<AgentCall>(["create", "events", "prompt"]))
     expect(agent.argsOf("create")).toHaveLength(2)
   })
 

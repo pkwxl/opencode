@@ -126,7 +126,6 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
   // adapter's model string. The map is handed out live: a caller that cached
   // it sees windows learned later.
   const limits = new Map<string, number>()
-  let lastModel: string | undefined
 
   const emit = (event: AgentEvent) => {
     for (const push of subscribers) push(event)
@@ -210,7 +209,6 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
           // The session exists on claude's side from here on.
           s.state = "stored"
           s.from = undefined
-          if (typeof line.model === "string") lastModel = `${MODEL_PREFIX}${line.model}`
         }
         if (line.type === "user" && line.isReplay && !line.parent_tool_use_id) live.unacked = Math.max(0, live.unacked - 1)
         for (const event of stream.feed(line)) emit(event)
@@ -379,10 +377,6 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
     },
     async contextLimits() {
       return limits
-    },
-    // The model of the most recent process start (display only).
-    async defaultModel() {
-      return lastModel
     },
     close() {
       for (const s of sessions.values()) {

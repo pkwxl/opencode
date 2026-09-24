@@ -14,12 +14,11 @@ import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyMod
 import { recallHandover, saveHandover } from "../src/handover"
 import type { Interactive } from "../src/interactive"
 import { recallProgress, saveProgress } from "../src/resume"
-import { resetServerModelCache } from "../src/session-api"
 import { attempt } from "../src/attempt"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import type { TestRun } from "../src/testrun"
-import { task, fakeClient, retryClient, type Outcome } from "./fixtures/runner"
+import { task, fakeClient, modelThenIdle, retryClient, type Outcome } from "./fixtures/runner"
 import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
 const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
@@ -48,14 +47,12 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
   })
 
   test("◈ 模型播报: 复用同会话同模型不重复,新会话(复用关)每次播报", async () => {
-    resetServerModelCache()
     const lines: string[] = []
     const orig = console.log
     console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
     try {
-      const fake = fakeClient({ current: "ses_new_1" })
-      // 未设路由: 经 config.get 回落播报服务端生效模型(同 test「未设路由」组)。
-      ;(fake.sdk as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
+      // 未设路由: 播报来自事件流里 user 消息携带的服务端实际解析模型。
+      const fake = fakeClient({ current: "ses_new_1", events: (id) => modelThenIdle(id, "prov/default") })
       const chain = reusable()
       await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, REUSE_ON)
       // fake 事件流收段后 pct=100(上限未知);复位回复用阈值内,第二个提示词才真复用。
@@ -64,11 +61,12 @@ describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
       await runSession(fake.client, task, "提示词3", {}, chain, undefined, undefined, REUSE_OFF)
     } finally {
       console.log = orig
-      resetServerModelCache()
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
     // 两次复用同一会话只播报一次;复用关后新开会话再播报一次(同模型)。
     expect(shown.length).toBe(2)
+    expect(shown[0]).toContain("prov/default")
+    expect(shown[0]).toContain("server resolved")
   })
 
   test("中断恢复接管(链上有会话且 note 待注入): 开关 off、阈值全不满足也进原会话;说明用后即清", async () => {
@@ -881,30 +879,26 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
     expect(shown[2]).toContain("fallback candidate")
   })
 
-  test("未设路由: 回落播报服务端生效模型(config.model),prompt 仍不带 model 键,新会话再播报", async () => {
-    resetServerModelCache()
+  test("未设路由: 播报服务端实际解析的模型(事件流观测),prompt 仍不带 model 键,新会话再播报", async () => {
     const lines: string[] = []
     const orig = console.log
     console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
     let calls: { prompts: { model?: unknown }[] }
     try {
-      const fake = fakeClient()
+      // 未设路由: 播报不再猜服务端默认,由事件流里 user 消息携带的实际模型播报。
+      const fake = fakeClient({ events: (id) => modelThenIdle(id, "prov/default") })
       calls = fake.calls
-      // fake client 缺省无 config/app/provider 表面——此处只补 config.get(全局
-      // config.model 回落档),验证 attempt 在 target undefined 时的服务端模型播报。
-      ;(fake.sdk as { config?: unknown }).config = { get: async () => ({ data: { model: "prov/default" } }) }
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
       await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
       await runSession(fake.client, task, "提示词2", {}, chain, undefined, undefined, parseSwitches({}))
     } finally {
       console.log = orig
-      resetServerModelCache()
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
     // 两次 runSession 各开新会话(复用关),同模型也逐会话播报。
     expect(shown.length).toBe(2)
     expect(shown[0]).toContain("prov/default")
-    expect(shown[0]).toContain("server default")
+    expect(shown[0]).toContain("server resolved")
     expect(shown[1]).toContain("prov/default")
     // 不变量 F: 播报归播报,下发依旧不带 model 键。
     expect(calls!.prompts.every((p) => p.model === undefined)).toBe(true)

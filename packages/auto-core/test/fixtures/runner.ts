@@ -20,6 +20,19 @@ async function* idleStream(sessionID: string) {
   yield { type: "session.idle", properties: { sessionID } }
 }
 
+// 先发一条带模型的 user 消息(服务端实际解析出的模型,驱动 attempt 的 ◈ 播报),
+// 再发 idle 正常收段。
+export async function* modelThenIdle(sessionID: string, model: string) {
+  const [providerID, modelID] = model.split("/")
+  yield {
+    type: "message.updated",
+    properties: {
+      info: { id: `msg_u_${sessionID}`, sessionID, role: "user", model: { providerID, modelID }, time: { created: Date.now() } },
+    },
+  }
+  yield { type: "session.idle", properties: { sessionID } }
+}
+
 // 最小 fake client(仅覆盖 runner 用到的表面;缺省行为 = 全部成功):
 // calls 记录 fork/create 调用,updates 记录会话改名参数。
 export function fakeClient(

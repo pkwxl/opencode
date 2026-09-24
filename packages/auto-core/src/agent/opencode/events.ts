@@ -73,7 +73,17 @@ export function mapEvent(event: Event): AgentEvent | undefined {
 // for messages()). Context occupancy is opencode's own measure: prompt input
 // plus cache reads of the latest step.
 export function mapMessage(info: Message): AgentMessage {
-  if (info.role !== "assistant") return { id: info.id, role: "user", completed: false, failed: false }
+  if (info.role !== "assistant")
+    return {
+      id: info.id,
+      role: "user",
+      completed: false,
+      failed: false,
+      // The user message carries the model the server resolved for its turn
+      // (prompt model > agent > config > session history); the driver
+      // displays this as the actually-used model.
+      ...(info.model ? { model: `${info.model.providerID}/${info.model.modelID}` } : {}),
+    }
   return {
     id: info.id,
     role: "assistant",

@@ -102,8 +102,10 @@ export type AgentMessage = {
   role: "user" | "assistant"
   // Assistant only: the message finished (no further updates will change it).
   completed: boolean
-  // Assistant only: the model that produced it, in the adapter's model-string
-  // form (the same form the driver passes back as PromptInput.model).
+  // The model behind this message, in the adapter's model-string form (the
+  // same form the driver passes back as PromptInput.model). Assistant: the
+  // model that produced it. User: the model the agent resolved for the turn
+  // it opens — the driver's "actually used" display reads it from here.
   model?: string
   // Assistant only: tokens occupying the context window after this message,
   // by the adapter's own measure; absent when it cannot measure. Feeds reuse,
@@ -188,7 +190,7 @@ export type PromptInput = {
 
 export type PermissionReply = "once" | "always" | "reject"
 
-// The fourteen calls the driver makes (today spread over attempt.ts,
+// The thirteen calls the driver makes (today spread over attempt.ts,
 // watch.ts, session-api.ts, exec-session.ts, interactive.ts).
 export interface AgentClient {
   readonly capabilities: AgentCapabilities
@@ -229,8 +231,6 @@ export interface AgentClient {
   // Context window size by model string; empty when unknown (usage lines then
   // show absolute tokens only and the share counts as 100%).
   contextLimits(): Promise<ReadonlyMap<string, number>>
-  // The model the agent uses when a prompt names none (display only).
-  defaultModel(agent?: string): Promise<string | undefined>
 }
 
 // How an agent without permission events (`capabilities.permission` false)

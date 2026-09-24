@@ -21,7 +21,7 @@ import type {
   PromptInput,
 } from "../../src/agent/types"
 
-// The fourteen AgentClient calls (the coverage roster of test/agent-fake.test.ts).
+// The thirteen AgentClient calls (the coverage roster of test/agent-fake.test.ts).
 export const AGENT_CALLS = [
   "create",
   "prompt",
@@ -36,7 +36,6 @@ export const AGENT_CALLS = [
   "rejectQuestion",
   "replyPermission",
   "contextLimits",
-  "defaultModel",
 ] as const
 export type AgentCall = (typeof AGENT_CALLS)[number]
 
@@ -131,7 +130,6 @@ export type FakeAgentOptions = {
   // Sessions `get` reports as gone.
   gone?: string[]
   limits?: Record<string, number>
-  defaultModel?: string
   // Seeded history per session (messages() returns it; forks copy it).
   history?: Record<string, AgentMessage[]>
 }
@@ -278,10 +276,6 @@ export function fakeAgent(options: FakeAgentOptions = {}): FakeAgent {
     async contextLimits() {
       record("contextLimits")
       return new Map(Object.entries(options.limits ?? { [MODEL]: WINDOW }))
-    },
-    async defaultModel(agent) {
-      record("defaultModel", agent)
-      return options.defaultModel
     },
   }
 

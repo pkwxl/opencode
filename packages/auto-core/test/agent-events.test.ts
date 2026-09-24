@@ -137,7 +137,6 @@ describe("AgentClient interface", () => {
       rejectQuestion: ok,
       replyPermission: ok,
       contextLimits: async () => new Map(),
-      defaultModel: async () => undefined,
     }
     const created = await fake.create({ title: "t" })
     expect(created).toEqual({ ok: true, value: { id: "f1" } })

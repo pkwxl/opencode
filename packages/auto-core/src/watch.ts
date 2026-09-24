@@ -51,7 +51,10 @@ export async function watch(
   // 严格恢复门禁(交接边界写核)取本次运行的开关;缺省取 OPENCODE_AUTO_* 解析值,
   // 注入供单测(attempt 透传其自身持有的 switches)。
   switches: Switches = autoSwitches(),
- ): Promise<Watch> {
+  // 实际使用模型的观测回调: 本会话事件流里首个带模型的消息(user 消息带着服务端
+  // 实际解析出的模型)到达即触发一次,attempt 据此播报真实生效模型。
+  onModel?: (model: string) => void,
+): Promise<Watch> {
    const waitAnswer = opts.waitAnswer ?? 0
    let lastText = ""
    let error = ""
@@ -110,6 +113,8 @@ export async function watch(
   // 在途交接记录,收尾没写完就被打断时据此从定版点 fork 出新会话重做收尾。纯观测,
   // 不额外发请求。
   let lastMessage: string | undefined
+  // 实际使用模型是否已上报(onModel 每次 watch 只触发一次)。
+  let modelReported = false
   // 回合结束服务端连发两个 idle 事件(session.status idle + session.idle);steer
   // 经 promptAsync 投递即返回后,第二个 idle 会在 steer 回合启动前到达,照处理
   // 会误判会话结束提前 break。处理过一次 idle 后忽略后续 idle,直到本会话出现
@@ -346,6 +351,12 @@ export async function watch(
       const info = event.message
       idleHandled = false
       lastMessage = info.id
+      // 实际使用模型上报(每次 watch 只报首个带模型的消息): user 消息的 model 即
+      // 服务端为本回合解析出的生效模型,assistant 消息的 model 同理兜底。
+      if (info.model !== undefined && !modelReported) {
+        modelReported = true
+        onModel?.(info.model)
+      }
       if (info.role !== "assistant" || !info.completed || seen.has(info.id)) continue
       seen.add(info.id)
       // Measurement point: the usage source already took this message in

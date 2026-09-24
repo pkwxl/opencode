@@ -368,7 +368,6 @@ describe("claudeAgent: process manager", () => {
     await agent.prompt({ session: id, text: "three" })
     await collect(events, (e) => e.type === "idle")
     expect(procs[2]!.args.slice(8, 10)).toEqual(["--resume", id])
-    expect(await agent.defaultModel()).toBe("claude/claude-haiku-4-5")
     ac.abort()
   })
 
