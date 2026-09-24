@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import {
   type UnitDecl,
+  type UnitRef,
   nextReady,
   parseIndex,
   parsePhaseDir,
@@ -99,6 +100,48 @@ describe("scanUnitStates", () => {
     await put("docs/T-001/done.md")
     const scan = await scanUnitStates(dir, [{ level: "task", id: "T-001" }])
     expect(scan.done.has("T-001")).toBe(true)
+  })
+
+  // Fixture files are placed through unitStatePaths, so the tests name units, not paths.
+  const t1 = { level: "task", id: "T-001" } as const
+  const t2 = { level: "task", id: "T-002" } as const
+  const t3 = { level: "task", id: "T-003" } as const
+  const done = (ref: UnitRef) => unitStatePaths(ref).complete
+  const todo = (ref: UnitRef) => unitStatePaths(ref).pending
+
+  test("closed: a done.md field block carrying `Closed:` maps the id to its reason (D16)", async () => {
+    await put(done(t2), "# T-002: x\nPhase: R-01.P01\nClosed: superseded by a later task\n\nbody\n")
+    const scan = await scanUnitStates(dir, [t2])
+    expect(scan.done.has("T-002")).toBe(true)
+    expect(scan.closed.get("T-002")).toBe("superseded by a later task")
+  })
+
+  test("closed: todo.md, a done.md without the field and a line below the field block do not count", async () => {
+    await put(todo(t1), "# T-001: x\nClosed: not yet\n")
+    await put(done(t2), "# T-002: x\nPhase: R-01.P01\n\nbody\n")
+    await put(done(t3), "# T-003: x\nPhase: R-01.P01\n\nbody text\nClosed: prose, not a field\n")
+    const scan = await scanUnitStates(dir, [t1, t2, t3])
+    expect([...scan.done]).toEqual(["T-002", "T-003"])
+    expect(scan.closed.size).toBe(0)
+  })
+
+  test("closed: a unit with both files reads its done.md", async () => {
+    await put(todo(t1), "# T-001: x\n")
+    await put(done(t1), "# T-001: x\nClosed: dropped\n")
+    const scan = await scanUnitStates(dir, [t1])
+    expect(scan.states[0]).toMatchObject({ id: "T-001", state: "both" })
+    expect(scan.closed.get("T-001")).toBe("dropped")
+  })
+
+  test("closed: works at the phase level; an empty value still marks the unit closed", async () => {
+    const implement = { level: "phase", id: "P03", round: "R-01", type: "implement" } as const
+    await put(done(phase), "# R-01.P02: design\nclosed: design folded into P03\n")
+    await put(done(implement), "# R-01.P03: implement\nClosed:\n")
+    const scan = await scanUnitStates(dir, [phase, implement])
+    expect([...scan.closed]).toEqual([
+      ["P02", "design folded into P03"],
+      ["P03", ""],
+    ])
   })
 })
 

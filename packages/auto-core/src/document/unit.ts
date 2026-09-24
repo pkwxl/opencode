@@ -83,12 +83,19 @@ export type UnitStateScan = {
   // Ids that count as done: done.md present (files win, so `both` is done —
   // the same degradation as effectiveDone).
   done: Set<string>
+  // Closed units (plans/0053 D16): done ids whose `done.md` field block
+  // carries `Closed: <reason>` → the reason. Closed is done for scheduling but
+  // not delivered. Only done.md counts — a `Closed:` line in todo.md, or one
+  // below the field block, means nothing. The key's presence marks the unit
+  // closed, so a hand-written empty value gives the reason "".
+  closed: Map<string, string>
 }
 
 export async function scanUnitStates(dir: string, refs: readonly UnitRef[]): Promise<UnitStateScan> {
   const states: UnitStateScan["states"] = []
   const illegal: UnitStateScan["illegal"] = []
   const done = new Set<string>()
+  const closed = new Map<string, string>()
   for (const ref of refs) {
     const paths = unitStatePaths(ref)
     const todo = await Bun.file(join(dir, paths.pending)).exists()
@@ -96,9 +103,12 @@ export async function scanUnitStates(dir: string, refs: readonly UnitRef[]): Pro
     const state: UnitFileState = todo && complete ? "both" : complete ? "done" : todo ? "todo" : "neither"
     states.push({ id: ref.id, state })
     if (state === "both" || state === "neither") illegal.push({ id: ref.id, kind: state })
-    if (complete) done.add(ref.id)
+    if (!complete) continue
+    done.add(ref.id)
+    const { fields } = parseUnitDoc(await Bun.file(join(dir, paths.complete)).text())
+    if ("closed" in fields) closed.set(ref.id, fields.closed!)
   }
-  return { states, illegal, done }
+  return { states, illegal, done, closed }
 }
 
 // DRIVER close-out rename (idempotent): skipped when todo.md is absent or
