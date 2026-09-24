@@ -15,6 +15,7 @@ import {
   countSubtasks,
   loadPlan,
   markDone,
+  newTaskProblems,
   next,
   plannedTaskProblems,
   readChecklist,
@@ -357,6 +358,34 @@ describe("planning output", () => {
     await writeTask("T-004")
     const { problems } = await plannedTaskProblems(dir, phase, { before: new Set(), numberStart: 7 })
     expect(problems[0]).toContain("below the numbering start T-007")
+  })
+
+  test("newTaskProblems(0053 D24, 自 plannedTaskProblems 拆出的单任务检查): 拒收已占编号/低于编号起点/文档不合格,合格则随附依赖声明", async () => {
+    // 合格: 无问题,decl 随附(同一次读取,供整索引调用方拼依赖图)
+    await writeTask("T-005", { depends: "none" })
+    expect(await newTaskProblems(dir, phase, "T-005", { before: new Set() })).toEqual({
+      problems: [],
+      decl: { id: "T-005", depends: "none" },
+    })
+    // 编号已被会话前存在的任务占用 → 拒收,无 decl
+    expect(await newTaskProblems(dir, phase, "T-005", { before: new Set(["T-005"]) })).toMatchObject({
+      problems: ["T-005 is already used by an earlier task (docs/T-005/ existed before this planning session); pick an unused number"],
+    })
+    // 低于自动编号起点 → 拒收
+    expect((await newTaskProblems(dir, phase, "T-005", { before: new Set(), numberStart: 8 })).problems).toEqual([
+      "T-005 is below the numbering start T-008; earlier numbers are taken",
+    ])
+    // 文档不合格(缺 Scope 节) → spec 检查报错,无 decl
+    await mkdir(join(dir, "docs/T-006"), { recursive: true })
+    await Bun.write(join(dir, "docs/T-006/todo.md"), "# T-006: a\nPhase: R-01.P01\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")
+    const bad = await newTaskProblems(dir, phase, "T-006", { before: new Set() })
+    expect(bad.problems.some((p) => p.includes("docs/T-006/todo.md") && p.includes("## Scope"))).toBe(true)
+    expect(bad.decl).toBeUndefined()
+    // Phase 字段不符 → 报错但 decl 仍随附(与拆分前行为一致: 仅 spec 失败才跳过 decl)
+    await writeTask("T-007", { phase: "R-09.P09" })
+    const wrongPhase = await newTaskProblems(dir, phase, "T-007", { before: new Set() })
+    expect(wrongPhase.problems).toEqual(["docs/T-007/todo.md must carry the field line `Phase: R-01.P01` right after its title line"])
+    expect(wrongPhase.decl).toEqual({ id: "T-007" })
   })
 
   test("taken ids = other phases' indexes and completed tasks; resetPlanning clears only this phase's own output", async () => {

@@ -148,6 +148,18 @@ describe("阶段步骤恢复点(openStep/closeStep)", () => {
     expect(await openStep(dir)).toEqual({ step: "phase-plan", unit: "R-01.P01", session: "ses_plan" })
   })
 
+  test("phase-append 步骤记录(0053 D23)同样往返;openStep 返回其身份,parseProgress 原样接受", async () => {
+    const progress: Progress = { task: "PLAN", session: "ses_append", at: 5, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P02" } }
+    await saveProgress(dir, progress)
+    expect(await recallProgress(dir, "PLAN")).toEqual(progress)
+    expect(await openStep(dir)).toEqual({ step: "phase-append", unit: "R-01.P02", session: "ses_append" })
+    // closeStep 按步骤身份匹配删除(与 phase-plan 同款)
+    await closeStep(dir, "phase-plan", "R-01.P02")
+    expect(await openStep(dir)).toBeDefined()
+    await closeStep(dir, "phase-append", "R-01.P02")
+    expect(await openStep(dir)).toBeUndefined()
+  })
+
   test("openStep: 已收口(active=false)、非 step 记录、无记录均返回 undefined", async () => {
     await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: false, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
     expect(await openStep(dir)).toBeUndefined()

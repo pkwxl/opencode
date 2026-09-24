@@ -25,10 +25,12 @@ import type { UnitBaseline } from "./git"
 // 恢复记忆。
 
 // 阶段级旁路步骤(driver 侧收口的流程步骤,非任务流水线阶段): phase-plan = 阶段
-// 规划会话(写任务索引与任务文档),phase-handover = 阶段交接蒸馏会话(产出交接文档)。
-// 这两类会话此前不写恢复点,中断后流程仅凭 AI 写的文件(任务单元/交接文档)推导
-// 路由,把未收口的会话静默跳过——见 plans/0018-session-resume-precedence-design.md。
-export type StepKind = "phase-plan" | "phase-handover"
+// 规划会话(写任务索引与任务文档),phase-handover = 阶段交接蒸馏会话(产出交接文档),
+// phase-append = 阶段追加规划会话(plans/0053 D23: 在既有任务索引之后追加新任务,
+// 模型路由沿用 phase-plan 角色)。这类会话此前不写恢复点,中断后流程仅凭 AI 写的
+// 文件(任务单元/交接文档)推导路由,把未收口的会话静默跳过——见
+// plans/0018-session-resume-precedence-design.md。
+export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 
 // 任务流水线的阶段标记:
 // - decompose: auto 模式合并理解与分解会话阶段(M1.0 起 understand+decompose 合一,
@@ -41,8 +43,8 @@ export type StepKind = "phase-plan" | "phase-handover"
 // - wrapup: 收尾会话阶段
 // - closeout: 收尾已完成,只剩任务报告结论行检查与完成标记(无会话);恢复时跳过
 //   收尾。已退役的 verify/review 记录(D13,二者只出现在收尾之后)读取时映射为本阶段
-// - step: 阶段级旁路步骤(phase-plan/phase-handover),unit 为归属阶段的限定编号
-//   R-NN.P<nn>(M3.6 前为预置字母;旧记录缺 unit,与任何阶段都不匹配,loop 告警后
+// - step: 阶段级旁路步骤(phase-plan/phase-handover/phase-append),unit 为归属阶段的
+//   限定编号 R-NN.P<nn>(M3.6 前为预置字母;旧记录缺 unit,与任何阶段都不匹配,loop 告警后
 //   按文件路由继续);
 //   driver 收口前记录保持 active,中断后据此让会话恢复优先于文件推导路由
 //

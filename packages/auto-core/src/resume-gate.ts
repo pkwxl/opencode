@@ -75,9 +75,13 @@ export function phaseText(phase: Phase | undefined): string {
     case "closeout":
       return "wrap-up finished (task report result line to check and completion to record)"
     case "step":
-      return phase.step === "phase-plan"
-        ? `phase planning step (phase ${phase.unit}, writing the task index and task documents)`
-        : `phase handover step (phase ${phase.unit}, producing the handover document)`
+      if (phase.step === "phase-plan") {
+        return `phase planning step (phase ${phase.unit}, writing the task index and task documents)`
+      }
+      if (phase.step === "phase-append") {
+        return `task-append step (phase ${phase.unit}, appending to the task index)`
+      }
+      return `phase handover step (phase ${phase.unit}, producing the handover document)`
   }
 }
 
@@ -145,9 +149,16 @@ function nextStepText(phase: Phase | undefined): string {
     case "closeout":
       return `Wrap-up is finished; only the DRIVER's completion record remains. `
     case "step":
-      return phase.step === "phase-plan"
-        ? `You are in the phase planning step: first read this phase's task index tasks.md and the task documents written so far (the last session may have written some tasks), complete or correct this phase's tasks on that basis without repeating an existing task number, then end the session. `
-        : `You are in the phase handover step: first read the handover document as it stands (the last session may have written part of it), complete the four mandatory sections (${HANDOVER_SECTIONS.join(" / ")}) without redoing finished parts, then end the session. `
+      if (phase.step === "phase-plan") {
+        return `You are in the phase planning step: first read this phase's task index tasks.md and the task documents written so far (the last session may have written some tasks), complete or correct this phase's tasks on that basis without repeating an existing task number, then end the session. `
+      }
+      if (phase.step === "phase-append") {
+        return (
+          `You are in the task-appending step: first read this phase's task index tasks.md as it stands (the last session may have appended some tasks), ` +
+          `complete the appended tasks after the existing lines without changing existing lines or task documents and without reusing a task number, then end the session. `
+        )
+      }
+      return `You are in the phase handover step: first read the handover document as it stands (the last session may have written part of it), complete the four mandatory sections (${HANDOVER_SECTIONS.join(" / ")}) without redoing finished parts, then end the session. `
   }
 }
 

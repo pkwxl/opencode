@@ -30,7 +30,7 @@ import {
   renderWrapup,
   type ScriptRun,
 } from "../src/prompt"
-import { renderImplementPlan, renderPhasePlan } from "../src/prompt-plan"
+import { renderImplementPlan, renderPhaseAppend, renderPhasePlan, existingTaskList } from "../src/prompt-plan"
 import type { ResolveItem } from "../src/resolve"
 import type { StuckHit } from "../src/stuck"
 import { renderTemplate, renderText } from "../src/template"
@@ -161,6 +161,41 @@ describe("golden 渲染快照", () => {
     golden(
       "phase-handover",
       renderPhaseHandover({ phase: phaseTypeOfLetter("m"), handover: "docs/R-01/P02-implement/handover.md", next: "P03-test 测试" }),
+    )
+    // Append planning (plans/0053 D27): the shared phase-append template, both
+    // modes byte-stable. The existing-task lines come from existingTaskList
+    // over a fixed task set (a closed task with its reason, a done and a
+    // pending one).
+    const existingTasks = existingTaskList([
+      { id: "T-004", title: "梳理词法器", status: "done", closed: "被 T-006 取代" },
+      { id: "T-005", title: "迁移语法器", status: "done" },
+      { id: "T-006", title: "接通流水线", status: "pending" },
+    ])
+    golden(
+      "phase-append",
+      renderPhaseAppend({
+        phase: phaseTypeOfLetter("m"),
+        brief: "项目意图(固定输入)。",
+        handovers: "前序阶段交接(固定输入)。",
+        mode: migrate,
+        phaseId: "R-01.P02",
+        taskIndex: "docs/R-01/P02-implement/tasks.md",
+        numberStart: 5,
+        input: "追加输入(固定输入)。",
+        inputPath: "docs/R-01/P02-implement/plan-input.md",
+        existingTasks,
+      }),
+    )
+    golden(
+      "phase-append-m",
+      renderPhaseAppend({
+        phaseId: "R-01.P01",
+        taskIndex: "docs/R-01/P01-implement/tasks.md",
+        numberStart: 4,
+        input: "追加输入(固定输入)。",
+        inputPath: "docs/R-01/P01-implement/plan-input.md",
+        existingTasks,
+      }),
     )
     golden("knowledge", renderKnowledge({ file: "docs/R-01/P04-knowledge/kb.md", mode: migrate }))
     golden(

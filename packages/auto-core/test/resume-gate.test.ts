@@ -67,6 +67,18 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
     expect(phaseText({ kind: "subtasks", index: 2 })).toBe("per-subtask execution (interrupted at subtask 2, continuing from the first unticked item)")
     expect(phaseText({ kind: "subtasks" })).toBe("per-subtask execution (continuing from the first unticked item)")
   })
+
+  test("phaseText 的 step 文案三分支(0053 D23: phase-append 逐字)", () => {
+    expect(phaseText({ kind: "step", step: "phase-plan", unit: "R-01.P01" })).toBe(
+      "phase planning step (phase R-01.P01, writing the task index and task documents)",
+    )
+    expect(phaseText({ kind: "step", step: "phase-append", unit: "R-01.P02" })).toBe(
+      "task-append step (phase R-01.P02, appending to the task index)",
+    )
+    expect(phaseText({ kind: "step", step: "phase-handover", unit: "R-01.P01" })).toBe(
+      "phase handover step (phase R-01.P01, producing the handover document)",
+    )
+  })
 })
 
 // ---- 恢复保真(plans/0022-session-recovery-fidelity-design.md 3.2/3.1/3.3)----
@@ -97,6 +109,23 @@ describe("resumeNote(中断恢复说明)", () => {
     const step = resumeNote({ kind: "step", step: "phase-handover", unit: "R-01.P01" }, false, true)
     expect(step).toContain("phase handover step")
     expect(step).toContain("four mandatory sections")
+  })
+
+  test("phase-append 步骤的恢复指引(0053 D23 逐字): 先读现状索引,在既有行之后补完追加任务", () => {
+    const appendStep: Phase = { kind: "step", step: "phase-append", unit: "R-01.P02" }
+    const note = resumeNote(appendStep, false, true)
+    expect(note).toContain(
+      "You are in the task-appending step: first read this phase's task index tasks.md as it stands (the last session may have appended some tasks), " +
+        "complete the appended tasks after the existing lines without changing existing lines or task documents and without reusing a task number, then end the session.",
+    )
+    // step 共同骨架: 检查工作区实际状态、提交语义澄清与"绝不自行提交"
+    expect(note).toContain("Check the actual worktree state with git status / git diff.")
+    expect(note).toContain("do not mean the changes were lost")
+    expect(note).toContain("you never commit yourself")
+    // 复用 + 严格恢复门禁在位 → 与其他阶段一样收敛为一句 continue
+    expect(resumeNote(appendStep, true, true)).toBe(
+      "[DRIVER] The session was interrupted; continue the current work until this unit is complete. Changes written before the interruption that are no longer in the worktree were committed to Git by the DRIVER — check with git log, do not redo them.",
+    )
   })
 
   test("提交语义澄清: 非一句 continue 的路径都说明「陌生提交/干净工作区 ≠ 修改丢失」", () => {

@@ -35,11 +35,12 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 15 份(勘测结论 §J-3,M1.0 合并 understand 后 -1,M2.2 退役六份 -6,plans/0052 D5 删 infer-source -1;新增引用需同步设计文档)", () => {
-    expect(consumers.length).toBe(15)
+  test("引用该片段的模板恰为 16 份(勘测结论 §J-3,M1.0 合并 understand 后 -1,M2.2 退役六份 -6,plans/0052 D5 删 infer-source -1,plans/0053 D27 增 phase-append +1;新增引用需同步设计文档)", () => {
+    expect(consumers.length).toBe(16)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
+    expect(consumers).toContain("phase-append.md")
     // wrapup 不引用该片段(收尾会话不提问);T-007 的 "Proxy-answered questions" 节是独立条件段
     expect(consumers).not.toContain("wrapup.md")
   })

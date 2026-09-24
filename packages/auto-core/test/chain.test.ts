@@ -68,6 +68,9 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
     expect(phaseToRole({ kind: "closeout" })).toBeUndefined()
     expect(phaseToRole({ kind: "step", step: "phase-plan", unit: "R-01.P01" })).toBe("phase-plan")
     expect(phaseToRole({ kind: "step", step: "phase-handover", unit: "R-01.P01" })).toBe("phase-handover")
+    // phase-append 是规划会话的追加变体,路由沿用 phase-plan 角色(0053 D23/F6:
+    // 既非新角色词也无旁路兜底,既有路由配置继续生效)
+    expect(phaseToRole({ kind: "step", step: "phase-append", unit: "R-01.P02" })).toBe("phase-plan")
     expect(phaseToRole(undefined)).toBeUndefined()
   })
 

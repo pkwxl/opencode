@@ -80,7 +80,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("24 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose)", () => {
+  test("25 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose;phase-append 见 0053 D27)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "context-base",
@@ -96,6 +96,7 @@ describe("内置模板注册表", () => {
       "implement-plan",
       "knowledge",
       "number-recovery",
+      "phase-append",
       "phase-handover",
       "phase-plan",
       "prior-knowledge",
@@ -171,6 +172,9 @@ describe("内置模板注册表", () => {
       fromFile: true,
       filePath: "docs/rough-plan.md",
       content: "先做 A,再做 B",
+      input: "追加规划输入",
+      inputPath: "docs/R-01/P02-implement/plan-input.md",
+      existingTasks: "- [pending] T-004: 既有任务",
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)
@@ -296,6 +300,47 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
       expect(() => usePromptLibrary(dir)).toThrow(/decompose\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/context\.md/)
       expect(() => usePromptLibrary(dir)).toThrow(/todo\.md/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("phase-append 覆盖缺 tier-1 标记(骨架 + {{taskIndex}}/{{existingTasks}}/{{input}})时报错(0053 D27/§6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      // 任务单元骨架齐全,但丢了 {{existingTasks}}(既有任务清单是追加契约的锚点)
+      writeFileSync(
+        join(overlay, "phase-append.md"),
+        ["追加规划: {{taskIndex}} 写 {{input}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>"].join("\n"),
+      )
+      expect(() => usePromptLibrary(dir)).toThrow(/phase-append\.md is missing required protocol content/)
+      expect(() => usePromptLibrary(dir)).toThrow(/\{\{existingTasks\}\}/)
+      usePromptLibrary(undefined)
+      // 骨架与 {{taskIndex}} 在,但丢了 {{input}}(追加必然针对规划输入,D23)
+      writeFileSync(
+        join(overlay, "phase-append.md"),
+        ["追加规划: {{taskIndex}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{existingTasks}}"].join("\n"),
+      )
+      expect(() => usePromptLibrary(dir)).toThrow(/\{\{input\}\}/)
+      // 齐备(骨架三节 + 索引行 + 三个槽位)则装载并渲染
+      writeFileSync(
+        join(overlay, "phase-append.md"),
+        [
+          "追加规划: 在 {{taskIndex}} 之后追加",
+          "# T-NNN: <task title>",
+          "Phase: {{phaseId}}",
+          "## Goal",
+          "## Scope",
+          "## Acceptance",
+          "- [ ] T-NNN <task title>",
+          "既有: {{existingTasks}}",
+          "输入: {{input}}",
+        ].join("\n"),
+      )
+      usePromptLibrary(dir)
+      expect(renderTemplate("phase-append", { taskIndex: "docs/R-01/P02-implement/tasks.md", existingTasks: "- [pending] T-004: 甲", input: "乙" })).toContain("既有: - [pending] T-004: 甲")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

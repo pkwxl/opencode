@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { renderKnowledge, renderNumberRecovery, renderPhaseHandover, renderPriorKnowledge } from "../src/prompt"
-import { renderImplementPlan, renderPhasePlan } from "../src/prompt-plan"
+import { existingTaskList, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "../src/prompt-plan"
 import { usePromptLibrary } from "../src/template"
 import { migrate, plan } from "./fixtures/prompt"
 import { parsePhaseTypeFile } from "../src/phases/custom"
@@ -195,6 +195,109 @@ describe("renderImplementPlan (m-mode planning, plans/0053 D12)", () => {
     for (const text of [
       implementPlan({ content: "提示词" }),
       implementPlan({ file: "docs/rough.md", content: "计划全文", brief: "意图" }),
+    ]) {
+      expect(text).not.toMatch(/\{\{|\}\}/)
+    }
+  })
+})
+
+describe("existingTaskList / renderPhaseAppend(追加规划会话,0053 D23/D27)", () => {
+  const phaseAppend = (input: Omit<Parameters<typeof renderPhaseAppend>[0], "phaseId" | "taskIndex" | "input" | "inputPath" | "existingTasks">) =>
+    renderPhaseAppend({
+      phaseId: "R-01.P02",
+      taskIndex: "docs/R-01/P02-implement/tasks.md",
+      input: "先补齐词法回退。",
+      inputPath: "docs/R-01/P02-implement/plan-input.md",
+      existingTasks: "- [done] T-004: 迁移语法器\n- [pending] T-005: 接通流水线",
+      ...input,
+    })
+
+  test("existingTaskList: 每任务一行,状态标签;closed 带理由(0053 D27/D16 同款措辞)", () => {
+    expect(
+      existingTaskList([
+        { id: "T-004", title: "迁移语法器", status: "done" },
+        { id: "T-005", title: "接通流水线", status: "pending" },
+        { id: "T-006", title: "修缓存", status: "blocked" },
+        { id: "T-007", title: "旧方案", status: "done", closed: "被 T-009 取代" },
+      ]),
+    ).toBe(
+      "- [done] T-004: 迁移语法器\n" +
+        "- [pending] T-005: 接通流水线\n" +
+        "- [blocked] T-006: 修缓存\n" +
+        "- [closed] T-007: 旧方案 (closed without completing: 被 T-009 取代)",
+    )
+  })
+
+  test("分阶段: 阶段署名/既有任务清单/规划输入/职责段与任务单元格式协议齐备", () => {
+    const text = phaseAppend({
+      phase: L("m"),
+      brief: "把 legacy 迁移到 bun",
+      handovers: "### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)\n\n- 决策甲: 选型 X",
+      mode: migrate,
+      numberStart: 6,
+    })
+    expect(text).toContain("\"Implementation\" phase (m)")
+    expect(text).toContain("this phase's tasks are already planned")
+    // 既有任务清单(追加契约的锚点)与追加纪律
+    expect(text).toContain("## Input: the task index as it stands (docs/R-01/P02-implement/tasks.md)")
+    expect(text).toContain("- [done] T-004: 迁移语法器")
+    expect(text).toContain("appended after them, never before or between them")
+    // 规划输入为必填块(0053 D23: --append 无输入即用法错误)
+    expect(text).toContain("## Input: planning input (docs/R-01/P02-implement/plan-input.md)")
+    expect(text).toContain("先补齐词法回退。")
+    expect(text).toContain("scenario-mode preamble (migrate)")
+    expect(text).toContain("prior-phase handovers")
+    expect(text).toContain("code migration and rework")
+    // 任务单元格式协议(tier-1 标记)与追加措辞
+    for (const marker of ["# T-NNN: <task title>", "Phase: R-01.P02", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "<!-- auto: eof -->"]) {
+      expect(text).toContain(marker)
+    }
+    expect(text).toContain("appended after the last existing line")
+    expect(text).toContain("Task numbers increment continuously from T-006")
+    expect(text).toContain("never edit, reorder or renumber an existing index line")
+    // Depends 接缝指引: 缺省 Depends = 上一行,首个新任务默认依赖最后一个既有任务
+    expect(text).toContain("the first new task")
+    expect(text).toContain("without the field depends on the last existing task")
+    expect(text).toContain("write `Depends:` explicitly")
+    expect(text).toContain("The append must add at least one new task")
+    expect(text).toContain("AUTO-DECISION")
+  })
+
+  test("m 模式: 无阶段署名/职责/轮次交接,实现计划口吻;必填槽位仍在", () => {
+    const text = renderPhaseAppend({
+      phaseId: "R-01.P01",
+      taskIndex: "docs/R-01/P01-implement/tasks.md",
+      input: "再迁移一个模块。",
+      inputPath: "docs/R-01/P01-implement/plan-input.md",
+      existingTasks: "- [done] T-001: 搭建",
+      numberStart: 2,
+    })
+    expect(text).toContain("You are the planner for this implementation plan")
+    expect(text).toContain("- [done] T-001: 搭建")
+    expect(text).toContain("再迁移一个模块。")
+    expect(text).toContain("Task numbers increment continuously from T-002")
+    // m 模式无职责段(与 implement-plan 一致): 无阶段署名与职责文案,轮次/交接块不渲染
+    expect(text).not.toContain("\"Implementation\" phase")
+    expect(text).not.toContain("Phase duties and artifact conventions")
+    expect(text).not.toContain("prior-phase handovers")
+    expect(text).not.toContain("round brief")
+    for (const marker of ["# T-NNN: <task title>", "Phase: R-01.P01", "- [ ] T-NNN <task title>", "<!-- auto: eof -->"]) {
+      expect(text).toContain(marker)
+    }
+  })
+
+  test("代表性参数组合渲染后不残留模板标签", () => {
+    for (const text of [
+      phaseAppend({ phase: L("a"), numberStart: 12 }),
+      phaseAppend({ phase: L("m"), brief: "意图", handovers: "### a 分析(x)\n\n- 决策", mode: migrate, parallel: "high" }),
+      renderPhaseAppend({
+        phaseId: "R-01.P01",
+        taskIndex: "docs/R-01/P01-implement/tasks.md",
+        input: "x",
+        inputPath: "docs/R-01/P01-implement/plan-input.md",
+        existingTasks: "- [pending] T-001: 甲",
+        parallel: "medium",
+      }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }

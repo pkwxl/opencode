@@ -35,6 +35,7 @@ import tplImplementPlan from "../templates/prompts/implement-plan.md" with { typ
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
 import tplNumberRecovery from "../templates/prompts/number-recovery.md" with { type: "file" }
 import tplPartials from "../templates/prompts/_partials.md" with { type: "file" }
+import tplPhaseAppend from "../templates/prompts/phase-append.md" with { type: "file" }
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
 import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file" }
 import tplPriorKnowledge from "../templates/prompts/prior-knowledge.md" with { type: "file" }
@@ -71,6 +72,7 @@ const embedded: Record<string, string> = {
   "implement-plan": tplImplementPlan,
   knowledge: tplKnowledge,
   "number-recovery": tplNumberRecovery,
+  "phase-append": tplPhaseAppend,
   "phase-handover": tplPhaseHandover,
   "phase-plan": tplPhasePlan,
   "prior-knowledge": tplPriorKnowledge,
@@ -102,6 +104,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "handoff-steer": ["Status: continue", "Status: done"],
   "implement-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "number-recovery": [".auto/next-task"],
+  // The append planner (plans/0053 D27): the phase-plan task-document skeleton
+  // plus the slots an override must keep rendering — the index path, the
+  // existing-task list and the planning input.
+  "phase-append": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}", "{{existingTasks}}", "{{input}}"],
   // Literal copies of document/roles HANDOVER_SECTIONS / PRIOR_KB_DONE (template
   // is intent-domain with frozen imports; test/template.test.ts pins the match).
   "phase-handover": ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index", "{{handover}}"],

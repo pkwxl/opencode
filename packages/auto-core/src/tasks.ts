@@ -453,13 +453,10 @@ export async function taskDirs(dir: string): Promise<string[]> {
 // —— Planning output check (plans/0047 L3) ——
 
 // Problems of what a planning session wrote for a phase (empty = accepted): a
-// task index with at least one task; per task a new id (not a task directory
-// that existed before the session, and not below the numbering record's start)
-// and a todo.md that passes the mandatory spec check (non-trivial, eof, the
-// Goal / Scope / Acceptance anchors) and carries `Phase: <this phase>`, with no
-// done.md; then the dependency graph of the listed tasks (unitProblems; the
-// completed tasks of earlier phases may be named). Problem lines name concrete
-// paths and feed the retry feedback.
+// task index with at least one task, each listed task passing the per-task
+// checks (newTaskProblems), then the dependency graph of the listed tasks
+// (unitProblems; the completed tasks of earlier phases may be named). Problem
+// lines name concrete paths and feed the retry feedback.
 export async function plannedTaskProblems(
   dir: string,
   phase: PlanPhase,
@@ -472,32 +469,56 @@ export async function plannedTaskProblems(
   const problems = parsed.problems.map((problem) => `${index} ${problem}`)
   const ids = parsed.entries.map((entry) => entry.id)
   if (!ids.length) problems.push(`${index} lists no task (lines \`- [ ] T-NNN <title>\`)`)
-  const qualified = qualifiedPhase(phase)
   const decls: UnitDecl[] = []
   for (const id of ids) {
-    if (opts.before.has(id)) {
-      problems.push(`${id} is already used by an earlier task (docs/${id}/ existed before this planning session); pick an unused number`)
-      continue
-    }
-    const n = /^T-(\d+)$/.exec(id)
-    if (opts.numberStart !== undefined && n && Number(n[1]) < opts.numberStart) {
-      problems.push(`${id} is below the numbering start T-${String(opts.numberStart).padStart(3, "0")}; earlier numbers are taken`)
-      continue
-    }
-    const paths = taskStatePaths(id)
-    if (await Bun.file(join(dir, paths.complete)).exists()) problems.push(`${paths.complete} must not exist for a newly planned task`)
-    const checked = await checkArtifactSpecs([taskTodoSpec(id)], { dir, policy: "mandatory" })
+    const checked = await newTaskProblems(dir, phase, id, opts)
     problems.push(...checked.problems)
-    if (checked.problems.length) continue
-    const doc = await Bun.file(join(dir, paths.pending)).text()
-    const phaseField = parseUnitDoc(doc).fields.phase
-    if (phaseField !== qualified) problems.push(`${paths.pending} must carry the field line \`Phase: ${qualified}\` right after its title line`)
-    decls.push(taskDecl(id, doc))
+    if (checked.decl) decls.push(checked.decl)
   }
   if (decls.length === ids.length) {
     problems.push(...unitProblems("task", decls, { external: await doneTaskIds(dir) }).map((problem) => `${index}: ${problem}`))
   }
   return { problems, ids: ids.filter((id) => isUnitId("task", id)) }
+}
+
+// Problems of one newly planned task (empty = accepted): a new id (not a task
+// directory that existed before the session, and not below the numbering
+// record's start), no done.md, and a todo.md that passes the mandatory spec
+// check (non-trivial, eof, the Goal / Scope / Acceptance anchors) and carries
+// `Phase: <this phase>`. The task's dependency declaration is returned
+// alongside when the document checks pass, so a caller checking a whole index
+// builds the graph from the same single read. Split out of
+// plannedTaskProblems as a pure refactor (plans/0053 D24): the append collect
+// reuses these per-task checks with `before` = taken ∪ snapshot ids.
+// AUTO-DECISION: the split returns `{ problems, decl? }` rather than problems
+// alone (the alternative — callers re-reading the document to derive the decl
+// — would double the reads and let the two reads drift apart), and the decl is
+// withheld exactly on the paths the pre-split loop `continue`d past, so
+// plannedTaskProblems' behavior and messages are byte-unchanged.
+export async function newTaskProblems(
+  dir: string,
+  phase: PlanPhase,
+  id: string,
+  opts: { before: ReadonlySet<string>; numberStart?: number },
+): Promise<{ problems: string[]; decl?: UnitDecl }> {
+  const qualified = qualifiedPhase(phase)
+  if (opts.before.has(id)) {
+    return { problems: [`${id} is already used by an earlier task (docs/${id}/ existed before this planning session); pick an unused number`] }
+  }
+  const n = /^T-(\d+)$/.exec(id)
+  if (opts.numberStart !== undefined && n && Number(n[1]) < opts.numberStart) {
+    return { problems: [`${id} is below the numbering start T-${String(opts.numberStart).padStart(3, "0")}; earlier numbers are taken`] }
+  }
+  const problems: string[] = []
+  const paths = taskStatePaths(id)
+  if (await Bun.file(join(dir, paths.complete)).exists()) problems.push(`${paths.complete} must not exist for a newly planned task`)
+  const checked = await checkArtifactSpecs([taskTodoSpec(id)], { dir, policy: "mandatory" })
+  problems.push(...checked.problems)
+  if (checked.problems.length) return { problems }
+  const doc = await Bun.file(join(dir, paths.pending)).text()
+  const phaseField = parseUnitDoc(doc).fields.phase
+  if (phaseField !== qualified) problems.push(`${paths.pending} must carry the field line \`Phase: ${qualified}\` right after its title line`)
+  return { problems, decl: taskDecl(id, doc) }
 }
 
 // Task ids already taken when a phase is planned: those listed in any other

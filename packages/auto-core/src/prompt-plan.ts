@@ -1,13 +1,16 @@
-// Planning-session prompts: phased planning (renderPhasePlan) and m-mode
-// planning (renderImplementPlan), both rendered by planPhase (src/loop-plan.ts,
-// plans/0053 D12). Moved out of src/prompt.ts (plans/0053 A2) so the P3
-// planning additions do not grow that file; the copy stays in
-// templates/prompts/phase-plan.md and implement-plan.md, and rendering goes
-// through prompt.ts's single exit (renderPrompt) and its intent-pack helpers.
+// Planning-session prompts: phased planning (renderPhasePlan), m-mode
+// planning (renderImplementPlan) and append planning (renderPhaseAppend),
+// the first two rendered by planPhase (src/loop-plan.ts, plans/0053 D12) and
+// the third by appendPlan (D23–D27, the wiring half landed with the template).
+// Moved out of src/prompt.ts (plans/0053 A2) so the P3 planning additions do
+// not grow that file; the copy stays in templates/prompts/phase-plan.md,
+// implement-plan.md and phase-append.md, and rendering goes through
+// prompt.ts's single exit (renderPrompt) and its intent-pack helpers.
 import type { ModeSpec } from "./mode"
 import type { ParallelLevel } from "./intent/types"
 import { planDutiesPartial, type PhaseTypeEntry } from "./phases/registry"
 import { intentText, modeText, phaseTag, renderPrompt } from "./prompt"
+import type { Task } from "./tasks"
 import { renderText } from "./template"
 
 // 阶段规划会话(设计文档 plans/0006-phases-design.md E 节): 旁路一次性,产物 = 本阶段任务
@@ -102,6 +105,79 @@ export function renderImplementPlan(input: {
     filePath: input.file,
     content: input.content,
     brief: input.brief?.trim() || undefined,
+    ...parallelism(input.parallel),
+  })
+}
+
+// The existing-task lines of the append prompt's existingTasks slot
+// (plans/0053 D27): one line per task of the current index, in index order,
+// labelled by its current status; a closed task (done for scheduling, not
+// delivered) carries its reason. The label is session-facing prose, not a
+// protocol string. An in_progress task (transient runtime state, impossible
+// at an append step — a task mid-pipeline blocks the append, D26) would show
+// its own label unchanged.
+export function existingTaskList(tasks: readonly Pick<Task, "id" | "title" | "status" | "closed">[]): string {
+  return tasks
+    .map((task) =>
+      task.closed !== undefined
+        ? `- [closed] ${task.id}: ${task.title} (closed without completing: ${task.closed})`
+        : `- [${task.status}] ${task.id}: ${task.title}`,
+    )
+    .join("\n")
+}
+
+// Append planning (plans/0053 D23/D27): the planner that adds tasks to a
+// phase whose index already lists some, rendered from the shared
+// phase-append template by both modes. Phased sessions pass the phase entry
+// (the phase naming, the duty paragraph, the round brief and the prior-phase
+// handovers); an m-mode session passes none of those — as implement-plan, it
+// has no duties, round or handovers — so the template drops those blocks.
+// input/inputPath are required (append always plans against a planning
+// input: --append without input is a usage error, D23), and existingTasks is
+// the pre-joined line list of the index as it stands (existingTaskList).
+// numberStart is the append numbering start (from the .auto/next-task record
+// under autoNumber, otherwise the highest taken or listed id + 1, D25); it
+// always exists in practice, hence the single unconditional numbering clause.
+// AUTO-DECISION: the mode split lives entirely in optional slots — a two-branch
+// intro on {{#if phase}}, the whole duties section (placement paragraph and
+// planDuties together) behind {{#if planDuties}}, no phase-plan-style
+// "brief not provided" fallback, and one unconditional numbering clause instead
+// of phase-plan's two branches (the append start is always computed; the
+// fallback branch would name T-001 under an index that already lists it).
+// The rejected alternative was two separate templates per mode, which D27
+// rules out; per-block negative fallbacks were dropped because m mode must
+// render the shared blocks' absence silently, as implement-plan does.
+export function renderPhaseAppend(input: {
+  phase?: PhaseTypeEntry
+  phaseId: string
+  taskIndex: string
+  numberStart?: number
+  input: string
+  inputPath: string
+  existingTasks: string
+  brief?: string
+  // The round brief docs/R-NN/round.md, comments stripped (plans/0049 G3).
+  round?: string
+  handovers?: string
+  mode?: ModeSpec
+  parallel?: ParallelLevel
+}): string {
+  const type = input.phase
+  return renderPrompt("phase-append", {
+    phase: type ? phaseTag(type) : undefined,
+    phaseName: type?.name,
+    phaseId: input.phaseId,
+    taskIndex: input.taskIndex,
+    numberStart: String(input.numberStart ?? 1).padStart(3, "0"),
+    input: input.input.trim(),
+    inputPath: input.inputPath,
+    existingTasks: input.existingTasks.trim(),
+    brief: input.brief?.trim() || undefined,
+    round: input.round?.trim() || undefined,
+    handovers: input.handovers?.trim() || undefined,
+    modeName: input.mode?.name,
+    modeInit: input.mode && modeText(input.mode.init),
+    ...(type ? { planDuties: renderText(type.planDuties ?? `{{> ${planDutiesPartial(type)}}}`, {}).trimEnd() } : {}),
     ...parallelism(input.parallel),
   })
 }

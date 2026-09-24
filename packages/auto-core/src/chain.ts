@@ -113,8 +113,10 @@ export type ForkBaseInfo = { id: string; used: number | undefined }
 // resume.Phase → 会话角色(模型路由的细键,见 plans/0017-model-routing-design.md B.5/C.1)。
 // 执行链各阶段映射同名角色(decompose 为 M1.0 合并理解与分解会话的角色,plans/0030 D12);
 // subtasks 取单数 subtask;closeout 无会话(落 bypass);
-// step 变体的英文 slug 即 StepKind(phase-plan / phase-handover)。phase 缺省时返回
-// undefined——由 roleOf 落 bypass(裸链与无 phase 的旁路会话)。
+// step 变体的英文 slug 即 StepKind(phase-plan / phase-handover),唯独 phase-append 是
+// 规划会话的追加变体(plans/0053 D23/F6),路由沿用 phase-plan 角色,不加新角色词——
+// 既有路由配置继续生效。phase 缺省时返回 undefined——由 roleOf 落 bypass(裸链与无
+// phase 的旁路会话)。
 export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
   if (!phase) return undefined
   switch (phase.kind) {
@@ -129,7 +131,7 @@ export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
     case "closeout":
       return undefined
     case "step":
-      return phase.step === "phase-plan" ? "phase-plan" : "phase-handover"
+      return phase.step === "phase-handover" ? "phase-handover" : "phase-plan"
   }
 }
 
