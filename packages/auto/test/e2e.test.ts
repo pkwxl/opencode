@@ -1587,6 +1587,12 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
         [["plan", dir, "--wait-between", "2"], "--wait-between is a run option"],
         [["plan", dir, "--max-sessions", "1"], "--max-sessions is a run option"],
         [["plan", dir, "-f"], "-f/--force is an init/reset/fix option"],
+        // --append 是 plan 专用(D23): 无输入为用法错误,其他命令一律指向 plan。
+        [["plan", dir, "--append"], "--append requires a planning input"],
+        [["run", dir, "--append"], "--append is a plan option"],
+        [["init", dir, "--append"], "--append is a plan option"],
+        [["close", "T-001", dir, "--append"], "--append is a plan option"],
+        [["fix", dir, "--append"], "--append is a plan option"],
         // 无 config.json:拒绝规划而不是用缺省建轮
         [["plan", dir], `nothing to plan: ${dir} has no .opencode/auto/config.json; run opencode-auto init`],
         [["run", dir, "-p", "text"], "-p/--prompt is a plan option: run takes no planning input"],
@@ -1628,7 +1634,7 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
     }
   })
 
-  test("m mode with tasks listed: the run notice without input, the append pointer with input", async () => {
+  test("m mode with tasks listed: the run notice without input; --append needs an input, and a mid-pipeline task stops the append (D26)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
@@ -1636,9 +1642,18 @@ describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
       const notice = await runCli(["plan", dir])
       expect(notice.code).toBe(0)
       expect(notice.out).toContain(`ℹ docs/R-01/P01-implement/tasks.md lists 1 task(s) (1 pending); next: opencode-auto run ${dir}`)
-      const withInput = await runCli(["plan", dir, "-p", "再加点"])
-      expect(withInput.code).toBe(1)
-      expect(withInput.err).toContain("docs/R-01/P01-implement/tasks.md already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append")
+      // --append 挂在规划输入上(D23): 无输入即用法错误。
+      const bare = await runCli(["plan", dir, "--append"])
+      expect(bare.code).toBe(1)
+      expect(bare.err).toContain("--append requires a planning input: pass -p <text> | --file <path>")
+      // 输入在已列任务索引上即追加;T-001 半途(有恢复点)时 D26 守卫在任何
+      // server 启动前拒绝。
+      await Bun.write(join(dir, ".auto/progress.json"), JSON.stringify({ task: "T-001", at: 1, active: true }))
+      for (const args of [["plan", dir, "-p", "再加点"], ["plan", dir, "--append", "-p", "再加点"]]) {
+        const guarded = await runCli(args)
+        expect(guarded.code).toBe(1)
+        expect(guarded.err).toContain("T-001 is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending")
+      }
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

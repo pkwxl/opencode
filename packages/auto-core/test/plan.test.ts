@@ -1,7 +1,7 @@
-// plan's prelude (plans/0053 D4–D5, D7, D15): every route that needs no AI,
-// decided over docs-tree fixtures before any agent starts; git fixtures where
-// the round-close check (G8) runs. The loop side of the stop condition (D6,
-// D8) needs the loop harness (plans/0053 A7).
+// plan's prelude (plans/0053 D4–D5, D7, D15, D23, D26): every route that
+// needs no AI, decided over docs-tree fixtures before any agent starts; git
+// fixtures where the round-close check (G8) runs. The loop side of the stop
+// condition (D6, D8) needs the loop harness (plans/0053 A7, B6).
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -303,21 +303,17 @@ describe("planPrelude: routes (rows 4–9)", () => {
   )
 
   test(
-    "row 9, m mode with tasks listed: a notice; input is exit 1 until appending exists",
+    "row 9, m mode with tasks listed: input implies the append and goes to the loop; without it, a notice",
     withDir(async (dir) => {
       await establishRound(dir, { phases: "m" })
       const [implement] = await phasesOf(dir)
       await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
       const notice = `ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (1 pending); next: opencode-auto run ${dir}`
       expect(await planPrelude(dir, { phases: "m" })).toEqual({ type: "stop", code: 0, lines: [notice] })
-      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({
-        type: "stop",
-        code: 1,
-        lines: [
-          "docs/R-01/P01-implement/tasks.md already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append",
-          notice,
-        ],
-      })
+      // In m mode the input on a non-empty index is an append (D23): the flag
+      // is implied, and an explicit one accepted as redundant.
+      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
+      expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual({ type: "loop" })
       // All done: m mode's phase stays open, so this is still row 9.
       await listTasks(dir, implement!, [["T-001", true], ["T-002", true]])
       expect(await planPrelude(dir, { phases: "m" })).toEqual({
@@ -325,6 +321,92 @@ describe("planPrelude: routes (rows 4–9)", () => {
         code: 0,
         lines: [`ℹ docs/R-01/P01-implement/tasks.md lists 2 task(s) (0 pending); next: opencode-auto run ${dir}`],
       })
+      expect(await planPrelude(dir, { phases: "m", input: INPUT, append: true })).toEqual({ type: "loop" })
+    }),
+  )
+
+  test(
+    "row 9 D26: a record of an open task stops the append; a step record or a done task's does not",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "m" })
+      const [implement] = await phasesOf(dir)
+      await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
+      for (const active of [true, false]) {
+        await saveProgress(dir, { task: "T-002", at: 1, active, phase: { kind: "subtasks", index: 1 } })
+        expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({
+          type: "stop",
+          code: 1,
+          lines: ["T-002 is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending"],
+        })
+      }
+      // A step record (task PLAN) is the step machinery's own, and the done
+      // task's leftover record names a task that is no longer open.
+      await saveProgress(dir, { task: "PLAN", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P01" } })
+      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
+      await saveProgress(dir, { task: "T-001", at: 1, active: true, phase: { kind: "subtasks", index: 1 } })
+      expect(await planPrelude(dir, { phases: "m", input: INPUT })).toEqual({ type: "loop" })
+    }),
+  )
+
+  test(
+    "row 10: --append on the phased execute and handover routes goes to the loop targeting the phase named now",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "am" })
+      const [analysis] = await phasesOf(dir)
+      await listTasks(dir, analysis!, [["T-001", true], ["T-002", false]])
+      // Execute route: the append targets this phase, guard passing.
+      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual({ type: "loop" })
+      // Handover route on the last task phase (only a task-less one follows):
+      // the append still targets this phase — it never advances to another
+      // one — while the same input without the flag is row 6's refusal (no
+      // phase left to plan after the handover).
+      await establishRound(dir, { phases: "amk" })
+      const [a, implement] = await phasesOf(dir)
+      await listTasks(dir, a!, [["T-001", true]])
+      await completePhase(dir, a!)
+      await listTasks(dir, implement!, [["T-002", true]])
+      expect(await planPrelude(dir, { phases: "amk", input: INPUT, append: true })).toEqual({ type: "loop" })
+      expect(await planPrelude(dir, { phases: "amk", input: INPUT })).toEqual({
+        type: "stop",
+        code: 1,
+        lines: ["no phase is left to plan in round R-01; the planning input would not be used"],
+      })
+    }),
+  )
+
+  test(
+    "row 10 D26: a record of an open task on the execute route stops the append",
+    withDir(async (dir) => {
+      await establishRound(dir, { phases: "am" })
+      const [analysis] = await phasesOf(dir)
+      await listTasks(dir, analysis!, [["T-001", true], ["T-002", false]])
+      await saveProgress(dir, { task: "T-002", at: 1, active: true, phase: { kind: "subtasks", index: 2 } })
+      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual({
+        type: "stop",
+        code: 1,
+        lines: ["T-002 is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending"],
+      })
+    }),
+  )
+
+  test(
+    "--append on the phased plan route plans the phase normally (D23); without input it is a usage error",
+    withDir(async (dir) => {
+      // A usage error before any route logic — including the round-setup
+      // rows, where it fires instead of the D5 input refusal, and before
+      // anything is written.
+      for (const phases of ["am", "m"]) {
+        expect(await planPrelude(dir, { phases, append: true })).toEqual({
+          type: "stop",
+          code: 1,
+          lines: [
+            `--append requires a planning input: pass one with opencode-auto plan ${dir} -p <text> | --file <path> — appending adds the tasks planned from the input to the current phase`,
+          ],
+        })
+      }
+      expect(await exists(dir, "docs/R-01")).toBe(false)
+      await establishRound(dir, { phases: "am" })
+      expect(await planPrelude(dir, { phases: "am", input: INPUT, append: true })).toEqual({ type: "loop" })
     }),
   )
 })

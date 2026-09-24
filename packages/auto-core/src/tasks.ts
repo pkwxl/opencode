@@ -338,7 +338,12 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
 }
 
 // A task's dependency declaration from its document text.
-function taskDecl(id: string, doc: string): UnitDecl {
+// AUTO-DECISION: exported (rather than re-derived by each caller from
+// parseUnitDoc) so every index-level check — the planning collect, the append
+// collect over a snapshot's existing tasks — builds its dependency graph from
+// the same single derivation; the alternative (a local copy in the append
+// collect) would let the two drift apart.
+export function taskDecl(id: string, doc: string): UnitDecl {
   const unit = parseUnitDoc(doc)
   return { id, ...(unit.depends !== undefined ? { depends: unit.depends } : {}), ...(unit.touches !== undefined ? { touches: unit.touches } : {}) }
 }

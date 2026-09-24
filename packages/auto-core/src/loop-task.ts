@@ -37,6 +37,11 @@ export type LoopCtx = {
   // The planning input this run was given (plans/0053 D9), consumed by the
   // first planning step, which persists it to its phase's plan-input.md.
   input?: PlanInput
+  // plan --append (plans/0053 D23): the input appends tasks to the phase the
+  // route names now instead of planning a fresh one (m mode implies it from an
+  // input on a non-empty index). Seeded from RunAllOpts.append; an append step
+  // consumes ctx.input, which is what keeps the intent single-use.
+  append?: boolean
   // The task ids the last planning step wrote, for plan's summary when it
   // stops after that step (plans/0053 D6).
   planned?: string[]

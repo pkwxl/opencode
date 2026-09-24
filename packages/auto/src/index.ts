@@ -69,7 +69,8 @@ const positional: string[] = []
 // auto-core plans/0053 D13);
 // --verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
-// 以及 --cascade/--commit-changes/--stash-changes(close 专用)是布尔选项,出现即
+// 以及 --cascade/--commit-changes/--stash-changes(close 专用)、--append(plan 专用)
+// 是布尔选项,出现即
 // true,仅当紧随字面量 true/false 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
 // --mode 另有短选项 -m(镜像 -p 的吞值规则)。解析按整名精确匹配:--commit-changes
@@ -97,7 +98,7 @@ const VALUE_FLAGS = new Set([
   "parallel",
   "max-sessions",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes", "append"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -150,6 +151,14 @@ for (let i = 1; i < args.length; i++) {
 // 历史选项对 init/continue/run/plan 有专属拦截报文,此处放行交由其后各自处理;
 // close 只接受自己的四个旗标,其余(含宪法级与 -p/--file)在下方 close 分支以
 // close 专属报文拒绝;check/status 不接受任何选项,出现旗标即拒绝。
+// --append is plan's alone (auto-core plans/0053 D23): appending tasks to the
+// current phase is a plan route, so every other command refuses the flag with
+// a pointer to plan — run's -p/--file refusal pattern — before any whitelist
+// or command block runs.
+if (command !== "plan" && flags.has("append")) {
+  console.error(`--append is a plan option: ${command ?? "this command"} takes no --append. Append tasks with opencode-auto plan <dir> --append -p <text> | --file <path>`)
+  process.exit(1)
+}
 // Retired flags are usage errors with their own notice (mirroring the --commit
 // false retirement), let through the whitelist so the notice replaces "unknown
 // option": the completion-side mechanisms (D13, auto-core plans/0044), the
@@ -342,15 +351,16 @@ if (command === "run") {
   process.exit(code)
 }
 
-// plan (auto-core plans/0053 D14): plan the current phase and stop before
-// execution, for review. It is run with a stop condition: the same options
-// (the builder is shared), preceded by the prelude that settles every route
-// needing no agent — establishing a round, the round-close gate before the
-// next one, the notices and the input refusals (planPrelude, D4). Order: the
-// flags and the planning input, the strict config load and the mode check,
-// then the run lock ("plan", held across the prelude; runAll re-enters it),
-// the prelude, and runAll. A prelude stop prints its lines and exits with its
-// code; runAll's exit codes are run's.
+// plan (auto-core plans/0053 D14, D23): plan the current phase and stop
+// before execution, for review. It is run with a stop condition: the same
+// options (the builder is shared), preceded by the prelude that settles every
+// route needing no agent — establishing a round, the round-close gate before
+// the next one, the notices and the input refusals (planPrelude, D4). Order:
+// the flags and the planning input, then --append (which rides an input and
+// appends the tasks it plans to the current phase), the strict config load
+// and the mode check, then the run lock ("plan", held across the prelude;
+// runAll re-enters it), the prelude, and runAll. A prelude stop prints its
+// lines and exits with its code; runAll's exit codes are run's.
 if (command === "plan") {
   refuseFrozenFlags("plan")
   // run's options for the task loop: plan stops before any task runs.
@@ -365,6 +375,15 @@ if (command === "plan") {
     }
   }
   const input = await parsePlanInput()
+  // --append (auto-core plans/0053 D23) rides a planning input: it appends
+  // the tasks planned from the input to the current phase. In m mode the
+  // input implies the append on a non-empty index, so the flag is redundant
+  // there; the prelude and planPrelude repeat the check for other shells.
+  const append = flags.has("append") && flags.get("append") !== "false"
+  if (append && !input) {
+    console.error("--append requires a planning input: pass -p <text> | --file <path>; it appends the tasks planned from the input to the current phase")
+    process.exit(1)
+  }
   const session = parseSessionFlags()
   // plan writes the round setup, which follows the config (phases): a
   // directory init never configured is refused rather than planned with the
@@ -383,7 +402,7 @@ if (command === "plan") {
     for (const line of lockLines(directory, lock.holder)) console.error(line)
     process.exit(1)
   }
-  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, input })
+  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, input, append })
   if (prelude.type === "stop") {
     for (const line of prelude.lines) (prelude.code === 0 ? console.log : console.error)(line)
     lock.release()
@@ -391,7 +410,7 @@ if (command === "plan") {
   }
   startRunLog(directory, session)
   await logRunBanner(directory, config)
-  const code = await runAll(directory, { ...runOptions(config, mode, session), stopBefore: "execute", planInput: input })
+  const code = await runAll(directory, { ...runOptions(config, mode, session), stopBefore: "execute", planInput: input, append })
   lock.release()
   process.exit(code)
 }
@@ -1368,7 +1387,7 @@ console.error(`usage:
   opencode-auto init [dir] [-p|--prompt <brief-text>] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--amend] [-f|--force]
   opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
-  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
+  opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto fix [dir] [-f|--force]
@@ -1381,7 +1400,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block, and re-syncs the current round's unstarted phases after a --phases change. init --amend does the same and stays until plan takes over init's round step; continue is always amend
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
-        plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
+         plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
         close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
         run lock: run and plan hold .auto/run.lock while they work, and close holds it around its writes; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)

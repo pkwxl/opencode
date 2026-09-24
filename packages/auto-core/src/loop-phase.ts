@@ -14,7 +14,7 @@ import { commitPending, commitTree } from "./git"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
 import { banner, log } from "./log"
-import { phaseState, phaseTitle, planWithStep } from "./loop-plan"
+import { appendWithStep, phaseState, phaseTitle, planWithStep } from "./loop-plan"
 import { runTaskLoop, type LoopCtx } from "./loop-task"
 import { completePhase, phaseAcceptanceDoc, phaseGates, phaseHandoverDoc, phaseKey, routePhase, type PhaseUnit } from "./phases"
 import { emptyIndexNotice, executeNotice, roundCompleteNext } from "./plan"
@@ -263,21 +263,24 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
     await statsPhase(directory, phaseKey(route.phase).id)
     // Session resume takes precedence over file-derived routing
     // (plans/0018-session-resume-precedence-design.md): an unclosed phase-step
-    // resume point on the driver side (the last run's planning/handover session
-    // was interrupted before the driver closed it out) → re-enter that step and
-    // reuse the interrupted session, even if the task/phase index has already
-    // moved file routing on. Task units and handover docs are written by the AI
-    // (or patched by the driver after the interruption) and cannot prove the
-    // session closed out; only closeStep deleting the resume point does. It
-    // applies only when the step's phase is the current routed phase and is not
-    // done: another phase (manual rollback, stale record) lets file routing win,
-    // and a done phase clears the stale record. The point is keyed by the
-    // qualified phase id R-NN.P<nn> (a type may repeat within a round); a record
-    // without one (pre-M3.6 `letter`) matches no phase and file routing wins.
+    // resume point on the driver side (the last run's planning/appending/
+    // handover session was interrupted before the driver closed it out) →
+    // re-enter that step and reuse the interrupted session, even if the
+    // task/phase index has already moved file routing on. Task units and
+    // handover docs are written by the AI (or patched by the driver after the
+    // interruption) and cannot prove the session closed out; only closeStep
+    // deleting the resume point does. It applies only when the step's phase is
+    // the current routed phase and is not done: another phase (manual
+    // rollback, stale record) lets file routing win, and a done phase clears
+    // the stale record. The point is keyed by the qualified phase id R-NN.P<nn>
+    // (a type may repeat within a round); a record without one (pre-M3.6
+    // `letter`) matches no phase and file routing wins.
     // The check precedes the m-mode branch below (plans/0053 D12), so an
-    // interrupted m-mode planning step is finished by whichever command runs
-    // next, from its persisted planning input; a record with no input to plan
-    // against (it predates the input) is closed, and file routing continues.
+    // interrupted m-mode planning or appending step is finished by whichever
+    // command runs next, from its persisted planning input; a record with no
+    // input to plan against (it predates the input) is closed, and file
+    // routing continues. An interrupted append re-enters through appendPlan
+    // (plans/0053 D23), never a full planPhase.
     const open = await openStep(directory)
     if (open) {
       const state = await phaseState(directory)
@@ -286,24 +289,28 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
         await closeStep(directory, open.step, open.unit)
       } else if (
         ctx.manual &&
-        open.step === "phase-plan" &&
+        (open.step === "phase-plan" || open.step === "phase-append") &&
         open.unit === phaseKey(route.phase).id &&
         !ctx.input &&
         !(await readPlanInput(directory, route.phase))?.trim()
       ) {
         log(
-          `⚠ unclosed m-mode planning resume point (${open.unit}) has no planning input (${planInputPath(route.phase)}) to plan against; ` +
+          `⚠ unclosed m-mode ${open.step === "phase-plan" ? "planning" : "appending"} resume point (${open.unit}) has no planning input (${planInputPath(route.phase)}) to plan against; ` +
             `closing it and continuing with the file-derived route`,
         )
         await closeStep(directory, open.step, open.unit)
       } else if (open.unit === phaseKey(route.phase).id) {
-        log(
-          `↻ session resume point takes precedence: the ${open.step === "phase-plan" ? "phase planning" : "phase handover"} session` +
-            `(${phaseTitle(route.phase)}) was not closed out; re-entering that step to continue`,
-        )
+        const stepName = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
+        log(`↻ session resume point takes precedence: the ${stepName} session(${phaseTitle(route.phase)}) was not closed out; re-entering that step to continue`)
         if (open.step === "phase-plan") {
           banner(`${phaseTitle(route.phase)} phase planning`)
           const code = await planWithStep(ctx, route.phase)
+          if (code !== 0 || opts.stopBefore === "execute") return code
+          continue
+        }
+        if (open.step === "phase-append") {
+          banner(`${phaseTitle(route.phase)} task append`)
+          const code = await appendWithStep(ctx, route.phase)
           if (code !== 0 || opts.stopBefore === "execute") return code
           continue
         }
@@ -324,6 +331,20 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
             `continuing with the file-derived route (ignore if this was a manual rollback; otherwise check .auto/progress.json)`,
         )
       }
+    }
+    // An append this run was asked for (plans/0053 D23): the phase the route
+    // names now already has its index written — tasks pending (execute route)
+    // or the phase distilled / gate-stopped (handover route) — so new tasks
+    // are appended to it, never a full planning step and never another phase.
+    // It always rides an input (the prelude refuses --append without one, and
+    // m mode implies the append from an input on a non-empty index), so the
+    // input still being unconsumed is what makes this an append: a planning
+    // step consumed it otherwise, and appendPlan consumes it here.
+    if (ctx.input !== undefined && route.type !== "plan" && (ctx.append || ctx.manual)) {
+      banner(`${phaseTitle(route.phase)} task append`)
+      const code = await appendWithStep(ctx, route.phase)
+      if (code !== 0 || opts.stopBefore === "execute") return code
+      continue
     }
     // 人工模式(无阶段): 没有任务可跑即收场——任务索引为空提示补写,任务全部
     // 完成打印轮次完成行;均退出 0,阶段保持未完成。A planning input handed to

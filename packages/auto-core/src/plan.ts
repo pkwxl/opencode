@@ -1,42 +1,53 @@
-// The plan command's core (plans/0053 D4–D8, D15): the prelude that decides
-// every route needing no AI before an agent starts, and the lines plan prints
-// where it stops. The prelude runs under the run lock the shell holds, before
-// runAll, so it works on the dirty tree a fresh round setup leaves and starts
-// no server just to print a notice; it must never import the loop. The loop
-// (loop-phase, loop-plan) prints the same stop lines through the helpers here,
-// so plan says the same thing wherever it stops.
+// The plan command's core (plans/0053 D4–D8, D15, D23, D26): the prelude that
+// decides every route needing no AI before an agent starts, and the lines plan
+// prints where it stops. The prelude runs under the run lock the shell holds,
+// before runAll, so it works on the dirty tree a fresh round setup leaves and
+// starts no server just to print a notice; it must never import the loop. The
+// loop (loop-phase, loop-plan) prints the same stop lines through the helpers
+// here, so plan says the same thing wherever it stops.
 //
-// Pointers to commands that arrive later are left out until they exist:
-// `plan --append` and `close` join the execute notice and the planned lines in
-// P3b (plans/0053 B3, B5), and the phase-index drift row (3) in P3c.
+// Pointer texts that name later commands are staged with them: the `close`
+// pointers join the notices in P3b B5 (plans/0053 D29), and the phase-index
+// drift row (3) in P3c.
 import { join } from "node:path"
 import { roundBriefPath, roundDirName } from "./docpaths"
 import { currentPhase, currentRound, establishRound, legacyLayoutProblem, phaseIndexPath, phaseLabel, readPhases, routePhase, type PhaseRoute, type PhaseState, type PhaseUnit } from "./phases"
 import type { PlanInput } from "./plan-input"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
-import { openStep } from "./resume"
+import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
-import { loadPlan, qualifiedPhase, taskIndexPath } from "./tasks"
+import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths } from "./tasks"
 
 type PlanStop = { type: "stop"; code: number; lines: string[] }
 export type PlanPrelude = { type: "loop" } | PlanStop
 
-// The routes the prelude decides, first match wins (plans/0053 D4; rows 3 and
-// 10 arrive in P3c and P3b):
+// The routes the prelude decides, first match wins (plans/0053 D4; row 3
+// arrives in P3c):
 //   1. the current round is not established → (G8 of the previous round) + establish, G1 lines;
 //   2. the round is complete → G8; pass = establish the next round, fail = exit 2;
 //   4. the route is blocked → exit 1;
 //   5. an open step record → the loop finishes it first;
-//   6. phased, plan or handover → the loop (input: a phase must be left to plan it);
-//   7. phased, execute → notice, exit 0 (input: exit 1);
+//   6. phased, plan or handover without --append → the loop (input: a phase must be left to plan it);
+//   7. phased, execute without --append → notice, exit 0 (input: exit 1);
 //   8. m mode, empty task index → input: the loop; else a notice;
-//   9. m mode, tasks listed → a notice (input: exit 1 until appending exists).
-// Input is refused before any write on the round-setup rows (D5).
-export async function planPrelude(dir: string, opts: { phases: string; build?: string; input?: PlanInput }): Promise<PlanPrelude> {
+//   9. m mode, tasks listed → input: the loop (an append, D23; --append implied, the flag redundant); else a notice;
+//  10. phased, --append on execute or handover → the loop (an append to the phase the route names now, D23).
+// Input is refused before any write on the round-setup rows (D5); rows 9 and
+// 10 apply the progress-record guard (D26); --append without input is a usage
+// error everywhere.
+export async function planPrelude(dir: string, opts: { phases: string; build?: string; input?: PlanInput; append?: boolean }): Promise<PlanPrelude> {
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return stop(1, [legacy])
   const { bin } = shellProfile()
   const manual = opts.phases === "m"
+  // --append without input is a usage error (D23): appending adds the tasks
+  // planned from the input. The shell checks this before the lock; this
+  // backstops other shells and direct callers, before any route logic.
+  if (opts.append && !opts.input) {
+    return stop(1, [
+      `--append requires a planning input: pass one with ${bin} plan ${dir} -p <text> | --file <path> — appending adds the tasks planned from the input to the current phase`,
+    ])
+  }
   const round = await currentRound(dir)
   // Row 1: no docs/R-NN/, or its phase index is missing (an interrupted
   // round start, plans/0049 G6).
@@ -74,7 +85,17 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
   // the loop decides whether the record still matches the route.
   if (await openStep(dir)) return { type: "loop" }
   if (!manual) {
-    // Row 6.
+    // Row 10 (plans/0053 D23): --append on the execute or handover route
+    // appends to the phase the route names now — never advancing to another
+    // phase, including one on the handover route whose handover exists or
+    // whose gate stopped it. The D26 guard applies.
+    if (opts.append && (route.type === "execute" || route.type === "handover")) {
+      const mid = await midPipelineTask(dir)
+      if (mid) return stop(1, [midPipelineLine(mid)])
+      return { type: "loop" }
+    }
+    // Row 6 (the plan route plans the phase normally; --append is redundant
+    // there — an empty index has nothing to append to).
     if (route.type === "plan" || route.type === "handover") {
       if (!opts.input) return { type: "loop" }
       let target: { phase: PhaseUnit; listed: boolean } | undefined
@@ -93,15 +114,37 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     }
     // Row 7 (D7): exit 0 without input keeps `plan && run` usable; input on
     // a planned phase is a real mistake.
-    return opts.input ? stop(1, [inputUnusedLine(route, false), ...executeNotice(dir, route, false)]) : stop(0, executeNotice(dir, route, false))
+    return opts.input ? stop(1, [inputUnusedLine(route), ...executeNotice(dir, route, false)]) : stop(0, executeNotice(dir, route, false))
   }
   // Row 8.
   if (route.type === "plan") return opts.input ? { type: "loop" } : stop(0, emptyIndexNotice(dir, route.plan.index))
-  // Row 9.
-  return opts.input ? stop(1, [inputUnusedLine(route, true), ...executeNotice(dir, route, true)]) : stop(0, executeNotice(dir, route, true))
+  // Row 9: input on a non-empty index is an append (D23) — implied in m mode,
+  // --append accepted as redundant; the D26 guard applies.
+  if (opts.input) {
+    const mid = await midPipelineTask(dir)
+    if (mid) return stop(1, [midPipelineLine(mid)])
+    return { type: "loop" }
+  }
+  return stop(0, executeNotice(dir, route, true))
 }
 
 const stop = (code: number, lines: string[]): PlanStop => ({ type: "stop", code, lines })
+
+// The progress-record guard of rows 9–10 (plans/0053 D26): an append step
+// writes its own resume record, and .auto/progress.json holds one record (F2)
+// — appending while a task is mid-pipeline would overwrite the task's resume
+// point. A record naming a task whose done.md does not exist (active or
+// summary, this phase or another) stops the prelude; a step record (task
+// PLAN) is the step machinery's own and no task's resume point, and a
+// leftover record of a done task is inert. New tasks go after a blocked task
+// anyway, and next resumes blocked tasks first, so an append cannot help it.
+async function midPipelineTask(dir: string): Promise<string | undefined> {
+  const record = await peekProgress(dir)
+  if (!record || record.phase?.kind === "step" || !/^T-\d+$/.test(record.task)) return undefined
+  return (await Bun.file(join(dir, taskStatePaths(record.task).complete)).exists()) ? undefined : record.task
+}
+
+const midPipelineLine = (id: string): string => `${id} is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending`
 
 // The previous round's round-close check (plans/0049 G8), re-run when an
 // interrupted round start is resumed: the round must be complete and pass it,
@@ -197,10 +240,10 @@ export function executeNotice(dir: string, route: Extract<PhaseRoute, { type: "e
   return [`ℹ ${phaseRefText(route.phase)} is planned (${pending} of ${total} tasks pending); next: ${bin} run ${dir}`]
 }
 
-// Input on a planned phase: nothing would plan it until appending exists.
-function inputUnusedLine(route: Extract<PhaseRoute, { type: "execute" | "handover" }>, manual: boolean): string {
-  const what = manual ? route.plan.index : phaseRefText(route.phase)
-  return `${what} already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append`
+// Input on a planned phase without --append (row 7): nothing would plan it —
+// appending is what the input is for.
+function inputUnusedLine(route: Extract<PhaseRoute, { type: "execute" | "handover" }>): string {
+  return `${phaseRefText(route.phase)} already lists tasks, so the planning input would not be used; appending tasks arrives with plan --append`
 }
 
 // m mode with nothing listed and no input (plans/0053 D15).

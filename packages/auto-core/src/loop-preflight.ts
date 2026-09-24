@@ -99,6 +99,11 @@ export type RunAllOpts = {
   // The planning input plan hands the run (plans/0053 D9): the first planning
   // step persists it to its phase's plan-input.md and plans against it.
   planInput?: PlanInput
+  // plan --append (plans/0053 D23): with planInput, the planning step appends
+  // tasks to the phase the route names now instead of planning it afresh; m
+  // mode implies the append from an input on a non-empty index, so the flag
+  // only matters for the phased execute and handover routes.
+  append?: boolean
 }
 
 // 预检段: 产出 runAll 后续仍用的 agentName 与两个计时器句柄(finally 中关闭);
