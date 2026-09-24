@@ -547,10 +547,22 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
       expect(digest).not.toContain("决策甲") // 仅注入最后完成阶段的交接
       expect(digest).toContain("### Previous round migration knowledge (docs/R-01/P03-knowledge/kb.md)")
       expect(digest).toContain("API 映射结论。")
+      // No closures: the index lines are exactly `- <root>/<name>/`
+      const index = (lines: string[]) => `(${roundDir(1)}/)\n\n${lines.map((line) => `- ${roundDir(1)}/${line}`).join("\n")}\n\n###`
+      expect(digest).toContain(index(["P01-analysis/", "P02-implement/", "P03-knowledge/"]))
+      // A closed phase (its done.md field block carries Closed:) gets the reason suffix; the other lines are unchanged
+      writeFileSync(
+        join(dir, units[0]!.dir, "done.md"),
+        renderPhaseTodo(units[0]!).replace("Type: analysis\n", "Type: analysis\nClosed: out of scope\n"),
+      )
+      const closed = await prevRoundDigest(dir)
+      expect(closed).toContain(index(["P01-analysis/ (closed: out of scope)", "P02-implement/", "P03-knowledge/"]))
+      expect(closed).toContain("迁移决策乙")
       // Previous round's index unusable: directory index and knowledge as usual, handover dropped (prompt input is lenient)
       writeFileSync(join(dir, "docs/R-01/phases.md"), "垃圾\n- [ ] P01 nonsense\n")
       const lenient = await prevRoundDigest(dir)
       expect(lenient).toContain("- docs/R-01/P01-analysis/")
+      expect(lenient).not.toContain("(closed:")
       expect(lenient).not.toContain("最终交接")
       // 空白轮目录(只有目录、无内容)→ undefined
       const bare = tempDir()

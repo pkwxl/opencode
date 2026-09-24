@@ -470,9 +470,10 @@ export async function roundKnowledgeDocs(dir: string, round: number): Promise<st
 // planning session): ① an index of its phase directories; ② the full handover
 // of its last completed phase; ③ its knowledge documents in full. Only
 // distilled documents are injected; the session can open anything else from
-// the index. No previous round directory, or nothing in it → undefined.
-// Lenient: an unusable index only drops ②, since a digest is prompt input and
-// strict failure belongs to the loop's own readPhases.
+// the index. A closed phase's index line carries ` (closed: <reason>)` (D16).
+// No previous round directory, or nothing in it → undefined.
+// Lenient: an unusable index drops ② and the closed suffixes, since a digest is
+// prompt input and strict failure belongs to the loop's own readPhases.
 export async function prevRoundDigest(dir: string): Promise<string | undefined> {
   const prev = (await currentRound(dir)) - 1
   if (prev < 1) return undefined
@@ -493,7 +494,13 @@ export async function prevRoundDigest(dir: string): Promise<string | undefined> 
   }
   if (!dirs.length && !handoverText?.trim() && !knowledge.length) return undefined
   const parts = [`### Previous round (round ${prev}) phase directory index (${root}/)\n`]
-  parts.push(dirs.map((name) => `- ${root}/${name}/`).join("\n"))
+  // AUTO-DECISION: a directory is matched to its phase by id alone (ids are
+  // unique within a round's index), not by the full directory path.
+  const closedSuffix = (name: string) => {
+    const reason = state?.closed.get(parsePhaseDir(name)!.id)
+    return reason === undefined ? "" : ` (closed: ${reason})`
+  }
+  parts.push(dirs.map((name) => `- ${root}/${name}/${closedSuffix(name)}`).join("\n"))
   if (handover && handoverText?.trim()) {
     parts.push(`\n### Previous round final handover (${handover})\n`)
     parts.push(handoverText.trim())
