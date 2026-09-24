@@ -8,7 +8,18 @@
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { syncPhaseIndex } from "../../src/phases"
-import { loadPlan, renderTaskIndex, subtasks, UNITS_FILE, type Plan, type PlanPhase, type Status, type Task } from "../../src/tasks"
+import {
+  loadPlan,
+  qualifiedPhase,
+  renderTaskIndex,
+  subtasks,
+  taskIndexPath,
+  UNITS_FILE,
+  type Plan,
+  type PlanPhase,
+  type Status,
+  type Task,
+} from "../../src/tasks"
 
 type Parsed = Task & { rawBody: string }
 
@@ -67,7 +78,13 @@ export const unitsText = (dir: string) => Bun.file(join(dir, UNITS_FILE)).text()
 
 // An in-memory plan of the implicit phase (no filesystem).
 export function planOf(text: string, dir = "."): Plan {
-  return { dir, phase: "R-01.P01", index: "docs/R-01/P01-implement/tasks.md", tasks: parseNotation(text).map(strip) }
+  return {
+    dir,
+    phase: qualifiedPhase(IMPLICIT_PHASE),
+    index: taskIndexPath(IMPLICIT_PHASE),
+    tasks: parseNotation(text).map(strip),
+    closed: new Map(),
+  }
 }
 
 // Write the tasks as units of R-01/P01-implement under dir (phase index and

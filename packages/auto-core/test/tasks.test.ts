@@ -25,6 +25,7 @@ import {
   subtasks,
   takenTaskIds,
   taskBody,
+  taskStatePaths,
   tickSubtask,
   UNITS_FILE,
 } from "../src/tasks"
@@ -162,6 +163,59 @@ describe("dependencies (M3.5)", () => {
       { text: "路由", done: true },
       { text: "鉴权", done: false, depends: "none", touches: ["src/auth/"] },
     ])
+  })
+})
+
+describe("closed tasks (plans/0053 D16)", () => {
+  // Add a line to a seeded task document's field block (after `Phase:`).
+  const withField = async (id: string, file: "todo.md" | "done.md", field: string) => {
+    const path = join(dir, "docs", id, file)
+    await Bun.write(path, (await Bun.file(path).text()).replace("Phase: R-01.P01\n", `Phase: R-01.P01\n${field}\n`))
+  }
+
+  test("an own closed task stays done and carries its reason", async () => {
+    await seedUnits(dir, SAMPLE)
+    await withField("T-001", "done.md", "Closed: superseded by T-002")
+    const plan = await loadPlan(dir, phase)
+    expect(plan.tasks[0]).toMatchObject({ id: "T-001", status: "done", closed: "superseded by T-002" })
+    expect([...plan.closed]).toEqual([["T-001", "superseded by T-002"]])
+    expect(plan.tasks.slice(1).some((task) => "closed" in task)).toBe(false)
+  })
+
+  test("closed external prerequisites named by Depends are read from their done.md", async () => {
+    await seedUnits(dir, "## T-001: a [done]\nA.\n\n## T-002: b [pending]\nB.\n")
+    await withField("T-001", "done.md", "Closed: obsolete")
+    // Done tasks of another phase (not in this index): one closed, one not.
+    await Bun.write(join(dir, taskStatePaths("T-050").complete), "# T-050: old\nClosed: dropped\n")
+    await Bun.write(join(dir, taskStatePaths("T-051").complete), "# T-051: kept\n")
+    await withField("T-002", "todo.md", "Depends: T-051, T-050, T-001")
+    const plan = await loadPlan(dir, phase)
+    // Own closures first, then external ones; a done external id without Closed: is absent.
+    expect([...plan.closed]).toEqual([
+      ["T-001", "obsolete"],
+      ["T-050", "dropped"],
+    ])
+  })
+
+  test("without closures the map is empty and no task has a closed key", async () => {
+    const plan = await seedUnits(dir, SAMPLE)
+    expect(plan.closed.size).toBe(0)
+    expect(plan.tasks.some((task) => "closed" in task)).toBe(false)
+  })
+
+  test("a Closed: line in todo.md means nothing", async () => {
+    await seedUnits(dir, SAMPLE)
+    await withField("T-003", "todo.md", "Closed: not yet")
+    const plan = await loadPlan(dir, phase)
+    expect(plan.closed.size).toBe(0)
+    expect(plan.tasks[2]).toMatchObject({ status: "pending" })
+    expect("closed" in plan.tasks[2]!).toBe(false)
+  })
+
+  test("next treats a closed task as done", async () => {
+    await seedUnits(dir, "## T-001: a [done]\nA.\n\n## T-002: b [pending]\nB.\n")
+    await withField("T-001", "done.md", "Closed: dropped")
+    expect(next(await loadPlan(dir, phase))!.id).toBe("T-002")
   })
 })
 

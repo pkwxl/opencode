@@ -57,6 +57,10 @@ export type Task = {
   id: string
   title: string
   status: Status
+  // The `Closed:` reason of a closed task (plans/0053 D16): done for
+  // scheduling but not delivered. Its status stays done — closed is
+  // orthogonal to status; the key is set only for a closed task.
+  closed?: string
   attempts: number
   // Fork base session of the fork-decompose pipeline (plans/0003 §4.2):
   // session mode = the decompose session id; digest mode = the base
@@ -89,6 +93,9 @@ export type Plan = {
   // Repository-relative path of the phase's task index.
   index: string
   tasks: Task[]
+  // Every closed task the plan's tasks name → its `Closed:` reason (D16): own
+  // closed tasks, then closed tasks of other phases named in `Depends:`.
+  closed: Map<string, string>
 }
 
 export const TASK_INDEX_NAME = "tasks.md"
@@ -269,10 +276,12 @@ function updateTask(dir: string, id: string, change: (entry: Runtime) => Runtime
 // runtime state. A missing index is an empty plan (the planning route). Throws
 // with fix-it guidance on an index problem line, a task directory with both or
 // neither of todo.md / done.md, or a dependency problem (unitProblems; a task
-// may name a task of this index or a completed task of any phase).
+// may name a task of this index or a completed task of any phase). Closures
+// (`Closed:` in a done.md field block) are read for the own tasks and for the
+// external `Depends:` ids, which are done tasks of other phases.
 export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
   const index = taskIndexPath(phase)
-  const plan: Plan = { dir, phase: qualifiedPhase(phase), index, tasks: [] }
+  const plan: Plan = { dir, phase: qualifiedPhase(phase), index, tasks: [], closed: new Map() }
   const text = await Bun.file(join(dir, index)).text().catch(() => undefined)
   if (text === undefined) return plan
   const parsed = parseIndex(text, "task")
@@ -301,6 +310,10 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
         "`Depends:` in docs/T-NNN/todo.md names tasks of this index or completed tasks (`Depends: none` for no prerequisite); fix it manually and re-run",
     )
   }
+  const own = new Set(parsed.entries.map((entry) => entry.id))
+  const external = [...new Set(decls.flatMap((decl) => (Array.isArray(decl.depends) ? decl.depends : [])))].filter((id) => !own.has(id))
+  const externalClosed = external.length ? (await scanUnitStates(dir, external.map(taskRef))).closed : new Map<string, string>()
+  for (const [id, reason] of [...scan.closed, ...externalClosed]) plan.closed.set(id, reason)
   for (const entry of parsed.entries) {
     const done = scan.done.has(entry.id)
     const doc = docs.get(entry.id)!
@@ -310,6 +323,7 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
       id: entry.id,
       title: unit.title || entry.title,
       status: done ? "done" : (runtime.status ?? "pending"),
+      ...(scan.closed.has(entry.id) ? { closed: scan.closed.get(entry.id)! } : {}),
       attempts: runtime.attempts ?? 0,
       ...(runtime.forkBase ? { forkBase: runtime.forkBase } : {}),
       body: taskBody(doc),
