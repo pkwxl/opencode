@@ -28,6 +28,16 @@ actual docs/ artifacts as the main input; no need to look for a task index.
   at their own phase directory's handover.md (a permanent path);
 - Phase index: this round's round directory's phases.md (docs/R-NN/phases.md).
 
+{{#if closedTasks}}
+## Closed tasks
+
+These tasks of this phase were closed without completing: they count as done for scheduling, but their deliverables
+were never produced. Record each one in "Key decisions" as not delivered, with its reason, and do not present its
+deliverables as available (not in "Required reading for the next phase", not in "Artifact index"):
+
+{{closedTasks}}
+
+{{/if}}
 ## Artifact
 
 Write the handover document to {{handover}} (its directory already created by the DRIVER, a permanent path — once
@@ -85,3 +95,5 @@ Never write a line starting with `Accepted:` — the sign-off `Accepted: yes` is
 3. The handover document must be self-contained: when a section references an artifact, give its permanent path
    relative to the target directory (docs/T-NNN/…, docs/R-NN/P<nn>-<type>/…) so the reader can locate it without
    cross-checking this prompt.
+
+<!-- auto: eof -->

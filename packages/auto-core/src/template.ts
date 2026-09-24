@@ -145,8 +145,16 @@ const registeredPartialMarkers: Record<string, string[]> = {}
 
 type Library = { dir: string | undefined; templates: Record<string, string>; partials: Record<string, string> }
 
+// A template file may close with the document terminator line (the doc-shape
+// mark an edited Markdown file ends with). It is file metadata, not prompt
+// text: loading drops it, so the rendered prompt is the same with or without it.
+// AUTO-RESOLVE: may a template file carry a trailing `<!-- auto: eof -->` line? -> yes, loading strips it (edited Markdown files must end with the terminator, while rendered prompts must stay byte-identical).
+const TEMPLATE_EOF = "<!-- auto: eof -->"
+
 function readTemplate(path: string): string {
-  return readFileSync(path, "utf8").trim()
+  const text = readFileSync(path, "utf8").trim()
+  const lines = text.split("\n")
+  return lines[lines.length - 1]!.trim() === TEMPLATE_EOF ? lines.slice(0, -1).join("\n").trim() : text
 }
 
 function readOverlayDir(dir: string): string[] {

@@ -237,6 +237,24 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     }
   })
 
+  test("a trailing document terminator line is file metadata, dropped on load", () => {
+    // Built-in: phase-handover.md ends with the terminator; the rendered prompt does not.
+    expect(renderTemplate("phase-handover", { handover: "handover.md" })).not.toContain("<!-- auto: eof -->")
+    const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
+    try {
+      const overlay = join(dir, ".opencode", "auto", "prompts")
+      mkdirSync(overlay, { recursive: true })
+      writeFileSync(join(overlay, "subtask.md"), "Custom subtask prompt: {{subtask}}\n\n<!-- auto: eof -->\n")
+      writeFileSync(join(overlay, "dryrun.md"), "End with `<!-- auto: eof -->`")
+      usePromptLibrary(dir)
+      expect(renderTemplate("subtask", { subtask: "A" })).toBe("Custom subtask prompt: A")
+      // Only a line holding the terminator alone is dropped; inline mentions stay prompt text.
+      expect(renderTemplate("dryrun", {})).toBe("End with `<!-- auto: eof -->`")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("handoff-steer override: pre-flip status literals are rejected, English loads (M3.7, open question 17)", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {

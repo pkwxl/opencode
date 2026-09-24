@@ -268,9 +268,49 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     for (const text of [
       renderPhaseHandover({ phase: L("a"), handover: "docs/R-01/P01-analysis/handover.md", next: "m 迁移实现" }),
       renderPhaseHandover({ phase: L("k"), handover: "docs/R-01/P03-knowledge/handover.md" }),
+      renderPhaseHandover({
+        phase: L("m"),
+        handover: "phase/handover.md",
+        closedTasks: [{ id: "T-006", title: "Port the parser", reason: "superseded" }],
+      }),
     ]) {
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
+  })
+
+  test("closed tasks (plans/0053 D16): listed with reasons, recorded as not delivered", () => {
+    const base = { phase: L("m"), handover: "phase/handover.md", next: "P03-test 测试" }
+    const text = renderPhaseHandover({
+      ...base,
+      closedTasks: [
+        { id: "T-006", title: "Port the parser", reason: "superseded by T-007" },
+        { id: "T-008", title: "Tune the cache", reason: "out of scope" },
+      ],
+    })
+    expect(text).toContain(
+      "## Closed tasks\n\n" +
+        "These tasks of this phase were closed without completing: they count as done for scheduling, but their deliverables\n",
+    )
+    expect(text).toContain(
+      "- T-006: Port the parser (closed without completing: superseded by T-007)\n" +
+        "- T-008: Tune the cache (closed without completing: out of scope)\n\n## Artifact\n",
+    )
+    expect(text).toContain('Record each one in "Key decisions" as not delivered, with its reason')
+    expect(text).toContain("do not present its\ndeliverables as available")
+    // The block sits between the input list and the artifact protocol; the four mandatory sections stay.
+    expect(text.indexOf("## Input (read-only)")).toBeLessThan(text.indexOf("## Closed tasks"))
+    expect(text.indexOf("## Closed tasks")).toBeLessThan(text.indexOf("## Artifact\n"))
+    for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
+      expect(text).toContain(section)
+    }
+
+    // No closures (key absent or empty list): nothing renders, byte-identical to the render without the key.
+    const plain = renderPhaseHandover(base)
+    expect(plain).not.toContain("## Closed tasks")
+    expect(plain).not.toContain("closed without completing")
+    expect(plain).toContain("phases.md).\n\n## Artifact\n")
+    expect(renderPhaseHandover({ ...base, closedTasks: [] })).toBe(plain)
+    expect(renderPhaseHandover({ ...base, closedTasks: undefined })).toBe(plain)
   })
 })
 

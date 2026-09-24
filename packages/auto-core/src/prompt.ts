@@ -384,7 +384,17 @@ export function renderNumberRecovery(input: { floor: number }): string {
 // acceptance = the phase's acceptance.md when its acceptance gate is on
 // (plans/0049 G7): the session also drafts it; what the draft holds is intent
 // (`## acceptance` / `### phase-acceptance-draft`).
-export function renderPhaseHandover(input: { phase: PhaseTypeEntry; handover: string; next?: string; acceptance?: string }): string {
+// closedTasks = the phase's tasks closed without completing (plans/0053 D16):
+// an optional block tells the distillation to record them as not delivered;
+// absent or empty renders nothing, so the output without closures is unchanged.
+export function renderPhaseHandover(input: {
+  phase: PhaseTypeEntry
+  handover: string
+  next?: string
+  acceptance?: string
+  closedTasks?: { id: string; title: string; reason: string }[]
+}): string {
+  const closed = input.closedTasks ?? []
   return renderPrompt("phase-handover", {
     phase: phaseTag(input.phase),
     phaseName: input.phase.name,
@@ -392,6 +402,9 @@ export function renderPhaseHandover(input: { phase: PhaseTypeEntry; handover: st
     next: input.next,
     acceptance: input.acceptance,
     acceptanceRules: input.acceptance ? intentText("acceptance", "phase-acceptance-draft", { acceptance: input.acceptance }) : undefined,
+    closedTasks: closed.length
+      ? closed.map((task) => `- ${task.id}: ${task.title} (closed without completing: ${task.reason})`).join("\n")
+      : undefined,
   })
 }
 
