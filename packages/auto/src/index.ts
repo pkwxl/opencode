@@ -19,6 +19,7 @@ import {
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
 import { applyFix, fixHint, formatFixPlan, planFix } from "@opencode-ai/auto-core/config-fix"
+import { closeUnit, type CloseChanges } from "@opencode-ai/auto-core/close"
 import { acquireRunLock, liveRunLock, lockLines, lockStatusLine } from "@opencode-ai/auto-core/lock"
 import { log, setInteractive, setLogFile, setVerbose } from "@opencode-ai/auto-core/log"
 import { ensurePointer } from "@opencode-ai/auto-core/agents-block"
@@ -63,14 +64,18 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--file/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
-// --max-sessions 带值(吞掉下一个 token;已退役的 --implement-file/--implement-prompt
-// 同样吞值,其参数不被当作目录,auto-core plans/0053 D13);
+// --max-sessions/--reason(close 专用)带值(吞掉下一个 token;已退役的
+// --implement-file/--implement-prompt 同样吞值,其参数不被当作目录,
+// auto-core plans/0053 D13);
 // --verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
-// 是布尔选项,出现即
+// 以及 --cascade/--commit-changes/--stash-changes(close 专用)是布尔选项,出现即
 // true,仅当紧随字面量 true/false 时才吞掉它。均支持
 // --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
-// --mode 另有短选项 -m(镜像 -p 的吞值规则)。
+// --mode 另有短选项 -m(镜像 -p 的吞值规则)。解析按整名精确匹配:--commit-changes
+// 与配置旗标 --commit 名字不同,互不误吞;close 的 ref 恒在前(positional[0]),
+// --commit 即使吞值也吞不到它(auto-core plans/0053 D20/F8,close 侧再以其配置旗标
+// 报文拦截)。
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -81,6 +86,7 @@ const VALUE_FLAGS = new Set([
   "subtask",
   "prompt",
   "file",
+  "reason",
   "permission",
   "idle-time",
   "idle-max",
@@ -91,7 +97,7 @@ const VALUE_FLAGS = new Set([
   "parallel",
   "max-sessions",
 ])
-const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force"])
+const BOOLEAN_FLAGS = new Set(["verbose", "interactive", "dryrun", "test-by-driver", "handover-test", "new-session", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "amend", "force", "cascade", "commit-changes", "stash-changes"])
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]!
   if (arg === "-i") {
@@ -142,7 +148,8 @@ for (let i = 1; i < args.length; i++) {
 }
 // 未知选项拦截: 白名单之外的旗标一律报错退出 1,防拼错被静默忽略。宪法级与
 // 历史选项对 init/continue/run/plan 有专属拦截报文,此处放行交由其后各自处理;
-// check/status 不接受任何选项,出现旗标即拒绝。
+// close 只接受自己的四个旗标,其余(含宪法级与 -p/--file)在下方 close 分支以
+// close 专属报文拒绝;check/status 不接受任何选项,出现旗标即拒绝。
 // Retired flags are usage errors with their own notice (mirroring the --commit
 // false retirement), let through the whitelist so the notice replaces "unknown
 // option": the completion-side mechanisms (D13, auto-core plans/0044), the
@@ -175,10 +182,39 @@ const FLAGLESS = command === "check" || command === "status"
 // fix takes its baseline from the existing config and no config flags, so it
 // accepts the same (plans/0052 D11).
 const RESET_FLAGS = new Set(["force"])
+// close (auto-core plans/0053 D22) takes only its four flags: --reason (a
+// value flag) and the booleans --cascade, --commit-changes, --stash-changes.
+// Everything else is refused with a close-appropriate message below — the
+// config flags with the frozen-by-init notice, -p/--file with plan's input
+// notice — mirroring RESET_FLAGS for reset/fix.
+const CLOSE_FLAGS = new Set(["reason", "cascade", "commit-changes", "stash-changes"])
 for (const key of flags.keys()) {
   if (command === "reset" || command === "fix") {
     if (RESET_FLAGS.has(key)) continue
     console.error(`unknown option --${key}: ${command} only accepts a directory argument and -f/--force`)
+    process.exit(1)
+  }
+  if (command === "close") {
+    if (CLOSE_FLAGS.has(key)) continue
+    // Retired flags keep their own notices below (they exit there).
+    if (key in RETIRED_FLAGS) continue
+    if (key === "commit") {
+      console.error(
+        "--commit is a config flag frozen by init (run's commit semantics; to change: opencode-auto amend <dir> --commit <value>, or edit that file directly) " +
+          "and it takes a value, so it would swallow whatever follows it; the close options for a dirty worktree are --commit-changes and --stash-changes",
+      )
+      process.exit(1)
+    }
+    if (CONFIG_FLAGS.includes(key)) {
+      console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly; close takes no config options`)
+      process.exit(1)
+    }
+    if (key === "prompt" || key === "file") {
+      console.error(`${key === "prompt" ? "-p/--prompt" : "--file"} is a plan option (the planning input: opencode-auto plan <dir> -p <text> | --file <path>); close takes no planning input`)
+      process.exit(1)
+    }
+    const similar = key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
+    console.error(`--${key} is not a close option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: close takes only --reason <text>, --cascade, --commit-changes and --stash-changes (usage: opencode-auto close <ref> [dir] --reason <text>)`)
     process.exit(1)
   }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
@@ -192,14 +228,58 @@ for (const [key, notice] of Object.entries(RETIRED_FLAGS)) {
     process.exit(1)
   }
 }
-const directory = resolve(positional[0] ?? ".")
+
+// close (auto-core plans/0053 D22): the ref is required, so it comes first —
+// positional[0] is the unit ref (R-NN | R-NN.P<nn> | T-NNN, closeUnit's
+// canonical shapes) and positional[1] the directory, overriding the global
+// directory rule for this command. The shape check is what makes the split
+// safe: a positional[0] that is not a ref means the ref is missing (the
+// directory alone, the natural mistake), never a directory silently taken as
+// the ref and closeUnit reading the wrong tree. closeUnit owns every
+// behavioural refusal (done or closed units, another round, the m-mode
+// phase, dependents, a dirty tree); the checks here are usage errors that
+// fire before anything is read.
+const CLOSE_REF = /^(?:R-\d{2,}|R-\d{2,}\.P\d{2,}|T-\d{3,})$/
+let closeRef: string | undefined
+if (command === "close") {
+  const ref = positional[0]
+  if (ref === undefined || !CLOSE_REF.test(ref)) {
+    console.error(
+      ref === undefined
+        ? "close requires a unit reference: opencode-auto close <ref> [dir] --reason <text> — a round R-NN, a phase R-NN.P<nn> or a task T-NNN"
+        : `${ref}: not a unit reference; expected a round R-NN, a phase R-NN.P<nn> or a task T-NNN (usage: opencode-auto close <ref> [dir] --reason <text>)`,
+    )
+    process.exit(1)
+  }
+  closeRef = ref
+  const reason = flags.get("reason")
+  if (reason === undefined) {
+    console.error("close requires --reason <text>: the one-line reason recorded in the Closed: field, the close commit and the phase handover")
+    process.exit(1)
+  }
+  if (!reason.trim()) {
+    console.error("--reason requires non-empty text (the close reason; the explicit ref and the reason are the confirmation — close asks for no other)")
+    process.exit(1)
+  }
+  if (reason.includes("\n")) {
+    console.error("--reason must be one line (it is the Closed: value and the close commit subject's tail); longer context belongs in the round brief or the plan")
+    process.exit(1)
+  }
+  const on = (key: string) => flags.has(key) && flags.get(key) !== "false"
+  if (on("commit-changes") && on("stash-changes")) {
+    console.error("--commit-changes and --stash-changes are mutually exclusive: pick one way to handle the uncommitted changes (folded into the close commit, or stashed)")
+    process.exit(1)
+  }
+}
+const directory = resolve(command === "close" ? positional[1] ?? "." : positional[0] ?? ".")
 
 // Legacy layout (M3.7, auto-core plans/0047 R3): an old-layout project is a
-// usage error before init/continue/amend/plan writes anything, status reads
-// anything or run starts (runAll and planPrelude repeat the check for other
-// shells). reset, fix and check stay available so an old tree can still be
-// de-initialized, repaired or inspected (fix touches only the config layer).
-if (command === "init" || command === "continue" || command === "amend" || command === "plan" || command === "status" || command === "run") {
+// usage error before init/continue/amend/plan/close writes anything, status
+// reads anything or run starts (runAll, planPrelude and closeUnit repeat the
+// check for other shells). reset, fix and check stay available so an old tree
+// can still be de-initialized, repaired or inspected (fix touches only the
+// config layer).
+if (command === "init" || command === "continue" || command === "amend" || command === "plan" || command === "close" || command === "status" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -210,8 +290,9 @@ if (command === "init" || command === "continue" || command === "amend" || comma
 // The run lock (auto-core plans/0053 D3): these commands write what a running
 // driver reads (config.json, the agent contract, the AGENTS.md block, the round
 // setup), so they refuse while another process holds .auto/run.lock; -f does
-// not override it. run takes the lock inside runAll; plan takes it itself
-// before its prelude and re-enters it through runAll.
+// not override it. run takes the lock inside runAll; plan and close take it
+// themselves — plan before its prelude (re-entered through runAll), close
+// around closeUnit — so neither joins this refusal list.
 if (command === "init" || command === "continue" || command === "amend" || command === "fix" || command === "reset") {
   const holder = liveRunLock(directory)
   if (holder) {
@@ -315,6 +396,68 @@ if (command === "plan") {
   process.exit(code)
 }
 
+// close (auto-core plans/0053 D22): close a unit — a task T-NNN, a phase
+// R-NN.P<nn> or a round R-NN — without completing it: done for scheduling,
+// never delivered, the reason recorded in a Closed: field, the close commit
+// and (for a phase) the driver-written mechanical handover. The explicit ref
+// and the required --reason are the confirmation, so there is no prompt, and
+// everything is reversible: the undo is `git revert` of the close commit,
+// printed in the output. The argument checks (ref shape, reason, the change
+// pair) ran above with the ref/directory split; closeUnit owns every
+// behavioural refusal. Exit codes: 0 closed; 1 refused or usage error; 2 the
+// close commit or the close-out check failed.
+// AUTO-DECISION (config load): reuse loadRunConfig, the strict load run and
+// plan share, instead of a phases/acceptanceGate-only reader. close needs
+// config.phases (the m-mode round/phase refusal) and config.acceptanceGate
+// (the skipped-gates record); the shared load adds only the mode check and
+// the fixHint, and a config that cannot load strictly leaves nothing to close
+// into — one strict loader is easier to keep honest than a second lighter
+// one. Like plan, a directory without config.json is refused outright rather
+// than closing with default values.
+if (command === "close") {
+  if (!(await Bun.file(join(directory, CONFIG_FILE)).exists())) {
+    const legacy = await legacyModeFallback(directory)
+    console.error(
+      `nothing to close: ${directory} has no ${CONFIG_FILE}; run opencode-auto init ${directory} first` +
+        (legacy !== undefined ? ` (or opencode-auto fix ${directory}, which writes it from the legacy .auto/config.json mode "${legacy}")` : ""),
+    )
+    process.exit(1)
+  }
+  const { config } = await loadRunConfig(directory)
+  // close holds the run lock itself (D3), so it is not in the refusal list
+  // above; status shows a live lock while this runs.
+  const lock = acquireRunLock(directory, "close")
+  if (!lock.ok) {
+    for (const line of lockLines(directory, lock.holder)) console.error(line)
+    process.exit(1)
+  }
+  const changes: CloseChanges | undefined =
+    flags.has("commit-changes") && flags.get("commit-changes") !== "false"
+      ? "commit"
+      : flags.has("stash-changes") && flags.get("stash-changes") !== "false"
+        ? "stash"
+        : undefined
+  const result = await closeUnit(directory, closeRef!, {
+    reason: flags.get("reason")!,
+    cascade: flags.has("cascade") && flags.get("cascade") !== "false",
+    changes,
+    phases: config.phases,
+    acceptanceGate: config.acceptanceGate,
+  })
+  lock.release()
+  for (const line of result.lines) (result.type === "closed" ? console.log : console.error)(line)
+  process.exit(result.type === "closed" ? 0 : result.type === "refused" ? 1 : 2)
+}
+
+// The amend hint of one config flag: how a person changes a key init froze.
+// Shared by run/plan's frozen-flag refusal and close's whitelist, so the hint
+// for a key is written once.
+function amendHint(key: string): string {
+  if (key === "auto-number" || key === "no-auto-number") return "opencode-auto amend <dir> --auto-number (use --no-auto-number to turn off)"
+  if (key === "wrapup" || key === "no-wrapup") return "opencode-auto amend <dir> --wrapup (use --no-wrapup to turn off)"
+  return `opencode-auto amend <dir> ${key === "mode" ? "-m" : `--${key}`} <value>`
+}
+
 // The options run and plan refuse alike (auto-core plans/0053 D14). 已固化选项
 // (设计文档 §C): 宪法级项目属性经 init 固化到 .opencode/auto/config.json,出现即
 // 用法错误(镜像 --commit-subtask 移除的既有先例);修订走 amend(plans/0052 D25)
@@ -330,14 +473,7 @@ function refuseFrozenFlags(command: "run" | "plan") {
   }
   for (const key of CONFIG_FLAGS) {
     if (flags.has(key)) {
-      const flag = key === "mode" ? "-m/--mode" : `--${key}`
-      const fix =
-        key === "auto-number" || key === "no-auto-number"
-          ? "opencode-auto amend <dir> --auto-number (use --no-auto-number to turn off)"
-          : key === "wrapup" || key === "no-wrapup"
-            ? "opencode-auto amend <dir> --wrapup (use --no-wrapup to turn off)"
-            : `opencode-auto amend <dir> ${key === "mode" ? "-m" : `--${key}`} <value>`
-      console.error(`${flag} was frozen by init (.opencode/auto/config.json). To change: ${fix}, or edit that file directly`)
+      console.error(`${key === "mode" ? "-m/--mode" : `--${key}`} was frozen by init (.opencode/auto/config.json). To change: ${amendHint(key)}, or edit that file directly`)
       process.exit(1)
     }
   }
@@ -1233,6 +1369,7 @@ console.error(`usage:
   opencode-auto continue [dir] [--phases <admtvk subsequence with m | type-id list>] [-p|--prompt <brief-text>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
+  opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto fix [dir] [-f|--force]
   opencode-auto reset [dir] [-f|--force]
@@ -1244,8 +1381,9 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block, and re-syncs the current round's unstarted phases after a --phases change. init --amend does the same and stays until plan takes over init's round step; continue is always amend
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
-       plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
-       run lock: run and plan hold .auto/run.lock while they work; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run or plan
+        plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
+        close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
+        run lock: run and plan hold .auto/run.lock while they work, and close holds it around its writes; init, continue, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt on init: project brief text, written to .opencode/auto/brief.md and consumed by phase planning sessions (init starts no AI sessions; on plan, -p is the planning input); without -p, init writes a stub there when the file is missing (## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning). State the migration source and target here — --source-dir/--source-path/--dest-dir are retired
