@@ -54,7 +54,7 @@ The canonical English term for each concept we discuss in Chinese. Code, comment
 | 全限定编号 | qualified id | `T-068.S01`, `R-01.P02` |
 | 字段块 | field block | `Phase:` / `Depends:` / `Touches:` lines in `todo.md` |
 | 就绪 | ready | `nextReady`: first unit not done whose dependencies are done |
-| 建轮 | round establishment | `establishRound` |
+| 建轮 | round establishment | `establishRound`, run by `plan`'s prelude (`plans/0053` D4) |
 | 轮关闭 | round close | `src/round-close.ts` |
 | 无阶段模式 | no-phase mode | The implicit `R-01/P01-implement` |
 | 流水线 | pipeline (task pipeline) | `runTask`: decompose → subtasks or whole → wrap-up → close-out |
@@ -256,14 +256,14 @@ Unit and outcome states:
 | 自动编号 | auto numbering | `--auto-number` |
 | 统计 | stats | `.auto/stats.json` |
 | 只读保护 | read-only guard | `src/protect.ts` |
-| 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run`, `plan` and `close` for the whole run (`runAll` re-enters the shell's lock); `init` / `continue` / `amend` / `fix` / `reset` refuse while it is live, `status` shows it first; a same-host lock whose process is gone is stale (`src/lock.ts`, `plans/0053` D1–D3) |
+| 运行锁 | run lock | `.auto/run.lock` (`pid`, `host`, `command`, `started`), held by `run`, `plan` and `close` for the whole run (`runAll` re-enters the shell's lock); `init` / `amend` / `fix` / `reset` refuse while it is live, `status` shows it first; a same-host lock whose process is gone is stale (`src/lock.ts`, `plans/0053` D1–D3) |
 | 生命周期命令 | lifecycle command | `plan` and `close` (with `plan --append` / `--force-close`): the commands that move a round's lifecycle (`plans/0052`, `plans/0053`) |
 | 配置层 | config layer | What `init` writes and `reset` removes |
-| 全量覆盖 | full overwrite | `init` without `--amend`; its baseline read drops retired keys and names them (`loadOverwriteBaseline`, `plans/0052` D4) |
+| 全量覆盖 | full overwrite | `init` (its only semantics); the baseline read drops retired keys and names them (`loadOverwriteBaseline`, `plans/0052` D4) |
 | 已退役键 | retired key | A config key that fails loading strictly: `commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir` (`RETIRED_KEYS` in `src/config.ts`) |
 | 墓碑键名 | tombstone key name | A retired key's name, reserved for good and never reused with a new meaning: `source`, `destDir` (`plans/0052` D3) |
 | 先校验后写盘 | validate, then write | `init` finishes every check before its first write (`plans/0052` D7) |
-| 增量修订 | amend | Change the named config keys, keep the rest: the `amend` command (`plans/0052` D25); `init --amend` does the same until P3c |
+| 增量修订 | amend | Change the named config keys, keep the rest: the `amend` command (`plans/0052` D25); `init --amend` and the `continue` command retired with P3c (`plans/0053`) |
 | 配置修复 | config fix | The `fix` command: repair the config layer by rule, never resetting a key (`src/config-fix.ts`, `plans/0052` D10–D11) |
 | 可修复 / 需人工 | fixable / manual | The two classes of a config-fix finding: deterministic and meaning-preserving, applied by `fix` / reported only, left to a person (`FixFinding.class`) |
 | 强制关闭 | force-close | `plan --force-close <ref> --reason <text>`: close a unit inside `plan`, then continue planning in the same process (`plans/0053` D28) |

@@ -29,7 +29,7 @@ const BUILD_TIMEOUT_MS = 30 * 60 * 1000
 const BUILD_TAIL_LINES = 20
 
 export type RoundClose = {
-  // Blocking: the next round does not start while any is listed.
+  // Blocking: plan refuses to open the next round while any is listed.
   problems: string[]
   // Advisory: bare task-id mentions, a skipped build.
   warnings: string[]
@@ -87,7 +87,7 @@ export function roundCloseLines(close: RoundClose): string[] {
     return ["✓ round close checks passed", ...close.warnings.map((warning) => `  ⚠ ${warning}`)]
   }
   return [
-    "⚠ round close checks: the next round cannot open until these are fixed",
+    "⚠ round close checks: plan will refuse to open the next round until these are fixed",
     ...close.problems.map((problem) => `  ✗ ${problem}`),
     ...close.warnings.map((warning) => `  ⚠ ${warning}`),
   ]

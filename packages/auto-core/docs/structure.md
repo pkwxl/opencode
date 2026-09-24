@@ -46,7 +46,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 |---|---|---|
 | Phase-type registry | Builtin types and their `--phases` preset letters (admtvk), decompose template, duties key, standard artifacts, gate; phases-value resolution | `src/phases/registry.ts` (0047 §5) |
 | Custom phase types | `.opencode/auto/phases/<type>.md` loader | `src/phases/custom.ts` |
-| Phase state machine | Round `docs/R-NN/phases.md` index + `P<nn>-<type>/` directories, routing, `completePhase` (todo.md → done.md), round establishment | `src/phases.ts` (0006, 0047 §3–§4, 0048) |
+| Phase state machine | Round `docs/R-NN/phases.md` index + `P<nn>-<type>/` directories, routing, `completePhase` (todo.md → done.md), round establishment, phase-index drift detection | `src/phases.ts` (0006, 0047 §3–§4, 0048, 0053 D34) |
 
 ### document — what the files in the target directory mean
 
@@ -123,7 +123,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Handover recovery | `.auto/handover.json` breakpoints of a test handover | `src/handover.ts` (0023 §I–§N) |
 | Numbering | `--auto-number`, `.auto/next-task` | `src/numbering.ts` (0001) |
 | Stats | Cross-interruption cumulative time and tokens, `.auto/stats.json` | `src/stats.ts` (0019) |
-| Round close | Whole-tree P1 scan, build check, close listing before `continue` | `src/round-close.ts` (0049) |
+| Round close | Whole-tree P1 scan, build check, close listing before `plan` opens the next round | `src/round-close.ts` (0049) |
 
 ### Git and scripts
 

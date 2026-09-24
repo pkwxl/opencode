@@ -164,7 +164,7 @@ describe("planPrelude: round setup (rows 1–2, D5)", () => {
       if (refused.type !== "stop") return
       expect(refused.code).toBe(2)
       expect(refused.lines[0]).toBe("⏸ round R-01 does not pass its round-close checks, so round R-02 cannot open yet")
-      expect(refused.lines[1]).toBe("⚠ round close checks: the next round cannot open until these are fixed")
+      expect(refused.lines[1]).toBe("⚠ round close checks: plan will refuse to open the next round until these are fixed")
       expect(refused.lines.at(-1)).toBe(`next: fix them, commit, then re-run: opencode-auto plan ${dir}`)
       expect(await exists(dir, "docs/R-02")).toBe(false)
       writeFileSync(join(dir, "docs/R-01/round.md"), FILLED_CLOSE)

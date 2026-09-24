@@ -6,6 +6,7 @@
 // ⊘ closed (plans/0053 D16: done for scheduling, not delivered), ▶ current /
 // in progress, ⏸ blocked.
 import { currentPhase, currentRound, phaseIndexPath, phaseLabel, readPhases } from "./phases"
+import { shellProfile } from "./shell"
 import { loadPlan, type Task } from "./tasks"
 
 const TASK_MARK: Record<Task["status"], string> = { pending: " ", in_progress: "▶", blocked: "⏸", done: "✓" }
@@ -29,7 +30,9 @@ export async function renderStatus(dir: string): Promise<string[]> {
   } catch (error) {
     return [`⚠ ${error instanceof Error ? error.message : String(error)}`]
   }
-  if (!state) return [`⚠ phase index ${phaseIndexPath(round)} is missing; run opencode-auto init to establish the round`]
+  // plan owns the rounds (plans/0053 D31): the pointer names it, with the bin
+  // from the shell profile.
+  if (!state) return [`⚠ phase index ${phaseIndexPath(round)} is missing; run ${shellProfile().bin} plan to establish the round`]
   const current = currentPhase(state)
   lines.push(`R-${String(round).padStart(2, "0")} (${state.done.size}/${state.phases.length} phases done)`)
   for (const phase of state.phases) {

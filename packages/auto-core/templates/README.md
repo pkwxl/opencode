@@ -1,6 +1,6 @@
 # opencode-auto target directory template
 
-Copy the two files in this directory to the target project root (init generates them together with the round directory):
+Copy the two files in this directory to the target project root (init writes them into the target directory; the rounds under `docs/` are plan's — `plan` establishes them):
 
 - Task units (not template files; written by a planning session or by hand): one `docs/R-NN/` per round, and under it one
   `P<nn>-<type>/` per phase; the phase's task index `tasks.md` has one line per task, `- [ ] T-NNN <title>`;

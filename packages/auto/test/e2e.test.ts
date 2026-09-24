@@ -1079,7 +1079,7 @@ describe("CLI: --implement-file/--implement-prompt retired (plans/0053 D13)", ()
         const refused = await runCli([...args])
         expect(refused.code).toBe(1)
         expect(refused.err).toContain(
-          `--${flag} is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after init and the round-start commit)`,
+          `--${flag} is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)`,
         )
       }
       expect(await readdir(dir)).toEqual([])

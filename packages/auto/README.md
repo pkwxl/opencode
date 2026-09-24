@@ -35,11 +35,9 @@ bun run packages/auto/src/index.ts <子命令> ...
 ## 使用
 
 ```sh
-opencode-auto init [dir]     # 建立轮次目录 docs/R-01/(阶段索引 + 阶段目录),生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,把项目配置固化到 .opencode/auto/config.json,在 AGENTS.md 幂等同步单一 opencode-auto 标记块,并把 driver 工作目录(tmp/、.auto/)、本地私有文件(/.gitignore、/.env、/AGENTS.md、/opencode.json)与目录树内的嵌套 git 仓库写进 .gitignore 忽略规则
-opencode-auto init [dir] -p "<需求描述>"   # 把项目意图写入 .opencode/auto/brief.md,由阶段规划会话消费(init 不启动 AI 会话)
+opencode-auto init [dir]     # 初始化项目配置层:把项目配置固化到 .opencode/auto/config.json,生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,在 AGENTS.md 幂等同步单一 opencode-auto 标记块,并把 driver 工作目录(tmp/、.auto/)、本地私有文件(/.gitignore、/.env、/AGENTS.md、/opencode.json)与目录树内的嵌套 git 仓库写进 .gitignore;不写 docs/——轮次目录由 plan 建立
 opencode-auto amend [dir] --<键选项> <值> ...   # 只改写给出的配置键,其余保留(至少一个键;无配置即拒绝),见"修订(amend)"
 opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名/迁入 brief.md,契约、AGENTS.md 块、.gitignore 与配置对齐,见"配置修复(fix)"
-opencode-auto continue [dir] # 续轮迁移: 上一轮阶段化迁移全部完成后建立新一轮轮次目录、开启新一轮(见"阶段化流程")
 opencode-auto plan [dir] [-p "<规划输入>" | --file <路径>]   # 规划当前阶段的任务并停在执行前供人工评审;轮未建立时先建轮(打印轮首门禁),轮完成后经轮关闭检查开下一轮(见"规划与轮次生命周期(plan)")
 opencode-auto run [dir]      # 按当前阶段的任务索引逐任务自动执行(agent/提交等语义来自项目配置)
 opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
@@ -47,8 +45,24 @@ opencode-auto check [dir]    # 检查 AGENTS.md 与任务文档中违背验证/�
 opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → 阶段 → 任务 → 子任务树
 ```
 
-`init` 对已存在的 opencode.json 与已写入的轮次目录一律跳过;`.opencode/agent/auto.md` 与内置
-模板不一致时总是替换,保证 agent 契约为最新版本。
+新项目流程(`init` → `plan` → 填写并提交 → `plan`(可选)→ `run`):
+
+```sh
+opencode-auto init <dir> --phases "admtvk"   # 1. 固化项目配置(init 只写配置层,不建轮次目录)
+opencode-auto plan <dir>                      # 2. 建立 docs/R-01/(阶段索引 + 阶段目录 + 轮简报桩),停在轮首门禁
+#                                              3. 人工:审阅轮次设置、填写 docs/R-01/round.md(目标/验收/发布判据),提交
+opencode-auto plan <dir> -p "首轮:把 legacy/pkg 迁移到 app/"   # 4. 可选:带规划输入规划 P01(也可手工在 tasks.md 列任务)
+opencode-auto run <dir>                       # 5. 逐阶段执行;每轮完成后填 ## Close 再 plan 开下一轮
+```
+
+`m` 模式(缺省单次运行)同理:`init` → `plan`(建立隐式单阶段 `R-01/P01-implement`,停在轮首门禁)→
+提交 → `plan -p`(可选,见[由 AI 规划任务](#由-ai-规划任务))或手工在 `tasks.md` 列任务 → `run`。
+`init` 的 `-p`(改由直接编辑 `.opencode/auto/brief.md`)与 `--amend`(改用 `amend` 子命令)已退役;
+`continue` 子命令已退役(开下一轮就是 `plan`)。
+
+`init` 对已存在的 opencode.json 一律跳过;`.opencode/agent/auto.md` 与内置
+模板不一致时总是替换,保证 agent 契约为最新版本。轮次目录(`docs/R-NN/`)不是 init 的产物——
+由 `plan` 建立(见[规划与轮次生命周期(plan)](#规划与轮次生命周期plan))。
 
 `init` 写 `.opencode/auto/config.json` 的语义是**无状态全量覆盖**:产出仅由本次执行
 传入的参数决定,未给出的键一律回落内置缺省,不与磁盘上的旧配置做增量合并。于是
@@ -117,9 +131,8 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 2. **amend(增量修订)**:`opencode-auto amend <dir> --<flag> <值>`——仅命令行显式
    给出的键被改写,其余保留既有值;裸选项取该键缺省档(如 `amend --test-by-driver`
    即 `testByDriver: true`),见[修订(amend)](#修订amend)。旧写法
-   `init <dir> --amend --<flag> <值>` 语义相同,保留到 `plan` 接管 init 的建轮职责
-   为止(auto-core plans/0052 P3c);`continue` 恒为 amend。amend 会把已退役键原样
-   带过去,故严格装载,遇之即失败并指向 `fix`;
+   `init <dir> --amend --<flag> <值>` 与 `continue` 子命令均已退役(出现即报文指向
+   `amend` / `plan`)。amend 会把已退役键原样带过去,故严格装载,遇之即失败并指向 `fix`;
 3. **fix(按规则修复)**:`opencode-auto fix <dir>`——只修"读不进来或会悄悄失义"
    的键(已退役键删除/更名/迁入 brief.md),其余键原样保留,见
    [配置修复(fix)](#配置修复fix);
@@ -129,12 +142,12 @@ rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本�
 坏 JSON / 键值越界 / `mode` 未注册 → `run` 与 `init` 均以退出码 1 失败,报错指明
 键名与期望值域(严格失败优于静默回落);未知键忽略(前向兼容)。严格失败若属
 `fix` 能修的一类(已退役键、旧键名、仅有旧版 `.auto/config.json`),`run` /
-`amend` / `continue` / `init --amend` 的报文末尾追加一行
+`amend` / `init` 的报文末尾追加一行
 `fix: opencode-auto fix <dir>`,`status` 在 ⚠ 行下同样打印这一行。
 
-**init 先全量校验、再写盘**(auto-core plans/0052 D7):选项取值、空 `-p`、模式、
-前缀护栏、阶段目录同步(不丢已完成阶段、不删已有工作的阶段目录)、目标目录提示词库
-覆盖件(`.opencode/auto/prompts/`)与意图包的校验全部在第一次写盘之前完成——任一失败即退出码 1,配置层原样不动(不写
+**init 先全量校验、再写盘**(auto-core plans/0052 D7):选项取值、模式、前缀护栏
+(只读:不丢已完成阶段、不删已有工作的阶段目录;阶段索引的重同步归 `plan`)、
+目标目录提示词库覆盖件(`.opencode/auto/prompts/`)与意图包的校验全部在第一次写盘之前完成——任一失败即退出码 1,配置层原样不动(不写
 config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。目标目录在 git 仓库内时还有
 一道**提交能力前置校验**:统一提交是完成条件,仓库无法提交(未配置
 user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方法)——先
@@ -147,13 +160,14 @@ user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方
 | --- | --- |
 | 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"运行 `fix` 写出完整配置"(`fix` 以旧 mode + 缺省值写出新文件);init / fix 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没,由 `reset` 一并清理) |
 | 旧脚本 `run -m xxx` / `run --commit` 等 | 退出码 1 + 修订指引(breaking) |
-| 已退役选项 `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | init/continue/run 出现即退出码 1 + 退役说明(验收改为规划出的任务,报告结论行 `Result: FAIL` 停跑) |
-| 已退役选项 `--source-dir` / `--source-path` / `--dest-dir` | init/continue/run 出现即退出码 1 + 退役说明(迁移源与目标是意图,写进 `.opencode/auto/brief.md`) |
-| 存量配置含 `source` / `destDir` | `run` / `amend` / `init --amend` / `continue` 严格失败(`status` 打 ⚠ 行),报文给出原值与修法(抄进 brief.md 后删键)并指向 `fix`——`fix` 把原值迁入 brief.md 的 `## Source` / `## Target` 节后删键;无参 `init` 丢弃并打印原值后照常覆盖 |
+| 已退役选项 `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | 任何命令出现即退出码 1 + 退役说明(验收改为规划出的任务,报告结论行 `Result: FAIL` 停跑) |
+| 已退役选项 `--source-dir` / `--source-path` / `--dest-dir` | 任何命令出现即退出码 1 + 退役说明(迁移源与目标是意图,写进 `.opencode/auto/brief.md`) |
+| 存量配置含 `source` / `destDir` | `run` / `amend` / `init` 严格失败(`status` 打 ⚠ 行),报文给出原值与修法(抄进 brief.md 后删键)并指向 `fix`——`fix` 把原值迁入 brief.md 的 `## Source` / `## Target` 节后删键;无参 `init` 丢弃并打印原值后照常覆盖 |
+| 已退役选项 `init -p` / `--prompt`(init 不再写 brief)与 `--amend` | 出现即退出码 1 + 退役说明(前者指向 `.opencode/auto/brief.md` 与 `plan -p`,后者指向 `amend` 子命令);已退役子命令 `continue` 同样出现即退出码 1 + 退役说明(指向 `plan`) |
 | 未知的 `--` 选项(含拼错,如 `--next`) | 退出码 1 + 近似名提示(breaking;此前被静默忽略)。`check` / `status` 只接受目录参数,出现任何选项即拒绝;`reset` / `fix` 只接受目录参数与 `-f` |
 | 重复 `init`(无参数) | **全键回落缺省值**(breaking:此前为"配置不变");模板与标记块照常幂等 |
 | `init --test-by-driver true` 等带参 init | 给出的键按值写入,**未给出的键回落缺省** |
-| `amend --test-by-driver true`(或 `init --amend …`) | 仅改写显式给出的键,其余保留 |
+| `amend --test-by-driver true` | 仅改写显式给出的键,其余保留 |
 | 覆盖已存在配置且工作区脏 | 退出码 1 + 未提交文件清单(含嵌套仓库/子模块);`-f`/`--force` 跳过 |
 | 覆盖已存在配置且在交互式终端 | 提示确认 `[y/N]`,非 `y` 即取消且不做任何改动;非 TTY(CI/脚本)直接覆盖 |
 | 存量 PLAN.md(含 `verify:` / `verified:` / `final:` 字段行、`T-F<k>` 任务) | M3.4 起不再读取;把任务迁为任务单元(见[任务单元格式](#任务单元格式))后继续 |
@@ -167,7 +181,6 @@ user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方
 
 | 选项 | 说明 |
 | --- | --- |
-| `-p` / `--prompt <文本>` | 项目意图文本,整写覆盖到 `.opencode/auto/brief.md`(版本化、人工可编辑,重复 `init -p` 覆盖重写;无 `-p` 时文件缺失才写项目简报桩,既有文件保留),由每个阶段的规划会话消费;init 不启动任何 AI 会话。迁移源与目标也写在这里——`--source-dir` / `--source-path` / `--dest-dir` 已退役,出现即用法错误 |
 | `-m` / `--mode <name>` | 场景模式,写入配置的 `mode` 键(优先级: 显式值 > 既有配置值 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
 | `--agent opencode\|claude` | 驱动会话的编码 agent,写入配置的 `agent` 键(缺省 `opencode`,不写键;`--amend --agent opencode` 删除该键);其他取值为用法错误;见[agent 选择](#opencode-server-与-agent-选择) |
 | `--phases <admtvk 子序列含 m \| 阶段类型列表>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);已有完成阶段时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工回退阶段索引。见[阶段化流程](#阶段化流程--phases) |
@@ -178,25 +191,21 @@ user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方
 | `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
 | `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(缺省/裸选项 `false`),写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
 | `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
-| `--amend` | 切回增量修订语义:只改写命令行显式给出的键,其余保留既有配置(不给 `--amend` 时 init 为全量覆盖)。与 [`amend` 子命令](#修订amend)同义,保留到 `plan` 接管 init 的建轮职责为止(auto-core plans/0052 P3c);`continue` 恒为 amend,无须给该选项;`amend` 子命令给出即用法错误(冗余);`run` 出现即用法错误 |
-| `-f` / `--force` | 跳过覆盖确认与工作区干净度检查,供 CI 与自动化脚本(与 `reset` / `fix` 共用);`amend` / `run` 出现即用法错误(amend 不丢弃任何键,无覆盖确认可跳) |
 | `--auto-number` / `--no-auto-number` | 自动编号开关,写入配置的 `autoNumber` 键(缺省 `--auto-number` = 启用,`--no-auto-number` 为关闭用退出开关;两开关同现且均未带 `=false` 为用法错误):启用后任务编号(T-NNN)在目标目录永不重复,阶段规划会话自 `.auto/next-task` 记录续接编号,记录缺失时先恢复再继续。`phases = "m"` 的规划会话(见[由 AI 规划任务](#由-ai-规划任务))同样自该记录续接。详见[阶段化流程](#阶段化流程--phases) |
+| `-f` / `--force` | 跳过覆盖确认与工作区干净度检查,供 CI 与自动化脚本(与 `reset` / `fix` 共用);`amend` / `run` 出现即用法错误(amend 不丢弃任何键,无覆盖确认可跳) |
 
-以上写入配置的选项在缺省(全量覆盖)下"未给出即回落缺省值",加 `--amend` 后才是
-"显式给出的键才被改写";`-p` 的 brief.md 是独立文件,恒为整写覆盖且无 `-p` 时保留
-既有(不随配置的全量覆盖被清空;文件缺失时写项目简报桩),`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
-
-`continue` 子命令(续轮迁移)恒为 amend 语义,复用同一套模板/标记块维护,差异见
-[续轮迁移](#续轮迁移-continue):`--phases`、`-p` 与其余执行选项
-(`--agent`/`--context-limit`/`--subtask`/`--idle-time`/`--idle-max`/
-`--commit`/`--test-by-driver`/`--handover-test`/`--auto-number`/`--no-auto-number`)可按轮修订;`-m/--mode`
-跨轮固定,显式给出即用法错误(退出码 1)。
+以上写入配置的选项在 `init`(缺省即全量覆盖)下"未给出即回落缺省值";"显式给出的键才被改写"
+是 `amend` 子命令的语义(其 `-p`、`-f`、`--amend` 均为用法错误)。项目简报
+`.opencode/auto/brief.md` 是独立文件:`init` 在文件缺失时写项目简报桩,既有文件保留
+(不随配置的全量覆盖被清空);要给意图就直接编辑它——`init -p` 已退役(出现即报文指向
+该文件与 `plan -p`)。`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
+init 不写 `docs/`(轮次目录由 `plan` 建立),也不启动任何 AI 会话。
 
 ### 修订(amend)
 
 `opencode-auto amend [dir] --<键选项> <值> ...` 改写给出的配置键,其余键保留既有值
-(auto-core plans/0052 D25)——即 `init --amend` 的独立命令形态,接受的键选项与取值
-同 init(`-m/--mode`、`--agent`、`--subtask`、`--idle-time`、`--idle-max`、`--commit`、
+(auto-core plans/0052 D25;旧写法 `init --amend` 已退役,并入本命令),接受的键选项与
+取值同 init(`-m/--mode`、`--agent`、`--subtask`、`--idle-time`、`--idle-max`、`--commit`、
 `--context-limit`、`--phases`、`--test-by-driver`、`--handover-test`、
 `--auto-number`/`--no-auto-number`、`--wrapup`/`--no-wrapup`、`--parallel`),值域
 校验、`handoverTest` 搭配校验、阶段索引前缀护栏与 init 同源。
@@ -210,9 +219,9 @@ user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方
   `init`(仅有旧版 `.auto/config.json` 时另指向 `fix`,它按旧 mode 写出完整配置)。
 - **严格装载**:既有配置读不进来(已退役键、越界值等)即失败,不会把坏键带过去;
   属 `fix` 能修的一类时报文末尾追加 `fix:` 行。
-- **写什么**:config.json、agent 契约与 AGENTS.md 标记块(二者由配置渲染),并在
-  改了 `--phases` 时照常同步当前轮次尚未开始的阶段目录;`opencode.json`、
-  `.gitignore` 与 brief.md 桩归 `init` / `fix` 管,amend 不碰。
+- **写什么**:config.json、agent 契约与 AGENTS.md 标记块(二者由配置渲染)——不碰
+  轮次目录:改 `--phases` 时只做只读前缀护栏,索引与配置的差异作为漂移留给 `plan`
+  重同步;`opencode.json`、`.gitignore` 与 brief.md 桩归 `init` / `fix` 管,amend 不碰。
 - 成功时打印 `✓ amended (<给出的选项>)`,改动留在工作区,不提交——审阅后自行提交。
 
 ### 配置修复(fix)
@@ -319,7 +328,7 @@ user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方
 运行结束(含 Ctrl+C 强制退出)即删除;`plan` 同样持锁(command 记为 `plan`,内部经
 `runAll` 重入),`close` 亦持锁(command 记为 `close`)。另一进程持锁期间,`run`、
 `plan` 与 `close` 以退出码 `1` 拒绝并报出持锁者;
-`init`、`continue`、`amend`、`fix`、`reset` 会改写运行中的 driver 所读的文件,同样以 `1` 拒绝
+`init`、`amend`、`fix`、`reset` 会改写运行中的 driver 所读的文件,同样以 `1` 拒绝
 (`-f` 不越过运行锁);`check` 与 `status` 从不取锁,`status` 把活锁打印在首行
 (`▶ run in progress (pid 1234 on build-3, since …)`、`plan`/`close` 持锁时为
 `▶ plan in progress (…)`/`▶ close in progress (…)`)。持锁进程已不存在(如被 `kill -9`)的
@@ -365,19 +374,23 @@ opencode-auto run <dir>             # 评审(可直接编辑/勾销任务)后执
 ```
 
 - **不需要 AI 的路由先行(plan prelude)**,在取运行锁之后、启动任何会话之前裁决:
-  - **建轮**:当前轮 `docs/R-NN/` 未建立时,先(对上一轮)跑轮关闭检查,再建立本轮
-    目录并打印轮首门禁提示(next 行),退出码 `0`。`phases = "m"` 时同样建
-    `R-01/P01-implement`。
-  - **开下一轮**:上一轮全部完成时,先跑轮关闭检查(G8):不过 → 打印问题清单,
-    退出码 `2`;过 → 打印警告、建立新一轮并停在轮首门禁,退出码 `0`。
-    (此前 `continue` 承担开轮;`plan` 覆盖同一入口,`continue` 将于后续版本退役。)
-  - **提示即退出**:路由阻塞 → 退出码 `1`;阶段已规划完(`run` 去执行;无输入时
-    退出码 `0`,保持 `plan && run` 可连写)或 `m` 模式任务索引为空(提示手工列任务
-    或改用 `-p`/`--file`)→ 打印提示退出。轮完成且本轮无需规划时,提示填
-    `## Close` 后再 `plan` 开下一轮。
-  - **输入拒绝(任何写盘之前,退出码 `1`)**:轮未建立、轮已完成待开新轮,或目标
-    阶段已列有任务时,给出的规划输入不会被消费——报文指明「先无输入 `plan` 建轮、
-    提交设置、再带输入」。
+   - **建轮**:当前轮 `docs/R-NN/` 未建立时,先(对上一轮)跑轮关闭检查,再建立本轮
+     目录并打印轮首门禁提示(next 行),退出码 `0`。`phases = "m"` 时同样建
+     `R-01/P01-implement`。
+   - **开下一轮**:上一轮全部完成时,先跑轮关闭检查(G8):不过 → 打印问题清单
+     (逐条 `✗` 行,`plan` 拒绝开下一轮直到修复),退出码 `2`;过 → 打印警告、
+     建立新一轮并停在轮首门禁,退出码 `0`。
+   - **阶段索引漂移重同步**:配置 `phases` 在建轮后变更、当前轮又未完成时,重同步
+     未开始尾部的阶段目录(改动不提交,停下待评审后提交,退出码 `0`;带规划输入时
+     先拒绝——先无输入重同步、提交、再带输入)。`run` 不重同步:遇到漂移以退出码 `1`
+     停下并指向 `plan`。
+   - **提示即退出**:路由阻塞 → 退出码 `1`;阶段已规划完(`run` 去执行;无输入时
+     退出码 `0`,保持 `plan && run` 可连写)或 `m` 模式任务索引为空(提示手工列任务
+     或改用 `-p`/`--file`)→ 打印提示退出。轮完成且本轮无需规划时,提示填
+     `## Close` 后再 `plan` 开下一轮。
+   - **输入拒绝(任何写盘之前,退出码 `1`)**:轮未建立、轮已完成待开新轮,或目标
+     阶段已列有任务时,给出的规划输入不会被消费——报文指明「先无输入 `plan` 建轮、
+     提交设置、再带输入」。
 - **规划输入(planning input)**:`-p` 文本或 `--file` 文件内容(非空、二者互斥,
   `--file` 须为常规文件),由 driver 原样写入阶段目录的
   `docs/R-NN/P<nn>-<type>/plan-input.md`,**在规划单元开始前单独提交**;规划会话经
@@ -635,7 +648,7 @@ plans/0044-completion-side-retirement-design.md):检查与验收是**规划出�
   任务(auto 模式下给该任务手工追加检查项属非法子任务状态,修复一律规划成任务);
   随后重新运行。直接重跑被阻塞的任务只会重跑收尾、重写结论行。
 
-退役选项在 init/continue/run 出现即退出码 1(附退役说明);配置 `verify: true`
+退役选项在任何命令出现即退出码 1(附退役说明);配置 `verify: true`
 严格失败;模型路由的 verify-*/review-*/final-plan 角色键同样报错。存量 PLAN.md(含其
 `verify:`/`verified:`/`final:` 字段行与 `T-F<k>` 任务)自 M3.4 起不再读取;
 遗留的 `.auto/verify.md`、`.auto/review.md`、`tmp/verify.*` 不做清理。
@@ -862,7 +875,7 @@ driver 两路采集:① 会话真发了问、被自动答复回落的(人工在 
 
 ## 阶段化流程(--phases)
 
-`--phases <admtvk 子序列含 m | 阶段类型列表>`(`init` / `continue` 接受,写入配置的
+`--phases <admtvk 子序列含 m | 阶段类型列表>`(`init` / `amend` 接受,写入配置的
 `phases` 键;缺省 `"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致)把迁移类
 长流程拆为阶段。取值有两种形态:
 
@@ -901,13 +914,13 @@ Split by attack surface.
 未知类型键在 run 启动时报用法错误。
 
 - **brief.md**:项目简报 `.opencode/auto/brief.md`(版本化、人工可编辑),由每个
-  阶段的规划会话消费——它是项目级意图,a 阶段定下的基调 k 阶段同样需要。无 `-p`
-  的 `init` 在文件缺失时写一份**项目简报桩**(`## Goal` / `## Source` / `## Target`
+  阶段的规划会话消费——它是项目级意图,a 阶段定下的基调 k 阶段同样需要。`init`
+  在文件缺失时写一份**项目简报桩**(`## Goal` / `## Source` / `## Target`
   / `## Constraints` 四节,各节只有 HTML 注释提示;既有文件保留),人直接编辑填写;
   注入规划会话前剥掉注释,原样未填的桩不注入任何内容。各节标题只是脚手架,driver
-  不解析。`init -p "<项目意图>"` 则以该文本整写覆盖(重复 `init -p` 覆盖重写)。
-  `reset` 只在它逐字节等于桩时删除,填写过即保留。init 不启动任何 AI 会话(规划从
-  init 挪到 run 的阶段边界,规划会话才能感知各阶段产物)。
+  不解析。`reset` 只在它逐字节等于桩时删除,填写过即保留。init 不启动任何 AI 会话,
+  也不接受 `-p`(意图直接编辑该文件;带规划输入的是 `plan -p`,见
+  [由 AI 规划任务](#由-ai-规划任务))。
 - **迁移源与目标**:属项目意图,写进 brief.md(如「把 `legacy/pkg` 迁移到
   `app/`」),规划会话读 brief 时一并得到——不再是配置(auto-core plans/0052
   D1–D3,2026-09-23)。原 `--source-dir` / `--source-path` / `--dest-dir` 选项与
@@ -916,8 +929,8 @@ Split by attack surface.
   并删键(或无参 `init` 全量覆盖丢弃)。源系统大树仍可
   经软链接入工作目录,在 brief 里写链接路径即可。
 - **轮次专用目录 `docs/R-NN/`**:阶段化流程(`phases ≠ "m"`)的每一轮是一个自
-  包含轮次容器(R 后两位零填充,如 `R-01`,自然进位),轮首即建(init 建 `R-01`,
-  continue 建 `R-(N+1)`),其中一切**落盘即永久**——不改名、不改路径、不删除:
+  包含轮次容器(R 后两位零填充,如 `R-01`,自然进位),轮首即建(`plan` 建:首轮
+  `R-01`,上一轮完成并通过轮关闭检查后 `R-(N+1)`),其中一切**落盘即永久**——不改名、不改路径、不删除:
   阶段索引 `phases.md`、每个阶段
   一个**阶段目录** `P<nn>-<类型>/`(如 `P01-analysis/`,见下)、轮首 AGENTS.md
   快照 `AGENTS.md.bak`(`.bak` 后缀避免被当指令自动加载)、前置知识 `prior-kb.md`。
@@ -945,9 +958,11 @@ Split by attack surface.
   - [ ] P03 test
   ```
 
-- **前缀护栏**:已有完成阶段时 `init --phases` 的新值必须以已完成阶段(按索引序
-  的预置字母)为前缀,否则报错(退出码 1)——防止 amend 把流程状态打成不可推导;
-  兼容的新值只重写尾部尚未开始、且目录内只有 `todo.md` 的阶段。索引行无法解析、
+- **前缀护栏(只读)**:当前轮未完成且已有完成阶段时,`init` / `amend` 的
+  `--phases` 新值必须以已完成阶段(按索引序)为前缀,否则报错(退出码 1)——防止
+  把流程状态改成不可推导;当前轮已完成时护栏放开,新值作用于 `plan` 建立的下一轮。
+  兼容的新值不再当场改写索引:索引与新值的差异作为**漂移**由 `plan` 重同步(重写
+  尾部尚未开始的阶段目录,`run` 遇漂移退出码 1 并指向 `plan`)。索引行无法解析、
   类型未知或重复、阶段目录 `todo.md`/`done.md` 两者都有或都没有,同样为环境错误
   (退出码 1)。
 - **人工回退**:回退到某阶段 = ① 把该阶段及其后各阶段目录内的 `done.md` 改名回
@@ -1013,50 +1028,22 @@ Split by attack surface.
   编号),driver 以确定性扫描的下限校验其写入(小于下限视为无效,重试一次仍失败按
   隐性阻塞退出码 2)。
 
-### 续轮迁移(continue)
-
-一轮阶段化迁移**全部完成后**(阶段索引中全部阶段完成),`continue` 子命令开启
-新一轮继续迁移——目标是**让迁移结果与源系统更加完整、一致**(补齐上一轮的遗漏、
-对齐残余差距),而不是重做已完成的工作:
-
-```sh
-opencode-auto init <dir> --phases "admtvk" -p "把 legacy/pkg 迁移到 app/"
-opencode-auto run <dir>                       # 第 1 轮: a→d→m→t→v→k 全部完成
-opencode-auto continue <dir> --phases "admtvk" -p "第二轮聚焦补齐 API 覆盖差距"
-opencode-auto run <dir>                       # 第 2 轮
-```
-
-- **前置校验**:仅阶段化项目(`phases ≠ "m"`)且上一轮已全部完成;阶段索引缺失、
-  尚有未完成阶段、含 `phases` 之外的已完成阶段或项目非阶段化 → 退出码 1 并给指引(先跑 `run`
-  完成本轮,或按人工回退规程处理)。
-- **轮首建立(不再归档搬移)**:建立新一轮轮次目录 `docs/R-(N+1)/`——阶段
-  索引与阶段目录按新 `phases` 展开(新一轮从头规划,无现场可清)、根 `AGENTS.md` 快照写入轮内 `AGENTS.md.bak`(轮首一次性,
-  已存在不重写)。上一轮轮次目录 `docs/R-N/`(阶段索引、各阶段目录与其任务索引)
-  原样保留——落盘即永久,绝不搬移/删除。各步幂等,中断后重跑
-  `continue` 自然续完(轮目录已建 = 既有内容不重写)。
-- **结论注入**:新一轮**首个阶段规划会话**注入上一轮结论摘录——上一轮轮内
-  阶段目录索引 + 最后完成阶段的交接文档全文(阶段目录内 `handover.md`)+ 迁移
-  知识文档全文(knowledge 阶段目录内 `kb.md`;蒸馏产物仍是唯一通道,原始产物按
-  索引可达,轮目录就在工作目录内);后续阶段照常走本轮 handover 蒸馏链,
-  不重复注入。
-- **参数修订**:`--phases` 可为任何合法值(新一轮阶段全未完成,不受前缀护栏约束,
-  如第 2 轮改跑 `mtvk` 跳过分析与设计);`-p` 可换新一轮意图;`--agent`/
-  `--context-limit`/`--subtask`/`--idle-time`/`--idle-max`/`--commit`/
-  `--test-by-driver`/`--handover-test`/`--auto-number`/`--no-auto-number`
-  照常 amend。**跨轮固定**:`-m/--mode` 显式给出即用法错误——换模式不是"同一
-  迁移的继续",请在新目录 init 新项目。迁移源与目标在 brief.md 里,换它们同样
-  应另起新项目。
-- **与 `plan` 的关系**:轮完成后,`plan` 同样先跑轮关闭检查、再开下一轮并停在轮首
-  门禁(不带 `--phases`/`-p` 等参数修订;要按轮改参数仍用 `continue`,`continue`
-  将于后续版本退役并入 `plan`)。
+- **开下一轮(`plan`)**:一轮阶段全部完成后(`run` 退出码 `0`),填
+  `docs/R-NN/round.md` 的 `## Close` 节(列出哪些决策已重述进目标自身的文档、哪些
+  接受流失)并提交,再跑 `plan`:它先跑轮关闭检查(全树 P1 扫描、目标构建、
+  `## Close` 清单;不过 → 逐条列出,退出码 `2`,`plan` 拒绝开下一轮),通过后建立
+  `docs/R-(N+1)/`——阶段索引与阶段目录按配置的 `phases` 展开、根 `AGENTS.md` 快照
+  写入轮内 `AGENTS.md.bak`(轮首一次性,已存在不重写),停在轮首门禁等待审阅提交;
+  各步幂等,中断后重跑 `plan` 自然续完。新一轮的目标是补齐上一轮的遗漏、对齐残余
+  差距,而不是重做已完成的工作;上一轮轮次目录原样保留(落盘即永久)。跨轮改配置用
+  `amend`(当前轮已完成时前缀护栏放开,新值作用于 `plan` 建立的下一轮)。新一轮
+  首个阶段规划会话注入上一轮结论摘录(轮内阶段目录索引 + 最后完成阶段的交接文档
+  全文 + 迁移知识文档全文),后续阶段照常走本轮 handover 蒸馏链。回退新轮 = 删除
+  新轮目录 `docs/R-(N+1)/` 后重跑 `run`,即恢复上一轮完成态。`continue` 子命令已
+  退役(出现即报文指向 `plan`);`--continue` 不是任何命令的选项(出现即报错指引)。
 - **轮次推导**:当前轮 = `docs/` 下 `R-NN` 轮次目录最大编号(轮首即建,无 +1),
-  零新增持久化状态;无 `R-NN` 目录时按旧语义回落(`docs/phases/round-<N>` 归档
-  最大号 + 1),混合项目自然续号;`run` 的阶段进度行带轮次标注(如上),`status` 的树以 `R-NN` 开头。
-  `continue` 是 `init`/`run` 之外的独立子命令,`--continue` 不是选项(出现即报错
-  指引)。
-- **人工回退轮次**:回退续轮 = 删除新轮目录 `docs/R-(N+1)/` 后重跑 `run`,即恢复
-  上一轮完成态(上一轮
-  阶段索引与阶段目录从未被动过)。
+  零新增持久化状态;`run` 的阶段进度行带轮次标注(如上),`status` 的树以 `R-NN`
+  开头。
 
 > 阶段化流程的 P1..P4 已全部接入:P3 起,交接文档由蒸馏会话产出并注入下一阶段
 > 规划会话;P4 起,k(知识提炼)阶段整体认领原
@@ -1163,7 +1150,7 @@ Phase: R-01.P01
 
 `init --implement-file` / `--implement-prompt` 快捷模式已退役(auto-core plans/0053 D13):
 任何命令出现这两个选项即用法错误(退出码 1),报文指向
-`opencode-auto plan <dir> -p <text> | --file <path>`(先 `init` 并提交轮首设置;
+`opencode-auto plan <dir> -p <text> | --file <path>`(先 `plan` 建轮并提交轮首设置;
 见[规划与轮次生命周期(plan)](#规划与轮次生命周期plan))。
 `init` 不再启动 AI 会话,也不再因这两个选项把 `subtask` 缺省为 `ondemand`、`wrapup`
 缺省为关闭。

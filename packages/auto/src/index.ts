@@ -202,7 +202,7 @@ const COMPLETION_RETIRED =
   'Plan the checking as tasks (for example the v acceptance phase); a task report whose result line reads "Result: FAIL" stops the run'
 const MIGRATION_RETIRED =
   "is retired: the migration source and target are intent, not configuration — state them in .opencode/auto/brief.md, which planning sessions read"
-const IMPLEMENT_RETIRED = "is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after init and the round-start commit)"
+const IMPLEMENT_RETIRED = "is retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)"
 const INIT_PROMPT_RETIRED =
   "is retired: init no longer writes the project brief: edit .opencode/auto/brief.md (the stub is there); planning input is plan -p"
 const AMEND_FLAG_RETIRED =
@@ -1389,7 +1389,7 @@ async function phasesLine(directory: string): Promise<string> {
   const round = await currentRound(directory)
   try {
     const state = await readPhases(directory)
-    if (!state) return `⚠ phase index (${phaseIndexPath(round)}) is missing; run opencode-auto init to establish the round`
+    if (!state) return `⚠ phase index (${phaseIndexPath(round)}) is missing; run opencode-auto plan to establish the round`
     return `phases${round > 1 ? ` (round ${round})` : ""}: ${formatPhases(state)}`
   } catch (error) {
     return `⚠ phase index (${phaseIndexPath(round)}) is invalid: ${error instanceof Error ? error.message : String(error)}`
@@ -1447,7 +1447,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --agent opencode|claude the coding agent that runs every session (default opencode; claude = Claude Code headless, needs the claude CLI on PATH). The agent contract is always .opencode/agent/auto.md; the env var OPENCODE_AUTO_AGENT overrides the configured agent for a run
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
-       --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after init and the round-start commit)
+       --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
        continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} plan <dir> — it runs the round-close checks and opens the next round
 
 exit codes: 0 all complete; 1 usage/environment error (same when check finds principle-violating statements); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)

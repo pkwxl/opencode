@@ -176,7 +176,10 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
   // M3.6: phase types load per project (phases/custom).
   // M4.2: completePhase checks the phase gates (document/roles: result line,
   // acceptance mark); establishRound writes the round brief stub (round-brief).
-  phases: ["docpaths", "document/roles", "document/unit", "phases/custom", "phases/registry", "round-brief", "tasks"],
+  // P3c (0053 D35): the blocked pointer names `plan` with the profile's bin
+  // (shell) — the phases-domain text needs the shell-agnostic program name,
+  // the same seam the driver-plane modules already use.
+  phases: ["docpaths", "document/roles", "document/unit", "phases/custom", "phases/registry", "round-brief", "shell", "tasks"],
   docpaths: [],
   doccheck: [],
   protect: ["document/roles"],

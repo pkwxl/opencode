@@ -43,6 +43,7 @@ import {
 } from "./document/unit"
 import { renderRoundBrief } from "./round-brief"
 import { loadPlan, qualifiedPhase, tickIndexLine, type Plan } from "./tasks"
+import { shellProfile } from "./shell"
 import { loadPhaseTypes } from "./phases/custom"
 import {
   PHASE_LETTERS,
@@ -366,11 +367,9 @@ export async function routePhase(dir: string): Promise<PhaseRoute> {
   if (!state) {
     return {
       type: "blocked",
-      // AUTO-DECISION (minimal edit): the `continue` subcommand this named as
-      // the alternative opener retired, so only "(or continue)" was dropped;
-      // rewriting the remaining "init" advice to plan is the D35 message
-      // sweep's, which owns this string next.
-      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with opencode-auto init first`,
+      // plan owns the rounds (plans/0053 D31): the pointer names it, with the
+      // bin from the shell profile.
+      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with ${shellProfile().bin} plan first`,
     }
   }
   const phase = currentPhase(state)
