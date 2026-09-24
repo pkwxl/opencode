@@ -36,9 +36,14 @@ export function renderRoundBrief(round: number): string {
     "",
     ROUND_CLOSE_HEADING,
     "",
-    "<!-- Fill in before `continue`: list the decisions of this round that were restated into the target's own",
-    "     documentation, and the ones accepted as lost with the process documents. `continue` refuses while this",
-    "     section is empty. -->",
+    // AUTO-DECISION (wording): the hint named `continue` as the gate's
+    // enforcer; with the subcommand retired the gate is plan's (its prelude
+    // refuses to open the next round while this section is empty), so the
+    // hint names plan. The heading above stays the protocol; this text is a
+    // stripped comment hint only.
+    "<!-- Fill in before the next round: list the decisions of this round that were restated into the target's own",
+    "     documentation, and the ones accepted as lost with the process documents. `plan` refuses to open the next",
+    "     round while this section is empty. -->",
     "",
   ].join("\n")
 }

@@ -13,8 +13,8 @@
 //      mechanical criterion tells which rationale had to survive.
 // Two anchors: the complete route reports it on every run (loop-phase.ts), and
 // the next round's start blocks on it: plan's prelude (plan.ts, exit 2,
-// plans/0053 D4) and the shells' continue precheck until continue retires. No
-// state is written, so routing stays a pure function of the files.
+// plans/0053 D4). No state is written, so routing stays a pure function of
+// the files.
 import { join } from "node:path"
 import { roundBriefPath } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"

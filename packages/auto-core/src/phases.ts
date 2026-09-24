@@ -333,7 +333,11 @@ export async function routePhase(dir: string): Promise<PhaseRoute> {
   if (!state) {
     return {
       type: "blocked",
-      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with opencode-auto init (or continue) first`,
+      // AUTO-DECISION (minimal edit): the `continue` subcommand this named as
+      // the alternative opener retired, so only "(or continue)" was dropped;
+      // rewriting the remaining "init" advice to plan is the D35 message
+      // sweep's, which owns this string next.
+      reason: `phase index ${phaseIndexPath(await currentRound(dir))} is missing; establish the round with opencode-auto init first`,
     }
   }
   const phase = currentPhase(state)

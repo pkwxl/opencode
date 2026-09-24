@@ -207,9 +207,11 @@ export async function preflight(
   if (opts.commit !== false && !opts.dryrun) {
     const gate = await beginUnit(directory, opts, { id: "PLAN", title: "pre-run baseline close-out" })
     if (gate.type === "dirty") {
-      // The round-start gate (plans/0049 G1): init/continue leave the round
-      // setup uncommitted on purpose — committing it is the human's review of
-      // the round. Its mark is a phase index that git has never seen.
+      // The round-start gate (plans/0049 G1): the command that establishes
+      // the round (plan; init and continue did before their round steps
+      // retired) leaves the setup uncommitted on purpose — committing it is
+      // the human's review of the round. Its mark is a phase index that git
+      // has never seen.
       const round = await currentRound(directory)
       const index = phaseIndexPath(round)
       if (gate.files.includes(index) && !(await fileTracked(directory, index))) {
