@@ -25,7 +25,7 @@ import { templateRenders } from "./template"
 
 // 阶段索引(路由已校验过;此处再读只为取完成集与前后序,缺失/非法按空处理)。
 export async function phaseState(directory: string): Promise<PhaseState> {
-  return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set() }
+  return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set(), closed: new Map() }
 }
 
 // 阶段显示名(日志/提交标题): P02-design 设计

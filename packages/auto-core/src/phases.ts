@@ -149,6 +149,10 @@ export type PhaseState = {
   phases: PhaseUnit[]
   // Ids whose done.md exists.
   done: Set<string>
+  // Closed phases (plans/0053 D16): done ids whose done.md field block carries
+  // `Closed: <reason>` → the reason. Still done for scheduling (currentPhase,
+  // doneTypes), but not delivered.
+  closed: Map<string, string>
 }
 
 // Read a round's phase index and the state files of its phases (round defaults
@@ -195,7 +199,7 @@ export async function readPhases(dir: string, round?: number): Promise<PhaseStat
         "(`Depends:` in it names phases of this round); fix it manually and re-run",
     )
   }
-  return { round: n, index, phases, done: scan.done }
+  return { round: n, index, phases, done: scan.done, closed: scan.closed }
 }
 
 const phaseDecl = (unit: PhaseUnit): UnitDecl => ({ id: unit.id, ...(unit.depends !== undefined ? { depends: unit.depends } : {}) })
@@ -345,12 +349,12 @@ export async function routePhase(dir: string): Promise<PhaseRoute> {
   return { type: "plan", phase, plan }
 }
 
-// Phase progress line (run banner and status): ✓ = done, ▶ = current.
-export function formatPhases(state: Pick<PhaseState, "phases" | "done">): string {
+// Phase progress line (run banner and status): ✓ = done, ⊘ = closed (done
+// without delivering; replaces ✓), ▶ = current.
+export function formatPhases(state: Pick<PhaseState, "phases" | "done" | "closed">): string {
   const current = currentPhase(state)
-  return state.phases
-    .map((unit) => `${phaseLabel(unit)}${state.done.has(unit.id) ? "✓" : unit === current ? "▶" : ""}`)
-    .join(" ")
+  const mark = (unit: PhaseUnit) => (state.closed.has(unit.id) ? "⊘" : state.done.has(unit.id) ? "✓" : unit === current ? "▶" : "")
+  return state.phases.map((unit) => `${phaseLabel(unit)}${mark(unit)}`).join(" ")
 }
 
 // —— Rounds (plans/0006-phases-design.md §M; round-directory plan) ——

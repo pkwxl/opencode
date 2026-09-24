@@ -316,6 +316,23 @@ describe("formatPhases / currentPhase(阶段进度行)", () => {
       const done = (await readPhases(dir))!
       expect(formatPhases(done)).toBe("P01-analysis✓ P02-implement✓ P03-test✓")
       expect(currentPhase(done)).toBeUndefined()
+      expect(done.closed.size).toBe(0)
+    }),
+  )
+
+  test(
+    "⊘ = closed (done.md field block carries Closed:), replacing ✓; still done for scheduling",
+    withDir(async (dir) => {
+      const units = await syncPhaseIndex(dir, 1, "amt")
+      const analysis = units[0]!
+      rmSync(join(dir, analysis.dir, "todo.md"))
+      const closedDoc = renderPhaseTodo(analysis).replace("Type: analysis\n", "Type: analysis\nClosed: out of scope\n")
+      writeFileSync(join(dir, analysis.dir, "done.md"), closedDoc)
+      const state = (await readPhases(dir))!
+      expect(state.closed).toEqual(new Map([["P01", "out of scope"]]))
+      expect(state.done.has("P01")).toBe(true)
+      expect(formatPhases(state)).toBe("P01-analysis⊘ P02-implement▶ P03-test")
+      expect(currentPhase(state)).toEqual(units[1]!)
     }),
   )
 })
