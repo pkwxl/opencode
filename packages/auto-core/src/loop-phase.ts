@@ -24,6 +24,7 @@ import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
 import { statsPhase } from "./stats"
 import { stepPause } from "./step"
+import { loadPlan } from "./tasks"
 
 // 阶段交接(F 节,docs 永不移动): ① 蒸馏会话(AI 唯一职责,旁路一次性)产出
 // 阶段目录内的永久交接文档 docs/R-NN/P<nn>-<type>/handover.md(落定不移动)→
@@ -77,11 +78,15 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     log(`↻ handover document ${handover} is complete; skipping the distillation session, going straight to archiving`)
   } else {
     log(`▶ starting the handover distillation session to produce ${handover}${acceptance ? ` and the acceptance draft ${acceptance}` : ""}`)
+    // The phase's closed tasks are listed for the distillation as not delivered (plans/0053 D16); the route already
+    // validated the index, so a load failure only drops the list (an index-less phase has no tasks).
+    const plan = await loadPlan(directory, phase).catch(() => undefined)
+    const closedTasks = plan?.tasks.flatMap((task) => (task.closed === undefined ? [] : [{ id: task.id, title: task.title, reason: task.closed }]))
     let draftIssue: string | undefined
     const distilled = await requireArtifact(
       serverHandle.client,
       distillTask,
-      renderPhaseHandover({ phase: phase.entry, handover, next, acceptance }),
+      renderPhaseHandover({ phase: phase.entry, handover, next, acceptance, closedTasks }),
       {
         agent: agentName,
         dir: directory,

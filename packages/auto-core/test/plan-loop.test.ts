@@ -78,6 +78,8 @@ describe("plan's stop condition (plans/0053 D6)", () => {
       expect(await Bun.file(join(f.dir, "docs/R-01/phases.md")).text()).toContain("- [x] P01")
       expect(lines).toContain("✓ planned R-01.P02 implement: 1 task(s) in docs/R-01/P02-implement/tasks.md")
       expect(f.agent.prompts.map((p) => p.text.includes("You are the handover distiller"))).toEqual([true, false])
+      // No closed task: the distiller prompt carries no closed-tasks block.
+      expect(f.agent.prompts[0]!.text).not.toContain("## Closed tasks")
       await clean(f)
       openStepGone(f)
     },
@@ -151,6 +153,30 @@ describe("closed phases in phase planning (plans/0053 D16)", () => {
       },
     )
   }
+})
+
+describe("closed tasks in the handover distillation (plans/0053 D16)", () => {
+  test(
+    "the phase's closed task is listed for the distiller with its reason; delivered tasks are not",
+    async () => {
+      const f = await fixture("am")
+      const analysis = await f.phase(0)
+      await seedTasks(f, analysis, [["T-001", true], ["T-002", true]])
+      const q = qualifiedPhase(analysis)
+      const done = join(f.dir, "docs", "T-001", "done.md")
+      await Bun.write(done, (await Bun.file(done).text()).replace(`Phase: ${q}\n`, `Phase: ${q}\nClosed: superseded\n`))
+      await f.commit("analysis tasks")
+      const { code } = await f.run({ stopBefore: "execute" })
+      expect(code).toBe(0)
+      expect(has(f, join(analysis.dir, "done.md"))).toBe(true)
+      const distillers = f.agent.prompts.filter((p) => p.text.includes("You are the handover distiller"))
+      expect(distillers).toHaveLength(1)
+      const text = distillers[0]!.text
+      const block = text.slice(text.indexOf("## Closed tasks"), text.indexOf("## Artifact"))
+      expect(block).toContain("- T-001: task T-001 (closed without completing: superseded)")
+      expect(block).not.toContain("T-002")
+    },
+  )
 })
 
 describe("m-mode planning (plans/0053 D9, D12)", () => {
