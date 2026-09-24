@@ -96,6 +96,9 @@ const CLASSIFIED: Record<string, Domain> = {
   chain: "driver",
   check: "driver",
   clean: "driver",
+  // Closing units: closeUnit, the mechanical handover, the close commit
+  // (plans/0053 D17–D21).
+  close: "driver",
   conclusion: "driver",
   config: "driver",
   // Config fix: the rule table behind `fix` (plans/0052 D10).
@@ -208,6 +211,11 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "session",
     to: ["artifact"],
     why: "artifact → session is the sanctioned direction (requireArtifact calls runSession); nothing in session may call back into artifact",
+  },
+  {
+    from: "close",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session"],
+    why: "close is a deterministic driver command that starts no session (plans/0053 D17–D21); it must not import the loop or the session-driving layer",
   },
   {
     from: "plan",

@@ -23,10 +23,14 @@ import { log } from "./log"
 // 提交"的机器判据(单元收口校验据此检出外部提交)。目标目录所在仓库的提交另以
 // Auto-Nested 行记录**全部**嵌套仓库的最终(或最新)SHA——本轮有提交记新 SHA、
 // 无提交记单元基线 SHA,使任一 root 提交都能对齐跨仓库状态(提交边界 D4)。
-function message(subject: string, task: { id: string }, stage: string, nested: { rel: string; sha: string }[] = []): string {
+// body (plans/0053 D21): optional multi-line commit body between the subject
+// and the trailers (the close commit lists the units it closed). Absent, the
+// message is byte-identical to the bodyless format every existing commit uses.
+function message(subject: string, task: { id: string }, stage: string, nested: { rel: string; sha: string }[] = [], body?: string): string {
   return [
     subject,
     "",
+    ...(body ? [body.replace(/\s+$/, ""), ""] : []),
     `Auto-Task: ${task.id}`,
     `Auto-Stage: ${stage}`,
     ...nested.map((repo) => `Auto-Nested: ${repo.rel} @ ${repo.sha}`),
@@ -61,7 +65,7 @@ export type CommitResult = { ok: boolean; failures: { rel: string; error: string
 // git add -A + git commit,无改动跳过、非 git 环境整体跳过;单仓库失败计入
 // failures 返回(调用方按完成条件处置——门禁关闭的调用方忽略返回值即旧行为)。
 // subject 为标题行。
-export async function commitTree(dir: string, task: { id: string; title: string }, info: { stage: string; subject: string }): Promise<CommitResult> {
+export async function commitTree(dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }): Promise<CommitResult> {
   const roots = await repoRoots(dir)
   const subject = commitTitle(info.subject)
   const failures: { rel: string; error: string }[] = []
@@ -78,7 +82,7 @@ export async function commitTree(dir: string, task: { id: string; title: string 
       }
       // Auto-Nested 覆盖全部嵌套仓库(根仓库最后提交,届时各嵌套仓库已落定最终 SHA)。
       const nested = root === dir ? await nestedHeads(dir, roots) : undefined
-      const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", message(subject, task, info.stage, nested)])
+      const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", message(subject, task, info.stage, nested, info.body)])
       if (committed.code !== 0) {
         const error = firstLine(committed.err || committed.out) || `git commit exit code ${committed.code}`
         log(`  ⚠ git commit failed (${rel}): ${error} (changes left in the worktree)`)
@@ -113,6 +117,42 @@ export async function pendingChanges(dir: string): Promise<boolean> {
     if (await hasChanges(root)) return true
   }
   return false
+}
+
+// Short HEAD sha of the repository containing dir (undefined outside git or
+// before the first commit). The close command's undo pointer names it
+// (plans/0053 D21/D30: `git revert <sha>`).
+export async function headSha(dir: string): Promise<string | undefined> {
+  const got = await git(dir, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
+  const sha = got?.code === 0 ? got.out.trim() : ""
+  return sha || undefined
+}
+
+// The close command's stash option (plans/0053 D20): stash every change of
+// every repository root, nested repositories first, and report each created
+// stash with its `git stash list` line. Roots without changes are skipped; a
+// root where `git stash push` fails is reported as a failure so the caller can
+// refuse before writing anything.
+export async function stashTree(
+  dir: string,
+  message: string,
+): Promise<{ failures: { rel: string; error: string }[]; stashes: { rel: string; line: string }[] }> {
+  const failures: { rel: string; error: string }[] = []
+  const stashes: { rel: string; line: string }[] = []
+  for (const root of await repoRoots(dir)) {
+    if (!(await hasChanges(root))) continue
+    const pushed = await git(root, ["stash", "push", "--include-untracked", "-m", message])
+    if (pushed.code !== 0) {
+      const error = firstLine(pushed.err || pushed.out) || `git stash exit code ${pushed.code}`
+      log(`  ⚠ git stash failed (${relative(dir, root) || "."}): ${error}`)
+      failures.push({ rel: relative(dir, root) || ".", error })
+      continue
+    }
+    const listed = await git(root, ["stash", "list", "-n", "1"])
+    const line = listed.out.split("\n")[0]?.trim()
+    if (line) stashes.push({ rel: relative(dir, root) || ".", line })
+  }
+  return { failures, stashes }
 }
 
 // —— 单元提交边界(plans/0021-commit-boundary-design.md)——

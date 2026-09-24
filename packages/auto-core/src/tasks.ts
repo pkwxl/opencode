@@ -421,6 +421,15 @@ export async function markDone(plan: Pick<Plan, "dir" | "index">, id: string): P
   await updateTask(plan.dir, id, () => undefined)
 }
 
+// Drop the runtime entries of the given task ids (a closure clearing the
+// records of closed units, plans/0053 D19: a closed task never runs again, so
+// its attempts / fork base are dead state). Idempotent.
+export async function forgetUnits(dir: string, ids: readonly string[]): Promise<void> {
+  await updateUnits(dir, (units) => {
+    for (const id of ids) delete units.tasks[id]
+  })
+}
+
 // Tick the index line of a unit id (phases.md / tasks.md). Idempotent; a
 // missing file or line is left alone (the state file is the fact).
 export async function tickIndexLine(file: string, id: string): Promise<void> {
