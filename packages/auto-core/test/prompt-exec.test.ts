@@ -81,7 +81,7 @@ describe("renderDecompose", () => {
     expect(text).toContain("AUTO-DECISION")
   })
 
-  test("closed 任务(plans/0053 D16): done 清单里标 [closed] 并带原因,仍在「already done」之下", () => {
+  test("closed task (plans/0053 D16): the done list labels it [closed] with its reason, still under already done", () => {
     const closedPlan = {
       ...plan,
       tasks: plan.tasks.map((t) => (t.id === "T-001" ? { ...t, closed: "superseded" } : t)),
@@ -92,16 +92,17 @@ describe("renderDecompose", () => {
     expect(text).toContain(line)
     expect(text).not.toContain("[done] T-001")
     expect(text.indexOf("These tasks are already done, do not redo them:")).toBeLessThan(text.indexOf(line))
-    // 无 closure 的原夹具仍渲染 [done] 行
+    // The original fixture without closures still renders the [done] line
     expect(renderDecompose(plan, task)).toContain("- [done] T-001: 搭建 schema")
     expect(renderDecompose(plan, task)).not.toContain("[closed]")
   })
 
-  // 任务块的 closed 前置注记(plans/0053 D16): 每个已 closed 的有效前置(显式或隐式)追加一行 DRIVER 注记。
+  // Closed-prerequisite notes in the task block (plans/0053 D16): one DRIVER line per closed
+  // effective prerequisite (explicit or implicit).
   const note = (id: string, reason: string) =>
     `[DRIVER] Prerequisite ${id} was closed without completing (${reason}); do not assume its deliverables exist.`
 
-  test("closed 前置注记: 隐式前置(无 Depends:,前一任务)closed → 任务块正文后空一行追加注记", () => {
+  test("closed-prerequisite note: a closed implicit prerequisite (no Depends:, the previous task) → note after the body and a blank line", () => {
     const closedPlan = {
       ...plan,
       tasks: plan.tasks.map((t) => (t.id === "T-001" ? { ...t, closed: "superseded" } : t)),
@@ -114,7 +115,7 @@ describe("renderDecompose", () => {
     expect(text.split("[DRIVER] Prerequisite").length - 1).toBe(1)
   })
 
-  test("closed 前置注记: 显式外部前置 closed → 按 Depends: 顺序每个一行;非前置的 closed 任务不注记", () => {
+  test("closed-prerequisite note: closed explicit external prerequisites → one line each in Depends: order; a closed non-prerequisite gets none", () => {
     const closedPlan = {
       ...plan,
       tasks: plan.tasks.map((t) => (t.id === "T-003" ? { ...t, depends: ["T-050", "T-060", "T-001"] } : t)),
@@ -125,17 +126,17 @@ describe("renderDecompose", () => {
     }
     const current = closedPlan.tasks[2]!
     const text = renderDecompose(closedPlan, current)
-    // T-060 是前置但未 closed,不注记
+    // T-060 is a prerequisite but not closed: no note
     expect(text).toContain(`${current.body}\n\n${note("T-050", "scope dropped")}\n${note("T-001", "superseded")}`)
     expect(text).not.toContain("Prerequisite T-060")
-    // T-002 的有效前置只有隐式的 T-001;T-050 虽 closed 但不是它的前置
+    // T-002's only effective prerequisite is the implicit T-001; T-050 is closed but not its prerequisite
     const other = renderDecompose(closedPlan, closedPlan.tasks[1]!)
     expect(other).toContain(note("T-001", "superseded"))
     expect(other).not.toContain("Prerequisite T-050")
   })
 
-  test("closed 前置注记: closed 任务不是当前任务的前置 → 无注记;无 closure 时任务块逐字节不变", () => {
-    // T-003 无 Depends:,隐式前置是 T-002(未 closed);closed 的 T-001 不是它的前置
+  test("closed-prerequisite note: a closed task that is not a prerequisite → no note; without closures the task block is byte-identical", () => {
+    // T-003 has no Depends:; its implicit prerequisite is T-002 (not closed); the closed T-001 is not its prerequisite
     const closedPlan = {
       ...plan,
       tasks: plan.tasks.map((t) => (t.id === "T-001" ? { ...t, closed: "superseded" } : t)),
@@ -143,10 +144,10 @@ describe("renderDecompose", () => {
     }
     expect(prerequisites(closedPlan, "T-003")).toEqual(["T-002"])
     expect(renderDecompose(closedPlan, closedPlan.tasks[2]!)).not.toContain("[DRIVER] Prerequisite")
-    // 首个任务没有前置
+    // The first task has no prerequisites
     expect(prerequisites(closedPlan, "T-001")).toEqual([])
     expect(renderDecompose(closedPlan, closedPlan.tasks[0]!)).not.toContain("[DRIVER] Prerequisite")
-    // 无 closure: 任务块即标题 + 正文,其后不追加任何内容
+    // No closures: the task block is the title plus the body, with nothing appended
     const text = renderDecompose(plan, task)
     expect(text).not.toContain("[DRIVER] Prerequisite")
     expect(text).toContain(`# T-002: 实现迁移\n\n${task.body}`)
