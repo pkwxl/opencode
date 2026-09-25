@@ -26,6 +26,14 @@ export type PhaseLetter = (typeof PHASE_LETTERS)[number]
 export const PHASE_GATES = ["verdict", "acceptance"] as const
 export type PhaseGate = (typeof PHASE_GATES)[number]
 
+// Reasoning tiers (plans/0055 §3, §5): how much reasoning a session's work
+// needs. A tier is a property of the work, so the program declares it for its
+// builtin types and a project for its custom types; the operator's model
+// registry (src/models.ts) only lists which models serve each tier.
+// AUTO-DECISION: the tier vocabulary is declared here and re-exported by src/models.ts (the phases domain may not import the driver, and a phase type's execute tier, a custom type's `Reasoning:` value and the registry's tier lists must share one list of words)
+export const TIERS = ["deep", "simple"] as const
+export type Tier = (typeof TIERS)[number]
+
 export type PhaseTypeEntry = {
   // Type id: the `<type>` of a phase directory `P<nn>-<type>` (M3.3).
   type: string
@@ -56,6 +64,10 @@ export type PhaseTypeEntry = {
   hasTasks: boolean
   // The type's own completion gates (PHASE_GATES); empty = none.
   gates: PhaseGate[]
+  // Execute tier: the tier of this type's task sessions (`whole`, `subtask`);
+  // src/tier.ts defaultTier derives every session's default tier from it and
+  // the session's role. A custom type's is its `Reasoning:` field.
+  reasoning: Tier
   // Where the entry comes from; a project file is `.opencode/auto/phases/<type>.md`.
   origin: "builtin" | "project"
 }
@@ -67,6 +79,10 @@ export type PhaseKey = { id: string; entry: PhaseTypeEntry }
 
 const artifact = (path: string, label: string): ArtifactSpec => ({ path, label, role: "artifact" })
 
+// Execute tiers (plans/0055 §5): analysis and design are reasoning work, and
+// the acceptance verdict must not pass wrongly, so they are deep. Implement
+// runs small, specified subtasks from a deep decompose; test works against a
+// specified behavior and knowledge is extraction, so they are simple.
 export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
   {
     type: "analysis",
@@ -78,6 +94,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("analysis.md", "task analysis")],
     hasTasks: true,
     gates: [],
+    reasoning: "deep",
     origin: "builtin",
   },
   {
@@ -90,6 +107,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("design.md", "task design")],
     hasTasks: true,
     gates: [],
+    reasoning: "deep",
     origin: "builtin",
   },
   {
@@ -102,6 +120,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [],
     hasTasks: true,
     gates: [],
+    reasoning: "simple",
     origin: "builtin",
   },
   {
@@ -114,6 +133,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("test-log.md", "test log")],
     hasTasks: true,
     gates: [],
+    reasoning: "simple",
     origin: "builtin",
   },
   {
@@ -126,6 +146,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [artifact("verification.md", "task verification")],
     hasTasks: true,
     gates: ["verdict"],
+    reasoning: "deep",
     origin: "builtin",
   },
   {
@@ -138,6 +159,7 @@ export const BUILTIN_PHASE_TYPES: readonly PhaseTypeEntry[] = [
     taskArtifacts: [],
     hasTasks: false,
     gates: [],
+    reasoning: "simple",
     origin: "builtin",
   },
 ]

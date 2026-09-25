@@ -8,6 +8,7 @@
 //
 //   Tasks: yes                        optional; only yes (task-less types stay builtin)
 //   Gate: none                        optional; none | verdict | acceptance | verdict, acceptance
+//   Reasoning: deep                   optional; deep | simple, the execute tier (absent = deep)
 //   Phase-artifacts: threat-model.md  optional; standard artifacts in the phase dir
 //   Task-artifacts: review.md         optional; standard artifacts in each task dir
 //
@@ -26,7 +27,7 @@
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { parseUnitDoc } from "../document/unit"
-import { BUILTIN_PHASE_TYPES, PHASE_GATES, PRESET_FORM, type PhaseGate, type PhaseTypeEntry } from "./registry"
+import { BUILTIN_PHASE_TYPES, PHASE_GATES, PRESET_FORM, TIERS, type PhaseGate, type PhaseTypeEntry, type Tier } from "./registry"
 
 export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
 
@@ -34,7 +35,7 @@ export const PHASE_TYPE_DIR = join(".opencode", "auto", "phases")
 // P<nn>-<type> accepts it).
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
-const FIELDS = ["tasks", "gate", "phase-artifacts", "task-artifacts"] as const
+const FIELDS = ["tasks", "gate", "reasoning", "phase-artifacts", "task-artifacts"] as const
 const SECTIONS: Record<string, "planDuties" | "decomposeDuties"> = {
   "plan duties": "planDuties",
   "decompose duties": "decomposeDuties",
@@ -77,7 +78,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
   const name = lines[0]!.trim().replace(/^#\s+/, "")
   const unknown = Object.keys(doc.fields).filter((key) => !(FIELDS as readonly string[]).includes(key))
   if (unknown.length) {
-    throw new Error(`${where} has unknown field(s) ${unknown.join(", ")} (available: Tasks, Gate, Phase-artifacts, Task-artifacts)`)
+    throw new Error(`${where} has unknown field(s) ${unknown.join(", ")} (available: Tasks, Gate, Reasoning, Phase-artifacts, Task-artifacts)`)
   }
   const tasks = (doc.fields.tasks ?? "yes").toLowerCase()
   if (tasks === "no") {
@@ -85,6 +86,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
   }
   if (tasks !== "yes") throw new Error(`${where}: Tasks must be yes; got "${doc.fields.tasks}"`)
   const gates = gateList(where, doc.fields.gate)
+  const reasoning = reasoningTier(where, doc.fields.reasoning)
   const phaseArtifacts = artifactList(where, "Phase-artifacts", doc.fields["phase-artifacts"], RESERVED_PHASE_FILES)
   const taskArtifacts = artifactList(where, "Task-artifacts", doc.fields["task-artifacts"], RESERVED_TASK_FILES)
   const sections = parseSections(where, lines)
@@ -100,6 +102,7 @@ export function parsePhaseTypeFile(type: string, text: string): PhaseTypeEntry {
     taskArtifacts,
     hasTasks: true,
     gates,
+    reasoning,
     origin: "project",
   }
 }
@@ -114,6 +117,20 @@ function gateList(where: string, raw: string | undefined): PhaseGate[] {
     throw new Error(`${where}: Gate must be none or a comma list of distinct ${PHASE_GATES.join(" / ")}; got "${raw}"`)
   }
   return items as PhaseGate[]
+}
+
+// `Reasoning:` — the execute tier of the type's task sessions (plans/0055 §5).
+// Absent = deep: a custom type exists because its work is special, and the
+// conservative default costs money, not correctness. The field is project
+// content, versioned with the type file; the operator's model registry never
+// sets it (§3).
+// AUTO-RESOLVE: is the Reasoning value case-sensitive? -> no, `Deep` reads as deep (the Tasks and Gate values of the same field block are read case-insensitively, and the field names are too)
+// AUTO-RESOLVE: does an empty `Reasoning:` line mean the default? -> no, it fails like any other value that is not deep or simple (an empty Tasks or Gate value fails the same way; leaving the line out is how a file takes the default)
+function reasoningTier(where: string, raw: string | undefined): Tier {
+  if (raw === undefined) return "deep"
+  const value = raw.trim().toLowerCase()
+  if (!(TIERS as readonly string[]).includes(value)) throw new Error(`${where}: Reasoning must be ${TIERS.join(" or ")}; got "${raw}"`)
+  return value as Tier
 }
 
 // undefined = usable as a custom type id. Model-routing role words are reserved

@@ -314,7 +314,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 - Artifact declaration and subtask `todo.md` headings: `Artifacts:`, `## Scope`, `## Artifacts`
 - Task report: `Result: PASS` / `Result: FAIL`
 - Phase handover sections: `## Key decisions`, `## Constraints and pitfalls`, `## Required reading for the next phase`, `## Artifact index`
-- Unit field block: `Phase: R-NN.P<nn>`, `Depends:`, `Touches:`, `Closed: <reason>` (written by `closeUnit` only); custom phase type `Gate: acceptance`
+- Unit field block: `Phase: R-NN.P<nn>`, `Depends:`, `Touches:`, `Closed: <reason>` (written by `closeUnit` only); custom phase type `Gate: acceptance`, `Reasoning: deep` / `Reasoning: simple`
 - Knowledge-doc terminator `DONE`; refcheck exemption markers `deleted` / `archived` / `historical`
 - Language-neutral: `<!-- auto: eof -->`, `- [ ]` / `- [x]`, `AUTO-RESOLVE:`, `AUTO-DECISION:`, `AUTO-FIXME:`, `[DRIVER]`, `Auto-Stage:` / `Auto-Nested:` trailers
 - File and directory names: `todo.md` / `done.md`, `tasks.md`, `phases.md`, `subtasks.md`, `context.md`, `report.md`, `round.md`, `handoff.md` / `testhandoff-<n>.md`, `.auto/*`, `docs/T-NNN/`, `docs/R-NN/`, `S<nn>`
@@ -336,3 +336,5 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 | driver / agent / session | Our program / the coding agent it drives (opencode, claude) / one AI conversation with that agent. |
 | acceptance / verify, review | **acceptance** is the live term. The completion-side `verify` / `review` / `final-review` are retired (`plans/0044`); do not reintroduce them. |
 | 台账 | Only the proxy-answer ledger is live; the phase ledger is retired. |
+
+<!-- auto: eof -->

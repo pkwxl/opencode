@@ -158,6 +158,9 @@ const CLASSIFIED: Record<string, Domain> = {
   tasks: "driver",
   "templates.d": "driver",
   testrun: "driver",
+  // Default reasoning tiers of sessions (plans/0055 §5): the role table over
+  // the phase types' execute tiers; selection builds on it.
+  tier: "driver",
   "unit-commit": "driver",
   usage: "driver",
   watch: "driver",
@@ -234,6 +237,12 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "models",
     to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice"],
     why: "the model registry is read-only data loaded at run start (plans/0055 §4.1); selection, preflight and the models command build on it, so it must not import the loop, the session-driving layer or the agent start",
+  },
+  // AUTO-DECISION: tier gets a one-way rule besides its classification row (like models, it will be imported by selection below the session layer, so an upward import would form a cycle; the rule states that before the first consumer lands)
+  {
+    from: "tier",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "models"],
+    why: "a session's default tier is a pure function of its role and the phase type (plans/0055 §5); it must not import the loop, the session-driving layer, the agent start or the operator's model registry, which never decides a tier (§3)",
   },
   {
     from: "watch",

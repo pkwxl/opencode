@@ -896,6 +896,7 @@ driver 两路采集:① 会话真发了问、被自动答复回落的(人工在 
 # Security review
 
 Gate: verdict
+Reasoning: deep
 Phase-artifacts: threat-model.md
 Task-artifacts: review.md
 
@@ -909,7 +910,8 @@ Split by attack surface.
 ```
 
 标题行为显示名;字段块可选(`Tasks:` 只接受 `yes`——自定义类型恒有任务,无任务的
-知识提炼阶段只内置;`Gate:` 取 `none` / `verdict`;产物路径相对阶段/任务目录);
+知识提炼阶段只内置;`Gate:` 取 `none` / `verdict`;`Reasoning:` 取 `deep` / `simple`,声明该类型
+任务会话(整任务、子任务)所需的推理档,缺省 `deep`,随类型文件版本化;产物路径相对阶段/任务目录);
 `## plan duties` 必填(阶段规划会话的职责段),`## decompose duties` 可选(分解会话
 的职责段)。非法文件按用法错误报出并指明文件。`OPENCODE_AUTO_MODEL` 可按类型 id
 路由模型(`security-review=prov/model`,优先级 角色 > 类型 id > 预置字母 > `*`),

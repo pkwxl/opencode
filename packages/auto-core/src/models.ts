@@ -44,7 +44,7 @@ import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { checkTimeZone, DEFAULT_WINDOW_TZ, parseWindow, type ModelWindow } from "./model-window"
-import { PHASE_LETTERS } from "./phases/registry"
+import { PHASE_LETTERS, TIERS, type Tier } from "./phases/registry"
 import { shellProfile } from "./shell"
 import { MODEL_ROLES, SWITCH_ENV, type AgentChoice } from "./switches"
 
@@ -58,8 +58,9 @@ export const BUILTIN_ADAPTERS: readonly AgentChoice[] = ["opencode", "claude"]
 // The implied agent profile of a registry without one.
 export const IMPLIED_AGENT = "opencode"
 
-export const TIERS = ["deep", "simple"] as const
-export type Tier = (typeof TIERS)[number]
+// The tier words are declared with the phase types (a tier is a property of
+// the work, not of the fleet); the registry keys its tier lists by them.
+export { TIERS, type Tier }
 
 export type RegistryLayerName = "operator" | "project"
 

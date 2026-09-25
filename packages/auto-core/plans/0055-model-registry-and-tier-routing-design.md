@@ -1,6 +1,6 @@
 # 0055 — Model registry, reasoning tiers and multi-agent routing (design)
 
-Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); S1 has begun with the window module `src/model-window.ts` (§4.4) and the registry loader `src/models.ts` (§4.1–§4.3). Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
+Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); S1 has begun with the window module `src/model-window.ts` (§4.4), the registry loader `src/models.ts` (§4.1–§4.3) and the tier half of §5: the execute tier field, the `Reasoning:` field and `src/tier.ts`. Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
 
 ## 0. The request
 
@@ -240,6 +240,15 @@ Every session has a tier, derived from its routing role and the current phase ty
 - The builtin types' execute tiers become a field in the phase type registry (`src/phases/registry.ts`). The custom field is parsed with the other `.opencode/auto/phases/<type>.md` fields (`src/phases/custom.ts`). That field is project content: it is versioned and travels with the project, as §3 requires.
 - An operator's `routes` override any of these for their own machine (`"implement": "deep"` for a hard migration).
 - **Borrowing:** a simple session whose simple list has no usable model continues down the deep list (availability over cost). A deep session never borrows a simple model. It waits instead (§6.3), because quality is the reason it is deep (R3).
+- **Settled in S1 (the tier half).** These points are recorded as AUTO-RESOLVE / AUTO-DECISION lines where they live. Nothing reads a tier at dispatch yet; selection (§6) will be the first reader.
+  - **The field.** `PhaseTypeEntry.reasoning` holds the execute tier of every type.
+    - The tier words `TIERS` / `Tier` are declared in `src/phases/registry.ts`. The phases domain may not import the driver, so `src/models.ts` re-exports them rather than declaring its own.
+  - **The file field.** `Reasoning:` is read case-insensitively, like the `Tasks:` and `Gate:` values.
+    - An empty or other value fails with `phase type file <path>: Reasoning must be deep or simple; got "<value>"`.
+    - The field is registered as a new protocol literal in plans/0035.
+  - **The role table.** `defaultTier(entry, role)` in `src/tier.ts` takes the entry as `resolveModel` does: `opts.phase?.entry`, undefined in m mode, which then uses the `implement` type's tier.
+    - The table is typed over `ModelRole`, so a role word added to `MODEL_ROLES` without a tier fails the typecheck, and `test/tier.test.ts` fails too.
+    - `test/import-direction.test.ts` classifies `tier` as driver. A one-way rule keeps it from importing the loop, the session-driving layer, the agent start or `models`.
 
 ## 6. Selection
 

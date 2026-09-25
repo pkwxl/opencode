@@ -511,3 +511,20 @@ when init moves retired keys into the brief.
 - `CURRENT.md` stays in `git.ts` `DRIVER_STATE` only so that deletion
   carries over like any driver write; it is no longer a `driverState` role
   name or a protected file.
+
+## Amendment (2026-09-25, plans/0055 §5): the `Reasoning:` field
+
+A new English protocol literal, registered as new rather than flipped, so it
+has no dual-read. `parsePhaseTypeFile` (`src/phases/custom.ts`) reads it:
+
+- the field name `Reasoning:` in a custom phase type file, read
+  case-insensitively by `parseUnitDoc` like the M3.6 fields. Its values are
+  `deep` and `simple`, also read case-insensitively. It declares the type's
+  execute tier, the tier of its task sessions. An absent field means `deep`,
+  and any other value fails, naming the file and the field. The
+  unknown-field message lists it as available.
+
+No template, marker or builtin type file changes. The builtin types carry
+their execute tiers in the registry (`src/phases/registry.ts`), not in a file.
+
+<!-- auto: eof -->

@@ -14,6 +14,7 @@ const FULL = [
   "",
   "Tasks: yes",
   "Gate: verdict",
+  "Reasoning: simple",
   "Phase-artifacts: threat-model.md, `notes/scope.md`",
   "Task-artifacts: review.md",
   "",
@@ -47,6 +48,7 @@ describe("parsePhaseTypeFile", () => {
       taskArtifacts: [{ path: "review.md", label: "review.md", role: "artifact" }],
       hasTasks: true,
       gates: ["verdict"],
+      reasoning: "simple",
       origin: "project",
     })
   })
@@ -57,9 +59,15 @@ describe("parsePhaseTypeFile", () => {
     expect(parsePhaseTypeFile("review", "# Review\n\nGate: none\n\n## plan duties\n\nx\n").gates).toEqual([])
   })
 
-  test("minimal file → defaults: tasks, no gate, no artifacts, no decompose duties", () => {
+  test("Reasoning takes deep or simple, case-insensitively (plans/0055 §5)", () => {
+    expect(parsePhaseTypeFile("review", "# Review\n\nReasoning: deep\n\n## plan duties\n\nx\n").reasoning).toBe("deep")
+    expect(parsePhaseTypeFile("review", "# Review\n\nReasoning: simple\n\n## plan duties\n\nx\n").reasoning).toBe("simple")
+    expect(parsePhaseTypeFile("review", "# Review\n\nreasoning: Simple\n\n## plan duties\n\nx\n").reasoning).toBe("simple")
+  })
+
+  test("minimal file → defaults: tasks, no gate, deep reasoning, no artifacts, no decompose duties", () => {
     const entry = parsePhaseTypeFile("review", MINIMAL)
-    expect(entry).toMatchObject({ hasTasks: true, gates: [], phaseArtifacts: [], taskArtifacts: [] })
+    expect(entry).toMatchObject({ hasTasks: true, gates: [], reasoning: "deep", phaseArtifacts: [], taskArtifacts: [] })
     expect(entry.decomposeDuties).toBeUndefined()
     expect(entry.letter).toBeUndefined()
   })
@@ -71,7 +79,9 @@ describe("parsePhaseTypeFile", () => {
       ["# R\n\nTasks: maybe\n\n## plan duties\n\nx\n", /Tasks must be yes/],
       ["# R\n\nGate: strict\n\n## plan duties\n\nx\n", /Gate must be none or a comma list/],
       ["# R\n\nGate: verdict, verdict\n\n## plan duties\n\nx\n", /Gate must be none or a comma list/],
-      ["# R\n\nOwner: me\n\n## plan duties\n\nx\n", /unknown field\(s\) owner/],
+      ["# R\n\nReasoning: medium\n\n## plan duties\n\nx\n", /Reasoning must be deep or simple; got "medium"/],
+      ["# R\n\nReasoning:\n\n## plan duties\n\nx\n", /Reasoning must be deep or simple; got ""/],
+      ["# R\n\nOwner: me\n\n## plan duties\n\nx\n", /unknown field\(s\) owner \(available: Tasks, Gate, Reasoning, Phase-artifacts, Task-artifacts\)/],
       ["# R\n\nPhase-artifacts: ../out.md\n\n## plan duties\n\nx\n", /must be relative to the unit directory/],
       ["# R\n\nPhase-artifacts: /abs.md\n\n## plan duties\n\nx\n", /must be relative/],
       ["# R\n\nPhase-artifacts: handover.md\n\n## plan duties\n\nx\n", /driver-owned file name/],

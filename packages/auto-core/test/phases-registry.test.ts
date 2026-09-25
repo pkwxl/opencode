@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs"
 import {
   BUILTIN_PHASE_TYPES,
   PHASE_LETTERS,
+  TIERS,
   expandPhases,
   isPhaseLetter,
   phaseType,
@@ -74,6 +75,18 @@ describe("builtin phase types", () => {
         expect(spec.path).toMatch(/^[a-z][a-z0-9-]*\.md$/)
       }
     }
+  })
+
+  test("execute tiers follow plans/0055 §5: analysis, design and acceptance deep; the rest simple", () => {
+    expect(Object.fromEntries(BUILTIN_PHASE_TYPES.map((entry) => [entry.type, entry.reasoning]))).toEqual({
+      analysis: "deep",
+      design: "deep",
+      implement: "simple",
+      test: "simple",
+      acceptance: "deep",
+      knowledge: "simple",
+    })
+    expect(TIERS).toEqual(["deep", "simple"])
   })
 
   test("every decompose template and plan-duties partial the registry names exists", () => {
