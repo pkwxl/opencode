@@ -13,11 +13,19 @@ import { repoRoots } from "./git"
 // and other runtime state).
 const ENTRIES = ["tmp/", ".auto/"]
 
+// The model registry's project layer (plans/0055 §4.1). It belongs to whoever
+// operates this checkout, not to the project, so it is local-only like
+// opencode.json. The path is src/models.ts MODELS_FILE, spelled out here to
+// keep this module near-leaf; test/gitignore.test.ts pins the two together.
+export const MODELS_ENTRY = "/.opencode/auto/models.json"
+
 // The local-only entries init writes on top of the workdir entries:
 // .gitignore itself (the ignore rules are a local arrangement), .env
-// (secrets), and AGENTS.md / opencode.json (agent instructions and session
-// configuration) are not committed.
-const INIT_ENTRIES = ["/.gitignore", "/.env", "/AGENTS.md", "/opencode.json"]
+// (secrets), AGENTS.md / opencode.json (agent instructions and session
+// configuration) and the model registry's project layer are not committed.
+// reset removes the entries only: a project layer stays on disk, since the
+// driver never wrote it.
+const INIT_ENTRIES = ["/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", MODELS_ENTRY]
 
 // Line-normalized equivalence: a leading / and a trailing / are both
 // disregarded (`/tmp`, `tmp/`, `tmp` are equivalent).
@@ -74,6 +82,15 @@ async function appendEntries(directory: string, entries: string[], opts: { dryRu
 // it would append (for `fix`'s plan).
 export async function ensureGitignore(directory: string, opts: { dryRun?: boolean } = {}): Promise<boolean> {
   return (await appendEntries(directory, ENTRIES, opts)).length > 0
+}
+
+// fix's rule for a project initialized before init wrote MODELS_ENTRY: append
+// that one entry (the other local-only entries are the person's to keep or
+// drop). Same equivalence and git criterion as ensureGitignore; returns whether
+// it appended (dryRun: whether it would).
+// AUTO-RESOLVE: does fix skip a .gitignore whose broader pattern (such as /.opencode/) already ignores the project layer? -> no, the rule looks for an equivalent line, as init does, not for git's verdict (such a file gets one redundant line, and the .gitignore then holds exactly the entry init writes and reset removes)
+export async function ensureModelsGitignore(directory: string, opts: { dryRun?: boolean } = {}): Promise<boolean> {
+  return (await appendEntries(directory, [MODELS_ENTRY], opts)).length > 0
 }
 
 // init's .gitignore initialization: on top of the driver workdir entries,

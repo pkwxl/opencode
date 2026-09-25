@@ -35,7 +35,7 @@ bun run packages/auto/src/index.ts <子命令> ...
 ## 使用
 
 ```sh
-opencode-auto init [dir]     # 初始化项目配置层:把项目配置固化到 .opencode/auto/config.json,生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,在 AGENTS.md 幂等同步单一 opencode-auto 标记块,并把 driver 工作目录(tmp/、.auto/)、本地私有文件(/.gitignore、/.env、/AGENTS.md、/opencode.json)与目录树内的嵌套 git 仓库写进 .gitignore;不写 docs/——轮次目录由 plan 建立
+opencode-auto init [dir]     # 初始化项目配置层:把项目配置固化到 .opencode/auto/config.json,生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,在 AGENTS.md 幂等同步单一 opencode-auto 标记块,并把 driver 工作目录(tmp/、.auto/)、本地私有文件(/.gitignore、/.env、/AGENTS.md、/opencode.json、模型注册表项目层 /.opencode/auto/models.json)与目录树内的嵌套 git 仓库写进 .gitignore;不写 docs/——轮次目录由 plan 建立
 opencode-auto amend [dir] --<键选项> <值> ...   # 只改写给出的配置键,其余保留(至少一个键;无配置即拒绝),见"修订(amend)"
 opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名/迁入 brief.md,契约、AGENTS.md 块、.gitignore 与配置对齐,见"配置修复(fix)"
 opencode-auto plan [dir] [-p "<规划输入>" | --file <路径>]   # 规划当前阶段的任务并停在执行前供人工评审;轮未建立时先建轮(打印轮首门禁),轮完成后经轮关闭检查开下一轮(见"规划与轮次生命周期(plan)")
@@ -249,6 +249,7 @@ init 不写 `docs/`(轮次目录由 `plan` 建立),也不启动任何 AI 会话�
 | AGENTS.md 标记块缺失 / 与当前配置渲染不一致 / 残留旧版或游离标记块 | 可修复 | 写入当前块并清理其余标记块(正文不动) |
 | 意图包装载失败(标记块无从渲染) | 需人工 | —— |
 | `.gitignore` 缺 `tmp/` 或 `.auto/` 条目 | 可修复 | 追加缺失条目 |
+| `.gitignore` 缺 `/.opencode/auto/models.json` 条目(init 尚不写它时初始化的项目) | 可修复 | 追加该条目(其余本地私有条目留给人决定) |
 | `opencode.json` 缺失 | 可修复 | 写内置模板(已存在即不动,可能含人工改动) |
 | brief.md 缺失 | 可修复 | 写项目简报桩(已存在即不动) |
 
@@ -286,7 +287,7 @@ init 不写 `docs/`(轮次目录由 `plan` 建立),也不启动任何 AI 会话�
 | `.opencode/agent/auto.md` | 删除(`init` 本就无条件按模板覆盖它,是纯 auto 产物) |
 | `opencode.json` | **逐字节等于内置模板时才删**;被改过则保留并在清单中说明原因 |
 | `AGENTS.md` | 只摘除 `opencode-auto` 标记块,其余正文原样保留;摘除后仅剩空壳标题(即该文件本就是 init 建的)则整个删除 |
-| `.gitignore` | 只移除 init 写出的条目(`tmp/`、`.auto/`、本地私有文件 `/.gitignore`/`/.env`/`/AGENTS.md`/`/opencode.json` 与现存的嵌套 git 仓库条目),用户自有条目保留;移除后文件为空则整个删除 |
+| `.gitignore` | 只移除 init 写出的条目(`tmp/`、`.auto/`、本地私有文件 `/.gitignore`/`/.env`/`/AGENTS.md`/`/opencode.json`/`/.opencode/auto/models.json` 与现存的嵌套 git 仓库条目),用户自有条目保留;移除后文件为空则整个删除。模型注册表项目层 `.opencode/auto/models.json` 本身不删(它属于操作者,不是 driver 写的) |
 | `.opencode/auto/`、`.opencode/agent/`、`.opencode/` | **仅在为空时**回收(`rmdir`,非空即跳过) |
 
 **明确不动**:`docs/`(含轮次目录 `R-NN` 与任务目录 `T-NNN`)、`.auto/` 除
@@ -621,7 +622,8 @@ server 上仍存在,driver 直接**复用该会话继续**(上下文不丢,与 `
 给出找回方式。网络故障重试耗尽
 属于"会话半途无法总结",保持会话复用资格,恢复时优先找回原会话。
 
-`run` 期间 driver 会把 opencode.json、`.opencode/auto/config.json` 与 AGENTS.md
+`run` 期间 driver 会把 opencode.json、`.opencode/auto/config.json`、AGENTS.md 与
+模型注册表项目层 `.opencode/auto/models.json`(存在时;driver 只在启动时读它、从不写)
 置为只读(chmod 0o444),driver 自身写入时临时恢复、写完立即重置。`run` 结束(含
 阻塞退出)恢复可写,便于人工介入编辑(包括手工修订项目配置);被强杀的运行遗留的
 只读位不妨碍 `init`/`amend`/`fix`/`reset` 改写这些文件。这是提示词契约之外的防误写

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -253,7 +254,22 @@ test.skipIf(!E2E)(
 // process's own driver environment — a hibernate window would make every run
 // sleep, a model policy would reroute): the base is a scrubbed copy, and a
 // case that wants a switch passes it in `env`, merged on top.
-const CLI_ENV_BASE = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key)))
+// Nor does it read the operator's model registry: run and plan load its
+// operator layer at every start ($OPENCODE_AUTO_MODELS, scrubbed above, or
+// $XDG_CONFIG_HOME/opencode-auto/models.json), so the base points
+// XDG_CONFIG_HOME at an empty directory. git in the subprocess then reads its
+// global config from ~/.gitconfig only. The opt-in in-process runs above call
+// runAll in this process, where OPENCODE_AUTO_MODELS names a file that does
+// not exist (no operator layer): moving XDG_CONFIG_HOME here would also hide
+// the operator's opencode config from the real server they start.
+// AUTO-DECISION: subprocesses get an empty XDG_CONFIG_HOME, this process an OPENCODE_AUTO_MODELS naming a missing file (a missing file is no operator layer, with no XDG fallback, and the in-process runs keep the real opencode config they need)
+const EMPTY_CONFIG_HOME = mkdtempSync(join(tmpdir(), "auto-cli-xdg-"))
+process.on("exit", () => rmSync(EMPTY_CONFIG_HOME, { recursive: true, force: true }))
+const CLI_ENV_BASE: Record<string, string | undefined> = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPENCODE_AUTO_/.test(key))),
+  XDG_CONFIG_HOME: EMPTY_CONFIG_HOME,
+}
+process.env.OPENCODE_AUTO_MODELS = join(EMPTY_CONFIG_HOME, "no-operator-layer.json")
 
 async function runCli(args: string[], env?: Record<string, string>) {
   const proc = Bun.spawn([process.execPath, join(import.meta.dir, "..", "src", "index.ts"), ...args], {
@@ -1078,7 +1094,7 @@ describe("CLI: phases / source / brief(阶段化流程 P1)", () => {
       expect(init.code).toBe(0)
       expect(init.out).toContain("updated: .gitignore")
       const gitignore = await Bun.file(join(dir, ".gitignore")).text()
-      for (const entry of ["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json"]) {
+      for (const entry of ["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json"]) {
         expect(gitignore).toContain(`${entry}\n`)
       }
     } finally {
@@ -1591,6 +1607,36 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(fix.err).toContain("1 finding(s) need a person")
       expect(await readConfig(dir)).not.toHaveProperty("verify")
       expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // auto-core plans/0055 §4.1: the model registry's project layer is
+  // local-only; a project initialized before init ignored it lacks the entry.
+  test("an older project: run refuses a project layer git does not ignore and names fix; fix adds the entry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const gitignore = join(dir, ".gitignore")
+      const older = (await Bun.file(gitignore).text()).replace("/.opencode/auto/models.json\n", "")
+      await Bun.write(gitignore, older)
+      await Bun.write(join(dir, ".opencode/auto/models.json"), JSON.stringify({ models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } } }))
+      // --server points at a closed port: the run needs no local opencode and
+      // stops at the connection once preflight passes.
+      const run = () => runCli(["run", dir, "--dryrun", "--server", "http://127.0.0.1:1"])
+      const refused = await run()
+      expect(refused.code).toBe(1)
+      expect(refused.out).toContain(
+        `model registry, project layer .opencode/auto/models.json: git does not ignore it, so the unified commit would commit it; run opencode-auto fix ${dir} to add its .gitignore entry, then re-run`,
+      )
+      const fix = await runCli(["fix", dir, "-f"])
+      expect(fix.code).toBe(0)
+      expect(fix.out).toContain("  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry")
+      expect(await Bun.file(gitignore).text()).toBe(`${older}/.opencode/auto/models.json\n`)
+      expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
+      expect((await run()).out).not.toContain("model registry")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

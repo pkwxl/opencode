@@ -7,6 +7,7 @@ import { consumeFailback } from "./failback"
 import { beginUnit, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
+import type { ModelRegistry } from "./models"
 import type { RunAllOpts } from "./loop-preflight"
 import { waitBetweenTasks } from "./loop-progress"
 import type { PlanInput } from "./plan-input"
@@ -45,6 +46,10 @@ export type LoopCtx = {
   // The task ids the last planning step wrote, for plan's summary when it
   // stops after that step (plans/0053 D6).
   planned?: string[]
+  // The model registry preflight loaded at run start (plans/0055 §4.1: read
+  // once per run, never written); undefined = no registry. Held for the
+  // routing steps: nothing reads it yet, so dispatch is unchanged.
+  registry?: ModelRegistry
 }
 
 // 主任务循环: 依次执行当前阶段任务索引(tasks.md)中的全部任务(子任务/收尾/

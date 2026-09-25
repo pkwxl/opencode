@@ -1,6 +1,6 @@
 # 0055 — Model registry, reasoning tiers and multi-agent routing (design)
 
-Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); S1 has begun with the window module `src/model-window.ts` (§4.4), the registry loader `src/models.ts` (§4.1–§4.3) and the tier half of §5: the execute tier field, the `Reasoning:` field and `src/tier.ts`. Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
+Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); S1 has begun with the window module `src/model-window.ts` (§4.4), the registry loader `src/models.ts` (§4.1–§4.3), the tier half of §5 (the execute tier field, the `Reasoning:` field and `src/tier.ts`), and the project layer's local-only handling with the run-start load (§4.1). Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
 
 ## 0. The request
 
@@ -79,6 +79,17 @@ So the fleet lives in an operator-level **model registry** outside the target di
 - Either layer alone is a registry, and without both there is no registry (C2). A relative `{file:…}` path resolves against the directory of the file that contains it.
 - **Read once, at run start**, like the switches. An edit takes effect on the next run, and `/failback` remains the runtime override (§9). The driver only reads the layers. It never writes or locks them. The run lock (0053 D1) does not cover the operator layer, which is outside the target.
 - **Strict:** bad JSON, an unknown field inside an entry, or a broken reference fails the run start with exit 1 and names the field. Unlike `config.json`, unknown fields are not ignored. A misspelled `aviod` would otherwise silently put a model back into its peak hours.
+- **Settled in S1 (the project layer and the run-start load).** These points are recorded as AUTO-RESOLVE / AUTO-DECISION lines where they live. Nothing reads the loaded registry yet; dispatch is unchanged.
+  - **gitignore.** `MODELS_ENTRY` (`/.opencode/auto/models.json`) is the last of init's local-only entries in `src/gitignore.ts`, so `reset` removes it with the others. The file itself is never in reset's list.
+  - **fix.** `ensureModelsGitignore` appends that one entry when no equivalent line is present, the same test init applies. A broader pattern such as `/.opencode/` therefore still gets the line once. The finding reads `.gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only)`.
+  - **Protection.** The layer is on `src/protect.ts`'s list with the same fixed modes as the other files: 0o444 while a run holds it, 0o644 after. A missing file is skipped and never created.
+  - **Run-start load.** `preflight` (`src/loop-preflight.ts`) loads the registry in its validation block, beside the prompt library and the phase types. That block is inside the run lock and ahead of every write, and dryrun reaches it too. The load gets the phase type list with the custom types. The registry rides the preflight result onto the loop context (`LoopCtx.registry`).
+  - **Refusals.** Each one logs and exits 1, like a bad config.
+    - A project layer that git does not ignore (`gitIgnored` in `src/git.ts`, over `git check-ignore`) is refused before its content is read, and the line names `fix`.
+    - A tracked layer is refused with its own line. Ignore rules skip tracked files, so that line names `git rm --cached` before `fix`.
+    - Outside a git work tree, nothing commits the layer and the check does not apply.
+    - A strict load failure logs the `ModelRegistryError` lines, and a broken reference logs `checkModelReferences`' lines, which name the reference, never a value.
+  - **Hermetic tests.** auto-core's `bunfig.toml` preloads `test/preload.ts`, which points `XDG_CONFIG_HOME` at an empty temporary directory and drops `OPENCODE_AUTO_MODELS`. The shell e2e's `CLI_ENV_BASE` gives subprocesses an empty `XDG_CONFIG_HOME`. Its in-process runs get an `OPENCODE_AUTO_MODELS` that names a missing file.
 
 ### 4.2 Format
 

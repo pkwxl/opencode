@@ -33,7 +33,7 @@ import {
   validateProjectConfig,
   type ProjectConfig,
 } from "./config"
-import { ensureGitignore } from "./gitignore"
+import { ensureGitignore, ensureModelsGitignore, MODELS_ENTRY } from "./gitignore"
 import { CONTRACT_AGENT } from "./opts"
 import { useIntentPacks } from "./prompt"
 import { shellProfile } from "./shell"
@@ -204,6 +204,11 @@ export async function planFix(dir: string): Promise<FixPlan> {
   }
 
   if (await ensureGitignore(dir, { dryRun: true })) fixable(".gitignore", "lacks the tmp/ or .auto/ entry", "append the missing entries", () => ensureGitignore(dir))
+  // A project initialized before init ignored the model registry's project
+  // layer (plans/0055 §4.1): preflight refuses an unignored one and names fix.
+  if (await ensureModelsGitignore(dir, { dryRun: true })) {
+    fixable(".gitignore", `lacks the ${MODELS_ENTRY} entry (the model registry's project layer is local-only)`, "append the entry", () => ensureModelsGitignore(dir))
+  }
 
   if (!(await Bun.file(join(dir, "opencode.json")).exists())) {
     fixable("opencode.json", "missing", "write the template", async () => Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text()))

@@ -671,6 +671,17 @@ export async function fileTracked(dir: string, rel: string): Promise<boolean> {
   return tracked?.code === 0
 }
 
+// Whether git ignores a path relative to dir (`git check-ignore`): true =
+// ignored; false = not ignored, which includes a tracked file (ignore rules
+// apply to untracked files only, so a tracked file's changes still commit);
+// undefined = dir is not inside a git work tree (nothing commits the path).
+export async function gitIgnored(dir: string, rel: string): Promise<boolean | undefined> {
+  const result = await git(dir, ["check-ignore", "-q", "--", rel]).catch(() => undefined)
+  if (result?.code === 0) return true
+  if (result?.code === 1) return false
+  return undefined
+}
+
 // 未被 git 跟踪才删(交接文档族陈旧清理的共用语义,与 testhandoff 的 F4 收窄同款):
 // 已跟踪的文件属已落账状态,删除即脏区——在途与否的判定权留给恢复语义(或人工),
 // 清理绝不自动制造脏区去撞下一个执行单元的 clean 门禁。

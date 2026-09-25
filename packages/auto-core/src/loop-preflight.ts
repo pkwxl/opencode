@@ -10,9 +10,10 @@ import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
-import { beginUnit, changedFiles, commitTree, fileTracked } from "./git"
+import { beginUnit, changedFiles, commitTree, fileTracked, gitIgnored } from "./git"
 import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
+import { checkModelReferences, layerLabel, loadModels, MODELS_FILE, projectLayerPath, type ModelRegistry } from "./models"
 import { currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
 import { roundBriefPath } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
@@ -109,10 +110,11 @@ export type RunAllOpts = {
 
 // 预检段: 产出 runAll 后续仍用的 agentName 与两个计时器句柄(finally 中关闭);
 // 报错出口回传 { exit },时序与副作用残留同搬运前(见文件头)。
+// registry: the model registry loaded at run start (undefined = none).
 export async function preflight(
   directory: string,
   opts: RunAllOpts,
-): Promise<{ agentName: string; watcher?: { close(): void }; progress: { close(): void } } | { exit: number }> {
+): Promise<{ agentName: string; watcher?: { close(): void }; progress: { close(): void }; registry?: ModelRegistry } | { exit: number }> {
   // Legacy layout (M3.7, plans/0047 R3): an old-layout project is a usage error
   // before anything is read or written — no compatibility read, no migration.
   const legacy = await legacyLayoutProblem(directory)
@@ -126,6 +128,9 @@ export async function preflight(
   // 意图包文件在此起即按用法错误报出。
   // 自定义阶段类型(M3.6,.opencode/auto/phases/)同点校验: 非法类型文件与
   // OPENCODE_AUTO_MODEL 中不存在的阶段类型键均按用法错误退出。
+  // The model registry loads at the same point (loadRunRegistry), once per
+  // run and against the phase type list with the custom types.
+  let registry: ModelRegistry | undefined
   try {
     usePromptLibrary(directory)
     useIntentPacks(directory)
@@ -139,6 +144,7 @@ export async function preflight(
     const types = loaded.map((entry) => entry.type)
     const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types)]
     if (problems.length) throw new Error(problems.join("\n"))
+    registry = await loadRunRegistry(directory, types)
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }
@@ -263,7 +269,44 @@ export async function preflight(
       return { exit: 2 }
     }
   }
-  return { agentName, watcher, progress }
+  return { agentName, watcher, progress, registry }
+}
+
+// The model registry at run start (plans/0055 §4.1, §4.3): both layers read
+// once, strictly, and held by the run (runAll puts it on the loop context);
+// the driver never writes or locks them. undefined = no registry, and then
+// nothing is logged and nothing changes. Every refusal throws, and preflight
+// logs it and exits 1, like a bad config:
+//   - a project layer that git does not ignore, checked before its content is
+//     read: the unified commit would commit it. The line names fix, which
+//     adds the .gitignore entry init writes; a tracked layer must be
+//     untracked first, since ignore rules skip tracked files;
+//   - a strict load failure (ModelRegistryError: one line per problem, each
+//     naming its layer and field);
+//   - a broken reference: a variable unset or empty, a file missing or
+//     unreadable. Each line names the field, the layer and the reference,
+//     never a value.
+// AUTO-DECISION: the load sits in preflight's validation block with the prompt library and the phase types, so it runs inside the run lock, before the start gate and every write, and under dryrun too (a bad registry then fails plan, run and a dryrun alike, and the custom phase types are already loaded there)
+// AUTO-RESOLVE: when a project layer is both unignored and malformed, which refusal is shown? -> the ignore refusal, checked before the content is read (it does not depend on the content, and a layer the unified commit would take is refused even while it does not parse)
+// AUTO-RESOLVE: a tracked project layer passes no ignore rule even with init's entry, and fix cannot untrack it: refuse it with fix's line alone? -> a line of its own that names the untrack command and fix (fix alone would leave the refusal in place)
+// AUTO-DECISION: the registry rides the preflight result into the loop context instead of RunAllOpts (the options are the caller's input; the registry is state the run derives from disk once)
+async function loadRunRegistry(directory: string, phaseTypes: readonly string[]): Promise<ModelRegistry | undefined> {
+  const project = projectLayerPath(directory)
+  if ((await Bun.file(project).exists()) && (await gitIgnored(directory, MODELS_FILE)) === false) {
+    const { bin } = shellProfile()
+    const label = layerLabel({ name: "project", path: project })
+    const fix = `run ${bin} fix ${directory} to add its .gitignore entry`
+    throw new Error(
+      (await fileTracked(directory, MODELS_FILE))
+        ? `${label}: git tracks it, so the unified commit would commit it; untrack it (git -C ${directory} rm --cached ${MODELS_FILE}), ${fix} if it lacks one, then re-run`
+        : `${label}: git does not ignore it, so the unified commit would commit it; ${fix}, then re-run`,
+    )
+  }
+  const registry = await loadModels(directory, { phaseTypes })
+  if (!registry) return undefined
+  const broken = checkModelReferences(registry)
+  if (broken.length) throw new Error(broken.map((problem) => problem.message).join("\n"))
+  return registry
 }
 
 // The first line of every CURRENT.md the driver wrote before the mirror

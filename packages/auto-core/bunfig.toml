@@ -1,0 +1,3 @@
+[test]
+# Hermetic against the operator's model registry: see test/preload.ts.
+preload = ["./test/preload.ts"]

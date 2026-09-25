@@ -45,7 +45,7 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
 async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
   const pre = await preflight(directory, opts)
   if ("exit" in pre) return pre.exit
-  const { agentName, watcher, progress } = pre
+  const { agentName, watcher, progress, registry } = pre
   // Hibernate window startup check (OPENCODE_AUTO_HIBERNATE, D4): when starting
   // inside the window, sleep until window end + random delay before continuing,
   // so the first execution unit isn't wasted; dryrun permission preflight is
@@ -144,7 +144,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // The advanceFinal closure would lose narrowing; capture the ready server
     // handle as const.
     const serverHandle = server
-    const ctx: LoopCtx = { directory, opts, server: serverHandle, agentName, phases, manual: phases === "m", repl, ran: 0, input: opts.planInput, append: opts.append }
+    const ctx: LoopCtx = { directory, opts, server: serverHandle, agentName, phases, manual: phases === "m", repl, ran: 0, input: opts.planInput, append: opts.append, registry }
     return await runPhaseLoop(ctx)
   } catch (error) {
     // /exit (design doc plans/0014-exit-resume-design.md): the three safe

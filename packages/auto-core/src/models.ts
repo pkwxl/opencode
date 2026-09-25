@@ -228,7 +228,9 @@ async function readLayer(layer: RegistryLayer, problems: string[]): Promise<stri
   }
 }
 
-function layerLabel(layer: RegistryLayer): string {
+// How messages name a layer: "model registry, project layer
+// .opencode/auto/models.json" (the operator layer by its absolute path).
+export function layerLabel(layer: RegistryLayer): string {
   return `model registry, ${layer.name} layer ${layer.name === "project" ? MODELS_FILE : layer.path}`
 }
 

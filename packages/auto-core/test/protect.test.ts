@@ -3,6 +3,7 @@ import { chmod, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AGENTS_BLOCK_START, ensurePointer, removePointer } from "../src/agents-block"
+import { MODELS_FILE } from "../src/models"
 import { protect, unprotect } from "../src/protect"
 
 const writable = async (path: string) => ((await stat(path)).mode & 0o222) !== 0
@@ -34,6 +35,24 @@ describe("protect", () => {
     await unprotect(dir)
     expect(await writable(path)).toBe(true)
     expect(await writable(join(dir, ".opencode/auto/config.json"))).toBe(true)
+  })
+
+  // plans/0055 §4.1: the model registry's project layer is read-only during
+  // run as opencode.json is (the path is the registry's own MODELS_FILE).
+  test("the model registry's project layer goes read-only during protection and writable after", async () => {
+    const registry = join(dir, MODELS_FILE)
+    await Bun.write(registry, "{}\n")
+    expect(await writable(registry)).toBe(true)
+    await protect(dir)
+    expect(await writable(registry)).toBe(false)
+    await unprotect(dir)
+    expect(await writable(registry)).toBe(true)
+    expect(await Bun.file(registry).text()).toBe("{}\n")
+  })
+
+  test("no project layer: protection skips it without creating it", async () => {
+    await protect(dir)
+    expect(await Bun.file(join(dir, MODELS_FILE)).exists()).toBe(false)
   })
 
   test("任务单元文档不在保护之列,始终保持可写", async () => {

@@ -189,9 +189,37 @@ describe("planFix / applyFix (plans/0052 D10)", () => {
     await seedInit(dir)
     expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
     const plan = await planFix(dir)
-    expect(plan.findings).toEqual([{ class: "fixable", path: ".gitignore", problem: "lacks the tmp/ or .auto/ entry", change: "append the missing entries" }])
+    expect(plan.findings).toEqual([
+      { class: "fixable", path: ".gitignore", problem: "lacks the tmp/ or .auto/ entry", change: "append the missing entries" },
+      {
+        class: "fixable",
+        path: ".gitignore",
+        problem: "lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only)",
+        change: "append the entry",
+      },
+    ])
     await applyFix(plan)
-    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n")
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("tmp/\n.auto/\n/.opencode/auto/models.json\n")
+  })
+
+  // plans/0055 §4.1: a project initialized before init ignored the model
+  // registry's project layer gets the entry, and nothing else changes.
+  test("an older init's .gitignore without the project layer entry: fix appends it and names it in the plan", async () => {
+    await seedInit(dir, { ...CONFIG_DEFAULTS, contextLimit: 128, custom: "kept" })
+    expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
+    const older = "node_modules/\ntmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n"
+    await writeFile(join(dir, ".gitignore"), older)
+    const config = await Bun.file(join(dir, CONFIG)).text()
+    const plan = await planFix(dir)
+    expect(formatFixPlan(plan)).toBe(
+      "  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry",
+    )
+    expect(plan.writes.map((write) => write.path)).toEqual([".gitignore"])
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe(older)
+    await applyFix(plan)
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe(`${older}/.opencode/auto/models.json\n`)
+    expect(await Bun.file(join(dir, CONFIG)).text()).toBe(config)
+    expect((await planFix(dir)).findings).toEqual([])
   })
 
   test("planFix writes nothing", async () => {

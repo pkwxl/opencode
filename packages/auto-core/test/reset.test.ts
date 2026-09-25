@@ -6,6 +6,7 @@ import templateConfig from "../templates/opencode.json" with { type: "file" }
 import { ensurePointer } from "../src/agents-block"
 import { renderProjectBrief } from "../src/brief"
 import { ensureGitignore, ensureInitGitignore, removeGitignoreEntries } from "../src/gitignore"
+import { MODELS_FILE } from "../src/models"
 import { applyReset, planReset, type ResetEntry } from "../src/reset"
 
 // init 产物的最小复刻(不跑真 CLI): 配置层四件 + 共用文件两件 + gitignore 条目。
@@ -144,6 +145,21 @@ describe("reset: 边界安全", () => {
     expect(await Bun.file(join(dir, "tmp", "verify.sh")).text()).toBe("#!/bin/sh\n")
   })
 
+  // plans/0055 §4.1: the model registry's project layer is the operator's file,
+  // never the driver's, so reset takes back init's entry for it and keeps it.
+  test("the model registry's project layer: its .gitignore entry is removed, the file and its directory stay", async () => {
+    await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
+    await writeFile(join(dir, ".gitignore"), "node_modules/\n")
+    expect(await ensureInitGitignore(dir)).toContain("/.opencode/auto/models.json")
+    const registry = '{ "models": {} }\n'
+    await writeFile(join(dir, MODELS_FILE), registry)
+    const entries = await reset(dir)
+    expect(entries.map((entry) => entry.path)).not.toContain(MODELS_FILE)
+    expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n")
+    expect(await Bun.file(join(dir, MODELS_FILE)).text()).toBe(registry)
+    expect(await exists(join(dir, ".opencode", "auto", "config.json"))).toBe(false)
+  })
+
   test("planReset 只算不删: 清单算出后文件仍在", async () => {
     const entries = await planReset(dir)
     expect(entries.length).toBeGreaterThan(0)
@@ -196,13 +212,13 @@ describe("removeGitignoreEntries", () => {
     await mkdir(join(dir, "pkg"))
     await Bun.spawn(["git", "-C", join(dir, "pkg"), "init", "-q"]).exited
     await writeFile(join(dir, ".gitignore"), "node_modules/\n")
-    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/pkg/"])
+    expect(await ensureInitGitignore(dir)).toEqual(["tmp/", ".auto/", "/.gitignore", "/.env", "/AGENTS.md", "/opencode.json", "/.opencode/auto/models.json", "/pkg/"])
     expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: false })
     expect(await Bun.file(join(dir, ".gitignore")).text()).toBe("node_modules/\n")
   })
 
   test("a file holding only init entries is deleted whole", async () => {
-    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n")
+    await writeFile(join(dir, ".gitignore"), "tmp/\n.auto/\n/.gitignore\n/.env\n/AGENTS.md\n/opencode.json\n/.opencode/auto/models.json\n")
     expect(await removeGitignoreEntries(dir)).toEqual({ removed: true, emptied: true })
     expect(await exists(join(dir, ".gitignore"))).toBe(false)
   })
