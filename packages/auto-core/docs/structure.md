@@ -69,7 +69,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Interface | `AgentClient` (14 never-rejecting calls), `AgentCapabilities`, `AgentEvent`, `AgentHost` | `src/agent/types.ts` (0037) |
-| opencode adapter | SDK calls, SSE → `AgentEvent` mapping, server spawn/connect/restart/timeout; the only importer of `@opencode-ai/sdk` | `src/agent/opencode/{client,events,server}.ts` (0039) |
+| opencode adapter | SDK calls, SSE → `AgentEvent` mapping, server spawn (the driver's own `opencode serve`, with an agent profile's bin, env overlay and spawn config)/connect/restart/timeout; the only importer of `@opencode-ai/sdk` | `src/agent/opencode/{client,events,server}.ts` (0039, 0055) |
 | claude headless adapter | `claude -p` stream-json process per working session, stdout parser, contract/permission translation, host factory | `src/agent/claude/{client,stream,contract,host}.ts` (0041) |
 
 ## Driver
@@ -90,7 +90,8 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Task loop | Iterates a phase's tasks; `LoopCtx` | `src/loop-task.ts` |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |
 | Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only) | `src/conclusion.ts` (0019, 0020) |
-| Agent choice | Which agent a run drives (shell profile > `OPENCODE_AUTO_AGENT` > config > opencode) | `src/agent-choice.ts` |
+| Agent choice | Which agent a run drives (shell profile > `OPENCODE_AUTO_AGENT` > config > opencode); under a model registry the agent starts with its agent profile | `src/agent-choice.ts` |
+| Agent environments | An agent profile's env resolved into the overlay its host starts with (values never logged); the loopback proxy warning of preflight | `src/agent-env.ts` (0055) |
 | Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks | `src/capability.ts` (0040) |
 | Usage source | Four `UsageTier`s and their effect on reuse, handover, steer, fork | `src/usage.ts` (0038) |
 
@@ -181,3 +182,5 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | `test/import-direction.test.ts` | Domain classification and dependency-direction rules (above) |
 | `test/agent-fake.test.ts` | Agent-neutral driver behavior; fails if any `AgentClient` call goes unexercised |
 | `test/incident-regression.test.ts` | Regressions from field incidents |
+
+<!-- auto: eof -->

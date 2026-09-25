@@ -15,7 +15,12 @@
 // hold the SDK client. MA.3 amended this file once, consciously (0031 D4):
 // AgentErrorPatterns / AgentClient.errorPatterns. MA.4 (plans/0040) amended
 // it again: PermissionPreset / AgentHostOptions / AgentHostFactory, the path a
-// permission policy takes into an agent that has no permission events.
+// permission policy takes into an agent that has no permission events. The
+// model registry (plans/0055 §4.2, §8.1, F14) amended it a third time:
+// AgentHostOptions.bin / env / config, the agent profile a host starts with —
+// its executable, the overlay on its processes' environment, and (opencode)
+// the config content its managed server is spawned with. AgentClient is
+// unchanged.
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -242,12 +247,31 @@ export interface AgentClient {
 // request itself.
 export type PermissionPreset = "allow" | "deny" | "block"
 
+// An overlay on the driver's environment for an agent's processes: a string
+// sets the variable, null removes an inherited one. Values are already
+// resolved (the driver reads `{env:…}` / `{file:…}` references just before the
+// host starts) and may be secrets, such as a proxy URL with credentials: a
+// host passes them to its child processes only, and never logs or writes them.
+// Log lines name the variables.
+export type AgentEnv = Readonly<Record<string, string | null>>
+
 export type AgentHostOptions = {
   // An already running instance to connect to instead of starting one
   // (opencode: --server <url>); absent = the adapter starts its own.
   server?: string
   permission: PermissionPreset
   log: (line: string) => void
+  // The executable; absent = the adapter's own ("opencode", "claude").
+  bin?: string
+  // Overlay on the driver's environment for every process the host starts;
+  // absent = the driver's environment as it is. A host that connects to an
+  // already running instance cannot apply it, and says so in its log.
+  env?: AgentEnv
+  // opencode: the config content the managed server is spawned with
+  // (OPENCODE_CONFIG_CONTENT; opencode merges it over the project's
+  // opencode.json and substitutes its `{env:…}` / `{file:…}` references
+  // itself); absent = {}. Other adapters ignore it.
+  config?: Readonly<Record<string, unknown>>
 }
 
 // Starts (or connects) the agent behind a run. A shell selects its agent by

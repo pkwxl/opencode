@@ -89,6 +89,10 @@ const CLASSIFIED: Record<string, Domain> = {
   // adapter; what remains seeds chains and formats output over AgentClient).
   // driver (orchestration plane)
   "agent-choice": "driver",
+  // Agent environments (plans/0055 §4.2, §8.10): an agent profile's env
+  // resolved into the overlay a host starts with, and the loopback proxy
+  // warning of preflight.
+  "agent-env": "driver",
   "agents-block": "driver",
   artifact: "driver",
   attempt: "driver",
@@ -261,6 +265,12 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "models-describe",
     to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
     why: "the models command prints the registry without starting any agent (plans/0055 §9); preflight imports its shared refusal, so it must not import the loop, the session-driving layer, the agent start or an agent host",
+  },
+  // AUTO-DECISION: agent-env gets a one-way rule besides its classification row (the agent start and preflight import it, and the agent pool will, so an upward import would form a cycle; it may read the registry's types but never start an agent)
+  {
+    from: "agent-env",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
+    why: "a profile's env is resolved for the host the agent start builds, and preflight reads the proxy warning (plans/0055 §4.2, §8.10); it must not import the loop, the session-driving layer, the agent start or an agent host",
   },
   {
     from: "watch",

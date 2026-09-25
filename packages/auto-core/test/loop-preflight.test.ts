@@ -97,10 +97,13 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
   // preflight with its log lines captured and the ambient OPENCODE_AUTO_*
   // switch layer scrubbed (its startup line would otherwise join the lines); a
   // passing preflight's handles are closed and the files it protected made
-  // writable again.
-  async function run(dir: string, opts: RunAllOpts = {}) {
-    const ambient = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_/.test(key))
+  // writable again. The ambient proxy variables are scrubbed too (a machine
+  // with a proxy and no NO_PROXY would add the loopback warning to a
+  // registry's lines); `env` sets variables for the one call.
+  async function run(dir: string, opts: RunAllOpts = {}, env: Record<string, string> = {}) {
+    const ambient = Object.entries(process.env).filter(([key]) => /^OPENCODE_AUTO_|^(https?|all|no)_proxy$/i.test(key))
     for (const [key] of ambient) delete process.env[key]
+    Object.assign(process.env, env)
     const lines: string[] = []
     const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       lines.push(args.map((arg) => String(arg)).join(" "))
@@ -114,6 +117,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
       return { result, lines }
     } finally {
       printed.mockRestore()
+      for (const key of Object.keys(env)) delete process.env[key]
       for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
       await unprotect(dir)
       await flushStats(dir)
@@ -192,6 +196,31 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     expect(result).toEqual({ exit: 1 })
     expect(lines).toEqual([`${LAYER}: unknown field "tierz" (known: tz, agents, models, tiers, routes, classifier)`])
     expect(await changedFiles(dir)).toEqual([])
+  })
+
+  test("the loopback proxy warning (§8.10): under a registry with an opencode profile, when NO_PROXY misses a loopback name", async () => {
+    const dir = await project({ ignored: true })
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    const warned = await run(dir, {}, { HTTP_PROXY: "http://user:secret@proxy:3128", NO_PROXY: "127.0.0.1" })
+    expect("exit" in warned.result).toBe(false)
+    expect(warned.lines).toEqual([
+      "⚠ HTTP_PROXY is set in the driver's environment and NO_PROXY does not cover localhost: " +
+        "Bun does not bypass loopback on its own, so the driver's requests to its opencode server would go through the proxy. " +
+        "Add localhost to NO_PROXY, and give an agent that needs the proxy its own through its agent profile's env in the model registry",
+    ])
+    // Later preflights on the same project also print the stats resume banner.
+    const warnings = async (env: Record<string, string>) => (await run(dir, {}, env)).lines.filter((line) => line.startsWith("⚠"))
+    expect(await warnings({ HTTP_PROXY: "http://proxy:3128", no_proxy: "localhost,127.0.0.1" })).toEqual([])
+    // A registry of claude profiles alone starts no opencode server to reach.
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ agents: { claude: { adapter: "claude" } }, models: { opus: { agent: "claude", model: "opus" } }, tiers: { deep: ["opus"] } }))
+    expect(await warnings({ HTTP_PROXY: "http://proxy:3128" })).toEqual([])
+  })
+
+  test("no registry: no proxy warning, whatever the environment (the run stays as it was)", async () => {
+    const dir = await project()
+    const { result, lines } = await run(dir, {}, { HTTP_PROXY: "http://proxy:3128" })
+    expect("exit" in result).toBe(false)
+    expect(lines).toEqual([])
   })
 
   test("a missing reference exits 1 naming the reference, never a value", async () => {

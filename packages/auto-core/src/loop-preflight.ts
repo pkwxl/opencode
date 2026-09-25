@@ -7,6 +7,7 @@
 // 拆分自 src/loop.ts(plans/0024-module-split-plan.md S14,纯搬运)。
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
+import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
@@ -149,6 +150,16 @@ export async function preflight(
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }
+  }
+  // The driver's own traffic (plans/0055 §8.10): it reaches a managed opencode
+  // server over loopback with Bun's fetch, which does not bypass loopback on
+  // its own, so a proxy in the driver's environment that NO_PROXY does not
+  // steer around loopback would carry that traffic (src/agent-env.ts). Proxies
+  // for agents belong on their agent profiles. A warning, never a refusal.
+  // AUTO-RESOLVE: does the loopback proxy warning fire without a model registry? -> no, only under a registry with an opencode profile (a run without a registry stays byte-identical, and a registry of claude profiles alone starts no opencode server to reach)
+  if (registry && [...registry.agents.values()].some((profile) => profile.adapter === "opencode")) {
+    const warning = loopbackProxyWarning(process.env)
+    if (warning) log(warning)
   }
   // --max-sessions is reserved (plans/0046 D9): there is no scheduler yet, so a
   // request for concurrent sessions is refused instead of silently run serially.

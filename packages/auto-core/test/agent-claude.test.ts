@@ -6,9 +6,9 @@
 
 import { describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { claudeAgent, CLAUDE_CAPABILITIES, CLAUDE_ERROR_PATTERNS, type ClaudeProcess, type ClaudeSpawn } from "../src/agent/claude/client"
+import { claudeAgent, claudeEnv, claudeProjectsDir, CLAUDE_CAPABILITIES, CLAUDE_ERROR_PATTERNS, type ClaudeProcess, type ClaudeSpawn } from "../src/agent/claude/client"
 import { claudePermissions, contractArgs, contractBody } from "../src/agent/claude/contract"
 import { createClaudeHost } from "../src/agent/claude/host"
 import { claudeStream } from "../src/agent/claude/stream"
@@ -493,6 +493,52 @@ describe("claudeAgent: process manager", () => {
     }
   })
 
+  test("an agent profile's env overlays the child's environment: set, replace, and null removes (plans/0055 F14)", async () => {
+    const { spawn, procs } = spawner(echo)
+    const saved = { CLAUDECODE: process.env.CLAUDECODE, AUTO_TEST_DROP: process.env.AUTO_TEST_DROP }
+    process.env.CLAUDECODE = "1"
+    process.env.AUTO_TEST_DROP = "inherited"
+    try {
+      const agent = agentWith(spawn, { env: { HTTPS_PROXY: "http://127.0.0.1:7890", AUTO_TEST_DROP: null, CLAUDE_CONFIG_DIR: "/home/op/.claude-b" } })
+      const id = ((await agent.create({ title: "t" })) as { ok: true; value: { id: string } }).value.id
+      await agent.prompt({ session: id, text: "x" })
+      expect(procs[0]!.env.HTTPS_PROXY).toBe("http://127.0.0.1:7890")
+      expect(procs[0]!.env.CLAUDE_CONFIG_DIR).toBe("/home/op/.claude-b")
+      expect("AUTO_TEST_DROP" in procs[0]!.env).toBe(false)
+      // The session variables stay out, as without a profile.
+      expect(procs[0]!.env.CLAUDECODE).toBeUndefined()
+      expect(procs[0]!.env.PATH).toBe(process.env.PATH)
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+    expect(claudeEnv({ A: "2", B: null, CLAUDECODE: "set by the profile" }, { A: "1", B: "1", C: "1", CLAUDECODE: "1" })).toEqual({ A: "2", C: "1", CLAUDECODE: "set by the profile" })
+  })
+
+  test("the transcript directory follows the profile's CLAUDE_CONFIG_DIR, else the driver's, else ~/.claude", async () => {
+    expect(claudeProjectsDir({ CLAUDE_CONFIG_DIR: "/p/.claude-b" }, { CLAUDE_CONFIG_DIR: "/driver" })).toBe("/p/.claude-b/projects")
+    expect(claudeProjectsDir({ HTTPS_PROXY: "x" }, { CLAUDE_CONFIG_DIR: "/driver" })).toBe("/driver/projects")
+    expect(claudeProjectsDir(undefined, {})).toBe(join(homedir(), ".claude", "projects"))
+    // A removal means claude's own default, whatever the driver has.
+    expect(claudeProjectsDir({ CLAUDE_CONFIG_DIR: null }, { CLAUDE_CONFIG_DIR: "/driver" })).toBe(join(homedir(), ".claude", "projects"))
+    // End to end: a session only the profile's config directory holds is known.
+    const configDir = await mkdtemp(join(tmpdir(), "auto-claude-config-"))
+    try {
+      const id = "eeeeeeee-0000-4000-8000-000000000000"
+      await mkdir(join(configDir, "projects", "-work-dir"), { recursive: true })
+      await writeFile(join(configDir, "projects", "-work-dir", `${id}.jsonl`), '{"type":"user"}\n')
+      const { spawn } = spawner(echo)
+      const own = claudeAgent({ directory: "/work/dir", permission: "deny", spawn, contract: async () => ({ args: [] }), env: { CLAUDE_CONFIG_DIR: configDir } })
+      expect(await own.get(id)).toEqual({ ok: true, value: { id } })
+      const other = claudeAgent({ directory: "/work/dir", permission: "deny", spawn, contract: async () => ({ args: [] }), env: { CLAUDE_CONFIG_DIR: join(configDir, "elsewhere") } })
+      expect((await other.get(id)).ok).toBe(false)
+    } finally {
+      await rm(configDir, { recursive: true, force: true })
+    }
+  })
+
   test("driven end to end: runSession over the adapter settles on idle with the closing words", async () => {
     const { spawn, procs } = spawner(echo)
     const agent = agentWith(spawn)
@@ -525,5 +571,29 @@ describe("claude host", () => {
     await host.client.prompt({ session: id, text: "x" })
     host.close()
     expect(procs[0]!.killed).toBe(true)
+  })
+
+  test("the profile's bin and env reach the version check and the processes; the profile's bin wins over the shell's", async () => {
+    const checked: { bin: string; env?: unknown }[] = []
+    const { spawn, procs } = spawner(echo)
+    const host = await createClaudeHost({
+      bin: "claude-of-the-shell",
+      version: async (bin, env) => {
+        checked.push({ bin, env })
+        return "2.1.278 (Claude Code)"
+      },
+      spawn,
+    })("/work", { permission: "deny", log: () => {}, bin: "/opt/claude-b/bin/claude", env: { CLAUDE_CONFIG_DIR: "/home/op/.claude-b" } })
+    expect(checked).toEqual([{ bin: "/opt/claude-b/bin/claude", env: { CLAUDE_CONFIG_DIR: "/home/op/.claude-b" } }])
+    const id = ((await host.client.create({ title: "t" })) as { ok: true; value: { id: string } }).value.id
+    await host.client.prompt({ session: id, text: "x" })
+    expect(procs[0]!.args[0]).toBe("/opt/claude-b/bin/claude")
+    expect(procs[0]!.env.CLAUDE_CONFIG_DIR).toBe("/home/op/.claude-b")
+    host.close()
+    // Without a profile the shell's bin applies and the check gets no env.
+    checked.length = 0
+    const plain = await createClaudeHost({ bin: "claude-of-the-shell", version: async (bin, env) => (checked.push({ bin, env }), "2.1.278"), spawn })("/work", { permission: "deny", log: () => {} })
+    expect(checked).toEqual([{ bin: "claude-of-the-shell", env: undefined }])
+    plain.close()
   })
 })

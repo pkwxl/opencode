@@ -112,10 +112,11 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       }
     }
     // Start the project's agent (src/agent-choice.ts) and degrade the switches
-    // it cannot serve; a configuration with no fallback stops here.
-    const started = await startAgent(directory, opts)
+    // it cannot serve; a configuration with no fallback stops here. Under a
+    // model registry the agent starts with its agent profile.
+    const started = await startAgent(directory, { ...opts, registry })
     server = started.host
-    if (started.error) {
+    if (started.error !== undefined || server === undefined) {
       log(`⏸ ${started.error}`)
       return 1
     }

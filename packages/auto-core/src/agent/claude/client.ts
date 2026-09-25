@@ -25,7 +25,7 @@
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { AgentCapabilities, AgentClient, AgentErrorPatterns, AgentEvent, AgentResult, PermissionPreset, PromptInput } from "../types"
+import type { AgentCapabilities, AgentClient, AgentEnv, AgentErrorPatterns, AgentEvent, AgentResult, PermissionPreset, PromptInput } from "../types"
 import { contractArgs } from "./contract"
 import { claudeStream, MODEL_PREFIX } from "./stream"
 
@@ -69,10 +69,15 @@ export type ClaudeAgentOptions = {
   directory: string
   permission: PermissionPreset
   bin?: string
+  // The agent profile's overlay on the processes' environment (null removes
+  // an inherited variable); absent = the driver's environment as it is.
+  env?: AgentEnv
   log?: (line: string) => void
   spawn?: ClaudeSpawn
   // Where claude keeps transcripts, for `get` on ids this process never ran
-  // (a resumed run); absent = $CLAUDE_CONFIG_DIR/projects or ~/.claude/projects.
+  // (a resumed run); absent = <config dir>/projects, where the config dir is
+  // the one the processes see: the overlay's CLAUDE_CONFIG_DIR when it sets
+  // or removes one, otherwise the driver's, otherwise ~/.claude.
   projectsDir?: string
   // Arguments from the target directory (contract, permissions); absent =
   // contract.ts contractArgs.
@@ -111,6 +116,29 @@ type Session = {
 // (developer machines): a child must not believe it is that session.
 const SESSION_ENV = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_(SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|ENTRYPOINT|MESSAGING_\w+))$/
 
+// The environment of a claude process: the driver's minus the Claude Code
+// session variables, overlaid by the agent profile's env (plans/0055 F14; a
+// null removes the inherited variable). The overlay comes last, so a profile
+// may set any variable, a session variable included.
+export function claudeEnv(overlay?: AgentEnv, base: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(base)) if (!SESSION_ENV.test(key)) env[key] = value
+  for (const [key, value] of Object.entries(overlay ?? {})) {
+    if (value === null) delete env[key]
+    else env[key] = value
+  }
+  return env
+}
+
+// The directory claude keeps its transcripts in, for the environment its
+// processes see: CLAUDE_CONFIG_DIR from the overlay when the overlay names it
+// (a null removal means claude's default), otherwise the driver's.
+// AUTO-RESOLVE: where do transcripts live when the profile env removes CLAUDE_CONFIG_DIR (null) while the driver has one? -> claude's default ~/.claude (the lookup follows the environment the claude processes actually run in, and they no longer see the driver's variable)
+export function claudeProjectsDir(overlay?: AgentEnv, base: Record<string, string | undefined> = process.env): string {
+  const own = overlay && Object.hasOwn(overlay, "CLAUDE_CONFIG_DIR") ? overlay.CLAUDE_CONFIG_DIR : base.CLAUDE_CONFIG_DIR
+  return join(own ?? join(homedir(), ".claude"), "projects")
+}
+
 const fail = (error: unknown): AgentResult<never> => ({ ok: false, error })
 const done: AgentResult = { ok: true, value: undefined }
 
@@ -119,7 +147,7 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
   const bin = options.bin ?? "claude"
   const spawn = options.spawn ?? bunSpawn
   const contract = options.contract ?? ((agent) => contractArgs(directory, agent, options.permission))
-  const projects = options.projectsDir ?? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects")
+  const projects = options.projectsDir ?? claudeProjectsDir(options.env)
   const sessions = new Map<string, Session>()
   const subscribers = new Set<(event: AgentEvent) => void>()
   // Context windows claude reported (result modelUsage), keyed by the
@@ -179,8 +207,7 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
       ...(s.title ? ["--name", s.title] : []),
       ...extra.args,
     ]
-    const env: Record<string, string | undefined> = {}
-    for (const [key, value] of Object.entries(process.env)) if (!SESSION_ENV.test(key)) env[key] = value
+    const env = claudeEnv(options.env)
     const base = s.state === "new" ? 0 : s.state === "fork" ? (sessions.get(s.from!)?.cost ?? (await savedCost(s.from!))) : (s.cost ?? (await savedCost(id)))
     let proc: ClaudeProcess
     try {
