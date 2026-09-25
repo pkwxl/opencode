@@ -68,12 +68,20 @@ export function opencodeAgent(sdk: OpencodeClient): AgentClient {
     // The synchronous POST resolves at turn end (its 2 h ceiling is
     // timeoutFetch's turn timeout). `agent` is always sent as a key, as the
     // driver did before (undefined is dropped on the wire); a prompt without
-    // a model string carries no model key at all (routing invariant, 0017).
+    // a model string carries no model key at all (routing invariant, 0017),
+    // and a variant (a registry model entry's reasoning-effort variant,
+    // plans/0055 §4.2) rides in the v2 prompt body only when one is given.
     prompt: (input, signal) =>
       settle(
         () =>
           sdk.session.prompt(
-            { sessionID: input.session, agent: input.agent, ...(input.model ? { model: splitModel(input.model) } : {}), parts: text(input) },
+            {
+              sessionID: input.session,
+              agent: input.agent,
+              ...(input.model ? { model: splitModel(input.model) } : {}),
+              ...(input.variant !== undefined ? { variant: input.variant } : {}),
+              parts: text(input),
+            },
             { signal },
           ),
         none,
@@ -85,6 +93,7 @@ export function opencodeAgent(sdk: OpencodeClient): AgentClient {
             sessionID: input.session,
             ...(input.agent !== undefined ? { agent: input.agent } : {}),
             ...(input.model ? { model: splitModel(input.model) } : {}),
+            ...(input.variant !== undefined ? { variant: input.variant } : {}),
             parts: text(input),
           }),
         none,

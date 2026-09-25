@@ -15,7 +15,7 @@ import { beginUnit, changedFiles, commitTree, fileTracked } from "./git"
 import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
 import { checkModelReferences, loadModels, type ModelRegistry } from "./models"
-import { projectLayerRefusal } from "./models-describe"
+import { projectLayerRefusal, switchModelRegistryInfo } from "./models-describe"
 import { currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
 import { roundBriefPath } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
@@ -28,8 +28,9 @@ import type { ParallelLevel } from "./intent/types"
 import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
+import { routingFacts, tierCoverageProblems } from "./routing"
 import { shellProfile } from "./shell"
-import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, type AgentChoice } from "./switches"
+import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, setSwitchModelRegistry, type AgentChoice } from "./switches"
 import { loadStats } from "./stats"
 import { usePromptLibrary } from "./template"
 import { restoreTestHandoffs } from "./testrun"
@@ -131,7 +132,10 @@ export async function preflight(
   // 自定义阶段类型(M3.6,.opencode/auto/phases/)同点校验: 非法类型文件与
   // OPENCODE_AUTO_MODEL 中不存在的阶段类型键均按用法错误退出。
   // The model registry loads at the same point (loadRunRegistry), once per
-  // run and against the phase type list with the custom types.
+  // run and against the phase type list with the custom types — and ahead of
+  // the switches' first parse, because a registry in force changes what the
+  // switches accept: OPENCODE_AUTO_MODEL values may be internal names and
+  // OPENCODE_AUTO_MODEL_FALLBACK is a usage error (plans/0055 §9 R7).
   let registry: ModelRegistry | undefined
   try {
     usePromptLibrary(directory)
@@ -144,9 +148,13 @@ export async function preflight(
     const loaded = loadPhaseTypes(directory)
     const custom = loaded.filter((entry) => entry.origin === "project").map((entry) => entry.type)
     const types = loaded.map((entry) => entry.type)
-    const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types)]
-    if (problems.length) throw new Error(problems.join("\n"))
     registry = await loadRunRegistry(directory, types)
+    setSwitchModelRegistry(registry ? switchModelRegistryInfo(registry) : undefined)
+    // A tier the run's sessions need with no candidate left after the agent
+    // filter is a usage error, never a silent wait (plans/0055 §6.3).
+    const coverage = registry ? tierCoverageProblems(registry, routingFacts(registry, opts.agent).agentFilter, deepTierNeeded(opts)) : []
+    const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types), ...coverage]
+    if (problems.length) throw new Error(problems.join("\n"))
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))
     return { exit: 1 }
@@ -282,6 +290,14 @@ export async function preflight(
     }
   }
   return { agentName, watcher, progress, registry }
+}
+
+// Whether this run's sessions need the deep tier (plans/0055 §6.3): every
+// mode runs simple sessions (bypass and wrap-up); a deep session runs when
+// the run plans or scans — a phased run's planning step, or m mode with a
+// planning input (its scan session).
+function deepTierNeeded(opts: RunAllOpts): boolean {
+  return (opts.phases !== undefined && opts.phases !== "m") || opts.planInput !== undefined
 }
 
 // The model registry at run start (plans/0055 §4.1, §4.3): both layers read

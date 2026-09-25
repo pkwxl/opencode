@@ -410,6 +410,20 @@ describe("describeModels", () => {
     ])
   })
 
+  // Under the loaded registry (plans/0055 §9 R7) an internal-name value parses
+  // and overrides with the entry; OPENCODE_AUTO_MODEL_FALLBACK is a problem
+  // naming the tier lists, as it fails a run start.
+  test("OPENCODE_AUTO_MODEL under the loaded registry: internal names override with the entry; _FALLBACK is a problem", async () => {
+    await writeExample()
+    const t = await table({ env: envWith({ OPENCODE_AUTO_MODEL: "whole=glm" }) })
+    expect(t.override).toBe("whole=glm")
+    expect(row(t, "analysis", "whole").override).toMatchObject({ value: "glm", model: "glm" })
+    const ring = await describeTarget({ env: envWith({ OPENCODE_AUTO_MODEL_FALLBACK: "zhipuai/glm-4.6" }) })
+    expect(ring.problems).toEqual([
+      "env OPENCODE_AUTO_MODEL_FALLBACK is not used under a model registry: the tier lists are the failover order (deep: opus, opus-b, k3; simple: glm, k2) (the table below ignores the OPENCODE_AUTO_* switches)",
+    ])
+  })
+
   test("a bad switch is a problem, and the table ignores the switches", async () => {
     await writeExample()
     const description = await describeTarget({ env: envWith({ OPENCODE_AUTO_AGENT: "kimi" }) })

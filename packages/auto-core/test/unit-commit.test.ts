@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { clearSticky, resetFailback } from "../src/failback"
+import { clearSticky, markModelDown, resetFailback } from "../src/failback"
 import { commitTree, unitBaseline } from "../src/git"
 import { recallHandover, saveHandover } from "../src/handover"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -115,5 +115,39 @@ describe("resumeModelNow (strict-resume model check)", () => {
   test("an explicit role wins over the phase, as it does at dispatch (plans/0053 D12)", () => {
     expect(resumeModelNow({}, switches, step)).toBe("kimi/k2")
     expect(resumeModelNow({}, switches, step, "implement-scan")).toBe("kimi/scan")
+  })
+
+  // Under a registry (plans/0055 §6.2) the comparison runs on internal names:
+  // the record holds the dispatched entry's internal name, and the check
+  // returns the selection's pick for the same routing — the marks and windows
+  // apply, the env-switch chain does not.
+  test("under a registry: the pick's internal name, down marks and windows applying", () => {
+    const entry = (name: string, fields: Partial<import("../src/models").ModelEntry> = {}): import("../src/models").ModelEntry => ({
+      name,
+      layer: "operator",
+      agent: "opencode",
+      ...fields,
+    })
+    const registry: import("../src/models").ModelRegistry = {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map([entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" })].map((item) => [item.name, item])),
+      tiers: { deep: { tier: "deep", names: ["a", "b"], layer: "operator" }, simple: { tier: "simple", names: ["b"], layer: "operator" } },
+      routes: new Map(),
+      unused: [],
+    }
+    const routing: import("../src/routing").RoutingFacts = {
+      registry,
+      agentFilter: "opencode",
+      filterSource: undefined,
+      defaultAgent: "opencode",
+    }
+    const opts: import("../src/opts").Opts = { routing }
+    // A deep planning step picks the deep list's first entry.
+    expect(resumeModelNow(opts, parseSwitches({}), step)).toBe("a")
+    // The primary marked down: the record's "a" would mismatch the pick.
+    markModelDown("a")
+    expect(resumeModelNow(opts, parseSwitches({}), step)).toBe("b")
   })
 })

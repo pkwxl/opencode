@@ -8,7 +8,7 @@ import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates } from "./document/state"
 import { maybeExit } from "./exit"
-import { consumeFailback, failbackApplies } from "./failback"
+import { clearDownMarks, consumeFailback, failbackApplies } from "./failback"
 import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
@@ -384,8 +384,15 @@ export async function runTask(
         await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
         // failback 回试(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): subtask/session 粒度
         // 在子任务边界清链上降级候选,下一子任务回试首选(task 粒度由链逐任务销毁
-        // 天然承担);/failback 请求同点消费(可整体重定义模型序)。
-        if (failbackApplies(switches.modelFailbackScope, "subtask")) chain.model = undefined
+        // 天然承担);/failback 请求同点消费(可整体重定义模型序)。Registry routing
+        // (plans/0055 §6.4): the same boundary clears the down marks the scope
+        // covers, and the chain's selected entry with the raw candidate.
+        if (failbackApplies(switches.modelFailbackScope, "subtask")) {
+          chain.model = undefined
+          chain.modelEntry = undefined
+          chain.modelStep = 0
+        }
+        clearDownMarks("subtask", switches.modelFailbackScope)
         consumeFailback(chain)
       }
       // 收尾会话: config.wrapup=false(--no-wrapup,缺省 true)时整体关闭。report.md

@@ -8,6 +8,7 @@ import { log } from "./log"
 import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
+import { logRunRouting, routingFacts } from "./routing"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentHost } from "./agent/types"
@@ -120,8 +121,13 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       log(`⏸ ${started.error}`)
       return 1
     }
+    // The run's routing facts (plans/0055 §6): fixed once the agent choice is
+    // known, held by every dispatch through Opts.routing. The run-start block
+    // (§6.5) prints the routing in force; without a registry nothing changes.
+    const routing = registry ? routingFacts(registry, opts.agent) : undefined
+    if (routing) logRunRouting(routing)
     if (opts.interactive) {
-      repl = startInteractive(server.client, agentName)
+      repl = startInteractive(server.client, agentName, undefined, routing ? new Set(routing.registry.models.keys()) : undefined)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
     }
     if (opts.dryrun) {
@@ -134,6 +140,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
         contextLimit: opts.contextLimit,
         interactive: repl,
         server,
+        routing,
       })
       if (result.type === "blocked") {
         log(`⏸ preflight session blocked:\n${result.question}`)
@@ -145,7 +152,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // The advanceFinal closure would lose narrowing; capture the ready server
     // handle as const.
     const serverHandle = server
-    const ctx: LoopCtx = { directory, opts, server: serverHandle, agentName, phases, manual: phases === "m", repl, ran: 0, input: opts.planInput, append: opts.append, registry }
+    const ctx: LoopCtx = { directory, opts, server: serverHandle, agentName, phases, manual: phases === "m", repl, ran: 0, input: opts.planInput, append: opts.append, routing }
     return await runPhaseLoop(ctx)
   } catch (error) {
     // /exit (design doc plans/0014-exit-resume-design.md): the three safe

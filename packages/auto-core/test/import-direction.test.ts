@@ -149,6 +149,11 @@ const CLASSIFIED: Record<string, Domain> = {
   "prompt-plan": "driver",
   refcheck: "driver",
   reset: "driver",
+  // The run's registry routing facts (plans/0055 §6): the agent filter, the
+  // default agent and the selection-context injection around the pure
+  // selection core, plus the run-start routing block and the tier-coverage
+  // refusal. Sits with select below the session layer.
+  routing: "driver",
   resolve: "driver",
   "resume-gate": "driver",
   resume: "driver",
@@ -297,6 +302,31 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
       "models-describe",
     ],
     why: "selection is the pure resolver behind every dispatch under a registry (plans/0055 §6, §12): attempt, session, unit-commit and the failback override call it, so it must not import the loop, the session-driving layer, the agent start, an agent host or the models command's data",
+  },
+  // AUTO-DECISION: routing gets a one-way rule besides its classification row (it injects the run state around selection and is imported by the dispatch resolvers and the loop, so an upward import would form a cycle)
+  {
+    from: "routing",
+    to: [
+      "loop",
+      "loop-phase",
+      "loop-plan",
+      "loop-task",
+      "loop-preflight",
+      "runner",
+      "artifact",
+      "session",
+      "attempt",
+      "watch",
+      "exec-session",
+      "execute",
+      "unit-commit",
+      "interactive",
+      "agent-choice",
+      "agent/opencode/server",
+      "agent/claude/host",
+      "models-describe",
+    ],
+    why: "the run's routing facts wrap selection for every dispatch under a registry (plans/0055 §6): attempt, session, unit-commit, the loop and preflight call it, so it must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the agent start, an agent host or the models command's data",
   },
   {
     from: "watch",

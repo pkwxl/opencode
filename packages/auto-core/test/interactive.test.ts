@@ -9,7 +9,8 @@ import { log } from "../src/log"
 
 // 用注入的流驱动常驻 readline;桩 client 记录 promptAsync 收到的消息。
 // chunks 收集 output 流收到的全部内容(供断言提示符重绘等副作用)。
-function setup() {
+// modelNames turns the /failback input check into its registry form.
+function setup(modelNames?: ReadonlySet<string>) {
   const input = new PassThrough()
   const chunks: string[] = []
   const output = new Writable({
@@ -27,7 +28,7 @@ function setup() {
       },
     },
   } as unknown as OpencodeClient)
-  const repl = startInteractive(client, undefined, { input, output })
+  const repl = startInteractive(client, undefined, { input, output }, modelNames)
   return { input, sent, repl, chunks }
 }
 
@@ -105,6 +106,23 @@ describe("interactive", () => {
     ctx.input.write("继续发消息\n")
     await tick()
     expect(ctx.sent).toEqual([{ sessionID: "s1", text: "继续发消息" }])
+  })
+
+  // Under a model registry (plans/0055 §9) the arguments are internal names;
+  // an unknown name is refused at input, as malformed arguments always were.
+  test("/failback under a registry: internal names accepted, unknown names refused", async () => {
+    const ctx = setup(new Set(["opus", "k3"]))
+    repl = ctx.repl
+    ctx.repl.attach("s1")
+    ctx.input.write("/failback opus k3\n")
+    await tick()
+    expect(failbackRequested()).toBe(true)
+    expect(consumeFailback()).toBe(true)
+    expect(failbackOverride()).toEqual({ wildcard: "opus", fallback: ["k3"] })
+    ctx.input.write("/failback glm\n")
+    await tick()
+    expect(failbackRequested()).toBe(false)
+    expect(ctx.sent).toEqual([])
   })
 
   test("回车把输入作为消息发往已 attach 的会话", async () => {

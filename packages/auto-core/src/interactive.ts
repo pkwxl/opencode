@@ -26,6 +26,12 @@ export function startInteractive(
   client: AgentClient,
   agent?: string,
   io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream },
+  // The registry's internal model names (plans/0055 §9): under a registry a
+  // /failback argument is an internal name or a raw provider/model string,
+  // and an unknown bare name is refused at input, as malformed arguments
+  // always were. undefined = no registry: the arguments keep the raw-only
+  // rule.
+  modelNames?: ReadonlySet<string>,
 ): Interactive {
   const rl = createInterface({ input: io?.input ?? process.stdin, output: io?.output ?? process.stdout })
   // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级处理器,
@@ -74,12 +80,20 @@ export function startInteractive(
     // /failback(设计文档 plans/0017-model-routing-design.md E 节): 与 /exit 同构但不
     // 停止——置位后在下一个安全边界重置降级状态,回试首选模型;带参数(空格分隔的
     // provider/model 列表)时整体重定义模型序(首个为首选、其余为降级候选环)。
-    // 与是否已连上会话无关,不发往会话。
+    // 与是否已连上会话无关,不发往会话。Under a model registry the arguments are
+    // internal model names (a raw provider/model string still works), and they
+    // replace every candidate list for the rest of the run (plans/0055 §9).
     if (text === "/failback" || text.startsWith("/failback ")) {
       const order = text.slice("/failback".length).trim().split(/\s+/).filter(Boolean)
-      const bad = order.find((item) => !item.includes("/"))
+      const valid = (item: string): boolean =>
+        modelNames === undefined ? item.includes("/") : item.includes("/") || modelNames.has(item)
+      const bad = order.find((item) => !valid(item))
       if (bad !== undefined) {
-        log(`⚠ invalid /failback argument: "${bad}" (models must be provider/model with a slash; usage: /failback [primary prov/a candidate prov/b ...])`)
+        log(
+          modelNames === undefined
+            ? `⚠ invalid /failback argument: "${bad}" (models must be provider/model with a slash; usage: /failback [primary prov/a candidate prov/b ...])`
+            : `⚠ invalid /failback argument: "${bad}" (under a model registry, arguments are internal model names or provider/model with a slash; usage: /failback [primary <name> candidate <name> ...])`,
+        )
       } else {
         requestFailback(order)
         log(

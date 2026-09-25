@@ -16,7 +16,11 @@ import { attempt } from "../src/attempt"
 import { degrade } from "../src/capability"
 import type { SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
+import type { ModelEntry, ModelRegistry, TierList } from "../src/models"
 import type { Opts } from "../src/opts"
+import { isModelDown, resetFailback, clearDownMarks } from "../src/failback"
+import { parseWindow } from "../src/model-window"
+import type { RoutingFacts } from "../src/routing"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -343,6 +347,162 @@ describe("the barest agent", () => {
 
   test("--test-by-driver needs steer: the one configuration without a fallback", () => {
     expect(degrade(BARE_CAPABILITIES, DEFAULTS, { testByDriver: true }).error).toContain("--test-by-driver")
+  })
+})
+
+// Registry-driven dispatch (plans/0055 §6, §7): selection picks the model of
+// every prompt under a hand-built registry (opts.routing), a classified
+// failure marks the model down and fails over along the tier list on the
+// same agent, the recovery probe clears a mark, and windows gate dispatches
+// without ever aborting a running turn.
+describe("registry routing (plans/0055 §6, §7)", () => {
+  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+
+  // The routing facts of a one-agent fleet: deep [a, b], simple [s] unless a
+  // fixture overrides the models or the clock.
+  const facts = (
+    models: ModelEntry[],
+    over: { tiers?: Partial<Record<"deep" | "simple", TierList>>; clock?: () => number } = {},
+  ): RoutingFacts => ({
+    registry: {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map(models.map((item) => [item.name, item])),
+      tiers: over.tiers ?? { deep: tierList("deep", ["a", "b"]), simple: tierList("simple", ["s"]) },
+      routes: new Map(),
+      unused: [],
+    },
+    agentFilter: "opencode",
+    filterSource: undefined,
+    defaultAgent: "opencode",
+    ...(over.clock ? { clock: over.clock } : {}),
+  })
+
+  const FLEET = [entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" }), entry("s", { model: "prov/s" })]
+  const deep: Opts = { routing: facts(FLEET) }
+  // The chain of a deep session: decompose routes deep by default.
+  const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
+  const quotaTurn = (ctx: { session: string; n: number }): AgentEvent[] | undefined =>
+    ctx.n === 1
+      ? [
+          ev.message(ctx.session, `msg_fail_${ctx.n}`, 5000),
+          ev.error(ctx.session, { name: "APIError", message: "usage limit reached, quota exceeded", isRetryable: false }),
+          ev.idle(ctx.session),
+        ]
+      : undefined
+
+  beforeEach(() => {
+    resetFailback()
+  })
+
+  test("every prompt names the tier's first model; the dispatch line format comes from the selection", async () => {
+    const agent = make()
+    const chain = deepChain()
+    await runSession(agent.client, task, "p", deep, chain, undefined, undefined, DEFAULTS)
+    expect(agent.prompts[0]).toMatchObject({ model: "prov/a" })
+    expect(agent.prompts[0]).not.toHaveProperty("variant")
+    expect(chain.modelEntry).toBe("a")
+    expect(chain.modelStep).toBe(0)
+  })
+
+  test("tier-ordered failover on one agent: quota marks the model down, the next candidate takes over via a fork", async () => {
+    const agent = make({ turn: quotaTurn })
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", deep, chain, undefined, undefined, DEFAULTS)
+    expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+    // First prompt on the primary, the failover fork's prompt on the second
+    // candidate of the tier list.
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b"])
+    expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
+    expect(chain.modelEntry).toBe("b")
+    expect(isModelDown("a", Date.now())).toBe(true)
+    expect(isModelDown("b", Date.now())).toBe(false)
+  })
+
+  test("a new prompt returns to the primary once its mark clears at the scope boundary", async () => {
+    const agent = make({ turn: quotaTurn })
+    const chain = deepChain()
+    await runSession(agent.client, task, "p", deep, chain, undefined, undefined, DEFAULTS)
+    // The task boundary under the default task scope: the marks clear, the
+    // next task's chain re-selects and the primary is back.
+    clearDownMarks("task", "task")
+    const next = deepChain()
+    await runSession(agent.client, task, "q", deep, next, undefined, undefined, DEFAULTS)
+    expect(agent.prompts[2]!.model).toBe("prov/a")
+    expect(next.modelEntry).toBe("a")
+  })
+
+  test("a continuation keeps the chain's model while it is usable, even after the primary is eligible again", async () => {
+    const agent = make({ turn: quotaTurn })
+    const chain = deepChain()
+    const reuse = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
+    await runSession(agent.client, task, "p", deep, chain, undefined, undefined, reuse)
+    clearDownMarks("task", "task")
+    // The reused session is a continuation of the same prompt line: it stays
+    // on the failover candidate although the primary is usable again.
+    await runSession(agent.client, task, "q", deep, chain, undefined, undefined, reuse)
+    expect(agent.prompts[2]).toMatchObject({ session: "ses_2", model: "prov/b" })
+    expect(agent.argsOf("create")).toHaveLength(1)
+  })
+
+  test("a window closing mid-turn never aborts the turn; it finishes and the next dispatch selects again", async () => {
+    let now = Date.parse("2026-09-25T12:00:30Z")
+    const clock = () => now
+    const only = parseWindow("00:00-12:01")
+    if ("error" in only) throw new Error(only.error)
+    const models = [entry("w", { model: "prov/w", only: [only.window] }), entry("b", { model: "prov/b" })]
+    const routing = facts(models, { clock, tiers: { deep: tierList("deep", ["w", "b"]), simple: tierList("simple", ["w", "b"]) } })
+    // The turn itself moves the clock past the window's end: the running turn
+    // is never aborted (§4.4) — windows gate dispatches only.
+    const agent = make({ turn: (ctx) => ((now = Date.parse("2026-09-25T12:02:00Z")), undefined) })
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
+    expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+    expect(agent.argsOf("abort")).toEqual([])
+    expect(agent.prompts[0]!.model).toBe("prov/w")
+  })
+
+  test("a variant declared on the entry reaches the prompt body", async () => {
+    const agent = make()
+    const models = [entry("think", { model: "prov/big", variant: "high" })]
+    await runSession(agent.client, task, "p", { routing: facts(models, { tiers: { deep: tierList("deep", ["think"]), simple: tierList("simple", ["think"]) } }) }, deepChain(), undefined, undefined, DEFAULTS)
+    expect(agent.prompts[0]).toMatchObject({ model: "prov/big", variant: "high" })
+  })
+
+  test("an entry without model sends no model key; the agent's own default runs", async () => {
+    const agent = make()
+    const models = [entry("any")]
+    const chain = deepChain()
+    await runSession(agent.client, task, "p", { routing: facts(models, { tiers: { deep: tierList("deep", ["any"]), simple: tierList("simple", ["any"]) } }) }, chain, undefined, undefined, DEFAULTS)
+    expect(agent.prompts[0]).not.toHaveProperty("model")
+    expect(agent.prompts[0]).not.toHaveProperty("variant")
+    expect(chain.modelEntry).toBe("any")
+    expect(chain.model).toBeUndefined()
+  })
+
+  test("all candidates down: the wait-and-probe loop probes the first in-window candidate and continues on it when service is back", async () => {
+    // Both candidates fail their first turns with quota; everything after
+    // (the probe and the re-dispatch) succeeds.
+    const quotaBoth = (ctx: { session: string; n: number }): AgentEvent[] | undefined =>
+      ctx.n <= 2
+        ? [
+            ev.message(ctx.session, `msg_fail_${ctx.n}`, 5000),
+            ev.error(ctx.session, { name: "APIError", message: "usage limit reached, quota exceeded", isRetryable: false }),
+            ev.idle(ctx.session),
+          ]
+        : undefined
+    const agent = make({ turn: quotaBoth })
+    const chain = deepChain()
+    const switches = parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" })
+    const result = await runSession(agent.client, task, "p", deep, chain, undefined, undefined, switches)
+    expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+    // a fails, b fails: both down → the probe clears a's mark, the probe
+    // succeeds on it, and the re-dispatch continues there.
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b", "prov/a", "prov/a"])
+    expect(isModelDown("a", Date.now())).toBe(false)
+    expect(isModelDown("b", Date.now())).toBe(true)
   })
 })
 

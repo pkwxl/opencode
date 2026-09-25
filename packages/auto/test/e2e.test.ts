@@ -1622,7 +1622,14 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       const gitignore = join(dir, ".gitignore")
       const older = (await Bun.file(gitignore).text()).replace("/.opencode/auto/models.json\n", "")
       await Bun.write(gitignore, older)
-      await Bun.write(join(dir, ".opencode/auto/models.json"), JSON.stringify({ models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } } }))
+      // The registry declares both tier lists on its one model: since
+      // selection wires the tiers into every dispatch, a needed tier with no
+      // candidate is a run-start refusal (auto-core plans/0055 §6.3), and
+      // this fixture wants the run to pass the registry checks.
+      await Bun.write(
+        join(dir, ".opencode/auto/models.json"),
+        JSON.stringify({ models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } }, tiers: { deep: ["glm"], simple: ["glm"] } }),
+      )
       // --server points at a closed port: the run needs no local opencode and
       // stops at the connection once preflight passes.
       const run = () => runCli(["run", dir, "--dryrun", "--server", "http://127.0.0.1:1"])

@@ -64,6 +64,11 @@ export type SessionResult =
       // 严格恢复: 本阻塞由交接文档无效触发,单元所有者(executeWhole/runSubtask)据此
       // 回滚到单元基线并冷启动重做,而非把阻塞上抛;无基线的调用方忽略此标记。
       rollback?: boolean
+      // Registry routing (plans/0055 §6.3): selection found no usable model
+      // for this dispatch — every candidate of the list is down or outside
+      // its windows. runSession sends the prompt to the wait-and-probe loop
+      // instead of treating this as a session failure.
+      noModel?: boolean
     })
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
@@ -85,12 +90,18 @@ export type SessionResult =
 // modelShown 为终端展示的已播报模型(每次 prompt 求值出的 target——未设路由时回落
 // 服务端生效模型——与之比对,模型变化时再播报「◈ 使用模型」;新会话(新建/分叉)
 // 恒播报,同会话同模型的续跑 prompt 不重复;仅内存态,不落盘)。
+// 模型注册表之下的选择态(plans/0055 §6.2,§12): modelEntry 为所选条目的内部名
+// (裸 override 值则为其模型串)——续跑判定、降级标记与严格恢复记录都以它为键;
+// model 在注册表之下改存「实际下发给适配器的模型 id」(无 model 的条目为 undefined,
+// prompt 不带 model 键),兼作续跑判定的 current(会话升步后等于所达步的 id);
+// modelStep 为会话已达的上下文步(0 = 基础步,§4.5;步进机制为后续步骤,此处仅
+// 记录基位)。无注册表的运行三者恒 undefined,原语义逐字节不变。
 // baseline 为当前执行单元的 SHA 基线(严格恢复,plans/0022-session-recovery-fidelity-design.md
 // 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
 // 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
 // hinted: the chain's current session was sent the in-turn handover hint
 // (copied from its Watch by attempt; plans/0040 D6).
-export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
+export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
 
 // 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
 // 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能

@@ -46,7 +46,21 @@ import {
 import { loadPhaseTypes } from "./phases/custom"
 import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import { shellProfile } from "./shell"
-import { MODEL_ROLES, parseSwitches, SWITCH_ENV, type ModelRole, type Switches } from "./switches"
+import { MODEL_ROLES, parseSwitches, SWITCH_ENV, type ModelRole, type Switches, type SwitchModelRegistry } from "./switches"
+
+// What the switches need to know about a loaded registry (plans/0055 §9 R7):
+// the internal names a bare OPENCODE_AUTO_MODEL value may take, and the tier
+// lists as text for the OPENCODE_AUTO_MODEL_FALLBACK refusal that names them.
+// Shared by the run start (which hands it to the switches through
+// setSwitchModelRegistry) and this command's own parse. undefined is not a
+// value here: a caller without a registry passes nothing and the switches
+// keep their no-registry grammar.
+export function switchModelRegistryInfo(registry: ModelRegistry): SwitchModelRegistry {
+  const tiers = (["deep", "simple"] as const)
+    .map((tier) => `${tier}: ${registry.tiers[tier]?.names.join(", ") ?? "(not declared)"}`)
+    .join("; ")
+  return { names: new Set(registry.models.keys()), tiers }
+}
 
 export type CheckModelsOptions = Omit<LoadModelsOptions, "phaseTypes"> & {
   // The phase type ids a route key may name; default: the builtin types and
@@ -261,7 +275,7 @@ export async function describeModels(
   if (registry === undefined) return { operatorPath, problems, notes }
   let switches: Switches | undefined
   try {
-    switches = parseSwitches(env)
+    switches = parseSwitches(env, registry ? switchModelRegistryInfo(registry) : undefined)
   } catch (error) {
     problems.push(`${errorText(error)} (the table below ignores the OPENCODE_AUTO_* switches)`)
   }

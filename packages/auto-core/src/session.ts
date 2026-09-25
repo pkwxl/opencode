@@ -11,9 +11,11 @@ import type { AgentClient } from "./agent/types"
 import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { attempt } from "./attempt"
 import { taskDoc } from "./docpaths"
-import { failbackOverride, setSticky, stickyModel } from "./failback"
+import { clearModelDownMark, downMarks, failbackOverride, markModelDown, setSticky, stickyModel } from "./failback"
 import { log } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
+import { candidateKey, nowOf, selectContext } from "./routing"
+import { select } from "./select"
 import { setForkBase, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
 import { firstLine } from "./resume-gate"
@@ -160,43 +162,84 @@ export async function runSession(
   // 承载)。降级触发门禁与 switchModel 的候选遍历共用同一来源。
   const fallbackRing = () => failbackOverride()?.fallback ?? switches.model.fallback
   // 候选降级的公共动作(两个触发面共用:下面的配额降级支、阶梯耗尽后的回落):
-  // 取 fallback 中首个「未试过 且 上下文窗口可接受」的候选,换 chain.model、挂一次性
-  // 降级 note、fork 副本带上下文随迁,并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
+  // 取下一个可用候选,换 chain.model、挂一次性降级 note、fork 副本带上下文随迁,
+  // 并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
   // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方落入等待-探测环)。
   // why is a short phrase naming the trigger; it goes into the log and the failover note.
+  // Under a model registry (plans/0055 §7 step 2) the current model is marked
+  // down and selection picks the next usable candidate of the tier's list,
+  // which replaces the global _FALLBACK ring; on this run's single agent the
+  // move is today's path unchanged (fork copy, the chain's model, the
+  // failover note, the ladder reset). Cross-agent candidates are a later
+  // step, and the key-ring half (step 1) too.
   const switchModel = async (why: string): Promise<boolean> => {
     limits ??= await client.contextLimits()
-    const fallback = fallbackRing()
-    // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
-    // 更糟);窗口未知(不在映射)不过滤。
-    let candidate: string | undefined
-    for (const c of fallback) {
-      if (tried.includes(c)) continue
-      const limit = limits.get(c)
-      if (limit !== undefined && limit < cap) {
-        if (!clipped.includes(c)) {
-          clipped.push(c)
-          log(`⇄ ${task.id} skipping candidate ${c}: context window ${formatTokens(limit)} < chain requirement ${formatTokens(cap)}; switching would immediately hit the ceiling`)
+    let from: string | undefined
+    let to: string | undefined
+    let toModel: string | undefined
+    let ringSize = 0
+    if (opts.routing) {
+      from = chain.modelEntry
+      if (from !== undefined) markModelDown(from)
+      const decision = select(selectContext(opts.routing, switches, cap, limits), {
+        role: roleOf(chain),
+        entry: opts.phase?.entry,
+        now: nowOf(opts.routing),
+        continuation: false,
+      })
+      if (decision.kind !== "pick") return false
+      to = candidateKey(decision.candidate)
+      // The model just marked down cannot be the pick; a same-name result
+      // would mean an override re-listed it — refuse rather than loop.
+      if (to === from) return false
+      toModel = decision.candidate.kind === "entry" ? decision.candidate.entry.model : decision.candidate.model
+    } else {
+      const fallback = fallbackRing()
+      // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
+      // 更糟);窗口未知(不在映射)不过滤。
+      for (const c of fallback) {
+        if (tried.includes(c)) continue
+        const limit = limits.get(c)
+        if (limit !== undefined && limit < cap) {
+          if (!clipped.includes(c)) {
+            clipped.push(c)
+            log(`⇄ ${task.id} skipping candidate ${c}: context window ${formatTokens(limit)} < chain requirement ${formatTokens(cap)}; switching would immediately hit the ceiling`)
+          }
+          continue
         }
-        continue
+        to = c
+        break
       }
-      candidate = c
-      break
+      // 候选耗尽(全部试过,或全部被窗口钳制跳过)。
+      if (to === undefined) return false
+      // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
+      // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
+      // 一并标记已试(防被再选)。与 attempt 的 target 求值同一优先级链(chain.model >
+      // sticky > /failback 覆写 > 路由表)。
+      from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
+      if (from !== undefined && !tried.includes(from)) tried.push(from)
+      tried.push(to)
+      toModel = to
+      ringSize = fallback.length
     }
-    // 候选耗尽(全部试过,或全部被窗口钳制跳过)。
-    if (candidate === undefined) return false
-    // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
-    // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
-    // 一并标记已试(防被再选)。与 attempt 的 target 求值同一优先级链(chain.model >
-    // sticky > /failback 覆写 > 路由表)。
-    const from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
-    if (from !== undefined && !tried.includes(from)) tried.push(from)
-    tried.push(candidate)
-    chain.model = candidate
-    // failback 粒度 phase: 降级跨任务粘滞——链逐任务销毁,候选人选经 failback 模块的
-    // sticky holder 带进本阶段后续任务,阶段边界(clearSticky)才重置回首选。
-    if (switches.modelFailbackScope === "phase") setSticky(candidate)
-    log(`⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${candidate} (candidate ${tried.length}/${fallback.length})`)
+    chain.model = toModel
+    if (opts.routing) {
+      // The registry's selection state: the internal name (and the base step)
+      // travel with the chain; the down marks replace the phase-scoped sticky
+      // holder (§6.4), so scope=phase keeps the move through the task
+      // boundaries without it.
+      chain.modelEntry = to
+      chain.modelStep = 0
+    } else if (switches.modelFailbackScope === "phase") {
+      // failback 粒度 phase: 降级跨任务粘滞——链逐任务销毁,候选人选经 failback 模块的
+      // sticky holder 带进本阶段后续任务,阶段边界(clearSticky)才重置回首选。
+      setSticky(to)
+    }
+    log(
+      opts.routing
+        ? `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
+        : `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${tried.length}/${ringSize})`,
+    )
     i = 1
     // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
     // 换模型续跑无需重做上下文。分叉源与重试环同一套「保住最值钱的会话」判据:失败会话
@@ -262,6 +305,15 @@ export async function runSession(
   // 探测链不带 phase(不写进度记录、不动真实链的恢复点),但复制真实链的
   // model/role——探测的就是恢复后要续跑的那条模型,配额按模型/账号计量,探测
   // 别的模型结论无意义。探测会话本身异常(订阅断开等)同样视为未恢复,继续等。
+  // Under a registry (§6.3) the probe dispatches through selection like any
+  // other: the probe candidate is the first one inside its window, ignoring
+  // the down marks, so its mark is cleared for the probe and re-marked when
+  // the probe fails — a successful probe leaves it cleared, which is exactly
+  // "a successful probe clears that candidate's mark", and the re-dispatch
+  // that follows picks it as the first usable candidate. A window-blocked
+  // list (the wait decision) keeps failing its probes until the window opens;
+  // the proper window wait with its jitter is the next step of the design.
+  // AUTO-DECISION: the probe realizes the mark-clearing by clearing the probe candidate's mark before the dispatch and re-marking it on a failed probe, instead of bypassing selection with a dictated model (selection then picks the cleared candidate deterministically — it is the first in-window one — and no dispatch path exists that skips the windows or the marks)
   const awaitRecovery = async (why: string): Promise<void> => {
     for (;;) {
       log(`⏳ ${task.id} ${why}; waiting ${switches.recoveryWait} minutes, then probing service recovery with a fresh temporary session (press Ctrl+C twice to force exit)`)
@@ -273,15 +325,31 @@ export async function runSession(
       } finally {
         await statsWaitEnd(opts.dir)
       }
-      const probe: SessionChain = { pct: 100, used: 0, at: 0, model: chain.model, role: roleOf(chain) }
+      let probed: string | undefined
+      if (opts.routing) {
+        limits ??= await client.contextLimits()
+        const decision = select(selectContext(opts.routing, switches, cap, limits), {
+          role: roleOf(chain),
+          entry: opts.phase?.entry,
+          now: nowOf(opts.routing),
+          continuation: false,
+        })
+        if (decision.kind === "probe") {
+          probed = candidateKey(decision.candidate)
+          clearModelDownMark(probed)
+        }
+      }
+      const probe: SessionChain = { pct: 100, used: 0, at: 0, ...(opts.routing ? {} : { model: chain.model }), role: roleOf(chain) }
       let ping: SessionResult
       try {
         ping = await attempt(client, task, RECOVERY_PROBE_PROMPT, opts, probe, undefined, undefined, switches)
       } catch (error) {
+        if (probed !== undefined) markModelDown(probed)
         log(`⏳ ${task.id} probe session itself errored (${formatClientError(error)}); service not recovered, continuing to wait`)
         continue
       }
       if (ping.type !== "idle") {
+        if (probed !== undefined) markModelDown(probed)
         log(`⏳ ${task.id} probe session still failing (${firstLine(ping.question)}); continuing to wait`)
         continue
       }
@@ -346,19 +414,33 @@ export async function runSession(
     // 上抛阻塞;仍直接返回的 blocked 只有会话内阻塞提问与权限拒绝——那需要人工
     // 答复,本就不属于故障。
     if (result.type !== "blocked") return result
+    // Registry routing: selection found nothing usable for the dispatch (every
+    // candidate down or outside its windows, §6.3) — no session ran, so this is
+    // not a session failure either: straight into the wait-and-probe loop,
+    // whose probe clears a candidate's mark when service is back.
+    if (result.noModel === true) {
+      await awaitRecovery(firstLine(result.question))
+      continue
+    }
     if (!(result.question.startsWith("session error: ") || result.question.startsWith("session creation failed: ") || result.question.startsWith("task dispatch failed: "))) return result
     // P4 配额降级(设计 D.3):分类为 quota/auth/rate 且配置了候选表时,取下一候选
     // (经 D.4 窗口钳制)、换 chain.model、复用既有 fork 副本路径续跑(上下文随迁)。
     // 判据取 result.errorClass(P3 三条触发面统一带来的归类):plain session.error 的
     // quota(isRetryable:false)与提前结算的 retry part / session.status retry 均带
     // errorClass,故据它决策即可覆盖两条路径(不读 result.failover)。
+    // Under a registry the tier lists are the candidate table (the global ring
+    // is a refused switch there), so the same gate applies with no ring set.
     const classLabel =
       result.errorClass === "quota" ? "quota restricted" : result.errorClass === "auth" ? "provider auth failed" : result.errorClass === "rate" ? "rate-limit wait too long" : undefined
-    if (fallbackRing().length > 0 && classLabel !== undefined) {
+    if ((opts.routing !== undefined || fallbackRing().length > 0) && classLabel !== undefined) {
       if (await switchModel(classLabel)) continue
       // 候选耗尽(候选与首选全部配额受限/不可用): 不再阻塞退出——等待-探测环等到
       // 额度恢复,期间探测用当前生效模型,恢复后从被中断的会话分叉续跑。
-      await awaitRecovery(`${classLabel} and fallback candidates exhausted (tried: ${tried.join(", ") || "none"})`)
+      await awaitRecovery(
+        opts.routing !== undefined
+          ? `${classLabel} and every candidate of the tier list is down (down: ${[...downMarks().keys()].join(", ") || "none"})`
+          : `${classLabel} and fallback candidates exhausted (tried: ${tried.join(", ") || "none"})`,
+      )
       continue
     }
     // 不可重试(isRetryable:false,配额/鉴权类): 换会话无意义、未配候选表也换不了
@@ -377,7 +459,7 @@ export async function runSession(
     // 自动从首选模型重新起跑;更细/更粗的回试粒度由 OPENCODE_AUTO_MODEL_FAILBACK_SCOPE
     // 在边界挂点消费(见 src/failback.ts)。
     if (i > waits.length) {
-      if (fallbackRing().length > 0 && (await switchModel("retry ladder exhausted"))) continue
+      if ((opts.routing !== undefined || fallbackRing().length > 0) && (await switchModel("retry ladder exhausted"))) continue
       await awaitRecovery(`retry ladder exhausted (${waits.length} retries) without success`)
       continue
     }

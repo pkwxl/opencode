@@ -84,6 +84,19 @@ export type ModelLetter = PhaseLetter
 // Shape of a phase-type key (the phase directory grammar's type part).
 const TYPE_KEY = /^[a-z][a-z0-9-]*$/
 
+// Shape of a registry model's internal name (plans/0055 §4.2): no "/", so a
+// bare OPENCODE_AUTO_MODEL value of that shape can only be an internal name.
+// Restated here because the registry loader (src/models.ts) imports this
+// module, not the other way round.
+const INTERNAL_NAME = /^[a-z][a-z0-9.-]*$/
+
+// What parseSwitches needs to know about a loaded model registry (plans/0055
+// §9 R7): the internal names a bare OPENCODE_AUTO_MODEL value may take, and
+// the tier lists as text for the OPENCODE_AUTO_MODEL_FALLBACK refusal that
+// names them. undefined = no registry: the switches keep their exact
+// no-registry grammar and refusals.
+export type SwitchModelRegistry = { names: ReadonlySet<string>; tiers: string }
+
 // Role words of retired sessions (plans/0044 D1): still a strict parse failure,
 // not read as phase type ids. Custom type ids may not take them either.
 export const RETIRED_MODEL_ROLES = ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"] as const
@@ -235,9 +248,29 @@ const SWITCH_DEFAULTS: Switches = {
 // 裸值 prov/model 等价全量覆盖(*=prov/model);条目表 `键=prov/model` 逗号分隔,键 ∈
 // {* ∪ 阶段字母 ∪ 角色词表},条目内分隔符用 = 而非 :(model id 可能含冒号)。值必须
 // 含 /;空串视同未设。坏值严格失败: throw 中文报错(含变量名、示例、越界键/坏值)。
-function parseModelPolicy(rawModel: string | undefined, rawFallback: string | undefined): ModelPolicy {
+// Under a model registry (registry info given, plans/0055 §9 R7) a value is
+// additionally allowed to be a bare internal model name: it must match the
+// internal-name shape and be one of the registry's names, and an unknown bare
+// name is refused listing the known ones. Without the registry info the bare
+// name keeps its old refusal, byte for byte, so a run without a registry is
+// unchanged.
+// AUTO-DECISION: the registry acceptance lives in the parse itself, not in a post-parse check (a value that parses differently depending on the registry cannot first parse "provisionally" and be validated later; the run start loads the registry before the switches are first parsed and feeds this flag through setSwitchModelRegistry)
+function parseModelPolicy(
+  rawModel: string | undefined,
+  rawFallback: string | undefined,
+  registry: SwitchModelRegistry | undefined,
+): ModelPolicy {
   const policy: ModelPolicy = { byLetter: {}, byType: {}, byRole: {}, fallback: [] }
   const modelExample = "*=kimi/k2,m=anthropic/c-4,wrapup=kimi/k2-lite"
+  // A value without "/": an internal name under a registry, a refusal without one.
+  const valueProblem = (value: string, key?: string): string | undefined => {
+    if (value.includes("/")) return undefined
+    if (registry === undefined)
+      return `env ${SWITCH_ENV.model} invalid value: "${value}" (${key !== undefined ? `model for key "${key}"` : "bare value"} must be provider/model with a slash${key === undefined ? ", or use entry-list key=prov/model" : ""}; example ${modelExample})`
+    if (INTERNAL_NAME.test(value) && registry.names.has(value)) return undefined
+    const known = [...registry.names].join(", ")
+    return `env ${SWITCH_ENV.model} invalid value: "${value}" (under a model registry a value is an internal model name or provider/model with a slash${known ? `; known internal names: ${known}` : "; the registry declares no models"})`
+  }
   const modelRaw = rawModel === undefined || rawModel === "" ? undefined : rawModel
   if (modelRaw !== undefined) {
     if (modelRaw.includes("=")) {
@@ -251,11 +284,8 @@ function parseModelPolicy(rawModel: string | undefined, rawFallback: string | un
         }
         const key = entry.slice(0, idx)
         const value = entry.slice(idx + 1)
-        if (!value.includes("/")) {
-          throw new Error(
-            `env ${SWITCH_ENV.model} invalid value: "${value}" (model for key "${key}" must be provider/model with a slash; example ${modelExample})`,
-          )
-        }
+        const problem = valueProblem(value, key)
+        if (problem !== undefined) throw new Error(problem)
         if (key === "*") policy.wildcard = value
         else if ((MODEL_LETTERS as readonly string[]).includes(key)) policy.byLetter[key as ModelLetter] = value
         else if ((MODEL_ROLES as readonly string[]).includes(key)) policy.byRole[key as ModelRole] = value
@@ -268,16 +298,20 @@ function parseModelPolicy(rawModel: string | undefined, rawFallback: string | un
       }
     } else {
       // 裸值形态:全量覆盖。
-      if (!modelRaw.includes("/")) {
-        throw new Error(
-          `env ${SWITCH_ENV.model} invalid value: "${modelRaw}" (bare value must be provider/model with a slash, or use entry-list key=prov/model; example ${modelExample})`,
-        )
-      }
+      const problem = valueProblem(modelRaw)
+      if (problem !== undefined) throw new Error(problem)
       policy.wildcard = modelRaw
     }
   }
   const fallbackRaw = rawFallback === undefined || rawFallback === "" ? undefined : rawFallback
   if (fallbackRaw !== undefined) {
+    // Under a registry the tier lists are the failover order (plans/0055 §9):
+    // the global ring is a usage error naming them.
+    if (registry !== undefined) {
+      throw new Error(
+        `env ${SWITCH_ENV.modelFallback} is not used under a model registry: the tier lists are the failover order (${registry.tiers})`,
+      )
+    }
     // 有序候选表 prov/a,prov/b;空/未设 = 不降级(空数组)。
     for (const item of fallbackRaw.split(",")) {
       if (!item.includes("/")) {
@@ -340,8 +374,11 @@ function parseHibernate(raw: string | undefined): HibernateWindow | undefined {
 }
 
 // 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
-// (取缺省),非法值 throw 中文报错。
-export function parseSwitches(env: Record<string, string | undefined>): Switches {
+// (取缺省),非法值 throw 中文报错。registry is the loaded model registry's
+// switch-facing facts (undefined = none): they widen OPENCODE_AUTO_MODEL's
+// value grammar to internal names and refuse OPENCODE_AUTO_MODEL_FALLBACK
+// (plans/0055 §9 R7).
+export function parseSwitches(env: Record<string, string | undefined>, registry?: SwitchModelRegistry): Switches {
   const onOff = (name: string, raw: string | undefined, fallback: boolean): boolean => {
     const value = raw === undefined || raw === "" ? (fallback ? "on" : "off") : raw
     if (value !== "on" && value !== "off") {
@@ -419,7 +456,7 @@ export function parseSwitches(env: Record<string, string | undefined>): Switches
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
     taskContext: taskContext as TaskContextMode,
     ask: onOff(SWITCH_ENV.ask, env[SWITCH_ENV.ask], SWITCH_DEFAULTS.ask),
-    model: parseModelPolicy(env[SWITCH_ENV.model], env[SWITCH_ENV.modelFallback]),
+    model: parseModelPolicy(env[SWITCH_ENV.model], env[SWITCH_ENV.modelFallback], registry),
     modelFailbackScope: modelFailbackScope as FailbackScope,
     retryWaits: waitList(SWITCH_ENV.retryWaits, env[SWITCH_ENV.retryWaits], SWITCH_DEFAULTS.retryWaits),
     recoveryWait: minutes(SWITCH_ENV.recoveryWait, env[SWITCH_ENV.recoveryWait], SWITCH_DEFAULTS.recoveryWait),
@@ -495,12 +532,31 @@ export function formatSwitches(switches: Switches): string {
 
 let memo: Switches | undefined
 
+// The registry facts the run start hands the switches (plans/0055 §9 R7):
+// set once by preflight after the model registry loads and before the
+// switches are first parsed, so a run under a registry accepts internal
+// names in OPENCODE_AUTO_MODEL and refuses OPENCODE_AUTO_MODEL_FALLBACK.
+// undefined (or a run that never loads a registry) keeps the no-registry
+// grammar. Commands that never load a registry never call this, and their
+// parse stays exactly as before.
+let modelRegistry: SwitchModelRegistry | undefined
+let memoRegistry: SwitchModelRegistry | undefined
+
+// Resets the memo when the facts change, so the next autoSwitches() re-parses
+// with them. In the run flow the memo is still empty at this point (preflight
+// calls this ahead of the first parse), so the reset is a guard, not a path.
+export function setSwitchModelRegistry(registry: SwitchModelRegistry | undefined): void {
+  modelRegistry = registry
+  if (memo !== undefined && registry !== memoRegistry) memo = undefined
+  memoRegistry = registry
+}
+
 // 运行期开关访问(memo 一次,全流水线一致): 首次调用解析 process.env——非法值
 // 抛出,由调用链最外层(CLI)转退出码 1;并在启动日志列出非默认生效项(默认
 // 组合静默,verbose 可查全量)。此后恒定返回同一对象。
 export function autoSwitches(): Switches {
   if (memo) return memo
-  memo = parseSwitches(process.env)
+  memo = parseSwitches(process.env, modelRegistry)
   const changed = nonDefaultSwitches(memo)
   if (changed) log(`⚙ experimental switches (OPENCODE_AUTO_* env vars, this run only): ${changed}`)
   vlog(`⚙ experimental switches (full): ${formatSwitches(memo)}`)

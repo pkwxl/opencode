@@ -150,6 +150,13 @@ function candidateOf(ctx: SelectContext, name: string): Candidate {
   return entry !== undefined ? { kind: "entry", name, entry } : { kind: "raw", model: name }
 }
 
+// The key a candidate is known by: the internal name of an entry, or the
+// model string of a raw override value — the form the down marks, the
+// strict-resume record and the chain's selected-entry field all use.
+export function candidateKey(candidate: Candidate): string {
+  return candidate.kind === "entry" ? candidate.name : candidate.model
+}
+
 // The decision of one dispatch (§6.2, §6.3). The walk, in order:
 //   1. the agent filter leaves the candidates (§6.2 rule 1); none left is
 //      the empty-tier error;

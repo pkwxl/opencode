@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { autoSwitches, formatSwitches, modelTypeProblems, nonDefaultSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
+import {
+  autoSwitches,
+  formatSwitches,
+  modelTypeProblems,
+  nonDefaultSwitches,
+  parseSwitches,
+  setSwitchModelRegistry,
+  SWITCH_ENV,
+  type SwitchModelRegistry,
+} from "../src/switches"
 
 describe("parseSwitches(实验开关环境变量层)", () => {
   test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate 未设)", () => {
@@ -386,6 +395,63 @@ describe("OPENCODE_AUTO_MODELS (the model registry's operator layer path)", () =
     expect(nonDefaultSwitches(withPath)).toBeUndefined()
     expect(formatSwitches(withPath)).toBe(formatSwitches(parseSwitches({})))
     expect(formatSwitches(withPath)).not.toContain(SWITCH_ENV.models)
+  })
+})
+
+// OPENCODE_AUTO_MODEL under a model registry (plans/0055 §9 R7): a value is
+// an internal model name or a raw provider/model string; an unknown bare
+// name is a parse failure, and OPENCODE_AUTO_MODEL_FALLBACK is a usage error
+// naming the tier lists. Without the registry facts the bare name keeps its
+// old refusal and the fallback ring parses, byte for byte.
+describe("model values under a model registry (plans/0055 §9 R7)", () => {
+  const registry: SwitchModelRegistry = { names: new Set(["opus", "k3"]), tiers: "deep: opus, k3; simple: glm (not declared)" }
+  const NAMES = "known internal names: opus, k3"
+
+  test("a bare internal name parses, per key and as the wildcard", () => {
+    expect(parseSwitches({ [SWITCH_ENV.model]: "opus" }, registry).model).toMatchObject({ wildcard: "opus" })
+    expect(parseSwitches({ [SWITCH_ENV.model]: "wrapup=k3,m=opus" }, registry).model).toMatchObject({
+      byRole: { wrapup: "k3" },
+      byLetter: { m: "opus" },
+    })
+    // A raw provider/model string parses as before.
+    expect(parseSwitches({ [SWITCH_ENV.model]: "zai/glm-4.6" }, registry).model.wildcard).toBe("zai/glm-4.6")
+  })
+
+  test("an unknown bare name is refused listing the known internal names", () => {
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "kimik2" }, registry)).toThrow(/OPENCODE_AUTO_MODEL/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "kimik2" }, registry)).toThrow(/internal model name/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "kimik2" }, registry)).toThrow(new RegExp(NAMES))
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=opus,wrapup=nope" }, registry)).toThrow(/"nope"/)
+  })
+
+  test("without the registry facts the bare name keeps today's refusal", () => {
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "opus" })).toThrow(/bare value must be provider\/model with a slash/)
+    expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=opus" })).toThrow(/must be provider\/model with a slash/)
+  })
+
+  test("OPENCODE_AUTO_MODEL_FALLBACK under a registry is a usage error naming the tier lists", () => {
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2" }, registry)).toThrow(/OPENCODE_AUTO_MODEL_FALLBACK/)
+    expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2" }, registry)).toThrow(
+      /the tier lists are the failover order \(deep: opus, k3; simple: glm \(not declared\)\)/,
+    )
+    // Without a registry the ring parses exactly as before.
+    expect(parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2" }).model.fallback).toEqual(["kimi/k2"])
+  })
+
+  test("setSwitchModelRegistry re-parses the memoized switches when the facts change", () => {
+    const savedModel = process.env[SWITCH_ENV.model]
+    process.env[SWITCH_ENV.model] = "opus"
+    try {
+      setSwitchModelRegistry(registry)
+      expect(autoSwitches().model.wildcard).toBe("opus")
+    } finally {
+      // Restore the environment before dropping the registry facts, so the
+      // re-parse that follows cannot hit the bare value without them.
+      if (savedModel === undefined) delete process.env[SWITCH_ENV.model]
+      else process.env[SWITCH_ENV.model] = savedModel
+      setSwitchModelRegistry(undefined)
+    }
+    expect(autoSwitches().model).toEqual({ byLetter: {}, byType: {}, byRole: {}, fallback: [] })
   })
 })
 

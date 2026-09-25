@@ -79,6 +79,13 @@ export async function executeWhole(
     chain.pct = 100
     chain.used = 0
     chain.at = 0
+    // The redo is a new prompt under registry routing too (the marks keep
+    // their scope-cleared meaning; the chain's entry does not carry over).
+    if (opts.routing) {
+      chain.model = undefined
+      chain.modelEntry = undefined
+      chain.modelStep = 0
+    }
     return "done"
   }
   for (;;) {
@@ -287,6 +294,18 @@ export async function runSubtask(
   subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
   chain.subject = subject
+  // Registry routing (plans/0055 §6.2): a new subtask is a new prompt — its
+  // first dispatch selects from the list instead of continuing the task's
+  // current entry (a failover within the task persists through the down
+  // marks, which survive subtask boundaries under the task scope, so a
+  // spent quota still skips its model; a window that reopened returns to
+  // the primary, as a new prompt should). Without a registry the chain's
+  // candidate keeps its exact task-scoped meaning.
+  if (opts.routing) {
+    chain.model = undefined
+    chain.modelEntry = undefined
+    chain.modelStep = 0
+  }
   const dir = opts.dir ?? plan.dir
   // 子任务单元提交边界: 启动 clean 门禁 + SHA 基线(收口时校验提交区间全为 driver
   // 提交);driver 独占状态文件遗留由 beginUnit 内部 carryover 自愈。基线同时上链
@@ -353,6 +372,12 @@ export async function runSubtask(
       chain.pct = 100
       chain.used = 0
       chain.at = 0
+      // The redo is a new prompt under registry routing too.
+      if (opts.routing) {
+        chain.model = undefined
+        chain.modelEntry = undefined
+        chain.modelStep = 0
+      }
       // 冷启动重做从基点重新分叉(与子任务首个会话同一形态,拿回暖前缀)。
       warm = await seedForkSession(client, opts, chain, base, subject)
       return "done"

@@ -3,11 +3,10 @@
 // 阶段首个任务前暂停),故作可变字段进 ctx 而非降为局部。
 // 拆分自 src/loop.ts(plans/0024-module-split-plan.md S15,纯搬运;§I D14)。不依赖 loop.ts。
 import { maybeExit } from "./exit"
-import { consumeFailback } from "./failback"
+import { clearDownMarks, consumeFailback } from "./failback"
 import { beginUnit, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
-import type { ModelRegistry } from "./models"
 import type { RunAllOpts } from "./loop-preflight"
 import { waitBetweenTasks } from "./loop-progress"
 import type { PlanInput } from "./plan-input"
@@ -18,7 +17,9 @@ import { phaseKey, type PhaseUnit } from "./phases"
 import { recallProgress } from "./resume"
 import { runTask } from "./runner"
 import type { AgentHost } from "./agent/types"
+import type { RoutingFacts } from "./routing"
 import { statsTask } from "./stats"
+import { autoSwitches } from "./switches"
 import { stepPause } from "./step"
 
 export type LoopCtx = {
@@ -46,10 +47,11 @@ export type LoopCtx = {
   // The task ids the last planning step wrote, for plan's summary when it
   // stops after that step (plans/0053 D6).
   planned?: string[]
-  // The model registry preflight loaded at run start (plans/0055 §4.1: read
-  // once per run, never written); undefined = no registry. Held for the
-  // routing steps: nothing reads it yet, so dispatch is unchanged.
-  registry?: ModelRegistry
+  // The run's registry routing facts (plans/0055 §6): the loaded registry
+  // with the agent filter and the default agent, threaded into the opts every
+  // session of the loop runs with; undefined = no registry, dispatch is
+  // unchanged.
+  routing?: RoutingFacts
 }
 
 // 主任务循环: 依次执行当前阶段任务索引(tasks.md)中的全部任务(子任务/收尾/
@@ -114,6 +116,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       newSession: opts.newSession,
       wrapup: opts.wrapup,
       phase: phaseKey(phase),
+      routing: ctx.routing,
     })
     if (outcome.type === "dirty") {
       // Unit-startup clean gate failure (runTask inner layer): no state
@@ -207,7 +210,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // (plans/0027-hibernate-design.md).
     await hibernatePause(`task ${task.id} ${task.title} boundary`, { dir: directory })
     // /failback 消费点(task 边界): 链已随 runTask 销毁、无需清 chain.model;
-    // 重置 phase 粒度 sticky holder 并应用模型序覆写(若有)。
+    // 重置 phase 粒度 sticky holder 并应用模型序覆写(若有)。Registry routing
+    // (plans/0055 §6.4): the chain's destruction is also where the task-scope
+    // down marks clear — the marks are run state, not chain state.
+    clearDownMarks("task", autoSwitches().modelFailbackScope)
     consumeFailback()
   }
 }

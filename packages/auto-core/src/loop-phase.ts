@@ -9,7 +9,7 @@ import { requireArtifact } from "./artifact"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { maybeExit } from "./exit"
-import { clearSticky, consumeFailback } from "./failback"
+import { clearDownMarks, clearSticky, consumeFailback } from "./failback"
 import { commitPending, commitTree } from "./git"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
@@ -22,6 +22,7 @@ import { planInputPath, readPlanInput } from "./plan-input"
 import { renderPhaseHandover } from "./prompt"
 import { roundCloseLines, roundCloseProblems } from "./round-close"
 import { closeStep, openStep } from "./resume"
+import { autoSwitches } from "./switches"
 import { shellProfile } from "./shell"
 import { statsPhase } from "./stats"
 import { stepPause } from "./step"
@@ -99,6 +100,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
         permission: opts.permission,
         interactive: repl,
         server: serverHandle,
+        routing: ctx.routing,
       },
       {
         kind: "handover distillation",
@@ -218,8 +220,10 @@ export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<
   // (plans/0027-hibernate-design.md).
   await hibernatePause(`phase ${phaseTitle(phase)} handover boundary`, { dir: directory })
   // failback 回试(phase 边界): 所有粒度都在阶段边界重置——phase 粒度的跨任务
-  // sticky holder 在此清零;/failback 请求同点消费。
+  // sticky holder 在此清零;/failback 请求同点消费。Registry routing (plans/0055
+  // §6.4): every scope covers the phase boundary, so the down marks clear here.
   clearSticky()
+  clearDownMarks("phase", autoSwitches().modelFailbackScope)
   consumeFailback()
   return 0
 }
@@ -387,6 +391,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
           permission: opts.permission,
           interactive: repl,
           server: serverHandle,
+        routing: ctx.routing,
           mode: opts.mode,
         }, route.phase)
         if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)

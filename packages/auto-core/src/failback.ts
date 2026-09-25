@@ -76,6 +76,13 @@ export function markModelDown(model: string, until?: number): void {
   downModels.set(model, until !== undefined ? { until } : {})
 }
 
+// Removes one model's mark (the recovery probe's "a successful probe clears
+// that candidate's mark", §6.3; a failed probe re-marks it through the
+// caller). Key marks are not touched.
+export function clearModelDownMark(model: string): void {
+  downModels.delete(model)
+}
+
 export function modelDownMark(model: string): DownMark | undefined {
   return downModels.get(model)
 }
@@ -153,10 +160,16 @@ export function failbackOverride(): { wildcard: string; fallback: string[] } | u
 // 三处安全边界共用的 /failback 消费点(紧随 maybeExit 之后;subtask 边界传入链以清
 // chain.model,task/phase 边界链已随 runTask 销毁、无需传入): 命中即重置降级状态
 // (链上候选 + sticky holder + down marks),带参时同时重定义运行期模型序。返回是否消费。
+// The chain's selected registry entry is cleared with the raw candidate
+// (plans/0055 §6.4: the next prompt re-selects from the list).
 // AUTO-RESOLVE: does a mark with `until` survive `/failback`, as it survives a scope boundary? -> no, `/failback` clears every mark, an `until` included (§6.4 lists the scope boundaries and `/failback` separately, and says `until` stands in for the scope boundary; the operator's explicit command retries the primary now, so a quota reset time must not override it)
-export function consumeFailback(chain?: { model?: string }): boolean {
+export function consumeFailback(chain?: { model?: string; modelEntry?: string; modelStep?: number }): boolean {
   if (pending === undefined) return false
-  if (chain) chain.model = undefined
+  if (chain) {
+    chain.model = undefined
+    chain.modelEntry = undefined
+    chain.modelStep = 0
+  }
   sticky = undefined
   downModels.clear()
   downKeys.clear()

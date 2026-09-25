@@ -9,12 +9,16 @@ import { rm } from "node:fs/promises"
 import { join, relative } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { resolveModel, roleOf, REUSE_BELOW, REUSE_IDLE_MINUTES, type SessionChain, type SessionResult } from "./chain"
-import { failbackOverride, stickyModel } from "./failback"
+import { clearDownMarks, failbackOverride, isModelDown, stickyModel } from "./failback"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
+import { usableAt } from "./model-window"
+import type { ModelRegistry } from "./models"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { currentRound } from "./phases"
+import { candidateKey, nowOf, selectContext } from "./routing"
+import { candidatesOf, select } from "./select"
 import { type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { recordResolves, type ResolveEvent } from "./resolve"
@@ -45,6 +49,21 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
       question: event.question,
     })),
   )
+}
+
+// A move's reason for the registry ◈ line (plans/0055 §6.5): the previously
+// shown model read against the registry at the dispatch's instant — outside
+// its windows ("window"), still marked down ("quota", standing for the
+// classified quota/auth/rate failures; key rings are a later step), or an
+// entry that is usable again, meaning the list changed underneath it (a
+// /failback or a scope boundary cleared its mark: "failback"). undefined =
+// no move, or a raw value with nothing attributable to say.
+function moveReason(registry: ModelRegistry, previous: string | undefined, now: number): string | undefined {
+  if (previous === undefined) return undefined
+  const entry = registry.models.get(previous)
+  if (entry !== undefined && !usableAt(entry, registry.tz, now)) return "window"
+  if (isModelDown(previous, now)) return "quota"
+  return entry !== undefined ? "failback" : undefined
 }
 
 
@@ -116,7 +135,14 @@ export async function attempt(
   // failback 粒度 session(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): 每个全新会话起点
   // 都清链上降级候选、回试首选模型。仅 create 路径(会话复用与 fork 消费不动)——
   // 降级 fork 出的迁移会话经 pending 进入,若在此清零会把 failover 立即 undo 成震荡。
-  if (session !== undefined && switches.modelFailbackScope === "session") chain.model = undefined
+  // Registry routing: the same boundary clears the down marks (§6.4) and the
+  // chain's selected entry, so the new session re-selects from the list.
+  if (session !== undefined && switches.modelFailbackScope === "session") {
+    chain.model = undefined
+    chain.modelEntry = undefined
+    chain.modelStep = 0
+    clearDownMarks("session", switches.modelFailbackScope)
+  }
   const sessionID = forked ?? session?.value.id ?? chain.id!
   // 交互旁路: 此后人工输入发往本会话(收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
@@ -182,22 +208,90 @@ export async function attempt(
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await client.events(sse.signal)
-    // This session's model (plans/0017-model-routing-design.md C.3/E): chain
-    // fallback candidate > phase-scoped cross-task sticky (sticky holder) >
-    // /failback runtime override > the routing table (role > phase type id >
-    // preset letter > wildcard, resolveModel). An undefined target sends no model
-    // key: with both variables unset and no override the whole chain stays
-    // undefined, byte-identical to the unrouted call (not model: undefined).
+    // This session's model. Under a model registry (plans/0055 §6) selection
+    // decides it: the candidate list of the session's role and phase type,
+    // the overrides of §9, and — for a continuation of the same prompt (a
+    // retry, a fork after a failure, the recovery loop's re-dispatch, a
+    // strict resume; reuse or a consumed pending fork here) — the chain's
+    // entry while it is still usable. The pick names the prompt's model and
+    // variant; nothing usable reaches the wait-and-probe loop through
+    // runSession (noModel), and an emptied list is a blocked refusal.
+    // Without a registry (plans/0017 C.3/E) the env-switch chain applies,
+    // byte for byte as before: chain fallback candidate > phase-scoped
+    // sticky > /failback runtime override > the routing table (role > phase
+    // type id > preset letter > wildcard, resolveModel). An undefined target
+    // sends no model key: with both variables unset and no override the whole
+    // chain stays undefined, byte-identical to the unrouted call (not
+    // model: undefined).
     const override = failbackOverride()
-    const target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
-    promptModel = target
+    let target: string | undefined
+    let promptVariant: string | undefined
+    if (opts.routing) {
+      const facts = opts.routing
+      const limits = await client.contextLimits()
+      const ctx = selectContext(facts, switches, cap, limits)
+      const list = candidatesOf(ctx, { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts) })
+      const decision = select(ctx, {
+        role: roleOf(chain),
+        entry: opts.phase?.entry,
+        now: nowOf(facts),
+        current: chain.modelEntry,
+        continuation: reuse || forked !== undefined,
+      })
+      if (decision.kind === "empty") {
+        const detail = `${list.override ? `the ${list.override} override` : `the ${list.tier} list`}${list.route ? ` (route ${list.route.key})` : ""}`
+        if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
+        return {
+          type: "blocked",
+          question: `model registry: no candidate is left for this session's routing (${detail}, agent filter ${facts.agentFilter ?? "none"}); fix the registry or the filter and re-run`,
+        }
+      }
+      if (decision.kind !== "pick") {
+        if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
+        return {
+          type: "blocked",
+          question: `no usable model candidate: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is down or outside its windows; entering the wait-and-probe loop`,
+          noModel: true,
+        }
+      }
+      const picked = decision.candidate
+      target = picked.kind === "entry" ? picked.entry.model : picked.model
+      promptVariant = picked.kind === "entry" ? picked.entry.variant : undefined
+      const key = candidateKey(picked)
+      chain.modelEntry = key
+      chain.model = target
+      chain.modelStep = 0
+      promptModel = key
+      // ◈ display (§6.5): the internal name with the tier, the agent and
+      // model behind it, and what routed the dispatch; a move names its
+      // reason — window, quota (the classified failures) or failback. Key
+      // rings are a later step. Like the no-registry line: every new session
+      // shows one, a reused session only on a change.
+      const bracket =
+        picked.kind === "entry" ? `${picked.entry.agent}:${picked.entry.model ?? "default"}` : `${facts.defaultAgent}:${picked.model}`
+      const routePart =
+        list.override === "env"
+          ? `override ${SWITCH_ENV.model}`
+          : list.override === "failback"
+            ? "override /failback"
+            : `route ${list.route?.key ?? roleOf(chain)}`
+      const previous = chain.modelShown !== undefined && chain.modelShown !== key ? chain.modelShown : undefined
+      const reason = moveReason(facts.registry, previous, nowOf(facts))
+      if (key !== chain.modelShown || !reuse) {
+        log(`◈ ${task.id} using model ${key} [${list.tier} · ${bracket}] (${routePart}${reason ? `; ${reason}` : ""})`)
+        chain.modelShown = key
+      }
+    } else {
+      target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
+      promptModel = target
+    }
     // 实际使用模型上终端(前端可见): 路由/降级给出显式 target 时下发即锁定该模型,
     // 直接按来源播报;未设路由(target undefined)时播报不再猜服务端默认(会话粘住
     // 模型等会让猜测失真),改由 watch 观测本会话首个带模型的消息(user 消息带着服务
     // 端实际解析结果)后播报真实生效模型。每个新会话(新建/分叉,即 !reuse)都播报
     // 一行,模型较上次 prompt 有变化时亦播报;同会话同模型的续跑 prompt(复用/恢复
     // 接管)不重复。无论何种来源,prompt 是否带 model 键的决定不变(不变量 F 不破)。
-    if (target !== undefined) {
+    if (!opts.routing && target !== undefined) {
       const from =
         chain.model !== undefined
           ? "fallback candidate"
@@ -255,7 +349,13 @@ export async function attempt(
     // 透传 POST 自身结果。竞速落败后 prompting 的迟到结果无人消费(dispatch
     // never rejects, 0037 D2, so nothing to catch).
     const prompting = client.prompt(
-      { session: sessionID, agent: opts.agent, ...(target ? { model: target } : {}), text: note ? `${promptText}\n\n${note}` : promptText },
+      {
+        session: sessionID,
+        agent: opts.agent,
+        ...(target ? { model: target } : {}),
+        ...(promptVariant !== undefined ? { variant: promptVariant } : {}),
+        text: note ? `${promptText}\n\n${note}` : promptText,
+      },
       post.signal,
     )
     const prompt = await Promise.race([prompting, watching.then((w) => (w.error ? null : prompting))])

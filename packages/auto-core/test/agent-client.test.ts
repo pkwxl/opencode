@@ -34,6 +34,20 @@ describe("opencode adapter: requests", () => {
     expect("model" in seen[1]!.params).toBe(false)
   })
 
+  // A registry model entry's variant rides in the v2 prompt body next to the
+  // model (plans/0055 §4.2); without one the body carries no variant key.
+  test("prompt: a variant travels beside the model; without a model there is no variant", async () => {
+    const seen: Record<string, unknown>[] = []
+    const client = opencodeAgent(sdk({ session: { prompt: async (params: Record<string, unknown>) => (seen.push(params), {}) } }))
+    await client.prompt({ session: "s1", model: "zai/glm-4.6", variant: "thinking", text: "deep" })
+    await client.prompt({ session: "s1", model: "zai/glm-4.6", text: "plain" })
+    await client.prompt({ session: "s1", text: "no model" })
+    expect(seen[0]).toMatchObject({ variant: "thinking" })
+    expect("variant" in seen[1]!).toBe(false)
+    expect("variant" in seen[2]!).toBe(false)
+    expect("model" in seen[2]!).toBe(false)
+  })
+
   test("promptAsync: steer text only (no agent/model keys unless given)", async () => {
     const seen: Record<string, unknown>[] = []
     const client = opencodeAgent(sdk({ session: { promptAsync: async (params: Record<string, unknown>) => (seen.push(params), {}) } }))

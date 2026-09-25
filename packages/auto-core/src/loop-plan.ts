@@ -83,6 +83,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       permission: opts.permission,
       interactive: repl,
       server: serverHandle,
+      routing: ctx.routing,
       mode: opts.mode,
     })
     if (numbering.type === "dirty") {
@@ -164,6 +165,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
       permission: opts.permission,
       interactive: repl,
       server: serverHandle,
+      routing: ctx.routing,
       mode: opts.mode,
     },
     {
@@ -497,6 +499,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
       permission: opts.permission,
       interactive: repl,
       server: serverHandle,
+      routing: ctx.routing,
       mode: opts.mode,
     })
     if (numbering.type === "dirty") {
@@ -589,6 +592,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
       permission: opts.permission,
       interactive: repl,
       server: serverHandle,
+      routing: ctx.routing,
       mode: opts.mode,
     },
     {

@@ -9,8 +9,10 @@ import { failbackOverride, stickyModel } from "./failback"
 import { commitTree, rollbackUnit, unitViolations, type UnitBaseline } from "./git"
 import { forgetHandover } from "./handover"
 import { log, vlog } from "./log"
-import type { Opts, SessionCommit, UnitStop } from "./opts"
+import { DEFAULT_CONTEXT_LIMIT, type Opts, type SessionCommit, type UnitStop } from "./opts"
 import { currentRound } from "./phases"
+import { candidateKey, nowOf, selectContext } from "./routing"
+import { select } from "./select"
 import type { Task } from "./tasks"
 import { autoCorrectRefs } from "./refcheck"
 import { collectAgentResolves, resolvesOf, type ResolveItem } from "./resolve"
@@ -144,7 +146,25 @@ export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches
 // such as m-mode planning's implement-scan, plans/0053 D12). The dispatch
 // routed by it, since an explicit role wins over the phase (roleOf), so the
 // check must derive the same role; absent = derived from the phase.
+// Under a model registry (plans/0055 §6.2, §10 item 11) the comparison runs
+// on internal names: the record holds the dispatched entry's internal name
+// (attempt writes it), and this returns the selection's pick for the same
+// routing — a fresh-prompt selection, the same shape the next dispatch takes.
+// The agent half of the eligibility-based comparison (a window change alone
+// must not roll a unit back) arrives with the session-agent binding of a
+// later step; until then a pick that differs rolls back, as a changed
+// env-route does today.
+// AUTO-DECISION: the registry path selects with no context windows (the live limits belong to the agent this function never sees); an unknown window never excluded a candidate on the no-registry path either, so the comparison keeps its shape
 export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined, role?: ModelRole): string | undefined {
+  if (opts.routing) {
+    const decision = select(selectContext(opts.routing, switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT), {
+      role: role ?? phaseToRole(phase) ?? "bypass",
+      entry: opts.phase?.entry,
+      now: nowOf(opts.routing),
+      continuation: false,
+    })
+    return decision.kind === "pick" ? candidateKey(decision.candidate) : undefined
+  }
   return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, role ?? phaseToRole(phase) ?? "bypass")
 }
 

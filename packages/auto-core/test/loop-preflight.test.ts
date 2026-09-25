@@ -239,4 +239,50 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     ])
     expect(lines.join("\n")).not.toContain("value-that-must-not-appear")
   })
+
+  // Selection's run-start refusals (plans/0055 §6.3, §9 R7): a tier the run's
+  // sessions need with no candidate left after the agent filter never becomes
+  // a silent wait, and under a registry the model switches take their registry
+  // meanings — an internal-name OPENCODE_AUTO_MODEL value parses, an unknown
+  // bare name and OPENCODE_AUTO_MODEL_FALLBACK are usage errors.
+  test("a needed tier the agent filter empties exits 1 naming the tier and the filter", async () => {
+    const dir = await project({ ignored: true })
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    const { result, lines } = await run(dir, {}, { OPENCODE_AUTO_AGENT: "claude" })
+    expect(result).toEqual({ exit: 1 })
+    expect(lines).toEqual([
+      "⚙ experimental switches (OPENCODE_AUTO_* env vars, this run only): OPENCODE_AUTO_AGENT=claude",
+      "model registry: the simple tier has no candidate left after the agent filter claude (tiers.simple: glm); every simple session of this run would have no model to dispatch on",
+    ])
+  })
+
+  test("a phased run needs the deep tier; m mode without a planning input does not", async () => {
+    const dir = await project({ ignored: true })
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    const phased = await run(dir, { phases: "md" })
+    expect(phased.result).toEqual({ exit: 1 })
+    expect(phased.lines).toEqual([
+      "model registry: the deep tier is not declared (tiers.deep: (empty)); every deep session of this run would have no model to dispatch on",
+    ])
+    const manual = await run(dir)
+    expect("exit" in manual.result).toBe(false)
+  })
+
+  test("OPENCODE_AUTO_MODEL takes internal names under a registry; an unknown name and _FALLBACK are usage errors", async () => {
+    const dir = await project({ ignored: true })
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    const routed = await run(dir, {}, { OPENCODE_AUTO_MODEL: "glm" })
+    expect("exit" in routed.result).toBe(false)
+    expect(routed.lines).toEqual(["⚙ experimental switches (OPENCODE_AUTO_* env vars, this run only): OPENCODE_AUTO_MODEL=*=glm"])
+    const unknown = await run(dir, {}, { OPENCODE_AUTO_MODEL: "opus" })
+    expect(unknown.result).toEqual({ exit: 1 })
+    expect(unknown.lines).toEqual([
+      'env OPENCODE_AUTO_MODEL invalid value: "opus" (under a model registry a value is an internal model name or provider/model with a slash; known internal names: glm)',
+    ])
+    const ring = await run(dir, {}, { OPENCODE_AUTO_MODEL_FALLBACK: "kimi/k2" })
+    expect(ring.result).toEqual({ exit: 1 })
+    expect(ring.lines).toEqual([
+      "env OPENCODE_AUTO_MODEL_FALLBACK is not used under a model registry: the tier lists are the failover order (deep: (not declared); simple: glm)",
+    ])
+  })
 })

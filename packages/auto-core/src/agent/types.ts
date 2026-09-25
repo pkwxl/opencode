@@ -19,8 +19,12 @@
 // model registry (plans/0055 §4.2, §8.1, F14) amended it a third time:
 // AgentHostOptions.bin / env / config, the agent profile a host starts with —
 // its executable, the overlay on its processes' environment, and (opencode)
-// the config content its managed server is spawned with. AgentClient is
-// unchanged.
+// the config content its managed server is spawned with. Selection (0055
+// §4.2, §12) amended it a fourth time, consciously: PromptInput.variant, the
+// per-prompt reasoning-effort variant a registry model entry may declare —
+// opencode carries it in the v2 prompt body next to the model; adapters that
+// cannot apply a variant reject the field at registry load, so the driver
+// never has to. AgentClient's calls are unchanged.
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -191,6 +195,12 @@ export type PromptInput = {
   // own default — the prompt then carries no model at all (routing
   // invariant, plans/0017).
   model?: string
+  // A per-prompt model variant (opencode: the v2 prompt body's `variant`,
+  // e.g. a reasoning-effort variant; plans/0055 §4.2). Absent = the model's
+  // default variant. Only a registry model entry with `model` may carry one
+  // (the loader rejects `variant` without `model`, and on adapters that
+  // cannot apply it), so a prompt without a model never carries a variant.
+  variant?: string
 }
 
 export type PermissionReply = "once" | "always" | "reject"

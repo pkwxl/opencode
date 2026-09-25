@@ -102,6 +102,12 @@ export type Opts = {
   // 人工答复,绝不代答(无 AUTO-RESOLVE);仅输入渠道不可及(stdin 关闭)才阻塞。
   // 规划类模板的 question-rule 分支同口径(prompt.ts useHumanQuestions)。
   humanQuestions?: boolean
+  // The run's registry routing facts (plans/0055 §6): the loaded model
+  // registry with the agent filter and the default agent, built once at run
+  // start. undefined = no registry: every dispatch resolves its model through
+  // the env-switch path, exactly as before. Type-only import; opts stays a
+  // pure type module.
+  routing?: import("./routing").RoutingFacts
 }
 
 // 上下文预算默认基线(tokens);--context-limit n 以千 tokens 覆盖。会话复用阈值
