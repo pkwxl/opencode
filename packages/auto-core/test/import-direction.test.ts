@@ -124,11 +124,17 @@ const CLASSIFIED: Record<string, Domain> = {
   "loop-progress": "driver",
   "loop-task": "driver",
   loop: "driver",
+  // Candidate lists of the model registry (plans/0055 §6.1): route, tier and
+  // the ordered names of a session, pure over a loaded registry.
+  "model-route": "driver",
   // Model windows of the model registry (plans/0055 §4.4): a leaf (LEAVES).
   "model-window": "driver",
   // The model registry (plans/0055 §4.1–§4.3): layers, merge, strict
   // validation and the reference check; a loader below every session module.
   models: "driver",
+  // The models command's data (plans/0055 §9): checkModels, describeModels
+  // and formatModels; starts no agent and writes nothing.
+  "models-describe": "driver",
   numbering: "driver",
   opts: "driver",
   // plan's prelude and stop lines (plans/0053 D4–D8); never imports the loop.
@@ -243,6 +249,18 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "tier",
     to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "models"],
     why: "a session's default tier is a pure function of its role and the phase type (plans/0055 §5); it must not import the loop, the session-driving layer, the agent start or the operator's model registry, which never decides a tier (§3)",
+  },
+  // AUTO-DECISION: model-route gets a one-way rule besides its classification row (selection will import it from below the session layer, as it does models and tier, so an upward import would form a cycle)
+  {
+    from: "model-route",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "models-describe"],
+    why: "a session's candidate list is a pure function of the loaded registry, its role and the phase type (plans/0055 §6.1); selection and the models command build on it, so it must not import the loop, the session-driving layer, the agent start or the models command's data",
+  },
+  // AUTO-DECISION: models-describe gets a one-way rule besides its classification row (the models command must start no agent and write nothing, plans/0055 §9; forbidding the agent start and the session-driving layer states that in the table)
+  {
+    from: "models-describe",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
+    why: "the models command prints the registry without starting any agent (plans/0055 §9); preflight imports its shared refusal, so it must not import the loop, the session-driving layer, the agent start or an agent host",
   },
   {
     from: "watch",

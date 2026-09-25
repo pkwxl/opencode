@@ -1713,6 +1713,122 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
 // notices — plus the argument checks. The loop paths (planning itself, the
 // stop after it) need an agent and live in the A7 loop harness / the
 // OPENCODE_AUTO_E2E block.
+describe("CLI: models (auto-core plans/0055 §9)", () => {
+  // A registry without windows, so the lines do not depend on the clock.
+  const REGISTRY = {
+    agents: {
+      opencode: { adapter: "opencode", env: { HTTPS_PROXY: "http://127.0.0.1:7890" } },
+      claude: { adapter: "claude", env: { HTTPS_PROXY: "{env:CLAUDE_PROXY}" } },
+    },
+    models: {
+      opus: { agent: "claude", model: "opus" },
+      k3: { agent: "opencode", model: "moonshotai/kimi-k3-256k", wider: ["moonshotai/kimi-k3"], keys: ["{env:MOONSHOT_KEY_A}", "{env:MOONSHOT_KEY_B}"] },
+      k2: { agent: "opencode", model: "moonshotai/kimi-k2", context: 128 },
+      free: { agent: "opencode", model: "opencode/some-free-model" },
+    },
+    tiers: { deep: ["opus", "k3"], simple: ["k2"] },
+    routes: { acceptance: "deep" },
+    classifier: ["free"],
+  }
+  const SECRETS = { CLAUDE_PROXY: "http://user:secret-proxy@10.0.0.1:3128", MOONSHOT_KEY_A: "sk-secret-a", MOONSHOT_KEY_B: "sk-secret-b" }
+
+  test("without a registry: one line, exit 0, and nothing is written", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const none = await runCli(["models", dir])
+      expect(none.code).toBe(0)
+      expect(none.out).toBe(
+        `no model registry: neither the operator layer ${join(EMPTY_CONFIG_HOME, "opencode-auto", "models.json")} nor the project layer .opencode/auto/models.json exists\n`,
+      )
+      expect(none.err).toBe("")
+      const missing = join(dir, "missing.json")
+      expect((await runCli(["models", dir], { OPENCODE_AUTO_MODELS: missing })).out).toContain(`neither the operator layer ${missing} nor`)
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a registry through OPENCODE_AUTO_MODELS: the table with tiers, candidates, layers, steps and env names, never values", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const file = join(dir, "operator.json")
+      await Bun.write(file, JSON.stringify(REGISTRY))
+      await mkdir(join(dir, ".opencode", "auto"), { recursive: true })
+      await Bun.write(join(dir, ".opencode/auto/models.json"), JSON.stringify({ models: { k2: { agent: "opencode", model: "moonshotai/kimi-k2-turbo-preview" } } }))
+      // It takes no run lock: a live one does not stop it.
+      await Bun.write(join(dir, RUN_LOCK_FILE), JSON.stringify({ pid: process.pid, host: hostname(), command: "run", started: "2026-09-23T10:00:00.000Z" }))
+      const shown = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, ...SECRETS })
+      expect(shown.err).toBe("")
+      expect(shown.code).toBe(0)
+      const lines = shown.out.split("\n")
+      expect(lines[0]).toBe(`model registry: operator layer ${file} · project layer .opencode/auto/models.json`)
+      expect(lines).toContain("agent filter: none: models on every agent profile are candidates")
+      expect(lines).toContain("project cap: 64k context · default agent: opencode")
+      expect(lines).toContain("  opencode  [operator]  adapter opencode · env HTTPS_PROXY (literal)")
+      expect(lines).toContain("  claude    [operator]  adapter claude · env HTTPS_PROXY (env CLAUDE_PROXY)")
+      expect(lines).toContain("  k3    [operator]  agent opencode (opencode) · steps moonshotai/kimi-k3-256k → moonshotai/kimi-k3 · ring moonshotai (2 keys)")
+      expect(lines).toContain("  k2    [project]  agent opencode (opencode) · model moonshotai/kimi-k2-turbo-preview · ring moonshotai (2 keys)")
+      expect(lines).toContain("  moonshotai  2 keys: MOONSHOT_KEY_A, MOONSHOT_KEY_B · models k3, k2")
+      expect(lines).toContain("classifier: [operator]  free")
+      expect(lines).toContain("  implement (m) · builtin · execute tier simple")
+      expect(lines).toContain("    decompose, phase-plan, implement-scan: deep → opus ✓ · k3 ✓")
+      expect(lines).toContain("    whole, subtask, wrapup, phase-handover, knowledge, prior-knowledge, number-recovery, bypass: simple → k2 ✓ | opus ✓ · k3 ✓")
+      expect(lines).toContain("    decompose, whole, subtask, wrapup, phase-plan, phase-handover, knowledge, prior-knowledge, implement-scan, number-recovery, bypass: deep · route acceptance [operator] → opus ✓ · k3 ✓")
+      for (const value of [...Object.values(SECRETS), "127.0.0.1:7890"]) expect(shown.out).not.toContain(value)
+      expect(await Bun.file(join(dir, RUN_LOCK_FILE)).exists()).toBe(true)
+
+      // The agent filter and the override come from the environment.
+      const filtered = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, ...SECRETS, OPENCODE_AUTO_AGENT: "claude", OPENCODE_AUTO_MODEL: "bypass=zhipuai/glm-4.6" })
+      expect(filtered.code).toBe(0)
+      expect(filtered.out).toContain("agent filter: claude (OPENCODE_AUTO_AGENT): only models on claude profiles are candidates")
+      expect(filtered.out).toContain("    decompose, phase-plan, implement-scan: deep → opus ✓ · k3 ✗")
+      expect(filtered.out).toContain("✗ not usable now: filtered out by the agent filter claude (OPENCODE_AUTO_AGENT)")
+      expect(filtered.out).toContain("    bypass: override OPENCODE_AUTO_MODEL → zhipuai/glm-4.6 ✗ (filtered out by the agent filter claude (OPENCODE_AUTO_AGENT); a raw provider/model on the default agent opencode, without window, ring or steps)")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a bad registry: the problems and exit 1; broken references print the table first", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const file = join(dir, "operator.json")
+      await Bun.write(file, JSON.stringify({ ...REGISTRY, models: { ...REGISTRY.models, k2: { agent: "opencode", model: "moonshotai/kimi-k2", aviod: [] } } }))
+      const bad = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, ...SECRETS })
+      expect(bad.code).toBe(1)
+      expect(bad.out).toBe(
+        [
+          `⚠ model registry, operator layer ${file}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys)`,
+          "1 problem(s): run and plan refuse to start until they are fixed (exit 1)",
+          "",
+        ].join("\n"),
+      )
+      await Bun.write(file, JSON.stringify(REGISTRY))
+      const broken = await runCli(["models", dir], { OPENCODE_AUTO_MODELS: file, MOONSHOT_KEY_A: "sk-secret-a" })
+      expect(broken.code).toBe(1)
+      expect(broken.out).toContain("routing per phase type and role")
+      expect(broken.out).toContain(`⚠ model registry, operator layer ${file}: agents.claude.env.HTTPS_PROXY: env CLAUDE_PROXY is not set`)
+      expect(broken.out).toContain(`⚠ model registry, operator layer ${file}: models.k3.keys[1]: env MOONSHOT_KEY_B is not set`)
+      expect(broken.out.trimEnd().split("\n").at(-1)).toBe("2 problem(s): run and plan refuse to start until they are fixed (exit 1)")
+      expect(broken.out).not.toContain("sk-secret-a")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("models takes no options", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const probe = await runCli(["models", dir, "--probe"])
+      expect(probe.code).toBe(1)
+      expect(probe.err).toContain("unknown option --probe: check/status/models only accept a directory argument, no options")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("CLI: plan (auto-core plans/0053 D14–D15)", () => {
   test("argument refusals: the input flags, run-only and config options, the unconfigured directory; nothing is written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))

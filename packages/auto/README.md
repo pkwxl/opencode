@@ -43,6 +43,7 @@ opencode-auto run [dir]      # 按当前阶段的任务索引逐任务自动执�
 opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
 opencode-auto check [dir]    # 检查 AGENTS.md 与任务文档中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 标记块缺失或过期
 opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → 阶段 → 任务 → 子任务树
+opencode-auto models [dir]   # 打印模型注册表的生效表(各阶段类型 × 会话角色的档位、候选与当前可用性),不启动 agent,见"模型注册表一览(models)"
 ```
 
 新项目流程(`init` → `plan` → 填写并提交 → `plan`(可选)→ `run`):
@@ -1182,6 +1183,37 @@ Markdown 链接内的目标目录根相对路径(可带 `:行号` 锚),失效引
 `check` 还会在 AGENTS.md 缺少引用规范块、或目标目录非 git(提交前引用
 auto-correct 不可用)时输出 note(非 git note 仅在开关 on 时)。引用的提交前自动
 修复(rename 改写)见「统一提交」相关章节。
+
+## 模型注册表一览(models)
+
+`opencode-auto models [dir]` 只读地打印**模型注册表**(model registry)的生效表,不启动任何
+agent、不写任何文件,因此不取运行锁,可与进行中的 `run` 并行。注册表由两层合并而成:操作者层
+(`$OPENCODE_AUTO_MODELS`,未设时为 `$XDG_CONFIG_HOME/opencode-auto/models.json`,
+`XDG_CONFIG_HOME` 缺省 `~/.config`)与可选的项目层 `.opencode/auto/models.json`(本地私有,
+`init` 把它写进 `.gitignore`,老项目由 `fix` 补上)。两层都不存在即无注册表,运行行为与以往
+逐字节一致。本节只说明本命令的输出:
+
+- **来源与环境**:读到的层、窗口时区与当前时刻、agent 过滤(外壳画像的 agent,否则
+  `OPENCODE_AUTO_AGENT`;按 profile 的 adapter 匹配)、项目上下文上限(配置 `contextLimit`)
+  与缺省 agent(配置 `agent`);设置了 `OPENCODE_AUTO_MODEL` 时另起一行标明它覆盖哪些会话的候选。
+- **agent profile**:每个 profile 的来源层(`[operator]` / `[project]` / `[implied]`)、adapter、
+  `bin`、`server`(去掉 URL 中的用户信息)与 `env` **变量名**——字面值只标 `(literal)`,引用只标
+  引用名(`(env CLAUDE_B_PROXY)`),`null` 标 `(removed)`,**从不打印任何值**。
+- **模型条目**:来源层、agent、步进(`model` 之后接各 `wider` id)、`variant`、`context`、窗口
+  与所在 provider 的 key ring;下一行给出**此刻是否可用及原因**——在窗口外(附下次开放时刻)、
+  被 agent 过滤排除、已知上下文窗口低于项目上限;上下文窗口未知(opencode 在 server 启动后才
+  报告,claude 在首轮之后)只作提示,不判为不可用。
+- **key ring**:每个 provider 一行,按顺序列出引用名与个数,以及共享它的模型。
+- **tiers / routes / classifier**:两档列表、路由覆盖与失败信息分类模型列表,各带来源层;没有被
+  任何档位、路由列表或分类器引用的模型单独提示为未使用。
+- **路由表**:每个阶段类型(内置类型与项目自定义类型)下,解析结果相同的会话角色合为一行:
+  档位(缺省档,或 `route <键>` 覆盖,优先级 角色 > 类型 id > 预置字母)与有序候选,`✓`/`✗` 标
+  此刻可用与否;simple 档在 `|` 之后接续借用的 deep 列表(deep 档从不借用 simple)。
+
+退出码:无注册表时打印一行、退出码 `0`;注册表可被 `run` 接受时打印整表、退出码 `0`;
+`run`/`plan` 启动时会拒绝的问题(坏 JSON、未知字段、坏窗口、引用的环境变量未设置或文件不可读、
+git 未忽略的项目层等)逐条以 `⚠` 打印、退出码 `1`——注册表能载入时先打印整表再列问题。
+`models` 不接受任何选项(与 `check`/`status` 同组)。
 
 ## 阻塞与恢复
 

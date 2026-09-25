@@ -10,10 +10,11 @@ import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
 import { resumeBanner } from "./conclusion"
-import { beginUnit, changedFiles, commitTree, fileTracked, gitIgnored } from "./git"
+import { beginUnit, changedFiles, commitTree, fileTracked } from "./git"
 import { ensureGitignore } from "./gitignore"
 import { log } from "./log"
-import { checkModelReferences, layerLabel, loadModels, MODELS_FILE, projectLayerPath, type ModelRegistry } from "./models"
+import { checkModelReferences, loadModels, type ModelRegistry } from "./models"
+import { projectLayerRefusal } from "./models-describe"
 import { currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
 import { roundBriefPath } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
@@ -286,22 +287,15 @@ export async function preflight(
 //   - a broken reference: a variable unset or empty, a file missing or
 //     unreadable. Each line names the field, the layer and the reference,
 //     never a value.
+// The refusal of a project layer that git would commit is shared with the
+// models command (projectLayerRefusal, src/models-describe.ts), so both name
+// the same fix.
+// AUTO-DECISION: preflight calls the shared projectLayerRefusal instead of its own copy of the check, and keeps its own load and reference steps (the refusal line stays byte-identical, and preflight still stops before reading an unignored layer's content)
 // AUTO-DECISION: the load sits in preflight's validation block with the prompt library and the phase types, so it runs inside the run lock, before the start gate and every write, and under dryrun too (a bad registry then fails plan, run and a dryrun alike, and the custom phase types are already loaded there)
-// AUTO-RESOLVE: when a project layer is both unignored and malformed, which refusal is shown? -> the ignore refusal, checked before the content is read (it does not depend on the content, and a layer the unified commit would take is refused even while it does not parse)
-// AUTO-RESOLVE: a tracked project layer passes no ignore rule even with init's entry, and fix cannot untrack it: refuse it with fix's line alone? -> a line of its own that names the untrack command and fix (fix alone would leave the refusal in place)
 // AUTO-DECISION: the registry rides the preflight result into the loop context instead of RunAllOpts (the options are the caller's input; the registry is state the run derives from disk once)
 async function loadRunRegistry(directory: string, phaseTypes: readonly string[]): Promise<ModelRegistry | undefined> {
-  const project = projectLayerPath(directory)
-  if ((await Bun.file(project).exists()) && (await gitIgnored(directory, MODELS_FILE)) === false) {
-    const { bin } = shellProfile()
-    const label = layerLabel({ name: "project", path: project })
-    const fix = `run ${bin} fix ${directory} to add its .gitignore entry`
-    throw new Error(
-      (await fileTracked(directory, MODELS_FILE))
-        ? `${label}: git tracks it, so the unified commit would commit it; untrack it (git -C ${directory} rm --cached ${MODELS_FILE}), ${fix} if it lacks one, then re-run`
-        : `${label}: git does not ignore it, so the unified commit would commit it; ${fix}, then re-run`,
-    )
-  }
+  const refusal = await projectLayerRefusal(directory)
+  if (refusal) throw new Error(refusal)
   const registry = await loadModels(directory, { phaseTypes })
   if (!registry) return undefined
   const broken = checkModelReferences(registry)

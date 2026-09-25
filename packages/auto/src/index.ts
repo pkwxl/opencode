@@ -27,6 +27,7 @@ import { commitIdentityProblem } from "@opencode-ai/auto-core/git"
 import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
+import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
 import { planPrelude } from "@opencode-ai/auto-core/plan"
 import type { PlanInput } from "@opencode-ai/auto-core/plan-input"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
@@ -168,6 +169,7 @@ if (command === "continue") {
 // 历史选项对 init/run/plan 有专属拦截报文,此处放行交由其后各自处理;
 // close 只接受自己的四个旗标,其余(含宪法级与 -p/--file)在下方 close 分支以
 // close 专属报文拒绝;check/status 不接受任何选项,出现旗标即拒绝。
+// models (auto-core plans/0055 §9) joins them: it only reads and prints.
 // --append is plan's alone (auto-core plans/0053 D23): appending tasks to the
 // current phase is a plan route, so every other command refuses the flag with
 // a pointer to plan — run's -p/--file refusal pattern — before any whitelist
@@ -225,7 +227,7 @@ const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RE
 // The config flags: the project attributes init freezes into config.json and
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel"]
-const FLAGLESS = command === "check" || command === "status"
+const FLAGLESS = command === "check" || command === "status" || command === "models"
 // reset 是反初始化,没有可配置项: 只接受 -f/--force(跳过确认与工作区干净度闸门)。
 // fix takes its baseline from the existing config and no config flags, so it
 // accepts the same (plans/0052 D11).
@@ -269,7 +271,7 @@ for (const key of flags.keys()) {
   }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
   const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status only accept a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
+  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status/models only accept a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
   process.exit(1)
 }
 for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
@@ -1414,6 +1416,21 @@ if (command === "status") {
   process.exit(0)
 }
 
+// models (auto-core plans/0055 §9): the model registry's effective table —
+// per phase type and routing role the tier, the route in force and the
+// candidates, whether each is usable now and why not, plus each entry's layer,
+// steps, key ring names, the classifier list and the profiles' env variable
+// names (never a value). It starts no agent and writes nothing, so it takes no
+// run lock and runs beside a live run. Exit codes: 0 no registry or a registry
+// a run start accepts; 1 one that run and plan would refuse (the problems are
+// printed, after the table when the registry loads).
+// AUTO-RESOLVE: does a registry that loads but has broken references (or a project layer git would commit) exit 1, and is its table printed? -> exit 1, since run and plan refuse it at start, with the table printed before the problems (it shows the operator what the references belong to)
+if (command === "models") {
+  const description = await describeModels(directory, Date.now())
+  for (const line of formatModels(description)) console.log(line)
+  process.exit(description.problems.length ? 1 : 0)
+}
+
 console.error(`usage:
   opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
@@ -1424,6 +1441,7 @@ console.error(`usage:
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
   opencode-auto status [dir]
+  opencode-auto models [dir]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
@@ -1448,6 +1466,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
        --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
+       models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no options and no run lock
        continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} plan <dir> — it runs the round-close checks and opens the next round
 
 exit codes: 0 all complete; 1 usage/environment error (same when check finds principle-violating statements); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)
