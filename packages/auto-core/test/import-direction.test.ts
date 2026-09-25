@@ -124,6 +124,8 @@ const CLASSIFIED: Record<string, Domain> = {
   "loop-progress": "driver",
   "loop-task": "driver",
   loop: "driver",
+  // Model windows of the model registry (plans/0055 §4.4): a leaf (LEAVES).
+  "model-window": "driver",
   numbering: "driver",
   opts: "driver",
   // plan's prelude and stop lines (plans/0053 D4–D8); never imports the loop.
@@ -230,6 +232,12 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     why: "watch is the bottom of the session-driving chain (plan §2.5); lower layers must not import upward",
   },
 ]
+
+// Leaf modules import no src module at all (type-only imports included), so
+// any layer may depend on them without forming a cycle or reaching upward.
+const LEAVES: Record<string, string> = {
+  "model-window": "the window grammar and wall-clock arithmetic of the model registry are pure (injected clock); the registry loader, the models command and selection all build on them",
+}
 
 // runner is the top of the task pipeline; exactly these modules may import it.
 const RUNNER_IMPORTERS = new Set(["loop", "loop-task"])
@@ -376,6 +384,15 @@ function checkOneWayRules(): string[] {
   return problems
 }
 
+function checkLeaves(): string[] {
+  const problems: string[] = []
+  for (const [key, why] of Object.entries(LEAVES)) {
+    if (!edges.has(key)) problems.push(`LEAVES lists src/${key}.ts which does not exist — remove the stale entry`)
+    for (const e of edges.get(key) ?? []) problems.push(`leaf violation: src/${key}.ts imports src/${e.to}.ts — ${why}${e.typeOnly ? " [type]" : ""}`)
+  }
+  return problems
+}
+
 function checkRunnerFanIn(): string[] {
   const problems: string[] = []
   for (const [from, list] of edges) {
@@ -455,6 +472,10 @@ describe("import direction (M0.7 / F11)", () => {
 
   test("documented one-way invariants hold (0024 §D.2)", () => {
     expect(checkOneWayRules().join("\n")).toBe("")
+  })
+
+  test("leaf modules import no src module", () => {
+    expect(checkLeaves().join("\n")).toBe("")
   })
 
   test("runner has exactly the sanctioned in-package consumers", () => {

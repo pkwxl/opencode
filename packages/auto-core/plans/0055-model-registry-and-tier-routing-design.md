@@ -1,6 +1,6 @@
 # 0055 — Model registry, reasoning tiers and multi-agent routing (design)
 
-Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); no other code change yet. Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
+Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); S1 has begun with the window module `src/model-window.ts` (§4.4). Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
 
 ## 0. The request
 
@@ -161,6 +161,7 @@ With no `agents` section, one profile `opencode` with adapter `opencode` is impl
 - `avoid` makes the model unavailable inside any listed window. `only` makes it available only inside the listed windows.
 - **Windows gate dispatches, never running turns.** Availability is checked when a prompt is dispatched (§6). A turn that is running when a window closes is not aborted: it finishes, and the next dispatch selects again. This is hibernate's rule ("graceful to the next safe point"), applied per model and at dispatch granularity.
 - The clock is the machine clock. After a system suspend, a sleep simply wakes late, as with hibernate.
+- **Settled in `src/model-window.ts` (S1).** A day range may wrap (`fri-mon` is fri, sat, sun and mon), and a comma list may hold ranges (`mon-wed,fri`). Day names are lowercase, hours and minutes have two digits, and one space separates days from times. A range whose ends are the same day (`mon-mon`), a window whose start equals its end, and `24:00` as a start are refused; each parse error names the window text and what was expected, and the loader prefixes the field and the layer. `tz` accepts what `Intl.DateTimeFormat` accepts and is shown in its canonical spelling. On a DST change day a window boundary is the first instant at which the local clock shows that time or a later one: a skipped time opens at the jump (a window lying wholly in the skipped hour is empty that day), and a repeated time means its first occurrence, so a window stays one span and adjacent windows never leave a gap. Searches (`nextOpening`, the window state) look 8 local days ahead, a week plus the DST shift; a model that does not open within them never opens. The window state reads `open`, `open until [ddd ]HH:MM <tz>`, `opens [ddd ]HH:MM <tz>` (a weekday when the time is not today) or `closed`.
 
 ### 4.5 Context steps: one model, several windows (request item 9)
 
@@ -472,3 +473,5 @@ No existing driver protocol string changes. The classifier reply (§7.1) is a ne
 - **0022 (strict resume)** — the recorded model gains its agent; eligibility replaces equality.
 - **0036 / 0046 (parallelism)** — key rotation by restart is a precondition to revisit (§10 item 8).
 - **0052 / 0053 (config commands, run lock)** — the operator layer is outside the target, so neither the lock nor `amend`/`fix` apply to it. The project layer is local-only like `opencode.json`: init writes its gitignore entry and `fix` repairs a missing one, but no command writes the file itself. The `Reasoning:` field of a custom type is target content, versioned like the rest of the type file.
+
+<!-- auto: eof -->
