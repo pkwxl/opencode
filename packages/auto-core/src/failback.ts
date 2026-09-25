@@ -9,18 +9,24 @@
 // (phase/task/subtask,挂点同 step.ts)消费——不抛异常、不占退出码通道,只重置降级
 // 状态;带参数时整体重定义模型序(首个为首选通配、其余为降级候选环),经本模块
 // override 层在运行期覆盖 switches.model(switches memo 恒定,不原地改)。
+//
+// Down marks(plans/0055 §6.4):模型注册表之下的降级标记——按模型内部名(及按
+// provider+key 引用,供后续步骤的密钥环)记「已降级」,在 OPENCODE_AUTO_MODEL_
+// FAILBACK_SCOPE 的边界与 /failback 处清零;带 until 的标记活到该时刻为止。无注册
+// 表的运行不写标记,sticky 语义逐字节不变。
 import { log } from "./log"
 import type { Boundary } from "./step"
 import type { FailbackScope } from "./switches"
 
 // 边界与粒度的细度序: 值越细序越大,边界序 ≤ 粒度序即重置(session 无对应
-// Boundary——它的重置点是 attempt 的新建会话分支,不走边界挂点)。
+// Boundary——对链上候选它的重置点是 attempt 的新建会话分支;对下面的 down
+// marks,"session" 是 scope=session 的等价边界: 每个新会话起点清标记)。
 const RANK: Record<FailbackScope | Boundary, number> = { phase: 1, task: 2, subtask: 3, session: 4 }
 
 // 粒度是否覆盖该边界(纯函数,供单测): 包含式——session 覆盖全部边界,subtask 覆盖
 // subtask/task/phase,task 覆盖 task 与 phase(均由链/holder 生命周期天然承担),
-// phase 只覆盖 phase。
-export function failbackApplies(scope: FailbackScope, boundary: Boundary): boolean {
+// phase 只覆盖 phase。"session" 作为边界只被 scope=session 覆盖。
+export function failbackApplies(scope: FailbackScope, boundary: Boundary | "session"): boolean {
   return RANK[boundary] <= RANK[scope]
 }
 
@@ -33,6 +39,88 @@ export function failbackApplies(scope: FailbackScope, boundary: Boundary): boole
 let sticky: string | undefined
 let pending: { order?: string[] } | undefined
 let override: { wildcard: string; fallback: string[] } | undefined
+
+// ---------------------------------------------------------------------------
+// Down marks (plans/0055 §6.4): under a model registry, a classified failure
+// marks a model down and a key failure marks a key down (the key half feeds
+// the per-provider rings of a later step); selection then moves to the next
+// usable candidate, and the primary returns when its mark clears. The marks
+// take over from the phase-scoped `sticky` holder, which keeps its exact
+// no-registry semantics: marks are written only where a registry drives the
+// failover, so a run without one never touches them.
+//
+// Marks live in memory only (nothing persists); a new run starts with every
+// model eligible. They are keyed by the model's internal name (a raw override
+// value by its model string, matching how selection reads them) and by
+// (provider, key reference) for a ring. A mark may carry `until`, the instant
+// a reset time named: it lasts until that instant *instead of* the scope
+// boundary, so a boundary clear keeps it and a read past the instant treats
+// it as cleared.
+// ---------------------------------------------------------------------------
+
+// A down mark; `until` (epoch ms) is the instant a reset time named, absent
+// = the mark clears at the scope boundaries.
+export type DownMark = { until?: number }
+
+const downModels = new Map<string, DownMark>()
+const downKeys = new Map<string, Map<string, DownMark>>()
+
+// The run's model down marks by internal name; selection reads this map
+// through its context. The map is never replaced, only mutated, so a held
+// reference stays live.
+export function downMarks(): ReadonlyMap<string, DownMark> {
+  return downModels
+}
+
+export function markModelDown(model: string, until?: number): void {
+  downModels.set(model, until !== undefined ? { until } : {})
+}
+
+export function modelDownMark(model: string): DownMark | undefined {
+  return downModels.get(model)
+}
+
+export function isModelDown(model: string, now: number): boolean {
+  const mark = downModels.get(model)
+  return mark !== undefined && (mark.until === undefined || mark.until > now)
+}
+
+// Key marks, per provider and key reference (the ring position itself never
+// moves back, §4.3; only whether a key is down lives here).
+export function markKeyDown(provider: string, key: string, until?: number): void {
+  let marks = downKeys.get(provider)
+  if (marks === undefined) {
+    marks = new Map()
+    downKeys.set(provider, marks)
+  }
+  marks.set(key, until !== undefined ? { until } : {})
+}
+
+export function keyDownMark(provider: string, key: string): DownMark | undefined {
+  return downKeys.get(provider)?.get(key)
+}
+
+export function isKeyDown(provider: string, key: string, now: number): boolean {
+  const mark = keyDownMark(provider, key)
+  return mark !== undefined && (mark.until === undefined || mark.until > now)
+}
+
+// Marks at a scope boundary (§6.4): the boundary clears every mark the scope
+// covers — phase clears under every scope, task under task (default) and
+// finer, and "session" is the new-session start of scope=session, which is
+// also the only scope that clears there. A mark with `until` lasts until
+// that instant instead, so it survives the clear and reads as up once the
+// instant has passed. Calling this at a boundary the scope does not cover is
+// a no-op.
+export function clearDownMarks(boundary: Boundary | "session", scope: FailbackScope): void {
+  if (!failbackApplies(scope, boundary)) return
+  dropScopeCleared(downModels)
+  for (const marks of downKeys.values()) dropScopeCleared(marks)
+}
+
+function dropScopeCleared(marks: Map<string, DownMark>): void {
+  for (const [key, mark] of marks) if (mark.until === undefined) marks.delete(key)
+}
 
 // /failback 置位(interactive.ts 已校验参数形态): order 非空 = 整体重定义模型序
 // (首个为首选、其余按序为降级候选环);空 = 仅重置降级状态回试当前首选。
@@ -64,11 +152,14 @@ export function failbackOverride(): { wildcard: string; fallback: string[] } | u
 
 // 三处安全边界共用的 /failback 消费点(紧随 maybeExit 之后;subtask 边界传入链以清
 // chain.model,task/phase 边界链已随 runTask 销毁、无需传入): 命中即重置降级状态
-// (链上候选 + sticky holder),带参时同时重定义运行期模型序。返回是否消费。
+// (链上候选 + sticky holder + down marks),带参时同时重定义运行期模型序。返回是否消费。
+// AUTO-RESOLVE: does a mark with `until` survive `/failback`, as it survives a scope boundary? -> no, `/failback` clears every mark, an `until` included (§6.4 lists the scope boundaries and `/failback` separately, and says `until` stands in for the scope boundary; the operator's explicit command retries the primary now, so a quota reset time must not override it)
 export function consumeFailback(chain?: { model?: string }): boolean {
   if (pending === undefined) return false
   if (chain) chain.model = undefined
   sticky = undefined
+  downModels.clear()
+  downKeys.clear()
   const order = pending.order
   pending = undefined
   if (order !== undefined) {
@@ -85,4 +176,6 @@ export function resetFailback(): void {
   sticky = undefined
   pending = undefined
   override = undefined
+  downModels.clear()
+  downKeys.clear()
 }

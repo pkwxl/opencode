@@ -158,7 +158,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Graceful exit | `/exit` at the next safe boundary | `src/exit.ts` (0014) |
 | Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window | `src/hibernate.ts` (0027) |
 | Interactive input | `--interactive` side-channel steer, `--wait-answer` input line | `src/interactive.ts` |
-| Model failback | `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`, `/failback` | `src/failback.ts` (0017) |
+| Model failback | `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`, `/failback`; under a model registry also the down marks (per model and provider key) selection reads | `src/failback.ts` (0017, 0055) |
 | Stuck-loop detection | Repeated-tool-call detection → steer hint | `src/stuck.ts`, `templates/prompts/stuck-hint.md` (0016) |
 | Proxy-answer ledger | `AUTO-RESOLVE`/`AUTO-DECISION` collection and reporting | `src/resolve.ts` (0020) |
 | Logging | Verbose/audit output, timestamps, log file | `src/log.ts` |

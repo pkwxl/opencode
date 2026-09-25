@@ -156,6 +156,11 @@ const CLASSIFIED: Record<string, Domain> = {
   "round-close": "driver",
   runner: "driver",
   script: "driver",
+  // Selection (plans/0055 §6): the candidate list, the pick and the
+  // nothing-usable decision of a dispatch under a registry; pure, with the
+  // clock and the run state injected. Sits below the session layer, above
+  // the agent domain (§12).
+  select: "driver",
   "session-api": "driver",
   session: "driver",
   shell: "driver",
@@ -271,6 +276,27 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "agent-env",
     to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice", "agent/opencode/server", "agent/claude/host"],
     why: "a profile's env is resolved for the host the agent start builds, and preflight reads the proxy warning (plans/0055 §4.2, §8.10); it must not import the loop, the session-driving layer, the agent start or an agent host",
+  },
+  // AUTO-DECISION: select gets a one-way rule besides its classification row (it is the resolver behind every dispatch under a registry — attempt, session, unit-commit and the failback override — so an upward import would form a cycle; §12 places it below the session layer and above the agent domain)
+  {
+    from: "select",
+    to: [
+      "loop",
+      "loop-phase",
+      "loop-plan",
+      "loop-task",
+      "loop-preflight",
+      "runner",
+      "artifact",
+      "session",
+      "attempt",
+      "watch",
+      "agent-choice",
+      "agent/opencode/server",
+      "agent/claude/host",
+      "models-describe",
+    ],
+    why: "selection is the pure resolver behind every dispatch under a registry (plans/0055 §6, §12): attempt, session, unit-commit and the failback override call it, so it must not import the loop, the session-driving layer, the agent start, an agent host or the models command's data",
   },
   {
     from: "watch",
