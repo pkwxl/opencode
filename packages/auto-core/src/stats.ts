@@ -632,9 +632,14 @@ function evictSessions(doc: StatsDoc) {
   for (const id of ids.slice(0, ids.length - MAX_SESSIONS)) delete doc.sessions[id]
 }
 
-// 人工等待开始(askHuman/stepPause/--wait-between): 嵌套深度 +1;最外层 fold 当前
-// 段后关段(等待期间 aiMs/wallMs 均不增长——总用时排除纯人工等待,计划 :14/:52)并
-// 落盘。reason 目前不消费(计划签名预留,供将来审计/vlog)。
+// 人工/计划等待开始: 嵌套深度 +1;最外层 fold 当前段后关段(等待期间 aiMs/wallMs
+// 均不增长——总用时排除纯人工等待,计划 :14/:52)并落盘。reason 目前不消费(计划
+// 签名预留,供将来审计/vlog),取值为既有等待种类之一:
+//   人工等待 — "askHuman"(会话内提问)、"waitBetweenTasks"(--wait-between)、
+//   "stepPause:<boundary>"(步进暂停);
+//   计划等待 — "hibernate"(休眠窗口,plans/0027)、"recovery"(等待-探测环,
+//   plans/0015)、"window"(模型窗口等待,plans/0055 §6.3——候选全部只在窗口外时
+//   睡到最早开启时刻加休眠抖动)。
 export async function statsWaitBegin(dir: string | undefined, reason?: string): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)

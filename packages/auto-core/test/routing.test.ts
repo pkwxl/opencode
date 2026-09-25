@@ -1,11 +1,12 @@
 // The run's routing facts (plans/0055 §6): the run-start routing block
-// (§6.5) over a hand-built registry, and the tier-coverage refusal of the
-// run start (§6.3). The dispatch behavior these facts drive is covered by
-// test/agent-fake.test.ts; the selection core itself by test/select.test.ts.
+// (§6.5) over a hand-built registry, and the dispatch-coverage refusal of
+// the run start (§6.3). The dispatch behavior these facts drive is covered
+// by test/agent-fake.test.ts; the selection core itself by test/select.test.ts.
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { parseWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models"
-import { logRunRouting, routingFacts, tierCoverageProblems, type RoutingFacts } from "../src/routing"
+import { phaseType } from "../src/phases/registry"
+import { dispatchCoverageProblems, logRunRouting, routingFacts, type DispatchNeed, type RoutingFacts } from "../src/routing"
 
 const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
 const agents = new Map<string, RegistryAgentProfile>([
@@ -88,27 +89,59 @@ describe("the run-start routing block (§6.5)", () => {
   })
 })
 
-describe("tier coverage of the run start (§6.3)", () => {
+describe("dispatch coverage of the run start (§6.3)", () => {
+  const implement = phaseType("implement")!
   const models = [entry("opus", { agent: "claude", model: "opus" }), entry("glm", { model: "zhipuai/glm-4.6" })]
   const tiers = {
     deep: { tier: "deep" as const, names: ["opus"], layer: "operator" as const },
     simple: { tier: "simple" as const, names: ["glm"], layer: "operator" as const },
   }
+  const fix = "fix the registry or the agent filter and re-run"
 
-  test("every needed tier with a candidate after the filter passes", () => {
-    expect(tierCoverageProblems(registry(models, tiers), undefined, true)).toEqual([])
-    expect(tierCoverageProblems(registry(models, tiers), "opencode", false)).toEqual([])
+  test("every need with a candidate after the filter passes", () => {
+    const needs: DispatchNeed[] = [{ role: "bypass" }, { role: "decompose", entry: implement }]
+    expect(dispatchCoverageProblems(registry(models, tiers), undefined, needs)).toEqual([])
+    // opus serves the claude filter, glm the opencode filter: each need has a
+    // candidate under the filter its own tier survives.
+    expect(dispatchCoverageProblems(registry(models, tiers), "claude", [{ role: "decompose", entry: implement }])).toEqual([])
+    expect(dispatchCoverageProblems(registry(models, tiers), "opencode", [{ role: "bypass" }])).toEqual([])
   })
 
   test("the filter emptying a needed tier, an undeclared tier and an empty tier are each one refusal", () => {
-    expect(tierCoverageProblems(registry(models, tiers), "claude", false)).toEqual([
-      "model registry: the simple tier has no candidate left after the agent filter claude (tiers.simple: glm); every simple session of this run would have no model to dispatch on",
+    // A filter no model serves empties both tiers. glm alone would not empty
+    // the bypass need: a simple tier borrows the deep list, and opus serves
+    // the claude filter.
+    expect(dispatchCoverageProblems(registry(models, tiers), "kimi", [{ role: "bypass" }, { role: "decompose", entry: implement }])).toEqual([
+      `model registry: the simple tier has no candidate left after the agent filter kimi (tiers.simple: glm); the bypass sessions of this run would have no model to dispatch on (${fix})`,
+      `model registry: the deep tier has no candidate left after the agent filter kimi (tiers.deep: opus); the decompose sessions of implement phases would have no model to dispatch on (${fix})`,
     ])
-    expect(tierCoverageProblems(registry(models, { simple: tiers.simple }), "opencode", true)).toEqual([
-      "model registry: the deep tier is not declared (tiers.deep: (empty)); every deep session of this run would have no model to dispatch on",
+    expect(dispatchCoverageProblems(registry(models, { simple: tiers.simple }), "opencode", [{ role: "decompose", entry: implement }])).toEqual([
+      `model registry: the deep tier is not declared (tiers.deep: (empty)); the decompose sessions of implement phases would have no model to dispatch on (${fix})`,
     ])
-    expect(tierCoverageProblems(registry(models, { deep: { tier: "deep", names: [], layer: "operator" }, simple: tiers.simple }), "opencode", true)).toEqual([
-      "model registry: the deep tier is declared empty (tiers.deep: (empty)); every deep session of this run would have no model to dispatch on",
+    expect(
+      dispatchCoverageProblems(registry(models, { deep: { tier: "deep", names: [], layer: "operator" }, simple: tiers.simple }), "opencode", [
+        { role: "decompose", entry: implement },
+      ]),
+    ).toEqual([
+      `model registry: the deep tier is declared empty (tiers.deep: (empty)); the decompose sessions of implement phases would have no model to dispatch on (${fix})`,
+    ])
+  })
+
+  test("one line per emptied list: the first need names it, later needs on the same list stay silent", () => {
+    expect(dispatchCoverageProblems(registry(models, tiers), "opencode", [{ role: "bypass" }, { role: "decompose", entry: implement }, { role: "phase-plan" }])).toEqual([
+      `model registry: the deep tier has no candidate left after the agent filter opencode (tiers.deep: opus); the decompose sessions of implement phases would have no model to dispatch on (${fix})`,
+    ])
+  })
+
+  test("a route in force names the route: a filtered list route and an emptied tier route", () => {
+    const routes: [string, ModelRoute][] = [
+      ["decompose", { key: "decompose", layer: "operator", names: ["opus"] }],
+      ["subtask", { key: "subtask", layer: "operator", tier: "deep" }],
+    ]
+    const empty = registry(models, { deep: { tier: "deep", names: [], layer: "operator" }, simple: tiers.simple }, routes)
+    expect(dispatchCoverageProblems(empty, "opencode", [{ role: "decompose", entry: implement }, { role: "subtask", entry: implement }])).toEqual([
+      `model registry: route decompose has no candidate left after the agent filter opencode (route decompose: opus); the decompose sessions of implement phases would have no model to dispatch on (${fix})`,
+      `model registry: route subtask (the deep tier) is declared empty (route subtask: (empty)); the subtask sessions of implement phases would have no model to dispatch on (${fix})`,
     ])
   })
 })

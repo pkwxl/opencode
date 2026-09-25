@@ -102,7 +102,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Task pipeline | `runOnce`/`runTask`: decompose → subtasks (or whole) → wrap-up → closeout; resume | `src/runner.ts` |
 | Execution | Merged understand+decompose session, per-subtask sessions, whole-task session | `src/execute.ts` (0030) |
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
-| Session driving | `runSession` retry / server restart / quota failover ring / `awaitRecovery`; `ensureForkBase` | `src/session.ts` (0015, 0017) |
+| Session driving | `runSession` retry / server restart / quota failover ring / `awaitRecovery`; registry window wait (sleep to the opening plus hibernate's jitter, booked as a `window` wait); `ensureForkBase` | `src/session.ts` (0015, 0017, 0055 §6.3) |
 | Single dispatch | Reuse-or-create, model target, resume point, stats segment, wait for idle | `src/attempt.ts` |
 | Event stream | Echo, usage tracking, handoff steer, stuck hints, marker collection, test requests, liveness probe, truncation resume | `src/watch.ts` (0026) |
 | Session chain and routing | `SessionChain`, phase → role → model routing, error classification | `src/chain.ts` (0017) |
@@ -156,7 +156,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Run lock | `.auto/run.lock`: one driver process per directory; re-entrant, stale-pid detection, refusal and status lines | `src/lock.ts` (0053 D1–D3) |
 | Step mode | `OPENCODE_AUTO_STEP` pauses at phase/task/subtask boundaries | `src/step.ts` (0012) |
 | Graceful exit | `/exit` at the next safe boundary | `src/exit.ts` (0014) |
-| Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window | `src/hibernate.ts` (0027) |
+| Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window; the shared booked sleep and 0–600 s jitter the registry window waits reuse | `src/hibernate.ts` (0027, 0055 §6.3) |
 | Interactive input | `--interactive` side-channel steer, `--wait-answer` input line | `src/interactive.ts` |
 | Model failback | `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`, `/failback`; under a model registry also the down marks (per model and provider key) selection reads | `src/failback.ts` (0017, 0055) |
 | Stuck-loop detection | Repeated-tool-call detection → steer hint | `src/stuck.ts`, `templates/prompts/stuck-hint.md` (0016) |

@@ -6,20 +6,26 @@
 // records use). Selection itself stays pure in src/select.ts; this module
 // injects the run state around it (the down marks, the /failback override,
 // the context windows) and owns the run-start routing block (§6.5) and the
-// tier-coverage refusal of the run start (§6.3).
+// dispatch-coverage refusal of the run start (§6.3).
 //
 // Without a registry nothing here runs: the dispatch resolvers keep their
 // env-switch path (resolveModel, src/chain.ts), byte for byte.
 import { downMarks, failbackOverride } from "./failback"
 import { log } from "./log"
+import { candidateList } from "./model-route"
 import { formatWindowState, windowState } from "./model-window"
 import { layerLabel, type ModelRegistry } from "./models"
+import type { PhaseTypeEntry } from "./phases/registry"
 import { candidateKey, select, type Candidate, type SelectContext } from "./select"
 import { shellProfile } from "./shell"
-import { autoSwitches, SWITCH_ENV, type AgentChoice, type Switches } from "./switches"
+import { autoSwitches, SWITCH_ENV, type AgentChoice, type ModelRole, type Switches } from "./switches"
 
 // The run-level facts of registry routing. `clock` is the injected instant
 // source (tests steer it past window boundaries); absent = the machine clock.
+// `random` and `sleep` are the window wait's knobs (§6.3), injected the same
+// way: the random source of hibernate's 0–600 s jitter and the sleep itself;
+// absent = Math.random and Bun.sleep.
+// AUTO-DECISION: the wait's random and sleep ride RoutingFacts beside the clock instead of new runSession parameters (the facts are already the one injection point tests use to steer time, and the wait is the only consumer — new signatures on runSession would spread test knobs through every caller)
 export type RoutingFacts = {
   registry: ModelRegistry
   // §6.2 rule 1: the adapter name only models on matching profiles pass;
@@ -32,6 +38,8 @@ export type RoutingFacts = {
   // values run on and unqualified session records belong to.
   defaultAgent: string
   clock?: () => number
+  random?: () => number
+  sleep?: (ms: number) => Promise<void>
 }
 
 // The routing facts of a run: the agent filter follows the same precedence
@@ -78,12 +86,29 @@ export function selectContext(
   }
 }
 
-// §6.3's run-start refusal: a tier the run's sessions need that has no
-// candidate left after the agent filter never becomes a silent wait. The
-// check reads the tier lists only (windows, marks and rings change during a
-// run); a route or override that empties a list surfaces at its dispatch.
-// AUTO-DECISION: the needed tiers are simple (bypass and wrap-up sessions exist in every mode) plus deep when the run plans or scans (a phased run, or m mode with a planning input); route lists and override values are not checked (which routes a run dispatches depends on its config, and an override that names a filtered-out model is a per-session mistake the dispatch itself refuses)
-export function tierCoverageProblems(registry: ModelRegistry, agentFilter: string | undefined, deepNeeded: boolean): string[] {
+// One dispatch the run can send (plans/0055 §6.3): a routing role under the
+// phase type in force when it runs (undefined = a run-level role no phase
+// owns). The coverage check reads the need's candidate list, so an operator's
+// route that empties a role's list is caught like an emptied tier.
+export type DispatchNeed = { role: ModelRole; entry?: PhaseTypeEntry }
+
+// §6.3's run-start refusal, per dispatch: for every need the run can send,
+// the candidate list (the route in force, the tier's list with borrowing)
+// must hold at least one candidate the agent filter keeps — a list left empty
+// by the filter is a usage error, never a silent wait. One line per empty
+// list (the first need that hits it is named), naming the tier or route, the
+// role or phase type and the filter. The check reads the lists only: windows,
+// down marks and key rings change during a run, and a list that empties only
+// through them waits or probes at its dispatch. The OPENCODE_AUTO_MODEL and
+// /failback overrides replace a list per dispatch and are not checked either
+// (a value naming a filtered-out model is a per-session refusal the dispatch
+// itself raises).
+// AUTO-DECISION: the refusal is per (role, phase type) need instead of per tier, and one line names one representative need (the fix is the same for every consumer of the emptied list, and a line per need would repeat the same tier for every phase type of a phased run)
+export function dispatchCoverageProblems(
+  registry: ModelRegistry,
+  agentFilter: string | undefined,
+  needs: readonly DispatchNeed[],
+): string[] {
   const passes = (name: string): boolean => {
     if (agentFilter === undefined) return true
     const entry = registry.models.get(name)
@@ -91,14 +116,38 @@ export function tierCoverageProblems(registry: ModelRegistry, agentFilter: strin
     return adapter === agentFilter
   }
   const problems: string[] = []
-  for (const tier of deepNeeded ? (["deep", "simple"] as const) : (["simple"] as const)) {
-    const list = registry.tiers[tier]
-    const names = list?.names ?? []
-    if (!names.some(passes)) {
-      const what = list === undefined ? "is not declared" : names.length ? `has no candidate left after the agent filter ${agentFilter}` : "is declared empty"
+  const reported = new Set<string>()
+  for (const need of needs) {
+    const list = candidateList(registry, need.entry, need.role)
+    if (list.names.some(passes)) continue
+    // One line per emptied list source (the tier, or the route in force).
+    const source = list.route !== undefined ? `route ${list.route.key}` : `tier ${list.tier}`
+    if (reported.has(source)) continue
+    reported.add(source)
+    const who =
+      need.entry === undefined
+        ? `the ${need.role} sessions of this run`
+        : `the ${need.role} sessions of ${need.entry.type} phases`
+    const fix = "fix the registry or the agent filter and re-run"
+    if (list.route === undefined) {
+      const declared = registry.tiers[list.tier]
+      const names = declared?.names ?? []
+      const state =
+        declared === undefined
+          ? "is not declared"
+          : names.length
+            ? `has no candidate left after the agent filter ${agentFilter}`
+            : "is declared empty"
       problems.push(
-        `model registry: the ${tier} tier ${what} (tiers.${tier}: ${names.join(", ") || "(empty)"}); ` +
-          `every ${tier} session of this run would have no model to dispatch on`,
+        `model registry: the ${list.tier} tier ${state} (tiers.${list.tier}: ${names.join(", ") || "(empty)"}); ` +
+          `${who} would have no model to dispatch on (${fix})`,
+      )
+    } else {
+      const state = list.names.length ? `has no candidate left after the agent filter ${agentFilter}` : "is declared empty"
+      const via = "names" in list.route ? "" : ` (the ${list.tier} tier)`
+      problems.push(
+        `model registry: route ${list.route.key}${via} ${state} (route ${list.route.key}: ${list.names.join(", ") || "(empty)"}); ` +
+          `${who} would have no model to dispatch on (${fix})`,
       )
     }
   }

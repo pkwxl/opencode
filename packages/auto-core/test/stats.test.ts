@@ -554,6 +554,24 @@ describe("stats 会话与等待", () => {
     expect(doc.sessions).toEqual({})
   })
 
+  // The window wait kind (plans/0055 §6.3): a dispatch whose candidates are
+  // all outside their windows books its sleep as a `window` wait — the same
+  // caliber as every planned wait (excluded from aiMs/wallMs, recorded as
+  // waitMs alone).
+  test("the window wait kind books like every planned wait: excluded from wallMs, recorded as waitMs", async () => {
+    await loadStats(dir)
+    now += 1000
+    await statsWaitBegin(dir, "window")
+    now += 2000
+    await statsWaitEnd(dir)
+    now += 1000
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.taskB.waitMs).toBe(2000)
+    expect(doc.taskB.wallMs).toBe(2000)
+    expect(doc.taskB.aiMs).toBe(0)
+  })
+
   test("per-session 跨装载续接: 同 sessionID 二次会话累加 rounds/aiMs/usage", async () => {
     await loadStats(dir)
     await statsTask(dir, "T-001")

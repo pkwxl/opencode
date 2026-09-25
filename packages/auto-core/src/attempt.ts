@@ -13,7 +13,7 @@ import { clearDownMarks, failbackOverride, isModelDown, stickyModel } from "./fa
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
-import { usableAt } from "./model-window"
+import { formatWindowState, usableAt } from "./model-window"
 import type { ModelRegistry } from "./models"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { currentRound } from "./phases"
@@ -214,8 +214,9 @@ export async function attempt(
     // retry, a fork after a failure, the recovery loop's re-dispatch, a
     // strict resume; reuse or a consumed pending fork here) — the chain's
     // entry while it is still usable. The pick names the prompt's model and
-    // variant; nothing usable reaches the wait-and-probe loop through
-    // runSession (noModel), and an emptied list is a blocked refusal.
+    // variant; nothing usable returns with noModel for runSession to act on
+    // (§6.3: wait for the earliest window opening, or probe in the
+    // wait-and-probe loop), and an emptied list is a blocked refusal.
     // Without a registry (plans/0017 C.3/E) the env-switch chain applies,
     // byte for byte as before: chain fallback candidate > phase-scoped
     // sticky > /failback runtime override > the routing table (role > phase
@@ -246,7 +247,27 @@ export async function attempt(
           question: `model registry: no candidate is left for this session's routing (${detail}, agent filter ${facts.agentFilter ?? "none"}); fix the registry or the filter and re-run`,
         }
       }
-      if (decision.kind !== "pick") {
+      if (decision.kind === "wait") {
+        // §6.3's wait: nothing is usable now, but a candidate that is not
+        // down opens later through its window. No session content exists to
+        // probe, so runSession sleeps inside the unit until the earliest
+        // opening plus hibernate's jitter and this loop dispatches again
+        // (the re-selection reads the advanced clock; a suspend that wakes
+        // past a short window simply waits for its next opening).
+        if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
+        return {
+          type: "blocked",
+          question: `no usable model candidate now: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is outside its windows; waiting for the earliest opening`,
+          noModel: true,
+          windowWait: {
+            until: decision.until,
+            model: candidateKey(decision.candidate),
+            tier: list.tier,
+            opens: formatWindowState({ open: false, opens: decision.until }, facts.registry.tz, nowOf(facts)),
+          },
+        }
+      }
+      if (decision.kind === "probe") {
         if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
         return {
           type: "blocked",

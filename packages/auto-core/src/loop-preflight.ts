@@ -19,6 +19,7 @@ import { projectLayerRefusal, switchModelRegistryInfo } from "./models-describe"
 import { currentRound, legacyLayoutProblem, phaseIndexPath } from "./phases"
 import { roundBriefPath } from "./docpaths"
 import { loadPhaseTypes } from "./phases/custom"
+import { phaseType, REQUIRED_TYPE, resolvePhases, type PhaseTypeEntry } from "./phases/registry"
 import { trackSubtasks, watchFiles } from "./loop-progress"
 import type { ModeSpec } from "./mode"
 import type { PlanInput } from "./plan-input"
@@ -28,7 +29,7 @@ import type { ParallelLevel } from "./intent/types"
 import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
-import { routingFacts, tierCoverageProblems } from "./routing"
+import { routingFacts, dispatchCoverageProblems, type DispatchNeed } from "./routing"
 import { shellProfile } from "./shell"
 import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, setSwitchModelRegistry, type AgentChoice } from "./switches"
 import { loadStats } from "./stats"
@@ -150,9 +151,9 @@ export async function preflight(
     const types = loaded.map((entry) => entry.type)
     registry = await loadRunRegistry(directory, types)
     setSwitchModelRegistry(registry ? switchModelRegistryInfo(registry) : undefined)
-    // A tier the run's sessions need with no candidate left after the agent
-    // filter is a usage error, never a silent wait (plans/0055 §6.3).
-    const coverage = registry ? tierCoverageProblems(registry, routingFacts(registry, opts.agent).agentFilter, deepTierNeeded(opts)) : []
+    // A dispatch the run can send with a list the agent filter emptied is a
+    // usage error, never a silent wait (plans/0055 §6.3, §10 item 7).
+    const coverage = registry ? dispatchCoverageProblems(registry, routingFacts(registry, opts.agent).agentFilter, dispatchNeeds(opts, loaded)) : []
     const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types), ...coverage]
     if (problems.length) throw new Error(problems.join("\n"))
   } catch (error) {
@@ -292,12 +293,41 @@ export async function preflight(
   return { agentName, watcher, progress, registry }
 }
 
-// Whether this run's sessions need the deep tier (plans/0055 §6.3): every
-// mode runs simple sessions (bypass and wrap-up); a deep session runs when
-// the run plans or scans — a phased run's planning step, or m mode with a
-// planning input (its scan session).
-function deepTierNeeded(opts: RunAllOpts): boolean {
-  return (opts.phases !== undefined && opts.phases !== "m") || opts.planInput !== undefined
+// The dispatches this run can send (plans/0055 §6.3): every role its
+// reachable phase types dispatch, plus the run-level roles no phase owns.
+// The reachable types are the configured phases (custom types included,
+// resolved against the loaded type list); "m" is the implicit implement
+// phase. Per type with tasks: the task sessions take the type's execute tier
+// (`whole` outside the auto subtask mode, `subtask` in every mode — a
+// checklist a person wrote dispatches too —, and the merged understand/
+// decompose session in the auto mode), and the wrap-up session runs unless
+// wrapup is off; a type without tasks runs its own knowledge session.
+// Run-level: the bypass one-offs in every mode (confirm turns, context-base
+// rebuilds, the dryrun precheck), the phased loop's planning and handover
+// sessions, and m mode's planning scan. number-recovery (a rare recovery
+// path inside a run) and prior-knowledge (shell-orchestrated outside runAll)
+// stay off the list: both are simple sessions, so the bypass need keeps
+// their tier covered.
+// AUTO-RESOLVE: does the default m mode need the deep tier? -> yes, through the decompose sessions of its implicit implement phase (the default subtask mode runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently; a run that really wants no deep tier says subtask: off, whose whole-task sessions take the implement type's simple tier)
+function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[]): DispatchNeed[] {
+  // An invalid phases value fails at its own validation (config load, the
+  // loop's routing); the coverage check stays total on the implicit type.
+  const entries = resolvePhases(opts.phases ?? "m", types) ?? [phaseType(REQUIRED_TYPE)!]
+  const phased = opts.phases !== undefined && opts.phases !== "m"
+  const needs: DispatchNeed[] = [{ role: "bypass" }]
+  if (phased) needs.push({ role: "phase-plan" }, { role: "phase-handover" })
+  else if (opts.planInput !== undefined) needs.push({ role: "implement-scan" })
+  for (const entry of entries) {
+    if (!entry.hasTasks) {
+      needs.push({ role: "knowledge", entry })
+      continue
+    }
+    if ((opts.subtask ?? "auto") === "auto") needs.push({ role: "decompose", entry })
+    else needs.push({ role: "whole", entry })
+    needs.push({ role: "subtask", entry })
+    if (opts.wrapup !== false) needs.push({ role: "wrapup", entry })
+  }
+  return needs
 }
 
 // The model registry at run start (plans/0055 §4.1, §4.3): both layers read

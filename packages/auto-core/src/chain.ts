@@ -8,7 +8,7 @@ import { type UnitBaseline } from "./git"
 import { type ResolveEvent } from "./resolve"
 import { type Phase } from "./resume"
 import { type Usage } from "./stats"
-import type { PhaseTypeEntry } from "./phases/registry"
+import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import { type ModelPolicy, type ModelRole } from "./switches"
 
 export type Watch = {
@@ -69,7 +69,20 @@ export type SessionResult =
       // its windows. runSession sends the prompt to the wait-and-probe loop
       // instead of treating this as a session failure.
       noModel?: boolean
+      // The §6.3 wait decision (with noModel): every candidate is blocked
+      // only by its windows and one that is not down opens later, so the
+      // dispatch waits inside the unit instead of probing. runSession sleeps
+      // until `until` plus hibernate's jitter and then selects again; the
+      // facts carry what the wait line names.
+      windowWait?: WindowWait
     })
+
+// The window wait of one dispatch (plans/0055 §6.3): `until` is the earliest
+// opening among the candidates that are not down (epoch ms), `model` the
+// candidate that opens then (the key selection knows it by), `tier` the
+// dispatch's list tier and `opens` the formatted opening ("opens 18:00
+// Asia/Shanghai") for the wait line.
+export type WindowWait = { until: number; model: string; tier: Tier; opens: string }
 
 // 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
 // OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一

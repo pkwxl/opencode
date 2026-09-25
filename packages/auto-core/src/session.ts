@@ -8,14 +8,16 @@
 
 import { dirname, join } from "node:path"
 import type { AgentClient } from "./agent/types"
-import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
+import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
 import { attempt } from "./attempt"
 import { taskDoc } from "./docpaths"
 import { clearModelDownMark, downMarks, failbackOverride, markModelDown, setSticky, stickyModel } from "./failback"
+import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
 import { log } from "./log"
+import { formatWindowState } from "./model-window"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
-import { candidateKey, nowOf, selectContext } from "./routing"
-import { select } from "./select"
+import { candidateKey, nowOf, selectContext, type Candidate } from "./routing"
+import { candidatesOf, select, type SelectCall, type SelectContext } from "./select"
 import { setForkBase, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
 import { firstLine } from "./resume-gate"
@@ -181,12 +183,17 @@ export async function runSession(
     if (opts.routing) {
       from = chain.modelEntry
       if (from !== undefined) markModelDown(from)
-      const decision = select(selectContext(opts.routing, switches, cap, limits), {
-        role: roleOf(chain),
-        entry: opts.phase?.entry,
-        now: nowOf(opts.routing),
-        continuation: false,
-      })
+      const facts = opts.routing
+      const ctx = selectContext(facts, switches, cap, limits)
+      const call = { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts), continuation: false as const }
+      let decision = select(ctx, call)
+      if (decision.kind === "wait") {
+        // Escalation step 3 (§7): the remaining candidates are blocked only
+        // by their windows — wait for the opening plus the jitter instead of
+        // handing a closed window to the probe loop, then select again.
+        await waitForWindow(windowWaitOf(ctx, call, decision))
+        decision = select(ctx, { ...call, now: nowOf(facts) })
+      }
       if (decision.kind !== "pick") return false
       to = candidateKey(decision.candidate)
       // The model just marked down cannot be the pick; a same-name result
@@ -295,6 +302,46 @@ export async function runSession(
     chain.pct = 100
     return true
   }
+  // The window wait (plans/0055 §6.3): every candidate is blocked only by
+  // its windows and one that is not down opens later. The dispatch sleeps
+  // inside the unit before dispatching, as the recovery wait does: one wait
+  // line naming the model and its opening, the interval booked as a `window`
+  // wait (excluded from aiMs/wallMs, recorded as waitMs), and hibernate's
+  // random delay of 0–600 s on top of the opening (plans/0027 D3, shared
+  // through HIBERNATE_JITTER_MS and the booked sleep), so drivers sharing an
+  // account do not all dispatch at the same moment. A double Ctrl+C
+  // force-quits it through runAll's process-level SIGINT handler (130), like
+  // every long wait. After the wake the loop selects again on the machine
+  // clock (the facts' injected clock in tests): a suspend only wakes late,
+  // and a wake past a short window simply waits for its next opening — the
+  // wait never exits on its own (§10 item 7).
+  // AUTO-DECISION: the wait decision is honored at every selection site — the dispatch target (attempt returns the facts, this loop sleeps), the failover (switchModel below) and the probe loop (awaitRecovery below) wait and re-select in place — instead of only at the dispatch (a failover onto a window-blocked list or a probe round after the marks clear would otherwise burn wait-and-probe rounds against a closed window; the wait line keeps the designed text and adds hibernate's resuming/force-quit hint, which §6.3's force-quit promise asks to be visible)
+  const waitForWindow = async (wait: WindowWait): Promise<void> => {
+    const facts = opts.routing!
+    const now = nowOf(facts)
+    const jitter = (facts.random ?? Math.random)() * HIBERNATE_JITTER_MS
+    const wakeAt = new Date(now + Math.max(0, wait.until - now) + jitter)
+    log(
+      `⏸ ${task.id} ${roleOf(chain)} waits for a ${wait.tier} model: ${wait.model} ${wait.opens}` +
+        `, resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
+    )
+    await bookedSleep("window", Math.max(0, wait.until - now) + jitter, { dir: opts.dir, sleep: facts.sleep })
+    log(`→ window wait over: continuing after ${wait.model} opened`)
+  }
+  // The wait facts of a wait decision, for the wait line: the model that
+  // opens first, its formatted opening and the dispatch list's tier. The
+  // dispatch target itself (attempt) builds the same payload from the list
+  // it already holds; the failover and the probe loop select without one.
+  const windowWaitOf = (
+    ctx: SelectContext,
+    call: SelectCall,
+    decision: { until: number; candidate: Candidate },
+  ): WindowWait => ({
+    until: decision.until,
+    model: candidateKey(decision.candidate),
+    tier: candidatesOf(ctx, call).tier,
+    opens: formatWindowState({ open: false, opens: decision.until }, opts.routing!.registry.tz, call.now),
+  })
   // 等待-探测环(2026-09-16 策略): 会话故障的最终归宿——不再阻塞退出,以
   // recoveryWait(缺省 30 分钟)为间隔无限等待,每轮用**全新临时干净会话**下发极小
   // 探测提示词判明服务是否恢复;恢复后 fork 被中断的会话(与重试环同一套「保住
@@ -311,8 +358,8 @@ export async function runSession(
   // the probe fails — a successful probe leaves it cleared, which is exactly
   // "a successful probe clears that candidate's mark", and the re-dispatch
   // that follows picks it as the first usable candidate. A window-blocked
-  // list (the wait decision) keeps failing its probes until the window opens;
-  // the proper window wait with its jitter is the next step of the design.
+  // list (the wait decision) never gets here: it waits on the window below
+  // instead of burning probe rounds against a closed window.
   // AUTO-DECISION: the probe realizes the mark-clearing by clearing the probe candidate's mark before the dispatch and re-marking it on a failed probe, instead of bypassing selection with a dictated model (selection then picks the cleared candidate deterministically — it is the first in-window one — and no dispatch path exists that skips the windows or the marks)
   const awaitRecovery = async (why: string): Promise<void> => {
     for (;;) {
@@ -328,12 +375,17 @@ export async function runSession(
       let probed: string | undefined
       if (opts.routing) {
         limits ??= await client.contextLimits()
-        const decision = select(selectContext(opts.routing, switches, cap, limits), {
-          role: roleOf(chain),
-          entry: opts.phase?.entry,
-          now: nowOf(opts.routing),
-          continuation: false,
-        })
+        const facts = opts.routing
+        const ctx = selectContext(facts, switches, cap, limits)
+        const call = { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts), continuation: false as const }
+        let decision = select(ctx, call)
+        // A wait decision here (the marks cleared mid-loop — /failback, say —
+        // and what is left is window-blocked): wait for the opening rather
+        // than probe a closed window, then take the probe decision.
+        while (decision.kind === "wait") {
+          await waitForWindow(windowWaitOf(ctx, call, decision))
+          decision = select(ctx, { ...call, now: nowOf(facts) })
+        }
         if (decision.kind === "probe") {
           probed = candidateKey(decision.candidate)
           clearModelDownMark(probed)
@@ -416,9 +468,15 @@ export async function runSession(
     if (result.type !== "blocked") return result
     // Registry routing: selection found nothing usable for the dispatch (every
     // candidate down or outside its windows, §6.3) — no session ran, so this is
-    // not a session failure either: straight into the wait-and-probe loop,
-    // whose probe clears a candidate's mark when service is back.
+    // not a session failure either. The two §6.3 outcomes split here: a wait-
+    // able window sleeps inside the unit until the opening plus the jitter and
+    // dispatches again; everything down goes to the wait-and-probe loop, whose
+    // probe clears a candidate's mark when service is back.
     if (result.noModel === true) {
+      if (result.windowWait !== undefined) {
+        await waitForWindow(result.windowWait)
+        continue
+      }
       await awaitRecovery(firstLine(result.question))
       continue
     }

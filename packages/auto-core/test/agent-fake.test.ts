@@ -10,7 +10,10 @@
 // adapter's mapping end to end; test/agent-claude.test.ts does the same for
 // claude. This file is the agent-neutral layer between them.
 
-import { beforeEach, describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { AgentEvent } from "../src/agent/types"
 import { attempt } from "../src/attempt"
 import { degrade } from "../src/capability"
@@ -23,6 +26,7 @@ import { parseWindow } from "../src/model-window"
 import type { RoutingFacts } from "../src/routing"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
+import { flushStats, setStatsClock } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { watch } from "../src/watch"
 import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
@@ -353,17 +357,25 @@ describe("the barest agent", () => {
 // Registry-driven dispatch (plans/0055 §6, §7): selection picks the model of
 // every prompt under a hand-built registry (opts.routing), a classified
 // failure marks the model down and fails over along the tier list on the
-// same agent, the recovery probe clears a mark, and windows gate dispatches
-// without ever aborting a running turn.
+// same agent, the recovery probe clears a mark, windows gate dispatches
+// without ever aborting a running turn, and a dispatch with only
+// closed-window candidates waits inside the unit for the opening plus
+// hibernate's jitter.
 describe("registry routing (plans/0055 §6, §7)", () => {
   const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
   const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
 
   // The routing facts of a one-agent fleet: deep [a, b], simple [s] unless a
-  // fixture overrides the models or the clock.
+  // fixture overrides the models, the tiers, the clock or the window wait's
+  // random/sleep knobs.
   const facts = (
     models: ModelEntry[],
-    over: { tiers?: Partial<Record<"deep" | "simple", TierList>>; clock?: () => number } = {},
+    over: {
+      tiers?: Partial<Record<"deep" | "simple", TierList>>
+      clock?: () => number
+      random?: () => number
+      sleep?: (ms: number) => Promise<void>
+    } = {},
   ): RoutingFacts => ({
     registry: {
       layers: [{ name: "operator", path: "/unused/models.json" }],
@@ -378,6 +390,8 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     ...(over.clock ? { clock: over.clock } : {}),
+    ...(over.random ? { random: over.random } : {}),
+    ...(over.sleep ? { sleep: over.sleep } : {}),
   })
 
   const FLEET = [entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" }), entry("s", { model: "prov/s" })]
@@ -464,6 +478,90 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     expect(agent.prompts[0]!.model).toBe("prov/w")
   })
 
+  // §6.3's window wait: a deep dispatch whose only candidate is outside its
+  // windows sleeps inside the unit until the earliest opening plus
+  // hibernate's jitter, logs the wait line, books a `window` wait, and then
+  // dispatches on the re-selection.
+  test("a deep dispatch with only closed-window candidates waits for the opening plus jitter, then dispatches", async () => {
+    let now = Date.parse("2026-09-25T12:00:00Z")
+    const clock = () => now
+    const only = parseWindow("18:00-24:00")
+    if ("error" in only) throw new Error(only.error)
+    const models = [entry("w", { model: "prov/w", only: [only.window] })]
+    const dir = await mkdtemp(join(tmpdir(), "auto-window-"))
+    const routing = facts(models, {
+      clock,
+      random: () => 0.25,
+      sleep: async (ms) => {
+        now += ms
+      },
+      tiers: { deep: tierList("deep", ["w"]), simple: tierList("simple", ["w"]) },
+    })
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    setStatsClock(clock)
+    try {
+      const agent = make()
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", { routing, dir }, chain, undefined, undefined, DEFAULTS)
+      expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+      // The only prompt went out after the wait, on the candidate whose
+      // window opened (the first attempt returned before dispatching; its
+      // session was created and abandoned, so this is the second one).
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]).toMatchObject({ model: "prov/w" })
+      // The wait covered the distance to the opening (6 h) plus a quarter of
+      // hibernate's jitter (0.25 × 600 s = 150 s).
+      expect(now).toBe(Date.parse("2026-09-25T18:02:30Z"))
+      // One wait line naming the model and its opening, one line after.
+      expect(lines.filter((line) => line.includes("waits for a deep model"))).toEqual([
+        `⏸ T-001 decompose waits for a deep model: w opens 18:00 UTC, resuming around ${new Date(Date.parse("2026-09-25T18:02:30Z")).toISOString()} (local ${new Date(Date.parse("2026-09-25T18:02:30Z")).toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
+      ])
+      expect(lines).toContain("→ window wait over: continuing after w opened")
+      // The interval was booked as a window wait: excluded from aiMs and
+      // recorded as waitMs (clamped to the 30-minute booking tick).
+      await flushStats(dir)
+      const doc = JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text())
+      expect(doc.roundB.waitMs).toBe(1_800_000)
+      expect(doc.roundB.aiMs).toBeLessThan(1_800_000)
+    } finally {
+      printed.mockRestore()
+      setStatsClock()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // §10 item 6: the machine clock decides after the wake. A suspend that
+  // wakes past a short window simply waits for the next opening — the wait
+  // never exits on its own (C5).
+  test("a wake past the window (a suspend) waits again for the next opening instead of dispatching", async () => {
+    let now = Date.parse("2026-09-25T12:00:00Z")
+    const clock = () => now
+    const only = parseWindow("18:00-20:00")
+    if ("error" in only) throw new Error(only.error)
+    const models = [entry("w", { model: "prov/w", only: [only.window] })]
+    let wakes = 0
+    const routing = facts(models, {
+      clock,
+      random: () => 0.25,
+      // The first wake overshoots the window by seven hours, like a machine
+      // that suspended; the second wakes exactly on time.
+      sleep: async (ms) => {
+        now += ms + (wakes++ === 0 ? 7 * 3_600_000 : 0)
+      },
+      tiers: { deep: tierList("deep", ["w"]), simple: tierList("simple", ["w"]) },
+    })
+    const agent = make()
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
+    expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+    expect(agent.prompts).toHaveLength(1)
+    expect(agent.prompts[0]).toMatchObject({ model: "prov/w" })
+    expect(now).toBe(Date.parse("2026-09-26T18:02:30Z"))
+  })
+
   test("a variant declared on the entry reaches the prompt body", async () => {
     const agent = make()
     const models = [entry("think", { model: "prov/big", variant: "high" })]
@@ -503,6 +601,34 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b", "prov/a", "prov/a"])
     expect(isModelDown("a", Date.now())).toBe(false)
     expect(isModelDown("b", Date.now())).toBe(true)
+  })
+
+  // Escalation step 3 (§7): a quota failure whose remaining candidates are
+  // blocked only by their windows waits for the opening instead of handing a
+  // closed window to the probe loop; the failover lands on the opened model.
+  test("a failover onto a window-blocked list waits for the opening, then switches to the opened model", async () => {
+    let now = Date.parse("2026-09-25T12:00:00Z")
+    const only = parseWindow("18:00-24:00")
+    if ("error" in only) throw new Error(only.error)
+    const models = [entry("a", { model: "prov/a" }), entry("w", { model: "prov/w", only: [only.window] })]
+    const routing = facts(models, {
+      clock: () => now,
+      random: () => 0,
+      sleep: async (ms) => {
+        now += ms
+      },
+      tiers: { deep: tierList("deep", ["a", "w"]), simple: tierList("simple", ["a", "w"]) },
+    })
+    const agent = make({ turn: quotaTurn })
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    // a fails with quota; w is closed until 18:00 — the failover waits the
+    // six hours (zero jitter from the injected random) and forks onto w.
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/w"])
+    expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
+    expect(chain.modelEntry).toBe("w")
+    expect(now).toBe(Date.parse("2026-09-25T18:00:00Z"))
   })
 })
 

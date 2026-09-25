@@ -10,7 +10,26 @@ import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { autoSwitches, formatHibernate, type HibernateWindow } from "./switches"
 
 // 窗口结束后的固定随机延迟上限(D3): 0~600 秒,错开同时唤醒的多实例。
+// 0055 §6.3 的模型窗口等待复用同一延迟: 共享账号的多实例不在同一时刻全部下发。
 export const HIBERNATE_JITTER_MS = 600_000
+
+// 计划等待的公共睡眠体(休眠窗口与模型窗口等待共用): 等待区间经
+// statsWaitBegin/End 从用时统计扣除、单记 waitMs(kind 为等待种类,见 stats.ts
+// 的种类清单),异常路径经 finally 配对关段;等待期间双 Ctrl+C 经 runAll 的进程级
+// SIGINT 处理器强退(130),与所有长等待相同——这是唯一的退出方式。sleep 注入供
+// 单测(配 fake clock 推进)。
+export async function bookedSleep(
+  kind: string,
+  ms: number,
+  opts: { dir?: string; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<void> {
+  await statsWaitBegin(opts.dir, kind)
+  try {
+    await (opts.sleep ?? Bun.sleep)(ms)
+  } finally {
+    await statsWaitEnd(opts.dir)
+  }
+}
 
 const DAY_MS = 86_400_000
 
@@ -60,12 +79,7 @@ export async function hibernatePause(
       ` resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
   )
   // 人工/计划等待扣除(STATS_PLAN §3 同口径): 关段后 aiMs/wallMs 均不增长,waitMs
-  // 单记;异常路径经 finally 配对 waitEnd,不留悬挂关段。
-  await statsWaitBegin(opts.dir, "hibernate")
-  try {
-    await (opts.sleep ?? Bun.sleep)(sleepMs)
-  } finally {
-    await statsWaitEnd(opts.dir)
-  }
+  // 单记;异常路径经 bookedSleep 的 finally 配对 waitEnd,不留悬挂关段。
+  await bookedSleep("hibernate", sleepMs, { dir: opts.dir, sleep: opts.sleep })
   log(`→ hibernate over: continuing after ${label}`)
 }
