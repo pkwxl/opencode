@@ -258,15 +258,16 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
     }
   })
 
-  test("driver 状态文件(CURRENT.md)遗留 → carryover 自愈后照常开会话产出", async () => {
+  test("driver 状态文件(阶段索引)遗留 → carryover 自愈后照常开会话产出", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
     try {
       await git(dir, "init", "-q")
       await writeFile(join(dir, "seed.txt"), "s")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "seed")
-      // 上次提交失败遗留的 driver 状态落账: 只含 CURRENT.md → 自愈补提交
-      await writeFile(join(dir, "CURRENT.md"), "# 当前任务\n")
+      // 上次提交失败遗留的 driver 状态落账: 只含阶段索引 → 自愈补提交
+      await mkdir(join(dir, "docs/R-01"), { recursive: true })
+      await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
       const { client, state } = unitClient()
       const value = await requireArtifact(client, planTask, "提取提示词", { dir }, unitSpec)
       expect(value).toBe("产出")

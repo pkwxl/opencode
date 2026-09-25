@@ -81,8 +81,9 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     expect(pack.phaseDuties).toContain("Vertical thin slices first")
     // M2.1: the understand/wrap-up/knowledge family — context.md layout and
     // report forms (artifact spec), knowledge quality bars and the stuck-hint
-    // reflection (quality), question-rule's decision catalog, the wrap-up audit
-    // scope and the AGENTS.md maintenance rules (governance).
+    // reflection (quality), question-rule's decision catalog and the wrap-up
+    // audit scope (governance). The AGENTS.md maintenance rules retired with
+    // session-maintained AGENTS.md (plans/0054 D2).
     expect(packSubsection(pack, "artifactSpec", "context-digest")).toContain("## Risks and unknowns")
     expect(packSubsection(pack, "artifactSpec", "report-indexed")).toContain("an indexed report")
     expect(packSubsection(pack, "artifactSpec", "report-solo")).toContain("a summary of the output")
@@ -92,7 +93,7 @@ describe("built-in registry and project overlay (loadIntents)", () => {
     expect(packSubsection(pack, "governance", "decisions-unattended")).toContain("{{resolveFormat}}")
     expect(packSubsection(pack, "governance", "decisions-ask")).toContain("instead of deciding in the user's place")
     expect(packSubsection(pack, "governance", "wrapup-audit")).toContain("pure implementation trade-offs")
-    expect(packSubsection(pack, "governance", "agents-maintenance")).toContain("AGENTS.md maintenance rules")
+    expect(packSubsection(pack, "governance", "agents-maintenance")).toBeUndefined()
     expect(packSubsection(pack, "acceptance", "result-line")).toContain("Never write PASS for a check you did not run or observe")
     // MP.1: planning guidance per parallel level; none has no subsection.
     for (const level of PARALLEL_LEVELS) expect(packSubsection(pack, "parallelism", level)).toContain("Touches:")

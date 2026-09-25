@@ -1,6 +1,6 @@
 {{> head}}
 
-Current task (its full content is also in CURRENT.md):
+Current task (its document is docs/{{taskId}}/todo.md):
 
 {{taskBlock}}
 

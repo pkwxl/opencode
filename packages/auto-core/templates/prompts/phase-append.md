@@ -91,7 +91,7 @@ Phase: {{phaseId}}
 <goal: what this task delivers>
 
 ## Scope
-<scope: modules/files involved, key constraints and necessary context — self-contained, executable from this, CURRENT.md and docs/ alone>
+<scope: modules/files involved, key constraints and necessary context — self-contained, executable from this and docs/ alone>
 
 ## Acceptance
 <acceptance: what counts as done>
@@ -117,7 +117,7 @@ Phase: {{phaseId}}
 
 1. This session writes only new lines at the end of the task index {{taskIndex}} and each new task's
    docs/T-NNN/todo.md; never edit, reorder or renumber an existing index line, and never change an existing task's
-   document; do not create done.md (the completion rename is the DRIVER's job); CURRENT.md and the other state files
+   document; do not create done.md (the completion rename is the DRIVER's job); the phase index and the other state files
    are read-only — do not edit them, and do not change file permissions via chmod or the like; git commits are made
    by the DRIVER after the session ends, do not run git commit or similar commands yourself.
 {{> question-rule}}

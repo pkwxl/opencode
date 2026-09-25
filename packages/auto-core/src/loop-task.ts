@@ -131,8 +131,8 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
         log(`⏸ ${task.id} blocked: ${lines[0]}`)
         log(lines[1])
       }
-      // Commit the interruption scene too: preserve the breakpoint (block
-      // question, CURRENT.md interruption note) so it can be rolled back to.
+      // Commit the interruption scene too: preserve the breakpoint (the
+      // unit's in-flight work) so it can be rolled back to.
       // Commit failure (typically the unified commit rejected by the
       // environment) is only escalated to a warning — already on the way to
       // exit 2, changes stay in the worktree for manual handling.
@@ -169,7 +169,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       }
     }
     ctx.ran++
-    // 任务完成的终态提交: todo.md → done.md 改名、tasks.md 勾选与 CURRENT.md 的删除在此一并落账
+    // 任务完成的终态提交: todo.md → done.md 改名与 tasks.md 勾选在此一并落账
     // (各会话产出已随会话提交,这里是收口)。
     // 完成条件门禁(plans/0021-commit-boundary-design.md): 终态提交失败 → 退出 2 交人工
     // (任务标记已在工作区,人工提交后重跑,下一任务以干净基线启动);提交成功

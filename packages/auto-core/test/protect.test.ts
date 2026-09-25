@@ -1,14 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm, stat } from "node:fs/promises"
+import { chmod, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { writeCurrent } from "../src/current"
+import { AGENTS_BLOCK_START, ensurePointer, removePointer } from "../src/agents-block"
 import { protect, unprotect } from "../src/protect"
-import { planOf } from "./fixtures/units"
-
-const SAMPLE = `## T-001: 示例任务 [pending]
-正文。
-`
 
 const writable = async (path: string) => ((await stat(path)).mode & 0o222) !== 0
 
@@ -18,8 +13,8 @@ describe("protect", () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-protect-"))
-    path = join(dir, "CURRENT.md")
-    await Bun.write(path, "# 当前任务\n")
+    path = join(dir, "AGENTS.md")
+    await Bun.write(path, "# AGENTS.md\n")
     await Bun.write(join(dir, "opencode.json"), "{}")
     await Bun.write(join(dir, ".opencode/auto/config.json"), "{}")
   })
@@ -41,13 +36,10 @@ describe("protect", () => {
     expect(await writable(join(dir, ".opencode/auto/config.json"))).toBe(true)
   })
 
-  test("AGENTS.md 与任务单元文档不在保护之列,始终保持可写", async () => {
-    const agents = join(dir, "AGENTS.md")
+  test("任务单元文档不在保护之列,始终保持可写", async () => {
     const todo = join(dir, "docs/T-001/todo.md")
-    await Bun.write(agents, "# AGENTS.md\n")
     await Bun.write(todo, "# T-001: 示例任务\n")
     await protect(dir)
-    expect(await writable(agents)).toBe(true)
     expect(await writable(todo)).toBe(true)
   })
 
@@ -57,10 +49,21 @@ describe("protect", () => {
     expect(await writable(path).catch(() => "missing")).toBe("missing")
   })
 
-  test("保护期间 driver 的 CURRENT.md 写入仍成功,且写后保持只读", async () => {
+  test("the AGENTS.md block sync still writes during protection and leaves the file read-only", async () => {
     await protect(dir)
-    await writeCurrent(dir, planOf(SAMPLE).tasks[0]!)
+    expect((await ensurePointer(dir)).block).toBe("inserted")
     expect(await writable(path)).toBe(false)
-    expect(await Bun.file(path).text()).toContain("T-001")
+    expect(await Bun.file(path).text()).toContain(AGENTS_BLOCK_START)
+  })
+
+  test("a read-only AGENTS.md left by a killed run does not stop the block writers", async () => {
+    // No protection active (a new process), but the file kept its 0o444.
+    await chmod(path, 0o444)
+    expect((await ensurePointer(dir)).block).toBe("inserted")
+    expect(await writable(path)).toBe(true)
+    await Bun.write(path, `# AGENTS.md\n\nProject notes.\n\n${await Bun.file(path).text().then((text) => text.slice(text.indexOf(AGENTS_BLOCK_START)))}`)
+    await chmod(path, 0o444)
+    expect(await removePointer(dir)).toEqual({ removed: true, emptied: false })
+    expect(await Bun.file(path).text()).toBe("# AGENTS.md\n\nProject notes.\n")
   })
 })

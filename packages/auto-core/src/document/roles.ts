@@ -75,18 +75,17 @@ export const ROLE_POLICIES: Record<DocumentRole, RolePolicy> = {
   freeform: { eofScan: true, process: false },
 }
 
-// Fixed-location driverState files besides CURRENT.md. With it they form
-// PROTECTED_FILES; .auto/ is driverState too (units.json runtime state,
-// progress.json, …) but is rewritten continuously by the driver, so it is
-// guarded by the prompt contract alone.
+// Fixed-location driverState files; they form PROTECTED_FILES. .auto/ is
+// driverState too (units.json runtime state, progress.json, …) but is
+// rewritten continuously by the driver, so it is guarded by the prompt
+// contract alone. The retired task mirror CURRENT.md (plans/0054 D3) is no
+// longer a role of its own.
 const DRIVER_STATE_PATHS = ["opencode.json", ".opencode/auto/config.json"]
 
-// CURRENT.md classifies by file name.
-const DRIVER_STATE_NAMES = ["CURRENT.md"]
-
-// Read-only during a run (protect.ts). Every entry must classify as
-// driverState — asserted by test/document-roles.test.ts.
-export const PROTECTED_FILES = ["CURRENT.md", "opencode.json", ".opencode/auto/config.json"] as const
+// Read-only during a run (protect.ts, which adds the contract surface
+// AGENTS.md). Every entry must classify as driverState — asserted by
+// test/document-roles.test.ts.
+export const PROTECTED_FILES = ["opencode.json", ".opencode/auto/config.json"] as const
 
 // The session handoff family by file name: handoff.md, testhandoff.md and the
 // archived testhandoff-<n>.md.
@@ -124,7 +123,6 @@ export function roleOf(rel: string): DocumentRole {
   if (path === ".auto" || path.startsWith(".auto/")) return "driverState"
   if (DRIVER_STATE_PATHS.includes(path)) return "driverState"
   const name = path.split("/").at(-1) ?? path
-  if (DRIVER_STATE_NAMES.includes(name)) return "driverState"
   if (HANDOFF_NAME.test(name)) return "handoff"
   if (!path.startsWith("docs/")) return "freeform"
   if (LEDGER.test(path)) return "ledger"
@@ -144,7 +142,7 @@ export function eofScanExempt(rel: string): boolean {
 
 // Agent-contract surfaces: freeform by role (the project owns them), but
 // they legitimately name process paths — the AGENTS.md pointer block tells
-// sessions where CURRENT.md and docs/T-NNN live, .opencode/ holds the agent
+// sessions where docs/T-NNN lives, .opencode/ holds the agent
 // contract and the project's prompt/mode/intent overlays, and the driver
 // writes `.auto/` into .gitignore (gitignore.ts). Outside P1 scope; the
 // whole-tree scan at round close (round-close.ts) would otherwise trip on them.

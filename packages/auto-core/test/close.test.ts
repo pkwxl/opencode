@@ -387,7 +387,8 @@ describe("closeUnit: dirty tree (D20)", () => {
       })
       expect(await head(dir)).toBe(before)
       expect(await exists(dir, "docs/T-001/todo.md")).toBe(true)
-      // Driver-state leftovers (an index tick, CURRENT.md) fold silently.
+      // Driver-state leftovers (here the retired CURRENT.md mirror an earlier
+      // release left, git.ts DRIVER_STATE) fold silently.
       rmSync(join(dir, "notes.txt"))
       writeFileSync(join(dir, "CURRENT.md"), "# Current task (maintained by opencode-auto, do not edit manually)\n\n## T-001: task T-001 [pending]\n")
       const folded = await close(dir, "T-001")
@@ -444,23 +445,19 @@ describe("closeUnit: dirty tree (D20)", () => {
 
 describe("closeUnit: records cleared only for closed units (D19)", () => {
   test(
-    "units.json, progress.json, handover.json, CURRENT.md and the handover chains of the closed task",
+    "units.json, progress.json, handover.json and the handover chains of the closed task",
     withDir(async (dir) => {
       await establishRound(dir, { phases: "am" })
       const [analysis] = await phasesOf(dir)
       await listTasks(dir, analysis!, [{ id: "T-001" }, { id: "T-002", depends: "none" }])
       // Seed the records: both tasks have runtime state; the closed one owns
-      // the progress, the handover record, CURRENT.md and the handoff chains.
+      // the progress, the handover record and the handoff chains.
       await Bun.write(
         join(dir, ".auto/units.json"),
         JSON.stringify({ tasks: { "T-001": { status: "blocked", attempts: 2 }, "T-002": { status: "in_progress", attempts: 1 } } }, null, 2) + "\n",
       )
       await Bun.write(join(dir, ".auto/progress.json"), JSON.stringify({ task: "T-001", at: 1, active: true, phase: { kind: "whole" } }))
       await Bun.write(join(dir, ".auto/handover.json"), JSON.stringify({ task: "T-001", scope: "docs/T-001/testhandoff.md", unit: "T-001", n: 1 }))
-      writeFileSync(
-        join(dir, "CURRENT.md"),
-        "# Current task (maintained by opencode-auto, do not edit manually)\n\n## T-001: task T-001 [in_progress]\n\nbody\n",
-      )
       await Bun.write(join(dir, "docs/T-001/handoff.md"), "# handoff\n\nStatus: continue\n")
       await Bun.write(join(dir, "docs/T-001/testhandoff.md"), "# test handoff\n\nStatus: continue\n")
       await Bun.write(join(dir, "docs/T-001/testhandoff-1.md"), "# archived\n\nStatus: continue\n")
@@ -473,13 +470,12 @@ describe("closeUnit: records cleared only for closed units (D19)", () => {
       // The closed task's resumable records are gone.
       expect(await exists(dir, ".auto/progress.json")).toBe(false)
       expect(await exists(dir, ".auto/handover.json")).toBe(false)
-      expect(await exists(dir, "CURRENT.md")).toBe(false)
       for (const file of ["docs/T-001/handoff.md", "docs/T-001/testhandoff.md", "docs/T-001/testhandoff-1.md", "docs/T-001/S01/testhandoff.md"]) {
         expect(await exists(dir, file)).toBe(false)
       }
       // The deletions of the tracked files land in the close commit.
       const changed = await git(dir, "show", "--name-only", "--pretty=format:", "HEAD")
-      for (const file of ["docs/T-001/handoff.md", "docs/T-001/testhandoff.md", "docs/T-001/testhandoff-1.md", "docs/T-001/S01/testhandoff.md", "CURRENT.md"]) {
+      for (const file of ["docs/T-001/handoff.md", "docs/T-001/testhandoff.md", "docs/T-001/testhandoff-1.md", "docs/T-001/S01/testhandoff.md"]) {
         expect(changed).toContain(file)
       }
       expect(await git(dir, "status", "--porcelain")).toBe("")
@@ -501,16 +497,11 @@ describe("closeUnit: records cleared only for closed units (D19)", () => {
         join(dir, ".auto/progress.json"),
         JSON.stringify({ task: "T-002", at: 2, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P02" } }),
       )
-      writeFileSync(
-        join(dir, "CURRENT.md"),
-        "# Current task (maintained by opencode-auto, do not edit manually)\n\n## T-002: task T-002 [blocked]\n\nbody\n",
-      )
       await commitAll(dir)
       const result = await close(dir, "T-001")
       expect(result.type).toBe("closed")
       expect(JSON.parse(await Bun.file(join(dir, ".auto/units.json")).text())).toEqual({ tasks: { "T-002": { status: "blocked" } } })
       expect(await exists(dir, ".auto/progress.json")).toBe(true)
-      expect(await exists(dir, "CURRENT.md")).toBe(true)
       // A step record of the closed phase itself is cleared.
       await Bun.write(
         join(dir, ".auto/progress.json"),
@@ -519,7 +510,6 @@ describe("closeUnit: records cleared only for closed units (D19)", () => {
       const phaseClose = await close(dir, "R-01.P01")
       expect(phaseClose.type).toBe("closed")
       expect(await exists(dir, ".auto/progress.json")).toBe(false)
-      expect(await exists(dir, "CURRENT.md")).toBe(true)
     }),
   )
 })

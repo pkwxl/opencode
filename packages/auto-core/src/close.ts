@@ -30,7 +30,6 @@
 // close commit, which is what asking for a stash says.
 import { readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { removeCurrent } from "./current"
 import { roundDirName, taskDoc } from "./docpaths"
 import { validHandover } from "./document/roles"
 import { parseIndex, renameUnitDone, unitStatePaths, type UnitRef } from "./document/unit"
@@ -397,7 +396,7 @@ async function insertClosedField(file: string, reason: string): Promise<void> {
 // AUTO-DECISION: no eof terminator — the handoff role carries its own
 // final-state contract (the four sections) and is exempt from the eof scan
 // (document/roles.ts), so the terminator would be pure noise; driver-written
-// state files (the indexes, CURRENT.md) never carry one either.
+// state files (the indexes) never carry one either.
 async function mechanicalHandover(phase: ClosingPhase, reason: string, gates: readonly PhaseGate[], dir: string): Promise<string> {
   const closedIds = new Set(phase.tasks.map((task) => task.id))
   const done = phase.plan.tasks.filter((task) => task.status === "done" && !closedIds.has(task.id))
@@ -504,12 +503,5 @@ async function clearRecords(dir: string, tasks: readonly ClosingTask[], closedPh
         await removeHandoffChain(dir, join("docs", id, entry.name, "testhandoff.md"))
       }
     }
-  }
-
-  // CURRENT.md names its task on the third line (`## T-NNN: <title> […]`).
-  const current = await Bun.file(join(dir, "CURRENT.md")).text().catch(() => undefined)
-  if (current !== undefined) {
-    const named = /^## (T-\d+):/.exec(current.split("\n")[2] ?? "")?.[1]
-    if (named !== undefined && ids.includes(named)) await removeCurrent(dir)
   }
 }

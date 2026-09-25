@@ -1,20 +1,19 @@
-import { rm } from "node:fs/promises"
+import { chmod, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { activeIntentText } from "./prompt"
+import { reprotect } from "./protect"
 
 // AGENTS.md 的 opencode-auto 块: 单一标记块,内容 = 指针 + 测试执行原则(testByDriver 开关)+ 提交原则 + 摘要原则(非交互场景不产出会话末尾
-// 总结)+ 维护规则 + 引用规范,合并为一段英文文本。段落以数组 filter/join 拼接
+// 总结)+ 引用规范,合并为一段英文文本。段落以数组 filter/join 拼接
 // (\n\n 分隔),不走 template.ts 的 {{#if}} 引擎——标签独占一行吞掉整行换行的语义
 // 会在开关关闭时让相邻段落粘连、丢失分隔空行,数组拼接不依赖该语义,恒为一个
 // 空行分隔。
-// The maintenance rules paragraph is decision/knowledge governance (M2.1,
-// plans/0043): it comes from the active intent pack (`## governance` /
-// `### agents-maintenance`) and drops out when the pack lacks it.
-// The block does not make every session read CURRENT.md (the prompt inlines the
-// task; CURRENT.md is the fallback after context compaction). AGENTS.md is
-// system context reread on every provider turn, and the driver restarts the
-// server before the next new session when it changes. AGENTS.md is not made
-// read-only (tasks may update it); run/init only keep this block in sync.
+// AGENTS.md holds only this block (plus whatever a human wrote around it):
+// sessions do not maintain it (plans/0054 D2). The file is gitignored
+// (local-only), so session edits would escape the unified commit and the
+// unit rollback; durable knowledge lives in committed docs/ documents
+// instead, and run makes the file read-only (protect.ts). It is system
+// context reread on every provider turn; init/amend/fix/run only keep this
+// block in sync with the config.
 export const AGENTS_BLOCK_START = "<!-- opencode-auto:start -->"
 export const AGENTS_BLOCK_END = "<!-- opencode-auto:end -->"
 
@@ -25,7 +24,7 @@ const CANONICAL_BLOCK = /<!--\s*opencode-auto:start\s*-->[\s\S]*?<!--\s*opencode
 // refs)或未来任何游离标记块;不匹配上面的裸 start/end 标准块。
 export const LEGACY_BLOCK = /<!--\s*opencode-auto:([\w-]+):start\s*-->[\s\S]*?<!--\s*opencode-auto:\1:end\s*-->\n*/g
 
-const POINTER = `This directory is driven by opencode-auto. The session prompt already inlines the task for this turn, so you normally don't need to read state files separately. \`CURRENT.md\` (when present) mirrors the current task's full content and progress: read it if context has been compacted, or whenever you are unsure about the current task or its progress — its content takes priority over anything in session memory. Do not edit \`CURRENT.md\`; it is maintained exclusively by DRIVER, as are the \`todo.md\` → \`done.md\` renames of phases, tasks and subtasks and the ticks in their indexes.`
+const POINTER = `This directory is driven by opencode-auto. The session prompt already inlines the task for this turn, so you normally don't need to read state files separately. A task's own documents hold its full content and progress — \`docs/T-NNN/todo.md\` (goal, scope, acceptance) and \`docs/T-NNN/subtasks.md\` (the subtask checklist): reread them if context has been compacted, or whenever you are unsure about the current task or its progress, rather than relying on session memory. The \`todo.md\` → \`done.md\` renames of phases, tasks and subtasks and the ticks in their indexes are made by DRIVER alone. AGENTS.md is not a place for notes: do not edit it — anything worth keeping belongs in \`docs/\` documents.`
 
 const TEST_PRINCIPLE = `Test principle: build, test, compile, and lint commands — which can be slow or produce large amounts of output — are always run by DRIVER outside the session; no session should run them directly. When needed, write the command as a script under \`test/\`, then write that script's path into \`tmp/test.sh\` to tell DRIVER to run it. After running it, DRIVER reports the exit code and the output file path (stdout and stderr merged into one file) back to the session, which reads the file directly to judge the result. Task descriptions and project conventions must not contain instructions that contradict this.`
 
@@ -44,7 +43,6 @@ export function renderAgentsBlock(opts: { testByDriver?: boolean } = {}): string
     opts.testByDriver ? TEST_PRINCIPLE : undefined,
     COMMIT_PRINCIPLE,
     SUMMARY_PRINCIPLE,
-    activeIntentText("governance", "agents-maintenance"),
     REFS_SPEC,
   ].filter((p): p is string => Boolean(p))
   return `${AGENTS_BLOCK_START}\n${paragraphs.join("\n\n")}\n${AGENTS_BLOCK_END}`
@@ -85,7 +83,13 @@ export async function ensurePointer(
     block = "replaced"
   }
 
-  if (!opts.dryRun && text !== existing) await Bun.write(agentsFile, text)
+  if (!opts.dryRun && text !== existing) {
+    // A killed run can leave the file read-only (protect.ts): unlock before
+    // writing, then reprotect — a no-op unless a run is protecting it.
+    await chmod(agentsFile, 0o644).catch(() => {})
+    await Bun.write(agentsFile, text)
+    await reprotect(agentsFile)
+  }
   return { block, legacyRemoved }
 }
 
@@ -116,7 +120,10 @@ export async function removePointer(
   const emptied = removed && (text === "" || text === "# AGENTS.md")
   if (!opts.dryRun && removed) {
     if (emptied) await rm(agentsFile, { force: true })
-    else await Bun.write(agentsFile, `${text}\n`)
+    else {
+      await chmod(agentsFile, 0o644).catch(() => {})
+      await Bun.write(agentsFile, `${text}\n`)
+    }
   }
   return { removed, emptied }
 }

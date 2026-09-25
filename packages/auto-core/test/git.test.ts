@@ -234,7 +234,7 @@ describe("beginUnit(单元启动门禁)", () => {
     }
   })
 
-  test("driver 独占状态写入(CURRENT.md、索引勾选、单元 todo→done 改名)遗留 → carryover 补提交自愈", async () => {
+  test("driver 独占状态写入(索引勾选、单元 todo→done 改名、退役 CURRENT.md 的删除)遗留 → carryover 补提交自愈", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
@@ -242,11 +242,13 @@ describe("beginUnit(单元启动门禁)", () => {
       await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
       await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 示例\n")
       await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: 示例\n")
+      await writeFile(join(dir, "CURRENT.md"), "镜像\n")
       await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
-      // markDone 之后、终态提交之前中断的现场
+      // markDone 之后、终态提交之前中断的现场;CURRENT.md 是早先版本留下、
+      // 由 preflight 删除的退役镜像(plans/0054 D3)
       await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
       await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [x] T-001 示例\n")
-      await writeFile(join(dir, "CURRENT.md"), "镜像\n")
+      await rm(join(dir, "CURRENT.md"))
       const gate = await beginUnit(dir, {}, task)
       expect(gate.type).toBe("ok")
       expect(await changedFiles(dir)).toEqual([])
@@ -516,13 +518,11 @@ describe("交接漂移登记: trackedSourceChanges", () => {
       await writeFile(join(dir, "src.ts"), "v1")
       await writeFile(join(dir, "test", "build.sh"), "echo v1")
       await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "旧")
-      await writeFile(join(dir, "CURRENT.md"), "镜像")
       await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
       expect(await trackedSourceChanges(dir)).toEqual([])
 
-      // 文档面改动(docs/** 与 CURRENT.md)不计。
+      // 文档面改动(docs/**)不计。
       await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "新")
-      await writeFile(join(dir, "CURRENT.md"), "镜像 2")
       // 未跟踪新增不计(已知取舍)。
       await writeFile(join(dir, "fresh.ts"), "新文件")
       expect(await trackedSourceChanges(dir)).toEqual([])

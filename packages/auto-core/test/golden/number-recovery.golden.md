@@ -41,7 +41,7 @@ not create, rename or edit them.
 
 ## Constraints
 
-1. The only file this session may write is .auto/next-task; no other file may be created or modified;CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
+1. The only file this session may write is .auto/next-task; no other file may be created or modified;todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —

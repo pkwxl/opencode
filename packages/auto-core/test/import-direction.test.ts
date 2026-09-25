@@ -104,7 +104,6 @@ const CLASSIFIED: Record<string, Domain> = {
   // Config fix: the rule table behind `fix` (plans/0052 D10).
   "config-fix": "driver",
   confirm: "driver",
-  current: "driver",
   "exec-session": "driver",
   execute: "driver",
   exit: "driver",

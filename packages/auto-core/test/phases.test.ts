@@ -467,7 +467,7 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("establishRound: 建轮目录 + 阶段索引与阶段目录 + AGENTS.md.bak 快照;不写 PLAN.md(M3.4 退役)", async () => {
+  test("establishRound: 建轮目录 + 阶段索引与阶段目录;不写 PLAN.md(M3.4 退役)与 AGENTS.md.bak(plans/0054 D1 退役)", async () => {
     const dir = tempDir()
     try {
       writeFileSync(join(dir, "AGENTS.md"), "# AGENTS\n\n工作流入口\n")
@@ -478,9 +478,9 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
       expect(await exists(join(dir, "docs/R-01/P03-test/todo.md"))).toBe(true)
       expect(await exists(join(dir, "PLAN.md"))).toBe(false)
       expect(await exists(join(dir, "docs/R-01/PLAN.md"))).toBe(false)
-      // AGENTS.md 快照改名 .bak(不当指令加载),根文件保留
-      expect(await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).text()).toContain("工作流入口")
-      expect(await exists(join(dir, "AGENTS.md"))).toBe(true)
+      // 不再为 AGENTS.md 做轮首快照,根文件原样不动
+      expect(await exists(join(dir, "docs/R-01/AGENTS.md.bak"))).toBe(false)
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe("# AGENTS\n\n工作流入口\n")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

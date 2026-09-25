@@ -41,7 +41,7 @@ opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名
 opencode-auto plan [dir] [-p "<规划输入>" | --file <路径>]   # 规划当前阶段的任务并停在执行前供人工评审;轮未建立时先建轮(打印轮首门禁),轮完成后经轮关闭检查开下一轮(见"规划与轮次生命周期(plan)")
 opencode-auto run [dir]      # 按当前阶段的任务索引逐任务自动执行(agent/提交等语义来自项目配置)
 opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
-opencode-auto check [dir]    # 检查 AGENTS.md 与任务文档中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 行数超限
+opencode-auto check [dir]    # 检查 AGENTS.md 与任务文档中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 标记块缺失或过期
 opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → 阶段 → 任务 → 子任务树
 ```
 
@@ -152,7 +152,7 @@ config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。目标目录
 一道**提交能力前置校验**:统一提交是完成条件,仓库无法提交(未配置
 user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方法)——先
 `git config --global user.name/user.email`(或仓库内去掉 `--global`)再重跑。`run` 期间该文件
-与 CURRENT.md、opencode.json 一起置为只读,人工修订请在 run 外进行。
+与 opencode.json、AGENTS.md 一起置为只读,人工修订请在 run 外进行。
 
 兼容与迁移:
 
@@ -339,7 +339,7 @@ init 不写 `docs/`(轮次目录由 `plan` 建立),也不启动任何 AI 会话�
 缺失或非法、运行锁被另一进程持有);`2` 阻塞或未完成为 pending,等待人工介入(含阶段规划会话受阻与任务报告结论行 `Result: FAIL`);`3` `--interactive` 下收到 `/exit`、已在安全边界处暂停退出(不需要人工介入,重新运行即可完整恢复);`130` 被强制终止。
 
 运行期间单次 Ctrl+C 不会终止(仅提示),3 秒内再次按下 Ctrl+C 才强制退出;
-退出前会尽力恢复 CURRENT.md 等文件的可写权限并关闭 opencode server。
+退出前会尽力恢复 opencode.json、AGENTS.md 等文件的可写权限并关闭 opencode server。
 
 每个任务与子任务开始时,输出会打出显著横幅(`=` 行为任务,`-` 行为子任务,
 首行重复字符 + 标题两行):
@@ -448,7 +448,7 @@ opencode-auto run <dir>             # 评审(可直接编辑/勾销任务)后执
   `Auto-Stage: force-close`,正文列出全部被关闭单元、各阶段被跳过的门禁与并入/ stash
   的文件);被关闭的阶段由 driver 写出**机械交接桩**(四小节齐全的 handover.md,记录
   关闭原因与各任务的 done/closed 状态,不开蒸馏会话);`.auto/` 中**只清除被关闭单元
-  自身**的运行记录(units.json 条目、进度记录、会话交接、CURRENT.md)。`.auto/next-task`
+  自身**的运行记录(units.json 条目、进度记录、会话交接)。`.auto/next-task`
   不回退——已关闭的编号永不复用。
 - **依赖**:`Depends:` 显式指向被关闭单元的打开任务会阻止关闭并逐一列出;`--cascade`
   把它们一并关闭(原因标注 cascade 来源,迭代到闭包)。缺省 `Depends:`(隐式认前序)
@@ -492,7 +492,8 @@ opencode-auto plan <dir> --force-close R-01.P02 --reason "本轮跳过"         
 2. **AGENTS.md 有更新**:AGENTS.md 是会话的 system context,driver 跟踪其变更
    指纹(mtime + size),发现更新后**在下一个新会话开启前**重启 server,使新会话
    必定加载最新内容(AGENTS.md 虽在每个 provider turn 现场重读,重启用于兜底
-   缓存场景)。
+   缓存场景)。会话不再维护 AGENTS.md(`run` 期间只读),这一路径只在文件于
+   运行中被外部改动时才会触发。
 
 复用外部 server 时实例不受本工具管理:上述两种情况只打提示、不重启(网络错误
 仍会换新会话重试),外部实例的启停与修复由使用者自行负责。
@@ -520,7 +521,7 @@ opencode 把它作为会话 agent;claude 把其正文追加到系统提示词、
 
 ## 执行流水线
 
-driver 对每个任务执行流水线,**CURRENT.md、索引勾选、`todo.md` → `done.md` 改名与 `.auto/units.json` 只由 driver 写入**。执行方式
+driver 对每个任务执行流水线,**索引勾选、`todo.md` → `done.md` 改名与 `.auto/units.json` 只由 driver 写入**。执行方式
 由项目配置的 `subtask` 键决定(`auto` 为缺省):
 
 `subtask: auto`(自动分解):
@@ -564,14 +565,14 @@ done;`Result: FAIL` → 任务置为阻塞、停止运行(退出码 2)。完成�
 自述:子任务由 driver 按状态文件勾选,单元以产物落盘且统一提交成功为完成条件;
 检查工作本身规划成任务(验收任务、v 验收阶段),其结论只经结论行传给 driver。
 
-当前任务镜像在 `CURRENT.md`:任务开始(首个会话前)即写入——中断运行遗留的缺失/
-过期文件会被重建——每次勾选后刷新,含完整任务内容与进度;**任务完成即删除**,
-而阻塞/回退 pending 的非完成结局会写入"中断备注"(退出原因、中断阶段、恢复方式)
-后**保留文件**,供人工查看与下次恢复;`init` 追加的 AGENTS.md 指针块要求每个会话
-先读它——AGENTS.md 作为 system context 每个 provider turn 现场重读,不随上下文压缩丢失;
-此外 driver 会跟踪 AGENTS.md 的变更指纹,**它有更新时在下一个新会话前自动重启
-opencode server**,确保新会话必定加载最新的 system context(见
-[opencode server 与 agent 选择](#opencode-server-与-agent-选择))。
+没有单独的当前任务镜像(`CURRENT.md` 已于 2026-09-25 退役,auto-core
+plans/0054):每个会话的提示词都内联当前任务,任务的完整内容与进度就在它自己的
+`docs/T-NNN/todo.md` 与 `docs/T-NNN/subtasks.md` 里——AGENTS.md 指针块告诉会话在
+上下文被压缩或拿不准进度时重读这两个文件(AGENTS.md 作为 system context 每个
+provider turn 现场重读,不随上下文压缩丢失)。阻塞/回退 pending 的原因打印在运行
+日志里,中断阶段留在进度记录中。早先版本遗留的 `CURRENT.md`(首行为它固定写的
+标题)由 `run`/`plan` 启动时删除,删除随启动时的 carryover 提交落账;首行不同的
+同名文件属于项目自身,不会被动。
 
 非权限提问无人答复时由 driver 自动答复并要求 AI 自主决策继续;自动答复同时要求
 AI **记录决策过程**(决策理由与否决的备选方案写入相关文档),并按「这个分歧点的决定权
@@ -594,8 +595,8 @@ AI **记录决策过程**(决策理由与否决的备选方案写入相关文档
 server 上仍存在,driver 直接**复用该会话继续**(上下文不丢,与 `opencode -r
 <session-id>` 同构,不再设时间窗;该接管不受 `OPENCODE_AUTO_REUSE_SESSION` 与复用
 阈值约束,恢复日志带上继承的上下文用量,恢复说明用后即清、下一个提示词回归常规
-规则);首个提示词附恢复说明,要求 AI 读 CURRENT.md
-并用 git status/diff 核对实际进度后从中断处继续。**交接文件优先**:中断前已写出
+规则);首个提示词附恢复说明,要求 AI 用 git status/diff
+核对实际进度后从中断处继续。**交接文件优先**:中断前已写出
 交接文档(subtask auto 子任务或 ondemand 的 `docs/<id>/handoff.md`、handover-test
 的任务级/子任务级 `testhandoff.md`——任一范围的遗留均判定)时不复用旧会话——其
 上下文已用满、进度由交接文档承载,
@@ -613,20 +614,21 @@ server 上仍存在,driver 直接**复用该会话继续**(上下文不丢,与 `
 - 收尾已完成(结论行检查阶段):不再开任何会话,直接读结论行并登记完成——旧版
   进度记录停在已退役的 verify / review 阶段时同样按此处理。
 
-**优雅退出的总结**(非 AI 服务原因停机——阻塞、回退 pending 等):退出前 driver
-在 CURRENT.md 写入"中断备注"(退出原因、中断阶段、恢复方式)并保留文件,进度记录
-转为总结态(不再复用旧会话——人工介入可能耗时数小时且会改动环境,旧会话上下文已
-不可信);重新运行后凭备注、勾选状态与阶段记录开新会话精确继续。网络故障重试耗尽
+**优雅退出的总结**(非 AI 服务原因停机——阻塞、回退 pending 等):退出原因打印在
+运行日志里,进度记录转为总结态(不再复用旧会话——人工介入可能耗时数小时且会改动
+环境,旧会话上下文已不可信);重新运行后凭勾选状态与阶段记录开新会话精确继续。
+严格恢复回滚单元时,被收回的工作存进 git stash(消息前缀 `auto-rollback`),日志
+给出找回方式。网络故障重试耗尽
 属于"会话半途无法总结",保持会话复用资格,恢复时优先找回原会话。
 
-`run` 期间 driver 会把 CURRENT.md、opencode.json 与
-`.opencode/auto/config.json` 置为只读(chmod 0o444),driver 自身写入时临时恢复、
-写完立即重置。`run` 结束(含阻塞退出)恢复可写,便于人工介入编辑(包括手工修订项目
-配置)。这是提示词契约之外的防误写护栏——同用户进程仍可经 bash chmod 绕过,
-并非安全边界。AGENTS.md 不在只读之列(任务可更新它),driver 只在 `run`/`init`
-启动会话前确保其中存在与当前配置渲染一致的单一 opencode-auto 标记块(缺失则追加、
-内容不一致则整块替换,旧版/多余的带名标记块一律清理,除此之外永不改写 AGENTS.md,
-见[AGENTS.md 标记块与维护规则](#agentsmd-标记块与维护规则))。
+`run` 期间 driver 会把 opencode.json、`.opencode/auto/config.json` 与 AGENTS.md
+置为只读(chmod 0o444),driver 自身写入时临时恢复、写完立即重置。`run` 结束(含
+阻塞退出)恢复可写,便于人工介入编辑(包括手工修订项目配置);被强杀的运行遗留的
+只读位不妨碍 `init`/`amend`/`fix`/`reset` 改写这些文件。这是提示词契约之外的防误写
+护栏——同用户进程仍可经 bash chmod 绕过,并非安全边界。会话不维护 AGENTS.md
+(见[AGENTS.md 标记块](#agentsmd-标记块)):driver 只在启动会话前确保其中存在与当前
+配置渲染一致的单一 opencode-auto 标记块(缺失则追加、内容不一致则整块替换,
+旧版/多余的带名标记块一律清理),除此之外永不改写 AGENTS.md。
 
 ## 验收结论行(Result: PASS|FAIL)
 
@@ -932,8 +934,9 @@ Split by attack surface.
   包含轮次容器(R 后两位零填充,如 `R-01`,自然进位),轮首即建(`plan` 建:首轮
   `R-01`,上一轮完成并通过轮关闭检查后 `R-(N+1)`),其中一切**落盘即永久**——不改名、不改路径、不删除:
   阶段索引 `phases.md`、每个阶段
-  一个**阶段目录** `P<nn>-<类型>/`(如 `P01-analysis/`,见下)、轮首 AGENTS.md
-  快照 `AGENTS.md.bak`(`.bak` 后缀避免被当指令自动加载)、前置知识 `prior-kb.md`。
+  一个**阶段目录** `P<nn>-<类型>/`(如 `P01-analysis/`,见下)、前置知识 `prior-kb.md`
+  (轮首的 AGENTS.md 快照 `AGENTS.md.bak` 已于 2026-09-25 退役——AGENTS.md 只含按
+  配置渲染的标记块,无需逐轮留档;旧轮次里已有的快照原样保留)。
   阶段目录收齐该阶段的一切:状态文件 `todo.md`/`done.md`、交接文档
   `handover.md`、任务索引 `tasks.md`(本阶段的任务清单,见[任务单元格式](#任务单元格式))、
   阶段级自由产物、类型标准产物(如 knowledge 阶段的知识文档 `kb.md`)与人写的验收
@@ -1032,8 +1035,7 @@ Split by attack surface.
   `docs/R-NN/round.md` 的 `## Close` 节(列出哪些决策已重述进目标自身的文档、哪些
   接受流失)并提交,再跑 `plan`:它先跑轮关闭检查(全树 P1 扫描、目标构建、
   `## Close` 清单;不过 → 逐条列出,退出码 `2`,`plan` 拒绝开下一轮),通过后建立
-  `docs/R-(N+1)/`——阶段索引与阶段目录按配置的 `phases` 展开、根 `AGENTS.md` 快照
-  写入轮内 `AGENTS.md.bak`(轮首一次性,已存在不重写),停在轮首门禁等待审阅提交;
+  `docs/R-(N+1)/`——阶段索引与阶段目录按配置的 `phases` 展开,停在轮首门禁等待审阅提交;
   各步幂等,中断后重跑 `plan` 自然续完。新一轮的目标是补齐上一轮的遗漏、对齐残余
   差距,而不是重做已完成的工作;上一轮轮次目录原样保留(落盘即永久)。跨轮改配置用
   `amend`(当前轮已完成时前缀护栏放开,新值作用于 `plan` 建立的下一轮)。新一轮
@@ -1050,7 +1052,7 @@ Split by attack surface.
 > `--extract-knowledge` 设计(知识提取会话产出 knowledge 阶段目录内 `kb.md`,失败不污染
 > 退出码)。`--track-fixme` 仍独立演进(`packages/auto-core/plans/0002-fixme-knowledge-design.md`),未实现。
 
-## AGENTS.md 标记块与维护规则
+## AGENTS.md 标记块
 
 `init` / `amend` / `fix` / `run` 在目标目录 AGENTS.md 中幂等同步单一 opencode-auto 标记块
 (`<!-- opencode-auto:start -->` 到 `<!-- opencode-auto:end -->`,内容为英文):
@@ -1060,37 +1062,23 @@ Split by attack surface.
 
 | 段落 | 内容 |
 | --- | --- |
-| 指针 | CURRENT.md 指针:每个会话开始先读当前任务镜像 |
+| 指针 | 提示词已内联当前任务;上下文被压缩或拿不准进度时重读 `docs/T-NNN/todo.md` 与 `subtasks.md`;AGENTS.md 不记笔记 |
 | 测试执行原则(Test principle) | 编译/测试/构建/lint 等命令由 driver 在会话外执行(仅 `testByDriver: true` 时出现) |
 | 提交原则(Commit principle) | 会话后由 driver 递归统一提交,会话不执行 git 提交 |
 | 摘要原则(Summary principle) | 非交互场景不产出会话末尾总结,产出物一律写入 docs/ |
-| 维护规则(AGENTS.md maintenance rules) | AGENTS.md 维护规则(见下) |
 | 引用与存放规范(Reference and storage conventions) | stable-refs:docs/T-NNN/ 目录化永久路径、引用根相对路径语法、检查三层 |
 
-提交原则、摘要原则、维护规则、引用规范描述的是**与配置无关的不变式**,无条件
-出现;测试执行原则对应测试执行协议,随 `testByDriver` 开关出现或消失——机制不存在
-时,块内不保留其描述。生效配置由 run
-启动横幅与 `status` 打印。
+提交原则、摘要原则、引用规范描述的是**与配置无关的不变式**,无条件出现;测试执行
+原则对应测试执行协议,随 `testByDriver` 开关出现或消失——机制不存在时,块内不保留
+其描述。生效配置由 run 启动横幅与 `status` 打印。
 
-**维护规则**(块内的维护规则段落,约束 AGENTS.md 保持工作流入口定位、不膨胀为
-知识库——它作为 system context 每个 provider turn 都进入上下文,膨胀会侵蚀全部
-会话的有效上下文):
-
-1. **保持精简**:全文不超过 150 行;不写入实现细节、长解释、命令输出或单任务知识;
-2. **路由不复制**:模块/阶段/任务特定的信息写入 `docs/agents/<主题>.md`,本文件
-   只保留一行路由条目(主题 → 路径);
-3. **更新不追加**:新增信息前先检查既有规则或路由条目是否应修改;淘汰过时内容,
-   不累积历史备注;
-4. **只沉淀持久的工作流知识**:仅记录会影响未来多数任务执行方式的约定;临时调试
-   状态、一次性决策、对话过程不写入(一次性决策按 `AUTO-DECISION` 记入相关文档)。
-
-`docs/agents/<主题>.md` 存放**跨任务**的工作流知识(规范、映射约定、环境
-quirks),与 docs/ 根的**单任务**过程产物(subtasks/report 等)分工;
-主题文件由会话在首次需要时创建并在 AGENTS.md 维护一行路由(纯提示词契约,无
-driver 侧解析),随统一提交入库。`check` 在块缺失、内容与当前配置渲染不一致、
-残留旧版标记块、或 AGENTS.md 超 150 行时输出提示(note,不影响退出码)。agent 契约
-(`.opencode/agent/auto.md`)同步约束会话:不得删除或改写 opencode-auto 标记块,
-更新其余内容须遵守块内的维护规则。
+**AGENTS.md 只承载这个标记块**(以及人工写在块外的内容):会话不维护它——原先的
+维护规则段落、`docs/agents/<主题>.md` 路由约定与 150 行上限已于 2026-09-25 退役
+(auto-core plans/0054)。原因:AGENTS.md 由 `init` 列入 `.gitignore`(仅本地),会话对它的
+改动既不进统一提交、也不随单元回滚,完成条件与审计轨迹都覆盖不到;值得留存的知识
+一律写进会随提交入库的 `docs/` 文档(阶段交接、知识阶段的 `kb.md` 等)。`run` 期间
+AGENTS.md 只读,agent 契约(`.opencode/agent/auto.md`)同步要求会话不改它。`check`
+在块缺失、内容与当前配置渲染不一致或残留旧版标记块时输出提示(note,不影响退出码)。
 
 ## 任务单元格式
 
@@ -1140,7 +1128,7 @@ Phase: R-01.P01
   在规划/分解会话收口时打回重写,在 `run` 加载索引时即环境错误(任务、阶段退出 1;
   子任务阻塞退出 2)。
 - 运行时状态(`in_progress` / `blocked`、尝试次数、fork 基点)只在 `.auto/units.json`,
-  不写进任何文档;`CURRENT.md`、索引勾选与 `todo.md` → `done.md` 改名只由 driver
+  不写进任何文档;索引勾选与 `todo.md` → `done.md` 改名只由 driver
   维护,agent 会话不得改动。`opencode-auto status [dir]` 打印只读的轮次 → 阶段 → 任务
   → 子任务树。
 - 验收标准写进 `## Acceptance`(或规划成独立的验收任务、v 阶段);结论经任务报告的
@@ -1175,8 +1163,7 @@ Phase: R-01.P01
 归属 driver 的语句、字段行与 opencode-auto 标记块不算违背;
 匹配为启发式,报告供人工确认。测试类描述的检查仅在 `testByDriver: true` 时进行,
 提交类检查始终进行。`check` 另输出提示(note,不影响退出码):缺少 opencode-auto 块、块内容与
-当前配置渲染不一致(过期)、残留旧版/多余的带名标记块、AGENTS.md 超 150 行
-(维护规则段落第 1 条,建议精简并把细节路由到 `docs/agents/`);标记块类提示指向
+当前配置渲染不一致(过期)、残留旧版/多余的带名标记块;这些提示都指向
 `fix`(`init` / `run` / `fix` 都会幂等同步该标记块)。配置读不进来时 `check` 只报
 一条 note,属 `fix` 的键规则能修的一类时追加 `fix:` 提示;`check` 不列出 `fix` 的
 逐条发现——完整清单跑 `fix` 看(不确认即不改动)。

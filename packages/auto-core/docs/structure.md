@@ -60,7 +60,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | P1 prohibition scan | Deliverables must not reference process documents | `src/document/process-refs.ts` (0045) |
 | Stable paths | Single constructor of task-document and round-directory paths | `src/docpaths.ts` (0010) |
 | Shape check | Non-trivial + `<!-- auto: eof -->` last-line criterion (pure) | `src/doccheck.ts` (0026) |
-| Read-only guard | chmod driver-owned files during `run` | `src/protect.ts` |
+| Read-only guard | chmod driver-owned files and AGENTS.md during `run` | `src/protect.ts` |
 | Round brief | `docs/R-NN/round.md` stub and readers | `src/round-brief.ts` (0049) |
 | Project brief | `.opencode/auto/brief.md` stub and planning-input reader | `src/brief.ts` (0052 D9) |
 
@@ -81,7 +81,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Run entry | `runAll`: preflight, agent start, interactive input, Ctrl+C handling, exit codes | `src/loop.ts` |
-| Preflight | Prompt library, agent-contract check, stats, read-only guard, handover restore, clean gate, housekeeping commit; `RunAllOpts` | `src/loop-preflight.ts` |
+| Preflight | Prompt library, agent-contract check, stats, read-only guard, handover restore, retired-`CURRENT.md` cleanup, clean gate, housekeeping commit; `RunAllOpts` | `src/loop-preflight.ts` (0054) |
 | Phase loop | Phase handover, phase routing; plan's stop condition (`stopBefore`) | `src/loop-phase.ts` (0006, 0047, 0053) |
 | Phase planning | The one planner: phased and m-mode planning sessions, their plan-review pause, and the append step `appendPlan` (snapshot → reset → collect, stale-handover removal); the phase-state helpers the phase loop shares | `src/loop-plan.ts` (0006, 0047, 0053) |
 | Planning input | A phase's `plan-input.md`: read, persist, and commit before the planning unit | `src/plan-input.ts` (0053 D9) |
@@ -98,7 +98,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Task pipeline | `runOnce`/`runTask`: decompose → subtasks (or whole) → wrap-up → closeout; resume, CURRENT.md lifecycle | `src/runner.ts` |
+| Task pipeline | `runOnce`/`runTask`: decompose → subtasks (or whole) → wrap-up → closeout; resume | `src/runner.ts` |
 | Execution | Merged understand+decompose session, per-subtask sessions, whole-task session | `src/execute.ts` (0030) |
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
 | Session driving | `runSession` retry / server restart / quota failover ring / `awaitRecovery`; `ensureForkBase` | `src/session.ts` (0015, 0017) |
@@ -117,7 +117,6 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 |---|---|---|
 | Task store | Phase `tasks.md` index + `docs/T-NNN/` units, `.auto/units.json` runtime state, `newTaskProblems` (the planning/appending collect's per-task checks) and `forgetUnits` (record clearing for closed tasks), no-phase mode | `src/tasks.ts` (0047, 0053) |
 | Status tree | Read-only round → phase → task → subtask view | `src/status.ts` |
-| CURRENT.md | Write/remove the current-task mirror | `src/current.ts` |
 | Progress record | `.auto/progress.json`, session reuse on resume | `src/resume.ts` (0018, 0022) |
 | Resume gate | Unit-ownership gate, resume/interruption wording | `src/resume-gate.ts` |
 | Handover recovery | `.auto/handover.json` breakpoints of a test handover | `src/handover.ts` (0023 §I–§N) |
@@ -144,7 +143,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Config fix | The rule table behind `fix`: fixable/manual findings over the raw config and the config-layer artifacts, planned then applied; `renderAgentContract` | `src/config-fix.ts` (0052 D10–D11) |
 | Experiment switches | `OPENCODE_AUTO_*` registry, parsed once, never persisted | `src/switches.ts` (0003) |
 | Shell profile | `setShellProfile`: program name, recovery hints, log audit, agent | `src/shell.ts` |
-| AGENTS.md block | The opencode-auto marker block written into the target's AGENTS.md | `src/agents-block.ts` |
+| AGENTS.md block | The opencode-auto marker block, the only content the driver puts in the target's AGENTS.md | `src/agents-block.ts` (0054) |
 | check command | Principle scan of AGENTS.md and open task documents | `src/check.ts` |
 | reset command | Remove init's configuration artifacts (the project brief only while it is the untouched stub) | `src/reset.ts` |
 | Destructive-op guards | Interactive confirmation; clean-worktree gate | `src/confirm.ts`, `src/clean.ts` |

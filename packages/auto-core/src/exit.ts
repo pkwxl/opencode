@@ -1,6 +1,6 @@
 // /exit 优雅退出(设计文档 plans/0014-exit-resume-design.md): --interactive 常驻输入行
 // 识别到 /exit 时置位;三处既有步进边界(phase/task/subtask,挂点同 step.ts)
-// 逐一探测,命中第一处即在该安全落点抛出 ExitRequested——此刻任务单元文件/CURRENT.md/
+// 逐一探测,命中第一处即在该安全落点抛出 ExitRequested——此刻任务单元文件与
 // .auto/progress.json 均已由该边界自身的常规收尾写好(与该处真实 crash/kill 中断
 // 的现场完全同构),不需要任何额外的保存动作;下次运行据已持久化的进度精确恢复。
 import type { Boundary } from "./step"

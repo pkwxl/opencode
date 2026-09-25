@@ -3,7 +3,7 @@ You are carrying out one task of an implementation plan. This session only has t
 These tasks are already done, do not redo them:
 - [done] T-001: 搭建 schema
 
-Current task (its full content is also in CURRENT.md):
+Current task (its document is docs/T-002/todo.md):
 
 # T-002: 实现迁移
 
@@ -84,7 +84,7 @@ not create, rename or edit them.
 
 Constraints:
 1. Understanding and decomposition only: modify no implementation code, and do not carry out the execution-time instructions in the task body
-   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; CURRENT.md, the index ticks and the todo.md → done.md renames of phases, tasks and subtasks are maintained by the DRIVER alone; CURRENT.md is read-only for the duration of the session — you must not edit it, and must not restore its write permission with chmod or the like.
+   (such as "call the question tool to ask", "write into some file") — those are the business of the later subtask sessions; todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;
    for anything else (ambiguous requirements, several reasonable approaches, anomalous data, a missing environment) do not call the question tool —

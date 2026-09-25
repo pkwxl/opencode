@@ -38,7 +38,8 @@ describe("renderPhasePlan(阶段规划会话,E 节)", () => {
     // 本会话只写任务索引与任务文档,不建 done.md;其余状态文件禁改
     expect(text).toContain("This session writes only the task index docs/R-01/P02-implement/tasks.md and each task's docs/T-NNN/todo.md")
     expect(text).toContain("do not create done.md")
-    expect(text).toContain("CURRENT.md and the other state files are read-only")
+    expect(text).toContain("the phase index and the other state files are read-only")
+    expect(text).not.toContain("CURRENT.md")
     expect(text).toContain("do not change file permissions via chmod or the like")
     expect(text).toContain("git commits are made by the DRIVER after the session")
     expect(text).toContain("AUTO-DECISION")
@@ -352,9 +353,9 @@ describe("renderPhaseHandover(阶段交接蒸馏会话,F.1)", () => {
     for (const section of ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index"]) {
       expect(text).toContain(section)
     }
-    // 无任务清单阶段(k)的兜底表述: 无任务索引/CURRENT.md 缺失属预期,蒸馏以本阶段 kb.md 产物为准
-    expect(text).toContain("no task index tasks.md")
-    expect(text).toContain("no\nCURRENT.md")
+    // 无任务清单阶段(k)的兜底表述: 无任务索引属预期,蒸馏以本阶段 kb.md 产物为准
+    expect(text).toContain("no task index tasks.md — that is\nexpected")
+    expect(text).not.toContain("CURRENT.md")
     expect(text).toContain("this phase directory's kb.md")
     expect(text).toContain("skip")
     // 有下一阶段时不带收尾措辞

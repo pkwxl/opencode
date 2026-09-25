@@ -147,17 +147,13 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     logGateStop(directory, phase, gated, acceptance)
     return 2
   }
-  // AGENTS.md 只校验不改写(F.2): 超 150 行在交接提交信息与终端 note 提示人工精简。
-  const agentsLines = (await Bun.file(join(directory, "AGENTS.md")).text().catch(() => "")).trimEnd().split("\n").length
-  const fat = agentsLines > 150 ? `AGENTS.md is ${agentsLines} lines, over the 150-line limit; trim it manually` : undefined
-  if (fat) log(`ℹ ${fat}`)
   if (opts.commit !== false) {
     // 交接提交是阶段单元的收口落账(完成改名 + 索引勾选),提交失败 → 阻塞退出 2
     // 交人工: 阶段已改名完成,重跑会路由到下一阶段,遗留未提交改动由人工
     // 处置后继续(plans/0021-commit-boundary-design.md P3)。
     const settled = await commitTree(directory, { id: "PLAN", title: `phase handover (${phaseTitle(phase)})` }, {
       stage: "phase-transition",
-      subject: `PLAN transition ${phaseTitle(phase)} → ${target}${fat ? `(${fat})` : ""}`,
+      subject: `PLAN transition ${phaseTitle(phase)} → ${target}`,
     })
     if (!settled.ok) {
       log(

@@ -874,7 +874,8 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
     expect(renderPriorKnowledge({ file: "kb.md" })).toContain("deduplicate across documents")
     expect(renderStuckHint(stuck)).toContain("still going in circles. Write these three things out")
     expect(renderStuckHint({ ...stuck, level: 1 })).not.toContain("Write these three things out")
-    expect(renderAgentsBlock()).toContain("AGENTS.md maintenance rules")
+    // The AGENTS.md block carries no maintenance rules any more (plans/0054 D2).
+    expect(renderAgentsBlock()).not.toContain("maintenance rules")
   })
 
   test("zero-intent baseline: an empty pack drops each segment cleanly, core protocol stays", () => {
@@ -912,7 +913,8 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
         const subtask = renderSubtask(plan, task, "编写迁移脚本的 schema 部分")
         expect(subtask).toContain("   CUSTOM-CATALOG: mark user-owned calls with `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)`.")
         expect(subtask).not.toContain("A decision of your own must leave a record in the relevant document")
-        expect(renderAgentsBlock()).toContain("CUSTOM-MAINT")
+        // A leftover `### agents-maintenance` subsection has no consumer (plans/0054 D2).
+        expect(renderAgentsBlock()).not.toContain("CUSTOM-MAINT")
       },
     )
   })

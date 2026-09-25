@@ -141,10 +141,10 @@ Unit and outcome states:
 | 产物规格 | artifact spec | `src/document/spec.ts` |
 | 预期产物清单 | expected artifact list | Parsed from the `Artifacts:` declarations |
 | 产物索引 | artifact index | Section of the phase handover |
-| 状态文件 | state file | `todo.md` / `done.md`, `CURRENT.md`, index ticks |
+| 状态文件 | state file | `todo.md` / `done.md`, index ticks |
 | driver 独占状态 | driver-exclusive state | Written only by the driver; read-only for sessions |
 | 运行期状态 | runtime state | `.auto/units.json` (status, attempts, fork base) |
-| 当前任务镜像 | current-task mirror | `CURRENT.md` |
+| 当前任务镜像 | current-task mirror | Retired: `CURRENT.md` is no longer written (plans/0054 D3); preflight deletes one an earlier release left |
 | 勾选 | tick | `- [x]` |
 | 台账 | ledger | Live use: the proxy-answer ledger `.auto/resolves.json`. The phase ledger is retired (the phase index replaced it) |
 | 交接文档 | handover document | `handoff.md`, `testhandoff-<n>.md` |
@@ -317,7 +317,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 - Unit field block: `Phase: R-NN.P<nn>`, `Depends:`, `Touches:`, `Closed: <reason>` (written by `closeUnit` only); custom phase type `Gate: acceptance`
 - Knowledge-doc terminator `DONE`; refcheck exemption markers `deleted` / `archived` / `historical`
 - Language-neutral: `<!-- auto: eof -->`, `- [ ]` / `- [x]`, `AUTO-RESOLVE:`, `AUTO-DECISION:`, `AUTO-FIXME:`, `[DRIVER]`, `Auto-Stage:` / `Auto-Nested:` trailers
-- File and directory names: `todo.md` / `done.md`, `tasks.md`, `phases.md`, `subtasks.md`, `context.md`, `report.md`, `round.md`, `CURRENT.md`, `handoff.md` / `testhandoff-<n>.md`, `.auto/*`, `docs/T-NNN/`, `docs/R-NN/`, `S<nn>`
+- File and directory names: `todo.md` / `done.md`, `tasks.md`, `phases.md`, `subtasks.md`, `context.md`, `report.md`, `round.md`, `handoff.md` / `testhandoff-<n>.md`, `.auto/*`, `docs/T-NNN/`, `docs/R-NN/`, `S<nn>`
 
 ## Confusable terms
 

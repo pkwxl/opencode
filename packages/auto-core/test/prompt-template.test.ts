@@ -295,12 +295,10 @@ describe("init 产物模板(agent 契约;PLAN.md 模板随 M3.4 退役)", () => 
   test("agent contract has no acceptance/verification text and the block list narrows accordingly (testByDriver off)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const off = renderText(raw, { testByDriver: false })
-    expect(off).toContain("AGENTS.md is not read-only")
-    expect(off).toContain("must not delete or rewrite the opencode-auto")
-    expect(off).toContain("marker block (pointer/commit/summary/maintenance rules/reference conventions")
+    expect(off).toContain("AGENTS.md and opencode.json are read-only")
+    expect(off).toContain("marker block (pointer/commit/summary/reference conventions")
     expect(off).toContain("<!-- opencode-auto:start -->")
     expect(off).toContain("<!-- opencode-auto:end -->")
-    expect(off).toContain("follow the AGENTS.md maintenance rules inside the block")
     expect(off).not.toContain("verify")
     expect(off).not.toContain("verification")
   })
@@ -317,26 +315,24 @@ describe("agent contract template (templates/.opencode/agent/auto.md)", () => {
       expect(rendered).not.toBe(raw)
     }
   })
-  test("the AGENTS.md clause covers the single opencode-auto block and cites the maintenance rules (drift guard, testByDriver on)", async () => {
+  test("the AGENTS.md clause covers the single opencode-auto block and keeps sessions out of the file (drift guard, testByDriver on)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const text = renderText(raw, { testByDriver: true })
-    expect(text).toContain("AGENTS.md is not read-only")
-    // Must not delete or rewrite the opencode-auto block (pointer/test/commit/summary/
-    // maintenance rules/reference conventions), one merged start/end block rather
-    // than the legacy per-name blocks
-    expect(text).toContain("must not delete or rewrite the opencode-auto")
-    expect(text).toContain("marker block (pointer/test/commit/summary/maintenance rules/reference conventions")
+    // AGENTS.md is read-only and not maintained by sessions (plans/0054 D2):
+    // the opencode-auto block (pointer/test/commit/summary/reference
+    // conventions) is one merged start/end block rather than the legacy
+    // per-name blocks, and notes go to docs/
+    expect(text).toContain("AGENTS.md and opencode.json are read-only")
+    expect(text).toContain("marker block (pointer/test/commit/summary/reference conventions")
     expect(text).toContain("<!-- opencode-auto:start -->")
     expect(text).toContain("<!-- opencode-auto:end -->")
     expect(text).not.toContain("<!-- opencode-auto:*:start -->")
-    expect(text).not.toContain("must not delete the opencode-auto pointer block")
-    // Updating the rest follows the in-block maintenance rules (concise / route /
-    // update rather than append / durable knowledge only)
-    expect(text).toContain("follow the AGENTS.md maintenance rules inside the block")
-    expect(text).toContain("docs/agents/")
-    expect(text).toContain("keep it concise")
-    expect(text).toContain("update rather than append")
-    expect(text).toContain("record only durable workflow knowledge")
+    expect(text).toContain("is not a place for notes")
+    expect(text).not.toContain("maintenance rules")
+    expect(text).not.toContain("docs/agents/")
+    // The retired task mirror is gone from the contract (plans/0054 D3)
+    expect(text).not.toContain("CURRENT.md")
+    expect(text).toContain("docs/T-NNN/todo.md and docs/T-NNN/subtasks.md")
   })
 })
 

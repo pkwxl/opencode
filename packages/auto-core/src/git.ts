@@ -159,9 +159,12 @@ export async function stashTree(
 
 // driver 独占的状态写入(单元启动遇脏时,脏区全属此类 = 上次提交失败遗留的
 // driver 落账 → carryover 补提交自愈;其余脏区(人工改动/AI 半途产物)一律阻塞
-// 交人工,不自动清扫): CURRENT.md 镜像,阶段索引 phases.md 与任务索引 tasks.md 的
-// 勾选,阶段与任务单元的 todo.md → done.md 改名(M3.4;子任务的改名随子任务提交,
-// 其失败走阻塞路径的中断现场提交)。
+// 交人工,不自动清扫): 阶段索引 phases.md 与任务索引 tasks.md 的勾选,阶段与
+// 任务单元的 todo.md → done.md 改名(M3.4;子任务的改名随子任务提交,其失败走
+// 阻塞路径的中断现场提交)。
+// CURRENT.md is the retired task mirror (plans/0054 D3): the driver no longer
+// writes it, but preflight deletes one an earlier release left behind, and
+// that deletion carries over here like any driver write.
 const DRIVER_STATE = [
   /^CURRENT\.md$/,
   /^docs\/R-\d+\/phases\.md$/,
@@ -361,7 +364,7 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
 
 // 回滚结果(设计 3.3): failures 非空 = 有仓库未能回滚(调用方按 dirty 交人工);
 // stashes 为实际执行的 stash 次数(保全现场 + reset 收回),resets/skipped 供日志
-// 与 CURRENT.md 回滚备注(跳过 reset 的仓库: 有 upstream / 基线为空 / 单元期间新建)。
+// (跳过 reset 的仓库: 有 upstream / 基线为空 / 单元期间新建)。
 export type RollbackResult = {
   ok: boolean
   failures: { rel: string; error: string }[]
@@ -608,11 +611,11 @@ function firstLine(text: string): string {
   return text.trim().split("\n")[0]!.slice(0, 200)
 }
 
-// 文档面: 目标目录自身的 docs/ 与 CURRENT.md——改动不影响测试结果,
+// 文档面: 目标目录自身的 docs/——改动不影响测试结果,
 // 不触发交接重测(测试交接前置化设计 D5)。其余已跟踪文件(源码与 test/ 下脚本,
 // 含嵌套仓库内的文件)一律计入。
 function documentOnly(rel: string): boolean {
-  return rel === "CURRENT.md" || rel === "docs" || rel.startsWith(`docs${sep}`)
+  return rel === "docs" || rel.startsWith(`docs${sep}`)
 }
 
 // 自 HEAD(= 交接定版提交)以来**已跟踪**文件的改动清单(相对目标目录),排除文档面。

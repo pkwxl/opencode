@@ -1,14 +1,12 @@
 // The unit-ownership gate of a resume point and the interruption wording:
 // whether the unit an active session belongs to reruns this time (deciding
-// whether its session may be reused), plus rendering of the three texts for
-// humans and the AI — phase description / resume note / CURRENT.md interruption
-// remark. Depends only on types and switches, not on the session layer.
+// whether its session may be reused), plus rendering of the two texts for
+// humans and the AI — phase description / resume note. Depends only on types
+// and switches, not on the session layer.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S4, pure move).
 import { HANDOVER_SECTIONS } from "./document/roles"
 import { nextChecklistIndex, type DeclaredItem } from "./document/state"
-import type { Outcome } from "./opts"
 import type { Phase } from "./resume"
-import { shellProfile } from "./shell"
 import { autoSwitches } from "./switches"
 
 // 恢复点的单元归属门禁: active 记录的中断会话属于某个具体执行单元(任务级
@@ -58,8 +56,7 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
       return false
   }
 }
-// Human-readable description of a phase (shared by resume logs and the
-// CURRENT.md interruption remark).
+// Human-readable description of a phase (resume logs).
 export function phaseText(phase: Phase | undefined): string {
   switch (phase?.kind) {
     case undefined:
@@ -91,7 +88,7 @@ export function phaseText(phase: Phase | undefined): string {
 // Under strict resume (OPENCODE_AUTO_STRICT_RESUME=on) a reused session (R1/R2)
 // gets a single continue line (plans/0022-session-recovery-fidelity-design.md 3.2):
 // field evidence shows a resumed session locates itself from the disk anyway
-// (CURRENT.md → git status → first unticked item), so the phase guidance is
+// (git status → first unticked item), so the phase guidance is
 // redundant; per-step guidance stays in the handover/state files, not in the
 // resume prompt. Non-reuse paths (cold start after rollback carries no note; a
 // graceful-exit summary resume) keep the existing guidance.
@@ -129,7 +126,7 @@ export function resumeNote(phase: Phase | undefined, reused: boolean, strictResu
   return (
     `[DRIVER] The earlier run of this task (or one of its subtasks) stopped because the application was interrupted. ` +
     (reused ? `You are continuing in the original, interrupted session. ` : `Part of the work may already be done. `) +
-    `First read CURRENT.md for the current task and progress, and check the actual worktree state with git status / git diff. ${COMMIT_CLARIFY} ` +
+    `Check the actual worktree state with git status / git diff. ${COMMIT_CLARIFY} ` +
     `${next}Commits are the DRIVER's job, you never commit yourself; do not redo finished work.`
   )
 }
@@ -160,27 +157,6 @@ function nextStepText(phase: Phase | undefined): string {
       }
       return `You are in the phase handover step: first read the handover document as it stands (the last session may have written part of it), complete the four mandatory sections (${HANDOVER_SECTIONS.join(" / ")}) without redoing finished parts, then end the session. `
   }
-}
-
-// The CURRENT.md interruption remark (written when a non-completion outcome
-// keeps the file): exit reason, phase snapshot and how to resume; when the next
-// run rebuilds the mirror, its gist reaches the AI through the resume prompt
-// (resumeNote).
-export function interruptionRemark(outcome: Outcome, phase: Phase | undefined): string {
-  const why =
-    outcome.type === "blocked"
-      ? `blocked: ${firstLine(outcome.question)}`
-      : outcome.type === "incomplete"
-        ? `incomplete, back to pending: ${firstLine(outcome.reason)}`
-        : `done`
-  return [
-    `## Interruption remark (opencode-auto)`,
-    ``,
-    `- Exited at: ${new Date().toISOString()}`,
-    `- Exit reason: ${why}`,
-    `- Interrupted phase: ${phaseText(phase)}`,
-    `- How to resume: handle the reason above and re-run ${shellProfile().program}; the DRIVER continues exactly from the interrupted phase, and the gist of this remark reaches the AI with the resume prompt.`,
-  ].join("\n")
 }
 
 export function firstLine(text: string): string {

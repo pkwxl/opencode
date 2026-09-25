@@ -10,8 +10,8 @@ import type { UnitBaseline } from "./git"
 //   的下一步指引);中断前已写出交接文档(ondemand handoff / handover-test)时不复用
 //   ——旧会话上下文已用满、进度由交接文档承载,开新会话凭交接续跑;
 //   --new-session 显式放弃旧会话(仅跳过复用,阶段精确重入保留)。
-// - 优雅退出(阻塞/回退 pending)由 driver 在退出前写好总结(CURRENT.md 中断备注
-//   + active=false 的记录),恢复时开新会话凭总结继续,不复用旧会话——人工介入
+// - 优雅退出(阻塞/回退 pending)由 driver 在退出前写好总结(active=false 的
+//   记录,原因见运行日志),恢复时开新会话凭总结继续,不复用旧会话——人工介入
 //   可能耗时数小时且会改动环境,旧会话上下文已不可信;
 // - 记录同时携带阶段(phase): 恢复时按阶段重入流水线(off/ondemand 已过执行阶段
 //   不再重跑整任务会话、closeout 跳过收尾等)。

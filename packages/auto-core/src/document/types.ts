@@ -12,8 +12,8 @@
 // process/deliverable split) and the handoff role's protocol checks.
 
 // The role of a path in the target directory (classified by roles.ts roleOf):
-// - driverState:     driver-exclusive state (CURRENT.md/.auto/*,
-//                    opencode.json, the project config); AI sessions must
+// - driverState:     driver-exclusive state (.auto/*, opencode.json,
+//                    the project config); AI sessions must
 //                    never write these (read-only during a run, protect.ts).
 // - ledger:          the round's phase index phases.md (order and membership;
 //                    driver-written, ticked on completion; M3.3 replaced the

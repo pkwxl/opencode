@@ -4,10 +4,9 @@
 // plans/0022-session-recovery-fidelity-design.md。
 // 位于会话驱动层之下: 不得 import session/watch/runner。
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S3,纯搬运)。
-import { writeCurrent } from "./current"
 import { phaseToRole, resolveModel } from "./chain"
 import { failbackOverride, stickyModel } from "./failback"
-import { commitTree, rollbackUnit, unitViolations, type RollbackResult, type UnitBaseline } from "./git"
+import { commitTree, rollbackUnit, unitViolations, type UnitBaseline } from "./git"
 import { forgetHandover } from "./handover"
 import { log, vlog } from "./log"
 import type { Opts, SessionCommit, UnitStop } from "./opts"
@@ -150,17 +149,16 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
 }
 
 // 回滚协议的 runner 侧编排(设计 3.3): rollbackUnit(stash 保全 + soft reset 收回
-// driver 提交)→ 进度记录转总结态(清基线/模型)→ CURRENT.md 写回滚备注(current
-// 给出时;runTask 恢复路径不在此写,由随后的任务镜像统一携带)。回滚失败返回
-// dirty(git 状态的决定权在人工);成功返回备注文本,调用方以冷启动(不附
-// resumeNote)重做本单元。
+// driver 提交)→ 进度记录转总结态(清基线/模型)→ 日志记下现场去向(stash)与
+// 找回方式。回滚失败返回 dirty(git 状态的决定权在人工);成功后调用方以冷启动
+// (不附 resumeNote)重做本单元。
 export async function rollbackUnitState(
   dir: string,
   task: Task,
   unit: string,
   baseline: UnitBaseline,
-  extra: { current?: boolean; progress?: Progress; solo?: boolean } = {},
-): Promise<{ type: "ok"; remark: string } | UnitStop> {
+  extra: { progress?: Progress } = {},
+): Promise<{ type: "ok" } | UnitStop> {
   const rolled = await rollbackUnit(dir, baseline, { task: task.id, unit })
   if (!rolled.ok) {
     return { type: "dirty", files: rolled.failures.map((failure) => `${failure.rel}: ${failure.error}`) }
@@ -172,26 +170,11 @@ export async function rollbackUnitState(
   if (extra.progress) {
     await saveProgress(dir, { ...extra.progress, active: false, baseline: undefined, model: undefined })
   }
-  const remark = rollbackRemark(task.id, unit, rolled)
-  if (extra.current) {
-    await writeCurrent(dir, task, extra.solo ?? false, remark)
-  }
   log(
     `↻ ${task.id} ${unit} rolled back to unit baseline (stash ×${rolled.stashes}` +
       `${rolled.resets.length ? `, reset ${rolled.resets.join(", ")}` : ""}` +
-      `${rolled.skipped.length ? `; stash only, no reset: ${rolled.skipped.join(", ")}` : ""}), re-running this unit from a clean baseline with a new session`,
+      `${rolled.skipped.length ? `; stash only, no reset: ${rolled.skipped.join(", ")}` : ""}), re-running this unit from a clean baseline with a new session; ` +
+      `the rolled-back work is kept in git stash (message prefix auto-rollback: git stash list, git stash show -p)`,
   )
-  return { type: "ok", remark }
-}
-
-// CURRENT.md 的回滚备注(回滚重跑路径保留文件时写入): 现场去向与找回方式。
-function rollbackRemark(taskID: string, unit: string, rolled: RollbackResult): string {
-  return [
-    `## Rollback note (opencode-auto)`,
-    ``,
-    `- rolled back at: ${new Date().toISOString()}`,
-    `- rolled-back unit: ${taskID} ${unit}`,
-    `- state preserved: uncommitted changes and the reclaimed commits of this unit are in git stash (message contains the auto-rollback prefix); locate with git stash list, inspect with git stash show -p`,
-    `- next: this unit will be redone from baseline by a new session; to recover rolled-back work, inspect the stash manually and decide`,
-  ].join("\n")
+  return { type: "ok" }
 }

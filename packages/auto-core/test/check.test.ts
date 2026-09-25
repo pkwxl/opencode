@@ -194,21 +194,18 @@ describe("checkPrinciple", () => {
     }
   })
 
-  test("AGENTS.md 超过 150 行输出精简提示(note 不进 findings)", async () => {
+  test("AGENTS.md has no line cap any more: a long file is no note (maintenance rules retired, plans/0054 D2)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
     try {
       await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: 任务\n\n实现功能。\n")
       const filler = Array.from({ length: 155 }, (_, i) => `规则条目 ${i + 1}: 与工作流相关的持久约定。`).join("\n")
       // 与 checkPrinciple 默认(verify/testByDriver 均未启用)渲染出的块内容完全一致,
-      // 避免额外触发"内容不一致"的过期提示,只保留行数超限提示。
+      // 避免额外触发"内容不一致"的过期提示。
       const content = ["# AGENTS.md", "", renderAgentsBlock(), "", filler, ""].join("\n")
       await Bun.write(join(dir, "AGENTS.md"), content)
-      const lines = content.trimEnd().split("\n").length
       const { findings, notes } = await checkPrinciple(dir)
       expect(findings).toEqual([])
-      expect(notes).toEqual([
-        `AGENTS.md is ${lines} lines, over the 150-line limit (maintenance rule block item 1); consider trimming per the rules and routing details to docs/agents/`,
-      ])
+      expect(notes).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

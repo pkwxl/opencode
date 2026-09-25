@@ -1,6 +1,6 @@
 You are the handover distiller for the "Implementation" phase (m): this phase's work is wrapped up (a phase
-with a task checklist has all its tasks done; a phase with no task checklist has no task index tasks.md and no
-CURRENT.md — that is expected). Read this phase's task units and docs/ artifacts in full, and distill the knowledge
+with a task checklist has all its tasks done; a phase with no task checklist has no task index tasks.md — that is
+expected). Read this phase's task units and docs/ artifacts in full, and distill the knowledge
 that needs to carry across phases into a handover document. Distill only, do not implement, do not modify any
 existing artifact.
 
@@ -52,7 +52,7 @@ pitfalls the next phase would step in>
 
 ## Constraints
 
-1. The only file this session may write is docs/R-01/P02-implement/handover.md; the task and phase indexes, todo.md/done.md and CURRENT.md
+1. The only file this session may write is docs/R-01/P02-implement/handover.md; the task and phase indexes, todo.md/done.md
    and the other state files are maintained exclusively by the DRIVER — do not edit them, and do not change file
    permissions via chmod or the like; git commits are made by the DRIVER after the session ends, do not run git
    commit or similar commands yourself.

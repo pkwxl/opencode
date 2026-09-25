@@ -5,6 +5,7 @@
 // 出口以 { exit } 回传、由 runAll 直接 return,不在此 process.exit;出口位于 runAll 的
 // try 之前、不经其 finally(plans/0024-module-split-plan.md §I D13)。不依赖 loop.ts。
 // 拆分自 src/loop.ts(plans/0024-module-split-plan.md S14,纯搬运)。
+import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
@@ -197,11 +198,16 @@ export async function preflight(
   // 本身就是脏区,门禁会在这里当场拦下整次运行。复原即消脏,随后的恢复状态机也
   // 才拿得到判定所需的文件。
   if (!opts.dryrun) await restoreTestHandoffs(directory)
+  // The retired task mirror (plans/0054 D3): a CURRENT.md an earlier release
+  // left behind — recognised by the header it always wrote — is removed ahead
+  // of the start gate, whose carryover commits the deletion as a driver write
+  // (git.ts DRIVER_STATE). Any other CURRENT.md belongs to the project.
+  if (!opts.dryrun && (await removeRetiredCurrent(directory))) log("removed: CURRENT.md (task mirror retired; an earlier release wrote it)")
   // 启动 clean 门禁(plans/0021-commit-boundary-design.md P3): 提交启用时要求工作区 clean——
   // 此后所有执行单元(任务/子任务/隐藏任务)依赖的信息全部由上一次提交固定。
   // 人工遗留脏区阻塞交人工(替代旧"⚠ 会被下一次提交吸纳"提示:吸纳会把人工改动
-  // 混入 driver 审计轨迹,破坏提交即隔离边界);driver 独占状态文件(CURRENT.md、
-  // 索引勾选)的遗留走 beginUnit 的 carryover 补提交自愈——上一次运行以非提交
+  // 混入 driver 审计轨迹,破坏提交即隔离边界);driver 独占状态文件(索引勾选、
+  // 单元改名)的遗留走 beginUnit 的 carryover 补提交自愈——上一次运行以非提交
   // 路径退出(如单元门禁不净直接 return 2)会留下它们的写盘,那是 driver 自己的
   // 落账、不是人工改动,拦在这里只会让下一次运行永远起不来。
   if (opts.commit !== false && !opts.dryrun) {
@@ -236,8 +242,9 @@ export async function preflight(
     if (stale.length) log(`↻ resuming interrupted state: ${stale.join(", ")} reset from in_progress to pending`)
   }
   // 启动会话前确保 AGENTS.md 的 opencode-auto 块与当前配置渲染一致(缺失则追加、
-  // 内容与渲染不一致则整块替换、旧版/多余的带名标记块一律清理)。AGENTS.md 本身
-  // 保持可写,任务可更新它的其余内容(有更新时 driver 会在新会话前重启 server)。
+  // 内容与渲染不一致则整块替换、旧版/多余的带名标记块一律清理)。AGENTS.md 在
+  // run 期间只读(protect.ts),会话不维护它(plans/0054 D2);ensurePointer 写入
+  // 前后自行解锁与重新保护。
   const ensured = await ensurePointer(directory, { testByDriver: opts.testByDriver })
   if (ensured.block === "inserted") log("inserted: AGENTS.md opencode-auto block")
   if (ensured.block === "replaced") log("refreshed: AGENTS.md opencode-auto block (differed from the current config rendering)")
@@ -257,4 +264,18 @@ export async function preflight(
     }
   }
   return { agentName, watcher, progress }
+}
+
+// The first line of every CURRENT.md the driver wrote before the mirror
+// retired (plans/0054 D3).
+const RETIRED_CURRENT_HEADER = "# Current task (maintained by opencode-auto, do not edit manually)"
+
+// Removes the root CURRENT.md when it is the retired task mirror; returns
+// whether it did. A file with any other first line is the project's own.
+export async function removeRetiredCurrent(dir: string): Promise<boolean> {
+  const file = join(dir, "CURRENT.md")
+  const text = await Bun.file(file).text().catch(() => undefined)
+  if (text?.split("\n")[0] !== RETIRED_CURRENT_HEADER) return false
+  await rm(file, { force: true })
+  return true
 }

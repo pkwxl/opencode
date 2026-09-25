@@ -1,7 +1,6 @@
 import { basename, join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
-import { writeCurrent, removeCurrent } from "./current"
 import { ensureDecomposed, executeWhole, runSubtask } from "./execute"
 import { resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 import { taskDoc } from "./docpaths"
@@ -14,7 +13,7 @@ import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
 import { type Opts, type Outcome, type UnitStop } from "./opts"
-import { interruptionRemark, phaseText, resumeNote, unitReruns } from "./resume-gate"
+import { phaseText, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, runSession } from "./session"
 import { begin, markDone, reloadTask, type Plan, type Task } from "./tasks"
 import { handoffFile } from "./prompt"
@@ -30,8 +29,7 @@ import { reportResult, runWrapup } from "./wrapup"
 // (STATS_PLAN §5,T-001 上收、本任务删本处私有副本并改 import)。
 
 // Runs one task through the pipeline; the driver owns all state writes (the
-// todo.md → done.md renames, index ticks, CURRENT.md, .auto/), sessions never
-// make them.
+// todo.md → done.md renames, index ticks, .auto/), sessions never make them.
 // --subtask auto (default): decompose (when subtasks.md has no checklist) →
 // one session per subtask (driver ticks on trust) → wrap-up → closeout.
 // --subtask off: a single whole-task session → wrap-up → closeout.
@@ -46,12 +44,10 @@ import { reportResult, runWrapup } from "./wrapup"
 // the previous one when its context usage ended below REUSE_BELOW, its used
 // tokens below 50% of contextLimit (default 32k) and it went idle within
 // REUSE_IDLE_MS (default 5 minutes), otherwise a fresh session is created.
-// CURRENT.md lives while the task is interrupted or running: it is
-// (re)created before the first session — an interrupted run may have left it
-// missing or stale — refreshed by later writeCurrent calls, kept with an
-// interruption remark when the task ends blocked/incomplete (the next run's
-// first prompt carries the essence via the resume note), and deleted only
-// when the task completes.
+// There is no task mirror (CURRENT.md retired, plans/0054 D3): every prompt
+// inlines the task, docs/T-NNN/todo.md and subtasks.md hold its content and
+// progress, and a blocked/incomplete exit is reported in the run log while
+// .auto/progress.json keeps the phase the next run's resume note is built from.
 // Interruption recovery (.auto/progress.json): the driver persists the current
 // phase at every pipeline boundary and the execution-chain session as active
 // while a session is in flight. On re-run: an active record with a live
@@ -66,7 +62,7 @@ import { reportResult, runWrapup } from "./wrapup"
 // execution phase never re-run the whole-task session, a closeout record
 // skips the wrap-up. Network-failure blockades keep the active record (the
 // session is in-flight and unsummarized); every other blocked/incomplete exit
-// finalizes the summary (CURRENT.md remark) and drops reuse eligibility.
+// finalizes the summary and drops reuse eligibility.
 // Session reuse is gated by unit attribution (unitReruns): the interrupted
 // session belongs to one concrete execution unit (pipeline stage / subtask #N)
 // and is resumed only when that unit will actually rerun — a unit already
@@ -108,9 +104,8 @@ export async function runTask(
   // handoff.md 或 --handover-test 的 testhandoff.md)时,旧会话上下文已用满、
   // 进度由文档承载——开新会话凭交接续跑(executeWhole/runSubtask/runExecSession
   // 据文件播种 continuation)。
-  // 严格恢复: rolledBack 非空 = 恢复时已回滚到单元基线( CURRENT.md 镜像改带
-  // 回滚备注,新会话冷启动重做、不附恢复说明)。
-  let rolledBack: string | undefined
+  // 严格恢复: rolledBack = 恢复时已回滚到单元基线(新会话冷启动重做、不附恢复说明)。
+  let rolledBack = false
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
     chain.phase = recalled.phase
@@ -170,7 +165,7 @@ export async function runTask(
     if (handoffInvalid) {
       const done = await rollbackUnitState(dir, task, "execution unit (invalid handover document)", recalled.baseline!, { progress: recalled })
       if (done.type !== "ok") return done
-      rolledBack = done.remark
+      rolledBack = true
       recalled.active = false
       log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} exists but has no valid status line; strict resume judged unfaithful, rolled back and re-running`)
     } else if (strict && recalled.active === true && rerun && !handedOff && recalled.baseline) {
@@ -191,7 +186,7 @@ export async function runTask(
               : `model mismatch (recorded ${recalled.model}, current ${modelNow ?? "no routing configured"})`
         const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
         if (done.type !== "ok") return done
-        rolledBack = done.remark
+        rolledBack = true
         recalled.active = false
         log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${why}); strict resume judged unfaithful, rolled back to the unit baseline and redone`)
       }
@@ -230,10 +225,8 @@ export async function runTask(
       }
     }
   }
-  // Mirror the task into CURRENT.md before the first session: the agent
-  // contract requires every session to read it first.
+  // A strict-resume rollback may have changed the task's files on disk.
   task = await reloadTask(plan, task.id)
-  await writeCurrent(dir, task, mode !== "auto", rolledBack)
   // 阶段持久化: 每个阶段边界推进记录(active=false,总结态);执行链会话开始/结束
   // 时由 attempt 刷新为 active=true(半途态)——此刻中断按"未总结"复用会话。
   // 严格恢复时同步刷新链上单元基线: 回滚锚点跟随阶段边界收紧(基线..HEAD 只含
@@ -249,18 +242,16 @@ export async function runTask(
   if (outcome.type === "completed") {
     // 终态改名: 链上最后一个会话标题指向 done 标签(与 loop 的终态提交同题)。
     await renameSession(client, chain, `${task.id} done ${task.title}`)
-    await removeCurrent(dir)
     await forgetProgress(dir)
     return outcome
   }
-  // 非完成结局(阻塞/回退 pending)时终结当前进展: CURRENT.md 写中断备注后保留,
-  // 供人工查看与下次恢复(下次 runTask 重建镜像时,备注要点经恢复提示词带给 AI)。
+  // 非完成结局(阻塞/回退 pending)时终结当前进展(原因见运行日志,阶段留在进度
+  // 记录里,下次运行据此生成恢复提示词)。
   // 会话错误类(网络重试耗尽)保持 active 记录供恢复复用(会话半途无法总结);
   // 其余清除复用资格(进度已总结,人工介入可能耗时且改动环境,旧会话上下文不可信),
   // 阶段信息保留供精确重入。会话标题同步改名为中断状态(与 loop 边界提交同题)。
   task = await reloadTask(plan, task.id)
   await renameSession(client, chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
-  await writeCurrent(dir, task, mode !== "auto", interruptionRemark(outcome, chain.phase))
   if (!(outcome.type === "blocked" && outcome.question.startsWith("session error: "))) {
     await persistStage(chain.phase ?? (mode === "auto" ? { kind: "decompose" } : { kind: "whole" }))
   }
@@ -325,7 +316,6 @@ export async function runTask(
       if (blocked) return blocked
       task = await reloadTask(plan, task.id)
     }
-    await writeCurrent(dir, task, mode !== "auto")
 
     // closeout resume: the wrap-up already finished before the interruption
     // (or the record is a legacy verify/review one, which only ever followed

@@ -17,7 +17,8 @@ import { freshRepo, git } from "./fixtures/runner"
 
 describe("roleOf", () => {
   const table: [string, string][] = [
-    ["CURRENT.md", "driverState"],
+    // The retired task mirror (plans/0054 D3) has no role of its own.
+    ["CURRENT.md", "freeform"],
     [".auto/progress.json", "driverState"],
     [".auto", "driverState"],
     ["opencode.json", "driverState"],
@@ -94,7 +95,7 @@ describe("roleOf", () => {
 
 describe("role-derived policies", () => {
   test("eofScanExempt follows the role policy", () => {
-    for (const rel of ["CURRENT.md", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md", "docs/R-01/P03-implement/plan-input.md"]) {
+    for (const rel of ["opencode.json", ".auto/x.md", "docs/R-01/phases.md", "docs/R-01/P03-implement/handover.md", "docs/R-01/P05-acceptance/acceptance.md", "docs/R-01/P03-implement/plan-input.md"]) {
       expect(eofScanExempt(rel), rel).toBe(true)
     }
     for (const rel of ["docs/T-001/S01/todo.md", "docs/T-001/report.md", "README.md"]) {
@@ -113,7 +114,7 @@ describe("role-derived policies", () => {
 
   test("p1Scope: deliverable files in, process documents and agent-contract surfaces out", () => {
     for (const rel of ["src/main.c", "README.md", "docs/guide.md", "test/build.sh", "docs/agents/build.md"]) expect(p1Scope(rel), rel).toBe(true)
-    for (const rel of ["docs/T-001/report.md", "CURRENT.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
+    for (const rel of ["docs/T-001/report.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
       expect(p1Scope(rel), rel).toBe(false)
     }
   })

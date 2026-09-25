@@ -25,7 +25,7 @@ Phase: R-01.P01
 <goal: what this task delivers>
 
 ## Scope
-<scope: modules/files involved, key constraints and necessary context — self-contained, executable from this, CURRENT.md and docs/ alone>
+<scope: modules/files involved, key constraints and necessary context — self-contained, executable from this and docs/ alone>
 
 ## Acceptance
 <acceptance: what counts as done>
@@ -54,7 +54,7 @@ Phase: R-01.P01
 ## Constraints
 
 1. This session writes only the task index docs/R-01/P01-implement/tasks.md and each task's docs/T-NNN/todo.md; do not create done.md
-   (the completion rename is the DRIVER's job); CURRENT.md and the other state files are read-only — do not edit them,
+   (the completion rename is the DRIVER's job); the phase index and the other state files are read-only — do not edit them,
    and do not change file permissions via chmod or the like; git commits are made by the DRIVER after the session
    ends, do not run git commit or similar commands yourself.
 2. For permission-related problems (such as needing access to a restricted directory), call the question tool to report the problem and ask the user to allow it in opencode.json;

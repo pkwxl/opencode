@@ -1144,8 +1144,8 @@ describe("CLI: init config-only; init -p/--amend retired (plans/0053 D31)", () =
       const init = await runCli(["init", dir])
       expect(init.code).toBe(0)
       expect(init.out).toContain(`next: opencode-auto plan ${dir} (establishes round R-01 and stops at the round-start gate)`)
-      // 只写配置层:docs/ 下没有任何产物(无轮目录、无 round.md 桩、无
-      // AGENTS.md.bak 快照——轮次产物全是 plan 的),brief 桩照写
+      // 只写配置层:docs/ 下没有任何产物(无轮目录、无 round.md 桩——轮次
+      // 产物全是 plan 的),brief 桩照写
       expect(await stat(join(dir, "docs")).catch(() => undefined)).toBeUndefined()
       expect(await stat(join(dir, "docs/R-01")).catch(() => undefined)).toBeUndefined()
       expect(await Bun.file(join(dir, "docs/R-01/round.md")).exists()).toBe(false)
@@ -1185,8 +1185,8 @@ describe("CLI: 阶段化流程 P2(轮次目录 / 空模板 / 阶段行 / 台账�
       // 任务单元布局(M3.4): 不再有根/轮内 PLAN.md
       expect(await Bun.file(join(dir, "PLAN.md")).exists()).toBe(false)
       expect(await Bun.file(join(dir, "docs/R-01/PLAN.md")).exists()).toBe(false)
-      // 轮首 AGENTS.md 快照(避免被当指令加载,.bak 后缀)
-      expect((await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).text()).length).toBeGreaterThan(0)
+      // 轮首不再快照 AGENTS.md(AGENTS.md.bak 退役,auto-core plans/0054 D1)
+      expect(await Bun.file(join(dir, "docs/R-01/AGENTS.md.bak")).exists()).toBe(false)
       const status = await runCli(["status", dir])
       expect(status.code).toBe(0)
       expect(status.out).toContain("R-01 (0/3 phases done)\n  [▶] P01-analysis\n  [ ] P02-implement\n  [ ] P03-test\n")

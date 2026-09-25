@@ -494,3 +494,20 @@ registration: it is injected whole, and its headings (`## Goal`,
 `## Source`, `## Target`, `## Constraints`) are scaffolding the driver never
 parses. `BRIEF_SOURCE_HEADING` / `BRIEF_TARGET_HEADING` are only written,
 when init moves retired keys into the brief.
+
+## Amendment (2026-09-25, plans/0054 D3): the task mirror is retired
+
+`CURRENT.md` is no longer written, so it leaves the protocol face:
+
+- The `state-rule` partial's tier-1 marker is now `todo.md → done.md` (the
+  renames stay the driver-owned surface the section names). Every overlay
+  written before the change already carried that literal next to
+  `CURRENT.md`, so existing `_partials.md` overlays keep loading.
+- The mirror's header `# Current task (maintained by opencode-auto, do not edit
+  manually)` survives as a read-only literal: preflight recognises a leftover
+  mirror by its first line and deletes it (`removeRetiredCurrent` in
+  `src/loop-preflight.ts`). It is never written again and must not be
+  translated.
+- `CURRENT.md` stays in `git.ts` `DRIVER_STATE` only so that deletion
+  carries over like any driver write; it is no longer a `driverState` role
+  name or a protected file.

@@ -88,7 +88,7 @@ describe("doccheck 纯函数(非平凡 + 末行终止符)", () => {
 
   test("eofScanExempt: driver 状态文件 / 阶段索引 / .auto/ / 交接文档族豁免,普通文档不豁免", () => {
     for (const rel of [
-      "CURRENT.md",
+      "opencode.json",
       "docs/R-01/phases.md",
       ".auto/state.md",
       "docs/T-001/handoff.md",

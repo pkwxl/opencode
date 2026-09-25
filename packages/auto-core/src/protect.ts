@@ -2,18 +2,19 @@ import { chmod } from "node:fs/promises"
 import { join } from "node:path"
 import { PROTECTED_FILES } from "./document/roles"
 
-// Read-only guard for driver-owned files: during `run`, CURRENT.md,
-// opencode.json and the persisted project config are chmod'd 0o444 so agent
-// sessions cannot modify them by mistake (defense in depth on top of the
-// prompt contract — a same-user process could still chmod them back via bash,
-// so this is a guardrail, not a security boundary). AGENTS.md is deliberately
-// excluded: tasks may update it; runAll only ensures the pointer block exists
-// before starting sessions. Driver writes call allowWrite / reprotect around
-// each mutation; runAll restores writability in a finally block so a human can
-// edit the files (including manual config amendments) after the driver stops.
+// Read-only guard for driver-owned files: during `run`, opencode.json, the
+// persisted project config and AGENTS.md are chmod'd 0o444 so agent sessions
+// cannot modify them by mistake (defense in depth on top of the prompt
+// contract — a same-user process could still chmod them back via bash, so
+// this is a guardrail, not a security boundary). AGENTS.md holds only the
+// driver's block, which sessions no longer maintain (plans/0054 D2); preflight
+// syncs the block through ensurePointer, which unlocks and reprotects around
+// its write. Driver writes call allowWrite / reprotect around each mutation;
+// runAll restores writability in a finally block so a human can edit the
+// files (including manual config amendments) after the driver stops.
 // The file list is the driverState role's fixed-location files
-// (document/roles.ts PROTECTED_FILES, M2.3).
-const FILES = PROTECTED_FILES
+// (document/roles.ts PROTECTED_FILES, M2.3) plus the contract surface AGENTS.md.
+const FILES = [...PROTECTED_FILES, "AGENTS.md"]
 
 let enabled = false
 

@@ -489,8 +489,8 @@ export function renderStuckHint(hit: StuckHit): string {
 }
 
 // Raw (unrendered) subsection of the active intent pack, for consumers outside
-// the prompt templates — the AGENTS.md block's maintenance rules (M2.1,
-// `## governance` / `### agents-maintenance`).
+// the prompt templates — preflight's check that the configured `## parallelism`
+// level exists.
 export function activeIntentText(section: IntentSection, key: string): string | undefined {
   return packSubsection(activeIntentPack, section, key)
 }

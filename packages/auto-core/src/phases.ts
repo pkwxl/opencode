@@ -466,11 +466,11 @@ export async function roundRoot(dir: string, round: number): Promise<string | un
 // permanent — never renamed, moved or deleted):
 // ① create the round directory (existing = idempotent resume, contents kept);
 // ② the phase index and phase directories from `phases` (syncPhaseIndex);
-// ③ a snapshot of the root AGENTS.md as AGENTS.md.bak (the suffix keeps it from
-//    loading as instructions; written once);
-// ④ the round brief stub round.md (written once; a human fills it in and
+// ③ the round brief stub round.md (written once; a human fills it in and
 //    commits it with the rest of the setup — the round-start gate, plans/0049
 //    G1/G2); phased flows only.
+// The root AGENTS.md is not snapshotted into the round (AGENTS.md.bak retired,
+// plans/0054 D1): it holds only the block the driver renders from the config.
 // The no-phase mode ("m") establishes R-01 with its single implement phase the
 // same way. The round defaults to currentRound (init / first run); a new round
 // passes nextRound.
@@ -479,11 +479,6 @@ export async function establishRound(dir: string, opts: { phases: string; round?
   const root = roundDir(round)
   await mkdir(join(dir, root), { recursive: true })
   await syncPhaseIndex(dir, round, opts.phases)
-  const agentsFile = join(root, "AGENTS.md.bak")
-  if (!(await Bun.file(join(dir, agentsFile)).exists())) {
-    const agents = await Bun.file(join(dir, "AGENTS.md")).text().catch(() => undefined)
-    if (agents !== undefined) await Bun.write(join(dir, agentsFile), agents)
-  }
   // The no-phase mode has no round loop (plans/0048 §2), so no brief.
   const brief = join(dir, roundBriefPath(round))
   if (opts.phases !== "m" && !(await Bun.file(brief).exists())) await Bun.write(brief, renderRoundBrief(round))

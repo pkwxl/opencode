@@ -133,7 +133,9 @@ const lacksMarker = (content: string) => (marker: string) => !content.includes(m
 // session's documents). Sections not listed here are marker-free.
 const PARTIAL_MARKERS: Record<string, string[]> = {
   "eof-rule": ["<!-- auto: eof -->"],
-  "state-rule": ["CURRENT.md"],
+  // The renames are the exclusivity surface since the CURRENT.md mirror
+  // retired (plans/0054 D3); every pre-retirement overlay carries it too.
+  "state-rule": ["todo.md → done.md"],
   "task-depends": ["Depends:", "Depends: none", "Touches:"],
   "subtask-depends": ["Depends:", "Depends: none", "Touches:"],
   "question-rule": ["question tool", "AUTO-RESOLVE", "AUTO-DECISION"],

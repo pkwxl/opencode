@@ -18,11 +18,6 @@ import { autoSwitches, type Switches } from "./switches"
 // 给 note。受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,缺省
 // off 静默空转,refs 恒空、不给引用相关 note)。
 
-// Line cap from rule 1 of the AGENTS.md maintenance rules (built-in intent pack
-// `## governance` / `### agents-maintenance`); over the cap, check emits a note
-// asking for trimming.
-const AGENTS_LINE_LIMIT = 150
-
 // 一处违背描述: 文件、行号、原文(任务文档附任务 ID)。
 export type Finding = { file: string; task?: string; line: number; text: string }
 
@@ -91,14 +86,6 @@ export async function checkPrinciple(
         if (legacyCount) {
           notes.push(`AGENTS.md contains ${legacyCount} legacy/redundant opencode-auto marker blocks, run opencode-auto fix (or run) to clean up`)
         }
-      }
-    }
-    // 维护规则块第 1 条(≤150 行)的唯一机器观测点: 超限仅提示,不进 findings、
-    // 不影响退出码。
-    if (name === "AGENTS.md") {
-      const lines = text.trimEnd().split("\n").length
-      if (lines > AGENTS_LINE_LIMIT) {
-        notes.push(`AGENTS.md is ${lines} lines, over the ${AGENTS_LINE_LIMIT}-line limit (maintenance rule block item 1); consider trimming per the rules and routing details to docs/agents/`)
       }
     }
   }

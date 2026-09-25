@@ -154,17 +154,9 @@ target's own documentation.
 also list any other proxy decisions you identified on your own (points of divergence that should have
    been the user's call and that you closed on the user's behalf); do not mix pure implementation trade-offs into this section.
 
-### agents-maintenance
-
-AGENTS.md maintenance rules (this file is a workflow entry point, not a knowledge base):
-1. Stay concise: the whole file must not exceed 150 lines; do not record implementation details, long explanations, command output, or single-task knowledge.
-2. Route, don't duplicate: module-, phase-, or task-specific information goes into `docs/agents/<topic>.md`; this file keeps only a one-line routing entry (topic → path).
-3. Update, don't append: before adding anything new, check whether an existing rule or routing entry should be revised instead; retire stale content rather than accumulating historical notes.
-4. Only durable workflow knowledge belongs here: record only conventions that affect how most future tasks are carried out; temporary debugging state, one-off decisions, and conversation history do not belong here (log one-off decisions as an `AUTO-DECISION` entry in the relevant document instead — and when the call was one the user should have made, such as scope, externally visible behaviour, an interface contract or an acceptance criterion, and you closed it yourself because nobody was there to ask, mark it `AUTO-RESOLVE` rather than `AUTO-DECISION`).
-
 ### process-references
 
-Process documents are the DRIVER's record of this long-running work — CURRENT.md, .auto/, and the task, round and phase documents under docs/T-* and docs/R-*. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, and no task ids used as pointers. When a comment needs a decision or constraint that a process document records, restate that content in the comment itself, so the code still stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line must carry its own question, decision and reason and never point at a process document.
+Process documents are the DRIVER's record of this long-running work — .auto/ and the task, round and phase documents under docs/T-* and docs/R-*. They steer the work; they are not part of what it delivers. The deliverable (code, comments, build and configuration files, the project's own documentation) must never reference them: no process-document paths, and no task ids used as pointers. When a comment needs a decision or constraint that a process document records, restate that content in the comment itself, so the code still stands on its own once the process documents are gone. AUTO-RESOLVE / AUTO-DECISION / AUTO-FIXME marker lines may sit in code comments, but each line must carry its own question, decision and reason and never point at a process document.
 
 ### test-handover-finish
 

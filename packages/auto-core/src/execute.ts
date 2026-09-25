@@ -8,7 +8,6 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
-import { writeCurrent } from "./current"
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { taskDoc } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
@@ -69,11 +68,7 @@ export async function executeWhole(
   let rolled = false
   const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
     if (!strict || !chain.baseline) return undefined
-    const done = await rollbackUnitState(dir, task, "execution session", chain.baseline, {
-      current: true,
-      progress: await peekProgress(dir),
-      solo: (opts.subtask ?? "auto") !== "auto",
-    })
+    const done = await rollbackUnitState(dir, task, "execution session", chain.baseline, { progress: await peekProgress(dir) })
     if (done.type !== "ok") return done
     continuation = false
     feedback = ""
@@ -220,10 +215,7 @@ export async function ensureDecomposed(
     if (!problems.length) {
       // 合并会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
       if (chain.id) await setForkBase(dir, task.id, chain.id)
-      // 镜像刷新同样先于统一提交(与子任务勾选同口径): 检查项与镜像同入
-      // decompose 提交,调用方随后的刷新即幂等空写。
       const fresh = await reloadTask(plan, task.id)
-      await writeCurrent(dir, fresh)
       const committed = await afterSession(opts.dir ?? dir, opts, task, { stage: "decompose", subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)
       return { type: "ok", task: fresh }
@@ -350,11 +342,7 @@ export async function runSubtask(
     let rolled = false
     const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
       if (!strict || !baseline) return undefined
-      const done = await rollbackUnitState(dir, task, `subtask ${index}`, baseline, {
-        current: true,
-        progress: await peekProgress(dir),
-        solo: (opts.subtask ?? "auto") !== "auto",
-      })
+      const done = await rollbackUnitState(dir, task, `subtask ${index}`, baseline, { progress: await peekProgress(dir) })
       if (done.type !== "ok") return done
       continuation = false
       feedback = ""
@@ -471,12 +459,8 @@ export async function runSubtask(
   // rename 之后 done.md 已存在,均跳过)。
   await renameTodoToDone(planDir, task.id, index)
   await tickSubtask(planDir, task.id, index)
-  // 镜像刷新属本次状态写入,须在统一提交前落盘: 否则 subtasks.md 的勾选与 CURRENT.md
-  // 的同一次刷新分属相邻两次提交(镜像永远落后一格,回滚到子任务提交取回的镜像
-  // 与盘面不一致;步进暂停现场亦会残留未提交改动)。
-  await writeCurrent(planDir, await reloadTask(plan, task.id), (opts.subtask ?? "auto") !== "auto")
   // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
-  // 单元收口: 带基线做提交区间校验——勾选与镜像未落账即不视为完成。
+  // 单元收口: 带基线做提交区间校验——勾选未落账即不视为完成。
   const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject }, baseline)
   if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
   log(`  ✓ ${text.slice(0, 60)}`)
