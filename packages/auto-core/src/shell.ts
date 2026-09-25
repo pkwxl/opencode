@@ -22,6 +22,10 @@ export type ShellProfile = {
   // is not declared here: it comes from the host's client capabilities and the
   // driver degrades per flag at run start (src/capability.ts).
   agent?: AgentProfile
+  // The directory under $XDG_CONFIG_HOME (default ~/.config) that holds the
+  // operator layer of the model registry, `<configDir>/models.json`
+  // (src/models.ts). OPENCODE_AUTO_MODELS overrides the whole path.
+  configDir: string
 }
 
 export type AgentProfile = {
@@ -37,6 +41,7 @@ const DEFAULTS: ShellProfile = {
   bin: "opencode-auto",
   agentRecovery: "init",
   auditLog: false,
+  configDir: "opencode-auto",
 }
 
 let profile: ShellProfile = DEFAULTS

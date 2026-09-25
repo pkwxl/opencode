@@ -378,6 +378,17 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
   })
 })
 
+describe("OPENCODE_AUTO_MODELS (the model registry's operator layer path)", () => {
+  test("registered in SWITCH_ENV, but a path: parseSwitches ignores it and the switch lines never list it", () => {
+    expect(SWITCH_ENV.models).toBe("OPENCODE_AUTO_MODELS")
+    const withPath = parseSwitches({ [SWITCH_ENV.models]: "/srv/fleet/models.json" })
+    expect(withPath).toEqual(parseSwitches({}))
+    expect(nonDefaultSwitches(withPath)).toBeUndefined()
+    expect(formatSwitches(withPath)).toBe(formatSwitches(parseSwitches({})))
+    expect(formatSwitches(withPath)).not.toContain(SWITCH_ENV.models)
+  })
+})
+
 describe("autoSwitches(memo 一次,全流水线一致)", () => {
   test("重复调用返回同一对象", () => {
     expect(autoSwitches()).toBe(autoSwitches())

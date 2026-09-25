@@ -1,6 +1,6 @@
 # 0055 — Model registry, reasoning tiers and multi-agent routing (design)
 
-Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); S1 has begun with the window module `src/model-window.ts` (§4.4). Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
+Status: **design, ruled** (2026-09-25; revised the same day with the follow-up requirements, §0 items 9–13, and every point of §11 ruled the same day). Step S0 is done (§13); S1 has begun with the window module `src/model-window.ts` (§4.4) and the registry loader `src/models.ts` (§4.1–§4.3). Source: the user's request of 2026-09-25 and its follow-up (§0). §11 lists the points for ruling, all ruled on 2026-09-25. Line numbers are as of auto-core `3ba1eb39c`; search by symbol if they drift. A constraint from the same day: **no source change outside `packages/auto-core` and `packages/auto`**. opencode and the other agents are reached only through surfaces they already have (§2 C1).
 
 ## 0. The request
 
@@ -154,6 +154,33 @@ With no `agents` section, one profile `opencode` with adapter `opencode` is impl
 - **Per provider.** A quota is spent by an account, and one server holds one apiKey per provider at a time. So a ring declared on a model entry applies to the entry's provider, and every entry on that provider shares it. Entries on the same provider must declare the same ring, or leave it out. In §4.2, k2 and every step of k3 share moonshotai's ring. Two different rings on one provider are a load error.
 - **Rotation is a server restart** (F8). The next key is written into the spawn config and the managed server restarts. Sessions persist across the restart, so the failed session is forked and re-dispatched on the same model (§7). The ring position stays where it is afterwards: the driver never goes back to key A while key B works (§6.4).
 - **Limits.** Rings are inactive under an external server, which cannot be restarted; the startup log notes it. The provider-specific loaders in F6 may ignore a config key, so each ringed provider is checked in the S3 smoke test before it is documented as supported.
+- **Settled in `src/models.ts` (S1).** These points are recorded as AUTO-RESOLVE / AUTO-DECISION lines in the module.
+  - **Loading.** `loadModels(dir, { phaseTypes, adapters?, env?, home?, configDir? })` returns `undefined` when neither layer exists and the merged registry otherwise.
+    - Every entry carries its layer: `operator`, `project`, or `implied` for the implied profile.
+    - Name-keyed sections are Maps.
+    - `unused` lists the models that no tier, route list or classifier names.
+  - **Locating the layers.**
+    - An explicitly set `OPENCODE_AUTO_MODELS` that names a missing file means no operator layer, and the loader does not fall back to the XDG path.
+    - A relative `XDG_CONFIG_HOME` is ignored.
+    - `OPENCODE_AUTO_MODELS` is registered in `SWITCH_ENV` but stays out of `Switches` and the switch lines.
+  - **Errors.**
+    - Every problem is collected into one `ModelRegistryError`, one line each, in the form `model registry, <layer> layer <file>: <field>: <message>`.
+    - No line quotes a `keys` or `env` value, and a bad-JSON line drops the quoted token the parser echoes.
+    - Unknown top-level fields fail too.
+  - **Merging.**
+    - Only the entries of the four sections accept `null`. In the operator layer a `null` entry removes nothing.
+    - A merged `agents` section left empty implies the `opencode` profile.
+  - **Names and values.**
+    - Agent profile names follow the internal-name pattern, and env variable names follow `[A-Za-z_][A-Za-z0-9_]*`.
+    - A reference must be the whole value.
+    - An opencode `model` must be `provider/model`, `server` must be an http(s) URL, and `bin` expands `~`.
+    - `variant` is refused only on claude.
+  - **Lists.**
+    - `only: []`, `wider: []`, `keys: []` and an empty route list are refused.
+    - `avoid: []`, an empty tier list and `classifier: []` are accepted; a project layer clears the operator's classifiers with `[]`.
+    - No list names the same item twice.
+  - **Rings.** The ring rule compares the ordered references per provider across all opencode profiles.
+  - **Reference check.** `checkModelReferences(registry, env)` requires a `{env:}` variable to be set and non-empty. A `{file:}` path must be an existing, readable regular file; this is checked with stat and access, and the file is never opened.
 
 ### 4.4 Windows
 

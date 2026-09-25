@@ -11,6 +11,7 @@ const GENERIC: ShellProfile = {
   bin: "opencode-auto",
   agentRecovery: "init",
   auditLog: false,
+  configDir: "opencode-auto",
 }
 
 describe("shell 画像", () => {
@@ -27,6 +28,12 @@ describe("shell 画像", () => {
     expect(shellProfile()).toEqual({ ...GENERIC, program: "opencode-auto", agentRecovery: "startup", auditLog: true })
     setShellProfile({ program: "opencode-auto" })
     expect(shellProfile()).toEqual({ ...GENERIC, program: "opencode-auto", agentRecovery: "startup", auditLog: true })
+  })
+
+  test("configDir defaults to opencode-auto, the model registry's directory under XDG_CONFIG_HOME, and a shell can override it", () => {
+    expect(shellProfile().configDir).toBe("opencode-auto")
+    setShellProfile({ configDir: "opencode-auto-migrate" })
+    expect(shellProfile()).toEqual({ ...GENERIC, configDir: "opencode-auto-migrate" })
   })
 
   test("auditLog 联动 log 层: 简易壳画像下非 verbose 的 vlog 仍写入日志文件", async () => {

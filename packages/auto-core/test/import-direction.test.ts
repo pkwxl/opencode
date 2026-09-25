@@ -126,6 +126,9 @@ const CLASSIFIED: Record<string, Domain> = {
   loop: "driver",
   // Model windows of the model registry (plans/0055 §4.4): a leaf (LEAVES).
   "model-window": "driver",
+  // The model registry (plans/0055 §4.1–§4.3): layers, merge, strict
+  // validation and the reference check; a loader below every session module.
+  models: "driver",
   numbering: "driver",
   opts: "driver",
   // plan's prelude and stop lines (plans/0053 D4–D8); never imports the loop.
@@ -225,6 +228,12 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
     from: "plan",
     to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session"],
     why: "plan's prelude decides the routes that need no AI before any agent starts (plans/0053 D4); the loop imports plan for its stop lines, never the reverse",
+  },
+  // AUTO-DECISION: models gets a one-way rule besides its classification row (selection and preflight will import it from below the session layer, so an upward import would form a cycle; the rule states that before the first consumer lands)
+  {
+    from: "models",
+    to: ["loop", "loop-phase", "loop-plan", "loop-task", "loop-preflight", "runner", "artifact", "session", "attempt", "watch", "agent-choice"],
+    why: "the model registry is read-only data loaded at run start (plans/0055 §4.1); selection, preflight and the models command build on it, so it must not import the loop, the session-driving layer or the agent start",
   },
   {
     from: "watch",

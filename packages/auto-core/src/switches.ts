@@ -30,6 +30,12 @@ export const SWITCH_ENV = {
   handoverConcurrent: "OPENCODE_AUTO_HANDOVER_CONCURRENT",
   hibernate: "OPENCODE_AUTO_HIBERNATE",
   agent: "OPENCODE_AUTO_AGENT",
+  // The operator layer of the model registry (src/models.ts): a file path, not
+  // a switch. Env-only and empty = unset, like the switches, but parseSwitches
+  // does not read it and the switch lines do not list it: the registry's own
+  // startup lines name the layers it loaded.
+  // AUTO-DECISION: OPENCODE_AUTO_MODELS is registered here but kept out of Switches, nonDefaultSwitches and formatSwitches (every entry of those lines is a parsed switch with a default; a path has neither, and leaving it out keeps the full switch line byte-identical for runs without a registry)
+  models: "OPENCODE_AUTO_MODELS",
 } as const
 
 // 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
