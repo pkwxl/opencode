@@ -63,7 +63,7 @@ describe("degrade: run-start clamp", () => {
   })
 
   test("switches already off are not reported", () => {
-    const got = degrade(HEADLESS, parseSwitches({ [SWITCH_ENV.stuck]: "off" }), {})
+    const got = degrade(HEADLESS, parseSwitches({ [SWITCH_ENV.stuck]: "off", [SWITCH_ENV.steer]: "off" }), {})
     expect(got.switches).toEqual({})
     // Only the two flag notes that do not hang on a switch remain.
     expect(got.notes.length).toBe(2)
@@ -203,7 +203,7 @@ describe("session driving without a capability", () => {
         })(),
     })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const steer = { limit: 1000, text: "hand over" }
+    const steer = { limit: 1000, text: "hand over", notes: [] }
     await runSession(client, task, "p", {}, chain, steer)
     expect(calls.steers).toEqual(["hand over"])
     expect(chain.used).toBe(500)
@@ -218,7 +218,7 @@ describe("session driving without a capability", () => {
   test("no hint: chain.hinted stays false", async () => {
     const { client } = fakeClient()
     const chain: SessionChain = { pct: 100, used: 0, at: 0, hinted: true }
-    await runSession(client, task, "p", {}, chain, { limit: 1000, text: "hand over" })
+    await runSession(client, task, "p", {}, chain, { limit: 1000, text: "hand over", notes: [] })
     expect(chain.hinted).toBe(false)
   })
 })

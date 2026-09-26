@@ -24,6 +24,8 @@ import {
   renderTestContinue,
   renderTestResult,
   renderTestWrapup,
+  renderUsageNoteInfo,
+  renderUsageNoteWinddown,
   renderWhole,
   renderWrapup,
   subtaskOutputFile,
@@ -433,11 +435,9 @@ describe("renderSubtask", () => {
     expect(text).toContain("do not run git commit")
   })
 
-  test("handover clause injected by default; continuation demands reading the handover document first", () => {
+  test("no context-handover protocol (ondemand-only, plans/0056); continuation still demands reading the handover document first", () => {
     const text = renderSubtask(plan, task, subtask)
-    expect(text).toContain("docs/T-002/handoff.md")
-    expect(text).toContain("[DRIVER] This session's context is about to reach the limit")
-    expect(text).toContain("counting whether this subtask is complete")
+    expect(text).not.toContain("[DRIVER] This session's context")
     expect(text).not.toContain("First read docs/T-002/handoff.md")
     const cont = renderSubtask(plan, task, subtask, { continuation: true })
     expect(cont).toContain("First read docs/T-002/handoff.md")
@@ -678,14 +678,31 @@ describe("renderWhole", () => {
     expect(text).not.toContain("git commit all uncommitted changes")
   })
 
-  test("ondemand mode: the handover clause is attached; continuation demands reading the handover document first", () => {
-    const text = renderWhole(plan, task, { ondemand: true })
+  test("ondemand mode: the context-budget protocol rides on the steer (budget), without it no protocol; continuation demands reading the handover document first", () => {
+    const text = renderWhole(plan, task, { ondemand: true, budget: true })
     expect(text).toContain("docs/T-002/handoff.md")
-    expect(text).toContain("[DRIVER] This session's context is about to reach the limit")
+    expect(text).toContain("Context-budget protocol")
+    expect(text).toContain("[DRIVER] This session's context has reached the wall")
+    // The protocol block rides on budget (the steer built), not on ondemand
+    // itself: with OPENCODE_AUTO_STEER=off the session gets no protocol.
+    expect(renderWhole(plan, task, { ondemand: true })).not.toContain("Context-budget protocol")
     expect(text).not.toContain("First read docs/T-002/handoff.md")
-    const cont = renderWhole(plan, task, { ondemand: true, continuation: true })
+    const cont = renderWhole(plan, task, { ondemand: true, budget: true, continuation: true })
     expect(cont).toContain("First read docs/T-002/handoff.md")
     expect(cont).toContain("then carry on from there")
+  })
+
+  test("the usage notices carry the figure slots and the handover path; the wind-down band carries the status protocol", () => {
+    const info = renderUsageNoteInfo(task)
+    expect(info).toContain("{{used}}")
+    expect(info).toContain("{{pct}}")
+    expect(info).toContain("{{wall}}")
+    expect(info).toContain("docs/T-002/handoff.md")
+    const winddown = renderUsageNoteWinddown(task)
+    expect(winddown).toContain("{{used}}")
+    expect(winddown).toContain("docs/T-002/handoff.md")
+    expect(winddown).toContain("Status: continue")
+    expect(winddown).toContain("Status: done")
   })
 
   test("no in-session commit demand (state-rule injects the commit principle)", () => {
@@ -700,8 +717,8 @@ describe("renderWhole", () => {
     expect(steer).toContain("Status: done")
   })
 
-  test("test-by-DRIVER: the test execution protocol is injected (can coexist with the ondemand handover clause)", () => {
-    const text = renderWhole(plan, task, { ondemand: true, testByDriver: true, handoverTest: true })
+  test("test-by-DRIVER: the test execution protocol is injected (can coexist with the ondemand context-budget protocol)", () => {
+    const text = renderWhole(plan, task, { ondemand: true, budget: true, testByDriver: true, handoverTest: true })
     expect(text).toContain("Test execution protocol (--test-by-driver)")
     expect(text).toContain("tmp/test.sh")
     expect(text).toContain("docs/T-002/handoff.md")

@@ -55,6 +55,8 @@ import tplSubtask from "../templates/prompts/subtask.md" with { type: "file" }
 import tplTestContinue from "../templates/prompts/test-continue.md" with { type: "file" }
 import tplTestWrapup from "../templates/prompts/test-wrapup.md" with { type: "file" }
 import tplTestResult from "../templates/prompts/test-result.md" with { type: "file" }
+import tplUsageNoteInfo from "../templates/prompts/usage-note-info.md" with { type: "file" }
+import tplUsageNoteWinddown from "../templates/prompts/usage-note-winddown.md" with { type: "file" }
 import tplWhole from "../templates/prompts/whole.md" with { type: "file" }
 import tplWrapup from "../templates/prompts/wrapup.md" with { type: "file" }
 
@@ -97,6 +99,8 @@ const embedded: Record<string, string> = {
   "test-continue": tplTestContinue,
   "test-wrapup": tplTestWrapup,
   "test-result": tplTestResult,
+  "usage-note-info": tplUsageNoteInfo,
+  "usage-note-winddown": tplUsageNoteWinddown,
   whole: tplWhole,
   wrapup: tplWrapup,
   _partials: tplPartials,
@@ -134,6 +138,13 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // the error text and the current time the reset time is resolved against.
   "classify-error": ['"class"', '"resetAt"', "{{error}}", "{{now}}"],
   "test-wrapup": ["{{handoffFile}}", "not dependent on this test run's result"],
+  // Usage notices (plans/0056): the figure slots {{used}}/{{pct}}/{{wall}} are
+  // round-tripped as literals (filled at send time by the driver, the figures
+  // do not exist at render time) — an override dropping them or the handoff
+  // path would steer a notice with no content. The wind-down band carries the
+  // full status protocol like handoff-steer.
+  "usage-note-info": ["{{used}}", "{{pct}}", "{{wall}}", "{{handoffFile}}"],
+  "usage-note-winddown": ["Status: continue", "Status: done", "{{used}}", "{{pct}}", "{{wall}}", "{{handoffFile}}"],
   wrapup: ["Result: PASS", "Result: FAIL"],
 }
 // (decompose family: the checklist format plus the context.md / todo.md

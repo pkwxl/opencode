@@ -28,7 +28,7 @@ import { awaitCacheClaim, enabledSteps, noteClaimContradiction, observeCacheClai
 import { statsModelEvent, type Usage } from "./stats"
 import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
-import { executeTest, resolveTestScript, type Steer, type TestRun } from "./testrun"
+import { executeTest, fillUsageNote, resolveTestScript, steerWall, type Steer, type TestRun } from "./testrun"
 import { steerDue, testHandoverDue, liveUsage, usageSource } from "./usage"
 
 // Liveness probe parameters (plans/0026-session-boundary-hardening-design.md
@@ -131,6 +131,10 @@ export async function watch(
   })
   // The steer is inserted at most once per session.
   let steerSent = false
+  // Usage-note bands already spent (keyed by the band's `at` fraction, plans/
+  // 0056): each band steers at most once; a jump crossing several bands sends
+  // only the highest, and the hard wall spends them all.
+  const noteSent = new Set<number>()
   // Context steps and steer naming (plans/0055 §4.5): under the registry every
   // steer names the model id the session currently runs — i.e. the id of the
   // reached step, so a late steer cannot drop the session back to the base
@@ -632,21 +636,50 @@ export async function watch(
       limit = info.model !== undefined ? limits.get(info.model) : undefined
       pct = limit ? Math.round((used / limit) * 100) : 100
       vlog(`  context: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
-      if (steer && !steerSent && steerDue(tier, now, steer.limit)) {
-        steerSent = true
-        log(`⚠ context used ${formatTokens(used)} tokens reached the ${formatTokens(steer.limit)} cap; inserting a handover hint`)
-        const ok = await steerText(steer.text)
-        if (!ok) {
-          return snapshot({
-            blocked: { type: "blocked", question: "steer dispatch failed (handover hint); cannot continue the session, see the log." },
-          })
+      if (steer) {
+        // Effective wall (plans/0056): the 2×cap budget clamped to 80% of the
+        // model's window when that is smaller — the hard-wall hint must leave
+        // room to write the handover document. Recomputed per measurement, so
+        // a mid-session model step-up widens it naturally.
+        const wall = steerWall(steer.limit, limit)
+        if (!steerSent && steerDue(tier, now, wall)) {
+          // The hard wall supersedes the notice bands (a jump may cross both):
+          // one steer, and the bands count as spent.
+          steerSent = true
+          for (const note of steer.notes) noteSent.add(note.at)
+          log(`⚠ context used ${formatTokens(used)} tokens reached the wall ${formatTokens(wall)}; inserting the handover hint`)
+          const ok = await steerText(steer.text)
+          if (!ok) {
+            return snapshot({
+              blocked: { type: "blocked", question: "steer dispatch failed (handover hint); cannot continue the session, see the log." },
+            })
+          }
+          // The handover hint owns this measurement point: the session is being
+          // wound down by the project's cap, so a step-up steer in the same
+          // breath would only confuse it. A session that keeps working past the
+          // hint steps up at a later measurement (steerSent stays true).
+          // AUTO-RESOLVE: when one measurement crosses both the wall and a step-up point, which steer goes out? -> the handover hint (the wall is the operator's policy for ending the session, and the design keeps the two mechanisms independent without ordering them; a session that survives the hint still steps up at its next measurement)
+          continue
         }
-        // The handover hint owns this measurement point: the session is being
-        // wound down by the project's cap, so a step-up steer in the same
-        // breath would only confuse it. A session that keeps working past the
-        // hint steps up at a later measurement (steerSent stays true).
-        // AUTO-RESOLVE: when one measurement crosses both the handover cap (2×cap) and a step-up point, which steer goes out? -> the handover hint (the project's cap is the operator's policy for ending the session, and the design keeps the two mechanisms independent without ordering them; a session that survives the hint still steps up at its next measurement)
-        continue
+        // Milestone usage notices (plans/0056): informational steers, the
+        // session decides when to hand over. One steer per measurement point —
+        // the highest band newly crossed; lower bands crossed by the same jump
+        // are spent with it. Notices do not suppress the step-up check below.
+        let fire: Steer["notes"][number] | undefined
+        for (const note of steer.notes) {
+          if (now < note.at * wall) break
+          if (!noteSent.has(note.at)) fire = note
+        }
+        if (fire) {
+          for (const note of steer.notes) if (note.at <= fire.at) noteSent.add(note.at)
+          log(`• context used ${formatTokens(used)} tokens (${Math.round((used / wall) * 100)}% of the wall ${formatTokens(wall)}); steering a usage notice`)
+          const ok = await steerText(fillUsageNote(fire.text, now, wall))
+          if (!ok) {
+            return snapshot({
+              blocked: { type: "blocked", question: "steer dispatch failed (usage notice); cannot continue the session, see the log." },
+            })
+          }
+        }
       }
       // Context steps (§4.5): a live figure that crossed the current step's
       // step-up point steps the same session up in place — steer the next

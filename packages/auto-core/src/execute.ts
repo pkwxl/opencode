@@ -23,7 +23,7 @@ import { readChecklist, reloadTask, setForkBase, subtasks, tickSubtask, type Pla
 import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
-import { clientOf, formatTokens, forkEndedSession, seedForkSession } from "./session-api"
+import { clientOf, forkEndedSession, seedForkSession } from "./session-api"
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
@@ -50,9 +50,13 @@ export async function executeWhole(
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
-  // With steer=off (OPENCODE_AUTO_STEER) no handover hint is built, and the
-  // post-session handover check is disabled with it (see usage.ts
-  // sessionHandoverDue); off mode never builds one anyway.
+  // Ondemand context management (plans/0056): with OPENCODE_AUTO_STEER on the
+  // session gets usage notices and may hand itself over at a natural boundary
+  // (a fresh handoff document is honored whatever the figure); the hard-wall
+  // hint fires at min(2×cap, 80% of the model window) in watch. With the
+  // switch off none of it exists — no notices, no hint, the post-session
+  // handover check disabled with it (see usage.ts sessionHandoverDue) and a
+  // spontaneously written document ignored; off mode never builds one anyway.
   const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
   chain.subject = subject
@@ -63,12 +67,19 @@ export async function executeWhole(
   // Status=continue → open a new session on the continuation prompt to continue
   // from the handover (reusing the old session would only hit the cap again at
   // once).
-  const prior = ondemand ? handoffStatus(await readHandoff()) : undefined
+  const priorText = ondemand ? await readHandoff() : ""
+  const prior = ondemand ? handoffStatus(priorText) : undefined
   if (prior === "done") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks execution complete; skipping the whole-task session`)
     return undefined
   }
   let continuation = prior === "continue"
+  // The handoff text the current dispatch was seeded with (recovery doc, or
+  // the document a previous session of this run handed over and the
+  // continuation prompt reads): a post-session document differing from it was
+  // written by the session that just ended — the self-decided handover signal.
+  // A document equal to it is stale (the session ended without touching it).
+  let consumed = priorText
   if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues from the handover document`)
   let feedback = ""
   let retried = false
@@ -85,6 +96,7 @@ export async function executeWhole(
     continuation = false
     feedback = ""
     retried = false
+    consumed = ""
     chain.id = undefined
     chain.pending = undefined
     chain.note = undefined
@@ -105,7 +117,7 @@ export async function executeWhole(
       client,
       plan,
       task,
-      renderWhole(plan, task, { mode: opts.mode, ondemand, continuation }) + feedback,
+      renderWhole(plan, task, { mode: opts.mode, ondemand, continuation, budget: steer !== undefined }) + feedback,
       opts,
       chain,
       steer,
@@ -138,12 +150,23 @@ export async function executeWhole(
     // Ending without hitting the handover threshold (2x cap) = the task
     // finished naturally in a single session; when no steer was built (off
     // mode or OPENCODE_AUTO_STEER=off) it likewise ends naturally, with no
-    // handover check.
-    if (!sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)) return undefined
-    const status = handoffStatus(await readHandoff())
+    // handover check. A fresh handoff document (differing from what this
+    // dispatch was seeded with) is honored whatever the figure — the session
+    // handed itself over at a natural boundary of its own choosing (plans/
+    // 0056); only with the steer built, an off-switch run ignores it.
+    const doc = await readHandoff()
+    const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)
+    const fresh = steer !== undefined && doc !== "" && doc !== consumed
+    if (!due && !fresh) return undefined
+    const status = handoffStatus(doc)
     if (status === "done") return undefined
     if (status === "continue") {
-      log(`↻ ${task.id} context reached the ${formatTokens(cap * 2)} cap; handed over as ${handoffFile(task)}, continuing in a new session`)
+      log(
+        due
+          ? `↻ ${task.id} context reached the handover wall; handed over as ${handoffFile(task)}, continuing in a new session`
+          : `↻ ${task.id} session handed itself over as ${handoffFile(task)}; continuing in a new session`,
+      )
+      consumed = doc
       continuation = true
       feedback = ""
       continue
@@ -154,7 +177,7 @@ export async function executeWhole(
       const redone = await rollbackRedo()
       if (redone === "done") {
         rolled = true
-        log(`↻ ${task.id} context cap reached but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting this task`)
+        log(`↻ ${task.id} handover due but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting this task`)
         continue
       }
       if (redone) return redone
@@ -163,14 +186,14 @@ export async function executeWhole(
       return {
         type: "blocked",
         question:
-          `session hit the context cap but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
+          `session ended with a handover due but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
           `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
       }
     }
-    log(`↻ ${task.id} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
+    log(`↻ ${task.id} handover due but ${handoffFile(task)} was not validly produced; retrying once with feedback`)
     retried = true
     feedback =
-      `\n\nThe last time you ended the session the context had reached its limit, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
+      `\n\nThe last time you ended the session a handover was due, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
       `This is a hard requirement: write that file before ending the session.`
   }
 }
@@ -309,16 +332,12 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
 // Runs one subtask session, then ticks the checklist item on trust: the
 // session self-checks its own work; the whole task is accounted for by the
 // wrap-up report and its result line.
-// handoff-steer applies to subtask sessions too (same mechanism as the
-// ondemand whole-task session, sharing docs/<id>/handoff.md): when a live
-// session's used context reaches 2x --context-limit the driver steers in the
-// handover hint, the session writes the handover document (last line
-// `Status: continue|done`, counted by whether this subtask is done), then a
-// new session continues from the handover, until a natural finish or the
-// handover document marks completion; once the subtask is done the handover
-// document is cleared and the next subtask starts counting anew. Experiment
-// switch OPENCODE_AUTO_STEER=off disables the mechanism (no handover hint
-// injected, no post-session handover check; a natural finish ends it).
+// No context handover here: the session handover mechanism is ondemand-only
+// (plans/0056 — this wiring was retired with it); a subtask session that runs
+// past the usage cap is left to the provider-side compression / cap errors,
+// which go through the existing "session error" path. The interruption-
+// recovery seeding below still reads a handover document left by a run of an
+// earlier release, and the close-out still clears such leftovers.
 export async function runSubtask(
   client: ClientSource,
   plan: Plan,
@@ -365,12 +384,6 @@ export async function runSubtask(
   }
   chain.baseline = baseline
   const strict = strictResumeActive(opts)
-  const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  // With steer=off (OPENCODE_AUTO_STEER) no handover hint is built, and the
-  // post-session handover check is disabled with it (see usage.ts
-  // sessionHandoverDue); --handover-test's test handover is a separate
-  // mechanism and is unaffected.
-  const steer = handoffSteer(autoSwitches().steer, cap, task)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
   // Subtask-directory state protocol (M1.0, plans/0030 D8): done.md already
@@ -398,15 +411,13 @@ export async function runSubtask(
     // ③ A subtask's first session forks from the fork base (the same fork
     // point as the decompose session — fork first, render after, which the
     // warm/cold background section chooses by); no reuse across subtasks
-    // (enforced by the seed chain), while handover continuation and
-    // retry-with-feedback keep the chain's existing mechanisms. No base /
+    // (enforced by the seed chain), while a recovery continuation keeps the
+    // chain's existing mechanisms. No base /
     // fork failure → brand-new session + cold-start prompt (reads context.md).
     let warm = await seedForkSession(client, opts, chain, base, subject)
     let feedback = ""
-    let retried = false
-    // Re-prompt count for the artifact shape check (D2): counted separately
-    // from the handover-document feedback's retried — each of the two loops is
-    // limited to one, neither eating into the other's retry budget.
+    // Re-prompt count for the artifact shape check (D2): one re-prompt with
+    // feedback per subtask, then blocked for a human.
     let shapeRetried = false
     // When a shape-check re-prompt is dispatched through a fork of the
     // just-ended session (revised 2026-09-18), the next round carries the
@@ -414,8 +425,8 @@ export async function runSubtask(
     // working context, and resending the whole thing would only induce
     // starting over from scratch.
     let shapeForked = false
-    // Strict-resume rollback redo (tightened in 3.3 R3): one invalid handover
-    // document (including a test-handover write-check failure) rolls back to
+    // Strict-resume rollback redo (tightened in 3.3 R3): one test-handover
+    // write-check failure rolls back to
     // the subtask baseline and cold-starts a redo, with no retry with
     // feedback; once only — failing again is escalated as a hidden blockage
     // (the working state is already preserved in the stash).
@@ -426,7 +437,6 @@ export async function runSubtask(
       if (done.type !== "ok") return done
       continuation = false
       feedback = ""
-      retried = false
       chain.id = undefined
       chain.pending = undefined
       chain.note = undefined
@@ -454,7 +464,7 @@ export async function runSubtask(
         brief ? feedback.trimStart() : renderSubtask(plan, task, text, { ...opts, continuation, index, warm }) + feedback,
         opts,
         chain,
-        steer,
+        undefined,
         index,
       )
       if (result.type === "blocked") {
@@ -470,89 +480,47 @@ export async function runSubtask(
         }
         return result
       }
-      // Ending without hitting the handover threshold (2x cap) = the subtask
-      // session finished naturally. Completion is never judged by agent
-      // self-report: the artifact shape check runs first (D2/D4/D6,
-      // session-boundary-hardening §4.3/§4.6) — zero-write / missing declared
-      // artifacts / document truncation (including the whole-change scan); any
-      // hit means no tick and no advance (the verdict-layer gap of the T-068
-      // S01 incident), one re-prompt with feedback, still failing → blocked
-      // for a human. Not enabled under dryrun / commit gate off / non-git; a
-      // session ending in a test handover is exempt (its completion criterion
-      // is in testhandoff.md). With steer=off no handover hint is built — a
-      // natural finish ends it and no handover document is demanded;
-      // otherwise a session that ended naturally but over the usage cap would
-      // be wrongly demanded to write a handover document after the fact. An
-      // over-cap ending is left to the provider-side compression / cap errors,
-      // which go through the existing "session error" path (retry in a new
-      // session); disk progress and the unified commit are unaffected.
-      if (!sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)) {
-        if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
-          const problems = await subtaskArtifactProblems(dir, text, baseline)
-          if (problems.length) {
-            if (shapeRetried) {
-              return {
-                type: "blocked",
-                question:
-                  `subtask session ended naturally but the artifact shape check failed (hidden blockage): ${problems.join("; ")}. ` +
-                  `Check the artifacts and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
-              }
+      // Ending = the subtask session finished naturally (no context handover
+      // for subtask sessions, plans/0056; a session over the usage cap hits
+      // the provider-side compression / cap errors and goes through the
+      // existing "session error" path — retry in a new session — with disk
+      // progress and the unified commit unaffected). Completion is never
+      // judged by agent self-report: the artifact shape check runs first
+      // (D2/D4/D6, session-boundary-hardening §4.3/§4.6) — zero-write /
+      // missing declared artifacts / document truncation (including the
+      // whole-change scan); any hit means no tick and no advance (the
+      // verdict-layer gap of the T-068 S01 incident), one re-prompt with
+      // feedback, still failing → blocked for a human. Not enabled under
+      // dryrun / commit gate off / non-git; a session ending in a test
+      // handover is exempt (its completion criterion is in testhandoff.md).
+      if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
+        const problems = await subtaskArtifactProblems(dir, text, baseline)
+        if (problems.length) {
+          if (shapeRetried) {
+            return {
+              type: "blocked",
+              question:
+                `subtask session ended naturally but the artifact shape check failed (hidden blockage): ${problems.join("; ")}. ` +
+                `Check the artifacts and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
             }
-            shapeRetried = true
-            feedback = shapeFeedback(task, index, problems)
-            // The re-prompt continues from a fork of the just-ended session
-            // (revised 2026-09-18): the copy carries all of that session's
-            // working context, and the next round dispatches the feedback
-            // alone; when fork is unavailable (the session is already gone) it
-            // falls back to a brand-new session + the full prompt + feedback.
-            shapeForked = await forkEndedSession(client, chain, subject)
-            // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on
-            // the model of the session that failed the artifact shape check;
-            // undefined without a registry (C2).
-            await statsModelEvent(dir, chain.modelEntry, "reprompt")
-            log(`↻ ${task.id} subtask ${index} ended naturally but the artifact shape check failed; ${shapeForked ? "forked from the original session, " : ""}re-prompting once with feedback`)
-            continue
           }
-        }
-        break
-      }
-      const status = handoffStatus(await readHandoff())
-      if (status === "done") break
-      // Before handover continuation / retry with feedback, commit this
-      // session's output first (the next session continues from a committed
-      // worktree).
-      const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
-      if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
-      if (status === "continue") {
-        log(`↻ ${task.id} subtask ${index} context reached the ${formatTokens(cap * 2)} cap; handed over as ${handoffFile(task)}, continuing in a new session`)
-        continuation = true
-        feedback = ""
-        continue
-      }
-      // Handover-boundary write-check failure (strict resume): one invalid
-      // attempt rolls back and cold-starts the redo.
-      if (!rolled) {
-        const redone = await rollbackRedo()
-        if (redone === "done") {
-          rolled = true
-          log(`↻ ${task.id} subtask ${index} context cap reached but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting`)
+          shapeRetried = true
+          feedback = shapeFeedback(task, index, problems)
+          // The re-prompt continues from a fork of the just-ended session
+          // (revised 2026-09-18): the copy carries all of that session's
+          // working context, and the next round dispatches the feedback
+          // alone; when fork is unavailable (the session is already gone) it
+          // falls back to a brand-new session + the full prompt + feedback.
+          shapeForked = await forkEndedSession(client, chain, subject)
+          // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on
+          // the model of the session that failed the artifact shape check;
+          // undefined without a registry (C2).
+          await statsModelEvent(dir, chain.modelEntry, "reprompt")
+          log(`↻ ${task.id} subtask ${index} ended naturally but the artifact shape check failed; ${shapeForked ? "forked from the original session, " : ""}re-prompting once with feedback`)
           continue
         }
-        if (redone) return redone
       }
-      if (retried) {
-        return {
-          type: "blocked",
-          question:
-            `subtask session hit the context cap but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
-            `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
-        }
-      }
-      log(`↻ ${task.id} subtask ${index} context cap reached but ${handoffFile(task)} was not produced; retrying once with feedback`)
-      retried = true
-      feedback =
-        `\n\nThe last time you ended the session the context had reached its limit, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
-        `This is a hard requirement: write that file before ending the session.`
+      break
     }
   }
   // Subtask done: clear the handover documents (the ondemand handover and the

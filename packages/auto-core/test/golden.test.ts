@@ -29,6 +29,8 @@ import {
   renderTestContinue,
   renderTestResult,
   renderTestWrapup,
+  renderUsageNoteInfo,
+  renderUsageNoteWinddown,
   renderWhole,
   renderWrapup,
   type ScriptRun,
@@ -135,6 +137,7 @@ describe("golden render snapshots", () => {
   test("execution family (subtask/whole-task/wrap-up)", () => {
     golden("subtask", renderSubtask(plan, task, "write the execution logic", { ...execOpts, index: 2 }))
     golden("whole", renderWhole(plan, task, { ...execOpts, ondemand: true }))
+    golden("whole-budget", renderWhole(plan, task, { ...execOpts, ondemand: true, budget: true }))
     golden("wrapup", renderWrapup(plan, task, { mode: migrate, resolves }))
   })
 
@@ -221,6 +224,8 @@ describe("golden render snapshots", () => {
     golden("implement-plan-file", renderImplementPlan({ file: "spec.md", content: "Full plan file (fixed input).", phaseId: "R-01.P01", taskIndex: "docs/R-01/P01-implement/tasks.md", numberStart: 4 }))
     golden("number-recovery", renderNumberRecovery({ floor: 7 }))
     golden("handoff-steer", renderHandoffSteer(task))
+    golden("usage-note-info", renderUsageNoteInfo(task))
+    golden("usage-note-winddown", renderUsageNoteWinddown(task))
     golden("stuck-hint-1", renderStuckHint(stuck(1)))
     golden("stuck-hint-2", renderStuckHint(stuck(2)))
     golden("stuck-hint-3", renderStuckHint(stuck(3)))

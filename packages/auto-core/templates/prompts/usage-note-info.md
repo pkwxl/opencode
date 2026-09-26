@@ -1,0 +1,1 @@
+[DRIVER] context: {{used}} tokens in use — about {{pct}}% of this session's token budget (wall {{wall}}). Informational, keep working. One expectation: structure the remaining work so that, if the budget does run out, it can be handed over at a natural boundary through {{handoffFile}} rather than mid-thought.

@@ -34,9 +34,11 @@ import { reportResult, runWrapup } from "./wrapup"
 // --subtask auto (default): decompose (when subtasks.md has no checklist) →
 // one session per subtask (driver ticks on trust) → wrap-up → closeout.
 // --subtask off: a single whole-task session → wrap-up → closeout.
-// --subtask ondemand: like off, but when the running session's context usage
-// reaches 2x --context-limit the driver steers in a handoff prompt; the session
-// writes docs/<id>/handoff.md and a fresh session continues from it.
+// --subtask ondemand: like off, but the session manages its own context budget
+// (plans/0056): the driver steers milestone usage notices in, the session
+// decides when to hand over and writes docs/<id>/handoff.md, and a fresh
+// session continues from it; the driver's hard-wall hint (min(2x
+// --context-limit, 80% of the model window)) is the last resort.
 // Closeout reads the result line of the task report (docs/<id>/report.md):
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final

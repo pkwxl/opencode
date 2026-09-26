@@ -197,7 +197,7 @@ Unit and outcome states:
 | 恢复保真 | recovery fidelity | `OPENCODE_AUTO_STRICT_RESUME` |
 | 进度记录 | progress record | `.auto/progress.json` |
 | 测试交接 | test handover | `--handover-test`, `src/exec-session.ts` |
-| 会话交接 | session handover | Context limit reached: hint by steer, then a handover document |
+| 会话交接 | session handover | Context budget (ondemand): usage notices, a session-decided handover document, the hard-wall hint as last resort (0056) |
 | 定版 | freeze | Frozen commit (#1), frozen point, frozen tree |
 | 续跑会话 | continuation session | The session that continues after a handover |
 | 在途 | in-flight | In-flight record `.auto/handover.json` |
@@ -341,7 +341,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 | Pair | Rule |
 |---|---|
 | handover / handoff | Prose says **handover**. `handoff` survives only in file names and some identifiers (`handoff.md`, `testhandoff-<n>.md`, `handoff-steer.md`, `handoffStatus`). |
-| 交接 | Say which one: **phase handover** (between phases), **test handover** (`--handover-test`), **session handover** (context limit). |
+| 交接 | Say which one: **phase handover** (between phases), **test handover** (`--handover-test`), **session handover** (context budget). |
 | 回退 / 回滚 / 回落 | **revert to pending** (unit status) / **rollback** (git) / **fallback** (next option). |
 | 降级 | **failover** for models under quota; **capability degradation** for missing agent capabilities. |
 | failover / failback / fallback | Away from the preferred model / back to it / any generic next option. |

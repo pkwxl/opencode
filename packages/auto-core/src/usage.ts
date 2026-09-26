@@ -125,8 +125,10 @@ export function reuseAllowed(prev: { pct: number; used: number | undefined; at: 
   return prev.pct < REUSE_BELOW && prev.used < cap / 2 && now - prev.at <= REUSE_IDLE_MS
 }
 
-// In-turn steer handover hint (watch.ts, used >= steer.limit = 2·cap). Needs
-// a live figure: under `reported` the turn is over before the value exists.
+// In-turn steer machinery (watch.ts: the milestone usage notices and the
+// hard-wall hint, both keyed on the effective wall = min(steer.limit, 80% of
+// the model's window), plans/0056). Needs a live figure: under `reported` the
+// turn is over before the value exists.
 export function steerDue(tier: UsageTier, used: number | undefined, limit: number): boolean {
   return liveUsage(tier) && used !== undefined && used >= limit
 }

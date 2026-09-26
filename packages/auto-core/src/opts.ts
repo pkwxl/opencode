@@ -66,10 +66,10 @@ export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; 
 export type SessionCommit = { type: "ok" } | { type: "failed"; question: string }
 
 // --subtask's three levels: off (one session to completion) / auto (automatic
-// decomposition, the default; a subtask session reaching 2x --context-limit
-// likewise gets a handover document + continuation in a new session) /
-// ondemand (one session executes; at 2x --context-limit a handover document +
-// continuation in a new session).
+// decomposition, the default) / ondemand (one session executes, managing its
+// own context: usage notices and a self-decided handover document continue
+// the task in fresh sessions, plans/0056 — the only mode with a session
+// handover).
 export type SubtaskMode = "off" | "auto" | "ondemand"
 
 // --permission's four levels: the handling policy for permission requests
@@ -109,8 +109,8 @@ export type Opts = {
   dryrun?: boolean
   // The context budget baseline (tokens); default 64k (--context-limit n
   // counts in thousands of tokens): the used-usage threshold for session reuse
-  // is half of it, the handover steer threshold 2x (ondemand whole-task
-  // sessions and auto subtask sessions).
+  // is half of it, the ondemand session-handover wall 2x of it, clamped to 80%
+  // of the model's window (plans/0056).
   contextLimit?: number
   // --permission's four levels: the handling policy for permission requests,
   // default ask-deny (see PermissionMode).
@@ -189,5 +189,6 @@ export type Opts = {
 
 // The default context budget baseline (tokens); overridden by --context-limit n
 // in thousands of tokens. The session-reuse threshold is half of it, the
-// handover steer threshold 2x.
+// ondemand session-handover wall 2x of it (clamped to 80% of the model's
+// window, plans/0056).
 export const DEFAULT_CONTEXT_LIMIT = 64_000

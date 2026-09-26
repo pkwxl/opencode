@@ -14,25 +14,61 @@ import { archivedTestHandoff, latestHandoffSeq, taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { deletedFiles, removeIfUntracked, restoreFile } from "./git"
 import { peekHandover } from "./handover"
-import { log } from "./log"
+import { formatTokens, log } from "./log"
 import type { Opts } from "./opts"
 import type { Task } from "./tasks"
-import { handoffFile, renderHandoffSteer, type TestRunInfo } from "./prompt"
+import { handoffFile, renderHandoffSteer, renderUsageNoteInfo, renderUsageNoteWinddown, type TestRunInfo } from "./prompt"
 import { runScript } from "./script"
 
-// steer: when the context already used by a session in progress reaches the
-// limit, the driver inserts one text into that session (the handoff-steer
-// handover hint; the v2 prompt steers by default, taking effect at the next
-// provider turn boundary).
-export type Steer = { limit: number; text: string }
+// Ondemand context management (OPENCODE_AUTO_STEER, plans/0056): the driver
+// watches a running session's context usage, steers milestone usage notices
+// into it (the `notes` bands, fractions of the effective wall), and the session
+// itself decides when to hand over at a natural boundary; the hard-wall steer
+// (`text`, fired at `limit`) is the last resort. The wall itself is
+// min(limit, 80% of the model's window), computed at the watch measurement
+// point where the window is known — `limit` stays the raw 2×cap budget so the
+// post-session check (usage.ts sessionHandoverDue) keeps its figure rule.
+export type Steer = {
+  limit: number
+  text: string
+  // Milestone notices, ascending by `at` (a fraction of the effective wall):
+  // crossed once, steered once. The text carries literal {{used}}/{{pct}}/
+  // {{wall}} slots filled at send time (fillUsageNote).
+  notes: { at: number; text: string }[]
+}
 
-// Handover steer construction (shared by the two call sites, the ondemand
-// whole-task session and the auto subtask session; exported as a pure
-// function for unit tests): not constructed while the experiment switch
-// OPENCODE_AUTO_STEER is off (on = autoSwitches().steer) — no 2×cap handover
-// hint is injected into a session in progress.
+// Handover steer construction (the ondemand whole-task session; exported as a
+// pure function for unit tests): not constructed while the experiment switch
+// OPENCODE_AUTO_STEER is off (on = autoSwitches().steer) — no usage notices,
+// no hard-wall hint, and the post-session handover check is disabled with it.
 export function handoffSteer(on: boolean, cap: number, task: Task): Steer | undefined {
-  return on ? { limit: cap * 2, text: renderHandoffSteer(task) } : undefined
+  return on
+    ? {
+        limit: cap * 2,
+        text: renderHandoffSteer(task),
+        notes: [
+          { at: 0.5, text: renderUsageNoteInfo(task) },
+          { at: 0.85, text: renderUsageNoteWinddown(task) },
+        ],
+      }
+    : undefined
+}
+
+// Fill a usage note's figure slots at send time (the figures do not exist at
+// render time): tokens formatted like the watch log lines, pct rounded.
+export function fillUsageNote(text: string, used: number, wall: number): string {
+  return text
+    .replaceAll("{{used}}", formatTokens(used))
+    .replaceAll("{{pct}}", String(Math.round((used / wall) * 100)))
+    .replaceAll("{{wall}}", formatTokens(wall))
+}
+
+// The effective wall (plans/0056): the 2×cap budget, clamped to 80% of the
+// model's context window when that is known and smaller — a hard-wall hint at
+// the budget would leave no room to write the handover document on a
+// narrow-window model.
+export function steerWall(limit: number, windowTokens: number | undefined): number {
+  return windowTokens !== undefined ? Math.min(limit, Math.floor(windowTokens * 0.8)) : limit
 }
 
 // The two handover predicates — the post-session check (was handoverDue) and

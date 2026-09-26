@@ -538,24 +538,41 @@ export function renderPriorKnowledge(input: { file: string; brief?: string; mode
   return renderPrompt("prior-knowledge", { ...ctx, qualityRules: intentText("quality", "prior-knowledge", ctx) })
 }
 
-// Handover document (relative to the target directory): shared by ondemand
-// whole-task sessions and auto subtask sessions — the driver inserts the
-// handover steer when the context reaches 2x --context-limit; the session
-// writes its progress into this file, and the trailing line
-// `Status: continue|done` is parsed by the driver. In the subtask case the
-// status counts whether that subtask is done. Constructed through docpaths
-// (the task-directory layout).
+// Handover document (relative to the target directory): written by an ondemand
+// whole-task session when it hands its context over (self-decided at a natural
+// boundary, or after the hard-wall steer; plans/0056) — the session writes its
+// progress into this file, and the trailing line `Status: continue|done` is
+// parsed by the driver. Constructed through docpaths (the task-directory
+// layout).
 export function handoffFile(task: Task): string {
   return taskDoc(task.id, "handoff")
 }
 
-// The handover steer the driver inserts while a session is running (the
-// context reaching the handover threshold, 2x contextLimit; ondemand
-// whole-task sessions and auto subtask sessions).
-// The v2 prompt is a steer by default, entering the session at the next
-// provider-turn boundary.
+// The hard-wall steer the driver inserts while a session is running (usage
+// reached the wall, min(2x contextLimit, 80% of the model window); ondemand
+// whole-task sessions only — the last resort after the usage notices went
+// unacted-on, plans/0056). The v2 prompt is a steer by default, entering the
+// session at the next provider-turn boundary.
 export function renderHandoffSteer(task: Task): string {
   return renderPrompt("handoff-steer", { handoffFile: handoffFile(task) })
+}
+
+// Usage notices steered into a running ondemand whole-task session at budget
+// milestones (plans/0056): the 50% band is informational, the 85% band advises
+// winding down at the next natural boundary. The figures do not exist at
+// render time — the {{used}}/{{pct}}/{{wall}} slots round-trip as literal
+// placeholders that the driver fills at send time (fillUsageNote in
+// src/testrun.ts).
+export function renderUsageNoteInfo(task: Task): string {
+  return renderPrompt("usage-note-info", usageNoteCtx(task))
+}
+
+export function renderUsageNoteWinddown(task: Task): string {
+  return renderPrompt("usage-note-winddown", usageNoteCtx(task))
+}
+
+function usageNoteCtx(task: Task): Ctx {
+  return { handoffFile: handoffFile(task), used: "{{used}}", pct: "{{pct}}", wall: "{{wall}}" }
 }
 
 // Context step-up note (steered into the same session when its context
@@ -607,19 +624,23 @@ export function activeIntentText(section: IntentSection, key: string): string | 
 }
 
 // --subtask off/ondemand: a single session completes the whole task (no
-// subtask decomposition). ondemand additionally carries the handover
-// clause; continuation means the previous session was interrupted by the
-// context limit and must read the handover document before continuing.
+// subtask decomposition). ondemand additionally carries the context-budget
+// protocol (usage notices + self-directed handover, plans/0056) when budget
+// is set — the caller passes it only while the steer is built, so
+// OPENCODE_AUTO_STEER=off renders no protocol and ignores handover documents;
+// continuation means the previous session handed its context over and this
+// one must read the handover document before continuing.
 export function renderWhole(
   plan: Plan,
   task: Task,
-  opts: Opts & { ondemand?: boolean; continuation?: boolean } = {},
+  opts: Opts & { ondemand?: boolean; continuation?: boolean; budget?: boolean } = {},
 ): string {
   const ctx = baseCtx(plan, task, opts)
   return renderPrompt("whole", {
     ...ctx,
     ondemand: Boolean(opts.ondemand),
     continuation: Boolean(opts.continuation),
+    budget: Boolean(opts.budget),
     handoffFile: handoffFile(task),
     // Closing self-check sentence (M1.3, same as renderSubtask but keyed to
     // the whole-task scope): `## quality` / `### self-check-whole`.

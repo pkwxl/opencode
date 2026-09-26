@@ -35,6 +35,7 @@ import { ensureForkBase, runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
 import { flushStats, setStatsClock } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
+import { handoffSteer } from "../src/testrun"
 import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
 import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
@@ -113,15 +114,57 @@ describe("usage tiers", () => {
   test("events: the steer hint goes into the live session once the figure reaches the cap", async () => {
     const agent = make()
     const chain = fresh()
-    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over" }, undefined, DEFAULTS)
+    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over", notes: [] }, undefined, DEFAULTS)
     expect(agent.steers).toEqual(["hand over"])
+    expect(chain.hinted).toBe(true)
+  })
+
+  test("usage notices (plans/0056): each band steers once with the figures filled, at a completed-message measurement point", async () => {
+    const agent = make({
+      turn: (ctx) => [
+        ev.message(ctx.session, `m_${ctx.n}_a`, 10_000),
+        ev.message(ctx.session, `m_${ctx.n}_b`, 60_000),
+        ev.message(ctx.session, `m_${ctx.n}_c`, 70_000),
+        ev.idle(ctx.session),
+      ],
+    })
+    const chain = fresh()
+    // Wall = min(2×50k budget, 80%×100k window) = 80k; bands at 40k / 68k:
+    // 10k crosses nothing, 60k the 50% band, 70k the 85% band.
+    await runSession(agent.client, task, "p", opts, chain, handoffSteer(true, 50_000, task)!, undefined, DEFAULTS)
+    expect(agent.steers).toHaveLength(2)
+    expect(agent.steers[0]).toContain("60.0k")
+    expect(agent.steers[0]).toContain("75%")
+    expect(agent.steers[0]).toContain("80.0k")
+    expect(agent.steers[1]).toContain("70.0k")
+    expect(agent.steers[1]).toContain("88%")
+    // Informational steers only: not a handover, nothing hinted.
+    expect(chain.hinted).toBe(false)
+  })
+
+  test("a jump crossing bands and the wall together sends the hard-wall hint only, and the bands are spent with it", async () => {
+    const agent = make({ turn: (ctx) => [ev.message(ctx.session, `m_${ctx.n}`, 90_000), ev.idle(ctx.session)] })
+    const chain = fresh()
+    await runSession(agent.client, task, "p", opts, chain, handoffSteer(true, 50_000, task)!, undefined, DEFAULTS)
+    expect(agent.steers).toHaveLength(1)
+    expect(agent.steers[0]).toContain("reached the wall")
+    expect(chain.hinted).toBe(true)
+  })
+
+  test("the wall is clamped to 80% of the model's window: a figure under the 2×cap budget but past the window headroom hands over", async () => {
+    const agent = make({ turn: (ctx) => [ev.message(ctx.session, `m_${ctx.n}`, 85_000), ev.idle(ctx.session)] })
+    const chain = fresh()
+    // Budget 500k ≫ the 100k window: without the clamp (85k < 500k) no hint.
+    await runSession(agent.client, task, "p", opts, chain, handoffSteer(true, 250_000, task)!, undefined, DEFAULTS)
+    expect(agent.steers).toHaveLength(1)
+    expect(agent.steers[0]).toContain("reached the wall")
     expect(chain.hinted).toBe(true)
   })
 
   test("reported: the same figure arrives at turn end, so no in-turn hint", async () => {
     const agent = make({ capabilities: { usage: "reported" } })
     const chain = fresh()
-    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over" }, undefined, DEFAULTS)
+    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over", notes: [] }, undefined, DEFAULTS)
     expect(agent.steers).toEqual([])
     expect(chain.used).toBe(1000)
   })
@@ -129,7 +172,7 @@ describe("usage tiers", () => {
   test("none: nothing measured — no hint, no figure, the share counts as full", async () => {
     const agent = make({ capabilities: { usage: "none" } })
     const chain = fresh()
-    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over" }, undefined, DEFAULTS)
+    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over", notes: [] }, undefined, DEFAULTS)
     expect(agent.steers).toEqual([])
     expect(chain.used).toBe(0)
     expect(chain.pct).toBe(100)
@@ -347,8 +390,8 @@ describe("the barest agent", () => {
     const switches = { ...on, ...degraded.switches }
     const agent = make({ capabilities: BARE_CAPABILITIES })
     const chain = fresh()
-    const first = await runSession(agent.client, task, "one", opts, chain, { limit: 1, text: "hand over" }, undefined, switches)
-    const second = await runSession(agent.client, task, "two", opts, chain, { limit: 1, text: "hand over" }, undefined, switches)
+    const first = await runSession(agent.client, task, "one", opts, chain, { limit: 1, text: "hand over", notes: [] }, undefined, switches)
+    const second = await runSession(agent.client, task, "two", opts, chain, { limit: 1, text: "hand over", notes: [] }, undefined, switches)
     expect([first, second]).toEqual([
       { type: "idle", lastText: "done: one", testHandover: false },
       { type: "idle", lastText: "done: two", testHandover: false },
@@ -915,7 +958,7 @@ describe("context steps (plans/0055 §4.5)", () => {
       },
     })
     const chain = deepChain()
-    const result = await runSession(agent.client, task, "p", stepsOpts(), chain, { limit: 70_000, text: "hand over" }, undefined, DEFAULTS)
+    const result = await runSession(agent.client, task, "p", stepsOpts(), chain, { limit: 70_000, text: "hand over", notes: [] }, undefined, DEFAULTS)
     expect(result.type).toBe("idle")
     const steers = steerInputs(agent)
     expect(steers).toHaveLength(2)
@@ -1087,7 +1130,7 @@ describe("context steps (plans/0055 §4.5)", () => {
   test("no registry: steers stay exactly as today (no model key)", async () => {
     const agent = make()
     const chain = fresh()
-    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over" }, undefined, DEFAULTS)
+    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over", notes: [] }, undefined, DEFAULTS)
     expect(agent.argsOf("promptAsync")).toEqual([[{ session: "ses_1", text: "hand over" }]])
     expect(chain.modelStep).toBeUndefined()
   })

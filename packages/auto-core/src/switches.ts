@@ -160,8 +160,13 @@ export type Switches = {
   // Fine-grained decompose: the decompose-<phase> template injects the fine-grained
   // criteria section (still bound by the lower-bound guard).
   fine: boolean
-  // Over-limit handover steer (2×cap): off disables both the in-session handover
-  // injection and the post-session handover decision (a natural finish just wraps up;
+  // Ondemand context management (default on, plans/0056): the driver steers
+  // milestone usage notices into a live ondemand whole-task session (50%/85% of
+  // the effective wall) and the session itself decides when to hand over at a
+  // natural boundary (a fresh handoff.md is honored whatever the figure); the
+  // hard-wall hint (min(2×cap, 80% of the window)) stays as the last resort.
+  // off disables the whole mechanism — no notices, no hard-wall hint, and a
+  // handoff document no longer demanded (a natural finish just wraps up;
   // --handover-test's test handover is an independent mechanism, unaffected).
   steer: boolean
   // Step mode: phase/task/subtask hard-pause at the matching (and coarser) boundaries,
@@ -275,7 +280,7 @@ const SWITCH_DEFAULTS: Switches = {
   fork: true,
   forkBase: "digest",
   fine: true,
-  steer: false,
+  steer: true,
   step: "off",
   refCheck: false,
   reuseSession: false,

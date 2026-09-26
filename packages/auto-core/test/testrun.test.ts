@@ -14,9 +14,11 @@ import { saveHandover } from "../src/handover"
 import { planOf } from "./fixtures/units"
 import {
   cleanTestHandoffs,
+  fillUsageNote,
   handoffSteer,
   resolveTestScript,
   restoreTestHandoffs,
+  steerWall,
 } from "../src/testrun"
 import { sessionHandoverDue, testHandoverDue } from "../src/usage"
 import { task } from "./fixtures/runner"
@@ -33,6 +35,25 @@ describe("handoffSteer / sessionHandoverDue (OPENCODE_AUTO_STEER wiring)", () =>
     expect(steer).toBeDefined()
     expect(steer.limit).toBe(cap * 2)
     expect(steer.text).toContain("docs/T-001/handoff.md")
+    // The notice bands (plans/0056): 50% informational, 85% wind-down, each
+    // text carrying the figure slots watch fills at send time.
+    expect(steer.notes.map((note) => note.at)).toEqual([0.5, 0.85])
+    expect(steer.notes[0]!.text).toContain("{{used}}")
+    expect(steer.notes[0]!.text).toContain("{{pct}}")
+    expect(steer.notes[0]!.text).toContain("{{wall}}")
+    expect(steer.notes[1]!.text).toContain("docs/T-001/handoff.md")
+    expect(steer.notes[1]!.text).toContain("Status: continue")
+  })
+
+  test("fillUsageNote: the figure slots become the formatted figures", () => {
+    const text = fillUsageNote("[DRIVER] context: {{used}} — {{pct}}% of the budget (wall {{wall}})", 60_000, 80_000)
+    expect(text).toBe("[DRIVER] context: 60.0k — 75% of the budget (wall 80.0k)")
+  })
+
+  test("steerWall: the budget clamped to 80% of the window when that is smaller; an unknown window keeps the budget", () => {
+    expect(steerWall(128_000, undefined)).toBe(128_000)
+    expect(steerWall(128_000, 200_000)).toBe(128_000)
+    expect(steerWall(128_000, 100_000)).toBe(80_000)
   })
 
   test("steer=off: no handover steer built (no handover hint injected into the session)", () => {
