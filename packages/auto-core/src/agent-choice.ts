@@ -10,11 +10,20 @@
 // just before the host starts, and (opencode) its external server. Without a
 // registry the host starts exactly as before. One host per profile, started
 // lazily, is the agent pool's job; until then the run has this one agent.
+//
+// The profile's opencode host also spawns with the key rings' current keys
+// as config references (§4.3): activateRings records the run's rings here —
+// the one place that knows whether the opencode server is managed or
+// external — and the spawn config goes to the host through
+// AgentHostOptions.config. A caller-supplied host (`managed`) is taken as
+// is, so its rings never activate and never rotate: that host's spawn
+// config was its caller's to build.
 import type { AgentHost, AgentHostOptions } from "./agent/types"
 import { opencodeHost } from "./agent/opencode/server"
 import { claudeHost } from "./agent/claude/host"
 import { profileLine, resolveProfileEnv } from "./agent-env"
 import { degrade, permissionPreset } from "./capability"
+import { activateRings, spawnKeyConfig } from "./keyring"
 import { log } from "./log"
 import type { ModelRegistry, RegistryAgentProfile } from "./models"
 import type { PermissionMode } from "./opts"
@@ -68,7 +77,7 @@ export async function startAgent(
 ): Promise<{ host: AgentHost; error?: string } | { host?: undefined; error: string }> {
   // The permission preset reaches only agents without permission events (MA.4).
   const agent = chooseAgent(opts.agent)
-  let fromProfile: Pick<AgentHostOptions, "bin" | "env" | "server"> = {}
+  let fromProfile: Pick<AgentHostOptions, "bin" | "env" | "server" | "config"> = {}
   if (!opts.managed && opts.registry) {
     const profile = agentProfileFor(opts.registry, agent)
     if (!profile) log(`◇ the model registry has no agent profile of adapter ${agent?.name ?? "opencode"}; the agent starts without one`)
@@ -76,11 +85,24 @@ export async function startAgent(
       const resolved = await resolveProfileEnv(profile)
       if ("problems" in resolved) return { error: resolved.problems.join("\n") }
       log(profileLine(profile))
+      // Key rings (plans/0055 §4.3): an opencode host spawns with the rings'
+      // current keys as config references — opencode substitutes each
+      // reference in its own process; the driver never reads a value. Under
+      // an external server (--server, OPENCODE_AUTO_SERVER, the profile's
+      // server) the rings stay inactive: no config, no rotation, and the
+      // run-start routing block says so.
+      let config: Record<string, unknown> | undefined
+      if (profile.adapter === "opencode") {
+        const external = Boolean(opts.server || process.env.OPENCODE_AUTO_SERVER || profile.server)
+        activateRings(opts.registry, external)
+        if (!external) config = spawnKeyConfig()
+      }
       fromProfile = {
         ...(profile.bin !== undefined ? { bin: profile.bin } : {}),
         ...(profile.env?.size ? { env: resolved.env } : {}),
         // --server and OPENCODE_AUTO_SERVER override the profile's server.
         ...(profile.server !== undefined ? { server: opts.server || process.env.OPENCODE_AUTO_SERVER || profile.server } : {}),
+        ...(config !== undefined ? { config } : {}),
       }
     }
   }

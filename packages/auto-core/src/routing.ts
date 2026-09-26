@@ -11,6 +11,7 @@
 // Without a registry nothing here runs: the dispatch resolvers keep their
 // env-switch path (resolveModel, src/chain.ts), byte for byte.
 import { downMarks, failbackOverride } from "./failback"
+import { ringHasUsableKey, ringInactiveNote, ringLabel } from "./keyring"
 import { log } from "./log"
 import { candidateList } from "./model-route"
 import { formatWindowState, windowState } from "./model-window"
@@ -66,8 +67,9 @@ export function nowOf(facts: RoutingFacts): number {
 
 // The selection context of one dispatch: the run facts plus the volatile run
 // state (the policy of OPENCODE_AUTO_MODEL, the /failback override, the down
-// marks) and the live context windows when the caller has them. The marks map
-// is the live module map (never replaced), the override is read per call.
+// marks, the key rings' usable-key predicate) and the live context windows
+// when the caller has them. The marks map and the rings are the live module
+// state (never replaced), the override is read per call.
 export function selectContext(
   facts: RoutingFacts,
   switches: Switches,
@@ -82,6 +84,7 @@ export function selectContext(
     policy: switches.model,
     override: failbackOverride(),
     marks: downMarks(),
+    ringUsable: ringHasUsableKey,
     ...(limits !== undefined ? { limits } : {}),
   }
 }
@@ -155,10 +158,15 @@ export function dispatchCoverageProblems(
 }
 
 // The run-start routing block (§6.5): each tier's list with every model's
-// agent, window state now and key-ring size, the routes in force, the agent
-// filter, the project-layer marks and the unused-model notes — and the R6
-// note when no tier uses the default agent.
-// AUTO-DECISION: the ring is shown as the entry's declared key count (the references the registry validates); key rotation itself is a later step, so the count is the fleet's shape, not a live position
+// agent, window state now and key-ring state (the live position by
+// reference name while the rings are active, the declared size otherwise),
+// the routes in force, the agent filter, the project-layer marks and the
+// unused-model notes — and the R6 note when no tier uses the default agent.
+// AUTO-DECISION: before the run's agent starts (unit tests of the block),
+// the ring shows the entry's declared key count — the references the
+// registry validates — because no live position exists yet; under an
+// external server the same shape is shown, plus the inactive note below
+// (keyring.ts owns both labels)
 export function logRunRouting(facts: RoutingFacts): void {
   const { registry } = facts
   const now = nowOf(facts)
@@ -174,12 +182,13 @@ export function logRunRouting(facts: RoutingFacts): void {
       const entry = registry.models.get(name)
       if (entry === undefined) return name
       const state = formatWindowState(windowState(entry, registry.tz, now), registry.tz, now)
-      const ring = entry.keys?.length ?? 0
       const project = entry.layer === "project" ? " · project layer" : ""
-      return `${name} (${entry.agent}, ${state}, ring ${ring}${project})`
+      return `${name} (${entry.agent}, ${state}, ring ${ringLabel(entry)}${project})`
     })
     log(`${label} ${shown.join(" → ") || "(empty)"}`)
   }
+  const inactive = ringInactiveNote()
+  if (inactive !== undefined) log(inactive)
   if (registry.routes.size) {
     const routes = [...registry.routes.values()].map((route) =>
       `${route.key} → ${"tier" in route ? `tier ${route.tier}` : `models ${route.names.join(", ")}`} [${route.layer} layer]`,

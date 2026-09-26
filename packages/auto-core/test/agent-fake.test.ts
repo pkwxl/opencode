@@ -10,11 +10,11 @@
 // adapter's mapping end to end; test/agent-claude.test.ts does the same for
 // claude. This file is the agent-neutral layer between them.
 
-import { beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentEvent } from "../src/agent/types"
+import type { AgentEvent, AgentHost } from "../src/agent/types"
 import { attempt } from "../src/attempt"
 import { degrade } from "../src/capability"
 import type { SessionChain } from "../src/chain"
@@ -22,9 +22,10 @@ import type { Interactive } from "../src/interactive"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models"
 import type { Opts } from "../src/opts"
 import { isModelDown, resetFailback, clearDownMarks } from "../src/failback"
+import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from "../src/keyring"
 import { resetSteps } from "../src/model-step"
 import { parseWindow } from "../src/model-window"
-import type { RoutingFacts } from "../src/routing"
+import { logRunRouting, type RoutingFacts } from "../src/routing"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
 import { flushStats, setStatsClock } from "../src/stats"
@@ -630,6 +631,199 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
     expect(chain.modelEntry).toBe("w")
     expect(now).toBe(Date.parse("2026-09-25T18:00:00Z"))
+  })
+})
+
+// Key rings (plans/0055 §4.3, §7 step 1): a quota/auth/rate failure on a
+// ringed provider first rotates the ring — the current key is marked down,
+// the next key goes into the spawn config, the managed server restarts and
+// the SAME model continues from a fork of the failed session. An exhausted
+// ring falls through to model failover; a cleared key mark never moves the
+// ring back; under an external server the rings are inactive, with a note.
+describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
+  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+  const KEY_A = { kind: "env" as const, name: "PROV_KEY_A", ref: "{env:PROV_KEY_A}", label: "PROV_KEY_A" }
+  const KEY_B = { kind: "env" as const, name: "PROV_KEY_B", ref: "{env:PROV_KEY_B}", label: "PROV_KEY_B" }
+  const MODELS = [
+    entry("a", { model: "prov/a", provider: "prov", keys: [KEY_A, KEY_B] }),
+    entry("b", { model: "other/b", provider: "other" }),
+  ]
+
+  const facts = (): RoutingFacts => ({
+    registry: {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map(MODELS.map((item) => [item.name, item])),
+      tiers: { deep: tierList("deep", ["a", "b"]), simple: tierList("simple", ["b"]) },
+      routes: new Map(),
+      unused: [],
+    },
+    agentFilter: "opencode",
+    filterSource: undefined,
+    defaultAgent: "opencode",
+  })
+  const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
+
+  // A managed-host double: restart and setConfig are recorded, nothing
+  // really restarts (the fake agent keeps answering for the same server).
+  const fakeHost = () => {
+    const restarts: string[] = []
+    const configs: (Record<string, unknown> | undefined)[] = []
+    const host: AgentHost = {
+      client: undefined as never,
+      syncContext: async () => {},
+      restart: async (reason) => {
+        restarts.push(reason)
+        return true
+      },
+      setConfig: (config) => {
+        configs.push(config)
+      },
+      close: () => {},
+    }
+    return { host, restarts, configs }
+  }
+
+  // A turn that fails with the given class on the first n prompts (0-token
+  // stubs never fork well, so each failed turn also measures 5000 tokens).
+  const classTurn = (message: string, statusCode?: number, fails = 1) => (ctx: { session: string; n: number }): AgentEvent[] | undefined =>
+    ctx.n <= fails
+      ? [ev.message(ctx.session, `msg_fail_${ctx.n}`, 5000), ev.error(ctx.session, { name: "APIError", message, ...(statusCode !== undefined ? { statusCode } : {}), isRetryable: message.includes("quota") ? false : undefined }), ev.idle(ctx.session)]
+      : undefined
+
+  const optsWith = (host: AgentHost, routing: RoutingFacts): Opts => ({ routing, server: host })
+
+  beforeEach(() => {
+    resetFailback()
+    resetKeyring()
+  })
+  afterEach(() => {
+    resetKeyring()
+  })
+
+  test("quota rotates to the next key: host restart, spawn config reference, same model from a fork", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      const routing = facts()
+      activateRings(routing.registry, false)
+      const agent = make({ turn: classTurn("usage limit reached, quota exceeded") })
+      const { host, restarts, configs } = fakeHost()
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", optsWith(host, routing), chain, undefined, undefined, DEFAULTS)
+      expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+      // The same model was re-dispatched from a fork of the failed session.
+      expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
+      expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
+      expect(agent.prompts[1]!.text).toContain("next key of the ring")
+      expect(chain.modelEntry).toBe("a")
+      expect(isModelDown("a", Date.now())).toBe(false)
+      // The host restarted once on the next key, and the spawn config names
+      // the reference only — never a value.
+      expect(restarts).toHaveLength(1)
+      expect(restarts[0]).toContain("key 2/2 PROV_KEY_B")
+      expect(configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } }])
+      expect(lines.some((line) => line.includes("key 1/2 PROV_KEY_A marked down, continuing the same model on key 2/2 PROV_KEY_B"))).toBe(true)
+      expect(lines.join("\n")).not.toContain("sk-")
+    } finally {
+      printed.mockRestore()
+    }
+  })
+
+  test("an exhausted ring falls through to model failover on the next candidate", async () => {
+    const routing = facts()
+    activateRings(routing.registry, false)
+    const agent = make({ turn: classTurn("usage limit reached, quota exceeded", undefined, 2) })
+    const { host, restarts, configs } = fakeHost()
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", optsWith(host, routing), chain, undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    // a fails on key A (rotation), fails again on key B (exhausted): the
+    // model itself is marked down and b takes over via a fork.
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a", "other/b"])
+    expect(restarts).toHaveLength(1)
+    expect(configs).toHaveLength(1)
+    expect(chain.modelEntry).toBe("b")
+    expect(isModelDown("a", Date.now())).toBe(true)
+    // Every key of the ring is down now, so §6.2 rule 4 keeps a out (the
+    // spawn config still names the current key — a restart for any other
+    // reason spawns on the last position).
+    expect(ringHasUsableKey("prov", Date.now())).toBe(false)
+    expect(spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
+  })
+
+  test("an auth failure counts as a key failure: the ring rotates too", async () => {
+    const routing = facts()
+    activateRings(routing.registry, false)
+    // 401 with no isRetryable statement: the classifier reads auth (a revoked
+    // key looks like one).
+    const agent = make({ turn: classTurn("unauthorized", 401) })
+    const { host, restarts, configs } = fakeHost()
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", optsWith(host, routing), chain, undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
+    expect(restarts).toHaveLength(1)
+    expect(configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } }])
+    expect(chain.modelEntry).toBe("a")
+  })
+
+  test("a cleared key mark does not move the ring back; only a failure of the current key advances it (wrapping onto the cleared key)", async () => {
+    const routing = facts()
+    activateRings(routing.registry, false)
+    // First dispatch: turn 1 fails with quota, the ring rotates A → B.
+    const first = fakeHost()
+    const firstAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
+    await runSession(firstAgent.client, task, "p", optsWith(first.host, routing), deepChain(), undefined, undefined, DEFAULTS)
+    expect(first.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } }])
+    // A scope boundary clears every mark: the ring stays on key B (the
+    // config still names it — no restart churn) and the model is eligible
+    // again, so the next dispatch selects a.
+    clearDownMarks("task", "task")
+    expect(spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
+    // That dispatch fails on key B: only now does the ring move — wrapping
+    // onto key A, whose mark the boundary cleared.
+    const second = fakeHost()
+    const secondAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
+    const chain = deepChain()
+    const result = await runSession(secondAgent.client, task, "q", optsWith(second.host, routing), chain, undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    expect(secondAgent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
+    expect(second.restarts).toHaveLength(1)
+    expect(second.configs).toEqual([{ provider: { prov: { options: { apiKey: "{env:PROV_KEY_A}" } } } }])
+    expect(chain.modelEntry).toBe("a")
+  })
+
+  test("under an external server the rings are inactive, with a note, and quota goes straight to model failover", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      const routing = facts()
+      activateRings(routing.registry, true)
+      logRunRouting(routing)
+      expect(lines.some((line) => line.includes("key rings are inactive") && line.includes("external"))).toBe(true)
+      expect(lines.some((line) => line.includes("ring 2"))).toBe(true)
+      expect(lines.some((line) => line.includes("ring 1/2"))).toBe(false)
+      // A quota failure cannot rotate (no restart possible): the model
+      // failover of step 2 takes over directly.
+      const agent = make({ turn: classTurn("usage limit reached, quota exceeded") })
+      const { host, restarts, configs } = fakeHost()
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", optsWith(host, routing), chain, undefined, undefined, DEFAULTS)
+      expect(result.type).toBe("idle")
+      expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "other/b"])
+      expect(restarts).toEqual([])
+      expect(configs).toEqual([])
+      expect(chain.modelEntry).toBe("b")
+    } finally {
+      printed.mockRestore()
+    }
   })
 })
 

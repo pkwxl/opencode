@@ -3,6 +3,7 @@
 // the run start (§6.3). The dispatch behavior these facts drive is covered
 // by test/agent-fake.test.ts; the selection core itself by test/select.test.ts.
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
+import { activateRings, commitRotation, resetKeyring, ringRotation } from "../src/keyring"
 import { parseWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models"
 import { phaseType } from "../src/phases/registry"
@@ -42,6 +43,7 @@ describe("the run-start routing block (§6.5)", () => {
   })
   afterEach(() => {
     printed.length = 0
+    resetKeyring()
     seen.mockRestore()
     seen = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       printed.push(args.map((arg) => String(arg)).join(" "))
@@ -86,6 +88,30 @@ describe("the run-start routing block (§6.5)", () => {
     expect(printed).toContain(
       "ℹ no tier lists a model on the default agent claude (config agent): raw OPENCODE_AUTO_MODEL values and unqualified session records still use it",
     )
+  })
+
+  test("active rings show the live position by reference name; an external server shows the declared size and the inactive note", () => {
+    const key = (name: string) => ({ kind: "env" as const, name, ref: `{env:${name}}`, label: name })
+    const models = [
+      entry("glm", { model: "zhipuai/glm-4.6", provider: "zhipuai", keys: [key("ZHIPU_KEY_A"), key("ZHIPU_KEY_B"), key("ZHIPU_KEY_C")] }),
+      entry("k3", { model: "moonshotai/kimi-k3-256k", provider: "moonshotai" }),
+    ]
+    const reg = registry(models, { deep: { tier: "deep", names: ["glm", "k3"], layer: "operator" }, simple: { tier: "simple", names: ["k3"], layer: "operator" } })
+    // A managed server: the tier line names the ring's current key.
+    activateRings(reg, false)
+    logRunRouting(facts(reg))
+    expect(printed).toContain("◇ tier deep [operator layer]: glm (opencode, open, ring 1/3 ZHIPU_KEY_A) → k3 (opencode, open, ring 0)")
+    // A rotation moves the display: the position never moves back on its own.
+    commitRotation(ringRotation("zhipuai", NOW)!)
+    printed.length = 0
+    logRunRouting(facts(reg))
+    expect(printed).toContain("◇ tier deep [operator layer]: glm (opencode, open, ring 2/3 ZHIPU_KEY_B) → k3 (opencode, open, ring 0)")
+    // An external server: the declared size only, plus the inactive note.
+    activateRings(reg, true)
+    printed.length = 0
+    logRunRouting(facts(reg))
+    expect(printed).toContain("◇ tier deep [operator layer]: glm (opencode, open, ring 3) → k3 (opencode, open, ring 0)")
+    expect(printed.some((line) => line.startsWith("ℹ key rings are inactive:"))).toBe(true)
   })
 })
 

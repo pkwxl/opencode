@@ -117,6 +117,10 @@ const CLASSIFIED: Record<string, Domain> = {
   handover: "driver",
   hibernate: "driver",
   interactive: "driver",
+  // Key rings of the model registry (plans/0055 §4.3): per-provider rings,
+  // the ring position and the spawn config content, in memory only; sits
+  // below the session layer, above the agent domain (§12).
+  keyring: "driver",
   knowledge: "driver",
   // The run lock .auto/run.lock (plans/0053 D1–D3).
   lock: "driver",
@@ -332,6 +336,33 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
       "models-describe",
     ],
     why: "the run's routing facts wrap selection for every dispatch under a registry (plans/0055 §6): attempt, session, unit-commit, the loop and preflight call it, so it must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the agent start, an agent host or the models command's data",
+  },
+  // AUTO-DECISION: keyring gets a one-way rule besides its classification row (selection's context, the routing block, the agent start and the session escalation all read it from below the session layer, so an upward import would form a cycle; §12 places it below session, above the agent domain)
+  {
+    from: "keyring",
+    to: [
+      "loop",
+      "loop-phase",
+      "loop-plan",
+      "loop-task",
+      "loop-preflight",
+      "runner",
+      "artifact",
+      "session",
+      "attempt",
+      "watch",
+      "exec-session",
+      "execute",
+      "unit-commit",
+      "interactive",
+      "routing",
+      "select",
+      "agent-choice",
+      "agent/opencode/server",
+      "agent/claude/host",
+      "models-describe",
+    ],
+    why: "key rings are run state over the loaded registry (plans/0055 §4.3): selection's ring predicate, the run-start routing block, the agent start (activation and spawn config) and the session escalation read them, so the module must not import the loop, the session-driving layer, selection or its context wrapper, the agent start or an agent host — it only holds references and never logs",
   },
   {
     from: "watch",

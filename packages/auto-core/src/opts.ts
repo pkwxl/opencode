@@ -67,8 +67,11 @@ export type Opts = {
   interactive?: Interactive
   // Agent host control (AgentHost minus client/close): syncContext before a new
   // session (opencode restarts its server when AGENTS.md changed), restart on
-  // a network-class session error before retrying.
-  server?: Pick<AgentHost, "syncContext" | "restart">
+  // a network-class session error before retrying, and setConfig (opencode)
+  // before a key-ring rotation restart re-spawns with the next key's config
+  // reference (plans/0055 §4.3; absent on hosts that spawn without
+  // driver-supplied config).
+  server?: Pick<AgentHost, "syncContext" | "restart" | "setConfig">
   // driver 托管脚本的看门狗: 持续无输出的判定窗口(缺省 10 分钟)与绝对时长上限
   // (缺省不设;config 的 idleTime / idleMax 以分钟设定)。
   idleMs?: number

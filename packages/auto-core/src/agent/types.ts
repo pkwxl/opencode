@@ -300,5 +300,12 @@ export interface AgentHost {
   // Replace the running instance; false when the adapter does not manage it
   // (an external server).
   restart(reason: string): Promise<boolean>
+  // Replaces the config content the next spawn uses (opencode only; key
+  // rings rotate the provider apiKey this way, plans/0055 §4.3). Absent on
+  // hosts that never spawn with driver-supplied config — rotation is simply
+  // not available for them, and the caller falls back to model failover.
+  // The fifth conscious amendment of this frozen file (0055 §12).
+  // AUTO-DECISION: setConfig rides the AgentHost interface as an optional method instead of the driver feature-detecting the opencode host (the session layer must not import an adapter module — that would pull the SDK into its import graph — and an optional method states the capability the same way AgentCapabilities does)
+  setConfig?(config: Readonly<Record<string, unknown>> | undefined): void
   close(): void
 }

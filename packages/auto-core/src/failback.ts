@@ -112,6 +112,13 @@ export function isKeyDown(provider: string, key: string, now: number): boolean {
   return mark !== undefined && (mark.until === undefined || mark.until > now)
 }
 
+// Clears one provider's key marks: the recovery probe's ring half (§6.3 —
+// the probe candidate ignores the down marks and the ring). The ring
+// position itself lives in src/keyring.ts and never moves here.
+export function clearKeyDownMarks(provider: string): void {
+  downKeys.get(provider)?.clear()
+}
+
 // Marks at a scope boundary (§6.4): the boundary clears every mark the scope
 // covers — phase clears under every scope, task under task (default) and
 // finer, and "session" is the new-session start of scope=session, which is

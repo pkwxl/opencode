@@ -10,7 +10,7 @@ import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
 import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-core/phases"
 import { renderText } from "@opencode-ai/auto-core/template"
-import { opencodeHost } from "@opencode-ai/auto-core/agent/opencode/server"
+import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/server"
 import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
 import { estimateTokens } from "@opencode-ai/auto-core/usage"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
@@ -322,6 +322,122 @@ test.skipIf(!(E2E && STEPS_PAIR.length >= 2))(
     }
   },
   { timeout: 900_000 },
+)
+
+// A real two-key rotation smoke (auto-core plans/0055 §4.3, §13 S3): a
+// deliberately exhausted first key rotates the ring onto a working second
+// key by restarting the managed server, and the same model finishes the
+// task. Opt-in like the e2e above, and additionally naming the model id and
+// the two key references exactly as the registry writes them:
+//   OPENCODE_AUTO_E2E=1 OPENCODE_AUTO_E2E_KEYS="prov/model,{env:PROV_KEY_DEAD},{env:PROV_KEY_LIVE}" \
+//     bun test test/e2e.test.ts -t "key ring"
+// Environment contract (read before running):
+//   - every `{env:}` reference's variable must be set and non-empty in this
+//     process (the run-start reference check refuses otherwise, and the
+//     spawned opencode server substitutes the reference from its own
+//     environment, which is this process's);
+//   - the first key must be deliberately dead in a way the error-wording
+//     classifier recognizes (401/403, quota or balance wording), so the
+//     failure settles as auth/quota and escalates to the ring instead of
+//     looping through the agent's own retries;
+//   - the provider's own environment variable(s) must be UNSET here, so the
+//     config apiKey is the only key in play — this is the F6 check: a
+//     provider whose loader picks its own env/auth token over a config key
+//     never rotates (the first dispatch would succeed on the ambient
+//     credential) and this smoke fails, which is the documented answer for
+//     whether that provider supports a ring.
+const KEYS_SPEC = (process.env.OPENCODE_AUTO_E2E_KEYS ?? "")
+  .split(",")
+  .map((part) => part.trim())
+  .filter(Boolean)
+
+test.skipIf(!(E2E && KEYS_SPEC.length >= 3))(
+  "a real key ring: the exhausted first key rotates to the second and the same model finishes (checks the provider honors a config key)",
+  async () => {
+    const [modelId, deadRef, liveRef] = KEYS_SPEC as [string, string, string]
+    const dir = await mkdtemp(join(tmpdir(), "auto-e2e-keys-"))
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      await establishRound(dir, { phases: "m" })
+      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
+      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(await Bun.file(templateAgent).text(), {}))
+      // The project layer is the whole registry: one ringed entry, two keys,
+      // the dead one first.
+      await Bun.write(
+        join(dir, ".opencode/auto/models.json"),
+        JSON.stringify({ models: { ringed: { agent: "opencode", model: modelId, keys: [deadRef, liveRef] } }, tiers: { deep: ["ringed"], simple: ["ringed"] } }, null, 2),
+      )
+      await listTasks(dir, P01.dir, "R-01.P01", [
+        ["T-001", "create done.txt", '在当前目录创建 done.txt,内容为 "ok"。'],
+      ])
+      expect(await runAll(dir, {})).toBe(0)
+      // One rotation: the line names both positions and references only —
+      // key 1/2 marked down, the same model continues on key 2/2 — and the
+      // dead key's actual value never appears anywhere the driver printed.
+      const rotated = lines.filter((line) => line.includes("marked down, continuing the same model on key"))
+      expect(rotated).toHaveLength(1)
+      expect(rotated[0]).toContain("key 1/2")
+      expect(rotated[0]).toContain("key 2/2")
+      const deadName = /^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(deadRef)?.[1]
+      if (deadName !== undefined && process.env[deadName])
+        expect(lines.join("\n")).not.toContain(process.env[deadName]!)
+      // The task itself completed on the same entry.
+      expect(await Bun.file(join(dir, "done.txt")).text()).toContain("ok")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+  { timeout: 900_000 },
+)
+
+// The key-ring mechanics against the real opencode CLI, without any
+// provider traffic (plans/0055 §13 S3): the managed spawn injects the ring's
+// current key as a config reference — opencode substitutes the {env:}
+// reference in its own process (F5) and a config apiKey wins over the
+// ambient OPENAI_API_KEY in the generic provider path (F6) — and a rotation
+// re-spawn (setConfig + restart) applies the next key. Only needs
+// `opencode` on PATH:
+//   OPENCODE_AUTO_E2E=1 bun test test/e2e.test.ts -t "key injection"
+// The apiKey values are dummies; no request is ever sent through them.
+test.skipIf(!E2E)(
+  "the managed spawn injects the ring's key reference and a rotation re-spawn applies the next key (opencode CLI, no provider traffic)",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-e2e-keycfg-"))
+    const ringConfig = (ref: string) => ({ provider: { openai: { options: { apiKey: ref } } } })
+    // manage() is opencodeHost's core: the OpencodeHost it returns exposes
+    // the server URL and setConfig, the two surfaces this check reads.
+    const host = await manage(dir, undefined, {
+      log: () => {},
+      env: { RING_SMOKE_KEY_A: "ring-smoke-key-a", RING_SMOKE_KEY_B: "ring-smoke-key-b" },
+      config: ringConfig("{env:RING_SMOKE_KEY_A}"),
+    })
+    try {
+      // The effective key of the generic path is options.apiKey — the auth
+      // record's `key` (env/auth.json) fills in only when it is unset
+      // (packages/opencode/src/provider/provider.ts), so this asserts both
+      // the {env:} substitution in the server's own process (F5) and the
+      // config key winning over the ambient credential (F6).
+      const keyOf = async (): Promise<string | undefined> => {
+        const res = await fetch(new URL("/config/providers", host.url))
+        const body = (await res.json()) as { providers: { id: string; options?: { apiKey?: string } }[] }
+        return body.providers.find((provider) => provider.id === "openai")?.options?.apiKey
+      }
+      expect(await keyOf()).toBe("ring-smoke-key-a")
+      // Rotation's mechanism: the next key goes into the spawn config and
+      // the restart re-spawns the server on it.
+      if (host.setConfig === undefined) throw new Error("the opencode host exposes no setConfig")
+      host.setConfig(ringConfig("{env:RING_SMOKE_KEY_B}"))
+      expect(await host.restart("key ring smoke: rotate onto the next key")).toBe(true)
+      expect(await keyOf()).toBe("ring-smoke-key-b")
+    } finally {
+      host.close()
+    }
+  },
+  { timeout: 60_000 },
 )
 
 // CLI 解析用例不需要 opencode 与 provider 凭证,始终运行: 以子进程运行源码入口,

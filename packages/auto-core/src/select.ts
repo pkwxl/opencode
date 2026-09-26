@@ -53,9 +53,11 @@ export type SelectContext = {
   override?: { wildcard: string; fallback: string[] }
   // The run's down marks by internal name (downMarks() of src/failback.ts).
   marks?: ReadonlyMap<string, DownMark>
-  // §6.2 rule 4: does this provider's key ring have a key that is not down?
-  // Key rings are a later step of the design; absent = every ring has one.
-  ringUsable?: (provider: string) => boolean
+  // §6.2 rule 4: does this provider's key ring have a key that is not down,
+  // at the dispatch's instant? src/keyring.ts supplies the run's answer
+  // (true for every provider without an active ring); absent = every ring
+  // has one.
+  ringUsable?: (provider: string, now: number) => boolean
   // Known context windows by model id, in tokens (contextLimits() data).
   limits?: ReadonlyMap<string, number>
 }
@@ -239,7 +241,7 @@ function faultsOf(ctx: SelectContext, call: SelectCall, candidate: Candidate): [
       candidate.entry.keys !== undefined &&
       candidate.entry.provider !== undefined &&
       ctx.ringUsable !== undefined &&
-      !ctx.ringUsable(candidate.entry.provider),
+      !ctx.ringUsable(candidate.entry.provider, call.now),
     known !== undefined && known < ctx.cap,
   ]
 }

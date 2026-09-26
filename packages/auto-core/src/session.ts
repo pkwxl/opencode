@@ -13,6 +13,15 @@ import { attempt } from "./attempt"
 import { taskDoc } from "./docpaths"
 import { clearModelDownMark, downMarks, failbackOverride, markModelDown, setSticky, stickyModel } from "./failback"
 import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
+import {
+  commitRotation,
+  hasActiveRing,
+  markCurrentKeyDown,
+  clearRingMarks,
+  ringKeyLabel,
+  ringRotation,
+  spawnKeyConfig,
+} from "./keyring"
 import { log } from "./log"
 import { formatWindowState } from "./model-window"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
@@ -172,8 +181,8 @@ export async function runSession(
   // down and selection picks the next usable candidate of the tier's list,
   // which replaces the global _FALLBACK ring; on this run's single agent the
   // move is today's path unchanged (fork copy, the chain's model, the
-  // failover note, the ladder reset). Cross-agent candidates are a later
-  // step, and the key-ring half (step 1) too.
+  // failover note, the ladder reset). Key rotation (step 1, above) runs
+  // before this; cross-agent candidates are a later step.
   const switchModel = async (why: string): Promise<boolean> => {
     limits ??= await client.contextLimits()
     let from: string | undefined
@@ -302,6 +311,80 @@ export async function runSession(
     chain.pct = 100
     return true
   }
+  // Escalation step 1 (plans/0055 §7): a quota/auth/rate failure whose model
+  // runs on a provider with a key ring moves the ring first — mark the
+  // current key down, write the next key into the spawn config, restart the
+  // managed server, then re-dispatch the *same* model from a fork of the
+  // failed session (the retry path's source choice and note). An auth error
+  // counts here because a revoked key looks like one. Only when no key is
+  // left that is not down (no ring, inactive rings, an exhausted ring, no
+  // host that can take a new spawn config) does the caller fall through to
+  // the model failover of step 2 — which then marks the model down and lets
+  // selection's ring predicate (§6.2 rule 4) skip every entry on the
+  // exhausted provider.
+  // AUTO-RESOLVE: the design says the re-dispatch's "source choice and note are those of the retry path" — may the note keep the retry path's literal "transient session error" wording? -> no, the two note forms and the mechanism are the retry path's, but the lead names the key failure ("failed on this provider's key (…) retried on the next key of the ring") (a quota-failed fork told about a transient error would misread the tail message it carries; the forms explain a repeated prompt alike, so only the lead changes)
+  const rotateProviderKey = async (why: string): Promise<boolean> => {
+    const facts = opts.routing
+    if (facts === undefined) return false
+    const entry = facts.registry.models.get(chain.modelEntry ?? "")
+    const provider = entry?.provider
+    if (provider === undefined || !hasActiveRing(provider)) return false
+    const now = nowOf(facts)
+    const rotation = ringRotation(provider, now)
+    if (rotation === undefined) {
+      // No key is left that is not down (an exhausted or single-key ring):
+      // the current key failed all the same, so it is marked down before the
+      // fall-through, and §6.2 rule 4 keeps every entry on this provider out
+      // of the selection that follows.
+      // AUTO-DECISION: the current key is marked down even when no rotation can land (the design's step 1 words the marking as part of a rotation, but an unmarked current key would leave the ring reading usable while its key just failed with quota, and the failover would be able to re-pick the same dead key the moment the model mark clears)
+      markCurrentKeyDown(provider)
+      return false
+    }
+    const host = opts.server
+    if (host === undefined || host.setConfig === undefined) return false
+    const from = ringKeyLabel(rotation.from)
+    const to = ringKeyLabel(rotation.to)
+    commitRotation(rotation)
+    host.setConfig(spawnKeyConfig())
+    const restarted = await host.restart(`${why}; rotating the provider ${provider} key ring to key ${to}`)
+    log(
+      `⇄ ${task.id} ${why}; provider ${provider} key ${from} marked down, continuing the same model on key ${to}` +
+        (restarted ? "" : " (the managed server could not be restarted; the new key applies at its next spawn)"),
+    )
+    // The re-dispatch rides a fork of the failed session — the same source
+    // choice as the retry ladder and switchModel (the failed session itself
+    // above the chain's original session, by accumulated context; a 0-token
+    // error stub never qualifies), so the turn's context survives the
+    // restart (F8: sessions persist across a managed server restart).
+    const failedID = chain.failed?.id ?? chain.id
+    const sources: { id: string; used: number; why: string }[] = []
+    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
+    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
+    sources.sort((a, b) => b.used - a.used)
+    for (const source of sources) {
+      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} key rotation`)
+      if (forked === undefined) {
+        if (source.id === chain.failed?.id) chain.failed = undefined
+        continue
+      }
+      log(`↻ ${task.id} ${why}; re-dispatching the same model from a forked copy of the ${source.why} ${source.id} (${formatTokens(source.used)} tokens)`)
+      chain.id = undefined
+      chain.pending = forked
+      chain.pct = 100
+      chain.used = source.used
+      chain.note =
+        source.id === failedID
+          ? `[DRIVER] The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring; continue with what this task asks.`
+          : retryNote(`The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring, but this session did not inherit this attempt's context.`)
+      return true
+    }
+    if (sources.length) log(`↻ key rotation fork copies failed; the rotation still takes effect, re-dispatching in a blank new session (no context inherited)`)
+    else log(`↻ no session context on the chain to inherit; the rotation still takes effect, re-dispatching in a blank new session`)
+    chain.note = retryNote(`The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring, but the earlier session's context could not be inherited.`)
+    chain.id = undefined
+    chain.pct = 100
+    return true
+  }
   // The window wait (plans/0055 §6.3): every candidate is blocked only by
   // its windows and one that is not down opens later. The dispatch sleeps
   // inside the unit before dispatching, as the recovery wait does: one wait
@@ -373,6 +456,13 @@ export async function runSession(
         await statsWaitEnd(opts.dir)
       }
       let probed: string | undefined
+      // The probe candidate's provider, when its ring kept the candidate
+      // unusable: the probe ignores the ring (§6.3), so the ring's key marks
+      // clear for the probe and the key it ran on is re-marked on failure —
+      // the same clear-and-re-mark the model mark gets, and the position
+      // never moves.
+      // AUTO-DECISION: the probe's ring half re-marks only the current key on failure, not every cleared mark (the probe ran on the current key alone; the earlier keys' marks would have cleared at the same boundaries anyway, and a wrapped rotation onto them later is the §6.4 semantics a boundary clear already has)
+      let probedProvider: string | undefined
       if (opts.routing) {
         limits ??= await client.contextLimits()
         const facts = opts.routing
@@ -389,6 +479,10 @@ export async function runSession(
         if (decision.kind === "probe") {
           probed = candidateKey(decision.candidate)
           clearModelDownMark(probed)
+          if (decision.candidate.kind === "entry" && decision.candidate.entry.provider !== undefined) {
+            probedProvider = decision.candidate.entry.provider
+            clearRingMarks(probedProvider)
+          }
         }
       }
       const probe: SessionChain = { pct: 100, used: 0, at: 0, ...(opts.routing ? {} : { model: chain.model }), role: roleOf(chain) }
@@ -397,11 +491,13 @@ export async function runSession(
         ping = await attempt(client, task, RECOVERY_PROBE_PROMPT, opts, probe, undefined, undefined, switches)
       } catch (error) {
         if (probed !== undefined) markModelDown(probed)
+        if (probedProvider !== undefined) markCurrentKeyDown(probedProvider)
         log(`⏳ ${task.id} probe session itself errored (${formatClientError(error)}); service not recovered, continuing to wait`)
         continue
       }
       if (ping.type !== "idle") {
         if (probed !== undefined) markModelDown(probed)
+        if (probedProvider !== undefined) markCurrentKeyDown(probedProvider)
         log(`⏳ ${task.id} probe session still failing (${firstLine(ping.question)}); continuing to wait`)
         continue
       }
@@ -488,9 +584,13 @@ export async function runSession(
     // errorClass,故据它决策即可覆盖两条路径(不读 result.failover)。
     // Under a registry the tier lists are the candidate table (the global ring
     // is a refused switch there), so the same gate applies with no ring set.
+    // The escalation is key → model → wait (plans/0055 §7): a ringed provider
+    // rotates to its next key first (rotateProviderKey), the model failover
+    // (switchModel, step 2) follows only when no key is left.
     const classLabel =
       result.errorClass === "quota" ? "quota restricted" : result.errorClass === "auth" ? "provider auth failed" : result.errorClass === "rate" ? "rate-limit wait too long" : undefined
     if ((opts.routing !== undefined || fallbackRing().length > 0) && classLabel !== undefined) {
+      if (opts.routing !== undefined && (await rotateProviderKey(classLabel))) continue
       if (await switchModel(classLabel)) continue
       // 候选耗尽(候选与首选全部配额受限/不可用): 不再阻塞退出——等待-探测环等到
       // 额度恢复,期间探测用当前生效模型,恢复后从被中断的会话分叉续跑。
