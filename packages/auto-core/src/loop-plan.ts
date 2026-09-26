@@ -40,24 +40,28 @@ import {
 import { templateRenders } from "./template"
 import { isUnitId, parseIndex, unitProblems, type IndexEntry, type UnitDecl } from "./document/unit"
 
-// 阶段索引(路由已校验过;此处再读只为取完成集与前后序,缺失/非法按空处理)。
+// the phase index (routing already validated it; re-read here only for the
+// done set and the order, missing/invalid treated as empty).
 export async function phaseState(directory: string): Promise<PhaseState> {
   return (await readPhases(directory).catch(() => undefined)) ?? { round: 0, index: "", phases: [], done: new Set(), closed: new Map() }
 }
 
-// 阶段显示名(日志/提交标题): P02-design 设计
+// the phase display name (logs/commit titles): P02-design Design
 export const phaseTitle = (unit: PhaseUnit) => `${phaseLabel(unit)} ${phaseName(unit)}`
 
-// 阶段规划会话(E 节): 旁路一次性,复用 requireArtifact 骨架,产物 = 本阶段任务索引
-// <阶段目录>/tasks.md + 各任务的 docs/T-NNN/todo.md(M3.4,plans/0047 L3),collect 按
-// mandatory 策略形检(plannedTaskProblems)。伪任务 PLAN 不进任务链、不写进度记录。
+// the phase planning session (§E): a one-off bypass reusing the
+// requireArtifact skeleton, artifacts = this phase's task index
+// <phase-directory>/tasks.md + each task's docs/T-NNN/todo.md (M3.4,
+// plans/0047 L3); collect shape-checks under the mandatory policy
+// (plannedTaskProblems). The pseudo task PLAN enters no task chain and writes
+// no progress record.
 // m mode (ctx.manual) plans on the same step, commit stage and checks
 // (plans/0053 D12), with three differences: the prompt is implement-plan over
 // the persisted planning input, which m-mode planning requires (m mode has no
 // round brief or handovers); the routing role is implement-scan, so existing
 // routing configs stay valid; and without the numbering record the tasks are
-// numbered after the highest taken id. 返回 0 = 规划完成,1 = m mode with no
-// planning input.
+// numbered after the highest taken id. Returns 0 = planning complete, 1 = m
+// mode with no planning input.
 export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, server: serverHandle, agentName, repl } = ctx
   // The phase loop routes m mode here only with an input, new or persisted;
@@ -66,10 +70,12 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     log(`⏸ nothing to plan ${phaseTitle(phase)} against: m-mode planning plans against a planning input, and ${planInputPath(phase)} is missing or empty`)
     return 1
   }
-  // 自动编号(config.autoNumber): 规划会话的编号起点来自 .auto/next-task
-  // 记录;记录缺失先恢复(无历史证据直接写 1,有证据开 AI 推导会话,见
-  // src/numbering.ts),恢复受阻即退出 2。恢复会话本身会产生一次统一提交
-  // (stage=numbering),先于规划会话。
+  // auto numbering (config.autoNumber): the planning session's numbering
+  // start comes from the .auto/next-task record; a missing record is restored
+  // first (no historical evidence writes 1 directly, with evidence an AI
+  // inference session opens, see src/numbering.ts), and a blocked restore
+  // exits 2. The restore session itself produces one unified commit
+  // (stage=numbering), ahead of the planning session.
   let numberStart: number | undefined
   if (opts.autoNumber) {
     const numbering = await ensureNumbering(serverHandle.client, directory, {
@@ -132,8 +138,10 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   const brief = await projectBriefText(directory)
   const taskIndex = taskIndexPath(phase)
   const phaseId = qualifiedPhase(phase)
-  // 已占用的任务编号: 其他阶段任务索引列出的与已完成的任务(本阶段规划自身的遗留
-  // 不算——中断续跑/反馈重试会再写同一批编号)。
+  // the taken task numbers: the tasks other phases' task indexes list and
+  // the already-completed tasks (this phase's own planning leftovers do not
+  // count — an interrupted resume/feedback retry rewrites the same batch of
+  // numbers).
   const taken = await takenTaskIds(directory, phase)
   const prompt = ctx.manual
     ? renderImplementPlan({
@@ -205,16 +213,20 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
     }
     return 2
   }
-  // 自动编号: 规划成功即把编号记录推进到本次最大编号 + 1(只增不减),
-  // 后续阶段/轮次的规划会话自该记录续接,编号在目标目录永不重复。
+  // auto numbering: on planning success the numbering record advances to
+  // this run's highest number + 1 (only ever increases); later phases'/rounds'
+  // planning sessions continue from the record, so numbers never repeat in
+  // the target directory.
   if (numberStart !== undefined) {
     const next = await advanceNextTask(directory, planned)
     log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
   }
   log(`✓ phase planning complete: ${taskIndex} lists ${planned.length} task(s)`)
   ctx.planned = planned
-  // 收口: 删除本步骤的 driver 侧恢复点(产物已校验、提交与编号推进均完成)。
-  // 在此之前被 kill → 记录仍 active,下次运行经 openStep 重入规划并复用会话。
+  // close-out: delete this step's driver-side resume point (artifacts
+  // validated, commit and numbering advance both done). Killed before this →
+  // the record is still active, and the next run re-enters planning through
+  // openStep and reuses the session.
   await closeStep(directory, "phase-plan", phaseKey(phase).id)
   return 0
 }
@@ -471,7 +483,8 @@ export async function resetAppend(dir: string, phase: PlanPhase, snap: AppendSna
 // this backstop catches a deleted plan-input.md). Modeled on planPhase and
 // sharing its machinery — the numbering record, the input commit, the step
 // resume point — with the snapshot → reset → collect cycle in place of the
-// fresh planning output check. 返回 0 = 追加完成,1 = 无规划输入,2 = 阻塞。
+// fresh planning output check. Returns 0 = append complete, 1 = no planning
+// input, 2 = blocked.
 // AUTO-DECISION: no spec.role is declared (either mode) — phaseToRole already
 // maps the phase-append step to the phase-plan model role (D23/F6), and the
 // append template is new surface, so no legacy implement-scan routing applies
@@ -485,7 +498,8 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     log(`⏸ nothing to append ${phaseTitle(phase)} against: appending plans against a planning input, and ${planInputPath(phase)} is missing or empty`)
     return 1
   }
-  // 自动编号: 与 planPhase 相同(记录缺失先恢复,恢复受阻即退出 2)。
+  // auto numbering: same as planPhase (a missing record is restored first, a
+  // blocked restore exits 2).
   let numberStart: number | undefined
   if (opts.autoNumber) {
     const numbering = await ensureNumbering(serverHandle.client, directory, {
@@ -550,8 +564,10 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   // (D24's residual), so a person's mid-append commit counts as existing work.
   const snap = await snapshotAppend(directory, phase)
   const plan = await loadPlan(directory, phase)
-  // 已占用编号 = 其他阶段索引与已完成任务 ∪ 本阶段既有条目(D24);无自动编号时,
-  // 提示词编号起点取其中最大编号 + 1(D25: the highest taken or listed id + 1)。
+  // taken numbers = other phases' indexes and done tasks ∪ this phase's
+  // existing entries (D24); without auto numbering, the prompt's numbering
+  // start is the highest number among them + 1 (D25: the highest taken or
+  // listed id + 1).
   // AUTO-DECISION: the collect enforces the numbering start only under
   // autoNumber (the record's value), exactly as planPhase does — without the
   // record only collisions with taken or listed ids are refused, so a gap id
@@ -631,7 +647,8 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     }
     return 2
   }
-  // 自动编号: 追加成功即推进编号记录到本次最大新编号 + 1(只增不减)。
+  // auto numbering: on append success the numbering record advances to this
+  // run's highest new number + 1 (only ever increases).
   if (numberStart !== undefined) {
     const next = await advanceNextTask(directory, appended)
     log(`✓ numbering record advanced: next available task number T-${String(next).padStart(3, "0")}(${NEXT_TASK_FILE})`)
@@ -661,10 +678,13 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
     }
     log(`✓ stale handover removed: ${handover} (the phase is distilled again after the appended tasks)`)
   }
-  // 收口: 删除本步骤的 driver 侧恢复点,最后一步(D25)——在此之前被 kill →
-  // 记录仍 active,下次运行经 openStep 重入追加(幂等)。已知残余: 若 kill 落在
-  // 追加单元提交之后、收口之前,重入的快照已含已提交的追加任务,重做会再追加
-  // 一批(设计接受的残余;plan 停下来供人审阅,重复可见可改)。
+  // close-out: delete this step's driver-side resume point, the last step
+  // (D25) — killed before this → the record is still active, and the next run
+  // re-enters the append through openStep (idempotent). Known residual: if
+  // the kill lands after the append unit's commit and before the close-out,
+  // the re-entry snapshot already contains the committed appended tasks, and
+  // the redo appends another batch (a residual the design accepts; plan stops
+  // for human review, the duplication is visible and editable).
   await closeStep(directory, "phase-append", phaseKey(phase).id)
   return 0
 }

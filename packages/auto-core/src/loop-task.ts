@@ -1,7 +1,10 @@
-// 主任务循环(runTaskLoop): runAll 原闭包转顶层函数,
-// 捕获量显式化为 LoopCtx;ran 跨 runTaskLoop 调用累积(决定 --wait-between 是否在后续
-// 阶段首个任务前暂停),故作可变字段进 ctx 而非降为局部。
-// 拆分自 src/loop.ts(plans/0024-module-split-plan.md S15,纯搬运;§I D14)。不依赖 loop.ts。
+// the main task loop (runTaskLoop): runAll's former closure turned into a
+// top-level function, its captures made explicit as LoopCtx; ran accumulates
+// across runTaskLoop calls (it decides whether --wait-between pauses before
+// the first task of a later phase), hence a mutable field on ctx rather than
+// a local.
+// Split out of src/loop.ts (plans/0024-module-split-plan.md S15, pure move;
+// §I D14). Does not depend on loop.ts.
 import { maybeExit } from "./exit"
 import { clearDownMarks, consumeFailback } from "./failback"
 import { beginUnit, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
@@ -33,8 +36,10 @@ export type LoopCtx = {
   // session runs only on a planning input (plans/0053 D12).
   manual: boolean
   repl?: Interactive
-  // runTaskLoop 跨调用累积的已跑任务数(§I D14): 决定 --wait-between 是否在后续阶段
-  // 首个任务前暂停,降为函数局部会每次清零(行为改动),故作可变字段进 ctx。
+  // the count of already-run tasks, accumulated across runTaskLoop calls
+  // (§I D14): it decides whether --wait-between pauses before the first task
+  // of a later phase; demoting it to a function local would zero it on every
+  // call (a behavior change), hence a mutable field on ctx.
   ran: number
   // The planning input this run was given (plans/0053 D9), consumed by the
   // first planning step, which persists it to its phase's plan-input.md.
@@ -54,10 +59,12 @@ export type LoopCtx = {
   routing?: RoutingFacts
 }
 
-// 主任务循环: 依次执行当前阶段任务索引(tasks.md)中的全部任务(子任务/收尾/
-// 统一提交/进度恢复)。phase 为当前阶段单元,其预置字母透传 runTask(模型路由字母
-// 键、分解模板选择)。返回 0 = 本阶段任务全部完成(阶段收口由 runPhaseLoop 路由),
-// 2 = 阻塞/未完成(原因在运行日志)。
+// the main task loop: execute in turn all tasks in the current phase's task
+// index (tasks.md) (subtasks/wrap-up/unified commit/progress recovery). phase
+// is the current phase unit; its preset letter is passed through to runTask
+// (the model-routing letter key, the decompose template choice). Returns 0 =
+// all of this phase's tasks complete (the phase close-out is routed by
+// runPhaseLoop), 2 = blocked/incomplete (the reason is in the run log).
 export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<number> {
   const { directory, opts, server: serverHandle, agentName, repl } = ctx
   for (;;) {
@@ -67,15 +74,20 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       log("✓ all tasks complete")
       return 0
     }
-    // 首个任务不等待;仅当存在后继任务时在任务之间暂停。
+    // no wait before the first task; pause between tasks only when a
+    // successor exists.
     if (ctx.ran > 0 && opts.waitBetween) await waitBetweenTasks(opts.waitBetween, task.id, repl, directory)
     if (task.status === "blocked") {
       log(`↻ ${task.id} was blocked previously, resuming directly (block reason in the previous run's log)`)
     }
-    // 任务单元提交边界(plans/0021-commit-boundary-design.md P3): 启动 clean 门禁 + SHA
-    // 基线。active 进度记录 = 恢复续跑(工作区承载本单元自身进度,含交接文档)
-    // 豁免 clean、仍记基线;done 终态提交后凭基线做收口校验(提交区间须全为
-    // driver 提交)。driver 独占状态文件遗留由 beginUnit 以 carryover 自愈。
+    // the task unit commit boundary (plans/0021-commit-boundary-design.md
+    // P3): the start clean gate + SHA baseline. An active progress record = a
+    // resumed continuation (the worktree carries this unit's own progress,
+    // handover documents included), exempt from clean while still recording
+    // the baseline; after the done terminal commit the baseline drives the
+    // close-out check (the commit range must be all driver commits).
+    // Driver-exclusive state file leftovers self-heal through beginUnit's
+    // carryover.
     let taskBaseline: UnitBaseline | undefined
     {
       const recalled = await recallProgress(directory, task.id)
@@ -93,8 +105,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     }
     banner(`${task.id} ${task.title}`)
     log(`▶ ${task.id} starting execution (attempt ${task.attempts + 1})`)
-    // 任务切换挂点(STATS_PLAN §3): 重置 task 桶(id 变化时)、清空 per-session
-    // 映射;同 id 幂等——中断续跑同任务不重置、不重复计数。
+    // the task-switch hook point (STATS_PLAN §3): reset the task bucket (when
+    // the id changes) and clear the per-session map; the same id is
+    // idempotent — an interruption resuming the same task neither resets nor
+    // double-counts.
     await statsTask(directory, task.id)
     const start = Date.now()
     const outcome = await runTask(serverHandle.client, plan, task, {
@@ -129,11 +143,15 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     if (outcome.type === "blocked") {
       await block(directory, task.id)
       log(`⏸ ${task.id} is blocked (the reason is recorded only in this log):\n${outcome.question}`)
-      // 代答高亮块(plans/0020-auto-resolve-design.md §H-②,H5): 置顶于结论行之前。三态
-      // 一律打印,且不受统计守卫影响(阻塞任务同样可能已被代答了若干问题)。
+      // the proxy-answer highlight block (plans/0020-auto-resolve-design.md
+      // §H-②, H5): pinned above the conclusion line. Printed for all three
+      // states, and unaffected by the stats guard (a blocked task may equally
+      // have had several questions proxy-answered already).
       for (const line of await taskResolveLines(directory, task.id)) log(line)
-      // 任务三态行(STATS_PLAN §4.2,T-006): blocked 同样输出累计统计段 +
-      // tokens 行(守卫失败时不打印,与 T-006 前行为一致——原本只有 done 有统计行)。
+      // the task three-state line (STATS_PLAN §4.2, T-006): blocked also
+      // prints the cumulative stats segment + the tokens line (not printed
+      // when the guard fails, consistent with the pre-T-006 behavior —
+      // originally only done had a stats line).
       const lines = await taskEndLines(directory, task.id)
       if (lines) {
         log(`⏸ ${task.id} blocked: ${lines[0]}`)
@@ -177,11 +195,15 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       }
     }
     ctx.ran++
-    // 任务完成的终态提交: todo.md → done.md 改名与 tasks.md 勾选在此一并落账
-    // (各会话产出已随会话提交,这里是收口)。
-    // 完成条件门禁(plans/0021-commit-boundary-design.md): 终态提交失败 → 退出 2 交人工
-    // (任务标记已在工作区,人工提交后重跑,下一任务以干净基线启动);提交成功
-    // 后凭任务基线做收口校验(提交区间须全为 driver 提交,外部提交即隔离破坏)。
+    // the terminal commit of task completion: the todo.md → done.md rename
+    // and the tasks.md tick are booked here together (each session's output
+    // was committed with its session; this is the close-out).
+    // the completion-condition gate (plans/0021-commit-boundary-design.md):
+    // terminal commit failure → exit 2 for human attention (the task mark is
+    // already in the worktree; after the human commits and re-runs, the next
+    // task starts on a clean baseline); after the commit succeeds, the task
+    // baseline drives the close-out check (the commit range must be all driver
+    // commits, an external commit is an isolation break).
     if (opts.commit !== false) {
       const settled = await commitTree(directory, task, { stage: "done", subject: `${task.id} done ${task.title}` })
       if (!settled.ok) {
@@ -200,8 +222,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
         }
       }
     }
-    // 步进暂停(task 边界,OPENCODE_AUTO_STEP ≥ task): 任务终态提交后、下一任务
-    // 前硬暂停,回车放行。dir 传入使暂停等待从用时统计扣除。
+    // step pause (task boundary, OPENCODE_AUTO_STEP ≥ task): a hard pause
+    // after the task's terminal commit and before the next task, Enter lets
+    // it proceed. dir is passed so the pause wait is deducted from the timing
+    // stats.
     await stepPause("task", `task ${task.id} ${task.title}`, { interactive: repl, dir: directory })
     maybeExit("task", `task ${task.id} ${task.title}`)
     // Hibernate window (task boundary, OPENCODE_AUTO_HIBERNATE): after the
@@ -209,10 +233,11 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // so, sleep until window end + random delay before continuing
     // (plans/0027-hibernate-design.md).
     await hibernatePause(`task ${task.id} ${task.title} boundary`, { dir: directory })
-    // /failback 消费点(task 边界): 链已随 runTask 销毁、无需清 chain.model;
-    // 重置 phase 粒度 sticky holder 并应用模型序覆写(若有)。Registry routing
-    // (plans/0055 §6.4): the chain's destruction is also where the task-scope
-    // down marks clear — the marks are run state, not chain state.
+    // the /failback consumption point (task boundary): the chain was
+    // destroyed with runTask, no chain.model to clear; reset the phase-scope
+    // sticky holder and apply the model-order override (if any). Registry
+    // routing (plans/0055 §6.4): the chain's destruction is also where the
+    // task-scope down marks clear — the marks are run state, not chain state.
     clearDownMarks("task", autoSwitches().modelFailbackScope)
     consumeFailback()
   }

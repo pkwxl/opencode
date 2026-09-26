@@ -1,41 +1,63 @@
-// 降级回试与 /failback(设计文档 plans/0017-model-routing-design.md):
-// OPENCODE_AUTO_MODEL_FAILBACK_SCOPE 控制降级到候选模型后、在哪个流水线边界重置回
-// 首选模型——包含式粒度(与 step.ts 同一 RANK 思路): phase 仅阶段边界(降级跨任务
-// 粘滞,经本模块 sticky holder 承载);task(缺省)= 现状,链逐任务销毁天然归零,无
-// 需代码;subtask 加子任务边界(清 chain.model);session 每个新会话起点都回试首选
-// (attempt 新建会话分支清零;降级 fork 出的迁移会话走 pending 路径不触发,防震荡)。
+// Failback and /failback (design document plans/0017-model-routing-design.md):
+// OPENCODE_AUTO_MODEL_FAILBACK_SCOPE controls at which pipeline boundary the
+// reset back to the preferred model happens after failing over to a
+// candidate — inclusive granularity (the same RANK idea as step.ts): phase
+// only at phase boundaries (failover stays sticky across tasks, carried by
+// this module's sticky holder); task (default) = the status quo, the chain
+// is destroyed per task and zeroes out naturally, no code needed; subtask
+// adds the subtask boundary (clears chain.model); session fails back to
+// the preferred model at every new-session start (attempt's new-session
+// branch zeroes it; the migrated session forked out by failover goes the
+// pending path and does not trigger it, to prevent oscillation).
 //
-// /failback(--interactive 常驻输入行,与 /exit 同构): 置位后在下一个安全边界
-// (phase/task/subtask,挂点同 step.ts)消费——不抛异常、不占退出码通道,只重置降级
-// 状态;带参数时整体重定义模型序(首个为首选通配、其余为降级候选环),经本模块
-// override 层在运行期覆盖 switches.model(switches memo 恒定,不原地改)。
+// /failback (the standing input line of --interactive, isomorphic to /exit):
+// once set it is consumed at the next safe boundary (phase/task/subtask,
+// hook points as in step.ts) — throws nothing, takes no exit-code channel,
+// only resets failover state; with arguments it redefines the model order
+// wholesale (the first is the preferred wildcard, the rest the failover
+// candidate ring), overriding switches.model at run time through this
+// module's override layer (the switches memo stays constant, nothing
+// changed in place).
 //
-// Down marks(plans/0055 §6.4):模型注册表之下的降级标记——按模型内部名(及按
-// provider+key 引用,供后续步骤的密钥环)记「已降级」,在 OPENCODE_AUTO_MODEL_
-// FAILBACK_SCOPE 的边界与 /failback 处清零;带 until 的标记活到该时刻为止。无注册
-// 表的运行不写标记,sticky 语义逐字节不变。
+// Down marks (plans/0055 §6.4): the down marks under the model registry —
+// "down" recorded by the model's internal name (and by provider+key
+// reference, for a later step's key rings), cleared at the
+// OPENCODE_AUTO_MODEL_FAILBACK_SCOPE boundaries and /failback; a mark with
+// until lives until that instant. A run without a registry writes no
+// marks, and the sticky semantics hold byte for byte.
 import { log } from "./log"
 import type { Boundary } from "./step"
 import type { FailbackScope } from "./switches"
 
-// 边界与粒度的细度序: 值越细序越大,边界序 ≤ 粒度序即重置(session 无对应
-// Boundary——对链上候选它的重置点是 attempt 的新建会话分支;对下面的 down
-// marks,"session" 是 scope=session 的等价边界: 每个新会话起点清标记)。
+// The fineness order of boundaries and granularities: the finer the value,
+// the larger the rank; boundary rank ≤ granularity rank means reset (session
+// has no matching Boundary — for a candidate on the chain its reset point is
+// attempt's new-session branch; for the down marks below, "session" is
+// scope=session's equivalent boundary: marks cleared at every new-session
+// start).
 const RANK: Record<FailbackScope | Boundary, number> = { phase: 1, task: 2, subtask: 3, session: 4 }
 
-// 粒度是否覆盖该边界(纯函数,供单测): 包含式——session 覆盖全部边界,subtask 覆盖
-// subtask/task/phase,task 覆盖 task 与 phase(均由链/holder 生命周期天然承担),
-// phase 只覆盖 phase。"session" 作为边界只被 scope=session 覆盖。
+// Whether the granularity covers the boundary (pure function, for unit
+// tests): inclusive — session covers every boundary, subtask covers
+// subtask/task/phase, task covers task and phase (all carried naturally by
+// the chain/holder lifetimes), phase covers only phase. "session" as a
+// boundary is covered only by scope=session.
 export function failbackApplies(scope: FailbackScope, boundary: Boundary | "session"): boolean {
   return RANK[boundary] <= RANK[scope]
 }
 
-// 单进程模块态(每次 CLI 调用是独立进程,天然复位;单测经 resetFailback 复位):
-// - sticky: phase 粒度的跨任务降级 holder,仅 scope=phase 时由 switchModel 写入,
-//   阶段边界无条件清(其他粒度下恒为 undefined,清理是空操作);
-// - pending: /failback 请求(可选整体重定义模型序);
-// - override: /failback 带参消费后的运行期模型序覆写,attempt/switchModel 读它优先于
-//   switches.model(不破坏 switches memo 恒定约定)。
+// Single-process module state (each CLI invocation is its own process, a
+// natural reset; unit tests reset through resetFailback):
+// - sticky: the cross-task failover holder of phase granularity, written by
+//   switchModel only under scope=phase, cleared unconditionally at phase
+//   boundaries (undefined under every other granularity, the clear is a
+//   no-op);
+// - pending: the /failback request (optionally redefining the model order
+//   wholesale);
+// - override: the run-time model-order override left after a parameterized
+//   /failback is consumed; attempt/switchModel read it ahead of
+//   switches.model (without breaking the switches-memo constancy
+//   convention).
 let sticky: string | undefined
 let pending: { order?: string[] } | undefined
 let override: { wildcard: string; fallback: string[] } | undefined
@@ -129,8 +151,10 @@ function dropScopeCleared(marks: Map<string, DownMark>): void {
   for (const [key, mark] of marks) if (mark.until === undefined) marks.delete(key)
 }
 
-// /failback 置位(interactive.ts 已校验参数形态): order 非空 = 整体重定义模型序
-// (首个为首选、其余按序为降级候选环);空 = 仅重置降级状态回试当前首选。
+// Set the /failback flag (interactive.ts has validated the argument shape):
+// a non-empty order = redefine the model order wholesale (the first is the
+// preferred model, the rest in order the failover candidate ring); empty =
+// only reset failover state and fail back to the current preferred model.
 export function requestFailback(order?: string[]): void {
   pending = order !== undefined && order.length > 0 ? { order } : {}
 }
@@ -147,8 +171,9 @@ export function setSticky(model: string): void {
   sticky = model
 }
 
-// 阶段边界挂点(loop.ts,紧随 maybeExit): 无条件清 sticky——sticky 只在 scope=phase
-// 下写入,其余粒度下是空操作。
+// The phase-boundary hook point (loop.ts, right after maybeExit): clears
+// sticky unconditionally — sticky is written only under scope=phase, a
+// no-op under every other granularity.
 export function clearSticky(): void {
   sticky = undefined
 }
@@ -157,9 +182,13 @@ export function failbackOverride(): { wildcard: string; fallback: string[] } | u
   return override
 }
 
-// 三处安全边界共用的 /failback 消费点(紧随 maybeExit 之后;subtask 边界传入链以清
-// chain.model,task/phase 边界链已随 runTask 销毁、无需传入): 命中即重置降级状态
-// (链上候选 + sticky holder + down marks),带参时同时重定义运行期模型序。返回是否消费。
+// The /failback consumption point shared by the three safe boundaries
+// (right after maybeExit; the subtask boundary passes the chain to clear
+// chain.model, at the task/phase boundaries the chain is already destroyed
+// with runTask and need not be passed): a hit resets the failover state
+// (the chain's candidate + the sticky holder + down marks), and with
+// arguments it also redefines the run-time model order. Returns whether it
+// consumed.
 // The chain's selected registry entry is cleared with the raw candidate
 // (plans/0055 §6.4: the next prompt re-selects from the list).
 // AUTO-RESOLVE: does a mark with `until` survive `/failback`, as it survives a scope boundary? -> no, `/failback` clears every mark, an `until` included (§6.4 lists the scope boundaries and `/failback` separately, and says `until` stands in for the scope boundary; the operator's explicit command retries the primary now, so a quota reset time must not override it)
@@ -184,7 +213,8 @@ export function consumeFailback(chain?: { model?: string; modelEntry?: string; m
   return true
 }
 
-// 仅供单测复位(bun test 单进程跑多个测试文件,模块级状态跨文件残留;先例 exit.ts)。
+// For unit-test resets only (bun test runs several test files in one
+// process, module-level state leaks across files; precedent exit.ts).
 export function resetFailback(): void {
   sticky = undefined
   pending = undefined

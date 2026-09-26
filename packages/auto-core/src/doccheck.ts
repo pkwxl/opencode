@@ -5,9 +5,10 @@
 // all; eof only proves "finished writing" (mechanically decidable) — quality
 // belongs to planned acceptance work.
 
-// Non-semantic terminator: deliberately a different shape from the `状态:` line
-// of handoff/testhandoff — avoiding a semantic collision, and avoiding stamping
-// a "done" wording on cross-task narrative files such as report (D5 decision).
+// Non-semantic terminator: deliberately a different shape from the `Status:`
+// line of handoff/testhandoff — avoiding a semantic collision, and avoiding
+// stamping a "done" wording on cross-task narrative files such as report (D5
+// decision).
 export const EOF_MARK = "<!-- auto: eof -->"
 
 // Non-triviality threshold (conservative, counted in characters after trimming

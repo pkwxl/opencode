@@ -6,19 +6,27 @@ import { renderNumberRecovery } from "./prompt"
 import type { Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
 
-// --auto-number(config.autoNumber)的任务编号记录机制: 任务编号(T-NNN)在目标目录
-// 永不重复,下一可用编号持久化在 .auto/next-task(driver 维护的状态文件;.auto/
-// 已被 gitignore,新克隆天然缺失)。阶段规划会话自该记录续接编号(不再每阶段从
-// T-001 重排);记录缺失时先恢复再继续——无任何历史证据(全新项目)直接写 1,
-// 有历史证据时开旁路一次性 AI 恢复会话通读任务索引/docs 产物/git 历史推导
-// 下一编号(git 历史中可能存在产物已被删除的编号,纯文件扫描看不到),driver
-// 以确定性扫描的下限校验其产出。--no-auto-number(退出开关)下本文件整体不生效。
+// The --auto-number (config.autoNumber) task-numbering record mechanism: task
+// numbers (T-NNN) never repeat in the target directory; the next available
+// number is persisted in .auto/next-task (a driver-maintained state file;
+// .auto/ is already gitignored, so a fresh clone naturally lacks it). The
+// phase planning session continues numbering from that record (no longer
+// restarting from T-001 every phase); a missing record is recovered first,
+// then numbering continues — with no historical evidence at all (a brand-new
+// project) write 1 directly; with historical evidence, open a one-shot bypass
+// AI recovery session that reads through the task indexes / docs artifacts /
+// git history to derive the next number (git history may hold numbers whose
+// artifacts have since been deleted, invisible to a pure file scan); the
+// driver validates its output against the floor of the deterministic scan.
+// Under --no-auto-number (the opt-out switch) this whole file is inert.
 
-// 编号记录文件(相对目标目录): 内容仅为一个正整数(下一可用编号)。
+// The numbering record file (relative to the target directory): its content is
+// a single positive integer (the next available number).
 export const NEXT_TASK_FILE = join(".auto", "next-task")
 
-// 任务编号提取: 仅认 T-<纯数字> 形态(T-F 等终审编号是独立的推导命名空间,
-// 不参与自动编号记录)。
+// Task-number extraction: only the T-<digits-only> form counts (final-audit
+// ids like T-F are a separate derivation namespace, not part of the auto
+// numbering record).
 export function taskNumber(id: string): number | undefined {
   const match = /^T-(\d+)$/.exec(id)
   return match ? Number(match[1]) : undefined
@@ -35,10 +43,12 @@ export async function writeNextTask(dir: string, n: number): Promise<void> {
   await Bun.write(join(dir, NEXT_TASK_FILE), `${n}\n`)
 }
 
-// 已用编号的确定性下限: 扫描各轮各阶段的任务索引(docs/R-*/P*/tasks.md,M3.4)与
-// 任务目录(docs/**/T-*/*.md 取路径段——任务单元的 todo.md/done.md 即在其中),
-// 取最大编号 + 1;
-// 无证据 = 1。只能看到现存文件——已被删除产物占用的编号需 AI 恢复会话查 git 历史补全。
+// Deterministic floor of used numbers: scan every round's and phase's task
+// indexes (docs/R-*/P*/tasks.md, M3.4) and task directories (path segments of
+// docs/**/T-*/*.md — the task units' todo.md/done.md live right there), take
+// the maximum number + 1;
+// no evidence = 1. Sees only surviving files — numbers taken by since-deleted
+// artifacts are completed by the AI recovery session reading git history.
 export async function taskNumberFloor(dir: string): Promise<number> {
   let max = 0
   const seen = (id: string) => {
@@ -49,8 +59,8 @@ export async function taskNumberFloor(dir: string): Promise<number> {
     const text = await Bun.file(join(dir, file)).text().catch(() => "")
     for (const entry of parseIndex(text, "task").entries) seen(entry.id)
   }
-  // 目录化布局: docs/**/T-*/*.md,取首个 T-<纯数字> 路径段(T-F<k> 锚定段被
-  // taskNumber 自然过滤)。
+  // Directory-layout: docs/**/T-*/*.md, take the first T-<digits-only> path
+  // segment (a T-F<k> anchor segment is filtered out naturally by taskNumber).
   for await (const file of new Bun.Glob(join("docs", "**", "T-*", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
     for (const segment of file.split(/[\\/]/)) {
       if (/^T-\d+$/.test(segment)) {
@@ -62,8 +72,10 @@ export async function taskNumberFloor(dir: string): Promise<number> {
   return max + 1
 }
 
-// 规划会话产出后推进编号记录: 取本次任务索引中最大编号 + 1(只增不减;
-// 编号小于既有记录不动——collect 已拦下该情况,这里仅作兜底)。
+// Advance the numbering record after a planning session's output: take the
+// maximum number in this task index + 1 (grows only, never shrinks; a number
+// below the existing record leaves it untouched — the collect already rejects
+// that case, this is only a backstop).
 export async function advanceNextTask(dir: string, ids: string[]): Promise<number> {
   const used = Math.max(0, ...ids.map((id) => taskNumber(id) ?? 0))
   const next = used + 1
@@ -72,11 +84,15 @@ export async function advanceNextTask(dir: string, ids: string[]): Promise<numbe
   return Math.max(next, current ?? 0)
 }
 
-// 确保编号记录就位(规划会话前调用): 记录存在直接返回;缺失时先恢复——
-// 下限为 1(无任何历史证据,全新项目)直接写 1 不开会话;否则开旁路一次性
-// AI 恢复会话(镜像 knowledge.ts 的 requireArtifact 骨架,伪任务 PLAN 不进
-// 任务链、不写进度记录),产物 = AI 写入的有效 .auto/next-task,driver 以
-// 确定性下限校验(小于下限视为无效产出,带反馈重试一次,仍失败隐性阻塞)。
+// Ensure the numbering record is in place (called before a planning session):
+// with the record present, return directly; when missing, recover first — a
+// floor of 1 (no historical evidence at all, a brand-new project) writes 1
+// directly with no session; otherwise open a one-shot bypass AI recovery
+// session (mirroring knowledge.ts's requireArtifact skeleton; the pseudo task
+// PLAN enters no task chain and writes no progress record), artifact = a
+// valid .auto/next-task written by the AI; the driver validates against the
+// deterministic floor (below the floor counts as an invalid artifact: retry
+// once with feedback, still failing blocks silently).
 export async function ensureNumbering(
   client: AgentClient,
   dir: string,

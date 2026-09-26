@@ -1,8 +1,9 @@
-// 会话链与模型路由求值: 任务内会话串链的状态载体(SessionChain / Watch /
-// SessionResult / FailedSession / ForkBaseInfo)、阶段→角色→模型的路由求值
-// (phaseToRole / roleOf / resolveModel),以及会话错误归类
-// (classifySessionError)与会话复用阈值常量。见 plans/0017-model-routing-design.md。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S2,纯搬运)。
+// Session chain and model routing evaluation: the state carriers of the task's
+// chained sessions (SessionChain / Watch / SessionResult / FailedSession /
+// ForkBaseInfo), the phase → role → model routing evaluation (phaseToRole /
+// roleOf / resolveModel), session error classification (classifySessionError),
+// and the session reuse threshold constants. See plans/0017-model-routing-design.md.
+// Split from src/runner.ts (plans/0024-module-split-plan.md S2, pure move).
 import type { AgentErrorPatterns } from "./agent/types"
 import { type UnitBaseline } from "./git"
 import { type ResolveEvent } from "./resolve"
@@ -12,21 +13,25 @@ import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import { type ModelPolicy, type ModelRole } from "./switches"
 
 export type Watch = {
-  // 会话内阻塞(askHuman 超时回落/权限拒绝)恒为 blocked 形态,不含 dirty——
-  // dirty 只在单元启动门禁(runSubtask/requireArtifact/beginUnit)产生,先于会话。
+  // In-session blocking (askHuman timeout fallback / permission denial) is
+  // always the blocked shape, never dirty — dirty arises only at the unit
+  // start gate (runSubtask/requireArtifact/beginUnit), before any session.
   blocked?: { type: "blocked"; question: string }
   error?: string
   lastText: string
-  // 会话结束时最近一次 assistant 消息的上下文占比(0-100);上限未知记 100。
+  // Context percentage (0-100) of the session's last assistant message;
+  // recorded as 100 when the limit is unknown.
   pct: number
-  // 会话结束时最近一次 assistant 消息的上下文已用量(tokens: input + cache.read)。
+  // Context usage of the session's last assistant message (tokens:
+  // input + cache.read).
   used: number
-  // 上下文上限(tokens),计算 pct 用;若未知则为 undefined。
+  // Context limit (tokens), used to compute pct; undefined when unknown.
   limit?: number
-  // 会话耗时(ms)。
+  // Session duration (ms).
   durationMs?: number
-  // --handover-test: 会话在 driver 发出测试交接要求后写出交接文档并正常结束,
-  // runExecSession 据此开新会话续跑。
+  // --handover-test: after the driver issued the test-handover requirement,
+  // the session wrote the handover document and ended normally; runExecSession
+  // opens a new continuation session on it.
   testHandover?: boolean
   // The in-turn handover hint went out in this session (plans/0040 D6; set
   // only when true). The post-session check reads it next to the final figure.
@@ -38,38 +43,56 @@ export type Watch = {
   // chain, so the session's next prompt and every later steer name the id.
   // Set only under a registry, only when a step-up happened.
   steppedUp?: { step: number; model: string }
-  // plans/0015-session-error-retry-plan.md: 会话错误是否值得重试(仅 ApiError 携带
-  // isRetryable;字段不存在或非 false 一律按可重试处理,保守缺省;多个
-  // session.error 事件叠加取悲观口径,只要出现过一次 false 即不可重试)。
+  // plans/0015-session-error-retry-plan.md: whether the session error is
+  // worth retrying (only ApiError carries isRetryable; when the field is
+  // absent or not false it always counts as retryable, the conservative
+  // default; with several session.error events stacked the pessimistic
+  // reading wins — one false ever seen makes it unretryable).
   retryable?: boolean
-  // plans/0017-model-routing-design.md D.2: 三条触发面增量累积的结构化错误数据(message/
-  // statusCode/isRetryable/responseBody,第 3 信号再带 attempt/next),供分类与上报。
+  // plans/0017-model-routing-design.md D.2: the structured error data
+  // accumulated incrementally across the three trigger surfaces (message/
+  // statusCode/isRetryable/responseBody, the 3rd signal adds attempt/next),
+  // for classification and reporting.
   errorInfo?: ErrorInfo
-  // 上述 errorInfo 经 classifySessionError 的归类结果(有错误信息时才有意义)。
+  // The classification of the above errorInfo through classifySessionError
+  // (meaningful only when error information exists).
   errorClass?: ErrorClass
-  // 仅 retry part / session.status retry 两条提前结算面置 true:标识本错误可降级,
-  // 交由 runSession 的 P4 failover 决策读取(此处只标记,不选择候选)。
+  // Set true only on the two early-settlement surfaces, the retry part and
+  // session.status retry: marks this error as failover-eligible for
+  // runSession's P4 failover decision to read (this only marks, it does not
+  // pick a candidate).
   failover?: boolean
-  // 本回合 token 增量累加(STATS_PLAN §2,T-003): 逐 step-finish part 按 part.id
-  // 去重累加——唯一不重不漏口径(服务端 assistantMessage.tokens 是末步覆盖值、
-  // session.tokens 含 fork 继承前缀,均不可直接求和,不得回退到这两个口径)。
-  // attempt 在回合结束时据此 statsSessionEnd 入账。
+  // This turn's token increments, accumulated (STATS_PLAN §2, T-003): per
+  // step-finish part, summed with part.id dedup — the only accounting that
+  // neither duplicates nor misses (the server-side assistantMessage.tokens
+  // is a last-step overwrite and session.tokens carries the fork-inherited
+  // prefix; neither can be summed directly, and neither may be fallen back
+  // to). attempt books it through statsSessionEnd when the turn ends.
   usage?: Usage
-  // 本回合被 driver 代答的提问(auto-resolve H1/H2,plans/0020-auto-resolve-design.md §G):
-  // 与 usage 完全同构——由 snapshot 统一带出,7 个 return 出口(含 error/blocked 提前
-  // 结算口)一个不漏;attempt 在回合结束时补桶身份后 recordResolves 落账。
+  // The questions the driver proxy-answered this turn (auto-resolve H1/H2,
+  // plans/0020-auto-resolve-design.md §G): fully isomorphic to usage —
+  // carried out uniformly by snapshot, through all 7 return exits
+  // (including the error/blocked early-settlement exits) without missing
+  // one; attempt fills in the bucket identity and books them via
+  // recordResolves when the turn ends.
   resolves?: ResolveEvent[]
-  // 测试交接写核失败(严格恢复,plans/0022-session-recovery-fidelity-design.md 3.3): 会话被要求
-  // 写测试交接文档但文档缺失/为空,严格模式下不再补写重试——经 attempt 折成下方
-  // SessionResult 的 rollback 标记,交单元所有者回滚后冷启动重做。
+  // Test-handover write check failed (strict recovery,
+  // plans/0022-session-recovery-fidelity-design.md 3.3): the session was
+  // asked to write the test handover document but the document is missing/
+  // empty; strict mode does no backfill-write retry — attempt folds this
+  // into the rollback flag of SessionResult below, and the unit owner rolls
+  // back and redoes the unit from a cold start.
   testHandoverInvalid?: boolean
 }
 
 export type SessionResult =
   | { type: "idle"; lastText: string; testHandover?: boolean }
   | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & {
-      // 严格恢复: 本阻塞由交接文档无效触发,单元所有者(executeWhole/runSubtask)据此
-      // 回滚到单元基线并冷启动重做,而非把阻塞上抛;无基线的调用方忽略此标记。
+      // Strict recovery: this blocked outcome was triggered by an invalid
+      // handover document; the unit owner (executeWhole/runSubtask) rolls
+      // back to the unit baseline and redoes the unit from a cold start
+      // instead of propagating the block upward; callers without a baseline
+      // ignore the flag.
       rollback?: boolean
       // Registry routing (plans/0055 §6.3): selection found no usable model
       // for this dispatch — every candidate of the list is down or outside
@@ -91,63 +114,101 @@ export type SessionResult =
 // Asia/Shanghai") for the wait line.
 export type WindowWait = { until: number; model: string; tier: Tier; opens: string }
 
-// 任务内所有会话(分解/子任务/修复/收尾)串成一条链: 复用受
-// OPENCODE_AUTO_REUSE_SESSION 管控,缺省 off = 每个提示词开新会话;开启时上一
-// 会话结束时上下文占比低于 REUSE_BELOW、已用量低于 contextLimit 的一半、且距其
-// 结束不超过 REUSE_IDLE_MS 才复用。初始 pct=100 保证首个会话新建;模型上限未知时
-// watch 记 100,即总是新建。中断恢复接管的会话不受开关与阈值约束(attempt 的
-// resumed: 链上有会话且 note 待注入 → 首个提示词必进原会话)。
-// phase 携带当前流水线阶段: 执行链会话据此写进度恢复
-// 记录(.auto/progress.json);旁路一次性会话(requireArtifact)的链不带 phase、
-// 不写记录,避免污染执行链记忆。note 为一次性附加说明(中断恢复时随首个提示词
-// 带给 AI,用后即清)。subject 为本会话产出的提交标题(短标签方案): 新建会话
-// 以它显式命名,复用会话跨阶段在结束时改名(见 renameSession),使会话列表
-// 与 git 历史、任务进度对齐。
-// fork 三段式(fork-decompose 设计 §4.3): forkBase 为本链的分叉基点会话(种子
-// 链携带,溯源用);pending 为预创建会话 id(seedForkSession 从基点分叉所得),
-// attempt() 在 !reuse 时优先消费它(等效于 session.create 的结果),消费即清——
-// 瞬时错误重试自然回落 create 路径。
-// modelShown 为终端展示的已播报模型(每次 prompt 求值出的 target——未设路由时回落
-// 服务端生效模型——与之比对,模型变化时再播报「◈ 使用模型」;新会话(新建/分叉)
-// 恒播报,同会话同模型的续跑 prompt 不重复;仅内存态,不落盘)。
-// 模型注册表之下的选择态(plans/0055 §6.2,§12): modelEntry 为所选条目的内部名
-// (裸 override 值则为其模型串)——续跑判定、降级标记与严格恢复记录都以它为键;
-// model 在注册表之下改存「实际下发给适配器的模型 id」(无 model 的条目为 undefined,
-// prompt 不带 model 键),兼作续跑判定的 current(会话升步后等于所达步的 id);
-// modelStep 为会话已达的上下文步(0 = 基础步,§4.5;步进机制为后续步骤,此处仅
-// 记录基位)。无注册表的运行三者恒 undefined,原语义逐字节不变。
-// baseline 为当前执行单元的 SHA 基线(严格恢复,plans/0022-session-recovery-fidelity-design.md
-// 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
-// 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
+// All sessions of a task (decompose/subtask/repair/wrap-up) chain into one
+// session chain: reuse is governed by OPENCODE_AUTO_REUSE_SESSION, default
+// off = every prompt opens a new session; when on, the previous session is
+// reused only if, at its end, the context percentage was below REUSE_BELOW,
+// the usage below half of contextLimit, and no more than REUSE_IDLE_MS has
+// passed since it ended. The initial pct=100 guarantees the first session is
+// newly created; when the model limit is unknown watch records 100, i.e.
+// always a new one. A session taken over by interruption recovery is exempt
+// from the switch and the thresholds (attempt's resumed: the chain holds a
+// session and a note awaits injection → the first prompt necessarily enters
+// the original session).
+// phase carries the current pipeline phase: the execution chain's sessions
+// write the progress record (.auto/progress.json) from it; the chain of a
+// one-shot bypass session (requireArtifact) carries no phase and writes no
+// record, to avoid polluting the execution chain's memory. note is a
+// one-shot remark (given to the AI with the first prompt during
+// interruption recovery, cleared once used). subject is the commit title of
+// this session's work (the short-label scheme): a newly created session is
+// explicitly named by it, a reused session is renamed at its end when
+// crossing phases (see renameSession), keeping the session list aligned
+// with git history and task progress.
+// The fork three-part scheme (fork-decompose design §4.3): forkBase is this
+// chain's fork-base session (carried by the seed chain, for provenance);
+// pending is a pre-created session id (what seedForkSession forked from the
+// base), which attempt() consumes first when !reuse (equivalent to the
+// result of session.create), cleared on consumption — a transient-error
+// retry naturally falls back to the create path.
+// modelShown is the model already announced to the terminal (each prompt
+// compares against the target it evaluated — falling back to the
+// server-effective model when no routing is set — and re-announces the
+// "◈ … using model" line when the model changed; a new session
+// (created/forked) is always announced, a continuation prompt on the same
+// session and model is not repeated; memory-only, never persisted).
+// The selection state under the model registry (plans/0055 §6.2, §12):
+// modelEntry is the internal name of the chosen entry (for a raw override
+// value, its model string) — continuation detection, failover marks and
+// strict-recovery records all key on it; under the registry, model instead
+// stores "the model id actually dispatched to the adapter" (undefined for an
+// entry without model, the prompt carries no model key) and doubles as the
+// continuation detection's current (after the session steps up it equals
+// the reached step's id); modelStep is the context step the session reached
+// (0 = the base step, §4.5; the step-up mechanism is a later step, only the
+// base position is recorded here). Without a registry all three stay
+// undefined, and the original semantics hold byte for byte.
+// baseline is the current execution unit's SHA baseline (strict recovery,
+// plans/0022-session-recovery-fidelity-design.md 3.1 ③): taken at the
+// runTask entry / the persistStage phase boundary / the runSubtask subtask
+// gate / the requireArtifact unit gate, recorded alongside attempt's write
+// of the active record; recovery verifies against it and rolls back to it.
 // hinted: the chain's current session was sent the in-turn handover hint
 // (copied from its Watch by attempt; plans/0040 D6).
 export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
 
-// 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
-// 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能
-// 从"本轮积累最多的会话"分叉: 超时类故障下,失败会话里那 100k+ 已核实研究是最
-// 值钱的资产,开空白会话等于把它扔掉再从零撞同一堵墙。副本不顶替恢复点(progress
-// 的还原逻辑不动,原会话仍是恢复点),晋升后即清。
-// 记录更替 invariant(2026-09-17,配额连败现场修复): 只被 used > 0 的失败顶替
-// (fork 副本带着旧前缀又跑出新内容,是严格超集);0-token 纯报错桩不顶替——否则
-// 副本下发即死时记录被它覆盖,下一轮重试丢失最有价值的分叉源,退化为基点冷播种。
-// fork 播种后记录刻意留存(不清空),直到副本成功收口(attempt 清)或跑出内容
-// (顶替);fork 已失效的死记录在择源循环顺手清理。
+// The body of the session that just ended with a retryable error (id + end
+// usage). The chain state at that moment was already restored to the
+// pre-dispatch snapshot (the original session is not sacrificed), and the
+// failed session itself went out of scope with it — it is recorded here
+// separately so the retry can fork from "the session with the most
+// accumulated this round": under timeout-type failures, the 100k+ of
+// verified research inside the failed session is the most valuable asset;
+// opening a blank session means throwing it away and hitting the same wall
+// from zero again. The copy does not replace the recovery point (progress's
+// restore logic is untouched, the original session stays the recovery
+// point); cleared once promoted.
+// Record-replacement invariant (2026-09-17, field fix after consecutive
+// quota failures): only a failure with used > 0 replaces it (the fork copy
+// carries the old prefix and runs new content on top, a strict superset); a
+// 0-token pure-error stub does not — otherwise a copy that dies on dispatch
+// overwrites the record with itself, the next retry round loses the most
+// valuable fork source and degrades to cold-seeding from the base. After
+// fork seeding the record is deliberately kept (not cleared) until the copy
+// closes out successfully (attempt clears it) or produces content
+// (replaces it); a dead record whose fork is already invalid is cleaned up
+// in passing by the source-picking loop.
 export type FailedSession = { id: string; used: number }
 
-// fork 基点信息: id 为生效基点会话;used 为基点末端上下文用量(tokens,播种进
-// 分叉链使 watch() 的 2×cap 交接阈值按「前缀+新增」计算,首个 turn 的事件跟踪
-// 随后自行校正)。undefined = unknown (an agent without readable history, MA.4):
-// seedForkSession then starts cold (plans/0038 G1).
+// Fork-base information: id is the effective base session; used is the
+// base's end context usage (tokens, seeded into the forked chain so that
+// watch()'s 2×cap handover threshold counts "prefix + new"; the first
+// turn's event tracking corrects it by itself afterwards). undefined
+// = unknown (an agent without readable history, MA.4): seedForkSession then
+// starts cold (plans/0038 G1).
 export type ForkBaseInfo = { id: string; used: number | undefined }
 
-// resume.Phase → 会话角色(模型路由的细键,见 plans/0017-model-routing-design.md B.5/C.1)。
-// 执行链各阶段映射同名角色(decompose 为 M1.0 合并理解与分解会话的角色,plans/0030 D12);
-// subtasks 取单数 subtask;closeout 无会话(落 bypass);
-// step 变体的英文 slug 即 StepKind(phase-plan / phase-handover),唯独 phase-append 是
-// 规划会话的追加变体(plans/0053 D23/F6),路由沿用 phase-plan 角色,不加新角色词——
-// 既有路由配置继续生效。phase 缺省时返回 undefined——由 roleOf 落 bypass(裸链与无
-// phase 的旁路会话)。
+// resume.Phase → session role (the fine-grained key of model routing, see
+// plans/0017-model-routing-design.md B.5/C.1). Each phase of the execution
+// chain maps to the like-named role (decompose is the role of the M1.0
+// merged understand-and-decompose session, plans/0030 D12); subtasks takes
+// the singular subtask; closeout has no session (bypass); a step variant's
+// English slug is the StepKind (phase-plan / phase-handover), except
+// phase-append, the append variant of the planning session (plans/0053
+// D23/F6): routing keeps the phase-plan role and adds no new role word, so
+// existing routing config keeps working. Returns undefined when phase is
+// absent — roleOf then lands on bypass (a bare chain, and bypass sessions
+// without a phase).
 export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
   if (!phase) return undefined
   switch (phase.kind) {
@@ -166,16 +227,20 @@ export function phaseToRole(phase: Phase | undefined): ModelRole | undefined {
   }
 }
 
-// 会话角色(路由键之一): 显式 chain.role(旁路经 requireArtifact 的 spec.role 设定)
-// 优先,其次由执行链 phase 推导,最后兜底 bypass。见设计 B.5/C.1。
+// The session role (one of the routing keys): the explicit chain.role (set
+// by a bypass through requireArtifact's spec.role) wins, then derivation
+// from the execution chain's phase, then bypass as the final fallback. See
+// design B.5/C.1.
 export function roleOf(chain: SessionChain): ModelRole {
   return chain.role ?? phaseToRole(chain.phase) ?? "bypass"
 }
 
-// 路由求值(设计 C.1,优先级由细到粗): role > phase type id > preset letter >
-// wildcard;均未命中返回 undefined(= 不带 model)。两变量未设时空策略对任意
-// (phase, role) 恒 undefined,保证 prompt 逐字节等价现状。phase 为当前阶段的类型
-// 条目(M3.6: 自定义类型只有类型键,内置类型两种键都认)。
+// Routing evaluation (design C.1, priority fine to coarse): role > phase
+// type id > preset letter > wildcard; when none hits, returns undefined (=
+// no model). With both variables unset, the empty policy is undefined for
+// every (phase, role), keeping the prompt byte-for-byte equivalent to the
+// status quo. phase is the current phase's type entry (M3.6: custom types
+// carry only the type key, builtin types accept both keys).
 export function resolveModel(policy: ModelPolicy, phase: PhaseTypeEntry | undefined, role: ModelRole): string | undefined {
   return (
     policy.byRole[role] ??
@@ -184,14 +249,19 @@ export function resolveModel(policy: ModelPolicy, phase: PhaseTypeEntry | undefi
   )
 }
 
-// 会话错误归类(plans/0017-model-routing-design.md D.1):换模型是否可能有用,是 failover
-// (P4)的决策依据。与 opencode retry.ts 的 RETRYABLE 正则(问"重试有没有用")刻意
-// 不同——这里问"换候选模型有没有用"。缺省 unknown 表示拿不准,P4 保守不在其上换。
+// Session error classification (plans/0017-model-routing-design.md D.1):
+// whether switching models could help — the decision basis of failover
+// (P4). Deliberately different from opencode retry.ts's RETRYABLE regex
+// (which asks "is retrying useful?") — here the question is "is switching
+// to a candidate model useful?". The default unknown means uncertain, and
+// P4 conservatively does not switch on it.
 export type ErrorClass = "quota" | "auth" | "rate" | "overflow" | "transient" | "unknown"
 
-// 分类器的结构化输入:取自 B.4 的三条触发面——session.error 的 data、retry part 的
-// ApiError.data(+attempt)、session.status retry 变体(+attempt、next)。字段全可选,
-// 便于多信号增量累积(见 watch 内 errorInfo 累加器)。
+// The classifier's structured input: taken from B.4's three trigger
+// surfaces — session.error's data, the retry part's ApiError.data
+// (+attempt), and the session.status retry variant (+attempt, next). All
+// fields optional, for incremental accumulation across signals (see the
+// errorInfo accumulator inside watch).
 export type ErrorInfo = {
   message?: string
   statusCode?: number
@@ -201,8 +271,10 @@ export type ErrorInfo = {
   next?: number
 }
 
-// 分类判据集中于此(设计 G.2:新 provider 措辞漏判时,正则在此演进并由 test/chain.test.ts
-// 的固定报文样本回归)。分类器问"换模型有没有用",与 opencode 自身的重试分类器不同。
+// The classification criteria live here (design G.2: when a new provider's
+// wording slips through, the regexes evolve here, regressed by
+// test/chain.test.ts's fixed message samples). The classifier asks "is
+// switching models useful?", unlike opencode's own retry classifier.
 // Neutral wording only (MA.3, plans/0039): an agent's own error type names
 // (opencode ContextOverflowError / ProviderAuthError) come from its adapter's
 // AgentClient.errorPatterns and are OR-ed in per class. Overflow has no
@@ -210,23 +282,32 @@ export type ErrorInfo = {
 const QUOTA_RE = /insufficient_quota|quota|balance|credit|usage limit/i
 const AUTH_RE = /unauthorized|forbidden/i
 const RATE_RE = /rate limit|resource exhausted/i
-// 数字状态码须带数字/小数点边界: 裸 500|502|503|504 会把 "Error 1500"、
-// "code 5042"、版本号 "5.0.4" 误归 transient(2026-09-17 审查 H4)。长号码里的
-// 子串与版本号都不构成"服务端 5xx"信号,应落 unknown 保守不换模型。
+// Numeric status codes need digit/dot boundaries: a bare 500|502|503|504
+// would misclassify "Error 1500", "code 5042" or version "5.0.4" as
+// transient (2026-09-17 review H4). Substrings inside long numbers and
+// version numbers carry no "server 5xx" signal; they should land on
+// unknown, conservatively not switching models.
 const TRANSIENT_RE = /overloaded|timeout|timed out|econn|socket hang up|network|temporar|internal server error|bad gateway|service unavailable|(?<![\d.])50[0234](?![\d.])/i
 const QUOTA_STATUS = 402
-// rate 阈值:单个 429 只是 opencode 仍在退避(不可据此换模型),须满足"已重试够多次"
-// 或"下次等待超阈值"才判 rate(设计 D.1 rate 行、B.4 第 2 信号)。
+// rate thresholds: a lone 429 only means opencode is still backing off (not
+// enough to switch models on); rate requires "retried enough times" or
+// "next wait above threshold" (design D.1 rate row, B.4 2nd signal).
 const RATE_ATTEMPTS = 3
 const RATE_WAIT_MS = 60_000
 
-// 归类优先级(自上而下,首个命中即返回,与设计 D.1 判据表一致):
-//   1. overflow   —— 报文含上下文溢出错误名(opencode: ContextOverflowError;交接/handover 机制管,明确不换)。
-//   2. quota      —— 服务端明说不可重试、或配额/余额/额度文案、或 402。
-//   3. auth       —— 401/403 或认证/越权文案(provider 不可用)。
-//   4. rate       —— 429/限流文案且达到重试次数或下次等待超阈值。
-//   5. transient  —— 已知瞬时错误(走现有重试路径,不换模型)。
-//   6. unknown    —— 保守缺省(拿不准不换)。
+// Classification priority (top to bottom, first hit returns; matches the
+// design D.1 criteria table):
+//   1. overflow   — the message names a context-overflow error (opencode:
+//                   ContextOverflowError; handled by the handover mechanism,
+//                   explicitly no switch).
+//   2. quota      — the server says outright non-retryable, or quota/
+//                   balance/credit wording, or 402.
+//   3. auth       — 401/403 or auth/forbidden wording (provider unusable).
+//   4. rate       — 429/rate-limit wording plus retries reached or a next
+//                   wait above threshold.
+//   5. transient  — a known transient error (existing retry path, no model
+//                   switch).
+//   6. unknown    — conservative default (no switch when uncertain).
 export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns = {}): ErrorClass {
   const hay = `${info.message ?? ""}\n${info.responseBody ?? ""}`
   const hit = (neutral: RegExp | undefined, own: RegExp | undefined) => (neutral?.test(hay) ?? false) || (own?.test(hay) ?? false)
@@ -240,10 +321,13 @@ export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns 
   return "unknown"
 }
 
-// 上下文占比低于该值(%)时复用上一会话(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效)。
+// Reuse the previous session when its context percentage is below this
+// value (%) (effective only with OPENCODE_AUTO_REUSE_SESSION=on).
 export const REUSE_BELOW = 50
 
-// 会话复用的间隔上限(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效): 距上一会话结束
-// 超过该值即视为上下文陈旧(driver 侧工作如测试脚本执行可能耗时很久),不复用、开新会话。
+// The interval cap for session reuse (effective only with
+// OPENCODE_AUTO_REUSE_SESSION=on): more than this since the previous
+// session ended counts as stale context (driver-side work such as
+// test-script runs can take long) — no reuse, open a new session.
 export const REUSE_IDLE_MS = 5 * 60 * 1000
 export const REUSE_IDLE_MINUTES = REUSE_IDLE_MS / 60_000

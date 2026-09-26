@@ -2,11 +2,16 @@ import { chmod, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { reprotect } from "./protect"
 
-// AGENTS.md 的 opencode-auto 块: 单一标记块,内容 = 指针 + 测试执行原则(testByDriver 开关)+ 提交原则 + 摘要原则(非交互场景不产出会话末尾
-// 总结)+ 引用规范,合并为一段英文文本。段落以数组 filter/join 拼接
-// (\n\n 分隔),不走 template.ts 的 {{#if}} 引擎——标签独占一行吞掉整行换行的语义
-// 会在开关关闭时让相邻段落粘连、丢失分隔空行,数组拼接不依赖该语义,恒为一个
-// 空行分隔。
+// The opencode-auto block of AGENTS.md: one marker block, content = the
+// pointer + the test-execution principle (the testByDriver switch) + the
+// commit principle + the summary principle (non-interactive scenarios
+// produce no end-of-session summary) + the reference conventions, merged
+// into one English text. Paragraphs are assembled with array filter/join
+// (\n\n separated), not through template.ts's {{#if}} engine — the semantic
+// where a tag alone on its line swallows the whole line's newline would
+// glue adjacent paragraphs together when a switch is off, losing the
+// separating blank line; array joining does not depend on that semantic and
+// always separates with exactly one blank line.
 // AGENTS.md holds only this block (plus whatever a human wrote around it):
 // sessions do not maintain it (plans/0054 D2). The file is gitignored
 // (local-only), so session edits would escape the unified commit and the
@@ -17,11 +22,12 @@ import { reprotect } from "./protect"
 export const AGENTS_BLOCK_START = "<!-- opencode-auto:start -->"
 export const AGENTS_BLOCK_END = "<!-- opencode-auto:end -->"
 
-// 唯一标准块(无 name 段)。
+// The one canonical block (no name segment).
 const CANONICAL_BLOCK = /<!--\s*opencode-auto:start\s*-->[\s\S]*?<!--\s*opencode-auto:end\s*-->/
 
-// 任何带 `:<name>:` 段的 opencode-auto 块——旧六块格式(verify/test/commit/maint/
-// refs)或未来任何游离标记块;不匹配上面的裸 start/end 标准块。
+// Any opencode-auto block with a `:<name>:` segment — the legacy six-block
+// format (verify/test/commit/maint/refs) or any future stray marker block;
+// does not match the bare start/end canonical block above.
 export const LEGACY_BLOCK = /<!--\s*opencode-auto:([\w-]+):start\s*-->[\s\S]*?<!--\s*opencode-auto:\1:end\s*-->\n*/g
 
 const POINTER = `This directory is driven by opencode-auto. The session prompt already inlines the task for this turn, so you normally don't need to read state files separately. A task's own documents hold its full content and progress — \`docs/T-NNN/todo.md\` (goal, scope, acceptance) and \`docs/T-NNN/subtasks.md\` (the subtask checklist): reread them if context has been compacted, or whenever you are unsure about the current task or its progress, rather than relying on session memory. The \`todo.md\` → \`done.md\` renames of phases, tasks and subtasks and the ticks in their indexes are made by DRIVER alone. AGENTS.md is not a place for notes: do not edit it — anything worth keeping belongs in \`docs/\` documents.`
@@ -48,11 +54,16 @@ export function renderAgentsBlock(opts: { testByDriver?: boolean } = {}): string
   return `${AGENTS_BLOCK_START}\n${paragraphs.join("\n\n")}\n${AGENTS_BLOCK_END}`
 }
 
-// 幂等同步 AGENTS.md 的 opencode-auto 块: 按当前配置渲染模板,与文件中现有的标准块
-// (裸 opencode-auto:start/end)比对——内容一致则不动,不一致则整块替换,不存在则
-// 追加;文件中其余带 name 段的 opencode-auto 块(旧六块格式或任何游离标记块)一律
-// 删除。旧格式的裸指针块本身就匹配标准块正则,因此会走替换分支被新合并内容取代,
-// 其余五个带名块由删除分支清理——这就是从旧格式到新格式的迁移路径。
+// Idempotently syncs AGENTS.md's opencode-auto block: renders the template
+// from the current config and compares it with the canonical block already
+// in the file (bare opencode-auto:start/end) — identical content is left
+// alone, differing content replaces the whole block, a missing one is
+// appended; every other opencode-auto block with a name segment in the file
+// (legacy six-block format or any stray marker block) is deleted. The
+// legacy bare-pointer block itself matches the canonical-block regex, so it
+// goes through the replace branch and is superseded by the new merged
+// content, while the other five named blocks are cleaned up by the delete
+// branch — that is the migration path from the old format to the new one.
 // dryRun computes the result without writing, so `fix` can print its plan first.
 export async function ensurePointer(
   directory: string,
@@ -93,10 +104,13 @@ export async function ensurePointer(
   return { block, legacyRemoved }
 }
 
-// ensurePointer 的逆操作(reset 用): 摘除标准块与任何旧版带名块,文件其余内容
-// (用户自写正文)原样保留。摘除后正文仅剩 `# AGENTS.md` 空壳标题——即该文件
-// 本就是 ensurePointer 建的——则报 emptied,由调用方整个删除。dryRun 只算结果
-// 不落盘,供 reset 先打印清单再确认。
+// The inverse of ensurePointer (used by reset): removes the canonical block
+// and any legacy named blocks, keeping the rest of the file (the user's own
+// prose) verbatim. If after removal the prose is down to the bare
+// `# AGENTS.md` heading shell — i.e. the file was created by ensurePointer
+// in the first place — it reports emptied and the caller deletes the whole
+// file. dryRun only computes the result without writing, so reset can
+// print the list first and confirm.
 export async function removePointer(
   directory: string,
   opts: { dryRun?: boolean } = {},

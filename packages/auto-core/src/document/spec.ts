@@ -31,13 +31,14 @@ import type { ArtifactSpec } from "./types"
 // workspace conventions like index.md — the list comes entirely from the
 // declaration). Syntax aligns with the decompose prompt's "declare artifacts
 // per item" convention, parsed leniently:
-//   - [ ] 调研 X Artifacts: docs/T-001/S01/record.md、src/y.ts
-//   - [ ] 写文档 Artifacts: docs/T-001/S01/index.md(背景、结论)
+//   - [ ] investigate X Artifacts: docs/T-001/S01/record.md、src/y.ts
+//   - [ ] write docs Artifacts: docs/T-001/S01/index.md(background、conclusions)
 // Paths separate by comma/ideographic comma/semicolon/whitespace; parenthesized
 // text after a path lists optional required section anchors (attached directly
 // or as a standalone paren item); backtick-wrapped paths are shelled; tokens
-// without `/` and without an extension (natural language, e.g. 「调研结论」)
-// are not paths and are skipped — a pure-prose declaration leaves zero specs,
+// without `/` and without an extension (natural language, e.g. "research
+// findings") are not paths and are skipped — a pure-prose declaration leaves
+// zero specs,
 // covered separately by the zero-disk-writes criterion (unit baseline diff).
 export function declaredArtifacts(text: string): ArtifactSpec[] {
   // Case-insensitive on the English token: a session writing `artifacts:` must

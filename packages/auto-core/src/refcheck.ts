@@ -1,26 +1,37 @@
-// 引用一致性层(stable-refs 设计 §4.5,三层见 D6): extractRefs 提取文档对文档/
-// 代码的路径引用(反引号 span 与 md 链接),rewriteRefs 做旧→新路径的机械改写
-// (提交前 auto-correct 与 fix-refs 手动脚本共用本原语);P4 补齐 validateRefs
-// (存在性 + 段边界后缀唯一匹配消解 + 行号上限)、renamePairs(git rename 配对)、
-// 活文档枚举与 scanRefs 全量扫描,供 check 子命令消费;
-// autoCorrectRefs 另维护 .auto/invalid-refs.md 失效清单,仅对新出现的失效引用输出
-// ⚠ 日志;refcheck-scope P2 补齐 renameHistory(git 历史 rename 地图)与缺失
-// 恢复(失效确认在先、恢复在后: missing finding 的目标在历史中曾存在且链式解析
-// 落点当前存在 → 就地改写恢复;落点已删除保留 finding 人工订正);P3 补齐范围再
-// 确认(reconfirmAnchors): 带行号锚的引用,其目标文件在所属(可能嵌套的)git
-// 仓库有未提交差异时,比对 HEAD 版本与当前工作区版本的同范围行切片,不一致即
-// 保留原范围、就地追加 @<sha> 版本标记(语义: 该范围仅对此历史版本有效)。
-// 三层挂点受 OPENCODE_AUTO_REF_CHECK 管控(refcheck-scope-design D3,
-// 缺省 off 空转;管控点在 runner.ts/check.ts,本层函数不感知开关)。
+// Reference-consistency layer (stable-refs design §4.5, the three layers in
+// D6): extractRefs extracts the path references a document makes to documents
+// and code (backtick spans and md links), rewriteRefs does the mechanical
+// old→new path rewrite (the pre-commit auto-correct and the fix-refs manual
+// script share this primitive); P4 added validateRefs (existence +
+// segment-boundary suffix unique-match resolution + the line-number cap),
+// renamePairs (git rename pairing), live-document enumeration and the
+// scanRefs full scan, consumed by the check subcommand; autoCorrectRefs also
+// maintains the .auto/invalid-refs.md stale list, logging ⚠ only for newly
+// appearing stale references; refcheck-scope P2 added renameHistory (the
+// git-history rename map) and missing recovery (confirm stale first, recover
+// after: a missing finding whose target once existed in history and whose
+// chain-resolved landing currently exists → recovered by an in-place rewrite;
+// a deleted landing keeps the finding for manual correction); P3 added range
+// reconfirmation (reconfirmAnchors): when a reference with a line anchor has
+// a target file with uncommitted differences in its owning (possibly nested)
+// git repository, the HEAD version's and the current worktree version's line
+// slices of the same range are compared, and on mismatch the original range
+// stays with an @<sha> version marker appended in place (semantics: the range
+// holds only for that historical version). The three layer hook points are
+// governed by OPENCODE_AUTO_REF_CHECK (refcheck-scope-design D3, off by
+// default = idle; the control points are in runner.ts/check.ts, and this
+// layer's functions never see the switch).
 import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
 import type { Stats } from "node:fs"
 import { join, relative, sep, dirname } from "node:path"
 import { repoRoots } from "./git"
 import { log } from "./log"
 
-// path = 剥离可选 `@<sha>` 版本标记与 `:行号` 尾锚后的引用路径;line = 尾锚行号
-// (存在时);ver = `@<sha>` 版本标记(存在时——历史快照引用,行号上限校验豁免);
-// at = 引用所在行号(1 起)。
+// path = the referenced path after stripping the optional `@<sha>` version
+// marker and the `:N` tail anchor; line = the tail anchor's line number (when
+// present); ver = the `@<sha>` version marker (when present — a historical
+// snapshot reference, exempt from the line-number cap check); at = the line
+// number the reference sits on (1-based).
 export type Ref = { path: string; line?: number; at: number; ver?: string }
 
 // Candidate-line mask (single-pass state machine): lines inside ``` / ~~~
@@ -29,7 +40,7 @@ export type Ref = { path: string; line?: number; at: number; ver?: string }
 // references in code blocks and references declared stale take no part in
 // extraction or rewriting; the fence lines themselves are exempt too.
 // The markers are a protocol string (0035 §4 phase face), flipped from
-// 已删除|已归档|历史 in M3.8 with no dual-read.
+// `已删除|已归档|历史` in M3.8 with no dual-read.
 export const REFCHECK_EXEMPT = /\b(?:deleted|archived|historical)\b/i
 
 function candidateMask(text: string): boolean[] {
@@ -43,8 +54,9 @@ function candidateMask(text: string): boolean[] {
   })
 }
 
-// 行内引用 token: 反引号 span(`…`)与 md 链接([x](…))的目标;同 token 多次
-// 出现只取一次(提取目的是路径清单,不是出现位置清单)。
+// In-line reference tokens: the targets of backtick spans (`…`) and md links
+// ([x](…)); a token appearing multiple times is taken once (the extraction's
+// purpose is a path list, not an occurrence list).
 function tokensOf(line: string): string[] {
   const tokens = new Set<string>()
   for (const span of line.matchAll(/`([^`]+)`/g)) tokens.add(span[1]!)
@@ -52,9 +64,11 @@ function tokensOf(line: string): string[] {
   return [...tokens]
 }
 
-// 尾锚解析(refcheck-scope P3 §6,顺序不可颠倒): 先剥可选 `@<sha>` 版本标记
-// (7-40 位十六进制,历史快照引用),再剥 `:N` / `:N-M` 行号锚;anchorRaw 保留
-// 原锚文本(范围再确认改写须保留原范围,不能由 start/end 重建)。
+// Tail-anchor parsing (refcheck-scope P3 §6, the order is not negotiable):
+// strip the optional `@<sha>` version marker first (7-40 hex digits, a
+// historical snapshot reference), then the `:N` / `:N-M` line anchor;
+// anchorRaw keeps the original anchor text (the range-reconfirmation rewrite
+// must keep the original range, it cannot be rebuilt from start/end).
 function parseTail(token: string): { path: string; start?: number; end?: number; ver?: string; anchorRaw?: string } {
   let rest = token
   let ver: string | undefined
@@ -70,9 +84,12 @@ function parseTail(token: string): { path: string; start?: number; end?: number;
   return { path, start: nums[0]!, end: nums[nums.length - 1]!, ver, anchorRaw: anchor[1]! }
 }
 
-// 提取规则(P1 计划 §4.2): 候选行的 token 剥离可选尾锚后,须无空白且
-// "含 / 或含 ."(路径状)才算引用;尾锚见 parseTail(行号区间 line 取上界——
-// 存在性校验用不到行号,行号上限校验按最大行号判超界)。
+// Extraction rules (P1 plan §4.2): a candidate line's token, after stripping
+// the optional tail anchor, must contain no whitespace and "contain / or
+// contain ." (path-shaped) to count as a reference; tail anchors see parseTail
+// (a line range's line takes the upper bound — existence checks need no line
+// number, the line-number cap check judges overflow by the largest line
+// number).
 export function extractRefs(text: string): Ref[] {
   const refs: Ref[] = []
   const mask = candidateMask(text)
@@ -90,11 +107,15 @@ export function extractRefs(text: string): Ref[] {
   return refs
 }
 
-// 机械改写: 对每个 pair 以全路径词边界正则替换并计数(防 docs/T-1.md 误配
-// docs/T-11.md、防截断半路径);同样只作用于候选行(围栏与标记行豁免)。
-// 排版不变式(2026-09-08 需求追加): 改写绝不动文档排版——只就地替换命中 token
-// 本身,行结构/空白/表格对齐/末尾换行一律原样保留;无命中(count=0)时输出与
-// 输入逐字节相同(调用方不写回,文件保持原样)。
+// Mechanical rewrite: each pair is replaced via a whole-path word-boundary
+// regex and counted (prevents docs/T-1.md matching docs/T-11.md, prevents
+// truncated half-paths); likewise acts only on candidate lines (fence and
+// marker lines exempt). Typographic invariant (2026-09-08 requirement
+// addendum): a rewrite never touches document typography — only the matched
+// token itself is replaced in place, and line structure/whitespace/table
+// alignment/trailing newline are all preserved as-is; with no hits (count=0)
+// the output is byte-identical to the input (the caller does not write back,
+// the file stays as it was).
 export function rewriteRefs(text: string, pairs: Array<{ old: string; new: string }>): { text: string; count: number } {
   const lines = text.split("\n")
   const mask = candidateMask(text)
@@ -116,10 +137,11 @@ function escapeRegexp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-// —— P4: 活文档枚举与校验 ——
-// 活文档范围(stable-refs §3.3): docs/**/*.md——阶段目录内的交接、产物、任务索引
-// tasks.md 与 todo.md/done.md,任务单元,以及轮内阶段索引 phases.md;排序保证扫描与
-// 日志输出确定。
+// —— P4: live-document enumeration and validation ——
+// Live-document scope (stable-refs §3.3): docs/**/*.md — the phase
+// directories' handovers, artifacts, task index tasks.md and todo.md/done.md,
+// task units, plus the round's phase index phases.md; the sort keeps scans
+// and log output deterministic.
 export async function activeDocs(dir: string): Promise<string[]> {
   const files: string[] = []
   for await (const file of new Bun.Glob(join("docs", "**", "*.md")).scan({ cwd: dir, onlyFiles: true })) {
@@ -128,10 +150,12 @@ export async function activeDocs(dir: string): Promise<string[]> {
   return files.sort()
 }
 
-// 引用是否属可校验形态: §3.2 唯一合法形态为目标目录根相对路径——URL(scheme:
-// 形态,含 Windows 盘符)、绝对路径与 ~/ 开头、./ 与 ../ 相对形态之外的引用不
-// 校验不报告;另要求路径状——含 / 或带字母开头的扩展名(防 `v1.2`、`3.10` 类
-// 版本号误报)。
+// Whether a reference has a checkable shape: §3.2's only legal shape is a
+// path relative to the target directory root — references outside it (URL
+// scheme: form, Windows drive letters included; absolute and ~/ prefixed;
+// ./ and ../ relative shapes) are neither checked nor reported;
+// path-shaped is also required — containing / or a letter-led extension
+// (guards against false positives on version numbers like `v1.2`, `3.10`).
 function checkable(path: string): boolean {
   if (path.startsWith("/") || path.startsWith("\\") || path.startsWith("~")) return false
   if (path.startsWith("./") || path.startsWith("../")) return false
@@ -140,17 +164,25 @@ function checkable(path: string): boolean {
   return /\.[A-Za-z][A-Za-z0-9]*$/.test(path)
 }
 
-// 一处失效引用: file/line/text = 引用所在文档与行(原文),path = 被引用路径,
-// problem = 路径不存在(missing)或行号超出文件总行数(beyond-eof)。
+// One stale reference: file/line/text = the referencing document and line
+// (the original text), path = the referenced path, problem = the path does
+// not exist (missing) or the line number exceeds the file's total line count
+// (beyond-eof).
 export type RefFinding = { file: string; line: number; text: string; path: string; problem: "missing" | "beyond-eof" }
 
-// 目录文件索引(惰性构建,一次扫描全程复用): 目标目录树的全量文件与目录清单,
-// node_modules 与 .git 剪枝不下钻(体积大且副本路径会破坏唯一性判定)。软链目录
-// 照常下钻(迁移工程常以软链挂载参照源码树,如 linux → …),以 realpath 集合防
-// 循环软链与重复下钻。用于消解带上下文语境的相对引用——引用常以引用者所在目录
-// 或参照树根为基书写,直接按目标目录根解析会误判缺失;目录引用(尾缀 /)只在
-// 目录项内匹配,文件引用不限形态(同名文件与目录不会并存于同一路径,跨形态歧义
-// 按多重匹配缺失处理)。
+// Directory file index (built lazily, reused for a whole scan): the full
+// list of files and directories of the target directory tree; node_modules
+// and .git are pruned without descending (huge, and duplicate paths would
+// break the uniqueness decision). Symlinked directories are descended as
+// usual (migration projects often mount reference source trees via symlinks,
+// e.g. linux → …), with a realpath set guarding against symlink cycles and
+// repeated descents. Used to resolve contextual relative references — a
+// reference is often written relative to the referencing document's
+// directory or the reference tree's root, and resolving it directly against
+// the target directory root would misjudge it missing; directory references
+// (trailing /) match only among directory entries, file references are not
+// shape-restricted (a file and a directory of the same name never coexist
+// at one path; cross-shape ambiguity is treated as missing via multi-match).
 type IndexEntry = { path: string; dir: boolean }
 
 class FileIndex {
@@ -163,10 +195,15 @@ class FileIndex {
     return this.files
   }
 
-  // 批量消解: 一趟遍历索引,对每项自末段向前枚举段边界后缀与目标集求交——总代价
-  // O(索引项 × 平均段数),引用数大时远优于逐目标全表过滤(O(引用数 × 文件数))。
-  // 唯一命中的目标收录(多重匹配属语境歧义,交由调用方按缺失处理);尾缀 `/` 的
-  // 目标只在目录项内匹配。带/不带尾杠的同一目标归一同键(值数组),避免互相覆盖。
+  // Batch resolution: one pass over the index, intersecting the target set
+  // with each entry's segment-boundary suffixes enumerated from the last
+  // segment backwards — total cost O(index entries × average segments), far
+  // better than a per-target full-table filter when the reference count is
+  // large (O(references × files)). Only uniquely hit targets are kept
+  // (multi-match is contextual ambiguity, left to the caller to treat as
+  // missing); a target with a trailing `/` matches only among directory
+  // entries. The same target with and without the trailing slash lands under
+  // one key (value array), avoiding mutual overwrite.
   async resolveAll(targets: string[]): Promise<Map<string, IndexEntry>> {
     const lookup = new Map<string, Array<{ target: string; dirOnly: boolean }>>()
     for (const target of targets) {
@@ -204,8 +241,11 @@ async function walkTree(dir: string, base = "", visited?: Set<string>): Promise<
   for (const entry of await readdir(join(dir, base), { withFileTypes: true }).catch(() => [])) {
     const rel = base ? `${base}/${entry.name}` : entry.name
     if (entry.name === "node_modules" || entry.name === ".git") continue
-    // 常规目录/文件按 Dirent 直收;软链需 stat 跟随判定目标形态(Dirent 对软链
-    // 恒报 isSymbolicLink),目录下钻前以 realpath 查 visited 防循环与重复。
+    // Regular directories/files are taken straight from the Dirent; a symlink
+    // needs a following stat to decide the target's shape (Dirent always
+    // reports isSymbolicLink for symlinks), and before descending into a
+    // directory its realpath is checked against visited to prevent cycles
+    // and repeats.
     if (entry.isDirectory()) {
       await descend(dir, rel, seen, out)
     } else if (entry.isFile()) {
@@ -227,22 +267,37 @@ async function descend(dir: string, rel: string, seen: Set<string>, out: IndexEn
   out.push(...(await walkTree(dir, rel, seen)))
 }
 
-// 校验一组引用(§3.2 校验语义: 路径存在;行号 ≤ 文件总行数)。路径解析两步:
-// 目标目录根相对直接命中即有效;否则在目录树中找以该路径为段边界后缀的唯一文件
-// 匹配——唯一命中即视为有效并消解到匹配文件做行号校验(带上下文语境的相对引用,
-// 尤其非 docs 引用;多重匹配属语境歧义,按缺失)。同一文档内的重复路径只校验一次;
-// md 链接的 #fragment 尾锚剥后再验;目录引用只查存在性(行号锚对目录无意义,忽略)。
-// index 供扫描入口跨文档复用(缺省自建,惰性构建)。
-// 校验一组引用(§3.2 校验语义: 路径存在;行号 ≤ 文件总行数)。路径解析两步:
-// 目标目录根相对直接命中即有效;否则在目录树中找以该路径为段边界后缀的唯一文件
-// 匹配——唯一命中即视为有效并消解到匹配文件做行号校验(带上下文语境的相对引用,
-// 尤其非 docs 引用;多重匹配属语境歧义,按缺失)。resolved 为跨文档共享的消解
-// 结果表(target → 消解路径或 undefined,含直接命中;由 scanRefs 单趟批量预计算,
-// 避免逐文档重复全索引消解——表内缺项时回落自查)。同一文档内的重复路径只校验
-// 一次;md 链接的 #fragment 尾锚剥后再验;目录引用只查存在性(行号锚对目录无
-// 意义,忽略)。带 ver(`@<sha>` 版本标记)的引用视为历史快照引用——只查路径
-// 存在性,行号上限校验豁免(历史版本不可机械校验,refcheck-scope P3 §6)。
-// index 供缺表时的回落消解复用(缺省自建,惰性构建)。
+// Validate a set of references (§3.2 validation semantics: the path exists;
+// the line number ≤ the file's total line count). Path resolution is two
+// steps: a target-directory-root-relative direct hit is valid; otherwise find
+// the unique file match in the directory tree having the path as a
+// segment-boundary suffix — a unique hit counts as valid and resolves to the
+// matched file for the line-number check (contextual relative references,
+// especially non-docs ones; multi-match is contextual ambiguity, treated as
+// missing). Duplicate paths within one document are validated once; an md
+// link's #fragment tail anchor is stripped before validating; directory
+// references get only an existence check (a line anchor is meaningless for a
+// directory, ignored). index lets the scan entry point reuse it across
+// documents (built by default, lazily).
+// Validate a set of references (§3.2 validation semantics: the path exists;
+// the line number ≤ the file's total line count). Path resolution is two
+// steps: a target-directory-root-relative direct hit is valid; otherwise find
+// the unique file match in the directory tree having the path as a
+// segment-boundary suffix — a unique hit counts as valid and resolves to the
+// matched file for the line-number check (contextual relative references,
+// especially non-docs ones; multi-match is contextual ambiguity, treated as
+// missing). resolved is the resolution-result table shared across documents
+// (target → resolved path or undefined, direct hits included; precomputed in
+// one batch pass by scanRefs, avoiding a per-document repeat of the
+// full-index resolution — when the table lacks an entry it falls back to
+// resolving here). Duplicate paths within one document are validated once; an
+// md link's #fragment tail anchor is stripped before validating; directory
+// references get only an existence check (a line anchor is meaningless for a
+// directory, ignored). A reference with ver (an `@<sha>` version marker)
+// counts as a historical snapshot reference — only the path's existence is
+// checked, the line-number cap check is exempt (a historical version cannot
+// be mechanically checked, refcheck-scope P3 §6). index is reused for the
+// no-table fallback resolution (built by default, lazily).
 export async function validateRefs(
   dir: string,
   refs: Ref[],
@@ -251,7 +306,7 @@ export async function validateRefs(
 ): Promise<Map<string, "missing" | "beyond-eof">> {
   const problems = new Map<string, "missing" | "beyond-eof">()
   const paths = [...new Set(refs.filter((ref) => checkable(ref.path)).map((ref) => ref.path))]
-  // 第一步: 定位每个目标的落点(直接命中 / 唯一消解 / 缺失)。
+  // Step one: locate each target's landing (direct hit / unique resolution / missing).
   const where = new Map<string, string>()
   const missing = new Set<string>()
   for (const path of paths) {
@@ -271,7 +326,8 @@ export async function validateRefs(
     if (hit) where.set(target, hit.path)
     else missing.add(target)
   }
-  // 第二步: 逐目标定性——落点存在性与行号上限(目录引用只查存在性)。
+  // Step two: classify each target — landing existence and the line-number
+  // cap (directory references get only the existence check).
   for (const path of paths) {
     const target = path.split("#")[0]!
     const at = where.get(target)
@@ -294,9 +350,11 @@ export async function validateRefs(
   return problems
 }
 
-// 扫描一组文档(docs 缺省 = 全部活文档): 先汇总全部文档的可校验目标,直接命中
-// 判定后一趟 resolveAll 批量消解(结果表跨文档共享,索引全程只遍历一次),再逐
-// 文档引用校验产出 findings。
+// Scan a set of documents (docs defaults to all live documents): first pool
+// every document's checkable targets, then after the direct-hit decision run
+// one resolveAll batch resolution (the result table is shared across
+// documents, the index is traversed exactly once for the whole scan), then
+// validate each document's references and produce the findings.
 export async function scanRefs(dir: string, docs?: string[]): Promise<RefFinding[]> {
   const files = docs ?? (await activeDocs(dir))
   const index = new FileIndex(dir)
@@ -319,8 +377,9 @@ export async function scanRefs(dir: string, docs?: string[]): Promise<RefFinding
     else unresolved.push(target)
   }
   const hits = await index.resolveAll(unresolved)
-  // 未命中目标(含多重匹配歧义)显式记 undefined = 已定性缺失,防止消费方回落自查
-  // 重复触发全索引遍历。
+  // Unhit targets (multi-match ambiguity included) are explicitly recorded
+  // as undefined = classified missing, preventing a consumer's fallback
+  // self-check from re-triggering a full-index traversal.
   for (const target of unresolved) resolved.set(target, hits.get(target)?.path)
   const findings: RefFinding[] = []
   for (const { file, text, refs } of scanned) {
@@ -335,8 +394,9 @@ export async function scanRefs(dir: string, docs?: string[]): Promise<RefFinding
   return findings
 }
 
-// —— P4: git rename 配对与提交前 auto-correct ——
-// 目标目录是否在 git 仓库内(check 对非 git 目录报 note: auto-correct 不可用)。
+// —— P4: git rename pairing and pre-commit auto-correct ——
+// Whether the target directory is inside a git repository (check reports a
+// note for non-git directories: auto-correct unavailable).
 export async function gitAvailable(dir: string): Promise<boolean> {
   try {
     const proc = Bun.spawn(["git", "-C", dir, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "pipe" })
@@ -347,10 +407,12 @@ export async function gitAvailable(dir: string): Promise<boolean> {
   }
 }
 
-// git rename 配对(§4.5): 索引 vs HEAD——工作区改动先经 git add -A 暂存,使
-// 未跟踪的新路径参与 rename 配对(driver 的下一次统一提交本就全量 add,暂存
-// 不改变其结果);输出换算为目标目录相对路径。非 git 目录/无 HEAD(空仓库)/
-// git 不可用返回 []。
+// git rename pairing (§4.5): index vs HEAD — worktree changes are staged
+// through git add -A first so untracked new paths take part in rename
+// pairing (the driver's next unified commit adds everything anyway, staging
+// changes nothing about its result); the output is converted to
+// target-directory-relative paths. A non-git directory / no HEAD (an empty
+// repository) / git unavailable returns [].
 export async function renamePairs(dir: string): Promise<Array<{ old: string; new: string }>> {
   const top = (await gitOut(dir, ["rev-parse", "--show-toplevel"]))?.trim()
   if (!top) return []
@@ -369,13 +431,18 @@ export async function renamePairs(dir: string): Promise<Array<{ old: string; new
   return pairs
 }
 
-// —— refcheck-scope P2: rename 历史地图与缺失引用恢复(§4)——
-// rename 历史地图(D5 的确定性判据:「曾出现」= 所属 git 仓库历史中曾存在该
-// 路径): 目标仓库及嵌套子仓库各自执行 git log --find-renames --diff-filter=R
-// --name-status --format= -z,按新→旧序遍历、首现优先得 old→new 直接边,再链式
-// 解析到最终落点(visited 防环;成环等病态历史解析到的落点若已不存在,由调用方
-// 存在性检查兜底保留 finding);路径换算目标目录相对,目录树外路径丢弃。
-// 键值均为目标目录相对路径(old → 最终落点)。
+// —— refcheck-scope P2: the rename history map and missing-reference recovery (§4) ——
+// The rename history map (D5's deterministic criterion: "once appeared" =
+// the path once existed in the owning git repository's history): the target
+// repository and each nested sub-repository run git log --find-renames
+// --diff-filter=R --name-status --format= -z; traversed newest→oldest with
+// first-appearance priority, the old→new direct edges fall out, then chain
+// resolution reaches the final landing (visited guards against cycles; if a
+// landing reached through cyclic or other pathological history no longer
+// exists, the caller's existence check keeps the finding as a backstop);
+// paths are converted to target-directory-relative, paths outside the
+// directory tree are dropped. Keys and values are both
+// target-directory-relative paths (old → final landing).
 export async function renameHistory(dir: string): Promise<Map<string, string>> {
   const edges = new Map<string, string>()
   for (const root of await repoRoots(dir)) {
@@ -407,12 +474,17 @@ export async function renameHistory(dir: string): Promise<Map<string, string>> {
   return history
 }
 
-// 缺失引用恢复(§4,失效确认在先、恢复在后——顺序不可颠倒): 对 findings 中
-// problem: "missing" 的条目逐一定性——rename 历史地图含该目标为 old 且链式落点
-// 当前存在 → rewriteRefs 就地改写恢复(排版不变式);落点已删除(或历史中不曾
-// 存在)→ 保留 finding 入失效清单,人工订正。只恢复「移动/改名」导致的失效,
-// 删除与语义变化不自动恢复(§8 边界)。最小范围: 只改写失效确认的该引用所在
-// 文档中的该路径 token,不波及其他文档。返回改写处数(0 = 本轮无恢复)。
+// Missing-reference recovery (§4, confirm stale first, recover after — the
+// order is not negotiable): each finding with problem: "missing" is
+// classified — the rename history map holds the target as an old and the
+// chain landing currently exists → rewriteRefs recovers it by an in-place
+// rewrite (typographic invariant); the landing is deleted (or never existed
+// in history) → the finding stays, entering the stale list for manual
+// correction. Only staleness caused by "move/rename" is recovered; deletion
+// and semantic change are not auto-recovered (§8 boundary). Minimal scope:
+// only that path token in the document holding the confirmed-stale reference
+// is rewritten, other documents are untouched. Returns the number of
+// rewrites (0 = no recovery this round).
 async function recoverMissingRefs(dir: string, findings: RefFinding[]): Promise<number> {
   const missing = findings.filter((finding) => finding.problem === "missing")
   if (!missing.length) return 0
@@ -441,22 +513,32 @@ async function recoverMissingRefs(dir: string, findings: RefFinding[]): Promise<
   return rewritten
 }
 
-// —— refcheck-scope P3: 引用范围再确认(§6,行号锚 + @sha 版本标记)——
-// 对象: 活文档中带行号锚(`:N` / `:N-M`)且不带版本标记的引用,其目标文件「被
-// 编辑修改过」——判据 = 目标文件在所属(可能嵌套的)git 仓库有未提交内容差异
-// (`git diff HEAD --name-only`;renamePairs 已 `git add -A` 暂存,暂存区即改动
-// 全集;嵌套子仓库逐个判定,镜像 git.ts 统一提交的嵌套优先遍历)。目标消解与
-// validateRefs 同款两步(直接命中 / 段边界后缀唯一匹配)。
-// 一致性判定 = 目标文件 HEAD 版本的范围行切片 vs 当前工作区版本同范围行切片
-// (当前文件行数不足即不一致):
-//   一致 → 引用不动;
-//   不一致 → 保留原引用范围不变,锚就地改写为 `path:N-M@<sha>`(sha = 所属仓库
-//   当前 HEAD 短哈希 7 位)——语义: 该范围仅对此历史版本有效,其后续内容已变更。
-// 幂等: 已带 `@sha` 的引用不再追加或更新标记,留待人工订正;HEAD 无该文件版本
-// (本轮新增文件)无历史版本可钉,跳过。排版不变式同 rewriteRefs(无命中不写回)。
-// 返回改写处数(0 = 本轮无再确认)。
+// —— refcheck-scope P3: reference range reconfirmation (§6, line anchors + @sha version markers) ——
+// Subject: references in live documents carrying a line anchor (`:N` /
+// `:N-M`) and no version marker, whose target file "has been edited" —
+// criterion = the target file has uncommitted content differences in its
+// owning (possibly nested) git repository (`git diff HEAD --name-only`;
+// renamePairs already staged with `git add -A`, so the index is the full
+// change set; nested sub-repositories are judged one by one, mirroring
+// git.ts's nested-first traversal for the unified commit). Target resolution
+// is the same two steps as validateRefs (direct hit / segment-boundary
+// suffix unique match).
+// Consistency decision = the target file's HEAD-version line slice of the
+// range vs the current worktree version's slice of the same range (the
+// current file having too few lines already counts as inconsistent):
+//   consistent → the reference stays untouched;
+//   inconsistent → the original reference range stays unchanged and the
+//   anchor is rewritten in place to `path:N-M@<sha>` (sha = the owning
+//   repository's current HEAD short hash, 7 digits) — semantics: the range
+//   holds only for that historical version, whose later content has changed.
+// Idempotent: a reference already carrying `@sha` gets no marker appended or
+// updated, left for manual correction; HEAD holding no version of the file
+// (a file added this round) has no historical version to pin and is skipped.
+// Typographic invariant as in rewriteRefs (no hits, no write-back). Returns
+// the number of rewrites (0 = no reconfirmation this round).
 export async function reconfirmAnchors(dir: string): Promise<number> {
-  // 各仓库: 改动文件集(目标目录相对)与 HEAD 短哈希;无 git/无 HEAD/无改动跳过
+  // Per repository: the changed-file set (target-directory-relative) and the
+  // HEAD short hash; no git / no HEAD / no changes → skipped
   const repos: Array<{ top: string; sha: string; changed: Set<string> }> = []
   for (const root of await repoRoots(dir)) {
     const top = (await gitOut(root, ["rev-parse", "--show-toplevel"]))?.trim()
@@ -478,7 +560,8 @@ export async function reconfirmAnchors(dir: string): Promise<number> {
   for (const file of await activeDocs(dir)) {
     const text = await Bun.file(join(dir, file)).text().catch(() => undefined)
     if (text === undefined) continue
-    // 候选: 带行号锚且不带版本标记的可校验引用(anchorRaw 保留原范围文本供改写)
+    // Candidates: checkable references carrying a line anchor and no version
+    // marker (anchorRaw keeps the original range text for the rewrite)
     const candidates: Array<{ path: string; start: number; end: number; anchorRaw: string }> = []
     const mask = candidateMask(text)
     text.split("\n").forEach((line, i) => {
@@ -498,7 +581,7 @@ export async function reconfirmAnchors(dir: string): Promise<number> {
       let at: string | undefined
       const direct = await stat(join(dir, target)).catch(() => undefined)
       if (direct) {
-        if (!direct.isFile()) continue // 目录引用无行号语义
+        if (!direct.isFile()) continue // a directory reference has no line semantics
         at = target
       } else {
         const hit = (await index.resolveAll([target])).get(target)
@@ -510,10 +593,12 @@ export async function reconfirmAnchors(dir: string): Promise<number> {
       const work = await Bun.file(join(dir, at)).text().catch(() => undefined)
       if (work === undefined) continue
       const head = await gitOut(repo.top, ["show", `HEAD:${relative(repo.top, join(dir, at)).split(sep).join("/")}`])
-      if (head === undefined) continue // HEAD 无此文件(本轮新增)→ 无版本可钉
+      if (head === undefined) continue // HEAD lacks the file (added this round) → no version to pin
       const workLines = work.split("\n")
       const headLines = head.split("\n")
-      // 当前文件行数不足即不一致;一致(同范围行切片逐行相同)→ 引用不动
+      // The current file having too few lines already counts as
+      // inconsistent; consistent (the same-range line slices match line by
+      // line) → the reference stays untouched
       const consistent =
         workLines.length >= ref.end &&
         headLines.length >= ref.end &&
@@ -549,10 +634,14 @@ async function gitOut(dir: string, args: string[]): Promise<string | undefined> 
   return run.code === 0 ? run.out : undefined
 }
 
-// —— 一次性警告登记(清单式去重,失效引用清单与迁移跳过清单共用)——
-// 键 = 稳定身份(不含行号/原文等随编辑漂移的成分)。每轮以 entries 全量重写清单
-// 文件——修复后自动移除,再复发视为新出现;新出现的键输出 ⚠(warn 缺省则静默
-// 登记),已收录键不重复警告。entries 为空时删除清单文件。
+// —— One-shot warning registry (list-style dedup, shared by the
+// stale-reference list and the migration skip list) ——
+// Key = stable identity (nothing that drifts with edits, like line numbers
+// or original text). Each round rewrites the list file wholesale from
+// entries — fixed entries drop out automatically, a recurrence counts as
+// newly appearing; newly appearing keys log ⚠ (silently registered when warn
+// is absent), already-recorded keys are not warned twice. Empty entries
+// deletes the list file.
 export async function recordOnce(
   dir: string,
   file: string,
@@ -573,10 +662,14 @@ export async function recordOnce(
   }
 }
 
-// —— 失效引用清单(.auto/invalid-refs.md)——
-// 键 = `文件 → 路径(problem)`: 不含行号与原文(随编辑漂移,不能作身份)。清单每轮
-// 以当前 findings 全量重写——修复后自动移除,再复发视为新出现;已收录键不再 ⚠,
-// 仅对新出现的失效引用输出警告日志(防无休止重复报告,人工核验订正以此清单为入口)。
+// —— The stale-reference list (.auto/invalid-refs.md) ——
+// Key = `file → path(problem)`: no line number or original text (they drift
+// with edits, unusable as identity). The list is rewritten wholesale each
+// round from the current findings — fixed entries drop out automatically, a
+// recurrence counts as newly appearing; already-recorded keys get no more ⚠,
+// and the warning log goes only to newly appearing stale references (no
+// endless re-reporting; human verification and correction enter through this
+// list).
 const INVALID_REFS_FILE = join(".auto", "invalid-refs.md")
 
 function invalidRefKey(finding: RefFinding): string {
@@ -599,15 +692,21 @@ async function recordInvalidRefs(dir: string, findings: RefFinding[]): Promise<v
   )
 }
 
-// 提交前 auto-correct(D6 第一层,挂点 runner 的 afterSession——覆盖全部统一
-// 提交): renamePairs → 活文档机械改写(只配对 rename,删除/语义变化不自动改,
-// 见 §8 边界)→ 复扫 findings → 缺失恢复(refcheck-scope P2: missing 条目经
-// git 历史 rename 地图追踪落点,就地改写恢复;恢复后再复扫)→ 范围再确认
-// (refcheck-scope P3: 改动文件的行号锚不一致就追加 @<sha> 版本标记,改写后
-// 再复扫——带标记的历史快照引用豁免行号上限校验,不再进失效清单)→ 记录失效
-// 清单 .auto/invalid-refs.md(只登记未恢复的失效引用;键已收录的不再 ⚠,仅对
-// 新出现的失效引用输出警告日志),止于本日志(宽松契约)。
-// 返回复扫 findings(恢复与再确认后)。
+// Pre-commit auto-correct (D6's first layer, hooked at runner's
+// afterSession — covering every unified commit): renamePairs → mechanical
+// rewrite of live documents (rename pairs only; deletion/semantic change is
+// not auto-corrected, see the §8 boundary) → re-scan findings →
+// missing-reference recovery (refcheck-scope P2: missing entries trace the
+// landing through the git-history rename map and are recovered by an
+// in-place rewrite; after recovery, another re-scan) → range reconfirmation
+// (refcheck-scope P3: an inconsistent line anchor on a changed file gets an
+// @<sha> version marker appended, and after the rewrite another re-scan — a
+// marked historical snapshot reference is exempt from the line-number cap
+// check and no longer enters the stale list) → record the stale list
+// .auto/invalid-refs.md (only unrecovered stale references are registered;
+// already-recorded keys get no more ⚠, the warning log goes only to newly
+// appearing stale references), ending at this log (a lenient contract).
+// Returns the re-scanned findings (after recovery and reconfirmation).
 export async function autoCorrectRefs(dir: string): Promise<RefFinding[]> {
   const pairs = await renamePairs(dir)
   if (pairs.length) {

@@ -1,9 +1,12 @@
-// 单次提示词下发的执行体: 会话复用判定与新建、模型 target 求值与下发、进度
-// 恢复点写入、统计收段,以及把事件流订阅(watch)接上后等待会话自然结束;
-// 代答台账的落账体 recordDriverResolves 只被本层调用,故一并归此。
-// 位于 session.ts 之下(其 runSession 的重试/降级环逐次调用本函数),自身只
-// 向下调用 watch / session-api / stats 等层;**不得反向 import session / runner**。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S8,纯搬运)。
+// The executor of a single prompt dispatch: session-reuse decision and creation,
+// model target evaluation and dispatch, progress recovery-point write, stats
+// segment close, and wiring in the event-stream subscription (watch) before
+// waiting for the session's natural finish; the proxy-answer ledger writer
+// recordDriverResolves is called only by this layer, so it belongs here too.
+// Sits below session.ts (whose runSession retry/failover ring calls this
+// function on each pass) and calls only the layers below — watch / session-api
+// / stats; **must never import session / runner back upward**.
+// Split out of src/runner.ts (plans/0024-module-split-plan.md S8, pure move).
 
 import { rm } from "node:fs/promises"
 import { join, relative } from "node:path"
@@ -34,8 +37,10 @@ import { strictResumeActive } from "./unit-commit"
 import { reuseAllowed } from "./usage"
 import { watch } from "./watch"
 
-// H3 的落账体: 回合内观测到的代答补上 task/phase/round/session 后落台账。无观测即
-// 空转(不读轮号、不碰文件),故常见的"整轮无提问"路径零新增 IO。
+// H3's ledger writer: proxy answers observed during the round get their
+// task/phase/round/session filled in, then are posted to the ledger. With no
+// observations it is a no-op (reads no round number, touches no file), so the
+// common "whole round without questions" path adds zero IO.
 async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveEvent[] | undefined): Promise<void> {
   if (!opts.dir || !events?.length) return
   const round = await currentRound(opts.dir).catch(() => 0)
@@ -79,30 +84,43 @@ export async function attempt(
   test: TestRun | undefined,
   switches: Switches,
 ): Promise<SessionResult> {
-  // 测试执行协议: 清除上一会话/上次运行遗留的待执行脚本(存在即请求,中断
-  // 恢复或重试场景下的旧请求不应注入本会话;归档历史 tmp/test.<n>.sh 保留)。
+  // Test-run protocol: clear the pending test script left by the previous
+  // session / previous run (presence means a request; a stale request from an
+  // interruption-recovery or retry scenario must not be injected into this
+  // session; archived history tmp/test.<n>.sh is kept).
   if (test) await rm(join(test.tmp, "test.sh"), { force: true })
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  // 中断恢复接管的会话(链上有会话且恢复说明待注入): 首个提示词无条件进原会话
-  // ——恢复语义即"接着被中断的那个会话继续",不受复用开关与阈值约束(与
-  // seedForkSession 的"恢复续跑优先于分叉"同一判据)。说明用后即清,此后该链
-  // 回归常规复用规则。分叉会话(pending)在场时让位: runSession 的重试环会同时
-  // 挂上 note(重试说明)与 pending(失败会话的副本)且刻意不清 chain.id(下次
-  // 重试仍从原会话重新 fork),此刻要接管的是副本而非复用原会话。
+  // A session taken over by interruption recovery (the chain has a session and
+  // a recovery note waiting to be injected): the first prompt goes into the
+  // original session unconditionally — recovery semantics is exactly "continue
+  // the session that was interrupted", unconstrained by the reuse switch and
+  // thresholds (the same criterion as seedForkSession's "recovery continuation
+  // outranks forking"). The note is cleared once used, and the chain then
+  // returns to the normal reuse rules. It yields when a forked session
+  // (pending) is present: runSession's retry ring hangs both note (the retry
+  // explanation) and pending (the failed session's copy) and deliberately
+  // leaves chain.id set (the next retry forks from the original session
+  // again); what takes over at that moment is the copy, not a reuse of the
+  // original session.
   // Without resumable sessions (MA.4) the chain's session never takes another
   // prompt: recovery and reuse both open a new one.
   const resumable = client.capabilities.resume
   const resumed = resumable && chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
-  // 链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控(缺省 off): off 时任务内每个
-  // 提示词都开新会话,阈值(占比/用量/闲置)不再参与决策。
+  // In-chain reuse is governed by OPENCODE_AUTO_REUSE_SESSION (default off):
+  // with it off every prompt in the task opens a new session and the
+  // thresholds (context share / usage / idle) take no part in the decision.
   const reuseSession = switches.reuseSession
   const reuse = resumable && chain.id !== undefined && (resumed || (reuseSession && reuseAllowed(chain, cap, Date.now())))
-  // 测试交接判据的回落值(D1): 复用/恢复接管的会话起跑就背着链上已用量,首个
-  // message.updated 到达前的测试请求照样要判得出来;fork 与全新会话归零——
-  // chain.used 是上一个会话的残值,照搬会让刚起跑的小会话在首次测试就误判超限、
-  // 白烧一次交接。
+  // The fallback value of the test-handover criterion (D1): a reused or
+  // recovery-takeover session starts out carrying the chain's already-used
+  // tokens, so a test request arriving before the first message.updated must
+  // still be judged correctly; a fork and a brand-new session reset it to
+  // zero — chain.used is the previous session's leftover, and copying it
+  // would make a small just-started session falsely test over-limit on its
+  // first test and burn a handover for nothing.
   if (test) test.startUsed = reuse ? chain.used : 0
-  // 恢复接管的复用已由 runTask 的恢复日志交代(含继承的上下文用量),不重复打印。
+  // Reuse by recovery takeover is already covered by runTask's recovery log
+  // (including the inherited context usage); not printed again.
   if (reuse && !resumed) {
     log(`♻ session reused (context ${chain.pct}%, used ${formatTokens(chain.used)} tokens, ended ${Math.round((Date.now() - chain.at) / 1000)}s ago)`)
   }
@@ -116,27 +134,37 @@ export async function attempt(
           : chain.used >= cap / 2
             ? `used ${formatTokens(chain.used)} tokens reached the ${formatTokens(cap / 2)} cap (reuse threshold)`
             : `more than ${REUSE_IDLE_MINUTES} minutes since the last session ended (context stale)`
-    // 复用关闭是缺省形态(链上每个会话都命中),只进明细日志;开启复用后的不
-    // 复用原因是决策依据,照常上终端。
+    // Reuse-off is the default shape (every session on the chain hits it), so
+    // it goes to the detail log only; with reuse enabled the no-reuse reason
+    // is decision material and reaches the terminal as usual.
     if (reuseSession) log(`▷ ${reason}; starting a new session`)
     else vlog(`▷ ${reason}; starting a new session`)
   }
-  // fork 预创建会话(seedForkSession 从基点分叉所得)在 !reuse 时优先于 create,
-  // 消费即清——瞬时错误重试时 pending 已清,自然回落 create 路径(设计 §4.3)。
+  // A pre-created fork session (what seedForkSession forked from the base
+  // point) outranks create when !reuse; consuming clears it — by a
+  // transient-error retry pending is already clear, so the flow falls back to
+  // the create path naturally (design §4.3).
   const forked = reuse ? undefined : chain.pending
   chain.pending = undefined
-  // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
-  // system context(AGENTS.md 每个 provider turn 现场重读,重启兜底缓存场景)。
-  // 分叉会话已在 seedForkSession 分叉前同步过。
+  // Sync AGENTS.md before a new session: with an update, restart the server
+  // before opening the new session so it loads the latest system context
+  // (AGENTS.md is re-read live on every provider turn; the restart backstops
+  // cached cases). A forked session was already synced before seedForkSession
+  // forked it.
   if (!reuse && !forked) await opts.server?.syncContext()
-  // 显式标题: 新建会话直接以本阶段提交标题命名(短标签,如 `T-001 S2 编写 schema`),
-  // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`;分叉会话已在 forkSession
-  // 改名,不经 create。
+  // Explicit title: a new session is named directly with this phase's commit
+  // title (a short label, e.g. `T-001 S2 write schema`); a session without a
+  // commit title (dryrun etc.) falls back to `[auto] <task>`; a forked
+  // session was already renamed by forkSession and does not go through
+  // create.
   const session = reuse || forked ? undefined : await client.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
   if (session && !session.ok) return { type: "blocked", question: `session creation failed: ${formatClientError(session.error)}` }
-  // failback 粒度 session(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): 每个全新会话起点
-  // 都清链上降级候选、回试首选模型。仅 create 路径(会话复用与 fork 消费不动)——
-  // 降级 fork 出的迁移会话经 pending 进入,若在此清零会把 failover 立即 undo 成震荡。
+  // failback granularity session (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): every
+  // brand-new session start clears the chain's failover candidate and fails
+  // back to the preferred model. Create path only (session reuse and a
+  // consumed fork leave it alone) — the migrated session forked out by a
+  // failover enters via pending, and clearing here would immediately undo the
+  // failover into oscillation.
   // Registry routing: the same boundary clears the down marks (§6.4) and the
   // chain's selected entry, so the new session re-selects from the list.
   if (session !== undefined && switches.modelFailbackScope === "session") {
@@ -146,16 +174,24 @@ export async function attempt(
     clearDownMarks("session", switches.modelFailbackScope)
   }
   const sessionID = forked ?? session?.value.id ?? chain.id!
-  // 交互旁路: 此后人工输入发往本会话(收尾等旁路会话同样覆盖)。
+  // Interactive bypass: human input goes to this session from here on (wrap-up
+  // and other bypass sessions override it the same way).
   opts.interactive?.attach(sessionID)
-  // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
-  // 下次运行从它分叉接回上下文。定版前的会话(记录里还留着待跑脚本与定版锚点)
-  // 不认领,那一态的恢复靠定版点分叉。
-  // 认领同样遵循「下发即写 + 失败还原」: 起跑即写(半途被 kill 也有锚点),但会话
-  // 以 0-token 可重试错误收场时还原为认领前的记录——纯报错桩不配作恢复锚点,否则
-  // 配额连败现场里最后一个 0-token 桩会顶掉真正有内容的续跑会话(2026-09-17
-  // virtio T-005: 41.3k 会话的 nextSession 被重试 3 的 0-token 桩覆写),重启只能
-  // fork 空壳。与 chain.failed 的更替 invariant 同一口径。
+  // Test-handover interruption recovery (§I): the continuation session opened
+  // after the handover close-out is claimed here — when it is itself
+  // interrupted, the next run forks from it to pick the context back up. The
+  // pre-freeze session (the record still carries the pending script and the
+  // freeze anchor) is not claimed; recovery from that state forks at the
+  // freeze point.
+  // The claim likewise follows "write on dispatch + restore on failure":
+  // written at the start (a mid-run kill still has an anchor), but when the
+  // session ends on a 0-token retryable error it is restored to the pre-claim
+  // record — a pure error stub is unfit as a recovery anchor, otherwise in a
+  // consecutive-quota-failure incident the last 0-token stub would displace
+  // the continuation session that actually has content (2026-09-17 virtio
+  // T-005: the 41.3k session's nextSession was overwritten by retry 3's
+  // 0-token stub), and the restart could only fork an empty shell. The same
+  // line as the chain.failed replacement invariant.
   let handoverClaimPrior: Handover | undefined
   if (test && opts.dir) {
     const inflight = await recallHandover(opts.dir, task.id, relative(test.dir, test.handoffFile))
@@ -164,13 +200,19 @@ export async function attempt(
       await saveHandover(opts.dir, { ...inflight, nextSession: sessionID })
     }
   }
-  // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
-  // 据此精确恢复;无阶段的旁路会话(dryrun/fork 基点等)
-  // 不写,避免污染恢复记忆。plans/0018-session-resume-precedence-design.md: 下发成功即落盘
-  // 认领在跑的会话(此前只在回合结束后写,回合进行中被 kill 会丢失认领);可重试
-  // 错误把记录还原为下发前快照,被弃的 fork 副本不顶替真实恢复点(保留
-  // plans/0015-session-error-retry-plan.md 第 4 点的保护,改为"下发即写 + 失败还原")。
-  // 本次提示词的生效模型(target 求值后回填,remember 写严格恢复记录用)。
+  // Progress record: a session carrying a phase (the execution chain + a
+  // phase-step bypass) writes an active record, from which an interrupted app
+  // resumes precisely; a phase-less bypass session (dryrun / fork base etc.)
+  // writes none, to avoid polluting the recovery memory.
+  // plans/0018-session-resume-precedence-design.md: persist the claim of the
+  // running session as soon as dispatch succeeds (previously written only
+  // after the round ended, so a kill mid-round lost the claim); a retryable
+  // error restores the record to its pre-dispatch snapshot so an abandoned
+  // fork copy does not displace the real recovery point (keeping the
+  // protection of point 4 of plans/0015-session-error-retry-plan.md, reworked
+  // as "write on dispatch + restore on failure").
+  // This prompt's effective model (backfilled after target evaluation; the
+  // remember write uses it for the strict-resume record).
   let promptModel: string | undefined
   const remember = async () => {
     if (opts.dir && chain.phase) {
@@ -180,33 +222,48 @@ export async function attempt(
         at: Date.now(),
         active: true,
         phase: chain.phase,
-        // 严格恢复(plans/0022-session-recovery-fidelity-design.md 3.1): active 记录随带单元
-        // 基线与本次生效模型(恢复时核对;model 未配置路由时无串可记,严格恢复下
-        // 该记录视为不可复用)。基线缺 thread 时以当前 HEAD 兜底(窗口从现在起)。
+        // Strict resume (plans/0022-session-recovery-fidelity-design.md 3.1):
+        // the active record carries the unit baseline and this prompt's
+        // effective model (checked at recovery; with no routing configured for
+        // model there is no string to record, and under strict resume such a
+        // record counts as non-reusable). When the baseline lacks a thread,
+        // the current HEAD backs it up (the window starts now).
         ...(strictResumeActive(opts, switches)
           ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: promptModel }
           : {}),
       })
     }
   }
-  // 下发前的 progress.json 快照: 可重试错误时还原,防止被弃副本顶替真实恢复点。
+  // The progress.json snapshot from before dispatch: restored on a retryable
+  // error, preventing an abandoned copy from displacing the real recovery
+  // point.
   const prior = opts.dir && chain.phase ? await peekProgress(opts.dir) : undefined
 
-  // SSE 订阅跟随本会话生命周期: 订阅时传入 AbortSignal,无论正常结束、下发失败
-  // 提前返回还是异常退出,finally 都立即中止订阅,断开底层连接并释放客户端连接
-  // 配额——此前订阅无人关闭、依赖 GC 回收,长周期运行下已结束会话的 SSE 长连接
-  // 持续积压,占满客户端并发池(Bun 缺省 256 条)后,后续所有请求在池内无限排队
-  // 且无超时报错,表现为无声卡死。
+  // The SSE subscription follows this session's lifetime: subscribe with an
+  // AbortSignal passed in, and whether the end is a normal finish, an early
+  // return on dispatch failure, or an abnormal exit, finally aborts the
+  // subscription immediately, dropping the underlying connection and
+  // releasing the client connection quota — previously nobody closed the
+  // subscription, GC was relied on; over long runs the SSE long connections
+  // of finished sessions kept piling up, and after filling the client
+  // concurrency pool (Bun default 256) every later request queued forever
+  // inside the pool with no timeout error, manifesting as a silent hang.
   const sse = new AbortController()
-  // 同步 POST 的中止信号(H7): watch 判半开/断流等错误先于悬挂的 POST 返回时
-  // 联动 abort——POST 立即作废不再悬挂到 TURN_TIMEOUT(2h),重试阶梯在探针判定
-  // 时刻(~2×idleTime)即启动。
+  // The sync POST's abort signal (H7): when watch's verdict of a half-open
+  // connection / broken stream or the like returns before the hung POST does,
+  // abort is chained — the POST is voided immediately instead of hanging
+  // until TURN_TIMEOUT (2h), and the retry ladder starts at the probe's
+  // verdict moment (~2×idleTime).
   const post = new AbortController()
-  // 统计收段幂等守卫(STATS_PLAN §2,T-003): 正常路径在 await watching 后收段;
-  // 下发失败/异常等未走到正常收段的路径由 finally 兜底——AI 段不悬挂。
+  // Idempotent guard of the stats segment close (STATS_PLAN §2, T-003): the
+  // normal path closes the segment after awaiting watching; paths that never
+  // reach the normal close (dispatch failure, exception, ...) are backstopped
+  // by finally — the AI segment never hangs.
   let booked = false
-  // 死循环检测器(会话级,见 src/stuck.ts): 开关 off 时不建;dryrun 预检会话恒不建
-  // ——它本就靠反复被拒探查权限,重复报错是其正常形态,不是死循环。
+  // Stuck-loop tracker (session level, see src/stuck.ts): not built when the
+  // switch is off; a dryrun preflight session never gets one — it probes
+  // permissions precisely by being refused over and over, so repeated errors
+  // are its normal shape, not a stuck loop.
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await client.events(sse.signal)
@@ -328,12 +385,19 @@ export async function attempt(
       target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
       promptModel = target
     }
-    // 实际使用模型上终端(前端可见): 路由/降级给出显式 target 时下发即锁定该模型,
-    // 直接按来源播报;未设路由(target undefined)时播报不再猜服务端默认(会话粘住
-    // 模型等会让猜测失真),改由 watch 观测本会话首个带模型的消息(user 消息带着服务
-    // 端实际解析结果)后播报真实生效模型。每个新会话(新建/分叉,即 !reuse)都播报
-    // 一行,模型较上次 prompt 有变化时亦播报;同会话同模型的续跑 prompt(复用/恢复
-    // 接管)不重复。无论何种来源,prompt 是否带 model 键的决定不变(不变量 F 不破)。
+    // The actually-used model reaches the terminal (frontend-visible): when
+    // routing / failover gives an explicit target, dispatch locks that model
+    // and the report names its source directly; without routing (target
+    // undefined) the report no longer guesses the server default (a session
+    // sticking to a model etc. would distort the guess) — instead watch
+    // observes this session's first message carrying a model (the user
+    // message carries the server's actual resolution) and then reports the
+    // real effective model. Every new session (created / forked, i.e. !reuse)
+    // reports one line, and so does a model change against the previous
+    // prompt; a continuation prompt on the same session and model (reuse /
+    // recovery takeover) is not repeated. Whatever the source, the decision
+    // whether the prompt carries a model key is unchanged (invariant F
+    // unbroken).
     if (!opts.routing && target !== undefined) {
       const from =
         chain.model !== undefined
@@ -348,10 +412,13 @@ export async function attempt(
         chain.modelShown = target
       }
     }
-    // 失联探针判半开等错误收场(session-boundary-hardening §4.4)先于悬挂的 POST
-    // 返回时: 提前断流释放 SSE reader 与连接配额,并联动中止 POST(下方竞速不再
-    // 等它,直接按本结果的会话错误收口)。对已中止的订阅重复 abort 无害;正常
-    // 结束路径此处无 effect。
+    // When the liveness probe's verdict — a half-open connection or the like
+    // ending the session (session-boundary-hardening §4.4) — returns before
+    // the hung POST does: drop the stream early, releasing the SSE reader and
+    // the connection quota, and chain-abort the POST (the race below no
+    // longer waits for it, going straight into this result's session-error
+    // close-out). Repeated aborts of an already-aborted subscription are
+    // harmless; the normal-finish path sees no effect here.
     let watchFailed = false
     const watching = watch(
       client,
@@ -384,18 +451,24 @@ export async function attempt(
       return w
     })
 
-    // 中断恢复等一次性说明随首个提示词带给 AI,用后即清。
+    // One-shot notes (interruption recovery etc.) ride the first prompt to
+    // the AI and are cleared once used.
     const note = chain.note
     chain.note = undefined
-    // 统计接线(STATS_PLAN §2,T-003): prompt 下发前开 AI 段并关联任务。旁路会话
-    // (伪任务 PLAN/AUTO,恢复点先例见 resume.ts)同此照记——statsTask 未设当前任务
-    // 时 usage/sessions 仍入 phase+round 桶。
+    // Stats wiring (STATS_PLAN §2, T-003): open the AI segment and associate
+    // the task before the prompt is dispatched. Bypass sessions (pseudo tasks
+    // PLAN/AUTO; recovery-point precedent in resume.ts) are recorded the same
+    // way — when statsTask has no current task set, usage/sessions still land
+    // in the phase+round buckets.
     await statsSessionBegin(opts.dir, task.id)
-    // 下发与事件流竞速(H7): 同步 POST 挂在半开连接上永不返回时,watch 的探针
-    // 判定先回——watch 带错误先回即由哨兵 null 接管(POST 已被上方 post.abort()
-    // 作废),不再等 POST 直接进下方 watching 的会话错误收口;watch 无错误则
-    // 透传 POST 自身结果。竞速落败后 prompting 的迟到结果无人消费(dispatch
-    // never rejects, 0037 D2, so nothing to catch).
+    // Dispatch races the event stream (H7): when the sync POST hangs on a
+    // half-open connection and never returns, watch's probe verdict comes
+    // back first — if watch returns with an error first, the sentinel null
+    // takes over (the POST is already voided by post.abort() above), skips
+    // waiting for the POST and goes straight into the session-error close-out
+    // of watching below; with no watch error, the POST's own result passes
+    // through. After losing the race, prompting's late result has no consumer
+    // (dispatch never rejects, 0037 D2, so nothing to catch).
     const prompting = client.prompt(
       {
         session: sessionID,
@@ -407,20 +480,26 @@ export async function attempt(
       post.signal,
     )
     const prompt = await Promise.race([prompting, watching.then((w) => (w.error ? null : prompting))])
-    // POST 因 watch 判错被联动中止时,其 error 只是 abort 回声,真实错误在
-    // watching 里——跳过下发失败分支与认领,由下方会话错误收口处置(可重试
-    // 分支会把进度记录还原为下发前快照)。
+    // When the POST was abort-chained because watch found an error, its error
+    // is merely the abort echo; the real error is in watching — skip the
+    // dispatch-failure branch and the claim, handled by the session-error
+    // close-out below (the retryable branch restores the progress record to
+    // the pre-dispatch snapshot).
     const dispatchEcho = watchFailed
     if (prompt !== null && !prompt.ok && !dispatchEcho) {
-      // 下发即失败: 刚认领的 nextSession 是什么都没收到的空会话,不配作恢复锚点
-      // ——还原为认领前的记录(与下方 0-token 报错桩还原同一口径)。
+      // Failed at dispatch: the just-claimed nextSession is an empty session
+      // that received nothing, unfit as a recovery anchor — restore the
+      // pre-claim record (the same line as the 0-token error-stub restore
+      // below).
       if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
       await remember()
       return { type: "blocked", question: `task dispatch failed: ${formatClientError(prompt.error)}${await missingAgentHint(opts)}` }
     }
-    // 下发成功即认领在跑的会话: 此刻进程被 kill/Ctrl+C,progress.json 指向本会话,
-    // 下次运行复用之(精确恢复的核心——回合进行中的会话不丢)。回合结束后再按
-    // 结果刷新或还原(见下方可重试错误分支)。
+    // Claim the running session as soon as dispatch succeeds: if the process
+    // is killed / Ctrl+C'd at this moment, progress.json points at this
+    // session and the next run reuses it (the core of precise recovery — a
+    // mid-round session is not lost). After the round ends it is refreshed or
+    // restored per the result (see the retryable-error branch below).
     if (prompt !== null && !dispatchEcho) await remember()
 
     const result = await watching
@@ -432,24 +511,34 @@ export async function attempt(
       chain.modelStep = result.steppedUp.step
       chain.model = result.steppedUp.model
     }
-    // 并发态(OPENCODE_AUTO_HANDOVER_CONCURRENT=on)交接期测试的统一收口: watch
-    // 起跑、这里等它落定——正常结束、会话错误、SSE 断流各路都经过此处,测试进程
-    // 不会跨会话悬挂。结果写在 test.last 上,供新会话续跑提示引用。顺序态(缺省)
-    // 此处恒空转,测试由 runExecSession 在提交 #2 之后执行。
+    // The unified close-out of handover-period tests in the concurrent mode
+    // (OPENCODE_AUTO_HANDOVER_CONCURRENT=on): watch is started and this waits
+    // for it to settle — natural finish, session error, SSE broken stream,
+    // every path passes here, so the test process never hangs across
+    // sessions. The result lands on test.last for the new session's
+    // continuation prompt to cite. In the sequential mode (default) this is
+    // always a no-op; the test is run by runExecSession after commit #2.
     if (test?.running) {
       await test.running.catch(() => {})
       test.running = undefined
     }
-    // 收段入账(T-003): usage 入 task/phase/round 三桶 + per-session;报告(report)
-    // 由下方 ◉ 会话结束两行消费(累计用时/轮次/累计费用,STATS_PLAN §4.1)。
+    // Segment-close booking (T-003): usage lands in the task/phase/round
+    // buckets + per-session; the report is consumed by the ◉ session-ended
+    // two lines below (cumulative elapsed / rounds / cumulative cost,
+    // STATS_PLAN §4.1).
     const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage())
     booked = true
-    // 代答落账(auto-resolve H3): 与 statsSessionEnd 同处收段——watch 侧只观测提问
-    // 原文与会话 id,桶身份(任务/阶段/轮号)由此处补齐。旁路会话的伪任务
-    // (PLAN/AUTO)照记,与统计同一口径。写失败在模块内静默,不影响回合结果。
+    // Proxy-answer posting (auto-resolve H3): closes the segment together
+    // with statsSessionEnd — the watch side observes only the question text
+    // and the session id; the bucket identity (task/phase/round number) is
+    // filled in here. Pseudo tasks of bypass sessions (PLAN/AUTO) are
+    // recorded the same way, the same line as stats. Write failures stay
+    // silent inside the module and do not affect the round's outcome.
     await recordDriverResolves(opts, task.id, result.resolves)
-    // 本轮开始前的原链状态: 可重试的会话错误需要还原到这里(而不是留在这一轮
-    // 刚失败的会话上),下一次重试才会从"从未被动过的原会话"重新 fork。
+    // The chain's original state from before this round started: a retryable
+    // session error must restore to this (rather than stay on the session
+    // that just failed this round), so that the next retry forks again from
+    // the untouched original session.
     const previousId = chain.id
     const previousUsed = chain.used
     const previousAt = chain.at
@@ -459,22 +548,36 @@ export async function attempt(
     chain.used = result.used
     chain.at = Date.now()
     chain.hinted = result.hinted === true
-    // ◉ 会话结束两行(STATS_PLAN §4.1,T-004): 无条件打印——所有经 attempt 的会话
-    // (含阶段规划/交接蒸馏等旁路,复用会话同样打印)统一输出;
-    // 行 1 上下文与用时,行 2 tokens 分项。省略规则: 单轮(session.rounds ≤ 1)
-    // 省略"(累计…)";reasoning=0 省略思考项;cost=0 省略费用;命中率分母 0 显示 —
-    // (formatCacheHit 口径)。report 仅 dir 缺失时为 undefined,按单轮处理,用时
-    // 回落 watch 的 durationMs。下发失败在上方提前 return,不会走到这里。
-    // AUTO-DECISION: 行 1 用时取 report.thisAiMs(纯 AI 时长口径)而非旧行的
-    // watch durationMs(含会话内人工等待)——与同行"累计"(session.aiMs 累计)同基
-    // 才有可比性,且符合"AI 用时排除 askHuman 挂起"的既定口径;旧行为只在无
-    // stats 目录(dir undefined)时经回落保留。
-    // AUTO-DECISION: 思考项插在"出"与"缓存读"之间(/ 思考 N)——计划草案未给出
-    // reasoning>0 的示例位次,取与 Usage 分项声明序(input/output/reasoning/
-    // cacheRead/cacheWrite)一致的位置;备选"行尾追加"会拆开缓存读/写相邻对,否决。
-    // AUTO-DECISION: 本次 cost=0 但跨轮累计 >0 时仍按"cost=0 省略费用"整项省略
-    // (不显示孤立的"(累计 $X)")——孤立累计无本次基数易误读,且逐字遵循既定省略
-    // 规则;备选"省略本次保留累计"与规则文字冲突,否决。
+    // ◉ The two session-ended lines (STATS_PLAN §4.1, T-004): printed
+    // unconditionally — every session that goes through attempt (phase
+    // planning / handover distillation and other bypasses included; reused
+    // sessions print too) outputs them uniformly; line 1 context and elapsed,
+    // line 2 the token breakdown. Omission rules: a single round
+    // (session.rounds ≤ 1) omits the "(cumulative …)"; reasoning=0 omits the
+    // reasoning item; cost=0 omits the cost; a hit-rate denominator of 0
+    // shows — (the formatCacheHit policy). report is undefined only when dir
+    // is missing; it is treated as a single round, elapsed falling back to
+    // watch's durationMs. Dispatch failure returns early above and never
+    // reaches here.
+    // AUTO-DECISION: line 1's elapsed takes report.thisAiMs (pure AI-time
+    // measure) rather than the old line's watch durationMs (which includes
+    // human waiting inside the session) — only on the same basis as the
+    // "cumulative" (session.aiMs cumulative) in the same line is it
+    // comparable, and it matches the established policy that AI elapsed
+    // excludes askHuman hangs; the old behavior survives only via the
+    // fallback when there is no stats directory (dir undefined).
+    // AUTO-DECISION: the reasoning item is inserted between "out" and
+    // "cache-read" (/ reasoning N) — the plan draft gave no example placement
+    // for reasoning>0, so take the position matching the Usage breakdown's
+    // declaration order (input/output/reasoning/cacheRead/cacheWrite); the
+    // alternative "append at line end" would split the adjacent cache-read /
+    // cache-write pair, rejected.
+    // AUTO-DECISION: when this round's cost=0 but the cross-round cumulative
+    // is >0, the whole item is still omitted per "cost=0 omits the cost" (no
+    // isolated "(cumulative $X)") — an isolated cumulative without this
+    // round's base reads misleadingly, and the established omission rule is
+    // followed to the letter; the alternative "omit this round, keep the
+    // cumulative" clashes with the rule's wording, rejected.
     const usage = result.usage ?? zeroUsage()
     const rounds = report?.session.rounds ?? 1
     const since = rounds > 1 ? ` (cumulative ${formatDurationCompact(report!.session.aiMs)} / ${rounds} rounds)` : ""
@@ -482,38 +585,57 @@ export async function attempt(
       `◉ session ended: context ${chain.pct}% (${formatTokens(chain.used)}${result.limit ? `/${formatTokens(result.limit)} tokens` : " tokens"}), ` +
         `elapsed ${formatDurationCompact(report?.thisAiMs ?? result.durationMs ?? 0)}${since}`,
     )
-    // 行 2 复用 log.ts 的 formatUsageLine(T-006 收口,任务/阶段/轮次结论行同格式);
-    // 会话特有的费用跨轮累计作为后缀追加(仅本次费用显示且跨轮时,见上方
-    // AUTO-DECISION: cost=0 整项省略,不出现孤立的"(累计 $X)")。
+    // Line 2 reuses log.ts's formatUsageLine (T-006 close-out; the
+    // task/phase/round conclusion lines share the format); the session's
+    // cross-round cumulative cost is appended as a suffix (only when this
+    // round's cost is shown and it crosses rounds; see the AUTO-DECISION
+    // above: cost=0 omits the whole item, no isolated "(cumulative $X)").
     const cost = formatCost(usage.cost)
     const costSince = cost && rounds > 1 ? formatCost(report!.session.usage.cost) : undefined
     log(formatUsageLine(usage) + (costSince ? ` (cumulative ${costSince})` : ""))
-    // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
-    // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
-    // 新建会话已在创建时命名,无需重复。
+    // Progress rename: a reused session's title stays at the old phase; at
+    // the end it is renamed to this phase's commit title, so the title prefix
+    // always reflects the session's latest progress (`T-001 S1 …` → `T-001
+    // S2 …` → `T-001 wrapup …`); a new session was named at creation and
+    // needs no repeat.
     if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
-    // 可重试的会话错误(plans/0015-session-error-retry-plan.md): 半截失败态——链状态与
-    // progress.json 一并还原为本轮下发前的原会话/原记录,被弃的 fork 副本不顶替
-    // 真实恢复点,交给 runSession 的重试循环从原会话重新 fork。不可重试的会话
-    // 错误、非会话错误类阻塞与成功一律"晋升":chain.id 落在这一轮实际用过的会话
-    // 上并刷新 progress.json(会话结束但阶段尚未推进时,保持 active——此刻中断
-    // 按"半途未总结"复用本会话继续,无时间窗,恢复时只看会话是否存活;子任务间歇
-    // 的窗口由 pipeline 在勾选+提交后经 persistStage 主动收口为总结态)。唯一例外
-    // 是测试交接收场——会话以交接文档收尾,任务已告完成,不认领(见下方分支)。
+    // A retryable session error (plans/0015-session-error-retry-plan.md): a
+    // half-failed state — the chain state and progress.json are both restored
+    // to the original session / record from before this round's dispatch, the
+    // abandoned fork copy does not displace the real recovery point, and
+    // runSession's retry loop forks again from the original session.
+    // Non-retryable session errors, non-session-error blocks, and success all
+    // "promote": chain.id lands on the session actually used this round and
+    // progress.json is refreshed (when the session has ended but the phase
+    // has not advanced, stay active — an interruption at that moment reuses
+    // this session and continues as "mid-way, not yet summarized", no time
+    // window; recovery only checks whether the session is alive; the
+    // subtask-interval window is actively closed out into the summarized
+    // state by the pipeline via persistStage after tick + commit). The sole
+    // exception is a test-handover finish — the session ends on a handover
+    // document and the task is already done, so no claim (see the branch
+    // below).
     if (result.error && result.retryable !== false) {
       chain.id = previousId
       chain.used = previousUsed
       chain.at = previousAt
       chain.hinted = previousHinted
-      // 链状态还原,但失败会话本身留给重试环作首选分叉源(见 FailedSession)。
-      // 0-token 的失败是纯报错桩(下发即失败,什么也没跑出来),不顶替链上仍有效
-      // 的有内容记录——否则下一轮重试将丢失最有价值的分叉源(2026-09-17 现场:
-      // 41.3k 失败会话被其 0-token fork 副本顶替,后续重试退化为基点冷播种);
-      // used > 0 的失败则是旧记录的严格超集(fork 副本带着旧前缀又跑出了新内容),
-      // 正常顶替。
+      // Chain state restored, but the failed session itself is left to the
+      // retry ring as the preferred fork source (see FailedSession).
+      // A 0-token failure is a pure error stub (failed at dispatch, ran
+      // nothing out) and does not displace the still-valid content-bearing
+      // record on the chain — otherwise the next retry would lose the most
+      // valuable fork source (2026-09-17 field incident: a 41.3k failed
+      // session was displaced by its own 0-token fork copy, and later retries
+      // degenerated into cold-seeding from the base point); a failure with
+      // used > 0 is a strict superset of the old record (the fork copy
+      // carried the old prefix and ran out new content), so it displaces
+      // normally.
       if (result.used > 0 || chain.failed === undefined) chain.failed = { id: sessionID, used: result.used }
-      // 0-token 桩同时撤回对 handover.json nextSession 的认领(恢复锚点回到上一个
-      // 有内容的续跑会话);used > 0 的失败保留认领——该会话是旧锚点的严格超集。
+      // A 0-token stub also withdraws the claim on handover.json's nextSession
+      // (the recovery anchor goes back to the previous content-bearing
+      // continuation session); a failure with used > 0 keeps the claim — that
+      // session is a strict superset of the old anchor.
       if (result.used === 0 && handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
       if (opts.dir && chain.phase) {
         if (prior) await saveProgress(opts.dir, prior)
@@ -521,17 +643,28 @@ export async function attempt(
       }
     } else {
       chain.failed = undefined
-      // 0-token 还原对不可重试错误同样适用(§J.3 只覆盖可重试分支的补齐):
-      // 首发即死的报错桩(会话里只有一条用户消息、没有任何产出)不配作恢复锚点。
+      // The 0-token restore applies to non-retryable errors too (§J.3 only
+      // covers completing the retryable branch): an error stub that dies on
+      // its first dispatch (nothing in the session but one user message, no
+      // output at all) is unfit as a recovery anchor.
       if (result.error && result.used === 0 && handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
-      // 测试交接收场(testhandoff.md 写出 `Status: continue`): 该会话的任务即告完成,作为
-      // 重启复用/重试分叉的锚点一并丢弃——链 id 清空(此后续跑会话出错,重试分叉源
-      // 只剩续跑谱系 chain.failed,不再可能 fork 回上下文已用满的定版前旧会话);
-      // progress 同步转「无会话在途态」: session 丢弃(下次运行无会话可复用,恢复经
-      // .auto/handover.json 的 nextSession/定版锚点接回交接**之后**的会话),active
-      // 保留(单元仍在途: 恢复续跑的 clean 豁免与交接文档保留依赖它)。此前的行为是
-      // 照常 remember() 认领定版会话——续跑会话随后遇可重试错误会把这份陈旧认领还原
-      // 成 progress.json,程序退出后再运行即复用/分叉到交接之前的会话(2026-09-16 修)。
+      // A test-handover finish (testhandoff.md written with `Status:
+      // continue`): the session's task is thereby complete, and the session
+      // is discarded together with its role as a restart-reuse / retry-fork
+      // anchor — the chain id is cleared (if the continuation session later
+      // errors, the retry fork source is left with the continuation lineage
+      // chain.failed only, never forking back into the pre-freeze old session
+      // whose context is exhausted); progress moves in sync to the "no
+      // session in flight" state: session dropped (the next run has no
+      // session to reuse; recovery reconnects via .auto/handover.json's
+      // nextSession / freeze anchor to the session **after** the handover),
+      // active kept (the unit is still in flight: the recovery continuation's
+      // clean exemption and the handover-document retention depend on it).
+      // The previous behavior was to remember()-claim the frozen session as
+      // usual — when the continuation session then hit a retryable error, that
+      // stale claim was restored into progress.json, and a later run after
+      // the process exited reused / forked into the pre-handover session
+      // (fixed 2026-09-16).
       if (result.testHandover) {
         chain.id = undefined
         if (opts.dir && chain.phase) {
@@ -542,20 +675,27 @@ export async function attempt(
       }
     }
     if (result.blocked) {
-      // 严格恢复的测试交接写核失败(3.3): 折成 rollback 标记上抛,单元所有者
-      // (executeWhole/runSubtask)据此回滚重做;无基线的调用方按普通阻塞处理。
+      // A strict-resume test-handover write-check failure (3.3): folded into
+      // a rollback flag and raised, on which the unit's owner
+      // (executeWhole/runSubtask) rolls back and redoes; a caller without a
+      // baseline treats it as an ordinary block.
       return result.testHandoverInvalid ? { ...result.blocked, rollback: true } : result.blocked
     }
     if (result.error)
       return { type: "blocked", question: `session error: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
-    // 统计兜底(T-003): 下发失败/异常等未走正常收段的路径同样收段——无配对 begin
-    // 时 thisAiMs=0、usage 零值照记(stats.ts 既有语义,消耗真实发生不虚构)。
+    // Stats backstop (T-003): paths that never reached the normal segment
+    // close (dispatch failure, exception, ...) close the segment too — with
+    // no paired begin, thisAiMs=0 and a zero usage are still recorded
+    // (stats.ts's standing semantics: only consumption that actually
+    // happened is recorded, nothing invented).
     if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage())
-    // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
-    // 释放(对已结束的订阅重复中止无害);POST 信号兜底——异常退出等路径上仍在
-    // 途的下发一并作废。
+    // Explicit stream drop: the abort signal cancels the SSE underlying
+    // reader and exits its reconnect loop, releasing the connection quota
+    // immediately (aborting an already-finished subscription is harmless);
+    // the POST signal is the backstop — dispatches still in flight on
+    // abnormal-exit paths are voided too.
     sse.abort()
     post.abort()
     vlog(`▪ unsubscribed from the event stream of session ${sessionID}`)

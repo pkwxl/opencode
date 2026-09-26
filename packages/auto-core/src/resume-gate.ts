@@ -9,22 +9,32 @@ import { nextChecklistIndex, type DeclaredItem } from "./document/state"
 import type { Phase } from "./resume"
 import { autoSwitches } from "./switches"
 
-// 恢复点的单元归属门禁: active 记录的中断会话属于某个具体执行单元(任务级
-// 阶段/子任务#N),仅当本次运行将重跑该单元时返回 true(允许
-// 复用其会话)。单元已过(检查项序号错位:中断发生在子任务收口后的间歇)、
-// 配置/实验开关变更使该单元不再执行、或记录缺失序号无法判定归属(老版本
-// 记录)时返回 false——恢复只发生在原单元重跑时,防下一单元误续上一单元的
-// 中断会话。ctx 由调用方按当前 subtasks.md/文件状态预计算(文件 IO 不进本函数)。
+// The unit-ownership gate of a recovery point: the active record's interrupted
+// session belongs to one concrete execution unit (a task-level phase /
+// subtask #N); returns true — allowing its session to be reused — only when
+// this run will rerun that unit. Returns false when the unit is past (checklist
+// ordinal misaligned: the interruption hit the gap after a subtask's
+// close-out), a config / experiment-switch change stops that unit from
+// running, or the record lacks the ordinal so ownership cannot be decided (an
+// old-version record) — recovery happens only when the original unit reruns,
+// preventing the next unit from accidentally continuing the previous unit's
+// interrupted session. ctx is precomputed by the caller from the current
+// subtasks.md / file state (no file IO in this function).
 export type UnitRerunCtx = {
-  // 子任务模式(auto/off/ondemand)与 fork 开关(子任务分叉的运行条件)
+  // Subtask mode (auto/off/ondemand) and the fork switch (the run condition
+  // for subtask forks)
   mode: "auto" | "off" | "ondemand"
   fork: boolean
-  // 当前检查项(subtasks.md);子任务目录状态协议激活时
-  // done 旗标已被调用方按 done.md 存在性覆盖(文件存在性即进度事实,plans/0030 D10)
+  // Current checklist items (subtasks.md); when the subtask-directory state
+  // protocol is active, the done flags have been overwritten by the caller
+  // from done.md existence (file existence is the progress fact, plans/0030
+  // D10)
   items: (DeclaredItem & { text: string })[]
-  // subtasks.md 已有检查项(合并理解与分解单元将幂等直注,不重开会话)
+  // Checklist items already in subtasks.md (the merged understand+decompose
+  // unit injects them idempotently without reopening the session)
   subtasksFileItems: number
-  // 收尾单元本轮是否会跑(配置已计入)
+  // Whether the wrap-up unit will run this round (config already accounted
+  // for)
   wrapup: boolean
 }
 
@@ -32,12 +42,14 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
   // The subtask the loop would run next (dependency order, M3.5; without
   // `Depends:` fields the first unticked item).
   const firstUnticked = nextChecklistIndex(ctx.items)
-  // 序号归属: 记录的检查项恰为当前首个未勾选项 = 该单元将重跑
+  // Ordinal ownership: the record's checklist item being exactly the current
+  // first unticked one = that unit will rerun
   const atItem = (index: number | undefined) => index !== undefined && firstUnticked === index - 1
   switch (phase?.kind) {
     case "decompose":
-      // 合并理解与分解单元(M1.0,plans/0030 D2): 检查项未注入且 subtasks.md 无
-      // 检查项时重跑(旧版 understand 记录经 parseProgress 映射为本阶段)
+      // The merged understand+decompose unit (M1.0, plans/0030 D2): reruns when
+      // the checklist is not injected and subtasks.md has no checklist items
+      // (legacy understand records are mapped to this phase by parseProgress)
       return ctx.mode === "auto" && ctx.items.length === 0 && ctx.subtasksFileItems === 0
     case "whole":
       return ctx.mode !== "auto"
@@ -46,13 +58,16 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
     case "wrapup":
       return ctx.wrapup && firstUnticked === -1
     case "closeout":
-      // 结论行检查与完成标记由 driver 承担,没有归属本单元的会话
+      // The result-line check and the completion mark are the driver's; no
+      // session belongs to this unit
       return false
     case "step":
-      // step 恢复点由 loop 经 openStep 判定归属,不经任务流水线复用
+      // Step recovery points get their ownership decided by the loop via
+      // openStep; they are not reused through the task pipeline
       return true
     case undefined:
-      // 无阶段记录: 无法判定单元归属,不复用(恢复走默认流程)
+      // No phase recorded: unit ownership cannot be decided, no reuse (resume
+      // takes the default flow)
       return false
   }
 }

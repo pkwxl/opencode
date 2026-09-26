@@ -1,33 +1,43 @@
-// 步进模式(OPENCODE_AUTO_STEP,设计文档 plans/0012-step-mode-design.md): phase/task/
-// subtask 三级包含式粒度,在对应(及更粗)的流水线边界硬暂停——phase 交接完成后、
-// task 终态提交后、subtask 勾选提交后;任意输入行(含空回车)放行,无超时自动
-// 继续(区别于 --wait-between 的带超时暂停)。暂停等待期间 ^C 转发进程级处理器,
-// 连续两次 Ctrl+C 强退 130(与 askHuman/waitBetweenTasks 一致)。
+// Step mode (OPENCODE_AUTO_STEP, design plans/0012-step-mode-design.md): three
+// inclusive granularities phase/task/subtask, hard-pausing at the matching (and
+// coarser) pipeline boundaries — after the phase handover completes, after the task's
+// final-state commit, after the subtask tick commit; any input line (including an
+// empty Enter) releases it, no timeout auto-continue (unlike --wait-between's pause
+// with timeout). While paused and waiting, ^C is forwarded to the process-level
+// handler; two consecutive Ctrl+C force-quit 130 (same as askHuman/
+// waitBetweenTasks).
 import { createInterface } from "node:readline/promises"
 import type { Interactive } from "./interactive"
 import { log } from "./log"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { autoSwitches, type StepMode } from "./switches"
 
-// 边界与档位的细度序(off 恒为 0): 值越细序越大,边界序 ≤ 档位序即暂停。
+// Fineness order of boundaries and tiers (off always 0): the finer the value the
+// larger its rank; a boundary pauses when boundary rank ≤ tier rank.
 const RANK: Record<StepMode | Boundary, number> = { off: 0, phase: 1, task: 2, subtask: 3 }
 
-// 流水线边界(kind): phase = --phases 阶段交接完成;task = 任务终态提交完成;
-// subtask = 检查项勾选提交完成。
+// Pipeline boundaries (kind): phase = the --phases phase handover completed; task =
+// the task's final-state commit completed; subtask = the checklist item's tick
+// committed.
 export type Boundary = "phase" | "task" | "subtask"
 
-// 档位是否覆盖该边界(纯函数,供单测): 包含式——subtask 覆盖全部边界,task 覆盖
-// task 与 phase,phase 只覆盖 phase,off 全不暂停。
+// Whether a tier covers a boundary (pure function, for unit tests): inclusive —
+// subtask covers every boundary, task covers task and phase, phase covers only
+// phase, off pauses nowhere.
 export function stepApplies(step: StepMode, boundary: Boundary): boolean {
   return RANK[boundary] <= RANK[step]
 }
 
-// 边界处步进暂停: 开关 off(缺省)时零行为直接返回;否则硬等待一行人工输入后
-// 放行(不解释输入内容,空回车即继续)。interactive = --interactive 的常驻输入行
-// (免两个 readline 争抢 stdin;其 close 回落语义同样适用);step 显式覆盖档位
-// (缺省取 OPENCODE_AUTO_STEP 解析值,注入供单测);io 注入供单测。
-// dir 传目标目录时,等待区间经 statsWaitBegin/End 从总用时/AI 用时中扣除、单记
-// waitMs(STATS_PLAN §3 三处人工等待点之一);off 零行为时统计同样零接触。
+// The step pause at a boundary: with the switch off (default) it is zero-behavior and
+// returns immediately; otherwise it hard-waits for one line of human input before
+// releasing (the input's content is not interpreted; an empty Enter just continues).
+// interactive = --interactive's persistent input line (sparing two readlines from
+// fighting over stdin; its close fallback semantics apply equally); step explicitly
+// overrides the tier (default takes OPENCODE_AUTO_STEP's parsed value, injected for
+// unit tests); io is injected for unit tests. When dir passes the target directory,
+// the wait interval is deducted from total/AI time via statsWaitBegin/End and
+// recorded separately as waitMs (one of STATS_PLAN §3's three human-wait points);
+// with off's zero behavior, stats are equally untouched.
 export async function stepPause(
   boundary: Boundary,
   label: string,
@@ -41,18 +51,21 @@ export async function stepPause(
   const step = opts.step ?? autoSwitches().step
   if (!stepApplies(step, boundary)) return
   const promptText = `⏸ step pause (step=${step}): ${label} done, press Enter to continue: `
-  // 人工等待扣除: 等待期间关段(aiMs/wallMs 均不增长),结束后重开段;异常路径
-  // 同样经 finally 配对 waitEnd,不留悬挂关段。
+  // Human-wait deduction: the segment closes during the wait (neither aiMs nor wallMs
+  // grows), reopening when it ends; the exceptional path likewise pairs waitEnd via
+  // finally, leaving no dangling closed segment.
   await statsWaitBegin(opts.dir, `stepPause:${boundary}`)
   try {
     if (opts.interactive) {
       await opts.interactive.question(promptText)
     } else {
       const rl = createInterface({ input: opts.io?.input ?? process.stdin, output: opts.io?.output ?? process.stdout })
-      // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
-      // 处理器,使暂停等待期间连续两次 Ctrl+C 同样能强制终止。
+      // In raw mode ^C does not raise the process-level SIGINT; readline intercepts
+      // it. Forward it to the process-level handler so that two consecutive Ctrl+C
+      // during the pause wait can still force-terminate.
       rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
-      // stdin 关闭(管道结束等): 回落 undefined 自动放行,与 interactive 的 close 语义一致。
+      // stdin closed (pipe ended etc.): falls back to undefined and auto-releases,
+      // same as interactive's close semantics.
       const closed = new Promise<undefined>((resolve) => rl.on("close", () => resolve(undefined)))
       try {
         await Promise.race([rl.question(promptText), closed])

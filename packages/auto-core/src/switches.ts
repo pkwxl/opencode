@@ -1,15 +1,19 @@
-// OPENCODE_AUTO_* 实验开关注册表——环境变量层(fork 系开关设计文档
-// plans/0003-fork-decompose-design.md §4.6,步进开关 plans/0012-step-mode-design.md):
-// 实验期全部开关经 OPENCODE_AUTO_* 环境变量注入、核心内一次解析(memo)、全流水线
-// 一致,CLI 壳零改动(命名沿 OPENCODE_AUTO_SERVER 先例,src/server.ts)。不落盘:
-// 实验语义 = 本次运行,区别于宪法键的 init 固化,同一次运行内开关恒定;宪法键
-// 转正(实验定型后)另议。空串视同未设;非法值 throw 中文报错(含变量名与期望
-// 值域),经 runner 入口(runTask)抛出、CLI 侧转退出码 1——与配置「坏文件严格
-// 失败」哲学一致。
+// OPENCODE_AUTO_* experiment-switch registry — the environment-variable layer (fork-family
+// switch design plans/0003-fork-decompose-design.md §4.6, the step switch
+// plans/0012-step-mode-design.md): during the experiment period every switch is injected
+// via an OPENCODE_AUTO_* env var, parsed once inside the core (memo), consistent across
+// the whole pipeline, zero CLI-shell changes (naming follows the OPENCODE_AUTO_SERVER
+// precedent, src/server.ts). Never persisted to disk: experiment semantics = this run
+// only, unlike a constitutional key's init-time fixation, and within one run the switches
+// are constant; promoting a constitutional key (once the experiment settles) is a
+// separate matter. The empty string counts as unset; an invalid value throws an error
+// message (naming the variable and its expected domain), raised at the runner entry
+// (runTask) and turned into exit code 1 on the CLI side — same philosophy as the
+// config's "bad file fails strictly".
 import { log, vlog } from "./log"
 import { PHASE_LETTERS, type PhaseLetter } from "./phases/registry"
 
-// 开关的环境变量名(解析、启动日志与测试引用同一来源)。
+// Env-var names of the switches (parsing, startup log and tests reference one source).
 export const SWITCH_ENV = {
   fork: "OPENCODE_AUTO_FORK",
   forkBase: "OPENCODE_AUTO_FORK_BASE",
@@ -38,29 +42,37 @@ export const SWITCH_ENV = {
   models: "OPENCODE_AUTO_MODELS",
 } as const
 
-// 步进模式(OPENCODE_AUTO_STEP)值域: off 不暂停;phase/task/subtask 为包含式
-// 粒度——所取值及更粗的边界都暂停(见 src/step.ts)。
+// Step mode (OPENCODE_AUTO_STEP) value domain: off never pauses; phase/task/subtask are
+// inclusive granularities — the chosen value and every coarser boundary all pause
+// (see src/step.ts).
 export type StepMode = "off" | "phase" | "task" | "subtask"
 
-// 降级回试粒度(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE)值域: 降级到候选模型后,在哪个
-// 边界重新回到首选模型——包含式粒度,所取值及更粗的边界都重置(与 step 同一 RANK
-// 思路,见 src/failback.ts): phase 仅阶段边界(跨任务粘滞);task(缺省)= 现状,
-// 链逐任务销毁天然归零;subtask 加子任务边界;session 每个新会话起点都回试首选
-// (降级 fork 出的迁移会话不触发,防震荡)。
+// Failback granularity (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE) value domain: after failing
+// over to a candidate model, at which boundary to return to the preferred model —
+// inclusive granularity, the chosen value and every coarser boundary all reset (same RANK
+// idea as step, see src/failback.ts): phase only at phase boundaries (sticky across
+// tasks); task (default) = the status quo, the chain's per-task teardown zeroes it
+// naturally; subtask adds subtask boundaries; session retries the preferred model at
+// every new session start (a migration session forked out by failover does not trigger
+// it, to prevent flapping).
 export type FailbackScope = "phase" | "task" | "subtask" | "session"
 
-// 理解摘要行数档位(OPENCODE_AUTO_TASK_CONTEXT)值域: off 为现状(建议 200 行
-// 以内);small/medium/large 逐档放宽(300/400/500 行,见 src/prompt.ts 的
-// TASK_CONTEXT_LINES)——仅调整提示词里的"建议行数"措辞,不做代码侧截断或校验
-// (context.md 本就无硬性行数限制,超出建议行数不会被拒收)。
+// Digest line-count tier (OPENCODE_AUTO_TASK_CONTEXT) value domain: off is the status quo
+// (suggest within 200 lines); small/medium/large loosen per tier (300/400/500 lines, see
+// TASK_CONTEXT_LINES in src/prompt.ts) — only the "suggested line count" wording in the
+// prompt changes, no code-side truncation or validation (context.md never had a hard
+// line limit anyway; exceeding the suggested count is not rejected).
 export type TaskContextMode = "off" | "small" | "medium" | "large"
 
-// 会话角色词表(阶段化模型路由,见 plans/0017-model-routing-design.md C.1):实验期固定、
-// 不做自由命名;与 B.5 执行链角色一一对应,`bypass` 为未显式给 role 的旁路会话兜底。
-// 导出为共享真源,后续 P2(resolveModel / roleOf)与旁路改造复用同一份。
-// M1.0 起 understand/decompose 两会话合一(plans/0030 D12): 词表不再含 understand——
-// 合并会话路由在 decompose 角色下,旧配置里的 understand= 键按非法键严格失败;
-// verify-*/review-*/final-plan 随三机制退役出表(plans/0044 D1),同样严格失败。
+// Session role vocabulary (staged model routing, see plans/0017-model-routing-design.md
+// C.1): fixed for the experiment period, no free naming; one-to-one with the B.5
+// execution-chain roles, `bypass` as the fallback for bypass sessions given no explicit
+// role. Exported as the shared source of truth, for the later P2 (resolveModel / roleOf)
+// and the bypass rework to reuse. Since M1.0 the understand/decompose sessions are one
+// (plans/0030 D12): the vocabulary no longer contains understand — the merged session
+// routes under the decompose role, an understand= key in old config fails strictly as an
+// invalid key; verify-*/review-*/final-plan left the table with the three mechanisms'
+// retirement (plans/0044 D1), equally strict failures.
 export const MODEL_ROLES = [
   "decompose",
   "whole",
@@ -76,8 +88,8 @@ export const MODEL_ROLES = [
 ] as const
 export type ModelRole = (typeof MODEL_ROLES)[number]
 
-// 阶段字母键(OPENCODE_AUTO_MODEL 条目表的字母键值域 = 阶段类型注册表的预置字母,
-// 见 runner 的 opts.phase)。
+// Phase letter keys (the OPENCODE_AUTO_MODEL entry list's letter-key domain = the
+// phase-type registry's preset letters, see runner's opts.phase).
 const MODEL_LETTERS = PHASE_LETTERS
 export type ModelLetter = PhaseLetter
 
@@ -121,9 +133,10 @@ export function modelTypeProblems(policy: ModelPolicy, types: readonly string[])
     .map((key) => `env ${SWITCH_ENV.model} key "${key}" names no phase type (known: ${types.join(", ")})`)
 }
 
-// 归一化后的模型路由策略(P1 只解析并持有,实际求值 resolveModel 落 P2)。缺省
-// wildcard=undefined / byLetter={} / byRole={} / fallback=[] 即「未设」——两变量
-// 均未设时 resolveModel 必须据此起「不带 model」(逐字节等价现状)。
+// The normalized model-routing policy (P1 only parses and holds it; the actual
+// evaluation resolveModel lands in P2). Defaults wildcard=undefined / byLetter={} /
+// byRole={} / fallback=[] mean "unset" — with both env vars unset resolveModel must
+// start from that "without model" (byte-for-byte equivalent to the status quo).
 export type ModelPolicy = {
   wildcard?: string
   byLetter: Partial<Record<ModelLetter, string>>
@@ -136,78 +149,112 @@ export type ModelPolicy = {
 }
 
 export type Switches = {
-  // fork 三段式流水线总开关: off = 现状流水线(无理解会话、无分叉),行为零变化。
+  // Master switch of the fork three-segment pipeline: off = the status-quo pipeline (no
+  // understand session, no fork), zero behavior change.
   fork: boolean
-  // fork 基点模式(仅 fork=on 有意义): session = 理解会话末端;digest = 以
-  // context.md 摘要为输入新建基点会话(前缀瘦、建立后跨运行持久复用、失效时可从
-  // 磁盘确定性重建)。
+  // Fork base mode (only meaningful with fork=on): session = the understand session's
+  // tail; digest = a fresh base session taking the context.md digest as input (thin
+  // prefix, persistently reused across runs once established, deterministically
+  // rebuildable from disk when invalidated).
   forkBase: "session" | "digest"
-  // 细粒度分解: decompose-<phase> 模板注入细粒度准则段(仍受下限保护约束)。
+  // Fine-grained decompose: the decompose-<phase> template injects the fine-grained
+  // criteria section (still bound by the lower-bound guard).
   fine: boolean
-  // 超限交接 steer(2×cap): off = 停用会话中交接注入与会话后的交接判定
-  // (自然完成即收;--handover-test 的测试交接是独立机制,不受影响)。
+  // Over-limit handover steer (2×cap): off disables both the in-session handover
+  // injection and the post-session handover decision (a natural finish just wraps up;
+  // --handover-test's test handover is an independent mechanism, unaffected).
   steer: boolean
-  // 步进模式: phase/task/subtask 在对应(及更粗)边界硬暂停等回车放行。
+  // Step mode: phase/task/subtask hard-pause at the matching (and coarser) boundaries,
+  // waiting for Enter to proceed.
   step: StepMode
-  // refcheck 总开关(refcheck-scope-design D3,缺省 off): off 时两处挂点
-  // (提交前 auto-correct、check 引用扫描)全部空转,目标目录
-  // 零引用检查行为;fix-refs 手动脚本不受约束(人工显式执行等价于显式开启)。
+  // Refcheck master switch (refcheck-scope-design D3, default off): with off both hook
+  // points (pre-commit auto-correct, the check reference scan) idle entirely and the
+  // target directory gets zero reference-check behavior; the manual fix-refs script is
+  // unconstrained (a person running it explicitly equals explicitly enabling it).
   refCheck: boolean
-  // 会话链复用总开关(缺省 off): off = 任务内每个提示词都开新会话(链上只留
-  // 上一会话的用量供日志与交接判定),阈值规则(REUSE_BELOW / cap 一半 /
-  // REUSE_IDLE_MS)不再参与;on = 恢复既有的阈值复用。中断恢复接管的会话不受
-  // 本开关约束(恢复语义即"接着被中断的那个会话继续",见 attempt 的 resumed)。
+  // Session-chain reuse master switch (default off): off = every prompt within a task
+  // opens a new session (the chain keeps only the previous session's usage for logging
+  // and the handover decision), the threshold rules (REUSE_BELOW / half of cap /
+  // REUSE_IDLE_MS) no longer take part; on = the existing threshold reuse restored. A
+  // session taken over by interruption recovery is not bound by this switch (recovery
+  // semantics is "continue the very session that was interrupted", see attempt's
+  // resumed).
   reuseSession: boolean
-  // 死循环检测(缺省 on,见 src/stuck.ts): 会话内重复同一动作且结果不变时,
-  // driver 经 steer 主动注入提示(每会话至多三次,不中止会话);off = 不检测、
-  // 不注入。dryrun 预检会话本就靠反复被拒探查权限,恒不检测(与本开关无关)。
+  // Stuck-loop detection (default on, see src/stuck.ts): when a session repeats the same
+  // action with unchanged results, the driver proactively injects a hint via steer (at
+  // most three per session, never aborts the session); off = no detection, no injection.
+  // A dryrun preflight session probes permissions by being refused over and over and is
+  // never detected (independent of this switch).
   stuck: boolean
-  // 理解摘要行数档位(缺省 off,现状零变化): small/medium/large 放宽 context.md
-  // 的建议行数上限(见 src/prompt.ts 的 TASK_CONTEXT_LINES),供怀疑摘要因"建议
-  // 200 行"措辞被过度压缩、信息丢失时调大预算验证。
+  // Digest line-count tier (default off, zero change from the status quo): the
+  // small/medium/large tiers loosen context.md's suggested line ceiling (see
+  // TASK_CONTEXT_LINES in src/prompt.ts), for enlarging the budget to verify when the
+  // digest is suspected over-compressed by the "suggest 200 lines" wording and losing
+  // information.
   taskContext: TaskContextMode
-  // 提问策略(缺省 off,现状零变化;设计文档 plans/0020-auto-resolve-design.md §E):
-  // off = 压制——非权限问题一律不调 question 工具、自主决策,凡本应发问却未发问的
-  // 分歧点强制以 AUTO-RESOLVE 标注,纯工程取舍以 AUTO-DECISION 标注;on = 允许——
-  // 决定权属于用户的分歧点主动调 question 工具发问,纯实现手段自主决定且不要求
-  // 任何标注(提问是流经 driver 的事件,代答记录由 driver 观测即完备)。提问策略
-  // 与标注义务同进同退、由本开关单键切换,不拆成两个独立布尔量。
+  // Question policy (default off, zero change from the status quo; design
+  // plans/0020-auto-resolve-design.md §E): off = suppress — never call the question tool
+  // for non-permission questions, decide autonomously; every divergence point that
+  // should have been asked about but was not is forcibly marked AUTO-RESOLVE, pure
+  // engineering trade-offs are marked AUTO-DECISION; on = allow — proactively ask via
+  // the question tool at divergence points whose decision belongs to the user, decide
+  // pure implementation means autonomously with no markers required (a question is an
+  // event flowing through the driver; observing it there makes the proxy-answer record
+  // complete). Question policy and marking duty advance and retreat together, toggled
+  // by this one switch, not split into two independent booleans.
   ask: boolean
-  // 阶段化模型路由 + 配额降级候选(缺省未设 = 现状零变化): OPENCODE_AUTO_MODEL 归一
-  // 化为 wildcard/byLetter/byRole,OPENCODE_AUTO_MODEL_FALLBACK 的有序候选折进 fallback。
-  // 实际求值与降级动作落 P2/P4,本层只解析、校验、日志登记。
+  // Staged model routing + quota failover candidates (default unset = zero change from
+  // the status quo): OPENCODE_AUTO_MODEL is normalized into wildcard/byLetter/byRole,
+  // OPENCODE_AUTO_MODEL_FALLBACK's ordered candidates fold into fallback. The actual
+  // evaluation and the failover action land in P2/P4; this layer only parses, validates
+  // and logs them.
   model: ModelPolicy
-  // 降级回试粒度(缺省 task = 现状零变化): 降级后在哪个边界重置回首选模型,
-  // 见 FailbackScope 与 src/failback.ts;/failback 命令的运行期覆写不经过本层
-  // (src/failback.ts 模块态)。
+  // Failback granularity (default task = zero change from the status quo): at which
+  // boundary to reset back to the preferred model after failover, see FailbackScope and
+  // src/failback.ts; the /failback command's runtime override does not pass through this
+  // layer (module state in src/failback.ts).
   modelFailbackScope: FailbackScope
-  // 瞬时会话错误的重试阶梯(OPENCODE_AUTO_RETRY_WAITS,逗号分隔的分钟数):每个
-  // 元素是「该次重试前的等待」,元素个数即重试次数上限。缺省 0,1,2,4,8 = 五次
-  // 重试,首次立即、其后 1/2/4/8 分钟。off = 不重试(首次失败即进等待-探测环)。
+  // Retry ladder for transient session errors (OPENCODE_AUTO_RETRY_WAITS, comma-separated
+  // minutes): each element is "the wait before that retry", the element count is the
+  // retry cap. Default 0,1,2,4,8 = five retries, the first immediate, then 1/2/4/8
+  // minutes. off = no retries (the first failure goes straight into the wait-and-probe
+  // loop).
   retryWaits: number[]
-  // 等待-探测环的间隔分钟数(OPENCODE_AUTO_RECOVERY_WAIT): 会话故障(不可重试的
-  // 配额类、阶梯耗尽的瞬时类、降级候选用尽)一律不再阻塞退出,改为以该间隔无限
-  // 等待,每轮用全新临时会话下发极小探测提示词;探测成功(服务恢复)后 fork 被中断
-  // 的会话续跑。等待期间连按两次 Ctrl+C 经进程级 SIGINT 处理器强制退出(130)。
+  // Wait-and-probe loop interval in minutes (OPENCODE_AUTO_RECOVERY_WAIT): session
+  // failures (the non-retryable quota class, the transient class with its ladder
+  // exhausted, failover candidates used up) are never a blocked exit anymore; instead
+  // they wait indefinitely at this interval, each round dispatching a minimal probe
+  // prompt in a fresh temporary session; once a probe succeeds (service recovered) the
+  // interrupted session is forked to continue. During the wait two consecutive Ctrl+C
+  // force-quit (130) via the process-level SIGINT handler.
   recoveryWait: number
-  // 严格恢复(plans/0022-session-recovery-fidelity-design.md,缺省 off = 现状): on 时进度
-  // 记录补单元基线 baseline 与生效模型 model、恢复时核对(外部提交混入走 dirty、
-  // 模型不一致/会话死亡/--new-session 回滚到单元基线重跑)、复用会话的恢复说明
-  // 收敛为一句 continue、交接文档无效一次即回滚。门禁关闭(--commit false/dryrun)
-  // 时由 runner 侧整体空转(记录不带新字段)。
+  // Strict resume (plans/0022-session-recovery-fidelity-design.md, default off = the
+  // status quo): on adds the unit baseline and the effective model to the progress
+  // record and verifies them at recovery (a foreign commit mixed in goes dirty; model
+  // mismatch / dead session / --new-session rolls back to the unit baseline and reruns),
+  // converges the reused session's recovery note to a single continue sentence, and
+  // rolls back on the first invalid handover document. With the gates off (--commit
+  // false/dryrun) the runner side idles it entirely (the record carries no new fields).
   strictResume: boolean
-  // 测试交接的测试时机(缺省 off = 先交接、后运行): off 时定版提交后只把脚本定下来
-  // (消费 tmp/test.sh 标记),会话收尾、交接文档归档、提交 #2 全部完成之后才执行——
-  // 被测的就是提交 #2 的那一份树,收尾期没有并发写。on 恢复旧的真并发(定版后不 await
-  // 测试即下发收尾),此时测试面对的是定版快照,收尾期若改了被测内容只打一行告警,
-  // 不 stash、不重跑、不阻塞(重测守卫已随本开关的引入退役,见
-  // plans/0023-test-handover-early-design.md §H)。
+  // Test-handover timing (default off = hand over first, run after): with off, after the
+  // freeze commit only the script gets pinned (consuming the tmp/test.sh marker), and
+  // the run happens only after session wrap-up, handover-document archiving and commit
+  // #2 are all done — what is tested is exactly the tree of commit #2, no concurrent
+  // writes during wrap-up. on restores the old true concurrency (after the freeze it
+  // dispatches wrap-up without awaiting the test); the test then faces the freeze
+  // snapshot, and if wrap-up changed the tested content it only prints one warning
+  // line — no stash, no rerun, no blocking (the retest guard was retired with this
+  // switch's introduction, see plans/0023-test-handover-early-design.md §H).
   handoverConcurrent: boolean
-  // 休眠时段(避开 LLM 高收费时段,plans/0027-hibernate-design.md,缺省 undefined = 不休眠,
-  // 现状零变化): OPENCODE_AUTO_HIBERNATE="HH:MM+H"(UTC 每日窗口,H 小时允许小数)。
-  // 只在三处既有安全边界(phase/task/subtask,挂点同 step.ts)与启动时检查「现在是否
-  // 在窗口内」——在窗口内睡到窗口结束 + 固定随机 0~600 秒再继续;执行中的单元跑到
-  // 边界才停,天然实现「优雅等待到安全退出点再暂停」。不预判下一单元、不落盘。
+  // Hibernation window (avoiding LLM high-tariff hours, plans/0027-hibernate-design.md,
+  // default undefined = no hibernation, zero change from the status quo):
+  // OPENCODE_AUTO_HIBERNATE="HH:MM+H" (a daily UTC window, H hours may be fractional).
+  // "Am I inside the window now" is checked only at the three existing safe boundaries
+  // (phase/task/subtask, same hook points as step.ts) and at startup — inside the window
+  // it sleeps to the window end + a fixed random 0~600 seconds before continuing; a
+  // unit mid-execution stops only at the boundary it reaches, naturally "gracefully
+  // waiting for the current task/subtask to reach a safe exit point before pausing". It
+  // does not predict the next unit and persists nothing.
   hibernate: HibernateWindow | undefined
   // Override of the project's coding agent (MA.5 plans/0041; M6.1): opencode
   // or claude (the headless adapter, src/agent/claude/). undefined = unset —
@@ -218,9 +265,10 @@ export type Switches = {
 
 export type AgentChoice = "opencode" | "claude"
 
-// 休眠窗口(OPENCODE_AUTO_HIBERNATE 归一化形态): startMin = UTC 窗口起点(当日分钟
-// 数,∈ [0,1440));durationMin = 时长(分钟,∈ (0,1440),允许小数)。跨午夜(如
-// 22:00+8)由消费侧取模处理。解析见 parseSwitches 的 hibernate 段。
+// Hibernate window (OPENCODE_AUTO_HIBERNATE's normalized shape): startMin = the UTC
+// window start (minutes into the day, ∈ [0,1440)); durationMin = the length (minutes,
+// ∈ (0,1440), fractions allowed). Crossing midnight (e.g. 22:00+8) is handled by the
+// consumer with modulo. Parsing lives in parseSwitches's hibernate section.
 export type HibernateWindow = { startMin: number; durationMin: number }
 
 const SWITCH_DEFAULTS: Switches = {
@@ -244,10 +292,13 @@ const SWITCH_DEFAULTS: Switches = {
   agent: undefined,
 }
 
-// OPENCODE_AUTO_MODEL / _FALLBACK 归一化为 ModelPolicy(纯函数,供单测)。两形态:
-// 裸值 prov/model 等价全量覆盖(*=prov/model);条目表 `键=prov/model` 逗号分隔,键 ∈
-// {* ∪ 阶段字母 ∪ 角色词表},条目内分隔符用 = 而非 :(model id 可能含冒号)。值必须
-// 含 /;空串视同未设。坏值严格失败: throw 中文报错(含变量名、示例、越界键/坏值)。
+// Normalize OPENCODE_AUTO_MODEL / _FALLBACK into a ModelPolicy (pure function, for unit
+// tests). Two shapes: a bare value prov/model is equivalent to a full override
+// (*=prov/model); an entry list `key=prov/model` comma-separated, keys ∈ {* ∪ phase
+// letters ∪ the role vocabulary}, the in-entry separator being = not : (a model id may
+// contain a colon). Values must contain /; the empty string counts as unset. Bad values
+// fail strictly: throws an error message (naming the variable, an example, the offending
+// key/value).
 // Under a model registry (registry info given, plans/0055 §9 R7) a value is
 // additionally allowed to be a bare internal model name: it must match the
 // internal-name shape and be one of the registry's names, and an unknown bare
@@ -274,7 +325,7 @@ function parseModelPolicy(
   const modelRaw = rawModel === undefined || rawModel === "" ? undefined : rawModel
   if (modelRaw !== undefined) {
     if (modelRaw.includes("=")) {
-      // 条目表形态:逐条 key=value。
+      // Entry-list shape: key=value per item.
       for (const entry of modelRaw.split(",")) {
         const idx = entry.indexOf("=")
         if (idx < 0) {
@@ -297,7 +348,7 @@ function parseModelPolicy(
         }
       }
     } else {
-      // 裸值形态:全量覆盖。
+      // Bare-value shape: full override.
       const problem = valueProblem(modelRaw)
       if (problem !== undefined) throw new Error(problem)
       policy.wildcard = modelRaw
@@ -312,7 +363,7 @@ function parseModelPolicy(
         `env ${SWITCH_ENV.modelFallback} is not used under a model registry: the tier lists are the failover order (${registry.tiers})`,
       )
     }
-    // 有序候选表 prov/a,prov/b;空/未设 = 不降级(空数组)。
+    // Ordered candidate list prov/a,prov/b; empty/unset = no failover (empty array).
     for (const item of fallbackRaw.split(",")) {
       if (!item.includes("/")) {
         throw new Error(
@@ -325,8 +376,9 @@ function parseModelPolicy(
   return policy
 }
 
-// 由策略回推 OPENCODE_AUTO_MODEL 的环境变量取值(启动日志用):固定按 wildcard→
-// 字母→角色的稳定次序渲染条目表;三项皆空返回空串(视同未设)。
+// Derive the OPENCODE_AUTO_MODEL env value back from the policy (for the startup log):
+// renders the entry list in the fixed stable order wildcard → letters → roles; with all
+// three empty it returns the empty string (counts as unset).
 function renderModelEnv(policy: ModelPolicy): string {
   const parts: string[] = []
   if (policy.wildcard !== undefined) parts.push(`*=${policy.wildcard}`)
@@ -342,8 +394,9 @@ function renderModelEnv(policy: ModelPolicy): string {
   return parts.join(",")
 }
 
-// 休眠窗口的规范写法(启动日志与单测同一来源): HH:MM+H(HH 补零两位,H 为小时数、
-// 小数渲染原样);undefined(未设)返回空串(视同未设)。
+// Canonical spelling of a hibernate window (startup log and unit tests share one
+// source): HH:MM+H (HH zero-padded to two digits, H is the hours, fractions render
+// as-is); undefined (unset) returns the empty string (counts as unset).
 export function formatHibernate(window: HibernateWindow | undefined): string {
   if (window === undefined) return ""
   const hh = String(Math.floor(window.startMin / 60)).padStart(2, "0")
@@ -351,9 +404,10 @@ export function formatHibernate(window: HibernateWindow | undefined): string {
   return `${hh}:${mm}+${window.durationMin / 60}`
 }
 
-// OPENCODE_AUTO_HIBERNATE 解析(纯函数): "HH:MM+H"——UTC 每日窗口,H 为小时数(允许
-// 小数,如 6.5)。空串/未设 = undefined(不休眠);坏值严格失败: throw 中文报错(含
-// 变量名、期望值域与示例)。
+// Parse OPENCODE_AUTO_HIBERNATE (pure function): "HH:MM+H" — a daily UTC window, H being
+// the hours (fractions allowed, e.g. 6.5). Empty/unset = undefined (no hibernation); bad
+// values fail strictly: throws an error message (naming the variable, the expected
+// domain and an example).
 function parseHibernate(raw: string | undefined): HibernateWindow | undefined {
   if (raw === undefined || raw === "") return undefined
   const match = /^(\d{1,2}):(\d{2})\+(\d+(?:\.\d+)?)$/.exec(raw)
@@ -373,11 +427,11 @@ function parseHibernate(raw: string | undefined): HibernateWindow | undefined {
   return { startMin: hour * 60 + minute, durationMin: hours * 60 }
 }
 
-// 解析(纯函数,供单测): env 传 process.env 或测试构造的记录;值为空串视同未设
-// (取缺省),非法值 throw 中文报错。registry is the loaded model registry's
-// switch-facing facts (undefined = none): they widen OPENCODE_AUTO_MODEL's
-// value grammar to internal names and refuse OPENCODE_AUTO_MODEL_FALLBACK
-// (plans/0055 §9 R7).
+// Parse (pure function, for unit tests): env is process.env or a test-built record; an
+// empty-string value counts as unset (default taken), an invalid value throws an error
+// message. registry is the loaded model registry's switch-facing facts (undefined =
+// none): they widen OPENCODE_AUTO_MODEL's value grammar to internal names and refuse
+// OPENCODE_AUTO_MODEL_FALLBACK (plans/0055 §9 R7).
 export function parseSwitches(env: Record<string, string | undefined>, registry?: SwitchModelRegistry): Switches {
   const onOff = (name: string, raw: string | undefined, fallback: boolean): boolean => {
     const value = raw === undefined || raw === "" ? (fallback ? "on" : "off") : raw
@@ -386,8 +440,9 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     }
     return value === "on"
   }
-  // 分钟阶梯: off = 空表(不重试);否则逗号分隔的非负分钟数(允许小数,供单测取
-  // 亚分钟值)。空串视同未设。
+  // Minute ladder: off = empty list (no retries); otherwise comma-separated non-negative
+  // minutes (fractions allowed, so unit tests can take sub-minute values). The empty
+  // string counts as unset.
   const waitList = (name: string, raw: string | undefined, fallback: number[]): number[] => {
     if (raw === undefined || raw === "") return fallback
     if (raw === "off") return []
@@ -467,12 +522,14 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
   }
 }
 
-// 阶梯的规范写法(日志与默认值比较同一来源): 空表渲染为 off。
+// Canonical spelling of the ladder (logging and default comparison share one source):
+// an empty list renders as off.
 function formatWaits(waits: number[]): string {
   return waits.length ? waits.join(",") : "off"
 }
 
-// 非默认生效项(启动日志): `名=值` 逗号清单,默认组合返回 undefined(静默)。
+// Non-default effective items (startup log): a comma list of `name=value` entries; the
+// default combination returns undefined (silent).
 export function nonDefaultSwitches(switches: Switches): string | undefined {
   const items = [
     switches.fork === SWITCH_DEFAULTS.fork ? undefined : `${SWITCH_ENV.fork}=${switches.fork ? "on" : "off"}`,
@@ -505,7 +562,8 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
   return items.length ? items.join(", ") : undefined
 }
 
-// 全量开关描述(verbose 日志;与非默认项清单同一 `名=值` 形态)。
+// Full switch description (verbose log; same `name=value` shape as the non-default
+// list).
 export function formatSwitches(switches: Switches): string {
   return [
     `${SWITCH_ENV.fork}=${switches.fork ? "on" : "off"}`,
@@ -551,9 +609,11 @@ export function setSwitchModelRegistry(registry: SwitchModelRegistry | undefined
   memoRegistry = registry
 }
 
-// 运行期开关访问(memo 一次,全流水线一致): 首次调用解析 process.env——非法值
-// 抛出,由调用链最外层(CLI)转退出码 1;并在启动日志列出非默认生效项(默认
-// 组合静默,verbose 可查全量)。此后恒定返回同一对象。
+// Runtime switch access (memoized once, consistent across the whole pipeline): the
+// first call parses process.env — an invalid value throws there, and the outermost
+// caller (the CLI) turns it into exit code 1; it also lists the non-default effective
+// items in the startup log (default combination silent, verbose shows the full set).
+// Afterwards it always returns the same object.
 export function autoSwitches(): Switches {
   if (memo) return memo
   memo = parseSwitches(process.env, modelRegistry)

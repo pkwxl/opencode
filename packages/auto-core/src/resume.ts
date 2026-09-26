@@ -2,57 +2,89 @@ import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { UnitBaseline } from "./git"
 
-// 进度恢复记录: run 期间 driver 把任务流水线的当前阶段与执行链会话持久化到目标
-// 目录 .auto/progress.json。应用崩溃/被强制终止后重新运行时据此精确恢复:
-// - active 且会话在 server 上仍存在 → 复用该会话继续(与 `opencode -r <session-id>`
-//   同构: 会话历史持久化在 server 项目存储,向原 session 下发新 prompt 即带全部
-//   上下文继续,会话内未落盘的进度不丢),首个提示词附"中断后的继续"说明(含按阶段
-//   的下一步指引);中断前已写出交接文档(ondemand handoff / handover-test)时不复用
-//   ——旧会话上下文已用满、进度由交接文档承载,开新会话凭交接续跑;
-//   --new-session 显式放弃旧会话(仅跳过复用,阶段精确重入保留)。
-// - 优雅退出(阻塞/回退 pending)由 driver 在退出前写好总结(active=false 的
-//   记录,原因见运行日志),恢复时开新会话凭总结继续,不复用旧会话——人工介入
-//   可能耗时数小时且会改动环境,旧会话上下文已不可信;
-// - 记录同时携带阶段(phase): 恢复时按阶段重入流水线(off/ondemand 已过执行阶段
-//   不再重跑整任务会话、closeout 跳过收尾等)。
-// 记录在提示词下发成功时即写(认领在跑的会话——回合进行中被 kill 也不丢),回合
-// 结束后按结果刷新;可重试的会话错误把记录还原为下发前快照(被弃副本不顶替真实
-// 恢复点,见 plans/0015-session-error-retry-plan.md 第 4 点与 plans/0018-session-resume-precedence-design.md)。
-// 任务完成即删除记录。除执行链会话外,阶段级旁路步骤(phase-plan/phase-handover,
-// phase.kind = "step")也写记录: driver 收口(产物校验+提交+后处理)前保持 active,
-// 使中断后会话恢复优先于"凭 AI 写的文件推导路由"(后者会把未收口的规划/交接会话
-// 静默跳过)。无阶段的一次性旁路会话(dryrun/fork 基点等)仍不写记录,避免污染
-// 恢复记忆。
+// Progress record: during a run the driver persists the task pipeline's
+// current phase and the session-chain session to the target directory's
+// .auto/progress.json. Re-running after an application crash / forced
+// termination recovers precisely from it:
+// - active and the session still exists on the server → reuse that session to
+//   continue (same shape as `opencode -r <session-id>`: the session history
+//   persists in the server's project store, so dispatching a new prompt to the
+//   original session continues with the full context and in-session progress
+//   not yet on disk is not lost); the first prompt carries a "continuing after
+//   an interruption" note (with per-phase next-step guidance); when a handover
+//   document was already written before the interruption (ondemand handoff /
+//   handover-test) there is no reuse — the old session's context is spent and
+//   progress is carried by the handover document, a new session resumes from
+//   it; --new-session explicitly abandons the old session (only the reuse is
+//   skipped; exact phase re-entry is kept).
+// - A graceful exit (blocked / reverted to pending) has the driver write a
+//   summary before exiting (an active=false record; the reason sits in the run
+//   log); on resume a new session continues from the summary, the old session
+//   is not reused — human attention may take hours and change the environment,
+//   so the old session's context is no longer trustworthy;
+// - The record also carries the phase: on resume the pipeline re-enters by
+//   phase (off/ondemand do not rerun the whole-task session for execution
+//   phases already past, closeout skips the wrap-up, etc.).
+// The record is written the moment a prompt dispatch succeeds (claiming the
+// running session — a kill mid-round loses nothing) and refreshed with the
+// result after the round ends; a retryable session error restores the record
+// to its pre-dispatch snapshot (an abandoned copy must not displace the real
+// recovery point, see plans/0015-session-error-retry-plan.md point 4 and
+// plans/0018-session-resume-precedence-design.md).
+// The record is deleted when the task completes. Besides the session-chain
+// session, phase-level bypass steps (phase-plan/phase-handover,
+// phase.kind = "step") also write a record: it stays active until the driver's
+// close-out (artifact checks + commit + post-processing), so that after an
+// interruption session recovery takes precedence over "deriving the route from
+// the files the AI wrote" (the latter would silently skip a planning/handover
+// session never closed out). One-shot no-phase bypass sessions (dryrun / the
+// fork base, etc.) still write no record, to avoid polluting the recovery
+// memory.
 
-// 阶段级旁路步骤(driver 侧收口的流程步骤,非任务流水线阶段): phase-plan = 阶段
-// 规划会话(写任务索引与任务文档),phase-handover = 阶段交接蒸馏会话(产出交接文档),
-// phase-append = 阶段追加规划会话(plans/0053 D23: 在既有任务索引之后追加新任务,
-// 模型路由沿用 phase-plan 角色)。这类会话此前不写恢复点,中断后流程仅凭 AI 写的
-// 文件(任务单元/交接文档)推导路由,把未收口的会话静默跳过——见
-// plans/0018-session-resume-precedence-design.md。
+// Phase-level bypass steps (process steps closed out on the driver side, not
+// task-pipeline phases): phase-plan = the phase planning session (writes the
+// task index and task documents), phase-handover = the handover-distillation
+// session (produces the handover document), phase-append = the append-planning
+// session (plans/0053 D23: appends new tasks after the existing task index,
+// model routing reuses the phase-plan role). These sessions previously wrote
+// no recovery point; after an interruption the flow derived the route purely
+// from the AI-written files (task units / the handover document) and silently
+// skipped the session never closed out — see
+// plans/0018-session-resume-precedence-design.md.
 export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 
-// 任务流水线的阶段标记:
-// - decompose: auto 模式合并理解与分解会话阶段(M1.0 起 understand+decompose 合一,
-//   见 plans/0030-subtask-loop-entry-design.md;产物 = context.md + shared.md +
-//   subtasks.md + 各子任务 todo.md,检查项尚未注入)。旧版 "understand" 记录在
-//   parseProgress 读取时映射为本阶段(兼容读)。
-// - whole: off/ondemand 模式整任务单会话执行阶段
-// - subtasks: 逐子任务会话阶段(从首个未勾选项继续);index = 归属子任务的 1 起
-//   序号,仅子任务会话的 active 记录携带(间歇/总结态记录不带)
-// - wrapup: 收尾会话阶段
-// - closeout: 收尾已完成,只剩任务报告结论行检查与完成标记(无会话);恢复时跳过
-//   收尾。已退役的 verify/review 记录(D13,二者只出现在收尾之后)读取时映射为本阶段
-// - step: 阶段级旁路步骤(phase-plan/phase-handover/phase-append),unit 为归属阶段的
-//   限定编号 R-NN.P<nn>(M3.6 前为预置字母;旧记录缺 unit,与任何阶段都不匹配,loop 告警后
-//   按文件路由继续);
-//   driver 收口前记录保持 active,中断后据此让会话恢复优先于文件推导路由
+// Phase markers of the task pipeline:
+// - decompose: the auto-mode phase merging the understand and decompose
+//   sessions (understand+decompose merged into one since M1.0, see
+//   plans/0030-subtask-loop-entry-design.md; artifacts = context.md +
+//   shared.md + subtasks.md + each subtask's todo.md, checklist not yet
+//   injected). Legacy "understand" records are mapped to this phase when
+//   parseProgress reads them (compatibility read).
+// - whole: the off/ondemand-mode whole-task single-session execution phase
+// - subtasks: the per-subtask session phase (continues from the first unticked
+//   item); index = the owning subtask's 1-based ordinal, carried only by the
+//   active record of a subtask session (interim / summary-state records do not
+//   carry it)
+// - wrapup: the wrap-up session phase
+// - closeout: the wrap-up is finished, only the task report result-line check
+//   and the completion mark remain (no session); on resume the wrap-up is
+//   skipped. Retired verify/review records (D13; both only ever appeared after
+//   the wrap-up) are mapped to this phase when read
+// - step: a phase-level bypass step (phase-plan/phase-handover/phase-append);
+//   unit is the owning phase's qualified id R-NN.P<nn> (before M3.6 a preset
+//   letter; old records lack unit, match no phase, and the loop warns then
+//   continues by file-derived routing);
+//   the record stays active until the driver's close-out, so that after an
+//   interruption session recovery takes precedence over file-derived routing
 //
-// 单元归属门禁(runner.unitReruns): active 记录的会话属于某个具体执行单元
-// (任务级阶段/子任务#N),恢复时仅当本次运行将重跑该单元才允许
-// 复用其会话;单元已过、配置/开关变更使其不再执行、或记录缺失序号无法判定
-// 归属(老版本记录)时,记录转总结态、开新会话——恢复只发生在原单元重跑时,
-// 不让下一单元误续上一单元的中断会话。
+// Unit-ownership gate (runner.unitReruns): an active record's session belongs
+// to one concrete execution unit (a task-level phase / subtask #N); on resume
+// its session may be reused only when this run will rerun that unit. When the
+// unit is past, a config/switch change stops it from running, or the record
+// lacks the ordinal so ownership cannot be decided (an old-version record),
+// the record turns into the summary state and a new session opens — recovery
+// happens only when the original unit reruns; the next unit must not continue
+// the previous unit's interrupted session by mistake.
 export type Phase =
   | { kind: "decompose" }
   | { kind: "whole" }
@@ -63,23 +95,33 @@ export type Phase =
 
 export type Progress = {
   task: string
-  // 执行链会话 ID;优雅退出后保留作诊断,但 active=false 使其不再被复用。测试交接
-  // 收场写「无会话在途态」(active=true 而 session 缺失): 交出交接文档的会话任务
-  // 已完成、不得作重启复用对象,恢复经 .auto/handover.json 接回交接之后的会话
-  // (attempt 的 testHandover 分支)。
+  // The session-chain session id; kept after a graceful exit for diagnosis,
+  // but active=false means it is never reused again. The test-handover finish
+  // writes the "no session in flight" state (active=true with session
+  // missing): the session that handed over the handover document has finished
+  // its task and must not be reused on restart; resume picks the session after
+  // the handover back up via .auto/handover.json (attempt's testHandover
+  // branch).
   session?: string
   at: number
-  // true = 会话半途未总结(kill/崩溃/网络故障),恢复时会话存活即复用。
+  // true = the session stopped mid-way with no summary (kill / crash / network
+  // failure); on resume it is reused if still alive.
   active: boolean
   phase?: Phase
-  // 单元基线(逐仓库 HEAD 短 SHA,plans/0022-session-recovery-fidelity-design.md 3.1 ③):
-  // 严格恢复(OPENCODE_AUTO_STRICT_RESUME)on 时由 attempt 随 active 记录写入,
-  // 恢复时核对 各仓库 HEAD == 基线 或 基线..HEAD 全部带 Auto-Stage trailer;
-  // 旧记录/开关关闭时缺失 → 严格恢复下视为不可复用(走回滚或新会话)。
+  // Unit baseline (per-repository HEAD short SHA,
+  // plans/0022-session-recovery-fidelity-design.md 3.1 ③): with strict resume
+  // (OPENCODE_AUTO_STRICT_RESUME) on, attempt writes it alongside the active
+  // record; on resume it verifies each repository's HEAD == the baseline, or
+  // that every commit in baseline..HEAD carries the Auto-Stage trailer; missing
+  // in old records / with the switch off → not reusable under strict resume
+  // (rollback or a new session).
   baseline?: UnitBaseline
-  // 生效模型(provider/model 串,3.1 ④): 下发该提示词时求值出的实际 model;恢复时
-  // 与当前配置解析结果不一致 → 不复用(会话在异模型上续跑 = 行为漂移)。未配置模型
-  // 路由时无串可记,严格恢复下同样视为不可复用。
+  // The effective model (provider/model string, 3.1 ④): the actual model
+  // resolved when the prompt was dispatched; on resume, a mismatch against the
+  // current config's resolution → no reuse (continuing a session on a
+  // different model = behavior drift). With model routing unconfigured there
+  // is no string to record; under strict resume that likewise counts as not
+  // reusable.
   model?: string
 }
 
@@ -90,27 +132,31 @@ export async function saveProgress(dir: string, progress: Progress) {
   await Bun.write(join(dir, FILE), JSON.stringify(progress))
 }
 
-// 任务完成(任何 Outcome 下的 completed)即删除;force 使缺失时也无害。
+// Deleted as soon as the task completes (completed under any Outcome); force
+// makes the missing case harmless too.
 export async function forgetProgress(dir: string) {
   await rm(join(dir, FILE), { force: true })
 }
 
-// 读取属于该任务的进度记录(不校验会话存活——存活判定在 runner)。任务不符、
-// 文件缺失或损坏返回 undefined。
+// Reads the progress record belonging to the task (does not verify the
+// session liveness — that verdict sits in runner). Returns undefined on a task
+// mismatch, a missing file, or a corrupt one.
 export async function recallProgress(dir: string, task: string): Promise<Progress | undefined> {
   const record = await readProgress(dir)
   if (!record || record.task !== task) return undefined
   return record
 }
 
-// 读取当前进度记录(不分任务)。
+// Reads the current progress record (regardless of task).
 export async function peekProgress(dir: string): Promise<Progress | undefined> {
   return readProgress(dir)
 }
 
-// 当前未收口的阶段步骤恢复点: 记录为 active 的 step 变体时返回其步骤身份与会话
-// (供 loop 让会话恢复优先于文件推导路由,见 plans/0018-session-resume-precedence-design.md);
-// 非 step 记录、已收口(active=false)或无记录返回 undefined。
+// The recovery point of a phase step not yet closed out: when the record is an
+// active step variant, returns its step identity and session (for the loop to
+// let session recovery take precedence over file-derived routing, see
+// plans/0018-session-resume-precedence-design.md); returns undefined for a
+// non-step record, a closed-out one (active=false), or no record.
 export async function openStep(dir: string): Promise<{ step: StepKind; unit: string; session?: string } | undefined> {
   const record = await peekProgress(dir)
   if (record?.active && record.phase?.kind === "step") {
@@ -119,8 +165,11 @@ export async function openStep(dir: string): Promise<{ step: StepKind; unit: str
   return undefined
 }
 
-// 阶段步骤收口: 仅当当前记录正是该步骤时删除之(driver 已完成产物校验/提交/
-// 后处理,恢复点不再需要)。记录不匹配(已被任务记录覆盖等)时不动,避免误清。
+// Close-out of a phase step: deletes it only when the current record is
+// exactly this step (the driver has finished artifact checks / commit /
+// post-processing; the recovery point is no longer needed). Leaves it
+// untouched on a mismatch (already overwritten by a task record, etc.), to
+// avoid clearing the wrong one.
 export async function closeStep(dir: string, step: StepKind, unit: string): Promise<void> {
   const record = await peekProgress(dir)
   if (record?.phase?.kind === "step" && record.phase.step === step && record.phase.unit === unit) {

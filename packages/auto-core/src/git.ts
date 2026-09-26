@@ -3,26 +3,41 @@ import { join, relative, sep } from "node:path"
 import type { AddedLine } from "./document/types"
 import { log } from "./log"
 
-// driver 统一提交机制: 收回 AI 会话的提交权——任何会话结束后由 driver 递归提交
-// 全部改动(先嵌套子仓库、后目标目录所在仓库),提交信息携带任务编号与阶段,
-// 使 git 历史成为 AI 变更的审计轨迹(追踪与回滚的粒度 = 会话)。会话不执行
-// git commit(AGENTS.md 提交原则块与 agent 契约同步约束)。
+// driver unified commit mechanism: revokes the commit right from AI sessions —
+// after any session ends the driver recursively commits all changes (nested
+// repositories first, then the repository containing the target directory),
+// with the commit message carrying the task id and phase, making git history
+// the audit trail of AI changes (granularity of tracing and rollback =
+// session). A session never runs git commit (constrained in sync by the
+// AGENTS.md commit-principles block and the agent contract).
 
-// 提交边界(plans/0021-commit-boundary-design.md):git 提交是执行单元(任务/子任务/隐藏任务)
-// 完成条件的一部分——单元启动要求工作区 clean(依赖的信息全部由上一次提交固定),
-// 收口要求改动全部落账且提交区间内只有 driver 提交。本文件提供三件套:
-// - beginUnit: 单元启动门禁(clean 检查 + driver 独占状态文件遗留的自愈补提交 + 基线);
-// - unitBaseline/unitViolations: SHA 基线与收口校验(外部提交检测);
-// - commitPending: 隐藏任务幂等入口的"产物已落盘未提交 → 补提交即完成"(③)。
-// --commit false / dryrun / 非 git 环境下门禁整体不生效。
+// Commit boundary (plans/0021-commit-boundary-design.md): a git commit is part
+// of the completion condition of an execution unit (task/subtask/hidden task)
+// — starting a unit requires a clean worktree (the information it depends on
+// is all fixed by the previous commit), and close-out requires every change
+// posted and only driver commits inside the commit range. This file provides
+// the trio:
+// - beginUnit: the unit start gate (clean check + the carryover backfill
+//   commit self-healing driver-exclusive state-file leftovers + baseline);
+// - unitBaseline/unitViolations: the SHA baseline and close-out check
+//   (external-commit detection);
+// - commitPending: the hidden-task idempotent entry's "artifacts on disk but
+//   uncommitted → a backfill commit completes it" (③).
+// Under --commit false / dryrun / a non-git environment the gates are wholly
+// inactive.
 
-// 提交信息: 英文标题行(人读,M0.6 起)+ 机器可读 trailer(脚本化定位回滚点)。
-// Auto-Task 任务编号(T-F*/PLAN 等)、Auto-Stage 阶段与序号(伪任务为旁路
-// 阶段标签: phase-plan/phase-handover/phase-transition/knowledge/numbering/
-// final-plan/doc-migrate/housekeeping/carryover 等);Auto-Stage 同时是"driver
-// 提交"的机器判据(单元收口校验据此检出外部提交)。目标目录所在仓库的提交另以
-// Auto-Nested 行记录**全部**嵌套仓库的最终(或最新)SHA——本轮有提交记新 SHA、
-// 无提交记单元基线 SHA,使任一 root 提交都能对齐跨仓库状态(提交边界 D4)。
+// Commit message: an English subject line (for humans, since M0.6) + machine-
+// readable trailers (so scripts can locate rollback points). Auto-Task carries
+// the task id (T-F*/PLAN etc.), Auto-Stage the phase and ordinal (for a pseudo
+// task, the bypass phase label: phase-plan/phase-handover/phase-transition/
+// knowledge/numbering/final-plan/doc-migrate/housekeeping/carryover etc.);
+// Auto-Stage is also the machine criterion for a "driver commit" (the unit
+// close-out check detects external commits by it). The commit of the
+// repository containing the target directory additionally records the final
+// (or latest) SHA of **all** nested repositories in Auto-Nested lines — a new
+// SHA for those with a commit this round, the unit baseline SHA for those
+// without — so any root commit can align cross-repository state (commit
+// boundary D4).
 // body (plans/0053 D21): optional multi-line commit body between the subject
 // and the trailers (the close commit lists the units it closed). Absent, the
 // message is byte-identical to the bodyless format every existing commit uses.
@@ -37,34 +52,47 @@ function message(subject: string, task: { id: string }, stage: string, nested: {
   ].join("\n")
 }
 
-// 提交标题(即会话标题,短标签方案 `T-NNN <label> <标题/子任务>`,见 runner.ts):
-// 超过 100 字截断,git 标题行与会话列表都保持可读。
+// Commit title (also the session title; the short-label scheme
+// `T-NNN <label> <title/subtask>`, see runner.ts): truncated past 100
+// characters, keeping both the git subject line and the session list
+// readable.
 const TITLE_MAX = 100
 
 export function commitTitle(subject: string): string {
   return subject.length > TITLE_MAX ? `${subject.slice(0, TITLE_MAX)}…` : subject
 }
 
-// 带后缀的提交标题: 主体(执行单元标题,可能很长)+ 后缀(如 `测试交接 #2 定版`)。
-// 超长时截的是**主体**——后缀才是区分同一单元多次提交的唯一信息,交给 commitTitle
-// 从尾部截会把 `#n`/`定版` 削掉,同一子任务的几次交接提交就此变得无法区分。
+// Commit title with a suffix: base (the execution unit's title, possibly
+// long) + suffix (e.g. `test handover #2 freeze`). When over length it is
+// the **base** that gets truncated — the suffix is the only information
+// distinguishing a unit's several commits; delegating to commitTitle, which
+// truncates the tail, would shave off `#n`/`freeze` and make one subtask's
+// successive handover commits indistinguishable.
 export function suffixedTitle(base: string, suffix: string): string {
-  // fit = 主体不截断时的可用长度(留一格分隔空格);再截时还要留一格省略号。
+  // fit = the length available when the base is not truncated (one character
+  // kept for the separator space); truncating must also leave one for the
+  // ellipsis.
   const fit = TITLE_MAX - suffix.length - 1
   if (base.length <= fit) return `${base} ${suffix}`
-  // 后缀本身就吃满了预算(不该发生): 退回统一截断,至少不产出超长标题。
+  // The suffix alone exhausts the budget (should not happen): fall back to
+  // the uniform truncation — at least it produces no over-long title.
   if (fit - 1 <= 0) return commitTitle(`${base} ${suffix}`)
   return `${base.slice(0, fit - 1)}… ${suffix}`
 }
 
-// 统一提交结果(plans/0021-commit-boundary-design.md P1): ok=false 时 failures 列出提交
-// 失败的仓库(相对目标目录路径 + 首行错误)。空数组 = 全部成功或无需提交。
+// Unified-commit result (plans/0021-commit-boundary-design.md P1): with
+// ok=false, failures lists the repositories whose commit failed (path
+// relative to the target directory + the error's first line). An empty array
+// = all succeeded or nothing to commit.
 export type CommitResult = { ok: boolean; failures: { rel: string; error: string }[] }
 
-// 会话后统一提交。逐仓库(深度优先,嵌套仓库先提交): 有未提交改动才
-// git add -A + git commit,无改动跳过、非 git 环境整体跳过;单仓库失败计入
-// failures 返回(调用方按完成条件处置——门禁关闭的调用方忽略返回值即旧行为)。
-// subject 为标题行。
+// Unified commit after a session. Per repository (depth-first, nested
+// repositories commit first): only with uncommitted changes does it run
+// git add -A + git commit — no changes → skip, non-git environment → skip
+// wholesale; a single repository's failure goes into the returned failures
+// (the caller disposes of it by the completion condition — a caller with the
+// gate off ignoring the return value is the old behavior). subject is the
+// subject line.
 export async function commitTree(dir: string, task: { id: string; title: string }, info: { stage: string; subject: string; body?: string }): Promise<CommitResult> {
   const roots = await repoRoots(dir)
   const subject = commitTitle(info.subject)
@@ -80,7 +108,9 @@ export async function commitTree(dir: string, task: { id: string; title: string 
         failures.push({ rel, error })
         continue
       }
-      // Auto-Nested 覆盖全部嵌套仓库(根仓库最后提交,届时各嵌套仓库已落定最终 SHA)。
+      // Auto-Nested covers every nested repository (the root repository
+      // commits last, by which time each nested repository has settled its
+      // final SHA).
       const nested = root === dir ? await nestedHeads(dir, roots) : undefined
       const committed = await git(root, [...(await identityArgs(root)), "commit", "-m", message(subject, task, info.stage, nested, info.body)])
       if (committed.code !== 0) {
@@ -99,9 +129,11 @@ export async function commitTree(dir: string, task: { id: string; title: string 
   return { ok: failures.length === 0, failures }
 }
 
-// 全部嵌套仓库的当前 HEAD(相对路径 + 短 SHA): 根仓库提交时逐个读取,使
-// Auto-Nested 同时记录"本轮已提交"与"本轮未动"的嵌套仓库(后者即基线 SHA,
-// 除非期间有外部提交——那会被 unitViolations 检出)。
+// The current HEAD of every nested repository (relative path + short SHA):
+// read one by one when the root repository commits, so Auto-Nested records
+// both the repositories "committed this round" and those "untouched this
+// round" (the latter at their baseline SHA, unless an external commit
+// happened in between — that is caught by unitViolations).
 async function nestedHeads(dir: string, roots: string[]): Promise<{ rel: string; sha: string }[]> {
   const heads: { rel: string; sha: string }[] = []
   for (const root of roots) {
@@ -111,7 +143,8 @@ async function nestedHeads(dir: string, roots: string[]): Promise<{ rel: string;
   return heads
 }
 
-// 工作区是否已有未提交改动(run 启动时提示用户: 它们会被纳入 driver 的下一次提交)。
+// Whether the worktree already has uncommitted changes (run's start-up notice
+// to the user: they will be swept into the driver's next commit).
 export async function pendingChanges(dir: string): Promise<boolean> {
   for (const root of await repoRoots(dir)) {
     if (await hasChanges(root)) return true
@@ -155,13 +188,16 @@ export async function stashTree(
   return { failures, stashes }
 }
 
-// —— 单元提交边界(plans/0021-commit-boundary-design.md)——
+// —— Unit commit boundary (plans/0021-commit-boundary-design.md) ——
 
-// driver 独占的状态写入(单元启动遇脏时,脏区全属此类 = 上次提交失败遗留的
-// driver 落账 → carryover 补提交自愈;其余脏区(人工改动/AI 半途产物)一律阻塞
-// 交人工,不自动清扫): 阶段索引 phases.md 与任务索引 tasks.md 的勾选,阶段与
-// 任务单元的 todo.md → done.md 改名(M3.4;子任务的改名随子任务提交,其失败走
-// 阻塞路径的中断现场提交)。
+// Driver-exclusive state writes (when a unit starts dirty: the dirty area
+// being entirely of this kind = leftover driver postings from a failed
+// previous commit → self-healed by a carryover backfill commit; any other
+// dirty area (manual edits / half-finished AI output) always blocks for human
+// attention, never swept automatically): the ticks of the phase index
+// phases.md and the task index tasks.md, and the todo.md → done.md renames of
+// phase and task units (M3.4; a subtask's rename commits with the subtask,
+// and its failure takes the blocked path's interruption-scene commit).
 // CURRENT.md is the retired task mirror (plans/0054 D3): the driver no longer
 // writes it, but preflight deletes one an earlier release left behind, and
 // that deletion carries over here like any driver write.
@@ -177,8 +213,9 @@ export function driverStateFile(rel: string): boolean {
   return DRIVER_STATE.some((re) => re.test(path))
 }
 
-// 单元 SHA 基线: 逐仓库 HEAD 短 SHA(空仓库记空串——其后任何提交都发生在本单元
-// 期间,收口校验全量检查)。
+// Unit SHA baseline: each repository's short HEAD SHA (an empty repository
+// records the empty string — every commit after it happens during this unit,
+// and the close-out check examines the full history).
 export type UnitBaseline = { root: string; sha: string }[]
 
 export async function unitBaseline(dir: string): Promise<UnitBaseline> {
@@ -189,10 +226,13 @@ export async function unitBaseline(dir: string): Promise<UnitBaseline> {
   return baseline
 }
 
-// 单元收口校验: ① 工作区必须 clean(统一提交成功后仍不净 = 有提交失败或新改动);
-// ② 各仓库 基线..HEAD 区间内每个提交必须带 Auto-Stage trailer(= driver 提交),
-// 出现无 trailer 的提交 = 期间有外部提交(人工/其他进程),破坏"提交即隔离边界"。
-// 返回违规清单(空 = 通过);空基线(非 git 环境/门禁关闭)恒通过。
+// Unit close-out check: ① the worktree must be clean (still dirty after a
+// successful unified commit = a commit failed or new changes appeared);
+// ② within each repository's baseline..HEAD range every commit must carry the
+// Auto-Stage trailer (= a driver commit) — a commit without the trailer = an
+// external commit (human / another process) happened in between, breaking
+// "a commit is the isolation boundary". Returns the violation list (empty =
+// pass); an empty baseline (non-git environment / gate off) always passes.
 export async function unitViolations(dir: string, baseline: UnitBaseline): Promise<string[]> {
   if (!baseline.length) return []
   const problems: string[] = []
@@ -211,10 +251,14 @@ export async function unitViolations(dir: string, baseline: UnitBaseline): Promi
   return problems
 }
 
-// 工作区相对单元基线是否零变更(session-boundary-hardening §4.3 的零落盘判据):
-// 各仓库 HEAD 均未离开基线(本单元内无任何提交——beginUnit 后本单元的 driver
-// 提交只发生在交接/收口边界,自然结束判定时 HEAD 未动 = 全单元无落账)且工作区
-// 无未提交改动。空基线(非 git 环境/门禁关闭)无法判定,恒非零落盘。
+// Whether the worktree has zero changes against the unit baseline (the
+// zero-write criterion of session-boundary-hardening §4.3): every
+// repository's HEAD has left the baseline nowhere (no commit within this
+// unit — after beginUnit this unit's driver commits happen only at the
+// handover/close-out boundaries, so at the natural-finish check an unmoved
+// HEAD = the whole unit posted nothing) and the worktree has no uncommitted
+// changes. An empty baseline (non-git environment / gate off) cannot be
+// judged and always counts as not zero-write.
 export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<boolean> {
   if (!baseline.length) return false
   if ((await changedFiles(dir)).length) return false
@@ -225,20 +269,27 @@ export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<bo
   return true
 }
 
-// 本单元 git 变更文件清单(session-boundary-hardening §4.6 全量文档终止符扫描的
-// 取数): 各仓库 基线..工作树 的已跟踪变更(git diff <baseline>——单元期间交接
-// 边界的 driver 提交同样落在区间内,git diff 与工作树比较把已提交与未提交一并
-// 报出)加上未跟踪新建(未跟踪即本单元新建,与 untrackedFiles 同判据)。排除删除
-// 项(文件不在盘,无形检对象);空基线(非 git 环境/门禁关闭)返回空集。
+// This unit's list of git-changed files (the data source of the full-document
+// eof-marker scan, session-boundary-hardening §4.6): each repository's
+// tracked changes over baseline..worktree (git diff <baseline> — this unit's
+// driver commits at handover boundaries during the unit also fall inside the
+// range; git diff compares against the worktree and reports the committed and
+// the uncommitted together) plus untracked new files (untracked = created by
+// this unit, the same criterion as untrackedFiles). Deletions are excluded
+// (the file is not on disk, no shape-check subject); an empty baseline
+// (non-git environment / gate off) returns the empty set.
 export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Promise<Set<string>> {
   const files = new Set<string>()
   for (const { root, sha } of baseline) {
     const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
     const toplevel = top?.code === 0 ? top.out.trim() : ""
     if (!toplevel) continue
-    // 基线为空串 = 单元启动时仓库尚无提交,与空树比较(本单元的全部落账都入区间)。
-    // --ignore-submodules=all: 嵌套仓库在外层是一条 gitlink,其内部文件由该仓库
-    // 自身的 diff 单独列出(与 gitDiffFiles/statusEntries 同一道理)。
+    // An empty-string baseline = the repository had no commits when the unit
+    // started; compare against the empty tree (everything this unit posts
+    // falls inside the range).
+    // --ignore-submodules=all: a nested repository is a single gitlink in the
+    // outer one; its inner files are listed separately by that repository's
+    // own diff (the same reasoning as gitDiffFiles/statusEntries).
     const diff = await git(root, ["diff", "--name-only", "-z", "--diff-filter=d", "--ignore-submodules=all", sha || EMPTY_TREE, "--", "."])
     if (diff.code !== 0) continue
     for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(dir, join(toplevel, path)))
@@ -322,11 +373,15 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promi
   return added
 }
 
-// git 空树哈希(固定常量): 无提交仓库的「相对基线 diff」以此为空基线端。
+// git's empty-tree hash (a fixed constant): a commit-less repository's
+// "diff against the baseline" uses it as the empty baseline end.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-// 基线..HEAD 区间内无 Auto-Stage trailer 的提交数(= 外部提交数);sha 为空串表示
-// 单元启动时仓库尚无提交,全量检查。unitViolations 与恢复保真核对/回滚共用。
+// The count of commits without the Auto-Stage trailer inside the
+// baseline..HEAD range (= the number of external commits); an empty-string
+// sha means the repository had no commits when the unit started — check the
+// full history. Shared by unitViolations and the recovery-fidelity baseline
+// check / rollback.
 async function foreignCommits(root: string, sha: string): Promise<number> {
   const bodies = await git(root, ["log", "-z", "--format=%B", ...(sha ? [`${sha}..HEAD`] : ["HEAD"])])
   return bodies.out
@@ -335,12 +390,15 @@ async function foreignCommits(root: string, sha: string): Promise<number> {
     .filter((body) => !body.includes("Auto-Stage:")).length
 }
 
-// —— 恢复保真(plans/0022-session-recovery-fidelity-design.md)——
+// —— Recovery fidelity (plans/0022-session-recovery-fidelity-design.md) ——
 
-// 恢复时的基线核对(设计 3.1 ③): 各仓库 HEAD == 基线,或 基线..HEAD 区间全部为
-// driver 提交(Auto-Stage trailer)——期间只有 driver 提交,会话上下文对现状的认知
-// 仍成立。与 unitViolations 的差异: **不检查未提交改动**——半途会话的脏区正是
-// 恢复对象。返回问题清单(空 = 基线完好)。
+// Baseline check on recovery (design 3.1 ③): every repository's HEAD ==
+// baseline, or the whole baseline..HEAD range is driver commits (Auto-Stage
+// trailer) — only driver commits happened in between, so the session
+// context's view of the present still holds. Unlike unitViolations: **it does
+// not check uncommitted changes** — a half-finished session's dirty area is
+// precisely the thing being recovered. Returns the problem list (empty =
+// baseline intact).
 export async function baselineIntact(dir: string, baseline: UnitBaseline): Promise<string[]> {
   const problems: string[] = []
   for (const { root, sha } of baseline) {
@@ -348,7 +406,8 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
     const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
     const head = got?.code === 0 ? got.out.trim() : ""
     if (!head) {
-      // HEAD 不可读: 基线也为空(单元启动时即无提交,现仍无提交)属正常,其余为异常。
+      // HEAD unreadable: an empty baseline too (no commits when the unit
+      // started, still none now) is normal; anything else is an anomaly.
       if (!sha) continue
       problems.push(`${rel}: HEAD unreadable (repo missing or history corrupt), baseline check failed`)
       continue
@@ -362,9 +421,11 @@ export async function baselineIntact(dir: string, baseline: UnitBaseline): Promi
   return problems
 }
 
-// 回滚结果(设计 3.3): failures 非空 = 有仓库未能回滚(调用方按 dirty 交人工);
-// stashes 为实际执行的 stash 次数(保全现场 + reset 收回),resets/skipped 供日志
-// (跳过 reset 的仓库: 有 upstream / 基线为空 / 单元期间新建)。
+// Rollback result (design 3.3): non-empty failures = some repository could
+// not be rolled back (the caller hands it to a human as dirty); stashes is
+// the number of stashes actually run (scene preservation + the reset
+// reclaim); resets/skipped are for the log (repositories that skipped reset:
+// has an upstream / empty baseline / created during the unit).
 export type RollbackResult = {
   ok: boolean
   failures: { rel: string; error: string }[]
@@ -373,12 +434,17 @@ export type RollbackResult = {
   skipped: string[]
 }
 
-// 回滚协议(设计 3.3,不可保真时): 逐仓库(深度优先,镜像 commitTree 的遍历)
-// ① git stash push -u 保全现场(未提交改动可人工找回;gitignored 的 .auto/、tmp/
-// 天然不参与);② baseline..HEAD 间存在本单元 driver 提交时 git reset --soft 回
-// 基线后再 stash(把已落账的部分工作一并收回;检测到 upstream 则跳过 reset 只
-// stash 并告警——已推送/被引用的历史不动)。外部提交混入的仓库整体不回滚(人工
-// 处置),计入 failures;仓库不在基线中(单元期间新建)只 stash 不 reset。
+// Rollback protocol (design 3.3, when fidelity cannot be kept): per
+// repository (depth-first, mirroring commitTree's traversal) ① git stash
+// push -u preserves the scene (uncommitted changes stay recoverable by hand;
+// the gitignored .auto/ and tmp/ never take part); ② when this unit's driver
+// commits exist in baseline..HEAD, git reset --soft back to the baseline then
+// stash again (reclaiming the already-posted partial work too; with an
+// upstream detected, skip the reset and only stash with a warning — pushed or
+// referenced history stays untouched). A repository with external commits
+// mixed in is not rolled back at all (left to human disposal) and goes into
+// failures; a repository absent from the baseline (created during the unit)
+// only stashes, no reset.
 export async function rollbackUnit(
   dir: string,
   baseline: UnitBaseline,
@@ -392,7 +458,8 @@ export async function rollbackUnit(
       const entry = baseline.find((line) => line.root === root)
       const got = await git(root, ["rev-parse", "--short", "HEAD"]).catch(() => undefined)
       const head = got?.code === 0 ? got.out.trim() : ""
-      // 外部提交混入: 该仓库不回滚(回滚只回收 driver 自己的单元内改动)。
+      // External commits mixed in: this repository is not rolled back
+      // (rollback reclaims only the driver's own within-unit changes).
       if (entry && head && head !== entry.sha) {
         const foreign = await foreignCommits(root, entry.sha)
         if (foreign > 0) {
@@ -400,7 +467,9 @@ export async function rollbackUnit(
           continue
         }
       }
-      // ① stash 保全现场(pathspec 限定在该目录子树内,目标目录可能位于更大的仓库中)。
+      // ① stash preserves the scene (the pathspec confines it to this
+      // directory's subtree — the target directory may sit inside a larger
+      // repository).
       if (await hasChanges(root)) {
         const stashed = await git(root, ["stash", "push", "-u", "-m", message, "--", "."])
         if (stashed.code !== 0) {
@@ -409,8 +478,10 @@ export async function rollbackUnit(
         }
         result.stashes++
       }
-      // ② 收回本单元的 driver 提交: 无基线(空仓库启动/单元期间新建)或 HEAD 未动
-      //    时无需 reset;有 upstream 的仓库只 stash 不动历史。
+      // ② reclaim this unit's driver commits: no reset is needed without a
+      //    baseline (started on an empty repository / created during the
+      //    unit) or when HEAD has not moved; a repository with an upstream
+      //    only stashes and leaves history untouched.
       const sha = entry?.sha ?? ""
       if (!sha || !head || head === sha) {
         if (!sha && head) {
@@ -449,13 +520,17 @@ export async function rollbackUnit(
   return result
 }
 
-// 单元启动门禁结果: ok = 基线已记录(baseline 为 undefined 表示门禁关闭——
-// --commit false / dryrun,收口校验随之跳过);dirty = 脏区不可自愈,交人工。
+// Unit start gate result: ok = the baseline is recorded (baseline undefined
+// means the gate is off — --commit false / dryrun, and the close-out check
+// skips with it); dirty = the dirty area cannot self-heal, hand it to a
+// human.
 export type UnitGate = { type: "ok"; baseline: UnitBaseline | undefined } | { type: "dirty"; files: string[] }
 
-// 单元启动门禁: 工作区 clean → 记基线放行;脏区全属 driver 独占状态文件 →
-// carryover 补提交自愈后放行;其余脏区 → dirty(调用方阻塞停机,不写状态文件、
-// 不做清扫提交——git 状态的决定权在人工)。
+// Unit start gate: a clean worktree → record the baseline and pass; a dirty
+// area entirely of driver-exclusive state files → self-heal with a carryover
+// backfill commit then pass; any other dirty area → dirty (the caller blocks
+// and halts, writing no state files and making no sweeping commit — the
+// authority over git state stays with the human).
 export async function beginUnit(
   dir: string,
   opts: { commit?: boolean; dryrun?: boolean },
@@ -476,9 +551,12 @@ export async function beginUnit(
   return { type: "ok", baseline: await unitBaseline(dir) }
 }
 
-// 隐藏任务幂等入口的 ③ 补提交: 指定产物文件任一在未提交清单 → 统一提交(补账)
-// 并返回结果;均不在(已提交/不存在)→ "clean" 无动作。完成判定 = 产物落盘且已
-// 提交,故补提交成功即视为完成。门禁关闭时空转。
+// The ③ backfill commit of a hidden task's idempotent entry: any of the
+// named artifact files on the uncommitted list → unified commit (backfill)
+// and return the result; none of them (already committed / nonexistent) →
+// "clean", no action. The completion condition = artifacts on disk and
+// committed, so a successful backfill commit counts as done. A no-op while
+// the gate is off.
 export async function commitPending(
   dir: string,
   opts: { commit?: boolean; dryrun?: boolean },
@@ -492,11 +570,14 @@ export async function commitPending(
   return commitTree(dir, task, info)
 }
 
-// 目标目录所在仓库及目录树下所有含 .git 的嵌套仓库根(排除 node_modules;
-// 嵌套仓库内部继续下探,嵌套中的嵌套同样参与)。目标目录可能位于更大的
-// 仓库中,以 git rev-parse 判定;提交范围由各 git 命令的 pathspec `.` 限定
-// 在该子树内。返回按路径深度降序排序,保证先内后外提交;loop 的 verbose
-// 变更文件监视(watchFiles)亦复用本发现。
+// The repository containing the target directory plus every nested repository
+// root under the tree that holds a .git (node_modules excluded; the descent
+// continues inside a nested repository, and a nested-of-nested one takes part
+// the same). The target directory may sit inside a larger repository, decided
+// by git rev-parse; each git command's pathspec `.` keeps the commit scope
+// inside that subtree. Returned sorted by descending path depth, guaranteeing
+// inner-before-outer commits; the loop's verbose changed-file watch
+// (watchFiles) also reuses this discovery.
 export async function repoRoots(dir: string): Promise<string[]> {
   const inRepo = await git(dir, ["rev-parse", "--is-inside-work-tree"])
     .then((out) => out.code === 0)
@@ -520,34 +601,44 @@ function depth(path: string): number {
   return path.split(sep).length
 }
 
-// 工作区未提交变更文件清单(相对目标目录的路径): 目标目录自身(可能位于更大的
-// 仓库中,用 pathspec `-- .` 限定该子树)加上所有含 .git 的子目录(嵌套仓库,含
-// worktree/子模块的 .git 文件;仓库发现复用本文件的 repoRoots)。非 git 环境返回
-// 空数组。
-// 本函数(与 gitStatusFiles)自 loop.ts 上收至此,供 loop 的变更文件监视与
-// resolve.ts 的会话收尾扫描共用: 从 loop.ts 导出会造成 loop → runner → resolve →
-// loop 的循环依赖,在 resolve.ts 镜像一份则留下两份必须同步演进的仓库遍历;git.ts
-// 是叶子模块(只依赖 log.ts)且已持有 repoRoots 与同款 porcelain 解析。决策记录见
-// plans/0020-auto-resolve-design.md §N。
+// The worktree's list of uncommitted changed files (paths relative to the
+// target directory): the target directory itself (possibly inside a larger
+// repository, confined to the subtree by the pathspec `-- .`) plus every
+// subdirectory holding a .git (nested repositories, including the .git files
+// of worktrees/submodules; repository discovery reuses this file's
+// repoRoots). A non-git environment returns the empty array.
+// This function (and gitStatusFiles) was hoisted here from loop.ts for the
+// loop's changed-file watch and resolve.ts's end-of-session scan to share:
+// exporting it from loop.ts would create a loop → runner → resolve → loop
+// circular dependency, and mirroring a copy in resolve.ts would leave two
+// repository traversals that must evolve in sync; git.ts is a leaf module
+// (depends only on log.ts) and already holds repoRoots and the same porcelain
+// parsing. The decision is recorded in plans/0020-auto-resolve-design.md §N.
 export async function changedFiles(dir: string): Promise<string[]> {
   const lists = await Promise.all((await repoRoots(dir)).map((root) => statusEntries(dir, root)))
   return lists.flat().map((entry) => entry.rel)
 }
 
-// 未跟踪(= 本单元新建)文件清单(session-boundary-hardening §4.3 形检的「新建
-// .md」判据): 逐仓库 porcelain 状态里的 ?? 项,相对目标目录。beginUnit 保证单元
-// 启动时工作区 clean,故未跟踪即本单元新建;嵌套仓库内部文件由其自身 status
-// 列出,判据跨仓库一致。非 git 环境返回空集。
+// The list of untracked (= created by this unit) files (the "new .md"
+// criterion of the shape check, session-boundary-hardening §4.3): the ??
+// entries of each repository's porcelain status, relative to the target
+// directory. beginUnit guarantees a clean worktree when the unit starts, so
+// untracked = created by this unit; a nested repository's inner files are
+// listed by its own status, so the criterion is uniform across repositories.
+// A non-git environment returns the empty set.
 export async function untrackedFiles(dir: string): Promise<Set<string>> {
   const lists = await Promise.all((await repoRoots(dir)).map((root) => statusEntries(dir, root)))
   return new Set(lists.flat().filter((entry) => entry.status === "??").map((entry) => entry.rel))
 }
 
-// --porcelain -z --no-renames -uall: 逐文件 NUL 分隔输出,不带改名箭头;每条为
-// "XY <path>",路径相对仓库根(worktree 顶层),换算为相对目标目录的路径。
-// -uall 下仍以 "?? dir/" 折叠输出的只有嵌套仓库目录(其内部文件由该仓库自身
-// 的 status 单独列出),跳过以免重复。XY 状态码随条目保留(未跟踪判据与清单
-// 共用同一次解析)。
+// --porcelain -z --no-renames -uall: NUL-separated per-file output with no
+// rename arrows; each entry is "XY <path>", the path relative to the
+// repository root (the worktree top level), converted to a path relative to
+// the target directory. Under -uall the only entries still collapsed to
+// "?? dir/" are nested repository directories (their inner files are listed
+// separately by that repository's own status), skipped to avoid duplication.
+// The XY status code is kept with each entry (the untracked criterion and the
+// listing share one parsing pass).
 async function statusEntries(dir: string, root: string): Promise<{ rel: string; status: string }[]> {
   const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     stdout: "pipe",
@@ -567,8 +658,10 @@ async function statusEntries(dir: string, root: string): Promise<{ rel: string; 
     .map((entry) => ({ rel: relative(dir, join(toplevel, entry.slice(3))), status: entry.slice(0, 2) }))
 }
 
-// 仓库内是否有未提交改动(限定该目录子树;折叠目录项只可能是嵌套仓库,由其
-// 自身的提交单独处理)。git 不可用(spawn 抛错)按无改动处理。
+// Whether the repository has uncommitted changes (confined to this
+// directory's subtree; a collapsed directory entry can only be a nested
+// repository, handled separately by its own commit). When git is unavailable
+// (spawn throws), treat as no changes.
 async function hasChanges(root: string): Promise<boolean> {
   const status = await git(root, ["status", "--porcelain", "-z", "--no-renames", "-uall", "--", "."]).catch(() => undefined)
   if (!status || status.code !== 0) return false
@@ -593,8 +686,10 @@ export async function commitIdentityProblem(dir: string): Promise<string | undef
   return undefined
 }
 
-// git 身份兜底: 仓库未配置 user.email 时以固定身份提交,避免全新环境提交失败
-// (-c 仅对该次调用生效,已配置的仓库不受影响)。
+// git identity fallback: when the repository has no user.email configured,
+// commit under a fixed identity so a pristine environment does not fail the
+// commit (-c applies to that one call only; configured repositories are
+// unaffected).
 async function identityArgs(root: string): Promise<string[]> {
   const email = await git(root, ["config", "user.email"])
   if (email.code === 0 && email.out.trim()) return []
@@ -611,61 +706,77 @@ function firstLine(text: string): string {
   return text.trim().split("\n")[0]!.slice(0, 200)
 }
 
-// 文档面: 目标目录自身的 docs/——改动不影响测试结果,
-// 不触发交接重测(测试交接前置化设计 D5)。其余已跟踪文件(源码与 test/ 下脚本,
-// 含嵌套仓库内的文件)一律计入。
+// The document side: the target directory's own docs/ — changes there do not
+// affect test results and do not trigger a handover retest (the test-handover
+// front-loading design D5). All other tracked files (source code and scripts
+// under test/, files inside nested repositories included) always count.
 function documentOnly(rel: string): boolean {
   return rel === "docs" || rel.startsWith(`docs${sep}`)
 }
 
-// 自 HEAD(= 交接定版提交)以来**已跟踪**文件的改动清单(相对目标目录),排除文档面。
-// 未跟踪新增不计(D5)——新建文件参与编译的场景会漏判,是已知取舍,换来"会话收尾
-// 落盘文档/产物不会白白触发一次登记"。测试交接的并发态据此登记漂移: 非空即
-// "本次测试跑的定版快照与将要落账的树不是同一份",只记事实不做处置(E3)。
-// 非 git 环境返回空数组。
+// The list of **tracked** files changed since HEAD (= the handover freeze
+// commit), relative to the target directory, excluding the document side.
+// Untracked additions do not count (D5) — a newly created file that takes
+// part in compilation slips through; that is the known trade-off, buying
+// "documents/artifacts the session wrote at its end do not trigger a
+// registration for nothing". The test handover's concurrent mode registers
+// drift by this: non-empty means "the frozen snapshot this test ran on and
+// the tree about to be posted are not the same"; it records the fact and
+// takes no action (E3). A non-git environment returns the empty array.
 export async function trackedSourceChanges(dir: string): Promise<string[]> {
   const lists = await Promise.all((await repoRoots(dir)).map((root) => gitDiffFiles(dir, root)))
   return lists.flat().filter((rel) => !documentOnly(rel))
 }
 
-// git diff --name-only -z HEAD -- .: 已跟踪文件相对 HEAD 的改动(暂存与未暂存
-// 合并,不含未跟踪),路径相对仓库根,换算为相对目标目录。首次提交前(无 HEAD)
-// 与非 git 目录返回空。
+// git diff --name-only -z HEAD -- .: tracked files' changes against HEAD
+// (staged and unstaged merged, untracked excluded), paths relative to the
+// repository root, converted to relative to the target directory. Before the
+// first commit (no HEAD) and in a non-git directory, returns empty.
 async function gitDiffFiles(dir: string, root: string): Promise<string[]> {
   const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
   const toplevel = top?.code === 0 ? top.out.trim() : ""
   if (!toplevel) return []
-  // --ignore-submodules=all: 嵌套仓库在外层是一条 gitlink,其内部文件改动由该
-  // 仓库自身的 diff 单独列出;不忽略会把整个嵌套目录再报一遍(与 gitStatusFiles
-  // 跳过折叠目录项同一道理)。
+  // --ignore-submodules=all: a nested repository is a single gitlink in the
+  // outer one; changes to its inner files are listed separately by that
+  // repository's own diff; not ignoring it would report the whole nested
+  // directory once more (the same reasoning as gitStatusFiles skipping
+  // collapsed directory entries).
   const diff = await git(root, ["diff", "--name-only", "-z", "--ignore-submodules=all", "HEAD", "--", "."]).catch(() => undefined)
   if (!diff || diff.code !== 0) return []
   return diff.out.split("\0").filter(Boolean).map((path) => relative(dir, join(toplevel, path)))
 }
 
 
-// 交接文档的现场复原(测试交接中断恢复 F3): 已被提交跟踪、却在工作区被删掉的
-// 文件清单(相对目标目录)。测试交接途中被打断后,下一次运行的陈旧清理可能把
-// 已落账的交接文档删掉——那不是"遗留",是在途状态,以 git 为权威复原即可,
-// 复原顺带消掉脏区,单元 clean 门禁自然放行。pathspec 限定在目标目录子树内。
+// Scene restoration of handover documents (test-handover interruption
+// recovery F3): the list of files that are committed and tracked yet deleted
+// in the worktree (relative to the target directory). After a test handover
+// is interrupted midway, the next run's stale cleanup may delete an
+// already-posted handover document — that is not a "leftover", it is
+// in-flight state; restore it with git as the authority, and the restoration
+// incidentally clears the dirty area, letting the unit clean gate pass
+// naturally. The pathspec confines it to the target directory's subtree.
 export async function deletedFiles(dir: string, pathspec: string): Promise<string[]> {
   const top = await git(dir, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
   const toplevel = top?.code === 0 ? top.out.trim() : ""
   if (!toplevel) return []
   const listed = await git(dir, ["ls-files", "--deleted", "-z", "--", pathspec]).catch(() => undefined)
   if (!listed || listed.code !== 0) return []
-  // ls-files 的路径相对仓库根(cwd 在子目录时同样如此),换算为相对目标目录。
+  // ls-files paths are relative to the repository root (also when the cwd is
+  // a subdirectory); converted to relative to the target directory.
   return listed.out.split("\0").filter(Boolean).map((path) => relative(dir, join(toplevel, path)))
 }
 
-// 单个文件的复原: 从索引取回(被删的已跟踪文件其索引项仍在,取回即得上次提交
-// 的内容)。非 git 环境或该文件未被跟踪时返回 false,调用方按"无可复原"处理。
+// Restoring a single file: retrieve it from the index (a deleted tracked
+// file's index entry is still there; retrieving yields the last commit's
+// content). Returns false in a non-git environment or when the file is not
+// tracked; the caller treats it as "nothing to restore".
 export async function restoreFile(dir: string, rel: string): Promise<boolean> {
   const done = await git(dir, ["checkout", "--", rel]).catch(() => undefined)
   return done?.code === 0
 }
 
-// 单个文件是否被 git 跟踪(已落过账): 陈旧清理据此区分"遗留"与"在途"。
+// Whether a single file is tracked by git (already posted): the stale cleanup
+// distinguishes "leftover" from "in-flight" by this.
 export async function fileTracked(dir: string, rel: string): Promise<boolean> {
   const tracked = await git(dir, ["ls-files", "--error-unmatch", "--", rel]).catch(() => undefined)
   return tracked?.code === 0
@@ -682,17 +793,23 @@ export async function gitIgnored(dir: string, rel: string): Promise<boolean | un
   return undefined
 }
 
-// 未被 git 跟踪才删(交接文档族陈旧清理的共用语义,与 testhandoff 的 F4 收窄同款):
-// 已跟踪的文件属已落账状态,删除即脏区——在途与否的判定权留给恢复语义(或人工),
-// 清理绝不自动制造脏区去撞下一个执行单元的 clean 门禁。
+// Delete only when git does not track the file (the shared semantics of the
+// handover-document family's stale cleanup, the same narrowing as
+// testhandoff's F4): a tracked file is already-posted state, deleting it is a
+// dirty area — the authority to judge in-flight or not is left to the
+// recovery semantics (or a human); the cleanup never manufactures a dirty
+// area by itself to hit the next execution unit's clean gate.
 export async function removeIfUntracked(dir: string, rel: string): Promise<void> {
   if (await fileTracked(dir, rel)) return
   await rm(join(dir, rel), { force: true })
 }
 
-// 单个文件是否"已落账": 被 git 跟踪且工作区副本与提交一致。测试交接恢复据此
-// 判断提交 #2 是否已经发生(归档份已落账 = 交接收口完成),也据此认定内容完整
-// (F2: 提交那一刻文件是整的,缺状态行是历史格式问题,不是半截文件)。
+// Whether a single file is "already posted": tracked by git and the worktree
+// copy equals the commit. Test-handover recovery judges by this whether
+// commit #2 has already happened (the archived copy posted = the handover
+// close-out complete), and by it also certifies the content whole (F2: the
+// file was whole at the moment of the commit; a missing status line is a
+// historical-format problem, not a truncated file).
 export async function fileCommitted(dir: string, rel: string): Promise<boolean> {
   if (!(await fileTracked(dir, rel))) return false
   const status = await git(dir, ["status", "--porcelain", "-z", "--", rel]).catch(() => undefined)

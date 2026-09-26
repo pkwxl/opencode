@@ -1,20 +1,30 @@
-// 外壳画像: 核心报文与日志审计语义的外壳级参数(壳层入口启动时经 setShellProfile
-// 设置一次,见 plans/AUTO_CORE_INTEGRATION_PLAN 阶段二)。核心代码只读本画像、不感知
-// 具体外壳——通用壳(auto)与简易壳(migrate)的行为差异(报文程序名、agent 契约
-// 恢复指引、日志审计语义)全部经此参数化,消除外壳对 runner/loop 文本的补丁。
+// Shell profile: the shell-level parameters of core messages and log-audit
+// semantics (set once at shell-entry startup via setShellProfile, see
+// plans/AUTO_CORE_INTEGRATION_PLAN stage two). Core code only reads the
+// profile and never knows a concrete shell — the behavioral differences
+// between the general shell (auto) and the simple shell (migrate) (message
+// program name, agent-contract recovery guidance, log-audit semantics) are
+// all parameterized through this, eliminating shell patches over
+// runner/loop text.
 import type { AgentHostFactory } from "./agent/types"
 import { setAuditLog } from "./log"
 
 export type ShellProfile = {
-  // 运行态程序名: 报文"重新运行 X"句式用(通用壳 "opencode-auto run")。
+  // The run-time program name: for the message pattern "re-run X"
+  // (general shell: "opencode-auto run").
   program: string
-  // 管理子命令前缀: 报文"运行 X init <dir>"句式用("opencode-auto")。
+  // The management-subcommand prefix: for the message pattern
+  // "run X init <dir>" ("opencode-auto").
   bin: string
-  // agent 契约缺失的恢复指引: "init" = 提示运行 init 子命令重建(通用壳);
-  // "startup" = 外壳每次启动按模板重建默认契约,提示重新运行外壳即可(简易壳)。
+  // Recovery guidance when the agent contract is missing: "init" = hint at
+  // running the init subcommand to rebuild it (general shell); "startup" =
+  // the shell rebuilds the default contract from the template at every
+  // startup, so the hint is simply to re-run the shell (simple shell).
   agentRecovery: "init" | "startup"
-  // true = 日志文件始终完整记录(vlog 免 verbose 门控、逐行带时间戳),使 run 日志
-  // 成为不依赖选项的完整审计记录(简易壳语义);false = 明细仅 --verbose 记录。
+  // true = the log file always records in full (vlog exempt from the
+  // verbose gate, every line timestamped), making the run log a complete
+  // audit record independent of options (simple-shell semantics);
+  // false = detail recorded only under --verbose.
   auditLog: boolean
   // Agent profile (MA.4, plans/0040): the coding agent this shell drives.
   // Absent = the built-in opencode adapter (loop.ts falls back to it), so a
@@ -35,7 +45,8 @@ export type AgentProfile = {
   host: AgentHostFactory
 }
 
-// 缺省 = 通用壳(auto)现状;未设置画像时核心报文与历史行为逐字节一致。
+// Defaults = the general shell (auto) status quo; with no profile set,
+// core messages and historical behavior are byte-for-byte identical.
 const DEFAULTS: ShellProfile = {
   program: "opencode-auto run",
   bin: "opencode-auto",
@@ -46,7 +57,8 @@ const DEFAULTS: ShellProfile = {
 
 let profile: ShellProfile = DEFAULTS
 
-// 壳层入口启动时调用(部分覆盖,在前值上合并;重复调用幂等);auditLog 联动 log 层。
+// Called at shell-entry startup (partial override, merged onto the previous
+// value; repeated calls are idempotent); auditLog wires the log layer.
 export function setShellProfile(part: Partial<ShellProfile>): void {
   profile = { ...profile, ...part }
   setAuditLog(profile.auditLog)

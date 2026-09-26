@@ -20,10 +20,13 @@ import { shellProfile } from "./shell"
 import { statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
 import { forkBaseAllowed } from "./usage"
 
-// 封装 client.fork(fork-decompose 设计 §4.3;client 可注入 fake 单测):
-// 在基点末端复制消息前缀为新会话并改名为本阶段短标签标题。{error} 或任何异常
-// (外部旧版 --server 无此路由、基点被存储清理等)都属预期回退场景——log 后
-// 返回 undefined,调用方走全新会话 + 冷启动,不是错误。
+// Wraps client.fork (fork-decompose design §4.3; the client accepts an
+// injected fake for unit tests): copies the message prefix up to the base's
+// tail into a new session and renames it to this phase's short-label title.
+// {error} or any exception (an external legacy --server without this route,
+// the base wiped by storage cleanup, etc.) is an expected fallback scenario —
+// log, then return undefined; the caller takes a brand-new session + cold
+// start, not an error.
 export async function forkSession(client: AgentClient, base: string, title: string, messageID?: string): Promise<string | undefined> {
   // An agent that cannot fork takes the same fallback as a failed fork (MA.4,
   // plans/0040); the run start already said so once, hence verbose only.
@@ -32,7 +35,8 @@ export async function forkSession(client: AgentClient, base: string, title: stri
     vlog(`↻ the agent cannot fork sessions; falling back to a brand-new session`)
     return undefined
   }
-  // messageID 为分叉锚点: 服务端复制该消息**之前**的全部消息(缺省复制整条会话)。
+  // messageID is the fork anchor: the server copies every message **before**
+  // that message (by default the whole session is copied).
   // Without message-level forks the whole session is copied — the pin fork's
   // own fallback when its anchor is gone (exec-session seedPinFork).
   const forked = await client.fork(base, fork === "message" ? messageID : undefined)
@@ -41,21 +45,27 @@ export async function forkSession(client: AgentClient, base: string, title: stri
     return undefined
   }
   const id = forked.value.id
-  // 分叉会话默认标题形如 "... (fork #N)";改名为本阶段提交标题,与 git 历史、
-  // 任务进度对齐(改名失败仅记明细)。
+  // The forked session's default title looks like "... (fork #N)"; rename it
+  // to this phase's commit title, aligned with the git history and task
+  // progress (a rename failure only logs a detail line).
   const renamed = await client.rename(id, commitTitle(title))
   if (!renamed.ok) vlog(`fork session rename failed: ${JSON.stringify(renamed.error)}`)
   return id
 }
 
-// 阶段/子任务首个会话的 fork 播种(fork-decompose 设计 §4.3/§4.4): 有基点即
-// 「先 fork 后渲染」——成功 → chain.pending = 分叉会话、种子链 { pct: 100,
-// used: 基点用量, at: 0, forkBase }(pct:100 强制首次不复用,fork 优先;跨子任务
-// 不复用、每项重新从基点分叉);fork 失败 → 重置链走全新会话 + 冷启动提示词;
-// 基点用量达 cap/2 → 不起 fork、直接冷启动(防前缀逼近上限)。中断恢复复用
-// 中断会话(链上仍有会话且恢复说明待注入)时不分叉,首个提示词进复用会话。
-// 返回 warm(= 本会话已继承任务背景)供提示词选择背景段;无基点(fork=off/
-// 从未确立)不动链,行为与现状完全一致。
+// Fork seeding for a phase's / subtask's first session (fork-decompose design
+// §4.3/§4.4): with a base it is "fork first, render later" — success →
+// chain.pending = the forked session, seeded chain { pct: 100, used: the base's
+// usage, at: 0, forkBase } (pct:100 forces no reuse of the first attempt, fork
+// wins; no reuse across subtasks, every item forks fresh from the base); fork
+// failure → reset the chain and take a brand-new session + cold-start prompt;
+// base usage reaching cap/2 → no fork, straight cold start (keeps the prefix
+// away from the limit). When interruption recovery reuses the interrupted
+// session (the chain still holds a session and a resume note is pending
+// injection), no fork: the first prompt goes into the reused session. Returns
+// warm (= this session already inherited the task background) for the prompt
+// to pick its background section; without a base (fork=off / never established)
+// the chain is untouched, behavior identical to the status quo.
 export async function seedForkSession(
   client: AgentClient,
   opts: Opts,
@@ -64,7 +74,8 @@ export async function seedForkSession(
   subject: string,
 ): Promise<boolean> {
   if (!base) return false
-  // 恢复续跑优先于分叉: 中断会话仍在链上且恢复说明(note)待注入 → 复用之。
+  // Resume takes precedence over forking: the interrupted session is still on
+  // the chain and its resume note is pending injection → reuse it.
   if (chain.id !== undefined && chain.note !== undefined) return true
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   if (!forkBaseAllowed(base.used, cap)) {
@@ -80,8 +91,9 @@ export async function seedForkSession(
     chain.at = 0
     return false
   }
-  // 新会话前同步 AGENTS.md(与 create 路径同款;分叉会话的 system context 继承
-  // 自基点,基点前缀与最新契约的一致性在此保证)。
+  // Sync AGENTS.md before the new session (same as the create path; the forked
+  // session's system context is inherited from the base — the base prefix's
+  // consistency with the latest contract is guaranteed here).
   await opts.server?.syncContext()
   const forked = await forkSession(client, base.id, subject)
   chain.id = undefined
@@ -96,30 +108,42 @@ export async function seedForkSession(
   return forked !== undefined
 }
 
-// 形检/检查未过的「带反馈重提示」的会话播种(session-boundary-hardening 设计
-// §4.3/§4.5,2026-09-18 修订): 基于刚结束的会话(链上当前会话)fork 副本下发——
-// 副本带着全部工作上下文,一句简短反馈即可接着做,而非开空白会话重发整份提示词
-// (重读全场、重做已完成的探查,还丢失「做了一半」的现场,kernel-spi-nor T-030 S13
-// 现场)。原会话保持不动、仍是恢复点(与重试阶梯「一律 fork 副本而非直接复用」同
-// 一哲学)。链上无会话/会话已失效/fork 失败返回 false,调用方回退全新会话 + 完整
-// 提示词。分叉前缀的用量即刚结束会话的用量,链上 pct/used/at 照留(attempt 在回合
-// 结束后以实测值刷新)。
+// Session seeding for the re-prompt with feedback after a failed shape check /
+// check (session-boundary-hardening design §4.3/§4.5, revised 2026-09-18):
+// dispatch a fork copy of the just-ended session (the chain's current session)
+// — the copy carries the full work context, so one short line of feedback
+// continues the work, instead of opening a blank session and resending the
+// whole prompt (re-reading everything, redoing finished exploration, and
+// losing the half-done state; field incident kernel-spi-nor T-030 S13). The
+// original session stays untouched and remains the recovery point (the same
+// philosophy as the retry ladder's "always fork a copy, never reuse
+// directly"). Returns false when the chain holds no session / the session is
+// dead / the fork fails; the caller falls back to a brand-new session + the
+// full prompt. The forked prefix's usage is the just-ended session's usage;
+// the chain's pct/used/at are left as they are (attempt refreshes them with
+// measured values once the round ends).
 export async function forkEndedSession(client: AgentClient, chain: SessionChain, subject: string): Promise<boolean> {
   if (chain.id === undefined || !(await sessionAlive(client, chain.id))) return false
   const forked = await forkSession(client, chain.id, subject)
   if (!forked) return false
-  // 与 seedForkSession 同形态: 清 id 让 attempt 消费 pending(reuse 判定要求链上
-  // 无会话,且 note + id 非空会命中 resumed 复用分支而忽略 pending)。
+  // Same shape as seedForkSession: clear id so attempt consumes pending (the
+  // reuse decision requires no session on the chain, and a non-empty note +
+  // id would hit the resumed reuse branch and ignore pending).
   chain.id = undefined
   chain.pending = forked
   return true
 }
 
-// 会话末端上下文用量(AgentMessage.contextUsed;opencode = input + cache.read)与占比重建: 经
-// client.messages **从末条往前**取第一条真正跑完过的 assistant 消息(不是
-// 字面末条,原因见 basis 注释),上限查 provider 表(与 watch 同口径: 取不到上限记
-// pct=100)。用于 fork 基点用量与中断恢复接管会话的用量继承。导出仅供单测直接驱动
-// 判据(与 ensureForkBase 同款,恢复决策本身落在 runTask,完整流水线由壳包 e2e 覆盖)。
+// Rebuilds the session's tail context usage (AgentMessage.contextUsed;
+// opencode = input + cache.read) and its percentage: via client.messages, take
+// the first assistant message **walking back from the end** that actually ran
+// to completion (not the literal last one — see the basis comment), with the
+// limit looked up in the provider table (same convention as watch: no limit
+// found → pct=100). Used for the fork base's usage and for the usage a session
+// taken over by interruption recovery inherits. Exported only so unit tests
+// can drive the criterion directly (same as ensureForkBase; the recovery
+// decision itself lives in runTask, the full pipeline is covered by the shell
+// package's e2e).
 export async function sessionUsage(client: AgentClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
   // No readable history (MA.4): the same unknown as a failed read — pct 100
   // keeps the session from being reused on its figure.
@@ -129,16 +153,22 @@ export async function sessionUsage(client: AgentClient, id: string): Promise<{ u
   const data = got.value
   const last = data.findLast((message) => message.role === "assistant")
   if (!last) return { used: 0, pct: 100, errorStub: false }
-  // 用量基准 = 从末条往前第一条"真正跑完过"的 assistant 消息(用量非 0)。provider
-  // 报错时服务端会追加一条 tokens 全 0 的 assistant 行(prompt.ts 先建行、processor
-  // .halt() 只写 error,step-finish 从未发生),被中断的轮次同样留下 0 tokens 的残行;
-  // 直接取末条会把"累积了十万级上下文、最后一轮撞限流"的会话读成 0 用量。基准不排除
-  // error 行:step-finish 之后才判定的错误(输出超限、内容过滤等)带真实 tokens,正是
-  // 末端用量的最佳估计。
+  // Usage basis = the first assistant message walking back from the end that
+  // "actually ran to completion" (non-zero usage). When a provider errors, the
+  // server appends an assistant line with all-zero tokens (prompt.ts creates
+  // the line first, processor .halt() only writes the error, step-finish never
+  // happened); an interrupted round likewise leaves a 0-token stub line. Taking
+  // the literal last message would read a session that "accumulated a
+  // hundred-thousand-token context and hit the rate limit on its last round"
+  // as 0 usage. The basis does not exclude error lines: errors decided only
+  // after step-finish (output over the limit, content filtering, etc.) carry
+  // real tokens — exactly the best estimate of the tail usage.
   const basis = data.findLast((message) => message.role === "assistant" && (message.contextUsed ?? 0) > 0)
   if (!basis) {
-    // 整条会话从未有过真实产出:末条本身就是报错桩,即 plans/0015-session-error-retry-plan.md
-    // 第 5 点要兜底的历史遗留形态(旧版"重试即换白板会话"留下的空会话)。
+    // The session never produced real output: the last message is itself the
+    // error stub — the legacy shape plans/0015-session-error-retry-plan.md
+    // point 5 covers (an empty session left by the old "retry = switch to a
+    // blank session" behavior).
     return { used: 0, pct: 100, errorStub: last.failed }
   }
   const used = basis.contextUsed!
@@ -146,23 +176,27 @@ export async function sessionUsage(client: AgentClient, id: string): Promise<{ u
   return { used, pct: limit ? Math.round((used / limit) * 100) : 100, limit, errorStub: false }
 }
 
-// 基点会话末端上下文用量(tokens);取不到按 0。Undefined when the agent keeps
-// no readable history (MA.4): the fork base guard then treats the base as full
-// and starts cold (plans/0038 G1) instead of trusting a made-up 0.
+// The base session's tail context usage (tokens); 0 when it cannot be read.
+// Undefined when the agent keeps no readable history (MA.4): the fork base
+// guard then treats the base as full and starts cold (plans/0038 G1) instead
+// of trusting a made-up 0.
 export async function sessionUsed(client: AgentClient, id: string): Promise<number | undefined> {
   if (!client.capabilities.history) return undefined
   return (await sessionUsage(client, id)).used
 }
 
-// statsSessionEnd 兜底用零用量(下发失败/异常路径无 usage 可记,不虚构消耗)。
+// Zero usage as the statsSessionEnd fallback (dispatch failure / exception
+// paths have no usage to record; no invented consumption).
 export function zeroUsage(): Usage {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
 }
 
-// 会话进度改名: 会话标题与提交标题共用同一短标签方案(`T-NNN <label> <标题/子任务>`,
-// label ∈ decompose/S<n>/exec/wrapup/pending/
-// blocked/done 等),会话结束与任务终态时把链上会话改名为最新标签,标题前缀即任务
-// 进度;改名失败仅记录明细,不影响流程。
+// Session progress renaming: session titles and commit titles share the same
+// short-label scheme (`T-NNN <label> <title/subtask>`, label ∈
+// decompose/S<n>/exec/wrapup/pending/blocked/done etc.); at session end and at
+// task terminal states the chain's session is renamed to the latest label, the
+// title prefix being the task progress; a rename failure only logs a detail
+// line and does not affect the flow.
 export async function renameSession(client: AgentClient, chain: SessionChain, subject: string): Promise<void> {
   chain.subject = subject
   if (!chain.id) return
@@ -170,8 +204,9 @@ export async function renameSession(client: AgentClient, chain: SessionChain, su
   if (!renamed.ok) vlog(`session rename failed: ${JSON.stringify(renamed.error)}`)
 }
 
-// 记忆会话是否仍存在于 server 上(opencode 会话持久化在项目存储,server 重启
-// 不丢;拉取失败或不存在则视为不可复用)。
+// Whether a remembered session still exists on the server (opencode sessions
+// persist in the project store and survive a server restart; a failed fetch or
+// a miss means not reusable).
 // Without resumable sessions (MA.4) no remembered session counts as alive:
 // recovery, base reuse and every fork from a stored id start fresh instead.
 export async function sessionAlive(client: AgentClient, id: string): Promise<boolean> {
@@ -179,10 +214,15 @@ export async function sessionAlive(client: AgentClient, id: string): Promise<boo
   return (await client.get(id)).ok
 }
 
-// 失联探针的探测体(plans/0026-session-boundary-hardening-design.md D3/§4.4): 一条独立的
-// 短超时连接 GET 会话元信息——半开的旧连接(无 FIN/RST)不响应也不拒绝,但不影响
-// 新连接,故新请求的成败即传输层活性的可信信号;超时无响应与请求异常同按未通计。
-// 与 sessionAlive 同族,差别只在超时上界与调用场景(在途周期探测 vs 恢复前一次性核对)。
+// The probe body of the liveness probe
+// (plans/0026-session-boundary-hardening-design.md D3/§4.4): an independent
+// short-timeout connection GETting the session's metadata — a half-open old
+// connection (no FIN/RST) neither responds nor refuses, but does not affect
+// new connections, so the success or failure of a fresh request is a
+// trustworthy signal of transport-level liveness; a timeout without a response
+// counts as a failed probe, same as a request exception. Same family as
+// sessionAlive; only the timeout upper bound and the call site differ
+// (periodic in-flight probing vs a one-time check before recovery).
 export const PROBE_TIMEOUT_MS = 30_000
 export async function probeSession(client: AgentClient, sessionID: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -200,8 +240,10 @@ export async function probeSession(client: AgentClient, sessionID: string, timeo
   }
 }
 
-// 下发任务失败的常见根因: 目标目录缺少 agent 契约文件时服务端只回
-// UnknownError(错误体不含根因),此处检测并按外壳画像提示恢复方式(见 src/shell.ts)。
+// A common root cause of task-dispatch failure: when the target directory is
+// missing the agent contract file the server only answers UnknownError (the
+// error body carries no root cause); detected here, hinting the recovery path
+// from the shell profile (see src/shell.ts).
 export async function missingAgentHint(opts: Opts): Promise<string> {
   if (!opts.dir) return ""
   const file = `.opencode/agent/${opts.agent ?? "auto"}.md`
@@ -215,10 +257,12 @@ export async function missingAgentHint(opts: Opts): Promise<string> {
   return `\nhint: the target directory is missing the agent contract file ${file}; the server rejects task dispatches with UnknownError because of this; ${recovery}`
 }
 
-// 把非文本 part 转成一行可读输出(始终经 vlog 交给 log 层决定去留: --verbose 上
-// 终端并记录,外壳画像 auditLog 时写入日志文件);返回 undefined 表示该 part 尚无
-// 终态内容可输出(后续更新事件会再触发)。工具输出与推理原文较长,
-// 截断到 2000 字符上限。display-only pieces arrive as
+// Renders a non-text part into a readable output line (always via vlog,
+// leaving the keep/drop decision to the log layer: --verbose shows it on the
+// terminal and records it, the shell profile's auditLog writes it to the log
+// file); undefined means the part has no terminal-state content to output yet
+// (later update events will trigger again). Tool output and raw reasoning can
+// be long, truncated to the 2000-character cap. display-only pieces arrive as
 // notes already rendered by the adapter (0037 D6); the retry line is watch's
 // (retry signals are events, not parts).
 export function describePart(part: AgentPart): string | undefined {
@@ -239,14 +283,17 @@ export function formatTokens(n: number): string {
   return String(n)
 }
 
-// 客户端错误可读化: fetch 异常(网络断开、请求超时中止等)返回的是 Error 实例,
-// JSON.stringify 只得 "{}";取其 message 才能让「请求超时」等字样进入阻塞问题
-// 文案,其余(服务端结构化错误体)照旧序列化。
+// Makes client errors readable: a fetch exception (network down, request
+// aborted on timeout, etc.) is an Error instance, and JSON.stringify only
+// yields "{}"; taking its message is what lets wording like "request timed
+// out" into the blocked-problem text; everything else (the server's structured
+// error body) is serialized as before.
 export function formatClientError(error: unknown): string {
   return error instanceof Error ? error.message : JSON.stringify(error)
 }
 
-// 权限等待中,这些回答(忽略首尾空白与大小写)视为确认授权。
+// During a permission wait these answers (leading/trailing whitespace and case
+// ignored) count as approval.
 export function isApproval(answer: string): boolean {
   return /^(allow|yes|y|ok|approve|always|允许|授权|是)$/.test(answer.trim().toLowerCase())
 }
@@ -257,10 +304,13 @@ export function isApproval(answer: string): boolean {
 // minutes === undefined = no timeout (plan's humanQuestions path: the run
 // waits for the human's answer indefinitely, never falling back); undefined
 // then means only that the input channel closed.
-// --interactive 下改由常驻输入行接收回答(提示语、超时与回落语义不变)。
-// dir 传入时等待区间(含 interactive.question 路径)经 statsWaitBegin/End 从会话
-// 用时与 AI 用时中同步扣除、单记 waitMs(STATS_PLAN §2/§3: AI 段关-开);导出供
-// 单测直驱(对齐 runSession 等内部接线测试)。
+// Under --interactive the resident input line takes the answer instead (prompt
+// text, timeout and fallback semantics unchanged).
+// When dir is passed, the waiting interval (the interactive.question path
+// included) is deducted from the session time and the AI time via
+// statsWaitBegin/End and recorded separately as waitMs (STATS_PLAN §2/§3: AI
+// segment off-on); exported for direct unit-test driving (aligned with the
+// runSession internal wiring tests).
 export async function askHuman(
   minutes: number | undefined,
   hint: string,
@@ -275,8 +325,9 @@ export async function askHuman(
   try {
     if (interactive) return (await interactive.question(promptText, minutes)) || undefined
     const rl = createInterface({ input: process.stdin, output: process.stdout })
-    // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级
-    // 处理器,使等待人工答复期间连续两次 Ctrl+C 同样能强制终止。
+    // In raw mode ^C does not raise the process-level SIGINT; readline
+    // intercepts it. Forward to the process-level handler so two consecutive
+    // Ctrl+C still force-quit while waiting for a human answer.
     rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
