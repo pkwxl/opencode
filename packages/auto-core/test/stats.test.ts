@@ -8,7 +8,10 @@ import {
   MAX_TICK,
   setStatsClock,
   statsBoot,
+  statsClassifyUsage,
+  statsHistory,
   statsId,
+  statsModelEvent,
   statsPhase,
   statsSessionBegin,
   statsSessionEnd,
@@ -627,5 +630,237 @@ describe("stats 会话与等待", () => {
     expect(doc.taskB.usage.input).toBe(7)
     expect(doc.taskB.aiMs).toBe(0) // 墙钟段: 无 AI 入账
     expect(doc.taskB.wallMs).toBe(1000)
+  })
+})
+
+// Per-model and per-tier usage, the `classify` bucket and the protocol-drift
+// counters (plans/0055 §7.1 "Stats", §10 items 3 and 12): booked beside the
+// bucket's own usage at the same session-booking point, persisted
+// backward-compatibly (absent sections = no model data, the pre-registry
+// shape) and cumulative across interruptions like the flat fields.
+describe("stats per-model / per-tier / classify buckets", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-stats-models-"))
+    now = 100_000
+    setStatsClock(() => now)
+  })
+
+  afterEach(async () => {
+    setStatsClock()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  async function readDoc(): Promise<StatsDoc> {
+    return JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as StatsDoc
+  }
+
+  async function writeDoc(doc: unknown) {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(join(dir, ".auto", "stats.json"), JSON.stringify(doc))
+  }
+
+  function usage(input: number): Usage {
+    return { input, output: 10, reasoning: 5, cacheRead: 90, cacheWrite: 20, cost: 0.01, steps: 2 }
+  }
+
+  test("dir/model undefined: no-ops that write nothing", async () => {
+    await statsModelEvent(undefined, "glm", "fail")
+    await statsModelEvent(dir, undefined, "fail")
+    await statsClassifyUsage(undefined, usage(1))
+    expect(await Bun.file(join(dir, ".auto", "stats.json")).exists()).toBe(false)
+  })
+
+  test("session booking by model and tier: parallel into the three buckets, report carries them", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5000
+    const report = await statsSessionEnd(dir, "s1", usage(100), "glm", "simple")
+    expect(report?.task.models?.glm?.sessions).toBe(1)
+    expect(report?.task.models?.glm?.usage.input).toBe(100)
+    expect(report?.phase.tiers?.simple?.sessions).toBe(1)
+    expect(report?.round.tiers?.simple?.usage.input).toBe(100)
+    await flushStats(dir)
+    const doc = await readDoc()
+    for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+      expect(bucket.models?.glm?.usage.input).toBe(100)
+      expect(bucket.models?.glm?.usage.steps).toBe(2)
+      expect(bucket.models?.glm?.sessions).toBe(1)
+      expect(bucket.tiers?.simple?.usage.input).toBe(100)
+      expect(bucket.tiers?.simple?.sessions).toBe(1)
+    }
+  })
+
+  test("a session without model/tier persists the pre-registry shape (C2)", async () => {
+    await loadStats(dir)
+    await statsSessionBegin(dir, "T-001")
+    now += 1000
+    await statsSessionEnd(dir, "s1", usage(10))
+    await statsModelEvent(dir, undefined, "fail")
+    await flushStats(dir)
+    const text = await Bun.file(join(dir, ".auto", "stats.json")).text()
+    expect(text).not.toContain('"models"')
+    expect(text).not.toContain('"tiers"')
+  })
+
+  test("a raw provider/model override value keys by its raw string", async () => {
+    await loadStats(dir)
+    await statsSessionBegin(dir, "T-001")
+    now += 1000
+    await statsSessionEnd(dir, "s1", usage(7), "zhipuai/glm-4.6", "deep")
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.roundB.models?.["zhipuai/glm-4.6"]?.usage.input).toBe(7)
+    expect(doc.roundB.tiers?.deep?.sessions).toBe(1)
+  })
+
+  test("the classify bucket: classifier tokens outside the unit's session totals", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsClassifyUsage(dir, usage(42))
+    await flushStats(dir)
+    const doc = await readDoc()
+    for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+      expect(bucket.models?.classify?.usage.input).toBe(42)
+      expect(bucket.models?.classify?.sessions).toBe(1)
+      expect(bucket.usage.input).toBe(0) // never in the bucket's own totals
+      expect(bucket.sessions).toBe(0)
+    }
+    expect(doc.sessions).toEqual({}) // and never in a per-session record
+  })
+
+  test("protocol-drift counters: fail / stuck / reprompt land on the model record in all three buckets", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsModelEvent(dir, "glm", "fail")
+    await statsModelEvent(dir, "glm", "stuck")
+    await statsModelEvent(dir, "glm", "stuck")
+    await statsModelEvent(dir, "glm", "reprompt")
+    const totals = await statsTotals(dir, "task")
+    expect(totals?.models?.glm).toMatchObject({ fails: 1, stuckHints: 2, reprompts: 1, sessions: 0 })
+    await statsModelEvent(dir, "opus", "fail")
+    await flushStats(dir)
+    const doc = await readDoc()
+    for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+      expect(bucket.models?.glm?.fails).toBe(1)
+      expect(bucket.models?.opus?.fails).toBe(1)
+      expect(bucket.models?.opus?.usage.input).toBe(0)
+    }
+  })
+
+  test("an older stats file loads; the new sections default empty and booking then works", async () => {
+    // A pre-registry v:1 document: no models/tiers anywhere, a hand-written
+    // task bucket and history aggregate.
+    await writeDoc({
+      v: 1,
+      round: 1,
+      phase: "m",
+      lastWriteAt: 90_000,
+      taskB: { id: "T-001", wallMs: 5000 },
+      phaseB: { id: "m", wallMs: 5000 },
+      roundB: { id: "1", wallMs: 5000, usage: { input: 40 } },
+      sessions: {},
+      history: { rounds: 1, totals: { wallMs: 60_000, usage: { input: 30 } } },
+    })
+    await loadStats(dir)
+    const totals = await statsTotals(dir, "task")
+    expect(totals?.models).toBeUndefined()
+    expect(totals?.tiers).toBeUndefined()
+    expect(totals?.usage.input).toBe(0)
+    expect((await statsHistory(dir))?.totals.models).toBeUndefined()
+    // booking then works on top of the loaded document
+    await statsSessionBegin(dir, "T-001")
+    now += 1000
+    await statsSessionEnd(dir, "s1", usage(5), "glm", "simple")
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.roundB.usage.input).toBe(45) // 40 loaded + 5 booked
+    expect(doc.roundB.models?.glm?.usage.input).toBe(5)
+    expect(doc.roundB.tiers?.simple?.sessions).toBe(1)
+  })
+
+  test("corrupt model sections parse leniently: bad entries drop, the flat fields survive", async () => {
+    await writeDoc({
+      v: 1,
+      round: 1,
+      phase: "m",
+      lastWriteAt: 90_000,
+      taskB: { id: "T-001", wallMs: 5000, models: "nope", tiers: { deep: "nope", simple: { usage: { input: "bad" } } } },
+      phaseB: { id: "m" },
+      roundB: { id: "1", models: { glm: { usage: { input: 9 }, sessions: "bad", fails: 2, junk: true } } },
+      sessions: {},
+      history: { rounds: 0 },
+    })
+    await loadStats(dir)
+    const task = await statsTotals(dir, "task")
+    expect(task?.models).toBeUndefined() // a non-object section drops whole
+    expect(task?.tiers?.simple?.usage.input).toBe(0) // a bad entry keeps its shell
+    expect(task?.tiers?.deep).toBeUndefined()
+    expect(task?.wallMs).toBe(5000)
+    const round = await statsTotals(dir, "round")
+    expect(round?.models?.glm?.usage.input).toBe(9) // unknown fields ignored
+    expect(round?.models?.glm?.sessions).toBe(0) // bad counter = missing
+    expect(round?.models?.glm?.fails).toBe(2)
+  })
+
+  test("cross-interruption cumulation: usage, sessions and counters accumulate over reloads", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5000
+    await statsSessionEnd(dir, "s1", usage(100), "glm", "simple")
+    await statsModelEvent(dir, "glm", "fail")
+    await statsClassifyUsage(dir, usage(10))
+    await flushStats(dir)
+
+    // 模拟进程重启: 同任务续跑,同模型再一会话,计数再各加一。
+    now += 60_000
+    await loadStats(dir)
+    await statsTask(dir, "T-001") // 同 id 幂等
+    await statsSessionBegin(dir, "T-001")
+    now += 3000
+    await statsSessionEnd(dir, "s2", usage(50), "glm", "simple")
+    await statsModelEvent(dir, "glm", "fail")
+    await statsClassifyUsage(dir, usage(5))
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.taskB.models?.glm?.sessions).toBe(2)
+    expect(doc.taskB.models?.glm?.usage.input).toBe(150)
+    expect(doc.taskB.models?.glm?.fails).toBe(2)
+    expect(doc.taskB.models?.classify?.usage.input).toBe(15)
+    expect(doc.taskB.models?.classify?.sessions).toBe(2)
+    expect(doc.taskB.tiers?.simple?.sessions).toBe(2)
+    expect(doc.taskB.usage.input).toBe(150) // classify stays outside the flat totals
+    expect(doc.taskB.sessions).toBe(2)
+  })
+
+  test("round rollover merges the model and tier sections into history", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5000
+    await statsSessionEnd(dir, "s1", usage(100), "glm", "simple")
+    await statsModelEvent(dir, "glm", "fail")
+    await statsClassifyUsage(dir, usage(10))
+    await flushStats(dir)
+
+    // 进入第 2 轮: 装载时第 1 轮滚进 history(models/tiers 一并入聚合)。
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    await loadStats(dir)
+    const history = await statsHistory(dir)
+    expect(history?.rounds).toBe(1)
+    expect(history?.totals.models?.glm?.usage.input).toBe(100)
+    expect(history?.totals.models?.glm?.sessions).toBe(1)
+    expect(history?.totals.models?.glm?.fails).toBe(1)
+    expect(history?.totals.models?.classify?.usage.input).toBe(10)
+    expect(history?.totals.tiers?.simple?.sessions).toBe(1)
+    await flushStats(dir)
+    const doc = await readDoc()
+    expect(doc.history.totals.models?.glm?.usage.input).toBe(100)
+    expect(doc.roundB.models).toBeUndefined() // the new round starts empty (C2 shape)
+    expect(doc.roundB.tiers).toBeUndefined()
   })
 })

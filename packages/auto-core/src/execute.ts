@@ -22,6 +22,7 @@ import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFi
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
 import { clientOf, formatTokens, forkEndedSession, seedForkSession } from "./session-api"
+import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
 import { sessionHandoverDue } from "./usage"
@@ -246,6 +247,10 @@ export async function ensureDecomposed(
     // all its research context); when fork is unavailable it falls back to a
     // brand-new session plus the full prompt.
     shapeForked = await forkEndedSession(client, chain, subject)
+    // Per-model protocol-drift counter (plans/0055 §10 item 3): the shape-check
+    // re-prompt books on the model of the session that just failed the check
+    // (the chain's selected entry); undefined without a registry (C2).
+    await statsModelEvent(opts.dir ?? dir, chain.modelEntry, "reprompt")
     log(`↻ ${task.id} decompose session artifacts failed checks (${problems.join("; ")}); ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }
 }
@@ -436,6 +441,10 @@ export async function runSubtask(
             // 全部工作上下文,下一回合只下发反馈本身;fork 不可用(会话已失效)回退
             // 全新会话 + 完整提示词 + 反馈。
             shapeForked = await forkEndedSession(client, chain, subject)
+            // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on
+            // the model of the session that failed the artifact shape check;
+            // undefined without a registry (C2).
+            await statsModelEvent(dir, chain.modelEntry, "reprompt")
             log(`↻ ${task.id} subtask ${index} ended naturally but the artifact shape check failed; ${shapeForked ? "forked from the original session, " : ""}re-prompting once with feedback`)
             continue
           }

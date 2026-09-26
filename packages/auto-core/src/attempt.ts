@@ -116,6 +116,18 @@ export async function attempt(
   // entry profile, the default agent for a raw override value; undefined
   // without a registry — then nothing below reads it.
   let pickAgent: string | undefined
+  // The per-model/per-tier stats keys of this dispatch (plans/0055 §7.1
+  // "Stats"): the pick's candidate key (an internal name, or the raw
+  // `provider/model` string of an override value) and the tier the session
+  // was routed as. Both undefined without a registry, and then nothing is
+  // booked (C2).
+  // AUTO-DECISION: a raw override value books the underlying tier too, not
+  // only the models map (the ◈ line shows that tier beside the raw value, so
+  // the tier summary and the display read the same dispatch the same way;
+  // keying the models map alone would leave the tier summary blind to every
+  // overridden session).
+  let statsModel: string | undefined
+  let statsTier: string | undefined
   if (opts.routing) {
     const facts = opts.routing
     const limits = await contextLimitsOf(client)
@@ -185,6 +197,8 @@ export async function attempt(
     steerEntry = entryOf
     steerStep = entryOf !== undefined ? step : 0
     pickAgent = picked.kind === "entry" ? picked.entry.agent : facts.defaultAgent
+    statsModel = key
+    statsTier = list.tier
     // ◈ display (§6.5): the internal name with the tier, the agent and
     // model behind it, and what routed the dispatch; a move names its
     // reason — window, quota (the classified failures) or failback. Key
@@ -491,8 +505,9 @@ export async function attempt(
       test.running = undefined
     }
     // 收段入账(T-003): usage 入 task/phase/round 三桶 + per-session;报告(report)
-    // 由下方 ◉ 会话结束两行消费(累计用时/轮次/累计费用,STATS_PLAN §4.1)。
-    const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage())
+    // 由下方 ◉ 会话结束两行消费(累计用时/轮次/累计费用,STATS_PLAN §4.1)。注册表
+    // 之下同时按模型/按层级入账(0055 §7.1): 同一入账点,跨中断累计同一口径。
+    const report = await statsSessionEnd(opts.dir, sessionID, result.usage ?? zeroUsage(), statsModel, statsTier)
     booked = true
     // 代答落账(auto-resolve H3): 与 statsSessionEnd 同处收段——watch 侧只观测提问
     // 原文与会话 id,桶身份(任务/阶段/轮号)由此处补齐。旁路会话的伪任务
@@ -613,8 +628,9 @@ export async function attempt(
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
     // 统计兜底(T-003): 下发失败/异常等未走正常收段的路径同样收段——无配对 begin
-    // 时 thisAiMs=0、usage 零值照记(stats.ts 既有语义,消耗真实发生不虚构)。
-    if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage())
+    // 时 thisAiMs=0、usage 零值照记(stats.ts 既有语义,消耗真实发生不虚构);模型/
+    // 层级键同样照带(会话确曾派发到该模型,0 用量的会话计数也是协议漂移的口径)。
+    if (!booked) await statsSessionEnd(opts.dir, sessionID, zeroUsage(), statsModel, statsTier)
     // 显式断流: 中止信号会取消 SSE 底层 reader 并退出其重连循环,连接配额即时
     // 释放(对已结束的订阅重复中止无害);POST 信号兜底——异常退出等路径上仍在
     // 途的下发一并作废。

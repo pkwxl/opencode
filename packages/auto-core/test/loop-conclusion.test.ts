@@ -16,7 +16,9 @@ import {
   flushStats,
   loadStats,
   setStatsClock,
+  statsClassifyUsage,
   statsHistory,
+  statsModelEvent,
   statsPhase,
   statsSessionBegin,
   statsSessionEnd,
@@ -231,6 +233,82 @@ describe("roundCompleteLines 轮次完成行", () => {
     expect(await taskEndLines(undefined, "T-001")).toBeUndefined()
     expect(await phaseCloseLines(undefined, unit("m"))).toBeUndefined()
     expect(await Bun.file(join(dir, ".auto", "stats.json")).exists()).toBe(false)
+  })
+})
+
+// Per-model lines of the round-complete block (plans/0055 §7.1 "Stats", §10
+// item 12): under a registry (model data booked with the sessions) the block
+// gains one line per model — usage, sessions and the protocol-drift counters
+// of §10 item 3 — plus the per-tier summary. Without model data (always the
+// no-registry shape) the block stays byte-identical (C2).
+describe("roundCompleteLines per-model lines", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-round-models-"))
+    now = 1_000_000
+    setStatsClock(() => now)
+  })
+
+  afterEach(async () => {
+    setStatsClock()
+    await flushStats(dir).catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("per-model lines and the per-tier summary under model data", async () => {
+    await loadStats(dir)
+    await statsPhase(dir, "m")
+    await statsTask(dir, "T-001")
+    // Two routed sessions (a simple and a deep one), one FAIL verdict, one
+    // stuck hint, two shape re-prompts on glm, and one classifier call.
+    await statsSessionBegin(dir, "T-001")
+    now += 30 * 60_000
+    await statsSessionEnd(dir, "ses_1", usage({ input: 2000, output: 500, cacheRead: 18_000, cost: 0.12 }), "glm", "simple")
+    await statsSessionBegin(dir, "T-001")
+    now += 10 * 60_000
+    await statsSessionEnd(dir, "ses_2", usage({ input: 1000, output: 200, cost: 0.08 }), "opus", "deep")
+    await statsModelEvent(dir, "glm", "fail")
+    await statsModelEvent(dir, "glm", "stuck")
+    await statsModelEvent(dir, "glm", "reprompt")
+    await statsModelEvent(dir, "glm", "reprompt")
+    await statsClassifyUsage(dir, usage({ input: 300, output: 20 }))
+    now += 2 * 60_000
+    const lines = await roundCompleteLines(dir)
+    expect(lines).toEqual([
+      "■ round 1 complete: total 42m 0s (AI 40m 0s), 1 tasks / 2 sessions",
+      "tokens in 3000 / out 700 / cache-read 18.0k / cache-write 0, hit 85.7%, cost $0.2",
+      "  model classify: 1 sessions, tokens in 300 / out 20 / cache-read 0 / cache-write 0, hit 0.0%",
+      "  model glm: 1 sessions, tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12, 1 FAIL verdict, 1 stuck hint, 2 shape re-prompts",
+      "  model opus: 1 sessions, tokens in 1000 / out 200 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.08",
+      "  tiers: deep 1 sessions, tokens in 1000 / out 200 / cache-read 0 / cache-write 0, hit 0.0%, cost $0.08; simple 1 sessions, tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12",
+    ])
+  })
+
+  test("counters at zero omit their items; a model without counters stays on one line", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5 * 60_000
+    await statsSessionEnd(dir, "ses_1", usage({ input: 100, output: 30 }), "glm", "simple")
+    const lines = await roundCompleteLines(dir)
+    expect(lines?.[2]).toBe("  model glm: 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
+    expect(lines?.[3]).toBe("  tiers: simple 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
+    expect(lines).toHaveLength(4)
+  })
+
+  test("no model data: the block stays at its two lines, byte-identical (C2)", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 30 * 60_000
+    await statsSessionEnd(dir, "ses_1", usage({ input: 2000, output: 500, cacheRead: 18_000, cost: 0.12 }))
+    const lines = await roundCompleteLines(dir)
+    expect(lines).toEqual([
+      "■ round 1 complete: total 30m 0s (AI 30m 0s), 1 tasks / 1 sessions",
+      "tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12",
+    ])
   })
 })
 

@@ -18,6 +18,7 @@ import { begin, markDone, reloadTask, type Plan, type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
 import { clientOf, formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
+import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { shellProfile } from "./shell"
 import { stepPause } from "./step"
@@ -486,6 +487,11 @@ export async function runTask(
     await persistStage({ kind: "closeout" })
     const result = await reportResult(dir, task)
     if (result?.type === "fail") {
+      // Per-model protocol-drift counter (plans/0055 §10 item 3): the FAIL
+      // verdict was written by the wrap-up session, whose selected entry the
+      // chain still holds. Undefined without a registry; the counter then
+      // books nothing (C2).
+      await statsModelEvent(dir, chain.modelEntry, "fail")
       const { bin } = shellProfile()
       chain.phase = { kind: "wrapup" }
       return {

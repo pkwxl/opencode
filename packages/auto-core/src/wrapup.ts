@@ -22,6 +22,7 @@ import type { Plan, Task } from "./tasks"
 import { renderWrapup } from "./prompt"
 import { runSession } from "./session"
 import { forkEndedSession } from "./session-api"
+import { statsModelEvent } from "./stats"
 import { afterSession, commitBlocked, wrapupResolves } from "./unit-commit"
 
 // report.md shape problems (empty = pass): the path is fixed and known to the
@@ -90,6 +91,10 @@ export async function runWrapup(
     // all wrap-up context); if forking is unavailable, fall back to a fresh
     // session + the full prompt.
     shapeForked = await forkEndedSession(client, chain, subject)
+    // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on the
+    // model of the wrap-up session that failed the report shape check;
+    // undefined without a registry (C2).
+    await statsModelEvent(dir, chain.modelEntry, "reprompt")
     log(`↻ ${task.id} wrap-up session's ${rel} failed checks; ${shapeForked ? "forked from the original session, " : ""}retrying once with feedback`)
   }
 }

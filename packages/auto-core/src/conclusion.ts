@@ -7,7 +7,7 @@
 import { formatDuration, formatUsageLine } from "./log"
 import { currentRound, phaseKey, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
-import { statsBoot, statsHistory, statsId, statsTotals, type StatsResume } from "./stats"
+import { statsBoot, statsHistory, statsId, statsTotals, type ModelStat, type TierStat, type StatsResume } from "./stats"
 
 // Startup resume banner (plans/STATS_PLAN.md §4.6): the snapshot is taken after
 // depreciation posting and before round rollover; round/phase/task are the
@@ -133,11 +133,50 @@ export async function phaseCloseLines(directory: string | undefined, phase: Phas
   ]
 }
 
+// Per-model and per-tier lines of the round-complete block (plans/0055 §7.1
+// "Stats", §10 item 12): under a registry the round bucket carries each
+// model's usage, sessions and protocol-drift counters, and each tier's usage
+// and sessions — so the savings of tier routing and each model's protocol
+// drift can be read off the run's conclusion. The model keys are internal
+// names, raw `provider/model` override values, and the classifier's
+// `classify` bucket. Names sort alphabetically (booking order is runtime
+// detail); a counter only prints when non-zero (the 0-omission convention of
+// the cost/reasoning items). No model data — always the case without a
+// registry — returns nothing, and the conclusion is byte-identical (C2).
+// AUTO-DECISION: the per-model lines cover this round only; the cross-round
+// history keeps its two existing cumulative lines. The plan asks for
+// per-model lines on the conclusion without naming a scope, and this round's
+// models are what the just-finished routing decided; a cumulative per-model
+// block would double the tail of an already long conclusion for numbers the
+// stats document still keeps (history rolls the model sections up).
+function modelBlockLines(models: Record<string, ModelStat> | undefined, tiers: Record<string, TierStat> | undefined): string[] {
+  const names = Object.keys(models ?? {}).sort()
+  const tierNames = Object.keys(tiers ?? {}).sort()
+  if (!names.length && !tierNames.length) return []
+  const lines: string[] = []
+  for (const name of names) {
+    const stat = models![name]!
+    const counters = [
+      stat.fails ? `${stat.fails} FAIL verdict${stat.fails === 1 ? "" : "s"}` : "",
+      stat.stuckHints ? `${stat.stuckHints} stuck hint${stat.stuckHints === 1 ? "" : "s"}` : "",
+      stat.reprompts ? `${stat.reprompts} shape re-prompt${stat.reprompts === 1 ? "" : "s"}` : "",
+    ].filter(Boolean)
+    lines.push(`  model ${name}: ${stat.sessions} sessions, ${formatUsageLine(stat.usage)}${counters.length ? `, ${counters.join(", ")}` : ""}`)
+  }
+  if (tierNames.length) {
+    lines.push(`  tiers: ${tierNames.map((name) => `${name} ${tiers![name]!.sessions} sessions, ${formatUsageLine(tiers![name]!.usage)}`).join("; ")}`)
+  }
+  return lines
+}
+
 // Round-complete line (§4.4): this round [`■ round N complete: total W (AI
 // A[, human wait Z]), [P phases / ] T tasks / S sessions`, tokens line];
 // phaseCount is only provided on the phased path (the phase index done count =
 // phases handed over this round); the non-phased path omits the phase segment (it is
 // the single pseudo-phase "m" throughout, a count carries no information).
+// Under a registry, per-model lines and the per-tier summary follow the
+// tokens line (plans/0055 §10 item 12); with no model data they are absent
+// and the block is byte-identical to the pre-registry form (C2).
 // When history.rounds > 0, two cross-round cumulative lines are appended
 // (indented two spaces, "cumulative" prefix distinguishes them from the
 // this-round line). The round number comes from roundB.id (loadStats snapshots
@@ -165,6 +204,7 @@ export async function roundCompleteLines(
       `${phasesPart}${totals.tasks} tasks / ${totals.sessions} sessions`,
     formatUsageLine(totals.usage),
   ]
+  lines.push(...modelBlockLines(totals.models, totals.tiers))
   const history = await statsHistory(directory)
   if (history && history.rounds > 0) {
     const h = history.totals

@@ -21,7 +21,7 @@ import { handoffFile, renderStepUp, renderStuckHint, renderTestWrapup, renderTes
 import { compactText, sameIssue, type ResolveEvent } from "./resolve"
 import { askHuman, describePart, formatClientError, formatTokens, isApproval, probeSession } from "./session-api"
 import { awaitCacheClaim, enabledSteps, noteClaimContradiction, observeCacheClaim, stepId, stepUpPoint, type SteerContext } from "./model-step"
-import type { Usage } from "./stats"
+import { statsModelEvent, type Usage } from "./stats"
 import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
 import { executeTest, resolveTestScript, type Steer, type TestRun } from "./testrun"
@@ -495,7 +495,9 @@ export async function watch(
         vlog(line)
         // 死循环检测(src/stuck.ts): 工具调用的终态逐个喂给检测器,识别到"重复
         // 同一动作且结果不变"即经 steer 主动注入提示,帮能力较弱的模型跳出空转。
-        // 只提示不中止会话;投递失败已由 steerText 记日志,照常继续观察。
+        // 只提示不中止会话;投递失败已由 steerText 记日志,照常继续观察。注册表
+        // 之下该提示同时计入该模型的 stuck-hint 计数(0055 §10 item 3 的协议漂移
+        // 口径);无注册表 steerContext 缺省,statsModelEvent 空转(C2)。
         if (stuck && part.kind === "tool" && (part.status === "completed" || part.status === "error")) {
           const hit = stuck.observe({
             tool: part.tool,
@@ -508,6 +510,7 @@ export async function watch(
               `⚠ repetitive action detected: ${hit.tool} has ${hit.count} consecutive ${hit.kind === "error" ? "identical errors" : "identical calls with identical results"}; ` +
                 `inserting a hint (level ${hit.level}/${STUCK_MAX_HINTS})`,
             )
+            await statsModelEvent(opts.dir, steerContext?.name, "stuck")
             await steerText(renderStuckHint(hit))
           }
         }

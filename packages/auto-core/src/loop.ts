@@ -8,13 +8,14 @@ import { log } from "./log"
 import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
+import { setClassifyUsageSink } from "./classify"
 import { logRunRouting, routingFacts } from "./routing"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentPool } from "./agent-pool"
 import { startPool } from "./agent-pool"
 import { shellProfile } from "./shell"
-import { flushStats } from "./stats"
+import { flushStats, statsClassifyUsage } from "./stats"
 
 // RunAllOpts is runAll's signature; the preflight segment owns it.
 import { preflight, type RunAllOpts } from "./loop-preflight"
@@ -132,6 +133,13 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // names the profile its session truly lives on.
     const routing = registry ? routingFacts(registry, opts.agent, started.profileName) : undefined
     if (routing) logRunRouting(routing)
+    // The classifier's token booking (plans/0055 §7.1 "Stats"): under a
+    // registry the failure-message classifier's one-shot sessions report their
+    // usage into the stats `classify` bucket — outside the unit's session
+    // totals. The sink is dropped again in the finally below, before the stats
+    // handle flushes; without a registry no classifier exists, so nothing is
+    // registered and the run stays byte-identical (C2).
+    if (routing) setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
     if (opts.interactive) {
       repl = startInteractive((agent) => server!.client(agent), agentName, undefined, routing ? new Set(routing.registry.models.keys()) : undefined)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
@@ -178,6 +186,9 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     repl?.close()
     watcher?.close()
     progress?.close()
+    // Drop the classifier's usage sink before the stats handle flushes, so a
+    // late answer cannot book into a re-loaded handle after the run's end.
+    setClassifyUsageSink(undefined)
     // 统计优雅收口(STATS_PLAN §1): fold 开放段后关段落盘并卸载句柄;下次
     // loadStats 无折旧可读。写失败内部静默,不影响退出码。
     await flushStats(directory)

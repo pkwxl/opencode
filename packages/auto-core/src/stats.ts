@@ -21,6 +21,9 @@ import { basename, dirname, join } from "node:path"
 import { currentRound } from "./phases"
 
 // ===== schema(v:1,落盘 compact JSON;plans/STATS_PLAN.md :28-43)=====
+// v:1 的向后兼容扩展(plans/0055 §7.1 "Stats"): 各桶与 history 聚合可携带
+// models/tiers 两个可选节(按内部模型名/按层级的用量与计数)。旧文档无这两节
+// 照常装载(宽容解析缺省为空);无注册表的运行不写它们,形状逐字节不变(C2)。
 
 // 逐 step-finish part 增量累加的用量(采集接线在 T-003,本模块只管入库与聚合)。
 export type Usage = {
@@ -40,7 +43,50 @@ export type Totals = {
   sessions: number
   tasks: number
   usage: Usage
+  // Usage and sessions per internal model name, and per protocol-drift
+  // counter, booked beside the bucket's own usage (plans/0055 §7.1 "Stats",
+  // §10 item 12). A raw `provider/model` override value is keyed by its raw
+  // string; the failure-message classifier's tokens sit in the `classify`
+  // bucket. Optional and absent until the first booking, so a run without a
+  // model registry persists the exact pre-registry shape (C2: byte-identical).
+  models?: Record<string, ModelStat>
+  // Usage and sessions per reasoning tier of the sessions booked above
+  // (plans/0055 §10 item 12): same booking point, key = the tier the dispatch
+  // was routed as. Optional for the same C2 reason.
+  tiers?: Record<string, TierStat>
 }
+
+// Per-model record: the usage booked for the model, how many sessions ran on
+// it, and the counters that read its protocol drift (plans/0055 §10 item 3) —
+// report `Result: FAIL` verdicts it wrote, stuck hints it needed, and
+// shape-check re-prompts its sessions caused.
+export type ModelStat = {
+  usage: Usage
+  sessions: number
+  fails: number
+  stuckHints: number
+  reprompts: number
+}
+
+// Per-tier record: the usage and session count of every session routed as
+// that tier, so the savings of tier routing can be measured.
+export type TierStat = {
+  usage: Usage
+  sessions: number
+}
+
+// The bucket the failure-message classifier's tokens go to (plans/0055 §7.1
+// "Stats"): outside the unit's session totals, keyed beside the internal
+// model names.
+// AUTO-DECISION: one shared `classify` bucket, not one per classifier entry
+// (the conclusion's per-model lines exist to compare the fleet's cost and
+// drift; the classifier is overhead of the run's error handling, and operators
+// rotate the classifier entry without caring which one answered). The
+// collision edge — an internal model literally named `classify` would share
+// the bucket — is accepted: the name is a plausible classifier name anyway,
+// and separating them would complicate every reader for an edge no registry
+// in practice hits.
+export const CLASSIFY_BUCKET = "classify"
 
 export type Bucket = Totals & { id: string; since: number }
 
@@ -154,7 +200,40 @@ function parseTotals(raw: unknown): Totals {
     sessions: num(t.sessions),
     tasks: num(t.tasks),
     usage: parseUsage(t.usage),
+    models: parseModelStats(t.models),
+    tiers: parseTierStats(t.tiers),
   }
+}
+
+// Per-model records, leniently (mirror parseUsage: bad = missing, never
+// throws). An absent or empty section returns undefined, keeping the persisted
+// shape of an un-routed run byte-identical on load→write round trips (C2).
+function parseModelStats(raw: unknown): Record<string, ModelStat> | undefined {
+  if (typeof raw !== "object" || !raw) return undefined
+  const models: Record<string, ModelStat> = {}
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value !== "object" || !value) continue // bad entry skipped
+    const m = value as Record<string, unknown>
+    models[name] = {
+      usage: parseUsage(m.usage),
+      sessions: num(m.sessions),
+      fails: num(m.fails),
+      stuckHints: num(m.stuckHints),
+      reprompts: num(m.reprompts),
+    }
+  }
+  return Object.keys(models).length ? models : undefined
+}
+
+function parseTierStats(raw: unknown): Record<string, TierStat> | undefined {
+  if (typeof raw !== "object" || !raw) return undefined
+  const tiers: Record<string, TierStat> = {}
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value !== "object" || !value) continue
+    const t = value as Record<string, unknown>
+    tiers[name] = { usage: parseUsage(t.usage), sessions: num(t.sessions) }
+  }
+  return Object.keys(tiers).length ? tiers : undefined
 }
 
 function parseBucket(raw: unknown, fallbackId: string): Bucket {
@@ -249,7 +328,9 @@ function depreciate(doc: StatsDoc) {
 }
 
 // roundB 滚进 history(历轮聚合,单桶有界);task/phase 桶不动——三桶并行累加,
-// roundB 已含全部,无丢失;task/phase 由下一次 statsTask/statsPhase 重置。
+// roundB 已含全部,无丢失;task/phase 由下一次 statsTask/statsPhase 重置。The
+// per-model and per-tier sections roll with the flat fields, so the history
+// aggregate stays consistent with its own usage totals.
 function rollHistory(doc: StatsDoc) {
   const totals = doc.history.totals
   totals.aiMs += doc.roundB.aiMs
@@ -260,7 +341,37 @@ function rollHistory(doc: StatsDoc) {
   for (const key of Object.keys(totals.usage) as (keyof Usage)[]) {
     totals.usage[key] += doc.roundB.usage[key]
   }
+  mergeModelStats(totals, doc.roundB)
   doc.history.rounds += 1
+}
+
+// ===== per-model / per-tier booking(plans/0055 §7.1 "Stats", §10 items 3/12)=====
+
+function emptyModelStat(): ModelStat {
+  return { usage: emptyUsage(), sessions: 0, fails: 0, stuckHints: 0, reprompts: 0 }
+}
+
+function emptyTierStat(): TierStat {
+  return { usage: emptyUsage(), sessions: 0 }
+}
+
+// Sum one bucket's per-model/per-tier sections into an aggregate Totals
+// (history at round rollover): creates the sections lazily, so an aggregate
+// that received no model data stays without them (C2 shape).
+function mergeModelStats(into: Totals, from: Totals) {
+  for (const [name, stat] of Object.entries(from.models ?? {})) {
+    const target = ((into.models ??= {})[name] ??= emptyModelStat())
+    addUsage(target.usage, stat.usage)
+    target.sessions += stat.sessions
+    target.fails += stat.fails
+    target.stuckHints += stat.stuckHints
+    target.reprompts += stat.reprompts
+  }
+  for (const [name, stat] of Object.entries(from.tiers ?? {})) {
+    const target = ((into.tiers ??= {})[name] ??= emptyTierStat())
+    addUsage(target.usage, stat.usage)
+    target.sessions += stat.sessions
+  }
 }
 
 // ===== 原子写 + 写队列 =====
@@ -410,7 +521,21 @@ function copyTotals(t: Totals): Totals {
     sessions: t.sessions,
     tasks: t.tasks,
     usage: { ...t.usage },
+    ...(t.models !== undefined ? { models: copyModelStats(t.models) } : {}),
+    ...(t.tiers !== undefined ? { tiers: copyTierStats(t.tiers) } : {}),
   }
+}
+
+function copyModelStats(models: Record<string, ModelStat>): Record<string, ModelStat> {
+  const out: Record<string, ModelStat> = {}
+  for (const [name, stat] of Object.entries(models)) out[name] = { ...stat, usage: { ...stat.usage } }
+  return out
+}
+
+function copyTierStats(tiers: Record<string, TierStat>): Record<string, TierStat> {
+  const out: Record<string, TierStat> = {}
+  for (const [name, stat] of Object.entries(tiers)) out[name] = { ...stat, usage: { ...stat.usage } }
+  return out
 }
 
 // 读数实时外推: 把开放段 [open.at, now] 的未落账部分计入**副本**返回(与 fold 同一
@@ -574,10 +699,16 @@ export type StatsSessionReport = {
 // (task/phase/round 三桶 + per-session)、sessions 计数 +1、关 AI 段重开墙钟段、
 // 停心跳、落盘,返回打印用报告。无配对 begin(下发失败等异常兜底)时 thisAiMs = 0,
 // usage 与 sessions/rounds 计数照记——消耗真实发生,不丢。
+// model/tier(注册表之下由 attempt 传入,plans/0055 §7.1 "Stats"): 内部名或裸
+// `provider/model` 串的候选键 + 本次派发的层级;给出时 usage/sessions 同时按模型
+// 与按层级并行记入三桶(与桶自身 usage 同一入账点,跨中断累计同一口径)。缺省
+// (无注册表)不建 models/tiers 节,持久化形状逐字节不变(C2)。
 export async function statsSessionEnd(
   dir: string | undefined,
   sessionID: string,
   usage: Usage,
+  model?: string,
+  tier?: string,
 ): Promise<StatsSessionReport | undefined> {
   if (!dir) return undefined
   const { handle } = await ensure(dir)
@@ -594,6 +725,16 @@ export async function statsSessionEnd(
   for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
     bucket.sessions += 1
     addUsage(bucket.usage, usage)
+    if (model !== undefined) {
+      const stat = ((bucket.models ??= {})[model] ??= emptyModelStat())
+      addUsage(stat.usage, usage)
+      stat.sessions += 1
+    }
+    if (tier !== undefined) {
+      const stat = ((bucket.tiers ??= {})[tier] ??= emptyTierStat())
+      addUsage(stat.usage, usage)
+      stat.sessions += 1
+    }
   }
   // per-session 续接: 同 sessionID 跨中断(fork 续跑)累加 rounds/aiMs/usage;
   // task 以本次 begin 关联为准(缺省沿用旧值/当前 taskB.id)。
@@ -621,6 +762,47 @@ export async function statsSessionEnd(
     phase: extrapolate(doc, doc.phaseB),
     round: extrapolate(doc, doc.roundB),
   }
+}
+
+// 协议漂移计数(plans/0055 §10 item 3): 某模型的会话写出的 report `Result:
+// FAIL` 判定(fail)、收到的死循环提示(stuck)、触发的形检重提示(reprompt)。
+// 与 usage 同一三桶并行口径——事件发生在哪个任务/阶段/轮次,计数就落在当时的
+// 三个桶里,跨中断随文档累计。model 缺省(无注册表,链上无选中条目)空转,
+// 不建 models 节(C2)。事件已在其观测点由调用方判定,这里只入库。
+// AUTO-DECISION: 计数三桶并行(task/phase/round 各 +1),不加"仅 round 桶"的
+// 单层口径——三桶是本模块既有的并行累加模型(阶段内含非任务时间也不折叠),
+// 单层口径会让"本任务该模型漂移几次"无处可读;三份重复是有界且自洽的。
+export type ModelEventKind = "fail" | "stuck" | "reprompt"
+
+export async function statsModelEvent(
+  dir: string | undefined,
+  model: string | undefined,
+  kind: ModelEventKind,
+): Promise<void> {
+  if (!dir || model === undefined) return
+  const { handle } = await ensure(dir)
+  for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+    const stat = ((bucket.models ??= {})[model] ??= emptyModelStat())
+    if (kind === "fail") stat.fails += 1
+    else if (kind === "stuck") stat.stuckHints += 1
+    else stat.reprompts += 1
+  }
+  queueWrite(dir, handle)
+}
+
+// 失败消息分类器的 token 落账(plans/0055 §7.1 "Stats"): 记入三桶各自的
+// `classify` 桶——在单元会话总量之外(不进桶的 usage/sessions、不进 per-session),
+// 与内部模型名并列展示。分类器的一次 one-shot 会话按 sessions 计数(它确实是
+// 一次会话,只是不属于任何单元)。无句柄时惰性装载同其它 API。
+export async function statsClassifyUsage(dir: string | undefined, usage: Usage): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+    const stat = ((bucket.models ??= {})[CLASSIFY_BUCKET] ??= emptyModelStat())
+    addUsage(stat.usage, usage)
+    stat.sessions += 1
+  }
+  queueWrite(dir, handle)
 }
 
 // 超上限按 at 升序淘汰最旧(淘汰无损: 聚合已入三桶;per-session 展示丢历史属
