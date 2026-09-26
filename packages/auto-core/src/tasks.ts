@@ -67,7 +67,13 @@ export type Task = {
   // session mode = the decompose session id; digest mode = the base
   // confirmation session id with a `digest:` prefix. Driver-written runtime
   // state (.auto/units.json), persistent across runs.
-  forkBase?: string
+  // Under a model registry (plans/0055 §8.2, §8.4) the persisted value is a
+  // map from agent profile to that agent's base (`digest:`-prefixed): a base
+  // is agent-local like every session. A plain string is the record of the
+  // one-agent era and reads as the run's (the default) agent's base —
+  // forkBaseFor resolves one agent's entry.
+  // AUTO-DECISION: any registry writes the map, even a single-agent one (the registry's presence is the switch; keying the shape on the profile count would flip the record the moment an operator adds a profile nobody dispatches on, and the read side accepts both shapes forever)
+  forkBase?: string | Record<string, string>
   // The task's own content: todo.md (done.md once complete) without its title
   // line, field block and terminator.
   body: string
@@ -231,8 +237,39 @@ export function renderTaskIndex(phase: string, tasks: readonly { id: string; tit
 
 export const UNITS_FILE = join(".auto", "units.json")
 
-type Runtime = { status?: "in_progress" | "blocked"; attempts?: number; forkBase?: string }
+type Runtime = { status?: "in_progress" | "blocked"; attempts?: number; forkBase?: string | Record<string, string> }
 type Units = { tasks: Record<string, Runtime> }
+
+// The persisted fork base record sanitized for a Task: a plain string as-is,
+// an object reduced to its string-valued keys (a map from agent profile to
+// base, plans/0055 §8.4), anything else dropped — the runtime state is
+// driver-written, but a hand-edited file degrades to "no base" rather than
+// poisoning the loader.
+function parseForkBase(raw: unknown): Task["forkBase"] {
+  if (typeof raw === "string") return raw
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const map: Record<string, string> = {}
+    for (const [agent, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof value === "string") map[agent] = value
+    }
+    return Object.keys(map).length ? map : undefined
+  }
+  return undefined
+}
+
+// One agent's fork base of the persisted record (plans/0055 §8.4): under a
+// registry the record is a map from agent profile to base and only the
+// reading agent's entry applies. The plain string of the one-agent era is the
+// run's (the default) agent's base and still applies. A map read without an
+// agent (no registry) owns nothing — the base is agent-local, so the digest
+// base is simply rebuilt.
+export function forkBaseFor(record: Task["forkBase"], agent: string | undefined): string | undefined {
+  if (record === undefined) return undefined
+  if (typeof record === "string") return record
+  if (agent === undefined) return undefined
+  const value = record[agent]
+  return typeof value === "string" ? value : undefined
+}
 
 async function readUnits(dir: string): Promise<Units> {
   const text = await Bun.file(join(dir, UNITS_FILE)).text().catch(() => undefined)
@@ -320,13 +357,14 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
     const doc = docs.get(entry.id)!
     const unit = parseUnitDoc(doc)
     const runtime = units.tasks[entry.id] ?? {}
+    const forkBase = parseForkBase(runtime.forkBase)
     plan.tasks.push({
       id: entry.id,
       title: unit.title || entry.title,
       status: done ? "done" : (runtime.status ?? "pending"),
       ...(scan.closed.has(entry.id) ? { closed: scan.closed.get(entry.id)! } : {}),
       attempts: runtime.attempts ?? 0,
-      ...(runtime.forkBase ? { forkBase: runtime.forkBase } : {}),
+      ...(forkBase !== undefined ? { forkBase } : {}),
       body: taskBody(doc),
       ...(unit.fields.phase ? { phase: unit.fields.phase } : {}),
       ...(unit.depends !== undefined ? { depends: unit.depends } : {}),
@@ -414,8 +452,20 @@ export async function block(dir: string, id: string): Promise<void> {
   await updateTask(dir, id, (entry) => ({ ...entry, status: "blocked" }))
 }
 
-export async function setForkBase(dir: string, id: string, sessionID: string): Promise<void> {
-  await updateTask(dir, id, (entry) => ({ ...entry, forkBase: sessionID }))
+// Records the task's fork base. Without an agent (no registry) the value is a
+// plain string, exactly as before. With one (under a registry, plans/0055
+// §8.4) the entry becomes a map from agent profile to base: the agent's entry
+// is set beside the other agents' entries, and a prior plain string of the
+// same run's agent is replaced — setForkBase runs only after a fresh base was
+// built, so the string it displaces was that agent's stale base.
+export async function setForkBase(dir: string, id: string, sessionID: string, agent?: string): Promise<void> {
+  await updateTask(dir, id, (entry) => {
+    const forkBase =
+      agent === undefined
+        ? sessionID
+        : { ...(typeof entry.forkBase === "object" && entry.forkBase !== null ? entry.forkBase : {}), [agent]: sessionID }
+    return { ...entry, forkBase }
+  })
 }
 
 // Task completion: rename todo.md → done.md and tick the index line (the task

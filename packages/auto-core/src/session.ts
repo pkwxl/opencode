@@ -28,7 +28,7 @@ import { formatWindowState, isoInZone } from "./model-window"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { candidateKey, nowOf, selectContext, type Candidate } from "./routing"
 import { candidatesOf, select, type SelectCall, type SelectContext } from "./select"
-import { setForkBase, type Plan, type Task } from "./tasks"
+import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
 import { firstLine } from "./resume-gate"
 import { forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
@@ -56,9 +56,18 @@ export async function ensureForkBase(
 ): Promise<ForkBaseInfo | undefined> {
   if (!switches.fork) return undefined
   const dir = opts.dir ?? plan.dir
+  // The run's agent (plans/0055 §8.4): the base the pipeline forks from must
+  // live on the agent this run dispatches on, so the persisted record is read
+  // and written for that agent alone (RoutingFacts.runAgent; undefined = no
+  // registry, where the plain-string record of the one-agent era applies
+  // as-is and setForkBase keeps the old shape).
+  const agent = opts.routing?.runAgent
   // digest 持久基点以 `digest:` 前缀与理解会话 id(session 基点)区分——无前缀值在
-  // digest 模式下只是重建失败时的兜底,不参与「存活即复用」。
-  const persistID = task.forkBase?.startsWith("digest:") ? task.forkBase.slice("digest:".length) : undefined
+  // digest 模式下只是重建失败时的兜底,不参与「存活即复用」。A plain string is the
+  // one-agent era's record and reads as this run's (the default) agent's; a
+  // map holds only the reading agent's entry (forkBaseFor).
+  const forkBaseRecord = forkBaseFor(task.forkBase, agent)
+  const persistID = forkBaseRecord?.startsWith("digest:") ? forkBaseRecord.slice("digest:".length) : undefined
   if (switches.forkBase === "digest") {
     if (persistID !== undefined) {
       if (await sessionAlive(client, persistID)) {
@@ -74,7 +83,7 @@ export async function ensureForkBase(
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
       const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
       if (result.type === "idle" && base.id) {
-        await setForkBase(dir, task.id, `digest:${base.id}`)
+        await setForkBase(dir, task.id, `digest:${base.id}`, agent)
         log(`⑂ ${task.id} digest base ready: session ${base.id} (digest prefix ${formatTokens(base.used)} tokens)`)
         return { id: base.id, used: base.used }
       }
@@ -86,7 +95,7 @@ export async function ensureForkBase(
   // session 基点(理解会话): digest 模式下持久基点走到这里必已在上方判死(存活即
   // 复用返回),不重复校验;session 模式遇 digest: 前缀遗留(运行中途切换基点模式)
   // 剥壳校验——存活的 digest 基点同样是有效暖前缀。
-  const sessionID = persistID === undefined ? task.forkBase : switches.forkBase === "session" ? persistID : undefined
+  const sessionID = persistID === undefined ? forkBaseRecord : switches.forkBase === "session" ? persistID : undefined
   if (sessionID) {
     if (await sessionAlive(client, sessionID)) {
       const used = sessionID === chain.id ? chain.used : await sessionUsed(client, sessionID)

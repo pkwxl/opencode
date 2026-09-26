@@ -26,6 +26,13 @@ export type Handover = {
   // (OPENCODE_AUTO_HANDOVER_CONCURRENT=on)定版即起跑,无待跑脚本可记。
   script?: string
   seq?: number
+  // The agent profile the recorded sessions live on (plans/0055 §8.2), next
+  // to their ids: session ids are agent-local, so the record carries the
+  // agent of `pinSession`/`nextSession`. Written only under a model registry
+  // (without one the file stays byte-identical); an absent field means the
+  // default agent's session, so records written before the binding stay
+  // valid.
+  agent?: string
   // 定版那一刻的会话与末条消息 id: 收尾未完成时从这里 fork 出新会话重做收尾
   // (fork 复制 target 之前的消息,故取末条消息的**后一条**作锚点)。
   pinSession?: string

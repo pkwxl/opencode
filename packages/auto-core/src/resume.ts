@@ -81,6 +81,13 @@ export type Progress = {
   // 与当前配置解析结果不一致 → 不复用(会话在异模型上续跑 = 行为漂移)。未配置模型
   // 路由时无串可记,严格恢复下同样视为不可复用。
   model?: string
+  // The agent profile the recorded session lives on (plans/0055 §8.2): session
+  // ids are agent-local, so the record carries its agent next to the id.
+  // Written only under a model registry (without one there is no agent notion
+  // and the files stay byte-identical); an absent field means the default
+  // agent's session, so every record written before the binding stays valid.
+  // AUTO-DECISION: any registry writes the field, even a single-agent one (the registry's presence is the switch; keying the shape on the profile count would flip records the moment an operator adds a profile nobody dispatches on, and the read side accepts both shapes forever anyway)
+  agent?: string
 }
 
 const FILE = join(".auto", "progress.json")
@@ -163,6 +170,8 @@ function parseProgress(raw: string): Progress | undefined {
           )
         : undefined,
       model: typeof parsed.model === "string" ? parsed.model : undefined,
+      // The session's agent profile (§8.2): absent = the default agent's.
+      agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
     }
   } catch {
     return undefined

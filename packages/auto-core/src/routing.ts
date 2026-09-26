@@ -38,6 +38,14 @@ export type RoutingFacts = {
   // §9 R6: the project's configured agent — the default agent raw override
   // values run on and unqualified session records belong to.
   defaultAgent: string
+  // §8.2: the agent profile this run's sessions live on — the profile the
+  // run's host started with (agentProfileFor of the chosen agent; the chosen
+  // agent's own name when the registry has no profile of its adapter). While
+  // the run has one agent, every session the driver creates, forks or reuses
+  // is acquired on it, so the chain and the persisted session records
+  // (progress, handover, fork base) carry this name. It is a profile of the
+  // filter's adapter (or the bare adapter name without a matching profile).
+  runAgent: string
   clock?: () => number
   random?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -47,8 +55,15 @@ export type RoutingFacts = {
 // the agent start uses (shell profile > OPENCODE_AUTO_AGENT > the configured
 // agent, src/agent-choice.ts), the default agent is the configured agent
 // alone (R6: it is not a filter, so a single-agent fleet keeps working).
+// runAgent is the profile the run's host started with, passed by the loop
+// from startAgent's result (the one place that picks the profile); the
+// fallback (the configured agent's own name) is exact whenever the profile is
+// named like its adapter, which the implied `opencode` profile always is —
+// callers that never started an agent (the coverage check, tests) may rely on
+// it.
 // AUTO-DECISION: while the run still has one agent, the filter falls back to the configured agent (the run cannot dispatch a model on an adapter it never started, so cross-adapter candidates are refused already at selection); when the agent pool runs one host per profile, the filter narrows to the shell profile's agent and OPENCODE_AUTO_AGENT, as ruled, and the configured agent keeps only its default-agent role
-export function routingFacts(registry: ModelRegistry, configuredAgent: AgentChoice | undefined): RoutingFacts {
+// AUTO-DECISION: runAgent is a fact of the run, not derived here per reader (deriving would need the agent start's profile pick, and routing must not import it — the one-way table); the loop passes the name startAgent actually started, so the records name the host that truly owns the session
+export function routingFacts(registry: ModelRegistry, configuredAgent: AgentChoice | undefined, runAgent?: string): RoutingFacts {
   const profile = shellProfile().agent?.name
   const env = autoSwitches().agent
   return {
@@ -56,6 +71,7 @@ export function routingFacts(registry: ModelRegistry, configuredAgent: AgentChoi
     agentFilter: profile ?? env ?? configuredAgent ?? "opencode",
     filterSource: profile ? "shell profile" : env ? "OPENCODE_AUTO_AGENT" : undefined,
     defaultAgent: configuredAgent ?? "opencode",
+    runAgent: runAgent ?? configuredAgent ?? "opencode",
   }
 }
 

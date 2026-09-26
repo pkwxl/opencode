@@ -13,6 +13,7 @@ import {
   block,
   doneTaskIds,
   countSubtasks,
+  forkBaseFor,
   loadPlan,
   markDone,
   newTaskProblems,
@@ -282,6 +283,62 @@ describe("runtime state (.auto/units.json)", () => {
     const t3 = (await loadPlan(dir, phase)).tasks[2]!
     expect(t3.status).toBe("blocked")
     expect(t3.forkBase).toBe("digest:ses_1")
+  })
+
+  // The fork base per agent (plans/0055 §8.2, §8.4): under a registry the
+  // persisted record is a map from agent profile to base; a plain string is
+  // the one-agent era's record and reads as the run's (the default) agent's.
+  // Without an agent setForkBase keeps the plain string, byte-identical to
+  // the old shape.
+  test("setForkBase with an agent writes the per-agent map and keeps the other agents' entries", async () => {
+    await seedUnits(dir, SAMPLE)
+    await setForkBase(dir, "T-003", "digest:ses_op", "opencode")
+    await setForkBase(dir, "T-003", "digest:ses_cl", "claude-b")
+    expect((await loadPlan(dir, phase)).tasks[2]!.forkBase).toEqual({ opencode: "digest:ses_op", "claude-b": "digest:ses_cl" })
+    // Rewriting one agent's base keeps the other's entry (a base per agent).
+    await setForkBase(dir, "T-003", "digest:ses_op2", "opencode")
+    expect((await loadPlan(dir, phase)).tasks[2]!.forkBase).toEqual({ opencode: "digest:ses_op2", "claude-b": "digest:ses_cl" })
+    // The stored shape is the map itself.
+    expect(JSON.parse(await Bun.file(join(dir, UNITS_FILE)).text()).tasks["T-003"].forkBase).toEqual({
+      opencode: "digest:ses_op2",
+      "claude-b": "digest:ses_cl",
+    })
+  })
+
+  test("setForkBase without an agent keeps the plain string (the no-registry shape is unchanged)", async () => {
+    await seedUnits(dir, SAMPLE)
+    await setForkBase(dir, "T-003", "digest:ses_1")
+    expect(JSON.parse(await Bun.file(join(dir, UNITS_FILE)).text()).tasks["T-003"].forkBase).toBe("digest:ses_1")
+  })
+
+  test("forkBaseFor: a plain string is the run's (default) agent's; a map holds only the reading agent's entry", async () => {
+    await seedUnits(dir, SAMPLE)
+    // One-agent era record: a plain string reads for the run's agent (the
+    // sole reader until the agent pool; forkBaseFor cannot tell which agent a
+    // pre-binding string belonged to, and by construction its reader is the
+    // one agent that ran then).
+    await setForkBase(dir, "T-003", "digest:ses_old")
+    const task = (await loadPlan(dir, phase)).tasks[2]!
+    expect(forkBaseFor(task.forkBase, "opencode")).toBe("digest:ses_old")
+    expect(forkBaseFor(task.forkBase, "claude-b")).toBe("digest:ses_old")
+    // A map: only the reading agent's entry applies.
+    await setForkBase(dir, "T-003", "digest:ses_cl", "claude-b")
+    const mapped = (await loadPlan(dir, phase)).tasks[2]!.forkBase
+    expect(forkBaseFor(mapped, "claude-b")).toBe("digest:ses_cl")
+    expect(forkBaseFor(mapped, "opencode")).toBeUndefined()
+    // A map read without an agent (no registry) owns nothing: the base is
+    // rebuilt rather than guessed.
+    expect(forkBaseFor(mapped, undefined)).toBeUndefined()
+    expect(forkBaseFor(undefined, "opencode")).toBeUndefined()
+  })
+
+  test("a map with non-string values degrades: only the string entries load; garbage drops to no base", async () => {
+    await seedUnits(dir, SAMPLE)
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(join(dir, UNITS_FILE), JSON.stringify({ tasks: { "T-003": { forkBase: { opencode: "digest:ses_1", "claude-b": 7 } } } }))
+    expect((await loadPlan(dir, phase)).tasks[2]!.forkBase).toEqual({ opencode: "digest:ses_1" })
+    await Bun.write(join(dir, UNITS_FILE), JSON.stringify({ tasks: { "T-003": { forkBase: ["digest:ses_1"] } } }))
+    expect((await loadPlan(dir, phase)).tasks[2]!.forkBase).toBeUndefined()
   })
 
   test("an unreadable units.json degrades to defaults", async () => {

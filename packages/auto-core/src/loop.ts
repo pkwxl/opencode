@@ -125,7 +125,9 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // The run's routing facts (plans/0055 §6): fixed once the agent choice is
     // known, held by every dispatch through Opts.routing. The run-start block
     // (§6.5) prints the routing in force; without a registry nothing changes.
-    const routing = registry ? routingFacts(registry, opts.agent) : undefined
+    // runAgent is the profile the started host runs on (§8.2): the chain and
+    // the persisted session records name it.
+    const routing = registry ? routingFacts(registry, opts.agent, started.profileName) : undefined
     if (routing) {
       logRunRouting(routing)
       // Step validation (§4.5, §10 item 13), once the server is up: each

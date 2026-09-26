@@ -59,6 +59,7 @@ const facts = (over: { classifier?: string[]; models?: ModelEntry[]; agentFilter
     agentFilter: over.agentFilter ?? "opencode",
     filterSource: undefined,
     defaultAgent: "opencode",
+    runAgent: "opencode",
     clock: over.clock ?? (() => NOW),
   }
 }

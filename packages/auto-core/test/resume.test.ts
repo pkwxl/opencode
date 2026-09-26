@@ -84,6 +84,34 @@ describe("进度记录", () => {
     expect(legacy?.model).toBeUndefined()
   })
 
+  // The session's agent profile (plans/0055 §8.2): written under a registry,
+  // and an absent field is the default agent's — the reader (runner/artifact,
+  // recordedAgentOk) resolves absent against the run's agent, so a pre-binding
+  // record reads as the default agent's without a stored value.
+  test("会话的 agent 档案随记录往返; 缺字段(绑定前旧记录)与坏值均为 undefined(= 默认 agent)", async () => {
+    const progress: Progress = {
+      task: "T-004",
+      session: "ses_bound",
+      at: 7,
+      active: true,
+      phase: { kind: "whole" },
+      agent: "claude-b",
+    }
+    await saveProgress(dir, progress)
+    expect(await recallProgress(dir, "T-004")).toEqual(progress)
+    expect((await recallProgress(dir, "T-004"))?.agent).toBe("claude-b")
+    await saveProgress(dir, { task: "T-005", session: "ses_old", at: 8, active: true, phase: { kind: "whole" } })
+    expect((await recallProgress(dir, "T-005"))?.agent).toBeUndefined()
+    // Without the field the file stays byte-identical to the pre-binding
+    // shape: the key is absent from the JSON, not stored as null.
+    expect(await Bun.file(join(dir, ".auto", "progress.json")).text()).not.toContain("agent")
+    await Bun.write(
+      join(dir, ".auto", "progress.json"),
+      JSON.stringify({ task: "T-006", session: "ses_bad", at: 1, active: true, agent: 42 }),
+    )
+    expect((await recallProgress(dir, "T-006"))?.agent).toBeUndefined()
+  })
+
   test("baseline/model 坏值容错: 非数组 → undefined,数组内缺 root/sha 的项被过滤,model 非字符串 → undefined", async () => {
     await Bun.write(
       join(dir, ".auto", "progress.json"),

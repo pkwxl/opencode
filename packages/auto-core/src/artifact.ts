@@ -18,7 +18,7 @@ import { resumeNote } from "./resume-gate"
 import { runSession } from "./session"
 import { formatTokens, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
-import { afterSession, commitBlocked, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
+import { afterSession, commitBlocked, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // The generic "bypass session must produce a file" skeleton (design doc A.4):
 // when a session ends with its artifact missing or invalid, retry once with
@@ -107,6 +107,9 @@ export async function requireArtifact<T>(
   const strict = strictResumeActive(opts, switches)
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
+  // The recorded model of a resumed step under a registry (§6.2 continuation:
+  // the first dispatch keeps it while it is usable).
+  let resumedModel: string | undefined
   if (stepPhase && opts.dir) {
     const recalled = await recallProgress(opts.dir, task.id)
     const openRecord =
@@ -123,13 +126,26 @@ export async function requireArtifact<T>(
       // An error stub (the whole session produced nothing real) is never reused — the same double check as runTask's cross-process resume.
       const usable = alive && usage && !(usage.used === 0 && usage.errorStub)
       const legacyRecord = strict && recalled!.baseline === undefined
+      // §8.3 (plans/0055 §8.2): the dead-session verdict under a registry — a
+      // recorded session is resumed only if its agent is this run's and its
+      // recorded model is usable now; otherwise the step is redone in a new
+      // session (strict resume: rolled back).
+      const dead = deadSessionWhy(opts, switches, recalled!, spec.role)
       if (strict && recalled!.baseline) {
         const drift = await baselineIntact(opts.dir, recalled!.baseline)
         if (drift.length) return { type: "dirty", files: drift }
         const modelNow = resumeModelNow(opts, switches, recalled!.phase, spec.role)
-        if (usable && !legacyRecord && recalled!.model !== undefined && recalled!.model === modelNow) {
+        // §10 item 11 (plans/0055): eligibility replaces the raw-string
+        // equality under a registry — a window change that only moves the
+        // fresh pick does not roll this step back.
+        const modelOk =
+          opts.routing !== undefined
+            ? recalled!.model !== undefined && resumeModelEligible(opts, switches, recalled!.model, recalled!.phase, spec.role)
+            : recalled!.model !== undefined && recalled!.model === modelNow
+        if (dead === undefined && usable && !legacyRecord && modelOk) {
           resumedSession = candidate
           resumedUsage = usage
+          resumedModel = recalled!.model
           log(
             `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
               `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
@@ -137,18 +153,23 @@ export async function requireArtifact<T>(
         } else {
           const why = opts.newSession
             ? "--new-session given"
-            : !usable
-              ? "the original session is not reusable"
-              : recalled!.model === undefined
-                ? "the record has no effective model (an old record from before strict resume)"
-                : `model mismatch (recorded ${recalled!.model}, now ${modelNow ?? "no routing configured"})`
+            : dead !== undefined
+              ? `${dead}; the recorded session is dead`
+              : !usable
+                ? "the original session is not reusable"
+                : recalled!.model === undefined
+                  ? "the record has no effective model (an old record from before strict resume)"
+                  : opts.routing !== undefined
+                    ? `the recorded model ${recalled!.model} is not usable now`
+                    : `model mismatch (recorded ${recalled!.model}, now ${modelNow ?? "no routing configured"})`
           const done = await rollbackUnitState(opts.dir, task, `${spec.kind} step`, recalled!.baseline, { progress: recalled })
           if (done.type !== "ok") return done
           log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${why}; strict resume rolled back, redoing this step)`)
         }
-      } else if (usable && !legacyRecord) {
+      } else if (dead === undefined && usable && !legacyRecord) {
         resumedSession = candidate
         resumedUsage = usage
+        resumedModel = recalled!.model
         log(
           `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
             `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
@@ -160,9 +181,11 @@ export async function requireArtifact<T>(
             ? "the record has no session"
             : legacyRecord
               ? "an old record from before strict resume has no unit baseline and cannot be checked strictly"
-              : alive
-                ? "the original session only took an error and produced nothing real"
-                : "the original session is not reusable"
+              : dead !== undefined
+                ? `${dead}; the recorded session is dead`
+                : alive
+                  ? "the original session only took an error and produced nothing real"
+                  : "the original session is not reusable"
         log(`↻ ${task.id} ${spec.kind} session resuming the interruption point (${why}; redoing this step in a new session)`)
       }
     } else {
@@ -214,6 +237,18 @@ export async function requireArtifact<T>(
       // and threshold; the note is cleared once used.
       chain.id = resumedSession
       chain.note = resumeNote(stepPhase, true, strict)
+      // Session-agent binding and the continuation's model (plans/0055 §8.2,
+      // §6.2): the resumed session stays bound to the run's agent and — a
+      // registry record naming its model — the first dispatch continues on
+      // that model while it is still usable, instead of a fresh pick moving
+      // the live session's model.
+      if (opts.routing) {
+        chain.agent = opts.routing.runAgent
+        if (resumedModel !== undefined) {
+          chain.modelEntry = resumedModel
+          chain.model = opts.routing.registry.models.get(resumedModel)?.model
+        }
+      }
     }
     const result = await runSession(client, task, promptText + feedback, opts, chain, undefined, undefined, switches)
     if (result.type === "blocked") return result

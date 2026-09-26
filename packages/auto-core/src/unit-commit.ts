@@ -150,10 +150,11 @@ export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches
 // on internal names: the record holds the dispatched entry's internal name
 // (attempt writes it), and this returns the selection's pick for the same
 // routing — a fresh-prompt selection, the same shape the next dispatch takes.
-// The agent half of the eligibility-based comparison (a window change alone
-// must not roll a unit back) arrives with the session-agent binding of a
-// later step; until then a pick that differs rolls back, as a changed
-// env-route does today.
+// The strict check itself no longer uses this pick under a registry: with the
+// session-agent binding in place it compares the recorded internal name and
+// agent by eligibility (resumeModelEligible / deadSessionWhy below), so a
+// window change alone does not roll a unit back; without a registry the
+// raw-string comparison against this value is unchanged.
 // AUTO-DECISION: the registry path selects with no context windows (the live limits belong to the agent this function never sees); an unknown window never excluded a candidate on the no-registry path either, so the comparison keeps its shape
 export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined, role?: ModelRole): string | undefined {
   if (opts.routing) {
@@ -166,6 +167,68 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
     return decision.kind === "pick" ? candidateKey(decision.candidate) : undefined
   }
   return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, role ?? phaseToRole(phase) ?? "bypass")
+}
+
+// —— Session-agent binding of persisted records (plans/0055 §8.2, §8.3) ——
+
+// Does a recorded session id belong to this run's agent? `runAgent` is the
+// agent profile this run's sessions live on (RoutingFacts.runAgent);
+// undefined = no registry. An absent field is the default agent's record
+// (§8.2: every record written before the binding stays valid), and a run
+// without a registry has no agent notion at all — both pass. Under a registry
+// an explicit agent must name the run's profile: session ids are agent-local
+// (F3), so a record of another agent is a dead session — never resumed, never
+// forked.
+export function recordedAgentOk(runAgent: string | undefined, recorded: string | undefined): boolean {
+  return runAgent === undefined || recorded === undefined || recorded === runAgent
+}
+
+// The §10 item 11 eligibility of a strict resume under a registry: the
+// recorded internal name is judged by eligibility, not equality. Selection is
+// asked exactly as the dispatch a resumed session takes — a continuation over
+// the recorded model (§6.2 keeps the chain's model while it is usable) — and
+// the recorded model must be what it keeps. So a window change that only
+// moves the fresh pick (an earlier candidate's window reopening), a reordered
+// list or a returned primary does not roll a unit back; a model that is
+// marked down, outside its windows, excluded by the agent filter or gone from
+// the registry is not eligible. Without a registry the callers keep the
+// raw-string comparison (this helper answers false; it is not for them).
+export function resumeModelEligible(opts: Opts, switches: Switches, recorded: string, phase?: Phase, role?: ModelRole): boolean {
+  const facts = opts.routing
+  if (facts === undefined) return false
+  const decision = select(selectContext(facts, switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT), {
+    role: role ?? phaseToRole(phase) ?? "bypass",
+    entry: opts.phase?.entry,
+    now: nowOf(facts),
+    continuation: true,
+    current: recorded,
+  })
+  return decision.kind === "pick" && candidateKey(decision.candidate) === recorded
+}
+
+// The §8.3 dead-session verdict of a resume record under a registry: a
+// recorded session is resumed only if its agent is this run's and its
+// recorded model is usable now; otherwise the session is dead and the resume
+// takes the existing path of a new session with the resume note (under strict
+// resume, the rollback path). Returns the reason for the log line; undefined
+// = no verdict (without a registry, or a record that names nothing to check —
+// a non-strict record carries no model, and eligibility then has nothing to
+// judge).
+export function deadSessionWhy(
+  opts: Opts,
+  switches: Switches,
+  record: { agent?: string; model?: string; phase?: Phase },
+  role?: ModelRole,
+): string | undefined {
+  const routing = opts.routing
+  if (routing === undefined) return undefined
+  if (!recordedAgentOk(routing.runAgent, record.agent)) {
+    return `the recorded session lives on agent ${record.agent}, not this run's ${routing.runAgent}`
+  }
+  if (record.model !== undefined && !resumeModelEligible(opts, switches, record.model, record.phase, role)) {
+    return `the recorded session's model ${record.model} is not usable now`
+  }
+  return undefined
 }
 
 // 回滚协议的 runner 侧编排(设计 3.3): rollbackUnit(stash 保全 + soft reset 收回

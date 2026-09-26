@@ -346,6 +346,10 @@ export async function watch(
         n,
         script: test!.pending?.script,
         seq: test!.pending?.seq,
+        // The pinned session's agent profile (plans/0055 §8.2), under a
+        // registry only; absent = the default agent's, as every pre-binding
+        // record reads.
+        ...(opts.routing ? { agent: opts.routing.runAgent } : {}),
         pinSession: sessionID,
         pinMessage: lastMessage,
       })

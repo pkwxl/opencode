@@ -522,6 +522,7 @@ test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
         agentFilter: "opencode",
         filterSource: undefined,
         defaultAgent: "opencode",
+        runAgent: "opencode",
       }
       const answer = await askClassifier(classifierFor(host.client, routing)!, {
         message: "Your plan's monthly allowance has been used up. It renews at 03:00 tomorrow.",

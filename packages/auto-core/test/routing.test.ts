@@ -32,6 +32,7 @@ const facts = (reg: ModelRegistry, over: Partial<RoutingFacts> = {}): RoutingFac
   agentFilter: "opencode",
   filterSource: undefined,
   defaultAgent: "opencode",
+  runAgent: "opencode",
   clock: () => NOW,
   ...over,
 })
@@ -179,5 +180,16 @@ describe("routingFacts (the filter and the default agent)", () => {
     expect(facts.defaultAgent).toBe("claude")
     expect(facts.agentFilter).toBe("claude")
     expect(routingFacts(reg, undefined).defaultAgent).toBe("opencode")
+  })
+
+  // The run agent (§8.2): the profile the started host runs on, passed by the
+  // loop from startAgent's result; without it the configured agent's own name
+  // is the fallback (exact whenever the profile is named like its adapter,
+  // which the implied opencode profile always is).
+  test("runAgent is the started profile when passed, else the configured agent's name", () => {
+    const reg = registry([], {})
+    expect(routingFacts(reg, undefined, "claude-b").runAgent).toBe("claude-b")
+    expect(routingFacts(reg, "claude").runAgent).toBe("claude")
+    expect(routingFacts(reg, undefined).runAgent).toBe("opencode")
   })
 })

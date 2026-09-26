@@ -29,7 +29,7 @@ import {
   type Steer,
   type TestRun,
 } from "./testrun"
-import { afterSession, commitBlocked } from "./unit-commit"
+import { afterSession, commitBlocked, recordedAgentOk } from "./unit-commit"
 import { scriptTmpDir } from "./script"
 
 // 执行类会话(子任务/整任务/修复轮)的统一入口: --test-by-driver 未启用时直通
@@ -103,7 +103,7 @@ export async function runExecSession(
   if (stage === "wrapup" && record) {
     // H1 收尾未完成: 定版提交已落账、会话没写完交接文档就被打断。从定版那一刻的
     // 会话状态 fork 出新会话重做收尾——收尾之后照常走归档 → 提交 #2 → 跑脚本。
-    if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`)) {
+    if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`, opts.routing?.runAgent)) {
       if (record.script) test.pending = { script: record.script, seq: record.seq ?? ++test.seq }
       test.resumeWrapup = true
       firstPrompt = renderTestWrapup({ handoffFile: test.handoffFile })
@@ -158,7 +158,14 @@ export async function runExecSession(
       }
     }
     // 续跑会话已经开过并被打断 → 从它分叉恢复,把那一轮已积累的上下文接回来。
-    if (record?.nextSession && (await seedSessionFork(client, chain, record.nextSession, `${test.label} test handover #${closedN} continuation`))) {
+    // A session never crosses agents (plans/0055 §8.3): a record whose agent
+    // is not this run's (an absent field is the default agent's) is a dead
+    // anchor — the fork is refused and the scope cold-starts.
+    if (
+      record?.nextSession &&
+      recordedAgentOk(opts.routing?.runAgent, record.agent) &&
+      (await seedSessionFork(client, chain, record.nextSession, `${test.label} test handover #${closedN} continuation`))
+    ) {
       log(`↻ ${test.label} resume after interruption: the pre-interruption continuation session ${record.nextSession} is still alive; forked a copy to resume`)
       // fork 副本带着续跑会话的全部上下文(任务提示词与续跑说明在它开出时已下发),
       // 整份重发只会重复: 本次恢复有新跑的测试才把结果带给它,否则收敛为一句继续
@@ -174,6 +181,7 @@ export async function runExecSession(
       n: closedN,
       script: undefined,
       seq: undefined,
+      agent: undefined,
       pinSession: undefined,
       pinMessage: undefined,
       nextSession: undefined,
@@ -245,8 +253,13 @@ export async function runExecSession(
 // 被打断的交接收尾。server 的 fork 语义是"复制 target **之前**的消息",故锚点取
 // 定版时观测到的末条消息的**后一条**;取不到(消息已被清理、锚点就是末条)时整份
 // 分叉——收尾提示词重下一遍,会话至多把收尾做两遍,不会丢东西。
-export async function seedPinFork(client: AgentClient, chain: SessionChain, record: Handover, subject: string): Promise<boolean> {
-  if (!record.pinSession || !(await sessionAlive(client, record.pinSession))) return false
+// runAgent is this run's agent profile (RoutingFacts.runAgent; undefined = no
+// registry): a session never crosses agents (plans/0055 §8.3), so a record
+// whose agent is not this run's (an absent field is the default agent's) is a
+// dead anchor — no fork, the caller cold-starts the scope.
+export async function seedPinFork(client: AgentClient, chain: SessionChain, record: Handover, subject: string, runAgent?: string): Promise<boolean> {
+  if (!record.pinSession || !recordedAgentOk(runAgent, record.agent)) return false
+  if (!(await sessionAlive(client, record.pinSession))) return false
   let anchor: string | undefined
   // No readable history (MA.4): no anchor, whole-session fork (the fallback below).
   if (record.pinMessage && client.capabilities.history) {

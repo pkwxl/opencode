@@ -129,12 +129,20 @@ export type WindowWait = { until: number; model: string; tier: Tier; opens: stri
 // prompt 不带 model 键),兼作续跑判定的 current(会话升步后等于所达步的 id);
 // modelStep 为会话已达的上下文步(0 = 基础步,§4.5;步进机制为后续步骤,此处仅
 // 记录基位)。无注册表的运行三者恒 undefined,原语义逐字节不变。
+// Session-agent binding (plans/0055 §8.2): the agent profile this chain's
+// session lives on. Session ids are agent-local (an opencode session cannot be
+// resumed or forked by claude, and the reverse holds too), so the chain
+// records where its session is; while the run has one agent (until the agent
+// pool) every create, fork and reuse acquires it on the run's profile
+// (RoutingFacts.runAgent), set at dispatch in attempt. Set only under a
+// registry; absent = the default agent's session, so a chain of the
+// no-registry era reads correctly.
 // baseline 为当前执行单元的 SHA 基线(严格恢复,plans/0022-session-recovery-fidelity-design.md
 // 3.1 ③): runTask 入口/persistStage 阶段边界/runSubtask 子任务门禁/requireArtifact
 // 单元门禁处置,attempt 写 active 记录时随记;恢复时据此核对与回滚。
 // hinted: the chain's current session was sent the in-turn handover hint
 // (copied from its Watch by attempt; plans/0040 D6).
-export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
+export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; agent?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
 
 // 刚以可重试错误收场的会话本体(id + 末端用量)。链状态在那一刻已被还原为下发前
 // 快照(原会话不被牺牲),失败会话本身随之出了作用域——这里单独记下它,使重试能

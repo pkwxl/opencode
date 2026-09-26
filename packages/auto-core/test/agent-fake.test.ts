@@ -16,6 +16,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentEvent, AgentHost } from "../src/agent/types"
 import { attempt } from "../src/attempt"
+import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
 import type { SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
@@ -27,6 +28,7 @@ import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from ".
 import { resetSteps } from "../src/model-step"
 import { isoInZone, parseWindow } from "../src/model-window"
 import { logRunRouting, type RoutingFacts } from "../src/routing"
+import { recallProgress, saveProgress } from "../src/resume"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
 import { flushStats, setStatsClock } from "../src/stats"
@@ -392,6 +394,7 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     agentFilter: "opencode",
     filterSource: undefined,
     defaultAgent: "opencode",
+    runAgent: "opencode",
     ...(over.clock ? { clock: over.clock } : {}),
     ...(over.random ? { random: over.random } : {}),
     ...(over.sleep ? { sleep: over.sleep } : {}),
@@ -664,6 +667,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     agentFilter: "opencode",
     filterSource: undefined,
     defaultAgent: "opencode",
+    runAgent: "opencode",
   })
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
 
@@ -848,6 +852,7 @@ describe("context steps (plans/0055 §4.5)", () => {
     agentFilter: "opencode",
     filterSource: undefined,
     defaultAgent: "opencode",
+    runAgent: "opencode",
   })
   const BASE = "prov/k3-256k"
   const WIDE = "prov/k3"
@@ -1108,6 +1113,7 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     agentFilter: "opencode",
     filterSource: undefined,
     defaultAgent: "opencode",
+    runAgent: "opencode",
   })
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
   // Wording no pattern knows (another language, a plan-specific limit).
@@ -1270,6 +1276,133 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     expect(result.type).toBe("idle")
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
     expect(agent.argsOf("create").some(([input]) => (input as { title: string }).title === "auto: classify error")).toBe(false)
+  })
+})
+
+// Sessions bound to their agent (plans/0055 §8.2, §8.3): the persisted
+// records carry the agent profile their session lives on, and on resume a
+// recorded session is used only if its agent is this run's and its recorded
+// model is usable now — otherwise it is a dead session, and the resume takes
+// the existing path of a new session with the resume note.
+describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
+  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+  // Friday 2026-09-25 12:00 UTC: w's only window (18:00-24:00) is closed.
+  const NOW = Date.parse("2026-09-25T12:00:00Z")
+  const w = (() => {
+    const parsed = parseWindow("18:00-24:00")
+    if ("error" in parsed) throw new Error(parsed.error)
+    return entry("w", { model: "prov/w", only: [parsed.window] })
+  })()
+  const facts = (): RoutingFacts => ({
+    registry: {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map([w, entry("b", { model: "prov/b" })].map((item) => [item.name, item])),
+      tiers: { deep: tierList("deep", ["w", "b"]), simple: tierList("simple", ["b"]) },
+      routes: new Map(),
+      unused: [],
+    },
+    agentFilter: "opencode",
+    filterSource: undefined,
+    defaultAgent: "opencode",
+    runAgent: "opencode",
+    clock: () => NOW,
+  })
+  const planTask = { id: "PLAN", title: "phase planning", status: "in_progress" as const, attempts: 0, body: "" }
+  const spec = (reset: () => void) => ({
+    kind: "phase planning",
+    step: { step: "phase-plan" as const, unit: "R-01.P01" },
+    artifact: "a filled task index",
+    requirement: "write the index",
+    reset: async () => {
+      reset()
+    },
+    collect: async () => 4,
+  })
+  const seededRecord = async (dir: string, record: { agent?: string; model?: string }) => {
+    await saveProgress(dir, {
+      task: "PLAN",
+      session: "ses_old",
+      at: 1,
+      active: true,
+      phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" },
+      ...record,
+    })
+  }
+
+  test("a session whose agent's model is not usable now is dead: the step is redone in a new session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-bind-dead-"))
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      // w is outside its only window at the record's clock.
+      await seededRecord(dir, { agent: "opencode", model: "w" })
+      const agent = make()
+      let resetCalled = false
+      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), DEFAULTS)
+      expect(value).toBe(4)
+      // Dead session: the original is never prompted or forked; the step is
+      // redone in a new session (the existing redo path: reset + fresh
+      // dispatch, no note — the note belongs to the task-level resume).
+      expect(resetCalled).toBe(true)
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]!.session).not.toBe("ses_old")
+      expect(agent.argsOf("fork")).toEqual([])
+      // The new session dispatches on a usable candidate, not the recorded w.
+      expect(agent.prompts[0]!.model).toBe("prov/b")
+      expect(lines.some((line) => line.includes("the recorded session's model w is not usable now") && line.includes("redoing this step in a new session"))).toBe(true)
+      // The record the new dispatch writes names the run's agent.
+      expect((await recallProgress(dir, "PLAN"))?.agent).toBe("opencode")
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a recorded session of another agent is dead even with a usable model", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-bind-agent-"))
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      await seededRecord(dir, { agent: "claude-b", model: "b" })
+      const agent = make()
+      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => {}), DEFAULTS)
+      expect(value).toBe(4)
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]!.session).not.toBe("ses_old")
+      expect(agent.argsOf("fork")).toEqual([])
+      expect(lines.some((line) => line.includes("the recorded session lives on agent claude-b") && line.includes("redoing this step in a new session"))).toBe(true)
+    } finally {
+      printed.mockRestore()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a live record on this run's agent with a usable model is resumed and keeps its model", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-bind-live-"))
+    try {
+      // b is the second candidate but the only usable one; the resumed
+      // session continues on it (the continuation keeps the recorded entry).
+      await seededRecord(dir, { agent: "opencode", model: "b" })
+      const agent = make()
+      let resetCalled = false
+      const value = await requireArtifact(agent.client, planTask, "planning prompt", { dir, routing: facts() }, spec(() => (resetCalled = true)), DEFAULTS)
+      expect(value).toBe(4)
+      expect(resetCalled).toBe(false)
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]!.session).toBe("ses_old")
+      expect(agent.prompts[0]!.text).toContain("You are continuing in the original, interrupted session")
+      expect(agent.prompts[0]!.model).toBe("prov/b")
+      expect(agent.argsOf("create")).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
 

@@ -2,7 +2,7 @@ import { basename, join } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { ensureDecomposed, executeWhole, runSubtask } from "./execute"
-import { resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
+import { resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive, deadSessionWhy } from "./unit-commit"
 import { taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
@@ -146,6 +146,12 @@ export async function runTask(
       recalled.baseline !== undefined
     // 严格恢复: 无基线的旧记录(开关启用前写入)无法严格核对,按不可复用处理。
     const legacyRecord = strict && recalled.baseline === undefined
+    // §8.3 (plans/0055 §8.2): the dead-session verdict under a registry — a
+    // recorded session is resumed only if its agent is this run's and its
+    // recorded model is usable now; otherwise it is a dead session and the
+    // resume takes the existing new-session path (strict resume: the rollback
+    // path). Without a registry there is no verdict (undefined).
+    const dead = deadSessionWhy(opts, switches, recalled)
     const alive =
       !handedOff && !opts.newSession && recalled.active && recalled.session && !legacyRecord && (await sessionAlive(client, recalled.session))
     // 继承中断会话的真实上下文用量(经末条 assistant 消息重建): 此前 seed 为
@@ -175,15 +181,29 @@ export async function runTask(
         return { type: "dirty", files: drift }
       }
       const modelNow = resumeModelNow(opts, switches, recalled.phase)
-      const modelOk = recalled.model !== undefined && recalled.model === modelNow
-      if (!(alive && usage && !errorStub) || opts.newSession || !modelOk) {
+      // §10 item 11 (plans/0055): under a registry the recorded internal name
+      // and agent are judged by eligibility — the recorded model must still be
+      // usable now, so a window change that only moves the fresh pick does not
+      // roll the unit back; without a registry the raw-string comparison is
+      // unchanged.
+      const modelOk =
+        opts.routing !== undefined
+          ? recalled.model !== undefined && resumeModelEligible(opts, switches, recalled.model, recalled.phase)
+          : recalled.model !== undefined && recalled.model === modelNow
+      if (dead !== undefined || !(alive && usage && !errorStub) || opts.newSession || !modelOk) {
         const why = opts.newSession
           ? "--new-session specified"
-          : !(alive && usage)
-            ? "original session not reusable"
-            : errorStub
-              ? "original session only hit an error, no real output"
-              : `model mismatch (recorded ${recalled.model}, current ${modelNow ?? "no routing configured"})`
+          : dead !== undefined
+            ? `${dead}; the recorded session is dead`
+            : !(alive && usage)
+              ? "original session not reusable"
+              : errorStub
+                ? "original session only hit an error, no real output"
+                : recalled.model === undefined
+                  ? "no effective model recorded (an old record from before strict resume)"
+                  : opts.routing !== undefined
+                    ? `the recorded model ${recalled.model} is not usable now`
+                    : `model mismatch (recorded ${recalled.model}, current ${modelNow ?? "no routing configured"})`
         const done = await rollbackUnitState(dir, task, "execution unit", recalled.baseline!, { progress: recalled })
         if (done.type !== "ok") return done
         rolledBack = true
@@ -192,13 +212,26 @@ export async function runTask(
       }
     }
     if (!rolledBack) {
-      if (alive && usage && !errorStub) {
+      if (dead === undefined && alive && usage && !errorStub) {
         chain.id = recalled.session!
         chain.pct = usage.pct
         chain.used = usage.used
         // 复用决策已在此做出;链内后续的 5 分钟复用规则从当前时刻起算。
         chain.at = Date.now()
         chain.note = resumeNote(recalled.phase, true, strict)
+        // Session-agent binding and the continuation's model (plans/0055 §8.2,
+        // §6.2): the resumed session stays bound to the run's agent and — a
+        // registry record naming its model — the first dispatch continues on
+        // that model while it is still usable (selection keeps the chain's
+        // entry on a continuation), instead of a fresh pick moving the live
+        // session's model.
+        if (opts.routing) {
+          chain.agent = opts.routing.runAgent
+          if (recalled.model !== undefined) {
+            chain.modelEntry = recalled.model
+            chain.model = opts.routing.registry.models.get(recalled.model)?.model
+          }
+        }
         log(
           `↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}, reusing the interrupted session ${recalled.session} to continue (context intact, ` +
             `${formatTokens(usage.used)} used${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens, limit unknown"})`,
@@ -218,9 +251,11 @@ export async function runTask(
               ? "--new-session specified; starting a new session to continue"
               : legacyRecord
                 ? "the legacy record predates strict resume and has no unit baseline, so strict verification is impossible; starting a new session to continue"
-                : errorStub
-                  ? "the original session only hit an error with no real output; starting a new session to continue"
-                  : "the original session is not reusable; starting a new session to continue"
+                : dead !== undefined
+                  ? `${dead}; the recorded session is dead, starting a new session to continue`
+                  : errorStub
+                    ? "the original session only hit an error with no real output; starting a new session to continue"
+                    : "the original session is not reusable; starting a new session to continue"
         log(`↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}(${why})`)
       }
     }
@@ -235,7 +270,16 @@ export async function runTask(
     chain.phase = phase
     if (strict) chain.baseline = await unitBaseline(dir)
     if (opts.dir && task.id.startsWith("T-")) {
-      await saveProgress(opts.dir, { task: task.id, session: chain.id, at: Date.now(), active: false, phase })
+      await saveProgress(opts.dir, {
+        task: task.id,
+        session: chain.id,
+        at: Date.now(),
+        active: false,
+        phase,
+        // The session's agent rides along when a session is named (§8.2,
+        // under a registry only; attempt keeps chain.agent current).
+        ...(opts.routing && chain.id !== undefined && chain.agent !== undefined ? { agent: chain.agent } : {}),
+      })
     }
   }
   const outcome = await pipeline(recalled?.phase)

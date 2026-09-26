@@ -61,6 +61,25 @@ describe("在途交接记录的读写", () => {
     }
   })
 
+  // The sessions' agent profile (plans/0055 §8.2): the record carries it next
+  // to pinSession/nextSession, written under a registry; an absent field is
+  // the default agent's, so pre-binding records read unchanged.
+  test("agent 随记录往返(pinSession/nextSession 之侧); 缺字段 = 默认 agent", async () => {
+    const dir = await fresh()
+    try {
+      const bound: Handover = { ...record, agent: "claude-b" }
+      await saveHandover(dir, bound)
+      expect(await recallHandover(dir, "T-028", record.scope)).toEqual(bound)
+      expect((await peekHandover(dir, "T-028"))?.agent).toBe("claude-b")
+      // Without the field the stored shape is the pre-binding one.
+      await saveHandover(dir, record)
+      expect(await Bun.file(join(dir, ".auto", "handover.json")).text()).not.toContain("agent")
+      expect((await recallHandover(dir, "T-028", record.scope))?.agent).toBeUndefined()
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("范围不符不取回(下一执行范围不得续上一范围的交接)", async () => {
     const dir = await fresh()
     try {

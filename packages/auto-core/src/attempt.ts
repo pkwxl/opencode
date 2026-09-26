@@ -148,6 +148,14 @@ export async function attempt(
     clearDownMarks("session", switches.modelFailbackScope)
   }
   const sessionID = forked ?? session?.value.id ?? chain.id!
+  // Session-agent binding (plans/0055 §8.2): the chain's session lives on the
+  // run's agent profile. Every way a chain acquires a session funnels through
+  // this line — a create, a consumed fork (pending, seeded by the retry /
+  // failover / recovery paths or a fork base), and a reuse or a resumed
+  // takeover (chain.id from the record) — so the binding is written here once
+  // per dispatch, before any record goes to disk. Only under a registry;
+  // without one there is no agent notion and nothing changes (C2).
+  if (opts.routing) chain.agent = opts.routing.runAgent
   // 交互旁路: 此后人工输入发往本会话(收尾等旁路会话同样覆盖)。
   opts.interactive?.attach(sessionID)
   // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
@@ -163,7 +171,9 @@ export async function attempt(
     const inflight = await recallHandover(opts.dir, task.id, relative(test.dir, test.handoffFile))
     if (inflight && inflight.script === undefined && inflight.pinSession === undefined && inflight.nextSession !== sessionID) {
       handoverClaimPrior = inflight
-      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID })
+      // The claimed continuation session carries its agent (plans/0055 §8.2):
+      // the claim is this dispatch's session, acquired on the run's profile.
+      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID, ...(opts.routing ? { agent: opts.routing.runAgent } : {}) })
     }
   }
   // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
@@ -188,6 +198,10 @@ export async function attempt(
         ...(strictResumeActive(opts, switches)
           ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: promptModel }
           : {}),
+        // The session's agent profile (plans/0055 §8.2), under a registry
+        // only: absent = the default agent's, so pre-binding records read
+        // correctly and a no-registry run writes byte-identical files (C2).
+        ...(opts.routing && chain.agent !== undefined ? { agent: chain.agent } : {}),
       })
     }
   }

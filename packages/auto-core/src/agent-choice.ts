@@ -70,18 +70,29 @@ export type StartAgentOpts = {
 // with no fallback under this agent: the caller closes the host, if one
 // started, and stops. A profile env reference that no longer resolves stops
 // the run before any host starts.
+// `profileName` names the agent profile the host started with (the registry's
+// pick when one matched, else the chosen agent's own name, else `opencode`):
+// the run's routing facts carry it as their runAgent, so the chain and the
+// persisted session records name the profile that owns the run's sessions
+// (plans/0055 §8.2). With a caller-supplied host (`managed`) it is the chosen
+// agent's name as the best the caller left knowable.
 // AUTO-RESOLVE: what happens when a profile env reference that passed the run start's reference check no longer resolves when the host starts (a variable unset, a file removed in between)? -> the run stops with exit 1 naming the profile, the variable and the reference (starting the agent without the variable would send its traffic the wrong way, such as around a required proxy, which is worse than a stop the operator can fix)
 export async function startAgent(
   directory: string,
   opts: StartAgentOpts,
-): Promise<{ host: AgentHost; error?: string } | { host?: undefined; error: string }> {
+): Promise<{ host: AgentHost; profileName: string; error?: string } | { host?: undefined; profileName?: undefined; error: string }> {
   // The permission preset reaches only agents without permission events (MA.4).
   const agent = chooseAgent(opts.agent)
+  // The profile the run's host starts with: the registry's pick when the
+  // registry has one of the chosen agent's adapter, otherwise the chosen
+  // agent's own name (the no-registry shape).
+  let profileName = agent?.name ?? "opencode"
   let fromProfile: Pick<AgentHostOptions, "bin" | "env" | "server" | "config"> = {}
   if (!opts.managed && opts.registry) {
     const profile = agentProfileFor(opts.registry, agent)
     if (!profile) log(`◇ the model registry has no agent profile of adapter ${agent?.name ?? "opencode"}; the agent starts without one`)
     else {
+      profileName = profile.name
       const resolved = await resolveProfileEnv(profile)
       if ("problems" in resolved) return { error: resolved.problems.join("\n") }
       log(profileLine(profile))
@@ -117,7 +128,7 @@ export async function startAgent(
   if (agent) log(`◇ agent: ${agent.name}`)
   const degraded = degrade(host.client.capabilities, autoSwitches(), opts)
   for (const note of degraded.notes) log(`⚙ ${note}`)
-  if (degraded.error) return { host, error: degraded.error }
+  if (degraded.error) return { host, profileName, error: degraded.error }
   clampSwitches(degraded.switches)
-  return { host }
+  return { host, profileName }
 }
