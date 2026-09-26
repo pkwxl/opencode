@@ -11,7 +11,7 @@ import { forgetHandover } from "./handover"
 import { log, vlog } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type SessionCommit, type UnitStop } from "./opts"
 import { currentRound } from "./phases"
-import { candidateKey, nowOf, selectContext } from "./routing"
+import { candidateKey, nowOf, selectContext, type RoutingFacts } from "./routing"
 import { select } from "./select"
 import type { Task } from "./tasks"
 import { autoCorrectRefs } from "./refcheck"
@@ -171,16 +171,22 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
 
 // —— Session-agent binding of persisted records (plans/0055 §8.2, §8.3) ——
 
-// Does a recorded session id belong to this run's agent? `runAgent` is the
-// agent profile this run's sessions live on (RoutingFacts.runAgent);
-// undefined = no registry. An absent field is the default agent's record
-// (§8.2: every record written before the binding stays valid), and a run
-// without a registry has no agent notion at all — both pass. Under a registry
-// an explicit agent must name the run's profile: session ids are agent-local
-// (F3), so a record of another agent is a dead session — never resumed, never
-// forked.
-export function recordedAgentOk(runAgent: string | undefined, recorded: string | undefined): boolean {
-  return runAgent === undefined || recorded === undefined || recorded === runAgent
+// Does a recorded session id belong to an agent this run can dispatch on?
+// `routing` undefined = no registry (no verdict, every record passes). Under
+// a registry the recorded agent (absent = the run's start profile, the shape
+// every pre-binding record reads as) must name a profile the registry knows
+// — or be the run's start agent itself, which may run profile-less when the
+// registry holds no profile of the chosen adapter — and its adapter must
+// pass the agent filter: session ids are agent-local (F3), and a filtered-out
+// agent's model is never a candidate, so its sessions are never resumed nor
+// forked (plans/0055 §8.3).
+export function recordedAgentOk(routing: RoutingFacts | undefined, recorded: string | undefined): boolean {
+  if (routing === undefined) return true
+  const agent = recorded ?? routing.runAgent
+  const adapter =
+    routing.registry.agents.get(agent)?.adapter ??
+    (agent === routing.runAgent ? (routing.agentFilter ?? routing.defaultAgent) : undefined)
+  return adapter !== undefined && (routing.agentFilter === undefined || adapter === routing.agentFilter)
 }
 
 // The §10 item 11 eligibility of a strict resume under a registry: the
@@ -207,13 +213,13 @@ export function resumeModelEligible(opts: Opts, switches: Switches, recorded: st
 }
 
 // The §8.3 dead-session verdict of a resume record under a registry: a
-// recorded session is resumed only if its agent is this run's and its
-// recorded model is usable now; otherwise the session is dead and the resume
-// takes the existing path of a new session with the resume note (under strict
-// resume, the rollback path). Returns the reason for the log line; undefined
-// = no verdict (without a registry, or a record that names nothing to check —
-// a non-strict record carries no model, and eligibility then has nothing to
-// judge).
+// recorded session is resumed only if its agent is one this run can dispatch
+// on and its recorded model is usable now; otherwise the session is dead and
+// the resume takes the existing path of a new session with the resume note
+// (under strict resume, the rollback path). Returns the reason for the log
+// line; undefined = no verdict (without a registry, or a record that names
+// nothing to check — a non-strict record carries no model, and eligibility
+// then has nothing to judge).
 export function deadSessionWhy(
   opts: Opts,
   switches: Switches,
@@ -222,8 +228,8 @@ export function deadSessionWhy(
 ): string | undefined {
   const routing = opts.routing
   if (routing === undefined) return undefined
-  if (!recordedAgentOk(routing.runAgent, record.agent)) {
-    return `the recorded session lives on agent ${record.agent}, not this run's ${routing.runAgent}`
+  if (!recordedAgentOk(routing, record.agent)) {
+    return `the recorded session lives on agent ${record.agent ?? routing.runAgent}, which this run does not dispatch on${routing.agentFilter ? ` (agent filter ${routing.agentFilter})` : " (no such agent profile)"}`
   }
   if (record.model !== undefined && !resumeModelEligible(opts, switches, record.model, record.phase, role)) {
     return `the recorded session's model ${record.model} is not usable now`

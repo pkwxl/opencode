@@ -28,6 +28,7 @@ import { ensureInitGitignore } from "@opencode-ai/auto-core/gitignore"
 import { runAll, type RunAllOpts } from "@opencode-ai/auto-core/loop"
 import { loadModes, type ModeSpec } from "@opencode-ai/auto-core/mode"
 import { describeModels, formatModels } from "@opencode-ai/auto-core/models-describe"
+import { probeModels } from "@opencode-ai/auto-core/agent-pool"
 import { planPrelude } from "@opencode-ai/auto-core/plan"
 import type { PlanInput } from "@opencode-ai/auto-core/plan-input"
 import { applyReset, formatResetPlan, planReset } from "@opencode-ai/auto-core/reset"
@@ -227,6 +228,9 @@ const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RE
 // The config flags: the project attributes init freezes into config.json and
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel"]
+// models takes exactly one option: --probe (§9's opt-in probe, which starts
+// agents and spends tokens); check and status stay flagless.
+const MODELS_FLAGS = new Set(["probe"])
 const FLAGLESS = command === "check" || command === "status" || command === "models"
 // reset 是反初始化,没有可配置项: 只接受 -f/--force(跳过确认与工作区干净度闸门)。
 // fix takes its baseline from the existing config and no config flags, so it
@@ -269,9 +273,14 @@ for (const key of flags.keys()) {
     console.error(`--${key} is not a close option${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}: close takes only --reason <text>, --cascade, --commit-changes and --stash-changes (usage: opencode-auto close <ref> [dir] --reason <text>)`)
     process.exit(1)
   }
+  if (command === "models") {
+    if (MODELS_FLAGS.has(key)) continue
+    console.error(`unknown option --${key}: models takes only --probe (a directory argument and no other options)`)
+    process.exit(1)
+  }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
   const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check/status/models only accept a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
+  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check and status only accept a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
   process.exit(1)
 }
 for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
@@ -1420,14 +1429,27 @@ if (command === "status") {
 // per phase type and routing role the tier, the route in force and the
 // candidates, whether each is usable now and why not, plus each entry's layer,
 // steps, key ring names, the classifier list and the profiles' env variable
-// names (never a value). It starts no agent and writes nothing, so it takes no
-// run lock and runs beside a live run. Exit codes: 0 no registry or a registry
-// a run start accepts; 1 one that run and plan would refuse (the problems are
-// printed, after the table when the registry loads).
+// names (never a value). It writes nothing and takes no run lock, so it runs
+// beside a live run. Exit codes: 0 no registry or a registry a run start
+// accepts; 1 one that run and plan would refuse (the problems are printed,
+// after the table when the registry loads).
 // AUTO-RESOLVE: does a registry that loads but has broken references (or a project layer git would commit) exit 1, and is its table printed? -> exit 1, since run and plan refuse it at start, with the table printed before the problems (it shows the operator what the references belong to)
+// --probe (§9) additionally sends the recovery probe prompt to each listed
+// model through the agent pool — the only thing here that starts agents, and
+// opt-in because it costs tokens; the shell only prints the lines the core
+// answers (probeModels, auto-core src/agent-pool.ts). A failed probe is a
+// finding printed per model, not a command error.
 if (command === "models") {
   const description = await describeModels(directory, Date.now())
   for (const line of formatModels(description)) console.log(line)
+  if (flags.has("probe")) {
+    if (description.registry === undefined) console.log("probe: no model registry, nothing to probe")
+    else {
+      console.log("probing every listed model (this sends one short prompt to each; it may take a while)")
+      for (const probe of await probeModels(description.registry, directory))
+        console.log(`${probe.ok ? "◇" : "⚠"} probe ${probe.name} (${probe.agent}): ${probe.line}`)
+    }
+  }
   process.exit(description.problems.length ? 1 : 0)
 }
 
@@ -1441,7 +1463,7 @@ console.error(`usage:
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
   opencode-auto status [dir]
-  opencode-auto models [dir]
+  opencode-auto models [dir] [--probe]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
@@ -1466,7 +1488,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
        --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
-       models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no options and no run lock
+       models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; --probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error
        continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} plan <dir> — it runs the round-close checks and opens the next round
 
 exit codes: 0 all complete; 1 usage/environment error (same when check finds principle-violating statements); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)

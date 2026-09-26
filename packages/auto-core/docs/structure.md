@@ -90,7 +90,8 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Task loop | Iterates a phase's tasks; `LoopCtx` | `src/loop-task.ts` |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |
 | Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only) | `src/conclusion.ts` (0019, 0020) |
-| Agent choice | Which agent a run drives (shell profile > `OPENCODE_AUTO_AGENT` > config > opencode); under a model registry the agent starts with its agent profile | `src/agent-choice.ts` |
+| Agent choice | Which agent a run drives (shell profile > `OPENCODE_AUTO_AGENT` > config > opencode) and the registry profile a name resolves to | `src/agent-choice.ts` |
+| Agent pool | The run's agent hosts under one control: under a model registry one lazily started host per agent profile (a profile nobody selects never spawns), the capability intersection at run start, preflight's bin check and the `models --probe` core; without one the single agent starts eagerly, exactly as before | `src/agent-pool.ts` |
 | Agent environments | An agent profile's env resolved into the overlay its host starts with (values never logged); the loopback proxy warning of preflight | `src/agent-env.ts` (0055) |
 | Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks | `src/capability.ts` (0040) |
 | Usage source | Four `UsageTier`s and their effect on reuse, handover, steer, fork | `src/usage.ts` (0038) |

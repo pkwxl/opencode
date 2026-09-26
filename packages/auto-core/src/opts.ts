@@ -4,8 +4,40 @@
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S1,纯搬运)。
 import type { Interactive } from "./interactive"
 import type { ModeSpec } from "./mode"
-import type { AgentHost } from "./agent/types"
+import type { AgentClient } from "./agent/types"
 import type { PhaseKey } from "./phases/registry"
+
+// The run's agent hosts under one control (plans/0055 §8.1, src/agent-pool.ts):
+// the agent pool under a model registry (one host per agent profile, started
+// lazily) or a wrapper over the one started host without one. `agent` names
+// the agent profile a call applies to — the chain's agent; undefined = the
+// run's start profile (the single host without a registry). An AgentHost is
+// assignable to this minus client/contextLimits, so a caller-supplied host
+// (`managed`) is wrapped once where the run starts (singleHost in
+// src/agent-pool.ts).
+export type ServerControl = {
+  // The client of the profile's host; under a pool the host starts here on
+  // the profile's first selection, so a profile nobody selects never spawns.
+  client(agent?: string): Promise<AgentClient>
+  syncContext(agent?: string): Promise<void>
+  restart(reason: string, agent?: string): Promise<boolean>
+  // Key-ring rotation (§4.3): replaces the config content the next spawn
+  // uses. On the pool this reaches every started host (one ring state, one
+  // config content); restart then applies to the chain's host alone.
+  setConfig?(config: Readonly<Record<string, unknown>> | undefined): void
+  // The context windows of every model the started hosts know (contextLimits
+  // merged; a model on a host that has not started is absent — an unknown
+  // window never excludes a candidate, §6.2 rule 5).
+  contextLimits(): Promise<ReadonlyMap<string, number>>
+  close(): void
+}
+
+// What the session-driving entry points accept in place of an AgentClient:
+// one client (tests, the no-registry single agent) or the run's pool control.
+// Every driver call that takes a client resolves it from the chain's agent
+// (src/agent-pool.ts clientOf); a plain client is returned as is, whatever
+// the agent, so the no-registry path is untouched.
+export type ClientSource = AgentClient | ServerControl
 
 // 任务结局。dirty(plans/0021-commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
 // 出口: 不写运行时状态、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
@@ -65,13 +97,18 @@ export type Opts = {
   // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
   // ask 的人工等待也改由它接收(语义不变)。
   interactive?: Interactive
-  // Agent host control (AgentHost minus client/close): syncContext before a new
-  // session (opencode restarts its server when AGENTS.md changed), restart on
-  // a network-class session error before retrying, and setConfig (opencode)
-  // before a key-ring rotation restart re-spawns with the next key's config
-  // reference (plans/0055 §4.3; absent on hosts that spawn without
-  // driver-supplied config).
-  server?: Pick<AgentHost, "syncContext" | "restart" | "setConfig">
+  // The run's agent hosts under one control (plans/0055 §8.1): the agent pool
+  // under a model registry — one host per agent profile, each started lazily
+  // on the profile's first selection — or a wrapper over the one started host
+  // without one. Every method takes the agent profile the call applies to
+  // (the chain's agent; undefined = the run's start profile / the single
+  // host), syncContext before a new session (opencode restarts its server
+  // when AGENTS.md changed), restart on a network-class session error before
+  // retry, setConfig (opencode) before a key-ring rotation restart re-spawns
+  // with the next key's config reference (§4.3; absent on hosts that spawn
+  // without driver-supplied config — the pool fans it out to every started
+  // host, whose spawn config is one global ring state).
+  server?: ServerControl
   // driver 托管脚本的看门狗: 持续无输出的判定窗口(缺省 10 分钟)与绝对时长上限
   // (缺省不设;config 的 idleTime / idleMax 以分钟设定)。
   idleMs?: number

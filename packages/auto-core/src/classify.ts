@@ -218,11 +218,13 @@ export function describeAnswer(answer: ClassifierAnswer, tz: string, now: number
 // ---------------------------------------------------------------------------
 
 // What one watch needs to ask: the run's client (the classifier's session is
-// created through the run's host), the registry with its classifier list, the
+// created through the run's hosts), the registry with its classifier list, the
 // agent filter, the dispatch clock, a log label (the task id) and the per-call
-// timeout.
+// timeout. `clientOf` resolves the pick's entry agent through the pool
+// (§8.1); absent, every call runs on the watch's own client.
 export type Classifier = {
   client: AgentClient
+  clientOf?: (agent: string) => Promise<AgentClient>
   registry: ModelRegistry
   agentFilter: string | undefined
   now: () => number
@@ -233,11 +235,17 @@ export type Classifier = {
 // The run's classifier, or undefined — no registry, or no classifier list (or
 // an empty one) — in which case nobody asks and the run is byte-identical to
 // one without the feature (C2).
-// AUTO-DECISION: while the run has one agent, the classifier's session is created on the watch's own client, which is the run's host (the agent pool, once it exists, hands out the classifier entry's host the same way; the agent filter already keeps a classifier on another adapter out)
-export function classifierFor(client: AgentClient, routing: RoutingFacts | undefined, label = ""): Classifier | undefined {
+// AUTO-DECISION: the classifier's one-shot session runs on the pick entry's own host when the caller hands the pool's client resolver (the entry's agent, exactly as §7.1 settles: "the pool hands out the entry's host"); the watch's own client remains the fallback, which a no-registry caller and the tests keep passing
+export function classifierFor(
+  client: AgentClient,
+  routing: RoutingFacts | undefined,
+  label = "",
+  clients?: (agent: string) => Promise<AgentClient>,
+): Classifier | undefined {
   if (routing === undefined || !(routing.registry.classifier?.names.length ?? 0)) return undefined
   return {
     client,
+    ...(clients !== undefined ? { clientOf: clients } : {}),
     registry: routing.registry,
     agentFilter: routing.agentFilter,
     now: () => routing.clock?.() ?? Date.now(),
@@ -345,9 +353,12 @@ async function runClassifier(
   input: string,
   now: number,
 ): Promise<ClassifierAnswer | undefined> {
-  const { registry, client } = classifier
+  const { registry } = classifier
   const text = renderClassifyError({ now: isoInZone(now, registry.tz), tz: registry.tz, error: input })
   vlog(`  classifier: asking ${pick.name} about a failure message (call ${calls}/${CLASSIFY_CALL_LIMIT})`)
+  // The entry's own host (§8.1): the pool starts it here if the entry is the
+  // first dispatch on its agent; the watch's client is the fallback.
+  const client = (await classifier.clientOf?.(pick.entry.agent)) ?? classifier.client
   const outcome = await oneShot(client, pick.entry, text, classifier.timeoutMs)
   if (outcome.usage.steps > 0) usageSink?.(outcome.usage, pick.name)
   const prefix = classifier.label ? `${classifier.label} ` : ""

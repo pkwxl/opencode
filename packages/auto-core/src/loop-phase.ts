@@ -86,7 +86,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
     const closedTasks = plan?.tasks.flatMap((task) => (task.closed === undefined ? [] : [{ id: task.id, title: task.title, reason: task.closed }]))
     let draftIssue: string | undefined
     const distilled = await requireArtifact(
-      serverHandle.client,
+      serverHandle,
       distillTask,
       renderPhaseHandover({ phase: phase.entry, handover, next, acceptance, closedTasks }),
       {
@@ -380,7 +380,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // 会话选择无需泛化。
       if (!route.phase.entry.hasTasks) {
         banner("k knowledge distillation: migration knowledge capture")
-        const extracted = await extractKnowledge(serverHandle.client, directory, {
+        const extracted = await extractKnowledge(serverHandle, directory, {
           agent: agentName,
           dir: directory,
           verbose: opts.verbose,

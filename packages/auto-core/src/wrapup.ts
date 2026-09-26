@@ -12,13 +12,12 @@
 // (module-split-plan §D.2).
 
 import { dirname, join } from "node:path"
-import type { AgentClient } from "./agent/types"
 import type { SessionChain } from "./chain"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
 import { parseResult, type ReportResult } from "./document/roles"
 import { autobanner, log } from "./log"
-import type { Opts, UnitStop } from "./opts"
+import type { ClientSource, Opts, UnitStop } from "./opts"
 import type { Plan, Task } from "./tasks"
 import { renderWrapup } from "./prompt"
 import { runSession } from "./session"
@@ -40,7 +39,7 @@ async function reportProblems(dir: string, task: Task): Promise<string[]> {
 // name used when the commit fails; solo is the off/ondemand whole-task mode (the
 // report is an output summary rather than an index). undefined = wrap-up done.
 export async function runWrapup(
-  client: AgentClient,
+  client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,

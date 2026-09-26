@@ -174,18 +174,31 @@ describe("dispatch coverage of the run start (§6.3)", () => {
 })
 
 describe("routingFacts (the filter and the default agent)", () => {
-  test("the default agent is the configured agent alone (R6: it is not a filter)", () => {
+  test("the configured agent is the default agent, never a filter (R6); the filter is the shell profile agent or OPENCODE_AUTO_AGENT alone (§9)", () => {
     const reg = registry([], {})
-    const facts = routingFacts(reg, "claude")
-    expect(facts.defaultAgent).toBe("claude")
-    expect(facts.agentFilter).toBe("claude")
-    expect(routingFacts(reg, undefined).defaultAgent).toBe("opencode")
+    // Scrub the ambient OPENCODE_AUTO_AGENT the driver exports to its
+    // children (the deliverables doc's environment caveat) — the filter
+    // reads it through autoSwitches.
+    const ambient = process.env.OPENCODE_AUTO_AGENT
+    delete process.env.OPENCODE_AUTO_AGENT
+    try {
+      const facts = routingFacts(reg, "claude")
+      expect(facts.defaultAgent).toBe("claude")
+      // A configured agent no longer filters: with the agent pool,
+      // candidates on every profile are selectable and `claude` only names
+      // the agent raw override values and unqualified records resolve to.
+      expect(facts.agentFilter).toBeUndefined()
+      expect(facts.filterSource).toBeUndefined()
+      expect(routingFacts(reg, undefined).defaultAgent).toBe("opencode")
+    } finally {
+      if (ambient !== undefined) process.env.OPENCODE_AUTO_AGENT = ambient
+    }
   })
 
-  // The run agent (§8.2): the profile the started host runs on, passed by the
-  // loop from startAgent's result; without it the configured agent's own name
-  // is the fallback (exact whenever the profile is named like its adapter,
-  // which the implied opencode profile always is).
+  // The run agent (§8.2): the profile the pool names as its default, passed
+  // by the loop from the pool's start; without it the configured agent's own
+  // name is the fallback (exact whenever the profile is named like its
+  // adapter, which the implied opencode profile always is).
   test("runAgent is the started profile when passed, else the configured agent's name", () => {
     const reg = registry([], {})
     expect(routingFacts(reg, undefined, "claude-b").runAgent).toBe("claude-b")

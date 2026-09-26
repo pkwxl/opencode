@@ -89,6 +89,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // adapter; what remains seeds chains and formats output over AgentClient).
   // driver (orchestration plane)
   "agent-choice": "driver",
+  // The agent pool (plans/0055 §8.1, §12): one lazily started host per agent
+  // profile, the capability intersection's run start, preflight's bin check
+  // and the models command's probe. Sits below the session layer, above the
+  // agent domain: it names the host factories, never a session module.
+  "agent-pool": "driver",
   // Agent environments (plans/0055 §4.2, §8.10): an agent profile's env
   // resolved into the overlay a host starts with, and the loopback proxy
   // warning of preflight.
@@ -392,6 +397,29 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
       "models-describe",
     ],
     why: "the classifier answers watch's retry branch from below it (plans/0055 §7.1): it reads the registry, the down marks and the rings and runs one tool-less session on the client it is handed, so it must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the agent start, an agent host or the models command's data",
+  },
+  // AUTO-DECISION: agent-pool gets a one-way rule besides its classification row (§12 places it below the session layer and above the agent domain; every session-driving module resolves clients and host control through it, so an upward import would form a cycle — and the pool starting a session-driving module's machinery would invert who serves whom)
+  {
+    from: "agent-pool",
+    to: [
+      "loop",
+      "loop-phase",
+      "loop-plan",
+      "loop-task",
+      "loop-preflight",
+      "runner",
+      "artifact",
+      "session",
+      "attempt",
+      "watch",
+      "exec-session",
+      "execute",
+      "unit-commit",
+      "interactive",
+      "classify",
+      "models-describe",
+    ],
+    why: "the agent pool holds the run's agent hosts (plans/0055 §8.1, §12): the loop starts it, the session layer resolves every client through it and preflight checks its bins, so it must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the classifier or the models command's data",
   },
   {
     from: "watch",

@@ -3,7 +3,7 @@
 // fixtures where the round-close check (G8) or the row-3 re-sync's
 // uncommitted change is asserted. The loop side of the stop condition (D6,
 // D8) needs the loop harness (plans/0053 A7, B6); run's drift stop (D34)
-// lands here too — it precedes startAgent, so runAll drives it without an
+// lands here too — it precedes the agent pool's start, so runAll drives it without an
 // agent over the same fixtures.
 import { describe, expect, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -594,7 +594,7 @@ describe("run's drift stop (D34)", () => {
 
   // The fixture preflight needs: a git repository as init leaves it, with the
   // agent contract and a committed round — the stop the drift check makes
-  // precedes startAgent, so no agent has to exist.
+  // precedes the agent pool's start, so no agent has to exist.
   test(
     "runAll exits 1 naming plan and writes nothing; a value the sync refuses stops with the guard's error",
     withDir(async (dir) => {

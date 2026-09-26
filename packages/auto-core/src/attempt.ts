@@ -15,7 +15,7 @@ import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
 import { formatWindowState, usableAt } from "./model-window"
 import type { ModelRegistry } from "./models"
-import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
+import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import { currentRound } from "./phases"
 import { candidateKey, nowOf, selectContext } from "./routing"
 import { candidatesOf, select } from "./select"
@@ -25,7 +25,7 @@ import { type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
-import { formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
+import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, worktreeNote, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
 import { createStuckTracker } from "./stuck"
 import { SWITCH_ENV, type Switches } from "./switches"
@@ -72,7 +72,7 @@ function moveReason(registry: ModelRegistry, previous: string | undefined, now: 
 
 
 export async function attempt(
-  client: AgentClient,
+  client: ClientSource,
   task: Task,
   promptText: string,
   opts: Opts,
@@ -85,20 +85,146 @@ export async function attempt(
   // 恢复或重试场景下的旧请求不应注入本会话;归档历史 tmp/test.<n>.sh 保留)。
   if (test) await rm(join(test.tmp, "test.sh"), { force: true })
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  // 中断恢复接管的会话(链上有会话且恢复说明待注入): 首个提示词无条件进原会话
-  // ——恢复语义即"接着被中断的那个会话继续",不受复用开关与阈值约束(与
-  // seedForkSession 的"恢复续跑优先于分叉"同一判据)。说明用后即清,此后该链
-  // 回归常规复用规则。分叉会话(pending)在场时让位: runSession 的重试环会同时
-  // 挂上 note(重试说明)与 pending(失败会话的副本)且刻意不清 chain.id(下次
-  // 重试仍从原会话重新 fork),此刻要接管的是副本而非复用原会话。
-  // Without resumable sessions (MA.4) the chain's session never takes another
-  // prompt: recovery and reuse both open a new one.
-  const resumable = client.capabilities.resume
-  const resumed = resumable && chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
+  // Registry selection runs before anything is created (plans/0055 §8.3): a
+  // session never crosses agents, so the pick decides whose host serves the
+  // dispatch — the client the session is created on, the host syncContext
+  // reaches and the chain's agent all come from it. Without a registry the
+  // target resolves exactly as before, after the session exists (C2).
+  // The chain's own agent decides the reuse gates' capabilities (the chain's
+  // session lives on it); a chain without a session — and without a pending
+  // fork — has none yet and needs no host for them (the gates only read
+  // capabilities when a session exists), so the pick below supplies the
+  // client that matters.
+  const resumable = chain.id !== undefined || chain.pending !== undefined ? (await clientOf(client, chain.agent)).capabilities.resume : true
+  // This dispatch's model, resolved before anything is created: the pick
+  // also names the agent whose host serves it. promptModel is the pick's
+  // key for the strict-resume record. (Without a registry the target stays
+  // where it always was — resolved after the session exists, below — so the
+  // session-scope failback clear still lands before it, C2.)
+  let promptModel: string | undefined
+  let resumed = resumable && chain.id !== undefined && chain.note !== undefined && chain.pending === undefined
+  let reuse = resumable && chain.id !== undefined && (resumed || (switches.reuseSession && reuseAllowed(chain, cap, Date.now())))
+  let target: string | undefined
+  let promptVariant: string | undefined
+  // The watch's steer context under a registry (§4.5): the picked
+  // candidate's key, its entry (when the pick is one) and the step the
+  // dispatch names — set with target below, undefined without a registry.
+  let steerKey: string | undefined
+  let steerEntry: ModelEntry | undefined
+  let steerStep: number | undefined
+  // The agent profile this dispatch's session lives on (§8.3): the pick's
+  // entry profile, the default agent for a raw override value; undefined
+  // without a registry — then nothing below reads it.
+  let pickAgent: string | undefined
+  if (opts.routing) {
+    const facts = opts.routing
+    const limits = await contextLimitsOf(client)
+    const ctx = selectContext(facts, switches, cap, limits)
+    const role = roleOf(chain)
+    const list = candidatesOf(ctx, { role, entry: opts.phase?.entry, now: nowOf(facts) })
+    const decision = select(ctx, {
+      role,
+      entry: opts.phase?.entry,
+      now: nowOf(facts),
+      current: chain.modelEntry,
+      continuation: reuse || chain.pending !== undefined,
+    })
+    if (decision.kind === "empty") {
+      const detail = `${list.override ? `the ${list.override} override` : `the ${list.tier} list`}${list.route ? ` (route ${list.route.key})` : ""}`
+      return {
+        type: "blocked",
+        question: `model registry: no candidate is left for this session's routing (${detail}, agent filter ${facts.agentFilter ?? "none"}); fix the registry or the filter and re-run`,
+      }
+    }
+    if (decision.kind === "wait") {
+      // §6.3's wait: nothing is usable now, but a candidate that is not
+      // down opens later through its window. No session content exists to
+      // probe, so runSession sleeps inside the unit until the earliest
+      // opening plus hibernate's jitter and this loop dispatches again
+      // (the re-selection reads the advanced clock; a suspend that wakes
+      // past a short window simply waits for its next opening).
+      return {
+        type: "blocked",
+        question: `no usable model candidate now: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is outside its windows; waiting for the earliest opening`,
+        noModel: true,
+        windowWait: {
+          until: decision.until,
+          model: candidateKey(decision.candidate),
+          tier: list.tier,
+          opens: formatWindowState({ open: false, opens: decision.until }, facts.registry.tz, nowOf(facts)),
+        },
+      }
+    }
+    if (decision.kind === "probe") {
+      return {
+        type: "blocked",
+        question: `no usable model candidate: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is down or outside its windows; entering the wait-and-probe loop`,
+        noModel: true,
+      }
+    }
+    const picked = decision.candidate
+    // Session lifetime of a step (§4.5): a continuation of the same session
+    // keeps the step it reached (the chain's field, written by the watch
+    // that stepped up); a resumed takeover recomputes it from the context
+    // size rebuilt from the session's history (chain.used, nothing
+    // persisted); every other dispatch — a new prompt, the session after a
+    // handover, a failover onto this entry — starts at the base step.
+    let step = 0
+    if (picked.kind === "entry" && (decision.via === "continuation" || resumed)) {
+      step = resumed ? stepForUsed(picked.entry, limits, chain.used) : (chain.modelStep ?? 0)
+    }
+    const entryOf = picked.kind === "entry" ? picked.entry : undefined
+    target = picked.kind === "entry" ? (stepId(picked.entry, step) ?? picked.entry.model) : picked.model
+    promptVariant = entryOf !== undefined ? entryOf.variant : undefined
+    const key = candidateKey(picked)
+    chain.modelEntry = key
+    chain.model = target
+    chain.modelStep = entryOf !== undefined ? step : 0
+    promptModel = key
+    steerKey = key
+    steerEntry = entryOf
+    steerStep = entryOf !== undefined ? step : 0
+    pickAgent = picked.kind === "entry" ? picked.entry.agent : facts.defaultAgent
+    // ◈ display (§6.5): the internal name with the tier, the agent and
+    // model behind it, and what routed the dispatch; a move names its
+    // reason — window, quota (the classified failures) or failback. Key
+    // rings are a later step. Like the no-registry line: every new session
+    // shows one, a reused session only on a change.
+    const bracket = picked.kind === "entry" ? `${picked.entry.agent}:${picked.entry.model ?? "default"}` : `${facts.defaultAgent}:${picked.model}`
+    const routePart =
+      list.override === "env"
+        ? `override ${SWITCH_ENV.model}`
+        : list.override === "failback"
+          ? "override /failback"
+          : `route ${list.route?.key ?? roleOf(chain)}`
+    const previous = chain.modelShown !== undefined && chain.modelShown !== key ? chain.modelShown : undefined
+    const reason = moveReason(facts.registry, previous, nowOf(facts))
+    if (key !== chain.modelShown || !reuse) {
+      log(`◈ ${task.id} using model ${key} [${list.tier} · ${bracket}] (${routePart}${reason ? `; ${reason}` : ""})`)
+      chain.modelShown = key
+    }
+    // §8.3: a session never crosses agents. A pick on another agent than
+    // the chain's live session (or its pre-created fork) cannot take this
+    // prompt: the id/pending session is left behind and the dispatch opens
+    // a blank session with the worktree-check note — both for a failover
+    // (switchModel writes this state itself) and for a continuation whose
+    // model died under it (§6.2 continuity ties move only new prompts, so
+    // the session itself is not moved).
+    if (chain.agent !== undefined && chain.agent !== pickAgent && (chain.pending !== undefined || reuse)) {
+      if (chain.pending !== undefined)
+        log(`↻ ${task.id} the pre-created session ${chain.pending} lives on agent ${chain.agent}; the dispatch moved to ${pickAgent}, so a new session opens there`)
+      chain.pending = undefined
+      chain.id = undefined
+      chain.failed = undefined
+      chain.pct = 100
+      chain.note = worktreeNote(`The dispatch moved to agent ${pickAgent} (a session never crosses agents) and did not inherit the earlier session's context`)
+      resumed = false
+      reuse = false
+    }
+  }
   // 链内复用受 OPENCODE_AUTO_REUSE_SESSION 管控(缺省 off): off 时任务内每个
   // 提示词都开新会话,阈值(占比/用量/闲置)不再参与决策。
   const reuseSession = switches.reuseSession
-  const reuse = resumable && chain.id !== undefined && (resumed || (reuseSession && reuseAllowed(chain, cap, Date.now())))
   // 测试交接判据的回落值(D1): 复用/恢复接管的会话起跑就背着链上已用量,首个
   // message.updated 到达前的测试请求照样要判得出来;fork 与全新会话归零——
   // chain.used 是上一个会话的残值,照搬会让刚起跑的小会话在首次测试就误判超限、
@@ -127,14 +253,18 @@ export async function attempt(
   // 消费即清——瞬时错误重试时 pending 已清,自然回落 create 路径(设计 §4.3)。
   const forked = reuse ? undefined : chain.pending
   chain.pending = undefined
+  // The client this dispatch runs on (§8.1): the pick's agent under a
+  // registry, the chain's for a consumed fork or reuse (the same agent the
+  // pick kept); the no-registry source itself, unchanged.
+  const dispatchClient: AgentClient = await clientOf(client, pickAgent ?? (reuse || forked !== undefined ? chain.agent : undefined))
   // 新会话前同步 AGENTS.md: 有更新则重启 server 再开新会话,使新会话加载最新
   // system context(AGENTS.md 每个 provider turn 现场重读,重启兜底缓存场景)。
   // 分叉会话已在 seedForkSession 分叉前同步过。
-  if (!reuse && !forked) await opts.server?.syncContext()
+  if (!reuse && !forked) await opts.server?.syncContext(pickAgent ?? chain.agent)
   // 显式标题: 新建会话直接以本阶段提交标题命名(短标签,如 `T-001 S2 编写 schema`),
   // 无提交标题的会话(dryrun 等)回落 `[auto] <任务>`;分叉会话已在 forkSession
   // 改名,不经 create。
-  const session = reuse || forked ? undefined : await client.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
+  const session = reuse || forked ? undefined : await dispatchClient.create({ title: chain.subject ? commitTitle(chain.subject) : `[auto] ${task.id} ${task.title}` })
   if (session && !session.ok) return { type: "blocked", question: `session creation failed: ${formatClientError(session.error)}` }
   // failback 粒度 session(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): 每个全新会话起点
   // 都清链上降级候选、回试首选模型。仅 create 路径(会话复用与 fork 消费不动)——
@@ -148,16 +278,21 @@ export async function attempt(
     clearDownMarks("session", switches.modelFailbackScope)
   }
   const sessionID = forked ?? session?.value.id ?? chain.id!
-  // Session-agent binding (plans/0055 §8.2): the chain's session lives on the
-  // run's agent profile. Every way a chain acquires a session funnels through
-  // this line — a create, a consumed fork (pending, seeded by the retry /
-  // failover / recovery paths or a fork base), and a reuse or a resumed
-  // takeover (chain.id from the record) — so the binding is written here once
-  // per dispatch, before any record goes to disk. Only under a registry;
-  // without one there is no agent notion and nothing changes (C2).
-  if (opts.routing) chain.agent = opts.routing.runAgent
-  // 交互旁路: 此后人工输入发往本会话(收尾等旁路会话同样覆盖)。
-  opts.interactive?.attach(sessionID)
+  // Session-agent binding (plans/0055 §8.2): the chain's session lives on
+  // the agent profile this dispatch picked — the pick's entry profile, the
+  // default agent for a raw override value (the agent pool runs one host per
+  // profile, §8.1, so the session truly lives on it). Every way a chain
+  // acquires a session funnels through this line — a create, a consumed fork
+  // (pending, seeded by the retry / failover / recovery paths or a fork
+  // base), and a reuse or a resumed takeover (chain.id from the record,
+  // which runTask restored from the record's own agent) — so the binding is
+  // written here once per dispatch, before any record goes to disk. Only
+  // under a registry; without one there is no agent notion and nothing
+  // changes (C2).
+  if (opts.routing) chain.agent = pickAgent
+  // 交互旁路: 此后人工输入发往本会话(收尾等旁路会话同样覆盖); the sideband
+  // resolves the client per session from the chain's agent (§8.1).
+  opts.interactive?.attach(sessionID, opts.routing ? pickAgent : undefined)
   // 测试交接中断恢复(§I): 交接收口后开出的续跑会话在此认领——它自己被打断时,
   // 下次运行从它分叉接回上下文。定版前的会话(记录里还留着待跑脚本与定版锚点)
   // 不认领,那一态的恢复靠定版点分叉。
@@ -172,8 +307,8 @@ export async function attempt(
     if (inflight && inflight.script === undefined && inflight.pinSession === undefined && inflight.nextSession !== sessionID) {
       handoverClaimPrior = inflight
       // The claimed continuation session carries its agent (plans/0055 §8.2):
-      // the claim is this dispatch's session, acquired on the run's profile.
-      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID, ...(opts.routing ? { agent: opts.routing.runAgent } : {}) })
+      // the claim is this dispatch's session, on the agent it was created on.
+      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID, ...(opts.routing && chain.agent !== undefined ? { agent: chain.agent } : {}) })
     }
   }
   // 进度记录: 携带阶段的会话(执行链 + 阶段步骤旁路)写 active 记录,应用中断后
@@ -183,7 +318,6 @@ export async function attempt(
   // 错误把记录还原为下发前快照,被弃的 fork 副本不顶替真实恢复点(保留
   // plans/0015-session-error-retry-plan.md 第 4 点的保护,改为"下发即写 + 失败还原")。
   // 本次提示词的生效模型(target 求值后回填,remember 写严格恢复记录用)。
-  let promptModel: string | undefined
   const remember = async () => {
     if (opts.dir && chain.phase) {
       await saveProgress(opts.dir, {
@@ -225,122 +359,22 @@ export async function attempt(
   // ——它本就靠反复被拒探查权限,重复报错是其正常形态,不是死循环。
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
-    const events = await client.events(sse.signal)
-    // This session's model. Under a model registry (plans/0055 §6) selection
-    // decides it: the candidate list of the session's role and phase type,
-    // the overrides of §9, and — for a continuation of the same prompt (a
-    // retry, a fork after a failure, the recovery loop's re-dispatch, a
-    // strict resume; reuse or a consumed pending fork here) — the chain's
-    // entry while it is still usable. The pick names the prompt's model and
-    // variant; nothing usable returns with noModel for runSession to act on
-    // (§6.3: wait for the earliest window opening, or probe in the
-    // wait-and-probe loop), and an emptied list is a blocked refusal.
-    // Without a registry (plans/0017 C.3/E) the env-switch chain applies,
-    // byte for byte as before: chain fallback candidate > phase-scoped
-    // sticky > /failback runtime override > the routing table (role > phase
-    // type id > preset letter > wildcard, resolveModel). An undefined target
-    // sends no model key: with both variables unset and no override the whole
-    // chain stays undefined, byte-identical to the unrouted call (not
-    // model: undefined).
+    const events = await dispatchClient.events(sse.signal)
+    // Under a registry the model was resolved before anything was created
+    // (plans/0055 §6): the candidate list of the session's role and phase
+    // type, the overrides of §9, and, for a continuation of the same prompt
+    // (a retry, a fork after a failure, the recovery loop's re-dispatch, a
+    // strict resume), the chain's entry while it is still usable — and the
+    // pick also names the agent whose host serves the dispatch (§8.3).
+    // Without a registry (plans/0017 C.3/E) the env-switch chain applies
+    // here, byte for byte as before — after the session-scope failback clear
+    // above — : chain fallback candidate > phase-scoped sticky > /failback
+    // runtime override > the routing table (role > phase type id > preset
+    // letter > wildcard, resolveModel). An undefined target sends no model
+    // key: with both variables unset and no override the whole chain stays
+    // undefined, byte-identical to the unrouted call (not model: undefined).
     const override = failbackOverride()
-    let target: string | undefined
-    let promptVariant: string | undefined
-    // The watch's steer context under a registry (§4.5): the picked
-    // candidate's key, its entry (when the pick is one) and the step the
-    // dispatch names — set with target below, undefined without a registry.
-    let steerKey: string | undefined
-    let steerEntry: ModelEntry | undefined
-    let steerStep: number | undefined
-    if (opts.routing) {
-      const facts = opts.routing
-      const limits = await client.contextLimits()
-      const ctx = selectContext(facts, switches, cap, limits)
-      const list = candidatesOf(ctx, { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts) })
-      const decision = select(ctx, {
-        role: roleOf(chain),
-        entry: opts.phase?.entry,
-        now: nowOf(facts),
-        current: chain.modelEntry,
-        continuation: reuse || forked !== undefined,
-      })
-      if (decision.kind === "empty") {
-        const detail = `${list.override ? `the ${list.override} override` : `the ${list.tier} list`}${list.route ? ` (route ${list.route.key})` : ""}`
-        if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
-        return {
-          type: "blocked",
-          question: `model registry: no candidate is left for this session's routing (${detail}, agent filter ${facts.agentFilter ?? "none"}); fix the registry or the filter and re-run`,
-        }
-      }
-      if (decision.kind === "wait") {
-        // §6.3's wait: nothing is usable now, but a candidate that is not
-        // down opens later through its window. No session content exists to
-        // probe, so runSession sleeps inside the unit until the earliest
-        // opening plus hibernate's jitter and this loop dispatches again
-        // (the re-selection reads the advanced clock; a suspend that wakes
-        // past a short window simply waits for its next opening).
-        if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
-        return {
-          type: "blocked",
-          question: `no usable model candidate now: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is outside its windows; waiting for the earliest opening`,
-          noModel: true,
-          windowWait: {
-            until: decision.until,
-            model: candidateKey(decision.candidate),
-            tier: list.tier,
-            opens: formatWindowState({ open: false, opens: decision.until }, facts.registry.tz, nowOf(facts)),
-          },
-        }
-      }
-      if (decision.kind === "probe") {
-        if (handoverClaimPrior && opts.dir) await saveHandover(opts.dir, handoverClaimPrior)
-        return {
-          type: "blocked",
-          question: `no usable model candidate: every candidate of ${list.override ? `the ${list.override} override` : `the ${list.tier} list`} is down or outside its windows; entering the wait-and-probe loop`,
-          noModel: true,
-        }
-      }
-      const picked = decision.candidate
-      // Session lifetime of a step (§4.5): a continuation of the same session
-      // keeps the step it reached (the chain's field, written by the watch
-      // that stepped up); a resumed takeover recomputes it from the context
-      // size rebuilt from the session's history (chain.used, nothing
-      // persisted); every other dispatch — a new prompt, the session after a
-      // handover, a failover onto this entry — starts at the base step.
-      let step = 0
-      if (picked.kind === "entry" && (decision.via === "continuation" || resumed)) {
-        step = resumed ? stepForUsed(picked.entry, limits, chain.used) : (chain.modelStep ?? 0)
-      }
-      const entryOf = picked.kind === "entry" ? picked.entry : undefined
-      target = picked.kind === "entry" ? (stepId(picked.entry, step) ?? picked.entry.model) : picked.model
-      promptVariant = entryOf !== undefined ? entryOf.variant : undefined
-      const key = candidateKey(picked)
-      chain.modelEntry = key
-      chain.model = target
-      chain.modelStep = entryOf !== undefined ? step : 0
-      promptModel = key
-      steerKey = key
-      steerEntry = entryOf
-      steerStep = entryOf !== undefined ? step : 0
-      // ◈ display (§6.5): the internal name with the tier, the agent and
-      // model behind it, and what routed the dispatch; a move names its
-      // reason — window, quota (the classified failures) or failback. Key
-      // rings are a later step. Like the no-registry line: every new session
-      // shows one, a reused session only on a change.
-      const bracket =
-        picked.kind === "entry" ? `${picked.entry.agent}:${picked.entry.model ?? "default"}` : `${facts.defaultAgent}:${picked.model}`
-      const routePart =
-        list.override === "env"
-          ? `override ${SWITCH_ENV.model}`
-          : list.override === "failback"
-            ? "override /failback"
-            : `route ${list.route?.key ?? roleOf(chain)}`
-      const previous = chain.modelShown !== undefined && chain.modelShown !== key ? chain.modelShown : undefined
-      const reason = moveReason(facts.registry, previous, nowOf(facts))
-      if (key !== chain.modelShown || !reuse) {
-        log(`◈ ${task.id} using model ${key} [${list.tier} · ${bracket}] (${routePart}${reason ? `; ${reason}` : ""})`)
-        chain.modelShown = key
-      }
-    } else {
+    if (!opts.routing) {
       target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
       promptModel = target
     }
@@ -370,7 +404,7 @@ export async function attempt(
     // 结束路径此处无 effect。
     let watchFailed = false
     const watching = watch(
-      client,
+      dispatchClient,
       sessionID,
       events,
       opts,
@@ -412,7 +446,7 @@ export async function attempt(
     // 作废),不再等 POST 直接进下方 watching 的会话错误收口;watch 无错误则
     // 透传 POST 自身结果。竞速落败后 prompting 的迟到结果无人消费(dispatch
     // never rejects, 0037 D2, so nothing to catch).
-    const prompting = client.prompt(
+    const prompting = dispatchClient.prompt(
       {
         session: sessionID,
         agent: opts.agent,
@@ -507,7 +541,7 @@ export async function attempt(
     // 进度改名: 复用会话的标题停留在旧阶段,结束时改名为本阶段提交标题,使标题
     // 前缀始终反映会话的最新进度(`T-001 S1 …` → `T-001 S2 …` → `T-001 wrapup …`);
     // 新建会话已在创建时命名,无需重复。
-    if (reuse && chain.subject) await renameSession(client, chain, chain.subject)
+    if (reuse && chain.subject) await renameSession(dispatchClient, chain, chain.subject)
     // 可重试的会话错误(plans/0015-session-error-retry-plan.md): 半截失败态——链状态与
     // progress.json 一并还原为本轮下发前的原会话/原记录,被弃的 fork 副本不顶替
     // 真实恢复点,交给 runSession 的重试循环从原会话重新 fork。不可重试的会话

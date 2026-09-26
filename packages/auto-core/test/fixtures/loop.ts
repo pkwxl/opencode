@@ -20,6 +20,7 @@ import { join } from "node:path"
 import { spyOn } from "bun:test"
 import type { AgentHost, AgentMessage } from "../../src/agent/types"
 import { EOF_MARK } from "../../src/doccheck"
+import { singleHost } from "../../src/agent-pool"
 import { runPhaseLoop } from "../../src/loop-phase"
 import type { RunAllOpts } from "../../src/loop-preflight"
 import type { LoopCtx } from "../../src/loop-task"
@@ -258,6 +259,9 @@ export async function loopFixture(
   const options = typeof agentOptions === "function" ? agentOptions(dir) : agentOptions
   const agent = fakeAgent({ ...options, turn: options.turn ?? artifactTurns(dir) })
   const host: AgentHost = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+  // The loop's server control is the pool surface; the harness wraps its one
+  // fake host in it (no registry, one agent).
+  const pool: LoopCtx["server"] = { ...singleHost(host), startedAgents: () => ["fake"] }
   return {
     dir,
     agent,
@@ -273,7 +277,7 @@ export async function loopFixture(
       const ctx: LoopCtx = {
         directory: dir,
         opts: { phases, ...rest },
-        server: host,
+        server: pool,
         agentName: "auto",
         phases,
         manual: phases === "m",

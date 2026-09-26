@@ -45,14 +45,15 @@ import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { checkTimeZone, DEFAULT_WINDOW_TZ, parseWindow, type ModelWindow } from "./model-window"
 import { PHASE_LETTERS, TIERS, type Tier } from "./phases/registry"
-import { shellProfile } from "./shell"
+import { registeredAdapterNames, shellProfile } from "./shell"
 import { MODEL_ROLES, SWITCH_ENV, type AgentChoice } from "./switches"
 
 // The project layer, relative to the target directory.
 export const MODELS_FILE = join(".opencode", "auto", "models.json")
 
 // The adapters the core ships. A shell that registers another adapter passes
-// the extended list to loadModels.
+// the extended list to loadModels; the default accepts every registered name
+// beside these (registerAgentAdapter, src/shell.ts, plans/0055 §8.8).
 export const BUILTIN_ADAPTERS: readonly AgentChoice[] = ["opencode", "claude"]
 
 // The implied agent profile of a registry without one.
@@ -145,7 +146,8 @@ export type LoadModelsOptions = {
   // Phase type ids a route key may name: the builtin types and the project's
   // custom types.
   phaseTypes: readonly string[]
-  // The adapters a profile may name; default BUILTIN_ADAPTERS.
+  // The adapters a profile may name; default BUILTIN_ADAPTERS plus every
+  // adapter a shell registered (§8.8).
   adapters?: readonly string[]
   // Where OPENCODE_AUTO_MODELS and XDG_CONFIG_HOME are read; default process.env.
   env?: Record<string, string | undefined>
@@ -335,7 +337,7 @@ class Validator {
     private readonly options: LoadModelsOptions,
     private readonly layers: RegistryLayer[],
   ) {
-    this.adapters = options.adapters ?? BUILTIN_ADAPTERS
+    this.adapters = options.adapters ?? [...BUILTIN_ADAPTERS, ...registeredAdapterNames()]
     this.home = options.home ?? homedir()
   }
 

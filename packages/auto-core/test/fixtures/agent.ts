@@ -15,6 +15,8 @@ import type {
   AgentError,
   AgentErrorPatterns,
   AgentEvent,
+  AgentHost,
+  AgentHostFactory,
   AgentMessage,
   AgentResult,
   AgentTokens,
@@ -142,6 +144,37 @@ export type FakeAgent = {
   // Prompts and steers in dispatch order.
   prompts: PromptInput[]
   steers: string[]
+}
+
+// The host side of a fake agent (the agent pool's two-adapter tests,
+// plans/0055 §8.1/§14): an AgentHostFactory that starts nothing eagerly —
+// each factory call is one lazy host start over the fake's client — and
+// records the starts, the restarts, the setConfig calls and the closes.
+export function fakeAgentHost(agent: FakeAgent): {
+  factory: AgentHostFactory
+  starts: () => number
+  restarts: () => string[]
+  closed: () => number
+} {
+  let started = 0
+  let closed = 0
+  const restarts: string[] = []
+  const factory: AgentHostFactory = async () => {
+    started += 1
+    return {
+      client: agent.client,
+      syncContext: async () => {},
+      restart: async (reason) => {
+        restarts.push(reason)
+        return true
+      },
+      setConfig: () => {},
+      close: () => {
+        closed += 1
+      },
+    }
+  }
+  return { factory, starts: () => started, restarts: () => restarts, closed: () => closed }
 }
 
 export function fakeAgent(options: FakeAgentOptions = {}): FakeAgent {

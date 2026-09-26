@@ -16,7 +16,7 @@ import { block, loadPlan, next } from "./tasks"
 import { phaseKey, type PhaseUnit } from "./phases"
 import { recallProgress } from "./resume"
 import { runTask } from "./runner"
-import type { AgentHost } from "./agent/types"
+import type { AgentPool } from "./agent-pool"
 import type { RoutingFacts } from "./routing"
 import { statsTask } from "./stats"
 import { autoSwitches } from "./switches"
@@ -25,7 +25,10 @@ import { stepPause } from "./step"
 export type LoopCtx = {
   directory: string
   opts: RunAllOpts
-  server: AgentHost
+  // The run's agent pool (plans/0055 §8.1): one host per agent profile under
+  // a registry, the one started host without one. runTask resolves each
+  // dispatch's client from the chain's agent through it.
+  server: AgentPool
   agentName: string
   phases: string
   // The no-phase mode (phases = "m"): the single phase P01-implement is manual —
@@ -97,7 +100,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // 映射;同 id 幂等——中断续跑同任务不重置、不重复计数。
     await statsTask(directory, task.id)
     const start = Date.now()
-    const outcome = await runTask(serverHandle.client, plan, task, {
+    const outcome = await runTask(serverHandle, plan, task, {
       agent: agentName,
       dir: directory,
       verbose: opts.verbose,

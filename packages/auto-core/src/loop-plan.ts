@@ -72,7 +72,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   // (stage=numbering),先于规划会话。
   let numberStart: number | undefined
   if (opts.autoNumber) {
-    const numbering = await ensureNumbering(serverHandle.client, directory, {
+    const numbering = await ensureNumbering(serverHandle, directory, {
       agent: agentName,
       dir: directory,
       verbose: opts.verbose,
@@ -151,7 +151,7 @@ export async function planPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<number>
   let problems: string[] = []
   log(`▶ starting the phase planning session to write ${taskIndex} and the task documents`)
   const planned = await requireArtifact(
-    serverHandle.client,
+    serverHandle,
     { id: "PLAN", title: `phase planning (${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
     prompt,
     {
@@ -488,7 +488,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   // 自动编号: 与 planPhase 相同(记录缺失先恢复,恢复受阻即退出 2)。
   let numberStart: number | undefined
   if (opts.autoNumber) {
-    const numbering = await ensureNumbering(serverHandle.client, directory, {
+    const numbering = await ensureNumbering(serverHandle, directory, {
       agent: agentName,
       dir: directory,
       verbose: opts.verbose,
@@ -578,7 +578,7 @@ export async function appendPlan(ctx: LoopCtx, phase: PhaseUnit): Promise<number
   let problems: string[] = []
   log(`▶ starting the task-append session to append to ${taskIndex}`)
   const appended = await requireArtifact(
-    serverHandle.client,
+    serverHandle,
     { id: "PLAN", title: `phase append (${phaseTitle(phase)})`, status: "in_progress", attempts: 0, body: "" },
     prompt,
     {

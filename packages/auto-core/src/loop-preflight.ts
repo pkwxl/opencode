@@ -7,6 +7,7 @@
 // 拆分自 src/loop.ts(plans/0024-module-split-plan.md S14,纯搬运)。
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
+import { checkAgentBins } from "./agent-pool"
 import { loopbackProxyWarning } from "./agent-env"
 import { ensurePointer } from "./agents-block"
 import { renderAgentContract } from "./config-fix"
@@ -153,8 +154,15 @@ export async function preflight(
     setSwitchModelRegistry(registry ? switchModelRegistryInfo(registry) : undefined)
     // A dispatch the run can send with a list the agent filter emptied is a
     // usage error, never a silent wait (plans/0055 §6.3, §10 item 7).
-    const coverage = registry ? dispatchCoverageProblems(registry, routingFacts(registry, opts.agent).agentFilter, dispatchNeeds(opts, loaded)) : []
-    const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types), ...coverage]
+    const facts = registry ? routingFacts(registry, opts.agent) : undefined
+    const coverage = facts ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded)) : []
+    // Preflight's bin check (plans/0055 §8.7): each profile a candidate list
+    // references runs `<bin> --version` under its env, 10 s timeout. The
+    // driver never logs in or reads credentials — an expired login surfaces
+    // at runtime as an `auth`-class error. A caller-supplied host (`managed`)
+    // brings its own agent; no bin of ours is checked.
+    const bins = facts && !opts.managed ? await checkAgentBins(registry!, facts.agentFilter) : []
+    const problems = [...phaseTypeRoleProblems(custom), ...modelTypeProblems(autoSwitches().model, types), ...coverage, ...bins]
     if (problems.length) throw new Error(problems.join("\n"))
   } catch (error) {
     log(error instanceof Error ? error.message : String(error))

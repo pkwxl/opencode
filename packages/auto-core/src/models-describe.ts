@@ -148,6 +148,10 @@ export type ModelsDescription = {
   notes: string[]
   // Absent when there is no registry or it failed to load.
   table?: ModelTable
+  // The loaded registry itself (same condition as `table`): the shell hands
+  // it to the opt-in probe (plans/0055 §9 --probe), which starts agents —
+  // everything else here reads it only.
+  registry?: ModelRegistry
 }
 
 export type AgentFilter = { agent: string; source: string }
@@ -309,6 +313,7 @@ export async function describeModels(
     operatorPath,
     problems,
     notes,
+    registry,
     table: {
       now,
       tz: registry.tz,

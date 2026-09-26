@@ -233,12 +233,13 @@ describe("resumeModelNow (strict-resume model check)", () => {
       expect(deadSessionWhy(opts, bare, { model: "gone", phase: step })).toContain("not usable now")
     })
 
-    test("an agent other than the run's is a dead session; absent = the default agent's", () => {
+    test("an agent this run cannot dispatch on is a dead session; absent = the run's start profile", () => {
       const models = [entry("a", { model: "prov/a" })]
       const opts: import("../src/opts").Opts = { routing: factsOf(models) }
-      expect(recordedAgentOk("opencode", undefined)).toBe(true)
-      expect(recordedAgentOk("opencode", "opencode")).toBe(true)
-      expect(recordedAgentOk("opencode", "claude-b")).toBe(false)
+      expect(recordedAgentOk(opts.routing, undefined)).toBe(true)
+      expect(recordedAgentOk(opts.routing, "opencode")).toBe(true)
+      // No registry profile of that name at all.
+      expect(recordedAgentOk(opts.routing, "claude-b")).toBe(false)
       expect(recordedAgentOk(undefined, "claude-b")).toBe(true)
       expect(deadSessionWhy(opts, bare, { agent: "claude-b", phase: step })).toContain("lives on agent claude-b")
       expect(deadSessionWhy(opts, bare, { agent: "opencode", phase: step })).toBeUndefined()
@@ -246,6 +247,27 @@ describe("resumeModelNow (strict-resume model check)", () => {
       expect(deadSessionWhy({}, bare, { agent: "claude-b", model: "whatever", phase: step })).toBeUndefined()
       // A record naming no model has nothing to judge: only the agent half.
       expect(deadSessionWhy(opts, bare, { phase: step })).toBeUndefined()
+    })
+
+    test("a session whose agent the filter excludes is dead, although the registry knows the profile (§8.3)", () => {
+      // A fleet of two adapters with the filter narrowed to opencode: the
+      // claude profile is known but never dispatchable, so its records are
+      // dead; without a filter both agents serve the run.
+      const models = [entry("a", { model: "prov/a" })]
+      const registry = {
+        ...registryOf(models),
+        agents: new Map([
+          ["opencode", { name: "opencode", layer: "operator" as const, adapter: "opencode" }],
+          ["claude-b", { name: "claude-b", layer: "operator" as const, adapter: "claude" }],
+        ]),
+      }
+      const filtered = factsOf(models)
+      filtered.registry = registry
+      const open: typeof filtered = { ...filtered, agentFilter: undefined, filterSource: undefined }
+      expect(recordedAgentOk(filtered, "claude-b")).toBe(false)
+      expect(deadSessionWhy({ routing: filtered }, bare, { agent: "claude-b", phase: step })).toContain("agent filter opencode")
+      expect(recordedAgentOk(open, "claude-b")).toBe(true)
+      expect(deadSessionWhy({ routing: open }, bare, { agent: "claude-b", phase: step })).toBeUndefined()
     })
   })
 })

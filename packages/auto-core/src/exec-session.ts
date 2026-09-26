@@ -5,18 +5,18 @@
 // 拆分自 src/runner.ts(plans/0024-module-split-plan.md S10,纯搬运)。
 
 import { dirname, join } from "node:path"
-import type { AgentClient } from "./agent/types"
 import type { SessionChain, SessionResult } from "./chain"
 import { archivedTestHandoff, latestHandoffSeq } from "./docpaths"
 import { fileCommitted, suffixedTitle, trackedSourceChanges } from "./git"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
 import { log } from "./log"
-import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
+import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
+import type { RoutingFacts } from "./routing"
 import type { Plan, Task } from "./tasks"
 import { renderTestContinue, renderTestWrapup, testHandoffFile, type TestRunInfo } from "./prompt"
 import { COMMIT_CLARIFY } from "./resume-gate"
 import { runSession } from "./session"
-import { forkSession, sessionAlive, sessionUsed } from "./session-api"
+import { clientOf, forkSession, sessionAlive, sessionUsed } from "./session-api"
 import { autoSwitches } from "./switches"
 import {
   archiveHandoff,
@@ -40,7 +40,7 @@ import { scriptTmpDir } from "./script"
 // 会话传入): 交接文档按执行范围命名(子任务级 docs/<id>/S<两位序号>/
 // testhandoff.md),防下一子任务误读上一子任务的遗留交接;整任务/修复轮为任务级命名。
 export async function runExecSession(
-  client: AgentClient,
+  client: ClientSource,
   plan: Plan,
   task: Task,
   promptText: string,
@@ -103,7 +103,7 @@ export async function runExecSession(
   if (stage === "wrapup" && record) {
     // H1 收尾未完成: 定版提交已落账、会话没写完交接文档就被打断。从定版那一刻的
     // 会话状态 fork 出新会话重做收尾——收尾之后照常走归档 → 提交 #2 → 跑脚本。
-    if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`, opts.routing?.runAgent)) {
+    if (await seedPinFork(client, chain, record, `${test.label} test handover #${record.n} wrapup`, opts.routing)) {
       if (record.script) test.pending = { script: record.script, seq: record.seq ?? ++test.seq }
       test.resumeWrapup = true
       firstPrompt = renderTestWrapup({ handoffFile: test.handoffFile })
@@ -163,8 +163,8 @@ export async function runExecSession(
     // anchor — the fork is refused and the scope cold-starts.
     if (
       record?.nextSession &&
-      recordedAgentOk(opts.routing?.runAgent, record.agent) &&
-      (await seedSessionFork(client, chain, record.nextSession, `${test.label} test handover #${closedN} continuation`))
+      recordedAgentOk(opts.routing, record.agent) &&
+      (await seedSessionFork(client, chain, record.nextSession, `${test.label} test handover #${closedN} continuation`, opts.routing ? (record.agent ?? opts.routing.runAgent) : undefined))
     ) {
       log(`↻ ${test.label} resume after interruption: the pre-interruption continuation session ${record.nextSession} is still alive; forked a copy to resume`)
       // fork 副本带着续跑会话的全部上下文(任务提示词与续跑说明在它开出时已下发),
@@ -253,25 +253,29 @@ export async function runExecSession(
 // 被打断的交接收尾。server 的 fork 语义是"复制 target **之前**的消息",故锚点取
 // 定版时观测到的末条消息的**后一条**;取不到(消息已被清理、锚点就是末条)时整份
 // 分叉——收尾提示词重下一遍,会话至多把收尾做两遍,不会丢东西。
-// runAgent is this run's agent profile (RoutingFacts.runAgent; undefined = no
-// registry): a session never crosses agents (plans/0055 §8.3), so a record
-// whose agent is not this run's (an absent field is the default agent's) is a
-// dead anchor — no fork, the caller cold-starts the scope.
-export async function seedPinFork(client: AgentClient, chain: SessionChain, record: Handover, subject: string, runAgent?: string): Promise<boolean> {
-  if (!record.pinSession || !recordedAgentOk(runAgent, record.agent)) return false
-  if (!(await sessionAlive(client, record.pinSession))) return false
+// routing is the run's routing facts (undefined = no registry): a session
+// never crosses agents (plans/0055 §8.3), so a record whose agent is not one
+// this run dispatches on (an absent field is the run's start profile's) is a
+// dead anchor — no fork, the caller cold-starts the scope. The fork runs on
+// the record's agent's host, and the chain's binding follows the fork.
+export async function seedPinFork(client: ClientSource, chain: SessionChain, record: Handover, subject: string, routing?: RoutingFacts): Promise<boolean> {
+  if (!record.pinSession || !recordedAgentOk(routing, record.agent)) return false
+  const agent = routing ? (record.agent ?? routing.runAgent) : undefined
+  const anchorClient = await clientOf(client, agent)
+  if (!(await sessionAlive(anchorClient, record.pinSession))) return false
   let anchor: string | undefined
   // No readable history (MA.4): no anchor, whole-session fork (the fallback below).
-  if (record.pinMessage && client.capabilities.history) {
-    const got = await client.messages(record.pinSession)
+  if (record.pinMessage && anchorClient.capabilities.history) {
+    const got = await anchorClient.messages(record.pinSession)
     const list = got.ok ? got.value : []
     const at = list.findIndex((message) => message.id === record.pinMessage)
     anchor = at >= 0 ? list[at + 1]?.id : undefined
   }
-  const forked = await forkSession(client, record.pinSession, subject, anchor)
+  const forked = await forkSession(anchorClient, record.pinSession, subject, anchor)
   if (!forked) return false
   chain.id = undefined
   chain.pending = forked
+  if (agent !== undefined) chain.agent = agent
   chain.pct = 100
   // 分叉前缀的用量无法廉价测得,归零处理: attempt 对非复用会话本就把
   // test.startUsed 归零,链内后续复用决策在本回合结束后即被真实用量覆盖。
@@ -284,15 +288,17 @@ export async function seedPinFork(client: AgentClient, chain: SessionChain, reco
 
 // 整份分叉一个尚存的会话(F5,续跑会话被打断时接回其上下文);不可用返回 false,
 // 调用方按冷启动继续。
-async function seedSessionFork(client: AgentClient, chain: SessionChain, session: string, subject: string): Promise<boolean> {
-  if (!(await sessionAlive(client, session))) return false
-  const forked = await forkSession(client, session, subject)
+async function seedSessionFork(client: ClientSource, chain: SessionChain, session: string, subject: string, agent?: string): Promise<boolean> {
+  const sessionClient = await clientOf(client, agent)
+  if (!(await sessionAlive(sessionClient, session))) return false
+  const forked = await forkSession(sessionClient, session, subject)
   if (!forked) return false
   chain.id = undefined
   chain.pending = forked
+  if (agent !== undefined) chain.agent = agent
   chain.pct = 100
   // Unknown (no readable history, MA.4) counts as 0 here, as a failed read does.
-  chain.used = (await sessionUsed(client, session).catch(() => 0)) ?? 0
+  chain.used = (await sessionUsed(sessionClient, session).catch(() => 0)) ?? 0
   chain.at = 0
   return true
 }

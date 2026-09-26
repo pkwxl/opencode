@@ -1,9 +1,8 @@
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
-import type { AgentClient } from "./agent/types"
 import { parseIndex } from "./document/unit"
 import { renderNumberRecovery } from "./prompt"
-import type { Opts, UnitStop } from "./opts"
+import type { ClientSource, Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
 
 // --auto-number(config.autoNumber)的任务编号记录机制: 任务编号(T-NNN)在目标目录
@@ -78,7 +77,7 @@ export async function advanceNextTask(dir: string, ids: string[]): Promise<numbe
 // 任务链、不写进度记录),产物 = AI 写入的有效 .auto/next-task,driver 以
 // 确定性下限校验(小于下限视为无效产出,带反馈重试一次,仍失败隐性阻塞)。
 export async function ensureNumbering(
-  client: AgentClient,
+  client: ClientSource,
   dir: string,
   opts: Opts,
 ): Promise<{ type: "ok"; next: number } | UnitStop> {

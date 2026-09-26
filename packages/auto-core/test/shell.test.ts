@@ -1,48 +1,71 @@
+// The shell profile module (src/shell.ts): the profile setter's idempotence
+// and the agent-adapter registration point (plans/0055 §8.8,
+// registerAgentAdapter) — what a shell registers, what the registry loader
+// accepts through it, and what the pool finds for the adapter's host.
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { setLogFile, vlog } from "../src/log"
-import { setShellProfile, shellProfile, type ShellProfile } from "../src/shell"
+import type { AgentAdapter } from "../src/shell"
+import { loadModels } from "../src/models"
+import { registerAgentAdapter, registeredAdapterNames, resetShellAdapters, setShellProfile, shellAdapter, shellProfile } from "../src/shell"
 
-// 缺省 = 通用壳(auto)现状: 核心报文在不设置画像时与历史行为逐字节一致。
-const GENERIC: ShellProfile = {
-  program: "opencode-auto run",
-  bin: "opencode-auto",
-  agentRecovery: "init",
-  auditLog: false,
-  configDir: "opencode-auto",
-}
+// A minimal registration: the host factory is never called here.
+const adapter = (over: Partial<AgentAdapter> = {}): AgentAdapter => ({
+  host: (async () => undefined) as never,
+  capabilities: { resume: true, fork: "none", steer: false, abort: false, question: false, permission: false, history: false, usage: "none" },
+  ...over,
+})
 
-describe("shell 画像", () => {
-  afterEach(() => {
-    setShellProfile(GENERIC)
+// setShellProfile merges over the current profile, so the restore names the
+// keys the tests touched (an auditLog left on would stamp every later log
+// line with a timestamp).
+afterEach(() => {
+  resetShellAdapters()
+  setShellProfile({ program: "opencode-auto run", auditLog: false })
+})
+
+describe("setShellProfile", () => {
+  test("partial updates merge idempotently over the defaults", () => {
+    expect(shellProfile().program).toBe("opencode-auto run")
+    setShellProfile({ program: "migrate run", auditLog: true })
+    setShellProfile({ program: "migrate run" })
+    const profile = shellProfile()
+    expect(profile.program).toBe("migrate run")
+    expect(profile.auditLog).toBe(true)
+    expect(profile.configDir).toBe("opencode-auto")
+  })
+})
+
+describe("registerAgentAdapter (§8.8)", () => {
+  test("registers an adapter under its name; the last registration wins; reset clears", () => {
+    registerAgentAdapter("kimi", adapter())
+    registerAgentAdapter("kimi", adapter({ bin: "second-cli" }))
+    expect(registeredAdapterNames()).toEqual(["kimi"])
+    expect(shellAdapter("kimi")?.bin).toBe("second-cli")
+    expect(shellAdapter("opencode")).toBeUndefined()
+    resetShellAdapters()
+    expect(registeredAdapterNames()).toEqual([])
   })
 
-  test("缺省画像 = 通用壳现状", () => {
-    expect(shellProfile()).toEqual(GENERIC)
-  })
-
-  test("部分覆盖在前值上合并;重复调用幂等", () => {
-    setShellProfile({ program: "opencode-auto", agentRecovery: "startup", auditLog: true })
-    expect(shellProfile()).toEqual({ ...GENERIC, program: "opencode-auto", agentRecovery: "startup", auditLog: true })
-    setShellProfile({ program: "opencode-auto" })
-    expect(shellProfile()).toEqual({ ...GENERIC, program: "opencode-auto", agentRecovery: "startup", auditLog: true })
-  })
-
-  test("configDir defaults to opencode-auto, the model registry's directory under XDG_CONFIG_HOME, and a shell can override it", () => {
-    expect(shellProfile().configDir).toBe("opencode-auto")
-    setShellProfile({ configDir: "opencode-auto-migrate" })
-    expect(shellProfile()).toEqual({ ...GENERIC, configDir: "opencode-auto-migrate" })
-  })
-
-  test("auditLog 联动 log 层: 简易壳画像下非 verbose 的 vlog 仍写入日志文件", async () => {
+  test("the registry loader accepts a registered adapter name by default, beside the builtins", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-shell-"))
     try {
-      setShellProfile({ program: "opencode-auto", agentRecovery: "startup", auditLog: true })
-      const path = setLogFile(dir)
-      vlog("审计明细")
-      expect(await Bun.file(path).text()).toMatch(/\] 审计明细\n/)
+      registerAgentAdapter("kimi", adapter())
+      const file = join(dir, "models.json")
+      await writeFile(file, JSON.stringify({ agents: { k: { adapter: "kimi" } }, models: { k1: { agent: "k", model: "prov/k" } }, tiers: { deep: ["k1"], simple: ["k1"] } }))
+      const loaded = await loadModels(dir, { phaseTypes: ["implement"], env: { OPENCODE_AUTO_MODELS: file, XDG_CONFIG_HOME: undefined } })
+      expect(loaded?.agents.get("k")?.adapter).toBe("kimi")
+      // An unregistered name stays a strict failure that lists the known
+      // adapters — the registered one included.
+      await writeFile(file, JSON.stringify({ agents: { q: { adapter: "qoder" } } }))
+      let failed: unknown
+      try {
+        await loadModels(dir, { phaseTypes: ["implement"], env: { OPENCODE_AUTO_MODELS: file, XDG_CONFIG_HOME: undefined } })
+      } catch (error) {
+        failed = error
+      }
+      expect(failed instanceof Error ? failed.message : String(failed)).toContain('"qoder" is unknown (known adapters: opencode, claude, kimi)')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

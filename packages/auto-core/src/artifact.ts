@@ -7,16 +7,15 @@
 // in the whole runner. Sits above session; **must not import runner**.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S9, pure move).
 
-import type { AgentClient } from "./agent/types"
 import type { SessionChain } from "./chain"
 import { baselineIntact, beginUnit, unitBaseline, type UnitBaseline } from "./git"
 import { log } from "./log"
-import type { Opts, UnitStop } from "./opts"
+import type { ClientSource, Opts, UnitStop } from "./opts"
 import type { Task } from "./tasks"
 import { recallProgress, saveProgress, type Phase, type StepKind } from "./resume"
 import { resumeNote } from "./resume-gate"
 import { runSession } from "./session"
-import { formatTokens, sessionAlive, sessionUsage } from "./session-api"
+import { clientOf, formatTokens, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
 import { afterSession, commitBlocked, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
@@ -52,7 +51,7 @@ import { afterSession, commitBlocked, deadSessionWhy, resumeModelEligible, resum
 // cannot fix a git fault), and after the commit the unit close-out check runs
 // (every commit in the range must be a driver commit).
 export async function requireArtifact<T>(
-  client: AgentClient,
+  client: ClientSource,
   task: Task,
   promptText: string,
   opts: Opts,
@@ -108,8 +107,10 @@ export async function requireArtifact<T>(
   let resumedSession: string | undefined
   let resumedUsage: { used: number; pct: number; limit?: number } | undefined
   // The recorded model of a resumed step under a registry (§6.2 continuation:
-  // the first dispatch keeps it while it is usable).
+  // the first dispatch keeps it while it is usable), and the agent the
+  // recorded session lives on (§8.2).
   let resumedModel: string | undefined
+  let resumedAgent: string | undefined
   if (stepPhase && opts.dir) {
     const recalled = await recallProgress(opts.dir, task.id)
     const openRecord =
@@ -121,8 +122,11 @@ export async function requireArtifact<T>(
     const sameStep = openRecord && !spec.restart
     if (sameStep) {
       const candidate = !opts.newSession ? recalled!.session : undefined
-      const alive = candidate !== undefined ? await sessionAlive(client, candidate) : false
-      const usage = alive ? await sessionUsage(client, candidate!) : undefined
+      // The recorded session's liveness runs on its own agent's host (§8.2:
+      // the record carries it; absent = the run's start profile).
+      const recalledClient = await clientOf(client, opts.routing ? (recalled!.agent ?? opts.routing.runAgent) : undefined)
+      const alive = candidate !== undefined ? await sessionAlive(recalledClient, candidate) : false
+      const usage = alive ? await sessionUsage(recalledClient, candidate!) : undefined
       // An error stub (the whole session produced nothing real) is never reused — the same double check as runTask's cross-process resume.
       const usable = alive && usage && !(usage.used === 0 && usage.errorStub)
       const legacyRecord = strict && recalled!.baseline === undefined
@@ -146,6 +150,7 @@ export async function requireArtifact<T>(
           resumedSession = candidate
           resumedUsage = usage
           resumedModel = recalled!.model
+          resumedAgent = recalled!.agent
           log(
             `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
               `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
@@ -170,6 +175,7 @@ export async function requireArtifact<T>(
         resumedSession = candidate
         resumedUsage = usage
         resumedModel = recalled!.model
+        resumedAgent = recalled!.agent
         log(
           `↻ ${task.id} ${spec.kind} session resuming the interruption point, reusing session ${candidate} (context intact, ` +
             `${formatTokens(usage.used)}${usage.limit ? `/${formatTokens(usage.limit)} tokens, ${usage.pct}%` : " tokens"} used)`,
@@ -238,12 +244,12 @@ export async function requireArtifact<T>(
       chain.id = resumedSession
       chain.note = resumeNote(stepPhase, true, strict)
       // Session-agent binding and the continuation's model (plans/0055 §8.2,
-      // §6.2): the resumed session stays bound to the run's agent and — a
-      // registry record naming its model — the first dispatch continues on
+      // §6.2): the resumed session stays on the agent its record names and —
+      // a registry record naming its model — the first dispatch continues on
       // that model while it is still usable, instead of a fresh pick moving
       // the live session's model.
       if (opts.routing) {
-        chain.agent = opts.routing.runAgent
+        chain.agent = resumedAgent ?? opts.routing.runAgent
         if (resumedModel !== undefined) {
           chain.modelEntry = resumedModel
           chain.model = opts.routing.registry.models.get(resumedModel)?.model

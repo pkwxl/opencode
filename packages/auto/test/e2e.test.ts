@@ -1935,7 +1935,14 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(fix.out).toContain("  fix: .gitignore: lacks the /.opencode/auto/models.json entry (the model registry's project layer is local-only) → append the entry")
       expect(await Bun.file(gitignore).text()).toBe(`${older}/.opencode/auto/models.json\n`)
       expect((await runCli(["fix", dir])).out).toContain("✓ nothing to fix")
-      expect((await run()).out).not.toContain("model registry")
+      // After the entry exists the run proceeds past the refusal: the routing
+      // block prints, and the lazily started host (the implied opencode
+      // profile) reaches the closed --server port — the agent pool starts no
+      // host at run start, so the connection stop happens at the first
+      // dispatch, with the adapter's own message.
+      const after = await run()
+      expect(after.out).not.toContain("git does not ignore it")
+      expect(after.out).toContain("◇ agent profile opencode (opencode, implied)")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2116,12 +2123,16 @@ describe("CLI: models (auto-core plans/0055 §9)", () => {
     }
   })
 
-  test("models takes no options", async () => {
+  test("models takes only --probe; without a registry the probe is a no-op line", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
+      const other = await runCli(["models", dir, "--verbose"])
+      expect(other.code).toBe(1)
+      expect(other.err).toContain("unknown option --verbose: models takes only --probe (a directory argument and no other options)")
+      // --probe without a registry probes nothing and keeps exit 0.
       const probe = await runCli(["models", dir, "--probe"])
-      expect(probe.code).toBe(1)
-      expect(probe.err).toContain("unknown option --probe: check/status/models only accept a directory argument, no options")
+      expect(probe.code).toBe(0)
+      expect(probe.out).toContain("probe: no model registry, nothing to probe")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

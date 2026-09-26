@@ -9,11 +9,10 @@ import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } 
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
 import { logRunRouting, routingFacts } from "./routing"
-import { stepValidationLines } from "./model-step"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
-import type { AgentHost } from "./agent/types"
-import { startAgent } from "./agent-choice"
+import type { AgentPool } from "./agent-pool"
+import { startPool } from "./agent-pool"
 import { shellProfile } from "./shell"
 import { flushStats } from "./stats"
 
@@ -53,7 +52,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
   // so the first execution unit isn't wasted; dryrun permission preflight is
   // exempt (not a token-spending path).
   if (!opts.dryrun) await hibernatePause("startup", { dir: directory })
-  let server: AgentHost | undefined
+  let server: AgentPool | undefined
   // --interactive sideband input controller; created once the server is ready,
   // closed in finally.
   let repl: Interactive | undefined
@@ -113,11 +112,14 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
         return 1
       }
     }
-    // Start the project's agent (src/agent-choice.ts) and degrade the switches
-    // it cannot serve; a configuration with no fallback stops here. Under a
-    // model registry the agent starts with its agent profile.
-    const started = await startAgent(directory, { ...opts, registry })
-    server = started.host
+    // Start the run's agent hosts (src/agent-pool.ts) and degrade the
+    // switches the fleet cannot serve; a configuration with no fallback
+    // stops here. Under a model registry no host starts yet — the pool
+    // starts each agent profile's host lazily on its first selection
+    // (plans/0055 §8.1); without one this starts the single agent exactly
+    // as before (C2).
+    const started = await startPool(directory, { ...opts, registry })
+    server = started.pool
     if (started.error !== undefined || server === undefined) {
       log(`⏸ ${started.error}`)
       return 1
@@ -125,24 +127,17 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // The run's routing facts (plans/0055 §6): fixed once the agent choice is
     // known, held by every dispatch through Opts.routing. The run-start block
     // (§6.5) prints the routing in force; without a registry nothing changes.
-    // runAgent is the profile the started host runs on (§8.2): the chain and
-    // the persisted session records name it.
+    // runAgent is the run's start profile (§8.2): unqualified session records
+    // and raw override values resolve through it, while each dispatch's chain
+    // names the profile its session truly lives on.
     const routing = registry ? routingFacts(registry, opts.agent, started.profileName) : undefined
-    if (routing) {
-      logRunRouting(routing)
-      // Step validation (§4.5, §10 item 13), once the server is up: each
-      // step's window from contextLimits() must be strictly larger than the
-      // step below; a step whose window is unknown or not larger disables
-      // the steps from it upward, and a model id the server does not name is
-      // a warning, never an error (some providers load models late).
-      for (const line of stepValidationLines(routing.registry, await server.client.contextLimits())) log(line)
-    }
+    if (routing) logRunRouting(routing)
     if (opts.interactive) {
-      repl = startInteractive(server.client, agentName, undefined, routing ? new Set(routing.registry.models.keys()) : undefined)
+      repl = startInteractive((agent) => server!.client(agent), agentName, undefined, routing ? new Set(routing.registry.models.keys()) : undefined)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
     }
     if (opts.dryrun) {
-      const result = await runOnce(server.client, "permission preflight", renderDryrun(), {
+      const result = await runOnce(server, "permission preflight", renderDryrun(), {
         agent: agentName,
         dir: directory,
         verbose: opts.verbose,

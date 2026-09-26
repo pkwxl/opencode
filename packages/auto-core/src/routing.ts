@@ -15,7 +15,7 @@ import { ringHasUsableKey, ringInactiveNote, ringLabel } from "./keyring"
 import { log } from "./log"
 import { candidateList } from "./model-route"
 import { formatWindowState, windowState } from "./model-window"
-import { layerLabel, type ModelRegistry } from "./models"
+import { layerLabel, type ModelRegistry, type RegistryAgentProfile } from "./models"
 import type { PhaseTypeEntry } from "./phases/registry"
 import { candidateKey, select, type Candidate, type SelectContext } from "./select"
 import { shellProfile } from "./shell"
@@ -38,13 +38,12 @@ export type RoutingFacts = {
   // §9 R6: the project's configured agent — the default agent raw override
   // values run on and unqualified session records belong to.
   defaultAgent: string
-  // §8.2: the agent profile this run's sessions live on — the profile the
-  // run's host started with (agentProfileFor of the chosen agent; the chosen
-  // agent's own name when the registry has no profile of its adapter). While
-  // the run has one agent, every session the driver creates, forks or reuses
-  // is acquired on it, so the chain and the persisted session records
-  // (progress, handover, fork base) carry this name. It is a profile of the
-  // filter's adapter (or the bare adapter name without a matching profile).
+  // §8.2: the agent profile this run starts on — the profile the pool names
+  // as its default (agentProfileFor of the chosen agent; the chosen agent's
+  // own name when the registry has no profile of its adapter). A dispatch
+  // may still land on any profile the selection picks (§8.1: one host per
+  // profile, started lazily); this name is what an unqualified record and a
+  // raw override value resolve to.
   runAgent: string
   clock?: () => number
   random?: () => number
@@ -52,23 +51,25 @@ export type RoutingFacts = {
 }
 
 // The routing facts of a run: the agent filter follows the same precedence
-// the agent start uses (shell profile > OPENCODE_AUTO_AGENT > the configured
-// agent, src/agent-choice.ts), the default agent is the configured agent
-// alone (R6: it is not a filter, so a single-agent fleet keeps working).
-// runAgent is the profile the run's host started with, passed by the loop
-// from startAgent's result (the one place that picks the profile); the
+// the agent choice uses minus the configured agent (shell profile >
+// OPENCODE_AUTO_AGENT, src/agent-choice.ts) — under a registry the filter is
+// only those two (§9 R6: the project's configured agent is the default agent
+// raw override values and unqualified records use, never a filter, so a
+// single-agent fleet keeps working on a project initialized with
+// `--agent claude`). The default agent is the configured agent alone.
+// runAgent is the profile the run's host starts with, passed by the loop
+// from the pool's start (the one place that picks the profile); the
 // fallback (the configured agent's own name) is exact whenever the profile is
 // named like its adapter, which the implied `opencode` profile always is —
 // callers that never started an agent (the coverage check, tests) may rely on
 // it.
-// AUTO-DECISION: while the run still has one agent, the filter falls back to the configured agent (the run cannot dispatch a model on an adapter it never started, so cross-adapter candidates are refused already at selection); when the agent pool runs one host per profile, the filter narrows to the shell profile's agent and OPENCODE_AUTO_AGENT, as ruled, and the configured agent keeps only its default-agent role
-// AUTO-DECISION: runAgent is a fact of the run, not derived here per reader (deriving would need the agent start's profile pick, and routing must not import it — the one-way table); the loop passes the name startAgent actually started, so the records name the host that truly owns the session
+// AUTO-DECISION: the filter names an adapter, never a profile (the filter values — the shell profile's agent and OPENCODE_AUTO_AGENT — name adapters by the agent-choice rule, and every profile of that adapter passes; a profile-name filter would silently empty every list when no profile bears the name, which §6.3 already reports better at its own layer)
 export function routingFacts(registry: ModelRegistry, configuredAgent: AgentChoice | undefined, runAgent?: string): RoutingFacts {
   const profile = shellProfile().agent?.name
   const env = autoSwitches().agent
   return {
     registry,
-    agentFilter: profile ?? env ?? configuredAgent ?? "opencode",
+    agentFilter: profile ?? env,
     filterSource: profile ? "shell profile" : env ? "OPENCODE_AUTO_AGENT" : undefined,
     defaultAgent: configuredAgent ?? "opencode",
     runAgent: runAgent ?? configuredAgent ?? "opencode",
@@ -173,8 +174,36 @@ export function dispatchCoverageProblems(
   return problems
 }
 
-// The run-start routing block (§6.5): each tier's list with every model's
-// agent, window state now and key-ring state (the live position by
+// The agent profiles a run can dispatch on (§8.5, §8.7): every profile with a
+// candidate in some list — the tier lists and the route name lists — after
+// the agent filter. The capability intersection degrades over these, and
+// preflight checks their bins; a profile no list names never enters (it never
+// starts either, §8.1). Each entry carries the internal names that put the
+// profile in the set, registry order, for the notes that name the forcing
+// agent (`claude (opus)`).
+// AUTO-DECISION: the classifier list does not widen the set (the classifier's one-shot session runs on the sessions' agents' capabilities — the intersection already covers what a dispatch needs — and v1 accepts opencode classifiers only, whose profiles the tiers usually name anyway; pulling a classifier-only profile into the intersection would turn off run-wide switches for a session the run's own dispatches never take)
+export function dispatchAgentProfiles(
+  registry: ModelRegistry,
+  agentFilter: string | undefined,
+): { profile: RegistryAgentProfile; names: string[] }[] {
+  const byProfile = new Map<string, string[]>()
+  const add = (name: string): void => {
+    const entry = registry.models.get(name)
+    if (entry === undefined) return
+    if (agentFilter !== undefined && registry.agents.get(entry.agent)?.adapter !== agentFilter) return
+    const names = byProfile.get(entry.agent) ?? []
+    if (!names.includes(name)) names.push(name)
+    byProfile.set(entry.agent, names)
+  }
+  for (const list of Object.values(registry.tiers)) for (const name of list?.names ?? []) add(name)
+  for (const route of registry.routes.values()) if ("names" in route) for (const name of route.names) add(name)
+  return [...registry.agents.values()].flatMap((profile) => {
+    const names = byProfile.get(profile.name)
+    return names ? [{ profile, names }] : []
+  })
+}
+
+// The run-start routing block (§6.5): each tier's list with every model's// agent, window state now and key-ring state (the live position by
 // reference name while the rings are active, the declared size otherwise),
 // the routes in force, the agent filter, the project-layer marks and the
 // unused-model notes — and the R6 note when no tier uses the default agent.

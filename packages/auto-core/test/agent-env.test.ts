@@ -1,13 +1,15 @@
 // Agent environments (plans/0055 §4.2, §8.10, F14; src/agent-env.ts and the
-// profile half of src/agent-choice.ts): a profile's env resolved into the
-// overlay a host starts with, the run's agent taking its registry profile, and
-// the loopback proxy warning. No resolved value may reach a log line (C4).
+// profile half of src/agent-choice.ts / src/agent-pool.ts): a profile's env
+// resolved into the overlay a host starts with, the pool starting the run's
+// agents on their registry profiles, and the loopback proxy warning. No
+// resolved value may reach a log line (C4).
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loopbackProxyWarning, profileLine, resolveProfileEnv } from "../src/agent-env"
-import { agentProfileFor, startAgent } from "../src/agent-choice"
+import { agentProfileFor } from "../src/agent-choice"
+import { startPool } from "../src/agent-pool"
 import { claudeHost } from "../src/agent/claude/host"
 import { loadModels, type ModelRegistry, type ProfileEnvValue, type RegistryAgentProfile } from "../src/models"
 import { autoSwitches, clampSwitches } from "../src/switches"
@@ -111,8 +113,8 @@ describe("resolveProfileEnv", () => {
   })
 })
 
-describe("agentProfileFor: the profile the run's single agent starts with", () => {
-  const claude = { name: "claude", host: claudeHost }
+describe("agentProfileFor: the profile a name resolves to", () => {
+  const claude = "claude"
 
   test("the profile named like the chosen agent, else the first of its adapter in registry order, else none", async () => {
     const loaded = await registry({
@@ -161,7 +163,7 @@ async function fakes(): Promise<{ dir: string; env(name: string): Promise<Map<st
   }
 }
 
-describe("startAgent under a registry: the run's agent starts with its profile", () => {
+describe("startPool under a registry: one lazily started host per agent profile", () => {
   const switches = autoSwitches()
   let printed: ReturnType<typeof spyOn>
   let lines: string[]
@@ -193,9 +195,14 @@ describe("startAgent under a registry: the run's agent starts with its profile",
         },
       },
     })
-    const started = await startAgent("/work", { registry: loaded })
+    const started = await startPool("/work", { registry: loaded })
     try {
       expect(started.error).toBeUndefined()
+      // Lazy start: the host begins with the profile only on the first
+      // client() — a profile nobody selects never spawns.
+      expect(started.pool!.startedAgents()).toEqual([])
+      await started.pool!.client()
+      expect(started.pool!.startedAgents()).toEqual(["opencode"])
       const env = await bin.env("opencode.env")
       expect(env.get("HTTPS_PROXY")).toBe("http://user:hunter2@proxy:3128")
       expect(env.get("AUTO_TEST_FILE")).toBe("file-secret-value")
@@ -206,7 +213,7 @@ describe("startAgent under a registry: the run's agent starts with its profile",
       expect(all).not.toContain("hunter2")
       expect(all).not.toContain("file-secret-value")
     } finally {
-      started.host?.close()
+      started.pool?.close()
     }
   })
 
@@ -216,17 +223,26 @@ describe("startAgent under a registry: the run's agent starts with its profile",
     const loaded = await registry({
       agents: { claude: { adapter: "claude", bin: join(bin.dir, "claude-profile"), env: { CLAUDE_CONFIG_DIR: "/home/op/.claude-b" } } },
     })
-    const started = await startAgent("/work", { registry: loaded })
+    const started = await startPool("/work", { registry: loaded })
     try {
       expect(started.error).toBeUndefined()
+      expect(started.profileName).toBe("claude")
+      await started.pool!.client()
       expect((await bin.env("claude.env")).get("CLAUDE_CONFIG_DIR")).toBe("/home/op/.claude-b")
-      expect(lines.slice(0, 3)).toEqual([
+      // The capability intersection runs before any host starts (§8.5), over
+      // the adapter's static record, naming the forcing agent; this registry
+      // lists no models, so the start profile stands in and the label is its
+      // name. The host then starts on the first client() with its profile
+      // line.
+      expect(lines).toEqual([
+        "◇ agent: claude",
+        "⚙ the agent settles permission requests itself: --permission ask-deny → deny (--wait-answer does not apply to them); claude has none",
+        "⚙ the agent keeps no readable session history: a persisted fork base starts cold, a recovered session's usage counts as unknown; claude has none",
         `◇ agent profile claude (claude, operator layer): bin ${join(bin.dir, "claude-profile")}; env: CLAUDE_CONFIG_DIR`,
         "◇ claude 2.1.278 (Claude Code)",
-        "◇ agent: claude",
       ])
     } finally {
-      started.host?.close()
+      started.pool?.close()
     }
   })
 
@@ -236,28 +252,33 @@ describe("startAgent under a registry: the run's agent starts with its profile",
     const loaded = await registry({
       agents: { opencode: { adapter: "opencode", bin: join(bin.dir, "opencode-profile"), env: { HTTPS_PROXY: "{env:AUTO_TEST_GONE}" } } },
     })
-    const started = await startAgent("/work", { registry: loaded })
+    const started = await startPool("/work", { registry: loaded })
     expect(started).toEqual({ error: "agent profile opencode: env HTTPS_PROXY: env AUTO_TEST_GONE is not set" })
     expect(await Bun.file(join(bin.dir, "opencode.env")).exists()).toBe(false)
   })
 
   test("no profile of the agent's adapter: a note, and the agent starts as without a registry", async () => {
     const loaded = await registry({ agents: { "claude-b": { adapter: "claude" } } })
-    const managed = { client: { capabilities: { resume: true, fork: "message", steer: true, abort: true, question: true, permission: true, history: true, usage: "events" } } } as never
+    const client = { capabilities: { resume: true, fork: "message", steer: true, abort: true, question: true, permission: true, history: true, usage: "events" } } as never
+    const managed = { client, syncContext: async () => {}, restart: async () => false, close: () => {} } as never
     // A managed host is taken as is: the profile does not apply to it.
-    const taken = await startAgent("/work", { registry: loaded, managed })
-    expect(taken.host).toBe(managed)
+    const taken = await startPool("/work", { registry: loaded, managed })
+    expect(await taken.pool!.client()).toBe(client)
     expect(lines).toEqual([])
     const bin = await fakes()
     setEnv({ PATH: `${bin.dir}:${process.env.PATH}` })
     await writeFile(join(bin.dir, "opencode"), `#!/bin/sh\necho "opencode server listening on http://127.0.0.1:4998"\nexec sleep 30\n`)
     await chmod(join(bin.dir, "opencode"), 0o755)
-    const started = await startAgent("/work", { registry: loaded })
+    const started = await startPool("/work", { registry: loaded })
     try {
       expect(started.error).toBeUndefined()
       expect(lines).toEqual(["◇ the model registry has no agent profile of adapter opencode; the agent starts without one"])
+      // The profile-less start still works: the host starts on the adapter's
+      // own factory (the fake `opencode` on PATH above).
+      await started.pool!.client()
+      expect(started.pool!.startedAgents()).toEqual(["opencode"])
     } finally {
-      started.host?.close()
+      started.pool?.close()
     }
   })
 })

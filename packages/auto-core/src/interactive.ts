@@ -11,8 +11,10 @@ import { requestFailback } from "./failback"
 import { log, setInput } from "./log"
 
 export type Interactive = {
-  // 每个会话建立/复用时由 runner 调用,后续输入发往该会话。
-  attach(sessionID: string): void
+  // 每个会话建立/复用时由 runner 调用,后续输入发往该会话。agent 是该会话所在的
+  // agent profile (plans/0055 §8.1): the sideband resolves the session's own
+  // host through the pool.
+  attach(sessionID: string, agent?: string): void
   // 显示提示并等待一行人工输入;minutes 缺省 = 无超时(等待输入行或 stdin 关闭),
   // 设定时则超时或关闭回落 undefined(步进暂停经缺省实现硬等待)。
   question(promptText: string, minutes?: number): Promise<string | undefined>
@@ -22,8 +24,11 @@ export type Interactive = {
 const PROMPT = "💬 "
 const ASK_PROMPT = "❓ "
 
+// clients resolves the client of the session the sideband currently feeds
+// (plans/0055 §8.1): under a pool the session's agent picks the host; a
+// single client ignores the agent, as the no-registry path always did.
 export function startInteractive(
-  client: AgentClient,
+  clients: (agent?: string) => Promise<AgentClient>,
   agent?: string,
   io?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream },
   // The registry's internal model names (plans/0055 §9): under a registry a
@@ -38,6 +43,9 @@ export function startInteractive(
   // 使常驻输入期间连续两次 Ctrl+C 同样能强制终止(与 askHuman 一致)。
   rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
   let sessionID: string | undefined
+  // The agent profile the current session lives on (§8.1): the sideband
+  // resolves its host per send.
+  let sessionAgent: string | undefined
   let closed = false
   // readline 已关闭,不再做任何终端操作(setPrompt/prompt)。
   let dead = false
@@ -110,15 +118,21 @@ export function startInteractive(
       return
     }
     // An agent without steer (MA.4) takes no message into a running session;
-    // the run start said so once.
-    if (!client.capabilities.steer) {
-      log(`⚠ the agent takes no messages mid-turn, input discarded: ${text}`)
-      return
-    }
-    log(`→ sent: ${text}`)
-    void client.promptAsync({ session: sessionID, agent, text }).then((result) => {
+    // the run start said so once. The client resolves per send from the
+    // session's agent (a pool starts that host if it has not started); the
+    // narrowed session id is captured for the async send.
+    const current = sessionID
+    const send = async (): Promise<void> => {
+      const client = await clients(sessionAgent)
+      if (!client.capabilities.steer) {
+        log(`⚠ the agent takes no messages mid-turn, input discarded: ${text}`)
+        return
+      }
+      log(`→ sent: ${text}`)
+      const result = await client.promptAsync({ session: current, ...(agent !== undefined ? { agent } : {}), text })
       if (!result.ok) log(`⚠ send failed: ${result.error instanceof Error ? String(result.error) : JSON.stringify(result.error)}`)
-    })
+    }
+    void send().catch((error) => log(`⚠ send failed: ${error instanceof Error ? String(error) : String(error)}`))
   })
   // stdin 关闭(管道结束等): 回落为非交互行为,等待中的 ask 按超时处理。
   // 同步清 log.ts 的常驻输入行引用——否则此后任何一条日志对已关闭的 rl 调
@@ -136,8 +150,9 @@ export function startInteractive(
   setInput(rl)
 
   return {
-    attach(id) {
+    attach(id, agent) {
       sessionID = id
+      sessionAgent = agent
     },
     question(promptText, minutes) {
       // 已关闭或重入(正常流程不会发生)时立即回落,调用方按无人答复处理。

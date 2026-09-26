@@ -18,6 +18,12 @@ import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2"
 import type { AgentEnv, AgentHost, AgentHostFactory } from "../types"
 import { opencodeAgent } from "./client"
 
+// The adapter's static capabilities, re-exported through this entry module so
+// the agent pool can degrade over the capability intersection before any host
+// starts (plans/0055 §8.5: lazy start means capabilities are known without
+// spawning; the record is the same constant the started client reports).
+export { OPENCODE_CAPABILITIES } from "./client"
+
 export type Server = {
   client: OpencodeClient
   url: string

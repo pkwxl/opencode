@@ -16,6 +16,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentEvent, AgentHost } from "../src/agent/types"
 import { attempt } from "../src/attempt"
+import { singleHost } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
 import type { SessionChain } from "../src/chain"
@@ -698,7 +699,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
       ? [ev.message(ctx.session, `msg_fail_${ctx.n}`, 5000), ev.error(ctx.session, { name: "APIError", message, ...(statusCode !== undefined ? { statusCode } : {}), isRetryable: message.includes("quota") ? false : undefined }), ev.idle(ctx.session)]
       : undefined
 
-  const optsWith = (host: AgentHost, routing: RoutingFacts): Opts => ({ routing, server: host })
+  const optsWith = (host: AgentHost, routing: RoutingFacts): Opts => ({ routing, server: singleHost(host) })
 
   beforeEach(() => {
     resetFailback()

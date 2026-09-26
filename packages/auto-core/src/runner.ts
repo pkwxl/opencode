@@ -1,5 +1,4 @@
 import { basename, join } from "node:path"
-import type { AgentClient } from "./agent/types"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
 import { ensureDecomposed, executeWhole, runSubtask } from "./execute"
 import { resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive, deadSessionWhy } from "./unit-commit"
@@ -12,13 +11,13 @@ import { clearDownMarks, consumeFailback, failbackApplies } from "./failback"
 import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
-import { type Opts, type Outcome, type UnitStop } from "./opts"
+import { type ClientSource, type Opts, type Outcome, type UnitStop } from "./opts"
 import { phaseText, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, runSession } from "./session"
 import { begin, markDone, reloadTask, type Plan, type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
-import { formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
+import { clientOf, formatTokens, renameSession, sessionAlive, sessionUsage } from "./session-api"
 import { autoSwitches } from "./switches"
 import { shellProfile } from "./shell"
 import { stepPause } from "./step"
@@ -76,7 +75,7 @@ import { reportResult, runWrapup } from "./wrapup"
 // question on the same issue, exhausted transient session errors, a FAIL
 // result line, or an ask-fail permission timeout.
 export async function runTask(
-  client: AgentClient,
+  client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -152,12 +151,17 @@ export async function runTask(
     // resume takes the existing new-session path (strict resume: the rollback
     // path). Without a registry there is no verdict (undefined).
     const dead = deadSessionWhy(opts, switches, recalled)
+    // The recorded session's liveness runs on its own agent's host (§8.2:
+    // the record carries it; absent = the run's start profile, the shape
+    // every pre-binding record reads as), resolved through the pool when the
+    // caller passed one.
+    const recalledClient = await clientOf(client, opts.routing ? (recalled.agent ?? opts.routing.runAgent) : undefined)
     const alive =
-      !handedOff && !opts.newSession && recalled.active && recalled.session && !legacyRecord && (await sessionAlive(client, recalled.session))
+      !handedOff && !opts.newSession && recalled.active && recalled.session && !legacyRecord && (await sessionAlive(recalledClient, recalled.session))
     // 继承中断会话的真实上下文用量(经末条 assistant 消息重建): 此前 seed 为
     // 0/0 占位以保证首个提示词必定复用,代价是恢复后的日志与链内后续复用决策
     // 全用假值;首轮复用现由 attempt 的 resumed 判据保证,这里只取真实值。
-    const usage = alive ? await sessionUsage(client, recalled.session!) : undefined
+    const usage = alive ? await sessionUsage(recalledClient, recalled.session!) : undefined
     // 双保险(plans/0015-session-error-retry-plan.md 第 5 点): 历史遗留的 progress.json 可能
     // 记着一个只挨了一记报错、从未真正产出过内容的会话(旧版"重试即换白板会话"
     // 逻辑的残留:整条会话没有任何跑完过的 assistant 轮次,只有报错桩)。有了第
@@ -226,7 +230,9 @@ export async function runTask(
         // entry on a continuation), instead of a fresh pick moving the live
         // session's model.
         if (opts.routing) {
-          chain.agent = opts.routing.runAgent
+          // The resumed session stays on the agent its record names (§8.3:
+          // absent = the run's start profile, the pre-binding shape).
+          chain.agent = recalled.agent ?? opts.routing.runAgent
           if (recalled.model !== undefined) {
             chain.modelEntry = recalled.model
             chain.model = opts.routing.registry.models.get(recalled.model)?.model
@@ -285,7 +291,7 @@ export async function runTask(
   const outcome = await pipeline(recalled?.phase)
   if (outcome.type === "completed") {
     // 终态改名: 链上最后一个会话标题指向 done 标签(与 loop 的终态提交同题)。
-    await renameSession(client, chain, `${task.id} done ${task.title}`)
+    await renameSession(await clientOf(client, chain.agent), chain, `${task.id} done ${task.title}`)
     await forgetProgress(dir)
     return outcome
   }
@@ -295,7 +301,7 @@ export async function runTask(
   // 其余清除复用资格(进度已总结,人工介入可能耗时且改动环境,旧会话上下文不可信),
   // 阶段信息保留供精确重入。会话标题同步改名为中断状态(与 loop 边界提交同题)。
   task = await reloadTask(plan, task.id)
-  await renameSession(client, chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
+  await renameSession(await clientOf(client, chain.agent), chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
   if (!(outcome.type === "blocked" && outcome.question.startsWith("session error: "))) {
     await persistStage(chain.phase ?? (mode === "auto" ? { kind: "decompose" } : { kind: "whole" }))
   }
@@ -480,7 +486,7 @@ export async function runTask(
 // --dryrun 的单次独立会话: 不属于任何任务,不进任何链,也不做会话后提交
 // (预检不改动工作区)。
 export async function runOnce(
-  client: AgentClient,
+  client: ClientSource,
   title: string,
   promptText: string,
   opts: Opts,

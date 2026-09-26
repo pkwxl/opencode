@@ -1,6 +1,5 @@
 import { readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
-import type { AgentClient } from "./agent/types"
 import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpaths"
 import { PRIOR_KB_DONE } from "./document/roles"
 import { parsePhaseDir } from "./document/unit"
@@ -8,7 +7,7 @@ import { changedFiles, commitPending, commitTree } from "./git"
 import { log } from "./log"
 import { currentRound, phaseArtifacts, roundKnowledgeDocs, type PhaseUnit } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
-import type { Opts, UnitStop } from "./opts"
+import type { ClientSource, Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
 import { afterSession } from "./unit-commit"
 
@@ -42,7 +41,7 @@ export async function existingKnowledge(dir: string, phase: PhaseUnit): Promise<
 // 基线,必须先停下)。提交失败(requireArtifact 的 blocked)同样按 dirty 口径
 // 上抛,由调用方停机。
 export async function extractKnowledge(
-  client: AgentClient,
+  client: ClientSource,
   dir: string,
   opts: Opts,
   phase: PhaseUnit,
@@ -155,7 +154,7 @@ export async function existingDistilledDocs(dir: string, round: number): Promise
 //    makes after init/continue — no shell commits it (plans/0048 R1).
 // failed(会话受阻/两次未产出)由调用方转阻塞停机,人工处置后重新运行重启本阶段。
 export async function extractPriorKnowledge(
-  client: AgentClient,
+  client: ClientSource,
   dir: string,
   opts: Opts,
   brief?: string,

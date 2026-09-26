@@ -43,7 +43,7 @@ opencode-auto run [dir]      # 按当前阶段的任务索引逐任务自动执�
 opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
 opencode-auto check [dir]    # 检查 AGENTS.md 与任务文档中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 标记块缺失或过期
 opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → 阶段 → 任务 → 子任务树
-opencode-auto models [dir]   # 打印模型注册表的生效表(各阶段类型 × 会话角色的档位、候选与当前可用性),不启动 agent,见"模型注册表一览(models)"
+opencode-auto models [dir] [--probe]   # 打印模型注册表的生效表(各阶段类型 × 会话角色的档位、候选与当前可用性);--probe 另向每个列入的模型发送恢复探测提示词(可选、花费 token),见"模型注册表一览(models)"
 ```
 
 新项目流程(`init` → `plan` → 填写并提交 → `plan`(可选)→ `run`):
@@ -1213,7 +1213,11 @@ agent、不写任何文件,因此不取运行锁,可与进行中的 `run` 并行
 退出码:无注册表时打印一行、退出码 `0`;注册表可被 `run` 接受时打印整表、退出码 `0`;
 `run`/`plan` 启动时会拒绝的问题(坏 JSON、未知字段、坏窗口、引用的环境变量未设置或文件不可读、
 git 未忽略的项目层等)逐条以 `⚠` 打印、退出码 `1`——注册表能载入时先打印整表再列问题。
-`models` 不接受任何选项(与 `check`/`status` 同组)。
+`models` 不取运行锁;除 `--probe` 外不接受任何选项(与 `check`/`status` 同组)。
+`--probe` 会**启动 agent**(按 profile 惰性拉起各自的 host,经 agent pool),向每个被档位、
+路由列表或分类器引用的模型逐个发送一条极短的恢复探测提示词(wait-and-probe 环的同款),
+逐模型打印一行应答或失败——它因此是可选的:探测产生真实 token 消耗。探测失败是逐模型的
+发现,不是命令错误;退出码仍由注册表本身决定。
 
 ## 阻塞与恢复
 

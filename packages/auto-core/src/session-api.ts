@@ -12,6 +12,7 @@ import { createInterface } from "node:readline/promises"
 import { join } from "node:path"
 import type { AgentClient, AgentPart } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
+import type { ClientSource } from "./opts"
 import { commitTitle } from "./git"
 import type { Interactive } from "./interactive"
 import { log, vlog } from "./log"
@@ -19,6 +20,33 @@ import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { shellProfile } from "./shell"
 import { statsWaitBegin, statsWaitEnd, type Usage } from "./stats"
 import { forkBaseAllowed } from "./usage"
+
+// The worktree-check tail every one-off note of a session that inherited no
+// context carries (the retry/failover/recovery notes of src/session.ts, and
+// the cross-agent move of src/attempt.ts, plans/0055 §8.3): a session that
+// did not inherit this attempt's context must be told to check the disk
+// state before going on, or it redoes half-finished work (same wording as
+// the cross-run resumeNote).
+export const WORKTREE_CHECK =
+  " The worktree may already hold part of this prompt's output: check it with git status / git diff first, then continue the remaining work from there without redoing what is finished."
+export const worktreeNote = (lead: string) => `[DRIVER] ${lead}${WORKTREE_CHECK}`
+
+// The client that serves an agent profile (plans/0055 §8.1): the pool starts
+// the profile's host here on its first selection (undefined agent = the
+// run's start profile); a plain client source (a test double, the
+// no-registry single agent) is returned as is, whatever the agent — the
+// no-registry path never reads the agent at all.
+export async function clientOf(source: ClientSource, agent?: string): Promise<AgentClient> {
+  return "client" in source ? await source.client(agent) : source
+}
+
+// The context windows of every model the source knows: a pool merges the
+// started hosts' contextLimits (a model on a host that has not started is
+// absent — an unknown window never excludes a candidate, §6.2 rule 5); a
+// plain client answers its own map.
+export async function contextLimitsOf(source: ClientSource): Promise<ReadonlyMap<string, number>> {
+  return await source.contextLimits()
+}
 
 // 封装 client.fork(fork-decompose 设计 §4.3;client 可注入 fake 单测):
 // 在基点末端复制消息前缀为新会话并改名为本阶段短标签标题。{error} 或任何异常
@@ -57,7 +85,7 @@ export async function forkSession(client: AgentClient, base: string, title: stri
 // 返回 warm(= 本会话已继承任务背景)供提示词选择背景段;无基点(fork=off/
 // 从未确立)不动链,行为与现状完全一致。
 export async function seedForkSession(
-  client: AgentClient,
+  client: ClientSource,
   opts: Opts,
   chain: SessionChain,
   base: ForkBaseInfo | undefined,
@@ -80,10 +108,14 @@ export async function seedForkSession(
     chain.at = 0
     return false
   }
+  // The base session is agent-local (plans/0055 §8.2): the fork runs on the
+  // chain's agent's host, resolved through the pool when the caller passed
+  // one (a base seeded onto this chain lives on its agent).
+  const baseClient = await clientOf(client, chain.agent)
   // 新会话前同步 AGENTS.md(与 create 路径同款;分叉会话的 system context 继承
   // 自基点,基点前缀与最新契约的一致性在此保证)。
-  await opts.server?.syncContext()
-  const forked = await forkSession(client, base.id, subject)
+  await opts.server?.syncContext(chain.agent)
+  const forked = await forkSession(baseClient, base.id, subject)
   chain.id = undefined
   chain.pending = forked
   chain.forkBase = base.id
@@ -104,9 +136,12 @@ export async function seedForkSession(
 // 一哲学)。链上无会话/会话已失效/fork 失败返回 false,调用方回退全新会话 + 完整
 // 提示词。分叉前缀的用量即刚结束会话的用量,链上 pct/used/at 照留(attempt 在回合
 // 结束后以实测值刷新)。
-export async function forkEndedSession(client: AgentClient, chain: SessionChain, subject: string): Promise<boolean> {
-  if (chain.id === undefined || !(await sessionAlive(client, chain.id))) return false
-  const forked = await forkSession(client, chain.id, subject)
+// The fork runs on the chain's agent's host (§8.2): the ended session lives
+// on it, and its copy must too.
+export async function forkEndedSession(client: ClientSource, chain: SessionChain, subject: string): Promise<boolean> {
+  const sessionClient = await clientOf(client, chain.agent)
+  if (chain.id === undefined || !(await sessionAlive(sessionClient, chain.id))) return false
+  const forked = await forkSession(sessionClient, chain.id, subject)
   if (!forked) return false
   // 与 seedForkSession 同形态: 清 id 让 attempt 消费 pending(reuse 判定要求链上
   // 无会话,且 note + id 非空会命中 resumed 复用分支而忽略 pending)。

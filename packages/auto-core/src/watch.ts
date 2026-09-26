@@ -130,7 +130,7 @@ export async function watch(
   // produces output again (the agent's retry got through), so a late answer
   // never aborts a turn that recovered. Without a classifier all of this
   // stays unset and the watch is byte-identical to before (C2).
-  const classifier = classifierFor(client, opts.routing, steerContext?.label)
+  const classifier = classifierFor(client, opts.routing, steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined)
   let retrying = false
   let consuming = true
   let answer: ClassifierAnswer | undefined

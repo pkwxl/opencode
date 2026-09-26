@@ -6,7 +6,6 @@
 
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
-import type { AgentClient } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { taskDoc } from "./docpaths"
@@ -17,12 +16,12 @@ import { checklistProblems, renameTodoToDone } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { beginUnit, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { autobanner, log, subbanner } from "./log"
-import { DEFAULT_CONTEXT_LIMIT, type Opts, type UnitStop } from "./opts"
+import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
 import { readChecklist, reloadTask, setForkBase, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
 import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
-import { formatTokens, forkEndedSession, seedForkSession } from "./session-api"
+import { clientOf, formatTokens, forkEndedSession, seedForkSession } from "./session-api"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
 import { sessionHandoverDue } from "./usage"
@@ -33,7 +32,7 @@ import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } fr
 // 续跑,直到自然完成或交接文档标记完成。返回 undefined 表示执行阶段完成。
 // 上次尝试遗留交接文档的清理由调用方(pipeline)在做恢复判定后进行。
 export async function executeWhole(
-  client: AgentClient,
+  client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -121,7 +120,7 @@ export async function executeWhole(
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
     // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
     // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
-    if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used, chain.hinted)) return undefined
+    if (!sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)) return undefined
     const status = handoffStatus(await readHandoff())
     if (status === "done") return undefined
     if (status === "continue") {
@@ -171,7 +170,7 @@ export async function executeWhole(
 // 旧版分解产物)直接沿用、不再开会话——没有 todo.md 状态文件的清单保持勾选语义
 // (协议未激活,plans/0030 D5)。
 export async function ensureDecomposed(
-  client: AgentClient,
+  client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -279,7 +278,7 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
 // 完成后清除交接文档,下一子任务重新起算。实验开关 OPENCODE_AUTO_STEER=off
 // 停用本机制(不注入交接提示、会话后不做交接判定,自然完成即收)。
 export async function runSubtask(
-  client: AgentClient,
+  client: ClientSource,
   plan: Plan,
   task: Task,
   text: string,
@@ -415,7 +414,7 @@ export async function runSubtask(
       // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
       // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
       // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
-      if (!sessionHandoverDue(client.capabilities.usage, steer, chain.used, chain.hinted)) {
+      if (!sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)) {
         if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
           const problems = await subtaskArtifactProblems(dir, text, baseline)
           if (problems.length) {

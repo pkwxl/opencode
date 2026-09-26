@@ -28,7 +28,7 @@ function setup(modelNames?: ReadonlySet<string>) {
       },
     },
   } as unknown as OpencodeClient)
-  const repl = startInteractive(client, undefined, { input, output }, modelNames)
+  const repl = startInteractive(async () => client, undefined, { input, output }, modelNames)
   return { input, sent, repl, chunks }
 }
 

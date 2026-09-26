@@ -25,13 +25,14 @@ import {
 } from "./keyring"
 import { log } from "./log"
 import { formatWindowState, isoInZone } from "./model-window"
-import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
+import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import { candidateKey, nowOf, selectContext, type Candidate } from "./routing"
 import { candidatesOf, select, type SelectCall, type SelectContext } from "./select"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
 import { firstLine } from "./resume-gate"
-import { forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
+import { clientOf, contextLimitsOf, forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed, worktreeNote } from "./session-api"
+import { AgentStartError } from "./agent-pool"
 import { autoSwitches, type Switches } from "./switches"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { type Steer, type TestRun } from "./testrun"
@@ -47,7 +48,7 @@ import { type Steer, type TestRun } from "./testrun"
 // 持久字段,校验存活,失效回退冷启动) → 冷启动。session 模式基点跨运行持久,用量
 // 经 messages 末条消息重建(近似即可;同次运行且基点即链上会话时直接取跟踪值)。
 export async function ensureForkBase(
-  client: AgentClient,
+  client: ClientSource,
   plan: Plan,
   task: Task,
   opts: Opts,
@@ -67,11 +68,15 @@ export async function ensureForkBase(
   // one-agent era's record and reads as this run's (the default) agent's; a
   // map holds only the reading agent's entry (forkBaseFor).
   const forkBaseRecord = forkBaseFor(task.forkBase, agent)
+  // The client the base's liveness and rebuild run on: the reading agent's
+  // host (a session id is agent-local, §8.2), resolved through the pool when
+  // the caller passes one.
+  const baseClient = await clientOf(client, agent)
   const persistID = forkBaseRecord?.startsWith("digest:") ? forkBaseRecord.slice("digest:".length) : undefined
   if (switches.forkBase === "digest") {
     if (persistID !== undefined) {
-      if (await sessionAlive(client, persistID)) {
-        const used = await sessionUsed(client, persistID)
+      if (await sessionAlive(baseClient, persistID)) {
+        const used = await sessionUsed(baseClient, persistID)
         log(`⑂ ${task.id} digest base reuse: session ${persistID} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
         return { id: persistID, used }
       }
@@ -83,7 +88,10 @@ export async function ensureForkBase(
       const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
       const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
       if (result.type === "idle" && base.id) {
-        await setForkBase(dir, task.id, `digest:${base.id}`, agent)
+        // The record names the agent the base session truly lives on (the
+        // dispatch inside picked it; §8.2) — with one agent a run this is
+        // always the reading agent.
+        await setForkBase(dir, task.id, `digest:${base.id}`, opts.routing ? (base.agent ?? agent) : undefined)
         log(`⑂ ${task.id} digest base ready: session ${base.id} (digest prefix ${formatTokens(base.used)} tokens)`)
         return { id: base.id, used: base.used }
       }
@@ -97,8 +105,8 @@ export async function ensureForkBase(
   // 剥壳校验——存活的 digest 基点同样是有效暖前缀。
   const sessionID = persistID === undefined ? forkBaseRecord : switches.forkBase === "session" ? persistID : undefined
   if (sessionID) {
-    if (await sessionAlive(client, sessionID)) {
-      const used = sessionID === chain.id ? chain.used : await sessionUsed(client, sessionID)
+    if (await sessionAlive(baseClient, sessionID)) {
+      const used = sessionID === chain.id ? chain.used : await sessionUsed(baseClient, sessionID)
       log(`⑂ ${task.id} session base ready: session ${sessionID} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
       return { id: sessionID, used }
     }
@@ -126,14 +134,12 @@ const RECOVERY_PROBE_PROMPT = "[DRIVER] Service availability probe: reply with j
 //    the AI treats the re-send as a repeated request and starts over (same motive
 //    as awaitRecovery's note);
 // ② partial context (blank new session / re-seeded from the base / a fork of the
-//    chain's original session): the attempt's partial output on disk is not in
-//    the new session's context, so the AI must check the worktree before going on,
-//    or it redoes half-finished work, duplicating appended output and re-running
-//    finished steps (same wording as the cross-run resumeNote: check the disk
-//    state, do not redo).
-const WORKSPACE_CHECK =
-  " The worktree may already hold part of this prompt's output: check it with git status / git diff first, then continue the remaining work from there without redoing what is finished."
-const retryNote = (lead: string) => `[DRIVER] ${lead}${WORKSPACE_CHECK}`
+//    chain's original session / a cross-agent move, plans/0055 §8.3): the
+//    attempt's partial output on disk is not in the new session's context, so the
+//    AI must check the worktree before going on, or it redoes half-finished work,
+//    duplicating appended output and re-running finished steps (same wording as
+//    the cross-run resumeNote: check the disk state, do not redo).
+const retryNote = worktreeNote
 
 // Runs one prompt on the session chain (reusing the previous session when its
 // context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
@@ -148,7 +154,7 @@ const retryNote = (lead: string) => `[DRIVER] ${lead}${WORKSPACE_CHECK}`
 // 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效);
 // switches 缺省取 OPENCODE_AUTO_* 解析值(复用开关),注入供单测。
 export async function runSession(
-  client: AgentClient,
+  client: ClientSource,
   task: Task,
   promptText: string,
   opts: Opts,
@@ -157,6 +163,11 @@ export async function runSession(
   test?: TestRun,
   switches: Switches = autoSwitches(),
 ): Promise<SessionResult> {
+  // The client of the chain's session (plans/0055 §8.1), resolved per use:
+  // a failover may move the chain to another agent between iterations, and
+  // every fork, liveness check and rename below belongs to the agent the
+  // session lives on. A plain client source resolves to itself.
+  const chainClient = () => clientOf(client, chain.agent)
   // 配额降级候选跟踪(设计 D.3/D.4):整条会话链共享——每个模型候选各享一轮完整的
   // 重试阶梯(i 在切换候选时重置为 1),总上限 = 候选数 × 阶梯长度,降级计数与
   // 阶梯计数分离、互不掩盖。tried 记录本链已试过的候选串(有序,供耗尽文案与去重
@@ -198,10 +209,14 @@ export async function runSession(
   // `classified` records that the class came from the classifier, so the ◈
   // line names the move "quota (classifier)" (§6.5).
   const switchModel = async (why: string, until?: number, classified?: boolean): Promise<boolean> => {
-    limits ??= await client.contextLimits()
+    limits ??= await contextLimitsOf(client)
     let from: string | undefined
     let to: string | undefined
     let toModel: string | undefined
+    // The agent profile the failover's pick runs on (plans/0055 §8.3): a
+    // move onto another agent cannot fork (F3) — it opens a new session
+    // there with the worktree-check note instead.
+    let toAgent: string | undefined
     let ringSize = 0
     if (opts.routing) {
       from = chain.modelEntry
@@ -223,6 +238,7 @@ export async function runSession(
       // would mean an override re-listed it — refuse rather than loop.
       if (to === from) return false
       toModel = decision.candidate.kind === "entry" ? decision.candidate.entry.model : decision.candidate.model
+      toAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
     } else {
       const fallback = fallbackRing()
       // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
@@ -267,10 +283,26 @@ export async function runSession(
     }
     log(
       opts.routing
-        ? `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
+        ? `⇄ ${task.id} ${why}; ${toAgent !== undefined && chain.agent !== undefined && toAgent !== chain.agent ? `moving to agent ${toAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
         : `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${tried.length}/${ringSize})`,
     )
     i = 1
+    // Cross-agent move (§7 step 2 / §8.3): the pick runs on another agent
+    // than the chain's session, and a session never crosses agents — no
+    // fork, no reuse. The chain drops its session and the next dispatch
+    // opens a blank one on the target agent with the worktree-check note,
+    // today's "blank new session" path.
+    if (opts.routing && toAgent !== undefined && chain.agent !== undefined && toAgent !== chain.agent) {
+      chain.id = undefined
+      chain.pending = undefined
+      // The failed-session record lives on the old agent too (§8.3): its
+      // fork value is unreachable from the new one, so it stops being a
+      // fork source instead of failing noisily on the next retry.
+      chain.failed = undefined
+      chain.pct = 100
+      chain.note = retryNote(`Switched model to continue (${why}), moving to agent ${toAgent}; the new session did not inherit the earlier session's context`)
+      return true
+    }
     // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
     // 换模型续跑无需重做上下文。分叉源与重试环同一套「保住最值钱的会话」判据:失败会话
     // 本体(用量 > 0 才算,0 用量是纯报错桩)与链上原会话,取已积累用量大者。两条触发面
@@ -292,7 +324,7 @@ export async function runSession(
     // 避免后续轮次对着死会话重复 fork。
     sources.sort((a, b) => b.used - a.used)
     for (const source of sources) {
-      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} failover`)
+      const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} failover`)
       if (forked === undefined) {
         if (source.id === chain.failed?.id) chain.failed = undefined
         continue
@@ -356,13 +388,16 @@ export async function runSession(
       markCurrentKeyDown(provider, until)
       return false
     }
+    // Rotation restarts the chain's host (§8.1: the pool applies restart to
+    // the chain's agent), and its setConfig reaches every started host at
+    // once (one ring state, one spawn config).
     const host = opts.server
     if (host === undefined || host.setConfig === undefined) return false
     const from = ringKeyLabel(rotation.from)
     const to = ringKeyLabel(rotation.to)
     commitRotation(rotation, until)
     host.setConfig(spawnKeyConfig())
-    const restarted = await host.restart(`${why}; rotating the provider ${provider} key ring to key ${to}`)
+    const restarted = await host.restart(`${why}; rotating the provider ${provider} key ring to key ${to}`, chain.agent)
     log(
       `⇄ ${task.id} ${why}; provider ${provider} key ${from} marked down, continuing the same model on key ${to}` +
         (restarted ? "" : " (the managed server could not be restarted; the new key applies at its next spawn)"),
@@ -378,7 +413,7 @@ export async function runSession(
     if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
     sources.sort((a, b) => b.used - a.used)
     for (const source of sources) {
-      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} key rotation`)
+      const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} key rotation`)
       if (forked === undefined) {
         if (source.id === chain.failed?.id) chain.failed = undefined
         continue
@@ -505,7 +540,7 @@ export async function runSession(
       // AUTO-DECISION: the probe's ring half re-marks only the current key on failure, not every cleared mark (the probe ran on the current key alone; the earlier keys' marks would have cleared at the same boundaries anyway, and a wrapped rotation onto them later is the §6.4 semantics a boundary clear already has)
       let probedProvider: string | undefined
       if (opts.routing) {
-        limits ??= await client.contextLimits()
+        limits ??= await contextLimitsOf(client)
         const facts = opts.routing
         const ctx = selectContext(facts, switches, cap, limits)
         const call = { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts), continuation: false as const }
@@ -529,8 +564,13 @@ export async function runSession(
       const probe: SessionChain = { pct: 100, used: 0, at: 0, ...(opts.routing ? {} : { model: chain.model }), role: roleOf(chain) }
       let ping: SessionResult
       try {
+        // The probe chain carries no agent on purpose (§8.1): attempt's own
+        // selection picks the just-cleared probe candidate, so the pool
+        // starts and uses that candidate's host — the model being probed,
+        // whatever agent runs it.
         ping = await attempt(client, task, RECOVERY_PROBE_PROMPT, opts, probe, undefined, undefined, switches)
       } catch (error) {
+        if (error instanceof AgentStartError) throw error
         if (probed !== undefined) markModelDown(probed)
         if (probedProvider !== undefined) markCurrentKeyDown(probedProvider)
         log(`⏳ ${task.id} probe session itself errored (${formatClientError(error)}); service not recovered, continuing to wait`)
@@ -557,7 +597,7 @@ export async function runSession(
       sources.sort((a, b) => b.used - a.used)
       let seeded = false
       for (const source of sources) {
-        const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} recovery`)
+        const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} recovery`)
         if (forked === undefined) {
           if (source.id === chain.failed?.id) chain.failed = undefined
           continue
@@ -597,6 +637,13 @@ export async function runSession(
     try {
       result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
     } catch (error) {
+      // A host that cannot start (§8.1: a profile env reference that broke
+      // since the run start) stops the run, exactly as the eager start would
+      // have — the retry ladder must not turn a broken profile into hours of
+      // retries. Everything else a session throws (event stream drops,
+      // request timeouts) stays a session fault and enters the recovery
+      // machinery below.
+      if (error instanceof AgentStartError) throw error
       // 会话故障不退出: SDK 调用抛出的异常(事件流订阅断开、请求超时中止等)与
       // 返回错误同渠道进入重试/等待机制——除连按两次 Ctrl+C 外,任何会话故障都
       // 不终止运行。
@@ -675,7 +722,7 @@ export async function runSession(
       continue
     }
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
-      await opts.server.restart("session error is a network/service failure; restarting the opencode server and retrying with a new session")
+      await opts.server.restart("session error is a network/service failure; restarting the opencode server and retrying with a new session", chain.agent)
     }
     // 本次重试前的退避。计数在动作之前推进,下面三条 continue 路径共用 nth 作日志序号。
     const waitMinutes = waits[i - 1] ?? 0
@@ -715,7 +762,7 @@ export async function runSession(
     sources.sort((a, b) => b.used - a.used)
     let seeded = false
     for (const source of sources) {
-      const forked = await forkSession(client, source.id, chain.subject ?? `${task.id} retry`)
+      const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} retry`)
       if (forked === undefined) {
         if (source.id === chain.failed?.id) chain.failed = undefined
         continue
@@ -743,8 +790,8 @@ export async function runSession(
     // 播种,至少赚回免费的暖前缀,而不是纯冷启动——与 fork 三段式"每项重新从基点
     // 分叉"(fork-decompose 设计 §4.3)同一语义。基点前缀只有任务背景,本次尝试的
     // 上下文不在其中,重发须带现场核对说明。基点失效则回落空白新会话。
-    if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(client, chain.forkBase))) {
-      const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(client, chain.forkBase) }
+    if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(await chainClient(), chain.forkBase))) {
+      const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(await chainClient(), chain.forkBase) }
       if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} retry`)) {
         log(`↻ ${task.id} transient session error; no session on the chain to fork, re-seeded from the base for retry (${nth}/${waits.length}):\n${result.question}`)
         chain.note = retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context.")

@@ -8,6 +8,12 @@
 import type { AgentEnv, AgentHost, AgentHostFactory } from "../types"
 import { claudeAgent, claudeEnv, type ClaudeSpawn } from "./client"
 
+// The adapter's static capabilities, re-exported through this entry module so
+// the agent pool can degrade over the capability intersection before any host
+// starts (plans/0055 §8.5; the record is the same constant the started
+// client reports).
+export { CLAUDE_CAPABILITIES } from "./client"
+
 export type ClaudeHostOptions = {
   // The CLI to run; absent = "claude" on PATH. An agent profile's bin
   // (AgentHostOptions.bin) takes precedence.

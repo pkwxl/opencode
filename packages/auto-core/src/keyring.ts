@@ -16,8 +16,8 @@
 // after which the caller re-dispatches the same model from a fork of the
 // failed session (§7 step 1, src/session.ts).
 //
-// Activation (activateRings) happens where the run's agent starts
-// (src/agent-choice.ts), which knows whether the opencode server is managed
+// Activation (activateRings) happens where the run's agent hosts start
+// (src/agent-pool.ts), which knows whether the opencode servers are managed
 // or external. Under an external server (--server, OPENCODE_AUTO_SERVER, an
 // agent profile's `server`) rings are inactive: no spawn config, no
 // rotation, no §6.2 rule-4 exclusion — and the run-start routing block says

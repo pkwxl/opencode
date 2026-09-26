@@ -94,13 +94,18 @@ export function stepForUsed(entry: ModelEntry, limits: ReadonlyMap<string, numbe
 // windows of the run's agent: a model id the agent's model list does not
 // name is a warning, never an error (some providers load models late), and
 // a step whose window is unknown or not larger than the one below disables
-// the steps from it upward.
+// the steps from it upward. `agent` narrows the validation to one profile's
+// entries — the agent pool runs it per host, against that host's own model
+// list, once the host has started (§8.1); absent = every opencode entry,
+// against the one list the single-agent era passed.
 // AUTO-RESOLVE: does the missing-id warning fire for every registry model id, including entries on other adapters? -> no, only opencode-adapter entries (the windows come from this run's opencode server; a claude entry's models would always be missing from it, and the validation exists for the steps this run's own agent serves)
+// AUTO-RESOLVE: under the agent pool, which host's model list validates a shared entry? -> the profile's own host, and only entries of the host's profile (a second opencode profile runs another server whose list knows nothing of the first's models; validating a foreign profile's entries against it would warn about every one of them)
 // AUTO-DECISION: the missing-id warning covers every step id and the base id alike (the design states one rule, "a registry model id missing from contextLimits() is a warning"; a step id is a model id, and naming which id is unknown is what the line is for)
-export function stepValidationLines(registry: ModelRegistry, limits: ReadonlyMap<string, number>): string[] {
+export function stepValidationLines(registry: ModelRegistry, limits: ReadonlyMap<string, number>, agent?: string): string[] {
   const lines: string[] = []
   for (const entry of registry.models.values()) {
     if (registry.agents.get(entry.agent)?.adapter !== "opencode") continue
+    if (agent !== undefined && entry.agent !== agent) continue
     const ids = stepIds(entry)
     for (const id of ids) {
       if (!limits.has(id))
