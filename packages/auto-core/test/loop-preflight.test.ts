@@ -6,10 +6,10 @@
 // layer git does not ignore, a strict failure and a broken reference each exit
 // 1 naming the cause; with no registry preflight is unchanged. The operator
 // layer stays out of these tests (test/preload.ts empties XDG_CONFIG_HOME).
-import { afterEach, describe, expect, spyOn, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test"
+import { chmod, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { ensurePointer } from "../src/agents-block"
 import { renderAgentContract } from "../src/config-fix"
 import { beginUnit, changedFiles } from "../src/git"
@@ -76,6 +76,27 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
   const REGISTRY = { models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } }, tiers: { deep: ["glm"], simple: ["glm"] } }
   const saved = { set: process.env.PREFLIGHT_TEST_SET_KEY, missing: process.env.PREFLIGHT_TEST_MISSING_KEY }
 
+  // §8.7 runs every dispatched profile's `<bin> --version`; the registry the
+  // tests write carries the opencode profile with a fake bin so a passing
+  // preflight does not depend on a real opencode install being on the
+  // machine's PATH (Bun.spawn resolves PATH from the process start, so a fake
+  // prepended to process.env.PATH would not be seen).
+  let fakeBin = ""
+  beforeAll(async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-preflight-bin-"))
+    fakeBin = join(dir, "opencode-bin")
+    await Bun.write(fakeBin, "#!/bin/sh\nexit 0\n")
+    await chmod(fakeBin, 0o755)
+  })
+  afterAll(async () => {
+    if (fakeBin) await rm(dirname(fakeBin), { recursive: true, force: true })
+  })
+
+  // The registry every test writes: REGISTRY plus the profile the bin check
+  // dispatches (the profile keeps the name "opencode", so the agent-filter
+  // and routing assertions see the same names as the implied profile).
+  const registry = () => ({ ...REGISTRY, agents: { opencode: { adapter: "opencode", bin: fakeBin } } })
+
   afterEach(() => {
     for (const [key, value] of [["PREFLIGHT_TEST_SET_KEY", saved.set], ["PREFLIGHT_TEST_MISSING_KEY", saved.missing]] as const) {
       if (value === undefined) delete process.env[key]
@@ -139,7 +160,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
 
   test("an ignored, valid project layer is loaded once and held on the result; nothing else changes", async () => {
     const dir = await project({ ignored: true })
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(registry()))
     const { result, lines } = await run(dir)
     expect("exit" in result).toBe(false)
     if ("exit" in result) return
@@ -154,7 +175,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     await Bun.write(join(dir, ".opencode/auto/phases/review.md"), "# Review\n\n## plan duties\n\nPlan the review.\n")
     await git(dir, "add", "-A")
     await git(dir, "commit", "-qm", "custom type")
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...REGISTRY, routes: { review: "simple" } }))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...registry(), routes: { review: "simple" } }))
     const { result } = await run(dir)
     expect("exit" in result).toBe(false)
     if ("exit" in result) return
@@ -173,7 +194,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
 
   test("a tracked project layer exits 1 even with the entry: it must be untracked, then fix", async () => {
     const dir = await project({ ignored: true })
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(registry()))
     await git(dir, "add", "-f", MODELS_FILE)
     await git(dir, "commit", "-qm", "tracked layer")
     const { result, lines } = await run(dir)
@@ -194,7 +215,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
 
   test("a strict registry error exits 1 naming the field and the layer; nothing is written", async () => {
     const dir = await project({ ignored: true })
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...REGISTRY, tierz: {} }))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...registry(), tierz: {} }))
     const { result, lines } = await run(dir)
     expect(result).toEqual({ exit: 1 })
     expect(lines).toEqual([`${LAYER}: unknown field "tierz" (known: tz, agents, models, tiers, routes, classifier)`])
@@ -203,7 +224,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
 
   test("the loopback proxy warning (§8.10): under a registry with an opencode profile, when NO_PROXY misses a loopback name", async () => {
     const dir = await project({ ignored: true })
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(registry()))
     const warned = await run(dir, {}, { HTTP_PROXY: "http://user:secret@proxy:3128", NO_PROXY: "127.0.0.1" })
     expect("exit" in warned.result).toBe(false)
     expect(warned.lines).toEqual([
@@ -231,7 +252,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     process.env.PREFLIGHT_TEST_SET_KEY = "value-that-must-not-appear"
     delete process.env.PREFLIGHT_TEST_MISSING_KEY
     const keys = ["{env:PREFLIGHT_TEST_SET_KEY}", "{env:PREFLIGHT_TEST_MISSING_KEY}", "{file:preflight-test-missing-key}"]
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...REGISTRY, models: { glm: { ...REGISTRY.models.glm, keys } } }))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...registry(), models: { glm: { ...REGISTRY.models.glm, keys } } }))
     const { result, lines } = await run(dir)
     expect(result).toEqual({ exit: 1 })
     expect(lines).toEqual([
@@ -250,7 +271,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
   // bare name and OPENCODE_AUTO_MODEL_FALLBACK are usage errors.
   test("a needed tier the agent filter empties exits 1 naming the tier, the role and the filter", async () => {
     const dir = await project({ ignored: true })
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(registry()))
     const { result, lines } = await run(dir, {}, { OPENCODE_AUTO_AGENT: "claude" })
     expect(result).toEqual({ exit: 1 })
     const fix = "fix the registry or the agent filter and re-run"
@@ -265,7 +286,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
 
   test("the deep tier is needed by a phased run's planning sessions and by the decompose sessions of the default m mode; subtask off needs none", async () => {
     const dir = await project({ ignored: true })
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ models: REGISTRY.models, tiers: { simple: ["glm"] } }))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...registry(), tiers: { simple: ["glm"] } }))
     const fix = "fix the registry or the agent filter and re-run"
     const phased = await run(dir, { phases: "md" })
     expect(phased.result).toEqual({ exit: 1 })
@@ -287,7 +308,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
 
   test("OPENCODE_AUTO_MODEL takes internal names under a registry; an unknown name and _FALLBACK are usage errors", async () => {
     const dir = await project({ ignored: true })
-    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(REGISTRY))
+    await Bun.write(join(dir, MODELS_FILE), JSON.stringify(registry()))
     const routed = await run(dir, {}, { OPENCODE_AUTO_MODEL: "glm" })
     expect("exit" in routed.result).toBe(false)
     expect(routed.lines).toEqual(["⚙ experimental switches (OPENCODE_AUTO_* env vars, this run only): OPENCODE_AUTO_MODEL=*=glm"])

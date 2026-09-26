@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmod, mkdtemp, rm } from "node:fs/promises"
+import { chmod, mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DEFAULT_SCRIPT_IDLE_MS, runScript, scriptTmpDir } from "../src/script"
@@ -48,7 +48,10 @@ describe("runScript", () => {
     await Bun.write(script, "#!/usr/bin/env bash\npwd\n")
     await chmod(script, 0o755)
     const run = await runScript(dir, script, { out: outOf() })
-    expect(run.out.trim()).toBe(dir)
+    // pwd reports the physical working directory (getcwd resolves symlinks,
+    // e.g. macOS $TMPDIR → /private/var/…), so compare against the resolved
+    // target directory — the same directory either way.
+    expect(run.out.trim()).toBe(await realpath(dir))
   })
 
   test("truncates before running, no previous output survives", async () => {

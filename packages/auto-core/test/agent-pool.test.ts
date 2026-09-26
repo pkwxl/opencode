@@ -352,10 +352,13 @@ describe("preflight's bin check (§8.7)", () => {
     const file = join(dir, "models.json")
     await writeFile(file, JSON.stringify({ agents: { a: { adapter: "fake-a", bin: dead }, b: { adapter: "fake-a", bin: hang }, c: { adapter: "fake-a", bin: ok } }, models: { a1: { agent: "a", model: "prov/a" }, b1: { agent: "b", model: "prov/b" }, c1: { agent: "c", model: "prov/c" } }, tiers: { deep: ["a1", "b1", "c1"], simple: ["c1"] } }))
     const loaded = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file }, adapters: ["fake-a"] }))!
-    const problems = await checkAgentBins(loaded, undefined, { timeoutMs: 300 })
+    // 3000ms, not a few hundred: macOS takes ~300ms to first-exec each
+    // distinct script path (a per-path security assessment), which would race
+    // a tight timeout even though the bins exit instantly.
+    const problems = await checkAgentBins(loaded, undefined, { timeoutMs: 3000 })
     expect(problems).toEqual([
       `agent profile a (adapter fake-a): \`${dead} --version\` exited 3; fix the executable or the profile's bin and re-run`,
-      `agent profile b (adapter fake-a): \`${hang} --version\` timed out after 300ms; fix the executable or the profile's bin and re-run`,
+      `agent profile b (adapter fake-a): \`${hang} --version\` timed out after 3000ms; fix the executable or the profile's bin and re-run`,
     ])
     void registry
   })

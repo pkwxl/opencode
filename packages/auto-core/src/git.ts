@@ -279,6 +279,7 @@ export async function unitQuiet(dir: string, baseline: UnitBaseline): Promise<bo
 // (the file is not on disk, no shape-check subject); an empty baseline
 // (non-git environment / gate off) returns the empty set.
 export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Promise<Set<string>> {
+  const phys = await physicalDir(dir)
   const files = new Set<string>()
   for (const { root, sha } of baseline) {
     const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
@@ -292,7 +293,7 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Pro
     // own diff (the same reasoning as gitDiffFiles/statusEntries).
     const diff = await git(root, ["diff", "--name-only", "-z", "--diff-filter=d", "--ignore-submodules=all", sha || EMPTY_TREE, "--", "."])
     if (diff.code !== 0) continue
-    for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(dir, join(toplevel, path)))
+    for (const path of diff.out.split("\0").filter(Boolean)) files.add(relative(phys, join(toplevel, path)))
   }
   for (const rel of await untrackedFiles(dir)) files.add(rel)
   return files
@@ -307,6 +308,7 @@ export async function unitChangedFiles(dir: string, baseline: UnitBaseline): Pro
 // hunks for them; untracked files with NUL bytes or over 1 MiB are skipped).
 // Nested repositories are covered per baseline root, like unitChangedFiles.
 export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promise<Map<string, AddedLine[]>> {
+  const phys = await physicalDir(dir)
   const added = new Map<string, AddedLine[]>()
   const push = (rel: string, line: number, text: string) => {
     const list = added.get(rel) ?? []
@@ -347,7 +349,7 @@ export async function unitAddedLines(dir: string, baseline: UnitBaseline): Promi
       if (header) {
         if (raw.startsWith("+++ ")) {
           const path = raw.slice(4).replace(/^"(.*)"$/, "$1")
-          file = path.startsWith("b/") ? relative(dir, join(toplevel, path.slice(2))) : undefined
+          file = path.startsWith("b/") ? relative(phys, join(toplevel, path.slice(2))) : undefined
         }
         const hunk = /^@@ -\S+ \+(\d+)/.exec(raw)
         if (!hunk) continue
@@ -640,6 +642,7 @@ export async function untrackedFiles(dir: string): Promise<Set<string>> {
 // The XY status code is kept with each entry (the untracked criterion and the
 // listing share one parsing pass).
 async function statusEntries(dir: string, root: string): Promise<{ rel: string; status: string }[]> {
+  const phys = await physicalDir(dir)
   const top = Bun.spawn(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     stdout: "pipe",
     stderr: "ignore",
@@ -655,7 +658,7 @@ async function statusEntries(dir: string, root: string): Promise<{ rel: string; 
   return output
     .split("\0")
     .filter((entry) => entry && !(entry.startsWith("?? ") && entry.endsWith("/")))
-    .map((entry) => ({ rel: relative(dir, join(toplevel, entry.slice(3))), status: entry.slice(0, 2) }))
+    .map((entry) => ({ rel: relative(phys, join(toplevel, entry.slice(3))), status: entry.slice(0, 2) }))
 }
 
 // Whether the repository has uncommitted changes (confined to this
@@ -702,6 +705,19 @@ async function git(root: string, args: string[]): Promise<{ code: number; out: s
   return { code, out, err }
 }
 
+// git names paths physically: after `git -C <dir>` chdir resolves symlinks,
+// `rev-parse --show-toplevel` and the porcelain/diff/ls-files listings all
+// report real paths, while dir may reach the same directory through a symlink
+// (macOS $TMPDIR → /private/var/…, or any symlinked project path). Mixing the
+// two in relative() climbs out in ../../.. chains instead of naming the file
+// inside the tree, so every point that turns git output into a
+// target-directory-relative path canonicalizes dir first and compares
+// physical against physical; on a symlink-free path realpath(dir) is dir
+// itself and the result is byte-identical to before.
+export async function physicalDir(dir: string): Promise<string> {
+  return await realpath(dir).catch(() => dir)
+}
+
 function firstLine(text: string): string {
   return text.trim().split("\n")[0]!.slice(0, 200)
 }
@@ -736,6 +752,7 @@ async function gitDiffFiles(dir: string, root: string): Promise<string[]> {
   const top = await git(root, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
   const toplevel = top?.code === 0 ? top.out.trim() : ""
   if (!toplevel) return []
+  const phys = await physicalDir(dir)
   // --ignore-submodules=all: a nested repository is a single gitlink in the
   // outer one; changes to its inner files are listed separately by that
   // repository's own diff; not ignoring it would report the whole nested
@@ -743,7 +760,7 @@ async function gitDiffFiles(dir: string, root: string): Promise<string[]> {
   // collapsed directory entries).
   const diff = await git(root, ["diff", "--name-only", "-z", "--ignore-submodules=all", "HEAD", "--", "."]).catch(() => undefined)
   if (!diff || diff.code !== 0) return []
-  return diff.out.split("\0").filter(Boolean).map((path) => relative(dir, join(toplevel, path)))
+  return diff.out.split("\0").filter(Boolean).map((path) => relative(phys, join(toplevel, path)))
 }
 
 
@@ -759,11 +776,12 @@ export async function deletedFiles(dir: string, pathspec: string): Promise<strin
   const top = await git(dir, ["rev-parse", "--show-toplevel"]).catch(() => undefined)
   const toplevel = top?.code === 0 ? top.out.trim() : ""
   if (!toplevel) return []
+  const phys = await physicalDir(dir)
   const listed = await git(dir, ["ls-files", "--deleted", "-z", "--", pathspec]).catch(() => undefined)
   if (!listed || listed.code !== 0) return []
   // ls-files paths are relative to the repository root (also when the cwd is
   // a subdirectory); converted to relative to the target directory.
-  return listed.out.split("\0").filter(Boolean).map((path) => relative(dir, join(toplevel, path)))
+  return listed.out.split("\0").filter(Boolean).map((path) => relative(phys, join(toplevel, path)))
 }
 
 // Restoring a single file: retrieve it from the index (a deleted tracked

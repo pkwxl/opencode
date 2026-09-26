@@ -24,7 +24,7 @@
 import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises"
 import type { Stats } from "node:fs"
 import { join, relative, sep, dirname } from "node:path"
-import { repoRoots } from "./git"
+import { physicalDir, repoRoots } from "./git"
 import { log } from "./log"
 
 // path = the referenced path after stripping the optional `@<sha>` version
@@ -416,6 +416,7 @@ export async function gitAvailable(dir: string): Promise<boolean> {
 export async function renamePairs(dir: string): Promise<Array<{ old: string; new: string }>> {
   const top = (await gitOut(dir, ["rev-parse", "--show-toplevel"]))?.trim()
   if (!top) return []
+  const phys = await physicalDir(dir)
   if ((await gitRun(dir, ["add", "-A", "--", "."])).code !== 0) return []
   const out = await gitOut(dir, ["diff", "--cached", "--find-renames", "--diff-filter=R", "--name-status", "-z", "HEAD"])
   if (!out) return []
@@ -423,8 +424,8 @@ export async function renamePairs(dir: string): Promise<Array<{ old: string; new
   const pairs: Array<{ old: string; new: string }> = []
   for (let i = 0; i < parts.length - 2; i++) {
     if (!parts[i]!.startsWith("R")) continue
-    const oldRel = relative(dir, join(top, parts[i + 1]!))
-    const newRel = relative(dir, join(top, parts[i + 2]!))
+    const oldRel = relative(phys, join(top, parts[i + 1]!))
+    const newRel = relative(phys, join(top, parts[i + 2]!))
     if (oldRel.startsWith("..") || newRel.startsWith("..")) continue
     pairs.push({ old: oldRel.split(sep).join("/"), new: newRel.split(sep).join("/") })
   }
@@ -445,6 +446,7 @@ export async function renamePairs(dir: string): Promise<Array<{ old: string; new
 // target-directory-relative paths (old → final landing).
 export async function renameHistory(dir: string): Promise<Map<string, string>> {
   const edges = new Map<string, string>()
+  const phys = await physicalDir(dir)
   for (const root of await repoRoots(dir)) {
     const top = (await gitOut(root, ["rev-parse", "--show-toplevel"]))?.trim()
     if (!top) continue
@@ -453,8 +455,8 @@ export async function renameHistory(dir: string): Promise<Map<string, string>> {
     const parts = out.split("\0")
     for (let i = 0; i < parts.length - 2; i++) {
       if (!parts[i]!.startsWith("R")) continue
-      const oldRel = relative(dir, join(top, parts[i + 1]!)).split(sep).join("/")
-      const newRel = relative(dir, join(top, parts[i + 2]!)).split(sep).join("/")
+      const oldRel = relative(phys, join(top, parts[i + 1]!)).split(sep).join("/")
+      const newRel = relative(phys, join(top, parts[i + 2]!)).split(sep).join("/")
       if (oldRel.startsWith("..") || newRel.startsWith("..")) continue
       if (!edges.has(oldRel)) edges.set(oldRel, newRel)
     }
@@ -540,6 +542,7 @@ export async function reconfirmAnchors(dir: string): Promise<number> {
   // Per repository: the changed-file set (target-directory-relative) and the
   // HEAD short hash; no git / no HEAD / no changes → skipped
   const repos: Array<{ top: string; sha: string; changed: Set<string> }> = []
+  const phys = await physicalDir(dir)
   for (const root of await repoRoots(dir)) {
     const top = (await gitOut(root, ["rev-parse", "--show-toplevel"]))?.trim()
     if (!top) continue
@@ -549,7 +552,7 @@ export async function reconfirmAnchors(dir: string): Promise<number> {
     const changed = new Set<string>()
     for (const part of out.split("\0")) {
       if (!part) continue
-      const rel = relative(dir, join(top, part)).split(sep).join("/")
+      const rel = relative(phys, join(top, part)).split(sep).join("/")
       if (!rel.startsWith("..")) changed.add(rel)
     }
     if (changed.size) repos.push({ top, sha, changed })
@@ -592,7 +595,10 @@ export async function reconfirmAnchors(dir: string): Promise<number> {
       if (!repo) continue
       const work = await Bun.file(join(dir, at)).text().catch(() => undefined)
       if (work === undefined) continue
-      const head = await gitOut(repo.top, ["show", `HEAD:${relative(repo.top, join(dir, at)).split(sep).join("/")}`])
+      // repo.top is physical (git output) while dir may reach it through a
+      // symlink — join the canonicalized dir so the HEAD: pathspec names the
+      // same file git itself would (physicalDir, same reasoning as above).
+      const head = await gitOut(repo.top, ["show", `HEAD:${relative(repo.top, join(phys, at)).split(sep).join("/")}`])
       if (head === undefined) continue // HEAD lacks the file (added this round) → no version to pin
       const workLines = work.split("\n")
       const headLines = head.split("\n")
