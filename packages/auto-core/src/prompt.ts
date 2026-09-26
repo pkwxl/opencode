@@ -476,6 +476,15 @@ export function renderStepUp(input: { from: string; next: string }): string {
   return renderPrompt("step-up", { fromModel: input.from, toModel: input.next })
 }
 
+// The failure-message classifier's prompt (plans/0055 §7.1, src/classify.ts):
+// the current time in the registry's time zone (`now`, ISO 8601 with the
+// zone's offset), the zone itself, and the redacted error text — nothing
+// else leaves the driver in this session. The reply shape (one JSON line of
+// class and resetAt) is parsed by src/classify.ts parseClassifierReply.
+export function renderClassifyError(input: { now: string; tz: string; error: string }): string {
+  return renderPrompt("classify-error", { now: input.now, tz: input.tz, error: input.error })
+}
+
 // Stuck-loop hint (steered into a running session when the driver detects
 // repeated actions, src/stuck.ts): level sets the force of the hint — 1 switch
 // approach, 2 write the diagnosis before acting, 3 stop retrying and close out

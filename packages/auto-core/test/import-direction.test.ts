@@ -99,6 +99,10 @@ const CLASSIFIED: Record<string, Domain> = {
   capability: "driver",
   chain: "driver",
   check: "driver",
+  // The failure-message classifier (plans/0055 §7.1): when to ask, the
+  // redaction, the run's cache and call limit, the reply's parser and the
+  // one-shot tool-less session; watch asks it beside the event stream.
+  classify: "driver",
   clean: "driver",
   // Closing units: closeUnit, the mechanical handover, the close commit
   // (plans/0053 D17–D21).
@@ -363,6 +367,31 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
       "models-describe",
     ],
     why: "key rings are run state over the loaded registry (plans/0055 §4.3): selection's ring predicate, the run-start routing block, the agent start (activation and spawn config) and the session escalation read them, so the module must not import the loop, the session-driving layer, selection or its context wrapper, the agent start or an agent host — it only holds references and never logs",
+  },
+  // AUTO-DECISION: classify gets a one-way rule besides its classification row (watch asks it from the bottom of the session-driving chain, so an upward import would form a cycle; §12 places it beside watch's retry branch, reading the registry, the marks and the rings below it)
+  {
+    from: "classify",
+    to: [
+      "loop",
+      "loop-phase",
+      "loop-plan",
+      "loop-task",
+      "loop-preflight",
+      "runner",
+      "artifact",
+      "session",
+      "attempt",
+      "watch",
+      "exec-session",
+      "execute",
+      "unit-commit",
+      "interactive",
+      "agent-choice",
+      "agent/opencode/server",
+      "agent/claude/host",
+      "models-describe",
+    ],
+    why: "the classifier answers watch's retry branch from below it (plans/0055 §7.1): it reads the registry, the down marks and the rings and runs one tool-less session on the client it is handed, so it must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the agent start, an agent host or the models command's data",
   },
   {
     from: "watch",

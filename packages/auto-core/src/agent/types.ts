@@ -24,7 +24,12 @@
 // per-prompt reasoning-effort variant a registry model entry may declare —
 // opencode carries it in the v2 prompt body next to the model; adapters that
 // cannot apply a variant reject the field at registry load, so the driver
-// never has to. AgentClient's calls are unchanged.
+// never has to. AgentClient's calls are unchanged. The key rings (0055 §4.3)
+// amended it a fifth time: AgentHost.setConfig. The failure-message
+// classifier (0055 §7.1, F18) amended it a sixth time, consciously:
+// PromptInput.bare, a prompt that denies every tool — opencode carries it as
+// the v2 body's `tools: {"*": false}`; only opencode sessions ever receive it
+// (the registry accepts classifier entries on opencode profiles only).
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -201,6 +206,16 @@ export type PromptInput = {
   // (the loader rejects `variant` without `model`, and on adapters that
   // cannot apply it), so a prompt without a model never carries a variant.
   variant?: string
+  // Deny every tool for this prompt's turn: the failure-message classifier's
+  // one-shot session (plans/0055 §7.1) reads provider error text with no tool
+  // at all, so instructions hidden in that text can do no more than produce
+  // a wrong class. opencode: the v2 prompt body's `tools: {"*": false}`,
+  // which the server turns into a deny-all permission rule on the session and
+  // strips every tool from the provider request (0055 §7.1 records the
+  // check). Only an adapter with a verified tool-less mode may accept it; the
+  // claude adapter refuses a bare prompt instead of running it with tools.
+  // Absent = the session's tools as its agent and permissions define them.
+  bare?: boolean
 }
 
 export type PermissionReply = "once" | "always" | "reject"

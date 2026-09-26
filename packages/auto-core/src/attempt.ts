@@ -9,7 +9,7 @@ import { rm } from "node:fs/promises"
 import { join, relative } from "node:path"
 import type { AgentClient } from "./agent/types"
 import { resolveModel, roleOf, REUSE_BELOW, REUSE_IDLE_MINUTES, type SessionChain, type SessionResult } from "./chain"
-import { clearDownMarks, failbackOverride, isModelDown, stickyModel } from "./failback"
+import { clearDownMarks, failbackOverride, isModelDown, modelDownMark, stickyModel } from "./failback"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
@@ -56,15 +56,17 @@ async function recordDriverResolves(opts: Opts, taskID: string, events: ResolveE
 // A move's reason for the registry ◈ line (plans/0055 §6.5): the previously
 // shown model read against the registry at the dispatch's instant — outside
 // its windows ("window"), still marked down ("quota", standing for the
-// classified quota/auth/rate failures; key rings are a later step), or an
+// classified quota/auth/rate failures; "quota (classifier)" when the class
+// that wrote the mark came from the failure-message classifier, §7.1), or an
 // entry that is usable again, meaning the list changed underneath it (a
 // /failback or a scope boundary cleared its mark: "failback"). undefined =
-// no move, or a raw value with nothing attributable to say.
+// no move, or a raw value with nothing attributable to say. A key-ring
+// rotation keeps the model, so it never shows here.
 function moveReason(registry: ModelRegistry, previous: string | undefined, now: number): string | undefined {
   if (previous === undefined) return undefined
   const entry = registry.models.get(previous)
   if (entry !== undefined && !usableAt(entry, registry.tz, now)) return "window"
-  if (isModelDown(previous, now)) return "quota"
+  if (isModelDown(previous, now)) return modelDownMark(previous)?.classifier ? "quota (classifier)" : "quota"
   return entry !== undefined ? "failback" : undefined
 }
 
@@ -546,8 +548,20 @@ export async function attempt(
       // (executeWhole/runSubtask)据此回滚重做;无基线的调用方按普通阻塞处理。
       return result.testHandoverInvalid ? { ...result.blocked, rollback: true } : result.blocked
     }
+    // The classifier's fields ride along only when it spoke (plans/0055
+    // §7.1): its raised class, the reset time the escalation's down marks
+    // last until, or the answer still on its way.
     if (result.error)
-      return { type: "blocked", question: `session error: ${result.error}`, retryable: result.retryable, errorClass: result.errorClass, failover: result.failover }
+      return {
+        type: "blocked",
+        question: `session error: ${result.error}`,
+        retryable: result.retryable,
+        errorClass: result.errorClass,
+        failover: result.failover,
+        ...(result.classified ? { classified: true } : {}),
+        ...(result.resetAt !== undefined ? { resetAt: result.resetAt } : {}),
+        ...(result.pendingReset !== undefined ? { pendingReset: result.pendingReset } : {}),
+      }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }
   } finally {
     // 统计兜底(T-003): 下发失败/异常等未走正常收段的路径同样收段——无配对 begin

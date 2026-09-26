@@ -154,6 +154,20 @@ export function formatWindowState(state: WindowState, tz: string, now: number): 
   return state.opens === undefined ? "closed" : `opens ${clock(tz, state.opens, now)} ${tz}`
 }
 
+// An instant as the local wall clock of `tz` shows it, in ISO 8601 with the
+// zone's offset at that instant, to the second: `2026-09-27T15:00:00+08:00`
+// (`+00:00` for UTC). The failure-message classifier's prompt states the
+// current time this way, and its reply names a reset time in the same shape
+// (plans/0055 §7.1).
+export function isoInZone(at: number, tz: string): string {
+  const wall = wallAt(tz, at)
+  const offset = Math.round((wall - at) / MINUTE_MS)
+  const sign = offset < 0 ? "-" : "+"
+  const abs = Math.abs(offset)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${new Date(wall).toISOString().slice(0, 19)}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+}
+
 function clock(tz: string, at: number, now: number): string {
   const wall = wallAt(tz, at)
   const time = new Date(wall).toISOString().slice(11, 16)

@@ -28,6 +28,7 @@ import tplDecomposeK from "../templates/prompts/decompose-k.md" with { type: "fi
 import tplDecomposeM from "../templates/prompts/decompose-m.md" with { type: "file" }
 import tplDecomposeT from "../templates/prompts/decompose-t.md" with { type: "file" }
 import tplDecomposeV from "../templates/prompts/decompose-v.md" with { type: "file" }
+import tplClassifyError from "../templates/prompts/classify-error.md" with { type: "file" }
 import tplContextBase from "../templates/prompts/context-base.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
@@ -67,6 +68,7 @@ const embedded: Record<string, string> = {
   "decompose-m": tplDecomposeM,
   "decompose-t": tplDecomposeT,
   "decompose-v": tplDecomposeV,
+  "classify-error": tplClassifyError,
   "context-base": tplContextBase,
   dryrun: tplDryrun,
   "handoff-steer": tplHandoffSteer,
@@ -115,6 +117,10 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "phase-handover": ["## Key decisions", "## Constraints and pitfalls", "## Required reading for the next phase", "## Artifact index", "{{handover}}"],
   "phase-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "prior-knowledge": ["DONE", "{{file}}"],
+  // The failure-message classifier (plans/0055 §7.1): the driver parses the
+  // reply's one JSON line by these two keys, and an override must still show
+  // the error text and the current time the reset time is resolved against.
+  "classify-error": ['"class"', '"resetAt"', "{{error}}", "{{now}}"],
   "test-wrapup": ["{{handoffFile}}", "not dependent on this test run's result"],
   wrapup: ["Result: PASS", "Result: FAIL"],
 }

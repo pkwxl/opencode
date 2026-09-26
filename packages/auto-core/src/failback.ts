@@ -59,8 +59,10 @@ let override: { wildcard: string; fallback: string[] } | undefined
 // ---------------------------------------------------------------------------
 
 // A down mark; `until` (epoch ms) is the instant a reset time named, absent
-// = the mark clears at the scope boundaries.
-export type DownMark = { until?: number }
+// = the mark clears at the scope boundaries. `classifier` = the class that
+// wrote the mark came from the failure-message classifier (plans/0055 §7.1),
+// so the ◈ line names the move `quota (classifier)` (§6.5).
+export type DownMark = { until?: number; classifier?: true }
 
 const downModels = new Map<string, DownMark>()
 const downKeys = new Map<string, Map<string, DownMark>>()
@@ -72,8 +74,20 @@ export function downMarks(): ReadonlyMap<string, DownMark> {
   return downModels
 }
 
-export function markModelDown(model: string, until?: number): void {
-  downModels.set(model, until !== undefined ? { until } : {})
+export function markModelDown(model: string, until?: number, classifier?: boolean): void {
+  downModels.set(model, { ...(until !== undefined ? { until } : {}), ...(classifier === true ? { classifier: true as const } : {}) })
+}
+
+// A reset time that became known after the mark was written (the
+// classifier's answer arriving after the turn ended, plans/0055 §7.1): the
+// mark now lasts until that instant instead of the scope boundary. Only an
+// existing mark is changed — a mark a boundary or /failback already cleared
+// is not written again.
+export function extendModelDownMark(model: string, until: number): boolean {
+  const mark = downModels.get(model)
+  if (mark === undefined) return false
+  downModels.set(model, { ...mark, until })
+  return true
 }
 
 // Removes one model's mark (the recovery probe's "a successful probe clears
@@ -101,6 +115,16 @@ export function markKeyDown(provider: string, key: string, until?: number): void
     downKeys.set(provider, marks)
   }
   marks.set(key, until !== undefined ? { until } : {})
+}
+
+// The key-mark counterpart of extendModelDownMark: an existing key mark
+// lasts until `until`.
+export function extendKeyDownMark(provider: string, key: string, until: number): boolean {
+  const marks = downKeys.get(provider)
+  const mark = marks?.get(key)
+  if (marks === undefined || mark === undefined) return false
+  marks.set(key, { ...mark, until })
+  return true
 }
 
 export function keyDownMark(provider: string, key: string): DownMark | undefined {

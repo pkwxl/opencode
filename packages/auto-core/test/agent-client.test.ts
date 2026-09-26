@@ -48,6 +48,34 @@ describe("opencode adapter: requests", () => {
     expect("model" in seen[2]!).toBe(false)
   })
 
+  // The failure-message classifier's prompt denies every tool (plans/0055
+  // §7.1, F18): the v2 body's deprecated-but-honored `tools` map with the
+  // wildcard off, which opencode stores as a deny rule for every permission
+  // and applies when it prepares the provider request. Without bare the
+  // body carries no tools key at all.
+  test("prompt / promptAsync: bare becomes tools {\"*\": false}; without it there is no tools key", async () => {
+    const seen: Record<string, unknown>[] = []
+    const client = opencodeAgent(
+      sdk({
+        session: {
+          prompt: async (params: Record<string, unknown>) => (seen.push(params), {}),
+          promptAsync: async (params: Record<string, unknown>) => (seen.push(params), {}),
+        },
+      }),
+    )
+    await client.prompt({ session: "s1", model: "free/model", text: "classify", bare: true })
+    await client.prompt({ session: "s1", model: "free/model", text: "plain" })
+    await client.promptAsync({ session: "s1", text: "steer", bare: true })
+    await client.prompt({ session: "s1", text: "explicitly not bare", bare: false })
+    expect(seen[0]).toEqual({ sessionID: "s1", agent: undefined, model: { providerID: "free", modelID: "model" }, tools: { "*": false }, parts: [{ type: "text", text: "classify" }] })
+    expect("tools" in seen[1]!).toBe(false)
+    expect(seen[2]).toEqual({ sessionID: "s1", tools: { "*": false }, parts: [{ type: "text", text: "steer" }] })
+    expect("tools" in seen[3]!).toBe(false)
+    // Each request gets its own map: nothing the SDK does to one body leaks
+    // into the next.
+    expect(seen[0]!.tools).not.toBe(seen[2]!.tools)
+  })
+
   test("promptAsync: steer text only (no agent/model keys unless given)", async () => {
     const seen: Record<string, unknown>[] = []
     const client = opencodeAgent(sdk({ session: { promptAsync: async (params: Record<string, unknown>) => (seen.push(params), {}) } }))

@@ -11,10 +11,11 @@ import type { AgentClient } from "./agent/types"
 import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
 import { attempt } from "./attempt"
 import { taskDoc } from "./docpaths"
-import { clearModelDownMark, downMarks, failbackOverride, markModelDown, setSticky, stickyModel } from "./failback"
+import { clearModelDownMark, downMarks, extendKeyDownMark, extendModelDownMark, failbackOverride, markModelDown, setSticky, stickyModel } from "./failback"
 import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
 import {
   commitRotation,
+  currentKey,
   hasActiveRing,
   markCurrentKeyDown,
   clearRingMarks,
@@ -23,7 +24,7 @@ import {
   spawnKeyConfig,
 } from "./keyring"
 import { log } from "./log"
-import { formatWindowState } from "./model-window"
+import { formatWindowState, isoInZone } from "./model-window"
 import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { candidateKey, nowOf, selectContext, type Candidate } from "./routing"
 import { candidatesOf, select, type SelectCall, type SelectContext } from "./select"
@@ -183,7 +184,11 @@ export async function runSession(
   // move is today's path unchanged (fork copy, the chain's model, the
   // failover note, the ladder reset). Key rotation (step 1, above) runs
   // before this; cross-agent candidates are a later step.
-  const switchModel = async (why: string): Promise<boolean> => {
+  // `until` is a reset time the failure-message classifier read (§7.1): the
+  // model's down mark lasts until then instead of the scope boundary;
+  // `classified` records that the class came from the classifier, so the ◈
+  // line names the move "quota (classifier)" (§6.5).
+  const switchModel = async (why: string, until?: number, classified?: boolean): Promise<boolean> => {
     limits ??= await client.contextLimits()
     let from: string | undefined
     let to: string | undefined
@@ -191,7 +196,7 @@ export async function runSession(
     let ringSize = 0
     if (opts.routing) {
       from = chain.modelEntry
-      if (from !== undefined) markModelDown(from)
+      if (from !== undefined) markModelDown(from, until, classified)
       const facts = opts.routing
       const ctx = selectContext(facts, switches, cap, limits)
       const call = { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts), continuation: false as const }
@@ -323,7 +328,9 @@ export async function runSession(
   // selection's ring predicate (§6.2 rule 4) skip every entry on the
   // exhausted provider.
   // AUTO-RESOLVE: the design says the re-dispatch's "source choice and note are those of the retry path" — may the note keep the retry path's literal "transient session error" wording? -> no, the two note forms and the mechanism are the retry path's, but the lead names the key failure ("failed on this provider's key (…) retried on the next key of the ring") (a quota-failed fork told about a transient error would misread the tail message it carries; the forms explain a repeated prompt alike, so only the lead changes)
-  const rotateProviderKey = async (why: string): Promise<boolean> => {
+  // `until` as for switchModel: the failed key's mark lasts until the reset
+  // time the classifier read.
+  const rotateProviderKey = async (why: string, until?: number): Promise<boolean> => {
     const facts = opts.routing
     if (facts === undefined) return false
     const entry = facts.registry.models.get(chain.modelEntry ?? "")
@@ -337,14 +344,14 @@ export async function runSession(
       // fall-through, and §6.2 rule 4 keeps every entry on this provider out
       // of the selection that follows.
       // AUTO-DECISION: the current key is marked down even when no rotation can land (the design's step 1 words the marking as part of a rotation, but an unmarked current key would leave the ring reading usable while its key just failed with quota, and the failover would be able to re-pick the same dead key the moment the model mark clears)
-      markCurrentKeyDown(provider)
+      markCurrentKeyDown(provider, until)
       return false
     }
     const host = opts.server
     if (host === undefined || host.setConfig === undefined) return false
     const from = ringKeyLabel(rotation.from)
     const to = ringKeyLabel(rotation.to)
-    commitRotation(rotation)
+    commitRotation(rotation, until)
     host.setConfig(spawnKeyConfig())
     const restarted = await host.restart(`${why}; rotating the provider ${provider} key ring to key ${to}`)
     log(
@@ -384,6 +391,31 @@ export async function runSession(
     chain.id = undefined
     chain.pct = 100
     return true
+  }
+  // The down marks one failure's escalation may write (plans/0055 §7.1):
+  // the chain's entry and, when its provider has an active ring, the key it
+  // ran on — read before the escalation moves anything.
+  const downTarget = (): { model?: string; provider?: string; key?: { ref: string; label: string } } => {
+    const model = chain.modelEntry
+    const provider = opts.routing?.registry.models.get(model ?? "")?.provider
+    const key = provider !== undefined && hasActiveRing(provider) ? currentKey(provider) : undefined
+    return { model, provider, ...(key !== undefined ? { key: { ref: key.ref, label: key.label } } : {}) }
+  }
+  // A classifier answer that arrives after the turn ended (§7.1): it can only
+  // set when this failure's down marks clear — each mark the escalation wrote
+  // and nothing cleared since then lasts until the reset time instead of the
+  // scope boundary. The class it names comes too late to change anything.
+  const lateReset = (pending: Promise<number | undefined> | undefined, target: ReturnType<typeof downTarget>): void => {
+    if (pending === undefined) return
+    void pending.then((until) => {
+      if (until === undefined) return
+      const marked: string[] = []
+      if (target.model !== undefined && extendModelDownMark(target.model, until)) marked.push(target.model)
+      if (target.provider !== undefined && target.key !== undefined && extendKeyDownMark(target.provider, target.key.ref, until))
+        marked.push(`provider ${target.provider} key ${target.key.label}`)
+      if (marked.length && opts.routing)
+        log(`⏲ ${task.id} the classifier's answer arrived after the turn ended: ${marked.join(" and ")} stay${marked.length > 1 ? "" : "s"} down until ${isoInZone(until, opts.routing.registry.tz)}`)
+    })
   }
   // The window wait (plans/0055 §6.3): every candidate is blocked only by
   // its windows and one that is not down opens later. The dispatch sleeps
@@ -496,8 +528,11 @@ export async function runSession(
         continue
       }
       if (ping.type !== "idle") {
-        if (probed !== undefined) markModelDown(probed)
-        if (probedProvider !== undefined) markCurrentKeyDown(probedProvider)
+        // A reset time the classifier read from the probe's failure sets
+        // when the re-written marks clear (§7.1), as on the escalation.
+        if (probed !== undefined) markModelDown(probed, ping.resetAt, ping.classified)
+        if (probedProvider !== undefined) markCurrentKeyDown(probedProvider, ping.resetAt)
+        if (probed !== undefined) lateReset(ping.pendingReset, { model: probed })
         log(`⏳ ${task.id} probe session still failing (${firstLine(ping.question)}); continuing to wait`)
         continue
       }
@@ -587,11 +622,20 @@ export async function runSession(
     // The escalation is key → model → wait (plans/0055 §7): a ringed provider
     // rotates to its next key first (rotateProviderKey), the model failover
     // (switchModel, step 2) follows only when no key is left.
-    const classLabel =
+    // A class the failure-message classifier raised (§7.1) is marked in the
+    // label — the ⇄ line and the failover note read "quota restricted
+    // (classifier)" — and its reset time goes into the down marks the
+    // escalation writes; an answer still on its way sets them when it lands.
+    const classBase =
       result.errorClass === "quota" ? "quota restricted" : result.errorClass === "auth" ? "provider auth failed" : result.errorClass === "rate" ? "rate-limit wait too long" : undefined
+    const classLabel = classBase !== undefined && result.classified ? `${classBase} (classifier)` : classBase
     if ((opts.routing !== undefined || fallbackRing().length > 0) && classLabel !== undefined) {
-      if (opts.routing !== undefined && (await rotateProviderKey(classLabel))) continue
-      if (await switchModel(classLabel)) continue
+      const target = downTarget()
+      const moved =
+        (opts.routing !== undefined && (await rotateProviderKey(classLabel, result.resetAt))) ||
+        (await switchModel(classLabel, result.resetAt, result.classified))
+      lateReset(result.pendingReset, target)
+      if (moved) continue
       // 候选耗尽(候选与首选全部配额受限/不可用): 不再阻塞退出——等待-探测环等到
       // 额度恢复,期间探测用当前生效模型,恢复后从被中断的会话分叉续跑。
       await awaitRecovery(

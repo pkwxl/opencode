@@ -59,6 +59,12 @@ async function settle<T>(call: () => Promise<{ data?: unknown; error?: unknown }
 
 const none = () => undefined
 
+// The v2 body's tool map of a bare prompt, fresh per request: the wildcard
+// key denies every tool name (opencode matches permission names with its
+// wildcard matcher; the rule it stores is `{ permission: "*", action:
+// "deny", pattern: "*" }`).
+const bareTools = (): Record<string, boolean> => ({ "*": false })
+
 export function opencodeAgent(sdk: OpencodeClient): AgentClient {
   const text = (input: PromptInput) => [{ type: "text" as const, text: input.text }]
   return {
@@ -71,6 +77,11 @@ export function opencodeAgent(sdk: OpencodeClient): AgentClient {
     // a model string carries no model key at all (routing invariant, 0017),
     // and a variant (a registry model entry's reasoning-effort variant,
     // plans/0055 §4.2) rides in the v2 prompt body only when one is given.
+    // A bare prompt (the failure-message classifier, plans/0055 §7.1, F18)
+    // adds `tools: {"*": false}`: the server stores one deny rule for every
+    // permission on the session, and its request preparation drops every
+    // tool that rule denies (packages/opencode session/prompt.ts and
+    // session/llm/request.ts resolveTools), so the turn runs with no tool.
     prompt: (input, signal) =>
       settle(
         () =>
@@ -80,6 +91,7 @@ export function opencodeAgent(sdk: OpencodeClient): AgentClient {
               agent: input.agent,
               ...(input.model ? { model: splitModel(input.model) } : {}),
               ...(input.variant !== undefined ? { variant: input.variant } : {}),
+              ...(input.bare === true ? { tools: bareTools() } : {}),
               parts: text(input),
             },
             { signal },
@@ -94,6 +106,7 @@ export function opencodeAgent(sdk: OpencodeClient): AgentClient {
             ...(input.agent !== undefined ? { agent: input.agent } : {}),
             ...(input.model ? { model: splitModel(input.model) } : {}),
             ...(input.variant !== undefined ? { variant: input.variant } : {}),
+            ...(input.bare === true ? { tools: bareTools() } : {}),
             parts: text(input),
           }),
         none,

@@ -21,10 +21,11 @@ import type { SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models"
 import type { Opts } from "../src/opts"
-import { isModelDown, resetFailback, clearDownMarks } from "../src/failback"
+import { isModelDown, modelDownMark, resetFailback, clearDownMarks } from "../src/failback"
+import { resetClassifier } from "../src/classify"
 import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from "../src/keyring"
 import { resetSteps } from "../src/model-step"
-import { parseWindow } from "../src/model-window"
+import { isoInZone, parseWindow } from "../src/model-window"
 import { logRunRouting, type RoutingFacts } from "../src/routing"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { runSession } from "../src/session"
@@ -1080,6 +1081,195 @@ describe("context steps (plans/0055 §4.5)", () => {
     await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over" }, undefined, DEFAULTS)
     expect(agent.argsOf("promptAsync")).toEqual([[{ session: "ses_1", text: "hand over" }]])
     expect(chain.modelStep).toBeUndefined()
+  })
+})
+
+// The failure-message classifier (plans/0055 §7.1): a registry `classifier`
+// entry reads the failure wording the patterns cannot settle, in a one-shot
+// bare session beside the event stream. Its quota answer settles a turn the
+// agent is still retrying (abort, then key → model → wait) long before the
+// agent's own retries run out; a reset time sets when the down mark clears,
+// also when the answer lands after the turn ended; its own failures mark
+// only its entry.
+describe("the failure-message classifier (plans/0055 §7.1)", () => {
+  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+  const facts = (): RoutingFacts => ({
+    registry: {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map([entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" }), entry("free", { model: "free/model" })].map((item) => [item.name, item])),
+      tiers: { deep: tierList("deep", ["a", "b"]), simple: tierList("simple", ["b"]) },
+      routes: new Map(),
+      unused: [],
+      classifier: { names: ["free"], layer: "operator" },
+    },
+    agentFilter: "opencode",
+    filterSource: undefined,
+    defaultAgent: "opencode",
+  })
+  const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
+  // Wording no pattern knows (another language, a plan-specific limit).
+  const UNKNOWN = "Ihr Kontingent für diesen Tarif ist erschöpft"
+  const isClassify = (text: string) => text.includes("The error text:")
+  const answerTurn = (text: string) => (session: string): AgentEvent[] => [ev.text(session, `cls_${session}`, text), ev.idle(session)]
+  const capture = () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    return { lines, restore: () => printed.mockRestore() }
+  }
+  const until = async (done: () => boolean) => {
+    for (let i = 0; i < 200 && !done(); i++) await Bun.sleep(5)
+  }
+
+  beforeEach(() => {
+    resetFailback()
+    resetClassifier()
+  })
+  afterEach(() => {
+    resetClassifier()
+  })
+
+  test("a quota answer during retries settles the turn before the agent's retries run out; bare reaches the prompt", async () => {
+    const resetAt = Date.now() + 2 * 3_600_000
+    // The primary's first turn only retries (the agent's own backoff, which
+    // would run on for many minutes); every later turn is the default one.
+    const agent = make({
+      turn: (ctx) => {
+        if (isClassify(ctx.text)) return answerTurn(`{"class": "quota", "resetAt": "${isoInZone(resetAt, "UTC")}"}`)(ctx.session)
+        if (ctx.n === 1)
+          return [ev.message(ctx.session, "msg_retrying", 5000), { type: "retry", session: ctx.session, id: "rty_1", attempt: 1, next: 2000, error: { message: UNKNOWN } }]
+        return undefined
+      },
+    })
+    const out = capture()
+    try {
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", { routing: facts() }, chain, undefined, undefined, DEFAULTS)
+      expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+      // The primary, the classifier's one-shot session, then the failover
+      // fork on the tier's next candidate.
+      expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "free/model", "prov/b"])
+      const classify = agent.prompts[1]!
+      expect(classify.bare).toBe(true)
+      expect("agent" in classify).toBe(false)
+      expect(agent.prompts[0]!.bare).toBeUndefined()
+      expect(agent.prompts[2]!.bare).toBeUndefined()
+      expect(agent.argsOf("create")).toContainEqual([{ title: "auto: classify error" }])
+      // The retrying turn was aborted after its first retry: no more retries ran.
+      expect(agent.argsOf("abort")).toContainEqual(["ses_1"])
+      expect(chain.modelEntry).toBe("b")
+      // The down mark lasts until the answer's reset time and remembers where
+      // the class came from; the ⇄ and ◈ lines say so.
+      expect(modelDownMark("a")).toEqual({ until: Math.floor(resetAt / 1000) * 1000, classifier: true })
+      expect(out.lines.some((line) => line.includes("the classifier reads the failure as quota, resets"))).toBe(true)
+      expect(out.lines.some((line) => line.includes("quota restricted (classifier)") && line.includes("a → b"))).toBe(true)
+      expect(out.lines.some((line) => line.startsWith("◈ T-001 using model b") && line.includes("quota (classifier)"))).toBe(true)
+    } finally {
+      out.restore()
+    }
+  })
+
+  test("the classifier's own failure is classified by the patterns alone and marks only its entry", async () => {
+    // The primary's turn ends with a failure no pattern knows (the retry
+    // ladder retries it); the classifier's session fails with quota wording.
+    const agent = make({
+      turn: (ctx) => {
+        if (isClassify(ctx.text))
+          return [ev.error(ctx.session, { name: "APIError", message: "insufficient_quota: the free tier is spent", isRetryable: false }), ev.idle(ctx.session)]
+        if (ctx.n === 1)
+          return [
+            ev.message(ctx.session, "msg_fail", 5000),
+            { type: "retry", session: ctx.session, id: "rty_1", attempt: 1, error: { message: UNKNOWN } },
+            ev.error(ctx.session, { name: "APIError", message: UNKNOWN }),
+            ev.idle(ctx.session),
+          ]
+        return undefined
+      },
+    })
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", { routing: facts() }, chain, undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    await until(() => isModelDown("free", Date.now()))
+    expect(isModelDown("free", Date.now())).toBe(true)
+    // Neither the primary nor its fallback was touched: the unknown failure
+    // took the retry ladder on the same model.
+    expect(isModelDown("a", Date.now())).toBe(false)
+    expect(isModelDown("b", Date.now())).toBe(false)
+    expect(agent.prompts.filter((p) => p.bare === true)).toHaveLength(1)
+    expect(agent.prompts.filter((p) => p.bare !== true).map((p) => p.model)).toEqual(["prov/a", "prov/a"])
+    expect(chain.modelEntry).toBe("a")
+  })
+
+  test("an answer that lands after the turn ended only sets when the down mark clears", async () => {
+    const resetAt = Date.now() + 3 * 3_600_000
+    const inner = make({
+      turn: (ctx) => {
+        if (isClassify(ctx.text)) return answerTurn(`{"class": "quota", "resetAt": "${isoInZone(resetAt, "UTC")}"}`)(ctx.session)
+        // The primary retries once on unknown wording, then the agent gives
+        // up with a quota verdict the patterns settle on their own.
+        if (ctx.n === 1)
+          return [
+            ev.message(ctx.session, "msg_fail", 5000),
+            { type: "retry", session: ctx.session, id: "rty_1", attempt: 1, error: { message: UNKNOWN } },
+            ev.error(ctx.session, { name: "APIError", message: "usage limit reached, quota exceeded", isRetryable: false }),
+            ev.idle(ctx.session),
+          ]
+        return undefined
+      },
+    })
+    // The classifier's dispatch is slow: its answer can only arrive after
+    // the primary's turn has settled and the escalation marked a down.
+    let release!: () => void
+    const released = new Promise<void>((resolve) => (release = resolve))
+    const client = {
+      ...inner.client,
+      prompt: async (input: Parameters<typeof inner.client.prompt>[0], signal?: AbortSignal) => {
+        if (input.bare === true) await released
+        return inner.client.prompt(input, signal)
+      },
+    }
+    const out = capture()
+    try {
+      const chain = deepChain()
+      const result = await runSession(client, task, "p", { routing: facts() }, chain, undefined, undefined, DEFAULTS)
+      expect(result.type).toBe("idle")
+      expect(chain.modelEntry).toBe("b")
+      // Marked by the patterns' quota verdict, with no reset time yet.
+      expect(modelDownMark("a")).toEqual({})
+      release()
+      await until(() => modelDownMark("a")?.until !== undefined)
+      expect(modelDownMark("a")).toEqual({ until: Math.floor(resetAt / 1000) * 1000 })
+      // The class it named came too late to change anything.
+      expect(out.lines.some((line) => line.includes("the classifier's answer arrived after the turn ended: a stays down until"))).toBe(true)
+      expect(out.lines.some((line) => line.includes("(classifier)"))).toBe(false)
+    } finally {
+      release()
+      out.restore()
+    }
+  })
+
+  test("without a classifier list nothing is asked and the retry branch is unchanged (C2)", async () => {
+    const plain = facts()
+    delete (plain.registry as { classifier?: unknown }).classifier
+    const agent = make({
+      turn: (ctx) =>
+        ctx.n === 1
+          ? [
+              ev.message(ctx.session, "msg_fail", 5000),
+              { type: "retry", session: ctx.session, id: "rty_1", attempt: 1, error: { message: UNKNOWN } },
+              ev.error(ctx.session, { name: "APIError", message: UNKNOWN }),
+              ev.idle(ctx.session),
+            ]
+          : undefined,
+    })
+    const result = await runSession(agent.client, task, "p", { routing: plain }, deepChain(), undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
+    expect(agent.argsOf("create").some(([input]) => (input as { title: string }).title === "auto: classify error")).toBe(false)
   })
 })
 

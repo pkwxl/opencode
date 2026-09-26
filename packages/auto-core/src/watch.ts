@@ -10,7 +10,8 @@
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentEvent } from "./agent/types"
-import { classifySessionError, type ErrorInfo, type Watch } from "./chain"
+import { classifySessionError, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
+import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk, type ClassifierAnswer } from "./classify"
 import { afterSession, autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete, saveHandover } from "./handover"
@@ -114,6 +115,81 @@ export async function watch(
   let steerModel: string | undefined = steerContext?.model
   let stepNow = steerContext?.step ?? 0
   let reached: { step: number; model: string } | undefined
+  // —— The failure-message classifier (plans/0055 §7.1) ——
+  // Under a registry with a classifier list, a failure the patterns leave
+  // undecided is read by a classifier model beside the event stream: a
+  // retry the patterns class unknown (or a rate signal below its threshold)
+  // while the agent keeps retrying, and a session error that ends unknown.
+  // The call never holds up this loop; its answer, when it raises the class
+  // while the turn is still retrying, settles the turn exactly as the
+  // patterns do (abort, then the key → model → wait escalation). Answers are
+  // turn-level: `answer` is the latest one known for this turn's failure,
+  // `asked` the latest call still on its way — at the turn's end they give
+  // the escalation its reset time (resetAt) or the promise of one
+  // (pendingReset). `retrying` is true from a retry event until the model
+  // produces output again (the agent's retry got through), so a late answer
+  // never aborts a turn that recovered. Without a classifier all of this
+  // stays unset and the watch is byte-identical to before (C2).
+  const classifier = classifierFor(client, opts.routing, steerContext?.label)
+  let retrying = false
+  let consuming = true
+  let answer: ClassifierAnswer | undefined
+  let asked: Promise<ClassifierAnswer | undefined> | undefined
+  let raised: ErrorClass | undefined
+  // The reset fields a settled failure carries to the escalation: the
+  // accepted reset time of the known answer, or the answer still on its way.
+  const resetFields = (): Partial<Watch> => {
+    if (classifier === undefined) return {}
+    if (answer !== undefined) {
+      const at = acceptedReset(answer, classifier.now())
+      return at !== undefined ? { resetAt: at } : {}
+    }
+    const pending = asked
+    return pending !== undefined ? { pendingReset: pending.then((got) => acceptedReset(got, classifier.now())) } : {}
+  }
+  // An answer arriving beside the stream: raise the class of the running
+  // turn if it is still retrying on an undecided failure, and wake the event
+  // loop (the same preemption the half-open probe uses) to settle it.
+  const onAnswer = (got: ClassifierAnswer | undefined): void => {
+    if (got === undefined || !consuming) return
+    answer = got
+    if (!retrying || errorInfo === undefined || raised !== undefined) return
+    const cls = classifySessionError(errorInfo, client.errorPatterns)
+    if (!shouldAsk("retry", errorInfo, cls, client.errorPatterns)) return
+    const merged = mergeClass(cls, got.class, errorInfo)
+    if (merged !== "quota" && merged !== "auth" && merged !== "rate") return
+    raised = merged
+    trip()
+  }
+  const ask = (info: ErrorInfo): void => {
+    const call = classifier !== undefined ? askClassifier(classifier, info) : undefined
+    if (call === undefined) return
+    asked = call
+    void call.then(onAnswer)
+  }
+  // The pattern verdict of an undecided failure, raised by a known answer:
+  // the cached answer about the same message (an earlier call), else this
+  // turn's own answer. Without one the classifier is asked — once per turn:
+  // a later undecided signal of the same turn (the next retry, the session
+  // error that ends it, whose message folds in the retries') waits for that
+  // call instead of starting another — and the verdict stands.
+  // AUTO-DECISION: one classifier call per failing turn, and the turn's answer covers every undecided signal of that turn (the retries and the closing session error of one turn are one failing request whose wording drifts — the closing error even repeats the retry messages — so a call per distinct message would spend the run's 20-call budget on one failure)
+  const consult = (surface: "retry" | "error", info: ErrorInfo, cls: ErrorClass): { cls: ErrorClass; classified: boolean } => {
+    if (classifier === undefined || !shouldAsk(surface, info, cls, client.errorPatterns)) return { cls, classified: false }
+    const known = cachedAnswer(info) ?? answer
+    if (known === undefined) {
+      if (asked === undefined) ask(info)
+      return { cls, classified: false }
+    }
+    answer = known
+    const merged = mergeClass(cls, known.class, info)
+    return { cls: merged, classified: merged !== cls }
+  }
+  const raisedLine = (cls: ErrorClass): void => {
+    if (classifier === undefined || answer === undefined) return
+    const label = steerContext?.label ? `${steerContext.label} ` : ""
+    log(`⚖ ${label}the classifier reads the failure as ${describeAnswer(answer, classifier.registry.tz, classifier.now())}; settling the turn as ${cls}`)
+  }
   // 自动答复过的问题(同一问题重复出现仍阻塞停机)。
   const autoAnswered: string[] = []
   // --test-by-driver 测试执行协议状态: 会话 idle 时检测 tmp/test.sh(请求标记,
@@ -345,21 +421,30 @@ export async function watch(
       }
     } finally {
       probeActive = false
+      consuming = false
       if (probeTimer !== undefined) clearTimeout(probeTimer)
       // 本生成器只可能悬挂在 yield 上被消费方收尾(return 立即进 finally),清理
       // 无时延。半开抢占出口内层留有悬挂的 next()(旧连接永不兑现),return() 会
       // 排在它后面一并等死——跳过,由 attempt 的 sse.abort() 取消底层 reader 收尾;
       // 其余出口无悬挂 next(),return() 促走内层 finally(释放 reader 锁),与裸
       // for-await 行为一致。
-      if (!halfOpen) await inner.return?.().catch(() => {})
+      // A classifier answer settling the retrying turn preempts the same way
+      // (the stream is live, its next event may be minutes away): skipped too.
+      if (!halfOpen && raised === undefined) await inner.return?.().catch(() => {})
     }
   })()
   for await (const event of raced) {
+    // A classifier answer raised the class while events kept queueing: stop
+    // here and settle below, as the preemption would have.
+    if (raised !== undefined) break
     if (event.session !== sessionID) continue
     source.observe(event)
     if (event.type === "part") {
       const part = event.part
       idleHandled = false
+      // Model output after a retry: the agent's retry got through, so a late
+      // classifier answer no longer settles this turn.
+      if (part.kind !== "step-start") retrying = false
       // step-finish 增量累加(T-003,唯一不重不漏口径): 同 part 重发不重计。
       if (part.kind === "step-finish") {
         // 截断续跑判据(与计费去重无关,重发事件覆写同值无害): 非 length 收场
@@ -640,6 +725,7 @@ export async function watch(
     if (event.type === "retry") {
       const e = event.error
       idleHandled = false
+      retrying = true
       errorInfo = {
         ...(errorInfo ?? {}),
         ...(e.message !== undefined ? { message: e.message } : {}),
@@ -649,11 +735,15 @@ export async function watch(
         ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
         ...(event.next !== undefined ? { next: event.next } : {}),
       }
-      const cls = classifySessionError(errorInfo, client.errorPatterns)
+      // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
+      // the class now; otherwise the classifier is asked beside the stream
+      // and its answer settles the turn from onAnswer while it still retries.
+      const { cls, classified } = consult("retry", errorInfo, classifySessionError(errorInfo, client.errorPatterns))
       if (cls === "quota" || cls === "auth" || cls === "rate") {
         await client.abort(sessionID)
         const msg = errorInfo.message ?? error
         error = error ? `${error}\n${msg}` : msg
+        if (classified) raisedLine(cls)
         return snapshot({
           error: msg,
           // isRetryable:false(如 insufficient_quota)才下传不可重试;其余可降级
@@ -662,6 +752,8 @@ export async function watch(
           errorInfo,
           errorClass: cls,
           failover: true,
+          ...(classified ? { classified: true } : {}),
+          ...resetFields(),
         })
       }
       // The same overflow read from the retry surface (the agent retried the
@@ -720,6 +812,24 @@ export async function watch(
       break
     }
   }
+  // A classifier answer raised the class of the retrying turn (plans/0055
+  // §7.1): settle it exactly as the retry branch settles a pattern verdict —
+  // abort the running turn first, then hand the class to the escalation.
+  if (raised !== undefined) {
+    await client.abort(sessionID)
+    const msg = errorInfo?.message ?? error
+    error = error ? `${error}\n${msg}` : msg
+    raisedLine(raised)
+    return snapshot({
+      error: msg,
+      retryable: errorInfo?.isRetryable === false ? false : undefined,
+      errorInfo,
+      errorClass: raised,
+      failover: true,
+      classified: true,
+      ...resetFields(),
+    })
+  }
   if (!settled) {
     // 断流/半开收口: 中止 server 端可能仍在运行的孤儿回合,避免与重试的新会话并发
     // 改文件(abort 对已完成的会话无害;网络已断时调用静默失败)。会话错误经 attempt
@@ -734,12 +844,26 @@ export async function watch(
     error = error ? `${error}\n${msg}` : msg
     if (halfOpen) errorInfo = { ...(errorInfo ?? {}), message: errorInfo?.message ? `${errorInfo.message}\n${msg}` : msg }
   }
+  // A session error that ends unknown (plans/0055 §7.1): a cached answer
+  // raises its class; otherwise the classifier is asked now, and its answer
+  // serves the next occurrence of the message and the reset time of any
+  // down mark this failure leads to. Only provider text is asked about — a
+  // bare transport loss has no errorInfo and stays unknown.
+  let finalClass: ErrorClass | undefined
+  let finalClassified = false
+  if (error) {
+    const verdict = classifySessionError(errorInfo ?? {}, client.errorPatterns)
+    const consulted = errorInfo !== undefined ? consult("error", errorInfo, verdict) : { cls: verdict, classified: false }
+    finalClass = consulted.cls
+    finalClassified = consulted.classified
+    if (finalClassified) raisedLine(finalClass)
+  }
   return snapshot({
     error,
     testHandover,
     retryable,
     // 仅当确有会话错误时把分类带上行下效(不改控制流);正常结束不带这两个键,行为
     // 逐字节等价现状。errorInfo 可能为空(如纯断流)→ 据空输入归类为 unknown。
-    ...(error ? { errorInfo, errorClass: classifySessionError(errorInfo ?? {}, client.errorPatterns) } : {}),
+    ...(error ? { errorInfo, errorClass: finalClass, ...(finalClassified ? { classified: true } : {}), ...resetFields() } : {}),
   })
 }

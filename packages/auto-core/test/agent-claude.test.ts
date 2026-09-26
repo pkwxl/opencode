@@ -473,6 +473,19 @@ describe("claudeAgent: process manager", () => {
     }
   })
 
+  // `claude -p` has no verified way to run with every tool denied, so a bare
+  // prompt (the failure-message classifier's, plans/0055 §7.1) is refused
+  // before any process starts; the registry never routes one here.
+  test("a bare prompt is refused, never run with tools", async () => {
+    const { spawn, procs } = spawner(echo)
+    const agent = agentWith(spawn)
+    const id = ((await agent.create({ title: "auto: classify error" })) as { ok: true; value: { id: string } }).value.id
+    const refused = await agent.prompt({ session: id, text: "classify", bare: true })
+    expect(!refused.ok && String(refused.error)).toContain("bare")
+    expect((await agent.promptAsync({ session: id, text: "classify", bare: true })).ok).toBe(false)
+    expect(procs).toHaveLength(0)
+  })
+
   test("the child does not inherit a surrounding Claude Code session's identity", async () => {
     const { spawn, procs } = spawner(echo)
     const saved = { CLAUDECODE: process.env.CLAUDECODE, CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID }

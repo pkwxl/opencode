@@ -80,9 +80,10 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("26 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose;phase-append 见 0053 D27;step-up 见 0055 §4.5)", () => {
+  test("27 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose;phase-append 见 0053 D27;step-up 与 classify-error 见 0055 §4.5、§7.1)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
+      "classify-error",
       "context-base",
       "decompose",
       "decompose-a",
@@ -178,6 +179,9 @@ describe("内置模板注册表", () => {
       existingTasks: "- [pending] T-004: 既有任务",
       fromModel: "prov/model-256k",
       toModel: "prov/model",
+      now: "2026-09-26T15:00:00+08:00",
+      tz: "Asia/Shanghai",
+      error: "429 usage limit reached",
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)

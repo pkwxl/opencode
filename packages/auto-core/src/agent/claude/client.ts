@@ -285,6 +285,12 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
   // A prompt naming another model than the live process was started with
   // restarts it between turns (the model is fixed per process).
   const send = async (input: PromptInput, signal?: AbortSignal): Promise<AgentResult> => {
+    // A bare prompt must run with no tool at all (plans/0055 §7.1): `claude -p`
+    // has no verified way to do that, so the adapter refuses the dispatch
+    // rather than run provider error text in a session that has tools. The
+    // registry accepts classifier entries on opencode profiles only, so the
+    // driver never sends one here; this is the adapter's own guard.
+    if (input.bare === true) return fail(new Error("the claude adapter cannot run a prompt with every tool denied (bare)"))
     const s = known(input.session)
     if (!s) return fail(new Error(`session not found: ${input.session}`))
     const wanted = input.model !== undefined ? input.model.slice(input.model.indexOf("/") + 1) : undefined

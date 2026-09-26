@@ -50,6 +50,19 @@ export type Watch = {
   // 仅 retry part / session.status retry 两条提前结算面置 true:标识本错误可降级,
   // 交由 runSession 的 P4 failover 决策读取(此处只标记,不选择候选)。
   failover?: boolean
+  // The failure-message classifier (plans/0055 §7.1; set only under a
+  // registry with a classifier list, only when its answer applies):
+  // `classified` = errorClass came from the classifier's answer, which raised
+  // the pattern verdict (the ◈ and ⇄ lines mark the move "(classifier)");
+  // `resetAt` = the answer's reset time (epoch ms, accepted only in the
+  // future and at most 7 days away), which the escalation's down mark lasts
+  // until instead of the scope boundary; `pendingReset` = an answer still on
+  // its way when the turn ended, resolving to such a reset time or undefined
+  // — it can only set when the down marks written for this failure clear,
+  // never change the class.
+  classified?: boolean
+  resetAt?: number
+  pendingReset?: Promise<number | undefined>
   // 本回合 token 增量累加(STATS_PLAN §2,T-003): 逐 step-finish part 按 part.id
   // 去重累加——唯一不重不漏口径(服务端 assistantMessage.tokens 是末步覆盖值、
   // session.tokens 含 fork 继承前缀,均不可直接求和,不得回退到这两个口径)。
@@ -67,7 +80,7 @@ export type Watch = {
 
 export type SessionResult =
   | { type: "idle"; lastText: string; testHandover?: boolean }
-  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & {
+  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & Pick<Watch, "classified" | "resetAt" | "pendingReset"> & {
       // 严格恢复: 本阻塞由交接文档无效触发,单元所有者(executeWhole/runSubtask)据此
       // 回滚到单元基线并冷启动重做,而非把阻塞上抛;无基线的调用方忽略此标记。
       rollback?: boolean
@@ -228,16 +241,35 @@ const RATE_WAIT_MS = 60_000
 //   5. transient  —— 已知瞬时错误(走现有重试路径,不换模型)。
 //   6. unknown    —— 保守缺省(拿不准不换)。
 export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns = {}): ErrorClass {
-  const hay = `${info.message ?? ""}\n${info.responseBody ?? ""}`
-  const hit = (neutral: RegExp | undefined, own: RegExp | undefined) => (neutral?.test(hay) ?? false) || (own?.test(hay) ?? false)
+  const hit = hitter(info)
   if (hit(undefined, extra.overflow)) return "overflow"
   if (info.isRetryable === false || hit(QUOTA_RE, extra.quota) || info.statusCode === QUOTA_STATUS) return "quota"
   if (info.statusCode === 401 || info.statusCode === 403 || hit(AUTH_RE, extra.auth)) return "auth"
-  const rateSignal = info.statusCode === 429 || hit(RATE_RE, extra.rate)
-  const rateThreshold = (info.attempt ?? 0) >= RATE_ATTEMPTS || (info.next ?? 0) > RATE_WAIT_MS
-  if (rateSignal && rateThreshold) return "rate"
+  if (rateSignal(info, extra) && rateThresholdMet(info)) return "rate"
   if (hit(TRANSIENT_RE, extra.transient)) return "transient"
   return "unknown"
+}
+
+// Pattern tests over the merged message + response body: the neutral pattern
+// or the agent's own, either one hits.
+function hitter(info: ErrorInfo): (neutral: RegExp | undefined, own: RegExp | undefined) => boolean {
+  const hay = `${info.message ?? ""}\n${info.responseBody ?? ""}`
+  return (neutral, own) => (neutral?.test(hay) ?? false) || (own?.test(hay) ?? false)
+}
+
+// A rate signal: a 429, or rate-limit wording (neutral or the agent's own).
+// It counts as the rate class only once the threshold below holds; below it,
+// the agent is still backing off and the signal classes as transient or
+// unknown. The failure-message classifier (src/classify.ts, plans/0055 §7.1)
+// is asked about exactly that below-threshold case.
+export function rateSignal(info: ErrorInfo, extra: AgentErrorPatterns = {}): boolean {
+  return info.statusCode === 429 || hitter(info)(RATE_RE, extra.rate)
+}
+
+// The rate threshold: the agent has retried RATE_ATTEMPTS times, or its next
+// wait is longer than RATE_WAIT_MS.
+export function rateThresholdMet(info: ErrorInfo): boolean {
+  return (info.attempt ?? 0) >= RATE_ATTEMPTS || (info.next ?? 0) > RATE_WAIT_MS
 }
 
 // 上下文占比低于该值(%)时复用上一会话(仅 OPENCODE_AUTO_REUSE_SESSION=on 生效)。

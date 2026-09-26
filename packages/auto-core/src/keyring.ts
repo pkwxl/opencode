@@ -131,9 +131,11 @@ export function ringRotation(provider: string, now: number): RingRotation | unde
 
 // Commits a decided rotation: the current key is marked down and the
 // position advances. The position stays where it landed afterwards — a
-// cleared mark never moves it back (§6.4).
-export function commitRotation(rotation: RingRotation): void {
-  markKeyDown(rotation.provider, rotation.from.ref.ref)
+// cleared mark never moves it back (§6.4). `until` is a reset time the
+// failure-message classifier read (§7.1): the key's mark lasts until then
+// instead of the scope boundary.
+export function commitRotation(rotation: RingRotation, until?: number): void {
+  markKeyDown(rotation.provider, rotation.from.ref.ref, until)
   positions.set(rotation.provider, rotation.to.index)
 }
 
@@ -184,10 +186,12 @@ export function clearRingMarks(provider: string): void {
 }
 
 // Marks the ring's current key down without moving the position: what a
-// failed recovery probe does to the key it ran on.
-export function markCurrentKeyDown(provider: string): void {
+// failed recovery probe does to the key it ran on, and what an exhausted
+// ring's escalation does before it falls through; `until` as for
+// commitRotation.
+export function markCurrentKeyDown(provider: string, until?: number): void {
   const key = currentKey(provider)
-  if (key !== undefined) markKeyDown(provider, key.ref)
+  if (key !== undefined) markKeyDown(provider, key.ref, until)
 }
 
 // Tests reset the module state (one Bun process runs many test files; the

@@ -12,6 +12,9 @@ import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-cor
 import { renderText } from "@opencode-ai/auto-core/template"
 import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/server"
 import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
+import { askClassifier, classifierFor, resetClassifier } from "@opencode-ai/auto-core/classify"
+import type { AgentClient, AgentEvent } from "@opencode-ai/auto-core/agent/types"
+import type { RoutingFacts } from "@opencode-ai/auto-core/routing"
 import { estimateTokens } from "@opencode-ai/auto-core/usage"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
@@ -438,6 +441,101 @@ test.skipIf(!E2E)(
     }
   },
   { timeout: 60_000 },
+)
+
+// The failure-message classifier's tool denial against a real server and a
+// real model (auto-core plans/0055 §7.1, §13 S3): a bare prompt — the v2
+// body's `tools: {"*": false}` — must leave the model with no tool at all.
+// A control turn in the same directory first shows the model does read the
+// planted file when it has tools; the bare turn, asked the same, must call
+// no tool and cannot quote the file, and the session stores the deny-all
+// rule. Last, one real classifier call parses the model's reply. Opt-in and
+// naming the model (the operator's own opencode credentials apply; a few
+// hundred tokens):
+//   OPENCODE_AUTO_E2E=1 OPENCODE_AUTO_E2E_CLASSIFIER="prov/model" bun test test/e2e.test.ts -t "bare prompt"
+const CLASSIFIER_MODEL = process.env.OPENCODE_AUTO_E2E_CLASSIFIER ?? ""
+
+test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
+  "a bare prompt denies every tool on a real opencode server, and a real classifier call parses (auto-core plans/0055 §7.1)",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-e2e-bare-"))
+    const word = `PLANTED-${crypto.randomUUID().slice(0, 8)}`
+    await writeFile(join(dir, "probe.txt"), `The secret word is ${word}.\n`)
+    const host = await manage(dir, undefined, { log: () => {} })
+    // One turn on a fresh session: its tool parts and closing words.
+    const turn = async (client: AgentClient, bare: boolean) => {
+      const created = await client.create({ title: bare ? "auto e2e: bare" : "auto e2e: control" })
+      if (!created.ok) throw new Error(`create failed: ${JSON.stringify(created.error)}`)
+      const session = created.value.id
+      const stop = new AbortController()
+      const events = await client.events(stop.signal)
+      const tools: string[] = []
+      const texts = new Map<string, string>()
+      const failures: string[] = []
+      const reading = (async () => {
+        for await (const event of events as AsyncIterable<AgentEvent>) {
+          if (event.session !== session) continue
+          if (event.type === "part" && event.part.kind === "tool") tools.push(event.part.tool)
+          // The prompt's own text part arrives too, never final.
+          if (event.type === "part" && event.part.kind === "text" && event.part.final) texts.set(event.part.id, event.part.text)
+          if (event.type === "error") failures.push(event.error.message ?? event.error.name ?? "error")
+          if (event.type === "permission") await client.replyPermission(event.request, "reject")
+          if (event.type === "idle") return
+        }
+      })()
+      const sent = await client.prompt({
+        session,
+        model: CLASSIFIER_MODEL,
+        text: "Use your file-reading tool to read the file probe.txt in the current directory, then reply with the secret word it contains. If you have no tool that can read files, reply exactly: NO TOOLS",
+        ...(bare ? { bare: true } : {}),
+      })
+      await Promise.race([reading, Bun.sleep(180_000)])
+      stop.abort()
+      return { session, sent, tools, reply: [...texts.values()].join("\n"), failures }
+    }
+    try {
+      const control = await turn(host.client, false)
+      expect(control.failures).toEqual([])
+      expect(control.tools.length).toBeGreaterThan(0)
+      expect(control.reply).toContain(word)
+      const bare = await turn(host.client, true)
+      expect(bare.sent.ok).toBe(true)
+      expect(bare.failures).toEqual([])
+      expect(bare.tools).toEqual([])
+      expect(bare.reply).not.toContain(word)
+      // The rule opencode stored on the session: every permission denied.
+      const stored = (await (await fetch(new URL(`/session/${bare.session}`, host.url))).json()) as { permission?: { permission: string; action: string; pattern: string }[] }
+      expect(stored.permission).toEqual([{ permission: "*", action: "deny", pattern: "*" }])
+      // One real classifier call: the reply parses into one of the classes.
+      resetClassifier()
+      const routing: RoutingFacts = {
+        registry: {
+          layers: [{ name: "operator", path: "/unused/models.json" }],
+          tz: "Asia/Shanghai",
+          agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+          models: new Map([["free", { name: "free", layer: "operator", agent: "opencode", model: CLASSIFIER_MODEL, provider: CLASSIFIER_MODEL.split("/")[0] }]]),
+          tiers: {},
+          routes: new Map(),
+          unused: [],
+          classifier: { names: ["free"], layer: "operator" },
+        },
+        agentFilter: "opencode",
+        filterSource: undefined,
+        defaultAgent: "opencode",
+      }
+      const answer = await askClassifier(classifierFor(host.client, routing)!, {
+        message: "Your plan's monthly allowance has been used up. It renews at 03:00 tomorrow.",
+        statusCode: 429,
+      })
+      expect(answer).toBeDefined()
+      expect(["quota", "rate", "auth", "transient", "unknown"]).toContain(answer!.class)
+    } finally {
+      resetClassifier()
+      host.close()
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+  { timeout: 600_000 },
 )
 
 // CLI 解析用例不需要 opencode 与 provider 凭证,始终运行: 以子进程运行源码入口,
