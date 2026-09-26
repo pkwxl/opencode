@@ -1,4 +1,5 @@
-// `with { type: "file" }` 导入在运行期/编译产物中解析为文件路径字符串。
+// A `with { type: "file" }` import resolves to the file's path string at
+// runtime and in the compiled output.
 declare module "*.md" {
   const path: string
   export default path
