@@ -321,6 +321,10 @@ export async function runTask(
     // 模式持久基点(.auto/units.json 的 forkBase,digest: 前缀)存活即复用、失效才从
     // context.md 重建,session 模式沿用/校验 fork-base 字段,失败沿回退链
     // (digest → session → 冷启动)降级,undefined = 冷启动。
+    // Under a registry the resolution waits for the subtask loop below: the
+    // base is per agent (plans/0055 §8.4), so each subtask resolves the base
+    // of the agent its chain currently runs on instead of one base serving
+    // every subtask of the run.
     let fork: ForkBaseInfo | undefined
     if (mode === "auto") {
       const sw = autoSwitches()
@@ -334,8 +338,12 @@ export async function runTask(
       if (decomposed.type !== "ok") return decomposed
       task = decomposed.task
       // ①′(digest)/基点校验(session)——此后每个子任务都从同一基点分叉
-      // (fork=off 时 fork 恒为 undefined,行为与现状零差异)。
-      fork = sw.fork ? await ensureForkBase(client, plan, task, opts, chain) : undefined
+      // (fork=off 时 fork 恒为 undefined,行为与现状零差异)。Without a
+      // registry this single resolution after decompose is the unchanged
+      // one-agent era behavior (C2); under a registry it is the subtask
+      // loop's job (see the comment at `let fork`), so nothing resolves
+      // here.
+      fork = sw.fork && !opts.routing ? await ensureForkBase(client, plan, task, opts, chain, sw) : undefined
       // 子任务交接文档的陈旧清理(镜像 ondemand 语义): 非恢复续跑时清除上次尝试
       // 遗留;恢复续跑(active 记录)时保留,由子任务会话凭交接续跑。只删未被 git
       // 跟踪的份(F4 同款): 已跟踪的 handoff.md 必属未收口的执行单元(单元收口时
@@ -415,6 +423,17 @@ export async function runTask(
         // 自身进度,runSubtask 的启动 clean 门禁据此豁免(plans/0021-commit-boundary-design.md)。
         const recalledPhase = recalled?.active === true ? recalled.phase : undefined
         const resumeUnit = recalledPhase?.kind === "subtasks" && recalledPhase.index === index + 1
+        // Per-agent fork base (plans/0055 §8.4): each subtask resolves the
+        // base of the agent its chain currently runs on — reusing it while
+        // alive, building it lazily on the first subtask that forks on that
+        // agent (the subtask route's pick lands the build on the agent the
+        // subtask itself will dispatch on), and leaving the other agents'
+        // entries untouched. A subtask that moved to another agent forks from
+        // that agent's base, building it on first use. The reload at the loop
+        // tail keeps the record fresh; without a registry the one base
+        // resolved after decompose serves every subtask, exactly as before
+        // (C2).
+        if (opts.routing && switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
         const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit)
         if (blocked) return blocked
         // 勾选后的镜像刷新已在 runSubtask 内于统一提交前完成,这里只重读任务。

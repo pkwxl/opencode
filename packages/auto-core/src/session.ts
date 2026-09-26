@@ -47,6 +47,12 @@ import { type Steer, type TestRun } from "./testrun"
 // 引入漂移。回退链: 持久 digest 基点存活复用 → digest 重建 → session 基点(units.json
 // 持久字段,校验存活,失效回退冷启动) → 冷启动。session 模式基点跨运行持久,用量
 // 经 messages 末条消息重建(近似即可;同次运行且基点即链上会话时直接取跟踪值)。
+// Per agent under a model registry (plans/0055 §8.4): the record is a map from
+// agent profile to base, read and written for the forking chain's agent alone,
+// and the digest rebuild is dispatched with the model selected for the
+// `subtask` route (see the body) — so a base exists per agent, built lazily on
+// the agent of the first subtask that forks on it. Without a registry the
+// one-agent-era behavior is byte-identical (C2).
 export async function ensureForkBase(
   client: ClientSource,
   plan: Plan,
@@ -57,12 +63,16 @@ export async function ensureForkBase(
 ): Promise<ForkBaseInfo | undefined> {
   if (!switches.fork) return undefined
   const dir = opts.dir ?? plan.dir
-  // The run's agent (plans/0055 §8.4): the base the pipeline forks from must
-  // live on the agent this run dispatches on, so the persisted record is read
-  // and written for that agent alone (RoutingFacts.runAgent; undefined = no
-  // registry, where the plain-string record of the one-agent era applies
-  // as-is and setForkBase keeps the old shape).
-  const agent = opts.routing?.runAgent
+  // The reading agent (plans/0055 §8.4): the base the pipeline forks from must
+  // live on the agent the forking subtask's chain runs on, so the persisted
+  // record is read and written for that agent alone. Under a registry that is
+  // the chain's agent — the decompose dispatch's before the first subtask,
+  // the moved-to agent after a cross-agent failover (a subtask that moved to
+  // another agent forks from that agent's base, building it on first use);
+  // RoutingFacts.runAgent stands in while the chain holds no session.
+  // undefined = no registry, where the plain-string record of the one-agent
+  // era applies as-is and setForkBase keeps the old shape.
+  const agent = opts.routing ? (chain.agent ?? opts.routing.runAgent) : undefined
   // digest 持久基点以 `digest:` 前缀与理解会话 id(session 基点)区分——无前缀值在
   // digest 模式下只是重建失败时的兜底,不参与「存活即复用」。A plain string is the
   // one-agent era's record and reads as this run's (the default) agent's; a
@@ -72,28 +82,49 @@ export async function ensureForkBase(
   // host (a session id is agent-local, §8.2), resolved through the pool when
   // the caller passes one.
   const baseClient = await clientOf(client, agent)
+  // The base lines name the agent under a registry (the base is agent-local,
+  // §8.4); without one the lines stay exactly as they were (C2).
+  const onAgent = agent !== undefined ? ` on agent ${agent}` : ""
   const persistID = forkBaseRecord?.startsWith("digest:") ? forkBaseRecord.slice("digest:".length) : undefined
   if (switches.forkBase === "digest") {
     if (persistID !== undefined) {
       if (await sessionAlive(baseClient, persistID)) {
         const used = await sessionUsed(baseClient, persistID)
-        log(`⑂ ${task.id} digest base reuse: session ${persistID} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
-        return { id: persistID, used }
+        log(`⑂ ${task.id} digest base reuse: session ${persistID}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
+        return { id: persistID, used, ...(agent !== undefined ? { agent } : {}) }
       }
-      log(`↻ ${task.id} persistent digest base ${persistID} is stale; rebuilding from ${taskDoc(task.id, "context")}`)
+      log(`↻ ${task.id} persistent digest base ${persistID}${onAgent} is stale; rebuilding from ${taskDoc(task.id, "context")}`)
     }
     const digest = (await Bun.file(join(dir, taskDoc(task.id, "context"))).text().catch(() => "")).trim()
     if (digest) {
       const subject = `${task.id} ctxbase ${task.title}`
-      const base: SessionChain = { pct: 100, used: 0, at: 0, subject }
+      // The base is created with the model selected for the `subtask` route,
+      // not `bypass` (§8.4): a base's value is a warm prefix (0003), and a
+      // prefix cached under one model is a miss under another — the one-shot
+      // chain carries the `subtask` role so the dispatch inside selects (and
+      // fails over) on the subtask tier's list for the current phase type,
+      // the picked entry's variant and base step included. Without a registry
+      // the chain stays roleless and the bypass routing of the one-agent era
+      // applies unchanged (C2).
+      const base: SessionChain = { pct: 100, used: 0, at: 0, subject, ...(opts.routing ? { role: "subtask" as const } : {}) }
       const result = await runSession(client, task, renderContextBase(task, digest), opts, base)
       if (result.type === "idle" && base.id) {
         // The record names the agent the base session truly lives on (the
-        // dispatch inside picked it; §8.2) — with one agent a run this is
-        // always the reading agent.
-        await setForkBase(dir, task.id, `digest:${base.id}`, opts.routing ? (base.agent ?? agent) : undefined)
-        log(`⑂ ${task.id} digest base ready: session ${base.id} (digest prefix ${formatTokens(base.used)} tokens)`)
-        return { id: base.id, used: base.used }
+        // dispatch inside picked it; §8.2) — the subtask route's first usable
+        // candidate's profile, which is where the forking subtask dispatches
+        // too, so the prefix caches under the model that forks from it. With
+        // one agent a run this is always the reading agent.
+        const landed = opts.routing ? (base.agent ?? agent) : undefined
+        await setForkBase(dir, task.id, `digest:${base.id}`, landed)
+        // The ready line names the agent and the model under a registry (the
+        // base is agent-local, §8.4, and was built for the subtask route's
+        // model); without one it stays exactly the old line (C2).
+        log(
+          landed !== undefined
+            ? `⑂ ${task.id} digest base ready: session ${base.id} on agent ${landed} (model ${base.modelEntry ?? "unrouted"}, digest prefix ${formatTokens(base.used)} tokens)`
+            : `⑂ ${task.id} digest base ready: session ${base.id} (digest prefix ${formatTokens(base.used)} tokens)`,
+        )
+        return { id: base.id, used: base.used, ...(landed !== undefined ? { agent: landed } : {}) }
       }
       log(`↻ ${task.id} digest base session not established${result.type === "blocked" ? ` (${firstLine(result.question)})` : ""}; falling back to the session base`)
     } else {
@@ -107,10 +138,10 @@ export async function ensureForkBase(
   if (sessionID) {
     if (await sessionAlive(baseClient, sessionID)) {
       const used = sessionID === chain.id ? chain.used : await sessionUsed(baseClient, sessionID)
-      log(`⑂ ${task.id} session base ready: session ${sessionID} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
-      return { id: sessionID, used }
+      log(`⑂ ${task.id} session base ready: session ${sessionID}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
+      return { id: sessionID, used, ...(agent !== undefined ? { agent } : {}) }
     }
-    log(`↻ ${task.id} session base ${sessionID} is stale; falling back to cold start`)
+    log(`↻ ${task.id} session base ${sessionID}${onAgent} is stale; falling back to cold start`)
   }
   return undefined
 }

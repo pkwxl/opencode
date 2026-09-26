@@ -11,32 +11,35 @@
 // claude. This file is the agent-neutral layer between them.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentEvent, AgentHost } from "../src/agent/types"
 import { attempt } from "../src/attempt"
-import { singleHost } from "../src/agent-pool"
+import { singleHost, startPool } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
 import type { SessionChain } from "../src/chain"
 import type { Interactive } from "../src/interactive"
-import type { ModelEntry, ModelRegistry, TierList } from "../src/models"
+import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
 import type { Opts } from "../src/opts"
-import { isModelDown, modelDownMark, resetFailback, clearDownMarks } from "../src/failback"
+import { isModelDown, markModelDown, modelDownMark, resetFailback, clearDownMarks } from "../src/failback"
 import { resetClassifier } from "../src/classify"
 import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from "../src/keyring"
 import { resetSteps } from "../src/model-step"
 import { isoInZone, parseWindow } from "../src/model-window"
-import { logRunRouting, type RoutingFacts } from "../src/routing"
+import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
 import { recallProgress, saveProgress } from "../src/resume"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
-import { runSession } from "../src/session"
+import { ensureForkBase, runSession } from "../src/session"
+import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
 import { flushStats, setStatsClock } from "../src/stats"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
+import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
-import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
+import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
 import { task } from "./fixtures/runner"
+import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
 
 // Every fake made in this file (the closing roster check reads their calls).
 const agents: FakeAgent[] = []
@@ -1401,6 +1404,215 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
       expect(agent.prompts[0]!.text).toContain("You are continuing in the original, interrupted session")
       expect(agent.prompts[0]!.model).toBe("prov/b")
       expect(agent.argsOf("create")).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// The per-agent fork base (plans/0055 §8.4) over a two-agent pool of different
+// capabilities: the digest base is built lazily on the agent of the first
+// subtask that forks on it, dispatched with the model the `subtask` route
+// selects (not `bypass`, variant and base step included); a subtask that
+// moved to another agent forks from that agent's base, building it on first
+// use while the other agents' entries stay untouched; a dead base is rebuilt
+// on its own agent.
+describe("the per-agent fork base (plans/0055 §8.4)", () => {
+  const PHASE_TYPES = ["analysis", "design", "implement", "test", "acceptance", "knowledge"]
+
+  // deep [a1 (agent a), b1 (agent b)], simple [a1, b1]. The default registry
+  // adds a `subtask` route naming b1 (with a variant), so the subtask route's
+  // pick — agent b, other/b, think — differs from what the deep pick before
+  // it (a1 on agent a) and what a bypass dispatch (the simple tier's first
+  // candidate a1) would take: the base's model and agent both prove the
+  // route.
+  const FLEET_ROUTE = JSON.stringify({
+    agents: { a: { adapter: "fake-a" }, b: { adapter: "fake-b" } },
+    models: { a1: { agent: "a", model: "prov/a" }, b1: { agent: "b", model: "other/b", variant: "think" } },
+    tiers: { deep: ["a1", "b1"], simple: ["a1", "b1"] },
+    routes: { subtask: ["b1"] },
+  })
+  // Without the route the tiers decide: the simple tier's first candidate
+  // (a1 on agent a) serves a subtask until it is down, then b1 on agent b.
+  const FLEET_TIERS = JSON.stringify({
+    agents: { a: { adapter: "fake-a" }, b: { adapter: "fake-b" } },
+    models: { a1: { agent: "a", model: "prov/a" }, b1: { agent: "b", model: "other/b" } },
+    tiers: { deep: ["a1", "b1"], simple: ["a1", "b1"] },
+  })
+
+  type BaseFleet = {
+    a: FakeAgent
+    b: FakeAgent
+    goneA: string[]
+    goneB: string[]
+    pool: Exclude<Awaited<ReturnType<typeof startPool>>["pool"], undefined>
+    facts: RoutingFacts
+    dir: string
+    plan: Plan
+    task: Task
+  }
+
+  // Two fake agents of different capabilities (fake-a asks no questions and
+  // grants no permission events but keeps readable history, so the base's
+  // usage rebuild works on both), registered as shell adapters and run
+  // through a real pool over a registry loaded from JSON.
+  async function baseFleet(registryText: string = FLEET_ROUTE): Promise<BaseFleet> {
+    const dir = await mkdtemp(join(tmpdir(), "auto-fork-base-"))
+    const goneA: string[] = []
+    const goneB: string[] = []
+    const a = fakeAgent({ capabilities: { question: false, permission: false }, limits: { "prov/a": 100_000 }, gone: goneA })
+    const b = fakeAgent({ limits: { "other/b": 100_000 }, gone: goneB })
+    registerAgentAdapter("fake-a", { host: fakeAgentHost(a).factory, capabilities: { ...FULL_CAPABILITIES, question: false, permission: false } })
+    registerAgentAdapter("fake-b", { host: fakeAgentHost(b).factory, capabilities: FULL_CAPABILITIES })
+    // Offset the two fakes' id counters so a test can tell the two agents'
+    // session ids apart (each fake numbers its own sessions from ses_1).
+    await a.client.create({ title: "warmup" })
+    const file = join(dir, "models.json")
+    await writeFile(file, registryText)
+    const registry = await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } })
+    if (registry === undefined) throw new Error("the test registry did not load")
+    const started = await startPool(dir, { registry })
+    if (started.pool === undefined) throw new Error(started.error)
+    // No agent filter is in force (the ambient OPENCODE_AUTO_AGENT would
+    // otherwise narrow the fleet).
+    const facts = { ...routingFacts(registry, undefined, started.profileName), agentFilter: undefined, filterSource: undefined }
+    const plan = await seedUnits(dir, `## T-001: per-agent base [in_progress]\n正文。\n`)
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
+    return { a, b, goneA, goneB, pool: started.pool, facts, dir, plan, task: plan.tasks[0]! }
+  }
+
+  const teardown = async (fleet: BaseFleet): Promise<void> => {
+    fleet.pool.close()
+    await rm(fleet.dir, { recursive: true, force: true })
+  }
+
+  const recordOf = async (fleet: BaseFleet): Promise<Record<string, string>> => JSON.parse(await unitsText(fleet.dir)).tasks["T-001"].forkBase
+
+  let printed: ReturnType<typeof spyOn>
+  let lines: string[]
+
+  beforeEach(() => {
+    lines = []
+    printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    resetFailback()
+    resetKeyring()
+  })
+
+  afterEach(() => {
+    printed.mockRestore()
+    resetShellAdapters()
+    resetFailback()
+    resetKeyring()
+  })
+
+  test("the digest base is built on the first forking subtask's agent with the subtask route's model", async () => {
+    const fleet = await baseFleet()
+    try {
+      const opts: Opts = { routing: fleet.facts, server: fleet.pool, dir: fleet.dir }
+      // The chain after the decompose dispatch: deep picked a1, so the chain
+      // runs on agent a while the subtask route's pick is b1 on agent b.
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, agent: "a" }
+      const base = await ensureForkBase(fleet.pool, fleet.plan, fleet.task, opts, chain, DEFAULTS)
+      expect(base).toMatchObject({ agent: "b" })
+      // The one-shot build dispatched on agent b alone, with the subtask
+      // route's model and variant (a bypass build would have taken the
+      // simple tier's first candidate a1 on agent a).
+      expect(fleet.a.prompts).toEqual([])
+      expect(fleet.b.prompts).toHaveLength(1)
+      expect(fleet.b.prompts[0]).toMatchObject({ model: "other/b", variant: "think" })
+      // The ready line names the agent and the model under a registry.
+      expect(lines.some((line) => line.includes(`digest base ready: session ${base!.id} on agent b (model b1,`))).toBe(true)
+      // The record is the per-agent map, stored under the agent the base
+      // session lives on.
+      expect(await recordOf(fleet)).toEqual({ b: `digest:${base!.id}` })
+      // The seeding forks that agent's base and moves the chain's binding to
+      // it, so the pending session and its consuming dispatch agree on the
+      // agent.
+      const sub: SessionChain = { pct: 10, used: 5, at: 0, id: "ses_prev", agent: "a" }
+      await expect(seedForkSession(fleet.pool, opts, sub, base, "T-001 S1 x")).resolves.toBe(true)
+      expect(sub.agent).toBe("b")
+      expect(sub.pending).not.toBe(base!.id)
+      expect(sub.forkBase).toBe(base!.id)
+      expect(fleet.b.argsOf("fork")).toEqual([[base!.id, undefined]])
+      expect(fleet.a.argsOf("fork")).toEqual([])
+    } finally {
+      await teardown(fleet)
+    }
+  })
+
+  test("a second agent gets its own base lazily, and the other agents' entries stay untouched", async () => {
+    const fleet = await baseFleet(FLEET_TIERS)
+    try {
+      const opts: Opts = { routing: fleet.facts, server: fleet.pool, dir: fleet.dir }
+      // The first forking subtask: the chain runs on agent a (the decompose
+      // dispatch's agent) and the simple tier's first candidate a1 is on a
+      // too, so the base is built and recorded there.
+      const first = await ensureForkBase(fleet.pool, fleet.plan, fleet.task, opts, { pct: 100, used: 0, at: 0, agent: "a" }, DEFAULTS)
+      expect(first).toMatchObject({ agent: "a" })
+      expect(fleet.a.prompts[0]!.model).toBe("prov/a")
+      // A failover moved the chain to agent b (a1 marked down): the next
+      // subtask resolves b's base on first use. The reload mirrors the
+      // pipeline, which re-reads the task between subtasks.
+      markModelDown("a1")
+      const fresh = (await reloadUnits(fleet.dir)).tasks[0]!
+      const second = await ensureForkBase(fleet.pool, fleet.plan, fresh, opts, { pct: 100, used: 0, at: 0, agent: "b" }, DEFAULTS)
+      expect(second).toMatchObject({ agent: "b" })
+      expect(fleet.b.prompts[0]!.model).toBe("other/b")
+      expect(await recordOf(fleet)).toEqual({ a: `digest:${first!.id}`, b: `digest:${second!.id}` })
+      // The base of an agent that did not move is reused as-is: no second
+      // build runs on a while its base is alive.
+      const again = await ensureForkBase(fleet.pool, fleet.plan, fresh, opts, { pct: 100, used: 0, at: 0, agent: "a" }, DEFAULTS)
+      expect(again).toMatchObject({ id: first!.id, agent: "a" })
+      expect(fleet.a.prompts).toHaveLength(1)
+    } finally {
+      await teardown(fleet)
+    }
+  })
+
+  test("a dead base is rebuilt on its own agent, leaving the other agents' entries alone", async () => {
+    const fleet = await baseFleet(FLEET_TIERS)
+    try {
+      const opts: Opts = { routing: fleet.facts, server: fleet.pool, dir: fleet.dir }
+      const onA = await ensureForkBase(fleet.pool, fleet.plan, fleet.task, opts, { pct: 100, used: 0, at: 0, agent: "a" }, DEFAULTS)
+      markModelDown("a1")
+      let fresh = (await reloadUnits(fleet.dir)).tasks[0]!
+      const onB = await ensureForkBase(fleet.pool, fleet.plan, fresh, opts, { pct: 100, used: 0, at: 0, agent: "b" }, DEFAULTS)
+      expect(onA!.id).not.toBe(onB!.id)
+      // Storage cleanup took b's base (a1 is still down, so the rebuild stays
+      // on agent b's candidate). The reload mirrors the pipeline, which
+      // re-reads the task between subtasks.
+      fleet.goneB.push(onB!.id)
+      fresh = (await reloadUnits(fleet.dir)).tasks[0]!
+      const rebuilt = await ensureForkBase(fleet.pool, fleet.plan, fresh, opts, { pct: 100, used: 0, at: 0, agent: "b" }, DEFAULTS)
+      expect(rebuilt).toMatchObject({ agent: "b" })
+      expect(rebuilt!.id).not.toBe(onB!.id)
+      expect(fleet.b.argsOf("create")).toHaveLength(2)
+      expect(lines.some((line) => line.includes(`persistent digest base ${onB!.id} on agent b is stale`))).toBe(true)
+      // a's entry survived b's rebuild untouched.
+      expect(await recordOf(fleet)).toEqual({ a: `digest:${onA!.id}`, b: `digest:${rebuilt!.id}` })
+    } finally {
+      await teardown(fleet)
+    }
+  })
+
+  test("without a registry the base lines and the record keep the one-agent era's shape", async () => {
+    const agent = make()
+    const dir = await mkdtemp(join(tmpdir(), "auto-fork-plain-"))
+    try {
+      const plan = await seedUnits(dir, `## T-001: plain base [in_progress]\n正文。\n`)
+      await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
+      const base = await ensureForkBase(agent.client, plan, plan.tasks[0]!, {}, { pct: 100, used: 0, at: 0 }, DEFAULTS)
+      expect(base).toEqual({ id: "ses_1", used: 1000 })
+      // The record stays the plain string and the ready line names neither
+      // an agent nor a model.
+      expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_1"')
+      expect(lines.some((line) => line.includes("digest base ready: session ses_1 (digest prefix 1000 tokens)"))).toBe(true)
+      const chain: SessionChain = { pct: 10, used: 5, at: 0, id: "ses_prev" }
+      await expect(seedForkSession(agent.client, {}, chain, base, "T-001 S1 x")).resolves.toBe(true)
+      expect(chain.pending).toBe("ses_2")
+      expect(lines.some((line) => line.includes("forked a new session from base ses_1 (prefix 1000 tokens)"))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -159,8 +159,13 @@ export type FailedSession = { id: string; used: number }
 // fork 基点信息: id 为生效基点会话;used 为基点末端上下文用量(tokens,播种进
 // 分叉链使 watch() 的 2×cap 交接阈值按「前缀+新增」计算,首个 turn 的事件跟踪
 // 随后自行校正)。undefined = unknown (an agent without readable history, MA.4):
-// seedForkSession then starts cold (plans/0038 G1).
-export type ForkBaseInfo = { id: string; used: number | undefined }
+// seedForkSession then starts cold (plans/0038 G1)。
+// agent (plans/0055 §8.4, under a registry only) names the agent profile the
+// base session lives on: a base is agent-local like every session (§8.2), so
+// the fork seeds on that agent's host and the chain's binding follows it.
+// Without a registry the field stays undefined and the seeding keeps reading
+// the chain alone.
+export type ForkBaseInfo = { id: string; used: number | undefined; agent?: string }
 
 // resume.Phase → 会话角色(模型路由的细键,见 plans/0017-model-routing-design.md B.5/C.1)。
 // 执行链各阶段映射同名角色(decompose 为 M1.0 合并理解与分解会话的角色,plans/0030 D12);

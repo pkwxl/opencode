@@ -220,7 +220,11 @@ export async function ensureDecomposed(
     const problems = await decomposeArtifactProblems(dir, task.id)
     if (!problems.length) {
       // 合并会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
-      if (chain.id) await setForkBase(dir, task.id, chain.id)
+      // Under a registry the record is the per-agent map (plans/0055 §8.2):
+      // the merged session lives on the agent its dispatch picked, so its id
+      // is stored under that agent's key and another agent's chain reads no
+      // base of its own from it.
+      if (chain.id) await setForkBase(dir, task.id, chain.id, opts.routing ? chain.agent : undefined)
       const fresh = await reloadTask(plan, task.id)
       const committed = await afterSession(opts.dir ?? dir, opts, task, { stage: "decompose", subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} decompose session`, committed)

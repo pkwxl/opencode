@@ -84,6 +84,9 @@ export async function forkSession(client: AgentClient, base: string, title: stri
 // 中断会话(链上仍有会话且恢复说明待注入)时不分叉,首个提示词进复用会话。
 // 返回 warm(= 本会话已继承任务背景)供提示词选择背景段;无基点(fork=off/
 // 从未确立)不动链,行为与现状完全一致。
+// Under a model registry the base is per agent (plans/0055 §8.4): a base that
+// names its agent forks there and moves the chain's binding to it, so the
+// seeded session and its consuming dispatch agree on the agent.
 export async function seedForkSession(
   client: ClientSource,
   opts: Opts,
@@ -110,11 +113,17 @@ export async function seedForkSession(
   }
   // The base session is agent-local (plans/0055 §8.2): the fork runs on the
   // chain's agent's host, resolved through the pool when the caller passed
-  // one (a base seeded onto this chain lives on its agent).
-  const baseClient = await clientOf(client, chain.agent)
+  // one (a base seeded onto this chain lives on its agent). Under a registry
+  // the base names the agent it was built on (§8.4): the fork runs there and
+  // the chain's binding follows — the pre-created session lives on that
+  // agent, so the dispatch consuming it must resolve its client, and read the
+  // cross-agent check, against the same name. Without a registry the base
+  // names no agent and the chain's stands, exactly as before (C2).
+  const agent = base.agent ?? chain.agent
+  const baseClient = await clientOf(client, agent)
   // 新会话前同步 AGENTS.md(与 create 路径同款;分叉会话的 system context 继承
   // 自基点,基点前缀与最新契约的一致性在此保证)。
-  await opts.server?.syncContext(chain.agent)
+  await opts.server?.syncContext(agent)
   const forked = await forkSession(baseClient, base.id, subject)
   chain.id = undefined
   chain.pending = forked
@@ -124,7 +133,10 @@ export async function seedForkSession(
   const used = base.used ?? 0
   chain.used = forked ? used : 0
   chain.at = 0
-  if (forked) log(`⑂ forked a new session from base ${base.id} (prefix ${formatTokens(used)} tokens)`)
+  if (forked) {
+    if (agent !== undefined) chain.agent = agent
+    log(`⑂ forked a new session from base ${base.id}${agent !== undefined ? ` on agent ${agent}` : ""} (prefix ${formatTokens(used)} tokens)`)
+  }
   return forked !== undefined
 }
 
