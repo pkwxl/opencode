@@ -1,5 +1,5 @@
-// src/prompt.ts 执行族渲染的单测: 合并理解与分解/基点/子任务/收尾/修复/整任务/测试执行协议/死循环提示/dryrun。
-// 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
+// Unit tests for the src/prompt.ts execution-family renders: merged understand+decompose / context base / subtask / wrap-up / repair / whole task / test execution protocol / stuck hint / dryrun.
+// Split out of test/prompt.test.ts (plans/0024-module-split-plan.md S19, pure move).
 
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -35,7 +35,7 @@ import { prerequisites } from "../src/tasks"
 import { groundPlan, groundTask, listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
 
 describe("renderDecompose", () => {
-  test("合并会话(M1.0): 理解四节 + 公共上下文索引 + subtasks.md 检查项 + 各子任务 todo.md", () => {
+  test("merged session (M1.0): the four understand sections + the shared context index + the subtasks.md checklist + each subtask's todo.md", () => {
     const text = renderDecompose(plan, task)
     expect(text).toContain("This session completes the task-background understanding and the subtask decomposition; it writes no implementation code")
     expect(text).toContain("docs/T-002/context.md")
@@ -52,13 +52,13 @@ describe("renderDecompose", () => {
     expect(text).toContain("## Artifacts")
     expect(text).toContain("modify no implementation code")
     expect(text).toContain("question tool")
-    // 状态文件排他: todo.md/done.md 由 DRIVER 管理
+    // State files are exclusive: todo.md/done.md are maintained by the DRIVER alone
     expect(text).toContain("must neither create done.md")
     expect(text).toContain("blocks the task and stops the run")
     expect(text).toContain("End the session as soon as the files are written")
   })
 
-  test("taskContext 档位: off 缺省 200 行,small/medium/large 放宽 300/400/500 行", () => {
+  test("taskContext levels: off defaults to 200 lines, small/medium/large loosen to 300/400/500 lines", () => {
     expect(renderDecompose(plan, task)).toContain("aim for 200 lines or fewer")
     expect(renderDecompose(plan, task, { taskContext: "off" })).toContain("aim for 200 lines or fewer")
     expect(renderDecompose(plan, task, { taskContext: "small" })).toContain("aim for 300 lines or fewer")
@@ -66,17 +66,17 @@ describe("renderDecompose", () => {
     expect(renderDecompose(plan, task, { taskContext: "large" })).toContain("aim for 500 lines or fewer")
   })
 
-  test("包含已完成任务、当前任务与状态文件只读规则,不再复述 PLAN.md 阻塞记事", () => {
+  test("includes the already-done tasks, the current task and the state-file read-only rules; no longer restates PLAN.md blockage notes", () => {
     const text = renderDecompose(plan, task)
-    expect(text).toContain("[done] T-001: 搭建 schema")
+    expect(text).toContain("[done] T-001: build the schema")
     expect(text).toContain("you do not need to know anything about the other tasks")
-    expect(text).toContain("T-002: 实现迁移")
-    expect(text).toContain("编写迁移脚本。")
-    // 阻塞原因/解答已退役: 不再从 PLAN.md 读出来注入提示词
-    expect(text).not.toContain("策略选 A 还是 B?")
-    expect(text).not.toContain("此前被阻塞")
+    expect(text).toContain("T-002: implement the migration")
+    expect(text).toContain("Write the migration script.")
+    // The blocked reason/answer is retired: no longer read out of PLAN.md into the prompt
+    expect(text).not.toContain("strategy A or B?")
+    expect(text).not.toContain("previously blocked")
     expect(text).toContain("are maintained by the DRIVER alone")
-    // 自动答复要求记录决策过程并标注 AUTO-DECISION
+    // A proxy answer must record the decision process and label it AUTO-DECISION
     expect(text).toContain("must leave a record of how it was made")
     expect(text).toContain("AUTO-DECISION")
   })
@@ -88,12 +88,12 @@ describe("renderDecompose", () => {
       closed: new Map([["T-001", "superseded"]]),
     }
     const text = renderDecompose(closedPlan, closedPlan.tasks[1]!)
-    const line = "- [closed] T-001: 搭建 schema (closed without completing: superseded)"
+    const line = "- [closed] T-001: build the schema (closed without completing: superseded)"
     expect(text).toContain(line)
     expect(text).not.toContain("[done] T-001")
     expect(text.indexOf("These tasks are already done, do not redo them:")).toBeLessThan(text.indexOf(line))
     // The original fixture without closures still renders the [done] line
-    expect(renderDecompose(plan, task)).toContain("- [done] T-001: 搭建 schema")
+    expect(renderDecompose(plan, task)).toContain("- [done] T-001: build the schema")
     expect(renderDecompose(plan, task)).not.toContain("[closed]")
   })
 
@@ -111,7 +111,7 @@ describe("renderDecompose", () => {
     const current = closedPlan.tasks[1]!
     expect(prerequisites(closedPlan, current.id)).toEqual(["T-001"])
     const text = renderDecompose(closedPlan, current)
-    expect(text).toContain(`# T-002: 实现迁移\n\n${current.body}\n\n${note("T-001", "superseded")}`)
+    expect(text).toContain(`# T-002: implement the migration\n\n${current.body}\n\n${note("T-001", "superseded")}`)
     expect(text.split("[DRIVER] Prerequisite").length - 1).toBe(1)
   })
 
@@ -150,12 +150,12 @@ describe("renderDecompose", () => {
     // No closures: the task block is the title plus the body, with nothing appended
     const text = renderDecompose(plan, task)
     expect(text).not.toContain("[DRIVER] Prerequisite")
-    expect(text).toContain(`# T-002: 实现迁移\n\n${task.body}`)
+    expect(text).toContain(`# T-002: implement the migration\n\n${task.body}`)
     expect(text).not.toContain(`${task.body}\n\n[DRIVER]`)
   })
 })
 
-describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
+describe("renderDecompose (per-phase templates decompose-<phase>)", () => {
   const phaseCases: Array<[PhaseLetter, string, string]> = [
     ["a", "Analysis", "Split by problem/open question/subsystem/risk surface"],
     ["d", "Design", "Split by design concern"],
@@ -165,12 +165,12 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
     ["k", "Knowledge distillation", "Split by knowledge artifact"],
   ]
 
-  test("各阶段渲染: 注入阶段名与该阶段的切分准则段", () => {
+  test("each phase renders: injects the phase name and that phase's splitting-criteria paragraph", () => {
     for (const [phase, name, rule] of phaseCases) {
       const text = renderDecompose(plan, task, { phase: key(phase) })
       expect(text).toContain(`The current phase is ${name}`)
       expect(text).toContain(rule)
-      // 共通粒度准则段(decompose-rule)与检查项协议
+      // The shared granularity-criteria paragraph (decompose-rule) and the checklist protocol
       expect(text).toContain("Decomposition granularity criteria")
       expect(text).toContain("measured against the task description")
       expect(text).toContain("- [ ]")
@@ -191,13 +191,13 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
     expect(plain).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("m 默认: 未传 phase 时选择 decompose-m", () => {
+  test("m default: decompose-m is chosen when no phase is passed", () => {
     const text = renderDecompose(plan, task)
     expect(text).toContain("The current phase is Implementation")
     expect(text).toContain("Vertical thin slices first")
   })
 
-  test("fine 两态: 细粒度段按开关出现/消失;contextBudget 注入半预算", () => {
+  test("fine two states: the fine-grained paragraph appears/disappears with the switch; contextBudget injects the half budget", () => {
     const off = renderDecompose(plan, task, { contextLimit: 100_000 })
     expect(off).toContain("on the order of 50.0k tokens")
     expect(off).not.toContain("Fine-grained mode")
@@ -207,25 +207,25 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
     expect(on).toContain("on the order of 32.0k tokens")
   })
 
-  test("回退: 库中无 decompose-<phase> 时回退通用 decompose(缺省按 m 查名)", () => {
+  test("fallback: with no decompose-<phase> in the library, fall back to the generic decompose (the default looks the name up by m)", () => {
     expect(decomposeTemplateName(phaseTypeOfLetter("m"), ["decompose"])).toBe("decompose")
     expect(decomposeTemplateName(undefined, ["decompose"])).toBe("decompose")
     expect(decomposeTemplateName(phaseTypeOfLetter("v"), ["decompose", "decompose-v"])).toBe("decompose-v")
     expect(decomposeTemplateName(undefined, ["decompose", "decompose-m"])).toBe("decompose-m")
   })
 
-  test("目标目录覆盖 decompose-m.md: 缺检查项协议行报错并指明文件,保留则生效", () => {
+  test("target-directory override decompose-m.md: missing the checklist-protocol lines fails naming the file; keeping them makes it take effect", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-prompt-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,丢了检查项协议")
+      writeFileSync(join(overlay, "decompose-m.md"), "Custom decompose prompt that lost the checklist protocol")
       expect(() => usePromptLibrary(dir)).toThrow(/decompose-m\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/- \[ \]/)
-      writeFileSync(join(overlay, "decompose-m.md"), "自定义分解提示词,保留协议: - [ ] 项,产物 context.md 与各 todo.md")
+      writeFileSync(join(overlay, "decompose-m.md"), "Custom decompose prompt keeping the protocol: - [ ] items, artifacts context.md and each todo.md")
       usePromptLibrary(dir)
-      expect(renderDecompose(plan, task)).toBe("自定义分解提示词,保留协议: - [ ] 项,产物 context.md 与各 todo.md")
-      // 未覆盖的阶段模板仍取内置
+      expect(renderDecompose(plan, task)).toBe("Custom decompose prompt keeping the protocol: - [ ] items, artifacts context.md and each todo.md")
+      // Phase templates not overridden still come from the built-ins
       expect(renderDecompose(plan, task, { phase: key("a") })).toContain("Split by problem/open question/subsystem/risk surface")
     } finally {
       usePromptLibrary(undefined)
@@ -233,7 +233,7 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
     }
   })
 
-  test("意图包外置(M1.2): 项目覆盖 default 包即替换分解意图,useIntentPacks 装载生效", () => {
+  test("intent packs externalized (M1.2): a project override of the default pack replaces the decompose intent; useIntentPacks loads it", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "intents")
@@ -246,18 +246,18 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       const text = renderDecompose(plan, task)
       expect(text).toContain("CUSTOM-RULE 32.0k")
       expect(text).toContain("CUSTOM-DUTIES Implementation")
-      // 整包替换(无合并): 内置准则消失
+      // Whole-pack replacement (no merging): the built-in criteria disappear
       expect(text).not.toContain("Decomposition granularity criteria")
       expect(text).not.toContain("Vertical thin slices first")
     } finally {
       useIntentPacks(undefined)
       rmSync(dir, { recursive: true, force: true })
     }
-    // 复位后内置包恢复生效
+    // After the reset the built-in pack takes effect again
     expect(renderDecompose(plan, task)).toContain("Vertical thin slices first")
   })
 
-  test("零意图基线: 空 default 包覆盖时准则段整体消失,核心协议保留", () => {
+  test("zero-intent baseline: an empty default pack override drops the criteria paragraph entirely; the core protocol stays", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "intents")
@@ -266,8 +266,8 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
       useIntentPacks(dir)
       const text = renderDecompose(plan, task)
       expect(text).not.toContain("Decomposition granularity criteria")
-      expect(text).not.toContain("Splitting and artifact criteria for this phase (迁移实现)")
-      // 核心模板仍承载角色边界与格式协议
+      expect(text).not.toContain("Splitting and artifact criteria for this phase (Implementation)")
+      // The core template still carries the role boundary and the format protocol
       expect(text).toContain("This session completes the task-background understanding and the subtask decomposition; it writes no implementation code")
       expect(text).toContain("- [ ] <subtask description; ends with Artifacts: <path list>>")
       expect(text).not.toMatch(/\{\{|\}\}/)
@@ -278,18 +278,18 @@ describe("renderDecompose(分阶段模板 decompose-<phase>)", () => {
   })
 })
 
-describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
-  const subtask = "编写迁移脚本的 schema 部分"
+describe("renderSubtask/renderWhole closing self-check sentence intent externalization (M1.3)", () => {
+  const subtask = "write the schema part of the migration script"
 
-  test("内置包: 子任务与整任务模板各自注入对应范围的自查句", () => {
+  test("built-in pack: the subtask and whole-task templates each inject the self-check sentence for their own scope", () => {
     expect(renderSubtask(plan, task, subtask)).toContain("check for yourself whether this subtask is genuinely complete")
     expect(renderWhole(plan, task)).toContain("once the whole task is complete, check for yourself whether it is genuinely complete")
-    // 两句不同文: 子任务句不带"完成整个任务后"前缀,整任务句不带"该子任务"
+    // The two sentences differ: the subtask sentence carries no "once the whole task is complete" prefix, the whole-task sentence no "this subtask"
     expect(renderSubtask(plan, task, subtask)).not.toContain("once the whole task is complete, check for yourself")
     expect(renderWhole(plan, task)).not.toContain("whether this subtask is genuinely complete")
   })
 
-  test("项目覆盖 default 包即替换自查句,useIntentPacks 装载生效", () => {
+  test("a project override of the default pack replaces the self-check sentence; useIntentPacks loads it", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "intents")
@@ -302,7 +302,7 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
       const sub = renderSubtask(plan, task, subtask)
       expect(sub).toContain("CUSTOM-SUBTASK-CHECK")
       expect(sub).not.toContain("check for yourself whether this subtask is genuinely complete")
-      // 核心协议不受影响: 收尾步骤仍在
+      // The core protocol is unaffected: the wrap-up step stays
       expect(sub).toContain("you may add to the content of docs/ but not modify it")
       const whole = renderWhole(plan, task)
       expect(whole).toContain("CUSTOM-WHOLE-CHECK")
@@ -314,7 +314,7 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
     expect(renderSubtask(plan, task, subtask)).toContain("check for yourself whether this subtask is genuinely complete")
   })
 
-  test("零意图基线: 空 default 包覆盖时自查项整行消失,核心协议保留且无残渣", () => {
+  test("zero-intent baseline: an empty default pack override drops the self-check line entirely; the core protocol stays with no residue", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "intents")
@@ -323,7 +323,7 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
       useIntentPacks(dir)
       const sub = renderSubtask(plan, task, subtask)
       expect(sub).not.toContain("check for yourself")
-      // 收尾步骤仍在(b/c 项保留既有编号,0032 D4 的编号取舍同口径)
+      // The wrap-up step stays (items b/c keep their existing numbering, the numbering trade-off of 0032 D4)
       expect(sub).toContain("3. Close-out:")
       expect(sub).toContain("you may add to the content of docs/ but not modify it")
       const whole = renderWhole(plan, task)
@@ -340,38 +340,38 @@ describe("renderSubtask/renderWhole 收尾自查句意图外置(M1.3)", () => {
   })
 })
 
-describe("renderSubtask 产出约定意图外置(M1.4,artifact spec 节)", () => {
-  const subtask = "编写执行逻辑"
+describe("renderSubtask output-placement intent externalization (M1.4, artifact spec section)", () => {
+  const subtask = "write the execution logic"
 
-  test("内置包: 有产出文件位(index 给定或推导)时注入约定段,无位时整段消失", () => {
+  test("built-in pack: with an output-file slot (index given or derived) the convention paragraph is injected; without one the whole paragraph disappears", () => {
     const withFile = renderSubtask(listPlan, listTask, subtask, { index: 2 })
     expect(withFile).toContain("Artifact placement convention")
     expect(withFile).toContain("write it into docs/T-004/S02/index.md (a standalone file, title on the first line, not merged into another document)")
     expect(withFile).toContain("code artifacts go directly into the source tree")
-    const noFile = renderSubtask(plan, task, "编写迁移脚本")
+    const noFile = renderSubtask(plan, task, "write the migration script")
     expect(noFile).not.toContain("Artifact placement convention")
   })
 
-  test("项目覆盖 default 包即替换约定段,useIntentPacks 装载生效;包文本可用模板变量", () => {
+  test("a project override of the default pack replaces the convention paragraph; useIntentPacks loads it; pack text may use template variables", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "intents")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "default.md"), "# default\n\n## artifact spec\n\n### subtask-output\n\nCUSTOM-CONVENTION 写入 {{outputFile}}\n")
+      writeFileSync(join(overlay, "default.md"), "# default\n\n## artifact spec\n\n### subtask-output\n\nCUSTOM-CONVENTION write into {{outputFile}}\n")
       useIntentPacks(dir)
       const text = renderSubtask(listPlan, listTask, subtask, { index: 2 })
-      expect(text).toContain("CUSTOM-CONVENTION 写入 docs/T-004/S02/index.md")
-      // 整包替换(无合并): 内置约定消失
+      expect(text).toContain("CUSTOM-CONVENTION write into docs/T-004/S02/index.md")
+      // Whole-pack replacement (no merging): the built-in convention disappears
       expect(text).not.toContain("Artifact placement convention")
     } finally {
       useIntentPacks(undefined)
       rmSync(dir, { recursive: true, force: true })
     }
-    // 复位后内置包恢复生效
+    // After the reset the built-in pack takes effect again
     expect(renderSubtask(listPlan, listTask, subtask, { index: 2 })).toContain("Artifact placement convention")
   })
 
-  test("零意图基线: 空 default 包覆盖时约定段消失,核心协议保留且无残渣", () => {
+  test("zero-intent baseline: an empty default pack override drops the convention paragraph; the core protocol stays with no residue", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "intents")
@@ -380,7 +380,7 @@ describe("renderSubtask 产出约定意图外置(M1.4,artifact spec 节)", () =>
       useIntentPacks(dir)
       const text = renderSubtask(listPlan, listTask, subtask, { index: 2 })
       expect(text).not.toContain("Artifact placement convention")
-      // 核心协议不受影响: 状态文件指针与排他条款仍在(tier-1 面不随意图包消失)
+      // The core protocol is unaffected: the state-file pointer and the exclusivity clause stay (the tier-1 surface does not vanish with the intent pack)
       expect(text).toContain("This subtask's scope declaration is in docs/T-004/S02/todo.md")
       expect(text).toContain("managed by the DRIVER alone")
       expect(text).toContain("Constraints:")
@@ -393,9 +393,9 @@ describe("renderSubtask 产出约定意图外置(M1.4,artifact spec 节)", () =>
   })
 })
 
-describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
-  test("摘要全文逐字注入 + 一句确认 + 不读不写不展开", () => {
-    const digest = "## 相关文件与关键符号\n- src/x.ts: 数据模型\n\n## 约束与前提\n- 只读目标目录"
+describe("renderContextBase (fork pipeline ①′ digest base session)", () => {
+  test("the digest is injected verbatim in full + one acknowledgement sentence + no reading, no writing, no expanding", () => {
+    const digest = "## Relevant files and key symbols\n- src/x.ts: data model\n\n## Constraints and premises\n- read-only target directory"
     const text = renderContextBase(task, digest)
     expect(text).toContain("task T-002's understanding phase")
     expect(text).toContain("docs/T-002/context.md). This session")
@@ -409,16 +409,16 @@ describe("renderContextBase(fork 流水线 ①′ digest 基点会话)", () => {
 })
 
 describe("renderSubtask", () => {
-  const subtask = "编写迁移脚本的 schema 部分"
+  const subtask = "write the schema part of the migration script"
 
-  test("只做一个子任务并自我检查;不含任务级验收与 verify 描述(verify 已退役)", () => {
+  test("does exactly one subtask and self-checks; no task-level acceptance or verify wording (verify retired)", () => {
     const text = renderSubtask(plan, task, subtask)
     expect(text).toContain(subtask)
     expect(text).toContain("Complete this one subtask strictly")
     expect(text).toContain("check for yourself whether this subtask is genuinely complete")
     expect(text).toContain("you may add to the content of docs/ but not modify it")
-    expect(text).toContain("T-002: 实现迁移")
-    // 状态文件由 DRIVER 维护,不再要求 agent 勾选
+    expect(text).toContain("T-002: implement the migration")
+    // State files are maintained by the DRIVER; the agent is no longer asked to tick
     expect(text).toContain("are maintained by the DRIVER alone")
     expect(text).not.toContain("change it to `- [x]`")
     expect(text).not.toContain("verify")
@@ -426,14 +426,14 @@ describe("renderSubtask", () => {
     expect(text).not.toContain("the verified field")
   })
 
-  test("不含会话内提交要求: 统一提交由 DRIVER 在会话后执行", () => {
+  test("no in-session commit demand: the unified commit is executed by the DRIVER after the session", () => {
     const text = renderSubtask(plan, task, subtask)
     expect(text).not.toContain("commit all uncommitted changes")
     expect(text).toContain("Git commits are made by the DRIVER in one pass after the session ends")
     expect(text).toContain("do not run git commit")
   })
 
-  test("交接条款默认注入;continuation 要求先读交接文档", () => {
+  test("handover clause injected by default; continuation demands reading the handover document first", () => {
     const text = renderSubtask(plan, task, subtask)
     expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("[DRIVER] This session's context is about to reach the limit")
@@ -444,73 +444,73 @@ describe("renderSubtask", () => {
     expect(cont).toContain("then carry on from there")
   })
 
-  test("test-by-DRIVER: 注入测试执行协议;未启用时整块消失", () => {
+  test("test-by-DRIVER: the test execution protocol is injected; when not enabled the whole block disappears", () => {
     const on = renderSubtask(plan, task, subtask, { testByDriver: true })
     expect(on).toContain("Test execution protocol (--test-by-driver)")
     expect(on).toContain("tmp/test.sh")
     expect(on).toContain("do not run compile, test, build, lint or similar commands directly inside the session")
     expect(on).toContain("write the command as a script into the test/ directory")
     expect(on).toContain("write the same script path into tmp/test.sh once more")
-    // handover-test 附带交接文档提示
+    // handover-test adds the handover-document note
     const handover = renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })
     expect(handover).toContain("docs/T-002/testhandoff.md")
     expect(handover).toContain("so that a new session can interpret the test result and continue")
-    // 未启用时协议与交接描述均不出现(doc-layout 共享段的规范性提及不含交接协议本身)
+    // When not enabled neither the protocol nor the handover wording appears (the normative mention in the shared doc-layout paragraph does not include the handover protocol itself)
     const off = renderSubtask(plan, task, subtask)
     expect(off).not.toContain("Test execution protocol")
     expect(off).not.toContain("tmp/test.sh")
     expect(off).not.toContain("the established handover rhythm")
   })
 
-  test("测试交接文档按子任务级目录命名: 下一子任务不会误读上一子任务的遗留交接", () => {
-    const handover = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, testByDriver: true, handoverTest: true })
+  test("the test handover document is named inside the subtask-level directory: the next subtask cannot misread the previous subtask's leftover handover", () => {
+    const handover = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, testByDriver: true, handoverTest: true })
     expect(handover).toContain("docs/T-004/S02/testhandoff.md")
     expect(handover).not.toContain("docs/T-004/testhandoff.md")
-    // 缺省推导 index(按正文检查项定位)同样落子任务级目录
-    const derived = renderSubtask(listPlan, listTask, "编写文档", { testByDriver: true, handoverTest: true })
+    // Default index derivation (located by the body's checklist item) likewise lands in the subtask-level directory
+    const derived = renderSubtask(listPlan, listTask, "write the docs", { testByDriver: true, handoverTest: true })
     expect(derived).toContain("docs/T-004/S03/testhandoff.md")
-    // 无检查项任务(旧形态单子任务)保持任务级命名
+    // A task without a checklist (old shape, single subtask) keeps task-level naming
     expect(renderSubtask(plan, task, subtask, { testByDriver: true, handoverTest: true })).toContain("docs/T-002/testhandoff.md")
   })
 })
 
-describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注入)", () => {
-  test("注入全量检查项列表(按序编号)与「第 N 项」;产出文件按位补零", () => {
-    const text = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2 })
+describe("renderSubtask (subtask list / output file / background paragraph, fork pipeline injection)", () => {
+  test("injects the full checklist list (numbered in order) and \"item N\"; the output file is zero-padded to two digits", () => {
+    const text = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2 })
     expect(text).toContain("The complete subtask list of this task (executed in order; the other items belong to other sessions, do not touch them)")
-    expect(text).toContain("1. 编写 schema 部分\n2. 编写执行逻辑\n3. 编写文档")
+    expect(text).toContain("1. write the schema part\n2. write the execution logic\n3. write the docs")
     expect(text).toContain("You are responsible for item 2 of that list only")
-    expect(text).toContain("- [ ] 编写执行逻辑")
-    // 产出约定: 文档类产出写 DRIVER 机械命名的独立文件
+    expect(text).toContain("- [ ] write the execution logic")
+    // Output convention: document-type outputs go into a standalone file mechanically named by the DRIVER
     expect(text).toContain("Artifact placement convention")
     expect(text).toContain("write it into docs/T-004/S02/index.md (a standalone file, title on the first line, not merged into another document)")
     expect(text).toContain("code artifacts go directly into the source tree")
   })
 
-  test("缺省推导: 不传 index 时按正文检查项定位同名项", () => {
-    const text = renderSubtask(listPlan, listTask, "编写文档")
+  test("default derivation: without an index, the same-named item is located by the body's checklist", () => {
+    const text = renderSubtask(listPlan, listTask, "write the docs")
     expect(text).toContain("You are responsible for item 3 of that list only")
     expect(text).toContain("write it into docs/T-004/S03/index.md")
   })
 
-  test("背景段 warm 两态: 继承上下文勿重读 / 冷启动先读 context.md 摘要", () => {
-    const warm = renderSubtask(listPlan, listTask, "编写文档", { index: 3, warm: true })
+  test("background paragraph warm two states: inherited context means no re-reading / a cold start reads the context.md digest first", () => {
+    const warm = renderSubtask(listPlan, listTask, "write the docs", { index: 3, warm: true })
     expect(warm).toContain("This session has inherited the task-background context (the understanding stage's digest and loaded content), so do not re-read files that are already in context")
     expect(warm).toContain("if background is still missing, read the docs/T-004/context.md digest")
     expect(warm).not.toContain("read it first to learn the task background")
-    const cold = renderSubtask(listPlan, listTask, "编写文档", { index: 3 })
+    const cold = renderSubtask(listPlan, listTask, "write the docs", { index: 3 })
     expect(cold).toContain("If docs/T-004/context.md exists, read it first to learn the task background before starting (if it does not exist, read the source yourself as needed)")
     expect(cold).not.toContain("inherited the task-background context")
   })
 
-  test("无检查项任务(旧形态): 单条呈现,列表与产出约定段不出现", () => {
-    const text = renderSubtask(plan, task, "编写迁移脚本")
+  test("task without a checklist (old shape): rendered as a single item; the list and the output-convention paragraph do not appear", () => {
+    const text = renderSubtask(plan, task, "write the migration script")
     expect(text).toContain("You are responsible for this single subtask of the task only")
     expect(text).not.toContain("complete subtask list")
     expect(text).not.toContain("Artifact placement convention")
   })
 
-  test("subtaskOutputFile: 两位递增命名(超出两位自然进位)", () => {
+  test("subtaskOutputFile: two-digit incrementing names (past two digits it naturally carries)", () => {
     expect(subtaskOutputFile(task, 1)).toBe("docs/T-002/S01/index.md")
     expect(subtaskOutputFile(task, 9)).toBe("docs/T-002/S09/index.md")
     expect(subtaskOutputFile(task, 12)).toBe("docs/T-002/S12/index.md")
@@ -518,74 +518,74 @@ describe("renderSubtask(子任务列表/产出文件/背景段,fork 流水线注
   })
 })
 
-describe("renderSubtask(L1 权威状态接地 + L3 全限定编号,session-boundary-hardening §4.1)", () => {
-  test("接地块注入: 当前任务状态 + 全限定编号 + 勾选快照 + 前序任务独立声明", () => {
-    const text = renderSubtask(groundPlan, groundTask, "本任务子任务一", { index: 1 })
+describe("renderSubtask (L1 authoritative state grounding + L3 fully qualified ids, session-boundary-hardening §4.1)", () => {
+  test("grounding block injection: current task status + fully qualified id + tick snapshot + preceding-tasks independence declaration", () => {
+    const text = renderSubtask(groundPlan, groundTask, "current subtask one", { index: 1 })
     expect(text).toContain("Authoritative DRIVER ledger state")
-    expect(text).toContain("Current task: T-002 \"本任务\", status: in progress")
+    expect(text).toContain("Current task: T-002 \"current task\", status: in progress")
     expect(text).toContain("Fully qualified id of this subtask: T-002.S01")
     expect(text).toContain("S01☐ S02☐ S03☐, done 0/3")
     expect(text).toContain("ticks are maintained by the DRIVER once each subtask session ends")
     expect(text).toContain("The previously completed tasks T-001 are independent of this task")
     expect(text).toContain("say nothing about this task's progress")
     expect(text).toContain("may be consulted only as a format/precedent reference")
-    // 接地块紧随 head 之后、任务块之前(会话先见权威状态再看任务正文)
+    // The grounding block sits right after the head and before the task block (the session sees the authoritative state before the task body)
     expect(text.indexOf("Authoritative DRIVER ledger state")).toBeGreaterThan(text.indexOf("do not carry them out."))
-    expect(text.indexOf("Authoritative DRIVER ledger state")).toBeLessThan(text.indexOf("# T-002: 本任务"))
+    expect(text.indexOf("Authoritative DRIVER ledger state")).toBeLessThan(text.indexOf("# T-002: current task"))
   })
 
-  test("勾选快照反映台账勾选状态: S 编号与全限定编号两位补零、已完成 k/n 如实计数", () => {
-    const text = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2 })
+  test("the tick snapshot reflects the ledger's ticks: S numbers and the fully qualified id are two-digit zero-padded, done k/n counts faithfully", () => {
+    const text = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2 })
     expect(text).toContain("S01☑ S02☐ S03☐, done 1/3")
     expect(text).toContain("Fully qualified id of this subtask: T-004.S02")
   })
 
-  test("编号撞名防误读: 前序任务的勾选状态不注入,声明直指他任务的 S 编号与本任务无关", () => {
-    const text = renderSubtask(groundPlan, groundTask, "本任务子任务一", { index: 1 })
+  test("number-collision misread guard: the preceding task's tick state is not injected; the declaration says outright that other tasks' S numbers are unrelated to this one", () => {
+    const text = renderSubtask(groundPlan, groundTask, "current subtask one", { index: 1 })
     expect(text).toContain("S-numbers appearing in other tasks' documents or commit records belong to those tasks and are unrelated to this one")
     expect(text).not.toContain("S01☑")
-    // 防的就是把 T-001 的「S01 已完成」读成本任务状态
+    // What this guards against is reading T-001's "S01 done" as this task's state
     expect(text).toContain("never infer whether this task is done from other tasks' documents, handovers or git commit records")
   })
 
-  test("无检查项任务(旧形态): 无编号与快照行,状态行与声明仍注入", () => {
-    const text = renderSubtask(plan, task, "编写迁移脚本")
-    expect(text).toContain("Current task: T-002 \"实现迁移\", status: blocked")
+  test("task without a checklist (old shape): no id or snapshot line; the status line and the declaration are still injected", () => {
+    const text = renderSubtask(plan, task, "write the migration script")
+    expect(text).toContain("Current task: T-002 \"implement the migration\", status: blocked")
     expect(text).not.toContain("Fully qualified id")
     expect(text).not.toContain("Subtask tick snapshot")
-    // 前序声明仍在场(plan 夹具有已完成的 T-001)
+    // The preceding declaration is still present (the plan fixture has T-001 done)
     expect(text).toContain("The previously completed tasks T-001")
   })
 
-  test("无前序已完成任务: 前序声明整体消失", () => {
-    const text = renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2 })
+  test("no preceding done tasks: the preceding declaration disappears entirely", () => {
+    const text = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2 })
     expect(text).not.toContain("The previously completed tasks")
   })
 })
 
 describe("renderWrapup", () => {
-  test("只执行收尾: docs、report.md,不标 done、不提交", () => {
+  test("wrap-up only: docs, report.md; no marking done, no committing", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("All subtasks of this task were completed one by one in earlier sessions; do not redo them")
     expect(text).toContain("docs/T-002/report.md")
-    expect(text).not.toContain("git 提交全部未提交改动")
+    expect(text).not.toContain("git commit all uncommitted changes")
     expect(text).toContain("Git commits are made by the DRIVER in one pass after the session ends")
     expect(text).toContain("are maintained by the DRIVER alone")
-    expect(text).not.toContain("把当前任务的状态标记改为 [done]")
+    expect(text).not.toContain("change the current task's status mark to [done]")
   })
 
-  test("收尾: 任务状态由 DRIVER 登记;结论行协议(Result: PASS|FAIL)落 report.md,写作纪律来自意图包", () => {
+  test("wrap-up: the task status is recorded by the DRIVER; the result-line protocol (Result: PASS|FAIL) lands in report.md; writing discipline comes from the intent pack", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("The task status is recorded by the DRIVER in one pass after the session ends")
     expect(text).toContain("`Result: PASS` or `Result: FAIL <one-sentence reason>`")
     expect(text).toContain(`last line of body text of docs/${task.id}/report.md`)
-    // (b) 类纪律来自内置意图包 ## acceptance / ### result-line
+    // (b)-class discipline comes from the built-in intent pack ## acceptance / ### result-line
     expect(text).toContain("Never write PASS for a check you did not run or observe")
     expect(text).not.toContain("verified")
     expect(text).not.toContain("结论: 通过")
   })
 
-  test("零意图基线: 意图包缺 ### result-line 时结论行指令整段消失(从不因结论停机)", () => {
+  test("zero-intent baseline: without ### result-line the result-line instruction disappears entirely (never halts over a verdict)", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "intents")
@@ -602,13 +602,13 @@ describe("renderWrapup", () => {
     }
   })
 
-  test("solo 模式(off/ondemand)不提及子任务", () => {
+  test("solo mode (off/ondemand) does not mention subtasks", () => {
     expect(renderWrapup(plan, task, { solo: true })).toContain("The implementation of this task was completed in earlier sessions")
     expect(renderWrapup(plan, task, { solo: true })).not.toContain("All subtasks")
     expect(renderWrapup(plan, task)).toContain("All subtasks of this task were completed one by one")
   })
 
-  test("索引式报告(auto 模式): 逐子任务一行引用产物路径,不复制产物内容", () => {
+  test("indexed report (auto mode): one line per subtask referencing artifact paths, no copying artifact content", () => {
     const text = renderWrapup(plan, task)
     expect(text).toContain("an indexed report")
     expect(text).toContain("one line per subtask")
@@ -617,16 +617,17 @@ describe("renderWrapup", () => {
     expect(text).toContain("overall conclusion and open issues, so that later sessions")
   })
 
-  test("solo 模式保持摘要式报告,不带索引式协议", () => {
+  test("solo mode keeps the summary-style report, without the indexed protocol", () => {
     const text = renderWrapup(plan, task, { solo: true })
     expect(text).not.toContain("indexed")
     expect(text).toContain("a summary of the output (what changed, key decisions and open items),\n   so that later sessions")
     expect(text).not.toContain("S<NN>")
   })
 
-  // 收尾闭环 H7(plans/0020-auto-resolve-design.md §I): DRIVER 观测到的代答清单注入收尾
-  // 提示词,要求 report.md 单列 "Proxy-answered questions" 节。
-  test("无代答(缺省/空清单)时代答段整体消失", () => {
+  // Wrap-up closed loop H7 (plans/0020-auto-resolve-design.md §I): the proxy-answer list the
+  // DRIVER observed is injected into the wrap-up prompt, requiring report.md to carry a
+  // standalone "Proxy-answered questions" section.
+  test("with no proxy answers (default / empty list) the proxy-answer block disappears entirely", () => {
     for (const text of [renderWrapup(plan, task), renderWrapup(plan, task, { resolves: [] })]) {
       expect(text).not.toContain("auto-answered")
       expect(text).not.toContain("Proxy-answered")
@@ -635,49 +636,49 @@ describe("renderWrapup", () => {
     }
   })
 
-  test("有代答时逐条列出原问题,并要求 report.md 单列 Proxy-answered questions 节", () => {
-    const text = renderWrapup(plan, task, { resolves: [resolveItem("是否把第三份 formatTokens 一并收口?")] })
+  test("with proxy answers each original question is listed, and report.md is required to carry a standalone Proxy-answered questions section", () => {
+    const text = renderWrapup(plan, task, { resolves: [resolveItem("Should the third formatTokens copy be closed out as well?")] })
     expect(text).toContain("the DRIVER auto-answered the following questions that you should have asked the user")
-    expect(text).toContain("   - 是否把第三份 formatTokens 一并收口?")
+    expect(text).toContain("   - Should the third formatTokens copy be closed out as well?")
     expect(text).toContain('In docs/T-002/report.md give these their own section, "Proxy-answered questions"')
     expect(text).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
     expect(text).toContain("Every item above must appear")
-    // 置于三项固定收尾要求之后、"以上全部完成前不要结束会话"之前
+    // Placed after the three fixed wrap-up requirements and before "Do not end the session before all of the above is done"
     expect(text.indexOf("auto-answered")).toBeGreaterThan(text.indexOf("report.md:"))
     expect(text.indexOf("auto-answered")).toBeLessThan(text.indexOf("Do not end the session before all of the above is done"))
   })
 
-  test("清单只列 DRIVER 源(agent 源已由会话自行标注),未配对的排在前", () => {
+  test("the list carries DRIVER-source items only (agent-source ones are already labeled by the session itself); unpaired ones come first", () => {
     const text = renderWrapup(plan, task, {
       resolves: [
-        { ...resolveItem("已配对的问题"), matched: true },
-        { ...resolveItem("会话自己标过的"), source: "agent", option: "方案甲", reason: "理由" },
-        resolveItem("没被标注的问题"),
+        { ...resolveItem("the paired question"), matched: true },
+        { ...resolveItem("one the session itself labeled"), source: "agent", option: "option A", reason: "rationale" },
+        resolveItem("the unpaired question"),
       ],
     })
-    expect(text).not.toContain("会话自己标过的")
-    expect(text.indexOf("没被标注的问题")).toBeLessThan(text.indexOf("已配对的问题"))
+    expect(text).not.toContain("one the session itself labeled")
+    expect(text.indexOf("the unpaired question")).toBeLessThan(text.indexOf("the paired question"))
   })
 
-  test("多行提问压成单行,空问题不占位", () => {
+  test("multi-line questions are squeezed to one line; empty questions take no slot", () => {
     const text = renderWrapup(plan, task, {
-      resolves: [resolveItem("折旧入账\n是否同样过   钳制?"), resolveItem("   ")],
+      resolves: [resolveItem("Book depreciation\ninto the same   cap?"), resolveItem("   ")],
     })
-    expect(text).toContain("   - 折旧入账 是否同样过 钳制?")
+    expect(text).toContain("   - Book depreciation into the same cap?")
     expect(text).not.toContain("   - \n")
   })
 })
 
 describe("renderWhole", () => {
-  test("off 模式: 单会话完成整个任务,不含交接条款", () => {
+  test("off mode: one session completes the whole task, without the handover clause", () => {
     const text = renderWhole(plan, task)
     expect(text).toContain("You are responsible for the whole task this time, completed within a single session, without decomposing it into subtasks")
-    expect(text).toContain("T-002: 实现迁移")
+    expect(text).toContain("T-002: implement the migration")
     expect(text).not.toContain("handoff.md")
-    expect(text).not.toContain("git 提交全部未提交改动")
+    expect(text).not.toContain("git commit all uncommitted changes")
   })
 
-  test("ondemand 模式: 附交接条款;continuation 要求先读交接文档", () => {
+  test("ondemand mode: the handover clause is attached; continuation demands reading the handover document first", () => {
     const text = renderWhole(plan, task, { ondemand: true })
     expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("[DRIVER] This session's context is about to reach the limit")
@@ -687,19 +688,19 @@ describe("renderWhole", () => {
     expect(cont).toContain("then carry on from there")
   })
 
-  test("不含会话内提交要求(state-rule 注入提交原则)", () => {
-    expect(renderWhole(plan, task)).not.toContain("git 提交全部未提交改动")
+  test("no in-session commit demand (state-rule injects the commit principle)", () => {
+    expect(renderWhole(plan, task)).not.toContain("git commit all uncommitted changes")
     expect(renderWhole(plan, task)).toContain("Git commits are made by the DRIVER in one pass after the session ends")
   })
 
-  test("交接提示要求写出状态行", () => {
+  test("the handover steer demands the status line be written", () => {
     const steer = renderHandoffSteer(task)
     expect(steer).toContain("docs/T-002/handoff.md")
     expect(steer).toContain("Status: continue")
     expect(steer).toContain("Status: done")
   })
 
-  test("test-by-DRIVER: 注入测试执行协议(与 ondemand 交接条款可同现)", () => {
+  test("test-by-DRIVER: the test execution protocol is injected (can coexist with the ondemand handover clause)", () => {
     const text = renderWhole(plan, task, { ondemand: true, testByDriver: true, handoverTest: true })
     expect(text).toContain("Test execution protocol (--test-by-driver)")
     expect(text).toContain("tmp/test.sh")
@@ -709,7 +710,7 @@ describe("renderWhole", () => {
   })
 })
 
-describe("测试执行协议(--test-by-driver)", () => {
+describe("Test execution protocol (--test-by-driver)", () => {
   const run: TestRunInfo = {
     seq: 3,
     script: "/tmp/pkg/test/build.sh",
@@ -719,7 +720,7 @@ describe("测试执行协议(--test-by-driver)", () => {
     out: "/tmp/pkg/tmp/test.3.out",
   }
 
-  test("testHandoffFile 路径与 ondemand handoff 分离命名;子任务级目录(两位零填充)", () => {
+  test("testHandoffFile paths are named separately from the ondemand handoff; subtask-level directories (two-digit zero-padded)", () => {
     expect(testHandoffFile(task)).toBe("docs/T-002/testhandoff.md")
     expect(testHandoffFile(task)).not.toBe("docs/T-002/handoff.md")
     expect(testHandoffFile(task, 2)).toBe("docs/T-002/S02/testhandoff.md")
@@ -727,7 +728,7 @@ describe("测试执行协议(--test-by-driver)", () => {
     expect(testHandoffFile(task, 123)).toBe("docs/T-002/S123/testhandoff.md")
   })
 
-  test("结果反馈: 退出码/耗时/脚本与输出路径,要求直读文件判断并说明再次请求方式", () => {
+  test("result feedback: exit code / duration / script and output paths; demands judging by reading the file directly and states how to request another run", () => {
     const text = renderTestResult(run)
     expect(text).toContain("run number 3")
     expect(text).toContain("/tmp/pkg/test/build.sh")
@@ -740,34 +741,34 @@ describe("测试执行协议(--test-by-driver)", () => {
     expect(timeout).toContain("no output throughout")
   })
 
-  test("收尾+交接要求: 落盘不依赖测试的剩余工作 + 交接文档硬性要求", () => {
+  test("wrap-up + handover requirements: persist the remaining work not dependent on the test + the handover document is mandatory", () => {
     const text = renderTestWrapup({ handoffFile: "/tmp/pkg/docs/T-002/testhandoff.md" })
-    // 对测试时机保持中性: 顺序态(缺省)交接收口后才跑,并发态此刻已在跑,一份文案两态都成立。
+    // Neutral about test timing: in the sequential mode (default) the test runs after the handover close-out; in the concurrent mode it is already running now; one wording holds for both.
     expect(text).toContain("will be run by the DRIVER")
     expect(text).not.toContain("in parallel")
     expect(text).toContain("not dependent on this test run's result")
-    // 未完成事项必须随交接带走: 否则新会话无从知晓,会被当成已完成而永久遗漏
+    // Unfinished items must travel with the handover: otherwise the new session has no way to know, treats them as done, and they are permanently missed
     expect(text).toContain("what is still unfinished in this execution scope")
     expect(text).toContain("/tmp/pkg/docs/T-002/testhandoff.md")
     expect(text).toContain("End the session as soon as the file is written")
-    // 状态行(中断恢复 F1): DRIVER 凭它分辨"写完了"与"DRIVER 死在会话写文件途中的半截文件"
+    // The status line (interruption recovery F1): with it the DRIVER tells apart "written completely" from "a half file left behind because the DRIVER died mid-write"
     expect(text).toContain("Status: continue")
-    // 测试结果恒由下一个会话判读,交接之后一定还有工作——测试交接没有"完成"这一态
-    // (handoff.md 才有: 那边的交接只是建议,活干完了自然不交接)
+    // The test result is always judged by the next session; there is always work after the handover — the test handover has no "done" state
+    // (handoff.md does: its handover is only advisory; with the work finished no handover happens naturally)
     expect(text).not.toContain("Status: done")
   })
 
-  // 文案硬约束(测试交接前置化设计 D2): 收尾提示词不得让会话知道"上下文吃紧"
-  // ——现场实证会话一旦知道就会自行判定余量不足、省略本应完成的落盘工作;
-  // 也不写"不要改源码"(顺序态下收尾改动本就会落进提交 #2 并被测试覆盖)。
-  test("收尾提示词不得出现上下文/超限措辞,也不代劳禁改源码", () => {
+  // Hard copy constraints (test-handover front-loading design D2): the wrap-up prompt must not let the session know "the context is running low"
+  // — field evidence shows that once a session knows, it judges the remaining budget insufficient on its own and skips disk work it should
+  // have finished; it also does not say "do not modify source" (in the sequential mode the wrap-up changes land in commit #2 anyway and are covered by the test).
+  test("the wrap-up prompt must contain no context/limit wording, nor do the no-source-modification ban's job", () => {
     const text = renderTestWrapup({ handoffFile: "docs/T-002/testhandoff.md" })
     for (const banned of ["context", "limit", "cap", "token", "Token", "do not modify", "do not change"]) {
       expect(text).not.toContain(banned)
     }
   })
 
-  test("续跑说明: 先读交接文档与最近输出;连续交接超阈值时提示 AUTO-FIXME 评估", () => {
+  test("continuation note: read the handover document and the latest output first; past the threshold of consecutive handovers it prompts an AUTO-FIXME review", () => {
     const plain = renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run })
     expect(plain).toContain("docs/T-002/testhandoff.md")
     expect(plain).toContain("/tmp/pkg/tmp/test.3.out")
@@ -776,7 +777,7 @@ describe("测试执行协议(--test-by-driver)", () => {
     const stuck = renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run, stuck: 11 })
     expect(stuck).toContain("has now happened 11 times in a row")
     expect(stuck).toContain("AUTO-FIXME")
-    // 无运行信息时省略最近测试段,仍渲染
+    // Without run info the latest-test paragraph is omitted; it still renders
     const bare = renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md" })
     expect(bare).toContain("docs/T-002/testhandoff.md")
     expect(bare).not.toContain("test.3.out")
@@ -784,7 +785,7 @@ describe("测试执行协议(--test-by-driver)", () => {
   })
 })
 
-describe("renderStuckHint(死循环提示)", () => {
+describe("renderStuckHint (stuck-loop hint)", () => {
   const errorHit = {
     kind: "error" as const,
     tool: "edit",
@@ -794,7 +795,7 @@ describe("renderStuckHint(死循环提示)", () => {
     detail: "String not found in file",
   }
 
-  test("同报错重复: 说明是同一个报错,列出工具/参数/报错原文", () => {
+  test("repeated same error: says it is the same error, listing the tool / arguments / error text", () => {
     const text = renderStuckHint(errorHit)
     expect(text).toContain("Loop detected")
     expect(text).toContain("edit")
@@ -805,14 +806,14 @@ describe("renderStuckHint(死循环提示)", () => {
     expect(text).not.toContain("returned exactly the same result")
   })
 
-  test("同参同果重复: 换一种说法,标注的是输出而非报错", () => {
-    const text = renderStuckHint({ ...errorHit, kind: "repeat", tool: "read", count: 4, detail: "文件内容" })
+  test("repeated same arguments, same result: worded differently, labeling the output rather than the error", () => {
+    const text = renderStuckHint({ ...errorHit, kind: "repeat", tool: "read", count: 4, detail: "file contents" })
     expect(text).toContain("has now returned exactly the same result 4 times for the same arguments")
     expect(text).toContain("Output:")
     expect(text).not.toContain("with exactly the same error")
   })
 
-  test("三级升级: 换思路 → 先写诊断 → 停止重试并收尾", () => {
+  test("three-level escalation: change approach → write a diagnosis first → stop retrying and wrap up", () => {
     const first = renderStuckHint(errorHit)
     expect(first).toContain("Stop and check your premises before acting again")
     expect(first).not.toContain("AUTO-FIXME")
@@ -827,7 +828,7 @@ describe("renderStuckHint(死循环提示)", () => {
     expect(third).not.toContain("Stop and check your premises before acting again")
   })
 
-  test("空参数/空输出有占位,渲染无残留标签", () => {
+  test("empty arguments / empty output have placeholders; the render leaves no tags behind", () => {
     const text = renderStuckHint({ ...errorHit, input: "", detail: "" })
     expect(text).toContain("(no arguments)")
     expect(text).toContain("(empty)")
@@ -836,7 +837,7 @@ describe("renderStuckHint(死循环提示)", () => {
 })
 
 describe("renderDryrun", () => {
-  test("权限预检: 列出授权外访问并逐只读探查,报告写入 .auto/dryrun.md", () => {
+  test("permission pre-check: lists out-of-grant accesses and probes each read-only; the report goes to .auto/dryrun.md", () => {
     const text = renderDryrun()
     expect(text).toContain("permission pre-check")
     expect(text).toContain("opencode.json")
@@ -848,7 +849,7 @@ describe("renderDryrun", () => {
 
 describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", () => {
   const stuck = { kind: "repeat" as const, tool: "bash", count: 3, level: 2, input: "ls", detail: "x" }
-  const driverResolve = resolveItem("策略选 A 还是 B?")
+  const driverResolve = resolveItem("strategy A or B?")
 
   function withPack(text: string, fn: () => void) {
     const dir = mkdtempSync(join(tmpdir(), "auto-intent-"))
@@ -899,7 +900,7 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
       expect(block).not.toContain("maintenance rules")
       expect(block).toContain("Summary principle")
       // question-rule falls back to the core minimum: protocol + marker formats
-      const subtask = renderSubtask(plan, task, "编写迁移脚本的 schema 部分")
+      const subtask = renderSubtask(plan, task, "write the schema part of the migration script")
       expect(subtask).not.toContain("The call should have been the user's")
       expect(subtask).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
       for (const text of [decompose, wrapup, knowledge, hint, subtask]) expect(text).not.toMatch(/\{\{|\}\}/)
@@ -910,7 +911,7 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
     withPack(
       "# default\n\n## governance\n\n### decisions-unattended\n\n   CUSTOM-CATALOG: mark user-owned calls with {{resolveFormat}}.\n\n### agents-maintenance\n\nCUSTOM-MAINT\n",
       () => {
-        const subtask = renderSubtask(plan, task, "编写迁移脚本的 schema 部分")
+        const subtask = renderSubtask(plan, task, "write the schema part of the migration script")
         expect(subtask).toContain("   CUSTOM-CATALOG: mark user-owned calls with `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)`.")
         expect(subtask).not.toContain("A decision of your own must leave a record in the relevant document")
         // A leftover `### agents-maintenance` subsection has no consumer (plans/0054 D2).
@@ -936,7 +937,7 @@ describe("intent externalization, P1 and test-handover discipline (M2.3)", () =>
   }
 
   test("built-in pack: the P1 discipline reaches subtask and whole sessions; test-wrapup keeps its wording", () => {
-    for (const text of [renderSubtask(plan, task, "编写迁移脚本的 schema 部分"), renderWhole(plan, task)]) {
+    for (const text of [renderSubtask(plan, task, "write the schema part of the migration script"), renderWhole(plan, task)]) {
       expect(text).toContain("Process documents are the DRIVER's record of this long-running work")
       expect(text).toContain("each line must carry its own question, decision and reason and never point at a process document")
     }
@@ -947,7 +948,7 @@ describe("intent externalization, P1 and test-handover discipline (M2.3)", () =>
 
   test("zero-intent baseline: the discipline drops out, the handover protocol stays", () => {
     withPack("# default\n", () => {
-      expect(renderSubtask(plan, task, "编写迁移脚本的 schema 部分")).not.toContain("Process documents are")
+      expect(renderSubtask(plan, task, "write the schema part of the migration script")).not.toContain("Process documents are")
       expect(renderWhole(plan, task)).not.toContain("Process documents are")
       const wrap = renderTestWrapup({ handoffFile: "docs/T-002/testhandoff.md" })
       expect(wrap).toContain("(code, documents, artifacts);\n")

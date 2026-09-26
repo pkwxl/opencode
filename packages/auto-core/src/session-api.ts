@@ -342,7 +342,7 @@ export function formatClientError(error: unknown): string {
 // During a permission wait these answers (leading/trailing whitespace and case
 // ignored) count as approval.
 export function isApproval(answer: string): boolean {
-  return /^(allow|yes|y|ok|approve|always|允许|授权|是)$/.test(answer.trim().toLowerCase())
+  return /^(allow|yes|y|ok|approve|always)$/i.test(answer.trim())
 }
 
 // Waits up to `minutes` for a human answer on stdin (Enter confirms); returns

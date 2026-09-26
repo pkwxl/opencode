@@ -30,8 +30,8 @@ async function fresh() {
   return await mkdtemp(join(tmpdir(), "auto-handover-"))
 }
 
-describe("在途交接记录的读写", () => {
-  test("往返: 按任务与执行范围取回", async () => {
+describe("in-flight handover record read/write", () => {
+  test("round trip: recalled by task and execution scope", async () => {
     const dir = await fresh()
     try {
       await saveHandover(dir, record)
@@ -42,7 +42,7 @@ describe("在途交接记录的读写", () => {
     }
   })
 
-  test("已收口态往返: 待跑脚本与定版锚点作废、执行结果固化(ran)保留", async () => {
+  test("closed-out state round trip: the pending script and freeze anchor are voided, the fixed execution result (ran) is kept", async () => {
     const dir = await fresh()
     try {
       const closed: Handover = {
@@ -64,7 +64,7 @@ describe("在途交接记录的读写", () => {
   // The sessions' agent profile (plans/0055 §8.2): the record carries it next
   // to pinSession/nextSession, written under a registry; an absent field is
   // the default agent's, so pre-binding records read unchanged.
-  test("agent 随记录往返(pinSession/nextSession 之侧); 缺字段 = 默认 agent", async () => {
+  test("agent round-trips with the record (next to pinSession/nextSession); absent field = the default agent", async () => {
     const dir = await fresh()
     try {
       const bound: Handover = { ...record, agent: "claude-b" }
@@ -80,30 +80,30 @@ describe("在途交接记录的读写", () => {
     }
   })
 
-  test("范围不符不取回(下一执行范围不得续上一范围的交接)", async () => {
+  test("a mismatched scope is not recalled (the next execution scope must not continue the previous scope's handover)", async () => {
     const dir = await fresh()
     try {
       await saveHandover(dir, record)
       expect(await recallHandover(dir, "T-028", "docs/T-028/S04/testhandoff.md")).toBeUndefined()
       expect(await recallHandover(dir, "T-029", "docs/T-028/S03/testhandoff.md")).toBeUndefined()
-      // 任务级窥视不看范围,只看任务
+      // The task-level peek ignores scope, task only
       expect(await peekHandover(dir, "T-029")).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("缺失、损坏与清除", async () => {
+  test("missing, corrupt, and cleared", async () => {
     const dir = await fresh()
     try {
       expect(await recallHandover(dir, "T-028", record.scope)).toBeUndefined()
-      await Bun.write(join(dir, ".auto", "handover.json"), "{ 不是 json")
+      await Bun.write(join(dir, ".auto", "handover.json"), "{ not json")
       expect(await recallHandover(dir, "T-028", record.scope)).toBeUndefined()
       expect(await peekHandover(dir, "T-028")).toBeUndefined()
       await saveHandover(dir, record)
       await forgetHandover(dir)
       expect(await recallHandover(dir, "T-028", record.scope)).toBeUndefined()
-      // 清除幂等
+      // Clearing is idempotent
       await forgetHandover(dir)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -111,11 +111,11 @@ describe("在途交接记录的读写", () => {
   })
 })
 
-describe("交接文档的完整判据(F1/F2)", () => {
-  test("状态行", () => {
-    expect(handoffStatus("正文\n\nStatus: continue\n")).toBe("continue")
-    expect(handoffStatus("正文\n\nStatus：done")).toBe("done")
-    expect(handoffStatus("正文,没有状态行")).toBeUndefined()
+describe("handover-document completeness criteria (F1/F2)", () => {
+  test("status line", () => {
+    expect(handoffStatus("body\n\nStatus: continue\n")).toBe("continue")
+    expect(handoffStatus("body\n\nStatus：done")).toBe("done")
+    expect(handoffStatus("body, no status line")).toBeUndefined()
   })
 
   test("English status line, case-insensitive; pre-flip Chinese no longer read (M3.7)", () => {
@@ -128,104 +128,108 @@ describe("交接文档的完整判据(F1/F2)", () => {
     expect(handoffStatus("状态: 完成")).toBeUndefined()
   })
 
-  test("状态行须整行锚定: 正文复述提示词字样不得命中(2026-09-17 审查 H3)", () => {
-    // 句中出现状态字样(会话复述提示词指令的常见形态)
-    expect(handoffStatus("完成后请写出 Status: continue 行")).toBeUndefined()
-    // 值带尾巴(如"continue with the rest")不算有效状态行
-    expect(handoffStatus("正文\nStatus: continue with the rest\n")).toBeUndefined()
-    // 跨行不算(旧判据 \s 可吞换行)
+  test("the status line must be whole-line anchored: the body restating the prompt wording must not match (2026-09-17 review H3)", () => {
+    // The wording appears mid-sentence (a common shape of the session restating the prompt's instructions)
+    expect(handoffStatus("when finished, write out the Status: continue line")).toBeUndefined()
+    // A value with a tail (e.g. "continue with the rest") is not a valid status line
+    expect(handoffStatus("body\nStatus: continue with the rest\n")).toBeUndefined()
+    // Split across lines does not count (the old criterion's \s could swallow the newline)
     expect(handoffStatus("Status:\ncontinue\n")).toBeUndefined()
-    // 行内允许前后空白
-    expect(handoffStatus("正文\n  Status:  continue  \n")).toBe("continue")
+    // Surrounding whitespace on the line is allowed
+    expect(handoffStatus("body\n  Status:  continue  \n")).toBe("continue")
     // Several matching lines: the last one wins (the protocol puts it last)
     expect(handoffStatus("Status: continue\nStatus: done\n")).toBe("done")
     expect(handoffStatus("## Step 2\nStatus: done\n\nnext steps…\n\nStatus: continue\n")).toBe("continue")
   })
 
-  test("有状态行即完整;缺状态行但已落账同样完整;半截文件不完整", () => {
-    expect(handoffComplete("正文\nStatus: continue", false)).toBe(true)
-    // 已落账 = 提交那一刻文件是整的,缺行只是写于状态行约定之前
-    expect(handoffComplete("状态行约定之前写的正文", true)).toBe(true)
-    expect(handoffComplete("会话写到一半被打断", false)).toBe(false)
+  test("a status line alone means complete; missing the status line but already archived is equally complete; a half-written file is incomplete", () => {
+    expect(handoffComplete("body\nStatus: continue", false)).toBe(true)
+    // Archived = the file was whole at commit time; the missing line just predates the status-line convention
+    expect(handoffComplete("body written before the status-line convention", true)).toBe(true)
+    expect(handoffComplete("session interrupted mid-write", false)).toBe(false)
     expect(handoffComplete(undefined, true)).toBe(false)
     expect(handoffComplete("   \n", true)).toBe(false)
   })
 })
 
-describe("handoverSeq(观测序号 vs 归档续号)", () => {
-  test("无在途记录: 观测与续号都回落盘扫描(存量现场)", () => {
+describe("handoverSeq (observed number vs archive continuation)", () => {
+  test("no in-flight record: both the observed number and the continuation fall back to the disk scan (legacy field state)", () => {
     expect(handoverSeq(undefined, 0)).toEqual({ observed: 0, nextBase: 0 })
     expect(handoverSeq(undefined, 3)).toEqual({ observed: 3, nextBase: 3 })
   })
 
-  test("记录在案即权威: 盘扫描更高号是命名族里的误写件,不作交接证据", () => {
-    // 现场: 交接 #1 已收口(testhandoff-1.md 落账),会话又自写 testhandoff-2.md——
-    // 观测仍认 #1 的归档份,阶段判为 test 而不是"交接 #2 已收口"。
+  test("a record on file is authoritative: a higher number from the disk scan is a miswritten file in the naming family, not handover evidence", () => {
+    // Field: handover #1 already closed out (testhandoff-1.md archived), and the
+    // session also wrote testhandoff-2.md itself — observation still recognizes
+    // #1's archived copy, and the stage is judged test rather than "handover #2
+    // closed out".
     expect(handoverSeq({ ...record, n: 1 }, 2)).toEqual({ observed: 1, nextBase: 2 })
   })
 
-  test("续号取两侧最大: 不覆盖盘上误写件,也不覆盖记录所指归档", () => {
-    // 误写件占住 2 号位 → 下一次真交接归档为 -3,误写件原样保留。
+  test("the continuation takes the max of both sides: neither overwrites the miswritten file on disk nor the archive the record points at", () => {
+    // The miswritten file occupies slot 2 → the next real handover archives as -3; the miswritten file stays as is.
     expect(handoverSeq({ ...record, n: 1 }, 2).nextBase).toBe(2)
-    // 归档份被删(盘扫描倒退)而记录还在 → 续号跟着记录走,不倒退。
+    // The archived copy deleted (disk scan goes backwards) while the record remains → the continuation follows the record, no going backwards.
     expect(handoverSeq({ ...record, n: 2 }, 0)).toEqual({ observed: 2, nextBase: 2 })
   })
 })
 
-describe("handoverStage(文件状态 × 提交状态)", () => {
+describe("handoverStage (file state × commit state)", () => {
   const base = { current: undefined, currentCommitted: false, archived: false, archivedCommitted: false }
 
-  test("H5 无交接痕迹 → none", () => {
+  test("H5 no handover traces → none", () => {
     expect(handoverStage({ ...base })).toBe("none")
   })
 
-  test("H1 有定版记录、文档半截 → wrapup(从定版点重做收尾)", () => {
+  test("H1 a freeze record exists, the document is half-written → wrapup (redo the wrap-up from the freeze point)", () => {
     expect(handoverStage({ ...base, record })).toBe("wrapup")
-    expect(handoverStage({ ...base, record, current: "写到一半" })).toBe("wrapup")
-    // 空文件与不在盘等价
+    expect(handoverStage({ ...base, record, current: "half-written" })).toBe("wrapup")
+    // An empty file equals not on disk
     expect(handoverStage({ ...base, record, current: "   " })).toBe("wrapup")
   })
 
-  test("H2 文档写完但未归档 → commit", () => {
-    expect(handoverStage({ ...base, record, current: "正文\nStatus: continue" })).toBe("commit")
-    // 已落账的历史格式文档(无状态行)同样算写完
-    expect(handoverStage({ ...base, record, current: "老格式正文", currentCommitted: true })).toBe("commit")
+  test("H2 document written but not archived → commit", () => {
+    expect(handoverStage({ ...base, record, current: "body\nStatus: continue" })).toBe("commit")
+    // An archived legacy-format document (no status line) also counts as written
+    expect(handoverStage({ ...base, record, current: "legacy-format body", currentCommitted: true })).toBe("commit")
   })
 
-  test("H2 已归档但提交 #2 没落账 → commit", () => {
+  test("H2 archived but commit #2 not recorded → commit", () => {
     expect(handoverStage({ ...base, record, archived: true })).toBe("commit")
   })
 
-  test("H3 归档份已落账 → test(交接已收口,只差跑脚本与续跑)", () => {
+  test("H3 the archived copy is recorded → test (the handover is closed out; only the script run and the continuation remain)", () => {
     expect(handoverStage({ ...base, record, archived: true, archivedCommitted: true })).toBe("test")
-    // 记录缺失不改变阶段(只影响"跑哪个脚本"的回落)
+    // A missing record does not change the stage (it only affects the "which script to run" fallback)
     expect(handoverStage({ ...base, archived: true, archivedCommitted: true })).toBe("test")
   })
 
-  test("H4 无记录的存量现场: 留着一份文档就按已交接处理,不凭空重做", () => {
-    expect(handoverStage({ ...base, current: "上一版 driver 写下的交接", currentCommitted: true })).toBe("commit")
-    expect(handoverStage({ ...base, current: "没有状态行的半截" })).toBe("commit")
+  test("H4 a legacy field state without a record: a document left on disk is treated as handed over, not redone from nothing", () => {
+    expect(handoverStage({ ...base, current: "a handover written by the previous driver version", currentCommitted: true })).toBe("commit")
+    expect(handoverStage({ ...base, current: "half-written without a status line" })).toBe("commit")
   })
 })
 
-describe("closedHandovers(恢复入口的已收口计数)", () => {
-  // record 夹具带 script/pinSession = 未收口形态;closed 为收口后形态(两者作废)。
+describe("closedHandovers (closed-out count at the recovery entry)", () => {
+  // The record fixture carries script/pinSession = the not-yet-closed-out shape; closed is the shape after close-out (both voided).
   const closed: Handover = { task: "T-028", scope: "docs/T-028/S03/testhandoff.md", unit: "subtask 3", n: 1 }
 
-  test("未收口记录的 n 是已分配的号而非已收口计数: 基数退一格,恢复收口正落 record.n", () => {
-    // 定版 #1 后收尾途中被打断: 归档扫描为 0,基数须为 0 而非 1——否则恢复收口
-    // 归档为 testhandoff-2.md,跳空一号且与「#1 定版」提交标题对不上。
+  test("an unclosed record's n is the allocated number, not a closed-out count: the base steps back by one, so the recovered close-out lands exactly on record.n", () => {
+    // Interrupted mid wrap-up after freeze #1: the archive scan is 0, so the
+    // base must be 0, not 1 — otherwise the recovered close-out archives as
+    // testhandoff-2.md, skipping a number and mismatching the "freeze #1"
+    // commit title.
     expect(closedHandovers({ ...record, n: 1 }, handoverSeq({ ...record, n: 1 }, 0))).toBe(0)
-    // 交接 #2 定版后被打断(#1 已收口归档): 基数 1,恢复收口正落 #2。
+    // Interrupted after handover #2 froze (#1 already closed out and archived): base 1, the recovered close-out lands exactly on #2.
     expect(closedHandovers({ ...record, n: 2 }, handoverSeq({ ...record, n: 2 }, 1))).toBe(1)
   })
 
-  test("已收口记录与无记录维持 nextBase 原义", () => {
+  test("a closed-out record and no record keep nextBase's original meaning", () => {
     expect(closedHandovers({ ...closed, n: 1 }, handoverSeq({ ...closed, n: 1 }, 1))).toBe(1)
     expect(closedHandovers(undefined, handoverSeq(undefined, 3))).toBe(3)
   })
 
-  test("盘上误写件更大时不被踩: 基数仍被 diskMax 托住", () => {
+  test("a larger miswritten file on disk is not stepped on: the base is still held up by diskMax", () => {
     expect(closedHandovers({ ...record, n: 1 }, handoverSeq({ ...record, n: 1 }, 2))).toBe(2)
   })
 })

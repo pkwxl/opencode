@@ -1,14 +1,16 @@
-// 事故回归场景集(M0.2,plans/AUTO_NEXT_REFACTOR_PLAN.md F7): 从现场事故库提炼的
-// driver 级 fake-client 场景,此后每里程碑退出标准必跑(§7-3)。与 watch.test.ts /
-// subtask-shape.test.ts 等单元用例不同,本文件按事故叙事组织,覆盖"现场加固行为"
-// 的端到端链路。场景出处:
-//   I1 半开连接悬挂     —— kernel-dm T-068(传输层半开 44 分钟无超时,session-boundary-hardening D3)
-//   I2 输出截断续跑     —— kernel-spi-nor T-030 S13(session-boundary-hardening §8,S9)
-//   I3 误判已完成零落盘 —— kernel-dm T-068 S01(读入前任务收尾叙事误判,session-boundary-hardening D2)
-//   I4 测试脚本原地改写 —— kernel-spi-nor T-028(rustfmt apply,test-handover-early §H:先交接后运行,无 stash)
-//   I5 交接链收口       —— test-handover-early §N F4(单元完成必清链,不留恢复误判面)
-//   I6 验收结论 FAIL    —— plans/0044 §3.3(D13 退役 verify/review/final-review 后唯一的完成侧判定:
-//                          报告结论行 Result: FAIL 即阻塞停跑,报告已提交,不标 done)
+// Incident regression scenario set (M0.2, plans/AUTO_NEXT_REFACTOR_PLAN.md F7):
+// driver-level fake-client scenarios distilled from the field-incident
+// library, run for every milestone exit criterion from then on (§7-3). Unlike
+// the unit cases in watch.test.ts / subtask-shape.test.ts, this file is
+// organized by incident narrative and covers the end-to-end chain of the
+// "field hardening behavior". Scenario origins:
+//   I1 half-open connection hang — kernel-dm T-068 (transport-layer half-open for 44 minutes with no timeout, session-boundary-hardening D3)
+//   I2 truncated-output resume — kernel-spi-nor T-030 S13 (session-boundary-hardening §8, S9)
+//   I3 misjudged-complete zero-write — kernel-dm T-068 S01 (misjudged by the pre-read task wrap-up narrative, session-boundary-hardening D2)
+//   I4 test script rewriting sources in place — kernel-spi-nor T-028 (rustfmt apply, test-handover-early §H: hand over first, run after; no stash)
+//   I5 handover chain close-out — test-handover-early §N F4 (unit completion must clear the chain, leaving no surface for recovery misjudgment)
+//   I6 acceptance verdict FAIL — plans/0044 §3.3 (the only completion-side verdict after D13 retired verify/review/final-review:
+//                               a report verdict line Result: FAIL blocks and halts the run; the report is committed, not marked done)
 
 import { describe, expect, test } from "bun:test"
 import { rm } from "node:fs/promises"
@@ -29,8 +31,9 @@ import { fakeClient, freshRepo, git } from "./fixtures/runner"
 const NO_WAIT = parseSwitches({ OPENCODE_AUTO_RETRY_WAITS: "0,0", OPENCODE_AUTO_RECOVERY_WAIT: "0" })
 const makeChain = (): SessionChain => ({ pct: 100, used: 0, at: 0 })
 
-// 每回合会话的替身脚本(与 subtask-shape.test.ts 同款): 第 n 回合消费 scripts[n-1],
-// 清单耗尽后重复末份;随后 idle 结束回合。
+// Per-round session stand-in script (same shape as subtask-shape.test.ts):
+// round n consumes scripts[n-1], repeating the last one once the list is
+// exhausted; then an idle ends the round.
 function scriptedClient(scripts: Array<(sid: string) => Promise<unknown>>) {
   let round = 0
   return fakeClient({
@@ -43,18 +46,18 @@ function scriptedClient(scripts: Array<(sid: string) => Promise<unknown>>) {
   })
 }
 
-// 带 git 的临时仓库: .gitignore 按 loop-preflight 口径忽略 tmp/ 与 .auto/。
+// A temp repository with git: .gitignore ignores tmp/ and .auto/ per the loop-preflight criteria.
 async function incidentRepo(planText: string): Promise<string> {
   const dir = await freshRepo()
   await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-  await Bun.write(join(dir, "src.ts"), "// 源码基线\n")
+  await Bun.write(join(dir, "src.ts"), "// source baseline\n")
   await seedUnits(dir, planText)
   await git(dir, "add", "-A")
   await git(dir, "commit", "-q", "-m", "init")
   return dir
 }
 
-// message.updated 事件(用量推进;input 超 contextLimit 即达测试交接判据)。
+// message.updated events (usage progress; input beyond contextLimit reaches the test-handover criterion).
 const usageMsg = (sid: string, id: string, input: number) => ({
   type: "message.updated",
   properties: {
@@ -70,30 +73,30 @@ const usageMsg = (sid: string, id: string, input: number) => ({
   },
 })
 
-describe("I1 半开连接悬挂(kernel-dm T-068)", () => {
-  test("探针两连败 → abort 会话 + 可重试会话错误,不无限悬挂", async () => {
+describe("I1 half-open connection hang (kernel-dm T-068)", () => {
+  test("two consecutive probe failures → abort the session + a retryable session error, no infinite hang", async () => {
     const { client, calls } = fakeClient({
       get: () => ({ error: { name: "UnknownError", data: {} } }),
-      // 半开形态: 事件流永不产事件(无 FIN/RST,客户端永远收不到结束信号)。
+      // Half-open shape: the event stream never produces an event (no FIN/RST; the client never receives the end signal).
       events: () =>
         (async function* () {
           await new Promise(() => {})
         })(),
     })
     const task = (await loadFromText()).tasks[0]!
-    const result = await attempt(client, task, "提示词", { idleMs: 20 }, makeChain(), undefined, undefined, NO_WAIT)
+    const result = await attempt(client, task, "prompt", { idleMs: 20 }, makeChain(), undefined, undefined, NO_WAIT)
     expect(result.type).toBe("blocked")
     expect((result as { errorClass?: string }).errorClass).toBe("transient")
     expect(calls.aborts).toContain("ses_new_1")
   })
 })
 
-// attempt 只需要一个 Task;落盘太重,直接用内存计划。
+// attempt only needs a Task; writing to disk is too heavy, so use an in-memory plan.
 async function loadFromText() {
-  return planOf("## T-001: 示例任务 [pending]\n正文。\n")
+  return planOf("## T-001: sample task [pending]\nBody.\n")
 }
 
-describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
+describe("I2 truncated-output resume (kernel-spi-nor T-030 S13)", () => {
   const stepFinish = (sid: string, id: string, reason: string) => ({
     type: "message.part.updated",
     properties: {
@@ -111,7 +114,7 @@ describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
   })
   const idle = (sid: string) => ({ type: "session.idle", properties: { sessionID: sid } })
 
-  test("length 收场不作自然结束: steer「从截断处继续」让原会话接着做", async () => {
+  test("a length finish is not a natural finish: the steer \"continue from the truncation point\" keeps the original session going", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -122,9 +125,9 @@ describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
         })(),
     })
     const task = (await loadFromText()).tasks[0]!
-    const result = await runSession(client, task, "提示词", {}, makeChain(), undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt", {}, makeChain(), undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
-    // 续跑经 steer 进原会话: 不新建会话、不重发提示词。
+    // The continuation goes into the original session via steer: no new session, no re-dispatched prompt.
     expect(calls.steers.length).toBe(1)
     expect(calls.steers[0]).toContain("cut off by the output length limit")
     expect(calls.steers[0]).toContain("continue the unfinished work")
@@ -132,7 +135,7 @@ describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
     expect(calls.prompts.length).toBe(1)
   })
 
-  test("连续截断以 3 次为限: 第 4 次按自然结束收口(交形检环处置)", async () => {
+  test("consecutive truncations are capped at 3: the 4th settles as a natural finish (handed to the shape-check loop)", async () => {
     const { client, calls } = fakeClient({
       events: (sid) =>
         (async function* () {
@@ -143,24 +146,25 @@ describe("I2 输出截断续跑(kernel-spi-nor T-030 S13)", () => {
         })(),
     })
     const task = (await loadFromText()).tasks[0]!
-    const result = await runSession(client, task, "提示词", {}, makeChain(), undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt", {}, makeChain(), undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.steers.length).toBe(3)
   })
 })
 
-describe("I3 误判已完成零落盘(kernel-dm T-068 S01)", () => {
-  const BODY = "调研并落盘记录 Artifacts: docs/T-001/S01/record.md"
+describe("I3 misjudged-complete zero-write (kernel-dm T-068 S01)", () => {
+  const BODY = "Investigate and write the record to disk Artifacts: docs/T-001/S01/record.md"
 
-  test("会话零产物收场: 带反馈重提示一次(复述权威状态)→ 仍零 → blocked,不勾选", async () => {
-    const dir = await incidentRepo(`## T-001: 示例任务 [in_progress]\n\n- [ ] ${BODY}\n`)
+  test("the session ends with zero artifacts: one re-prompt with feedback (restating the ground state) → still zero → blocked, not ticked", async () => {
+    const dir = await incidentRepo(`## T-001: sample task [in_progress]\n\n- [ ] ${BODY}\n`)
     try {
       const { client, calls } = scriptedClient([async () => {}])
       const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("zero disk writes")
-      // 首发 + 一次带反馈重提示,反馈复述权威状态(L1)防叙事误判。
+      // Initial dispatch + one re-prompt with feedback; the feedback restates
+      // the ground state (L1) to prevent the narrative misjudgment.
       expect(calls.prompts.length).toBe(2)
       const feedback = String((calls.prompts[1]!.parts[0] as { text?: string })?.text ?? "")
       expect(feedback).toContain("artifacts did not pass the shape check")
@@ -173,24 +177,26 @@ describe("I3 误判已完成零落盘(kernel-dm T-068 S01)", () => {
   })
 })
 
-describe("I4 测试脚本原地改写源码(kernel-spi-nor T-028)", () => {
+describe("I4 the test script rewriting sources in place (kernel-spi-nor T-028)", () => {
   const HANDOFF = "docs/T-001/S01/testhandoff.md"
 
-  test("顺序态: 定版提交 → 归档+提交 #2 → 之后跑脚本;脚本改写留在工作区不提交,全程无 stash", async () => {
-    const dir = await incidentRepo(`## T-001: 示例任务 [in_progress]\n\n- [ ] 实现逻辑\n`)
+  test("sequential state: freeze commit → archive + commit #2 → the script runs after that; its rewrite stays in the worktree uncommitted, no stash at any point", async () => {
+    const dir = await incidentRepo(`## T-001: sample task [in_progress]\n\n- [ ] implement the logic\n`)
     try {
-      // 回合 1: 用量超限 → 发起测试(脚本原地改写 src.ts,rustfmt apply 形态)→ 定版;
-      // 收尾写出交接文档(Status: continue)→ testHandover 收场。回合 2(续跑): 自然结束。
-      // 逐事件编排与 session.test.ts handoverStream 同款。
+      // Round 1: usage over the limit → initiates a test (the script rewrites
+      // src.ts in place, rustfmt-apply shape) → freeze; the wrap-up writes the
+      // handover document (Status: continue) → testHandover settle. Round 2
+      // (continuation): natural finish.
+      // Per-event orchestration, same shape as session.test.ts handoverStream.
       let round = 0
       const { client: driver, calls } = fakeClient({
         events: (sid) =>
           (async function* () {
             if (round++ === 0) {
               yield usageMsg(sid, "m_limit", 2000)
-              await Bun.write(join(dir, "tmp", "test.sh"), "echo '// 格式化改写' >> src.ts")
+              await Bun.write(join(dir, "tmp", "test.sh"), "echo '// formatted rewrite' >> src.ts")
               yield { type: "session.idle", properties: { sessionID: sid } }
-              await Bun.write(join(dir, HANDOFF), "# 交接\n\n进度与后续步骤。\n\nStatus: continue\n")
+              await Bun.write(join(dir, HANDOFF), "# Handover\n\nProgress and next steps.\n\nStatus: continue\n")
               yield usageMsg(sid, "m_wrapup", 2100)
               yield { type: "session.idle", properties: { sessionID: sid } }
             } else {
@@ -199,29 +205,35 @@ describe("I4 测试脚本原地改写源码(kernel-spi-nor T-028)", () => {
           })(),
       })
       const plan = await reloadUnits(dir)
-      const chain: SessionChain = { pct: 100, used: 0, at: 0, subject: "T-001 S1 实现逻辑", phase: { kind: "subtasks", index: 1 } }
+      const chain: SessionChain = { pct: 100, used: 0, at: 0, subject: "T-001 S1 implement the logic", phase: { kind: "subtasks", index: 1 } }
       const result = await runExecSession(
         driver,
         plan,
         plan.tasks[0]!,
-        "提示词",
+        "prompt",
         { dir, commit: true, testByDriver: true, handoverTest: true, contextLimit: 1000 },
         chain,
         undefined,
         1,
       )
       expect(result.type).toBe("idle")
-      // 交接文档已归档落账(testhandoff-1.md 在 git 里;续跑自然结束后当前份被清链,
-      // 在途记录随之作废——闭环语义由 I5 断言,这里只核对归档份在账)。
+      // The handover document is archived and recorded (testhandoff-1.md is in
+      // git; after the continuation's natural finish the current copy is
+      // chain-cleared and the in-flight record voided with it — the closure
+      // semantics are asserted by I5; here we only verify the archived copy is
+      // on the books).
       const tracked = await git(dir, "ls-files")
       expect(tracked).toContain("docs/T-001/S01/testhandoff-1.md")
-      // 关键时序(T-028): 脚本在收口提交之后跑——HEAD 里的 src.ts 仍是基线,
-      // 改写留在工作区未提交,由下一单元吸纳;全程未动 stash(重测守卫已退役)。
-      expect(await git(dir, "show", "HEAD:src.ts")).not.toContain("格式化改写")
-      expect(await Bun.file(join(dir, "src.ts")).text()).toContain("格式化改写")
+      // The key ordering (T-028): the script runs after the close-out commit —
+      // src.ts in HEAD is still the baseline, the rewrite stays in the worktree
+      // uncommitted and is absorbed by the next unit; stash is never touched
+      // (the retest guard is retired).
+      expect(await git(dir, "show", "HEAD:src.ts")).not.toContain("formatted rewrite")
+      expect(await Bun.file(join(dir, "src.ts")).text()).toContain("formatted rewrite")
       expect((await git(dir, "status", "--porcelain")).trimEnd()).toBe(" M src.ts")
       expect((await git(dir, "stash", "list")).trim()).toBe("")
-      // 续跑回合只补一句 continuation,不从头重发: 两次 prompt(首发+续跑)。
+      // The continuation round only adds one continuation message, no
+      // re-dispatch from scratch: two prompts (initial + continuation).
       expect(calls.prompts.length).toBe(2)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -229,12 +241,12 @@ describe("I4 测试脚本原地改写源码(kernel-spi-nor T-028)", () => {
   })
 })
 
-describe("I5 交接链收口(test-handover-early §N F4)", () => {
-  const BODY = "调研并落盘记录 Artifacts: docs/T-001/S01/record.md"
-  const filler = "占位素材甲乙丙。".repeat(30)
+describe("I5 handover chain close-out (test-handover-early §N F4)", () => {
+  const BODY = "Investigate and write the record to disk Artifacts: docs/T-001/S01/record.md"
+  const filler = "Placeholder material alpha beta gamma. ".repeat(30)
 
-  test("单元完成必清链: 交接发生、续跑完成 → testhandoff 全链删除并随单元提交落账,工作区干净", async () => {
-    const dir = await incidentRepo(`## T-001: 示例任务 [in_progress]\n\n- [ ] ${BODY}\n`)
+  test("unit completion must clear the chain: the handover happened, the continuation completed → the whole testhandoff chain is deleted and recorded with the unit commit; the worktree is clean", async () => {
+    const dir = await incidentRepo(`## T-001: sample task [in_progress]\n\n- [ ] ${BODY}\n`)
     try {
       let round = 0
       const { client } = fakeClient({
@@ -244,12 +256,12 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
               yield usageMsg(sid, "m_limit", 2000)
               await Bun.write(join(dir, "tmp", "test.sh"), "echo ok")
               yield { type: "session.idle", properties: { sessionID: sid } }
-              await Bun.write(join(dir, "docs/T-001/S01/testhandoff.md"), "# 交接\n\n进度。\n\nStatus: continue\n")
+              await Bun.write(join(dir, "docs/T-001/S01/testhandoff.md"), "# Handover\n\nProgress.\n\nStatus: continue\n")
               yield usageMsg(sid, "m_wrapup", 2100)
               yield { type: "session.idle", properties: { sessionID: sid } }
             } else {
-              // 续跑回合: 补上声明产物(非平凡 + 末行终止符),自然结束。
-              await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n${filler}\n\n${EOF_MARK}\n`)
+              // Continuation round: adds the declared artifact (non-trivial + last-line terminator), natural finish.
+              await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# Record\n\n${filler}\n\n${EOF_MARK}\n`)
               yield { type: "session.idle", properties: { sessionID: sid } }
             }
           })(),
@@ -265,15 +277,18 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
         makeChain(),
       )
       expect(result).toBeUndefined()
-      // 交接确实发生过(归档又删除,历史由 git 承载),当前盘面无任何 testhandoff 文件。
+      // The handover really happened (archived then deleted; history lives in
+      // git); the current disk state has no testhandoff file at all.
       const tracked = await git(dir, "ls-files")
       expect(tracked).not.toContain("testhandoff")
       expect(await Bun.file(join(dir, "docs/T-001/S01/testhandoff.md")).exists()).toBe(false)
-      // 子任务勾选、单元提交落账、工作区干净(删除已随提交落账,不留脏区撞下一单元门禁)。
+      // The subtask is ticked, the unit commit recorded, the worktree clean
+      // (the deletion is recorded with the commit, leaving no dirty area to
+      // slam the next unit's gate).
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       expect(await git(dir, "log", "--format=%s")).toContain("test handover #1")
-      // 在途记录已作废(闭环即清)。
+      // The in-flight record is voided (cleared on closure).
       expect(await recallHandover(dir, "T-001", "docs/T-001/S01/testhandoff.md")).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -281,14 +296,14 @@ describe("I5 交接链收口(test-handover-early §N F4)", () => {
   })
 })
 
-describe("I6 验收结论 FAIL 停跑(plans/0044 §3.3)", () => {
+describe("I6 acceptance verdict FAIL halts the run (plans/0044 §3.3)", () => {
   const filler = "Acceptance evidence line. ".repeat(20)
   // Round 1 = whole-task session (off mode): a source change. Round 2 = the
   // wrap-up session: the task report, ending in the given result line.
   const scenario = (dir: string, resultLine: string) =>
     scriptedClient([
       async () => {
-        await Bun.write(join(dir, "src.ts"), "// 源码基线\nexport const x = 1\n")
+        await Bun.write(join(dir, "src.ts"), "// source baseline\nexport const x = 1\n")
       },
       async () => {
         await Bun.write(join(dir, "docs/T-001/report.md"), `# T-001 report\n\n${filler}\n\n${resultLine}\n\n${EOF_MARK}\n`)
@@ -296,7 +311,7 @@ describe("I6 验收结论 FAIL 停跑(plans/0044 §3.3)", () => {
     ])
 
   test("Result: FAIL → blocked with the reason, task not done, report committed, phase rewound to wrapup", async () => {
-    const dir = await incidentRepo(`## T-001: 验收 [pending]\n\n检查 x。\n\n## T-002: 后续 [pending]\n\n后续工作。\n`)
+    const dir = await incidentRepo(`## T-001: acceptance [pending]\n\nCheck x.\n\n## T-002: follow-up [pending]\n\nFollow-up work.\n`)
     try {
       const { client } = scenario(dir, "Result: FAIL x is not exported under the expected name")
       const plan = await reloadUnits(dir)
@@ -316,7 +331,7 @@ describe("I6 验收结论 FAIL 停跑(plans/0044 §3.3)", () => {
   })
 
   test("Result: PASS → completed and marked done", async () => {
-    const dir = await incidentRepo(`## T-001: 验收 [pending]\n\n检查 x。\n`)
+    const dir = await incidentRepo(`## T-001: acceptance [pending]\n\nCheck x.\n`)
     try {
       const { client } = scenario(dir, "Result: PASS")
       const plan = await reloadUnits(dir)

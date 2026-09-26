@@ -12,16 +12,16 @@ import { EOF_MARK } from "../src/doccheck"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, SUBTASK_TODO_SECTIONS, subtaskStateSpec } from "../src/document/spec"
 import type { ArtifactSpec } from "../src/document/types"
 
-describe("declaredArtifacts(Artifacts: 字段解析,session-boundary-hardening §4.3 D4)", () => {
-  test("无声明 / 纯自然语言声明: 不构成产物清单", () => {
-    expect(declaredArtifacts("调研迁移策略并落盘")).toEqual([])
-    expect(declaredArtifacts("写文档 Artifacts: 调研结论与建议")).toEqual([])
-    // 「投入:」一类字样不含「Artifacts:」字段
-    expect(declaredArtifacts("投入: docs/a.md")).toEqual([])
+describe("declaredArtifacts (the Artifacts: field parser, session-boundary-hardening §4.3 D4)", () => {
+  test("no declaration / a purely natural-language declaration: no artifact list", () => {
+    expect(declaredArtifacts("investigate migration strategies and write them down")).toEqual([])
+    expect(declaredArtifacts("write docs Artifacts: research findings and recommendations")).toEqual([])
+    // A wording like "Effort:" does not contain the "Artifacts:" field
+    expect(declaredArtifacts("Effort: docs/a.md")).toEqual([])
   })
 
-  test("单路径/多路径清单: 逗号、顿号、分号、空白、全角冒号均可分隔,role 恒为 artifact", () => {
-    expect(declaredArtifacts("调研 X Artifacts: docs/T-001/S01/record.md")).toEqual([{ path: "docs/T-001/S01/record.md", role: "artifact" }])
+  test("single-path / multi-path lists: comma, ideographic comma, semicolon, whitespace and the full-width colon all separate; role is always artifact", () => {
+    expect(declaredArtifacts("investigate X Artifacts: docs/T-001/S01/record.md")).toEqual([{ path: "docs/T-001/S01/record.md", role: "artifact" }])
     expect(declaredArtifacts("Artifacts：docs/a.md、src/b.ts")).toEqual([
       { path: "docs/a.md", role: "artifact" },
       { path: "src/b.ts", role: "artifact" },
@@ -31,32 +31,32 @@ describe("declaredArtifacts(Artifacts: 字段解析,session-boundary-hardening �
       { path: "src/b.ts", role: "artifact" },
       { path: "docs/c.md", role: "artifact" },
     ])
-    expect(declaredArtifacts("Artifacts: docs/a.md 和 src/b.ts。")).toEqual([
+    expect(declaredArtifacts("Artifacts: docs/a.md and src/b.ts。")).toEqual([
       { path: "docs/a.md", role: "artifact" },
       { path: "src/b.ts", role: "artifact" },
     ])
   })
 
-  test("可选章节锚清单: 路径后圆括号(紧跟或独立括号项),括号内分隔符不切断路径", () => {
-    expect(declaredArtifacts("Artifacts: docs/T-001/S01/index.md(背景、结论)")).toEqual([
-      { path: "docs/T-001/S01/index.md", role: "artifact", sectionAnchors: ["背景", "结论"] },
+  test("optional section-anchor lists: parentheses after the path (attached directly or as a standalone paren item); separators inside the parens do not cut the path", () => {
+    expect(declaredArtifacts("Artifacts: docs/T-001/S01/index.md(background, conclusions)")).toEqual([
+      { path: "docs/T-001/S01/index.md", role: "artifact", sectionAnchors: ["background", "conclusions"] },
     ])
-    expect(declaredArtifacts("Artifacts: docs/a.md (背景、结论) docs/b.md(风险)")).toEqual([
-      { path: "docs/a.md", role: "artifact", sectionAnchors: ["背景", "结论"] },
-      { path: "docs/b.md", role: "artifact", sectionAnchors: ["风险"] },
+    expect(declaredArtifacts("Artifacts: docs/a.md (background, conclusions) docs/b.md(risks)")).toEqual([
+      { path: "docs/a.md", role: "artifact", sectionAnchors: ["background", "conclusions"] },
+      { path: "docs/b.md", role: "artifact", sectionAnchors: ["risks"] },
     ])
-    // 无路径可归属的独立括号项: 忽略
-    expect(declaredArtifacts("Artifacts: (背景)")).toEqual([])
+    // A standalone paren item with no path to attach to: ignored
+    expect(declaredArtifacts("Artifacts: (background)")).toEqual([])
   })
 
-  test("markdown 反引号剥壳;带扩展名但无斜杠的路径是合法声明", () => {
+  test("markdown backticks are shelled; a path with an extension but no slash is a valid declaration", () => {
     expect(declaredArtifacts("Artifacts: `docs/a.md`")).toEqual([{ path: "docs/a.md", role: "artifact" }])
     expect(declaredArtifacts("Artifacts: README.md")).toEqual([{ path: "README.md", role: "artifact" }])
   })
 })
 
-describe("spec 表构造(数据声明点)", () => {
-  test("decomposeArtifactSpecs: 四组产物(context/subtasks 带 D4 回落读),todo 逐子任务展开", () => {
+describe("spec table construction (the data declaration points)", () => {
+  test("decomposeArtifactSpecs: four artifact groups (context/subtasks with the D4 fallback reads), todo expanded per subtask", () => {
     const specs = decomposeArtifactSpecs("T-001", 2)
     expect(specs.map((spec) => spec.path)).toEqual([
       "docs/T-001/context.md",
@@ -66,16 +66,16 @@ describe("spec 表构造(数据声明点)", () => {
       "docs/T-001/S02/todo.md",
     ])
     expect(specs.every((spec) => spec.role === "artifact")).toBe(true)
-    // 反馈命名与 todo.md 协议章节锚
+    // Feedback naming and the todo.md protocol section anchors
     expect(specs[0]!.label).toBe("understanding digest")
     expect(specs[1]!.label).toBe("shared-context index")
     expect(specs[2]!.label).toBe("subtask checklist")
     expect(specs[3]!.sectionAnchors).toEqual([...SUBTASK_TODO_SECTIONS])
-    // 零子任务(检查项解析失败)= 只有前三组
+    // Zero subtasks (checklist parse failure) = only the first three groups
     expect(decomposeArtifactSpecs("T-001", 0)).toHaveLength(3)
   })
 
-  test("subtaskStateSpec: pending=todo.md(带锚与命名)/ complete=done.md(仅路径)", () => {
+  test("subtaskStateSpec: pending = todo.md (with anchors and a label) / complete = done.md (path only)", () => {
     const spec = subtaskStateSpec("T-001", 3)
     expect(spec.pending.path).toBe("docs/T-001/S03/todo.md")
     expect(spec.pending.sectionAnchors).toEqual(["## Scope", "## Artifacts"])
@@ -85,7 +85,7 @@ describe("spec 表构造(数据声明点)", () => {
   })
 })
 
-// —— 通用检查器(真实落盘,临时目录)——
+// —— The generic checker (real files on disk, temporary directory) ——
 
 let dir: string
 
@@ -97,16 +97,16 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-const filler = "占位素材甲乙丙。".repeat(30)
-const properDoc = `# 记录\n\n${filler}\n\n${EOF_MARK}\n`
+const filler = "Placeholder filler material. ".repeat(30)
+const properDoc = `# Record\n\n${filler}\n\n${EOF_MARK}\n`
 
 async function put(rel: string, text: string) {
   const abs = join(dir, rel)
   await Bun.write(abs, text)
 }
 
-describe('checkArtifactSpecs(policy "declared",子任务循环声明产出)', () => {
-  test("声明路径缺失 → does not exist;存在即过(非 .md 不再深查)", async () => {
+describe('checkArtifactSpecs(policy "declared", subtask-loop declared artifacts)', () => {
+  test("a declared path missing → does not exist; present passes (non-.md gets no deeper check)", async () => {
     await put("src/b.ts", "export const x = 1\n")
     const specs: ArtifactSpec[] = [
       { path: "docs/a.md", role: "artifact" },
@@ -117,9 +117,9 @@ describe('checkArtifactSpecs(policy "declared",子任务循环声明产出)', ()
     expect(result.shaped).toEqual([])
   })
 
-  test("fresh .md 形检(非平凡 + 末行终止符)并计入 shaped;非 fresh 不形检", async () => {
-    await put("docs/new.md", `# 记录\n\n${filler}\n`)
-    await put("docs/old.md", "# 既有\n\n短\n")
+  test("fresh .md shape check (non-trivial + last-line terminator) and counted as shaped; non-fresh is not shape-checked", async () => {
+    await put("docs/new.md", `# Record\n\n${filler}\n`)
+    await put("docs/old.md", "# Existing\n\nshort\n")
     const specs: ArtifactSpec[] = [
       { path: "docs/new.md", role: "artifact" },
       { path: "docs/old.md", role: "artifact" },
@@ -129,29 +129,29 @@ describe('checkArtifactSpecs(policy "declared",子任务循环声明产出)', ()
     expect(result.shaped).toEqual(["docs/new.md"])
   })
 
-  test("章节锚: 既有(非 fresh).md 同样校验锚;缺失成案、齐备通过", async () => {
+  test("section anchors: an existing (non-fresh) .md is anchor-checked too; a missing anchor is a finding, complete ones pass", async () => {
     await put("docs/a.md", properDoc)
-    await put("docs/b.md", `# 记录\n\n背景: 见正文。\n\n${filler}\n\n${EOF_MARK}\n`)
+    await put("docs/b.md", `# Record\n\nbackground: see the body.\n\n${filler}\n\n${EOF_MARK}\n`)
     const specs: ArtifactSpec[] = [
-      { path: "docs/a.md", role: "artifact", sectionAnchors: ["背景", "结论"] },
-      { path: "docs/b.md", role: "artifact", sectionAnchors: ["背景"] },
+      { path: "docs/a.md", role: "artifact", sectionAnchors: ["background", "conclusions"] },
+      { path: "docs/b.md", role: "artifact", sectionAnchors: ["background"] },
     ]
     const result = await checkArtifactSpecs(specs, { dir, policy: "declared", fresh: new Set() })
     expect(result.problems).toEqual([
-      'declared artifact docs/a.md is missing section "背景"',
-      'declared artifact docs/a.md is missing section "结论"',
+      'declared artifact docs/a.md is missing section "background"',
+      'declared artifact docs/a.md is missing section "conclusions"',
     ])
   })
 
-  test("非 artifact 角色不进本检查器(M2.3 角色策略预留)", async () => {
+  test("non-artifact roles do not enter this checker (reserved by the M2.3 role policies)", async () => {
     const specs: ArtifactSpec[] = [{ path: "docs/x.md", role: "freeform" }]
     const result = await checkArtifactSpecs(specs, { dir, policy: "declared" })
     expect(result.problems).toEqual([])
   })
 })
 
-describe('checkArtifactSpecs(policy "mandatory",合并分解会话单元产物)', () => {
-  test("缺失或空内容 → <path> <label> missing or empty(不继续形检)", async () => {
+describe('checkArtifactSpecs(policy "mandatory", the merged decompose session\'s unit artifacts)', () => {
+  test("missing or empty content → <path> <label> missing or empty (no further shape check)", async () => {
     await put("docs/T-001/shared.md", "  \n")
     const specs: ArtifactSpec[] = [
       { path: "docs/T-001/context.md", label: "understanding digest", role: "artifact" },
@@ -164,8 +164,8 @@ describe('checkArtifactSpecs(policy "mandatory",合并分解会话单元产物)'
     ])
   })
 
-  test("无 label 时问题行只含路径;短内容/缺终止符走形检文案", async () => {
-    await put("docs/a.md", "# 空壳\n\n(略)\n")
+  test("without a label the problem line carries only the path; short content / missing terminator get the shape-check wording", async () => {
+    await put("docs/a.md", "# Stub\n\n(omitted)\n")
     const result = await checkArtifactSpecs([{ path: "docs/a.md", role: "artifact" }], { dir, policy: "mandatory" })
     expect(result.problems.join("; ")).toContain("docs/a.md: content too short")
     expect(result.problems.join("; ")).toContain("missing last-line terminator")
@@ -186,12 +186,13 @@ describe('checkArtifactSpecs(policy "mandatory",合并分解会话单元产物)'
     expect(declaredArtifacts("Artifacts: docs/a.md(background)")).toEqual([
       { path: "docs/a.md", role: "artifact", sectionAnchors: ["background"] },
     ])
-    expect(declaredArtifacts("写文档 产出: docs/a.md")).toEqual([])
+    expect(declaredArtifacts("write docs 产出: docs/a.md")).toEqual([])
     // A lower-cased token must not silently yield zero specs (0035 D2)
     expect(declaredArtifacts("write notes artifacts: docs/a.md")).toEqual([{ path: "docs/a.md", role: "artifact" }])
   })
 
   test("pre-flip todo.md headings no longer satisfy the section anchors (M3.7)", async () => {
+    // The two Chinese headings below are the rejected pre-flip spellings — they must keep failing the anchor check.
     await put("docs/T-001/S01/todo.md", `# S01\n\n## 范围声明\n\n${filler}\n\n## 产出清单\n\n- docs/x.md\n\n${EOF_MARK}\n`)
     const result = await checkArtifactSpecs([subtaskStateSpec("T-001", 1).pending], { dir, policy: "mandatory" })
     expect(result.problems).toEqual([
@@ -200,7 +201,7 @@ describe('checkArtifactSpecs(policy "mandatory",合并分解会话单元产物)'
     ])
   })
 
-  test("todo.md 协议章节锚: 缺锚成案,双锚齐备通过(0030 §4 的 M1.4 交接项)", async () => {
+  test("todo.md protocol section anchors: a missing anchor is a finding; both anchors present passes (the M1.4 handover item of 0030 §4)", async () => {
     await put("docs/T-001/S01/todo.md", `# S01\n\n## Scope\n\n${filler}\n\n${EOF_MARK}\n`)
     await put("docs/T-001/S02/todo.md", `# S02\n\n## Scope\n\n${filler}\n\n## Artifacts\n\n- docs/x.md\n\n${EOF_MARK}\n`)
     const specs = [subtaskStateSpec("T-001", 1).pending, subtaskStateSpec("T-001", 2).pending]

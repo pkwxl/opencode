@@ -45,18 +45,18 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-const SAMPLE = `## T-001: 搭建 schema [done]
-数据层建模。
+const SAMPLE = `## T-001: Build the schema [done]
+Data-layer modeling.
 
-## T-002: 实现迁移 [blocked]
+## T-002: Implement the migration [blocked]
   - attempts: 1
-编写迁移脚本。
+Write the migration script.
 
-## T-003: 编写 API [pending]
-REST 接口。
+## T-003: Write the API [pending]
+REST endpoints.
 
-- [x] 路由
-- [ ] 鉴权
+- [x] routing
+- [ ] auth
 `
 
 describe("loadPlan", () => {
@@ -69,8 +69,8 @@ describe("loadPlan", () => {
       ["T-002", "blocked", 1],
       ["T-003", "pending", 0],
     ])
-    expect(plan.tasks[1]!.title).toBe("实现迁移")
-    expect(plan.tasks[1]!.body).toBe("编写迁移脚本。")
+    expect(plan.tasks[1]!.title).toBe("Implement the migration")
+    expect(plan.tasks[1]!.body).toBe("Write the migration script.")
     expect(plan.tasks[1]!.phase).toBe("R-01.P01")
     expect(next(plan)!.id).toBe("T-002")
   })
@@ -78,10 +78,10 @@ describe("loadPlan", () => {
   test("the checklist comes from subtasks.md, not the body", async () => {
     const plan = await seedUnits(dir, SAMPLE)
     const t3 = plan.tasks[2]!
-    expect(t3.body).toBe("REST 接口。")
+    expect(t3.body).toBe("REST endpoints.")
     expect(t3.checklist).toEqual([
-      { text: "路由", done: true },
-      { text: "鉴权", done: false },
+      { text: "routing", done: true },
+      { text: "auth", done: false },
     ])
     expect(countSubtasks(t3.checklist)).toEqual({ done: 1, total: 2 })
   })
@@ -163,8 +163,8 @@ describe("dependencies (M3.5)", () => {
     await Bun.write(join(dir, "docs/T-003/S01/done.md"), "## Scope\n")
     await Bun.write(join(dir, "docs/T-003/S02/todo.md"), "Depends: none\nTouches: src/auth/\n\n## Scope\n")
     expect(await readChecklist(dir, "T-003")).toEqual([
-      { text: "路由", done: true },
-      { text: "鉴权", done: false, depends: "none", touches: ["src/auth/"] },
+      { text: "routing", done: true },
+      { text: "auth", done: false, depends: "none", touches: ["src/auth/"] },
     ])
   })
 })
@@ -356,7 +356,7 @@ describe("driver completion", () => {
     await markDone(plan, "T-003")
     expect(await Bun.file(join(dir, "docs/T-003/todo.md")).exists()).toBe(false)
     expect(await Bun.file(join(dir, "docs/T-003/done.md")).exists()).toBe(true)
-    expect(await Bun.file(join(dir, plan.index)).text()).toContain("- [x] T-003 编写 API")
+    expect(await Bun.file(join(dir, plan.index)).text()).toContain("- [x] T-003 Write the API")
     const t3 = (await loadPlan(dir, phase)).tasks[2]!
     expect(t3).toMatchObject({ status: "done", attempts: 0 })
   })
@@ -417,28 +417,28 @@ describe("planning output", () => {
     expect(problems[0]).toContain("below the numbering start T-007")
   })
 
-  test("newTaskProblems(0053 D24, 自 plannedTaskProblems 拆出的单任务检查): 拒收已占编号/低于编号起点/文档不合格,合格则随附依赖声明", async () => {
-    // 合格: 无问题,decl 随附(同一次读取,供整索引调用方拼依赖图)
+  test("newTaskProblems (0053 D24, the single-task check split out of plannedTaskProblems): rejects taken ids / ids below the numbering start / substandard documents; a valid one carries its dependency declaration", async () => {
+    // valid: no problems, the decl is attached (same single read, for whole-index callers to assemble the dependency graph)
     await writeTask("T-005", { depends: "none" })
     expect(await newTaskProblems(dir, phase, "T-005", { before: new Set() })).toEqual({
       problems: [],
       decl: { id: "T-005", depends: "none" },
     })
-    // 编号已被会话前存在的任务占用 → 拒收,无 decl
+    // the number is taken by a task that existed before the session → rejected, no decl
     expect(await newTaskProblems(dir, phase, "T-005", { before: new Set(["T-005"]) })).toMatchObject({
       problems: ["T-005 is already used by an earlier task (docs/T-005/ existed before this planning session); pick an unused number"],
     })
-    // 低于自动编号起点 → 拒收
+    // below the auto-numbering start → rejected
     expect((await newTaskProblems(dir, phase, "T-005", { before: new Set(), numberStart: 8 })).problems).toEqual([
       "T-005 is below the numbering start T-008; earlier numbers are taken",
     ])
-    // 文档不合格(缺 Scope 节) → spec 检查报错,无 decl
+    // a substandard document (missing the Scope section) → the spec check reports, no decl
     await mkdir(join(dir, "docs/T-006"), { recursive: true })
     await Bun.write(join(dir, "docs/T-006/todo.md"), "# T-006: a\nPhase: R-01.P01\n\n## Goal\n\ng\n\n<!-- auto: eof -->\n")
     const bad = await newTaskProblems(dir, phase, "T-006", { before: new Set() })
     expect(bad.problems.some((p) => p.includes("docs/T-006/todo.md") && p.includes("## Scope"))).toBe(true)
     expect(bad.decl).toBeUndefined()
-    // Phase 字段不符 → 报错但 decl 仍随附(与拆分前行为一致: 仅 spec 失败才跳过 decl)
+    // wrong Phase field → reported but the decl is still attached (same behavior as before the split: only a spec failure skips the decl)
     await writeTask("T-007", { phase: "R-09.P09" })
     const wrongPhase = await newTaskProblems(dir, phase, "T-007", { before: new Set() })
     expect(wrongPhase.problems).toEqual(["docs/T-007/todo.md must carry the field line `Phase: R-01.P01` right after its title line"])

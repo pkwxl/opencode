@@ -1476,7 +1476,7 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     // No agent filter is in force (the ambient OPENCODE_AUTO_AGENT would
     // otherwise narrow the fleet).
     const facts = { ...routingFacts(registry, undefined, started.profileName), agentFilter: undefined, filterSource: undefined }
-    const plan = await seedUnits(dir, `## T-001: per-agent base [in_progress]\n正文。\n`)
+    const plan = await seedUnits(dir, `## T-001: per-agent base [in_progress]\nBody.\n`)
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
     return { a, b, goneA, goneB, pool: started.pool, facts, dir, plan, task: plan.tasks[0]! }
   }
@@ -1601,7 +1601,7 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     const agent = make()
     const dir = await mkdtemp(join(tmpdir(), "auto-fork-plain-"))
     try {
-      const plan = await seedUnits(dir, `## T-001: plain base [in_progress]\n正文。\n`)
+      const plan = await seedUnits(dir, `## T-001: plain base [in_progress]\nBody.\n`)
       await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
       const base = await ensureForkBase(agent.client, plan, plan.tasks[0]!, {}, { pct: 100, used: 0, at: 0 }, DEFAULTS)
       expect(base).toEqual({ id: "ses_1", used: 1000 })

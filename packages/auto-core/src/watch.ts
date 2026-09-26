@@ -666,7 +666,7 @@ export async function watch(
       const text = event.questions.join("\n")
       // The dryrun preflight session auto-answers everything, never blocking
       // on a question.
-      const permission = opts.dryrun ? false : /权限|permission/i.test(text)
+      const permission = opts.dryrun ? false : /\bpermission\b/i.test(text)
       const repeated = autoAnswered.some((prev) => sameIssue(prev, text))
       // plan's sessions (opts.humanQuestions): a non-permission question is a
       // decision for the human — plan runs for human review before execution,

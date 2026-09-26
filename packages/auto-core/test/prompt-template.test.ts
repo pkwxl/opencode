@@ -1,5 +1,5 @@
-// src/prompt.ts 与模板机制的单测: question-rule 片段、digest-rule 片段、模式注入、init 产物模板、agent 契约模板、渲染完整性。
-// 拆分自 test/prompt.test.ts(plans/0024-module-split-plan.md S19,纯搬运)。
+// Unit tests for src/prompt.ts and the template machinery: the question-rule partial, the digest-rule partial, mode injection, init artifact templates, the agent contract template, render completeness.
+// Split out of test/prompt.test.ts (plans/0024-module-split-plan.md S19, pure move).
 
 import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -31,20 +31,20 @@ import { renderTemplate, renderText, usePromptLibrary } from "../src/template"
 import agentTemplate from "../templates/.opencode/agent/auto.md" with { type: "file" }
 import { listPlan, listTask, migrate, plan, resolveItem, task } from "./fixtures/prompt"
 
-describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020-auto-resolve-design.md §E)", () => {
+describe("question-rule partial and question-policy wiring (OPENCODE_AUTO_ASK, plans/0020-auto-resolve-design.md §E)", () => {
   const prompts = join(import.meta.dir, "..", "templates", "prompts")
   const consumers = readdirSync(prompts)
     .filter((name) => name.endsWith(".md") && name !== "_partials.md")
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> question-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 16 份(勘测结论 §J-3,M1.0 合并 understand 后 -1,M2.2 退役六份 -6,plans/0052 D5 删 infer-source -1,plans/0053 D27 增 phase-append +1;新增引用需同步设计文档)", () => {
+  test("exactly 16 templates reference the partial (survey conclusion §J-3; M1.0 merging understand -1, M2.2 retiring six -6, plans/0052 D5 deleting infer-source -1, plans/0053 D27 adding phase-append +1; a new reference needs the design document updated in step)", () => {
     expect(consumers.length).toBe(16)
     expect(consumers).toContain("decompose-m.md")
     expect(consumers).toContain("whole.md")
     expect(consumers).toContain("subtask.md")
     expect(consumers).toContain("phase-append.md")
-    // wrapup 不引用该片段(收尾会话不提问);T-007 的 "Proxy-answered questions" 节是独立条件段
+    // wrapup does not reference the partial (the wrap-up session asks no questions); T-007's "Proxy-answered questions" section is a separate conditional block
     expect(consumers).not.toContain("wrapup.md")
   })
 
@@ -52,30 +52,31 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
   // and recording discipline come from the built-in pack's `## governance`.
   const fragment = (ask: boolean) => renderText("{{> question-rule}}", promptCtx({ ask }))
 
-  // 历史标记读取方模板: 它们要求会话汇总既有文档里 AUTO-DECISION 标记的决策,
-  // 与"本次是否留痕"无关(历史标记在 git 里恒存),故 on 档下照常出现该字样。
+  // History-marker reader templates: they ask the session to compile the decisions marked
+  // AUTO-DECISION in existing documents, unrelated to "whether to leave a record this time"
+  // (history markers persist in git forever), so under the on setting the wording appears as usual.
   const historyReaders = ["knowledge.md", "prior-knowledge.md", "phase-handover.md"]
 
-  test("off 档(缺省): 保留现状的不提问口径,并按归属判据要求两类标注", () => {
+  test("off setting (default): keeps the current no-questions basis, and demands both annotation classes by the ownership criteria", () => {
     const off = fragment(false)
     expect(off).toContain("do not call the question tool")
     expect(off).toContain("must leave a record of how it was made")
     expect(off).toContain("AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)")
     expect(off).toContain("AUTO-DECISION: <decision> (<reason>)")
-    // 判别硬判据与正反例(设计文档 §C): 拿不准倒向 AUTO-RESOLVE
+    // The discriminant's hard criteria and the positive/negative examples (design document §C): when unsure lean to AUTO-RESOLVE
     expect(off).toContain("The call should have been the user's")
     expect(off).toContain("The call was always yours")
     expect(off).toContain("when unsure use AUTO-RESOLVE")
     expect(off).toContain("matched or paired")
   })
 
-  test("on 档: 归属于用户的分歧点主动发问,且全片段不出现 AUTO-DECISION 字样", () => {
+  test("on setting: user-owned disagreements are asked about proactively, and the whole fragment never shows the AUTO-DECISION wording", () => {
     const on = fragment(true)
     expect(on).toContain("instead of deciding in the user's place")
     expect(on).toContain("The call should have been the user's")
     expect(on).toContain("decide it yourself, no record required")
     expect(on).toContain("when unsure, ask")
-    // 不提标注 = 不给会话出于惯性继续留痕的由头(设计文档 §K-4)
+    // No annotation demand = no excuse for the session to keep leaving records out of habit (design document §K-4)
     expect(on).not.toContain("AUTO-DECISION")
     expect(on).not.toContain("AUTO-RESOLVE")
     expect(on).not.toContain("do not call the question tool")
@@ -98,21 +99,22 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     expect(fragment(false)).toContain(DECISION_FORMAT)
   })
 
-  test("两档结构不变式: 各自恰好一条编号 2 的约束项,首尾不引入空行", () => {
+  test("two-setting structural invariant: each has exactly one numbered-2 constraint item; no blank lines introduced at either end", () => {
     for (const ask of [false, true]) {
       const text = fragment(ask)
       expect(text.startsWith("2. ")).toBe(true)
       expect(text.endsWith("\n")).toBe(false)
-      // 片段落在各模板的 "1." 与 "3." 之间,顶格编号行必须只有这一条
+      // The partial lands between each template's "1." and "3."; the flush-left numbered line must be exactly this one
       expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)
       expect(text).not.toContain("\n\n")
     }
   })
 
-  // plan 的会话(RunAllOpts.stopBefore === "execute" 时 preflight 置位
-  // useHumanQuestions): 提问等人工答复,无自动代答口径、无标注要求;同一条
-  // 编号 2 的不变式照常成立。模块态须复位,否则污染同进程其余用例。
-  test("humanQuestions 档(plan 的会话): 等人工、无代理答复,结构不变式同样成立", () => {
+  // plan's sessions (preflight sets useHumanQuestions when RunAllOpts.stopBefore === "execute"):
+  // questions wait for the human answer, no proxy-answer basis, no annotation demand; the same
+  // single numbered-2 invariant holds. The module state must be reset, otherwise it pollutes
+  // the other cases in this process.
+  test("humanQuestions setting (plan's sessions): waits for the human, no proxy answers; the structural invariant holds equally", () => {
     useHumanQuestions(true)
     try {
       for (const ask of [false, true]) {
@@ -127,7 +129,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
         expect(text.split("\n").filter((line) => /^\d+\. /.test(line))).toHaveLength(1)
         expect(text).not.toContain("\n\n")
       }
-      // 复位后两档文案与未置位时逐字一致(run 的渲染不受 plan 影响)。
+      // After the reset both settings' wording is byte-identical to the unset state (run's rendering is unaffected by plan).
       useHumanQuestions(false)
       expect(fragment(false)).toBe(renderText("{{> question-rule}}", promptCtx({ ask: false })))
     } finally {
@@ -135,7 +137,7 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     }
   })
 
-  test("23 份消费模板在两档下均渲染通过(片段改动波及全部引用方)", () => {
+  test("all 23 consumer templates render under both settings (a partial change reaches every referencing side)", () => {
     for (const ask of [false, true]) {
       for (const name of consumers) {
         const rendered = renderTemplate(name.replace(/\.md$/, ""), { ask })
@@ -144,33 +146,33 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
     }
   })
 
-  test("on 档下执行类模板整体不含 AUTO-DECISION(历史标记读取方除外)", () => {
+  test("under the on setting the execution-family templates contain no AUTO-DECISION at all (except the history-marker readers)", () => {
     for (const name of consumers.filter((item) => !historyReaders.includes(item))) {
       expect(renderTemplate(name.replace(/\.md$/, ""), { ask: true })).not.toContain("AUTO-DECISION")
     }
-    // off 档下 whole/subtask 的 docs/ 修改条款仍点名 AUTO-DECISION(逐字保留现状口径)
+    // Under the off setting whole/subtask's docs/ modification clause still names AUTO-DECISION (the current basis kept verbatim)
     expect(renderTemplate("whole", { ask: false })).toContain("annotate it as AUTO-DECISION and record it in the relevant document")
     expect(renderTemplate("subtask", { ask: false })).toContain("annotate it as AUTO-DECISION and record it in the relevant document")
     expect(renderTemplate("whole", { ask: true })).toContain("if a modification is unavoidable, record it in the relevant document")
   })
 
-  test("渲染出口注入 ask: 覆盖片段后按开关取值渲染条件段(缺省 off 走 off 分支)", () => {
+  test("the render exit injects ask: with the partial overridden, the conditional block renders by the switch (default off takes the off branch)", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-ask-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
       writeFileSync(
         join(overlay, "_partials.md"),
-        "# 覆盖\n\n## question-rule\nquestion tool AUTO-RESOLVE AUTO-DECISION {{#if ask}}ASK-ON-BRANCH{{/if}}{{^ask}}ASK-OFF-BRANCH{{/if}}\n",
+        "# override\n\n## question-rule\nquestion tool AUTO-RESOLVE AUTO-DECISION {{#if ask}}ASK-ON-BRANCH{{/if}}{{^ask}}ASK-OFF-BRANCH{{/if}}\n",
       )
       usePromptLibrary(dir)
-      // 测试进程未设 OPENCODE_AUTO_ASK,autoSwitches().ask === false —— 出口注入
-      // 的是开关值而非 undefined,故走 off 分支而不是两个分支都消失。
+      // The test process sets no OPENCODE_AUTO_ASK, autoSwitches().ask === false — the exit injects
+      // the switch value rather than undefined, so the off branch is taken instead of both branches disappearing.
       expect(autoSwitches().ask).toBe(false)
       const text = renderWhole(plan, task)
       expect(text).toContain("ASK-OFF-BRANCH")
       expect(text).not.toContain("ASK-ON-BRANCH")
-      // 调用点显式给出的 ask 优先于开关(单测直驱两档的口径)
+      // An ask given explicitly at the call site wins over the switch (the basis for unit tests driving both settings directly)
       expect(renderText("{{#if ask}}ON{{/if}}{{^ask}}OFF{{/if}}", { ask: true })).toBe("ON")
     } finally {
       usePromptLibrary(undefined)
@@ -179,14 +181,14 @@ describe("question-rule 片段与提问策略接线(OPENCODE_AUTO_ASK,plans/0020
   })
 })
 
-describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-boundary-hardening-design.md §4.2)", () => {
+describe("digest-rule partial and cross-task reference discipline (L2, plans/0026-session-boundary-hardening-design.md §4.2)", () => {
   const prompts = join(import.meta.dir, "..", "templates", "prompts")
   const consumers = readdirSync(prompts)
     .filter((name) => name.endsWith(".md") && name !== "_partials.md")
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> digest-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 decompose 基础+六阶段变体共 7 份(M1.0 合并)", () => {
+  test("exactly the decompose base + six phase variants, 7 templates, reference the partial (M1.0 merge)", () => {
     expect(consumers).toEqual([
       "decompose-a.md",
       "decompose-d.md",
@@ -196,24 +198,24 @@ describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-bound
       "decompose-v.md",
       "decompose.md",
     ])
-    // 执行类模板不引用:subtask/whole 会话不写 digest,防误读由 L1 ground-state 接地覆盖
+    // Execution-family templates do not reference it: subtask/whole sessions write no digest; misread-guarding is covered by the L1 ground-state grounding
     expect(consumers).not.toContain("subtask.md")
     expect(consumers).not.toContain("whole.md")
   })
 
-  test("片段三条纪律: 跨任务引用只指阶段级单源 / 收尾产物仅作格式模板定性 / 摘录优先不整文回源", () => {
+  test("the partial's three disciplines: cross-task references point only at phase-level single sources / wrap-up artifacts count as format templates only / excerpt first, never send the reader back to a whole document", () => {
     const text = renderText("{{> digest-rule}}", {})
     expect(text).toContain("Point cross-task references only at phase-level single sources (rulings/contracts/ledger)")
     expect(text).toContain("artifact of another, already completed task — format template only")
     expect(text).toContain("Excerpt the points you need instead of sending the reader back to a whole document")
-    // 定性义务点名前序任务级收尾产物族(report/批记录/testhandoff)
+    // The characterization duty names the preceding task-level wrap-up artifact family (report/batch record/testhandoff)
     expect(text).toContain("report/batch record/testhandoff")
-    // 背景行写明误读后果:前序完成叙事流入会被下游会话误读为本任务已完成
+    // The background line spells out the misread consequence: a preceding completion narrative flowing in gets misread by downstream sessions as this task already done
     expect(text).toContain("misreads it as a sign that this task is already done")
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("7 份消费模板渲染含纪律段且不残留模板标签(片段改动波及全部引用方)", () => {
+  test("the 7 consumer templates render with the discipline paragraph and no leftover template tags (a partial change reaches every referencing side)", () => {
     for (const name of consumers) {
       const rendered = renderTemplate(name.replace(/\.md$/, ""), {})
       expect(rendered).toContain("Cross-task reference discipline")
@@ -223,14 +225,14 @@ describe("digest-rule 片段与跨任务引用纪律(L2,plans/0026-session-bound
   })
 })
 
-describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-boundary-hardening-design.md §4.3/§4.5)", () => {
+describe("eof-rule partial and document eof-marker discipline (D4/D5, plans/0026-session-boundary-hardening-design.md §4.3/§4.5)", () => {
   const prompts = join(import.meta.dir, "..", "templates", "prompts")
   const consumers = readdirSync(prompts)
     .filter((name) => name.endsWith(".md") && name !== "_partials.md")
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> eof-rule}}"))
     .sort()
 
-  test("引用该片段的模板恰为 subtask + decompose 基础+六阶段变体 + wrapup 共 9 份(S3/S3b,M1.0 合并)", () => {
+  test("exactly subtask + decompose base + six phase variants + wrapup, 9 templates, reference the partial (S3/S3b, M1.0 merge)", () => {
     expect(consumers).toEqual([
       "decompose-a.md",
       "decompose-d.md",
@@ -244,7 +246,7 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
     ])
   })
 
-  test("片段内容: 终止符形态与独占末行要求,存量文档不回补", () => {
+  test("partial content: the eof marker's shape and its own-last-line requirement; existing documents are not retrofitted", () => {
     const text = renderText("{{> eof-rule}}", {})
     expect(text).toContain("<!-- auto: eof -->")
     expect(text).toContain("as its last line of body text")
@@ -252,9 +254,9 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("消费模板渲染含终止符纪律段(subtask/decompose/wrapup 三类自动会话,M1.0 合并)", () => {
+  test("consumer templates render with the eof-marker discipline paragraph (the subtask/decompose/wrapup automatic session kinds, M1.0 merge)", () => {
     for (const rendered of [
-      renderSubtask(plan, task, "编写迁移脚本的 schema 部分"),
+      renderSubtask(plan, task, "write the schema part of the migration script"),
       renderDecompose(plan, task),
       renderWrapup(plan, task),
     ]) {
@@ -265,11 +267,11 @@ describe("eof-rule 片段与文档终止符纪律(D4/D5,plans/0026-session-bound
   })
 })
 
-describe("模式注入(-m/--mode)", () => {
-  test("执行类模板注入 exec 段;不传模式时不注入", () => {
+describe("Mode injection (-m/--mode)", () => {
+  test("execution-family templates inject the exec paragraph; without a mode nothing is injected", () => {
     for (const text of [
       renderDecompose(plan, task, { mode: migrate }),
-      renderSubtask(plan, task, "编写迁移脚本的 schema 部分", { mode: migrate }),
+      renderSubtask(plan, task, "write the schema part of the migration script", { mode: migrate }),
       renderWrapup(plan, task, { mode: migrate }),
       renderWhole(plan, task, { mode: migrate }),
     ]) {
@@ -278,12 +280,12 @@ describe("模式注入(-m/--mode)", () => {
       expect(text).toContain("AUTO-DECISION")
     }
     expect(renderDecompose(plan, task)).not.toContain("Scenario mode notes")
-    expect(renderSubtask(plan, task, "编写迁移脚本的 schema 部分")).not.toContain("Scenario mode notes")
-    expect(renderWrapup(plan, task)).not.toContain("场景模式注意事项")
-    expect(renderWhole(plan, task)).not.toContain("场景模式注意事项")
+    expect(renderSubtask(plan, task, "write the schema part of the migration script")).not.toContain("Scenario mode notes")
+    expect(renderWrapup(plan, task)).not.toContain("Scenario mode notes")
+    expect(renderWhole(plan, task)).not.toContain("Scenario mode notes")
   })
 
-  test("modeCtx: 共享模式变量组装(壳层自写 render* 的扩展点)与缺省形态", () => {
+  test("modeCtx: shared mode-variable assembly (the extension point for shells writing their own render*) and the default shape", () => {
     const ctx = modeCtx(migrate)
     expect(ctx.modeName).toBe("migrate")
     expect(ctx.modeInit).toContain("baseline confirmation")
@@ -293,7 +295,7 @@ describe("模式注入(-m/--mode)", () => {
   })
 })
 
-describe("init 产物模板(agent 契约;PLAN.md 模板随 M3.4 退役)", () => {
+describe("init artifact templates (agent contract; the PLAN.md template retired with M3.4)", () => {
   test("agent contract has no acceptance/verification text and the block list narrows accordingly (testByDriver off)", async () => {
     const raw = await Bun.file(agentTemplate).text()
     const off = renderText(raw, { testByDriver: false })
@@ -338,26 +340,26 @@ describe("agent contract template (templates/.opencode/agent/auto.md)", () => {
   })
 })
 
-describe("模板渲染完整性", () => {
-  test("全部 render* 在代表性参数组合下渲染后不残留模板标签", () => {
+describe("Template render completeness", () => {
+  test("all render* leave no template tags behind under representative parameter combinations", () => {
     const solo = plan.tasks[0]!
     const texts = [
       renderDecompose(plan, task),
       renderDecompose(plan, task, { mode: migrate }),
-      renderSubtask(plan, task, "子任务甲"),
-      renderSubtask(plan, task, "子任务甲", { mode: migrate }),
-      renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, warm: true, mode: migrate }),
-      renderSubtask(listPlan, listTask, "编写执行逻辑", { index: 2, continuation: true }),
+      renderSubtask(plan, task, "subtask A"),
+      renderSubtask(plan, task, "subtask A", { mode: migrate }),
+      renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, warm: true, mode: migrate }),
+      renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, continuation: true }),
       renderWrapup(plan, task),
       renderWrapup(plan, task, { solo: true, mode: migrate }),
-      renderWrapup(plan, task, { resolves: [resolveItem("是否把第三份实现一并收口?")] }),
+      renderWrapup(plan, task, { resolves: [resolveItem("Should the third implementation be closed out as well?")] }),
       renderWhole(plan, task, { ondemand: true, continuation: true, mode: migrate }),
       renderHandoffSteer(task),
       renderTestResult({ script: "/s", code: 0, ms: 9, timedOut: false, out: "/o", seq: 1 }),
       renderTestWrapup({ handoffFile: "/h" }),
       renderTestContinue({ handoffFile: "docs/T-002/testhandoff.md", run: { script: "/s", code: 1, ms: 9, timedOut: false, out: "/o", seq: 2 }, stuck: 11 }),
       renderKnowledge({ file: "docs/R-01/P03-knowledge/kb.md", mode: migrate }),
-      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "意图", mode: migrate }),
+      renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", brief: "intent", mode: migrate }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md" }),
       renderPriorKnowledge({ file: "docs/prior-kb/prior-x.md", distilled: ["docs/R-01/P02-implement/handover.md"] }),
       renderDryrun(),
@@ -368,7 +370,7 @@ describe("模板渲染完整性", () => {
     for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("init 产物模板按 testByDriver 两态渲染后不残留模板标签", async () => {
+  test("the init artifact templates render under both testByDriver states with no leftover template tags", async () => {
     for (const raw of [await Bun.file(agentTemplate).text()]) {
       for (const testByDriver of [true, false]) {
         expect(renderText(raw, { testByDriver })).not.toMatch(/\{\{|\}\}/)
@@ -377,7 +379,7 @@ describe("模板渲染完整性", () => {
   })
 })
 
-describe("step-up 模板(plans/0055 §4.5)", () => {
+describe("step-up template (plans/0055 §4.5)", () => {
   test("one-line note names both step ids, renders with no leftover tags, and the file ends with the terminator", async () => {
     const text = renderStepUp({ from: "moonshotai/kimi-k3-256k", next: "moonshotai/kimi-k3" })
     expect(text).toContain("moonshotai/kimi-k3-256k")
@@ -392,7 +394,7 @@ describe("step-up 模板(plans/0055 §4.5)", () => {
   })
 })
 
-describe("classify-error 模板(plans/0055 §7.1)", () => {
+describe("classify-error template (plans/0055 §7.1)", () => {
   test("states the time and zone, fences the error text as data, asks for the one JSON line; the file ends with the terminator", async () => {
     const text = renderClassifyError({ now: "2026-09-26T15:00:00+08:00", tz: "Asia/Shanghai", error: "Kontingent erschöpft {{not a tag}}" })
     expect(text).toContain("The current time is 2026-09-26T15:00:00+08:00 (time zone Asia/Shanghai)")

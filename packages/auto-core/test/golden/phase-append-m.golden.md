@@ -9,9 +9,9 @@ The tasks this phase already has, one line each in index order. The bracketed la
 (pending / blocked / done / closed — a closed task was closed without completing: do not assume its deliverables
 exist):
 
-- [closed] T-004: 梳理词法器 (closed without completing: 被 T-006 取代)
-- [done] T-005: 迁移语法器
-- [pending] T-006: 接通流水线
+- [closed] T-004: sort out the lexer (closed without completing: superseded by T-006)
+- [done] T-005: migrate the parser
+- [pending] T-006: wire up the pipeline
 
 The existing lines are fixed: the new tasks are appended after them, never before or between them.
 
@@ -20,7 +20,7 @@ The existing lines are fixed: the new tasks are appended after them, never befor
 The person who started this appending step asked for the following. Plan the additional tasks to cover it, building
 on the existing tasks above.
 
-追加输入(固定输入)。
+Append input (fixed input).
 
 ## Tasks
 

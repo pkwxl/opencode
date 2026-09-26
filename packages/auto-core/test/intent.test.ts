@@ -158,7 +158,7 @@ describe("subsection addressing (packSubsection, M1.3 generalization)", () => {
 
 split criteria.
 
-### self-check-whole 整任务收尾自查
+### self-check-whole whole-task wrap-up self-check
 
 check the whole task.
 
@@ -195,11 +195,11 @@ describe("per-phase duties addressing (dutiesForPhase)", () => {
 
 ## phase duties
 
-### a 分析
+### a Analysis
 
 duties for a.
 
-### m 迁移实现
+### m Implementation
 
 duties for m,
 two lines.

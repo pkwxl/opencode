@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { closeStep, forgetProgress, openStep, peekProgress, recallProgress, saveProgress, type Progress } from "../src/resume"
 
-describe("进度记录", () => {
+describe("progress record", () => {
   let dir: string
 
   beforeEach(async () => {
@@ -15,7 +15,7 @@ describe("进度记录", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("save → recall 往返;forget 后不可 recall", async () => {
+  test("save → recall round trip; not recallable after forget", async () => {
     const progress: Progress = { task: "T-001", session: "ses_abc", at: Date.now(), active: true, phase: { kind: "subtasks" } }
     await saveProgress(dir, progress)
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
@@ -23,7 +23,7 @@ describe("进度记录", () => {
     expect(await recallProgress(dir, "T-001")).toBeUndefined()
   })
 
-  test("recall 不校验存活与时龄(任意久远的记录仍返回,存活判定在 runner)", async () => {
+  test("recall checks neither liveness nor age (an arbitrarily old record is still returned; the liveness decision lives in runner)", async () => {
     await saveProgress(dir, {
       task: "T-001",
       session: "ses_old",
@@ -34,7 +34,7 @@ describe("进度记录", () => {
     expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_old")
   })
 
-  test("旧版 understand 阶段记录(M1.0 前)读取时映射为合并的 decompose 阶段(plans/0030 D2)", async () => {
+  test("a legacy understand-phase record (pre-M1.0) maps on read to the merged decompose phase (plans/0030 D2)", async () => {
     const { mkdir } = await import("node:fs/promises")
     await mkdir(join(dir, ".auto"), { recursive: true })
     await Bun.write(
@@ -44,17 +44,17 @@ describe("进度记录", () => {
     expect(await recallProgress(dir, "T-001")).toEqual({ task: "T-001", session: "ses_understand", at: 7, active: true, phase: { kind: "decompose" } })
   })
 
-  test("subtasks 阶段记录的归属子任务序号 index 随记录往返", async () => {
+  test("a subtasks-phase record's owning-subtask index round-trips with the record", async () => {
     const progress: Progress = { task: "T-001", session: "ses_s2", at: Date.now(), active: true, phase: { kind: "subtasks", index: 2 } }
     await saveProgress(dir, progress)
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
   })
 
-  test("已退役的 verify/review 阶段记录(plans/0044 D5)读取时映射为 closeout: 收尾已完成,只剩结论行检查与完成", async () => {
+  test("retired verify/review phase records (plans/0044 D5) map on read to closeout: the wrap-up is done, only the verdict-line check and completion remain", async () => {
     const { mkdir } = await import("node:fs/promises")
     await mkdir(join(dir, ".auto"), { recursive: true })
     for (const phase of [
-      { kind: "verify", stage: "fix", round: 2, rechecks: 0, replaced: false, gap: "构建失败" },
+      { kind: "verify", stage: "fix", round: 2, rechecks: 0, replaced: false, gap: "build failed" },
       { kind: "review", round: 1, stage: "fixrun", index: 2 },
     ]) {
       await Bun.write(join(dir, ".auto", "progress.json"), JSON.stringify({ task: "T-001", session: "ses_fix", at: 7, active: true, phase }))
@@ -62,7 +62,7 @@ describe("进度记录", () => {
     }
   })
 
-  test("严格恢复字段(baseline/model)随记录往返;缺字段的旧记录两字段为 undefined", async () => {
+  test("strict-resume fields (baseline/model) round-trip with the record; an old record missing them has both undefined", async () => {
     const progress: Progress = {
       task: "T-001",
       session: "ses_strict",
@@ -77,7 +77,7 @@ describe("进度记录", () => {
     }
     await saveProgress(dir, progress)
     expect(await recallProgress(dir, "T-001")).toEqual(progress)
-    // 严格恢复启用前写入的旧记录: 两字段缺失 → undefined(runner 据此判不可复用)
+    // An old record written before strict resume was enabled: both fields missing → undefined (runner judges it non-reusable on that basis)
     await saveProgress(dir, { task: "T-002", session: "ses_old", at: 8, active: true, phase: { kind: "whole" } })
     const legacy = await recallProgress(dir, "T-002")
     expect(legacy?.baseline).toBeUndefined()
@@ -88,7 +88,7 @@ describe("进度记录", () => {
   // and an absent field is the default agent's — the reader (runner/artifact,
   // recordedAgentOk) resolves absent against the run's agent, so a pre-binding
   // record reads as the default agent's without a stored value.
-  test("会话的 agent 档案随记录往返; 缺字段(绑定前旧记录)与坏值均为 undefined(= 默认 agent)", async () => {
+  test("the session's agent profile round-trips with the record; an absent field (pre-binding old record) and a bad value are both undefined (= the default agent)", async () => {
     const progress: Progress = {
       task: "T-004",
       session: "ses_bound",
@@ -112,7 +112,7 @@ describe("进度记录", () => {
     expect((await recallProgress(dir, "T-006"))?.agent).toBeUndefined()
   })
 
-  test("baseline/model 坏值容错: 非数组 → undefined,数组内缺 root/sha 的项被过滤,model 非字符串 → undefined", async () => {
+  test("baseline/model bad-value tolerance: non-array → undefined, entries in the array missing root/sha are filtered, non-string model → undefined", async () => {
     await Bun.write(
       join(dir, ".auto", "progress.json"),
       JSON.stringify({ task: "T-003", at: 1, active: true, baseline: "abc1234", model: 42 }),
@@ -132,7 +132,7 @@ describe("进度记录", () => {
     expect((await recallProgress(dir, "T-003"))?.baseline).toEqual([{ root: "/tmp/a", sha: "abc1234" }])
   })
 
-  test("任务不符、文件缺失或损坏返回 undefined", async () => {
+  test("task mismatch, missing file, or corrupt file returns undefined", async () => {
     await saveProgress(dir, { task: "T-001", at: Date.now(), active: false })
     expect(await recallProgress(dir, "T-002")).toBeUndefined()
     await forgetProgress(dir)
@@ -141,24 +141,24 @@ describe("进度记录", () => {
     expect(await recallProgress(dir, "T-001")).toBeUndefined()
   })
 
-  test("旧版 .auto/session.json 不再读取(M3.7 退役)", async () => {
+  test("the legacy .auto/session.json is no longer read (retired M3.7)", async () => {
     await Bun.write(join(dir, ".auto", "session.json"), JSON.stringify({ task: "T-001", session: "ses_old", at: 123 }))
     expect(await recallProgress(dir, "T-001")).toBeUndefined()
     expect(await peekProgress(dir)).toBeUndefined()
   })
 
-  test("peek 不分任务返回当前记录;缺失时为 undefined", async () => {
+  test("peek returns the current record regardless of task; undefined when absent", async () => {
     expect(await peekProgress(dir)).toBeUndefined()
     await saveProgress(dir, { task: "T-003", at: Date.now(), active: false, phase: { kind: "closeout" } })
     expect(await peekProgress(dir)).toEqual({ task: "T-003", session: undefined, at: expect.any(Number), active: false, phase: { kind: "closeout" } })
   })
 
-  test("forget 对缺失文件无害", async () => {
+  test("forget is harmless on a missing file", async () => {
     await forgetProgress(dir)
   })
 })
 
-describe("阶段步骤恢复点(openStep/closeStep)", () => {
+describe("phase-step recovery points (openStep/closeStep)", () => {
   let dir: string
 
   beforeEach(async () => {
@@ -169,26 +169,26 @@ describe("阶段步骤恢复点(openStep/closeStep)", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("step 记录往返;openStep 返回未收口步骤的身份与会话", async () => {
+  test("step record round trip; openStep returns the open step's identity and session", async () => {
     const progress: Progress = { task: "PLAN", session: "ses_plan", at: 5, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } }
     await saveProgress(dir, progress)
     expect(await recallProgress(dir, "PLAN")).toEqual(progress)
     expect(await openStep(dir)).toEqual({ step: "phase-plan", unit: "R-01.P01", session: "ses_plan" })
   })
 
-  test("phase-append 步骤记录(0053 D23)同样往返;openStep 返回其身份,parseProgress 原样接受", async () => {
+  test("a phase-append step record (0053 D23) round-trips too; openStep returns its identity, parseProgress accepts it as is", async () => {
     const progress: Progress = { task: "PLAN", session: "ses_append", at: 5, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P02" } }
     await saveProgress(dir, progress)
     expect(await recallProgress(dir, "PLAN")).toEqual(progress)
     expect(await openStep(dir)).toEqual({ step: "phase-append", unit: "R-01.P02", session: "ses_append" })
-    // closeStep 按步骤身份匹配删除(与 phase-plan 同款)
+    // closeStep deletes by matching the step identity (same as phase-plan)
     await closeStep(dir, "phase-plan", "R-01.P02")
     expect(await openStep(dir)).toBeDefined()
     await closeStep(dir, "phase-append", "R-01.P02")
     expect(await openStep(dir)).toBeUndefined()
   })
 
-  test("openStep: 已收口(active=false)、非 step 记录、无记录均返回 undefined", async () => {
+  test("openStep: closed out (active=false), a non-step record, and no record all return undefined", async () => {
     await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: false, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
     expect(await openStep(dir)).toBeUndefined()
     await saveProgress(dir, { task: "T-001", session: "s", at: 1, active: true, phase: { kind: "subtasks" } })
@@ -197,7 +197,7 @@ describe("阶段步骤恢复点(openStep/closeStep)", () => {
     expect(await openStep(dir)).toBeUndefined()
   })
 
-  test("closeStep: 步骤/阶段单元匹配才删除;不匹配则保留", async () => {
+  test("closeStep: deletes only when the step/phase unit matches; otherwise kept", async () => {
     await saveProgress(dir, { task: "PLAN", session: "s", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
     await closeStep(dir, "phase-handover", "R-01.P01")
     expect(await openStep(dir)).toBeDefined()
@@ -210,7 +210,7 @@ describe("阶段步骤恢复点(openStep/closeStep)", () => {
     expect(await peekProgress(dir)).toBeUndefined()
   })
 
-  test("closeStep: 当前是任务记录(非本步骤)时不误删", async () => {
+  test("closeStep: no mistaken deletion when the current record is a task record (not this step)", async () => {
     await saveProgress(dir, { task: "T-009", session: "s", at: 1, active: true, phase: { kind: "subtasks" } })
     await closeStep(dir, "phase-plan", "m")
     expect((await peekProgress(dir))?.task).toBe("T-009")

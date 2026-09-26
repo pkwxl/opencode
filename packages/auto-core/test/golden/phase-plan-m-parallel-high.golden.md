@@ -3,7 +3,7 @@ this phase into a set of executable tasks, and write this phase's task index and
 
 ## Input: project intent (.opencode/auto/brief.md)
 
-项目意图(固定输入)。
+Project intent (fixed input).
 
 ## Input: scenario-mode preamble (migrate)
 

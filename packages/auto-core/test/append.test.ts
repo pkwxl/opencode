@@ -124,7 +124,7 @@ describe("appendProblems (D24)", () => {
     await writeDoc("T-003")
     await writeIndex([{ id: "T-001", done: true }, { id: "T-002" }, { id: "T-003" }])
     // The pending task's document edited.
-    await Bun.write(join(dir, "docs/T-002/todo.md"), (await Bun.file(join(dir, "docs/T-002/todo.md")).text()).replace("## Goal", "## 目标"))
+    await Bun.write(join(dir, "docs/T-002/todo.md"), (await Bun.file(join(dir, "docs/T-002/todo.md")).text()).replace("## Goal", "## Objective"))
     // A done.md created next to it.
     await Bun.write(join(dir, "docs/T-002/done.md"), "# T-002: task T-002\n")
     const { problems } = await appendProblems(dir, phase, snap, { before: await beforeOf(snap) })
@@ -177,7 +177,7 @@ describe("resetAppend (D24)", () => {
     // A failed attempt's leftovers: a rewritten index, an edited existing
     // document, a created done.md and two new task directories.
     await writeIndex([{ id: "T-001", done: true, title: "renamed" }, { id: "T-002", done: true }, { id: "T-003" }, { id: "T-004" }])
-    await Bun.write(join(dir, "docs/T-002/todo.md"), pending.replace("## Goal", "## 目标"))
+    await Bun.write(join(dir, "docs/T-002/todo.md"), pending.replace("## Goal", "## Objective"))
     await Bun.write(join(dir, "docs/T-002/done.md"), "# T-002: task T-002\n")
     await writeDoc("T-003")
     await writeDoc("T-004")

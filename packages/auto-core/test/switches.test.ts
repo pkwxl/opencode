@@ -10,8 +10,8 @@ import {
   type SwitchModelRegistry,
 } from "../src/switches"
 
-describe("parseSwitches(实验开关环境变量层)", () => {
-  test("默认组合: 全部未设取缺省(fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate 未设)", () => {
+describe("parseSwitches (the experiment-switch environment layer)", () => {
+  test("default combination: everything unset takes the defaults (fork on / digest / fine on / steer off / step off / refCheck off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate unset)", () => {
     expect(parseSwitches({})).toEqual({
       fork: true,
       forkBase: "digest",
@@ -34,7 +34,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     })
   })
 
-  test("空串视同未设(十九个变量同测)", () => {
+  test("an empty string counts as unset (all nineteen variables tested together)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "",
@@ -79,7 +79,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     })
   })
 
-  test("合法值: 显式设置全部开关", () => {
+  test("valid values: every switch set explicitly", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "off",
@@ -122,7 +122,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     })
   })
 
-  test("显式设置缺省值等价于未设", () => {
+  test("explicitly setting the default values is equivalent to unset", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "on",
@@ -142,33 +142,33 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     ).toEqual(parseSwitches({}))
   })
 
-  test("step 合法值域: phase/task/subtask 均可解析", () => {
+  test("step value domain: phase/task/subtask all parse", () => {
     for (const value of ["phase", "task", "subtask"] as const) {
       expect(parseSwitches({ [SWITCH_ENV.step]: value }).step).toBe(value)
     }
   })
 
-  test("taskContext 合法值域: small/medium/large 均可解析", () => {
+  test("taskContext value domain: small/medium/large all parse", () => {
     for (const value of ["small", "medium", "large"] as const) {
       expect(parseSwitches({ [SWITCH_ENV.taskContext]: value }).taskContext).toBe(value)
     }
   })
 
-  test("modelFailbackScope 合法值域: phase/task/subtask/session 均可解析,缺省 task(= 现状)", () => {
+  test("modelFailbackScope value domain: phase/task/subtask/session all parse, default task (= the status quo)", () => {
     expect(parseSwitches({}).modelFailbackScope).toBe("task")
     for (const value of ["phase", "task", "subtask", "session"] as const) {
       expect(parseSwitches({ [SWITCH_ENV.modelFailbackScope]: value }).modelFailbackScope).toBe(value)
     }
   })
 
-  test("ask 值域: on/off 两档,缺省 off(提问策略开关,plans/0020-auto-resolve-design.md §E)", () => {
+  test("ask value domain: on/off, default off (the question-policy switch, plans/0020-auto-resolve-design.md §E)", () => {
     expect(parseSwitches({}).ask).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.ask]: "on" }).ask).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.ask]: "off" }).ask).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.ask]: "" }).ask).toBe(false)
   })
 
-  test("strictResume 值域: on/off 两档,缺省 off(严格恢复开关,plans/0022-session-recovery-fidelity-design.md S3)", () => {
+  test("strictResume value domain: on/off, default off (the strict-resume switch, plans/0022-session-recovery-fidelity-design.md S3)", () => {
     expect(parseSwitches({}).strictResume).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "on" }).strictResume).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.strictResume]: "off" }).strictResume).toBe(false)
@@ -177,7 +177,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.strictResume]: "yes" })).toThrow(/default off/)
   })
 
-  test("handoverConcurrent 值域: on/off 两档,缺省 off = 先交接后运行(plans/0023-test-handover-early-design.md §H)", () => {
+  test("handoverConcurrent value domain: on/off, default off = test handover before the run (plans/0023-test-handover-early-design.md §H)", () => {
     expect(parseSwitches({}).handoverConcurrent).toBe(false)
     expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "on" }).handoverConcurrent).toBe(true)
     expect(parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "off" }).handoverConcurrent).toBe(false)
@@ -195,15 +195,15 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.agent]: "codex" })).toThrow(/OPENCODE_AUTO_AGENT.*expected opencode\|claude/)
   })
 
-  test("hibernate 值域: HH:MM+H(UTC 每日窗口,H 允许小数),缺省未设 = 不休眠(plans/0027-hibernate-design.md)", () => {
+  test("hibernate value domain: HH:MM+H (a daily UTC window, H may be fractional), default unset = no hibernation (plans/0027-hibernate-design.md)", () => {
     expect(parseSwitches({}).hibernate).toBeUndefined()
     expect(parseSwitches({ [SWITCH_ENV.hibernate]: "" }).hibernate).toBeUndefined()
     expect(parseSwitches({ [SWITCH_ENV.hibernate]: "04:00+6" }).hibernate).toEqual({ startMin: 240, durationMin: 360 })
     expect(parseSwitches({ [SWITCH_ENV.hibernate]: "22:00+8.5" }).hibernate).toEqual({ startMin: 1320, durationMin: 510 })
     expect(parseSwitches({ [SWITCH_ENV.hibernate]: "0:30+0.5" }).hibernate).toEqual({ startMin: 30, durationMin: 30 })
-    // 非法值: 报错含变量名与期望值域
-    expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "4点+6" })).toThrow(/OPENCODE_AUTO_HIBERNATE/)
-    expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "4点+6" })).toThrow(/HH:MM\+H/)
+    // an invalid value: the error carries the variable name and the expected domain
+    expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "4am+6" })).toThrow(/OPENCODE_AUTO_HIBERNATE/)
+    expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "4am+6" })).toThrow(/HH:MM\+H/)
     expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "24:00+6" })).toThrow(/HH ∈ 00\.\.23/)
     expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:60+6" })).toThrow(/MM ∈ 00\.\.59/)
     expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:00+0" })).toThrow(/H ∈ \(0,24\)/)
@@ -211,7 +211,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.hibernate]: "04:00-6" })).toThrow(/invalid value/)
   })
 
-  test("重试阶梯: 逗号分隔的分钟表,off = 空表(不自动重试)", () => {
+  test("retry ladder: a comma-separated minutes list, off = an empty list (no automatic retry)", () => {
     expect(parseSwitches({ [SWITCH_ENV.retryWaits]: "0,1,2,4,8" }).retryWaits).toEqual([0, 1, 2, 4, 8])
     expect(parseSwitches({ [SWITCH_ENV.retryWaits]: " 0 , 0.5 " }).retryWaits).toEqual([0, 0.5])
     expect(parseSwitches({ [SWITCH_ENV.retryWaits]: "off" }).retryWaits).toEqual([])
@@ -220,7 +220,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(parseSwitches({ [SWITCH_ENV.recoveryWait]: "0.5" }).recoveryWait).toBe(0.5)
   })
 
-  test("非法值: 报错含变量名与期望值域", () => {
+  test("invalid values: the error carries the variable name and the expected domain", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.fork]: "yes" })).toThrow(/OPENCODE_AUTO_FORK/)
     expect(() => parseSwitches({ [SWITCH_ENV.fork]: "yes" })).toThrow(/on\|off/)
     expect(() => parseSwitches({ [SWITCH_ENV.forkBase]: "hybrid" })).toThrow(/OPENCODE_AUTO_FORK_BASE/)
@@ -248,16 +248,16 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.retryWaits]: "soon" })).toThrow(/0,1,2,4,8/)
     expect(() => parseSwitches({ [SWITCH_ENV.recoveryWait]: "-1" })).toThrow(/OPENCODE_AUTO_RECOVERY_WAIT/)
     expect(() => parseSwitches({ [SWITCH_ENV.recoveryWait]: "soon" })).toThrow(/non-negative minutes/)
-    // 报文提示空串语义与缺省值
+    // the message hints at the empty-string semantics and the default value
     expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/empty string = unset/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "1" })).toThrow(/default off/)
   })
 
-  test("model 用例(1) 空串 = 缺省空策略(未设)", () => {
+  test("model case (1): empty string = the default empty policy (unset)", () => {
     expect(parseSwitches({ [SWITCH_ENV.model]: "" }).model).toEqual({ byLetter: {}, byType: {}, byRole: {}, fallback: [] })
   })
 
-  test("model 用例(2) 裸值 prov/model ⇒ 全量覆盖 wildcard", () => {
+  test("model case (2): a bare prov/model value ⇒ the wildcard full override", () => {
     expect(parseSwitches({ [SWITCH_ENV.model]: "kimi/k2" }).model).toEqual({
       wildcard: "kimi/k2",
       byLetter: {},
@@ -267,7 +267,7 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     })
   })
 
-  test("model 用例(3) 条目表 ⇒ wildcard/字母/角色三项填充(分隔符 =,值可含冒号)", () => {
+  test("model case (3): an entry list ⇒ wildcard/letter/role all filled (separator =, values may contain colons)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.model]: "*=kimi/k2,m=anthropic/c-4,t=kimi/k2-lite,wrapup=kimi/k2-lite,decompose=anthropic/c-4",
@@ -281,13 +281,13 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     })
   })
 
-  test("model: 已退役会话的角色键(verify-*/review-*/final-plan,plans/0044 D1)按越界键严格失败", () => {
+  test("model: the retired session role keys (verify-*/review-*/final-plan, plans/0044 D1) fail strictly as out-of-range keys", () => {
     for (const role of ["verify-judge", "verify-fix", "review-audit", "review-fixrun", "final-plan"]) {
       expect(() => parseSwitches({ [SWITCH_ENV.model]: `${role}=kimi/k2` })).toThrow(/invalid key/)
     }
   })
 
-  test("model 用例(4) 越界键 ⇒ 中文报错含变量名与越界键", () => {
+  test("model case (4): an out-of-range key ⇒ the error names the variable and the key", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "X=kimi/k2" })).toThrow(/OPENCODE_AUTO_MODEL/)
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "X=kimi/k2" })).toThrow(/invalid key/)
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "X=kimi/k2" })).toThrow(/"X"/)
@@ -307,30 +307,30 @@ describe("parseSwitches(实验开关环境变量层)", () => {
     )
   })
 
-  test("model 用例(5) 值缺 / ⇒ 中文报错", () => {
+  test("model case (5): a value missing / ⇒ error", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=kimik2" })).toThrow(/OPENCODE_AUTO_MODEL/)
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "*=kimik2" })).toThrow(/invalid value/)
-    // 裸值形态同样要求含 /
+    // the bare form requires a slash too
     expect(() => parseSwitches({ [SWITCH_ENV.model]: "kimik2" })).toThrow(/invalid value/)
   })
 
-  test("modelFallback 有序候选表 ⇒ fallback 数组按序", () => {
+  test("modelFallback: an ordered candidate list ⇒ the fallback array keeps the order", () => {
     expect(parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,anthropic/c-4" }).model.fallback).toEqual([
       "kimi/k2",
       "anthropic/c-4",
     ])
-    // 空串/未设 = 不降级(空数组)
+    // empty string / unset = no failover (empty array)
     expect(parseSwitches({ [SWITCH_ENV.modelFallback]: "" }).model.fallback).toEqual([])
   })
 
-  test("modelFallback 坏值(缺 /)⇒ 中文报错", () => {
+  test("modelFallback: a bad value (missing /) ⇒ error", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,bad" })).toThrow(/OPENCODE_AUTO_MODEL_FALLBACK/)
     expect(() => parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,bad" })).toThrow(/invalid value/)
   })
 })
 
-describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
-  test("默认组合静默: 非默认项为 undefined;全量描述列出十九项", () => {
+describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
+  test("the default combination is silent: non-default items undefined; the full listing names all nineteen", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
@@ -338,7 +338,7 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     )
   })
 
-  test("非默认项逐一列出,默认项不出现;全量描述始终完整", () => {
+  test("non-default items listed one by one, defaults absent; the full listing always complete", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "off" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=off")
     expect(formatSwitches(changed)).toBe(
@@ -359,27 +359,27 @@ describe("nonDefaultSwitches / formatSwitches(启动日志)", () => {
     const asking = parseSwitches({ [SWITCH_ENV.ask]: "on" })
     expect(nonDefaultSwitches(asking)).toBe("OPENCODE_AUTO_ASK=on")
     expect(formatSwitches(asking)).toContain("OPENCODE_AUTO_ASK=on")
-    // model 生效:路由项按 wildcard→字母→角色稳定次序回推环境变量取值;降级候选独立成项
+    // model in effect: the routing entries reconstruct the env value in the stable wildcard→letter→role order; the failover candidates stand as their own item
     const routed = parseSwitches({ [SWITCH_ENV.model]: "*=kimi/k2,m=anthropic/c-4,decompose=anthropic/c-4" })
     expect(nonDefaultSwitches(routed)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2,m=anthropic/c-4,decompose=anthropic/c-4")
     const failed = parseSwitches({ [SWITCH_ENV.modelFallback]: "kimi/k2,anthropic/c-4" })
     expect(nonDefaultSwitches(failed)).toBe("OPENCODE_AUTO_MODEL_FALLBACK=kimi/k2,anthropic/c-4")
-    // failback 粒度: 缺省 task 静默,非默认粒度独立成项
+    // failback scope: default task is silent, a non-default scope stands as its own item
     const scoped = parseSwitches({ [SWITCH_ENV.modelFailbackScope]: "session" })
     expect(nonDefaultSwitches(scoped)).toBe("OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session")
     expect(formatSwitches(scoped)).toContain("OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session")
     const both = parseSwitches({ [SWITCH_ENV.model]: "kimi/k2", [SWITCH_ENV.modelFallback]: "b/y" })
     expect(nonDefaultSwitches(both)).toBe("OPENCODE_AUTO_MODEL=*=kimi/k2, OPENCODE_AUTO_MODEL_FALLBACK=b/y")
-    // 严格恢复: 缺省 off 静默,on 独立成项
+    // strict resume: default off is silent, on stands as its own item
     const strict = parseSwitches({ [SWITCH_ENV.strictResume]: "on" })
     expect(nonDefaultSwitches(strict)).toBe("OPENCODE_AUTO_STRICT_RESUME=on")
     expect(formatSwitches(strict)).toContain("OPENCODE_AUTO_STRICT_RESUME=on")
-    // 交接测试时机: 缺省 off(先交接后运行)静默,on(并发)独立成项
+    // test-handover timing: default off (hand over before the run) is silent, on (concurrent) stands as its own item
     const concurrent = parseSwitches({ [SWITCH_ENV.handoverConcurrent]: "on" })
     expect(nonDefaultSwitches(concurrent)).toBe("OPENCODE_AUTO_HANDOVER_CONCURRENT=on")
     expect(formatSwitches(concurrent)).toContain("OPENCODE_AUTO_HANDOVER_CONCURRENT=on")
     expect(formatSwitches(parseSwitches({}))).toContain("OPENCODE_AUTO_HANDOVER_CONCURRENT=off")
-    // 休眠窗口: 缺省未设静默,设置后按规范写法 HH:MM+H 独立成项
+    // hibernate window: default unset is silent; once set it stands as its own item in the canonical HH:MM+H spelling
     const hibernating = parseSwitches({ [SWITCH_ENV.hibernate]: "4:00+6.5" })
     expect(nonDefaultSwitches(hibernating)).toBe("OPENCODE_AUTO_HIBERNATE=04:00+6.5")
     expect(formatSwitches(hibernating)).toContain("OPENCODE_AUTO_HIBERNATE=04:00+6.5")
@@ -455,8 +455,8 @@ describe("model values under a model registry (plans/0055 §9 R7)", () => {
   })
 })
 
-describe("autoSwitches(memo 一次,全流水线一致)", () => {
-  test("重复调用返回同一对象", () => {
+describe("autoSwitches (memoized once, consistent across the whole pipeline)", () => {
+  test("repeated calls return the same object", () => {
     expect(autoSwitches()).toBe(autoSwitches())
   })
 })

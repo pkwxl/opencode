@@ -1,9 +1,13 @@
-// src/execute.ts runSubtask 产物形检(D2/D4/D6)与 src/doccheck.ts 的单测
-// (session-boundary-hardening 设计 §4.3/§4.6,S3/S3c): 零落盘→重提示→仍零→blocked;
-// 清单缺失/截断→同环;全量文档终止符扫描(修改后 eof 不在末行→拦截、豁免清单、
-// 未声明顺带文档);形检全过→正常勾选;dryrun/testHandover 豁免。
-// 走完整 runSubtask 链路(fake client + 真实 git 仓库),替 AI 落盘的脚本写在
-// 事件流生成器里(与 session.test.ts 的 handoverStream 同款接线)。
+// Unit tests for src/execute.ts runSubtask's artifact shape check
+// (D2/D4/D6) and src/doccheck.ts (session-boundary-hardening design
+// §4.3/§4.6, S3/S3c): zero-write → re-prompt → still zero → blocked; checklist
+// missing/truncated → the same loop; the whole-unit document terminator scan
+// (eof no longer on the last line after an edit → intercepted, the exemption
+// list, undeclared side documents); every shape check passes → the normal
+// tick; dryrun/testHandover exempt. Runs the full runSubtask chain (fake
+// client + a real git repository); the scripts that write on the AI's behalf
+// live in the event-stream generator (the same wiring as session.test.ts's
+// handoverStream).
 
 import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -20,15 +24,17 @@ import type { Opts } from "../src/opts"
 import { reloadUnits, seedUnits } from "./fixtures/units"
 import { fakeClient, freshRepo, git } from "./fixtures/runner"
 
-const BODY = "调研并落盘记录 Artifacts: docs/T-001/S01/record.md"
+const BODY = "investigate and write the record Artifacts: docs/T-001/S01/record.md"
 
-// 干净 git 仓库 + 已提交的任务单元(subtasks.md 含声明产出的检查项)与 README;tmp/ 与
-// .auto/ 按 loop-preflight 的 ensureGitignore 口径忽略,统计落盘不污染 clean 门禁。
+// A clean git repo + a committed task unit (subtasks.md with an item that
+// declares its artifact) and a README; tmp/ and .auto/ are ignored per
+// loop-preflight's ensureGitignore basis, so stats writes never pollute the
+// clean gate.
 async function shapeRepo(item: string = BODY): Promise<string> {
   const dir = await freshRepo()
   await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
-  await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n")
-  await seedUnits(dir, `## T-001: 示例任务 [in_progress]\n\n- [ ] ${item}\n`)
+  await Bun.write(join(dir, "README.md"), "# Sample\n\nBackground notes.\n")
+  await seedUnits(dir, `## T-001: sample task [in_progress]\n\n- [ ] ${item}\n`)
   await git(dir, "add", "-A")
   await git(dir, "commit", "-q", "-m", "init")
   return dir
@@ -36,8 +42,10 @@ async function shapeRepo(item: string = BODY): Promise<string> {
 
 const makeChain = (): SessionChain => ({ pct: 10, used: 0, at: 0 })
 
-// 每回合会话的替身脚本: 事件流建立时执行一次(第 n 回合消费 scripts[n-1],清单
-// 耗尽后重复末份——「仍不补正」的形态),随后立即 idle 结束回合。
+// The stand-in script for each round's session: runs once when the event
+// stream is built (round n consumes scripts[n-1]; after the list runs out the
+// last entry repeats — the "still not fixed" shape), then immediately idles
+// to end the round.
 function scriptedClient(scripts: Array<() => Promise<unknown>>) {
   let round = 0
   return fakeClient({
@@ -52,31 +60,33 @@ function scriptedClient(scripts: Array<() => Promise<unknown>>) {
 
 const promptText = (call: { parts: unknown[] }): string => String((call.parts[0] as { text?: string } | undefined)?.text ?? "")
 
-// 非平凡且末行终止符合规的新建文档(正文占位不含「背景/结论」字样,供章节用例区分)。
-const filler = "占位素材甲乙丙。".repeat(30)
-const properDoc = `# 记录\n\n${filler}\n\n${EOF_MARK}\n`
+// A fresh document that is non-trivial and ends with the terminator on the
+// last line (the filler wording avoids the section names, keeping the
+// section-anchor cases distinct).
+const filler = "Placeholder filler material. ".repeat(30)
+const properDoc = `# Record\n\n${filler}\n\n${EOF_MARK}\n`
 
-describe("doccheck 纯函数(非平凡 + 末行终止符)", () => {
-  test("endsWithEof: 终止符独占末行(尾随空行容忍、行内空白容忍、终止符后有正文即不过)", () => {
-    expect(endsWithEof(`# 标题\n\n正文\n${EOF_MARK}`)).toBe(true)
-    expect(endsWithEof(`# 标题\n\n正文\n${EOF_MARK}\n\n`)).toBe(true)
-    expect(endsWithEof(`# 标题\n\n正文\n ${EOF_MARK} \n`)).toBe(true)
-    expect(endsWithEof(`# 标题\n\n正文`)).toBe(false)
-    expect(endsWithEof(`${EOF_MARK}\n追加在终止符之后\n`)).toBe(false)
+describe("doccheck pure functions (non-trivial + last-line terminator)", () => {
+  test("endsWithEof: the terminator alone on the last line (trailing blank lines and in-line whitespace tolerated; any body after it fails)", () => {
+    expect(endsWithEof(`# Title\n\nBody\n${EOF_MARK}`)).toBe(true)
+    expect(endsWithEof(`# Title\n\nBody\n${EOF_MARK}\n\n`)).toBe(true)
+    expect(endsWithEof(`# Title\n\nBody\n ${EOF_MARK} \n`)).toBe(true)
+    expect(endsWithEof(`# Title\n\nBody`)).toBe(false)
+    expect(endsWithEof(`${EOF_MARK}\nappended after the terminator\n`)).toBe(false)
     expect(endsWithEof("")).toBe(false)
   })
 
-  test("docShapeProblems: 过短与缺终止符分别成案,阈值边界恰过", () => {
+  test("docShapeProblems: too short and missing terminator are separate findings; the threshold boundary just passes", () => {
     expect(docShapeProblems(properDoc, "docs/a.md")).toEqual([])
-    const atThreshold = `# 标\n\n${"甲".repeat(MIN_DOC_CHARS)}\n${EOF_MARK}\n`
+    const atThreshold = `# T\n\n${"x".repeat(MIN_DOC_CHARS)}\n${EOF_MARK}\n`
     expect(docShapeProblems(atThreshold, "docs/a.md")).toEqual([])
-    const stub = `# 标\n\n略\n${EOF_MARK}\n`
+    const stub = `# T\n\n(omitted)\n${EOF_MARK}\n`
     expect(docShapeProblems(stub, "docs/a.md")).toEqual([`docs/a.md: content too short (${stub.trim().length} chars < threshold ${MIN_DOC_CHARS}), suspected stub or truncation`])
-    const long = `# 标\n\n${filler}\n`
+    const long = `# T\n\n${filler}\n`
     expect(docShapeProblems(long, "docs/a.md")).toEqual([`docs/a.md: missing last-line terminator (the last line of body text must be ${EOF_MARK})`])
   })
 
-  test("shapeCheckOn: dryrun / commit off / 空基线(非 git)/ testHandover 收场不启用", () => {
+  test("shapeCheckOn: off under dryrun / commit off / an empty baseline (non-git) / a testHandover finish", () => {
     const baseline = [{ root: "/x", sha: "abc1234" }]
     expect(shapeCheckOn({ commit: true }, baseline, false)).toBe(true)
     expect(shapeCheckOn({ dryrun: true }, baseline, false)).toBe(false)
@@ -86,7 +96,7 @@ describe("doccheck 纯函数(非平凡 + 末行终止符)", () => {
     expect(shapeCheckOn({}, baseline, true)).toBe(false)
   })
 
-  test("eofScanExempt: driver 状态文件 / 阶段索引 / .auto/ / 交接文档族豁免,普通文档不豁免", () => {
+  test("eofScanExempt: driver state files / the phase index / .auto/ / the handover document family are exempt; ordinary documents are not", () => {
     for (const rel of [
       "opencode.json",
       "docs/R-01/phases.md",
@@ -105,8 +115,8 @@ describe("doccheck 纯函数(非平凡 + 末行终止符)", () => {
   })
 })
 
-describe("runSubtask 产物形检(D2/D4)", () => {
-  test("零落盘: 重提示一次(反馈复述权威状态)仍零 → blocked,不勾选", async () => {
+describe("runSubtask artifact shape check (D2/D4)", () => {
+  test("zero-write: one re-prompt (the feedback restates the authoritative state), still zero → blocked, not ticked", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([async () => {}])
@@ -116,26 +126,26 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(result).toMatchObject({ type: "blocked" })
       expect((result as { question: string }).question).toContain("zero disk writes")
       expect(calls.prompts.length).toBe(2)
-      // 反馈复述权威状态(L1)并直指误判
+      // The feedback restates the authoritative state (L1) and names the misjudgment directly
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("artifacts did not pass the shape check")
       expect(feedback).toContain("T-001.S01")
       expect(feedback).toContain("S01 is not ticked yet")
       expect(feedback).toContain("do not judge this subtask complete on that basis")
-      // 未勾选、未推进
+      // Not ticked, not advanced
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("声明产出缺失(有其他落盘,非零落盘): 重提示后补齐 → 正常勾选", async () => {
+  test("declared artifact missing (other writes exist, so not a zero-write): fixed after the re-prompt → ticked normally", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
         async () => {
-          // 顺带文档同样受 D6 全量扫描约束(须非平凡 + 末行终止符)。
-          await Bun.write(join(dir, "docs/notes.md"), `# 顺带笔记\n\n${filler}\n\n${EOF_MARK}\n`)
+          // Side documents fall under the same D6 whole-unit scan (must be non-trivial + end with the last-line terminator).
+          await Bun.write(join(dir, "docs/notes.md"), `# Side notes\n\n${filler}\n\n${EOF_MARK}\n`)
         },
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
@@ -152,12 +162,12 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     }
   })
 
-  test("新建文档缺末行终止符(内容非平凡): 重提示后补正 → 勾选", async () => {
+  test("fresh document missing the last-line terminator (content non-trivial): fixed after the re-prompt → ticked", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
         async () => {
-          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n${filler}\n`)
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# Record\n\n${filler}\n`)
         },
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
@@ -174,12 +184,12 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     }
   })
 
-  test("新建文档空壳(带终止符但过短)且仍不补正 → blocked 引用未过关项", async () => {
+  test("fresh document is a stub (has the terminator but too short) and stays unfixed → blocked naming the failed item", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
         async () => {
-          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n(略)\n${EOF_MARK}\n`)
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# Record\n\n(omitted)\n${EOF_MARK}\n`)
         },
       ])
       const plan = await reloadUnits(dir)
@@ -193,8 +203,8 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     }
   })
 
-  test("声明必填章节缺失 → 同环;补齐后勾选", async () => {
-    const body = "写记录 Artifacts: docs/T-001/S01/record.md(背景、结论)"
+  test("declared required sections missing → the same loop; ticked once fixed", async () => {
+    const body = "write the record Artifacts: docs/T-001/S01/record.md(background, conclusions)"
     const dir = await shapeRepo(body)
     try {
       const { client, calls } = scriptedClient([
@@ -202,7 +212,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
         },
         async () => {
-          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n背景: 见正文。\n结论: 如上。\n${filler}\n${EOF_MARK}\n`)
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# Record\n\nbackground: see the body.\nconclusions: as above.\n${filler}\n${EOF_MARK}\n`)
         },
       ])
       const plan = await reloadUnits(dir)
@@ -210,15 +220,15 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain('is missing section "背景"')
-      expect(feedback).toContain('is missing section "结论"')
+      expect(feedback).toContain('is missing section "background"')
+      expect(feedback).toContain('is missing section "conclusions"')
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("形检全过: 单会话正常勾选并带基线统一提交", async () => {
+  test("all shape checks pass: one session, ticked normally, unified commit with the baseline", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
@@ -231,7 +241,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(1)
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
-      // 单元收口提交发生且带 Auto-Stage trailer
+      // The unit close-out commit happened and carries the Auto-Stage trailer
       const message = await git(dir, "log", "-1", "--format=%B")
       expect(message).toContain("Auto-Stage: subtask 1")
     } finally {
@@ -239,23 +249,23 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     }
   })
 
-  test("修改型声明产物(已跟踪): 存在性恒真,但受 D6 全量扫描约束——改写后缺终止符 → 重提示补正 → 勾选", async () => {
-    const body = "更新说明 Artifacts: README.md"
+  test("modify-type declared artifact (already tracked): existence always holds, but the D6 whole-unit scan still applies — rewritten without the terminator → fixed after the re-prompt → ticked", async () => {
+    const body = "update the notes Artifacts: README.md"
     const dir = await shapeRepo(body)
     try {
       const { client, calls } = scriptedClient([
         async () => {
-          await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n补充一行。\n")
+          await Bun.write(join(dir, "README.md"), "# Sample\n\nBackground notes.\nOne added line.\n")
         },
         async () => {
-          await Bun.write(join(dir, "README.md"), `# 示例\n\n背景说明。\n\n${filler}\n\n${EOF_MARK}\n`)
+          await Bun.write(join(dir, "README.md"), `# Sample\n\nBackground notes.\n\n${filler}\n\n${EOF_MARK}\n`)
         },
       ])
       const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, body, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
-      // D4 存在性恒真(不报「声明产出 … 不存在」),D6 以非平凡 + 末行终止符拦截修改型文档
+      // D4 existence always holds (no "declared artifact … does not exist"); D6 catches the modified document on non-trivial + last-line terminator
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).not.toContain("declared artifact README.md does not exist")
       expect(feedback).toContain("README.md")
@@ -266,7 +276,7 @@ describe("runSubtask 产物形检(D2/D4)", () => {
     }
   })
 
-  test("dryrun: 零产物自然结束不启用形检,照常勾选", async () => {
+  test("dryrun: a zero-artifact natural finish skips the shape check, ticked as usual", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([async () => {}])
@@ -281,16 +291,19 @@ describe("runSubtask 产物形检(D2/D4)", () => {
   })
 })
 
-// 形检重提示 fork 原会话(2026-09-18 修订,kernel-spi-nor T-030 S13 现场): 重提示
-// 基于刚结束的会话 fork 副本下发,只带形检反馈本身(副本已含完整提示词与全部工作
-// 上下文);fork 不可用回退全新会话 + 完整提示词 + 反馈。
-describe("runSubtask 形检重提示 fork 续做", () => {
-  test("fork 成功: 重提示只带形检反馈(不重发整份子任务提示词),补正后勾选", async () => {
+// The shape-check re-prompt forks the original session (revised 2026-09-18,
+// kernel-spi-nor T-030 S13 field incident): the re-prompt is dispatched on a
+// fork copy of the just-ended session and carries only the shape-check
+// feedback itself (the copy already holds the full prompt and the whole
+// working context); when a fork is unavailable it falls back to a fresh
+// session + the full prompt + the feedback.
+describe("runSubtask shape-check re-prompt continues on a fork", () => {
+  test("fork succeeds: the re-prompt carries only the shape-check feedback (no full subtask prompt resent), ticked once fixed", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
         async () => {
-          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n${filler}\n`)
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# Record\n\n${filler}\n`)
         },
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
@@ -299,32 +312,32 @@ describe("runSubtask 形检重提示 fork 续做", () => {
       const plan = await reloadUnits(dir)
       const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
-      // 重提示会话 = 原会话的 fork 副本,且只带反馈(不含子任务正文/整份提示词)。
+      // The re-prompt session = a fork copy of the original session, carrying only the feedback (no subtask body / full prompt).
       expect(calls.forks).toEqual(["ses_new_1"])
       expect(calls.prompts.length).toBe(2)
       expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
       const feedback = promptText(calls.prompts[1]!)
       expect(feedback).toContain("artifacts did not pass the shape check")
       expect(feedback).toContain("missing last-line terminator")
-      expect(feedback).not.toContain("调研并落盘记录")
+      expect(feedback).not.toContain("investigate and write the record")
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("fork 失败: 回退全新会话 + 完整提示词 + 反馈(与修订前行为一致)", async () => {
+  test("fork fails: falls back to a fresh session + the full prompt + the feedback (same behavior as before the revision)", async () => {
     const dir = await shapeRepo()
     try {
       const { sdk, calls } = scriptedClient([
         async () => {
-          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# 记录\n\n${filler}\n`)
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), `# Record\n\n${filler}\n`)
         },
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
         },
       ])
-      // fork 路由不可用(旧版 server / 会话已失效)→ forkSession 回退 undefined。
+      // The fork route is unavailable (old server / session gone) → forkSession falls back to undefined.
       const stubbed = opencodeAgent({
         ...sdk,
         session: { ...sdk.session, fork: async () => ({ error: { message: "no fork" } }) },
@@ -333,10 +346,10 @@ describe("runSubtask 形检重提示 fork 续做", () => {
       const result = await runSubtask(stubbed, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true }, makeChain())
       expect(result).toBeUndefined()
       expect(calls.prompts.length).toBe(2)
-      // 全新会话重发完整提示词(含子任务正文)+ 反馈。
+      // The fresh session resends the full prompt (with the subtask body) + the feedback.
       expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
       const feedback = promptText(calls.prompts[1]!)
-      expect(feedback).toContain("调研并落盘记录")
+      expect(feedback).toContain("investigate and write the record")
       expect(feedback).toContain("artifacts did not pass the shape check")
       expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
     } finally {
@@ -345,17 +358,17 @@ describe("runSubtask 形检重提示 fork 续做", () => {
   })
 })
 
-describe("runSubtask 全量文档终止符扫描(D6)", () => {
-  test("未声明的顺带文档截断(新建、缺终止符): 拦截,补正后勾选", async () => {
+describe("runSubtask whole-unit document terminator scan (D6)", () => {
+  test("an undeclared side document truncated (fresh, missing the terminator): intercepted, ticked once fixed", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
-          await Bun.write(join(dir, "docs/notes.md"), `# 顺带分析\n\n${filler}\n`)
+          await Bun.write(join(dir, "docs/notes.md"), `# Side analysis\n\n${filler}\n`)
         },
         async () => {
-          await Bun.write(join(dir, "docs/notes.md"), `# 顺带分析\n\n${filler}\n\n${EOF_MARK}\n`)
+          await Bun.write(join(dir, "docs/notes.md"), `# Side analysis\n\n${filler}\n\n${EOF_MARK}\n`)
         },
       ])
       const plan = await reloadUnits(dir)
@@ -371,20 +384,20 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
     }
   })
 
-  test("修改既有文档后终止符不在末行(追加在终止符之后): 拦截,恢复末行终止符后勾选", async () => {
+  test("an existing document edited so the terminator is no longer last (body appended after the terminator): intercepted, ticked once the last-line terminator is restored", async () => {
     const dir = await shapeRepo()
     try {
-      // 既有文档自带终止符;会话中途改写把正文追加在终止符之后 = 截断形态
-      await Bun.write(join(dir, "docs/existing.md"), `# 既有\n\n${filler}\n\n${EOF_MARK}\n`)
+      // The existing document carries the terminator; the session's mid-flight rewrite appends body after it = the truncation shape
+      await Bun.write(join(dir, "docs/existing.md"), `# Existing\n\n${filler}\n\n${EOF_MARK}\n`)
       await git(dir, "add", "-A")
       await git(dir, "commit", "-q", "-m", "existing")
       const { client, calls } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
-          await Bun.write(join(dir, "docs/existing.md"), `# 既有\n\n${filler}\n\n${EOF_MARK}\n\n## 追加\n\n后续内容。\n`)
+          await Bun.write(join(dir, "docs/existing.md"), `# Existing\n\n${filler}\n\n${EOF_MARK}\n\n## Addition\n\nFollow-up content.\n`)
         },
         async () => {
-          await Bun.write(join(dir, "docs/existing.md"), `# 既有\n\n${filler}\n\n## 追加\n\n后续内容。\n\n${EOF_MARK}\n`)
+          await Bun.write(join(dir, "docs/existing.md"), `# Existing\n\n${filler}\n\n## Addition\n\nFollow-up content.\n\n${EOF_MARK}\n`)
         },
       ])
       const plan = await reloadUnits(dir)
@@ -400,15 +413,15 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
     }
   })
 
-  test("豁免文档族(handoff/testhandoff/driver 状态文件)不受影响: 全过正常收口", async () => {
+  test("the exempt document family (handoff/testhandoff/driver state files) is unaffected: everything passes, normal close-out", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
-          // 豁免清单内的文件短且无终止符,不得触发形检
-          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# 交接\n\nStatus: continue\n")
-          await Bun.write(join(dir, "docs/T-001/testhandoff-1.md"), "# 测试交接归档\n")
+          // Files on the exemption list are short and carry no terminator — they must not trigger the shape check
+          await Bun.write(join(dir, "docs/T-001/handoff.md"), "# Handover\n\nStatus: continue\n")
+          await Bun.write(join(dir, "docs/T-001/testhandoff-1.md"), "# Test-handover archive\n")
         },
       ])
       const plan = await reloadUnits(dir)
@@ -421,20 +434,21 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
     }
   })
 
-  test("单元期间已随 driver 提交落账的文档同样纳入扫描(基线..工作树取数)", async () => {
+  test("a document already booked by a driver commit during the unit is scanned too (the baseline..worktree basis)", async () => {
     const dir = await shapeRepo()
     try {
       const { client, calls } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
-          // 模拟交接边界的 driver 提交: 单元期间文档已落账(缺终止符),
-          // 工作区 changedFiles 看不到,基线 diff 仍须捞回
-          await Bun.write(join(dir, "docs/committed.md"), `# 落账文档\n\n${filler}\n`)
+          // Simulates a driver commit at a handover boundary: the document was
+          // booked mid-unit (missing the terminator); the worktree's
+          // changedFiles cannot see it, the baseline diff must still fish it out
+          await Bun.write(join(dir, "docs/committed.md"), `# Booked doc\n\n${filler}\n`)
           await git(dir, "add", "-A")
           await git(dir, "commit", "-q", "-m", "mid-unit\n\nAuto-Stage: subtask 1")
         },
         async () => {
-          await Bun.write(join(dir, "docs/committed.md"), `# 落账文档\n\n${filler}\n\n${EOF_MARK}\n`)
+          await Bun.write(join(dir, "docs/committed.md"), `# Booked doc\n\n${filler}\n\n${EOF_MARK}\n`)
         },
       ])
       const plan = await reloadUnits(dir)
@@ -449,20 +463,20 @@ describe("runSubtask 全量文档终止符扫描(D6)", () => {
   })
 })
 
-describe("unitChangedFiles(D6 取数)", () => {
-  test("基线..工作树: 已提交改动/未提交修改/未跟踪新建均入列,删除项排除", async () => {
+describe("unitChangedFiles (the D6 basis)", () => {
+  test("baseline..worktree: committed changes / unstaged modifications / untracked new files all listed; deletions excluded", async () => {
     const dir = await freshRepo()
     try {
-      await Bun.write(join(dir, "a.md"), "甲\n")
-      await Bun.write(join(dir, "b.md"), "乙\n")
+      await Bun.write(join(dir, "a.md"), "a\n")
+      await Bun.write(join(dir, "b.md"), "b\n")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-q", "-m", "init")
       const baseline = await unitBaseline(dir)
-      await Bun.write(join(dir, "c.md"), "丙\n")
+      await Bun.write(join(dir, "c.md"), "c\n")
       await git(dir, "add", "c.md")
       await git(dir, "commit", "-q", "-m", "mid")
-      await Bun.write(join(dir, "a.md"), "甲\n改\n")
-      await Bun.write(join(dir, "d.md"), "丁\n")
+      await Bun.write(join(dir, "a.md"), "a\nedited\n")
+      await Bun.write(join(dir, "d.md"), "d\n")
       await rm(join(dir, "b.md"))
       const files = await unitChangedFiles(dir, baseline)
       expect(files).toEqual(new Set(["a.md", "c.md", "d.md"]))
@@ -471,7 +485,7 @@ describe("unitChangedFiles(D6 取数)", () => {
     }
   })
 
-  test("空基线(非 git 环境/门禁关闭)返回空集", async () => {
+  test("an empty baseline (non-git / gate off) returns the empty set", async () => {
     expect(await unitChangedFiles(join(tmpdir(), "nonexistent-dir"), [])).toEqual(new Set())
   })
 })
@@ -514,7 +528,7 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
       const { client } = scriptedClient([
         async () => {
           await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
-          await Bun.write(join(dir, "README.md"), "# 示例\n\n背景说明。\n\nStatus is tracked in .auto/units.json.\n")
+          await Bun.write(join(dir, "README.md"), "# Sample\n\nBackground notes.\n\nStatus is tracked in .auto/units.json.\n")
         },
       ])
       const plan = await reloadUnits(dir)

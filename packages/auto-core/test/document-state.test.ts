@@ -1,6 +1,8 @@
-// src/document/state.ts 子任务状态协议(M1.0)的单测:扫描三态(无状态文件=旧版路径/
-// todo=待办/done=完成;激活后双文件或同缺=非法)、effectiveDone 双轨合并、改名幂等、
-// 注入写定的跳过规则。
+// Unit tests for the src/document/state.ts subtask state protocol (M1.0):
+// the three scan states (no state file = the legacy layout / todo = pending /
+// done = completed; once active, both files or both missing = illegal),
+// effectiveDone's two-track merge, the idempotent rename, and the skip rule
+// for protocol-inactive injection writes.
 
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -25,7 +27,7 @@ async function put(path: string, text = "x") {
 }
 
 describe("scanSubtaskStates", () => {
-  test("无任何状态文件: active=false,沿用 PLAN.md 勾选(旧版产物)", async () => {
+  test("no state files at all: active=false, the PLAN.md ticks stay in force (legacy output)", async () => {
     const result = await scanSubtaskStates(dir, "T-001", 2)
     expect(result.active).toBe(false)
     expect(result.illegal).toEqual([])
@@ -35,7 +37,7 @@ describe("scanSubtaskStates", () => {
     ])
   })
 
-  test("双文件并存: 非法 both", async () => {
+  test("both files present: illegal both", async () => {
     await put("docs/T-001/S01/todo.md")
     await put("docs/T-001/S01/done.md")
     const result = await scanSubtaskStates(dir, "T-001", 1)
@@ -43,20 +45,20 @@ describe("scanSubtaskStates", () => {
     expect(result.illegal).toEqual([{ index: 1, kind: "both" }])
   })
 
-  test("todo 与 done 皆缺(协议已被其他子任务激活): 非法 neither", async () => {
+  test("both todo and done missing (the protocol already activated by another subtask): illegal neither", async () => {
     await put("docs/T-001/S01/done.md")
     const result = await scanSubtaskStates(dir, "T-001", 2)
     expect(result.active).toBe(true)
     expect(result.illegal).toEqual([{ index: 2, kind: "neither" }])
   })
 
-  test("协议未激活时不判 neither(旧版产物全部无状态文件不属非法)", async () => {
+  test("neither is not judged when the protocol is inactive (legacy output with no state files anywhere is not illegal)", async () => {
     const result = await scanSubtaskStates(dir, "T-001", 3)
     expect(result.active).toBe(false)
     expect(result.illegal).toEqual([])
   })
 
-  test("混合: todo 待办 / done 完成,合法", async () => {
+  test("mixed: todo pending / done completed, legal", async () => {
     await put("docs/T-001/S01/done.md")
     await put("docs/T-001/S02/todo.md")
     const result = await scanSubtaskStates(dir, "T-001", 2)
@@ -72,12 +74,12 @@ describe("scanSubtaskStates", () => {
 describe("effectiveDone", () => {
   const items = [{ done: true }, { done: false }, { done: true }]
 
-  test("协议未激活: 沿用勾选轨", () => {
+  test("protocol inactive: the tick track stays in force", () => {
     const scan = { active: false, states: [], illegal: [] }
     expect(effectiveDone(scan, items)).toEqual([true, false, true])
   })
 
-  test("协议激活: done.md 覆盖勾选;todo.md 压下勾选;同缺回落勾选", () => {
+  test("protocol active: done.md overrides the tick; todo.md suppresses it; both missing falls back to the tick", () => {
     const scan = {
       active: true,
       states: [
@@ -92,21 +94,21 @@ describe("effectiveDone", () => {
 })
 
 describe("renameTodoToDone", () => {
-  test("todo → done 改名,内容原样保留", async () => {
+  test("the todo → done rename keeps the content verbatim", async () => {
     await put("docs/T-001/S01/todo.md", "# S01\n")
     await renameTodoToDone(dir, "T-001", 1)
     expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).text()).toBe("# S01\n")
     expect(await Bun.file(join(dir, "docs/T-001/S01/todo.md")).exists()).toBe(false)
   })
 
-  test("幂等: done 已存在(改名与提交间中断后重入)静默跳过", async () => {
-    await put("docs/T-001/S01/todo.md", "新\n")
-    await put("docs/T-001/S01/done.md", "旧\n")
+  test("idempotent: done already exists (re-entry after an interruption between the rename and the commit) → silently skipped", async () => {
+    await put("docs/T-001/S01/todo.md", "new\n")
+    await put("docs/T-001/S01/done.md", "old\n")
     await renameTodoToDone(dir, "T-001", 1)
-    expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).text()).toBe("旧\n")
+    expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).text()).toBe("old\n")
   })
 
-  test("协议未激活(无 todo.md): 静默跳过不报错", async () => {
+  test("protocol inactive (no todo.md): silently skipped, no error", async () => {
     await renameTodoToDone(dir, "T-001", 1)
     expect(await Bun.file(join(dir, "docs/T-001/S01/done.md")).exists()).toBe(false)
   })

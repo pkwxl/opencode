@@ -1,6 +1,9 @@
-// src/session-api.ts 的单测: 基点分叉(forkSession/seedForkSession)、末端用量重建(sessionUsage)、askHuman 等待扣除;
-// 另含 src/session.ts 的 ensureForkBase(基点确立与回退链,经会话驱动,见 §F.2 归属)。
-// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
+// Unit tests for src/session-api.ts: the fork-base fork (forkSession/
+// seedForkSession), end-of-session usage rebuild (sessionUsage), the askHuman
+// wait deduction; also src/session.ts's ensureForkBase (base establishment
+// and the fallback chain, driven through sessions — see §F.2 for ownership).
+// Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, a
+// pure move).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
@@ -17,33 +20,33 @@ import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEn
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { fakeClient } from "./fixtures/runner"
 
-// ---- fork 三段式流水线(fork-decompose 设计 §4.2/§4.3)----
+// ---- The fork three-stage pipeline (fork-decompose design §4.2/§4.3) ----
 
-describe("forkSession(基点分叉与回退)", () => {
-  test("成功: 返回新会话 id,并改名为本阶段标题", async () => {
+describe("forkSession (forking from the base, and the fallback)", () => {
+  test("success: returns the new session id, renamed to this step's title", async () => {
     const { client, calls } = fakeClient({ fork: () => ({ data: { id: "ses_forked" } }) })
-    expect(await forkSession(client, "ses_base", "T-001 S1 编写 schema")).toBe("ses_forked")
+    expect(await forkSession(client, "ses_base", "T-001 S1 write the schema")).toBe("ses_forked")
     expect(calls.forks).toEqual(["ses_base"])
-    expect(calls.updates).toEqual([{ id: "ses_forked", title: "T-001 S1 编写 schema" }])
+    expect(calls.updates).toEqual([{ id: "ses_forked", title: "T-001 S1 write the schema" }])
   })
 
-  test("返回 error(外部旧版 --server 无 fork 路由等): log 后 undefined,不抛错", async () => {
+  test("returns error (an external legacy --server without the fork route, etc.): logs, then undefined, no throw", async () => {
     const { client } = fakeClient({ fork: () => ({ error: { name: "NotFoundError" } }) })
     expect(await forkSession(client, "ses_base", "T-001 S1 x")).toBeUndefined()
   })
 
-  test("抛异常(网络断开等): 同样回退 undefined", async () => {
+  test("throws (network dropped, etc.): also falls back to undefined", async () => {
     const { client } = fakeClient({ fork: () => Promise.reject(new Error("fetch failed")) })
     expect(await forkSession(client, "ses_base", "T-001 S1 x")).toBeUndefined()
   })
 })
 
-describe("seedForkSession(阶段/子任务首个会话的播种)", () => {
+describe("seedForkSession (seeding a phase's/subtask's first session)", () => {
   const base: ForkBaseInfo = { id: "ses_base", used: 500 }
   const opts = {}
   const makeChain = (over: Partial<SessionChain> = {}): SessionChain => ({ pct: 10, used: 100, at: Date.now(), id: "ses_prev", ...over })
 
-  test("分叉成功: pending=分叉会话,种子链 pct=100/used=基点用量/at=0,返回 warm", async () => {
+  test("fork succeeds: pending = the forked session, the seeded chain pct=100/used=the base's usage/at=0, returns warm", async () => {
     const { client, calls } = fakeClient()
     const chain = makeChain()
     await expect(seedForkSession(client, opts, chain, base, "T-001 S1 x")).resolves.toBe(true)
@@ -51,14 +54,14 @@ describe("seedForkSession(阶段/子任务首个会话的播种)", () => {
     expect(calls.forks).toEqual(["ses_base"])
   })
 
-  test("fork 失败: 重置链走全新会话(冷启动),warm=false", async () => {
+  test("fork fails: the chain resets to a fresh session (cold start), warm=false", async () => {
     const { client } = fakeClient({ fork: () => ({ error: { name: "NotFound" } }) })
     const chain = makeChain()
     await expect(seedForkSession(client, opts, chain, base, "T-001 S1 x")).resolves.toBe(false)
     expect(chain).toMatchObject({ id: undefined, pending: undefined, pct: 100, used: 0, at: 0 })
   })
 
-  test("基点用量达 cap/2: 不起 fork,直接重置为冷启动", async () => {
+  test("base usage at cap/2: no fork, resets straight to a cold start", async () => {
     const { client, calls } = fakeClient()
     const chain = makeChain()
     await expect(seedForkSession(client, opts, chain, { id: "ses_base", used: 32_000 }, "T-001 S1 x")).resolves.toBe(false)
@@ -66,16 +69,16 @@ describe("seedForkSession(阶段/子任务首个会话的播种)", () => {
     expect(chain).toMatchObject({ id: undefined, pending: undefined, pct: 100, used: 0, at: 0 })
   })
 
-  test("中断恢复复用会话(链上有会话且 note 待注入): 不分叉、链不动,warm=true", async () => {
+  test("interruption recovery reuses the session (a session on the chain with a note pending injection): no fork, the chain untouched, warm=true", async () => {
     const { client, calls } = fakeClient()
-    const chain = makeChain({ id: "ses_interrupted", note: "[driver] 中断后的继续" })
+    const chain = makeChain({ id: "ses_interrupted", note: "[driver] continuation after the interruption" })
     await expect(seedForkSession(client, opts, chain, base, "T-001 S1 x")).resolves.toBe(true)
     expect(calls.forks).toEqual([])
     expect(chain.pending).toBeUndefined()
     expect(chain).toMatchObject({ id: "ses_interrupted", pct: 10, used: 100 })
   })
 
-  test("无基点(fork=off/冷启动): 链与现状一致,不动", async () => {
+  test("no base (fork=off / cold start): the chain stays exactly as it is, untouched", async () => {
     const { client, calls } = fakeClient()
     const chain = makeChain()
     await expect(seedForkSession(client, opts, chain, undefined, "T-001 S1 x")).resolves.toBe(false)
@@ -84,7 +87,7 @@ describe("seedForkSession(阶段/子任务首个会话的播种)", () => {
   })
 })
 
-describe("ensureForkBase(基点确立与回退链: digest 持久复用 → digest 重建 → session → 冷启动)", () => {
+describe("ensureForkBase (base establishment and the fallback chain: persistent digest reuse → digest rebuild → session → cold start)", () => {
   let dir: string
   const digest = parseSwitches({})
   const session = parseSwitches({ [SWITCH_ENV.forkBase]: "session" })
@@ -100,38 +103,38 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
   })
 
   async function setupTask(forkBase?: string) {
-    return (await seedUnits(dir, `## T-001: 示例任务 [in_progress]\n${forkBase ? `  - fork-base: ${forkBase}\n` : ""}正文。\n`)).tasks[0]!
+    return (await seedUnits(dir, `## T-001: sample task [in_progress]\n${forkBase ? `  - fork-base: ${forkBase}\n` : ""}Body.\n`)).tasks[0]!
   }
 
-  test("digest 成功: 从 context.md 一次性链建基点会话,以 digest: 前缀落 fork-base 持久,返回基点", async () => {
-    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+  test("digest succeeds: builds the base session in one shot from context.md, persists fork-base with the digest: prefix, returns the base", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files and key symbols\n- a.ts\n")
     const taskNoBase = await setupTask()
     const { client, calls } = fakeClient()
     const base = await ensureForkBase(client, await reloadUnits(dir), taskNoBase, {}, chain, digest)
     expect(base).toEqual({ id: "ses_new_1", used: 0 })
-    // 一次性链建会话(标题即提交标题),不 fork、不改名(新建已命名)
+    // One-shot session build (the title is the commit title), no fork, no rename (a new session is already named)
     expect(calls.creates).toBe(1)
     expect(calls.forks).toEqual([])
     expect(calls.updates).toEqual([])
-    // fork-base 以 digest: 前缀持久为新基点会话 id
+    // fork-base persists with the digest: prefix as the new base session id
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_1"')
   })
 
-  test("digest 持久基点存活(中断后重跑/子任务未竟再运行): 复用同一基点会话,不重建、字段不动", async () => {
-    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+  test("persistent digest base alive (re-run after an interruption / a task resumed unfinished): the same base session reused, no rebuild, the field untouched", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files and key symbols\n- a.ts\n")
     const taskPersisted = await setupTask("digest:ses_P")
     const { client, calls } = fakeClient({
       messages: () => ({ data: [{ info: { role: "user" } }, { info: { role: "assistant", tokens: { input: 400, cache: { read: 100 } } } }] }),
     })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, digest)
-    // 用量经 messages 末条 assistant 重建(400 + 100)
+    // Usage rebuilt from the last assistant message (400 + 100)
     expect(base).toEqual({ id: "ses_P", used: 500 })
     expect(calls.creates).toBe(0)
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_P"')
   })
 
-  test("digest 持久基点失效(存储清理): 从摘要重建并覆写字段", async () => {
-    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+  test("persistent digest base dead (storage cleanup): rebuilt from the digest, the field overwritten", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files and key symbols\n- a.ts\n")
     const taskPersisted = await setupTask("digest:ses_dead")
     const { client, calls } = fakeClient({ get: () => undefined })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, digest)
@@ -140,8 +143,8 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_1"')
   })
 
-  test("digest 持久基点失效 + 重建受阻(会话内阻塞提问): 不重复校验死基点,回退冷启动", async () => {
-    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+  test("persistent digest base dead + rebuild blocked (a blocking question inside the session): the dead base is not re-validated, falls back to a cold start", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files and key symbols\n- a.ts\n")
     const taskPersisted = await setupTask("digest:ses_dead")
     const gets: string[] = []
     const { sdk } = fakeClient({
@@ -151,24 +154,24 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
       },
       events: (sid) =>
         (async function* () {
-          yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
+          yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "Permission request: write a file" }] } }
         })(),
     })
     const stubbed = opencodeAgent({ ...sdk, permission: { reply: async () => ({}) } } as unknown as OpencodeClient)
     expect(await ensureForkBase(stubbed, await reloadUnits(dir), taskPersisted, {}, chain, digest)).toBeUndefined()
-    // 存活校验只对死基点做过一次;回退链不再拿 digest: 前缀值重复校验
+    // The liveness check ran exactly once on the dead base; the fallback chain never re-validates the digest:-prefixed value
     expect(gets).toEqual(["ses_dead"])
   })
 
-  test("digest 基点会话受阻(会话内阻塞提问,非故障)→ 回退 session 基点: 校验存活并按 messages 重建用量", async () => {
-    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+  test("digest base session blocked (a blocking question inside the session, not a failure) → falls back to the session base: liveness checked, usage rebuilt from messages", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files and key symbols\n- a.ts\n")
     const taskWithBase = await setupTask("ses_U")
-    // 权限提问且未设 --wait-answer → 会话以非故障的 blocked 收场(会话故障——错误/
-    // 下发失败——自 2026-09-16 起在 runSession 内重试至恢复,不再走到回退)。
+    // A permission question with no --wait-answer set → the session ends blocked, not failed (session failures — errors / dispatch
+    // failures — have been retried to recovery inside runSession since 2026-09-16 and no longer reach the fallback).
     const { sdk } = fakeClient({
       events: (sid) =>
         (async function* () {
-          yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "请求权限: 写文件" }] } }
+          yield { type: "question.asked", properties: { id: "q1", sessionID: sid, questions: [{ question: "Permission request: write a file" }] } }
         })(),
       messages: () => ({ data: [{ info: { role: "user" } }, { info: { role: "assistant", tokens: { input: 700, cache: { read: 300 } } } }] }),
     })
@@ -178,8 +181,8 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
     expect(await unitsText(dir)).toContain('"forkBase": "ses_U"')
   })
 
-  test("digest 基点会话遇下发故障不回退: 会话故障经重试恢复后照样建立基点", async () => {
-    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## 相关文件与关键符号\n- a.ts\n")
+  test("a dispatch failure in the digest base session does not fall back: after the session failure recovers through retries, the base is built anyway", async () => {
+    await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files and key symbols\n- a.ts\n")
     const taskNoBase = await setupTask()
     let n = 0
     const { client } = fakeClient({
@@ -193,27 +196,27 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_2"')
   })
 
-  test("digest 摘要缺失 → 回退 session 基点", async () => {
+  test("digest missing → falls back to the session base", async () => {
     const taskWithBase = await setupTask("ses_U")
     const { client } = fakeClient({ messages: () => ({ data: [] }) })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskWithBase, {}, chain, digest)
-    // session 基点存活但用量取不到 → 按 0
+    // The session base is alive but its usage is unreadable → counted as 0
     expect(base).toEqual({ id: "ses_U", used: 0 })
   })
 
-  test("session 模式基点失效(存储清理)→ 回退冷启动(undefined)", async () => {
+  test("session mode with a dead base (storage cleanup) → falls back to a cold start (undefined)", async () => {
     const taskWithBase = await setupTask("ses_U")
     const { client } = fakeClient({ get: () => undefined })
     expect(await ensureForkBase(client, await reloadUnits(dir), taskWithBase, {}, chain, session)).toBeUndefined()
   })
 
-  test("session 模式遇 digest: 前缀遗留(运行中途切换基点模式): 剥壳校验,存活即复用为暖前缀", async () => {
+  test("session mode meeting a leftover digest: prefix (the base mode switched mid-run): shelled and validated, reused as the warm prefix when alive", async () => {
     const taskPersisted = await setupTask("digest:ses_P")
     const { client } = fakeClient({ messages: () => ({ data: [] }) })
     expect(await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, session)).toEqual({ id: "ses_P", used: 0 })
   })
 
-  test("fork=off: 恒为 undefined(现状流水线)", async () => {
+  test("fork=off: always undefined (the current pipeline)", async () => {
     const taskWithBase = await setupTask("ses_U")
     const { client } = fakeClient()
     const off = parseSwitches({ [SWITCH_ENV.fork]: "off" })
@@ -221,11 +224,12 @@ describe("ensureForkBase(基点确立与回退链: digest 持久复用 → diges
   })
 })
 
-// ---- 会话末端用量重建与"报错桩"判据(sessionUsage: 跨进程恢复是否复用旧会话的依据)----
+// ---- End-of-session usage rebuild and the "error stub" criterion (sessionUsage: the basis for reusing an old session across a process recovery) ----
 
-describe("sessionUsage(恢复复用判据)", () => {
-  // server 的 messages 按创建序(旧→新)返回;runner 只读 info 的 role/tokens/error
-  // 与 providerID/modelID(查上下文上限)。
+describe("sessionUsage (the reuse criterion)", () => {
+  // The server's messages come back in creation order (old → new); the runner
+  // reads only info's role/tokens/error and providerID/modelID (to look up the
+  // context limit).
   const user = { info: { role: "user" } }
   const asst = (input: number, cacheRead: number, error?: unknown) => ({
     info: {
@@ -245,9 +249,10 @@ describe("sessionUsage(恢复复用判据)", () => {
       provider: { list: async () => ({ data: { all: [{ id: "kimi", models: { k2: { limit: { context: limit } } } }] } }) },
     }) as unknown as OpencodeClient)
 
-  test("末条是 0-token 报错桩、此前有真实产出: 用量取真实末端,不判为报错桩(T-063 现场)", async () => {
-    // 第 1–4 点刻意把这个会话留在 progress.json 里:跑了很多活,最后一轮撞 isRetryable:false
-    // 的账号级限流——服务端为此追加了 tokens 全 0 的报错行。
+  test("the last message is a 0-token error stub with real output before it: usage takes the real tail, not judged an error stub (T-063 field incident)", async () => {
+    // Points 1-4 deliberately left this session in progress.json: it did a lot
+    // of work, and the last turn hit an account-level rate limit with
+    // isRetryable:false — the server appended a tokens-all-zero error line for it.
     const usage = await sessionUsage(
       client([user, asst(3981, 8448), asst(1416, 107776), asst(0, 0, { name: "APIError" })]),
       "ses_real",
@@ -257,39 +262,39 @@ describe("sessionUsage(恢复复用判据)", () => {
     expect(usage.errorStub).toBe(false)
   })
 
-  test("整条会话只有报错桩(旧'重试即换白板会话'遗留形态): 判为报错桩,恢复时开新会话", async () => {
+  test("the whole session is nothing but an error stub (a legacy shape of the old retry-opens-a-blank-session era): judged an error stub, recovery opens a new session", async () => {
     const usage = await sessionUsage(client([user, asst(0, 0, { name: "APIError" })]), "ses_stub")
     expect(usage.used).toBe(0)
     expect(usage.errorStub).toBe(true)
   })
 
-  test("末条是被中断的 0-token 残行(无 error,kill/崩溃场景): 用量取更早的真实轮次", async () => {
+  test("the last message is an interrupted 0-token remnant (no error, a kill/crash shape): usage takes the earlier real turn", async () => {
     const usage = await sessionUsage(client([user, asst(2675, 62720), asst(0, 0)]), "ses_killed")
     expect(usage.used).toBe(65395)
     expect(usage.errorStub).toBe(false)
   })
 
-  test("末条错误行自带真实 tokens(step-finish 后才判定,如输出超限): 直接以它为基准", async () => {
+  test("the last error line carries real tokens (decided after step-finish, e.g. output length exceeded): it is the basis directly", async () => {
     const usage = await sessionUsage(client([user, asst(1000, 5000), asst(2000, 60000, { name: "MessageOutputLengthError" })]), "ses_partial")
     expect(usage.used).toBe(62000)
     expect(usage.errorStub).toBe(false)
   })
 
-  test("尚无任何 assistant 消息: used 0、上限未知口径不变,不判为报错桩(空会话第一轮照常复用)", async () => {
+  test("no assistant message yet: used 0, the unknown-limit basis unchanged, not judged an error stub (an empty session is reused normally on the first turn)", async () => {
     const usage = await sessionUsage(client([user]), "ses_fresh")
     expect(usage).toEqual({ used: 0, pct: 100, errorStub: false })
   })
 
-  test("messages 拉取失败或返回 error: 退化为用量 0 且不判报错桩(不因查询故障牺牲会话)", async () => {
+  test("messages fetch fails or returns an error: degrades to usage 0 without the error-stub judgment (a query failure never costs the session)", async () => {
     expect(await sessionUsage(client({ error: { name: "UnknownError" } }), "ses_x")).toEqual({ used: 0, pct: 100, errorStub: false })
     const broken = opencodeAgent({ session: { messages: async () => { throw new Error("fetch failed") } } } as unknown as OpencodeClient)
     expect(await sessionUsage(broken, "ses_x")).toEqual({ used: 0, pct: 100, errorStub: false })
   })
 })
 
-// ---- 三处人工等待点扣时长(STATS_PLAN §2/§3,T-005): askHuman 接线 ----
-// stepPause / waitBetweenTasks 的接线用例分别在 step.test.ts / loop-progress.test.ts。
-describe("askHuman 等待扣除(stats 接线,T-005)", () => {
+// ---- Wait-time deduction at the three human wait points (STATS_PLAN §2/§3, T-005): the askHuman wiring ----
+// stepPause / waitBetweenTasks wiring cases live in step.test.ts / loop-progress.test.ts.
+describe("askHuman wait deduction (stats wiring, T-005)", () => {
   let now: number
 
   beforeEach(() => {
@@ -301,7 +306,8 @@ describe("askHuman 等待扣除(stats 接线,T-005)", () => {
     setStatsClock()
   })
 
-  // fake 常驻输入行: 作答前推进注入时钟,模拟人工等待时长。
+  // A fake resident input line: advances the injected clock before answering,
+  // simulating a human wait duration.
   function fakeInteractive(answer: string, advance: number): Interactive {
     return {
       attach: () => {},
@@ -313,17 +319,17 @@ describe("askHuman 等待扣除(stats 接线,T-005)", () => {
     } as unknown as Interactive
   }
 
-  test("interactive 路径: 会话内等待同步扣除会话用时与 AI 用时,waitMs 单记", async () => {
+  test("interactive path: the in-session wait deducts synchronously from session and AI time, waitMs booked separately", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-ask-"))
     try {
       await loadStats(dir)
       await statsSessionBegin(dir, "T-001")
-      now += 3000 // AI 活跃 3s
-      const answer = await askHuman(5, "超时将自动答复", fakeInteractive("allow", 8000), dir)
-      expect(answer).toBe("allow") // 行为不变: 回答照传
-      now += 2000 // AI 再活跃 2s
+      now += 3000 // AI active 3s
+      const answer = await askHuman(5, "auto-answered on timeout", fakeInteractive("allow", 8000), dir)
+      expect(answer).toBe("allow") // behavior unchanged: the answer passes through
+      now += 2000 // AI active 2s more
       const report = await statsSessionEnd(dir, "s1", { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 })
-      expect(report?.thisAiMs).toBe(5000) // 3000 + 2000,等待 8000 不计
+      expect(report?.thisAiMs).toBe(5000) // 3000 + 2000, the 8000 wait not counted
       expect(report?.session.wallMs).toBe(13_000) // per-session wallMs = aiMs + waitMs
       const round = await statsTotals(dir, "round")
       expect(round?.aiMs).toBe(5000)
@@ -335,21 +341,21 @@ describe("askHuman 等待扣除(stats 接线,T-005)", () => {
     }
   })
 
-  test("空回答回落 undefined(行为不变);dir 缺省统计零接触", async () => {
-    // interactive 路径历来不做 trim(readline 路径才有 answer?.trim()),空串 → undefined。
+  test("an empty answer falls back to undefined (behavior unchanged); with no dir, stats untouched", async () => {
+    // The interactive path has never trimmed (only the readline path had answer?.trim()); an empty string → undefined.
     expect(await askHuman(5, "hint", fakeInteractive("", 1000))).toBeUndefined()
-    // 非空回答(含空白)原样返回——与改动前对等行为。
+    // A non-empty answer (whitespace included) returns verbatim — behavior equivalent to before the change.
     expect(await askHuman(5, "hint", fakeInteractive("allow", 1000))).toBe("allow")
   })
 
-  test("无超时等待(minutes undefined,plan 的 humanQuestions 路径): 提示语不带分钟数与限时,回答直达", async () => {
+  test("waiting with no timeout (minutes undefined, plan's humanQuestions path): the prompt carries no minutes or limit, the answer goes straight through", async () => {
     let seen: { prompt: string; minutes?: number } | undefined
     const line: Interactive = {
       attach: () => {},
       question: async (prompt: string, minutes?: number) => {
         seen = { prompt, minutes }
         now += 60_000
-        return "按方案 A 做"
+        return "go with plan A"
       },
       close: () => {},
     } as unknown as Interactive
@@ -357,11 +363,11 @@ describe("askHuman 等待扣除(stats 接线,T-005)", () => {
     try {
       await loadStats(dir)
       await statsSessionBegin(dir, "T-001")
-      expect(await askHuman(undefined, "no timeout under plan", line, dir)).toBe("按方案 A 做")
+      expect(await askHuman(undefined, "no timeout under plan", line, dir)).toBe("go with plan A")
       expect(seen?.minutes).toBeUndefined()
       expect(seen?.prompt).toContain("enter your answer (Enter to confirm, no timeout under plan): ")
       expect(seen?.prompt).not.toContain("within")
-      // 等待扣除口径不变: 无超时的等待同样单记 waitMs、不计 AI 用时。
+      // The wait-deduction basis is unchanged: a no-timeout wait is likewise booked as waitMs alone, never AI time.
       const report = await statsSessionEnd(dir, "s1", { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 })
       expect(report?.thisAiMs).toBe(0)
       expect(report?.session.wallMs).toBe(60_000)

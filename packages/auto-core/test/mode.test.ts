@@ -4,36 +4,36 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadModes, parseModeFile } from "../src/mode"
 
-// 合法模式文件样例: 标题与文件名一致、两节齐备。
-function modeText(name: string, marker = "默认"): string {
+// A valid mode file sample: title matches the file name, both sections present.
+function modeText(name: string, marker = "default"): string {
   return `# ${name}
 
 ## init
-${marker}导语。
+${marker} intro.
 
 ## exec
-${marker}注记。
+${marker} note.
 `
 }
 
-describe("内置模式", () => {
-  test("内置仅注册 migrate,两段文案齐备(逐字迁移自旧注册表)", () => {
+describe("built-in modes", () => {
+  test("the built-ins register only migrate, both copy blocks present (migrated verbatim from the old registry)", () => {
     const modes = loadModes()
     expect(Object.keys(modes)).toEqual(["migrate"])
     const mode = modes.migrate!
     expect(mode.name).toBe("migrate")
-    // init 导语: 场景定义、任务排布原则
+    // init lead-in: scenario definition, task-layout principles
     expect(mode.init).toContain("externally visible behaviour stays the same")
     expect(mode.init).toContain("baseline confirmation")
     expect(mode.init).toContain("migration work")
     expect(mode.init).toContain("regression verification")
-    // exec 注记: 对等行为、兼容层与 AUTO-DECISION 标注要求
+    // exec note: equivalent behaviour, the compatibility layer and the AUTO-DECISION annotation requirement
     expect(mode.exec).toContain("behaviourally equivalent")
     expect(mode.exec).toContain("compatibility layer")
     expect(mode.exec).toContain("AUTO-DECISION")
   })
 
-  test("未注册名不在注册表中(optimize/implement/test 须由目标目录提供)", () => {
+  test("unregistered names are absent from the registry (optimize/implement/test must come from the target directory)", () => {
     const modes = loadModes()
     expect(modes.optimize).toBeUndefined()
     expect(modes.implement).toBeUndefined()
@@ -41,53 +41,53 @@ describe("内置模式", () => {
   })
 })
 
-describe("目标目录模式扩展(.opencode/auto/modes/)", () => {
-  test("新增模式零源码改动;同名覆盖内置", () => {
+describe("target-directory mode extension (.opencode/auto/modes/)", () => {
+  test("a new mode needs zero source changes; a same name overrides the built-in", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-mode-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "modes")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "optimize.md"), modeText("optimize", "优化"))
-      writeFileSync(join(overlay, "migrate.md"), modeText("migrate", "自定义"))
+      writeFileSync(join(overlay, "optimize.md"), modeText("optimize", "optimized"))
+      writeFileSync(join(overlay, "migrate.md"), modeText("migrate", "custom"))
       const modes = loadModes(dir)
       expect(Object.keys(modes).sort()).toEqual(["migrate", "optimize"])
-      expect(modes.optimize!.init).toContain("优化导语")
-      // 同名覆盖: 内置 migrate 的文案被目标目录版本替换
-      expect(modes.migrate!.init).toContain("自定义导语")
+      expect(modes.optimize!.init).toContain("optimized intro")
+      // Same-name override: the built-in migrate's copy is replaced by the target-directory version
+      expect(modes.migrate!.init).toContain("custom intro")
       expect(modes.migrate!.init).not.toContain("externally visible behaviour stays the same")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("文件名不合法、标题不符、缺节、未知节均为解析错误", () => {
+  test("an invalid file name, mismatched title, missing section and unknown section are all parse errors", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-mode-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "modes")
       mkdirSync(overlay, { recursive: true })
       writeFileSync(join(overlay, "Bad_Name.md"), modeText("Bad_Name"))
-      writeFileSync(join(overlay, "mismatch.md"), modeText("其他名字"))
-      writeFileSync(join(overlay, "incomplete.md"), `# incomplete\n\n## init\n只有一节。\n`)
-      writeFileSync(join(overlay, "unknown.md"), `${modeText("unknown")}\n## extra\n多余节。\n`)
+      writeFileSync(join(overlay, "mismatch.md"), modeText("other name"))
+      writeFileSync(join(overlay, "incomplete.md"), `# incomplete\n\n## init\nonly one section.\n`)
+      writeFileSync(join(overlay, "unknown.md"), `${modeText("unknown")}\n## extra\nextra section.\n`)
       expect(() => loadModes(dir)).toThrow(/Bad_Name\.md is invalid/)
-      expect(() => parseModeFile("mismatch", modeText("其他名字"))).toThrow(/must start with "# mismatch"/)
-      expect(() => parseModeFile("incomplete", `# incomplete\n\n## init\n只有一节。\n`)).toThrow(
+      expect(() => parseModeFile("mismatch", modeText("other name"))).toThrow(/must start with "# mismatch"/)
+      expect(() => parseModeFile("incomplete", `# incomplete\n\n## init\nonly one section.\n`)).toThrow(
         /is missing sections: ## exec$/,
       )
-      expect(() => parseModeFile("unknown", `${modeText("unknown")}\n## extra\n多余节。\n`)).toThrow(/has unknown section/)
+      expect(() => parseModeFile("unknown", `${modeText("unknown")}\n## extra\nextra section.\n`)).toThrow(/has unknown section/)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("节体首尾空行被裁剪,空节视为缺失", () => {
+  test("leading and trailing blank lines of a section body are trimmed; an empty section counts as missing", () => {
     const spec = parseModeFile(
       "x",
-      `# x\n\n## init\n\n\n导语。\n\n\n## exec\n注记。\n## final: audit\na\n## final: validate\nb\n## final: finalize\n\n\nc\n`,
+      `# x\n\n## init\n\n\nintro.\n\n\n## exec\nnote.\n## final: audit\na\n## final: validate\nb\n## final: finalize\n\n\nc\n`,
     )
-    expect(spec.init).toBe("导语。")
-    // 已退役的 final: 三节(plans/0044 D1)仍可解析,节体被忽略、不进 ModeSpec
-    expect(spec).toEqual({ name: "x", init: "导语。", exec: "注记。" })
-    expect(() => parseModeFile("y", `# y\n\n## init\n\n\n## exec\n注记。\n`)).toThrow(/is missing sections/)
+    expect(spec.init).toBe("intro.")
+    // The retired final: three sections (plans/0044 D1) still parse; their bodies are ignored and kept out of ModeSpec
+    expect(spec).toEqual({ name: "x", init: "intro.", exec: "note." })
+    expect(() => parseModeFile("y", `# y\n\n## init\n\n\n## exec\nnote.\n`)).toThrow(/is missing sections/)
   })
 })

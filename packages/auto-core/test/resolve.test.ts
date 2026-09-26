@@ -16,8 +16,9 @@ import {
   type ResolveItem,
 } from "../src/resolve"
 
-// T-004 覆盖: src/resolve.ts 全量(标记解析/台账落盘/会话收尾扫描/读回/高亮报文)。
-// driver 侧采集接线(H1..H4)的用例在 T-005 的 test/runner.test.ts 追加。
+// T-004 coverage: all of src/resolve.ts (marker parsing / ledger persistence / session
+// close-out scan / read-back / highlight block). Cases for the driver-side collection
+// wiring (H1..H4) are added in T-005's test/runner.test.ts.
 
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
@@ -26,7 +27,7 @@ async function git(dir: string, ...args: string[]) {
     new Response(proc.stderr).text(),
     proc.exited,
   ])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
   return out
 }
 
@@ -39,68 +40,68 @@ function agentItem(question: string, over: Partial<ResolveItem> = {}): ResolveIt
 }
 
 describe("parseResolveLine", () => {
-  test("完整三段: 问题 / 所选方案 / 理由", () => {
-    expect(parseResolveLine("AUTO-RESOLVE: 是否顺带收口第三份 formatTokens -> 顺带收口 (同层依赖)")).toEqual({
-      question: "是否顺带收口第三份 formatTokens",
-      option: "顺带收口",
-      reason: "同层依赖",
+  test("full three-part line: question / chosen option / reason", () => {
+    expect(parseResolveLine("AUTO-RESOLVE: fold in the third formatTokens copy too -> fold it in (same layer)")).toEqual({
+      question: "fold in the third formatTokens copy too",
+      option: "fold it in",
+      reason: "same layer",
     })
   })
 
-  test("分隔符三种写法与中文括号等价", () => {
+  test("three arrow spellings are equivalent, and full-width Chinese parentheses parse the same", () => {
     const arrows = ["->", "→", "=>"]
     for (const arrow of arrows) {
-      expect(parseResolveLine(`AUTO-RESOLVE: 问题 ${arrow} 方案(理由)`)).toEqual({
-        question: "问题",
-        option: "方案",
-        reason: "理由",
+      expect(parseResolveLine(`AUTO-RESOLVE: question ${arrow} option（reason）`)).toEqual({
+        question: "question",
+        option: "option",
+        reason: "reason",
       })
     }
   })
 
-  test("行内前缀(代码注释 / markdown 列表项 / 反引号包裹)同等有效", () => {
-    expect(parseResolveLine("// AUTO-RESOLVE: 问题 -> 方案 (理由)")?.question).toBe("问题")
-    expect(parseResolveLine("- **AUTO-RESOLVE**: 问题 -> 方案 (理由)")?.question).toBe("问题")
-    expect(parseResolveLine("`AUTO-RESOLVE: 问题 -> 方案 (理由)`")).toEqual({
-      question: "问题",
-      option: "方案",
-      reason: "理由",
+  test("inline prefixes (code comment / markdown list item / backtick-wrapped) are equally valid", () => {
+    expect(parseResolveLine("// AUTO-RESOLVE: question -> option (reason)")?.question).toBe("question")
+    expect(parseResolveLine("- **AUTO-RESOLVE**: question -> option (reason)")?.question).toBe("question")
+    expect(parseResolveLine("`AUTO-RESOLVE: question -> option (reason)`")).toEqual({
+      question: "question",
+      option: "option",
+      reason: "reason",
     })
   })
 
-  test("无箭头: 整行作问题、标 malformed(仍然计数)", () => {
-    expect(parseResolveLine("AUTO-RESOLVE: 验收口径是否包含并发场景")).toEqual({
-      question: "验收口径是否包含并发场景",
+  test("no arrow: the whole line becomes the question and it is flagged malformed (still counted)", () => {
+    expect(parseResolveLine("AUTO-RESOLVE: does the acceptance basis cover concurrency")).toEqual({
+      question: "does the acceptance basis cover concurrency",
       malformed: true,
     })
   })
 
-  test("无理由段: 保留所选方案、标 malformed", () => {
-    expect(parseResolveLine("AUTO-RESOLVE: 问题 -> 方案")).toEqual({
-      question: "问题",
-      option: "方案",
+  test("no reason part: the chosen option is kept and it is flagged malformed", () => {
+    expect(parseResolveLine("AUTO-RESOLVE: question -> option")).toEqual({
+      question: "question",
+      option: "option",
       reason: undefined,
       malformed: true,
     })
   })
 
-  test("无标记 / 空正文 / 纯占位样例行返回 undefined", () => {
-    expect(parseResolveLine("AUTO-DECISION: 新字段叫 matched 还是 paired(不改变可见行为)")).toBeUndefined()
-    expect(parseResolveLine("这行没有任何标记")).toBeUndefined()
+  test("no marker / empty body / pure placeholder sample line return undefined", () => {
+    expect(parseResolveLine("AUTO-DECISION: call the new field matched or paired (no visible behavior change)")).toBeUndefined()
+    expect(parseResolveLine("this line has no marker")).toBeUndefined()
     expect(parseResolveLine("AUTO-RESOLVE:")).toBeUndefined()
-    expect(parseResolveLine("AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)")).toBeUndefined()
+    expect(parseResolveLine("AUTO-RESOLVE: <question> -> <option> (<reason>)")).toBeUndefined()
   })
 })
 
 describe("sameIssue", () => {
-  test("归一化后全等或互为子串视为同一问题", () => {
-    expect(sameIssue("是否 顺带收口?", "是否顺带收口?")).toBe(true)
-    expect(sameIssue("是否顺带收口", "请问是否顺带收口第三份 formatTokens")).toBe(true)
-    expect(sameIssue("折旧是否钳制", "验收口径是否含并发")).toBe(false)
+  test("equal after normalization, or either a substring of the other, counts as the same question", () => {
+    expect(sameIssue("fold  it in?", "fold it in?")).toBe(true)
+    expect(sameIssue("fold it in", "please fold it in for the third formatTokens copy")).toBe(true)
+    expect(sameIssue("is depreciation clamped", "does the acceptance basis include concurrency")).toBe(false)
   })
 })
 
-describe("台账落盘", () => {
+describe("ledger persistence", () => {
   let dir: string
 
   beforeEach(async () => {
@@ -117,80 +118,80 @@ describe("台账落盘", () => {
     return JSON.parse(await Bun.file(join(dir, ".auto", "resolves.json")).text()) as ResolveDoc
   }
 
-  test("dir === undefined 全部空转", async () => {
-    await recordResolves(undefined, [driverItem("问题")])
+  test("dir === undefined is all no-op", async () => {
+    await recordResolves(undefined, [driverItem("question")])
     expect(await resolvesOf(undefined, "task", "T-001")).toEqual([])
     expect(await collectAgentResolves(undefined, { task: "T-001" })).toEqual({ resolves: 0, decisions: 0 })
   })
 
-  test("往返: 落账后可按任务读回", async () => {
-    await recordResolves(dir, [driverItem("是否顺带收口", { session: "ses_1" })])
+  test("round trip: after recording, items read back by task", async () => {
+    await recordResolves(dir, [driverItem("fold it in", { session: "ses_1" })])
     const doc = await readDoc()
     expect(doc.v).toBe(1)
     expect(doc.items).toHaveLength(1)
-    expect(doc.items[0]).toMatchObject({ task: "T-001", source: "driver", question: "是否顺带收口", session: "ses_1" })
+    expect(doc.items[0]).toMatchObject({ task: "T-001", source: "driver", question: "fold it in", session: "ses_1" })
     expect(await resolvesOf(dir, "task", "T-001")).toHaveLength(1)
   })
 
-  test("去重: 同一来源同一任务的同一问题两次落账只留一条,缺失字段被补齐", async () => {
-    await recordResolves(dir, [agentItem("是否 顺带 收口")])
-    await recordResolves(dir, [agentItem("是否顺带收口", { option: "顺带收口", reason: "同层依赖" })])
+  test("dedupe: the same question from the same source and task is recorded once; missing fields are filled in", async () => {
+    await recordResolves(dir, [agentItem("fold  it  in")])
+    await recordResolves(dir, [agentItem("fold it in", { option: "fold it in", reason: "same layer" })])
     const doc = await readDoc()
     expect(doc.items).toHaveLength(1)
-    expect(doc.items[0]).toMatchObject({ option: "顺带收口", reason: "同层依赖" })
+    expect(doc.items[0]).toMatchObject({ option: "fold it in", reason: "same layer" })
   })
 
-  test("同一问题 driver 与 agent 两源各留一条(来源不同即不同条目)", async () => {
-    await recordResolves(dir, [driverItem("是否顺带收口"), agentItem("是否顺带收口")])
+  test("the same question from driver and agent leaves one item each (different sources are different items)", async () => {
+    await recordResolves(dir, [driverItem("fold it in"), agentItem("fold it in")])
     expect((await readDoc()).items).toHaveLength(2)
   })
 
-  test("坏文件宽容: 非 JSON / 条目坏字段不 throw,从当下重开", async () => {
+  test("lenient on a corrupt file: non-JSON / entries with bad fields do not throw, the ledger restarts from now", async () => {
     await mkdir(join(dir, ".auto"), { recursive: true })
-    await writeFile(join(dir, ".auto", "resolves.json"), "{ 这不是 JSON")
-    await recordResolves(dir, [driverItem("问题一")])
+    await writeFile(join(dir, ".auto", "resolves.json"), "{ this is not JSON")
+    await recordResolves(dir, [driverItem("question one")])
     expect((await readDoc()).items).toHaveLength(1)
 
     await writeFile(
       join(dir, ".auto", "resolves.json"),
-      JSON.stringify({ v: 1, items: [null, { question: 42 }, { question: "好条目", at: "坏", round: "坏" }] }),
+      JSON.stringify({ v: 1, items: [null, { question: 42 }, { question: "valid entry", at: "bad", round: "bad" }] }),
     )
-    await recordResolves(dir, [driverItem("问题二")])
+    await recordResolves(dir, [driverItem("question two")])
     const items = (await readDoc()).items
     expect(items).toHaveLength(2)
-    expect(items[0]).toMatchObject({ question: "好条目", at: 0, round: 0, source: "driver" })
+    expect(items[0]).toMatchObject({ question: "valid entry", at: 0, round: 0, source: "driver" })
   })
 
-  test("总量上限 512 FIFO 淘汰最旧", async () => {
+  test("cap of 512 items total, FIFO evicts the oldest", async () => {
     await recordResolves(
       dir,
-      Array.from({ length: 520 }, (_, i) => driverItem(`问题 ${i}`)),
+      Array.from({ length: 520 }, (_, i) => driverItem(`question ${i}`)),
     )
     const items = (await readDoc()).items
     expect(items).toHaveLength(512)
-    expect(items[0]!.question).toBe("问题 8")
-    expect(items.at(-1)!.question).toBe("问题 519")
+    expect(items[0]!.question).toBe("question 8")
+    expect(items.at(-1)!.question).toBe("question 519")
   })
 
-  test("并发写: 条目不丢,且不留 .tmp 残留", async () => {
+  test("concurrent writes: no item lost and no .tmp leftovers", async () => {
     await Promise.all([
-      recordResolves(dir, [driverItem("问题一")]),
-      recordResolves(dir, [driverItem("问题二")]),
-      recordResolves(dir, [driverItem("问题三")]),
+      recordResolves(dir, [driverItem("question one")]),
+      recordResolves(dir, [driverItem("question two")]),
+      recordResolves(dir, [driverItem("question three")]),
     ])
     expect((await readDoc()).items).toHaveLength(3)
     expect((await readdir(join(dir, ".auto"))).filter((name) => name.includes(".tmp"))).toEqual([])
   })
 
-  test("resolvesOf 三 scope 过滤;空 id 守卫返回空", async () => {
+  test("resolvesOf filters by the three scopes; empty id is guarded to empty", async () => {
     await recordResolves(dir, [
-      driverItem("问题一", { task: "T-001", phase: "m", round: 1 }),
-      driverItem("问题二", { task: "T-002", phase: "t", round: 1 }),
-      driverItem("问题三", { task: "T-003", phase: "m", round: 2 }),
+      driverItem("question 1", { task: "T-001", phase: "m", round: 1 }),
+      driverItem("question 2", { task: "T-002", phase: "t", round: 1 }),
+      driverItem("question 3", { task: "T-003", phase: "m", round: 2 }),
     ])
-    expect((await resolvesOf(dir, "task", "T-002")).map((item) => item.question)).toEqual(["问题二"])
-    expect((await resolvesOf(dir, "phase", "m")).map((item) => item.question)).toEqual(["问题一", "问题三"])
-    expect((await resolvesOf(dir, "round", 1)).map((item) => item.question)).toEqual(["问题一", "问题二"])
+    expect((await resolvesOf(dir, "task", "T-002")).map((item) => item.question)).toEqual(["question 2"])
+    expect((await resolvesOf(dir, "phase", "m")).map((item) => item.question)).toEqual(["question 1", "question 3"])
+    expect((await resolvesOf(dir, "round", 1)).map((item) => item.question)).toEqual(["question 1", "question 2"])
     expect(await resolvesOf(dir, "phase", "")).toEqual([])
   })
 })
@@ -213,8 +214,8 @@ describe("collectAgentResolves", () => {
     return raw ? (JSON.parse(raw) as ResolveDoc).items : []
   }
 
-  test("非 git 目录: 空转不报错、不落账", async () => {
-    await writeFile(join(dir, "note.md"), "AUTO-RESOLVE: 问题 -> 方案 (理由)\n")
+  test("non-git directory: no-op without error and nothing recorded", async () => {
+    await writeFile(join(dir, "note.md"), "AUTO-RESOLVE: question -> option (reason)\n")
     expect(await collectAgentResolves(dir, { task: "T-001", phase: "m", round: 1 })).toEqual({
       resolves: 0,
       decisions: 0,
@@ -222,13 +223,13 @@ describe("collectAgentResolves", () => {
     expect(await readItems()).toEqual([])
   })
 
-  test("AUTO-RESOLVE 落账并带 路径:行号;AUTO-DECISION 只计数不落账", async () => {
+  test("AUTO-RESOLVE is recorded with path:line; AUTO-DECISION only counts, never recorded", async () => {
     await git(dir, "init", "-q")
     await writeFile(
       join(dir, "note.md"),
-      ["# 报告", "", "- AUTO-RESOLVE: 是否顺带收口 -> 顺带收口 (同层依赖)", "- AUTO-DECISION: 字段命名取 matched (与 schema 一致)", ""].join("\n"),
+      ["# report", "", "- AUTO-RESOLVE: should we fold it in -> fold it in (same layer)", "- AUTO-DECISION: name the field matched (consistent with the schema)", ""].join("\n"),
     )
-    await writeFile(join(dir, "code.ts"), "// AUTO-DECISION: 用正则逐行扫描 (与 refcheck 同量级)\n")
+    await writeFile(join(dir, "code.ts"), "// AUTO-DECISION: scan line by line with a regex (same order of cost as refcheck)\n")
     const counts = await collectAgentResolves(dir, { task: "T-001", phase: "m", round: 1 })
     expect(counts).toEqual({ resolves: 1, decisions: 2 })
     const items = await readItems()
@@ -238,86 +239,86 @@ describe("collectAgentResolves", () => {
       task: "T-001",
       phase: "m",
       round: 1,
-      question: "是否顺带收口",
-      option: "顺带收口",
-      reason: "同层依赖",
+      question: "should we fold it in",
+      option: "fold it in",
+      reason: "same layer",
       file: "note.md:3",
     })
   })
 
-  test("二进制与超过 2MB 的文件跳过", async () => {
+  test("binary files and files over 2MB are skipped", async () => {
     await git(dir, "init", "-q")
     await Bun.write(join(dir, "blob.bin"), new Uint8Array([65, 0, 66, 67]))
-    await writeFile(join(dir, "huge.md"), `AUTO-RESOLVE: 巨文件里的问题 -> 方案 (理由)\n${"x".repeat(2 * 1024 * 1024)}`)
+    await writeFile(join(dir, "huge.md"), `AUTO-RESOLVE: question in a huge file -> option (reason)\n${"x".repeat(2 * 1024 * 1024)}`)
     expect(await collectAgentResolves(dir, { task: "T-001", round: 1 })).toEqual({ resolves: 0, decisions: 0 })
     expect(await readItems()).toEqual([])
   })
 
-  test("嵌套子仓库的变更同样被采集", async () => {
+  test("changes in a nested repository are collected too", async () => {
     await git(dir, "init", "-q")
     await mkdir(join(dir, "pkg"), { recursive: true })
     await git(join(dir, "pkg"), "init", "-q")
-    await writeFile(join(dir, "pkg", "inner.md"), "AUTO-RESOLVE: 嵌套仓库里的问题 -> 方案 (理由)\n")
+    await writeFile(join(dir, "pkg", "inner.md"), "AUTO-RESOLVE: question inside the nested repo -> option (reason)\n")
     const counts = await collectAgentResolves(dir, { task: "T-001", round: 1 })
     expect(counts.resolves).toBe(1)
-    expect((await readItems())[0]).toMatchObject({ question: "嵌套仓库里的问题", file: join("pkg", "inner.md") + ":1" })
+    expect((await readItems())[0]).toMatchObject({ question: "question inside the nested repo", file: join("pkg", "inner.md") + ":1" })
   })
 
-  test("driver 项经 sameIssue 配对置 matched;未配对的保持未标注", async () => {
+  test("driver items pair up via sameIssue and get matched; unpaired ones stay unmarked", async () => {
     await git(dir, "init", "-q")
     await recordResolves(dir, [
-      driverItem("是否把第三份 formatTokens 一并收口?"),
-      driverItem("验收口径是否包含并发场景?"),
+      driverItem("fold the third formatTokens copy in too?"),
+      driverItem("does the acceptance basis cover concurrency?"),
     ])
-    await writeFile(join(dir, "report.md"), "AUTO-RESOLVE: 是否把第三份 formatTokens 一并收口 -> 顺带收口 (同层依赖)\n")
+    await writeFile(join(dir, "report.md"), "AUTO-RESOLVE: fold the third formatTokens copy in too -> fold it in (same layer)\n")
     await collectAgentResolves(dir, { task: "T-001", phase: "m", round: 1 })
     const items = await readItems()
     const driver = items.filter((item) => item.source === "driver")
     expect(driver.find((item) => item.question.includes("formatTokens"))!.matched).toBe(true)
-    expect(driver.find((item) => item.question.includes("并发"))!.matched).toBeUndefined()
+    expect(driver.find((item) => item.question.includes("concurrency"))!.matched).toBeUndefined()
   })
 })
 
 describe("resolveHighlight", () => {
-  test("空列表返回空(没有代答就不占版面)", () => {
+  test("empty list returns empty (no proxy answers, no space taken)", () => {
     expect(resolveHighlight([])).toEqual([])
-    expect(resolveHighlight([driverItem("问题", { matched: true })])).toEqual([])
+    expect(resolveHighlight([driverItem("question", { matched: true })])).toEqual([])
   })
 
-  test("任务块: 置顶标题 + 逐条方案理由 + 标记位置 + 报告指引", () => {
+  test("task block: pinned title + per-item option and reason + marker location + report pointer", () => {
     const lines = resolveHighlight([
-      agentItem("是否顺带收口第三份 formatTokens", {
-        option: "顺带收口",
-        reason: "同层依赖,不引入反向 import",
+      agentItem("fold in the third formatTokens copy too", {
+        option: "fold it in",
+        reason: "same layer, no reverse import",
         file: "src/prompt.ts:501",
       }),
     ])
     expect(lines[0]).toBe("⚑ this task auto-answered 1 questions that should have been confirmed by you; please review:")
-    expect(lines[1]).toBe("  1. 是否顺带收口第三份 formatTokens → 顺带收口(同层依赖,不引入反向 import)")
+    expect(lines[1]).toBe("  1. fold in the third formatTokens copy too → fold it in(same layer, no reverse import)")
     expect(lines[2]).toBe("     src/prompt.ts:501")
     expect(lines[3]).toBe(`  full record in the "Proxy-answered questions" section of ${join("docs", "T-001", "report.md")}`)
   })
 
-  test("未配对 driver 项与 malformed agent 项各自带 ⚠", () => {
+  test("unpaired driver items and malformed agent items each carry a ⚠", () => {
     const lines = resolveHighlight([
-      driverItem("验收口径是否包含并发场景"),
-      agentItem("折旧是否同样钳制", { malformed: true }),
+      driverItem("does the acceptance basis cover concurrency"),
+      agentItem("is depreciation clamped the same way", { malformed: true }),
     ])
     expect(lines[1]).toContain("⚠ session did not write the AUTO-RESOLVE marker as required")
     expect(lines[2]).toContain("⚠ malformed marker")
   })
 
-  test("超过 8 条只列前 8 条,末行给出剩余条数与报告路径", () => {
-    const items = Array.from({ length: 11 }, (_, i) => agentItem(`问题 ${i}`, { option: "方案", reason: "理由" }))
+  test("over 8 items lists only the first 8; the last line gives the remainder count and report path", () => {
+    const items = Array.from({ length: 11 }, (_, i) => agentItem(`question ${i}`, { option: "option", reason: "reason" }))
     const lines = resolveHighlight(items)
     expect(lines[0]).toContain("11 questions")
     expect(lines).toHaveLength(1 + 8 + 1)
     expect(lines.at(-1)).toBe(`  …and 3 more, all in ${join("docs", "T-001", "report.md")}`)
   })
 
-  test("AUTO-DECISION 计数折进末行,且被截断为单行的长问题带省略号", () => {
-    const long = "问".repeat(120)
-    const lines = resolveHighlight([agentItem(`${long}\n换行也压平`, { option: "方案", reason: "理由" })], {
+  test("the AUTO-DECISION count folds into the last line; an over-long question is flattened to one line with an ellipsis", () => {
+    const long = "q".repeat(120)
+    const lines = resolveHighlight([agentItem(`${long}\nnewlines flatten too`, { option: "option", reason: "reason" })], {
       decisions: 5,
     })
     expect(lines[1]).toContain("…")
@@ -325,24 +326,24 @@ describe("resolveHighlight", () => {
     expect(lines.at(-1)).toBe("  plus 5 AUTO-DECISION entries (folded, see task report)")
   })
 
-  test("阶段/轮次汇总只给一行计数,未标注项单独点名", () => {
+  test("phase/round summaries give one count line; unmarked items are called out", () => {
     const items = [
-      agentItem("问题一", { option: "方案", reason: "理由" }),
-      driverItem("问题二"),
-      agentItem("问题三", { option: "方案", reason: "理由" }),
+      agentItem("question 1", { option: "option", reason: "reason" }),
+      driverItem("question 2"),
+      agentItem("question 3", { option: "option", reason: "reason" }),
     ]
     expect(resolveHighlight(items, { scope: "phase", id: "m" })).toEqual([
       "⚑ phase m: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
     ])
-    expect(resolveHighlight([agentItem("问题一", { option: "方案", reason: "理由" })], { scope: "round", id: 2 })).toEqual([
+    expect(resolveHighlight([agentItem("question 1", { option: "option", reason: "reason" })], { scope: "round", id: 2 })).toEqual([
       "⚑ round 2: 1 questions awaiting confirmation were auto-answered; see task reports for details",
     ])
   })
 })
 
-// T-006 追加: 逐任务 AUTO-DECISION 计数(高亮块末行的折叠数字)。行级明细仍不落账,
-// 落的只是每个任务一个整数。
-describe("AUTO-DECISION 计数", () => {
+// T-006 addition: per-task AUTO-DECISION counting (the folded number on the highlight
+// block's last line). Line-level detail is never recorded — only one integer per task.
+describe("AUTO-DECISION counting", () => {
   let dir: string
 
   beforeEach(async () => {
@@ -355,7 +356,7 @@ describe("AUTO-DECISION 计数", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("逐任务累加、互不串台;dir/任务缺省或计数非正时空转", async () => {
+  test("accumulates per task without cross-talk; no-op when dir/task missing or the count is not positive", async () => {
     await recordDecisions(dir, "T-001", 2)
     await recordDecisions(dir, "T-001", 3)
     await recordDecisions(dir, "T-002", 1)
@@ -369,14 +370,14 @@ describe("AUTO-DECISION 计数", () => {
     expect(await decisionsOf(undefined, "T-001")).toBe(0)
   })
 
-  test("扫描把计数与标记落进同一次写", async () => {
+  test("the scan lands counts and markers in the same write", async () => {
     await git(dir, "init", "-q")
     await writeFile(
       join(dir, "report.md"),
       [
-        "AUTO-RESOLVE: 是否收窄范围 -> 不收窄 (计划已写死)",
-        "AUTO-DECISION: 新字段命名 matched (与 schema 注释同词)",
-        "AUTO-DECISION: 扫描按行正则 (与 refcheck 同量级)",
+        "AUTO-RESOLVE: narrow the scope -> no (the plan already fixes it)",
+        "AUTO-DECISION: name the new field matched (same word as the schema comment)",
+        "AUTO-DECISION: scan line by line with a regex (same order of cost as refcheck)",
       ].join("\n"),
     )
     expect(await collectAgentResolves(dir, { task: "T-007", phase: "m", round: 1 })).toEqual({
@@ -384,22 +385,23 @@ describe("AUTO-DECISION 计数", () => {
       decisions: 2,
     })
     expect(await decisionsOf(dir, "T-007")).toBe(2)
-    expect((await resolvesOf(dir, "task", "T-007")).map((item) => item.question)).toEqual(["是否收窄范围"])
-    // 二次扫描(同一批改动仍未提交)累加计数,标记侧由去重键吸收——`--commit false`
-    // 下计数偏大是已接受边界(plans/0020-auto-resolve-design.md §K)。
+    expect((await resolvesOf(dir, "task", "T-007")).map((item) => item.question)).toEqual(["narrow the scope"])
+    // A second scan (the same changes still uncommitted) accumulates the counts; the
+    // marker side is absorbed by the dedupe key — an inflated count under `--commit false`
+    // is an accepted boundary (plans/0020-auto-resolve-design.md §K).
     await collectAgentResolves(dir, { task: "T-007", phase: "m", round: 1 })
     expect(await decisionsOf(dir, "T-007")).toBe(4)
     expect(await resolvesOf(dir, "task", "T-007")).toHaveLength(1)
   })
 
-  test("坏计数宽容: 非对象/负值/非数值逐键跳过,不影响 items 读回", async () => {
+  test("lenient on corrupt counts: non-object / negative / non-numeric values skip per key, items still read back", async () => {
     await mkdir(join(dir, ".auto"), { recursive: true })
     await Bun.write(
       join(dir, ".auto", "resolves.json"),
       JSON.stringify({
         v: 1,
-        items: [agentItem("问题", { option: "方案", reason: "理由" })],
-        decisions: { "T-001": -3, "T-002": "五", "T-003": 4.7, "": 9 },
+        items: [agentItem("question", { option: "option", reason: "reason" })],
+        decisions: { "T-001": -3, "T-002": "five", "T-003": 4.7, "": 9 },
       }),
     )
     expect(await decisionsOf(dir, "T-001")).toBe(0)

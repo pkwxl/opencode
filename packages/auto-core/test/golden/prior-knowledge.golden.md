@@ -14,7 +14,7 @@ Migration/upgrade mode notes:
 
 ## Input: project intent (.opencode/auto/brief.md)
 
-二次迁移意图。
+Second-pass migration intent.
 
 ## Input: existing distilled artifacts (reference, do not restate)
 

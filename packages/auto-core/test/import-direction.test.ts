@@ -46,7 +46,7 @@ const DOMAIN_ENTRIES: Record<Exclude<Domain, "driver">, string[]> = {
   // driver calls where it validates config and preflights a run.
   phases: ["phases/registry", "phases/custom"],
   // document: types = the frozen schema (M1.1); spec = the artifact-spec
-  // machinery (M1.4 — `产出:` declaration parser, decompose/state-file spec
+  // machinery (M1.4 — the `Artifacts:` declaration parser, decompose/state-file spec
   // tables, generic spec-driven checker), the domain's published acquisition
   // surface for artifact checks; roles = the role model (M2.3 — classifier,
   // per-role policies, protect list, handoff protocol checks); state = the

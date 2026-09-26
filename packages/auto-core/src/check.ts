@@ -44,18 +44,21 @@ const FIELD_LINE = /^\s*-\s+[\w-]+\s*:/
 // Test/build-like violation signatures (checked only when config.testByDriver
 // is enabled): an execution verb + build/test/lint semantics. The
 // verb-to-object distance is kept very tight to avoid same-sentence false
-// positives; the leading negative lookbehind excludes the verb reading inside
-// the compound word "executable (file)".
+// positives.
 const TEST_PATTERNS: RegExp[] = [
-  /(?<!可)(运行|执行|跑)[^。\n]{0,8}(编译|测试|单元测试|构建|lint)/i,
   /\b(run|execute|perform)\b[^.\n]{0,40}\b(build|compile|tests?|lint)\b/i,
 ]
 
 // Commit-type violation signatures (always checked): running git add/commit
 // inside a session, or an instruction like "commit all/every change" (the
 // unified commit is run by the driver after the session); nominal phrases
-// such as "commit message / commit SHA" do not match.
-const COMMIT_PATTERNS: RegExp[] = [/\bgit\s+(add|commit)\b/i, /提交(全部|所有|一次)?(未提交)?(改动|变更|代码)/]
+// such as "commit message / commit SHA" do not match — the verb must take the
+// changes as its direct object, and a determiner before "commit" (the commit,
+// this commit, …) marks the noun reading and is excluded by the lookbehind.
+const COMMIT_PATTERNS: RegExp[] = [
+  /\bgit\s+(add|commit)\b/i,
+  /(?<!\b(?:a|an|the|this|that|each|every|one)\s)\bcommits?\s+(?:(?:all|every|any|the|your|these|those)\s+)?(?:(?:uncommitted|pending|outstanding)\s+)?(?:changes?|modifications?|code|work)\b/i,
+]
 
 export async function checkPrinciple(
   dir: string,
@@ -133,10 +136,13 @@ function violates(line: string, patterns: RegExp[]): boolean {
   for (const pattern of patterns) {
     const match = pattern.exec(line)
     if (!match) continue
-    // Negative sentences (the negation words the preceding-window regex
-    // tests for) state exactly what the principles require — not reported.
-    const window = line.slice(Math.max(0, match.index - 4), match.index)
-    if (/(不要|不得|不应|不许|不再|禁止|避免|无需|不必|别|不|未)/.test(window)) continue
+    // Negative sentences (a negation word immediately before the match)
+    // state exactly what the principles require — not reported. The window
+    // reaches a little further than the Chinese original needed to: English
+    // negation words ("do not", "don't", "never") are longer than one
+    // character.
+    const window = line.slice(Math.max(0, match.index - 12), match.index)
+    if (/(?:\b(?:no|not|never|avoid|without|except|cannot)\b|n['’]t)\s*$/i.test(window)) continue
     return true
   }
   return false

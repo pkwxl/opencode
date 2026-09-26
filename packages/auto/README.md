@@ -1,553 +1,612 @@
 # opencode-auto
 
-按任务单元(阶段任务索引 `tasks.md` + `docs/T-NNN/`)驱动 [opencode](https://opencode.ai) 自动逐任务执行实施的命令行工具。
-宪法级项目属性(agent 契约、提交语义、上下文预算、场景模式)经 `init` 固化到
-`.opencode/auto/config.json`(版本化、随仓库共享、人工可编辑),`run` 只控制本次执行。
-状态由 driver 独占维护:每个任务先经分解会话拆成子任务,再逐子任务调度会话完成
-(缺省每个会话独立新建;`OPENCODE_AUTO_REUSE_SESSION=on` 时上一会话上下文占比低于
-50% 且 5 分钟内结束则复用,会话结束即由 driver 勾选),收尾后由 driver 标 done。
-检查/验收是规划出来的工作(验收任务、v 验收阶段):任务报告末尾的结论行写
-`Result: FAIL` 时 driver 在提交后把该任务置为阻塞并停止运行,交人工调整任务
-(任务级验收 `verify`、质量审核 `--review` 与终审闭环 `--final-review` 已于
-2026-09-21 退役,见[验收结论行](#验收结论行result-passfail));遇到无法自主决策的
-反复提问、`--permission ask-fail` 下无人答复的权限请求等情况时停机等待人工处理。
-中断(含应用崩溃、网络故障)后重新运行可依进度记录精确恢复到中断的会话与阶段。
+A command-line tool that drives [opencode](https://opencode.ai) to implement work automatically, task by task,
+in task units (the phase's task index `tasks.md` + `docs/T-NNN/`). Constitutional project options (the agent
+contract, commit semantics, context budget, scenario mode) are fixed by `init` into `.opencode/auto/config.json`
+(versioned, shared with the repository, human-editable); `run` controls only the current execution. State is
+maintained exclusively by the driver: each task is first split into subtasks by a decompose session, then
+completed one subtask at a time by dispatched sessions (by default every session starts fresh; with
+`OPENCODE_AUTO_REUSE_SESSION=on` the previous session is reused when its context share was below 50% and it
+ended within 5 minutes; the driver ticks state as each session ends), and after wrap-up the driver marks the
+task done. Checking and acceptance are planned work (acceptance tasks, the v acceptance phase): when the
+result line at the end of a task report says `Result: FAIL`, the driver blocks that task after committing and
+stops the run for a person to adjust the task (task-level acceptance `verify`, quality review `--review` and
+the final-review loop `--final-review` were retired on 2026-09-21 — see
+[Acceptance result line](#acceptance-result-line-result-passfail)); the run also halts for human attention on
+repeated questions the AI cannot decide on its own, permission requests left unanswered under
+`--permission ask-fail`, and similar situations. After an interruption (including application crashes and
+network failures), rerunning recovers precisely to the interrupted session and phase from the progress record.
 
-## 构建独立可执行文件
+## Building a standalone executable
 
 ```sh
 cd packages/auto
-bun run build            # 生成 dist/opencode-auto(本机平台)
-bun run build -- --target bun-windows-x64   # 交叉编译,产物带平台后缀
+bun run build            # produces dist/opencode-auto (native platform)
+bun run build -- --target bun-windows-x64   # cross-compile; the artifact gets a platform suffix
 ```
 
-产物是单个自包含文件(模板与 SDK 已嵌入),拷贝到任意机器即可运行。
-运行 `run` 时只需目标机器装有 `opencode` CLI——缺省会自动启动并托管一个
-`opencode serve` 实例;也可提供已有 server 地址复用外部实例(见
-[opencode server 与 agent 选择](#opencode-server-与-agent-选择))。
+The artifact is a single self-contained file (templates and SDK embedded) — copy it to any machine and run.
+Running `run` only requires the `opencode` CLI on the target machine: by default the tool automatically starts
+and manages an `opencode serve` instance; you can also point it at an existing server address to reuse an
+external instance (see [opencode server and agent selection](#opencode-server-and-agent-selection)).
 
-也可以不构建,直接用 Bun 运行源码:
+You can also skip the build and run the sources directly with Bun:
 
 ```sh
-bun run packages/auto/src/index.ts <子命令> ...
+bun run packages/auto/src/index.ts <subcommand> ...
 ```
 
-## 使用
+## Usage
 
 ```sh
-opencode-auto init [dir]     # 初始化项目配置层:把项目配置固化到 .opencode/auto/config.json,生成 opencode.json、.opencode/agent/auto.md 模板与 .opencode/auto/brief.md 项目简报桩,在 AGENTS.md 幂等同步单一 opencode-auto 标记块,并把 driver 工作目录(tmp/、.auto/)、本地私有文件(/.gitignore、/.env、/AGENTS.md、/opencode.json、模型注册表项目层 /.opencode/auto/models.json)与目录树内的嵌套 git 仓库写进 .gitignore;不写 docs/——轮次目录由 plan 建立
-opencode-auto amend [dir] --<键选项> <值> ...   # 只改写给出的配置键,其余保留(至少一个键;无配置即拒绝),见"修订(amend)"
-opencode-auto fix [dir] [-f]  # 按规则修复配置层: 退役键删除/更名/迁入 brief.md,契约、AGENTS.md 块、.gitignore 与配置对齐,见"配置修复(fix)"
-opencode-auto plan [dir] [-p "<规划输入>" | --file <路径>]   # 规划当前阶段的任务并停在执行前供人工评审;轮未建立时先建轮(打印轮首门禁),轮完成后经轮关闭检查开下一轮(见"规划与轮次生命周期(plan)")
-opencode-auto run [dir]      # 按当前阶段的任务索引逐任务自动执行(agent/提交等语义来自项目配置)
-opencode-auto reset [dir]    # 反初始化(与 init 互逆): 移除 init 写出的配置层产物,把工作区还原至未初始化状态
-opencode-auto check [dir]    # 检查 AGENTS.md 与任务文档中违背验证/测试/提交执行权原则的描述,全量扫描 docs/ 活文档失效引用,并提示 AGENTS.md 标记块缺失或过期
-opencode-auto status [dir]   # 打印项目配置摘要与只读的轮次 → 阶段 → 任务 → 子任务树
-opencode-auto models [dir] [--probe]   # 打印模型注册表的生效表(各阶段类型 × 会话角色的档位、候选与当前可用性);--probe 另向每个列入的模型发送恢复探测提示词(可选、花费 token),见"模型注册表一览(models)"
+opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json, the .opencode/agent/auto.md template and the .opencode/auto/brief.md project brief stub, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by plan
+opencode-auto amend [dir] --<key-option> <value> ...   # rewrite only the given config keys, keep the rest (at least one key; refused without a config), see "Amending (amend)"
+opencode-auto fix [dir] [-f]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config, see "Config fix (fix)"
+opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # plan the current phase's tasks and stop before execution for human review; establishes the round first when none exists (printing the round-start gate), and after a round completes runs the round-close check to open the next one (see "Planning and the round lifecycle (plan)")
+opencode-auto run [dir]      # execute tasks one by one following the current phase's task index (agent/commit semantics come from the project config)
+opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state
+opencode-auto check [dir]    # scan AGENTS.md and task documents for statements violating the verification/test/commit execution-rights principles, full-scan live docs/ documents for dead references, and note a missing or stale AGENTS.md marker block
+opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
+opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
 ```
 
-新项目流程(`init` → `plan` → 填写并提交 → `plan`(可选)→ `run`):
+New-project flow (`init` → `plan` → fill in and commit → `plan` (optional) → `run`):
 
 ```sh
-opencode-auto init <dir> --phases "admtvk"   # 1. 固化项目配置(init 只写配置层,不建轮次目录)
-opencode-auto plan <dir>                      # 2. 建立 docs/R-01/(阶段索引 + 阶段目录 + 轮简报桩),停在轮首门禁
-#                                              3. 人工:审阅轮次设置、填写 docs/R-01/round.md(目标/验收/发布判据),提交
-opencode-auto plan <dir> -p "首轮:把 legacy/pkg 迁移到 app/"   # 4. 可选:带规划输入规划 P01(也可手工在 tasks.md 列任务)
-opencode-auto run <dir>                       # 5. 逐阶段执行;每轮完成后填 ## Close 再 plan 开下一轮
+opencode-auto init <dir> --phases "admtvk"   # 1. fix the project config (init writes only the config layer, no round directories)
+opencode-auto plan <dir>                      # 2. establish docs/R-01/ (phase index + phase directories + round brief stub), stop at the round-start gate
+#                                              3. by hand: review the round setup, fill in docs/R-01/round.md (goals/acceptance/release criteria), commit
+opencode-auto plan <dir> -p "First round: migrate legacy/pkg into app/"   # 4. optional: plan P01 with a planning input (tasks can also be listed by hand in tasks.md)
+opencode-auto run <dir>                       # 5. execute phase by phase; after each round fills ## Close, run plan again to open the next round
 ```
 
-`m` 模式(缺省单次运行)同理:`init` → `plan`(建立隐式单阶段 `R-01/P01-implement`,停在轮首门禁)→
-提交 → `plan -p`(可选,见[由 AI 规划任务](#由-ai-规划任务))或手工在 `tasks.md` 列任务 → `run`。
-`init` 的 `-p`(改由直接编辑 `.opencode/auto/brief.md`)与 `--amend`(改用 `amend` 子命令)已退役;
-`continue` 子命令已退役(开下一轮就是 `plan`)。
+The `m` mode (the default single run) works the same way: `init` → `plan` (establishes the implicit single
+phase `R-01/P01-implement`, stops at the round-start gate) → commit → `plan -p` (optional, see
+[Planning tasks with AI](#planning-tasks-with-ai)) or list tasks by hand in `tasks.md` → `run`. `init`'s
+`-p` (edit `.opencode/auto/brief.md` directly instead) and `--amend` (use the `amend` subcommand instead) are
+retired; the `continue` subcommand is retired too (opening the next round is simply `plan`).
 
-`init` 对已存在的 opencode.json 一律跳过;`.opencode/agent/auto.md` 与内置
-模板不一致时总是替换,保证 agent 契约为最新版本。轮次目录(`docs/R-NN/`)不是 init 的产物——
-由 `plan` 建立(见[规划与轮次生命周期(plan)](#规划与轮次生命周期plan))。
+`init` always leaves an existing opencode.json untouched; `.opencode/agent/auto.md` is always replaced when
+it differs from the built-in template, so the agent contract is the latest version. Round directories
+(`docs/R-NN/`) are not an init product — `plan` establishes them (see
+[Planning and the round lifecycle (plan)](#planning-and-the-round-lifecycle-plan)).
 
-`init` 写 `.opencode/auto/config.json` 的语义是**无状态全量覆盖**:产出仅由本次执行
-传入的参数决定,未给出的键一律回落内置缺省,不与磁盘上的旧配置做增量合并。于是
-"干净环境跑一次无参 `init`"与"带参 `init` 之后再跑一次无参 `init`"产出逐字节一致
-——单次 `init` 即可得到确定状态,无需前置清理;相同参数连跑多次结果恒定。想只改一
-两个键而保留其余既有值,用 `amend` 子命令(见[修订(amend)](#修订amend));只想把
-契约 / AGENTS.md 块刷新到与现有配置一致、或清掉已退役键,用 `fix`(见
-[配置修复(fix)](#配置修复fix))——二者都不会把其余键重置为缺省。
+The semantics of `init` writing `.opencode/auto/config.json` are a **stateless full overwrite**: the output
+is decided solely by the arguments passed to this invocation; keys not given always fall back to the built-in
+defaults, with no incremental merge against the old config on disk. So "run a no-argument `init` in a clean
+environment" and "run a no-argument `init` after a parameterized `init`" produce byte-identical output — a
+single `init` reaches a deterministic state, no prior cleanup needed; repeated runs with the same arguments
+are constant. To change one or two keys and keep the rest of the existing values, use the `amend` subcommand
+(see [Amending (amend)](#amending-amend)); to only refresh the contract / AGENTS.md block to match the current
+config, or to clear retired keys, use `fix` (see [Config fix (fix)](#config-fix-fix)) — neither ever resets the
+remaining keys to defaults.
 
-**breaking 变更**:`run` 不再接受 `-m/--mode`、`--agent`、`--context-limit`、
-`--subtask`、`--idle-time`、`--idle-max`、`--commit`、`--test-by-driver`、
-`--handover-test`、`--auto-number`、`--no-auto-number`、`--phases`、`--parallel`
-——任一出现即用法错误(退出码 1),报文
-给出修订指引(`opencode-auto amend <dir> --<flag> <值>`,或直接编辑配置文件);这些
-选项已固化为项目属性,见下节。`--implement-file`/`--implement-prompt` 已退役,任何命令
-出现即用法错误,见[由 AI 规划任务](#由-ai-规划任务)。
+**Breaking change**: `run` no longer accepts `-m/--mode`, `--agent`, `--context-limit`, `--subtask`,
+`--idle-time`, `--idle-max`, `--commit`, `--test-by-driver`, `--handover-test`, `--auto-number`,
+`--no-auto-number`, `--phases`, `--parallel` — any of them appearing is a usage error (exit code 1), and the
+message points at how to amend (`opencode-auto amend <dir> --<flag> <value>`, or edit the config file
+directly); these options are fixed as project attributes, see the next section. `--implement-file`/
+`--implement-prompt` are retired; appearing on any command is a usage error — see
+[Planning tasks with AI](#planning-tasks-with-ai).
 
-## 项目配置(.opencode/auto/config.json)
+## Project configuration (.opencode/auto/config.json)
 
-"决定会话被如何告知、提交语义如何运作"的宪法级选项在 `init` 时固化到
-`.opencode/auto/config.json`:版本化、随仓库共享、人工可编辑。`run` 每次启动读取
-该文件并打印一行配置摘要,`status` 同样打印。选项归属的判别标准:**改它需要同时
-改 AGENTS.md / 任务文档 / 契约的表述,或它描述的是模型/项目属性 → init;只描述本次
-运行怎么跑、人怎么盯 → run。**
+Constitutional options — those deciding "how sessions are instructed and how commit semantics operate" —
+are fixed at `init` time into `.opencode/auto/config.json`: versioned, shared with the repository,
+human-editable. `run` reads the file at every start and prints a one-line config summary; `status` prints the
+same. The test for which side an option belongs on: **changing it requires also changing the wording of
+AGENTS.md / task documents / the contract, or it describes a model/project attribute → init; it only
+describes how this run executes and how a person watches it → run.**
 
-| 键 | 值域 | 缺省 | 说明 |
+| Key | Value range | Default | Description |
 | --- | --- | --- | --- |
-| `mode` | 已注册模式名 | `migrate` | 提示词级场景模式,见[模式层](#模式层-m-mode) |
-| `agent` | `opencode` / `claude` | `opencode`(不写键) | 驱动全部会话的编码 agent(M6.1);`OPENCODE_AUTO_AGENT` 可按次覆盖。旧版本此键为契约名(如 `auto`),读到即报错并提示删除该键(`fix` 代删)——契约恒为 `.opencode/agent/auto.md`。见[agent 选择](#opencode-server-与-agent-选择) |
-| `contextLimit` | 正整数(千 tokens) | `64` | 上下文预算基线:会话复用(需 `OPENCODE_AUTO_REUSE_SESSION=on`)的已用量阈值为其一半(缺省 32k);`subtask` 为 `ondemand` 时交接阈值为 2 倍 |
-| `subtask` | `off` / `auto` / `ondemand` | `auto` | 子任务划分,见[执行流水线](#执行流水线) |
-| `idleTime` | 1..120(分钟) | `10` | driver 托管脚本(test 脚本)的无进度判定窗口;旧键名 `verifyIdle` 在新键缺失时回落读取(`fix` 就地更名) |
-| `idleMax` | 0..1440(分钟,0 = 不设) | `0` | driver 托管脚本的绝对时长上限;旧键名 `verifyMax` 在新键缺失时回落读取(`fix` 就地更名) |
-| `verify` | **已退役** | — | 任务级验收已退役(2026-09-21):存量配置写着 `verify: true` 读入即报错退出 1(删该键——`fix` 代删——把验收规划成任务或用 v 阶段);`false` 或缺省忽略 |
-| `commit` | `true`(**`false` 已退役**) | `true` | 会话后统一提交(git 历史即 AI 变更的审计轨迹);提交是完成条件,写着 `false` 的存量配置读入即报错退出 1(`fix` 删除该键) |
-| `testByDriver` | `true` / `false` | `false` | 编译/测试/构建/lint 等命令由 driver 执行(会话经 `test/` 脚本 + `tmp/test.sh` 标记请求),见[测试执行协议](#测试执行协议--test-by-driver) |
-| `handoverTest` | `true` / `false` | `false` | 测试失败且上下文达限时写交接文档换新会话续跑;须搭配 `testByDriver: true`,否则配置校验失败(退出码 1) |
-| `autoNumber` | `true` / `false` | `true` | 自动编号(缺省启用,`--no-auto-number` 关闭):任务编号(T-NNN)在目标目录永不重复,下一可用编号持久化在 `.auto/next-task`,由阶段规划会话消费,记录缺失时先恢复再继续——见[阶段化流程](#阶段化流程--phases)一节末尾 |
-| `phases` | `admtvk` 的子序列且含 `m`,或含 `implement` 的阶段类型 id 列表(逗号分隔字符串或 JSON 数组) | `"m"` | 阶段化流程(a 分析 → d 设计 → m 迁移实现 → t 测试 → v 验收 → k 知识提炼;列表形态可引用 `.opencode/auto/phases/` 下的自定义类型);`"m"` = 无阶段声明,即隐式单阶段 `docs/R-01/P01-implement`,不开交接会话,任务由人工列出或按规划输入规划(见[由 AI 规划任务](#由-ai-规划任务))。见[阶段化流程](#阶段化流程--phases) |
-| `source` / `destDir` | **已退役** | — | 迁移源与目标是意图、不是配置(2026-09-23,auto-core plans/0052 D2/D3):写进 `.opencode/auto/brief.md`,由规划会话读取。存量配置写着任一键(任何值)读入即报错退出 1,报文给出原值与修法(抄进 brief.md 后删键——`fix` 代为迁入 `## Source` / `## Target` 节并删键);无参 `init` 全量覆盖会丢弃并逐个打印原值。两个键名永久占位,不再复用 |
+| `mode` | A registered mode name | `migrate` | Prompt-level scenario mode, see [Mode layer](#mode-layer--m--mode) |
+| `agent` | `opencode` / `claude` | `opencode` (key not written) | The coding agent that drives every session (M6.1); `OPENCODE_AUTO_AGENT` overrides it per run. In older versions this key held a contract name (e.g. `auto`); reading one is an error telling you to delete the key (`fix` deletes it) — the contract is always `.opencode/agent/auto.md`. See [agent selection](#opencode-server-and-agent-selection) |
+| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline: the used-tokens threshold for session reuse (needs `OPENCODE_AUTO_REUSE_SESSION=on`) is half of it (32k by default); the handover threshold is 2x when `subtask` is `ondemand` |
+| `subtask` | `off` / `auto` / `ondemand` | `auto` | Subtask splitting, see [Execution pipeline](#execution-pipeline) |
+| `idleTime` | 1..120 (minutes) | `10` | The no-progress window for driver-managed scripts (test scripts); the old key name `verifyIdle` is read as a fallback when the new key is missing (`fix` renames it in place) |
+| `idleMax` | 0..1440 (minutes, 0 = no limit) | `0` | The absolute duration cap for driver-managed scripts; the old key name `verifyMax` is read as a fallback when the new key is missing (`fix` renames it in place) |
+| `verify` | **Retired** | — | Task-level acceptance was retired (2026-09-21): an existing config with `verify: true` fails loading with exit 1 (delete the key — `fix` does it — and plan acceptance as tasks or use the v phase); `false` or absent is ignored |
+| `commit` | `true` (**`false` retired**) | `true` | Unified commit after sessions (the git history is the audit trail of AI changes); committing is the completion condition — an existing config with `false` fails loading with exit 1 (`fix` deletes the key) |
+| `testByDriver` | `true` / `false` | `false` | Compile/test/build/lint commands are executed by the driver (sessions request them via a `test/` script + the `tmp/test.sh` marker), see [Test execution protocol](#test-execution-protocol---test-by-driver) |
+| `handoverTest` | `true` / `false` | `false` | On test failure with the context at its limit, write a handover document and continue in a new session; requires `testByDriver: true`, otherwise config validation fails (exit code 1) |
+| `autoNumber` | `true` / `false` | `true` | Auto numbering (on by default, disabled by `--no-auto-number`): task numbers (T-NNN) never repeat in the target directory; the next available number is persisted in `.auto/next-task`, consumed by the phase planning session and recovered first when the record is missing — see the end of [Phased flow](#phased-flow---phases) |
+| `phases` | A subsequence of `admtvk` containing `m`, or a list of phase type ids containing `implement` (comma-separated string or JSON array) | `"m"` | Phased flow (a analysis → d design → m implementation → t test → v acceptance → k knowledge distillation; the list form may reference custom types under `.opencode/auto/phases/`); `"m"` = no phases declared, i.e. the implicit single phase `docs/R-01/P01-implement`, no handover sessions, tasks listed by a person or planned from a planning input (see [Planning tasks with AI](#planning-tasks-with-ai)). See [Phased flow](#phased-flow---phases) |
+| `source` / `destDir` | **Retired** | — | The migration source and target are intent, not config (2026-09-23, auto-core plans/0052 D2/D3): they go into `.opencode/auto/brief.md`, read by the planning sessions. An existing config carrying either key (any value) fails loading with exit 1; the message names the original value and the fix (copy it into brief.md, then delete the key — `fix` migrates it into the `## Source` / `## Target` sections and deletes the key); a no-argument `init` full overwrite drops them and prints each original value. Both key names are tombstoned for good, never reused |
 
-**统一提交**(`commit: true`,缺省):任何会话结束且 driver 完成状态写入(如勾选
-子任务)后,由 driver 递归提交全部改动——先嵌套 `.git` 子仓库、后目标目录所在
-仓库,提交信息为短标签标题行 `T-NNN <label> <任务标题/子任务>`(如
-`T-001 decompose 修复登录`、`T-001 S2 编写 schema`、`T-001 wrapup 修复登录`、
-`T-001 done 修复登录`;trailer `Auto-Task` / `Auto-Stage`,目标仓库另以
-`Auto-Nested` 记录全部嵌套仓库的最终/最新 SHA),git 历史即 AI 变更的审计轨迹、
-回滚粒度 = 会话;**提交是完成条件**(auto-core plans/0021-commit-boundary-design.md):
-统一提交失败一律阻塞停机待人工,任务/子任务/隐藏任务以工作区 clean 基线启动,
-单元启动遇人工遗留脏区也会阻塞(先提交或清理再运行);
-opencode 会话与提交同名,会话列表即任务进度;AI 会话不执行 git commit
-(经 AGENTS.md 提交原则块与 agent 契约约束)。每次统一提交前 driver 先做**引用
-auto-correct**(实验开关 `OPENCODE_AUTO_REF_CHECK=on` 时启用,缺省 off 不做):
-git rename 配对成功的新旧路径机械改写活文档中的旧引用(只配对
-rename,删除类不自动改),并复扫失效引用打 ⚠ 日志(改写随本次提交落账;非 git
-目录空转)。`false` 关闭后改动留在工作区。
+**Unified commit** (`commit: true`, the default): after any session ends and the driver has finished its
+state writes (e.g. ticking a subtask), the driver recursively commits all changes — nested `.git`
+repositories first, then the repository containing the target directory — with the short-label subject line
+`T-NNN <label> <task title/subtask>` (e.g. `T-001 decompose fix login`, `T-001 S2 write schema`, `T-001 wrapup
+fix login`, `T-001 done fix login`; trailers `Auto-Task` / `Auto-Stage`, and in the target repository
+`Auto-Nested` records the final/latest SHA of every nested repository). The git history is the audit trail of
+AI changes and the rollback granularity is one session; **committing is the completion condition** (auto-core
+plans/0021-commit-boundary-design.md): a failed unified commit always blocks and halts for human attention;
+tasks/subtasks/hidden tasks start from a clean-worktree baseline, and a unit starting on a person's leftover
+dirty area also blocks (commit or clean up first, then run). The opencode session shares the commit's name, so
+the session list reads as task progress; AI sessions never run git commit (enforced by the AGENTS.md
+commit-principle block and the agent contract). Before every unified commit the driver first runs
+**reference auto-correct** (enabled by the experiment switch `OPENCODE_AUTO_REF_CHECK=on`, default off, no-op):
+old-new path pairs that git rename matched mechanically rewrite the old references in live documents (rename
+pairs only — deletions are never rewritten automatically), then a re-scan logs ⚠ for dead references (the
+rewrite is recorded with that commit; a no-op outside git). Turning it off with `false` left changes in the
+worktree.
 
-写入通道有四条:
+There are four write channels:
 
-1. **init(缺省,全量覆盖)**:`opencode-auto init <dir> [--<flag> <值> ...]`——产出
-   仅由本次参数决定,未给出的键强制回落缺省值(无选项的手编键 `acceptanceGate` /
-   `build` 保留)。既有文件里的已退役键(`commit: false`、`verify: true`、契约名
-   `agent`、`source`、`destDir`)反正会被覆盖掉,故基线读取容忍它们:init 逐个打印
-   `⚠ full overwrite drops the retired key <键> = <原值>` 后照常写出(auto-core
-   plans/0052 D4)——存量 `commit: false` 不再挡住清除它的那次 init;
-2. **amend(增量修订)**:`opencode-auto amend <dir> --<flag> <值>`——仅命令行显式
-   给出的键被改写,其余保留既有值;裸选项取该键缺省档(如 `amend --test-by-driver`
-   即 `testByDriver: true`),见[修订(amend)](#修订amend)。旧写法
-   `init <dir> --amend --<flag> <值>` 与 `continue` 子命令均已退役(出现即报文指向
-   `amend` / `plan`)。amend 会把已退役键原样带过去,故严格装载,遇之即失败并指向 `fix`;
-3. **fix(按规则修复)**:`opencode-auto fix <dir>`——只修"读不进来或会悄悄失义"
-   的键(已退役键删除/更名/迁入 brief.md),其余键原样保留,见
-   [配置修复(fix)](#配置修复fix);
-4. **直接编辑** `.opencode/auto/config.json`(init 每次写出全量键,人工编辑同样
-   合法)。
+1. **init (default, full overwrite)**: `opencode-auto init <dir> [--<flag> <value> ...]` — the output is
+   decided solely by this invocation's arguments; keys not given are forced back to defaults (hand-edited
+   keys without options, `acceptanceGate` / `build`, are preserved). Retired keys in the existing file
+   (`commit: false`, `verify: true`, a contract-name `agent`, `source`, `destDir`) are overwritten anyway, so
+   the baseline read tolerates them: init prints `⚠ full overwrite drops the retired key <key> = <value>`
+   for each and writes as usual (auto-core plans/0052 D4) — an existing `commit: false` no longer blocks the
+   init that clears it;
+2. **amend (incremental revision)**: `opencode-auto amend <dir> --<flag> <value>` — only the keys explicitly
+   given on the command line are rewritten, the rest keep their existing values; a bare flag takes the key's
+   default (e.g. `amend --test-by-driver` means `testByDriver: true`), see [Amending (amend)](#amending-amend).
+   The old spellings `init <dir> --amend --<flag> <value>` and the `continue` subcommand are retired (either
+   appearing gets a message pointing at `amend` / `plan`). amend carries retired keys through as-is, so it
+   loads strictly, fails on them and points at `fix`;
+3. **fix (repair by rule)**: `opencode-auto fix <dir>` — repairs only keys that "fail to load or silently
+   lose their meaning" (retired keys deleted/renamed/migrated into brief.md), every other key kept verbatim,
+   see [Config fix (fix)](#config-fix-fix);
+4. **Edit** `.opencode/auto/config.json` directly (init writes the full key set every time; manual editing is
+   equally legal).
 
-坏 JSON / 键值越界 / `mode` 未注册 → `run` 与 `init` 均以退出码 1 失败,报错指明
-键名与期望值域(严格失败优于静默回落);未知键忽略(前向兼容)。严格失败若属
-`fix` 能修的一类(已退役键、旧键名、仅有旧版 `.auto/config.json`),`run` /
-`amend` / `init` 的报文末尾追加一行
-`fix: opencode-auto fix <dir>`,`status` 在 ⚠ 行下同样打印这一行。
+Bad JSON / out-of-range values / an unregistered `mode` → both `run` and `init` fail with exit code 1, the
+error naming the key and its expected range (strict failure over silent fallback); unknown keys are ignored
+(forward compatible). When the strict failure is of a class `fix` can repair (retired keys, old key names,
+only the legacy `.auto/config.json`), the `run` / `amend` / `init` message appends the line
+`fix: opencode-auto fix <dir>`, and `status` prints the same line under its ⚠ line.
 
-**init 先全量校验、再写盘**(auto-core plans/0052 D7):选项取值、模式、前缀护栏
-(只读:不丢已完成阶段、不删已有工作的阶段目录;阶段索引的重同步归 `plan`)、
-目标目录提示词库覆盖件(`.opencode/auto/prompts/`)与意图包的校验全部在第一次写盘之前完成——任一失败即退出码 1,配置层原样不动(不写
-config.json、不刷新契约与 AGENTS.md 块、不写 brief.md)。目标目录在 git 仓库内时还有
-一道**提交能力前置校验**:统一提交是完成条件,仓库无法提交(未配置
-user.name/user.email 等提交身份)即拒绝(退出码 1,报文给出配置方法)——先
-`git config --global user.name/user.email`(或仓库内去掉 `--global`)再重跑。`run` 期间该文件
-与 opencode.json、AGENTS.md 一起置为只读,人工修订请在 run 外进行。
+**init validates everything, then writes** (auto-core plans/0052 D7): option values, modes, the prefix
+guardrail (read-only: no completed phase is lost, no phase directory containing existing work is deleted;
+re-syncing the phase index belongs to `plan`), the target directory's prompt-library overrides
+(`.opencode/auto/prompts/`) and the intent packs are all validated before the first write — any failure is
+exit code 1 with the config layer untouched (no config.json, no contract or AGENTS.md block refresh, no
+brief.md). When the target directory is inside a git repository there is also a **commit-capability
+prerequisite check**: the unified commit is the completion condition, so a repository that cannot commit (no
+user.name/user.email commit identity configured) is refused (exit code 1, the message says how to configure
+it) — run `git config --global user.name/user.email` first (or drop `--global` inside the repository) and
+retry. During `run` the file is made read-only together with opencode.json and AGENTS.md; make manual
+revisions outside a run.
 
-兼容与迁移:
+Compatibility and migration:
 
-| 场景 | 行为 |
+| Scenario | Behavior |
 | --- | --- |
-| 旧项目(仅 `.auto/config.json` 有 mode) | 新文件缺失时回落读取旧值,run 打提示"运行 `fix` 写出完整配置"(`fix` 以旧 mode + 缺省值写出新文件);init / fix 写出新文件后回落终止(旧文件不删除,留在 gitignore 内自然沉没,由 `reset` 一并清理) |
-| 旧脚本 `run -m xxx` / `run --commit` 等 | 退出码 1 + 修订指引(breaking) |
-| 已退役选项 `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | 任何命令出现即退出码 1 + 退役说明(验收改为规划出的任务,报告结论行 `Result: FAIL` 停跑) |
-| 已退役选项 `--source-dir` / `--source-path` / `--dest-dir` | 任何命令出现即退出码 1 + 退役说明(迁移源与目标是意图,写进 `.opencode/auto/brief.md`) |
-| 存量配置含 `source` / `destDir` | `run` / `amend` / `init` 严格失败(`status` 打 ⚠ 行),报文给出原值与修法(抄进 brief.md 后删键)并指向 `fix`——`fix` 把原值迁入 brief.md 的 `## Source` / `## Target` 节后删键;无参 `init` 丢弃并打印原值后照常覆盖 |
-| 已退役选项 `init -p` / `--prompt`(init 不再写 brief)与 `--amend` | 出现即退出码 1 + 退役说明(前者指向 `.opencode/auto/brief.md` 与 `plan -p`,后者指向 `amend` 子命令);已退役子命令 `continue` 同样出现即退出码 1 + 退役说明(指向 `plan`) |
-| 未知的 `--` 选项(含拼错,如 `--next`) | 退出码 1 + 近似名提示(breaking;此前被静默忽略)。`check` / `status` 只接受目录参数,出现任何选项即拒绝;`reset` / `fix` 只接受目录参数与 `-f` |
-| 重复 `init`(无参数) | **全键回落缺省值**(breaking:此前为"配置不变");模板与标记块照常幂等 |
-| `init --test-by-driver true` 等带参 init | 给出的键按值写入,**未给出的键回落缺省** |
-| `amend --test-by-driver true` | 仅改写显式给出的键,其余保留 |
-| 覆盖已存在配置且工作区脏 | 退出码 1 + 未提交文件清单(含嵌套仓库/子模块);`-f`/`--force` 跳过 |
-| 覆盖已存在配置且在交互式终端 | 提示确认 `[y/N]`,非 `y` 即取消且不做任何改动;非 TTY(CI/脚本)直接覆盖 |
-| 存量 PLAN.md(含 `verify:` / `verified:` / `final:` 字段行、`T-F<k>` 任务) | M3.4 起不再读取;把任务迁为任务单元(见[任务单元格式](#任务单元格式))后继续 |
-| 中途切换 `subtask` | 已注入检查项的任务照旧从勾选状态续跑(进度按任务记录,不跨任务混淆);新任务按新档执行;不建议中途切换 |
-| 中途换 `mode` | 仅提示词文案变化(模式不进调度状态机) |
-| 中途 `commit` off | 已不可能:`commit: false` 于 2026-09-15 退役,读到即报错退出 1(`fix` 删除该键且保留其余键;或手删/改 `true`,或无参 `init` 全量覆盖——丢弃并打印该键) |
+| Old project (only `.auto/config.json` has a mode) | When the new file is missing, the old value is read as a fallback and run prints a hint to "run `fix` to write out the full config" (`fix` writes the new file from the old mode + defaults); once init / fix has written the new file the fallback ends (the old file is not deleted — it sits ignored by git until `reset` cleans it up) |
+| Old scripts like `run -m xxx` / `run --commit` | Exit code 1 + amend guidance (breaking) |
+| Retired options `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | Appearing on any command: exit code 1 + retirement notice (acceptance becomes planned tasks; the report result line `Result: FAIL` stops the run) |
+| Retired options `--source-dir` / `--source-path` / `--dest-dir` | Appearing on any command: exit code 1 + retirement notice (the migration source and target are intent and go into `.opencode/auto/brief.md`) |
+| Existing config containing `source` / `destDir` | `run` / `amend` / `init` fail strictly (`status` prints a ⚠ line); the message names the original value and the fix (copy into brief.md, then delete the key) and points at `fix` — `fix` migrates the value into brief.md's `## Source` / `## Target` sections and deletes the key; a no-argument `init` drops them, prints the original values, and overwrites as usual |
+| Retired options `init -p` / `--prompt` (init no longer writes the brief) and `--amend` | Appearing: exit code 1 + retirement notice (the former points at `.opencode/auto/brief.md` and `plan -p`, the latter at the `amend` subcommand); the retired `continue` subcommand likewise: exit code 1 + retirement notice (pointing at `plan`) |
+| Unknown `--` options (including misspellings like `--next`) | Exit code 1 + near-name suggestions (breaking; previously silently ignored). `check` / `status` accept only a directory argument and reject any option; `reset` / `fix` accept only a directory argument and `-f` |
+| Repeated `init` (no arguments) | **Every key falls back to its default** (breaking: previously "config unchanged"); templates and the marker block stay idempotent |
+| Parameterized init like `init --test-by-driver true` | Given keys are written with their values, **keys not given fall back to defaults** |
+| `amend --test-by-driver true` | Only the explicitly given keys are rewritten, the rest are kept |
+| Overwriting an existing config with a dirty worktree | Exit code 1 + a list of uncommitted files (including nested repositories/submodules); `-f`/`--force` skips it |
+| Overwriting an existing config on an interactive terminal | Asks for confirmation `[y/N]`; anything but `y` cancels with no changes; non-TTY (CI/scripts) overwrites directly |
+| An existing PLAN.md (with `verify:` / `verified:` / `final:` field lines, `T-F<k>` tasks) | Not read since M3.4; migrate the tasks into task units (see [Task unit format](#task-unit-format)) to continue |
+| Switching `subtask` mid-run | Tasks whose checklist was already injected resume from their ticked state (progress is recorded per task, never mixed across tasks); new tasks run under the new setting; switching mid-run is discouraged |
+| Changing `mode` mid-run | Only the prompt copy changes (modes do not enter the scheduling state machine) |
+| Turning `commit` off mid-run | No longer possible: `commit: false` was retired on 2026-09-15; reading it fails with exit 1 (`fix` deletes the key and keeps the rest; or delete it by hand / set `true`, or a no-argument `init` full overwrite — dropping and printing the key) |
 
-组合要点:`--dryrun` 读配置的 `agent` / `contextLimit`,commit / subtask 不参与。
+Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; commit / subtask do not take part.
 
-### init 的选项(固化与修订)
+### init options (fixing and amending)
 
-| 选项 | 说明 |
+| Option | Description |
 | --- | --- |
-| `-m` / `--mode <name>` | 场景模式,写入配置的 `mode` 键(优先级: 显式值 > 既有配置值 > 缺省 `migrate`;未注册名为用法错误退出码 1,报文列出当前支持的模式);详见[模式层](#模式层-m-mode) |
-| `--agent opencode\|claude` | 驱动会话的编码 agent,写入配置的 `agent` 键(缺省 `opencode`,不写键;`--amend --agent opencode` 删除该键);其他取值为用法错误;见[agent 选择](#opencode-server-与-agent-选择) |
-| `--phases <admtvk 子序列含 m \| 阶段类型列表>` | 阶段化流程,写入配置的 `phases` 键(缺省 `"m"` = 单次运行);已有完成阶段时修订须满足前缀护栏(已完成阶段构成新值的前缀),否则报错并指引人工回退阶段索引。见[阶段化流程](#阶段化流程--phases) |
-| `--subtask [mode]` | 子任务划分,写入配置(缺省/裸选项 `auto`):`auto` 自动分解;`off` 关闭划分,单会话完成整个任务;`ondemand` 上下文达到 `contextLimit` 的 2 倍时交接续跑。见[执行流水线](#执行流水线) |
-| `--idle-time [1-120]` | driver 托管脚本的无进度判定窗口(分钟,缺省/裸选项 10;旧名 `--verify-idle` 已更名,出现即报错指引):driver 轮询输出文件(`tmp/test.<n>.out`,stdout/stderr 合并单文件)的大小,持续无增长达到该窗口才终止脚本(退出码记 124);只要输出持续增长,运行时长不受限 |
-| `--idle-max [1-1440]` | driver 托管脚本的绝对运行时长上限(分钟,缺省/裸选项不设;旧名 `--verify-max` 已更名):兜底防止脚本无限循环输出;设为正整数时无论是否有输出,总时长超限即终止 |
-| `--commit [true]` | 会话后统一提交,写入配置(缺省/裸选项 `true`)。**`false` 与旧别名 `none` 已于 2026-09-15 退役**——统一提交是完成条件(单元 clean 门禁/SHA 基线/恢复回滚均以提交恒开为前提),出现即用法错误退出 1;存量配置里的 `commit: false` 按坏文件严格失败,请删该键或改 `true` |
-| `--context-limit [n]` | 上下文预算基线(单位: 千 tokens,缺省/裸选项 64),写入配置;上一会话已用量达到其一半(缺省 32k)即新建会话,与 50% 占比阈值同时生效 |
-| `--test-by-driver [true]` | 编译/测试/构建/lint 等命令的执行权收归 driver(缺省/裸选项 `false`),写入配置:执行类会话不在会话内直接运行这类命令,改为把命令写成脚本放 `test/` 目录、把脚本路径写入 `tmp/test.sh` 请求 driver 执行,退出码与输出文件反馈回会话由 AI 直读判断。该开关同时决定测试执行原则块是否进入 AGENTS.md、测试协议段是否进入 agent 契约与执行类提示词。详见[测试执行协议](#测试执行协议--test-by-driver) |
-| `--handover-test [true]` | 需搭配 `--test-by-driver`(否则用法错误退出码 1),写入配置:测试失败且会话上下文达到 `contextLimit` 时,要求 AI 写交接文档后换新会话续跑,防止在超大上下文中反复试错 |
-| `--auto-number` / `--no-auto-number` | 自动编号开关,写入配置的 `autoNumber` 键(缺省 `--auto-number` = 启用,`--no-auto-number` 为关闭用退出开关;两开关同现且均未带 `=false` 为用法错误):启用后任务编号(T-NNN)在目标目录永不重复,阶段规划会话自 `.auto/next-task` 记录续接编号,记录缺失时先恢复再继续。`phases = "m"` 的规划会话(见[由 AI 规划任务](#由-ai-规划任务))同样自该记录续接。详见[阶段化流程](#阶段化流程--phases) |
-| `-f` / `--force` | 跳过覆盖确认与工作区干净度检查,供 CI 与自动化脚本(与 `reset` / `fix` 共用);`amend` / `run` 出现即用法错误(amend 不丢弃任何键,无覆盖确认可跳) |
+| `-m` / `--mode <name>` | Scenario mode, written to the config's `mode` key (precedence: explicit value > existing config value > default `migrate`; an unregistered name is a usage error with exit code 1, the message listing the currently supported modes); see [Mode layer](#mode-layer--m--mode) |
+| `--agent opencode\|claude` | The coding agent driving the sessions, written to the config's `agent` key (default `opencode`, key not written; `--amend --agent opencode` deletes the key); any other value is a usage error; see [agent selection](#opencode-server-and-agent-selection) |
+| `--phases <admtvk subsequence containing m \| phase type list>` | Phased flow, written to the config's `phases` key (default `"m"` = single run); when completed phases exist, an amendment must satisfy the prefix guardrail (the completed phases form a prefix of the new value), otherwise it errors and points at rolling back the phase index by hand. See [Phased flow](#phased-flow---phases) |
+| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` decomposes automatically; `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
+| `--idle-time [1-120]` | The no-progress window for driver-managed scripts (minutes, default/bare flag 10; the old name `--verify-idle` was renamed — appearing errors with guidance): the driver polls the size of the output file (`tmp/test.<n>.out`, stdout/stderr merged into one file) and terminates the script only after no growth is sustained for the window (exit code recorded as 124); as long as output keeps growing, the runtime is unlimited |
+| `--idle-max [1-1440]` | The absolute runtime cap for driver-managed scripts (minutes, default/bare flag unset; the old name `--verify-max` was renamed): a backstop against scripts looping forever while printing; when set to a positive integer, exceeding the total duration terminates the script regardless of output |
+| `--commit [true]` | Unified commit after sessions, written to the config (default/bare flag `true`). **`false` and the old alias `none` were retired on 2026-09-15** — the unified commit is the completion condition (the unit clean gate / SHA baseline / recovery rollback all assume committing is always on); appearing is a usage error with exit 1; an existing `commit: false` fails strictly as a bad file — delete the key or set `true` |
+| `--context-limit [n]` | The context budget baseline (unit: thousand tokens, default/bare flag 64), written to the config; a new session starts once the previous session's used tokens reach half of it (32k by default), effective alongside the 50% share threshold |
+| `--test-by-driver [true]` | Execution rights for compile/test/build/lint commands move to the driver (default/bare flag `false`), written to the config: execution sessions no longer run such commands in-session; instead they write the command as a script in `test/`, write the script path into `tmp/test.sh` to request execution by the driver, and the exit code and output file are fed back for the AI to read and judge directly. The switch also decides whether the test-execution principle block enters AGENTS.md and whether the test protocol section enters the agent contract and execution prompts. See [Test execution protocol](#test-execution-protocol---test-by-driver) |
+| `--handover-test [true]` | Must be combined with `--test-by-driver` (otherwise a usage error, exit code 1), written to the config: when a test fails and the session context reaches `contextLimit`, the AI is asked to write a handover document and continue in a new session, preventing repeated trial-and-error inside a bloated context |
+| `--auto-number` / `--no-auto-number` | Auto numbering switch, written to the config's `autoNumber` key (default `--auto-number` = on, `--no-auto-number` is the disabling toggle; both switches present without `=false` is a usage error): with it on, task numbers (T-NNN) never repeat in the target directory; the phase planning session continues numbering from the `.auto/next-task` record and recovers it first when missing. The `phases = "m"` planning session (see [Planning tasks with AI](#planning-tasks-with-ai)) also continues from that record. See [Phased flow](#phased-flow---phases) |
+| `-f` / `--force` | Skip the overwrite confirmation and the clean-worktree check, for CI and automation scripts (shared with `reset` / `fix`); on `amend` / `run` it is a usage error (amend discards no keys, so there is no overwrite confirmation to skip) |
 
-以上写入配置的选项在 `init`(缺省即全量覆盖)下"未给出即回落缺省值";"显式给出的键才被改写"
-是 `amend` 子命令的语义(其 `-p`、`-f`、`--amend` 均为用法错误)。项目简报
-`.opencode/auto/brief.md` 是独立文件:`init` 在文件缺失时写项目简报桩,既有文件保留
-(不随配置的全量覆盖被清空);要给意图就直接编辑它——`init -p` 已退役(出现即报文指向
-该文件与 `plan -p`)。`--server` 已随 init 去 AI 化移除(init 不再启动会话)。
-init 不写 `docs/`(轮次目录由 `plan` 建立),也不启动任何 AI 会话。
+Under `init` (the default full overwrite), the config-writing options above mean "not given falls back to the
+default"; "only explicitly given keys are rewritten" is the `amend` subcommand's semantics (its `-p`, `-f`,
+`--amend` are all usage errors). The project brief `.opencode/auto/brief.md` is a separate file: `init` writes
+the project brief stub when the file is missing and keeps an existing one (it is not cleared by the config's
+full overwrite); to supply intent, edit it directly — `init -p` is retired (appearing gets a message pointing
+at this file and `plan -p`). `--server` was removed from init along with its de-AI-ification (init starts no
+sessions). init writes nothing under `docs/` (round directories are established by `plan`) and starts no AI
+sessions.
 
-### 修订(amend)
+### Amending (amend)
 
-`opencode-auto amend [dir] --<键选项> <值> ...` 改写给出的配置键,其余键保留既有值
-(auto-core plans/0052 D25;旧写法 `init --amend` 已退役,并入本命令),接受的键选项与
-取值同 init(`-m/--mode`、`--agent`、`--subtask`、`--idle-time`、`--idle-max`、`--commit`、
-`--context-limit`、`--phases`、`--test-by-driver`、`--handover-test`、
-`--auto-number`/`--no-auto-number`、`--wrapup`/`--no-wrapup`、`--parallel`),值域
-校验、`handoverTest` 搭配校验、阶段索引前缀护栏与 init 同源。
+`opencode-auto amend [dir] --<key-option> <value> ...` rewrites the given config keys and keeps the rest at
+their existing values (auto-core plans/0052 D25; the old spelling `init --amend` is retired, folded into this
+command). It accepts the same key options and values as init (`-m/--mode`, `--agent`, `--subtask`,
+`--idle-time`, `--idle-max`, `--commit`, `--context-limit`, `--phases`, `--test-by-driver`,
+`--handover-test`, `--auto-number`/`--no-auto-number`, `--wrapup`/`--no-wrapup`, `--parallel`); value-range
+validation, the `handoverTest` pairing check and the phase index prefix guardrail share their code with init.
 
-- **只收配置键**:`-p` 用法错误(brief 不是配置,直接编辑 `.opencode/auto/brief.md`);
-  `-f` 用法错误(amend 不丢弃任何键,无覆盖确认与干净度闸门可跳);`--amend` 用法错误
-  (冗余)。
-- **至少一个键**:一个键选项都没给即用法错误,报文指向 `fix`(只想把契约 /
-  AGENTS.md 块刷新到与现有配置一致,用 `fix`)。
-- **无配置即拒绝**:目标目录没有 `.opencode/auto/config.json` 时退出码 1、指向
-  `init`(仅有旧版 `.auto/config.json` 时另指向 `fix`,它按旧 mode 写出完整配置)。
-- **严格装载**:既有配置读不进来(已退役键、越界值等)即失败,不会把坏键带过去;
-  属 `fix` 能修的一类时报文末尾追加 `fix:` 行。
-- **写什么**:config.json、agent 契约与 AGENTS.md 标记块(二者由配置渲染)——不碰
-  轮次目录:改 `--phases` 时只做只读前缀护栏,索引与配置的差异作为漂移留给 `plan`
-  重同步;`opencode.json`、`.gitignore` 与 brief.md 桩归 `init` / `fix` 管,amend 不碰。
-- 成功时打印 `✓ amended (<给出的选项>)`,改动留在工作区,不提交——审阅后自行提交。
+- **Config keys only**: `-p` is a usage error (the brief is not config — edit `.opencode/auto/brief.md`
+  directly); `-f` is a usage error (amend discards no keys, there is no overwrite confirmation or cleanliness
+  gate to skip); `--amend` is a usage error (redundant).
+- **At least one key**: giving no key option at all is a usage error, and the message points at `fix` (to
+  only refresh the contract / AGENTS.md block to match the existing config, use `fix`).
+- **Refused without a config**: when the target directory has no `.opencode/auto/config.json`, exit code 1
+  pointing at `init` (with only the legacy `.auto/config.json` it also points at `fix`, which writes the full
+  config from the old mode).
+- **Strict loading**: if the existing config fails to load (retired keys, out-of-range values, …) it fails
+  rather than carrying bad keys forward; when the failure is of a class `fix` can repair, a `fix:` line is
+  appended to the message.
+- **What it writes**: config.json, the agent contract and the AGENTS.md marker block (both rendered from the
+  config) — it never touches round directories: changing `--phases` runs only the read-only prefix
+  guardrail, and the difference between index and config is left as drift for `plan` to re-sync;
+  `opencode.json`, `.gitignore` and the brief.md stub belong to `init` / `fix`, which amend does not touch.
+- On success it prints `✓ amended (<given options>)`; the changes stay in the worktree, uncommitted — review
+  and commit them yourself.
 
-### 配置修复(fix)
+### Config fix (fix)
 
-`opencode-auto fix [dir] [-f]` 按规则修复配置层(auto-core plans/0052 D10/D11):
-`.opencode/auto/config.json` 与 init 按它写出的产物。基线是磁盘上的既有配置
-(按原始记录读,不经严格校验),不接受任何配置键选项,**从不把任何键重置为缺省**
-——未知键与规则未点名的键一律原样保留。规则只修"读不进来或会悄悄失义"的键,
-合法的替代写法(数组形态的 `phases`、`parallel: "none"`、`agent: "opencode"`)不动;
-阶段索引的不一致不归 fix(归后续的 `plan`)。
+`opencode-auto fix [dir] [-f]` repairs the config layer by rule (auto-core plans/0052 D10/D11):
+`.opencode/auto/config.json` and the artifacts init writes from it. The baseline is the existing config on
+disk (read as raw records, without strict validation); it accepts no config key options and **never resets
+any key to its default** — unknown keys and keys no rule names are kept verbatim. The rules repair only keys
+that "fail to load or silently lose their meaning"; legal alternative spellings (array-form `phases`,
+`parallel: "none"`, `agent: "opencode"`) are left alone; phase index inconsistency is not fix's business (it
+belongs to the later `plan`).
 
-发现分两类:**可修复**(fix)——确定且不改变含义,按下表执行;**需人工**(manual)
-——只报告、不猜(如 `handoverTest: true` 而 `testByDriver: false`,改哪一边是人的
-决定)。
+Findings come in two classes: **fixable** — deterministic and meaning-preserving, applied per the table
+below; **manual** — reported only, never guessed (e.g. `handoverTest: true` with `testByDriver: false`:
+which side to change is a person's decision).
 
-| 对象 | 发现 | 动作 |
+| Object | Finding | Action |
 | --- | --- | --- |
-| `config.json` 缺失、旧版 `.auto/config.json` 有 mode | 可修复 | 以旧 mode + 缺省值写出新文件 |
-| `commit: false` / `verify`(任何值)/ 契约名 `agent`(如 `auto`) | 可修复 | 删键 |
-| `verifyIdle` / `verifyMax` | 可修复 | 更名为 `idleTime` / `idleMax`(键序不变);新键已存在则删旧键 |
-| `source` / `destDir` | 可修复 | 原值迁入 brief.md 的 `## Source` / `## Target` 节末尾(节缺失则在文末补节;brief.md 缺失则以桩为底),然后删键 |
-| `config.json` 不是合法 JSON / 不是对象 | 需人工 | —— |
-| 应用上述规则后配置仍装载失败(越界值、未注册 mode、搭配冲突…) | 需人工 | 报文照录;下方产物规则整体跳过(`skipped:` 行) |
-| agent 契约 `.opencode/agent/auto.md` 缺失 / 与按 `testByDriver` 渲染的模板不一致 | 可修复 | 按模板重写 |
-| AGENTS.md 标记块缺失 / 与当前配置渲染不一致 / 残留旧版或游离标记块 | 可修复 | 写入当前块并清理其余标记块(正文不动) |
-| 意图包装载失败(标记块无从渲染) | 需人工 | —— |
-| `.gitignore` 缺 `tmp/` 或 `.auto/` 条目 | 可修复 | 追加缺失条目 |
-| `.gitignore` 缺 `/.opencode/auto/models.json` 条目(init 尚不写它时初始化的项目) | 可修复 | 追加该条目(其余本地私有条目留给人决定) |
-| `opencode.json` 缺失 | 可修复 | 写内置模板(已存在即不动,可能含人工改动) |
-| brief.md 缺失 | 可修复 | 写项目简报桩(已存在即不动) |
+| `config.json` missing, legacy `.auto/config.json` has a mode | Fixable | Write the new file from the old mode + defaults |
+| `commit: false` / `verify` (any value) / a contract-name `agent` (e.g. `auto`) | Fixable | Delete the key |
+| `verifyIdle` / `verifyMax` | Fixable | Rename to `idleTime` / `idleMax` (key order unchanged); if the new key already exists, delete the old one |
+| `source` / `destDir` | Fixable | Migrate the original value to the end of brief.md's `## Source` / `## Target` section (append the section at the end of the file if missing; start from the stub if brief.md is missing), then delete the key |
+| `config.json` is not valid JSON / not an object | Manual | — |
+| After applying the rules above the config still fails to load (out-of-range values, unregistered mode, pairing conflicts…) | Manual | Reported verbatim; the artifact rules below are skipped as a whole (`skipped:` line) |
+| Agent contract `.opencode/agent/auto.md` missing / differs from the template rendered per `testByDriver` | Fixable | Rewrite from the template |
+| AGENTS.md marker block missing / inconsistent with the current config rendering / leftover old or stray marker blocks | Fixable | Write the current block and clean up the others (body text untouched) |
+| Intent packs fail to load (the marker block cannot be rendered) | Manual | — |
+| `.gitignore` missing the `tmp/` or `.auto/` entry | Fixable | Append the missing entries |
+| `.gitignore` missing the `/.opencode/auto/models.json` entry (projects initialized before init wrote it) | Fixable | Append that entry (the remaining local-only entries are left to the person) |
+| `opencode.json` missing | Fixable | Write the built-in template (left alone when it exists, possibly containing manual edits) |
+| brief.md missing | Fixable | Write the project brief stub (left alone when it exists) |
 
-产物规则由配置渲染,故只在配置(应用键规则之后)能严格装载时执行。
+The artifact rules are rendered from the config, so they run only when the config (after the key rules are
+applied) loads strictly.
 
-交互同 `reset`:先打印发现清单(`fix:` / `manual:` / `skipped:` 行),有可修复项时
-过工作区干净度闸门、再问一次 `[y/N]`(非 TTY 免提示;`-f`/`--force` 两道闸一并
-跳过),然后按清单写盘并逐条打印 `fixed:` 行。fix 不提交,改动留在工作区供审阅。
+Interaction mirrors `reset`: it first prints the findings list (`fix:` / `manual:` / `skipped:` lines); when
+there are fixable items it goes through the clean-worktree gate, then asks once more `[y/N]` (no prompt
+off-TTY; `-f`/`--force` skips both gates), then writes per the list and prints a `fixed:` line per item. fix
+does not commit — the changes stay in the worktree for review.
 
-| 情形 | 退出码 |
+| Case | Exit code |
 | --- | --- |
-| 无配置、也无旧版 mode(未初始化,应先 `init`) | 1 |
-| 无任何发现(配置层与配置一致) | 0 |
-| 可修复项全部应用、无需人工项 | 0 |
-| 有需人工项(可修复项照常应用) | 1 |
-| 工作区脏(未给 `-f`) | 1,不做任何改动 |
-| 确认时回答非 `y` | 0,不做任何改动 |
+| No config and no legacy mode (not initialized; run `init` first) | 1 |
+| No findings at all (the config layer matches the config) | 0 |
+| All fixable items applied, no manual items | 0 |
+| Manual items present (fixable items still applied) | 1 |
+| Dirty worktree (no `-f` given) | 1, no changes made |
+| Confirmation answered with anything but `y` | 0, no changes made |
 
-`run` / `status` / `check` 以及 amend 路径上的严格失败,在 fix 的键规则能修时附带
-`fix: opencode-auto fix <dir>` 一行;契约缺失、AGENTS.md 块过期等恢复提示同样指向
-`fix`(此前指向会重置其余键的无参 `init`)。
+Strict failures on the `run` / `status` / `check` and amend paths append a `fix: opencode-auto fix <dir>`
+line when fix's key rules can repair them; recovery hints like a missing contract or a stale AGENTS.md block
+likewise point at `fix` (previously they pointed at a no-argument `init`, which resets the other keys).
 
-### 反初始化(reset)
+### De-initialization (reset)
 
-`opencode-auto reset [dir]` 是 `init` 的逆操作:精确移除 `init` 写出的**配置层**产物,
-把工作区还原至未初始化状态,消除配置残留对 opencode 主程序与其他扩展组件的干扰。
+`opencode-auto reset [dir]` is the inverse of `init`: it precisely removes the **config layer** artifacts
+init wrote and restores the worktree to the uninitialized state, clearing config leftovers that would
+otherwise interfere with the opencode host program and other extension components.
 
-清理范围(枚举式白名单,无通配、无递归删除):
+Cleanup scope (an enumerated whitelist — no globs, no recursive deletion):
 
-| 目标 | 动作 |
+| Target | Action |
 | --- | --- |
-| `.opencode/auto/config.json` | 删除 |
-| `.opencode/auto/brief.md` | **逐字节等于项目简报桩时才删**;填写过则保留(人的意图,不是 init 产物)并在清单中说明原因 |
-| `.auto/config.json` | 删除(旧版仅含 `mode` 的残留配置) |
-| `.opencode/agent/auto.md` | 删除(`init` 本就无条件按模板覆盖它,是纯 auto 产物) |
-| `opencode.json` | **逐字节等于内置模板时才删**;被改过则保留并在清单中说明原因 |
-| `AGENTS.md` | 只摘除 `opencode-auto` 标记块,其余正文原样保留;摘除后仅剩空壳标题(即该文件本就是 init 建的)则整个删除 |
-| `.gitignore` | 只移除 init 写出的条目(`tmp/`、`.auto/`、本地私有文件 `/.gitignore`/`/.env`/`/AGENTS.md`/`/opencode.json`/`/.opencode/auto/models.json` 与现存的嵌套 git 仓库条目),用户自有条目保留;移除后文件为空则整个删除。模型注册表项目层 `.opencode/auto/models.json` 本身不删(它属于操作者,不是 driver 写的) |
-| `.opencode/auto/`、`.opencode/agent/`、`.opencode/` | **仅在为空时**回收(`rmdir`,非空即跳过) |
+| `.opencode/auto/config.json` | Deleted |
+| `.opencode/auto/brief.md` | **Deleted only when byte-identical to the project brief stub**; if it has been filled in it is kept (human intent, not an init product) and the list explains why |
+| `.auto/config.json` | Deleted (the legacy leftover config holding only `mode`) |
+| `.opencode/agent/auto.md` | Deleted (`init` already overwrites it unconditionally from the template — a pure auto product) |
+| `opencode.json` | **Deleted only when byte-identical to the built-in template**; if edited it is kept and the list explains why |
+| `AGENTS.md` | Only the `opencode-auto` marker block is removed, the rest of the body kept verbatim; if only a hollow heading is left (i.e. the file was init-created in the first place) the whole file is deleted |
+| `.gitignore` | Only the entries init wrote are removed (`tmp/`, `.auto/`, the local-only files `/.gitignore`/`/.env`/`/AGENTS.md`/`/opencode.json`/`/.opencode/auto/models.json` and the entries for existing nested git repositories); user-owned entries are kept; if the file is empty after removal it is deleted entirely. The model registry project layer `.opencode/auto/models.json` itself is not deleted (it belongs to the operator, not written by the driver) |
+| `.opencode/auto/`, `.opencode/agent/`, `.opencode/` | **Reclaimed only when empty** (`rmdir`; skipped when non-empty) |
 
-**明确不动**:`docs/`(含轮次目录 `R-NN` 与任务目录 `T-NNN`)、`.auto/` 除
-`config.json` 外的全部运行时状态(日志、`stats.json`、`resolves.json`、`progress.json`)、
-`tmp/`。这些是人与 AI 的工作成果或运行痕迹,不是 `init` 的产物。
+**Explicitly untouched**: `docs/` (including round directories `R-NN` and task directories `T-NNN`), all
+runtime state in `.auto/` other than `config.json` (logs, `stats.json`, `resolves.json`, `progress.json`),
+and `tmp/`. These are human and AI work products or run traces, not `init` artifacts.
 
-空目录才回收这一条同时保住了两样东西:你自建的提示词覆盖目录
-`.opencode/auto/prompts/`,以及 `.opencode/agent/` 下你自己的其他 agent 契约。
+Reclaiming only empty directories also preserves two things: your own prompt-override directory
+`.opencode/auto/prompts/` and your other agent contracts under `.opencode/agent/`.
 
-执行前有两道闸(`-f`/`--force` 一并跳过):
+Two gates run before execution (`-f`/`--force` skips both):
 
-- **工作区干净度**:目标目录所在仓库及目录树下全部嵌套仓库/子模块有未提交改动时,
-  退出码 1 并列出文件,不做任何改动。git 是唯一的撤销手段,脏工作区意味着撤销不回来。
-- **交互确认**:先打印完整清单(含保留项与原因),再问一次 `[y/N]`。非 TTY(CI、脚本)
-  免提示直接执行——但干净度闸门照常生效。
+- **Clean worktree**: when the repository containing the target directory, or any nested
+  repository/submodule in the tree, has uncommitted changes, exit code 1 with the files listed and nothing
+  changed. git is the only undo mechanism — a dirty worktree means no undo.
+- **Interactive confirmation**: print the full list first (including kept items and reasons), then ask once
+  `[y/N]`. Off-TTY (CI, scripts) it executes without prompting — but the cleanliness gate still applies.
 
-`reset` 后再 `init`,产出与首次 `init` 逐字节一致。目录中没有任何 `init` 产物时,
-`reset` 打印"未发现 init 产物"并以 0 退出。
+After `reset`, a fresh `init` produces byte-identical output to the first one. When the directory holds no
+`init` artifacts at all, `reset` prints "no init artifacts found" and exits 0.
 
-### run 的选项(本次执行)
+### run options (this execution)
 
-| 选项 | 说明 |
+| Option | Description |
 | --- | --- |
-| `--server <url>` | 复用已运行的 `opencode serve`,不另起进程;也可用环境变量 `OPENCODE_AUTO_SERVER`。缺省时自动 spawn 一个 `opencode serve` 并托管其生命周期(网络故障与 AGENTS.md 更新会自动重启,见[opencode server 与 agent 选择](#opencode-server-与-agent-选择)) |
-| `--verbose [true]` | 输出会话内全部消息部件(文本、工具调用、推理、步骤等)与上下文用量/占比,每行带时间戳,并每 10 秒列出 git status 新出现的变动文件(含子目录中的嵌套 git 仓库) |
-| `--interactive` / `-i` | 旁路交互(与 `--verbose` 互斥):终端保持非 verbose 的干净输出并常驻等待人工输入,回车把输入作为额外用户消息发往当前活动会话(steer 语义,在下一 provider turn 边界处理;无活动会话时输入丢弃并提示),等待输入不阻塞正常执行;日志文件仍保持 `--verbose` 级别的完整记录。`--wait-answer`/`--wait-between` 的人工等待也经这条输入行接收,ask 结束后恢复接收会话消息。输入一行 `/exit` 不会发往会话,而是预约在下一个安全边界(阶段/任务/子任务交接完成处)暂停退出(退出码 `3`),进度已持久化,重新运行即可完整恢复 |
-| `--wait-answer [1-60]` | 提问先等待人工 stdin 答复(分钟):非权限提问超时自动答复;权限请求在 `--permission` 的 ask-* 模式下作为等待窗口(见该选项);不带值默认 1 分钟;缺省此选项则非权限提问立即自动答复、权限类提问(question 工具)直接阻塞 |
-| `--wait-between [1-60]` | 任务之间暂停等待人工(分钟):回车立即开始下一任务,超时自动继续;不带值默认 1 分钟;缺省此选项则任务间不暂停 |
-| `--permission [mode]` | 权限请求(permission.asked)的处理策略,缺省 `ask-deny`:`auto-allow` 立即自动授权(always 放行,不等待);`ask-allow` / `ask-deny` / `ask-fail` 先等待人工(窗口为 `--wait-answer` 分钟,未设则不等待即视为超时;回答 `allow`/`yes`/`y` 等即授权,其余明确回答拒绝该权限但会话继续),超时分别回落:自动授权 / 自动拒绝但会话继续(AI 无授权绕开) / 拒绝并退出运行(阻塞停机,退出码 2) |
-| `--dryrun [true]` | 权限预检:只调用一次 AI,列出执行任务可能需要的 opencode.json 授权之外的目录/操作并逐只读探查确认,报告写入 `.auto/dryrun.md` 并打印到终端;不执行任何任务 |
-| `--new-session` | 中断恢复时强制开新会话:跳过会话复用(旧会话上下文已陈旧时的逃生阀),阶段级精确重入仍按进度记录执行;仅对本次运行生效,不写入配置。详见[中断恢复](#中断恢复) |
+| `--server <url>` | Reuse an already-running `opencode serve` instead of spawning one; the environment variable `OPENCODE_AUTO_SERVER` works too. By default an `opencode serve` is spawned automatically with its lifecycle managed (network failures and AGENTS.md updates restart it — see [opencode server and agent selection](#opencode-server-and-agent-selection)) |
+| `--verbose [true]` | Print every message part of the sessions (text, tool calls, reasoning, steps, …) plus context usage/share, every line timestamped, and every 10 seconds list files newly changed per git status (including nested git repositories in subdirectories) |
+| `--interactive` / `-i` | Interactive side channel (mutually exclusive with `--verbose`): the terminal keeps the clean non-verbose output and waits for human input; Enter sends the input as an extra user message to the currently active session (steer semantics, processed at the next provider turn boundary; with no active session the input is dropped with a notice), and waiting for input never blocks normal execution. The log file still keeps the full `--verbose`-level record. The human waits of `--wait-answer`/`--wait-between` are also received through this input line; session messages resume after the ask ends. Typing `/exit` does not go to the session — it schedules a pause-and-exit at the next safe boundary (where a phase/task/subtask transition completes) with exit code `3`; progress is already persisted, and rerunning recovers fully |
+| `--wait-answer [1-60]` | Questions first wait for a human stdin answer (minutes): non-permission questions are proxy-answered on timeout; for permission requests under `--permission`'s ask-* modes this is the wait window (see that option); without a value it defaults to 1 minute; without this option non-permission questions are proxy-answered immediately and permission questions (the question tool) simply block |
+| `--wait-between [1-60]` | Pause between tasks waiting for a human (minutes): Enter starts the next task immediately, timeout continues automatically; without a value it defaults to 1 minute; without this option there is no pause between tasks |
+| `--permission [mode]` | Handling policy for permission requests (permission.asked), default `ask-deny`: `auto-allow` auto-grants immediately (always allowed, no waiting); `ask-allow` / `ask-deny` / `ask-fail` first wait for a human (the window is `--wait-answer` minutes; unset means no wait, i.e. immediate timeout; answering `allow`/`yes`/`y` etc. grants, any other explicit answer denies that permission but the session continues); on timeout they fall back respectively to: auto-grant / auto-deny with the session continuing (the AI gets no grant to go around) / deny and exit the run (blocked halt, exit code 2) |
+| `--dryrun [true]` | Permission preflight: a single AI call lists the directories/operations the tasks may need beyond the opencode.json grants, each confirmed by a read-only probe; the report is written to `.auto/dryrun.md` and printed to the terminal; no tasks are executed |
+| `--new-session` | Force a new session on interruption recovery: skips session reuse (the escape hatch when the old session's context has gone stale); phase-level precise re-entry still follows the progress record; effective for this run only, never written to the config. See [Interruption recovery](#interruption-recovery) |
 
-每次 `run`(以及进入循环的 `plan`)都会在目标目录的 `.auto/logs/run-<时间戳>.log` 新建日志文件,
-终端的全部输出同步写入该文件(逐条直写,进程中断也不丢已输出内容);
-`--interactive` 下日志文件额外包含 verbose 明细(会话部件、上下文用量、变更文件),与 `--verbose` 运行时的记录一致。
+Every `run` (and every `plan` that enters the loop) creates a new log file `.auto/logs/run-<timestamp>.log`
+in the target directory; all terminal output is written to it synchronously (written line by line, so an
+interrupted process loses nothing already printed). Under `--interactive` the log file additionally contains
+the verbose detail (session parts, context usage, changed files), matching what a `--verbose` run records.
 
-同一目录同一时刻只允许一个 driver 进程工作:`run` 启动时取得**运行锁**(run lock)
-`.auto/run.lock`(JSON:进程号 `pid`、主机名 `host`、命令 `command`、起始时间 `started`),
-运行结束(含 Ctrl+C 强制退出)即删除;`plan` 同样持锁(command 记为 `plan`,内部经
-`runAll` 重入),`close` 亦持锁(command 记为 `close`)。另一进程持锁期间,`run`、
-`plan` 与 `close` 以退出码 `1` 拒绝并报出持锁者;
-`init`、`amend`、`fix`、`reset` 会改写运行中的 driver 所读的文件,同样以 `1` 拒绝
-(`-f` 不越过运行锁);`check` 与 `status` 从不取锁,`status` 把活锁打印在首行
-(`▶ run in progress (pid 1234 on build-3, since …)`、`plan`/`close` 持锁时为
-`▶ plan in progress (…)`/`▶ close in progress (…)`)。持锁进程已不存在(如被 `kill -9`)的
-本机锁视为失效,下一次 `run` 或 `plan` 自动移除并打印一行说明;记录在其他主机上的锁无法探查进程,
-一律视为有效。锁文件无法解析时同样视为有效,确认无进程在跑后手工删除 `.auto/run.lock`。
+Only one driver process may work in a directory at a time: `run` takes the **run lock** `.auto/run.lock` at
+startup (JSON: pid `pid`, host `host`, command `command`, start time `started`) and deletes it when the run
+ends (including a Ctrl+C force quit); `plan` holds the lock too (command recorded as `plan`, re-entering
+internally through `runAll`), and so does `close` (command recorded as `close`). While another process holds
+the lock, `run`, `plan` and `close` refuse with exit code `1` and name the holder; `init`, `amend`, `fix`,
+`reset` rewrite files a running driver reads and are likewise refused with `1` (`-f` does not step over the
+run lock); `check` and `status` never take the lock, and `status` prints a live lock on its first line
+(`▶ run in progress (pid 1234 on build-3, since …)`, or `▶ plan in progress (…)`/`▶ close in progress (…)`
+when `plan`/`close` holds it). A same-host lock whose holder process no longer exists (e.g. after `kill -9`)
+counts as stale: the next `run` or `plan` removes it automatically and prints a one-line notice; a lock
+recorded on another host cannot be probed and always counts as valid. An unparseable lock file also counts as
+valid — after confirming no process is running, delete `.auto/run.lock` by hand.
 
-退出码:`0` 全部完成(阶段化流程下 = 全部阶段完成);`1` 用法/环境错误(含阶段索引
-缺失或非法、运行锁被另一进程持有);`2` 阻塞或未完成为 pending,等待人工介入(含阶段规划会话受阻与任务报告结论行 `Result: FAIL`);`3` `--interactive` 下收到 `/exit`、已在安全边界处暂停退出(不需要人工介入,重新运行即可完整恢复);`130` 被强制终止。
+Exit codes: `0` everything complete (under the phased flow = all phases complete); `1` usage/environment
+error (including a missing or invalid phase index, or the run lock held by another process); `2` blocked, or
+incomplete work reverted to pending, waiting for human attention (including a blocked phase planning session
+and the task report result line `Result: FAIL`); `3` `/exit` received under `--interactive`, paused and
+exited at a safe boundary (no human attention needed — rerunning recovers fully); `130` force-terminated.
 
-运行期间单次 Ctrl+C 不会终止(仅提示),3 秒内再次按下 Ctrl+C 才强制退出;
-退出前会尽力恢复 opencode.json、AGENTS.md 等文件的可写权限并关闭 opencode server。
+During a run a single Ctrl+C does not terminate (it only prints a notice); pressing Ctrl+C again within 3
+seconds force-quits. Before exiting it best-effort restores write permissions on opencode.json, AGENTS.md and
+the like, and shuts down the opencode server.
 
-每个任务与子任务开始时,输出会打出显著横幅(`=` 行为任务,`-` 行为子任务,
-首行重复字符 + 标题两行):
+As each task and subtask starts, the output prints a prominent banner (an `=` rule for a task, a `-` rule
+for a subtask; a repeated-character line followed by the title):
 
 ```
 ============================================================
-T-009 实现迁移
+T-009 Implement the migration
 
 ------------------------------------------------------------
-T-009 子任务 1：编写迁移脚本的 schema 部分
+T-009 Subtask 1: write the schema part of the migration script
 ```
 
-`auto` 子任务模式下,任务正文尚无检查项时,driver 在开分解会话前打出隐式
-(自动)任务子任务分割标记(点线、空行后接 `<任务编号> <任务标题>: 子任务分解`):
+In `auto` subtask mode, when the task body has no checklist yet, the driver prints the implicit (automatic)
+subtask split marker before opening the decompose session (a dotted rule, a blank line, then `<task id>
+<task title>: subtask decomposition`):
 
 ```
 ............................................................
-T-009 实现迁移: 子任务分解
+T-009 Implement the migration: subtask decomposition
 ```
 
-### 规划与轮次生命周期(plan)
+### Planning and the round lifecycle (plan)
 
-`plan [dir] [-p|--prompt <文本> | --file <路径>]` 是**规划命令**:它与 `run` 共用同一状态机,
-多一个**停止条件**——任一规划步骤成功(或轮次走到本该执行任务的位置)即停下,供人工
-评审任务清单;之后 `run` 照常执行(auto-core plans/0053 D4–D14)。
+`plan [dir] [-p|--prompt <text> | --file <path>]` is the **planning command**: it shares the same state
+machine with `run` plus one extra **stop condition** — it stops as soon as a planning step succeeds (or the
+round reaches the point where tasks would execute), leaving the task list for human review; afterwards `run`
+executes as usual (auto-core plans/0053 D4–D14).
 
 ```sh
-opencode-auto plan <dir>            # 轮未建立 → 建轮并停在轮首门禁;否则规划当前阶段并停在执行前
-opencode-auto plan <dir> -p "…"     # 带规划输入:存为本阶段的 plan-input.md 后再规划
-opencode-auto plan <dir> --file plan-brief.md   # 规划输入取自文件(-p 与 --file 互斥)
-opencode-auto run <dir>             # 评审(可直接编辑/勾销任务)后执行
+opencode-auto plan <dir>            # no round yet → establish one and stop at the round-start gate; otherwise plan the current phase and stop before execution
+opencode-auto plan <dir> -p "…"     # with a planning input: stored as this phase's plan-input.md, then planned
+opencode-auto plan <dir> --file plan-brief.md   # planning input taken from a file (-p and --file are mutually exclusive)
+opencode-auto run <dir>             # review (edit/strike tasks directly if needed), then execute
 ```
 
-- **不需要 AI 的路由先行(plan prelude)**,在取运行锁之后、启动任何会话之前裁决:
-   - **建轮**:当前轮 `docs/R-NN/` 未建立时,先(对上一轮)跑轮关闭检查,再建立本轮
-     目录并打印轮首门禁提示(next 行),退出码 `0`。`phases = "m"` 时同样建
-     `R-01/P01-implement`。
-   - **开下一轮**:上一轮全部完成时,先跑轮关闭检查(G8):不过 → 打印问题清单
-     (逐条 `✗` 行,`plan` 拒绝开下一轮直到修复),退出码 `2`;过 → 打印警告、
-     建立新一轮并停在轮首门禁,退出码 `0`。
-   - **阶段索引漂移重同步**:配置 `phases` 在建轮后变更、当前轮又未完成时,重同步
-     未开始尾部的阶段目录(改动不提交,停下待评审后提交,退出码 `0`;带规划输入时
-     先拒绝——先无输入重同步、提交、再带输入)。`run` 不重同步:遇到漂移以退出码 `1`
-     停下并指向 `plan`。
-   - **提示即退出**:路由阻塞 → 退出码 `1`;阶段已规划完(`run` 去执行;无输入时
-     退出码 `0`,保持 `plan && run` 可连写)或 `m` 模式任务索引为空(提示手工列任务
-     或改用 `-p`/`--file`)→ 打印提示退出。轮完成且本轮无需规划时,提示填
-     `## Close` 后再 `plan` 开下一轮。
-   - **输入拒绝(任何写盘之前,退出码 `1`)**:轮未建立、轮已完成待开新轮,或目标
-     阶段已列有任务时,给出的规划输入不会被消费——报文指明「先无输入 `plan` 建轮、
-     提交设置、再带输入」。
-- **规划输入(planning input)**:`-p` 文本或 `--file` 文件内容(非空、二者互斥,
-  `--file` 须为常规文件),由 driver 原样写入阶段目录的
-  `docs/R-NN/P<nn>-<type>/plan-input.md`,**在规划单元开始前单独提交**;规划会话经
-  phase-plan 模板的 `{{input}}` 块读到它。一个阶段一个文件、始终存最新一份(历史在
-  git);输入变更会使在途规划步骤重开新会话。要无输入规划,删除该文件并提交即可。
-- **`m` 模式**:`plan -p`/`--file` 即「由 AI 规划任务」的入口(原 `--implement-*`
-  已退役),见[由 AI 规划任务](#由-ai-规划任务)。
- - **选项**:接受 `run` 的会话选项(`--server`、`--verbose`、`--interactive/-i`、
-  `--wait-answer`、`--permission`、`--new-session`);拒绝一切配置类选项(报文同
-  `run`)与 `--dryrun`、`--wait-between`、`--max-sessions`、`-f`、`--amend`、
-  `--continue`(`run` 反过来拒绝 `-p`/`--file`)。持运行锁(command 记为 `plan`);
-  进入循环时同样在 `.auto/logs/` 建日志文件。退出码同 `run`(另:轮关闭检查不过为 `2`)。
-- **提问即问人(无 AUTO-RESOLVE)**:plan 为执行前的人工审阅而跑,其会话里的非权限
-  提问一律由人工回答——driver **无超时等待**(`-i` 常驻输入行,未给 `-i` 时为 stdin
-  提问),`--wait-answer` 的超时代答回落在此不生效,会话也不要求 AUTO-RESOLVE 标注
-  (见[提问策略与代答审计(AUTO-RESOLVE)](#提问策略与代答审计auto-resolve))。
-  输入渠道不可达(stdin 关闭或空回答)或同一问题重复询问,则阻塞交人工(退出码 `2`),
-  在会话外处理后再跑。
+- **Agent-free routes run first (plan prelude)**, decided after taking the run lock and before any session
+  starts:
+   - **Establish a round**: when the current round's `docs/R-NN/` does not exist yet, first run the
+     round-close check (against the previous round), then establish this round's directory and print the
+     round-start gate notice (the next line), exit code `0`. Under `phases = "m"` the same establishes
+     `R-01/P01-implement`.
+   - **Open the next round**: when the previous round is fully complete, first run the round-close check
+     (G8): failing → print the problem list (one `✗` line each; `plan` refuses to open the next round until
+     they are fixed), exit code `2`; passing → print warnings, establish the new round and stop at the
+     round-start gate, exit code `0`.
+   - **Phase index drift re-sync**: when the config's `phases` changed after the round was established and
+     the current round is not complete, the not-yet-started tail of phase directories is re-synced (changes
+     uncommitted; it stops for review and commit, exit code `0`; with a planning input it refuses first —
+     re-sync without input, commit, then come back with input). `run` never re-syncs: on drift it stops with
+     exit code `1` and points at `plan`.
+   - **Notice-and-exit**: a blocked route → exit code `1`; the phase already planned (`run` takes over;
+     exit code `0` when there is no input, keeping `plan && run` chainable) or an empty task index in `m`
+     mode (hinting to list tasks by hand or use `-p`/`--file`) → print the notice and exit. When the round
+     is complete and needs no planning, it hints to fill in `## Close` and then `plan` the next round.
+   - **Input refused (before any write, exit code `1`)**: when no round is established, the round is
+     complete awaiting a new one, or the target phase already lists tasks, a given planning input is not
+     consumed — the message says "first `plan` without input to establish the round, commit the setup, then
+     come back with input".
+- **Planning input**: the `-p` text or the `--file` file's content (non-empty, mutually exclusive; `--file`
+  must be a regular file), written verbatim by the driver to the phase directory's
+  `docs/R-NN/P<nn>-<type>/plan-input.md` and **committed on its own before the planning unit starts**; the
+  planning session reads it through the phase-plan template's `{{input}}` block. One file per phase, always
+  the latest copy (history lives in git); a changed input restarts an in-flight planning step in a new
+  session. To plan without input, just delete the file and commit.
+- **`m` mode**: `plan -p`/`--file` is the entry point for "planning tasks with AI" (the former
+  `--implement-*` is retired), see [Planning tasks with AI](#planning-tasks-with-ai).
+ - **Options**: accepts `run`'s session options (`--server`, `--verbose`, `--interactive/-i`,
+  `--wait-answer`, `--permission`, `--new-session`); rejects every config-class option (message identical to
+  `run`'s) plus `--dryrun`, `--wait-between`, `--max-sessions`, `-f`, `--amend`, `--continue` (`run` in turn
+  rejects `-p`/`--file`). Holds the run lock (command recorded as `plan`); creates a log file under
+  `.auto/logs/` when it enters the loop. Exit codes as `run` (plus: a failed round-close check is `2`).
+- **Questions go to the human (no AUTO-RESOLVE)**: plan runs for the pre-execution human review, so every
+  non-permission question in its sessions is answered by a person — the driver **waits without timeout**
+  (`-i`'s resident input line, or a stdin prompt without `-i`), `--wait-answer`'s timeout-proxy-answer
+  fallback does not apply, and the session is not asked for AUTO-RESOLVE marking (see
+  [Question policy and proxy-answer audit (AUTO-RESOLVE)](#question-policy-and-proxy-answer-audit-auto-resolve)).
+  When the input channel is unreachable (stdin closed or empty answers) or the same question is asked
+  repeatedly, it blocks for the human (exit code `2`); handle it outside the session and rerun.
 
-追加任务(`--append`)与关闭单元(`close`、`plan --force-close`)见下面两节。
+Appending tasks (`--append`) and closing units (`close`, `plan --force-close`) are covered in the next two
+sections.
 
-### 追加规划(plan --append)
+### Append planning (plan --append)
 
-`plan [dir] --append -p <文本> | --file <路径>` 向**当前阶段**追加任务:任务索引里
-已有的行一个不动,新任务按规划输入追加在既有行之后,编号续接(`autoNumber` 开启时自
-`.auto/next-task` 续接并推进,否则从已占用或已列出的最大编号 + 1 起)。它从不切换阶段——
-路由此刻指向哪个阶段,就追加到哪个阶段,包括交接路由上交接文档已写出、或被阶段门禁拦下的
-阶段。`m` 模式下索引非空时,带输入的 `plan` 本身就是追加,`--append` 可省(显式给出
-亦算冗余)。
+`plan [dir] --append -p <text> | --file <path>` appends tasks to the **current phase**: existing lines in
+the task index are untouched, new tasks are appended after them per the planning input, numbering continuing
+(`autoNumber` on: continues from and advances `.auto/next-task`; otherwise from the largest occupied or
+listed number + 1). It never switches phases — whichever phase routing points at right now is the phase
+appended to, including one on a handover route whose handover document is already written, or one held back
+by a phase gate. In `m` mode with a non-empty index, an input-carrying `plan` already appends, so `--append`
+may be omitted (giving it explicitly just counts as redundant).
 
-- **既有内容保持不动**:追加步骤(步骤种类 `phase-append`)进入时先对任务索引与各
-  既有任务文档做快照;会话改写了既有行或既有任务文档即拒绝并要求重试。步骤中断后
-  人工提交的半成品,重跑时按快照口径计入既有部分,只校验其后的新任务。
-- **旧交接文档会被移除**:追加成功后,阶段内已写出的 `handover.md` 由 driver 在独立
-  提交中删除,新任务跑完后重新蒸馏交接(acceptance.md / verdict.md 保留,由下一次
-  蒸馏重写)。
-- **任务流水线进行中不可追加**:某任务的恢复点还在 `.auto/progress.json` 里(任务
-  执行到一半或刚被阻塞)时,`--append` 以退出码 `1` 拒绝——先 `run` 完成它,或
-  `close` 关闭它。新任务本来也排在一个受阻任务之后,帮不上它。
-- `--append` 不带输入即用法错误(追加的正是按输入规划出的任务);轮未建立、轮已完成
-  待开新轮等路由上,输入的拒绝规则与普通规划输入一致。
+- **Existing content stays untouched**: the append step (step kind `phase-append`) snapshots the task index
+  and every existing task document on entry; if the session rewrites an existing line or an existing task
+  document, it is refused and told to retry. Half-finished output a person committed after the step was
+  interrupted counts as existing by the snapshot on rerun; only the new tasks after it are validated.
+- **The old handover document is removed**: after a successful append, a `handover.md` already written in
+  the phase is deleted by the driver in its own commit; the handover is distilled anew once the new tasks
+  are done (acceptance.md / verdict.md are kept, rewritten by the next distillation).
+- **No appending while the task pipeline is in flight**: while some task's recovery point is still in
+  `.auto/progress.json` (mid-execution or just blocked), `--append` refuses with exit code `1` — finish it
+  with `run` first, or close it with `close`. New tasks would queue behind a stuck task anyway and could not
+  help it.
+- `--append` without input is a usage error (what gets appended is exactly the tasks planned from the
+  input); on routes where no round is established or the round is complete awaiting a new one, the input
+  refusal rules match ordinary planning input.
 
-### 关闭单元(close 与 plan --force-close)
+### Closing units (close and plan --force-close)
 
-`close <ref> [dir] --reason <文本> [--cascade] [--commit-changes | --stash-changes]`
-把一个单元**关闭**(closed)而非完成:调度上按收口处理(`todo.md` → `done.md` 改名
-与索引勾选照做),但**未交付**——原因写进该单元 `done.md` 字段块的 `Closed:` 字段,
-状态树(`⊘` 标记)、已完成清单、规划提示与交接蒸馏都会标注「已关闭、未交付,不要假设
-其产物存在」。目标 `ref` 必须属于当前轮且处于打开状态,三种形态:`T-NNN`(任务)、
-`R-NN.P<nn>`(阶段)、`R-NN`(整轮,仅阶段化流程;`m` 模式的唯一阶段不可关闭,关闭
-其中的任务即可)。`--reason` 必填且单行,它同时是 `Closed:` 的值与关闭提交主题的尾;
-显式的 ref 加必填原因即是确认,`close` 不再二次询问。
+`close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]` **closes** a unit
+rather than completing it: for scheduling it is treated as closed out (the `todo.md` → `done.md` rename and
+the index tick happen as usual), but it was **not delivered** — the reason goes into the `Closed:` field of
+the unit's `done.md` field block, and the status tree (`⊘` mark), the completed list, planning notices and
+handover distillation all flag it as "closed, not delivered — do not assume its artifacts exist". The target
+`ref` must belong to the current round and be open, in three forms: `T-NNN` (task), `R-NN.P<nn>` (phase),
+`R-NN` (a whole round, phased flow only; the single phase of `m` mode cannot be closed — close its tasks
+instead). `--reason` is required and single-line; it is both the `Closed:` value and the tail of the close
+commit's subject; an explicit ref plus the required reason is the confirmation — `close` asks nothing
+further.
 
-- **提交与记录**:关闭改动落在一个独立提交里(主题 `<ref> closed: <原因>`,trailer
-  `Auto-Stage: force-close`,正文列出全部被关闭单元、各阶段被跳过的门禁与并入/ stash
-  的文件);被关闭的阶段由 driver 写出**机械交接桩**(四小节齐全的 handover.md,记录
-  关闭原因与各任务的 done/closed 状态,不开蒸馏会话);`.auto/` 中**只清除被关闭单元
-  自身**的运行记录(units.json 条目、进度记录、会话交接)。`.auto/next-task`
-  不回退——已关闭的编号永不复用。
-- **依赖**:`Depends:` 显式指向被关闭单元的打开任务会阻止关闭并逐一列出;`--cascade`
-  把它们一并关闭(原因标注 cascade 来源,迭代到闭包)。缺省 `Depends:`(隐式认前序)
-  视为已满足,输出会点名这些任务。子任务不参与级联关闭——其状态文件是任务进行到哪
-  的记录。
-- **脏工作区**:超出 driver 自身状态文件的未提交改动会使 `close` 拒绝(退出码 `1`,
-  列出文件);`--commit-changes` 把改动并入关闭提交,`--stash-changes` 在每个仓库根
-  `git stash push --include-untracked`(嵌套仓库先行,逐个打印)。
-- **退出码**:`0` 已关闭;`1` 拒绝或用法错误;`2` 关闭提交或收口校验失败。
-- **撤销即 `git revert`,没有 `reopen`**:`close` 的输出末尾打印
-  `to undo before anything else runs: git revert <sha>`。revert 恢复 `todo.md`、去掉
-  `Closed:` 字段、取消索引勾选并移除机械交接桩;被清除的运行记录**不**恢复,重开的
-  任务从零开始——这正是重开该有的结果。限制在「任何后续工作开始之前」:一旦后续工作
-  已建立在关闭之上(比如下一阶段已在新状态下规划),revert 会留下两个打开的阶段,
-  `reopen` 也无济于事。
-- **`plan --force-close <ref> --reason <文本> [上述关闭选项]`**:同一进程内先关闭、再
-  接着走 `plan` 的正常流程(共用 `plan` 的运行锁;关闭被拒 → 退出码 `1` 且无任何
-  写盘,提交失败 → `2`,关闭成功后退出码即 `plan` 的)。关闭类选项(`--reason`、
-  `--cascade`、`--commit-changes`、`--stash-changes`)不带 `--force-close` 出现在
-  `plan` 上即用法错误;其他命令不接受 `--force-close`。典型用法:
+- **Commit and records**: the close lands in its own commit (subject `<ref> closed: <reason>`, trailer
+  `Auto-Stage: force-close`, body listing every closed unit, the gates skipped per phase and the
+  merged/stashed files); a closed phase gets a **mechanical handover** written by the driver (a handover.md
+  with all four sections, recording the close reason and each task's done/closed status, no distillation
+  session); in `.auto/` **only the closed units' own** run records are cleared (units.json entries, progress
+  record, session handover). `.auto/next-task` never rolls back — closed numbers are never reused.
+- **Dependencies**: open tasks whose `Depends:` explicitly names the unit being closed block the close and
+  are listed one by one; `--cascade` closes them too (the reason annotated with the cascade origin, iterated
+  to the closure). A default `Depends:` (implicitly following the predecessor) counts as satisfied; the
+  output names those tasks. Subtasks never take part in a cascading close — their state files record how far
+  the task got.
+- **Dirty worktree**: uncommitted changes beyond the driver's own state files make `close` refuse (exit code
+  `1`, files listed); `--commit-changes` merges them into the close commit, `--stash-changes` runs
+  `git stash push --include-untracked` at every repository root (nested repositories first, each printed).
+- **Exit codes**: `0` closed; `1` refused or usage error; `2` the close commit or close-out check failed.
+- **Undo is `git revert`; there is no `reopen`**: `close` ends its output with
+  `to undo before anything else runs: git revert <sha>`. The revert restores `todo.md`, removes the
+  `Closed:` field, unticks the index and removes the mechanical handover; the cleared run records are **not**
+  restored — a reopened task starts from zero, which is exactly what reopening should mean. The limit is
+  "before any follow-up work runs": once later work has built on the close (say the next phase was already
+  planned under the new state), the revert leaves two open phases and `reopen` would not help either.
+- **`plan --force-close <ref> --reason <text> [close options above]`**: closes first, then continues
+  `plan`'s normal flow in the same process (sharing `plan`'s run lock; close refused → exit code `1` with
+  nothing written, commit failed → `2`; after a successful close the exit code is `plan`'s). Close-class
+  options (`--reason`, `--cascade`, `--commit-changes`, `--stash-changes`) on `plan` without
+  `--force-close` are usage errors; no other command accepts `--force-close`. Typical uses:
 
 ```sh
-opencode-auto plan <dir> --force-close T-005 --reason "方向已换" --append -p "改做 X"   # 换掉一个任务
-opencode-auto plan <dir> --force-close R-01.P02 --reason "本轮跳过"                     # 跳过该阶段,直接规划下一个
+opencode-auto plan <dir> --force-close T-005 --reason "direction changed" --append -p "do X instead"   # swap out a task
+opencode-auto plan <dir> --force-close R-01.P02 --reason "skipped this round"                     # skip the phase, plan the next one directly
 ```
 
-## opencode server 与 agent 选择
+## opencode server and agent selection
 
-### opencode server:缺省自动启动与自动重启
+### opencode server: default auto-start and auto-restart
 
-`run` **缺省自动启动**一个 `opencode serve` 子进程(要求 PATH 上有
-`opencode` CLI),其生命周期完全由本工具托管:正常退出或被强制终止时关闭 server。
-仅当显式指定时才复用外部 server:`--server <url>` 或环境变量 `OPENCODE_AUTO_SERVER`
-(要求该地址健康,否则报用法/环境错误退出码 1)。
+By default `run` **auto-starts** an `opencode serve` child process (requires the `opencode` CLI on PATH)
+whose lifecycle is fully managed by this tool: the server is shut down on normal exit or force termination.
+An external server is reused only when explicitly requested: `--server <url>` or the environment variable
+`OPENCODE_AUTO_SERVER` (the address must be healthy, otherwise a usage/environment error with exit code 1).
 
-托管实例在两种情况下会**自动杀死并重启新实例**:
+The managed instance **kills itself and starts a fresh one** in two situations:
 
-1. **网络类会话错误**:会话错误匹配 `Internal network failure` / `Network error`
-   等网络/服务故障特征时,driver 先重启 server 再换新会话重试(至多 3 次,仍失败
-   则阻塞停机),避免对着同一坏实例反复失败;
-2. **AGENTS.md 有更新**:AGENTS.md 是会话的 system context,driver 跟踪其变更
-   指纹(mtime + size),发现更新后**在下一个新会话开启前**重启 server,使新会话
-   必定加载最新内容(AGENTS.md 虽在每个 provider turn 现场重读,重启用于兜底
-   缓存场景)。会话不再维护 AGENTS.md(`run` 期间只读),这一路径只在文件于
-   运行中被外部改动时才会触发。
+1. **Network-class session errors**: when a session error matches network/service-failure signatures like
+   `Internal network failure` / `Network error`, the driver restarts the server first, then retries in a new
+   session (at most 3 times; still failing blocks and halts), avoiding repeated failures against the same
+   broken instance;
+2. **AGENTS.md updated**: AGENTS.md is the sessions' system context; the driver tracks its change
+   fingerprint (mtime + size) and, on detecting an update, restarts the server **before the next new session
+   opens**, so the new session is guaranteed to load the latest content (AGENTS.md is re-read live on every
+   provider turn anyway; the restart is a backstop for caching). Sessions no longer maintain AGENTS.md
+   (read-only during `run`), so this path only triggers when the file is changed externally mid-run.
 
-复用外部 server 时实例不受本工具管理:上述两种情况只打提示、不重启(网络错误
-仍会换新会话重试),外部实例的启停与修复由使用者自行负责。
+With an external server the instance is not managed by this tool: in the two situations above it only prints
+a notice and does not restart (network errors still retry in a new session); starting, stopping and
+repairing the external instance is the user's responsibility.
 
-### agent 的含义与选择
+### Agent semantics and selection
 
-`agent` 键选择**驱动会话的编码 agent**(`init --agent opencode|claude`,M6.1):
+The `agent` key selects the **coding agent that drives the sessions** (`init --agent opencode|claude`, M6.1):
 
-| 选择 | 说明 |
+| Choice | Description |
 | --- | --- |
-| `opencode`(缺省) | 托管或复用 `opencode serve`(见上节),能力全集 |
-| `claude` | Claude Code headless(`claude -p --output-format stream-json`,要求 PATH 上有 `claude` CLI);每个工作会话一个子进程,`--server` 被忽略。缺失的能力(fork、提问等)在 run 启动时自动降级并逐条打印 |
+| `opencode` (default) | Managed or reused `opencode serve` (see above), the full capability set |
+| `claude` | Claude Code headless (`claude -p --output-format stream-json`, requires the `claude` CLI on PATH); one child process per working session, `--server` ignored. Missing capabilities (fork, questions, …) are degraded automatically at run start and printed one by one |
 
-优先级:外壳画像指定的 agent > 环境变量 `OPENCODE_AUTO_AGENT`(按次覆盖,空串 = 不覆盖)
-> 配置 `agent` 键 > `opencode`。所有会话(m 模式的规划会话在内)都由 `run` 的
-driver 发起,同样使用该 agent。
+Precedence: the shell profile's agent > the environment variable `OPENCODE_AUTO_AGENT` (per-run override;
+empty string = no override) > the config's `agent` key > `opencode`. Every session (including the `m`-mode
+planning session) is started by `run`'s driver and uses that agent.
 
-**agent 契约**恒为 `init` 生成并维护的 `.opencode/agent/auto.md`(M6.1 起不再可选;旧版
-`--agent <name>` 的契约名语义已退役):非交互工作契约——严格只做本次角色、状态文件
-只读、验证执行权在 driver、权限问题走 question 工具其余自主决策并记录决策过程。
-opencode 把它作为会话 agent;claude 把其正文追加到系统提示词、把 `opencode.json`
-的权限规则转写为 claude 设置。契约与内置模板不一致时 `init` / `amend` / `fix` 总是替换为最新模板,
-`run` 启动时发现不一致会给出刷新提示;文件缺失时 run 前完整性检查拦截——二者都指向
-`opencode-auto fix <dir>`(按现有配置重写契约,不动任何键)。
+The **agent contract** is always `.opencode/agent/auto.md`, generated and maintained by `init` (no longer
+optional since M6.1; the old `--agent <name>` contract-name semantics are retired): a non-interactive work
+contract — strictly do only the current role, treat state files as read-only, verification execution rights
+belong to the driver, permission questions go through the question tool while everything else is decided
+autonomously with the decision process recorded. opencode uses it as the session agent; claude appends its
+body to the system prompt and translates `opencode.json`'s permission rules into claude settings. When the
+contract differs from the built-in template, `init` / `amend` / `fix` always replace it with the latest
+template, and `run` prints a refresh hint at startup when it spots a mismatch; a missing file is caught by
+the pre-run integrity check — both point at `opencode-auto fix <dir>` (rewrites the contract from the
+current config, touching no key).
 
-## 模型注册表与分层路由(model registry)
+## Model registry and tiered routing (model registry)
 
-哪些模型存在、每个由哪个 agent 跑、用什么钥匙付费、什么时段便宜,是**操作者**的知识而非
-项目内容:它住在目标目录之外的**模型注册表**(model registry,auto-core plans/0055)里,
-由两层合并而成:
+Which models exist, which agent runs each, which keys pay for them and when they are cheap is the
+**operator's** knowledge, not project content: it lives in the **model registry** outside the target
+directory (auto-core plans/0055), merged from two layers:
 
-- **操作者层**(operator layer):`$OPENCODE_AUTO_MODELS` 指定的文件;未设时为
-  `$XDG_CONFIG_HOME/opencode-auto/models.json`(`XDG_CONFIG_HOME` 缺省 `~/.config`,
-  相对值被忽略)。指向的文件不存在即视为没有操作者层(不回落 XDG 路径)。
-- **项目层**(project layer):`.opencode/auto/models.json`(可选)。它属于操作这台检出
-  的人,不随仓库走,故为**本地私有文件**:`init` 把 `/.opencode/auto/models.json` 写进
-  `.gitignore`(更早初始化的项目由 `fix` 补上该条目),`reset` 只移除条目、从不删文件
-  本身,`run` 期间与其他配置一起置为只读;git 未忽略(或已跟踪)的项目层在 `run` /
-  `plan` 启动时拒绝(退出码 1,报文指向 `fix`)。
+- **Operator layer**: the file named by `$OPENCODE_AUTO_MODELS`; when unset,
+  `$XDG_CONFIG_HOME/opencode-auto/models.json` (`XDG_CONFIG_HOME` defaults to `~/.config`; relative values
+  are ignored). A missing file counts as no operator layer (no fallback to the XDG path).
+- **Project layer**: `.opencode/auto/models.json` (optional). It belongs to whoever operates this checkout
+  and does not travel with the repository, hence a **local-only file**: `init` writes
+  `/.opencode/auto/models.json` into `.gitignore` (`fix` backfills the entry for older projects), `reset`
+  removes only the entry and never deletes the file itself, and during `run` it is read-only alongside the
+  other configs; a project layer git does not ignore (or already tracks) is refused at `run` / `plan`
+  startup (exit code 1, message pointing at `fix`).
 
-两层都不存在即**无注册表**:一切行为与以往逐字节一致,环境开关语义不变。合并只做一级:
-项目层的 `agents` / `models` / `tiers` / `routes` 每个键**整体替换**操作者层的同名条目
-(`null` 值删除操作者层的该条目),`tz` / `classifier` 整体替换,条目内部从不合并。
-装载**严格**:坏 JSON、未知字段(顶层与条目内都不容忍——拼错的 `aviod` 会把模型悄悄放回
-高峰时段)、坏窗口、坏引用,均在启动时以退出码 1 逐条报出(每条点名层与文件)。注册表只在
-run 启动时读一次,编辑在下次运行生效;driver 只读、从不写这两层。
+Neither layer present means **no registry**: every behavior stays byte-for-byte as before and the
+environment-switch semantics are unchanged. The merge is one level deep: each of the project layer's
+`agents` / `models` / `tiers` / `routes` keys **wholly replaces** the operator layer's entry of the same
+name (a `null` value deletes that operator entry); `tz` / `classifier` replace wholesale; entries are never
+merged internally. Loading is **strict**: bad JSON, unknown fields (tolerated neither at top level nor
+inside entries — a misspelled `aviod` would silently push a model back into peak hours), bad windows and
+bad references are all reported item by item at startup with exit code 1 (each naming the layer and file).
+The registry is read once at run start; edits take effect on the next run. The driver only reads, never
+writes either layer.
 
-### 注册表格式
+### Registry format
 
-JSON。**内部名**(internal name,`^[a-z][a-z0-9.-]*$`)是模型的注册表键:不含 `/`,
-因此绝不会与裸 `provider/model` 串混淆。示例为示意(名字与窗口都不是任何 provider 的真实
-价目表):
+JSON. The **internal name** (`^[a-z][a-z0-9.-]*$`) is a model's registry key: it contains no `/`, so it can
+never be confused with a bare `provider/model` string. The example is illustrative (neither the names nor
+the windows are any provider's real price sheet):
 
 ```json
 {
@@ -572,515 +631,612 @@ JSON。**内部名**(internal name,`^[a-z][a-z0-9.-]*$`)是模型的注册表键
 }
 ```
 
-**agent 画像**(agent profile,`agents.<name>`):`adapter` 必填(`opencode` / `claude`,
-或外壳经 `registerAgentAdapter` 注册的名字);`bin` 可选(可执行文件,缺省用 adapter 自带
-的 `opencode` / `claude`);`env` 可选(见下节);`server` 可选(仅 opencode:外部 server
-地址,`--server` 仍按次覆盖)。没有 `agents` 节即隐含一个 `opencode` 画像。多个画像共用
-一个 adapter 即可做**账号容错**:两个 claude 画像只差 `CLAUDE_CONFIG_DIR`,各自在 driver
-之外登录,档位里两个都列,失败切换就是普通的模型降级。
+**Agent profiles** (`agents.<name>`): `adapter` is required (`opencode` / `claude`, or a name the shell
+registered via `registerAgentAdapter`); `bin` is optional (an executable; by default the adapter's own
+`opencode` / `claude`); `env` is optional (see below); `server` is optional (opencode only: an external
+server address; `--server` still overrides per run). No `agents` section implies a single `opencode`
+profile. Several profiles sharing one adapter give **account fault tolerance**: two claude profiles
+differing only in `CLAUDE_CONFIG_DIR`, each logged in outside the driver, both listed in a tier — switching
+on failure is an ordinary model failover.
 
-**模型条目**(`models.<内部名>`):`agent` 必填(画像名);`model` 可选——缺省即用该
-agent 自己的缺省模型(提示词不带 model),此时条目不能有 `keys` / `variant` / `wider`,
-于是"只做暂停"的注册表可以表达;`avoid` / `only` 二选一(窗口列表);`keys` 为有序密钥环
-(仅 opencode);`wider` 为上下文步进(仅 opencode);`variant` 透传 opencode 的每提示词
-变体(如推理力度;claude 在装载时拒绝该字段);`context` 可选(以千 tokens 记的上下文窗口,
-供启动前未报告窗口的 agent 使用)。
+**Model entries** (`models.<internal name>`): `agent` is required (a profile name); `model` is optional —
+when absent the agent's own default model is used (the prompt carries no model), and the entry may not have
+`keys` / `variant` / `wider`, so a "pausing-only" registry can be expressed; `avoid` / `only` are mutually
+exclusive (a window list); `keys` is an ordered key ring (opencode only); `wider` is the context step
+(opencode only); `variant` passes through opencode's per-prompt variant (e.g. reasoning effort; claude
+rejects the field at load); `context` is optional (the context window in thousand tokens, for agents that
+do not report one before startup).
 
-### 档位(tier)与路由
+### Tiers and routing
 
-会话分两档:**deep**(需要深度推理)与 **simple**(报告、蒸馏、提取类)。把模型列进档位
-就是它的分类;同一个模型可以同时出现在两档。程序默认表:阶段规划、m 模式规划扫描、分解为
-deep;收尾、阶段交接、知识/前置知识、编号恢复、旁路一次性会话为 simple;任务会话(整任务、
-子任务)用**阶段类型的执行档**——内置类型中 a 分析 / d 设计 / v 验收为 deep,m 实现 /
-t 测试 / k 知识提炼为 simple,自定义类型读其类型文件的 `Reasoning: deep|simple` 字段
-(缺省 deep,随项目版本化)。**借用**是单向的:simple 会话的 simple 列表没有可用模型时
-续走 deep 列表(可用性优先于成本);deep 会话从不借用 simple——它等待,因为深度正是它
-存在的理由。`routes` 可按操作者覆盖:键是角色词 / 阶段类型 id / 预设字母(优先级同
-`OPENCODE_AUTO_MODEL` 的键语法;`*` 不允许——档位列表本身就是缺省),值是档名或一个
-有序内部名列表。
+Sessions come in two tiers: **deep** (deep reasoning needed) and **simple** (reports, distillation,
+extraction). Listing a model in a tier *is* its classification; the same model may appear in both. The
+program's default table: phase planning, the `m`-mode planning scan and decompose are deep; wrap-up, phase
+handover, knowledge/prior-knowledge, numbering recovery and one-shot bypass sessions are simple; task
+sessions (whole-task, subtask) use the **phase type's execute tier** — among the builtin types a analysis /
+d design / v acceptance are deep, m implementation / t test / k knowledge distillation are simple, and a
+custom type reads its type file's `Reasoning: deep|simple` field (default deep, versioned with the
+project). **Borrowing** is one-way: a simple session whose simple list has nothing available continues down
+the deep list (availability beats cost); a deep session never borrows simple — it waits, because depth is
+the reason it exists. `routes` is the operator's override: keys are role words / phase type ids / preset
+letters (precedence as in `OPENCODE_AUTO_MODEL`'s key syntax; `*` is not allowed — the tier lists themselves
+are the default), values are a tier name or an ordered list of internal names.
 
-每次下发在候选列表里取**第一个此刻可用的**条目:过 agent 过滤、在窗口内、未被降级标记、
-其 provider 的密钥环(若有)还有未标记的 key、已知上下文窗口不低于项目上限(带步进的
-条目看顶端一步)。同一提示词的延续(重试、失败后的 fork、等待环的重发、严格恢复)保持链上
-模型不变;新提示词随时回首选——首选窗口重开或标记清除即自动回归,低价时段的回试因此不需要
-额外状态。无可用候选时:有候选只是被窗口拦住 → **等待最早开放时刻**(睡眠在单元内、加
-hibernate 同款 0–600 秒随机抖动、计入 `window` 等待、双击 Ctrl+C 可强退);全部被标记
-降级 → 走既有**等待-探测环**(探测首个窗口内候选,成功即清其标记);过滤后档位一个候选
-都不剩 → 预检错误(退出码 1),绝不静默等待。
+Every dispatch takes the **first entry available right now** from the candidate list: past the agent
+filter, inside its window, not down-marked, its provider's key ring (if any) still has an unmarked key, and
+its known context window is at least the project limit (stepped entries check the top step). Continuations
+of the same prompt (retries, forks after failure, wait-loop redispatches, strict recovery) keep the chain's
+model; a new prompt goes back to the preferred entry at any time — it returns automatically once the
+preferred window reopens or the mark clears, so failback in cheap hours needs no extra state. With no
+available candidate: candidates exist but are windowed out → **wait for the earliest opening** (the sleep
+happens inside the unit, with the same 0–600 s random jitter as hibernate, counted as `window` waiting; two
+consecutive Ctrl+C force-quits); all down-marked → the existing **wait-and-probe loop** (probes the first
+in-window candidate and clears its mark on success); the tier has no candidate left after filtering → a
+preflight error (exit code 1), never a silent wait.
 
-会话错误按**key → 模型 → 等待**升级:配额/鉴权/限流类先试密钥环轮换,再降级模型,最后
-等待(auto-core plans/0017 的重试阶梯不变)。
+Session errors escalate **key → model → wait**: quota/auth/rate-limit classes first try key ring rotation,
+then failover to another model, and finally wait (the retry ladder of auto-core plans/0017 is unchanged).
 
-### 窗口(window)与时区
+### Windows and time zones
 
-`avoid` 使模型在所列窗口内不可用,`only` 使模型仅在所列窗口内可用。语法
-`[days ]HH:MM-HH:MM`:`days` 为 `mon`..`sun`、区间(`mon-fri`,可跨周如 `fri-mon`)或
-逗号列表(列表项本身可是区间,`mon-wed,fri`),缺省为每天;`24:00` 只允许作终点;跨午夜
-的窗口(`22:00-06:00`)属于它开始的那天。全文件一个 `tz`(IANA 时区,缺省 `UTC`),
-按当地钟面解释、含夏令时规则(不存在的时间开在跳变处,重复的时间取第一次)。窗口只拦
-**下发**,不打断进行中的回合;正在跑的回合跑完,下一次下发重新选择。机器时钟即准,系统
-休眠后睡眠自然迟到(同 hibernate)。
+`avoid` makes a model unavailable inside the listed windows; `only` makes it available only inside them.
+Syntax `[days ]HH:MM-HH:MM`: `days` is `mon`..`sun`, a range (`mon-fri`, may wrap the week like `fri-mon`)
+or a comma list (list items may themselves be ranges, `mon-wed,fri`), defaulting to every day; `24:00` is
+allowed only as an end point; a window crossing midnight (`22:00-06:00`) belongs to the day it starts. One
+`tz` per file (an IANA zone, default `UTC`), interpreted on the local clock face including DST rules (a
+nonexistent time opens at the jump; a repeated time takes the first occurrence). Windows gate **dispatches**
+only and never interrupt a running turn; the running turn finishes and the next dispatch re-selects. The
+machine clock is taken as correct; after system sleep the sleep simply arrives late (same as hibernate).
 
-### 密钥环(key ring)
+### Key ring
 
-一个 opencode provider 的多把 API key 构成一**环**:声明在模型条目上、作用于整个
-provider——同一 provider 的所有条目必须声明同一环(或都不声明),两套不同的环是装载错误。
-key **只接受引用**:`{env:NAME}` 或 `{file:path}`(相对路径相对所在层文件解析);字面量
-密钥在装载时拒绝。driver 从不把 key 的值读进任何字符串:引用经 spawn config
-(`OPENCODE_CONFIG_CONTENT`)交给托管的 opencode server,在 server 自己的进程内替换;
-日志与输出只报引用名(`key 2/3 ZHIPU_KEY_B`)。**轮换即重启托管 server**:下一把 key 写进
-spawn config、server 重启(会话跨重启保留),失败会话 fork 后以**同一模型**重发。环位只进
-不退——清除的 key 标记不回卷环位,只有当前 key 失败才推进,避免重启抖动;探测环的成功
-同样只清标记。外部 server(`--server`、画像 `server`)无法重启,环在其下不活跃(启动日志
-说明)。**目前尚无 provider 被列为已验证支持密钥环**:通用 provider 路径(config apiKey
-优先于环境与 `auth.json`、`{env:}`/`{file:}` 在 server 进程内替换、setConfig+restart
-重发)已经源码与实机机制验证,但 bedrock、cloudflare、cloudflare-ai-gateway、gitlab 与
-网关(env 先于 config)这类自定义装载路径须各自通过双钥冒烟(`OPENCODE_AUTO_E2E_KEYS`,
-见 `packages/auto` 的 e2e 说明)后方可列入。
+Multiple API keys for one opencode provider form a **ring**: declared on model entries, effective for the
+whole provider — every entry of the same provider must declare the same ring (or none); two different rings
+are a load error. Keys **accept references only**: `{env:NAME}` or `{file:path}` (relative paths resolve
+against the layer file); literal secrets are rejected at load. The driver never reads a key's value into
+any string: the reference reaches the managed opencode server through the spawn config
+(`OPENCODE_CONFIG_CONTENT`) and is substituted inside the server's own process; logs and output name the
+reference only (`key 2/3 ZHIPU_KEY_B`). **Rotation is a managed server restart**: the next key goes into
+the spawn config and the server restarts (sessions survive the restart); the failed session is forked and
+resent on the **same model**. The ring position only advances — clearing a key's mark never rewinds it; it
+moves only when the current key fails, avoiding restart churn; a successful probe likewise clears only the
+mark. An external server (`--server`, a profile's `server`) cannot be restarted, so the ring is inactive
+under it (the startup log says so). **No provider is listed as verified for key rings yet**: the generic
+provider path (config apiKey taking precedence over the environment and `auth.json`, `{env:}`/`{file:}`
+substitution inside the server process, setConfig+restart resend) is verified at the source and mechanism
+level on real machines, but custom loading paths — bedrock, cloudflare, cloudflare-ai-gateway, gitlab and
+gateways (env before config) — each need a two-key smoke test (`OPENCODE_AUTO_E2E_KEYS`, see the e2e notes
+of `packages/auto`) before being listed.
 
-### 上下文步进(context step)
+### Context step
 
-同一模型按数个 id 发售、共享提示缓存、只差上下文窗口与价格时(如 kimi `k3-256k` 与
-`k3`),写**一个条目**:`model` 为基础档,`wider` 列出逐级更大的 id。条目是路由的单位:
-档位、路由、窗口、密钥环、降级标记都作用于整条;项目上限的钳制看顶端一步。装载校验每一步
-都在同一 provider 上且窗口严格递增(server 起来后核对,未知窗口则自该步起禁用并告警)。
-会话上下文到达当前一步的**步进点**(窗口 − max(48k, 窗口/5))时,driver 向**同一会话**
-发一条带下一 id 的插话——会话、历史与缓存前缀都不动,无 fork 无交接;插话一律点名当前
-id,防止 server 把后续回合落回基础档。会话内只升不降;新会话(新提示词、交接后、降级到
-本条目)从基础档起;恢复时按历史上下文量重算,不落盘。步进插话成功后的第一个
-step-finish 核对缓存主张
-(`cacheRead` 大 → 共享成立;整前缀 `cacheWrite` → 矛盾,每条目告警一次)。提前步进只是
-多花差价;迟了则 server 照常压缩,日志记 `step-up late`。
+When the same model is sold under several ids that share the prompt cache and differ only in context window
+and price (e.g. kimi `k3-256k` vs `k3`), write **one entry**: `model` is the base step and `wider` lists
+the progressively larger ids. The entry is the unit of routing: tiers, routes, windows, key rings and down
+marks apply to it as a whole; the project limit is clamped against the top step. Load validation checks
+that every step is on the same provider with strictly increasing windows (verified once the server is up; a
+step with an unknown window is disabled from that step on, with a warning). When the session context
+reaches the current step's **step-up point** (window − max(48k, window/5)), the driver steers **the same
+session** with the next id — session, history and cached prefix all stay put, no fork, no handover; the
+interjection always names the current id so the server does not drop later turns back to the base step.
+Within a session it only steps up, never down; a new session (new prompt, after a handover, failed over
+onto this entry) starts at the base step; on recovery it is recomputed from the historical context size and
+not persisted. The first step-finish after a successful step-up interjection checks the cache claim (large
+`cacheRead` → sharing holds; a full-prefix `cacheWrite` → contradiction, warned once per entry). Stepping
+up early only pays the price difference; stepping up late means the server compacts as usual and the log
+records `step-up late`.
 
-### 画像 env:代理与多账号
+### Profile env: proxies and multiple accounts
 
-画像 `env` 叠加在 driver 环境之上、只作用于该画像的进程:值为字面量(`~` 展开)、
-`{env:NAME}` / `{file:path}` 引用(driver 在该画像的 host 启动前解析,host 重启沿用同一次
-解析)或 `null`(移除继承的变量,把全局代理挡在必须直连的 agent 之外)。用途:`HTTPS_PROXY` 等
-把该 agent 的流量走代理(`NO_PROXY` 缺省不含回环,driver 自身连托管 server 的回环流量
-会被代理截走——预检在 `HTTP_PROXY` 已设而 `NO_PROXY` 不含 `127.0.0.1,localhost` 时
-告警);`CLAUDE_CONFIG_DIR` 把两个外部登录的账号变成两个画像。**一个 opencode server
-一个环境**:同一 server 上所有 provider 共享它的 env,部分 provider 需要代理时用
-`NO_PROXY` 列直连主机,或声明两个 opencode 画像(各起一个托管 server、各持各的密钥环;
-会话不跨画像)。外部 server 保持它启动时的 env,画像 `env` 对它无效。日志与
-`models` 输出只报变量名,从不报值。
+A profile's `env` layers on top of the driver's environment and applies only to that profile's processes:
+values are literals (`~` expanded), `{env:NAME}` / `{file:path}` references (resolved by the driver before
+the profile's host starts; a host restart reuses the same resolution) or `null` (removes the inherited
+variable, keeping a global proxy away from agents that must connect directly). Uses: `HTTPS_PROXY` and
+friends route that agent's traffic through a proxy (`NO_PROXY` does not include loopback by default, and the
+driver's own loopback traffic to the managed server would be intercepted by the proxy — preflight warns when
+`HTTP_PROXY` is set and `NO_PROXY` lacks `127.0.0.1,localhost`); `CLAUDE_CONFIG_DIR` turns two externally
+logged-in accounts into two profiles. **One opencode server, one environment**: all providers on the same
+server share its env; when only some providers need a proxy, list the direct hosts in `NO_PROXY`, or declare
+two opencode profiles (each runs its own managed server and holds its own key ring; sessions never cross
+profiles). An external server keeps the env it started with; a profile's `env` has no effect on it. Logs and
+`models` output name variables only, never values.
 
-### 失败信息分类器(classifier)
+### Failure-message classifier (classifier)
 
-provider 的失败话术各异(其他语言、套餐限额、"resets at 15:00"),错误模式串认不出时,
-注册表 `classifier` 列出的模型(通常是免费模型)来读:仅在模式串不能定论时询问(unknown
-类、或未到阈值的限流信号;绝不问 overflow / 已定的 quota / auth),一次失败回合只问一次,
-30 秒超时或失败即当无答复、模式串结论照旧。答复是一行 JSON(`class` + 可选 `resetAt`),
-**只升不降**:unknown 取答复的类(quota / rate / auth / transient,rate 也须待模式串自身
-的阈值成立),未到阈值的限流信号只可升为 quota,从不下调模式串已定的类。quota / auth
-答复像模式串一样立刻收束回合(中止后走
-key → 模型 → 等待);`resetAt`(带时区偏移、未来 7 天内)设定降级标记的解除时刻。
-每 run 至多 20 次、按脱敏文本缓存(同文只花一次)。它只送**脱敏后的错误文本**(≤2000 字符,
-密钥样 token / 邮箱 / URL 查询串已去除),在 adapter 缺省 agent 上开一次性会话、**全部
-工具禁用**——免费档可能留存它收到的内容,故输入面收得这么窄。分类器自身的失败由模式串
-归类,只标记分类器条目自身。其 token 计入 `classify` 桶,不进单元会话合计。
+Providers phrase failures differently (other languages, plan limits, "resets at 15:00"); when the error
+pattern strings cannot decide, the models listed in the registry's `classifier` (usually free models) read
+it: they are asked only when the pattern strings are inconclusive (unknown class, or a rate signal below
+its threshold; never for overflow / already-decided quota / auth), at most once per failed turn, and a
+30-second timeout or failure counts as no answer — the pattern-string verdict stands. The reply is one line
+of JSON (`class` + optional `resetAt`) and **only ever escalates**: unknown takes the reply's class (quota /
+rate / auth / transient — rate also requires the pattern string's own threshold to hold), a rate signal
+below threshold may only escalate to quota, and a class the pattern strings already decided is never
+downgraded. A quota / auth reply ends the turn immediately, like a pattern string (after the abort:
+key → model → wait); `resetAt` (with timezone offset, within the next 7 days) sets when the down mark
+lifts. At most 20 calls per run, cached by the redacted text (the same text is paid for once). It receives
+**only the redacted error text** (≤2000 characters; key-like tokens / emails / URL query strings stripped),
+in a one-shot session on the adapter's default agent with **all tools disabled** — a free tier may retain
+what it receives, hence the narrow input surface. The classifier's own failures are classified by the
+pattern strings and only mark the classifier entry itself. Its tokens go into the `classify` bucket, not
+the unit session totals.
 
-### 多 agent 池与运行行为
+### The agent pool and run behavior
 
-有注册表时,driver 为**每个被选中的画像惰性启动一个 host**(没人选的画像永不拉起;每个
-opencode 画像一个托管 server,画像的 `bin` / `env` / 密钥环 spawn config 都作用于自己的
-进程——driver 亲自 spawn `opencode serve`,不再经 SDK)。会话**从不跨画像**:跨 agent 的
-移动 = 新会话 + 工作区核对说明;会话链与持久记录(进度记录、fork 基点、交接锚点)都带
-agent,旧记录无该字段即归缺省 agent。启动时按过滤后档位/路由列表涉及的 adapter 做**能力交集
-降级**(逐条注明是哪个 agent 缺的;分类器列表不扩大交集);预检对每个被引用的画像跑
-`<bin> --version`(10 秒)。
-运行启动打印**路由块**(每档列表与各模型的 agent、窗口现状、环位;生效路由;过滤),每次
-下发打 `◈` 行并注明移动原因(`window` / `quota` / `key ring` / `failback`,分类器来源
-标注如 `quota (classifier)`),等待打 `⏸` 行、步进打 `⇡` 行。统计按内部模型名与档位记账
-(裸覆盖值按原串),轮完成结论逐模型一行(仅本轮)加档位小结;无模型数据时持久化形状与
-结论逐字节不变。
+Under a registry the driver **lazily starts one host per selected profile** (a profile nobody selects never
+spawns; one managed server per opencode profile, with the profile's `bin` / `env` / key ring spawn config
+applied to its own process — the driver spawns `opencode serve` itself, no longer through the SDK).
+Sessions **never cross profiles**: a cross-agent move = a new session + a worktree-verification note;
+session chains and persistent records (progress record, fork base, handover anchor) all carry the agent,
+and an old record without the field belongs to the default agent. At startup, **capability degradation
+intersects** over the adapters the filtered tier/route lists involve (each note naming the agent that lacks
+it; the classifier list does not widen the intersection); preflight runs `<bin> --version` (10 seconds) for
+every referenced profile. Run start prints the **routing block** (each tier's list with every model's
+agent, current window state, ring position; effective routes; filtering); every dispatch prints a `◈` line
+naming the reason for the move (`window` / `quota` / `key ring` / `failback`; a classifier origin annotated
+as `quota (classifier)`); waits print `⏸` lines and step-ups print `⇡` lines. Stats are booked per internal
+model name and per tier (bare override values as the raw string); the round-completion conclusion has one
+line per model (this round only) plus a per-tier summary; with no model data the persisted shape and the
+conclusion stay byte-identical.
 
-### 环境变量与命令在有无注册表下的行为
+### Environment variables and commands with and without a registry
 
-| 面 | 无注册表 | 有注册表 |
+| Surface | No registry | With a registry |
 | --- | --- | --- |
-| `OPENCODE_AUTO_MODEL` | 不变 | 键语法相同;值为**内部名**,或跑在缺省 agent 上的裸 `provider/model`(无窗口、无环、无步进)。覆盖匹配会话的候选列表,仅本次运行 |
-| `OPENCODE_AUTO_MODEL_FALLBACK` | 不变 | **用法错误**(退出码 1):档位列表就是降级序 |
-| `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` | 不变 | 清除降级标记(模型与 key 两类) |
-| `/failback [a b …]` | 不变 | 参数为内部名;整体替换此后所有列表(同覆盖语义) |
-| `OPENCODE_AUTO_AGENT`、外壳画像 `agent` | 选择运行唯一的 agent | **过滤**:仅该 adapter 上的模型是候选。配置 `agent`(init `--agent`)不再是过滤,而是**缺省 agent**——裸 `provider/model` 值与不带 agent 的会话记录归属它;无档位用到它时启动提示 |
-| `--server` / `OPENCODE_AUTO_SERVER` | 不变 | 覆盖 opencode 画像的 `server`;外部 server 下密钥环不活跃,画像 `bin` / `env` 对它无效 |
+| `OPENCODE_AUTO_MODEL` | Unchanged | Same key syntax; the value is an **internal name**, or a bare `provider/model` running on the default agent (no window, no ring, no stepping). Overrides the matched session's candidate list, this run only |
+| `OPENCODE_AUTO_MODEL_FALLBACK` | Unchanged | **Usage error** (exit code 1): the tier list is the failover order |
+| `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` | Unchanged | Clears down marks (both the model and the key kind) |
+| `/failback [a b …]` | Unchanged | Arguments are internal names; wholly replaces every list from then on (same semantics as an override) |
+| `OPENCODE_AUTO_AGENT`, the shell profile's `agent` | Selects the run's single agent | **Filter**: only models on that adapter are candidates. The config's `agent` (init `--agent`) is no longer a filter but the **default agent** — bare `provider/model` values and session records without an agent belong to it; a startup notice when no tier uses it |
+| `--server` / `OPENCODE_AUTO_SERVER` | Unchanged | Overrides an opencode profile's `server`; the key ring is inactive under an external server, and the profile's `bin` / `env` have no effect on it |
 
-注册表的生效表见 [模型注册表一览(models)](#模型注册表一览models)。
+The registry's effective table: see [Model registry overview (models)](#model-registry-overview-models).
 
-## 执行流水线
+## Execution pipeline
 
-driver 对每个任务执行流水线,**索引勾选、`todo.md` → `done.md` 改名与 `.auto/units.json` 只由 driver 写入**。执行方式
-由项目配置的 `subtask` 键决定(`auto` 为缺省):
+The driver runs a pipeline for every task, and **index ticks, the `todo.md` → `done.md` rename and
+`.auto/units.json` are written by the driver alone**. How a task executes is decided by the project config's
+`subtask` key (`auto` is the default):
 
-`subtask: auto`(自动分解):
+`subtask: auto` (automatic decomposition):
 
-1. **分解**(`docs/T-NNN/subtasks.md` 尚无检查项时):一个会话分析任务并写出
-   `docs/T-NNN/subtasks.md`(Markdown 检查项,即该任务的子任务清单本体)与各子任务
-   目录的 `todo.md`。未产出有效文件会自动带反馈重试一次,仍失败则阻塞。
-2. **逐子任务执行**:任务内所有执行会话(分解/子任务/修复/收尾)串成一条链,
-   链内复用**缺省关闭**——每个提示词都开新会话(提示词自带完整上下文,不依赖
-   上一会话的记忆);置 `OPENCODE_AUTO_REUSE_SESSION=on` 恢复阈值复用:上一会话
-   结束时上下文占比低于 50%、已用量低于配置的 `contextLimit` 的一半(默认 32k
-   tokens)且距其结束**不超过 5 分钟**才复用它(占比与用量始终跟踪,与
-   `--verbose` 无关;拿不到模型上下文上限时占比记 100,一律新建;driver 托管
-   脚本与旁路会话可能耗时较久,超过 5 分钟即视为上下文陈旧、自动换新会话)。每个会话结束都无条件打印两行统计:行 1 `◉ 会话结束: 上下文 n%
-   (用量/上限 tokens),用时 X(累计 Y / N 轮)`(纯 AI 用时口径,跨中断累计),
-   行 2 为 tokens 分项(入/出/思考/缓存读/缓存写/命中率/费用);复用会话与
-   中断恢复接管的会话同样打印;任务完成/阶段收口/轮次完成时另有对应结论行
-   (各级跨中断累计用时与 tokens 分项,统计存于目标目录 `.auto/stats.json`,
-   清零即删除该文件);
-    子任务会话进行中上下文已用量达到配置的 `contextLimit` 的 2 倍时,driver
-    同样插入交接提示,AI 把本子任务进度写入 `docs/T-NNN/handoff.md`(末行
-    `Status: continue|done`,以该子任务是否完成计)后结束,新会话凭交接文档续跑
-    该子任务;子任务完成后 driver 删除该文件,下一子任务重新起算;
-    子任务会话自我检查自己的工作,会话结束后 driver 把子任务 `todo.md` 改名为
-    `done.md` 并勾选 subtasks.md 对应行。
-3. **收尾**:见下方公共部分。
+1. **Decompose** (when `docs/T-NNN/subtasks.md` has no checklist yet): one session analyzes the task and
+   writes `docs/T-NNN/subtasks.md` (a Markdown checklist — the task's subtask checklist itself) plus each
+   subtask directory's `todo.md`. Producing no valid file is retried once automatically with feedback;
+   failing again blocks.
+2. **Execute subtask by subtask**: all execution sessions within a task (decompose/subtask/repair/wrap-up)
+   form one chain, and reuse within the chain is **off by default** — every prompt opens a new session (each
+   prompt carries its full context and does not depend on the previous session's memory); set
+   `OPENCODE_AUTO_REUSE_SESSION=on` to restore threshold-based reuse: the previous session is reused only
+   when its context share at the end was below 50%, its used tokens below half the configured `contextLimit`
+   (32k tokens by default) and it ended **no more than 5 minutes ago** (share and usage are always tracked,
+   independent of `--verbose`; when the model's context limit is unavailable the share is recorded as 100
+   and a new session is always opened; driver-managed scripts and bypass sessions can run long — past 5
+   minutes the context counts as stale and a new session starts automatically). Every session end
+   unconditionally prints two stats lines: line 1 `◉ session ended: context n% (used/limit tokens), time X
+   (cumulative Y / N turns)` (pure-AI time, accumulated across interruptions), line 2 the token breakdown
+   (in/out/thinking/cache-read/cache-write/hit-rate/cost); reused sessions and sessions taken over by
+   interruption recovery print them too; task completion / phase close-out / round completion each add
+   their own conclusion line (cumulative time and token breakdowns across interruptions at each level;
+   stats live in `.auto/stats.json` in the target directory, the file deleted when zeroed).
+   While a subtask session is running and its used context reaches twice the configured `contextLimit`, the
+   driver likewise injects a handover hint; the AI writes this subtask's progress to `docs/T-NNN/handoff.md`
+   (last line `Status: continue|done`, judged by whether the subtask is complete) and ends, and a new
+   session continues the subtask from the handover document; once the subtask completes the driver deletes
+   the file and the next subtask starts fresh.
+   The subtask session self-checks its own work; after the session ends the driver renames the subtask's
+   `todo.md` to `done.md` and ticks the matching line in subtasks.md.
+3. **Wrap-up**: see the common part below.
 
-`subtask: off`(关闭划分):一个会话完成整个任务,随后进入公共收尾;会话未能
-完成时**不做修复重跑**,driver 把任务状态改回 `pending` 并以退出码 2 停机,由人工
-改进任务文档后重新运行。
+`subtask: off` (splitting disabled): one session completes the whole task, then the common wrap-up runs; if
+the session fails to finish there is **no repair rerun** — the driver reverts the task status to `pending`
+and halts with exit code 2, for a person to improve the task documents and rerun.
 
-`subtask: ondemand`(按需交接):先按单会话执行;会话进行中上下文已用量达到
-配置的 `contextLimit` 的 2 倍时,driver 向该会话插入交接提示,AI 把进度与后续步骤写入
-`docs/T-NNN/handoff.md`(末行 `Status: continue|done`;旧版 `状态: 继续|完成` 仍可读)后结束,driver 开新会话从交接
-文档续跑,直到任务完成。
+`subtask: ondemand` (handover on demand): the task first runs as a single session; once the in-flight
+session's used context reaches twice the configured `contextLimit`, the driver injects a handover hint into
+it, the AI writes progress and remaining steps to `docs/T-NNN/handoff.md` (last line `Status: continue|done`;
+the older Chinese spelling is still readable) and ends, and the driver opens a new session that continues
+from the handover document until the task completes.
 
-公共部分(**收尾**):一个会话统一更新 docs/、`docs/T-NNN/report.md`(各子任务
-产出摘要),会话结束后由 driver 统一提交;随后 driver 读报告的结论行(见
-[验收结论行](#验收结论行result-passfail)):无结论行或 `Result: PASS` → 把任务标
-done;`Result: FAIL` → 任务置为阻塞、停止运行(退出码 2)。完成判定从不采信会话
-自述:子任务由 driver 按状态文件勾选,单元以产物落盘且统一提交成功为完成条件;
-检查工作本身规划成任务(验收任务、v 验收阶段),其结论只经结论行传给 driver。
+Common part (**wrap-up**): one session updates docs/ and `docs/T-NNN/report.md` (a summary of each
+subtask's output) coherently; after the session ends the driver runs the unified commit. The driver then
+reads the report's result line (see
+[Acceptance result line](#acceptance-result-line-result-passfail)): no result line or `Result: PASS` → the
+task is marked done; `Result: FAIL` → the task is blocked and the run stops (exit code 2). Completion is
+never judged by session self-report: subtasks are ticked by the driver from the state files, a unit is
+complete when its artifacts are on disk and the unified commit succeeded, and checking work is itself
+planned as tasks (acceptance tasks, the v acceptance phase), whose verdict reaches the driver only through
+the result line.
 
-没有单独的当前任务镜像(`CURRENT.md` 已于 2026-09-25 退役,auto-core
-plans/0054):每个会话的提示词都内联当前任务,任务的完整内容与进度就在它自己的
-`docs/T-NNN/todo.md` 与 `docs/T-NNN/subtasks.md` 里——AGENTS.md 指针块告诉会话在
-上下文被压缩或拿不准进度时重读这两个文件(AGENTS.md 作为 system context 每个
-provider turn 现场重读,不随上下文压缩丢失)。阻塞/回退 pending 的原因打印在运行
-日志里,中断阶段留在进度记录中。早先版本遗留的 `CURRENT.md`(首行为它固定写的
-标题)由 `run`/`plan` 启动时删除,删除随启动时的 carryover 提交落账;首行不同的
-同名文件属于项目自身,不会被动。
+There is no separate current-task mirror (`CURRENT.md` was retired on 2026-09-25, auto-core plans/0054):
+every session's prompt inlines the current task, and the task's full content and progress live in its own
+`docs/T-NNN/todo.md` and `docs/T-NNN/subtasks.md` — the AGENTS.md pointer block tells sessions to re-read
+those two files when the context gets compacted or progress is uncertain (AGENTS.md, as the system context,
+is re-read live on every provider turn and does not disappear with context compaction). The reason for a
+block or a revert-to-pending is printed in the run log; the interrupted phase stays in the progress record.
+A `CURRENT.md` left by earlier releases (first line the heading it always wrote) is deleted at `run`/`plan`
+startup, the deletion recorded in the startup carryover commit; a same-named file with a different first
+line belongs to the project itself and is never touched.
 
-非权限提问无人答复时由 driver 自动答复并要求 AI 自主决策继续;自动答复同时要求
-AI **记录决策过程**(决策理由与否决的备选方案写入相关文档),并按「这个分歧点的决定权
-本应属于谁」分两类标注 —— 本应由你拍板却被替你闭环的标 `AUTO-RESOLVE`、AI 本就该自己
-做的工程裁量标 `AUTO-DECISION`,前者在任务结束时高亮置顶提醒你复核。详见
-[提问策略与代答审计](#提问策略与代答审计auto-resolve)。
+When a non-permission question goes unanswered, the driver proxy-answers it and requires the AI to decide
+on its own and continue; the proxy answer also requires the AI to **record the decision process** (the
+rationale and the rejected alternatives go into the relevant documents) and to mark two classes per "whose
+call was this decision point supposed to be" — `AUTO-RESOLVE` for calls that were yours but were closed on
+your behalf, `AUTO-DECISION` for engineering decisions the AI should have made itself; the former is
+highlighted at the top at task end to remind you to review. See
+[Question policy and proxy-answer audit](#question-policy-and-proxy-answer-audit-auto-resolve).
 
-### 中断恢复
+### Interruption recovery
 
-上次运行被 kill/Ctrl+C 中断时,`.auto/units.json` 可能遗留 `in_progress` 状态(实际无会话在跑);
-`run` 启动时会把它们全部重置为 `pending` 再正常续跑(`attempts` 保留),无需手工清理。
+When the previous run was interrupted by kill/Ctrl+C, `.auto/units.json` may be left with an `in_progress`
+status (no session actually running); at startup `run` resets all of them to `pending` and resumes normally
+(`attempts` preserved) — no manual cleanup needed.
 
-恢复的依据是**进度记录** `.auto/progress.json`:run 期间 driver 在任务流水线的每个
-阶段边界持久化 `{task, session, at, active, phase}`——`phase` 标记当前阶段
-(分解 / 整任务执行 / 逐子任务 / 收尾 / 结论行检查),执行链会话在运行期间以
-`active` 记录;dryrun、fork 基点等旁路一次性会话不写记录(不污染执行链记忆)。
-任务完成即删除记录;旧版 `.auto/session.json` 兼容读取。
+Recovery is grounded in the **progress record** `.auto/progress.json`: during a run the driver persists
+`{task, session, at, active, phase}` at every stage boundary of the task pipeline — `phase` marks the
+current stage (decompose / whole-task execution / subtask by subtask / wrap-up / result-line check), and an
+execution-chain session is recorded live as `active` while it runs; one-shot bypass sessions such as dryrun
+and fork bases write no record (they do not pollute the execution chain's memory). The record is deleted
+when the task completes; the legacy `.auto/session.json` is read compatibly.
 
-**会话内恢复**(会话半途、无法总结进度——kill/崩溃/网络故障):只要该会话在
-server 上仍存在,driver 直接**复用该会话继续**(上下文不丢,与 `opencode -r
-<session-id>` 同构,不再设时间窗;该接管不受 `OPENCODE_AUTO_REUSE_SESSION` 与复用
-阈值约束,恢复日志带上继承的上下文用量,恢复说明用后即清、下一个提示词回归常规
-规则);首个提示词附恢复说明,要求 AI 用 git status/diff
-核对实际进度后从中断处继续。**交接文件优先**:中断前已写出
-交接文档(subtask auto 子任务或 ondemand 的 `docs/<id>/handoff.md`、handover-test
-的任务级/子任务级 `testhandoff.md`——任一范围的遗留均判定)时不复用旧会话——其
-上下文已用满、进度由交接文档承载,
-开新会话凭交接续跑(handoff 标记 `状态: 完成` 时直接跳过整任务会话)。会话已不可
-用或显式给出 `--new-session` 时开新会话:恢复说明中按记录的阶段给出具体的下一步
-指引,同样不重做已完成的工作——`--new-session` 仅跳过会话复用,阶段级精确重入
-保留,是旧会话上下文已陈旧时的逃生阀。事件流中断(未收到会话结束事件即断流,
-疑似 server 故障或网络断开)同样按会话半途处理,不会误判为会话正常结束。
+**In-session recovery** (session interrupted mid-flight with no way to summarize progress — kill/crash/
+network failure): as long as the session still exists on the server, the driver simply **reuses it and
+continues** (no context loss, isomorphic to `opencode -r <session-id>`, no time window anymore; the takeover
+is exempt from `OPENCODE_AUTO_REUSE_SESSION` and the reuse thresholds, the recovery log carries the
+inherited context usage, and the recovery note is cleared after use — the next prompt returns to the normal
+rules); the first prompt carries a recovery note asking the AI to verify actual progress with git
+status/diff and continue from where it broke off. **Handover files take precedence**: when a handover
+document was already written before the interruption (a subtask of `subtask: auto` or `ondemand`'s
+`docs/<id>/handoff.md`, or handover-test's task-level/subtask-level `testhandoff.md` — a leftover at either
+scope decides it), the old session is not reused — its context was full and progress is carried by the
+handover document, so a new session continues from the handover (with the handoff marked `Status: done`, the
+whole-task session is skipped outright). When the session is gone or `--new-session` is given, a new session
+opens: the recovery note gives concrete next-step guidance per the recorded stage, likewise redoing no
+finished work — `--new-session` skips only session reuse, phase-level precise re-entry stays, and it is the
+escape hatch for stale old-session context. An interrupted event stream (the stream drops before the
+session-end event, likely a server failure or network cut) is likewise treated as mid-flight, never
+misjudged as a natural session end.
 
-**阶段级精确重入**:恢复时按 `phase` 重入流水线,而不是从头再来——
+**Phase-level precise re-entry**: recovery re-enters the pipeline per `phase` instead of starting over —
 
-- 分解阶段:上次已写出 `docs/T-NNN/subtasks.md` 有效检查项 → 直接采用,不再开会话;
-- 逐子任务:从首个未完成项继续(子任务 `todo.md`/`done.md` 天然持久);
-- 收尾:off/ondemand 不再重跑整任务执行会话,直接重跑收尾;
-- 收尾已完成(结论行检查阶段):不再开任何会话,直接读结论行并登记完成——旧版
-  进度记录停在已退役的 verify / review 阶段时同样按此处理。
+- Decompose stage: valid checklist items already written to `docs/T-NNN/subtasks.md` last time → adopted
+  as-is, no new session;
+- Subtask by subtask: continue from the first unfinished item (subtask `todo.md`/`done.md` are naturally
+  persistent);
+- Wrap-up: off/ondemand do not rerun the whole-task execution session, just the wrap-up;
+- Wrap-up already done (result-line check stage): no session at all — read the result line and register
+  completion — a legacy progress record sitting in the retired verify / review stages is handled the same
+  way.
 
-**优雅退出的总结**(非 AI 服务原因停机——阻塞、回退 pending 等):退出原因打印在
-运行日志里,进度记录转为总结态(不再复用旧会话——人工介入可能耗时数小时且会改动
-环境,旧会话上下文已不可信);重新运行后凭勾选状态与阶段记录开新会话精确继续。
-严格恢复回滚单元时,被收回的工作存进 git stash(消息前缀 `auto-rollback`),日志
-给出找回方式。网络故障重试耗尽
-属于"会话半途无法总结",保持会话复用资格,恢复时优先找回原会话。
+**Graceful-exit summary** (halts not caused by the AI service — blocked, reverted to pending, …): the exit
+reason is printed in the run log and the progress record turns into a summary state (the old session is no
+longer reused — human attention may take hours and changes the environment, so the old session's context is
+no longer trustworthy); after rerunning, a new session continues precisely from the tick state and stage
+record. When strict recovery rolls a unit back, the retracted work goes into git stash (message prefix
+`auto-rollback`); the log says how to retrieve it. Exhausted network-failure retries count as "interrupted
+mid-flight with no summary" and keep session-reuse eligibility — recovery prefers to reclaim the original
+session.
 
-`run` 期间 driver 会把 opencode.json、`.opencode/auto/config.json`、AGENTS.md 与
-模型注册表项目层 `.opencode/auto/models.json`(存在时;driver 只在启动时读它、从不写)
-置为只读(chmod 0o444),driver 自身写入时临时恢复、写完立即重置。`run` 结束(含
-阻塞退出)恢复可写,便于人工介入编辑(包括手工修订项目配置);被强杀的运行遗留的
-只读位不妨碍 `init`/`amend`/`fix`/`reset` 改写这些文件。这是提示词契约之外的防误写
-护栏——同用户进程仍可经 bash chmod 绕过,并非安全边界。会话不维护 AGENTS.md
-(见[AGENTS.md 标记块](#agentsmd-标记块)):driver 只在启动会话前确保其中存在与当前
-配置渲染一致的单一 opencode-auto 标记块(缺失则追加、内容不一致则整块替换,
-旧版/多余的带名标记块一律清理),除此之外永不改写 AGENTS.md。
+During `run` the driver makes opencode.json, `.opencode/auto/config.json`, AGENTS.md and the model registry
+project layer `.opencode/auto/models.json` (when present; the driver reads it only at startup and never
+writes it) read-only (chmod 0o444), temporarily restoring write access for its own writes and re-setting it
+immediately after. When `run` ends (including a blocked exit) they become writable again, for human editing
+(including hand-revising the project config); read-only bits left by a force-killed run do not stop
+`init`/`amend`/`fix`/`reset` from rewriting these files. This is a guard rail against accidental writes
+beyond the prompt contract — a same-user process can still bypass it via bash chmod; it is not a security
+boundary. Sessions do not maintain AGENTS.md (see [AGENTS.md marker block](#the-agentsmd-marker-block)): the
+driver only ensures, before starting a session, that it contains the single opencode-auto marker block
+rendered from the current config (appended when missing, replaced wholesale when the content differs; old
+or extra named marker blocks are always cleaned up) and never rewrites AGENTS.md otherwise.
 
-## 验收结论行(Result: PASS|FAIL)
+## Acceptance result line (Result: PASS|FAIL)
 
-任务级验收 `verify`(三段式脚本验收与 `verified` 字段)、质量审核 `--review`/`--early`/
-`--early-review` 与终审闭环 `--final-review` 已于 2026-09-21 退役(auto-core
-plans/0044-completion-side-retirement-design.md):检查与验收是**规划出来的工作**——
-写成普通任务,或用阶段化流程的 v(验收)阶段。driver 对完成侧只保留一个判定:
+Task-level acceptance `verify` (three-stage script acceptance and the `verified` field), quality review
+`--review`/`--early`/`--early-review` and the final-review loop `--final-review` were retired on 2026-09-21
+(auto-core plans/0044-completion-side-retirement-design.md): checking and acceptance are **planned work** —
+written as ordinary tasks, or carried by the phased flow's v (acceptance) phase. The driver keeps exactly
+one verdict on the completion side:
 
-- 收尾会话在 `docs/T-NNN/report.md` 最后一行正文(终止符之前)独占一行写
-  `Result: PASS` 或 `Result: FAIL <一句话原因>`——协议串,照原样书写,不翻译、
-  不加粗、不加列表符号。何时写、何谓 FAIL 属意图包内容(`## acceptance` /
-  `### result-line`):任务描述要求检查、测试、验证或验收时必写,发现任务目标未达成时
-  也写;PASS 须每项要求的检查都实际运行或观察过、证据写进报告。意图包省略该小节即
-  不下发此要求(永不停跑);
-- driver 以最后一个 `Result:` 行为准(大小写敏感):`PASS`、无报告或无结论行 →
-  标 done;其他取值 → 视同无结论;`FAIL` → 报告与改动已随收尾统一提交,任务置为
-  `[blocked]`、停止运行(退出码 2),原因打印在日志;
-- 人工处置:接受结论 → 把该任务手工标 `[done]`;需要修复 → 在它**之前**插入修复
-  任务(auto 模式下给该任务手工追加检查项属非法子任务状态,修复一律规划成任务);
-  随后重新运行。直接重跑被阻塞的任务只会重跑收尾、重写结论行。
+- The wrap-up session writes `Result: PASS` or `Result: FAIL <one-line reason>` on its own line as the
+  last body line of `docs/T-NNN/report.md` (before the eof marker) — a protocol string, written verbatim:
+  no translation, no bold, no list marker. When to write it and what FAIL means are intent-pack content
+  (`## acceptance` / `### result-line`): required whenever the task description asks for checking, tests,
+  verification or acceptance, and also written when the task's goal turns out unmet; PASS requires every
+  requested check to have actually run or been observed, with evidence in the report. An intent pack that
+  omits the section simply does not impose the requirement (the run never stops);
+- The driver goes by the last `Result:` line (case-sensitive): `PASS`, no report or no result line → mark
+  done; any other value → treated as no verdict; `FAIL` → the report and changes were already committed
+  with the wrap-up's unified commit, the task is set `[blocked]` and the run stops (exit code 2), the
+  reason printed in the log;
+- Human disposal: accept the verdict → mark the task `[done]` by hand; needs rework → insert a repair task
+  **before** it (in auto mode, hand-appending checklist items to that task is an illegal subtask state —
+  repairs are always planned as tasks); then rerun. Rerunning the blocked task directly only reruns the
+  wrap-up and rewrites the result line.
 
-退役选项在任何命令出现即退出码 1(附退役说明);配置 `verify: true`
-严格失败;模型路由的 verify-*/review-*/final-plan 角色键同样报错。存量 PLAN.md(含其
-`verify:`/`verified:`/`final:` 字段行与 `T-F<k>` 任务)自 M3.4 起不再读取;
-遗留的 `.auto/verify.md`、`.auto/review.md`、`tmp/verify.*` 不做清理。
+Retired options are exit code 1 on any command (with a retirement notice); config `verify: true` fails
+strictly; the model-routing verify-*/review-*/final-plan role keys error the same way. Existing PLAN.md
+files (with their `verify:`/`verified:`/`final:` field lines and `T-F<k>` tasks) have not been read since
+M3.4; leftover `.auto/verify.md`, `.auto/review.md`, `tmp/verify.*` are not cleaned up.
 
-## 测试执行协议(--test-by-driver)
+## Test execution protocol (--test-by-driver)
 
-`--test-by-driver`(宪法级选项,经 `init --test-by-driver` 固化到配置
-`testByDriver` 键,`run` 出现即用法错误)把"实现环节中编译/测试/构建/lint 等
-可能耗时长或产生大量输出的命令"的执行权收归 driver。适用会话为执行类会话——
-子任务会话(`subtask: auto`)与整任务会话(`off` / `ondemand`);分解、收尾等
-旁路会话不适用(`--dryrun` 亦不启用)。
+`--test-by-driver` (a constitutional option, fixed into the config's `testByDriver` key by `init
+--test-by-driver`; appearing on `run` is a usage error) moves execution rights for "implementation-phase
+commands that can run long or produce massive output — compile/test/build/lint and the like" to the driver.
+It applies to execution sessions — subtask sessions (`subtask: auto`) and whole-task sessions (`off` /
+`ondemand`); bypass sessions such as decompose and wrap-up are out of scope (`--dryrun` does not enable it
+either).
 
-协议机制:
+The protocol mechanics:
 
-- **请求 = 脚本 + 标记**:会话需要运行这类命令时,把命令写成脚本放入 `test/`
-  目录(命名清晰、可执行、可复用,随仓库版本化),再把脚本路径(相对工作目录,
-  如 `test/build.sh`)写入 `tmp/test.sh` 标记文件(目标目录下 driver 管理的
-  工作目录,已被 gitignore),然后结束本轮消息。标记存在即"待执行请求"——
-  没有 mtime 竞态,重写标记即可再次请求。
-- **执行与输出**:driver 在会话 idle 时检测标记:内容 trim 后单行且指向现存
-  文件路径 → 直接运行该脚本并 best-effort 补 `chmod +x`(会话忘加执行位无需
-  排查;`test/` 内脚本已随统一提交版本化,不另归档);否则按内联脚本回落,
-  把内容整写为 `tmp/test.<n>.sh` 后运行(保留执行快照供审计)。两种形态均移除
-  标记后在目标目录执行(共用 `idleTime` / `idleMax` 看门狗),stdout/stderr
-  合并整写 `tmp/test.<n>.out`(单文件,编号跨会话/跨运行接续)。退出码非 0
-  不由 driver 判定——判断权在 AI。
-- **反馈**:driver 经 steer(下一 provider turn 边界)把退出码、耗时、超时原因、
-  脚本与输出文件路径注入**同一会话**;AI 直读文件判断(不经工具输出截断,大文件
-  分段读)。重跑同一测试 = 把同一脚本路径再次写入 `tmp/test.sh`(脚本可先修改
-  再重跑)。如此循环直至会话不再写标记、自然结束,回到主流水线。
+- **Request = script + marker**: when a session needs to run such a command, it writes the command as a
+  script in `test/` (clearly named, executable, reusable, versioned with the repository), writes the script
+  path (relative to the working directory, e.g. `test/build.sh`) into the `tmp/test.sh` marker file (the
+  driver-managed work directory in the target directory, already gitignored), and ends its turn. The
+  marker's presence is the "pending request" — there is no mtime race; rewriting the marker requests again.
+- **Execution and output**: the driver detects the marker while the session is idle: if the trimmed content
+  is a single line naming an existing file path, it runs that script directly and best-effort adds
+  `chmod +x` (no debugging needed when the session forgets the exec bit; scripts in `test/` are already
+  versioned by the unified commit, no extra archiving); otherwise it falls back to an inline script,
+  writing the content wholesale to `tmp/test.<n>.sh` and running it (an execution snapshot kept for audit).
+  Either form removes the marker first, then executes in the target directory (sharing the `idleTime` /
+  `idleMax` watchdog); stdout/stderr are merged and written whole to `tmp/test.<n>.out` (one file, numbering
+  continuing across sessions and runs). A nonzero exit code is never judged by the driver — judgment
+  belongs to the AI.
+- **Feedback**: via steer (at the next provider turn boundary) the driver injects the exit code, duration,
+  timeout reason, and the script and output file paths into **the same session**; the AI reads the files
+  directly to judge (no tool-output truncation; large files read in chunks). Rerunning the same test =
+  writing the same script path into `tmp/test.sh` again (the script may be edited first). The loop repeats
+  until the session writes no more markers and finishes naturally, returning to the main pipeline.
 
-每个执行会话入口会清除上一会话/上次运行遗留的待执行标记(归档历史保留),防止陈旧
-请求污染新会话;测试脚本不经 opencode 权限体系(等同 driver 亲自在本地跑测试;
-这是便利性取舍而非安全边界)。该约定同时经 init 下沉:AGENTS.md 的 opencode-auto
-标记块内测试执行原则段落(随 `testByDriver` 出现或消失)、agent 契约带对应条款,
-`check` 子命令在 `testByDriver` 启用时扫描 AGENTS.md 与任务文档中要求会话亲自
-运行编译/测试/构建/lint 的描述。
+Every execution-session entry clears the pending marker left by the previous session/run (the archived
+history is kept), preventing stale requests from polluting a new session; test scripts bypass the opencode
+permission system (equivalent to the driver running tests locally itself; a convenience trade-off, not a
+security boundary). init also propagates the convention: the test-execution principle section inside the
+AGENTS.md opencode-auto marker block (appearing and disappearing with `testByDriver`), a matching clause in
+the agent contract, and the `check` subcommand scanning AGENTS.md and task documents for statements
+requiring sessions to run compile/test/build/lint themselves whenever `testByDriver` is on.
 
-### 测试交接(--handover-test)
+### Test handover (--handover-test)
 
-`--handover-test`(需搭配 `--test-by-driver`,经 `init --handover-test` 固化到配置
-`handoverTest` 键)针对"超大上下文中反复试错"。
+`--handover-test` (requires `--test-by-driver`, fixed into the config's `handoverTest` key by `init
+--handover-test`) targets "repeated trial-and-error inside a bloated context".
 
-**交接时机 = AI 发起测试的那一刻。** 判据是单条件:会话上下文已用 tokens 达到
-`contextLimit`(不再叠加"测试失败")。之所以卡在测试请求这一刻,是因为它是唯一天然
-干净的分割点——AI 发起测试通常意味着相关工作已做完、正要验证;越过这一刻上下文就
-开始变化,不再好切。现场审计实测旧的双条件判据会让会话冲到上限的 2–4 倍
-(64k/80k 上限 vs 实测 72.7k–264.3k),上下文越大,会话意外死亡时的损失面越大。
+**The handover moment = the instant the AI requests a test.** The criterion is a single condition: the
+session's used context tokens have reached `contextLimit` ("test failed" is no longer layered on top). The
+reason it pins on the test request is that it is the only naturally clean split point — a test request
+usually means the related work is done and about to be verified; past that moment the context starts
+changing again and no longer cuts well. Field audits measured the old two-condition criterion letting
+sessions run to 2–4x the limit (64k/80k limits vs measured 72.7k–264.3k); the bigger the context, the bigger
+the loss surface when a session dies unexpectedly.
 
-命中时 driver 在这一刻一口气做三件事:
+On a hit, the driver does three things at that instant:
 
-1. **提交定版(提交 #1)**——固定被测的脚本与源码。此刻会话处于 idle,没有半写文件。
-2. **并发执行测试**——不等会话收尾(串行会把会话晾到缓存失效)。
-3. **下发收尾+交接指令**——要求 AI 把**不依赖本次测试结果**的剩余工作全部做完落盘,
-   再把**与本次测试密切相关或依赖测试结果**的部分写入测试交接文档后结束会话。
+1. **The freeze commit (commit #1)** — pins the script and source under test. At this moment the session is
+   idle, with no half-written files.
+2. **Run the test concurrently** — without waiting for the session to finish (serializing would leave the
+   session hanging until its cache expires).
+3. **Dispatch the wrap-up + handover instruction** — the AI must finish and persist all remaining work that
+   **does not depend on this test's result**, then write the parts **closely tied to this test or dependent
+   on its result** into the test handover document and end the session.
 
-会话结束后,driver **重测守卫**比对定版提交以来已跟踪的非文档改动(`test/` 脚本与
-源码;文档面与未跟踪新增不计):有改动说明本次测试结果对不上工作区,则 `git stash -u`
-挪开收尾改动、对定版快照重跑同一脚本、再 `stash pop` 恢复——收尾成果一份不丢,
-"两次提交之间源码与脚本无修改"由此成立(pop 冲突不吞:stash 条目保留、阻塞停机)。
-随后交接文档**归档**为 `testhandoff-<n>.md`,并落**提交 #2**确认交接。一次交接两次
-提交,每次交接都有可回退的留档。
+After the session ends, the driver's **re-test guard** compares tracked non-document changes since the
+freeze commit (`test/` scripts and source; the documentation surface and untracked additions do not count):
+changes mean this test's result no longer matches the worktree, so `git stash -u` moves the wrap-up changes
+aside, the same script is rerun against the frozen snapshot, then `stash pop` restores — not one wrap-up
+result is lost, and "no source or script changes between the two commits" holds (a pop conflict is not
+swallowed: the stash entry is kept, blocked halt). The handover document is then **archived** as
+`testhandoff-<n>.md`, and **commit #2** records the handover. One handover, two commits — every handover
+leaves a revertible record.
 
-文档按执行范围命名:子任务为 `docs/<任务ID>/S<两位序号>/testhandoff.md`,整任务会话为
-`docs/<任务ID>/testhandoff.md`;交接只对本执行范围生效——下一子任务不会
-误读上一子任务的遗留交接。文档缺失带反馈重试一次,仍缺失按隐性阻塞停机
-(严格恢复开启时无效一次即回滚重做)。归档份与当前份在执行范围完成时一并清除,
-历史交接内容由 git 提交记录承载。driver 随即开新会话(上下文已超限,会话复用规则
-自动新建),以续跑说明(先读交接文档、再判读那次测试的结果)继续完成任务,测试仍走
-同一协议。
+The document is named by execution scope: a subtask gets `docs/<task id>/S<two-digit number>/testhandoff.md`,
+a whole-task session `docs/<task id>/testhandoff.md`; the handover applies to this execution scope only —
+the next subtask cannot misread the previous subtask's leftover handover. A missing document is retried once
+with feedback; still missing halts as an implicit block (with strict recovery on, one failure rolls the unit
+back and redoes it). The archived and current copies are both cleared when the execution scope completes;
+historical handover content lives in the git commit records. The driver then opens a new session (the
+context is over the limit, so the session-reuse rules start fresh automatically) and continues the task with
+a continuation note (read the handover document first, then interpret that test's result); tests still go
+through the same protocol.
 
-收尾提示词刻意**不提"上下文/上限"**:会话一旦知道自己上下文吃紧,就会自行判定余量
-不足而省略本应完成的落盘工作(现场实证);也不写"不要改源码"——AI 发起测试时本就
-知道被测内容不该动,真动了由定版提交 + 重测守卫兜底。
+The wrap-up prompt deliberately **never mentions "context/limit"**: once a session knows its context is
+tight, it decides on its own that the remainder is not enough and skips persist work it should have
+finished (observed in the field); nor does it say "do not touch the source" — the AI already knows the code
+under test should not move when it requests the test, and if it truly does, the freeze commit + re-test
+guard backstop it.
 
-交接不设硬上限;连续交接超过 10 次时,续跑说明会附带提醒——先评估是否陷入当前
-无法解决的问题,若是可经 `AUTO-FIXME: <原因与计划>` 标注遗留后跳过继续,由 AI
-自主决策。交接文档与 `ondemand` 的 `docs/<任务ID>/handoff.md` 命名分离,两机制可
-同现;任务非恢复续跑时,上次尝试遗留的交接文档(含归档份)会被清除(镜像 ondemand 语义)。
+Handovers have no hard cap; past 10 consecutive handovers the continuation note carries a reminder — first
+assess whether this is a problem unsolvable right now, and if so skip past it marked
+`AUTO-FIXME: <reason and plan>`, an autonomous AI decision. The handover document's name is separate from
+`ondemand`'s `docs/<task id>/handoff.md`, so both mechanisms can coexist; when a task is not resumed by
+recovery, the previous attempt's leftover handover documents (archived copies included) are cleared
+(mirroring the ondemand semantics).
 
-## 死循环检测(重复动作提示)
+## Stuck-loop detection (repeated-action hints)
 
-能力较弱的模型常会连续多次以同一方式重复同一个动作却始终不成功——同一个 edit 反复
-报同一个错、参数微调后报错一字不差、反复读同一个文件得到完全相同的输出——上下文里
-堆的全是同一段失败,自己走不出来。driver 在会话进行中观察每个工具调用的结果,识别到
-这类重复即**主动向会话插入一条提示**,帮它跳出死循环。
+Weaker models often repeat the same action the same way several times without success — the same edit
+failing with the same error over and over, the error byte-identical after parameter tweaks, the same file
+read repeatedly with identical output — the context fills with the same failure and the model cannot get
+out on its own. The driver observes every tool call's result while the session runs, and on recognizing
+this pattern **actively steers a hint into the session** to help it break the loop.
 
-判据(以会话为范围,不要求连续——交替重试同样识别):
+Criteria (scoped to the session; consecutive not required — alternating retries are recognized too):
 
-| 情形 | 判据 | 次数 |
+| Case | Criterion | Count |
 |---|---|---|
-| 同一个报错反复出现 | 同一工具 + 同一报错文本(**不看参数**,参数微调仍算同一个坑) | 3 次 |
-| 同参同果的空转 | 同一工具 + 同一参数 + 完全相同的输出(这次调用没带来新信息) | 4 次 |
+| The same error keeps coming back | Same tool + same error text (**parameters ignored** — a parameter tweak is still the same trap) | 3 |
+| Same arguments, same result, no progress | Same tool + same arguments + identical output (this call brought no new information) | 4 |
 
-报错不同或输出不同一律视为有进展,不计数。提示逐级升级:第一次摆出证据(工具、参数、
-报错原文)并要求核对前提、换一种手段;第二次要求先写清"目标 / 已经试过什么、各自失败
-在哪 / 下一步换用什么"再动手;第三次要求停止重试,以 `AUTO-FIXME: <原因与计划>` 标注
-遗留、交代进度后结束会话,由 driver 推进后续流程。每个会话至多提示三次,命中后该动作
-的计数清零(再犯满一轮才会再提示)。
+A different error or different output always counts as progress and is not counted. The hints escalate:
+the first lays out the evidence (tool, arguments, error text) and asks to re-check premises and try a
+different approach; the second asks to first write down "goal / what has been tried and where each attempt
+failed / what to switch to next" before acting; the third asks to stop retrying, mark the leftover with
+`AUTO-FIXME: <reason and plan>`, state the progress and end the session, letting the driver advance the
+flow. At most three hints per session; a hit resets that action's counters (a fresh full round is needed
+before hinting again).
 
-检测**只提示、不停机**:不中止会话、不改变任何完成判定、不写状态文件。判据再稳妥也可能
-误判(有的任务本就要反复跑同一条命令等外部状态变化),因此第三级也只是把"收尾"的决定权
-交回 AI。
+Detection **only hints, never halts**: it aborts no session, changes no completion verdict, writes no
+state file. However sound the criteria, they can misjudge (some tasks legitimately run the same command
+repeatedly waiting for external state to change), so even the third level only hands the "wrap it up"
+decision back to the AI.
 
-置 `OPENCODE_AUTO_STUCK=off` 关闭检测(缺省 `on`);`--dryrun` 权限预检会话恒不检测——
-它本就靠反复被拒来探查权限边界,重复报错是其正常形态。
+Set `OPENCODE_AUTO_STUCK=off` to disable detection (default `on`); the `--dryrun` permission-preflight
+session is never checked — it explores the permission boundary by being rejected repeatedly, and repeated
+errors are its normal shape.
 
-## 提问策略与代答审计(AUTO-RESOLVE)
+## Question policy and proxy-answer audit (AUTO-RESOLVE)
 
-无人值守流水线为了不停机,会把**本应由你拍板的分歧点**替你闭环掉。这类决策和 AI 本就
-该自己做的工程裁量性质完全不同,却曾经混在同一个 `AUTO-DECISION` 标记里:一个任务记十
-几条,真正该被看见的那两三条反而淹没其中。现在两者分开记、分开报。
+To keep the unattended pipeline running, it closes **decision points that should have been yours** on your
+behalf. These decisions are a completely different animal from the engineering decisions the AI should make
+itself, yet they used to share one `AUTO-DECISION` marker: a task recorded a dozen-plus entries and the two
+or three that truly deserved eyes drowned in them. The two are now recorded and reported separately.
 
-判据只有一条 —— **这个分歧点的决定权本应属于谁**:
+There is exactly one criterion — **whose call was this decision point supposed to be**:
 
-| 决定权归属 | 标记 | 典型情形 |
+| Call belongs to | Marker | Typical cases |
 |---|---|---|
-| **你(用户)** | `AUTO-RESOLVE: <原问题> -> <所选方案> (<理由>)` | 需求意图与范围取舍(做不做、做到哪)、对外可见行为与接口契约的变更、「什么算做完」的判定标准、事实确认类问题(数据异常、环境缺失、与文档不符的现状)、超出或收窄任务描述的字面范围 |
-| **AI** | `AUTO-DECISION: <决策> (<理由>)` | 实现手段的选择,且任一选项都不改变用户可见行为(算法、内部结构、命名、文件组织、注入方式、测试写法) |
+| **You (the user)** | `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` | Requirement-intent and scope trade-offs (do it or not, how far), changes to externally visible behavior and interface contracts, the bar for "what counts as done", fact-confirmation questions (data anomalies, missing environment, reality not matching docs), going beyond or narrowing the task description's literal scope |
+| **AI** | `AUTO-DECISION: <decision> (<reason>)` | Choice of implementation means, where no option changes user-visible behavior (algorithm, internal structure, naming, file organization, injection approach, test style) |
 
-同一决策只标一类;拿不准标 `AUTO-RESOLVE` —— 多提醒一次无妨,漏报才是真损失。
+One decision, one class; when unsure, mark `AUTO-RESOLVE` — one extra reminder is harmless, a missed one is
+the real loss.
 
-driver 两路采集:① 会话真发了问、被自动答复回落的(人工在 `--wait-answer` 内真答了的
-**不算**,那是你做的决定;`--dryrun` 权限预检会话也不算);② 会话收尾扫描本次未提交
-改动里的两类标记行。两源配对后,`AUTO-RESOLVE` 在任务、阶段、轮次的结论行**之前**以
-`⚑` 置顶展示:
+The driver collects from two channels: (1) sessions that actually asked and fell back to the proxy answer
+(a human genuinely answering within `--wait-answer` **does not count** — that was your decision; the
+`--dryrun` permission-preflight session does not count either); (2) an end-of-session scan of this run's
+uncommitted changes for both marker lines. After pairing the two sources, `AUTO-RESOLVE` entries surface at
+the top with `⚑` **before** the conclusion lines of the task, phase and round:
 
 ```
-⚑ 本任务自动代答了 3 个本应由你确认的问题,请重点确认:
-  1. 是否把 prompt.ts 的第三份 formatTokens 一并收口 → 顺带收口(同层依赖,不引入反向 import)
+⚑ This task proxy-answered 3 questions that should have been yours to confirm — please review:
+  1. Should the third copy of formatTokens in prompt.ts be closed out as well → close it out too (same-layer dependency, no reverse import)
      src/prompt.ts:501
-  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)
+  2. Should depreciation booking go through the same MAX_TICK clamp → same clamp (better under than over)
      src/stats.ts:84
-  3. 「什么算做完」是否包含并发场景  ⚠ 会话未按要求写出 AUTO-RESOLVE 标记
-  完整记录见 docs/T-001/report.md 的「自动代答问题」节
-  另记录 AUTO-DECISION 5 条(已折叠,见任务报告)
-✓ T-001 完成: 用时 24 分 31 秒(AI 18 分 12 秒),会话 7 次
+  3. Does "what counts as done" include concurrent scenarios  ⚠ the session did not write the AUTO-RESOLVE marker as required
+  Full record in the "Proxy-answered questions" section of docs/T-001/report.md
+  Also recorded 5 AUTO-DECISION entries (collapsed, see the task report)
+✓ T-001 done: 24m 31s elapsed (AI 18m 12s), 7 sessions
 ```
 
-任务级逐条列出(超过 8 条只列前 8 条),阶段与轮次只给一行计数。`AUTO-DECISION`
-**永不与它争版面**:有代答时折成末行一个数字,没有代答时连终端都不上(只进日志文件)。
-收尾会话还会被注入 driver 观测到的代答清单,要求任务报告单列「自动代答问题」一节 ——
-持久记录因此不依赖 AI 自觉,进了 git 的标记行与该节才是审计轨迹。
+At task level they are listed item by item (past 8 only the first 8); phases and rounds get a one-line
+count. `AUTO-DECISION` **never competes for the space**: with proxy answers present it folds into a number
+on the last line, and with none it does not even reach the terminal (log file only). The wrap-up session is
+also injected with the driver-observed proxy-answer list and required to give the task report a dedicated
+"Proxy-answered questions" section — the persistent record therefore does not depend on AI diligence; the
+marker lines in git and that section are the audit trail.
 
-### 两档提问策略(`OPENCODE_AUTO_ASK`)
+### The two question policies (`OPENCODE_AUTO_ASK`)
 
-提问义务与标注义务**同进同退**,由这一个开关切换:
+The duty to ask and the duty to mark **rise and fall together**, toggled by this one switch:
 
-| 值 | 提问策略 | 标注要求 | 代答记录的完备性 |
+| Value | Question policy | Marking requirement | Completeness of the proxy-answer record |
 |---|---|---|---|
-| `off`(缺省) | 非权限问题一律不问,自主决策(与改造前逐字节等价) | 强制标注两类标记 | 只覆盖"会话仍然发了问"的少数情形,其余靠会话自觉,**漏标不可检测** |
-| `on` | 归属于你的分歧点**主动调 question 工具发问** | 不要求任何标注 | 提问是流经 driver 的事件,**观测即完备** |
+| `off` (default) | Never ask non-permission questions; decide autonomously (byte-for-byte identical to before the change) | Both markers mandatory | Covers only the rare "session still asked" cases; the rest relies on session diligence, and **missed markers are undetectable** |
+| `on` | Decision points that belong to you are **actively asked via the question tool** | No marking required | Questions are events flowing through the driver, so **observation is complete** |
 
-**要可审计的代答记录就用 `on`** —— 缺省档的计数不完备,别把它当全量。代价是每个问题
-一次会话往返(token 与时长),以及提问变多后更容易撞上"同一问题重复询问即阻塞停机"的
-安全网(该判定用的是归一化后子串包含,作用域限于当前回合)。
+**Use `on` if you want an auditable proxy-answer record** — the default's counts are incomplete; do not
+treat them as exhaustive. The cost is one session round trip per question (tokens and wall time), and, with
+more questions, a higher chance of hitting the "asking the same question repeatedly blocks the run" safety
+net (that check is a normalized substring containment, scoped to the current turn).
 
-副产品:提问数就是**计划完备度指标**。计划写得完备 → 提问寥寥 → 跑完很安静;提问密集
-→ 高亮块很吵 → 说明计划有洞。档位选择是你对自己计划质量的显式声明,程序不代劳。
+A side effect: the question count is a **plan-completeness metric**. A complete plan → few questions → a
+quiet run; dense questioning → a noisy highlight block → the plan has holes. Choosing the tier is your
+explicit statement about your plan's quality; the program does not decide it for you.
 
-台账落在目标目录 `.auto/resolves.json`(已被 gitignore,driver 独占写),与恢复判定完全
-无关:损坏或缺失只是计数从当下重开,不影响运行。人工回退重跑同一任务前 `rm` 掉它即可
-清零(与 `.auto/stats.json` 同款规程)。
+The ledger lands in the target directory's `.auto/resolves.json` (gitignored, written exclusively by the
+driver) and has nothing to do with recovery decisions: corruption or absence merely restarts counting from
+now and never affects the run. Before a human rollback and rerun of the same task, `rm` it to zero the
+count (same procedure as `.auto/stats.json`).
 
-**例外:`plan` 的会话不代答。** plan 为执行前的人工审阅而跑,非权限提问一律等人工
-回答(无超时,`-i` 常驻输入行或 stdin),不产生 AUTO-RESOLVE 代答与标注;答不上来
-(输入关闭)或同题重问即阻塞交人工。`run` 的会话(含 `run` 发起的规划会话)口径不变。
+**Exception: `plan`'s sessions never proxy-answer.** plan runs for the pre-execution human review; every
+non-permission question waits for a human answer (no timeout; `-i`'s resident input line or stdin) and
+produces no AUTO-RESOLVE proxy answers or markers; an unreachable answer channel (closed input) or a
+repeated question blocks for the human. `run`'s sessions (including planning sessions started by `run`)
+keep the normal policy.
 
-## 提示词模板与自定义
+## Prompt templates and customization
 
-全部会话提示词以**文件模板**管理(文案与逻辑分离,提示词组装在核心包 `@opencode-ai/auto-core` 的 `src/prompt.ts`):
+Every session prompt is managed as a **file template** (copy separated from logic; prompt assembly lives in
+the core package `@opencode-ai/auto-core`'s `src/prompt.ts`):
 
-- 内置模板在核心包 `@opencode-ai/auto-core` 的 `templates/prompts/`(每种会话一个文件,共享片段集中在其
-  `_partials.md`),编译期嵌入独立二进制;
-- 目标目录 `.opencode/auto/prompts/<name>.md` 同名文件可**覆盖**任意内置模板
-  (`_partials.md` 按节名合并共享片段),不需要重新编译。
+- Built-in templates live in the core package `@opencode-ai/auto-core`'s `templates/prompts/` (one file per
+  session kind, shared partials centralized in its `_partials.md`), embedded into the standalone binary at
+  compile time;
+- A same-named file `.opencode/auto/prompts/<name>.md` in the target directory can **override** any built-in
+  template (`_partials.md` merges shared partials by section name), no recompile needed.
 
-模板语法刻意保持最小:
+The template syntax is deliberately minimal:
 
-| 语法 | 含义 |
+| Syntax | Meaning |
 |---|---|
-| `{{var}}` | 变量替换(string 直替;boolean/undefined 渲染为空) |
-| `{{#if x}}…{{/if}}` / `{{^x}}…{{/if}}` | 条件段(x 非空字符串或 true 为真) |
-| `{{> 片段名}}` | 引用 `_partials.md` 的 `## 片段名` 节;独占一行时行首缩进应用到片段每一行 |
+| `{{var}}` | Variable substitution (strings replaced directly; boolean/undefined render empty) |
+| `{{#if x}}…{{/if}}` / `{{^x}}…{{/if}}` | Conditional block (truthy when x is a non-empty string or true) |
+| `{{> partial name}}` | References the `## partial name` section of `_partials.md`; when it occupies a line of its own, the line's leading indent is applied to every line of the partial |
 
-块/片段标签独占一行时整行吞掉,书写不必顾虑空行。协议敏感模板(收尾、阶段交接、
-分解等)被覆盖时会做**关键协议内容校验**:缺少 driver 解析所依赖的协议行(如收尾
-模板的 `Result: PASS` / `Result: FAIL` 结论行说明)即装载报错退出(退出码 1),
-防止自定义模板悄悄破坏 driver 协议。
+A block/partial tag on a line of its own swallows the whole line, so writing need not worry about blank
+lines. Overriding a protocol-sensitive template (wrap-up, phase handover,
+decompose, …) triggers a **key protocol content check**: missing a protocol line the driver's parsing
+depends on (e.g. the wrap-up
+template's `Result: PASS` / `Result: FAIL` result-line instructions) fails loading with exit code 1,
+keeping custom templates from silently breaking the driver protocol.
 
-## 模式层(-m/--mode)
+## Mode layer (-m/--mode)
 
-`-m/--mode <name>`(仅 `init` 接受,写入配置的 `mode` 键;缺省 `migrate`;显式值须为
-已注册的模式名,否则用法错误退出码 1,报文会列出当前支持的模式)是**提示词级**的
-场景引导,不改变 driver 的调度状态机:
+`-m/--mode <name>` (accepted by `init` only, written to the config's `mode` key; default `migrate`; an
+explicit value must be a registered mode name, otherwise a usage error with exit code 1 and a message
+listing the currently supported modes) is **prompt-level** scenario guidance; it does not change the
+driver's scheduling state machine:
 
-- 阶段规划会话注入场景导语:场景定义、任务排布原则与验证侧重;
-- 执行类会话(分解 / 整任务 / 子任务 / 收尾)注入对应的注意事项。
+- The phase planning session gets the scenario prelude: scenario definition, task-arrangement principles
+  and verification emphasis;
+- Execution sessions (decompose / whole-task / subtask / wrap-up) get the matching notes.
 
-模式同样以文件模板管理:**新增模式 = 在目标目录放一个模式文件,零源码改动**。
-内置 `templates/modes/migrate.md`(auto-core 包,迁移/升级场景:以保持外部行为不变为前提,任务
-按"基线确认 → 迁移改造 → 回归验证"排布,回归验证优先复用既有测试/构建命令;执行
-注记要求新旧实现对等行为、兼容层注明用途与移除时机、迁移取舍按 `AUTO-DECISION`
-要求标注);目标目录 `.opencode/auto/modes/<name>.md` 可新增模式或覆盖内置,文件
-格式(注入前会经模板引擎渲染):
+Modes are file templates too: **adding a mode = dropping a mode file into the target directory, zero source
+changes**. Built-in `templates/modes/migrate.md` (auto-core package; migration/upgrade scenario: tasks
+arranged as "baseline confirmation → migration rework → regression verification" under the precondition
+that external behavior stays unchanged, regression verification preferring existing test/build commands;
+the execution
+notes require old and new implementations to behave identically, compatibility layers to state their
+purpose and removal timing, and migration trade-offs to be marked per `AUTO-DECISION`
+requirements); the target directory's `.opencode/auto/modes/<name>.md` adds or overrides modes, file
+format (rendered through the template engine before injection):
 
 ```markdown
-# <模式名>(须与文件名一致,小写字母开头的字母/数字/连字符)
+# <mode name> (must match the file name; letters/digits/hyphens, starting with a lowercase letter)
 
 ## init
-(规划导语: 场景定义、任务排布原则、验证侧重)
+(planning prelude: scenario definition, task-arrangement principles, verification emphasis)
 
 ## exec
-(执行注意事项)
+(execution notes)
 ```
 
-两节齐备,缺节/未知节为解析错误;终审闭环退役前的 `## final: audit` /
-`## final: validate` / `## final: finalize` 三节仍可装载,内容忽略。
+Both sections are required; a missing or unknown section is a parse error. The three pre-retirement
+sections `## final: audit` /
+`## final: validate` / `## final: finalize` still load, content ignored.
 
-模式固化在项目配置的 `mode` 键(`.opencode/auto/config.json`):`init -m <name>`
-显式修订(优先级: 显式值 > 既有配置值 > 缺省 `migrate`);`run` 读取配置解析,
-不再接受 `-m`(出现即用法错误)。`optimize` / `implement` / `test` 等扩展场景
-直接按上述格式添加文件即可。
+The mode is fixed in the project config's `mode` key (`.opencode/auto/config.json`): `init -m <name>`
+amends it explicitly (precedence: explicit value > existing config value > default `migrate`); `run` reads
+and resolves it from the config and no longer accepts `-m` (appearing is a usage error). Additional
+scenarios like `optimize` / `implement` / `test` are just files in the format above.
 
-## 阶段化流程(--phases)
+## Phased flow (--phases)
 
-`--phases <admtvk 子序列含 m | 阶段类型列表>`(`init` / `amend` 接受,写入配置的
-`phases` 键;缺省 `"m"` = 无阶段声明,单次运行,行为与阶段化之前完全一致)把迁移类
-长流程拆为阶段。取值有两种形态:
+`--phases <admtvk subsequence containing m | phase type list>` (accepted by `init` / `amend`, written to
+the config's `phases` key; default `"m"` = no phases declared, a single run, behavior identical to
+pre-phases) splits a long migration-style flow into phases. The value takes two forms:
 
-- **字母预置**:六个内置阶段 **a 分析(analysis) → d 设计(design) → m 迁移实现
-  (implement) → t 测试(test) → v 验收(acceptance) → k 知识提炼(knowledge)**
-  的子序列且包含 `m`(如 `m`、`amt`、`admtvk` 合法;`tma`、`adk`、重复字母、空串
-  非法)。
-- **阶段类型列表**:逗号分隔的类型 id(如 `analysis,security-review,implement`),
-  顺序任意、可重复、须含 `implement`;config.json 里也可写成 JSON 数组。注意只有
-  字符串 `"m"` 是单次运行,列表 `implement` 是带规划会话的阶段化流程。
+- **Preset letters**: a subsequence of the six builtin phases **a analysis → d design → m implementation
+  (implement) → t test → v acceptance → k knowledge distillation (knowledge)**
+  that contains `m` (`m`, `amt`, `admtvk` are valid; `tma`, `adk`, repeated letters and the empty string
+  are invalid).
+- **Phase type list**: comma-separated type ids (e.g. `analysis,security-review,implement`),
+  any order, repeats allowed, must contain `implement`; in config.json a JSON array works too. Note that
+  only the string `"m"` is a single run — the list `implement` is a phased flow with a planning session.
 
-**自定义阶段类型**:在 `.opencode/auto/phases/<type>.md` 一类型一文件定义(文件名即
-类型 id,不得与内置类型、字母预置形态或模型路由角色词重名),在类型列表里按 id 引用:
+**Custom phase types**: define one type per file under `.opencode/auto/phases/<type>.md` (the file name is
+the type id; it must not collide with a builtin type, a preset letter form, or a model-routing role word)
+and reference it by id in the type list:
 
 ```markdown
 # Security review
@@ -1099,53 +1255,74 @@ Plan one review task per trust boundary.
 Split by attack surface.
 ```
 
-标题行为显示名;字段块可选(`Tasks:` 只接受 `yes`——自定义类型恒有任务,无任务的
-知识提炼阶段只内置;`Gate:` 取 `none` / `verdict`;`Reasoning:` 取 `deep` / `simple`,声明该类型
-任务会话(整任务、子任务)所需的推理档,缺省 `deep`,随类型文件版本化;产物路径相对阶段/任务目录);
-`## plan duties` 必填(阶段规划会话的职责段),`## decompose duties` 可选(分解会话
-的职责段)。非法文件按用法错误报出并指明文件。`OPENCODE_AUTO_MODEL` 可按类型 id
-路由模型(`security-review=prov/model`,优先级 角色 > 类型 id > 预置字母 > `*`;
-有模型注册表时值为内部名,见
-[模型注册表与分层路由](#模型注册表与分层路由model-registry)),
-未知类型键在 run 启动时报用法错误。
+The heading line is the display name; the field block is optional (`Tasks:` accepts only `yes` — custom
+types always have tasks; the taskless
+knowledge-distillation phase is builtin-only; `Gate:` takes `none` / `verdict`; `Reasoning:` takes
+`deep` / `simple`, declaring the reasoning tier this type's
+task sessions (whole-task, subtask) need, default `deep`, versioned with the type file; artifact paths are
+relative to the phase/task directory);
+`## plan duties` is required (the phase planning session's duties paragraph), `## decompose duties`
+optional (the decompose session's). An invalid file is reported as a usage error naming the file.
+`OPENCODE_AUTO_MODEL` can route a model by type id
+(`security-review=prov/model`, precedence role > type id > preset letter > `*`;
+under a model registry the value is an internal name — see
+[Model registry and tiered routing](#model-registry-and-tiered-routing-model-registry));
+an unknown type key is a usage error at run start.
 
-- **brief.md**:项目简报 `.opencode/auto/brief.md`(版本化、人工可编辑),由每个
-  阶段的规划会话消费——它是项目级意图,a 阶段定下的基调 k 阶段同样需要。`init`
-  在文件缺失时写一份**项目简报桩**(`## Goal` / `## Source` / `## Target`
-  / `## Constraints` 四节,各节只有 HTML 注释提示;既有文件保留),人直接编辑填写;
-  注入规划会话前剥掉注释,原样未填的桩不注入任何内容。各节标题只是脚手架,driver
-  不解析。`reset` 只在它逐字节等于桩时删除,填写过即保留。init 不启动任何 AI 会话,
-  也不接受 `-p`(意图直接编辑该文件;带规划输入的是 `plan -p`,见
-  [由 AI 规划任务](#由-ai-规划任务))。
-- **迁移源与目标**:属项目意图,写进 brief.md(如「把 `legacy/pkg` 迁移到
-  `app/`」),规划会话读 brief 时一并得到——不再是配置(auto-core plans/0052
-  D1–D3,2026-09-23)。原 `--source-dir` / `--source-path` / `--dest-dir` 选项与
-  配置键 `source` / `destDir` 已退役:选项出现即用法错误,存量键读入即严格失败并
-  给出原值,请抄进 brief.md 后删键——`fix` 代为迁入 `## Source` / `## Target` 节
-  并删键(或无参 `init` 全量覆盖丢弃)。源系统大树仍可
-  经软链接入工作目录,在 brief 里写链接路径即可。
-- **轮次专用目录 `docs/R-NN/`**:阶段化流程(`phases ≠ "m"`)的每一轮是一个自
-  包含轮次容器(R 后两位零填充,如 `R-01`,自然进位),轮首即建(`plan` 建:首轮
-  `R-01`,上一轮完成并通过轮关闭检查后 `R-(N+1)`),其中一切**落盘即永久**——不改名、不改路径、不删除:
-  阶段索引 `phases.md`、每个阶段
-  一个**阶段目录** `P<nn>-<类型>/`(如 `P01-analysis/`,见下)、前置知识 `prior-kb.md`
-  (轮首的 AGENTS.md 快照 `AGENTS.md.bak` 已于 2026-09-25 退役——AGENTS.md 只含按
-  配置渲染的标记块,无需逐轮留档;旧轮次里已有的快照原样保留)。
-  阶段目录收齐该阶段的一切:状态文件 `todo.md`/`done.md`、交接文档
-  `handover.md`、任务索引 `tasks.md`(本阶段的任务清单,见[任务单元格式](#任务单元格式))、
-  阶段级自由产物、类型标准产物(如 knowledge 阶段的知识文档 `kb.md`)与人写的验收
-  记录 `acceptance.md`。任务本身在工作目录级的 `docs/T-NNN/`(编号全局唯一)。
-  `phases = "m"` 同样建立 `docs/R-01/`,即隐式单阶段 `P01-implement/`。
-  **旧布局不兼容**(auto-next 重构裁决):字母阶段布局(轮内 `<字母>-<英文名>/`
-  归档、`handovers/`、`phase-docs/`、`- [done]` 台账行)与更早的平铺布局(根
-  `docs/phases.md` 台账、`docs/phases/`、`docs/handovers/`、`docs/migration-kb/`)
-  的项目不在本版本下推进,需要继续的项目请新开项目;残留的平铺读回落与旧布局
-  检测报错随后续清理一并落地。
-- **阶段索引(轮内 `docs/R-NN/phases.md`)与阶段目录**:轮首按 `phases` 预置
-  字母展开写出索引(每阶段一行,只记顺序与成员)与各阶段目录(内含 `todo.md`)。
-  阶段状态是**推导式**的——阶段完成 = 其目录内 `todo.md` 由 driver 改名为
-  `done.md`(随交接提交落盘),当前阶段 = 索引中第一个未完成的阶段;索引行的勾选
-  只是冗余视图,以文件为准:
+- **brief.md**: the project brief `.opencode/auto/brief.md` (versioned, human-editable), consumed by
+  every phase's planning session — it is project-level intent, and the tone set in the a phase is just as
+  needed in the k phase. When the file is missing, `init`
+  writes a **project brief stub** (four sections `## Goal` / `## Source` / `## Target`
+  / `## Constraints`, each holding only HTML comment hints; an existing file is kept) for a person to fill
+  in by direct editing; comments are stripped before injecting into the planning session, and an unfilled
+  stub injects nothing. The section headings are scaffolding only — the driver
+  does not parse them. `reset` deletes it only while it is byte-identical to the stub; once filled in it is
+  kept. init starts no AI sessions and
+  accepts no `-p` (intent is edited directly in that file; planning with input is `plan -p` — see
+  [Planning tasks with AI](#planning-tasks-with-ai)).
+- **Migration source and target**: project intent, written into brief.md (e.g. "migrate `legacy/pkg`
+  into `app/`"), and picked up by the planning session when it reads the brief — no longer config
+  (auto-core plans/0052
+  D1–D3, 2026-09-23). The former `--source-dir` / `--source-path` / `--dest-dir` options and
+  the config keys `source` / `destDir` are retired: the options are usage errors, and existing keys fail
+  loading strictly with
+  the original value named — copy the value into brief.md and delete the key; `fix` migrates it into the
+  `## Source` / `## Target` sections
+  and deletes the key (or a no-argument `init` full overwrite drops it). A large source tree can still
+  enter the working directory via a symlink — just write the link path in the brief.
+- **Round-private directory `docs/R-NN/`**: under the phased flow (`phases ≠ "m"`) every round is a
+  self-contained round container (two zero-padded digits after R, e.g. `R-01`, carrying naturally),
+  established at round start (`plan` establishes it: first round
+  `R-01`, and `R-(N+1)` after the previous round completes and passes the round-close check); everything in
+  it is **permanent once on disk** — never renamed, never repathed, never deleted:
+  the phase index `phases.md`, one
+  **phase directory** `P<nn>-<type>/` per phase (e.g. `P01-analysis/`, see below), and the prior knowledge
+  `prior-kb.md`
+  (the round-start AGENTS.md snapshot `AGENTS.md.bak` was retired on 2026-09-25 — AGENTS.md holds only the
+  config-rendered marker block and needs no per-round copy; snapshots already present in old rounds are
+  kept as-is).
+  The phase directory gathers everything of the phase: state files `todo.md`/`done.md`, the handover
+  document
+  `handover.md`, the task index `tasks.md` (this phase's task list — see [Task unit format](#task-unit-format)),
+  phase-level free-form artifacts, the type's standard artifacts (e.g. the knowledge phase's knowledge
+  document `kb.md`) and the human-written acceptance
+  record `acceptance.md`. The tasks themselves live in working-directory-level `docs/T-NNN/` (globally
+  unique numbering).
+  `phases = "m"` likewise establishes `docs/R-01/`, the implicit single phase `P01-implement/`.
+  **Old layouts are incompatible** (auto-next refactor ruling): the lettered-phase layout (in-round
+  `<letter>-<english name>/`
+  archives, `handovers/`, `phase-docs/`, `- [done]` ledger lines) and the earlier flat layout (root
+  `docs/phases.md` ledger, `docs/phases/`, `docs/handovers/`, `docs/migration-kb/`)
+  do not advance under this version; open a new project to continue. The leftover flat-layout read
+  fallback and old-layout
+  detection errors land together with later cleanup.
+- **Phase index (the round's `docs/R-NN/phases.md`) and phase directories**: at round start the index is
+  written by expanding the `phases` preset
+  letters (one line per phase, order and membership only) along with each phase directory (containing a
+  `todo.md`).
+  Phase state is **derived** — a phase is complete when its directory's `todo.md` has been renamed
+  `done.md` by the driver (recorded with the handover commit), and the current phase is the first
+  incomplete one in the index; the index ticks are a redundant view, files win:
 
   ```markdown
   # Phases (R-01)
@@ -1155,269 +1332,392 @@ Split by attack surface.
   - [ ] P03 test
   ```
 
-- **前缀护栏(只读)**:当前轮未完成且已有完成阶段时,`init` / `amend` 的
-  `--phases` 新值必须以已完成阶段(按索引序)为前缀,否则报错(退出码 1)——防止
-  把流程状态改成不可推导;当前轮已完成时护栏放开,新值作用于 `plan` 建立的下一轮。
-  兼容的新值不再当场改写索引:索引与新值的差异作为**漂移**由 `plan` 重同步(重写
-  尾部尚未开始的阶段目录,`run` 遇漂移退出码 1 并指向 `plan`)。索引行无法解析、
-  类型未知或重复、阶段目录 `todo.md`/`done.md` 两者都有或都没有,同样为环境错误
-  (退出码 1)。
-- **人工回退**:回退到某阶段 = ① 把该阶段及其后各阶段目录内的 `done.md` 改名回
-  `todo.md`(索引勾选随手取消,或留给 driver);② 需要续跑该阶段的某个任务时把
-  `docs/T-NNN/done.md` 改名回 `todo.md`;③ 重跑 `run`。推导式状态使回退
-  无需专门代码支持。
-- `v`(验收)阶段是完成侧检查的承载点:v 阶段任务只验证与记录、不做修复,
-  发现差距经任务报告的结论行上报——`Result: FAIL` 即阻塞停跑,由人工规划修复
-  (见[验收结论行](#验收结论行result-passfail))。
-- **阶段循环(`run`)**:配置 `phases ≠ "m"` 时 `run` 按"规划 → 执行 → 交接"推进到
-  全部阶段完成,进度全部从阶段索引/阶段目录 + 任务索引/任务目录推导(运行时状态只在
+- **Prefix guardrail (read-only)**: while the current round is incomplete and completed phases exist, a
+  new `--phases` value for `init` / `amend` must have the completed phases (in index order) as a prefix,
+  otherwise an error (exit code 1) — keeping
+  the flow state derivable; once the current round is complete the guardrail lifts and the new value
+  applies to the next round `plan` establishes.
+  A compatible new value no longer rewrites the index on the spot: the difference between index and new
+  value is left as **drift** for `plan` to re-sync (rewriting
+  the not-yet-started tail of phase directories; `run` exits 1 on drift and points at `plan`). An
+  unparseable index line, an
+  unknown or duplicated type, or a phase directory with both or neither of `todo.md`/`done.md` is likewise
+  an environment error
+  (exit code 1).
+- **Manual rollback**: rolling back to a phase = (1) rename `done.md` back to `todo.md` in that phase's
+  and every later phase directory (untick the index lines while at it, or leave that to the driver);
+  (2) to resume one of the phase's tasks, rename its `docs/T-NNN/done.md` back to `todo.md`; (3) rerun
+  `run`. Derived state means rollback needs no dedicated code.
+- The `v` (acceptance) phase carries the completion-side checking: v-phase tasks only verify and record,
+  never repair; gaps found are reported through the task report's result line — `Result: FAIL` blocks and
+  stops the run, with a person planning the repairs
+  (see [Acceptance result line](#acceptance-result-line-result-passfail)).
+- **Phase loop (`run`)**: with `phases ≠ "m"` configured, `run` advances through "plan → execute → hand
+  over" until
+  every phase is complete; all progress is derived from phase index/phase directories + task index/task
+  directories (runtime state lives only in
   `.auto/units.json`):
-  - **规划**:当前阶段尚无任务索引 `tasks.md`(或索引为空)时开一个**阶段规划会话**,
-    把本阶段任务写成阶段目录内的 `tasks.md` 与各 `docs/T-NNN/todo.md`(格式见
-    [任务单元格式](#任务单元格式))。driver 逐份形检(字段块、`## Goal`/`## Scope`/
-    `## Acceptance`、末行终止符、`Phase:` 为本阶段编号、编号不与其他阶段或已完成任务
-    冲突),不过关带反馈重试一次,重试前清掉本阶段上次产出。会话消费 `brief.md`
-    (含迁移源与目标)、轮次简报、模式导语与**各前序阶段的交接文档**(handover 蒸馏产物是跨阶段
-    记忆的唯一通道,前序原始 `docs/` 不注入;缺 handover 的阶段在清单中标注
-    "(no handover document)");规划受阻退出码 2(人工处理后重跑)。
-  - **执行**:有未完成任务时走既有主循环,任务级语义(分解/收尾/结论行/统一提交/
-    断点恢复)与单次运行完全一致。
-  - **k(知识提炼)阶段例外**:k 阶段不开规划会话、不列任务——
-    plan 路由直接进入**知识提取旁路会话**(整体认领原 `--extract-knowledge`
-    设计,见 `packages/auto-core/plans/0002-fixme-knowledge-design.md` 文首修订节),通读阶段索引与各
-    阶段目录内的交接文档,把最终验证过的迁移经验蒸馏为该阶段目录内的类型标准
-    产物 `docs/R-NN/P<nn>-knowledge/kb.md`(落盘即永久;章节
-    骨架:迁移概要/API 与类型映射/实现模式/坑点与边界情况/可复用规则/设计
-    偏差与重要决策/验证证据/参考)。
-    **提取失败不污染退出码**:会话受阻或两次未产出仅打 ⚠ 警告,k 阶段照常交接
-    (迁移成功不被文档生成失败反向污染;重试 = 把该阶段 `done.md` 改名回
-    `todo.md`、删除其 `kb.md` 后重跑);交接前中断则重跑时按阶段目录内文档幂等
-    跳过已产出。知识文档随统一提交入库。人工在
-    k 阶段自行在其 `tasks.md` 列任务时走通用执行/交接路由,提取挂点不触发。
-  - **交接**:本阶段任务全 done 后,先开**交接蒸馏会话**(旁路一次性,通读本阶段
-    任务索引与 `docs/` 产物,提炼出阶段目录内的 `handover.md` 交接文档,必备
-    四个小节:关键决策 / 约束与坑 / 下一阶段必读清单 / 产物索引;产物缺失带
-    反馈重试一次,仍失败按隐性阻塞退出码 2),再由 driver 机械收口——阶段 `todo.md`
-    改名为 `done.md` 并勾选索引行(任务索引原样留在阶段目录,无快照与重置),整体作为一次统一提交
-    (`Auto-Stage: phase-transition`)落账。本阶段的 `docs/` 产物文档
-    (`docs/T-*/` 等)为永久路径,交接不搬移。各步幂等,交接中途断电/Ctrl+C 后
-    重跑会自行补完(含补做完成改名)。
-  - 索引中全部阶段完成 → 退出码 0(`✓ all phases complete`)。
-- **阶段进度行**:`run` 启动横幅在配置摘要后打印一行进度(`status` 改为打印完整的
-  阶段/任务/子任务树),`✓` = 已
-  完成、`▶` = 当前阶段、其余 = 未开始;续轮(轮次目录 `docs/R-NN` 最大号
-  \> 1)时带轮次标注:
+  - **Planning**: when the current phase has no task index `tasks.md` yet (or the index is empty), a
+    **phase planning session**
+    writes the phase's tasks as the phase directory's `tasks.md` and each `docs/T-NNN/todo.md` (format in
+    [Task unit format](#task-unit-format)). The driver shape-checks every document (field block,
+    `## Goal`/`## Scope`/
+    `## Acceptance`, trailing eof marker, `Phase:` equal to this phase's id, numbers not colliding with
+    other phases or completed tasks
+    ); a failure is retried once with feedback, the phase's previous output cleared before the retry. The
+    session consumes `brief.md`
+    (including the migration source and target), the round brief, the mode prelude and **every preceding
+    phase's handover document** (the distilled handover is the only cross-phase
+    memory channel; the preceding phases' raw `docs/` are not injected; a phase without a handover is
+    flagged
+    "(no handover document)" in the list); a blocked planning session exits 2 (rerun after human handling).
+  - **Execution**: with unfinished tasks the existing main loop runs; task-level semantics
+    (decompose/wrap-up/result line/unified commit/
+    breakpoint recovery) are identical to a single run.
+  - **The k (knowledge distillation) phase is the exception**: the k phase opens no planning session and
+    lists no tasks —
+    the plan route goes straight into the **knowledge-extraction bypass session** (wholesale adoption of
+    the former `--extract-knowledge`
+    design, see the revision note at the head of
+    `packages/auto-core/plans/0002-fixme-knowledge-design.md`), reads the phase index and every
+    phase directory's handover documents, and distills the finally verified migration experience into the
+    type's standard
+    artifact `docs/R-NN/P<nn>-knowledge/kb.md` in that phase directory (permanent once on disk; section
+    skeleton: migration overview / API and type mapping / implementation patterns / pitfalls and edge
+    cases / reusable rules / design
+    deviations and major decisions / verification evidence / references).
+    **Extraction failure does not pollute the exit code**: a blocked session or two failures to produce
+    output only logs a ⚠ warning, and the k phase hands over as usual
+    (a successful migration is not polluted in reverse by a documentation failure; retry = rename the
+    phase's `done.md` back to
+    `todo.md`, delete its `kb.md`, rerun); interrupted before the handover, a rerun skips already-produced
+    documents idempotently. The knowledge document enters the repository with the unified commit. When a
+    person lists tasks in the
+    k phase's own `tasks.md`, the generic execute/handover routes run instead and the extraction hook
+    never triggers.
+  - **Handover**: once the phase's tasks are all done, a **handover distillation session** opens first (a
+    one-shot bypass session reading the phase's
+    task index and `docs/` artifacts and distilling the `handover.md` handover document in the phase
+    directory, with the
+    four required sections: key decisions / constraints and pitfalls / required reading for the next
+    phase / artifact index; a missing artifact is
+    retried once with feedback, still failing as an implicit block with exit code 2), then the driver
+    closes out mechanically — the phase's `todo.md`
+    is renamed `done.md` and the index line ticked (the task index stays in the phase directory verbatim,
+    no snapshot, no reset), the whole recorded as one unified commit
+    (`Auto-Stage: phase-transition`). The phase's `docs/` artifact documents
+    (`docs/T-*/` etc.) are permanent paths; the handover never moves them. Every step is idempotent —
+    after a power cut/Ctrl+C mid-handover, a
+    rerun completes it by itself (including catching up the completion rename).
+  - Every phase in the index complete → exit code 0 (`✓ all phases complete`).
+- **Phase progress line**: the `run` startup banner prints one progress line after the config summary
+  (`status` instead prints the full
+  phase/task/subtask tree): `✓` = completed, `▶` = current phase, the rest = not started; in a continuing
+  round (largest `docs/R-NN` number
+  \> 1) it carries a round annotation:
 
   ```text
   phases: P01-analysis✓ P02-design✓ P03-implement▶ P04-test
   phases (round 2): P01-analysis▶ P02-implement
   ```
 
-- **自动编号(缺省启用,`init --no-auto-number` 关闭)**:关闭后阶段规划会话不再被提供起始编号,但任务目录 `docs/T-NNN/` 全局唯一,
-  driver 仍拒绝与其他阶段或已完成任务冲突的编号。启用时
-  任务编号在目标目录**永不重复**:下一可用编号持久化在 `.auto/next-task`(内容仅为
-  一个正整数,driver 维护;`.auto/` 已被 gitignore,新克隆天然缺失),阶段规划会话
-  自该记录续接编号,driver 校验产出不复用已占用编号(复用视为无效产出、带反馈重试
-  一次仍失败按隐性阻塞退出码 2),规划成功后记录推进到本次最大编号 + 1(只增不减)。
-  **记录缺失时先恢复再继续**:现存文件(各阶段任务索引 `tasks.md`、
-  任务目录 `docs/T-NNN/` 等产物文件名)中无任何编号证据(全新项目)时直接写 1;否则开一个旁路一次性
-  **编号恢复会话**通读归档与 git 提交历史推导下一编号(git 历史可发现产物已被删除的
-  编号),driver 以确定性扫描的下限校验其写入(小于下限视为无效,重试一次仍失败按
-  隐性阻塞退出码 2)。
+- **Auto numbering (on by default, disabled by `init --no-auto-number`)**: disabled, the phase planning
+  session is no longer given a starting number, but task directories `docs/T-NNN/` stay globally unique
+  and the driver still rejects numbers colliding with other phases or completed tasks. Enabled,
+  task numbers **never repeat** in the target directory: the next available number is persisted in
+  `.auto/next-task` (content: a single
+  positive integer, maintained by the driver; `.auto/` is gitignored, so fresh clones lack it naturally),
+  the phase planning session
+  continues numbering from that record, and the driver validates that output reuses no occupied number (a
+  reuse is invalid output — retried once
+  with feedback, still failing as an implicit block with exit code 2); after successful planning the
+  record advances to this run's largest number + 1 (grows only).
+  **When the record is missing it is recovered first**: with no number evidence anywhere in existing
+  files (each phase's task index `tasks.md`,
+  task directories `docs/T-NNN/` and other artifact file names — a brand-new project), 1 is written
+  directly; otherwise a one-shot bypass
+  **numbering recovery session** reads the archives and git commit history to derive the next number (git
+  history can discover numbers whose artifacts were
+  deleted), and the driver validates its write against the lower bound of a deterministic scan (below the
+  bound is invalid — retried once with feedback, still failing as an
+  implicit block with exit code 2).
 
-- **开下一轮(`plan`)**:一轮阶段全部完成后(`run` 退出码 `0`),填
-  `docs/R-NN/round.md` 的 `## Close` 节(列出哪些决策已重述进目标自身的文档、哪些
-  接受流失)并提交,再跑 `plan`:它先跑轮关闭检查(全树 P1 扫描、目标构建、
-  `## Close` 清单;不过 → 逐条列出,退出码 `2`,`plan` 拒绝开下一轮),通过后建立
-  `docs/R-(N+1)/`——阶段索引与阶段目录按配置的 `phases` 展开,停在轮首门禁等待审阅提交;
-  各步幂等,中断后重跑 `plan` 自然续完。新一轮的目标是补齐上一轮的遗漏、对齐残余
-  差距,而不是重做已完成的工作;上一轮轮次目录原样保留(落盘即永久)。跨轮改配置用
-  `amend`(当前轮已完成时前缀护栏放开,新值作用于 `plan` 建立的下一轮)。新一轮
-  首个阶段规划会话注入上一轮结论摘录(轮内阶段目录索引 + 最后完成阶段的交接文档
-  全文 + 迁移知识文档全文),后续阶段照常走本轮 handover 蒸馏链。回退新轮 = 删除
-  新轮目录 `docs/R-(N+1)/` 后重跑 `run`,即恢复上一轮完成态。`continue` 子命令已
-  退役(出现即报文指向 `plan`);`--continue` 不是任何命令的选项(出现即报错指引)。
-- **轮次推导**:当前轮 = `docs/` 下 `R-NN` 轮次目录最大编号(轮首即建,无 +1),
-  零新增持久化状态;`run` 的阶段进度行带轮次标注(如上),`status` 的树以 `R-NN`
-  开头。
+- **Opening the next round (`plan`)**: once a round's phases are all complete (`run` exit code `0`),
+  fill in
+  `docs/R-NN/round.md`'s `## Close` section (listing which decisions have been restated into the target's
+  own documents and which
+  losses are accepted) and commit, then run `plan`: it first runs the round-close check (whole-tree P1
+  scan, target build,
+  `## Close` checklist; failing → itemized listing, exit code `2`, and `plan` refuses to open the next
+  round); passing, it establishes
+  `docs/R-(N+1)/` — the phase index and phase directories expand from the configured `phases`, stopping at
+  the round-start gate for review and commit;
+  every step is idempotent, and rerunning `plan` after an interruption finishes naturally. The new round's
+  goal is to fill the previous round's gaps and close residual
+  differences, not to redo finished work; the previous round's directory stays as-is (permanent once on
+  disk). Change config across rounds with
+  `amend` (the prefix guardrail lifts once the current round is complete, the new value applying to the
+  round `plan` establishes next). The new
+  round's first phase planning session gets an excerpt of the previous round's conclusions (the round's
+  phase directory index + the last completed phase's handover document
+  in full + the migration knowledge document in full); later phases use this round's handover distillation
+  chain as usual. Rolling back a new round = delete
+  the new round directory `docs/R-(N+1)/` and rerun `run`, restoring the previous round's completed state.
+  The `continue` subcommand is
+  retired (appearing gets a message pointing at `plan`); `--continue` is not an option of any command
+  (appearing errors with guidance).
+- **Round derivation**: the current round = the largest `R-NN` round directory number under `docs/`
+  (established at round start, no +1),
+  zero new persisted state; `run`'s phase progress line carries the round annotation (above), and
+  `status`'s tree starts with `R-NN`.
 
-> 阶段化流程的 P1..P4 已全部接入:P3 起,交接文档由蒸馏会话产出并注入下一阶段
-> 规划会话;P4 起,k(知识提炼)阶段整体认领原
-> `--extract-knowledge` 设计(知识提取会话产出 knowledge 阶段目录内 `kb.md`,失败不污染
-> 退出码)。`--track-fixme` 仍独立演进(`packages/auto-core/plans/0002-fixme-knowledge-design.md`),未实现。
+> The phased flow's P1..P4 are all wired in: from P3 the handover document is produced by the distillation
+> session and injected into the next phase's
+> planning session; from P4 the k (knowledge distillation) phase wholly adopts the former
+> `--extract-knowledge` design (the knowledge-extraction session produces `kb.md` in the knowledge phase
+> directory, failures not polluting the
+> exit code). `--track-fixme` still evolves independently
+> (`packages/auto-core/plans/0002-fixme-knowledge-design.md`), unimplemented.
 
-## AGENTS.md 标记块
+## The AGENTS.md marker block
 
-`init` / `amend` / `fix` / `run` 在目标目录 AGENTS.md 中幂等同步单一 opencode-auto 标记块
-(`<!-- opencode-auto:start -->` 到 `<!-- opencode-auto:end -->`,内容为英文):
-按当前配置渲染后与文件中现有的标准块比对,一致则不动、不一致则整块替换、缺失则
-追加;文件中任何其他 `opencode-auto:<name>:start/end` 标记块(旧版六块格式,或
-游离标记块)一律清理,除此之外永不改写 AGENTS.md。块内含以下段落:
+`init` / `amend` / `fix` / `run` idempotently sync a single opencode-auto marker block in the target
+directory's AGENTS.md
+(from `<!-- opencode-auto:start -->` to `<!-- opencode-auto:end -->`, content in English):
+it is rendered from the current config and compared with the file's existing standard block — identical:
+untouched; different: replaced wholesale; missing:
+appended; any other `opencode-auto:<name>:start/end` marker blocks in the file (the old six-block format,
+or
+stray marker blocks) are always cleaned up, and AGENTS.md is never rewritten otherwise. The block contains
+these sections:
 
-| 段落 | 内容 |
+| Section | Content |
 | --- | --- |
-| 指针 | 提示词已内联当前任务;上下文被压缩或拿不准进度时重读 `docs/T-NNN/todo.md` 与 `subtasks.md`;AGENTS.md 不记笔记 |
-| 测试执行原则(Test principle) | 编译/测试/构建/lint 等命令由 driver 在会话外执行(仅 `testByDriver: true` 时出现) |
-| 提交原则(Commit principle) | 会话后由 driver 递归统一提交,会话不执行 git 提交 |
-| 摘要原则(Summary principle) | 非交互场景不产出会话末尾总结,产出物一律写入 docs/ |
-| 引用与存放规范(Reference and storage conventions) | stable-refs:docs/T-NNN/ 目录化永久路径、引用根相对路径语法、检查三层 |
+| Pointer | Prompts inline the current task; re-read `docs/T-NNN/todo.md` and `subtasks.md` when the context is compacted or progress is uncertain; AGENTS.md keeps no notes |
+| Test principle | Compile/test/build/lint commands are executed by the driver outside the session (present only with `testByDriver: true`) |
+| Commit principle | The driver recursively runs the unified commit after sessions; sessions never run git commits |
+| Summary principle | No end-of-session summaries in non-interactive scenarios; output always goes into docs/ |
+| Reference and storage conventions | stable-refs: `docs/T-NNN/` directory-style permanent paths, root-relative reference syntax, the checking's three layers |
 
-提交原则、摘要原则、引用规范描述的是**与配置无关的不变式**,无条件出现;测试执行
-原则对应测试执行协议,随 `testByDriver` 开关出现或消失——机制不存在时,块内不保留
-其描述。生效配置由 run 启动横幅与 `status` 打印。
+The commit principle, summary principle and reference conventions describe **configuration-independent
+invariants** and appear unconditionally; the test
+principle corresponds to the test execution protocol and appears or disappears with the `testByDriver`
+switch — when the mechanism is absent, the block keeps no
+description of it. The effective config is printed by the run startup banner and `status`.
 
-**AGENTS.md 只承载这个标记块**(以及人工写在块外的内容):会话不维护它——原先的
-维护规则段落、`docs/agents/<主题>.md` 路由约定与 150 行上限已于 2026-09-25 退役
-(auto-core plans/0054)。原因:AGENTS.md 由 `init` 列入 `.gitignore`(仅本地),会话对它的
-改动既不进统一提交、也不随单元回滚,完成条件与审计轨迹都覆盖不到;值得留存的知识
-一律写进会随提交入库的 `docs/` 文档(阶段交接、知识阶段的 `kb.md` 等)。`run` 期间
-AGENTS.md 只读,agent 契约(`.opencode/agent/auto.md`)同步要求会话不改它。`check`
-在块缺失、内容与当前配置渲染不一致或残留旧版标记块时输出提示(note,不影响退出码)。
+**AGENTS.md carries only this marker block** (plus whatever a person writes outside it): sessions do not
+maintain it — the former
+maintenance-rules section, the `docs/agents/<topic>.md` routing convention and the 150-line cap were
+retired on 2026-09-25
+(auto-core plans/0054). Reason: `init` lists AGENTS.md in `.gitignore` (local only), so session edits to it
+enter neither the unified commit nor the unit rollback — invisible to both the completion condition and
+the audit trail; knowledge worth keeping
+goes into `docs/` documents that are committed with the work (phase handovers, the knowledge phase's
+`kb.md`, …). During
+`run` AGENTS.md is read-only, and the agent contract (`.opencode/agent/auto.md`) equally forbids sessions
+from changing it. `check`
+prints a note when the block is missing, inconsistent with the current config rendering, or a legacy
+marker block lingers (note, does not affect the exit code).
 
-## 任务单元格式
+## Task unit format
 
-任务按阶段登记在阶段目录的任务索引里,每个任务一个目录。`phases = "m"`(缺省)
-即隐式单阶段 `docs/R-01/P01-implement/`:
+Tasks are registered per phase in the phase directory's task index, one directory per task. `phases = "m"`
+(the default) means the implicit single phase `docs/R-01/P01-implement/`:
 
 ```md
-<!-- docs/R-01/P01-implement/tasks.md(任务索引:只记顺序与成员) -->
+<!-- docs/R-01/P01-implement/tasks.md (task index: order and membership only) -->
 # Tasks
 
-- [ ] T-001 任务标题
-- [ ] T-002 另一个任务
+- [ ] T-001 Task title
+- [ ] T-002 Another task
 ```
 
 ```md
-<!-- docs/T-001/todo.md(任务正文) -->
-# T-001: 任务标题
+<!-- docs/T-001/todo.md (task body) -->
+# T-001: Task title
 Phase: R-01.P01
 
 ## Goal
 
-目标。
+The goal.
 
 ## Scope
 
-范围与关键约束。
+Scope and key constraints.
 
 ## Acceptance
 
-完成判据。
+Completion criteria.
 ```
 
-- 索引行格式 `- [ ] T-<编号> <标题>`,按行序执行;driver 取第一个未完成且依赖已满足的
-  任务。**进度以文件为准**:任务目录内恰有 `todo.md`(未完成)或 `done.md`(已完成)
-  之一,driver 完成任务时把 `todo.md` 改名为 `done.md` 并勾选索引行——勾选只是冗余
-  视图,两者都没有或同时存在即环境错误(`run` 退出 1 并给修订指引)。
-- 任务正文由标题行、紧随的字段块(`Phase:`,可选 `Depends:` / `Touches:`)与
-  `## Goal` / `## Scope` / `## Acceptance` 三节组成;规划会话产出的任务文档按此强制
-  形检,手写时建议同样遵守。不要手工编写子任务检查项——分解会话会写
-  `docs/T-NNN/subtasks.md`,子任务进度同样以 `docs/T-NNN/S<nn>/todo.md|done.md` 为准。
-- 依赖字段三层同构:任务写在 `Phase:` 行之后,阶段写在阶段目录 `todo.md` 的 `Type:`
-  行之后,子任务写在 `S<nn>/todo.md` 开头(检查项第 n 行即 `S<nn>`)。`Depends: T-011, T-012`
-  = 所列单元完成后才开始(只写同层编号:任务可引用本阶段任务或已完成的任务,阶段只引用
-  本轮阶段,子任务只引用本任务子任务);缺省 = 依赖索引中的前一项(即串行),
-  `Depends: none` = 无前置。`Touches:` 列出会改动的仓库相对路径(不得为绝对路径或含
-  `..`),缺省 = 可能触及一切,目前只做检查、不参与调度。空值、自依赖、未知编号与环
-  在规划/分解会话收口时打回重写,在 `run` 加载索引时即环境错误(任务、阶段退出 1;
-  子任务阻塞退出 2)。
-- 运行时状态(`in_progress` / `blocked`、尝试次数、fork 基点)只在 `.auto/units.json`,
-  不写进任何文档;索引勾选与 `todo.md` → `done.md` 改名只由 driver
-  维护,agent 会话不得改动。`opencode-auto status [dir]` 打印只读的轮次 → 阶段 → 任务
-  → 子任务树。
-- 验收标准写进 `## Acceptance`(或规划成独立的验收任务、v 阶段);结论经任务报告的
-  结论行上报,见[验收结论行](#验收结论行result-passfail)。
+- Index lines take the form `- [ ] T-<number> <title>` and execute in line order; the driver takes the
+  first unfinished task whose dependencies are satisfied.
+  **Files are the source of truth for progress**: the task directory holds exactly one of `todo.md`
+  (unfinished) or `done.md` (complete);
+  when the driver completes a task it renames `todo.md` to `done.md` and ticks the index line — the tick is
+  a redundant view, and having neither or both is an environment error (`run` exits 1 with amend guidance).
+- The task body consists of a heading line, the immediately following field block (`Phase:`, optional
+  `Depends:` / `Touches:`) and
+  the three sections `## Goal` / `## Scope` / `## Acceptance`; task documents produced by the planning
+  session are shape-checked against this, and hand-written ones should follow it too. Do not write subtask
+  checklist items by hand — the decompose session will write
+  `docs/T-NNN/subtasks.md`, and subtask progress likewise follows `docs/T-NNN/S<nn>/todo.md|done.md`.
+- The dependency field is isomorphic across the three levels: a task's sits after the `Phase:` line, a
+  phase's after the `Type:` line in the phase directory's `todo.md`, a subtask's at the head of
+  `S<nn>/todo.md` (checklist line n is `S<nn>`). `Depends: T-011, T-012`
+  = start only after the listed units complete (same-level numbers only: a task may reference tasks of its
+  own phase or completed tasks, a phase only
+  phases of its own round, a subtask only subtasks of its own task); the default = depend on the previous
+  entry in the index (i.e. serial),
+  `Depends: none` = no prerequisite. `Touches:` lists the repository-relative paths that will change (no
+  absolute paths, no `..`); the default = may touch anything — currently checked only, not used in
+  scheduling. Empty values, self-dependencies, unknown numbers and cycles
+  are bounced back for rewriting at the planning/decompose close-out, and are environment errors when
+  `run` loads the index (tasks and phases exit 1;
+  subtasks block with exit 2).
+- Runtime state (`in_progress` / `blocked`, attempt counts, fork base) lives only in `.auto/units.json`,
+  never in a document; index ticks and the `todo.md` → `done.md` rename are maintained by the driver
+  alone — agent sessions must not change them. `opencode-auto status [dir]` prints the read-only round →
+  phase → task
+  → subtask tree.
+- Acceptance criteria go into `## Acceptance` (or are planned as dedicated acceptance tasks, or the v
+  phase); the verdict is reported through the task report's
+  result line — see [Acceptance result line](#acceptance-result-line-result-passfail).
 
-### 由 AI 规划任务
+### Planning tasks with AI
 
-`init --implement-file` / `--implement-prompt` 快捷模式已退役(auto-core plans/0053 D13):
-任何命令出现这两个选项即用法错误(退出码 1),报文指向
-`opencode-auto plan <dir> -p <text> | --file <path>`(先 `plan` 建轮并提交轮首设置;
-见[规划与轮次生命周期(plan)](#规划与轮次生命周期plan))。
-`init` 不再启动 AI 会话,也不再因这两个选项把 `subtask` 缺省为 `ondemand`、`wrapup`
-缺省为关闭。
+The `init --implement-file` / `--implement-prompt` shortcuts are retired (auto-core plans/0053 D13):
+either option on any command is a usage error (exit code 1), with the message pointing at
+`opencode-auto plan <dir> -p <text> | --file <path>` (run `plan` first to establish the round and commit
+the round-start setup;
+see [Planning and the round lifecycle (plan)](#planning-and-the-round-lifecycle-plan)).
+`init` starts no AI sessions and no longer defaults `subtask` to `ondemand` or `wrapup` to off because of
+these options.
 
-`phases = "m"` 的规划与阶段化流程共用同一个阶段规划会话(auto-core plans/0053 D12):
+Planning under `phases = "m"` shares the same phase planning session with the phased flow (auto-core
+plans/0053 D12):
 
-- 输入原样存为阶段目录下的 `plan-input.md`(`docs/R-01/P01-implement/plan-input.md`),
-  在规划会话之前单独提交;规划会话按「计划文件」读取它,写出任务索引与各
-  `docs/T-NNN/todo.md`,完成即统一提交(`Auto-Stage: phase-plan`)。
-- 模型路由沿用 `implement-scan` 角色,已有的路由配置无需改动。
-- 编号:`autoNumber` 开启时自 `.auto/next-task` 续接并在规划后推进;关闭时从已占用的
-  最大编号之后开始。
-- 规划会话被中断时,下一次 `run`(或 `plan`)先完成这一步骤、再执行任务;与阶段化
-  流程的规划步骤一样复用未收口的会话。
+- The input is stored verbatim as the phase directory's `plan-input.md`
+  (`docs/R-01/P01-implement/plan-input.md`),
+  committed on its own before the planning session; the planning session reads it as the "plan file",
+  writes the task index and each `docs/T-NNN/todo.md`, and commits with the unified commit on completion
+  (`Auto-Stage: phase-plan`).
+- Model routing keeps the `implement-scan` role; existing routing config needs no change.
+- Numbering: with `autoNumber` on, continue from `.auto/next-task` and advance after planning; off, start
+  after the largest occupied number.
+- When the planning session is interrupted, the next `run` (or `plan`) finishes this step first, then
+  executes tasks; like the phased
+  flow's planning step, it reuses the unclosed session.
 
-## 原则检查(check)
+## Principle check (check)
 
-`opencode-auto check [dir]` 启发式扫描目标目录的 `AGENTS.md` 与任务文档 `docs/T-*/todo.md`,报告与
-"测试执行权 / 提交执行权在 driver"原则相违背的描述——即要求会话直接运行编译/
-测试/构建/lint 命令,或要求会话执行 git 提交的语句(命中打印
-文件、行号与原文,退出码 1;干净时退出码 0)。原则性/否定句("不要运行…")、
-归属 driver 的语句、字段行与 opencode-auto 标记块不算违背;
-匹配为启发式,报告供人工确认。测试类描述的检查仅在 `testByDriver: true` 时进行,
-提交类检查始终进行。`check` 另输出提示(note,不影响退出码):缺少 opencode-auto 块、块内容与
-当前配置渲染不一致(过期)、残留旧版/多余的带名标记块;这些提示都指向
-`fix`(`init` / `run` / `fix` 都会幂等同步该标记块)。配置读不进来时 `check` 只报
-一条 note,属 `fix` 的键规则能修的一类时追加 `fix:` 提示;`check` 不列出 `fix` 的
-逐条发现——完整清单跑 `fix` 看(不确认即不改动)。
+`opencode-auto check [dir]` heuristically scans the target directory's `AGENTS.md` and task documents
+`docs/T-*/todo.md`, reporting
+statements that violate the "test / commit execution rights belong to the driver" principles — i.e.
+sentences requiring sessions to run compile/
+test/build/lint commands directly, or to run git commits (hits print the
+file, line number and original text, exit code 1; clean exits 0). Principled/negative sentences ("do not
+run …"),
+statements assigning something to the driver, field lines and the opencode-auto marker block do not count
+as violations;
+the matching is heuristic and the report is for human confirmation. The test-class check runs only with
+`testByDriver: true`,
+the commit-class check always runs. `check` also prints notes (not affecting the exit code): a missing
+opencode-auto block, block content inconsistent with the
+current config rendering (stale), or leftover old/extra named marker blocks; all of these point at
+`fix` (`init` / `run` / `fix` all idempotently sync the marker block). When the config fails to load,
+`check` reports just
+one note, appending the `fix:` hint when it is of a class fix's key rules repair; `check` does not list
+fix's
+itemized findings — run `fix` for the full list (it changes nothing without confirmation).
 
-`check` 同时做**引用检查**(稳定引用规范,stable-refs;实验开关
-`OPENCODE_AUTO_REF_CHECK=on` 时启用,缺省 off 不扫描):全量扫描活文档
-(`docs/**/*.md`,排除 `docs/phases/` 旧布局状态归档与轮内 `docs/R-NN/<字母>-*/`
-阶段归档)中的路径引用——反引号 span 与
-Markdown 链接内的目标目录根相对路径(可带 `:行号` 锚),失效引用(路径不存在、
-行号超出文件总行数)逐条打印并退出码 1;代码围栏内的路径与行内含
-`已删除` / `已归档` / `历史` 标记的引用豁免;URL、绝对路径与版本号形态不校验。
-`check` 还会在 AGENTS.md 缺少引用规范块、或目标目录非 git(提交前引用
-auto-correct 不可用)时输出 note(非 git note 仅在开关 on 时)。引用的提交前自动
-修复(rename 改写)见「统一提交」相关章节。
+`check` also runs the **reference check** (the stable reference conventions, stable-refs; the experiment
+switch
+`OPENCODE_AUTO_REF_CHECK=on` enables it, default off, no scan): a full scan of path references in live
+documents
+(`docs/**/*.md`, excluding the old-layout state archive `docs/phases/` and the in-round phase archives
+`docs/R-NN/<letter>-*/`
+) — root-relative target-directory paths inside backtick spans and
+Markdown links (optionally with a `:line` anchor); dead references (path absent,
+line beyond the file's line count) are printed item by item with exit code 1. Paths inside code fences and
+references whose line carries a
+`deleted` / `archived` / `historical` marker are exempt; URLs, absolute paths and version-number shapes
+are not validated.
+`check` also notes when AGENTS.md lacks the reference-conventions block, or the target directory is not a
+git repository (pre-commit reference
+auto-correct unavailable; the non-git note only with the switch on). The pre-commit auto-repair of
+references (rename rewriting) is covered in the "Unified commit" section.
 
-## 模型注册表一览(models)
+## Model registry overview (models)
 
-`opencode-auto models [dir]` 只读地打印**模型注册表**(model registry)的生效表,不启动任何
-agent、不写任何文件,因此不取运行锁,可与进行中的 `run` 并行。注册表由两层合并而成:操作者层
-(`$OPENCODE_AUTO_MODELS`,未设时为 `$XDG_CONFIG_HOME/opencode-auto/models.json`,
-`XDG_CONFIG_HOME` 缺省 `~/.config`)与可选的项目层 `.opencode/auto/models.json`(本地私有,
-`init` 把它写进 `.gitignore`,老项目由 `fix` 补上)。两层都不存在即无注册表,运行行为与以往
-逐字节一致。本节只说明本命令的输出:
+`opencode-auto models [dir]` read-only prints the **model registry**'s effective table; it starts no
+agent and writes no file, so it takes no run lock and can run alongside a live `run`. The registry merges
+two layers: the operator layer
+(`$OPENCODE_AUTO_MODELS`, or `$XDG_CONFIG_HOME/opencode-auto/models.json` when unset,
+`XDG_CONFIG_HOME` defaulting to `~/.config`) and the optional project layer `.opencode/auto/models.json`
+(local-only;
+`init` writes it into `.gitignore`, older projects get it backfilled by `fix`). Neither layer present means
+no registry, and run behavior is byte-identical to before.
+This section covers only the command's output:
 
-- **来源与环境**:读到的层、窗口时区与当前时刻、agent 过滤(外壳画像的 agent,否则
-  `OPENCODE_AUTO_AGENT`;按 profile 的 adapter 匹配)、项目上下文上限(配置 `contextLimit`)
-  与缺省 agent(配置 `agent`);设置了 `OPENCODE_AUTO_MODEL` 时另起一行标明它覆盖哪些会话的候选。
-- **agent profile**:每个 profile 的来源层(`[operator]` / `[project]` / `[implied]`)、adapter、
-  `bin`、`server`(去掉 URL 中的用户信息)与 `env` **变量名**——字面值只标 `(literal)`,引用只标
-  引用名(`(env CLAUDE_B_PROXY)`),`null` 标 `(removed)`,**从不打印任何值**。
-- **模型条目**:来源层、agent、步进(`model` 之后接各 `wider` id)、`variant`、`context`、窗口
-  与所在 provider 的 key ring;下一行给出**此刻是否可用及原因**——在窗口外(附下次开放时刻)、
-  被 agent 过滤排除、已知上下文窗口低于项目上限;上下文窗口未知(opencode 在 server 启动后才
-  报告,claude 在首轮之后)只作提示,不判为不可用。
-- **key ring**:每个 provider 一行,按顺序列出引用名与个数,以及共享它的模型。
-- **tiers / routes / classifier**:两档列表、路由覆盖与失败信息分类模型列表,各带来源层;没有被
-  任何档位、路由列表或分类器引用的模型单独提示为未使用。
-- **路由表**:每个阶段类型(内置类型与项目自定义类型)下,解析结果相同的会话角色合为一行:
-  档位(缺省档,或 `route <键>` 覆盖,优先级 角色 > 类型 id > 预置字母)与有序候选,`✓`/`✗` 标
-  此刻可用与否;simple 档在 `|` 之后接续借用的 deep 列表(deep 档从不借用 simple)。
+- **Sources and environment**: the layers read, the window timezone and current time, the agent filter
+  (the shell profile's agent, else
+  `OPENCODE_AUTO_AGENT`; matched by profile adapter), the project context limit (config `contextLimit`)
+  and the default agent (config `agent`); when `OPENCODE_AUTO_MODEL` is set, an extra line marks whose
+  candidates it overrides.
+- **agent profiles**: each profile's source layer (`[operator]` / `[project]` / `[implied]`), adapter,
+  `bin`, `server` (userinfo stripped from the URL) and the `env` **variable names** — literals are only
+  marked `(literal)`, references only named
+  (`(env CLAUDE_B_PROXY)`), `null` marked `(removed)`; **no value is ever printed**.
+- **model entries**: source layer, agent, steps (`model` followed by the `wider` ids), `variant`,
+  `context`, window,
+  and the provider's key ring; the next line gives **availability right now and why** — outside the window
+  (with the next opening time),
+  excluded by the agent filter, or a known context window below the project limit; an unknown context
+  window (opencode reports it only after the server
+  starts, claude after the first turn) is only a note, not judged unavailable.
+- **key rings**: one line per provider, listing the reference names and count in order, plus the models
+  sharing it.
+- **tiers / routes / classifier**: the two tier lists, route overrides and the failure-message classifier
+  model list, each with its source layer; models referenced by no
+  tier, route list or classifier are flagged separately as unused.
+- **routing table**: under each phase type (builtin and project-custom), session roles resolving
+  identically share one line:
+  the tier (default tier, or a `route <key>` override, precedence role > type id > preset letter) and the
+  ordered candidates, `✓`/`✗` marking
+  availability right now; a simple tier continues after `|` with the deep list it borrows (a deep tier
+  never borrows simple).
 
-退出码:无注册表时打印一行、退出码 `0`;注册表可被 `run` 接受时打印整表、退出码 `0`;
-`run`/`plan` 启动时会拒绝的问题(坏 JSON、未知字段、坏窗口、引用的环境变量未设置或文件不可读、
-git 未忽略的项目层等)逐条以 `⚠` 打印、退出码 `1`——注册表能载入时先打印整表再列问题。
-`models` 不取运行锁;除 `--probe` 外不接受任何选项(与 `check`/`status` 同组)。
-`--probe` 会**启动 agent**(按 profile 惰性拉起各自的 host,经 agent pool),向每个被档位、
-路由列表或分类器引用的模型逐个发送一条极短的恢复探测提示词(wait-and-probe 环的同款),
-逐模型打印一行应答或失败——它因此是可选的:探测产生真实 token 消耗。探测失败是逐模型的
-发现,不是命令错误;退出码仍由注册表本身决定。
+Exit codes: no registry prints one line, exit code `0`; a registry `run` would accept prints the full
+table, exit code `0`;
+problems `run`/`plan` would refuse at startup (bad JSON, unknown fields, bad windows, a referenced
+environment variable unset or file unreadable,
+a git-unignored project layer, …) print item by item with `⚠`, exit code `1` — when the registry loads,
+the full table prints first and the problems follow.
+`models` takes no run lock and accepts no option besides `--probe` (same group as `check`/`status`).
+`--probe` **starts agents** (lazily bringing up each profile's host via the agent pool) and sends one very
+short recovery-probe prompt (the same one the wait-and-probe loop uses) to every model referenced by a
+tier,
+route list or classifier, printing one reply-or-failure line per model — which is why it is optional:
+probing costs real tokens. A failed probe is a per-model
+finding, not a command error; the exit code still follows the registry itself.
 
-## 阻塞与恢复
+## Blocking and recovery
 
-任务阻塞(退出码 `2`)时,driver 会把问题写入该任务的 `question` 字段并停机:
+When a task blocks (exit code `2`), the driver writes the problem into that task's `question` field and
+halts:
 
-- **权限问题**:按 `--permission` 策略处理(缺省 `ask-deny`)——`auto-allow` 立即
-  自动授权;`ask-allow` / `ask-deny` / `ask-fail` 先等待人工指令(`--wait-answer`
-  分钟,未设则不等待;回答 `allow`/`yes`/`y` 等即授权,明确的其余回答拒绝该权限但
-  会话继续),超时分别自动授权 / 自动拒绝并继续(AI 无授权绕开) / 拒绝并阻塞停机
-  (此时按提示在目标目录 `opencode.json` 的 `permission` 规则中放行后重跑);
-- **其他问题**:在会话外处理(或在 `answer` 字段填写解答),然后重新运行
-  `opencode-auto run` 即可从阻塞处续跑。
+- **Permission problems**: handled per the `--permission` policy (default `ask-deny`) — `auto-allow`
+  auto-grants immediately;
+  `ask-allow` / `ask-deny` / `ask-fail` first wait for a human instruction (`--wait-answer`
+  minutes; unset means no wait; answering `allow`/`yes`/`y` etc. grants, any other explicit answer denies
+  that permission but
+  the session continues); on timeout they respectively auto-grant / auto-deny and continue (the AI gets no
+  grant to go around) / deny and block-halt
+  (in that case, per the hint, allow it in the target directory's `opencode.json` `permission` rules and
+  rerun);
+- **Other problems**: handle them outside the session (or fill the answer into the `answer` field), then
+  rerun
+  `opencode-auto run` to resume from the block.
 
 <!-- auto: eof -->

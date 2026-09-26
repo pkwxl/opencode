@@ -36,16 +36,18 @@ function unit(letter: PhaseLetter, id = "P01"): PhaseUnit {
   return { round: "R-01", id, type: entry.type, entry, dir: `docs/R-01/${id}-${entry.type}` }
 }
 
-// T-006: 任务三态行 / 阶段收口行 / 轮次完成行的报文构造(plans/STATS_PLAN.md
-// §4.2/4.3/4.4)——注入 stats 句柄(loadStats + 注入时钟)直驱 loop.ts 的三个
-// 报文构造函数,断言文案、省略规则与守卫。loop 主体的调用点接线(typecheck 覆盖)
-// 不在此重复 fake 整条 runAll 链。
+// T-006: message construction for the task three-state lines / phase close-out
+// lines / round-complete lines (plans/STATS_PLAN.md §4.2/4.3/4.4) — inject a
+// stats handle (loadStats + an injected clock) and drive loop.ts's three
+// message builders directly, asserting copy, omission rules and guards. The
+// call-site wiring inside the loop body (covered by typecheck) is not re-faked
+// here with a whole runAll chain.
 
 function usage(partial: Partial<Usage>): Usage {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 1, ...partial }
 }
 
-describe("taskEndLines 任务结束三态行", () => {
+describe("taskEndLines task-end three-state lines", () => {
   let dir: string
   let now: number
 
@@ -61,23 +63,24 @@ describe("taskEndLines 任务结束三态行", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("statsId 守卫: 未装载或桶身份不符返回 undefined(调用方回落旧文案)", async () => {
-    // 未装载句柄
+  test("statsId guard: unloaded or a mismatched bucket identity returns undefined (the caller falls back to the old copy)", async () => {
+    // no loaded handle
     expect(await taskEndLines(dir, "T-001")).toBeUndefined()
-    // 桶身份是别的任务
+    // the bucket identity is another task
     await loadStats(dir)
     await statsTask(dir, "T-999")
     expect(await taskEndLines(dir, "T-001")).toBeUndefined()
   })
 
-  test("未中断: 累计口径输出,无“本进程”段(本进程 == 累计,文案等价现状)", async () => {
+  test("no interruption: cumulative-basis output without a \"this process\" part (this process == cumulative, copy equivalent to the status quo)", async () => {
     await loadStats(dir)
     await statsTask(dir, "T-003")
-    // 两次会话: 18 分 12 秒 AI(墙钟段 6 分 19 秒补齐到 24 分 31 秒)。
+    // Two sessions: 18m 12s AI (the wall-clock segment of 6m 19s tops it up
+    // to 24m 31s).
     await statsSessionBegin(dir, "T-003")
     now += 10 * 60_000
     await statsSessionEnd(dir, "ses_1", usage({ input: 1200, output: 340, cacheRead: 28_400, cacheWrite: 3100, cost: 0.041 }))
-    now += 6 * 60_000 + 19_000 // 会话间墙钟
+    now += 6 * 60_000 + 19_000 // wall clock between sessions
     await statsSessionBegin(dir, "T-003")
     now += 8 * 60_000 + 12_000
     await statsSessionEnd(dir, "ses_2", usage({ input: 800, output: 100 }))
@@ -88,13 +91,14 @@ describe("taskEndLines 任务结束三态行", () => {
     ])
   })
 
-  test("跨中断续接: 累计含中断前,“本进程” ≠ 累计时输出", async () => {
-    // 第一“进程”: 18 分后优雅收口。
+  test("resumed across an interruption: the cumulative includes the pre-interruption part; the \"this process\" part appears once this process ≠ cumulative", async () => {
+    // First "process": graceful close-out after 18 minutes.
     await loadStats(dir)
     await statsTask(dir, "T-003")
     now += 18 * 60_000
     await flushStats(dir)
-    // 第二“进程”: 续跑同任务(同 id 幂等,桶不重置),再跑 6 分。
+    // Second "process": resumes the same task (same id is idempotent, bucket
+    // not reset) and runs 6 more minutes.
     await loadStats(dir)
     await statsTask(dir, "T-003")
     now += 6 * 60_000
@@ -103,7 +107,7 @@ describe("taskEndLines 任务结束三态行", () => {
   })
 })
 
-describe("phaseCloseLines 阶段收口行", () => {
+describe("phaseCloseLines phase close-out lines", () => {
   let dir: string
   let now: number
 
@@ -120,9 +124,10 @@ describe("phaseCloseLines 阶段收口行", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("全量口径: 总用时(含规划/交接/提交;AI,人工等待),任务 N 个 / 会话 M 次 + tokens 行", async () => {
+  test("full basis: total time (incl. plan/handover/commit; AI, human wait), N tasks / M sessions + tokens line", async () => {
     await statsPhase(dir, "R-01.P01")
-    // 两个任务(statsTask 各计 1)、三次会话(含旁路,同归 phase 桶)、一次人工等待。
+    // Two tasks (statsTask counts 1 each), three sessions (the bypass one
+    // included, all into the phase bucket), one human wait.
     await statsTask(dir, "T-001")
     await statsSessionBegin(dir, "T-001")
     now += 20 * 60_000
@@ -134,13 +139,14 @@ describe("phaseCloseLines 阶段收口行", () => {
     await statsWaitBegin(dir, "stepPause:phase")
     now += 3 * 60_000
     await statsWaitEnd(dir)
-    // 交接蒸馏旁路会话(伪任务 PLAN)。
+    // Handover-distillation bypass session (pseudo task PLAN).
     await statsSessionBegin(dir, "PLAN")
     now += 60_000
     await statsSessionEnd(dir, "ses_3", usage({ output: 200 }))
-    now += 8 * 60_000 // 归档/台账/提交等 driver 墙钟
-    // 总用时 50 分 = 20+21+1(AI 段)+ 8(driver 墙钟);3 分人工等待从总用时扣除、
-    // 单记 waitMs(STATS_PLAN 已确认口径: 总用时排除纯人工等待)。
+    now += 8 * 60_000 // driver wall clock for archive/ledger/commit and the like
+    // Total 50m = 20+21+1 (AI segments) + 8 (driver wall clock); the 3m human
+    // wait is deducted from the total and booked alone as waitMs (basis
+    // confirmed in STATS_PLAN: the total excludes pure human waits).
     const lines = await phaseCloseLines(dir, unit("t"))
     expect(lines).toEqual([
       "■ phase P01-test Testing closed: total 50m 0s (incl. plan/handover/commit; AI 42m 0s, human wait 3m 0s), 2 tasks / 3 sessions",
@@ -148,7 +154,7 @@ describe("phaseCloseLines 阶段收口行", () => {
     ])
   })
 
-  test("省略与守卫: waitMs=0 省略人工等待段;桶 id 不符(已切换阶段)返回 undefined", async () => {
+  test("omission and guard: waitMs=0 omits the human-wait part; a mismatched bucket id (phase already switched) returns undefined", async () => {
     await statsPhase(dir, "R-01.P01")
     await statsTask(dir, "T-001")
     now += 5 * 60_000
@@ -161,7 +167,7 @@ describe("phaseCloseLines 阶段收口行", () => {
   })
 })
 
-describe("roundCompleteLines 轮次完成行", () => {
+describe("roundCompleteLines round-complete lines", () => {
   let dir: string
   let now: number
 
@@ -177,7 +183,7 @@ describe("roundCompleteLines 轮次完成行", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("本轮汇总: phaseCount 提供时带阶段段,缺省省略;history.rounds=0 无历轮段", async () => {
+  test("this round's summary: the phase part appears when phaseCount is given and is omitted by default; history.rounds=0 means no prior-rounds part", async () => {
     await loadStats(dir)
     await statsPhase(dir, "m")
     await statsTask(dir, "T-001")
@@ -185,20 +191,20 @@ describe("roundCompleteLines 轮次完成行", () => {
     now += 30 * 60_000
     await statsSessionEnd(dir, "ses_1", usage({ input: 2000, output: 500, cacheRead: 18_000, cost: 0.12 }))
     now += 22 * 60_000
-    // 分阶段路径(阶段数由调用方从台账读)
+    // Phased path (the caller reads the phase count from its records)
     const phased = await roundCompleteLines(dir, { phaseCount: 6 })
     expect(phased).toEqual([
       "■ round 1 complete: total 52m 0s (AI 30m 0s), 6 phases / 1 tasks / 1 sessions",
       "tokens in 2000 / out 500 / cache-read 18.0k / cache-write 0, hit 90.0%, cost $0.12",
     ])
-    // 非分阶段路径(m 阶段汇总,无阶段段)
+    // Non-phased path (the m-phase summary, no phase part)
     const plain = await roundCompleteLines(dir)
     expect(plain?.[0]).toBe("■ round 1 complete: total 52m 0s (AI 30m 0s), 1 tasks / 1 sessions")
     expect(plain).toHaveLength(2)
   })
 
-  test("历轮累计: 轮次滚动进 history 后追加两行历轮段", async () => {
-    // 第 1 轮: 40 分,1 任务 2 会话。
+  test("cumulative over prior rounds: once a round rolls into history, two prior-rounds lines are appended", async () => {
+    // Round 1: 40m, 1 task, 2 sessions.
     await loadStats(dir)
     await statsPhase(dir, "m")
     await statsTask(dir, "T-001")
@@ -209,11 +215,12 @@ describe("roundCompleteLines 轮次完成行", () => {
     now += 10 * 60_000
     await statsSessionEnd(dir, "ses_2", usage({ input: 1000, output: 200, cost: 0.1 }))
     await flushStats(dir)
-    // 进入第 2 轮(docs/R-02 存在 → currentRound = 2):装载时第 1 轮滚进 history。
+    // Enter round 2 (docs/R-02 exists → currentRound = 2): on load round 1
+    // rolls into history.
     await mkdir(join(dir, "docs", "R-02"), { recursive: true })
     await loadStats(dir)
     expect((await statsHistory(dir))?.rounds).toBe(1)
-    // 第 2 轮: 20 分,1 任务 1 会话。
+    // Round 2: 20m, 1 task, 1 session.
     await statsPhase(dir, "m")
     await statsTask(dir, "T-002")
     await statsSessionBegin(dir, "T-002")
@@ -228,7 +235,7 @@ describe("roundCompleteLines 轮次完成行", () => {
     ])
   })
 
-  test("dir 缺省/未装载: 空转返回 undefined,不落盘", async () => {
+  test("dir undefined / not loaded: no-op returns undefined, nothing written", async () => {
     expect(await roundCompleteLines(undefined)).toBeUndefined()
     expect(await taskEndLines(undefined, "T-001")).toBeUndefined()
     expect(await phaseCloseLines(undefined, unit("m"))).toBeUndefined()
@@ -312,10 +319,12 @@ describe("roundCompleteLines per-model lines", () => {
   })
 })
 
-// ===== 代答高亮块(plans/0020-auto-resolve-design.md §H,T-006 的 H5/H6)=====
-// 台账经 recordResolves/recordDecisions 直接播种(不走 runner 接线,那是 T-005 的
-// 覆盖面),断言三个构造函数的置顶块文案、driver↔agent 合并、折叠计数与空转。
-describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLines", () => {
+// ===== Proxy-answer highlight blocks (plans/0020-auto-resolve-design.md §H,
+// T-006's H5/H6) =====
+// The ledger is seeded directly via recordResolves/recordDecisions (no runner
+// wiring — that is T-005's coverage), asserting the three builders' highlight
+// copy, driver↔agent merging, folded counts and no-ops.
+describe("proxy-answer highlight blocks taskResolveLines / phaseResolveLines / roundResolveLines", () => {
   let dir: string
 
   const item = (partial: Partial<ResolveItem> & { question: string }): ResolveItem => ({
@@ -335,100 +344,102 @@ describe("代答高亮块 taskResolveLines / phaseResolveLines / roundResolveLin
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("无代答: 三处一律返回空数组,不占版面", async () => {
+  test("no proxy answers: all three return an empty array, taking no space", async () => {
     expect(await taskResolveLines(dir, "T-001")).toEqual([])
     expect(await phaseResolveLines(dir, unit("m"))).toEqual([])
     expect(await roundResolveLines(dir)).toEqual([])
   })
 
-  test("dir 缺省: 空转返回空数组,不落盘", async () => {
+  test("dir undefined: no-op returns an empty array, nothing written", async () => {
     expect(await taskResolveLines(undefined, "T-001")).toEqual([])
     expect(await phaseResolveLines(undefined, unit("m"))).toEqual([])
     expect(await roundResolveLines(undefined)).toEqual([])
     expect(await Bun.file(join(dir, ".auto", "resolves.json")).exists()).toBe(false)
   })
 
-  test("任务置顶块: 逐条列出 + 标记位置 + 完整记录指引", async () => {
+  test("task highlight block: per-item listing + marker location + full-record pointer", async () => {
     await recordResolves(dir, [
       item({
-        question: "是否把 prompt.ts 的第三份 formatTokens 一并收口",
-        option: "顺带收口",
-        reason: "同层依赖,不引入反向 import",
+        question: "should the third formatTokens copy in prompt.ts be folded in too",
+        option: "fold it in",
+        reason: "same layer, no reverse import",
         file: "src/prompt.ts:501",
       }),
-      item({ question: "折旧入账是否同样过 MAX_TICK 钳制", option: "同样钳制", reason: "宁少不多" }),
+      item({ question: "is depreciation booking also clamped by MAX_TICK", option: "clamped the same way", reason: "undercount rather than overcount" }),
     ])
     expect(await taskResolveLines(dir, "T-001")).toEqual([
       "⚑ this task auto-answered 2 questions that should have been confirmed by you; please review:",
-      "  1. 是否把 prompt.ts 的第三份 formatTokens 一并收口 → 顺带收口(同层依赖,不引入反向 import)",
+      "  1. should the third formatTokens copy in prompt.ts be folded in too → fold it in(same layer, no reverse import)",
       "     src/prompt.ts:501",
-      "  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)",
+      "  2. is depreciation booking also clamped by MAX_TICK → clamped the same way(undercount rather than overcount)",
       `  full record in the "Proxy-answered questions" section of ${taskDoc("T-001", "report")}`,
     ])
   })
 
-  test("未配对的 driver 项带 ⚠ 点名;已配对的被信息更全的 agent 项取代", async () => {
+  test("unpaired driver items are called out with ⚠; paired ones are replaced by the fuller agent item", async () => {
     await recordResolves(dir, [
-      item({ source: "driver", question: "验收口径是否包含并发场景", session: "ses_1" }),
-      item({ source: "driver", question: "折旧入账是否同样过 MAX_TICK 钳制", session: "ses_1", matched: true }),
-      item({ question: "折旧入账是否同样过 MAX_TICK 钳制", option: "同样钳制", reason: "宁少不多" }),
+      item({ source: "driver", question: "does the acceptance basis include concurrency", session: "ses_1" }),
+      item({ source: "driver", question: "is depreciation booking also clamped by MAX_TICK", session: "ses_1", matched: true }),
+      item({ question: "is depreciation booking also clamped by MAX_TICK", option: "clamped the same way", reason: "undercount rather than overcount" }),
     ])
     const lines = await taskResolveLines(dir, "T-001")
     expect(lines[0]).toBe("⚑ this task auto-answered 2 questions that should have been confirmed by you; please review:")
-    expect(lines[1]).toBe("  1. 验收口径是否包含并发场景  ⚠ session did not write the AUTO-RESOLVE marker as required")
-    expect(lines[2]).toBe("  2. 折旧入账是否同样过 MAX_TICK 钳制 → 同样钳制(宁少不多)")
+    expect(lines[1]).toBe("  1. does the acceptance basis include concurrency  ⚠ session did not write the AUTO-RESOLVE marker as required")
+    expect(lines[2]).toBe("  2. is depreciation booking also clamped by MAX_TICK → clamped the same way(undercount rather than overcount)")
   })
 
-  test("AUTO-DECISION 计数折进末行;无代答时整块为空(计数不上终端)", async () => {
+  test("the AUTO-DECISION count folds into the last line; with no proxy answers the whole block is empty (the count never reaches the terminal)", async () => {
     await recordDecisions(dir, "T-001", 2)
     await recordDecisions(dir, "T-001", 3)
-    // 只有 AUTO-DECISION、没有代答 → 空块(计数在会话收尾已进 vlog,§H-④)。
+    // Only AUTO-DECISION and no proxy answers → an empty block (the count
+    // already went to the vlog at session close-out, §H-④).
     expect(await taskResolveLines(dir, "T-001")).toEqual([])
-    await recordResolves(dir, [item({ question: "是否收窄本任务范围", option: "不收窄", reason: "计划已写死" })])
+    await recordResolves(dir, [item({ question: "should this task's scope be narrowed", option: "no", reason: "the plan already fixes it" })])
     const lines = await taskResolveLines(dir, "T-001")
     expect(lines.at(-1)).toBe("  plus 5 AUTO-DECISION entries (folded, see task report)")
   })
 
-  test("超 8 条截断为前 8 条 + 另有 N 条", async () => {
+  test("over 8 items truncates to the first 8 + N more", async () => {
     await recordResolves(
       dir,
-      Array.from({ length: 10 }, (_, i) => item({ question: `问题 ${i + 1}`, option: "方案", reason: "理由" })),
+      Array.from({ length: 10 }, (_, i) => item({ question: `question ${i + 1}`, option: "option", reason: "reason" })),
     )
     const lines = await taskResolveLines(dir, "T-001")
-    expect(lines[1]).toBe("  1. 问题 1 → 方案(理由)")
-    expect(lines[8]).toBe("  8. 问题 8 → 方案(理由)")
+    expect(lines[1]).toBe("  1. question 1 → option(reason)")
+    expect(lines[8]).toBe("  8. question 8 → option(reason)")
     expect(lines.at(-1)).toBe(`  …and 2 more, all in ${taskDoc("T-001", "report")}`)
   })
 
-  test("阶段/轮次汇总: 只给计数与未标注数,不展示 AUTO-DECISION", async () => {
+  test("phase/round summaries: counts and the unmarked count only, AUTO-DECISION not shown", async () => {
     await recordResolves(dir, [
-      item({ task: "T-001", question: "问题甲", option: "方案", reason: "理由" }),
-      item({ task: "T-002", question: "问题乙", option: "方案", reason: "理由" }),
-      item({ task: "T-002", source: "driver", question: "问题丙" }),
+      item({ task: "T-001", question: "question A", option: "option", reason: "reason" }),
+      item({ task: "T-002", question: "question B", option: "option", reason: "reason" }),
+      item({ task: "T-002", source: "driver", question: "question C" }),
     ])
     await recordDecisions(dir, "T-001", 9)
     expect(await phaseResolveLines(dir, unit("m"))).toEqual([
       "⚑ phase P01-implement: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
     ])
-    // 轮号取 currentRound 现查: 无 docs/R-NN 目录时为第 1 轮,与落账侧同源。
+    // The round number is looked up from currentRound on the spot: with no
+    // docs/R-NN directory it is round 1, same source as the recording side.
     expect(await roundResolveLines(dir)).toEqual([
       "⚑ round 1: 3 questions awaiting confirmation were auto-answered (1 not marked as required); see task reports for details",
     ])
   })
 
-  test("桶身份过滤: 别的任务/阶段/轮次的条目不串台", async () => {
+  test("bucket-identity filtering: items of other tasks/phases/rounds do not cross-talk", async () => {
     await recordResolves(dir, [
-      item({ task: "T-001", phase: "R-01.P01", round: 1, question: "本桶问题", option: "方案", reason: "理由" }),
-      item({ task: "T-002", phase: "R-02.P01", round: 2, question: "别桶问题", option: "方案", reason: "理由" }),
+      item({ task: "T-001", phase: "R-01.P01", round: 1, question: "this bucket's question", option: "option", reason: "reason" }),
+      item({ task: "T-002", phase: "R-02.P01", round: 2, question: "another bucket's question", option: "option", reason: "reason" }),
     ])
     expect(await taskResolveLines(dir, "T-002")).toHaveLength(3)
     expect((await phaseResolveLines(dir, unit("m")))[0]).toContain("1 questions awaiting confirmation were auto-answered")
     expect((await roundResolveLines(dir))[0]).toContain("1 questions awaiting confirmation were auto-answered")
   })
 
-  test("台账损坏: 吞成空块,不影响流程", async () => {
+  test("corrupt ledger: swallowed into an empty block, flow unaffected", async () => {
     await mkdir(join(dir, ".auto"), { recursive: true })
-    await Bun.write(join(dir, ".auto", "resolves.json"), "{ 坏文件")
+    await Bun.write(join(dir, ".auto", "resolves.json"), "{ corrupt file")
     expect(await taskResolveLines(dir, "T-001")).toEqual([])
     expect(await phaseResolveLines(dir, unit("m"))).toEqual([])
     expect(await roundResolveLines(dir)).toEqual([])

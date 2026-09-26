@@ -1,8 +1,12 @@
-// 在途失联探针(plans/0026-session-boundary-hardening-design.md D3/§4.4,S4): watching 期间
-// 每 idleTime 经独立短超时连接探测会话活性——两连败判半开 → abort + 可重试会话
-// 错误(transient,走既有重试阶梯与降级环);探针恢复即重置计数、继续 watching;
-// 定时器随全部出口清理。半开形态用「永不产事件的事件流」复现(无 FIN/RST,客户端
-// 永远收不到结束信号);探针周期经 opts.idleMs 缩到毫秒级。
+// The in-flight liveness probe (plans/0026-session-boundary-hardening-design.md
+// D3/§4.4, S4): while watching, session liveness is probed every idleTime over
+// an independent short-timeout connection — two consecutive failures declare
+// it half-open → abort + a retryable session error (transient, taking the
+// existing retry ladder and failover ring); a recovered probe resets the
+// count and watching continues; the timer is cleaned up on every exit. The
+// half-open shape is reproduced with an event stream that never yields an
+// event (no FIN/RST, so the client never sees an end signal); the probe
+// period is shrunk to milliseconds via opts.idleMs.
 
 import { describe, expect, test } from "bun:test"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
@@ -13,52 +17,57 @@ import { probeSession } from "../src/session-api"
 import { parseSwitches } from "../src/switches"
 import { task, fakeClient } from "./fixtures/runner"
 
-describe("在途失联探针(S4/D3)", () => {
-  test("两连败: 判半开,abort 会话并返回可重试会话错误(errorClass=transient)", async () => {
+describe("in-flight liveness probe (S4/D3)", () => {
+  test("two consecutive failures: declared half-open, the session aborted and a retryable session error returned (errorClass=transient)", async () => {
     let gets = 0
     const { client, calls } = fakeClient({
       get: () => {
         gets++
         return { error: { name: "UnknownError", data: {} } }
       },
-      // 半开形态: 事件流永不产事件(无结束信号、无断开错误)。
+      // Half-open shape: the event stream never yields an event (no end
+      // signal, no disconnect error).
       events: () =>
         (async function* () {
           await new Promise(() => {})
         })(),
     })
-    const result = await attempt(client, task, "提示词", { idleMs: 20 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
+    const result = await attempt(client, task, "prompt", { idleMs: 20 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("blocked")
     const blocked = result as { question: string; retryable?: boolean; errorClass?: string }
     expect(blocked.question).toContain("session error: ")
     expect(blocked.question).toContain("half-open")
-    // 可重试(retryable 非 false)+ transient 归类(传输层故障,不换模型)。
+    // Retryable (retryable not false) + transient classification
+    // (transport-layer failure, no model switch).
     expect(blocked.retryable).not.toBe(false)
     expect(blocked.errorClass).toBe("transient")
     expect(gets).toBeGreaterThanOrEqual(2)
-    // 收口必须 abort(不留孤儿 server 回合与重试 fork 并发改文件)。
+    // Close-out must abort (no orphaned server turns or retry forks
+    // concurrently editing files).
     expect(calls.aborts).toContain("ses_new_1")
   })
 
-  test("一败后恢复: 计数重置不判半开,会话照常经 idle 结算、不 abort", async () => {
+  test("recovery after one failure: the count resets without declaring half-open; the session settles via idle as usual, no abort", async () => {
     let gets = 0
     const { client, calls } = fakeClient({
-      // 第 1 次未通,其后全通——两连败门槛不得被单次抖动触达。
+      // The first probe fails, all later ones succeed — the two-consecutive-
+      // failures threshold must not be reached by a single blip.
       get: () => (gets++ === 0 ? { error: { name: "UnknownError", data: {} } } : { data: { id: "ses_x" } }),
       events: (sid) =>
         (async function* () {
-          // 三个探针周期内无事件(探针工作区间),随后正常 idle 结算。
+          // No events for three probe periods (the probe's working
+          // interval), then a normal idle settle.
           await new Promise((resolve) => setTimeout(resolve, 75))
           yield { type: "session.idle", properties: { sessionID: sid } }
         })(),
     })
-    const result = await runSession(client, task, "提示词", { idleMs: 20 }, { pct: 100, used: 0, at: 0 })
+    const result = await runSession(client, task, "prompt", { idleMs: 20 }, { pct: 100, used: 0, at: 0 })
     expect(result.type).toBe("idle")
     expect(gets).toBeGreaterThanOrEqual(2)
     expect(calls.aborts).toEqual([])
   })
 
-  test("定时器清理: 会话结算后不再发探针(无泄漏)", async () => {
+  test("timer cleanup: no further probes after the session settles (no leak)", async () => {
     let gets = 0
     const { client } = fakeClient({
       get: () => {
@@ -66,43 +75,48 @@ describe("在途失联探针(S4/D3)", () => {
         return { data: { id: "ses_x" } }
       },
     })
-    const result = await runSession(client, task, "提示词", { idleMs: 20 }, { pct: 100, used: 0, at: 0 })
+    const result = await runSession(client, task, "prompt", { idleMs: 20 }, { pct: 100, used: 0, at: 0 })
     expect(result.type).toBe("idle")
     const atSettle = gets
-    // 等三个探针周期以上,探针计数不得再增长(结算即清链,迟到回调亦不续排)。
+    // Wait more than three probe periods; the probe count must not grow
+    // again (settling tears the chain down; late callbacks re-arm nothing).
     await new Promise((resolve) => setTimeout(resolve, 70))
     expect(gets).toBe(atSettle)
   })
 
-  test("H7: POST 悬挂在半开连接上时,探针判定即联动中止 POST 并按会话错误收口(不等 TURN_TIMEOUT)", async () => {
+  test("H7: when the POST hangs on a half-open connection, the probe's verdict aborts the POST in concert and settles as a session error (without waiting for TURN_TIMEOUT)", async () => {
     const { client, calls } = fakeClient({
       get: () => {
         return { error: { name: "UnknownError", data: {} } }
       },
-      // H7 现场: 同步 POST 与 SSE 同挂半开连接,两侧都永不兑现。
+      // The H7 field shape: the synchronous POST and the SSE both hang on
+      // the half-open connection; neither side ever resolves.
       prompt: () => new Promise(() => {}),
       events: () =>
         (async function* () {
           await new Promise(() => {})
         })(),
     })
-    // 若仍押在 POST 上等 TURN_TIMEOUT,本用例会挂到测试超时;能在探针尺度
-    // (~2×idleMs)返回即证明联动生效。
-    const result = await attempt(client, task, "提示词", { idleMs: 20 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
+    // If the code still bet on the POST until TURN_TIMEOUT, this case would
+    // hang to the test timeout; returning on the probe scale (~2×idleMs)
+    // proves the linkage works.
+    const result = await attempt(client, task, "prompt", { idleMs: 20 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("blocked")
     const blocked = result as { question: string; retryable?: boolean; errorClass?: string }
-    // 按 watch 的半开会话错误收口,不得报成"下发任务失败"(abort 回声)。
+    // Settles as watch's half-open session error, and must not be reported
+    // as a "task dispatch failed" (an abort echo).
     expect(blocked.question).toContain("session error: ")
     expect(blocked.question).toContain("half-open")
     expect(blocked.question).not.toContain("task dispatch failed")
     expect(blocked.retryable).not.toBe(false)
     expect(blocked.errorClass).toBe("transient")
-    // POST 携带中止信号,且随半开判定被 abort(真实链路即取消底层 fetch)。
+    // The POST carries the abort signal and is aborted along with the
+    // half-open verdict (on a real link this cancels the underlying fetch).
     expect(calls.promptSignals[0]?.aborted).toBe(true)
     expect(calls.aborts).toContain("ses_new_1")
   })
 
-  test("probeSession 探测体: 超时无响应与请求异常同按未通计,正常响应为通", async () => {
+  test("probeSession probe body: a timeout without response and a request throw both count as failed; a normal response counts as live", async () => {
     const hanging = opencodeAgent({ session: { get: () => new Promise(() => {}) } } as unknown as OpencodeClient)
     expect(await probeSession(hanging, "ses_x", 20)).toBe(false)
     const throwing = opencodeAgent({ session: { get: () => Promise.reject(new Error("boom")) } } as unknown as OpencodeClient)

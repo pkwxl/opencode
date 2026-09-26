@@ -15,11 +15,11 @@ async function knowledgePhase(dir: string, round: number) {
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
   return out
 }
 
-describe("knowledgeFile / priorKnowledgeFile(输出路径)", () => {
+describe("knowledgeFile / priorKnowledgeFile (output paths)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
@@ -39,7 +39,7 @@ describe("knowledgeFile / priorKnowledgeFile(输出路径)", () => {
   })
 })
 
-describe("existingKnowledge(本阶段幂等检查)", () => {
+describe("existingKnowledge (this phase's idempotence check)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
@@ -50,12 +50,12 @@ describe("existingKnowledge(本阶段幂等检查)", () => {
       const phase = await knowledgePhase(dir, 1)
       expect(await existingKnowledge(dir, phase)).toBeUndefined()
       mkdirSync(join(dir, "docs/migration-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/migration-kb/R1-migration-a.md"), "旧平铺知识")
-      writeFileSync(join(dir, "docs/R-01/migration-kb.md"), "字母布局期的轮内知识")
+      writeFileSync(join(dir, "docs/migration-kb/R1-migration-a.md"), "legacy flat knowledge")
+      writeFileSync(join(dir, "docs/R-01/migration-kb.md"), "letter-layout-era in-round knowledge")
       expect(await existingKnowledge(dir, phase)).toBeUndefined()
       writeFileSync(join(dir, knowledgeFile(phase)), " \n")
       expect(await existingKnowledge(dir, phase)).toBeUndefined()
-      writeFileSync(join(dir, knowledgeFile(phase)), "本轮知识")
+      writeFileSync(join(dir, knowledgeFile(phase)), "this round's knowledge")
       expect(await existingKnowledge(dir, phase)).toBe("docs/R-01/P03-knowledge/kb.md")
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -63,21 +63,21 @@ describe("existingKnowledge(本阶段幂等检查)", () => {
   })
 })
 
-describe("existingPriorKnowledge(本轮幂等检查,与 existingKnowledge 同一守卫)", () => {
+describe("existingPriorKnowledge (this round's idempotence check, the same guard as existingKnowledge)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
 
-  test("本轮 docs/R-NN/prior-kb.md 非空 → 返回;空文件、缺失与旧平铺 docs/prior-kb/ 存量不算(M3.7)", async () => {
+  test("this round's docs/R-NN/prior-kb.md non-empty → returned; an empty file, a missing one and legacy flat docs/prior-kb/ stock do not count (M3.7)", async () => {
     const dir = tempDir()
     try {
       expect(await existingPriorKnowledge(dir, 1)).toBeUndefined()
       mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/prior-kb/R1-prior-a.md"), "旧平铺前置知识")
+      writeFileSync(join(dir, "docs/prior-kb/R1-prior-a.md"), "legacy flat prior knowledge")
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
       writeFileSync(join(dir, "docs/R-01/prior-kb.md"), " \n")
       expect(await existingPriorKnowledge(dir, 1)).toBeUndefined()
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge")
       expect(await existingPriorKnowledge(dir, 1)).toBe(join("docs", "R-01", "prior-kb.md"))
       expect(await existingPriorKnowledge(dir, 2)).toBeUndefined()
     } finally {
@@ -85,28 +85,29 @@ describe("existingPriorKnowledge(本轮幂等检查,与 existingKnowledge 同一
     }
   })
 
-  test("新布局结构性消除旧轮误判: R-05 轮目录已建 + 旧轮 R4-prior 存量 → 必重新蒸馏(2026-09-08 事故回归)", async () => {
+  test("the new layout structurally eliminates the old-round misjudgment: round R-05's directory established + old-round R4-prior stock → must distill again (2026-09-08 incident regression)", async () => {
     const dir = tempDir()
     try {
-      // kernel-dm-stripe 事故现场: 旧轮(docs/prior-kb/R4-prior-*.md,含 simple 判定)
-      // 原地保留;新轮 R-05 轮首建立(轮内 prior-kb.md 恒空)
+      // The kernel-dm-stripe incident scene: the old round (docs/prior-kb/R4-prior-*.md,
+      // including the simple verdict) kept in place; the new round R-05 established at
+      // round start (the in-round prior-kb.md is always empty)
       mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/prior-kb/R4-prior-2026.md"), "# 第 4 轮前置知识\n\n流程建议: simple\n")
+      writeFileSync(join(dir, "docs/prior-kb/R4-prior-2026.md"), "# Round 4 prior knowledge\n\nProcess advice: simple\n")
       mkdirSync(join(dir, "docs/R-05"), { recursive: true })
       expect(await existingPriorKnowledge(dir, 5)).toBeUndefined()
-      // 轮内文档产出后幂等命中
-      writeFileSync(join(dir, "docs/R-05/prior-kb.md"), "本轮前置知识")
+      // Idempotent hit once the in-round document exists
+      writeFileSync(join(dir, "docs/R-05/prior-kb.md"), "this round's prior knowledge")
       expect(await existingPriorKnowledge(dir, 5)).toBe(join("docs", "R-05", "prior-kb.md"))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("temp-kb.md(提取中间产物,未收笔态)永不算既有产物", async () => {
+  test("temp-kb.md (the extraction intermediate, not yet finalized) never counts as an existing artifact", async () => {
     const dir = tempDir()
     try {
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/temp-kb.md"), "半途而废的中间产物")
+      writeFileSync(join(dir, "docs/R-01/temp-kb.md"), "an abandoned intermediate")
       expect(await existingPriorKnowledge(dir, 1)).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -114,39 +115,39 @@ describe("existingPriorKnowledge(本轮幂等检查,与 existingKnowledge 同一
   })
 })
 
-describe("existingDistilledDocs(已有蒸馏产物清单,提取会话引用化输入)", () => {
+describe("existingDistilledDocs (the list of existing distilled artifacts, referenced input of the extraction session)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
 
-  test("目录缺失 → 空数组;旧平铺 migration-kb/handovers/prior-kb 不再收集(M3.7)", async () => {
+  test("directory missing → an empty array; the legacy flat migration-kb/handovers/prior-kb are no longer collected (M3.7)", async () => {
     const dir = tempDir()
     try {
       expect(await existingDistilledDocs(dir, 2)).toEqual([])
       mkdirSync(join(dir, "docs/migration-kb"), { recursive: true })
       mkdirSync(join(dir, "docs/handovers"), { recursive: true })
       mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/migration-kb", "R1-migration-a.md"), "上一轮知识")
-      writeFileSync(join(dir, "docs/handovers", "R1-m-migrate.md"), "上一轮交接")
-      writeFileSync(join(dir, "docs/prior-kb", "R1-prior-old.md"), "旧前置知识")
+      writeFileSync(join(dir, "docs/migration-kb", "R1-migration-a.md"), "previous round's knowledge")
+      writeFileSync(join(dir, "docs/handovers", "R1-m-migrate.md"), "previous round's handover")
+      writeFileSync(join(dir, "docs/prior-kb", "R1-prior-old.md"), "old prior knowledge")
       expect(await existingDistilledDocs(dir, 2)).toEqual([])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("轮次目录: 历轮 prior-kb.md、各阶段目录 handover.md 与 knowledge 阶段 kb.md 一并收集,本轮 prior-kb 排除", async () => {
+  test("round directories: every prior round's prior-kb.md, each phase directory's handover.md and the knowledge phase's kb.md collected together; this round's prior-kb excluded", async () => {
     const dir = tempDir()
     try {
       await syncPhaseIndex(dir, 1, "mk")
-      writeFileSync(join(dir, "docs/R-01/P02-knowledge/kb.md"), "第 1 轮知识")
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识")
-      writeFileSync(join(dir, "docs/R-01/P01-implement/handover.md"), "第 1 轮交接")
-      writeFileSync(join(dir, "docs/R-01/P01-implement/notes.md"), "自由产物不算")
+      writeFileSync(join(dir, "docs/R-01/P02-knowledge/kb.md"), "round 1 knowledge")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge")
+      writeFileSync(join(dir, "docs/R-01/P01-implement/handover.md"), "round 1 handover")
+      writeFileSync(join(dir, "docs/R-01/P01-implement/notes.md"), "a free artifact does not count")
       await syncPhaseIndex(dir, 2, "mk")
-      writeFileSync(join(dir, "docs/R-02/prior-kb.md"), "本轮前置知识不算")
-      writeFileSync(join(dir, "docs/R-02/P02-knowledge/kb.md"), " \n") // 空文件不算
-      writeFileSync(join(dir, "docs/R-02/P01-implement/handover.md"), "本轮已完成阶段的交接")
+      writeFileSync(join(dir, "docs/R-02/prior-kb.md"), "this round's prior knowledge does not count")
+      writeFileSync(join(dir, "docs/R-02/P02-knowledge/kb.md"), " \n") // an empty file does not count
+      writeFileSync(join(dir, "docs/R-02/P01-implement/handover.md"), "this round's completed-phase handover")
       expect(await existingDistilledDocs(dir, 2)).toEqual([
         join("docs/R-01", "P01-implement", "handover.md"),
         join("docs/R-01", "P02-knowledge", "kb.md"),
@@ -159,28 +160,28 @@ describe("existingDistilledDocs(已有蒸馏产物清单,提取会话引用化�
   })
 })
 
-describe("priorKnowledgeDigest(前置知识摘要,跨轮累积注入)", () => {
+describe("priorKnowledgeDigest (the prior-knowledge digest, accumulated injection across rounds)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
 
-  test("历轮 docs/R-*/prior-kb.md 非空文档按路径排序拼接;旧平铺 docs/prior-kb/ 不读;无产物 → undefined", async () => {
+  test("prior rounds' non-empty docs/R-*/prior-kb.md concatenated sorted by path; the legacy flat docs/prior-kb/ is not read; no artifacts → undefined", async () => {
     const dir = tempDir()
     try {
       expect(await priorKnowledgeDigest(dir)).toBeUndefined()
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge")
       mkdirSync(join(dir, "docs/R-02"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-02/prior-kb.md"), "  \n") // 空文件不注入
+      writeFileSync(join(dir, "docs/R-02/prior-kb.md"), "  \n") // an empty file is not injected
       mkdirSync(join(dir, "docs/prior-kb"), { recursive: true })
-      writeFileSync(join(dir, "docs/prior-kb/R0-prior-legacy.md"), "旧平铺前置知识")
+      writeFileSync(join(dir, "docs/prior-kb/R0-prior-legacy.md"), "legacy flat prior knowledge")
       const digest = await priorKnowledgeDigest(dir)
       expect(digest).toContain(`### ${join("docs", "R-01", "prior-kb.md")}`)
-      expect(digest).toContain("第 1 轮前置知识")
-      expect(digest).not.toContain("旧平铺前置知识")
+      expect(digest).toContain("round 1 prior knowledge")
+      expect(digest).not.toContain("legacy flat prior knowledge")
       expect(digest).not.toContain("R-02")
-      // temp-kb.md(中间产物)不注入摘要
-      writeFileSync(join(dir, "docs/R-02/temp-kb.md"), "未收笔的中间产物")
+      // temp-kb.md (an intermediate) is not injected into the digest
+      writeFileSync(join(dir, "docs/R-02/temp-kb.md"), "an unfinalized intermediate")
       expect(await priorKnowledgeDigest(dir)).not.toContain("temp-kb")
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -188,33 +189,33 @@ describe("priorKnowledgeDigest(前置知识摘要,跨轮累积注入)", () => {
   })
 })
 
-describe("priorKnowledgeComplete(收笔标记判定)", () => {
-  test("最后一个非空行恰为「DONE」→ true;空文档/无标记/标记带尾巴 → false", () => {
+describe("priorKnowledgeComplete (the finalized-marker check)", () => {
+  test("the last non-empty line exactly DONE → true; an empty document / no marker / a marker with a tail → false", () => {
     expect(priorKnowledgeComplete("")).toBe(false)
     expect(priorKnowledgeComplete("  \n")).toBe(false)
     expect(priorKnowledgeComplete("DONE")).toBe(true)
-    expect(priorKnowledgeComplete("# 知识库\n\n正文\n\nDONE")).toBe(true)
-    expect(priorKnowledgeComplete("正文\nDONE\n\n  \n")).toBe(true)
-    expect(priorKnowledgeComplete("正文\n  DONE  \n")).toBe(true)
-    expect(priorKnowledgeComplete("正文,已完成。")).toBe(false)
-    expect(priorKnowledgeComplete("正文\nDONE。")).toBe(false)
-    expect(priorKnowledgeComplete("DONE\n再补一段正文")).toBe(false)
+    expect(priorKnowledgeComplete("# Knowledge base\n\nBody\n\nDONE")).toBe(true)
+    expect(priorKnowledgeComplete("Body\nDONE\n\n  \n")).toBe(true)
+    expect(priorKnowledgeComplete("Body\n  DONE  \n")).toBe(true)
+    expect(priorKnowledgeComplete("Body, done.")).toBe(false)
+    expect(priorKnowledgeComplete("Body\nDONE.")).toBe(false)
+    expect(priorKnowledgeComplete("DONE\nanother paragraph of body")).toBe(false)
   })
 })
 
-describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交人工)", () => {
+describe("extractPriorKnowledge completion condition (artifact on disk + committed; dirty goes to a human)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
-  // 本组只覆盖不启动会话的分支(skipped/dirty),client 不会被触达。
+  // This group covers only the branches that start no session (skipped/dirty); the client is never touched.
   const client = opencodeAgent({} as OpencodeClient)
 
-  test("产物已存在且已提交 → skipped,不产生新提交", async () => {
+  test("artifact already exists and committed → skipped, no new commit", async () => {
     const dir = tempDir()
     try {
       await git(dir, "init", "-q")
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\nDONE\n")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge\n\nDONE\n")
       await git(dir, "add", "-A")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
       const result = await extractPriorKnowledge(client, dir, { dir })
@@ -225,16 +226,16 @@ describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交�
     }
   })
 
-  test("产物已存在但尚未提交 → 补提交后 skipped(完成判定以提交为准)", async () => {
+  test("artifact exists but is not committed yet → backfilled, then skipped (the completion condition is the commit)", async () => {
     const dir = tempDir()
     try {
       await git(dir, "init", "-q")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "第 1 轮前置知识\n\nDONE\n")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge\n\nDONE\n")
       const result = await extractPriorKnowledge(client, dir, { dir })
       expect(result).toEqual({ type: "skipped", file: join("docs", "R-01", "prior-kb.md") })
-      // 已补提交: 工作区干净,提交带 prior-knowledge 阶段标记
+      // Backfilled: the worktree is clean and the commit carries the prior-knowledge stage mark
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: prior-knowledge")
     } finally {
@@ -242,32 +243,33 @@ describe("extractPriorKnowledge 完成判定(产物落盘 + 已提交;dirty 交�
     }
   })
 
-  test("产物缺失但工作区有未提交改动 → dirty(不主动清理,列出改动文件)", async () => {
+  test("artifact missing but the worktree has uncommitted changes → dirty (no cleanup, the changed files listed)", async () => {
     const dir = tempDir()
     try {
       await git(dir, "init", "-q")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
-      writeFileSync(join(dir, "docs/R-01/temp-kb.md"), "半途而废的中间产物")
+      writeFileSync(join(dir, "docs/R-01/temp-kb.md"), "an abandoned intermediate")
       const result = await extractPriorKnowledge(client, dir, { dir })
       expect(result.type).toBe("dirty")
       expect((result as { files: string[] }).files).toContain(join("docs", "R-01", "temp-kb.md"))
-      // 不主动清理: 现场原样保留,无任何新提交
+      // No cleanup: the scene stays as-is, no new commit
       expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
-      expect(await Bun.file(join(dir, "docs/R-01/temp-kb.md")).text()).toBe("半途而废的中间产物")
+      expect(await Bun.file(join(dir, "docs/R-01/temp-kb.md")).text()).toBe("an abandoned intermediate")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 })
 
-describe("extractKnowledge 完成判定(③补提交/④dirty 推广,plans/0021-commit-boundary-design.md)", () => {
+describe("extractKnowledge completion condition (the ③ backfill / ④ dirty extension, plans/0021-commit-boundary-design.md)", () => {
   function tempDir() {
     return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
   }
-  // 本组只覆盖不启动会话的分支(skipped/dirty),client 不会被触达。
+  // This group covers only the branches that start no session (skipped/dirty); the client is never touched.
   const client = opencodeAgent({} as OpencodeClient)
-  // 轮首建立的阶段目录先提交(外壳在轮次目录初建后统一提交,提供干净基线)。
+  // The phase directory established at round start is committed first (the shell commits
+  // once right after the round directory is created, providing a clean baseline).
   async function committedKnowledgePhase(dir: string) {
     const phase = await knowledgePhase(dir, 1)
     await git(dir, "add", "-A")
@@ -275,13 +277,13 @@ describe("extractKnowledge 完成判定(③补提交/④dirty 推广,plans/0021-
     return phase
   }
 
-  test("③ 本轮文档已产出但尚未提交 → 补提交后 skipped(完成判定以提交为准)", async () => {
+  test("③ this round's document already produced but not committed → backfilled, then skipped (the completion condition is the commit)", async () => {
     const dir = tempDir()
     try {
       await git(dir, "init", "-q")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       const phase = await committedKnowledgePhase(dir)
-      writeFileSync(join(dir, knowledgeFile(phase)), "第 1 轮迁移知识")
+      writeFileSync(join(dir, knowledgeFile(phase)), "round 1 migration knowledge")
       const result = await extractKnowledge(client, dir, { dir }, phase)
       expect(result).toEqual({ type: "skipped", file: "docs/R-01/P03-knowledge/kb.md" })
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
@@ -291,13 +293,13 @@ describe("extractKnowledge 完成判定(③补提交/④dirty 推广,plans/0021-
     }
   })
 
-  test("④ 文档缺失但工作区有未提交改动 → dirty(半途而废现场交人工,不主动清理)", async () => {
+  test("④ document missing but the worktree has uncommitted changes → dirty (the abandoned scene goes to a human, no cleanup)", async () => {
     const dir = tempDir()
     try {
       await git(dir, "init", "-q")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       const phase = await committedKnowledgePhase(dir)
-      writeFileSync(join(dir, "src.ts"), "半途而废的产物")
+      writeFileSync(join(dir, "src.ts"), "an abandoned artifact")
       const result = await extractKnowledge(client, dir, { dir }, phase)
       expect(result.type).toBe("dirty")
       expect((result as { files: string[] }).files).toContain("src.ts")
@@ -307,13 +309,13 @@ describe("extractKnowledge 完成判定(③补提交/④dirty 推广,plans/0021-
     }
   })
 
-  test("门禁关闭(--commit false)维持旧语义: 产物存在即 skipped,不查不提交", async () => {
+  test("gate off (--commit false) keeps the old semantics: an existing artifact is skipped, nothing checked or committed", async () => {
     const dir = tempDir()
     try {
       await git(dir, "init", "-q")
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       const phase = await committedKnowledgePhase(dir)
-      writeFileSync(join(dir, knowledgeFile(phase)), "第 1 轮迁移知识")
+      writeFileSync(join(dir, knowledgeFile(phase)), "round 1 migration knowledge")
       const result = await extractKnowledge(client, dir, { dir, commit: false }, phase)
       expect(result).toEqual({ type: "skipped", file: "docs/R-01/P03-knowledge/kb.md" })
       expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("2")

@@ -7,7 +7,7 @@ import { baselineIntact, beginUnit, changedFiles, commitIdentityProblem, commitP
 async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
   return out
 }
 
@@ -17,46 +17,46 @@ async function fresh() {
   return dir
 }
 
-const task = { id: "T-001", title: "实现迁移" }
+const task = { id: "T-001", title: "implement the migration" }
 
 describe("commitTree", () => {
-  test("非 git 目录: 空操作不报错,pendingChanges 为 false", async () => {
+  test("non-git directory: a no-op without error, pendingChanges false", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
     try {
       await writeFile(join(dir, "a.txt"), "a")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001 实现迁移: 执行" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 implement the migration: execute" })
       expect(await pendingChanges(dir)).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("git 仓库: 提交带标题行与 Auto-Task/Auto-Stage trailer;无改动时跳过不产生新提交", async () => {
+  test("git repository: the commit carries the subject line and the Auto-Task/Auto-Stage trailers; with no changes it skips and creates no new commit", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "a.txt"), "a")
-      await commitTree(dir, task, { stage: "subtask 2", subject: "T-001: 子任务 2 编写 schema" })
+      await commitTree(dir, task, { stage: "subtask 2", subject: "T-001: subtask 2 write the schema" })
       const message = await git(dir, "log", "-1", "--pretty=%B")
-      expect(message).toContain("T-001: 子任务 2 编写 schema")
+      expect(message).toContain("T-001: subtask 2 write the schema")
       expect(message).toContain("Auto-Task: T-001")
       expect(message).toContain("Auto-Stage: subtask 2")
       expect(await pendingChanges(dir)).toBe(false)
-      // 无改动: 不再产生新提交
-      await commitTree(dir, task, { stage: "wrapup", subject: "T-001 实现迁移: 收尾" })
+      // No changes: no new commit is created
+      await commitTree(dir, task, { stage: "wrapup", subject: "T-001 implement the migration: wrap-up" })
       expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("嵌套仓库先提交;父仓库提交信息以 Auto-Nested 记录其路径与 SHA", async () => {
+  test("nested repositories commit first; the parent's commit message records their path and SHA with Auto-Nested", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "pkg"))
       await git(join(dir, "pkg"), "init", "-q")
       await writeFile(join(dir, "root.txt"), "r")
       await writeFile(join(dir, "pkg", "inner.txt"), "i")
-      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1 搭建骨架" })
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1 build the skeleton" })
       expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("1")
       expect((await git(join(dir, "pkg"), "rev-list", "--count", "HEAD")).trim()).toBe("1")
       const message = await git(dir, "log", "-1", "--pretty=%B")
@@ -68,14 +68,15 @@ describe("commitTree", () => {
     }
   })
 
-  test("仓库身份为空(user.email 未配置): 身份兜底仍可提交", async () => {
+  test("empty repository identity (user.email unset): the identity fallback still commits", async () => {
     const dir = await fresh()
     try {
-      // 本地置空身份,模拟全新环境(全局未配置 user.email)的确定性路径
+      // Blank the identity locally, the deterministic path of a fresh
+      // environment (no global user.email configured)
       await git(dir, "config", "user.email", "")
       await git(dir, "config", "user.name", "")
       await writeFile(join(dir, "a.txt"), "a")
-      await commitTree(dir, task, { stage: "done", subject: "T-001 实现迁移: 完成" })
+      await commitTree(dir, task, { stage: "done", subject: "T-001 implement the migration: done" })
       expect((await git(dir, "log", "-1", "--pretty=%an")).trim()).toBe("opencode-auto")
       expect((await git(dir, "log", "-1", "--pretty=%ae")).trim()).toBe("opencode-auto@local")
     } finally {
@@ -83,7 +84,7 @@ describe("commitTree", () => {
     }
   })
 
-  test("过长的标题行截断到 100 字符", async () => {
+  test("an over-long subject line is truncated to 100 characters", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "a.txt"), "a")
@@ -134,22 +135,23 @@ describe("commitIdentityProblem(init's prerequisite: the repository must be able
   })
 })
 
-// ---- 单元提交边界(plans/0021-commit-boundary-design.md)----
+// ---- Unit commit boundary (plans/0021-commit-boundary-design.md) ----
 
-// pre-commit hook 恒失败: 构造确定性的提交失败环境。
+// A pre-commit hook that always fails: builds a deterministic
+// commit-failure environment.
 async function failHooks(dir: string) {
   await mkdir(join(dir, "hooks"))
   await writeFile(join(dir, "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
   await git(dir, "config", "core.hooksPath", "hooks")
 }
 
-describe("commitTree 失败上报", () => {
-  test("pre-commit hook 拒绝: ok=false,失败清单带仓库相对路径与错误;改动保留在工作区", async () => {
+describe("commitTree failure reporting", () => {
+  test("pre-commit hook rejects: ok=false, the failure list carries the repository-relative path and the error; the changes stay in the worktree", async () => {
     const dir = await fresh()
     try {
       await failHooks(dir)
       await writeFile(join(dir, "a.txt"), "a")
-      const result = await commitTree(dir, task, { stage: "execute", subject: "T-001 执行" })
+      const result = await commitTree(dir, task, { stage: "execute", subject: "T-001 execute" })
       expect(result.ok).toBe(false)
       expect(result.failures).toHaveLength(1)
       expect(result.failures[0]!.rel).toBe(".")
@@ -160,17 +162,18 @@ describe("commitTree 失败上报", () => {
     }
   })
 
-  test("Auto-Nested 覆盖全部嵌套仓库: 本轮未动的嵌套仓库也记其当前 HEAD SHA", async () => {
+  test("Auto-Nested covers every nested repository: one untouched this round still records its current HEAD SHA", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "pkg"))
       await git(join(dir, "pkg"), "init", "-q")
       await writeFile(join(dir, "pkg", "inner.txt"), "i")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 内包初始化" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: inner repository init" })
       const pkgHead = (await git(join(dir, "pkg"), "rev-parse", "--short", "HEAD")).trim()
-      // 本轮只改根仓库,嵌套仓库无改动 —— root 提交仍须记录 pkg 的最新 SHA
+      // This round only changes the root repository, the nested one is
+      // untouched — the root commit must still record pkg's latest SHA
       await writeFile(join(dir, "root.txt"), "r")
-      const result = await commitTree(dir, task, { stage: "wrapup", subject: "T-001: 收尾" })
+      const result = await commitTree(dir, task, { stage: "wrapup", subject: "T-001: wrap-up" })
       expect(result.ok).toBe(true)
       const message = await git(dir, "log", "-1", "--pretty=%B")
       expect(message).toMatch(new RegExp(`Auto-Nested: pkg @ ${pkgHead}`))
@@ -180,26 +183,26 @@ describe("commitTree 失败上报", () => {
   })
 })
 
-describe("unitBaseline / unitViolations(单元收口校验)", () => {
-  test("driver 提交区间通过;外部提交与遗留脏区分别检出", async () => {
+describe("unitBaseline / unitViolations (unit close-out check)", () => {
+  test("a driver commit range passes; an external commit and a leftover dirty area are each detected", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "a.txt"), "a")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
-      // ① driver 提交(带 Auto-Stage trailer)→ 无违规
+      // ① a driver commit (with the Auto-Stage trailer) → no violations
       await writeFile(join(dir, "b.txt"), "b")
-      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1" })
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
       expect(await unitViolations(dir, baseline)).toEqual([])
-      // ② 外部提交(无 Auto-Stage trailer)→ 检出
+      // ② an external commit (no Auto-Stage trailer) → detected
       await writeFile(join(dir, "c.txt"), "c")
       await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "人工提交")
+      await git(dir, "commit", "-qm", "manual commit")
       const violations = await unitViolations(dir, baseline)
       expect(violations).toHaveLength(1)
       expect(violations[0]).toContain("non-driver commit")
-      // ③ 遗留未提交改动 → 检出
-      await git(dir, "commit", "--amend", "-qm", "人工提交") // 把工作区复原为干净
+      // ③ leftover uncommitted changes → detected
+      await git(dir, "commit", "--amend", "-qm", "manual commit") // restore the worktree to clean
       await writeFile(join(dir, "d.txt"), "d")
       const dirty = await unitViolations(dir, baseline)
       expect(dirty.some((problem) => problem.includes("uncommitted changes"))).toBe(true)
@@ -208,7 +211,7 @@ describe("unitBaseline / unitViolations(单元收口校验)", () => {
     }
   })
 
-  test("空基线(门禁关闭/非 git 环境)恒通过", async () => {
+  test("an empty baseline (gate off / non-git environment) always passes", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
     try {
       expect(await unitViolations(dir, [])).toEqual([])
@@ -218,8 +221,8 @@ describe("unitBaseline / unitViolations(单元收口校验)", () => {
   })
 })
 
-describe("beginUnit(单元启动门禁)", () => {
-  test("clean → 记基线;门禁关闭(--commit false / dryrun)→ 直通无基线", async () => {
+describe("beginUnit (unit start gate)", () => {
+  test("clean → record the baseline; gate off (--commit false / dryrun) → straight through with no baseline", async () => {
     const dir = await fresh()
     try {
       const gate = await beginUnit(dir, {}, task)
@@ -234,20 +237,21 @@ describe("beginUnit(单元启动门禁)", () => {
     }
   })
 
-  test("driver 独占状态写入(索引勾选、单元 todo→done 改名、退役 CURRENT.md 的删除)遗留 → carryover 补提交自愈", async () => {
+  test("leftover driver-exclusive state writes (index ticks, the unit todo→done rename, the retired CURRENT.md deletion) → a carryover backfill commit self-heals", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
       await mkdir(join(dir, "docs/T-001"), { recursive: true })
       await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
-      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 示例\n")
-      await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: 示例\n")
-      await writeFile(join(dir, "CURRENT.md"), "镜像\n")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
-      // markDone 之后、终态提交之前中断的现场;CURRENT.md 是早先版本留下、
-      // 由 preflight 删除的退役镜像(plans/0054 D3)
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [ ] T-001 sample\n")
+      await writeFile(join(dir, "docs/T-001/todo.md"), "# T-001: sample\n")
+      await writeFile(join(dir, "CURRENT.md"), "mirror\n")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
+      // The scene of an interruption between markDone and the final-state
+      // commit; CURRENT.md is the retired mirror an earlier release left
+      // behind and preflight deletes (plans/0054 D3)
       await rename(join(dir, "docs/T-001/todo.md"), join(dir, "docs/T-001/done.md"))
-      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [x] T-001 示例\n")
+      await writeFile(join(dir, "docs/R-01/P01-implement/tasks.md"), "- [x] T-001 sample\n")
       await rm(join(dir, "CURRENT.md"))
       const gate = await beginUnit(dir, {}, task)
       expect(gate.type).toBe("ok")
@@ -259,26 +263,26 @@ describe("beginUnit(单元启动门禁)", () => {
     }
   })
 
-  test("其他脏区(人工改动/AI 半途产物)→ dirty 交人工,不自动清扫", async () => {
+  test("any other dirty area (manual edits / half-finished AI output) → dirty, handed to a person, never swept automatically", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "src.ts"), "x")
       const gate = await beginUnit(dir, {}, task)
       expect(gate).toEqual({ type: "dirty", files: ["src.ts"] })
-      // 脏区原样保留(driver 不动 git)
+      // The dirty area stays exactly as it was (the driver does not touch git)
       expect(await changedFiles(dir)).toEqual(["src.ts"])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("轮次与任务目录内的非状态文件脏区仍 dirty 交人工(子任务状态文件不属 carryover)", async () => {
+  test("dirty non-state files inside the round and task directories still go dirty to a person (subtask state files are not carryover)", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "docs/R-01/P01-implement"), { recursive: true })
       await mkdir(join(dir, "docs/T-001/S01"), { recursive: true })
       await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
       await writeFile(join(dir, "docs/R-01/P01-implement/handover.md"), "a\n")
       await writeFile(join(dir, "docs/T-001/S01/done.md"), "a\n")
       expect(await beginUnit(dir, {}, task)).toEqual({ type: "dirty", files: ["docs/R-01/P01-implement/handover.md", "docs/T-001/S01/done.md"] })
@@ -288,23 +292,23 @@ describe("beginUnit(单元启动门禁)", () => {
   })
 })
 
-describe("commitPending(隐藏任务 ③ 补提交)", () => {
-  test("产物在未提交清单 → 补提交并返回结果;不在 → clean;门禁关闭 → clean", async () => {
+describe("commitPending (a hidden task's ③ backfill commit)", () => {
+  test("an artifact on the uncommitted list → backfill commit and return the result; not on it → clean; gate off → clean", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "seed.txt"), "s")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 种子" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: seed" })
       await mkdir(join(dir, "docs"))
-      await writeFile(join(dir, "docs", "kb.md"), "知识")
-      const committed = await commitPending(dir, {}, task, { stage: "knowledge", subject: "PLAN knowledge 迁移知识沉淀" }, [join("docs", "kb.md")])
+      await writeFile(join(dir, "docs", "kb.md"), "knowledge")
+      const committed = await commitPending(dir, {}, task, { stage: "knowledge", subject: "PLAN knowledge migration knowledge distillation" }, [join("docs", "kb.md")])
       expect(committed !== "clean" && committed.ok).toBe(true)
       expect(await changedFiles(dir)).toEqual([])
       const message = await git(dir, "log", "-1", "--pretty=%B")
       expect(message).toContain("Auto-Stage: knowledge")
-      // 已提交 → clean 无动作
+      // Already committed → clean, no action
       expect(await commitPending(dir, {}, task, { stage: "knowledge", subject: "x" }, [join("docs", "kb.md")])).toBe("clean")
-      // 门禁关闭 → clean 空转
-      await writeFile(join(dir, "docs", "kb2.md"), "知识2")
+      // Gate off → clean no-op
+      await writeFile(join(dir, "docs", "kb2.md"), "knowledge 2")
       expect(await commitPending(dir, { commit: false }, task, { stage: "knowledge", subject: "x" }, [join("docs", "kb2.md")])).toBe("clean")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -312,28 +316,30 @@ describe("commitPending(隐藏任务 ③ 补提交)", () => {
   })
 })
 
-// ---- 恢复保真(plans/0022-session-recovery-fidelity-design.md 3.1 ③ / 3.3)----
+// ---- Recovery fidelity (plans/0022-session-recovery-fidelity-design.md 3.1 ③ / 3.3) ----
 
-describe("baselineIntact(恢复时的基线核对)", () => {
-  test("HEAD == 基线 / 区间全 driver 提交 → 通过;外部提交检出;**未提交脏区不报**", async () => {
+describe("baselineIntact (baseline verification at recovery)", () => {
+  test("HEAD == baseline / a range of only driver commits → passes; an external commit is detected; **uncommitted dirty areas are not reported**", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "a.txt"), "a")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
-      // ① HEAD == 基线
+      // ① HEAD == baseline
       expect(await baselineIntact(dir, baseline)).toEqual([])
-      // ② 基线..HEAD 全是 driver 提交(带 Auto-Stage trailer)
+      // ② baseline..HEAD is all driver commits (with the Auto-Stage trailer)
       await writeFile(join(dir, "b.txt"), "b")
-      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1" })
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1" })
       expect(await baselineIntact(dir, baseline)).toEqual([])
-      // ③ 半途脏区正是恢复对象: 核对不看未提交改动(与 unitViolations 的关键差异)
+      // ③ a mid-way dirty area is exactly what recovery handles: the check
+      // ignores uncommitted changes (the key difference from unitViolations)
       await writeFile(join(dir, "c.txt"), "c")
       expect(await baselineIntact(dir, baseline)).toEqual([])
       expect((await unitViolations(dir, baseline)).some((problem) => problem.includes("uncommitted changes"))).toBe(true)
-      // ④ 外部提交(无 Auto-Stage trailer)混入 → 认知失真
+      // ④ an external commit (no Auto-Stage trailer) mixed in → the recovered
+      // picture is wrong
       await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "人工提交")
+      await git(dir, "commit", "-qm", "manual commit")
       const problems = await baselineIntact(dir, baseline)
       expect(problems).toHaveLength(1)
       expect(problems[0]).toContain("non-driver commit")
@@ -342,7 +348,7 @@ describe("baselineIntact(恢复时的基线核对)", () => {
     }
   })
 
-  test("空基线恒通过;基线在册但仓库不可读 → HEAD 不可读", async () => {
+  test("an empty baseline always passes; a baseline on record but an unreadable repository → HEAD unreadable", async () => {
     const dir = await fresh()
     try {
       expect(await baselineIntact(dir, [])).toEqual([])
@@ -354,18 +360,18 @@ describe("baselineIntact(恢复时的基线核对)", () => {
     }
   })
 
-  test("空仓库基线(单元启动时尚无提交): driver 提交通过,外部提交检出", async () => {
+  test("an empty-repository baseline (no commits yet when the unit started): driver commits pass, an external commit is detected", async () => {
     const dir = await fresh()
     try {
       const baseline = await unitBaseline(dir)
       expect(baseline).toEqual([{ root: dir, sha: "" }])
       expect(await baselineIntact(dir, baseline)).toEqual([])
       await writeFile(join(dir, "a.txt"), "a")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 单元内首个提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: first commit inside the unit" })
       expect(await baselineIntact(dir, baseline)).toEqual([])
       await writeFile(join(dir, "b.txt"), "b")
       await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "人工提交")
+      await git(dir, "commit", "-qm", "manual commit")
       expect((await baselineIntact(dir, baseline))[0]).toContain("non-driver commit")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -373,19 +379,19 @@ describe("baselineIntact(恢复时的基线核对)", () => {
   })
 })
 
-describe("rollbackUnit(不可保真时的回滚协议)", () => {
-  const info = { task: "T-001", unit: "子任务 1" }
+describe("rollbackUnit (the rollback protocol when fidelity cannot be kept)", () => {
+  const info = { task: "T-001", unit: "subtask 1" }
 
-  test("脏区 + 本单元 driver 提交 → stash×2 + soft reset 回基线,工作区净、现场在 stash", async () => {
+  test("dirty area + driver commits in this unit → stash×2 + soft reset back to the baseline, worktree clean, the scene in the stash", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "seed.txt"), "s")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
       const base = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      await writeFile(join(dir, "done.txt"), "已落账的半截工作")
-      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1 半途" })
-      await writeFile(join(dir, "wip.txt"), "未提交的半截工作")
+      await writeFile(join(dir, "done.txt"), "committed half-finished work")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1 mid-flight" })
+      await writeFile(join(dir, "wip.txt"), "uncommitted half-finished work")
       const result = await rollbackUnit(dir, baseline, info)
       expect(result.ok).toBe(true)
       expect(result.stashes).toBe(2)
@@ -401,17 +407,17 @@ describe("rollbackUnit(不可保真时的回滚协议)", () => {
     }
   })
 
-  test("外部提交混入 → ok=false 且该仓库原样(不动人工提交,交人工处置)", async () => {
+  test("an external commit mixed in → ok=false with that repository left as-is (manual commits untouched, handed to a person)", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "seed.txt"), "s")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
-      await writeFile(join(dir, "human.txt"), "人工改动")
+      await writeFile(join(dir, "human.txt"), "manual edit")
       await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "人工提交")
+      await git(dir, "commit", "-qm", "manual commit")
       const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      await writeFile(join(dir, "wip.txt"), "半截工作")
+      await writeFile(join(dir, "wip.txt"), "half-finished work")
       const result = await rollbackUnit(dir, baseline, info)
       expect(result.ok).toBe(false)
       expect(result.failures).toHaveLength(1)
@@ -424,21 +430,22 @@ describe("rollbackUnit(不可保真时的回滚协议)", () => {
     }
   })
 
-  test("检测到 upstream → 只 stash 不动分支历史(计入 skipped)", async () => {
+  test("an upstream detected → stash only, branch history untouched (counted in skipped)", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "seed.txt"), "s")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
-      await writeFile(join(dir, "done.txt"), "已落账")
-      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1 半途" })
+      await writeFile(join(dir, "done.txt"), "committed")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1 mid-flight" })
       const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      // 自引用 upstream(无需远端): 当前分支的 upstream 指向本地镜像分支
+      // A self-referencing upstream (no remote needed): the current branch's
+      // upstream points at a local mirror branch
       const current = (await git(dir, "rev-parse", "--abbrev-ref", "HEAD")).trim()
       await git(dir, "branch", "upstream-mirror")
       await git(dir, "config", `branch.${current}.remote`, ".")
       await git(dir, "config", `branch.${current}.merge`, "refs/heads/upstream-mirror")
-      await writeFile(join(dir, "wip.txt"), "半截工作")
+      await writeFile(join(dir, "wip.txt"), "half-finished work")
       const result = await rollbackUnit(dir, baseline, info)
       expect(result.ok).toBe(true)
       expect(result.stashes).toBe(1)
@@ -450,14 +457,14 @@ describe("rollbackUnit(不可保真时的回滚协议)", () => {
     }
   })
 
-  test("空仓库基线(单元启动时尚无提交)→ 只 stash 不回退历史", async () => {
+  test("an empty-repository baseline (no commits yet when the unit started) → stash only, history not rewound", async () => {
     const dir = await fresh()
     try {
       const baseline = await unitBaseline(dir)
       await writeFile(join(dir, "a.txt"), "a")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 单元内首个提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: first commit inside the unit" })
       const head = (await git(dir, "rev-parse", "--short", "HEAD")).trim()
-      await writeFile(join(dir, "wip.txt"), "半截工作")
+      await writeFile(join(dir, "wip.txt"), "half-finished work")
       const result = await rollbackUnit(dir, baseline, info)
       expect(result.ok).toBe(true)
       expect(result.stashes).toBe(1)
@@ -470,22 +477,22 @@ describe("rollbackUnit(不可保真时的回滚协议)", () => {
     }
   })
 
-  test("嵌套仓库各自回滚到各自基线(深度优先,先内后外)", async () => {
+  test("nested repositories roll back to their own baselines (depth-first, inner before outer)", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "pkg"))
       await git(join(dir, "pkg"), "init", "-q")
       await writeFile(join(dir, "root.txt"), "r")
       await writeFile(join(dir, "pkg", "inner.txt"), "i")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
       const bases = Object.fromEntries(baseline.map((line) => [line.root, line.sha]))
-      // 两仓库各落一个 driver 提交 + 各留一份脏区
+      // Each repository gets one driver commit + one dirty area left behind
       await writeFile(join(dir, "root2.txt"), "r2")
       await writeFile(join(dir, "pkg", "inner2.txt"), "i2")
-      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: 子任务 1 半途" })
-      await writeFile(join(dir, "wip.txt"), "半截")
-      await writeFile(join(dir, "pkg", "wip.txt"), "半截")
+      await commitTree(dir, task, { stage: "subtask 1", subject: "T-001: subtask 1 mid-flight" })
+      await writeFile(join(dir, "wip.txt"), "partial")
+      await writeFile(join(dir, "pkg", "wip.txt"), "partial")
       const result = await rollbackUnit(dir, baseline, info)
       expect(result.ok).toBe(true)
       expect(result.resets.sort()).toEqual([".", "pkg"])
@@ -499,8 +506,8 @@ describe("rollbackUnit(不可保真时的回滚协议)", () => {
   })
 })
 
-describe("交接漂移登记: trackedSourceChanges", () => {
-  test("非 git 目录: 无改动可言,返回空数组", async () => {
+describe("test-handover drift registration: trackedSourceChanges", () => {
+  test("non-git directory: no changes to speak of, returns an empty array", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
     try {
       await writeFile(join(dir, "src.ts"), "a")
@@ -510,24 +517,24 @@ describe("交接漂移登记: trackedSourceChanges", () => {
     }
   })
 
-  test("只认已跟踪的非文档改动: 文档面与未跟踪新增都不登记", async () => {
+  test("only tracked non-document changes count: the document side and untracked additions are not registered", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "docs", "T-001"), { recursive: true })
       await mkdir(join(dir, "test"), { recursive: true })
       await writeFile(join(dir, "src.ts"), "v1")
       await writeFile(join(dir, "test", "build.sh"), "echo v1")
-      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "旧")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
+      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "old")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: freeze" })
       expect(await trackedSourceChanges(dir)).toEqual([])
 
-      // 文档面改动(docs/**)不计。
-      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "新")
-      // 未跟踪新增不计(已知取舍)。
-      await writeFile(join(dir, "fresh.ts"), "新文件")
+      // Document-side changes (docs/**) do not count.
+      await writeFile(join(dir, "docs", "T-001", "testhandoff.md"), "new")
+      // Untracked additions do not count (a known trade-off).
+      await writeFile(join(dir, "fresh.ts"), "new file")
       expect(await trackedSourceChanges(dir)).toEqual([])
 
-      // 已跟踪源码与 test/ 脚本改动才计。
+      // Only tracked source and test/ script changes count.
       await writeFile(join(dir, "src.ts"), "v2")
       await writeFile(join(dir, "test", "build.sh"), "echo v2")
       expect((await trackedSourceChanges(dir)).sort()).toEqual([join("test", "build.sh"), "src.ts"].sort())
@@ -536,7 +543,7 @@ describe("交接漂移登记: trackedSourceChanges", () => {
     }
   })
 
-  test("嵌套仓库同样覆盖: 内外两仓的已跟踪改动合并成一张清单", async () => {
+  test("nested repositories covered too: the tracked changes of the outer and inner repositories merge into one list", async () => {
     const dir = await fresh()
     try {
       await writeFile(join(dir, "src.ts"), "v1")
@@ -544,7 +551,7 @@ describe("交接漂移登记: trackedSourceChanges", () => {
       await mkdir(nested, { recursive: true })
       await git(nested, "init", "-q")
       await writeFile(join(nested, "lib.ts"), "n1")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 定版" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: freeze" })
       expect(await trackedSourceChanges(dir)).toEqual([])
 
       await writeFile(join(dir, "src.ts"), "v2")
@@ -556,36 +563,37 @@ describe("交接漂移登记: trackedSourceChanges", () => {
   })
 })
 
-describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
-  test("已落账却被删掉的文档: 列得出、取得回,复原即消脏", async () => {
+describe("scene restoration of handover documents (test-handover interruption recovery F3)", () => {
+  test("a committed yet deleted document: listed, retrievable, restoring it clears the dirty area", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "docs", "T-028", "S03"), { recursive: true })
       const rel = join("docs", "T-028", "S03", "testhandoff.md")
-      await writeFile(join(dir, rel), "交接正文\n\nStatus: continue\n")
-      await commitTree(dir, task, { stage: "subtask 3 handoff-1", subject: "T-001 测试交接 #1" })
+      await writeFile(join(dir, rel), "handover body\n\nStatus: continue\n")
+      await commitTree(dir, task, { stage: "subtask 3 handoff-1", subject: "T-001 test handover #1" })
       expect(await fileTracked(dir, rel)).toBe(true)
       expect(await fileCommitted(dir, rel)).toBe(true)
       expect(await deletedFiles(dir, "docs")).toEqual([])
 
-      // 上一次运行的陈旧清理把在途文档删掉: 删除本身即脏区
+      // A previous run's stale cleanup deleted the in-flight document: the
+      // deletion itself is the dirty area
       await rm(join(dir, rel), { force: true })
       expect(await deletedFiles(dir, "docs")).toEqual([rel])
       expect(await changedFiles(dir)).toEqual([rel])
 
       expect(await restoreFile(dir, rel)).toBe(true)
-      expect(await Bun.file(join(dir, rel)).text()).toBe("交接正文\n\nStatus: continue\n")
+      expect(await Bun.file(join(dir, rel)).text()).toBe("handover body\n\nStatus: continue\n")
       expect(await changedFiles(dir)).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("未跟踪文件: 不算已落账、不算被删", async () => {
+  test("an untracked file: not counted as committed, not counted as deleted", async () => {
     const dir = await fresh()
     try {
       await mkdir(join(dir, "docs"), { recursive: true })
-      await writeFile(join(dir, "docs", "stray.md"), "遗留")
+      await writeFile(join(dir, "docs", "stray.md"), "leftover")
       expect(await fileTracked(dir, join("docs", "stray.md"))).toBe(false)
       expect(await fileCommitted(dir, join("docs", "stray.md"))).toBe(false)
       expect(await deletedFiles(dir, "docs")).toEqual([])
@@ -594,20 +602,22 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
     }
   })
 
-  // steer 交接文档(handoff.md)陈旧清理的共用原语(F4 语义上收): 已跟踪的属未收口
-  // 单元的在途状态,删它即脏区——保留给恢复语义;未跟踪的陈旧遗留照删。
-  test("removeIfUntracked: 已跟踪的不删且不产生脏区,未跟踪的照删", async () => {
+  // The shared primitive of the steer handover document (handoff.md) stale
+  // cleanup (F4 semantics hoisted): a tracked one is the in-flight state of
+  // an unclosed unit — deleting it is a dirty area, kept for the recovery
+  // semantics; an untracked stale leftover is deleted as-is.
+  test("removeIfUntracked: a tracked file is not deleted and produces no dirty area, an untracked one is deleted as-is", async () => {
     const dir = await fresh()
     try {
       const rel = join("docs", "T-028", "handoff.md")
       await mkdir(join(dir, "docs", "T-028"), { recursive: true })
-      await writeFile(join(dir, rel), "交接正文\n\nStatus: continue\n")
-      await commitTree(dir, { id: "T-028", title: "落码" }, { stage: "subtask 1 handoff", subject: "T-028 S1 交接" })
+      await writeFile(join(dir, rel), "handover body\n\nStatus: continue\n")
+      await commitTree(dir, { id: "T-028", title: "code landing" }, { stage: "subtask 1 handoff", subject: "T-028 S1 handover" })
       await removeIfUntracked(dir, rel)
       expect(await Bun.file(join(dir, rel)).exists()).toBe(true)
       expect(await changedFiles(dir)).toEqual([])
       const stray = join("docs", "T-028", "handoff-legacy.md")
-      await writeFile(join(dir, stray), "遗留")
+      await writeFile(join(dir, stray), "leftover")
       await removeIfUntracked(dir, stray)
       expect(await Bun.file(join(dir, stray)).exists()).toBe(false)
     } finally {
@@ -615,12 +625,12 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
     }
   })
 
-  test("已跟踪但工作区有改动: 不算已落账(提交 #2 还没发生)", async () => {
+  test("tracked but modified in the worktree: not counted as committed (commit #2 has not happened yet)", async () => {
     const dir = await fresh()
     try {
-      await writeFile(join(dir, "a.md"), "一")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001 执行" })
-      await writeFile(join(dir, "a.md"), "二")
+      await writeFile(join(dir, "a.md"), "one")
+      await commitTree(dir, task, { stage: "execute", subject: "T-001 execute" })
+      await writeFile(join(dir, "a.md"), "two")
       expect(await fileTracked(dir, "a.md")).toBe(true)
       expect(await fileCommitted(dir, "a.md")).toBe(false)
     } finally {
@@ -628,7 +638,7 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
     }
   })
 
-  test("非 git 目录: 一律安全回落", async () => {
+  test("non-git directory: always a safe fallback", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-git-"))
     try {
       expect(await deletedFiles(dir, "docs")).toEqual([])
@@ -641,22 +651,23 @@ describe("交接文档的现场复原(测试交接中断恢复 F3)", () => {
   })
 })
 
-describe("suffixedTitle(交接提交标题 = 单元标题 + 交接标记)", () => {
-  test("短标题原样拼接", () => {
-    expect(suffixedTitle("T-028 S3 参数确定主链族落码", "测试交接 #1 定版")).toBe("T-028 S3 参数确定主链族落码 测试交接 #1 定版")
+describe("suffixedTitle (handover commit title = unit title + handover marker)", () => {
+  test("a short title is concatenated as-is", () => {
+    expect(suffixedTitle("T-028 S3 finalize parameters and implement the main chain family", "test handover #1 freeze")).toBe("T-028 S3 finalize parameters and implement the main chain family test handover #1 freeze")
   })
 
-  test("超长时截主体、保后缀,总长不超过 commitTitle 的上限(不被二次截断)", () => {
-    const base = `T-028 S3 ${"标".repeat(120)}`
-    const title = suffixedTitle(base, "测试交接 #2 定版")
-    expect(title.endsWith("… 测试交接 #2 定版")).toBe(true)
+  test("when over-long the body is truncated and the suffix kept, the total stays within commitTitle's limit (no second truncation)", () => {
+    const base = `T-028 S3 ${"x".repeat(120)}`
+    const title = suffixedTitle(base, "test handover #2 freeze")
+    expect(title.endsWith("… test handover #2 freeze")).toBe(true)
     expect(title.length).toBeLessThanOrEqual(100)
-    // 关键: #n 与"定版"是区分同一子任务多次交接提交的唯一信息,不能被截掉
+    // Key point: #n and "freeze" are the only information distinguishing one
+    // subtask's repeated handover commits, they must not be cut off
     expect(commitTitle(title)).toBe(title)
   })
 
-  test("恰好卡在上限: 不截", () => {
-    const suffix = "测试交接 #1"
+  test("exactly at the limit: not truncated", () => {
+    const suffix = "test handover #1"
     const base = "x".repeat(100 - suffix.length - 1)
     expect(suffixedTitle(base, suffix)).toBe(`${base} ${suffix}`)
     expect(suffixedTitle(base, suffix).length).toBe(100)

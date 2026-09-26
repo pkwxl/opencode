@@ -7,8 +7,9 @@ import { consumeFailback, failbackOverride, failbackRequested, resetFailback } f
 import { startInteractive, type Interactive } from "../src/interactive"
 import { log } from "../src/log"
 
-// 用注入的流驱动常驻 readline;桩 client 记录 promptAsync 收到的消息。
-// chunks 收集 output 流收到的全部内容(供断言提示符重绘等副作用)。
+// Drive the resident readline with injected streams; the stub client records
+// the messages promptAsync receives. chunks collects everything the output
+// stream receives (for asserting side effects such as prompt redraws).
 // modelNames turns the /failback input check into its registry form.
 function setup(modelNames?: ReadonlySet<string>) {
   const input = new PassThrough()
@@ -32,7 +33,8 @@ function setup(modelNames?: ReadonlySet<string>) {
   return { input, sent, repl, chunks }
 }
 
-// readline 的 line 事件异步派发,等一拍再断言。
+// readline dispatches line events asynchronously; wait a tick before
+// asserting.
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 10))
 }
@@ -47,7 +49,7 @@ describe("interactive", () => {
     resetFailback()
   })
 
-  test("/exit 不发往会话,置位退出请求", async () => {
+  test("/exit is not sent to the session; it sets the exit request", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
@@ -56,13 +58,14 @@ describe("interactive", () => {
     await tick()
     expect(ctx.sent).toEqual([])
     expect(exitRequested()).toBe(true)
-    // 置位后输入行继续可用,后续消息照常发送。
-    ctx.input.write("继续发消息\n")
+    // After the flag is set the input line stays usable; later messages are
+    // sent as usual.
+    ctx.input.write("keep sending messages\n")
     await tick()
-    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "继续发消息" }])
+    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "keep sending messages" }])
   })
 
-  test("无活动会话时 /exit 仍置位(与消息丢弃语义不同)", async () => {
+  test("/exit still sets the flag with no active session (unlike the message-dropping semantics)", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.input.write("/exit\n")
@@ -70,7 +73,7 @@ describe("interactive", () => {
     expect(exitRequested()).toBe(true)
   })
 
-  test("/failback 不发往会话,置位回试请求", async () => {
+  test("/failback is not sent to the session; it sets the failback request", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
@@ -79,14 +82,15 @@ describe("interactive", () => {
     await tick()
     expect(ctx.sent).toEqual([])
     expect(failbackRequested()).toBe(true)
-    // 无参形态: 消费仅重置降级状态,不产生模型序覆写。
+    // No-argument form: consuming it only resets the failover state and
+    // produces no model-order override.
     const chain: { model?: string } = { model: "prov/b" }
     expect(consumeFailback(chain)).toBe(true)
     expect(chain.model).toBeUndefined()
     expect(failbackOverride()).toBeUndefined()
   })
 
-  test("/failback 带参: 空格分隔模型序,首个为首选、其余为降级候选环", async () => {
+  test("/failback with arguments: a space-separated model order — the first is the preferred model, the rest the failover candidate ring", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.input.write("/failback kimi/k3 zai/glm-5.3-flash zai/glm-5.3\n")
@@ -96,16 +100,16 @@ describe("interactive", () => {
     expect(failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: ["zai/glm-5.3-flash", "zai/glm-5.3"] })
   })
 
-  test("/failback 参数缺斜杠: 拒绝置位,输入行继续可用", async () => {
+  test("/failback with a slash-less argument: the request is refused, the input line stays usable", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
     ctx.input.write("/failback kimi/k3 bad\n")
     await tick()
     expect(failbackRequested()).toBe(false)
-    ctx.input.write("继续发消息\n")
+    ctx.input.write("keep sending messages\n")
     await tick()
-    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "继续发消息" }])
+    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "keep sending messages" }])
   })
 
   // Under a model registry (plans/0055 §9) the arguments are internal names;
@@ -125,70 +129,73 @@ describe("interactive", () => {
     expect(ctx.sent).toEqual([])
   })
 
-  test("回车把输入作为消息发往已 attach 的会话", async () => {
+  test("Enter sends the input as a message to the attached session", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
-    ctx.input.write("请顺便检查一下类型\n")
+    ctx.input.write("please also check the types\n")
     await tick()
-    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "请顺便检查一下类型" }])
+    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "please also check the types" }])
     ctx.repl.attach("s2")
-    ctx.input.write("发到新会话\n")
+    ctx.input.write("send to the new session\n")
     await tick()
-    expect(ctx.sent[1]).toEqual({ sessionID: "s2", text: "发到新会话" })
+    expect(ctx.sent[1]).toEqual({ sessionID: "s2", text: "send to the new session" })
   })
 
-  test("无活动会话时输入被丢弃,空行不发送", async () => {
+  test("input is dropped with no active session; blank lines are not sent", async () => {
     const ctx = setup()
     repl = ctx.repl
-    ctx.input.write("太早了\n\n   \n")
+    ctx.input.write("too early\n\n   \n")
     await tick()
     expect(ctx.sent).toEqual([])
   })
 
-  test("question 占用输入行作答,应答后恢复发消息", async () => {
+  test("question takes over the input line for the answer; messaging resumes afterwards", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
-    const answer = ctx.repl.question("提问内容", 1)
-    ctx.input.write("这样做就行\n")
-    expect(await answer).toBe("这样做就行")
-    ctx.input.write("继续发消息\n")
+    const answer = ctx.repl.question("Question text", 1)
+    ctx.input.write("this way works\n")
+    expect(await answer).toBe("this way works")
+    ctx.input.write("keep sending messages\n")
     await tick()
-    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "继续发消息" }])
+    expect(ctx.sent).toEqual([{ sessionID: "s1", text: "keep sending messages" }])
   })
 
-  test("question 空行解析为空字符串(由调用方按原语义解释)", async () => {
+  test("a blank question line parses to an empty string (interpreted by the caller under the original semantics)", async () => {
     const ctx = setup()
     repl = ctx.repl
-    const answer = ctx.repl.question("任务间暂停", 1)
+    const answer = ctx.repl.question("pause between tasks", 1)
     ctx.input.write("\n")
     expect(await answer).toBe("")
   })
 
-  test("stdin 关闭后等待中的 question 回落 undefined,后续输入忽略", async () => {
+  test("after stdin closes, a waiting question falls back to undefined and later input is ignored", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
-    const answer = ctx.repl.question("提问内容", 1)
+    const answer = ctx.repl.question("Question text", 1)
     ctx.input.end()
     expect(await answer).toBeUndefined()
     await tick()
     expect(ctx.sent).toEqual([])
   })
 
-  test("stdin 关闭后日志不再向已关闭的 readline 重绘提示符(2026-09-17 审查 H6)", async () => {
+  test("after stdin closes, logging no longer redraws the prompt on the closed readline (2026-09-17 review H6)", async () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.input.end()
     await tick()
-    // 只观测日志触发的重绘: 清掉启动/关闭期间已写入的提示符。
+    // Observe only the log-triggered redraw: clear the prompt already
+    // written during startup/close.
     ctx.chunks.length = 0
-    log("stdin 关闭后的日志")
-    // close 事件已同步清掉 log.ts 的常驻输入行引用: 日志不再触发提示符重绘。
-    // (报告原判"rl.prompt(true) 抛 ERR_USE_AFTER_CLOSE"经实证不成立——Node 20/Bun
-    // 均不抛,仅 promises question() 抛且 log.ts 未用;修复收敛为对称清理,可观测
-    // 差异即本断言。)
+    log("a log line after stdin closed")
+    // The close event has synchronously cleared log.ts's resident input-line
+    // reference: logging no longer triggers a prompt redraw. (The report's
+    // original claim that "rl.prompt(true) throws ERR_USE_AFTER_CLOSE" was
+    // disproven — neither Node 20 nor Bun throws; only the promises
+    // question() throws, and log.ts does not use it; the fix converged to
+    // symmetric cleanup, and this assertion is the observable difference.)
     expect(ctx.chunks.join("")).not.toContain("💬")
   })
 })

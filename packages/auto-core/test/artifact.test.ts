@@ -1,5 +1,5 @@
-// src/artifact.ts 的单测: requireArtifact 阶段步骤恢复(spec.step)、独立单元门禁(spec.unitStart)、严格恢复(STRICT_RESUME)。
-// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
+// Unit tests for src/artifact.ts: requireArtifact phase-step recovery (spec.step), the standalone unit gate (spec.unitStart), strict resume (STRICT_RESUME).
+// Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
@@ -14,14 +14,16 @@ import { readPlanInput, savePlanInput } from "../src/plan-input"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
-// ---- 阶段步骤恢复点(requireArtifact spec.step: 会话恢复优先于文件推导)----
+// ---- Phase-step recovery points (requireArtifact spec.step: session recovery takes precedence over file-based derivation) ----
 
-describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
-  // 零等待阶梯: 本块只验恢复点语义,不该被重试退避拖成分钟级。
+describe("requireArtifact phase-step recovery (spec.step)", () => {
+  // Zero-wait ladder: this block only checks recovery-point semantics; retry backoff must not stretch it into minutes.
   const STEP_NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
-  // 专用 fake client: 记录 create 次数与每个 prompt 的目标会话;messages 返回一条
-  // 真实 assistant 轮次(tokens>0)使 sessionUsage 判为可复用、非报错桩;事件流对
-  // "当前会话"(新建则随之更新,复用则保持)发一个 idle 让 watch 正常结算。
+  // Dedicated fake client: records the create count and each prompt's target
+  // session; messages returns one real assistant turn (tokens > 0) so
+  // sessionUsage judges it reusable rather than an error stub; the event
+  // stream emits one idle for the "current session" (updated on create, kept
+  // on reuse) so watch settles normally.
   function artifactClient(current?: string) {
     const state = { creates: 0, prompts: [] as string[], current }
     const sdk = {
@@ -59,44 +61,45 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
     return { client: opencodeAgent(sdk), state, sdk }
   }
 
-  const planTask = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
+  const planTask = { id: "PLAN", title: "phase planning (m implementation)", status: "in_progress" as const, attempts: 0, body: "" }
   const spec = (reset: () => void) => ({
-    kind: "阶段规划",
+    kind: "phase planning",
     step: { step: "phase-plan" as const, unit: "R-01.P01" },
-    artifact: "已填充的 PLAN.md",
-    requirement: "写入 PLAN.md",
+    artifact: "a filled-in PLAN.md",
+    requirement: "write PLAN.md",
     reset: async () => {
       reset()
     },
     collect: async () => 4,
   })
 
-  test("未收口 step 记录 + 会话存活: 复用原会话、不重置产物、提示词进原会话", async () => {
+  test("an open step record + a live session: reuse the original session, keep the artifact scene (no reset), prompt goes into the original session", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-resume-"))
     try {
       await saveProgress(dir, { task: "PLAN", session: "ses_plan_old", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const { client, state } = artifactClient("ses_plan_old")
       let resetCalled = false
-      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
+      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)))
       expect(value).toBe(4)
-      expect(resetCalled).toBe(false) // 复用会话 → 保留产物现场,不重置
-      expect(state.creates).toBe(0) // 复用,不新建
-      expect(state.prompts).toEqual(["ses_plan_old"]) // 提示词进原会话
+      expect(resetCalled).toBe(false) // reuse → keep the artifact scene, no reset
+      expect(state.creates).toBe(0) // reuse, no new session
+      expect(state.prompts).toEqual(["ses_plan_old"]) // prompt goes into the original session
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("无 step 记录(全新步骤): 重置产物、开新会话,且下发即写 active 恢复点", async () => {
+  test("no step record (fresh step): reset the artifact, open a new session, and write the active recovery point on dispatch", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-fresh-"))
     try {
       const { client, state } = artifactClient()
       let resetCalled = false
-      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
+      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)))
       expect(value).toBe(4)
       expect(resetCalled).toBe(true)
       expect(state.creates).toBe(1)
-      // 伪任务 PLAN 携带 step 阶段 → 下发成功即落盘(此前 T- 门控会漏掉旁路会话)
+      // The pseudo task PLAN carries a step phase → written on successful dispatch
+      // (the earlier T- gating missed bypass sessions)
       const rec = await recallProgress(dir, "PLAN")
       expect(rec?.active).toBe(true)
       expect(rec?.session).toBe("ses_new_1")
@@ -106,16 +109,16 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
     }
   })
 
-  test("step 记录存在但会话已死(get 失败): 不复用,重置并开新会话", async () => {
+  test("step record exists but the session is dead (get fails): no reuse, reset and open a new session", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-dead-"))
     try {
       await saveProgress(dir, { task: "PLAN", session: "ses_dead", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const { client, state, sdk } = artifactClient("ses_dead")
       ;(sdk as unknown as { session: { get: unknown } }).session.get = async () => ({ error: { name: "NotFound" } })
       let resetCalled = false
-      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)))
+      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)))
       expect(value).toBe(4)
-      expect(resetCalled).toBe(true) // 会话不可复用 → 重置重做
+      expect(resetCalled).toBe(true) // session not reusable → reset and redo
       expect(state.creates).toBe(1)
       expect(state.prompts).toEqual(["ses_new_1"])
     } finally {
@@ -141,11 +144,13 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
     }
   })
 
-  test("可重试错误耗尽进等待-探测: 恢复后步骤正常完成,中途失败不删步骤认领", async () => {
+  test("retryable errors exhaust into the wait-and-probe loop: after recovery the step completes normally; a mid-way failure does not delete the step claim", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-step-retry-"))
     try {
-      // 前三次会话(阶梯 0,0 的三次尝试)全部可重试错误 → 阶梯耗尽进入等待-探测
-      // → 探测会话(第 4 次 create)成功 → 空白新会话重发(第 5 次 create)成功。
+      // The first three sessions (three attempts of the 0,0 ladder) all fail
+      // with retryable errors → the ladder exhausts into the wait-and-probe
+      // loop → the probe session (4th create) succeeds → the blank new
+      // session re-dispatch (5th create) succeeds.
       const queue: unknown[] = []
       let seq = 0
       let n = 0
@@ -178,10 +183,12 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
         provider: { list: async () => ({ data: { all: [] } }) },
         event: { subscribe: async () => ({ stream: (async function* () { while (queue.length) yield queue.shift() })() }) },
       } as unknown as OpencodeClient)
-      const result = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}), STEP_NO_WAIT)
+      const result = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => {}), STEP_NO_WAIT)
       expect(result).toBe(4)
-      // 中途失败从未删除步骤认领(openStep 全程可重入本步骤);成功后由调用方收口,
-      // 此处直接验证记录仍指向本步骤的会话谱系而非被删。
+      // A mid-way failure never deleted the step claim (openStep keeps the
+      // step re-enterable throughout); the caller closes it out on success —
+      // here we only verify the record still points at this step's session
+      // lineage rather than being deleted.
       const open = await openStep(dir)
       expect(open?.step).toBe("phase-plan")
       expect(open?.unit).toBe("R-01.P01")
@@ -191,11 +198,13 @@ describe("requireArtifact 阶段步骤恢复(spec.step)", () => {
   })
 })
 
-// ---- requireArtifact 独立单元门禁(spec.unitStart,plans/0021-commit-boundary-design.md)----
+// ---- requireArtifact standalone unit gate (spec.unitStart, plans/0021-commit-boundary-design.md) ----
 
-describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
-  // 复用 step 恢复块的 fake client 形态: 单会话 + idle 结算,记录 create/prompt;
-  // produce 使会话回合内落一个文件(模拟 AI 写产物,供统一提交有物可提)。
+describe("requireArtifact standalone unit gate (spec.unitStart)", () => {
+  // Reuses the step-recovery block's fake client shape: single session + idle
+  // settle, records create/prompt; produce drops a file within the session
+  // turn (simulating the AI writing the artifact, giving the unified commit
+  // something to commit).
   function unitClient(produce?: () => Promise<void>) {
     const state = { creates: 0, prompts: [] as string[] }
     const client = opencodeAgent({
@@ -228,29 +237,29 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
     return { client, state }
   }
 
-  const planTask = { id: "PLAN", title: "知识提取(k)", status: "in_progress" as const, attempts: 0, body: "" }
+  const planTask = { id: "PLAN", title: "knowledge distillation (k)", status: "in_progress" as const, attempts: 0, body: "" }
   const unitSpec = {
-    kind: "知识提取",
+    kind: "knowledge distillation",
     unitStart: true,
-    artifact: "非空知识文档",
-    requirement: "写入文档",
-    collect: async () => "产出",
+    artifact: "a non-empty knowledge document",
+    requirement: "write the document",
+    collect: async () => "output",
   }
 
   async function git(dir: string, ...args: string[]) {
     const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
     const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-    if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+    if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
     return out
   }
 
-  test("启动前工作区脏(人工改动)→ dirty,不开会话", async () => {
+  test("dirty worktree before start (human edits) → dirty, no session opened", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
     try {
       await git(dir, "init", "-q")
-      await writeFile(join(dir, "human.txt"), "人工遗留")
+      await writeFile(join(dir, "human.txt"), "human leftover")
       const { client, state } = unitClient()
-      const value = await requireArtifact(client, planTask, "提取提示词", { dir }, unitSpec)
+      const value = await requireArtifact(client, planTask, "distillation prompt", { dir }, unitSpec)
       expect(value).toEqual({ type: "dirty", files: ["human.txt"] })
       expect(state.creates).toBe(0)
     } finally {
@@ -258,45 +267,45 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
     }
   })
 
-  test("driver 状态文件(阶段索引)遗留 → carryover 自愈后照常开会话产出", async () => {
+  test("driver state file (phase index) left over → carryover self-heals, then the session opens and produces as usual", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
     try {
       await git(dir, "init", "-q")
       await writeFile(join(dir, "seed.txt"), "s")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "seed")
-      // 上次提交失败遗留的 driver 状态落账: 只含阶段索引 → 自愈补提交
+      // Driver state left on disk by a failed previous commit: phase index only → self-healing backfill commit
       await mkdir(join(dir, "docs/R-01"), { recursive: true })
       await writeFile(join(dir, "docs/R-01/phases.md"), "- [ ] P01 implement\n")
       const { client, state } = unitClient()
-      const value = await requireArtifact(client, planTask, "提取提示词", { dir }, unitSpec)
-      expect(value).toBe("产出")
+      const value = await requireArtifact(client, planTask, "distillation prompt", { dir }, unitSpec)
+      expect(value).toBe("output")
       expect(state.creates).toBe(1)
       const log = await git(dir, "log", "--pretty=%B")
       expect(log).toContain("Auto-Stage: carryover")
-      // .auto/ 运行时状态(stats)不属纳管内容,排除后工作区应干净
+      // .auto/ runtime state (stats) is not managed content; with it excluded the worktree should be clean
       expect((await changedFiles(dir)).filter((file) => !file.startsWith(".auto/"))).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("spec.commit 提交失败(pre-commit 拒绝)→ blocked,不视为完成", async () => {
+  test("spec.commit commit failure (pre-commit rejects) → blocked, not considered complete", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
     try {
       await git(dir, "init", "-q")
       await mkdir(join(dir, "hooks"))
       await writeFile(join(dir, "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
-      // 先落账 hook 脚本本身(保持工作区 clean),再启用 hooksPath 使后续提交失败
+      // Commit the hook script itself first (keeping the worktree clean), then enable hooksPath so later commits fail
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "hooks")
       await git(dir, "config", "core.hooksPath", "hooks")
       const { client } = unitClient(async () => {
-        await writeFile(join(dir, "kb.md"), "知识")
+        await writeFile(join(dir, "kb.md"), "knowledge")
       })
-      const value = await requireArtifact(client, planTask, "提取提示词", { dir }, {
+      const value = await requireArtifact(client, planTask, "distillation prompt", { dir }, {
         ...unitSpec,
-        commit: { stage: "knowledge", subject: "PLAN knowledge 提取" },
+        commit: { stage: "knowledge", subject: "PLAN knowledge distillation" },
       })
       expect(typeof value === "object" && "type" in value && value.type).toBe("blocked")
       if (typeof value === "object" && "type" in value && value.type === "blocked") {
@@ -308,12 +317,12 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
     }
   })
 
-  test("恢复复用原会话(step 记录存活)豁免 clean 检查: 脏的产物现场照常续跑", async () => {
+  test("recovery reusing the original session (live step record) is exempt from the clean check: the dirty artifact scene continues as usual", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-unit-gate-"))
     try {
       await git(dir, "init", "-q")
-      // 半途产物 + active step 记录 + 存活会话 → 复用续跑而非 dirty 阻塞
-      await writeFile(join(dir, "docs-kb.md"), "半途产物")
+      // Half-done artifact + active step record + live session → reuse and continue instead of a dirty block
+      await writeFile(join(dir, "docs-kb.md"), "half-done artifact")
       await saveProgress(dir, { task: "PLAN", session: "ses_alive", at: 1, active: true, phase: { kind: "step", step: "phase-plan", unit: "R-01.P01" } })
       const state = { creates: 0, prompts: [] as string[] }
       const client = opencodeAgent({
@@ -347,21 +356,23 @@ describe("requireArtifact 独立单元门禁(spec.unitStart)", () => {
           }),
         },
       } as unknown as OpencodeClient)
-      const value = await requireArtifact(client, planTask, "续跑提示词", { dir }, {
+      const value = await requireArtifact(client, planTask, "continuation prompt", { dir }, {
         ...unitSpec,
         step: { step: "phase-plan", unit: "R-01.P01" },
       })
-      expect(value).toBe("产出")
-      expect(state.prompts).toEqual(["ses_alive"]) // 复用原会话,未因脏区分叉
+      expect(value).toBe("output")
+      expect(state.prompts).toEqual(["ses_alive"]) // reuses the original session; no fork over the dirty area
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 })
 
-describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基线/模型核对)", () => {
-  // 注入开关: 严格恢复 on + 模型路由(严格恢复要求记录带生效模型,未配路由一律不复用)
-  // + 零等待重试阶梯(本块只验恢复判据,不该被退避拖成分钟级)。
+describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit baseline/model check)", () => {
+  // Injected switches: strict resume on + model routing (strict resume requires
+  // the record to carry the effective model; without routing configured nothing
+  // is ever reused) + the zero-wait retry ladder (this block only checks the
+  // recovery criteria; backoff must not stretch it into minutes).
   const STRICT = parseSwitches({
     [SWITCH_ENV.strictResume]: "on",
     [SWITCH_ENV.model]: "*=kimi/k2",
@@ -375,8 +386,9 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
   })
 
   beforeEach(() => {
-    // 严格恢复的模型求值链含 sticky / /failback 覆写(src/failback.ts 模块态),
-    // 与其他用例共享进程 → 每例前复位,避免串扰。
+    // Strict resume's model evaluation chain includes the sticky / /failback
+    // overrides (src/failback.ts module state), shared with other cases in
+    // this process → reset before each case to avoid cross-talk.
     clearSticky()
     resetFailback()
   })
@@ -384,11 +396,11 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
   async function git(dir: string, ...args: string[]) {
     const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
     const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-    if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+    if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
     return out
   }
 
-  // 记录了阶段步骤恢复点的临时仓库: 种子提交 + active step 记录(基线/模型由入参给定)。
+  // A temp repository with a recorded phase-step recovery point: seed commit + active step record (baseline/model given by the arguments).
   async function seeded(record: { model?: string; withBaseline?: boolean } = {}) {
     const dir = await mkdtemp(join(tmpdir(), "auto-strict-resume-"))
     await git(dir, "init", "-q")
@@ -445,24 +457,24 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     return { client, state }
   }
 
-  const planTask = { id: "PLAN", title: "阶段规划(m 迁移实现)", status: "in_progress" as const, attempts: 0, body: "" }
+  const planTask = { id: "PLAN", title: "phase planning (m implementation)", status: "in_progress" as const, attempts: 0, body: "" }
   const spec = (reset: () => void) => ({
-    kind: "阶段规划",
+    kind: "phase planning",
     step: { step: "phase-plan" as const, unit: "R-01.P01" },
-    artifact: "已填充的 PLAN.md",
-    requirement: "写入 PLAN.md",
+    artifact: "a filled-in PLAN.md",
+    requirement: "write PLAN.md",
     reset: async () => {
       reset()
     },
     collect: async () => 4,
   })
 
-  test("基线完好 + 模型一致 + 会话存活 → 复用原会话、保留产物现场", async () => {
+  test("intact baseline + matching model + live session → reuse the original session, keep the artifact scene", async () => {
     const { dir } = await seeded({ model: "kimi/k2" })
     try {
       const { client, state } = stepClient("ses_plan_old")
       let resetCalled = false
-      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
       expect(resetCalled).toBe(false)
       expect(state.creates).toBe(0)
       expect(state.prompts).toEqual(["ses_plan_old"])
@@ -471,12 +483,12 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     }
   })
 
-  test("模型不一致 → 回滚到单元基线(现场进 stash)后开新会话重做本步骤", async () => {
+  test("model mismatch → roll back to the unit baseline (scene goes into a stash), then open a new session to redo the step", async () => {
     const { dir, head } = await seeded({ model: "kimi/old" })
     try {
       const { client, state } = stepClient("ses_plan_old")
       let resetCalled = false
-      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
       expect(resetCalled).toBe(true)
       expect(state.creates).toBe(1)
       expect(state.prompts).toEqual(["ses_new_1"])
@@ -487,12 +499,12 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     }
   })
 
-  test("原会话已死 → 同样回滚后重做(不在陌生脏区上续跑)", async () => {
+  test("original session dead → same rollback then redo (no continuing on a foreign dirty area)", async () => {
     const { dir } = await seeded({ model: "kimi/k2" })
     try {
       const { client, state } = stepClient("ses_plan_old", false)
       let resetCalled = false
-      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
       expect(resetCalled).toBe(true)
       expect(state.creates).toBe(1)
       expect(await git(dir, "stash", "list")).toContain("auto-rollback")
@@ -501,14 +513,14 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     }
   })
 
-  test("基线以来混入外部提交 → dirty 交人工(不回滚、不开会话)", async () => {
+  test("external commits since the baseline → dirty for a human (no rollback, no session)", async () => {
     const { dir } = await seeded({ model: "kimi/k2" })
     try {
-      await writeFile(join(dir, "human.txt"), "人工改动")
+      await writeFile(join(dir, "human.txt"), "human edit")
       await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "人工提交")
+      await git(dir, "commit", "-qm", "human commit")
       const { client, state } = stepClient("ses_plan_old")
-      const value = await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => {}), STRICT)
+      const value = await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => {}), STRICT)
       expect(typeof value === "object" && "type" in value && value.type).toBe("dirty")
       expect(state.creates).toBe(0)
       expect(await git(dir, "stash", "list")).toBe("")
@@ -517,12 +529,12 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     }
   })
 
-  test("严格恢复启用前的旧记录(无基线)→ 不复用也不回滚,开新会话重做", async () => {
+  test("old record from before strict resume was enabled (no baseline) → neither reuse nor rollback; open a new session to redo", async () => {
     const { dir } = await seeded({ withBaseline: false })
     try {
       const { client, state } = stepClient("ses_plan_old")
       let resetCalled = false
-      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
+      expect(await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), STRICT)).toBe(4)
       expect(resetCalled).toBe(true)
       expect(state.creates).toBe(1)
       expect(await git(dir, "stash", "list")).toBe("")
@@ -531,12 +543,12 @@ describe("requireArtifact 严格恢复(OPENCODE_AUTO_STRICT_RESUME + 单元基�
     }
   })
 
-  test("开关缺省 off: 同一条模型不一致的记录仍按既有语义复用(等价现状)", async () => {
+  test("switch default off: the same model-mismatched record is still reused under the existing semantics (status-quo equivalent)", async () => {
     const { dir } = await seeded({ model: "kimi/old" })
     try {
       const { client, state } = stepClient("ses_plan_old")
       let resetCalled = false
-      expect(await requireArtifact(client, planTask, "规划提示词", { dir }, spec(() => (resetCalled = true)), LOOSE)).toBe(4)
+      expect(await requireArtifact(client, planTask, "planning prompt", { dir }, spec(() => (resetCalled = true)), LOOSE)).toBe(4)
       expect(resetCalled).toBe(false)
       expect(state.creates).toBe(0)
       expect(state.prompts).toEqual(["ses_plan_old"])

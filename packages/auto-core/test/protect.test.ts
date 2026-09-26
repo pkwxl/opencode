@@ -21,12 +21,13 @@ describe("protect", () => {
   })
 
   afterEach(async () => {
-    // 恢复可写再清理,避免只读文件残留(以及模块开关泄漏到其它测试)
+    // Restore writability before cleanup, so no read-only file is left behind
+    // (and the module switches do not leak into other tests)
     await unprotect(dir)
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("protect 置只读,unprotect 恢复可写", async () => {
+  test("protect sets read-only, unprotect restores writability", async () => {
     expect(await writable(path)).toBe(true)
     await protect(dir)
     expect(await writable(path)).toBe(false)
@@ -55,14 +56,14 @@ describe("protect", () => {
     expect(await Bun.file(join(dir, MODELS_FILE)).exists()).toBe(false)
   })
 
-  test("任务单元文档不在保护之列,始终保持可写", async () => {
+  test("task unit documents are not protected, they stay writable throughout", async () => {
     const todo = join(dir, "docs/T-001/todo.md")
-    await Bun.write(todo, "# T-001: 示例任务\n")
+    await Bun.write(todo, "# T-001: sample task\n")
     await protect(dir)
     expect(await writable(todo)).toBe(true)
   })
 
-  test("protect 对不存在的文件静默跳过", async () => {
+  test("protect silently skips files that do not exist", async () => {
     await rm(path)
     await protect(dir)
     expect(await writable(path).catch(() => "missing")).toBe("missing")

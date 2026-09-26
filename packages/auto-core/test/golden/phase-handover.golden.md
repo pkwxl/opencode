@@ -6,7 +6,7 @@ existing artifact.
 
 ## Handover recipient
 
-The next phase is "P03-test 测试". It will take this document as its main input for cross-phase memory (the prior
+The next phase is "P03-test Testing". It will take this document as its main input for cross-phase memory (the prior
 phase's raw docs/ will not be injected), so distill on the standard "the next phase can safely start without
 reading the raw artifacts."
 ## Input (read-only)

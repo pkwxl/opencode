@@ -8,22 +8,22 @@ The tasks this phase already has, one line each in index order. The bracketed la
 (pending / blocked / done / closed — a closed task was closed without completing: do not assume its deliverables
 exist):
 
-- [closed] T-004: 梳理词法器 (closed without completing: 被 T-006 取代)
-- [done] T-005: 迁移语法器
-- [pending] T-006: 接通流水线
+- [closed] T-004: sort out the lexer (closed without completing: superseded by T-006)
+- [done] T-005: migrate the parser
+- [pending] T-006: wire up the pipeline
 
 The existing lines are fixed: the new tasks are appended after them, never before or between them.
 
 ## Input: project intent (.opencode/auto/brief.md)
 
-项目意图(固定输入)。
+Project intent (fixed input).
 
 ## Input: planning input (docs/R-01/P02-implement/plan-input.md)
 
 The person who started this appending step asked for the following. Plan the additional tasks to cover it, building
 on the existing tasks above.
 
-追加输入(固定输入)。
+Append input (fixed input).
 
 ## Input: scenario-mode preamble (migrate)
 
@@ -38,7 +38,7 @@ Below are the handover-distillation documents of each prior phase (at this round
 P<nn>-<type>/handover.md, a permanent path), the sole channel of cross-phase memory (in place of the prior phases'
 raw docs/ — do not try to read them when planning; pull more detail via their artifact index as needed):
 
-前序阶段交接(固定输入)。
+Prior phase handover (fixed input).
 
 ## Phase duties and artifact conventions
 

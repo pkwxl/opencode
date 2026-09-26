@@ -18,75 +18,75 @@ describe("log", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("setLogFile 在 .auto/logs/ 下建文件,log 输出同步落盘", async () => {
+  test("setLogFile creates the file under .auto/logs/, log output lands on disk synchronously", async () => {
     const path = setLogFile(dir)
     expect(path).toStartWith(join(dir, ".auto", "logs", "run-"))
-    log("第一行")
-    log("多行\n输出")
-    // writeSync 直写,无需等待 flush 即可读到
+    log("first line")
+    log("multi-line\noutput")
+    // writeSync writes directly: readable without waiting for a flush
     const content = await Bun.file(path).text()
-    expect(content).toContain("第一行\n")
-    expect(content).toContain("多行\n输出\n")
+    expect(content).toContain("first line\n")
+    expect(content).toContain("multi-line\noutput\n")
     expect(await readdir(join(dir, ".auto", "logs"))).toHaveLength(1)
   })
 
-  test("verbose 下文件与终端一样带时间戳", async () => {
+  test("verbose: the file carries timestamps like the terminal", async () => {
     setVerbose(true)
     const path = setLogFile(dir)
-    log("计时输出")
-    expect(await Bun.file(path).text()).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 计时输出\n$/)
+    log("timed output")
+    expect(await Bun.file(path).text()).toMatch(/^\[\d{2}:\d{2}:\d{2}\] timed output\n$/)
   })
 
-  test("interactive 下 vlog 只进文件不上终端,log 终端无时间戳而文件有", async () => {
+  test("interactive: vlog goes only to the file, never the terminal; log has no timestamp on the terminal but does in the file", async () => {
     setInteractive()
     const path = setLogFile(dir)
     const lines: string[] = []
     const original = console.log
     console.log = (...args: unknown[]) => lines.push(args.join(" "))
     try {
-      log("状态行")
-      vlog("明细行")
+      log("status line")
+      vlog("detail line")
     } finally {
       console.log = original
     }
-    expect(lines).toEqual(["状态行"])
+    expect(lines).toEqual(["status line"])
     const content = await Bun.file(path).text()
-    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 状态行\n/)
-    expect(content).toContain("] 明细行\n")
+    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] status line\n/)
+    expect(content).toContain("] detail line\n")
   })
 
-  test("非 verbose 下 vlog 完全静默", async () => {
+  test("non-verbose: vlog is fully silent", async () => {
     const path = setLogFile(dir)
-    vlog("明细行")
+    vlog("detail line")
     expect(await Bun.file(path).text()).toBe("")
   })
 
-  test("audit(外壳画像 auditLog)下非 verbose 的 vlog 不上终端但仍写入日志文件(带时间戳)", async () => {
+  test("audit (the shell profile's auditLog): a non-verbose vlog stays off the terminal but still enters the log file (with a timestamp)", async () => {
     setAuditLog(true)
     const path = setLogFile(dir)
     const lines: string[] = []
     const original = console.log
     console.log = (...args: unknown[]) => lines.push(args.join(" "))
     try {
-      vlog("明细行")
-      log("状态行")
+      vlog("detail line")
+      log("status line")
     } finally {
       console.log = original
     }
-    expect(lines).toEqual(["状态行"])
+    expect(lines).toEqual(["status line"])
     const content = await Bun.file(path).text()
-    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] 明细行\n/)
-    expect(content).toMatch(/\] 状态行\n/)
+    expect(content).toMatch(/^\[\d{2}:\d{2}:\d{2}\] detail line\n/)
+    expect(content).toMatch(/\] status line\n/)
   })
 })
 
-describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
-  test("formatDuration 中文式: 秒 / 分秒 / 小时分", () => {
+describe("formatter (stats-message consolidation, STATS_PLAN §5)", () => {
+  test("formatDuration verbose style: seconds / minutes-seconds / hours-minutes", () => {
     expect(formatDuration(0)).toBe("0s")
-    expect(formatDuration(999)).toBe("1s") // Math.round 进位,与 loop 原版一致
+    expect(formatDuration(999)).toBe("1s") // Math.round carries, same as the original loop version
     expect(formatDuration(45_000)).toBe("45s")
     expect(formatDuration(59_499)).toBe("59s")
-    expect(formatDuration(59_500)).toBe("1m 0s") // Math.round 进位后升档(loop 原版行为)
+    expect(formatDuration(59_500)).toBe("1m 0s") // carried by Math.round, steps up a tier (original loop behavior)
     expect(formatDuration(60_000)).toBe("1m 0s")
     expect(formatDuration(24 * 60_000 + 31_000)).toBe("24m 31s")
     expect(formatDuration(59 * 60_000 + 59_000)).toBe("59m 59s")
@@ -95,7 +95,7 @@ describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
     expect(formatDuration(2 * 3600_000 + 5 * 60_000 + 30_000)).toBe("2h 5m")
   })
 
-  test("formatDurationCompact 紧凑式: 与 runner.ts 私有副本逐字一致", () => {
+  test("formatDurationCompact compact style: verbatim identical to runner.ts's private copy", () => {
     expect(formatDurationCompact(0)).toBe("0ms")
     expect(formatDurationCompact(999)).toBe("999ms")
     expect(formatDurationCompact(1000)).toBe("1.0s")
@@ -106,7 +106,7 @@ describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
     expect(formatDurationCompact(3600_000)).toBe("60m")
   })
 
-  test("formatTokens: 万位以下原样,及以上转 N.Nk", () => {
+  test("formatTokens: below the ten-thousands place as-is, from there on N.Nk", () => {
     expect(formatTokens(0)).toBe("0")
     expect(formatTokens(9999)).toBe("9999")
     expect(formatTokens(10_000)).toBe("10.0k")
@@ -114,25 +114,26 @@ describe("formatter(统计报文收口,STATS_PLAN §5)", () => {
     expect(formatTokens(1_000_000)).toBe("1000.0k")
   })
 
-  test("formatCost: 0/假值 → undefined(省略费用项),正值自适应精度", () => {
+  test("formatCost: 0/falsy → undefined (the cost item is omitted), positive values with adaptive precision", () => {
     expect(formatCost(0)).toBeUndefined()
     expect(formatCost(0.041)).toBe("$0.041")
     expect(formatCost(0.31)).toBe("$0.31")
     expect(formatCost(1.5)).toBe("$1.5")
-    expect(formatCost(0.00012)).toBe("$0.0001") // 4 位精度上限截断
+    expect(formatCost(0.00012)).toBe("$0.0001") // truncated at the 4-digit precision cap
   })
 
-  test("formatCacheHit: hit = cacheRead/(cacheRead+input) 一位小数,分母 0 → —", () => {
+  test("formatCacheHit: hit = cacheRead/(cacheRead+input) with one decimal, denominator 0 → —", () => {
     expect(formatCacheHit(95, 5)).toBe("95.0%")
     expect(formatCacheHit(959, 41)).toBe("95.9%")
     expect(formatCacheHit(0, 100)).toBe("0.0%")
-    expect(formatCacheHit(0, 0)).toBe("—") // 分母 0
-    expect(formatCacheHit(28_400, 1200)).toBe("95.9%") // STATS_PLAN §4 报文草案例
+    expect(formatCacheHit(0, 0)).toBe("—") // denominator 0
+    expect(formatCacheHit(28_400, 1200)).toBe("95.9%") // STATS_PLAN §4 draft-report example
   })
 
-  // T-006: formatUsageLine 收口(tokens 行统一格式)——T-004 会话结束行 2 与
-  // T-006 任务/阶段/轮次结论行共用。
-  test("formatUsageLine: 思考项位次(出与缓存读之间)/cost=0 省略费用/命中率分母 0", () => {
+  // T-006: the formatUsageLine consolidation (a unified format for the tokens
+  // line) — shared by the T-004 session-end line 2 and the T-006
+  // task/phase/round conclusion lines.
+  test("formatUsageLine: the reasoning item's position (between output and cache-read) / cost=0 omits the cost / hit-rate denominator 0", () => {
     const base = { input: 1200, output: 340, reasoning: 0, cacheRead: 28_400, cacheWrite: 3100, cost: 0 }
     expect(formatUsageLine(base)).toBe("tokens in 1200 / out 340 / cache-read 28.4k / cache-write 3100, hit 95.9%")
     expect(formatUsageLine({ ...base, reasoning: 120 })).toBe(

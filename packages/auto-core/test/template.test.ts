@@ -5,65 +5,65 @@ import { join } from "node:path"
 import { parsePartials, promptTemplateNames, registerPartial, registerTemplate, renderText, renderTemplate, templateRenders, usePromptLibrary } from "../src/template"
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 
-// 每个用例后恢复仅内置,避免覆盖状态泄漏到其他测试文件。
+// Restore built-ins only after each case, so overlay state never leaks into other test files.
 afterEach(() => usePromptLibrary(undefined))
 
-describe("渲染器", () => {
-  test("变量替换: string 直替,boolean/undefined 渲染为空", () => {
-    expect(renderText("a{{x}}b", { x: "值" })).toBe("a值b")
+describe("renderer", () => {
+  test("variable substitution: a string replaces directly, boolean/undefined render empty", () => {
+    expect(renderText("a{{x}}b", { x: "value" })).toBe("avalueb")
     expect(renderText("a{{x}}b", { x: true })).toBe("ab")
     expect(renderText("a{{x}}b", { x: false })).toBe("ab")
     expect(renderText("a{{x}}b", {})).toBe("ab")
   })
 
-  test("条件段: 非空字符串或 true 为真,空串/false/未定义为假", () => {
-    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", { x: "文字" })).toBe("有")
-    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", { x: true })).toBe("有")
-    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", { x: "" })).toBe("无")
-    expect(renderText("{{#if x}}有{{/if}}{{^x}}无{{/if}}", {})).toBe("无")
+  test("conditional blocks: a non-empty string or true is truthy, an empty string/false/undefined falsy", () => {
+    expect(renderText("{{#if x}}yes{{/if}}{{^x}}no{{/if}}", { x: "text" })).toBe("yes")
+    expect(renderText("{{#if x}}yes{{/if}}{{^x}}no{{/if}}", { x: true })).toBe("yes")
+    expect(renderText("{{#if x}}yes{{/if}}{{^x}}no{{/if}}", { x: "" })).toBe("no")
+    expect(renderText("{{#if x}}yes{{/if}}{{^x}}no{{/if}}", {})).toBe("no")
   })
 
-  test("条件段支持嵌套", () => {
+  test("conditional blocks nest", () => {
     expect(renderText("{{#if a}}A{{#if b}}B{{/if}}{{/if}}", { a: true, b: true })).toBe("AB")
     expect(renderText("{{#if a}}A{{#if b}}B{{/if}}{{/if}}", { a: true })).toBe("A")
   })
 
-  test("独占一行的块标签整行吞掉,不残留空行", () => {
-    const text = ["前", "", "{{#if x}}", "中", "", "{{/if}}", "后"].join("\n")
-    expect(renderText(text, { x: true })).toBe("前\n\n中\n\n后")
-    expect(renderText(text, {})).toBe("前\n\n后")
+  test("a block tag alone on its line swallows the whole line, leaving no blank-line residue", () => {
+    const text = ["head", "", "{{#if x}}", "middle", "", "{{/if}}", "tail"].join("\n")
+    expect(renderText(text, { x: true })).toBe("head\n\nmiddle\n\ntail")
+    expect(renderText(text, {})).toBe("head\n\ntail")
   })
 
   test("unclosed / unmatched closing tags throw", () => {
-    expect(() => renderText("{{#if x}}内容", { x: true })).toThrow("unclosed")
+    expect(() => renderText("{{#if x}}content", { x: true })).toThrow("unclosed")
     expect(() => renderText("{{/if}}", {})).toThrow("unmatched {{/if}}")
-    expect(() => renderText("{{#if x}}内容{{/each}}", { x: true })).toThrow("unknown closing tag")
+    expect(() => renderText("{{#if x}}content{{/each}}", { x: true })).toThrow("unknown closing tag")
   })
 
-  test("片段引用: 共享片段按当前上下文渲染(片段内可用变量)", () => {
+  test("partial references: a shared partial renders against the current context (variables usable inside)", () => {
     usePromptLibrary(undefined)
     expect(renderText("{{> state-rule}}", {})).toContain("are maintained by the DRIVER alone")
     expect(renderText("{{> state-rule}}", {})).toContain("Git commits are made by the DRIVER in one pass after the session ends")
   })
 
-  test("片段独占一行时行首缩进应用到每一行;行内引用仅应用到第二行起(片段体自带缩进叠加)", () => {
+  test("when a partial stands alone on its line the line's leading indent applies to every line; an inline reference applies only from the second line on (stacking on the partial body's own indent)", () => {
     usePromptLibrary(undefined)
-    const standalone = renderText("前:\n   {{> state-rule}}\n后", {})
+    const standalone = renderText("before:\n   {{> state-rule}}\nafter", {})
     expect(standalone.split("\n")[1]).toBe("   todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.")
     expect(standalone.split("\n")[2]).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.")
-    const inline = renderText("前:\n   {{> state-rule}};尾", {})
-    expect(inline.split("\n").at(-1)).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.;尾")
+    const inline = renderText("before:\n   {{> state-rule}};tail", {})
+    expect(inline.split("\n").at(-1)).toBe("   Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.;tail")
   })
 })
 
-describe("共享片段解析", () => {
-  test("## 节解析为首尾去空行的片段体,H1 与节外说明忽略", () => {
-    const partials = parsePartials("# 标题\n说明文字忽略。\n\n## a\n\n内容甲\n\n\n## b\n内容乙\n")
-    expect(partials.a).toBe("内容甲")
-    expect(partials.b).toBe("内容乙")
+describe("shared partial parsing", () => {
+  test("## sections parse into partial bodies with leading/trailing blank lines trimmed; the H1 and out-of-section prose are ignored", () => {
+    const partials = parsePartials("# Title\nIntro prose is ignored.\n\n## a\n\nBody A\n\n\n## b\nBody B\n")
+    expect(partials.a).toBe("Body A")
+    expect(partials.b).toBe("Body B")
   })
 
-  test("doc-layout 节存在且不含模板变量;任务模板引用渲染为永久路径规范", () => {
+  test("the doc-layout section exists and carries no template variables; task templates referencing it render the permanent path rules", () => {
     usePromptLibrary(undefined)
     const text = renderText("{{> doc-layout}}", {})
     expect(text).toContain("Document placement rules")
@@ -71,16 +71,16 @@ describe("共享片段解析", () => {
     expect(text).toContain("S<two-digit index>/index.md")
     expect(text).toContain("these paths are permanent")
     expect(text).toContain("do not create flat task files at the top level of docs/")
-    // 不含模板变量: phase-plan 等无 taskId 的模板同样可引用
+    // No template variables: templates without taskId (phase-plan and friends) can reference it too
     expect(text).not.toMatch(/\{\{|\}\}/)
-    // 引用渲染: decompose(任务文档写者)与 phase-plan(无 taskId 的规划者)都带该段
+    // Referencing renders: decompose (the task-document writer) and phase-plan (the planner without taskId) both carry the section
     expect(renderTemplate("decompose", { taskId: "T-001", taskBlock: "x" })).toContain("Document placement rules")
-    expect(renderTemplate("phase-plan", { phase: "a", phaseName: "分析" })).toContain("Document placement rules")
+    expect(renderTemplate("phase-plan", { phase: "a", phaseName: "analysis" })).toContain("Document placement rules")
   })
 })
 
-describe("内置模板注册表", () => {
-  test("27 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose;phase-append 见 0053 D27;step-up 与 classify-error 见 0055 §4.5、§7.1)", () => {
+describe("built-in template registry", () => {
+  test("all 27 session templates plus _partials present (understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "classify-error",
@@ -112,31 +112,31 @@ describe("内置模板注册表", () => {
     ])
   })
 
-  test("全部内置模板可渲染(代表性上下文,无残留标签)", () => {
+  test("every built-in template renders (representative context, no leftover tags)", () => {
     const ctx = {
       taskId: "T-001",
-      taskBlock: "# T-001\n\n正文",
-      doneList: "- [done] T-000: 前置",
-      gap: "差距",
-      digest: "## 相关文件与关键符号\n- src/x.ts",
-      subtask: "子任务",
+      taskBlock: "# T-001\n\nbody",
+      doneList: "- [done] T-000: prerequisite",
+      gap: "gap",
+      digest: "## Related files and key symbols\n- src/x.ts",
+      subtask: "subtask",
       index: "1",
-      subtaskList: "1. 任务甲\n2. 任务乙",
+      subtaskList: "1. Task A\n2. Task B",
       outputFile: "docs/T-001/S01/index.md",
       warm: true,
       scriptPath: "/tmp/verify.sh",
-      verifyState: "未声明",
+      verifyState: "not declared",
       handoffFile: "docs/T-001/handoff.md",
-      stageName: "终审审计",
+      stageName: "final audit",
       round: "1",
       proposalFile: "docs/final/plan-audit-r1.md",
       runScript: "/x",
       runCode: "0",
       runMs: "1",
-      runTimeout: "否",
+      runTimeout: "no",
       runOut: "/out",
       replacement: "/r",
-      laterVerifyList: "   (无)",
+      laterVerifyList: "   (none)",
       final: true,
       early: true,
       solo: true,
@@ -152,20 +152,20 @@ describe("内置模板注册表", () => {
       question: "",
       answer: "",
       modeName: "migrate",
-      modeInit: "导语",
-      modeExec: "注记",
-      emphasis: "侧重",
-      prior: "上游",
+      modeInit: "intro",
+      modeExec: "note",
+      emphasis: "emphasis",
+      prior: "upstream",
       file: "docs/R-01/P04-knowledge/kb.md",
       phase: "a",
-      phaseName: "分析",
-      brief: "项目意图",
-      handovers: "### P01-analysis 分析(docs/R-01/P01-analysis/handover.md)",
+      phaseName: "analysis",
+      brief: "project intent",
+      handovers: "### P01-analysis Analysis(docs/R-01/P01-analysis/handover.md)",
       prevRound: "### Previous round (round 1) phase directory index",
       archive: "docs/R-01/P01-analysis",
-      next: "P02-implement 迁移实现",
+      next: "P02-implement Implementation",
       finalReview: "2",
-      planDuties: "- 职责",
+      planDuties: "- duties",
       verify: true,
       testByDriver: true,
       handoverTest: true,
@@ -173,10 +173,10 @@ describe("内置模板注册表", () => {
       fine: true,
       fromFile: true,
       filePath: "docs/rough-plan.md",
-      content: "先做 A,再做 B",
-      input: "追加规划输入",
+      content: "Do A first, then B",
+      input: "append-planning input",
       inputPath: "docs/R-01/P02-implement/plan-input.md",
-      existingTasks: "- [pending] T-004: 既有任务",
+      existingTasks: "- [pending] T-004: existing task",
       fromModel: "prov/model-256k",
       toModel: "prov/model",
       now: "2026-09-26T15:00:00+08:00",
@@ -189,41 +189,44 @@ describe("内置模板注册表", () => {
   })
 })
 
-describe("分阶段分解模板 decompose-<phase>", () => {
+describe("per-phase decompose templates decompose-<phase>", () => {
   const six = ["a", "d", "m", "t", "v", "k"] as const
 
-  // M1.2 意图外置后,粒度准则与阶段职责段不再由模板自带,而是 prompt.ts 以
-  // decomposeRule/phaseDuties 变量注入意图包内容;模板层只留角色边界、格式
-  // 协议与注入挂点。内容断言见 test/intent.test.ts 与 test/prompt-exec.test.ts。
-  test("六份齐备: 均含检查项协议与意图注入挂点,注入内容落位正确", () => {
+  // Since M1.2 externalized the intent, the granularity criteria and the
+  // phase-duties section are no longer baked into the template; prompt.ts injects
+  // the intent-pack content through the decomposeRule/phaseDuties variables. The
+  // template layer keeps only the role boundary, the format protocol and the
+  // injection hook points. Content assertions live in test/intent.test.ts and
+  // test/prompt-exec.test.ts.
+  test("all six present: each carries the checklist protocol and the intent-injection hook points, injected content lands in the right place", () => {
     usePromptLibrary(undefined)
     for (const letter of six) {
       const text = renderTemplate(`decompose-${letter}`, {
         taskId: "T-001",
-        taskBlock: "# T-001\n\n正文",
-        phaseName: "阶段名",
+        taskBlock: "# T-001\n\nbody",
+        phaseName: "phase name",
         contextBudget: "32.0k",
         decomposeRule: "RULE-SENTINEL",
         phaseDuties: "DUTIES-SENTINEL",
       })
       expect(text).toContain("- [ ]")
       expect(text).toContain("This session completes the task-background understanding and the subtask decomposition; it writes no implementation code")
-      expect(text).toContain("The current phase is 阶段名")
+      expect(text).toContain("The current phase is phase name")
       expect(text).toContain("RULE-SENTINEL")
       expect(text).toContain("DUTIES-SENTINEL")
-      // 注入点在检查项协议(5. 把分解结果写入…)之前
+      // The injection points precede the checklist protocol (5. Write the decomposition into …)
       expect(text.indexOf("DUTIES-SENTINEL")).toBeLessThan(text.indexOf("5. Write the decomposition into"))
       expect(text).not.toMatch(/\{\{|\}\}/)
     }
   })
 
-  test("零意图基线: 注入变量缺省时整段消失,不留空行残渣、不残留标签", () => {
+  test("zero-intent baseline: with the injection variables absent the whole block disappears, no blank-line residue, no leftover tags", () => {
     usePromptLibrary(undefined)
     for (const letter of six) {
       const text = renderTemplate(`decompose-${letter}`, {
         taskId: "T-001",
-        taskBlock: "# T-001\n\n正文",
-        phaseName: "阶段名",
+        taskBlock: "# T-001\n\nbody",
+        phaseName: "phase name",
       })
       expect(text).toContain("- [ ]")
       expect(text).not.toMatch(/\{\{|\}\}/)
@@ -232,16 +235,16 @@ describe("分阶段分解模板 decompose-<phase>", () => {
   })
 })
 
-describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
-  test("同名模板覆盖内置,新内容生效", () => {
+describe("target-directory overrides (.opencode/auto/prompts/)", () => {
+  test("a same-named template overrides the built-in, the new content takes effect", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "subtask.md"), "自定义子任务提示词: {{subtask}}")
+      writeFileSync(join(overlay, "subtask.md"), "Custom subtask prompt: {{subtask}}")
       usePromptLibrary(dir)
-      expect(renderTemplate("subtask", { subtask: "任务甲" })).toBe("自定义子任务提示词: 任务甲")
-      // 未覆盖的模板仍取内置
+      expect(renderTemplate("subtask", { subtask: "Task A" })).toBe("Custom subtask prompt: Task A")
+      // A non-overridden template still loads the built-in
       expect(renderTemplate("dryrun", {})).toContain("permission pre-check")
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -285,25 +288,25 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     }
   })
 
-  test("协议敏感模板覆盖缺失协议行时报错并指明文件", () => {
+  test("a protocol-sensitive template override missing a protocol line errors and names the file", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "wrapup.md"), "随便写的收尾提示词,没有结论行协议")
+      writeFileSync(join(overlay, "wrapup.md"), "an ad-hoc wrap-up prompt with no result-line protocol")
       expect(() => usePromptLibrary(dir)).toThrow(/wrapup\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/Result: PASS/)
       rmSync(join(overlay, "wrapup.md"))
-      // phase-handover 覆盖缺四个必备小节标题 → 同样报错;修复后再测 decompose
-      writeFileSync(join(overlay, "phase-handover.md"), "自定义交接提示词,丢了小节协议")
+      // A phase-handover override missing the four required section headings → same error; then test decompose after the fix
+      writeFileSync(join(overlay, "phase-handover.md"), "a custom handover prompt that dropped the section protocol")
       expect(() => usePromptLibrary(dir)).toThrow(/phase-handover\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/## Key decisions/)
       writeFileSync(
         join(overlay, "phase-handover.md"),
-        "自定义交接提示词,保留协议: ## Key decisions ## Constraints and pitfalls ## Required reading for the next phase ## Artifact index 写入 {{handover}}",
+        "a custom handover prompt, protocol kept: ## Key decisions ## Constraints and pitfalls ## Required reading for the next phase ## Artifact index written to {{handover}}",
       )
-      // decompose 覆盖丢 context.md/todo.md 产物协议(M1.0 合并会话)→ 同样报错
-      writeFileSync(join(overlay, "decompose.md"), "自定义分解提示词,丢了产物协议与检查项格式")
+      // A decompose override losing the context.md/todo.md artifact protocol (M1.0 merged session) → same error
+      writeFileSync(join(overlay, "decompose.md"), "a custom decompose prompt that dropped the artifact protocol and the checklist format")
       expect(() => usePromptLibrary(dir)).toThrow(/decompose\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/context\.md/)
       expect(() => usePromptLibrary(dir)).toThrow(/todo\.md/)
@@ -312,171 +315,174 @@ describe("目标目录覆盖(.opencode/auto/prompts/)", () => {
     }
   })
 
-  test("phase-append 覆盖缺 tier-1 标记(骨架 + {{taskIndex}}/{{existingTasks}}/{{input}})时报错(0053 D27/§6)", () => {
+  test("a phase-append override missing a tier-1 marker (skeleton + {{taskIndex}}/{{existingTasks}}/{{input}}) errors (0053 D27/§6)", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      // 任务单元骨架齐全,但丢了 {{existingTasks}}(既有任务清单是追加契约的锚点)
+      // The task-unit skeleton is complete but {{existingTasks}} is gone (the existing-task list is the append contract's anchor)
       writeFileSync(
         join(overlay, "phase-append.md"),
-        ["追加规划: {{taskIndex}} 写 {{input}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>"].join("\n"),
+        ["Append planning: {{taskIndex}} writes {{input}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>"].join("\n"),
       )
       expect(() => usePromptLibrary(dir)).toThrow(/phase-append\.md is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/\{\{existingTasks\}\}/)
       usePromptLibrary(undefined)
-      // 骨架与 {{taskIndex}} 在,但丢了 {{input}}(追加必然针对规划输入,D23)
+      // Skeleton and {{taskIndex}} present, but {{input}} gone (appending always targets the planning input, D23)
       writeFileSync(
         join(overlay, "phase-append.md"),
-        ["追加规划: {{taskIndex}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{existingTasks}}"].join("\n"),
+        ["Append planning: {{taskIndex}}", "# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{existingTasks}}"].join("\n"),
       )
       expect(() => usePromptLibrary(dir)).toThrow(/\{\{input\}\}/)
-      // 齐备(骨架三节 + 索引行 + 三个槽位)则装载并渲染
+      // Complete (three skeleton sections + index line + three slots) → loads and renders
       writeFileSync(
         join(overlay, "phase-append.md"),
         [
-          "追加规划: 在 {{taskIndex}} 之后追加",
+          "Append planning: append after {{taskIndex}}",
           "# T-NNN: <task title>",
           "Phase: {{phaseId}}",
           "## Goal",
           "## Scope",
           "## Acceptance",
           "- [ ] T-NNN <task title>",
-          "既有: {{existingTasks}}",
-          "输入: {{input}}",
+          "Existing: {{existingTasks}}",
+          "Input: {{input}}",
         ].join("\n"),
       )
       usePromptLibrary(dir)
-      expect(renderTemplate("phase-append", { taskIndex: "docs/R-01/P02-implement/tasks.md", existingTasks: "- [pending] T-004: 甲", input: "乙" })).toContain("既有: - [pending] T-004: 甲")
+      expect(renderTemplate("phase-append", { taskIndex: "docs/R-01/P02-implement/tasks.md", existingTasks: "- [pending] T-004: A", input: "B" })).toContain("Existing: - [pending] T-004: A")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("_partials 覆盖按节名合并,未覆盖节保留内置;被覆盖节须保留 tier-1 协议标记", () => {
+  test("a _partials override merges by section name, non-overridden sections keep the built-in; an overridden section must keep its tier-1 protocol markers", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      // state-rule 是 tier-1 协议敏感节: 覆盖须保留 todo.md → done.md 锚点
-      // (CURRENT.md 镜像退役前写成的覆盖同样带着它,plans/0054 D3)
-      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则: CURRENT.md 与 todo.md → done.md 改名仍由 DRIVER 独占维护。")
+      // state-rule is a tier-1 protocol-sensitive section: an override must keep the
+      // todo.md → done.md anchor (overrides written before the CURRENT.md mirror
+      // retired carry it too, plans/0054 D3)
+      writeFileSync(join(overlay, "_partials.md"), "## state-rule\nCustom state rule: CURRENT.md and the todo.md → done.md renames remain maintained by the DRIVER alone.")
       usePromptLibrary(dir)
-      expect(renderText("{{> state-rule}}", {})).toBe("自定义状态规则: CURRENT.md 与 todo.md → done.md 改名仍由 DRIVER 独占维护。")
+      expect(renderText("{{> state-rule}}", {})).toBe("Custom state rule: CURRENT.md and the todo.md → done.md renames remain maintained by the DRIVER alone.")
       expect(renderText("{{> question-rule}}", {})).toContain("AUTO-DECISION")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("协议敏感片段节覆盖缺失 tier-1 标记时报错并指明节名(M1.3 双层化)", () => {
+  test("a protocol-sensitive partial-section override missing a tier-1 marker errors and names the section (M1.3 two-tier markers)", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "_partials.md"), "## state-rule\n自定义状态规则,丢了状态文件锚点。")
+      writeFileSync(join(overlay, "_partials.md"), "## state-rule\nCustom state rules, the state-file anchor dropped.")
       expect(() => usePromptLibrary(dir)).toThrow(/section state-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/todo\.md → done\.md/)
-      writeFileSync(join(overlay, "_partials.md"), "## eof-rule\n写完就行,不用终止符。")
+      writeFileSync(join(overlay, "_partials.md"), "## eof-rule\nJust write it out; no terminator needed.")
       expect(() => usePromptLibrary(dir)).toThrow(/section eof-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/<!-- auto: eof -->/)
-      writeFileSync(join(overlay, "_partials.md"), "## question-rule\n随意提问即可。")
+      writeFileSync(join(overlay, "_partials.md"), "## question-rule\nAsk questions freely.")
       expect(() => usePromptLibrary(dir)).toThrow(/section question-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/AUTO-RESOLVE/)
-      // 未列名的节(如 digest-rule)非协议敏感,覆盖免标记
-      writeFileSync(join(overlay, "_partials.md"), "## digest-rule\n自定义引用纪律。")
+      // An unlisted section (digest-rule, say) is not protocol-sensitive; overriding it needs no markers
+      writeFileSync(join(overlay, "_partials.md"), "## digest-rule\nCustom reference discipline.")
       usePromptLibrary(dir)
-      expect(renderText("{{> digest-rule}}", {})).toBe("自定义引用纪律。")
+      expect(renderText("{{> digest-rule}}", {})).toBe("Custom reference discipline.")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 })
 
-describe("动态注册(registerTemplate)", () => {
-  test("注册附加模板: 即时可渲染(含条件语法)并进入模板名清单", () => {
-    registerTemplate("shell-extra", "外壳附加提示词: {{topic}}{{#if strict}}(严格){{/if}}")
-    expect(renderTemplate("shell-extra", { topic: "参数推断", strict: true })).toBe("外壳附加提示词: 参数推断(严格)")
-    expect(renderTemplate("shell-extra", { topic: "参数推断" })).toBe("外壳附加提示词: 参数推断")
+describe("dynamic registration (registerTemplate)", () => {
+  test("registering an extra template: immediately renderable (conditional syntax included) and listed among the template names", () => {
+    registerTemplate("shell-extra", "Shell extra prompt: {{topic}}{{#if strict}} (strict){{/if}}")
+    expect(renderTemplate("shell-extra", { topic: "parameter inference", strict: true })).toBe("Shell extra prompt: parameter inference (strict)")
+    expect(renderTemplate("shell-extra", { topic: "parameter inference" })).toBe("Shell extra prompt: parameter inference")
     expect(promptTemplateNames()).toContain("shell-extra")
   })
 
-  test("注册跨 usePromptLibrary 重载保留;与内置同名时注册内容生效,目标目录覆盖仍最高优先", () => {
+  test("a registration survives usePromptLibrary reloads; on a built-in name the registered content wins, a target-directory override still outranks both", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
-      registerTemplate("shell-extra", "注册版: {{topic}}")
-      registerTemplate("dryrun", "外壳替换后的权限预检提示词")
+      registerTemplate("shell-extra", "Registered version: {{topic}}")
+      registerTemplate("dryrun", "The shell's replacement permission pre-check prompt")
       usePromptLibrary(dir)
-      expect(renderTemplate("shell-extra", { topic: "甲" })).toBe("注册版: 甲")
-      expect(renderTemplate("dryrun", {})).toBe("外壳替换后的权限预检提示词")
-      // 目标目录同名覆盖 > 注册 > 内置(同目录二次装载须先重置,装载幂等短路)
+      expect(renderTemplate("shell-extra", { topic: "A" })).toBe("Registered version: A")
+      expect(renderTemplate("dryrun", {})).toBe("The shell's replacement permission pre-check prompt")
+      // Same-name precedence: target-directory override > registration > built-in
+      // (loading the same directory a second time must reset first; loading short-circuits idempotently)
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "dryrun.md"), "用户覆盖版预检提示词")
+      writeFileSync(join(overlay, "dryrun.md"), "User-overridden pre-check prompt")
       usePromptLibrary(undefined)
       usePromptLibrary(dir)
-      expect(renderTemplate("dryrun", {})).toBe("用户覆盖版预检提示词")
-      expect(renderTemplate("shell-extra", { topic: "乙" })).toBe("注册版: 乙")
+      expect(renderTemplate("dryrun", {})).toBe("User-overridden pre-check prompt")
+      expect(renderTemplate("shell-extra", { topic: "B" })).toBe("Registered version: B")
     } finally {
       rmSync(dir, { recursive: true, force: true })
-      // 注册表面是模块级全局: 恢复内置 dryrun 文案,防跨测试文件污染(renderDryrun 等)
+      // The registry is a module-level global: restore the built-in dryrun copy to avoid
+      // cross-test-file pollution (renderDryrun and friends)
       registerTemplate("dryrun", readFileSync(tplDryrun, "utf8"))
     }
   })
 
-  test("带 markers 注册: 目标目录覆盖缺失协议行时报错", () => {
+  test("registering with markers: a target-directory override missing the protocol line errors", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
-      registerTemplate("shell-protocol", "外壳协议模板", ["结论: 通过"])
+      registerTemplate("shell-protocol", "Shell protocol template", ["verdict: pass"])
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "shell-protocol.md"), "覆盖版丢了协议行")
+      writeFileSync(join(overlay, "shell-protocol.md"), "Override dropped the protocol line")
       expect(() => usePromptLibrary(dir)).toThrow(/shell-protocol\.md is missing required protocol content/)
-      expect(() => usePromptLibrary(dir)).toThrow(/结论: 通过/)
-      writeFileSync(join(overlay, "shell-protocol.md"), "覆盖版保留协议行: 结论: 通过")
+      expect(() => usePromptLibrary(dir)).toThrow(/verdict: pass/)
+      writeFileSync(join(overlay, "shell-protocol.md"), "Override keeps the protocol line: verdict: pass")
       usePromptLibrary(dir)
-      expect(renderTemplate("shell-protocol", {})).toBe("覆盖版保留协议行: 结论: 通过")
+      expect(renderTemplate("shell-protocol", {})).toBe("Override keeps the protocol line: verdict: pass")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("空模板名 / 空内容 / _partials 整份注册拒绝(按节走 registerPartial)", () => {
-    expect(() => registerTemplate("", "内容")).toThrow("template name must not be empty")
+  test("an empty template name / empty content / registering _partials wholesale is rejected (per section use registerPartial)", () => {
+    expect(() => registerTemplate("", "content")).toThrow("template name must not be empty")
     expect(() => registerTemplate("shell-empty", "   ")).toThrow("template shell-empty must not be empty")
-    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow(/whole-file registration is not accepted/)
-    expect(() => registerTemplate("_partials", "## x\n内容")).toThrow(/registerPartial/)
+    expect(() => registerTemplate("_partials", "## x\ncontent")).toThrow(/whole-file registration is not accepted/)
+    expect(() => registerTemplate("_partials", "## x\ncontent")).toThrow(/registerPartial/)
   })
 })
 
-describe("片段按节注册(registerPartial,M1.3)", () => {
-  test("注册共享片段节: 即时可渲染并跨 usePromptLibrary 重载保留", () => {
+describe("per-section partial registration (registerPartial, M1.3)", () => {
+  test("registering a shared partial section: immediately renderable and kept across usePromptLibrary reloads", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
-      registerPartial("shell-note", "外壳注记: {{topic}}")
-      expect(renderText("{{> shell-note}}", { topic: "甲" })).toBe("外壳注记: 甲")
+      registerPartial("shell-note", "Shell note: {{topic}}")
+      expect(renderText("{{> shell-note}}", { topic: "A" })).toBe("Shell note: A")
       usePromptLibrary(dir)
-      expect(renderText("{{> shell-note}}", { topic: "乙" })).toBe("外壳注记: 乙")
+      expect(renderText("{{> shell-note}}", { topic: "B" })).toBe("Shell note: B")
     } finally {
       rmSync(dir, { recursive: true, force: true })
       usePromptLibrary(undefined)
-      registerPartial("shell-note", "复位")
+      registerPartial("shell-note", "reset")
       usePromptLibrary(undefined)
     }
   })
 
-  test("与内置节同名时注册内容生效,目标目录 _partials.md 覆盖仍最高优先", () => {
+  test("on a built-in section name the registered content wins, a target-directory _partials.md override still outranks it", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
       const builtin = renderText("{{> digest-rule}}", {})
-      registerPartial("digest-rule", "注册版引用纪律")
-      expect(renderText("{{> digest-rule}}", {})).toBe("注册版引用纪律")
+      registerPartial("digest-rule", "Registered reference discipline")
+      expect(renderText("{{> digest-rule}}", {})).toBe("Registered reference discipline")
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "_partials.md"), "## digest-rule\n用户覆盖版引用纪律。")
+      writeFileSync(join(overlay, "_partials.md"), "## digest-rule\nUser-overridden reference discipline.")
       usePromptLibrary(dir)
-      expect(renderText("{{> digest-rule}}", {})).toBe("用户覆盖版引用纪律。")
-      // 复位内置节文案,防跨测试文件污染
+      expect(renderText("{{> digest-rule}}", {})).toBe("User-overridden reference discipline.")
+      // Restore the built-in section copy to avoid cross-test-file pollution
       usePromptLibrary(undefined)
       registerPartial("digest-rule", builtin)
       usePromptLibrary(undefined)
@@ -486,28 +492,28 @@ describe("片段按节注册(registerPartial,M1.3)", () => {
     }
   })
 
-  test("带 markers 注册: 目标目录覆盖该节缺失标记时报错", () => {
+  test("registering with markers: a target-directory override missing the section's marker errors", () => {
     const dir = mkdtempSync(join(tmpdir(), "auto-tpl-"))
     try {
-      registerPartial("shell-rule", "外壳协议片段: KEEP-ME", ["KEEP-ME"])
+      registerPartial("shell-rule", "Shell protocol partial: KEEP-ME", ["KEEP-ME"])
       const overlay = join(dir, ".opencode", "auto", "prompts")
       mkdirSync(overlay, { recursive: true })
-      writeFileSync(join(overlay, "_partials.md"), "## shell-rule\n覆盖版丢了锚点。")
+      writeFileSync(join(overlay, "_partials.md"), "## shell-rule\nOverride dropped the anchor.")
       expect(() => usePromptLibrary(dir)).toThrow(/section shell-rule is missing required protocol content/)
       expect(() => usePromptLibrary(dir)).toThrow(/KEEP-ME/)
-      writeFileSync(join(overlay, "_partials.md"), "## shell-rule\n覆盖版保留 KEEP-ME 锚点。")
+      writeFileSync(join(overlay, "_partials.md"), "## shell-rule\nOverride keeps the KEEP-ME anchor.")
       usePromptLibrary(dir)
-      expect(renderText("{{> shell-rule}}", {})).toBe("覆盖版保留 KEEP-ME 锚点。")
+      expect(renderText("{{> shell-rule}}", {})).toBe("Override keeps the KEEP-ME anchor.")
     } finally {
       rmSync(dir, { recursive: true, force: true })
       usePromptLibrary(undefined)
-      registerPartial("shell-rule", "复位")
+      registerPartial("shell-rule", "reset")
       usePromptLibrary(undefined)
     }
   })
 
-  test("空片段名 / 空内容拒绝", () => {
-    expect(() => registerPartial("", "内容")).toThrow("partial name must not be empty")
+  test("an empty partial name / empty content is rejected", () => {
+    expect(() => registerPartial("", "content")).toThrow("partial name must not be empty")
     expect(() => registerPartial("shell-empty-partial", "   ")).toThrow("partial shell-empty-partial must not be empty")
   })
 })

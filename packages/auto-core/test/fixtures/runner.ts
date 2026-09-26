@@ -1,6 +1,9 @@
-// runner 系单测的共享夹具: 示例任务 task、fake client 族(fakeClient/sseClient/retryClient/idleStream)、
-// git 临时仓库助手(git/freshRepo)。拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运);
-// 放 fixtures/ 子目录——bun test 只收 *.test.ts,本文件不会被当测试跑。
+// Shared fixture for the runner-family tests: the sample task, the fake
+// client family (fakeClient/sseClient/retryClient/idleStream), the git
+// temporary-repository helpers (git/freshRepo). Split out of
+// test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move);
+// lives in fixtures/ — bun test only picks up *.test.ts, so this file is
+// never run as a test.
 
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -10,18 +13,20 @@ import { opencodeAgent } from "../../src/agent/opencode/client"
 import { planOf } from "./units"
 
 export const task = planOf(
-  `## T-001: 示例任务 [pending]
-正文。
+  `## T-001: sample task [pending]
+Body.
 `,
 ).tasks[0]!
 
-// 立即结束的事件流: 只发一个属于 sessionID 的 idle 事件(watch 据此正常结算)。
+// An event stream that settles immediately: emits only one idle event for
+// the sessionID (watch settles normally on it).
 async function* idleStream(sessionID: string) {
   yield { type: "session.idle", properties: { sessionID } }
 }
 
-// 先发一条带模型的 user 消息(服务端实际解析出的模型,驱动 attempt 的 ◈ 播报),
-// 再发 idle 正常收段。
+// Emits a user message carrying the model first (the model the server
+// actually resolved, which drives attempt's ◈ announcement), then the idle
+// event for a normal settle.
 export async function* modelThenIdle(sessionID: string, model: string) {
   const [providerID, modelID] = model.split("/")
   yield {
@@ -33,19 +38,24 @@ export async function* modelThenIdle(sessionID: string, model: string) {
   yield { type: "session.idle", properties: { sessionID } }
 }
 
-// 最小 fake client(仅覆盖 runner 用到的表面;缺省行为 = 全部成功):
-// calls 记录 fork/create 调用,updates 记录会话改名参数。
+// Minimal fake client (covers only the surface runner uses; default
+// behavior = everything succeeds): calls records fork/create calls, updates
+// records the session-rename parameters.
 export function fakeClient(
   over: {
     fork?: (sessionID: string) => unknown
     get?: (sessionID: string) => unknown
     prompt?: () => unknown
     messages?: (sessionID: string) => unknown
-    // 事件流当前跟随的会话(未新建时的 idle 目标): 复用/恢复接管路径不调用
-    // create,idle 事件须发给链上既有会话,否则 watch 收不到结束事件。
+    // The session the event stream currently follows (the idle target when
+    // nothing new is created): the reuse/recovery takeover paths never call
+    // create, so idle events must go to an existing session on the chain or
+    // watch sees no end event.
     current?: string
-    // 自定义事件流(缺省为单 idle 正常结束流):收当前会话 id,便于测试发定向事件;
-    // () => AsyncIterable 亦可(参数少者可赋给参数多者)。
+    // Custom event stream (default = a single-idle normal-end stream):
+    // receives the current session id so tests can emit targeted events;
+    // () => AsyncIterable works too (a function with fewer parameters is
+    // assignable to one with more).
     events?: (sessionID: string) => AsyncIterable<unknown>
   } = {},
 ) {
@@ -53,19 +63,25 @@ export function fakeClient(
     forks: [] as string[],
     creates: 0,
     updates: [] as { id: string; title: string }[],
-    // 记录每次 prompt 下发参数,供模型路由断言(model 缺省时该属性不存在)。
+    // Records each prompt's dispatch parameters, for model-routing
+    // assertions (the model property is absent when unset).
     prompts: [] as { sessionID: string; agent?: string; model?: { providerID: string; modelID: string }; parts: unknown[] }[],
-    // 每次 prompt 的 options.signal(H7: 探针判半开联动中止 POST 的断言点)。
+    // Each prompt's options.signal (H7: the assertion point for the
+    // probe-decides-half-open → abort-POST linkage).
     promptSignals: [] as (AbortSignal | undefined)[],
-    // 记录 session.abort 调用的会话 id,供提前结算/断流清理断言(D.2 降级前必 abort)。
+    // Records the session ids of session.abort calls, for early-settle /
+    // stream-teardown assertions (D.2: abort before degrading).
     aborts: [] as string[],
-    // 提问答复/驳回(auto-resolve T-005): replies 记每次答复文案,rejects 记驳回的
-    // requestID(重复提问走驳回 + abort)。
+    // Question replies/rejections (auto-resolve T-005): replies records
+    // each reply text, rejects records the rejected requestIDs (a repeated
+    // question goes through reject + abort).
     replies: [] as string[],
     rejects: [] as string[],
-    // 每次 fork 传入的分叉锚点(undefined = 整份分叉),供定版点分叉断言。
+    // The fork anchor passed on each fork (undefined = fork the whole
+    // history), for frozen-point fork assertions.
     forkAnchors: [] as (string | undefined)[],
-    // 每次 promptAsync(steer)下发的文本,供截断续跑/交接 steer 断言。
+    // The text dispatched on each promptAsync (steer), for
+    // truncation-resume / handover-steer assertions.
     steers: [] as string[],
   }
   let seq = 0
@@ -81,7 +97,8 @@ export function fakeClient(
         calls.forks.push(params.sessionID)
         calls.forkAnchors.push(params.messageID)
         const result = over.fork ? over.fork(params.sessionID) : { data: { id: `ses_fork_${calls.forks.length}` } }
-        // fork 出的副本是后续 prompt 的下发目标,事件流跟随它(与 create 同规则)。
+        // The forked copy is the dispatch target of later prompts; the
+        // event stream follows it (same rule as create).
         const id = (result as { data?: { id?: string } }).data?.id
         if (id) lastCreated = id
         return result
@@ -126,10 +143,14 @@ export function fakeClient(
   return { client: opencodeAgent(sdk), calls, sdk }
 }
 
-// 带 signal 透传的 fake 订阅: 记录 subscribe 收到的 AbortSignal;事件流先发一个
-// idle 事件(watch 据此正常结算),finally 记录收尾——真实 SDK 生成器在消费方
-// break 时经 return() 走 finally(仅 releaseLock 不断连接),由 driver 显式 abort
-// 关闭底层连接,本测试断言的正是"信号已透传且各退出路径必然 abort"。
+// Fake subscription with signal pass-through: records the AbortSignal
+// subscribe received; the event stream emits one idle event first (watch
+// settles normally on it), finally records the teardown — the real SDK
+// generator goes through return() into finally on the consumer's break
+// (releasing the lock only, not the connection); the driver closes the
+// underlying connection with an explicit abort. What this test asserts is
+// exactly "the signal was passed through and every exit path necessarily
+// aborts".
 export function sseClient(
   id: string,
   over: { prompt?: () => unknown } = {},
@@ -158,17 +179,23 @@ export function sseClient(
   return { client: opencodeAgent(sdk), state }
 }
 
-// 构造一个只发 session.error(可选 isRetryable)+ session.idle 的事件流,喂给
-// fakeClient 同款的 subscribe——outcomes 按 create/fork 调用顺序逐个消费,
-// 决定该次新建/分叉出的会话本轮是否报错。
+// Builds an event stream that emits only session.error (optionally
+// isRetryable) + session.idle, fed to the same subscribe surface as
+// fakeClient — outcomes are consumed one by one in create/fork call order,
+// deciding whether the session created/forked in that round reports an
+// error.
 export type Outcome = "error-retryable" | "error-fatal" | "ok"
-// used: 与 outcomes 同序的"该次会话末端上下文用量"(给数字则每次会话同额),不给则为
-// 0(纯报错桩)。
-// 经 message.updated 事件注入,与真实链路同一条计量路径(input + cache.read)。
-// message: 报错文案,决定 classifySessionError 的归类 —— 缺省 "usage limit" 落 quota
-// (配额支的既有用例据此),传 transient/unknown 文案则走重试阶梯。
+// used: the "context usage at the end of that session" in the same order as
+// outcomes (a number means every session gets the same amount); absent
+// means 0 (a pure error stub).
+// Injected through message.updated events, the same metering path as the
+// real chain (input + cache.read).
+// message: the error text, which decides how classifySessionError sorts it
+// — the default "usage limit" falls into quota (the existing quota-branch
+// cases rely on that); a transient/unknown text takes the retry ladder.
 export function retryClient(outcomes: Outcome[], used: number[] | number = [], message = "usage limit") {
-  // prompts 记每次下发参数(model 缺省时该属性不存在),供模型路由/降级断言。
+  // prompts records each dispatch's parameters (the model property is
+  // absent when unset), for model-routing / failover assertions.
   const calls = { forks: [] as string[], creates: 0, prompts: [] as { sessionID: string; model?: { providerID: string; modelID: string }; parts: unknown[] }[] }
   const queue: unknown[] = []
   let index = 0
@@ -234,7 +261,7 @@ export function retryClient(outcomes: Outcome[], used: number[] | number = [], m
 export async function git(dir: string, ...args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`git ${args.join(" ")} 退出码 ${code}: ${err || out}`)
+  if (code !== 0) throw new Error(`git ${args.join(" ")} exit code ${code}: ${err || out}`)
   return out
 }
 

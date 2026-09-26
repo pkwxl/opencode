@@ -1,7 +1,8 @@
-// src/session.ts 的单测(经 runSession 驱动): 会话链复用开关、错误重试阶梯、
-// 等待-探测环(不可重试/阶梯耗尽/候选用尽一律不退出)、attempt 模型注入接线、
-// 配额降级 failover、failback 粒度与 /failback 覆写。
-// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
+// Unit tests for src/session.ts (driven through runSession): the session-chain
+// reuse switch, the error retry ladder, the wait-and-probe loop (non-retryable /
+// ladder exhausted / candidates exhausted never exit), attempt's model-injection
+// wiring, quota failover, failback scopes and the /failback override.
+// Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -23,219 +24,221 @@ import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
 const key = (letter: PhaseLetter) => ({ id: "R-01.P01", entry: phaseTypeOfLetter(letter) })
 
-// ---- 会话链复用(OPENCODE_AUTO_REUSE_SESSION,缺省 off)----
+// ---- Session-chain reuse (OPENCODE_AUTO_REUSE_SESSION, default off) ----
 
-describe("会话链复用开关(OPENCODE_AUTO_REUSE_SESSION)", () => {
+describe("session-chain reuse switch (OPENCODE_AUTO_REUSE_SESSION)", () => {
   const REUSE_OFF = parseSwitches({})
   const REUSE_ON = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
-  // 复用阈值(占比 <50%、已用 <cap/2、闲置 ≤5 分钟)全部满足的链。
+  // A chain that satisfies every reuse threshold (pct <50%, used <cap/2, idle ≤5 minutes).
   const reusable = (): SessionChain => ({ id: "ses_new_1", pct: 10, used: 100, at: Date.now() })
 
-  test("off(缺省): 阈值全部满足也开新会话", async () => {
+  test("off (default): opens a new session even when every threshold is satisfied", async () => {
     const { client, calls } = fakeClient({ current: "ses_new_1" })
     const chain = reusable()
-    expect((await runSession(client, task, "提示词", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    expect((await runSession(client, task, "prompt text", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
     expect(calls.creates).toBe(1)
   })
 
-  test("on: 阈值满足即复用链上会话,不新建", async () => {
+  test("on: reuses the session on the chain once the thresholds are met, no new session", async () => {
     const { client, calls } = fakeClient({ current: "ses_new_1" })
     const chain = reusable()
-    expect((await runSession(client, task, "提示词", {}, chain, undefined, undefined, REUSE_ON)).type).toBe("idle")
+    expect((await runSession(client, task, "prompt text", {}, chain, undefined, undefined, REUSE_ON)).type).toBe("idle")
     expect(calls.creates).toBe(0)
     expect(chain.id).toBe("ses_new_1")
   })
 
-  test("◈ 模型播报: 复用同会话同模型不重复,新会话(复用关)每次播报", async () => {
+  test("◈ model announcement: not repeated when the same session is reused with the same model; announced for every new session (reuse off)", async () => {
     const lines: string[] = []
     const orig = console.log
     console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
     try {
-      // 未设路由: 播报来自事件流里 user 消息携带的服务端实际解析模型。
+      // No route set: the announcement comes from the model the server actually resolved, carried by a user message in the event stream.
       const fake = fakeClient({ current: "ses_new_1", events: (id) => modelThenIdle(id, "prov/default") })
       const chain = reusable()
-      await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, REUSE_ON)
-      // fake 事件流收段后 pct=100(上限未知);复位回复用阈值内,第二个提示词才真复用。
+      await runSession(fake.client, task, "prompt text", {}, chain, undefined, undefined, REUSE_ON)
+      // After the fake event stream settles pct=100 (limit unknown); reset back inside the reuse thresholds so only the second prompt truly reuses.
       Object.assign(chain, { pct: 10, used: 100, at: Date.now() })
-      await runSession(fake.client, task, "提示词2", {}, chain, undefined, undefined, REUSE_ON)
-      await runSession(fake.client, task, "提示词3", {}, chain, undefined, undefined, REUSE_OFF)
+      await runSession(fake.client, task, "prompt text 2", {}, chain, undefined, undefined, REUSE_ON)
+      await runSession(fake.client, task, "prompt text 3", {}, chain, undefined, undefined, REUSE_OFF)
     } finally {
       console.log = orig
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
-    // 两次复用同一会话只播报一次;复用关后新开会话再播报一次(同模型)。
+    // Reusing the same session twice announces once; with reuse off the new session announces once more (same model).
     expect(shown.length).toBe(2)
     expect(shown[0]).toContain("prov/default")
     expect(shown[0]).toContain("server resolved")
   })
 
-  test("中断恢复接管(链上有会话且 note 待注入): 开关 off、阈值全不满足也进原会话;说明用后即清", async () => {
+  test("interruption-recovery takeover (chain holds a session and a note pending injection): re-enters the original session even with the switch off and every threshold unmet; the note clears after use", async () => {
     const { client, calls } = fakeClient({ current: "ses_interrupted" })
     const chain: SessionChain = {
       id: "ses_interrupted",
       pct: 80,
       used: 90_000,
       at: Date.now() - 10 * 60_000,
-      note: "[driver] 中断后的继续",
+      note: "[driver] continuation after interruption",
     }
-    expect((await runSession(client, task, "提示词", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    expect((await runSession(client, task, "prompt text", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
     expect(calls.creates).toBe(0)
     expect(chain.id).toBe("ses_interrupted")
     expect(chain.note).toBeUndefined()
-    // 恢复说明已消费: 下一个提示词回归常规规则(off → 新会话)
-    expect((await runSession(client, task, "下一个提示词", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
+    // The recovery note is consumed: the next prompt falls back to the normal rules (off → new session)
+    expect((await runSession(client, task, "the next prompt", {}, chain, undefined, undefined, REUSE_OFF)).type).toBe("idle")
     expect(calls.creates).toBe(1)
   })
 })
 
-// ---- 会话错误重试(plans/0015-session-error-retry-plan.md;2026-09-16 起耗尽不再阻塞)----
+// ---- Session error retry (plans/0015-session-error-retry-plan.md; since 2026-09-16 exhaustion no longer blocks) ----
 
-describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测环", () => {
-  // 阶梯夹具: 两次重试、零等待,探测间隔也压成零(等待-探测环的轮次在单测里即时)。
+describe("session error retry: isRetryable-driven fork-retry / wait-and-probe loop", () => {
+  // Ladder fixture: two retries, zero waits, and the probe interval squeezed to zero as well (the wait-and-probe loop's rounds are instant in unit tests).
   const NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
-  test("isRetryable:false: 不再直接阻塞——等待后用全新临时会话探测,恢复后 fork 被中断的会话重发任务", async () => {
-    // 依次: 任务下发即配额致命 → 探测仍致命 → 探测成功 → 恢复重发成功。
+  test("isRetryable:false: no longer blocks outright — waits, probes with a fresh temporary session, and after recovery forks the interrupted session and re-dispatches the task", async () => {
+    // In order: the dispatch hits a fatal quota error → the probe is still fatal → the probe succeeds → the recovery re-dispatch succeeds.
     const { client, calls } = retryClient(["error-fatal", "error-fatal", "ok", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
-    // 探测走全新临时会话(ses_new_2/3),不往被中断的会话(ses_new_1)里塞探测轮次;
-    // 恢复后从被中断的会话分叉副本重发任务。
+    // Probes go through fresh temporary sessions (ses_new_2/3), never pushing probe rounds into the interrupted session (ses_new_1);
+    // after recovery the task is re-dispatched from a forked copy of the interrupted session.
     expect(calls.forks).toEqual(["ses_new_1"])
     expect(calls.creates).toBe(3)
     expect(calls.prompts.map((p) => p.sessionID)).toEqual(["ses_new_1", "ses_new_2", "ses_new_3", "ses_fork_1"])
-    // 探测提示词是极小探测文案,不是任务提示词。
+    // The probe prompt is a minimal probe text, not the task prompt.
     for (const probe of [calls.prompts[1]!, calls.prompts[2]!]) {
       expect((probe.parts[0] as { text: string }).text).toContain("Service availability probe")
     }
-    // 恢复重发落在分叉副本上,带一次性恢复说明。
+    // The recovery re-dispatch lands on the forked copy, carrying a one-time recovery note.
     const text = (calls.prompts[3]!.parts[0] as { text: string }).text
-    expect(text).toContain("提示词")
+    expect(text).toContain("prompt text")
     expect(text).toContain("[DRIVER]")
     expect(text).toContain("service has recovered")
     expect(chain.note).toBeUndefined()
     expect(chain.id).toBe("ses_fork_1")
   })
 
-  test("探测持续失败期间不 fork、不重发任务(每轮都是新临时会话)", async () => {
-    // 致命 → 探测致命 ×2 → 探测成功 → 恢复重发成功;探测失败轮次里绝无 fork/任务重发。
+  test("while probes keep failing: no fork, no task re-dispatch (every round is a fresh temporary session)", async () => {
+    // Fatal → probe fatal ×2 → probe succeeds → recovery re-dispatch succeeds; the probe-failure rounds contain no fork or task re-dispatch at all.
     const { client, calls } = retryClient(["error-fatal", "error-fatal", "error-fatal", "ok", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_new_1"])
     expect(calls.prompts.length).toBe(5)
   })
 
-  test("可重试错误 + chain.id 已有真实累计上下文: fork 原会话重试,成功即晋升为 chain.id", async () => {
+  test("retryable error + chain.id already holds real accumulated context: retries by forking the original session, promoted to chain.id on success", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_real"])
     expect(calls.creates).toBe(1)
     expect(chain.id).toBe("ses_fork_1")
   })
 
-  test("fork 副本重试仍失败: 丢弃副本,从同一个原会话重新 fork(不是对失败副本再 fork)", async () => {
+  test("forked-copy retry fails again: discards the copy and re-forks the same original session (not a fork of the failed copy)", async () => {
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"])
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_real", "ses_real"])
     expect(chain.id).toBe("ses_fork_2")
   })
 
-  test("chain.id 本为空(首条消息即失败): 无值得保护的内容,维持现状开空白新会话", async () => {
+  test("chain.id empty from the start (the first message fails): nothing worth protecting, keeps the current behavior of opening a blank new session", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual([])
     expect(calls.creates).toBe(2)
   })
 
-  // ---- 保住最值钱的会话(provider-timeout-analysis-20260912.md §8.4)----
+  // ---- Keep the most valuable session (provider-timeout-analysis-20260912.md §8.4) ----
 
-  test("chain.id 为空但失败会话已积累上下文(子任务形态): 分叉失败会话本体,不开空白会话", async () => {
-    // 子任务只有一个提示词回合,失败那一刻链上必然无会话——老策略在此开空白
-    // 新会话,把会话里已核实的研究成果整份扔掉,重开后在同一点再撞墙。
+  test("chain.id empty but the failed session has accumulated context (the subtask shape): forks the failed session itself, no blank session", async () => {
+    // A subtask has a single prompt round, so at the moment of failure the chain necessarily holds no session — the old
+    // strategy opened a blank new session here, throwing away the session's verified research wholesale and hitting the
+    // same wall again at the same point after the restart.
     const { client, calls } = retryClient(["error-retryable", "ok"], [168_000])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_new_1"])
     expect(calls.creates).toBe(1)
     expect(chain.id).toBe("ses_fork_1")
   })
 
-  test("失败会话用量高于链上原会话: 取失败会话(价值 = 已积累上下文)", async () => {
+  test("failed session's usage above the chain's original session: takes the failed session (value = accumulated context)", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"], [50_000])
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_new_1"])
   })
 
-  test("等待-探测环恢复时承接失败会话的前缀用量(阶梯耗尽后经探测恢复)", async () => {
-    // 三次全失败(每个会话 50k 用量)→ 阶梯耗尽进入等待-探测 → 探测成功 → fork
-    // 最值钱的失败会话(ses_fork_2,50k)→ 副本承接前缀用量,2×cap 交接阈值按
-    // 前缀 + 新增计算。
+  test("wait-and-probe recovery carries over the failed session's prefix usage (recovered via probe after ladder exhaustion)", async () => {
+    // Three failures in a row (50k usage per session) → ladder exhausted, enters wait-and-probe → probe succeeds → forks
+    // the most valuable failed session (ses_fork_2, 50k) → the copy carries the prefix usage, and the 2×cap handover
+    // threshold counts prefix + new work.
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok", "ok"], 50_000)
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(chain.used).toBe(50_000)
     expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1", "ses_fork_2"])
     expect(calls.creates).toBe(2)
   })
 
-  test("失败会话用量低于链上原会话: 仍取原会话(刚失败不等于更值钱)", async () => {
+  test("failed session's usage below the chain's original session: still takes the original session (having just failed does not mean more valuable)", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"], [800])
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_real"])
   })
 
-  test("链上无会话可分叉但基点存活: 从基点重新播种,赚回暖前缀而非纯冷启动", async () => {
+  test("no session on the chain to fork but the fork base is alive: re-seeds from the base, regaining the warm prefix instead of a pure cold start", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0, forkBase: "ses_base" }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_base"])
     expect(calls.creates).toBe(1)
     expect(chain.forkBase).toBe("ses_base")
   })
 
-  test("失败会话为纯报错桩(用量 0)且无基点: 维持空白新会话,不把报错桩背进副本", async () => {
+  test("failed session is a pure error stub (0 usage) with no fork base: keeps the blank new session, does not carry the error stub into the copy", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(calls.forks).toEqual([])
   })
 
-  test("重试成功后 chain.failed 清空,不残留到下一轮", async () => {
+  test("chain.failed clears after a successful retry, leaving no residue into the next round", async () => {
     const { client } = retryClient(["error-retryable", "ok"], [9000])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(chain.failed).toBeUndefined()
   })
 
-  test("fork 副本 0-token 即死(配额连败): 不顶替有内容的失败会话,后续每轮仍从它重新分叉", async () => {
-    // 2026-09-17 virtio T-005 现场: 交接后续跑会话跑到 41.3k 遇配额连败——重试 1
-    // fork 失败会话(41.3k),副本下发即死(0 tokens);旧簿记把 chain.failed 顶替成
-    // 该 0-token 副本,重试 2 起失败会话引用丢失,退化为基点/空白冷播种。修复后:
-    // 0-token 报错桩不进候选也不顶替记录,每一轮重试都重新 fork 那 41.3k 会话。
+  test("forked copy dies at 0 tokens (repeated quota failures): does not displace the contentful failed session; every later round re-forks it instead", async () => {
+    // 2026-09-17 virtio T-005 field incident: the post-handover continuation session reached 41.3k and hit repeated quota
+    // failures — retry 1 forked the failed session (41.3k) and the copy died on dispatch (0 tokens); the old bookkeeping
+    // displaced chain.failed with that 0-token copy, so from retry 2 on the failed-session reference was lost and it
+    // degraded to base/blank cold seeding. After the fix: a 0-token error stub neither enters the candidates nor
+    // displaces the record, and every retry round re-forks that 41.3k session.
     const LADDER3 = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], [41_300])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER3)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, LADDER3)
     expect(result.type).toBe("idle")
-    // 三次重试全部从最初那个 41.3k 失败会话重新分叉,不开空白新会话。
+    // All three retries re-fork the original 41.3k failed session; no blank new session is opened.
     expect(calls.forks).toEqual(["ses_new_1", "ses_new_1", "ses_new_1"])
     expect(calls.creates).toBe(1)
-    // 第 2/3 次重发仍判「上下文完整」档: 只解释重发,不带现场核对说明。
+    // Re-dispatches 2/3 are still judged "context complete": they only explain the re-dispatch, without the worktree-check note.
     for (const p of [calls.prompts[2]!, calls.prompts[3]!]) {
       const text = (p.parts[0] as { text: string }).text
       expect(text).toContain("being retried now")
@@ -244,44 +247,46 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(chain.failed).toBeUndefined()
   })
 
-  test("fork 副本跑出内容后再失败(used > 0): 正常顶替记录(副本是旧记录的严格超集)", async () => {
-    // 副本带着旧前缀又跑出了新内容,失败时用量更大——记录应更新到副本,
-    // 下一轮从副本分叉而非回到旧会话。
+  test("forked copy produces content before failing again (used > 0): displaces the record normally (the copy is a strict superset of the old record)", async () => {
+    // The copy carried the old prefix and produced new content on top, so its usage is larger at failure — the record
+    // should move to the copy, and the next round forks the copy instead of going back to the old session.
     const LADDER3 = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "ok"], [41_300, 52_000])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER3)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, LADDER3)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1"])
     expect(calls.creates).toBe(1)
   })
 
-  // ---- 重试说明: 重发同一提示词必须带一次性说明 ----
-  // 两档按「接管的会话是否带着本次尝试的上下文」区分: 分叉失败会话本体(上下文完整)
-  // 只解释"重发不是重复要求"; 回退空白新会话 / 分叉原会话(本次尝试已落盘的部分产出
-  // 不在新会话上下文里)还须引导核对工作区,防新会话对着半成品从头重做——与跨运行
-  // 恢复 resumeNote 的现场核对同一口径。
+  // ---- Retry notes: re-dispatching the same prompt must carry a one-time note ----
+  // The two tiers are distinguished by "whether the session being taken over carries this attempt's context": forking the
+  // failed session itself (context complete) only explains "the re-dispatch is not a repeated request"; falling back to a
+  // blank new session / forking the original session (this attempt's already-written partial output is not in the new
+  // session's context) must additionally guide checking the worktree, so the new session does not redo the half-finished
+  // work from scratch — the same basis as the cross-run recovery resumeNote's worktree check.
 
-  test("分叉失败会话本体重试: 重发带一次性说明;note 与 pending 并存时接管的是副本而非复用原会话", async () => {
+  test("retry by forking the failed session itself: the re-dispatch carries a one-time note; with note and pending coexisting, what is taken over is the copy, not a reuse of the original session", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"], 50_000)
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
-    // 失败会话(50k)价值高于链上原会话(5k),分叉自 ses_new_1;chain.id(原会话)刻意
-    // 保留供下次重试重新分叉,故 note+id+pending 三者并存——要接管的是 pending 副本。
+    // The failed session (50k) is worth more than the chain's original session (5k), so the fork comes from ses_new_1;
+    // chain.id (the original session) is deliberately kept for the next retry's re-fork, hence note+id+pending all
+    // coexist — what must be taken over is the pending copy.
     expect(calls.forks).toEqual(["ses_new_1"])
     expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
-    expect(text).toContain("提示词")
+    expect(text).toContain("prompt text")
     expect(text).toContain("being retried now")
     expect(text).not.toContain("git status")
     expect(chain.note).toBeUndefined()
   })
 
-  test("失败会话为纯报错桩、分叉原会话重试: 原会话不含本次尝试的上下文,带现场核对说明", async () => {
+  test("failed session is a pure error stub, retry forks the original session: the original session lacks this attempt's context, so the worktree-check note is attached", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { id: "ses_real", pct: 10, used: 5000, at: Date.now() }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual(["ses_real"])
     expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
@@ -290,10 +295,10 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(text).toContain("without redoing")
   })
 
-  test("链上无可分叉内容回退空白新会话: 重发带现场核对说明(工作区可能有部分产出)", async () => {
+  test("nothing forkmable on the chain, falls back to a blank new session: the re-dispatch carries the worktree-check note (the worktree may hold partial output)", async () => {
     const { client, calls } = retryClient(["error-retryable", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.forks).toEqual([])
     expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
@@ -303,41 +308,41 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     expect(chain.note).toBeUndefined()
   })
 
-  // ---- 重试阶梯与等待-探测环(provider-timeout-analysis-20260912.md §8.4)----
+  // ---- Retry ladder and wait-and-probe loop (provider-timeout-analysis-20260912.md §8.4) ----
 
-  test("阶梯次数由 waits 的元素个数决定,不再是写死的 RETRIES", async () => {
-    // 0,0,0 = 三次重试 → 连同首次共四次尝试,第四次仍失败才进入等待-探测环;
-    // 此处第四次成功,全程不进探测。
+  test("ladder count is decided by the number of elements in waits, no longer a hardcoded RETRIES", async () => {
+    // 0,0,0 = three retries → four attempts including the first; only a fourth failure enters the wait-and-probe loop;
+    // here the fourth succeeds, so probing never happens.
     const three = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0,0", [SWITCH_ENV.recoveryWait]: "0" })
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, three)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, three)
     expect(result.type).toBe("idle")
     expect(calls.creates).toBe(4)
   })
 
-  test("退避真的等待: waits 的分钟数落到实际睡眠上", async () => {
-    // 0.002 分钟 = 120ms,足以与零等待区分又不拖慢测试。
+  test("backoff truly waits: waits' minutes land on actual sleep", async () => {
+    // 0.002 minutes = 120ms, enough to tell apart from a zero wait without slowing the test.
     const slow = parseSwitches({ [SWITCH_ENV.retryWaits]: "0.002", [SWITCH_ENV.recoveryWait]: "0" })
     const { client } = retryClient(["error-retryable", "ok"])
     const began = Date.now()
-    const result = await runSession(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, slow)
+    const result = await runSession(client, task, "prompt text", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, slow)
     expect(result.type).toBe("idle")
     expect(Date.now() - began).toBeGreaterThanOrEqual(100)
   })
 
-  test("等待-探测环的间隔真的睡眠: recoveryWait 的分钟数落到实际睡眠上", async () => {
-    // 0.002 分钟 = 120ms;致命错误直达等待-探测环,探测成功即恢复。
+  test("the wait-and-probe loop's interval truly sleeps: recoveryWait's minutes land on actual sleep", async () => {
+    // 0.002 minutes = 120ms; a fatal error goes straight to the wait-and-probe loop, and a successful probe recovers.
     const slow = parseSwitches({ [SWITCH_ENV.recoveryWait]: "0.002" })
     const { client } = retryClient(["error-fatal", "ok", "ok"])
     const began = Date.now()
-    const result = await runSession(client, task, "提示词", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, slow)
+    const result = await runSession(client, task, "prompt text", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, slow)
     expect(result.type).toBe("idle")
     expect(Date.now() - began).toBeGreaterThanOrEqual(100)
   })
 
-  test("阶梯耗尽: 不再等人工裁决,直接进入等待-探测环(interactive 全程不被询问)", async () => {
-    // 三次尝试用尽阶梯 → 等待-探测(探测 1 仍失败、探测 2 成功)→ 恢复重发成功。
+  test("ladder exhausted: no longer waits for a human verdict, goes straight into the wait-and-probe loop (interactive is never asked)", async () => {
+    // Three attempts exhaust the ladder → wait-and-probe (probe 1 still fails, probe 2 succeeds) → recovery re-dispatch succeeds.
     let asked = 0
     const silent: Interactive = {
       attach() {},
@@ -349,28 +354,28 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
     }
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", { interactive: silent }, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", { interactive: silent }, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(asked).toBe(0)
-    // 三次阶梯尝试(全任务提示词)+ 两次探测 + 一次恢复重发 = 6 次下发。
+    // Three ladder attempts (all full task prompts) + two probes + one recovery re-dispatch = 6 dispatches.
     expect(calls.prompts.length).toBe(6)
     expect(calls.prompts.filter((p) => (p.parts[0] as { text: string }).text.includes("Service availability probe")).length).toBe(2)
   })
 
-  test("waits=off: 首次失败即进等待-探测环,不做阶梯重试", async () => {
+  test("waits=off: the first failure goes straight to the wait-and-probe loop, no ladder retries", async () => {
     const none = parseSwitches({ [SWITCH_ENV.retryWaits]: "off", [SWITCH_ENV.recoveryWait]: "0" })
     const { client, calls } = retryClient(["error-retryable", "ok", "ok"])
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, none)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, none)
     expect(result.type).toBe("idle")
-    // 首次失败 → 探测成功 → 空白新会话重发(链上无可分叉内容),共 3 次下发。
+    // First failure → probe succeeds → blank new session re-dispatch (nothing forkmable on the chain), 3 dispatches total.
     expect(calls.prompts.length).toBe(3)
     expect(calls.forks).toEqual([])
   })
 
-  test("会话故障不退出: 创建/下发失败与 SDK 抛出的异常同样进入重试机制", async () => {
-    // prompt 首次抛异常(SDK 层面)、第二次返回错误体、第三次成功——三次都是
-    // 「会话故障」面,一律重试,绝不向上抛 blocked。
+  test("session failures do not exit: create/dispatch failures and SDK-thrown exceptions enter the retry mechanism alike", async () => {
+    // prompt throws on the first call (SDK layer), returns an error body on the second, succeeds on the third — all three
+    // are "session failure" faces, retried uniformly, never escalating to blocked.
     let n = 0
     const { client, calls, sdk } = fakeClient()
     const raw = sdk as unknown as { session: { prompt: (p: unknown) => Promise<unknown> } }
@@ -382,20 +387,20 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
       return {}
     }
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_WAIT)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_WAIT)
     expect(result.type).toBe("idle")
     expect(calls.prompts.length).toBe(3)
     expect(calls.creates).toBe(3)
   })
 
-  test("可重试的中间失败态不落盘 progress.json,不顶替之前的真实记录(等待期间亦然)", async () => {
+  test("retryable intermediate failure states do not write progress.json and do not displace the earlier real record (during the wait likewise)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-remember-"))
     try {
       const real: Awaited<ReturnType<typeof recallProgress>> = { task: "T-001", session: "ses_real_old", at: 1, active: true, phase: { kind: "decompose" } }
       await saveProgress(dir, real!)
-      // 阶梯 0,0: 前三次尝试全部可重试失败 → 进入等待-探测(探测 1 仍失败)。
-      // 在探测会话建立的瞬间窥探 progress.json: 应回复为 prior 真实记录,而不是
-      // 被任何失败会话(含探测本身)的认领顶替。
+      // Ladder 0,0: the first three attempts all fail retryably → enter wait-and-probe (probe 1 still fails).
+      // Peek at progress.json the instant a probe session is established: it must still be the prior real record, not
+      // displaced by any failed session's claim (the probe itself included).
       const seen: (string | undefined)[] = []
       const { client, sdk } = retryClient(["error-retryable", "error-retryable", "error-retryable", "error-fatal", "ok", "ok"])
       const raw = sdk as unknown as { session: { create: () => Promise<unknown> } }
@@ -406,20 +411,20 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
         return made
       }
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "decompose" } }
-      const result = await runSession(client, task, "提示词", { dir }, chain, undefined, undefined, NO_WAIT)
+      const result = await runSession(client, task, "prompt text", { dir }, chain, undefined, undefined, NO_WAIT)
       expect(result.type).toBe("idle")
-      // 探测会话(create #4/#5)建立时,记录仍是 prior 的 ses_real_old。
+      // When the probe sessions (create #4/#5) are established, the record is still the prior ses_real_old.
       expect(seen[3]).toBe("ses_real_old")
       expect(seen[4]).toBe("ses_real_old")
-      // 全程结束后: 记录认领的是恢复重发成功的会话(探测失败轮的空白新会话,因链上
-      // 无可分叉内容),而非任何失败会话或探测会话。
+      // After the whole run: the record claims the session whose recovery re-dispatch succeeded (the probe-failure
+      // round's blank new session, since nothing on the chain is forkmable), not any failed or probe session.
       expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_new_6")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("不可重试的故障: 等待期间 progress.json 正常认领被中断的会话(它是恢复点)", async () => {
+  test("non-retryable failure: during the wait progress.json claims the interrupted session normally (it is the recovery point)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-remember-fatal-"))
     try {
       const seen: (string | undefined)[] = []
@@ -432,11 +437,11 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
         return made
       }
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "decompose" } }
-      const result = await runSession(client, task, "提示词", { dir }, chain, undefined, undefined, NO_WAIT)
+      const result = await runSession(client, task, "prompt text", { dir }, chain, undefined, undefined, NO_WAIT)
       expect(result.type).toBe("idle")
-      // 首次致命失败后、探测会话建立时: 记录认领被中断的会话 ses_new_1(active)。
+      // After the first fatal failure, when the probe session is established: the record claims the interrupted session ses_new_1 (active).
       expect(seen[1]).toBe("ses_new_1")
-      // 恢复重发成功后认领分叉副本。
+      // After the recovery re-dispatch succeeds it claims the forked copy.
       expect((await recallProgress(dir, "T-001"))?.session).toBe("ses_fork_1")
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -444,14 +449,15 @@ describe("会话错误重试: isRetryable 驱动的 fork-重试 / 等待-探测�
   })
 })
 
-// ---- 测试交接收场(2026-09-16 修): 交接之后的会话才是重启复用/重试分叉的对象 ----
+// ---- Test-handover ending (fixed 2026-09-16): only sessions after the handover are reuse/retry-fork targets ----
 
-describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分叉锚点", () => {
+describe("test-handover ending: the frozen session's task is complete, dropped as a reuse/fork anchor", () => {
   const NO_WAIT = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
 
-  // 驱动一次完整的测试交接(--handover-test 顺序态): 上下文超限 + AI 请求测试(tmp/
-  // test.sh)→ 定版 + 收尾 steer → AI 写出交接文档(Status: continue)→ 会话以 testHandover
-  // 收场。替 AI 落盘的两步写在事件流生成器里,与真实链路同一批事件驱动 watch。
+  // Drives one full test handover (--handover-test sequential state): context over limit + the AI requests a test (tmp/
+  // test.sh) → freeze + wrap-up steer → the AI writes the handover document (Status: continue) → the session ends as
+  // testHandover. The two steps that write files on the AI's behalf live in the event-stream generator, driving watch
+  // with the same batch of events as the real chain.
   const handoverStream =
     (tmp: string, handoffFile: string) =>
     (sid: string): AsyncIterable<unknown> =>
@@ -473,7 +479,7 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
         yield msg("m_limit", 2000)
         await Bun.write(join(tmp, "test.sh"), "echo ok")
         yield { type: "session.idle", properties: { sessionID: sid } }
-        await Bun.write(handoffFile, "# 交接\n\nStatus: continue\n")
+        await Bun.write(handoffFile, "# Handover\n\nStatus: continue\n")
         yield msg("m_wrapup", 2100)
         yield { type: "session.idle", properties: { sessionID: sid } }
       })()
@@ -494,72 +500,77 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
     seq: 0,
     task,
     unit: "subtask 1",
-    subject: "T-001 S1 示例任务",
+    subject: "T-001 S1 sample task",
     label: "T-001 S1",
     handovers: 0,
     startUsed: 0,
   })
 
-  test("交接收场不认领定版会话: progress 转无会话在途态、chain.id 清空", async () => {
+  test("the handover ending does not claim the frozen session: progress moves to the no-session in-flight state, chain.id cleared", async () => {
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-end-")
     try {
       const { client } = fakeClient({ events: handoverStream(tmp, handoffFile) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
-      const result = await runSession(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await runSession(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("idle")
       expect((result as { testHandover?: boolean }).testHandover).toBe(true)
-      // 定版会话(本会话 ses_new_1)的任务已告完成: 链与记录都不再认领它。active 保留
-      // (单元在途: 恢复续跑的 clean 豁免与交接文档保留依赖它),session 缺失 = 无会话
-      // 可复用,恢复只能经 handover.json 的 nextSession/定版锚点接回交接之后的会话。
+      // The frozen session's (here ses_new_1) task is complete: neither the chain nor the record claims it any more.
+      // active stays (the unit is in flight: the recovery resume's clean exemption and the handover document's retention
+      // depend on it); a missing session = no session to reuse, and recovery can only reconnect to the post-handover
+      // session through handover.json's nextSession/frozen anchor.
       expect(chain.id).toBeUndefined()
       expect(await recallProgress(dir, "T-001")).toMatchObject({ task: "T-001", session: undefined, active: true, phase: { kind: "subtasks", index: 1 } })
-      // 定版锚点照常在册(收尾未完成的中断恢复据此分叉)。
+      // The frozen anchor stays on record as usual (an interruption recovery with the wrap-up unfinished forks from it).
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ pinSession: "ses_new_1", pinMessage: "m_limit" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("续跑会话遇可重试错误: 阶梯耗尽进等待-探测,记录仍不认领旧会话,重启复用对象 = 之后的会话", async () => {
+  test("the continuation session hits a retryable error: ladder exhausted into wait-and-probe, the record still does not claim the old session, the restart-reuse target = the later session", async () => {
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-retry-")
     try {
-      // 第一段: 走完一次测试交接,收场丢弃定版会话(同上一用例)。
+      // Part one: run one full test handover; the ending drops the frozen session (same as the previous case).
       const pin = fakeClient({ events: handoverStream(tmp, handoffFile) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0, phase: { kind: "subtasks", index: 1 } }
-      const handedOver = await runSession(pin.client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const handedOver = await runSession(pin.client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect((handedOver as { testHandover?: boolean }).testHandover).toBe(true)
-      // 模拟 runExecSession 的交接收口(归档 + 提交 #2 + 跑脚本后,在途记录转已收口
-      // 态: 脚本与定版锚点作废,待 attempt 回填 nextSession)。
+      // Simulates runExecSession's handover close-out (after archiving + commit #2 + running the script, the in-flight
+      // record moves to the closed-out state: the script and the frozen anchor are voided, waiting for attempt to
+      // backfill nextSession).
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1 })
-      // 第二段: 续跑会话三轮全部可重试失败(纯报错桩、无上下文)→ 阶梯耗尽进入
-      // 等待-探测 → 探测成功 → 空白新会话重发成功。
+      // Part two: the continuation session fails retryably in all three rounds (pure error stub, no context) → ladder
+      // exhausted into wait-and-probe → probe succeeds → blank new session re-dispatch succeeds.
       const retry = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok", "ok"])
-      const outcome = await runSession(retry.client, task, "续跑提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const outcome = await runSession(retry.client, task, "continuation prompt", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(outcome.type).toBe("idle")
-      // 重试/恢复分叉源不含定版会话(修复前: chain.id 被还原为定版会话,凭满额上下文
-      // 成为首选分叉源,把续跑提示词 fork 回交接之前的会话)。
+      // The retry/recovery fork sources exclude the frozen session (before the fix: chain.id was restored to the frozen
+      // session, which by its full context became the preferred fork source, forking the continuation prompt back into
+      // the pre-handover session).
       expect(retry.calls.forks).toEqual([])
-      // 结束后 progress 认领恢复重发成功的续跑会话(ses_new_5),而非任何交接之前的会话。
+      // Afterwards progress claims the continuation session whose recovery re-dispatch succeeded (ses_new_5), not any
+      // pre-handover session.
       expect(await recallProgress(dir, "T-001")).toMatchObject({ session: "ses_new_5", active: true })
-      // 在途交接记录认领的同样是恢复后的续跑会话: 重启复用经它分叉接回,对象 =
-      // 交接之后的会话。
+      // The in-flight handover record likewise claims the recovered continuation session: restart reuse forks back
+      // through it, the target being the post-handover session.
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_new_5" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  // ---- nextSession 认领的「下发即写 + 失败还原」(2026-09-17,virtio T-005 现场)----
+  // ---- nextSession's claim: "write on dispatch + revert on failure" (2026-09-17, virtio T-005 field incident) ----
 
-  test("续跑会话 0-token 即死(纯报错桩): 撤回 nextSession 认领,恢复锚点留在上一个有内容的会话", async () => {
-    // 现场: 41.3k 续跑会话遇配额连败,重试的 0-token 桩逐个覆写 nextSession,重启
-    // 只能 fork 空壳。修复后桩的认领被还原,锚点留在 41.3k 会话。
+  test("the continuation session dies at 0 tokens (pure error stub): withdraws the nextSession claim, the recovery anchor stays on the last contentful session", async () => {
+    // Field incident: a 41.3k continuation session hit repeated quota failures; the retries' 0-token stubs overwrote
+    // nextSession one by one, so a restart could only fork an empty shell. After the fix the stub's claim is reverted
+    // and the anchor stays on the 41.3k session.
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-stub-")
     try {
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
       const { client } = retryClient(["error-retryable"])
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
     } finally {
@@ -567,31 +578,31 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
     }
   })
 
-  test("续跑会话带着内容失败(used > 0): 保留认领,它成为新的恢复锚点", async () => {
+  test("the continuation session fails with content (used > 0): keeps the claim, it becomes the new recovery anchor", async () => {
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-content-")
     try {
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_old" })
       const { client } = retryClient(["error-retryable"], [41_300])
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
-      // 41.3k 内容的失败会话比旧锚点更值钱(严格超集),认领不还原。
+      // The failed session with 41.3k of content is worth more than the old anchor (a strict superset); the claim is not reverted.
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_new_1" })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("续跑会话 0-token 即死且不可重试(isRetryable:false): 同样撤回认领(§J.3 补齐)", async () => {
-    // §J.3 的还原最初只覆盖可重试分支;不可重试的 0-token 报错桩(如首发即
-    // insufficient_quota)同样不配作恢复锚点——进程在等待-探测环被强退后,重启
-    // 恢复只能从上一锚点分叉。
+  test("the continuation session dies at 0 tokens and is non-retryable (isRetryable:false): the claim is withdrawn likewise (§J.3 completion)", async () => {
+    // §J.3's revert initially covered only the retryable branch; a non-retryable 0-token error stub (e.g.
+    // insufficient_quota on the very first dispatch) is equally unqualified as a recovery anchor — after the process is
+    // force-quit inside the wait-and-probe loop, restart recovery can only fork from the previous anchor.
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-fatal-stub-")
     try {
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
       const { client } = retryClient(["error-fatal"])
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
       expect((result as { retryable?: boolean }).retryable).toBe(false)
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
@@ -600,13 +611,13 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
     }
   })
 
-  test("续跑会话下发即失败(prompt.error): 撤回认领——空会话不配作恢复锚点", async () => {
+  test("the continuation session fails on dispatch (prompt.error): withdraws the claim — an empty session is unqualified as a recovery anchor", async () => {
     const { dir, tmp, handoffFile } = await makeDir("auto-handover-prompt-fail-")
     try {
       await saveHandover(dir, { task: "T-001", scope: relative(dir, handoffFile), unit: "subtask 1", n: 1, nextSession: "ses_contentful" })
       const { client } = fakeClient({ prompt: () => ({ error: { name: "UnknownError", data: { message: "boom" } } }) })
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      const result = await attempt(client, task, "提示词", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
+      const result = await attempt(client, task, "prompt text", { dir, commit: false }, chain, undefined, makeTest(dir, tmp, handoffFile), NO_WAIT)
       expect(result.type).toBe("blocked")
       expect((result as { question: string }).question).toContain("task dispatch failed")
       expect(await recallHandover(dir, "T-001", relative(dir, handoffFile))).toMatchObject({ nextSession: "ses_contentful" })
@@ -616,36 +627,37 @@ describe("测试交接收场: 定版会话任务即告完成,丢弃为复用/分
   })
 })
 
-describe("attempt 接线: runSession 依注入策略带/不带 model(不依赖 autoSwitches memo)", () => {
-  test("字母命中: opts.phase=m → anthropic/c-4 进 prompt.model", async () => {
+describe("attempt wiring: runSession includes/omits model per the injected policy (no dependency on the autoSwitches memo)", () => {
+  test("letter match: opts.phase=m → anthropic/c-4 goes into prompt.model", async () => {
     const { client, calls } = fakeClient()
-    const chain: SessionChain = { pct: 100, used: 0, at: 0 } // 无 role/phase → bypass;letter m 命中
-    await runSession(client, task, "提示词", { phase: key("m") }, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "m=anthropic/c-4,*=kimi/k2" }))
+    const chain: SessionChain = { pct: 100, used: 0, at: 0 } // No role/phase → bypass; letter m matches
+    await runSession(client, task, "prompt text", { phase: key("m") }, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "m=anthropic/c-4,*=kimi/k2" }))
     expect(calls.prompts[0]!.model).toEqual({ providerID: "anthropic", modelID: "c-4" })
   })
 
-  test("旁路角色: chain.role=knowledge → role 覆盖 wildcard", async () => {
+  test("bypass role: chain.role=knowledge → role overrides the wildcard", async () => {
     const { client, calls } = fakeClient()
     const chain: SessionChain = { pct: 100, used: 0, at: 0, role: "knowledge" }
-    await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "knowledge=kimi/k2-lite,*=kimi/k2" }))
+    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.model]: "knowledge=kimi/k2-lite,*=kimi/k2" }))
     expect(calls.prompts[0]!.model).toEqual({ providerID: "kimi", modelID: "k2-lite" })
   })
 
-  test("未设策略: prompt 参数里没有 model 键(逐字节等价现状)", async () => {
+  test("no policy set: no model key in the prompt parameters (byte-for-byte equivalent to the status quo)", async () => {
     const { client, calls } = fakeClient()
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词", { phase: key("m") }, chain, undefined, undefined, parseSwitches({}))
+    await runSession(client, task, "prompt text", { phase: key("m") }, chain, undefined, undefined, parseSwitches({}))
     expect("model" in calls.prompts[0]!).toBe(false)
   })
 })
 
-// ---- 配额降级(D.3/D.4,P4):runSession 降级支 + 候选钳制与耗尽 + 降级 note ----
-// 复用 fakeClient(over.events 按当前会话 id 造定向事件流、over.fork 造分叉结果),
-// 仅注入 switches.model.fallback 驱动降级;候选窗口钳制经扩展 provider.list 表面断言。
-describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过 / 耗尽进等待-探测环", () => {
+// ---- Quota failover (D.3/D.4, P4): runSession's failover branch + candidate clamping and exhaustion + the failover note ----
+// Reuses fakeClient (over.events builds a targeted event stream by current session id, over.fork builds fork results),
+// injecting only switches.model.fallback to drive the failover; candidate window clamping is asserted through an
+// extended provider.list surface.
+describe("quota failover (D.3/D.4): candidate switch keeps context / clamping skips / exhaustion enters the wait-and-probe loop", () => {
   const FAILOVER = parseSwitches({ [SWITCH_ENV.modelFallback]: "prov/b,prov/c", [SWITCH_ENV.recoveryWait]: "0" })
-  // 第 n 次订阅(n 从 1)发不可重试 quota 的 session.error,其后仍发 idle 让 watch
-  // 正常结算;第 2 次起发 idle。用于「首轮配额失败、次轮成功」。
+  // The n-th subscription (n from 1) emits a non-retryable quota session.error, then still emits idle so watch settles
+  // normally; from the 2nd on, only idle. For "quota failure on the first round, success on the second".
   const quotaThenIdleEvents = () => {
     let n = 0
     return (sid: string) =>
@@ -655,8 +667,8 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
         yield { type: "session.idle", properties: { sessionID: sid } }
       })()
   }
-  // 前 k 次订阅发不可重试 quota session.error(候选用尽场景),其后只发 idle
-  // (服务恢复,探测会成功)。
+  // The first k subscriptions emit a non-retryable quota session.error (the candidates-exhausted scenario); afterwards
+  // only idle (the service recovered, the probes will succeed).
   const quotaTimesThenIdleEvents = (k: number) => {
     let n = 0
     return (sid: string) =>
@@ -667,34 +679,34 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
       })()
   }
 
-  test("quota + 两候选:切到首个候选(prov/b),从首个失败会话 fork 保上下文,降级 note 随次轮提示词带给 AI", async () => {
+  test("quota + two candidates: switches to the first candidate (prov/b), forks the first failed session to keep context, the failover note rides the second round's prompt to the AI", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdleEvents() })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, FAILOVER)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, FAILOVER)
     expect(result.type).toBe("idle")
-    // 首轮不带 model(未设路由主模型),次轮带首个降级候选 prov/b。
+    // The first round carries no model (no routed primary set); the second carries the first failover candidate prov/b.
     expect("model" in calls.prompts[0]!).toBe(false)
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
-    // 上下文随迁:对首个失败会话(ses_new_1)做了一次 fork。
+    // Context migrates along: one fork was made of the first failed session (ses_new_1).
     expect(calls.forks).toContain("ses_new_1")
-    // 降级 note(一次性)已随次轮提示词下发并自动清除。
+    // The failover note (one-time) was dispatched with the second round's prompt and cleared automatically.
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
     expect(text).toContain("[DRIVER]")
     expect(text).toContain("Switched model")
     expect(chain.note).toBeUndefined()
-    // 换模型续跑落在分叉出的会话上(ses_fork_1),而非白板新会话。
+    // The model-switched continuation lands on the forked session (ses_fork_1), not a blank new one.
     expect(calls.prompts[1]!.sessionID).toBe("ses_fork_1")
   })
 
-  test("降级 fork 失败回退空白新会话: 降级说明改现场核对版(空白会话没有前文可沿用)", async () => {
+  test("failover fork fails and falls back to a blank new session: the failover note switches to the worktree-check version (a blank session has no preceding context to carry on)", async () => {
     const { client, calls } = fakeClient({
       events: quotaThenIdleEvents(),
       fork: () => ({ error: { name: "NotFound" } }),
     })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, FAILOVER)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, FAILOVER)
     expect(result.type).toBe("idle")
-    // fork 失败 → 次轮落在新建的空白会话(不是分叉副本),模型切换仍生效。
+    // Fork fails → the second round lands on a newly created blank session (not a forked copy); the model switch still takes effect.
     expect(calls.prompts[1]!.sessionID).toBe("ses_new_2")
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
     const text = (calls.prompts[1]!.parts[0] as { text: string }).text
@@ -704,15 +716,15 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(chain.note).toBeUndefined()
   })
 
-  test("未配候选表 + 恢复期分叉失败回退空白新会话: 恢复重发同样带现场核对说明", async () => {
+  test("no candidate list + recovery-period fork fails back to a blank new session: the recovery re-dispatch carries the worktree-check note likewise", async () => {
     const { client, calls } = fakeClient({
       events: quotaThenIdleEvents(),
       fork: () => ({ error: { name: "NotFound" } }),
     })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" }))
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" }))
     expect(result.type).toBe("idle")
-    // 致命错误 → 等待-探测(探测成功)→ 分叉被中断会话失败 → 空白新会话重发。
+    // Fatal error → wait-and-probe (probe succeeds) → forking the interrupted session fails → blank new session re-dispatch.
     expect(calls.forks).toEqual(["ses_new_1"])
     expect(calls.prompts[2]!.sessionID).toBe("ses_new_3")
     const text = (calls.prompts[2]!.parts[0] as { text: string }).text
@@ -720,31 +732,32 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     expect(text).toContain("without redoing")
   })
 
-  test("候选耗尽(首选与两候选全配额受限): 不再阻塞——等待-探测环等恢复,探测沿用末个候选,恢复后从被中断会话分叉续跑", async () => {
-    // 前 3 次订阅 quota(主模型 + prov/b + prov/c 各一轮)→ 候选耗尽 → 等待-探测
-    // (探测会话走 prov/c)→ 探测成功 → fork 末个失败会话(ses_fork_2)重发任务。
+  test("candidates exhausted (primary and both candidates all quota-limited): no longer blocks — the wait-and-probe loop waits for recovery, the probe keeps the last candidate, and after recovery it continues from a fork of the interrupted session", async () => {
+    // The first 3 subscriptions hit quota (primary + prov/b + prov/c, one round each) → candidates exhausted →
+    // wait-and-probe (the probe session runs prov/c) → probe succeeds → forks the last failed session (ses_fork_2) and
+    // re-dispatches the task.
     const { client, calls } = fakeClient({ events: quotaTimesThenIdleEvents(3) })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, FAILOVER)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, FAILOVER)
     expect(result.type).toBe("idle")
-    // 模型序: 首轮无 model → prov/b → prov/c →(探测)prov/c →(恢复重发)prov/c。
+    // Model order: first round no model → prov/b → prov/c → (probe) prov/c → (recovery re-dispatch) prov/c.
     expect("model" in calls.prompts[0]!).toBe(false)
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "c" })
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "c" })
     expect(calls.prompts[4]!.model).toEqual({ providerID: "prov", modelID: "c" })
-    // 第 4 次下发是探测(极小提示词、全新会话),第 5 次是恢复重发(任务提示词 + 恢复说明)。
+    // The 4th dispatch is the probe (minimal prompt, fresh session); the 5th is the recovery re-dispatch (task prompt + recovery note).
     expect((calls.prompts[3]!.parts[0] as { text: string }).text).toContain("Service availability probe")
     const text = (calls.prompts[4]!.parts[0] as { text: string }).text
-    expect(text).toContain("提示词")
+    expect(text).toContain("prompt text")
     expect(text).toContain("service has recovered")
     expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1", "ses_fork_2"])
     expect(chain.model).toBe("prov/c")
   })
 
-  test("候选窗口钳制:prov/b 上下文窗口 < cap 被跳过,首个生效切换为窗口足够的 prov2/c", async () => {
+  test("candidate window clamping: prov/b's context window < cap is skipped, the first effective switch is prov2/c with a sufficient window", async () => {
     const { sdk, calls } = fakeClient({ events: quotaThenIdleEvents() })
-    // 扩展 provider 表面:prov/b 窗口 1000 < 显式 cap 5000(跳过),prov2/c 窗口 1_000_000(可用)。
+    // Extended provider surface: prov/b's window 1000 < the explicit cap 5000 (skipped), prov2/c's window 1_000_000 (usable).
     const clamped = opencodeAgent({
       ...sdk,
       provider: {
@@ -760,40 +773,42 @@ describe("配额降级 failover(D.3/D.4):候选切换保上下文 / 钳制跳过
     } as unknown as OpencodeClient)
     const CLAMP = parseSwitches({ [SWITCH_ENV.modelFallback]: "prov/b,prov2/c" })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(clamped, task, "提示词", { contextLimit: 5000 }, chain, undefined, undefined, CLAMP)
+    const result = await runSession(clamped, task, "prompt text", { contextLimit: 5000 }, chain, undefined, undefined, CLAMP)
     expect(result.type).toBe("idle")
-    // 被选中的降级候选跳过了 prov/b(窗口不足),直接取 prov2/c。
+    // The selected failover candidate skipped prov/b (insufficient window) and took prov2/c directly.
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov2", modelID: "c" })
-    // prov/b 从未作为下发模型出现(证明是被跳过、而非选中后失败)。
+    // prov/b never appears as a dispatched model (proof it was skipped, not selected and then failed).
     expect(calls.prompts.some((p) => p.model?.providerID === "prov" && p.model?.modelID === "b")).toBe(false)
   })
 
-  test("未配候选表: quota 直接进等待-探测环(不换模型、prompt 不带 model),恢复后从被中断会话分叉续跑", async () => {
+  test("no candidate list: quota goes straight into the wait-and-probe loop (no model switch, prompt carries no model), continues from a fork of the interrupted session after recovery", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdleEvents() })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" }))
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" }))
     expect(result.type).toBe("idle")
-    // 无降级: 全程无 model 键;首轮失败后唯一一次 fork 是恢复期对被中断会话的分叉。
+    // No failover: no model key throughout; the single fork after the first round's failure is the recovery-period fork of the interrupted session.
     expect(calls.prompts.every((p) => !("model" in p))).toBe(true)
     expect(calls.forks).toEqual(["ses_new_1"])
     expect(calls.prompts.length).toBe(3)
     expect((calls.prompts[1]!.parts[0] as { text: string }).text).toContain("Service availability probe")
-    expect((calls.prompts[2]!.parts[0] as { text: string }).text).toContain("提示词")
+    expect((calls.prompts[2]!.parts[0] as { text: string }).text).toContain("prompt text")
   })
 })
 
-// ---- 降级回试粒度(OPENCODE_AUTO_MODEL_FAILBACK_SCOPE)与 /failback 覆写 ----
-// scope 决定降级后何时回试首选: task(缺省)= 链内粘滞(现状);session = 新建会话即回试;
-// phase = 经 failback 模块 sticky holder 跨链(跨任务)粘滞、阶段边界清零。/failback 带参
-// 消费后整体重定义模型序(首选通配 + 候选环),经 override 层优先于 switches.model。
-describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / 模型序重定义 / 使用模型播报", () => {
+// ---- Failover failback scope (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE) and the /failback override ----
+// The scope decides when the primary is retried after a failover: task (default) = sticky within the chain (status quo);
+// session = retry at every new session; phase = sticky across chains (across tasks) via the failback module's sticky
+// holder, cleared at phase boundaries. /failback with arguments, once consumed, redefines the model order wholesale
+// (primary wildcard + candidate ring) and, through the override layer, takes precedence over switches.model.
+describe("failback scope and the /failback override: failback timing / cross-task stickiness / model-order redefinition / in-use model announcement", () => {
   afterEach(() => {
     resetFailback()
   })
   const SCOPED = (scope: "task" | "session" | "phase") =>
     parseSwitches({ [SWITCH_ENV.model]: "prov/a", [SWITCH_ENV.modelFallback]: "prov/b", [SWITCH_ENV.modelFailbackScope]: scope })
-  // 首轮订阅发不可重试 quota,其后 idle(与上组 quotaThenIdleEvents 同构,自带计数器
-  // 以支撑同一 client 跨多次 runSession 的订阅序号)。
+  // The first subscription emits a non-retryable quota error, then idle (isomorphic to the previous group's
+  // quotaThenIdleEvents, with its own counter to support the subscription numbering across multiple runSession calls on
+  // the same client).
   const quotaThenIdle = () => {
     let n = 0
     return (sid: string) =>
@@ -804,72 +819,73 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
       })()
   }
 
-  test("缺省 task 粒度: 降级在同一条链内粘滞——第二次 runSession(同链)仍用候选 prov/b(现状不变)", async () => {
+  test("default task scope: the failover stays sticky within the same chain — the second runSession (same chain) still uses candidate prov/b (status quo unchanged)", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdle() })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("task"))
+    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, SCOPED("task"))
     expect(chain.model).toBe("prov/b")
-    await runSession(client, task, "提示词2", {}, chain, undefined, undefined, SCOPED("task"))
-    // 第三次提示词(第二次 runSession 的首轮)仍带降级候选。
+    await runSession(client, task, "prompt text 2", {}, chain, undefined, undefined, SCOPED("task"))
+    // The third prompt (the second runSession's first round) still carries the failover candidate.
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "b" })
   })
 
-  test("session 粒度: 新建会话起点回试首选 prov/a(降级 fork 的迁移会话不被 undo)", async () => {
+  test("session scope: retries the primary prov/a at the start of a new session (the failover fork's migrated session is not undone)", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdle() })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("session"))
-    // 降级 fork 出的迁移会话仍用候选 prov/b(不在 fork 消费点清零,防震荡)。
+    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, SCOPED("session"))
+    // The migrated session forked out by the failover still uses candidate prov/b (not zeroed at the fork consumption point, to prevent oscillation).
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "b" })
     expect(chain.model).toBe("prov/b")
-    // 第二次 runSession: 复用关闭 → 全新 create,起点清零回首选 prov/a。
-    await runSession(client, task, "提示词2", {}, chain, undefined, undefined, SCOPED("session"))
+    // Second runSession: reuse off → a brand-new create; at the start the state is zeroed back to primary prov/a.
+    await runSession(client, task, "prompt text 2", {}, chain, undefined, undefined, SCOPED("session"))
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "a" })
     expect(chain.model).toBeUndefined()
   })
 
-  test("phase 粒度: 降级经 sticky holder 跨链粘滞(模拟下一任务的新链),clearSticky(阶段边界)后回首选", async () => {
+  test("phase scope: the failover stays sticky across chains via the sticky holder (simulating the next task's new chain); after clearSticky (a phase boundary) it returns to the primary", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdle() })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("phase"))
+    await runSession(client, task, "prompt text", {}, chain, undefined, undefined, SCOPED("phase"))
     expect(stickyModel()).toBe("prov/b")
-    // 新链(下一任务): 链上无 chain.model,sticky 兜底仍用 prov/b。
+    // New chain (next task): no chain.model on it; the sticky fallback still uses prov/b.
     const next: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词2", {}, next, undefined, undefined, SCOPED("phase"))
+    await runSession(client, task, "prompt text 2", {}, next, undefined, undefined, SCOPED("phase"))
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "b" })
-    // 阶段边界清零: 再下一条链回首选 prov/a。
+    // Phase-boundary clear: the chain after that returns to primary prov/a.
     clearSticky()
     const third: SessionChain = { pct: 100, used: 0, at: 0 }
-    await runSession(client, task, "提示词3", {}, third, undefined, undefined, SCOPED("phase"))
+    await runSession(client, task, "prompt text 3", {}, third, undefined, undefined, SCOPED("phase"))
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "a" })
   })
 
-  test("/failback 带参覆写: 首选 prov/x + 候选环 prov/y;env 未设 fallback 也能经覆写环降级", async () => {
+  test("/failback override with arguments: primary prov/x + candidate ring prov/y; with no env fallback set, failover still happens through the override ring", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdle() })
     requestFailback(["prov/x", "prov/y"])
     expect(consumeFailback()).toBe(true)
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("idle")
-    // 首选取覆写通配(路由表未设);quota 后从覆写环降级到 prov/y。
+    // The primary takes the override's wildcard (no route table set); after quota it fails over through the override ring to prov/y.
     expect(calls.prompts[0]!.model).toEqual({ providerID: "prov", modelID: "x" })
     expect(calls.prompts[1]!.model).toEqual({ providerID: "prov", modelID: "y" })
   })
 
-  test("实际使用模型播报: ◈ 行含模型与来源,新会话即播报(同模型亦然),同会话不重复", async () => {
+  test("in-use model announcement: the ◈ line carries model and source, announced for every new session (same model included), not repeated on the same session", async () => {
     const lines: string[] = []
     const orig = console.log
     console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
     try {
       const { client } = fakeClient({ events: quotaThenIdle() })
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      await runSession(client, task, "提示词", {}, chain, undefined, undefined, SCOPED("task"))
-      await runSession(client, task, "提示词2", {}, chain, undefined, undefined, SCOPED("task"))
+      await runSession(client, task, "prompt text", {}, chain, undefined, undefined, SCOPED("task"))
+      await runSession(client, task, "prompt text 2", {}, chain, undefined, undefined, SCOPED("task"))
     } finally {
       console.log = orig
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
-    // 首选 prov/a(路由)一次 + 降级 prov/b(降级候选)一次;第二次 runSession 模型
-    // 未变(prov/b 粘滞)但复用关、新开会话——新会话恒播报,同模型也再来一行。
+    // Primary prov/a (route) once + failover prov/b (fallback candidate) once; the second runSession's model is
+    // unchanged (prov/b sticky) but reuse is off and a new session opens — a new session always announces, so the same
+    // model gets another line.
     expect(shown.length).toBe(3)
     expect(shown[0]).toContain("prov/a")
     expect(shown[0]).toContain("route")
@@ -879,99 +895,100 @@ describe("failback 粒度与 /failback 覆写:回试时机 / 跨任务粘滞 / �
     expect(shown[2]).toContain("fallback candidate")
   })
 
-  test("未设路由: 播报服务端实际解析的模型(事件流观测),prompt 仍不带 model 键,新会话再播报", async () => {
+  test("no route set: announces the model the server actually resolved (observed from the event stream), the prompt still carries no model key, a new session announces again", async () => {
     const lines: string[] = []
     const orig = console.log
     console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "))
     let calls: { prompts: { model?: unknown }[] }
     try {
-      // 未设路由: 播报不再猜服务端默认,由事件流里 user 消息携带的实际模型播报。
+      // No route set: the announcement no longer guesses the server default; it announces the actual model carried by a user message in the event stream.
       const fake = fakeClient({ events: (id) => modelThenIdle(id, "prov/default") })
       calls = fake.calls
       const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-      await runSession(fake.client, task, "提示词", {}, chain, undefined, undefined, parseSwitches({}))
-      await runSession(fake.client, task, "提示词2", {}, chain, undefined, undefined, parseSwitches({}))
+      await runSession(fake.client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({}))
+      await runSession(fake.client, task, "prompt text 2", {}, chain, undefined, undefined, parseSwitches({}))
     } finally {
       console.log = orig
     }
     const shown = lines.filter((line) => line.includes("◈") && line.includes("using model"))
-    // 两次 runSession 各开新会话(复用关),同模型也逐会话播报。
+    // The two runSessions each open a new session (reuse off); the same model still announces per session.
     expect(shown.length).toBe(2)
     expect(shown[0]).toContain("prov/default")
     expect(shown[0]).toContain("server resolved")
     expect(shown[1]).toContain("prov/default")
-    // 不变量 F: 播报归播报,下发依旧不带 model 键。
+    // Invariant F: the announcement is one thing, the dispatch still carries no model key.
     expect(calls!.prompts.every((p) => p.model === undefined)).toBe(true)
   })
 })
 
-// ---- 阶梯耗尽后的回落接入配额降级环(T1):transient/unknown 耗尽阶梯 → 换候选续跑 ----
-// 与上组的区别:触发面不是 quota/auth/rate(那三类在阶梯之前就换模型),而是重试阶梯
-// 跑完后的回落支(2026-09-16 起不再等人工裁决)。用 retryClient:它按 create/fork 顺序
-// 给每个会话排事件,能如实模拟「每次重试都失败」并让失败会话带上真实用量。
-describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候选耗尽进等待-探测环", () => {
-  // 零等待两级阶梯(首次 + 两次重试 = 三次尝试)+ 零间隔等待-探测 + 两个候选。
+// ---- The post-ladder-exhaustion fallback joins the quota failover ring (T1): transient/unknown exhausts the ladder → switch candidate and continue ----
+// Difference from the previous group: the trigger surface is not quota/auth/rate (those three switch models before the
+// ladder) but the fallback branch after the retry ladder finishes (since 2026-09-16 it no longer waits for a human
+// verdict). Uses retryClient: it queues events per session in create/fork order, faithfully simulating "every retry
+// fails" while giving the failed sessions real usage.
+describe("ladder-exhaustion fallback → candidate failover: switch models and restart a ladder round / candidates exhausted into the wait-and-probe loop", () => {
+  // Zero-wait two-step ladder (first + two retries = three attempts) + zero-interval wait-and-probe + two candidates.
   const LADDER_FAILOVER = parseSwitches({
     [SWITCH_ENV.retryWaits]: "0,0",
     [SWITCH_ENV.recoveryWait]: "0",
     [SWITCH_ENV.modelFallback]: "prov/b,prov/c",
   })
-  // 可重试(未标 isRetryable:false)⇒ 归类落 transient/unknown ⇒ 不进 quota 支,只能
-  // 走阶梯。每个会话带 50k 用量:失败会话有真实上下文才进分叉候选(0 用量是纯报错桩,
-  // 按设计不保),而这正是本项要保住的资产。
+  // Retryable (not marked isRetryable:false) ⇒ classified transient/unknown ⇒ not the quota branch, only the ladder.
+  // Every session carries 50k usage: only a failed session with real context enters the fork candidates (0 usage is a
+  // pure error stub, deliberately not kept), and that is exactly the asset this case protects.
   const TRANSIENT = "stream disconnected"
   const allFail = (n = 12) => Array<Outcome>(n).fill("error-retryable")
 
-  test("阶梯耗尽 + 回落:切到首个候选(prov/b)、带降级 note 从最值钱的会话 fork 续跑,阶梯重开一轮", async () => {
-    // 三次尝试全失败 → 回落降级 → 第四次带 prov/b 成功。
+  test("ladder exhausted + fallback: switches to the first candidate (prov/b), forks the most valuable session with the failover note and continues, a fresh ladder round starts", async () => {
+    // Three attempts all fail → fallback failover → the fourth succeeds with prov/b.
     const { client, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], 50_000, TRANSIENT)
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER_FAILOVER)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, LADDER_FAILOVER)
     expect(result.type).toBe("idle")
     expect(calls.prompts.length).toBe(4)
-    // 阶梯内三次尝试都不带 model(未设路由主模型),降级后第四次带首个候选。
+    // The three in-ladder attempts carry no model (no routed primary set); after the failover the fourth carries the first candidate.
     for (const p of calls.prompts.slice(0, 3)) expect("model" in p).toBe(false)
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "b" })
-    // 上下文随迁:降级从上一轮的失败会话(50k 用量,链上 chain.id 已被 attempt 还原为空)
-    // 分叉,而不是开白板新会话。
+    // Context migrates along: the failover forks the previous round's failed session (50k usage; chain.id on the chain
+    // was already restored to empty by attempt), rather than opening a blank new session.
     expect(calls.forks).toEqual(["ses_new_1", "ses_fork_1", "ses_fork_2"])
     expect(calls.creates).toBe(1)
     expect(calls.prompts[3]!.sessionID).toBe("ses_fork_3")
-    // 一次性降级 note 已随该提示词下发并清除,文案点名触发原因。
+    // The one-time failover note was dispatched with that prompt and cleared; the text names the trigger.
     const text = (calls.prompts[3]!.parts[0] as { text: string }).text
     expect(text).toContain("[DRIVER]")
     expect(text).toContain("retry ladder exhausted")
     expect(text).toContain("Switched model")
     expect(chain.note).toBeUndefined()
-    // chain.model 停在生效候选上(作用域:chain 由 runTask 逐任务新建,下一个任务自动
-    // 回首选模型,无需退回逻辑)。
+    // chain.model rests on the effective candidate (scope: runTask creates a chain per task, so the next task
+    // automatically returns to the primary model; no rollback logic needed).
     expect(chain.model).toBe("prov/b")
   })
 
-  test("候选耗尽(每个候选各跑一轮完整阶梯仍失败):不再阻塞——等待-探测环等恢复后从被中断会话分叉续跑", async () => {
-    // 主模型 + 两候选各跑一轮三轮阶梯(9 次失败)→ 候选耗尽 → 等待-探测(探测成功)
-    // → fork 末个失败会话重发成功。
+  test("candidates exhausted (each candidate runs a full ladder round and still fails): no longer blocks — the wait-and-probe loop waits for recovery, then continues from a fork of the interrupted session", async () => {
+    // Primary + two candidates each run a three-step ladder round (9 failures) → candidates exhausted → wait-and-probe
+    // (probe succeeds) → forks the last failed session and the re-dispatch succeeds.
     const outcomes: Outcome[] = [...allFail(9), "ok", "ok"]
     const { client, calls } = retryClient(outcomes, 50_000, TRANSIENT)
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, LADDER_FAILOVER)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, LADDER_FAILOVER)
     expect(result.type).toBe("idle")
-    // 9 次阶梯尝试 + 1 次探测 + 1 次恢复重发 = 11 次下发。
+    // 9 ladder attempts + 1 probe + 1 recovery re-dispatch = 11 dispatches.
     expect(calls.prompts.length).toBe(11)
-    // 三轮阶梯的模型序: 无 model → prov/b → prov/c;探测与恢复重发沿用末个候选。
+    // The three ladder rounds' model order: no model → prov/b → prov/c; the probe and the recovery re-dispatch keep the last candidate.
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "b" })
     expect(calls.prompts[6]!.model).toEqual({ providerID: "prov", modelID: "c" })
     expect(calls.prompts[9]!.model).toEqual({ providerID: "prov", modelID: "c" })
     expect((calls.prompts[9]!.parts[0] as { text: string }).text).toContain("Service availability probe")
-    expect((calls.prompts[10]!.parts[0] as { text: string }).text).toContain("提示词")
-    // 恢复重发落在被中断会话(末个失败会话 ses_fork_8,50k 前缀)的分叉副本上;
-    // 探测走全新临时会话(第 2 次 create)。
+    expect((calls.prompts[10]!.parts[0] as { text: string }).text).toContain("prompt text")
+    // The recovery re-dispatch lands on a forked copy of the interrupted session (the last failed session ses_fork_8,
+    // 50k prefix); the probe goes through a fresh temporary session (the 2nd create).
     expect(calls.prompts[9]!.sessionID).toBe("ses_new_2")
     expect(calls.prompts[10]!.sessionID).toBe("ses_fork_9")
     expect(chain.model).toBe("prov/c")
   })
 
-  test("候选窗口钳制同样生效:窗口不足的候选被跳过,不作为回落目标下发", async () => {
+  test("candidate window clamping applies here too: a candidate with an insufficient window is skipped, never dispatched as the fallback target", async () => {
     const { sdk: base, calls } = retryClient(["error-retryable", "error-retryable", "error-retryable", "ok"], 50_000, TRANSIENT)
     const clamped = opencodeAgent({
       ...base,
@@ -982,19 +999,19 @@ describe("阶梯耗尽回落 → 候选降级:换模型重开一轮阶梯 / 候�
       },
     } as unknown as OpencodeClient)
     const CLAMP = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0", [SWITCH_ENV.modelFallback]: "prov/b,prov2/c" })
-    const result = await runSession(clamped, task, "提示词", { contextLimit: 5000 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, CLAMP)
+    const result = await runSession(clamped, task, "prompt text", { contextLimit: 5000 }, { pct: 100, used: 0, at: 0 }, undefined, undefined, CLAMP)
     expect(result.type).toBe("idle")
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov2", modelID: "c" })
     expect(calls.prompts.some((p) => p.model?.providerID === "prov" && p.model?.modelID === "b")).toBe(false)
   })
 
-  test("未配候选表: 阶梯耗尽直接进等待-探测环(全程不换模型),恢复后从被中断会话分叉续跑", async () => {
+  test("no candidate list: ladder exhaustion goes straight into the wait-and-probe loop (no model switch throughout), continues from a fork of the interrupted session after recovery", async () => {
     const NO_FAILOVER = parseSwitches({ [SWITCH_ENV.retryWaits]: "0,0", [SWITCH_ENV.recoveryWait]: "0" })
     const { client, calls } = retryClient([...allFail(3), "ok", "ok"], 50_000, TRANSIENT)
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
-    const result = await runSession(client, task, "提示词", {}, chain, undefined, undefined, NO_FAILOVER)
+    const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, NO_FAILOVER)
     expect(result.type).toBe("idle")
-    // 三次阶梯尝试(无 model)→ 探测 → 恢复重发,全程不换模型。
+    // Three ladder attempts (no model) → probe → recovery re-dispatch; no model switch throughout.
     expect(calls.prompts.length).toBe(5)
     expect(calls.prompts.every((p) => !("model" in p))).toBe(true)
     expect(chain.model).toBeUndefined()

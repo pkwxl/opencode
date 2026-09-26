@@ -1,5 +1,6 @@
-// src/chain.ts 的单测: 模型路由求值(resolveModel/splitModel)、角色推导(phaseToRole/roleOf)、会话错误归类(classifySessionError)。
-// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
+// Unit tests for src/chain.ts: model-routing evaluation (resolveModel/splitModel),
+// role derivation (phaseToRole/roleOf), session-error classification (classifySessionError).
+// Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { describe, expect, test } from "bun:test"
 import { OPENCODE_ERROR_PATTERNS, splitModel } from "../src/agent/opencode/client"
@@ -10,31 +11,31 @@ import { parseSwitches, SWITCH_ENV } from "../src/switches"
 
 const L = (letter: PhaseLetter) => phaseTypeOfLetter(letter)
 
-// ---- 阶段化模型路由(plans/0017-model-routing-design.md C.1/C.3,P2)----
+// ---- Phased model routing (plans/0017-model-routing-design.md C.1/C.3, P2) ----
 
-describe("resolveModel(路由求值 role > type > letter > wildcard)", () => {
+describe("resolveModel (routing precedence role > type > letter > wildcard)", () => {
   const policy = (raw?: string) => parseSwitches(raw ? { [SWITCH_ENV.model]: raw } : {}).model
 
-  test("role 覆盖 letter 覆盖 wildcard", () => {
+  test("role overrides letter overrides wildcard", () => {
     const p = policy("*=kimi/k2,m=anthropic/c-4,wrapup=kimi/k2-lite")
-    expect(resolveModel(p, L("m"), "wrapup")).toBe("kimi/k2-lite") // role 命中优先
-    expect(resolveModel(p, L("m"), "decompose")).toBe("anthropic/c-4") // role 缺、letter 命中
-    expect(resolveModel(p, L("t"), "decompose")).toBe("kimi/k2") // letter 缺、wildcard 兜底
+    expect(resolveModel(p, L("m"), "wrapup")).toBe("kimi/k2-lite") // a role hit wins
+    expect(resolveModel(p, L("m"), "decompose")).toBe("anthropic/c-4") // no role, letter hit
+    expect(resolveModel(p, L("t"), "decompose")).toBe("kimi/k2") // no letter, wildcard fallback
   })
 
-  test("未设(空策略): 任意 (letter, role) → undefined", () => {
+  test("unset (empty policy): any (letter, role) → undefined", () => {
     const p = policy()
     expect(resolveModel(p, undefined, "bypass")).toBeUndefined()
     expect(resolveModel(p, L("m"), "decompose")).toBeUndefined()
   })
 
-  test("仅字母: 命中字母取值,否则 undefined", () => {
+  test("letters only: the hit letter's value, else undefined", () => {
     const p = policy("m=anthropic/c-4")
     expect(resolveModel(p, L("m"), "subtask")).toBe("anthropic/c-4")
     expect(resolveModel(p, L("t"), "subtask")).toBeUndefined()
   })
 
-  test("仅通配(裸值形态): 全量命中", () => {
+  test("wildcard only (bare-value form): matches everything", () => {
     const p = policy("kimi/k2")
     expect(resolveModel(p, undefined, "bypass")).toBe("kimi/k2")
     expect(resolveModel(p, L("m"), "subtask")).toBe("kimi/k2")
@@ -50,17 +51,17 @@ describe("resolveModel(路由求值 role > type > letter > wildcard)", () => {
   })
 })
 
-describe("splitModel(prov/model → SDK model 参数,按首个 / 切分;MA.3 起在 opencode 适配器)", () => {
-  test("基本切分", () => {
+describe("splitModel (prov/model → the SDK model param, split on the first /; in the opencode adapter since MA.3)", () => {
+  test("basic split", () => {
     expect(splitModel("anthropic/c-4")).toEqual({ providerID: "anthropic", modelID: "c-4" })
   })
-  test("modelID 含冒号仍只按首个斜杠切", () => {
+  test("a modelID containing a colon still splits on the first slash only", () => {
     expect(splitModel("openai/gpt-4:128k")).toEqual({ providerID: "openai", modelID: "gpt-4:128k" })
   })
 })
 
-describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
-  test("phaseToRole: 执行链各阶段映射(subtasks→subtask,closeout 无会话,step 按 slug)", () => {
+describe("phaseToRole / roleOf (pipeline and bypass roles)", () => {
+  test("phaseToRole: pipeline step mapping (subtasks→subtask, closeout has no session, step by slug)", () => {
     expect(phaseToRole({ kind: "decompose" })).toBe("decompose")
     expect(phaseToRole({ kind: "whole" })).toBe("whole")
     expect(phaseToRole({ kind: "subtasks" })).toBe("subtask")
@@ -68,13 +69,14 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
     expect(phaseToRole({ kind: "closeout" })).toBeUndefined()
     expect(phaseToRole({ kind: "step", step: "phase-plan", unit: "R-01.P01" })).toBe("phase-plan")
     expect(phaseToRole({ kind: "step", step: "phase-handover", unit: "R-01.P01" })).toBe("phase-handover")
-    // phase-append 是规划会话的追加变体,路由沿用 phase-plan 角色(0053 D23/F6:
-    // 既非新角色词也无旁路兜底,既有路由配置继续生效)
+    // phase-append is the append variant of the planning session; routing keeps
+    // the phase-plan role (0053 D23/F6: neither a new role word nor a bypass
+    // fallback, so existing route configuration keeps working)
     expect(phaseToRole({ kind: "step", step: "phase-append", unit: "R-01.P02" })).toBe("phase-plan")
     expect(phaseToRole(undefined)).toBeUndefined()
   })
 
-  test("roleOf: 显式 role 优先 > phase 推导 > bypass 兜底", () => {
+  test("roleOf: explicit role first > phase-derived > bypass fallback", () => {
     expect(roleOf({ pct: 100, used: 0, at: 0, role: "knowledge" })).toBe("knowledge")
     expect(
       roleOf({ pct: 100, used: 0, at: 0, role: "knowledge", phase: { kind: "wrapup" } }),
@@ -84,11 +86,13 @@ describe("phaseToRole / roleOf(执行链与旁路角色)", () => {
   })
 })
 
-// ---- 会话错误分类器(plans/0017-model-routing-design.md D.1,P3)----
-// 固定报文样本驱动判据演进(设计 G.2):新 provider 措辞漏判时改这里并回归。
-// 分类问"换模型有没有用",与 opencode 自身 RETRYABLE 判据(换会话有没有用)不同。
-describe("classifySessionError(固定报文样本 → 类别)", () => {
-  test("quota: isRetryable:false 的 insufficient_quota 报文", () => {
+// ---- Session-error classifier (plans/0017-model-routing-design.md D.1, P3) ----
+// Fixed message samples drive the criteria's evolution (design G.2): when a new
+// provider's wording slips through, change these and regress.
+// The classification asks "would switching the model help", unlike opencode's own
+// RETRYABLE criterion ("would switching the session help").
+describe("classifySessionError (fixed message samples → class)", () => {
+  test("quota: an insufficient_quota message with isRetryable:false", () => {
     expect(
       classifySessionError({
         message: "Error 002: Invalid request",
@@ -98,38 +102,38 @@ describe("classifySessionError(固定报文样本 → 类别)", () => {
       }),
     ).toBe("quota")
   })
-  test("quota: 402 状态码", () => {
+  test("quota: status code 402", () => {
     expect(classifySessionError({ statusCode: 402, message: "Payment Required" })).toBe("quota")
   })
-  test("quota: 余额/额度文案", () => {
+  test("quota: balance/quota wording", () => {
     expect(classifySessionError({ message: "insufficient balance in your account" })).toBe("quota")
     expect(classifySessionError({ responseBody: "you have reached your usage limit" })).toBe("quota")
   })
-  test("quota 优先于 auth: isRetryable:false 同时带 401", () => {
+  test("quota beats auth: isRetryable:false together with a 401", () => {
     expect(classifySessionError({ isRetryable: false, statusCode: 401, message: "unauthorized" })).toBe("quota")
   })
   test("auth: 401", () => {
     expect(classifySessionError({ statusCode: 401, message: "bad credentials" })).toBe("auth")
   })
-  test("auth: 403 + ProviderAuthError 名", () => {
+  test("auth: 403 + ProviderAuthError name", () => {
     expect(classifySessionError({ statusCode: 403, message: "ProviderAuthError: rejected key" })).toBe("auth")
   })
-  test("rate: 429 且 attempt>=3", () => {
+  test("rate: 429 with attempt>=3", () => {
     expect(classifySessionError({ statusCode: 429, message: "rate limit exceeded", attempt: 3 })).toBe("rate")
   })
-  test("rate: 429 且 next > 60s", () => {
+  test("rate: 429 with next > 60s", () => {
     expect(classifySessionError({ statusCode: 429, message: "resource_exhausted", next: 40 * 60_000 })).toBe("rate")
   })
-  test("非 rate: 单个 429(attempt:1、无 next)→ unknown(仍视为 opencode 在退避)", () => {
+  test("not rate: a lone 429 (attempt:1, no next) → unknown (still treated as opencode backing off)", () => {
     expect(classifySessionError({ statusCode: 429, message: "too many requests", attempt: 1 })).toBe("unknown")
   })
-  test("非 rate: 429 且 next<=60s → unknown", () => {
+  test("not rate: 429 with next<=60s → unknown", () => {
     expect(classifySessionError({ statusCode: 429, message: "too many requests", next: 30_000 })).toBe("unknown")
   })
-  test("overflow: 报文含 ContextOverflowError(opencode 适配器的错误名表)", () => {
+  test("overflow: message contains ContextOverflowError (the opencode adapter's error-name table)", () => {
     expect(classifySessionError({ message: "ContextOverflowError: prompt is too long" }, OPENCODE_ERROR_PATTERNS)).toBe("overflow")
   })
-  test("overflow 优先: 与 isRetryable:false 同时出现仍判 overflow", () => {
+  test("overflow wins: still classified overflow when it co-occurs with isRetryable:false", () => {
     expect(classifySessionError({ message: "ContextOverflowError", isRetryable: false }, OPENCODE_ERROR_PATTERNS)).toBe("overflow")
   })
   test("adapter patterns (MA.3): agent error names are the adapter's; the neutral table does not know them", () => {
@@ -147,23 +151,23 @@ describe("classifySessionError(固定报文样本 → 类别)", () => {
   test("transient: overloaded_error", () => {
     expect(classifySessionError({ message: "overloaded_error: engine busy" })).toBe("transient")
   })
-  test("transient: 500 内部错误", () => {
+  test("transient: a 500 internal error", () => {
     expect(classifySessionError({ statusCode: 500, message: "Internal Server Error" })).toBe("transient")
   })
-  test("transient: 报文里独立出现的 5xx 数字码", () => {
+  test("transient: a standalone 5xx numeric code in the message", () => {
     expect(classifySessionError({ message: "upstream returned 502" })).toBe("transient")
     expect(classifySessionError({ message: "HTTP/1.1 503" })).toBe("transient")
   })
-  test("非 transient: 长号码里的 50x 子串不算 5xx 信号(2026-09-17 审查 H4)", () => {
+  test("not transient: a 50x substring inside a longer number is not a 5xx signal (2026-09-17 review H4)", () => {
     expect(classifySessionError({ message: "Error 1500: something odd" })).toBe("unknown")
     expect(classifySessionError({ message: "error code 5042" })).toBe("unknown")
     expect(classifySessionError({ message: "5000 requests sent" })).toBe("unknown")
     expect(classifySessionError({ message: "runtime v5.0.4" })).toBe("unknown")
   })
-  test("unknown: 无意义字符串(保守缺省,不在 unknown 上换模型)", () => {
+  test("unknown: a meaningless string (conservative default; no model switch on unknown)", () => {
     expect(classifySessionError({ message: "asdf zxcv qwerty" })).toBe("unknown")
   })
-  test("unknown: 空输入", () => {
+  test("unknown: empty input", () => {
     expect(classifySessionError({})).toBe("unknown")
   })
 })

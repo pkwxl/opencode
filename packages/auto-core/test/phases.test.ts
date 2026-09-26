@@ -33,7 +33,7 @@ describe("parsePhases", () => {
   const letters = (raw: string) => parsePhases(raw)?.map((entry) => entry.letter)
   const types = (raw: string, dir?: string) => parsePhases(raw, dir)?.map((entry) => entry.type)
 
-  test("admtvk 的子序列且含 m → 按给出顺序返回", () => {
+  test("a subsequence of admtvk containing m → returned in the given order", () => {
     expect(letters("m")).toEqual(["m"])
     expect(letters("amt")).toEqual(["a", "m", "t"])
     expect(letters("admtvk")).toEqual(["a", "d", "m", "t", "v", "k"])
@@ -58,7 +58,7 @@ describe("parsePhases", () => {
     }),
   )
 
-  test("非法取值 → null(乱序/缺 m/越界字母/重复/空串)", () => {
+  test("invalid values → null (out of order / missing m / out-of-range letters / repeats / empty string)", () => {
     for (const raw of ["", "tma", "adk", "mm", "ama", "mx", "M", "amtkv ", "admtvkx"]) {
       expect(parsePhases(raw)).toBeNull()
     }
@@ -245,13 +245,13 @@ describe("phase index (M3.3): syncPhaseIndex / readPhases / completePhase", () =
   )
 })
 
-describe("routePhase(阶段路由,D.2)", () => {
+describe("routePhase (phase routing, D.2)", () => {
   // The current phase's task index with one task T-001 in the given state.
   async function seedTask(dir: string, unit: { dir: string; round: string; id: string }, done: boolean) {
-    writeFileSync(join(dir, unit.dir, "tasks.md"), renderTaskIndex(`${unit.round}.${unit.id}`, [{ id: "T-001", title: "任务", done }]))
+    writeFileSync(join(dir, unit.dir, "tasks.md"), renderTaskIndex(`${unit.round}.${unit.id}`, [{ id: "T-001", title: "task", done }]))
     mkdirSync(join(dir, "docs/T-001"), { recursive: true })
     rmSync(join(dir, "docs/T-001", done ? "todo.md" : "done.md"), { force: true })
-    writeFileSync(join(dir, "docs/T-001", done ? "done.md" : "todo.md"), renderTaskTodo({ id: "T-001", title: "任务" }))
+    writeFileSync(join(dir, "docs/T-001", done ? "done.md" : "todo.md"), renderTaskTodo({ id: "T-001", title: "task" }))
   }
   const route = async (dir: string) => {
     const r = await routePhase(dir)
@@ -301,7 +301,7 @@ describe("routePhase(阶段路由,D.2)", () => {
   )
 })
 
-describe("formatPhases / currentPhase(阶段进度行)", () => {
+describe("formatPhases / currentPhase (the phase progress line)", () => {
   test(
     "✓ = done.md, ▶ = current, others pending",
     withDir(async (dir) => {
@@ -352,47 +352,47 @@ describe("phase directory paths", () => {
   )
 })
 
-describe("validHandover(蒸馏会话产物校验,交接蒸馏受阻路径的判定依据)", () => {
+describe("validHandover (validates the handover-distillation session's artifact; the deciding basis for the blocked handover-distillation path)", () => {
   const HANDOVER = [
     "# a Analysis phase handover",
     "",
     "## Key decisions",
-    "- 决策甲",
+    "- Decision A",
     "",
     "## Constraints and pitfalls",
-    "- 坑乙",
+    "- Pitfall B",
     "",
     "## Required reading for the next phase",
-    "- docs/analysis/baseline.md: 行为基线",
+    "- docs/analysis/baseline.md: behavior baseline",
     "",
     "## Artifact index",
-    "- docs/analysis/: 分析产物",
+    "- docs/analysis/: analysis artifacts",
   ].join("\n")
 
-  test("四小节齐备(标题行逐字匹配,容忍行首空白)→ 有效", () => {
+  test("all four sections present (heading lines matched verbatim, leading whitespace tolerated) → valid", () => {
     expect(validHandover(HANDOVER)).toBe(true)
     expect(validHandover(HANDOVER.replace("## Key decisions", "   ## Key decisions"))).toBe(true)
   })
 
-  test("缺任一小节 / 标题被改写 / 空文档 → 无效(蒸馏产物缺失走隐性阻塞)", () => {
+  test("any section missing / a heading reworded / an empty document → invalid (a missing distillation artifact takes the implicit blocked path)", () => {
     for (const bad of [
       HANDOVER.replace("## Constraints and pitfalls", "## Constraints and traps"),
-      HANDOVER.replace("## Artifact index\n- docs/analysis/: 分析产物", ""),
+      HANDOVER.replace("## Artifact index\n- docs/analysis/: analysis artifacts", ""),
       "",
     ]) {
       expect(validHandover(bad)).toBe(false)
     }
-    // 次级标题不算数: "### Key decisions"包含协议子串但不是逐字的 ## 标题行
+    // a subheading does not count: "### Key decisions" contains the protocol substring but is not a verbatim ## heading line
     expect(validHandover(HANDOVER.replace(/^## /gm, "### "))).toBe(false)
   })
 })
 
-describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / establishRound / prevRoundDigest", () => {
+describe("rounds (M section + the per-round directory scheme): currentRound / nextRound / establishRound / prevRoundDigest", () => {
   async function exists(path: string) {
     return await Bun.file(path).exists()
   }
 
-  test("currentRound: 全新 = 1;R 系目录最大号(无 +1);旧 docs/phases/round-<N> 不参与(M3.7)", async () => {
+  test("currentRound: fresh = 1; the highest R-* directory number (no +1); old docs/phases/round-<N> does not count (M3.7)", async () => {
     const dir = tempDir()
     try {
       expect(await currentRound(dir)).toBe(1)
@@ -407,12 +407,12 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("nextRound: 当前轮已建(有索引)→ 当前轮 + 1;未建或建轮中断(目录无索引)= 当前推导值;旧根台账不算占用(M3.7, 0049 G6)", async () => {
+  test("nextRound: current round established (index present) → current + 1; not established or interrupted mid-establishment (directory without index) = the derived current value; the old root ledger does not count as occupied (M3.7, 0049 G6)", async () => {
     const dir = tempDir()
     try {
       expect(await nextRound(dir)).toBe(1)
       mkdirSync(join(dir, "docs"), { recursive: true })
-      writeFileSync(join(dir, "docs/phases.md"), "# 阶段台账\n")
+      writeFileSync(join(dir, "docs/phases.md"), "# Phase ledger\n")
       expect(await nextRound(dir)).toBe(1)
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
       expect(await roundEstablishing(dir, 1)).toBe(true)
@@ -429,24 +429,24 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("legacyLayoutProblem: 根 PLAN.md / 无阶段目录的 R-NN → 用法错误文案;新布局与空 R-NN(建轮崩溃窗口)不算(M3.7)", async () => {
+  test("legacyLayoutProblem: root PLAN.md / an R-NN without phase directories → usage-error wording; the new layout and an empty R-NN (the round-establishment crash window) do not count (M3.7)", async () => {
     const dir = tempDir()
     try {
       expect(await legacyLayoutProblem(dir)).toBeUndefined()
-      // 空轮次目录: establishRound 在 ① 与 ② 之间崩溃的窗口,续跑自愈
+      // an empty round directory: the window where establishRound crashed between ① and ②; resume self-heals
       mkdirSync(join(dir, "docs/R-01"), { recursive: true })
       expect(await legacyLayoutProblem(dir)).toBeUndefined()
-      // 新布局: 轮次目录内有阶段目录
+      // the new layout: phase directories inside the round directory
       await establishRound(dir, { phases: "amk" })
       expect(await legacyLayoutProblem(dir)).toBeUndefined()
-      // 旧轮次专用目录: 只有平铺文档、没有 P*-<type> 阶段目录
+      // an old per-round directory: only flat documents, no P*-<type> phase directories
       mkdirSync(join(dir, "docs/R-02"), { recursive: true })
       writeFileSync(join(dir, "docs/R-02/PLAN.md"), "# plan\n")
       const round = await legacyLayoutProblem(dir)
       expect(round).toStartWith("legacy layout: start a new project")
       expect(round).toContain("docs/R-02/ without phase directories")
       expect(round).not.toContain("R-01")
-      // 根 PLAN.md
+      // root PLAN.md
       writeFileSync(join(dir, "PLAN.md"), "# plan\n")
       expect(await legacyLayoutProblem(dir)).toContain("found root PLAN.md, docs/R-02/")
     } finally {
@@ -454,7 +454,7 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("runAll 预检: 旧布局在任何读写之前即用法错误退出 1(外壳之外的入口同样拦截)", async () => {
+  test("runAll preflight: a legacy layout exits 1 as a usage error before any read or write (entries outside the shell are caught the same)", async () => {
     const { readdirSync } = await import("node:fs")
     const { runAll } = await import("../src/loop")
     const dir = tempDir()
@@ -467,26 +467,26 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("establishRound: 建轮目录 + 阶段索引与阶段目录;不写 PLAN.md(M3.4 退役)与 AGENTS.md.bak(plans/0054 D1 退役)", async () => {
+  test("establishRound: creates the round directory + the phase index and phase directories; writes no PLAN.md (retired M3.4) and no AGENTS.md.bak (retired plans/0054 D1)", async () => {
     const dir = tempDir()
     try {
-      writeFileSync(join(dir, "AGENTS.md"), "# AGENTS\n\n工作流入口\n")
+      writeFileSync(join(dir, "AGENTS.md"), "# AGENTS\n\nWorkflow entry\n")
       const result = await establishRound(dir, { phases: "amt" })
       expect(result).toEqual({ round: 1, root: roundDir(1) })
-      // 阶段索引与阶段目录随轮首建立
+      // the phase index and phase directories are established with the round
       expect((await readPhases(dir))!.phases.map(phaseLabel)).toEqual(["P01-analysis", "P02-implement", "P03-test"])
       expect(await exists(join(dir, "docs/R-01/P03-test/todo.md"))).toBe(true)
       expect(await exists(join(dir, "PLAN.md"))).toBe(false)
       expect(await exists(join(dir, "docs/R-01/PLAN.md"))).toBe(false)
-      // 不再为 AGENTS.md 做轮首快照,根文件原样不动
+      // no round-start snapshot of AGENTS.md any more; the root file stays untouched
       expect(await exists(join(dir, "docs/R-01/AGENTS.md.bak"))).toBe(false)
-      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe("# AGENTS\n\n工作流入口\n")
+      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toBe("# AGENTS\n\nWorkflow entry\n")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  test("establishRound 无阶段模式: phases = m 建隐式单阶段 R-01/P01-implement(plans/0047 L2)", async () => {
+  test("establishRound no-phase mode: phases = m establishes the implicit single phase R-01/P01-implement (plans/0047 L2)", async () => {
     const dir = tempDir()
     try {
       await establishRound(dir, { phases: "m" })
@@ -496,25 +496,25 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
   })
 
-  test("establishRound 幂等续跑: 阶段完成态与阶段目录内容保留;显式轮号开新一轮", async () => {
+  test("establishRound idempotent resume: phase completion state and phase directory contents are kept; an explicit round number starts a new round", async () => {
     const dir = tempDir()
     try {
       await establishRound(dir, { phases: "amt" })
-      writeFileSync(join(dir, "docs/R-01/P01-analysis/tasks.md"), "- [x] T-001 已完成任务\n")
+      writeFileSync(join(dir, "docs/R-01/P01-analysis/tasks.md"), "- [x] T-001 done task\n")
       await completePhase(dir, (await readPhases(dir))!.phases[0]!)
-      // 幂等: 重复建立当前轮不重写阶段目录,阶段完成态保留
+      // idempotent: re-establishing the current round does not rewrite phase directories; completion state is kept
       const again = await establishRound(dir, { phases: "amt" })
       expect(doneTypes((await readPhases(dir))!)).toEqual(["analysis"])
       expect(again.round).toBe(1)
-      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("已完成任务")
-      // 新一轮: 显式轮号(nextRound)
+      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("done task")
+      // a new round: explicit round number (nextRound)
       const next = await establishRound(dir, { phases: "am", round: await nextRound(dir) })
       expect(next.round).toBe(2)
-      // 新一轮阶段全未完成
+      // the new round's phases are all incomplete
       expect(formatPhases((await readPhases(dir))!)).toBe("P01-analysis▶ P02-implement")
       expect(await currentRound(dir)).toBe(2)
-      // 上一轮内容不受影响(落盘即永久)
-      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("已完成任务")
+      // the previous round's content is unaffected (what is on disk is permanent)
+      expect(await Bun.file(join(dir, "docs/R-01/P01-analysis/tasks.md")).text()).toContain("done task")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -529,11 +529,11 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
     }
     const dir = tempDir()
     try {
-      // R-01 完成的轮: 阶段索引 + 阶段目录(交接/知识)+ done.md;R-02 已建(新一轮开工)
+      // R-01, a completed round: phase index + phase directories (handover/knowledge) + done.md; R-02 established (a new round under way)
       const units = await syncPhaseIndex(dir, 1, "amk")
-      writeFileSync(join(dir, "docs/R-01/P01-analysis/handover.md"), "# 分析 阶段交接\n\n## 关键决策\n- 决策甲\n")
-      writeFileSync(join(dir, "docs/R-01/P02-implement/handover.md"), "# 迁移实现 阶段交接\n\n## 关键决策\n- 迁移决策乙\n")
-      writeFileSync(join(dir, "docs/R-01/P03-knowledge/kb.md"), "# 迁移知识\n\nAPI 映射结论。")
+      writeFileSync(join(dir, "docs/R-01/P01-analysis/handover.md"), "# Analysis phase handover\n\n## Key decisions\n- Decision A\n")
+      writeFileSync(join(dir, "docs/R-01/P02-implement/handover.md"), "# Implementation phase handover\n\n## Key decisions\n- Implementation decision B\n")
+      writeFileSync(join(dir, "docs/R-01/P03-knowledge/kb.md"), "# Migration knowledge\n\nAPI mapping conclusions.")
       await completePhase(dir, units[0]!)
       await completePhase(dir, units[1]!)
       await syncPhaseIndex(dir, 2, "am")
@@ -543,10 +543,10 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
       expect(digest).toContain("- docs/R-01/P01-analysis/")
       expect(digest).toContain("- docs/R-01/P03-knowledge/")
       expect(digest).toContain("### Previous round final handover (docs/R-01/P02-implement/handover.md)")
-      expect(digest).toContain("迁移决策乙")
-      expect(digest).not.toContain("决策甲") // 仅注入最后完成阶段的交接
+      expect(digest).toContain("Implementation decision B")
+      expect(digest).not.toContain("Decision A") // only the last completed phase's handover is injected
       expect(digest).toContain("### Previous round migration knowledge (docs/R-01/P03-knowledge/kb.md)")
-      expect(digest).toContain("API 映射结论。")
+      expect(digest).toContain("API mapping conclusions.")
       // No closures: the index lines are exactly `- <root>/<name>/`
       const index = (lines: string[]) => `(${roundDir(1)}/)\n\n${lines.map((line) => `- ${roundDir(1)}/${line}`).join("\n")}\n\n###`
       expect(digest).toContain(index(["P01-analysis/", "P02-implement/", "P03-knowledge/"]))
@@ -557,14 +557,14 @@ describe("轮次(M 节 + 轮次专用目录方案): currentRound / nextRound / e
       )
       const closed = await prevRoundDigest(dir)
       expect(closed).toContain(index(["P01-analysis/ (closed: out of scope)", "P02-implement/", "P03-knowledge/"]))
-      expect(closed).toContain("迁移决策乙")
+      expect(closed).toContain("Implementation decision B")
       // Previous round's index unusable: directory index and knowledge as usual, handover dropped (prompt input is lenient)
-      writeFileSync(join(dir, "docs/R-01/phases.md"), "垃圾\n- [ ] P01 nonsense\n")
+      writeFileSync(join(dir, "docs/R-01/phases.md"), "garbage\n- [ ] P01 nonsense\n")
       const lenient = await prevRoundDigest(dir)
       expect(lenient).toContain("- docs/R-01/P01-analysis/")
       expect(lenient).not.toContain("(closed:")
-      expect(lenient).not.toContain("最终交接")
-      // 空白轮目录(只有目录、无内容)→ undefined
+      expect(lenient).not.toContain("final handover")
+      // a bare round directory (directories only, no content) → undefined
       const bare = tempDir()
       try {
         mkdirSync(join(bare, "docs/R-01"), { recursive: true })

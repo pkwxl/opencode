@@ -1,5 +1,7 @@
-// src/unit-commit.ts 的单测: refcheck 挂点门禁(gatedAutoCorrectRefs)与 afterSession 完成条件门禁。
-// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
+// Unit tests for src/unit-commit.ts: the refcheck hook-point gate
+// (gatedAutoCorrectRefs) and the afterSession completion-condition gate.
+// Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure
+// move).
 
 import { beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
@@ -12,38 +14,39 @@ import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { afterSession, deadSessionWhy, gatedAutoCorrectRefs, recordedAgentOk, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
 import { git, freshRepo, task } from "./fixtures/runner"
 
-// ---- refcheck 挂点门禁(refcheck-scope-design D3,OPENCODE_AUTO_REF_CHECK 缺省 off)----
+// ---- refcheck hook-point gate (refcheck-scope-design D3, OPENCODE_AUTO_REF_CHECK defaults off) ----
 
-describe("gatedAutoCorrectRefs(OPENCODE_AUTO_REF_CHECK 挂点门禁)", () => {
-  test("off(缺省): 提交前 auto-correct 空转,目标目录零引用检查行为", async () => {
+describe("gatedAutoCorrectRefs (the OPENCODE_AUTO_REF_CHECK hook-point gate)", () => {
+  test("off (default): auto-correct is a no-op before committing, zero reference-check behavior in the target directory", async () => {
     const dir = await freshRepo()
     try {
       await Bun.write(join(dir, "src/old.ts"), "code\n")
-      await Bun.write(join(dir, "docs/T-001/report.md"), "见 `src/old.ts` 与 `docs/gone.md`。\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "See `src/old.ts` and `docs/gone.md`.\n")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "init")
-      // 提交前发生移动(rename 配对可得),但 off 时不得改写
+      // The move happens before the commit (a rename pairing is available),
+      // but while off nothing may be rewritten
       await Bun.spawn(["mv", join(dir, "src/old.ts"), join(dir, "src/new.ts")]).exited
       const before = await Bun.file(join(dir, "docs/T-001/report.md")).text()
       await gatedAutoCorrectRefs(dir, false)
       expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(before)
-      // 不扫失效引用、不产生失效清单
+      // No stale-reference scan, no invalid list written
       expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("on: auto-correct 按 rename 配对改写并落失效清单", async () => {
+  test("on: auto-correct rewrites by the rename pairing and writes the invalid list", async () => {
     const dir = await freshRepo()
     try {
       await Bun.write(join(dir, "src/old.ts"), "code\n")
-      await Bun.write(join(dir, "docs/T-001/report.md"), "见 `src/old.ts` 与 `docs/gone.md`。\n")
+      await Bun.write(join(dir, "docs/T-001/report.md"), "See `src/old.ts` and `docs/gone.md`.\n")
       await git(dir, "add", "-A")
       await git(dir, "commit", "-qm", "init")
       await Bun.spawn(["mv", join(dir, "src/old.ts"), join(dir, "src/new.ts")]).exited
       await gatedAutoCorrectRefs(dir, true)
-      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe("见 `src/new.ts` 与 `docs/gone.md`。\n")
+      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe("See `src/new.ts` and `docs/gone.md`.\n")
       expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -51,8 +54,8 @@ describe("gatedAutoCorrectRefs(OPENCODE_AUTO_REF_CHECK 挂点门禁)", () => {
   })
 })
 
-describe("afterSession 完成条件门禁(plans/0021-commit-boundary-design.md)", () => {
-  test("提交失败(pre-commit 拒绝)→ failed 带问题文本;门禁关闭(--commit false)→ ok", async () => {
+describe("afterSession completion-condition gate (plans/0021-commit-boundary-design.md)", () => {
+  test("a commit failure (pre-commit rejects) → failed with the problem text; gate off (--commit false) → ok", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-after-gate-"))
     try {
       await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited
@@ -60,12 +63,12 @@ describe("afterSession 完成条件门禁(plans/0021-commit-boundary-design.md)"
       await writeFile(join(dir, "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
       await Bun.spawn(["git", "-C", dir, "config", "core.hooksPath", "hooks"]).exited
       await writeFile(join(dir, "a.txt"), "a")
-      const failed = await afterSession(dir, {}, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
+      const failed = await afterSession(dir, {}, { id: "T-001", title: "sample" }, { stage: "execute", subject: "T-001 execute" })
       expect(failed.type).toBe("failed")
       if (failed.type === "failed") expect(failed.question).toContain("unified commit failed")
-      const off = await afterSession(dir, { commit: false }, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
+      const off = await afterSession(dir, { commit: false }, { id: "T-001", title: "sample" }, { stage: "execute", subject: "T-001 execute" })
       expect(off).toEqual({ type: "ok" })
-      const none = await afterSession(undefined, {}, { id: "T-001", title: "示例" }, { stage: "execute", subject: "T-001 执行" })
+      const none = await afterSession(undefined, {}, { id: "T-001", title: "sample" }, { stage: "execute", subject: "T-001 execute" })
       expect(none).toEqual({ type: "ok" })
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -73,17 +76,18 @@ describe("afterSession 完成条件门禁(plans/0021-commit-boundary-design.md)"
   })
 })
 
-// ---- rollbackUnitState(单元回滚编排)----
+// ---- rollbackUnitState (unit rollback orchestration) ----
 
-describe("rollbackUnitState(单元回滚编排)", () => {
-  test("回滚成功即在途测试交接记录一并作废(.auto/handover.json 删除)", async () => {
+describe("rollbackUnitState (unit rollback orchestration)", () => {
+  test("a successful rollback also voids the in-flight test-handover record (.auto/handover.json deleted)", async () => {
     const dir = await freshRepo()
     try {
       await writeFile(join(dir, "seed.txt"), "s")
-      await commitTree(dir, task, { stage: "execute", subject: "T-001: 基线前提交" })
+      await commitTree(dir, task, { stage: "execute", subject: "T-001: pre-baseline commit" })
       const baseline = await unitBaseline(dir)
-      await writeFile(join(dir, "wip.txt"), "半截工作")
-      // 在途记录: 定版后收尾途中(带待跑脚本与定版锚点)。
+      await writeFile(join(dir, "wip.txt"), "half-finished work")
+      // The in-flight record: midway between the freeze and the wrap-up (with
+      // the script still to run and the freeze anchor).
       await saveHandover(dir, {
         task: "T-001",
         scope: "docs/T-001/testhandoff.md",
@@ -92,10 +96,11 @@ describe("rollbackUnitState(单元回滚编排)", () => {
         script: join(dir, "test", "t.sh"),
         pinSession: "ses_pin",
       })
-      const done = await rollbackUnitState(dir, task, "执行会话", baseline!)
+      const done = await rollbackUnitState(dir, task, "execute session", baseline!)
       expect(done.type).toBe("ok")
-      // 记录指向的定版提交与锚点属被收回的单元,不删会让重做被恢复状态机接回
-      // 「继续被丢弃的交接」。
+      // The freeze commit and anchor the record points at belong to the
+      // reclaimed unit; left in place, the redo would be picked up by the
+      // recovery state machine as "continue the discarded handover".
       expect(await recallHandover(dir, "T-001", "docs/T-001/testhandoff.md")).toBeUndefined()
     } finally {
       await rm(dir, { recursive: true, force: true })

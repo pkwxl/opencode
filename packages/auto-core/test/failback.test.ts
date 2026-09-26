@@ -19,8 +19,8 @@ import {
   stickyModel,
 } from "../src/failback"
 
-describe("failbackApplies(包含式粒度,与 step 同一 RANK 思路)", () => {
-  test("phase 只覆盖 phase 边界;task 覆盖 task/phase;subtask 全覆盖;session 全覆盖", () => {
+describe("failbackApplies (inclusive granularity, the same RANK idea as step)", () => {
+  test("phase covers only the phase boundary; task covers task/phase; subtask covers all; session covers all", () => {
     expect(failbackApplies("phase", "phase")).toBe(true)
     expect(failbackApplies("phase", "task")).toBe(false)
     expect(failbackApplies("phase", "subtask")).toBe(false)
@@ -36,12 +36,12 @@ describe("failbackApplies(包含式粒度,与 step 同一 RANK 思路)", () => {
   })
 })
 
-describe("failback(降级回试与 /failback 的模块态)", () => {
+describe("failback (the module state for failover, failback and /failback)", () => {
   afterEach(() => {
     resetFailback()
   })
 
-  test("sticky holder: setSticky/clearSticky 读写,缺省 undefined", () => {
+  test("sticky holder: setSticky/clearSticky read and write, default undefined", () => {
     expect(stickyModel()).toBeUndefined()
     setSticky("prov/a")
     expect(stickyModel()).toBe("prov/a")
@@ -49,14 +49,14 @@ describe("failback(降级回试与 /failback 的模块态)", () => {
     expect(stickyModel()).toBeUndefined()
   })
 
-  test("未置位时 consumeFailback 返回 false,链状态不动", () => {
+  test("when not requested, consumeFailback returns false and the chain state is untouched", () => {
     const chain: { model?: string } = { model: "prov/b" }
     expect(consumeFailback(chain)).toBe(false)
     expect(chain.model).toBe("prov/b")
     expect(failbackOverride()).toBeUndefined()
   })
 
-  test("无参 /failback: 消费后清链上降级候选与 sticky,不设覆写", () => {
+  test("/failback without arguments: on consumption the chain's failover candidate and sticky are cleared, no override set", () => {
     setSticky("prov/b")
     requestFailback()
     expect(failbackRequested()).toBe(true)
@@ -68,25 +68,25 @@ describe("failback(降级回试与 /failback 的模块态)", () => {
     expect(failbackRequested()).toBe(false)
   })
 
-  test("带参 /failback: 首个为首选覆写、其余为降级候选环", () => {
+  test("/failback with arguments: the first is the preferred override, the rest the failover candidate ring", () => {
     requestFailback(["kimi/k3", "zai/glm-5.3-flash", "zai/glm-5.3"])
     expect(consumeFailback()).toBe(true)
     expect(failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: ["zai/glm-5.3-flash", "zai/glm-5.3"] })
   })
 
-  test("带参仅一个模型: 首选覆写,候选环为空", () => {
+  test("a single model given: preferred override only, empty candidate ring", () => {
     requestFailback(["kimi/k3"])
     expect(consumeFailback()).toBe(true)
     expect(failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: [] })
   })
 
-  test("空参数表视同无参(仅重置)", () => {
+  test("an empty argument list counts as no arguments (reset only)", () => {
     requestFailback([])
     expect(consumeFailback()).toBe(true)
     expect(failbackOverride()).toBeUndefined()
   })
 
-  test("连续 /failback: 后一次覆写覆盖前一次", () => {
+  test("consecutive /failback: the later override replaces the earlier one", () => {
     requestFailback(["prov/a", "prov/b"])
     consumeFailback()
     requestFailback(["prov/c"])
@@ -94,7 +94,7 @@ describe("failback(降级回试与 /failback 的模块态)", () => {
     expect(failbackOverride()).toEqual({ wildcard: "prov/c", fallback: [] })
   })
 
-  test("resetFailback 复位全部模块态", () => {
+  test("resetFailback resets all module state", () => {
     setSticky("prov/a")
     requestFailback(["prov/c"])
     consumeFailback()

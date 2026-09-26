@@ -4,11 +4,11 @@ only, do not implement — do not modify any file other than the task index and 
 
 ## Input: implementation prompt
 
-实施提示词全文(固定输入)。
+Full implementation prompt (fixed input).
 
 ## Input: project intent (.opencode/auto/brief.md)
 
-项目意图。
+Project intent.
 
 ## Tasks
 

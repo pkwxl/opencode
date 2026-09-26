@@ -194,7 +194,7 @@ export const badAppendTurns = (dir: string): TurnScript => {
     const listed = [...index.matchAll(/^- \[.\] (T-\d{3}) /gm)].map((m) => m[1]!)
     const last = listed[listed.length - 1]
     const doc = last ? join(dir, "docs", last, "todo.md") : undefined
-    if (doc && existsSync(doc)) writeFileSync(doc, readFileSync(doc, "utf8").replace("## Goal", "## 目标"))
+    if (doc && existsSync(doc)) writeFileSync(doc, readFileSync(doc, "utf8").replace("## Goal", "## Aim"))
     return undefined
   }
 }

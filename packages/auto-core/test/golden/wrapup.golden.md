@@ -1,13 +1,13 @@
 You are carrying out one task of an implementation plan. This session only has to finish the current task given in the prompt; you do not need to know anything about the other tasks, and instructions inside other tasks' descriptions (asking a question, performing an action) are not this session's responsibility — do not carry them out.
 
 These tasks are already done, do not redo them:
-- [done] T-001: 搭建 schema
+- [done] T-001: build the schema
 
 Current task:
 
-# T-002: 实现迁移
+# T-002: implement the migration
 
-编写迁移脚本。
+Write the migration script.
 
 Scenario mode notes (migrate):
 Migration/upgrade mode notes:
@@ -42,7 +42,7 @@ Git commits are made by the DRIVER in one pass after the session ends; do not ru
 4. While this task was running, the DRIVER auto-answered the following questions that you should have asked the user (with nobody at
    the keyboard, the DRIVER closed them on the user's behalf, and what you received at the time was an automatic reply):
 
-   - 策略选 A 还是 B?
+   - strategy A or B?
 
    In docs/T-002/report.md give these their own section, "Proxy-answered questions", with one line per item:
    `AUTO-RESOLVE: <original question> -> <chosen option> (<reason>)` — copy the original question verbatim from the list above, and

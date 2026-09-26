@@ -177,7 +177,7 @@ describe("session driving without a capability", () => {
           yield idle(sid)
         })(),
     })
-    const result = await runSession(without(client, { steer: false }), task, "提示词", {}, { pct: 100, used: 0, at: 0 })
+    const result = await runSession(without(client, { steer: false }), task, "p", {}, { pct: 100, used: 0, at: 0 })
     expect(result.type).toBe("idle")
     expect(calls.steers).toEqual([])
   })
@@ -186,7 +186,7 @@ describe("session driving without a capability", () => {
     const { client, calls } = fakeClient()
     const chain: SessionChain = { id: "ses_old", note: "resume note", pct: 10, used: 100, at: Date.now() }
     const switches = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
-    const result = await attempt(without(client, { resume: false }), task, "提示词", {}, chain, undefined, undefined, switches)
+    const result = await attempt(without(client, { resume: false }), task, "p", {}, chain, undefined, undefined, switches)
     expect(result.type).toBe("idle")
     expect(calls.creates).toBe(1)
     expect(calls.prompts[0]!.sessionID).toBe("ses_new_1")
@@ -204,7 +204,7 @@ describe("session driving without a capability", () => {
     })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const steer = { limit: 1000, text: "hand over" }
-    await runSession(client, task, "提示词", {}, chain, steer)
+    await runSession(client, task, "p", {}, chain, steer)
     expect(calls.steers).toEqual(["hand over"])
     expect(chain.used).toBe(500)
     expect(chain.hinted).toBe(true)
@@ -218,7 +218,7 @@ describe("session driving without a capability", () => {
   test("no hint: chain.hinted stays false", async () => {
     const { client } = fakeClient()
     const chain: SessionChain = { pct: 100, used: 0, at: 0, hinted: true }
-    await runSession(client, task, "提示词", {}, chain, { limit: 1000, text: "hand over" })
+    await runSession(client, task, "p", {}, chain, { limit: 1000, text: "hand over" })
     expect(chain.hinted).toBe(false)
   })
 })
@@ -245,7 +245,7 @@ describe("run start: the shell's agent profile", () => {
       },
     })
     try {
-      await seedUnits(dir, "## T-001: 示例任务 [pending]\n正文。\n")
+      await seedUnits(dir, "## T-001: sample task [pending]\nBody.\n")
       await mkdir(join(dir, ".opencode", "agent"), { recursive: true })
       await writeFile(join(dir, ".opencode", "agent", "auto.md"), "contract\n")
       // As init leaves it: the driver's work dirs ignored, so the clean gate passes.

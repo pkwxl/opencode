@@ -1,25 +1,25 @@
-// src/resume-gate.ts 的单测: 恢复点单元归属门禁(unitReruns/phaseText)与中断恢复说明(resumeNote)。
-// 拆分自 test/runner.test.ts(plans/0024-module-split-plan.md S18,纯搬运)。
+// Unit tests for src/resume-gate.ts: the recovery point's unit-ownership gate (unitReruns/phaseText) and the interruption-recovery note (resumeNote).
+// Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { describe, expect, test } from "bun:test"
 import type { Phase } from "../src/resume"
 import { phaseText, resumeNote, unitReruns, type UnitRerunCtx } from "../src/resume-gate"
 
-describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑才允许复用)", () => {
+describe("unitReruns (the recovery point's unit-ownership gate: reuse allowed only when the owning unit will rerun)", () => {
   const ctx = (over: Partial<UnitRerunCtx> = {}): UnitRerunCtx => ({
     mode: "auto",
     fork: true,
-    items: [{ text: "第一项", done: true }, { text: "第二项", done: false }, { text: "第三项", done: false }],
+    items: [{ text: "item one", done: true }, { text: "item two", done: false }, { text: "item three", done: false }],
     subtasksFileItems: 0,
     wrapup: true,
     ...over,
   })
 
-  test("subtasks: 归属序号恰为首个未勾选项才可复用;已勾选(间歇期中断)/缺序号(老记录)/越界均否", () => {
+  test("subtasks: reusable only when the owning index is exactly the first unticked item; already ticked (interrupted in the gap), missing index (old record), and out of bounds are all no", () => {
     expect(unitReruns({ kind: "subtasks", index: 2 }, ctx())).toBe(true)
-    expect(unitReruns({ kind: "subtasks", index: 1 }, ctx())).toBe(false) // 中断于子任务 1 收口后的间歇
+    expect(unitReruns({ kind: "subtasks", index: 1 }, ctx())).toBe(false) // interrupted in the gap after subtask 1's close-out
     expect(unitReruns({ kind: "subtasks", index: 3 }, ctx())).toBe(false)
-    expect(unitReruns({ kind: "subtasks" }, ctx())).toBe(false) // 老版本无序号记录: 无法判定归属
+    expect(unitReruns({ kind: "subtasks" }, ctx())).toBe(false) // old record without an index: ownership undecidable
     expect(unitReruns({ kind: "subtasks", index: 9 }, ctx())).toBe(false)
   })
 
@@ -33,42 +33,42 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
     expect(unitReruns({ kind: "subtasks", index: 2 }, ctx({ items }))).toBe(false)
   })
 
-  test("decompose(合并理解与分解单元,M1.0): 检查项已注入或 subtasks.md 已有检查项使单元幂等跳过 → 不复用", () => {
-    // 检查项未注入且 subtasks.md 无检查项 → 合并单元将重跑,允许复用(fork 开关无关)
+  test("decompose (the merged understand+decompose unit, M1.0): items already injected, or subtasks.md already having items, makes the unit skip idempotently → no reuse", () => {
+    // Items not injected and subtasks.md has none → the merged unit will rerun, reuse allowed (fork switch irrelevant)
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [] }))).toBe(true)
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [], fork: false }))).toBe(true)
-    // subtasks.md 已有检查项 → 直注路径,合并会话不重跑
+    // subtasks.md already has items → the direct-inject path; the merged session does not rerun
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [], subtasksFileItems: 3 }))).toBe(false)
-    // 已有检查项 / 非 auto 模式 → 单元不跑
+    // Items already present / non-auto mode → the unit does not run
     expect(unitReruns({ kind: "decompose" }, ctx())).toBe(false)
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [], mode: "off" }))).toBe(false)
   })
 
-  test("whole/wrapup: 模式或配置使单元不跑 → 不复用;wrapup 要求检查项已全部勾完", () => {
+  test("whole/wrapup: mode or config making the record's unit not run → no reuse; wrapup requires all checklist items ticked", () => {
     expect(unitReruns({ kind: "whole" }, ctx({ mode: "off" }))).toBe(true)
     expect(unitReruns({ kind: "whole" }, ctx({ mode: "ondemand" }))).toBe(true)
     expect(unitReruns({ kind: "whole" }, ctx({ mode: "auto" }))).toBe(false)
-    const done = ctx({ items: [{ text: "唯一项", done: true }] })
+    const done = ctx({ items: [{ text: "only item", done: true }] })
     expect(unitReruns({ kind: "wrapup" }, done)).toBe(true)
-    expect(unitReruns({ kind: "wrapup" }, ctx())).toBe(false) // 尚有未勾项,下一个单元是子任务
+    expect(unitReruns({ kind: "wrapup" }, ctx())).toBe(false) // an unticked item remains; the next unit is a subtask
     expect(unitReruns({ kind: "wrapup" }, ctx({ items: [], wrapup: false }))).toBe(false)
   })
 
-  test("closeout: 结论行检查与完成标记由 driver 承担,没有可复用的会话", () => {
-    expect(unitReruns({ kind: "closeout" }, ctx({ items: [{ text: "唯一项", done: true }] }))).toBe(false)
+  test("closeout: the verdict-line check and the done marking are the driver's job; no session to reuse", () => {
+    expect(unitReruns({ kind: "closeout" }, ctx({ items: [{ text: "only item", done: true }] }))).toBe(false)
   })
 
-  test("无阶段(旧版 session.json)无法判定归属 → 不复用;step 记录不归本门禁", () => {
+  test("no phase (legacy session.json) leaves ownership undecidable → no reuse; step records are outside this gate", () => {
     expect(unitReruns(undefined, ctx())).toBe(false)
     expect(unitReruns({ kind: "step", step: "phase-plan", unit: "R-01.P01" }, ctx())).toBe(true)
   })
 
-  test("phaseText 的 subtasks 文案带归属序号", () => {
+  test("phaseText's subtasks wording carries the owning index", () => {
     expect(phaseText({ kind: "subtasks", index: 2 })).toBe("per-subtask execution (interrupted at subtask 2, continuing from the first unticked item)")
     expect(phaseText({ kind: "subtasks" })).toBe("per-subtask execution (continuing from the first unticked item)")
   })
 
-  test("phaseText 的 step 文案三分支(0053 D23: phase-append 逐字)", () => {
+  test("phaseText's step wording in three branches (0053 D23: phase-append verbatim)", () => {
     expect(phaseText({ kind: "step", step: "phase-plan", unit: "R-01.P01" })).toBe(
       "phase planning step (phase R-01.P01, writing the task index and task documents)",
     )
@@ -81,28 +81,28 @@ describe("unitReruns(恢复点的单元归属门禁: 仅当所属单元将重跑
   })
 })
 
-// ---- 恢复保真(plans/0022-session-recovery-fidelity-design.md 3.2/3.1/3.3)----
+// ---- Recovery fidelity (plans/0022-session-recovery-fidelity-design.md 3.2/3.1/3.3) ----
 
-describe("resumeNote(中断恢复说明)", () => {
+describe("resumeNote (interruption-recovery note)", () => {
   const subtasks: Phase = { kind: "subtasks", index: 2 }
   const planStep: Phase = { kind: "step", step: "phase-plan", unit: "R-01.P01" }
   const ONE_LINE =
     "[DRIVER] The session was interrupted; continue the current work until this unit is complete. Changes written before the interruption that are no longer in the worktree were committed to Git by the DRIVER — check with git log, do not redo them."
 
-  test("严格恢复门禁在位 + 复用原会话 → 收敛为一句 continue(3.2),附带提交语义澄清", () => {
+  test("strict-resume gate in place + reusing the original session → collapses to the one-line continue (3.2), with the commit-semantics clarification attached", () => {
     expect(resumeNote(subtasks, true, true)).toBe(ONE_LINE)
     expect(resumeNote(planStep, true, true)).toBe(ONE_LINE)
     expect(resumeNote(undefined, true, true)).toBe(ONE_LINE)
   })
 
-  test("门禁不在位(缺省 off / dryrun)→ 复用路径维持既有按阶段指引", () => {
+  test("gate not in place (default off / dryrun) → the reuse path keeps the existing per-phase guidance", () => {
     const note = resumeNote(subtasks, true, false)
     expect(note).not.toBe(ONE_LINE)
     expect(note).toContain("You are continuing in the original, interrupted session.")
     expect(note).toContain("first unfinished item")
   })
 
-  test("非复用路径(总结态续跑)恒给按阶段指引,不受严格恢复影响", () => {
+  test("the non-reuse path (continuation from a summary state) always gives per-phase guidance, unaffected by strict resume", () => {
     const note = resumeNote(subtasks, false, true)
     expect(note).toContain("Part of the work may already be done.")
     expect(note).toContain("first unfinished item")
@@ -111,26 +111,28 @@ describe("resumeNote(中断恢复说明)", () => {
     expect(step).toContain("four mandatory sections")
   })
 
-  test("phase-append 步骤的恢复指引(0053 D23 逐字): 先读现状索引,在既有行之后补完追加任务", () => {
+  test("the phase-append step's recovery guidance (0053 D23 verbatim): read the current index first, complete the appended tasks after the existing lines", () => {
     const appendStep: Phase = { kind: "step", step: "phase-append", unit: "R-01.P02" }
     const note = resumeNote(appendStep, false, true)
     expect(note).toContain(
       "You are in the task-appending step: first read this phase's task index tasks.md as it stands (the last session may have appended some tasks), " +
         "complete the appended tasks after the existing lines without changing existing lines or task documents and without reusing a task number, then end the session.",
     )
-    // step 共同骨架: 检查工作区实际状态、提交语义澄清与"绝不自行提交"
+    // The shared step skeleton: check the actual worktree state, the commit-semantics clarification, and "never commit yourself"
     expect(note).toContain("Check the actual worktree state with git status / git diff.")
     expect(note).toContain("do not mean the changes were lost")
     expect(note).toContain("you never commit yourself")
-    // 复用 + 严格恢复门禁在位 → 与其他阶段一样收敛为一句 continue
+    // Reuse + strict-resume gate in place → collapses to the one-line continue like the other phases
     expect(resumeNote(appendStep, true, true)).toBe(
       "[DRIVER] The session was interrupted; continue the current work until this unit is complete. Changes written before the interruption that are no longer in the worktree were committed to Git by the DRIVER — check with git log, do not redo them.",
     )
   })
 
-  test("提交语义澄清: 非一句 continue 的路径都说明「陌生提交/干净工作区 ≠ 修改丢失」", () => {
-    // 中断恢复时 AI 以 git 核对盘面,driver 统一提交(定版/交接/单元收口)或人工
-    // 处置提交会被误读为修改丢失而重做——澄清句必须在场(2026-09-17)。
+  test("commit-semantics clarification: every path that is not the one-line continue states \"unfamiliar commits / a clean worktree ≠ changes lost\"", () => {
+    // During interruption recovery the AI reconciles the state with git; commits
+    // made by the driver's unified commit (freeze/handover/unit close-out) or by
+    // human handling get misread as lost changes and redone — the clarification
+    // sentence must be present (2026-09-17).
     for (const note of [
       resumeNote(subtasks, true, false),
       resumeNote(subtasks, false, false),

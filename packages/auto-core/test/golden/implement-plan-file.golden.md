@@ -4,7 +4,7 @@ only, do not implement — do not modify any file other than the task index and 
 
 ## Input: plan file (spec.md)
 
-计划文件全文(固定输入)。
+Full plan file (fixed input).
 
 ## Tasks
 

@@ -21,7 +21,7 @@ const index = process.argv.indexOf("--target")
 const raw = index === -1 ? undefined : process.argv[index + 1]
 const target = TARGETS.find((item) => item === raw)
 if (raw && !target) {
-  console.error(`未知 --target: ${raw}\n可选值: ${TARGETS.join(", ")}`)
+  console.error(`Unknown --target: ${raw}\nvalid values: ${TARGETS.join(", ")}`)
   process.exit(1)
 }
 // Cross-compiled outputs get a platform suffix so they never overwrite the
@@ -37,4 +37,4 @@ if (!result.success) {
   for (const log of result.logs) console.error(log)
   process.exit(1)
 }
-console.log(`已生成独立可执行文件: ${outfile}`)
+console.log(`Standalone executable generated: ${outfile}`)

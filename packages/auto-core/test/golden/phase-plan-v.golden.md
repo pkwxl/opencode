@@ -3,7 +3,7 @@ this phase into a set of executable tasks, and write this phase's task index and
 
 ## Input: project intent (.opencode/auto/brief.md)
 
-项目意图(固定输入)。
+Project intent (fixed input).
 
 ## Input: scenario-mode preamble (migrate)
 
@@ -18,7 +18,7 @@ Below are the handover-distillation documents of each prior phase (at this round
 P<nn>-<type>/handover.md, a permanent path), the sole channel of cross-phase memory (in place of the prior phases'
 raw docs/ — do not try to read them when planning; pull more detail via their artifact index as needed):
 
-前序阶段交接(固定输入)。
+Prior phase handover (fixed input).
 
 ## Phase duties and artifact conventions
 
