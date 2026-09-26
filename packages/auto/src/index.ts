@@ -60,20 +60,24 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--file/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
-// --max-sessions/--reason(close 与 plan --force-close 共用)/--force-close
-// (plan 专用)带值(吞掉下一个 token;已退役的
-// --implement-file/--implement-prompt 同样吞值,其参数不被当作目录,
-// auto-core plans/0053 D13;init 的 -p/--prompt 退役后同理仍吞值,plans/0053 D31);
+// --max-sessions/--reason (shared by close and plan --force-close)/--force-close
+// (plan's alone) are value flags (they swallow the next token; the retired
+// --implement-file/--implement-prompt swallow one too, so their argument is
+// never mistaken for the directory, auto-core plans/0053 D13; init's retired
+// -p/--prompt keeps swallowing one for the same reason, plans/0053 D31);
 // --verbose/--interactive/--dryrun/--test-by-driver/
 // --handover-test/--new-session/--auto-number/--no-auto-number/--wrapup/--no-wrapup
-// 以及 --cascade/--commit-changes/--stash-changes(close 与 plan --force-close
-// 共用)、--append(plan 专用)是布尔选项,出现即
-// true,仅当紧随字面量 true/false 时才吞掉它。均支持
-// --flag=value;--prompt 另有短选项 -p,--interactive 另有短选项 -i(布尔,不吞值),
-// --mode 另有短选项 -m(镜像 -p 的吞值规则)。解析按整名精确匹配:--commit-changes
-// 与配置旗标 --commit、--force-close 与 -f/--force 名字均不同,互不误吞;close 的
-// ref 恒在前(positional[0]),--commit 即使吞值也吞不到它
-// (auto-core plans/0053 D20/F8,close 侧再以其配置旗标报文拦截)。
+// plus --cascade/--commit-changes/--stash-changes (shared by close and plan
+// --force-close) and --append (plan's alone) are boolean flags: presence means
+// true, and only a literally following true/false is swallowed. Every flag
+// accepts --flag=value; --prompt also has the short form -p, --interactive the
+// short form -i (boolean, swallows nothing), --mode the short form -m
+// (mirroring -p's swallow rule). Parsing matches whole names exactly:
+// --commit-changes differs from the config flag --commit and --force-close from
+// -f/--force, so none swallows the other's value by mistake; close's ref always
+// comes first (positional[0]), so --commit cannot swallow it even as a value
+// flag (auto-core plans/0053 D20/F8; the close side intercepts it with its
+// config-flag message anyway).
 const VALUE_FLAGS = new Set([
   "agent",
   "server",
@@ -166,10 +170,13 @@ if (command === "continue") {
   process.exit(1)
 }
 
-// 未知选项拦截: 白名单之外的旗标一律报错退出 1,防拼错被静默忽略。宪法级与
-// 历史选项对 init/run/plan 有专属拦截报文,此处放行交由其后各自处理;
-// close 只接受自己的四个旗标,其余(含宪法级与 -p/--file)在下方 close 分支以
-// close 专属报文拒绝;check/status 不接受任何选项,出现旗标即拒绝。
+// Unknown-option interception: every flag outside the whitelist is an error
+// with exit 1, so a typo is never silently ignored. Constitutional and
+// historical options have their own refusal messages on init/run/plan and are
+// waved through here for those to handle; close accepts only its four flags,
+// and everything else (constitutional options and -p/--file included) is
+// refused below in the close branch with close's own messages; check/status
+// take no options at all — any flag is refused.
 // models (auto-core plans/0055 §9) joins them: it only reads and prints.
 // --append is plan's alone (auto-core plans/0053 D23): appending tasks to the
 // current phase is a plan route, so every other command refuses the flag with
@@ -232,7 +239,8 @@ const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", 
 // agents and spends tokens); check and status stay flagless.
 const MODELS_FLAGS = new Set(["probe"])
 const FLAGLESS = command === "check" || command === "status" || command === "models"
-// reset 是反初始化,没有可配置项: 只接受 -f/--force(跳过确认与工作区干净度闸门)。
+// reset is de-initialization with nothing to configure: it accepts only
+// -f/--force (skipping the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
 // accepts the same (plans/0052 D11).
 const RESET_FLAGS = new Set(["force"])
@@ -609,11 +617,14 @@ function flagOn(key: string): boolean {
   return flags.has(key) && flags.get(key) !== "false"
 }
 
-// The options run and plan refuse alike (auto-core plans/0053 D14). 已固化选项
-// (设计文档 §C): 宪法级项目属性经 init 固化到 .opencode/auto/config.json,出现即
-// 用法错误(镜像 --commit-subtask 移除的既有先例);修订走 amend(plans/0052 D25)
-// 或直接编辑配置文件。看门狗键已由 --verify-idle/--verify-max 更名为
-// --idle-time/--idle-max(现控制 test 脚本执行),旧名出现即单独提示更名。
+// The options run and plan refuse alike (auto-core plans/0053 D14). Frozen
+// options (design document §C): the constitutional project attributes are
+// frozen by init into .opencode/auto/config.json — their presence at run time
+// is a usage error (mirroring the existing --commit-subtask removal
+// precedent); revision goes through amend (plans/0052 D25) or direct edits of
+// the config file. The watchdog keys were renamed from --verify-idle/
+// --verify-max to --idle-time/--idle-max (now governing the test-script
+// watchdog); the old names get their own rename notice.
 function refuseFrozenFlags(command: "run" | "plan") {
   for (const key of ["verify-idle", "verify-max"]) {
     if (flags.has(key)) {
@@ -632,15 +643,19 @@ function refuseFrozenFlags(command: "run" | "plan") {
     console.error("--commit-subtask removed: commits are now made by the driver after every session ends (AI commit rights revoked), and can no longer be turned off (--commit false is retired)")
     process.exit(1)
   }
-  // --amend 已全局退役(上方 RETIRED_FLAGS:init 不再接受该旗标后没有任何命令接受它)。
-  // -f/--force 是 init/reset/fix 专用(跳过覆盖确认与工作区干净度闸门);run 与 plan
-  // 不写配置、不做破坏性覆盖,无意义。
+  // --amend is retired everywhere (RETIRED_FLAGS above: once init stopped
+  // taking the flag, no command accepts it).
+  // -f/--force belongs to init/reset/fix alone (it skips the overwrite
+  // confirmation and the worktree cleanliness gate); run and plan write no
+  // config and do no destructive overwrite, so it is meaningless there.
   if (flags.has("force")) {
     console.error(`-f/--force is an init/reset/fix option (skips the confirmation and the worktree cleanliness check); ${command} does not accept it`)
     process.exit(1)
   }
-  // --continue 不是任何命令的选项: 续轮不是子命令(`continue` 已退役),是 plan
-  // 的路由——轮完成、## Close 填写并提交后,plan 跑轮尾检查并开新一轮。
+  // --continue is no command's option: opening the next round is not a
+  // subcommand (`continue` is retired) but a plan route — once the round is
+  // complete and ## Close is filled in and committed, plan runs the round-close
+  // checks and opens the next round.
   if (flags.has("continue")) {
     console.error(
       `--continue is not an option: the next round opens with plan — once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} plan <dir> (it runs the round-close checks and opens the next round)`,
@@ -655,8 +670,10 @@ type SessionFlags = { verbose: boolean; interactive: boolean; waitAnswer: number
 
 function parseSessionFlags(): SessionFlags {
   const verbose = flags.has("verbose") && flags.get("verbose") !== "false"
-  // --interactive/-i: 旁路交互(与 --verbose 互斥);文件保持 verbose 级完整记录,
-  // 前台不显示 verbose 明细,常驻 stdin 接收人工输入注入当前会话。
+  // --interactive/-i: foreground interactive mode (mutually exclusive with
+  // --verbose); the log file keeps the full verbose-level record while the
+  // foreground hides the verbose detail, and a resident stdin feeds human input
+  // into the current session as a steer.
   const interactive = flags.has("interactive") && flags.get("interactive") !== "false"
   if (interactive && verbose) {
     console.error("--interactive/-i and --verbose are mutually exclusive; pick one")
@@ -672,7 +689,9 @@ function parseSessionFlags(): SessionFlags {
     console.error("--permission takes auto-allow|ask-allow|ask-deny|ask-fail; defaults to ask-deny")
     process.exit(1)
   }
-  // --new-session: 中断恢复时不复用被中断的旧会话(仅跳过复用,阶段精确重入保留)。
+  // --new-session: when resuming from an interruption, do not reuse the
+  // interrupted session (it only skips reuse; exact phase re-entry is
+  // unaffected).
   return { verbose, interactive, waitAnswer, permission, newSession: flags.has("new-session") && flags.get("new-session") !== "false" }
 }
 
@@ -712,17 +731,21 @@ async function parsePlanInput(): Promise<PlanInput | undefined> {
   return { text: content, source: path }
 }
 
-// 每次 run(与 plan 进入循环时)都在目标目录 .auto/logs/ 下新建日志文件,同步
-// 记录全部输出。
+// Every run (and every plan that enters the loop) starts a fresh log file
+// under the target directory's .auto/logs/, recording all output
+// synchronously.
 function startRunLog(directory: string, session: SessionFlags) {
   setVerbose(session.verbose)
   if (session.interactive) setInteractive()
   log(`📝 log file: ${setLogFile(directory)}`)
 }
 
-// 项目配置(.opencode/auto/config.json)是宪法级选项的唯一来源;坏文件为环境
-// 错误退出 1(严格失败优于静默回落,附 fix 提示)。文件缺失取缺省并做 legacy 回落
-// (.auto/config.json 的 mode,仅提示、不迁移)。配置的模式须已注册。
+// The project config (.opencode/auto/config.json) is the only source of the
+// constitutional options; a broken file is an environment error with exit 1
+// (strict failure beats silent fallback, with a fix hint appended). A missing
+// file takes the defaults plus the legacy fallback (the mode in
+// .auto/config.json, noted but never migrated). The configured mode must be
+// registered.
 async function loadRunConfig(directory: string): Promise<{ config: ProjectConfig; mode: ModeSpec }> {
   let config: ProjectConfig
   try {
@@ -753,9 +776,11 @@ async function logRunBanner(directory: string, config: ProjectConfig) {
     )
   }
   log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  // 阶段进度行(B.2,与 status 共用 phasesLine;✓=已完成,▶=当前,其余=未开始);
-  // 续轮(docs/R-NN 轮次目录最大号 > 1)时带轮次标注。阶段索引缺失/非法仅提示,
-  // runAll 的阶段路由会以环境错误退出 1。
+  // The phase progress line (B.2, sharing phasesLine with status; ✓ = done,
+  // ▶ = current, the rest = not started); carries a round annotation when
+  // rounds continue (the greatest docs/R-NN round number > 1). A missing or
+  // invalid phase index only warns here — runAll's phase routing exits 1 as an
+  // environment error.
   if (config.phases !== "m") log(await phasesLine(directory))
 }
 
@@ -768,7 +793,8 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags
     // config file (written by init); OPENCODE_AUTO_AGENT still overrides the agent.
     agent: config.agent,
     server: flags.get("server"),
-    // interactive 隐含 verbose 记录级别(watch/变更文件监视照常运行并写入日志)。
+    // interactive implies the verbose log level (the watch/change-file
+    // monitoring runs as usual and writes to the log).
     verbose: session.verbose || session.interactive,
     waitAnswer: session.waitAnswer,
     commit: config.commit,
@@ -791,40 +817,44 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags
   }
 }
 
-// --commit 缺省/裸选项/true = 启用(会话后统一提交)。false 与旧值 none 已于
-// 2026-09-15 退役(plans/0021-commit-boundary-design.md): 统一提交是完成条件,单元基线、
-// 恢复保真回滚等机制全部以"提交恒开"为前提,关闭档与之冲突——出现即用法错误。
-// 旧的 subtask/task/once 档已随"收回 AI 提交权、driver 统一提交"一并移除。
-// 返回 null 表示取值非法(含已退役的关闭档)。
+// --commit absent/bare/true = on (the unified commit after sessions). false
+// and the old alias none retired on 2026-09-15
+// (plans/0021-commit-boundary-design.md): the unified commit is the completion
+// condition — the unit baseline, the recovery-fidelity rollback and the rest
+// all assume commits are always on, so an off setting conflicts with them and
+// is a usage error on sight. The old subtask/task/once levels were removed
+// together with "revoke AI commit rights, the driver commits". Returns null
+// for an invalid value (the retired off levels included).
 function parseCommit(flags: Map<string, string>): boolean | null {
   const raw = flags.get("commit")
   if (raw === undefined || raw === "" || raw === "true") return true
   return null
 }
 
-// --max-sessions 缺省 = 1;须为正整数,返回 null 表示取值非法。
+// --max-sessions defaults to 1; must be a positive integer — null marks an
+// invalid value.
 function parseMaxSessions(raw: string | undefined): number | null {
   if (raw === undefined) return 1
   const value = Number(raw)
   return /^\d+$/.test(raw) && value >= 1 ? value : null
 }
 
-// --subtask 缺省/裸选项 = auto;返回 null 表示取值非法。
+// --subtask absent/bare = auto; null marks an invalid value.
 function parseSubtask(raw: string | undefined): SubtaskMode | null {
   if (raw === undefined || raw === "") return "auto"
   if (raw === "off" || raw === "auto" || raw === "ondemand") return raw
   return null
 }
 
-// --permission 缺省/裸选项 = ask-deny;返回 null 表示取值非法。
+// --permission absent/bare = ask-deny; null marks an invalid value.
 function parsePermission(raw: string | undefined): PermissionMode | null {
   if (raw === undefined || raw === "") return "ask-deny"
   if (raw === "auto-allow" || raw === "ask-allow" || raw === "ask-deny" || raw === "ask-fail") return raw
   return null
 }
 
-// --wait-answer/--wait-between 缺省(无此选项)= 0(不等待);裸选项 = 默认 1 分钟;
-// 返回 null 表示取值非法。
+// --wait-answer/--wait-between absent (no flag) = 0 (no wait); bare = the
+// default 1 minute; null marks an invalid value.
 function parseMinutes(raw: string | undefined): number | null {
   if (raw === undefined) return 0
   if (raw === "") return 1
@@ -833,7 +863,7 @@ function parseMinutes(raw: string | undefined): number | null {
   return minutes
 }
 
-// --context-limit 缺省/裸选项 = 64(千 tokens);返回 null 表示取值非法。
+// --context-limit absent/bare = 64 (k tokens); null marks an invalid value.
 function parseContextLimit(raw: string | undefined): number | null {
   if (raw === undefined || raw === "") return 64
   const limit = Number(raw)
@@ -841,7 +871,8 @@ function parseContextLimit(raw: string | undefined): number | null {
   return limit
 }
 
-// --idle-time 缺省/裸选项 = 10(分钟);显式值须为 1..120 整数;返回 null 表示非法。
+// --idle-time absent/bare = 10 (minutes); an explicit value must be an integer
+// in 1..120; null marks an invalid one.
 function parseIdleTime(raw: string | undefined): number | null {
   if (raw === undefined || raw === "") return 10
   const minutes = Number(raw)
@@ -849,8 +880,8 @@ function parseIdleTime(raw: string | undefined): number | null {
   return minutes
 }
 
-// --idle-max 缺省/裸选项 = 0(不设绝对上限);显式值须为 1..1440 整数(分钟);
-// 返回 null 表示取值非法。
+// --idle-max absent/bare = 0 (no absolute cap); an explicit value must be an
+// integer in 1..1440 (minutes); null marks an invalid value.
 function parseIdleMax(raw: string | undefined): number | null {
   if (raw === undefined || raw === "") return 0
   const minutes = Number(raw)
@@ -858,8 +889,9 @@ function parseIdleMax(raw: string | undefined): number | null {
   return minutes
 }
 
-// 装载模式注册表(内置 + 目标目录 .opencode/auto/modes/ 覆盖);模式文件不合法
-// 时打印错误并以退出码 1 终止。init 与 run 共用。
+// Load the mode registry (builtin plus the target directory's
+// .opencode/auto/modes/ overrides); an invalid mode file prints its error and
+// exits 1. Shared by init and run.
 function loadModeTable(directory: string): Record<string, ModeSpec> {
   try {
     return loadModes(directory)
@@ -906,9 +938,10 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
     console.error("--context-limit takes a positive integer (unit: k tokens); defaults to 64")
     process.exit(1)
   }
-  // --idle-time: driver 托管脚本(test)的无进度判定窗口(输出文件持续无增长
-  // 即终止);--idle-max: 绝对时长上限(0 = 不设,只要持续有输出
-  // 就永不限时)。
+  // --idle-time: the no-progress window of a driver-run script (the test
+  // script) — terminate once its output file stops growing; --idle-max: the
+  // absolute duration cap (0 = none: as long as output keeps coming, it never
+  // times out).
   const idleTime = parseIdleTime(flags.get("idle-time"))
   if (idleTime === null) {
     console.error("--idle-time takes 1..120 (minutes); defaults to 10")
@@ -919,12 +952,15 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
     console.error("--idle-max takes 1..1440 (minutes); no cap by default")
     process.exit(1)
   }
-  // --phases: 阶段化流程(设计文档 plans/0006-phases-design.md);"m"(缺省)= 无阶段
-  // 声明,单次运行,行为不变。已有完成阶段时的前缀护栏见下(已完成的阶段必须构成
-  // 新值的前缀,防止 amend 把流程状态打成不可推导)。
-  // 取值二形态(M3.6): 字母预置(admtvk 子序列含 m)或逗号分隔的阶段类型 id 列表
-  // (含 .opencode/auto/phases/ 的自定义类型,须含 implement);列表形态规范化为
-  // 无空格的逗号串写入 config。
+  // --phases: the phased flow (design document plans/0006-phases-design.md);
+  // "m" (the default) = no phase declaration, a single run, behavior unchanged.
+  // The prefix guard over already-completed phases sits below (the completed
+  // phases must form a prefix of the new value, so amend cannot push the flow
+  // state beyond derivation).
+  // Two value shapes (M3.6): the letter preset (an admtvk subsequence
+  // containing m) or a comma-separated list of phase type ids (custom types
+  // from .opencode/auto/phases/ allowed, implement required); the list shape is
+  // normalized to a space-free comma string in the config.
   let phases: string | undefined
   if (flags.has("phases")) {
     const raw = flags.get("phases") ?? ""
@@ -941,8 +977,9 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
     }
     phases = PRESET_FORM.test(raw) ? raw : parsed.map((entry) => entry.type).join(",")
   }
-  // 仅显式给出的键进入合并: --commit/--subtask 等裸选项取各自缺省档,
-  // 未出现的选项不覆盖既有配置。
+  // Only explicitly given keys enter the merge: bare --commit/--subtask and
+  // their kin take their own defaults, and options never given leave the
+  // existing config alone.
   const explicit: Partial<ProjectConfig> = {}
   if (agent === "claude") explicit.agent = agent
   if (flags.has("commit")) explicit.commit = commit
@@ -952,20 +989,24 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   if (flags.has("idle-max")) explicit.idleMax = idleMax
   if (phases !== undefined) explicit.phases = phases
   if (parallel !== undefined && parallel !== "none") explicit.parallel = parallel as ProjectConfig["parallel"]
-  // --test-by-driver / --handover-test: 布尔宪法级选项,init/amend
-  // 接受(裸选项或 true 启用、false 关闭),经 explicit 合并(amend 语义)。
+  // --test-by-driver / --handover-test: boolean constitutional options
+  // accepted by init/amend (bare or true turns them on, false off), merged
+  // through explicit (amend semantics).
   if (flags.has("test-by-driver")) explicit.testByDriver = flags.get("test-by-driver") !== "false"
   if (flags.has("handover-test")) explicit.handoverTest = flags.get("handover-test") !== "false"
-  // --auto-number/--no-auto-number: 一对布尔开关(启用/关闭自动编号),同为布尔
-  // 宪法级选项,经 explicit 合并(amend 语义);两者同现自相矛盾,为用法错误。
+  // --auto-number/--no-auto-number: a boolean on/off pair (auto numbering on
+  // or off), likewise constitutional boolean options merged through explicit
+  // (amend semantics); both at once contradict themselves and are a usage
+  // error.
   if (flags.has("auto-number") && flags.has("no-auto-number") && flags.get("auto-number") !== "false" && flags.get("no-auto-number") !== "false") {
     console.error("--auto-number and --no-auto-number are a mutually exclusive pair; do not use both")
     process.exit(1)
   }
   if (flags.has("auto-number") && flags.get("auto-number") !== "false") explicit.autoNumber = true
   if (flags.has("no-auto-number") && flags.get("no-auto-number") !== "false") explicit.autoNumber = false
-  // --wrapup/--no-wrapup: 一对布尔开关(启用/关闭任务收尾会话),镜像
-  // --auto-number/--no-auto-number 同款处理;两者同现自相矛盾,为用法错误。
+  // --wrapup/--no-wrapup: a boolean pair (the task wrap-up session on or off),
+  // handled the same way as --auto-number/--no-auto-number; both at once
+  // contradict themselves and are a usage error.
   if (flags.has("wrapup") && flags.has("no-wrapup") && flags.get("wrapup") !== "false" && flags.get("no-wrapup") !== "false") {
     console.error("--wrapup and --no-wrapup are a mutually exclusive pair; do not use both")
     process.exit(1)
@@ -976,11 +1017,15 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
 }
 
 if (command === "init" || command === "amend") {
-  // 项目宪法选项在 init 固化(设计文档 §B): 缺省为**无状态全量覆盖**——产出的
-  // config.json 仅由本次执行传入的参数决定,未给出的键一律回落内置缺省,不与磁盘
-  // 上的旧配置做任何增量合并。于是「干净环境跑一次无参 init」与「带参 init 之后
-  // 再跑一次无参 init」产出逐字节一致,单次 init 即可得到确定状态,无需前置清理。
-  // 值域校验复用既有 parse*(与配置文件侧 validateProjectConfig 同源)。
+  // The project's constitutional options are frozen by init (design document
+  // §B): the default is a **stateless full overwrite** — the config.json
+  // produced is determined solely by the parameters passed this run; keys not
+  // given always fall back to the builtin defaults, never incrementally
+  // merging the old config on disk. So "a bare init in a clean environment"
+  // and "a bare init after a parameterized one" produce byte-identical output:
+  // one init yields a determined state, no pre-cleanup needed. Value
+  // validation reuses the existing parse* helpers (same source as the
+  // config-file side's validateProjectConfig).
   //
   // The amend command (plans/0052 D25) is the per-key revision of its own:
   // it takes the config flags only, refuses without config.json or without a
@@ -1059,8 +1104,10 @@ if (command === "init" || command === "amend") {
   // the amend command refuses it, `continue` is retired), so only the key
   // droppers and the explicit keys are read back here.
   const { explicit, agent, parallel } = parseConfigFlags(directory)
-  // 全量覆盖 vs 增量修订的唯一分水岭: 缺省取内置缺省表作基线(未给出的键回落
-  // 默认值),--amend 取磁盘上的既有配置作基线(未给出的键保留原值)。
+  // The one watershed between full overwrite and per-key revision: the default
+  // takes the builtin defaults table as its baseline (keys not given fall back
+  // to the defaults), while the amend command takes the existing on-disk
+  // config as its baseline (keys not given keep their values).
   //
   // An amend loads strictly, since it would carry a retired key over. A full
   // overwrite discards them anyway, so its baseline read tolerates them and
@@ -1083,9 +1130,10 @@ if (command === "init" || command === "amend") {
   // hand-edited: a full-overwrite init keeps them rather than silently erasing them.
   const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
   const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
-  // handoverTest 须搭配 testByDriver: 显式给出时按本次生效值校验(未显式给出
-  // test-by-driver 则回落既有配置值);amend 关闭 test-by-driver 而保留既有
-  // handoverTest=true 亦在此拦截。
+  // handoverTest requires testByDriver: when either is explicit, the check
+  // judges this run's effective values (an ungiven --test-by-driver falls back
+  // to the existing config value); an amend turning test-by-driver off while
+  // keeping a stored handoverTest=true is caught here too.
   {
     const effectiveTestByDriver = explicit.testByDriver ?? base.testByDriver
     const effectiveHandoverTest = explicit.handoverTest ?? base.handoverTest
@@ -1097,11 +1145,15 @@ if (command === "init" || command === "amend") {
       process.exit(1)
     }
   }
-  // 阶段索引(当前轮 docs/R-NN/phases.md + 各阶段目录 todo.md/done.md,M3.3)是
-  // 推导式状态载体;非法即环境错误退出 1(报文给人工修订指引)。已完成阶段的类型
-  // 序列(索引序,M3.6 起取代预置字母串): 非空时显式改 --phases 须满足前缀护栏。
-  // (continue 曾在这里复核上一轮完整性并跑轮尾检查后建新一轮;该子命令已退役,
-  // plan 的 prelude 承担整条路由。)
+  // The phase index (the current round's docs/R-NN/phases.md plus each phase
+  // directory's todo.md/done.md, M3.3) is a derived state carrier; an invalid
+  // one is an environment error with exit 1 (the message points a person at
+  // the fix). The completed phases' type sequence (index order, replacing the
+  // preset letter string since M3.6): when non-empty, an explicit --phases
+  // change must satisfy the prefix guard. (`continue` used to re-check the
+  // previous round's completeness here, run the round-close checks and
+  // establish the next round; that subcommand retired, and plan's prelude owns
+  // the whole route.)
   const liveRound = await currentRound(directory)
   let phaseState: PhaseState | undefined
   try {
@@ -1110,8 +1162,10 @@ if (command === "init" || command === "amend") {
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
-  // -m/--mode 解析(缩减版,init 侧): 优先级 显式值 > 基线值(全量覆盖下即缺省,
-  // amend 命令下为既有配置值);未注册名为用法错误(报文列出当前支持的模式)。
+  // -m/--mode parsing (the reduced init-side form): precedence is explicit
+  // value > baseline value (the defaults under a full overwrite, the existing
+  // config under the amend command); an unregistered name is a usage error
+  // (the message lists the currently supported modes).
   const modeName = flags.get("mode") ?? base.mode
   const modes = loadModeTable(directory)
   if (!modes[modeName]) {
@@ -1148,9 +1202,10 @@ if (command === "init" || command === "amend") {
       process.exit(1)
     }
   }
-  // 提示词库与意图包: 装载目标目录 .opencode/auto/prompts/ 与 .opencode/auto/intents/
-  // 覆盖(协议校验失败即退出);init 不渲染提示词,提前装载可在 init 阶段就暴露
-  // 覆盖问题。
+  // The prompt library and intent packs: load the target directory's
+  // .opencode/auto/prompts/ and .opencode/auto/intents/ overrides (a failed
+  // protocol check exits right there); init renders no prompts, but loading
+  // early surfaces override problems at init time already.
   try {
     usePromptLibrary(directory)
     useIntentPacks(directory)
@@ -1174,21 +1229,25 @@ if (command === "init" || command === "amend") {
     }
   }
   for (const item of discarded) console.log(`⚠ full overwrite drops the retired key ${item.key} = ${JSON.stringify(item.value)}: ${item.why}`)
-  // 防误触闸门: 只在「已存在配置、且本次是全量覆盖」时生效——全新目录没有可覆盖
-  // 的东西,amend 命令也不会丢弃任何既有键。两道闸都必须排在第一个写盘点
-  // (saveProjectConfig)之前,现有 e2e 断言「旗标校验通过前目录为空」的不变式
-  // 依赖于此;先拦截再询问,避免用户答完 y 才看到报错。
+  // The mistouch gates: they bite only when "a config already exists and this
+  // run is a full overwrite" — a fresh directory has nothing to overwrite, and
+  // the amend command discards no existing key. Both gates must precede the
+  // first write (saveProjectConfig); the existing e2e invariant "the directory
+  // is empty until every flag check passes" depends on it. Intercept first,
+  // ask second — a person must not answer y only to then hit an error.
   const force = flags.has("force")
   const overwriting = !amendCommand && !force && (await Bun.file(join(directory, ".opencode", "auto", "config.json")).exists())
   if (overwriting) {
-    // ① 工作区干净度: init 会覆盖已落盘的配置,git 是用户唯一的撤销手段。
-    //    非 TTY 同样生效——免掉的只是交互确认,不是这道拦截。
+    // ① Worktree cleanliness: init overwrites a config already on disk, and
+    //    git is the person's only undo. It applies without a TTY too — what a
+    //    non-TTY skips is the confirmation, never this gate.
     const dirty = await checkCleanTree(directory, "init full overwrite")
     if (dirty) {
       console.error(dirty)
       process.exit(1)
     }
-    // ② 交互确认: 非 TTY 直接放行(confirm 内部判定)。
+    // ② Interactive confirmation: a non-TTY passes straight through (decided
+    //    inside confirm).
     const ok = await confirm(
       "found an existing config .opencode/auto/config.json; init will fully overwrite it with these parameters (keys not given fall back to defaults; to change individual keys instead, use opencode-auto amend). continue? [y/N] ",
     )
@@ -1204,9 +1263,11 @@ if (command === "init" || command === "amend") {
     process.exit(1)
   }
   console.log(`⚙ project config (.opencode/auto/config.json): ${formatProjectConfig(config)}`)
-  // `type: "file"` 导入会被嵌入编译产物,保证独立二进制可用。任务不在此写(PLAN.md
-  // 已退役,M3.4): 轮次目录与阶段目录由 plan 的建轮路由建立,任务单元由规划会话
-  // 或人工写出。amend writes only what renders from the config
+  // The `type: "file"` imports are embedded into the compiled output, keeping
+  // the standalone binary self-sufficient. Tasks are not written here (PLAN.md
+  // retired, M3.4): round and phase directories come from plan's
+  // round-establishment route, and task units from a planning session or a
+  // person. amend writes only what renders from the config
   // (the contract); opencode.json may hold a person's edits and is init's and fix's.
   const templates: Record<string, string> = amendCommand
     ? { ".opencode/agent/auto.md": templateAgent }
@@ -1214,7 +1275,7 @@ if (command === "init" || command === "amend") {
   for (const [file, source] of Object.entries(templates)) {
     const target = resolve(directory, file)
     const raw = await Bun.file(source).text()
-    // agent 契约按 config.testByDriver 条件渲染。
+    // The agent contract renders conditionally on config.testByDriver.
     const content = file === "opencode.json" ? raw : renderText(raw, { testByDriver: config.testByDriver })
     const existing = await Bun.file(target).text().catch(() => undefined)
     if (existing !== undefined && (existing === content || file !== ".opencode/agent/auto.md")) {
@@ -1234,8 +1295,10 @@ if (command === "init" || command === "amend") {
       console.log(`created: ${BRIEF_FILE} (project brief stub: fill in the goal, the migration source and target, and constraints; every planning session reads it)`)
     }
   }
-  // 幂等同步 AGENTS.md 的 opencode-auto 块: 按当前配置渲染,与文件中现有标准块比对
-  // ——缺失则追加、内容不一致则整块替换、旧版/多余的带名标记块一律清理。
+  // Idempotently sync the opencode-auto block of AGENTS.md: render it from the
+  // current config and compare with the file's existing standard block —
+  // append when missing, replace the whole block when it differs, and clean
+  // out legacy/stray named marker blocks unconditionally.
   const ensured = await ensurePointer(directory, { testByDriver: config.testByDriver })
   console.log(
     ensured.block === "inserted"
@@ -1270,14 +1333,20 @@ if (command === "init" || command === "amend") {
   process.exit(0)
 }
 
-// check: ①启发式检查 AGENTS.md 与未完成任务的任务文档中是否有与"提交执行权在 driver"原则
-// (及 testByDriver 启用时的"测试/编译
-// reset 子命令(反初始化 / 卸载): 与 init 互逆,精确移除 init 写出的配置层产物,
-// 把工作区还原到未初始化状态,消除配置残留对 opencode 主程序与其他扩展组件的
-// 干扰。清单与执行都在 auto-core/reset.ts(边界口径写在那里的文件头注释):只清
-// 配置层,不碰 .auto/ 运行时状态、docs/ 与 tmp/;与主程序共用的
-// opencode.json 逐字节比对模板后才删,AGENTS.md 只摘除 opencode-auto 标记块;
-// 目录一律 rmdir(空才回收),保住 .opencode/auto/prompts/ 与用户其他 agent 契约。
+// check: ① a heuristic scan of AGENTS.md and the open tasks' task documents
+// for statements violating the "commit execution rights live with the driver"
+// principle (and, when testByDriver is on, the "test/compile
+// reset subcommand (de-initialization / uninstall): the inverse of init —
+// remove exactly the config-layer artifacts init wrote and restore the
+// worktree to the uninitialized state, so leftover config stops interfering
+// with the opencode main program and other extension components. The checklist
+// and its execution live in auto-core/reset.ts (the boundary is stated in that
+// file's header comment): it clears the config layer only, never .auto/
+// runtime state, docs/ or tmp/; opencode.json, shared with the main program,
+// is deleted only after matching the template byte for byte; AGENTS.md loses
+// only the opencode-auto marker block; directories are reclaimed by rmdir only
+// when empty, preserving .opencode/auto/prompts/ and the person's other agent
+// contracts.
 if (command === "reset") {
   const entries = await planReset(directory)
   const actionable = entries.filter((entry) => entry.action !== "keep")
@@ -1289,7 +1358,8 @@ if (command === "reset") {
   console.log(formatResetPlan(entries))
   const force = flags.has("force")
   if (!force) {
-    // reset 恒为破坏性,干净度闸门无条件生效(不像 init 只在覆盖时才查)。
+    // reset is always destructive, so the cleanliness gate applies
+    // unconditionally (unlike init, which checks only when overwriting).
     const dirty = await checkCleanTree(directory, "reset deinit")
     if (dirty) {
       console.error(dirty)
@@ -1361,10 +1431,12 @@ if (command === "fix") {
   process.exit(0)
 }
 
-// 等命令执行权在 driver"原则)相违背的描述;②引用检查(stable-refs P4)——
-// 全量活文档(docs/**/*.md)扫描失效引用(路径不存在 /
-// 行号超出文件总行数)。任一命中退出码 1,供人工修订。测试类检查是否启用由
-// checkPrinciple 依配置决定,testOn 仅用于调整报文措辞。
+// and other command execution rights live with the driver" principle); ② the
+// reference check (stable-refs P4) — a full scan of the live documents
+// (docs/**/*.md) for stale references (a path that does not exist, or a line
+// number beyond the file's line count). Any hit exits 1 for a person to fix.
+// Whether the test-side checks run is checkPrinciple's call from the config;
+// testOn only shapes the message wording.
 if (command === "check") {
   const { findings, notes, refs, testOn } = await checkPrinciple(directory)
   const active = [...(testOn ? ["test"] : []), "commit"].join("/")
@@ -1394,8 +1466,9 @@ if (command === "check") {
   process.exit(1)
 }
 
-// 阶段进度行(run 横幅与 status 共用): 当前轮阶段索引 → P01-analysis✓ P02-design▶ …;
-// 索引缺失/非法只给提示行,不阻塞调用方。
+// The phase progress line (shared by run's banner and status): the current
+// round's phase index → P01-analysis✓ P02-design▶ …; a missing or invalid
+// index only yields a warning line and never blocks the caller.
 async function phasesLine(directory: string): Promise<string> {
   const round = await currentRound(directory)
   try {
@@ -1408,9 +1481,11 @@ async function phasesLine(directory: string): Promise<string> {
 }
 
 if (command === "status") {
-  // 配置摘要,随后是当前轮的只读总览树(轮 → 阶段 → 任务 → 子任务,状态与依赖;
-  // plans/0047 L1/R2)。配置非法仅提示、不阻塞总览;阶段/任务索引缺失或非法以
-  // ⚠ 行呈现。A live run lock comes first (plans/0053 D3).
+  // The config summary, then the current round's read-only overview tree
+  // (round → phase → task → subtask, with status and dependencies; plans/0047
+  // L1/R2). An invalid config only warns and never blocks the overview; a
+  // missing or invalid phase/task index shows as ⚠ lines. A live run lock
+  // comes first (plans/0053 D3).
   const holder = liveRunLock(directory)
   if (holder) console.log(lockStatusLine(holder))
   try {

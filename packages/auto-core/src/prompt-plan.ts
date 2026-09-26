@@ -13,19 +13,31 @@ import { intentText, modeText, phaseTag, renderPrompt } from "./prompt"
 import type { Task } from "./tasks"
 import { renderText } from "./template"
 
-// 阶段规划会话(设计文档 plans/0006-phases-design.md E 节): 旁路一次性,产物 = 本阶段任务
-// 索引 taskIndex(<阶段目录>/tasks.md)+ 各任务的 docs/T-NNN/todo.md(M3.4,plans/0047
-// L3;phaseId 为阶段限定编号,写入任务文档的 `Phase:` 字段)。brief 为 .opencode/auto/brief.md 原文
-// (可空,模板含未提供提示段);handovers 为各前序阶段 handover.md 的预拼接字符串
-// (driver 侧组装,注入纪律: 只注入蒸馏产物、不注入前序原始 docs/)。
-// prevRound 为上一轮迁移结论摘录(plans/0006-phases-design.md M 节,loop 侧组装: 归档索引/
-// 最终交接/迁移知识),仅续轮(新一轮轮目录建立后)的新一轮首个规划会话注入。
+// Phase planning session (design doc plans/0006-phases-design.md §E): a
+// one-shot bypass session whose artifacts = this phase's task index
+// taskIndex (<phase directory>/tasks.md) + each task's docs/T-NNN/todo.md
+// (M3.4, plans/0047 L3; phaseId is the phase qualified id, written into
+// the task document's `Phase:` field). brief is the .opencode/auto/brief.md
+// text verbatim (may be empty; the template carries a not-provided notice
+// block); handovers is the pre-joined string of every prior phase's
+// handover.md (assembled on the driver side; injection discipline: only
+// distillation artifacts are injected, never the prior phases' raw docs/).
+// prevRound is an excerpt of the previous round's migration conclusion
+// (plans/0006-phases-design.md §M, assembled on the loop side: archive
+// index / final handover / migration knowledge), injected only into the
+// first planning session of a continued round (once the new round's round
+// directory is established).
 // The migration source and target are intent and reach planning through the
 // brief (plans/0052 D2); there are no separate parameters.
-// trimmedPhases 仅 m 阶段生效(生效 phases 经 --phases 裁剪、不含独立 a/d 阶段时由
-// loop 传入,模板注入「流程裁剪注记」——勘察设计并入首批任务,底线保障不省)。
-// numberStart 为自动编号(config.autoNumber)下的编号起点(.auto/next-task 记录值,
-// 由 loop 在规划会话前经 ensureNumbering 确保就位),未启用时缺省——编号自 T-001 起。
+// trimmedPhases takes effect only for the m phase (passed by the loop when
+// the effective phases were trimmed via --phases and include no standalone
+// a/d phases; the template injects the "flow trimming" note — the survey
+// and design phases are folded into the first batch of tasks, and the
+// bottom-line safeguards are not skipped).
+// numberStart is the numbering start under auto numbering
+// (config.autoNumber): the .auto/next-task recorded value, which the loop
+// ensures is in place via ensureNumbering before the planning session;
+// defaults when disabled — numbering starts from T-001.
 export function renderPhasePlan(input: {
   phase: PhaseTypeEntry
   phaseId: string
@@ -80,14 +92,19 @@ function parallelism(level: ParallelLevel | undefined): { parallel?: string; par
 }
 
 // m-mode planning (phases = "m", plans/0053 D12; formerly the init shortcut
-// --implement-file/--implement-prompt): 旁路一次性,产物 = 单阶段 P01-implement 的
-// 任务索引 + 各任务文档,复用与 renderPhasePlan 同款任务单元格式约定,但不含阶段/
-// 轮次/交接等阶段化流程概念。numberStart 为编号起点(三位零填充前的数值;缺省 1)。
-// 输入二选一: file 给出时按「计划文件」呈现 content(源文件全文,path 供报文引用),
-// 否则按「实施提示词」呈现(content = 提示词原文)。planPhase always passes the
+// --implement-file/--implement-prompt): a one-shot bypass session whose
+// artifacts = the single-phase P01-implement's task index + each task's
+// documents, reusing the same task-unit format conventions as
+// renderPhasePlan but without the phased-flow notions of phase / round /
+// handover. numberStart is the numbering start (the value before
+// three-digit zero padding; default 1). The input is one of two: with
+// file given, content is presented as the "plan file" (the source file's
+// full text; path for the prompt to reference), otherwise as the
+// "implementation prompt" (content = the prompt text verbatim).planPhase always passes the
 // phase's persisted planning input as the file (plan-input.md, D11), so the
-// prompt branch is unused by the core. brief 为 .opencode/auto/brief.md 原文(可空,
-// 供规划会话感知项目意图)。
+// prompt branch is unused by the core. brief is the .opencode/auto/brief.md
+// text verbatim (may be empty; it lets the planning session sense the
+// project intent).
 export function renderImplementPlan(input: {
   file?: string
   content: string

@@ -1,8 +1,10 @@
-// 任务执行阶段: executeWhole(off/ondemand 整任务会话)+ 合并理解与分解
-// (ensureDecomposed,M1.0 起 understand+decompose 单会话合一,plans/0030)+
-// runSubtask 单个子任务会话(含子任务目录状态协议 todo.md→done.md)。位于 exec-session/session 之上、runner 之下;
-// **不得反向 import runner**(§D.2)。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S12,纯搬运)。
+// The task execution stage: executeWhole (off/ondemand whole-task sessions) +
+// the merged understand+decompose unit (ensureDecomposed; since M1.0
+// understand+decompose is one single session, plans/0030) + runSubtask, one
+// subtask session (with the subtask-directory state protocol todo.md→done.md).
+// Sits above exec-session/session and below runner; **must not import
+// runner** (§D.2).
+// Split out of src/runner.ts (plans/0024-module-split-plan.md S12, pure move).
 
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -28,10 +30,13 @@ import { handoffSteer, removeHandoffChain } from "./testrun"
 import { sessionHandoverDue } from "./usage"
 import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
-// off/ondemand 的执行阶段: off 单会话完成整个任务;ondemand 会话进行中上下文
-// 达到 2x --context-limit 时由 driver steer 交接提示,会话写出交接文档后换新会话
-// 续跑,直到自然完成或交接文档标记完成。返回 undefined 表示执行阶段完成。
-// 上次尝试遗留交接文档的清理由调用方(pipeline)在做恢复判定后进行。
+// The execution stage for off/ondemand: off finishes the whole task in one
+// session; ondemand, when a live session's context reaches 2x --context-limit,
+// the driver steers in the handover hint, the session writes a handover
+// document and a new session continues from it, until a natural finish or the
+// handover document marks completion. Returns undefined = execution stage done.
+// A handover document left over from the previous attempt is cleaned up by the
+// caller (the pipeline) after its recovery determination.
 export async function executeWhole(
   client: ClientSource,
   plan: Plan,
@@ -45,14 +50,19 @@ export async function executeWhole(
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
-  // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
-  // (见 usage.ts sessionHandoverDue);off 模式本就不构造。
+  // With steer=off (OPENCODE_AUTO_STEER) no handover hint is built, and the
+  // post-session handover check is disabled with it (see usage.ts
+  // sessionHandoverDue); off mode never builds one anyway.
   const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
   chain.subject = subject
-  // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在即
-  // active 恢复——中断前已交接。状态=完成 → 执行阶段已完成,跳过整任务会话;
-  // 状态=继续 → 以续跑提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
+  // Interruption-recovery seeding: a stale handover document is cleared by the
+  // pipeline on the non-recovery path, so the file still existing here means an
+  // active recovery — handed over before the interruption. Status=done → the
+  // execution stage already finished; skip the whole-task session.
+  // Status=continue → open a new session on the continuation prompt to continue
+  // from the handover (reusing the old session would only hit the cap again at
+  // once).
   const prior = ondemand ? handoffStatus(await readHandoff()) : undefined
   if (prior === "done") {
     log(`↻ ${task.id} resume after interruption: handover document ${handoffFile(task)} marks execution complete; skipping the whole-task session`)
@@ -62,9 +72,11 @@ export async function executeWhole(
   if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues from the handover document`)
   let feedback = ""
   let retried = false
-  // 严格恢复的回滚重做(3.3 R3 收紧): 交接文档无效(含测试交接写核失败)一次即回滚
-  // 到单元基线、冷启动重做本单元,不再带反馈重试;以一次为限,再失败按隐性阻塞
-  // 上抛(现场已保全在 stash)。
+  // Strict-resume rollback redo (tightened in 3.3 R3): one invalid handover
+  // document (including a test-handover write-check failure) rolls back to the
+  // unit baseline and cold-starts a redo of the unit, with no retry with
+  // feedback; once only — failing again is escalated as a hidden blockage (the
+  // working state is already preserved in the stash).
   let rolled = false
   const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
     if (!strict || !chain.baseline) return undefined
@@ -99,7 +111,8 @@ export async function executeWhole(
       steer,
     )
     if (result.type === "blocked") {
-      // 测试交接写核失败(严格恢复): 回滚后冷启动重做,一次为限。
+      // Test-handover write-check failure (strict resume): roll back and
+      // cold-start the redo, once only.
       if (result.rollback && !rolled) {
         const redone = await rollbackRedo()
         if (redone === "done") {
@@ -110,17 +123,22 @@ export async function executeWhole(
       }
       return result
     }
-    // 任务级测试交接链随执行范围闭环整链清除(与 runSubtask 子任务收口同口径):
-    // 归档份已落账也必须删——留给同范围的下一次执行(任务回退重跑)会被恢复
-    // 状态机误判为「已收口」的在途交接(无记录 + 归档已落账 = H3)。删除随下方
-    // 统一提交落账。
+    // The task-level test-handover chain is cleared whole when the execution
+    // scope closes (same rule as runSubtask's subtask close-out): the archived
+    // copy must be deleted even though committed — kept around for the next
+    // execution in the same scope (the task reverted and re-run), the recovery
+    // state machine would misjudge it as an in-flight handover already closed
+    // out (no record + archived copy committed = H3). The deletion lands with
+    // the unified commit below.
     if (opts.testByDriver) {
       await removeHandoffChain(planDir, taskDoc(task.id, "testhandoff"))
     }
     const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
-    // 未触发交接阈值(2x cap)即结束 = 任务在单会话内自然完成;steer 未构造
-    // (off 模式或 OPENCODE_AUTO_STEER=off)时同样自然收,不做交接判定。
+    // Ending without hitting the handover threshold (2x cap) = the task
+    // finished naturally in a single session; when no steer was built (off
+    // mode or OPENCODE_AUTO_STEER=off) it likewise ends naturally, with no
+    // handover check.
     if (!sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)) return undefined
     const status = handoffStatus(await readHandoff())
     if (status === "done") return undefined
@@ -130,7 +148,8 @@ export async function executeWhole(
       feedback = ""
       continue
     }
-    // 交接边界写核失败(严格恢复): 无效一次即回滚冷启动重做。
+    // Handover-boundary write-check failure (strict resume): one invalid
+    // attempt rolls back and cold-starts the redo.
     if (!rolled) {
       const redone = await rollbackRedo()
       if (redone === "done") {
@@ -167,9 +186,11 @@ export async function executeWhole(
 // On success the session id is recorded as the session-mode fork base (digest
 // mode overwrites it in ensureForkBase afterwards) and everything lands in the
 // "decompose" unit commit.
-// 中断恢复/兼容读: subtasks.md 已有检查项(上次分解已写文件、人工编写的清单,或
-// 旧版分解产物)直接沿用、不再开会话——没有 todo.md 状态文件的清单保持勾选语义
-// (协议未激活,plans/0030 D5)。
+// Interruption recovery / compatibility read: when subtasks.md already has
+// checklist items (files written by a previous decomposition, a hand-written
+// checklist, or legacy decomposition output) they are used as-is with no new
+// session — a checklist without todo.md state files keeps its tick semantics
+// (the protocol is not active, plans/0030 D5).
 export async function ensureDecomposed(
   client: ClientSource,
   plan: Plan,
@@ -196,13 +217,18 @@ export async function ensureDecomposed(
   autobanner(`${task.id} ${task.title}: task understanding + decomposition`)
   const subject = `${task.id} decompose ${task.title}`
   chain.subject = subject
-  // 形检/缺失重提示经 fork 刚结束的会话下发时(2026-09-18 修订),下一回合只带
-  // 反馈本身——副本已含完整提示词与全部工作上下文,重发整份只会诱导从头重做。
+  // When a shape-check / missing-artifact re-prompt is dispatched through a
+  // fork of the just-ended session (revised 2026-09-18), the next round carries
+  // the feedback alone — the copy already holds the full prompt and all the
+  // working context, and resending the whole thing would only induce starting
+  // over from scratch.
   let shapeForked = false
   for (let i = 0; ; i++) {
-    // fine(OPENCODE_AUTO_DECOMPOSE_FINE=on)透传分解提示词: 注入细粒度准则段
-    // (plans/0003-fork-decompose-design.md §5.1);taskContext(OPENCODE_AUTO_TASK_CONTEXT)
-    // 透传 context.md 的建议行数措辞。
+    // fine (OPENCODE_AUTO_DECOMPOSE_FINE=on) passes through into the decompose
+    // prompt: injects the fine-grained criteria section
+    // (plans/0003-fork-decompose-design.md §5.1); taskContext
+    // (OPENCODE_AUTO_TASK_CONTEXT) passes through the suggested-line-count
+    // wording of context.md.
     const brief = shapeForked
     shapeForked = false
     const result = await runSession(
@@ -215,12 +241,15 @@ export async function ensureDecomposed(
       chain,
     )
     if (result.type === "blocked") return result
-    // 产物校验(全部硬性): context.md/shared.md 非空 + 形检;subtasks.md 有检查项 +
-    // 形检;每个子任务目录的 todo.md 存在 + 形检。只查本次会话产出——上方「文件已存在
-    // 即直接注入」路径不受影响(不追溯存量)。
+    // Artifact checks (all hard): context.md/shared.md non-empty + shape
+    // check; subtasks.md has checklist items + shape check; every subtask
+    // directory's todo.md exists + shape check. Only this session's output is
+    // checked — the "file already exists, inject directly" path above is
+    // unaffected (existing files are not re-audited).
     const problems = await decomposeArtifactProblems(dir, task.id)
     if (!problems.length) {
-      // 合并会话即 session 模式基点;digest 模式由 ensureForkBase 随后覆写。
+      // The merged session is the session-mode fork base; digest mode
+      // overwrites it in ensureForkBase afterwards.
       // Under a registry the record is the per-agent map (plans/0055 §8.2):
       // the merged session lives on the agent its dispatch picked, so its id
       // is stored under that agent's key and another agent's chain reads no
@@ -280,12 +309,16 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
 // Runs one subtask session, then ticks the checklist item on trust: the
 // session self-checks its own work; the whole task is accounted for by the
 // wrap-up report and its result line.
-// handoff-steer 同样适用于子任务会话(与 ondemand 整任务会话同机制、共用
-// docs/<id>/handoff.md): 会话进行中上下文已用量达到 2x --context-limit 时
-// driver steer 交接提示,会话写出交接文档(末行 `Status: continue|done`,以本子任务
-// 是否完成计)后换新会话凭交接续跑,直到自然完成或交接文档标记完成;子任务
-// 完成后清除交接文档,下一子任务重新起算。实验开关 OPENCODE_AUTO_STEER=off
-// 停用本机制(不注入交接提示、会话后不做交接判定,自然完成即收)。
+// handoff-steer applies to subtask sessions too (same mechanism as the
+// ondemand whole-task session, sharing docs/<id>/handoff.md): when a live
+// session's used context reaches 2x --context-limit the driver steers in the
+// handover hint, the session writes the handover document (last line
+// `Status: continue|done`, counted by whether this subtask is done), then a
+// new session continues from the handover, until a natural finish or the
+// handover document marks completion; once the subtask is done the handover
+// document is cleared and the next subtask starts counting anew. Experiment
+// switch OPENCODE_AUTO_STEER=off disables the mechanism (no handover hint
+// injected, no post-session handover check; a natural finish ends it).
 export async function runSubtask(
   client: ClientSource,
   plan: Plan,
@@ -295,8 +328,10 @@ export async function runSubtask(
   opts: Opts,
   chain: SessionChain,
   base?: ForkBaseInfo,
-  // 本子任务恢复续跑(active 进度记录归属本单元): 豁免启动 clean 门禁——工作区
-  // 脏区是本单元自身进度(含交接文档),收口时一并落账(plans/0021-commit-boundary-design.md)。
+  // Resumed continuation of this subtask (the active progress record belongs
+  // to this unit): exempt from the startup clean gate — the worktree's dirty
+  // area is this unit's own progress (handover document included), committed
+  // together at close-out (plans/0021-commit-boundary-design.md).
   resumeUnit = false,
 ): Promise<UnitStop | undefined> {
   subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
@@ -315,9 +350,11 @@ export async function runSubtask(
     chain.modelStep = 0
   }
   const dir = opts.dir ?? plan.dir
-  // 子任务单元提交边界: 启动 clean 门禁 + SHA 基线(收口时校验提交区间全为 driver
-  // 提交);driver 独占状态文件遗留由 beginUnit 内部 carryover 自愈。基线同时上链
-  // (严格恢复: active 记录携带、回滚锚点)。
+  // Subtask unit commit boundary: startup clean gate + SHA baseline (close-out
+  // verifies the commit range is all driver commits); driver-exclusive
+  // state-file leftovers self-heal through the carryover inside beginUnit. The
+  // baseline also goes onto the chain (strict resume: carried by the active
+  // record, the rollback anchor).
   let baseline: UnitBaseline | undefined
   if (resumeUnit) {
     if (opts.commit !== false && !opts.dryrun) baseline = await unitBaseline(dir)
@@ -329,20 +366,27 @@ export async function runSubtask(
   chain.baseline = baseline
   const strict = strictResumeActive(opts)
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  // steer=off(OPENCODE_AUTO_STEER)时不构造交接提示,会话后的交接判定一并停用
-  // (见 usage.ts sessionHandoverDue);--handover-test 的测试交接是独立机制,不受影响。
+  // With steer=off (OPENCODE_AUTO_STEER) no handover hint is built, and the
+  // post-session handover check is disabled with it (see usage.ts
+  // sessionHandoverDue); --handover-test's test handover is a separate
+  // mechanism and is unaffected.
   const steer = handoffSteer(autoSwitches().steer, cap, task)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
-  // 子任务目录状态协议(M1.0,plans/0030 D8): done.md 已存在 = 本子任务已收口
-  // (含中断恰好落在 rename 与统一提交之间的恢复盘面)——跳过会话直接进收口
-  // (勾选 + 提交)。文件存在性是进度事实,不凭会话叙事。状态文件路径自 spec 数据
-  // (document/spec.ts subtaskStateSpec,M1.4)。
+  // Subtask-directory state protocol (M1.0, plans/0030 D8): done.md already
+  // existing = this subtask already closed out (including the recovery board
+  // where the interruption landed exactly between the rename and the unified
+  // commit) — skip the session and go straight to close-out (tick + commit).
+  // File existence is the progress fact, not session narrative. State-file
+  // paths come from the spec data (document/spec.ts subtaskStateSpec, M1.4).
   const stateSpec = subtaskStateSpec(task.id, index)
   const stateDone = await Bun.file(join(planDir, stateSpec.complete.path)).exists()
-  // 中断恢复播种: 陈旧交接文档由 pipeline 在非恢复路径清除,此处文件仍存在且
-  // 状态=完成 → 子任务在中断前已由交接会话完成,直接勾选;状态=继续 → 以续跑
-  // 提示开新会话凭交接继续(复用旧会话只会立刻再触上限)。
+  // Interruption-recovery seeding: a stale handover document is cleared by the
+  // pipeline on the non-recovery path, so the file still existing here with
+  // status=done → the subtask was already finished by a handover session
+  // before the interruption; tick it directly. Status=continue → open a new
+  // session on the continuation prompt to continue from the handover (reusing
+  // the old session would only hit the cap again at once).
   const prior = stateDone ? undefined : handoffStatus(await readHandoff())
   if (stateDone) {
     log(`↻ ${task.id} subtask ${index}: ${stateSpec.complete.path} already exists; skipping the session and closing out directly`)
@@ -351,21 +395,30 @@ export async function runSubtask(
   } else {
     let continuation = prior === "continue"
     if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues the subtask from the handover document`)
-    // ③ 子任务首个会话从基点分叉(与分解会话同一分叉点,先 fork 后渲染——warm/
-    // cold 背景段据此选择);跨子任务不复用(种子链强制),交接续跑与带反馈重试
-    // 沿用链内既有机制。无基点/失败 → 全新会话 + 冷启动提示词(读 context.md)。
+    // ③ A subtask's first session forks from the fork base (the same fork
+    // point as the decompose session — fork first, render after, which the
+    // warm/cold background section chooses by); no reuse across subtasks
+    // (enforced by the seed chain), while handover continuation and
+    // retry-with-feedback keep the chain's existing mechanisms. No base /
+    // fork failure → brand-new session + cold-start prompt (reads context.md).
     let warm = await seedForkSession(client, opts, chain, base, subject)
     let feedback = ""
     let retried = false
-    // 产物形检的重提示次数(D2): 与交接文档反馈的 retried 各自计数——两条环路
-    // 各限一次,互不挤占对方的重试额度。
+    // Re-prompt count for the artifact shape check (D2): counted separately
+    // from the handover-document feedback's retried — each of the two loops is
+    // limited to one, neither eating into the other's retry budget.
     let shapeRetried = false
-    // 形检重提示经 fork 刚结束的会话下发时(2026-09-18 修订),下一回合只带反馈
-    // 本身——副本已含完整提示词与全部工作上下文,重发整份只会诱导从头重做。
+    // When a shape-check re-prompt is dispatched through a fork of the
+    // just-ended session (revised 2026-09-18), the next round carries the
+    // feedback alone — the copy already holds the full prompt and all the
+    // working context, and resending the whole thing would only induce
+    // starting over from scratch.
     let shapeForked = false
-    // 严格恢复的回滚重做(3.3 R3 收紧): 交接文档无效(含测试交接写核失败)一次即
-    // 回滚到子任务基线、冷启动重做,不再带反馈重试;以一次为限,再失败按隐性阻塞
-    // 上抛(现场已保全在 stash)。
+    // Strict-resume rollback redo (tightened in 3.3 R3): one invalid handover
+    // document (including a test-handover write-check failure) rolls back to
+    // the subtask baseline and cold-starts a redo, with no retry with
+    // feedback; once only — failing again is escalated as a hidden blockage
+    // (the working state is already preserved in the stash).
     let rolled = false
     const rollbackRedo = async (): Promise<UnitStop | "done" | undefined> => {
       if (!strict || !baseline) return undefined
@@ -386,7 +439,8 @@ export async function runSubtask(
         chain.modelEntry = undefined
         chain.modelStep = 0
       }
-      // 冷启动重做从基点重新分叉(与子任务首个会话同一形态,拿回暖前缀)。
+      // The cold-start redo forks from the base again (the same shape as the
+      // subtask's first session, recovering the warm prefix).
       warm = await seedForkSession(client, opts, chain, base, subject)
       return "done"
     }
@@ -404,7 +458,8 @@ export async function runSubtask(
         index,
       )
       if (result.type === "blocked") {
-        // 测试交接写核失败(严格恢复): 回滚后冷启动重做,一次为限。
+        // Test-handover write-check failure (strict resume): roll back and
+        // cold-start the redo, once only.
         if (result.rollback && !rolled) {
           const redone = await rollbackRedo()
           if (redone === "done") {
@@ -415,14 +470,22 @@ export async function runSubtask(
         }
         return result
       }
-      // 未触发交接阈值(2x cap)即结束 = 子任务会话自然收场。完成判定不靠 agent
-      // 自报: 先过产物形检(D2/D4/D6,session-boundary-hardening §4.3/§4.6)——零落盘/
-      // 声明产出缺失/文档截断(含全量变更扫描)任一命中都不得勾选推进(T-068 S01 事故的判定层
-      // 缺口),带反馈重提示一次,仍不过 → blocked 交人工。dryrun/提交门禁关闭/
-      // 非 git 不启用,测试交接收场会话豁免(其完成判据在 testhandoff.md)。
-      // steer=off 时不构造交接提示,自然完成即收、不索要交接文档——否则自然结束
-      // 但用量超限的会话会被误要求补写交接文档;超限收场交由 provider 侧压缩/上限
-      // 错误走既有「会话错误」换新会话重试,磁盘进度与统一提交不受影响。
+      // Ending without hitting the handover threshold (2x cap) = the subtask
+      // session finished naturally. Completion is never judged by agent
+      // self-report: the artifact shape check runs first (D2/D4/D6,
+      // session-boundary-hardening §4.3/§4.6) — zero-write / missing declared
+      // artifacts / document truncation (including the whole-change scan); any
+      // hit means no tick and no advance (the verdict-layer gap of the T-068
+      // S01 incident), one re-prompt with feedback, still failing → blocked
+      // for a human. Not enabled under dryrun / commit gate off / non-git; a
+      // session ending in a test handover is exempt (its completion criterion
+      // is in testhandoff.md). With steer=off no handover hint is built — a
+      // natural finish ends it and no handover document is demanded;
+      // otherwise a session that ended naturally but over the usage cap would
+      // be wrongly demanded to write a handover document after the fact. An
+      // over-cap ending is left to the provider-side compression / cap errors,
+      // which go through the existing "session error" path (retry in a new
+      // session); disk progress and the unified commit are unaffected.
       if (!sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)) {
         if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
           const problems = await subtaskArtifactProblems(dir, text, baseline)
@@ -437,9 +500,11 @@ export async function runSubtask(
             }
             shapeRetried = true
             feedback = shapeFeedback(task, index, problems)
-            // 重提示基于刚结束的会话 fork 续做(2026-09-18 修订): 副本带着本会话的
-            // 全部工作上下文,下一回合只下发反馈本身;fork 不可用(会话已失效)回退
-            // 全新会话 + 完整提示词 + 反馈。
+            // The re-prompt continues from a fork of the just-ended session
+            // (revised 2026-09-18): the copy carries all of that session's
+            // working context, and the next round dispatches the feedback
+            // alone; when fork is unavailable (the session is already gone) it
+            // falls back to a brand-new session + the full prompt + feedback.
             shapeForked = await forkEndedSession(client, chain, subject)
             // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on
             // the model of the session that failed the artifact shape check;
@@ -453,7 +518,9 @@ export async function runSubtask(
       }
       const status = handoffStatus(await readHandoff())
       if (status === "done") break
-      // 交接续跑/带反馈重试前先把本会话产出提交(下一会话从已提交的工作区继续)。
+      // Before handover continuation / retry with feedback, commit this
+      // session's output first (the next session continues from a committed
+      // worktree).
       const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject })
       if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
       if (status === "continue") {
@@ -462,7 +529,8 @@ export async function runSubtask(
         feedback = ""
         continue
       }
-      // 交接边界写核失败(严格恢复): 无效一次即回滚冷启动重做。
+      // Handover-boundary write-check failure (strict resume): one invalid
+      // attempt rolls back and cold-starts the redo.
       if (!rolled) {
         const redone = await rollbackRedo()
         if (redone === "done") {
@@ -487,17 +555,23 @@ export async function runSubtask(
         `This is a hard requirement: write that file before ending the session.`
     }
   }
-  // 子任务完成: 清除交接文档(ondemand 交接与测试交接,下一子任务重新起算——
-  // 测试交接按子任务命名,这里移除本子任务的文件;driver 勾选后统一提交)。
+  // Subtask done: clear the handover documents (the ondemand handover and the
+  // test handover — the next subtask starts counting anew; the test handover
+  // is named per subtask, so this removes this subtask's file; the driver's
+  // tick is recorded by the unified commit that follows).
   await rm(join(planDir, handoffFile(task)), { force: true })
   await removeHandoffChain(planDir, testHandoffFile(task, index))
-  // 子任务目录状态协议收口(plans/0030 D7): DRIVER 在提交边界内把 todo.md 改名为
-  // done.md——盘面文件存在性即进度事实;幂等(协议未激活无 todo.md、中断落在
-  // rename 之后 done.md 已存在,均跳过)。
+  // Subtask-directory state protocol close-out (plans/0030 D7): the DRIVER
+  // renames todo.md to done.md inside the commit boundary — on-disk file
+  // existence is the progress fact; idempotent (no todo.md when the protocol
+  // is not active, or done.md already existing after the interruption landed
+  // past the rename — both skip).
   await renameTodoToDone(planDir, task.id, index)
   await tickSubtask(planDir, task.id, index)
-  // 子任务提交信息省略任务标题(编号 + 子任务编号 + 子任务标题即可定位)。
-  // 单元收口: 带基线做提交区间校验——勾选未落账即不视为完成。
+  // The subtask commit subject omits the task title (task id + subtask number
+  // + subtask title locate it already).
+  // Unit close-out: the commit range is verified against the baseline — a
+  // tick not yet committed does not count as done.
   const committed = await afterSession(dir, opts, task, { stage: `subtask ${index}`, subject }, baseline)
   if (committed.type === "failed") return commitBlocked(`${task.id} subtask ${index}`, committed)
   log(`  ✓ ${text.slice(0, 60)}`)

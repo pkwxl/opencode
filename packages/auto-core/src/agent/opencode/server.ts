@@ -53,20 +53,30 @@ export type OpencodeHost = AgentHost & {
 
 type Log = (line: string) => void
 
-// 普通请求的连接与响应头上限: 到点未取得响应头即中止并告警,禁止请求在客户端
-// 连接池无限排队(无声死锁)。覆盖 session.create / question.reply 等短交互;
-// 响应头到达后计时即止,SSE 订阅的长响应体不受影响。
+// Connection and response-header cap for ordinary requests: abort and warn
+// when no response headers have arrived by the deadline, forbidding requests
+// from queuing forever in the client's connection pool (a silent deadlock).
+// Covers short interactions like session.create / question.reply; the clock
+// stops once the headers arrive, so the long response bodies of SSE
+// subscriptions are unaffected.
 const REQUEST_TIMEOUT_MS = 60_000
-// 同步 prompt(POST /session/{id}/message)阻塞到整个 AI 回合结束,回合时长由
-// 事件流与 --idle-* 看门狗管束,不按普通请求超时,仅设宽裕的绝对上限兜底。
+// A synchronous prompt (POST /session/{id}/message) blocks until the whole AI
+// turn ends; turn length is governed by the event stream and the --idle-*
+// watchdog, not by the ordinary request timeout — only a generous absolute cap
+// as a backstop.
 const TURN_TIMEOUT_MS = 2 * 60 * 60_000
 
-// 带超时防护的底层 fetch,注入 SDK 客户端(createOpencodeClient 的 config.fetch):
-// 每个请求在响应头到达前受上限约束,超时中止并 log 可辨识告警(错误 message 带
-// 「请求超时」字样)。请求自带信号与超时信号经 AbortSignal.any 组合,外部中止
-// (如 SSE 订阅 abort)在全生命周期有效——含响应体阶段,SSE 断连依赖于此。沿用
-// SDK 缺省 fetch 的语义关闭 Bun 内建 300s 超时(request.timeout = false)。timeouts
-// 的 requestMs/turnMs 与 underlying(底层 fetch)供测试注入,缺省用常量与全局 fetch。
+// The timeout-guarded underlying fetch, injected into the SDK client
+// (createOpencodeClient's config.fetch): every request is capped until the
+// response headers arrive; on timeout it aborts and logs a recognizable
+// warning (the error message carries the "request timed out" wording). The
+// request's own signal and the timeout signal are combined via
+// AbortSignal.any, so an external abort (e.g. an SSE subscription abort) stays
+// effective over the whole lifecycle — including the response-body phase,
+// which SSE disconnects rely on. Keeps the SDK default fetch semantics with
+// Bun's built-in 300s timeout off (request.timeout = false). timeouts'
+// requestMs/turnMs and underlying (the underlying fetch) are test-injection
+// points; the defaults are the constants and the global fetch.
 export function timeoutFetch(
   timeouts: { requestMs?: number; turnMs?: number } = {},
   underlying: typeof fetch = ((...args: Parameters<typeof fetch>) => fetch(...args)) as typeof fetch,
@@ -76,7 +86,8 @@ export function timeoutFetch(
   const turnMs = timeouts.turnMs ?? TURN_TIMEOUT_MS
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init)
-    // Bun 扩展: 关闭其内建缺省超时(Request 类型未声明该属性,经断言写入)。
+    // Bun extension: turn off its built-in default timeout (the Request type
+    // does not declare the property; written through an assertion).
     ;(request as unknown as { timeout?: number | boolean }).timeout = false
     const url = new URL(request.url)
     const syncPrompt = request.method === "POST" && /\/session\/[^/]+\/message$/.test(url.pathname)
@@ -88,8 +99,10 @@ export function timeoutFetch(
       controller.abort(new Error(`opencode request timed out (no response for ${seconds}s): ${request.method} ${url.pathname}`))
     }, timeoutMs)
     timer.unref?.()
-    // 组合信号: 请求自带信号(Request.signal / init.signal,如 SSE 订阅)在响应体
-    // 阶段仍能中止 fetch;超时信号仅在响应头前生效(计时到头即清)。
+    // Combined signal: the request's own signal (Request.signal / init.signal,
+    // e.g. an SSE subscription) can still abort the fetch in the response-body
+    // phase; the timeout signal is effective only before the response headers
+    // (cleared as soon as the clock runs out).
     const signal = AbortSignal.any([controller.signal, request.signal, ...(init?.signal ? [init.signal] : [])])
     try {
       return await underlying(request, { signal })
@@ -99,12 +112,15 @@ export function timeoutFetch(
   }) as unknown as typeof fetch
 }
 
-// 缺省自动 spawn 一个 `opencode serve` 并托管其生命周期(需 PATH 上有 opencode
-// CLI,或 agent profile 的 bin);仅当显式给出 url(--server / OPENCODE_AUTO_SERVER,
-// 或 agent profile 的 server)时复用外部 server、不托管其生命周期。`directory`
-// 客户端选项按请求定位项目,单个 server 可驱动任意目标目录。bin / env / config
-// 是每次 spawn(含 restart)的输入;外部 server 不经 spawn,profile 的 bin 与 env
-// 对其无效,启动时记一行说明。
+// By default spawns an `opencode serve` automatically and manages its
+// lifecycle (needs the opencode CLI on PATH, or the agent profile's bin); only
+// when a url is given explicitly (--server / OPENCODE_AUTO_SERVER, or the
+// agent profile's server) is an external server reused without managing its
+// lifecycle. The `directory` client option locates the project per request, so
+// a single server can drive any target directory. bin / env / config are the
+// inputs to each spawn (restart included); an external server is not spawned
+// through, so the profile's bin and env have no effect on it — one explanatory
+// line is logged at startup.
 export async function manage(
   directory: string,
   url: string | undefined,
@@ -130,7 +146,9 @@ export async function manage(
   }
   let server = external ? await connect(external, directory) : await spawn(directory, inputs())
   let agents = await agentsFingerprint(directory)
-  // 指向当前活动 server 的代理 SDK 客户端——restart 换实例后,既有引用自动指向新 server。
+  // Proxy SDK client always targeting the active server — after a restart
+  // swaps the instance, existing references point at the new server
+  // automatically.
   const sdk = new Proxy({} as OpencodeClient, {
     get: (_target, prop) => {
       const value = Reflect.get(server.client, prop)
@@ -145,16 +163,18 @@ export async function manage(
     setConfig(next) {
       config = next
     },
-    // AGENTS.md 是 system context,更新后新会话必须看到最新内容: 指纹(mtime+size)
-    // 变化即重启 server。外部 server 不受管理,仅提示。
+    // AGENTS.md is system context: new sessions must see the latest content
+    // after an update — a fingerprint (mtime+size) change restarts the server.
+    // An external server is not managed; only a notice is logged.
     async syncContext() {
       const current = await agentsFingerprint(directory)
       if (JSON.stringify(current) === JSON.stringify(agents)) return
       agents = current
       await handle.restart("AGENTS.md updated, restarting opencode server before creating a new session")
     },
-    // 杀死当前 spawn 的 server 并以当前 spawn 输入(含 setConfig 替换后的 config)
-    // 启动新实例;复用外部 server 时不可重启,返回 false。
+    // Kill the currently spawned server and start a new instance with the
+    // current spawn inputs (including the config replaced by setConfig); with
+    // an external server reuse, restarting is impossible and returns false.
     async restart(reason) {
       if (external) {
         log(`⚠ ${reason}; but an external server (${external}) is being reused and is not managed by this tool, keeping the current instance`)
@@ -291,7 +311,7 @@ function stop(proc: ChildProcess): void {
   proc.kill()
 }
 
-// AGENTS.md 变更指纹(mtime + size);文件不存在记 null。
+// AGENTS.md change fingerprint (mtime + size); a missing file records null.
 async function agentsFingerprint(directory: string): Promise<{ mtimeMs: number; size: number } | null> {
   return stat(join(directory, "AGENTS.md")).then(
     (info) => ({ mtimeMs: info.mtimeMs, size: info.size }),

@@ -1,9 +1,13 @@
-// --interactive 旁路交互: 常驻 readline 等待人工输入,回车把非空行作为额外
-// 用户消息经 promptAsync(fire-and-forget)注入当前活动会话——v1 引擎对运行中
-// 会话是 steer 语义,在下一个 provider turn 边界被处理;等待输入不阻塞主流程。
-// ask(--wait-answer)与任务间暂停(--wait-between)的人工等待也经这条输入行
-// 接收(提示语、超时、回落语义不变),ask 结束后输入行恢复为发消息模式。
-// 不改动任何既有处理逻辑: 无 --wait-answer 时提问仍自动答复,权限仍阻塞。
+// --interactive bypass interaction: a resident readline waits for human input;
+// Enter injects a non-empty line as an extra user message into the current
+// active session via promptAsync (fire-and-forget) — for a running session
+// this is steer semantics on the v1 engine, processed at the next provider
+// turn boundary; waiting for input does not block the main flow. The human
+// waits of ask (--wait-answer) and the between-tasks pause (--wait-between)
+// are received through this input line too (prompt text, timeout and fallback
+// semantics unchanged); after ask ends the input line returns to send-message
+// mode. No existing handling logic changes: without --wait-answer questions
+// are still auto-answered, permissions still block.
 import { createInterface } from "node:readline/promises"
 import type { AgentClient } from "./agent/types"
 import { requestExit } from "./exit"
@@ -11,12 +15,15 @@ import { requestFailback } from "./failback"
 import { log, setInput } from "./log"
 
 export type Interactive = {
-  // 每个会话建立/复用时由 runner 调用,后续输入发往该会话。agent 是该会话所在的
-  // agent profile (plans/0055 §8.1): the sideband resolves the session's own
-  // host through the pool.
+  // Called by the runner whenever a session is created/reused; subsequent
+  // input goes to that session. agent is the agent profile the session lives
+  // on (plans/0055 §8.1): the sideband resolves the session's own host
+  // through the pool.
   attach(sessionID: string, agent?: string): void
-  // 显示提示并等待一行人工输入;minutes 缺省 = 无超时(等待输入行或 stdin 关闭),
-  // 设定时则超时或关闭回落 undefined(步进暂停经缺省实现硬等待)。
+  // Show the prompt and wait for one line of human input; minutes omitted =
+  // no timeout (waiting on the input line or stdin closing); with a value set,
+  // timeout or close falls back to undefined (the step-mode pause hard-waits
+  // through the omitted-value behavior).
   question(promptText: string, minutes?: number): Promise<string | undefined>
   close(): void
 }
@@ -39,17 +46,19 @@ export function startInteractive(
   modelNames?: ReadonlySet<string>,
 ): Interactive {
   const rl = createInterface({ input: io?.input ?? process.stdin, output: io?.output ?? process.stdout })
-  // raw 模式下 ^C 不会触发进程级 SIGINT,readline 会截获;转发给进程级处理器,
-  // 使常驻输入期间连续两次 Ctrl+C 同样能强制终止(与 askHuman 一致)。
+  // In raw mode ^C does not raise the process-level SIGINT, readline
+  // intercepts it; forward it to the process-level handler so two consecutive
+  // Ctrl+C during the resident input still force-quit (same as askHuman).
   rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"))
   let sessionID: string | undefined
   // The agent profile the current session lives on (§8.1): the sideband
   // resolves its host per send.
   let sessionAgent: string | undefined
   let closed = false
-  // readline 已关闭,不再做任何终端操作(setPrompt/prompt)。
+  // readline is closed; no further terminal operations (setPrompt/prompt).
   let dead = false
-  // 有 pending 时输入行解析给 ask/暂停,否则作为会话消息发送。
+  // With a pending, the input line resolves the ask/pause; otherwise it is
+  // sent as a session message.
   let pending: { resolve: (answer: string | undefined) => void; timer?: ReturnType<typeof setTimeout> } | undefined
 
   function settle(answer: string | undefined) {
@@ -65,8 +74,10 @@ export function startInteractive(
 
   rl.on("line", (line) => {
     const text = line.trim()
-    // ask/暂停等待中: 任何输入行(含空行)都立即作为回答——与原 askHuman 的
-    // 空行回落、waitBetween 的空行继续语义一致,由调用方解释空回答。
+    // Waiting in ask/pause: any input line (empty lines included) is
+    // immediately taken as the answer — consistent with the original
+    // askHuman's empty-line fallback and waitBetween's empty-line-continues
+    // semantics; the caller interprets an empty answer.
     if (pending) {
       settle(text)
       return
@@ -75,20 +86,26 @@ export function startInteractive(
       rl.prompt()
       return
     }
-    // /exit(设计文档 plans/0014-exit-resume-design.md): 不发往会话,只置位——真正的
-    // 暂停延迟到下一个 phase/task/subtask 安全边界,进度届时已按常规收尾写好,
-    // 下次运行精确恢复。不判断当前是否有活动会话(与消息转发的丢弃语义不同,
-    // /exit 的意图与是否已连上会话无关)。
+    // /exit (design document plans/0014-exit-resume-design.md): not sent to
+    // the session, only sets the flag — the actual pause is deferred to the
+    // next phase/task/subtask safe boundary, by which point progress has been
+    // written through the regular wrap-up and the next run resumes exactly.
+    // It does not check whether a session is currently active (unlike the
+    // discard semantics of message forwarding, /exit's intent is independent
+    // of whether a session is attached).
     if (text === "/exit") {
       requestExit()
       log("🚪 /exit received: will pause and exit at the next safe boundary (phase/task/subtask handover point); progress is persisted, re-run to resume exactly")
       rl.prompt()
       return
     }
-    // /failback(设计文档 plans/0017-model-routing-design.md E 节): 与 /exit 同构但不
-    // 停止——置位后在下一个安全边界重置降级状态,回试首选模型;带参数(空格分隔的
-    // provider/model 列表)时整体重定义模型序(首个为首选、其余为降级候选环)。
-    // 与是否已连上会话无关,不发往会话。Under a model registry the arguments are
+    // /failback (design document plans/0017-model-routing-design.md section
+    // E): isomorphic to /exit but does not stop — once the flag is set, the
+    // next safe boundary resets the failover state and retries the primary
+    // model; with arguments (a space-separated provider/model list) it wholly
+    // redefines the model order (the first is the primary, the rest the
+    // failover candidate ring). Independent of whether a session is attached,
+    // not sent to the session. Under a model registry the arguments are
     // internal model names (a raw provider/model string still works), and they
     // replace every candidate list for the rest of the run (plans/0055 §9).
     if (text === "/failback" || text.startsWith("/failback ")) {
@@ -134,10 +151,12 @@ export function startInteractive(
     }
     void send().catch((error) => log(`⚠ send failed: ${error instanceof Error ? String(error) : String(error)}`))
   })
-  // stdin 关闭(管道结束等): 回落为非交互行为,等待中的 ask 按超时处理。
-  // 同步清 log.ts 的常驻输入行引用——否则此后任何一条日志对已关闭的 rl 调
-  // prompt(true) 抛 ERR_USE_AFTER_CLOSE,打穿主流程(2026-09-17 审查 H6;
-  // 与下方 close() 的对称清理一致)。
+  // stdin closed (pipe end etc.): fall back to non-interactive behavior; a
+  // waiting ask is treated as timed out. Also synchronously clear log.ts's
+  // resident input-line reference — otherwise any later log would call
+  // prompt(true) on the closed rl and throw ERR_USE_AFTER_CLOSE, breaking
+  // through the main flow (2026-09-17 review H6; symmetric with the cleanup
+  // in close() below).
   rl.on("close", () => {
     closed = true
     dead = true
@@ -155,13 +174,15 @@ export function startInteractive(
       sessionAgent = agent
     },
     question(promptText, minutes) {
-      // 已关闭或重入(正常流程不会发生)时立即回落,调用方按无人答复处理。
+      // When already closed or re-entered (never happens in the normal flow),
+      // fall back immediately; the caller treats it as no answer.
       if (closed || pending) return Promise.resolve(undefined)
       log(promptText)
       rl.setPrompt(ASK_PROMPT)
       rl.prompt()
       return new Promise((resolve) => {
-        // minutes 缺省 = 无超时硬等待(步进暂停);定时仅在显式给值时挂。
+        // minutes omitted = hard wait with no timeout (step-mode pause); the
+        // timer is armed only when a value is explicitly given.
         pending = { resolve, timer: minutes === undefined ? undefined : setTimeout(() => settle(undefined), minutes * 60_000) }
       })
     },

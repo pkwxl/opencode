@@ -1,23 +1,31 @@
-// 休眠时段(OPENCODE_AUTO_HIBERNATE,设计文档 plans/0027-hibernate-design.md): 避开 LLM
-// 高收费时段的每日 UTC 休眠窗口("HH:MM+H",如 04:00+6 = UTC 04:00 起休眠 6 小时)。
-// 触发语义: 只在三处既有安全边界(phase/task/subtask,挂点同 step.ts)与 run 启动时
-// 检查「现在是否在窗口内」——在窗口内睡到窗口结束、再固定随机延迟 0~600 秒后继续;
-// 执行中的单元跨越窗口开始时刻时,在其结束的边界自然被截停,即「优雅等待当前任务/
-// 子任务到安全退出点再暂停」。不预判下一单元、不落盘;睡眠期间双 Ctrl+C 经进程级
-// SIGINT 处理器强退(130),等待时长经 statsWaitBegin/End 从用时统计扣除。
+// Hibernation window (OPENCODE_AUTO_HIBERNATE, design plans/0027-hibernate-design.md):
+// a daily UTC window that avoids LLM high-tariff hours ("HH:MM+H", e.g. 04:00+6 =
+// hibernate 6 hours from UTC 04:00). Trigger semantics: "am I inside the window now"
+// is checked only at the three existing safe boundaries (phase/task/subtask, same hook
+// points as step.ts) and at run startup — inside the window it sleeps to the window
+// end, then continues after a fixed random delay of 0~600 seconds; a unit mid-execution
+// that crosses the window's start is naturally cut off at the boundary where it ends,
+// i.e. "gracefully wait for the current task/subtask to reach a safe exit point before
+// pausing". It does not predict the next unit and persists nothing; during sleep a
+// double Ctrl+C force-quits (130) via the process-level SIGINT handler, and the wait
+// duration is deducted from time stats via statsWaitBegin/End.
 import { log } from "./log"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { autoSwitches, formatHibernate, type HibernateWindow } from "./switches"
 
-// 窗口结束后的固定随机延迟上限(D3): 0~600 秒,错开同时唤醒的多实例。
-// 0055 §6.3 的模型窗口等待复用同一延迟: 共享账号的多实例不在同一时刻全部下发。
+// Cap of the fixed random delay after the window ends (D3): 0~600 seconds, spreading
+// out multiple instances waking at the same moment. The model-window wait of 0055 §6.3
+// reuses the same delay: multiple instances sharing one account are not all dispatched
+// at the same instant.
 export const HIBERNATE_JITTER_MS = 600_000
 
-// 计划等待的公共睡眠体(休眠窗口与模型窗口等待共用): 等待区间经
-// statsWaitBegin/End 从用时统计扣除、单记 waitMs(kind 为等待种类,见 stats.ts
-// 的种类清单),异常路径经 finally 配对关段;等待期间双 Ctrl+C 经 runAll 的进程级
-// SIGINT 处理器强退(130),与所有长等待相同——这是唯一的退出方式。sleep 注入供
-// 单测(配 fake clock 推进)。
+// The shared sleep body of planned waits (the hibernate window and the model-window
+// wait share it): the wait interval is deducted from time stats and recorded separately
+// as waitMs via statsWaitBegin/End (kind is the wait kind, see the kind list in
+// stats.ts); the exceptional path pairs the segment close via finally. During the wait
+// a double Ctrl+C force-quits (130) via runAll's process-level SIGINT handler, same as
+// every long wait — that is the only way out. sleep is injected for unit tests (to be
+// advanced with a fake clock).
 export async function bookedSleep(
   kind: string,
   ms: number,
@@ -33,31 +41,38 @@ export async function bookedSleep(
 
 const DAY_MS = 86_400_000
 
-// 休眠时长计算(纯函数,供单测): now(epoch 毫秒)落在当日 UTC 窗口
-// [startMin, startMin+durationMin)(模 1440 分钟,跨午夜取模)内 → 返回「到窗口结束的
-// 毫秒数 + random() × HIBERNATE_JITTER_MS」;不在窗口 → 0。恰在窗口起点算在内(睡满
-// 全程),恰在窗口终点算在外(窗口已结束)。
+// Hibernation duration calculation (pure function, for unit tests): now (epoch ms)
+// inside today's UTC window [startMin, startMin+durationMin) (modulo 1440 minutes,
+// midnight crossing handled by the modulo) → returns "milliseconds to the window end +
+// random() × HIBERNATE_JITTER_MS"; outside the window → 0. Exactly at the window
+// start counts as inside (sleeps the full length); exactly at the window end counts as
+// outside (the window is over).
 export function hibernateSleepMs(window: HibernateWindow, now: number, random: () => number = Math.random): number {
   const start = window.startMin * 60_000
   const end = start + window.durationMin * 60_000
   const t = ((now % DAY_MS) + DAY_MS) % DAY_MS
   let remaining: number
   if (t >= start) {
-    // 起点之后:窗口尚未跨日结束即在内(end 可能 > DAY_MS,无碍比较)。
+    // After the start: inside as long as the window has not ended past midnight (end
+    // may exceed DAY_MS, harmless for the comparison).
     if (t >= end) return 0
     remaining = end - t
   } else {
-    // 起点之前:仅当窗口跨午夜且尾部覆盖到当日此时才在内。
+    // Before the start: inside only when the window crosses midnight and its tail
+    // covers this time of day.
     if (end <= DAY_MS || t >= end - DAY_MS) return 0
     remaining = end - DAY_MS - t
   }
   return remaining + random() * HIBERNATE_JITTER_MS
 }
 
-// 边界/启动挂点: 开关未设(缺省)零行为直接返回(统计零接触);在窗口内则睡到唤醒。
-// dir 传目标目录时等待区间经 statsWaitBegin/End 扣除、单记 waitMs(与 stepPause 同一
-// 口径);now/random/sleep/window 注入供单测。唤醒后不重新检查窗口——系统挂起导致
-// 睡过头只会更晚恢复,语义仍满足「度过休眠时段后继续」。
+// Boundary/startup hook point: with the switch unset (default) it is zero-behavior
+// and returns immediately (stats untouched); inside the window it sleeps until
+// wake-up. When dir passes the target directory, the wait interval is deducted via
+// statsWaitBegin/End and recorded separately as waitMs (same treatment as stepPause);
+// now/random/sleep/window are injected for unit tests. After waking it does not
+// re-check the window — oversleeping caused by a system suspend only resumes later;
+// the semantics still satisfies "continue after the hibernation window has passed".
 export async function hibernatePause(
   label: string,
   opts: {
@@ -78,8 +93,10 @@ export async function hibernatePause(
     `⏸ hibernating: ${label} is inside the hibernate window (UTC ${formatHibernate(window)}),` +
       ` resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
   )
-  // 人工/计划等待扣除(STATS_PLAN §3 同口径): 关段后 aiMs/wallMs 均不增长,waitMs
-  // 单记;异常路径经 bookedSleep 的 finally 配对 waitEnd,不留悬挂关段。
+  // Human/planned wait deduction (same treatment as STATS_PLAN §3): with the segment
+  // closed neither aiMs nor wallMs grows, waitMs is recorded separately; the
+  // exceptional path pairs waitEnd via bookedSleep's finally, leaving no dangling
+  // closed segment.
   await bookedSleep("hibernate", sleepMs, { dir: opts.dir, sleep: opts.sleep })
   log(`→ hibernate over: continuing after ${label}`)
 }

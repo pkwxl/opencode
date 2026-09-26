@@ -11,14 +11,23 @@
 // silently drop the anchors the driver parses session output against (the
 // two-tier marker model is documented above PROTOCOL_MARKERS).
 //
-// 模板语法(刻意保持最小;清单类数据由调用方预拼接为字符串,不做循环):
-//   {{var}}             变量: string 直接替换;boolean/undefined 渲染为空
-//   {{#if x}}…{{/if}}   x 为非空字符串或 true 时保留块内容
-//   {{^x}}…{{/if}}      与上一条相反(x 空/false/未定义时保留)
-//   {{> name}}          共享片段(_partials.md 的 `## name` 节);标签前只有空白时,
-//                       该空白作为片段缩进——独占一行应用到每一行,行内仅应用到
-//                       第二行起(首行已带模板内前缀)
-// 块/片段标签独占一行时整行吞掉(standalone 语义),条件段书写不必顾虑空行。
+// Template syntax (deliberately minimal; list-shaped data is pre-joined into a
+// string by the caller, no loops):
+//   {{var}}             variable: a string replaces directly; boolean/undefined
+//                       renders empty
+//   {{#if x}}…{{/if}}   keep the block content when x is a non-empty string or
+//                       true
+//   {{^x}}…{{/if}}      the negation of the line above (keep when x is empty/
+//                       false/undefined)
+//   {{> name}}          shared partial (the `## name` section of _partials.md);
+//                       when only whitespace precedes the tag, that whitespace
+//                       becomes the partial's indent — alone on its line it
+//                       applies to every line, inline it applies only from the
+//                       second line on (the first line already carries the
+//                       in-template prefix)
+// A block/partial tag alone on its line swallows the whole line (standalone
+// semantics), so conditional sections can be written without minding blank
+// lines.
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import tplDecompose from "../templates/prompts/decompose.md" with { type: "file" }
@@ -49,7 +58,8 @@ import tplTestResult from "../templates/prompts/test-result.md" with { type: "fi
 import tplWhole from "../templates/prompts/whole.md" with { type: "file" }
 import tplWrapup from "../templates/prompts/wrapup.md" with { type: "file" }
 
-// 模板上下文: 值为 string(替换)、boolean(条件判断,true 渲染为空)或 undefined。
+// Template context: values are string (substitution), boolean (conditionals;
+// true renders empty) or undefined.
 export type Ctx = Record<string, string | boolean | undefined>
 
 type Node =
@@ -58,8 +68,10 @@ type Node =
   | { kind: "block"; name: string; negated: boolean; children: Node[] }
   | { kind: "partial"; name: string; indent: string; standalone: boolean }
 
-// 内置模板注册表: 新增内置模板 = 加文件 + 一条 `with { type: "file" }` 导入并
-// 登记到这里(用户自定义/覆盖走目标目录 .opencode/auto/prompts/,无需改源码)。
+// Built-in template registry: adding a built-in = add the file + one
+// `with { type: "file" }` import and register it here (user customization /
+// overrides go through the target directory's .opencode/auto/prompts/, no
+// source change needed).
 const embedded: Record<string, string> = {
   decompose: tplDecompose,
   "decompose-a": tplDecomposeA,
@@ -228,8 +240,10 @@ function loadLibrary(dir: string | undefined): Library {
 let library: Library = loadLibrary(undefined)
 const cache = new Map<string, Node[]>()
 
-// CLI 入口(init/run)以目标目录调用一次,装载 .opencode/auto/prompts/ 覆盖;幂等,
-// 传 undefined 恢复仅内置(测试用)。装载失败(协议校验等)抛出,由调用方决定退出。
+// The CLI entry points (init/run) call this once with the target directory to
+// load the .opencode/auto/prompts/ overrides; idempotent, and passing
+// undefined restores built-ins only (for tests). Load failures (protocol
+// validation etc.) throw; the caller decides the exit.
 export function usePromptLibrary(dir: string | undefined): void {
   if (library.dir === dir) return
   library = loadLibrary(dir)
@@ -351,8 +365,9 @@ function parseCached(key: string, text: string): Node[] {
   return nodes
 }
 
-// 文本 → 节点树。块/片段标签"独占一行"(前后同行仅有空白)时整行吞掉;行内出现
-// 时原位处理。闭合标签固定写 {{/if}}。
+// Text → node tree. A block/partial tag "alone on its line" (only whitespace
+// before it and after it on the same line) swallows the whole line; an inline
+// occurrence is handled in place. The closing tag is always written {{/if}}.
 export function parseTemplate(text: string): Node[] {
   const roots: Node[] = []
   const stack: Extract<Node, { kind: "block" }>[] = []
@@ -382,8 +397,11 @@ export function parseTemplate(text: string): Node[] {
       const rest = text.slice(end + 2, lineBreak === -1 ? text.length : lineBreak)
       const alone = /^[ \t]*$/.test(before) && /^[ \t]*$/.test(rest)
       emit({ kind: "text", text: text.slice(pos, alone ? lineStart : start) })
-      // 块标签独占一行时整行吞掉(含行尾换行);片段独占一行时保留行尾换行
-      // (片段代表内容行,吞掉会使相邻行粘连),只吞标签与行尾空白。
+      // A block tag alone on its line swallows the whole line (including the
+      // trailing newline); a partial alone on its line keeps the trailing
+      // newline (the partial stands for content lines — swallowing it would
+      // glue adjacent lines together) and swallows only the tag and the
+      // trailing whitespace.
       pos = alone
         ? marker === ">"
           ? lineBreak === -1

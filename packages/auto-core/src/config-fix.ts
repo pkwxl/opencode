@@ -43,9 +43,11 @@ import templateConfig from "../templates/opencode.json" with { type: "file" }
 
 export const CONTRACT_FILE = join(".opencode", "agent", `${CONTRACT_AGENT}.md`)
 
-// agent 契约渲染文本: 按 testByDriver 两态渲染内置模板。外壳的契约维护
-// 写入、fix 的契约规则与 runAll 的完整性检查共用本函数,防止写入与比对口径漂移
-// (模板含 {{#if}} 条件块,拿原始文本比对渲染后的文件必然不一致)。
+// The agent contract's rendered text: renders the built-in template in its two
+// testByDriver states. The shell's contract-maintenance write, fix's contract
+// rule and runAll's integrity check share this function, so the write and the
+// comparison cannot drift apart (the template contains {{#if}} conditional
+// blocks; comparing the raw text against the rendered file would never match).
 export async function renderAgentContract(testByDriver: boolean): Promise<string> {
   return renderText(await Bun.file(templateAgent).text(), { testByDriver })
 }

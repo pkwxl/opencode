@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 import { fileURLToPath } from "url"
 
-// 一次性生成独立可执行文件 dist/opencode-auto(模板与 SDK 均已嵌入)。
-// 用法: bun run build [--target <bun-平台三元组>]
+// One-shot build of the standalone executable dist/opencode-auto (templates
+// and SDK embedded).
+// Usage: bun run build [--target <bun platform triple>]
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
@@ -23,7 +24,8 @@ if (raw && !target) {
   console.error(`未知 --target: ${raw}\n可选值: ${TARGETS.join(", ")}`)
   process.exit(1)
 }
-// 交叉编译时按平台后缀区分产物,避免覆盖本机二进制。
+// Cross-compiled outputs get a platform suffix so they never overwrite the
+// native binary.
 const outfile = target ? `dist/opencode-auto-${target.replace(/^bun-/, "")}` : "dist/opencode-auto"
 
 const result = await Bun.build({

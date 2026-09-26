@@ -4,18 +4,24 @@ import type { Interface } from "node:readline/promises"
 import { mkdirSync, openSync, writeSync } from "node:fs"
 import { join } from "node:path"
 
-// verbose = 终端是否显示明细与时间戳(--verbose);audit = 日志文件是否始终完整
-// 记录(免 verbose 门控,经外壳画像 setShellProfile 联动,见 src/shell.ts)。
-// --verbose 时终端与文件同开;--interactive 只开文件记录,终端保持干净输出,
-// 避免明细流冲乱常驻输入行。audit 开启时日志文件成为不依赖选项的完整审计记录。
+// verbose = whether the terminal shows detail and timestamps (--verbose);
+// audit = whether the log file always records in full (exempt from the
+// verbose gate, wired through the shell profile setShellProfile, see
+// src/shell.ts). Under --verbose both terminal and file are on; --interactive
+// turns on file recording only, keeping the terminal output clean so the
+// detail stream does not scramble the resident input line. With audit on,
+// the log file becomes a complete audit record independent of any option.
 let verbose = false
 let foreground = false
 let audit = false
-// run 模式下的日志文件描述符;writeSync 逐条直写,进程崩溃或被 kill 也不丢
-// 已输出的内容。
+// The log file descriptor in run mode; writeSync writes each entry straight
+// through, so nothing already output is lost when the process crashes or is
+// killed.
 let fd: number | undefined
-// 交互模式的常驻 readline;log 打印前先清输入行、打印后重绘提示符与已输入内容。
-// 仅在 --interactive 下注册,此时 foreground 为 false,vlog 不上终端无需重绘。
+// The resident readline of interactive mode; log clears the input line
+// before printing and redraws the prompt plus typed input after. Registered
+// only under --interactive, where foreground is false and vlog never reaches
+// the terminal, so no redraw is needed.
 let rl: Interface | undefined
 
 export function setVerbose(on: boolean) {
@@ -23,13 +29,15 @@ export function setVerbose(on: boolean) {
   foreground = on
 }
 
-// --interactive: 文件保持完整记录(verbose 或 audit 级),前台不显示 verbose 明细。
+// --interactive: the file keeps the full record (verbose or audit level),
+// the foreground shows no verbose detail.
 export function setInteractive() {
   verbose = true
   foreground = false
 }
 
-// 外壳画像联动(setShellProfile 调用): true = vlog 始终写入日志文件并带时间戳。
+// Shell-profile wiring (a setShellProfile call): true = vlog always writes
+// into the log file, with timestamps.
 export function setAuditLog(on: boolean) {
   audit = on
 }
@@ -38,8 +46,9 @@ export function setInput(input: Interface | undefined) {
   rl = input
 }
 
-// 每次 run 在目标目录的 .auto/logs/ 下新建一个日志文件,此后 log 的全部
-// 输出在打印到终端的同时同步写入该文件。返回日志文件路径。
+// Every run creates a new log file under the target directory's
+// .auto/logs/; from then on everything log prints to the terminal is also
+// written to that file synchronously. Returns the log file path.
 export function setLogFile(directory: string): string {
   const dir = join(directory, ".auto", "logs")
   mkdirSync(dir, { recursive: true })
@@ -49,19 +58,21 @@ export function setLogFile(directory: string): string {
   return path
 }
 
-// 驱动级消息: 始终打印到终端,时间戳仅 --verbose(foreground)下加。
+// Driver-level messages: always printed to the terminal; the timestamp is
+// added only under --verbose (foreground).
 export function log(...args: unknown[]) {
   const text = format(args)
   if (rl) process.stdout.write("\r\x1b[0K")
   console.log(stamp(text, foreground))
   record(text)
-  // 重绘被清掉的输入提示与已输入内容。
+  // Redraw the cleared input prompt and the typed content.
   if (rl) rl.prompt(true)
 }
 
-// verbose 明细(会话部件、上下文用量、变更文件等): verbose 或 audit 时记录,
-// 终端仅 --verbose(foreground)显示;--interactive 与 audit(未开 verbose)下只进
-// 日志文件。
+// Verbose detail (session pieces, context usage, changed files and the
+// like): recorded when verbose or audit; the terminal shows it only under
+// --verbose (foreground); under --interactive and audit (verbose off) it
+// goes into the log file only.
 export function vlog(...args: unknown[]) {
   if (!verbose && !audit) return
   const text = format(args)
@@ -73,7 +84,8 @@ function format(args: unknown[]): string {
   return args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ")
 }
 
-// 文件行按 verbose 或 audit 记录级别加时间戳(writeSync 直写)。
+// File lines get timestamps per the verbose-or-audit record level
+// (written straight through by writeSync).
 function record(text: string) {
   if (fd !== undefined) writeSync(fd, stamp(text, verbose || audit) + "\n")
 }
@@ -84,8 +96,10 @@ function stamp(text: string, on: boolean): string {
   return text.split("\n").map((line) => `[${time}] ${line}`).join("\n")
 }
 
-// 任务/子任务开始的显著横幅与隐式(自动)任务子任务分割标记: 首行重复字符,
-// 标题单独一行(任务/子任务)或空行后接标题(隐式分割)。
+// The prominent banner at task/subtask start and the implicit (automatic)
+// task-subtask divider: the first line is a repeated character, the title
+// stands on its own line (task/subtask) or follows a blank line (implicit
+// division).
 export function banner(text: string) {
   rule("=", text)
 }
@@ -94,7 +108,8 @@ export function subbanner(text: string) {
   rule("-", text)
 }
 
-// 隐式(自动)任务子任务分割标记: 点线、空行、"<任务> <标题>: 阶段名"(子任务分解/收尾)。
+// The implicit (automatic) task-subtask divider: dotted line, blank line,
+// "<task> <title>: stage name" (subtask decompose / wrap-up).
 export function autobanner(text: string) {
   rule(".", text)
 }
@@ -106,12 +121,16 @@ function rule(char: string, text: string) {
   log(`\n${centerTime}\n${text}`)
 }
 
-// ===== 统计/报文 formatter(纯函数,与上面的输出机制互不干扰)=====
-// 供 stats 报文(plans/STATS_PLAN.md §4)与既有 runner/loop 私有副本收口使用:
-// 高频行(进度心跳、会话结束行)用紧凑式 formatDurationCompact,结论行(任务/阶段/
-// 轮次收口)用中文式 formatDuration——双口径与现状一致(STATS_PLAN §5)。
-// 接线(删 runner.ts:79-88 与 loop.ts:879-884 私有副本、改 import)属 T-002/T-003,
-// 本收口只新增函数,不改任何现有调用点。
+// ===== Stats/message formatters (pure functions, not interfering with the
+// output machinery above) =====
+// Serving the stats messages (plans/STATS_PLAN.md §4) and the consolidation
+// of the existing runner/loop private copies: high-frequency lines (progress
+// heartbeats, session-end lines) use the compact formatDurationCompact,
+// conclusion lines (task/phase/round close-out) use the verbose
+// formatDuration — the dual scheme matches the status quo (STATS_PLAN §5).
+// The wiring (deleting the runner.ts:79-88 and loop.ts:879-884 private
+// copies, changing imports) belongs to T-002/T-003; this consolidation only
+// adds functions, changing no existing call site.
 
 // Verbose duration (loop.ts:879-884 version kept verbatim + new hour tier):
 // "Ns" / "Nm Ns" / "Nh Nm". Used in task/phase/round conclusion lines.
@@ -127,8 +146,9 @@ export function formatDuration(ms: number): string {
   return `${hours}h ${minutes % 60}m`
 }
 
-// 紧凑式时长(runner.ts:79-88 版逐字保持): "Nms" / "N.Ns" / "Nm" / "NmNs"。
-// 用于会话结束行、复用提示等高频行。
+// Compact duration (runner.ts:79-88 version kept verbatim):
+// "Nms" / "N.Ns" / "Nm" / "NmNs". Used in session-end lines, reuse hints
+// and other high-frequency lines.
 export function formatDurationCompact(ms: number): string {
   if (ms < 1000) return `${ms}ms`
   const seconds = ms / 1000
@@ -139,29 +159,40 @@ export function formatDurationCompact(ms: number): string {
   return `${minutes}m${remainingSeconds.toFixed(0)}s`
 }
 
-// token 数紧凑表示(runner.ts:2806 / prompt.ts:501 版逐字保持): ≥10000 → "N.Nk"。
+// Compact token-count rendering (runner.ts:2806 / prompt.ts:501 versions
+// kept verbatim): ≥10000 → "N.Nk".
 export function formatTokens(n: number): string {
   if (n >= 10_000) return `${(n / 1000).toFixed(1)}k`
   return String(n)
 }
 
-// 费用表示: 0(或无费用信息)返回 undefined,供报文拼接时省略费用项
-// (STATS_PLAN §5)。返回 "$N.NNN" 风格。
-// AUTO-DECISION: 精度取 toFixed(4) 后去尾零(parseFloat 往返): 计划 §4 报文草案
-// 同时出现 "$0.041" 与 "$0.31",说明精度随数值自适应而非定长;备选固定 3 位
-// (toFixed(3)) 会得到 "$0.310" 这类拖零,与草案不符,否决。
+// Cost rendering: 0 (or no cost info) returns undefined, so message
+// assembly can omit the cost item (STATS_PLAN §5). Returns the "$N.NNN"
+// style.
+// AUTO-DECISION: precision is toFixed(4) with trailing zeros stripped
+// (parseFloat round-trip): the plan §4 message draft shows both "$0.041"
+// and "$0.31", meaning precision adapts to the value rather than being
+// fixed-length; the alternative of a fixed 3 digits (toFixed(3)) would
+// yield trailing-zero forms like "$0.310", contradicting the draft —
+// rejected.
 export function formatCost(cost: number): string | undefined {
   if (!cost) return undefined
   return `$${parseFloat(cost.toFixed(4))}`
 }
 
-// 缓存命中率: hit = cacheRead / (cacheRead + input)(STATS_PLAN §已确认口径:服务端
-// 归一化后 input 已不含 cache 部分);分母 0(无用量信息)→ "—"。返回 "N.N%" 风格,
-// 供 ◉ 会话结束 tokens 行拼接("命中率 95.9%")。
-// AUTO-DECISION: cacheHit 口径落在 log.ts formatter(展示层纯函数)而非 statsTotals
-// 返回字段——计划未钉死位置,但命中率只是展示口径,入库保持原始分项(cacheRead/
-// input)更利于后续改口径;备选"stats.ts 助手"会把展示格式("—"/百分号)泄漏进
-// 统计模块,否决。取原始双参而非 Usage 类型,避免 log → stats 类型依赖。
+// Cache hit rate: hit = cacheRead / (cacheRead + input) (the formula
+// confirmed in STATS_PLAN §: after server-side normalization input no
+// longer contains the cache part); denominator 0 (no usage info) → "—".
+// Returns the "N.N%" style, for the ◉ session-end tokens line
+// ("hit 95.9%").
+// AUTO-DECISION: the cacheHit formula lives in the log.ts formatter (a
+// display-layer pure function) rather than a statsTotals return field —
+// the plan did not pin the location, but the hit rate is a display formula
+// only; keeping the raw components in storage (cacheRead/input) makes a
+// later formula change easier; the alternative "stats.ts helper" would
+// leak display format ("—"/percent sign) into the stats module — rejected.
+// Takes the two raw numbers rather than the Usage type, avoiding a
+// log → stats type dependency.
 export function formatCacheHit(cacheRead: number, input: number): string {
   const total = cacheRead + input
   if (!(total > 0)) return "—"

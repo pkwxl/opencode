@@ -1,14 +1,19 @@
-// 破坏性操作的交互确认(init 全量覆盖、reset 反初始化): 仅在交互式终端提问,
-// 非 TTY(CI、脚本、测试的 Bun.spawn)视为已授权直接放行——非交互环境没有人
-// 能回答,提问只会挂死;真正的防误触在非交互侧由工作区干净度闸门(git.ts 的
-// changedFiles)承担。io 可注入,沿用 interactive.ts / step.ts 的同款惯例,
-// 使单测无须真 TTY。
+// Interactive confirmation for destructive operations (init full overwrite,
+// reset de-initialization): asks only on an interactive terminal; non-TTY
+// (CI, scripts, tests' Bun.spawn) counts as authorized and goes straight
+// through — nobody can answer in a non-interactive environment, asking would
+// only hang. The real guard against accidental invocation on the
+// non-interactive side is carried by the worktree cleanliness gate (git.ts
+// changedFiles). io is injectable, same convention as interactive.ts /
+// step.ts, so unit tests need no real TTY.
 import { createInterface } from "node:readline/promises"
 
 export type ConfirmIO = { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream; tty?: boolean }
 
-// 仅 y / yes(忽略大小写、忽略首尾空白)为真;空行与其余一律为假(缺省不执行)。
-// stdin 关闭(管道结束)同样回落为假——破坏性操作不因输入意外中断而放行。
+// Only y / yes (case-insensitive, surrounding whitespace ignored) is true;
+// an empty line and anything else is false (default: do not execute). A
+// closed stdin (end of pipe) likewise falls back to false — a destructive
+// operation is not let through because input ended unexpectedly.
 export async function confirm(question: string, io?: ConfirmIO): Promise<boolean> {
   const tty = io?.tty ?? process.stdin.isTTY
   if (!tty) return true

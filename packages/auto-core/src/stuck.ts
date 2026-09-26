@@ -1,49 +1,65 @@
-// 死循环检测(弱模型自救): 能力较弱的模型常会连续多次以同一方式重复同一个动作
-// ——同样的工具、同样的参数、同样的失败,或参数微调但报错一字不差——自己走不
-// 出来。driver 观察每个工具调用的终态,识别到这类重复即经 steer 主动向会话注入
-// 提示(src/runner.ts 的 watch 挂点,文案在 templates/prompts/stuck-hint.md),
-// 让模型换一种思路而不是继续空转。设计见 plans/0016-stuck-loop-design.md。
+// Stuck-loop detection (a weak model's self-rescue): weaker models often repeat the
+// same action the same way several times in a row — same tool, same parameters, same
+// failure, or slightly adjusted parameters with a byte-identical error — and cannot
+// get out of it by themselves. The driver observes every tool call's final state, and
+// on recognizing this kind of repetition proactively injects a hint into the session
+// via steer (the watch hook point in src/runner.ts, wording in
+// templates/prompts/stuck-hint.md), so the model tries a different approach instead of
+// spinning. Design: plans/0016-stuck-loop-design.md.
 //
-// 判据(两条,均以本会话为范围,不要求"连续"——A,B,A,B,A 这类交替重试同样是
-// 死循环,按签名累计即可识别):
-//   - error: 同一工具 + 同一报错(参数可不同)累计达 errorRepeat 次;
-//   - repeat: 同一工具 + 同一参数 + 完全相同的输出累计达 sameRepeat 次
-//     (结果一模一样 = 这次调用没带来任何新信息)。
-// 结果有变化(报错不同、输出不同)一律视为有进展,不计入。
+// Criteria (two, both scoped to this session, "consecutive" not required — an
+// alternating retry pattern like A,B,A,B,A is just as much a stuck loop; accumulating
+// by signature recognizes it):
+//   - error: the same tool + the same error (parameters may differ) accumulated
+//     errorRepeat times;
+//   - repeat: the same tool + the same parameters + a completely identical output
+//     accumulated sameRepeat times (an identical result = the call brought no new
+//     information).
+// Any change in the result (a different error, a different output) always counts as
+// progress and is not counted.
 //
-// 提示后该签名的计数清零(需再次达阈值才会再提示),每会话最多 maxHints 次,
-// 提示逐级升级(见模板);检测只发提示,不中止会话——判据再稳妥也可能误判,
-// 停机代价远高于一条多余的提示。
+// After a hint the signature's counter resets to zero (the threshold must be reached
+// again before another hint), at most maxHints hints per session, with escalating
+// levels (see the template); detection only sends hints, never aborts the session —
+// however sound the criteria, they can still misjudge, and the cost of halting is far
+// higher than one superfluous hint.
 
-// 同一工具 + 同一报错累计达此次数即提示(参数可不同: 弱模型常微调参数后撞上
-// 一模一样的报错)。
+// Hint once the same tool + the same error accumulates this many times (parameters may
+// differ: a weak model often tweaks parameters and runs into the byte-identical error).
 export const STUCK_ERROR_REPEAT = 3
 
-// 同一工具 + 同一参数 + 完全相同的输出累计达此次数即提示(成功但无新信息的
-// 空转,阈值比报错高一档: 重复读同一文件在正常会话里也偶有发生)。
+// Hint once the same tool + the same parameters + a completely identical output
+// accumulates this many times (spinning without new information despite success; one
+// tier above the error threshold: re-reading the same file also happens occasionally in
+// a healthy session).
 export const STUCK_SAME_REPEAT = 4
 
-// 每会话最多注入的提示条数,达上限后静默(继续检测但不再打扰)。
+// Max hint injections per session; past the cap it stays silent (still detecting, but
+// no longer intruding).
 export const STUCK_MAX_HINTS = 3
 
-// 观察到的工具调用终态(由 runner 从 SDK 的 ToolPart 摘取,detector 不依赖 SDK 类型)。
+// The final state of an observed tool call (extracted by the runner from the SDK's
+// ToolPart; the detector does not depend on SDK types).
 export type StuckCall = {
   tool: string
-  // 工具入参(对象,签名按键名排序后序列化;缺省视为空参)。
+  // The tool input (an object; the signature serializes it with keys sorted; absent
+  // counts as no arguments).
   input?: unknown
   status: "completed" | "error"
-  // status=error 时为报错文本,completed 时为输出文本。
+  // The error text when status=error, the output text when completed.
   result: string
 }
 
-// 命中详情(交给 renderStuckHint 组装提示词): kind=error 为同报错重复,
-// repeat 为同参同果重复;count 为触发时的累计次数,level 为本会话第几次提示。
+// Hit details (handed to renderStuckHint to assemble the prompt): kind=error is the
+// same-error repeat, repeat the same-args-same-result repeat; count is the accumulated
+// count at triggering, level is which hint of the session this is.
 export type StuckHit = {
   kind: "error" | "repeat"
   tool: string
   count: number
   level: number
-  // 参数与结果的摘要(截断后的展示文本,注入提示词让模型知道说的是哪一次调用)。
+  // Digests of the input and result (display text trimmed when overlong; injected into
+  // the prompt so the model knows which call is being talked about).
   input: string
   detail: string
 }
@@ -52,14 +68,15 @@ export type StuckTracker = {
   observe(call: StuckCall): StuckHit | undefined
 }
 
-// 阈值可注入(单测用;缺省即上面三个常量)。
+// Thresholds are injectable (for unit tests; defaults are the three constants above).
 export type StuckOptions = {
   errorRepeat?: number
   sameRepeat?: number
   maxHints?: number
 }
 
-// 会话级检测器: 每个会话一个实例(状态即本会话的调用历史,不跨会话累计)。
+// Session-scoped detector: one instance per session (its state is this session's call
+// history, not accumulated across sessions).
 export function createStuckTracker(options: StuckOptions = {}): StuckTracker {
   const errorRepeat = options.errorRepeat ?? STUCK_ERROR_REPEAT
   const sameRepeat = options.sameRepeat ?? STUCK_SAME_REPEAT
@@ -69,7 +86,8 @@ export function createStuckTracker(options: StuckOptions = {}): StuckTracker {
   return {
     observe(call: StuckCall): StuckHit | undefined {
       const error = call.status === "error"
-      // 报错判据不含参数(参数微调仍算同一个坑),同参同果判据含参数与输出。
+      // The error criterion excludes parameters (a tweaked parameter is still the same
+      // pit); the same-args-same-result criterion includes parameters and output.
       const input = call.input === undefined || call.input === null ? "" : stableJson(call.input)
       const key = error
         ? `e|${call.tool}|${hash(normalize(call.result))}`
@@ -77,7 +95,8 @@ export function createStuckTracker(options: StuckOptions = {}): StuckTracker {
       const count = (counts.get(key) ?? 0) + 1
       counts.set(key, count)
       if (count < (error ? errorRepeat : sameRepeat)) return undefined
-      // 计数清零: 提示后重新起算,同一个坑再犯满一轮才会再提示。
+      // Counter reset: counting restarts after a hint; the same pit must be fallen into
+      // a full round again before the next hint.
       counts.set(key, 0)
       if (hints >= maxHints) return undefined
       hints += 1
@@ -93,13 +112,15 @@ export function createStuckTracker(options: StuckOptions = {}): StuckTracker {
   }
 }
 
-// 签名归一化: 空白折叠 + 小写,消除排版差异导致的"看起来不同"。
+// Signature normalization: whitespace folding + lowercase, removing the "looks
+// different" that layout differences cause.
 function normalize(text: string): string {
   return text.replace(/\s+/g, " ").trim().toLowerCase()
 }
 
-// 入参的确定性序列化(键名排序,与书写顺序无关);非对象原样 JSON,不可序列化
-// 的值回落其 String 形态。
+// Deterministic serialization of the input (keys sorted, independent of writing
+// order); non-objects JSON as-is, unserializable values fall back to their String
+// form.
 function stableJson(value: unknown): string {
   const seen = new Set<unknown>()
   const walk = (node: unknown): unknown => {
@@ -126,7 +147,8 @@ function summarize(text: string, max: number): string {
   return trimmed.length > max ? `${trimmed.slice(0, max)}… (truncated)` : trimmed
 }
 
-// FNV-1a 32 位: 只用于把长文本压成短签名键,不做安全用途。
+// FNV-1a 32-bit: only compresses long text into short signature keys, no security
+// use.
 function hash(text: string): string {
   let value = 0x811c9dc5
   for (let i = 0; i < text.length; i++) {

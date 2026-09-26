@@ -84,8 +84,8 @@ export function resolveIntent(packs: Record<string, IntentPack>, name: string = 
 
 // Subsection addressing (generalized in M1.3, plans/0033): any section may be
 // subdivided by `### <key>` subsections (the heading may carry a human-readable
-// suffix after the key, e.g. `### m 迁移实现`). Returns the trimmed body of the
-// matching subsection; undefined when the section or the key is absent
+// suffix after the key, e.g. `### m migration implementation`). Returns the
+// trimmed body of the matching subsection; undefined when the section or the key is absent
 // (zero-intent baseline: the template then renders nothing for it). Text
 // before the first `###` heading is not addressable and never injected.
 export function packSubsection(pack: IntentPack, section: IntentSection, key: string): string | undefined {

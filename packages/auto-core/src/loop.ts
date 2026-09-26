@@ -189,10 +189,13 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // Drop the classifier's usage sink before the stats handle flushes, so a
     // late answer cannot book into a re-loaded handle after the run's end.
     setClassifyUsageSink(undefined)
-    // 统计优雅收口(STATS_PLAN §1): fold 开放段后关段落盘并卸载句柄;下次
-    // loadStats 无折旧可读。写失败内部静默,不影响退出码。
+    // Graceful stats close-out (STATS_PLAN §1): fold the open segment, then
+    // persist the closed segment and unload the handle; the next loadStats
+    // reads with no depreciation left. Write failures are silent inside and
+    // do not affect the exit code.
     await flushStats(directory)
-    // 托管句柄(managed)的生命周期归调用方,此处不关闭。
+    // The lifecycle of a managed handle (managed) belongs to the caller; not
+    // closed here.
     if (!opts.managed) server?.close()
     await unprotect(directory)
   }

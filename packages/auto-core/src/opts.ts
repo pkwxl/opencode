@@ -1,7 +1,9 @@
-// 会话级选项与执行结局类型: runTask/runOnce 与各旁路会话共用的透传参数、
-// 单元停机出口与提交结果联合,外加上下文预算常量。纯类型 + 常量,无运行时依赖,
-// 位于依赖图底层——任何模块都可引入而不拉进会话驱动图。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S1,纯搬运)。
+// Session-level options and outcome types: the pass-through parameters shared
+// by runTask/runOnce and the bypass sessions, the unit stop-exit and
+// commit-result unions, plus the context budget constants. Pure types +
+// constants, no runtime dependencies, at the bottom of the dependency graph —
+// any module can import it without pulling in the session-driving graph.
+// Split out of src/runner.ts (plans/0024-module-split-plan.md S1, pure move).
 import type { Interactive } from "./interactive"
 import type { ModeSpec } from "./mode"
 import type { AgentClient } from "./agent/types"
@@ -39,34 +41,46 @@ export type ServerControl = {
 // the agent, so the no-registry path is untouched.
 export type ClientSource = AgentClient | ServerControl
 
-// 任务结局。dirty(plans/0021-commit-boundary-design.md)= 单元启动 clean 门禁失败的专用
-// 出口: 不写运行时状态、不做清扫提交,git 状态的决定权在人工,调用方直接停机退出 2。
+// Task outcomes. dirty (plans/0021-commit-boundary-design.md) = the dedicated
+// exit for a unit-start clean-gate failure: writes no runtime state, makes no
+// sweeping commit, the authority over git state stays with the human; the
+// caller halts directly with exit 2.
 export type Outcome =
   | { type: "completed" }
   | { type: "blocked"; question: string }
   | { type: "incomplete"; reason: string }
   | { type: "dirty"; files: string[] }
 
-// 单元停机出口(blocked = 状态记 .auto/units.json + interrupted 清扫提交;dirty = 不写不扫,
-// 人工处置 git 后重跑)。供各执行函数的返回联合引用,替代原 `Outcome & {type:"blocked"}`。
+// Unit stop exits (blocked = status recorded in .auto/units.json + a sweeping
+// commit of the interrupted state; dirty = no write and no sweep, re-run after
+// the human handles git). Referenced by the return unions of the execution
+// functions, replacing the former `Outcome & {type:"blocked"}`.
 export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; files: string[] }
 
-// 完成条件门禁(plans/0021-commit-boundary-design.md P2): 返回 SessionCommit——统一提交
-// 失败或(baseline 给出时)单元收口校验不通过 → failed,调用方按"不视为完成"
-// 阻塞停机待人工;无 dir / 门禁关闭 → ok(旧行为)。baseline 仅在单元收口调用点
-// (子任务末次提交/隐藏任务 spec.commit)传入。
+// Completion-condition gate (plans/0021-commit-boundary-design.md P2): returns
+// SessionCommit — unified commit failure, or (when a baseline is given) the
+// unit close-out check not passing → failed, and the caller blocks and halts
+// on "not counted as done" for the human; no dir / gate off → ok (the old
+// behavior). The baseline is passed only at the unit close-out call sites (a
+// subtask's final commit / a hidden task's spec.commit).
 export type SessionCommit = { type: "ok" } | { type: "failed"; question: string }
 
-// --subtask 三档: off(单会话完成)/ auto(自动分解,缺省;子任务会话上下文达到
-// 2x --context-limit 时同样交接文档 + 新会话续跑)/ ondemand(单会话执行,
-// 上下文达到 2x --context-limit 时交接文档 + 新会话续跑)。
+// --subtask's three levels: off (one session to completion) / auto (automatic
+// decomposition, the default; a subtask session reaching 2x --context-limit
+// likewise gets a handover document + continuation in a new session) /
+// ondemand (one session executes; at 2x --context-limit a handover document +
+// continuation in a new session).
 export type SubtaskMode = "off" | "auto" | "ondemand"
 
-// --permission 四档: 权限请求(permission.asked)的处理策略,缺省 ask-deny。
-// auto-allow 立即自动授权(always 放行,不等待);ask-* 先等人工(--wait-answer
-// 分钟,未设则不等待即视为超时;allow/yes/y 等回答视为授权,明确拒绝的回答拒绝
-// 该权限但会话继续),超时分别回落:ask-allow 自动授权 / ask-deny 自动拒绝但会话
-// 继续(AI 无授权绕开) / ask-fail 拒绝并退出运行(阻塞停机)。
+// --permission's four levels: the handling policy for permission requests
+// (permission.asked), default ask-deny. auto-allow grants immediately and
+// automatically (always lets it through, no waiting); ask-* first waits for
+// the human (--wait-answer minutes; unset = no waiting, counted as timeout at
+// once; answers like allow/yes/y count as granted, an explicit refusal denies
+// that permission but the session continues), and on timeout each falls back:
+// ask-allow grants automatically / ask-deny denies automatically but the
+// session continues (the AI works around the missing grant) / ask-fail denies
+// and exits the run (blocks and halts).
 export type PermissionMode = "auto-allow" | "ask-allow" | "ask-deny" | "ask-fail"
 
 // The agent contract every session runs under: `.opencode/agent/auto.md`,
@@ -75,27 +89,35 @@ export type PermissionMode = "auto-allow" | "ask-allow" | "ask-deny" | "ask-fail
 // the claude adapter appends its body to the system prompt.
 export const CONTRACT_AGENT = "auto"
 
-// 会话级选项: runTask/runOnce 与各旁路会话共用的透传参数。
+// Session-level options: the pass-through parameters shared by runTask/runOnce
+// and the bypass sessions.
 export type Opts = {
   // The contract name (CONTRACT_AGENT) — not the coding agent choice.
   agent?: string
-  // 目标目录;用于下发失败时检测 agent 契约文件缺失并给出恢复提示。
+  // The target directory; used when a dispatch fails to detect a missing agent
+  // contract file and give a recovery hint.
   dir?: string
   verbose?: boolean
   waitAnswer?: number
-  // --commit false: 关闭 driver 的会话后统一提交(缺省启用;提交机制见 src/git.ts)。
+  // --commit false: turns off the driver's post-session unified commit (on by
+  // default; the commit mechanism is src/git.ts).
   commit?: boolean
   subtask?: SubtaskMode
-  // dryrun 会话: 权限请求自动拒绝但不中断(供 AI 记录受阻项),提问一律自动答复。
+  // dryrun sessions: permission requests are denied automatically without
+  // interrupting (so the AI can record the blocked items); questions are
+  // always auto-answered.
   dryrun?: boolean
-  // 上下文预算基线(tokens);缺省 64k(--context-limit n 以千 tokens 计):会话
-  // 复用的已用量阈值为其一半,交接 steer 阈值为其 2 倍(ondemand 整任务会话与
-  // auto 子任务会话)。
+  // The context budget baseline (tokens); default 64k (--context-limit n
+  // counts in thousands of tokens): the used-usage threshold for session reuse
+  // is half of it, the handover steer threshold 2x (ondemand whole-task
+  // sessions and auto subtask sessions).
   contextLimit?: number
-  // --permission 四档: 权限请求的处理策略,缺省 ask-deny(见 PermissionMode)。
+  // --permission's four levels: the handling policy for permission requests,
+  // default ask-deny (see PermissionMode).
   permission?: PermissionMode
-  // --interactive 旁路: 每个会话建立/复用时 attach,人工输入经它注入会话;
-  // ask 的人工等待也改由它接收(语义不变)。
+  // --interactive bypass: attached as every session is created/reused, human
+  // input is injected into the session through it; the ask-* human wait is now
+  // also received through it (semantics unchanged).
   interactive?: Interactive
   // The run's agent hosts under one control (plans/0055 §8.1): the agent pool
   // under a model registry — one host per agent profile, each started lazily
@@ -109,38 +131,53 @@ export type Opts = {
   // without driver-supplied config — the pool fans it out to every started
   // host, whose spawn config is one global ring state).
   server?: ServerControl
-  // driver 托管脚本的看门狗: 持续无输出的判定窗口(缺省 10 分钟)与绝对时长上限
-  // (缺省不设;config 的 idleTime / idleMax 以分钟设定)。
+  // Watchdog of the driver-managed scripts: the sustained-no-output judgment
+  // window (default 10 minutes) and the absolute duration cap (default unset;
+  // config's idleTime / idleMax are set in minutes).
   idleMs?: number
   maxMs?: number
-  // --test-by-driver: 测试/编译/构建等命令的执行协议(config.testByDriver 持久化、
-  // run 注入)——执行类会话(子任务/整任务)
-  // 不在会话内直接运行这类命令,把命令写成脚本放 test/ 目录、把脚本路径写入
-  // tmp/test.sh 由 driver 执行(存在即待执行请求),driver 合并 stdout/stderr
-  // 整写 tmp/test.<n>.out,退出码与输出文件路径 steer 回原会话由 AI 直读判断。
+  // --test-by-driver: the execution protocol for test/compile/build commands
+  // (persisted as config.testByDriver, injected by run) — execution sessions
+  // (subtask/whole-task) do not run such commands directly inside the session;
+  // the command is written as a script into the test/ directory and the script
+  // path into tmp/test.sh for the driver to execute (its existence is the
+  // pending-execution request); the driver merges stdout/stderr into one
+  // tmp/test.<n>.out, and steers the exit code and output file path back into
+  // the original session for the AI to read and judge directly.
   testByDriver?: boolean
-  // --handover-test(需 --test-by-driver,config 持久化): 测试失败(非零退出或
-  // 看门狗超时)且会话上下文已用达到 contextLimit 时,要求 AI 写交接文档
-  // docs/<id>/testhandoff.md(子任务会话落 docs/<id>/S<两位序号>/testhandoff.md,
-  // 整任务/修复轮为任务级;子任务完成即清除,防下一子任务误读遗留交接)并结束
-  // 会话,driver 开新会话据其续跑,防止在超大上下文中反复试错。
+  // --handover-test (needs --test-by-driver, persisted in config): when a test
+  // fails (nonzero exit or watchdog timeout) and the session context has used
+  // up to contextLimit, the AI is required to write a handover document
+  // docs/<id>/testhandoff.md (a subtask session puts it at
+  // docs/<id>/S<two-digit seq>/testhandoff.md, whole-task/rework rounds name it
+  // at task level; it is cleared as soon as the subtask completes, so the next
+  // subtask does not misread a leftover handover) and end the session; the
+  // driver opens a new session to continue from it, preventing repeated trial
+  // and error inside a huge context.
   handoverTest?: boolean
-  // -m/--mode 场景模式(缺省 migrate): 透传给执行类与初始化提示词渲染。
+  // -m/--mode scenario mode (default migrate): passed through to the execution
+  // and init prompt renders.
   mode?: ModeSpec
-  // --new-session: 中断恢复时跳过会话复用(即使被中断的会话仍存活也开新会话);
-  // 阶段精确重入不受影响——仅放弃旧会话上下文,进度记录的 phase 照常指导续跑。
+  // --new-session: skips session reuse in interruption recovery (a new session
+  // opens even when the interrupted session is still alive); exact phase
+  // re-entry is unaffected — only the old session context is abandoned, the
+  // progress record's phase still guides the resume as usual.
   newSession?: boolean
   // Current phase (loop passes it; undefined = a bare run outside the phase
   // loop): the qualified id keys resolve records, the type entry drives model
   // routing and the decompose template and duties (M3.6).
   phase?: PhaseKey
-  // --no-wrapup(config.wrapup 持久化,缺省 true): 关闭时每个任务的子任务/整
-  // 任务执行完成后跳过收尾会话(renderWrapup)。
+  // --no-wrapup (persisted as config.wrapup, default true): once off, each
+  // task skips the wrap-up session after its subtask/whole-task execution
+  // completes (renderWrapup).
   wrapup?: boolean
-  // plan 的会话(RunAllOpts.stopBefore === "execute" 时由 loop 注入): 非权限
-  // 提问是人工的决定——plan 的存在就是为了执行前人工审阅,driver 无超时等待
-  // 人工答复,绝不代答(无 AUTO-RESOLVE);仅输入渠道不可及(stdin 关闭)才阻塞。
-  // 规划类模板的 question-rule 分支同口径(prompt.ts useHumanQuestions)。
+  // plan's sessions (injected by the loop when RunAllOpts.stopBefore ===
+  // "execute"): non-permission questions are the human's to decide — plan
+  // exists precisely for human review before execution, so the driver waits
+  // for the human's answer with no timeout and never proxy-answers (no
+  // AUTO-RESOLVE); it blocks only when the input channel is unreachable (stdin
+  // closed). The planning templates' question-rule branch follows the same
+  // policy (prompt.ts useHumanQuestions).
   humanQuestions?: boolean
   // The run's registry routing facts (plans/0055 §6): the loaded model
   // registry with the agent filter and the default agent, built once at run
@@ -150,6 +187,7 @@ export type Opts = {
   routing?: import("./routing").RoutingFacts
 }
 
-// 上下文预算默认基线(tokens);--context-limit n 以千 tokens 覆盖。会话复用阈值
-// 为其一半、交接 steer 阈值为其 2 倍。
+// The default context budget baseline (tokens); overridden by --context-limit n
+// in thousands of tokens. The session-reuse threshold is half of it, the
+// handover steer threshold 2x.
 export const DEFAULT_CONTEXT_LIMIT = 64_000

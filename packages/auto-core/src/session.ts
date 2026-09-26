@@ -1,10 +1,14 @@
-// 会话驱动的核心层: 单个提示词在会话链上的执行(runSession——复用/新建、瞬时
-// 错误换新会话重试、网络故障重启 server、配额受限的模型降级环与窗口钳制、
-// 一切会话故障的最终归宿「等待-探测环」awaitRecovery),以及 fork 基点的确立
-// (ensureForkBase——它驱动一次性基点会话,属会话驱动而非 SDK 薄封装,故与
-// runSession 同层,见 plans/0024-module-split-plan.md §I D9)。
-// 位于 attempt/watch 之上、runner 之下;**不得反向 import runner**。
-// 拆分自 src/runner.ts(plans/0024-module-split-plan.md S8,纯搬运)。
+// The core layer of session driving: running one prompt on the session chain
+// (runSession — reuse/new session, transient errors retried in a fresh
+// session, server restart on network failures, the model failover ring under
+// quota restriction with window clipping, and the wait-and-probe loop
+// awaitRecovery, the final destination of every session fault), plus fork base
+// establishment (ensureForkBase — it drives a one-off base session, which is
+// session driving rather than a thin SDK wrapper, hence it sits on the same
+// layer as runSession, see plans/0024-module-split-plan.md §I D9).
+// Sits above attempt/watch and below runner; **must never import runner in the
+// reverse direction**.
+// Split out of src/runner.ts (plans/0024-module-split-plan.md S8, pure move).
 
 import { dirname, join } from "node:path"
 import type { AgentClient } from "./agent/types"
@@ -37,16 +41,25 @@ import { autoSwitches, type Switches } from "./switches"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { type Steer, type TestRun } from "./testrun"
 
-// fork 基点确立(fork-decompose 设计 §4.2,2026-09-18 持久化修订): 返回生效基点,
-// undefined = 冷启动。digest 模式基点**一经建立即跨运行持久**——setForkBase 以
-// `digest:` 前缀落运行态 .auto/units.json 的 forkBase,此后每次运行(含中断恢复、子任务未竟的
-// 重跑)先校验存活,存活即复用同一基点会话继续分叉,不再从 context.md 无条件重建;
-// 失效(存储清理)才经一次性链(subject `T-NNN ctxbase …`,不带 phase、不写进度
-// 记录;确认 turn 无工作区改动、commitTree 自然零提交)重建——前缀确定性 = 摘要全文,
-// provider 缓存友好。基点会话建立后只被 fork、不再下发,前缀恒为摘要全文,复用不
-// 引入漂移。回退链: 持久 digest 基点存活复用 → digest 重建 → session 基点(units.json
-// 持久字段,校验存活,失效回退冷启动) → 冷启动。session 模式基点跨运行持久,用量
-// 经 messages 末条消息重建(近似即可;同次运行且基点即链上会话时直接取跟踪值)。
+// Fork base establishment (fork-decompose design §4.2, persistence revision
+// 2026-09-18): returns the effective base, undefined = cold start. A
+// digest-mode base **persists across runs once established** — setForkBase
+// stores it in the runtime-state .auto/units.json forkBase under the `digest:`
+// prefix, and every later run (including interruption recovery and reruns with
+// subtasks left undone) validates liveness first: alive means reusing the same
+// base session to keep forking, no longer unconditionally rebuilding from
+// context.md; only a stale one (storage cleanup) is rebuilt through a one-off
+// chain (subject `T-NNN ctxbase …`, carries no phase, writes no progress
+// record; the turn is verified to leave no worktree changes, commitTree
+// naturally commits nothing) — the prefix is deterministic = the full digest
+// text, provider-cache friendly. Once established, the base session is only
+// forked, never dispatched again, the prefix stays the full digest text, and
+// reuse introduces no drift. Fallback chain: persistent digest base alive and
+// reused → digest rebuild → session base (a persistent units.json field,
+// liveness-checked, falls back to cold start when stale) → cold start. A
+// session-mode base persists across runs, with usage rebuilt from the last
+// message in messages (an approximation suffices; within the same run, when
+// the base is the session on the chain, the tracked value is taken directly).
 // Per agent under a model registry (plans/0055 §8.4): the record is a map from
 // agent profile to base, read and written for the forking chain's agent alone,
 // and the digest rebuild is dispatched with the model selected for the
@@ -73,10 +86,12 @@ export async function ensureForkBase(
   // undefined = no registry, where the plain-string record of the one-agent
   // era applies as-is and setForkBase keeps the old shape.
   const agent = opts.routing ? (chain.agent ?? opts.routing.runAgent) : undefined
-  // digest 持久基点以 `digest:` 前缀与理解会话 id(session 基点)区分——无前缀值在
-  // digest 模式下只是重建失败时的兜底,不参与「存活即复用」。A plain string is the
-  // one-agent era's record and reads as this run's (the default) agent's; a
-  // map holds only the reading agent's entry (forkBaseFor).
+  // A persistent digest base is told from the understand-session id (the
+  // session base) by the `digest:` prefix — an unprefixed value in digest mode
+  // is only the fallback for a failed rebuild and takes no part in "alive
+  // means reuse". A plain string is the one-agent era's record and reads as
+  // this run's (the default) agent's; a map holds only the reading agent's
+  // entry (forkBaseFor).
   const forkBaseRecord = forkBaseFor(task.forkBase, agent)
   // The client the base's liveness and rebuild run on: the reading agent's
   // host (a session id is agent-local, §8.2), resolved through the pool when
@@ -131,9 +146,11 @@ export async function ensureForkBase(
       log(`↻ ${task.id} ${taskDoc(task.id, "context")} digest missing; digest base cannot be established, falling back to the session base`)
     }
   }
-  // session 基点(理解会话): digest 模式下持久基点走到这里必已在上方判死(存活即
-  // 复用返回),不重复校验;session 模式遇 digest: 前缀遗留(运行中途切换基点模式)
-  // 剥壳校验——存活的 digest 基点同样是有效暖前缀。
+  // The session base (the understand session): in digest mode a persistent
+  // base reaching here must already have been ruled stale above (alive would
+  // have returned by reuse), so no re-check; in session mode a leftover
+  // `digest:` prefix (base mode switched mid-run) is unwrapped and checked —
+  // a live digest base is equally a valid warm prefix.
   const sessionID = persistID === undefined ? forkBaseRecord : switches.forkBase === "session" ? persistID : undefined
   if (sessionID) {
     if (await sessionAlive(baseClient, sessionID)) {
@@ -146,8 +163,10 @@ export async function ensureForkBase(
   return undefined
 }
 
-// 会话错误中属于网络/服务故障的特征串;命中时先重启 server(外部 server 除外)
-// 再换新会话重试,避免对着同一坏实例反复失败。
+// Signature strings marking a network/service failure inside session errors; on
+// a hit the server is restarted first (an external server excepted), then the
+// retry goes to a fresh session, avoiding repeated failures against the same
+// broken instance.
 const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
 
 // Probe prompt of the wait-and-probe loop: a minimal payload that only needs one
@@ -176,14 +195,16 @@ const retryNote = worktreeNote
 // context ended below REUSE_BELOW and within REUSE_IDLE_MS). Transient
 // provider failures (session.error, e.g. malformed reasoning content from a
 // gateway) are retried in a fresh session; network/server failures
-// (Internal network failure / Network error 等) additionally restart the
+// (Internal network failure / Network error etc.) additionally restart the
 // spawned opencode server before the retry; non-retryable failures (quota
 // etc.) and ladder exhaustion fall into the recovery wait-probe loop instead
 // of blocking — a session fault never terminates the run.
-// 单个提示词在会话链上的执行(复用/新建、错误重试与 server 重启、等待-探测环);
-// 导出供旁路会话复用。test 为 --test-by-driver 的协议
-// 状态(仅执行类会话经 runExecSession 传入;旁路会话不传,协议不生效);
-// switches 缺省取 OPENCODE_AUTO_* 解析值(复用开关),注入供单测。
+// Runs one prompt on the session chain (reuse/new session, error retry with
+// server restart, the wait-and-probe loop); exported for reuse by bypass
+// sessions. test is the --test-by-driver protocol state (passed in only by
+// execution sessions via runExecSession; bypass sessions leave it out, so the
+// protocol stays inactive); switches defaults to the parsed OPENCODE_AUTO_*
+// values (the reuse switches), injected for unit tests.
 export async function runSession(
   client: ClientSource,
   task: Task,
@@ -199,35 +220,55 @@ export async function runSession(
   // every fork, liveness check and rename below belongs to the agent the
   // session lives on. A plain client source resolves to itself.
   const chainClient = () => clientOf(client, chain.agent)
-  // 配额降级候选跟踪(设计 D.3/D.4):整条会话链共享——每个模型候选各享一轮完整的
-  // 重试阶梯(i 在切换候选时重置为 1),总上限 = 候选数 × 阶梯长度,降级计数与
-  // 阶梯计数分离、互不掩盖。tried 记录本链已试过的候选串(有序,供耗尽文案与去重
-  // 再选);clipped 记录因上下文窗口不足被跳过的候选(供耗尽文案与去重日志);limits
-  // 惰性取一次 contextLimits 并缓存(降级判定只读上下文窗口,容错空映射)。
+  // Quota-failover candidate tracking (design D.3/D.4): shared across the
+  // whole session chain — each model candidate gets its own full round of the
+  // retry ladder (i resets to 1 when the candidate switches), the total cap =
+  // candidate count × ladder length, and the failover count and the ladder
+  // count stay separate so neither masks the other. tried records the
+  // candidate strings this chain has already tried (ordered, for the
+  // exhaustion message and dedup on re-selection); clipped records candidates
+  // skipped because their context window falls short (for the exhaustion
+  // message and dedup logging); limits lazily fetches contextLimits once and
+  // caches it (the failover decision only reads context windows, tolerating an
+  // empty map).
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const tried: string[] = []
   const clipped: string[] = []
   let limits: ReadonlyMap<string, number> | undefined
-  // 重试阶梯(OPENCODE_AUTO_RETRY_WAITS,缺省 0,1,2,4,8): waits 的每个元素是该次
-  // 重试前的等待分钟数,元素个数即重试次数上限。首次重试立即——瞬时抖动确实会在
-  // 下一回合就恢复(DB 里有「尝试 1 静默 300s 被中止、尝试 2 成功」的实例);其后
-  // 按分钟级退避。
+  // The retry ladder (OPENCODE_AUTO_RETRY_WAITS, default 0,1,2,4,8): each
+  // element of waits is the minutes to wait before that retry, and the element
+  // count is the retry-count cap. The first retry is immediate — transient
+  // jitter really does recover on the very next turn (the DB holds an instance
+  // of "attempt 1 killed after 300s of silence, attempt 2 succeeded"); after
+  // that the backoff scales in minutes.
   //
-  // 为什么退避从分钟起步、而不是从秒开始翻倍: 退避本身不是恢复手段。opencode 内层
-  // 每次故障已经用掉 6×300s 超时 + 2+4+8+16+30s 退避 ≈ 1860s(实测 1862s),外层再叠
-  // 一条秒级曲线只占其中零头,改变不了下一次请求的命运。分钟级等待的唯一意义是
-  // 「跨过一段上游退化」;阶梯耗尽后的出路是下方的等待-探测环(2026-09-16 起,
-  // 此前为人工裁决)——配额/限流的恢复窗口以小时计,加码次数无济于事,等就是了。
+  // Why the backoff starts at minutes instead of doubling from seconds:
+  // backoff is not itself a recovery mechanism. On each failure opencode's
+  // inner layer has already spent 6×300s timeouts + 2+4+8+16+30s backoff ≈
+  // 1860s (measured 1862s); stacking a second-scale curve on top from the
+  // outer layer would be a rounding fraction of that and changes nothing about
+  // the next request's fate. Minute-scale waiting has exactly one purpose:
+  // "outlasting a stretch of upstream degradation"; the way out once the
+  // ladder is exhausted is the wait-and-probe loop below (since 2026-09-16;
+  // before that a human ruling) — quota/rate-limit recovery windows are
+  // hour-scaled, extra attempts do not help, waiting is all there is.
   const waits = switches.retryWaits
   let i = 1
-  // 有效降级候选环: /failback 带参重定义过模型序时用其覆写环,否则取 switches 的
-  // OPENCODE_AUTO_MODEL_FALLBACK 解析结果(switches memo 恒定,覆写经 failback 模块态
-  // 承载)。降级触发门禁与 switchModel 的候选遍历共用同一来源。
+  // The effective failover candidate ring: when /failback with arguments has
+  // redefined the model order, its override ring applies, otherwise the
+  // OPENCODE_AUTO_MODEL_FALLBACK parse result from switches (the switches memo
+  // is constant; the override lives in the failback module's state). The
+  // failover trigger gate and switchModel's candidate walk share this one
+  // source.
   const fallbackRing = () => failbackOverride()?.fallback ?? switches.model.fallback
-  // 候选降级的公共动作(两个触发面共用:下面的配额降级支、阶梯耗尽后的回落):
-  // 取下一个可用候选,换 chain.model、挂一次性降级 note、fork 副本带上下文随迁,
-  // 并把阶梯计数重置为 1(本候选独享一轮完整阶梯)。
-  // 切换成功返回 true(调用方 continue);候选耗尽返回 false(调用方落入等待-探测环)。
+  // The common action of a candidate failover (shared by the two trigger
+  // faces: the quota-failover branch below and the fallback after ladder
+  // exhaustion): pick the next usable candidate, switch chain.model, attach a
+  // one-off failover note, fork a copy that carries the context along, and
+  // reset the ladder counter to 1 (this candidate gets its own full ladder
+  // round).
+  // Returns true on a successful switch (the caller continues); returns false
+  // on candidate exhaustion (the caller falls into the wait-and-probe loop).
   // why is a short phrase naming the trigger; it goes into the log and the failover note.
   // Under a model registry (plans/0055 §7 step 2) the current model is marked
   // down and selection picks the next usable candidate of the tier's list,
@@ -272,8 +313,10 @@ export async function runSession(
       toAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
     } else {
       const fallback = fallbackRing()
-      // 窗口已知且 < cap 的候选跳过并记一次原因(D.4:降级后立刻撞上限/交接预算比原故障
-      // 更糟);窗口未知(不在映射)不过滤。
+      // Candidates with a known window < cap are skipped with the reason
+      // logged once (D.4: hitting the ceiling or the handover budget right
+      // after the failover would be worse than the original fault); an unknown
+      // window (absent from the map) is not filtered.
       for (const c of fallback) {
         if (tried.includes(c)) continue
         const limit = limits.get(c)
@@ -287,12 +330,15 @@ export async function runSession(
         to = c
         break
       }
-      // 候选耗尽(全部试过,或全部被窗口钳制跳过)。
+      // Candidates exhausted (all tried, or all skipped by window clipping).
       if (to === undefined) return false
-      // 记录被离开的模型(供日志与降级 note):链上已降级候选优先,否则取路由主模型;
-      // 未设路由时 from 为 undefined,日志渲染为「主模型」。若 from 恰为某真实候选串,
-      // 一并标记已试(防被再选)。与 attempt 的 target 求值同一优先级链(chain.model >
-      // sticky > /failback 覆写 > 路由表)。
+      // Record the model being left (for the log and the failover note): a
+      // candidate already failed over to on the chain wins, otherwise the
+      // routing primary model; without routing, from is undefined and the log
+      // renders "primary model". If from happens to be a real candidate
+      // string, mark it tried as well (so it is not picked again). The same
+      // priority chain as attempt's target evaluation (chain.model > sticky >
+      // /failback override > the routing table).
       from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
       if (from !== undefined && !tried.includes(from)) tried.push(from)
       tried.push(to)
@@ -308,8 +354,11 @@ export async function runSession(
       chain.modelEntry = to
       chain.modelStep = 0
     } else if (switches.modelFailbackScope === "phase") {
-      // failback 粒度 phase: 降级跨任务粘滞——链逐任务销毁,候选人选经 failback 模块的
-      // sticky holder 带进本阶段后续任务,阶段边界(clearSticky)才重置回首选。
+      // failback scope phase: the failover stays sticky across tasks — the
+      // chain is destroyed per task, so the chosen candidate is carried into
+      // the phase's later tasks through the failback module's sticky holder,
+      // and only the phase boundary (clearSticky) resets back to the preferred
+      // model.
       setSticky(to)
     }
     log(
@@ -334,25 +383,41 @@ export async function runSession(
       chain.note = retryNote(`Switched model to continue (${why}), moving to agent ${toAgent}; the new session did not inherit the earlier session's context`)
       return true
     }
-    // 上下文随迁(设计 D.3/D.4):fork 逐条克隆消息、只搬消息不复制 agent/model/权限,
-    // 换模型续跑无需重做上下文。分叉源与重试环同一套「保住最值钱的会话」判据:失败会话
-    // 本体(用量 > 0 才算,0 用量是纯报错桩)与链上原会话,取已积累用量大者。两条触发面
-    // 的链状态形态不同,这套判据同时覆盖:不可重试类(quota/auth/rate)attempt 已把会话
-    // 晋升到 chain.id、chain.failed 为空,选出的就是 chain.id(行为等价改造前);可重试类
-    // 跑完阶梯回落到这里时,attempt 把 chain.id 还原成了下发前的原会话、真正攒着上下文的
-    // 是 chain.failed,若不看它就会把 100k+ 产出扔掉去开白板会话。fork 成功即从副本续跑;
-    // 都不可用则回退全新会话——切换仍生效,仅不继承上下文。
-    // 「下发过本提示词的会话」:可重试类记在 chain.failed,不可重试类已被 attempt 晋升到
-    // chain.id——分到它即上下文完整,只带换模说明;分到链上原会话则本次尝试的部分产出
-    // 不在副本里,须带现场核对说明(见 retryNote)。
+    // Context travels along (design D.3/D.4): fork clones the messages one by
+    // one and carries only messages, not the agent/model/permissions, so
+    // continuing on a switched model needs no context rebuild. The fork source
+    // uses the same "keep the most valuable session" criterion as the retry
+    // ring: the failed session itself (counted only with usage > 0; 0 usage is
+    // a pure error stub) and the chain's original session, taking the one with
+    // more accumulated usage. The two trigger faces leave the chain in
+    // different shapes, and this one criterion covers both: for the
+    // non-retryable classes (quota/auth/rate) attempt has already promoted the
+    // session to chain.id with chain.failed empty, so the pick is chain.id
+    // (behavior unchanged from before the rework); when a retryable class
+    // falls back here after exhausting the ladder, attempt has restored
+    // chain.id to the original session from before the dispatch and the one
+    // actually holding the context is chain.failed — ignoring it would throw
+    // away 100k+ of output and open a blank session. A successful fork
+    // continues from the copy; when none is usable it falls back to a
+    // brand-new session — the switch still takes effect, only the context is
+    // not inherited.
+    // "The session this prompt was dispatched to": recorded in chain.failed
+    // for retryable classes, already promoted to chain.id by attempt for
+    // non-retryable ones — picking it means the context is complete, carrying
+    // only the model-switch note; picking the chain's original session means
+    // this attempt's partial output is not in the copy, so the worktree-check
+    // note is required (see retryNote).
     const failedID = chain.failed?.id ?? chain.id
     const sources: { id: string; used: number; why: string }[] = []
     if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
     if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
-    // chain.failed 在 fork 播种后刻意保留(不清空): 副本若 0-token 即死(配额连败
-    // 现场),attempt 的守卫不会拿报错桩顶替它,下一轮重试仍能从这个最有价值的会话
-    // 重新分叉;副本成功时由 attempt 收口清空。fork 已失效的死记录在此顺手清理,
-    // 避免后续轮次对着死会话重复 fork。
+    // chain.failed is deliberately kept after the fork seeding (not cleared):
+    // if the copy dies at 0 tokens (a run of consecutive quota failures),
+    // attempt's guard will not replace it with the error stub, and the next
+    // retry can still fork again from this most valuable session; once the copy
+    // succeeds, attempt's close-out clears it. Dead records whose fork has gone
+    // stale are cleaned up here in passing, so later rounds do not keep forking
+    // a dead session.
     sources.sort((a, b) => b.used - a.used)
     for (const source of sources) {
       const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} failover`)
@@ -360,9 +425,12 @@ export async function runSession(
         if (source.id === chain.failed?.id) chain.failed = undefined
         continue
       }
-      // chain.id 清空、改由 pending 承载分叉会话:note 非空 + chain.id 非空会命中
-      // attempt 的「中断恢复(resumed)复用原会话」分支而忽略 pending,故此处必须清 id,
-      // 让降级 note 随分叉副本会话下发(副本已含真实累计消息)。
+      // chain.id is cleared and the forked session is carried by pending
+      // instead: a non-empty note + a non-empty chain.id would hit attempt's
+      // "interruption recovery (resumed) reuses the original session" branch
+      // and ignore pending, so the id must be cleared here, letting the
+      // failover note ride the forked copy session (the copy already holds the
+      // real accumulated messages).
       chain.id = undefined
       chain.pending = forked
       chain.pct = 100
@@ -532,16 +600,26 @@ export async function runSession(
     tier: candidatesOf(ctx, call).tier,
     opens: formatWindowState({ open: false, opens: decision.until }, opts.routing!.registry.tz, call.now),
   })
-  // 等待-探测环(2026-09-16 策略): 会话故障的最终归宿——不再阻塞退出,以
-  // recoveryWait(缺省 30 分钟)为间隔无限等待,每轮用**全新临时干净会话**下发极小
-  // 探测提示词判明服务是否恢复;恢复后 fork 被中断的会话(与重试环同一套「保住
-  // 最值钱的会话」判据: 失败会话本体 > 链上原会话,0 用量纯报错桩不进候选)从
-  // 副本续跑,fork 失败回退空白新会话重发完整提示词,阶梯计数重开一轮。如此无论
-  // 面临何种配额限制,程序都能等到额度恢复后再继续;等待期间连按两次 Ctrl+C 经
-  // runAll 的进程级 SIGINT 处理器强制退出(130),这是唯一的退出方式。
-  // 探测链不带 phase(不写进度记录、不动真实链的恢复点),但复制真实链的
-  // model/role——探测的就是恢复后要续跑的那条模型,配额按模型/账号计量,探测
-  // 别的模型结论无意义。探测会话本身异常(订阅断开等)同样视为未恢复,继续等。
+  // The wait-and-probe loop (strategy of 2026-09-16): the final destination of
+  // every session fault — no longer a blocking exit; it waits indefinitely at
+  // recoveryWait intervals (default 30 minutes), each round dispatching a tiny
+  // probe prompt through a **fresh temporary clean session** to tell whether
+  // service has recovered; once recovered it forks the interrupted session
+  // (same "keep the most valuable session" criterion as the retry ring: the
+  // failed session itself > the chain's original session; 0-usage pure error
+  // stubs never enter the candidates) and continues from the copy; a failed
+  // fork falls back to a blank new session re-sending the full prompt, and the
+  // ladder counter starts a fresh round. This way, whatever quota restriction
+  // it faces, the program waits until the quota recovers and then continues;
+  // during the wait a double Ctrl+C force-quits through runAll's process-level
+  // SIGINT handler (130) — the only way out.
+  // The probe chain carries no phase (writes no progress record, leaves the
+  // real chain's recovery point untouched) but copies the real chain's
+  // model/role — what is probed is exactly the model the run will continue on
+  // after recovery; quota is metered per model/account, so probing another
+  // model says nothing. A probe session failing on its own (stream
+  // subscription dropped, etc.) likewise counts as not recovered: keep
+  // waiting.
   // Under a registry (§6.3) the probe dispatches through selection like any
   // other: the probe candidate is the first one inside its window, ignoring
   // the down marks, so its mark is cleared for the probe and re-marked when
@@ -554,8 +632,10 @@ export async function runSession(
   const awaitRecovery = async (why: string): Promise<void> => {
     for (;;) {
       log(`⏳ ${task.id} ${why}; waiting ${switches.recoveryWait} minutes, then probing service recovery with a fresh temporary session (press Ctrl+C twice to force exit)`)
-      // 等待可能以小时计,从会话与 AI 用时中扣除、单记 waitMs(与 askHuman 同口径,
-      // STATS_PLAN §2/§3);探测会话自身的用时照常入账。
+      // The wait can run to hours: deducted from the session and AI timings
+      // and booked separately as waitMs (same treatment as askHuman,
+      // STATS_PLAN §2/§3); the probe session's own timings are booked as
+      // usual.
       await statsWaitBegin(opts.dir, "recovery")
       try {
         await Bun.sleep(switches.recoveryWait * 60_000)
@@ -619,11 +699,16 @@ export async function runSession(
       const sources: { id: string; used: number; why: string }[] = []
       if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
       if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
-      // 「下发过本提示词的会话」:不可重试类被 attempt 晋升到 chain.id、可重试类记在
-      // chain.failed——分到它即上下文完整,只带恢复说明;分到原会话/空白会话则本次
-      // 尝试的部分产出不在上下文里,须带现场核对说明(见 retryNote)。
-      // chain.failed 在 fork 播种后刻意保留(与重试阶梯同一 invariant,见下方):
-      // 副本 0-token 即死时记录不被顶替,恢复重发仍能从它重新分叉。
+      // "The session this prompt was dispatched to": promoted to chain.id by
+      // attempt for the non-retryable classes, recorded in chain.failed for
+      // the retryable ones — picking it means the context is complete,
+      // carrying only the recovery note; picking the original session / a
+      // blank session means this attempt's partial output is not in the
+      // context, so the worktree-check note is required (see retryNote).
+      // chain.failed is deliberately kept after the fork seeding (same
+      // invariant as the retry ladder, see below): when the copy dies at 0
+      // tokens the record is not replaced, and the recovery re-send can still
+      // fork again from it.
       const failedID = chain.failed?.id ?? chain.id
       sources.sort((a, b) => b.used - a.used)
       let seeded = false
@@ -634,8 +719,9 @@ export async function runSession(
           continue
         }
         log(`↻ ${task.id} service recovered; re-dispatching the task from a forked copy of the ${source.why} ${source.id} (${formatTokens(source.used)} tokens)`)
-        // 清 chain.id、改由 pending 承载分叉会话(与 switchModel 同理: note + chain.id
-        // 非空会命中 attempt 的 resumed 复用分支而忽略 pending)。
+        // Clear chain.id and carry the forked session by pending instead (same
+        // reasoning as switchModel: a non-empty note + chain.id would hit
+        // attempt's resumed-reuse branch and ignore pending).
         chain.id = undefined
         chain.pending = forked
         chain.pct = 100
@@ -675,14 +761,18 @@ export async function runSession(
       // request timeouts) stays a session fault and enters the recovery
       // machinery below.
       if (error instanceof AgentStartError) throw error
-      // 会话故障不退出: SDK 调用抛出的异常(事件流订阅断开、请求超时中止等)与
-      // 返回错误同渠道进入重试/等待机制——除连按两次 Ctrl+C 外,任何会话故障都
-      // 不终止运行。
+      // A session fault does not exit: exceptions thrown by SDK calls (event
+      // stream subscription dropped, request timed out and aborted, etc.)
+      // enter the retry/wait mechanisms through the same channel as returned
+      // errors — apart from a double Ctrl+C, no session fault ever terminates
+      // the run.
       result = { type: "blocked", question: `session error: ${formatClientError(error)}` }
     }
-    // 会话故障面(错误本体/创建会话失败/下发任务失败)全部进入恢复机制,不直接
-    // 上抛阻塞;仍直接返回的 blocked 只有会话内阻塞提问与权限拒绝——那需要人工
-    // 答复,本就不属于故障。
+    // Every session-fault face (the error itself / session creation failed /
+    // task dispatch failed) goes into the recovery mechanism rather than being
+    // thrown up as blocked; the only blocked results still returned directly
+    // are in-session blocking questions and permission denials — those need a
+    // human reply and were never faults to begin with.
     if (result.type !== "blocked") return result
     // Registry routing: selection found nothing usable for the dispatch (every
     // candidate down or outside its windows, §6.3) — no session ran, so this is
@@ -699,11 +789,15 @@ export async function runSession(
       continue
     }
     if (!(result.question.startsWith("session error: ") || result.question.startsWith("session creation failed: ") || result.question.startsWith("task dispatch failed: "))) return result
-    // P4 配额降级(设计 D.3):分类为 quota/auth/rate 且配置了候选表时,取下一候选
-    // (经 D.4 窗口钳制)、换 chain.model、复用既有 fork 副本路径续跑(上下文随迁)。
-    // 判据取 result.errorClass(P3 三条触发面统一带来的归类):plain session.error 的
-    // quota(isRetryable:false)与提前结算的 retry part / session.status retry 均带
-    // errorClass,故据它决策即可覆盖两条路径(不读 result.failover)。
+    // P4 quota failover (design D.3): when the class is quota/auth/rate and a
+    // candidate table is configured, take the next candidate (after D.4 window
+    // clipping), switch chain.model, and reuse the existing fork-copy path to
+    // continue (context travels along). The criterion reads
+    // result.errorClass (the classification P3 brought uniformly to the three
+    // trigger faces): both the quota of a plain session.error
+    // (isRetryable:false) and the early-settled retry part / session.status
+    // retry carry errorClass, so deciding on it alone covers both paths
+    // (result.failover is not read).
     // Under a registry the tier lists are the candidate table (the global ring
     // is a refused switch there), so the same gate applies with no ring set.
     // The escalation is key → model → wait (plans/0055 §7): a ringed provider
@@ -723,8 +817,11 @@ export async function runSession(
         (await switchModel(classLabel, result.resetAt, result.classified))
       lateReset(result.pendingReset, target)
       if (moved) continue
-      // 候选耗尽(候选与首选全部配额受限/不可用): 不再阻塞退出——等待-探测环等到
-      // 额度恢复,期间探测用当前生效模型,恢复后从被中断的会话分叉续跑。
+      // Candidates exhausted (candidates and primary all quota-restricted /
+      // unusable): no longer a blocking exit — the wait-and-probe loop waits
+      // for the quota to recover, probing with the currently effective model
+      // in the meantime, and after recovery continues from a fork of the
+      // interrupted session.
       await awaitRecovery(
         opts.routing !== undefined
           ? `${classLabel} and every candidate of the tier list is down (down: ${[...downMarks().keys()].join(", ") || "none"})`
@@ -732,21 +829,31 @@ export async function runSession(
       )
       continue
     }
-    // 不可重试(isRetryable:false,配额/鉴权类): 换会话无意义、未配候选表也换不了
-    // 模型——不再直接阻塞,等待-探测环无限等额度恢复,期间全新临时会话探测,恢复
-    // 后 fork 被中断的会话续跑。attempt() 已保证 chain.id 落在这一轮实际用过的
-    // 会话上(哪怕它就是刚失败的这个),真正有内容的会话不被牺牲。
+    // Non-retryable (isRetryable:false, the quota/auth classes): switching
+    // sessions is pointless, and without a candidate table the model cannot be
+    // switched either — no longer blocks directly; the wait-and-probe loop
+    // waits indefinitely for the quota to recover, probing with fresh
+    // temporary sessions in the meantime, and after recovery forks the
+    // interrupted session to continue. attempt() already guarantees chain.id
+    // lands on the session this round actually used (even if that is the one
+    // that just failed), so the session holding real content is not
+    // sacrificed.
     if (result.retryable === false) {
       await awaitRecovery(`non-retryable session error encountered (${firstLine(result.question)})`)
       continue
     }
-    // 阶梯耗尽: 不再等人工裁决——先试降级候选(换 provider 是阶梯之外唯一还没
-    // 试过的手段),候选也用尽(或未配置)则进入等待-探测环,半小时一次直至服务
-    // 恢复,从被中断的会话分叉续跑、阶梯重开一轮。留在进程里等,会话就还活着、
-    // 还能继续 fork——阻塞退出反而会把阶梯期间刚保住的那个会话扔掉。
-    // 作用域:chain 由 runTask 逐任务新建,chain.model 随之逐任务归零,下一个任务
-    // 自动从首选模型重新起跑;更细/更粗的回试粒度由 OPENCODE_AUTO_MODEL_FAILBACK_SCOPE
-    // 在边界挂点消费(见 src/failback.ts)。
+    // Ladder exhausted: no longer waits for a human ruling — the failover
+    // candidates are tried first (switching provider is the only lever outside
+    // the ladder not yet tried); when those are exhausted too (or none
+    // configured), the wait-and-probe loop takes over, every half hour until
+    // service recovers, then continuing from a fork of the interrupted session
+    // with the ladder restarted. Waiting inside the process keeps the session
+    // alive and still forkable — a blocking exit would instead throw away the
+    // very session the ladder rounds just preserved.
+    // Scope: runTask creates the chain per task, chain.model resets with it,
+    // and the next task automatically starts again from the preferred model; a
+    // finer/coarser failback granularity is consumed at the boundary hook
+    // points by OPENCODE_AUTO_MODEL_FAILBACK_SCOPE (see src/failback.ts).
     if (i > waits.length) {
       if ((opts.routing !== undefined || fallbackRing().length > 0) && (await switchModel("retry ladder exhausted"))) continue
       await awaitRecovery(`retry ladder exhausted (${waits.length} retries) without success`)
@@ -755,41 +862,62 @@ export async function runSession(
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
       await opts.server.restart("session error is a network/service failure; restarting the opencode server and retrying with a new session", chain.agent)
     }
-    // 本次重试前的退避。计数在动作之前推进,下面三条 continue 路径共用 nth 作日志序号。
+    // The backoff before this retry. The counter advances before the action,
+    // and the three continue paths below share nth as the log ordinal.
     const waitMinutes = waits[i - 1] ?? 0
     const nth = i++
     if (waitMinutes > 0) {
       log(`⏳ ${task.id} transient session error; waiting ${waitMinutes} minutes before retrying (${nth}/${waits.length}):\n${firstLine(result.question)}`)
       await Bun.sleep(waitMinutes * 60_000)
     }
-    // 保住最值钱的会话再从它分叉: 候选为刚失败的会话本体与链上原会话(attempt()
-    // 已把 chain.id 还原为下发前的原会话;复用轮里两者同一个,去重后只试一次),
-    // 价值以"已积累的上下文用量"度量,取最大者,fork 失败再退而求其次;都不可用
-    // 时依次回落 fork 基点(暖前缀,见下方 forkBase 分支)与空白新会话。
+    // Keep the most valuable session, then fork from it: the candidates are
+    // the just-failed session itself and the chain's original session
+    // (attempt() has restored chain.id to the original session from before the
+    // dispatch; in a reuse round the two are the same one, deduplicated into a
+    // single try), value measured as "accumulated context usage", take the
+    // largest, and on a failed fork fall to the next best; when none is
+    // usable, fall back in turn to the fork base (a warm prefix, see the
+    // forkBase branch below) and a blank new session.
     //
-    // 失败会话优先的理由: 超时/流中断类故障与会话内容无关(provider 侧停顿),
-    // 会话里那 100k+ 已核实产出是本轮最值钱的资产,开空白会话等于把它扔掉、再从
-    // 零撞同一堵墙——plans/0015-session-error-retry-plan.md 事实基线第 4 点记过这种"比完全不
-    // 复用还差"的反例。代价是副本尾部带着那条 0-token 报错消息、重试提示词落在它
-    // 后面;used 为 0 的失败会话则是纯报错桩(下发即失败,什么也没跑出来),没有
-    // 值得保护的内容,不进候选(维持原设计判据)。
+    // Why the failed session comes first: timeout/stream-break faults have
+    // nothing to do with the session's content (a provider-side stall), and
+    // the 100k+ of verified output in that session is this round's most
+    // valuable asset — opening a blank session equals throwing it away and
+    // hitting the same wall from zero; plans/0015-session-error-retry-plan.md
+    // fact baseline item 4 records such a counterexample, "worse than not
+    // reusing at all". The cost is a copy whose tail carries that 0-token
+    // error message, with the retry prompt landing after it; a failed session
+    // with used = 0 is a pure error stub (it failed on dispatch and produced
+    // nothing), holds nothing worth protecting, and does not enter the
+    // candidates (keeping the original design's criterion).
     //
-    // 一律 fork 副本而非直接复用: 原会话不受影响,失败即弃,恢复点仍是原会话
-    // (progress 的还原逻辑不动,见 attempt() 的可重试分支)。此处也不设
-    // seedForkSession 的"用量达 cap/2 即冷启动"护栏——那道护栏防的是新子任务背上
-    // 过大前缀,而重试是同一条提示词的续命,前缀大恰恰因为活干得多。
+    // Always fork a copy rather than reuse directly: the original session is
+    // untouched and discarded on failure, and the recovery point remains the
+    // original session (progress's restore logic untouched, see attempt()'s
+    // retryable branch). Nor is seedForkSession's "cold start once usage
+    // reaches cap/2" guard placed here — that guard protects a new subtask
+    // from lugging an oversized prefix, while a retry is the same prompt
+    // living on; the prefix is large precisely because much work was done.
     //
-    // 「下发过本提示词的会话」= chain.failed(可重试类 attempt 已还原链状态并把它
-    // 记录在案):分到它即上下文完整,重发只需一句解释;分到链上原会话、基点或空白
-    // 会话则本次尝试已落盘的部分产出不在上下文里,须带现场核对说明(见 retryNote)。
+    // "The session this prompt was dispatched to" = chain.failed (for
+    // retryable classes attempt has restored the chain state and recorded it):
+    // picking it means the context is complete, and the re-send needs only one
+    // line of explanation; picking the chain's original session, the base, or
+    // a blank session means this attempt's partial output already on disk is
+    // not in the context, so the worktree-check note is required (see
+    // retryNote).
     const failedID = chain.failed?.id ?? chain.id
     const sources: { id: string; used: number; why: string }[] = []
     if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
     if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
-    // chain.failed 在 fork 播种后刻意保留(不清空): 副本若 0-token 即死(配额连败
-    // 现场,2026-09-17 virtio T-005),attempt 的守卫不会拿报错桩顶替它,下一轮重试
-    // 仍能从这个最有价值的会话重新分叉;副本跑出内容(used > 0)则严格超集正常顶替,
-    // 成功时由 attempt 收口清空。fork 已失效的死记录在此顺手清理。
+    // chain.failed is deliberately kept after the fork seeding (not cleared):
+    // if the copy dies at 0 tokens (a run of consecutive quota failures,
+    // 2026-09-17 virtio T-005), attempt's guard will not replace it with the
+    // error stub, and the next retry can still fork again from this most
+    // valuable session; once the copy produces content (used > 0), it is a
+    // strict superset and replaces the record normally, cleared by attempt's
+    // close-out on success. Dead records whose fork has gone stale are cleaned
+    // up here in passing.
     sources.sort((a, b) => b.used - a.used)
     let seeded = false
     for (const source of sources) {
@@ -817,10 +945,14 @@ export async function runSession(
     }
     if (seeded) continue
     if (sources.length) log(`↻ fork retry copy failed; falling back to the fork base / a blank new session`)
-    // 无会话可分叉(子任务的首条消息即失败,链上本就为空)但基点还在: 从基点重新
-    // 播种,至少赚回免费的暖前缀,而不是纯冷启动——与 fork 三段式"每项重新从基点
-    // 分叉"(fork-decompose 设计 §4.3)同一语义。基点前缀只有任务背景,本次尝试的
-    // 上下文不在其中,重发须带现场核对说明。基点失效则回落空白新会话。
+    // No session to fork (the subtask's very first message failed, the chain
+    // was empty to begin with) but the base is still alive: re-seed from the
+    // base, recovering at least the free warm prefix instead of a pure cold
+    // start — same semantics as the fork three-step's "each item forks anew
+    // from the base" (fork-decompose design §4.3). The base prefix holds only
+    // the task background; this attempt's context is not in it, so the re-send
+    // must carry the worktree-check note. A stale base falls back to a blank
+    // new session.
     if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(await chainClient(), chain.forkBase))) {
       const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(await chainClient(), chain.forkBase) }
       if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} retry`)) {
@@ -830,8 +962,10 @@ export async function runSession(
       }
     }
     log(`↻ ${task.id} transient session error; retrying with a new session (${nth}/${waits.length}):\n${result.question}`)
-    // 重试保持"换新会话"语义,不复用出错的会话;空白会话对本次尝试的产出一无所知,
-    // 重发必须带现场核对说明,否则新会话对着半成品从头重做。
+    // The retry keeps the "switch to a new session" semantics and never
+    // reuses the errored session; a blank session knows nothing of this
+    // attempt's output, so the re-send must carry the worktree-check note —
+    // otherwise the new session redoes the half-finished work from scratch.
     chain.id = undefined
     chain.pct = 100
     chain.note = retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit the earlier session's context.")

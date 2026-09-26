@@ -1,9 +1,13 @@
-// 项目配置层(设计文档 plans/0004-init-config-agents-design.md §A): 宪法级选项——
-// 决定会话被如何告知、提交语义如何运作的项目属性——在 init 固化到
-// .opencode/auto/config.json,版本化、随仓库共享、人工可编辑;未知键忽略
-// (前向兼容)。run 只控制本次执行,不再接受对应选项。旧版 .auto/config.json
-// (仅 mode)只在新文件缺失时回落读取,新文件一经写出即不再读取;它不会被 run
-// 清理(留在 gitignore 内自然沉没),但属配置层,由 reset 一并移除。
+// The project config layer (design doc plans/0004-init-config-agents-design.md
+// §A): constitutional options — project properties deciding how sessions are
+// told things and how commit semantics operate — are fixed by init into
+// .opencode/auto/config.json, versioned, shared with the repository and
+// human-editable; unknown keys are ignored (forward compatibility). run only
+// controls this one execution and no longer accepts the corresponding options.
+// The legacy .auto/config.json (mode only) is read as a fallback only while
+// the new file is missing; once the new file is written it is never read
+// again; run does not clean it up (it naturally sinks inside gitignore), but
+// it belongs to the config layer, and reset removes it along with the rest.
 import { chmod } from "node:fs/promises"
 import { join } from "node:path"
 import { loadModes } from "./mode"
@@ -16,44 +20,57 @@ import { PARALLEL_LEVELS, type ParallelLevel } from "./intent/types"
 export { PARALLEL_LEVELS, type ParallelLevel }
 
 export type ProjectConfig = {
-  // 须为 loadModes(dir) 已注册名。
+  // Must be a name registered in loadModes(dir).
   mode: string
   // The coding agent the project runs on (M6.1): opencode (absent, the
   // default — no key is written) or claude. Until M6.1 this key named the agent
   // contract; that name is fixed to `auto` now (opts.ts CONTRACT_AGENT), and a
   // stored contract name fails loading with a hint.
   agent?: AgentChoice
-  // 千 tokens(与 CLI 单位一致;run 侧 ×1000 注入 Opts)。
+  // Thousands of tokens (same unit as the CLI; the run side injects it into
+  // Opts ×1000).
   contextLimit: number
   subtask: SubtaskMode
-  // 分钟,1..120。driver 执行脚本(--test-by-driver 的 test 脚本)的通用看门狗。
+  // Minutes, 1..120. The general watchdog of the driver-executed scripts (the
+  // test scripts of --test-by-driver).
   idleTime: number
-  // 分钟,0 = 不设,1..1440。
+  // Minutes, 0 = unset, 1..1440.
   idleMax: number
-  // 会话后统一提交(缺省 true)。**false 已于 2026-09-15 退役**——统一提交是完成
-  // 条件,读到 commit: false 的存量配置一律严格失败(见 validateProjectConfig);
-  // 字段本身与代码侧的 opts.commit 门禁暂留,清理另立任务。
+  // Post-session unified commit (default true). **false has been retired since
+  // 2026-09-15** — unified commit is the completion condition, and any stored
+  // config reading commit: false fails loading strictly (see
+  // validateProjectConfig); the field itself and the code-side opts.commit
+  // gate stay for now, their cleanup is a separate task.
   commit: boolean
-  // --test-by-driver: 测试/编译/构建等命令的执行权收归 driver。
-  // 启用时执行类会话不直接运行这类命令,改为把命令写成脚本放 test/ 目录、把
-  // 脚本路径写入 tmp/test.sh 告知 driver 执行,driver 合并 stdout/stderr 落单文件
-  // 后把退出码与输出文件反馈回会话。
+  // --test-by-driver: the right to execute test/compile/build commands moves
+  // to the driver. When on, execution sessions do not run such commands
+  // directly; instead the command is written as a script into the test/
+  // directory and the script path into tmp/test.sh to tell the driver to
+  // execute it; the driver merges stdout/stderr into a single file and feeds
+  // the exit code and output file back into the session.
   testByDriver: boolean
-  // --handover-test(需 testByDriver): 测试失败且会话上下文达上限时要求 AI 写
-  // 交接文档后换新会话续跑,防止超大上下文中反复试错。
+  // --handover-test (needs testByDriver): when a test fails and the session
+  // context reaches its limit, the AI is required to write a handover document
+  // and a new session continues from it, preventing repeated trial and error
+  // inside a huge context.
   handoverTest: boolean
-  // --auto-number: 自动编号——任务编号(T-NNN)在目标目录永不重复,下一可用编号
-  // 持久化在 .auto/next-task,规划会话自该记录续接编号;记录缺失时先经 AI 恢复
-  // 会话推导恢复再继续。缺省 true(stable-refs D5 翻转);--no-auto-number 保留为
-  // 退出开关(关闭后编号自 T-001 重排,与历史行为一致)。
+  // --auto-number: auto numbering — task numbers (T-NNN) never repeat in the
+  // target directory; the next available number is persisted in
+  // .auto/next-task and planning sessions continue numbering from that record;
+  // when the record is missing, an AI recovery session first derives and
+  // restores it before continuing. Default true (stable-refs D5 flip);
+  // --no-auto-number stays as the off switch (once off, numbering re-runs from
+  // T-001, matching the historical behavior).
   autoNumber: boolean
-  // --no-wrapup: 关闭任务收尾会话(renderWrapup,子任务/整任务执行完成后与
-  // 修复轮后的收尾会话)。缺省 true(现状零变化)。
+  // --no-wrapup: turns off the task wrap-up sessions (renderWrapup: the
+  // wrap-up sessions after subtask/whole-task execution completes and after a
+  // rework round). Default true (zero change to today's behavior).
   wrapup: boolean
-  // 字母预置(admtvk 的子序列且含 m,设计文档 plans/0006-phases-design.md §A)或
-  // 逗号分隔的阶段类型 id 列表(含 .opencode/auto/phases/ 的自定义类型,须含
-  // implement,M3.6);"m" = 无阶段声明,单次运行。config.json 里也可写 JSON 数组,
-  // 读取时规范化为逗号串。
+  // A letter preset (a subsequence of admtvk containing m, design doc
+  // plans/0006-phases-design.md §A) or a comma-separated list of phase type
+  // ids (custom types from .opencode/auto/phases/ included, must contain
+  // implement, M3.6); "m" = no phases declared, a single run. config.json may
+  // also hold a JSON array; it is normalized to the comma string on load.
   phases: string
   // Phase types whose phases wait for a human's `Accepted: yes` in their
   // acceptance.md before they are marked done (M4.2, plans/0049 G7/G9; a
@@ -88,9 +105,10 @@ export const CONFIG_DEFAULTS: ProjectConfig = {
 export const CONFIG_FILE = join(".opencode", "auto", "config.json")
 export const LEGACY_FILE = join(".auto", "config.json")
 
-// 读取 + 校验: 文件缺失 → 缺省 + legacy 回落(.auto/config.json 的 mode);
-// 坏 JSON / 键值越界 / mode 未注册(loadModes)→ throw(中文报错含键名与期望),
-// CLI 侧转退出码 1。run 与 init 均经此入口。
+// Load + validate: file missing → defaults + the legacy fallback (the mode of
+// .auto/config.json); bad JSON / a key out of range / an unregistered mode
+// (loadModes) → throw (the error names the key and what it expects), which the
+// CLI side turns into exit code 1. Both run and init go through this entry.
 export async function loadProjectConfig(dir: string): Promise<ProjectConfig> {
   return validateProjectConfig(await readConfigRecord(dir), dir)
 }
@@ -181,17 +199,20 @@ function migrationParameter(key: string) {
   }
 }
 
-// init 用: 仅显式给出的键覆盖既有值,其余保留(undefined 的键视同未给出);
-// 返回待写回的完整配置。
+// For init: only explicitly given keys override the existing values, the rest
+// are kept (a key of undefined counts as not given); returns the complete
+// config to write back.
 export function mergeProjectConfig(existing: ProjectConfig, explicit: Partial<ProjectConfig>): ProjectConfig {
   const given = Object.fromEntries(Object.entries(explicit).filter(([, value]) => value !== undefined))
   return { ...existing, ...given }
 }
 
-// 普通整写(Bun.write 自动建父目录);只在 init(非 protect 期)调用,无需原子写。
-// 写前 best-effort 解除只读位: protect.ts 在 run 期间把本文件 chmod 0444,run 被
-// 强杀时该位会残留,而 allowWrite 靠模块级状态、在新进程里帮不上忙——不解除
-// 会让此后所有 init 以 EACCES 失败。
+// The plain full write (Bun.write creates parent directories); called only by
+// init (outside the protect period), no atomic write needed. Best-effort
+// clears the read-only bit before writing: protect.ts chmods this file 0444
+// during run, the bit survives a killed run, and allowWrite relies on
+// module-level state and cannot help in a new process — without clearing it,
+// every init from then on fails with EACCES.
 export async function saveProjectConfig(dir: string, config: ProjectConfig): Promise<void> {
   await saveConfigRecord(dir, config)
 }
@@ -204,8 +225,10 @@ export async function saveConfigRecord(dir: string, record: object): Promise<voi
   await Bun.write(file, JSON.stringify(record, null, 2) + "\n")
 }
 
-// run 启动提示用: 新文件缺失而旧版 .auto/config.json 仍有持久化 mode(生效
-// 模式来自旧位置,重跑 init 可固化完整配置);返回旧值,无则 undefined。
+// For run's startup notice: the new file is missing while the legacy
+// .auto/config.json still holds a persisted mode (the live mode comes from
+// the old location; re-running init fixes the full config); returns the old
+// value, undefined when there is none.
 export async function legacyModeFallback(dir: string): Promise<string | undefined> {
   if (await Bun.file(join(dir, CONFIG_FILE)).exists()) return undefined
   return readLegacyMode(dir)
@@ -216,7 +239,7 @@ async function readLegacyMode(dir: string): Promise<string | undefined> {
   return typeof config?.mode === "string" ? config.mode : undefined
 }
 
-// run 启动横幅 / status 共用的一行配置摘要。
+// The one-line config summary shared by run's startup banner and status.
 export function formatProjectConfig(config: ProjectConfig): string {
   const watchdog = `idle ${config.idleTime}m/max ${config.idleMax > 0 ? `${config.idleMax}m` : "unset"}`
   return (
@@ -232,7 +255,8 @@ export function formatProjectConfig(config: ProjectConfig): string {
   )
 }
 
-// 值域与 CLI 侧 parse* 一致;未知键忽略(前向兼容),缺失键回落缺省值。
+// Value ranges match the CLI-side parse*; unknown keys are ignored (forward
+// compatibility), missing keys fall back to the defaults.
 export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${CONFIG_FILE} must be a JSON object`)
   const record = raw as Record<string, unknown>
@@ -275,9 +299,11 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
     handoverTest,
     autoNumber: booleanOf("autoNumber", pick("autoNumber")),
     wrapup: booleanOf("wrapup", pick("wrapup")),
-    // 看门狗键由 verifyIdle/verifyMax 更名而来(旧名沿用自已退役的 verify 脚本,
-    // 现控制 test 脚本执行);旧键仅在新键缺失时回落读取,不迁移写回——下次 init
-    // 自然固化新键。
+    // The watchdog keys were renamed from verifyIdle/verifyMax (the old names
+    // carried over from the already-retired verify scripts; they now govern
+    // test script execution); the old keys are read as a fallback only while
+    // the new ones are missing, never migrated back in writing — the next
+    // init naturally fixes the new keys.
     idleTime: intInRange("idleTime", record.idleTime ?? record.verifyIdle ?? CONFIG_DEFAULTS.idleTime, 1, 120, "minutes"),
     idleMax: intInRange("idleMax", record.idleMax ?? record.verifyMax ?? CONFIG_DEFAULTS.idleMax, 0, 1440, "minutes, 0 = unset"),
     commit,

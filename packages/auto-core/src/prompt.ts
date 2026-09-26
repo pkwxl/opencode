@@ -1,7 +1,9 @@
-// 提示词上下文组装层: 文案全部在 templates/prompts/*.md(共享片段见 _partials.md,
-// 经 src/template.ts 渲染;目标目录 .opencode/auto/prompts/ 可覆盖),这里只负责
-// 把 plan/task/运行信息组装为模板变量。render* 签名保持稳定,runner/loop
-// 的调用点不感知模板机制。
+// Prompt context assembly layer: all copy lives in templates/prompts/*.md
+// (shared partials in _partials.md, rendered through src/template.ts; the
+// target directory's .opencode/auto/prompts/ can override it); this layer
+// only assembles plan/task/run info into template variables. The render*
+// signatures stay stable, so runner/loop call sites are unaware of the
+// template mechanism.
 import { dirname, join } from "node:path"
 import type { ModeSpec } from "./mode"
 import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
@@ -74,12 +76,17 @@ type Opts = {
 }
 
 // The single render exit, also for src/prompt-plan.ts's planning renderers.
-// 本层唯一渲染出口(所有 render* 经此调用 renderTemplate): 统一注入提问策略变量
-// ask(OPENCODE_AUTO_ASK,设计文档 plans/0020-auto-resolve-design.md §E)。该变量服务
-// _partials.md 的 question-rule 片段,而该片段被 23 份模板引用——逐 render 函数
-// 透传 opts 会在新增模板时静默漏档,故在出口统一注入而非照搬 fine 的逐函数透传
-// (fine 只服务 decompose-<phase> 一族,透传面可控)。ctx 显式给出的 ask 优先,
-// 供单测直驱两档(镜像 src/step.ts:41 的 `opts.x ?? autoSwitches().x` 口径)。
+// This layer's only render exit (every render* calls renderTemplate through
+// it): uniformly injects the question-policy var ask (OPENCODE_AUTO_ASK,
+// design doc plans/0020-auto-resolve-design.md §E). That var serves the
+// question-rule partial of _partials.md, and that partial is referenced by
+// 23 templates — threading opts through the render functions one by one
+// would silently leave a newly added template uncovered, hence the uniform
+// injection at the exit instead of copying fine's per-function threading
+// (fine serves only the decompose-<phase> family, a controllable threading
+// surface). An ask given explicitly in ctx wins, so unit tests can drive
+// both tiers directly (mirroring the `opts.x ?? autoSwitches().x`
+// convention at src/step.ts:41).
 //
 // The same exit feeds question-rule's governance hooks (M2.1, plans/0043): the
 // "who should have owned this call" catalog and the recording discipline live
@@ -116,17 +123,26 @@ export type ScriptRun = {
   out: string
 }
 
-// --test-by-driver 的单次测试执行信息(ScriptRun + 按序归档编号): driver 执行
-// AI 指定的 test/ 脚本后经 steer 注入执行会话,AI 直读合并输出文件判断。
+// One test execution of --test-by-driver (ScriptRun + the sequence number
+// for in-order archiving): after the driver runs an AI-designated test/
+// script it is steered into the executing session; the AI reads the merged
+// output file directly to judge.
 export type TestRunInfo = ScriptRun & { seq: number }
 
-// --handover-test 的测试交接文档(相对目标目录): 上下文达到上限时(判定时点固定
-// 为"AI 发起测试的那一刻",不再叠加测试失败),会话把进度与后续步骤写入该文件后
-// 结束,driver 归档为 testhandoff-<n>.md 并开新会话以 continuation 提示续跑。
-// 文件按执行范围命名: 子任务会话写 docs/<id>/S<两位序号>/testhandoff.md,整任务
-// 会话为任务级(docs/<id>/testhandoff.md)——交接文档只对本执行范围
-// 生效,防止下一子任务误读上一子任务的遗留交接。路径构造经 docpaths(目录化
-// 布局的唯一构造点),导出名与签名保持稳定,runner 调用面零改动。
+// --handover-test's test handover document (relative to the target
+// directory): when the context limit is reached (the decision point is
+// fixed at "the moment the AI initiates the test"; test failure no longer
+// stacks onto it), the session writes its progress and next steps into
+// this file and ends; the driver archives it as testhandoff-<n>.md and
+// opens a new session that continues on the continuation prompt. The file
+// is named per execution scope: a subtask session writes
+// docs/<id>/S<two-digit ordinal>/testhandoff.md, a whole-task session is
+// task-level (docs/<id>/testhandoff.md) — the handover document applies
+// only to its own execution scope, preventing the next subtask from
+// misreading the previous subtask's leftover handover. Path construction
+// goes through docpaths (the single construction point of the
+// directory-based layout); the exported name and signature stay stable,
+// zero change to runner's call surface.
 export function testHandoffFile(task: Task, subtask?: number): string {
   return subtask !== undefined ? subtaskDoc(task.id, subtask, "testhandoff") : taskDoc(task.id, "testhandoff")
 }
@@ -146,21 +162,36 @@ export function renderTestResult(run: TestRunInfo): string {
   })
 }
 
-// --handover-test 收尾+交接要求(steer 注入执行会话): AI 发起测试的那一刻,
-// driver 已判定需要交接——提交定版、把脚本定下来,同时以本提示词要求会话把不依赖
-// 测试结果的剩余工作做完落盘、写出交接文档后结束会话,测试结果交下一个会话判读。
-// 措辞对测试时机保持中性("将由 driver 执行"): 顺序态在交接收口之后才跑,并发态
-// (OPENCODE_AUTO_HANDOVER_CONCURRENT=on)此刻已在跑,一份文案两态都成立。
+// --handover-test wrap-up + handover demands (steered into the executing
+// session): at the moment the AI initiates the test the driver has already
+// decided a handover is needed — the commit is frozen and the script
+// settled — and this prompt asks the session to finish writing out the
+// remaining work that does not depend on the test result, write the
+// handover document, then end the session; the test result is left for the
+// next session to judge. The wording stays neutral about the test's timing
+// ("will be executed by the driver"): in the sequential mode the test only
+// runs after the handover close-out, in the concurrent mode
+// (OPENCODE_AUTO_HANDOVER_CONCURRENT=on) it is already running at this
+// moment — one copy holds in both modes.
 //
-// 文案硬约束(测试交接前置化设计 D2): **不得出现"上下文/超限/上限/tokens"**——
-// 会话一旦知道自己上下文吃紧,就会自行判定余量不足而省略本应完成的落盘工作
-// (现场实证);只陈述"需要交接并切换新会话"这一事实。同样不写"不要改源码":
-// 顺序态下会话收尾的改动本就会一并落进提交 #2 并被测试覆盖,说了反而提示它这是
-// 个可以自由裁量的边界。
-// 文档内容的清单里另有一条"本执行范围内还没做完的事": 第 1 步要求把不依赖测试
-// 结果的剩余工作做完,但会话并不总能做完(它也不知道自己为什么要交接);没列出来
-// 的剩余工作在交接处静默消失——新会话读不到、也不知道有,会当成已完成而永久遗漏。
-// 入参只有交接文档路径——此刻测试尚未出结果,退出码/输出都还不存在。
+// Hard copy constraint (test-handover front-loading design D2): **must not
+// mention "context / over the limit / limit / tokens"** — once a session
+// knows its context is tight, it judges the remaining budget insufficient
+// itself and skips the write-out work it should have completed
+// (field-verified); state only the fact that "a handover is needed and the
+// session must switch". Likewise it never says "do not modify source": in
+// the sequential mode the session's wrap-up changes land in commit #2
+// anyway and are covered by the test, so saying it would instead hint that
+// this is a boundary it may dispose of freely.
+// The document's content checklist carries one more item, "work not yet
+// finished within this execution scope": step 1 asks to finish the
+// remaining work not depending on the test result, but the session cannot
+// always finish it (it does not know why it is handing over either);
+// remaining work that is not listed silently disappears at the handover —
+// the new session cannot read it, does not know it exists, and treats it
+// as done: permanently missed.
+// The only input is the handover document path — at this moment the test
+// has not produced a result yet, so exit code/output do not exist.
 //
 // The completeness discipline is split out (M2.3, plans/0045 D9): the
 // protocol — what to write, where, the status line — stays in the template;
@@ -176,9 +207,14 @@ export function renderTestWrapup(info: { handoffFile: string }): string {
   })
 }
 
-// 测试交接后的新会话续跑说明(追加到执行提示词): 先读交接文档(归档份
-// testhandoff-<n>.md)与本次测试输出再继续——判读测试结果正是本会话的首要工作。stuck 为连续交接次数超过阈值(10)时的提醒——评估是否陷入暂时
-// 无法解决的问题,可经 AUTO-FIXME 标注遗留后继续。
+// Continuation instructions for the new session after a test handover
+// (appended to the execution prompt): read the handover document (the
+// archived copy testhandoff-<n>.md) and this run's test output before
+// continuing — judging the test result is precisely this session's first
+// job. stuck is the reminder when consecutive handovers exceed the
+// threshold (10) — assess whether the session is stuck in a temporarily
+// unsolvable problem; it may continue after marking the leftover with
+// AUTO-FIXME.
 export function renderTestContinue(input: { handoffFile: string; run?: TestRunInfo; stuck?: number }): string {
   return renderPrompt("test-continue", {
     handoffFile: input.handoffFile,
@@ -189,8 +225,9 @@ export function renderTestContinue(input: { handoffFile: string; run?: TestRunIn
   })
 }
 
-// digest 基点会话(①′,driver 主导,fork-decompose 设计 §7): 摘要全文 + 一句
-// 确认;会话结束即成为该任务全部分叉(子任务)的前缀基点。
+// digest base session (①′, driver-led, fork-decompose design §7): the
+// full digest text + one confirmation sentence; when the session ends it
+// becomes the prefix fork base for every fork (subtask) of the task.
 export function renderContextBase(task: Task, digest: string): string {
   return renderPrompt("context-base", { taskId: task.id, digest })
 }
@@ -200,8 +237,10 @@ export function renderContextBase(task: Task, digest: string): string {
 // reference index (docs/<id>/shared.md) + subtask split (docs/<id>/subtasks.md
 // checklist) + one scope file per subtask (docs/<id>/S<nn>/todo.md). The
 // driver reads the checklist from subtasks.md and ticks it itself.
-// 模板按阶段选择: decompose-<phase>(缺省 m;粒度准则以任务描述为基准,fine
-// 开启细粒度档),库中无此名回退通用 decompose。
+// Template chosen per phase: decompose-<phase> (default m; the granularity
+// criteria take the task description as their baseline, fine turns on the
+// fine-grained tier), falling back to the generic decompose when the
+// library has no such name.
 // Intent injection (M1.2/M1.3): the granularity criteria and per-phase duties
 // come from the active pack (`### decompose` under `## quality`, and the
 // `### <letter>` subsection under `## phase duties`), pre-rendered with this
@@ -224,9 +263,10 @@ export function renderDecompose(plan: Plan, task: Task, opts: Opts = {}): string
   })
 }
 
-// decompose 模板名解析(纯函数,便于单测): 阶段类型条目 → decomposeTemplate(缺省
-// implement);names 为当前生效模板名清单(promptTemplateNames()),无此名时回退通用
-// decompose。
+// decompose template-name resolution (a pure function, easy to unit-test):
+// phase type entry → decomposeTemplate (default implement); names is the
+// currently active template-name list (promptTemplateNames()); an absent
+// name falls back to the generic decompose.
 export function decomposeTemplateName(entry: PhaseTypeEntry | undefined, names: string[]): string {
   const candidate = (entry ?? phaseEntry(undefined)).decomposeTemplate
   return names.includes(candidate) ? candidate : "decompose"
@@ -271,15 +311,22 @@ function doneIds(plan: Plan): string | undefined {
 
 // Subtask session: exactly one checklist item. The session implements it and
 // self-checks; ticking the checkbox is the driver's job when the session ends
-// (会话后的统一提交同样由 driver 执行,见 src/git.ts)。
-// handoff-steer 同样适用于子任务会话: 上下文达到 2x contextLimit 时 driver
-// 插入交接提示,会话把进度写入 docs/<id>/handoff.md 后由新会话续跑;
-// continuation 表示此前会话因上下文限制中断,需先读交接文档继续。
-// index/subtaskList/outputFile/warm(fork 三段式流水线,fork-decompose 设计
-// §8): 注入全量检查项列表与「你本次只负责其中的第 N 项」、文档类产出的独立
-// 落盘文件(driver 机械命名)、warm=会话从分叉基点继承了任务背景上下文(冷启动
-// 则提示先读 context.md 摘要)。缺省时由任务检查项(subtasks.md)推导 index/列表/产出文件
-// (与 runner 子任务循环同口径),旧调用不传参仍渲染完整提示词。
+// (the unified commit after the session is likewise executed by the driver,
+// see src/git.ts).
+// handoff-steer also applies to subtask sessions: when the context reaches
+// 2x contextLimit the driver inserts the handover steer; the session writes
+// its progress into docs/<id>/handoff.md and a new session continues;
+// continuation means the previous session was interrupted by the context
+// limit and must read the handover document before continuing.
+// index/subtaskList/outputFile/warm (the fork three-stage pipeline,
+// fork-decompose design §8): inject the full checklist list plus "you are
+// responsible for only item N of it this run", the standalone write-out
+// file for document-type outputs (mechanically named by the driver), and
+// warm = the session inherited the task background context from the fork
+// base (a cold start instead prompts reading the context.md digest first).
+// When absent, index/list/output file are derived from the task checklist
+// (subtasks.md) (same convention as the runner's subtask loop); old
+// callers passing no params still render the full prompt.
 export function renderSubtask(
   plan: Plan,
   task: Task,
@@ -292,8 +339,11 @@ export function renderSubtask(
   const ctx = baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined })
   const outputFile = opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined)
   return renderPrompt("subtask", {
-    // index 的推导值回灌 baseCtx: 测试交接文档命名(测试协议段)与本处注入的
-    // 「第 N 项」同源,缺省推导(旧调用不传 index)时同样落子任务级目录命名。
+    // The derived index value is fed back into baseCtx: the test handover
+    // document naming (the test protocol section) and the "item N" injected
+    // here share one source, so under default derivation (old callers not
+    // passing index) the naming likewise lands in the subtask-level
+    // directory.
     ...ctx,
     subtask,
     continuation: Boolean(opts.continuation),
@@ -312,8 +362,10 @@ export function renderSubtask(
     // process documents — `## governance` / `### process-references`; the
     // DRIVER's prohibition scan at close-out is the mechanical side.
     processRefs: intentText("governance", "process-references", ctx),
-    // L1 接地块变量(ground-state 片段): 台账权威状态随每个子任务会话注入;
-    // qualifiedId 仅在编号可知时给出(无检查项的旧形态任务没有 S 编号)。
+    // L1 ground-state block vars (the ground-state partial): the ledger's
+    // authoritative state is injected with every subtask session;
+    // qualifiedId is given only when the number is known (old-shape tasks
+    // without a checklist have no S number).
     taskTitle: task.title,
     taskStatusText: STATUS_TEXT[task.status],
     qualifiedId: index !== undefined ? `${task.id}.S${index.padStart(2, "0")}` : undefined,
@@ -322,26 +374,35 @@ export function renderSubtask(
     index,
     subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.text}`).join("\n") : undefined),
     outputFile,
-    // 子任务目录状态协议(M1.0): 分解期写定的范围声明文件;旧形态任务无此文件,
-    // 模板按「如存在」措辞条件化。
+    // Subtask-directory state protocol (M1.0): the scope declaration file
+    // fixed at decompose time; old-shape tasks lack the file, and the
+    // template conditions on it with "if it exists" wording.
     todoFile: index !== undefined ? subtaskDoc(task.id, Number(index), "todo") : undefined,
     warm: Boolean(opts.warm),
   })
 }
 
-// 子任务产物文件(相对目标目录): 文档/分析/设计类子任务的独立落盘文件,driver
-// 机械命名(两位递增,避免 slug 清洗歧义),标题写在文件首行;代码类产出直接落
-// 源码树,不重复落文档(fork-decompose 设计 §4.7)。构造经 docpaths 目录化。
+// Subtask output file (relative to the target directory): the standalone
+// write-out file for document/analysis/design-type subtasks, mechanically
+// named by the driver (two-digit increment, avoiding slug-cleaning
+// ambiguity) with the title on the file's first line; code-type outputs
+// land directly in the source tree and are not duplicated as documents
+// (fork-decompose design §4.7). Constructed through docpaths' directory
+// layout.
 export function subtaskOutputFile(task: Task, index: number): string {
   return subtaskDoc(task.id, index, "index")
 }
 
 // Wrap-up session: every subtask is already ticked by the driver. Only docs
 // and the output-summary report remain.
-// resolves(收尾闭环 H7,plans/0020-auto-resolve-design.md §I): driver 本任务观测到的代答
-// 清单,注入后要求 report.md 单列「Proxy-answered questions」一节——持久审计轨迹由此不再依赖会话
-// 自觉标注,driver 看见的那部分被强制写进 git。本层是同步纯函数(prompt.ts 只做数据
-// 组装),清单由调用点(runner 的两处收尾)先 resolvesOf 读台账再传入。
+// resolves (wrap-up closed loop H7, plans/0020-auto-resolve-design.md §I):
+// the proxy-answer list the driver observed for this task; once injected,
+// report.md is required to carry a dedicated "Proxy-answered questions"
+// section — the persistent audit trail thus no longer depends on the
+// session labeling them on its own, and the part the driver saw is forced
+// into git. This layer is a synchronous pure function (prompt.ts only
+// assembles data); the list is read from the ledger via resolvesOf by the
+// call site (the two wrap-up points in runner) and passed in.
 // Intent injection (M2.1, plans/0043): the report's content form comes from
 // `## artifact spec` (`### report-indexed` for the subtask form, `### report-solo`
 // for the single-session form), and the audit's scope beyond the driver-listed
@@ -364,11 +425,18 @@ export function renderWrapup(plan: Plan, task: Task, opts: Opts & { solo?: boole
   })
 }
 
-// 代答清单的预拼接(模板语法刻意不做循环,清单类数据由调用方拼成字符串,见
-// src/template.ts 头注释)。只列 driver 源: agent 源是会话自己已经标注过的,再报一遍
-// 徒增噪声。未配对 agent 标记的排在前(§I 的"优先列未找到配对的"),它们正是最可能在
-// 报告里缺席的那些。不截断条数、不截断正文——提示词要求"上面每一条都必须出现",丢条目
-// 会与该要求自相矛盾;只把提问原文的换行压成单行,否则多行提问会把清单结构冲散。
+// Pre-joining of the proxy-answer list (the template syntax deliberately
+// has no loops; list-type data is joined into a string by the caller, see
+// the src/template.ts header comment). Only driver-source items are
+// listed: agent-source items are already labeled by the session itself,
+// and reporting them again is pure noise. Items whose agent marker found
+// no pair come first (§I's "prefer listing the ones that found no pair")
+// — they are exactly the ones most likely to be missing from the report.
+// Neither entry count nor body is truncated — the prompt demands "every
+// one above must appear", and dropping entries would contradict that
+// demand; only the newlines of the original question are squeezed into a
+// single line, otherwise multi-line questions would break the list
+// structure.
 function resolveList(items: ResolveItem[] | undefined): string | undefined {
   const driver = (items ?? []).filter((item) => item.source === "driver")
   const lines = [...driver.filter((item) => !item.matched), ...driver.filter((item) => item.matched)]
@@ -378,9 +446,12 @@ function resolveList(items: ResolveItem[] | undefined): string | undefined {
   return lines.length ? lines.join("\n") : undefined
 }
 
-// 自动编号(config.autoNumber)的编号记录恢复会话(src/numbering.ts): 旁路一次性,
-// 产物 = AI 写入的 .auto/next-task(单个正整数)。floor 为 driver 确定性扫描的
-// 已用编号下限,作模板输入与 driver 侧 collect 校验共用同一数值。
+// The number-record recovery session of auto numbering (config.autoNumber,
+// src/numbering.ts): a one-shot bypass session whose artifact =
+// .auto/next-task as written by the AI (a single positive integer). floor
+// is the lower bound of used numbers from the driver's deterministic scan,
+// one value shared by the template input and the driver-side collect
+// check.
 export function renderNumberRecovery(input: { floor: number }): string {
   return renderPrompt("number-recovery", {
     floor: String(input.floor),
@@ -388,11 +459,15 @@ export function renderNumberRecovery(input: { floor: number }): string {
   })
 }
 
-// 阶段交接蒸馏会话(设计文档 plans/0006-phases-design.md F.1 步骤 1): 旁路一次性,通读本阶段
-// 任务索引与 docs/ 产物,蒸馏出永久路径交接文档(四个必备小节协议在模板内联)。
-// handover = phaseHandoverDoc(unit)(src/phases.ts,阶段目录内
-// docs/R-NN/P<nn>-<type>/handover.md);next 为下一阶段"P<nn>-<type> 中文名"或
-// undefined(最后一个阶段无下一阶段,仍写 handover 供后续查阅)。
+// Phase handover distillation session (design doc plans/0006-phases-design.md
+// F.1 step 1): a one-shot bypass session that reads through this phase's
+// task index and docs/ artifacts and distills the permanent-path handover
+// document (the four required-sections protocol is inlined in the
+// template). handover = phaseHandoverDoc(unit) (src/phases.ts, the
+// docs/R-NN/P<nn>-<type>/handover.md inside the phase directory); next is
+// the next phase's "P<nn>-<type> Chinese name" or undefined (the last
+// phase has no next phase and still writes the handover for later
+// reference).
 // acceptance = the phase's acceptance.md when its acceptance gate is on
 // (plans/0049 G7): the session also drafts it; what the draft holds is intent
 // (`## acceptance` / `### phase-acceptance-draft`).
@@ -420,25 +495,37 @@ export function renderPhaseHandover(input: {
   })
 }
 
-// k(知识提炼)阶段的知识提取会话(plans/0006-phases-design.md P4,整体认领
-// plans/0002-fixme-knowledge-design.md §D.3): 旁路一次性,通读阶段索引与各阶段交接文档
-// (本轮轮次目录 docs/R-NN/ 内),蒸馏出最终验证过的迁移知识文档(永久路径:
-// knowledge 阶段目录内 kb.md)。file 为输出路径
-// (相对目标目录);mode.exec 作场景背景注入(复用 ModeSpec 现有字段,不新增注册表面)。
+// The knowledge-extraction session of the k (knowledge distillation) phase
+// (plans/0006-phases-design.md P4, wholesale adoption of
+// plans/0002-fixme-knowledge-design.md §D.3): a one-shot bypass session
+// that reads through the phase index and every phase handover document
+// (inside this round's round directory docs/R-NN/) and distills the
+// finally verified migration-knowledge document (permanent path: kb.md
+// inside the knowledge phase directory). file is the output path (relative
+// to the target directory); mode.exec is injected as scenario background
+// (reusing ModeSpec's existing fields, adding no registration surface).
 // The quality hard constraints (M2.1) come from `## quality` / `### knowledge`.
 export function renderKnowledge(input: { file: string; mode?: ModeSpec }): string {
   const ctx = { file: input.file, ...modeCtx(input.mode) }
   return renderPrompt("knowledge", { ...ctx, qualityRules: intentText("quality", "knowledge", ctx) })
 }
 
-// 前置知识提取会话(外壳的二次迁移编排,src/knowledge.ts extractPriorKnowledge):
-// 旁路一次性,通读已有迁移结果(不限于此前轮次——docs/ 全树、历轮轮次目录
-// docs/R-NN/、产出代码与 git 历史),蒸馏出前置知识文档(轮内 docs/R-NN/prior-kb.md),作为二次迁移
-// 与参数推断的输入。file 为中间产物 temp-kb.md 的输出路径(相对目标目录;收笔
-// 标记经 driver 确认后才改名转正,完成判定协议见 knowledge.ts);brief 为项目意图
-// 原文(可空);distilled 为已有蒸馏产物路径清单(knowledge.ts existingDistilledDocs,
-// 非空时模板注入引用化条件段: 已覆盖的知识点只引用不复述,蒸馏精力聚焦新对象的
-// 差分增量)。
+// Prior-knowledge extraction session (the shell's second-migration
+// orchestration, src/knowledge.ts extractPriorKnowledge): a one-shot
+// bypass session that reads through the existing migration results (not
+// limited to prior rounds — the whole docs/ tree, past rounds' round
+// directories docs/R-NN/, produced code and git history) and distills the
+// prior-knowledge document (docs/R-NN/prior-kb.md within the round) as
+// input to the second migration and parameter inference. file is the
+// output path of the intermediate artifact temp-kb.md (relative to the
+// target directory; only after the driver confirms the finish marker is it
+// renamed into place — the completion-verdict protocol is in
+// knowledge.ts); brief is the project intent verbatim (may be empty);
+// distilled is the list of existing distillation artifact paths
+// (knowledge.ts existingDistilledDocs; when non-empty the template injects
+// a reference-style conditional block: already-covered knowledge points
+// are referenced, not restated, and the distillation effort focuses on the
+// differential increment of new objects).
 // The quality hard constraints (M2.1) come from `## quality` / `### prior-knowledge`.
 export function renderPriorKnowledge(input: { file: string; brief?: string; mode?: ModeSpec; distilled?: string[] }): string {
   const distilled = input.distilled?.filter(Boolean) ?? []
@@ -451,17 +538,22 @@ export function renderPriorKnowledge(input: { file: string; brief?: string; mode
   return renderPrompt("prior-knowledge", { ...ctx, qualityRules: intentText("quality", "prior-knowledge", ctx) })
 }
 
-// 交接文档(相对目标目录): ondemand 整任务会话与 auto 子任务会话共用——driver 在
-// 上下文达到 2x --context-limit 时插入交接提示,会话把进度写入该文件,末行
-// `Status: continue|done` 由 driver 解析。子任务场景的状态以该子任务是否完成计。
-// 构造经 docpaths(任务目录化布局)。
+// Handover document (relative to the target directory): shared by ondemand
+// whole-task sessions and auto subtask sessions — the driver inserts the
+// handover steer when the context reaches 2x --context-limit; the session
+// writes its progress into this file, and the trailing line
+// `Status: continue|done` is parsed by the driver. In the subtask case the
+// status counts whether that subtask is done. Constructed through docpaths
+// (the task-directory layout).
 export function handoffFile(task: Task): string {
   return taskDoc(task.id, "handoff")
 }
 
-// driver 在会话进行中(上下文达到交接阈值,2x contextLimit)插入的交接提示
-// (ondemand 整任务会话与 auto 子任务会话)。
-// v2 prompt 默认 steer,在下一个 provider turn 边界进入会话。
+// The handover steer the driver inserts while a session is running (the
+// context reaching the handover threshold, 2x contextLimit; ondemand
+// whole-task sessions and auto subtask sessions).
+// The v2 prompt is a steer by default, entering the session at the next
+// provider-turn boundary.
 export function renderHandoffSteer(task: Task): string {
   return renderPrompt("handoff-steer", { handoffFile: handoffFile(task) })
 }
@@ -514,8 +606,10 @@ export function activeIntentText(section: IntentSection, key: string): string | 
   return packSubsection(activeIntentPack, section, key)
 }
 
-// --subtask off/ondemand: 单会话完成整个任务(不做子任务分解)。ondemand 额外附带
-// 交接条款;continuation 表示此前会话因上下文限制中断,需先读交接文档继续。
+// --subtask off/ondemand: a single session completes the whole task (no
+// subtask decomposition). ondemand additionally carries the handover
+// clause; continuation means the previous session was interrupted by the
+// context limit and must read the handover document before continuing.
 export function renderWhole(
   plan: Plan,
   task: Task,
@@ -535,15 +629,19 @@ export function renderWhole(
   })
 }
 
-// --dryrun: 权限预检会话,报告写入 .auto/dryrun.md。
+// --dryrun: the permission-preflight session; its report goes to
+// .auto/dryrun.md.
 export function renderDryrun(): string {
   return renderPrompt("dryrun", {})
 }
 
-// 模式注记上下文(baseCtx 的模式部分,独立导出): 旁路一次性会话(knowledge 等)
-// 与外壳自写的 render* 函数共用同口径的模式变量组装,壳层不必改 prompt.ts。
-// 模式文本先经模板引擎渲染再作为变量注入;不传模式时三个变量均为 undefined
-// (模板条件段整体消失)。
+// Mode-note context (the mode part of baseCtx, exported separately): the
+// one-shot bypass sessions (knowledge etc.) and the shell's hand-written
+// render* functions share one convention for mode-var assembly, so the
+// shell need not modify prompt.ts. Mode text is rendered through the
+// template engine first, then injected as a variable; with no mode all
+// three vars are undefined (the template's conditional block disappears
+// entirely).
 export function modeCtx(mode?: ModeSpec): Ctx {
   return {
     modeName: mode?.name,
@@ -566,12 +664,15 @@ function doneList(plan: Plan): string {
     .join("\n")
 }
 
-// 公共上下文: head(done 清单)/blocked(阻塞问答)/mode-section(模式注记)三个
-// 共享片段与任务块所需的变量;phase/phaseName 缺省 m(单阶段流程,与
-// renderDecompose 的模板选择一致),contextBudget/fine 供分解粒度准则段
-// (decompose-rule)使用。
-// 上下文预算基线缺省与 runner 的 DEFAULT_CONTEXT_LIMIT 一致(64k tokens);本地
-// 声明避免 prompt 层反向依赖 runner。formatTokens 与 runner 日志同口径。
+// Shared context: the vars needed by the head (done list) / blocked
+// (blocked Q&A) / mode-section (mode note) shared partials and by the task
+// block; phase/phaseName default to m (the single-phase flow, consistent
+// with renderDecompose's template choice); contextBudget/fine serve the
+// decompose granularity-criteria block (decompose-rule).
+// The context-budget baseline default matches runner's
+// DEFAULT_CONTEXT_LIMIT (64k tokens); the local declaration avoids the
+// prompt layer depending backward on runner. formatTokens matches the
+// runner log convention.
 const DEFAULT_CONTEXT_LIMIT = 64_000
 
 function formatTokens(n: number): string {
@@ -579,10 +680,13 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-// 理解摘要建议行数档位(OPENCODE_AUTO_TASK_CONTEXT,开关层见 src/switches.ts):
-// off 为现状(200,与改动前的硬编码措辞一致);small/medium/large 逐档放宽。
-// 仅改变提示词里的"建议行数"措辞——ensureDecomposed 只校验 context.md 非空,
-// 不按行数截断或拒收,调大档位不改变任何校验行为。
+// The understand digest's suggested line-count tiers
+// (OPENCODE_AUTO_TASK_CONTEXT, the switch layer is src/switches.ts): off is
+// the status quo (200, matching the pre-change hardcoded wording);
+// small/medium/large loosen step by step. Only the "suggested line count"
+// wording in the prompt changes — ensureDecomposed only checks that
+// context.md is non-empty, never truncates by or rejects on line count;
+// raising the tier changes no validation behavior.
 const TASK_CONTEXT_LINES: Record<TaskContextMode, number> = { off: 200, small: 300, medium: 400, large: 500 }
 
 // Driver notes appended to the task block (plans/0053 D16): one line per
@@ -609,8 +713,10 @@ function baseCtx(plan: Plan, task: Task, opts: Opts & { index?: number } = {}): 
     doneList: doneList(plan),
     testByDriver: Boolean(opts.testByDriver),
     handoverTest: Boolean(opts.handoverTest),
-    // 测试交接文档按执行范围命名: index(仅 renderSubtask 传入,子任务序号)存在
-    // 时落子任务级目录(docs/<id>/S<kk>/testhandoff.md),整任务为任务级命名。
+    // The test handover document is named per execution scope: when index
+    // (passed only by renderSubtask, the subtask ordinal) exists it lands
+    // in the subtask-level directory (docs/<id>/S<kk>/testhandoff.md); the
+    // whole task gets task-level naming.
     testHandoffFile: opts.testByDriver ? testHandoffFile(task, opts.index) : undefined,
     phase: phaseTag(entry),
     phaseName: entry.name,

@@ -1,31 +1,43 @@
-// 跨中断累计统计(plans/STATS_PLAN.md §1): 任务/会话/阶段/轮次各级的累计用时与
-// Token 分项,持久化在目标目录 `.auto/stats.json`(gitignore 内、driver 独占写、
-// 不进 protect 名单)。进程可被 kill -9 随时打断,故统计增量落盘:开放段 fold +
-// 30s 心跳刷新 lastWriteAt,下一进程装载时只承认 `[open.at, lastWriteAt]` 的折旧
-// (宁少不多、绝不虚高)。
+// Cross-interruption cumulative stats (plans/STATS_PLAN.md §1): accumulated
+// elapsed time and token usage breakdowns at the task/session/phase/round
+// levels, persisted in the target directory `.auto/stats.json` (inside
+// .gitignore, written by the driver exclusively, not on the protect list). The
+// process can be kill -9'd at any moment, so stats increments are persisted to
+// disk: open-segment fold + a 30s heartbeat refreshing lastWriteAt; the next
+// process's load credits only the `[open.at, lastWriteAt]` depreciation
+// (undercount rather than overcount, never inflated).
 //
-// 计时模型: 单段(segment)状态机——`open?: { at, ai }` 至多一个进行中的段;每次
-// 边界 fold 把 `[open.at, now]` **并行**累加进 task/phase/round 三个桶(不做子层
-// 向父层折叠——阶段内含非任务时间,折叠式会丢)。ai 段同时累加 aiMs/wallMs,墙钟
-// 段只累加 wallMs;fold 钳制 [0, MAX_TICK](时钟回拨/休眠防御)。
+// Timing model: a single-segment state machine — `open?: { at, ai }` allows at
+// most one in-progress segment; each boundary fold accumulates `[open.at, now]`
+// into the three task/phase/round buckets **in parallel** (no folding child
+// layers up into parents — a phase contains non-task time that a rollup would
+// lose). An ai segment accumulates both aiMs/wallMs, a wall-clock segment only
+// wallMs; fold clamps to [0, MAX_TICK] (clock-rollback / suspend defense).
 //
-// 健壮性: 原子写(.tmp → rename + 写队列串行化,对齐 plan.ts edit);解析逐字段
-// 宽容(镜像 resume.ts parseProgress,坏 = 缺失不 throw);sessions 超 64 按 at
-// 淘汰;所有写失败 catch 静默——统计永不影响流程/退出码。
+// Robustness: atomic write (.tmp → rename + serialization through the write
+// queue, aligned with plan.ts edit); lenient per-field parsing (mirrors
+// resume.ts parseProgress, bad = missing, no throw); sessions evicted by at
+// beyond 64; every write failure is caught and silenced — stats never affects
+// flow or exit codes.
 //
-// 公共 API 首参一律 `dir: string | undefined`,undefined = 空转(不发心跳、不读
-// 写盘);内部 `Map<dir, Handle>` 惰性装载。同目录并发两个 run 不支持(后写覆盖,
-// 偏小不炸)——已接受边界,不加锁文件。
+// Every public API takes `dir: string | undefined` as its first parameter;
+// undefined = no-op (no heartbeat, no disk reads or writes); internally a
+// lazily loaded `Map<dir, Handle>`. Two concurrent runs in the same directory
+// are unsupported (the later write overwrites, skewing low rather than
+// crashing) — an accepted boundary, no lock file added.
 import { mkdir, realpath, rename } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { currentRound } from "./phases"
 
-// ===== schema(v:1,落盘 compact JSON;plans/STATS_PLAN.md :28-43)=====
-// v:1 的向后兼容扩展(plans/0055 §7.1 "Stats"): 各桶与 history 聚合可携带
-// models/tiers 两个可选节(按内部模型名/按层级的用量与计数)。旧文档无这两节
-// 照常装载(宽容解析缺省为空);无注册表的运行不写它们,形状逐字节不变(C2)。
+// ===== schema (v:1, compact JSON on disk; plans/STATS_PLAN.md :28-43) =====
+// A v:1 backward-compatible extension (plans/0055 §7.1 "Stats"): the buckets
+// and the history aggregate may carry two optional sections, models/tiers
+// (usage and counts per internal model name / per tier). Older documents
+// without the two sections still load (lenient parsing defaults them empty);
+// runs without a registry never write them, the shape stays byte-identical
+// (C2).
 
-// 逐 step-finish part 增量累加的用量(采集接线在 T-003,本模块只管入库与聚合)。
+// Usage accumulated incrementally per step-finish part (collection wiring is in T-003; this module only handles storage and aggregation).
 export type Usage = {
   input: number
   output: number
@@ -90,7 +102,7 @@ export const CLASSIFY_BUCKET = "classify"
 
 export type Bucket = Totals & { id: string; since: number }
 
-// per-sessionID 累计(需求 2 子会话续接);task 为所属任务,at 为最后活跃时刻(淘汰序)。
+// Per-sessionID accumulation (requirement 2: sub-session continuation); task is the owning task, at is the last-active moment (eviction order).
 export type SessionStat = {
   task: string
   aiMs: number
@@ -102,19 +114,21 @@ export type SessionStat = {
 
 export type StatsDoc = {
   v: 1
-  round: number // 装载时 currentRound(dir) 快照
+  round: number // currentRound(dir) snapshot taken at load time
   phase: string // current phase, qualified id R-NN.P<nn> (maintained by statsPhase)
-  open?: { at: number; ai: boolean } // 至多一个进行中的段
-  lastWriteAt: number // 任一写入刷新 = 上一进程死亡时刻的代理
+  open?: { at: number; ai: boolean } // at most one in-progress segment
+  lastWriteAt: number // refreshed by any write = a proxy for the previous process's moment of death
   taskB: Bucket
   phaseB: Bucket
   roundB: Bucket
   sessions: Record<string, SessionStat>
-  history: { rounds: number; totals: Totals } // 已滚出历轮聚合(单桶有界)
+  history: { rounds: number; totals: Totals } // aggregate of rolled-out past rounds (single bounded bucket)
 }
 
-// loadStats 的续接信息(有旧文档时返回,供启动横幅打印;plans/STATS_PLAN.md §4.6)。
-// 快照在折旧入账之后、轮次滚动之前截取——round/phase/task 均为上一进程停下时的位置。
+// Resume information for loadStats (returned when an old document exists,
+// printed by the startup banner; plans/STATS_PLAN.md §4.6). The snapshot is
+// taken after depreciation posting and before round rollover — round/phase/task
+// are the positions where the previous process stopped.
 export type StatsResume = {
   round: number
   phase: string
@@ -124,23 +138,30 @@ export type StatsResume = {
   lastWriteAt: number
 }
 
-// fold/折旧的单段时长上限: 时钟回拨、休眠唤醒等异常间隔截断到 30 分钟(宁少不多)。
+// Per-segment duration cap for fold/depreciation: abnormal gaps (clock
+// rollback, suspend/wake, …) are truncated to 30 minutes (undercount rather
+// than overcount).
 export const MAX_TICK = 30 * 60_000
 
 const FILE = join(".auto", "stats.json")
 
-// AUTO-DECISION: now 注入采用模块级可替换时钟(setStatsClock 测试钩子)。备选方案
-// 是 loadStats/fold 等各 API 加可选 now 形参——但 fold 还发生在心跳与 S03/S04 各
-// 会话/读数 API 内部,形参要逐层穿透全部公共 API,污染签名且接线层(T-002/T-003)
-// 也得跟着传;模块级时钟一处注入全模块生效,测试 afterEach 复位即可,否决形参案。
+// AUTO-DECISION: now injection uses a module-level replaceable clock
+// (setStatsClock test hook). The alternative was an optional now parameter on
+// each API such as loadStats/fold — but fold also happens inside the heartbeat
+// and the S03/S04 session/reading APIs, so the parameter would have to thread
+// through every public API, polluting signatures, and the wiring layers
+// (T-002/T-003) would have to pass it along too; a module-level clock is
+// injected in one place and takes effect module-wide, tests just reset it in
+// afterEach — the parameter variant was rejected.
 let clock: () => number = Date.now
 
-// 替换统计模块的时钟(测试注入确定性 now);不传参调用恢复 Date.now。
+// Replace the stats module's clock (tests inject a deterministic now); calling
+// with no argument restores Date.now.
 export function setStatsClock(fn?: () => number) {
   clock = fn ?? Date.now
 }
 
-// ===== 空值构造 =====
+// ===== empty-value constructors =====
 
 function emptyUsage(): Usage {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 }
@@ -168,7 +189,7 @@ function emptyDoc(round: number, now: number): StatsDoc {
   }
 }
 
-// ===== 宽容解析(镜像 resume.ts parseProgress: 逐字段 typeof 判定,坏 = 缺失)=====
+// ===== lenient parsing (mirrors resume.ts parseProgress: per-field typeof check, bad = missing) =====
 
 function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
@@ -245,7 +266,7 @@ function parseSessions(raw: unknown): Record<string, SessionStat> {
   const sessions: Record<string, SessionStat> = {}
   if (typeof raw !== "object" || !raw) return sessions
   for (const [id, value] of Object.entries(raw)) {
-    if (typeof value !== "object" || !value) continue // 坏条目跳过(无损,聚合已入桶)
+    if (typeof value !== "object" || !value) continue // skip a bad entry (lossless: already in the buckets)
     const s = value as Record<string, unknown>
     sessions[id] = {
       task: str(s.task),
@@ -282,15 +303,17 @@ function parseStatsDoc(raw: string): StatsDoc | undefined {
   }
 }
 
-// ===== fold / 折旧 / 轮次滚动 =====
+// ===== fold / depreciation / round rollover =====
 
-// 段时长钳制 [0, MAX_TICK]: 负值(时钟回拨)/NaN 归 0,超上限截断。
+// Segment duration clamped to [0, MAX_TICK]: negatives (clock rollback) and
+// NaN go to 0, over-cap values are truncated.
 function clampTick(ms: number): number {
   if (!(ms > 0)) return 0
   return Math.min(ms, MAX_TICK)
 }
 
-// 把一段时长并行累加进 task/phase/round 三桶;ai 段同加 aiMs。
+// Accumulate one duration into the three task/phase/round buckets in parallel;
+// an ai segment also adds aiMs.
 function book(doc: StatsDoc, ms: number, ai: boolean) {
   if (!ms) return
   for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
@@ -299,9 +322,12 @@ function book(doc: StatsDoc, ms: number, ai: boolean) {
   }
 }
 
-// 折开放段: 入账 [open.at, now] 并把锚点推进到 now(段保持开放)。
-// 时钟回拨(now <= open.at)时锚点不动——若后退锚点,已入账区间会被下次 fold 双计。
-// AI 段时长并行计入进行中会话的 aiMs 累计(thisAiMs / per-session 口径)。
+// Fold the open segment: post [open.at, now] and advance the anchor to now
+// (the segment stays open).
+// On clock rollback (now <= open.at) the anchor does not move — moving it back
+// would let the next fold double-count the already-posted interval.
+// An AI segment's duration also counts in parallel toward the in-progress
+// session's aiMs accumulation (the thisAiMs / per-session caliber).
 function fold(handle: Handle) {
   const open = handle.doc.open
   if (!open) return
@@ -313,13 +339,18 @@ function fold(handle: Handle) {
   open.at = now
 }
 
-// 折旧上一进程遗留段: 只承认 [open.at, lastWriteAt](lastWriteAt = 死亡时刻代理,
-// 宁少不多)。
-// AUTO-DECISION: 折旧同样过 MAX_TICK 钳制(clampTick)。计划 :47 未明说折旧是否
-// 钳制,但"宁少不多"原则下一律钳制最稳妥:lastWriteAt 异常(坏文件宽容解析出的
-// 离谱值)时不受钳制会一次性虚增数小时;备选"折旧不钳制、只 fold 钳制"会放大坏
-// 数据影响面,否决。折旧不进 per-session(open 段不携带 sessionID,无从归属),
-// 同样是宁少不多的已接受取舍。
+// Depreciate the segment left over by the previous process: only
+// [open.at, lastWriteAt] is credited (lastWriteAt = a proxy for the moment of
+// death, undercount rather than overcount).
+// AUTO-DECISION: depreciation goes through the same MAX_TICK clamp (clampTick).
+// The plan (:47) does not explicitly say whether depreciation is clamped, but
+// under the "undercount rather than overcount" principle clamping everything is
+// safest: with an abnormal lastWriteAt (an absurd value leniently parsed out of
+// a bad file), leaving it unclamped would inflate the numbers by hours in one
+// shot; the alternative "depreciation unclamped, only fold clamped" would widen
+// the impact of bad data, rejected. Depreciation does not reach per-session
+// (the open segment carries no sessionID, nothing to attribute to) — the same
+// accepted undercounting trade-off.
 function depreciate(doc: StatsDoc) {
   const open = doc.open
   if (!open) return
@@ -327,10 +358,12 @@ function depreciate(doc: StatsDoc) {
   doc.open = undefined
 }
 
-// roundB 滚进 history(历轮聚合,单桶有界);task/phase 桶不动——三桶并行累加,
-// roundB 已含全部,无丢失;task/phase 由下一次 statsTask/statsPhase 重置。The
-// per-model and per-tier sections roll with the flat fields, so the history
-// aggregate stays consistent with its own usage totals.
+// Roll roundB into history (past-rounds aggregate, single bounded bucket); the
+// task/phase buckets stay untouched — with the three buckets accumulating in
+// parallel, roundB already contains everything, nothing is lost; task/phase are
+// reset by the next statsTask/statsPhase. The per-model and per-tier sections
+// roll with the flat fields, so the history aggregate stays consistent with
+// its own usage totals.
 function rollHistory(doc: StatsDoc) {
   const totals = doc.history.totals
   totals.aiMs += doc.roundB.aiMs
@@ -345,7 +378,7 @@ function rollHistory(doc: StatsDoc) {
   doc.history.rounds += 1
 }
 
-// ===== per-model / per-tier booking(plans/0055 §7.1 "Stats", §10 items 3/12)=====
+// ===== per-model / per-tier booking (plans/0055 §7.1 "Stats", §10 items 3/12) =====
 
 function emptyModelStat(): ModelStat {
   return { usage: emptyUsage(), sessions: 0, fails: 0, stuckHints: 0, reprompts: 0 }
@@ -374,13 +407,17 @@ function mergeModelStats(into: Totals, from: Totals) {
   }
 }
 
-// ===== 原子写 + 写队列 =====
+// ===== atomic write + write queue =====
 
-// 会话内进行中状态(不持久化): statsSessionBegin 关联当前任务并清零累计;AI 段每次
-// fold 的时长并行计入 aiMs(thisAiMs / per-session 口径),会话内人工等待计入 waitMs
-// (per-session wallMs = aiMs + waitMs,与三桶"wallMs 排除纯人工等待"口径区分)。
-// kill -9 丢失未落账的会话内累计(三桶经折旧仍承认到 lastWriteAt,per-session 无从
-// 归属故宁少不多——与折旧不进 per-session 同一取舍)。
+// In-session in-progress state (not persisted): statsSessionBegin associates
+// the current task and zeroes the accumulators; every fold of an AI segment
+// counts its duration in parallel toward aiMs (the thisAiMs / per-session
+// caliber), in-session human wait counts toward waitMs (per-session wallMs =
+// aiMs + waitMs, distinct from the three buckets' "wallMs excludes pure human
+// wait" caliber). kill -9 loses the unposted in-session accumulators (the three
+// buckets still get credit up to lastWriteAt through depreciation; per-session
+// has no attribution, so it undercounts — the same trade-off as depreciation
+// not reaching per-session).
 type ActiveSession = {
   task: string
   aiMs: number
@@ -389,23 +426,32 @@ type ActiveSession = {
 
 type Handle = {
   doc: StatsDoc
-  // 本进程起点快照(statsBoot): loadStats 时刻(折旧+轮次滚动之后)的三桶 Totals
-  // 副本;桶在本进程内被重置(statsTask/statsPhase 切换)时对应快照同步归零,保证
-  // "本进程增量 = statsTotals − statsBoot" 始终对齐当前桶身份。不持久化。
+  // This process's starting-point snapshot (statsBoot): a copy of the three
+  // buckets' Totals at loadStats time (after depreciation + round rollover);
+  // when a bucket is reset within this process (a statsTask/statsPhase switch)
+  // the matching snapshot zeroes with it, keeping "this process's increment =
+  // statsTotals − statsBoot" always aligned with the current bucket identity.
+  // Not persisted.
   boot: { task: Totals; phase: Totals; round: Totals }
-  writing: Promise<void> // 写队列尾: 所有落盘(心跳/事件/flush)都经此链串行化
-  session?: ActiveSession // 进行中的 AI 会话(statsSessionBegin/End 维护)
-  // 人工等待嵌套深度计数: depth 0→1 关段(fold 后 open=undefined,墙钟/AI 均不
-  // 增长)、归零时 waitMs 单记入三桶并重开段(ai 标志恢复为关段前的值)。嵌套去重:
-  // --early 并行会话等重叠等待只计一次(计划 :52)。由此层级桶的 aiMs 语义 =
-  // "AI 活跃墙钟时长"(任一会话 AI 段开放的墙钟区间并集),而非各会话 AI 时长之
-  // 和——并行会话重叠时 层级 aiMs ≤ Σ session aiMs,属预期而非漏计。
+  writing: Promise<void> // write-queue tail; all disk writes (heartbeat/event/flush) serialize through this chain
+  session?: ActiveSession // the in-progress AI session (maintained by statsSessionBegin/End)
+  // Human-wait nesting depth counter: depth 0→1 closes the segment (after the
+  // fold open=undefined; neither wall clock nor AI grows); when it returns to
+  // zero, waitMs is posted alone into the three buckets and the segment reopens
+  // (the ai flag restored to its pre-close value). Nesting dedup: overlapping
+  // waits such as --early parallel sessions are counted once (plan :52). Hence
+  // the hierarchical buckets' aiMs semantics = "wall-clock time with AI active"
+  // (the union of wall-clock intervals where any session's AI segment is open),
+  // not the sum of the sessions' AI durations — with overlapping parallel
+  // sessions, hierarchical aiMs ≤ Σ session aiMs, which is expected, not
+  // undercounting.
   wait: { depth: number; start: number; ai: boolean }
-  timer?: ReturnType<typeof setInterval> // 会话期 30s 心跳(fold+落盘,unref)
+  timer?: ReturnType<typeof setInterval> // 30s heartbeat while a session runs (fold + persist, unref)
 }
 
-// 对齐 plan.ts edit 的 .tmp → rename;stats.json 非 protect 名单文件,无需
-// allowWrite/reprotect。失败向上抛,由 queueWrite 的 catch 静默。
+// .tmp → rename aligned with plan.ts edit; stats.json is not on the protect
+// list, no allowWrite/reprotect needed. Failures propagate up, silenced by
+// queueWrite's catch.
 async function atomicWrite(dir: string, text: string) {
   const auto = join(dir, ".auto")
   await mkdir(auto, { recursive: true })
@@ -416,22 +462,24 @@ async function atomicWrite(dir: string, text: string) {
   await rename(tmp, target)
 }
 
-// 入队一次落盘: 快照序列化在入队时刻(点位持久化,后续内存改动不影响已排队写),
-// lastWriteAt 同步刷新;写失败 catch 静默(统计永不影响流程/退出码)。
+// Enqueue one disk write: the snapshot is serialized at enqueue time (that
+// point-in-time is what persists; later in-memory changes do not affect
+// already-queued writes), lastWriteAt refreshes with it; write failures are
+// caught and silenced (stats never affects flow or exit codes).
 function queueWrite(dir: string, handle: Handle) {
   handle.doc.lastWriteAt = clock()
   const text = JSON.stringify(handle.doc)
   handle.writing = handle.writing.then(() => atomicWrite(dir, text)).catch(() => {})
 }
 
-// ===== 装载(loadStats / flushStats)=====
+// ===== loading (loadStats / flushStats) =====
 
 const handles = new Map<string, Handle>()
 const loading = new Map<string, Promise<Loaded>>()
 
 type Loaded = { handle: Handle; resumed?: StatsResume }
 
-// 惰性装载: 已装载直接返回;并发首次装载共用同一 promise。
+// Lazy loading: an already-loaded directory returns directly; concurrent first loads share one promise.
 function ensure(dir: string): Promise<Loaded> {
   const existing = handles.get(dir)
   if (existing) return Promise.resolve({ handle: existing })
@@ -451,9 +499,9 @@ async function load(dir: string): Promise<Loaded> {
   let doc: StatsDoc
   if (parsed) {
     doc = parsed
-    // 折旧上一进程遗留段(只承认 [open.at, lastWriteAt])。
+    // Depreciate the segment left over by the previous process (only [open.at, lastWriteAt] is credited).
     depreciate(doc)
-    // 续接快照: 折旧之后、轮次滚动之前(呈现上一进程停下时的位置)。
+    // Resume snapshot: after depreciation, before round rollover (presenting where the previous process stopped).
     resumed = {
       round: doc.round,
       phase: doc.phase,
@@ -462,18 +510,19 @@ async function load(dir: string): Promise<Loaded> {
       taskAiMs: doc.taskB.aiMs,
       lastWriteAt: doc.lastWriteAt,
     }
-    // 轮号变化: roundB 滚进 history 并重置。round 字段损坏(<1)视为缺失,
-    // 只刷快照不滚动,避免空轮次虚增 history.rounds。
+    // Round number changed: roundB rolls into history and resets. A corrupt
+    // round field (<1) is treated as missing — only the snapshot refreshes, no
+    // rollover, avoiding inflating history.rounds with an empty round.
     if (doc.round >= 1 && round !== doc.round) {
       rollHistory(doc)
       doc.roundB = emptyBucket(String(round), now)
     }
     doc.round = round
   } else {
-    // 损坏/缺失 = 从当下重开(换机/清 .auto/ 同此路径,统计非事实来源)。
+    // Corrupt/missing = start over from now (a machine change or a wiped .auto takes the same path; stats is not the source of truth).
     doc = emptyDoc(round, now)
   }
-  // 开本进程首段(墙钟段,ai=false;会话段由 statsSessionBegin 切换)。
+  // Open this process's first segment (wall-clock, ai=false; the session segment is switched in by statsSessionBegin).
   doc.open = { at: now, ai: false }
   doc.lastWriteAt = now
   const handle: Handle = {
@@ -487,17 +536,21 @@ async function load(dir: string): Promise<Loaded> {
   return { handle, resumed }
 }
 
-// runAll 启动调用: 读盘(损坏/缺失 = 从当下重开)→ 折旧 → 轮次滚动 → 开本进程
-// 首段。有旧文档时返回可打印的续接信息;全新目录、重复调用(不重复折旧)或
-// dir === undefined 返回 undefined。
+// Called at runAll startup: read disk (corrupt/missing = start over from now)
+// → depreciate → round rollover → open this process's first segment. Returns
+// printable resume information when an old document exists; a brand-new
+// directory, a repeat call (no double depreciation) or dir === undefined
+// returns undefined.
 export async function loadStats(dir: string | undefined): Promise<StatsResume | undefined> {
   if (!dir) return undefined
   if (handles.has(dir)) return undefined
   return (await ensure(dir)).resumed
 }
 
-// runAll finally 优雅收口: 折开放段后关段落盘(文档不留 open,下一进程装载无
-// 折旧),并卸载句柄(再次 loadStats 重新读盘)。无句柄或 dir === undefined 空转。
+// Graceful close-out in runAll's finally: fold the open segment, then close it
+// and persist (the document keeps no open, so the next process loads with
+// nothing to depreciate), and unload the handle (a later loadStats reads from
+// disk again). No-op without a handle or when dir === undefined.
 export async function flushStats(dir: string | undefined): Promise<void> {
   if (!dir) return
   if (!handles.has(dir) && !loading.has(dir)) return
@@ -511,7 +564,7 @@ export async function flushStats(dir: string | undefined): Promise<void> {
   handles.delete(dir)
 }
 
-// ===== 层级切换与读数(statsPhase/statsTask/statsTotals/statsId/statsBoot)=====
+// ===== hierarchy switching and readings (statsPhase/statsTask/statsTotals/statsId/statsBoot) =====
 
 function copyTotals(t: Totals): Totals {
   return {
@@ -538,8 +591,10 @@ function copyTierStats(tiers: Record<string, TierStat>): Record<string, TierStat
   return out
 }
 
-// 读数实时外推: 把开放段 [open.at, now] 的未落账部分计入**副本**返回(与 fold 同一
-// 钳制),不修改 doc、不落盘——展示层任意时刻可读到当前值,状态机不受影响。
+// Real-time extrapolation for readings: the open segment's [open.at, now]
+// unposted part is counted into a **copy** that is returned (same clamp as
+// fold), without modifying doc or persisting — the display layer can read the
+// current value at any moment, the state machine is unaffected.
 function extrapolate(doc: StatsDoc, bucket: Bucket): Bucket {
   const copy: Bucket = { id: bucket.id, since: bucket.since, ...copyTotals(bucket) }
   const open = doc.open
@@ -571,13 +626,20 @@ export async function statsPhase(dir: string | undefined, phase: string): Promis
   queueWrite(dir, handle)
 }
 
-// 任务切换(runTaskLoop 任务横幅处): fold 后,id 变化时重置 taskB、清空 sessions
-// 映射(计划 :49;清空前聚合已入三桶,per-session 展示丢历史属已接受取舍)并落盘;
-// 同 id 幂等——中断续跑同任务不重置、不重复计数、保留 per-session 续接。
-// AUTO-DECISION: tasks 计数 = 进入一个不同任务 id 计 +1(含本进程首次进入),累加在
-// phase/round 桶(对应"阶段 N 个任务 / 本轮 N 个任务"报文口径);taskB 重置后置 1 表
-// 示本桶覆盖当前这一个任务。备选"按任务完成计数"被否决:完成时刻(blocked/
-// incomplete 也算?)口径模糊,而"进入"语义简单且跨中断幂等(同 id 不重复计)。
+// Task switch (at runTaskLoop's task banner): after the fold, when the id
+// changes reset taskB and clear the sessions map (plan :49; before the clear
+// the aggregate is already in the three buckets — losing per-session display
+// history is an accepted trade-off) and persist; same id is idempotent —
+// resuming the same task after an interruption does not reset, does not
+// double-count, and keeps the per-session continuation.
+// AUTO-DECISION: the tasks count = +1 on entering a different task id
+// (including this process's first entry), accumulated in the phase/round
+// buckets (the "N tasks in the phase / N tasks in this round" message caliber);
+// after taskB resets it is set to 1, meaning this bucket covers the one current
+// task. The alternative "count at task completion" was rejected: the moment of
+// completion (does blocked/incomplete count too?) is an ambiguous caliber,
+// while "entry" semantics are simple and idempotent across interruptions (same
+// id not counted twice).
 export async function statsTask(dir: string | undefined, id: string): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
@@ -594,8 +656,9 @@ export async function statsTask(dir: string | undefined, id: string): Promise<vo
 
 export type StatsScope = "task" | "phase" | "round"
 
-// 读数: 返回该桶累计副本 + 开放段实时外推(未落账段即时计入,不修改状态不落盘)。
-// dir === undefined 返回 undefined。
+// Reading: returns a copy of the bucket's accumulations + real-time
+// extrapolation of the open segment (the unposted segment counted instantly,
+// no state change, no disk write). dir === undefined returns undefined.
 export async function statsTotals(
   dir: string | undefined,
   scope: StatsScope,
@@ -606,18 +669,24 @@ export async function statsTotals(
   return extrapolate(handle.doc, bucket)
 }
 
-// 当前 taskB.id(trackSubtasks 守卫: statsId === task.id 才信 statsTotals,T-002 消费)。
-// AUTO-DECISION: 同步且不触发惰性装载——守卫读数应无副作用;未装载/空 id 返回
-// undefined 即守卫失败,语义正确。若为守卫读数触发一次 load(读盘+落盘)反而引入
-// 不必要的 IO 与状态时序,否决。
+// The current taskB.id (trackSubtasks guard: statsTotals is trusted only when
+// statsId === task.id; consumed by T-002).
+// AUTO-DECISION: synchronous and does not trigger lazy loading — a guard
+// reading must be side-effect-free; unloaded/empty id returning undefined is
+// the guard failing, which is the correct semantics. Triggering a load (disk
+// read + write) for a guard reading would instead introduce unnecessary IO and
+// state-timing concerns, rejected.
 export function statsId(dir: string | undefined): string | undefined {
   if (!dir) return undefined
   return handles.get(dir)?.doc.taskB.id || undefined
 }
 
-// 本进程起点快照(loadStats 时刻、折旧+轮次滚动之后;桶在本进程内重置时对应快照
-// 归零)。"累计 X(本进程 Y)"口径: 本进程增量 = statsTotals(scope) − statsBoot(scope)
-// 的同名字段差。返回深拷贝,调用方改动不影响内部状态。
+// This process's starting-point snapshot (at loadStats time, after
+// depreciation + round rollover; a bucket's matching snapshot zeroes when the
+// bucket resets within this process). "accumulated X (this process Y)" caliber:
+// this process's increment = the same-named field delta of
+// statsTotals(scope) − statsBoot(scope). Returns a deep copy; caller-side
+// changes do not affect internal state.
 export async function statsBoot(
   dir: string | undefined,
 ): Promise<{ task: Totals; phase: Totals; round: Totals } | undefined> {
@@ -626,8 +695,10 @@ export async function statsBoot(
   return { task: copyTotals(handle.boot.task), phase: copyTotals(handle.boot.phase), round: copyTotals(handle.boot.round) }
 }
 
-// 历轮聚合读数(T-006 轮次完成行的"历轮累计"段): history 副本(rounds = 已滚出
-// 轮数,totals 为历轮合计,不含本轮 roundB)。rounds = 0 时调用方省略历轮段。
+// Past-rounds aggregate reading (the cross-round cumulative segment of T-006's
+// round-complete line): a copy of history (rounds = the number of rolled-out
+// rounds, totals = the past-rounds sum, excluding this round's roundB). The
+// caller omits the cross-round segment when rounds = 0.
 export async function statsHistory(
   dir: string | undefined,
 ): Promise<{ rounds: number; totals: Totals } | undefined> {
@@ -636,21 +707,23 @@ export async function statsHistory(
   return { rounds: handle.doc.history.rounds, totals: copyTotals(handle.doc.history.totals) }
 }
 
-// ===== 会话与等待(statsSessionBegin/End、statsWaitBegin/End)=====
+// ===== sessions and waits (statsSessionBegin/End, statsWaitBegin/End) =====
 
-// 会话期心跳周期: fold+落盘,限制 kill -9 损失 ≤ ~30s(折旧只承认到 lastWriteAt)。
+// Heartbeat period while a session runs: fold + persist, bounding the kill -9
+// loss to ≤ ~30s (depreciation credits only up to lastWriteAt).
 const HEARTBEAT_MS = 30_000
 
-// sessions 淘汰上限: 超 64 按 at(最后活跃时刻)淘汰最旧(聚合已入三桶,无损)。
+// Sessions eviction cap: beyond 64 the oldest are evicted by at (last-active
+// moment) (the aggregate is already in the three buckets, lossless).
 const MAX_SESSIONS = 64
 
 function startHeartbeat(dir: string, handle: Handle) {
-  if (handle.timer) return // 已在跳(嵌套/并行会话共用一个)
+  if (handle.timer) return // already ticking (nested/parallel sessions share one)
   handle.timer = setInterval(() => {
     fold(handle)
     queueWrite(dir, handle)
   }, HEARTBEAT_MS)
-  handle.timer.unref() // 不阻止进程退出
+  handle.timer.unref() // does not block process exit
 }
 
 function stopHeartbeat(handle: Handle) {
@@ -668,13 +741,17 @@ function addUsage(target: Usage, delta: Usage) {
   target.steps += num(delta.steps)
 }
 
-// prompt 下发前(runner attempt): fold 当前段后开 AI 段、关联当前任务并启动 30s
-// 心跳(fold+落盘,unref)。
-// AUTO-DECISION: begin 时不落盘——紧接的首次心跳(≤30s)即把 fold 结果持久化,
-// kill -9 损失仍受心跳周期上界约束;备选"begin 即 queueWrite"只缩小数秒窗口却
-// 每次会话多一次写盘,否决。
-// begin 时已有进行中会话(并行/异常路径未配对 end): 旧会话的内存累计被遗弃(三桶
-// 已入账无损,per-session 宁少不多),新会话从零累计。
+// Before prompt dispatch (runner attempt): fold the current segment, then open
+// an AI segment, associate the current task, and start the 30s heartbeat
+// (fold + persist, unref).
+// AUTO-DECISION: no disk write at begin — the first heartbeat right after
+// (≤30s) persists the fold result, and the kill -9 loss stays bounded by the
+// heartbeat period; the alternative "queueWrite at begin" only narrows the
+// window by a few seconds while adding one disk write per session, rejected.
+// A session already in progress at begin (parallel, or an unpaired end on an
+// abnormal path): the old session's in-memory accumulators are abandoned
+// (already posted losslessly to the three buckets; per-session undercounts),
+// and the new session accumulates from zero.
 export async function statsSessionBegin(dir: string | undefined, taskID: string): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
@@ -684,9 +761,11 @@ export async function statsSessionBegin(dir: string | undefined, taskID: string)
   startHeartbeat(dir, handle)
 }
 
-// statsSessionEnd 的打印用报告(◉ 会话结束行,T-003/T-004 消费): thisAiMs = 本次
-// 会话 AI 时长;session = 该 sessionID 跨中断累计(含本次);task/phase/round = 三桶
-// 当前累计副本(与 statsTotals 同口径)。
+// The printable report of statsSessionEnd (the ◉ session-end line, consumed by
+// T-003/T-004): thisAiMs = this session's AI duration; session = that
+// sessionID's cross-interruption accumulation (this one included);
+// task/phase/round = copies of the three buckets' current accumulations (same
+// caliber as statsTotals).
 export type StatsSessionReport = {
   thisAiMs: number
   session: SessionStat
@@ -695,14 +774,22 @@ export type StatsSessionReport = {
   round: Bucket
 }
 
-// 回合结束(含 error/blocked/异常,runner 8 个 return 全带): fold、usage 入四层
-// (task/phase/round 三桶 + per-session)、sessions 计数 +1、关 AI 段重开墙钟段、
-// 停心跳、落盘,返回打印用报告。无配对 begin(下发失败等异常兜底)时 thisAiMs = 0,
-// usage 与 sessions/rounds 计数照记——消耗真实发生,不丢。
-// model/tier(注册表之下由 attempt 传入,plans/0055 §7.1 "Stats"): 内部名或裸
-// `provider/model` 串的候选键 + 本次派发的层级;给出时 usage/sessions 同时按模型
-// 与按层级并行记入三桶(与桶自身 usage 同一入账点,跨中断累计同一口径)。缺省
-// (无注册表)不建 models/tiers 节,持久化形状逐字节不变(C2)。
+// End of a session round (including error/blocked/abnormal paths — all 8
+// runner returns carry it): fold, post usage into the four layers (the
+// task/phase/round buckets + per-session), sessions count +1, close the AI
+// segment and reopen a wall-clock segment, stop the heartbeat, persist, and
+// return the printable report. Without a paired begin (a fallback for dispatch
+// failures and similar abnormal paths) thisAiMs = 0, while usage and the
+// sessions/rounds counts still record — the consumption really happened, do
+// not drop it.
+// model/tier (passed in by attempt under a registry, plans/0055 §7.1
+// "Stats"): the candidate key — an internal name, or the raw
+// `provider/model` string of an override value — plus this dispatch's tier;
+// when given, usage and sessions are booked in parallel per model and per
+// tier into the three buckets (the same booking point as the buckets' own
+// usage, one cumulative criterion across interruptions). Defaulted (no
+// registry): no models/tiers sections are created, the persisted shape stays
+// byte-identical (C2).
 export async function statsSessionEnd(
   dir: string | undefined,
   sessionID: string,
@@ -718,8 +805,10 @@ export async function statsSessionEnd(
   handle.session = undefined
   const doc = handle.doc
   const now = clock()
-  // 关 AI 段重开墙钟段;若正处于人工等待中(段已关),由 waitEnd 负责重开——
-  // 把 wait.ai 拨回 false,等待结束后恢复的是墙钟段而非已结束会话的 AI 段。
+  // Close the AI segment and reopen a wall-clock segment; if currently inside
+  // a human wait (the segment is already closed), waitEnd does the reopening —
+  // wait.ai flips back to false so what resumes after the wait is a wall-clock
+  // segment, not the ended session's AI segment.
   if (handle.wait.depth === 0) doc.open = { at: now, ai: false }
   else handle.wait.ai = false
   for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
@@ -736,8 +825,9 @@ export async function statsSessionEnd(
       stat.sessions += 1
     }
   }
-  // per-session 续接: 同 sessionID 跨中断(fork 续跑)累加 rounds/aiMs/usage;
-  // task 以本次 begin 关联为准(缺省沿用旧值/当前 taskB.id)。
+  // Per-session continuation: the same sessionID accumulates rounds/aiMs/usage
+  // across interruptions (fork continuation); task follows this begin's
+  // association (defaulting to the old value / the current taskB.id).
   const entry = doc.sessions[sessionID] ?? {
     task: "",
     aiMs: 0,
@@ -764,14 +854,21 @@ export async function statsSessionEnd(
   }
 }
 
-// 协议漂移计数(plans/0055 §10 item 3): 某模型的会话写出的 report `Result:
-// FAIL` 判定(fail)、收到的死循环提示(stuck)、触发的形检重提示(reprompt)。
-// 与 usage 同一三桶并行口径——事件发生在哪个任务/阶段/轮次,计数就落在当时的
-// 三个桶里,跨中断随文档累计。model 缺省(无注册表,链上无选中条目)空转,
-// 不建 models 节(C2)。事件已在其观测点由调用方判定,这里只入库。
-// AUTO-DECISION: 计数三桶并行(task/phase/round 各 +1),不加"仅 round 桶"的
-// 单层口径——三桶是本模块既有的并行累加模型(阶段内含非任务时间也不折叠),
-// 单层口径会让"本任务该模型漂移几次"无处可读;三份重复是有界且自洽的。
+// Protocol-drift counting (plans/0055 §10 item 3): the report `Result: FAIL`
+// verdict a session of some model wrote (fail), the stuck-loop hints it
+// received (stuck), the shape-check re-prompts it triggered (reprompt).
+// The same parallel three-bucket criterion as usage — the count lands in the
+// three buckets of the task/phase/round the event happened in, accumulating
+// in the document across interruptions. A defaulted model (no registry, no
+// chosen entry on the chain) is a no-op and creates no models section (C2).
+// The event was already judged by the caller at its observation point; this
+// only stores it.
+// AUTO-DECISION: the counts go to the three buckets in parallel (task/phase/
+// round each +1), not a single "round bucket only" criterion — the three
+// buckets are this module's standing parallel accumulation model (phase time
+// including non-task time is not folded either), a single-layer criterion
+// would leave "how often this model drifted in this task" unreadable; the
+// three copies are bounded and self-consistent.
 export type ModelEventKind = "fail" | "stuck" | "reprompt"
 
 export async function statsModelEvent(
@@ -790,10 +887,12 @@ export async function statsModelEvent(
   queueWrite(dir, handle)
 }
 
-// 失败消息分类器的 token 落账(plans/0055 §7.1 "Stats"): 记入三桶各自的
-// `classify` 桶——在单元会话总量之外(不进桶的 usage/sessions、不进 per-session),
-// 与内部模型名并列展示。分类器的一次 one-shot 会话按 sessions 计数(它确实是
-// 一次会话,只是不属于任何单元)。无句柄时惰性装载同其它 API。
+// The failure-message classifier's token booking (plans/0055 §7.1 "Stats"):
+// recorded into each of the three buckets' `classify` bucket — outside the
+// unit-session totals (not into the buckets' usage/sessions, not into
+// per-session), displayed beside the internal model names. The classifier's
+// one-shot session counts as a session (it is indeed a session, just one that
+// belongs to no unit). Lazy-loaded like the other APIs when no handle exists.
 export async function statsClassifyUsage(dir: string | undefined, usage: Usage): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
@@ -805,8 +904,9 @@ export async function statsClassifyUsage(dir: string | undefined, usage: Usage):
   queueWrite(dir, handle)
 }
 
-// 超上限按 at 升序淘汰最旧(淘汰无损: 聚合已入三桶;per-session 展示丢历史属
-// 已接受取舍,见 context.md 风险节)。
+// Over the cap, evict the oldest by ascending at (eviction is lossless: the
+// aggregate is already in the three buckets; losing per-session display
+// history is an accepted trade-off, see the risks section of context.md).
 function evictSessions(doc: StatsDoc) {
   const ids = Object.keys(doc.sessions)
   if (ids.length <= MAX_SESSIONS) return
@@ -814,19 +914,22 @@ function evictSessions(doc: StatsDoc) {
   for (const id of ids.slice(0, ids.length - MAX_SESSIONS)) delete doc.sessions[id]
 }
 
-// 人工/计划等待开始: 嵌套深度 +1;最外层 fold 当前段后关段(等待期间 aiMs/wallMs
-// 均不增长——总用时排除纯人工等待,计划 :14/:52)并落盘。reason 目前不消费(计划
-// 签名预留,供将来审计/vlog),取值为既有等待种类之一:
-//   人工等待 — "askHuman"(会话内提问)、"waitBetweenTasks"(--wait-between)、
-//   "stepPause:<boundary>"(步进暂停);
-//   计划等待 — "hibernate"(休眠窗口,plans/0027)、"recovery"(等待-探测环,
-//   plans/0015)、"window"(模型窗口等待,plans/0055 §6.3——候选全部只在窗口外时
-//   睡到最早开启时刻加休眠抖动)。
+// Human/planned wait begins: nesting depth +1; the outermost level folds the
+// current segment then closes it (during the wait neither aiMs nor wallMs
+// grows — total time excludes pure human wait, plan :14/:52) and persists.
+// reason is currently unconsumed (the plan reserved it in the signature for
+// future audit/vlog); its value is one of the existing wait kinds:
+//   human waits — "askHuman" (in-session question), "waitBetweenTasks"
+//   (--wait-between), "stepPause:<boundary>" (step-mode pause);
+//   planned waits — "hibernate" (hibernate window, plans/0027), "recovery"
+//   (wait-and-probe loop, plans/0015), "window" (model window wait,
+//   plans/0055 §6.3 — when every candidate lies outside its window, sleep
+//   until the earliest opening time plus hibernation jitter).
 export async function statsWaitBegin(dir: string | undefined, reason?: string): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)
   handle.wait.depth += 1
-  if (handle.wait.depth > 1) return // 嵌套: 重叠等待只计一次
+  if (handle.wait.depth > 1) return // nested: overlapping waits are counted once
   fold(handle)
   handle.wait.ai = handle.doc.open?.ai ?? false
   handle.wait.start = clock()
@@ -834,8 +937,10 @@ export async function statsWaitBegin(dir: string | undefined, reason?: string): 
   queueWrite(dir, handle)
 }
 
-// 人工等待结束: 深度归零时 waitMs 单记入三桶(clampTick 钳制,会话内则同时计入
-// per-session wallMs),并按关段前的 ai 标志重开段、落盘。无配对 begin 空转。
+// Human wait ends: when the depth returns to zero, waitMs is posted alone into
+// the three buckets (clamped by clampTick; inside a session it also counts
+// toward per-session wallMs), the segment reopens with the pre-close ai flag,
+// and the state is persisted. No-op without a paired begin.
 export async function statsWaitEnd(dir: string | undefined): Promise<void> {
   if (!dir) return
   const { handle } = await ensure(dir)

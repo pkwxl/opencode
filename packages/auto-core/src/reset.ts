@@ -1,16 +1,23 @@
-// 反初始化(与 init 互逆): 精确移除 init 写出的配置层产物,把工作区还原到未
-// 初始化状态,消除配置残留对 opencode 主程序与其他扩展组件的干扰。
+// De-initialization (the inverse of init): precisely removes the config-layer
+// artifacts init wrote, restoring the worktree to the uninitialized state and
+// clearing config leftovers that would interfere with the opencode host
+// program and other extension components.
 //
-// 边界(设计要点,改动前先读完):
-//   1. 只清配置层。.auto/ 的运行时状态(日志、stats/resolves/progress)、
-//      docs/(含轮次目录 R-NN 与任务目录 T-NNN)、tmp/ 一律不动——
-//      那些是人与 AI 的工作成果,不是 init 的产物。
-//   2. 清单是枚举式白名单,没有通配、没有递归删除。
-//   3. 目录回收一律用 rmdir(非空即抛,跳过),绝不用 rm -r。这道机制保住
-//      .opencode/auto/prompts/(用户自建的提示词覆盖目录,template.ts 读取)
-//      与 .opencode/agent/ 下用户自己的其他 agent 契约。
-//   4. 与主程序共用的文件逐字节比对后才动: opencode.json 只在内容等于模板时
-//      删除,被改过就保留;AGENTS.md 只摘除 opencode-auto 标记块。
+// Boundaries (design points, read them all before changing anything):
+//   1. Clears the config layer only. .auto/'s runtime state (logs,
+//      stats/resolves/progress), docs/ (including the round directories R-NN
+//      and task directories T-NNN) and tmp/ are never touched — that is the
+//      work of humans and AI, not init's output.
+//   2. The list is an enumerated whitelist: no globs, no recursive deletion.
+//   3. Directory reclamation always uses rmdir (throws on non-empty, skipped)
+//      and never rm -r. This is the mechanism that protects
+//      .opencode/auto/prompts/ (the user's own prompt overlay directory, read
+//      by template.ts) and the user's other agent contracts under
+//      .opencode/agent/.
+//   4. Files shared with the host program are touched only after a
+//      byte-for-byte comparison: opencode.json is deleted only while its
+//      content equals the template, kept once modified; AGENTS.md only has
+//      the opencode-auto marker block stripped.
 //   5. The project brief holds human intent: it is removed only while it equals
 //      the stub init wrote, a filled brief is kept (plans/0052 D9, DF6).
 import { rm, rmdir, stat } from "node:fs/promises"
@@ -23,32 +30,35 @@ import { removeGitignoreEntries } from "./gitignore"
 export type ResetAction = "remove" | "strip" | "rmdir" | "keep"
 
 export type ResetEntry = {
-  // 相对目标目录的路径,用于打印清单。
+  // The path relative to the target directory, used to print the list.
   path: string
   action: ResetAction
-  // keep 必填(说明为何保留);其余可选补充说明。
+  // Required for keep (why it is kept); optional extra note for the rest.
   reason?: string
 }
 
-// init 写出的配置层产物,按与写入互逆的顺序。
+// The config-layer artifacts init writes, in the order inverse to the writing.
 const CONFIG_JSON = join(".opencode", "auto", "config.json")
-// 旧版仅含 mode 的配置(config.ts 的 LEGACY_FILE): 虽落在 .auto/ 下,性质是
-// 配置而非运行时状态,属清理范围;.auto/ 其余内容不动。
+// The legacy config holding only mode (config.ts's LEGACY_FILE): it lives
+// under .auto/, but its nature is config, not runtime state, so it is in
+// scope; the rest of .auto/ is untouched.
 const LEGACY_CONFIG = join(".auto", "config.json")
 const AGENT_MD = join(".opencode", "agent", "auto.md")
-// 空则回收的目录,按由内向外。
+// Directories reclaimed when empty, from the inside out.
 const PRUNE_DIRS = [join(".opencode", "auto"), join(".opencode", "agent"), ".opencode"]
 
 async function fileExists(path: string): Promise<boolean> {
   return Bun.file(path).exists()
 }
 
-// Bun.file(...).exists() 对目录恒为 false,目录存在性须走 stat。
+// Bun.file(...).exists() is always false for directories; directory existence
+// must go through stat.
 async function dirExists(path: string): Promise<boolean> {
   return stat(path).then((entry) => entry.isDirectory(), () => false)
 }
 
-// 计算清单但不落盘: CLI 先打印给用户看、再确认,确认后才 applyReset。
+// Computes the list but writes nothing: the CLI first prints it for the user,
+// confirms, and only then applyReset.
 export async function planReset(dir: string): Promise<ResetEntry[]> {
   const entries: ResetEntry[] = []
 
@@ -63,12 +73,15 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
   }
   if (await fileExists(join(dir, LEGACY_CONFIG))) entries.push({ path: LEGACY_CONFIG, action: "remove" })
 
-  // agent 契约不比对: init 本就无条件按模板覆盖它(内容不一致即替换),
-  // 它是纯 auto 产物,手改不具备「用户自有内容」的地位。
+  // The agent contract is not compared: init already overwrites it
+  // unconditionally from the template (replacing on any content difference) —
+  // it is a pure auto artifact, and a hand edit does not earn it the status
+  // of "the user's own content".
   if (await fileExists(join(dir, AGENT_MD))) entries.push({ path: AGENT_MD, action: "remove" })
 
-  // opencode.json 由主程序读取,可能承载用户自己的 model/permission 配置:
-  // 逐字节等于模板才删,否则保留。
+  // opencode.json is read by the host program and may hold the user's own
+  // model/permission settings: deleted only when byte-for-byte equal to the
+  // template, otherwise kept.
   const configFile = join(dir, "opencode.json")
   if (await fileExists(configFile)) {
     const [current, template] = await Promise.all([Bun.file(configFile).text(), Bun.file(templateConfig).text()])
@@ -100,8 +113,9 @@ export async function planReset(dir: string): Promise<ResetEntry[]> {
   return entries
 }
 
-// 执行清单。rmdir 对非空目录抛错即跳过——这正是保住 prompts/ 与用户其他 agent
-// 契约的机制,不要改成 rm -r。
+// Executes the list. rmdir throws on a non-empty directory and is skipped —
+// that is exactly the mechanism protecting prompts/ and the user's other
+// agent contracts; do not change it to rm -r.
 export async function applyReset(dir: string, entries: ResetEntry[]): Promise<void> {
   for (const entry of entries) {
     if (entry.action === "keep") continue
@@ -123,7 +137,8 @@ export async function applyReset(dir: string, entries: ResetEntry[]): Promise<vo
   }
 }
 
-// 清单的人读渲染(CLI 与测试共用,保证「打印什么」与「删什么」同源)。
+// The human-readable render of the list (shared by the CLI and the tests, so
+// "what is printed" and "what is deleted" come from the same source).
 export function formatResetPlan(entries: ResetEntry[]): string {
   const label: Record<ResetAction, string> = { remove: "remove", strip: "strip", rmdir: "rmdir-if-empty", keep: "keep" }
   return entries.map((entry) => `  ${label[entry.action]}: ${entry.path}${entry.reason ? ` (${entry.reason})` : ""}`).join("\n")

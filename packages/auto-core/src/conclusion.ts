@@ -87,7 +87,7 @@ export async function roundResolveLines(directory: string | undefined): Promise<
 // returns undefined, and the caller falls back to the pre-T-006 legacy text
 // (done) or prints nothing (blocked/incomplete never had a stats line).
 // AUTO-DECISION: "this process" is the wall-clock delta (wallMs −
-// boot.task.wallMs). The draft's "其中本进程" sits next to the word AI and
+// boot.task.wallMs). The draft's Chinese phrase for "this process" sits next to the word AI and
 // could read as an AI subset; but the T-002 progress heartbeat line
 // (subtaskProgressLine in this file) already established "this process" as the
 // wall-clock caliber of the same task bucket, identical wording across message
