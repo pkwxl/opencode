@@ -80,7 +80,7 @@ describe("共享片段解析", () => {
 })
 
 describe("内置模板注册表", () => {
-  test("25 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose;phase-append 见 0053 D27)", () => {
+  test("26 个会话模板与 _partials 齐备(M1.0 起 understand 并入 decompose;phase-append 见 0053 D27;step-up 见 0055 §4.5)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "context-base",
@@ -100,6 +100,7 @@ describe("内置模板注册表", () => {
       "phase-handover",
       "phase-plan",
       "prior-knowledge",
+      "step-up",
       "stuck-hint",
       "subtask",
       "test-continue",
@@ -175,6 +176,8 @@ describe("内置模板注册表", () => {
       input: "追加规划输入",
       inputPath: "docs/R-01/P02-implement/plan-input.md",
       existingTasks: "- [pending] T-004: 既有任务",
+      fromModel: "prov/model-256k",
+      toModel: "prov/model",
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)

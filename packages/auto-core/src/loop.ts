@@ -9,6 +9,7 @@ import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } 
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
 import { logRunRouting, routingFacts } from "./routing"
+import { stepValidationLines } from "./model-step"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentHost } from "./agent/types"
@@ -125,7 +126,15 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // known, held by every dispatch through Opts.routing. The run-start block
     // (§6.5) prints the routing in force; without a registry nothing changes.
     const routing = registry ? routingFacts(registry, opts.agent) : undefined
-    if (routing) logRunRouting(routing)
+    if (routing) {
+      logRunRouting(routing)
+      // Step validation (§4.5, §10 item 13), once the server is up: each
+      // step's window from contextLimits() must be strictly larger than the
+      // step below; a step whose window is unknown or not larger disables
+      // the steps from it upward, and a model id the server does not name is
+      // a warning, never an error (some providers load models late).
+      for (const line of stepValidationLines(routing.registry, await server.client.contextLimits())) log(line)
+    }
     if (opts.interactive) {
       repl = startInteractive(server.client, agentName, undefined, routing ? new Set(routing.registry.models.keys()) : undefined)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")

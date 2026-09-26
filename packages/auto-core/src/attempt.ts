@@ -19,6 +19,8 @@ import { DEFAULT_CONTEXT_LIMIT, type Opts } from "./opts"
 import { currentRound } from "./phases"
 import { candidateKey, nowOf, selectContext } from "./routing"
 import { candidatesOf, select } from "./select"
+import { stepForUsed, stepId } from "./model-step"
+import type { ModelEntry } from "./models"
 import { type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { recordResolves, type ResolveEvent } from "./resolve"
@@ -227,6 +229,12 @@ export async function attempt(
     const override = failbackOverride()
     let target: string | undefined
     let promptVariant: string | undefined
+    // The watch's steer context under a registry (§4.5): the picked
+    // candidate's key, its entry (when the pick is one) and the step the
+    // dispatch names — set with target below, undefined without a registry.
+    let steerKey: string | undefined
+    let steerEntry: ModelEntry | undefined
+    let steerStep: number | undefined
     if (opts.routing) {
       const facts = opts.routing
       const limits = await client.contextLimits()
@@ -276,13 +284,27 @@ export async function attempt(
         }
       }
       const picked = decision.candidate
-      target = picked.kind === "entry" ? picked.entry.model : picked.model
-      promptVariant = picked.kind === "entry" ? picked.entry.variant : undefined
+      // Session lifetime of a step (§4.5): a continuation of the same session
+      // keeps the step it reached (the chain's field, written by the watch
+      // that stepped up); a resumed takeover recomputes it from the context
+      // size rebuilt from the session's history (chain.used, nothing
+      // persisted); every other dispatch — a new prompt, the session after a
+      // handover, a failover onto this entry — starts at the base step.
+      let step = 0
+      if (picked.kind === "entry" && (decision.via === "continuation" || resumed)) {
+        step = resumed ? stepForUsed(picked.entry, limits, chain.used) : (chain.modelStep ?? 0)
+      }
+      const entryOf = picked.kind === "entry" ? picked.entry : undefined
+      target = picked.kind === "entry" ? (stepId(picked.entry, step) ?? picked.entry.model) : picked.model
+      promptVariant = entryOf !== undefined ? entryOf.variant : undefined
       const key = candidateKey(picked)
       chain.modelEntry = key
       chain.model = target
-      chain.modelStep = 0
+      chain.modelStep = entryOf !== undefined ? step : 0
       promptModel = key
+      steerKey = key
+      steerEntry = entryOf
+      steerStep = entryOf !== undefined ? step : 0
       // ◈ display (§6.5): the internal name with the tier, the agent and
       // model behind it, and what routed the dispatch; a move names its
       // reason — window, quota (the classified failures) or failback. Key
@@ -348,6 +370,11 @@ export async function attempt(
             }
           }
         : undefined,
+      // Registry steers name their model (§4.5): the watch carries the entry's
+      // steps (the same session steps up in place) and the id every steer
+      // names — the reached step. Without a registry nothing is passed and
+      // steers stay exactly as they are (C2).
+      opts.routing && steerKey !== undefined ? { name: steerKey, label: task.id, ...(steerEntry !== undefined ? { entry: steerEntry } : {}), ...(steerStep !== undefined ? { step: steerStep } : {}), ...(target !== undefined ? { model: target } : {}) } : undefined,
     ).then((w) => {
       if (w.error) {
         watchFailed = true
@@ -397,6 +424,14 @@ export async function attempt(
     if (prompt !== null && !dispatchEcho) await remember()
 
     const result = await watching
+    // A session that stepped up in place (§4.5) keeps its step on the chain:
+    // the continuation prompt and every later steer name the id it runs on.
+    // Not restored on retryable errors — the retry's fork inherits the
+    // context, so it inherits the step too.
+    if (result.steppedUp !== undefined) {
+      chain.modelStep = result.steppedUp.step
+      chain.model = result.steppedUp.model
+    }
     // 并发态(OPENCODE_AUTO_HANDOVER_CONCURRENT=on)交接期测试的统一收口: watch
     // 起跑、这里等它落定——正常结束、会话错误、SSE 断流各路都经过此处,测试进程
     // 不会跨会话悬挂。结果写在 test.last 上,供新会话续跑提示引用。顺序态(缺省)

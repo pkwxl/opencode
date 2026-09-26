@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
@@ -10,6 +10,9 @@ import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
 import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-core/phases"
 import { renderText } from "@opencode-ai/auto-core/template"
+import { opencodeHost } from "@opencode-ai/auto-core/agent/opencode/server"
+import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
+import { estimateTokens } from "@opencode-ai/auto-core/usage"
 import templateConfig from "@opencode-ai/auto-core/templates/opencode.json" with { type: "file" }
 import templateAgent from "@opencode-ai/auto-core/templates/.opencode/agent/auto.md" with { type: "file" }
 
@@ -241,6 +244,80 @@ test.skipIf(!E2E)(
       expect(phasesIndex).toContain("- [x] P02 design")
       expect(phasesIndex).toContain("- [x] P03 implement")
     } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+  { timeout: 900_000 },
+)
+
+// A real context step-up on a provider that sells one model under several ids
+// sharing a prompt cache (auto-core plans/0055 §4.5, the §13 S2 verification).
+// Opt-in like the e2e above, and additionally naming the id pair (and an
+// optional third field: one padding read's size in k tokens, default 40):
+//   OPENCODE_AUTO_E2E=1 OPENCODE_AUTO_E2E_STEPS="prov/model-256k,prov/model" \
+//     bun test test/e2e.test.ts -t "step-up"
+// (run from packages/auto with the pair of a provider whose ids share a
+// cache.) The smoke plants a project-layer registry around the pair, sizes
+// the padding from the base id's live window, and runs one task that
+// re-reads the padding file until the context crosses the step-up point.
+const STEPS_PAIR = (process.env.OPENCODE_AUTO_E2E_STEPS ?? "")
+  .split(",")
+  .map((part) => part.trim())
+  .filter(Boolean)
+
+test.skipIf(!(E2E && STEPS_PAIR.length >= 2))(
+  "a real step-up: the same session moves to the wider id at the step-up point (needs a provider with a shared cache)",
+  async () => {
+    const baseId = STEPS_PAIR[0]!
+    const wideId = STEPS_PAIR[1]!
+    const dir = await mkdtemp(join(tmpdir(), "auto-e2e-steps-"))
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      await establishRound(dir, { phases: "m" })
+      await Bun.write(join(dir, "opencode.json"), await Bun.file(templateConfig).text())
+      await Bun.write(join(dir, ".opencode/agent/auto.md"), renderText(await Bun.file(templateAgent).text(), {}))
+      // The project layer is the whole registry: one stepped entry.
+      await Bun.write(
+        join(dir, ".opencode/auto/models.json"),
+        JSON.stringify({ models: { step: { agent: "opencode", model: baseId, wider: [wideId] } }, tiers: { deep: ["step"], simple: ["step"] } }, null, 2),
+      )
+      // The base id's live window sizes the padding: one pass ≈ pad tokens,
+      // enough passes to cross the step-up point with slack (the count is
+      // capped so an expensive pair cannot run away).
+      const host = await opencodeHost(dir, { permission: "allow", log: () => {} })
+      let window: number | undefined
+      try {
+        window = (await host.client.contextLimits()).get(baseId)
+      } finally {
+        host.close()
+      }
+      expect(window, `${baseId} has no known context window on this server (check the OPENCODE_AUTO_E2E_STEPS pair)`).toBeDefined()
+      const point = stepUpPoint(window!)
+      const pad = Math.min((STEPS_PAIR[2] ? Number(STEPS_PAIR[2]) : 40) * 1000, Math.max(1000, Math.floor(point / 2)))
+      const reads = Math.min(12, Math.max(2, Math.ceil((point * 1.2 + 20_000) / pad)))
+      const unit = "the quick brown fox jumps over the lazy dog; "
+      let padding = ""
+      while (estimateTokens(padding) < pad) padding += unit
+      await Bun.write(join(dir, "data.txt"), padding)
+      await listTasks(dir, P01.dir, "R-01.P01", [
+        [
+          "T-001",
+          "keep reading until the wider step",
+          `Read data.txt from start to end with the read tool (in several offset chunks when needed; skip no line). Each time you have read the whole file, append one line "pass N done" to log.txt (N counting from 1). Repeat the full read ${reads} times. Never summarize from memory — every pass must read the file again. When all passes are done, create done.txt with the content "ok".`,
+        ],
+      ])
+      // The cap sits at the base window, so the handover hint (2×cap) never
+      // pre-empts the step-up point (window − max(48k, window/5)).
+      expect(await runAll(dir, { contextLimit: window })).toBe(0)
+      const stepped = lines.filter((line) => line.includes("reached the step-up point") || line.includes("step-up late"))
+      expect(stepped.join("\n")).toContain(`continuing the same session on ${wideId}`)
+      // The task itself completed on the stepped entry either way.
+      expect(await Bun.file(join(dir, "done.txt")).text()).toContain("ok")
+    } finally {
+      printed.mockRestore()
       await rm(dir, { recursive: true, force: true })
     }
   },

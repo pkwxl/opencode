@@ -466,6 +466,16 @@ export function renderHandoffSteer(task: Task): string {
   return renderPrompt("handoff-steer", { handoffFile: handoffFile(task) })
 }
 
+// Context step-up note (steered into the same session when its context
+// reaches the current step's step-up point, plans/0055 §4.5): the session
+// continues in place on the next step's id — same history, shared prompt
+// cache — and the steer itself names that id, so the next provider turn
+// runs on it. One line: the session needs to know only that nothing else
+// changed.
+export function renderStepUp(input: { from: string; next: string }): string {
+  return renderPrompt("step-up", { fromModel: input.from, toModel: input.next })
+}
+
 // Stuck-loop hint (steered into a running session when the driver detects
 // repeated actions, src/stuck.ts): level sets the force of the hint — 1 switch
 // approach, 2 write the diagnosis before acting, 3 stop retrying and close out

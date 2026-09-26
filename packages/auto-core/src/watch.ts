@@ -16,14 +16,15 @@ import { suffixedTitle } from "./git"
 import { handoffComplete, saveHandover } from "./handover"
 import { log, vlog } from "./log"
 import type { Opts } from "./opts"
-import { handoffFile, renderStuckHint, renderTestWrapup, renderTestResult } from "./prompt"
+import { handoffFile, renderStepUp, renderStuckHint, renderTestWrapup, renderTestResult } from "./prompt"
 import { compactText, sameIssue, type ResolveEvent } from "./resolve"
 import { askHuman, describePart, formatClientError, formatTokens, isApproval, probeSession } from "./session-api"
+import { awaitCacheClaim, enabledSteps, noteClaimContradiction, observeCacheClaim, stepId, stepUpPoint, type SteerContext } from "./model-step"
 import type { Usage } from "./stats"
 import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
 import { executeTest, resolveTestScript, type Steer, type TestRun } from "./testrun"
-import { steerDue, testHandoverDue, usageSource } from "./usage"
+import { steerDue, testHandoverDue, liveUsage, usageSource } from "./usage"
 
 // 失联探针参数(plans/0026-session-boundary-hardening-design.md D3): 周期缺省复用 idleTime
 // (10 分钟,与脚本看门狗同键同缺省,config.idleTime);**连续 2 次**未通才判半开
@@ -54,6 +55,10 @@ export async function watch(
   // 实际使用模型的观测回调: 本会话事件流里首个带模型的消息(user 消息带着服务端
   // 实际解析出的模型)到达即触发一次,attempt 据此播报真实生效模型。
   onModel?: (model: string) => void,
+  // 注册表之下的 steer 上下文(plans/0055 §4.5): 会话所在条目的上下文步与
+  // steer 应具名的模型 id。缺省(无注册表)一切照旧——steer 不带 model 键,
+  // 逐字节等价现状(C2)。
+  steerContext?: SteerContext,
 ): Promise<Watch> {
    const waitAnswer = opts.waitAnswer ?? 0
    let lastText = ""
@@ -96,10 +101,19 @@ export async function watch(
     usage,
     resolves,
     ...(steerSent ? { hinted: true } : {}),
+    ...(reached !== undefined ? { steppedUp: reached } : {}),
     ...extra,
   })
   // steer 每会话只插入一次。
   let steerSent = false
+  // 上下文步与 steer 具名(plans/0055 §4.5): 注册表之下每个 steer 具名会话当前
+  // 运行的模型 id——即已达步的 id,迟到的 steer 才不会把会话跌回基础步;步进
+  // 机制本身在测量点(下方 message 分支)把同一会话原地升到下一步。stepNow 单向
+  // 只升不降;reached 记录变化,snapshot 带给 attempt 写回链。无注册表(或无
+  // model 的条目)steerModel 恒 undefined,steer 不带 model 键,逐字节等价现状。
+  let steerModel: string | undefined = steerContext?.model
+  let stepNow = steerContext?.step ?? 0
+  let reached: { step: number; model: string } | undefined
   // 自动答复过的问题(同一问题重复出现仍阻塞停机)。
   const autoAnswered: string[] = []
   // --test-by-driver 测试执行协议状态: 会话 idle 时检测 tmp/test.sh(请求标记,
@@ -127,12 +141,60 @@ export async function watch(
   // steer 投递用 promptAsync(投递即返回):v2 同步 /message 端点会阻塞到它启动的
   // 整个回合结束,在事件循环内同步等待会卡死事件循环(事件堆积、提问/权限无人
   // 应答)。投递失败记 log 并返回 false,调用方按隐性阻塞处理,不再静默空等。
+  // 注册表之下 steer 具名 steerModel(已达步的 id,§4.5"steers name their
+  // model");无注册表时不带 model 键,与现状逐字节一致。
   const steerText = async (text: string): Promise<boolean> => {
     source.prompt(text)
-    const sent = await client.promptAsync({ session: sessionID, text })
+    const sent = await client.promptAsync({ session: sessionID, text, ...(steerModel !== undefined ? { model: steerModel } : {}) })
     if (sent.ok) return true
     log(`⚠ steer dispatch failed: ${formatClientError(sent.error)}`)
     return false
+  }
+  // —— 上下文步(plans/0055 §4.5)——
+  // The step-up itself, at the measurement point that crossed the current
+  // step's step-up point: steer the same session with the next step's id and
+  // the one-line note, record the reached step, and arm the cache-claim
+  // check on the wider id. Without the steer capability the note cannot be
+  // delivered mid-session; the step still takes effect — the chain's record
+  // makes the next prompt into this session name the next id (§4.5).
+  const stepUp = async (usedNow: number): Promise<void> => {
+    const entry = steerContext?.entry
+    if (entry === undefined || steerContext === undefined) return
+    const nextId = stepId(entry, stepNow + 1)
+    const fromId = stepId(entry, stepNow)
+    if (nextId === undefined || fromId === undefined) return
+    // The step is recorded before the steer goes out: the steer itself names
+    // the next id (that is how the session moves), and a failed dispatch
+    // still leaves the record — the next prompt into this session names the
+    // id, exactly as without the steer capability.
+    stepNow += 1
+    steerModel = nextId
+    reached = { step: stepNow, model: nextId }
+    log(`⇡ ${steerContext.label} context ${formatTokens(usedNow)} reached the step-up point of ${steerContext.name} (${fromId}); continuing the same session on ${nextId}`)
+    if (client.capabilities.steer) {
+      const ok = await steerText(renderStepUp({ from: fromId, next: nextId }))
+      if (ok) awaitCacheClaim(steerContext.name, usedNow)
+    } else {
+      log(`⇡ ${steerContext.label} the agent takes no mid-turn steers; the next prompt into this session names ${nextId}`)
+    }
+  }
+  // Late step-up (§4.5, §7's overflow exception): the agent compacted before
+  // the step-up steer could land — an overflow error below the top step. No
+  // steer (the compaction already shrank the context); the reached step is
+  // recorded so the next prompt into this session names the next id. Every
+  // other overflow stays with the handover mechanism.
+  const stepLate = async (): Promise<void> => {
+    const entry = steerContext?.entry
+    if (entry === undefined || steerContext === undefined) return
+    limits ??= await client.contextLimits()
+    if (stepNow + 1 >= enabledSteps(entry, limits)) return
+    const nextId = stepId(entry, stepNow + 1)
+    const fromId = stepId(entry, stepNow)
+    if (nextId === undefined || fromId === undefined) return
+    log(`⇡ ${steerContext.label} step-up late: the agent compacted the session (overflow on ${fromId}) before the step-up steer could land; the next prompt into this session names ${nextId}`)
+    stepNow += 1
+    steerModel = nextId
+    reached = { step: stepNow, model: nextId }
   }
   const handleIdleTest = async (): Promise<{ type: "continue" } | { type: "break" } | { type: "blocked"; question: string } | { type: "invalid" }> => {
     // 交接要求已发出: 校验交接文档写完了(F1,末行 `Status: continue|done`)。判据由
@@ -304,6 +366,22 @@ export async function watch(
         // (续跑后恢复正常工作)重置连续截断计数。
         lastFinish = part.reason
         if (part.reason !== "length") lengthContinued = 0
+        // Cache-claim check (§4.5): `wider` asserts the step ids share the
+        // base id's prompt cache; the first step-finish after a step-up shows
+        // whether it holds (a large cacheRead confirms it, a cacheWrite of
+        // the whole prefix contradicts it). The contradiction line fires
+        // once per entry.
+        if (steerContext?.entry !== undefined) {
+          const verdict = observeCacheClaim(steerContext.name, part.tokens)
+          if (verdict === "confirmed") {
+            vlog(`✓ ${steerContext.name}: the wider step read ${formatTokens(part.tokens.cacheRead)} tokens from the shared prompt cache`)
+          } else if (verdict === "contradiction" && noteClaimContradiction(steerContext.name)) {
+            log(
+              `⚠ ${steerContext.name}: the first step on the wider id wrote ${formatTokens(part.tokens.cacheWrite)} tokens of cache and read ${formatTokens(part.tokens.cacheRead)} — ` +
+                `the wider id does not share the base id's prompt cache as the entry's wider list claims; check the provider's model ids`,
+            )
+          }
+        }
         if (!billedSteps.has(part.id)) {
           billedSteps.add(part.id)
           usage.input += part.tokens.input
@@ -377,6 +455,24 @@ export async function watch(
           return snapshot({
             blocked: { type: "blocked", question: "steer dispatch failed (handover hint); cannot continue the session, see the log." },
           })
+        }
+        // The handover hint owns this measurement point: the session is being
+        // wound down by the project's cap, so a step-up steer in the same
+        // breath would only confuse it. A session that keeps working past the
+        // hint steps up at a later measurement (steerSent stays true).
+        // AUTO-RESOLVE: when one measurement crosses both the handover cap (2×cap) and a step-up point, which steer goes out? -> the handover hint (the project's cap is the operator's policy for ending the session, and the design keeps the two mechanisms independent without ordering them; a session that survives the hint still steps up at its next measurement)
+        continue
+      }
+      // Context steps (§4.5): a live figure that crossed the current step's
+      // step-up point steps the same session up in place — steer the next
+      // step's id, keep it for the rest of the session. The condition itself
+      // is the re-arm: after a step-up the next step's point sits above the
+      // current figure, so the next steer happens at its own boundary.
+      if (steerContext?.entry !== undefined && liveUsage(tier)) {
+        const entry = steerContext.entry
+        if (stepNow + 1 < enabledSteps(entry, limits)) {
+          const window = limits.get(stepId(entry, stepNow)!)
+          if (window !== undefined && now >= stepUpPoint(window)) await stepUp(now)
         }
       }
       continue
@@ -528,6 +624,10 @@ export async function watch(
         ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
         ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
       }
+      // Late step-up (§4.5, §7): an overflow below the top step means the
+      // agent compacted before the step-up steer could land — record the
+      // next step and go on observing (the compacted session continues).
+      if (classifySessionError(errorInfo, client.errorPatterns) === "overflow") await stepLate()
       continue
     }
     // retry(B.4 两路信号合一 / D.2 触发面 2、3,0037 D4): 服务端自己在重试失败的
@@ -564,6 +664,10 @@ export async function watch(
           failover: true,
         })
       }
+      // The same overflow read from the retry surface (the agent retried the
+      // request that overflowed before compacting): the late step-up applies
+      // here exactly as at the session.error surface above.
+      if (cls === "overflow") await stepLate()
       if (event.id !== undefined && !seen.has(event.id)) {
         seen.add(event.id)
         vlog(`  ↻ request retry (attempt ${event.attempt})`)

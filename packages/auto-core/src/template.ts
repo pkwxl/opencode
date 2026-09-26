@@ -39,6 +39,7 @@ import tplPhaseAppend from "../templates/prompts/phase-append.md" with { type: "
 import tplPhaseHandover from "../templates/prompts/phase-handover.md" with { type: "file" }
 import tplPhasePlan from "../templates/prompts/phase-plan.md" with { type: "file" }
 import tplPriorKnowledge from "../templates/prompts/prior-knowledge.md" with { type: "file" }
+import tplStepUp from "../templates/prompts/step-up.md" with { type: "file" }
 import tplStuckHint from "../templates/prompts/stuck-hint.md" with { type: "file" }
 import tplSubtask from "../templates/prompts/subtask.md" with { type: "file" }
 import tplTestContinue from "../templates/prompts/test-continue.md" with { type: "file" }
@@ -76,6 +77,7 @@ const embedded: Record<string, string> = {
   "phase-handover": tplPhaseHandover,
   "phase-plan": tplPhasePlan,
   "prior-knowledge": tplPriorKnowledge,
+  "step-up": tplStepUp,
   "stuck-hint": tplStuckHint,
   subtask: tplSubtask,
   "test-continue": tplTestContinue,

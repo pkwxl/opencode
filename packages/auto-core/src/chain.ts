@@ -31,6 +31,13 @@ export type Watch = {
   // The in-turn handover hint went out in this session (plans/0040 D6; set
   // only when true). The post-session check reads it next to the final figure.
   hinted?: boolean
+  // Context steps (plans/0055 §4.5): the session stepped up in place during
+  // this watch — at the step-up point (the steer) or after the agent
+  // compacted first (the late step-up). Carries the step index the session
+  // reached and the model id it now runs on; attempt writes both onto the
+  // chain, so the session's next prompt and every later steer name the id.
+  // Set only under a registry, only when a step-up happened.
+  steppedUp?: { step: number; model: string }
   // plans/0015-session-error-retry-plan.md: 会话错误是否值得重试(仅 ApiError 携带
   // isRetryable;字段不存在或非 false 一律按可重试处理,保守缺省;多个
   // session.error 事件叠加取悲观口径,只要出现过一次 false 即不可重试)。

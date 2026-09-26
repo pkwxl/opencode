@@ -22,6 +22,7 @@ import type { Interactive } from "../src/interactive"
 import type { ModelEntry, ModelRegistry, TierList } from "../src/models"
 import type { Opts } from "../src/opts"
 import { isModelDown, resetFailback, clearDownMarks } from "../src/failback"
+import { resetSteps } from "../src/model-step"
 import { parseWindow } from "../src/model-window"
 import type { RoutingFacts } from "../src/routing"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
@@ -629,6 +630,262 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
     expect(chain.modelEntry).toBe("w")
     expect(now).toBe(Date.parse("2026-09-25T18:00:00Z"))
+  })
+})
+
+// Context steps (plans/0055 §4.5): an entry with `wider` steps a session up
+// in place — the same session continues on the next id once its context
+// reaches the step-up point, every steer names the id the session runs on,
+// and the step lives with the session (a new one starts at the base).
+describe("context steps (plans/0055 §4.5)", () => {
+  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+  const facts = (models: ModelEntry[]): RoutingFacts => ({
+    registry: {
+      layers: [{ name: "operator", path: "/unused/models.json" }],
+      tz: "UTC",
+      agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+      models: new Map(models.map((item) => [item.name, item])),
+      tiers: { deep: tierList("deep", ["k3"]), simple: tierList("simple", ["k3"]) },
+      routes: new Map(),
+      unused: [],
+    },
+    agentFilter: "opencode",
+    filterSource: undefined,
+    defaultAgent: "opencode",
+  })
+  const BASE = "prov/k3-256k"
+  const WIDE = "prov/k3"
+  // Base window 100k → step-up point 52k; the wider window 200k.
+  const LIMITS = { [BASE]: 100_000, [WIDE]: 200_000 }
+  const stepsOpts = (over: Partial<Opts> = {}): Opts => ({ routing: facts([entry("k3", { model: BASE, wider: [WIDE] })]), ...over })
+  const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
+  const steerInputs = (agent: FakeAgent) => agent.argsOf("promptAsync").map((args) => args[0] as { session: string; text: string; model?: string })
+
+  beforeEach(() => {
+    resetFailback()
+    resetSteps()
+  })
+
+  test("the steer at the step-up point names the next id and the chain records the reached step", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      let steered = 0
+      const agent = make({
+        limits: LIMITS,
+        turn: (ctx) => (ctx.n === 1 ? [ev.message(ctx.session, "m1", 60_000)] : undefined),
+        steer: (ctx) => {
+          steered++
+          return steered === 1 ? [ev.message(ctx.session, "m2", 61_000, { model: WIDE }), ev.idle(ctx.session)] : [ev.idle(ctx.session)]
+        },
+      })
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
+      expect(result.type).toBe("idle")
+      const steers = steerInputs(agent)
+      expect(steers).toHaveLength(1)
+      // The steer names the next id and carries the one-line note.
+      expect(steers[0]).toMatchObject({ session: "ses_1", model: WIDE })
+      expect(steers[0]!.text).toContain(WIDE)
+      expect(steers[0]!.text).toContain(BASE)
+      expect(lines.some((line) => line === `⇡ T-001 context 60.0k reached the step-up point of k3 (${BASE}); continuing the same session on ${WIDE}`)).toBe(true)
+      expect(chain.modelEntry).toBe("k3")
+      expect(chain.modelStep).toBe(1)
+      expect(chain.model).toBe(WIDE)
+    } finally {
+      printed.mockRestore()
+    }
+  })
+
+  test("a later steer in the same session keeps the reached step (the handover hint names it)", async () => {
+    let steered = 0
+    const agent = make({
+      limits: LIMITS,
+      turn: (ctx) => (ctx.n === 1 ? [ev.message(ctx.session, "m1", 60_000)] : undefined),
+      steer: (ctx) => {
+        steered++
+        return steered === 1 ? [ev.message(ctx.session, "m2", 75_000, { model: WIDE })] : [ev.idle(ctx.session)]
+      },
+    })
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", stepsOpts(), chain, { limit: 70_000, text: "hand over" }, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    const steers = steerInputs(agent)
+    expect(steers).toHaveLength(2)
+    expect(steers[0]).toMatchObject({ model: WIDE })
+    expect(steers[1]).toMatchObject({ model: WIDE, text: "hand over" })
+    expect(chain.modelStep).toBe(1)
+  })
+
+  test("a continuation of the same session keeps its step; a new session starts at the base", async () => {
+    let steered = 0
+    const agent = make({
+      limits: LIMITS,
+      turn: (ctx) => (ctx.n === 1 ? [ev.message(ctx.session, "m1", 60_000)] : undefined),
+      steer: (ctx) => {
+        steered++
+        return steered === 1 ? [ev.message(ctx.session, "m2", 61_000, { model: WIDE }), ev.idle(ctx.session)] : [ev.idle(ctx.session)]
+      },
+    })
+    const reuse = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
+    const chain = deepChain()
+    await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
+    expect(agent.prompts[0]).toMatchObject({ model: BASE })
+    // The chain's next prompt into the same session names the step it
+    // reached (a large cap keeps the session under the reuse thresholds).
+    await runSession(agent.client, task, "q", stepsOpts({ contextLimit: 200_000 }), chain, undefined, undefined, reuse)
+    expect(agent.prompts[1]).toMatchObject({ session: "ses_1", model: WIDE })
+    // The next task's chain is a new prompt: a new session at the base step.
+    const next = deepChain()
+    await runSession(agent.client, task, "r", stepsOpts(), next, undefined, undefined, DEFAULTS)
+    expect(agent.prompts[2]).toMatchObject({ model: BASE })
+    expect(agent.prompts[2]!.session).not.toBe("ses_1")
+    expect(next.modelStep).toBe(0)
+  })
+
+  test("a compaction before the steer lands is logged as late; the next prompt names the next step", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      const agent = make({
+        limits: LIMITS,
+        errorPatterns: { overflow: /ContextOverflowError/i },
+        // The turn overflows mid-flight (no completed message crossed the
+        // step-up point first), the agent compacts and the session finishes
+        // the turn on the shrunk context — the driver sees the overflow
+        // error and the post-compaction measurement.
+        turn: (ctx) =>
+          ctx.n === 1
+            ? [
+                ev.error(ctx.session, { name: "ContextOverflowError", message: "context length exceeded, compacting" }),
+                ev.message(ctx.session, "m1", 30_000),
+                ev.idle(ctx.session),
+              ]
+            : undefined,
+      })
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
+      expect(result.type).toBe("idle")
+      // No step-up steer went out; the overflow was absorbed as a late
+      // step-up, and the retry ladder's fork of the compacted session
+      // dispatches on the next step's id.
+      expect(agent.argsOf("promptAsync")).toEqual([])
+      expect(lines.some((line) => line.includes("step-up late") && line.includes(WIDE))).toBe(true)
+      expect(agent.prompts.map((p) => p.model)).toEqual([BASE, WIDE])
+      expect(chain.modelStep).toBe(1)
+    } finally {
+      printed.mockRestore()
+    }
+  })
+
+  test("the cache-claim warning: a whole-prefix cacheWrite on the wider id contradicts the shared cache", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      let steered = 0
+      const agent = make({
+        limits: LIMITS,
+        turn: (ctx) => (ctx.n === 1 ? [ev.message(ctx.session, "m1", 60_000)] : undefined),
+        steer: (ctx) => {
+          steered++
+          return steered === 1
+            ? [
+                {
+                  type: "part" as const,
+                  session: ctx.session,
+                  part: {
+                    kind: "step-finish" as const,
+                    id: "claim",
+                    reason: "stop",
+                    tokens: { input: 1000, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 55_000 },
+                    cost: 0,
+                  },
+                },
+                ev.message(ctx.session, "m2", 61_000, { model: WIDE }),
+                ev.idle(ctx.session),
+              ]
+            : [ev.idle(ctx.session)]
+        },
+      })
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
+      expect(result.type).toBe("idle")
+      expect(lines.some((line) => line.includes("k3") && line.includes("does not share the base id's prompt cache"))).toBe(true)
+    } finally {
+      printed.mockRestore()
+    }
+  })
+
+  test("an unknown step window disables the steps above it (no steer, base id kept)", async () => {
+    const agent = make({
+      limits: { [BASE]: 100_000 },
+      turn: (ctx) => (ctx.n === 1 ? [ev.message(ctx.session, "m1", 60_000), ev.idle(ctx.session)] : undefined),
+    })
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    expect(agent.argsOf("promptAsync")).toEqual([])
+    expect(agent.prompts[0]).toMatchObject({ model: BASE })
+    expect(chain.modelStep).toBe(0)
+  })
+
+  test("without the steer capability the step lands on the next prompt into the session", async () => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      const agent = make({
+        capabilities: { steer: false },
+        limits: LIMITS,
+        // The turn crosses the step-up point and then fails transiently: the
+        // step-up steer cannot go out (no steer capability), so the step
+        // lands on the next prompt into this session — the retry ladder's
+        // fork of it, the one continuation a stepped-up session can take
+        // (reuse thresholds refuse a session this full).
+        turn: (ctx) =>
+          ctx.n === 1
+            ? [ev.message(ctx.session, "m1", 60_000, { model: BASE }), ev.error(ctx.session, { message: "upstream hiccup" }), ev.idle(ctx.session)]
+            : undefined,
+      })
+      const chain = deepChain()
+      const result = await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
+      expect(result.type).toBe("idle")
+      expect(agent.argsOf("promptAsync")).toEqual([])
+      expect(lines.some((line) => line.includes("the agent takes no mid-turn steers") && line.includes(WIDE))).toBe(true)
+      expect(chain.modelStep).toBe(1)
+      expect(agent.prompts.map((p) => p.model)).toEqual([BASE, WIDE])
+    } finally {
+      printed.mockRestore()
+    }
+  })
+
+  test("on resume the step is recomputed from the context size in the session's history", async () => {
+    const agent = make({
+      limits: LIMITS,
+      history: { ses_old: [{ id: "m0", role: "assistant", completed: true, model: WIDE, contextUsed: 61_000, failed: false }] },
+    })
+    // The recovery takeover shape: the session id with the resume note, and
+    // the context size rebuilt from the history (the runner's usage figure).
+    const chain: SessionChain = { ...deepChain(), id: "ses_old", used: 61_000, note: "[DRIVER] resume note" }
+    await runSession(agent.client, task, "p", stepsOpts(), chain, undefined, undefined, DEFAULTS)
+    expect(agent.prompts[0]).toMatchObject({ session: "ses_old", model: WIDE })
+    expect(chain.modelStep).toBe(1)
+  })
+
+  test("no registry: steers stay exactly as today (no model key)", async () => {
+    const agent = make()
+    const chain = fresh()
+    await runSession(agent.client, task, "p", opts, chain, { limit: 500, text: "hand over" }, undefined, DEFAULTS)
+    expect(agent.argsOf("promptAsync")).toEqual([[{ session: "ses_1", text: "hand over" }]])
+    expect(chain.modelStep).toBeUndefined()
   })
 })
 

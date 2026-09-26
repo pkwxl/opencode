@@ -16,6 +16,7 @@ import {
   renderHandoffSteer,
   renderKnowledge,
   renderPriorKnowledge,
+  renderStepUp,
   renderSubtask,
   renderTestContinue,
   renderTestResult,
@@ -361,6 +362,7 @@ describe("模板渲染完整性", () => {
       renderDryrun(),
       renderDecompose(plan, solo),
       renderHandoffSteer(solo),
+      renderStepUp({ from: "prov/model-256k", next: "prov/model" }),
     ]
     for (const text of texts) expect(text).not.toMatch(/\{\{|\}\}/)
   })
@@ -371,5 +373,20 @@ describe("模板渲染完整性", () => {
         expect(renderText(raw, { testByDriver })).not.toMatch(/\{\{|\}\}/)
       }
     }
+  })
+})
+
+describe("step-up 模板(plans/0055 §4.5)", () => {
+  test("one-line note names both step ids, renders with no leftover tags, and the file ends with the terminator", async () => {
+    const text = renderStepUp({ from: "moonshotai/kimi-k3-256k", next: "moonshotai/kimi-k3" })
+    expect(text).toContain("moonshotai/kimi-k3-256k")
+    expect(text).toContain("moonshotai/kimi-k3")
+    expect(text).not.toMatch(/\{\{|\}\}/)
+    // The note is one line: the session needs to know only that nothing else
+    // changed, and nothing in it is a driver-parsed protocol marker.
+    expect(text.split("\n")).toHaveLength(1)
+    const raw = await Bun.file(join(import.meta.dir, "..", "templates", "prompts", "step-up.md")).text()
+    expect(raw.trimEnd().endsWith("<!-- auto: eof -->")).toBe(true)
+    expect(renderTemplate("step-up", { from: "a/b", next: "a/c" })).not.toContain("<!-- auto: eof -->")
   })
 })

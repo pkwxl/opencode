@@ -139,6 +139,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // The models command's data (plans/0055 §9): checkModels, describeModels
   // and formatModels; starts no agent and writes nothing.
   "models-describe": "driver",
+  // Context steps of a model registry entry (plans/0055 §4.5): the step-up
+  // point, the step walk over the live windows and the startup validation
+  // lines, pure over the limits; the cache-claim check's run state. Watch
+  // (the live half), attempt and the loop build on it.
+  "model-step": "driver",
   numbering: "driver",
   opts: "driver",
   // plan's prelude and stop lines (plans/0053 D4–D8); never imports the loop.
