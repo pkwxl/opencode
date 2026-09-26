@@ -4,7 +4,7 @@ Package-level notes for coding agents, kept lean: the core-mechanism documentati
 
 ## Overview
 
-`@opencode-ai/auto` is the general CLI shell (bin `opencode-auto`): the init/amend/plan/close/run/fix/reset/check/status subcommands and argument parsing are concentrated in `src/index.ts` (the `continue` subcommand is retired — its notice names `plan`), and all mechanisms are implemented in the core library `@opencode-ai/auto-core` (workspace dependency, subpath imports, driving opencode through its v2 SDK interface for per-task automated execution). Comments and user-facing messages are written in English, using the terms in [../auto-core/docs/glossary.md](../auto-core/docs/glossary.md).
+`@opencode-ai/auto` is the general CLI shell (bin `opencode-auto`): the init/amend/plan/close/run/fix/reset/check/status/models subcommands and argument parsing are concentrated in `src/index.ts` (the `continue` subcommand is retired — its notice names `plan`; `models` prints the model registry's effective table from the core's `describeModels`/`checkModels`/`probeModels`, see the README's registry section), and all mechanisms are implemented in the core library `@opencode-ai/auto-core` (workspace dependency, subpath imports, driving opencode through its v2 SDK interface for per-task automated execution). Comments and user-facing messages are written in English, using the terms in [../auto-core/docs/glossary.md](../auto-core/docs/glossary.md).
 
 ## Commands (run inside this package directory)
 

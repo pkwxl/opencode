@@ -521,6 +521,193 @@ opencode 把它作为会话 agent;claude 把其正文追加到系统提示词、
 `run` 启动时发现不一致会给出刷新提示;文件缺失时 run 前完整性检查拦截——二者都指向
 `opencode-auto fix <dir>`(按现有配置重写契约,不动任何键)。
 
+## 模型注册表与分层路由(model registry)
+
+哪些模型存在、每个由哪个 agent 跑、用什么钥匙付费、什么时段便宜,是**操作者**的知识而非
+项目内容:它住在目标目录之外的**模型注册表**(model registry,auto-core plans/0055)里,
+由两层合并而成:
+
+- **操作者层**(operator layer):`$OPENCODE_AUTO_MODELS` 指定的文件;未设时为
+  `$XDG_CONFIG_HOME/opencode-auto/models.json`(`XDG_CONFIG_HOME` 缺省 `~/.config`,
+  相对值被忽略)。指向的文件不存在即视为没有操作者层(不回落 XDG 路径)。
+- **项目层**(project layer):`.opencode/auto/models.json`(可选)。它属于操作这台检出
+  的人,不随仓库走,故为**本地私有文件**:`init` 把 `/.opencode/auto/models.json` 写进
+  `.gitignore`(更早初始化的项目由 `fix` 补上该条目),`reset` 只移除条目、从不删文件
+  本身,`run` 期间与其他配置一起置为只读;git 未忽略(或已跟踪)的项目层在 `run` /
+  `plan` 启动时拒绝(退出码 1,报文指向 `fix`)。
+
+两层都不存在即**无注册表**:一切行为与以往逐字节一致,环境开关语义不变。合并只做一级:
+项目层的 `agents` / `models` / `tiers` / `routes` 每个键**整体替换**操作者层的同名条目
+(`null` 值删除操作者层的该条目),`tz` / `classifier` 整体替换,条目内部从不合并。
+装载**严格**:坏 JSON、未知字段(顶层与条目内都不容忍——拼错的 `aviod` 会把模型悄悄放回
+高峰时段)、坏窗口、坏引用,均在启动时以退出码 1 逐条报出(每条点名层与文件)。注册表只在
+run 启动时读一次,编辑在下次运行生效;driver 只读、从不写这两层。
+
+### 注册表格式
+
+JSON。**内部名**(internal name,`^[a-z][a-z0-9.-]*$`)是模型的注册表键:不含 `/`,
+因此绝不会与裸 `provider/model` 串混淆。示例为示意(名字与窗口都不是任何 provider 的真实
+价目表):
+
+```json
+{
+  "tz": "Asia/Shanghai",
+  "agents": {
+    "opencode": { "adapter": "opencode", "env": { "HTTPS_PROXY": null } },
+    "claude":   { "adapter": "claude", "env": { "HTTPS_PROXY": "http://127.0.0.1:7890" } },
+    "claude-b": { "adapter": "claude",
+                  "env": { "CLAUDE_CONFIG_DIR": "~/.claude-b", "HTTPS_PROXY": "{env:CLAUDE_B_PROXY}" } }
+  },
+  "models": {
+    "opus":   { "agent": "claude",   "model": "opus", "avoid": ["mon-fri 09:00-18:00"] },
+    "k3":     { "agent": "opencode", "model": "moonshotai/kimi-k3-256k", "wider": ["moonshotai/kimi-k3"],
+                "keys": ["{env:MOONSHOT_KEY_A}", "{env:MOONSHOT_KEY_B}"] },
+    "glm":    { "agent": "opencode", "model": "zhipuai/glm-4.6", "only": ["00:00-08:00", "sat-sun 00:00-24:00"],
+                "keys": ["{env:ZHIPU_KEY_A}", "{env:ZHIPU_KEY_B}", "{file:~/.secrets/zhipu-c}"] },
+    "free":   { "agent": "opencode", "model": "opencode/some-free-model" }
+  },
+  "tiers": { "deep": ["opus", "k3"], "simple": ["glm", "free"] },
+  "routes": { "acceptance": "deep", "phase-handover": ["free"] },
+  "classifier": ["free"]
+}
+```
+
+**agent 画像**(agent profile,`agents.<name>`):`adapter` 必填(`opencode` / `claude`,
+或外壳经 `registerAgentAdapter` 注册的名字);`bin` 可选(可执行文件,缺省用 adapter 自带
+的 `opencode` / `claude`);`env` 可选(见下节);`server` 可选(仅 opencode:外部 server
+地址,`--server` 仍按次覆盖)。没有 `agents` 节即隐含一个 `opencode` 画像。多个画像共用
+一个 adapter 即可做**账号容错**:两个 claude 画像只差 `CLAUDE_CONFIG_DIR`,各自在 driver
+之外登录,档位里两个都列,失败切换就是普通的模型降级。
+
+**模型条目**(`models.<内部名>`):`agent` 必填(画像名);`model` 可选——缺省即用该
+agent 自己的缺省模型(提示词不带 model),此时条目不能有 `keys` / `variant` / `wider`,
+于是"只做暂停"的注册表可以表达;`avoid` / `only` 二选一(窗口列表);`keys` 为有序密钥环
+(仅 opencode);`wider` 为上下文步进(仅 opencode);`variant` 透传 opencode 的每提示词
+变体(如推理力度;claude 在装载时拒绝该字段);`context` 可选(以千 tokens 记的上下文窗口,
+供启动前未报告窗口的 agent 使用)。
+
+### 档位(tier)与路由
+
+会话分两档:**deep**(需要深度推理)与 **simple**(报告、蒸馏、提取类)。把模型列进档位
+就是它的分类;同一个模型可以同时出现在两档。程序默认表:阶段规划、m 模式规划扫描、分解为
+deep;收尾、阶段交接、知识/前置知识、编号恢复、旁路一次性会话为 simple;任务会话(整任务、
+子任务)用**阶段类型的执行档**——内置类型中 a 分析 / d 设计 / v 验收为 deep,m 实现 /
+t 测试 / k 知识提炼为 simple,自定义类型读其类型文件的 `Reasoning: deep|simple` 字段
+(缺省 deep,随项目版本化)。**借用**是单向的:simple 会话的 simple 列表没有可用模型时
+续走 deep 列表(可用性优先于成本);deep 会话从不借用 simple——它等待,因为深度正是它
+存在的理由。`routes` 可按操作者覆盖:键是角色词 / 阶段类型 id / 预设字母(优先级同
+`OPENCODE_AUTO_MODEL` 的键语法;`*` 不允许——档位列表本身就是缺省),值是档名或一个
+有序内部名列表。
+
+每次下发在候选列表里取**第一个此刻可用的**条目:过 agent 过滤、在窗口内、未被降级标记、
+其 provider 的密钥环(若有)还有未标记的 key、已知上下文窗口不低于项目上限(带步进的
+条目看顶端一步)。同一提示词的延续(重试、失败后的 fork、等待环的重发、严格恢复)保持链上
+模型不变;新提示词随时回首选——首选窗口重开或标记清除即自动回归,低价时段的回试因此不需要
+额外状态。无可用候选时:有候选只是被窗口拦住 → **等待最早开放时刻**(睡眠在单元内、加
+hibernate 同款 0–600 秒随机抖动、计入 `window` 等待、双击 Ctrl+C 可强退);全部被标记
+降级 → 走既有**等待-探测环**(探测首个窗口内候选,成功即清其标记);过滤后档位一个候选
+都不剩 → 预检错误(退出码 1),绝不静默等待。
+
+会话错误按**key → 模型 → 等待**升级:配额/鉴权/限流类先试密钥环轮换,再降级模型,最后
+等待(auto-core plans/0017 的重试阶梯不变)。
+
+### 窗口(window)与时区
+
+`avoid` 使模型在所列窗口内不可用,`only` 使模型仅在所列窗口内可用。语法
+`[days ]HH:MM-HH:MM`:`days` 为 `mon`..`sun`、区间(`mon-fri`,可跨周如 `fri-mon`)或
+逗号列表(列表项本身可是区间,`mon-wed,fri`),缺省为每天;`24:00` 只允许作终点;跨午夜
+的窗口(`22:00-06:00`)属于它开始的那天。全文件一个 `tz`(IANA 时区,缺省 `UTC`),
+按当地钟面解释、含夏令时规则(不存在的时间开在跳变处,重复的时间取第一次)。窗口只拦
+**下发**,不打断进行中的回合;正在跑的回合跑完,下一次下发重新选择。机器时钟即准,系统
+休眠后睡眠自然迟到(同 hibernate)。
+
+### 密钥环(key ring)
+
+一个 opencode provider 的多把 API key 构成一**环**:声明在模型条目上、作用于整个
+provider——同一 provider 的所有条目必须声明同一环(或都不声明),两套不同的环是装载错误。
+key **只接受引用**:`{env:NAME}` 或 `{file:path}`(相对路径相对所在层文件解析);字面量
+密钥在装载时拒绝。driver 从不把 key 的值读进任何字符串:引用经 spawn config
+(`OPENCODE_CONFIG_CONTENT`)交给托管的 opencode server,在 server 自己的进程内替换;
+日志与输出只报引用名(`key 2/3 ZHIPU_KEY_B`)。**轮换即重启托管 server**:下一把 key 写进
+spawn config、server 重启(会话跨重启保留),失败会话 fork 后以**同一模型**重发。环位只进
+不退——清除的 key 标记不回卷环位,只有当前 key 失败才推进,避免重启抖动;探测环的成功
+同样只清标记。外部 server(`--server`、画像 `server`)无法重启,环在其下不活跃(启动日志
+说明)。**目前尚无 provider 被列为已验证支持密钥环**:通用 provider 路径(config apiKey
+优先于环境与 `auth.json`、`{env:}`/`{file:}` 在 server 进程内替换、setConfig+restart
+重发)已经源码与实机机制验证,但 bedrock、cloudflare、cloudflare-ai-gateway、gitlab 与
+网关(env 先于 config)这类自定义装载路径须各自通过双钥冒烟(`OPENCODE_AUTO_E2E_KEYS`,
+见 `packages/auto` 的 e2e 说明)后方可列入。
+
+### 上下文步进(context step)
+
+同一模型按数个 id 发售、共享提示缓存、只差上下文窗口与价格时(如 kimi `k3-256k` 与
+`k3`),写**一个条目**:`model` 为基础档,`wider` 列出逐级更大的 id。条目是路由的单位:
+档位、路由、窗口、密钥环、降级标记都作用于整条;项目上限的钳制看顶端一步。装载校验每一步
+都在同一 provider 上且窗口严格递增(server 起来后核对,未知窗口则自该步起禁用并告警)。
+会话上下文到达当前一步的**步进点**(窗口 − max(48k, 窗口/5))时,driver 向**同一会话**
+发一条带下一 id 的插话——会话、历史与缓存前缀都不动,无 fork 无交接;插话一律点名当前
+id,防止 server 把后续回合落回基础档。会话内只升不降;新会话(新提示词、交接后、降级到
+本条目)从基础档起;恢复时按历史上下文量重算,不落盘。步进插话成功后的第一个
+step-finish 核对缓存主张
+(`cacheRead` 大 → 共享成立;整前缀 `cacheWrite` → 矛盾,每条目告警一次)。提前步进只是
+多花差价;迟了则 server 照常压缩,日志记 `step-up late`。
+
+### 画像 env:代理与多账号
+
+画像 `env` 叠加在 driver 环境之上、只作用于该画像的进程:值为字面量(`~` 展开)、
+`{env:NAME}` / `{file:path}` 引用(driver 在该画像的 host 启动前解析,host 重启沿用同一次
+解析)或 `null`(移除继承的变量,把全局代理挡在必须直连的 agent 之外)。用途:`HTTPS_PROXY` 等
+把该 agent 的流量走代理(`NO_PROXY` 缺省不含回环,driver 自身连托管 server 的回环流量
+会被代理截走——预检在 `HTTP_PROXY` 已设而 `NO_PROXY` 不含 `127.0.0.1,localhost` 时
+告警);`CLAUDE_CONFIG_DIR` 把两个外部登录的账号变成两个画像。**一个 opencode server
+一个环境**:同一 server 上所有 provider 共享它的 env,部分 provider 需要代理时用
+`NO_PROXY` 列直连主机,或声明两个 opencode 画像(各起一个托管 server、各持各的密钥环;
+会话不跨画像)。外部 server 保持它启动时的 env,画像 `env` 对它无效。日志与
+`models` 输出只报变量名,从不报值。
+
+### 失败信息分类器(classifier)
+
+provider 的失败话术各异(其他语言、套餐限额、"resets at 15:00"),错误模式串认不出时,
+注册表 `classifier` 列出的模型(通常是免费模型)来读:仅在模式串不能定论时询问(unknown
+类、或未到阈值的限流信号;绝不问 overflow / 已定的 quota / auth),一次失败回合只问一次,
+30 秒超时或失败即当无答复、模式串结论照旧。答复是一行 JSON(`class` + 可选 `resetAt`),
+**只升不降**:unknown 取答复的类(quota / rate / auth / transient,rate 也须待模式串自身
+的阈值成立),未到阈值的限流信号只可升为 quota,从不下调模式串已定的类。quota / auth
+答复像模式串一样立刻收束回合(中止后走
+key → 模型 → 等待);`resetAt`(带时区偏移、未来 7 天内)设定降级标记的解除时刻。
+每 run 至多 20 次、按脱敏文本缓存(同文只花一次)。它只送**脱敏后的错误文本**(≤2000 字符,
+密钥样 token / 邮箱 / URL 查询串已去除),在 adapter 缺省 agent 上开一次性会话、**全部
+工具禁用**——免费档可能留存它收到的内容,故输入面收得这么窄。分类器自身的失败由模式串
+归类,只标记分类器条目自身。其 token 计入 `classify` 桶,不进单元会话合计。
+
+### 多 agent 池与运行行为
+
+有注册表时,driver 为**每个被选中的画像惰性启动一个 host**(没人选的画像永不拉起;每个
+opencode 画像一个托管 server,画像的 `bin` / `env` / 密钥环 spawn config 都作用于自己的
+进程——driver 亲自 spawn `opencode serve`,不再经 SDK)。会话**从不跨画像**:跨 agent 的
+移动 = 新会话 + 工作区核对说明;会话链与持久记录(进度记录、fork 基点、交接锚点)都带
+agent,旧记录无该字段即归缺省 agent。启动时按过滤后档位/路由列表涉及的 adapter 做**能力交集
+降级**(逐条注明是哪个 agent 缺的;分类器列表不扩大交集);预检对每个被引用的画像跑
+`<bin> --version`(10 秒)。
+运行启动打印**路由块**(每档列表与各模型的 agent、窗口现状、环位;生效路由;过滤),每次
+下发打 `◈` 行并注明移动原因(`window` / `quota` / `key ring` / `failback`,分类器来源
+标注如 `quota (classifier)`),等待打 `⏸` 行、步进打 `⇡` 行。统计按内部模型名与档位记账
+(裸覆盖值按原串),轮完成结论逐模型一行(仅本轮)加档位小结;无模型数据时持久化形状与
+结论逐字节不变。
+
+### 环境变量与命令在有无注册表下的行为
+
+| 面 | 无注册表 | 有注册表 |
+| --- | --- | --- |
+| `OPENCODE_AUTO_MODEL` | 不变 | 键语法相同;值为**内部名**,或跑在缺省 agent 上的裸 `provider/model`(无窗口、无环、无步进)。覆盖匹配会话的候选列表,仅本次运行 |
+| `OPENCODE_AUTO_MODEL_FALLBACK` | 不变 | **用法错误**(退出码 1):档位列表就是降级序 |
+| `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` | 不变 | 清除降级标记(模型与 key 两类) |
+| `/failback [a b …]` | 不变 | 参数为内部名;整体替换此后所有列表(同覆盖语义) |
+| `OPENCODE_AUTO_AGENT`、外壳画像 `agent` | 选择运行唯一的 agent | **过滤**:仅该 adapter 上的模型是候选。配置 `agent`(init `--agent`)不再是过滤,而是**缺省 agent**——裸 `provider/model` 值与不带 agent 的会话记录归属它;无档位用到它时启动提示 |
+| `--server` / `OPENCODE_AUTO_SERVER` | 不变 | 覆盖 opencode 画像的 `server`;外部 server 下密钥环不活跃,画像 `bin` / `env` 对它无效 |
+
+注册表的生效表见 [模型注册表一览(models)](#模型注册表一览models)。
+
 ## 执行流水线
 
 driver 对每个任务执行流水线,**索引勾选、`todo.md` → `done.md` 改名与 `.auto/units.json` 只由 driver 写入**。执行方式
@@ -917,7 +1104,9 @@ Split by attack surface.
 任务会话(整任务、子任务)所需的推理档,缺省 `deep`,随类型文件版本化;产物路径相对阶段/任务目录);
 `## plan duties` 必填(阶段规划会话的职责段),`## decompose duties` 可选(分解会话
 的职责段)。非法文件按用法错误报出并指明文件。`OPENCODE_AUTO_MODEL` 可按类型 id
-路由模型(`security-review=prov/model`,优先级 角色 > 类型 id > 预置字母 > `*`),
+路由模型(`security-review=prov/model`,优先级 角色 > 类型 id > 预置字母 > `*`;
+有模型注册表时值为内部名,见
+[模型注册表与分层路由](#模型注册表与分层路由model-registry)),
 未知类型键在 run 启动时报用法错误。
 
 - **brief.md**:项目简报 `.opencode/auto/brief.md`(版本化、人工可编辑),由每个

@@ -210,10 +210,24 @@ Unit and outcome states:
 
 | 中文 | English | Code / notes |
 |---|---|---|
-| 模型路由 | model routing | Phase → role → model, `OPENCODE_AUTO_MODEL` |
+| 模型路由 | model routing | Phase → role → model: `OPENCODE_AUTO_MODEL`, or under a model registry tier → candidate list (`src/routing.ts`) |
+| 模型注册表 | model registry | `src/models.ts` (0055): the operator's fleet — models, agent profiles, tiers, routes, key rings |
+| 操作者层 | operator layer | `$OPENCODE_AUTO_MODELS`, else `$XDG_CONFIG_HOME/<configDir>/models.json` |
+| 项目层(注册表) | project layer | `.opencode/auto/models.json`, local-only (gitignored); a registry layer, not the config layer |
+| 内部名 | internal name | A model entry's registry key, `^[a-z][a-z0-9.-]*$`; never reads as `provider/model` |
+| 推理档 | (reasoning) tier | `deep` / `simple`; listing a model in a tier *is* its classification |
+| 执行档 | execute tier | The phase type's reasoning tier for task sessions: the builtin table, or a custom type's `Reasoning:` field |
+| 借用 | borrowing | A simple session continues down the deep list; a deep session never borrows simple (it waits) |
+| 路由覆盖 | route override | The registry's `routes`: key → tier name or list (precedence role > type id > preset letter) |
+| 窗口 | window | An entry's `avoid` / `only` list, `[days ]HH:MM-HH:MM` in the registry `tz`; gates dispatches, never running turns |
+| 密钥环 | key ring | Per provider, references only; rotation = a managed server restart |
+| 降级标记 | down mark | In memory, per model and per provider key; cleared at the failback boundaries, `/failback`, or its `until` |
+| 上下文步进 | context step | An entry's `wider` ids: one model under several windows that share a cache; one entry is one routing unit |
+| 步进点 | step-up point | The context size that steps a session up: window − max(48k, window/5) |
+| 失败信息分类器 | (failure-message) classifier | The registry's `classifier` list; advisory, sees redacted error text only, runs without tools |
 | 配额 | quota | |
 | 降级(配额) | failover | Switch to the next candidate model when quota runs out |
-| 降级环 | failover ring | `src/session.ts` |
+| 降级环 | failover ring | `src/session.ts` (the no-registry `_FALLBACK` path; under a registry the tier lists are the order) |
 | 回试 | failback | Return to the preferred model; `/failback`, `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` |
 | 回落 | fallback | General "use the next option" (capability fallback, ladder exhaustion) |
 | 候选 | candidate | |
@@ -226,9 +240,12 @@ Unit and outcome states:
 | 中文 | English | Code / notes |
 |---|---|---|
 | 编码 agent | coding agent | opencode or claude, driven by the driver |
-| 适配器 | adapter | `src/agent/opencode/`, `src/agent/claude/` |
+| 适配器 | adapter | `src/agent/opencode/`, `src/agent/claude/`; a shell adds more via `registerAgentAdapter` |
+| agent 画像 | agent profile | The registry's `agents.<name>`: adapter, bin, env, server (0055 §4.2) |
+| agent 池 | agent pool | `src/agent-pool.ts`: one lazily started host per agent profile |
+| agent 过滤 | agent filter | The shell profile's agent or `OPENCODE_AUTO_AGENT`, matched by adapter (0055 §6.2 rule 1) |
 | 能力 | capability | `AgentCapabilities` |
-| 能力降级 | capability degradation | `src/capability.ts` |
+| 能力降级 | capability degradation | `src/capability.ts`; under a registry, the intersection over the fleet |
 | 用量来源 | usage source | `src/usage.ts` |
 | 用量档 | usage tier | `events` / `reported` / `estimated` / `none` |
 | 权限预设 | permission preset | `PermissionPreset` |
@@ -328,6 +345,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 | 回退 / 回滚 / 回落 | **revert to pending** (unit status) / **rollback** (git) / **fallback** (next option). |
 | 降级 | **failover** for models under quota; **capability degradation** for missing agent capabilities. |
 | failover / failback / fallback | Away from the preferred model / back to it / any generic next option. |
+| tier | Two kinds: the **usage tier** (`UsageTier`, 0038) and the **reasoning tier** (the registry's deep/simple, 0055; a phase type's is its **execute tier**). English prose names the kind. |
 | wrap-up / close-out | AI session writing the report / driver checks and commit after it. |
 | 关闭 / 轮关闭 / 收口 | **close** a unit (a person's `close`: done without delivering, `Closed:`) / **round close** (the G8 gate before the next round) / **close-out** (the driver's checks and commit after every unit). |
 | artifact / deliverable / process document | Anything a unit produces / what the project ships / driver-facing records the deliverable must not reference. |
