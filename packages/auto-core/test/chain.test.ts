@@ -3,8 +3,13 @@
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { describe, expect, test } from "bun:test"
+import type { Event } from "@opencode-ai/sdk/v2"
+import { CLAUDE_ERROR_PATTERNS } from "../src/agent/claude/client"
+import { claudeStream } from "../src/agent/claude/stream"
 import { OPENCODE_ERROR_PATTERNS, splitModel } from "../src/agent/opencode/client"
-import { classifySessionError, phaseToRole, resolveModel, roleOf } from "../src/chain"
+import { mapEvent } from "../src/agent/opencode/events"
+import type { AgentEvent } from "../src/agent/types"
+import { classifySessionError, type ErrorInfo, phaseToRole, resolveModel, roleOf } from "../src/chain"
 import { parsePhaseTypeFile } from "../src/phases/custom"
 import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -169,5 +174,37 @@ describe("classifySessionError (fixed message samples → class)", () => {
   })
   test("unknown: empty input", () => {
     expect(classifySessionError({})).toBe("unknown")
+  })
+})
+
+// plans/0057 F3, §11 item 2: `next` is the wait in ms on every adapter. Each
+// adapter's own retry signal for the same wait must reach the classifier as
+// the same figure — opencode states an instant, claude a delay — so a lone
+// 429 with a two-second backoff never classes as rate on either one.
+describe("retry wait: one unit across adapters (plans/0057 F3)", () => {
+  const now = Date.parse("2026-09-25T11:44:57Z")
+  const opencodeRetry = (wait: number) =>
+    mapEvent({ id: "e", type: "session.status", properties: { sessionID: "s", status: { type: "retry", attempt: 1, message: "rate limit exceeded", next: now + wait } } } as unknown as Event, now)
+  const claudeRetry = (wait: number) =>
+    claudeStream("s").feed({ type: "system", subtype: "api_retry", attempt: 1, retry_delay_ms: wait, error_status: 429, error: "rate_limit" })[0]
+  const info = (event: AgentEvent | undefined): ErrorInfo => {
+    if (event?.type !== "retry") throw new Error(`not a retry event: ${JSON.stringify(event)}`)
+    return { ...event.error, attempt: event.attempt, next: event.next }
+  }
+
+  test("a two-second backoff: the same next, below the threshold, on both", () => {
+    const opencode = info(opencodeRetry(2000))
+    const claude = info(claudeRetry(2000))
+    expect([opencode.next, claude.next]).toEqual([2000, 2000])
+    expect(classifySessionError(opencode, OPENCODE_ERROR_PATTERNS)).toBe("unknown")
+    expect(classifySessionError(claude, CLAUDE_ERROR_PATTERNS)).toBe("unknown")
+  })
+
+  test("a forty-minute wait: the same next, above the threshold, rate on both", () => {
+    const opencode = info(opencodeRetry(40 * 60_000))
+    const claude = info(claudeRetry(40 * 60_000))
+    expect([opencode.next, claude.next]).toEqual([40 * 60_000, 40 * 60_000])
+    expect(classifySessionError(opencode, OPENCODE_ERROR_PATTERNS)).toBe("rate")
+    expect(classifySessionError(claude, CLAUDE_ERROR_PATTERNS)).toBe("rate")
   })
 })

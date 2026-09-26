@@ -4,7 +4,7 @@
 // and the process manager over a scripted subprocess double — including one
 // session driven end to end through runSession / watch.
 
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +17,7 @@ import { degrade } from "../src/capability"
 import { classifySessionError } from "../src/chain"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
+import { usageSource } from "../src/usage"
 import { task } from "./fixtures/runner"
 
 const SID = "11111111-2222-4333-8444-555555555555"
@@ -52,6 +53,46 @@ const result = (extra: Record<string, unknown> = {}) => ({
   queued_turn_count: 0,
   ...extra,
 })
+
+// plans/0057 §1.1: T-024's session hit its five-hour window mid-turn, on the
+// API call after a tool result. The synthetic message is rebuilt from the
+// transcript; the rate_limit_event carries the transcript's window record (the
+// rejected line itself is not captured yet, S0).
+const LIMIT_TEXT = "You've hit your session limit · resets 12:30pm (UTC)"
+const WINDOW = { rateLimitType: "five_hour", resetsAt: 1790339400, overageStatus: "rejected", overageDisabledReason: "out_of_credits", isUsingOverage: false }
+const rateLimit = (status: string) => ({ type: "rate_limit_event", rate_limit_info: { status, ...WINDOW }, uuid: "u", session_id: SID })
+const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+const syntheticLine = {
+  type: "assistant",
+  message: {
+    id: "3730a296-d489-4816-abbd-409981ab2f3d",
+    model: "<synthetic>",
+    role: "assistant",
+    stop_reason: "stop_sequence",
+    stop_sequence: "",
+    type: "message",
+    usage: zeroUsage,
+    content: [{ type: "text", text: LIMIT_TEXT }],
+  },
+  parent_tool_use_id: null,
+  session_id: SID,
+  error: "rate_limit",
+  is_api_error_message: true,
+  api_error_status: 429,
+}
+// The field session ran on a 1M window.
+const failedResult = result({
+  is_error: true,
+  stop_reason: "stop_sequence",
+  result: LIMIT_TEXT,
+  api_error_status: 429,
+  usage: zeroUsage,
+  total_cost_usd: 4.76,
+  modelUsage: { "claude-haiku-4-5-20251001": { contextWindow: 1_000_000 } },
+})
+// The turn's work before the limit struck: one tool call at 206.2k context.
+const toolCall = assistant("msg_1", { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "bun test" } })
+const workBeforeLimit = [{ ...toolCall, message: { ...toolCall.message, usage: usage(2, 201_000, 5_200) } }, toolResult("toolu_1", "ok")]
 
 describe("claudeStream: stdout lines → AgentEvent", () => {
   test("a turn: step-start, message in progress, text / tool parts, completion on tool result and result", () => {
@@ -144,6 +185,72 @@ describe("claudeStream: stdout lines → AgentEvent", () => {
     )
     // No assistant line: no step to finish, only the error.
     expect(resume).toEqual([{ type: "error", session: SID, error: { name: "error_during_execution", message: "No conversation found with session ID: x" } }])
+  })
+
+  test("a failed result is never named success: the error code, else terminal_reason, else a failing subtype, else error", () => {
+    const name = (extra: Record<string, unknown>) => {
+      const last = claudeStream(SID).feed(result({ is_error: true, result: "boom", total_cost_usd: 0, ...extra })).at(-1)
+      return last?.type === "error" ? last.error.name : undefined
+    }
+    expect(name({ terminal_reason: "api_error" })).toBe("api_error")
+    expect(name({})).toBe("error")
+    expect(name({ subtype: "error_max_turns" })).toBe("error_max_turns")
+    expect(name({ subtype: "error_max_turns", terminal_reason: "max_turns" })).toBe("max_turns")
+  })
+
+  describe("a spent usage window (plans/0057 F7, F19–F21)", () => {
+
+    test("the synthetic message reports no figure and no model; the session keeps the context it earned", () => {
+      const stream = claudeStream(SID, 0)
+      const events = [...workBeforeLimit, rateLimit("rejected"), syntheticLine, failedResult].flatMap((line) => stream.feed(line))
+      const completed = events.flatMap((e) => (e.type === "message" && e.message.completed ? [e.message] : []))
+      expect(completed.at(-1)).toEqual({ id: "3730a296-d489-4816-abbd-409981ab2f3d", role: "assistant", completed: true, failed: true })
+      expect(events.some((e) => e.type === "message" && e.message.model?.includes("<synthetic>"))).toBe(false)
+      const source = usageSource("events")
+      for (const event of events) source.observe(event)
+      expect(source.used()).toBe(206_202)
+    })
+
+    test("a rejected window makes the turn's error non-retryable, which classes as quota", () => {
+      const stream = claudeStream(SID, 0)
+      const events = [...workBeforeLimit, rateLimit("rejected"), syntheticLine, failedResult].flatMap((line) => stream.feed(line))
+      const error = events.at(-1)
+      expect(error).toEqual({ type: "error", session: SID, error: { name: "rate_limit", message: LIMIT_TEXT, statusCode: 429, isRetryable: false } })
+      // watch folds the name into the message it classifies.
+      if (error?.type !== "error") throw new Error("no error event")
+      expect(classifySessionError({ message: `rate_limit ${LIMIT_TEXT}`, statusCode: 429, isRetryable: error.error.isRetryable }, CLAUDE_ERROR_PATTERNS)).toBe("quota")
+      // Without the window line the same wording stays a throttle signal below
+      // the rate threshold: unknown, as before (rate_limit alone cannot tell
+      // a throttle from a spent window, F7).
+      const bare = claudeStream(SID, 0)
+      const plain = [syntheticLine, failedResult].flatMap((line) => bare.feed(line)).at(-1)
+      expect(plain).toEqual({ type: "error", session: SID, error: { name: "rate_limit", message: LIMIT_TEXT, statusCode: 429 } })
+      expect(classifySessionError({ message: `rate_limit ${LIMIT_TEXT}`, statusCode: 429 }, CLAUDE_ERROR_PATTERNS)).toBe("unknown")
+    })
+
+    test("rate_limit_event is state: allowed lines emit nothing, and a later allowed clears a rejection", () => {
+      const stream = claudeStream(SID, 0)
+      // Captured verbatim on 2026-09-26 (claude 2.1.283, F20).
+      const allowed = {
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "allowed",
+          resetsAt: 1790479200,
+          rateLimitType: "five_hour",
+          overageStatus: "rejected",
+          overageDisabledReason: "out_of_credits",
+          isUsingOverage: false,
+          unifiedWindows: { five_hour: { utilization: 0.04, resetsAt: 1790479200 }, seven_day: { utilization: 0.4, resetsAt: 1790805600 } },
+        },
+        uuid: "f84409b0-2e75-437a-9d44-351ef0e24298",
+        session_id: "e90a7346-5fb3-4db4-bc9d-b527a2cf6ae6",
+      }
+      expect(stream.feed(allowed)).toEqual([])
+      expect(stream.feed(rateLimit("rejected"))).toEqual([])
+      expect(stream.feed(allowed)).toEqual([])
+      const error = [syntheticLine, failedResult].flatMap((line) => stream.feed(line)).at(-1)
+      expect(error?.type === "error" && error.error.isRetryable).toBeUndefined()
+    })
   })
 
   test("system lines: api_retry → retry, compaction and denials → notes; replays, subagents, tool errors", () => {
@@ -562,6 +669,63 @@ describe("claudeAgent: process manager", () => {
     // Measured in-turn (events tier): the chain carries the figure and the window.
     expect(chain.used).toBe(20206)
     expect(chain.pct).toBe(10)
+  })
+
+  // The first session's turn ends on the given lines after 206.2k of work;
+  // every later prompt (probe, retry, re-dispatch) is answered normally.
+  const interruptedRun = async (ending: object[]) => {
+    const interrupt = (proc: Fake, text: string) => {
+      queueMicrotask(() => {
+        proc.print({ type: "system", subtype: "init", model: "claude-haiku-4-5" })
+        proc.print({ type: "user", isReplay: true, message: { role: "user", content: [{ type: "text", text }] } })
+        for (const line of [...workBeforeLimit, ...ending]) proc.print(line)
+      })
+    }
+    const { spawn, procs } = spawner((proc, text) => (procs.length === 1 ? interrupt : echo)(proc, text))
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const switches = parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" })
+      const outcome = await runSession(agentWith(spawn), task, "do the task", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, switches)
+      expect(outcome.type).toBe("idle")
+    } finally {
+      printed.mockRestore()
+    }
+    const argOf = (proc: Fake, flag: string) => proc.args[proc.args.indexOf(flag) + 1]
+    return { procs, log: lines.join("\n"), interrupted: argOf(procs[0]!, "--session-id"), argOf }
+  }
+
+  // plans/0057 §1.1 as it ran on 2026-09-25, minus the defects: the limit
+  // strikes mid-turn. No retry ladder of blank stub sessions (F7); the
+  // wait-and-probe loop takes over at once, and after the probe the task
+  // continues on a fork of the interrupted session with its real figure
+  // (F21), where the field run restarted blank.
+  test("a spent window mid-turn: no ladder, and the recovery forks the interrupted session", async () => {
+    const { procs, log, interrupted, argOf } = await interruptedRun([rateLimit("rejected"), syntheticLine, failedResult])
+    // The interrupted session, the probe, the re-dispatch on a fork.
+    expect(procs).toHaveLength(3)
+    expect(procs[2]!.args).toContain("--fork-session")
+    expect(argOf(procs[2]!, "--resume")).toBe(interrupted)
+    expect(log).toContain("non-retryable session error encountered")
+    expect(log).not.toContain("retrying with a new session")
+    expect(log).toContain(`forked copy of the original session ${interrupted} (206.2k tokens)`)
+    expect(log).toContain("context 21% (206.2k/1000.0k tokens)")
+    expect(log).not.toContain("<synthetic>")
+  })
+
+  // Any API error the CLI gave up on arrives as the same synthetic message
+  // (F21 is not limited to quota): a retryable one takes the ladder, whose
+  // first retry forks the failed session with its real figure.
+  test("an API error after real work: the ladder's retry forks the failed session", async () => {
+    const overloaded = { ...syntheticLine, error: "overloaded", api_error_status: 529, message: { ...syntheticLine.message, content: [{ type: "text", text: "API Error: overloaded" }] } }
+    const { procs, log, interrupted, argOf } = await interruptedRun([overloaded, { ...failedResult, result: "API Error: overloaded", api_error_status: 529 }])
+    expect(procs).toHaveLength(2)
+    expect(procs[1]!.args).toContain("--fork-session")
+    expect(argOf(procs[1]!, "--resume")).toBe(interrupted)
+    expect(log).toContain(`retrying from a forked copy of the failed session ${interrupted} (206.2k tokens) (1/5)`)
+    expect(log).not.toContain("<synthetic>")
   })
 })
 

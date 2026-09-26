@@ -1,7 +1,7 @@
 # 0057 — Session exceptions: the agent's retry policy, quota windows and scheduled waits (design)
 
-Status: **design, ruled** (2026-09-26; revised the same day with the field evidence of §1.1, and
-all ten points of §11 ruled as recommended). Source: the user's request of the same day —
+Status: **design, ruled; S1 implemented** (2026-09-26; revised the same day with the field
+evidence of §1.1, all ten points of §11 ruled as recommended, and S1 done as §13 records). Source: the user's request of the same day —
 the session exception flow has deficiencies; the driver should recognize what a coding agent
 reports across agents and models, formulate better wait-and-retry strategies for the rolling
 five-hour and weekly quota limits, know when an agent cures a limit by itself so the driver
@@ -225,7 +225,9 @@ already thrown away the session the recovery was meant to continue (§1 F21).
   context could not be inherited". opencode has a guard for exactly this shape (take the last
   *non-zero* assistant figure, `src/session-api.ts:203-213`), but it reads history, which the
   claude adapter lacks. The same synthetic message also names the model: each stub logged "◈
-  using model claude/`<synthetic>`", which per-model stats would book as a model.
+  using model claude/`<synthetic>`" and made it the chain's shown model. Per-model stats were
+  spared: they book the registry's selected entry (`src/attempt.ts:207`), never the reported
+  model.
 - **F22 — the fixed poll and the ladder are pure delay against a stated reset.** On both
   events the reset instant was in the wording and in `resetsAt` from the first second (§1.1).
   The ladder spent 15 minutes and five 0-token sessions per event. The 30-minute poll resumed
@@ -436,7 +438,9 @@ for this design.
 `isApiErrorMessage`/`is_api_error_message`, or `model: "<synthetic>"`, reports no `contextUsed`
 (undefined, so the previous figure stands) and no model. The session keeps the context figure
 it earned, `attempt` records it as a fork source with its real `used`, and no `<synthetic>`
-model reaches the ◈ line or the per-model stats. This belongs to S1 with the other defects.
+model reaches the ◈ line. Because the message names no model, watch keeps the context window
+already in effect for it; otherwise the session would read 100 %. This belongs to S1 with the
+other defects.
 
 **5.3 Precedence.** A header-stated `resetAt` beats a classifier `resetAt`; both land on the same
 down-mark `until` through the existing path (F11), and `acceptedReset`'s horizon and the
@@ -632,6 +636,61 @@ imports the driver domain.
 - **S1 — the defects.** The `next` unit conversion, the claude terminal `name`,
   `terminal_reason`, the dropped limit lines, and F21's synthetic-message usage and model. Each
   with a mapping test; the log-line changes recorded for the golden check.
+
+  **Done (2026-09-26).**
+  - **F3.** `mapEvent(event, now)` turns opencode's instant into the wait
+    (`src/agent/opencode/events.ts`). `test/chain.test.ts` feeds both adapters' own retry
+    signal for a 2-second and a 40-minute wait, and asserts one `next` and one class for each
+    (§11 item 2). The rate case in `test/watch.test.ts` had fed opencode a duration; it now
+    states the instant, as opencode does.
+  - **The terminal name.** `errorName`, else `terminal_reason`, else the subtype, else
+    `"error"`; `"success"` is never a name. This departs from §5.2's formula in one point: a
+    failing subtype (`error_max_turns`, `error_during_execution`) still names the error when
+    neither of the first two is present. CLIs before `terminal_reason` send only the subtype,
+    and the adapter's existing `error_during_execution` case depends on it.
+  - **The limit lines.** `rate_limit_event` is read as state: the latest status of the
+    process stands until the next event, since the CLI emits one only when the window changes.
+    A failed turn whose latest status is `rejected` carries `isRetryable: false`. That is an
+    existing field, and its meaning ("a fresh session fails the same way", `src/watch.ts`) is
+    exactly F19. The turn classes as `quota`, so it escalates (key, then model), or with no
+    candidate goes straight to the wait-and-probe loop. The ladder is not run. So on claude,
+    §4.1's ladder skip already arrives with S1. S4 still brings it for header-stated windows
+    (opencode), together with the scheduled sleep. The window's fields and the `limit` event
+    stay in S3 with the seventh amendment. A `rejected` event with no `is_error` result still
+    synthesizes no error until S0 has the rejected stream.
+  - **F21.** The synthetic line reports no figure and no model (`src/agent/claude/stream.ts`),
+    and `src/watch.ts` keeps the window in effect for a message that names no model (§5.2a).
+  - **Tests.** `test/agent-claude.test.ts` holds the parser cases: the synthetic line rebuilt
+    from the transcript, the captured `allowed` line verbatim, and the name rule. It also holds
+    two end-to-end cases over the claude process double, each ending the first turn after
+    206.2k of work. In the first, a spent window: no ladder, one probe, and the task continues
+    on a fork of the interrupted session. In the second, an `overloaded` API error: the
+    ladder's first retry forks the failed session with its real figure. §14 placed this F21
+    regression in `test/agent-fake.test.ts`. It went into the claude suite instead, because
+    the defect sits in the claude parser and only the real adapter exercises it. Each new case
+    fails against the code before S1.
+  - **Log lines.** The goldens are unchanged, since none covers these paths. What changes:
+    - On claude, a spent window no longer logs the ladder ("↻ … transient session error;
+      retrying with a new session (n/5)" and "⏳ … waiting n minutes before retrying"). The
+      next line is "⏳ … non-retryable session error encountered (session error: You've hit
+      your session limit · resets …); waiting 30 minutes, then probing …". With a registry
+      or a fallback ring, it is the "quota restricted" failover instead.
+    - The interrupted session's "◉ session ended: context 100% (0 tokens)" now shows its real
+      figure, for example "context 21% (206.2k/1000.0k tokens)". A session that made only the
+      rejected call, such as a probe, still reads 0 tokens, which is its true figure.
+    - "◈ … using model claude/`<synthetic>` (server resolved)" is gone; such a session prints
+      no ◈ line.
+    - After recovery, the log reads "↻ … re-dispatching the task from a forked copy of the
+      original session `<id>` (206.2k tokens)". It says "original" because the non-retryable
+      path promotes the failed session to the chain's session.
+    - On opencode, a 429 with a short backoff no longer settles the turn as `rate` on its
+      first retry signal. opencode keeps retrying, and no "rate-limit wait too long" failover
+      follows.
+  - **Timing against §1.1, S1 without S4.** The fixed 30-minute poll now starts at the failure
+    itself. T-024 would have probed at 12:14:57, still limited, and resumed at about 12:45,
+    15 minutes after the reset; the field run resumed 14 s after it, by chance. T-026 would
+    have resumed at about 17:39, 9 minutes after the reset, against 25 minutes in the field.
+    Both events lose their five stub sessions. The timing gain belongs to S4.
 - **S2 — the policy record.** `AgentRetryPolicy` on both adapters with the registry's per-entry
   override, `agentGaveUp` in `src/chain.ts`, the silence budget in the watchdog. Closes U3.
 - **S3 — the structured signal.** The four `AgentError` fields, the header table, claude's

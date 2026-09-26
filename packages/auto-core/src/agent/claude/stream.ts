@@ -16,10 +16,20 @@
 // |                                               |   (completed / error)                |
 // | system api_retry                              | retry                                |
 // | system compact_boundary / permission_denied   | part note                            |
+// | rate_limit_event                              | none: its status is kept for the     |
+// |                                               |   turn's error (rejected = not       |
+// |                                               |   retryable)                         |
 // | result                                        | message completed + step-finish      |
 // |                                               |   (+ error when is_error)            |
 // | anything with parent_tool_use_id (subagents), | dropped                              |
-// |   replayed user lines, init, rate limits, ... |                                      |
+// |   replayed user lines, init, ...              |                                      |
+//
+// An API error arrives as a synthetic assistant message (model "<synthetic>",
+// all-zero usage, `is_api_error_message`): it measured nothing and ran on no
+// model, so its message event carries neither figure nor model and the
+// session keeps the context it earned (plans/0057 F21). The turn's error is
+// named by the message's `error` code, else the result's `terminal_reason`,
+// else its subtype — never "success", which contradicts `is_error` (F7).
 //
 // Billing: the stream repeats a message's usage on every content-block line
 // with its output count still growing, so per-message figures cannot be
@@ -38,9 +48,12 @@ import type { AgentError, AgentEvent, AgentMessage, AgentPart, AgentTokens } fro
 // adapter strips whatever prefix it gets and reports its own.
 export const MODEL_PREFIX = "claude/"
 
+// The model name the CLI gives the assistant message that wraps an API error.
+const SYNTHETIC_MODEL = "<synthetic>"
+
 type Line = Record<string, any>
 
-type Current = { id: string; model: string; used: number | undefined; blocks: number; failed: boolean }
+type Current = { id: string; model: string | undefined; used: number | undefined; blocks: number; failed: boolean }
 
 export type ClaudeStream = {
   feed(line: Line): AgentEvent[]
@@ -58,13 +71,19 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
   // Error code of an API error message (assistant `error`), folded into the
   // turn's error event as its name.
   let errorName: string | undefined
+  // The provider's usage window as the CLI last reported it
+  // (rate_limit_event, "emitted when rate limit info changes"): state, not a
+  // per-turn signal, so it stands until the next event. Rejected means the
+  // account's window is spent — a fresh session fails the same way until it
+  // resets (plans/0057 F19, F20), so the turn's error is not retryable.
+  let windowRejected = false
 
   const message = (c: Current, completed: boolean): AgentEvent => {
     const info: AgentMessage = {
       id: c.id,
       role: "assistant",
       completed,
-      model: `${MODEL_PREFIX}${c.model}`,
+      ...(c.model !== undefined ? { model: `${MODEL_PREFIX}${c.model}` } : {}),
       ...(c.used !== undefined ? { contextUsed: c.used } : {}),
       failed: c.failed,
     }
@@ -90,9 +109,10 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
             out.push(part({ kind: "step-start", id: `${session}:turn:${turn}` }))
           }
           if (line.error) errorName = String(line.error)
-          current ??= { id: String(m.id), model: String(m.model ?? ""), used: undefined, blocks: 0, failed: false }
-          current.used = contextUsed(m.usage) ?? current.used
-          current.failed ||= line.is_api_error_message === true || line.error !== undefined
+          const synthetic = line.is_api_error_message === true || m.model === SYNTHETIC_MODEL
+          current ??= { id: String(m.id), model: synthetic ? undefined : String(m.model ?? ""), used: undefined, blocks: 0, failed: false }
+          if (!synthetic) current.used = contextUsed(m.usage) ?? current.used
+          current.failed ||= synthetic || line.error !== undefined
           out.push(message(current, false))
           for (const block of Array.isArray(m.content) ? m.content : []) {
             const id = `${current.id}:${current.blocks++}`
@@ -143,6 +163,11 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
           }
           return out
         }
+        case "rate_limit_event": {
+          const status = line.rate_limit_info?.status
+          if (typeof status === "string") windowRejected = status === "rejected"
+          return out
+        }
         case "result": {
           close(out)
           const total = typeof line.total_cost_usd === "number" ? line.total_cost_usd : costSeen
@@ -168,9 +193,10 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
               type: "error",
               session,
               error: {
-                name: errorName ?? String(line.subtype ?? "error"),
+                name: errorName ?? terminalName(line),
                 ...(detail ? { message: detail } : {}),
                 ...(typeof line.api_error_status === "number" ? { statusCode: line.api_error_status } : {}),
+                ...(windowRejected ? { isRetryable: false } : {}),
               },
             })
           }
@@ -182,6 +208,16 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
       }
     },
   }
+}
+
+// A failed turn's name when no API error message named it: the result's
+// terminal_reason, else a subtype that names a failure (error_max_turns,
+// error_during_execution). A failed result can carry subtype "success"
+// (plans/0057 F7); that is no name.
+function terminalName(line: Line): string {
+  if (typeof line.terminal_reason === "string" && line.terminal_reason) return line.terminal_reason
+  if (typeof line.subtype === "string" && line.subtype && line.subtype !== "success") return line.subtype
+  return "error"
 }
 
 // Tokens occupying the context after an API message: the prompt it was sent

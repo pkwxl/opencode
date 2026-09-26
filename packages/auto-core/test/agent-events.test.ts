@@ -56,8 +56,12 @@ describe("opencode event mapping", () => {
       attempt: 2,
       error: { name: "APIError", message: "quota", statusCode: 402, isRetryable: false, responseBody: "{}" },
     })
-    const fromStatus = mapEvent(ev({ id: "e", type: "session.status", properties: { sessionID: "s1", status: { type: "retry", attempt: 3, message: "rate limit", next: 90_000 } } }))
+    // opencode states the next attempt's instant; the event carries the wait.
+    const now = Date.parse("2026-09-25T11:44:57Z")
+    const fromStatus = mapEvent(ev({ id: "e", type: "session.status", properties: { sessionID: "s1", status: { type: "retry", attempt: 3, message: "rate limit", next: now + 90_000 } } }), now)
     expect(fromStatus).toEqual({ type: "retry", session: "s1", attempt: 3, next: 90_000, error: { message: "rate limit" } })
+    // An instant already past (the event arrived late) is no wait at all.
+    expect(mapEvent(ev({ id: "e", type: "session.status", properties: { sessionID: "s1", status: { type: "retry", attempt: 1, message: "x", next: now - 500 } } }), now)).toMatchObject({ next: 0 })
     // Older servers: missing fields stay absent.
     expect(mapEvent(ev({ id: "e", type: "session.status", properties: { sessionID: "s1", status: { type: "retry" } } }))).toEqual({ type: "retry", session: "s1", error: {} })
   })

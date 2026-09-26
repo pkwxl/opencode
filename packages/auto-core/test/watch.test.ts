@@ -105,7 +105,8 @@ describe("error-signal wiring: watch's three trigger surfaces → attempt exits 
         (async function* () {
           yield {
             type: "session.status",
-            properties: { sessionID: sid, status: { type: "retry", attempt: 1, message: "rate limit, retrying later", next: 40 * 60_000 } },
+            // opencode's next is the attempt's instant (plans/0057 F3): 40 minutes out.
+            properties: { sessionID: sid, status: { type: "retry", attempt: 1, message: "rate limit, retrying later", next: Date.now() + 40 * 60_000 } },
           }
           yield { type: "session.idle", properties: { sessionID: sid } }
         })(),

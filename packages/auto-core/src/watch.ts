@@ -633,7 +633,9 @@ export async function watch(
       if (now === undefined) continue
       limits ??= await client.contextLimits()
       used = now
-      limit = info.model !== undefined ? limits.get(info.model) : undefined
+      // A message that names no model (claude's synthetic API-error message,
+      // plans/0057 F21) ran under the window already in effect.
+      limit = info.model !== undefined ? limits.get(info.model) : limit
       pct = limit ? Math.round((used / limit) * 100) : 100
       vlog(`  context: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
       if (steer) {

@@ -16,10 +16,13 @@
 //
 // Both retry signals become one event: the driver treats them alike (merge
 // into the error record, classify, fail over early on quota/auth/rate).
+// opencode's status `next` is the epoch instant of the next attempt
+// (SessionRetry.policy: now + wait); the event's `next` is the wait until it,
+// so the mapping subtracts `now` (plans/0057 F3).
 import type { Event, Message, Part } from "@opencode-ai/sdk/v2"
 import type { AgentError, AgentEvent, AgentMessage, AgentPart } from "../types"
 
-export function mapEvent(event: Event): AgentEvent | undefined {
+export function mapEvent(event: Event, now = Date.now()): AgentEvent | undefined {
   switch (event.type) {
     case "message.part.updated": {
       const part = event.properties.part
@@ -56,7 +59,7 @@ export function mapEvent(event: Event): AgentEvent | undefined {
           type: "retry",
           session: sessionID,
           ...(st.attempt !== undefined ? { attempt: st.attempt } : {}),
-          ...(st.next !== undefined ? { next: st.next } : {}),
+          ...(st.next !== undefined ? { next: Math.max(0, st.next - now) } : {}),
           error: st.message !== undefined ? { message: st.message } : {},
         }
       }
