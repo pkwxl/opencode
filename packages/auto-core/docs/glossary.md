@@ -58,6 +58,8 @@ The canonical English term for each concept we discuss in Chinese. Code, comment
 | 轮关闭 | round close | `src/round-close.ts` |
 | 无阶段模式 | no-phase mode | The implicit `R-01/P01-implement` |
 | 流水线 | pipeline (task pipeline) | `runTask`: decompose → subtasks or whole → wrap-up → close-out |
+| 计划流水线 | planned pipeline | `--subtask true`: a decompose session writes the checklist upfront, one session per subtask, then the wrap-up — what `auto` meant before `plans/0059` |
+| 自适应拆分 | adaptive decomposition | `--subtask auto`, the default (`plans/0059` D2–D5): one lead session; a split only where the guard finds it pays |
 | 阶段循环 / 任务循环 / 子任务循环 | phase loop / task loop / subtask loop | `loop-phase.ts` / `loop-task.ts` / `execute.ts` |
 | 阶段路由 | phase routing | Route values `complete` / `plan` / `execute` / `handover` / `blocked` |
 
@@ -94,6 +96,13 @@ Unit and outcome states:
 | 理解 | understand | Merged into the decompose session |
 | 分解 | decompose (noun: decomposition) | `decompose*.md` |
 | 整体执行 | whole-task session | `whole.md`: a task run without subtasks |
+| 主导会话 | lead session (the lead) | auto's whole-task session: `whole.md` with the context-budget protocol and the split clause (`executeWhole(…, lead)`) |
+| 拆分 | split | The lead's hand-off of its remaining work: `subtasks.md`, one line per stream, written at execution time (`src/split.ts`) |
+| 拆分条款 | split clause | `whole.md`'s `{{#if adaptive}}` split rule: 2–5 streams with their own files, each substantial, only after the first usage notice |
+| 拆分守卫 | split guard | The driver's mechanical check of a split — 2–5 lines, a valid graph, no path shared by independent streams, the lead at half the wall; *taken* or *rejected* (`splitProblems`, `splitUsageReached`) |
+| 流 | stream | One line of a taken split: a subtask by layout (`S<nn>`), run in a fork of the lead with the `fanout.md` delta |
+| 扇出 | fan-out | Running a taken split's streams, each forked from the lead (`runSubtask` with the split, `leadForkBase`) |
+| 拆分点 | split point | `.auto/units.json` `split`: each repository's HEAD after the lead's commit, kept with the lead's final figure (`leadUsed`) |
 | 收尾 | wrap-up | The AI session that writes the task report; `wrapup.md`, `src/wrapup.ts` |
 | 收口 | close-out | The driver's mechanical checks and commit after a unit; runner `closeout` step |
 | 阶段规划 | phase planning | `phase-plan.md`; in no-phase mode `implement-plan.md` over the planning input, on the same step (`planPhase`, `plans/0053` D12) |
@@ -197,7 +206,8 @@ Unit and outcome states:
 | 恢复保真 | recovery fidelity | `OPENCODE_AUTO_STRICT_RESUME` |
 | 进度记录 | progress record | `.auto/progress.json` |
 | 测试交接 | test handover | `--handover-test`, `src/exec-session.ts` |
-| 会话交接 | session handover | Context budget (ondemand): usage notices, a session-decided handover document, the hard-wall hint as last resort (0056) |
+| 会话交接 | session handover | Context budget (ondemand, auto's lead and its streams): usage notices, a session-decided handover document, the hard-wall hint as last resort (0056) |
+| 墙 | wall | The context-budget wall: 2×cap, raised to a quarter of a large model window, capped at 80% of the window (`steerWall`, `plans/0059` D6) |
 | 定版 | freeze | Frozen commit (#1), frozen point, frozen tree |
 | 续跑会话 | continuation session | The session that continues after a handover |
 | 在途 | in-flight | In-flight record `.auto/handover.json` |
@@ -359,6 +369,8 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 | quota window / usage window | Prose says **quota window**. `usage window` survives in the log lines (the usage-window lines, the wait line's "the weekly usage window resets …") and in the agent interface's comments. |
 | tier | Two kinds: the **usage tier** (`UsageTier`, 0038) and the **reasoning tier** (the registry's deep/simple, 0055; a phase type's is its **execute tier**). English prose names the kind. |
 | wrap-up / close-out | AI session writing the report / driver checks and commit after it. |
+| decomposition / split | **Decomposition** is the planned pipeline's upfront decompose session (`--subtask true`); a **split** is auto's lead handing its remaining work to streams at execution time. "Adaptive decomposition" names the mode, not a session. |
+| stream / subtask | A **stream** is a subtask of a taken split: the same layout and close-out, but forked from the lead and prompted with the fan-out delta; the planned pipeline's items stay **subtasks**. |
 | 关闭 / 轮关闭 / 收口 | **close** a unit (a person's `close`: done without delivering, `Closed:`) / **round close** (the G8 gate before the next round) / **close-out** (the driver's checks and commit after every unit). |
 | artifact / deliverable / process document | Anything a unit produces / what the project ships / driver-facing records the deliverable must not reference. |
 | unit / task | "Unit" is the generic term; "task" means `T-NNN` only. |

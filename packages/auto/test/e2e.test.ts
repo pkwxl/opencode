@@ -2,8 +2,9 @@ import { describe, expect, spyOn, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { loadPlan, taskStatePaths } from "@opencode-ai/auto-core/tasks"
+import { subtaskDoc, taskDoc } from "@opencode-ai/auto-core/docpaths"
 import { RUN_LOCK_FILE } from "@opencode-ai/auto-core/lock"
 import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
@@ -610,14 +611,15 @@ const gitOf = (dir: string) => {
 // `claude` first, plus the adapter selection. runCli's scrubbed base keeps the
 // ambient OPENCODE_AUTO_* switches out, so the subprocess's experiment
 // switches are deterministic.
-async function fakeClaude() {
+// `extra` goes into the same environment (the fake's own FAKE_CLAUDE_* knobs).
+async function fakeClaude(extra: Record<string, string> = {}) {
   const binDir = await mkdtemp(join(tmpdir(), "auto-cli-agent-"))
   await Bun.write(
     join(binDir, "claude"),
     `#!/bin/sh\nexec bun ${JSON.stringify(join(import.meta.dir, "fixtures", "fake-claude.ts"))} "$@"\n`,
   )
   await chmod(join(binDir, "claude"), 0o755)
-  const env: Record<string, string> = { PATH: `${binDir}:${process.env.PATH ?? ""}`, OPENCODE_AUTO_AGENT: "claude" }
+  const env: Record<string, string> = { PATH: `${binDir}:${process.env.PATH ?? ""}`, OPENCODE_AUTO_AGENT: "claude", ...extra }
   const run = (args: string[]) => runCli(args, env)
   return { run, done: () => rm(binDir, { recursive: true, force: true }) }
 }
@@ -3137,6 +3139,145 @@ describe("CLI: the new-project flow end to end (auto-core plans/0053 §8, C5)", 
     } finally {
       await agent.done()
       await rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+})
+
+// run under the default --subtask auto, end to end over the claude adapter
+// (auto-core plans/0059 D2–D5): the fake `claude` on PATH plays the lead, its
+// streams, the wrap-up and the phase handover (test/fixtures/fake-claude.ts),
+// and records every turn with the session arguments of its process. What
+// these cases pin beyond the core's native-fake cases (test/agent-fake.test.ts
+// there) is the real adapter underneath: the lead's usage notice arrives on
+// the live process's stdin mid-turn, and a fork of the lead is a new claude
+// process started with `--resume <lead> --fork-session`. claude has no
+// readable session history, so the second stream's fork guard reads the
+// lead's figure recorded with the split.
+describe("CLI: run under --subtask auto over the claude adapter (auto-core plans/0059)", () => {
+  type Turn = { session?: string; resume?: string; fork: boolean; text: string }
+  const TASK = "T-001"
+  const doc = `# ${TASK}: the widget\nPhase: R-01.P01\n\n## Goal\n\nBuild the widget.\n\n## Scope\n\nsrc only.\n\n## Acceptance\n\nThe modules read back.\n\n<!-- auto: eof -->\n`
+
+  // A committed project with one pending task under the default config
+  // (subtask auto, wrap-up on); `lead` = the lead's reported context.
+  const setup = async (lead: number) => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-auto-"))
+    const log = join(await mkdtemp(join(tmpdir(), "auto-cli-turns-")), "turns.jsonl")
+    const agent = await fakeClaude({ FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_LEAD_CONTEXT: String(lead) })
+    const git = gitOf(dir)
+    await git("init")
+    expect((await runCli(["init", dir])).code).toBe(0)
+    expect((await agent.run(["plan", dir])).code).toBe(0)
+    await Bun.write(join(dir, P01.dir, "tasks.md"), `# Tasks\n\n- [ ] ${TASK} the widget\n`)
+    await Bun.write(join(dir, taskStatePaths(TASK).pending), doc)
+    await git("add", "-A")
+    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "baseline")
+    const turns = async (): Promise<Turn[]> =>
+      (await Bun.file(log).text().catch(() => ""))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Turn)
+    const done = async () => {
+      await agent.done()
+      await rm(dirname(log), { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true })
+    }
+    return { dir, git, agent, turns, done }
+  }
+
+  test("a split the guard takes: the notice reaches the lead mid-turn, and every stream is a claude fork of the lead", async () => {
+    const { dir, git, agent, turns, done } = await setup(70_000)
+    try {
+      const run = await agent.run(["run", dir])
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      const all = await turns()
+      const leadTurn = all.find((turn) => turn.text.includes("Split rule (adaptive decomposition)"))
+      expect(leadTurn).toBeDefined()
+      const lead = leadTurn!.session!
+      expect(lead).toBeDefined()
+      expect(leadTurn!.fork).toBe(false)
+      expect(leadTurn!.text).toContain("You are the lead session of this task")
+      // The first usage notice (criterion (c)) went into the lead's own
+      // process while its turn ran: 70k of the 128k wall.
+      const notice = all.find((turn) => turn.text.startsWith("[DRIVER] context:"))
+      expect(notice?.session).toBe(lead)
+      expect(run.out).toContain("steering a usage notice")
+      expect(run.out).toContain(`${TASK} the lead split the remaining work into 2 streams (S01, S02); they run next, each a fork of the lead`)
+      // Each stream: a new claude session forked from the lead, sent the
+      // delta alone; the dependent second one names the file the first
+      // changed and runs the task's full verification.
+      const streams = all.filter((turn) => turn.text.startsWith("[DRIVER] Your split was taken"))
+      expect(streams).toHaveLength(2)
+      for (const stream of streams) {
+        expect(stream.resume).toBe(lead)
+        expect(stream.fork).toBe(true)
+        expect(stream.session).not.toBe(lead)
+      }
+      expect(streams[0]!.session).not.toBe(streams[1]!.session)
+      expect(streams[0]!.text).toContain(`runs stream ${TASK}.S01`)
+      expect(streams[1]!.text).toContain(`runs stream ${TASK}.S02`)
+      expect(streams[1]!.text).toContain("Since the split, the streams that ran before this one changed these files")
+      expect(streams[1]!.text).toContain("src/alpha.ts")
+      expect(streams[1]!.text).toContain("This is the last stream")
+      // No history on claude: the second stream's guard read the recorded
+      // figure, so neither stream started cold.
+      expect(run.out.split("\n").filter((line) => line.includes(`lead base: session ${lead} (70.0k tokens)`))).toHaveLength(2)
+      expect(run.out).not.toContain("base usage unknown")
+      // The wrap-up is a session of its own, not a fork.
+      const wrapup = all.find((turn) => turn.text.includes("This session only performs the wrap-up"))
+      expect(wrapup?.fork).toBe(false)
+      expect(wrapup?.resume).toBeUndefined()
+      // On disk: the lead's foundation, both streams' modules, the scope
+      // files done, the checklist ticked, the task done; every commit landed.
+      expect(await Bun.file(join(dir, "src/shared.ts")).text()).toBe("export const shared = 1\n")
+      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe(`export const alpha = "${TASK}.S01"\n`)
+      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe(`export const beta = "${TASK}.S02"\n`)
+      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "done"))).exists()).toBe(true)
+      expect(await Bun.file(join(dir, subtaskDoc(TASK, 2, "done"))).exists()).toBe(true)
+      expect(await Bun.file(join(dir, taskDoc(TASK, "subtasks"))).text()).not.toContain("- [ ]")
+      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
+      const subjects = (await git("log", "--format=%s")).trim().split("\n")
+      expect(subjects.some((subject) => subject.startsWith(`${TASK} exec the widget`))).toBe(true)
+      expect(subjects.some((subject) => subject.startsWith(`${TASK} S1 alpha`))).toBe(true)
+      expect(subjects.some((subject) => subject.startsWith(`${TASK} S2 beta`))).toBe(true)
+      expect(subjects.some((subject) => subject.startsWith(`${TASK} wrapup the widget`))).toBe(true)
+      expect(subjects.indexOf(subjects.find((subject) => subject.startsWith(`${TASK} S1`))!)).toBeGreaterThan(
+        subjects.indexOf(subjects.find((subject) => subject.startsWith(`${TASK} S2`))!),
+      )
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await done()
+    }
+  }, 60_000)
+
+  test("a split the guard rejects (the lead under half the wall): a claude fork of the lead gets the reason and finishes the task, with no streams", async () => {
+    const { dir, git, agent, turns, done } = await setup(100)
+    try {
+      const run = await agent.run(["run", dir])
+      expect(run.code, `${run.out}\n${run.err}`).toBe(0)
+      const all = await turns()
+      const lead = all.find((turn) => turn.text.includes("Split rule (adaptive decomposition)"))?.session
+      expect(lead).toBeDefined()
+      expect(run.out).toContain(`${TASK} the lead's split was not taken (the lead's context`)
+      expect(run.out).toContain("a fork of the lead finishes the task")
+      expect(run.out).not.toContain("steering a usage notice")
+      const rejected = all.filter((turn) => turn.text.startsWith("[DRIVER] The split was not taken"))
+      expect(rejected).toHaveLength(1)
+      expect(rejected[0]!.resume).toBe(lead)
+      expect(rejected[0]!.fork).toBe(true)
+      expect(rejected[0]!.text).toContain("under half the wall")
+      expect(all.some((turn) => turn.text.startsWith("[DRIVER] Your split was taken"))).toBe(false)
+      // The checklist is gone and no scope file was written; the fork did
+      // the work, and the task closed.
+      expect(await Bun.file(join(dir, taskDoc(TASK, "subtasks"))).exists()).toBe(false)
+      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "todo"))).exists()).toBe(false)
+      expect(await Bun.file(join(dir, subtaskDoc(TASK, 1, "done"))).exists()).toBe(false)
+      expect(await Bun.file(join(dir, "src/alpha.ts")).text()).toBe('export const alpha = "lead"\n')
+      expect(await Bun.file(join(dir, "src/beta.ts")).text()).toBe('export const beta = "lead"\n')
+      expect(await Bun.file(join(dir, taskStatePaths(TASK).complete)).exists()).toBe(true)
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await done()
     }
   }, 60_000)
 })

@@ -117,7 +117,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Task pipeline | `runOnce`/`runTask`: decompose → subtasks (or whole) → wrap-up → closeout; resume | `src/runner.ts` |
+| Task pipeline | `runOnce`/`runTask`: dispatch by `--subtask` (`true`: decompose → subtasks; `auto`: the lead, then its streams when its split is taken; `off`/`ondemand`: whole) → wrap-up → closeout; resume | `src/runner.ts` (0059 D1) |
 | Execution | Merged understand+decompose session, per-subtask sessions, whole-task session (auto's lead, its split judged after each session), the split's streams as forks of the lead with their own handover | `src/execute.ts` (0030, 0059) |
 | Lead's split | The lead's checklist lines, the structural split guard, the driver-written `S<nn>/todo.md`, the taken-split check and the driver-state filter of its changed-files list (a checklist item's title is `tasks.ts` `checklistTitle`, shared with the pipeline's subtask prompt) | `src/split.ts` (0059 D3–D5, T1) |
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
@@ -135,7 +135,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Task store | Phase `tasks.md` index + `docs/T-NNN/` units, `.auto/units.json` runtime state, `newTaskProblems` (the planning/appending collect's per-task checks) and `forgetUnits` (record clearing for closed tasks), no-phase mode | `src/tasks.ts` (0047, 0053) |
+| Task store | Phase `tasks.md` index + `docs/T-NNN/` units, `.auto/units.json` runtime state (status, attempts, fork base, auto's split point with the lead's final figure), `newTaskProblems` (the planning/appending collect's per-task checks) and `forgetUnits` (record clearing for closed tasks), no-phase mode | `src/tasks.ts` (0047, 0053, 0059 D5) |
 | Status tree | Read-only round → phase → task → subtask view | `src/status.ts` |
 | Progress record | `.auto/progress.json`, session reuse on resume | `src/resume.ts` (0018, 0022) |
 | Resume gate | Unit-ownership gate, resume/interruption wording | `src/resume-gate.ts` |
@@ -152,7 +152,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Unified commit | Recursive driver commits (nested repos first), `Auto-Stage` trailer, clean gate, SHA baseline, rollback primitives | `src/git.ts` (0021) |
 | Unit commit | Post-session commit, close-out checks, refcheck gate, strict-resume fidelity, unit rollback | `src/unit-commit.ts` (0021, 0022) |
 | Driver scripts | `tmp/test.sh` request marker, output capture, watchdog | `src/script.ts` |
-| Test run | `--test-by-driver` execution, handover-document archive/cleanup (no session imports) | `src/testrun.ts` (0023) |
+| Test run | `--test-by-driver` execution, handover-document archive/cleanup, the context-budget steer (`handoffSteer`, its wall `steerWall`: 2×cap raised to a quarter of a large window, capped at 80% of it) (no session imports) | `src/testrun.ts` (0023, 0056, 0059 D6) |
 | Reference check | Extract/rewrite/validate document references; `check` scanning | `src/refcheck.ts` (0010, 0013) |
 | .gitignore | Driver work-directory entries | `src/gitignore.ts` |
 

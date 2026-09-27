@@ -31,7 +31,7 @@ import { parseSplit, splitProblems, splitStateFile, writeSplitTodos } from "./sp
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
-import { sessionHandoverDue, splitUsageReached } from "./usage"
+import { liveUsage, sessionHandoverDue, splitUsageReached } from "./usage"
 import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // The execution stage for off/auto/ondemand: off finishes the whole task in
@@ -129,7 +129,7 @@ export async function executeWhole(
   // (the scope files written, a handover document of the lead removed — the
   // streams must not read it as their own), rejected with the reasons, or
   // nothing to judge.
-  const judgeSplit = async (): Promise<{ type: "taken"; count: number } | { type: "rejected"; reason: string } | undefined> => {
+  const judgeSplit = async (): Promise<{ type: "taken"; count: number; used?: number } | { type: "rejected"; reason: string } | undefined> => {
     const items = await unjudged()
     if (!items.length) return undefined
     if (split === "rejected") {
@@ -142,7 +142,8 @@ export async function executeWhole(
     // last measurement (the 2×cap budget where none was taken).
     // AUTO-DECISION: the wall is the session's own last measured wall (SessionChain.wall), the budget without one (it is the wall the lead's notices were measured against, so the guard and criterion (c) read the same figure; recomputing it here would need the model window)
     const wall = chain.wall ?? steer!.limit
-    if (!splitUsageReached((await clientOf(client, chain.agent)).capabilities.usage, chain.used, wall)) {
+    const tier = (await clientOf(client, chain.agent)).capabilities.usage
+    if (!splitUsageReached(tier, chain.used, wall)) {
       reasons.push(`the lead's context (${formatTokens(chain.used)} tokens) is under half the wall (${formatTokens(wall)}), where finishing in this session is cheaper`)
     }
     if (reasons.length) {
@@ -152,7 +153,10 @@ export async function executeWhole(
     }
     await writeSplitTodos(planDir, task.id, items)
     await rm(join(planDir, handoffFile(task)), { force: true })
-    return { type: "taken", count: items.length }
+    // The lead's figure goes with the split record where the guard measured
+    // it (tasks.ts Task.leadUsed): the streams' fork guard reads it once the
+    // lead's own session can no longer tell its size.
+    return { type: "taken", count: items.length, ...(liveUsage(tier) ? { used: chain.used } : {}) }
   }
   // Interruption-recovery seeding: a stale handover document is cleared by the
   // pipeline on the non-recovery path, so the file still existing here means an
@@ -273,7 +277,7 @@ export async function executeWhole(
       // commit (none where nothing commits). The files a stream's
       // prerequisites change are read against it, and the record marks the
       // checklist as the lead's streams.
-      await setSplit(planDir, task.id, opts.commit !== false && !opts.dryrun ? await unitBaseline(dir) : [])
+      await setSplit(planDir, task.id, opts.commit !== false && !opts.dryrun ? await unitBaseline(dir) : [], verdict.used)
       log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next, each a fork of the lead`)
       return undefined
     }
@@ -490,7 +494,10 @@ export async function leadForkBase(client: ClientSource, task: Task, opts: Opts,
     log(`↻ ${task.id} the lead session ${id}${onAgent} is gone; the stream starts in a new session`)
     return undefined
   }
-  const used = id === chain.id ? chain.used : await sessionUsed(baseClient, id)
+  // The lead's size: the chain's own figure while the chain still holds the
+  // lead, else the session's history, else the figure recorded with the split
+  // (an agent with no readable history, tasks.ts Task.leadUsed).
+  const used = id === chain.id ? chain.used : ((await sessionUsed(baseClient, id)) ?? task.leadUsed)
   log(`⑂ ${task.id} lead base: session ${id}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
   return { id, used, lead: true, ...(agent !== undefined ? { agent } : {}) }
 }

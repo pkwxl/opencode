@@ -217,4 +217,37 @@ describe("the fan-out prompt's helpers (plans/0059 D5)", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  test("the lead's figure: recorded with the split point, dropped with it, and a malformed or orphaned value reads as none", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-split-"))
+    try {
+      const plan = await seedUnits(dir, "## T-001: sample task [pending]\nBody.\n")
+      await setSplit(dir, "T-001", [], 70_000)
+      const task = await reloadTask(plan, "T-001")
+      expect(task.split).toEqual([])
+      expect(task.leadUsed).toBe(70_000)
+      // A split whose figure was not measured (a tier without a live figure)
+      // records none.
+      await setSplit(dir, "T-001", [])
+      expect((await reloadTask(plan, "T-001")).leadUsed).toBeUndefined()
+      await setSplit(dir, "T-001", [], 70_000)
+      await setSplit(dir, "T-001", undefined, 70_000)
+      const dropped = await reloadTask(plan, "T-001")
+      expect(dropped.split).toBeUndefined()
+      expect(dropped.leadUsed).toBeUndefined()
+      const units = join(dir, ".auto", "units.json")
+      for (const [runtime, expected] of [
+        [{ split: [], leadUsed: "70000" }, undefined],
+        [{ split: [], leadUsed: -1 }, undefined],
+        [{ split: [], leadUsed: 0 }, 0],
+        // A figure without its split point belongs to no split.
+        [{ leadUsed: 70_000 }, undefined],
+      ] as const) {
+        writeFileSync(units, JSON.stringify({ tasks: { "T-001": runtime } }))
+        expect((await reloadTask(plan, "T-001")).leadUsed).toBe(expected)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

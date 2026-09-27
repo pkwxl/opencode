@@ -2921,6 +2921,62 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
     }
   })
 
+  // An agent with no readable session history (claude) cannot tell an ended
+  // session's size: the lead's figure travels with the split record instead.
+  test("an agent without session history: every stream forks the lead, its size read from the figure recorded with the split", async () => {
+    const { dir, agent, outcome, prompts } = await run(
+      (dir) => (ctx) => {
+        if (ctx.n === 1) {
+          write(dir, "docs/T-001/subtasks.md", SPLIT)
+          return big(ctx.session, ctx.n)
+        }
+        streams(dir, ctx.text)
+        return undefined
+      },
+      { capabilities: { history: false } },
+    )
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(3)
+      const lead = agent.prompts[0]!.session
+      expect(agent.argsOf("fork").map((args) => args[0])).toEqual([lead, lead])
+      expect(prompts[1]).toStartWith("[DRIVER] Your split was taken")
+      expect(prompts[2]).toStartWith("[DRIVER] Your split was taken")
+      // The first stream reads the lead's chain, the second the record.
+      expect(lines.filter((line) => line.includes(`lead base: session ${lead} (50.0k tokens)`))).toHaveLength(2)
+      expect(lines.some((line) => line.includes("base usage unknown"))).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an agent without session history, resumed after the split: the streams fork the recorded lead at its recorded size", async () => {
+    const { dir, agent, outcome, prompts } = await run(
+      (dir) => (ctx) => {
+        streams(dir, ctx.text)
+        return undefined
+      },
+      {
+        seed: async (dir) => {
+          write(dir, "docs/T-001/subtasks.md", SPLIT)
+          write(dir, "docs/T-001/S01/todo.md", "Depends: none\nTouches: src/alpha.ts\n\n## Scope\n\nalpha\n\n## Artifacts\n\n- src/alpha.ts\n\n<!-- auto: eof -->\n")
+          write(dir, "docs/T-001/S02/todo.md", "Depends: none\nTouches: src/beta.ts\n\n## Scope\n\nbeta\n\n## Artifacts\n\n- src/beta.ts\n\n<!-- auto: eof -->\n")
+          write(dir, ".auto/units.json", JSON.stringify({ tasks: { "T-001": { forkBase: "ses_lead", split: [], leadUsed: BIG } } }))
+        },
+        capabilities: { history: false },
+      },
+    )
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(2)
+      expect(agent.argsOf("fork").map((args) => args[0])).toEqual(["ses_lead", "ses_lead"])
+      expect(prompts[0]).toStartWith("[DRIVER] Your split was taken")
+      expect(lines.filter((line) => line.includes("lead base: session ses_lead (50.0k tokens)"))).toHaveLength(2)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("OPENCODE_AUTO_STEER=off: no notices, so no split clause either — a checklist the lead writes runs after it, as under ondemand", async () => {
     clampSwitches({ steer: false })
     try {

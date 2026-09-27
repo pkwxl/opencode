@@ -103,7 +103,7 @@ describes how this run executes and how a person watches it → run.**
 | --- | --- | --- | --- |
 | `mode` | A registered mode name | `migrate` | Prompt-level scenario mode, see [Mode layer](#mode-layer--m--mode) |
 | `agent` | `opencode` / `claude` | `opencode` (key not written) | The coding agent that drives every session (M6.1); `OPENCODE_AUTO_AGENT` overrides it per run. In older versions this key held a contract name (e.g. `auto`); reading one is an error telling you to delete the key (`fix` deletes it) — the contract is always `.opencode/agent/auto.md`. See [agent selection](#opencode-server-and-agent-selection) |
-| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline: the used-tokens threshold for session reuse (needs `OPENCODE_AUTO_REUSE_SESSION=on`) is half of it (32k by default); the handover threshold is 2x when `subtask` is `ondemand` or `auto` |
+| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline: the used-tokens threshold for session reuse (needs `OPENCODE_AUTO_REUSE_SESSION=on`) is half of it (32k by default); under `subtask` `ondemand` and `auto` the context-budget wall is 2x, raised to a quarter of a large model window and capped at 80% of the window (see [Execution pipeline](#execution-pipeline)) |
 | `subtask` | `off` / `auto` / `true` / `ondemand` | `auto` | Subtask splitting, see [Execution pipeline](#execution-pipeline); the JSON boolean `true` reads as `"true"` |
 | `idleTime` | 1..120 (minutes) | `10` | The no-progress window for driver-managed scripts (test scripts); the old key name `verifyIdle` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `idleMax` | 0..1440 (minutes, 0 = no limit) | `0` | The absolute duration cap for driver-managed scripts; the old key name `verifyMax` is read as a fallback when the new key is missing (`fix` renames it in place) |
@@ -862,8 +862,10 @@ half the wall:
   stream's line, the other streams by title, the files changed since the split when the stream waits for an
   earlier one, checks targeted at the stream, and the task's full verification in the last stream. A stream
   runs under the same context-budget protocol and may hand itself over: a new session continues it from
-  `docs/T-NNN/handoff.md`, and the stream still closes with one commit. Without a fork (the lead's session is
-  gone, or the fork fails) a stream starts in a new session with the full subtask prompt.
+  `docs/T-NNN/handoff.md`, and the stream still closes with one commit. The lead's final context figure is
+  kept with the split in `.auto/units.json`, so every stream — and every stream of a resumed run — can fork
+  the lead on an agent that cannot read an ended session's size back (claude). Without a fork (the lead's
+  session is gone, or the fork fails) a stream starts in a new session with the full subtask prompt.
 - **Rejected**: `subtasks.md` is removed, the lead's work is committed, and a fork of the lead is told why and
   finishes the task (when the fork fails, a new session with the full prompt). There is no second split: a
   `subtasks.md` written after that is removed.
@@ -895,11 +897,10 @@ stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtas
    interruption recovery print them too; task completion / phase close-out / round completion each add
    their own conclusion line (cumulative time and token breakdowns across interruptions at each level;
    stats live in `.auto/stats.json` in the target directory, the file deleted when zeroed).
-   While a subtask session is running and its used context reaches twice the configured `contextLimit`, the
-   driver likewise injects a handover hint; the AI writes this subtask's progress to `docs/T-NNN/handoff.md`
-   (last line `Status: continue|done`, judged by whether the subtask is complete) and ends, and a new
-   session continues the subtask from the handover document; once the subtask completes the driver deletes
-   the file and the next subtask starts fresh.
+   A subtask session gets no context-budget protocol (auto-core plans/0056 D1): no usage notices, no
+   handover; one that outgrows the budget runs into the provider's own compaction or limit errors and the
+   session-error retry path. A subtask handover document an earlier release left (`docs/T-NNN/handoff.md`)
+   is still read on resume, and deleted once the subtask completes.
    The subtask session self-checks its own work; after the session ends the driver renames the subtask's
    `todo.md` to `done.md` and ticks the matching line in subtasks.md.
    Each checklist line opens with a short title (`- [ ] <title>: <description> Artifacts: <paths>`), and a
@@ -918,11 +919,17 @@ stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtas
 the session fails to finish there is **no repair rerun** — the driver reverts the task status to `pending`
 and halts with exit code 2, for a person to improve the task documents and rerun.
 
-`subtask: ondemand` (handover on demand): the task first runs as a single session; once the in-flight
-session's used context reaches twice the configured `contextLimit`, the driver injects a handover hint into
-it, the AI writes progress and remaining steps to `docs/T-NNN/handoff.md` (last line `Status: continue|done`;
-the older Chinese spelling is still readable) and ends, and the driver opens a new session that continues
-from the handover document until the task completes.
+`subtask: ondemand` (handover on demand; auto-core plans/0056): the task runs as a single session that manages
+its own context against a **wall** — twice the configured `contextLimit`, raised to a quarter of the model's
+window when that is larger and capped at 80% of the window (at the default 64k: 102k on a 128k window, 128k
+on a 160k–512k window, 250k on a 1M window). The driver steers one-line `[DRIVER] context: …` usage notices
+into the running session at about 50% and 85% of the wall; they are information, not interrupts. The session
+decides when to hand over:
+at a natural boundary it writes progress, key decisions, verified facts, dead ends and next steps to
+`docs/T-NNN/handoff.md` (last line `Status: continue|done`; the older Chinese spelling is still readable) and
+ends, and the driver opens a new session that continues from the handover document until the task completes.
+Only a session that reaches the wall itself gets the hard-wall hint to write the document at once.
+`OPENCODE_AUTO_STEER=off` turns the protocol off (no notices, no hint, a written document ignored).
 
 Common part (**wrap-up**): one session updates docs/ and `docs/T-NNN/report.md` (a summary of each
 subtask's output) coherently; after the session ends the driver runs the unified commit. The driver then
@@ -1037,8 +1044,8 @@ one verdict on the completion side:
   with the wrap-up's unified commit, the task is set `[blocked]` and the run stops (exit code 2), the
   reason printed in the log;
 - Human disposal: accept the verdict → mark the task `[done]` by hand; needs rework → insert a repair task
-  **before** it (in auto mode, hand-appending checklist items to that task is an illegal subtask state —
-  repairs are always planned as tasks); then rerun. Rerunning the blocked task directly only reruns the
+  **before** it (with a subtask checklist, hand-appending items to that task's checklist is an illegal
+  subtask state — repairs are always planned as tasks); then rerun. Rerunning the blocked task directly only reruns the
   wrap-up and rewrites the result line.
 
 Retired options are exit code 1 on any command (with a retirement notice); config `verify: true` fails
