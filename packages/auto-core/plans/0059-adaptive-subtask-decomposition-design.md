@@ -1,0 +1,279 @@
+# 0059 — Adaptive decomposition: `--subtask auto` becomes cost-aware, the planned pipeline moves to `true`
+
+Status: **design** (2026-09-27), nothing implemented; §8 ruled 2026-09-27 (every recommendation accepted). Request: `--subtask auto` was meant to cut one large task into subtasks so each session's context stays small and cache overhead drops. On the field it did the opposite: T-008, decomposed into 11 subtasks on the claude adapter, used a whole five-hour quota window. The operator estimates that a single session would have needed about 30% of one. Every later task ran `off`. For `auto` to mean anything it must cost less than a single session. The current pipeline is kept under the new value `true`, for a complex task made of several unrelated subtasks. `auto` becomes intelligent, cost-aware decomposition.
+
+## 0. The answer in one paragraph
+
+The session transcripts confirm the operator's estimate: T-008 cost 2–3× a comparable single session, and about 3.5× once stray sessions are counted. Almost none of that comes from context size. With prompt caching, the token class that decomposition saves (cache reads) is the cheapest, about 1/33 of a cache write. The classes it multiplies are the expensive ones:
+
+- **Cache writes.** Every new session rebuilds context by re-reading.
+- **Output.** A plan is written three times, and every subtask writes its own record.
+
+On top of that come fixed per-unit costs: prompt boilerplate, full-suite verification, and shape-check re-prompts. A leaked environment variable also turned each test run into a real claude session.
+
+So "keep contexts small" is the wrong goal for a cached agent. The right goal is **never re-establish context and never duplicate artifacts**. The new `auto` follows from that:
+
+- **Lead first.** It starts one lead session (a whole-task session under the 0056 usage protocol) that reads what it needs and works.
+- **Split only when it pays.** The lead may fan the rest out only when the numbers say it pays: the streams are separable and its context is already large. The fan-out sessions are **forks of the lead**, so the understanding stays in the cached prefix and nothing is re-read.
+- **Otherwise one session.** In every other case `auto` is one session with a self-directed handover.
+
+On most tasks `auto` costs what `off` costs. On large, separable tasks it should cost 10–20% less, an estimate (§2, §7). It is never the 2–3× of today's pipeline.
+
+## 1. Field evidence: T-008 (2026-09-24 01:14–02:12, `/workspace/aseo`)
+
+Method: the driver log `.auto/logs/run-2026-09-24_01-14-43.log` and the claude transcripts `~/.claude/projects/-workspace-aseo/<session>.jsonl` of its 20 sessions. Usage is deduplicated by `requestId`, because a fork copies its parent's messages. The deduplicated totals equal the driver's figures exactly.
+
+Configuration:
+
+- Agent: claude (`claude-opus-5-5`), with `subtask auto`, `contextLimit 64k` and wrap-up on.
+- Switches at their defaults: fork on, fork base `digest`, `DECOMPOSE_FINE` on. `STEER` was off, before 0056.
+- Deliverable: +539 −29 lines in 18 files of the nested repository.
+
+### 1.1 Where the cost went (claude's own per-session cost, total $12.28)
+
+| sessions | cost | share |
+|---|---|---|
+| decompose (understanding + plan), 1 | $3.21 | 26.2% |
+| digest fork base, 1 | $0.12 | 1.0% |
+| subtask sessions S01–S10, 10 | $4.78 | 38.9% |
+| S11 close-out subtask, 1 | $1.49 | 12.1% |
+| shape-check re-prompt forks, 6 | $1.77 | 14.4% |
+| wrap-up, 1 | $0.91 | 7.4% |
+| **stray e2e sessions (W1), 29, not in the driver's total** | **≈ $6.3** | — |
+
+Token classes, T-008 total:
+
+| class | tokens | share of cost |
+|---|---|---|
+| output (incl. 54k reasoning) | 179k | ≈ 30% |
+| cache write (all 1h TTL) | 678k | ≈ 40% |
+| cache read | 16.4M | ≈ 30% |
+
+The per-class shares use weights fitted to 61 recorded Opus 5.5 session costs (max error 10%): output ≈ $19.7/M, cache write ≈ $7.2/M, cache read ≈ $0.22/M. A cache write weighs about **33×** a cache read, and output about 90×.
+
+### 1.2 Against single sessions of the same round (claude, `subtask off`, wrap-up off)
+
+| task | sessions | change | cost | cost with cache reads free |
+|---|---|---|---|---|
+| **T-008** | 20 | +539 −29, 18 files | **$12.28** (+≈$6.3 stray) | **$8.41** |
+| T-023 | 1 | +254 −12, 12 files | $2.29 | $1.47 |
+| T-021 | 1 | +618 −1, 4 files | $2.68 | $2.03 |
+| T-022 | 1 | +1815 −1, 8 files | $4.53 | $3.08 |
+| T-024 | 2 (limit restart) | +467 −33, 19 files | $6.25 | $3.71 |
+| T-025 | 1 | +1500 −19, 9 files | $6.74 | $3.92 |
+| T-026 | 2 (limit restart) | +1034 −50, 15 files | $6.88 | $4.29 |
+| T-032 | 1 | +1636 −45, 23 files | $10.57 | $5.91 |
+
+A single session for T-008 would plausibly have cost $4–6. T-008 as decomposed cost more than T-032, which changed three times as much code. Without wrap-up it would still have been $11.37.
+
+### 1.3 The quota windows
+
+Limits were hit on three windows, and T-008 has its own window for comparison:
+
+| window | limit hit | output | cache read | cache write | API-equivalent |
+|---|---|---|---|---|---|
+| 09-23 00:50–03:58 | yes | 393k | 49.8M | 1.44M | $29.0 |
+| 09-25 07:30–11:44 | yes | 372k | 28.6M | 0.92M | $20.2 |
+| 09-25 12:30–14:39 | yes | 205k | 24.9M | 0.59M | $13.7 |
+| 09-24 01:14–02:13 (T-008) | — | 269k | 19.9M | 1.20M | $18.3 |
+
+No single weighting makes the three limit-hit windows agree. API weights, cache reads free and cache reads at full input price all leave a spread of ±38–44%. So the subscription limit is not a stable token-weighted sum visible from this machine: the account is shared with other clients, and limits may move. How much a cache read counts on the plan therefore cannot be settled from these logs.
+
+It does not need to be. T-008's window is at least the smallest limit-hit window under every weighting tested: $18.3 against $13.7 at API weights, $13.98 against $8.28 with cache reads free. If the plan counts cache reads for less than the API does, decomposition looks worse, not better: the only class it saves gets cheaper, and the classes it multiplies do not (§2).
+
+### 1.4 The duplicated work, itemized
+
+- **W1 — stray real agents (≈ $6.3, 29 sessions).**
+  - Every agent process inherits the driver's environment, including `OPENCODE_AUTO_AGENT=claude`. When a subtask ran `bun test` in `packages/auto`, the e2e CLI test started a real claude "[auto] AUTO permission preflight" session in `/tmp/auto-cli-*`. In 11 of the 29 sessions the temp dir was deleted under it when the test hit its 5 s timeout.
+  - This coincides with the "known failing `CLI: fix` test" the sessions kept recording as pre-existing.
+  - The shell suite ran about 22 times, because every subtask's `Verify:` said "both packages".
+  - T-015 (09-24 05:49) gave `runCli` a scrubbed environment. That closes the leak for this repository's e2e test only: the driver still passes its switches to every agent process (X1).
+- **W2 — the understanding is paid for, then thrown away.**
+  - The decompose session made 40 reads (125k characters of source) and reached 143k context ($3.21).
+  - The digest fork base kept only the 10.6k-character `context.md`. Each subtask forked from a 23.2k-token prefix: the harness plus that digest.
+- **W3 — every subtask re-reads.**
+  - S01–S10 re-read 13–36k characters of source each, about 230k in total.
+  - Reads of `shared.md` and `todo.md` recur in 12 sessions, about 87k characters in all.
+  - The subtask prompt told them they had "inherited the task-background context (the understanding stage's digest and loaded content), so do not re-read files". Under the digest base that is not true.
+- **W4 — prompt duplication.**
+  - Each subtask prompt is 22.1k characters (≈ 9.3k tokens written per session), about half of it the full text of all 11 items.
+  - That repeated across 17 sessions (the 11 subtasks and the 6 re-prompts).
+- **W5 — process-document output.**
+  - The process documents total 94.7k characters: `context.md` 10.4k, `shared.md` 4.8k, `subtasks.md` 9.0k, eleven `todo.md`/`done.md` 25.5k, eleven `S<nn>/index.md` records 39.4k, `report.md` 5.6k.
+  - That is more text than the deliverable itself. The decompose session's output alone was 52.7k tokens.
+  - The plan is stated three times: in `subtasks.md` items, in `todo.md` scopes, and in the digest.
+- **W6 — per-item full verification.**
+  - Across the 18 working sessions: 58 typecheck runs, about 9 full core-suite runs and about 22 full shell-suite runs.
+  - They cost few tokens (outputs were tailed), but they were slow and they multiplied W1.
+- **W7 — shape-check re-prompts (6 of 11 items, $1.77), all false positives.**
+  - The P1 scan flagged `docs/T-…` and `docs/R-…` strings in the driver's own test fixtures, which are data, not references.
+  - The eof scan demanded the terminator on a prompt template (`templates/prompts/phase-handover.md`). To satisfy it, the S09 re-prompt changed `src/template.ts` to strip a trailing terminator, so deliverable code changed to please a checker (still in the tree).
+  - Single sessions do not run the per-unit scan, so the per-unit check multiplies the exposure by the item count.
+- **W8 — ceremony units.**
+  - The S11 close-out subtask re-ran everything and wrote notes ($1.49).
+  - The wrap-up re-read 75.8k characters to write the report ($0.91). It is needed because no session saw the whole task.
+- **W9 — an over-fine, coupled split.**
+  - 11 items averaging about 50 changed lines each. 9 of 11 depend on another item; the longest chain is S01→S02→S07→S08→S11.
+  - 8 files are touched by two or more items: `tasks.ts`, `phases.ts`, `loop-plan.ts`, `prompt.ts` (three items), and four test files. This is the opposite of the conditions under which a split pays (§2).
+  - The split followed the fine-mode criterion "one item per natural unit… prefer finer over coarser — the fork pipeline has removed the fixed cost of re-understanding between subtasks". That premise holds only for a `session` fork base, not for the `digest` default (W2, W3).
+  - Its granularity budget, "on the order of `contextLimit/2` = 32k tokens" per item, is below a claude subtask session's own starting context (32.5k).
+
+## 2. Why decomposition cannot win on context size alone
+
+A session turn with context C re-sends C and pays `w_r·C` to read the cached prefix, plus `w_w·ΔC` to write the new tail and `w_o·o` for output. The fitted weights are `w_r : w_w : w_o ≈ 0.22 : 7.2 : 19.7` ($/M).
+
+- **One session** growing from B to F over T turns reads about `T·(B+F)/2` and writes about F.
+- **A split** at context C, continued by a session that must re-establish R tokens and runs T′ more turns:
+  - saves about `w_r·(C−R)·T′` in reads;
+  - costs `w_w·R` plus a fixed overhead O (prompt, first turn, close-out) plus whatever ceremony the split adds.
+  - Break-even: `T′ ≈ (w_w·R + O) / (w_r·(C−R))`. With R = 40k and O ≈ $0.10:
+
+| context at the split | turns needed after it to break even |
+|---|---|
+| 250k | ≈ 8 |
+| 128k | ≈ 20 |
+| 64k (T-008's items) | never practical |
+
+- **Fork from the understanding point.** The understanding is not re-established but cache-read: R ≈ 0 for that part. A fan-out item only avoids carrying its siblings' growth. With 3 items of 30 turns each growing 40k, that saves about `w_r·(30·40k + 30·80k)` ≈ $0.8. On a $10 task that is under 10%, but it is positive and bounded by construction.
+- **If the plan weighs cache reads lower than the API** (the operator's point about the Pro plan), `w_r` shrinks and every break-even moves further out.
+
+The consequences for design:
+
+1. The default must be one session: decomposition is justified by size and separability, not by habit.
+2. A split must come from the session that holds the understanding, at the point it holds it, and continue as forks, not as cold sessions reading a digest.
+3. A split must add no ceremony: no second statement of the plan, no per-item records, no per-item full verification, no close-out unit.
+4. A split must never be finer than a few substantial streams.
+5. The handover wall must sit where a handover pays for almost any remaining work: well above 128k on a 1M-window model.
+
+## 3. Decisions
+
+- **D1 — `true` is today's `auto` pipeline, verbatim.**
+  - `SubtaskMode` becomes `"off" | "auto" | "true" | "ondemand"`. Every branch that tests for `"auto"` today tests for `"true"`: runner dispatch, the resume gate's `decompose`/`whole` ownership, preflight dispatch needs, and prompt selection.
+  - The pipeline itself (decompose, fork base, subtask sessions, wrap-up) and its switches (`OPENCODE_AUTO_FORK`, `_FORK_BASE`, `_DECOMPOSE_FINE`) are untouched and govern `true` only.
+  - The config accepts `"true"` and the JSON boolean `true` as the same value. The shell's `--subtask` takes `off|auto|true|ondemand`, and bare `--subtask` stays `auto`. That change is on the shell branch.
+- **D2 — `auto` is adaptive: one lead session first.**
+  - The lead is a whole-task session: `whole.md` with the 0056 usage protocol (notices at 50%/85% of the wall, a self-directed handover), plus a new `{{#if adaptive}}` split clause.
+  - There is no decompose session, no digest base, no `context.md`/`shared.md`. The lead reads what it needs and works.
+  - It ends one of three ways:
+    - it finishes the task;
+    - it hands over by time (0056: `handoff.md`, then a continuation session, which is again a lead);
+    - it declares a split (D3).
+- **D3 — the split clause (criteria from §2, stated with the figures).** The lead may split only when all of these hold:
+  - (a) The remaining work is 2–5 streams that each change their own files. A file two streams would both change is either finished by the lead first or its streams are ordered with `Depends:`.
+  - (b) Each stream is substantial: tens of tool turns, not a function or a test case.
+  - (c) The driver's first usage notice (50% of the wall) has arrived. Below it, finishing in this session is cheaper.
+
+  The lead does the shared foundation itself before splitting: the types, helpers or fixtures every stream needs. In T-008 terms, that is S01–S03. To split, it writes `docs/T-NNN/subtasks.md`, one checklist line per stream (`- [ ] <title>: <what, where, how to verify> Depends: S01 Artifacts: <paths>`), and ends. The driver, not the session, writes each `S<nn>/todo.md` from its line (the field block from `Depends:`/`Artifacts:`, `## Scope`, `## Artifacts`). The plan is stated once.
+- **D4 — the driver's split guard (mechanical).**
+  - A split is honored when all of these hold:
+    - 2 ≤ items ≤ 5;
+    - every line parses and the dependency graph is valid (existing `checklistProblems`);
+    - no path is declared by two items unless one (transitively) depends on the other;
+    - the lead's final measured context is at least 50% of the wall. This enforces (c) where a live figure exists; usage tiers without one skip this check.
+  - Otherwise the driver removes `subtasks.md` and re-prompts a fork of the lead: "[DRIVER] the split was not taken: <reason>; finish the task in this session". That continuation carries no split clause, so there is one rejection at most, and a `subtasks.md` that appears anyway is ignored and removed.
+  - Work the lead did before splitting is committed as the task's execution unit (`T-NNN exec`) before the fan-out starts.
+- **D5 — fan-out items are forks of the lead.**
+  - The lead's session id becomes the task's fork base: the existing `session`-mode record (`setForkBase`), per agent under a registry (0055 §8.2).
+  - Items run in `nextReady` order over their `Depends:` fields. Each is seeded by `seedForkSession` from the lead and prompted with a short delta, a new template `fanout.md`. The rules and the task are already in the forked prefix. The delta contains:
+    - the item line in full, with the siblings by title only;
+    - "this session is a fork of yours: do not re-read what you read; re-read only the files changed since the split: <`git diff --name-only <split>..HEAD`>". The list is present only when prerequisites ran.
+    - verification: targeted checks for this item; the last item runs the task's full acceptance verification once.
+    - no `S<nn>/index.md` for code-only items.
+  - The unit state protocol, commit boundary and shape check are `runSubtask`'s, unchanged.
+  - Items start from a large prefix, so they run under the ondemand usage protocol. A handed-over item continues in a fresh session from its `handoff.md`, scoped to the item. This re-enables handover for this subtask kind only; `true` subtasks keep 0056 D1.
+  - Sibling forks share a split point and have disjoint artifacts, so they are parallel-ready. Running them in parallel is 0046's business, not this design's.
+- **D6 — the wall on large windows: `min(max(2×cap, window/4), 0.8×window)`.**
+  - This is `steerWall` for `auto` and `ondemand`. It is unchanged for windows up to 512k at the default cap: 128k → 102k, 200k → 128k, 512k → 128k. On a 1M window it rises from 128k to 250k.
+  - The T-008 decompose session reached 143k on understanding alone, so a 128k wall would force a handover right after the understanding is paid for: the worst boundary, where everything read is lost. At 250k a handover pays after about 8 turns (§2).
+- **D7 — degradation.** An agent without session fork, or without mid-turn steer (`AgentCapabilities`), runs `auto` without the split clause (`auto` ≡ `ondemand`), with the existing run-start degrade note.
+- **D8 — the default and stored values.** The config default stays `"auto"` and now means adaptive. A stored `"subtask": "auto"` takes the new meaning with no migration. The pipeline stays one `amend --subtask true` away. (Ruled, §8 item 1.)
+- **D9 — `OPENCODE_AUTO_DECOMPOSE_FINE` defaults to off.** Its premise is refuted for the `digest` default (W9). The switch stays for `true`. (Ruled, §8 item 3.)
+
+## 4. Fixes independent of the mode
+
+- **X1 — the driver's switches never reach agent processes.**
+  - `claudeEnv` (the claude spawn) and the `opencode serve` spawn environment drop `OPENCODE_AUTO_*`. The switches are read once at run start; a session and the tools it launches have no use for them. A profile's `env` overlay can still set one explicitly.
+  - This closes W1 for every target, not just this repository's e2e test.
+- **X2 — process-shaped strings in a deliverable that legitimately contains them.**
+  - This repository's test fixtures and prompt templates trip the P1 scan and the eof scan (W7).
+  - Ruled (§8 item 4): a project-owned exemption list (globs) consulted by `p1Scope` and `eofScanExempt`, carried as a key of `.opencode/auto/config.json`. It is shared with the repository and changed with `amend`, like every config key, so `init`/`amend`/`fix` and their validation learn it. The key name is settled at implementation.
+  - Separately, review whether the S09 terminator-stripping in `src/template.ts` should stay.
+- **X3 — harness overhead per fresh claude session** (lower priority; measure first).
+  - A fresh `claude -p` session loads the operator's skill listing, claude.ai connectors and their instructions: about 12k tokens written beyond the shared 10.8k system prefix. The digest base's reply even commented on the Google Drive connector.
+  - Candidate: start driver sessions with `--strict-mcp-config` and the equivalent switches for skills, if the CLI offers them.
+
+## 5. Trims for `true` (the method stays; only its waste goes; all six ruled in, §8 item 5)
+
+- **T1** — siblings by title only in the subtask prompt; the current item in full (W4).
+- **T2** — under the `digest` base, the warm sentence stops claiming the loaded files were inherited (W3).
+- **T3** — the granularity budget is measured above the agent's session base, not as `contextLimit/2` (W9).
+- **T4** — D9.
+- **T5** — targeted verification per item; the full suite once, in the last item (W6).
+- **T6** — no separate close-out item: final verification folds into the last item (W8).
+
+## 6. Behavior matrix
+
+| mode | sessions | who decides the split | fork base | handover |
+|---|---|---|---|---|
+| `off` | one whole-task session | — | — | none |
+| `ondemand` | whole-task session + continuations | — | — | self-directed (0056), wall D6 |
+| `auto` (new) | lead (+ continuations) [+ fan-out items] | the lead, after understanding, under D3/D4 | the lead itself | lead and items: self-directed, wall D6 |
+| `true` (old `auto`) | decompose + subtasks + wrap-up | the decompose session, upfront | `digest` (default) / `session` | none in subtasks (0056 D1) |
+| `auto` on an agent without fork or steer | as `ondemand` without notices | — | — | as degraded today |
+
+## 7. Expected effect
+
+- **T-008 replayed under `auto`.**
+  - The lead reads what the decompose session read.
+  - The split is rejected by the lead's own criteria, or failing that by D4: 9 of 11 items were dependent, and 8 files were shared.
+  - It finishes as one session: an estimated $4–6 against $12.28, and against about $18.6 including the stray sessions (X1).
+- **A large, separable task (T-032-sized, 365k peak context).**
+  - The lead understands and builds the shared foundation, then fans out 2–4 streams from its fork.
+  - The saving over `off` is estimated at 10–20%: the siblings' growth is not carried, and the understanding is cache-read, not rewritten.
+- **Everything else** costs what `off` costs, plus a split clause of a few hundred tokens in the prompt.
+- The target is **`auto` ≤ `off` on every task, below it on large, separable ones**. No mechanism under prompt caching makes decomposition dramatically cheaper than one well-run session. The 3× seen on T-008 was waste, not the price of decomposition.
+
+## 8. Rulings (2026-09-27: every recommendation accepted)
+
+1. **Stored `"auto"`** takes the new meaning, with no migration (D8). Rejected: `fix` rewriting it to `"true"` once to preserve the old behavior.
+2. **The D6 wall** applies to `ondemand` as well as `auto`. Rejected: `auto` only.
+3. **`DECOMPOSE_FINE` defaults to off** (D9). Rejected: leaving it on for `true`.
+4. **X2's carrier** is a glob list in `.opencode/auto/config.json` (amendable, shared with the repository). Rejected: a local-only file.
+5. **T1–T6 for `true`**: all six are taken. Rejected: keeping `true` byte-identical to today.
+
+## 9. Stages and steps
+
+- **S1 — X1.** Scrub the switches in `claudeEnv` and the `opencode serve` spawn. Tests: the adapter env case, and an `agent-fake` case asserting that no `OPENCODE_AUTO_*` reaches the agent's environment.
+- **S2 — D1.** Add the `"true"` mode and move every `"auto"` branch to it.
+  - Until S4, `auto` runs as the lead without the split clause (≡ `ondemand`), so S2 is safe to ship alone.
+  - Config parse and validation, the resume gate, preflight dispatch needs, runner dispatch.
+  - The shell's `--subtask` values and help text land on the shell branch.
+- **S3 — D6.** `steerWall` with the window-quarter floor. Tests: the `testrun` wall table.
+- **S4 — D2–D4.**
+  - The `whole.md` split clause (`{{#if adaptive}}`) and its renderer flag.
+  - Split detection after the lead ends, the guard, the driver-written `todo.md`, the rejection re-prompt through `forkEndedSession`, and the lead's commit before fan-out.
+- **S5 — D5.**
+  - The lead as the fork base, `fanout.md` with its renderer, and the changed-files list for dependent items.
+  - Item handover through the ondemand loop; last-item full verification.
+- **S6 — D7, D9, and T1–T6 and X2 as ruled** (§8).
+- **S7 — documentation and measurement.**
+  - Documentation: the AGENTS.md navigation line, glossary rows (adaptive decomposition, lead session, fan-out), `docs/structure.md`, and the shell README.
+  - One measured A/B run on two comparable tasks, compared on `stats.json` per-task usage. This is the 0003 §11 A/B matrix, finally run on claude.
+
+## 10. Touch points
+
+- **Mode and dispatch:** `src/opts.ts` (`SubtaskMode`), `src/config.ts` (value, default), `src/runner.ts` (dispatch), `src/resume-gate.ts`, `src/loop-preflight.ts` (dispatch needs: the lead is the `whole` role, items the `subtask` role).
+- **Execution:** `src/execute.ts` (lead, split detection and guard, fan-out), `src/session.ts` `ensureForkBase` (lead as base), `src/tasks.ts` (driver-written `S<nn>/todo.md`), `src/testrun.ts` `steerWall`, `src/capability.ts` (D7).
+- **Prompts:** `src/prompt.ts` + `templates/prompts/whole.md` + new `templates/prompts/fanout.md` (registered in `src/template.ts`).
+- **Switches and fixes:** `src/switches.ts` (`fine` default), `src/agent/claude/client.ts` `claudeEnv` + `src/agent/opencode/server.ts` (X1), `src/document/roles.ts` (X2).
+- **Tests:** `test/agent-fake.test.ts` (no split / accepted split / rejected split / dependent item with changed files / degraded agent).
+- **Shell:** `packages/auto` (flag values, help, README).
+
+## 11. Relationship to other designs
+
+- **0003** (fork-decompose): its premise ("understanding paid once, each fork's incremental cost far below re-reading files") holds for the `session` base. D5 applies it where it holds; T-008 measured the `digest` default where it does not.
+- **0030** (merged understand+decompose): unchanged under `true`.
+- **0056** (ondemand): `auto`'s lead is an ondemand session with a split clause. D5 re-enables handover for fan-out items only. D6 amends the wall.
+- **0045** (P1): X2 narrows a false-positive class without weakening the rule.
+- **0046** (parallel): fan-out siblings are parallel-ready.
+- **0055** (registry): the fork base per agent; the lead takes the `whole` role's tier, items the `subtask` role's.
