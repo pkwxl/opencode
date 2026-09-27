@@ -1,8 +1,8 @@
 # 0057 — Session exceptions: the agent's retry policy, quota windows and scheduled waits (design)
 
-Status: **design, ruled; S1–S3 implemented** (2026-09-26; revised the same day with the field
+Status: **design, ruled; S1–S4 implemented** (2026-09-26; revised the same day with the field
 evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13 records;
-S3 done 2026-09-27). Source: the user's request of the same day —
+S3 and S4 done 2026-09-27). Source: the user's request of the same day —
 the session exception flow has deficiencies; the driver should recognize what a coding agent
 reports across agents and models, formulate better wait-and-retry strategies for the rolling
 five-hour and weekly quota limits, know when an agent cures a limit by itself so the driver
@@ -858,6 +858,131 @@ imports the driver domain.
     a failure whose reset was stated.
 - **S4 — the scheduled wait.** §6 with §4.1's ladder skip, then §7's scope table, then `/exit`
   inside the wait, then §11 item 7's wait line and round-conclusion figure.
+
+  **Done (2026-09-27).**
+  - **The sleep** (`planSleep` in `src/session.ts`). Each round of the wait-and-probe loop
+    works out its sleep before it logs. Without a registry, the instant is the reset the last
+    failure stated: first the failure that led into the loop, then each failed probe's. A
+    probe that errors on its own leaves no instant. Under a registry, the instant is when the
+    down list comes back by waiting alone. `recoveryAt` (`src/select.ts`) walks the candidates
+    selection would walk and takes the soonest instant one of them is usable again: now for a
+    usable one, else a down mark's `until`, in either case moved to the next opening of its
+    windows. The marks already hold every stated reset, because the escalation and the failed
+    probes write them with `until` (S3), so the failure's own reset needs no second path. The
+    rule is conservative. A down mark without `until`, or a ring with no usable key, leaves the
+    instant unknown, since waiting alone may never cure it. A candidate the cap excludes is
+    skipped, as selection's wait decision skips it. A candidate usable now explains no wait.
+    The loop can still be there: a probe on a candidate whose mark has lapsed goes through
+    selection as a pick, and its failure re-marks nothing. Such a round falls back to the
+    failure's own reset, else the poll, so it never sleeps the jitter alone. §6's "when one is
+    known and is sooner" is read as "within the horizon": a known instant up to
+    `RESET_HORIZON_MS` away gives `until − now` plus `random() × HIBERNATE_JITTER_MS`, with
+    the registry's injected clock, random and sleep when there is one. Anything else sleeps
+    `recoveryWait`, as before. The probe, the clear-and-re-mark and the fork on success are
+    unchanged.
+  - **The ladder skip** (§4.1). `spentWindow` reads a failure with a stated `resetAt` and the
+    scope `5h`, `7d` or `day` as a spent window, whatever its class. With a registry or a
+    fallback ring, it escalates at once (key, then model). When the class gives no label, the
+    move names itself "five-hour / weekly / daily usage window spent". Without either, it goes
+    straight to the wait, which sleeps to the reset. On claude, S1 already skipped the ladder
+    through `isRetryable: false`. S4 adds opencode's header-stated windows and any other
+    adapter's.
+  - **The scope table** (§7).
+    - `request` and `token`: the retry branch of `src/watch.ts` no longer settles quota
+      wording on a per-minute cap before `agentGaveUp`. A rate class already waited for it.
+    - `5h`: the escalation as before, then the ladder skip and the scheduled sleep.
+    - `7d` and `day`: the down mark `until resetAt` (S3) and the scheduled wait.
+    - `unknown`: unchanged.
+
+    The scope rides `Watch` and the blocked `SessionResult` beside `resetAt` (`src/chain.ts`,
+    `src/attempt.ts`).
+  - **`/exit` inside the wait** (§11 item 9, `src/exit.ts`). `sleepUnlessExit` races the
+    sleep against `requestExit`, which now wakes every sleeper. It returns at once when /exit
+    was requested before the sleep. On a pause, `pauseForExit` writes the progress record the
+    re-run's recovery reads. The record names the most valuable fork source by the recovery's
+    own rule (the failed session, else the chain's session), active, with the chain's phase.
+    Its figure goes into a new optional `Progress.used`. `sessionUsage` takes that figure for
+    an agent that keeps no history (claude), which otherwise reads 0. The runner's resume and
+    the step resume in `src/artifact.ts` pass it. Then `ExitRequested("wait", …)` reaches
+    `runAll` and exits 3, like the other boundaries. A phase-less chain (a one-off session)
+    writes no record, and a chain with no session has nothing to keep; the pause line says
+    which. The re-run resumes the kept session through the existing resume path; it does not
+    fork it. The /exit receipt names the new boundary, and under `--interactive` the wait line
+    offers /exit.
+  - **Quota-window stats** (§11 item 7). Two kinds of wait are booked per model in a new
+    `quotaWaits` record of each bucket (`statsQuotaWait`, `src/stats.ts`): a wait scheduled to
+    a reset, and any wait entered after a `quota` or `rate` failure. Each still books the
+    generic `recovery` wait as well. The figure is the planned sleep, or the part slept before
+    an /exit; it is never a clock difference. Unlike `waitMs` it is not clamped at `MAX_TICK`
+    (30 minutes), so a five-hour wait counts as hours. The key is the model the wait is for:
+    under a registry the candidate that comes back first, else the chain's model. The round
+    conclusion adds one line after the model block when anything was booked. History merges
+    the record at the round rollover.
+  - **Tests.**
+    - `test/select.test.ts`: `recoveryAt`. It covers the soonest end, now for a usable
+      candidate, an unknown instant for a mark without `until` and for an exhausted ring, a
+      skipped cap-excluded candidate, and an end inside a closed window moved to its opening.
+    - `test/exit.test.ts`: `sleepUnlessExit` for a full sleep, a sleep cut short, an /exit
+      requested before it, and an injected sleep.
+    - `test/stats.test.ts` and `test/loop-conclusion.test.ts`: the three buckets, the
+      unclamped figure, absence until booked, lenient parsing, the rollover, and the
+      conclusion line.
+    - `test/agent-fake.test.ts`, a new block (§14's wait-and-probe case):
+      - without a registry, a stated five-hour reset: the sleep ends at it, one probe, a
+        fork, and the figure is booked;
+      - under a registry on a fake clock: b's reset plus half the jitter (3 900 000 ms), with
+        the line naming b and a's mark keeping its five-hour reset;
+      - an end beyond the horizon, and a mark without `until`: polled;
+      - a probe failing on a candidate whose mark lapsed: the next round sleeps to the
+        probe's stated reset, else polls;
+      - a spent weekly window of unknown wording: no ladder, a sleep to its reset, and under
+        a registry an immediate escalation;
+      - the per-minute gate;
+      - /exit in mid-sleep: the record, the line, no probe, and the partial figure booked;
+      - /exit requested before the wait: the failed session kept, and the one-off line;
+      - `sessionUsage`'s recorded figure.
+    - `test/agent-claude.test.ts`: §1.1's case with its reset still ahead sleeps to the
+      reset, not the 30-minute poll. `interruptedRun` now takes the switches.
+
+    Each new wait case fails against the code before S4, whose recovery sleep was a plain
+    `Bun.sleep` of `recoveryWait`.
+  - **Log lines.** The goldens are unchanged. What changes:
+    - A wait with a known instant reads "⏳ T-026 non-retryable session error encountered
+      (…); the five-hour usage window resets 2026-09-25T17:30:00.000Z, sleeping until about
+      <ISO> (local <time>, includes random delay), then probing service recovery with a fresh
+      temporary session (press Ctrl+C twice to force exit)". The window is named by the scope
+      (five-hour, weekly, daily, per-minute, else "the limit"). Under a registry the reason
+      reads "b is usable again at <ISO in the registry's zone>".
+    - A spent window with no class reads "the weekly usage window is spent (…)" where the
+      ladder used to log, and "⇄ … weekly usage window spent; keeping chain context,
+      switching model a → b" when it escalates.
+    - Under `--interactive` the wait lines end "(type /exit to pause the run here, or press
+      Ctrl+C twice to force exit)". The /exit receipt reads "…next safe boundary
+      (phase/task/subtask handover point, or a recovery wait)…".
+    - New: "⏸ T-001 /exit inside the recovery wait: the re-run resumes the original session
+      ses_1 (5000 tokens)", or the one-off and no-session forms.
+    - New in the round conclusion: "  time lost to quota windows: glm 3h 5m; opus 1m 30s".
+  - **Timing against §1.1.** Both events carry the reset in the `rejected` window since S3.
+    T-026 now sleeps from 14:39:25 to 17:30:00 plus up to 10 minutes of jitter, then probes
+    once. The field run resumed at 17:54:54 after five stubs and six probes; S1 alone would have
+    resumed at about 17:39. T-024 now wakes between 12:30:00 and 12:40:00, where S1 alone would
+    have resumed at about 12:45.
+  - **Still open.**
+    - The two-hour `TURN_TIMEOUT_MS` hazard S2 left here is not addressed. The scheduled sleep
+      runs between sessions and never meets the cap. The hazard is a transient wait longer
+      than two hours inside an opencode turn, which is still read as a failed dispatch. The
+      fix would be in the opencode adapter (extend the cap by an announced wait) and needs its
+      own step.
+    - A current opencode server publishes a retry as `session.status` only, with no headers
+      (S3). A limit met there reaches the wait with no instant and still polls. Only a
+      `session.error` with headers, or claude's `rejected` window, schedules.
+    - The window waits (`waitForWindow`, at dispatch and inside the loop) are not /exit
+      boundaries. §11 item 9 names only the recovery wait.
+    - A probe that selection picks as usable re-marks nothing when it fails (0055 §6.3
+      clears and re-marks only the probe decision's candidate). The sleep now covers that
+      case; whether such a failure should write a mark is 0055's to decide.
+    - A learned instant dies with the process until S5. S0's rejected claude stream is still
+      not captured.
 - **S5 — persistence** (§8), keyed by the profile's account.
 - **S6 — the durable documentation:** glossary, `docs/structure.md`, the AGENTS.md navigation
   line. Quota probes are deferred (§11 item 5) and have no step.

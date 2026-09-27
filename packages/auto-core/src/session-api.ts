@@ -191,10 +191,17 @@ export async function forkEndedSession(client: ClientSource, chain: SessionChain
 // can drive the criterion directly (same as ensureForkBase; the recovery
 // decision itself lives in runTask, the full pipeline is covered by the shell
 // package's e2e).
-export async function sessionUsage(client: AgentClient, id: string): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
+// recorded = the figure the progress record carries (an /exit inside the
+// recovery wait writes it, plans/0057 §6): an agent without readable history
+// resumes with it instead of 0.
+export async function sessionUsage(
+  client: AgentClient,
+  id: string,
+  recorded?: number,
+): Promise<{ used: number; pct: number; limit?: number; errorStub: boolean }> {
   // No readable history (MA.4): the same unknown as a failed read — pct 100
   // keeps the session from being reused on its figure.
-  if (!client.capabilities.history) return { used: 0, pct: 100, errorStub: false }
+  if (!client.capabilities.history) return { used: recorded ?? 0, pct: 100, errorStub: false }
   const got = await client.messages(id)
   if (!got.ok) return { used: 0, pct: 100, errorStub: false }
   const data = got.value

@@ -13,6 +13,7 @@ import {
   statsId,
   statsModelEvent,
   statsPhase,
+  statsQuotaWait,
   statsSessionBegin,
   statsSessionEnd,
   statsTask,
@@ -871,5 +872,78 @@ describe("stats per-model / per-tier / classify buckets", () => {
     expect(doc.history.totals.models?.glm?.usage.input).toBe(100)
     expect(doc.roundB.models).toBeUndefined() // the new round starts empty (C2 shape)
     expect(doc.roundB.tiers).toBeUndefined()
+  })
+})
+
+// Time lost to quota windows (plans/0057 §11 item 7): a per-model figure in
+// each bucket, beside the generic waitMs the wait also books.
+describe("stats quota-window waits", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-stats-quota-"))
+    now = 100_000
+    setStatsClock(() => now)
+  })
+
+  afterEach(async () => {
+    setStatsClock()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  async function readDoc(): Promise<StatsDoc> {
+    return JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as StatsDoc
+  }
+
+  test("no dir, or nothing slept: no-ops that write nothing", async () => {
+    await statsQuotaWait(undefined, "glm", 1000)
+    await statsQuotaWait(dir, "glm", 0)
+    await statsQuotaWait(dir, "glm", -5)
+    expect(await Bun.file(join(dir, ".auto", "stats.json")).exists()).toBe(false)
+  })
+
+  test("booked per model into the three buckets, unclamped; absent until one is booked", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await flushStats(dir)
+    expect(await Bun.file(join(dir, ".auto", "stats.json")).text()).not.toContain('"quotaWaits"')
+    // Three hours is past MAX_TICK: the figure is the planned sleep as is.
+    await statsQuotaWait(dir, "glm", 3 * 3_600_000)
+    await statsQuotaWait(dir, "glm", 60_000)
+    await statsQuotaWait(dir, "opus", 1000)
+    await flushStats(dir)
+    const doc = await readDoc()
+    for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+      expect(bucket.quotaWaits).toEqual({ glm: 3 * 3_600_000 + 60_000, opus: 1000 })
+    }
+    expect((await statsTotals(dir, "round"))?.quotaWaits?.glm).toBe(3 * 3_600_000 + 60_000)
+  })
+
+  test("a bad figure parses as missing; round rollover merges the figures into history", async () => {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(
+      join(dir, ".auto", "stats.json"),
+      JSON.stringify({
+        v: 1,
+        round: 1,
+        phase: "m",
+        lastWriteAt: 90_000,
+        taskB: { id: "T-001", quotaWaits: "nope" },
+        phaseB: { id: "m" },
+        roundB: { id: "1", quotaWaits: { glm: 5000, bad: "x", negative: -1 } },
+        sessions: {},
+        history: { rounds: 1, totals: { quotaWaits: { glm: 1000 } } },
+      }),
+    )
+    await loadStats(dir)
+    expect((await statsTotals(dir, "task"))?.quotaWaits).toBeUndefined()
+    expect((await statsTotals(dir, "round"))?.quotaWaits).toEqual({ glm: 5000 })
+    await flushStats(dir)
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    await loadStats(dir)
+    expect((await statsHistory(dir))?.totals.quotaWaits).toEqual({ glm: 6000 })
+    await flushStats(dir)
+    expect((await readDoc()).roundB.quotaWaits).toBeUndefined()
   })
 })

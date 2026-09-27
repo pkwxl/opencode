@@ -211,6 +211,40 @@ export function select(ctx: SelectContext, call: SelectCall): Selection {
   return { kind: "probe", candidate: inWindow ?? inPlay[0]! }
 }
 
+// The earliest instant a list with nothing usable becomes usable again by
+// waiting alone, and the candidate usable then (plans/0057 §6): the
+// wait-and-probe loop sleeps to it instead of polling. A candidate in play
+// comes back when its down mark's `until` has passed and its window is open —
+// the next opening at or after that instant; one below the cap never comes
+// back by waiting and is passed over, as is one whose window never opens.
+// undefined when no such instant is known: a candidate is down with no end
+// (a mark without `until`, or a ring with no usable key — when a ring's keys
+// come back is not an input here), so only a probe can tell when it
+// recovers, and the loop keeps its polled interval — or nothing ever comes
+// back.
+// AUTO-DECISION: one candidate down with no known end withholds the instant for the whole list, rather than the soonest known instant being taken anyway (the loop's probe is the only way such a candidate returns, and sleeping past the polled interval to another candidate's reset would stop probing it — the scheduled wait may only lengthen a sleep where every way back has an instant)
+export function recoveryAt(ctx: SelectContext, call: SelectCall): { at: number; candidate: Candidate } | undefined {
+  let soonest: { at: number; candidate: Candidate } | undefined
+  for (const candidate of candidatesOf(ctx, call).candidates.filter((item) => passesFilter(ctx, item))) {
+    const [, down, ring, small] = faultsOf(ctx, call, candidate)
+    if (small) continue
+    if (ring) return undefined
+    let at = call.now
+    if (down) {
+      const until = ctx.marks?.get(candidateKey(candidate))?.until
+      if (until === undefined) return undefined
+      at = until
+    }
+    if (candidate.kind === "entry") {
+      const opens = nextOpening([candidate.entry], ctx.registry.tz, at)
+      if (opens === undefined) continue
+      at = opens
+    }
+    if (soonest === undefined || at < soonest.at) soonest = { at, candidate }
+  }
+  return soonest
+}
+
 // §6.2 rule 1: the agent filter keeps only the models on its adapter; a raw
 // value runs on the default agent (§9 R6), so the filter reads that agent's
 // name for it.

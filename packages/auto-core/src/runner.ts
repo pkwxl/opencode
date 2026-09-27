@@ -191,8 +191,9 @@ export async function runTask(
     // guarantee the first prompt always reused, at the cost of the post-resume
     // log and the chain's later reuse decisions all working off fake values;
     // first-round reuse is now guaranteed by attempt's `resumed` criterion, so
-    // only the real values are taken here.
-    const usage = alive ? await sessionUsage(recalledClient, recalled.session!) : undefined
+    // only the real values are taken here (for an agent without readable
+    // history, the figure an /exit inside the recovery wait recorded).
+    const usage = alive ? await sessionUsage(recalledClient, recalled.session!, recalled.used) : undefined
     // Belt and braces (plans/0015-session-error-retry-plan.md item 5): a
     // legacy progress.json may record a session that only ever took one error
     // and never produced real content (leftover of the old "retry means a

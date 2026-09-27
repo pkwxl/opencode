@@ -14,7 +14,7 @@
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
-import { classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
+import { agentGaveUp, classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
 import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk, type ClassifierAnswer } from "./classify"
 import { afterSession, autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
@@ -215,11 +215,13 @@ export async function watch(
   // The reset fields a settled failure carries to the escalation: a reset the
   // provider or the agent stated (plans/0057 §5.3, it outranks the
   // classifier's), else the accepted reset time of the known answer, or the
-  // answer still on its way. The stated one rides without a registry too, to
-  // no effect: only the registry's down marks read it.
+  // answer still on its way. The stated one rides without a registry too: the
+  // down marks and the wait-and-probe loop's scheduled sleep (plans/0057 §6)
+  // read it, and it carries its scope, which the escalation and the wait line
+  // read (§7).
   const resetFields = (): Partial<Watch> => {
     const stated = acceptedReset(errorInfo, opts.routing?.clock?.() ?? Date.now())
-    if (stated !== undefined) return { resetAt: stated }
+    if (stated !== undefined) return { resetAt: stated, ...(errorInfo?.scope !== undefined ? { scope: errorInfo.scope } : {}) }
     if (classifier === undefined) return {}
     if (answer !== undefined) {
       const at = acceptedReset(answer, classifier.now())
@@ -983,7 +985,12 @@ export async function watch(
       // the class now; otherwise the classifier is asked beside the stream
       // and its answer settles the turn from onAnswer while it still retries.
       const { cls, classified } = consult("retry", errorInfo, classify(errorInfo))
-      if (cls === "quota" || cls === "auth" || cls === "rate") {
+      // A per-minute cap the agent is still backing off from (plans/0057 §7):
+      // its own retrying cures it, so the turn does not settle before the
+      // agent gave up — quota wording on a refused request included. (A rate
+      // class already waits for agentGaveUp.)
+      const perMinute = (errorInfo.scope === "request" || errorInfo.scope === "token") && !agentGaveUp(errorInfo, policy)
+      if ((cls === "quota" && !perMinute) || cls === "auth" || cls === "rate") {
         await client.abort(sessionID)
         const msg = errorInfo.message ?? error
         error = error ? `${error}\n${msg}` : msg

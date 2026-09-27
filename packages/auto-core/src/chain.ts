@@ -73,8 +73,12 @@ export type Watch = {
   // still on its way when the turn ended and nothing stated a reset,
   // resolving to such a reset time or undefined — it can only set when the
   // down marks written for this failure clear, never change the class.
+  // `scope` = the limit a stated resetAt belongs to (errorInfo.scope, plans/
+  // 0057 §7): a spent five-hour, daily or weekly window skips the retry
+  // ladder, and the wait line names it. Absent with a classifier's reset.
   classified?: boolean
   resetAt?: number
+  scope?: LimitScope
   pendingReset?: Promise<number | undefined>
   // This turn's token increments, accumulated (STATS_PLAN §2, T-003): per
   // step-finish part, summed with part.id dedup — the only accounting that
@@ -101,7 +105,7 @@ export type Watch = {
 
 export type SessionResult =
   | { type: "idle"; lastText: string; testHandover?: boolean }
-  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & Pick<Watch, "classified" | "resetAt" | "pendingReset"> & {
+  | ({ type: "blocked"; question: string; retryable?: boolean; failover?: boolean; errorClass?: ErrorClass } & Pick<Watch, "classified" | "resetAt" | "scope" | "pendingReset"> & {
       // Strict recovery: this blocked outcome was triggered by an invalid
       // handover document; the unit owner (executeWhole/runSubtask) rolls
       // back to the unit baseline and redoes the unit from a cold start

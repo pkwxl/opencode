@@ -169,6 +169,18 @@ function modelBlockLines(models: Record<string, ModelStat> | undefined, tiers: R
   return lines
 }
 
+// The time the round's wait-and-probe loops slept for quota windows, per
+// model (plans/0057 §11 item 7): one indented line after the per-model block,
+// names alphabetical like it. Its figures are the planned sleeps, so a
+// five-hour window reads as the hours it cost where the round line's wait
+// segment clamps every wait. No such wait — every run that met no limit —
+// adds nothing, and the conclusion keeps its shape.
+function quotaWaitLine(waits: Record<string, number> | undefined): string[] {
+  const names = Object.keys(waits ?? {}).sort()
+  if (!names.length) return []
+  return [`  time lost to quota windows: ${names.map((name) => `${name} ${formatDuration(waits![name]!)}`).join("; ")}`]
+}
+
 // Round-complete line (§4.4): this round [`■ round N complete: total W (AI
 // A[, human wait Z]), [P phases / ] T tasks / S sessions`, tokens line];
 // phaseCount is only provided on the phased path (the phase index done count =
@@ -176,7 +188,9 @@ function modelBlockLines(models: Record<string, ModelStat> | undefined, tiers: R
 // the single pseudo-phase "m" throughout, a count carries no information).
 // Under a registry, per-model lines and the per-tier summary follow the
 // tokens line (plans/0055 §10 item 12); with no model data they are absent
-// and the block is byte-identical to the pre-registry form (C2).
+// and the block is byte-identical to the pre-registry form (C2). The
+// quota-window line follows them (plans/0057 §11 item 7), registry or not,
+// only when a wait was booked.
 // When history.rounds > 0, two cross-round cumulative lines are appended
 // (indented two spaces, "cumulative" prefix distinguishes them from the
 // this-round line). The round number comes from roundB.id (loadStats snapshots
@@ -205,6 +219,7 @@ export async function roundCompleteLines(
     formatUsageLine(totals.usage),
   ]
   lines.push(...modelBlockLines(totals.models, totals.tiers))
+  lines.push(...quotaWaitLine(totals.quotaWaits))
   const history = await statsHistory(directory)
   if (history && history.rounds > 0) {
     const h = history.totals

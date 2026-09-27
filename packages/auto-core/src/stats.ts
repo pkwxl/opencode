@@ -66,6 +66,14 @@ export type Totals = {
   // (plans/0055 §10 item 12): same booking point, key = the tier the dispatch
   // was routed as. Optional for the same C2 reason.
   tiers?: Record<string, TierStat>
+  // Time slept in the wait-and-probe loop for a quota window, in ms per
+  // model (plans/0057 §11 item 7): the model whose limit the wait was for —
+  // an internal name under a registry, else the model the chain ran on. The
+  // same wait is also in waitMs (the `recovery` wait, clamped per segment
+  // like every wait); this figure is the planned sleep, unclamped, so a
+  // five-hour window reads as the hours it cost. Optional and absent until
+  // the first such wait, so a run without one keeps the exact shape.
+  quotaWaits?: Record<string, number>
 }
 
 // Per-model record: the usage booked for the model, how many sessions ran on
@@ -223,7 +231,20 @@ function parseTotals(raw: unknown): Totals {
     usage: parseUsage(t.usage),
     models: parseModelStats(t.models),
     tiers: parseTierStats(t.tiers),
+    quotaWaits: parseQuotaWaits(t.quotaWaits),
   }
+}
+
+// Quota-window waits per model, leniently (bad entry skipped); an absent or
+// empty section returns undefined (the C2 shape).
+function parseQuotaWaits(raw: unknown): Record<string, number> | undefined {
+  if (typeof raw !== "object" || !raw) return undefined
+  const waits: Record<string, number> = {}
+  for (const [name, value] of Object.entries(raw)) {
+    const ms = num(value)
+    if (ms > 0) waits[name] = ms
+  }
+  return Object.keys(waits).length ? waits : undefined
 }
 
 // Per-model records, leniently (mirror parseUsage: bad = missing, never
@@ -388,8 +409,9 @@ function emptyTierStat(): TierStat {
   return { usage: emptyUsage(), sessions: 0 }
 }
 
-// Sum one bucket's per-model/per-tier sections into an aggregate Totals
-// (history at round rollover): creates the sections lazily, so an aggregate
+// Sum one bucket's per-model/per-tier sections and its quota-window waits
+// into an aggregate Totals (history at round rollover): creates the sections
+// lazily, so an aggregate
 // that received no model data stays without them (C2 shape).
 function mergeModelStats(into: Totals, from: Totals) {
   for (const [name, stat] of Object.entries(from.models ?? {})) {
@@ -404,6 +426,10 @@ function mergeModelStats(into: Totals, from: Totals) {
     const target = ((into.tiers ??= {})[name] ??= emptyTierStat())
     addUsage(target.usage, stat.usage)
     target.sessions += stat.sessions
+  }
+  for (const [name, ms] of Object.entries(from.quotaWaits ?? {})) {
+    const waits = (into.quotaWaits ??= {})
+    waits[name] = (waits[name] ?? 0) + ms
   }
 }
 
@@ -576,6 +602,7 @@ function copyTotals(t: Totals): Totals {
     usage: { ...t.usage },
     ...(t.models !== undefined ? { models: copyModelStats(t.models) } : {}),
     ...(t.tiers !== undefined ? { tiers: copyTierStats(t.tiers) } : {}),
+    ...(t.quotaWaits !== undefined ? { quotaWaits: { ...t.quotaWaits } } : {}),
   }
 }
 
@@ -900,6 +927,23 @@ export async function statsClassifyUsage(dir: string | undefined, usage: Usage):
     const stat = ((bucket.models ??= {})[CLASSIFY_BUCKET] ??= emptyModelStat())
     addUsage(stat.usage, usage)
     stat.sessions += 1
+  }
+  queueWrite(dir, handle)
+}
+
+// A wait-and-probe sleep spent on a quota window (plans/0057 §11 item 7):
+// ms is added to the model's figure in the three buckets, beside the
+// `recovery` wait the same sleep books through statsWaitBegin/End. The model
+// key is the caller's (an internal name, else the model string the chain ran
+// on). Unclamped: the caller passes the sleep it planned, or the part it
+// slept before an /exit cut it short, never a clock difference a suspend
+// could inflate. Lazy-loaded like the other APIs when no handle exists.
+export async function statsQuotaWait(dir: string | undefined, model: string, ms: number): Promise<void> {
+  if (!dir || !(ms > 0)) return
+  const { handle } = await ensure(dir)
+  for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+    const waits = (bucket.quotaWaits ??= {})
+    waits[model] = (waits[model] ?? 0) + ms
   }
   queueWrite(dir, handle)
 }

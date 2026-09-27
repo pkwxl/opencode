@@ -92,10 +92,11 @@ export function startInteractive(
     // written through the regular wrap-up and the next run resumes exactly.
     // It does not check whether a session is currently active (unlike the
     // discard semantics of message forwarding, /exit's intent is independent
-    // of whether a session is attached).
+    // of whether a session is attached). A wait-and-probe loop sleeping at
+    // the time wakes and pauses at once (plans/0057 §6).
     if (text === "/exit") {
       requestExit()
-      log("🚪 /exit received: will pause and exit at the next safe boundary (phase/task/subtask handover point); progress is persisted, re-run to resume exactly")
+      log("🚪 /exit received: will pause and exit at the next safe boundary (phase/task/subtask handover point, or a recovery wait); progress is persisted, re-run to resume exactly")
       rl.prompt()
       return
     }

@@ -9,7 +9,7 @@ import { parseWindow, type ModelWindow } from "../src/model-window"
 import type { ModelEntry, ModelReference, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models"
 import { phaseType, type Tier } from "../src/phases/registry"
 import type { ModelPolicy } from "../src/switches"
-import { candidatesOf, select, type Candidate, type SelectCall, type SelectContext } from "../src/select"
+import { candidatesOf, recoveryAt, select, type Candidate, type SelectCall, type SelectContext } from "../src/select"
 
 // Friday 2026-09-25 12:00 UTC: inside the avoid windows the tests declare
 // (00:00-13:00, 00:00-14:00) and outside the only window (00:00-08:00).
@@ -304,6 +304,50 @@ describe("nothing usable (§6.3)", () => {
       { agentFilter: "claude" },
     )
     expect(select(routed, call())).toEqual({ kind: "empty", tier: "deep", route: "whole", filter: "claude" })
+  })
+})
+
+describe("the recovery instant (plans/0057 §6)", () => {
+  const until = (marks: Record<string, string>): Map<string, { until?: number }> =>
+    new Map(Object.entries(marks).map(([name, clock]): [string, { until?: number }] => [name, { until: AT(clock) }]))
+  const at = (result: ReturnType<typeof recoveryAt>): [number, string] | undefined =>
+    result === undefined ? undefined : [result.at, nameOf(result.candidate)]
+
+  test("the soonest known end among the down candidates; a usable candidate is usable now", () => {
+    const ctx = context({}, { marks: until({ opus: "15:00", "opus-b": "13:00", k3: "14:00" }) })
+    expect(at(recoveryAt(ctx, call()))).toEqual([AT("13:00"), "opus-b"])
+    // k3 not marked: usable now, so the instant is now.
+    const open = context({}, { marks: until({ opus: "15:00", "opus-b": "13:00" }) })
+    expect(at(recoveryAt(open, call()))).toEqual([NOW, "k3"])
+  })
+
+  test("any down candidate without a known end leaves the instant unknown: the wait polls", () => {
+    const marks = until({ opus: "13:00", k3: "14:00" })
+    marks.set("opus-b", {})
+    expect(recoveryAt(context({}, { marks }), call())).toBeUndefined()
+  })
+
+  test("a ring with no usable key leaves the instant unknown; a cap-excluded candidate is not waited for", () => {
+    const key: ModelReference = { kind: "env", name: "MOONSHOT_KEY_A", ref: "{env:MOONSHOT_KEY_A}", label: "MOONSHOT_KEY_A" }
+    const ringed = MODELS.map((item) =>
+      item.name === "k3" ? { ...item, provider: "moonshotai", keys: [key] } : item,
+    )
+    const marks = until({ opus: "15:00", "opus-b": "13:00" })
+    expect(recoveryAt(context({ models: ringed }, { marks, ringUsable: () => false }), call())).toBeUndefined()
+    expect(at(recoveryAt(context({ models: ringed }, { marks, ringUsable: () => true }), call()))).toEqual([NOW, "k3"])
+    // opus-b's known 32k window is below the cap: its sooner end is ignored.
+    const small = MODELS.map((item) => (item.name === "opus-b" ? { ...item, context: 32 } : item))
+    const all = until({ opus: "15:00", "opus-b": "12:30", k3: "14:00" })
+    expect(at(recoveryAt(context({ models: small }, { marks: all }), call()))).toEqual([AT("14:00"), "k3"])
+  })
+
+  test("an end inside a closed window moves to the window's next opening", () => {
+    const models = MODELS.map((item) => (item.name === "opus" ? { ...item, avoid: [window("00:00-13:00")] } : item))
+    const marks = until({ opus: "12:30", "opus-b": "14:00", k3: "15:00" })
+    expect(at(recoveryAt(context({ models }, { marks }), call()))).toEqual([AT("13:00"), "opus"])
+    // Not down but outside its window: usable at the opening.
+    const open = until({ "opus-b": "14:00", k3: "15:00" })
+    expect(at(recoveryAt(context({ models }, { marks: open }), call()))).toEqual([AT("13:00"), "opus"])
   })
 })
 

@@ -20,6 +20,7 @@ import {
   statsHistory,
   statsModelEvent,
   statsPhase,
+  statsQuotaWait,
   statsSessionBegin,
   statsSessionEnd,
   statsTask,
@@ -303,6 +304,25 @@ describe("roundCompleteLines per-model lines", () => {
     expect(lines?.[2]).toBe("  model glm: 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
     expect(lines?.[3]).toBe("  tiers: simple 1 sessions, tokens in 100 / out 30 / cache-read 0 / cache-write 0, hit 0.0%")
     expect(lines).toHaveLength(4)
+  })
+
+  test("time lost to quota windows: one line, names sorted, the figure unclamped where the wait segment clamps (plans/0057 §11 item 7)", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5 * 60_000
+    await statsSessionEnd(dir, "ses_1", usage({ input: 100, output: 30 }))
+    // A recovery wait slept to a five-hour window's reset: the generic wait
+    // segment clamps at MAX_TICK, the quota figure keeps the planned sleep.
+    await statsWaitBegin(dir, "recovery")
+    now += 3 * 3_600_000 + 5 * 60_000
+    await statsWaitEnd(dir)
+    await statsQuotaWait(dir, "fake/model-1", 3 * 3_600_000 + 5 * 60_000)
+    await statsQuotaWait(dir, "glm", 90_000)
+    const lines = await roundCompleteLines(dir)
+    expect(lines?.[0]).toContain("human wait 30m 0s")
+    expect(lines?.[2]).toBe("  time lost to quota windows: fake/model-1 3h 5m; glm 1m 30s")
+    expect(lines).toHaveLength(3)
   })
 
   test("no model data: the block stays at its two lines, byte-identical (C2)", async () => {

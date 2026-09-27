@@ -171,7 +171,8 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
   } catch (error) {
     // /exit (design doc plans/0014-exit-resume-design.md): the three safe
     // boundaries (phase/task/subtask, the latter thrown up from runner.ts via
-    // runTask) land here uniformly — the run has stopped at that boundary's
+    // runTask) and the recovery wait (plans/0057 §6, thrown up from
+    // runSession) land here uniformly — the run has stopped at that boundary's
     // normal wrap-up point (unit state files and .auto/progress.json all
     // written, isomorphic to a real crash/kill interruption at the same spot);
     // exit code 3 differs from 2 (blocked/pending, needs manual action):

@@ -130,6 +130,12 @@ export type Progress = {
   // agent's session, so every record written before the binding stays valid.
   // AUTO-DECISION: any registry writes the field, even a single-agent one (the registry's presence is the switch; keying the shape on the profile count would flip records the moment an operator adds a profile nobody dispatches on, and the read side accepts both shapes forever anyway)
   agent?: string
+  // The recorded session's context figure (tokens), written only by an /exit
+  // inside the recovery wait (plans/0057 §6): the resume reads it when the
+  // agent keeps no readable history to rebuild the figure from (the claude
+  // adapter), so the continuation does not start from 0. Absent everywhere
+  // else, so every other record keeps its shape.
+  used?: number
 }
 
 const FILE = join(".auto", "progress.json")
@@ -221,6 +227,7 @@ function parseProgress(raw: string): Progress | undefined {
       model: typeof parsed.model === "string" ? parsed.model : undefined,
       // The session's agent profile (§8.2): absent = the default agent's.
       agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
+      used: typeof parsed.used === "number" && Number.isFinite(parsed.used) && parsed.used >= 0 ? parsed.used : undefined,
     }
   } catch {
     return undefined

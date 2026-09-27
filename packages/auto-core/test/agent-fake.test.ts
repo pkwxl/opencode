@@ -14,11 +14,12 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentEvent, AgentHost, AgentRetryPolicy } from "../src/agent/types"
+import type { AgentError, AgentEvent, AgentHost, AgentRetryPolicy } from "../src/agent/types"
 import { attempt } from "../src/attempt"
 import { singleHost, startPool } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
+import { ExitRequested, requestExit, resetExitRequest } from "../src/exit"
 import type { SessionChain, Watch } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
@@ -1499,6 +1500,308 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     expect(header.resetAt).toBe(statedAt)
     expect(header.pendingReset).toBeUndefined()
     expect(header.errorInfo).toMatchObject({ resetAt: statedAt, scope: "5h" })
+  })
+})
+
+// The scheduled wait (plans/0057 §6, §7): the wait-and-probe loop sleeps to a
+// known reset plus hibernate's jitter instead of polling; a spent usage
+// window skips the retry ladder; a per-minute cap stays with the agent's own
+// ladder; /exit inside the wait pauses the run and keeps the recovery point.
+describe("the scheduled wait (plans/0057 §6, §7)", () => {
+  const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
+  const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
+  const T0 = Date.parse("2026-09-25T14:39:25Z")
+  // A one-agent fleet, deep [a, b], on a fake clock the injected sleep
+  // advances (and records).
+  const fleet = (random = 0.5) => {
+    const clock = { now: T0, sleeps: [] as number[] }
+    const routing: RoutingFacts = {
+      registry: {
+        layers: [{ name: "operator", path: "/unused/models.json" }],
+        tz: "UTC",
+        agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+        models: new Map([entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" })].map((item) => [item.name, item])),
+        tiers: { deep: tierList("deep", ["a", "b"]), simple: tierList("simple", ["b"]) },
+        routes: new Map(),
+        unused: [],
+      },
+      agentFilter: "opencode",
+      filterSource: undefined,
+      defaultAgent: "opencode",
+      runAgent: "opencode",
+      clock: () => clock.now,
+      random: () => random,
+      sleep: async (ms) => {
+        clock.sleeps.push(ms)
+        clock.now += ms
+      },
+    }
+    return { clock, routing }
+  }
+  const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
+  const limitError = (session: string, fields: Partial<AgentError> = {}): AgentEvent =>
+    ev.error(session, { name: "APIError", message: "usage limit reached, quota exceeded", isRetryable: false, ...fields })
+  // The first turn fails with the given events after 5000 tokens of work;
+  // every later turn is the default one.
+  const failsFirst = (fail: (session: string) => AgentEvent[]) => (ctx: { session: string; n: number }) =>
+    ctx.n === 1 ? [ev.message(ctx.session, "msg_fail", 5000), ...fail(ctx.session)] : undefined
+  const capture = (onLine?: (line: string) => void) => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      const line = args.map(String).join(" ")
+      lines.push(line)
+      onLine?.(line)
+    })
+    return { lines, restore: () => printed.mockRestore() }
+  }
+  const waitLine = (lines: string[]) => lines.find((line) => line.includes("then probing service recovery"))
+  const quotaWaits = async (dir: string): Promise<Record<string, number> | undefined> => {
+    await flushStats(dir)
+    return JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()).roundB.quotaWaits
+  }
+
+  let dir: string
+  beforeEach(async () => {
+    resetFailback()
+    dir = await mkdtemp(join(tmpdir(), "auto-wait-"))
+  })
+  afterEach(async () => {
+    resetExitRequest()
+    await flushStats(dir)
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("no registry: a stated five-hour reset sets the sleep, and the wait is booked as time lost to quota windows", async () => {
+    const random = spyOn(Math, "random").mockReturnValue(0)
+    const resetAt = Date.now() + 300
+    const agent = make({ turn: failsFirst((session) => [limitError(session, { resetAt, scope: "5h" }), ev.idle(session)]) })
+    const out = capture()
+    const began = Date.now()
+    let result
+    try {
+      result = await runSession(agent.client, task, "p", { dir }, fresh(), undefined, undefined, DEFAULTS)
+    } finally {
+      out.restore()
+      random.mockRestore()
+    }
+    expect(result.type).toBe("idle")
+    // Slept to the reset (zero jitter), not the 30-minute poll.
+    expect(Date.now() - began).toBeGreaterThanOrEqual(100)
+    expect(waitLine(out.lines)).toContain(`; the five-hour usage window resets ${new Date(resetAt).toISOString()}, sleeping until about `)
+    expect(waitLine(out.lines)).toContain("(local ")
+    expect(agent.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_2", "ses_3"])
+    expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
+    const booked = (await quotaWaits(dir))?.[MODEL] ?? 0
+    expect(booked).toBeGreaterThan(0)
+    expect(booked).toBeLessThanOrEqual(300)
+  })
+
+  test("a registry: the sleep ends when the first candidate is usable again by waiting alone, plus the jitter", async () => {
+    const { clock, routing } = fleet(0.5)
+    const aReset = T0 + 3 * 3_600_000
+    const bReset = T0 + 3_600_000
+    const agent = make({
+      turn: (ctx) =>
+        ctx.n === 1
+          ? [
+              ev.message(ctx.session, "msg_a", 5000),
+              { type: "retry", session: ctx.session, attempt: 1, next: 3 * 3_600_000, error: { message: "rate limited", statusCode: 429, resetAt: aReset, scope: "5h" } },
+            ]
+          : ctx.n === 2
+            ? [ev.message(ctx.session, "msg_b", 5000), limitError(ctx.session, { resetAt: bReset }), ev.idle(ctx.session)]
+            : undefined,
+    })
+    const out = capture()
+    let result
+    try {
+      result = await runSession(agent.client, task, "p", { routing }, deepChain(), undefined, undefined, DEFAULTS)
+    } finally {
+      out.restore()
+    }
+    expect(result.type).toBe("idle")
+    // a is down to its five-hour reset, b to its quota reset: b comes back
+    // first, and the sleep is b's reset plus half the jitter.
+    expect(clock.sleeps).toEqual([3_600_000 + 300_000])
+    expect(waitLine(out.lines)).toContain(`; b is usable again at ${isoInZone(bReset, "UTC")}, sleeping until about ${new Date(bReset + 300_000).toISOString()}`)
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b", "prov/b", "prov/b"])
+    expect(modelDownMark("a")).toEqual({ until: aReset })
+  })
+
+  test("an end beyond the horizon, or a down candidate with no known end, polls at the recovery interval", async () => {
+    const polled = parseSwitches({ [SWITCH_ENV.recoveryWait]: "1" })
+    const layouts: [string, number | undefined][][] = [
+      [
+        ["a", T0 + 8 * 86_400_000],
+        ["b", T0 + 8 * 86_400_000],
+      ],
+      [
+        ["a", undefined],
+        ["b", T0 + 3_600_000],
+      ],
+    ]
+    for (const marks of layouts) {
+      resetFailback()
+      const { clock, routing } = fleet()
+      for (const [name, until] of marks) markModelDown(name, until)
+      const agent = make()
+      const out = capture()
+      try {
+        expect((await runSession(agent.client, task, "p", { routing }, deepChain(), undefined, undefined, polled)).type).toBe("idle")
+      } finally {
+        out.restore()
+      }
+      expect(clock.sleeps).toEqual([60_000])
+      expect(waitLine(out.lines)).toContain("; waiting 1 minutes, then probing service recovery")
+      // The probe clears a's mark and the dispatch continues on it.
+      expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
+    }
+  })
+
+  test("a candidate usable now explains no wait: after a probe fails on it, the failure's own reset, else the poll", async () => {
+    // Both candidates down to known ends: the first sleep is a's. At the wake
+    // a's mark has lapsed, so selection picks it for the probe as usable, and
+    // the probe's failure re-marks nothing. The next round's wait is that
+    // failure's, never a jitter-only round.
+    const polled = parseSwitches({ [SWITCH_ENV.recoveryWait]: "1" })
+    const wake = T0 + 3_600_000 + 300_000
+    const probeReset = T0 + 3 * 3_600_000
+    const cases: { fields: Partial<AgentError>; second: number; reason: string }[] = [
+      { fields: {}, second: 60_000, reason: "; waiting 1 minutes, then probing" },
+      { fields: { resetAt: probeReset }, second: probeReset - wake + 300_000, reason: `; the limit resets ${new Date(probeReset).toISOString()}, sleeping until about ` },
+    ]
+    for (const { fields, second, reason } of cases) {
+      resetFailback()
+      const { clock, routing } = fleet(0.5)
+      markModelDown("a", T0 + 3_600_000)
+      markModelDown("b", T0 + 2 * 3_600_000)
+      const agent = make({ turn: (ctx) => (ctx.n === 1 ? [limitError(ctx.session, fields), ev.idle(ctx.session)] : undefined) })
+      const out = capture()
+      try {
+        expect((await runSession(agent.client, task, "p", { routing }, deepChain(), undefined, undefined, polled)).type).toBe("idle")
+      } finally {
+        out.restore()
+      }
+      expect(clock.sleeps).toEqual([3_900_000, second])
+      expect(out.lines.filter((line) => line.includes("then probing service recovery"))[1]).toContain(reason)
+      // The failed probe, the probe that got through, the dispatch.
+      expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a", "prov/a"])
+    }
+  })
+
+  test("a spent weekly window of unknown wording skips the retry ladder: without a registry it sleeps to the reset, under one it escalates at once", async () => {
+    const weekly = (resetAt: number) =>
+      failsFirst((session) => [ev.error(session, { name: "APIError", message: "Wochenkontingent aufgebraucht", resetAt, scope: "7d" }), ev.idle(session)])
+    const random = spyOn(Math, "random").mockReturnValue(0)
+    const resetAt = Date.now() + 200
+    const plain = make({ turn: weekly(resetAt) })
+    const out = capture()
+    let result
+    try {
+      result = await runSession(plain.client, task, "p", opts, fresh(), undefined, undefined, DEFAULTS)
+    } finally {
+      out.restore()
+      random.mockRestore()
+    }
+    expect(result.type).toBe("idle")
+    // The ladder's first rung (0 minutes) would have retried at once.
+    expect(out.lines.some((line) => line.includes("transient session error"))).toBe(false)
+    expect(waitLine(out.lines)).toContain("⏳ T-001 the weekly usage window is spent (session error: ")
+    expect(waitLine(out.lines)).toContain(`; the weekly usage window resets ${new Date(resetAt).toISOString()}, sleeping until about `)
+    expect(plain.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_2", "ses_3"])
+    expect(plain.argsOf("fork")).toEqual([["ses_1", undefined]])
+
+    const { routing } = fleet()
+    const aReset = T0 + 2 * 86_400_000
+    const routed = make({ turn: weekly(aReset) })
+    const routedOut = capture()
+    try {
+      expect((await runSession(routed.client, task, "p", { routing }, deepChain(), undefined, undefined, DEFAULTS)).type).toBe("idle")
+    } finally {
+      routedOut.restore()
+    }
+    expect(routedOut.lines.some((line) => line.includes("⇄ T-001 weekly usage window spent; keeping chain context, switching model a → b"))).toBe(true)
+    expect(routed.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b"])
+    expect(modelDownMark("a")).toEqual({ until: aReset })
+  })
+
+  test("a per-minute cap stays with the agent's own ladder until it gives up, quota wording included", async () => {
+    const refused = (attempt: number, scope?: "request" | "token"): AgentEvent => ({
+      type: "retry",
+      session: "s",
+      attempt,
+      error: { message: "usage limit reached, quota exceeded", statusCode: 429, ...(scope !== undefined ? { scope } : {}) },
+    })
+    for (const scope of ["request", "token"] as const) {
+      const agent = make()
+      const cured = await watch(agent.client, "s", stream([refused(1, scope), ev.text("s", "t", "back"), ev.idle("s")]), opts)
+      expect(cured.error).toBe("")
+      expect(agent.argsOf("abort")).toEqual([])
+    }
+    // No scope, or the agent's attempts spent: settled as quota.
+    for (const signal of [refused(1), refused(3, "request")]) {
+      const agent = make()
+      const result = await watch(agent.client, "s", stream([signal, ev.idle("s")]), opts)
+      expect(result.errorClass).toBe("quota")
+      expect(result.failover).toBe(true)
+      expect(agent.argsOf("abort")).toEqual([["s"]])
+    }
+  })
+
+  test("/exit inside the wait pauses the run: the progress record keeps the session the recovery would continue, with its figure", async () => {
+    const agent = make({ turn: failsFirst((session) => [limitError(session), ev.idle(session)]) })
+    const chain: SessionChain = { ...fresh(), phase: { kind: "decompose" } }
+    const out = capture((line) => {
+      if (line.includes("then probing service recovery")) setTimeout(requestExit, 20)
+    })
+    const began = Date.now()
+    let caught: unknown
+    try {
+      await runSession(agent.client, task, "p", { dir }, chain, undefined, undefined, DEFAULTS)
+    } catch (error) {
+      caught = error
+    } finally {
+      out.restore()
+    }
+    // The 30-minute poll ended at the request.
+    expect(Date.now() - began).toBeLessThan(10_000)
+    expect(caught).toBeInstanceOf(ExitRequested)
+    expect((caught as ExitRequested).boundary).toBe("wait")
+    expect(out.lines).toContain("⏸ T-001 /exit inside the recovery wait: the re-run resumes the original session ses_1 (5000 tokens)")
+    expect(await recallProgress(dir, task.id)).toMatchObject({ session: "ses_1", active: true, phase: { kind: "decompose" }, used: 5000 })
+    // No probe ran.
+    expect(agent.prompts).toHaveLength(1)
+    // The part slept before the pause is booked, not the planned half hour.
+    const booked = (await quotaWaits(dir))?.[MODEL] ?? 0
+    expect(booked).toBeGreaterThan(0)
+    expect(booked).toBeLessThan(10_000)
+  })
+
+  test("an /exit already requested pauses as the wait starts; a phase-less chain keeps no record", async () => {
+    const noLadder = parseSwitches({ [SWITCH_ENV.retryWaits]: "off" })
+    const hiccup = failsFirst((session) => [ev.error(session, { name: "APIError", message: "upstream hiccup" }), ev.idle(session)])
+    requestExit()
+    const phased = make({ turn: hiccup })
+    const oneOff = make({ turn: hiccup })
+    const out = capture()
+    try {
+      await expect(runSession(phased.client, task, "p", { dir }, { ...fresh(), phase: { kind: "whole" } }, undefined, undefined, noLadder)).rejects.toBeInstanceOf(ExitRequested)
+      await expect(runSession(oneOff.client, task, "p", opts, fresh(), undefined, undefined, noLadder)).rejects.toBeInstanceOf(ExitRequested)
+    } finally {
+      out.restore()
+    }
+    expect(out.lines).toContain("⏸ T-001 /exit inside the recovery wait: the re-run resumes the failed session ses_1 (5000 tokens)")
+    expect(out.lines).toContain(
+      "⏸ T-001 /exit inside the recovery wait: the failed session ses_1 is a one-off session with no progress record, so the re-run starts it anew",
+    )
+    expect(await recallProgress(dir, task.id)).toMatchObject({ session: "ses_1", used: 5000 })
+    expect(waitLine(out.lines)).toBeUndefined()
+  })
+
+  test("the recorded figure stands in for an agent that keeps no history", async () => {
+    const agent = make({ capabilities: { history: false } })
+    expect(await sessionUsage(agent.client, "ses_9", 5000)).toEqual({ used: 5000, pct: 100, errorStub: false })
+    expect((await sessionUsage(agent.client, "ses_9")).used).toBe(0)
+    expect(agent.argsOf("messages")).toEqual([])
   })
 })
 

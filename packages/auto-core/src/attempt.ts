@@ -743,7 +743,8 @@ export async function attempt(
     }
     // The classifier's fields ride along only when it spoke (plans/0055
     // §7.1): its raised class, the reset time the escalation's down marks
-    // last until, or the answer still on its way.
+    // last until, or the answer still on its way; a stated reset rides with
+    // its scope (plans/0057 §7).
     if (result.error)
       return {
         type: "blocked",
@@ -753,6 +754,7 @@ export async function attempt(
         failover: result.failover,
         ...(result.classified ? { classified: true } : {}),
         ...(result.resetAt !== undefined ? { resetAt: result.resetAt } : {}),
+        ...(result.scope !== undefined ? { scope: result.scope } : {}),
         ...(result.pendingReset !== undefined ? { pendingReset: result.pendingReset } : {}),
       }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }

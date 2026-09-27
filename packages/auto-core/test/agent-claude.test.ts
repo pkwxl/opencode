@@ -723,8 +723,9 @@ describe("claudeAgent: process manager", () => {
   })
 
   // The first session's turn ends on the given lines after 206.2k of work;
-  // every later prompt (probe, retry, re-dispatch) is answered normally.
-  const interruptedRun = async (ending: object[]) => {
+  // every later prompt (probe, retry, re-dispatch) is answered normally. The
+  // wait polls at once unless the caller's switches say otherwise.
+  const interruptedRun = async (ending: object[], switches = parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" })) => {
     const interrupt = (proc: Fake, text: string) => {
       queueMicrotask(() => {
         proc.print({ type: "system", subtype: "init", model: "claude-haiku-4-5" })
@@ -738,7 +739,6 @@ describe("claudeAgent: process manager", () => {
       lines.push(args.map((arg) => String(arg)).join(" "))
     })
     try {
-      const switches = parseSwitches({ [SWITCH_ENV.recoveryWait]: "0" })
       const outcome = await runSession(agentWith(spawn), task, "do the task", {}, { pct: 100, used: 0, at: 0 }, undefined, undefined, switches)
       expect(outcome.type).toBe("idle")
     } finally {
@@ -764,6 +764,23 @@ describe("claudeAgent: process manager", () => {
     expect(log).toContain(`forked copy of the original session ${interrupted} (206.2k tokens)`)
     expect(log).toContain("context 21% (206.2k/1000.0k tokens)")
     expect(log).not.toContain("<synthetic>")
+  })
+
+  // plans/0057 §6: the same event with its reset still ahead. The wait
+  // sleeps to the stated reset (plus hibernate's jitter, zero here) where the
+  // field run polled every 30 minutes.
+  test("a spent window whose reset is ahead: the wait sleeps to the reset, not the poll", async () => {
+    const resetsAt = Math.ceil(Date.now() / 1000) + 1
+    const ahead = { ...rateLimit("rejected"), rate_limit_info: { status: "rejected", ...WINDOW, resetsAt } }
+    const random = spyOn(Math, "random").mockReturnValue(0)
+    try {
+      const { procs, log } = await interruptedRun([ahead, syntheticLine, failedResult], parseSwitches({}))
+      expect(procs).toHaveLength(3)
+      expect(log).toContain(`; the five-hour usage window resets ${new Date(resetsAt * 1000).toISOString()}, sleeping until about `)
+      expect(log).not.toContain("waiting 30 minutes")
+    } finally {
+      random.mockRestore()
+    }
   })
 
   // Any API error the CLI gave up on arrives as the same synthetic message

@@ -126,7 +126,7 @@ export async function requireArtifact<T>(
       // the record carries it; absent = the run's start profile).
       const recalledClient = await clientOf(client, opts.routing ? (recalled!.agent ?? opts.routing.runAgent) : undefined)
       const alive = candidate !== undefined ? await sessionAlive(recalledClient, candidate) : false
-      const usage = alive ? await sessionUsage(recalledClient, candidate!) : undefined
+      const usage = alive ? await sessionUsage(recalledClient, candidate!, recalled!.used) : undefined
       // An error stub (the whole session produced nothing real) is never reused — the same double check as runTask's cross-process resume.
       const usable = alive && usage && !(usage.used === 0 && usage.errorStub)
       const legacyRecord = strict && recalled!.baseline === undefined
