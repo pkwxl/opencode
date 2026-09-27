@@ -26,6 +26,7 @@ import { stepForUsed, stepId } from "./model-step"
 import type { ModelEntry } from "./models"
 import { type Task } from "./tasks"
 import { handoffFile } from "./prompt"
+import { accountOf, learnObserved } from "./quota-windows"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
 import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, worktreeNote, zeroUsage } from "./session-api"
@@ -500,6 +501,9 @@ export async function attempt(
       // names — the reached step. Without a registry nothing is passed and
       // steers stay exactly as they are (C2).
       opts.routing && steerKey !== undefined ? { name: steerKey, label: task.id, ...(steerEntry !== undefined ? { entry: steerEntry } : {}), ...(steerStep !== undefined ? { step: steerStep } : {}), ...(target !== undefined ? { model: target } : {}) } : undefined,
+      // A changed usage-window observation is recorded for the account the
+      // chain dispatches on (plans/0057 §8), read when the event arrives.
+      (event) => void learnObserved(opts.dir, accountOf(chain, opts.routing), event, opts.routing ? nowOf(opts.routing) : Date.now()),
     ).then((w) => {
       if (w.error) {
         watchFailed = true
@@ -755,6 +759,7 @@ export async function attempt(
         ...(result.classified ? { classified: true } : {}),
         ...(result.resetAt !== undefined ? { resetAt: result.resetAt } : {}),
         ...(result.scope !== undefined ? { scope: result.scope } : {}),
+        ...(result.resetSource !== undefined ? { resetSource: result.resetSource } : {}),
         ...(result.pendingReset !== undefined ? { pendingReset: result.pendingReset } : {}),
       }
     return { type: "idle", lastText: result.lastText, testHandover: result.testHandover }

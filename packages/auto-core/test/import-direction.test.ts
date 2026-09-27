@@ -165,6 +165,9 @@ const CLASSIFIED: Record<string, Domain> = {
   "plan-input": "driver",
   // The planning renderers, moved out of prompt.ts (plans/0053 A2).
   "prompt-plan": "driver",
+  // Learned quota windows persisted across runs (plans/0057 §8): read by the
+  // recovery wait's sleep only; below attempt and session.
+  "quota-windows": "driver",
   refcheck: "driver",
   reset: "driver",
   // The run's registry routing facts (plans/0055 §6): the agent filter, the

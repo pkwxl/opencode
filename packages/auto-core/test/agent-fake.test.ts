@@ -11,7 +11,7 @@
 // claude. This file is the agent-neutral layer between them.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentError, AgentEvent, AgentHost, AgentRetryPolicy } from "../src/agent/types"
@@ -30,6 +30,7 @@ import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from ".
 import { resetSteps } from "../src/model-step"
 import { isoInZone, parseWindow } from "../src/model-window"
 import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
+import { resetQuotaWindows } from "../src/quota-windows"
 import { recallProgress, saveProgress } from "../src/resume"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { ensureForkBase, runSession } from "../src/session"
@@ -1563,6 +1564,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   let dir: string
   beforeEach(async () => {
     resetFailback()
+    resetQuotaWindows()
     dir = await mkdtemp(join(tmpdir(), "auto-wait-"))
   })
   afterEach(async () => {
@@ -1781,6 +1783,111 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     const words = await watch(make().client, "s", stream([ev.error("s", { name: "APIError", message: zhipuFive(worded) }), ev.idle("s")]), opts)
     expect(words.resetAt).toBe(worded)
     expect(words.scope).toBe("5h")
+  })
+
+  // Learned windows (plans/0057 §8, S5): the record in .auto/windows.json,
+  // keyed by the account — without a registry the provider of the model the
+  // terminal was shown, `fake` here.
+  const windowsFile = () => join(dir, ".auto", "windows.json")
+  const recorded = async (): Promise<Record<string, unknown>[]> => JSON.parse(await Bun.file(windowsFile()).text()).windows
+  const seedWindows = async (windows: Record<string, unknown>[]) => {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await writeFile(windowsFile(), JSON.stringify({ windows }))
+  }
+  // /exit at the wait line: the run pauses where it would have slept.
+  const pauseAtWait = () =>
+    capture((line) => {
+      if (line.includes("then probing service recovery")) requestExit()
+    })
+
+  test("a stated reset outlives the run: a re-run whose failure states none sleeps to the recorded reset (S5)", async () => {
+    const resetAt = (Math.floor(Date.now() / 1000) + 3 * 86_400) * 1000
+    const stated = make({ turn: failsFirst((session) => [ev.error(session, { name: "APIError", message: zhipuWeekly(resetAt) }), ev.idle(session)]) })
+    let out = pauseAtWait()
+    try {
+      await expect(runSession(stated.client, task, "p", { dir }, fresh(), undefined, undefined, DEFAULTS)).rejects.toBeInstanceOf(ExitRequested)
+    } finally {
+      out.restore()
+    }
+    const [entry] = await recorded()
+    expect(await recorded()).toEqual([{ account: "fake", scope: "7d", resetAt, learnedAt: expect.any(Number), source: "stated", spent: true }])
+    // The re-run, a new process: its failure says nothing of the limit.
+    resetExitRequest()
+    resetQuotaWindows()
+    const silent = make({ turn: failsFirst((session) => [limitError(session), ev.idle(session)]) })
+    out = pauseAtWait()
+    try {
+      await expect(runSession(silent.client, task, "p", { dir }, fresh(), undefined, undefined, DEFAULTS)).rejects.toBeInstanceOf(ExitRequested)
+    } finally {
+      out.restore()
+    }
+    expect(waitLine(out.lines)).toContain("⏳ T-001 non-retryable session error encountered (session error: usage limit reached, quota exceeded)")
+    expect(waitLine(out.lines)).toContain(
+      `; the weekly usage window resets ${new Date(resetAt).toISOString()} (recorded ${new Date(entry!.learnedAt as number).toISOString()}), sleeping until about `,
+    )
+    expect(silent.prompts).toHaveLength(1)
+  })
+
+  test("a probe that errors on its own sleeps to the account's recorded reset, not the poll (S5)", async () => {
+    const random = spyOn(Math, "random").mockReturnValue(0)
+    const weekEnd = Date.now() + 3 * 86_400_000
+    await seedWindows([{ account: "fake", scope: "7d", resetAt: weekEnd, learnedAt: Date.now() - 86_400_000, source: "observed", spent: true, utilization: 1 }])
+    const fiveEnd = Date.now() + 300
+    const agent = make({ turn: failsFirst((session) => [limitError(session, { resetAt: fiveEnd, scope: "5h" }), ev.idle(session)]) })
+    // The probe's session cannot be created: it errors on its own.
+    let creates = 0
+    const client = {
+      ...agent.client,
+      create: (input: { title: string }) => {
+        if (++creates === 2) throw new Error("socket hang up")
+        return agent.client.create(input)
+      },
+    }
+    let waited = 0
+    const out = capture((line) => {
+      if (line.includes("then probing service recovery") && ++waited === 2) requestExit()
+    })
+    try {
+      await expect(runSession(client, task, "p", { dir }, fresh(), undefined, undefined, DEFAULTS)).rejects.toBeInstanceOf(ExitRequested)
+    } finally {
+      out.restore()
+      random.mockRestore()
+    }
+    const waits = out.lines.filter((line) => line.includes("then probing service recovery"))
+    // The failure's own reset first; after the failed probe, the recorded one.
+    expect(out.lines.some((line) => line.includes("probe session itself errored (socket hang up)"))).toBe(true)
+    expect(waits[0]).toContain(`; the five-hour usage window resets ${new Date(fiveEnd).toISOString()}, sleeping until about `)
+    expect(waits[1]).toContain(`; the weekly usage window resets ${new Date(weekEnd).toISOString()} (recorded `)
+    expect(waits[1]).not.toContain("waiting 30 minutes")
+  })
+
+  test("a turn that goes through clears the account's spent windows, and a usage-window observation is recorded (S5)", async () => {
+    const ahead = Date.now() + 86_400_000
+    await seedWindows([
+      { account: "fake", scope: "7d", resetAt: ahead, learnedAt: Date.now(), source: "stated", spent: true },
+      { account: "other", scope: "7d", resetAt: ahead, learnedAt: Date.now(), source: "stated", spent: true },
+    ])
+    const week = Date.now() + 2 * 86_400_000
+    const agent = make({
+      turn: (ctx) => [
+        ev.message(ctx.session, "msg_1", 1000),
+        { type: "limit", session: ctx.session, status: "allowed", windows: [{ scope: "7d", resetAt: week, utilization: 0.4 }] },
+        ev.text(ctx.session, "txt_1", "done"),
+        ev.step(ctx.session, "stp_1"),
+        ev.idle(ctx.session),
+      ],
+    })
+    const out = capture()
+    try {
+      expect((await runSession(agent.client, task, "p", { dir }, fresh(), undefined, undefined, DEFAULTS)).type).toBe("idle")
+    } finally {
+      out.restore()
+    }
+    const byAccount = (await recorded()).map((w) => [w.account, w.scope, w.source, w.spent])
+    expect(byAccount).toEqual([
+      ["other", "7d", "stated", true],
+      ["fake", "7d", "observed", false],
+    ])
   })
 
   test("a per-minute cap stays with the agent's own ladder until it gives up, quota wording included", async () => {

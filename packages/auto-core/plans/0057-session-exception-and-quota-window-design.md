@@ -1,9 +1,9 @@
 # 0057 — Session exceptions: the agent's retry policy, quota windows and scheduled waits (design)
 
-Status: **design, ruled; S1–S4 and S4a implemented** (2026-09-26; revised the same day with the
+Status: **design, ruled; S1–S5 and S4a implemented** (2026-09-26; revised the same day with the
 field evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13
 records; S3 and S4 done 2026-09-27; S4a added and done the same day with the opencode field
-evidence of §1.2). Source: the user's request of the same day —
+evidence of §1.2; S5 done the same day). Source: the user's request of the same day —
 the session exception flow has deficiencies; the driver should recognize what a coding agent
 reports across agents and models, formulate better wait-and-retry strategies for the rolling
 five-hour and weekly quota limits, know when an agent cures a limit by itself so the driver
@@ -659,7 +659,7 @@ reasoning; the **Ruled** sentence is the decision.
 | a reset stated in a known provider wording (S4a) | `src/chain.ts` `statedInWording`, `src/watch.ts` |
 | the silence budget in the watchdog | `src/watch.ts` |
 | scheduled sleep in the wait-and-probe loop | `src/session.ts` |
-| learned-window persistence (§8, §11 item 4) | `src/failback.ts` + the run state |
+| learned-window persistence (§8, §11 item 4) | `src/quota-windows.ts` (`.auto/windows.json`), read by `src/session.ts` |
 | the reset instant on the wait line; hours lost to quota windows per model in the round conclusion (§11 item 7) | `src/session.ts`, `src/stats.ts`, `src/conclusion.ts` |
 | glossary: retry policy, quota window, scheduled wait | `docs/glossary.md` |
 
@@ -1088,6 +1088,90 @@ imports the driver domain.
     registry.
 
 - **S5 — persistence** (§8), keyed by the profile's account.
+
+  **Done (2026-09-27).**
+  - **The record** (`src/quota-windows.ts`, `.auto/windows.json`). It holds one entry per account
+    and scope: `{ account, scope, resetAt, learnedAt, source, spent, utilization? }`. The latest
+    statement stands. An entry dies at its reset, or seven days after it was learned
+    (`RESET_HORIZON_MS`). Writes are atomic and serialized per directory, and a failed write is
+    silent, as with stats. The run lock makes the in-memory copy the file. The module map named
+    `src/failback.ts`, but the record got a module of its own: failback's marks are in-memory
+    selection state, and the record must never become one of them.
+  - **The account.**
+    - Under a registry: the entry's agent profile, its provider, and the ring's current key by
+      name (`opencode/zai-coding-plan#ZHIPU_KEY_B`, `claude-b`). A claude profile is its login,
+      so the key names the profile rather than its `CLAUDE_CONFIG_DIR` value (C4).
+    - Without a registry, the directory has one agent. The account is the provider of the model
+      string (`zai-coding-plan`), else `default`, since claude's model ids name no provider.
+  - **The sources.** Three sources are recorded:
+    - `stated`: the failure's structured fields or a known wording (opencode's headers, claude's
+      stream, S4a's wording);
+    - `classifier`;
+    - `observed`: the `limit` event.
+
+    §8's split between header and stream is not kept, because the driver sees one `AgentError`
+    shape (C6) and no adapter name. §8's `probe` is §9's quota endpoint, which is deferred.
+  - **The writers.**
+    - `runSession` records a failure's stated reset for the account it ran on, before the
+      escalation moves the chain. It does the same for each failed probe, on the probed account:
+      the probe candidate under a registry, else the chain's.
+    - `watch` hands a changed `limit` event to `attempt`, which records it for the chain's
+      account. This is a new trailing `onLimit` parameter beside `onModel`. A window is spent when
+      its utilization is 1, or when a rejected event names it alone. Any other observation
+      replaces a spent entry of the same window.
+    - A turn that goes through clears the account's spent entries, whether it is the dispatch
+      or a probe. A provider may reset early, and a stale entry must not stretch a later,
+      unrelated wait.
+    - A per-minute scope is not recorded. Neither is the classifier's late answer
+      (`pendingReset`). The reset's source rides `Watch.resetSource` and the blocked
+      `SessionResult`.
+  - **The reader** (`planSleep`). The record is read only where the failure's own reset would
+    apply and the failure states none. There, the latest reset among the account's spent
+    entries is the instant. That covers a failure of unknown wording on a spent account, a
+    re-run's first failure, and a probe that errored on its own.
+
+    The last case read "no instant" in S4 and polled. The wait now keeps the account of the
+    failure it waits out. Under a registry `recoveryAt` still comes first.
+
+    The record never writes a down mark. It never makes the escalation skip the ladder, because
+    `spentWindow` reads the failure alone. It never refuses a dispatch (§11 item 10): a re-run's
+    first dispatch still goes out and fails.
+  - **Tests.**
+    - `test/quota-windows.test.ts`:
+      - the account key, without a registry and under one (profile, provider, raw override, and
+        the ring key by name, never by value);
+      - the record surviving a module reset, with the latest spent window read;
+      - a classifier's reset recorded as `unknown`; per-minute and past resets not recorded;
+      - the horizon;
+      - the clear on success, per account;
+      - observations: used up, rejected alone, two windows left undecided, an open observation
+        superseding a spent entry;
+      - an observation arriving beside a statement;
+      - lenient reading.
+    - `test/agent-fake.test.ts`, the scheduled-wait block:
+      - Zhipu's weekly wording is recorded. A re-run whose failure states nothing sleeps to it;
+        /exit at the wait line stands in for the long sleep.
+      - A probe that errors on its own sleeps to a recorded weekly reset, after the failure's own
+        five-hour reset.
+      - A turn that goes through clears the account's spent entry and records its observation.
+
+      Each fails against the code before S5.
+    - `test/import-direction.test.ts`: the new module is classified as driver.
+  - **Log lines.** The goldens are unchanged. A wait whose instant comes from the record reads
+    "…; the weekly usage window resets 2026-10-02T03:25:23.000Z (recorded
+    2026-09-26T17:15:19.000Z), sleeping until about …". Nothing else is logged; the file is the
+    record.
+  - **Against §1.2.** The 2026-09-26 run was stopped with Ctrl+C at 01:17Z. Since S4a, a re-run's
+    first dispatch fails at opencode's first retry status and sleeps to the stated reset, with
+    or without the record. The record adds two cases: the re-run's failure states nothing, or a
+    probe errors on its own in the middle of the wait.
+  - **This closes S4's open item on a learned instant** ("dies with the process until S5").
+    S0's rejected claude stream is still not captured.
+  - **Still open.**
+    - The record is per directory. fs, virtio and net share one Zhipu account (§1.2), and each
+      learns the window once.
+    - `recoveryAt` does not read the record for a down mark without `until`. A registry run with
+      such a mark polls as before.
 - **S6 — the durable documentation:** glossary, `docs/structure.md`, the AGENTS.md navigation
   line. Quota probes are deferred (§11 item 5) and have no step.
 
@@ -1112,6 +1196,9 @@ imports the driver domain.
 - The wait-and-probe loop: a fake clock, one known instant, and the assertions that the sleep
   targets the instant plus jitter, that an instant beyond the horizon falls back to
   `recoveryWait`, and that a successful probe still forks the most valuable session.
+- `test/quota-windows.test.ts` and `test/agent-fake.test.ts`: the learned-window record (S5) —
+  the account key, the horizon, what counts as spent, the clear on success, and the wait that
+  sleeps to a recorded reset.
 - `test/chain.test.ts` and `test/agent-fake.test.ts`: the provider wordings that state a reset
   (S4a), verbatim from the field (§1.2), including the drops and the precedence.
 - Goldens are never regenerated; where a log line must change, the change is stated in the step.

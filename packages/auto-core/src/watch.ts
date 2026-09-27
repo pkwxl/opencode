@@ -87,15 +87,17 @@ const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
 // never a verdict: dispatch and the escalation do not read it (§11 item 10).
 const windowsLogged = new WeakMap<AgentClient, string>()
 
-function noteWindows(client: AgentClient, event: Extract<AgentEvent, { type: "limit" }>): void {
+// Returns whether the event changed anything (and was logged).
+function noteWindows(client: AgentClient, event: Extract<AgentEvent, { type: "limit" }>): boolean {
   const key = [event.status, ...event.windows.map((w) => `${w.scope}@${w.resetAt}`)].join(" ")
-  if (windowsLogged.get(client) === key) return
+  if (windowsLogged.get(client) === key) return false
   windowsLogged.set(client, key)
   const windows = event.windows.map(
     (w) => `${w.scope} ${w.utilization !== undefined ? `${Math.round(w.utilization * 100)}% used, ` : ""}resets ${new Date(w.resetAt).toISOString()}`,
   )
   const head = event.status === "rejected" ? "⚠ a usage window is spent" : event.status === "warning" ? "⚠ usage windows near their limit" : "ℹ usage windows"
   log(`${head} (session ${event.session})${windows.length ? `: ${windows.join("; ")}` : ""}`)
+  return true
 }
 
 export async function watch(
@@ -120,6 +122,9 @@ export async function watch(
   // a registry (the default) everything stays as before — steers carry no
   // model key, byte-for-byte equivalent to the status quo (C2).
   steerContext?: SteerContext,
+  // A usage-window observation that changed (the `limit` event, plans/0057
+  // §5.2): attempt records it for the chain's account (§8).
+  onLimit?: (event: Extract<AgentEvent, { type: "limit" }>) => void,
 ): Promise<Watch> {
    const waitAnswer = opts.waitAnswer ?? 0
    let lastText = ""
@@ -233,11 +238,11 @@ export async function watch(
   // read (§7).
   const resetFields = (): Partial<Watch> => {
     const stated = acceptedReset(errorInfo, clockNow())
-    if (stated !== undefined) return { resetAt: stated, ...(errorInfo?.scope !== undefined ? { scope: errorInfo.scope } : {}) }
+    if (stated !== undefined) return { resetAt: stated, ...(errorInfo?.scope !== undefined ? { scope: errorInfo.scope } : {}), resetSource: "stated" }
     if (classifier === undefined) return {}
     if (answer !== undefined) {
       const at = acceptedReset(answer, classifier.now())
-      return at !== undefined ? { resetAt: at } : {}
+      return at !== undefined ? { resetAt: at, resetSource: "classifier" } : {}
     }
     const pending = asked
     return pending !== undefined ? { pendingReset: pending.then((got) => acceptedReset(got, classifier.now())) } : {}
@@ -597,10 +602,11 @@ export async function watch(
     if (raised !== undefined) break
     if (event.session !== sessionID) continue
     source.observe(event)
-    // The account's usage windows (plans/0057 §5.2): logged when they change,
-    // nothing else — not a turn event, so the twin-idle guard is untouched.
+    // The account's usage windows (plans/0057 §5.2): logged and recorded (§8)
+    // when they change, nothing else — not a turn event, so the twin-idle
+    // guard is untouched.
     if (event.type === "limit") {
-      noteWindows(client, event)
+      if (noteWindows(client, event)) onLimit?.(event)
       continue
     }
     if (event.type === "part") {

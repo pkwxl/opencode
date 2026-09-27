@@ -72,9 +72,12 @@ let override: { wildcard: string; fallback: string[] } | undefined
 // failover, so a run without one never touches them.
 //
 // Marks live in memory only (nothing persists); a new run starts with every
-// model eligible. They are keyed by the model's internal name (a raw override
-// value by its model string, matching how selection reads them) and by
-// (provider, key reference) for a ring. A mark may carry `until`, the instant
+// model eligible. The resets a failure states do outlive the run, as the
+// account's learned windows (src/quota-windows.ts, plans/0057 §8), but those
+// only time the recovery wait's sleep and never become a mark. Marks are
+// keyed by the model's internal name (a raw override value by its model
+// string, matching how selection reads them) and by (provider, key
+// reference) for a ring. A mark may carry `until`, the instant
 // a reset time named: it lasts until that instant *instead of* the scope
 // boundary, so a boundary clear keeps it and a read past the instant treats
 // it as cleared.

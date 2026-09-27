@@ -37,6 +37,7 @@ import { candidateKey, nowOf, selectContext, type Candidate } from "./routing"
 import { candidatesOf, recoveryAt, select, type SelectCall, type SelectContext } from "./select"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
+import { accountAnswered, accountOf, learnedReset, learnFailure } from "./quota-windows"
 import { saveProgress } from "./resume"
 import { firstLine } from "./resume-gate"
 import { clientOf, contextLimitsOf, forkSession, formatClientError, formatTokens, seedForkSession, sessionAlive, sessionUsed, worktreeNote } from "./session-api"
@@ -198,8 +199,9 @@ const retryNote = worktreeNote
 
 // What the wait-and-probe loop knows of the failure it waits out: its class
 // and a reset with the scope a statement gave it — the failure that led into
-// the loop, then each failed probe's (plans/0057 §6).
-type WaitCause = Pick<Extract<SessionResult, { type: "blocked" }>, "errorClass" | "resetAt" | "scope">
+// the loop, then each failed probe's (plans/0057 §6) — and the account it
+// failed on, whose learned windows stand in when it states no reset (§8).
+type WaitCause = Pick<Extract<SessionResult, { type: "blocked" }>, "errorClass" | "resetAt" | "scope"> & { account?: string }
 
 // The limits a reset instant reads as on the wait line (plans/0057 §7).
 function limitPhrase(scope: LimitScope | undefined): string {
@@ -257,6 +259,8 @@ export async function runSession(
   // every fork, liveness check and rename below belongs to the agent the
   // session lives on. A plain client source resolves to itself.
   const chainClient = () => clientOf(client, chain.agent)
+  // The run's clock (a registry's injected one, else the wall clock).
+  const clockNow = (): number => (opts.routing ? nowOf(opts.routing) : Date.now())
   // Quota-failover candidate tracking (design D.3/D.4): shared across the
   // whole session chain — each model candidate gets its own full round of the
   // retry ladder (i resets to 1 when the candidate switches), the total cap =
@@ -670,6 +674,12 @@ export async function runSession(
   // jitter-only round. A reset beyond the horizon (RESET_HORIZON_MS) is not
   // scheduled. `model` is the model the wait is for, the key of the
   // quota-window figure.
+  // Where the failure's own reset would apply but it states none — a
+  // failure of unknown wording, a probe that errored on its own — the
+  // account's learned windows stand in (src/quota-windows.ts, plans/0057 §8):
+  // the latest reset among its spent windows, this run's or an earlier
+  // one's, so a probe that cannot succeed before it is not sent. The line
+  // says when that reset was recorded.
   const planSleep = async (cause: WaitCause | undefined): Promise<{ ms: number; wake?: Date; reason?: string; model: string }> => {
     const facts = opts.routing
     const now = facts ? nowOf(facts) : Date.now()
@@ -688,6 +698,12 @@ export async function runSession(
     } else if ((facts === undefined || back !== undefined) && cause?.resetAt !== undefined) {
       at = cause.resetAt
       reason = `${limitPhrase(cause.scope)} resets ${new Date(at).toISOString()}`
+    } else if (facts === undefined || back !== undefined) {
+      const learned = await learnedReset(opts.dir, cause?.account ?? accountOf(chain, facts), now)
+      if (learned !== undefined) {
+        at = learned.resetAt
+        reason = `${limitPhrase(learned.scope)} resets ${new Date(at).toISOString()} (recorded ${new Date(learned.learnedAt).toISOString()})`
+      }
     }
     model ??= chainModel() ?? chain.modelShown ?? "(agent default)"
     if (at === undefined || at - now > RESET_HORIZON_MS) return { ms: switches.recoveryWait * 60_000, model }
@@ -827,11 +843,17 @@ export async function runSession(
         if (probed !== undefined) markModelDown(probed)
         if (probedProvider !== undefined) markCurrentKeyDown(probedProvider)
         log(`⏳ ${task.id} probe session itself errored (${formatClientError(error)}); service not recovered, continuing to wait`)
-        cause = undefined
+        // It says nothing of the limit: the account's learned windows (§8)
+        // decide the next sleep, else the poll.
+        cause = cause?.account !== undefined ? { account: cause.account } : undefined
         continue
       }
+      // The account the probe ran on: the probed candidate's under a
+      // registry, else the chain's (the probe copies its model).
+      const probeAccount = accountOf(opts.routing ? probe : chain, opts.routing)
       if (ping.type !== "idle") {
-        cause = ping
+        await learnFailure(opts.dir, probeAccount, ping, clockNow())
+        cause = { ...ping, account: probeAccount }
         // A reset time the classifier read from the probe's failure sets
         // when the re-written marks clear (§7.1), as on the escalation.
         if (probed !== undefined) markModelDown(probed, ping.resetAt, ping.classified)
@@ -840,6 +862,7 @@ export async function runSession(
         log(`⏳ ${task.id} probe session still failing (${firstLine(ping.question)}); continuing to wait`)
         continue
       }
+      await accountAnswered(opts.dir, probeAccount, clockNow())
       const sources = recoverySources()
       // "The session this prompt was dispatched to": promoted to chain.id by
       // attempt for the non-retryable classes, recorded in chain.failed for
@@ -914,7 +937,12 @@ export async function runSession(
     // thrown up as blocked; the only blocked results still returned directly
     // are in-session blocking questions and permission denials — those need a
     // human reply and were never faults to begin with.
-    if (result.type !== "blocked") return result
+    // A turn that went through clears its account's spent windows (plans/0057
+    // §8): whatever an entry said, the account answers now.
+    if (result.type !== "blocked") {
+      await accountAnswered(opts.dir, accountOf(chain, opts.routing), clockNow())
+      return result
+    }
     // Registry routing: selection found nothing usable for the dispatch (every
     // candidate down or outside its windows, §6.3) — no session ran, so this is
     // not a session failure either. The two §6.3 outcomes split here: a wait-
@@ -952,6 +980,11 @@ export async function runSession(
     // the retry ladder whatever its class: the escalation runs at once (key,
     // then model), else the wait sleeps to the reset. Its class names the
     // move when it has one ("quota restricted" for claude's rejected window).
+    // A stated reset outlives the process (plans/0057 §8): recorded for the
+    // account the failure ran on, read before the escalation moves the chain.
+    const account = accountOf(chain, opts.routing)
+    await learnFailure(opts.dir, account, result, clockNow())
+    const cause: WaitCause = { ...result, account }
     const spent = spentWindow(result)
     const classBase =
       result.errorClass === "quota"
@@ -980,7 +1013,7 @@ export async function runSession(
         opts.routing !== undefined
           ? `${classLabel} and every candidate of the tier list is down (down: ${[...downMarks().keys()].join(", ") || "none"})`
           : `${classLabel} and fallback candidates exhausted (tried: ${tried.join(", ") || "none"})`,
-        result,
+        cause,
       )
       continue
     }
@@ -997,11 +1030,11 @@ export async function runSession(
     // sleeps to its reset instead of the ladder retrying (plans/0057 §4.1;
     // on 2026-09-25 the ladder bought five stub sessions per event).
     if (result.retryable === false) {
-      await awaitRecovery(`non-retryable session error encountered (${firstLine(result.question)})`, result)
+      await awaitRecovery(`non-retryable session error encountered (${firstLine(result.question)})`, cause)
       continue
     }
     if (spent !== undefined) {
-      await awaitRecovery(`the ${spent} usage window is spent (${firstLine(result.question)})`, result)
+      await awaitRecovery(`the ${spent} usage window is spent (${firstLine(result.question)})`, cause)
       continue
     }
     // Ladder exhausted: no longer waits for a human ruling — the failover
@@ -1018,7 +1051,7 @@ export async function runSession(
     // points by OPENCODE_AUTO_MODEL_FAILBACK_SCOPE (see src/failback.ts).
     if (i > waits.length) {
       if ((opts.routing !== undefined || fallbackRing().length > 0) && (await switchModel("retry ladder exhausted"))) continue
-      await awaitRecovery(`retry ladder exhausted (${waits.length} retries) without success`, result)
+      await awaitRecovery(`retry ladder exhausted (${waits.length} retries) without success`, cause)
       continue
     }
     if (opts.server && NETWORK_FAILURE.test(result.question)) {
