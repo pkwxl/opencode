@@ -202,7 +202,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; commi
 | `-m` / `--mode <name>` | Scenario mode, written to the config's `mode` key (precedence: explicit value > existing config value > default `migrate`; an unregistered name is a usage error with exit code 1, the message listing the currently supported modes); see [Mode layer](#mode-layer--m--mode) |
 | `--agent opencode\|claude` | The coding agent driving the sessions, written to the config's `agent` key (default `opencode`, key not written; `--amend --agent opencode` deletes the key); any other value is a usage error; see [agent selection](#opencode-server-and-agent-selection) |
 | `--phases <admtvk subsequence containing m \| phase type list>` | Phased flow, written to the config's `phases` key (default `"m"` = single run); when completed phases exist, an amendment must satisfy the prefix guardrail (the completed phases form a prefix of the new value), otherwise it errors and points at rolling back the phase index by hand. See [Phased flow](#phased-flow---phases) |
-| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task (for now it never splits, so it runs exactly as `ondemand`); `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
+| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task under `ondemand`'s handover protocol, and may split the remaining work into 2–5 streams when the driver's guard finds that it pays; `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
 | `--idle-time [1-120]` | The no-progress window for driver-managed scripts (minutes, default/bare flag 10; the old name `--verify-idle` was renamed — appearing errors with guidance): the driver polls the size of the output file (`tmp/test.<n>.out`, stdout/stderr merged into one file) and terminates the script only after no growth is sustained for the window (exit code recorded as 124); as long as output keeps growing, the runtime is unlimited |
 | `--idle-max [1-1440]` | The absolute runtime cap for driver-managed scripts (minutes, default/bare flag unset; the old name `--verify-max` was renamed): a backstop against scripts looping forever while printing; when set to a positive integer, exceeding the total duration terminates the script regardless of output |
 | `--commit [true]` | Unified commit after sessions, written to the config (default/bare flag `true`). **`false` and the old alias `none` were retired on 2026-09-15** — the unified commit is the completion condition (the unit clean gate / SHA baseline / recovery rollback all assume committing is always on); appearing is a usage error with exit 1; an existing `commit: false` fails strictly as a bad file — delete the key or set `true` |
@@ -844,10 +844,24 @@ The driver runs a pipeline for every task, and **index ticks, the `todo.md` → 
 `subtask` key (`auto` is the default):
 
 `subtask: auto` (adaptive decomposition, the default; auto-core plans/0059): the task runs as one lead
-session under the same context-budget protocol as `subtask: ondemand` below. The lead's option to split
-the remaining work into forked subtasks when that pays is not implemented yet, so today `auto` behaves
-exactly as `ondemand` — same prompt, same handover, same recovery. A stored `"subtask": "auto"` takes this
-meaning with no migration; `amend --subtask true` keeps the pipeline.
+session under the same context-budget protocol as `subtask: ondemand` below, and its prompt carries a split
+rule. By default the lead finishes the task itself, handing over by time as `ondemand` does. It may split
+only when the remaining work is 2–5 substantial streams that each change their own files, and only once the
+driver's first usage notice (half the wall) has arrived: it then builds the shared foundation itself, writes
+one line per stream into `docs/T-NNN/subtasks.md` (`- [ ] <title>: <what, where, how to verify> Depends: S01
+Artifacts: <paths>`) and ends. The driver checks the split mechanically — 2 to 5 lines, a valid dependency
+graph, no path declared by two streams unless one depends on the other, the lead's final context at least
+half the wall:
+
+- **Taken**: the driver writes each stream's `S<nn>/todo.md` from its line, commits the lead's work with the
+  checklist as the task's `exec` commit, and the streams run as subtask sessions, then the common wrap-up.
+- **Rejected**: `subtasks.md` is removed, the lead's work is committed, and a fork of the lead is told why and
+  finishes the task (an agent that cannot fork gets a new session with the full prompt). There is no second
+  split: a `subtasks.md` written after that is removed.
+
+Without usage notices (`OPENCODE_AUTO_STEER=off`, or an agent that takes no mid-turn messages), or when the
+task already has a checklist written by hand, the lead gets no split rule and runs exactly as `ondemand`. A
+stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtask true` keeps the pipeline.
 
 `subtask: true` (the planned pipeline — what `auto` meant before auto-core plans/0059):
 
@@ -954,6 +968,8 @@ misjudged as a natural session end.
   as-is, no new session;
 - Subtask by subtask: continue from the first unfinished item (subtask `todo.md`/`done.md` are naturally
   persistent);
+- Under `auto`, a split the guard already took is not decided again: the lead does not rerun, and its
+  streams continue from the first unfinished one;
 - Wrap-up: off/ondemand do not rerun the whole-task execution session, just the wrap-up;
 - Wrap-up already done (result-line check stage): no session at all — read the result line and register
   completion — a legacy progress record sitting in the retired verify / review stages is handled the same

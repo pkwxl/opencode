@@ -822,6 +822,16 @@ export async function removeIfUntracked(dir: string, rel: string): Promise<void>
   await rm(join(dir, rel), { force: true })
 }
 
+// A file's content in the last commit (HEAD), relative to dir: "" when HEAD
+// does not hold it; undefined when there is no commit to read (not a git
+// work tree, or no commit yet) — the caller then has nothing to compare with.
+export async function headText(dir: string, rel: string): Promise<string | undefined> {
+  const head = await git(dir, ["rev-parse", "--verify", "-q", "HEAD"]).catch(() => undefined)
+  if (head?.code !== 0) return undefined
+  const shown = await git(dir, ["show", `HEAD:./${rel}`]).catch(() => undefined)
+  return shown?.code === 0 ? shown.out : ""
+}
+
 // Whether a single file is "already posted": tracked by git and the worktree
 // copy equals the commit. Test-handover recovery judges by this whether
 // commit #2 has already happened (the archived copy posted = the handover

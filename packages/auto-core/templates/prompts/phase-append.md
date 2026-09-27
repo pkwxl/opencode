@@ -110,7 +110,7 @@ Phase: {{phaseId}}
    need the task right before it.
 3. Task numbers increment continuously from T-{{numberStart}}, and a number already used by an existing task or any
    historical task must not be reused; each new task focuses on one independently deliverable outcome; do not
-   hand-write subtask checklist items (the DRIVER's decompose session generates those at execution time);
+   hand-write subtask checklist items (whether and how a task is split is decided at execution time);
 4. End the session immediately once planning is done and the appended index lines and all new task documents are
    written.
 ## Constraints

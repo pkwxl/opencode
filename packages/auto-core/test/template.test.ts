@@ -80,7 +80,7 @@ describe("shared partial parsing", () => {
 })
 
 describe("built-in template registry", () => {
-  test("all 29 session templates plus _partials present (understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056)", () => {
+  test("all 30 session templates plus _partials present (understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "classify-error",
@@ -101,6 +101,7 @@ describe("built-in template registry", () => {
       "phase-handover",
       "phase-plan",
       "prior-knowledge",
+      "split-rejected",
       "step-up",
       "stuck-hint",
       "subtask",

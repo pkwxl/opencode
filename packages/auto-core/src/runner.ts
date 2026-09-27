@@ -14,6 +14,7 @@ import { log } from "./log"
 import { type ClientSource, type Opts, type Outcome, type UnitStop } from "./opts"
 import { phaseText, resumeNote, unitReruns } from "./resume-gate"
 import { ensureForkBase, runSession } from "./session"
+import { splitTaken } from "./split"
 import { begin, markDone, reloadTask, type Plan, type Task } from "./tasks"
 import { handoffFile } from "./prompt"
 import { forgetProgress, recallProgress, saveProgress, type Phase } from "./resume"
@@ -41,9 +42,13 @@ import { reportResult, runWrapup } from "./wrapup"
 // session continues from it; the driver's hard-wall hint (2x
 // --context-limit, raised to a quarter of a large model window and clamped to
 // 80% of it) is the last resort.
-// --subtask auto (default, adaptive decomposition, plans/0059 D2): one lead
-// session — a whole-task session under ondemand's protocol; until the lead's
-// split clause lands it runs exactly as ondemand (see SubtaskMode in opts.ts).
+// --subtask auto (default, adaptive decomposition, plans/0059 D2–D4): one lead
+// session — a whole-task session under ondemand's protocol, whose prompt
+// carries the split clause. The lead either finishes (or hands over by time,
+// as ondemand does), or ends by writing the remaining streams into
+// subtasks.md; the driver's split guard takes the split (the streams then run
+// in the subtask loop below, as checklist items with driver-written todo.md
+// files) or rejects it, and a fork of the lead finishes the task.
 // Closeout reads the result line of the task report (docs/<id>/report.md):
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final
@@ -153,6 +158,9 @@ export async function runTask(
         items,
         subtasksFileItems: items.length,
         wrapup: opts.wrapup ?? true,
+        // auto: a split already taken ends the lead's unit (its streams are
+        // the checklist items that remain).
+        split: mode === "auto" && (await splitTaken(dir, task.id, items.length)),
       })
       if (!rerun) {
         await saveProgress(dir, { ...recalled, active: false })
@@ -396,10 +404,7 @@ export async function runTask(
     let fork: ForkBaseInfo | undefined
     // The session handover protocol (plans/0056) of the whole-task branch:
     // ondemand's, and auto's lead's (plans/0059 D2: a whole-task session
-    // under the same protocol). With no split clause yet, auto takes this
-    // branch exactly as ondemand does — the temporary equivalence SubtaskMode
-    // (opts.ts) records, which ends when the lead's split lands; the lead
-    // keeps the protocol after that.
+    // under the same protocol, plus its split clause).
     const selfHandover = mode === "ondemand" || mode === "auto"
     if (mode === "true") {
       const sw = autoSwitches()
@@ -465,10 +470,19 @@ export async function runTask(
       if (opts.testByDriver && recalled?.active !== true) {
         await cleanTestHandoffs(dir, task)
       }
-      await persistStage({ kind: "whole" })
-      const blocked = await executeWhole(client, plan, task, opts, chain, selfHandover)
-      if (blocked) return blocked
-      task = await reloadTask(plan, task.id)
+      // auto: a split taken by an earlier run (the checklist's state files
+      // exist) — the lead's stage is over, and its streams continue in the
+      // subtask loop below. Re-running the lead would redo work its commit
+      // already holds.
+      // AUTO-RESOLVE: under auto, does a checklist with state files that the pre-0059 pipeline left run its remaining items with no lead first? -> yes (the files are the progress fact and read exactly like a taken split; a fresh lead first would redo the work the items cover and then run them anyway)
+      if (mode === "auto" && (await splitTaken(dir, task.id, task.checklist?.length ?? 0))) {
+        log(`↻ ${task.id} the lead's split was taken earlier; its streams continue from ${taskDoc(task.id, "subtasks")}, the lead does not run again`)
+      } else {
+        await persistStage({ kind: "whole" })
+        const blocked = await executeWhole(client, plan, task, opts, chain, selfHandover, mode === "auto")
+        if (blocked) return blocked
+        task = await reloadTask(plan, task.id)
+      }
     }
 
     // closeout resume: the wrap-up already finished before the interruption
@@ -476,8 +490,9 @@ export async function runTask(
     // wrap-up) — only the result check and completion remain.
     if (resume?.kind !== "closeout") {
       await persistStage({ kind: "subtasks" })
-      // In true mode this is where the decomposed checklist items run;
-      // off/auto/ondemand modes only have the items hand-written in
+      // In true mode this is where the decomposed checklist items run; under
+      // auto, the streams of a split the lead's guard took; off/ondemand (and
+      // auto without a split) only have the items hand-written in
       // subtasks.md.
       for (;;) {
         const items = task.checklist ?? []

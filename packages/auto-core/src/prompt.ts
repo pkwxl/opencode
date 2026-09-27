@@ -625,17 +625,20 @@ export function activeIntentText(section: IntentSection, key: string): string | 
 }
 
 // --subtask off/auto/ondemand: a single session completes the whole task (no
-// subtask decomposition; auto's lead, which has no split clause yet, renders
-// as ondemand — plans/0059 D2). ondemand additionally carries the context-budget
-// protocol (usage notices + self-directed handover, plans/0056) when budget
-// is set — the caller passes it only while the steer is built, so
+// subtask decomposition). ondemand and auto's lead additionally carry the
+// context-budget protocol (usage notices + self-directed handover, plans/0056)
+// when budget is set — the caller passes it only while the steer is built, so
 // OPENCODE_AUTO_STEER=off renders no protocol and ignores handover documents;
 // continuation means the previous session handed its context over and this
-// one must read the handover document before continuing.
+// one must read the handover document before continuing. adaptive is auto's
+// lead with its split clause (plans/0059 D2–D3): the option to end by writing
+// the remaining streams into subtasks.md instead of finishing; the caller
+// passes it only with the protocol (the clause's criterion (c) is the first
+// usage notice), and drops it after a rejected split.
 export function renderWhole(
   plan: Plan,
   task: Task,
-  opts: Opts & { ondemand?: boolean; continuation?: boolean; budget?: boolean } = {},
+  opts: Opts & { ondemand?: boolean; continuation?: boolean; budget?: boolean; adaptive?: boolean } = {},
 ): string {
   const ctx = baseCtx(plan, task, opts)
   return renderPrompt("whole", {
@@ -643,13 +646,25 @@ export function renderWhole(
     ondemand: Boolean(opts.ondemand),
     continuation: Boolean(opts.continuation),
     budget: Boolean(opts.budget),
+    adaptive: Boolean(opts.adaptive),
     handoffFile: handoffFile(task),
+    subtasksFile: taskDoc(task.id, "subtasks"),
     // Closing self-check sentence (M1.3, same as renderSubtask but keyed to
     // the whole-task scope): `## quality` / `### self-check-whole`.
     selfCheck: intentText("quality", "self-check-whole", ctx),
     // P1 discipline (M2.3), same subsection as renderSubtask.
     processRefs: intentText("governance", "process-references", ctx),
   })
+}
+
+// The note that continues auto's lead after the driver rejected its split
+// (plans/0059 D4): reason is the guard's verdict. It goes alone into a fork
+// of the lead, which already holds the task and its work; fresh is the
+// fallback where no fork could be made — the note then follows the full
+// whole-task prompt of a new session, and says the earlier work is committed.
+// AUTO-DECISION: the note is a template (split-rejected.md), not an inline string like the shape-check feedback (it is session-facing copy a project may override through its prompt library, as the usage notes are)
+export function renderSplitRejected(task: Task, reason: string, fresh = false): string {
+  return renderPrompt("split-rejected", { reason, subtasksFile: taskDoc(task.id, "subtasks"), fresh })
 }
 
 // --dryrun: the permission-preflight session; its report goes to

@@ -190,6 +190,10 @@ const CLASSIFIED: Record<string, Domain> = {
   "session-api": "driver",
   session: "driver",
   shell: "driver",
+  // The lead's split (plans/0059 D3–D4): the checklist-line parser, the
+  // structural guard, the driver-written S<nn>/todo.md and the taken-split
+  // check; pure over the documents, below execute and runner.
+  split: "driver",
   stats: "driver",
   status: "driver",
   step: "driver",

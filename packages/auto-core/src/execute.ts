@@ -1,5 +1,6 @@
 // The task execution stage: executeWhole (off/auto/ondemand whole-task
-// sessions; auto's is its lead, plans/0059 D2) +
+// sessions; auto's is its lead, which may split the rest of the task,
+// plans/0059 D2–D4) +
 // the merged understand+decompose unit (ensureDecomposed; since M1.0
 // understand+decompose is one single session, plans/0030) + runSubtask, one
 // subtask session (with the subtask-directory state protocol todo.md→done.md).
@@ -11,35 +12,50 @@ import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { ForkBaseInfo, SessionChain } from "./chain"
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
-import { taskDoc } from "./docpaths"
+import { subtaskDoc, taskDoc } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, handoffStatus } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
-import { checklistProblems, renameTodoToDone } from "./document/state"
+import { checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
-import { beginUnit, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
+import { beginUnit, headText, removeIfUntracked, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
 import { readChecklist, reloadTask, setForkBase, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
-import { handoffFile, renderDecompose, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
+import { handoffFile, renderDecompose, renderSplitRejected, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
-import { clientOf, forkEndedSession, seedForkSession } from "./session-api"
+import { clientOf, forkEndedSession, formatTokens, seedForkSession } from "./session-api"
+import { parseSplit, splitProblems, writeSplitTodos } from "./split"
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
-import { sessionHandoverDue } from "./usage"
+import { sessionHandoverDue, splitUsageReached } from "./usage"
 import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
 // The execution stage for off/auto/ondemand: off finishes the whole task in
-// one session; ondemand (and auto's lead, which runs as ondemand until its
-// split clause lands — `ondemand` is true for both, see SubtaskMode in
-// opts.ts), when a live session's context reaches 2x --context-limit,
-// the driver steers in the handover hint, the session writes a handover
-// document and a new session continues from it, until a natural finish or the
-// handover document marks completion. Returns undefined = execution stage done.
+// one session; ondemand and auto's lead (`ondemand` is true for both), when a
+// live session's context reaches 2x --context-limit, the driver steers in the
+// handover hint, the session writes a handover document and a new session
+// continues from it, until a natural finish or the handover document marks
+// completion. Returns undefined = execution stage done.
 // A handover document left over from the previous attempt is cleaned up by the
 // caller (the pipeline) after its recovery determination.
+// `lead` = auto's lead (plans/0059 D2–D4): the prompt carries the split
+// clause, and a session that ends having written subtasks.md is judged by the
+// driver's split guard before its work is committed —
+//   - taken: the driver writes each line's S<nn>/todo.md, the lead's work,
+//     the checklist and the scope files are committed as the task's
+//     execution unit (`T-NNN exec`), and the caller's subtask loop runs the
+//     streams;
+//   - not taken: subtasks.md is removed, the lead's work is committed, and a
+//     fork of the lead is told why and finishes the task. That continuation
+//     and every session after it carry no split clause (one rejection at
+//     most), and a subtasks.md one of them writes is ignored and removed.
+// The clause needs the steer (its criterion (c) is the first usage notice)
+// and a task whose checklist is not written yet: a checklist committed
+// before the stage (written by hand) keeps ondemand's path, and runs after
+// the lead as it does there.
 export async function executeWhole(
   client: ClientSource,
   plan: Plan,
@@ -47,6 +63,7 @@ export async function executeWhole(
   opts: Opts,
   chain: SessionChain,
   ondemand: boolean,
+  lead = false,
 ): Promise<UnitStop | undefined> {
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
   const dir = opts.dir ?? plan.dir
@@ -64,6 +81,68 @@ export async function executeWhole(
   const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
   chain.subject = subject
+  // The lead's split. The checklist the stage starts from is the committed
+  // copy: one the lead of an interrupted run left uncommitted is that lead's
+  // own split, still to be judged (a resumed run is the only one the clean
+  // gate lets start with it). Without a commit to read (no git) it is the copy
+  // on disk.
+  // AUTO-DECISION: the starting checklist is read from HEAD, falling back to the disk only without a commit (the copy on disk at the stage's start would make a killed lead's uncommitted split look written by hand on the resumed run, and nothing else lets a task start with an uncommitted checklist past the clean gate)
+  // AUTO-RESOLVE: does auto's lead get the split clause when the task already has a committed checklist? -> no, the lead runs as ondemand's session and the checklist runs after it (a checklist a person wrote is a split already decided; judging it by the lead's guard could remove it, and a second split on top would run two plans)
+  // AUTO-RESOLVE: does auto's lead get the split clause without usage notices (OPENCODE_AUTO_STEER=off)? -> no, it runs as ondemand's session (criterion (c) is the first usage notice, which never arrives; 0059 D7 rules the same for an agent without mid-turn steer, and the run start already turns the steer off for one)
+  const subtasksRel = taskDoc(task.id, "subtasks")
+  const readSubtasks = async (): Promise<string> => Bun.file(join(planDir, subtasksRel)).text().catch(() => "")
+  const checklistBase = lead && steer !== undefined ? ((await headText(planDir, subtasksRel)) ?? (await readSubtasks())) : ""
+  const splitOffered = lead && steer !== undefined && subtasks(checklistBase).length === 0
+  if (lead && steer !== undefined && !splitOffered) {
+    log(`• ${task.id} ${subtasksRel} already holds a checklist; the lead runs without its split clause, and the checklist runs after it`)
+  }
+  // open = the clause is offered; rejected = one split was not taken, so no
+  // later session of this stage gets the clause, and a checklist it writes is
+  // removed; none = not auto's lead with the clause at all.
+  let split: "open" | "rejected" | "none" = splitOffered ? "open" : "none"
+  // Puts subtasks.md back as the stage found it, with any S<nn>/todo.md the
+  // lead wrote against the clause (the driver writes those).
+  const dropSplit = async (count: number) => {
+    if (checklistBase) await Bun.write(join(planDir, subtasksRel), checklistBase)
+    else await rm(join(planDir, subtasksRel), { force: true })
+    for (let i = 1; i <= count; i++) await removeIfUntracked(planDir, subtaskDoc(task.id, i, "todo"))
+  }
+  // A checklist the session wrote that nobody judged yet (the lead's own when
+  // open, a new one after a rejection); its items when there is one.
+  const unjudged = async () => {
+    if (split === "none") return []
+    const raw = await readSubtasks()
+    return raw !== checklistBase ? parseSplit(raw) : []
+  }
+  // The guard (plans/0059 D4) over the checklist a session just left: taken
+  // (the scope files written, a handover document of the lead removed — the
+  // streams must not read it as their own), rejected with the reasons, or
+  // nothing to judge.
+  const judgeSplit = async (): Promise<{ type: "taken"; count: number } | { type: "rejected"; reason: string } | undefined> => {
+    const items = await unjudged()
+    if (!items.length) return undefined
+    if (split === "rejected") {
+      await dropSplit(items.length)
+      log(`↻ ${task.id} ${subtasksRel} was written again after the rejected split; ignored and removed`)
+      return undefined
+    }
+    const reasons = splitProblems(items)
+    // The usage condition: the lead's final figure against the wall of its
+    // last measurement (the 2×cap budget where none was taken).
+    // AUTO-DECISION: the wall is the session's own last measured wall (SessionChain.wall), the budget without one (it is the wall the lead's notices were measured against, so the guard and criterion (c) read the same figure; recomputing it here would need the model window)
+    const wall = chain.wall ?? steer!.limit
+    if (!splitUsageReached((await clientOf(client, chain.agent)).capabilities.usage, chain.used, wall)) {
+      reasons.push(`the lead's context (${formatTokens(chain.used)} tokens) is under half the wall (${formatTokens(wall)}), where finishing in this session is cheaper`)
+    }
+    if (reasons.length) {
+      await dropSplit(items.length)
+      split = "rejected"
+      return { type: "rejected", reason: reasons.join("; ") }
+    }
+    await writeSplitTodos(planDir, task.id, items)
+    await rm(join(planDir, handoffFile(task)), { force: true })
+    return { type: "taken", count: items.length }
+  }
   // Interruption-recovery seeding: a stale handover document is cleared by the
   // pipeline on the non-recovery path, so the file still existing here means an
   // active recovery — handed over before the interruption. Status=done → the
@@ -78,6 +157,9 @@ export async function executeWhole(
     return undefined
   }
   let continuation = prior === "continue"
+  // The rejected split's note goes alone into a fork of the lead (it holds the
+  // task and all its work); forked marks that dispatch.
+  let forked = false
   // The handoff text the current dispatch was seeded with (recovery doc, or
   // the document a previous session of this run handed over and the
   // continuation prompt reads): a post-session document differing from it was
@@ -101,6 +183,8 @@ export async function executeWhole(
     feedback = ""
     retried = false
     consumed = ""
+    forked = false
+    split = splitOffered ? "open" : "none"
     chain.id = undefined
     chain.pending = undefined
     chain.note = undefined
@@ -117,11 +201,15 @@ export async function executeWhole(
     return "done"
   }
   for (;;) {
+    const brief = forked
+    forked = false
     const result = await runExecSession(
       client,
       plan,
       task,
-      renderWhole(plan, task, { mode: opts.mode, ondemand, continuation, budget: steer !== undefined }) + feedback,
+      brief
+        ? feedback.trimStart()
+        : renderWhole(plan, task, { mode: opts.mode, ondemand, continuation, budget: steer !== undefined, adaptive: split === "open" }) + feedback,
       opts,
       chain,
       steer,
@@ -137,6 +225,15 @@ export async function executeWhole(
         }
         if (redone) return redone
       }
+      // A session stopped before its split was judged: the checklist goes, or
+      // the interruption commit would keep it and the next run would read it
+      // as one written by hand. A lead that still splits writes it again.
+      // AUTO-DECISION: a blocked lead's unjudged split is removed rather than judged or kept (judging needs the session to continue, which a blocked one cannot; kept, the loop's interruption commit would turn it into a committed checklist that the next run offers no guard for)
+      const left = await unjudged()
+      if (left.length) {
+        await dropSplit(left.length)
+        log(`↻ ${task.id} the session stopped before ${subtasksRel} was judged; the unjudged split was removed`)
+      }
       return result
     }
     // The task-level test-handover chain is cleared whole when the execution
@@ -149,8 +246,27 @@ export async function executeWhole(
     if (opts.testByDriver) {
       await removeHandoffChain(planDir, taskDoc(task.id, "testhandoff"))
     }
+    // The lead's split is judged before the commit, so the commit holds its
+    // outcome: the lead's work with the checklist and the scope files when
+    // taken, the lead's work alone when not.
+    const verdict = await judgeSplit()
     const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
+    if (verdict?.type === "taken") {
+      log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next`)
+      return undefined
+    }
+    if (verdict?.type === "rejected") {
+      // A handover document the lead left is not this round's signal: the
+      // fork continues in the lead's own context.
+      consumed = await readHandoff()
+      // AUTO-DECISION: without a fork (an agent that cannot fork, or the lead is gone) the rejected lead continues in a new session with the full whole-task prompt, no clause, plus the note (the shape-check re-prompts' fallback; 0059 D7 will withhold the clause from agents that cannot fork, which leaves this for a lost session)
+      forked = await forkEndedSession(client, chain, subject)
+      feedback = `${forked ? "" : "\n\n"}${renderSplitRejected(task, verdict.reason, !forked)}`
+      retried = false
+      log(`↻ ${task.id} the lead's split was not taken (${verdict.reason}); ${forked ? "a fork of the lead" : "a new session"} finishes the task`)
+      continue
+    }
     // Ending without hitting the handover threshold (2x cap, or the effective
     // wall where a large window raised it above that) = the task
     // finished naturally in a single session; when no steer was built (off

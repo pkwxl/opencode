@@ -54,6 +54,10 @@ describe("unitReruns (the recovery point's unit-ownership gate: reuse allowed on
     // auto's lead is a whole-task session (plans/0059 D2); the pipeline has none
     expect(unitReruns({ kind: "whole" }, ctx({ mode: "auto" }))).toBe(true)
     expect(unitReruns({ kind: "whole" }, ctx({ mode: "true" }))).toBe(false)
+    // A split the lead's guard took ends the lead's unit (plans/0059 D4): the
+    // record's session is the lead's, and the next unit is a stream.
+    expect(unitReruns({ kind: "whole" }, ctx({ mode: "auto", split: true }))).toBe(false)
+    expect(unitReruns({ kind: "subtasks", index: 2 }, ctx({ mode: "auto", split: true }))).toBe(true)
     const done = ctx({ items: [{ text: "only item", done: true }] })
     expect(unitReruns({ kind: "wrapup" }, done)).toBe(true)
     expect(unitReruns({ kind: "wrapup" }, ctx())).toBe(false) // an unticked item remains; the next unit is a subtask

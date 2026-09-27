@@ -19,6 +19,7 @@
 // | post-session handover check     | today¹ | off (no live) | estimate¹ | off         |
 // | test handover (used >= cap)     | today  | today         | estimate  | off         |
 // | fork base guard (used < cap/2)  | today  | today         | estimate  | cold start  |
+// | split guard (used >= wall/2)    | today  | skipped       | estimate  | skipped     |
 // | failover window clamp           | window sizes, not usage: same in every tier  |
 // ¹ also due when the hint went out, whatever the final figure (plans/0040 D6)
 //
@@ -177,6 +178,17 @@ export function testHandoverDue(
   // Today a measured 0 means "nothing arrived yet"; keep that reading.
   const basis = used !== undefined && used > 0 ? used : test.startUsed
   return basis !== undefined && basis >= test.limit
+}
+
+// The usage condition of the lead's split guard (plans/0059 D4, execute.ts):
+// a split is taken only once the lead's final figure reached half the wall —
+// where the first usage notice goes out; below it, finishing in the same
+// session is cheaper than re-establishing context in the streams. Only a
+// live tier has the figure the notice is sent on; the other tiers skip the
+// check, and the lead's own reading of the split rule stands.
+export function splitUsageReached(tier: UsageTier, used: number | undefined, wall: number): boolean {
+  if (!liveUsage(tier)) return true
+  return used !== undefined && used >= wall / 2
 }
 
 // Fork seeding from a base session (session-api.ts seedForkSession): forking

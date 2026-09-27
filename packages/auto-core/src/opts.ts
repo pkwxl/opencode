@@ -67,18 +67,12 @@ export type SessionCommit = { type: "ok" } | { type: "failed"; question: string 
 
 // --subtask's four levels (plans/0059 D1): off (one session to completion) /
 // auto (adaptive decomposition, the default: one lead session works the whole
-// task and splits only when that pays) / true (the planned pipeline: a
-// decompose session, one session per subtask, a wrap-up — what auto meant
-// before 0059) / ondemand (one session executes, managing its own context:
-// usage notices and a self-decided handover document continue the task in
-// fresh sessions, plans/0056).
-// AUTO-DECISION: until the lead's split clause and the driver's split guard
-// land (plans/0059 D2–D4, its stage S4), auto runs its lead exactly as
-// ondemand runs its whole-task session — same prompt, same handover protocol,
-// same resume ownership and dispatch needs — so the rename ships alone and
-// changes nothing but the meaning of a stored "auto", which 0059 D8 rules.
-// The equivalence is temporary: it ends where runner.ts joins auto to the
-// ondemand path (selfHandover), when S4 gives the lead its split clause.
+// task under ondemand's protocol and splits the rest off only when the
+// driver's guard finds that it pays, plans/0059 D2–D4) / true (the planned
+// pipeline: a decompose session, one session per subtask, a wrap-up — what
+// auto meant before 0059) / ondemand (one session executes, managing its own
+// context: usage notices and a self-decided handover document continue the
+// task in fresh sessions, plans/0056).
 export const SUBTASK_MODES = ["off", "auto", "true", "ondemand"] as const
 export type SubtaskMode = (typeof SUBTASK_MODES)[number]
 

@@ -37,6 +37,10 @@ export type UnitRerunCtx = {
   // Whether the wrap-up unit will run this round (config already accounted
   // for)
   wrapup: boolean
+  // auto: the lead's split was taken (the checklist's state files exist), so
+  // the lead's unit is over and its streams are the checklist items
+  // (plans/0059 D4). Absent = no split.
+  split?: boolean
 }
 
 export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean {
@@ -57,8 +61,9 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
       return ctx.mode === "true" && ctx.items.length === 0 && ctx.subtasksFileItems === 0
     case "whole":
       // off/ondemand's whole-task session and auto's lead (plans/0059 D2: a
-      // whole-task session too).
-      return ctx.mode !== "true"
+      // whole-task session too) — unless the lead's split was taken, which
+      // ends its unit: the next unit is a stream, never the lead continued.
+      return ctx.mode !== "true" && ctx.split !== true
     case "subtasks":
       return atItem(phase.index)
     case "wrapup":

@@ -118,7 +118,8 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Task pipeline | `runOnce`/`runTask`: decompose → subtasks (or whole) → wrap-up → closeout; resume | `src/runner.ts` |
-| Execution | Merged understand+decompose session, per-subtask sessions, whole-task session | `src/execute.ts` (0030) |
+| Execution | Merged understand+decompose session, per-subtask sessions, whole-task session (auto's lead, its split judged after each session) | `src/execute.ts` (0030, 0059) |
+| Lead's split | The lead's checklist lines, the structural split guard, the driver-written `S<nn>/todo.md`, the taken-split check | `src/split.ts` (0059 D3–D4) |
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
 | Session driving | `runSession` retry / server restart / key-ring rotation → model failover / `awaitRecovery`; a spent quota window with a stated reset skips the retry ladder; the scheduled wait (`planSleep`: the recovery sleep to a known instant — a candidate usable again, a stated or learned reset — plus jitter, `/exit` a boundary inside it); registry window wait (sleep to the opening plus hibernate's jitter, booked as a `window` wait); `ensureForkBase` (per agent, built with the subtask route's pick) | `src/session.ts` (0015, 0017, 0055 §6.3, §7, §8.4, 0057 §4.1, §6) |
 | Single dispatch | Reuse-or-create, model target and the chain's agent binding, resume point, stats segment, wait for idle | `src/attempt.ts` |

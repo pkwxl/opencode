@@ -24,6 +24,7 @@ import {
   renderNumberRecovery,
   renderPhaseHandover,
   renderPriorKnowledge,
+  renderSplitRejected,
   renderStuckHint,
   renderSubtask,
   renderTestContinue,
@@ -138,6 +139,7 @@ describe("golden render snapshots", () => {
     golden("subtask", renderSubtask(plan, task, "write the execution logic", { ...execOpts, index: 2 }))
     golden("whole", renderWhole(plan, task, { ...execOpts, ondemand: true }))
     golden("whole-budget", renderWhole(plan, task, { ...execOpts, ondemand: true, budget: true }))
+    golden("whole-adaptive", renderWhole(plan, task, { ...execOpts, ondemand: true, budget: true, adaptive: true }))
     golden("wrapup", renderWrapup(plan, task, { mode: migrate, resolves }))
   })
 
@@ -226,6 +228,7 @@ describe("golden render snapshots", () => {
     golden("handoff-steer", renderHandoffSteer(task))
     golden("usage-note-info", renderUsageNoteInfo(task))
     golden("usage-note-winddown", renderUsageNoteWinddown(task))
+    golden("split-rejected", renderSplitRejected(task, "1 item, where a split takes 2 to 5 streams", true))
     golden("stuck-hint-1", renderStuckHint(stuck(1)))
     golden("stuck-hint-2", renderStuckHint(stuck(2)))
     golden("stuck-hint-3", renderStuckHint(stuck(3)))

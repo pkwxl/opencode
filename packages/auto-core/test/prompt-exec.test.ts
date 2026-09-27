@@ -19,6 +19,7 @@ import {
   renderHandoffSteer,
   renderKnowledge,
   renderPriorKnowledge,
+  renderSplitRejected,
   renderStuckHint,
   renderSubtask,
   renderTestContinue,
@@ -690,6 +691,34 @@ describe("renderWhole", () => {
     const cont = renderWhole(plan, task, { ondemand: true, budget: true, continuation: true })
     expect(cont).toContain("First read docs/T-002/handoff.md")
     expect(cont).toContain("then carry on from there")
+  })
+
+  test("auto's lead (adaptive): the split clause with its three criteria and the line format, in place of the single-session sentence", () => {
+    const text = renderWhole(plan, task, { ondemand: true, budget: true, adaptive: true })
+    expect(text).toContain("You are the lead session of this task")
+    expect(text).not.toContain("without decomposing it into subtasks")
+    expect(text).toContain("Split rule (adaptive decomposition)")
+    expect(text).toContain("(a) the remaining work is 2 to 5 streams that each change their own files")
+    expect(text).toContain("(b) each stream is substantial")
+    expect(text).toContain("(c) the DRIVER's first `[DRIVER] context: …` notice")
+    expect(text).toContain("write docs/T-002/subtasks.md with one checklist line per stream")
+    expect(text).toContain("- [ ] <title>: <what to do, where, and how to verify it> Depends: S01 Artifacts: <file paths>")
+    expect(text).toContain("without writing docs/T-002/handoff.md or any S<nn>/todo.md")
+    // The clause follows the context-budget protocol it builds on.
+    expect(text.indexOf("Split rule")).toBeGreaterThan(text.indexOf("Context-budget protocol"))
+    // Without the flag (ondemand, off, a lead after a rejected split) the
+    // prompt is the single-session one, byte for byte.
+    expect(renderWhole(plan, task, { ondemand: true, budget: true, adaptive: false })).toBe(renderWhole(plan, task, { ondemand: true, budget: true }))
+    expect(renderWhole(plan, task, { ondemand: true, budget: true })).not.toContain("Split rule")
+  })
+
+  test("the rejected split's note: the reason, the removed checklist, no second split; the fresh-session fallback adds the committed earlier work", () => {
+    const note = renderSplitRejected(task, "1 item, where a split takes 2 to 5 streams")
+    expect(note).toStartWith("[DRIVER] The split was not taken: 1 item, where a split takes 2 to 5 streams.")
+    expect(note).toContain("docs/T-002/subtasks.md has been removed")
+    expect(note).toContain("Finish the task in this session and do not split it again")
+    expect(note).not.toContain("git log")
+    expect(renderSplitRejected(task, "why", true)).toContain("its changes are committed: check git log and git diff")
   })
 
   test("the usage notices carry the figure slots and the handover path; the wind-down band carries the status protocol", () => {
