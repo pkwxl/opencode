@@ -14,6 +14,7 @@ import {
   renderClassifyError,
   renderDecompose,
   renderDryrun,
+  renderFanout,
   renderHandoffSteer,
   renderKnowledge,
   renderPriorKnowledge,
@@ -232,7 +233,9 @@ describe("eof-rule partial and document eof-marker discipline (D4/D5, plans/0026
     .filter((name) => readFileSync(join(prompts, name), "utf8").includes("{{> eof-rule}}"))
     .sort()
 
-  test("exactly subtask + decompose base + six phase variants + wrapup, 9 templates, reference the partial (S3/S3b, M1.0 merge)", () => {
+  test("exactly subtask + decompose base + six phase variants + wrapup + the lead's stream, 10 templates, reference the partial (S3/S3b, M1.0 merge, plans/0059 D5)", () => {
+    // fanout.md: a stream forks the lead, whose whole-task prompt never
+    // carried the terminator rule, and its close-out checks it.
     expect(consumers).toEqual([
       "decompose-a.md",
       "decompose-d.md",
@@ -241,6 +244,7 @@ describe("eof-rule partial and document eof-marker discipline (D4/D5, plans/0026
       "decompose-t.md",
       "decompose-v.md",
       "decompose.md",
+      "fanout.md",
       "subtask.md",
       "wrapup.md",
     ])
@@ -254,11 +258,12 @@ describe("eof-rule partial and document eof-marker discipline (D4/D5, plans/0026
     expect(text).not.toMatch(/\{\{|\}\}/)
   })
 
-  test("consumer templates render with the eof-marker discipline paragraph (the subtask/decompose/wrapup automatic session kinds, M1.0 merge)", () => {
+  test("consumer templates render with the eof-marker discipline paragraph (the subtask/decompose/wrapup automatic session kinds and the lead's stream, M1.0 merge)", () => {
     for (const rendered of [
       renderSubtask(plan, task, "write the schema part of the migration script"),
       renderDecompose(plan, task),
       renderWrapup(plan, task),
+      renderFanout(plan, task, "write the schema part of the migration script", 1, { siblings: ["S02 write the execution logic"] }),
     ]) {
       expect(rendered).toContain("Document terminator discipline")
       expect(rendered).toContain("<!-- auto: eof -->")
