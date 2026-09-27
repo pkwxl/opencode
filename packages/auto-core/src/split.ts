@@ -8,7 +8,10 @@
 // writes from each accepted line — the lead writes the plan once, as the
 // checklist, and never a todo.md. The usage half of the guard (the lead's
 // final figure against the wall, src/usage.ts splitUsageReached) and the
-// accept / reject flow live in execute.ts executeWhole.
+// accept / reject flow live in execute.ts executeWhole. For the streams that
+// run afterwards as forks of the lead (D5, execute.ts runSubtask) it also
+// gives each stream's title and the driver-state filter of the files changed
+// since the split.
 //
 // The guard, all of which must hold for a split to be taken:
 //   - 2 to 5 items: one stream is no split, more than five is finer than a
@@ -25,7 +28,7 @@
 import { mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { EOF_MARK } from "./doccheck"
-import { subtaskDoc } from "./docpaths"
+import { subtaskDoc, taskDir, taskDoc } from "./docpaths"
 import { declaredArtifacts, SUBTASK_TODO_SECTIONS } from "./document/spec"
 import { checklistProblems, scanSubtaskStates, subtaskId } from "./document/state"
 import { resolveDepends } from "./document/unit"
@@ -190,6 +193,27 @@ export async function writeSplitTodos(dir: string, taskId: string, items: readon
     await mkdir(dirname(file), { recursive: true })
     await Bun.write(file, renderSplitTodo(item))
   }
+}
+
+// A stream's title, for the sibling list of a fan-out prompt (plans/0059 D5:
+// the other streams by title only): the line's text up to the colon that
+// ends its title (`<title>: <what, where, how to verify>`), the whole
+// description when there is none, capped at 60 characters.
+export function splitTitle(text: string): string {
+  const { description } = splitItem(text, 0)
+  const colon = description.search(/[:：](?:\s|$)/)
+  const title = (colon > 0 ? description.slice(0, colon) : description).trim()
+  return title.length > 60 ? `${title.slice(0, 59)}…` : title
+}
+
+// The driver's own writes around the streams — the checklist ticks and the
+// S<nn> todo.md → done.md renames — which the files-changed-since-the-split
+// list of a fan-out prompt leaves out: they are no content a stream reads.
+export function splitStateFile(taskId: string, rel: string): boolean {
+  const path = rel.replaceAll("\\", "/").replace(/^\.\//, "")
+  if (path === taskDoc(taskId, "subtasks")) return true
+  const inTask = `${taskDir(taskId)}/`
+  return path.startsWith(inTask) && /^S\d{2,}\/(?:todo|done)\.md$/.test(path.slice(inTask.length))
 }
 
 // Whether a split was taken for the task: its checklist has items and their

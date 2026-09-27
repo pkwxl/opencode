@@ -1149,7 +1149,7 @@ export async function runSession(
     // must carry the worktree-check note. A stale base falls back to a blank
     // new session.
     if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(await chainClient(), chain.forkBase))) {
-      const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(await chainClient(), chain.forkBase) }
+      const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(await chainClient(), chain.forkBase), ...(chain.forkLead ? { lead: true } : {}) }
       if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} retry`)) {
         log(`↻ ${task.id} transient session error; no session on the chain to fork, re-seeded from the base for retry (${nth}/${waits.length}):\n${result.question}`)
         chain.note = retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context.")

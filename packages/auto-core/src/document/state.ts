@@ -37,7 +37,7 @@
 // the top of S<nn>/todo.md (a subtask scope file has no title line), and
 // selection is nextReady over the positional ids; without fields the default
 // serial order is the old "first unticked item".
-import { nextReady, renameUnitDone, scanUnitStates, unitProblems, type UnitDecl, type UnitRef } from "./unit"
+import { nextReady, renameUnitDone, resolveDepends, scanUnitStates, unitProblems, type UnitDecl, type UnitRef } from "./unit"
 
 export type SubtaskState = { index: number; todo: boolean; done: boolean }
 
@@ -61,6 +61,12 @@ export function nextChecklistIndex(items: readonly DeclaredItem[]): number {
   const done = new Set(items.flatMap((item, i) => (item.done ? [subtaskId(i + 1)] : [])))
   const id = nextReady(checklistDecls(items), done)
   return id === undefined ? -1 : Number(id.slice(1)) - 1
+}
+
+// The effective prerequisites (S<nn> ids) of the 1-based item n: its
+// `Depends:` ids, none for `none`, else the item before it (G3).
+export function checklistPrerequisites(items: readonly DeclaredItem[], n: number): string[] {
+  return resolveDepends(checklistDecls(items)).get(subtaskId(n)) ?? []
 }
 
 // Dependency problems of a task's subtasks (G4, subtask scope: S<nn> within

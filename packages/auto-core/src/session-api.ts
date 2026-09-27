@@ -88,9 +88,11 @@ export async function forkSession(client: AgentClient, base: string, title: stri
 // wins; no reuse across subtasks, every item forks fresh from the base); fork
 // failure → reset the chain and take a brand-new session + cold-start prompt;
 // base usage reaching cap/2 → no fork, straight cold start (keeps the prefix
-// away from the limit). When interruption recovery reuses the interrupted
-// session (the chain still holds a session and a resume note is pending
-// injection), no fork: the first prompt goes into the reused session. Returns
+// away from the limit), except for auto's lead as the base of its split's
+// streams, forked whatever its size (plans/0059 D5, base.lead). When
+// interruption recovery reuses the interrupted session (the chain still holds
+// a session and a resume note is pending injection), no fork: the first
+// prompt goes into the reused session. Returns
 // warm (= this session already inherited the task background) for the prompt
 // to pick its background section; without a base (fork=off / never established)
 // the chain is untouched, behavior identical to the status quo.
@@ -109,7 +111,7 @@ export async function seedForkSession(
   // the chain and its resume note is pending injection → reuse it.
   if (chain.id !== undefined && chain.note !== undefined) return true
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  if (!forkBaseAllowed(base.used, cap)) {
+  if (!forkBaseAllowed(base.used, cap, base.lead)) {
     log(
       base.used === undefined
         ? `↻ base usage unknown; not forking (cold start)`
@@ -140,6 +142,7 @@ export async function seedForkSession(
   chain.id = undefined
   chain.pending = forked
   chain.forkBase = base.id
+  chain.forkLead = base.lead || undefined
   chain.pct = 100
   // forkBaseAllowed passed, so the figure is known.
   const used = base.used ?? 0

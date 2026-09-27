@@ -19,6 +19,7 @@
 // | post-session handover check     | today¹ | off (no live) | estimate¹ | off         |
 // | test handover (used >= cap)     | today  | today         | estimate  | off         |
 // | fork base guard (used < cap/2)  | today  | today         | estimate  | cold start  |
+// | fan-out fork of the lead        | fork   | fork          | fork      | cold start  |
 // | split guard (used >= wall/2)    | today  | skipped       | estimate  | skipped     |
 // | failover window clamp           | window sizes, not usage: same in every tier  |
 // ¹ also due when the hint went out, whatever the final figure (plans/0040 D6)
@@ -194,6 +195,13 @@ export function splitUsageReached(tier: UsageTier, used: number | undefined, wal
 // Fork seeding from a base session (session-api.ts seedForkSession): forking
 // a base whose prefix is already half the cap makes the new session start
 // near the wall. An unknown base size is treated as full: cold start.
-export function forkBaseAllowed(baseUsed: number | undefined, cap: number): boolean {
-  return baseUsed !== undefined && baseUsed < cap / 2
+// `lead` = the base is auto's lead and the new session one stream of its
+// split (plans/0059 D5): the lead split at half its wall or above, so the
+// cap/2 guard would refuse every stream the understanding the fork exists to
+// carry. A stream forks whatever the lead's size and runs under the usage
+// protocol instead, which hands it over when the inherited prefix leaves too
+// little room. An unknown size still starts cold.
+// AUTO-DECISION: a stream forks the lead with no size ceiling (the lead's figure is already bounded by its own hard-wall hint, and a stream starting near the wall is handed over by the same protocol at its first measurement; a ceiling at the wall would need the model window at seeding time, which only the watch learns)
+export function forkBaseAllowed(baseUsed: number | undefined, cap: number, lead = false): boolean {
+  return baseUsed !== undefined && (lead || baseUsed < cap / 2)
 }

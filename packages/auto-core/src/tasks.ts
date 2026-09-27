@@ -29,6 +29,7 @@ import { mkdir, rename, rm } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
+import type { UnitBaseline } from "./git"
 import { checkArtifactSpecs, taskTodoSpec } from "./document/spec"
 import { effectiveDone, scanSubtaskStates, subtaskId } from "./document/state"
 import {
@@ -74,6 +75,14 @@ export type Task = {
   // forkBaseFor resolves one agent's entry.
   // AUTO-DECISION: any registry writes the map, even a single-agent one (the registry's presence is the switch; keying the shape on the profile count would flip the record the moment an operator adds a profile nobody dispatches on, and the read side accepts both shapes forever)
   forkBase?: string | Record<string, string>
+  // The split point of auto's lead (plans/0059 D5): each repository's HEAD
+  // right after the commit that took the lead's split ([] where nothing is
+  // committed — no git, or dryrun). Its presence marks the task's checklist
+  // as the lead's streams, forked from the lead (the fork base above); the
+  // files a stream's prerequisites changed are read against it. Runtime
+  // state, written when the split is taken, dropped when a lead starts again.
+  // AUTO-DECISION: the split point is a runtime record beside the fork base, not derived from git (the commit that added S01/todo.md reads the same for the planned pipeline's decompose commit, and a non-git run has no commit at all; the record is the one fact that tells the lead's streams from any other checklist)
+  split?: UnitBaseline
   // The task's own content: todo.md (done.md once complete) without its title
   // line, field block and terminator.
   body: string
@@ -237,7 +246,7 @@ export function renderTaskIndex(phase: string, tasks: readonly { id: string; tit
 
 export const UNITS_FILE = join(".auto", "units.json")
 
-type Runtime = { status?: "in_progress" | "blocked"; attempts?: number; forkBase?: string | Record<string, string> }
+type Runtime = { status?: "in_progress" | "blocked"; attempts?: number; forkBase?: string | Record<string, string>; split?: UnitBaseline }
 type Units = { tasks: Record<string, Runtime> }
 
 // The persisted fork base record sanitized for a Task: a plain string as-is,
@@ -255,6 +264,14 @@ function parseForkBase(raw: unknown): Task["forkBase"] {
     return Object.keys(map).length ? map : undefined
   }
   return undefined
+}
+
+// The persisted split point sanitized like the fork base: an array of
+// { root, sha } lines (an empty one is a split taken with nothing committed),
+// anything else dropped — no split record.
+function parseSplitPoint(raw: unknown): UnitBaseline | undefined {
+  if (!Array.isArray(raw)) return undefined
+  return raw.filter((line): line is { root: string; sha: string } => typeof line?.root === "string" && typeof line?.sha === "string")
 }
 
 // One agent's fork base of the persisted record (plans/0055 §8.4): under a
@@ -358,6 +375,7 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
     const unit = parseUnitDoc(doc)
     const runtime = units.tasks[entry.id] ?? {}
     const forkBase = parseForkBase(runtime.forkBase)
+    const split = parseSplitPoint(runtime.split)
     plan.tasks.push({
       id: entry.id,
       title: unit.title || entry.title,
@@ -365,6 +383,7 @@ export async function loadPlan(dir: string, phase: PlanPhase): Promise<Plan> {
       ...(scan.closed.has(entry.id) ? { closed: scan.closed.get(entry.id)! } : {}),
       attempts: runtime.attempts ?? 0,
       ...(forkBase !== undefined ? { forkBase } : {}),
+      ...(split !== undefined ? { split } : {}),
       body: taskBody(doc),
       ...(unit.fields.phase ? { phase: unit.fields.phase } : {}),
       ...(unit.depends !== undefined ? { depends: unit.depends } : {}),
@@ -466,6 +485,12 @@ export async function setForkBase(dir: string, id: string, sessionID: string, ag
         : { ...(typeof entry.forkBase === "object" && entry.forkBase !== null ? entry.forkBase : {}), [agent]: sessionID }
     return { ...entry, forkBase }
   })
+}
+
+// Records the split point of auto's lead (Task.split), or drops it
+// (undefined): a lead that starts again makes an earlier record stale.
+export async function setSplit(dir: string, id: string, split: UnitBaseline | undefined): Promise<void> {
+  await updateTask(dir, id, (entry) => ({ ...entry, split }))
 }
 
 // Task completion: rename todo.md → done.md and tick the index line (the task

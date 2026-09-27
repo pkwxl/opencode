@@ -327,11 +327,16 @@ function doneIds(plan: Plan): string | undefined {
 // When absent, index/list/output file are derived from the task checklist
 // (subtasks.md) (same convention as the runner's subtask loop); old
 // callers passing no params still render the full prompt.
+// budget: the session runs under the context-budget protocol (usage notices
+// and a self-directed handover, plans/0056) — a stream of auto's split that
+// starts without a fork of the lead, or continues from a handover (plans/0059
+// D5); the planned pipeline's subtasks never pass it (0056 D1).
+// AUTO-DECISION: the protocol is a conditional block of subtask.md rather than a separate template (the stream without a fork needs the whole subtask prompt anyway, and without the flag the prompt stays byte-identical)
 export function renderSubtask(
   plan: Plan,
   task: Task,
   subtask: string,
-  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean } = {},
+  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; budget?: boolean } = {},
 ): string {
   const items = task.checklist ?? []
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
@@ -379,6 +384,47 @@ export function renderSubtask(
     // template conditions on it with "if it exists" wording.
     todoFile: index !== undefined ? subtaskDoc(task.id, Number(index), "todo") : undefined,
     warm: Boolean(opts.warm),
+    budget: Boolean(opts.budget),
+  })
+}
+
+// One stream of auto's taken split, sent alone into a fork of the lead
+// (plans/0059 D5): the fork already holds the task, its rules and everything
+// the lead read, so the prompt is only the delta —
+//   - the item line in full, the other streams by title (siblings, one
+//     pre-rendered line each);
+//   - changed: the files changed since the split, given to a stream whose
+//     prerequisites ran (the fork holds them as they were at the split);
+//     without it the stream is told not to re-read;
+//   - targeted verification, with the task's full acceptance verification
+//     run once by the last stream (last);
+//   - no per-item record for code changes (the commit is the record), a
+//     document output into the item's output file;
+//   - the document terminator discipline, which the lead's prompt never
+//     carried and the stream's close-out checks;
+//   - budget: the context-budget protocol, scoped to the stream.
+// AUTO-DECISION: the delta also carries the terminator rule and names the stream's own test-handover document (the lead's prompt had neither — its test handover is the task-level one — and the stream's close-out checks the terminator and reads the stream-level document)
+export function renderFanout(
+  plan: Plan,
+  task: Task,
+  subtask: string,
+  index: number,
+  opts: Opts & { siblings: string[]; changed?: string[]; last?: boolean; budget?: boolean },
+): string {
+  const ctx = baseCtx(plan, task, { ...opts, index })
+  return renderPrompt("fanout", {
+    ...ctx,
+    subtask,
+    qualifiedId: `${task.id}.S${String(index).padStart(2, "0")}`,
+    siblings: opts.siblings.map((line) => `- ${line}`).join("\n"),
+    changed: opts.changed?.length ? opts.changed.map((path) => `- ${path}`).join("\n") : undefined,
+    last: Boolean(opts.last),
+    budget: Boolean(opts.budget),
+    handoffFile: handoffFile(task),
+    subtasksFile: taskDoc(task.id, "subtasks"),
+    outputFile: subtaskOutputFile(task, index),
+    // The stream's closing self-check (M1.3), the subtask one.
+    selfCheck: intentText("quality", "self-check-subtask", ctx),
   })
 }
 
@@ -551,15 +597,15 @@ export function handoffFile(task: Task): string {
 // The hard-wall steer the driver inserts while a session is running (usage
 // reached the wall, testrun.ts steerWall: 2x contextLimit, raised to a quarter
 // of a large model window and clamped to 80% of it; ondemand
-// whole-task sessions only — the last resort after the usage notices went
-// unacted-on, plans/0056). The v2 prompt is a steer by default, entering the
+// whole-task sessions, auto's lead and the streams of its split, plans/0059
+// D5 — the last resort after the usage notices went unacted-on, plans/0056). The v2 prompt is a steer by default, entering the
 // session at the next provider-turn boundary.
 export function renderHandoffSteer(task: Task): string {
   return renderPrompt("handoff-steer", { handoffFile: handoffFile(task) })
 }
 
-// Usage notices steered into a running ondemand whole-task session at budget
-// milestones (plans/0056): the 50% band is informational, the 85% band advises
+// Usage notices steered into a running ondemand whole-task session (or auto's
+// lead, or a stream of its split) at budget milestones (plans/0056): the 50% band is informational, the 85% band advises
 // winding down at the next natural boundary. The figures do not exist at
 // render time — the {{used}}/{{pct}}/{{wall}} slots round-trip as literal
 // placeholders that the driver fills at send time (fillUsageNote in

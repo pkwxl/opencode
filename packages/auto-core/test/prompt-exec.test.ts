@@ -16,6 +16,7 @@ import {
   renderContextBase,
   renderDecompose,
   renderDryrun,
+  renderFanout,
   renderHandoffSteer,
   renderKnowledge,
   renderPriorKnowledge,
@@ -753,6 +754,63 @@ describe("renderWhole", () => {
     expect(text).toContain("docs/T-002/handoff.md")
     expect(text).toContain("docs/T-002/testhandoff.md")
     expect(renderWhole(plan, task)).not.toContain("Test execution protocol")
+  })
+})
+
+describe("renderFanout and the stream's full prompt (plans/0059 D5)", () => {
+  const line = "write the execution logic: src/exec.ts, verify with its test Depends: S01 Artifacts: src/exec.ts"
+  const siblings = ["S01 write the schema part (done)", "S03 write the docs"]
+
+  test("the delta a fork of the lead gets: the item line in full, the siblings by title, no task block or rules", () => {
+    const text = renderFanout(listPlan, listTask, line, 2, { siblings })
+    expect(text).toStartWith("[DRIVER] Your split was taken")
+    expect(text).toContain("it runs stream T-004.S02, nothing else")
+    expect(text).toContain(`- [ ] ${line}`)
+    expect(text).toContain("- S01 write the schema part (done)\n- S03 write the docs")
+    // The fork holds the task and its rules: the delta restates neither.
+    expect(text).not.toContain("Whole-task description.")
+    expect(text).not.toContain("Constraints:")
+    // No per-item record for code; the terminator discipline the lead never saw.
+    expect(text).toContain("write no docs/T-004/S02/index.md for code changes")
+    expect(text).toContain("<!-- auto: eof -->")
+    expect(text).toContain("Do not change docs/T-004/subtasks.md")
+    expect(text).toContain("check for yourself whether this subtask is genuinely complete")
+  })
+
+  test("the files changed since the split replace the do-not-re-read sentence; the last stream runs the full acceptance verification", () => {
+    const quiet = renderFanout(listPlan, listTask, line, 2, { siblings })
+    expect(quiet).toContain("Do not re-read what you already read")
+    expect(quiet).not.toContain("Since the split")
+    expect(quiet).toContain("not the full suite")
+    expect(quiet).not.toContain("This is the last stream")
+    const changed = renderFanout(listPlan, listTask, line, 2, { siblings, changed: ["src/schema.ts", "test/schema.test.ts"], last: true })
+    expect(changed).toContain("Since the split, the streams that ran before this one changed these files")
+    expect(changed).toContain("- src/schema.ts\n- test/schema.test.ts")
+    expect(changed).not.toContain("Do not re-read what you already read")
+    expect(changed).toContain("This is the last stream: once it is done, run the task's full acceptance verification once")
+    // An empty list reads as none.
+    expect(renderFanout(listPlan, listTask, line, 2, { siblings, changed: [] })).toBe(quiet)
+  })
+
+  test("budget carries the stream's handover protocol; the test handover names the stream's own document", () => {
+    const text = renderFanout(listPlan, listTask, line, 2, { siblings, budget: true, testByDriver: true, handoverTest: true })
+    expect(text).toContain("the prefix it inherited counts")
+    expect(text).toContain("write docs/T-004/handoff.md (overwriting it) for this stream alone")
+    expect(text).toContain("`Status: continue` (stream incomplete) or `Status: done` (stream fully done)")
+    expect(text).toContain("this stream's document is docs/T-004/S02/testhandoff.md")
+    const plain = renderFanout(listPlan, listTask, line, 2, { siblings })
+    expect(plain).not.toContain("Status: continue")
+    expect(plain).not.toContain("testhandoff")
+  })
+
+  test("the full subtask prompt carries the context-budget protocol only with budget; without it the prompt is unchanged", () => {
+    const text = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, budget: true })
+    expect(text).toContain("Context-budget protocol (this session manages its own context)")
+    expect(text).toContain("write into docs/T-004/handoff.md (overwriting it) what a brand-new session continuing this subtask from that file alone needs")
+    expect(text).toContain("`Status: continue` (subtask incomplete) or `Status: done` (subtask fully done)")
+    const plain = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2 })
+    expect(plain).not.toContain("Context-budget protocol")
+    expect(renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, budget: false })).toBe(plain)
   })
 })
 

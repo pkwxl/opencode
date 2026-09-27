@@ -1,6 +1,6 @@
 import { basename, join } from "node:path"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
-import { ensureDecomposed, executeWhole, runSubtask } from "./execute"
+import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
 import { resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive, deadSessionWhy } from "./unit-commit"
 import { taskDoc } from "./docpaths"
 import { handoffStatus } from "./document/roles"
@@ -42,13 +42,14 @@ import { reportResult, runWrapup } from "./wrapup"
 // session continues from it; the driver's hard-wall hint (2x
 // --context-limit, raised to a quarter of a large model window and clamped to
 // 80% of it) is the last resort.
-// --subtask auto (default, adaptive decomposition, plans/0059 D2–D4): one lead
+// --subtask auto (default, adaptive decomposition, plans/0059 D2–D5): one lead
 // session — a whole-task session under ondemand's protocol, whose prompt
 // carries the split clause. The lead either finishes (or hands over by time,
 // as ondemand does), or ends by writing the remaining streams into
 // subtasks.md; the driver's split guard takes the split (the streams then run
 // in the subtask loop below, as checklist items with driver-written todo.md
-// files) or rejects it, and a fork of the lead finishes the task.
+// files, each in a fork of the lead) or rejects it, and a fork of the lead
+// finishes the task.
 // Closeout reads the result line of the task report (docs/<id>/report.md):
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final
@@ -491,9 +492,9 @@ export async function runTask(
     if (resume?.kind !== "closeout") {
       await persistStage({ kind: "subtasks" })
       // In true mode this is where the decomposed checklist items run; under
-      // auto, the streams of a split the lead's guard took; off/ondemand (and
-      // auto without a split) only have the items hand-written in
-      // subtasks.md.
+      // auto, the streams of a split the lead's guard took, each a fork of
+      // the lead; off/ondemand (and auto without a split) only have the items
+      // hand-written in subtasks.md.
       for (;;) {
         const items = task.checklist ?? []
         // Subtask-directory state protocol (M1.0, plans/0030): when the
@@ -553,8 +554,17 @@ export async function runTask(
         // tail keeps the record fresh; without a registry the one base
         // resolved after decompose serves every subtask, exactly as before
         // (C2).
-        if (opts.routing && switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
-        const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit)
+        // auto's streams (plans/0059 D5): a checklist the lead's split
+        // produced (its split point recorded, Task.split) runs as forks of the
+        // lead — the lead's session is each stream's base, resolved per
+        // stream on the chain's agent. A checklist without the record (written
+        // by hand, left by the planned pipeline, or a split whose record was
+        // lost between its commit and the record) runs as plain subtasks.
+        // AUTO-RESOLVE: under auto, how does a checklist with state files but no split record run (a split taken by a release before the streams forked the lead, a checklist the planned pipeline left, or a split whose record was lost between its commit and the record)? -> as plain subtasks, the pre-fan-out path (no lead to fork is known; the record is written by the release that forks, so the path stays for as long as such checklists may exist)
+        const fanout = mode === "auto" ? task.split : undefined
+        if (fanout) fork = await leadForkBase(client, task, opts, chain)
+        else if (opts.routing && switches.fork) fork = await ensureForkBase(client, plan, task, opts, chain, switches)
+        const blocked = await runSubtask(client, plan, task, items[index].text, index + 1, opts, chain, fork, resumeUnit, fanout)
         if (blocked) return blocked
         // The post-tick mirror refresh already happened inside runSubtask
         // before the unified commit; here the task is only re-read.

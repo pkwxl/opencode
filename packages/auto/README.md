@@ -202,7 +202,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; commi
 | `-m` / `--mode <name>` | Scenario mode, written to the config's `mode` key (precedence: explicit value > existing config value > default `migrate`; an unregistered name is a usage error with exit code 1, the message listing the currently supported modes); see [Mode layer](#mode-layer--m--mode) |
 | `--agent opencode\|claude` | The coding agent driving the sessions, written to the config's `agent` key (default `opencode`, key not written; `--amend --agent opencode` deletes the key); any other value is a usage error; see [agent selection](#opencode-server-and-agent-selection) |
 | `--phases <admtvk subsequence containing m \| phase type list>` | Phased flow, written to the config's `phases` key (default `"m"` = single run); when completed phases exist, an amendment must satisfy the prefix guardrail (the completed phases form a prefix of the new value), otherwise it errors and points at rolling back the phase index by hand. See [Phased flow](#phased-flow---phases) |
-| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task under `ondemand`'s handover protocol, and may split the remaining work into 2–5 streams when the driver's guard finds that it pays; `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
+| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task under `ondemand`'s handover protocol, and may split the remaining work into 2–5 streams, each run in a fork of the lead, when the driver's guard finds that it pays; `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
 | `--idle-time [1-120]` | The no-progress window for driver-managed scripts (minutes, default/bare flag 10; the old name `--verify-idle` was renamed — appearing errors with guidance): the driver polls the size of the output file (`tmp/test.<n>.out`, stdout/stderr merged into one file) and terminates the script only after no growth is sustained for the window (exit code recorded as 124); as long as output keeps growing, the runtime is unlimited |
 | `--idle-max [1-1440]` | The absolute runtime cap for driver-managed scripts (minutes, default/bare flag unset; the old name `--verify-max` was renamed): a backstop against scripts looping forever while printing; when set to a positive integer, exceeding the total duration terminates the script regardless of output |
 | `--commit [true]` | Unified commit after sessions, written to the config (default/bare flag `true`). **`false` and the old alias `none` were retired on 2026-09-15** — the unified commit is the completion condition (the unit clean gate / SHA baseline / recovery rollback all assume committing is always on); appearing is a usage error with exit 1; an existing `commit: false` fails strictly as a bad file — delete the key or set `true` |
@@ -854,7 +854,13 @@ graph, no path declared by two streams unless one depends on the other, the lead
 half the wall:
 
 - **Taken**: the driver writes each stream's `S<nn>/todo.md` from its line, commits the lead's work with the
-  checklist as the task's `exec` commit, and the streams run as subtask sessions, then the common wrap-up.
+  checklist as the task's `exec` commit, and the streams run one at a time, each in a fork of the lead, then
+  the common wrap-up. A fork already holds everything the lead read, so its prompt is a short delta: the
+  stream's line, the other streams by title, the files changed since the split when the stream waits for an
+  earlier one, checks targeted at the stream, and the task's full verification in the last stream. A stream
+  runs under the same context-budget protocol and may hand itself over: a new session continues it from
+  `docs/T-NNN/handoff.md`, and the stream still closes with one commit. Without a fork (the lead's session is
+  gone, or the agent cannot fork) a stream starts in a new session with the full subtask prompt.
 - **Rejected**: `subtasks.md` is removed, the lead's work is committed, and a fork of the lead is told why and
   finishes the task (an agent that cannot fork gets a new session with the full prompt). There is no second
   split: a `subtasks.md` written after that is removed.
@@ -1030,8 +1036,8 @@ M3.4; leftover `.auto/verify.md`, `.auto/review.md`, `tmp/verify.*` are not clea
 `--test-by-driver` (a constitutional option, fixed into the config's `testByDriver` key by `init
 --test-by-driver`; appearing on `run` is a usage error) moves execution rights for "implementation-phase
 commands that can run long or produce massive output — compile/test/build/lint and the like" to the driver.
-It applies to execution sessions — subtask sessions (`subtask: true`) and whole-task sessions (`off` /
-`ondemand`, and `auto`'s lead); bypass sessions such as decompose and wrap-up are out of scope (`--dryrun` does not enable it
+It applies to execution sessions — subtask sessions (`subtask: true`, and the streams of `auto`'s split) and
+whole-task sessions (`off` / `ondemand`, and `auto`'s lead); bypass sessions such as decompose and wrap-up are out of scope (`--dryrun` does not enable it
 either).
 
 The protocol mechanics:

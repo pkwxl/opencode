@@ -162,8 +162,9 @@ export type Switches = {
   // criteria section (still bound by the lower-bound guard).
   fine: boolean
   // Ondemand context management (default on, plans/0056): the driver steers
-  // milestone usage notices into a live ondemand whole-task session or auto's
-  // lead (plans/0059 D2) at 50%/85% of the effective wall, and the session
+  // milestone usage notices into a live ondemand whole-task session, auto's
+  // lead (plans/0059 D2) or a stream of its split (D5) at 50%/85% of the
+  // effective wall, and the session
   // itself decides when to hand over at a
   // natural boundary (a fresh handoff.md is honored whatever the figure); the
   // hard-wall hint (at the effective wall: 2×cap, raised to a quarter of a

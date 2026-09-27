@@ -19,6 +19,7 @@ import {
   renderContextBase,
   renderDecompose,
   renderDryrun,
+  renderFanout,
   renderHandoffSteer,
   renderKnowledge,
   renderNumberRecovery,
@@ -137,6 +138,29 @@ describe("golden render snapshots", () => {
 
   test("execution family (subtask/whole-task/wrap-up)", () => {
     golden("subtask", renderSubtask(plan, task, "write the execution logic", { ...execOpts, index: 2 }))
+    // A stream of auto's split without a fork of the lead (or continuing from
+    // its handover): the full prompt with the context-budget protocol
+    // (plans/0059 D5).
+    golden("subtask-budget", renderSubtask(plan, task, "write the execution logic", { ...execOpts, index: 2, budget: true }))
+    // The delta a fork of the lead gets (plans/0059 D5): a dependent stream
+    // with the files changed since the split, the protocol and the test
+    // handover; then the last stream, independent, with neither.
+    golden(
+      "fanout",
+      renderFanout(plan, task, "write the execution logic: src/exec.ts, verify with its test Depends: S01 Artifacts: src/exec.ts", 2, {
+        ...execOpts,
+        siblings: ["S01 write the schema part (done)", "S03 write the docs"],
+        changed: ["src/schema.ts", "test/schema.test.ts"],
+        budget: true,
+      }),
+    )
+    golden(
+      "fanout-last",
+      renderFanout(plan, task, "write the docs: README.md, verify by reading it back Depends: none Artifacts: README.md", 3, {
+        siblings: ["S01 write the schema part (done)", "S02 write the execution logic (done)"],
+        last: true,
+      }),
+    )
     golden("whole", renderWhole(plan, task, { ...execOpts, ondemand: true }))
     golden("whole-budget", renderWhole(plan, task, { ...execOpts, ondemand: true, budget: true }))
     golden("whole-adaptive", renderWhole(plan, task, { ...execOpts, ondemand: true, budget: true, adaptive: true }))

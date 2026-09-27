@@ -201,7 +201,10 @@ export type WindowWait = { until: number; model: string; tier: Tier; opens: stri
 // hinted: the chain's current session was sent the in-turn handover hint
 // (copied from its Watch by attempt; plans/0040 D6). wall: the effective
 // handover wall of its last measurement (copied the same way; plans/0059 D6).
-export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; wall?: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; agent?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
+// forkLead: forkBase is auto's lead (ForkBaseInfo.lead), so a retry that
+// re-seeds from it forks it the same way the stream's first session did.
+// AUTO-DECISION: the lead flag rides the chain beside forkBase (the transient-error retry re-seeds from chain.forkBase alone; without the flag the cap/2 guard would turn that retry into a new session sent the delta prompt, which assumes the lead's context)
+export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; wall?: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; forkLead?: boolean; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; agent?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
 
 // The body of the session that just ended with a retryable error (id + end
 // usage). The chain state at that moment was already restored to the
@@ -237,7 +240,9 @@ export type FailedSession = { id: string; used: number }
 // the fork seeds on that agent's host and the chain's binding follows it.
 // Without a registry the field stays undefined and the seeding keeps reading
 // the chain alone.
-export type ForkBaseInfo = { id: string; used: number | undefined; agent?: string }
+// lead (plans/0059 D5) marks auto's lead as the base of its split's streams:
+// seeding forks it whatever its size (usage.ts forkBaseAllowed).
+export type ForkBaseInfo = { id: string; used: number | undefined; agent?: string; lead?: boolean }
 
 // resume.Phase → session role (the fine-grained key of model routing, see
 // plans/0017-model-routing-design.md B.5/C.1). Each phase of the execution

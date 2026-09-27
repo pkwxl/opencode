@@ -2448,7 +2448,7 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
   })
 })
 
-describe("auto's lead and its split (plans/0059 D2–D4)", () => {
+describe("auto's lead and its split (plans/0059 D2–D5)", () => {
   let lines: string[]
   let printed: ReturnType<typeof spyOn>
   beforeEach(() => {
@@ -2476,7 +2476,7 @@ describe("auto's lead and its split (plans/0059 D2–D4)", () => {
   // commit; the turn script receives the directory.
   const run = async (
     turn: (dir: string) => FakeAgentOptions["turn"],
-    options: { capabilities?: FakeAgentOptions["capabilities"]; seed?: (dir: string) => Promise<void>; body?: string } = {},
+    options: { capabilities?: FakeAgentOptions["capabilities"]; seed?: (dir: string) => Promise<void>; body?: string; agent?: FakeAgentOptions } = {},
   ) => {
     const dir = await freshRepo()
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
@@ -2485,7 +2485,7 @@ describe("auto's lead and its split (plans/0059 D2–D4)", () => {
     await git(dir, "add", "-A")
     await git(dir, "commit", "-q", "-m", "init")
     const script = turn(dir)
-    const agent = make({ ...(script ? { turn: script } : {}), ...(options.capabilities ? { capabilities: options.capabilities } : {}) })
+    const agent = make({ ...options.agent, ...(script ? { turn: script } : {}), ...(options.capabilities ? { capabilities: options.capabilities } : {}) })
     const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "auto" })
     return { dir, agent, outcome, prompts: agent.prompts.map((prompt) => prompt.text) }
   }
@@ -2509,23 +2509,35 @@ describe("auto's lead and its split (plans/0059 D2–D4)", () => {
     }
   })
 
-  test("a split the guard takes: the driver writes each line's todo.md, the lead's work lands in the exec commit, and the streams run as subtasks", async () => {
-    const { dir, outcome, prompts } = await run((dir) => (ctx) => {
+  test("a split the guard takes: the driver writes each line's todo.md, the lead's work lands in the exec commit, and the streams run as forks of the lead", async () => {
+    const { dir, agent, outcome, prompts } = await run((dir) => (ctx) => {
       if (ctx.n === 1) {
         write(dir, "src/shared.ts", "export const shared = 1\n")
         write(dir, "docs/T-001/subtasks.md", SPLIT)
         return big(ctx.session, ctx.n)
       }
-      if (ctx.text.includes("item 1 of that list only")) write(dir, "src/alpha.ts", "export const alpha = 1\n")
-      if (ctx.text.includes("item 2 of that list only")) write(dir, "src/beta.ts", "export const beta = 1\n")
+      if (ctx.text.includes("runs stream T-001.S01")) write(dir, "src/alpha.ts", "export const alpha = 1\n")
+      if (ctx.text.includes("runs stream T-001.S02")) write(dir, "src/beta.ts", "export const beta = 1\n")
       return undefined
     })
     try {
       expect(outcome).toEqual({ type: "completed" })
       expect(prompts).toHaveLength(3)
-      expect(prompts[1]).toContain("You are responsible for item 1 of that list only")
-      expect(prompts[1]).toContain("This subtask's scope declaration is in docs/T-001/S01/todo.md")
-      expect(prompts[2]).toContain("You are responsible for item 2 of that list only")
+      // Each stream is a fork of the lead (plans/0059 D5), sent the delta alone.
+      const lead = agent.prompts[0]!.session
+      expect(agent.argsOf("fork").map((args) => args[0])).toEqual([lead, lead])
+      expect(agent.prompts[1]!.session).not.toBe(lead)
+      expect(agent.prompts[2]!.session).not.toBe(agent.prompts[1]!.session)
+      expect(prompts[1]).toStartWith("[DRIVER] Your split was taken")
+      expect(prompts[1]).toContain(`- [ ] ${SPLIT.split("\n")[0]!.slice("- [ ] ".length)}`)
+      expect(prompts[1]).toContain("- S02 beta\n")
+      expect(prompts[1]).not.toContain("This is the last stream")
+      expect(prompts[2]).toContain("runs stream T-001.S02")
+      expect(prompts[2]).toContain("- S01 alpha (done)\n")
+      expect(prompts[2]).toContain("This is the last stream")
+      // S02 declares no prerequisite: no changed-files list.
+      expect(prompts[2]).toContain("Do not re-read what you already read")
+      expect(lines.some((line) => line.includes(`lead base: session ${lead} (50.0k tokens)`))).toBe(true)
       // The driver's scope files, renamed to done.md at each stream's close-out.
       expect(read(dir, "docs/T-001/S01/done.md")).toBe(
         "Depends: none\nTouches: src/alpha.ts\n\n## Scope\n\nalpha: the alpha module in src/alpha.ts, verify by reading it back\n\n## Artifacts\n\n- src/alpha.ts\n\n<!-- auto: eof -->\n",
@@ -2632,7 +2644,7 @@ describe("auto's lead and its split (plans/0059 D2–D4)", () => {
     }
   })
 
-  test("a split taken by an earlier run: the lead does not run again, its streams continue", async () => {
+  test("a split taken by an earlier run with no split record (a checklist the planned pipeline left reads the same): the lead does not run again, the items run as plain subtasks", async () => {
     const { dir, outcome, prompts } = await run(
       (dir) => (ctx) => {
         if (ctx.text.includes("item 1 of that list only")) write(dir, "src/alpha.ts", "export const alpha = 1\n")
@@ -2672,6 +2684,159 @@ describe("auto's lead and its split (plans/0059 D2–D4)", () => {
       expect(prompts[0]).toContain("Context-budget protocol")
       expect(prompts[0]).not.toContain("Split rule")
       expect(prompts[1]).toContain("- [ ] the extra step")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // —— The streams of a taken split (plans/0059 D5) ——
+
+  // S02 waits for S01: the changed-files list names what S01 changed.
+  const DEPENDENT = [
+    "- [ ] alpha: the alpha module in src/alpha.ts, verify by reading it back Depends: none Artifacts: src/alpha.ts",
+    "- [ ] beta: the beta module over alpha in src/beta.ts, verify by reading it back Depends: S01 Artifacts: src/beta.ts",
+    "",
+  ].join("\n")
+  // The lead's turn that takes a split, and the streams' default work.
+  const lead = (dir: string, ctx: { n: number; session: string }, split = SPLIT) => {
+    write(dir, "docs/T-001/subtasks.md", split)
+    return big(ctx.session, ctx.n)
+  }
+  const streams = (dir: string, text: string) => {
+    if (text.includes("runs stream T-001.S01")) write(dir, "src/alpha.ts", "export const alpha = 1\n")
+    if (text.includes("runs stream T-001.S02")) write(dir, "src/beta.ts", "export const beta = 1\n")
+  }
+
+  test("a dependent stream: its delta names the files changed since the split, without the driver's checklist ticks and state files", async () => {
+    const { dir, outcome, prompts } = await run((dir) => (ctx) => {
+      if (ctx.n === 1) return lead(dir, ctx, DEPENDENT)
+      streams(dir, ctx.text)
+      return undefined
+    })
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(3)
+      // S01 has no prerequisite.
+      expect(prompts[1]).toContain("Do not re-read what you already read")
+      expect(prompts[2]).toContain("Since the split, the streams that ran before this one changed these files; re-read those this stream relies on, and nothing else you already read:\n- src/alpha.ts\n\n")
+      expect(prompts[2]).not.toContain("subtasks.md\n")
+      expect(prompts[2]).not.toContain("S01/done.md")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a stream hands itself over: a new session continues it from handoff.md with the full subtask prompt and the protocol, and one commit closes the stream", async () => {
+    const { dir, agent, outcome, prompts } = await run((dir) => (ctx) => {
+      if (ctx.n === 1) return lead(dir, ctx)
+      if (ctx.text.includes("runs stream T-001.S01")) {
+        write(dir, "src/alpha.ts", "export const alpha = 0\n")
+        write(dir, "docs/T-001/handoff.md", "alpha is half done: the constant is a placeholder.\n\nStatus: continue\n")
+        return undefined
+      }
+      if (ctx.text.includes("You are responsible for item 1 of that list only")) {
+        write(dir, "src/alpha.ts", "export const alpha = 1\n")
+        return undefined
+      }
+      streams(dir, ctx.text)
+      return undefined
+    })
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(4)
+      // The continuation is a new session, not a fork of the lead.
+      expect(names(agent).filter((name) => name === "create")).toHaveLength(2)
+      expect(agent.argsOf("fork")).toHaveLength(2)
+      expect(prompts[2]).toContain("You are responsible for item 1 of that list only")
+      expect(prompts[2]).toContain("First read docs/T-001/handoff.md")
+      expect(prompts[2]).toContain("Context-budget protocol (this session manages its own context)")
+      expect(prompts[3]).toContain("runs stream T-001.S02")
+      expect(lines.some((line) => line.includes("subtask 1 session handed itself over as docs/T-001/handoff.md; continuing in a new session"))).toBe(true)
+      // One commit per stream; the handover document is gone with the close-out.
+      expect((await subjects(dir)).slice(0, 3).map((subject) => subject.split(" ").slice(0, 2).join(" "))).toEqual(["T-001 S2", "T-001 S1", "T-001 exec"])
+      expect(existsSync(join(dir, "docs/T-001/handoff.md"))).toBe(false)
+      expect(read(dir, "src/alpha.ts")).toBe("export const alpha = 1\n")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a stream hinted at the wall that writes no handover document: one re-prompt in a fork of the ended session, the demand alone", async () => {
+    const { dir, agent, outcome, prompts } = await run((dir) => (ctx) => {
+      if (ctx.n === 1) return lead(dir, ctx)
+      if (ctx.text.includes("runs stream T-001.S01")) {
+        write(dir, "src/alpha.ts", "export const alpha = 1\n")
+        // Past the 80k wall: the hard-wall hint goes out, no document follows.
+        return [ev.message(ctx.session, `m_wall_${ctx.n}`, 85_000), ev.text(ctx.session, `t_${ctx.n}`, "done"), ev.idle(ctx.session)]
+      }
+      if (ctx.text.startsWith("The last time you ended the session a handover was due")) {
+        write(dir, "docs/T-001/handoff.md", "alpha is finished.\n\nStatus: done\n")
+        return undefined
+      }
+      streams(dir, ctx.text)
+      return undefined
+    })
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(4)
+      expect(agent.steers.some((text) => text.startsWith("[DRIVER] This session's context has reached the wall"))).toBe(true)
+      // The re-prompt is the feedback alone, in a fork of the stream's ended session.
+      expect(prompts[2]).toStartWith("The last time you ended the session a handover was due, but no valid docs/T-001/handoff.md was written")
+      expect(agent.argsOf("fork").map((args) => args[0])).toEqual([agent.prompts[0]!.session, agent.prompts[1]!.session, agent.prompts[0]!.session])
+      expect(prompts[3]).toContain("runs stream T-001.S02")
+      expect(existsSync(join(dir, "docs/T-001/S01/done.md"))).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a stream whose fork fails: a new session with the full subtask prompt and the context-budget protocol", async () => {
+    const { dir, agent, outcome, prompts } = await run(
+      (dir) => (ctx) => {
+        if (ctx.n === 1) return lead(dir, ctx)
+        if (ctx.text.includes("item 1 of that list only")) write(dir, "src/alpha.ts", "export const alpha = 1\n")
+        if (ctx.text.includes("item 2 of that list only")) write(dir, "src/beta.ts", "export const beta = 1\n")
+        return undefined
+      },
+      { agent: { fail: { fork: new Error("fork refused") } } },
+    )
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(3)
+      expect(agent.argsOf("fork")).toHaveLength(2)
+      for (const prompt of prompts.slice(1)) {
+        expect(prompt).not.toStartWith("[DRIVER] Your split was taken")
+        expect(prompt).toContain("Context-budget protocol (this session manages its own context)")
+      }
+      expect(prompts[1]).toContain("You are responsible for item 1 of that list only")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a split record left by an earlier run: the streams fork the recorded lead, the lead does not run again", async () => {
+    const { dir, agent, outcome, prompts } = await run(
+      (dir) => (ctx) => {
+        streams(dir, ctx.text)
+        return undefined
+      },
+      {
+        seed: async (dir) => {
+          write(dir, "docs/T-001/subtasks.md", SPLIT)
+          write(dir, "docs/T-001/S01/todo.md", "Depends: none\nTouches: src/alpha.ts\n\n## Scope\n\nalpha\n\n## Artifacts\n\n- src/alpha.ts\n\n<!-- auto: eof -->\n")
+          write(dir, "docs/T-001/S02/todo.md", "Depends: none\nTouches: src/beta.ts\n\n## Scope\n\nbeta\n\n## Artifacts\n\n- src/beta.ts\n\n<!-- auto: eof -->\n")
+          write(dir, ".auto/units.json", JSON.stringify({ tasks: { "T-001": { forkBase: "ses_lead", split: [] } } }))
+        },
+        agent: { history: { ses_lead: [{ id: "m_lead", role: "assistant", completed: true, model: MODEL, failed: false, contextUsed: BIG }] } },
+      },
+    )
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      expect(prompts).toHaveLength(2)
+      expect(agent.argsOf("fork").map((args) => args[0])).toEqual(["ses_lead", "ses_lead"])
+      expect(prompts[0]).toStartWith("[DRIVER] Your split was taken")
+      expect(prompts[1]).toContain("This is the last stream")
+      expect(lines.some((line) => line.includes("lead base: session ses_lead (50.0k tokens)"))).toBe(true)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

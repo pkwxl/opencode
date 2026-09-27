@@ -3,7 +3,8 @@
 // plans/0059 D2–D4) +
 // the merged understand+decompose unit (ensureDecomposed; since M1.0
 // understand+decompose is one single session, plans/0030) + runSubtask, one
-// subtask session (with the subtask-directory state protocol todo.md→done.md).
+// subtask session (with the subtask-directory state protocol todo.md→done.md;
+// a stream of the lead's split forks the lead, plans/0059 D5).
 // Sits above exec-session/session and below runner; **must not import
 // runner** (§D.2).
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S12, pure move).
@@ -16,17 +17,17 @@ import { subtaskDoc, taskDoc } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
 import { eofScanExempt, handoffStatus } from "./document/roles"
 import { checkArtifactSpecs, declaredArtifacts, decomposeArtifactSpecs, subtaskStateSpec } from "./document/spec"
-import { checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
+import { checklistPrerequisites, checklistProblems, renameTodoToDone, subtaskId } from "./document/state"
 import { runExecSession } from "./exec-session"
 import { beginUnit, headText, removeIfUntracked, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
-import { readChecklist, reloadTask, setForkBase, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
-import { handoffFile, renderDecompose, renderSplitRejected, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
+import { forkBaseFor, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
+import { handoffFile, renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
-import { clientOf, forkEndedSession, formatTokens, seedForkSession } from "./session-api"
-import { parseSplit, splitProblems, writeSplitTodos } from "./split"
+import { clientOf, forkEndedSession, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
+import { parseSplit, splitProblems, splitStateFile, splitTitle, writeSplitTodos } from "./split"
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
@@ -46,8 +47,10 @@ import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } fr
 // driver's split guard before its work is committed —
 //   - taken: the driver writes each line's S<nn>/todo.md, the lead's work,
 //     the checklist and the scope files are committed as the task's
-//     execution unit (`T-NNN exec`), and the caller's subtask loop runs the
-//     streams;
+//     execution unit (`T-NNN exec`), the lead is recorded as the streams'
+//     fork base and the commit as the split point (Task.split), and the
+//     caller's subtask loop runs the streams, each a fork of the lead
+//     (runSubtask's fan-out, plans/0059 D5);
 //   - not taken: subtasks.md is removed, the lead's work is committed, and a
 //     fork of the lead is told why and finishes the task. That continuation
 //     and every session after it carry no split clause (one rejection at
@@ -100,6 +103,10 @@ export async function executeWhole(
   // later session of this stage gets the clause, and a checklist it writes is
   // removed; none = not auto's lead with the clause at all.
   let split: "open" | "rejected" | "none" = splitOffered ? "open" : "none"
+  // A lead that starts makes a split record of an earlier attempt stale: its
+  // streams are gone from the checklist (or the lead would not run), and a
+  // checklist this stage leaves without a split taken is no fan-out.
+  if (lead && task.split !== undefined) await setSplit(planDir, task.id, undefined)
   // Puts subtasks.md back as the stage found it, with any S<nn>/todo.md the
   // lead wrote against the clause (the driver writes those).
   const dropSplit = async (count: number) => {
@@ -250,10 +257,20 @@ export async function executeWhole(
     // outcome: the lead's work with the checklist and the scope files when
     // taken, the lead's work alone when not.
     const verdict = await judgeSplit()
+    // A taken split's streams fork the lead (plans/0059 D5): the session that
+    // wrote the split is their fork base, per agent under a registry like
+    // every base (plans/0055 §8.4). Recorded before the commit, so a split
+    // whose commit landed names its base.
+    if (verdict?.type === "taken" && chain.id) await setForkBase(planDir, task.id, chain.id, opts.routing ? chain.agent : undefined)
     const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
     if (verdict?.type === "taken") {
-      log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next`)
+      // The split point: every repository's HEAD right after the lead's
+      // commit (none where nothing commits). The files a stream's
+      // prerequisites change are read against it, and the record marks the
+      // checklist as the lead's streams.
+      await setSplit(planDir, task.id, opts.commit !== false && !opts.dryrun ? await unitBaseline(dir) : [])
+      log(`↳ ${task.id} the lead split the remaining work into ${verdict.count} streams (${Array.from({ length: verdict.count }, (_, i) => subtaskId(i + 1)).join(", ")}); they run next, each a fork of the lead`)
       return undefined
     }
     if (verdict?.type === "rejected") {
@@ -450,15 +467,56 @@ async function decomposeArtifactProblems(dir: string, taskId: string): Promise<s
   return problems
 }
 
+// The fork base of a stream of auto's taken split (plans/0059 D5): the lead
+// session recorded when the split was taken, read for the chain's agent under
+// a registry (a session is agent-local, plans/0055 §8.2). A lead that is gone
+// leaves the stream a new session with the full subtask prompt. The
+// pipeline's fork switches (OPENCODE_AUTO_FORK / _FORK_BASE) govern true
+// alone (0059 D1) and are not read here; an agent that cannot fork falls to
+// the same new session inside seedForkSession.
+// AUTO-RESOLVE: does OPENCODE_AUTO_FORK=off (or _FORK_BASE) stop auto's streams from forking the lead? -> no (the design rules that the pipeline's fork switches govern true alone; forking the lead is what auto's split is, and a stream without a fork still runs, in a new session)
+export async function leadForkBase(client: ClientSource, task: Task, opts: Opts, chain: SessionChain): Promise<ForkBaseInfo | undefined> {
+  const agent = opts.routing ? (chain.agent ?? opts.routing.runAgent) : undefined
+  const id = forkBaseFor(task.forkBase, agent)
+  // A digest base is the planned pipeline's, never a lead.
+  if (id === undefined || id.startsWith("digest:")) return undefined
+  const baseClient = await clientOf(client, agent)
+  const onAgent = agent !== undefined ? ` on agent ${agent}` : ""
+  if (!(await sessionAlive(baseClient, id))) {
+    log(`↻ ${task.id} the lead session ${id}${onAgent} is gone; the stream starts in a new session`)
+    return undefined
+  }
+  const used = id === chain.id ? chain.used : await sessionUsed(baseClient, id)
+  log(`⑂ ${task.id} lead base: session ${id}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
+  return { id, used, lead: true, ...(agent !== undefined ? { agent } : {}) }
+}
+
 // Runs one subtask session, then ticks the checklist item on trust: the
 // session self-checks its own work; the whole task is accounted for by the
 // wrap-up report and its result line.
-// No context handover here: the session handover mechanism is ondemand-only
-// (plans/0056 — this wiring was retired with it); a subtask session that runs
-// past the usage cap is left to the provider-side compression / cap errors,
-// which go through the existing "session error" path. The interruption-
-// recovery seeding below still reads a handover document left by a run of an
-// earlier release, and the close-out still clears such leftovers.
+// No context handover for the planned pipeline's subtasks: the session
+// handover mechanism is ondemand's (plans/0056 — this wiring was retired with
+// it); such a session that runs past the usage cap is left to the
+// provider-side compression / cap errors, which go through the existing
+// "session error" path. The interruption-recovery seeding below still reads a
+// handover document left by a run of an earlier release, and the close-out
+// still clears such leftovers.
+// `split` = the item is a stream of auto's taken split (plans/0059 D5; the
+// split point, Task.split). Such a stream:
+//   - forks the lead (base, from leadForkBase) and gets the short delta of
+//     fanout.md alone — the fork holds the task, its rules and the lead's
+//     understanding; the delta names the files changed since the split when
+//     the stream has prerequisites, and asks the last stream for the task's
+//     full acceptance verification;
+//   - runs under the usage protocol, as the lead did: its prefix starts
+//     large, so it gets the notices and the hard-wall hint, and may hand
+//     itself over through handoff.md. A handover continues the stream in a
+//     new session from that document (the full subtask prompt, scoped to the
+//     stream), inside the same unit — one commit at its close-out;
+//   - without a fork (the lead gone, an agent that cannot fork) or resumed
+//     after an interruption, gets the full subtask prompt with the protocol.
+// The unit state protocol, the commit boundary and the shape check are the
+// same for every subtask.
 export async function runSubtask(
   client: ClientSource,
   plan: Plan,
@@ -473,6 +531,7 @@ export async function runSubtask(
   // area is this unit's own progress (handover document included), committed
   // together at close-out (plans/0021-commit-boundary-design.md).
   resumeUnit = false,
+  split?: UnitBaseline,
 ): Promise<UnitStop | undefined> {
   subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
@@ -507,6 +566,12 @@ export async function runSubtask(
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
+  // A stream of the lead's split runs under the usage protocol (the lead's
+  // own steer: notices at 50%/85% of the wall, the hard-wall hint); none with
+  // OPENCODE_AUTO_STEER=off, which leaves the stream without a handover, as
+  // it leaves every session.
+  // AUTO-DECISION: a stream hands over through the task's own handoff.md, not a per-stream file (streams run one at a time, this function's recovery seeding and close-out already read and clear that file, and the notices and the hard-wall hint name it; a per-stream document would need a new document role and recovery path, worth it only once streams run side by side)
+  const steer = split ? handoffSteer(autoSwitches().steer, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, task) : undefined
   // Subtask-directory state protocol (M1.0, plans/0030 D8): done.md already
   // existing = this subtask already closed out (including the recovery board
   // where the interruption landed exactly between the rename and the unified
@@ -521,7 +586,8 @@ export async function runSubtask(
   // before the interruption; tick it directly. Status=continue → open a new
   // session on the continuation prompt to continue from the handover (reusing
   // the old session would only hit the cap again at once).
-  const prior = stateDone ? undefined : handoffStatus(await readHandoff())
+  const priorText = stateDone ? "" : await readHandoff()
+  const prior = stateDone ? undefined : handoffStatus(priorText)
   if (stateDone) {
     log(`↻ ${task.id} subtask ${index}: ${stateSpec.complete.path} already exists; skipping the session and closing out directly`)
   } else if (prior === "done") {
@@ -529,23 +595,63 @@ export async function runSubtask(
   } else {
     let continuation = prior === "continue"
     if (continuation) log(`↻ ${task.id} resume after interruption: handed over as ${handoffFile(task)} before the interruption; the new session continues the subtask from the handover document`)
+    // The session the interruption recovery reuses (it holds a resume note):
+    // seedForkSession keeps it instead of forking.
+    const resumed = chain.id !== undefined && chain.note !== undefined
     // ③ A subtask's first session forks from the fork base (the same fork
     // point as the decompose session — fork first, render after, which the
     // warm/cold background section chooses by); no reuse across subtasks
     // (enforced by the seed chain), while a recovery continuation keeps the
     // chain's existing mechanisms. No base /
     // fork failure → brand-new session + cold-start prompt (reads context.md).
-    let warm = await seedForkSession(client, opts, chain, base, subject)
+    // A stream continuing from its handover document starts in a new session
+    // instead: forking the lead again would put it back at the lead's size.
+    // AUTO-DECISION: a stream's handover continuation is a new session without a fork (the design's "fresh session from its handoff.md"; a new fork of the lead would restart at the lead's size, at or above half the wall, and hand over again soon)
+    let warm = split && continuation ? false : await seedForkSession(client, opts, chain, base, subject)
+    // A stream in a fresh fork of the lead: the delta prompt alone. A session
+    // the recovery resumed gets the full prompt instead.
+    // AUTO-DECISION: a stream's session resumed after an interruption gets the full subtask prompt, not the delta (the resumed session may be a new session the stream started in without a fork, which the delta would leave without the task; the full prompt is right for a fork too)
+    let forked = split !== undefined && warm && !resumed
+    // The delta's changing parts, read once the fork is made: the other
+    // streams by title, the files changed since the split for a stream whose
+    // prerequisites ran, and whether this is the last stream.
+    // AUTO-DECISION: the changed-files list is every file changed since the split (tracked diffs and untracked files across the nested repositories, deletions left out, as the shape check reads them) minus the driver's checklist ticks and S<nn> state files, and a stream without prerequisites gets none (the fork holds the tree as it was at the split; an independent stream's files are disjoint from what ran before it by the guard)
+    // AUTO-DECISION: a sibling line carries its done state beside the title (one word per line, and it tells the stream which siblings' work is already in the tree it forks into)
+    const fanout = async () => {
+      const items = task.checklist ?? []
+      const prerequisites = checklistPrerequisites(items, index)
+      const changed =
+        split?.length && prerequisites.length
+          ? [...(await unitChangedFiles(dir, split))].filter((rel) => !splitStateFile(task.id, rel)).sort()
+          : []
+      return {
+        siblings: items.flatMap((item, i) => (i + 1 === index ? [] : [`${subtaskId(i + 1)} ${splitTitle(item.text)}${item.done ? " (done)" : ""}`])),
+        changed,
+        last: items.every((item, i) => item.done || i + 1 === index),
+      }
+    }
+    const delta = forked ? await fanout() : undefined
+    const prompt = (): string =>
+      forked && delta
+        ? renderFanout(plan, task, text, index, { ...opts, ...delta, budget: steer !== undefined })
+        : renderSubtask(plan, task, text, { ...opts, continuation, index, warm: split ? false : warm, budget: steer !== undefined })
     let feedback = ""
     // Re-prompt count for the artifact shape check (D2): one re-prompt with
     // feedback per subtask, then blocked for a human.
     let shapeRetried = false
-    // When a shape-check re-prompt is dispatched through a fork of the
-    // just-ended session (revised 2026-09-18), the next round carries the
-    // feedback alone — the copy already holds the full prompt and all the
-    // working context, and resending the whole thing would only induce
-    // starting over from scratch.
-    let shapeForked = false
+    // When a re-prompt (the shape check's, or a stream's missing handover
+    // document) is dispatched through a fork of the just-ended session
+    // (revised 2026-09-18), the next round carries the feedback alone — the
+    // copy already holds the full prompt and all the working context, and
+    // resending the whole thing would only induce starting over from scratch.
+    let briefFork = false
+    // A stream's handover (plans/0059 D5, the ondemand loop of executeWhole):
+    // consumed = the handover text the current session was seeded with (a
+    // document differing from it was written by the session that just ended);
+    // handoverRetried = the one re-prompt for a handover due without a valid
+    // document was spent.
+    let consumed = priorText
+    let handoverRetried = false
     // Strict-resume rollback redo (tightened in 3.3 R3): one test-handover
     // write-check failure rolls back to
     // the subtask baseline and cold-starts a redo, with no retry with
@@ -558,6 +664,8 @@ export async function runSubtask(
       if (done.type !== "ok") return done
       continuation = false
       feedback = ""
+      consumed = ""
+      handoverRetried = false
       chain.id = undefined
       chain.pending = undefined
       chain.note = undefined
@@ -573,21 +681,13 @@ export async function runSubtask(
       // The cold-start redo forks from the base again (the same shape as the
       // subtask's first session, recovering the warm prefix).
       warm = await seedForkSession(client, opts, chain, base, subject)
+      forked = split !== undefined && warm && delta !== undefined
       return "done"
     }
     for (;;) {
-      const brief = shapeForked
-      shapeForked = false
-      const result = await runExecSession(
-        client,
-        plan,
-        task,
-        brief ? feedback.trimStart() : renderSubtask(plan, task, text, { ...opts, continuation, index, warm }) + feedback,
-        opts,
-        chain,
-        undefined,
-        index,
-      )
+      const brief = briefFork
+      briefFork = false
+      const result = await runExecSession(client, plan, task, brief ? feedback.trimStart() : prompt() + feedback, opts, chain, steer, index)
       if (result.type === "blocked") {
         // Test-handover write-check failure (strict resume): roll back and
         // cold-start the redo, once only.
@@ -601,11 +701,67 @@ export async function runSubtask(
         }
         return result
       }
-      // Ending = the subtask session finished naturally (no context handover
-      // for subtask sessions, plans/0056; a session over the usage cap hits
-      // the provider-side compression / cap errors and goes through the
-      // existing "session error" path — retry in a new session — with disk
-      // progress and the unified commit unaffected). Completion is never
+      // A stream's handover (only with the steer built): the ondemand loop's
+      // reading of executeWhole — a handover due by the figure (or the hint),
+      // or a fresh document the session wrote at a boundary of its choosing.
+      // Status continue → a new session continues the stream from the
+      // document; done → the stream is finished, judged below as a natural
+      // end; no valid document → one re-prompt through a fork of the ended
+      // session (it holds what the document needs), then blocked.
+      if (steer) {
+        const doc = await readHandoff()
+        const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
+        const fresh = doc !== "" && doc !== consumed
+        if (due || fresh) {
+          const status = handoffStatus(doc)
+          if (status === "continue") {
+            log(
+              due
+                ? `↻ ${task.id} subtask ${index} context reached the handover wall; handed over as ${handoffFile(task)}, continuing in a new session`
+                : `↻ ${task.id} subtask ${index} session handed itself over as ${handoffFile(task)}; continuing in a new session`,
+            )
+            consumed = doc
+            continuation = true
+            forked = false
+            feedback = ""
+            continue
+          }
+          if (status !== "done") {
+            if (!rolled) {
+              const redone = await rollbackRedo()
+              if (redone === "done") {
+                rolled = true
+                log(`↻ ${task.id} subtask ${index} handover due but no valid handover document ${handoffFile(task)} was produced; strict resume already rolled back; cold-starting this subtask`)
+                continue
+              }
+              if (redone) return redone
+            }
+            if (handoverRetried) {
+              return {
+                type: "blocked",
+                question:
+                  `subtask ${index} ended with a handover due but failed twice to produce a valid handover document ${handoffFile(task)} (missing, or lacking a status line; hidden blockage). ` +
+                  `Check the file and re-run. Last agent output:\n${result.lastText.trim().slice(-2000) || "(no output)"}`,
+              }
+            }
+            handoverRetried = true
+            // AUTO-DECISION: a stream's missing handover document is demanded in a fork of the ended session with the feedback alone (it holds what the document must say; executeWhole's retry sends the full prompt to a new session, which cannot know it), and a new session with the full prompt only without a fork
+            feedback =
+              `\n\nThe last time you ended the session a handover was due, but no valid ${handoffFile(task)} was written (missing, or lacking the \`Status: continue|done\` status line — a driver protocol string, write it verbatim). ` +
+              `This is a hard requirement: write that file for this subtask before ending the session.`
+            briefFork = await forkEndedSession(client, chain, subject)
+            log(`↻ ${task.id} subtask ${index} handover due but ${handoffFile(task)} was not validly produced; ${briefFork ? "forked from the ended session, " : ""}retrying once with feedback`)
+            continue
+          }
+        }
+      }
+      // Ending = the subtask session finished naturally (the planned
+      // pipeline's subtasks have no context handover, plans/0056; a session
+      // over the usage cap hits the provider-side compression / cap errors
+      // and goes through the existing "session error" path — retry in a new
+      // session — with disk progress and the unified commit unaffected; a
+      // stream of the lead's split got here past its handover check above).
+      // Completion is never
       // judged by agent self-report: the artifact shape check runs first
       // (D2/D4/D6, session-boundary-hardening §4.3/§4.6) — zero-write /
       // missing declared artifacts / document truncation (including the
@@ -632,12 +788,12 @@ export async function runSubtask(
           // working context, and the next round dispatches the feedback
           // alone; when fork is unavailable (the session is already gone) it
           // falls back to a brand-new session + the full prompt + feedback.
-          shapeForked = await forkEndedSession(client, chain, subject)
+          briefFork = await forkEndedSession(client, chain, subject)
           // Per-model protocol-drift counter (plans/0055 §10 item 3): booked on
           // the model of the session that failed the artifact shape check;
           // undefined without a registry (C2).
           await statsModelEvent(dir, chain.modelEntry, "reprompt")
-          log(`↻ ${task.id} subtask ${index} ended naturally but the artifact shape check failed; ${shapeForked ? "forked from the original session, " : ""}re-prompting once with feedback`)
+          log(`↻ ${task.id} subtask ${index} ended naturally but the artifact shape check failed; ${briefFork ? "forked from the original session, " : ""}re-prompting once with feedback`)
           continue
         }
       }

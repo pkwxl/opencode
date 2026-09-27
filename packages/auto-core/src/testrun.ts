@@ -38,8 +38,9 @@ export type Steer = {
   notes: { at: number; text: string }[]
 }
 
-// Handover steer construction (the ondemand whole-task session; exported as a
-// pure function for unit tests): not constructed while the experiment switch
+// Handover steer construction (the ondemand whole-task session, auto's lead
+// and the streams of its split — plans/0059 D5; exported as a pure function
+// for unit tests): not constructed while the experiment switch
 // OPENCODE_AUTO_STEER is off (on = autoSwitches().steer) — no usage notices,
 // no hard-wall hint, and the post-session handover check is disabled with it.
 export function handoffSteer(on: boolean, cap: number, task: Task): Steer | undefined {

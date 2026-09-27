@@ -110,6 +110,13 @@ describe("behavior matrix: events row equals today", () => {
     // seedForkSession: base.used >= cap / 2 → cold start.
     for (const used of grid) expect(forkBaseAllowed(used, cap)).toBe(!(used >= cap / 2))
   })
+
+  test("fan-out fork of the lead (plans/0059 D5): forked whatever its size, cold only when the size is unknown", () => {
+    for (const used of grid) expect(forkBaseAllowed(used, cap, true)).toBe(true)
+    expect(forkBaseAllowed(10 * cap, cap, true)).toBe(true)
+    expect(forkBaseAllowed(undefined, cap, true)).toBe(false)
+    expect(forkBaseAllowed(undefined, cap)).toBe(false)
+  })
 })
 
 describe("behavior matrix: other tiers", () => {

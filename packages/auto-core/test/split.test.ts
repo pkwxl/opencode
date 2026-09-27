@@ -1,5 +1,7 @@
-// The lead's split (plans/0059 D3–D4): the checklist-line parser, the
-// structural guard, the driver-written scope file and the taken-split check.
+// The lead's split (plans/0059 D3–D5): the checklist-line parser, the
+// structural guard, the driver-written scope file, the taken-split check, and
+// the fan-out prompt's helpers (a stream's title, the driver-state filter of
+// the files changed since the split, a stream's prerequisites).
 // The usage half of the guard is src/usage.ts splitUsageReached; the accept /
 // reject flow of executeWhole is covered in test/agent-fake.test.ts.
 
@@ -8,9 +10,11 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { checklistPrerequisites } from "../src/document/state"
 import { parseUnitDoc } from "../src/document/unit"
-import { parseSplit, renderSplitTodo, splitItem, splitProblems, splitTaken, writeSplitTodos } from "../src/split"
-import { readChecklist } from "../src/tasks"
+import { parseSplit, renderSplitTodo, splitItem, splitProblems, splitStateFile, splitTaken, splitTitle, writeSplitTodos } from "../src/split"
+import { readChecklist, reloadTask, setForkBase, setSplit } from "../src/tasks"
+import { seedUnits } from "./fixtures/units"
 import { splitUsageReached } from "../src/usage"
 
 const lines = (...items: string[]) => items.map((item) => `- [ ] ${item}`).join("\n") + "\n"
@@ -148,5 +152,65 @@ describe("splitUsageReached (the guard's usage condition)", () => {
     expect(splitUsageReached("estimated", undefined, 80_000)).toBe(false)
     expect(splitUsageReached("reported", 1_000, 80_000)).toBe(true)
     expect(splitUsageReached("none", undefined, 80_000)).toBe(true)
+  })
+})
+
+describe("the fan-out prompt's helpers (plans/0059 D5)", () => {
+  test("splitTitle: the text up to the colon ending the title, the description without one, capped at 60 characters", () => {
+    expect(splitTitle("alpha: the alpha module in src/alpha.ts Depends: none Artifacts: src/alpha.ts")).toBe("alpha")
+    expect(splitTitle("the whole rest Artifacts: src/all.ts")).toBe("the whole rest")
+    // A colon inside a word (a URL, a path) does not end the title.
+    expect(splitTitle("fetch http://x.org/a: the client Artifacts: src/fetch.ts")).toBe("fetch http://x.org/a")
+    const long = splitTitle(`${"x".repeat(80)} Artifacts: a.ts`)
+    expect(long).toHaveLength(60)
+    expect(long.endsWith("…")).toBe(true)
+  })
+
+  test("splitStateFile: the checklist and the S<nn> state files of the task, nothing else", () => {
+    expect(splitStateFile("T-001", "docs/T-001/subtasks.md")).toBe(true)
+    expect(splitStateFile("T-001", "docs/T-001/S01/todo.md")).toBe(true)
+    expect(splitStateFile("T-001", "docs/T-001/S12/done.md")).toBe(true)
+    expect(splitStateFile("T-001", "./docs/T-001/S02/done.md")).toBe(true)
+    // A stream's own document output and every other file are content.
+    expect(splitStateFile("T-001", "docs/T-001/S01/index.md")).toBe(false)
+    expect(splitStateFile("T-001", "docs/T-002/subtasks.md")).toBe(false)
+    expect(splitStateFile("T-001", "docs/T-002/S01/done.md")).toBe(false)
+    expect(splitStateFile("T-001", "src/alpha.ts")).toBe(false)
+  })
+
+  test("checklistPrerequisites: Depends as declared, none for none, else the item before", () => {
+    const items = [
+      { done: true, depends: "none" as const },
+      { done: false },
+      { done: false, depends: ["S01", "S02"] },
+      { done: false, depends: "none" as const },
+    ]
+    expect(checklistPrerequisites(items, 1)).toEqual([])
+    expect(checklistPrerequisites(items, 2)).toEqual(["S01"])
+    expect(checklistPrerequisites(items, 3)).toEqual(["S01", "S02"])
+    expect(checklistPrerequisites(items, 4)).toEqual([])
+  })
+
+  test("the split record: loaded onto the task with the lead's fork base, dropped by setSplit(undefined)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-split-"))
+    try {
+      const plan = await seedUnits(dir, "## T-001: sample task [pending]\nBody.\n")
+      expect((await reloadTask(plan, "T-001")).split).toBeUndefined()
+      const point = [{ root: dir, sha: "abc1234" }]
+      await setForkBase(dir, "T-001", "ses_lead")
+      await setSplit(dir, "T-001", point)
+      const task = await reloadTask(plan, "T-001")
+      expect(task.split).toEqual(point)
+      expect(task.forkBase).toBe("ses_lead")
+      // A split taken with nothing committed is an empty record, still a split.
+      await setSplit(dir, "T-001", [])
+      expect((await reloadTask(plan, "T-001")).split).toEqual([])
+      await setSplit(dir, "T-001", undefined)
+      const dropped = await reloadTask(plan, "T-001")
+      expect(dropped.split).toBeUndefined()
+      expect(dropped.forkBase).toBe("ses_lead")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

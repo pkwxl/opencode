@@ -40,6 +40,7 @@ import tplDecomposeV from "../templates/prompts/decompose-v.md" with { type: "fi
 import tplClassifyError from "../templates/prompts/classify-error.md" with { type: "file" }
 import tplContextBase from "../templates/prompts/context-base.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
+import tplFanout from "../templates/prompts/fanout.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
 import tplImplementPlan from "../templates/prompts/implement-plan.md" with { type: "file" }
 import tplKnowledge from "../templates/prompts/knowledge.md" with { type: "file" }
@@ -86,6 +87,7 @@ const embedded: Record<string, string> = {
   "classify-error": tplClassifyError,
   "context-base": tplContextBase,
   dryrun: tplDryrun,
+  fanout: tplFanout,
   "handoff-steer": tplHandoffSteer,
   "implement-plan": tplImplementPlan,
   knowledge: tplKnowledge,
@@ -124,6 +126,11 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   "decompose-t": ["- [ ]", "context.md", "todo.md"],
   "decompose-v": ["- [ ]", "context.md", "todo.md"],
   "handoff-steer": ["Status: continue", "Status: done"],
+  // A stream of auto's split, sent alone into a fork of the lead (plans/0059
+  // D5): the item line is the stream's whole assignment, and its handover
+  // carries the status protocol like handoff-steer.
+  // AUTO-DECISION: fanout gets tier-1 markers although whole and subtask have none (an override dropping the item line would send a fork no assignment, and the status line is a string the driver parses, as in handoff-steer)
+  fanout: ["{{subtask}}", "Status: continue", "Status: done"],
   "implement-plan": ["# T-NNN: <task title>", "Phase: {{phaseId}}", "## Goal", "## Scope", "## Acceptance", "- [ ] T-NNN <task title>", "{{taskIndex}}"],
   "number-recovery": [".auto/next-task"],
   // The append planner (plans/0053 D27): the phase-plan task-document skeleton
