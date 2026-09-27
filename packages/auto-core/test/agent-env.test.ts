@@ -2,7 +2,9 @@
 // profile half of src/agent-choice.ts / src/agent-pool.ts): a profile's env
 // resolved into the overlay a host starts with, the pool starting the run's
 // agents on their registry profiles, and the loopback proxy warning. No
-// resolved value may reach a log line (C4).
+// resolved value may reach a log line (C4). Also the other half of an agent's
+// environment: the driver's own variables stay out of it (plans/0059 X1,
+// src/agent/env.ts).
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -12,7 +14,10 @@ import { agentProfileFor } from "../src/agent-choice"
 import { startPool } from "../src/agent-pool"
 import { claudeHost } from "../src/agent/claude/host"
 import { loadModels, type ModelRegistry, type ProfileEnvValue, type RegistryAgentProfile } from "../src/models"
-import { autoSwitches, clampSwitches } from "../src/switches"
+import { claudeEnv } from "../src/agent/claude/client"
+import { driverVariable } from "../src/agent/env"
+import { serverEnv } from "../src/agent/opencode/server"
+import { autoSwitches, clampSwitches, SWITCH_ENV } from "../src/switches"
 
 const PHASE_TYPES = ["analysis", "design", "implement", "test", "acceptance", "knowledge"]
 
@@ -315,5 +320,31 @@ describe("loopbackProxyWarning (§8.10, measured on Bun 1.4.2)", () => {
       expect(loopbackProxyWarning({ HTTP_PROXY: "http://p:1", NO_PROXY: noProxy })).toBeDefined()
     }
     expect(loopbackProxyWarning({ HTTP_PROXY: "http://user:secret@p:1" })).not.toContain("secret")
+  })
+})
+
+// AUTO-DECISION: the no-OPENCODE_AUTO_*-in-the-agent's-environment case lives here and in the adapter suites (agent-claude: the claude client's process start; agent-server: the real `opencode serve` spawn over a fake executable that records its environment), not in agent-fake.test.ts (its native fake AgentClient starts no process and so has no environment to observe; the scrub sits in the two adapters' spawns, which only these suites run)
+describe("the driver's own variables stay out of every agent (plans/0059 X1)", () => {
+  // Every variable the driver reads: the switch registry and the external
+  // server URL, which the agent domain restates as a prefix it cannot import.
+  const driverVars = [...Object.values(SWITCH_ENV), "OPENCODE_AUTO_SERVER"]
+
+  test("every variable the switch registry names is a driver variable; opencode's own flags are not", () => {
+    for (const name of driverVars) expect(driverVariable(name)).toBe(true)
+    expect(driverVariable("OPENCODE_AUTO_SHARE")).toBe(false)
+    expect(driverVariable("OPENCODE_AUTO_HEAP_SNAPSHOT")).toBe(false)
+    expect(driverVariable("OPENCODE_CONFIG")).toBe(false)
+    expect(driverVariable("OPENCODE_AUTOSHARE")).toBe(false)
+  })
+
+  test("both adapters' spawn environments drop every one of them, with or without a profile env", () => {
+    const base: Record<string, string> = { PATH: "/usr/bin", OPENCODE_AUTO_SHARE: "true" }
+    for (const name of driverVars) base[name] = "set"
+    for (const overlay of [undefined, { HTTPS_PROXY: "http://127.0.0.1:7890" }]) {
+      for (const env of [claudeEnv(overlay, base), serverEnv(overlay, {}, base)]) {
+        expect(Object.keys(env).filter((key) => key.startsWith("OPENCODE_AUTO_"))).toEqual(["OPENCODE_AUTO_SHARE"])
+        expect(env.PATH).toBe("/usr/bin")
+      }
+    }
   })
 })

@@ -688,6 +688,40 @@ describe("claudeAgent: process manager", () => {
     expect(claudeEnv({ A: "2", B: null, CLAUDECODE: "set by the profile" }, { A: "1", B: "1", C: "1", CLAUDECODE: "1" })).toEqual({ A: "2", C: "1", CLAUDECODE: "set by the profile" })
   })
 
+  test("the driver's own OPENCODE_AUTO_* variables never reach the child (plans/0059 X1); a profile may still set one", async () => {
+    const { spawn, procs } = spawner(echo)
+    const vars = ["OPENCODE_AUTO_AGENT", "OPENCODE_AUTO_STEER", "OPENCODE_AUTO_SERVER", "OPENCODE_AUTO_STEP", "OPENCODE_AUTO_SHARE"]
+    const saved = Object.fromEntries(vars.map((key) => [key, process.env[key]]))
+    process.env.OPENCODE_AUTO_AGENT = "claude"
+    process.env.OPENCODE_AUTO_STEER = "on"
+    process.env.OPENCODE_AUTO_SERVER = "http://127.0.0.1:4096"
+    process.env.OPENCODE_AUTO_SHARE = "true"
+    try {
+      const plain = agentWith(spawn)
+      const id = ((await plain.create({ title: "t" })) as { ok: true; value: { id: string } }).value.id
+      await plain.prompt({ session: id, text: "x" })
+      const env = procs[0]!.env
+      expect(Object.keys(env).filter((key) => key.startsWith("OPENCODE_AUTO_"))).toEqual(["OPENCODE_AUTO_SHARE"])
+      expect(env.PATH).toBe(process.env.PATH)
+      // The overlay comes after the scrub.
+      const profiled = agentWith(spawn, { env: { OPENCODE_AUTO_STEP: "task" } })
+      const other = ((await profiled.create({ title: "t" })) as { ok: true; value: { id: string } }).value.id
+      await profiled.prompt({ session: other, text: "x" })
+      expect(procs[1]!.env.OPENCODE_AUTO_STEP).toBe("task")
+      expect(procs[1]!.env.OPENCODE_AUTO_AGENT).toBeUndefined()
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+    expect(claudeEnv(undefined, { OPENCODE_AUTO_AGENT: "claude", OPENCODE_AUTO_MODELS: "/m.json", OPENCODE_AUTO_HEAP_SNAPSHOT: "1", OPENCODE_CONFIG: "/c.json", A: "1" })).toEqual({
+      OPENCODE_AUTO_HEAP_SNAPSHOT: "1",
+      OPENCODE_CONFIG: "/c.json",
+      A: "1",
+    })
+  })
+
   test("the transcript directory follows the profile's CLAUDE_CONFIG_DIR, else the driver's, else ~/.claude", async () => {
     expect(claudeProjectsDir({ CLAUDE_CONFIG_DIR: "/p/.claude-b" }, { CLAUDE_CONFIG_DIR: "/driver" })).toBe("/p/.claude-b/projects")
     expect(claudeProjectsDir({ HTTPS_PROXY: "x" }, { CLAUDE_CONFIG_DIR: "/driver" })).toBe("/driver/projects")

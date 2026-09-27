@@ -37,8 +37,9 @@ import { reportResult, runWrapup } from "./wrapup"
 // --subtask ondemand: like off, but the session manages its own context budget
 // (plans/0056): the driver steers milestone usage notices in, the session
 // decides when to hand over and writes docs/<id>/handoff.md, and a fresh
-// session continues from it; the driver's hard-wall hint (min(2x
-// --context-limit, 80% of the model window)) is the last resort.
+// session continues from it; the driver's hard-wall hint (2x
+// --context-limit, raised to a quarter of a large model window and clamped to
+// 80% of it) is the last resort.
 // Closeout reads the result line of the task report (docs/<id>/report.md):
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final

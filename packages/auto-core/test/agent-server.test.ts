@@ -168,7 +168,16 @@ async function fakeOpencode(): Promise<{ dir: string; record(n: number): Promise
 
 describe("spawnOpencodeServer: the driver's own opencode serve", () => {
   let fake: Awaited<ReturnType<typeof fakeOpencode>>
-  const saved = { PATH: process.env.PATH, OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT, AUTO_TEST_DROP: process.env.AUTO_TEST_DROP, AUTO_TEST_KEEP: process.env.AUTO_TEST_KEEP }
+  const saved = {
+    PATH: process.env.PATH,
+    OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
+    AUTO_TEST_DROP: process.env.AUTO_TEST_DROP,
+    AUTO_TEST_KEEP: process.env.AUTO_TEST_KEEP,
+    OPENCODE_AUTO_AGENT: process.env.OPENCODE_AUTO_AGENT,
+    OPENCODE_AUTO_STEER: process.env.OPENCODE_AUTO_STEER,
+    OPENCODE_AUTO_SHARE: process.env.OPENCODE_AUTO_SHARE,
+    OPENCODE_AUTO_TEST_KEY: process.env.OPENCODE_AUTO_TEST_KEY,
+  }
   const running: { close(): void }[] = []
 
   beforeEach(async () => {
@@ -191,8 +200,9 @@ describe("spawnOpencodeServer: the driver's own opencode serve", () => {
     return server
   }
 
-  test("without a profile it starts exactly what the SDK spawn starts: same executable, arguments and environment", async () => {
+  test("without a profile it starts exactly what the SDK spawn starts: same executable, arguments and environment, less the driver's own variables", async () => {
     process.env.OPENCODE_CONFIG_CONTENT = '{"from":"the operator environment"}'
+    process.env.OPENCODE_AUTO_AGENT = "claude"
     const sdk = await createOpencodeServer({ port: 0 })
     running.push(sdk)
     const own = await started({ port: 0 })
@@ -202,10 +212,27 @@ describe("spawnOpencodeServer: the driver's own opencode serve", () => {
     expect(ours.args).toEqual(theirs.args)
     expect(ours.args).toEqual(["serve", "--hostname=127.0.0.1", "--port=0"])
     expect(ours.env.get("OPENCODE_CONFIG_CONTENT")).toBe("{}")
-    // The shell adds its own bookkeeping variables (PWD, SHLVL, _); the rest is identical.
+    // The shell adds its own bookkeeping variables (PWD, SHLVL, _); the rest
+    // is identical but for the driver's variables, which the SDK passes on
+    // and the driver's own spawn leaves out (plans/0059 X1).
     const shell = new Set(["PWD", "OLDPWD", "SHLVL", "_"])
     const strip = (env: Map<string, string>) => [...env].filter(([key]) => !shell.has(key)).sort(([a], [b]) => a.localeCompare(b))
-    expect(strip(ours.env)).toEqual(strip(theirs.env))
+    expect(theirs.env.get("OPENCODE_AUTO_AGENT")).toBe("claude")
+    expect(ours.env.has("OPENCODE_AUTO_AGENT")).toBe(false)
+    expect(strip(ours.env)).toEqual(strip(theirs.env).filter(([key]) => !key.startsWith("OPENCODE_AUTO_")))
+  })
+
+  test("the driver's own OPENCODE_AUTO_* variables never reach the server (plans/0059 X1): opencode's own flags, a referenced key and the overlay stay", async () => {
+    process.env.OPENCODE_AUTO_AGENT = "claude"
+    process.env.OPENCODE_AUTO_STEER = "on"
+    process.env.OPENCODE_AUTO_SHARE = "true"
+    process.env.OPENCODE_AUTO_TEST_KEY = "a key the ring names"
+    const config = { provider: { zhipuai: { options: { apiKey: "{env:OPENCODE_AUTO_TEST_KEY}" } } } }
+    await started({ bin: join(fake.dir, "opencode-b"), env: { OPENCODE_AUTO_STEP: "task" }, config, port: 0 })
+    const { env } = await fake.record(1)
+    expect([...env.keys()].filter((key) => key.startsWith("OPENCODE_AUTO_")).sort()).toEqual(["OPENCODE_AUTO_SHARE", "OPENCODE_AUTO_STEP", "OPENCODE_AUTO_TEST_KEY"])
+    expect(env.get("OPENCODE_AUTO_TEST_KEY")).toBe("a key the ring names")
+    expect(env.get("OPENCODE_AUTO_STEP")).toBe("task")
   })
 
   test("the profile's bin, the env overlay (null removes an inherited variable) and the config content", async () => {
@@ -227,9 +254,20 @@ describe("spawnOpencodeServer: the driver's own opencode serve", () => {
     expect(env.get("OPENCODE_CONFIG_CONTENT")).toBe(JSON.stringify(config))
   })
 
-  test("serverEnv: the driver's environment, the overlay, then OPENCODE_CONFIG_CONTENT", () => {
+  test("serverEnv: the driver's environment less its own variables, the overlay, then OPENCODE_CONFIG_CONTENT", () => {
     expect(serverEnv(undefined, {}, { A: "1", OPENCODE_CONFIG_CONTENT: "x" })).toEqual({ A: "1", OPENCODE_CONFIG_CONTENT: "{}" })
     expect(serverEnv({ A: null, B: "2" }, { k: 1 }, { A: "1", C: "3" })).toEqual({ B: "2", C: "3", OPENCODE_CONFIG_CONTENT: '{"k":1}' })
+    const base = { A: "1", OPENCODE_AUTO_AGENT: "claude", OPENCODE_AUTO_SERVER: "http://127.0.0.1:4096", OPENCODE_AUTO_HEAP_SNAPSHOT: "1", OPENCODE_AUTO_KEY_B: "k" }
+    expect(serverEnv(undefined, {}, base)).toEqual({ A: "1", OPENCODE_AUTO_HEAP_SNAPSHOT: "1", OPENCODE_CONFIG_CONTENT: "{}" })
+    // A variable the config names by reference stays; the overlay may set any.
+    const config = { provider: { p: { options: { apiKey: "{env:OPENCODE_AUTO_KEY_B}" } } } }
+    expect(serverEnv({ OPENCODE_AUTO_AGENT: "opencode" }, config, base)).toEqual({
+      A: "1",
+      OPENCODE_AUTO_AGENT: "opencode",
+      OPENCODE_AUTO_HEAP_SNAPSHOT: "1",
+      OPENCODE_AUTO_KEY_B: "k",
+      OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+    })
   })
 
   test("the SDK's errors: an exit before the listening line, a timeout, an unparsable line, a missing executable", async () => {

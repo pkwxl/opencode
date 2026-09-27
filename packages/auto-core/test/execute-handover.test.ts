@@ -15,14 +15,14 @@ import { join } from "node:path"
 import type { SessionChain } from "../src/chain"
 import { executeWhole } from "../src/execute"
 import { clampSwitches } from "../src/switches"
-import { ev, fakeAgent, type TurnScript } from "./fixtures/agent"
+import { ev, fakeAgent, MODEL, type TurnScript } from "./fixtures/agent"
 import { planOf } from "./fixtures/units"
 
 // The fake's default turn measures 1000 tokens — far under the wall
-// (min(2×64k budget, 80%×100k window) = 80k), so a session that does not
-// script a big figure runs quiet: no notices, no hint.
+// (min(max(2×64k budget, 100k window/4), 80%×100k window) = 80k), so a session
+// that does not script a big figure runs quiet: no notices, no hint.
 describe("executeWhole (ondemand self-directed handover)", () => {
-  const setup = async (turn?: TurnScript) => {
+  const setup = async (turn?: TurnScript, limits?: Record<string, number>) => {
     const dir = await mkdtemp(join(tmpdir(), "auto-ondemand-"))
     const plan = planOf(
       `## T-001: sample task [pending]
@@ -30,7 +30,7 @@ Body.
 `,
       dir,
     )
-    const agent = fakeAgent(turn ? { turn } : {})
+    const agent = fakeAgent({ ...(turn ? { turn } : {}), ...(limits ? { limits } : {}) })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     // The fake session writes the handover document itself (the driver never
     // pre-creates it); the directory must exist for that write.
@@ -102,6 +102,23 @@ Body.
       // requirement, then the quiet second session finishes naturally.
       expect(agent.prompts).toHaveLength(2)
       expect(agent.prompts[1]!.text).toContain("This is a hard requirement")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a large window raises the wall (plans/0059 D6): a session finishing past the 2×cap budget but under a quarter of the window is a natural finish, nothing demanded", async () => {
+    const { dir, plan, task, agent, chain } = await setup(
+      (ctx) => (ctx.n === 1 ? [ev.message(ctx.session, "m_big", 150_000), ev.text(ctx.session, "t1", "all done"), ev.idle(ctx.session)] : undefined),
+      { [MODEL]: 1_000_000 },
+    )
+    try {
+      expect(await executeWhole(agent.client, plan, task, { dir, commit: false }, chain, true)).toBeUndefined()
+      // 150k is past the 128k budget but only 60% of the 250k wall: the 50%
+      // notice, no hard-wall hint, and one session with no document demanded.
+      expect(agent.steers).toHaveLength(1)
+      expect(agent.steers[0]).toContain("wall 250.0k")
+      expect(agent.prompts).toHaveLength(1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

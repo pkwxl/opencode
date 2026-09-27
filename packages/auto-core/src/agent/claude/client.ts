@@ -25,6 +25,7 @@
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { driverVariable } from "../env"
 import type { AgentCapabilities, AgentClient, AgentEnv, AgentErrorPatterns, AgentEvent, AgentResult, AgentRetryPolicy, PermissionPreset, PromptInput } from "../types"
 import { contractArgs } from "./contract"
 import { claudeStream, MODEL_PREFIX } from "./stream"
@@ -135,12 +136,13 @@ type Session = {
 const SESSION_ENV = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_CODE_(SESSION_ID|CHILD_SESSION|SESSION_ATTENDED|ENTRYPOINT|MESSAGING_\w+))$/
 
 // The environment of a claude process: the driver's minus the Claude Code
-// session variables, overlaid by the agent profile's env (plans/0055 F14; a
-// null removes the inherited variable). The overlay comes last, so a profile
-// may set any variable, a session variable included.
+// session variables and minus the driver's own OPENCODE_AUTO_* variables
+// (plans/0059 X1, ../env.ts), overlaid by the agent profile's env (plans/0055
+// F14; a null removes the inherited variable). The overlay comes last, so a
+// profile may set any variable, a session or driver variable included.
 export function claudeEnv(overlay?: AgentEnv, base: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {}
-  for (const [key, value] of Object.entries(base)) if (!SESSION_ENV.test(key)) env[key] = value
+  for (const [key, value] of Object.entries(base)) if (!SESSION_ENV.test(key) && !driverVariable(key)) env[key] = value
   for (const [key, value] of Object.entries(overlay ?? {})) {
     if (value === null) delete env[key]
     else env[key] = value

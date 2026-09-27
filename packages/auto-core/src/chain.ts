@@ -36,6 +36,12 @@ export type Watch = {
   // The in-turn handover hint went out in this session (plans/0040 D6; set
   // only when true). The post-session check reads it next to the final figure.
   hinted?: boolean
+  // The effective handover wall of this session's last measurement (testrun.ts
+  // steerWall; set only with a steer and a measured figure). The post-session
+  // check measures the final figure against it where it lies above the 2×cap
+  // budget (a large window, plans/0059 D6), so a session that finished under
+  // a wall it was never hinted at is not judged due.
+  wall?: number
   // Context steps (plans/0055 §4.5): the session stepped up in place during
   // this watch — at the step-up point (the steer) or after the agent
   // compacted first (the late step-up). Carries the step index the session
@@ -193,8 +199,9 @@ export type WindowWait = { until: number; model: string; tier: Tier; opens: stri
 // gate / the requireArtifact unit gate, recorded alongside attempt's write
 // of the active record; recovery verifies against it and rolls back to it.
 // hinted: the chain's current session was sent the in-turn handover hint
-// (copied from its Watch by attempt; plans/0040 D6).
-export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; agent?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
+// (copied from its Watch by attempt; plans/0040 D6). wall: the effective
+// handover wall of its last measurement (copied the same way; plans/0059 D6).
+export type SessionChain = { id?: string; pct: number; used: number; at: number; hinted?: boolean; wall?: number; note?: string; phase?: Phase; subject?: string; forkBase?: string; pending?: string; role?: ModelRole; model?: string; modelEntry?: string; modelStep?: number; agent?: string; failed?: FailedSession; modelShown?: string; baseline?: UnitBaseline }
 
 // The body of the session that just ended with a retryable error (id + end
 // usage). The chain state at that moment was already restored to the

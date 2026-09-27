@@ -15,7 +15,7 @@
 // | mechanism                       | events | reported      | estimated | none        |
 // |---------------------------------|--------|---------------|-----------|-------------|
 // | reuse (pct < 50, used < cap/2)  | today  | today         | estimate  | off         |
-// | steer handover (used >= 2·cap)  | today  | off (no live) | estimate  | off         |
+// | steer handover (used >= wall)   | today  | off (no live) | estimate  | off         |
 // | post-session handover check     | today¹ | off (no live) | estimate¹ | off         |
 // | test handover (used >= cap)     | today  | today         | estimate  | off         |
 // | fork base guard (used < cap/2)  | today  | today         | estimate  | cold start  |
@@ -126,9 +126,9 @@ export function reuseAllowed(prev: { pct: number; used: number | undefined; at: 
 }
 
 // In-turn steer machinery (watch.ts: the milestone usage notices and the
-// hard-wall hint, both keyed on the effective wall = min(steer.limit, 80% of
-// the model's window), plans/0056). Needs a live figure: under `reported` the
-// turn is over before the value exists.
+// hard-wall hint, both keyed on the effective wall = testrun.ts
+// steerWall(steer.limit, window), plans/0056 and plans/0059 D6). Needs a live
+// figure: under `reported` the turn is over before the value exists.
 export function steerDue(tier: UsageTier, used: number | undefined, limit: number): boolean {
   return liveUsage(tier) && used !== undefined && used >= limit
 }
@@ -144,8 +144,21 @@ export function steerDue(tier: UsageTier, used: number | undefined, limit: numbe
 // final figure alone misses a session that compacted after the hint and ended
 // below 2·cap with a written `Status: continue` handover (0038 §6 latent). OR-ed, so
 // every session judged due before still is.
-export function sessionHandoverDue(tier: UsageTier, steer: { limit: number } | undefined, used: number | undefined, hinted = false): boolean {
-  return steer !== undefined && (hinted || steerDue(tier, used, steer.limit))
+// `wall` = the effective wall of the session's last measurement (Watch.wall).
+// The figure rule measures against the larger of it and the 2×cap budget: a
+// wall above the budget (a large window, plans/0059 D6) was never crossed by
+// a session that finished under it, so it was never asked for a handover.
+// Where the wall is at or below the budget (every window up to 512k at the
+// default cap) the rule is the budget, as before.
+// AUTO-DECISION: the post-session figure rule follows the raised wall through a new Watch/SessionChain `wall` field (the rule was sound only while the wall never exceeded the budget; left at the budget, a session finishing between 128k and 250k on a 1M window would be asked for a handover document it was never hinted to write, which defeats the raised wall; recomputing the wall here from the window would need the window on the chain and an import of testrun.ts, with its git, prompt and script dependencies, into this pure module, while the watch already holds the wall it used)
+export function sessionHandoverDue(
+  tier: UsageTier,
+  steer: { limit: number } | undefined,
+  used: number | undefined,
+  hinted = false,
+  wall?: number,
+): boolean {
+  return steer !== undefined && (hinted || steerDue(tier, used, Math.max(steer.limit, wall ?? 0)))
 }
 
 // Test handover at the moment the session requests a test run (watch.ts; was

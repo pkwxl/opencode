@@ -24,10 +24,11 @@ import { runScript } from "./script"
 // watches a running session's context usage, steers milestone usage notices
 // into it (the `notes` bands, fractions of the effective wall), and the session
 // itself decides when to hand over at a natural boundary; the hard-wall steer
-// (`text`, fired at `limit`) is the last resort. The wall itself is
-// min(limit, 80% of the model's window), computed at the watch measurement
-// point where the window is known — `limit` stays the raw 2×cap budget so the
-// post-session check (usage.ts sessionHandoverDue) keeps its figure rule.
+// (`text`, fired at the wall) is the last resort. The wall itself is
+// steerWall(limit, window), computed at the watch measurement point where the
+// window is known — `limit` stays the raw 2×cap budget, and the post-session
+// check (usage.ts sessionHandoverDue) takes the larger of it and the wall the
+// session was last measured against.
 export type Steer = {
   limit: number
   text: string
@@ -63,12 +64,21 @@ export function fillUsageNote(text: string, used: number, wall: number): string 
     .replaceAll("{{wall}}", formatTokens(wall))
 }
 
-// The effective wall (plans/0056): the 2×cap budget, clamped to 80% of the
-// model's context window when that is known and smaller — a hard-wall hint at
-// the budget would leave no room to write the handover document on a
-// narrow-window model.
+// The effective wall (plans/0056, raised on large windows by plans/0059 D6):
+// min(max(2×cap, window/4), 80% of the window) when the model's context window
+// is known, the 2×cap budget otherwise.
+// - The 80% ceiling: a hard-wall hint at the budget would leave no room to
+//   write the handover document on a narrow-window model.
+// - The window/4 floor: on a large window a wall at the budget forces the
+//   handover right after the session has paid for its understanding, the
+//   worst boundary, where everything it read is lost. Handing over from a
+//   quarter of a 1M window pays after a few turns; below it, carrying on in
+//   the same session is cheaper.
+// At the default 64k cap the floor changes nothing up to a 512k window
+// (128k → 102k, 200k → 128k, 512k → 128k); a 1M window rises from 128k to 250k.
 export function steerWall(limit: number, windowTokens: number | undefined): number {
-  return windowTokens !== undefined ? Math.min(limit, Math.floor(windowTokens * 0.8)) : limit
+  if (windowTokens === undefined) return limit
+  return Math.min(Math.max(limit, Math.floor(windowTokens / 4)), Math.floor(windowTokens * 0.8))
 }
 
 // The two handover predicates — the post-session check (was handoverDue) and

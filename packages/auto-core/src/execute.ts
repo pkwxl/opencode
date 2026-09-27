@@ -53,7 +53,8 @@ export async function executeWhole(
   // Ondemand context management (plans/0056): with OPENCODE_AUTO_STEER on the
   // session gets usage notices and may hand itself over at a natural boundary
   // (a fresh handoff document is honored whatever the figure); the hard-wall
-  // hint fires at min(2×cap, 80% of the model window) in watch. With the
+  // hint fires at the effective wall in watch (testrun.ts steerWall: 2×cap,
+  // raised to a quarter of a large window, clamped to 80% of it). With the
   // switch off none of it exists — no notices, no hint, the post-session
   // handover check disabled with it (see usage.ts sessionHandoverDue) and a
   // spontaneously written document ignored; off mode never builds one anyway.
@@ -147,7 +148,8 @@ export async function executeWhole(
     }
     const committed = await afterSession(dir, opts, task, { stage: "execute", subject })
     if (committed.type === "failed") return commitBlocked(`${task.id} execution session`, committed)
-    // Ending without hitting the handover threshold (2x cap) = the task
+    // Ending without hitting the handover threshold (2x cap, or the effective
+    // wall where a large window raised it above that) = the task
     // finished naturally in a single session; when no steer was built (off
     // mode or OPENCODE_AUTO_STEER=off) it likewise ends naturally, with no
     // handover check. A fresh handoff document (differing from what this
@@ -155,7 +157,7 @@ export async function executeWhole(
     // handed itself over at a natural boundary of its own choosing (plans/
     // 0056); only with the steer built, an off-switch run ignores it.
     const doc = await readHandoff()
-    const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted)
+    const due = sessionHandoverDue((await clientOf(client, chain.agent)).capabilities.usage, steer, chain.used, chain.hinted, chain.wall)
     const fresh = steer !== undefined && doc !== "" && doc !== consumed
     if (!due && !fresh) return undefined
     const status = handoffStatus(doc)

@@ -15,6 +15,7 @@ import { spawn as spawnProcess, spawnSync, type ChildProcess } from "node:child_
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2"
+import { driverVariable } from "../env"
 import type { AgentEnv, AgentHost, AgentHostFactory } from "../types"
 import { opencodeAgent } from "./client"
 
@@ -223,8 +224,9 @@ const SERVE_START_TIMEOUT_MS = 5000
 // server listening on <url>" line — createOpencodeServer of the SDK
 // (packages/sdk/js/src/v2/server.ts) with the executable and the environment
 // as inputs. Same arguments (serve --hostname --port, plus --log-level when
-// the config sets logLevel), same environment (the driver's, now overlaid by
-// the profile env, then OPENCODE_CONFIG_CONTENT = the config's JSON), same
+// the config sets logLevel), same environment (the driver's, now without the
+// driver's own variables and overlaid by the profile env, then
+// OPENCODE_CONFIG_CONTENT = the config's JSON, see serverEnv), same
 // timeout and the same errors: the timeout, an unparsable listening line, an
 // exit before it (with the process output), and a spawn error (ENOENT for a
 // missing executable) as is.
@@ -282,21 +284,29 @@ export async function spawnOpencodeServer(
   return { url, close: () => stop(proc) }
 }
 
-// The managed server's environment: the driver's, overlaid by the profile env
-// (null removes an inherited variable), then OPENCODE_CONFIG_CONTENT, which
-// the driver owns: it replaces whatever the operator's environment or the
-// overlay holds, as the SDK spawn always did. Exported for tests.
+// The managed server's environment: the driver's minus the driver's own
+// OPENCODE_AUTO_* variables (plans/0059 X1, ../env.ts — the server's tools and
+// shells inherit what it has), overlaid by the profile env (null removes an
+// inherited variable), then OPENCODE_CONFIG_CONTENT, which the driver owns: it
+// replaces whatever the operator's environment or the overlay holds, as the
+// SDK spawn always did. A driver variable the config content names by an
+// `{env:NAME}` reference (a key ring's key) stays: the server substitutes the
+// reference from its own environment. Exported for tests.
+// AUTO-DECISION: a driver-prefixed variable referenced by the spawn config stays in the server's environment (the driver itself built that reference from a registry key, which passed the run start's reference check against the driver's environment, so dropping it would leave the server an empty key; an operator could re-set it through the profile overlay but has no way to know it is needed)
 export function serverEnv(
   overlay: AgentEnv | undefined,
   config: Readonly<Record<string, unknown>>,
   base: Record<string, string | undefined> = process.env,
 ): Record<string, string | undefined> {
-  const env = { ...base }
+  const content = JSON.stringify(config)
+  const referenced = new Set([...content.matchAll(/\{env:([^}]*)\}/g)].map((match) => match[1]!))
+  const env: Record<string, string | undefined> = {}
+  for (const [name, value] of Object.entries(base)) if (!driverVariable(name) || referenced.has(name)) env[name] = value
   for (const [name, value] of Object.entries(overlay ?? {})) {
     if (value === null) delete env[name]
     else env[name] = value
   }
-  env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config)
+  env.OPENCODE_CONFIG_CONTENT = content
   return env
 }
 

@@ -175,11 +175,14 @@ export async function watch(
     usage,
     resolves,
     ...(steerSent ? { hinted: true } : {}),
+    ...(wall !== undefined ? { wall } : {}),
     ...(reached !== undefined ? { steppedUp: reached } : {}),
     ...extra,
   })
   // The steer is inserted at most once per session.
   let steerSent = false
+  // The effective wall of the last measurement (with a steer only).
+  let wall: number | undefined
   // Usage-note bands already spent (keyed by the band's `at` fraction, plans/
   // 0056): each band steers at most once; a jump crossing several bands sends
   // only the highest, and the hard wall spends them all.
@@ -728,11 +731,12 @@ export async function watch(
       pct = limit ? Math.round((used / limit) * 100) : 100
       vlog(`  context: ${formatTokens(used)}${limit ? `/${formatTokens(limit)}` : ""} tokens${limit ? ` (${pct}%)` : ""}`)
       if (steer) {
-        // Effective wall (plans/0056): the 2×cap budget clamped to 80% of the
-        // model's window when that is smaller — the hard-wall hint must leave
-        // room to write the handover document. Recomputed per measurement, so
-        // a mid-session model step-up widens it naturally.
-        const wall = steerWall(steer.limit, limit)
+        // Effective wall (plans/0056, plans/0059 D6): the 2×cap budget, raised
+        // to a quarter of a large model window and clamped to 80% of any
+        // window — the hard-wall hint must leave room to write the handover
+        // document. Recomputed per measurement, so a mid-session model step-up
+        // widens it naturally.
+        wall = steerWall(steer.limit, limit)
         if (!steerSent && steerDue(tier, now, wall)) {
           // The hard wall supersedes the notice bands (a jump may cross both):
           // one steer, and the bands count as spent.

@@ -164,7 +164,9 @@ export type Switches = {
   // milestone usage notices into a live ondemand whole-task session (50%/85% of
   // the effective wall) and the session itself decides when to hand over at a
   // natural boundary (a fresh handoff.md is honored whatever the figure); the
-  // hard-wall hint (min(2×cap, 80% of the window)) stays as the last resort.
+  // hard-wall hint (at the effective wall: 2×cap, raised to a quarter of a
+  // large window and clamped to 80% of it, testrun.ts steerWall) stays as the
+  // last resort.
   // off disables the whole mechanism — no notices, no hard-wall hint, and a
   // handoff document no longer demanded (a natural finish just wraps up;
   // --handover-test's test handover is an independent mechanism, unaffected).

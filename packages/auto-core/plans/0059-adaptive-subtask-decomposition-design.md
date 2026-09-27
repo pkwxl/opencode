@@ -1,6 +1,6 @@
 # 0059 — Adaptive decomposition: `--subtask auto` becomes cost-aware, the planned pipeline moves to `true`
 
-Status: **design** (2026-09-27), nothing implemented; §8 ruled 2026-09-27 (every recommendation accepted). Request: `--subtask auto` was meant to cut one large task into subtasks so each session's context stays small and cache overhead drops. On the field it did the opposite: T-008, decomposed into 11 subtasks on the claude adapter, used a whole five-hour quota window. The operator estimates that a single session would have needed about 30% of one. Every later task ran `off`. For `auto` to mean anything it must cost less than a single session. The current pipeline is kept under the new value `true`, for a complex task made of several unrelated subtasks. `auto` becomes intelligent, cost-aware decomposition.
+Status: **design, ruled; S1 and S3 implemented** (2026-09-27, recorded in §12); §8 ruled 2026-09-27 (every recommendation accepted). Request: `--subtask auto` was meant to cut one large task into subtasks so each session's context stays small and cache overhead drops. On the field it did the opposite: T-008, decomposed into 11 subtasks on the claude adapter, used a whole five-hour quota window. The operator estimates that a single session would have needed about 30% of one. Every later task ran `off`. For `auto` to mean anything it must cost less than a single session. The current pipeline is kept under the new value `true`, for a complex task made of several unrelated subtasks. `auto` becomes intelligent, cost-aware decomposition.
 
 ## 0. The answer in one paragraph
 
@@ -277,3 +277,20 @@ The consequences for design:
 - **0045** (P1): X2 narrows a false-positive class without weakening the rule.
 - **0046** (parallel): fan-out siblings are parallel-ready.
 - **0055** (registry): the fork base per agent; the lead takes the `whole` role's tier, items the `subtask` role's.
+
+## 12. Implementation record
+
+- **S1 — X1, done 2026-09-27.**
+  - `src/agent/env.ts` `driverVariable`: an inherited variable with the `OPENCODE_AUTO_` prefix is the driver's. `claudeEnv` drops it next to the Claude Code session variables. `serverEnv` drops it before the profile overlay and `OPENCODE_CONFIG_CONTENT`. The overlay comes after the scrub, so a profile's `env` can still set one.
+  - The agent domain cannot import the switch registry, so it restates the prefix; a test checks every `SWITCH_ENV` name and `OPENCODE_AUTO_SERVER` against it.
+  - Two exceptions, each marked in the code:
+    - opencode's own flags that share the prefix (`OPENCODE_AUTO_SHARE`, `OPENCODE_AUTO_HEAP_SNAPSHOT`) stay (`src/agent/env.ts`);
+    - a variable the spawn config names as `{env:NAME}` (a key ring's key) stays in the server's environment, since the server substitutes the reference from it (`serverEnv`).
+  - Out of reach: an external server (`--server`, `OPENCODE_AUTO_SERVER`, a profile's `server`) keeps the environment it was started with.
+  - Tests: `test/agent-claude.test.ts` (the claude client's process start), `test/agent-server.test.ts` (the real `opencode serve` spawn over a fake executable that records its environment; the SDK-equivalence case now expects exactly this difference) and `test/agent-env.test.ts` (the registry check; both spawn environments drop every driver variable). §9's `agent-fake` case lives in those suites instead: the native fake starts no process, so it has no environment to observe.
+- **S3 — D6, done 2026-09-27.**
+  - `steerWall(limit, window)` = `min(max(limit, ⌊window/4⌋), ⌊0.8·window⌋)`, and the budget when the window is unknown. The result is unchanged wherever window/4 ≤ 2×cap.
+  - The post-session check had to follow. `sessionHandoverDue` measured the final figure against the raw 2×cap budget, which was sound only while the wall never exceeded it. On a 1M window, a session finishing at 150k was never hinted (the wall is 250k) but would have been judged due and asked for a handover document. The watch now reports the wall of its last measurement (`Watch.wall`, copied to `SessionChain.wall` by attempt). The figure rule uses the larger of the budget and that wall, which is the budget, as before, on every window up to 512k at the default cap (`src/usage.ts`).
+  - Tests: `test/testrun.test.ts` (the wall table), `test/agent-fake.test.ts` (a 1M window: a notice at 150k naming the 250k wall, no hint, not due; the hint at 260k) and `test/execute-handover.test.ts` (a 150k finish on a 1M window is one natural session). Two `agent-fake` cases that steered at a 500-token budget on the fixture's 100k window now use a 30k budget and figure: the floor lifts a 500-token budget to 25k there.
+
+<!-- auto: eof -->

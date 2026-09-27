@@ -607,11 +607,13 @@ export async function attempt(
     const previousUsed = chain.used
     const previousAt = chain.at
     const previousHinted = chain.hinted
+    const previousWall = chain.wall
     chain.id = sessionID
     chain.pct = result.pct
     chain.used = result.used
     chain.at = Date.now()
     chain.hinted = result.hinted === true
+    chain.wall = result.wall
     // ◉ The two session-ended lines (STATS_PLAN §4.1, T-004): printed
     // unconditionally — every session that goes through attempt (phase
     // planning / handover distillation and other bypasses included; reused
@@ -684,6 +686,7 @@ export async function attempt(
       chain.used = previousUsed
       chain.at = previousAt
       chain.hinted = previousHinted
+      chain.wall = previousWall
       // Chain state restored, but the failed session itself is left to the
       // retry ring as the preferred fork source (see FailedSession).
       // A 0-token failure is a pure error stub (failed at dispatch, ran

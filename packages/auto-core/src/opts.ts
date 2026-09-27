@@ -109,8 +109,9 @@ export type Opts = {
   dryrun?: boolean
   // The context budget baseline (tokens); default 64k (--context-limit n
   // counts in thousands of tokens): the used-usage threshold for session reuse
-  // is half of it, the ondemand session-handover wall 2x of it, clamped to 80%
-  // of the model's window (plans/0056).
+  // is half of it, the ondemand session-handover wall 2x of it, raised to a
+  // quarter of a large model window and clamped to 80% of the window (plans/
+  // 0056, plans/0059 D6; testrun.ts steerWall).
   contextLimit?: number
   // --permission's four levels: the handling policy for permission requests,
   // default ask-deny (see PermissionMode).
@@ -189,6 +190,6 @@ export type Opts = {
 
 // The default context budget baseline (tokens); overridden by --context-limit n
 // in thousands of tokens. The session-reuse threshold is half of it, the
-// ondemand session-handover wall 2x of it (clamped to 80% of the model's
-// window, plans/0056).
+// ondemand session-handover wall 2x of it (raised to a quarter of a large
+// model window and clamped to 80% of the window, plans/0056, plans/0059 D6).
 export const DEFAULT_CONTEXT_LIMIT = 64_000

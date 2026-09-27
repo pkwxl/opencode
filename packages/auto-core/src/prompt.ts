@@ -549,7 +549,8 @@ export function handoffFile(task: Task): string {
 }
 
 // The hard-wall steer the driver inserts while a session is running (usage
-// reached the wall, min(2x contextLimit, 80% of the model window); ondemand
+// reached the wall, testrun.ts steerWall: 2x contextLimit, raised to a quarter
+// of a large model window and clamped to 80% of it; ondemand
 // whole-task sessions only — the last resort after the usage notices went
 // unacted-on, plans/0056). The v2 prompt is a steer by default, entering the
 // session at the next provider-turn boundary.
