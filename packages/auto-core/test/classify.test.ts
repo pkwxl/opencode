@@ -101,6 +101,15 @@ describe("when it is asked", () => {
     }
   })
 
+  test("never about a failure whose reset the provider or the agent already stated (plans/0057 §5.3)", () => {
+    const stated = { resetAt: Date.parse("2026-09-25T12:30:00Z"), scope: "5h" as const }
+    expect(shouldAsk("retry", { ...info, ...stated }, "unknown")).toBe(false)
+    expect(shouldAsk("error", { ...info, ...stated }, "unknown")).toBe(false)
+    expect(shouldAsk("retry", { message: "server busy, timeout", statusCode: 429, attempt: 1, ...stated }, "transient")).toBe(false)
+    // A reason or a wait without a reset leaves the question open.
+    expect(shouldAsk("retry", { ...info, limitReason: "account_rate_limit", retryAfterMs: 2000 }, "unknown")).toBe(true)
+  })
+
   test("no registry, or no classifier list, means no classifier at all (C2)", () => {
     const agent = fakeAgent()
     expect(classifierFor(agent.client, undefined)).toBeUndefined()

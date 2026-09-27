@@ -4,7 +4,7 @@
 // footing).
 import { describe, expect, test } from "bun:test"
 import type { Event } from "@opencode-ai/sdk/v2"
-import { mapEvent, mapMessage } from "../src/agent/opencode/events"
+import { limitFields, mapEvent, mapMessage } from "../src/agent/opencode/events"
 import type { AgentClient, AgentEvent } from "../src/agent/types"
 
 // Fixtures are cast from plain objects: only the fields the mapping reads matter.
@@ -106,6 +106,113 @@ describe("opencode event mapping", () => {
     expect(got).toEqual({ type: "error", session: "s1", error: { name: "ContextOverflowError", message: "too long" } })
     expect(mapEvent(ev({ id: "e", type: "session.error", properties: { error: { name: "UnknownError", data: { message: "x" } } } }))).toBeUndefined()
     expect(mapEvent(ev({ id: "e", type: "session.error", properties: { sessionID: "s1" } }))).toBeUndefined()
+  })
+
+  // plans/0057 §5.1: the response headers of an API error give its limit
+  // fields; the retry status's action.reason its limit reason (F5, F6).
+  test("session.error: an API error's headers become its limit fields", () => {
+    const now = Date.parse("2026-09-25T11:44:57Z")
+    const reset = Date.parse("2026-09-25T12:30:00Z")
+    const got = mapEvent(
+      ev({
+        id: "e",
+        type: "session.error",
+        properties: {
+          sessionID: "s1",
+          error: {
+            name: "APIError",
+            data: {
+              message: "rate_limit_error",
+              statusCode: 429,
+              isRetryable: true,
+              responseHeaders: {
+                "Retry-After-Ms": "2700000",
+                "anthropic-ratelimit-unified-status": "rejected",
+                "anthropic-ratelimit-unified-5h-reset": String(reset / 1000),
+                "anthropic-ratelimit-unified-7d-reset": String(Date.parse("2026-09-30T22:00:00Z") / 1000),
+                "anthropic-ratelimit-unified-reset": String(reset / 1000),
+              },
+            },
+          },
+        },
+      }),
+      now,
+    )
+    expect(got).toEqual({
+      type: "error",
+      session: "s1",
+      error: { name: "APIError", message: "rate_limit_error", statusCode: 429, isRetryable: true, retryAfterMs: 2_700_000, resetAt: reset, scope: "5h" },
+    })
+    // The retry status: action.reason is the limit reason; no headers ride it.
+    const status = mapEvent(
+      ev({
+        id: "e",
+        type: "session.status",
+        properties: {
+          sessionID: "s1",
+          status: { type: "retry", attempt: 1, message: "Free usage exceeded", next: now + 30_000, action: { reason: "free_tier_limit", provider: "opencode", title: "t", message: "m", label: "l" } },
+        },
+      }),
+      now,
+    )
+    expect(status).toEqual({ type: "retry", session: "s1", attempt: 1, next: 30_000, error: { message: "Free usage exceeded", limitReason: "free_tier_limit" } })
+  })
+
+  test("limitFields: the header table, the most specific reset first; unparsable values dropped", () => {
+    const now = Date.parse("2026-09-25T11:00:00Z")
+    const at = (iso: string) => Date.parse(iso)
+    const epoch = (iso: string) => String(at(iso) / 1000)
+    // A stated wait alone: retry-after in seconds or as an HTTP-date, counted from now.
+    expect(limitFields({ "retry-after": "90" }, now)).toEqual({ retryAfterMs: 90_000, resetAt: now + 90_000 })
+    expect(limitFields({ "retry-after": "Thu, 25 Sep 2026 11:05:00 GMT" }, now)).toEqual({ retryAfterMs: 300_000, resetAt: now + 300_000 })
+    // retry-after-ms wins over retry-after, as in opencode's own delay().
+    expect(limitFields({ "retry-after-ms": "1500.5", "retry-after": "90" }, now)).toEqual({ retryAfterMs: 1501, resetAt: now + 1501 })
+    // The unified reset names the binding window: here the weekly one.
+    const week = { "anthropic-ratelimit-unified-5h-reset": epoch("2026-09-25T14:00:00Z"), "anthropic-ratelimit-unified-7d-reset": epoch("2026-09-30T22:00:00Z") }
+    expect(limitFields({ ...week, "anthropic-ratelimit-unified-reset": epoch("2026-09-30T22:00:00Z") }, now)).toEqual({ resetAt: at("2026-09-30T22:00:00Z"), scope: "7d" })
+    // A unified reset that matches neither window: scope unknown.
+    expect(limitFields({ "anthropic-ratelimit-unified-reset": epoch("2026-09-25T13:00:00Z") }, now)).toEqual({ resetAt: at("2026-09-25T13:00:00Z"), scope: "unknown" })
+    // Two windows and no binding reset: the fuller one, else the later.
+    expect(limitFields({ ...week, "anthropic-ratelimit-unified-5h-utilization": "1.0", "anthropic-ratelimit-unified-7d-utilization": "0.4" }, now)).toMatchObject({ scope: "5h" })
+    expect(limitFields(week, now)).toMatchObject({ scope: "7d" })
+    // Open windows (status allowed): the family is not the failure's; a stated wait still is.
+    expect(limitFields({ ...week, "anthropic-ratelimit-unified-status": "allowed", "retry-after": "2" }, now)).toEqual({ retryAfterMs: 2000, resetAt: now + 2000 })
+    // The per-minute caps: RFC 3339 instants; a cap with requests left did not refuse.
+    const caps = {
+      "anthropic-ratelimit-requests-remaining": "12",
+      "anthropic-ratelimit-requests-reset": "2026-09-25T11:00:40Z",
+      "anthropic-ratelimit-input-tokens-remaining": "0",
+      "anthropic-ratelimit-input-tokens-reset": "2026-09-25T11:00:20Z",
+    }
+    expect(limitFields(caps, now)).toEqual({ resetAt: at("2026-09-25T11:00:20Z"), scope: "token" })
+    // The windows outrank the caps, which outrank a bare retry-after.
+    expect(limitFields({ ...caps, "anthropic-ratelimit-unified-5h-reset": epoch("2026-09-25T14:00:00Z"), "retry-after": "20" }, now)).toEqual({
+      retryAfterMs: 20_000,
+      resetAt: at("2026-09-25T14:00:00Z"),
+      scope: "5h",
+    })
+    // The OpenAI family states durations: the wait, and the reset counted from now; the latest refused cap binds.
+    expect(limitFields({ "x-ratelimit-reset-requests": "1s", "x-ratelimit-reset-tokens": "6m0s" }, now)).toEqual({ retryAfterMs: 360_000, resetAt: now + 360_000, scope: "token" })
+    expect(limitFields({ "x-ratelimit-reset-requests": "20ms", "x-ratelimit-remaining-tokens": "5", "x-ratelimit-reset-tokens": "6m0s" }, now)).toEqual({
+      retryAfterMs: 20,
+      resetAt: now + 20,
+      scope: "request",
+    })
+    // Values that do not parse are dropped, not guessed: a bare clock time, a
+    // date without an offset, a number too small to be an instant, a malformed duration.
+    expect(
+      limitFields(
+        {
+          "retry-after": "soon",
+          "anthropic-ratelimit-unified-reset": "12:30",
+          "anthropic-ratelimit-requests-reset": "2026-09-25T11:00:40",
+          "anthropic-ratelimit-tokens-reset": "42",
+          "x-ratelimit-reset-tokens": "6 minutes",
+        },
+        now,
+      ),
+    ).toEqual({})
+    expect(limitFields(undefined, now)).toEqual({})
   })
 
   test("idle from both opencode signals; busy and unrelated events dropped", () => {

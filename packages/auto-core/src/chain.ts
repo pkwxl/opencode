@@ -4,7 +4,7 @@
 // roleOf / resolveModel), session error classification (classifySessionError),
 // and the session reuse threshold constants. See plans/0017-model-routing-design.md.
 // Split from src/runner.ts (plans/0024-module-split-plan.md S2, pure move).
-import type { AgentErrorPatterns, AgentRetryPolicy } from "./agent/types"
+import type { AgentErrorPatterns, AgentRetryPolicy, LimitScope } from "./agent/types"
 import { type UnitBaseline } from "./git"
 import { type ResolveEvent } from "./resolve"
 import { type Phase } from "./resume"
@@ -66,12 +66,13 @@ export type Watch = {
   // registry with a classifier list, only when its answer applies):
   // `classified` = errorClass came from the classifier's answer, which raised
   // the pattern verdict (the ◈ and ⇄ lines mark the move "(classifier)");
-  // `resetAt` = the answer's reset time (epoch ms, accepted only in the
-  // future and at most 7 days away), which the escalation's down mark lasts
-  // until instead of the scope boundary; `pendingReset` = an answer still on
-  // its way when the turn ended, resolving to such a reset time or undefined
-  // — it can only set when the down marks written for this failure clear,
-  // never change the class.
+  // `resetAt` = the reset time (epoch ms, accepted only in the future and at
+  // most 7 days away) the provider or the agent stated (errorInfo.resetAt,
+  // plans/0057 §5.3), else the answer's, which the escalation's down mark
+  // lasts until instead of the scope boundary; `pendingReset` = an answer
+  // still on its way when the turn ended and nothing stated a reset,
+  // resolving to such a reset time or undefined — it can only set when the
+  // down marks written for this failure clear, never change the class.
   classified?: boolean
   resetAt?: number
   pendingReset?: Promise<number | undefined>
@@ -299,6 +300,14 @@ export type ErrorInfo = {
   // (plans/0057 §4.1), as opposed to a retry signal it is still working
   // through.
   terminal?: boolean
+  // What the provider or the agent stated about the limit (AgentError's
+  // limit fields, plans/0057 §5), the latest statement of the turn. They ride
+  // beside the class and never decide it (C7): a stated resetAt outranks the
+  // failure-message classifier's (§5.3) and spares asking it.
+  retryAfterMs?: number
+  resetAt?: number
+  scope?: LimitScope
+  limitReason?: string
 }
 
 // The classification criteria live here (design G.2: when a new provider's

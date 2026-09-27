@@ -211,11 +211,24 @@ describe("claudeStream: stdout lines → AgentEvent", () => {
       expect(source.used()).toBe(206_202)
     })
 
-    test("a rejected window makes the turn's error non-retryable, which classes as quota", () => {
+    test("a rejected window makes the turn's error non-retryable, which classes as quota, and carries the window (§5.2)", () => {
       const stream = claudeStream(SID, 0)
       const events = [...workBeforeLimit, rateLimit("rejected"), syntheticLine, failedResult].flatMap((line) => stream.feed(line))
       const error = events.at(-1)
-      expect(error).toEqual({ type: "error", session: SID, error: { name: "rate_limit", message: LIMIT_TEXT, statusCode: 429, isRetryable: false } })
+      expect(error).toEqual({
+        type: "error",
+        session: SID,
+        error: {
+          name: "rate_limit",
+          message: LIMIT_TEXT,
+          statusCode: 429,
+          isRetryable: false,
+          // 12:30:00Z, the reset the wording states.
+          resetAt: Date.parse("2026-09-25T12:30:00Z"),
+          scope: "5h",
+          limitReason: "five_hour/out_of_credits",
+        },
+      })
       // watch folds the name into the message it classifies.
       if (error?.type !== "error") throw new Error("no error event")
       expect(classifySessionError({ message: `rate_limit ${LIMIT_TEXT}`, statusCode: 429, isRetryable: error.error.isRetryable }, CLAUDE_ERROR_PATTERNS)).toBe("quota")
@@ -228,7 +241,7 @@ describe("claudeStream: stdout lines → AgentEvent", () => {
       expect(classifySessionError({ message: `rate_limit ${LIMIT_TEXT}`, statusCode: 429 }, CLAUDE_ERROR_PATTERNS)).toBe("unknown")
     })
 
-    test("rate_limit_event is state: allowed lines emit nothing, and a later allowed clears a rejection", () => {
+    test("rate_limit_event is state: each becomes a limit event, and a later allowed clears a rejection", () => {
       const stream = claudeStream(SID, 0)
       // Captured verbatim on 2026-09-26 (claude 2.1.283, F20).
       const allowed = {
@@ -245,11 +258,49 @@ describe("claudeStream: stdout lines → AgentEvent", () => {
         uuid: "f84409b0-2e75-437a-9d44-351ef0e24298",
         session_id: "e90a7346-5fb3-4db4-bc9d-b527a2cf6ae6",
       }
-      expect(stream.feed(allowed)).toEqual([])
-      expect(stream.feed(rateLimit("rejected"))).toEqual([])
-      expect(stream.feed(allowed)).toEqual([])
+      // The unified windows, the weekly one at 40 %, resetting 2026-09-30T22:00Z.
+      const open: AgentEvent = {
+        type: "limit",
+        session: SID,
+        status: "allowed",
+        windows: [
+          { scope: "5h", resetAt: Date.parse("2026-09-27T03:20:00Z"), utilization: 0.04 },
+          { scope: "7d", resetAt: Date.parse("2026-09-30T22:00:00Z"), utilization: 0.4 },
+        ],
+      }
+      expect(stream.feed(allowed)).toEqual([open])
+      // No unified windows (the transcript's record): the one window the event names.
+      expect(stream.feed(rateLimit("rejected"))).toEqual([
+        { type: "limit", session: SID, status: "rejected", windows: [{ scope: "5h", resetAt: Date.parse("2026-09-25T12:30:00Z") }] },
+      ])
+      expect(stream.feed(allowed)).toEqual([open])
       const error = [syntheticLine, failedResult].flatMap((line) => stream.feed(line)).at(-1)
       expect(error?.type === "error" && error.error.isRetryable).toBeUndefined()
+      expect(error?.type === "error" && error.error.resetAt).toBeUndefined()
+    })
+
+    test("rate_limit_event statuses and window types map as §5.2's table states", () => {
+      const limit = (info: Record<string, unknown>) => claudeStream(SID).feed({ type: "rate_limit_event", rate_limit_info: info, session_id: SID })
+      expect(limit({ status: "allowed_warning", rateLimitType: "seven_day_opus", resetsAt: 1790805600, utilization: 0.91 })).toEqual([
+        { type: "limit", session: SID, status: "warning", windows: [{ scope: "7d", resetAt: 1790805600_000, utilization: 0.91 }] },
+      ])
+      // Overage and unnamed windows state no window; an unknown status is no event.
+      expect(limit({ status: "rejected", rateLimitType: "overage", resetsAt: 1790805600 })).toEqual([{ type: "limit", session: SID, status: "rejected", windows: [] }])
+      expect(limit({ status: "queued" })).toEqual([])
+      expect(limit({})).toEqual([])
+      // The turn's error: a weekly window scopes 7d; overage, or no type, unknown.
+      const refused = (info: Record<string, unknown>) => {
+        const stream = claudeStream(SID, 0)
+        stream.feed({ type: "rate_limit_event", rate_limit_info: { status: "rejected", ...info }, session_id: SID })
+        const error = [syntheticLine, failedResult].flatMap((line) => stream.feed(line)).at(-1)
+        return error?.type === "error" ? error.error : undefined
+      }
+      expect(refused({ rateLimitType: "seven_day", resetsAt: 1790805600 })).toMatchObject({ isRetryable: false, resetAt: 1790805600_000, scope: "7d", limitReason: "seven_day" })
+      expect(refused({ rateLimitType: "overage" })).toMatchObject({ isRetryable: false, scope: "unknown", limitReason: "overage" })
+      const bare = refused({})
+      expect(bare).toMatchObject({ isRetryable: false, scope: "unknown" })
+      expect(bare?.resetAt).toBeUndefined()
+      expect(bare?.limitReason).toBeUndefined()
     })
   })
 

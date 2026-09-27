@@ -24,7 +24,7 @@ import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
 import type { Opts } from "../src/opts"
 import { isModelDown, markModelDown, modelDownMark, resetFailback, clearDownMarks } from "../src/failback"
-import { resetClassifier } from "../src/classify"
+import { cachedAnswer, resetClassifier } from "../src/classify"
 import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from "../src/keyring"
 import { resetSteps } from "../src/model-step"
 import { isoInZone, parseWindow } from "../src/model-window"
@@ -1422,6 +1422,129 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     expect(result.type).toBe("idle")
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/a"])
     expect(agent.argsOf("create").some(([input]) => (input as { title: string }).title === "auto: classify error")).toBe(false)
+  })
+
+  // plans/0057 §5.3: a reset the provider or the agent stated outranks the
+  // classifier's, lands on the same down-mark `until`, and spares asking.
+  test("a stated reset sets when the down mark clears; the classifier is not asked", async () => {
+    // Whole seconds, as a provider states them.
+    const resetAt = Math.floor((Date.now() + 3 * 3_600_000) / 1000) * 1000
+    const agent = make({
+      turn: (ctx) =>
+        ctx.n === 1
+          ? [
+              ev.message(ctx.session, "msg_retrying", 5000),
+              { type: "retry", session: ctx.session, attempt: 1, next: 3 * 3_600_000, error: { message: "rate limited", statusCode: 429, resetAt, scope: "5h" } },
+            ]
+          : undefined,
+    })
+    const chain = deepChain()
+    const result = await runSession(agent.client, task, "p", { routing: facts() }, chain, undefined, undefined, DEFAULTS)
+    expect(result.type).toBe("idle")
+    expect(chain.modelEntry).toBe("b")
+    expect(modelDownMark("a")).toEqual({ until: resetAt })
+    expect(agent.prompts.some((p) => p.bare === true)).toBe(false)
+  })
+
+  test("the classifier is not asked about wording it would read when the reset is stated", async () => {
+    const statedAt = Math.floor((Date.now() + 2 * 3_600_000) / 1000) * 1000
+    const agent = make({ turn: (ctx) => (isClassify(ctx.text) ? answerTurn('{"class": "quota", "resetAt": null}')(ctx.session) : undefined) })
+    const result = await watch(
+      agent.client,
+      "s",
+      stream([{ type: "retry", session: "s", attempt: 1, error: { message: UNKNOWN, resetAt: statedAt } }, ev.text("s", "t", "back"), ev.idle("s")]),
+      { routing: facts() },
+    )
+    expect(result.error).toBe("")
+    expect(agent.prompts).toEqual([])
+  })
+
+  test("a stated reset ends with the retry: model output clears it before a later failure", async () => {
+    const statedAt = Math.floor((Date.now() + 2 * 3_600_000) / 1000) * 1000
+    const retry: AgentEvent = { type: "retry", session: "s", attempt: 1, error: { message: "service unavailable", statusCode: 503, resetAt: statedAt, retryAfterMs: 7_200_000 } }
+    const quota = ev.error("s", { name: "APIError", message: "usage limit reached", isRetryable: false })
+    // No registry: the stated reset still rides the result (to no effect there).
+    const held = await watch(make().client, "s", stream([retry, quota, ev.idle("s")]), opts)
+    expect(held.resetAt).toBe(statedAt)
+    const recovered = await watch(make().client, "s", stream([retry, ev.text("s", "t", "back"), quota, ev.idle("s")]), opts)
+    expect(recovered.errorClass).toBe("quota")
+    expect(recovered.resetAt).toBeUndefined()
+    expect(recovered.errorInfo?.retryAfterMs).toBeUndefined()
+  })
+
+  test("a stated reset outranks the answer's", async () => {
+    const answered = Date.now() + 5 * 3_600_000
+    const statedAt = Math.floor((Date.now() + 2 * 3_600_000) / 1000) * 1000
+    const settle = async (stated: boolean): Promise<Watch> => {
+      resetClassifier()
+      const agent = make({
+        turn: (ctx) => (isClassify(ctx.text) ? answerTurn(`{"class": "unknown", "resetAt": "${isoInZone(answered, "UTC")}"}`)(ctx.session) : undefined),
+      })
+      // The first retry is undecided and asked about; once the answer is in,
+      // the agent gives up with a quota verdict the patterns settle on their
+      // own, stating the reset (or not).
+      async function* turn() {
+        yield { type: "retry", session: "s", attempt: 1, error: { message: UNKNOWN } } satisfies AgentEvent
+        await until(() => cachedAnswer({ message: UNKNOWN }) !== undefined)
+        yield ev.error("s", { name: "APIError", message: "usage limit reached", isRetryable: false, ...(stated ? { resetAt: statedAt, scope: "5h" as const } : {}) })
+        yield ev.idle("s")
+      }
+      return watch(agent.client, "s", turn(), { routing: facts() })
+    }
+    const answer = await settle(false)
+    expect(answer.errorClass).toBe("quota")
+    expect(answer.resetAt).toBe(Math.floor(answered / 1000) * 1000)
+    const header = await settle(true)
+    expect(header.errorClass).toBe("quota")
+    expect(header.resetAt).toBe(statedAt)
+    expect(header.pendingReset).toBeUndefined()
+    expect(header.errorInfo).toMatchObject({ resetAt: statedAt, scope: "5h" })
+  })
+})
+
+// The account's usage windows (plans/0057 §5.2): the `limit` event is logged
+// when its status or a window's reset changes, once per agent across its
+// sessions, and never settles anything.
+describe("usage windows (plans/0057 §5.2)", () => {
+  const FIVE = Date.parse("2026-09-27T03:20:00Z")
+  const WEEK = Date.parse("2026-09-30T22:00:00Z")
+  const limit = (status: "allowed" | "warning" | "rejected", five = FIVE, used = 0.04): AgentEvent => ({
+    type: "limit",
+    session: "s",
+    status,
+    windows: [
+      { scope: "5h", resetAt: five, utilization: used },
+      { scope: "7d", resetAt: WEEK, utilization: 0.4 },
+    ],
+  })
+  const logged = async (agent: FakeAgent, events: AgentEvent[]): Promise<{ result: Watch; lines: string[] }> => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      return { result: await watch(agent.client, "s", stream([...events, ev.text("s", "t", "done"), ev.idle("s")]), opts), lines: lines.filter((line) => line.includes("usage window")) }
+    } finally {
+      printed.mockRestore()
+    }
+  }
+
+  test("logged when the status or a reset changes, not when only the utilization moves", async () => {
+    const agent = make()
+    const first = await logged(agent, [limit("allowed"), limit("allowed", FIVE, 0.07), limit("warning", FIVE, 0.92), limit("rejected", FIVE, 1)])
+    expect(first.result.error).toBe("")
+    expect(first.result.lastText).toBe("done")
+    expect(first.lines).toEqual([
+      "ℹ usage windows (session s): 5h 4% used, resets 2026-09-27T03:20:00.000Z; 7d 40% used, resets 2026-09-30T22:00:00.000Z",
+      "⚠ usage windows near their limit (session s): 5h 92% used, resets 2026-09-27T03:20:00.000Z; 7d 40% used, resets 2026-09-30T22:00:00.000Z",
+      "⚠ a usage window is spent (session s): 5h 100% used, resets 2026-09-27T03:20:00.000Z; 7d 40% used, resets 2026-09-30T22:00:00.000Z",
+    ])
+    // The next session on the same agent: unchanged windows stay quiet, the
+    // next five-hour window is logged.
+    const next = await logged(agent, [limit("rejected", FIVE, 1), limit("allowed", FIVE + 5 * 3_600_000, 0.01)])
+    expect(next.lines).toEqual(["ℹ usage windows (session s): 5h 1% used, resets 2026-09-27T08:20:00.000Z; 7d 40% used, resets 2026-09-30T22:00:00.000Z"])
+    // Another agent has its own account.
+    expect((await logged(make(), [limit("allowed")])).lines).toHaveLength(1)
   })
 })
 

@@ -16,9 +16,8 @@
 // |                                               |   (completed / error)                |
 // | system api_retry                              | retry                                |
 // | system compact_boundary / permission_denied   | part note                            |
-// | rate_limit_event                              | none: its status is kept for the     |
-// |                                               |   turn's error (rejected = not       |
-// |                                               |   retryable)                         |
+// | rate_limit_event                              | limit (its windows); the info is     |
+// |                                               |   kept for the turn's error          |
 // | result                                        | message completed + step-finish      |
 // |                                               |   (+ error when is_error)            |
 // | anything with parent_tool_use_id (subagents), | dropped                              |
@@ -31,6 +30,23 @@
 // named by the message's `error` code, else the result's `terminal_reason`,
 // else its subtype — never "success", which contradicts `is_error` (F7).
 //
+// Usage windows (plans/0057 §5.2, F20): the CLI emits a rate_limit_event when
+// its view of the account's windows changes, so its info is state and stands
+// until the next one. Each becomes a `limit` event (allowed / warning /
+// rejected, with the unified windows it states). A turn that fails while the
+// latest status is rejected is refused by a spent window: its error is not
+// retryable (a fresh session fails the same way until the reset, F19) and
+// carries the window:
+//
+// | rate_limit_info                       | error field                             |
+// |---------------------------------------|-----------------------------------------|
+// | status rejected                       | isRetryable false                       |
+// | resetsAt (epoch s)                    | resetAt (ms)                            |
+// | rateLimitType five_hour               | scope 5h                                |
+// | rateLimitType seven_day*              | scope 7d                                |
+// | rateLimitType overage, or none        | scope unknown                           |
+// | rateLimitType, overageDisabledReason  | limitReason (five_hour/out_of_credits)  |
+//
 // Billing: the stream repeats a message's usage on every content-block line
 // with its output count still growing, so per-message figures cannot be
 // summed. The turn's `result` carries the exact turn totals and becomes the
@@ -41,7 +57,7 @@
 // cost is not billed rather than billing the whole history).
 // Context: input + cache reads + cache writes of the latest API message — the
 // whole prompt the model saw — measured in-turn, hence usage tier `events`.
-import type { AgentError, AgentEvent, AgentMessage, AgentPart, AgentTokens } from "../types"
+import type { AgentError, AgentEvent, AgentMessage, AgentPart, AgentTokens, LimitScope, LimitWindow } from "../types"
 
 // The adapter's model-string form: "claude/<model id>". The driver's model
 // strings carry a provider prefix (switches.ts requires "prov/model"); the
@@ -71,12 +87,12 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
   // Error code of an API error message (assistant `error`), folded into the
   // turn's error event as its name.
   let errorName: string | undefined
-  // The provider's usage window as the CLI last reported it
+  // The provider's usage windows as the CLI last reported them
   // (rate_limit_event, "emitted when rate limit info changes"): state, not a
   // per-turn signal, so it stands until the next event. Rejected means the
   // account's window is spent — a fresh session fails the same way until it
   // resets (plans/0057 F19, F20), so the turn's error is not retryable.
-  let windowRejected = false
+  let limitInfo: Line | undefined
 
   const message = (c: Current, completed: boolean): AgentEvent => {
     const info: AgentMessage = {
@@ -164,8 +180,11 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
           return out
         }
         case "rate_limit_event": {
-          const status = line.rate_limit_info?.status
-          if (typeof status === "string") windowRejected = status === "rejected"
+          const info = line.rate_limit_info
+          if (typeof info?.status !== "string") return out
+          limitInfo = info
+          const status = LIMIT_STATUS[info.status]
+          if (status !== undefined) out.push({ type: "limit", session, status, windows: limitWindows(info) })
           return out
         }
         case "result": {
@@ -196,7 +215,7 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
                 name: errorName ?? terminalName(line),
                 ...(detail ? { message: detail } : {}),
                 ...(typeof line.api_error_status === "number" ? { statusCode: line.api_error_status } : {}),
-                ...(windowRejected ? { isRetryable: false } : {}),
+                ...(limitInfo?.status === "rejected" ? spentWindow(limitInfo) : {}),
               },
             })
           }
@@ -207,6 +226,43 @@ export function claudeStream(session: string, costBase?: number): ClaudeStream {
           return out
       }
     },
+  }
+}
+
+const LIMIT_STATUS: Record<string, "allowed" | "warning" | "rejected"> = { allowed: "allowed", allowed_warning: "warning", rejected: "rejected" }
+
+// rateLimitType → the scope of its reset; overage and unknown types have none.
+function windowScope(type: unknown): "5h" | "7d" | undefined {
+  if (type === "five_hour") return "5h"
+  return typeof type === "string" && type.startsWith("seven_day") ? "7d" : undefined
+}
+
+// The windows a rate_limit_event states: the unified five-hour and weekly
+// windows when present (subscription profiles), else the one window the
+// event itself names. The overage-included weekly window is not a second 7d.
+function limitWindows(info: Line): LimitWindow[] {
+  const one = (scope: "5h" | "7d", resetsAt: unknown, utilization: unknown): LimitWindow[] =>
+    typeof resetsAt === "number" ? [{ scope, resetAt: resetsAt * 1000, ...(typeof utilization === "number" ? { utilization } : {}) }] : []
+  const unified = info.unifiedWindows
+  if (typeof unified === "object" && unified !== null) {
+    return [
+      ...one("5h", unified.five_hour?.resetsAt, unified.five_hour?.utilization),
+      ...one("7d", unified.seven_day?.resetsAt, unified.seven_day?.utilization),
+    ]
+  }
+  const scope = windowScope(info.rateLimitType)
+  return scope !== undefined ? one(scope, info.resetsAt, info.utilization) : []
+}
+
+// The error fields of a turn refused by a spent window.
+function spentWindow(info: Line): AgentError {
+  const scope: LimitScope = windowScope(info.rateLimitType) ?? "unknown"
+  const reason = [info.rateLimitType, info.overageDisabledReason].filter((part): part is string => typeof part === "string" && part !== "").join("/")
+  return {
+    isRetryable: false,
+    ...(typeof info.resetsAt === "number" ? { resetAt: info.resetsAt * 1000 } : {}),
+    scope,
+    ...(reason ? { limitReason: reason } : {}),
   }
 }
 

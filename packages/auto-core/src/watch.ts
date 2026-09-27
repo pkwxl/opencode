@@ -13,7 +13,7 @@
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S7, pure move).
 
 import { join, relative } from "node:path"
-import type { AgentClient, AgentEvent } from "./agent/types"
+import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
 import { classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
 import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk, type ClassifierAnswer } from "./classify"
 import { afterSession, autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
@@ -53,6 +53,40 @@ const PROBE_MAX_FAILURES = 2
 // artifact shape-check loop; a step finishing with a reason other than length
 // (work back to normal after continuation) resets the count.
 const LENGTH_CONTINUE_MAX = 3
+
+// A failure's limit statement (AgentError's limit fields, plans/0057 §5) laid
+// over the turn's record: the latest statement stands, and a stated reset
+// replaces the earlier reset together with its scope.
+function withLimit(info: ErrorInfo, e: AgentError): ErrorInfo {
+  const { resetAt, scope, ...rest } = info
+  const reset = e.resetAt !== undefined || e.scope !== undefined ? { resetAt: e.resetAt, scope: e.scope } : { resetAt, scope }
+  return {
+    ...rest,
+    ...(reset.resetAt !== undefined ? { resetAt: reset.resetAt } : {}),
+    ...(reset.scope !== undefined ? { scope: reset.scope } : {}),
+    ...(e.retryAfterMs !== undefined ? { retryAfterMs: e.retryAfterMs } : {}),
+    ...(e.limitReason !== undefined ? { limitReason: e.limitReason } : {}),
+  }
+}
+
+const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
+
+// The usage windows last logged per agent client (plans/0057 §5.2): a
+// `limit` event is logged only when its status or a window's reset changed,
+// so a run shows a line per window and status, not one per session. It is
+// never a verdict: dispatch and the escalation do not read it (§11 item 10).
+const windowsLogged = new WeakMap<AgentClient, string>()
+
+function noteWindows(client: AgentClient, event: Extract<AgentEvent, { type: "limit" }>): void {
+  const key = [event.status, ...event.windows.map((w) => `${w.scope}@${w.resetAt}`)].join(" ")
+  if (windowsLogged.get(client) === key) return
+  windowsLogged.set(client, key)
+  const windows = event.windows.map(
+    (w) => `${w.scope} ${w.utilization !== undefined ? `${Math.round(w.utilization * 100)}% used, ` : ""}resets ${new Date(w.resetAt).toISOString()}`,
+  )
+  const head = event.status === "rejected" ? "⚠ a usage window is spent" : event.status === "warning" ? "⚠ usage windows near their limit" : "ℹ usage windows"
+  log(`${head} (session ${event.session})${windows.length ? `: ${windows.join("; ")}` : ""}`)
+}
 
 export async function watch(
   client: AgentClient,
@@ -178,9 +212,14 @@ export async function watch(
   let answer: ClassifierAnswer | undefined
   let asked: Promise<ClassifierAnswer | undefined> | undefined
   let raised: ErrorClass | undefined
-  // The reset fields a settled failure carries to the escalation: the
-  // accepted reset time of the known answer, or the answer still on its way.
+  // The reset fields a settled failure carries to the escalation: a reset the
+  // provider or the agent stated (plans/0057 §5.3, it outranks the
+  // classifier's), else the accepted reset time of the known answer, or the
+  // answer still on its way. The stated one rides without a registry too, to
+  // no effect: only the registry's down marks read it.
   const resetFields = (): Partial<Watch> => {
+    const stated = acceptedReset(errorInfo, opts.routing?.clock?.() ?? Date.now())
+    if (stated !== undefined) return { resetAt: stated }
     if (classifier === undefined) return {}
     if (answer !== undefined) {
       const at = acceptedReset(answer, classifier.now())
@@ -544,15 +583,27 @@ export async function watch(
     if (raised !== undefined) break
     if (event.session !== sessionID) continue
     source.observe(event)
+    // The account's usage windows (plans/0057 §5.2): logged when they change,
+    // nothing else — not a turn event, so the twin-idle guard is untouched.
+    if (event.type === "limit") {
+      noteWindows(client, event)
+      continue
+    }
     if (event.type === "part") {
       const part = event.part
       idleHandled = false
       // Model output after a retry: the agent's retry got through, so a late
-      // classifier answer no longer settles this turn, and an announced
-      // silence is over.
+      // classifier answer no longer settles this turn, an announced silence
+      // is over, and what was stated about the limit no longer applies — a
+      // later failure of this watch must not carry its reset into a down mark.
       if (part.kind !== "step-start") {
         retrying = false
         quietUntil = undefined
+        const stated = errorInfo as ErrorInfo | undefined
+        if (stated !== undefined && LIMIT_KEYS.some((key) => stated[key] !== undefined)) {
+          const { resetAt: _reset, scope: _scope, retryAfterMs: _wait, limitReason: _reason, ...rest } = stated
+          errorInfo = rest
+        }
       }
       // step-finish increment accumulation (T-003, the one basis that neither
       // duplicates nor misses): re-sends of the same part are not counted
@@ -878,15 +929,18 @@ export async function watch(
       // (design D.1; the name table is supplied by the adapter).
       const classifyMsg = detail.toLowerCase().includes(errName.toLowerCase()) ? detail : `${errName} ${detail}`
       const prev = errorInfo as ErrorInfo | undefined
-      errorInfo = {
-        ...(prev ?? {}),
-        message: prev?.message ? `${prev.message}\n${classifyMsg}` : classifyMsg,
-        ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
-        ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
-        ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
-        // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
-        terminal: true,
-      }
+      errorInfo = withLimit(
+        {
+          ...(prev ?? {}),
+          message: prev?.message ? `${prev.message}\n${classifyMsg}` : classifyMsg,
+          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
+          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
+          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
+          // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
+          terminal: true,
+        },
+        e,
+      )
       // Late step-up (§4.5, §7): an overflow below the top step means the
       // agent compacted before the step-up steer could land — record the
       // next step and go on observing (the compacted session continues).
@@ -913,15 +967,18 @@ export async function watch(
       // A retry means the agent works through a failure again (a later turn
       // of this watch, say): an earlier turn's end is not this signal's.
       const { terminal: _ended, ...before } = errorInfo ?? {}
-      errorInfo = {
-        ...before,
-        ...(e.message !== undefined ? { message: e.message } : {}),
-        ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
-        ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
-        ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
-        ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
-        ...(event.next !== undefined ? { next: event.next } : {}),
-      }
+      errorInfo = withLimit(
+        {
+          ...before,
+          ...(e.message !== undefined ? { message: e.message } : {}),
+          ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
+          ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
+          ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
+          ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
+          ...(event.next !== undefined ? { next: event.next } : {}),
+        },
+        e,
+      )
       // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
       // the class now; otherwise the classifier is asked beside the stream
       // and its answer settles the turn from onAnswer while it still retries.

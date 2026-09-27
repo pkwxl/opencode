@@ -34,8 +34,10 @@
 // AgentRetryPolicy / AgentClient.retryPolicy, what the agent does on its own
 // when a provider request fails, so the driver consults a declared record
 // instead of guessing the agent's behaviour from the shape of one error. The
-// same amendment grows in S3 (0057 §5: AgentError's limit fields and the
-// `limit` event).
+// same amendment grew in S3 (0057 §5): AgentError's limit fields (retryAfterMs,
+// resetAt, scope, limitReason) — what the provider or the agent stated about
+// the limit behind a failure — and the `limit` event, the agent's view of the
+// provider's usage windows on healthy turns too.
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -67,7 +69,34 @@ export type AgentError = {
   // the driver treats as retryable (plans/0015).
   isRetryable?: boolean
   responseBody?: string
+  // The limit fields (plans/0057 §5): each absent when neither the provider
+  // nor the agent stated it — the failure-message classifier may then still
+  // read a reset from the wording (0055 §7.1). A stated value outranks the
+  // classifier's.
+  // The provider's stated wait before a retry may succeed (retry-after).
+  retryAfterMs?: number
+  // The instant the limit resets, epoch ms: a rate-limit header's reset
+  // value, claude's rate_limit_event, or a stated wait counted from the
+  // moment it arrived.
+  resetAt?: number
+  // Which limit the reset belongs to, so a per-minute cap and a weekly quota
+  // are not waited out the same way (0057 §7).
+  scope?: LimitScope
+  // The provider's or agent's own machine-readable limit reason: opencode's
+  // retry action.reason, claude's rateLimitType (with its
+  // overageDisabledReason, `five_hour/out_of_credits`).
+  limitReason?: string
 }
+
+// The limit a stated reset belongs to: a per-minute request or token cap, a
+// rolling five-hour window, a weekly or a daily quota; unknown = a reset was
+// stated for a limit the statement does not name.
+export type LimitScope = "request" | "token" | "5h" | "7d" | "day" | "unknown"
+
+// One usage window of the provider's account, as the agent reports it (the
+// `limit` event). `utilization` is the used share (0.4 = 40 %), absent when
+// the agent did not state it.
+export type LimitWindow = { scope: "5h" | "7d"; resetAt: number; utilization?: number }
 
 // Agent-specific wording for the driver's error classes (chain.ts
 // classifySessionError). The classifier keeps provider-neutral patterns (quota
@@ -185,6 +214,12 @@ export type AgentEvent =
   // when the signal is a turn piece (dedupe/display key, as for parts);
   // `next` is the wait in ms before the next attempt, when stated.
   | { type: "retry"; session: string; id?: string; attempt?: number; next?: number; error: AgentError }
+  // The agent's view of the provider's usage windows (claude:
+  // rate_limit_event), sent when it changes: on healthy turns too, and never
+  // an error by itself — a turn that fails on a rejected window carries the
+  // window in its error event (plans/0057 §5.2). `warning` = still allowed,
+  // near the limit.
+  | { type: "limit"; session: string; status: "allowed" | "warning" | "rejected"; windows: LimitWindow[] }
   // The turn ended and the session waits for input. At-least-once per turn:
   // opencode emits it twice (session.status idle + session.idle), so
   // consumers settle once and ignore further idles until the session shows

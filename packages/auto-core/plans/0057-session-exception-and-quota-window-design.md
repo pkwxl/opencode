@@ -1,7 +1,8 @@
 # 0057 — Session exceptions: the agent's retry policy, quota windows and scheduled waits (design)
 
-Status: **design, ruled; S1 and S2 implemented** (2026-09-26; revised the same day with the field
-evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13 records). Source: the user's request of the same day —
+Status: **design, ruled; S1–S3 implemented** (2026-09-26; revised the same day with the field
+evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13 records;
+S3 done 2026-09-27). Source: the user's request of the same day —
 the session exception flow has deficiencies; the driver should recognize what a coding agent
 reports across agents and models, formulate better wait-and-retry strategies for the rolling
 five-hour and weekly quota limits, know when an agent cures a limit by itself so the driver
@@ -770,6 +771,91 @@ imports the driver domain.
 - **S3 — the structured signal.** The four `AgentError` fields, the header table, claude's
   `rate_limit_event` table and the `limit` event, precedence over the classifier, `shouldAsk`
   narrowing.
+
+  **Done (2026-09-27).** S0's rejected stream is still not captured. §5.2 was built from the
+  2.1.283 SDK schema, the transcript's window record (F19) and the captured `allowed` line
+  (F20), and it is to be checked against the rejected stream once one is saved.
+  - **The amendment** (`src/agent/types.ts`, the seventh amendment's second part).
+    `AgentError` has `retryAfterMs`, `resetAt`, `scope` and `limitReason`, as §5 wrote them;
+    `LimitScope` names the scopes. The `limit` event carries `LimitWindow`s, and it departs
+    from §5.2 in one point: `utilization` is optional. A `rate_limit_event` without
+    `unifiedWindows` (API-key profiles, and the transcript's record) names one window and no
+    utilization. The driver's `ErrorInfo` (`src/chain.ts`) carries the same four fields. They
+    ride beside the class and never decide it (C7).
+  - **The opencode mapping** (`limitFields` in `src/agent/opencode/events.ts`). It follows
+    §5.1's table, with three refinements:
+    - The unified family counts only when its `-status` is absent or `rejected`, and a
+      per-minute cap only when its `-remaining` is absent or zero. Providers send these reset
+      headers on every response, so without the gate a throttled request on an open
+      subscription window would carry a five-hour reset it never hit.
+    - "The most specific reset wins" is read as "the reset that binds". The unified `-reset`
+      names the binding window, and its scope is the window whose own reset it equals, else
+      `unknown`. Without it, a lone window is taken; of two, the fuller one by
+      `-utilization`, else the later. Among the per-minute caps that refused the request,
+      the latest reset binds.
+    - `anthropic-ratelimit-tokens-reset` (the documented combined cap) joins the token row.
+      An OpenAI-family duration gives a `resetAt` as well, and gives `retryAfterMs` only when
+      no retry-after was stated.
+
+    Values parse strictly: RFC 3339 with an offset, an HTTP IMF-fixdate, epoch seconds or
+    milliseconds (a number below 1e9 is no instant), and a Go-style duration. Anything else is
+    dropped. The retry status's `action.reason` becomes `limitReason`. One fact corrects F6's
+    premise. The current opencode server publishes a retry only as the `session.status`
+    (`message`, `action`, `next`) and sends no retry parts. So the headers reach the driver
+    only on `session.error`, and on the retry parts of older servers. On the retry surface,
+    `next` (S2) is still what settles a turn. The Zhipu error codes §5 names under
+    `limitReason` are not read: §5.1's table has no row for them.
+  - **The claude mapping** (`src/agent/claude/stream.ts`). Every `rate_limit_event` with a
+    known status becomes a `limit` event (`allowed_warning` becomes `warning`). Its windows
+    are the unified five-hour and weekly windows, else the one window the event names; the
+    overage-included weekly window is not listed as a second `7d`. The event's info remains
+    the parser's state (S1). A failed turn under a `rejected` status now carries, beside
+    `isRetryable: false`, the `resetAt`, the `scope` (`seven_day*` → `7d`; overage or no
+    type → `unknown`) and the `limitReason` (`five_hour/out_of_credits`). A `rejected`
+    event with no `is_error` result still synthesizes no error; that waits on S0 as before.
+  - **Precedence** (`src/watch.ts`, `src/classify.ts`). The turn's record keeps the latest
+    limit statement, and a stated reset replaces the earlier reset together with its scope.
+    `resetFields` returns a stated reset first, under `acceptedReset`'s horizon, which now
+    takes an `ErrorInfo` too. With a stated reset no `pendingReset` is returned, so a late
+    answer cannot extend the marks past it. The stated reset rides the result without a
+    registry too. It has no effect there, because only the registry's down marks read it;
+    S4's scheduled wait will. Model output clears the statement, as it ends an announced
+    silence. Otherwise a reset stated by a retry the agent got through would carry into
+    the down mark of a later, unrelated failure in the same watch.
+  - **`shouldAsk`.** A failure with a stated `resetAt` is not asked about, on either
+    surface. A retry-after alone counts too: it synthesizes a `resetAt`, and a provider that
+    states its wait is not one of the providers the classifier is for. The same check keeps
+    an answer already on its way from raising the class once a reset is stated.
+  - **The `limit` event in watch.** It is logged when its status or a window's reset
+    changes, once per agent client across its sessions (a `WeakMap`, so a run shows one line
+    per window, not one per session). It is not a turn event, and the twin-idle guard does
+    not see it. Nothing reads it for dispatch (§11 item 10). Persistence is S5.
+  - **Tests.**
+    - `test/agent-events.test.ts`: a `session.error` whose `APIError` carries
+      `retry-after-ms` and the unified headers, the `action.reason` row, and `limitFields`
+      row by row (the binding window, the utilization and later-reset fallbacks, the status
+      and remaining gates, both instant forms, durations, and unparsable values dropped).
+    - `test/agent-claude.test.ts`: the S1 cases now expect the window on the error and a
+      `limit` event per line (the captured `allowed` line verbatim). A new case covers the
+      status and type rows.
+    - `test/classify.test.ts`: the narrowing.
+    - `test/agent-fake.test.ts`:
+      - a native double's retry with a stated reset, which ends as the down mark's `until`
+        with the classifier never asked (§14's case, without a provider);
+      - the classifier not asked about unknown wording when a reset is stated;
+      - a stated reset outranking an answer already in hand;
+      - model output clearing the statement;
+      - the window log's change rule across two sessions and two agents.
+
+    Each fails against the code before S3.
+  - **Log lines.** The goldens are unchanged. New lines:
+    - "ℹ usage windows (session …): 5h 4% used, resets 2026-09-27T03:20:00.000Z; 7d 40% used,
+      resets 2026-09-30T22:00:00.000Z", logged once per change;
+    - the same line headed "⚠ usage windows near their limit" or "⚠ a usage window is spent".
+
+    Under a registry, a header- or stream-stated reset now sets the down mark's `until`
+    without a classifier, and "the classifier reads the failure as …" no longer appears for
+    a failure whose reset was stated.
 - **S4 — the scheduled wait.** §6 with §4.1's ladder skip, then §7's scope table, then `/exit`
   inside the wait, then §11 item 7's wait line and round-conclusion figure.
 - **S5 — persistence** (§8), keyed by the profile's account.

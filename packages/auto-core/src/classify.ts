@@ -69,8 +69,12 @@ export type ClassifierAnswer = { class: ClassifierClass; resetAt?: number }
 // as unknown, or as a rate signal still below its threshold (transient or
 // unknown then); a session error that ends as unknown. Never about overflow,
 // and never about a message the patterns already class as quota or auth (or
-// rate, which is already the escalation's class).
+// rate, which is already the escalation's class). Nor about a failure whose
+// reset the provider or the agent already stated (plans/0057 §5.3): a stated
+// reset outranks the answer's, and the classifier's job is the providers
+// that state nothing.
 export function shouldAsk(surface: "retry" | "error", info: ErrorInfo, cls: ErrorClass, extra?: AgentErrorPatterns): boolean {
+  if (info.resetAt !== undefined) return false
   if (cls === "unknown") return true
   return surface === "retry" && cls === "transient" && rateSignal(info, extra)
 }
@@ -180,8 +184,9 @@ function parseResetAt(value: unknown): number | undefined {
 
 // A reset time that may set when a down mark clears (§7.1): in the future
 // and at most 7 days away; anything else is ignored and the mark clears at
-// the scope boundary as before.
-export function acceptedReset(answer: ClassifierAnswer | undefined, now: number): number | undefined {
+// the scope boundary as before. The same horizon holds for a reset the
+// provider or the agent stated (an ErrorInfo's, plans/0057 §5.3).
+export function acceptedReset(answer: ClassifierAnswer | ErrorInfo | undefined, now: number): number | undefined {
   const at = answer?.resetAt
   return at !== undefined && at > now && at <= now + RESET_HORIZON_MS ? at : undefined
 }
