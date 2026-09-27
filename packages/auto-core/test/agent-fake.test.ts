@@ -1724,6 +1724,65 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     expect(modelDownMark("a")).toEqual({ until: aReset })
   })
 
+  // Zhipu's wording (plans/0057 S4a, F24): the reset instant in Beijing time
+  // with no offset, in whole seconds.
+  const beijing = (at: number) => new Date(at + 8 * 3_600_000).toISOString().slice(0, 19).replace("T", " ")
+  const zhipuFive = (at: number) => `Usage limit reached for 5 hour. Your limit will reset at ${beijing(at)}`
+  const zhipuWeekly = (at: number) => `Weekly/Monthly Limit Exhausted. Your limit will reset at ${beijing(at)}`
+
+  test("a reset stated in Zhipu's wording (S4a): the first retry settles as quota, no ladder, and the wait sleeps to it", async () => {
+    const random = spyOn(Math, "random").mockReturnValue(0)
+    const resetAt = (Math.floor(Date.now() / 1000) + 1) * 1000
+    // opencode's retry status: the provider's words, no status code, no headers.
+    const agent = make({
+      turn: (ctx) =>
+        ctx.n === 1 ? [ev.message(ctx.session, "msg_fail", 5000), { type: "retry", session: ctx.session, attempt: 1, next: 2_000, error: { message: zhipuWeekly(resetAt) } }] : undefined,
+    })
+    const out = capture()
+    let result
+    try {
+      result = await runSession(agent.client, task, "p", opts, fresh(), undefined, undefined, DEFAULTS)
+    } finally {
+      out.restore()
+      random.mockRestore()
+    }
+    expect(result.type).toBe("idle")
+    // Settled on the first retry signal, not after the agent's own retrying.
+    expect(agent.argsOf("abort")).toContainEqual(["ses_1"])
+    expect(out.lines.some((line) => line.includes("transient session error"))).toBe(false)
+    expect(waitLine(out.lines)).toContain("⏳ T-001 the weekly usage window is spent (session error: Weekly/Monthly Limit Exhausted.")
+    expect(waitLine(out.lines)).toContain(`; the weekly usage window resets ${new Date(resetAt).toISOString()}, sleeping until about `)
+    expect(agent.prompts.map((p) => p.session)).toEqual(["ses_1", "ses_2", "ses_3"])
+    expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
+  })
+
+  test("under a registry the reset Zhipu's wording states is the down mark's end (S4a)", async () => {
+    const { routing } = fleet()
+    const aReset = T0 + 2 * 3_600_000
+    const agent = make({ turn: failsFirst((session) => [ev.error(session, { name: "APIError", message: zhipuFive(aReset), statusCode: 429 }), ev.idle(session)]) })
+    const out = capture()
+    try {
+      expect((await runSession(agent.client, task, "p", { routing }, deepChain(), undefined, undefined, DEFAULTS)).type).toBe("idle")
+    } finally {
+      out.restore()
+    }
+    expect(out.lines.some((line) => line.includes("⇄ T-001 quota restricted; keeping chain context, switching model a → b"))).toBe(true)
+    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b"])
+    expect(modelDownMark("a")).toEqual({ until: aReset })
+  })
+
+  test("a limit the event states in structured form outranks the reset in its wording (S4a)", async () => {
+    const header = Math.floor((Date.now() + 3_600_000) / 1000) * 1000
+    const worded = Math.floor((Date.now() + 2 * 3_600_000) / 1000) * 1000
+    const both = await watch(make().client, "s", stream([ev.error("s", { name: "APIError", message: zhipuFive(worded), resetAt: header, scope: "unknown" }), ev.idle("s")]), opts)
+    expect(both.errorClass).toBe("quota")
+    expect(both.resetAt).toBe(header)
+    expect(both.scope).toBe("unknown")
+    const words = await watch(make().client, "s", stream([ev.error("s", { name: "APIError", message: zhipuFive(worded) }), ev.idle("s")]), opts)
+    expect(words.resetAt).toBe(worded)
+    expect(words.scope).toBe("5h")
+  })
+
   test("a per-minute cap stays with the agent's own ladder until it gives up, quota wording included", async () => {
     const refused = (attempt: number, scope?: "request" | "token"): AgentEvent => ({
       type: "retry",

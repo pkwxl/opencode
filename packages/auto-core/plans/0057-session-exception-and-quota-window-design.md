@@ -1,8 +1,9 @@
 # 0057 — Session exceptions: the agent's retry policy, quota windows and scheduled waits (design)
 
-Status: **design, ruled; S1–S4 implemented** (2026-09-26; revised the same day with the field
-evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13 records;
-S3 and S4 done 2026-09-27). Source: the user's request of the same day —
+Status: **design, ruled; S1–S4 and S4a implemented** (2026-09-26; revised the same day with the
+field evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13
+records; S3 and S4 done 2026-09-27; S4a added and done the same day with the opencode field
+evidence of §1.2). Source: the user's request of the same day —
 the session exception flow has deficiencies; the driver should recognize what a coding agent
 reports across agents and models, formulate better wait-and-retry strategies for the rolling
 five-hour and weekly quota limits, know when an agent cures a limit by itself so the driver
@@ -153,6 +154,7 @@ already thrown away the session the recovery was meant to continue (§1 F21).
   `GET /v1/users/me/balance`, no reset time. Zhipu/GLM: error codes 1302/1305, no headers, no
   balance endpoint. So a reset time is available from headers for Anthropic and OpenAI-family,
   from a free endpoint for OpenRouter, and from nothing but wording for Gemini, Zhipu and Kimi.
+  Zhipu's wording turned out to state the reset instant outright (F24).
 - **F16 — "just wait, the agent recovers" is not available on the adapter the driver runs
   (confirmed in the field, F19).** Interactive Claude Code waits out a limit and resumes, with a
   documented five-hour rolling window and a weekly window that resets at a fixed
@@ -240,6 +242,19 @@ already thrown away the session the recovery was meant to continue (§1 F21).
   (`src/interactive.ts:91-98`), after three hours of waiting and a 3m40s recovery session. With
   F20 the driver knows the wait's length in advance, so an operator who asks to stop during a
   known three-hour wait is left with two Ctrl+C (exit 130) as the only prompt exit.
+- **F24 — Zhipu states a spent window's reset in its wording, and opencode relays it before the
+  error (field evidence, §1.2).** Zhipu's coding plan sends no rate-limit headers (F15). Its
+  refusal names the window and the reset instant: "Usage limit reached for 5 hour. Your limit
+  will reset at 2026-09-16 06:28:10", and "Weekly/Monthly Limit Exhausted. Your limit will
+  reset at 2026-10-02 11:25:23". The instant is Beijing time without an offset. The five-hour
+  refusal came at 19:32Z; 06:28:10 read as +08:00 is 22:28:10Z, 2h56m later, and read as UTC it
+  is 10h55m later, which no five-hour window allows. opencode retries the refusal. Its
+  `retryable()` keeps an `APIError`'s message as the retry message, and the adapter passes
+  `message` through (`src/agent/opencode/events.ts`). So each `session.status` retry carries the
+  same text, and the driver holds the statement about 70 s before the `session.error` (§1.2). Nothing read it
+  before S4a. "Weekly/Monthly Limit Exhausted" matched no pattern and classed as `unknown`, and
+  neither text gave a `resetAt`: the headers of §5.1 are absent, and the classifier that reads
+  wording exists only under a registry with a classifier list.
 
 ### 1.1 Field evidence: the 2026-09-25 run
 
@@ -259,6 +274,38 @@ registry and no fallback ring, so no failover was possible and every fault went 
 
 The recovered sessions finished both tasks from the worktree (T-024: 6m36s at 90.5k context;
 T-026: 3m40s at 102.9k). The blank restart was costly but not fatal, which bears on §11 item 8.
+
+### 1.2 Field evidence: opencode on Zhipu, 2026-09-15 to 2026-09-26
+
+`/workspace/kernel-mig/fs/.auto/logs/`, with its sibling targets `virtio` and `net` on the same
+host: opencode on `zai-coding-plan/glm-5.3` (the server default), no registry and no fallback
+ring, a driver build from before this design. The three targets share one account: on
+2026-09-15 all three were refused within 20 s of each other, with the same reset. Log times are
+UTC, checked against the files' modification times.
+
+| | 2026-09-15 (fs, virtio, net) | 2026-09-17 (virtio) | 2026-09-26 (fs, T-039) |
+|---|---|---|---|
+| refused | 19:32:45–19:33:04Z | 01:53:30Z | 17:15:20Z |
+| wording | "Usage limit reached for 5 hour. Your limit will reset at 2026-09-16 06:28:10" | "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-09-17 10:16:43" | "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-02 11:25:23" |
+| reset as +08:00 | 22:28:10Z (+2h56m) | 02:16:43Z (+23m) | 2026-10-02 03:25:23Z (+5d10h) |
+| each later call failed after | under 1 s | 1m14s–1m18s | 1m9s–1m17s |
+| what the driver did | five ladder stubs, a human prompt, blocked at 20:18Z | the ladder | five ladder stubs, then 14 probes at 30-minute intervals until a double Ctrl+C at 01:17Z |
+
+On 2026-09-26 the session's last activity was at 17:14:05 and its `session.error` came at
+17:15:19; on 2026-09-17 the gap was 72 s. Every later stub and probe took about as long. That is
+opencode retrying the refused request before it gave up. The operator saw the limit wording in
+opencode's own log during that time, which matches F24's reading of its retry code. Scheduled on the stated reset, the 2026-09-26 wait is one sleep of five days and ten
+hours and one probe; polled, it is about 260 probes of 70 s each.
+
+The same run met "Rate limit reached for requests" three times (11:58Z, 16:09Z, 16:18Z), with no
+reset stated. Each burst cleared within about seven minutes, on the ladder's second to fourth
+rung. Those calls failed in under a second: the build predates S1, so F3 settled the first retry
+signal at once.
+
+opencode's own log and database for these runs were not kept. Under the target,
+`.local/share/opencode/opencode/` holds only a bootstrap of 2026-09-12, with one session. The raw
+`APIError` (its response body with Zhipu's error code, and its headers) therefore stays S0's open
+opencode half; the wording above is what the driver logged from `session.error`.
 
 ## 2. Constraints
 
@@ -449,7 +496,8 @@ extend-only rule for late answers are unchanged (`src/classify.ts:184-187`,
 `src/failback.ts:108-113`). `shouldAsk` (`src/classify.ts:73-76`) gains one more case where it
 does **not** ask: a limit whose reset the headers already stated. The classifier's remaining job
 is exactly the providers that state nothing (F15's Gemini, Zhipu, Kimi) and wording in other
-languages.
+languages. A wording that states its reset outright is read without it (S4a, F24): Zhipu's two
+spent-window messages rank below a structured statement and above the classifier.
 
 ## 6. Scheduled waits instead of a fixed poll
 
@@ -608,6 +656,7 @@ reasoning; the **Ruled** sentence is the decision.
 | the optional per-entry policy override, validated at load (§11 item 3) | `src/models.ts` |
 | `agentGaveUp`, the policy-aware threshold | `src/chain.ts` |
 | merge order (headers over classifier), `shouldAsk` narrowing | `src/watch.ts`, `src/classify.ts` |
+| a reset stated in a known provider wording (S4a) | `src/chain.ts` `statedInWording`, `src/watch.ts` |
 | the silence budget in the watchdog | `src/watch.ts` |
 | scheduled sleep in the wait-and-probe loop | `src/session.ts` |
 | learned-window persistence (§8, §11 item 4) | `src/failback.ts` + the run state |
@@ -983,6 +1032,61 @@ imports the driver domain.
       case; whether such a failure should write a mark is 0055's to decide.
     - A learned instant dies with the process until S5. S0's rejected claude stream is still
       not captured.
+- **S4a — a reset stated in the provider's wording.** Added with the field evidence of §1.2:
+  on opencode and Zhipu, without a registry, S1–S4 got no instant (F24).
+
+  **Done (2026-09-27).**
+  - **The wording table** (`statedInWording`, `src/chain.ts`, beside the classification
+    patterns, since provider wording evolves there). Two rows: "Usage limit reached for 5 hour"
+    gives `scope: "5h"`, "Weekly/Monthly Limit Exhausted" gives `7d`. Each takes its instant from
+    "Your limit will reset at YYYY-MM-DD HH:MM:SS", read as +08:00. An instant that is past, or
+    for the five-hour row more than five hours (plus a minute) away, is dropped rather than
+    read in another zone. The weekly row has no bound of its own; `acceptedReset`'s horizon
+    still applies downstream, so a monthly reset beyond seven days is polled as before. The
+    rows match the wording, not the agent: z.ai's Anthropic endpoint under claude sends the
+    same text.
+  - **The class.** `QUOTA_RE` gains "limit exhausted", so the weekly wording classes as `quota`
+    and settles on the first retry status. "limit reached" is not added: Zhipu's per-minute
+    "Rate limit reached for requests" must stay a rate signal the agent's backoff owns.
+  - **The merge** (`withWording`, `src/watch.ts`). On both surfaces, the event's own words are
+    read when the event states no limit in structured form: a header- or stream-stated reset
+    outranks the wording, and across events the latest statement stands, as §5.3 has it. The
+    rest follows unchanged:
+    - `shouldAsk` does not ask the classifier;
+    - `resetFields` carries the instant and its scope;
+    - `spentWindow` skips the ladder, and `planSleep` sleeps to the reset;
+    - under a registry, the down mark ends at it.
+  - **Not done.**
+    - Zhipu's error codes (1302, 1308, 1310 and the like) are not read. The raw response body
+      was not captured (§1.2), and the wording already decides.
+    - Kimi's wording is unknown and has no row. Other providers still leave wording to the
+      classifier.
+  - **Tests.**
+    - `test/chain.test.ts`: the three field messages verbatim, their classes, the +08:00
+      reading of all three recorded resets, and the drops: a past instant, a five-hour reset
+      twelve hours ahead, and text with no window or no reset sentence.
+    - `test/agent-fake.test.ts`, the scheduled-wait block:
+      - without a registry, a retry status carrying only the weekly wording: abort at the
+        first retry, no ladder, a sleep to the stated reset, one probe, a fork;
+      - under a registry, the five-hour wording on `session.error`: the ⇄ move, and the down
+        mark ending at the reset;
+      - a structured statement outranking the wording.
+
+    Each fails against the code before S4a.
+  - **Log lines.** The goldens are unchanged. On §1.2's 2026-09-26 event:
+    - the ladder's "↻ … transient session error" lines are gone;
+    - the wait reads "⏳ T-039 the weekly usage window is spent (session error:
+      Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-02 11:25:23); the weekly
+      usage window resets 2026-10-02T03:25:23.000Z, sleeping until about …";
+    - each call settles at opencode's first retry status (its first backoff is 2 s), not after
+      about 70 s.
+
+    The five-hour wording sleeps to its reset in the same way ("the five-hour usage window is
+    spent …").
+  - **This narrows S4's second open item.** A retry status still carries no headers, but on
+    Zhipu the wording now gives the instant. Other wording-only providers still poll without a
+    registry.
+
 - **S5 — persistence** (§8), keyed by the profile's account.
 - **S6 — the durable documentation:** glossary, `docs/structure.md`, the AGENTS.md navigation
   line. Quota probes are deferred (§11 item 5) and have no step.
@@ -1008,6 +1112,8 @@ imports the driver domain.
 - The wait-and-probe loop: a fake clock, one known instant, and the assertions that the sleep
   targets the instant plus jitter, that an instant beyond the horizon falls back to
   `recoveryWait`, and that a successful probe still forks the most valuable session.
+- `test/chain.test.ts` and `test/agent-fake.test.ts`: the provider wordings that state a reset
+  (S4a), verbatim from the field (§1.2), including the drops and the precedence.
 - Goldens are never regenerated; where a log line must change, the change is stated in the step.
 - The classifier's caps, redaction and raise-only merge keep their existing cases; the new
   "headers already stated a reset" case asserts the classifier is not asked.

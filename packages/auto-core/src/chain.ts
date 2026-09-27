@@ -322,7 +322,10 @@ export type ErrorInfo = {
 // (opencode ContextOverflowError / ProviderAuthError) come from its adapter's
 // AgentClient.errorPatterns and are OR-ed in per class. Overflow has no
 // neutral pattern: it is recognized by agent-specific names alone.
-const QUOTA_RE = /insufficient_quota|quota|balance|credit|usage limit/i
+// "limit exhausted" is Zhipu's weekly/monthly wording (plans/0057 F24); a bare
+// "limit reached" would also catch its per-minute "Rate limit reached for
+// requests", which the agent's own backoff cures.
+const QUOTA_RE = /insufficient_quota|quota|balance|credit|usage limit|limit exhausted/i
 const AUTH_RE = /unauthorized|forbidden/i
 const RATE_RE = /rate limit|resource exhausted/i
 // Numeric status codes need digit/dot boundaries: a bare 500|502|503|504
@@ -382,6 +385,40 @@ export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns 
 function hitter(info: ErrorInfo): (neutral: RegExp | undefined, own: RegExp | undefined) => boolean {
   const hay = `${info.message ?? ""}\n${info.responseBody ?? ""}`
   return (neutral, own) => (neutral?.test(hay) ?? false) || (own?.test(hay) ?? false)
+}
+
+// A spent window stated in the provider's own words (plans/0057 S4a, F24):
+// for providers that send no rate-limit headers the error text is the only
+// statement of the reset, and a known wording reads as deterministically as a
+// header. It ranks below a reset the agent states in structured form (a
+// header, claude's stream) and above the failure-message classifier (C3),
+// which is then not asked. Zhipu's coding plans name the window and the reset
+// instant in Beijing time with no offset ("Usage limit reached for 5 hour.
+// Your limit will reset at 2026-09-16 06:28:10"); the field run of 2026-09-15
+// fixes the zone: read as +08:00 that reset was 2h56m after the refusal, read
+// as UTC 10h55m, which no five-hour window allows. The wording is matched,
+// not the agent: the same text reaches the driver through any adapter.
+const WORDING_WINDOWS: { re: RegExp; scope: LimitScope; maxMs?: number }[] = [
+  { re: /usage limit reached for 5 hour/i, scope: "5h", maxMs: 5 * 3_600_000 },
+  { re: /weekly\/monthly limit exhausted/i, scope: "7d" },
+]
+const WORDING_RESET_RE = /your limit will reset at (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})/i
+const WORDING_ZONE = "+08:00"
+// Rounding and clock drift between the provider and this host.
+const WORDING_SLACK_MS = 60_000
+
+// The reset a known wording states, with its scope; undefined when the text
+// matches no row, or its instant is past or further away than the window's
+// own length (a misread zone is dropped, not guessed). The horizon of a
+// stated reset (classify.ts acceptedReset) still applies downstream.
+export function statedInWording(text: string, now: number): { resetAt: number; scope: LimitScope } | undefined {
+  const row = WORDING_WINDOWS.find((w) => w.re.test(text))
+  const got = row !== undefined ? WORDING_RESET_RE.exec(text) : null
+  if (row === undefined || got === null) return undefined
+  const at = Date.parse(`${got[1]}T${got[2]}${WORDING_ZONE}`)
+  if (!Number.isFinite(at) || at <= now) return undefined
+  if (row.maxMs !== undefined && at > now + row.maxMs + WORDING_SLACK_MS) return undefined
+  return { resetAt: at, scope: row.scope }
 }
 
 // A rate signal: a 429, or rate-limit wording (neutral or the agent's own).

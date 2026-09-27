@@ -1,6 +1,7 @@
 // Unit tests for src/chain.ts: model-routing evaluation (resolveModel/splitModel),
 // role derivation (phaseToRole/roleOf), session-error classification (classifySessionError),
-// the agent's retry policy (agentGaveUp/retryPolicyOf, plans/0057 §4).
+// the agent's retry policy (agentGaveUp/retryPolicyOf, plans/0057 §4), the
+// resets stated in a provider's wording (statedInWording, plans/0057 S4a).
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { describe, expect, test } from "bun:test"
@@ -10,7 +11,7 @@ import { claudeStream } from "../src/agent/claude/stream"
 import { OPENCODE_ERROR_PATTERNS, OPENCODE_RETRY_POLICY, splitModel } from "../src/agent/opencode/client"
 import { mapEvent } from "../src/agent/opencode/events"
 import type { AgentEvent, AgentRetryPolicy } from "../src/agent/types"
-import { agentGaveUp, classifySessionError, type ErrorInfo, NEUTRAL_RETRY_POLICY, phaseToRole, resolveModel, retryPolicyOf, roleOf } from "../src/chain"
+import { agentGaveUp, classifySessionError, type ErrorInfo, NEUTRAL_RETRY_POLICY, phaseToRole, resolveModel, retryPolicyOf, roleOf, statedInWording } from "../src/chain"
 import { parsePhaseTypeFile } from "../src/phases/custom"
 import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -175,6 +176,49 @@ describe("classifySessionError (fixed message samples → class)", () => {
   })
   test("unknown: empty input", () => {
     expect(classifySessionError({})).toBe("unknown")
+  })
+})
+
+// plans/0057 F24: the three messages Zhipu's coding plan sent through
+// opencode on 2026-09-15 and 2026-09-26, verbatim. Times are UTC; the reset
+// instant is Beijing time with no offset.
+describe("Zhipu's wording (plans/0057 S4a, F24)", () => {
+  const FIVE = "Usage limit reached for 5 hour. Your limit will reset at 2026-09-16 06:28:10"
+  const WEEK = "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-02 11:25:23"
+  const RATE = "Rate limit reached for requests"
+
+  test("both spent windows class as quota; the per-minute cap stays a rate signal the agent's backoff owns", () => {
+    expect(classifySessionError({ message: FIVE })).toBe("quota")
+    expect(classifySessionError({ message: WEEK })).toBe("quota")
+    expect(classifySessionError({ message: RATE })).toBe("unknown")
+    expect(classifySessionError({ message: RATE, attempt: 4, next: 16_000 }, OPENCODE_ERROR_PATTERNS, OPENCODE_RETRY_POLICY)).toBe("unknown")
+    expect(classifySessionError({ message: RATE, attempt: 5, next: 32_000 }, OPENCODE_ERROR_PATTERNS, OPENCODE_RETRY_POLICY)).toBe("rate")
+  })
+
+  test("the stated reset reads as +08:00, with the window's scope", () => {
+    expect(statedInWording(FIVE, Date.parse("2026-09-15T19:33:04Z"))).toEqual({ resetAt: Date.parse("2026-09-15T22:28:10Z"), scope: "5h" })
+    expect(statedInWording(WEEK, Date.parse("2026-09-26T17:15:20Z"))).toEqual({ resetAt: Date.parse("2026-10-02T03:25:23Z"), scope: "7d" })
+    // The 2026-09-17 weekly event on the same account.
+    const virtio = "Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-09-17 10:16:43"
+    expect(statedInWording(virtio, Date.parse("2026-09-17T01:53:30Z"))?.resetAt).toBe(Date.parse("2026-09-17T02:16:43Z"))
+    // Folded into a longer text (the error name ahead, a response body after).
+    expect(statedInWording(`APIError ${FIVE}\n{"error":{"code":"1308"}}`, Date.parse("2026-09-15T19:33:04Z"))?.scope).toBe("5h")
+  })
+
+  test("an instant that is past, or further away than the window allows, is dropped, not guessed", () => {
+    expect(statedInWording(FIVE, Date.parse("2026-09-15T22:28:10Z"))).toBeUndefined()
+    // Twelve hours ahead: no five-hour window resets that late (a misread zone).
+    expect(statedInWording(FIVE, Date.parse("2026-09-15T10:28:10Z"))).toBeUndefined()
+    // The weekly wording has no bound of its own; the horizon applies downstream.
+    expect(statedInWording(WEEK, Date.parse("2026-09-01T00:00:00Z"))?.scope).toBe("7d")
+  })
+
+  test("no statement without a known window's wording and a reset sentence", () => {
+    const now = Date.parse("2026-09-15T19:33:04Z")
+    expect(statedInWording(RATE, now)).toBeUndefined()
+    expect(statedInWording("Your limit will reset at 2026-09-16 06:28:10", now)).toBeUndefined()
+    expect(statedInWording("Usage limit reached for 5 hour.", now)).toBeUndefined()
+    expect(statedInWording("Usage limit reached for 5 hour. Your limit will reset at 2026-09-16T06:28:10Z", now)).toBeUndefined()
   })
 })
 

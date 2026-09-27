@@ -14,7 +14,7 @@
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
-import { agentGaveUp, classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
+import { agentGaveUp, classifySessionError, retryPolicyOf, statedInWording, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
 import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk, type ClassifierAnswer } from "./classify"
 import { afterSession, autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
@@ -67,6 +67,16 @@ function withLimit(info: ErrorInfo, e: AgentError): ErrorInfo {
     ...(e.retryAfterMs !== undefined ? { retryAfterMs: e.retryAfterMs } : {}),
     ...(e.limitReason !== undefined ? { limitReason: e.limitReason } : {}),
   }
+}
+
+// A failure's own words beneath its structured limit fields (plans/0057
+// S4a): a reset the provider states in a known wording (chain.ts
+// statedInWording) counts as stated when the event states no limit of its
+// own — a header- or stream-stated one outranks it.
+function withWording(e: AgentError, now: number): AgentError {
+  if (e.resetAt !== undefined || e.scope !== undefined) return e
+  const stated = statedInWording(`${e.message ?? ""}\n${e.responseBody ?? ""}`, now)
+  return stated !== undefined ? { ...e, ...stated } : e
 }
 
 const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
@@ -212,6 +222,8 @@ export async function watch(
   let answer: ClassifierAnswer | undefined
   let asked: Promise<ClassifierAnswer | undefined> | undefined
   let raised: ErrorClass | undefined
+  // The run's clock (a registry's injected one, else the wall clock).
+  const clockNow = (): number => opts.routing?.clock?.() ?? Date.now()
   // The reset fields a settled failure carries to the escalation: a reset the
   // provider or the agent stated (plans/0057 §5.3, it outranks the
   // classifier's), else the accepted reset time of the known answer, or the
@@ -220,7 +232,7 @@ export async function watch(
   // read it, and it carries its scope, which the escalation and the wait line
   // read (§7).
   const resetFields = (): Partial<Watch> => {
-    const stated = acceptedReset(errorInfo, opts.routing?.clock?.() ?? Date.now())
+    const stated = acceptedReset(errorInfo, clockNow())
     if (stated !== undefined) return { resetAt: stated, ...(errorInfo?.scope !== undefined ? { scope: errorInfo.scope } : {}) }
     if (classifier === undefined) return {}
     if (answer !== undefined) {
@@ -941,7 +953,7 @@ export async function watch(
           // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
           terminal: true,
         },
-        e,
+        withWording(e, clockNow()),
       )
       // Late step-up (§4.5, §7): an overflow below the top step means the
       // agent compacted before the step-up steer could land — record the
@@ -979,7 +991,7 @@ export async function watch(
           ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
           ...(event.next !== undefined ? { next: event.next } : {}),
         },
-        e,
+        withWording(e, clockNow()),
       )
       // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
       // the class now; otherwise the classifier is asked beside the stream
