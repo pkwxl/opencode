@@ -22,7 +22,7 @@ Migration/upgrade mode notes:
 - Every trade-off made to advance the migration (leaving an old path in place, simplifying a branch, and the like) is a code-change decision:
   record how it was made and annotate it as AUTO-DECISION requires.
 
-The complete subtask list of this task (executed in order; the other items belong to other sessions, do not touch them):
+The subtask list of this task, by title (executed in order; the other items belong to other sessions, do not touch them):
 
 1. write the schema part
 2. write the execution logic
@@ -33,6 +33,8 @@ You are responsible for item 2 of that list only:
 - [ ] write the execution logic
 If docs/T-002/context.md exists, read it first to learn the task background before starting (if it does not exist, read the source yourself as needed).
 This subtask's scope declaration is in docs/T-002/S02/todo.md (written during decomposition — read it first if it exists). If docs/T-002/shared.md (the shared-context index) exists, read the files it lists on demand and by reference. The todo.md/done.md state files are managed by the DRIVER alone: you must not create, rename or delete them — the completion decision for this subtask and the rename belong to the DRIVER.
+
+Verification: run the checks that target this subtask's own changes (its tests, the typecheck or build of what it touched), not the full suite.
 
 Document placement rules: all documents of a task (T-NNN) go inside that task's own directory docs/T-NNN/ (understanding digest context.md,
 shared-context index shared.md, decomposition checklist subtasks.md, wrap-up report report.md);

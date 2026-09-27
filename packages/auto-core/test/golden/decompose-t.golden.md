@@ -34,20 +34,25 @@ This session completes the task-background understanding and the subtask decompo
    - One aspect per subtask: work of different natures (research, implementation, documentation, wiring) is not merged into a single item;
      the files/modules/interfaces/behaviours/scenarios named in the task description are the natural splitting reference;
    - Each item self-contained: executable from the item description alone plus this subtask's todo.md, the task-background digest
-     context.md, the shared-context index shared.md and docs/, and including the way to verify it;
+     context.md, the shared-context index shared.md and docs/, and including the way to verify it — the checks that target the item's own
+     changes (its tests, the typecheck or build of what it touched), not the task's full suite;
    - Each item declares its artifacts: documents state the file path, code states the module/file range;
-   - Budget-oriented: each item should be completable by a single session with a smallish context (on the order of 32.0k tokens);
+   - Budget-oriented: each item's own work — what its session reads and writes beyond the context it starts with (the agent's harness, its
+     prompt and the inherited background) — should be on the order of 32.0k tokens;
+   - No close-out item: the task's final verification (the full suite, the build, the acceptance checks of the task description) is not an
+     item of its own — the last item runs it once, after its own work;
 4. Splitting and artifact criteria for this phase (Testing):
    - Split by test surface / scenario family: each item corresponds to one test file or to one family of closely related scenarios;
    - Keep writing tests apart from fixing defects: implementation defects that the tests expose are appended as separate fix items, not mixed
      into the test-writing item;
    - Test execution follows the test execution protocol (with --test-by-driver enabled, scripts are handed to the DRIVER to run);
-5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each description must be
+5. Write the decomposition into docs/T-002/subtasks.md (the subtask index) as Markdown checklist items. Each item opens with a
+   short title and a colon (the other subtask sessions see only the titles of the items that are not theirs). Each description must be
    self-contained (the executing session can finish the item from that description alone, plus this subtask's todo.md, the shared-context
    index shared.md and docs/), and must declare the item's artifacts at the end of the description with the literal token `Artifacts:` — a
    protocol string the driver parses, so write it verbatim and do not translate it:
 
-- [ ] <subtask description; ends with Artifacts: <path list>>
+- [ ] <short title>: <subtask description; ends with Artifacts: <path list>>
 
 6. Write a scope file for each subtask (item N maps to docs/T-002/S<two-digit zero-padded index>/todo.md, e.g. S01 for item 1),
    containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.
