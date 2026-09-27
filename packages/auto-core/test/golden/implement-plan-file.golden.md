@@ -42,9 +42,9 @@ Phase: R-01.P01
    itself and a dependency cycle are rejected.
 3. Task numbers increment continuously from T-004, and must not reuse a number already taken by an
    existing task directory; each task focuses on one independently deliverable outcome, sized so a single session can
-   finish it within a modest context budget; do not hand-write subtask checklist items (the DRIVER's decompose
-   session generates those automatically at execution time); where there is a dependency order, arrange tasks in
-   executable order (a task depending on an earlier one comes after it).
+   finish it within a modest context budget; do not hand-write subtask checklist items (whether and how a task is
+   split is decided at execution time); where there is a dependency order, arrange tasks in executable order (a
+   task depending on an earlier one comes after it).
 4. End the session immediately once planning is done and the task index and all task documents are written.
 
 ## Constraints

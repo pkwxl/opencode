@@ -68,7 +68,7 @@ Phase: R-01.P02
 3. Task numbers increment continuously from T-005 (auto-numbering: numbers never repeat
    within the target directory; earlier numbers are already taken by historical tasks and must not be reused);
    each task focuses on one independently deliverable outcome; do not hand-write subtask
-   checklist items (the DRIVER's decompose session generates those at execution time);
+   checklist items (whether and how a task is split is decided at execution time);
 4. End the session immediately once planning is done and the task index and all task documents are written.
 ## Constraints
 
