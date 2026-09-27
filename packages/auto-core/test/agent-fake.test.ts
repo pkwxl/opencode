@@ -14,12 +14,12 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentEvent, AgentHost } from "../src/agent/types"
+import type { AgentEvent, AgentHost, AgentRetryPolicy } from "../src/agent/types"
 import { attempt } from "../src/attempt"
 import { singleHost, startPool } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
-import type { SessionChain } from "../src/chain"
+import type { SessionChain, Watch } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
 import type { Opts } from "../src/opts"
@@ -316,6 +316,105 @@ describe("error signals", () => {
     expect(result.type).toBe("idle")
     expect(agent.argsOf("fork")).toEqual([])
     expect(agent.argsOf("create")).toHaveLength(2)
+  })
+})
+
+// A stream with pauses (ms) between its events; "hang" never yields again,
+// the half-open shape.
+async function* timed(steps: (AgentEvent | number | "hang")[]) {
+  for (const step of steps) {
+    if (step === "hang") await new Promise(() => {})
+    else if (typeof step === "number") await new Promise((resolve) => setTimeout(resolve, step))
+    else yield step
+  }
+}
+
+describe("the agent's retry policy (plans/0057 §4)", () => {
+  const POLICY: AgentRetryPolicy = { maxAttempts: 5, backoffCapMs: 10_000, honorsRetryAfter: true, waitsOutLimit: true, silenceBudgetMs: 60_000 }
+  const throttled = (attempt: number, next?: number): AgentEvent => ({
+    type: "retry",
+    session: "s",
+    attempt,
+    ...(next !== undefined ? { next } : {}),
+    error: { message: "too many requests", statusCode: 429 },
+  })
+
+  test("a rate signal is the rate class once the agent's own retrying gave up, as its policy states", async () => {
+    // Attempt 3: the neutral threshold is met, this agent's cap (5) is not.
+    const neutral = make()
+    const early = await watch(neutral.client, "s", stream([throttled(3, 5_000), ev.idle("s")]), opts)
+    expect(early.errorClass).toBe("rate")
+    const declared = make({ retryPolicy: POLICY })
+    const still = await watch(declared.client, "s", stream([throttled(3, 5_000), ev.idle("s")]), opts)
+    expect(still.failover).toBeUndefined()
+    expect(declared.argsOf("abort")).toEqual([])
+    // Its cap spent, or a wait above its own backoff: settled as rate.
+    for (const signal of [throttled(5, 5_000), throttled(1, 15_000)]) {
+      const agent = make({ retryPolicy: POLICY })
+      const result = await watch(agent.client, "s", stream([signal, ev.idle("s")]), opts)
+      expect(result.errorClass).toBe("rate")
+      expect(result.failover).toBe(true)
+      expect(agent.argsOf("abort")).toEqual([["s"]])
+    }
+  })
+
+  test("an agent that does not wait out a limit: its turn ending on a rate signal is the rate class", async () => {
+    const ended = [ev.error("s", { name: "rate_limit", message: "request throttled", statusCode: 429 }), ev.idle("s")]
+    const gives = make({ retryPolicy: { ...POLICY, waitsOutLimit: false } })
+    expect((await watch(gives.client, "s", stream(ended), opts)).errorClass).toBe("rate")
+    const waits = make({ retryPolicy: POLICY })
+    expect((await watch(waits.client, "s", stream(ended), opts)).errorClass).toBe("unknown")
+  })
+
+  test("a registry entry's retry override lays over the adapter's record", async () => {
+    const agent = make({ retryPolicy: POLICY })
+    const entry: ModelEntry = { name: "m", layer: "project", agent: "a", retry: { maxAttempts: 2 } }
+    const result = await watch(agent.client, "s", stream([throttled(2, 5_000), ev.idle("s")]), opts, undefined, undefined, undefined, DEFAULTS, undefined, { name: "m", label: "T-001", entry })
+    expect(result.errorClass).toBe("rate")
+  })
+
+  // §4.2: the probe fails on every call; a wait the agent announced beyond
+  // its silence budget holds the half-open verdict until the wait's end.
+  const quiet: AgentRetryPolicy = { ...POLICY, silenceBudgetMs: 0 }
+  const unavailable = (next: number): AgentEvent => ({ type: "retry", session: "s", attempt: 1, next, error: { message: "service unavailable", statusCode: 503 } })
+  const unreachable = { get: new Error("connection refused") }
+  const capture = async (run: () => Promise<Watch>): Promise<{ result: Watch; lines: string[] }> => {
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "))
+    })
+    try {
+      return { result: await run(), lines }
+    } finally {
+      printed.mockRestore()
+    }
+  }
+
+  test("an announced silence: the line names its end, and the probe's failures inside it are not counted", async () => {
+    const agent = make({ retryPolicy: quiet, fail: unreachable })
+    const { result, lines } = await capture(() =>
+      watch(agent.client, "s", timed([unavailable(300), 150, ev.text("s", "t", "back"), ev.idle("s")]), { idleMs: 20 }),
+    )
+    expect(result.error).toBe("")
+    expect(lines.some((line) => /⏳ the agent waits \S+ before retrying \(attempt 1\) \(session s\); no events are expected until \d{4}-/.test(line))).toBe(true)
+    expect(lines.some((line) => line.includes("inside the agent's announced wait; not counted before"))).toBe(true)
+    expect(agent.argsOf("abort")).toEqual([])
+    // Without honorsRetryAfter the same wait is not announced: two failures
+    // judge the connection half-open long before the agent speaks again.
+    const deaf = make({ retryPolicy: { ...quiet, honorsRetryAfter: false }, fail: unreachable })
+    const judged = await watch(deaf.client, "s", timed([unavailable(300), 150, ev.text("s", "t", "back"), ev.idle("s")]), { idleMs: 20 })
+    expect(judged.error).toContain("half-open")
+  })
+
+  test("past the announced end the probe counts again, and model output ends the silence early", async () => {
+    const past = make({ retryPolicy: quiet, fail: unreachable })
+    const late = await watch(past.client, "s", timed([unavailable(80), "hang"]), { idleMs: 20 })
+    expect(late.error).toContain("half-open")
+    expect(late.durationMs ?? 0).toBeGreaterThanOrEqual(80)
+    const resumed = make({ retryPolicy: quiet, fail: unreachable })
+    const early = await watch(resumed.client, "s", timed([unavailable(60_000), 5, ev.text("s", "t", "retry got through"), "hang"]), { idleMs: 20 })
+    expect(early.error).toContain("half-open")
+    expect(early.durationMs ?? 0).toBeLessThan(10_000)
   })
 })
 

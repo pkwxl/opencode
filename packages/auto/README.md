@@ -645,7 +645,10 @@ when absent the agent's own default model is used (the prompt carries no model),
 exclusive (a window list); `keys` is an ordered key ring (opencode only); `wider` is the context step
 (opencode only); `variant` passes through opencode's per-prompt variant (e.g. reasoning effort; claude
 rejects the field at load); `context` is optional (the context window in thousand tokens, for agents that
-do not report one before startup).
+do not report one before startup); `retry` is optional and overrides fields of the agent's retry policy
+(`maxAttempts`, `backoffCapMs`, `honorsRetryAfter`, `waitsOutLimit`, `silenceBudgetMs`; auto-core
+plans/0057 §4) where the profile changes how the agent retries, e.g. a claude profile whose `env` sets
+`CLAUDE_CODE_RETRY_WATCHDOG` or `CLAUDE_CODE_MAX_RETRIES`.
 
 ### Tiers and routing
 

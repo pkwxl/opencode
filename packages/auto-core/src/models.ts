@@ -43,6 +43,7 @@ import { accessSync, constants, statSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
+import type { AgentRetryPolicy } from "./agent/types"
 import { checkTimeZone, DEFAULT_WINDOW_TZ, parseWindow, type ModelWindow } from "./model-window"
 import { PHASE_LETTERS, TIERS, type Tier } from "./phases/registry"
 import { registeredAdapterNames, shellProfile } from "./shell"
@@ -119,7 +120,15 @@ export type ModelEntry = {
   only?: ModelWindow[]
   // The key ring as references (opencode only, §4.3).
   keys?: ModelReference[]
+  // Fields of the agent's retry policy this entry overrides (plans/0057 §11
+  // item 3): what its profile's environment or its provider changes about
+  // the adapter's record, laid over it field by field (chain.ts retryPolicyOf).
+  retry?: RetryOverride
 }
+
+// A model entry's `retry` (plans/0057 §4, §11 item 3): any fields of the
+// agent's retry policy.
+export type RetryOverride = Partial<AgentRetryPolicy>
 
 export type TierList = { tier: Tier; names: string[]; layer: RegistryLayerName }
 
@@ -178,7 +187,8 @@ const TOP_FIELDS = ["tz", "agents", "models", "tiers", "routes", "classifier"]
 const SECTIONS = ["agents", "models", "tiers", "routes"] as const
 type Section = (typeof SECTIONS)[number]
 const PROFILE_FIELDS = ["adapter", "bin", "env", "server"]
-const MODEL_FIELDS = ["agent", "model", "wider", "variant", "context", "avoid", "only", "keys"]
+const MODEL_FIELDS = ["agent", "model", "wider", "variant", "context", "avoid", "only", "keys", "retry"]
+const RETRY_FIELDS = ["maxAttempts", "backoffCapMs", "honorsRetryAfter", "waitsOutLimit", "silenceBudgetMs"]
 const REFERENCE_HINT = "{env:NAME} or {file:path}"
 
 // ---------------------------------------------------------------------------
@@ -617,6 +627,7 @@ class Validator {
       }
       if (value.keys !== undefined && !noModel("keys") && onlyOpencode("keys"))
         entry.keys = this.keys(layer, `${where}.keys`, value.keys)
+      if (value.retry !== undefined) entry.retry = this.retry(layer, `${where}.retry`, value.retry)
     }
     return models
   }
@@ -702,6 +713,44 @@ class Validator {
       else keys.push(ref)
     })
     return keys
+  }
+
+  // The retry override: known fields only, each checked on its own; an empty
+  // object is refused like the other empty settings.
+  // AUTO-RESOLVE: is `retry` allowed on an entry without `model`? -> yes (the policy describes the agent's retrying, which the agent's default model goes through as well)
+  // AUTO-RESOLVE: is `retry` limited to some adapters? -> no (every adapter retries somehow; an adapter that declares no policy gets the driver's neutral record, and the override lays over that)
+  private retry(layer: RegistryLayer, where: string, raw: unknown): RetryOverride | undefined {
+    if (!isRecord(raw) || !Object.keys(raw).length) {
+      this.fail(layer, where, `must be an object with at least one of ${RETRY_FIELDS.join(", ")}`)
+      return undefined
+    }
+    this.unknownFields(layer, where, raw, RETRY_FIELDS)
+    const retry: RetryOverride = {}
+    const { maxAttempts, backoffCapMs, honorsRetryAfter, waitsOutLimit, silenceBudgetMs } = raw
+    if (maxAttempts !== undefined) {
+      if (typeof maxAttempts !== "number" || !Number.isInteger(maxAttempts) || maxAttempts < 1)
+        this.fail(layer, `${where}.maxAttempts`, "must be a positive whole number (the agent's own attempt cap)")
+      else retry.maxAttempts = maxAttempts
+    }
+    const ms = (field: string, value: unknown, what: string): number | undefined => {
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value
+      this.fail(layer, `${where}.${field}`, `must be a number of milliseconds, 0 or more (${what})`)
+      return undefined
+    }
+    if (backoffCapMs !== undefined) {
+      const value = ms("backoffCapMs", backoffCapMs, "the longest wait the agent's own backoff chooses")
+      if (value !== undefined) retry.backoffCapMs = value
+    }
+    if (silenceBudgetMs !== undefined) {
+      const value = ms("silenceBudgetMs", silenceBudgetMs, "the silence taken in stride while the agent backs off")
+      if (value !== undefined) retry.silenceBudgetMs = value
+    }
+    for (const [field, value] of [["honorsRetryAfter", honorsRetryAfter], ["waitsOutLimit", waitsOutLimit]] as const) {
+      if (value === undefined) continue
+      if (typeof value !== "boolean") this.fail(layer, `${where}.${field}`, "must be true or false")
+      else retry[field] = value
+    }
+    return retry
   }
 
   // A list of existing model names.

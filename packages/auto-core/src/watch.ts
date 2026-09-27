@@ -14,12 +14,12 @@
 
 import { join, relative } from "node:path"
 import type { AgentClient, AgentEvent } from "./agent/types"
-import { classifySessionError, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
+import { classifySessionError, retryPolicyOf, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
 import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk, type ClassifierAnswer } from "./classify"
 import { afterSession, autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete, saveHandover } from "./handover"
-import { log, vlog } from "./log"
+import { formatDuration, log, vlog } from "./log"
 import type { Opts } from "./opts"
 import { handoffFile, renderStepUp, renderStuckHint, renderTestWrapup, renderTestResult } from "./prompt"
 import { compactText, sameIssue, type ResolveEvent } from "./resolve"
@@ -147,6 +147,16 @@ export async function watch(
   let steerModel: string | undefined = steerContext?.model
   let stepNow = steerContext?.step ?? 0
   let reached: { step: number; model: string } | undefined
+  // The agent's retry policy (plans/0057 §4): the adapter's record with the
+  // registry entry's override. Every pattern verdict below reads the rate
+  // threshold from it — a rate signal is the rate class once the agent gave
+  // up curing it by itself (chain.ts agentGaveUp).
+  const policy = retryPolicyOf(client.retryPolicy, steerContext?.entry?.retry)
+  const classify = (info: ErrorInfo): ErrorClass => classifySessionError(info, client.errorPatterns, policy)
+  // An announced silence (§4.2): the end of the wait the agent's last retry
+  // signal named, when that wait is longer than the policy's silence budget.
+  // Until then the liveness probe counts no failure; model output ends it.
+  let quietUntil: number | undefined
   // —— The failure-message classifier (plans/0055 §7.1) ——
   // Under a registry with a classifier list, a failure the patterns leave
   // undecided is read by a classifier model beside the event stream: a
@@ -186,9 +196,9 @@ export async function watch(
     if (got === undefined || !consuming) return
     answer = got
     if (!retrying || errorInfo === undefined || raised !== undefined) return
-    const cls = classifySessionError(errorInfo, client.errorPatterns)
+    const cls = classify(errorInfo)
     if (!shouldAsk("retry", errorInfo, cls, client.errorPatterns)) return
-    const merged = mergeClass(cls, got.class, errorInfo)
+    const merged = mergeClass(cls, got.class, errorInfo, policy)
     if (merged !== "quota" && merged !== "auth" && merged !== "rate") return
     raised = merged
     trip()
@@ -214,7 +224,7 @@ export async function watch(
       return { cls, classified: false }
     }
     answer = known
-    const merged = mergeClass(cls, known.class, info)
+    const merged = mergeClass(cls, known.class, info, policy)
     return { cls: merged, classified: merged !== cls }
   }
   const raisedLine = (cls: ErrorClass): void => {
@@ -485,6 +495,10 @@ export async function watch(
         if (!probeActive || halfOpen) return
         if (ok) {
           probeFailures = 0
+        } else if (quietUntil !== undefined && Date.now() < quietUntil) {
+          // The agent announced this silence (§4.2): the verdict waits for
+          // the end it named.
+          log(`⚠ connectivity probe failed (session ${sessionID}) inside the agent's announced wait; not counted before ${new Date(quietUntil).toISOString()}`)
         } else {
           probeFailures += 1
           log(`⚠ connectivity probe failure ${probeFailures}/${PROBE_MAX_FAILURES} (session ${sessionID}); connection suspected half-open`)
@@ -534,8 +548,12 @@ export async function watch(
       const part = event.part
       idleHandled = false
       // Model output after a retry: the agent's retry got through, so a late
-      // classifier answer no longer settles this turn.
-      if (part.kind !== "step-start") retrying = false
+      // classifier answer no longer settles this turn, and an announced
+      // silence is over.
+      if (part.kind !== "step-start") {
+        retrying = false
+        quietUntil = undefined
+      }
       // step-finish increment accumulation (T-003, the one basis that neither
       // duplicates nor misses): re-sends of the same part are not counted
       // twice.
@@ -866,11 +884,13 @@ export async function watch(
         ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
         ...(e.responseBody !== undefined ? { responseBody: e.responseBody } : {}),
         ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
+        // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
+        terminal: true,
       }
       // Late step-up (§4.5, §7): an overflow below the top step means the
       // agent compacted before the step-up steer could land — record the
       // next step and go on observing (the compacted session continues).
-      if (classifySessionError(errorInfo, client.errorPatterns) === "overflow") await stepLate()
+      if (classify(errorInfo) === "overflow") await stepLate()
       continue
     }
     // retry (B.4 the two signals unified / D.2 trigger surfaces 2 and 3,
@@ -890,8 +910,11 @@ export async function watch(
       const e = event.error
       idleHandled = false
       retrying = true
+      // A retry means the agent works through a failure again (a later turn
+      // of this watch, say): an earlier turn's end is not this signal's.
+      const { terminal: _ended, ...before } = errorInfo ?? {}
       errorInfo = {
-        ...(errorInfo ?? {}),
+        ...before,
         ...(e.message !== undefined ? { message: e.message } : {}),
         ...(e.statusCode !== undefined ? { statusCode: e.statusCode } : {}),
         ...(e.isRetryable !== undefined ? { isRetryable: e.isRetryable } : {}),
@@ -902,7 +925,7 @@ export async function watch(
       // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
       // the class now; otherwise the classifier is asked beside the stream
       // and its answer settles the turn from onAnswer while it still retries.
-      const { cls, classified } = consult("retry", errorInfo, classifySessionError(errorInfo, client.errorPatterns))
+      const { cls, classified } = consult("retry", errorInfo, classify(errorInfo))
       if (cls === "quota" || cls === "auth" || cls === "rate") {
         await client.abort(sessionID)
         const msg = errorInfo.message ?? error
@@ -926,6 +949,19 @@ export async function watch(
       // request that overflowed before compacting): the late step-up applies
       // here exactly as at the session.error surface above.
       if (cls === "overflow") await stepLate()
+      // An announced silence (§4.2): the agent honours a wait longer than its
+      // silence budget and says nothing more until it is over. The line names
+      // its end; the liveness probe counts no failure before it.
+      if (policy.honorsRetryAfter && event.next !== undefined && event.next > policy.silenceBudgetMs) {
+        const until = Date.now() + event.next
+        if (quietUntil === undefined || Math.abs(until - quietUntil) >= 1000) {
+          log(
+            `⏳ the agent waits ${formatDuration(event.next)} before retrying${event.attempt !== undefined ? ` (attempt ${event.attempt})` : ""} (session ${sessionID}); ` +
+              `no events are expected until ${new Date(until).toISOString()}`,
+          )
+        }
+        quietUntil = until
+      }
       if (event.id !== undefined && !seen.has(event.id)) {
         seen.add(event.id)
         vlog(`  ↻ request retry (attempt ${event.attempt})`)
@@ -1033,7 +1069,7 @@ export async function watch(
   let finalClass: ErrorClass | undefined
   let finalClassified = false
   if (error) {
-    const verdict = classifySessionError(errorInfo ?? {}, client.errorPatterns)
+    const verdict = classify(errorInfo ?? {})
     const consulted = errorInfo !== undefined ? consult("error", errorInfo, verdict) : { cls: verdict, classified: false }
     finalClass = consulted.cls
     finalClassified = consulted.classified

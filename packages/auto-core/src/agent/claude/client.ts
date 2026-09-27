@@ -25,7 +25,7 @@
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { AgentCapabilities, AgentClient, AgentEnv, AgentErrorPatterns, AgentEvent, AgentResult, PermissionPreset, PromptInput } from "../types"
+import type { AgentCapabilities, AgentClient, AgentEnv, AgentErrorPatterns, AgentEvent, AgentResult, AgentRetryPolicy, PermissionPreset, PromptInput } from "../types"
 import { contractArgs } from "./contract"
 import { claudeStream, MODEL_PREFIX } from "./stream"
 
@@ -51,6 +51,24 @@ export const CLAUDE_ERROR_PATTERNS: AgentErrorPatterns = {
   auth: /authentication_failed|invalid api key|not logged in|please run \/login/i,
   rate: /rate_limit/i,
   transient: /server_error|claude process exited/i,
+}
+
+// claude's own retry policy in `-p` mode, read from the 2.1.283 CLI (plans/0057
+// §13 S0): 10 retries (CLAUDE_CODE_MAX_RETRIES changes it, clamped to 15;
+// each api_retry line states it as max_retries); a backoff of 500 ms doubling
+// per attempt, capped at 32 s, plus up to 25 % jitter — 40 s at most; a
+// provider's retry-after is honoured, but a wait above 60 s makes the CLI give
+// up at once instead (retry_after_too_long), so no silence is longer. A spent
+// subscription window is not retried at all: the turn ends with a synthetic
+// API-error message (F19). CLAUDE_CODE_RETRY_WATCHDOG changes all of this
+// (300 retries, waits up to 6 h); a profile that sets it needs a per-entry
+// override in the registry.
+export const CLAUDE_RETRY_POLICY: AgentRetryPolicy = {
+  maxAttempts: 10,
+  backoffCapMs: 40_000,
+  honorsRetryAfter: true,
+  waitsOutLimit: false,
+  silenceBudgetMs: 60_000,
 }
 
 // One subprocess, as the manager needs it (Bun.spawn in production, a scripted
@@ -328,6 +346,7 @@ export function claudeAgent(options: ClaudeAgentOptions): AgentClient & { close(
   return {
     capabilities: CLAUDE_CAPABILITIES,
     errorPatterns: CLAUDE_ERROR_PATTERNS,
+    retryPolicy: CLAUDE_RETRY_POLICY,
     async create({ title }) {
       const id = crypto.randomUUID()
       sessions.set(id, { state: "new", title })

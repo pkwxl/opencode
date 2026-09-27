@@ -42,6 +42,7 @@ import {
   type RegistryAgentProfile,
   type RegistryLayer,
   type RegistryLayerName,
+  type RetryOverride,
 } from "./models"
 import { loadPhaseTypes } from "./phases/custom"
 import type { PhaseTypeEntry, Tier } from "./phases/registry"
@@ -193,6 +194,8 @@ export type ModelRow = {
   window?: string
   // The key ring of the entry's provider, when it has one.
   ring?: { provider: string; size: number }
+  // The entry's retry-policy override (plans/0057 §11 item 3), as written.
+  retry?: RetryOverride
   state: CandidateState
 }
 
@@ -409,6 +412,7 @@ function modelRow(entry: ModelEntry, ctx: StateContext): ModelRow {
     steps: entry.model === undefined ? [] : [entry.model, ...(entry.wider ?? [])],
     ...(entry.variant ? { variant: entry.variant } : {}),
     ...(entry.context !== undefined ? { context: entry.context } : {}),
+    ...(entry.retry !== undefined ? { retry: entry.retry } : {}),
     ...(windows ? { windows: { kind: windows, texts: (entry[windows] ?? []).map((item) => item.text) } } : {}),
     ...(window !== undefined ? { window } : {}),
     state,
@@ -523,6 +527,8 @@ export function formatModels(description: ModelsDescription): string[] {
     if (model.context !== undefined) parts.push(`context ${model.context}k`)
     if (model.windows) parts.push(`${model.windows.kind} ${model.windows.texts.join(", ") || "(none)"}`)
     if (model.ring) parts.push(`ring ${model.ring.provider} (${keyCount(model.ring.size)})`)
+    if (model.retry)
+      parts.push(`retry ${Object.entries(model.retry).map(([field, value]) => `${field} ${value}`).join(", ")}`)
     lines.push(`  ${model.name.padEnd(modelWidth)}  ${mark(model.layer)}  ${parts.join(" · ")}`)
     const now = [model.state.usable ? "✓ usable now" : `✗ not usable now: ${model.state.reasons.join("; ")}`]
     if (model.window !== undefined && model.state.usable) now.push(`window ${model.window}`)

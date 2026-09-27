@@ -210,7 +210,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ models: { glm: { agent: "opencode", aviod: [] } } }))
     const { result, lines } = await run(dir)
     expect(result).toEqual({ exit: 1 })
-    expect(lines).toEqual([`${LAYER}: models.glm: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys)`])
+    expect(lines).toEqual([`${LAYER}: models.glm: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys, retry)`])
   })
 
   test("a strict registry error exits 1 naming the field and the layer; nothing is written", async () => {

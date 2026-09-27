@@ -334,7 +334,7 @@ describe("strict errors name the field and the layer", () => {
     )
     expect(await problems()).toEqual([
       `${OPERATOR()}: agents.opencode: unknown field "proxy" (known: adapter, bin, env, server)`,
-      `${OPERATOR()}: models.glm: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys)`,
+      `${OPERATOR()}: models.glm: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys, retry)`,
     ])
   })
 
@@ -481,6 +481,45 @@ describe("strict errors name the field and the layer", () => {
     ])
     await writeOperator({ models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6", variant: "high" } } })
     expect((await loaded()).models.get("glm")!.variant).toBe("high")
+  })
+
+  // plans/0057 §11 item 3: the agent's retry policy, overridden per entry.
+  test("a retry override keeps the fields it names, on any adapter and without model", async () => {
+    await writeOperator({
+      agents: { opencode: { adapter: "opencode" }, claude: { adapter: "claude" } },
+      models: {
+        opus: { agent: "claude", model: "opus", retry: { maxAttempts: 300, waitsOutLimit: true, silenceBudgetMs: 21_600_000 } },
+        glm: { agent: "opencode", model: "zhipuai/glm-4.6", retry: { backoffCapMs: 0, honorsRetryAfter: false } },
+        plain: { agent: "claude", retry: { maxAttempts: 15 } },
+      },
+    })
+    const models = (await loaded()).models
+    expect(models.get("opus")!.retry).toEqual({ maxAttempts: 300, waitsOutLimit: true, silenceBudgetMs: 21_600_000 })
+    expect(models.get("glm")!.retry).toEqual({ backoffCapMs: 0, honorsRetryAfter: false })
+    expect(models.get("plain")!.retry).toEqual({ maxAttempts: 15 })
+  })
+
+  test("a bad retry override names each bad field", async () => {
+    await writeOperator(
+      fleet({
+        a: { agent: "opencode", retry: {} },
+        b: { agent: "opencode", retry: [3] },
+        c: { agent: "opencode", retry: { maxAttempts: 0, backoffCapMs: -1, honorsRetryAfter: "yes", attempts: 3 } },
+        d: { agent: "opencode", retry: { maxAttempts: 2.5, silenceBudgetMs: "10m", waitsOutLimit: 1 } },
+      }),
+    )
+    const known = "maxAttempts, backoffCapMs, honorsRetryAfter, waitsOutLimit, silenceBudgetMs"
+    expect(await problems()).toEqual([
+      `${OPERATOR()}: models.a.retry: must be an object with at least one of ${known}`,
+      `${OPERATOR()}: models.b.retry: must be an object with at least one of ${known}`,
+      `${OPERATOR()}: models.c.retry: unknown field "attempts" (known: ${known})`,
+      `${OPERATOR()}: models.c.retry.maxAttempts: must be a positive whole number (the agent's own attempt cap)`,
+      `${OPERATOR()}: models.c.retry.backoffCapMs: must be a number of milliseconds, 0 or more (the longest wait the agent's own backoff chooses)`,
+      `${OPERATOR()}: models.c.retry.honorsRetryAfter: must be true or false`,
+      `${OPERATOR()}: models.d.retry.maxAttempts: must be a positive whole number (the agent's own attempt cap)`,
+      `${OPERATOR()}: models.d.retry.silenceBudgetMs: must be a number of milliseconds, 0 or more (the silence taken in stride while the agent backs off)`,
+      `${OPERATOR()}: models.d.retry.waitsOutLimit: must be true or false`,
+    ])
   })
 
   test("a literal key is refused and never quoted", async () => {
@@ -748,7 +787,7 @@ describe("layers", () => {
       tiers: { simple: ["glm", "k9"] },
     })
     expect(await problems()).toEqual([
-      `${PROJECT}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys)`,
+      `${PROJECT}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys, retry)`,
       `${PROJECT}: tiers.simple: names no model: "k9" is not defined (defined: opus, opus-b, k3, glm, k2, free)`,
     ])
     // A ring conflict across layers names both.

@@ -1,7 +1,7 @@
 # 0057 — Session exceptions: the agent's retry policy, quota windows and scheduled waits (design)
 
-Status: **design, ruled; S1 implemented** (2026-09-26; revised the same day with the field
-evidence of §1.1, all ten points of §11 ruled as recommended, and S1 done as §13 records). Source: the user's request of the same day —
+Status: **design, ruled; S1 and S2 implemented** (2026-09-26; revised the same day with the field
+evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13 records). Source: the user's request of the same day —
 the session exception flow has deficiencies; the driver should recognize what a coding agent
 reports across agents and models, formulate better wait-and-retry strategies for the rolling
 five-hour and weekly quota limits, know when an agent cures a limit by itself so the driver
@@ -628,7 +628,8 @@ imports the driver domain.
     --verbose` saves the lines. §5.2 is checked against them before S3.
   - **claude's throttle numbers** (`maxAttempts`, `backoffCapMs` for a 429 or `overloaded`),
     from its `api_retry` lines, and what a resumed session sends for F19's synthetic message
-    (§11 item 8).
+    (§11 item 8). The numbers were read from the 2.1.283 CLI in S2 (below); what a resumed
+    session sends is still open.
   - **The opencode half, unchanged.** One opencode turn against a 429 with headers, capturing the
     `APIError` body (F6, F13).
 
@@ -693,6 +694,79 @@ imports the driver domain.
     Both events lose their five stub sessions. The timing gain belongs to S4.
 - **S2 — the policy record.** `AgentRetryPolicy` on both adapters with the registry's per-entry
   override, `agentGaveUp` in `src/chain.ts`, the silence budget in the watchdog. Closes U3.
+
+  **Done (2026-09-26).**
+  - **The record** (`src/agent/types.ts`, the seventh amendment's first part;
+    `AgentClient.retryPolicy`, absent = the neutral record). It has five of §4's six fields.
+    `terminal` is not built. Every adapter already maps its final failure onto the `error`
+    event: opencode's `session.error`, claude's failing `result` line and its process exit alike.
+    So the driver reads the terminal signal from the event type (`ErrorInfo.terminal`, set by
+    the error surface and cleared by a later retry), and a per-adapter description of it would
+    have no reader.
+  - **opencode's values** (`OPENCODE_RETRY_POLICY`): no cap, `backoffCapMs` 30 s, honours
+    retry-after, waits out a limit, and a `silenceBudgetMs` of 10 minutes (the probe's default
+    interval, §4's "else `PROBE_INTERVAL_MS`"). Reading `retry.ts` again corrected F4 in one
+    point. The 30 s cap holds only when the error carries no response headers. With headers
+    but no retry-after, the 2 s backoff doubles without a cap. So a wait above 30 s is the
+    provider's, or the backoff after a fifth failure in a row (32 s). Either way the agent will
+    not cure the failure sooner, which is what §4.1 asks.
+  - **claude's values** (`CLAUDE_RETRY_POLICY`), read from the 2.1.283 CLI rather than a smoke
+    check. The default is 10 retries; `CLAUDE_CODE_MAX_RETRIES` changes it, clamped to 15, and
+    every `api_retry` line states it as `max_retries`. The backoff is `min(500 ms ·
+    2^(n−1), 32 s)` plus up to 25 % jitter, so 40 s at most. A provider's retry-after is
+    honoured up to 60 s; above that the CLI gives up at once (`retry_after_too_long`), so no
+    claude silence is longer than 60 s, and that is its budget. `waitsOutLimit` is false
+    (F19). `CLAUDE_CODE_RETRY_WATCHDOG` changes the whole policy (300 retries, waits up to
+    6 h), and it is the case the per-entry override exists for.
+  - **`agentGaveUp` and the neutral record** (`src/chain.ts`). `NEUTRAL_RETRY_POLICY` is the old
+    pair of constants written as a record: three attempts, a minute, waits out a limit,
+    announces nothing. So an adapter without a policy behaves exactly as before, and there is
+    one code path. `rateThresholdMet` and `classifySessionError` take the policy, and so does
+    the classifier's `mergeClass`. watch computes the session's policy once:
+    `retryPolicyOf(client.retryPolicy, entry.retry)`. The classifier's own one-shot session
+    does the same.
+  - **The override** (`models.<name>.retry`, `src/models.ts`). It takes any of the five fields,
+    each validated on its own, with unknown fields and an empty object refused. It is allowed
+    on every adapter, and without `model`, since the agent's default model retries the same
+    way. The `models` command shows it as written.
+  - **The silence budget** (`src/watch.ts`). This is built as §4.2 says, but its premise needs
+    a correction. A retry that names a wait above the budget (with `honorsRetryAfter`) is
+    logged with its end, and until that end a failed liveness probe is logged but not counted.
+    Model output ends the silence early. The premise was that the watchdog would otherwise
+    judge the session dead ten minutes in. It would not. The probe asks `get`, which a live
+    agent answers during its wait: opencode's server serves it, and the claude adapter answers
+    from its own table. So for today's two adapters the rule changes nothing while the agent
+    lives. When the driver cannot reach the agent at all, it defers the half-open verdict to
+    the announced end at the latest. What U3 asked is answered by the rest of S2. A rate-signal
+    wait that the agent's own backoff would not choose now settles the turn and escalates, and
+    no longer sits silent. The wait that does sit silent (a transient one) is announced with
+    its end. One silent-wait hazard is left, and it is not the probe. The opencode adapter caps
+    the synchronous prompt POST at two hours (`TURN_TIMEOUT_MS`,
+    `src/agent/opencode/server.ts`). A turn that outlasts it is read as a failed dispatch,
+    whatever its events say. Only a long transient wait can still reach that cap. It is
+    recorded here and left for S4, which owns the waits.
+  - **Tests.** `test/chain.test.ts`: `agentGaveUp` per clause (the cap spent or absent, a wait
+    at and just above each cap, a terminal signal with and without `waitsOutLimit`), the
+    neutral record against plans/0017's threshold, and `retryPolicyOf`. The F3 cross-adapter
+    block now also runs each adapter's own mapped signal under its own policy.
+    `test/agent-fake.test.ts`: the threshold following a declared policy, a terminal rate
+    signal on an agent that does not wait out a limit, an entry's override reaching watch, and
+    the announced silence (the probe held, the same wait unannounced without
+    `honorsRetryAfter`, counting again past the end, and model output ending it).
+    `test/models.test.ts` and `test/models-describe.test.ts`: the override's validation and
+    display. The four tests that pin the list of known entry fields gained `retry`.
+  - **Behaviour and log lines.** The goldens are unchanged.
+    - opencode: a rate signal settles the turn only when its wait exceeds 30 s. Before, it
+      settled at the third attempt or above a minute. A 429 whose error carries no headers
+      therefore keeps opencode retrying every 30 s for as long as it lasts, which is its
+      declared policy.
+    - claude: a rate signal still being retried settles at the tenth attempt or above 40 s.
+      Before, it settled at the third attempt or above a minute. A turn that ends on a rate
+      signal (the CLI spent its retries) is now `rate` instead of `unknown`. With a registry or
+      a fallback ring it fails over at once. Without either it takes the ladder, as before.
+    - New lines: "⏳ the agent waits 2h 0m before retrying (attempt 3) (session …); no
+      events are expected until <ISO time>", and during that wait "⚠ connectivity probe failed
+      (session …) inside the agent's announced wait; not counted before <ISO time>".
 - **S3 — the structured signal.** The four `AgentError` fields, the header table, claude's
   `rate_limit_event` table and the `limit` event, precedence over the classifier, `shouldAsk`
   narrowing.

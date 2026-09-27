@@ -1,15 +1,16 @@
 // Unit tests for src/chain.ts: model-routing evaluation (resolveModel/splitModel),
-// role derivation (phaseToRole/roleOf), session-error classification (classifySessionError).
+// role derivation (phaseToRole/roleOf), session-error classification (classifySessionError),
+// the agent's retry policy (agentGaveUp/retryPolicyOf, plans/0057 §4).
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure move).
 
 import { describe, expect, test } from "bun:test"
 import type { Event } from "@opencode-ai/sdk/v2"
-import { CLAUDE_ERROR_PATTERNS } from "../src/agent/claude/client"
+import { CLAUDE_ERROR_PATTERNS, CLAUDE_RETRY_POLICY } from "../src/agent/claude/client"
 import { claudeStream } from "../src/agent/claude/stream"
-import { OPENCODE_ERROR_PATTERNS, splitModel } from "../src/agent/opencode/client"
+import { OPENCODE_ERROR_PATTERNS, OPENCODE_RETRY_POLICY, splitModel } from "../src/agent/opencode/client"
 import { mapEvent } from "../src/agent/opencode/events"
-import type { AgentEvent } from "../src/agent/types"
-import { classifySessionError, type ErrorInfo, phaseToRole, resolveModel, roleOf } from "../src/chain"
+import type { AgentEvent, AgentRetryPolicy } from "../src/agent/types"
+import { agentGaveUp, classifySessionError, type ErrorInfo, NEUTRAL_RETRY_POLICY, phaseToRole, resolveModel, retryPolicyOf, roleOf } from "../src/chain"
 import { parsePhaseTypeFile } from "../src/phases/custom"
 import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
@@ -206,5 +207,74 @@ describe("retry wait: one unit across adapters (plans/0057 F3)", () => {
     expect([opencode.next, claude.next]).toEqual([40 * 60_000, 40 * 60_000])
     expect(classifySessionError(opencode, OPENCODE_ERROR_PATTERNS)).toBe("rate")
     expect(classifySessionError(claude, CLAUDE_ERROR_PATTERNS)).toBe("rate")
+  })
+
+  // plans/0057 §4.1: under each adapter's own policy the two signals still
+  // agree on the two ends, and part where the agents differ.
+  test("under each adapter's own retry policy", () => {
+    const opencode = (wait: number) => classifySessionError(info(opencodeRetry(wait)), OPENCODE_ERROR_PATTERNS, OPENCODE_RETRY_POLICY)
+    const claude = (wait: number) => classifySessionError(info(claudeRetry(wait)), CLAUDE_ERROR_PATTERNS, CLAUDE_RETRY_POLICY)
+    expect([opencode(2000), claude(2000)]).toEqual(["unknown", "unknown"])
+    expect([opencode(40 * 60_000), claude(40 * 60_000)]).toEqual(["rate", "rate"])
+    // A 45-second wait: above opencode's 30 s backoff cap and claude's 40 s
+    // one, so neither agent cures it sooner; the neutral minute would still
+    // wait. 35 s is inside claude's own backoff (32 s plus jitter).
+    expect(opencode(45_000)).toBe("rate")
+    expect(classifySessionError(info(opencodeRetry(45_000)), OPENCODE_ERROR_PATTERNS)).toBe("unknown")
+    expect(claude(45_000)).toBe("rate")
+    expect(claude(35_000)).toBe("unknown")
+  })
+})
+
+// plans/0057 §4.1: whether the agent's own retrying will cure a failure,
+// read from its declared policy instead of two constants.
+describe("agentGaveUp (plans/0057 §4.1)", () => {
+  const capped: AgentRetryPolicy = { maxAttempts: 10, backoffCapMs: 40_000, honorsRetryAfter: true, waitsOutLimit: false, silenceBudgetMs: 60_000 }
+  const uncapped: AgentRetryPolicy = { backoffCapMs: 30_000, honorsRetryAfter: true, waitsOutLimit: true, silenceBudgetMs: 600_000 }
+
+  test("the attempt cap: spent at maxAttempts; an uncapped agent never spends it", () => {
+    expect(agentGaveUp({ attempt: 9 }, capped)).toBe(false)
+    expect(agentGaveUp({ attempt: 10 }, capped)).toBe(true)
+    expect(agentGaveUp({ attempt: 1_000 }, uncapped)).toBe(false)
+  })
+
+  test("a wait above the agent's own backoff cap came from elsewhere; one at or below it is the agent's own", () => {
+    expect(agentGaveUp({ attempt: 1, next: 30_000 }, uncapped)).toBe(false)
+    expect(agentGaveUp({ attempt: 1, next: 30_001 }, uncapped)).toBe(true)
+    expect(agentGaveUp({ attempt: 1, next: 40_000 }, capped)).toBe(false)
+    expect(agentGaveUp({ attempt: 1, next: 40_001 }, capped)).toBe(true)
+  })
+
+  test("a terminal signal: final for an agent that does not wait out a limit, one more step for one that does", () => {
+    expect(agentGaveUp({ terminal: true }, capped)).toBe(true)
+    expect(agentGaveUp({ terminal: true }, uncapped)).toBe(false)
+    expect(agentGaveUp({}, capped)).toBe(false)
+  })
+
+  test("the neutral policy is plans/0017's threshold: three attempts, or a wait above a minute", () => {
+    expect(agentGaveUp({ attempt: 2, next: 60_000 }, NEUTRAL_RETRY_POLICY)).toBe(false)
+    expect(agentGaveUp({ attempt: 3 }, NEUTRAL_RETRY_POLICY)).toBe(true)
+    expect(agentGaveUp({ next: 60_001 }, NEUTRAL_RETRY_POLICY)).toBe(true)
+    expect(agentGaveUp({ terminal: true }, NEUTRAL_RETRY_POLICY)).toBe(false)
+  })
+
+  test("a claude turn that ended on a throttle is the rate class under its policy (no more unknown → ladder)", () => {
+    const ended: ErrorInfo = { message: "rate_limit API Error: Request rejected (429)", statusCode: 429, terminal: true }
+    expect(classifySessionError(ended, CLAUDE_ERROR_PATTERNS, CLAUDE_RETRY_POLICY)).toBe("rate")
+    expect(classifySessionError(ended, CLAUDE_ERROR_PATTERNS)).toBe("unknown")
+    // Still backing off inside the CLI's ladder: not yet.
+    expect(classifySessionError({ message: "rate_limit", statusCode: 429, attempt: 3, next: 2_000 }, CLAUDE_ERROR_PATTERNS, CLAUDE_RETRY_POLICY)).toBe("unknown")
+  })
+})
+
+describe("retryPolicyOf (plans/0057 §11 item 3)", () => {
+  test("the adapter's record, else the neutral one, with an entry's fields laid over it", () => {
+    expect(retryPolicyOf(undefined)).toEqual(NEUTRAL_RETRY_POLICY)
+    expect(retryPolicyOf(CLAUDE_RETRY_POLICY)).toEqual(CLAUDE_RETRY_POLICY)
+    expect(retryPolicyOf(CLAUDE_RETRY_POLICY, { maxAttempts: 15 })).toEqual({ ...CLAUDE_RETRY_POLICY, maxAttempts: 15 })
+    expect(retryPolicyOf(undefined, { waitsOutLimit: false })).toEqual({ ...NEUTRAL_RETRY_POLICY, waitsOutLimit: false })
+    // opencode declares no cap; an override may give it one.
+    expect(retryPolicyOf(OPENCODE_RETRY_POLICY).maxAttempts).toBeUndefined()
+    expect(retryPolicyOf(OPENCODE_RETRY_POLICY, { maxAttempts: 8 }).maxAttempts).toBe(8)
   })
 })

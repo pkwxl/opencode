@@ -19,6 +19,7 @@ import type {
   AgentHostFactory,
   AgentMessage,
   AgentResult,
+  AgentRetryPolicy,
   AgentTokens,
   PromptInput,
 } from "../../src/agent/types"
@@ -122,6 +123,8 @@ export function defaultTurn(ctx: TurnContext): AgentEvent[] {
 export type FakeAgentOptions = {
   capabilities?: Partial<AgentCapabilities>
   errorPatterns?: AgentErrorPatterns
+  // The agent's declared retry policy; absent = none (the driver's neutral one).
+  retryPolicy?: AgentRetryPolicy
   // Script per turn; absent (or returning undefined) = defaultTurn.
   turn?: TurnScript
   // Events published on each steer; absent = none (the running turn goes on
@@ -210,6 +213,7 @@ export function fakeAgent(options: FakeAgentOptions = {}): FakeAgent {
   const client: AgentClient = {
     capabilities,
     ...(options.errorPatterns ? { errorPatterns: options.errorPatterns } : {}),
+    ...(options.retryPolicy ? { retryPolicy: options.retryPolicy } : {}),
     async create(input) {
       record("create", input)
       const fail = failed("create")

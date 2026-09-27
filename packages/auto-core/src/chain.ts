@@ -4,7 +4,7 @@
 // roleOf / resolveModel), session error classification (classifySessionError),
 // and the session reuse threshold constants. See plans/0017-model-routing-design.md.
 // Split from src/runner.ts (plans/0024-module-split-plan.md S2, pure move).
-import type { AgentErrorPatterns } from "./agent/types"
+import type { AgentErrorPatterns, AgentRetryPolicy } from "./agent/types"
 import { type UnitBaseline } from "./git"
 import { type ResolveEvent } from "./resolve"
 import { type Phase } from "./resume"
@@ -295,6 +295,10 @@ export type ErrorInfo = {
   responseBody?: string
   attempt?: number
   next?: number
+  // The agent's error event arrived: its turn failed and it stopped retrying
+  // (plans/0057 §4.1), as opposed to a retry signal it is still working
+  // through.
+  terminal?: boolean
 }
 
 // The classification criteria live here (design G.2: when a new provider's
@@ -315,11 +319,27 @@ const RATE_RE = /rate limit|resource exhausted/i
 // unknown, conservatively not switching models.
 const TRANSIENT_RE = /overloaded|timeout|timed out|econn|socket hang up|network|temporar|internal server error|bad gateway|service unavailable|(?<![\d.])50[0234](?![\d.])/i
 const QUOTA_STATUS = 402
-// rate thresholds: a lone 429 only means opencode is still backing off (not
-// enough to switch models on); rate requires "retried enough times" or
-// "next wait above threshold" (design D.1 rate row, B.4 2nd signal).
-const RATE_ATTEMPTS = 3
-const RATE_WAIT_MS = 60_000
+
+// The retry policy the driver assumes for an agent that declares none
+// (plans/0057 §4.3): the rate threshold of plans/0017 D.1 (a lone 429 only
+// means the agent is still backing off, not enough to switch models on; rate
+// requires "retried three times" or "next wait above a minute") as a policy
+// record, so both paths run through agentGaveUp. It waits out whatever it
+// meets and announces no silence.
+export const NEUTRAL_RETRY_POLICY: AgentRetryPolicy = {
+  maxAttempts: 3,
+  backoffCapMs: 60_000,
+  honorsRetryAfter: false,
+  waitsOutLimit: true,
+  silenceBudgetMs: 60_000,
+}
+
+// The policy one session runs under: the adapter's record (else the neutral
+// one) with a registry entry's override laid over it field by field (plans/
+// 0057 §11 item 3).
+export function retryPolicyOf(agent: AgentRetryPolicy | undefined, override?: Partial<AgentRetryPolicy>): AgentRetryPolicy {
+  return { ...(agent ?? NEUTRAL_RETRY_POLICY), ...override }
+}
 
 // Classification priority (top to bottom, first hit returns; matches the
 // design D.1 criteria table):
@@ -329,17 +349,17 @@ const RATE_WAIT_MS = 60_000
 //   2. quota      — the server says outright non-retryable, or quota/
 //                   balance/credit wording, or 402.
 //   3. auth       — 401/403 or auth/forbidden wording (provider unusable).
-//   4. rate       — 429/rate-limit wording plus retries reached or a next
-//                   wait above threshold.
+//   4. rate       — 429/rate-limit wording, once the agent's own retrying
+//                   gave up (agentGaveUp under its retry policy).
 //   5. transient  — a known transient error (existing retry path, no model
 //                   switch).
 //   6. unknown    — conservative default (no switch when uncertain).
-export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns = {}): ErrorClass {
+export function classifySessionError(info: ErrorInfo, extra: AgentErrorPatterns = {}, policy: AgentRetryPolicy = NEUTRAL_RETRY_POLICY): ErrorClass {
   const hit = hitter(info)
   if (hit(undefined, extra.overflow)) return "overflow"
   if (info.isRetryable === false || hit(QUOTA_RE, extra.quota) || info.statusCode === QUOTA_STATUS) return "quota"
   if (info.statusCode === 401 || info.statusCode === 403 || hit(AUTH_RE, extra.auth)) return "auth"
-  if (rateSignal(info, extra) && rateThresholdMet(info)) return "rate"
+  if (rateSignal(info, extra) && rateThresholdMet(info, policy)) return "rate"
   if (hit(TRANSIENT_RE, extra.transient)) return "transient"
   return "unknown"
 }
@@ -360,10 +380,21 @@ export function rateSignal(info: ErrorInfo, extra: AgentErrorPatterns = {}): boo
   return info.statusCode === 429 || hitter(info)(RATE_RE, extra.rate)
 }
 
-// The rate threshold: the agent has retried RATE_ATTEMPTS times, or its next
-// wait is longer than RATE_WAIT_MS.
-export function rateThresholdMet(info: ErrorInfo): boolean {
-  return (info.attempt ?? 0) >= RATE_ATTEMPTS || (info.next ?? 0) > RATE_WAIT_MS
+// The rate threshold: a rate signal counts as the rate class once the agent
+// gave up curing it by itself.
+export function rateThresholdMet(info: ErrorInfo, policy: AgentRetryPolicy = NEUTRAL_RETRY_POLICY): boolean {
+  return agentGaveUp(info, policy)
+}
+
+// Whether the agent's own retrying will not cure this failure (plans/0057
+// §4.1), under its declared policy: its attempt cap is spent; or the wait it
+// announced is longer than any backoff of its own, so it cures nothing before
+// that wait is over; or its turn already ended on the failure and it does not
+// wait out a limit.
+export function agentGaveUp(info: ErrorInfo, policy: AgentRetryPolicy): boolean {
+  if (policy.maxAttempts !== undefined && (info.attempt ?? 0) >= policy.maxAttempts) return true
+  if ((info.next ?? 0) > policy.backoffCapMs) return true
+  return !policy.waitsOutLimit && info.terminal === true
 }
 
 // Reuse the previous session when its context percentage is below this

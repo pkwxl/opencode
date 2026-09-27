@@ -12,7 +12,7 @@
 // string, the SSE → AgentEvent mapping, and opencode's own error type names
 // for the classifier.
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import type { AgentCapabilities, AgentClient, AgentErrorPatterns, AgentEvent, AgentResult, PromptInput } from "../types"
+import type { AgentCapabilities, AgentClient, AgentErrorPatterns, AgentEvent, AgentResult, AgentRetryPolicy, PromptInput } from "../types"
 import { mapEvent, mapMessage } from "./events"
 
 // opencode persists sessions, forks at a message anchor, accepts prompts into
@@ -33,6 +33,23 @@ export const OPENCODE_CAPABILITIES: AgentCapabilities = {
 export const OPENCODE_ERROR_PATTERNS: AgentErrorPatterns = {
   overflow: /contextoverflowerror/i,
   auth: /providerautherror/i,
+}
+
+// opencode's own retry policy (packages/opencode session/retry.ts, plans/0057
+// F4): SessionRetry.policy has no attempt cap — it stops only when the error
+// is no longer retryable. The wait is retry-after-ms, else retry-after
+// (seconds or an HTTP date), else 2 s doubling per attempt: capped at 30 s
+// when the error carries no response headers, uncapped when it does. So a
+// wait above 30 s is the provider's, or the backoff after a fifth failure in
+// a row (32 s). A stated wait is honoured up to 24.8 days
+// with nothing but the retry status in between, and a spent window is waited
+// out the same way. The silence budget is the liveness probe's default
+// interval: a shorter silence cannot meet its two-failure rule.
+export const OPENCODE_RETRY_POLICY: AgentRetryPolicy = {
+  backoffCapMs: 30_000,
+  honorsRetryAfter: true,
+  waitsOutLimit: true,
+  silenceBudgetMs: 10 * 60_000,
 }
 
 // "prov/model" → the SDK's model parameter, split at the first "/": the
@@ -70,6 +87,7 @@ export function opencodeAgent(sdk: OpencodeClient): AgentClient {
   return {
     capabilities: OPENCODE_CAPABILITIES,
     errorPatterns: OPENCODE_ERROR_PATTERNS,
+    retryPolicy: OPENCODE_RETRY_POLICY,
     create: ({ title }) => settle(() => sdk.session.create({ title }), (data) => ({ id: data.id as string })),
     // The synchronous POST resolves at turn end (its 2 h ceiling is
     // timeoutFetch's turn timeout). `agent` is always sent as a key, as the

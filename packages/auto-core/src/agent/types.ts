@@ -29,7 +29,13 @@
 // classifier (0055 §7.1, F18) amended it a sixth time, consciously:
 // PromptInput.bare, a prompt that denies every tool — opencode carries it as
 // the v2 body's `tools: {"*": false}`; only opencode sessions ever receive it
-// (the registry accepts classifier entries on opencode profiles only).
+// (the registry accepts classifier entries on opencode profiles only). Session
+// exceptions (plans/0057 §4, S2) amended it a seventh time, consciously:
+// AgentRetryPolicy / AgentClient.retryPolicy, what the agent does on its own
+// when a provider request fails, so the driver consults a declared record
+// instead of guessing the agent's behaviour from the shape of one error. The
+// same amendment grows in S3 (0057 §5: AgentError's limit fields and the
+// `limit` event).
 
 // Every call resolves; none rejects. A failure the agent reports and a
 // transport failure (network error, timeout, abort via signal) both arrive as
@@ -75,6 +81,36 @@ export type AgentErrorPatterns = {
   auth?: RegExp
   rate?: RegExp
   transient?: RegExp
+}
+
+// What the agent does on its own when a provider request fails (plans/0057
+// §4): static per adapter, read from the agent's own retry code, and
+// overridable per registry model entry (a profile's environment can change
+// it, e.g. claude's CLAUDE_CODE_MAX_RETRIES). The driver consults it where it
+// used to infer the agent's behaviour from two constants (chain.ts
+// agentGaveUp); an adapter without one gets the driver's neutral record,
+// which is exactly those constants.
+export type AgentRetryPolicy = {
+  // The agent's own attempt cap; undefined = it retries as long as the error
+  // stays retryable (opencode: SessionRetry.policy has no cap).
+  maxAttempts?: number
+  // The longest wait between attempts the agent chooses by itself. A stated
+  // wait above it did not come from the agent's own backoff: the provider
+  // named it, or the backoff has grown past anything a short throttle needs,
+  // so the agent will not cure the failure sooner than that wait.
+  backoffCapMs: number
+  // The agent honours a provider-stated wait (retry-after) and stays silent
+  // for that long: no error, only the retry signal that announced it.
+  honorsRetryAfter: boolean
+  // The agent waits out a spent quota window by itself, in the mode the
+  // driver runs it. False: a limit ends the turn (claude headless, 0057 F19),
+  // so a terminal limit signal is final — waiting on the agent cures nothing.
+  waitsOutLimit: boolean
+  // The silence the driver takes in its stride while the agent backs off. A
+  // retry that names a longer wait (with honorsRetryAfter) is an announced
+  // silence: the driver logs it with its end, and its liveness watchdog does
+  // not judge the session dead before that end (0057 §4.2).
+  silenceBudgetMs: number
 }
 
 // The pieces of an assistant turn, as far as the driver needs them.
@@ -227,6 +263,9 @@ export interface AgentClient {
   // Extra classifier patterns for this agent's error wording; absent = the
   // neutral patterns only.
   readonly errorPatterns?: AgentErrorPatterns
+  // What the agent does on its own when a provider request fails; absent =
+  // the driver's neutral record (the rate threshold of plans/0017 F17).
+  readonly retryPolicy?: AgentRetryPolicy
   // New session titled `title`.
   create(input: { title: string }): Promise<AgentResult<{ id: string }>>
   // Dispatches a prompt. Resolution timing is the adapter's business (opencode

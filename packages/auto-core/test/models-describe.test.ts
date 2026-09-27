@@ -199,7 +199,7 @@ describe("checkModels", () => {
     const check = await checkModels(target, { env: { OPENCODE_AUTO_MODELS: operator }, home })
     expect(check.registry).toBeUndefined()
     expect(check.problems).toEqual([
-      `model registry, operator layer ${operator}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys)`,
+      `model registry, operator layer ${operator}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys, retry)`,
     ])
   })
 
@@ -513,6 +513,15 @@ describe("describeModels", () => {
     expect(text).toContain("env HTTPS_PROXY (removed)")
     expect(text).toContain("  moonshotai  2 keys: MOONSHOT_KEY_A, MOONSHOT_KEY_B · models k3, k2")
     expect(text).toContain("  zhipuai     3 keys: ZHIPU_KEY_A, ZHIPU_KEY_B, ~/.secrets/zhipu-c · models glm")
+  })
+
+  test("a retry override is shown as written (plans/0057 §11 item 3)", async () => {
+    await writeExample({ ...EXAMPLE, models: { ...EXAMPLE.models, opus: { ...EXAMPLE.models.opus, retry: { maxAttempts: 300, waitsOutLimit: true } } } })
+    const t = await table()
+    expect(model(t, "opus").retry).toEqual({ maxAttempts: 300, waitsOutLimit: true })
+    expect(model(t, "k3").retry).toBeUndefined()
+    const text = formatModels(await describeTarget()).join("\n")
+    expect(text).toContain("avoid mon-fri 09:00-18:00 · retry maxAttempts 300, waitsOutLimit true")
   })
 
   test("unused models and reference problems come with the table", async () => {

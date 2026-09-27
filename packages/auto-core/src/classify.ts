@@ -31,8 +31,8 @@
 // → model → wait escalation. Without a registry or without a classifier list
 // nothing here runs (C2). Sits below watch: no loop, no session-driving, no
 // agent start imports (import-direction rule).
-import type { AgentClient, AgentErrorPatterns, AgentEvent } from "./agent/types"
-import { classifySessionError, rateSignal, rateThresholdMet, type ErrorClass, type ErrorInfo } from "./chain"
+import type { AgentClient, AgentErrorPatterns, AgentEvent, AgentRetryPolicy } from "./agent/types"
+import { classifySessionError, NEUTRAL_RETRY_POLICY, rateSignal, rateThresholdMet, retryPolicyOf, type ErrorClass, type ErrorInfo } from "./chain"
 import { isModelDown, markModelDown } from "./failback"
 import { ringHasUsableKey } from "./keyring"
 import { log, vlog } from "./log"
@@ -194,12 +194,13 @@ export function acceptedReset(answer: ClassifierAnswer | undefined, now: number)
 // signal below its threshold (the patterns' `transient`) to `quota`. It never
 // lowers a class the patterns found. A `rate` answer is a rate signal like
 // the patterns' own: it counts as `rate` only once the threshold holds (the
-// agent has retried three times, or its next wait is over a minute) — below
-// it the agent is still backing off, and the class stays as it was.
+// agent gave up curing it by itself under its retry policy, chain.ts
+// agentGaveUp) — below it the agent is still backing off, and the class stays
+// as it was.
 // AUTO-RESOLVE: does a `rate` answer settle a retrying turn at once? -> only once the patterns' rate threshold holds (§7.1 lets the answer replace `unknown`, but F17's threshold exists because a single 429 is the agent's own backoff; a classifier naming the same thing must not settle sooner than the patterns would, while quota and auth, which retrying cannot cure, settle at once)
-export function mergeClass(pattern: ErrorClass, answer: ClassifierClass, info: ErrorInfo): ErrorClass {
+export function mergeClass(pattern: ErrorClass, answer: ClassifierClass, info: ErrorInfo, policy: AgentRetryPolicy = NEUTRAL_RETRY_POLICY): ErrorClass {
   if (pattern === "unknown") {
-    if (answer === "rate") return rateThresholdMet(info) ? "rate" : "unknown"
+    if (answer === "rate") return rateThresholdMet(info, policy) ? "rate" : "unknown"
     return answer
   }
   if (pattern === "transient" && answer === "quota") return "quota"
@@ -367,7 +368,7 @@ async function runClassifier(
     return undefined
   }
   if (outcome.kind === "failed") {
-    const cls = classifySessionError(outcome.error, client.errorPatterns)
+    const cls = classifySessionError(outcome.error, client.errorPatterns, retryPolicyOf(client.retryPolicy, pick.entry.retry))
     if (cls === "quota" || cls === "auth" || cls === "rate") {
       markModelDown(pick.name)
       log(`⚠ ${prefix}the classifier ${pick.name} failed (${cls}); marked it down, and the error patterns decide this failure alone`)
@@ -459,6 +460,7 @@ async function oneShot(client: AgentClient, entry: ModelEntry, text: string, tim
           ...(event.error.statusCode !== undefined ? { statusCode: event.error.statusCode } : {}),
           ...(event.error.isRetryable !== undefined ? { isRetryable: event.error.isRetryable } : {}),
           ...(event.error.responseBody !== undefined ? { responseBody: event.error.responseBody } : {}),
+          terminal: true,
         })
         continue
       }
@@ -474,7 +476,7 @@ async function oneShot(client: AgentClient, entry: ModelEntry, text: string, tim
           ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
           ...(event.next !== undefined ? { next: event.next } : {}),
         })
-        const cls = classifySessionError(failure ?? {}, client.errorPatterns)
+        const cls = classifySessionError(failure ?? {}, client.errorPatterns, retryPolicyOf(client.retryPolicy, entry.retry))
         if (cls === "quota" || cls === "auth" || cls === "rate") break
         continue
       }
