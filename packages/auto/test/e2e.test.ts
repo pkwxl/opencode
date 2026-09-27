@@ -2593,6 +2593,93 @@ describe("CLI: close (auto-core plans/0053 D22)", () => {
   })
 })
 
+// plan --new-task (auto-core plans/0058): add one task the person names with
+// no session at all. The shell half validated here: the flag's usage errors
+// (plan's alone, the mutual exclusions, the one-line title) and the
+// end-to-end add over a git fixture — establish, commit the round setup,
+// add — with no agent anywhere in the process.
+describe("CLI: plan --new-task (auto-core plans/0058)", () => {
+  // An initialized m-mode git fixture whose round setup is committed, so the
+  // add starts from a clean tree.
+  async function newTaskFixture() {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-nt-"))
+    const git = gitOf(dir)
+    await git("init")
+    expect((await runCli(["init", dir])).code).toBe(0)
+    expect((await runCli(["plan", dir])).code).toBe(0)
+    await git("add", "-A")
+    await git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "round setup")
+    return { dir, git }
+  }
+
+  test("argument errors: plan's alone, the exclusions, the one-line title; nothing is written", async () => {
+    const { dir, git } = await newTaskFixture()
+    try {
+      const refusals: [string[], string][] = [
+        // --new-task is plan's alone: every other command points at plan.
+        [["run", dir, "--new-task", "a task"], "--new-task is a plan option: run takes no --new-task"],
+        [["init", dir, "--new-task", "a task"], "--new-task is a plan option"],
+        [["close", "T-001", dir, "--reason", "r", "--new-task", "a task"], "--new-task is a plan option: close takes no --new-task"],
+        // The title: non-empty and one line.
+        [["plan", dir, "--new-task"], "--new-task requires a one-line task title"],
+        [["plan", dir, "--new-task", "  "], "--new-task requires a one-line task title"],
+        [["plan", dir, "--new-task", "two\nlines"], "--new-task must be one line"],
+        // The exclusions: no planning input rides along, and --append is the
+        // session-planned path.
+        [["plan", dir, "--new-task", "a task", "-p", "input"], "--new-task and -p | --file are mutually exclusive"],
+        [["plan", dir, "--new-task", "a task", "--append"], "--new-task and --append are mutually exclusive"],
+      ]
+      for (const [args, notice] of refusals) {
+        const refused = await runCli(args)
+        expect(refused.code, args.join(" ")).toBe(1)
+        expect(refused.err, args.join(" ")).toContain(notice)
+      }
+      expect(await Bun.file(join(dir, P01.dir, "tasks.md")).exists()).toBe(false)
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("m mode end to end: the task lands committed, a second add appends, and the uncommitted round setup is refused first", async () => {
+    const { dir, git } = await newTaskFixture()
+    try {
+      const title = "Harden the retry policy against provider throttling"
+      const added = await runCli(["plan", dir, "--new-task", title])
+      expect(added.code).toBe(0)
+      expect(added.out).toContain(`✓ task T-001 added to docs/R-01/P01-implement/tasks.md (no session: --new-task writes it directly)`)
+      expect(added.out).toContain(`next: review it (sharpen the Goal / Scope / Acceptance of docs/T-001/todo.md if needed), then run: opencode-auto run ${dir}`)
+      expect(await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).toContain(`- [ ] T-001 ${title}`)
+      const doc = await Bun.file(join(dir, "docs/T-001/todo.md")).text()
+      expect(doc.startsWith(`# T-001: ${title}\nPhase: R-01.P01\n`)).toBe(true)
+      expect(doc).toContain("Added by `plan --new-task`")
+      expect((await git("log", "--format=%s")).split("\n")[0]).toBe(`PLAN add T-001 ${title}`)
+      expect((await git("status", "--porcelain")).trim()).toBe("")
+      // A second known task appends after the first.
+      const second = await runCli(["plan", dir, "--new-task", "Second known task"])
+      expect(second.code).toBe(0)
+      expect((await Bun.file(join(dir, "docs/R-01/P01-implement/tasks.md")).text()).endsWith("- [ ] T-002 Second known task\n")).toBe(true)
+      // The round-start gate discipline: on an uncommitted setup the add
+      // waits for the human (exit 2, nothing written).
+      const dirty = await mkdtemp(join(tmpdir(), "auto-cli-nt-"))
+      try {
+        const git2 = gitOf(dirty)
+        await git2("init")
+        expect((await runCli(["init", dirty])).code).toBe(0)
+        expect((await runCli(["plan", dirty])).code).toBe(0)
+        const refused = await runCli(["plan", dirty, "--new-task", title])
+        expect(refused.code).toBe(2)
+        expect(refused.err).toContain("⏸ worktree not clean before adding the task")
+        expect(await Bun.file(join(dirty, "docs/R-01/P01-implement/tasks.md")).exists()).toBe(false)
+      } finally {
+        await rm(dirty, { recursive: true, force: true })
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 // plan --force-close (auto-core plans/0053 D28): close a unit and continue
 // planning in the same process, under one lock. The shell half validated
 // here: the argument checks (close's flag set on plan), the refusal contract

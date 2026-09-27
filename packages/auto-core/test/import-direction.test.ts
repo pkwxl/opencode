@@ -194,6 +194,9 @@ const CLASSIFIED: Record<string, Domain> = {
   switches: "driver",
   // The task store (M3.4): task units + runtime state; replaced plan.ts.
   tasks: "driver",
+  // Adding one task by hand (--new-task): the mechanical, no-session half
+  // of append planning (plans/0058); called from plan's prelude.
+  "task-add": "driver",
   "templates.d": "driver",
   testrun: "driver",
   // Default reasoning tiers of sessions (plans/0055 §5): the role table over

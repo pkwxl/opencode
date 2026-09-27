@@ -553,6 +553,149 @@ describe("planPrelude: routes (rows 4–9)", () => {
   )
 })
 
+describe("planPrelude: --new-task (row 11, plans/0058)", () => {
+  const TITLE = "Harden the retry policy against provider throttling"
+
+  test("usage backstops: input or --append alongside, and a blank or multi-line title", withDir(async (dir) => {
+    const excluded =
+      `--new-task adds the task you name with no session; it takes no planning input and no --append — ` +
+      `pass only the title (opencode-auto plan ${dir} --new-task "<title>"), or plan from an input instead (opencode-auto plan ${dir} --append -p <text> | --file <path>)`
+    expect(await planPrelude(dir, { phases: "am", newTask: TITLE, input: INPUT })).toEqual({ type: "stop", code: 1, lines: [excluded] })
+    expect(await planPrelude(dir, { phases: "am", newTask: TITLE, append: true })).toEqual({ type: "stop", code: 1, lines: [excluded] })
+    for (const bad of ["", "   ", "two\nlines"]) {
+      expect(await planPrelude(dir, { phases: "am", newTask: bad })).toEqual({
+        type: "stop",
+        code: 1,
+        lines: ["--new-task requires a one-line task title (it becomes the index line and the task document's title); longer context goes into docs/T-NNN/todo.md after the add"],
+      })
+    }
+    expect(await exists(dir, "docs/R-01")).toBe(false)
+  }))
+
+  test("round-setup rows refuse before any write (D5)", withDir(async (dir) => {
+    // Row 1: no round yet.
+    expect(await planPrelude(dir, { phases: "am", newTask: TITLE })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [`round R-01 is not established yet: run opencode-auto plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`],
+    })
+    // Row 2: the round is complete awaiting the next one.
+    await completeRound(dir, "am")
+    expect(await planPrelude(dir, { phases: "am", newTask: TITLE })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [`round R-01 is complete and round R-02 is not established yet: run opencode-auto plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`],
+    })
+    // Row 3: a drift is re-synced first; the task waits.
+    await establishRound(dir, { phases: "amt" })
+    const before = await read(dir, "docs/R-01/phases.md")
+    expect(await planPrelude(dir, { phases: "amv", newTask: TITLE })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [`the phase index of round R-01 differs from config phases: run opencode-auto plan ${dir} without --new-task to re-sync it, commit the change, then add the task again.`],
+    })
+    expect(await read(dir, "docs/R-01/phases.md")).toBe(before)
+  }))
+
+  test("an open step or a mid-pipeline task refuses the add", withDir(async (dir) => {
+    await establishRound(dir, { phases: "m" })
+    const [implement] = await phasesOf(dir)
+    await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
+    await saveProgress(dir, { task: "PLAN", session: "ses", at: 1, active: true, phase: { kind: "step", step: "phase-append", unit: "R-01.P01" } })
+    expect(await planPrelude(dir, { phases: "m", newTask: TITLE })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [
+        `the task appending step of R-01.P01 was interrupted and is not closed out; finish it first (run: opencode-auto plan ${dir}), then add the task with --new-task`,
+      ],
+    })
+    await saveProgress(dir, { task: "T-002", at: 1, active: true, phase: { kind: "subtasks", index: 1 } })
+    expect(await planPrelude(dir, { phases: "m", newTask: TITLE })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: ["T-002 is mid-pipeline (its resume point is in .auto/progress.json); finish it with run, or close it, before appending"],
+    })
+    expect(await exists(dir, "docs/T-003")).toBe(false)
+  }))
+
+  test("a task-less (knowledge) phase refuses: it distills knowledge, it holds no tasks", withDir(async (dir) => {
+    await establishRound(dir, { phases: "knowledge,implement" })
+    expect(await planPrelude(dir, { phases: "knowledge,implement", newTask: TITLE })).toEqual({
+      type: "stop",
+      code: 1,
+      lines: [
+        `R-01.P01 knowledge holds no tasks (its type, knowledge, distills knowledge instead); ` +
+          `--new-task adds a task to a phase that runs them — advance through it with opencode-auto run ${dir}`,
+      ],
+    })
+  }))
+
+  test("m mode: creates the index with T-001 on the empty one, appends after existing lines otherwise", withDir(async (dir) => {
+    await establishRound(dir, { phases: "m" })
+    const [implement] = await phasesOf(dir)
+    const added = await planPrelude(dir, { phases: "m", newTask: TITLE })
+    expect(added).toEqual({
+      type: "stop",
+      code: 0,
+      lines: [
+        "✓ task T-001 added to docs/R-01/P01-implement/tasks.md (no session: --new-task writes it directly)",
+        `next: review it (sharpen the Goal / Scope / Acceptance of docs/T-001/todo.md if needed), then run: opencode-auto run ${dir}`,
+      ],
+    })
+    expect(await read(dir, "docs/R-01/P01-implement/tasks.md")).toContain(`- [ ] T-001 ${TITLE}`)
+    expect(await read(dir, "docs/T-001/todo.md")).toContain(`Phase: R-01.P01`)
+    await listTasks(dir, implement!, [["T-001", true], ["T-002", false]])
+    const again = await planPrelude(dir, { phases: "m", newTask: "Second known task" })
+    expect(again.type === "stop" && again.code).toBe(0)
+    expect(await read(dir, "docs/R-01/P01-implement/tasks.md")).toContain(`- [ ] T-003 Second known task`)
+  }))
+
+  test("phased: the plan route gains its first task, the execute route appends to the phase named now", withDir(async (dir) => {
+    await establishRound(dir, { phases: "am" })
+    const [analysis] = await phasesOf(dir)
+    const planned = await planPrelude(dir, { phases: "am", newTask: TITLE })
+    expect(planned.type === "stop" && planned.code).toBe(0)
+    expect(await read(dir, "docs/R-01/P01-analysis/tasks.md")).toContain(`- [ ] T-001 ${TITLE}`)
+    await listTasks(dir, analysis!, [["T-001", true], ["T-002", false]])
+    const appended = await planPrelude(dir, { phases: "am", newTask: "Second known task" })
+    expect(appended.type === "stop" && appended.code).toBe(0)
+    const index = await read(dir, "docs/R-01/P01-analysis/tasks.md")
+    expect(index).toContain(`- [x] T-001 task T-001`)
+    expect(index.endsWith(`- [ ] T-003 Second known task\n`)).toBe(true)
+  }))
+
+  test("the handover route: a stale handover is removed first and the add is committed (git)", withDir(async (dir) => {
+    await establishRound(dir, { phases: "am" })
+    const [analysis] = await phasesOf(dir)
+    await listTasks(dir, analysis!, [["T-001", true]])
+    await Bun.write(join(dir, analysis!.dir, "handover.md"), "# Handover\n\n## Summary\n\ndone\n")
+    await commitAll(dir)
+    const result = await planPrelude(dir, { phases: "am", newTask: "A fix after the distillation" })
+    expect(result.type === "stop" && result.code).toBe(0)
+    expect(result.type === "stop" && result.lines[1]).toBe(
+      "✓ stale handover removed: docs/R-01/P01-analysis/handover.md (the phase is distilled again after the task)",
+    )
+    expect(await exists(dir, "docs/R-01/P01-analysis/handover.md")).toBe(false)
+    const subjects = (await git(dir, "log", "--format=%s")).trim().split("\n")
+    expect(subjects[0]).toBe("PLAN add T-002 A fix after the distillation")
+    expect(subjects[1]).toBe("PLAN add T-002: remove the stale handover")
+    expect(await git(dir, "status", "--porcelain")).toBe("")
+  }))
+
+  test("a dirty worktree stops with exit 2 naming the files", withDir(async (dir) => {
+    await establishRound(dir, { phases: "m" })
+    await commitAll(dir)
+    writeFileSync(join(dir, "unrelated.txt"), "dirty\n")
+    const result = await planPrelude(dir, { phases: "m", newTask: TITLE })
+    expect(result).toEqual({
+      type: "stop",
+      code: 2,
+      lines: ["⏸ worktree not clean before adding the task; handle it manually (commit/clean) and re-run:", "  unrelated.txt"],
+    })
+    expect(await exists(dir, "docs/R-01/P01-implement/tasks.md")).toBe(false)
+  }))
+})
+
 describe("plan's stop lines (D8, D15)", () => {
   test(
     "planned: the phase and count when phased, the id span in m mode",

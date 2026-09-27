@@ -407,8 +407,20 @@ executes as usual (auto-core plans/0053 D4–D14).
 opencode-auto plan <dir>            # no round yet → establish one and stop at the round-start gate; otherwise plan the current phase and stop before execution
 opencode-auto plan <dir> -p "…"     # with a planning input: stored as this phase's plan-input.md, then planned
 opencode-auto plan <dir> --file plan-brief.md   # planning input taken from a file (-p and --file are mutually exclusive)
+opencode-auto plan <dir> --new-task "Fix the retry storm in the sync client"   # add this one known task with no session at all
 opencode-auto run <dir>             # review (edit/strike tasks directly if needed), then execute
 ```
+
+- **Choosing the planning scope** — use the lightest tool that fits:
+   - a **multi-phase plan** is the phase flow itself: the `phases` value frozen by `init`
+     (rounds and their phase directories are established mechanically, each phase planned in
+     turn);
+   - an **intra-phase multi-task plan** is a planning input: `plan -p "…"` for a fresh phase
+     (or `--file <path>`), `plan --append -p "…"` to add to a phase that already lists tasks —
+     a session decomposes the input into the task list;
+   - a **single task you can already name** needs neither: `plan --new-task "<one-line
+     title>"` adds exactly that task with no session (see
+     [Adding a single task without a session](#adding-a-single-task-without-a-session-plan---new-task)).
 
 - **Agent-free routes run first (plan prelude)**, decided after taking the run lock and before any session
   starts:
@@ -454,7 +466,8 @@ opencode-auto run <dir>             # review (edit/strike tasks directly if need
   When the input channel is unreachable (stdin closed or empty answers) or the same question is asked
   repeatedly, it blocks for the human (exit code `2`); handle it outside the session and rerun.
 
-Appending tasks (`--append`) and closing units (`close`, `plan --force-close`) are covered in the next two
+Appending tasks (`--append`), adding one without a session (`--new-task`) and closing units
+(`close`, `plan --force-close`) are covered in the next three
 sections.
 
 ### Append planning (plan --append)
@@ -481,6 +494,35 @@ may be omitted (giving it explicitly just counts as redundant).
 - `--append` without input is a usage error (what gets appended is exactly the tasks planned from the
   input); on routes where no round is established or the round is complete awaiting a new one, the input
   refusal rules match ordinary planning input.
+
+### Adding a single task without a session (plan --new-task)
+
+`plan [dir] --new-task "<one-line title>"` adds the **one task you name** to the current phase with **no
+planning session at all**: you already did the planning, the driver does the mechanics — allocate the next
+task number, write a conforming `docs/T-NNN/todo.md`, append the index line, and commit (trailer
+`Auto-Stage: task-add`). It is the session-free counterpart of `--append`, and composes with
+`--force-close` for a session-free task replacement:
+`plan <dir> --force-close T-005 --reason "direction changed" --new-task "do X instead"`.
+
+- **Targeting and guards are `--append`'s**: whichever phase routing points at right now is the phase
+  added to (never another one, including one held back by a handover or a gate); it refuses while a task
+  is mid-pipeline, and the round-setup routes (no round yet, complete, drifting) refuse like a planning
+  input. One guard is added: while any planning / append / handover step is still open (interrupted, not
+  closed out), the add waits — finish it with `plan` / `run` first.
+- **The title is the whole task content**: it becomes the index line, the document's title and its
+  `## Goal`; `## Scope` and `## Acceptance` are written as unrestricted, each noting its provenance
+  (`Added by plan --new-task`). Sharpen `docs/T-NNN/todo.md` before `run` when the task needs a tighter
+  scope or pinned criteria — the stop lines point there. The title must be one line.
+- **Numbering**: `autoNumber` on — continues from and advances `.auto/next-task`; otherwise the largest
+  occupied or listed number + 1. A missing numbering record is *not* recovered here (that recovery is a
+  session); the deterministic scan picks the number, and the next planning session recovers the record.
+- **A stale handover is removed first**, in its own commit before the add (the phase is distilled again
+  once the task runs) — the add itself is one commit, and both require a **clean worktree** (exit 2
+  otherwise): like every planning-side write, `--new-task` never rides a dirty tree, so after
+  establishing a round, commit the setup first.
+- **Usage errors**: with `-p`/`--file` (a planning input plans *through a session*), with `--append`
+  (the session-planned way to add tasks), on any command other than `plan`, or a blank / multi-line
+  title.
 
 ### Closing units (close and plan --force-close)
 

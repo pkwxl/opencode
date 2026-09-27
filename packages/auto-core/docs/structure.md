@@ -86,6 +86,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Phase planning | The one planner: phased and m-mode planning sessions, their plan-review pause, and the append step `appendPlan` (snapshot → reset → collect, stale-handover removal); the phase-state helpers the phase loop shares | `src/loop-plan.ts` (0006, 0047, 0053) |
 | Planning input | A phase's `plan-input.md`: read, persist, and commit before the planning unit | `src/plan-input.ts` (0053 D9) |
 | Plan prelude | `planPrelude`: the routes `plan` settles without an agent (establish a round, the round-close gate, notices, input refusals); the lines `plan` prints where its loop stops | `src/plan.ts` (0053 D4–D8, D15) |
+| Task add | `--new-task`: adding the one task a person names with no session — number, task document, index line, stale-handover removal, the task-add commit | `src/task-add.ts` (0058) |
 | Close | `closeUnit`: close a task/phase/round without completing it — the `Closed:` field, the mechanical handover of a closed phase, per-unit record clearing, the close commit | `src/close.ts` (0053 D17–D22) |
 | Task loop | Iterates a phase's tasks; `LoopCtx` | `src/loop-task.ts` |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |

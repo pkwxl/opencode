@@ -1,10 +1,12 @@
-// The plan command's core (plans/0053 D4–D8, D15, D23, D26, D34): the prelude
-// that decides every route needing no AI before an agent starts, and the lines
-// plan prints where it stops. The prelude runs under the run lock the shell
-// holds, before runAll, so it works on the dirty tree a fresh round setup
-// leaves and starts no server just to print a notice; it must never import the
-// loop. The loop (loop-phase, loop-plan) prints the same stop lines through the
-// helpers here, so plan says the same thing wherever it stops.
+// The plan command's core (plans/0053 D4–D8, D15, D23, D26, D34; the
+// no-session task add lives in src/task-add.ts, plans/0058): the prelude
+// that decides every route needing no AI before an agent starts, and the
+// lines plan prints where it stops. The prelude runs under the run lock the
+// shell holds, before runAll, so it works on the dirty tree a fresh round
+// setup leaves and starts no server just to print a notice; it must never
+// import the loop. The loop (loop-phase, loop-plan) prints the same stop
+// lines through the helpers here, so plan says the same thing wherever it
+// stops.
 //
 // Pointer texts name the lifecycle commands that exist (plans/0053 D29).
 import { join } from "node:path"
@@ -29,6 +31,7 @@ import type { PlanInput } from "./plan-input"
 import { roundCloseLines, roundCloseProblems, type RoundClose } from "./round-close"
 import { openStep, peekProgress } from "./resume"
 import { shellProfile } from "./shell"
+import { addTask } from "./task-add"
 import { loadPlan, qualifiedPhase, taskIndexPath, taskStatePaths } from "./tasks"
 
 type PlanStop = { type: "stop"; code: number; lines: string[] }
@@ -46,10 +49,14 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 //   8. m mode, empty task index → input: the loop; else a notice;
 //   9. m mode, tasks listed → input: the loop (an append, D23; --append implied, the flag redundant); else a notice;
 //  10. phased, --append on execute or handover → the loop (an append to the phase the route names now, D23).
+//  11. --new-task <title> → add one task the person names, with no session,
+//      to the phase the route names now (task-add, the mechanical half of
+//      append planning) and stop for review.
 // Input is refused before any write on the round-setup rows (D5, rows 1–3);
-// rows 9 and 10 apply the progress-record guard (D26); --append without input
-// is a usage error everywhere.
-export async function planPrelude(dir: string, opts: { phases: string; build?: string; input?: PlanInput; append?: boolean }): Promise<PlanPrelude> {
+// rows 9–11 apply the progress-record guard (D26); --append without input
+// is a usage error everywhere; row 11 refuses while a step is open (its
+// snapshot and resume machinery must not be bypassed).
+export async function planPrelude(dir: string, opts: { phases: string; build?: string; input?: PlanInput; append?: boolean; newTask?: string; autoNumber?: boolean }): Promise<PlanPrelude> {
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return stop(1, [legacy])
   const { bin } = shellProfile()
@@ -57,6 +64,22 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
   // --append without input is a usage error (D23): appending adds the tasks
   // planned from the input. The shell checks this before the lock; this
   // backstops other shells and direct callers, before any route logic.
+  // --new-task (the no-session add): the shell checks the shape and the
+  // mutual exclusions before the lock; this backstops other shells and
+  // direct callers, before any route logic — including the append backstop,
+  // so a direct --new-task --append call hears the exclusion, not the
+  // append's missing-input line.
+  if (opts.newTask !== undefined) {
+    if (!opts.newTask.trim() || opts.newTask.includes("\n")) {
+      return stop(1, [`--new-task requires a one-line task title (it becomes the index line and the task document's title); longer context goes into docs/T-NNN/todo.md after the add`])
+    }
+    if (opts.input || opts.append) {
+      return stop(1, [
+        `--new-task adds the task you name with no session; it takes no planning input and no --append — ` +
+          `pass only the title (${bin} plan ${dir} --new-task "<title>"), or plan from an input instead (${bin} plan ${dir} --append -p <text> | --file <path>)`,
+      ])
+    }
+  }
   if (opts.append && !opts.input) {
     return stop(1, [
       `--append requires a planning input: pass one with ${bin} plan ${dir} -p <text> | --file <path> — appending adds the tasks planned from the input to the current phase`,
@@ -69,6 +92,11 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     if (opts.input) {
       return stop(1, [
         `round ${roundDirName(round)} is not established yet: run ${bin} plan ${dir} without input to establish it, commit the setup, then pass the input.`,
+      ])
+    }
+    if (opts.newTask !== undefined) {
+      return stop(1, [
+        `round ${roundDirName(round)} is not established yet: run ${bin} plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`,
       ])
     }
     const lines: string[] = []
@@ -87,6 +115,12 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
       return stop(1, [
         `round ${roundDirName(round)} is complete and round ${next} is not established yet: ` +
           `run ${bin} plan ${dir} without input to establish it, commit the setup, then pass the input.`,
+      ])
+    }
+    if (opts.newTask !== undefined) {
+      return stop(1, [
+        `round ${roundDirName(round)} is complete and round ${next} is not established yet: ` +
+          `run ${bin} plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`,
       ])
     }
     const close = await roundCloseProblems(dir, round, { build: opts.build })
@@ -109,6 +143,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
   }
   if (drift) {
     if (opts.input) return stop(1, [driftInputLine(dir, drift)])
+    if (opts.newTask !== undefined) return stop(1, [driftNewTaskLine(dir, drift)])
     try {
       await syncPhaseIndex(dir, round, opts.phases)
     } catch (error) {
@@ -119,8 +154,35 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
   // Row 4.
   if (route.type === "blocked") return stop(1, [`⏸ phase flow blocked: ${route.reason}`])
   // Row 5: the interrupted step is finished first (plans/0018 precedence);
-  // the loop decides whether the record still matches the route.
+  // the loop decides whether the record still matches the route. A hand-add
+  // must not run under an open step: its snapshot and resume machinery
+  // assume they own the phase's index, so --new-task waits until the step is
+  // closed out.
+  if (opts.newTask !== undefined) {
+    const open = await openStep(dir)
+    if (open) return stop(1, [openStepNewTaskLine(dir, open)])
+  }
   if (await openStep(dir)) return { type: "loop" }
+  // Row 11 (--new-task): add one task the person names, with no session, to
+  // the phase the route names now — D23's targeting (never another phase,
+  // including one a handover or gate holds) and D26's guard, then the
+  // mechanical write (task-add) and the review stop. Covers the plan route
+  // (the phase's first task, the hand-listed m-mode entry made driver-safe),
+  // execute, handover and both m-mode rows alike: a task someone already
+  // knows needs no planner wherever it lands.
+  if (opts.newTask !== undefined) {
+    if (!route.phase.entry.hasTasks) {
+      return stop(1, [taskLessPhaseLine(dir, route.phase)])
+    }
+    const mid = await midPipelineTask(dir)
+    if (mid) return stop(1, [midPipelineLine(mid)])
+    const added = await addTask(dir, route.phase, opts.newTask, { autoNumber: opts.autoNumber })
+    if (added.type === "dirty") {
+      return stop(2, [`⏸ worktree not clean before adding the task; handle it manually (commit/clean) and re-run:`, ...added.files.map((file) => `  ${file}`)])
+    }
+    if (added.type === "failed") return stop(2, [`⏸ ${added.question}`])
+    return stop(0, addedLines(dir, added))
+  }
   if (!manual) {
     // Row 10 (plans/0053 D23): --append on the execute or handover route
     // appends to the phase the route names now — never advancing to another
@@ -247,6 +309,50 @@ function driftInputLine(dir: string, drift: PhaseTailDrift): string {
     `the phase index of round ${roundDirName(drift.round)} differs from config phases: ` +
     `run ${bin} plan ${dir} without input to re-sync it, commit the change, then pass the input.`
   )
+}
+
+// Row 3's --new-task refusal: same gate, adapted tail — the re-synced tail
+// must be reviewed and committed before a task lands in its phases.
+function driftNewTaskLine(dir: string, drift: PhaseTailDrift): string {
+  const { bin } = shellProfile()
+  return (
+    `the phase index of round ${roundDirName(drift.round)} differs from config phases: ` +
+    `run ${bin} plan ${dir} without --new-task to re-sync it, commit the change, then add the task again.`
+  )
+}
+
+// Row 11's open-step refusal: the step's snapshot and resume machinery own
+// the phase's index until closeStep; a hand-add under them would bypass both.
+function openStepNewTaskLine(dir: string, open: { step: string; unit: string }): string {
+  const { bin } = shellProfile()
+  const name = open.step === "phase-plan" ? "phase planning" : open.step === "phase-append" ? "task appending" : "phase handover"
+  return (
+    `the ${name} step of ${open.unit} was interrupted and is not closed out; ` +
+    `finish it first (run: ${bin} plan ${dir}), then add the task with --new-task`
+  )
+}
+
+// Row 11's task-less-phase refusal: only the knowledge type gets here (its
+// route distills knowledge instead of planning tasks).
+function taskLessPhaseLine(dir: string, phase: PhaseUnit): string {
+  const { bin } = shellProfile()
+  return (
+    `${phaseRefText(phase)} holds no tasks (its type, ${phase.type}, distills knowledge instead); ` +
+    `--new-task adds a task to a phase that runs them — advance through it with ${bin} run ${dir}`
+  )
+}
+
+// Row 11's success lines: what was written where, and the review point. The
+// document is deliberately minimal, so the review line names it.
+function addedLines(dir: string, added: { id: string; index: string; handoverRemoved?: string }): string[] {
+  const { bin } = shellProfile()
+  return [
+    `✓ task ${added.id} added to ${added.index} (no session: --new-task writes it directly)`,
+    ...(added.handoverRemoved !== undefined
+      ? [`✓ stale handover removed: ${added.handoverRemoved} (the phase is distilled again after the task)`]
+      : []),
+    `next: review it (sharpen the Goal / Scope / Acceptance of docs/${added.id}/todo.md if needed), then run: ${bin} run ${dir}`,
+  ]
 }
 
 // Establish a round (no AI, left uncommitted for the round-start gate G1)
