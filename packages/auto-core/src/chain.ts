@@ -242,7 +242,10 @@ export type FailedSession = { id: string; used: number }
 // the chain alone.
 // lead (plans/0059 D5) marks auto's lead as the base of its split's streams:
 // seeding forks it whatever its size (usage.ts forkBaseAllowed).
-export type ForkBaseInfo = { id: string; used: number | undefined; agent?: string; lead?: boolean }
+// digest (plans/0059 T2) marks the planned pipeline's digest base: a fork of
+// it holds the context.md digest alone, not the files the decompose session
+// read, and the subtask prompt says so (the session base holds both).
+export type ForkBaseInfo = { id: string; used: number | undefined; agent?: string; lead?: boolean; digest?: boolean }
 
 // resume.Phase → session role (the fine-grained key of model routing, see
 // plans/0017-model-routing-design.md B.5/C.1). Each phase of the execution

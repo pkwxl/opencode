@@ -114,6 +114,9 @@ export type RunAllOpts = {
   // config.parallel (MP.1, plans/0046 D8): the planning-guidance level injected
   // into the planning sessions; absent = none.
   parallel?: ParallelLevel
+  // config.scanExempt (plans/0059 X2): the deliverable paths the P1 scan and
+  // the terminator scan skip, at subtask close-out and at round close.
+  scanExempt?: string[]
   // --max-sessions (plans/0046 D9): concurrent AI sessions. Reserved until the
   // MP.3 scheduler exists: only 1 (the default) is accepted.
   maxSessions?: number

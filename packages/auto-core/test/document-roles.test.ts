@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
 import { processReferenceScan } from "../src/document/process-refs"
-import { eofScanExempt, p1Scope, PROTECTED_FILES, roleOf, ROLE_POLICIES } from "../src/document/roles"
+import { eofScanExempt, p1Scope, PROTECTED_FILES, roleOf, ROLE_POLICIES, scanExempted } from "../src/document/roles"
 import { subtaskStateSpec } from "../src/document/spec"
 import type { AddedLine } from "../src/document/types"
 import { unitAddedLines, unitBaseline } from "../src/git"
@@ -117,6 +117,60 @@ describe("role-derived policies", () => {
     for (const rel of ["docs/T-001/report.md", ".auto/progress.json", "AGENTS.md", ".opencode/auto/prompts/subtask.md", "docs/R-01/phases.md", "docs/R-01/P02-implement/plan-input.md"]) {
       expect(p1Scope(rel), rel).toBe(false)
     }
+  })
+})
+
+describe("scan exemptions (config scanExempt, plans/0059 X2)", () => {
+  const globs = ["test/fixtures/**", "templates/prompts/", "docs/*.sample.md", "pkg/{a,b}/golden"]
+
+  test("scanExempted: a glob matches the path or one of its parent directories", () => {
+    for (const rel of [
+      "test/fixtures/report.md",
+      "test/fixtures/deep/nested/x.ts",
+      "templates/prompts/subtask.md",
+      "templates/prompts/sub/dir.md",
+      "./templates/prompts/x.md",
+      "docs/plan.sample.md",
+      "pkg/a/golden/x.md",
+      "pkg/b/golden",
+    ]) {
+      expect(scanExempted(rel, globs), rel).toBe(true)
+    }
+    for (const rel of ["test/other.ts", "templates/intents/default.md", "docs/sub/plan.sample.md", "pkg/c/golden/x.md", "README.md"]) {
+      expect(scanExempted(rel, globs), rel).toBe(false)
+    }
+    expect(scanExempted("test/fixtures/report.md")).toBe(false)
+    expect(scanExempted("test/fixtures/report.md", [])).toBe(false)
+  })
+
+  test("only deliverable paths are exempted: a process document stays scanned, a matching glob cannot widen or narrow the role policy", () => {
+    // A glob over docs/ would reach the task records; the terminator scan still covers them.
+    expect(scanExempted("docs/T-001/report.md", ["docs/**"])).toBe(false)
+    expect(eofScanExempt("docs/T-001/report.md", ["docs/**"])).toBe(false)
+    expect(scanExempted("docs/guide.md", ["docs/**"])).toBe(true)
+    // Exempt by role already, whatever the list says.
+    expect(eofScanExempt("docs/R-01/phases.md", [])).toBe(true)
+  })
+
+  test("p1Scope and eofScanExempt consult the list", () => {
+    expect(p1Scope("test/fixtures/report.md")).toBe(true)
+    expect(p1Scope("test/fixtures/report.md", globs)).toBe(false)
+    expect(p1Scope("src/main.c", globs)).toBe(true)
+    expect(eofScanExempt("templates/prompts/subtask.md")).toBe(false)
+    expect(eofScanExempt("templates/prompts/subtask.md", globs)).toBe(true)
+    expect(eofScanExempt("README.md", globs)).toBe(false)
+  })
+
+  test("processReferenceScan skips exempted files, problems and warnings alike", () => {
+    const added = new Map<string, AddedLine[]>([
+      ["test/fixtures/report.md", [{ line: 1, text: "see docs/T-003/S01/index.md (T-003)" }]],
+      ["src/a.c", [{ line: 2, text: "// see .auto/progress.json" }]],
+    ])
+    expect(processReferenceScan(added).problems).toHaveLength(2)
+    const scan = processReferenceScan(added, globs)
+    expect(scan.problems).toHaveLength(1)
+    expect(scan.problems[0]).toStartWith("src/a.c:2")
+    expect(scan.warnings).toEqual([])
   })
 })
 

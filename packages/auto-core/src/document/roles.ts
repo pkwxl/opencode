@@ -9,7 +9,9 @@
 //   - the handoff role's two protocol shapes (session handoff status line,
 //     phase handover four sections) are checked here;
 //   - the P1 prohibition scan (process-refs.ts) targets exactly the paths
-//     whose role is not a process role (p1Scope).
+//     whose role is not a process role (p1Scope);
+//   - both scans skip the deliverable paths the project lists in its config
+//     key scanExempt (scanExempted, plans/0059 X2).
 // Legacy layouts have no shapes here (M3.7, plans/0047 R3): an old project is
 // a usage error before any path is classified.
 //
@@ -134,10 +136,35 @@ export function roleOf(rel: string): DocumentRole {
   return "freeform"
 }
 
+// The project's scan exemptions (config scanExempt, plans/0059 X2): globs of
+// deliverable paths where process-shaped strings or terminator-free Markdown
+// are content, not a slip — a tool's own test fixtures and prompt templates.
+// A path is exempt when a glob matches it or one of its parent directories,
+// so a glob naming a directory covers the files under it. Only the
+// deliverable side (freeform) is ever exempted: the process roles keep their
+// own policies whatever a glob says.
+// AUTO-DECISION: an exemption reaches freeform paths only (a glob as broad as docs/** must not switch off the terminator check of the driver's own task artifacts; the process roles are the P1 scan's referenced side anyway)
+// AUTO-DECISION: a glob matches the path or any parent directory of it (a person naming a fixtures directory means the files in it; `dir/**` still works as written)
+const compiled = new Map<string, InstanceType<typeof Bun.Glob>>()
+export function scanExempted(rel: string, globs: readonly string[] = []): boolean {
+  if (!globs.length) return false
+  const path = rel.replaceAll("\\", "/").replace(/^\.\//, "")
+  if (roleOf(path) !== "freeform") return false
+  const parts = path.split("/")
+  const candidates = parts.map((_, i) => parts.slice(0, parts.length - i).join("/"))
+  return globs.some((glob) => {
+    const pattern = glob.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "")
+    const matcher = compiled.get(pattern) ?? new Bun.Glob(pattern)
+    compiled.set(pattern, matcher)
+    return candidates.some((candidate) => matcher.match(candidate))
+  })
+}
+
 // Whether a path is exempt from the whole-unit document terminator scan
-// (session-boundary-hardening §4.6 D6), derived from its role.
-export function eofScanExempt(rel: string): boolean {
-  return !ROLE_POLICIES[roleOf(rel)].eofScan
+// (session-boundary-hardening §4.6 D6), derived from its role; `exempt` is
+// the project's scan exemptions (scanExempted).
+export function eofScanExempt(rel: string, exempt: readonly string[] = []): boolean {
+  return !ROLE_POLICIES[roleOf(rel)].eofScan || scanExempted(rel, exempt)
 }
 
 // Agent-contract surfaces: freeform by role (the project owns them), but
@@ -151,10 +178,11 @@ function contractSurface(path: string): boolean {
 }
 
 // Whether a path belongs to the deliverable side P1 protects: a non-process
-// role and not an agent-contract surface.
-export function p1Scope(rel: string): boolean {
+// role, not an agent-contract surface and not one of the project's scan
+// exemptions (`exempt`, scanExempted).
+export function p1Scope(rel: string, exempt: readonly string[] = []): boolean {
   const path = rel.replaceAll("\\", "/").replace(/^\.\//, "")
-  return !ROLE_POLICIES[roleOf(path)].process && !contractSurface(path)
+  return !ROLE_POLICIES[roleOf(path)].process && !contractSurface(path) && !scanExempted(path, exempt)
 }
 
 // —— handoff role: protocol checks ——

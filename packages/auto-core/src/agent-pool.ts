@@ -28,7 +28,7 @@ import { activateRings, spawnKeyConfig } from "./keyring"
 import { log } from "./log"
 import { stepValidationLines } from "./model-step"
 import type { ModelEntry, ModelRegistry } from "./models"
-import type { ClientSource, PermissionMode, ServerControl } from "./opts"
+import type { ClientSource, PermissionMode, ServerControl, SubtaskMode } from "./opts"
 import { dispatchAgentProfiles, routingFacts } from "./routing"
 import { shellAdapter } from "./shell"
 import { autoSwitches, clampSwitches, type AgentChoice } from "./switches"
@@ -72,15 +72,21 @@ export type StartPoolOpts = {
   managed?: AgentHost
   // The model registry loaded at run start; undefined = none.
   registry?: ModelRegistry
+  // The run's subtask mode: degradation names what auto loses on a fleet that
+  // cannot fork (plans/0059 D7).
+  subtask?: SubtaskMode
 }
 
 // The pool surface plus what tests read: which agent profiles' hosts started
 // (in start order, the closed ones included).
 export type AgentPool = ServerControl & { startedAgents(): string[] }
 
+// leadSplit false = the fleet cannot fork, so auto's lead runs without its
+// split clause (plans/0059 D7; Degradation.leadSplit), carried to every task
+// through Opts.leadSplit.
 export type StartedPool =
-  | { pool: AgentPool; profileName: string; error?: string }
-  | { pool?: undefined; profileName?: undefined; error: string }
+  | { pool: AgentPool; profileName: string; error?: string; leadSplit?: false }
+  | { pool?: undefined; profileName?: undefined; error: string; leadSplit?: undefined }
 
 // A host that cannot start for a dispatch (a profile env reference that no
 // longer resolves, a factory gap): the run stops (exit 1), exactly as the
@@ -122,7 +128,7 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
     const profileName = agent?.name ?? "opencode"
     if (degraded.error) return { pool: singleHostPool(host, profileName), profileName, error: degraded.error }
     clampSwitches(degraded.switches)
-    return { pool: singleHostPool(host, profileName), profileName }
+    return { pool: singleHostPool(host, profileName), profileName, ...(degraded.leadSplit === false ? { leadSplit: false as const } : {}) }
   }
   const registry = opts.registry
   const startProfile = agentProfileFor(registry, agent?.name)
@@ -170,7 +176,7 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
   for (const note of degraded.notes) log(`⚙ ${note}`)
   if (degraded.error) return { error: degraded.error }
   clampSwitches(degraded.switches)
-  return { pool: poolOf(directory, opts, registry, profileName, preludeEnvs), profileName }
+  return { pool: poolOf(directory, opts, registry, profileName, preludeEnvs), profileName, ...(degraded.leadSplit === false ? { leadSplit: false as const } : {}) }
 }
 
 // The pool under a registry: lazy hosts per profile, keyed by profile name.

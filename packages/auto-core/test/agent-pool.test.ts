@@ -47,6 +47,7 @@ type FleetFixture = {
   pool: Exclude<Awaited<ReturnType<typeof startPool>>["pool"], undefined>
   profileName: string
   facts: RoutingFacts
+  leadSplit?: false
 }
 
 // A two-agent fleet: deep [a1 (agent a), b1 (agent b)], simple [b1]. The
@@ -74,7 +75,16 @@ async function fleet(optionsA: FakeAgentOptions = {}, optionsB: FakeAgentOptions
   const started = await startPool(dir, { registry })
   if (started.pool === undefined) throw new Error(started.error)
   const facts = routingFacts(registry, undefined, started.profileName)
-  return { a, b, hosts, registry, pool: started.pool, profileName: started.profileName, facts: { ...facts, agentFilter: undefined, filterSource: undefined } }
+  return {
+    a,
+    b,
+    hosts,
+    registry,
+    pool: started.pool,
+    profileName: started.profileName,
+    facts: { ...facts, agentFilter: undefined, filterSource: undefined },
+    ...(started.leadSplit === false ? { leadSplit: false as const } : {}),
+  }
 }
 
 const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
@@ -333,6 +343,52 @@ describe("the capability intersection (§8.5)", () => {
       expect(lines.filter((line) => line.startsWith("⚙"))).toEqual([])
     } finally {
       pool.close()
+    }
+  })
+
+  test("a fleet agent that cannot fork: auto's lead runs without its split clause for the whole run, the note naming that agent (plans/0059 D7)", async () => {
+    const dir = await temp("auto-agent-pool-nofork-")
+    const a = fakeAgent({ capabilities: { fork: "none" }, limits: { "prov/a": 100_000 } })
+    const b = fakeAgent({ limits: { "other/b": 100_000 } })
+    registerAgentAdapter("fake-a", { host: fakeAgentHost(a).factory, capabilities: { ...FULL_CAPABILITIES, fork: "none" } })
+    registerAgentAdapter("fake-b", { host: fakeAgentHost(b).factory, capabilities: FULL_CAPABILITIES })
+    const file = join(dir, "models.json")
+    await writeFile(
+      file,
+      JSON.stringify({
+        agents: { a: { adapter: "fake-a" }, b: { adapter: "fake-b" } },
+        models: { a1: { agent: "a", model: "prov/a" }, b1: { agent: "b", model: "other/b" } },
+        tiers: { deep: ["a1", "b1"], simple: ["b1"] },
+      }),
+    )
+    const registry = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } }))!
+    // The fork switch the degradation clamps is restored for later tests.
+    const { fork } = autoSwitches()
+    try {
+      const auto = await startPool(dir, { registry, subtask: "auto" })
+      expect(auto.leadSplit).toBe(false)
+      expect(lines).toContain(
+        "⚙ --subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as an ondemand session does; fake-a (a1) has none",
+      )
+      auto.pool?.close()
+      // The planned pipeline has no clause to lose: no note, the fact alone.
+      lines.length = 0
+      const pipeline = await startPool(dir, { registry, subtask: "true" })
+      expect(pipeline.leadSplit).toBe(false)
+      expect(lines.some((line) => line.includes("--subtask auto"))).toBe(false)
+      pipeline.pool?.close()
+    } finally {
+      clampSwitches({ fork })
+    }
+  })
+
+  test("a fleet that forks keeps the split clause: no leadSplit, no note", async () => {
+    const started = await fleet()
+    try {
+      expect(started.leadSplit).toBeUndefined()
+      expect(lines.some((line) => line.includes("--subtask auto"))).toBe(false)
+    } finally {
+      started.pool.close()
     }
   })
 })

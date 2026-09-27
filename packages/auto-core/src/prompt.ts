@@ -9,7 +9,7 @@ import type { ModeSpec } from "./mode"
 import { dutiesForPhase, loadIntents, packSubsection, resolveIntent } from "./intent/load"
 import type { IntentPack, IntentSection } from "./intent/types"
 import { subtaskDoc, taskDoc } from "./docpaths"
-import { prerequisites, type Plan, type Status, type Task } from "./tasks"
+import { checklistTitle, prerequisites, type Plan, type Status, type Task } from "./tasks"
 import type { ResolveItem } from "./resolve"
 import type { StuckHit } from "./stuck"
 import { phaseType, REQUIRED_TYPE, type PhaseKey, type PhaseTypeEntry } from "./phases/registry"
@@ -61,7 +61,10 @@ export function intentText(section: IntentSection, key: string, ctx: Ctx): strin
 // the fine-grained decompose switch (OPENCODE_AUTO_DECOMPOSE_FINE, wiring in
 // plans/0003-fork-decompose-design.md §4.6) — the entry's decompose template is
 // chosen and rendered from these (phaseName = the display name; contextBudget =
-// the half-budget granularity ceiling; fine injects the fine-grained criteria).
+// the half-budget granularity ceiling, an item's own work counted above the
+// context its session starts with — plans/0059 T3: a fresh subtask session's
+// harness and prompt alone can reach the whole half budget; fine injects the
+// fine-grained criteria).
 // taskContext: the understanding digest's line-count tier
 // (OPENCODE_AUTO_TASK_CONTEXT, see src/switches.ts); the understand template
 // renders contextLines from it (suggested wording, not a hard cut).
@@ -319,11 +322,19 @@ function doneIds(plan: Plan): string | undefined {
 // continuation means the previous session was interrupted by the context
 // limit and must read the handover document before continuing.
 // index/subtaskList/outputFile/warm (the fork three-stage pipeline,
-// fork-decompose design §8): inject the full checklist list plus "you are
+// fork-decompose design §8): inject the checklist list plus "you are
 // responsible for only item N of it this run", the standalone write-out
 // file for document-type outputs (mechanically named by the driver), and
 // warm = the session inherited the task background context from the fork
 // base (a cold start instead prompts reading the context.md digest first).
+// The list names every item by title (tasks.ts checklistTitle) and the
+// session's own item follows in full (plans/0059 T1: the other items' full
+// text was half of every subtask prompt, repeated in each). digest = the base
+// is the digest base, which holds the context.md digest but none of the files
+// the decompose session read, so the warm sentence must not claim them (T2).
+// last = every other item is done: the item runs the task's full acceptance
+// verification once, after its own targeted checks (T5/T6 — no close-out
+// item re-runs it); derived from the checklist when absent.
 // When absent, index/list/output file are derived from the task checklist
 // (subtasks.md) (same convention as the runner's subtask loop); old
 // callers passing no params still render the full prompt.
@@ -336,11 +347,12 @@ export function renderSubtask(
   plan: Plan,
   task: Task,
   subtask: string,
-  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; budget?: boolean } = {},
+  opts: Opts & { continuation?: boolean; index?: number; subtaskList?: string; outputFile?: string; warm?: boolean; digest?: boolean; last?: boolean; budget?: boolean } = {},
 ): string {
   const items = task.checklist ?? []
   const at = opts.index !== undefined ? opts.index - 1 : items.findIndex((item) => !item.done && item.text === subtask)
   const index = at >= 0 ? String(at + 1) : undefined
+  const last = opts.last ?? (at >= 0 && at < items.length && items.every((item, i) => item.done || i === at))
   const ctx = baseCtx(plan, task, { ...opts, index: index !== undefined ? Number(index) : undefined })
   const outputFile = opts.outputFile ?? (index !== undefined ? subtaskOutputFile(task, at + 1) : undefined)
   return renderPrompt("subtask", {
@@ -377,13 +389,15 @@ export function renderSubtask(
     subtaskSnapshot: subtaskSnapshot(items),
     doneIds: doneIds(plan),
     index,
-    subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${item.text}`).join("\n") : undefined),
+    subtaskList: opts.subtaskList ?? (items.length ? items.map((item, i) => `${i + 1}. ${checklistTitle(item.text)}`).join("\n") : undefined),
     outputFile,
     // Subtask-directory state protocol (M1.0): the scope declaration file
     // fixed at decompose time; old-shape tasks lack the file, and the
     // template conditions on it with "if it exists" wording.
     todoFile: index !== undefined ? subtaskDoc(task.id, Number(index), "todo") : undefined,
     warm: Boolean(opts.warm),
+    digest: Boolean(opts.digest),
+    last,
     budget: Boolean(opts.budget),
   })
 }

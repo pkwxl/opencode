@@ -53,7 +53,7 @@ Domains depend one way and only through their entry modules; the driver sits on 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Frozen schema | Artifact-spec and role types | `src/document/types.ts` (0031) |
-| Role model | `roleOf` path classifier + per-role policies (eof-scan exemption, protect list, handoff checks) | `src/document/roles.ts` (0045) |
+| Role model | `roleOf` path classifier + per-role policies (eof-scan exemption, protect list, handoff checks); the project's scan exemptions (config `scanExempt`, `scanExempted`) | `src/document/roles.ts` (0045, 0059 X2) |
 | Unit model | Phase/task/subtask refs and paths, todo/done scan and rename, index parsing, `Depends:`/`Touches:` fields, the `closed` map read from `Closed:` lines, `nextReady` selection | `src/document/unit.ts` (0047, 0053 D16) |
 | Subtask state protocol | `docs/T-NNN/S<nn>/todo.md` → `done.md` | `src/document/state.ts` (0030, 0045) |
 | Artifact specs | `Artifacts:` declaration parsing, spec tables, spec-driven mechanical checks | `src/document/spec.ts` (0034) |
@@ -95,7 +95,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Agent choice | The adapter a run drives (shell profile > `OPENCODE_AUTO_AGENT` > config > opencode) and the start profile a name resolves to under a registry (`agentProfileFor`) | `src/agent-choice.ts` (0041, 0055) |
 | Agent pool | The run's agent hosts under one control: under a model registry one lazily started host per agent profile (a profile nobody selects never spawns), the capability intersection at run start, preflight's bin check and the `models --probe` core; without one the single agent starts eagerly, exactly as before | `src/agent-pool.ts` |
 | Agent environments | An agent profile's env resolved into the overlay its host starts with (values never logged); the loopback proxy warning of preflight | `src/agent-env.ts` (0055) |
-| Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks; under a registry, the intersection over the fleet's static records | `src/capability.ts` (0040, 0055) |
+| Capability degradation | Maps missing `AgentCapabilities` to existing fallbacks; under a registry, the intersection over the fleet's static records; a fleet that cannot fork withholds auto's split clause (`leadSplit`) | `src/capability.ts` (0040, 0055, 0059 D7) |
 | Usage source | Four `UsageTier`s and their effect on reuse, handover, steer, fork | `src/usage.ts` (0038) |
 
 ### Model registry and routing
@@ -119,7 +119,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 |---|---|---|
 | Task pipeline | `runOnce`/`runTask`: decompose → subtasks (or whole) → wrap-up → closeout; resume | `src/runner.ts` |
 | Execution | Merged understand+decompose session, per-subtask sessions, whole-task session (auto's lead, its split judged after each session), the split's streams as forks of the lead with their own handover | `src/execute.ts` (0030, 0059) |
-| Lead's split | The lead's checklist lines, the structural split guard, the driver-written `S<nn>/todo.md`, the taken-split check, a stream's title and the driver-state filter of its changed-files list | `src/split.ts` (0059 D3–D5) |
+| Lead's split | The lead's checklist lines, the structural split guard, the driver-written `S<nn>/todo.md`, the taken-split check and the driver-state filter of its changed-files list (a checklist item's title is `tasks.ts` `checklistTitle`, shared with the pipeline's subtask prompt) | `src/split.ts` (0059 D3–D5, T1) |
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
 | Session driving | `runSession` retry / server restart / key-ring rotation → model failover / `awaitRecovery`; a spent quota window with a stated reset skips the retry ladder; the scheduled wait (`planSleep`: the recovery sleep to a known instant — a candidate usable again, a stated or learned reset — plus jitter, `/exit` a boundary inside it); registry window wait (sleep to the opening plus hibernate's jitter, booked as a `window` wait); `ensureForkBase` (per agent, built with the subtask route's pick) | `src/session.ts` (0015, 0017, 0055 §6.3, §7, §8.4, 0057 §4.1, §6) |
 | Single dispatch | Reuse-or-create, model target and the chain's agent binding, resume point, stats segment, wait for idle | `src/attempt.ts` |

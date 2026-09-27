@@ -9,7 +9,7 @@ Current task:
 {{#if modeExec}}Scenario mode notes ({{modeName}}):
 {{modeExec}}
 
-{{/if}}{{#if subtaskList}}The complete subtask list of this task (executed in order; the other items belong to other sessions, do not touch them):
+{{/if}}{{#if subtaskList}}The subtask list of this task, by title (executed in order; the other items belong to other sessions, do not touch them):
 
 {{subtaskList}}
 
@@ -21,8 +21,10 @@ You are responsible for item {{index}} of that list only:
 {{#if continuation}}
 The previous session was interrupted by the context limit. First read {{handoffFile}} to learn the progress and the next steps, then carry on from there.
 {{/if}}
-{{#if warm}}This session has inherited the task-background context (the understanding stage's digest and loaded content), so do not re-read files that are already in context; if background is still missing, read the docs/{{taskId}}/context.md digest.{{/if}}{{^warm}}If docs/{{taskId}}/context.md exists, read it first to learn the task background before starting (if it does not exist, read the source yourself as needed).{{/if}}
+{{#if warm}}{{#if digest}}This session has inherited the task-background digest: the text of docs/{{taskId}}/context.md is already in context, so do not re-read it. The files the understanding stage read are not in this context — read the ones this subtask needs.{{/if}}{{^digest}}This session has inherited the task-background context (the understanding stage's digest and loaded content), so do not re-read files that are already in context; if background is still missing, read the docs/{{taskId}}/context.md digest.{{/if}}{{/if}}{{^warm}}If docs/{{taskId}}/context.md exists, read it first to learn the task background before starting (if it does not exist, read the source yourself as needed).{{/if}}
 {{#if todoFile}}This subtask's scope declaration is in {{todoFile}} (written during decomposition — read it first if it exists). {{/if}}If docs/{{taskId}}/shared.md (the shared-context index) exists, read the files it lists on demand and by reference. The todo.md/done.md state files are managed by the DRIVER alone: you must not create, rename or delete them — the completion decision for this subtask and the rename belong to the DRIVER.
+
+Verification: run the checks that target this subtask's own changes (its tests, the typecheck or build of what it touched), not the full suite.{{#if last}} This is the last subtask: once it is done, run the task's full acceptance verification once, for the whole task, and fix what it finds.{{/if}}
 
 {{> doc-layout}}
 

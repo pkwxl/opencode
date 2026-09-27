@@ -522,6 +522,25 @@ describe("runSubtask P1 prohibition scan (M2.3)", () => {
     }
   })
 
+  test("scan exemptions (config scanExempt, plans/0059 X2): an exempted fixture may hold process paths and terminator-free Markdown; one session, ticked", async () => {
+    const dir = await shapeRepo()
+    try {
+      const { client, calls } = scriptedClient([
+        async () => {
+          await Bun.write(join(dir, "docs/T-001/S01/record.md"), properDoc)
+          await Bun.write(join(dir, "test/fixtures/report.md"), "# Fixture\n\nA sample report pointing at docs/T-004/report.md and .auto/units.json.\n")
+        },
+      ])
+      const plan = await reloadUnits(dir)
+      const result = await runSubtask(client, plan, plan.tasks[0]!, BODY, 1, { dir, commit: true, scanExempt: ["test/fixtures"] }, makeChain())
+      expect(result).toBeUndefined()
+      expect(calls.prompts.length).toBe(1)
+      expect(((await reloadUnits(dir)).tasks[0]!.checklist ?? [])[0]!.done).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("the reference stays after the re-prompt → blocked, not ticked", async () => {
     const dir = await shapeRepo()
     try {

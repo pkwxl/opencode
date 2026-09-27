@@ -10,6 +10,8 @@ import {
   loadProjectConfig,
   mergeProjectConfig,
   saveProjectConfig,
+  scanExemptProblem,
+  splitGlobList,
   type ProjectConfig,
 } from "../src/config"
 
@@ -461,5 +463,68 @@ describe("config key parallel (MP.1, plans/0046 D8)", () => {
   test("the summary line mentions the level only above none", () => {
     expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("parallel")
     expect(formatProjectConfig({ ...CONFIG_DEFAULTS, parallel: "medium" })).toEndWith(" · parallel medium")
+  })
+})
+
+describe("config key scanExempt (plans/0059 X2)", () => {
+  test("absent and [] load as undefined; a glob array reads back; a non-array or a bad glob throws naming it", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, "{}")
+      expect((await loadProjectConfig(dir)).scanExempt).toBeUndefined()
+      writeConfig(dir, JSON.stringify({ scanExempt: [] }))
+      expect((await loadProjectConfig(dir)).scanExempt).toBeUndefined()
+      writeConfig(dir, JSON.stringify({ scanExempt: ["test/fixtures/**", "templates/prompts"] }))
+      expect((await loadProjectConfig(dir)).scanExempt).toEqual(["test/fixtures/**", "templates/prompts"])
+      for (const value of ["test/**", [1], { a: "b" }]) {
+        writeConfig(dir, JSON.stringify({ scanExempt: value }))
+        expect(loadProjectConfig(dir)).rejects.toThrow("scanExempt must be an array of path globs")
+      }
+      writeConfig(dir, JSON.stringify({ scanExempt: ["ok/**", "/abs", "../up/x", ""] }))
+      const error = await loadProjectConfig(dir).catch((caught: Error) => caught.message)
+      expect(error).toContain("scanExempt: ")
+      expect(error).toContain('"/abs" is absolute')
+      expect(error).toContain('"../up/x" climbs out of the target directory')
+      expect(error).toContain("an empty glob")
+      expect(error).not.toContain("ok/**")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a config without the key saves without it; a list round-trips", async () => {
+    const dir = tempDir()
+    try {
+      writeConfig(dir, JSON.stringify({ scanExempt: [] }))
+      await saveProjectConfig(dir, await loadProjectConfig(dir))
+      expect(await Bun.file(join(dir, ".opencode", "auto", "config.json")).text()).not.toContain("scanExempt")
+      await saveProjectConfig(dir, { ...CONFIG_DEFAULTS, scanExempt: ["fixtures"] })
+      expect((await loadProjectConfig(dir)).scanExempt).toEqual(["fixtures"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("the summary line lists the globs only when set", () => {
+    expect(formatProjectConfig(CONFIG_DEFAULTS)).not.toContain("scan-exempt")
+    expect(formatProjectConfig({ ...CONFIG_DEFAULTS, scanExempt: ["a/**", "b"] })).toEndWith(" · scan-exempt a/**,b")
+  })
+
+  test("scanExemptProblem names what makes a glob unusable", () => {
+    for (const glob of ["test/**", "templates/prompts/", "*.golden.md", "pkg/{a,b}/x", "./fixtures"]) expect(scanExemptProblem(glob), glob).toBeUndefined()
+    expect(scanExemptProblem("")).toBe("an empty glob")
+    expect(scanExemptProblem("  ")).toBe("an empty glob")
+    expect(scanExemptProblem(" a/**")).toContain("surrounding whitespace")
+    expect(scanExemptProblem("/etc/**")).toContain("is absolute")
+    expect(scanExemptProblem("C:\\work\\x")).toContain("is absolute")
+    expect(scanExemptProblem("a/../b")).toContain("climbs out")
+    expect(scanExemptProblem("..\\b")).toContain("climbs out")
+  })
+
+  test("splitGlobList: commas split outside brace groups; entries trimmed, empty ones dropped", () => {
+    expect(splitGlobList("a/**, b ,,c")).toEqual(["a/**", "b", "c"])
+    expect(splitGlobList("pkg/{a,b}/x,docs/*.{md,txt}")).toEqual(["pkg/{a,b}/x", "docs/*.{md,txt}"])
+    expect(splitGlobList(" , ")).toEqual([])
+    expect(splitGlobList("")).toEqual([])
   })
 })

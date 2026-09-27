@@ -74,6 +74,33 @@ describe("degrade: run-start clamp", () => {
     expect(degrade({ ...OPENCODE_CAPABILITIES, resume: false }, ALL_ON, {}).switches).toEqual({ fork: false, reuseSession: false })
   })
 
+  test("fork none or no resume: auto's lead loses its split clause for the run, with a note under auto only; a forking agent keeps it (plans/0059 D7)", () => {
+    const none = degrade({ ...OPENCODE_CAPABILITIES, fork: "none" }, parseSwitches({}), {})
+    expect(none.leadSplit).toBe(false)
+    expect(none.notes).toContain(
+      "--subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as an ondemand session does",
+    )
+    // Whatever the pipeline's switch says: OPENCODE_AUTO_FORK governs true alone.
+    const switchOff = degrade({ ...OPENCODE_CAPABILITIES, resume: false }, parseSwitches({ [SWITCH_ENV.fork]: "off" }), { subtask: "auto" })
+    expect(switchOff.leadSplit).toBe(false)
+    expect(switchOff.notes.some((note) => note.startsWith("--subtask auto:"))).toBe(true)
+    // Another mode offers no clause, so nothing is said; the fact stays.
+    const ondemand = degrade({ ...OPENCODE_CAPABILITIES, fork: "none" }, parseSwitches({}), { subtask: "ondemand" })
+    expect(ondemand.leadSplit).toBe(false)
+    expect(ondemand.notes.some((note) => note.startsWith("--subtask auto:"))).toBe(false)
+    // A session-granularity fork is a fork.
+    expect(degrade(HEADLESS, parseSwitches({}), {}).leadSplit).toBeUndefined()
+  })
+
+  test("no steer under auto: the steer note says the lead gets no split clause (the clamped steer withholds it, plans/0059 D7)", () => {
+    const steer = (subtask?: "auto" | "true") => degrade(HEADLESS, ALL_ON, subtask ? { subtask } : {}).notes.find((note) => note.startsWith(SWITCH_ENV.steer))!
+    expect(steer()).toContain("--subtask auto's lead gets no split clause")
+    expect(steer("auto")).toContain("--subtask auto's lead gets no split clause")
+    expect(steer("true")).toBe(
+      `${SWITCH_ENV.steer}=on needs an agent that takes messages mid-turn; running with steer off (no handover hint, a session over the cap finishes naturally)`,
+    )
+  })
+
   test("--test-by-driver without steer has no fallback: startup error, dryrun exempt", () => {
     expect(degrade(HEADLESS, parseSwitches({}), { testByDriver: true }).error).toContain("--test-by-driver")
     expect(degrade(HEADLESS, parseSwitches({}), { testByDriver: true, dryrun: true }).error).toBeUndefined()

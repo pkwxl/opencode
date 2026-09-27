@@ -10,8 +10,9 @@
 // final figure against the wall, src/usage.ts splitUsageReached) and the
 // accept / reject flow live in execute.ts executeWhole. For the streams that
 // run afterwards as forks of the lead (D5, execute.ts runSubtask) it also
-// gives each stream's title and the driver-state filter of the files changed
-// since the split.
+// gives the driver-state filter of the files changed since the split (each
+// stream's title is tasks.ts checklistTitle, shared with the pipeline's
+// subtask prompt).
 //
 // The guard, all of which must hold for a split to be taken:
 //   - 2 to 5 items: one stream is no split, more than five is finer than a
@@ -32,7 +33,7 @@ import { subtaskDoc, taskDir, taskDoc } from "./docpaths"
 import { declaredArtifacts, SUBTASK_TODO_SECTIONS } from "./document/spec"
 import { checklistProblems, scanSubtaskStates, subtaskId } from "./document/state"
 import { resolveDepends } from "./document/unit"
-import { subtasks } from "./tasks"
+import { CHECKLIST_FIELD, subtasks } from "./tasks"
 
 export const SPLIT_MIN = 2
 export const SPLIT_MAX = 5
@@ -53,9 +54,9 @@ export type SplitItem = {
   artifacts: string[]
 }
 
-// Field markers inside a line: the protocol strings `Depends:` and
-// `Artifacts:`, read case-insensitively (plans/0035 D2), in either order.
-const FIELD = /(?:^|\s)(depends|artifacts)\s*[:：]/gi
+// Field markers inside a line (tasks.ts CHECKLIST_FIELD): `Depends:` and
+// `Artifacts:`, case-insensitive, in either order.
+const FIELD = CHECKLIST_FIELD
 
 export function splitItem(text: string, index: number): SplitItem {
   const marks = [...text.matchAll(FIELD)].map((m) => ({ name: m[1]!.toLowerCase(), start: m.index!, end: m.index! + m[0].length }))
@@ -193,17 +194,6 @@ export async function writeSplitTodos(dir: string, taskId: string, items: readon
     await mkdir(dirname(file), { recursive: true })
     await Bun.write(file, renderSplitTodo(item))
   }
-}
-
-// A stream's title, for the sibling list of a fan-out prompt (plans/0059 D5:
-// the other streams by title only): the line's text up to the colon that
-// ends its title (`<title>: <what, where, how to verify>`), the whole
-// description when there is none, capped at 60 characters.
-export function splitTitle(text: string): string {
-  const { description } = splitItem(text, 0)
-  const colon = description.search(/[:：](?:\s|$)/)
-  const title = (colon > 0 ? description.slice(0, colon) : description).trim()
-  return title.length > 60 ? `${title.slice(0, 59)}…` : title
 }
 
 // The driver's own writes around the streams — the checklist ticks and the

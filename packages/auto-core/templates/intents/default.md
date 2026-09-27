@@ -11,9 +11,13 @@
      prefer finer over coarser — the fork pipeline has removed the fixed cost of re-understanding between subtasks, so a fine item's marginal
      cost is low; order the fine items explicitly into an executable sequence, placing an item that depends on an earlier one after it;
 {{/if}}   - Each item self-contained: executable from the item description alone plus this subtask's todo.md, the task-background digest
-     context.md, the shared-context index shared.md and docs/, and including the way to verify it;
+     context.md, the shared-context index shared.md and docs/, and including the way to verify it — the checks that target the item's own
+     changes (its tests, the typecheck or build of what it touched), not the task's full suite;
    - Each item declares its artifacts: documents state the file path, code states the module/file range;
-   - Budget-oriented: each item should be completable by a single session with a smallish context (on the order of {{contextBudget}} tokens);
+   - Budget-oriented: each item's own work — what its session reads and writes beyond the context it starts with (the agent's harness, its
+     prompt and the inherited background) — should be on the order of {{contextBudget}} tokens;
+   - No close-out item: the task's final verification (the full suite, the build, the acceptance checks of the task description) is not an
+     item of its own — the last item runs it once, after its own work;
 
 ### self-check-subtask
 

@@ -181,6 +181,23 @@ describe("round-close gate (plans/0049 G8)", () => {
   )
 
   test(
+    "scan exemptions (config scanExempt, plans/0059 X2): an exempted deliverable path is left out of the whole-tree scan",
+    withDir(async (dir) => {
+      await gitRepo(dir)
+      await establishRound(dir, { phases: "am" })
+      writeFileSync(join(dir, "docs/R-01/round.md"), `# Round R-01\n\n${FILLED_CLOSE}`)
+      mkdirSync(join(dir, "test/fixtures"), { recursive: true })
+      writeFileSync(join(dir, "test/fixtures/sample.md"), "a sample task record: docs/T-004/report.md\n")
+      await git(dir, "add", "-A")
+      await git(dir, "commit", "-qm", "round")
+      const scanned = await roundCloseProblems(dir, 1, { build: "true" })
+      expect(scanned.problems).toHaveLength(1)
+      expect(scanned.problems[0]).toStartWith('process reference: test/fixtures/sample.md:1 references "docs/T-004/report.md"')
+      expect(await roundCloseProblems(dir, 1, { build: "true", scanExempt: ["test/fixtures/**"] })).toEqual({ problems: [], warnings: [] })
+    }),
+  )
+
+  test(
     "untracked deliverable files are scanned too; a missing round.md is a problem",
     withDir(async (dir) => {
       await gitRepo(dir)

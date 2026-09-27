@@ -86,6 +86,15 @@ export type ProjectConfig = {
   // into the planning templates. Absent = none (nothing injected, today's
   // prompts byte for byte). Planning guidance only: tasks still run one at a time.
   parallel?: ParallelLevel
+  // Path globs, relative to the target directory, of deliverable files the
+  // driver's two content scans skip (plans/0059 X2): the P1 prohibition scan
+  // (process-document paths in added lines, at unit close-out and at round
+  // close) and the whole-unit document terminator scan. For a deliverable
+  // that legitimately holds process-shaped strings or terminator-free
+  // Markdown, such as a tool's own test fixtures and prompt templates. A glob
+  // naming a directory covers the files under it. Absent (or []) = none; set
+  // with init/amend --scan-exempt, shared with the repository like every key.
+  scanExempt?: string[]
 }
 
 export const CONFIG_DEFAULTS: ProjectConfig = {
@@ -251,7 +260,8 @@ export function formatProjectConfig(config: ProjectConfig): string {
     ` · context-limit ${config.contextLimit}k · phases ${config.phases}` +
     (config.acceptanceGate?.length ? ` · acceptance gate ${config.acceptanceGate.join(",")}` : "") +
     (config.build ? " · build set" : "") +
-    (config.parallel ? ` · parallel ${config.parallel}` : "")
+    (config.parallel ? ` · parallel ${config.parallel}` : "") +
+    (config.scanExempt?.length ? ` · scan-exempt ${config.scanExempt.join(",")}` : "")
   )
 }
 
@@ -311,6 +321,7 @@ export function validateProjectConfig(raw: unknown, dir: string): ProjectConfig 
     acceptanceGate: acceptanceGateOf(record.acceptanceGate, types.map((entry) => entry.type)),
     build: record.build === undefined ? undefined : stringOf("build", record.build),
     parallel: parallelOf(record.parallel),
+    scanExempt: scanExemptOf(record.scanExempt),
   }
 }
 
@@ -331,6 +342,50 @@ export function parallelOf(value: unknown): ParallelLevel | undefined {
     throw new Error(`${CONFIG_FILE} parallel must be none|${PARALLEL_LEVELS.join("|")}`)
   }
   return value as ParallelLevel
+}
+
+// scanExempt (plans/0059 X2): an array of usable globs; absent or [] = none.
+function scanExemptOf(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`${CONFIG_FILE} scanExempt must be an array of path globs (relative to the target directory)`)
+  }
+  const problems = value.flatMap((glob) => scanExemptProblem(glob) ?? [])
+  if (problems.length) throw new Error(`${CONFIG_FILE} scanExempt: ${problems.join("; ")}`)
+  return value.length ? value : undefined
+}
+
+// Why one scan-exemption glob is unusable, undefined when it is fine: the
+// scans see repository-relative paths, so an absolute glob or one climbing
+// out with `..` could never match, and an empty one says nothing. Shared by
+// the config load and the shells' --scan-exempt parse.
+export function scanExemptProblem(glob: string): string | undefined {
+  if (!glob.trim()) return "an empty glob"
+  if (glob.trim() !== glob) return `"${glob}" has surrounding whitespace`
+  if (glob.startsWith("/") || /^[A-Za-z]:[\\/]/.test(glob)) return `"${glob}" is absolute (globs match paths relative to the target directory)`
+  if (glob.replaceAll("\\", "/").split("/").includes("..")) return `"${glob}" climbs out of the target directory (..)`
+  return undefined
+}
+
+// A comma-separated glob list as a flag gives it: commas inside a brace group
+// (`{a,b}`) belong to the glob, every entry is trimmed, and empty entries are
+// dropped.
+export function splitGlobList(text: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let current = ""
+  for (const char of text) {
+    if (char === "{") depth++
+    else if (char === "}" && depth > 0) depth--
+    if (char === "," && depth === 0) {
+      out.push(current)
+      current = ""
+      continue
+    }
+    current += char
+  }
+  out.push(current)
+  return out.map((glob) => glob.trim()).filter(Boolean)
 }
 
 // acceptanceGate: an array of distinct known phase type ids; absent or [] = none.

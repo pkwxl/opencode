@@ -111,7 +111,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     const taskNoBase = await setupTask()
     const { client, calls } = fakeClient()
     const base = await ensureForkBase(client, await reloadUnits(dir), taskNoBase, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_new_1", used: 0 })
+    expect(base).toEqual({ id: "ses_new_1", used: 0, digest: true })
     // One-shot session build (the title is the commit title), no fork, no rename (a new session is already named)
     expect(calls.creates).toBe(1)
     expect(calls.forks).toEqual([])
@@ -128,7 +128,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, digest)
     // Usage rebuilt from the last assistant message (400 + 100)
-    expect(base).toEqual({ id: "ses_P", used: 500 })
+    expect(base).toEqual({ id: "ses_P", used: 500, digest: true })
     expect(calls.creates).toBe(0)
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_P"')
   })
@@ -138,7 +138,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
     const taskPersisted = await setupTask("digest:ses_dead")
     const { client, calls } = fakeClient({ get: () => undefined })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_new_1", used: 0 })
+    expect(base).toEqual({ id: "ses_new_1", used: 0, digest: true })
     expect(calls.creates).toBe(1)
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_1"')
   })
@@ -192,7 +192,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
       },
     })
     const base = await ensureForkBase(client, await reloadUnits(dir), taskNoBase, {}, chain, digest)
-    expect(base).toEqual({ id: "ses_new_2", used: 0 })
+    expect(base).toEqual({ id: "ses_new_2", used: 0, digest: true })
     expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_new_2"')
   })
 
@@ -213,7 +213,7 @@ describe("ensureForkBase (base establishment and the fallback chain: persistent 
   test("session mode meeting a leftover digest: prefix (the base mode switched mid-run): shelled and validated, reused as the warm prefix when alive", async () => {
     const taskPersisted = await setupTask("digest:ses_P")
     const { client } = fakeClient({ messages: () => ({ data: [] }) })
-    expect(await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, session)).toEqual({ id: "ses_P", used: 0 })
+    expect(await ensureForkBase(client, await reloadUnits(dir), taskPersisted, {}, chain, session)).toEqual({ id: "ses_P", used: 0, digest: true })
   })
 
   test("fork=off: always undefined (the current pipeline)", async () => {

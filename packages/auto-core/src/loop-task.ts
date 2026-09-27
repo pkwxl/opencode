@@ -60,6 +60,9 @@ export type LoopCtx = {
   // session of the loop runs with; undefined = no registry, dispatch is
   // unchanged.
   routing?: RoutingFacts
+  // false = the run's agents cannot fork, so auto's lead runs without its
+  // split clause (plans/0059 D7); set once at run start by the degradation.
+  leadSplit?: false
 }
 
 // the main task loop: execute in turn all tasks in the current phase's task
@@ -132,8 +135,10 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       mode: opts.mode,
       newSession: opts.newSession,
       wrapup: opts.wrapup,
+      scanExempt: opts.scanExempt,
       phase: phaseKey(phase),
       routing: ctx.routing,
+      ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
     })
     if (outcome.type === "dirty") {
       // Unit-startup clean gate failure (runTask inner layer): no state

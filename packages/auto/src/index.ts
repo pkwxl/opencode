@@ -15,6 +15,8 @@ import {
   loadProjectConfig,
   mergeProjectConfig,
   saveProjectConfig,
+  scanExemptProblem,
+  splitGlobList,
   type ProjectConfig,
   type RetiredKey,
 } from "@opencode-ai/auto-core/config"
@@ -60,7 +62,7 @@ const flags = new Map<string, string>()
 const positional: string[] = []
 // --agent/--server/--wait-answer/--wait-between/--context-limit/--commit/--subtask/
 // --prompt/--file/--permission/--idle-time/--idle-max/--mode/--phases/--parallel/
-// --max-sessions/--reason (shared by close and plan --force-close)/--force-close
+// --scan-exempt/--max-sessions/--reason (shared by close and plan --force-close)/--force-close
 // and --new-task (plan's alone) are value flags (they swallow the next token; the retired
 // --implement-file/--implement-prompt swallow one too, so their argument is
 // never mistaken for the directory, auto-core plans/0053 D13; init's retired
@@ -98,6 +100,7 @@ const VALUE_FLAGS = new Set([
   "implement-file",
   "implement-prompt",
   "parallel",
+  "scan-exempt",
   "max-sessions",
   "new-task",
 ])
@@ -242,7 +245,7 @@ const RETIRED_FLAGS: Record<string, string | { command: string; notice: string }
 const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RETIRED_FLAGS), "continue", "commit-subtask", "verify-idle", "verify-max"])
 // The config flags: the project attributes init freezes into config.json and
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
-const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel"]
+const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
 // agents and spends tokens); check and status stay flagless.
 const MODELS_FLAGS = new Set(["probe"])
@@ -574,7 +577,7 @@ if (command === "plan") {
       process.exit(closed.type === "refused" ? 1 : 2)
     }
   }
-  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, input, append, newTask, autoNumber: config.autoNumber })
+  const prelude = await planPrelude(directory, { phases: config.phases, build: config.build, scanExempt: config.scanExempt, input, append, newTask, autoNumber: config.autoNumber })
   if (prelude.type === "stop") {
     for (const line of prelude.lines) (prelude.code === 0 ? console.log : console.error)(line)
     lock.release()
@@ -847,6 +850,7 @@ function runOptions(config: ProjectConfig, mode: ModeSpec, session: SessionFlags
     acceptanceGate: config.acceptanceGate,
     build: config.build,
     parallel: config.parallel,
+    scanExempt: config.scanExempt,
     newSession: session.newSession,
   }
 }
@@ -938,9 +942,10 @@ function loadModeTable(directory: string): Record<string, ModeSpec> {
 
 // The config flags of init/amend, parsed once (plans/0052 D25): the
 // value checks, and the keys explicitly given (`explicit`, merged over the
-// baseline). --agent opencode and --parallel none are returned separately,
-// since they drop their key instead of setting it. A bad value exits 1.
-function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>; phases?: string; agent?: string; parallel?: string } {
+// baseline). --agent opencode, --parallel none and --scan-exempt none are
+// returned separately, since they drop their key instead of setting it. A bad
+// value exits 1.
+function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>; phases?: string; agent?: string; parallel?: string; scanExempt?: string } {
   // --agent (M6.1): the coding agent, frozen like every project attribute;
   // opencode = the key is absent from config.json.
   const agent = flags.get("agent")
@@ -954,6 +959,21 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   if (parallel !== undefined && parallel !== "none" && !(PARALLEL_LEVELS as readonly string[]).includes(parallel)) {
     console.error(`--parallel takes none|${PARALLEL_LEVELS.join("|")}; defaults to none`)
     process.exit(1)
+  }
+  // --scan-exempt (auto-core plans/0059 X2): comma-separated path globs the
+  // driver's P1 and terminator scans skip; the list replaces the stored one,
+  // none = the key is absent from config.json.
+  const scanExempt = flags.get("scan-exempt")
+  const exemptGlobs = scanExempt === undefined || scanExempt === "none" ? [] : splitGlobList(scanExempt)
+  if (scanExempt !== undefined && scanExempt !== "none") {
+    const problems = exemptGlobs.flatMap((glob) => scanExemptProblem(glob) ?? [])
+    if (!exemptGlobs.length || problems.length) {
+      console.error(
+        `--scan-exempt takes none or a comma-separated list of path globs relative to the target directory (e.g. "test/fixtures/**,templates/prompts")` +
+          `${problems.length ? `: ${problems.join("; ")}` : ""}; defaults to none`,
+      )
+      process.exit(1)
+    }
   }
   const commit = parseCommit(flags)
   if (commit === null) {
@@ -1024,6 +1044,7 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   if (flags.has("idle-max")) explicit.idleMax = idleMax
   if (phases !== undefined) explicit.phases = phases
   if (parallel !== undefined && parallel !== "none") explicit.parallel = parallel as ProjectConfig["parallel"]
+  if (exemptGlobs.length) explicit.scanExempt = exemptGlobs
   // --test-by-driver / --handover-test: boolean constitutional options
   // accepted by init/amend (bare or true turns them on, false off), merged
   // through explicit (amend semantics).
@@ -1048,7 +1069,7 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   }
   if (flags.has("wrapup") && flags.get("wrapup") !== "false") explicit.wrapup = true
   if (flags.has("no-wrapup") && flags.get("no-wrapup") !== "false") explicit.wrapup = false
-  return { explicit, phases, agent, parallel }
+  return { explicit, phases, agent, parallel, scanExempt }
 }
 
 if (command === "init" || command === "amend") {
@@ -1138,7 +1159,7 @@ if (command === "init" || command === "amend") {
   // No command reaching this block takes -p (init's is a scoped retired flag,
   // the amend command refuses it, `continue` is retired), so only the key
   // droppers and the explicit keys are read back here.
-  const { explicit, agent, parallel } = parseConfigFlags(directory)
+  const { explicit, agent, parallel, scanExempt } = parseConfigFlags(directory)
   // The one watershed between full overwrite and per-key revision: the default
   // takes the builtin defaults table as its baseline (keys not given fall back
   // to the defaults), while the amend command takes the existing on-disk
@@ -1163,6 +1184,9 @@ if (command === "init" || command === "amend") {
   }
   // acceptanceGate/build (plans/0049 G9) have no flag, so they are only ever
   // hand-edited: a full-overwrite init keeps them rather than silently erasing them.
+  // AUTO-DECISION: scanExempt is not kept here — it has its flag
+  // (--scan-exempt), so it follows the stateless overwrite like parallel; a
+  // single key is changed with amend.
   const handEdited = { acceptanceGate: existing.acceptanceGate, build: existing.build }
   const base: ProjectConfig = amend ? existing : { ...CONFIG_DEFAULTS, ...handEdited }
   // handoverTest requires testByDriver: when either is explicit, the check
@@ -1208,9 +1232,10 @@ if (command === "init" || command === "amend") {
     process.exit(1)
   }
   const config = mergeProjectConfig(base, { ...explicit, mode: modeName })
-  // --parallel none / --agent opencode drop their keys (an amend would
-  // otherwise keep the old value).
+  // --parallel none / --scan-exempt none / --agent opencode drop their keys
+  // (an amend would otherwise keep the old value).
   if (parallel === "none") delete config.parallel
+  if (scanExempt === "none") delete config.scanExempt
   if (agent === "opencode") delete config.agent
   // The read-only prefix guard, one per command (plans/0053 D31–D32): init
   // and amend no longer re-sync the index, so the guard only keeps the config
@@ -1564,18 +1589,18 @@ if (command === "models") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [-f|--force]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
-  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
+  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>]
   opencode-auto fix [dir] [-f|--force]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
 
-options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
+options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
        fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
@@ -1596,6 +1621,7 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --wrapup / --no-wrapup task wrap-up session switch (default --wrapup = on; --no-wrapup is the opt-out): when off, the wrap-up session is skipped after each task's subtasks/whole-task execution completes (including wrap-up after fix rounds)
        --agent opencode|claude the coding agent that runs every session (default opencode; claude = Claude Code headless, needs the claude CLI on PATH). The agent contract is always .opencode/agent/auto.md; the env var OPENCODE_AUTO_AGENT overrides the configured agent for a run
        --parallel none|low|medium|high planning guidance (default none): how hard planning sessions work to make tasks independent (declared Depends:/Touches: fields, tasks split along file and module boundaries); the level's text comes from the ## parallelism section of the intent pack. It changes only what planning sessions are told — tasks still run one at a time
+       --scan-exempt none|<globs> comma-separated path globs, relative to the target directory, of deliverable files the driver's content scans skip (default none): the process-document reference scan (unit close-out and round close) and the document terminator scan. For deliverables where such strings are content, e.g. a tool's own test fixtures or prompt templates; a glob naming a directory covers the files under it; only deliverable paths are exempted (process documents and the agent-contract surfaces are never scanned for references anyway); the list replaces the stored one, none removes it
        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
        --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
        models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; --probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error

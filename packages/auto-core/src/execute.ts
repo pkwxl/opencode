@@ -22,12 +22,12 @@ import { runExecSession } from "./exec-session"
 import { beginUnit, headText, removeIfUntracked, unitAddedLines, unitBaseline, unitChangedFiles, unitQuiet, untrackedFiles, type UnitBaseline } from "./git"
 import { autobanner, log, subbanner } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts, type UnitStop } from "./opts"
-import { forkBaseFor, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
+import { checklistTitle, forkBaseFor, readChecklist, reloadTask, setForkBase, setSplit, subtasks, tickSubtask, type Plan, type Task } from "./tasks"
 import { handoffFile, renderDecompose, renderFanout, renderSplitRejected, renderSubtask, renderWhole, testHandoffFile } from "./prompt"
 import { peekProgress } from "./resume"
 import { runSession } from "./session"
 import { clientOf, forkEndedSession, formatTokens, seedForkSession, sessionAlive, sessionUsed } from "./session-api"
-import { parseSplit, splitProblems, splitStateFile, splitTitle, writeSplitTodos } from "./split"
+import { parseSplit, splitProblems, splitStateFile, writeSplitTodos } from "./split"
 import { statsModelEvent } from "./stats"
 import { autoSwitches } from "./switches"
 import { handoffSteer, removeHandoffChain } from "./testrun"
@@ -55,10 +55,12 @@ import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } fr
 //     fork of the lead is told why and finishes the task. That continuation
 //     and every session after it carry no split clause (one rejection at
 //     most), and a subtasks.md one of them writes is ignored and removed.
-// The clause needs the steer (its criterion (c) is the first usage notice)
-// and a task whose checklist is not written yet: a checklist committed
-// before the stage (written by hand) keeps ondemand's path, and runs after
-// the lead as it does there.
+// The clause needs the steer (its criterion (c) is the first usage notice),
+// agents that can fork (the streams are forks of the lead; the run start
+// says so in opts.leadSplit, plans/0059 D7) and a task whose checklist is not
+// written yet: a checklist committed before the stage (written by hand) keeps
+// ondemand's path, and runs after the lead as it does there. Without the
+// clause auto's lead is exactly ondemand's session.
 export async function executeWhole(
   client: ClientSource,
   plan: Plan,
@@ -92,11 +94,13 @@ export async function executeWhole(
   // AUTO-DECISION: the starting checklist is read from HEAD, falling back to the disk only without a commit (the copy on disk at the stage's start would make a killed lead's uncommitted split look written by hand on the resumed run, and nothing else lets a task start with an uncommitted checklist past the clean gate)
   // AUTO-RESOLVE: does auto's lead get the split clause when the task already has a committed checklist? -> no, the lead runs as ondemand's session and the checklist runs after it (a checklist a person wrote is a split already decided; judging it by the lead's guard could remove it, and a second split on top would run two plans)
   // AUTO-RESOLVE: does auto's lead get the split clause without usage notices (OPENCODE_AUTO_STEER=off)? -> no, it runs as ondemand's session (criterion (c) is the first usage notice, which never arrives; 0059 D7 rules the same for an agent without mid-turn steer, and the run start already turns the steer off for one)
+  // AUTO-DECISION: an agent that cannot fork is known from the run start's fleet-wide degradation (opts.leadSplit), not from the lead's own client (under a model registry the streams may dispatch on any agent of the fleet, and reading a client here would start a host the lead may never use; the steer half of D7 is run-wide in the same way)
   const subtasksRel = taskDoc(task.id, "subtasks")
   const readSubtasks = async (): Promise<string> => Bun.file(join(planDir, subtasksRel)).text().catch(() => "")
-  const checklistBase = lead && steer !== undefined ? ((await headText(planDir, subtasksRel)) ?? (await readSubtasks())) : ""
-  const splitOffered = lead && steer !== undefined && subtasks(checklistBase).length === 0
-  if (lead && steer !== undefined && !splitOffered) {
+  const clause = lead && steer !== undefined && opts.leadSplit !== false
+  const checklistBase = clause ? ((await headText(planDir, subtasksRel)) ?? (await readSubtasks())) : ""
+  const splitOffered = clause && subtasks(checklistBase).length === 0
+  if (clause && !splitOffered) {
     log(`• ${task.id} ${subtasksRel} already holds a checklist; the lead runs without its split clause, and the checklist runs after it`)
   }
   // open = the clause is offered; rejected = one split was not taken, so no
@@ -277,7 +281,7 @@ export async function executeWhole(
       // A handover document the lead left is not this round's signal: the
       // fork continues in the lead's own context.
       consumed = await readHandoff()
-      // AUTO-DECISION: without a fork (an agent that cannot fork, or the lead is gone) the rejected lead continues in a new session with the full whole-task prompt, no clause, plus the note (the shape-check re-prompts' fallback; 0059 D7 will withhold the clause from agents that cannot fork, which leaves this for a lost session)
+      // AUTO-DECISION: without a fork (the lead's session is gone, or the fork call failed) the rejected lead continues in a new session with the full whole-task prompt, no clause, plus the note (the shape-check re-prompts' fallback; an agent that cannot fork never gets the clause, plans/0059 D7)
       forked = await forkEndedSession(client, chain, subject)
       feedback = `${forked ? "" : "\n\n"}${renderSplitRejected(task, verdict.reason, !forked)}`
       retried = false
@@ -625,7 +629,7 @@ export async function runSubtask(
           ? [...(await unitChangedFiles(dir, split))].filter((rel) => !splitStateFile(task.id, rel)).sort()
           : []
       return {
-        siblings: items.flatMap((item, i) => (i + 1 === index ? [] : [`${subtaskId(i + 1)} ${splitTitle(item.text)}${item.done ? " (done)" : ""}`])),
+        siblings: items.flatMap((item, i) => (i + 1 === index ? [] : [`${subtaskId(i + 1)} ${checklistTitle(item.text)}${item.done ? " (done)" : ""}`])),
         changed,
         last: items.every((item, i) => item.done || i + 1 === index),
       }
@@ -634,7 +638,7 @@ export async function runSubtask(
     const prompt = (): string =>
       forked && delta
         ? renderFanout(plan, task, text, index, { ...opts, ...delta, budget: steer !== undefined })
-        : renderSubtask(plan, task, text, { ...opts, continuation, index, warm: split ? false : warm, budget: steer !== undefined })
+        : renderSubtask(plan, task, text, { ...opts, continuation, index, warm: split ? false : warm, digest: Boolean(base?.digest), budget: steer !== undefined })
     let feedback = ""
     // Re-prompt count for the artifact shape check (D2): one re-prompt with
     // feedback per subtask, then blocked for a human.
@@ -771,7 +775,7 @@ export async function runSubtask(
       // dryrun / commit gate off / non-git; a session ending in a test
       // handover is exempt (its completion criterion is in testhandoff.md).
       if (baseline && shapeCheckOn(opts, baseline, Boolean(result.testHandover))) {
-        const problems = await subtaskArtifactProblems(dir, text, baseline)
+        const problems = await subtaskArtifactProblems(dir, text, baseline, opts.scanExempt)
         if (problems.length) {
           if (shapeRetried) {
             return {
@@ -839,8 +843,11 @@ export async function runSubtask(
 // plans/0045) — lines the unit added to deliverable files must not reference
 // process documents (document/process-refs.ts; bare task ids are logged as
 // warnings only). All criteria are deterministic: a zero-write or truncated
-// "natural end" is never completion.
-async function subtaskArtifactProblems(dir: string, text: string, baseline: UnitBaseline): Promise<string[]> {
+// "natural end" is never completion. `exempt` = the project's scan
+// exemptions (config scanExempt, plans/0059 X2): deliverable paths both ⑤ and
+// ⑥ skip, where terminator-free Markdown or process-shaped strings are
+// content.
+async function subtaskArtifactProblems(dir: string, text: string, baseline: UnitBaseline, exempt?: readonly string[]): Promise<string[]> {
   const problems: string[] = []
   if (await unitQuiet(dir, baseline)) problems.push("no changes relative to the unit baseline (zero disk writes)")
   const fresh = await untrackedFiles(dir)
@@ -856,11 +863,11 @@ async function subtaskArtifactProblems(dir: string, text: string, baseline: Unit
   // terminator" truncation shape), and the re-prompt feedback directs
   // restoring the terminal terminator.
   for (const rel of await unitChangedFiles(dir, baseline)) {
-    if (!rel.toLowerCase().endsWith(".md") || shaped.has(rel) || eofScanExempt(rel)) continue
+    if (!rel.toLowerCase().endsWith(".md") || shaped.has(rel) || eofScanExempt(rel, exempt)) continue
     const content = await Bun.file(join(dir, rel)).text().catch(() => "")
     problems.push(...docShapeProblems(content, rel))
   }
-  const refs = processReferenceScan(await unitAddedLines(dir, baseline))
+  const refs = processReferenceScan(await unitAddedLines(dir, baseline), exempt)
   for (const warning of refs.warnings) log(`  ⚠ ${warning}`)
   problems.push(...refs.problems)
   return problems

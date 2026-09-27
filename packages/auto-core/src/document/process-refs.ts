@@ -6,9 +6,9 @@
 //
 // Scope: the lines the unit added (git.ts unitAddedLines) in files on the
 // deliverable side (roles.ts p1Scope — non-process roles minus the
-// agent-contract surfaces). Never the existing tree: retroactively failing
-// older content is not the driver's business (the whole-tree scan is the
-// round-close gate, M4).
+// agent-contract surfaces and the project's scan exemptions, plans/0059 X2).
+// Never the existing tree: retroactively failing older content is not the
+// driver's business (the whole-tree scan is the round-close gate, M4).
 //
 // Keyed on tool-owned path shapes, not on the bare word `docs/`, so the scan
 // is safe in a tree with its own documentation directory:
@@ -43,11 +43,13 @@ export type ProcessReferenceScan = {
   warnings: string[]
 }
 
-export function processReferenceScan(added: ReadonlyMap<string, readonly AddedLine[]>): ProcessReferenceScan {
+// `exempt` = the project's scan exemptions (config scanExempt, roles.ts
+// scanExempted): deliverable files where process-shaped strings are content.
+export function processReferenceScan(added: ReadonlyMap<string, readonly AddedLine[]>, exempt: readonly string[] = []): ProcessReferenceScan {
   const problems: string[] = []
   const warnings: string[] = []
   for (const [rel, lines] of [...added].sort(([a], [b]) => a.localeCompare(b))) {
-    if (!p1Scope(rel)) continue
+    if (!p1Scope(rel, exempt)) continue
     const hits: string[] = []
     let ids = 0
     for (const { line, text } of lines) {

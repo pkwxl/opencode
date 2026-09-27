@@ -37,6 +37,7 @@ import {
 } from "../src/prompt"
 import { prerequisites } from "../src/tasks"
 import { groundPlan, groundTask, listPlan, listTask, plan, resolveItem, task } from "./fixtures/prompt"
+import { planOf } from "./fixtures/units"
 
 describe("renderDecompose", () => {
   test("merged session (M1.0): the four understand sections + the shared context index + the subtasks.md checklist + each subtask's todo.md", () => {
@@ -50,7 +51,7 @@ describe("renderDecompose", () => {
     expect(text).toContain("docs/T-002/shared.md")
     expect(text).toContain("prefetch by reference")
     expect(text).toContain("docs/T-002/subtasks.md")
-    expect(text).toContain("- [ ] <subtask description; ends with Artifacts: <path list>>")
+    expect(text).toContain("- [ ] <short title>: <subtask description; ends with Artifacts: <path list>>")
     expect(text).toContain("docs/T-002/S<two-digit zero-padded index>/todo.md")
     expect(text).toContain("## Scope")
     expect(text).toContain("## Artifacts")
@@ -273,7 +274,7 @@ describe("renderDecompose (per-phase templates decompose-<phase>)", () => {
       expect(text).not.toContain("Splitting and artifact criteria for this phase (Implementation)")
       // The core template still carries the role boundary and the format protocol
       expect(text).toContain("This session completes the task-background understanding and the subtask decomposition; it writes no implementation code")
-      expect(text).toContain("- [ ] <subtask description; ends with Artifacts: <path list>>")
+      expect(text).toContain("- [ ] <short title>: <subtask description; ends with Artifacts: <path list>>")
       expect(text).not.toMatch(/\{\{|\}\}/)
     } finally {
       useIntentPacks(undefined)
@@ -477,9 +478,9 @@ describe("renderSubtask", () => {
 })
 
 describe("renderSubtask (subtask list / output file / background paragraph, fork pipeline injection)", () => {
-  test("injects the full checklist list (numbered in order) and \"item N\"; the output file is zero-padded to two digits", () => {
+  test("injects the checklist list (numbered in order, by title) and \"item N\"; the output file is zero-padded to two digits", () => {
     const text = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2 })
-    expect(text).toContain("The complete subtask list of this task (executed in order; the other items belong to other sessions, do not touch them)")
+    expect(text).toContain("The subtask list of this task, by title (executed in order; the other items belong to other sessions, do not touch them)")
     expect(text).toContain("1. write the schema part\n2. write the execution logic\n3. write the docs")
     expect(text).toContain("You are responsible for item 2 of that list only")
     expect(text).toContain("- [ ] write the execution logic")
@@ -495,6 +496,56 @@ describe("renderSubtask (subtask list / output file / background paragraph, fork
     expect(text).toContain("write it into docs/T-004/S03/index.md")
   })
 
+  test("the list names every item by its title only; the session's own item follows in full (plans/0059 T1)", () => {
+    const long = planOf(
+      `## T-004: forked execution [pending]
+Whole-task description.
+
+- [x] schema: the schema part in src/schema.ts, with its migration and seed data Artifacts: src/schema.ts
+- [ ] execution: the execution logic over the schema in src/exec.ts, verified by its test Artifacts: src/exec.ts
+- [ ] docs: the README section on the new command Artifacts: README.md
+`,
+    )
+    const item = long.tasks[0]!.checklist![1]!.text
+    const text = renderSubtask(long, long.tasks[0]!, item, { index: 2 })
+    expect(text).toContain("1. schema\n2. execution\n3. docs\n")
+    expect(text).toContain(`You are responsible for item 2 of that list only:\n\n- [ ] ${item}\n`)
+    // No other item's description reaches the prompt.
+    expect(text).not.toContain("with its migration and seed data")
+    expect(text).not.toContain("the README section on the new command")
+  })
+
+  test("verification: targeted checks for every item; the last one (every other item done) also runs the task's full acceptance verification once (plans/0059 T5/T6)", () => {
+    const middle = renderSubtask(listPlan, listTask, "write the execution logic", { index: 2 })
+    expect(middle).toContain("Verification: run the checks that target this subtask's own changes (its tests, the typecheck or build of what it touched), not the full suite.")
+    expect(middle).not.toContain("This is the last subtask")
+    // Item 3 with item 2 still open is not the last; with item 2 done it is.
+    expect(renderSubtask(listPlan, listTask, "write the docs", { index: 3 })).not.toContain("This is the last subtask")
+    const done = planOf(
+      `## T-004: forked execution [pending]
+Whole-task description.
+
+- [x] write the schema part
+- [x] write the execution logic
+- [ ] write the docs
+`,
+    )
+    const last = renderSubtask(done, done.tasks[0]!, "write the docs", { index: 3 })
+    expect(last).toContain("This is the last subtask: once it is done, run the task's full acceptance verification once, for the whole task, and fix what it finds.")
+    // The caller's own answer wins over the derived one.
+    expect(renderSubtask(listPlan, listTask, "write the execution logic", { index: 2, last: true })).toContain("This is the last subtask")
+    // A task without a checklist has no position to judge.
+    expect(renderSubtask(plan, task, "write the migration script")).not.toContain("This is the last subtask")
+  })
+
+  test("background paragraph under the digest base: the digest is in context, the files the understanding stage read are not (plans/0059 T2)", () => {
+    const text = renderSubtask(listPlan, listTask, "write the docs", { index: 3, warm: true, digest: true })
+    expect(text).toContain("This session has inherited the task-background digest: the text of docs/T-004/context.md is already in context, so do not re-read it. The files the understanding stage read are not in this context — read the ones this subtask needs.")
+    expect(text).not.toContain("loaded content")
+    // The digest flag means nothing without a fork: a cold start reads context.md first.
+    expect(renderSubtask(listPlan, listTask, "write the docs", { index: 3, digest: true })).toContain("If docs/T-004/context.md exists, read it first")
+  })
+
   test("background paragraph warm two states: inherited context means no re-reading / a cold start reads the context.md digest first", () => {
     const warm = renderSubtask(listPlan, listTask, "write the docs", { index: 3, warm: true })
     expect(warm).toContain("This session has inherited the task-background context (the understanding stage's digest and loaded content), so do not re-read files that are already in context")
@@ -508,7 +559,7 @@ describe("renderSubtask (subtask list / output file / background paragraph, fork
   test("task without a checklist (old shape): rendered as a single item; the list and the output-convention paragraph do not appear", () => {
     const text = renderSubtask(plan, task, "write the migration script")
     expect(text).toContain("You are responsible for this single subtask of the task only")
-    expect(text).not.toContain("complete subtask list")
+    expect(text).not.toContain("The subtask list of this task")
     expect(text).not.toContain("Artifact placement convention")
   })
 

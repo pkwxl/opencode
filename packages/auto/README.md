@@ -84,7 +84,7 @@ remaining keys to defaults.
 
 **Breaking change**: `run` no longer accepts `-m/--mode`, `--agent`, `--context-limit`, `--subtask`,
 `--idle-time`, `--idle-max`, `--commit`, `--test-by-driver`, `--handover-test`, `--auto-number`,
-`--no-auto-number`, `--phases`, `--parallel` — any of them appearing is a usage error (exit code 1), and the
+`--no-auto-number`, `--phases`, `--parallel`, `--scan-exempt` — any of them appearing is a usage error (exit code 1), and the
 message points at how to amend (`opencode-auto amend <dir> --<flag> <value>`, or edit the config file
 directly); these options are fixed as project attributes, see the next section. `--implement-file`/
 `--implement-prompt` are retired; appearing on any command is a usage error — see
@@ -113,6 +113,7 @@ describes how this run executes and how a person watches it → run.**
 | `handoverTest` | `true` / `false` | `false` | On test failure with the context at its limit, write a handover document and continue in a new session; requires `testByDriver: true`, otherwise config validation fails (exit code 1) |
 | `autoNumber` | `true` / `false` | `true` | Auto numbering (on by default, disabled by `--no-auto-number`): task numbers (T-NNN) never repeat in the target directory; the next available number is persisted in `.auto/next-task`, consumed by the phase planning session and recovered first when the record is missing — see the end of [Phased flow](#phased-flow---phases) |
 | `phases` | A subsequence of `admtvk` containing `m`, or a list of phase type ids containing `implement` (comma-separated string or JSON array) | `"m"` | Phased flow (a analysis → d design → m implementation → t test → v acceptance → k knowledge distillation; the list form may reference custom types under `.opencode/auto/phases/`); `"m"` = no phases declared, i.e. the implicit single phase `docs/R-01/P01-implement`, no handover sessions, tasks listed by a person or planned from a planning input (see [Planning tasks with AI](#planning-tasks-with-ai)). See [Phased flow](#phased-flow---phases) |
+| `scanExempt` | An array of path globs relative to the target directory (`*`, `**`, `{a,b}`; no absolute path, no `..`) | none (key not written) | Deliverable files the driver's two content scans skip (auto-core plans/0059 X2): the process-document reference scan (the lines a unit added, at subtask close-out, and the whole tree at round close) and the document terminator scan at subtask close-out. For a deliverable where such strings are content — a tool's own test fixtures, prompt templates, sample documents. A glob naming a directory covers the files under it (`test/fixtures` = `test/fixtures/**`). Only deliverable paths are exempted: the task and round records stay held to their rules whatever the list says. Set with `init`/`amend --scan-exempt a,b` (the list replaces the stored one; `none` removes the key); shared with the repository like every key |
 | `source` / `destDir` | **Retired** | — | The migration source and target are intent, not config (2026-09-23, auto-core plans/0052 D2/D3): they go into `.opencode/auto/brief.md`, read by the planning sessions. An existing config carrying either key (any value) fails loading with exit 1; the message names the original value and the fix (copy it into brief.md, then delete the key — `fix` migrates it into the `## Source` / `## Target` sections and deletes the key); a no-argument `init` full overwrite drops them and prints each original value. Both key names are tombstoned for good, never reused |
 
 **Unified commit** (`commit: true`, the default): after any session ends and the driver has finished its
@@ -209,6 +210,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; commi
 | `--context-limit [n]` | The context budget baseline (unit: thousand tokens, default/bare flag 64), written to the config; a new session starts once the previous session's used tokens reach half of it (32k by default), effective alongside the 50% share threshold |
 | `--test-by-driver [true]` | Execution rights for compile/test/build/lint commands move to the driver (default/bare flag `false`), written to the config: execution sessions no longer run such commands in-session; instead they write the command as a script in `test/`, write the script path into `tmp/test.sh` to request execution by the driver, and the exit code and output file are fed back for the AI to read and judge directly. The switch also decides whether the test-execution principle block enters AGENTS.md and whether the test protocol section enters the agent contract and execution prompts. See [Test execution protocol](#test-execution-protocol---test-by-driver) |
 | `--handover-test [true]` | Must be combined with `--test-by-driver` (otherwise a usage error, exit code 1), written to the config: when a test fails and the session context reaches `contextLimit`, the AI is asked to write a handover document and continue in a new session, preventing repeated trial-and-error inside a bloated context |
+| `--scan-exempt none\|<globs>` | The scan exemptions, written to the config's `scanExempt` key as a comma-separated glob list (commas inside `{a,b}` stay in the glob; default none, key not written; `none` deletes the key): deliverable paths the process-document reference scan and the document terminator scan skip. An empty list, an absolute glob or one containing `..` is a usage error |
 | `--auto-number` / `--no-auto-number` | Auto numbering switch, written to the config's `autoNumber` key (default `--auto-number` = on, `--no-auto-number` is the disabling toggle; both switches present without `=false` is a usage error): with it on, task numbers (T-NNN) never repeat in the target directory; the phase planning session continues numbering from the `.auto/next-task` record and recovers it first when missing. The `phases = "m"` planning session (see [Planning tasks with AI](#planning-tasks-with-ai)) also continues from that record. See [Phased flow](#phased-flow---phases) |
 | `-f` / `--force` | Skip the overwrite confirmation and the clean-worktree check, for CI and automation scripts (shared with `reset` / `fix`); on `amend` / `run` it is a usage error (amend discards no keys, so there is no overwrite confirmation to skip) |
 
@@ -227,7 +229,8 @@ sessions.
 their existing values (auto-core plans/0052 D25; the old spelling `init --amend` is retired, folded into this
 command). It accepts the same key options and values as init (`-m/--mode`, `--agent`, `--subtask`,
 `--idle-time`, `--idle-max`, `--commit`, `--context-limit`, `--phases`, `--test-by-driver`,
-`--handover-test`, `--auto-number`/`--no-auto-number`, `--wrapup`/`--no-wrapup`, `--parallel`); value-range
+`--handover-test`, `--auto-number`/`--no-auto-number`, `--wrapup`/`--no-wrapup`, `--parallel`,
+`--scan-exempt`); value-range
 validation, the `handoverTest` pairing check and the phase index prefix guardrail share their code with init.
 
 - **Config keys only**: `-p` is a usage error (the brief is not config — edit `.opencode/auto/brief.md`
@@ -860,13 +863,15 @@ half the wall:
   earlier one, checks targeted at the stream, and the task's full verification in the last stream. A stream
   runs under the same context-budget protocol and may hand itself over: a new session continues it from
   `docs/T-NNN/handoff.md`, and the stream still closes with one commit. Without a fork (the lead's session is
-  gone, or the agent cannot fork) a stream starts in a new session with the full subtask prompt.
+  gone, or the fork fails) a stream starts in a new session with the full subtask prompt.
 - **Rejected**: `subtasks.md` is removed, the lead's work is committed, and a fork of the lead is told why and
-  finishes the task (an agent that cannot fork gets a new session with the full prompt). There is no second
-  split: a `subtasks.md` written after that is removed.
+  finishes the task (when the fork fails, a new session with the full prompt). There is no second split: a
+  `subtasks.md` written after that is removed.
 
-Without usage notices (`OPENCODE_AUTO_STEER=off`, or an agent that takes no mid-turn messages), or when the
-task already has a checklist written by hand, the lead gets no split rule and runs exactly as `ondemand`. A
+Without usage notices (`OPENCODE_AUTO_STEER=off`, or an agent that takes no mid-turn messages), with an agent
+that cannot fork sessions (every stream is a fork of the lead; under a model registry, any agent the run may
+use — the run start prints a degradation note naming it), or when the task already has a checklist written by
+hand, the lead gets no split rule and runs exactly as `ondemand`. A
 stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtask true` keeps the pipeline.
 
 `subtask: true` (the planned pipeline — what `auto` meant before auto-core plans/0059):
@@ -897,6 +902,16 @@ stored `"subtask": "auto"` takes this meaning with no migration; `amend --subtas
    the file and the next subtask starts fresh.
    The subtask session self-checks its own work; after the session ends the driver renames the subtask's
    `todo.md` to `done.md` and ticks the matching line in subtasks.md.
+   Each checklist line opens with a short title (`- [ ] <title>: <description> Artifacts: <paths>`), and a
+   subtask session sees the other items by title only. It runs the checks aimed at its own changes, not the
+   full suite; the last item then runs the task's full acceptance verification once, so the decompose
+   session plans no separate close-out item. An item is sized so that its own work — what its session reads
+   and writes beyond the context it starts with — is on the order of half the context budget. Under the
+   default fork base (`OPENCODE_AUTO_FORK_BASE=digest`) a subtask session is told it inherits the
+   task-background digest alone (the files the decompose session read are not in its context). The
+   fine-grained decompose criteria (`OPENCODE_AUTO_DECOMPOSE_FINE`) are off by default since auto-core
+   plans/0059 (`=on` restores them): their premise, no re-reading cost between subtasks, holds only for the
+   `session` fork base.
 3. **Wrap-up**: see the common part below.
 
 `subtask: off` (splitting disabled): one session completes the whole task, then the common wrap-up runs; if

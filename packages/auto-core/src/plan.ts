@@ -56,7 +56,7 @@ export type PlanPrelude = { type: "loop" } | PlanStop
 // rows 9–11 apply the progress-record guard (D26); --append without input
 // is a usage error everywhere; row 11 refuses while a step is open (its
 // snapshot and resume machinery must not be bypassed).
-export async function planPrelude(dir: string, opts: { phases: string; build?: string; input?: PlanInput; append?: boolean; newTask?: string; autoNumber?: boolean }): Promise<PlanPrelude> {
+export async function planPrelude(dir: string, opts: { phases: string; build?: string; scanExempt?: string[]; input?: PlanInput; append?: boolean; newTask?: string; autoNumber?: boolean }): Promise<PlanPrelude> {
   const legacy = await legacyLayoutProblem(dir)
   if (legacy) return stop(1, [legacy])
   const { bin } = shellProfile()
@@ -101,7 +101,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
     }
     const lines: string[] = []
     if (round > 1) {
-      const previous = await previousRoundClose(dir, round - 1, opts.build)
+      const previous = await previousRoundClose(dir, round - 1, opts)
       if (previous.type === "stop") return previous
       lines.push(...previous.lines)
     }
@@ -123,7 +123,7 @@ export async function planPrelude(dir: string, opts: { phases: string; build?: s
           `run ${bin} plan ${dir} without --new-task to establish it, commit the setup, then add the task again.`,
       ])
     }
-    const close = await roundCloseProblems(dir, round, { build: opts.build })
+    const close = await roundCloseProblems(dir, round, { build: opts.build, scanExempt: opts.scanExempt })
     if (close.problems.length) return stop(2, closeRefusal(dir, round, close))
     return establish(dir, round + 1, opts.phases, roundCloseLines(close))
   }
@@ -248,7 +248,7 @@ const midPipelineLine = (id: string): string => `${id} is mid-pipeline (its resu
 // The previous round's round-close check (plans/0049 G8), re-run when an
 // interrupted round start is resumed: the round must be complete and pass it,
 // as when the start began.
-async function previousRoundClose(dir: string, round: number, build: string | undefined): Promise<{ type: "pass"; lines: string[] } | PlanStop> {
+async function previousRoundClose(dir: string, round: number, gate: { build?: string; scanExempt?: string[] }): Promise<{ type: "pass"; lines: string[] } | PlanStop> {
   const { bin } = shellProfile()
   let state: PhaseState | undefined
   try {
@@ -264,7 +264,7 @@ async function previousRoundClose(dir: string, round: number, build: string | un
         `finish it with ${bin} run ${dir}, or remove the empty round directory`,
     ])
   }
-  const close = await roundCloseProblems(dir, round, { build })
+  const close = await roundCloseProblems(dir, round, { build: gate.build, scanExempt: gate.scanExempt })
   if (close.problems.length) return stop(2, closeRefusal(dir, round, close))
   return { type: "pass", lines: roundCloseLines(close) }
 }

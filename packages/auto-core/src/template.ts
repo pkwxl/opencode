@@ -197,6 +197,7 @@ type Library = { dir: string | undefined; templates: Record<string, string>; par
 // mark an edited Markdown file ends with). It is file metadata, not prompt
 // text: loading drops it, so the rendered prompt is the same with or without it.
 // AUTO-RESOLVE: may a template file carry a trailing `<!-- auto: eof -->` line? -> yes, loading strips it (edited Markdown files must end with the terminator, while rendered prompts must stay byte-identical).
+// AUTO-RESOLVE: does the stripping stay now that a project can exempt its template directories from the terminator scan (config scanExempt)? -> yes (a project overlay under .opencode/auto/prompts/ is a deliverable file the scan covers unless the project lists it, so both choices must render the same; and the builtin templates that already end with the line would otherwise put it into prompts)
 const TEMPLATE_EOF = "<!-- auto: eof -->"
 
 function readTemplate(path: string): string {

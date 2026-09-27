@@ -135,6 +135,25 @@ export function subtasks(text: string): ChecklistItem[] {
   })
 }
 
+// Field markers inside a checklist line: the protocol strings `Depends:` and
+// `Artifacts:`, read case-insensitively (plans/0035 D2), in either order.
+export const CHECKLIST_FIELD = /(?:^|\s)(depends|artifacts)\s*[:：]/gi
+
+// A checklist line's title: its text before the fields, cut at the colon that
+// ends a `<title>: <description>` line (a colon followed by a space, so a URL
+// or a `path:line` stays whole), and capped at 60 characters. A line without
+// such a colon is its own title, capped the same way. Other sessions see an
+// item by this title alone: the pipeline's subtask prompt lists the items
+// that are not its own by title (plans/0059 T1), and a stream of auto's
+// split sees its siblings the same way (D5).
+export function checklistTitle(text: string): string {
+  const field = text.search(CHECKLIST_FIELD)
+  const description = (field === -1 ? text : text.slice(0, field)).trim()
+  const colon = description.search(/[:：](?:\s|$)/)
+  const title = (colon > 0 ? description.slice(0, colon) : description).trim()
+  return title.length > 60 ? `${title.slice(0, 59)}…` : title
+}
+
 export function countSubtasks(items: readonly ChecklistItem[] = []): { done: number; total: number } {
   return { done: items.filter((item) => item.done).length, total: items.length }
 }

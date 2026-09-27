@@ -7,13 +7,18 @@
 // | flag off          | degradation                                                           |
 // |-------------------|-----------------------------------------------------------------------|
 // | resume            | OPENCODE_AUTO_REUSE_SESSION and OPENCODE_AUTO_FORK off; sessionAlive  |
-// |                   | answers false, so recovery and base reuse start fresh (session-api)   |
+// |                   | answers false, so recovery and base reuse start fresh (session-api); |
+// |                   | --subtask auto's lead gets no split clause (as fork "none")           |
 // | fork "none"       | OPENCODE_AUTO_FORK off; every other fork (retry, failover, shape-check |
-// |                   | re-prompt, handover pin) falls back to a new session (forkSession)    |
+// |                   | re-prompt, handover pin) falls back to a new session (forkSession);  |
+// |                   | --subtask auto's lead gets no split clause: its streams are forks of |
+// |                   | the lead (plans/0059 D7, leadSplit — auto runs as ondemand does)      |
 // | fork "session"    | the handover pin fork copies the whole session (anchor dropped)       |
 // | steer             | OPENCODE_AUTO_STEER and OPENCODE_AUTO_STUCK off; no length resume;    |
 // |                   | --interactive discards typed lines; --test-by-driver has no fallback |
-// |                   | (the results go back into the live session) → startup error          |
+// |                   | (the results go back into the live session) → startup error; with    |
+// |                   | the steer off auto's lead gets no split clause either (its criterion |
+// |                   | (c) is a usage notice, plans/0059 D7), so the steer note covers it   |
 // | question          | OPENCODE_AUTO_ASK off (the ask=off tier: decide and label AUTO-RESOLVE)|
 // | permission        | --permission becomes a PermissionPreset fixed at host start           |
 // | history           | a session's usage cannot be rebuilt → unknown (session-api)           |
@@ -29,7 +34,7 @@
 // thread capabilities through every consumer), and choosing a fleet without
 // the weak agent is how an operator gets the other behavior back.
 import type { AgentCapabilities, PermissionPreset } from "./agent/types"
-import type { PermissionMode } from "./opts"
+import type { PermissionMode, SubtaskMode } from "./opts"
 import { SWITCH_ENV, type Switches } from "./switches"
 
 // The switches a missing capability can force off.
@@ -43,6 +48,21 @@ export type Degradation = {
   // A configuration with no fallback under this agent: the run does not start
   // (environment error, exit 1).
   error?: string
+  // false = the fleet cannot fork a session, so --subtask auto's lead runs
+  // without its split clause (plans/0059 D7): the streams of a split are forks
+  // of the lead. Absent = the clause may be offered. Not a switch: the pipeline's
+  // OPENCODE_AUTO_FORK governs `true` alone (D1), so the run start hands this
+  // fact to the task pipeline (Opts.leadSplit) instead of clamping a switch.
+  leadSplit?: false
+}
+
+// The run-start options degradation reads.
+export type DegradeOpts = { permission?: PermissionMode; testByDriver?: boolean; interactive?: boolean; dryrun?: boolean; subtask?: SubtaskMode }
+
+// Whether an agent can fork a session: a copy must exist (fork not "none")
+// and the session it copies must still be resumable.
+export function forksSessions(caps: AgentCapabilities): boolean {
+  return caps.fork !== "none" && caps.resume
 }
 
 // --permission for an agent that settles permission requests itself: the
@@ -62,11 +82,7 @@ export function permissionPreset(mode: PermissionMode | undefined, dryrun = fals
   }
 }
 
-export function degrade(
-  caps: AgentCapabilities,
-  switches: Switches,
-  opts: { permission?: PermissionMode; testByDriver?: boolean; interactive?: boolean; dryrun?: boolean },
-): Degradation {
+export function degrade(caps: AgentCapabilities, switches: Switches, opts: DegradeOpts): Degradation {
   // One agent, no labels: today's wording and switches, untouched (a run
   // without a registry never calls degradeAgents with more).
   return degradeAgents([{ caps, label: "" }], switches, opts, false)
@@ -88,12 +104,7 @@ export type FleetAgent = {
 // not intersect — MA.2's matrix reads it off the client that serves each
 // session, never the run. `labelNotes` (a registry run) appends the forcing
 // agent to each note; the single-agent path keeps today's wording.
-export function degradeAgents(
-  agents: FleetAgent[],
-  switches: Switches,
-  opts: { permission?: PermissionMode; testByDriver?: boolean; interactive?: boolean; dryrun?: boolean },
-  labelNotes = true,
-): Degradation {
+export function degradeAgents(agents: FleetAgent[], switches: Switches, opts: DegradeOpts, labelNotes = true): Degradation {
   const forced = (pick: (caps: AgentCapabilities) => boolean): FleetAgent | undefined =>
     agents.find((agent) => pick(agent.caps))
   const caps: AgentCapabilities = {
@@ -109,10 +120,21 @@ export function degradeAgents(
   const by = (found: FleetAgent | undefined): string => (labelNotes && found ? `; ${found.label} has none` : "")
   const patch: DegradedSwitches = {}
   const notes: string[] = []
-  if (switches.fork && (caps.fork === "none" || !caps.resume)) {
+  const forks = forksSessions(caps)
+  if (switches.fork && !forks) {
     patch.fork = false
     notes.push(
-      `${SWITCH_ENV.fork}=on needs an agent that can fork sessions; running with fork off (each session starts fresh with the full prompt)${by(forced((c) => c.fork === "none" || !c.resume))}`,
+      `${SWITCH_ENV.fork}=on needs an agent that can fork sessions; running with fork off (each session starts fresh with the full prompt)${by(forced((c) => !forksSessions(c)))}`,
+    )
+  }
+  // auto's split (plans/0059 D7): whatever the switch — it governs the
+  // planned pipeline alone — a fleet that cannot fork gets no split clause.
+  // The note is auto's (the default mode); every other mode never offers it.
+  // AUTO-DECISION: the fork half of D7 adds one note of its own under auto instead of relying on the OPENCODE_AUTO_FORK note (that note is printed only while the switch is on and speaks of the pipeline's sessions); the steer half extends the steer note under auto, since the clamped steer switch already withholds the clause
+  const auto = (opts.subtask ?? "auto") === "auto"
+  if (!forks && auto) {
+    notes.push(
+      `--subtask auto: the lead's split needs an agent that can fork sessions (each stream is a fork of the lead); the lead runs without its split clause, as an ondemand session does${by(forced((c) => !forksSessions(c)))}`,
     )
   }
   if (switches.reuseSession && !caps.resume) {
@@ -124,7 +146,7 @@ export function degradeAgents(
     if (switches.steer) {
       patch.steer = false
       notes.push(
-        `${SWITCH_ENV.steer}=on needs an agent that takes messages mid-turn; running with steer off (no handover hint, a session over the cap finishes naturally)${named}`,
+        `${SWITCH_ENV.steer}=on needs an agent that takes messages mid-turn; running with steer off (no handover hint, a session over the cap finishes naturally${auto ? "; --subtask auto's lead gets no split clause, whose last criterion is a usage notice" : ""})${named}`,
       )
     }
     if (switches.stuck) {
@@ -155,5 +177,5 @@ export function degradeAgents(
     opts.testByDriver && !opts.dryrun && !caps.steer
       ? `--test-by-driver needs an agent that takes messages into a live session (the driver feeds test results back that way); this agent cannot${labelNotes && weakSteer ? ` (${weakSteer.label})` : ""}. Re-init the project without --test-by-driver.`
       : undefined
-  return { switches: patch, notes, ...(error ? { error } : {}) }
+  return { switches: patch, notes, ...(error ? { error } : {}), ...(forks ? {} : { leadSplit: false as const }) }
 }

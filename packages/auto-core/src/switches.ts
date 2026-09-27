@@ -159,7 +159,10 @@ export type Switches = {
   // rebuildable from disk when invalidated).
   forkBase: "session" | "digest"
   // Fine-grained decompose: the decompose-<phase> template injects the fine-grained
-  // criteria section (still bound by the lower-bound guard).
+  // criteria section (still bound by the lower-bound guard). Default off
+  // (plans/0059 D9): its premise — a fork pipeline has no fixed cost of
+  // re-understanding between subtasks — holds for the session fork base only,
+  // not for the digest default, where every subtask re-reads its sources.
   fine: boolean
   // Ondemand context management (default on, plans/0056): the driver steers
   // milestone usage notices into a live ondemand whole-task session, auto's
@@ -284,7 +287,7 @@ export type HibernateWindow = { startMin: number; durationMin: number }
 const SWITCH_DEFAULTS: Switches = {
   fork: true,
   forkBase: "digest",
-  fine: true,
+  fine: false,
   steer: true,
   step: "off",
   refCheck: false,

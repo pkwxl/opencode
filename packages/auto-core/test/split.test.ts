@@ -12,8 +12,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { checklistPrerequisites } from "../src/document/state"
 import { parseUnitDoc } from "../src/document/unit"
-import { parseSplit, renderSplitTodo, splitItem, splitProblems, splitStateFile, splitTaken, splitTitle, writeSplitTodos } from "../src/split"
-import { readChecklist, reloadTask, setForkBase, setSplit } from "../src/tasks"
+import { parseSplit, renderSplitTodo, splitItem, splitProblems, splitStateFile, splitTaken, writeSplitTodos } from "../src/split"
+import { checklistTitle, readChecklist, reloadTask, setForkBase, setSplit } from "../src/tasks"
 import { seedUnits } from "./fixtures/units"
 import { splitUsageReached } from "../src/usage"
 
@@ -156,12 +156,16 @@ describe("splitUsageReached (the guard's usage condition)", () => {
 })
 
 describe("the fan-out prompt's helpers (plans/0059 D5)", () => {
-  test("splitTitle: the text up to the colon ending the title, the description without one, capped at 60 characters", () => {
-    expect(splitTitle("alpha: the alpha module in src/alpha.ts Depends: none Artifacts: src/alpha.ts")).toBe("alpha")
-    expect(splitTitle("the whole rest Artifacts: src/all.ts")).toBe("the whole rest")
+  test("checklistTitle: the text up to the colon ending the title, the description without one, capped at 60 characters", () => {
+    expect(checklistTitle("alpha: the alpha module in src/alpha.ts Depends: none Artifacts: src/alpha.ts")).toBe("alpha")
+    expect(checklistTitle("the whole rest Artifacts: src/all.ts")).toBe("the whole rest")
+    // The fields end the description in either order, case-insensitively.
+    expect(checklistTitle("the rest artifacts: src/all.ts Depends: S01")).toBe("the rest")
     // A colon inside a word (a URL, a path) does not end the title.
-    expect(splitTitle("fetch http://x.org/a: the client Artifacts: src/fetch.ts")).toBe("fetch http://x.org/a")
-    const long = splitTitle(`${"x".repeat(80)} Artifacts: a.ts`)
+    expect(checklistTitle("fetch http://x.org/a: the client Artifacts: src/fetch.ts")).toBe("fetch http://x.org/a")
+    // A line with no fields at all is its own title.
+    expect(checklistTitle("write the docs")).toBe("write the docs")
+    const long = checklistTitle(`${"x".repeat(80)} Artifacts: a.ts`)
     expect(long).toHaveLength(60)
     expect(long.endsWith("…")).toBe(true)
   })

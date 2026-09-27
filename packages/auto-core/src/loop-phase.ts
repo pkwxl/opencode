@@ -287,7 +287,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
       // Round-close report (plans/0049 G8, anchor a): the checks the next
       // round's start enforces, reported on every complete run; the exit code
       // is unaffected.
-      for (const line of roundCloseLines(await roundCloseProblems(directory, state.round, { build: opts.build }))) log(line)
+      for (const line of roundCloseLines(await roundCloseProblems(directory, state.round, { build: opts.build, scanExempt: opts.scanExempt }))) log(line)
       // plan does not open the next round here (plans/0053 D8): the round's
       // ## Close cannot be filled in yet, so the round-close checks would fail.
       if (opts.stopBefore === "execute") log(roundCompleteNext(directory, state.round))

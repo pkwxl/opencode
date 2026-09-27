@@ -643,6 +643,7 @@ describe("CLI parsing: run-side options and the config", () => {
         ["--wrapup"],
         ["--no-wrapup"],
         ["--parallel", "low"],
+        ["--scan-exempt", "test/fixtures/**"],
       ]
       for (const extra of fixed) {
         const run = await runCli(["run", dir, ...extra])
@@ -1140,6 +1141,48 @@ describe("CLI: init freezes the project config", () => {
       const zero = await runCli(["run", dir, "--max-sessions", "0"])
       expect(zero.code).toBe(1)
       expect(zero.err).toContain("--max-sessions takes a positive integer")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("init/amend --scan-exempt freezes the scan-exemption globs; none drops the key; bad globs are usage errors (plans/0059 X2)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      const plain = await runCli(["init", dir])
+      expect(plain.code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
+      expect(plain.out).not.toContain("scan-exempt")
+      // a comma list is split (brace groups keep their commas) and trimmed
+      const set = await runCli(["init", dir, "--scan-exempt", "test/fixtures/**, templates/{prompts,intents}"])
+      expect(set.code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ scanExempt: ["test/fixtures/**", "templates/{prompts,intents}"] })
+      expect(set.out).toContain("· scan-exempt test/fixtures/**,templates/{prompts,intents}")
+      // amend keeps it, amend --scan-exempt replaces it, none removes it
+      expect((await runCli(["amend", dir, "--commit", "true"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ scanExempt: ["test/fixtures/**", "templates/{prompts,intents}"] })
+      expect((await runCli(["amend", dir, "--scan-exempt", "fixtures"])).code).toBe(0)
+      expect(await readConfig(dir)).toMatchObject({ scanExempt: ["fixtures"] })
+      expect((await runCli(["amend", dir, "--scan-exempt", "none"])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
+      // a plain init is the stateless overwrite: the key falls back to none
+      expect((await runCli(["init", dir, "--scan-exempt", "fixtures"])).code).toBe(0)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
+      // an absolute glob, one climbing out, and an empty list are usage errors
+      for (const value of ["/abs/**", "../elsewhere", " , "]) {
+        const bad = await runCli(["amend", dir, "--scan-exempt", value])
+        expect(bad.code).toBe(1)
+        expect(bad.err).toContain("--scan-exempt takes none or a comma-separated list of path globs")
+      }
+      expect((await runCli(["amend", dir, "--scan-exempt", "/abs/**"])).err).toContain("is absolute")
+      expect((await runCli(["amend", dir, "--scan-exempt", "../elsewhere"])).err).toContain("climbs out of the target directory")
+      expect(await readConfig(dir)).not.toHaveProperty("scanExempt")
+      // a hand-edited bad value is refused at load, naming the key
+      await Bun.write(join(dir, ".opencode", "auto", "config.json"), JSON.stringify({ scanExempt: "test/**" }))
+      const load = await runCli(["amend", dir, "--commit", "true"])
+      expect(load.code).toBe(1)
+      expect(load.err).toContain("scanExempt must be an array of path globs")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

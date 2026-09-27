@@ -35,13 +35,15 @@ export type RoundClose = {
   warnings: string[]
 }
 
-export async function roundCloseProblems(dir: string, round: number, opts: { build?: string } = {}): Promise<RoundClose> {
+// scanExempt = config scanExempt (plans/0059 X2): deliverable paths whose
+// process-shaped strings are content, skipped by the whole-tree scan too.
+export async function roundCloseProblems(dir: string, round: number, opts: { build?: string; scanExempt?: readonly string[] } = {}): Promise<RoundClose> {
   const problems: string[] = []
   const warnings: string[] = []
   // 1. Whole tree: an empty baseline per repository makes every tracked line
   // "added"; untracked files are added whole by unitAddedLines itself.
   const roots = await repoRoots(dir)
-  const scan = processReferenceScan(await unitAddedLines(dir, roots.map((root) => ({ root, sha: "" }))))
+  const scan = processReferenceScan(await unitAddedLines(dir, roots.map((root) => ({ root, sha: "" }))), opts.scanExempt)
   problems.push(...scan.problems.map((problem) => `process reference: ${problem}`))
   warnings.push(...scan.warnings)
   // 2. Build.

@@ -190,6 +190,14 @@ export type Opts = {
   // the env-switch path, exactly as before. Type-only import; opts stays a
   // pure type module.
   routing?: import("./routing").RoutingFacts
+  // false = the run's agents cannot fork a session (capability.ts
+  // Degradation.leadSplit, fixed at run start over the whole fleet): auto's
+  // lead runs without its split clause, since the streams of a split are
+  // forks of the lead (plans/0059 D7). Absent = the clause may be offered.
+  leadSplit?: boolean
+  // config.scanExempt (plans/0059 X2): globs of deliverable paths the
+  // subtask close-out's P1 scan and terminator scan skip.
+  scanExempt?: string[]
 }
 
 // The default context budget baseline (tokens); overridden by --context-limit n

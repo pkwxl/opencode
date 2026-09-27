@@ -2373,7 +2373,7 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
       const plan = await seedUnits(dir, `## T-001: plain base [in_progress]\nBody.\n`)
       await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
       const base = await ensureForkBase(agent.client, plan, plan.tasks[0]!, {}, { pct: 100, used: 0, at: 0 }, DEFAULTS)
-      expect(base).toEqual({ id: "ses_1", used: 1000 })
+      expect(base).toEqual({ id: "ses_1", used: 1000, digest: true })
       // The record stays the plain string and the ready line names neither
       // an agent nor a model.
       expect(await unitsText(dir)).toContain('"forkBase": "digest:ses_1"')
@@ -2437,6 +2437,60 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
     expect(off.prompts[0]).not.toContain("Context-budget protocol")
   })
 
+  test("true's subtasks fork the digest base and are told only the digest is inherited, see the other items by title, and the last one runs the full verification (plans/0059 T1, T2, T5)", async () => {
+    const dir = await freshRepo()
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    const plan = await seedUnits(dir, `## T-001: sample task [pending]\nBody.\n`)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-q", "-m", "init")
+    const doc = (head: string) => `${head}\n\n${"Background the subtasks rely on. ".repeat(6)}\n\n<!-- auto: eof -->\n`
+    const checklist = [
+      "- [ ] alpha: the alpha module in src/alpha.ts, with its constant and a check that reads it back Artifacts: src/alpha.ts",
+      "- [ ] beta: the beta module in src/beta.ts, with its constant and a check that reads it back Artifacts: src/beta.ts",
+      "",
+      "<!-- auto: eof -->",
+      "",
+    ].join("\n")
+    const agent = make({
+      turn: (ctx) => {
+        if (ctx.n === 1) {
+          mkdirSync(join(dir, "docs/T-001/S01"), { recursive: true })
+          mkdirSync(join(dir, "docs/T-001/S02"), { recursive: true })
+          writeFileSync(join(dir, "docs/T-001/context.md"), doc("## Relevant files and key symbols\n- src/alpha.ts, src/beta.ts"))
+          writeFileSync(join(dir, "docs/T-001/shared.md"), doc("- src/index.ts: the module index both items extend"))
+          writeFileSync(join(dir, "docs/T-001/subtasks.md"), checklist)
+          writeFileSync(join(dir, "docs/T-001/S01/todo.md"), doc("## Scope\n\nThe alpha module.\n\n## Artifacts\n\n- src/alpha.ts"))
+          writeFileSync(join(dir, "docs/T-001/S02/todo.md"), doc("## Scope\n\nThe beta module.\n\n## Artifacts\n\n- src/beta.ts"))
+        }
+        if (ctx.text.includes("item 1 of that list only")) writeFileSync(join(dir, "src/alpha.ts"), "export const alpha = 1\n")
+        if (ctx.text.includes("item 2 of that list only")) writeFileSync(join(dir, "src/beta.ts"), "export const beta = 1\n")
+        return undefined
+      },
+    })
+    try {
+      mkdirSync(join(dir, "src"), { recursive: true })
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "true" })
+      expect(outcome).toEqual({ type: "completed" })
+      const prompts = agent.prompts.map((prompt) => prompt.text)
+      // decompose, the digest base, then the two subtasks, each a fork of the base.
+      expect(prompts).toHaveLength(4)
+      const base = agent.prompts[1]!.session
+      expect(agent.argsOf("fork").map((args) => args[0])).toEqual([base, base])
+      const [first, second] = [prompts[2]!, prompts[3]!]
+      expect(first).toContain("The subtask list of this task, by title (executed in order; the other items belong to other sessions, do not touch them):\n\n1. alpha\n2. beta\n")
+      expect(first).toContain(`You are responsible for item 1 of that list only:\n\n${checklist.split("\n")[0]}\n`)
+      expect(first).not.toContain("the beta module in src/beta.ts")
+      expect(first).toContain("This session has inherited the task-background digest: the text of docs/T-001/context.md is already in context")
+      expect(first).not.toContain("loaded content")
+      expect(first).toContain("Verification: run the checks that target this subtask's own changes")
+      expect(first).not.toContain("This is the last subtask")
+      expect(second).not.toContain("the alpha module in src/alpha.ts")
+      expect(second).toContain("This is the last subtask: once it is done, run the task's full acceptance verification once")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("true runs the planned pipeline: the merged understand/decompose session comes first", async () => {
     // The fake's default turn writes none of the decompose artifacts, so the
     // session is re-prompted once with feedback and the task blocks there.
@@ -2476,7 +2530,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
   // commit; the turn script receives the directory.
   const run = async (
     turn: (dir: string) => FakeAgentOptions["turn"],
-    options: { capabilities?: FakeAgentOptions["capabilities"]; seed?: (dir: string) => Promise<void>; body?: string; agent?: FakeAgentOptions } = {},
+    options: { capabilities?: FakeAgentOptions["capabilities"]; seed?: (dir: string) => Promise<void>; body?: string; agent?: FakeAgentOptions; opts?: Partial<Opts> } = {},
   ) => {
     const dir = await freshRepo()
     await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
@@ -2486,7 +2540,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
     await git(dir, "commit", "-q", "-m", "init")
     const script = turn(dir)
     const agent = make({ ...options.agent, ...(script ? { turn: script } : {}), ...(options.capabilities ? { capabilities: options.capabilities } : {}) })
-    const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "auto" })
+    const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "auto", ...options.opts })
     return { dir, agent, outcome, prompts: agent.prompts.map((prompt) => prompt.text) }
   }
   const write = (dir: string, rel: string, text: string) => {
@@ -2621,7 +2675,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
     }
   })
 
-  test("an agent that cannot fork: the rejected lead continues in a new session with the full prompt, no split clause, and the note saying the earlier work is committed", async () => {
+  test("a rejected lead whose fork fails (its session is gone): it continues in a new session with the full prompt, no split clause, and the note saying the earlier work is committed", async () => {
     const { dir, outcome, prompts } = await run(
       (dir) => (ctx) => {
         if (ctx.n === 1) {
@@ -2630,7 +2684,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
         }
         return undefined
       },
-      { capabilities: { fork: "none" } },
+      { agent: { fail: { fork: new Error("fork refused") } } },
     )
     try {
       expect(outcome).toEqual({ type: "completed" })
@@ -2639,6 +2693,31 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
       expect(prompts[1]).not.toContain("Split rule")
       expect(prompts[1]).toContain("\n\n[DRIVER] The split was not taken: 1 item, where a split takes 2 to 5 streams.")
       expect(prompts[1]).toContain("its changes are committed: check git log and git diff")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("an agent that cannot fork (plans/0059 D7): the run start withholds the clause — the lead is ondemand's session, and a checklist it writes runs after it, unjudged", async () => {
+    const { dir, outcome, prompts } = await run(
+      (dir) => (ctx) => {
+        if (ctx.n === 1) write(dir, "docs/T-001/subtasks.md", SPLIT)
+        if (ctx.text.includes("item 1 of that list only")) write(dir, "src/alpha.ts", "export const alpha = 1\n")
+        if (ctx.text.includes("item 2 of that list only")) write(dir, "src/beta.ts", "export const beta = 1\n")
+        return undefined
+      },
+      { capabilities: { fork: "none" }, opts: { leadSplit: false } },
+    )
+    try {
+      expect(outcome).toEqual({ type: "completed" })
+      // Ondemand's whole-task session: the protocol, no clause.
+      expect(prompts[0]).toContain("Context-budget protocol")
+      expect(prompts[0]).not.toContain("Split rule")
+      expect(prompts[0]).not.toContain("You are the lead session of this task")
+      // Not judged: no driver-written scope files, the items run on ticks.
+      expect(prompts).toHaveLength(3)
+      expect(existsSync(join(dir, "docs/T-001/S01"))).toBe(false)
+      expect(lines.some((line) => line.includes("already holds a checklist"))).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

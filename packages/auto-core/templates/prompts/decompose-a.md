@@ -19,12 +19,13 @@ Current task (its document is docs/{{taskId}}/todo.md):
    sessions read the listed files themselves, on demand, following the index;
 {{#if decomposeRule}}{{decomposeRule}}
 {{/if}}{{#if phaseDuties}}{{phaseDuties}}
-{{/if}}5. Write the decomposition into docs/{{taskId}}/subtasks.md (the subtask index) as Markdown checklist items. Each description must be
+{{/if}}5. Write the decomposition into docs/{{taskId}}/subtasks.md (the subtask index) as Markdown checklist items. Each item opens with a
+   short title and a colon (the other subtask sessions see only the titles of the items that are not theirs). Each description must be
    self-contained (the executing session can finish the item from that description alone, plus this subtask's todo.md, the shared-context
    index shared.md and docs/), and must declare the item's artifacts at the end of the description with the literal token `Artifacts:` — a
    protocol string the driver parses, so write it verbatim and do not translate it:
 
-- [ ] <subtask description; ends with Artifacts: <path list>>
+- [ ] <short title>: <subtask description; ends with Artifacts: <path list>>
 
 6. Write a scope file for each subtask (item N maps to docs/{{taskId}}/S<two-digit zero-padded index>/todo.md, e.g. S01 for item 1),
    containing the two sections below. Both headings are protocol anchors the driver checks for: write them verbatim and untranslated.

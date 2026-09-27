@@ -112,7 +112,7 @@ export async function ensureForkBase(
       if (await sessionAlive(baseClient, persistID)) {
         const used = await sessionUsed(baseClient, persistID)
         log(`⑂ ${task.id} digest base reuse: session ${persistID}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
-        return { id: persistID, used, ...(agent !== undefined ? { agent } : {}) }
+        return { id: persistID, used, ...(agent !== undefined ? { agent } : {}), digest: true }
       }
       log(`↻ ${task.id} persistent digest base ${persistID}${onAgent} is stale; rebuilding from ${taskDoc(task.id, "context")}`)
     }
@@ -145,7 +145,7 @@ export async function ensureForkBase(
             ? `⑂ ${task.id} digest base ready: session ${base.id} on agent ${landed} (model ${base.modelEntry ?? "unrouted"}, digest prefix ${formatTokens(base.used)} tokens)`
             : `⑂ ${task.id} digest base ready: session ${base.id} (digest prefix ${formatTokens(base.used)} tokens)`,
         )
-        return { id: base.id, used: base.used, ...(landed !== undefined ? { agent: landed } : {}) }
+        return { id: base.id, used: base.used, ...(landed !== undefined ? { agent: landed } : {}), digest: true }
       }
       log(`↻ ${task.id} digest base session not established${result.type === "blocked" ? ` (${firstLine(result.question)})` : ""}; falling back to the session base`)
     } else {
@@ -162,7 +162,8 @@ export async function ensureForkBase(
     if (await sessionAlive(baseClient, sessionID)) {
       const used = sessionID === chain.id ? chain.used : await sessionUsed(baseClient, sessionID)
       log(`⑂ ${task.id} session base ready: session ${sessionID}${onAgent} (${used === undefined ? "usage unknown" : `${formatTokens(used)} tokens`})`)
-      return { id: sessionID, used, ...(agent !== undefined ? { agent } : {}) }
+      // A digest base read in session mode still holds the digest alone.
+      return { id: sessionID, used, ...(agent !== undefined ? { agent } : {}), ...(sessionID === persistID ? { digest: true } : {}) }
     }
     log(`↻ ${task.id} session base ${sessionID}${onAgent} is stale; falling back to cold start`)
   }
