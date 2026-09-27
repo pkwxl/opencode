@@ -18,7 +18,7 @@ import { resetKeyring } from "../src/keyring"
 import { routingFacts, type RoutingFacts } from "../src/routing"
 import { runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters, setShellProfile, shellAdapter, shellProfile } from "../src/shell"
-import { clampSwitches, parseSwitches } from "../src/switches"
+import { autoSwitches, clampSwitches, parseSwitches } from "../src/switches"
 import { WORKTREE_CHECK } from "../src/session-api"
 import { ev, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgent, type FakeAgentOptions } from "./fixtures/agent"
 import { task } from "./fixtures/runner"
@@ -90,6 +90,10 @@ const quotaTurn = (ctx: { session: string; n: number }) =>
       ]
     : undefined
 
+// The env-parsed values the suite's clamps restore: undefined is no Switches
+// value for ask, and a later file's autoSwitches() would read it.
+const { ask: envAsk, agent: envAgent } = autoSwitches()
+
 let printed: ReturnType<typeof spyOn>
 let lines: string[]
 
@@ -107,7 +111,7 @@ afterEach(() => {
   resetShellAdapters()
   resetFailback()
   resetKeyring()
-  clampSwitches({ ask: undefined, agent: undefined })
+  clampSwitches({ ask: envAsk, agent: envAgent })
 })
 
 // The suite's own afterAll for the temp directories.
