@@ -231,9 +231,18 @@ Unit and outcome states:
 | 回试 | failback | Return to the preferred model; `/failback`, `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` |
 | 回落 | fallback | General "use the next option" (capability fallback, ladder exhaustion) |
 | 候选 | candidate | |
-| 重试阶梯 | retry ladder | |
-| 等待-探测环 | wait-and-probe loop | `awaitRecovery`, `OPENCODE_AUTO_RECOVERY_WAIT` |
-| 错误归类 | error classification | overflow / quota / auth / rate / transient |
+| 重试阶梯 | retry ladder | The driver's own retries of a failed session, `OPENCODE_AUTO_RETRY_WAITS`; skipped for a spent quota window with a stated reset (`plans/0057` §4.1) |
+| 等待-探测环 | wait-and-probe loop | `awaitRecovery`; `OPENCODE_AUTO_RECOVERY_WAIT` is its interval when no reset is known |
+| 错误归类 | error classification | overflow / quota / auth / rate / transient / unknown |
+| 重试策略 | retry policy | `AgentRetryPolicy`: what the agent does by itself when a provider request fails — its attempt and backoff caps, whether it waits out a spent quota window, its silence budget. Declared per adapter (`retryPolicy`), overridden per registry entry (`retry`); `agentGaveUp` reads it (`plans/0057` §4) |
+| 静默预算 | silence budget | `silenceBudgetMs`: how long the agent may say nothing while it backs off; a retry signal naming a longer wait is an announced silence, and the liveness probe holds off until it ends (`plans/0057` §4.2) |
+| 配额窗口、用量窗口 | quota window | A provider's rolling limit on an account: five-hour, daily, weekly (`scope` `5h` / `day` / `7d`). *Spent* = it refuses requests until its reset. A per-minute cap (`request` / `token`) is not one (`plans/0057` §7) |
+| 重置时刻 | reset | `resetAt`, epoch ms: when a spent limit lifts; never scheduled past the horizon `RESET_HORIZON_MS` (7 days) |
+| 声明的重置 | stated reset | A reset the failure itself gives: response headers, claude's `rate_limit_event`, or a known provider wording (`statedInWording`); it ranks above the classifier's reading (`plans/0057` §5.3) |
+| 窗口观测 | limit event | The `limit` `AgentEvent` (claude's `rate_limit_event`): the account's quota windows, on healthy turns too; logged and recorded, never used to refuse a dispatch (`plans/0057` §5.2, §11 item 10) |
+| 计划等待 | scheduled wait | The wait-and-probe loop sleeping to a known instant — a candidate usable again (`recoveryAt`), a stated or learned reset — plus hibernate's jitter instead of the polled interval (`planSleep`, `plans/0057` §6); `/exit` is a boundary inside it |
+| 学得窗口 | learned window | `.auto/windows.json` (`src/quota-windows.ts`): a spent quota window's reset kept across runs per account, read only to time the scheduled wait; never a down mark (`plans/0057` §8) |
+| 账号 | account | What a learned window is kept under: the agent profile, the provider, the ring's key by name (`accountOf`) |
 
 ## Agent domain
 
@@ -263,7 +272,7 @@ Unit and outcome states:
 | 预检 | preflight | `src/loop-preflight.ts` |
 | 空跑 | dryrun | |
 | 步进模式 | step mode | `OPENCODE_AUTO_STEP` |
-| 安全边界、步进边界 | safe boundary | Phase / task / subtask boundary |
+| 安全边界、步进边界 | safe boundary | Phase / task / subtask boundary; for `/exit` also the wait-and-probe loop's sleep (`plans/0057` §6) |
 | 优雅退出 | graceful exit | `/exit` |
 | 休眠 | hibernate | `OPENCODE_AUTO_HIBERNATE` |
 | 休眠窗口 | hibernate window | Daily UTC window |
@@ -345,6 +354,9 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 | 回退 / 回滚 / 回落 | **revert to pending** (unit status) / **rollback** (git) / **fallback** (next option). |
 | 降级 | **failover** for models under quota; **capability degradation** for missing agent capabilities. |
 | failover / failback / fallback | Away from the preferred model / back to it / any generic next option. |
+| retry ladder / retry policy | The driver retrying a failed session / what the agent does by itself before the failure reaches the driver. |
+| window / quota window | The registry's **window** (`avoid` / `only`) is declared by the operator and repeats; a **quota window** is the provider's, and its reset is learned and one-off. |
+| quota window / usage window | Prose says **quota window**. `usage window` survives in the log lines (the usage-window lines, the wait line's "the weekly usage window resets …") and in the agent interface's comments. |
 | tier | Two kinds: the **usage tier** (`UsageTier`, 0038) and the **reasoning tier** (the registry's deep/simple, 0055; a phase type's is its **execute tier**). English prose names the kind. |
 | wrap-up / close-out | AI session writing the report / driver checks and commit after it. |
 | 关闭 / 轮关闭 / 收口 | **close** a unit (a person's `close`: done without delivering, `Closed:`) / **round close** (the G8 gate before the next round) / **close-out** (the driver's checks and commit after every unit). |

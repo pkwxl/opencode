@@ -1,16 +1,16 @@
 # 0057 — Session exceptions: the agent's retry policy, quota windows and scheduled waits (design)
 
-Status: **design, ruled; S1–S5 and S4a implemented** (2026-09-26; revised the same day with the
-field evidence of §1.1, all ten points of §11 ruled as recommended, and S1 and S2 done as §13
-records; S3 and S4 done 2026-09-27; S4a added and done the same day with the opencode field
-evidence of §1.2; S5 done the same day). Source: the user's request of the same day —
-the session exception flow has deficiencies; the driver should recognize what a coding agent
-reports across agents and models, formulate better wait-and-retry strategies for the rolling
-five-hour and weekly quota limits, know when an agent cures a limit by itself so the driver
-only has to wait, and consider the providers' public interfaces as a decision source — plus
-the follow-up: **the driver should know the retry policy a coding agent applied**.
-§11 records the rulings. Line numbers are as of auto-core `67cde2d55`; search by
-symbol if they drift.
+Status: **design, ruled; S1–S6 and S4a implemented, S0's evidence gaps open** (2026-09-26;
+revised the same day with the field evidence of §1.1, all ten points of §11 ruled as
+recommended, and S1 and S2 done as §13 records; S3 and S4 done 2026-09-27; S4a added and done
+the same day with the opencode field evidence of §1.2; S5 and S6 done the same day). Source:
+the user's request of the same day — the session exception flow has deficiencies; the driver
+should recognize what a coding agent reports across agents and models, formulate better
+wait-and-retry strategies for the rolling five-hour and weekly quota limits, know when an agent
+cures a limit by itself so the driver only has to wait, and consider the providers' public
+interfaces as a decision source — plus the follow-up: **the driver should know the retry
+policy a coding agent applied**. §11 records the rulings. Line numbers are as of auto-core
+`67cde2d55`; search by symbol if they drift.
 
 F7 and F16 first rested on community reports about `claude` headless. Field evidence has since
 replaced them (§1.1): the run `.auto/logs/run-2026-09-25_11-20-51.log` hit the five-hour limit
@@ -661,7 +661,7 @@ reasoning; the **Ruled** sentence is the decision.
 | scheduled sleep in the wait-and-probe loop | `src/session.ts` |
 | learned-window persistence (§8, §11 item 4) | `src/quota-windows.ts` (`.auto/windows.json`), read by `src/session.ts` |
 | the reset instant on the wait line; hours lost to quota windows per model in the round conclusion (§11 item 7) | `src/session.ts`, `src/stats.ts`, `src/conclusion.ts` |
-| glossary: retry policy, quota window, scheduled wait | `docs/glossary.md` |
+| glossary: retry policy, quota window, scheduled wait, learned window; the structure index; the navigation line (S6) | `docs/glossary.md`, `docs/structure.md`, `AGENTS.md` |
 
 Import direction is unchanged: `src/classify.ts` stays below `src/watch.ts`, and neither adapter
 imports the driver domain.
@@ -1174,6 +1174,32 @@ imports the driver domain.
       such a mark polls as before.
 - **S6 — the durable documentation:** glossary, `docs/structure.md`, the AGENTS.md navigation
   line. Quota probes are deferred (§11 item 5) and have no step.
+
+  **Done (2026-09-27).** Documentation only; no code, test or log line changes.
+  - **`docs/glossary.md`**, in the model-routing table:
+    - new rows: retry policy, silence budget, quota window, reset, stated reset, limit event,
+      scheduled wait, learned window, account;
+    - widened rows: the retry ladder (skipped for a stated spent window), the wait-and-probe
+      loop (`OPENCODE_AUTO_RECOVERY_WAIT` is its interval when no reset is known), error
+      classification (`unknown` added), and the safe boundary (the wait is one for `/exit`).
+
+    Three confusable pairs are added: retry ladder / retry policy; the registry's window / a
+    quota window; and quota window / usage window.
+  - **The term.** The design, `src/quota-windows.ts`, `quotaWaits` and the round conclusion
+    say "quota window"; the log lines say "usage window" (S3's window lines, S4's wait lines).
+    The glossary makes **quota window** the prose term, the design's own. "Usage window"
+    survives in the log lines and the agent interface's comments, as `handoff` survives beside
+    handover. The log lines are left as they are.
+  - **`docs/structure.md`.**
+    - A new row for `src/quota-windows.ts` under the task store and state.
+    - Widened rows: the agent interface and both adapters, the registry loader (`retry`),
+      selection (`recoveryAt`), the classifier, session driving (the ladder skip and the
+      scheduled wait), the event stream, the session chain, stats, conclusions, graceful exit,
+      and hibernate (its jitter).
+  - **`AGENTS.md`.** One navigation line after the wait-and-probe loop's, pointing here. The
+    agent-domain line also names the seventh amendment beside 0055's. No invariant line is
+    added, because the design's constraints are already listed there: C4 is the references
+    invariant and C5 the exit codes.
 
 ## 14. Test plan
 

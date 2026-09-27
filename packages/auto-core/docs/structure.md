@@ -68,9 +68,9 @@ Domains depend one way and only through their entry modules; the driver sits on 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Interface | `AgentClient` (14 never-rejecting calls), `AgentCapabilities`, `AgentEvent`, `AgentHost` — consciously amended for the registry (0055: `PromptInput.variant`/`bare`, `AgentHostOptions.bin`/`env`/`config`, `AgentHost.setConfig`) | `src/agent/types.ts` (0037, 0055) |
-| opencode adapter | SDK calls, SSE → `AgentEvent` mapping, server spawn (the driver's own `opencode serve`, with an agent profile's bin, env overlay and spawn config)/connect/restart/timeout; the only importer of `@opencode-ai/sdk` | `src/agent/opencode/{client,events,server}.ts` (0039, 0055) |
-| claude headless adapter | `claude -p` stream-json process per working session, stdout parser, contract/permission translation, host factory | `src/agent/claude/{client,stream,contract,host}.ts` (0041) |
+| Interface | `AgentClient` (14 never-rejecting calls), `AgentCapabilities`, `AgentEvent`, `AgentHost` — consciously amended for the registry (0055: `PromptInput.variant`/`bare`, `AgentHostOptions.bin`/`env`/`config`, `AgentHost.setConfig`) and for session exceptions (0057: `AgentRetryPolicy`, `AgentError`'s limit fields, the `limit` event) | `src/agent/types.ts` (0037, 0055, 0057) |
+| opencode adapter | SDK calls, SSE → `AgentEvent` mapping (response headers and the retry status → limit fields), its retry policy, server spawn (the driver's own `opencode serve`, with an agent profile's bin, env overlay and spawn config)/connect/restart/timeout; the only importer of `@opencode-ai/sdk` | `src/agent/opencode/{client,events,server}.ts` (0039, 0055, 0057) |
+| claude headless adapter | `claude -p` stream-json process per working session, stdout parser (`rate_limit_event` → limit fields and the `limit` event), its retry policy, contract/permission translation, host factory | `src/agent/claude/{client,stream,contract,host}.ts` (0041, 0057) |
 
 ## Driver
 
@@ -90,7 +90,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Close | `closeUnit`: close a task/phase/round without completing it — the `Closed:` field, the mechanical handover of a closed phase, per-unit record clearing, the close commit | `src/close.ts` (0053 D17–D22) |
 | Task loop | Iterates a phase's tasks; `LoopCtx` | `src/loop-task.ts` |
 | Loop progress | `--wait-between` pause, changed-files watch, subtask heartbeat | `src/loop-progress.ts` (0019) |
-| Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only; per-model lines and the per-tier summary under a registry) | `src/conclusion.ts` (0019, 0020, 0055) |
+| Conclusions | Resume banner, proxy-answer highlight blocks, conclusion lines (text only; per-model lines and the per-tier summary under a registry; the time lost to quota windows) | `src/conclusion.ts` (0019, 0020, 0055, 0057) |
 | Agent choice | The adapter a run drives (shell profile > `OPENCODE_AUTO_AGENT` > config > opencode) and the start profile a name resolves to under a registry (`agentProfileFor`) | `src/agent-choice.ts` (0041, 0055) |
 | Agent pool | The run's agent hosts under one control: under a model registry one lazily started host per agent profile (a profile nobody selects never spawns), the capability intersection at run start, preflight's bin check and the `models --probe` core; without one the single agent starts eagerly, exactly as before | `src/agent-pool.ts` |
 | Agent environments | An agent profile's env resolved into the overlay its host starts with (values never logged); the loopback proxy warning of preflight | `src/agent-env.ts` (0055) |
@@ -101,14 +101,14 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 
 | Module | Responsibility | Key files |
 |---|---|---|
-| Registry loader | The operator layer (`$OPENCODE_AUTO_MODELS`, else `$XDG_CONFIG_HOME/<configDir>/models.json`) and the local-only project layer `.opencode/auto/models.json`: one-level-deep merge, strict validation, key/env reference checks; with neither layer there is no registry and nothing changes | `src/models.ts` (0055) |
+| Registry loader | The operator layer (`$OPENCODE_AUTO_MODELS`, else `$XDG_CONFIG_HOME/<configDir>/models.json`) and the local-only project layer `.opencode/auto/models.json`: one-level-deep merge, strict validation, key/env reference checks, an entry's `retry` policy override; with neither layer there is no registry and nothing changes | `src/models.ts` (0055, 0057) |
 | Windows | `avoid`/`only` window grammar, availability and next opening in the registry `tz` (DST-correct, injected clock, pure) | `src/model-window.ts` (0055) |
 | Tiers | The default reasoning tier of every routing role and phase type (a custom type's `Reasoning:` field, the builtin execute tiers) | `src/tier.ts` (0055) |
 | Candidate lists | The route in force (role > type id > preset letter), the session's tier and the ordered internal names, before any usability check | `src/model-route.ts` (0055) |
-| Selection | Pick / window wait / probe / empty-tier over a candidate list (pure: down marks, ring predicate and context windows are inputs) | `src/select.ts` (0055) |
+| Selection | Pick / window wait / probe / empty-tier over a candidate list, and `recoveryAt`, the instant a list with nothing usable comes back by waiting (pure: down marks, ring predicate and context windows are inputs) | `src/select.ts` (0055, 0057) |
 | Routing run state | The run-level facts (registry, agent filter, default agent), the wiring every registry-driven dispatch calls through, the run-start routing block and the dispatch-coverage refusal | `src/routing.ts` (0055) |
 | Key rings | Per-provider rings of references, ring positions and activation, the spawn config content, rotation by managed-server restart | `src/keyring.ts` (0055) |
-| Failure-message classifier | The registry's `classifier` entries read failure text the error patterns cannot settle: redaction, cache and call budget, reply parsing, the one-shot tool-free session | `src/classify.ts` (0055) |
+| Failure-message classifier | The registry's `classifier` entries read failure text the error patterns cannot settle and whose reset nothing stated: redaction, cache and call budget, reply parsing, the one-shot tool-free session; the reset horizon | `src/classify.ts` (0055, 0057) |
 | Context steps | The `wider` step ids of one entry: the step-up point, the enabled-step walk over live windows, the resume rule, startup validation, cache-claim verdicts (the live trigger is watch.ts) | `src/model-step.ts` (0055) |
 | models command data | `checkModels` / `describeModels` / `formatModels`: the run start's registry problems and the effective table as data; the shell only prints | `src/models-describe.ts` (0055) |
 
@@ -119,10 +119,10 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Task pipeline | `runOnce`/`runTask`: decompose → subtasks (or whole) → wrap-up → closeout; resume | `src/runner.ts` |
 | Execution | Merged understand+decompose session, per-subtask sessions, whole-task session | `src/execute.ts` (0030) |
 | Test-handover state machine | `runExecSession`: handover sequence and recovery forks | `src/exec-session.ts` (0023) |
-| Session driving | `runSession` retry / server restart / key-ring rotation → model failover / `awaitRecovery`; registry window wait (sleep to the opening plus hibernate's jitter, booked as a `window` wait); `ensureForkBase` (per agent, built with the subtask route's pick) | `src/session.ts` (0015, 0017, 0055 §6.3, §7, §8.4) |
+| Session driving | `runSession` retry / server restart / key-ring rotation → model failover / `awaitRecovery`; a spent quota window with a stated reset skips the retry ladder; the scheduled wait (`planSleep`: the recovery sleep to a known instant — a candidate usable again, a stated or learned reset — plus jitter, `/exit` a boundary inside it); registry window wait (sleep to the opening plus hibernate's jitter, booked as a `window` wait); `ensureForkBase` (per agent, built with the subtask route's pick) | `src/session.ts` (0015, 0017, 0055 §6.3, §7, §8.4, 0057 §4.1, §6) |
 | Single dispatch | Reuse-or-create, model target and the chain's agent binding, resume point, stats segment, wait for idle | `src/attempt.ts` |
-| Event stream | Echo, usage tracking, handoff steer, stuck hints, marker collection, test requests, liveness probe, truncation resume; context step-up steers and classifier calls beside the retry branch | `src/watch.ts` (0026, 0055 §4.5, §7.1) |
-| Session chain and routing | `SessionChain` (with its `agent` and model entry), phase → role → model routing, error classification | `src/chain.ts` (0017, 0055 §8.2) |
+| Event stream | Echo, usage tracking, handoff steer, stuck hints, marker collection, test requests, liveness probe (held off through an announced silence), truncation resume; context step-up steers and classifier calls beside the retry branch; the limit fields merged (stated, then wording, then classifier), quota-window lines | `src/watch.ts` (0026, 0055 §4.5, §7.1, 0057) |
+| Session chain and routing | `SessionChain` (with its `agent` and model entry), phase → role → model routing, error classification, the retry policy in force and `agentGaveUp`, resets stated in a known provider wording (`statedInWording`) | `src/chain.ts` (0017, 0055 §8.2, 0057 §4, S4a) |
 | Session helpers | Fork, usage, liveness, rename over `AgentClient`; `clientOf`/`contextLimitsOf` resolve a client or the agent pool; terminal formatting; human answers | `src/session-api.ts` |
 | Bypass-session skeleton | `requireArtifact`: dispatch → collect → one retry → implicit block; hidden-unit commit boundary | `src/artifact.ts` |
 | Wrap-up | Wrap-up session, `Result: PASS\|FAIL` parsing | `src/wrapup.ts` (0044) |
@@ -139,7 +139,8 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Resume gate | Unit-ownership gate, resume/interruption wording | `src/resume-gate.ts` |
 | Handover recovery | `.auto/handover.json` breakpoints of a test handover | `src/handover.ts` (0023 §I–§N) |
 | Numbering | `--auto-number`, `.auto/next-task` | `src/numbering.ts` (0001) |
-| Stats | Cross-interruption cumulative time and tokens, `.auto/stats.json`; under a registry also per-model and per-tier usage, the `classify` bucket and per-model protocol-drift counters | `src/stats.ts` (0019, 0055 §7.1) |
+| Stats | Cross-interruption cumulative time and tokens, `.auto/stats.json`; under a registry also per-model and per-tier usage, the `classify` bucket and per-model protocol-drift counters; the time slept for quota windows per model (`quotaWaits`) | `src/stats.ts` (0019, 0055 §7.1, 0057 §11 item 7) |
+| Learned windows | `.auto/windows.json`: a spent quota window's reset per account, kept across runs and read only to time the scheduled wait; never a down mark | `src/quota-windows.ts` (0057 §8) |
 | Round close | Whole-tree P1 scan, build check, close listing before `plan` opens the next round | `src/round-close.ts` (0049) |
 
 ### Git and scripts
@@ -172,8 +173,8 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 |---|---|---|
 | Run lock | `.auto/run.lock`: one driver process per directory; re-entrant, stale-pid detection, refusal and status lines | `src/lock.ts` (0053 D1–D3) |
 | Step mode | `OPENCODE_AUTO_STEP` pauses at phase/task/subtask boundaries | `src/step.ts` (0012) |
-| Graceful exit | `/exit` at the next safe boundary | `src/exit.ts` (0014) |
-| Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window; the shared booked sleep and 0–600 s jitter the registry window waits reuse | `src/hibernate.ts` (0027, 0055 §6.3) |
+| Graceful exit | `/exit` at the next safe boundary, the wait-and-probe loop's sleep included | `src/exit.ts` (0014, 0057 §6) |
+| Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window; the shared booked sleep and 0–600 s jitter the registry window waits and the scheduled wait reuse | `src/hibernate.ts` (0027, 0055 §6.3, 0057 §6) |
 | Interactive input | `--interactive` side-channel steer, `--wait-answer` input line | `src/interactive.ts` |
 | Model failback | `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`, `/failback`; under a model registry also the down marks (per model and provider key) selection reads | `src/failback.ts` (0017, 0055) |
 | Stuck-loop detection | Repeated-tool-call detection → steer hint | `src/stuck.ts`, `templates/prompts/stuck-hint.md` (0016) |
