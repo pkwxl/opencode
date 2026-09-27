@@ -343,5 +343,39 @@ The consequences for design:
   - Documentation: the glossary's rows for the planned pipeline, adaptive decomposition, the lead session, the split, the split clause, the split guard, a stream, fan-out, the split point and the wall, with two confusable pairs (decomposition / split, stream / subtask); `docs/structure.md` (the task pipeline's dispatch by mode, the task store's runtime records, the test-run module's wall); the core `AGENTS.md` navigation (the lead's figure, the fork switches governing `true`); the shell README (the config row's wall, the ondemand protocol as 0056 and D6 made it, the `true` subtasks without a handover protocol — both paragraphs still described the pre-0056 2×cap hint — the lead's figure, the repair note).
   - A defect found while writing the claude end-to-end test: on an agent with no readable session history (claude, `history: false`) only the first stream forked the lead. `leadForkBase` read the lead's size from the chain while the chain still held the lead, and from the session's history otherwise; claude has none, so the second and later streams, and every stream of a resumed run, logged "base usage unknown; not forking (cold start)" and started cold with the full subtask prompt. The fix: the lead's final figure is kept with the split point (`.auto/units.json` `leadUsed`, `src/tasks.ts` `setSplit`, written only where the guard measured it, on a live usage tier), and `leadForkBase` falls back to it after the history read, so an agent with history behaves as before.
   - Tests: `test/split.test.ts` (the record written, dropped and sanitized), `test/agent-fake.test.ts` (an agent without history: both streams fork the lead, in the run that split and in a resumed one), and the shell's `test/e2e.test.ts` over the fake `claude` CLI (`test/fixtures/fake-claude.ts` now plays the lead, its streams, the rejected lead's fork, the wrap-up and the phase handover, and records each turn's session arguments): a taken split — the usage notice reaches the lead's live process mid-turn, both streams are claude processes started with `--resume <lead> --fork-session`, the second one from the recorded figure — and a rejected one, finished by a fork of the lead.
+  - Measured, 2026-09-27: `claude-opus-5-5` (claude 2.1.283). Two identical copies of a small Bun library each
+    got the same task (add csv, ini and query-string modules with tests, export and document them). The arms
+    ran side by side with config defaults (contextLimit 64k, wrap-up on) and differed only in `--subtask`.
+    Figures are `stats.json` per-task usage; the API-equivalent uses the §1.1 weights with reasoning counted as
+    output.
+
+    | | `true` | `auto` | auto / true |
+    |---|---|---|---|
+    | claude cost | $5.62 | $2.66 | 0.47 |
+    | API-equivalent | $5.41 | $2.57 | 0.48 |
+    | output incl. reasoning | 137.0k | 71.8k | 0.52 |
+    | cache write | 287.2k | 120.9k | 0.42 |
+    | cache read | 2.91M | 1.30M | 0.45 |
+    | sessions | 9 | 2 | — |
+    | AI time | 21.4 min | 11.0 min | 0.51 |
+
+    - `true` spent its sessions as follows:
+      - decomposition cost $1.38, 25% of the task (T-008: 26%);
+      - a digest base;
+      - five subtask forks, each writing 12k–43k of cache on top of the 23.8k prefix;
+      - one shape-check re-prompt;
+      - the wrap-up.
+    - `auto` ran the lead ($2.10) and the wrap-up ($0.57). The lead got the usage notice at 68.6k and declined
+      to split ("the rest should fit in this session's budget"), as §7 expects for a task this size, so no
+      stream ran.
+    - Both deliverables pass their own tests (73 and 76 cases). The stats agree with the claude transcripts
+      deduplicated by `requestId`, and neither arm waited on quota.
+    - The §7 target holds here: `auto` cost about half the pipeline, which matches §0's 2–3× at its low end. This
+      was one run per arm. The saving a taken split should bring on a large, separable task is still
+      unmeasured.
+    - Finding: on claude the lead's notice measured against a 128k wall, the 2×cap budget, not the 250k a 1M
+      window gives. The adapter learns a window only from a turn's result event, per run, so the first turn of a
+      run's first session always runs on the budget. Left as D6's designed fallback. Seeding the window from the
+      model registry would change every claude session's steering, and belongs to a design of its own.
 
 <!-- auto: eof -->
