@@ -2176,7 +2176,7 @@ describe("CLI: models (auto-core plans/0055 §9)", () => {
       expect(bad.code).toBe(1)
       expect(bad.out).toBe(
         [
-          `⚠ model registry, operator layer ${file}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys)`,
+          `⚠ model registry, operator layer ${file}: models.k2: unknown field "aviod" (known: agent, model, wider, variant, context, avoid, only, keys, retry)`,
           "1 problem(s): run and plan refuse to start until they are fixed (exit 1)",
           "",
         ].join("\n"),
