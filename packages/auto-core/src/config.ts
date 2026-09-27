@@ -13,7 +13,7 @@ import { join } from "node:path"
 import { loadModes } from "./mode"
 import { loadPhaseTypes } from "./phases/custom"
 import { phasesProblem, resolvePhases } from "./phases/registry"
-import type { SubtaskMode } from "./opts"
+import { SUBTASK_MODES, type SubtaskMode } from "./opts"
 import { phaseTypeRoleProblems, type AgentChoice } from "./switches"
 import { PARALLEL_LEVELS, type ParallelLevel } from "./intent/types"
 
@@ -362,9 +362,15 @@ function intInRange(key: string, value: unknown, min: number, max: number, unit:
   return value
 }
 
+// subtask: off|auto|true|ondemand. The JSON boolean true is the same value as
+// "true" (plans/0059 D1: the pipeline's name reads as a boolean, so a
+// hand-edited config may well write it as one); the config is read back as the
+// string, so the next amend writes "true".
+// AUTO-RESOLVE: is the JSON boolean false accepted as "off"? -> no, it stays invalid (0059 D1 names only true as an alias; false never was a valid value, and reading it as off would widen the ruled contract).
 function subtaskOf(value: unknown): SubtaskMode {
-  if (value !== "off" && value !== "auto" && value !== "ondemand") {
-    throw new Error(`${CONFIG_FILE} subtask must be off|auto|ondemand`)
+  if (value === true) return "true"
+  if (typeof value !== "string" || !(SUBTASK_MODES as readonly string[]).includes(value)) {
+    throw new Error(`${CONFIG_FILE} subtask must be ${SUBTASK_MODES.join("|")}`)
   }
-  return value
+  return value as SubtaskMode
 }

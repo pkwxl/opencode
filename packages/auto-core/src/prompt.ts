@@ -624,8 +624,9 @@ export function activeIntentText(section: IntentSection, key: string): string | 
   return packSubsection(activeIntentPack, section, key)
 }
 
-// --subtask off/ondemand: a single session completes the whole task (no
-// subtask decomposition). ondemand additionally carries the context-budget
+// --subtask off/auto/ondemand: a single session completes the whole task (no
+// subtask decomposition; auto's lead, which has no split clause yet, renders
+// as ondemand — plans/0059 D2). ondemand additionally carries the context-budget
 // protocol (usage notices + self-directed handover, plans/0056) when budget
 // is set — the caller passes it only while the steer is built, so
 // OPENCODE_AUTO_STEER=off renders no protocol and ignores handover documents;

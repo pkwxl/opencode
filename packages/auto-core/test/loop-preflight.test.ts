@@ -70,9 +70,10 @@ describe("removeRetiredCurrent (plans/0054 D4)", () => {
 
 describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)", () => {
   const LAYER = `model registry, project layer ${MODELS_FILE}`
-  // glm on both tiers: the default m mode's needs (bypass, wrapup — simple;
-  // the decompose sessions of its implicit implement phase — deep) all pass
-  // the default opencode filter.
+  // glm on both tiers: the needs of every m-mode run (bypass, the lead or
+  // whole-task sessions, wrapup — simple; under subtask: true the decompose
+  // sessions of its implicit implement phase — deep) all pass the default
+  // opencode filter.
   const REGISTRY = { models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } }, tiers: { deep: ["glm"], simple: ["glm"] } }
   const saved = { set: process.env.PREFLIGHT_TEST_SET_KEY, missing: process.env.PREFLIGHT_TEST_MISSING_KEY }
 
@@ -272,7 +273,8 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
   test("a needed tier the agent filter empties exits 1 naming the tier, the role and the filter", async () => {
     const dir = await project({ ignored: true })
     await Bun.write(join(dir, MODELS_FILE), JSON.stringify(registry()))
-    const { result, lines } = await run(dir, {}, { OPENCODE_AUTO_AGENT: "claude" })
+    // The pipeline (subtask: true) needs both tiers: its decompose sessions are deep.
+    const { result, lines } = await run(dir, { subtask: "true" }, { OPENCODE_AUTO_AGENT: "claude" })
     expect(result).toEqual({ exit: 1 })
     const fix = "fix the registry or the agent filter and re-run"
     expect(lines).toEqual([
@@ -284,7 +286,7 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     ])
   })
 
-  test("the deep tier is needed by a phased run's planning sessions and by the decompose sessions of the default m mode; subtask off needs none", async () => {
+  test("the deep tier is needed by a phased run's planning sessions and by m mode's decompose sessions under subtask: true; auto, ondemand and off need none", async () => {
     const dir = await project({ ignored: true })
     await Bun.write(join(dir, MODELS_FILE), JSON.stringify({ ...registry(), tiers: { simple: ["glm"] } }))
     const fix = "fix the registry or the agent filter and re-run"
@@ -293,17 +295,20 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     expect(phased.lines).toEqual([
       `model registry: the deep tier is not declared (tiers.deep: (empty)); the phase-plan sessions of this run would have no model to dispatch on (${fix})`,
     ])
-    // m mode's implicit implement phase still dispatches its deep decompose
-    // sessions under the default subtask mode.
-    const manual = await run(dir)
-    expect(manual.result).toEqual({ exit: 1 })
-    expect(manual.lines).toEqual([
+    // m mode's implicit implement phase dispatches deep decompose sessions
+    // under the pipeline (subtask: true).
+    const pipeline = await run(dir, { subtask: "true" })
+    expect(pipeline.result).toEqual({ exit: 1 })
+    expect(pipeline.lines).toEqual([
       `model registry: the deep tier is not declared (tiers.deep: (empty)); the decompose sessions of implement phases would have no model to dispatch on (${fix})`,
     ])
-    // With whole-task sessions instead (subtask off) no role of the phase
-    // needs the deep tier, and the run starts.
-    const whole = await run(dir, { subtask: "off" })
-    expect("exit" in whole.result).toBe(false)
+    // With whole-task sessions instead — auto's lead (the default, plans/0059
+    // D2), ondemand and off — no role of the phase needs the deep tier, and
+    // the run starts.
+    for (const subtask of [undefined, "auto", "ondemand", "off"] as const) {
+      const whole = await run(dir, { subtask })
+      expect("exit" in whole.result).toBe(false)
+    }
   })
 
   test("OPENCODE_AUTO_MODEL takes internal names under a registry; an unknown name and _FALLBACK are usage errors", async () => {

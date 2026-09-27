@@ -80,6 +80,9 @@ describe("loadProjectConfig", () => {
         ["contextLimit", 0],
         ["contextLimit", 64.5],
         ["subtask", "fast"],
+        // only true has a JSON boolean alias (plans/0059 D1); false never was a value
+        ["subtask", false],
+        ["subtask", "TRUE"],
         // verify is retired (plans/0044 D2): true fails strictly, the message names the key
         ["verify", true],
         ["commit", 1],
@@ -103,6 +106,23 @@ describe("loadProjectConfig", () => {
         writeConfig(dir, JSON.stringify({ [key]: value }))
         await expect(loadProjectConfig(dir)).rejects.toThrow(key)
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("subtask takes off|auto|true|ondemand; the JSON boolean true is the pipeline's \"true\"; the default stays auto (plans/0059 D1, D8)", async () => {
+    const dir = tempDir()
+    try {
+      expect(CONFIG_DEFAULTS.subtask).toBe("auto")
+      for (const value of ["off", "auto", "true", "ondemand"] as const) {
+        writeConfig(dir, JSON.stringify({ subtask: value }))
+        expect((await loadProjectConfig(dir)).subtask).toBe(value)
+      }
+      writeConfig(dir, JSON.stringify({ subtask: true }))
+      expect(await loadProjectConfig(dir)).toEqual({ ...CONFIG_DEFAULTS, subtask: "true" })
+      writeConfig(dir, JSON.stringify({ subtask: "sometimes" }))
+      await expect(loadProjectConfig(dir)).rejects.toThrow("subtask must be off|auto|true|ondemand")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

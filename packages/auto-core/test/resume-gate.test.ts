@@ -7,7 +7,7 @@ import { phaseText, resumeNote, unitReruns, type UnitRerunCtx } from "../src/res
 
 describe("unitReruns (the recovery point's unit-ownership gate: reuse allowed only when the owning unit will rerun)", () => {
   const ctx = (over: Partial<UnitRerunCtx> = {}): UnitRerunCtx => ({
-    mode: "auto",
+    mode: "true",
     fork: true,
     items: [{ text: "item one", done: true }, { text: "item two", done: false }, { text: "item three", done: false }],
     subtasksFileItems: 0,
@@ -39,15 +39,21 @@ describe("unitReruns (the recovery point's unit-ownership gate: reuse allowed on
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [], fork: false }))).toBe(true)
     // subtasks.md already has items → the direct-inject path; the merged session does not rerun
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [], subtasksFileItems: 3 }))).toBe(false)
-    // Items already present / non-auto mode → the unit does not run
+    // Items already present / a mode other than the true pipeline → the unit does not run
     expect(unitReruns({ kind: "decompose" }, ctx())).toBe(false)
     expect(unitReruns({ kind: "decompose" }, ctx({ items: [], mode: "off" }))).toBe(false)
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], mode: "ondemand" }))).toBe(false)
+    // auto is no longer the pipeline (plans/0059 D1): a decompose record left
+    // by a pre-0059 auto run owns no unit under today's auto
+    expect(unitReruns({ kind: "decompose" }, ctx({ items: [], mode: "auto" }))).toBe(false)
   })
 
   test("whole/wrapup: mode or config making the record's unit not run → no reuse; wrapup requires all checklist items ticked", () => {
     expect(unitReruns({ kind: "whole" }, ctx({ mode: "off" }))).toBe(true)
     expect(unitReruns({ kind: "whole" }, ctx({ mode: "ondemand" }))).toBe(true)
-    expect(unitReruns({ kind: "whole" }, ctx({ mode: "auto" }))).toBe(false)
+    // auto's lead is a whole-task session (plans/0059 D2); the pipeline has none
+    expect(unitReruns({ kind: "whole" }, ctx({ mode: "auto" }))).toBe(true)
+    expect(unitReruns({ kind: "whole" }, ctx({ mode: "true" }))).toBe(false)
     const done = ctx({ items: [{ text: "only item", done: true }] })
     expect(unitReruns({ kind: "wrapup" }, done)).toBe(true)
     expect(unitReruns({ kind: "wrapup" }, ctx())).toBe(false) // an unticked item remains; the next unit is a subtask

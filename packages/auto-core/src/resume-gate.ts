@@ -6,6 +6,7 @@
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S4, pure move).
 import { HANDOVER_SECTIONS } from "./document/roles"
 import { nextChecklistIndex, type DeclaredItem } from "./document/state"
+import type { SubtaskMode } from "./opts"
 import type { Phase } from "./resume"
 import { autoSwitches } from "./switches"
 
@@ -21,9 +22,9 @@ import { autoSwitches } from "./switches"
 // interrupted session. ctx is precomputed by the caller from the current
 // subtasks.md / file state (no file IO in this function).
 export type UnitRerunCtx = {
-  // Subtask mode (auto/off/ondemand) and the fork switch (the run condition
-  // for subtask forks)
-  mode: "auto" | "off" | "ondemand"
+  // Subtask mode (off/auto/true/ondemand) and the fork switch (the run
+  // condition for subtask forks)
+  mode: SubtaskMode
   fork: boolean
   // Current checklist items (subtasks.md); when the subtask-directory state
   // protocol is active, the done flags have been overwritten by the caller
@@ -49,10 +50,15 @@ export function unitReruns(phase: Phase | undefined, ctx: UnitRerunCtx): boolean
     case "decompose":
       // The merged understand+decompose unit (M1.0, plans/0030 D2): reruns when
       // the checklist is not injected and subtasks.md has no checklist items
-      // (legacy understand records are mapped to this phase by parseProgress)
-      return ctx.mode === "auto" && ctx.items.length === 0 && ctx.subtasksFileItems === 0
+      // (legacy understand records are mapped to this phase by parseProgress).
+      // Only the pipeline (true) has the unit: a decompose record left by a
+      // run from before plans/0059 D1, when auto was the pipeline, finds no
+      // unit under today's auto and starts its lead fresh.
+      return ctx.mode === "true" && ctx.items.length === 0 && ctx.subtasksFileItems === 0
     case "whole":
-      return ctx.mode !== "auto"
+      // off/ondemand's whole-task session and auto's lead (plans/0059 D2: a
+      // whole-task session too).
+      return ctx.mode !== "true"
     case "subtasks":
       return atItem(phase.index)
     case "wrapup":

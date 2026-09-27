@@ -349,9 +349,10 @@ export async function preflight(
 // The reachable types are the configured phases (custom types included,
 // resolved against the loaded type list); "m" is the implicit implement
 // phase. Per type with tasks: the task sessions take the type's execute tier
-// (`whole` outside the auto subtask mode, `subtask` in every mode — a
-// checklist a person wrote dispatches too —, and the merged understand/
-// decompose session in the auto mode), and the wrap-up session runs unless
+// (`whole` outside the true subtask mode — auto's lead is a whole-task
+// session, plans/0059 D2 —, `subtask` in every mode — a checklist a person
+// wrote dispatches too —, and the merged understand/decompose session in the
+// true mode, the planned pipeline), and the wrap-up session runs unless
 // wrapup is off; a type without tasks runs its own knowledge session.
 // Run-level: the bypass one-offs in every mode (confirm turns, context-base
 // rebuilds, the dryrun precheck), the phased loop's planning and handover
@@ -359,7 +360,7 @@ export async function preflight(
 // path inside a run) and prior-knowledge (shell-orchestrated outside runAll)
 // stay off the list: both are simple sessions, so the bypass need keeps
 // their tier covered.
-// AUTO-RESOLVE: does the default m mode need the deep tier? -> yes, through the decompose sessions of its implicit implement phase (the default subtask mode runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently; a run that really wants no deep tier says subtask: off, whose whole-task sessions take the implement type's simple tier)
+// AUTO-RESOLVE: does the default m mode need the deep tier? -> only under subtask: true, through the decompose sessions of its implicit implement phase (the pipeline runs the merged understand/decompose session, a deep role of that phase; §6.3 makes an emptied needed list a preflight error rather than a mid-run wait, and the previous trigger — deep only when the run plans or scans — would leave those dispatches waiting silently). The default subtask mode auto runs a lead whole-task session instead (plans/0059 D2, §11: the lead takes the whole role's tier), so like off and ondemand it takes the implement type's execute tier and the default m mode needs no deep tier unless it plans or scans.
 function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[]): DispatchNeed[] {
   // An invalid phases value fails at its own validation (config load, the
   // loop's routing); the coverage check stays total on the implicit type.
@@ -373,7 +374,7 @@ function dispatchNeeds(opts: RunAllOpts, types: readonly PhaseTypeEntry[]): Disp
       needs.push({ role: "knowledge", entry })
       continue
     }
-    if ((opts.subtask ?? "auto") === "auto") needs.push({ role: "decompose", entry })
+    if ((opts.subtask ?? "auto") === "true") needs.push({ role: "decompose", entry })
     else needs.push({ role: "whole", entry })
     needs.push({ role: "subtask", entry })
     if (opts.wrapup !== false) needs.push({ role: "wrapup", entry })

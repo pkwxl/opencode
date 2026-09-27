@@ -31,8 +31,9 @@ import { reportResult, runWrapup } from "./wrapup"
 
 // Runs one task through the pipeline; the driver owns all state writes (the
 // todo.md → done.md renames, index ticks, .auto/), sessions never make them.
-// --subtask auto (default): decompose (when subtasks.md has no checklist) →
-// one session per subtask (driver ticks on trust) → wrap-up → closeout.
+// --subtask true (the planned pipeline, what auto meant before plans/0059 D1):
+// decompose (when subtasks.md has no checklist) → one session per subtask
+// (driver ticks on trust) → wrap-up → closeout.
 // --subtask off: a single whole-task session → wrap-up → closeout.
 // --subtask ondemand: like off, but the session manages its own context budget
 // (plans/0056): the driver steers milestone usage notices in, the session
@@ -40,6 +41,9 @@ import { reportResult, runWrapup } from "./wrapup"
 // session continues from it; the driver's hard-wall hint (2x
 // --context-limit, raised to a quarter of a large model window and clamped to
 // 80% of it) is the last resort.
+// --subtask auto (default, adaptive decomposition, plans/0059 D2): one lead
+// session — a whole-task session under ondemand's protocol; until the lead's
+// split clause lands it runs exactly as ondemand (see SubtaskMode in opts.ts).
 // Closeout reads the result line of the task report (docs/<id>/report.md):
 // `Result: FAIL` blocks the task and stops the run; PASS or no result line
 // marks the task done. There is no driver-run acceptance, audit or final
@@ -115,9 +119,9 @@ export async function runTask(
   // both cases the first prompt carries the "[DRIVER] continuing after an
   // interruption" note (with next-step guidance per phase).
   // Handover files take precedence over session reuse: when the session
-  // already wrote a handover document before the interruption (ondemand/auto
-  // subtask handoff.md or --handover-test's testhandoff.md), the old session's
-  // context is exhausted and the document carries the progress — a fresh
+  // already wrote a handover document before the interruption (the handoff.md
+  // of ondemand or of auto's lead, or --handover-test's testhandoff.md), the
+  // old session's context is exhausted and the document carries the progress — a fresh
   // session continues from the handover (executeWhole/runSubtask/runExecSession
   // seed the continuation from the file).
   // Strict resume: rolledBack = already rolled back to the unit baseline at
@@ -360,7 +364,7 @@ export async function runTask(
   task = await reloadTask(plan, task.id)
   await renameSession(await clientOf(client, chain.agent), chain, `${task.id} ${outcome.type === "incomplete" ? "pending" : "blocked"} ${task.title}`)
   if (!(outcome.type === "blocked" && outcome.question.startsWith("session error: "))) {
-    await persistStage(chain.phase ?? (mode === "auto" ? { kind: "decompose" } : { kind: "whole" }))
+    await persistStage(chain.phase ?? (mode === "true" ? { kind: "decompose" } : { kind: "whole" }))
   }
   return outcome
 
@@ -375,13 +379,13 @@ export async function runTask(
     // it clears the dirt.
     if (opts.testByDriver) await restoreTestHandoffs(dir, task)
     // Precise phase re-entry: the record shows the pipeline advanced to
-    // wrap-up or beyond → off/ondemand skip the execution phase (the
-    // whole-task session is not re-run; auto's decompose/subtask loops are
+    // wrap-up or beyond → off/auto/ondemand skip the execution phase (the
+    // whole-task session is not re-run; true's decompose/subtask loops are
     // idempotent anyway, no special case needed).
     const resumed = resume?.kind
-    // Fork base (fork-decompose design §4.2): established only in auto mode
-    // with fork=on; the digest mode's persistent base (.auto/units.json's
-    // forkBase, `digest:` prefix) is reused while alive and rebuilt from
+    // Fork base (fork-decompose design §4.2): established only in true mode
+    // (the pipeline) with fork=on; the digest mode's persistent base
+    // (.auto/units.json's forkBase, `digest:` prefix) is reused while alive and rebuilt from
     // context.md only once invalid; session mode reuses/verifies the fork-base
     // field; on failure it degrades along the fallback chain (digest →
     // session → cold start); undefined = cold start.
@@ -390,7 +394,14 @@ export async function runTask(
     // of the agent its chain currently runs on instead of one base serving
     // every subtask of the run.
     let fork: ForkBaseInfo | undefined
-    if (mode === "auto") {
+    // The session handover protocol (plans/0056) of the whole-task branch:
+    // ondemand's, and auto's lead's (plans/0059 D2: a whole-task session
+    // under the same protocol). With no split clause yet, auto takes this
+    // branch exactly as ondemand does — the temporary equivalence SubtaskMode
+    // (opts.ts) records, which ends when the lead's split lands; the lead
+    // keeps the protocol after that.
+    const selfHandover = mode === "ondemand" || mode === "auto"
+    if (mode === "true") {
       const sw = autoSwitches()
       // Merged understand + decompose session (M1.0, plans/0030): entered
       // when subtasks.md has no checklist items (tasks that already have
@@ -431,7 +442,7 @@ export async function runTask(
         // Same for --handover-test's test handover documents (task-level and
         // subtask-level cleared together): runExecSession's handover loop
         // closes within one runTask call, so leftovers across calls are stale
-        // state; auto mode never enters the whole-task branch, so the cleanup
+        // state; true mode never enters the whole-task branch, so the cleanup
         // must be covered here — otherwise the next subtask misreads a stale
         // handover and continues from it.
         if (opts.testByDriver) await cleanTestHandoffs(dir, task)
@@ -441,10 +452,10 @@ export async function runTask(
       // handover document; on resume it is kept (it holds the interrupted
       // session's progress summary, and executeWhole decides whether to
       // continue from its `Status:` line). Again only the copy git does not
-      // track is deleted (same reason as the auto branch: a tracked one is
+      // track is deleted (same reason as the true branch: a tracked one is
       // the in-flight state of an unclosed unit, and deleting it is itself a
       // dirty area).
-      if (mode === "ondemand" && recalled?.active !== true) {
+      if (selfHandover && recalled?.active !== true) {
         await removeIfUntracked(dir, handoffFile(task))
       }
       // Same for --handover-test's test handover documents: a non-resumed run
@@ -455,7 +466,7 @@ export async function runTask(
         await cleanTestHandoffs(dir, task)
       }
       await persistStage({ kind: "whole" })
-      const blocked = await executeWhole(client, plan, task, opts, chain, mode === "ondemand")
+      const blocked = await executeWhole(client, plan, task, opts, chain, selfHandover)
       if (blocked) return blocked
       task = await reloadTask(plan, task.id)
     }
@@ -465,8 +476,9 @@ export async function runTask(
     // wrap-up) — only the result check and completion remain.
     if (resume?.kind !== "closeout") {
       await persistStage({ kind: "subtasks" })
-      // In auto mode this is where the decomposed checklist items run;
-      // off/ondemand modes only have the items hand-written in subtasks.md.
+      // In true mode this is where the decomposed checklist items run;
+      // off/auto/ondemand modes only have the items hand-written in
+      // subtasks.md.
       for (;;) {
         const items = task.checklist ?? []
         // Subtask-directory state protocol (M1.0, plans/0030): when the
@@ -571,7 +583,7 @@ export async function runTask(
       // gates live inside runWrapup (session-boundary-hardening §4.5 D5, S3b).
       if (opts.wrapup ?? true) {
         await persistStage({ kind: "wrapup" })
-        const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "auto", label: "wrapup session" })
+        const stopped = await runWrapup(client, plan, task, opts, chain, { solo: mode !== "true", label: "wrapup session" })
         if (stopped) return stopped
       }
     }
@@ -582,7 +594,7 @@ export async function runTask(
     // (the Closed: field records why); `plan --force-close … --append -p`
     // replaces the task with a better one; listing fix tasks before it in
     // tasks.md gets the gap fixed first (a hand-added checklist item is
-    // illegal subtask state in auto mode, so fixes are planned as tasks).
+    // illegal subtask state in true mode, so fixes are planned as tasks).
     // The phase is rewound to wrapup, so re-running the task itself only
     // re-runs the wrap-up, which rewrites the result line. No report or no
     // result line = no stop.

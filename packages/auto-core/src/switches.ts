@@ -150,7 +150,8 @@ export type ModelPolicy = {
 
 export type Switches = {
   // Master switch of the fork three-segment pipeline: off = the status-quo pipeline (no
-  // understand session, no fork), zero behavior change.
+  // understand session, no fork), zero behavior change. fork, forkBase and fine
+  // govern the planned pipeline alone — the true subtask mode (plans/0059 D1).
   fork: boolean
   // Fork base mode (only meaningful with fork=on): session = the understand session's
   // tail; digest = a fresh base session taking the context.md digest as input (thin
@@ -161,8 +162,9 @@ export type Switches = {
   // criteria section (still bound by the lower-bound guard).
   fine: boolean
   // Ondemand context management (default on, plans/0056): the driver steers
-  // milestone usage notices into a live ondemand whole-task session (50%/85% of
-  // the effective wall) and the session itself decides when to hand over at a
+  // milestone usage notices into a live ondemand whole-task session or auto's
+  // lead (plans/0059 D2) at 50%/85% of the effective wall, and the session
+  // itself decides when to hand over at a
   // natural boundary (a fresh handoff.md is honored whatever the figure); the
   // hard-wall hint (at the effective wall: 2×cap, raised to a quarter of a
   // large window and clamped to 80% of it, testrun.ts steerWall) stays as the

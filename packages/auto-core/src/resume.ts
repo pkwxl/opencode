@@ -54,13 +54,15 @@ import type { UnitBaseline } from "./git"
 export type StepKind = "phase-plan" | "phase-handover" | "phase-append"
 
 // Phase markers of the task pipeline:
-// - decompose: the auto-mode phase merging the understand and decompose
+// - decompose: the true-mode phase (the pipeline, the auto mode before
+//   plans/0059 D1) merging the understand and decompose
 //   sessions (understand+decompose merged into one since M1.0, see
 //   plans/0030-subtask-loop-entry-design.md; artifacts = context.md +
 //   shared.md + subtasks.md + each subtask's todo.md, checklist not yet
 //   injected). Legacy "understand" records are mapped to this phase when
 //   parseProgress reads them (compatibility read).
-// - whole: the off/ondemand-mode whole-task single-session execution phase
+// - whole: the off/auto/ondemand-mode whole-task single-session execution
+//   phase (auto's lead, plans/0059 D2)
 // - subtasks: the per-subtask session phase (continues from the first unticked
 //   item); index = the owning subtask's 1-based ordinal, carried only by the
 //   active record of a subtask session (interim / summary-state records do not

@@ -16,7 +16,7 @@
 //
 // Activation: the protocol is active for a task iff ANY todo/done file exists
 // among its subtask directories. Legacy tasks (decomposed before this protocol,
-// human-written checklists, off/ondemand modes) have none and keep checklist
+// human-written checklists, off/auto/ondemand modes) have none and keep checklist
 // semantics unchanged (compatible read, plan D4).
 //
 // Illegal states (active protocol): both files present (ambiguous) or neither

@@ -37,8 +37,9 @@ async function reportProblems(dir: string, task: Task): Promise<string[]> {
 
 // Runs one task wrap-up session and closes it out: banner/subject/resolves
 // assembly + runSession + report.md gate + unified commit. label is the unit
-// name used when the commit fails; solo is the off/ondemand whole-task mode (the
-// report is an output summary rather than an index). undefined = wrap-up done.
+// name used when the commit fails; solo is the off/auto/ondemand whole-task
+// mode, every mode but the true pipeline (the report is an output summary
+// rather than an index). undefined = wrap-up done.
 export async function runWrapup(
   client: ClientSource,
   plan: Plan,

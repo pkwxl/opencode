@@ -1,4 +1,5 @@
-// The task execution stage: executeWhole (off/ondemand whole-task sessions) +
+// The task execution stage: executeWhole (off/auto/ondemand whole-task
+// sessions; auto's is its lead, plans/0059 D2) +
 // the merged understand+decompose unit (ensureDecomposed; since M1.0
 // understand+decompose is one single session, plans/0030) + runSubtask, one
 // subtask session (with the subtask-directory state protocol todo.md→done.md).
@@ -30,8 +31,10 @@ import { handoffSteer, removeHandoffChain } from "./testrun"
 import { sessionHandoverDue } from "./usage"
 import { afterSession, commitBlocked, rollbackUnitState, strictResumeActive } from "./unit-commit"
 
-// The execution stage for off/ondemand: off finishes the whole task in one
-// session; ondemand, when a live session's context reaches 2x --context-limit,
+// The execution stage for off/auto/ondemand: off finishes the whole task in
+// one session; ondemand (and auto's lead, which runs as ondemand until its
+// split clause lands — `ondemand` is true for both, see SubtaskMode in
+// opts.ts), when a live session's context reaches 2x --context-limit,
 // the driver steers in the handover hint, the session writes a handover
 // document and a new session continues from it, until a natural finish or the
 // handover document marks completion. Returns undefined = execution stage done.

@@ -4,8 +4,9 @@ A command-line tool that drives [opencode](https://opencode.ai) to implement wor
 in task units (the phase's task index `tasks.md` + `docs/T-NNN/`). Constitutional project options (the agent
 contract, commit semantics, context budget, scenario mode) are fixed by `init` into `.opencode/auto/config.json`
 (versioned, shared with the repository, human-editable); `run` controls only the current execution. State is
-maintained exclusively by the driver: each task is first split into subtasks by a decompose session, then
-completed one subtask at a time by dispatched sessions (by default every session starts fresh; with
+maintained exclusively by the driver: each task runs as one lead session that manages its own context (the
+default `subtask: auto`), or — under `subtask: true` — is first split into subtasks by a decompose session,
+then completed one subtask at a time by dispatched sessions (by default every session starts fresh; with
 `OPENCODE_AUTO_REUSE_SESSION=on` the previous session is reused when its context share was below 50% and it
 ended within 5 minutes; the driver ticks state as each session ends), and after wrap-up the driver marks the
 task done. Checking and acceptance are planned work (acceptance tasks, the v acceptance phase): when the
@@ -102,8 +103,8 @@ describes how this run executes and how a person watches it → run.**
 | --- | --- | --- | --- |
 | `mode` | A registered mode name | `migrate` | Prompt-level scenario mode, see [Mode layer](#mode-layer--m--mode) |
 | `agent` | `opencode` / `claude` | `opencode` (key not written) | The coding agent that drives every session (M6.1); `OPENCODE_AUTO_AGENT` overrides it per run. In older versions this key held a contract name (e.g. `auto`); reading one is an error telling you to delete the key (`fix` deletes it) — the contract is always `.opencode/agent/auto.md`. See [agent selection](#opencode-server-and-agent-selection) |
-| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline: the used-tokens threshold for session reuse (needs `OPENCODE_AUTO_REUSE_SESSION=on`) is half of it (32k by default); the handover threshold is 2x when `subtask` is `ondemand` |
-| `subtask` | `off` / `auto` / `ondemand` | `auto` | Subtask splitting, see [Execution pipeline](#execution-pipeline) |
+| `contextLimit` | Positive integer (thousand tokens) | `64` | The context budget baseline: the used-tokens threshold for session reuse (needs `OPENCODE_AUTO_REUSE_SESSION=on`) is half of it (32k by default); the handover threshold is 2x when `subtask` is `ondemand` or `auto` |
+| `subtask` | `off` / `auto` / `true` / `ondemand` | `auto` | Subtask splitting, see [Execution pipeline](#execution-pipeline); the JSON boolean `true` reads as `"true"` |
 | `idleTime` | 1..120 (minutes) | `10` | The no-progress window for driver-managed scripts (test scripts); the old key name `verifyIdle` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `idleMax` | 0..1440 (minutes, 0 = no limit) | `0` | The absolute duration cap for driver-managed scripts; the old key name `verifyMax` is read as a fallback when the new key is missing (`fix` renames it in place) |
 | `verify` | **Retired** | — | Task-level acceptance was retired (2026-09-21): an existing config with `verify: true` fails loading with exit 1 (delete the key — `fix` does it — and plan acceptance as tasks or use the v phase); `false` or absent is ignored |
@@ -201,7 +202,7 @@ Combination notes: `--dryrun` reads the config's `agent` / `contextLimit`; commi
 | `-m` / `--mode <name>` | Scenario mode, written to the config's `mode` key (precedence: explicit value > existing config value > default `migrate`; an unregistered name is a usage error with exit code 1, the message listing the currently supported modes); see [Mode layer](#mode-layer--m--mode) |
 | `--agent opencode\|claude` | The coding agent driving the sessions, written to the config's `agent` key (default `opencode`, key not written; `--amend --agent opencode` deletes the key); any other value is a usage error; see [agent selection](#opencode-server-and-agent-selection) |
 | `--phases <admtvk subsequence containing m \| phase type list>` | Phased flow, written to the config's `phases` key (default `"m"` = single run); when completed phases exist, an amendment must satisfy the prefix guardrail (the completed phases form a prefix of the new value), otherwise it errors and points at rolling back the phase index by hand. See [Phased flow](#phased-flow---phases) |
-| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` decomposes automatically; `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
+| `--subtask [mode]` | Subtask splitting, written to the config (default/bare flag `auto`): `auto` is adaptive decomposition — one lead session works the task (for now it never splits, so it runs exactly as `ondemand`); `true` is the planned pipeline (a decompose session, then one session per subtask — what `auto` meant before auto-core plans/0059); `off` disables splitting and one session completes the whole task; `ondemand` hands over and continues when the context reaches 2x `contextLimit`. See [Execution pipeline](#execution-pipeline) |
 | `--idle-time [1-120]` | The no-progress window for driver-managed scripts (minutes, default/bare flag 10; the old name `--verify-idle` was renamed — appearing errors with guidance): the driver polls the size of the output file (`tmp/test.<n>.out`, stdout/stderr merged into one file) and terminates the script only after no growth is sustained for the window (exit code recorded as 124); as long as output keeps growing, the runtime is unlimited |
 | `--idle-max [1-1440]` | The absolute runtime cap for driver-managed scripts (minutes, default/bare flag unset; the old name `--verify-max` was renamed): a backstop against scripts looping forever while printing; when set to a positive integer, exceeding the total duration terminates the script regardless of output |
 | `--commit [true]` | Unified commit after sessions, written to the config (default/bare flag `true`). **`false` and the old alias `none` were retired on 2026-09-15** — the unified commit is the completion condition (the unit clean gate / SHA baseline / recovery rollback all assume committing is always on); appearing is a usage error with exit 1; an existing `commit: false` fails strictly as a bad file — delete the key or set `true` |
@@ -387,7 +388,7 @@ T-009 Implement the migration
 T-009 Subtask 1: write the schema part of the migration script
 ```
 
-In `auto` subtask mode, when the task body has no checklist yet, the driver prints the implicit (automatic)
+In `true` subtask mode, when the task body has no checklist yet, the driver prints the implicit (automatic)
 subtask split marker before opening the decompose session (a dotted rule, a blank line, then `<task id>
 <task title>: subtask decomposition`):
 
@@ -842,7 +843,13 @@ The driver runs a pipeline for every task, and **index ticks, the `todo.md` → 
 `.auto/units.json` are written by the driver alone**. How a task executes is decided by the project config's
 `subtask` key (`auto` is the default):
 
-`subtask: auto` (automatic decomposition):
+`subtask: auto` (adaptive decomposition, the default; auto-core plans/0059): the task runs as one lead
+session under the same context-budget protocol as `subtask: ondemand` below. The lead's option to split
+the remaining work into forked subtasks when that pays is not implemented yet, so today `auto` behaves
+exactly as `ondemand` — same prompt, same handover, same recovery. A stored `"subtask": "auto"` takes this
+meaning with no migration; `amend --subtask true` keeps the pipeline.
+
+`subtask: true` (the planned pipeline — what `auto` meant before auto-core plans/0059):
 
 1. **Decompose** (when `docs/T-NNN/subtasks.md` has no checklist yet): one session analyzes the task and
    writes `docs/T-NNN/subtasks.md` (a Markdown checklist — the task's subtask checklist itself) plus each
@@ -930,8 +937,8 @@ is exempt from `OPENCODE_AUTO_REUSE_SESSION` and the reuse thresholds, the recov
 inherited context usage, and the recovery note is cleared after use — the next prompt returns to the normal
 rules); the first prompt carries a recovery note asking the AI to verify actual progress with git
 status/diff and continue from where it broke off. **Handover files take precedence**: when a handover
-document was already written before the interruption (a subtask of `subtask: auto` or `ondemand`'s
-`docs/<id>/handoff.md`, or handover-test's task-level/subtask-level `testhandoff.md` — a leftover at either
+document was already written before the interruption (the `docs/<id>/handoff.md` of `subtask: ondemand` or
+`auto`, or handover-test's task-level/subtask-level `testhandoff.md` — a leftover at either
 scope decides it), the old session is not reused — its context was full and progress is carried by the
 handover document, so a new session continues from the handover (with the handoff marked `Status: done`, the
 whole-task session is skipped outright). When the session is gone or `--new-session` is given, a new session
@@ -1007,8 +1014,8 @@ M3.4; leftover `.auto/verify.md`, `.auto/review.md`, `tmp/verify.*` are not clea
 `--test-by-driver` (a constitutional option, fixed into the config's `testByDriver` key by `init
 --test-by-driver`; appearing on `run` is a usage error) moves execution rights for "implementation-phase
 commands that can run long or produce massive output — compile/test/build/lint and the like" to the driver.
-It applies to execution sessions — subtask sessions (`subtask: auto`) and whole-task sessions (`off` /
-`ondemand`); bypass sessions such as decompose and wrap-up are out of scope (`--dryrun` does not enable it
+It applies to execution sessions — subtask sessions (`subtask: true`) and whole-task sessions (`off` /
+`ondemand`, and `auto`'s lead); bypass sessions such as decompose and wrap-up are out of scope (`--dryrun` does not enable it
 either).
 
 The protocol mechanics:
@@ -1605,7 +1612,7 @@ Completion criteria.
   `Depends:` / `Touches:`) and
   the three sections `## Goal` / `## Scope` / `## Acceptance`; task documents produced by the planning
   session are shape-checked against this, and hand-written ones should follow it too. Do not write subtask
-  checklist items by hand — the decompose session will write
+  checklist items by hand — under `subtask: true` the decompose session will write
   `docs/T-NNN/subtasks.md`, and subtask progress likewise follows `docs/T-NNN/S<nn>/todo.md|done.md`.
 - The dependency field is isomorphic across the three levels: a task's sits after the `Phase:` line, a
   phase's after the `Type:` line in the phase directory's `todo.md`, a subtask's at the head of

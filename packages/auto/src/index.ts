@@ -46,7 +46,7 @@ import { loadPhaseTypes } from "@opencode-ai/auto-core/phases/custom"
 import { PRESET_FORM, phasesProblem, type PhaseTypeEntry } from "@opencode-ai/auto-core/phases/registry"
 import { renderStatus } from "@opencode-ai/auto-core/status"
 import { roundDirName } from "@opencode-ai/auto-core/docpaths"
-import type { PermissionMode, SubtaskMode } from "@opencode-ai/auto-core/opts"
+import { SUBTASK_MODES, type PermissionMode, type SubtaskMode } from "@opencode-ai/auto-core/opts"
 import { useIntentPacks } from "@opencode-ai/auto-core/prompt"
 import { shellProfile } from "@opencode-ai/auto-core/shell"
 import { usePromptLibrary, renderText } from "@opencode-ai/auto-core/template"
@@ -873,11 +873,12 @@ function parseMaxSessions(raw: string | undefined): number | null {
   return /^\d+$/.test(raw) && value >= 1 ? value : null
 }
 
-// --subtask absent/bare = auto; null marks an invalid value.
+// --subtask absent/bare = auto; null marks an invalid value. The four values
+// are the core's SUBTASK_MODES (auto-core plans/0059 D1: true is the planned
+// pipeline auto used to be, auto the adaptive default).
 function parseSubtask(raw: string | undefined): SubtaskMode | null {
   if (raw === undefined || raw === "") return "auto"
-  if (raw === "off" || raw === "auto" || raw === "ondemand") return raw
-  return null
+  return (SUBTASK_MODES as readonly string[]).includes(raw) ? (raw as SubtaskMode) : null
 }
 
 // --permission absent/bare = ask-deny; null marks an invalid value.
@@ -964,7 +965,7 @@ function parseConfigFlags(directory: string): { explicit: Partial<ProjectConfig>
   }
   const subtask = parseSubtask(flags.get("subtask"))
   if (subtask === null) {
-    console.error("--subtask takes off|auto|ondemand; defaults to auto")
+    console.error(`--subtask takes ${SUBTASK_MODES.join("|")}; defaults to auto`)
     process.exit(1)
   }
   const contextLimit = parseContextLimit(flags.get("context-limit"))
@@ -1563,11 +1564,11 @@ if (command === "models") {
 }
 
 console.error(`usage:
-  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [-f|--force]
+  opencode-auto init [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [-f|--force]
   opencode-auto run [dir] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--wait-between [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--dryrun [true|false]] [--new-session] [--max-sessions 1]
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
-  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
+  opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high]
   opencode-auto fix [dir] [-f|--force]
   opencode-auto reset [dir] [-f|--force]
   opencode-auto check [dir]

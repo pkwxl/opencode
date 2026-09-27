@@ -32,6 +32,7 @@ import { isoInZone, parseWindow } from "../src/model-window"
 import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
 import { resetQuotaWindows } from "../src/quota-windows"
 import { recallProgress, saveProgress } from "../src/resume"
+import { runTask } from "../src/runner"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { ensureForkBase, runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
@@ -42,7 +43,7 @@ import { sessionHandoverDue } from "../src/usage"
 import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
 import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
-import { task } from "./fixtures/runner"
+import { freshRepo, git, task } from "./fixtures/runner"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
 
 // Every fake made in this file (the closing roster check reads their calls).
@@ -2383,6 +2384,62 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
+  // Log lines of the runs, kept out of the test output.
+  let printed: ReturnType<typeof spyOn>
+  beforeEach(() => {
+    printed = spyOn(console, "log").mockImplementation(() => {})
+  })
+  afterEach(() => {
+    printed.mockRestore()
+  })
+
+  // A committed repository with one pending task; the task runs with no
+  // wrap-up, so its sessions are the execution stage's alone.
+  const run = async (subtask: Opts["subtask"]) => {
+    const dir = await freshRepo()
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    const plan = await seedUnits(dir, `## T-001: sample task [pending]\nBody.\n`)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-q", "-m", "init")
+    const agent = make()
+    try {
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, ...(subtask ? { subtask } : {}) })
+      return { outcome, prompts: agent.prompts.map((prompt) => prompt.text.replaceAll(dir, "<dir>")), creates: names(agent).filter((name) => name === "create").length }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("auto — the default — runs its lead as ondemand runs its whole-task session: one session, the same prompt with the context-budget protocol, no decompose", async () => {
+    const ondemand = await run("ondemand")
+    expect(ondemand.outcome).toEqual({ type: "completed" })
+    expect(ondemand.prompts).toHaveLength(1)
+    expect(ondemand.prompts[0]).toContain("Context-budget protocol")
+    for (const subtask of ["auto", undefined] as const) {
+      const lead = await run(subtask)
+      expect(lead.outcome).toEqual({ type: "completed" })
+      expect(lead.prompts).toEqual(ondemand.prompts)
+      expect(lead.creates).toBe(1)
+    }
+    // off is the same whole-task session without the protocol.
+    const off = await run("off")
+    expect(off.outcome).toEqual({ type: "completed" })
+    expect(off.prompts).toHaveLength(1)
+    expect(off.prompts[0]).not.toContain("Context-budget protocol")
+  })
+
+  test("true runs the planned pipeline: the merged understand/decompose session comes first", async () => {
+    // The fake's default turn writes none of the decompose artifacts, so the
+    // session is re-prompted once with feedback and the task blocks there.
+    const pipeline = await run("true")
+    expect(pipeline.outcome).toMatchObject({ type: "blocked" })
+    expect((pipeline.outcome as { question: string }).question).toContain("decompose session ended twice")
+    expect(pipeline.prompts[0]).toContain("This session completes the task-background understanding and the subtask decomposition")
+    expect(pipeline.prompts[0]).not.toContain("Context-budget protocol")
   })
 })
 

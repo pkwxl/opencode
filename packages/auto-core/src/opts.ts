@@ -65,12 +65,22 @@ export type UnitStop = { type: "blocked"; question: string } | { type: "dirty"; 
 // subtask's final commit / a hidden task's spec.commit).
 export type SessionCommit = { type: "ok" } | { type: "failed"; question: string }
 
-// --subtask's three levels: off (one session to completion) / auto (automatic
-// decomposition, the default) / ondemand (one session executes, managing its
-// own context: usage notices and a self-decided handover document continue
-// the task in fresh sessions, plans/0056 — the only mode with a session
-// handover).
-export type SubtaskMode = "off" | "auto" | "ondemand"
+// --subtask's four levels (plans/0059 D1): off (one session to completion) /
+// auto (adaptive decomposition, the default: one lead session works the whole
+// task and splits only when that pays) / true (the planned pipeline: a
+// decompose session, one session per subtask, a wrap-up — what auto meant
+// before 0059) / ondemand (one session executes, managing its own context:
+// usage notices and a self-decided handover document continue the task in
+// fresh sessions, plans/0056).
+// AUTO-DECISION: until the lead's split clause and the driver's split guard
+// land (plans/0059 D2–D4, its stage S4), auto runs its lead exactly as
+// ondemand runs its whole-task session — same prompt, same handover protocol,
+// same resume ownership and dispatch needs — so the rename ships alone and
+// changes nothing but the meaning of a stored "auto", which 0059 D8 rules.
+// The equivalence is temporary: it ends where runner.ts joins auto to the
+// ondemand path (selfHandover), when S4 gives the lead its split clause.
+export const SUBTASK_MODES = ["off", "auto", "true", "ondemand"] as const
+export type SubtaskMode = (typeof SUBTASK_MODES)[number]
 
 // --permission's four levels: the handling policy for permission requests
 // (permission.asked), default ask-deny. auto-allow grants immediately and

@@ -892,6 +892,23 @@ describe("CLI: init freezes the project config", () => {
     }
   })
 
+  test("--subtask takes true, the planned pipeline (auto-core plans/0059 D1); a stored JSON boolean true reads as it, and bare --subtask stays auto", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir, "--subtask", "true"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, subtask: "true" })
+      expect((await runCli(["amend", dir, "--subtask"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual(DEFAULT_CONFIG)
+      // A hand-edited boolean: amend loads it as "true" and writes the string back.
+      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({ ...DEFAULT_CONFIG, subtask: true }))
+      expect((await runCli(["status", dir])).out).toContain("subtask true")
+      expect((await runCli(["amend", dir, "--context-limit", "128"])).code).toBe(0)
+      expect(await readConfig(dir)).toEqual({ ...DEFAULT_CONFIG, contextLimit: 128, subtask: "true" })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("init defaults to the full overwrite: keys not given fall back to their defaults, identical to a bare init in a clean environment", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
@@ -1881,7 +1898,7 @@ describe("CLI: amend (plans/0052 D25)", () => {
       await completeLetters(dir, ["a"])
       const config = await readConfig(dir)
       for (const [args, message] of [
-        [["--subtask", "sometimes"], "--subtask takes off|auto|ondemand"],
+        [["--subtask", "sometimes"], "--subtask takes off|auto|true|ondemand"],
         [["--handover-test"], "--handover-test requires --test-by-driver"],
         [["-m", "nope"], "--mode must be a registered mode"],
         [["--phases", "dm"], 'phases "dm" would drop the completed phase docs/R-01/P01-analysis/ from docs/R-01/phases.md'],
