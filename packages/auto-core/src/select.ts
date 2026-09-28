@@ -25,12 +25,22 @@
 // existing entries only (the loader validates that), so a raw candidate can
 // only come from an override value.
 import { resolveModel } from "./chain"
-import type { DownMark } from "./router"
 import { candidateList } from "./model-route"
 import { nextOpening, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute } from "./models"
 import type { PhaseTypeEntry, Tier } from "./phases/registry"
 import type { ModelPolicy, ModelRole } from "./switches"
+
+// A down mark; `until` (epoch ms) is the instant a reset time named, absent
+// = the mark clears at the failback-scope boundaries. `classifier` = the
+// class that wrote the mark came from the failure-message classifier, so the
+// ◈ line names the move `quota (classifier)`. The mark *state* lives in the
+// router service (one map per run); the shape lives here, beside the
+// SelectContext field that reads it, because the router imports this module
+// (the routing fence calls selection) and a type edge back would close a
+// cycle the import-direction DAG check rejects.
+// AUTO-DECISION: DownMark's definition moved from src/router.ts to here (the fence in router.ts needs `select` at run time, so select.ts may no longer type-import the router — the shape sits beside its primary contract, SelectContext.marks, and the router holds the state under this imported type)
+export type DownMark = { until?: number; classifier?: true }
 
 // The run-level state of selection: everything a run fixes once and every
 // dispatch shares. Built where the run starts (registry, filter, cap,

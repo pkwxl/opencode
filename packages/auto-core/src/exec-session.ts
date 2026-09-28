@@ -32,7 +32,11 @@ import {
   type Steer,
   type TestRun,
 } from "./testrun"
-import { afterSession, commitBlocked, recordedAgentOk } from "./unit-commit"
+import { afterSession, commitBlocked } from "./unit-commit"
+// The fence's registry/no-registry agent verdict (moved out of unit-commit
+// with the routing fence: its no-registry guard is a routing-truthiness
+// branch, so it lives in the router service's module).
+import { recordedAgentOk } from "./router"
 import { scriptTmpDir } from "./script"
 
 // The unified entry for execution-type sessions (subtask / whole task /

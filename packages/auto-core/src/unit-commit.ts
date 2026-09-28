@@ -6,15 +6,12 @@
 // and plans/0022-session-recovery-fidelity-design.md.
 // Sits below the session-driving layer: must not import session/watch/runner.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S3, pure move).
-import { phaseToRole } from "./chain"
-import { modelOfChain } from "./chain-transitions"
 import { commitTree, rollbackUnit, unitViolations, type UnitBaseline } from "./git"
 import { forgetHandover } from "./handover"
 import { log, vlog } from "./log"
 import { DEFAULT_CONTEXT_LIMIT, type Opts, type SessionCommit, type UnitStop } from "./opts"
 import { currentRound } from "./phases"
-import { candidateKey, nowOf, selectContext, type RoutingFacts } from "./routing"
-import { select } from "./select"
+import { createRouter, deadSessionWhy as deadWhyOf, resumeModelEligible as eligibleOf } from "./router"
 import type { Task } from "./tasks"
 import { collectAgentResolves, resolvesOf, type ResolveItem } from "./resolve"
 import { saveProgress, type Phase, type Progress } from "./resume"
@@ -148,120 +145,63 @@ export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches
   return switches.strictResume && opts.commit !== false && !opts.dryrun
 }
 
-// The model-consistency evaluation at resume (design 3.1 ④): the same
-// priority chain attempt uses to compute the target for a reused session
-// (modelOfChain over a minimal chain view of the record's role and phase —
-// the chain's failover candidates do not exist at resume, so the priority
-// chain starts at sticky > the /failback override > the routing table, the
-// two holders read from the session options' router).
-// Returning undefined = no model routing currently configured (the record
-// has nothing to hold either then; the check treats it as a mismatch).
-// role is the session's explicit routing role (requireArtifact's spec.role,
-// such as m-mode planning's implement-scan, plans/0053 D12). The dispatch
-// routed by it, since an explicit role wins over the phase (roleOf), so the
-// check must derive the same role; absent = derived from the phase.
-// Under a model registry (plans/0055 §6.2, §10 item 11) the comparison runs
-// on internal names: the record holds the dispatched entry's internal name
-// (attempt writes it), and this returns the selection's pick for the same
-// routing — a fresh-prompt selection, the same shape the next dispatch takes.
-// The strict check itself no longer uses this pick under a registry: with the
-// session-agent binding in place it compares the recorded internal name and
-// agent by eligibility (resumeModelEligible / deadSessionWhy below), so a
-// window change alone does not roll a unit back; without a registry the
-// raw-string comparison against this value is unchanged.
-// AUTO-DECISION: the registry path selects with no context windows (the live limits belong to the agent this function never sees); an unknown window never excluded a candidate on the no-registry path either, so the comparison keeps its shape
+// The model-consistency evaluation at resume (design 3.1 ④): the target a
+// reused session's recorded model is judged against — the same routing
+// decision the next dispatch takes, computed through the router service's
+// routing fence (src/router.ts: under a registry a fresh selection over the
+// routing facts, whose pick's internal name the record holds; without one
+// the priority chain over the record's role and phase — a resume has no
+// live chain, so those stand in for one, and modelOfChain's priority chain
+// starts at the sticky holder — reading the router's holders). Returning
+// undefined = no model routing currently configured (the record has nothing
+// to hold either then; the check treats it as a mismatch). role is the
+// session's explicit routing role (requireArtifact's spec.role, such as
+// m-mode planning's implement-scan, plans/0053 D12); absent = derived from
+// the phase. The holderless router fallback is exact: a run object that
+// never knew routing state (a minimal test literal) reads every holder as
+// unset, exactly as the optional chain read undefined before the fence.
 export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | undefined, role?: ModelRole): string | undefined {
-  if (opts.routing) {
-    const decision = select(selectContext(opts.routing, switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT), {
-      role: role ?? phaseToRole(phase) ?? "bypass",
-      entry: opts.phase?.entry,
-      now: nowOf(opts.routing),
-      continuation: false,
-    })
-    return decision.kind === "pick" ? candidateKey(decision.candidate) : undefined
-  }
-  // A resume has no live chain; the record's role and phase stand in for one
-  // (modelOfChain derives the role the same way the dispatch did), and the
-  // run's current phase reference feeds the routing table, as at dispatch.
-  // The router is the run's routing decision state reached through the
-  // session options (the commit boundary sits below the services' entry
-  // modules): absent = the caller handed over a run object that never knew
-  // routing state (a minimal test literal), so the holders read as unset.
-  return modelOfChain(
+  return (opts.router ?? createRouter()).target(
+    opts.routing,
     { pct: 100, used: 0, at: 0, role, phase },
     switches,
+    opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
     opts.phase,
-    opts.router?.stickyModel(),
-    opts.router?.failbackOverride(),
   )
 }
 
 // —— Session-agent binding of persisted records (plans/0055 §8.2, §8.3) ——
+// The dual-path verdicts of this section live behind the routing fence in
+// src/router.ts (recordedAgentOk, resumeModelEligible, deadSessionWhy):
+// their no-registry guards are routing-truthiness branches. The exported
+// helper signatures here stay stable — runner, artifact and exec-session
+// call them with the session options — so each body is one fence call
+// unwrapping opts (the facts pass through untested; the cap is the unit
+// context limit the fence's selections ask with).
 
-// Does a recorded session id belong to an agent this run can dispatch on?
-// `routing` undefined = no registry (no verdict, every record passes). Under
-// a registry the recorded agent (absent = the run's start profile, the shape
-// every pre-binding record reads as) must name a profile the registry knows
-// — or be the run's start agent itself, which may run profile-less when the
-// registry holds no profile of the chosen adapter — and its adapter must
-// pass the agent filter: session ids are agent-local (F3), and a filtered-out
-// agent's model is never a candidate, so its sessions are never resumed nor
-// forked (plans/0055 §8.3).
-export function recordedAgentOk(routing: RoutingFacts | undefined, recorded: string | undefined): boolean {
-  if (routing === undefined) return true
-  const agent = recorded ?? routing.runAgent
-  const adapter =
-    routing.registry.agents.get(agent)?.adapter ??
-    (agent === routing.runAgent ? (routing.agentFilter ?? routing.defaultAgent) : undefined)
-  return adapter !== undefined && (routing.agentFilter === undefined || adapter === routing.agentFilter)
-}
-
-// The §10 item 11 eligibility of a strict resume under a registry: the
-// recorded internal name is judged by eligibility, not equality. Selection is
-// asked exactly as the dispatch a resumed session takes — a continuation over
-// the recorded model (§6.2 keeps the chain's model while it is usable) — and
-// the recorded model must be what it keeps. So a window change that only
-// moves the fresh pick (an earlier candidate's window reopening), a reordered
-// list or a returned primary does not roll a unit back; a model that is
-// marked down, outside its windows, excluded by the agent filter or gone from
-// the registry is not eligible. Without a registry the callers keep the
-// raw-string comparison (this helper answers false; it is not for them).
+// The §10 item 11 eligibility of a strict resume under a registry
+// (eligibility replaces equality — a window change that only moves the
+// fresh pick does not roll a unit back); without a registry the fence
+// answers false and the callers keep the raw-string comparison.
 export function resumeModelEligible(opts: Opts, switches: Switches, recorded: string, phase?: Phase, role?: ModelRole): boolean {
-  const facts = opts.routing
-  if (facts === undefined) return false
-  const decision = select(selectContext(facts, switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT), {
-    role: role ?? phaseToRole(phase) ?? "bypass",
-    entry: opts.phase?.entry,
-    now: nowOf(facts),
-    continuation: true,
-    current: recorded,
-  })
-  return decision.kind === "pick" && candidateKey(decision.candidate) === recorded
+  return eligibleOf(opts.routing, switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, opts.phase, recorded, phase, role)
 }
 
-// The §8.3 dead-session verdict of a resume record under a registry: a
-// recorded session is resumed only if its agent is one this run can dispatch
-// on and its recorded model is usable now; otherwise the session is dead and
-// the resume takes the existing path of a new session with the resume note
-// (under strict resume, the rollback path). Returns the reason for the log
-// line; undefined = no verdict (without a registry, or a record that names
-// nothing to check — a non-strict record carries no model, and eligibility
-// then has nothing to judge).
+// The §8.3 dead-session verdict of a resume record: a recorded session is
+// resumed only if its agent is one this run can dispatch on and its
+// recorded model is usable now; otherwise the session is dead and the
+// resume takes the existing path of a new session with the resume note
+// (under strict resume, the rollback path). Returns the reason for the
+// log line; undefined = no verdict (without a registry, or a record that
+// names nothing to check — a non-strict record carries no model, and
+// eligibility then has nothing to judge).
 export function deadSessionWhy(
   opts: Opts,
   switches: Switches,
   record: { agent?: string; model?: string; phase?: Phase },
   role?: ModelRole,
 ): string | undefined {
-  const routing = opts.routing
-  if (routing === undefined) return undefined
-  if (!recordedAgentOk(routing, record.agent)) {
-    return `the recorded session lives on agent ${record.agent ?? routing.runAgent}, which this run does not dispatch on${routing.agentFilter ? ` (agent filter ${routing.agentFilter})` : " (no such agent profile)"}`
-  }
-  if (record.model !== undefined && !resumeModelEligible(opts, switches, record.model, record.phase, role)) {
-    return `the recorded session's model ${record.model} is not usable now`
-  }
-  return undefined
+  return deadWhyOf(opts.routing, switches, opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT, opts.phase, record, role)
 }
 
 // The runner-side orchestration of the rollback protocol (design 3.3):

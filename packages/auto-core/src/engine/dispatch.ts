@@ -17,14 +17,13 @@
 // exists, exactly as before, and stays the executor's to compute.
 import { roleOf, type SessionChain, type SessionResult } from "../chain"
 import type { ChainRoute } from "../chain-transitions"
-import type { DownMark } from "../router"
 import { usableAt, formatWindowState } from "../model-window"
 import { stepForUsed, stepId } from "../model-step"
 import type { ModelEntry } from "../models"
 import type { PhaseTypeEntry, Tier } from "../phases/registry"
 import { nowOf, type RoutingFacts } from "../routing"
 import { worktreeNote } from "../session-api"
-import { candidatesOf, candidateKey, select, type SelectContext } from "../select"
+import { candidatesOf, candidateKey, select, type DownMark, type SelectContext } from "../select"
 import { SWITCH_ENV, type Switches } from "../switches"
 
 // What one dispatch is decided on. `routing` and `ctx` are present iff a

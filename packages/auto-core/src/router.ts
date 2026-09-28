@@ -36,30 +36,34 @@
 // run's agent fleet starts (src/agent-pool.ts, after the holder exists,
 // through `activateRings`), not at construction — so `createRouter()` takes
 // no inputs and the holder may build it beside the clock, which depends on
-// nothing above it either. The remaining tranche that reads the registry
-// and the switches at construction (the routing fence over the registry and
-// no-registry halves) arrives with its own change and takes its inputs at
-// its slot, which sits after the freeze in the written order.
+// nothing above it either. The routing fence — the dual registry and
+// no-registry halves of the routing decisions in one seam — reads the
+// registry and the switches per call, never at construction: the fence
+// methods take the run's routing facts (and the switches, the cap,
+// whatever the site holds) as call-time arguments, so the same
+// construction order stands and a holder the preload builds before a test
+// parses its switches never captures a stale snapshot. The no-registry
+// half behind the fence is the compatibility layer of plans/0061 §4.11:
+// one seam before F2 deletes that half.
 // AUTO-DECISION: createRouter() is parameterless instead of receiving the registry and the frozen switch snapshot (no state it builds consults either — the key rings read the registry at their activation, not at construction — and the boundary clears keep taking the failback scope as a call argument because the switch memo is per-parse process state that a test or the pre-freeze composition must be able to change independently of the holder, and capturing the memo at construction time would freeze a stale snapshot for every holder the preload builds before a test parses its switches).
 import type { AgentClient, AgentEvent, AgentTokens } from "./agent/types"
 import type { Boundary } from "./control-types"
+import { phaseToRole, type SessionChain } from "./chain"
+import { modelOfChain } from "./chain-transitions"
 import { failbackApplies } from "./failback"
 import { buildRings, ringKeyLabel, type RingRotation } from "./keyring"
 import { log } from "./log"
 import type { ModelEntry, ModelRegistry, ModelReference } from "./models"
-import type { FailbackScope } from "./switches"
+import type { PhaseKey } from "./phases/registry"
+import type { Phase } from "./resume"
+import { candidateKey, select, type DownMark, type SelectContext } from "./select"
+import type { FailbackScope, ModelRole, Switches } from "./switches"
 import type { Usage } from "./stats"
 
 // The run-time model-order override a parameterized /failback leaves behind:
 // the first argument is the preferred wildcard, the rest the failover
 // candidate ring.
 export type FailbackOverride = { wildcard: string; fallback: string[] }
-
-// A down mark; `until` (epoch ms) is the instant a reset time named, absent
-// = the mark clears at the scope boundaries. `classifier` = the class that
-// wrote the mark came from the failure-message classifier, so the ◈ line
-// names the move `quota (classifier)`.
-export type DownMark = { until?: number; classifier?: true }
 
 // The verdict of one cache-claim observation; undefined = no claim was
 // pending, or the tokens were inconclusive (a small cacheWrite with a small
@@ -163,6 +167,22 @@ export type Router = {
   noteClassifierLimit(): void
   setClassifyUsageSink(sink: ClassifyUsageSink | undefined): void
   classifyUsageSink(): ClassifyUsageSink | undefined
+  // —— The routing fence ——
+  // The dispatch target of one routing decision, both halves behind one
+  // seam: under a registry (`facts` present) a fresh-prompt selection over
+  // the facts — the pick's candidate key, undefined = nothing usable now;
+  // without one the no-registry priority chain over `chain` (the chain's
+  // failover candidate > this instance's sticky holder > the /failback
+  // override > the routing table). The registry/no-registry branch is the
+  // fence's to own: callers pass `opts.routing` untested; the no-registry
+  // half is the compatibility layer of plans/0061 §4.11, deleted in F2.
+  target(
+    facts: RouteFacts | undefined,
+    chain: SessionChain,
+    switches: Switches,
+    cap: number,
+    phase: PhaseKey | undefined,
+  ): string | undefined
 }
 
 // Builds the run's router. See the module header for why this takes no
@@ -548,5 +568,151 @@ export function createRouter(): Router {
       classifyUsageSink = sink
     },
     classifyUsageSink: () => classifyUsageSink,
+
+    // —— The routing fence ——
+    // The dual registry/no-registry dispatch target in one seam (see the
+    // type comment). The registry half reads its live state — the marks,
+    // the override, the rings — through the facts' router, never through
+    // this instance: that half always followed the facts. The no-registry
+    // half reads this instance's holders (sticky, the /failback override) —
+    // the compatibility layer behind the fence, deleted in F2
+    // (plans/0061 §4.11).
+    target: (facts, chain, switches, cap, phase) => {
+      if (facts !== undefined) {
+        const decision = select(routeContext(facts, switches, cap), {
+          role: chain.role ?? phaseToRole(chain.phase) ?? "bypass",
+          entry: phase?.entry,
+          now: facts.clock.now(),
+          continuation: false,
+        })
+        return decision.kind === "pick" ? candidateKey(decision.candidate) : undefined
+      }
+      return modelOfChain(chain, switches, phase, sticky, override)
+    },
   }
+}
+
+// —— The routing fence (the dual registry/no-registry path in one seam) ——
+// The registry/no-registry branch of every routing decision lives in this
+// module: the callers pass their routing facts untested and the fence
+// decides which half runs (plans/0061 §2.1 R2: one seam now, the
+// no-registry half deleted in F2 — §4.11's compatibility layer). The
+// fence's free functions are the stateless verdicts (no holder reads);
+// `target` above is the holder-reading decision as a method.
+
+// The structural slice of the run's routing facts the fence reads. The
+// run's RoutingFacts (src/routing.ts) satisfies it field for field; the
+// fence cannot name that type: routing carries the Router type, so an
+// import back — type-only included — would close a cycle the
+// import-direction DAG check rejects (the same reason ClassifierAnswer
+// lives in this module, beside its cache). The clock likewise appears as
+// its structural `{ now }` slice, not the services' Clock: services
+// imports createRouter at run time.
+export type RouteFacts = {
+  registry: ModelRegistry
+  // §6.2 rule 1: the adapter filter; undefined = no filter.
+  agentFilter: string | undefined
+  // §9 R6: the project's configured agent (the default agent raw override
+  // values and unqualified records use).
+  defaultAgent: string
+  // §8.2: the agent profile this run starts on.
+  runAgent: string
+  router: Router
+  clock: { now(): number }
+}
+
+// The selection context the fence builds from the facts — the twin of
+// routing.ts's selectContext without its optional `limits` (no fence call
+// passes live context windows): the down marks, the /failback override and
+// the key rings are the live run state behind the facts' router, read
+// exactly as selectContext reads them.
+// AUTO-DECISION: the fence's selections carry no context windows (the live limits belong to the agent a resume check never sees); an unknown window never excluded a candidate on the no-registry path either, so the comparison keeps its shape
+function routeContext(facts: RouteFacts, switches: Switches, cap: number): SelectContext {
+  return {
+    registry: facts.registry,
+    cap,
+    agentFilter: facts.agentFilter,
+    defaultAgent: facts.defaultAgent,
+    policy: switches.model,
+    override: facts.router.failbackOverride(),
+    marks: facts.router.downMarks(),
+    ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
+  }
+}
+
+// Does a recorded session id belong to an agent this run can dispatch on?
+// `facts` undefined = no registry (no verdict, every record passes). Under
+// a registry the recorded agent (absent = the run's start profile, the
+// shape every pre-binding record reads as) must name a profile the registry
+// knows — or be the run's start agent itself, which may run profile-less
+// when the registry holds no profile of the chosen adapter — and its
+// adapter must pass the agent filter: session ids are agent-local, and a
+// filtered-out agent's model is never a candidate, so its sessions are
+// never resumed nor forked (plans/0055 §8.3). Moved from src/unit-commit.ts
+// behind the fence: its no-registry guard is a routing-truthiness branch.
+export function recordedAgentOk(facts: RouteFacts | undefined, recorded: string | undefined): boolean {
+  if (facts === undefined) return true
+  const agent = recorded ?? facts.runAgent
+  const adapter =
+    facts.registry.agents.get(agent)?.adapter ??
+    (agent === facts.runAgent ? (facts.agentFilter ?? facts.defaultAgent) : undefined)
+  return adapter !== undefined && (facts.agentFilter === undefined || adapter === facts.agentFilter)
+}
+
+// The §10 item 11 eligibility of a strict resume under a registry (moved
+// from src/unit-commit.ts behind the fence): the recorded internal name is
+// judged by eligibility, not equality. Selection is asked exactly as the
+// dispatch a resumed session takes — a continuation over the recorded
+// model (§6.2 keeps the chain's model while it is usable) — and the
+// recorded model must be what it keeps. So a window change that only moves
+// the fresh pick (an earlier candidate's window reopening), a reordered
+// list or a returned primary does not roll a unit back; a model that is
+// marked down, outside its windows, excluded by the agent filter or gone
+// from the registry is not eligible. Without a registry there is no
+// verdict (false; the callers keep the raw-string comparison).
+export function resumeModelEligible(
+  facts: RouteFacts | undefined,
+  switches: Switches,
+  cap: number,
+  phaseKey: PhaseKey | undefined,
+  recorded: string,
+  phase?: Phase,
+  role?: ModelRole,
+): boolean {
+  if (facts === undefined) return false
+  const decision = select(routeContext(facts, switches, cap), {
+    role: role ?? phaseToRole(phase) ?? "bypass",
+    entry: phaseKey?.entry,
+    now: facts.clock.now(),
+    continuation: true,
+    current: recorded,
+  })
+  return decision.kind === "pick" && candidateKey(decision.candidate) === recorded
+}
+
+// The §8.3 dead-session verdict of a resume record under a registry (moved
+// from src/unit-commit.ts behind the fence): a recorded session is resumed
+// only if its agent is one this run can dispatch on and its recorded model
+// is usable now; otherwise the session is dead and the resume takes the
+// existing path of a new session with the resume note (under strict
+// resume, the rollback path). Returns the reason for the log line;
+// undefined = no verdict (without a registry, or a record that names
+// nothing to check — a non-strict record carries no model, and
+// eligibility then has nothing to judge).
+export function deadSessionWhy(
+  facts: RouteFacts | undefined,
+  switches: Switches,
+  cap: number,
+  phaseKey: PhaseKey | undefined,
+  record: { agent?: string; model?: string; phase?: Phase },
+  role?: ModelRole,
+): string | undefined {
+  if (facts === undefined) return undefined
+  if (!recordedAgentOk(facts, record.agent)) {
+    return `the recorded session lives on agent ${record.agent ?? facts.runAgent}, which this run does not dispatch on${facts.agentFilter ? ` (agent filter ${facts.agentFilter})` : " (no such agent profile)"}`
+  }
+  if (record.model !== undefined && !resumeModelEligible(facts, switches, cap, phaseKey, record.model, record.phase, role)) {
+    return `the recorded session's model ${record.model} is not usable now`
+  }
+  return undefined
 }

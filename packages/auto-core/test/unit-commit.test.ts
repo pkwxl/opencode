@@ -11,7 +11,10 @@ import { join } from "node:path"
 import { commitTree, unitBaseline } from "../src/git"
 import { recallHandover, saveHandover } from "../src/handover"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
-import { afterSession, deadSessionWhy, recordedAgentOk, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
+import { afterSession, deadSessionWhy, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
+// The agent verdict lives behind the routing fence in the router's module
+// (its no-registry guard is a routing-truthiness branch).
+import { recordedAgentOk } from "../src/router"
 import { services } from "../src/services"
 import { freshRepo, task } from "./fixtures/runner"
 
