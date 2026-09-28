@@ -1,5 +1,11 @@
 # refcheck 范围收敛与恢复设计(OPENCODE_AUTO_REF_CHECK)
 
+> **Historical record (2026-09-28, `plans/0061` A3): retired, not maintained.** refcheck as a whole is retired:
+> `src/refcheck.ts`, the `OPENCODE_AUTO_REF_CHECK` switch (now a retired-switch notice), the pre-commit gate, the
+> `fix-refs` script and the `.auto/invalid-refs.md` stale list are deleted, and the `deleted|archived|historical`
+> exemption markers left the `plans/0035` protocol registry. Keeping references valid is each session's own work
+> (`plans/0061` R6). Original preserved untranslated below.
+
 > 状态: **P1..P3 已全部实施(2026-09-08): P1 = 开关 + 三层挂点管控 + D2 废弃项摘除;
 > P2 = 缺失恢复(rename 历史地图 + 就地改写恢复 + 复扫);P3 = 范围再确认(改动
 > 文件检测 + `@sha` 语法与解析/校验扩展 + 嵌套仓库 SHA)+ 规范块/模板文案**。

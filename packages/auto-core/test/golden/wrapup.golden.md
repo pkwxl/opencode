@@ -23,10 +23,8 @@ All subtasks of this task were completed one by one in earlier sessions; do not 
    artifact path docs/T-002/S<NN>/index.md or code location); do not copy or rewrite the content of the subtask artifacts, add only
    two sections of your own, overall conclusion and open issues, so that later sessions and reviewers can learn what this task produced from the files on disk alone. Every reference in the
    report (to a document or to code) must be a path relative to the target directory root (e.g. docs/T-002/S01/index.md,
-   src/foo.ts:42, in backticks or as a link, optionally with :line), and you must confirm the path exists before writing it — broken
-   references are caught by the DRIVER's reference check; line anchors can drift as the target file changes, and the DRIVER appends an
-   @<sha> version marker to any anchor that no longer matches (the range is then valid only for the marked historical version) — do
-   not alter references that already carry a marker yourself; do not reference the state files inside the round directory docs/R-NN/
+   src/foo.ts:42, in backticks or as a link, optionally with :line), and you must confirm the path exists before writing it — the
+   DRIVER does not check references afterwards; do not reference the state files inside the round directory docs/R-NN/
    (the phase index phases.md, the task indexes tasks.md in the phase directories and the phase state files todo.md/done.md);
 3. The task status is recorded by the DRIVER in one pass after the session ends. todo.md → done.md renames and the index ticks of phases, tasks and subtasks are maintained by the DRIVER alone — do not make them yourself.
 Git commits are made by the DRIVER in one pass after the session ends; do not run git commit or any other commit command.

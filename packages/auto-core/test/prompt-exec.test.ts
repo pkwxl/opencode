@@ -1034,6 +1034,28 @@ describe("intent externalization, understand/wrap-up/knowledge family (M2.1)", (
     expect(renderAgentsBlock()).not.toContain("maintenance rules")
   })
 
+  test("the AGENTS.md block's reference paragraphs promise no checking (the reference checker is retired)", () => {
+    const block = renderAgentsBlock()
+    // Paragraph 2: the @<sha> version marker is described without the retired
+    // line-number-exemption clause.
+    expect(block).toContain("meaning that range is valid only for that historical revision)")
+    expect(block).not.toContain("exempt from line-number checking")
+    // Paragraph 3: the DRIVER neither checks nor rewrites references; the
+    // retired subcommand and the exemption markers are not named.
+    expect(block).toContain(
+      "3. Checking: DRIVER neither checks nor rewrites references. Confirm that a path exists before you write it, and keep the references your task touches valid — that is part of the task's own work and of its acceptance.",
+    )
+    expect(block).not.toContain("full scan of all live documents")
+    expect(block).not.toContain("deleted/archived/historical")
+    // The wrap-up report item carries the same statement (the golden pins the
+    // full render; this pins the two sentences wherever the pack varies).
+    for (const text of [renderWrapup(plan, task), renderWrapup(plan, task, { solo: true, resolves: [driverResolve] })]) {
+      expect(text).toContain("DRIVER does not check references afterwards")
+      expect(text).not.toContain("DRIVER's reference check")
+      expect(text).not.toContain("carry a marker yourself")
+    }
+  })
+
   test("zero-intent baseline: an empty pack drops each segment cleanly, core protocol stays", () => {
     withPack("# default\n", () => {
       const decompose = renderDecompose(plan, task)

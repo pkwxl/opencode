@@ -1,5 +1,13 @@
 # 稳定引用与文件存放规范:设计基准与实施计划(stable-refs)
 
+> **Historical record (2026-09-28, `plans/0061` A3/A5): retired in part, not maintained.** The storage half of
+> this design lives on unchanged (permanent `docs/T-NNN/` task directories and round directories, `src/docpaths.ts`,
+> the AGENTS.md block's reference conventions). Its checking half is retired: `src/refcheck.ts` (existence/line-cap
+> validation, rename rewrite, rename-history recovery, `@sha` range reconfirmation), the `OPENCODE_AUTO_REF_CHECK`
+> switch, the pre-commit gate and the `.auto/invalid-refs.md` stale list are deleted, and the block no longer names
+> any checking — keeping references valid is each session's own work. The successor rulings are `plans/0061` R6/R15.
+> Original preserved untranslated below.
+
 > 状态:**设计定稿(2026-09-06)**。实施分 P1..P4 四期,建议每期一个独立会话;
 > P1 已实施(2026-09-07,见 §7);P1 的可执行规格、既定决策(P1-D1..D9)与会话切分
 > (P1-S1..S4)见 [plans/0011-stable-refs-p1-plan.md](./0011-stable-refs-p1-plan.md)。

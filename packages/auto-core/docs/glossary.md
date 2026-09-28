@@ -167,7 +167,7 @@ Unit and outcome states:
 | 锁步 | lockstep | Parser, template and tests change in one commit |
 | 翻转 | flip | Switch a protocol string to its new spelling |
 | 稳定引用 | stable reference | `src/docpaths.ts` |
-| 引用检查 | reference check | `src/refcheck.ts` |
+| 引用检查 | reference check | Retired 2026-09-28 (`plans/0061` A3): the checker, its `OPENCODE_AUTO_REF_CHECK` switch and its `deleted`/`archived`/`historical` exemption markers are gone; keeping references valid is each session's own work (the AGENTS.md block and the wrap-up prompt say so) |
 | 报告结果行 | report result line | `Result: PASS` / `Result: FAIL` |
 | 结论 | verdict | |
 | 自报 | self-report | Never a completion criterion |
@@ -351,7 +351,7 @@ Write these verbatim, in backticks, and never translate or paraphrase them. Stor
 - Task report: `Result: PASS` / `Result: FAIL`
 - Phase handover sections: `## Key decisions`, `## Constraints and pitfalls`, `## Required reading for the next phase`, `## Artifact index`
 - Unit field block: `Phase: R-NN.P<nn>`, `Depends:`, `Touches:`, `Closed: <reason>` (written by `closeUnit` only); custom phase type `Gate: acceptance`, `Reasoning: deep` / `Reasoning: simple`
-- Knowledge-doc terminator `DONE`; refcheck exemption markers `deleted` / `archived` / `historical`
+- Knowledge-doc terminator `DONE`
 - Language-neutral: `<!-- auto: eof -->`, `- [ ]` / `- [x]`, `AUTO-RESOLVE:`, `AUTO-DECISION:`, `AUTO-FIXME:`, `[DRIVER]`, `Auto-Stage:` / `Auto-Nested:` trailers
 - File and directory names: `todo.md` / `done.md`, `tasks.md`, `phases.md`, `subtasks.md`, `context.md`, `report.md`, `round.md`, `handoff.md` / `testhandoff-<n>.md`, `.auto/*`, `docs/T-NNN/`, `docs/R-NN/`, `S<nn>`
 

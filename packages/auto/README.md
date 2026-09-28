@@ -128,12 +128,7 @@ plans/0021-commit-boundary-design.md): a failed unified commit always blocks and
 tasks/subtasks/hidden tasks start from a clean-worktree baseline, and a unit starting on a person's leftover
 dirty area also blocks (commit or clean up first, then run). The opencode session shares the commit's name, so
 the session list reads as task progress; AI sessions never run git commit (enforced by the AGENTS.md
-commit-principle block and the agent contract). Before every unified commit the driver first runs
-**reference auto-correct** (enabled by the experiment switch `OPENCODE_AUTO_REF_CHECK=on`, default off, no-op):
-old-new path pairs that git rename matched mechanically rewrite the old references in live documents (rename
-pairs only — deletions are never rewritten automatically), then a re-scan logs ⚠ for dead references (the
-rewrite is recorded with that commit; a no-op outside git). Turning it off with `false` left changes in the
-worktree.
+commit-principle block and the agent contract).
 
 There are four write channels:
 
@@ -1602,7 +1597,7 @@ these sections:
 | Test principle | Compile/test/build/lint commands are executed by the driver outside the session (present only with `testByDriver: true`) |
 | Commit principle | The driver recursively runs the unified commit after sessions; sessions never run git commits |
 | Summary principle | No end-of-session summaries in non-interactive scenarios; output always goes into docs/ |
-| Reference and storage conventions | stable-refs: `docs/T-NNN/` directory-style permanent paths, root-relative reference syntax, the checking's three layers |
+| Reference and storage conventions | stable-refs: `docs/T-NNN/` directory-style permanent paths, root-relative reference syntax; the DRIVER neither checks nor rewrites references — confirming a path exists and keeping the references a task touches valid is the session's own work |
 
 The commit principle, summary principle and reference conventions describe **configuration-independent
 invariants** and appear unconditionally; the test

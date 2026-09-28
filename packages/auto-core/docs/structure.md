@@ -150,10 +150,9 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Module | Responsibility | Key files |
 |---|---|---|
 | Unified commit | Recursive driver commits (nested repos first), `Auto-Stage` trailer, clean gate, SHA baseline, rollback primitives | `src/git.ts` (0021) |
-| Unit commit | Post-session commit, close-out checks, refcheck gate, strict-resume fidelity, unit rollback | `src/unit-commit.ts` (0021, 0022) |
+| Unit commit | Post-session commit, close-out checks, strict-resume fidelity, unit rollback | `src/unit-commit.ts` (0021, 0022) |
 | Driver scripts | `tmp/test.sh` request marker, output capture, watchdog | `src/script.ts` |
 | Test run | `--test-by-driver` execution, handover-document archive/cleanup, the context-budget steer (`handoffSteer`, its wall `steerWall`: 2×cap raised to a quarter of a large window, capped at 80% of it) (no session imports) | `src/testrun.ts` (0023, 0056, 0059 D6) |
-| Reference check | Extract/rewrite/validate document references; `check` scanning | `src/refcheck.ts` (0010, 0013) |
 | .gitignore | Driver work-directory entries | `src/gitignore.ts` |
 
 ### Configuration, switches, and project setup
@@ -165,7 +164,6 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Experiment switches | `OPENCODE_AUTO_*` registry, parsed once, never persisted (the `OPENCODE_AUTO_MODELS` path variable is registered but stays out of the parsed switches) | `src/switches.ts` (0003, 0055 §9) |
 | Shell profile | `setShellProfile`: program name, `configDir`, recovery hints, log audit, agent; `registerAgentAdapter` lets a shell add an agent adapter without a core change | `src/shell.ts` (0055) |
 | AGENTS.md block | The opencode-auto marker block, the only content the driver puts in the target's AGENTS.md | `src/agents-block.ts` (0054) |
-| check command | Principle scan of AGENTS.md and open task documents | `src/check.ts` |
 | reset command | Remove init's configuration artifacts (the project brief only while it is the untouched stub) | `src/reset.ts` |
 | Destructive-op guards | Interactive confirmation; clean-worktree gate | `src/confirm.ts`, `src/clean.ts` |
 

@@ -527,4 +527,19 @@ has no dual-read. `parsePhaseTypeFile` (`src/phases/custom.ts`) reads it:
 No template, marker or builtin type file changes. The builtin types carry
 their execute tiers in the registry (`src/phases/registry.ts`), not in a file.
 
+## Amendment (2026-09-28, plans/0061 A3/A5): the refcheck exemption markers are retired, not flipped
+
+The inline exemption markers `deleted|archived|historical` (flipped from
+`已删除|已归档|历史` at M3.8) leave the protocol face: their only parser lived in
+`src/refcheck.ts`, deleted with the reference checker (plans/0061 A3), and their
+producers are gone too — the AGENTS.md block's checking paragraph, which named the
+exemption, is replaced (plans/0061 R6) and the shell's stale-reference CLI hint was
+deleted with the `check` command (plans/0061 A4). Nothing parses, guards or writes
+the markers any more, so per this registry's own rule (D3: registered = a literal a
+driver parser matches) they are retired rather than flipped: no dual-read, no
+tier-1 marker, no compatibility path. A document still carrying one of the words
+inline is simply prose now; `docs/glossary.md` drops them from the protocol-literal
+list in the same change. The §4 row and the M3.8 amendment entry that still name
+them are history, not live registration. The other M3.8 flips stand unchanged.
+
 <!-- auto: eof -->
