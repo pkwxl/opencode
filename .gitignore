@@ -36,3 +36,7 @@ tsconfig.tsbuildinfo
 # Claude Code
 CLAUDE.md
 .claude
+
+# ZCode
+.zcode/
+.zcodeignore
