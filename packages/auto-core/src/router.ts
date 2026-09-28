@@ -183,6 +183,46 @@ export type Router = {
     cap: number,
     phase: PhaseKey | undefined,
   ): string | undefined
+  // The dispatch's model pair, both halves behind one seam: under a
+  // registry (`facts` present) the plan's pick — the route the pure
+  // planner resolved before anything was created and setRoute then
+  // wrote onto the chain (`picked`, the executor passes the pick's
+  // route: `target` is the model id the prompt carries, `promptModel`
+  // the entry the strict-resume record keys on; the fence must not
+  // re-select — the pick already read the live windows and the step
+  // walk, and the chain's route fields cannot stand in because the
+  // session-scope failback clear may have wiped them after the pick) —
+  // without one the no-registry priority chain resolved at the
+  // dispatch's slot, after that clear (both reads hold the same
+  // string). The registry/no-registry branch is the fence's to own:
+  // callers pass `opts.routing` untested; the no-registry half is the
+  // compatibility layer of plans/0061 §4.11, deleted in F2.
+  dispatchModel(
+    facts: RouteFacts | undefined,
+    chain: SessionChain,
+    switches: Switches,
+    phase: PhaseKey | undefined,
+    picked: { model?: string; entry?: string } | undefined,
+  ): { target: string | undefined; promptModel: string | undefined }
+  // The ◈ announcement of the model a dispatch runs on, without a
+  // registry: the "using model" line with its source label (the chain's
+  // failover candidate, the phase-scoped sticky holder, the /failback
+  // override, else the routing table), logged for every new session and
+  // on a model change — a continuation of the same session and model is
+  // not repeated. Logs the line itself and returns the model the caller
+  // records as the chain's display memory (the caller writes the chain);
+  // undefined = nothing was announced. Under a registry the planner's
+  // own announce line already covered the dispatch, so the answer is
+  // undefined there — the registry/no-registry branch is the fence's to
+  // own: callers pass `opts.routing` untested; the no-registry half is
+  // the compatibility layer of plans/0061 §4.11, deleted in F2.
+  describe(
+    facts: RouteFacts | undefined,
+    chain: SessionChain,
+    target: string | undefined,
+    label: string,
+    resumed: boolean,
+  ): string | undefined
 }
 
 // Builds the run's router. See the module header for why this takes no
@@ -589,6 +629,35 @@ export function createRouter(): Router {
       }
       return modelOfChain(chain, switches, phase, sticky, override)
     },
+    // The dispatch's model pair (see the type comment). The registry half
+    // answers the pick the executor hands in — the plan's own selection,
+    // not a fresh one; the no-registry half resolves the priority chain
+    // over this instance's holders, exactly where the executor's branch
+    // used to stand (the sticky and the override are read at the call,
+    // and nothing between the two fence calls of one dispatch can write
+    // them — the dispatch slot runs synchronously between its awaits).
+    dispatchModel: (facts, chain, switches, phase, picked) => {
+      if (facts !== undefined) return { target: picked?.model, promptModel: picked?.entry }
+      const model = modelOfChain(chain, switches, phase, sticky, override)
+      return { target: model, promptModel: model }
+    },
+    // The no-registry ◈ line (see the type comment): the from label and
+    // the repeat rule moved here from the executor's branch; the chain's
+    // display memory stays the caller's write.
+    describe: (facts, chain, target, label, resumed) => {
+      if (facts !== undefined || target === undefined) return undefined
+      if (target === chain.modelShown && resumed) return undefined
+      const from =
+        chain.model !== undefined
+          ? "fallback candidate"
+          : sticky !== undefined
+            ? "fallback candidate (sticky within phase)"
+            : override !== undefined
+              ? "/failback override"
+              : "route"
+      log(`◈ ${label} using model ${target} (${from})`)
+      return target
+    },
   }
 }
 
@@ -715,4 +784,17 @@ export function deadSessionWhy(
     return `the recorded session's model ${record.model} is not usable now`
   }
   return undefined
+}
+
+// The agent field of a record the dispatch side persists (the handover
+// claim's continuation session, the progress record of a running
+// session): the field is present iff a registry drives the run and the
+// chain names its agent — absent = the default agent's, so pre-binding
+// records read correctly and a no-registry run writes byte-identical
+// files. A stateless verdict of the fence (no holder reads): callers
+// spread the result into their record literal and pass `opts.routing`
+// untested; the no-registry `{}` half is the compatibility layer of
+// plans/0061 §4.11, deleted in F2.
+export function agentField(facts: RouteFacts | undefined, agent: string | undefined): { agent?: string } {
+  return facts !== undefined && agent !== undefined ? { agent } : {}
 }

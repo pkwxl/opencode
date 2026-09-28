@@ -7,6 +7,10 @@
 // session's natural finish — writing the chain only through the named
 // transitions of src/chain-transitions.ts. The proxy-answer ledger writer
 // recordDriverResolves is called only by this layer, so it belongs here too.
+// The registry/no-registry branch of every routing decision this executor
+// makes sits behind the router service's fence (src/router.ts): the routing
+// facts pass into the seam untested, and the truthiness reads that stay
+// (the dispatch plan's fact-building) are marked below.
 // Sits below session.ts (whose runSession retry/failover ring calls this
 // function on each pass) and calls only the layers below — watch / session-api
 // / stats; **must never import session / runner back upward**.
@@ -22,7 +26,6 @@ import {
   bindAgent,
   consumeNote,
   consumePending,
-  modelOfChain,
   promote,
   resetRoute,
   restoreRetryable,
@@ -40,6 +43,7 @@ import { handoffFile } from "./prompt"
 import { accountOf, learnObserved } from "./quota-windows"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
+import { agentField } from "./router"
 import { selectContext } from "./routing"
 import { services } from "./services"
 import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
@@ -109,7 +113,12 @@ export async function attempt(
   // target resolves exactly as before, after the session exists (C2). The
   // selection context is the seam the volatile run state (down marks, the
   // /failback override, the key rings, the live windows) enters the pure
-  // planner through.
+  // planner through. The two truthiness reads here (the limits fetch and
+  // the context build) are the fact-building of the dispatch plan — the
+  // facts are the router fence's own input, so these are the one
+  // registry/no-registry reads this file keeps; the planner's own guard
+  // over the assembled facts sits in src/engine/dispatch.ts, and every
+  // other routing branch below goes through the seam in src/router.ts.
   const limits = opts.routing !== undefined ? await contextLimitsOf(client) : undefined
   const plan = planDispatch(chain, {
     routing: opts.routing,
@@ -121,13 +130,15 @@ export async function attempt(
   })
   if (plan.blocked !== undefined) return plan.blocked
   const pick = plan.pick
-  // This dispatch's model, resolved by the plan before anything was created
-  // (promptModel is the pick's key, the strict-resume record's model).
-  // (Without a registry the target stays where it always was — resolved
-  // after the session exists, below — so the session-scope failback clear
-  // still lands before it, C2.)
-  let promptModel = pick?.route.entry
-  let target = pick?.route.model
+  // This dispatch's model, both halves behind the router's fence: under a
+  // registry the plan's pick (resolved before anything was created;
+  // promptModel is the pick's key, the strict-resume record's model),
+  // without one the priority chain resolved after the session exists —
+  // so the session-scope failback clear still lands before it (C2).
+  // Assigned at the dispatch's slot below, where the branch used to
+  // stand; nothing reads either variable before that point.
+  let promptModel: string | undefined
+  let target: string | undefined
   const promptVariant = pick?.variant
   // The watch's steer context under a registry (§4.5): the picked
   // candidate's key, its entry (when the pick is one) and the step the
@@ -226,8 +237,12 @@ export async function attempt(
   if (pick !== undefined) bindAgent(chain, pick.agent)
   // Interactive bypass: human input goes to this session from here on (wrap-up
   // and other bypass sessions override it the same way); the sideband
-  // resolves the client per session from the chain's agent (§8.1).
-  opts.interactive?.attach(sessionID, opts.routing ? pickAgent : undefined)
+  // resolves the client per session from the chain's agent (§8.1). The
+  // attach agent is the pick's entry profile — and the pick exists exactly
+  // when a registry drives the run (the plan answers none without routing
+  // facts), so undefined already means "no registry" and the field needs
+  // no routing test of its own.
+  opts.interactive?.attach(sessionID, pickAgent)
   // Test-handover interruption recovery (§I): the continuation session opened
   // after the handover close-out is claimed here — when it is itself
   // interrupted, the next run forks from it to pick the context back up. The
@@ -250,7 +265,10 @@ export async function attempt(
       handoverClaimPrior = inflight
       // The claimed continuation session carries its agent (plans/0055 §8.2):
       // the claim is this dispatch's session, on the agent it was created on.
-      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID, ...(opts.routing && chain.agent !== undefined ? { agent: chain.agent } : {}) })
+      // The field's presence is the fence's verdict (a registry run records
+      // the agent, a no-registry run writes the record byte-identically to
+      // before).
+      await saveHandover(opts.dir, { ...inflight, nextSession: sessionID, ...agentField(opts.routing, chain.agent) })
     }
   }
   // Progress record: a session carrying a phase (the execution chain + a
@@ -286,7 +304,9 @@ export async function attempt(
         // The session's agent profile (plans/0055 §8.2), under a registry
         // only: absent = the default agent's, so pre-binding records read
         // correctly and a no-registry run writes byte-identical files (C2).
-        ...(opts.routing && chain.agent !== undefined ? { agent: chain.agent } : {}),
+        // The field's presence is the fence's verdict (same as the handover
+        // claim above).
+        ...(agentField(opts.routing, chain.agent)),
       })
     }
   }
@@ -323,25 +343,22 @@ export async function attempt(
   const stuck = switches.stuck && !opts.dryrun ? createStuckTracker() : undefined
   try {
     const events = await dispatchClient.events(sse.signal)
-    // Under a registry the model was resolved before anything was created
-    // (plans/0055 §6): the candidate list of the session's role and phase
-    // type, the overrides of §9, and, for a continuation of the same prompt
-    // (a retry, a fork after a failure, the recovery loop's re-dispatch, a
-    // strict resume), the chain's entry while it is still usable — and the
-    // pick also names the agent whose host serves the dispatch (§8.3).
-    // Without a registry (plans/0017 C.3/E) the env-switch chain applies
-    // here, byte for byte as before — after the session-scope failback clear
-    // above — : chain fallback candidate > phase-scoped sticky > /failback
-    // runtime override > the routing table (role > phase type id > preset
-    // letter > wildcard; the shared priority chain of modelOfChain). An
-    // undefined target sends no model key: with both variables unset and no
-    // override the whole chain stays undefined, byte-identical to the
+    // The dispatch's model pair, both halves behind the router's fence:
+    // under a registry the plan's pick (resolved before anything was
+    // created, plans/0055 §6 — the pick also names the agent whose host
+    // serves the dispatch, §8.3, and the fence answers the pick's route
+    // rather than re-selecting); without one (plans/0017 C.3/E) the
+    // env-switch chain applies, byte for byte as before — after the
+    // session-scope failback clear above — : chain fallback candidate >
+    // phase-scoped sticky > /failback runtime override > the routing
+    // table (role > phase type id > preset letter > wildcard; the shared
+    // priority chain of modelOfChain, read inside the seam). An
+    // undefined target sends no model key: with both variables unset and
+    // no override the whole chain stays undefined, byte-identical to the
     // unrouted call (not model: undefined).
-    const override = router.failbackOverride()
-    if (!opts.routing) {
-      target = modelOfChain(chain, switches, opts.phase, router.stickyModel(), override)
-      promptModel = target
-    }
+    const models = router.dispatchModel(opts.routing, chain, switches, opts.phase, pick?.route)
+    target = models.target
+    promptModel = models.promptModel
     // The actually-used model reaches the terminal (frontend-visible): when
     // routing / failover gives an explicit target, dispatch locks that model
     // and the report names its source directly; without routing (target
@@ -353,21 +370,13 @@ export async function attempt(
     // line, and so does a model change against the previous prompt; a
     // continuation prompt on the same session and model (a resumed takeover)
     // is not repeated. Whatever the source, the decision whether the prompt
-    // carries a model key is unchanged (invariant F unbroken).
-    if (!opts.routing && target !== undefined) {
-      const from =
-        chain.model !== undefined
-          ? "fallback candidate"
-          : router.stickyModel() !== undefined
-            ? "fallback candidate (sticky within phase)"
-            : override !== undefined
-              ? "/failback override"
-              : "route"
-      if (target !== chain.modelShown || !resumed) {
-        log(`◈ ${task.id} using model ${target} (${from})`)
-        announceModel(chain, target)
-      }
-    }
+    // carries a model key is unchanged (invariant F unbroken). The
+    // no-registry ◈ line itself is the fence's to render: its source label
+    // (fallback candidate / sticky / /failback override / route) and its
+    // repeat rule live in the seam, and the returned model is recorded as
+    // the chain's display memory here (the caller writes the chain).
+    const shown = router.describe(opts.routing, chain, target, task.id, resumed)
+    if (shown !== undefined) announceModel(chain, shown)
     // When the liveness probe's verdict — a half-open connection or the like
     // ending the session (session-boundary-hardening §4.4) — returns before
     // the hung POST does: drop the stream early, releasing the SSE reader and
@@ -395,11 +404,16 @@ export async function attempt(
         : undefined,
       // Registry steers name their model (§4.5): the watch carries the entry's
       // steps (the same session steps up in place) and the id every steer
-      // names — the reached step. Without a registry nothing is passed and
-      // steers stay exactly as they are (C2).
-      opts.routing && steerKey !== undefined ? { name: steerKey, label: task.id, ...(steerEntry !== undefined ? { entry: steerEntry } : {}), ...(steerStep !== undefined ? { step: steerStep } : {}), ...(target !== undefined ? { model: target } : {}) } : undefined,
+      // names — the reached step. steerKey is the pick's entry, and the pick
+      // exists exactly when a registry drives the run (the plan answers no
+      // pick without routing facts), so without one nothing is passed and
+      // steers stay exactly as they are (C2) — the context needs no routing
+      // test of its own.
+      steerKey !== undefined ? { name: steerKey, label: task.id, ...(steerEntry !== undefined ? { entry: steerEntry } : {}), ...(steerStep !== undefined ? { step: steerStep } : {}), ...(target !== undefined ? { model: target } : {}) } : undefined,
       // A changed usage-window observation is recorded for the account the
       // chain dispatches on (plans/0057 §8), read when the event arrives.
+      // The facts go in as a value (the account the routing names, or none):
+      // a carry, not a branch.
       (event) => void learnObserved(opts.dir, accountOf(chain, opts.routing), event, clockNow()),
     ).then((w) => {
       if (w.error) {
