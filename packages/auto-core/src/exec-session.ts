@@ -9,6 +9,7 @@
 
 import { dirname, join } from "node:path"
 import type { SessionChain, SessionResult } from "./chain"
+import { consumeNote, seedFork } from "./chain-transitions"
 import { archivedTestHandoff, latestHandoffSeq } from "./docpaths"
 import { fileCommitted, suffixedTitle } from "./git"
 import { forgetHandover, closedHandovers, handoverSeq, handoverStage, recallHandover, saveHandover, type Handover } from "./handover"
@@ -318,19 +319,13 @@ export async function seedPinFork(client: ClientSource, chain: SessionChain, rec
   }
   const forked = await forkSession(anchorClient, record.pinSession, subject, anchor)
   if (!forked) return false
-  chain.id = undefined
-  chain.pending = forked
-  if (agent !== undefined) chain.agent = agent
-  chain.pct = 100
   // The forked prefix's usage cannot be measured cheaply, so it is zeroed:
   // attempt already zeroes test.startUsed for non-reused sessions, and the
   // chain's later reuse decisions are overwritten by real usage once this
-  // round ends.
-  chain.used = 0
-  chain.at = 0
-  // The wrap-up instruction is self-contained; no recovery note is layered on
-  // top (that is for cold-start sessions to read).
-  chain.note = undefined
+  // round ends. The wrap-up instruction is self-contained; no recovery note
+  // is layered on top (that is for cold-start sessions to read).
+  seedFork(chain, forked, { used: 0, agent })
+  consumeNote(chain)
   return true
 }
 
@@ -342,12 +337,7 @@ async function seedSessionFork(client: ClientSource, chain: SessionChain, sessio
   if (!(await sessionAlive(sessionClient, session))) return false
   const forked = await forkSession(sessionClient, session, subject)
   if (!forked) return false
-  chain.id = undefined
-  chain.pending = forked
-  if (agent !== undefined) chain.agent = agent
-  chain.pct = 100
   // Unknown (no readable history, MA.4) counts as 0 here, as a failed read does.
-  chain.used = (await sessionUsed(sessionClient, session).catch(() => 0)) ?? 0
-  chain.at = 0
+  seedFork(chain, forked, { used: (await sessionUsed(sessionClient, session).catch(() => 0)) ?? 0, agent })
   return true
 }

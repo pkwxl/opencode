@@ -8,6 +8,7 @@
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S9, pure move).
 
 import type { SessionChain } from "./chain"
+import { bindAgent, resumeSession, setRoute } from "./chain-transitions"
 import { baselineIntact, beginUnit, unitBaseline, type UnitBaseline } from "./git"
 import { log } from "./log"
 import type { ClientSource, Opts, UnitStop } from "./opts"
@@ -227,10 +228,11 @@ export async function requireArtifact<T>(
     // never taken for this session's output.
     const resume = i === 0 && resumedSession !== undefined
     if (!resume) await spec.reset?.()
+    const resumedAt = resume ? Date.now() : 0
     const chain: SessionChain = {
       pct: resume ? resumedUsage!.pct : 100,
       used: resume ? resumedUsage!.used : 0,
-      at: resume ? Date.now() : 0,
+      at: resumedAt,
       subject: spec.commit?.subject,
       phase: stepPhase,
       role: spec.role,
@@ -240,20 +242,17 @@ export async function requireArtifact<T>(
     if (resume) {
       // attempt's resumed test (a session on the chain and a pending note) sends
       // the first prompt into the original session regardless of the reuse switch
-      // and threshold; the note is cleared once used.
-      chain.id = resumedSession
-      chain.note = resumeNote(stepPhase, true, strict)
+      // and threshold; the note is cleared once used. The takeover repeats the
+      // constructor's pct/used/at values, so the chain state is bit-identical.
+      resumeSession(chain, resumedSession!, resumedUsage!, resumedAt, resumeNote(stepPhase, true, strict))
       // Session-agent binding and the continuation's model (plans/0055 §8.2,
       // §6.2): the resumed session stays on the agent its record names and —
       // a registry record naming its model — the first dispatch continues on
       // that model while it is still usable, instead of a fresh pick moving
       // the live session's model.
       if (opts.routing) {
-        chain.agent = resumedAgent ?? opts.routing.runAgent
-        if (resumedModel !== undefined) {
-          chain.modelEntry = resumedModel
-          chain.model = opts.routing.registry.models.get(resumedModel)?.model
-        }
+        bindAgent(chain, resumedAgent ?? opts.routing.runAgent)
+        if (resumedModel !== undefined) setRoute(chain, { entry: resumedModel, model: opts.routing.registry.models.get(resumedModel)?.model })
       }
     }
     const result = await runSession(client, task, promptText + feedback, opts, chain, undefined, undefined, switches)

@@ -12,6 +12,7 @@
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import type { ForkBaseInfo, SessionChain } from "./chain"
+import { anchorBaseline, coldStart, consumeNote, nameSubject, resetRoute } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK, shapeCheckOn } from "./doccheck"
 import { subtaskDoc, taskDoc } from "./docpaths"
 import { processReferenceScan } from "./document/process-refs"
@@ -85,7 +86,7 @@ export async function executeWhole(
   // spontaneously written document ignored; off mode never builds one anyway.
   const steer = ondemand ? handoffSteer(autoSwitches().steer, cap, task) : undefined
   const subject = `${task.id} exec ${task.title}`
-  chain.subject = subject
+  nameSubject(chain, subject)
   // The lead's split. The checklist the stage starts from is the committed
   // copy: one the lead of an interrupted run left uncommitted is that lead's
   // own split, still to be judged (a resumed run is the only one the clean
@@ -200,19 +201,13 @@ export async function executeWhole(
     consumed = ""
     forked = false
     split = splitOffered ? "open" : "none"
-    chain.id = undefined
-    chain.pending = undefined
-    chain.note = undefined
-    chain.pct = 100
-    chain.used = 0
-    chain.at = 0
-    // The redo is a new prompt under registry routing too (the marks keep
-    // their scope-cleared meaning; the chain's entry does not carry over).
-    if (opts.routing) {
-      chain.model = undefined
-      chain.modelEntry = undefined
-      chain.modelStep = 0
-    }
+    // The cold restart: the chain drops its session state and the one-shot
+    // note; the redo is a new prompt under registry routing too (the marks
+    // keep their scope-cleared meaning; the chain's entry does not carry
+    // over).
+    coldStart(chain)
+    consumeNote(chain)
+    if (opts.routing) resetRoute(chain)
     return "done"
   }
   for (;;) {
@@ -385,7 +380,7 @@ export async function ensureDecomposed(
   // work instead of writing the files; the files are a hard requirement.
   autobanner(`${task.id} ${task.title}: task understanding + decomposition`)
   const subject = `${task.id} decompose ${task.title}`
-  chain.subject = subject
+  nameSubject(chain, subject)
   // When a shape-check / missing-artifact re-prompt is dispatched through a
   // fork of the just-ended session (revised 2026-09-18), the next round carries
   // the feedback alone — the copy already holds the full prompt and all the
@@ -546,7 +541,7 @@ export async function runSubtask(
 ): Promise<UnitStop | undefined> {
   subbanner(`${task.id} subtask ${index}: ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`)
   const subject = `${task.id} S${index} ${text}`
-  chain.subject = subject
+  nameSubject(chain, subject)
   // Registry routing (plans/0055 §6.2): a new subtask is a new prompt — its
   // first dispatch selects from the list instead of continuing the task's
   // current entry (a failover within the task persists through the down
@@ -554,11 +549,7 @@ export async function runSubtask(
   // spent quota still skips its model; a window that reopened returns to
   // the primary, as a new prompt should). Without a registry the chain's
   // candidate keeps its exact task-scoped meaning.
-  if (opts.routing) {
-    chain.model = undefined
-    chain.modelEntry = undefined
-    chain.modelStep = 0
-  }
+  if (opts.routing) resetRoute(chain)
   const dir = opts.dir ?? plan.dir
   // Subtask unit commit boundary: startup clean gate + SHA baseline (close-out
   // verifies the commit range is all driver commits); driver-exclusive
@@ -573,7 +564,7 @@ export async function runSubtask(
     if (gate.type === "dirty") return { type: "dirty", files: gate.files }
     baseline = gate.baseline
   }
-  chain.baseline = baseline
+  anchorBaseline(chain, baseline)
   const strict = strictResumeActive(opts)
   const planDir = plan.dir
   const readHandoff = async (): Promise<string> => Bun.file(join(planDir, taskDoc(task.id, "handoff"))).text().catch(() => "")
@@ -677,18 +668,11 @@ export async function runSubtask(
       feedback = ""
       consumed = ""
       handoverRetried = false
-      chain.id = undefined
-      chain.pending = undefined
-      chain.note = undefined
-      chain.pct = 100
-      chain.used = 0
-      chain.at = 0
-      // The redo is a new prompt under registry routing too.
-      if (opts.routing) {
-        chain.model = undefined
-        chain.modelEntry = undefined
-        chain.modelStep = 0
-      }
+      // The cold restart: the chain drops its session state and the one-shot
+      // note; the redo is a new prompt under registry routing too.
+      coldStart(chain)
+      consumeNote(chain)
+      if (opts.routing) resetRoute(chain)
       // The cold-start redo forks from the base again (the same shape as the
       // subtask's first session, recovering the warm prefix).
       warm = await seedForkSession(client, opts, chain, base, subject)

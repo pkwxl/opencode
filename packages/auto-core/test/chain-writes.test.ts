@@ -1,10 +1,9 @@
 // The chain-write ratchet (plans/0061 §4.8): SessionChain is mutable state
 // with one home — src/chain-transitions.ts — and this suite holds every
-// other src file to a per-file budget of direct field writes. The table
-// below is seeded with the counts of the day the ratchet landed; a unit that
-// converts its callers to the named transitions lowers its files' entries in
-// the same change, so the numbers only ever go down, to zero once every
-// writer goes through the transitions.
+// other src file to zero direct field writes. The per-file budget table of
+// the conversion stages is gone: any write outside the transitions fails,
+// ever. A new chain state change belongs in a named transition there (with
+// its field writes and rationale as documentation), never at a call site.
 //
 // What counts as a write: an assignment (=, compound assignment, ++/--) to,
 // or a `delete` of, a SessionChain field through a binding annotated
@@ -12,33 +11,17 @@
 // session-driving files). Object-literal construction of a chain is not a
 // write, and neither are reads. Detection is name-based per file: a binding
 // of the same name typed as something else (a fork-base record, say) can in
-// principle trip it — such a failure names its site and is settled by a
-// conscious table edit, never by weakening the scanner. Writes through
-// structurally-typed stand-ins of the chain (failback.ts's consumeFailback
-// parameter) are outside this scan by the same boundary; they disappear when
-// their clear becomes one of the named transitions.
+// principle escape it — such a gap is settled by moving the writes into a
+// transition, never by weakening the scanner. A same-named binding of
+// another type tripping the scan names its site and is settled by a
+// conscious rename, never by weakening the scanner either — a false
+// positive is loud, a silent false negative is the real hazard.
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 
 const SRC = resolve(import.meta.dir, "..", "src")
 const TRANSITIONS = "chain-transitions.ts"
-
-// ---------------------------------------------------------------------------
-// The budget table — seeded with the counts of the landing day; edits only
-// lower a number, and a file's entry stays (at 0) once it is done.
-// ---------------------------------------------------------------------------
-
-const CHAIN_WRITE_BUDGET: Record<string, number> = {
-  "attempt.ts": 0,
-  "artifact.ts": 5,
-  "exec-session.ts": 13,
-  "execute.ts": 25,
-  "runner.ts": 18,
-  "session-api.ts": 16,
-  "session.ts": 0,
-  "wrapup.ts": 1,
-}
 
 // ---------------------------------------------------------------------------
 // Scan
@@ -264,37 +247,14 @@ function scan(fields: string[]): Write[] {
 describe("chain-write ratchet", () => {
   const fields = chainFields()
   const writes = scan(fields)
-  const actual = new Map<string, { count: number; sites: string[] }>()
-  for (const w of writes) {
-    const entry = actual.get(w.file) ?? { count: 0, sites: [] }
-    entry.count++
-    entry.sites.push(`${w.line}: ${w.text}`)
-    actual.set(w.file, entry)
-  }
 
-  test("every file's direct chain writes equal its budget (the table only goes down)", () => {
-    const problems: string[] = []
-    for (const file of [...new Set([...Object.keys(CHAIN_WRITE_BUDGET), ...actual.keys()])].sort()) {
-      const budget = CHAIN_WRITE_BUDGET[file] ?? 0
-      const got = actual.get(file)?.count ?? 0
-      if (got === budget) continue
-      const sites = (actual.get(file)?.sites ?? []).join("\n    ")
-      if (got > budget) problems.push(`src/${file}: ${got} chain writes > budget ${budget} — convert the sites to the named transitions of src/chain-transitions.ts (or raise nothing: a new write belongs there)\n    ${sites}`)
-      else problems.push(`src/${file}: ${got} chain writes < budget ${budget} — lower the table entry to ${got} in this change (the ratchet only goes down)`)
-    }
-    expect(problems.join("\n")).toBe("")
-  })
-
-  test("the budget table names files that exist", () => {
-    const problems: string[] = []
-    for (const file of Object.keys(CHAIN_WRITE_BUDGET)) {
-      try {
-        statSync(join(SRC, file))
-      } catch {
-        problems.push(`src/${file} is listed in the budget table but does not exist — remove the stale entry`)
-      }
-    }
-    expect(problems.join("\n")).toBe("")
+  test("no chain writes outside the transitions — the flat rule", () => {
+    // One home for the chain's mutations: src/chain-transitions.ts. Any
+    // direct field write anywhere else names its site below and belongs in
+    // a named transition instead.
+    const sites = writes.map((w) => `src/${w.file}:${w.line}: ${w.text}`)
+    expect(sites.join("\n")).toBe("")
+    expect(writes.length).toBe(0)
   })
 
   test("the field reader still sees the SessionChain shape", () => {

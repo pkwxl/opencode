@@ -10,15 +10,19 @@
 // This file starts with the two pure computations that were copied four times
 // each (plans/0061 §1 F5): the fork-source list and the no-registry model
 // priority chain. The mutating transitions land here together with the
-// conversion of their callers; runSession's paths (the retry ladder, the model
+// conversion of their callers: runSession's paths (the retry ladder, the model
 // failover, the provider-key rotation, the recovery loop and the blank
-// fallbacks) write through the six below, and the dispatch-side transitions
-// (the executor is attempt, over the pure dispatch plan of
-// src/engine/dispatch.ts) close the set.
+// fallbacks), the dispatch side (the executor is attempt, over the pure
+// dispatch plan of src/engine/dispatch.ts), and the pipeline side (the stage,
+// subject and baseline bookkeeping of runner/execute/wrapup, the
+// interruption-recovery takeover and the pre-created fork seedings) — with
+// those converted, every chain mutation in the driver lives here.
 
 import { resolveModel, roleOf, type FailedSession, type SessionChain, type Watch } from "./chain"
 import { failbackOverride, stickyModel } from "./failback"
+import { type UnitBaseline } from "./git"
 import type { PhaseKey } from "./phases/registry"
+import { type Phase } from "./resume"
 import type { Switches } from "./switches"
 
 // One candidate fork source of a retry, failover, key rotation or recovery:
@@ -187,14 +191,19 @@ export function bindAgent(chain: SessionChain, agent: string): void {
   chain.agent = agent
 }
 
-// Clears the chain's route — the empty route of setRoute. The session-scope
-// failback boundary (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session): every
-// brand-new session start fails back to the preferred model, so the new
-// session re-selects from the list (the caller clears the down marks at the
-// same boundary; a resumed takeover and a consumed fork never pass here —
-// the migrated session forked out by a failover enters via pending, and
-// clearing at its dispatch would immediately undo the failover into
-// oscillation).
+// Clears the chain's route — the empty route of setRoute: the next prompt
+// re-selects instead of continuing the chain's entry. Every boundary with
+// that meaning writes through here: the session-scope failback boundary
+// (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=session — every brand-new session
+// start fails back to the preferred model; the caller clears the down marks
+// at the same boundary), the coarser scopes' subtask-boundary failback and
+// the /failback order consumed beside it, a new subtask's first prompt (its
+// own decision — the down marks survive subtask boundaries under the task
+// scope, so a spent quota still skips its model), and the strict-resume
+// rollback's cold redo (the redo is a new prompt; the chain's entry does not
+// carry over). A resumed takeover and a consumed fork never pass here — the
+// migrated session forked out by a failover enters via pending, and clearing
+// at its dispatch would immediately undo the failover into oscillation.
 export function resetRoute(chain: SessionChain): void {
   setRoute(chain, {})
 }
@@ -258,6 +267,110 @@ export function restoreRetryable(chain: SessionChain, prior: ChainPrior, failed:
 export function afterTestHandover(chain: SessionChain): void {
   chain.id = undefined
   chain.failed = undefined
+}
+
+// ---------------------------------------------------------------------------
+// The pipeline-side transitions: the stage, subject and baseline bookkeeping
+// of the task pipeline (runner, execute, wrapup), the interruption-recovery
+// takeover, and the pre-created fork seedings of the session APIs.
+// ---------------------------------------------------------------------------
+
+// Names the chain's commit title — the short-label scheme's current unit
+// (`T-NNN <label> <title>`): every pipeline stage sets it when it starts
+// (the whole-task execution, the merged decompose, a subtask, the wrap-up),
+// and the terminal-state rename keeps it in step with the session list's
+// titles, so the sessions stay aligned with git history and task progress.
+export function nameSubject(chain: SessionChain, subject: string): void {
+  chain.subject = subject
+}
+
+// The pipeline boundary's phase bookkeeping: the chain now runs this phase —
+// adopted from a recalled progress record at the task entry (undefined = the
+// record names none; the chain runs none), advanced at every stage
+// persistence, tagged with the owning subtask's index, or rewound to wrapup
+// when a FAIL verdict blocks the run. The routing role is derived from it
+// (roleOf) and the execution chain's sessions write their progress records
+// with it.
+export function enterPhase(chain: SessionChain, phase: Phase | undefined): void {
+  chain.phase = phase
+}
+
+// Sets the chain's rollback anchor — the current execution unit's SHA
+// baseline (strict recovery): taken at the task entry and refreshed at the
+// stage boundaries and the subtask gate, recorded beside the active progress
+// record; a resumed run verifies against it and rolls back to it. The value
+// may be undefined (the commit gates are off); the write is unconditional,
+// exactly as the boundary sites were.
+export function anchorBaseline(chain: SessionChain, baseline: UnitBaseline | undefined): void {
+  chain.baseline = baseline
+}
+
+// Interruption recovery's takeover: the interrupted session becomes the
+// chain's session again (attempt's resumed criterion then sends the first
+// prompt into it regardless of the reuse switch), the usage counters seed
+// from the session's measured tail so the chain's later decisions work off
+// real figures, `at` stamps the moment the figures were taken (the chain's
+// `at` rides the snapshot a retryable error restores to), and the one-shot
+// note explains the continuation to the session. The continuation's agent
+// and route are the caller's composition: bindAgent for the agent the
+// record names, setRoute for the recorded model the first dispatch keeps
+// while it is still usable.
+export function resumeSession(chain: SessionChain, session: string, usage: { pct: number; used: number }, at: number, note: string): void {
+  chain.id = session
+  chain.pct = usage.pct
+  chain.used = usage.used
+  chain.at = at
+  chain.note = note
+}
+
+// Attaches a one-shot note for the next dispatch's first prompt to carry out
+// (the set side of consumeNote below). Interruption recovery's fresh-session
+// branch uses it: no session is taken over, but the first prompt still
+// carries the resume note. Every fork-shaped note (a retry, a failover, a
+// blank fallback, an agent move) rides its own transition instead.
+export function attachNote(chain: SessionChain, note: string): void {
+  chain.note = note
+}
+
+// Resets the chain to its fresh-session shape: the session slots clear (the
+// chain's session and any pre-created fork copy) and the usage counters
+// restart. The fork guard's refusal (a base too full or unreadable) takes
+// this path, and the strict-resume rollback's cold redo composes it with
+// consumeNote and resetRoute.
+export function coldStart(chain: SessionChain): void {
+  chain.id = undefined
+  chain.pending = undefined
+  chain.pct = 100
+  chain.used = 0
+  chain.at = 0
+}
+
+// The seed of a pre-created fork: the copy rides `pending` for the next
+// dispatch to consume, and the chain's session slot clears for it (a
+// non-empty id would hit the dispatch's resumed-reuse branch and ignore
+// pending). With a seed record the usage counters restart from the forked
+// prefix's figure, the agent binding follows the fork (a session never
+// crosses agents) and the fork-base pointers record the provenance a later
+// re-seed forks from; `forked` undefined (the fork call failed) still seeds
+// the pointers and the counters at zero, the shape the caller's cold-start
+// fallback continues from. Without a seed (a fork of the chain's own
+// just-ended session) the counters stay as they are: the ended session's
+// figures are the copy's figures, and the dispatch refreshes them with
+// measured values once the round ends.
+export type ForkSeed = { used: number; agent?: string; base?: { id: string; lead?: boolean } }
+export function seedFork(chain: SessionChain, forked: string | undefined, seed?: ForkSeed): void {
+  chain.id = undefined
+  chain.pending = forked
+  if (seed) {
+    if (seed.agent !== undefined) chain.agent = seed.agent
+    chain.pct = 100
+    chain.used = seed.used
+    chain.at = 0
+    if (seed.base) {
+      chain.forkBase = seed.base.id
+      chain.forkLead = seed.base.lead || undefined
+    }
+  }
 }
 
 // Records the model the terminal was last told a session runs on (the ◈

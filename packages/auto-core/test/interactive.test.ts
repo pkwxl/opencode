@@ -83,10 +83,9 @@ describe("interactive", () => {
     expect(ctx.sent).toEqual([])
     expect(failbackRequested()).toBe(true)
     // No-argument form: consuming it only resets the failover state and
-    // produces no model-order override.
-    const chain: { model?: string } = { model: "prov/b" }
-    expect(consumeFailback(chain)).toBe(true)
-    expect(chain.model).toBeUndefined()
+    // produces no model-order override (the chain's route clears at the
+    // boundary that holds it, not here).
+    expect(consumeFailback()).toBe(true)
     expect(failbackOverride()).toBeUndefined()
   })
 

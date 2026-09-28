@@ -1,5 +1,6 @@
 import { basename, join } from "node:path"
 import { type ForkBaseInfo, type SessionChain, type SessionResult } from "./chain"
+import { anchorBaseline, attachNote, bindAgent, enterPhase, resetRoute, resumeSession, setRoute } from "./chain-transitions"
 import { ensureDecomposed, executeWhole, leadForkBase, runSubtask } from "./execute"
 import { resumeModelEligible, resumeModelNow, rollbackUnitState, strictResumeActive, deadSessionWhy } from "./unit-commit"
 import { taskDoc } from "./docpaths"
@@ -115,7 +116,7 @@ export async function runTask(
   // applies the same way) — the subtask/pipeline-stage boundaries refresh it
   // to a nearer unit baseline via runSubtask/persistStage.
   const strict = strictResumeActive(opts, switches)
-  if (strict) chain.baseline = await unitBaseline(dir)
+  if (strict) anchorBaseline(chain, await unitBaseline(dir))
   // Interruption recovery (progress record): a session interrupted mid-way
   // and unsummarized (active) that still exists on the server → reuse the
   // original session to continue (isomorphic to `opencode -r`, context not
@@ -134,7 +135,7 @@ export async function runTask(
   let rolledBack = false
   const recalled = await recallProgress(dir, task.id)
   if (recalled) {
-    chain.phase = recalled.phase
+    enterPhase(chain, recalled.phase)
     // Unit attribution gate (unitReruns): the interrupted session belongs to
     // one concrete execution unit (a task-level pipeline stage / subtask #N /
     // fix checklist item #N), and its session may be reused only when this
@@ -273,13 +274,7 @@ export async function runTask(
     }
     if (!rolledBack) {
       if (dead === undefined && alive && usage && !errorStub) {
-        chain.id = recalled.session!
-        chain.pct = usage.pct
-        chain.used = usage.used
-        // The reuse decision was made here; the chain's later 5-minute reuse
-        // rule counts from this moment.
-        chain.at = Date.now()
-        chain.note = resumeNote(recalled.phase, true, strict)
+        resumeSession(chain, recalled.session!, usage, Date.now(), resumeNote(recalled.phase, true, strict))
         // Session-agent binding and the continuation's model (plans/0055 §8.2,
         // §6.2): the resumed session stays bound to the run's agent and — a
         // registry record naming its model — the first dispatch continues on
@@ -289,11 +284,8 @@ export async function runTask(
         if (opts.routing) {
           // The resumed session stays on the agent its record names (§8.3:
           // absent = the run's start profile, the pre-binding shape).
-          chain.agent = recalled.agent ?? opts.routing.runAgent
-          if (recalled.model !== undefined) {
-            chain.modelEntry = recalled.model
-            chain.model = opts.routing.registry.models.get(recalled.model)?.model
-          }
+          bindAgent(chain, recalled.agent ?? opts.routing.runAgent)
+          if (recalled.model !== undefined) setRoute(chain, { entry: recalled.model, model: opts.routing.registry.models.get(recalled.model)?.model })
         }
         log(
           `↻ ${task.id} resume after interruption: ${phaseText(recalled.phase)}, reusing the interrupted session ${recalled.session} to continue (context intact, ` +
@@ -307,7 +299,7 @@ export async function runTask(
         if (opts.newSession && recalled.active) {
           await saveProgress(dir, { ...recalled, active: false })
         }
-        chain.note = resumeNote(recalled.phase, false, strict)
+        attachNote(chain, resumeNote(recalled.phase, false, strict))
         const why = !rerun
           ? "the interrupted session's execution unit will not re-run this time (already done or no longer executing); its resume point is obsolete, starting a new session to continue"
           : handedOff
@@ -336,8 +328,8 @@ export async function runTask(
   // baseline..HEAD holding only driver commits, a nearer baseline verifies the
   // same as a farther one, and the rollback radius shrinks).
   const persistStage = async (phase: Phase) => {
-    chain.phase = phase
-    if (strict) chain.baseline = await unitBaseline(dir)
+    enterPhase(chain, phase)
+    if (strict) anchorBaseline(chain, await unitBaseline(dir))
     if (opts.dir && task.id.startsWith("T-")) {
       await saveProgress(opts.dir, {
         task: task.id,
@@ -535,7 +527,7 @@ export async function runTask(
         // successfully; on resume, the unit attribution gate (unitReruns)
         // reuses its session only when that subtask will re-run.
         const loopPhase: Phase = { kind: "subtasks" }
-        chain.phase = { ...loopPhase, index: index + 1 }
+        enterPhase(chain, { ...loopPhase, index: index + 1 })
         // Resumed-run determination (the active record belongs exactly to
         // this checklist item): the worktree's dirty areas at the
         // interruption scene are this unit's own progress, and runSubtask's
@@ -594,13 +586,13 @@ export async function runTask(
         // same point (and may redefine the model order wholesale). Registry routing
         // (plans/0055 §6.4): the same boundary clears the down marks the scope
         // covers, and the chain's selected entry with the raw candidate.
-        if (failbackApplies(switches.modelFailbackScope, "subtask")) {
-          chain.model = undefined
-          chain.modelEntry = undefined
-          chain.modelStep = 0
-        }
+        if (failbackApplies(switches.modelFailbackScope, "subtask")) resetRoute(chain)
         clearDownMarks("subtask", switches.modelFailbackScope)
-        consumeFailback(chain)
+        // A consumed /failback order clears the route beside it (this
+        // boundary holds the chain; the task/phase boundaries destroy it
+        // with runTask before reaching here, so they pass no chain and clear
+        // nothing).
+        if (consumeFailback()) resetRoute(chain)
       }
       // Wrap-up session: skipped entirely when config.wrapup=false
       // (--no-wrapup, default true). The report.md existence + shape-check
@@ -631,7 +623,7 @@ export async function runTask(
       // books nothing (C2).
       await statsModelEvent(dir, chain.modelEntry, "fail")
       const { bin } = shellProfile()
-      chain.phase = { kind: "wrapup" }
+      enterPhase(chain, { kind: "wrapup" })
       return {
         type: "blocked",
         question:

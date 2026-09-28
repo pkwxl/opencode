@@ -13,6 +13,7 @@
 
 import { dirname, join } from "node:path"
 import type { SessionChain } from "./chain"
+import { nameSubject } from "./chain-transitions"
 import { docShapeProblems, EOF_MARK } from "./doccheck"
 import { taskDoc } from "./docpaths"
 import { parseResult, type ReportResult } from "./document/roles"
@@ -51,7 +52,7 @@ export async function runWrapup(
   const dir = opts.dir ?? plan.dir
   autobanner(`${task.id} ${task.title}: wrap-up`)
   const subject = `${task.id} wrapup ${task.title}`
-  chain.subject = subject
+  nameSubject(chain, subject)
   const resolves = await wrapupResolves(dir, task.id)
   let feedback = ""
   // When the shape re-prompt goes out through a fork of the session that just

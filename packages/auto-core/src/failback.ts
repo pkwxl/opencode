@@ -217,22 +217,23 @@ export function failbackOverride(): { wildcard: string; fallback: string[] } | u
 }
 
 // The /failback consumption point shared by the three safe boundaries
-// (right after maybeExit; the subtask boundary passes the chain to clear
-// chain.model, at the task/phase boundaries the chain is already destroyed
-// with runTask and need not be passed): a hit resets the failover state
-// (the chain's candidate + the sticky holder + down marks), and with
-// arguments it also redefines the run-time model order. Returns whether it
-// consumed.
-// The chain's selected registry entry is cleared with the raw candidate
-// (plans/0055 §6.4: the next prompt re-selects from the list).
+// (right after maybeExit): a hit resets the failover state (the sticky
+// holder + down marks), and with arguments it also redefines the run-time
+// model order. Returns whether it consumed. The chain's selected entry is
+// cleared with the raw candidate at the boundary that holds the chain
+// (plans/0055 §6.4: the next prompt re-selects from the list) — the
+// subtask boundary calls resetRoute beside this consumption; the task and
+// phase boundaries destroy the chain with runTask before reaching here, so
+// they pass nothing and clear nothing.
+// AUTO-DECISION: the chain parameter is gone (it was a structurally-typed
+// stand-in writing model/modelEntry/modelStep directly). This module cannot
+// make that clear itself: the transitions module reads the sticky holder and
+// the /failback override here for its no-registry model priority chain, so
+// an import back would be an import cycle — the clear belongs to the
+// boundary, which already imports the transitions.
 // AUTO-RESOLVE: does a mark with `until` survive `/failback`, as it survives a scope boundary? -> no, `/failback` clears every mark, an `until` included (§6.4 lists the scope boundaries and `/failback` separately, and says `until` stands in for the scope boundary; the operator's explicit command retries the primary now, so a quota reset time must not override it)
-export function consumeFailback(chain?: { model?: string; modelEntry?: string; modelStep?: number }): boolean {
+export function consumeFailback(): boolean {
   if (pending === undefined) return false
-  if (chain) {
-    chain.model = undefined
-    chain.modelEntry = undefined
-    chain.modelStep = 0
-  }
   sticky = undefined
   downModels.clear()
   downKeys.clear()

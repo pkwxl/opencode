@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import type { SessionChain } from "../src/chain"
+import { resetRoute } from "../src/chain-transitions"
 import {
   clearDownMarks,
   consumeFailback,
@@ -49,20 +51,24 @@ describe("failback (the module state for failover, failback and /failback)", () 
     expect(stickyModel()).toBeUndefined()
   })
 
-  test("when not requested, consumeFailback returns false and the chain state is untouched", () => {
-    const chain: { model?: string } = { model: "prov/b" }
-    expect(consumeFailback(chain)).toBe(false)
-    expect(chain.model).toBe("prov/b")
+  test("when not requested, consumeFailback returns false and no override is set", () => {
+    expect(consumeFailback()).toBe(false)
     expect(failbackOverride()).toBeUndefined()
   })
 
-  test("/failback without arguments: on consumption the chain's failover candidate and sticky are cleared, no override set", () => {
+  test("/failback without arguments: on consumption the failover state clears and the boundary resets the chain's route beside it", () => {
     setSticky("prov/b")
     requestFailback()
     expect(failbackRequested()).toBe(true)
-    const chain: { model?: string } = { model: "prov/b" }
-    expect(consumeFailback(chain)).toBe(true)
+    expect(consumeFailback()).toBe(true)
+    // The boundary that holds the chain (the subtask boundary) clears the
+    // route beside the consumption; this module no longer writes chain
+    // fields itself.
+    const chain: SessionChain = { pct: 100, used: 0, at: 0, model: "prov/b", modelEntry: "prov/b", modelStep: 2 }
+    resetRoute(chain)
     expect(chain.model).toBeUndefined()
+    expect(chain.modelEntry).toBeUndefined()
+    expect(chain.modelStep).toBe(0)
     expect(stickyModel()).toBeUndefined()
     expect(failbackOverride()).toBeUndefined()
     expect(failbackRequested()).toBe(false)

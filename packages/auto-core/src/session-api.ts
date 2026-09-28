@@ -12,6 +12,7 @@ import { createInterface } from "node:readline/promises"
 import { join } from "node:path"
 import type { AgentClient, AgentPart } from "./agent/types"
 import type { ForkBaseInfo, SessionChain } from "./chain"
+import { coldStart, nameSubject, seedFork } from "./chain-transitions"
 import type { ClientSource } from "./opts"
 import { commitTitle } from "./git"
 import type { Interactive } from "./interactive"
@@ -117,11 +118,7 @@ export async function seedForkSession(
         ? `↻ base usage unknown; not forking (cold start)`
         : `↻ base usage ${formatTokens(base.used)} reached the ${formatTokens(cap / 2)} cap; not forking (cold start)`,
     )
-    chain.id = undefined
-    chain.pending = undefined
-    chain.pct = 100
-    chain.used = 0
-    chain.at = 0
+    coldStart(chain)
     return false
   }
   // The base session is agent-local (plans/0055 §8.2): the fork runs on the
@@ -139,17 +136,13 @@ export async function seedForkSession(
   // consistency with the latest contract is guaranteed here).
   await opts.server?.syncContext(agent)
   const forked = await forkSession(baseClient, base.id, subject)
-  chain.id = undefined
-  chain.pending = forked
-  chain.forkBase = base.id
-  chain.forkLead = base.lead || undefined
-  chain.pct = 100
   // forkBaseAllowed passed, so the figure is known.
   const used = base.used ?? 0
-  chain.used = forked ? used : 0
-  chain.at = 0
+  // The base pointers seed even when the fork call failed (forked undefined,
+  // the counters at zero): the caller continues from the cold-start shape,
+  // and the agent binding follows only a copy that exists.
+  seedFork(chain, forked, { used: forked ? used : 0, agent: forked ? agent : undefined, base: { id: base.id, lead: base.lead } })
   if (forked) {
-    if (agent !== undefined) chain.agent = agent
     log(`⑂ forked a new session from base ${base.id}${agent !== undefined ? ` on agent ${agent}` : ""} (prefix ${formatTokens(used)} tokens)`)
   }
   return forked !== undefined
@@ -176,11 +169,11 @@ export async function forkEndedSession(client: ClientSource, chain: SessionChain
   if (chain.id === undefined || !(await sessionAlive(sessionClient, chain.id))) return false
   const forked = await forkSession(sessionClient, chain.id, subject)
   if (!forked) return false
-  // Same shape as seedForkSession: clear id so attempt consumes pending (the
-  // reuse decision requires no session on the chain, and a non-empty note +
-  // id would hit the resumed reuse branch and ignore pending).
-  chain.id = undefined
-  chain.pending = forked
+  // Same shape as seedForkSession: the chain's session slot clears so
+  // attempt consumes the pending copy (the reuse decision requires no
+  // session on the chain, and a non-empty note + id would hit the resumed
+  // reuse branch and ignore pending); no seed — the counters stay.
+  seedFork(chain, forked)
   return true
 }
 
@@ -255,7 +248,7 @@ export function zeroUsage(): Usage {
 // title prefix being the task progress; a rename failure only logs a detail
 // line and does not affect the flow.
 export async function renameSession(client: AgentClient, chain: SessionChain, subject: string): Promise<void> {
-  chain.subject = subject
+  nameSubject(chain, subject)
   if (!chain.id) return
   const renamed = await client.rename(chain.id, commitTitle(subject))
   if (!renamed.ok) vlog(`session rename failed: ${JSON.stringify(renamed.error)}`)
