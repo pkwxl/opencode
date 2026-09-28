@@ -141,7 +141,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Resume gate | Unit-ownership gate, resume/interruption wording | `src/resume-gate.ts` |
 | Handover recovery | `.auto/handover.json` breakpoints of a test handover | `src/handover.ts` (0023 §I–§N) |
 | Numbering | `--auto-number`, `.auto/next-task` | `src/numbering.ts` (0001) |
-| Stats | Cross-interruption cumulative time and tokens, `.auto/stats.json`; under a registry also per-model and per-tier usage, the `classify` bucket and per-model protocol-drift counters; the time slept for quota windows per model (`quotaWaits`) | `src/stats.ts` (0019, 0055 §7.1, 0057 §11 item 7) |
+| Stats | Cross-interruption cumulative time and tokens, `.auto/stats.json`; under a registry also per-model and per-tier usage, the `classify` bucket and per-model protocol-drift counters; the time slept for quota windows per model (`quotaWaits`); knowledge-digest counters (`digests`: per-planning-session digest sizes, cap trips, knowledge-phase use) with the 25% digest cap on the planning prompt's prevRound slot (`templates/prompts/digest-index.md` is the index form) | `src/stats.ts` (0019, 0055 §7.1, 0057 §11 item 7, 0061 R3) |
 | Learned windows | `.auto/windows.json`: a spent quota window's reset per account, kept across runs and read only to time the scheduled wait; never a down mark | `src/quota-windows.ts` (0057 §8) |
 | Round close | Whole-tree P1 scan, build check, close listing before `plan` opens the next round | `src/round-close.ts` (0049) |
 

@@ -1,10 +1,23 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
-import { existingDistilledDocs, existingKnowledge, existingPriorKnowledge, extractKnowledge, extractPriorKnowledge, knowledgeFile, priorKnowledgeComplete, priorKnowledgeDigest, priorKnowledgeFile } from "../src/knowledge"
+import {
+  digestIndexEntries,
+  existingDistilledDocs,
+  existingKnowledge,
+  existingPriorKnowledge,
+  extractKnowledge,
+  extractPriorKnowledge,
+  knowledgeFile,
+  priorKnowledgeComplete,
+  priorKnowledgeDigest,
+  priorKnowledgeFile,
+  priorKnowledgeParts,
+  renderDigestIndex,
+} from "../src/knowledge"
 import { syncPhaseIndex } from "../src/phases"
 
 // A round established with phases "amk": the knowledge phase is P03.
@@ -196,10 +209,85 @@ describe("priorKnowledgeComplete (the finalized-marker check)", () => {
     expect(priorKnowledgeComplete("DONE")).toBe(true)
     expect(priorKnowledgeComplete("# Knowledge base\n\nBody\n\nDONE")).toBe(true)
     expect(priorKnowledgeComplete("Body\nDONE\n\n  \n")).toBe(true)
-    expect(priorKnowledgeComplete("Body\n  DONE  \n")).toBe(true)
+    expect(priorKnowledgeComplete("Body\n  DONE  ")).toBe(true)
     expect(priorKnowledgeComplete("Body, done.")).toBe(false)
     expect(priorKnowledgeComplete("Body\nDONE.")).toBe(false)
     expect(priorKnowledgeComplete("DONE\nanother paragraph of body")).toBe(false)
+  })
+})
+
+// The digest cap's index form (plans/0061 R3/A7): the per-file parts feed
+// both the digest and the index, the entries mirror the full digest's
+// selection, and the renderer shapes the prevRound-slot text.
+describe("digestIndexEntries / renderDigestIndex (the capped digest's index form)", () => {
+  function tempDir() {
+    return mkdtempSync(join(tmpdir(), "auto-knowledge-"))
+  }
+
+  test("priorKnowledgeParts: past rounds' non-empty prior-kb.md as {file, text}, sorted by path", async () => {
+    const dir = tempDir()
+    try {
+      expect(await priorKnowledgeParts(dir)).toEqual([])
+      mkdirSync(join(dir, "docs/R-02"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-02/prior-kb.md"), "round 2 prior knowledge")
+      mkdirSync(join(dir, "docs/R-01"), { recursive: true })
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge")
+      writeFileSync(join(dir, "docs/R-01/temp-kb.md"), "an unfinalized intermediate")
+      expect(await priorKnowledgeParts(dir)).toEqual([
+        { file: join("docs", "R-01", "prior-kb.md"), text: "round 1 prior knowledge" },
+        { file: join("docs", "R-02", "prior-kb.md"), text: "round 2 prior knowledge" },
+      ])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("digestIndexEntries: the prior rounds' prior knowledge plus the previous round's final handover and knowledge documents; empty files never count", async () => {
+    const dir = tempDir()
+    try {
+      // No docs at all → an empty index.
+      expect(await digestIndexEntries(dir)).toEqual([])
+      // Round 1 complete (its implement phase done with a handover, a
+      // knowledge phase with a document, prior knowledge), round 2 under way.
+      await syncPhaseIndex(dir, 1, "mk")
+      writeFileSync(join(dir, "docs/R-01/P01-implement/handover.md"), "final handover")
+      writeFileSync(join(dir, "docs/R-01/P02-knowledge/kb.md"), "migration knowledge")
+      writeFileSync(join(dir, "docs/R-01/prior-kb.md"), "round 1 prior knowledge")
+      renameSync(join(dir, "docs/R-01/P01-implement/todo.md"), join(dir, "docs/R-01/P01-implement/done.md"))
+      await syncPhaseIndex(dir, 2, "m")
+      writeFileSync(join(dir, "docs/R-02/prior-kb.md"), "  \n") // this round's, empty — never in the digest anyway
+      const entries = await digestIndexEntries(dir)
+      // The prior-knowledge parts come first (the digest joins them first),
+      // then the previous round's handover and knowledge documents.
+      expect(entries.map((entry) => entry.file)).toEqual([
+        join("docs", "R-01", "prior-kb.md"),
+        join("docs", "R-01", "P01-implement", "handover.md"),
+        join("docs", "R-01", "P02-knowledge", "kb.md"),
+      ])
+      // The sizes are the usage source's token estimate (ASCII at 3 chars per
+      // token).
+      const handover = entries.find((entry) => entry.file === join("docs", "R-01", "P01-implement", "handover.md"))!
+      expect(handover.tokens).toBe(Math.ceil("final handover".length / 3))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("renderDigestIndex: one line per entry (path + size) and the open-what-you-need line, figures formatted", () => {
+    const text = renderDigestIndex(
+      [
+        { file: join("docs", "R-01", "P01-implement", "handover.md"), tokens: 21_400 },
+        { file: join("docs", "R-02", "prior-kb.md"), tokens: 300 },
+      ],
+      { total: 21_700, cap: 16_000 },
+    )
+    expect(text).toContain("about 21.7k tokens")
+    expect(text).toContain("digest budget of 16.0k tokens")
+    expect(text).toContain(`- ${join("docs", "R-01", "P01-implement", "handover.md")} (~21.4k tokens)`)
+    expect(text).toContain(`- ${join("docs", "R-02", "prior-kb.md")} (~300 tokens)`)
+    expect(text).toContain("Open and read the documents")
+    // No template braces leak into the rendered form.
+    expect(text).not.toMatch(/\{\{|\}\}/)
   })
 })
 
@@ -268,6 +356,13 @@ describe("extractKnowledge completion condition (the ③ backfill / ④ dirty ex
   }
   // This group covers only the branches that start no session (skipped/dirty); the client is never touched.
   const client = opencodeAgent({} as OpencodeClient)
+  // The knowledge-phase booking (plans/0061 R3/A7) writes .auto/stats.json,
+  // so these repositories gitignore the driver's state directory like init
+  // does; the clean-tree assertions below would otherwise see it as dirty.
+  async function initRepo(dir: string) {
+    await git(dir, "init", "-q")
+    await Bun.write(join(dir, ".gitignore"), ".auto/\n")
+  }
   // The phase directory established at round start is committed first (the shell commits
   // once right after the round directory is created, providing a clean baseline).
   async function committedKnowledgePhase(dir: string) {
@@ -280,7 +375,7 @@ describe("extractKnowledge completion condition (the ③ backfill / ④ dirty ex
   test("③ this round's document already produced but not committed → backfilled, then skipped (the completion condition is the commit)", async () => {
     const dir = tempDir()
     try {
-      await git(dir, "init", "-q")
+      await initRepo(dir)
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       const phase = await committedKnowledgePhase(dir)
       writeFileSync(join(dir, knowledgeFile(phase)), "round 1 migration knowledge")
@@ -288,6 +383,8 @@ describe("extractKnowledge completion condition (the ③ backfill / ④ dirty ex
       expect(result).toEqual({ type: "skipped", file: "docs/R-01/P03-knowledge/kb.md" })
       expect((await git(dir, "status", "--porcelain")).trim()).toBe("")
       expect(await git(dir, "log", "-1", "--pretty=%B")).toContain("Auto-Stage: knowledge")
+      // A completed distillation books knowledge-phase use (plans/0061 R3/A7).
+      expect(JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()).roundB.digests).toEqual({ knowledgePhases: 1 })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -296,7 +393,7 @@ describe("extractKnowledge completion condition (the ③ backfill / ④ dirty ex
   test("④ document missing but the worktree has uncommitted changes → dirty (the abandoned scene goes to a human, no cleanup)", async () => {
     const dir = tempDir()
     try {
-      await git(dir, "init", "-q")
+      await initRepo(dir)
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       const phase = await committedKnowledgePhase(dir)
       writeFileSync(join(dir, "src.ts"), "an abandoned artifact")
@@ -304,6 +401,8 @@ describe("extractKnowledge completion condition (the ③ backfill / ④ dirty ex
       expect(result.type).toBe("dirty")
       expect((result as { files: string[] }).files).toContain("src.ts")
       expect((await git(dir, "rev-list", "--count", "HEAD")).trim()).toBe("2")
+      // No completion, no knowledge-phase booking.
+      expect(await Bun.file(join(dir, ".auto", "stats.json")).exists()).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -312,7 +411,7 @@ describe("extractKnowledge completion condition (the ③ backfill / ④ dirty ex
   test("gate off (--commit false) keeps the old semantics: an existing artifact is skipped, nothing checked or committed", async () => {
     const dir = tempDir()
     try {
-      await git(dir, "init", "-q")
+      await initRepo(dir)
       await git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
       const phase = await committedKnowledgePhase(dir)
       writeFileSync(join(dir, knowledgeFile(phase)), "round 1 migration knowledge")

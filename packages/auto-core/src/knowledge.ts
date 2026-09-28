@@ -4,9 +4,12 @@ import { priorKnowledgeDoc, roundDirName, tempPriorKnowledgeDoc } from "./docpat
 import { PRIOR_KB_DONE } from "./document/roles"
 import { parsePhaseDir } from "./document/unit"
 import { changedFiles, commitPending, commitTree } from "./git"
-import { log } from "./log"
-import { currentRound, phaseArtifacts, roundKnowledgeDocs, type PhaseUnit } from "./phases"
+import { formatTokens, log } from "./log"
+import { currentRound, phaseHandoverDoc, phaseArtifacts, readPhases, roundKnowledgeDocs, roundRoot, type PhaseUnit } from "./phases"
 import { renderKnowledge, renderPriorKnowledge } from "./prompt"
+import { renderTemplate } from "./template"
+import { statsKnowledgePhase } from "./stats"
+import { estimateTokens } from "./usage"
 import type { ClientSource, Opts, UnitStop } from "./opts"
 import { requireArtifact } from "./artifact"
 import { afterSession } from "./unit-commit"
@@ -72,6 +75,7 @@ export async function extractKnowledge(
       log(pending.ok ? `✓ knowledge document was produced but not committed; committed now: ${existing}` : `⚠ knowledge document make-up commit failed: ${pending.failures.map((f) => `${f.rel}: ${f.error}`).join("; ")}`)
       if (!pending.ok) return { type: "dirty", files: [existing] }
     }
+    await statsKnowledgePhase(dir)
     return { type: "skipped", file: existing }
   }
   // ④ Half-finished-site detection: artifact missing + worktree dirty → hand
@@ -102,7 +106,11 @@ export async function extractKnowledge(
       },
     },
   )
-  if (produced === true) return { type: "ok", file }
+  if (produced === true) {
+    // Knowledge-phase use (plans/0061 R3/A7): the distillation completed.
+    await statsKnowledgePhase(dir)
+    return { type: "ok", file }
+  }
   if (produced.type === "dirty") return { type: "dirty", files: produced.files }
   // If the worktree is already dirty after a blocked session / no output
   // (typically: commit failure), likewise halt as dirty.
@@ -272,20 +280,74 @@ export function priorKnowledgeComplete(text: string): boolean {
   return trimmed.split("\n").pop()!.trim() === PRIOR_KB_DONE
 }
 
+// Per-file prior-knowledge parts (the digest's sources): past rounds'
+// non-empty docs/R-*/prior-kb.md, sorted by path. The digest joins them into
+// one text; the capped index form lists them per file.
+export async function priorKnowledgeParts(dir: string): Promise<Array<{ file: string; text: string }>> {
+  const files: string[] = []
+  for (const entry of await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])) {
+    if (entry.isDirectory() && /^R-\d+$/.test(entry.name)) files.push(join("docs", entry.name, "prior-kb.md"))
+  }
+  const parts: Array<{ file: string; text: string }> = []
+  for (const file of files.sort()) {
+    const text = (await Bun.file(join(dir, file)).text().catch(() => "")).trim()
+    if (text) parts.push({ file, text })
+  }
+  return parts
+}
+
 // Prior-knowledge digest (injected into this round's first phase planning
 // session and the parameter-inference session): past rounds' prior knowledge
 // concatenated in full, sorted by path — the non-empty documents among past
 // rounds' docs/R-*/prior-kb.md (cross-round cumulative injection). No artifact
 // → undefined.
 export async function priorKnowledgeDigest(dir: string): Promise<string | undefined> {
-  const files: string[] = []
-  for (const entry of await readdir(join(dir, "docs"), { withFileTypes: true }).catch(() => [])) {
-    if (entry.isDirectory() && /^R-\d+$/.test(entry.name)) files.push(join("docs", entry.name, "prior-kb.md"))
+  const parts = await priorKnowledgeParts(dir)
+  return parts.length ? parts.map((part) => `### ${part.file}\n\n${part.text}`).join("\n\n") : undefined
+}
+
+// —— The digest cap's index form (plans/0061 R3/A7) ——
+
+// One document of the index form: its repository-relative path and estimated
+// token size (the same token estimate the usage source uses).
+export type DigestIndexEntry = {
+  file: string
+  tokens: number
+}
+
+// The documents the injected digest would carry, one entry each: the
+// prior-knowledge documents (priorKnowledgeParts — every round's non-empty
+// prior-kb.md, the freshly distilled one included), the previous round's
+// final handover (the last done phase's handover.md) and its knowledge
+// documents (the knowledge phase directories' kb.md). Assembled here from
+// the phases module's exports because the full digest's selection rules
+// live in prevRoundDigest there; this mirrors them for the index (empty
+// files never count, same as the digest).
+export async function digestIndexEntries(dir: string): Promise<DigestIndexEntry[]> {
+  const entries: DigestIndexEntry[] = []
+  for (const part of await priorKnowledgeParts(dir)) entries.push({ file: part.file, tokens: estimateTokens(part.text) })
+  const prev = (await currentRound(dir)) - 1
+  const root = prev >= 1 ? await roundRoot(dir, prev) : undefined
+  if (root) {
+    const state = await readPhases(dir, prev).catch(() => undefined)
+    const last = state?.phases.filter((unit) => state.done.has(unit.id)).at(-1)
+    const files = [...(last ? [phaseHandoverDoc(last)] : []), ...(await roundKnowledgeDocs(dir, prev))]
+    for (const file of files) {
+      const text = (await Bun.file(join(dir, file)).text().catch(() => "")).trim()
+      if (text) entries.push({ file, tokens: estimateTokens(text) })
+    }
   }
-  const parts: string[] = []
-  for (const file of files.sort()) {
-    const text = (await Bun.file(join(dir, file)).text().catch(() => "")).trim()
-    if (text) parts.push(`### ${file}\n\n${text}`)
-  }
-  return parts.length ? parts.join("\n\n") : undefined
+  return entries
+}
+
+// The capped digest's rendered index form: what fills the planning prompt's
+// prevRound slot when the joined digest exceeds the cap — the path and size
+// of each knowledge document and handover, and one line asking the session to
+// open what it needs (the template digest-index.md carries the text).
+export function renderDigestIndex(entries: readonly DigestIndexEntry[], figures: { total: number; cap: number }): string {
+  return renderTemplate("digest-index", {
+    total: formatTokens(figures.total),
+    cap: formatTokens(figures.cap),
+    index: entries.map((entry) => `- ${entry.file} (~${formatTokens(entry.tokens)} tokens)`).join("\n"),
+  })
 }

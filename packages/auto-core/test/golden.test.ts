@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { renderAgentContract } from "../src/config-fix"
+import { renderDigestIndex } from "../src/knowledge"
 import { loadIntents, packSubsection, resolveIntent } from "../src/intent/load"
 import { loadModes } from "../src/mode"
 import { planOf } from "./fixtures/units"
@@ -238,6 +239,19 @@ describe("golden render snapshots", () => {
     golden(
       "prior-knowledge",
       renderPriorKnowledge({ file: "docs/R-01/temp-kb.md", brief: "Second-pass migration intent.", mode: migrate, distilled: ["docs/R-00/prior-kb.md"] }),
+    )
+    // The capped digest's index form (plans/0061 R3/A7): what fills the
+    // phase-plan prevRound slot when the joined digest exceeds the cap.
+    golden(
+      "digest-index",
+      renderDigestIndex(
+        [
+          { file: join("docs", "R-01", "P02-implement", "handover.md"), tokens: 21_400 },
+          { file: join("docs", "R-01", "P03-knowledge", "kb.md"), tokens: 18_250 },
+          { file: join("docs", "R-02", "prior-kb.md"), tokens: 8_650 },
+        ],
+        { total: 48_300, cap: 16_000 },
+      ),
     )
   })
 

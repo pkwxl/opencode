@@ -80,7 +80,7 @@ describe("shared partial parsing", () => {
 })
 
 describe("built-in template registry", () => {
-  test("all 31 session templates plus _partials present (understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5)", () => {
+  test("all 32 session templates plus _partials present (understand merged into decompose since M1.0; phase-append see 0053 D27; step-up and classify-error see 0055 §4.5, §7.1; usage notes see 0056; split-rejected see 0059 D4; fanout see 0059 D5; digest-index see 0061 R3)", () => {
     expect(promptTemplateNames()).toEqual([
       "_partials",
       "classify-error",
@@ -92,6 +92,7 @@ describe("built-in template registry", () => {
       "decompose-m",
       "decompose-t",
       "decompose-v",
+      "digest-index",
       "dryrun",
       "fanout",
       "handoff-steer",
@@ -186,6 +187,8 @@ describe("built-in template registry", () => {
       now: "2026-09-26T15:00:00+08:00",
       tz: "Asia/Shanghai",
       error: "429 usage limit reached",
+      total: "48.3k",
+      cap: "16.0k",
     }
     for (const name of promptTemplateNames().filter((item) => item !== "_partials")) {
       expect(renderTemplate(name, ctx)).not.toMatch(/\{\{|\}\}/)

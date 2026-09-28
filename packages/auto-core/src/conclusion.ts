@@ -4,10 +4,10 @@
 // Only constructs text, never prints; the loop body owns log(). Pure leaf, no
 // dependency on loop.ts.
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S13, pure move).
-import { formatDuration, formatUsageLine } from "./log"
+import { formatDuration, formatTokens, formatUsageLine } from "./log"
 import { currentRound, phaseKey, phaseLabel, phaseName, type PhaseUnit } from "./phases"
 import { decisionsOf, resolveHighlight, resolvesOf } from "./resolve"
-import { statsBoot, statsHistory, statsId, statsTotals, type ModelStat, type TierStat, type StatsResume } from "./stats"
+import { statsBoot, statsHistory, statsId, statsTotals, type DigestStat, type DigestStats, type ModelStat, type TierStat, type StatsResume } from "./stats"
 
 // Startup resume banner (plans/STATS_PLAN.md §4.6): the snapshot is taken after
 // depreciation posting and before round rollover; round/phase/task are the
@@ -181,6 +181,24 @@ function quotaWaitLine(waits: Record<string, number> | undefined): string[] {
   return [`  time lost to quota windows: ${names.map((name) => `${name} ${formatDuration(waits![name]!)}`).join("; ")}`]
 }
 
+// Knowledge-digest counters of the round (plans/0061 R3/A7): how many
+// planning sessions got each digest and their cumulative estimated size, how
+// often the cap replaced the full text with the index form, and how many
+// knowledge phases distilled. A line only when a counter is non-zero — no
+// digest data (every round without prior conclusions or a knowledge phase)
+// adds nothing, and the conclusion keeps its shape.
+function digestLine(digests: DigestStats | undefined): string[] {
+  if (!digests) return []
+  const parts: string[] = []
+  const item = (label: string, stat: DigestStat) => `${label} ${stat.sessions} session${stat.sessions === 1 ? "" : "s"} / ${formatTokens(stat.tokens)} tokens`
+  if (digests.priorKnowledge) parts.push(item("prior knowledge", digests.priorKnowledge))
+  if (digests.prevRound) parts.push(item("previous round", digests.prevRound))
+  if (digests.capped) parts.push(`${digests.capped} capped`)
+  if (digests.knowledgePhases) parts.push(`${digests.knowledgePhases} knowledge phase${digests.knowledgePhases === 1 ? "" : "s"}`)
+  if (!parts.length) return []
+  return [`  digests: ${parts.join(", ")}`]
+}
+
 // Round-complete line (§4.4): this round [`■ round N complete: total W (AI
 // A[, human wait Z]), [P phases / ] T tasks / S sessions`, tokens line];
 // phaseCount is only provided on the phased path (the phase index done count =
@@ -190,7 +208,8 @@ function quotaWaitLine(waits: Record<string, number> | undefined): string[] {
 // tokens line (plans/0055 §10 item 12); with no model data they are absent
 // and the block is byte-identical to the pre-registry form (C2). The
 // quota-window line follows them (plans/0057 §11 item 7), registry or not,
-// only when a wait was booked.
+// only when a wait was booked; the digest line follows that (plans/0061
+// R3/A7), only when a digest counter is non-zero.
 // When history.rounds > 0, two cross-round cumulative lines are appended
 // (indented two spaces, "cumulative" prefix distinguishes them from the
 // this-round line). The round number comes from roundB.id (loadStats snapshots
@@ -220,6 +239,7 @@ export async function roundCompleteLines(
   ]
   lines.push(...modelBlockLines(totals.models, totals.tiers))
   lines.push(...quotaWaitLine(totals.quotaWaits))
+  lines.push(...digestLine(totals.digests))
   const history = await statsHistory(directory)
   if (history && history.rounds > 0) {
     const h = history.totals

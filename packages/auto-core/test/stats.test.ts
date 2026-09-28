@@ -9,8 +9,10 @@ import {
   setStatsClock,
   statsBoot,
   statsClassifyUsage,
+  statsDigest,
   statsHistory,
   statsId,
+  statsKnowledgePhase,
   statsModelEvent,
   statsPhase,
   statsQuotaWait,
@@ -23,6 +25,13 @@ import {
   type StatsDoc,
   type Usage,
 } from "../src/stats"
+import { roundCompleteLines } from "../src/conclusion"
+
+// A usage helper shared with the conclusion-line case (the loop-conclusion
+// suite's shape).
+function usage(partial: Partial<Usage>): Usage {
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 1, ...partial }
+}
 
 // S02 coverage: the persistence and loading loop (schema / lenient parsing /
 // atomic write / depreciation / round rollover / flush). Cases for the session
@@ -945,5 +954,124 @@ describe("stats quota-window waits", () => {
     expect((await statsHistory(dir))?.totals.quotaWaits).toEqual({ glm: 6000 })
     await flushStats(dir)
     expect((await readDoc()).roundB.quotaWaits).toBeUndefined()
+  })
+})
+
+// Knowledge-digest counters (plans/0061 R3/A7): per planning session the
+// estimated sizes of the injected digests, the cap trips, and knowledge-phase
+// use — booked into the three buckets like the other optional sections, with
+// the same absent-until-booked shape rule. The round conclusion's digest line
+// (src/conclusion.ts) is covered here too: it is the counters' only reader.
+describe("stats digest counters", () => {
+  let dir: string
+  let now: number
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "auto-stats-digest-"))
+    now = 100_000
+    setStatsClock(() => now)
+  })
+
+  afterEach(async () => {
+    setStatsClock()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  async function readDoc(): Promise<StatsDoc> {
+    return JSON.parse(await Bun.file(join(dir, ".auto", "stats.json")).text()) as StatsDoc
+  }
+
+  test("no dir, or nothing to book: no-ops that write nothing", async () => {
+    await statsDigest(undefined, { priorKnowledge: 1000, prevRound: 2000, capped: true })
+    await statsKnowledgePhase(undefined)
+    await statsDigest(dir, {})
+    await statsDigest(dir, { priorKnowledge: 0, prevRound: -5 })
+    expect(await Bun.file(join(dir, ".auto", "stats.json")).exists()).toBe(false)
+  })
+
+  test("booked per digest kind into the three buckets; absent until booked; a size below 1 still counts the session-free cap", async () => {
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await flushStats(dir)
+    expect(await Bun.file(join(dir, ".auto", "stats.json")).text()).not.toContain('"digests"')
+    await statsDigest(dir, { priorKnowledge: 12_000, prevRound: 41_000 })
+    await statsDigest(dir, { priorKnowledge: 3_000, capped: true })
+    await statsKnowledgePhase(dir)
+    await statsKnowledgePhase(dir)
+    await flushStats(dir)
+    const doc = await readDoc()
+    for (const bucket of [doc.taskB, doc.phaseB, doc.roundB]) {
+      expect(bucket.digests).toEqual({
+        priorKnowledge: { sessions: 2, tokens: 15_000 },
+        prevRound: { sessions: 1, tokens: 41_000 },
+        capped: 1,
+        knowledgePhases: 2,
+      })
+    }
+    expect((await statsTotals(dir, "round"))?.digests?.capped).toBe(1)
+  })
+
+  test("a capped digest alone (both sizes absent) books the cap counter", async () => {
+    await loadStats(dir)
+    await statsDigest(dir, { capped: true })
+    await flushStats(dir)
+    expect((await readDoc()).roundB.digests).toEqual({ capped: 1 })
+  })
+
+  test("a bad section parses as missing per field; round rollover merges the counters into history", async () => {
+    await mkdir(join(dir, ".auto"), { recursive: true })
+    await Bun.write(
+      join(dir, ".auto", "stats.json"),
+      JSON.stringify({
+        v: 1,
+        round: 1,
+        phase: "m",
+        lastWriteAt: 90_000,
+        taskB: { id: "T-001", digests: "nope" },
+        phaseB: { id: "m" },
+        roundB: { id: "1", digests: { priorKnowledge: { sessions: 2, tokens: 900 }, prevRound: "bad", capped: 0, knowledgePhases: 1 } },
+        sessions: {},
+        history: { rounds: 1, totals: { digests: { prevRound: { sessions: 1, tokens: 400 }, capped: 2 } } },
+      }),
+    )
+    await loadStats(dir)
+    expect((await statsTotals(dir, "task"))?.digests).toBeUndefined()
+    expect((await statsTotals(dir, "round"))?.digests).toEqual({ priorKnowledge: { sessions: 2, tokens: 900 }, knowledgePhases: 1 })
+    await flushStats(dir)
+    await mkdir(join(dir, "docs", "R-02"), { recursive: true })
+    await loadStats(dir)
+    expect((await statsHistory(dir))?.totals.digests).toEqual({
+      priorKnowledge: { sessions: 2, tokens: 900 },
+      prevRound: { sessions: 1, tokens: 400 },
+      capped: 2,
+      knowledgePhases: 1,
+    })
+    await flushStats(dir)
+    expect((await readDoc()).roundB.digests).toBeUndefined()
+  })
+
+  test("the round conclusion gains one digest line only when a counter is non-zero", async () => {
+    // No digest data: the block keeps its shape (byte-identical to the
+    // pre-A7 conclusion).
+    await loadStats(dir)
+    await statsTask(dir, "T-001")
+    await statsSessionBegin(dir, "T-001")
+    now += 5 * 60_000
+    await statsSessionEnd(dir, "ses_1", usage({ input: 100, output: 30 }))
+    const plain = await roundCompleteLines(dir)
+    expect(plain).toHaveLength(2)
+    expect(plain?.[0]).toBe("■ round 1 complete: total 5m 0s (AI 5m 0s), 1 tasks / 1 sessions")
+    // Counters booked: one line after the tokens line, only the non-zero
+    // parts, singular/plural like the model counters.
+    await statsDigest(dir, { priorKnowledge: 12_000, prevRound: 41_000, capped: true })
+    await statsKnowledgePhase(dir)
+    const lines = await roundCompleteLines(dir)
+    expect(lines?.[2]).toBe("  digests: prior knowledge 1 session / 12.0k tokens, previous round 1 session / 41.0k tokens, 1 capped, 1 knowledge phase")
+    expect(lines).toHaveLength(3)
+    // Only one kind booked: the absent one omits its part.
+    await loadStats(join(dir, "empty"))
+    await statsDigest(join(dir, "empty"), { prevRound: 41_000 })
+    const one = await roundCompleteLines(join(dir, "empty"))
+    expect(one?.[2]).toBe("  digests: previous round 1 session / 41.0k tokens")
   })
 })

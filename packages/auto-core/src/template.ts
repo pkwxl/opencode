@@ -39,6 +39,7 @@ import tplDecomposeT from "../templates/prompts/decompose-t.md" with { type: "fi
 import tplDecomposeV from "../templates/prompts/decompose-v.md" with { type: "file" }
 import tplClassifyError from "../templates/prompts/classify-error.md" with { type: "file" }
 import tplContextBase from "../templates/prompts/context-base.md" with { type: "file" }
+import tplDigestIndex from "../templates/prompts/digest-index.md" with { type: "file" }
 import tplDryrun from "../templates/prompts/dryrun.md" with { type: "file" }
 import tplFanout from "../templates/prompts/fanout.md" with { type: "file" }
 import tplHandoffSteer from "../templates/prompts/handoff-steer.md" with { type: "file" }
@@ -86,6 +87,7 @@ const embedded: Record<string, string> = {
   "decompose-v": tplDecomposeV,
   "classify-error": tplClassifyError,
   "context-base": tplContextBase,
+  "digest-index": tplDigestIndex,
   dryrun: tplDryrun,
   fanout: tplFanout,
   "handoff-steer": tplHandoffSteer,
@@ -146,6 +148,11 @@ const PROTOCOL_MARKERS: Record<string, string[]> = {
   // reply's one JSON line by these two keys, and an override must still show
   // the error text and the current time the reset time is resolved against.
   "classify-error": ['"class"', '"resetAt"', "{{error}}", "{{now}}"],
+  // The capped digest's index form (plans/0061 R3/A7): the index lines are
+  // the form's entire content — an override dropping {{index}} would send a
+  // cap notice with no data (the figure slots are filled at render time,
+  // like the usage notes').
+  "digest-index": ["{{index}}"],
   "test-wrapup": ["{{handoffFile}}", "not dependent on this test run's result"],
   // Usage notices (plans/0056): the figure slots {{used}}/{{pct}}/{{wall}} are
   // round-tripped as literals (filled at send time by the driver, the figures

@@ -74,6 +74,34 @@ export type Totals = {
   // five-hour window reads as the hours it cost. Optional and absent until
   // the first such wait, so a run without one keeps the exact shape.
   quotaWaits?: Record<string, number>
+  // Knowledge-digest counters (plans/0061 R3/A7): per planning session the
+  // sizes of the injected digests (estimated tokens), how often the cap
+  // replaced the full text with the index form, and how many knowledge
+  // phases distilled. Booked so the memory-service question — do real
+  // rounds run digests near the cap? — has data. Optional and absent until
+  // the first booking, so a run without digests keeps the exact shape.
+  digests?: DigestStats
+}
+
+// One injected digest kind's counters: how many planning sessions received
+// it and the cumulative estimated size (the same token estimate the usage
+// source uses).
+export type DigestStat = {
+  sessions: number
+  tokens: number
+}
+
+// The digest counter section of a bucket: the two digest kinds, the cap
+// trips, and the knowledge phases that ran a distillation.
+export type DigestStats = {
+  priorKnowledge?: DigestStat
+  prevRound?: DigestStat
+  // Times the joined digest exceeded the cap and the planning prompt got
+  // the index form instead of the full texts.
+  capped?: number
+  // Knowledge phases whose distillation completed (produced now or found
+  // already produced).
+  knowledgePhases?: number
 }
 
 // Per-model record: the usage booked for the model, how many sessions ran on
@@ -232,7 +260,36 @@ function parseTotals(raw: unknown): Totals {
     models: parseModelStats(t.models),
     tiers: parseTierStats(t.tiers),
     quotaWaits: parseQuotaWaits(t.quotaWaits),
+    digests: parseDigestStats(t.digests),
   }
+}
+
+// Digest counters, leniently (mirror parseQuotaWaits: bad fields read as
+// missing, never throws). An absent or empty section returns undefined,
+// keeping the persisted shape of a run without digests byte-identical on
+// load→write round trips.
+function parseDigestStat(raw: unknown): DigestStat | undefined {
+  if (typeof raw !== "object" || !raw) return undefined
+  const s = raw as Record<string, unknown>
+  const sessions = num(s.sessions)
+  const tokens = num(s.tokens)
+  return sessions > 0 || tokens > 0 ? { sessions, tokens } : undefined
+}
+
+function parseDigestStats(raw: unknown): DigestStats | undefined {
+  if (typeof raw !== "object" || !raw) return undefined
+  const d = raw as Record<string, unknown>
+  const priorKnowledge = parseDigestStat(d.priorKnowledge)
+  const prevRound = parseDigestStat(d.prevRound)
+  const capped = num(d.capped)
+  const knowledgePhases = num(d.knowledgePhases)
+  const digests: DigestStats = {
+    ...(priorKnowledge ? { priorKnowledge } : {}),
+    ...(prevRound ? { prevRound } : {}),
+    ...(capped > 0 ? { capped } : {}),
+    ...(knowledgePhases > 0 ? { knowledgePhases } : {}),
+  }
+  return Object.keys(digests).length ? digests : undefined
 }
 
 // Quota-window waits per model, leniently (bad entry skipped); an absent or
@@ -396,6 +453,7 @@ function rollHistory(doc: StatsDoc) {
     totals.usage[key] += doc.roundB.usage[key]
   }
   mergeModelStats(totals, doc.roundB)
+  mergeDigestStats(totals, doc.roundB)
   doc.history.rounds += 1
 }
 
@@ -431,6 +489,23 @@ function mergeModelStats(into: Totals, from: Totals) {
     const waits = (into.quotaWaits ??= {})
     waits[name] = (waits[name] ?? 0) + ms
   }
+}
+
+// Sum one bucket's digest counters into an aggregate Totals (history at round
+// rollover): creates the section lazily, so an aggregate that received no
+// digest data stays without it (the same shape rule as the model sections).
+function mergeDigestStats(into: Totals, from: Totals) {
+  if (!from.digests) return
+  const digests = (into.digests ??= {})
+  for (const key of ["priorKnowledge", "prevRound"] as const) {
+    const stat = from.digests[key]
+    if (!stat) continue
+    const target = (digests[key] ??= { sessions: 0, tokens: 0 })
+    target.sessions += stat.sessions
+    target.tokens += stat.tokens
+  }
+  if (from.digests.capped) digests.capped = (digests.capped ?? 0) + from.digests.capped
+  if (from.digests.knowledgePhases) digests.knowledgePhases = (digests.knowledgePhases ?? 0) + from.digests.knowledgePhases
 }
 
 // ===== atomic write + write queue =====
@@ -603,6 +678,16 @@ function copyTotals(t: Totals): Totals {
     ...(t.models !== undefined ? { models: copyModelStats(t.models) } : {}),
     ...(t.tiers !== undefined ? { tiers: copyTierStats(t.tiers) } : {}),
     ...(t.quotaWaits !== undefined ? { quotaWaits: { ...t.quotaWaits } } : {}),
+    ...(t.digests !== undefined ? { digests: copyDigestStats(t.digests) } : {}),
+  }
+}
+
+function copyDigestStats(digests: DigestStats): DigestStats {
+  return {
+    ...(digests.priorKnowledge ? { priorKnowledge: { ...digests.priorKnowledge } } : {}),
+    ...(digests.prevRound ? { prevRound: { ...digests.prevRound } } : {}),
+    ...(digests.capped !== undefined ? { capped: digests.capped } : {}),
+    ...(digests.knowledgePhases !== undefined ? { knowledgePhases: digests.knowledgePhases } : {}),
   }
 }
 
@@ -944,6 +1029,55 @@ export async function statsQuotaWait(dir: string | undefined, model: string, ms:
   for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
     const waits = (bucket.quotaWaits ??= {})
     waits[model] = (waits[model] ?? 0) + ms
+  }
+  queueWrite(dir, handle)
+}
+
+// Knowledge-digest sizes per planning session (plans/0061 R3/A7): the
+// estimated token sizes of the digests this planning session was injected
+// with — priorKnowledge for the prior rounds' prior knowledge, prevRound for
+// the previous round's conclusions — plus capped = the joined digest exceeded
+// the cap and the prompt got the index form instead (the sizes stay the full
+// digest's, which is the data the cap question needs). The same parallel
+// three-bucket criterion as the other optional sections; nothing to book (no
+// digest present, cap not tripped) writes nothing and creates no section, so
+// a run without digests persists the exact prior shape.
+export async function statsDigest(
+  dir: string | undefined,
+  sizes: { priorKnowledge?: number; prevRound?: number; capped?: boolean },
+): Promise<void> {
+  if (!dir) return
+  const priorKnowledge = sizes.priorKnowledge !== undefined && sizes.priorKnowledge > 0 ? sizes.priorKnowledge : undefined
+  const prevRound = sizes.prevRound !== undefined && sizes.prevRound > 0 ? sizes.prevRound : undefined
+  if (priorKnowledge === undefined && prevRound === undefined && !sizes.capped) return
+  const { handle } = await ensure(dir)
+  for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+    const digests = (bucket.digests ??= {})
+    if (priorKnowledge !== undefined) {
+      const stat = (digests.priorKnowledge ??= { sessions: 0, tokens: 0 })
+      stat.sessions += 1
+      stat.tokens += priorKnowledge
+    }
+    if (prevRound !== undefined) {
+      const stat = (digests.prevRound ??= { sessions: 0, tokens: 0 })
+      stat.sessions += 1
+      stat.tokens += prevRound
+    }
+    if (sizes.capped) digests.capped = (digests.capped ?? 0) + 1
+  }
+  queueWrite(dir, handle)
+}
+
+// A knowledge phase's distillation completed (plans/0061 R3/A7: knowledge-
+// phase use): booked when the k phase produced its document or found it
+// already produced, so the count says how much knowledge machinery a round
+// actually ran. Lazy-loaded like the other APIs when no handle exists.
+export async function statsKnowledgePhase(dir: string | undefined): Promise<void> {
+  if (!dir) return
+  const { handle } = await ensure(dir)
+  for (const bucket of [handle.doc.taskB, handle.doc.phaseB, handle.doc.roundB]) {
+    const digests = (bucket.digests ??= {})
+    digests.knowledgePhases = (digests.knowledgePhases ?? 0) + 1
   }
   queueWrite(dir, handle)
 }

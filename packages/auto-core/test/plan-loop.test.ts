@@ -4,7 +4,7 @@
 // runPhaseLoop on the native fake agent over real git repositories, whose
 // scripted turns write the planning and handover artifacts (F14).
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, rmSync } from "node:fs"
+import { existsSync, renameSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { FakeAgentOptions } from "./fixtures/agent"
 import { loopFixture, pastMessage, taskDoc, type LoopFixture } from "./fixtures/loop"
@@ -287,6 +287,78 @@ describe("the planning input and the open step (plans/0053 D9, D12; plans/0018 p
       ).toBeTruthy()
       expect(f.agent.calls).toEqual([])
       openStepGone(f)
+    },
+  )
+})
+
+// The digest cap on the round's first planning session (plans/0061 R3/A7):
+// below a quarter of the run's context limit the joined digest (prior
+// knowledge + the previous round's conclusions) is injected in full as
+// before; above it the prevRound slot carries the index form instead, and
+// the sizes are booked into stats either way.
+describe("the digest cap of the round's first planning session", () => {
+  // A continuation round: round 1 holds a done analysis phase with a
+  // handover and a distilled prior-kb.md; round 2 is established and about
+  // to plan its first phase.
+  async function continuationFixture(handover: string) {
+    const f = await fixture("am")
+    const first = await f.phase(0)
+    await Bun.write(join(f.dir, "docs/R-01/P01-analysis/handover.md"), handover)
+    renameSync(join(f.dir, first.dir, "todo.md"), join(f.dir, first.dir, "done.md"))
+    await Bun.write(join(f.dir, "docs/R-01/prior-kb.md"), "prior knowledge of round 1\n")
+    await f.commit("round 1 conclusions")
+    await establishRound(f.dir, { phases: "am", round: 2 })
+    await f.commit("round 2 setup")
+    return f
+  }
+
+  const readStats = async (f: LoopFixture) =>
+    JSON.parse(await Bun.file(join(f.dir, ".auto", "stats.json")).text()) as {
+      roundB: { digests?: { priorKnowledge?: { sessions: number; tokens: number }; prevRound?: { sessions: number; tokens: number }; capped?: number } }
+    }
+
+  test(
+    "below the cap: the full digest is injected, the sizes booked per planning session",
+    async () => {
+      const f = await continuationFixture("# Final handover\n\n## Key decisions\n- Keep the schema stable.\n")
+      const { code, lines } = await f.run({ stopBefore: "execute" })
+      expect(code).toBe(0)
+      const prompt = planners(f)[0]!.text
+      expect(prompt).toContain("### Previous round final handover (docs/R-01/P01-analysis/handover.md)")
+      expect(prompt).toContain("Keep the schema stable.")
+      expect(prompt).toContain(`### ${join("docs", "R-01", "prior-kb.md")}`)
+      expect(prompt).not.toContain("digest budget")
+      expect(lines).toContain("ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)")
+      const digests = (await readStats(f)).roundB.digests
+      expect(digests?.capped).toBeUndefined()
+      expect(digests?.priorKnowledge).toEqual({ sessions: 1, tokens: expect.any(Number) })
+      expect(digests?.prevRound).toEqual({ sessions: 1, tokens: expect.any(Number) })
+    },
+  )
+
+  test(
+    "above the cap: the prevRound slot carries the index form, the session is asked to open what it needs, the sizes still booked",
+    async () => {
+      // A 1000-token run context caps the digest at 250 tokens; the handover
+      // body alone (2000 ASCII chars ≈ 667 tokens) trips it.
+      const f = await continuationFixture(`# Final handover\n\n${"h".repeat(2000)}\n`)
+      const { code, lines } = await f.run({ stopBefore: "execute", contextLimit: 1000 })
+      expect(code).toBe(0)
+      const prompt = planners(f)[0]!.text
+      expect(prompt).not.toContain("### Previous round final handover")
+      expect(prompt).not.toContain("h".repeat(100))
+      expect(prompt).toContain("digest budget of 250 tokens")
+      // Prior-knowledge entries come first (the digest joins them first),
+      // then the previous round's handover; sizes are the usage source's
+      // estimate (the handover is 2018 ASCII chars → 673 tokens).
+      expect(prompt).toContain(`- ${join("docs", "R-01", "prior-kb.md")} (~9 tokens)`)
+      expect(prompt).toContain(`- ${join("docs", "R-01", "P01-analysis", "handover.md")} (~673 tokens)`)
+      expect(prompt).toContain("Open and read the documents this phase's planning needs")
+      expect(lines.some((line) => line.startsWith("ℹ prior migration conclusions exceed the digest cap ("))).toBe(true)
+      const digests = (await readStats(f)).roundB.digests
+      expect(digests?.capped).toBe(1)
+      expect(digests?.priorKnowledge?.sessions).toBe(1)
+      expect(digests?.prevRound?.sessions).toBe(1)
     },
   )
 })

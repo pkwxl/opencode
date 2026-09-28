@@ -13,8 +13,8 @@ import { requireArtifact } from "./artifact"
 import { projectBriefText } from "./brief"
 import { maybeExit } from "./exit"
 import { commitTree } from "./git"
-import { priorKnowledgeDigest } from "./knowledge"
-import { log } from "./log"
+import { digestIndexEntries, priorKnowledgeDigest, renderDigestIndex } from "./knowledge"
+import { formatTokens, log } from "./log"
 import type { LoopCtx } from "./loop-task"
 import { advanceNextTask, ensureNumbering, NEXT_TASK_FILE, taskNumber } from "./numbering"
 import { phaseHandoverDoc, phaseKey, phaseLabel, phaseName, prevRoundDigest, readPhases, type PhaseState, type PhaseUnit } from "./phases"
@@ -23,7 +23,10 @@ import { planInputPath, readPlanInput, savePlanInput } from "./plan-input"
 import { existingTaskList, renderImplementPlan, renderPhaseAppend, renderPhasePlan } from "./prompt-plan"
 import { closeStep } from "./resume"
 import { roundBriefText } from "./round-brief"
+import { statsDigest } from "./stats"
 import { stepPause } from "./step"
+import { estimateTokens } from "./usage"
+import { DEFAULT_CONTEXT_LIMIT } from "./opts"
 import {
   doneTaskIds,
   loadPlan,
@@ -255,11 +258,34 @@ async function phasePlanPrompt(
   // "First" = no completed phase of this round has tasks (plans/0049 G4): a
   // leading task-less knowledge phase has no planning session and must not
   // swallow the digest.
+  // The digest cap: above a quarter of the run's context limit (estimated by
+  // the same token estimate the usage source uses), the prompt gets the index
+  // form instead of the full texts — the path and size of each knowledge
+  // document and handover, the session opening what it needs — still through
+  // the prevRound slot. The sizes are booked per planning session either way,
+  // so the memory-service question has its data.
   let prevRound: string | undefined
   if (!state.phases.some((unit) => state.done.has(unit.id) && unit.entry.hasTasks)) {
-    const digests = [await priorKnowledgeDigest(directory), await prevRoundDigest(directory)].filter((part): part is string => Boolean(part?.trim()))
-    prevRound = digests.length ? digests.join("\n\n") : undefined
-    if (prevRound) log("ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)")
+    const prior = (await priorKnowledgeDigest(directory))?.trim() || undefined
+    const prev = (await prevRoundDigest(directory))?.trim() || undefined
+    const parts = [prior, prev].filter((part): part is string => part !== undefined)
+    const joined = parts.length ? parts.join("\n\n") : undefined
+    const cap = (opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT) / 4
+    const total = joined === undefined ? 0 : estimateTokens(joined)
+    const capped = joined !== undefined && total > cap
+    prevRound = capped ? renderDigestIndex(await digestIndexEntries(directory), { total, cap }) : joined
+    if (prevRound) {
+      log(
+        capped
+          ? `ℹ prior migration conclusions exceed the digest cap (${formatTokens(total)} tokens > ${formatTokens(cap)}); injecting the index form instead — the session opens what it needs`
+          : "ℹ injecting prior migration conclusions (prior knowledge + previous round's archive excerpts)",
+      )
+    }
+    await statsDigest(directory, {
+      priorKnowledge: prior === undefined ? undefined : estimateTokens(prior),
+      prevRound: prev === undefined ? undefined : estimateTokens(prev),
+      capped,
+    })
   }
   // The round brief docs/R-NN/round.md (plans/0049 G3): every planning session
   // plans against the round's goal and criteria; an untouched stub injects nothing.
