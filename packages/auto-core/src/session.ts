@@ -1,5 +1,6 @@
 // The core layer of session driving: running one prompt on the session chain
-// (runSession — a fresh session per prompt except a resumed takeover,
+// (runSession — the executor of the pure ladder decision of
+// src/engine/ladder.ts: a fresh session per prompt except a resumed takeover,
 // transient errors retried in a fresh
 // session, server restart on network failures, the model failover ring under
 // quota restriction with window clipping, and the wait-and-probe loop
@@ -16,6 +17,7 @@ import type { AgentClient, LimitScope } from "./agent/types"
 import { roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
 import { dropStaleFailed, forkSources, modelOfChain, moveOnFork, retryOnFork, setRoute, toAgent, toBlankSession } from "./chain-transitions"
 import { attempt } from "./attempt"
+import { nextStep, type LadderFacts, type LadderState, type WaitCause } from "./engine/ladder"
 import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
 import { ExitRequested, exitRequested, sleepUnlessExit } from "./exit"
@@ -172,12 +174,6 @@ export async function ensureForkBase(
   return undefined
 }
 
-// Signature strings marking a network/service failure inside session errors; on
-// a hit the server is restarted first (an external server excepted), then the
-// retry goes to a fresh session, avoiding repeated failures against the same
-// broken instance.
-const NETWORK_FAILURE = /internal network failure|network error|fetch failed|econnrefused|econnreset|socket hang up/i
-
 // Probe prompt of the wait-and-probe loop: a minimal payload that only needs one
 // real provider round trip to tell whether service is back. Never probe with the
 // interrupted session (a probe turn in a real session pollutes its context, and a
@@ -200,12 +196,6 @@ const RECOVERY_PROBE_PROMPT = "[DRIVER] Service availability probe: reply with j
 //    the cross-run resumeNote: check the disk state, do not redo).
 const retryNote = worktreeNote
 
-// What the wait-and-probe loop knows of the failure it waits out: its class
-// and a reset with the scope a statement gave it — the failure that led into
-// the loop, then each failed probe's (plans/0057 §6) — and the account it
-// failed on, whose learned windows stand in when it states no reset (§8).
-type WaitCause = Pick<Extract<SessionResult, { type: "blocked" }>, "errorClass" | "resetAt" | "scope"> & { account?: string }
-
 // The limits a reset instant reads as on the wait line (plans/0057 §7).
 function limitPhrase(scope: LimitScope | undefined): string {
   switch (scope) {
@@ -221,16 +211,6 @@ function limitPhrase(scope: LimitScope | undefined): string {
     default:
       return "the limit"
   }
-}
-
-// A spent usage window with a stated reset (plans/0057 §4.1, §7): a
-// five-hour, daily or weekly window cures nothing before that instant, so
-// the retry ladder's fresh sessions would only hit it again. undefined for a
-// per-minute cap (the agent's own ladder cures it) and for a reset of
-// unknown scope (today's path).
-function spentWindow(result: WaitCause): string | undefined {
-  if (result.resetAt === undefined) return undefined
-  return result.scope === "5h" ? "five-hour" : result.scope === "7d" ? "weekly" : result.scope === "day" ? "daily" : undefined
 }
 
 // Runs one prompt on the session chain (a fresh session per prompt, except a
@@ -267,18 +247,20 @@ export async function runSession(
   const clockNow = (): number => (opts.routing ? nowOf(opts.routing) : Date.now())
   // Quota-failover candidate tracking (design D.3/D.4): shared across the
   // whole session chain — each model candidate gets its own full round of the
-  // retry ladder (i resets to 1 when the candidate switches), the total cap =
-  // candidate count × ladder length, and the failover count and the ladder
-  // count stay separate so neither masks the other. tried records the
-  // candidate strings this chain has already tried (ordered, for the
-  // exhaustion message and dedup on re-selection); clipped records candidates
-  // skipped because their context window falls short (for the exhaustion
-  // message and dedup logging); limits lazily fetches contextLimits once and
-  // caches it (the failover decision only reads context windows, tolerating an
-  // empty map).
+  // retry ladder (the ladder's counter resets to 1 when the candidate
+  // switches), the total cap = candidate count × ladder length, and the
+  // failover count and the ladder count stay separate so neither masks the
+  // other. The bookkeeping is one LadderState object (src/engine/ladder.ts):
+  // `i`, the next retry's ordinal, `tried`, the candidate strings this chain
+  // has already tried (ordered, for the exhaustion message and dedup on
+  // re-selection), and `clipped`, candidates skipped because their context
+  // window falls short (for the exhaustion message and dedup logging). The
+  // pure decision reads it; the executor paths below (switchModel, the retry
+  // dispatch, awaitRecovery's fresh round) are its only writers. limits
+  // lazily fetches contextLimits once and caches it (the failover decision
+  // only reads context windows, tolerating an empty map).
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
-  const tried: string[] = []
-  const clipped: string[] = []
+  const ladder: LadderState = { i: 1, tried: [], clipped: [] }
   let limits: ReadonlyMap<string, number> | undefined
   // The retry ladder (OPENCODE_AUTO_RETRY_WAITS, default 0,1,2,4,8): each
   // element of waits is the minutes to wait before that retry, and the element
@@ -363,11 +345,11 @@ export async function runSession(
       // after the failover would be worse than the original fault); an unknown
       // window (absent from the map) is not filtered.
       for (const c of fallback) {
-        if (tried.includes(c)) continue
+        if (ladder.tried.includes(c)) continue
         const limit = limits.get(c)
         if (limit !== undefined && limit < cap) {
-          if (!clipped.includes(c)) {
-            clipped.push(c)
+          if (!ladder.clipped.includes(c)) {
+            ladder.clipped.push(c)
             log(`⇄ ${task.id} skipping candidate ${c}: context window ${formatTokens(limit)} < chain requirement ${formatTokens(cap)}; switching would immediately hit the ceiling`)
           }
           continue
@@ -385,8 +367,8 @@ export async function runSession(
       // priority chain as attempt's target evaluation (modelOfChain:
       // chain.model > sticky > /failback override > the routing table).
       from = modelOfChain(chain, switches, opts.phase)
-      if (from !== undefined && !tried.includes(from)) tried.push(from)
-      tried.push(to)
+      if (from !== undefined && !ladder.tried.includes(from)) ladder.tried.push(from)
+      ladder.tried.push(to)
       toModel = to
       ringSize = fallback.length
     }
@@ -409,9 +391,10 @@ export async function runSession(
     log(
       opts.routing
         ? `⇄ ${task.id} ${why}; ${pickAgent !== undefined && chain.agent !== undefined && pickAgent !== chain.agent ? `moving to agent ${pickAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
-        : `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${tried.length}/${ringSize})`,
+        : `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${ladder.tried.length}/${ringSize})`,
     )
-    i = 1
+    // This candidate gets its own full round of the retry ladder.
+    ladder.i = 1
     // Cross-agent move (§7 step 2 / §8.3): the pick runs on another agent
     // than the chain's session, and a session never crosses agents — no
     // fork, no reuse. The chain drops its session and the next dispatch
@@ -883,198 +866,48 @@ export async function runSession(
         // must carry the worktree-check note.
         toBlankSession(chain, retryNote("The previous dispatch was interrupted by a service/quota failure; service has recovered, but the earlier session's context could not be inherited."))
       }
-      i = 1
+      // Service is back: the ladder starts a fresh round for the re-dispatch.
+      ladder.i = 1
       return
     }
   }
-  for (;;) {
-    let result: SessionResult
-    try {
-      result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
-    } catch (error) {
-      // A host that cannot start (§8.1: a profile env reference that broke
-      // since the run start) stops the run, exactly as the eager start would
-      // have — the retry ladder must not turn a broken profile into hours of
-      // retries. Everything else a session throws (event stream drops,
-      // request timeouts) stays a session fault and enters the recovery
-      // machinery below.
-      if (error instanceof AgentStartError) throw error
-      // A session fault does not exit: exceptions thrown by SDK calls (event
-      // stream subscription dropped, request timed out and aborted, etc.)
-      // enter the retry/wait mechanisms through the same channel as returned
-      // errors — apart from a double Ctrl+C, no session fault ever terminates
-      // the run.
-      result = { type: "blocked", question: `session error: ${formatClientError(error)}` }
-    }
-    // Every session-fault face (the error itself / session creation failed /
-    // task dispatch failed) goes into the recovery mechanism rather than being
-    // thrown up as blocked; the only blocked results still returned directly
-    // are in-session blocking questions and permission denials — those need a
-    // human reply and were never faults to begin with.
-    // A turn that went through clears its account's spent windows (plans/0057
-    // §8): whatever an entry said, the account answers now.
-    if (result.type !== "blocked") {
-      await accountAnswered(opts.dir, accountOf(chain, opts.routing), clockNow())
-      return result
-    }
-    // Registry routing: selection found nothing usable for the dispatch (every
-    // candidate down or outside its windows, §6.3) — no session ran, so this is
-    // not a session failure either. The two §6.3 outcomes split here: a wait-
-    // able window sleeps inside the unit until the opening plus the jitter and
-    // dispatches again; everything down goes to the wait-and-probe loop, whose
-    // probe clears a candidate's mark when service is back.
-    if (result.noModel === true) {
-      if (result.windowWait !== undefined) {
-        await waitForWindow(result.windowWait)
-        continue
-      }
-      await awaitRecovery(firstLine(result.question))
-      continue
-    }
-    if (!(result.question.startsWith("session error: ") || result.question.startsWith("session creation failed: ") || result.question.startsWith("task dispatch failed: "))) return result
-    // P4 quota failover (design D.3): when the class is quota/auth/rate and a
-    // candidate table is configured, take the next candidate (after D.4 window
-    // clipping), switch chain.model, and reuse the existing fork-copy path to
-    // continue (context travels along). The criterion reads
-    // result.errorClass (the classification P3 brought uniformly to the three
-    // trigger faces): both the quota of a plain session.error
-    // (isRetryable:false) and the early-settled retry part / session.status
-    // retry carry errorClass, so deciding on it alone covers both paths
-    // (result.failover is not read).
-    // Under a registry the tier lists are the candidate table (the global ring
-    // is a refused switch there), so the same gate applies with no ring set.
-    // The escalation is key → model → wait (plans/0055 §7): a ringed provider
-    // rotates to its next key first (rotateProviderKey), the model failover
-    // (switchModel, step 2) follows only when no key is left.
-    // A class the failure-message classifier raised (§7.1) is marked in the
-    // label — the ⇄ line and the failover note read "quota restricted
-    // (classifier)" — and its reset time goes into the down marks the
-    // escalation writes; an answer still on its way sets them when it lands.
-    // A spent usage window with a stated reset (plans/0057 §4.1, §7) skips
-    // the retry ladder whatever its class: the escalation runs at once (key,
-    // then model), else the wait sleeps to the reset. Its class names the
-    // move when it has one ("quota restricted" for claude's rejected window).
-    // A stated reset outlives the process (plans/0057 §8): recorded for the
-    // account the failure ran on, read before the escalation moves the chain.
-    const account = accountOf(chain, opts.routing)
-    await learnFailure(opts.dir, account, result, clockNow())
-    const cause: WaitCause = { ...result, account }
-    const spent = spentWindow(result)
-    const classBase =
-      result.errorClass === "quota"
-        ? "quota restricted"
-        : result.errorClass === "auth"
-          ? "provider auth failed"
-          : result.errorClass === "rate"
-            ? "rate-limit wait too long"
-            : spent !== undefined
-              ? `${spent} usage window spent`
-              : undefined
-    const classLabel = classBase !== undefined && result.classified ? `${classBase} (classifier)` : classBase
-    if ((opts.routing !== undefined || fallbackRing().length > 0) && classLabel !== undefined) {
-      const target = downTarget()
-      const moved =
-        (opts.routing !== undefined && (await rotateProviderKey(classLabel, result.resetAt))) ||
-        (await switchModel(classLabel, result.resetAt, result.classified))
-      lateReset(result.pendingReset, target)
-      if (moved) continue
-      // Candidates exhausted (candidates and primary all quota-restricted /
-      // unusable): no longer a blocking exit — the wait-and-probe loop waits
-      // for the quota to recover, probing with the currently effective model
-      // in the meantime, and after recovery continues from a fork of the
-      // interrupted session.
-      await awaitRecovery(
-        opts.routing !== undefined
-          ? `${classLabel} and every candidate of the tier list is down (down: ${[...downMarks().keys()].join(", ") || "none"})`
-          : `${classLabel} and fallback candidates exhausted (tried: ${tried.join(", ") || "none"})`,
-        cause,
-      )
-      continue
-    }
-    // Non-retryable (isRetryable:false, the quota/auth classes): switching
-    // sessions is pointless, and without a candidate table the model cannot be
-    // switched either — no longer blocks directly; the wait-and-probe loop
-    // waits indefinitely for the quota to recover, probing with fresh
-    // temporary sessions in the meantime, and after recovery forks the
-    // interrupted session to continue. attempt() already guarantees chain.id
-    // lands on the session this round actually used (even if that is the one
-    // that just failed), so the session holding real content is not
-    // sacrificed. A spent window (above) takes the same path without a
-    // candidate table: a fresh session would only hit it again, so the wait
-    // sleeps to its reset instead of the ladder retrying (plans/0057 §4.1;
-    // on 2026-09-25 the ladder bought five stub sessions per event).
-    if (result.retryable === false) {
-      await awaitRecovery(`non-retryable session error encountered (${firstLine(result.question)})`, cause)
-      continue
-    }
-    if (spent !== undefined) {
-      await awaitRecovery(`the ${spent} usage window is spent (${firstLine(result.question)})`, cause)
-      continue
-    }
-    // Ladder exhausted: no longer waits for a human ruling — the failover
-    // candidates are tried first (switching provider is the only lever outside
-    // the ladder not yet tried); when those are exhausted too (or none
-    // configured), the wait-and-probe loop takes over, every half hour until
-    // service recovers, then continuing from a fork of the interrupted session
-    // with the ladder restarted. Waiting inside the process keeps the session
-    // alive and still forkable — a blocking exit would instead throw away the
-    // very session the ladder rounds just preserved.
-    // Scope: runTask creates the chain per task, chain.model resets with it,
-    // and the next task automatically starts again from the preferred model; a
-    // finer/coarser failback granularity is consumed at the boundary hook
-    // points by OPENCODE_AUTO_MODEL_FAILBACK_SCOPE (see src/failback.ts).
-    if (i > waits.length) {
-      if ((opts.routing !== undefined || fallbackRing().length > 0) && (await switchModel("retry ladder exhausted"))) continue
-      await awaitRecovery(`retry ladder exhausted (${waits.length} retries) without success`, cause)
-      continue
-    }
-    if (opts.server && NETWORK_FAILURE.test(result.question)) {
-      await opts.server.restart("session error is a network/service failure; restarting the opencode server and retrying with a new session", chain.agent)
-    }
-    // The backoff before this retry. The counter advances before the action,
-    // and the three continue paths below share nth as the log ordinal.
-    const waitMinutes = waits[i - 1] ?? 0
-    const nth = i++
-    if (waitMinutes > 0) {
-      log(`⏳ ${task.id} transient session error; waiting ${waitMinutes} minutes before retrying (${nth}/${waits.length}):\n${firstLine(result.question)}`)
-      await Bun.sleep(waitMinutes * 60_000)
-    }
-    // Keep the most valuable session, then fork from it: the candidates are
-    // the just-failed session itself and the chain's original session
-    // (attempt() has restored chain.id to the original session from before the
-    // dispatch; in a reuse round the two are the same one, deduplicated into a
-    // single try), value measured as "accumulated context usage", take the
-    // largest, and on a failed fork fall to the next best; when none is
-    // usable, fall back in turn to the fork base (a warm prefix, see the
-    // forkBase branch below) and a blank new session.
-    //
-    // Why the failed session comes first: timeout/stream-break faults have
-    // nothing to do with the session's content (a provider-side stall), and
-    // the 100k+ of verified output in that session is this round's most
-    // valuable asset — opening a blank session equals throwing it away and
-    // hitting the same wall from zero; plans/0015-session-error-retry-plan.md
-    // fact baseline item 4 records such a counterexample, "worse than not
-    // reusing at all". The cost is a copy whose tail carries that 0-token
-    // error message, with the retry prompt landing after it; a failed session
-    // with used = 0 is a pure error stub (it failed on dispatch and produced
-    // nothing), holds nothing worth protecting, and does not enter the
-    // candidates (keeping the original design's criterion).
-    //
-    // Always fork a copy rather than reuse directly: the original session is
-    // untouched and discarded on failure, and the recovery point remains the
-    // original session (progress's restore logic untouched, see attempt()'s
-    // retryable branch). Nor is seedForkSession's "cold start once usage
-    // reaches cap/2" guard placed here — that guard protects a new subtask
-    // from lugging an oversized prefix, while a retry is the same prompt
-    // living on; the prefix is large precisely because much work was done.
-    //
-    // "The session this prompt was dispatched to" = chain.failed (for
-    // retryable classes attempt has restored the chain state and recorded it):
-    // picking it means the context is complete, and the re-send needs only one
-    // line of explanation; picking the chain's original session, the base, or
-    // a blank session means this attempt's partial output already on disk is
-    // not in the context, so the worktree-check note is required (see
-    // retryNote).
+  // The retry step's fork seeding: keep the most valuable session, then fork
+  // from it — the candidates are the just-failed session itself and the
+  // chain's original session (attempt() has restored chain.id to the original
+  // session from before the dispatch; in a reuse round the two are the same
+  // one, deduplicated into a single try), value measured as "accumulated
+  // context usage", take the largest, and on a failed fork fall to the next
+  // best; when none is usable, fall back in turn to the fork base (a warm
+  // prefix, see the forkBase branch below) and a blank new session.
+  //
+  // Why the failed session comes first: timeout/stream-break faults have
+  // nothing to do with the session's content (a provider-side stall), and
+  // the 100k+ of verified output in that session is this round's most
+  // valuable asset — opening a blank session equals throwing it away and
+  // hitting the same wall from zero; plans/0015-session-error-retry-plan.md
+  // fact baseline item 4 records such a counterexample, "worse than not
+  // reusing at all". The cost is a copy whose tail carries that 0-token
+  // error message, with the retry prompt landing after it; a failed session
+  // with used = 0 is a pure error stub (it failed on dispatch and produced
+  // nothing), holds nothing worth protecting, and does not enter the
+  // candidates (keeping the original design's criterion).
+  //
+  // Always fork a copy rather than reuse directly: the original session is
+  // untouched and discarded on failure, and the recovery point remains the
+  // original session (progress's restore logic untouched, see attempt()'s
+  // retryable branch). Nor is seedForkSession's "cold start once usage
+  // reaches cap/2" guard placed here — that guard protects a new subtask
+  // from lugging an oversized prefix, while a retry is the same prompt
+  // living on; the prefix is large precisely because much work was done.
+  //
+  // "The session this prompt was dispatched to" = chain.failed (for
+  // retryable classes attempt has restored the chain state and recorded it):
+  // picking it means the context is complete, and the re-send needs only one
+  // line of explanation; picking the chain's original session, the base, or
+  // a blank session means this attempt's partial output already on disk is
+  // not in the context, so the worktree-check note is required (see
+  // retryNote).
+  const seedRetry = async (nth: number, question: string): Promise<void> => {
     const failedID = chain.failed?.id ?? chain.id
     // The shared source list of forkSources — the "keep the most valuable
     // session" criterion documented above, as one sorted list.
@@ -1094,7 +927,7 @@ export async function runSession(
         dropStaleFailed(chain, source.id)
         continue
       }
-      log(`↻ ${task.id} transient session error; retrying from a forked copy of the ${source.why} ${source.id} (${formatTokens(source.used)} tokens) (${nth}/${waits.length}):\n${result.question}`)
+      log(`↻ ${task.id} transient session error; retrying from a forked copy of the ${source.why} ${source.id} (${formatTokens(source.used)} tokens) (${nth}/${waits.length}):\n${question}`)
       // One-off retry note: the copy ends with the error message, so a repeated
       // prompt needs a word of explanation or the AI treats the re-send as a repeated
       // request (same motive as awaitRecovery's note). retryOnFork keeps the
@@ -1113,7 +946,7 @@ export async function runSession(
       seeded = true
       break
     }
-    if (seeded) continue
+    if (seeded) return
     if (sources.length) log(`↻ fork retry copy failed; falling back to the fork base / a blank new session`)
     // No session to fork (the subtask's very first message failed, the chain
     // was empty to begin with) but the base is still alive: re-seed from the
@@ -1126,7 +959,7 @@ export async function runSession(
     if (chain.id === undefined && chain.forkBase !== undefined && (await sessionAlive(await chainClient(), chain.forkBase))) {
       const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(await chainClient(), chain.forkBase), ...(chain.forkLead ? { lead: true } : {}) }
       if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} retry`)) {
-        log(`↻ ${task.id} transient session error; no session on the chain to fork, re-seeded from the base for retry (${nth}/${waits.length}):\n${result.question}`)
+        log(`↻ ${task.id} transient session error; no session on the chain to fork, re-seeded from the base for retry (${nth}/${waits.length}):\n${question}`)
         // The re-seeded retry completes through the same transition: the
         // forked session is the one the seeding put on pending and the base
         // is its source, so retryOnFork repeats the seeding's own
@@ -1147,14 +980,155 @@ export async function runSession(
           { id: base.id, used: base.used ?? 0, why: "fork base" },
           retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context."),
         )
-        continue
+        return
       }
     }
-    log(`↻ ${task.id} transient session error; retrying with a new session (${nth}/${waits.length}):\n${result.question}`)
+    log(`↻ ${task.id} transient session error; retrying with a new session (${nth}/${waits.length}):\n${question}`)
     // The retry keeps the "switch to a new session" semantics and never
     // reuses the errored session; a blank session knows nothing of this
     // attempt's output, so the re-send must carry the worktree-check note —
     // otherwise the new session redoes the half-finished work from scratch.
     toBlankSession(chain, retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit the earlier session's context."))
+  }
+  // The loop itself is only the executor of the pure ladder decision
+  // (src/engine/ladder.ts): every dispatch's outcome is handed to nextStep
+  // with the facts the decision cannot read itself (the routing facts'
+  // presence, the fallback ring's current length, the ladder's waits, the
+  // managed server, the account a failure books against), and the step it
+  // answers is executed below with today's side effects in their places.
+  for (;;) {
+    let result: SessionResult
+    try {
+      result = await attempt(client, task, promptText, opts, chain, steer, test, switches)
+    } catch (error) {
+      // A host that cannot start (§8.1: a profile env reference that broke
+      // since the run start) stops the run, exactly as the eager start would
+      // have — the retry ladder must not turn a broken profile into hours of
+      // retries. Everything else a session throws (event stream drops,
+      // request timeouts) stays a session fault and enters the recovery
+      // machinery below.
+      if (error instanceof AgentStartError) throw error
+      // A session fault does not exit: exceptions thrown by SDK calls (event
+      // stream subscription dropped, request timed out and aborted, etc.)
+      // enter the retry/wait mechanisms through the same channel as returned
+      // errors — apart from a double Ctrl+C, no session fault ever terminates
+      // the run.
+      result = { type: "blocked", question: `session error: ${formatClientError(error)}` }
+    }
+    const account = accountOf(chain, opts.routing)
+    const facts: LadderFacts = {
+      registry: opts.routing !== undefined,
+      ringLength: fallbackRing().length,
+      waits,
+      server: opts.server !== undefined,
+      account,
+    }
+    const step = nextStep(result, ladder, facts)
+    switch (step.kind) {
+      // A turn that went through clears its account's spent windows
+      // (plans/0057 §8): whatever an entry said, the account answers now.
+      // An in-session blocked question needs a human reply and was never a
+      // fault — it returns without booking.
+      case "return":
+        if (step.result.type !== "blocked") await accountAnswered(opts.dir, account, clockNow())
+        return step.result
+      // A waitable window sleeps inside the unit until the opening plus the
+      // jitter, then the loop selects and dispatches again.
+      case "window-wait":
+        await waitForWindow(step.wait)
+        continue
+      // The wait-and-probe loop, the final destination of every session
+      // fault (and of a no-model exhaustion, with no cause). A recover with
+      // a cause answers a session fault, so it books the failure first; the
+      // no-model recover carries no cause (no session ran) and books
+      // nothing.
+      case "recover":
+        if (step.cause !== undefined && result.type === "blocked") await learnFailure(opts.dir, account, result, clockNow())
+        await awaitRecovery(step.why, step.cause)
+        continue
+      // The three fault steps share one booking: a session fault records
+      // its stated windows before the step's own effects (plans/0057 §8) —
+      // a reset that outlives the process, booked for the account the
+      // failure ran on, read before the escalation moves the chain. The
+      // blocked guard holds by nextStep's contract (these kinds answer a
+      // fault face, which only a blocked result carries) and only types
+      // the reads of the result's failure fields below.
+      // AUTO-DECISION: the booking hangs on the step kinds (the fault set
+      // is exactly escalate, after-ladder, retry and the recover-with-a-
+      // cause below) instead of a fault flag on Step — the kinds state the
+      // invariant where the booking happens, and a flag would be
+      // vocabulary on every step for one call's wiring.
+      case "escalate":
+      case "after-ladder":
+      case "retry":
+        if (result.type !== "blocked") continue
+        await learnFailure(opts.dir, account, result, clockNow())
+        if (step.kind === "escalate") {
+          // The escalation is key → model → wait (plans/0055 §7): a ringed
+          // provider rotates to its next key first (rotateProviderKey), the
+          // model failover (switchModel, step 2) follows only when no key
+          // is left, and the wait-and-probe loop takes what neither can
+          // move. The down marks are read before the escalation moves
+          // anything (downTarget), so a classifier answer still on its way
+          // can extend them to the reset it names (lateReset).
+          const target = downTarget()
+          const moved =
+            (opts.routing !== undefined && (await rotateProviderKey(step.label, step.until))) ||
+            (await switchModel(step.label, step.until, step.classified))
+          lateReset(result.pendingReset, target)
+          if (moved) continue
+          // Candidates exhausted (candidates and primary all quota-restricted /
+          // unusable): no longer a blocking exit — the wait-and-probe loop waits
+          // for the quota to recover, probing with the currently effective model
+          // in the meantime, and after recovery continues from a fork of the
+          // interrupted session. The message names the marks and candidates as
+          // they stand now, after the escalation wrote its own.
+          await awaitRecovery(
+            opts.routing !== undefined
+              ? `${step.label} and every candidate of the tier list is down (down: ${[...downMarks().keys()].join(", ") || "none"})`
+              : `${step.label} and fallback candidates exhausted (tried: ${ladder.tried.join(", ") || "none"})`,
+            step.cause,
+          )
+          continue
+        }
+        // Ladder exhausted: the failover candidates are tried first (switching
+        // provider is the only lever outside the ladder not yet tried); when
+        // those are exhausted too (or none configured — the decision then
+        // answers recover directly), the wait-and-probe loop takes over, every
+        // interval until service recovers, then continuing from a fork of the
+        // interrupted session with the ladder restarted. Waiting inside the
+        // process keeps the session alive and still forkable — a blocking exit
+        // would instead throw away the very session the ladder rounds just
+        // preserved.
+        // Scope: runTask creates the chain per task, chain.model resets with
+        // it, and the next task automatically starts again from the preferred
+        // model; a finer/coarser failback granularity is consumed at the
+        // boundary hook points by OPENCODE_AUTO_MODEL_FAILBACK_SCOPE (see
+        // src/failback.ts).
+        if (step.kind === "after-ladder") {
+          if (await switchModel("retry ladder exhausted")) continue
+          await awaitRecovery(step.why, step.cause)
+          continue
+        }
+        // The backoff before this retry. The counter advances before the
+        // action (this dispatch writes it from the step's ordinal), a
+        // network/service failure restarts the managed server before the
+        // retry goes out, and the fork-seeding paths share the ordinal as the
+        // log ordinal. The sleep stays Bun.sleep — deliberately not
+        // interruptible by /exit here; the run services' clock owns it once
+        // it exists.
+        ladder.i = step.nth + 1
+        if (step.restartServer && opts.server) {
+          await opts.server.restart("session error is a network/service failure; restarting the opencode server and retrying with a new session", chain.agent)
+        }
+        if (step.waitMinutes > 0) {
+          log(`⏳ ${task.id} transient session error; waiting ${step.waitMinutes} minutes before retrying (${step.nth}/${waits.length}):\n${firstLine(result.question)}`)
+          await Bun.sleep(step.waitMinutes * 60_000)
+        }
+        await seedRetry(step.nth, result.question)
+        continue
+    }
+    // Exhaustiveness: every Step kind is dispatched above.
+    step satisfies never
   }
 }

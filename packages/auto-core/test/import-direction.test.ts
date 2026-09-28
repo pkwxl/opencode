@@ -142,6 +142,13 @@ const CLASSIFIED: Record<string, Domain> = {
   // attempt is its executor; the module reaches only the selection core and
   // the types below the session layer.
   "engine/dispatch": "driver",
+  // The pure ladder decision of one session prompt (plans/0061 §4.7): what
+  // the session-driving loop does with a dispatch's outcome — return,
+  // window wait, recovery, the key→model escalation, the after-ladder
+  // failover or the retry. session.ts is its executor; the module reaches
+  // only the chain types and the first-line helper below the session
+  // layer.
+  "engine/ladder": "driver",
   "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -271,16 +278,18 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
     // entry: watch and attempt, session and the commit boundary's resume
     // checks all reach the chain's transitions, and it reaches none of them.
     "chain-transitions": 0,
-    // The pure dispatch plan (plans/0061 §4.7), one slot below watch: attempt
-    // executes it, and the engine modules the turn consolidation adds
-    // (engine/*) need the slots under watch beside it.
+    // The pure engine decisions (plans/0061 §4.7), one slot below watch:
+    // attempt executes the dispatch plan and session the ladder decision,
+    // and the engine modules the turn consolidation adds (engine/*) need
+    // the slots under watch beside them.
     "engine/dispatch": 1,
-    watch: 2,
-    attempt: 3,
-    session: 4,
-    artifact: 5,
-    "exec-session": 5,
-    execute: 6,
+    "engine/ladder": 2,
+    watch: 3,
+    attempt: 4,
+    session: 5,
+    artifact: 6,
+    "exec-session": 6,
+    execute: 7,
     runner: 8,
   }
 
