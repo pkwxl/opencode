@@ -28,7 +28,6 @@ export const REPO_LANE: readonly string[] = [
   "test/artifact.test.ts",
   "test/auto-doc-shape.test.ts",
   "test/capability.test.ts",
-  "test/check.test.ts",
   "test/close.test.ts",
   "test/config-fix.test.ts",
   "test/document-roles.test.ts",

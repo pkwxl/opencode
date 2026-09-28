@@ -18,8 +18,9 @@
 //   - Files a person may have edited (opencode.json, brief.md) are only
 //     written when missing, as init does. The one exception is moving the
 //     retired source/destDir into brief.md, which appends to its sections.
-// validateProjectConfig stays strict: run, status, amend and check name `fix`
-// in a strict failure when a key rule applies (fixHint).
+// validateProjectConfig stays strict: run, status and amend name `fix`
+// in a strict failure when a key rule applies (fixHint); `fix --dryrun`
+// lists the same findings without writing.
 import { join } from "node:path"
 import { ensurePointer } from "./agents-block"
 import { appendToSection, BRIEF_FILE, BRIEF_SOURCE_HEADING, BRIEF_TARGET_HEADING, renderProjectBrief } from "./brief"

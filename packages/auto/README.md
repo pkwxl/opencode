@@ -42,11 +42,10 @@ bun run packages/auto/src/index.ts <subcommand> ...
 ```sh
 opencode-auto init [dir]     # initialize the project config layer: fix the project config into .opencode/auto/config.json, generate opencode.json, the .opencode/agent/auto.md template and the .opencode/auto/brief.md project brief stub, idempotently sync the single opencode-auto marker block in AGENTS.md, and write the driver workdir (tmp/, .auto/), the local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json, the model registry project layer /.opencode/auto/models.json) and every nested git repository in the tree into .gitignore; writes nothing under docs/ — round directories are established by plan
 opencode-auto amend [dir] --<key-option> <value> ...   # rewrite only the given config keys, keep the rest (at least one key; refused without a config), see "Amending (amend)"
-opencode-auto fix [dir] [-f]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config, see "Config fix (fix)"
+opencode-auto fix [dir] [-f] [--dryrun]  # repair the config layer by rule: delete/rename/migrate retired keys into brief.md, align the contract, the AGENTS.md block and .gitignore with the config; --dryrun lists the findings read-only and writes nothing (exit 0 when there are none, 1 when there are any), see "Config fix (fix)"
 opencode-auto plan [dir] [-p "<planning input>" | --file <path>]   # plan the current phase's tasks and stop before execution for human review; establishes the round first when none exists (printing the round-start gate), and after a round completes runs the round-close check to open the next one (see "Planning and the round lifecycle (plan)")
 opencode-auto run [dir]      # execute tasks one by one following the current phase's task index (agent/commit semantics come from the project config)
 opencode-auto reset [dir]    # de-initialize (the inverse of init): remove the config-layer artifacts init wrote and restore the worktree to the uninitialized state
-opencode-auto check [dir]    # scan AGENTS.md and task documents for statements violating the verification/test/commit execution-rights principles, full-scan live docs/ documents for dead references, and note a missing or stale AGENTS.md marker block
 opencode-auto status [dir]   # print the project config summary and the read-only round → phase → task → subtask tree
 opencode-auto models [dir] [--probe]   # print the model registry's effective table (tier, candidates and current availability per phase type × session role); --probe additionally sends a short recovery-probe prompt to every listed model (optional, costs tokens), see "Model registry overview (models)"
 ```
@@ -65,7 +64,9 @@ The `m` mode (the default single run) works the same way: `init` → `plan` (est
 phase `R-01/P01-implement`, stops at the round-start gate) → commit → `plan -p` (optional, see
 [Planning tasks with AI](#planning-tasks-with-ai)) or list tasks by hand in `tasks.md` → `run`. `init`'s
 `-p` (edit `.opencode/auto/brief.md` directly instead) and `--amend` (use the `amend` subcommand instead) are
-retired; the `continue` subcommand is retired too (opening the next round is simply `plan`).
+retired; the `continue` subcommand is retired too (opening the next round is simply `plan`), and so is the
+`check` subcommand (the principle scan and the reference check were removed; `fix --dryrun` lists the
+configuration findings).
 
 `init` always leaves an existing opencode.json untouched; `.opencode/agent/auto.md` is always replaced when
 it differs from the built-in template, so the agent contract is the latest version. Round directories
@@ -182,8 +183,8 @@ Compatibility and migration:
 | Retired options `--verify` / `--review` / `--early` / `--early-review` / `--final-review` | Appearing on any command: exit code 1 + retirement notice (acceptance becomes planned tasks; the report result line `Result: FAIL` stops the run) |
 | Retired options `--source-dir` / `--source-path` / `--dest-dir` | Appearing on any command: exit code 1 + retirement notice (the migration source and target are intent and go into `.opencode/auto/brief.md`) |
 | Existing config containing `source` / `destDir` | `run` / `amend` / `init` fail strictly (`status` prints a ⚠ line); the message names the original value and the fix (copy into brief.md, then delete the key) and points at `fix` — `fix` migrates the value into brief.md's `## Source` / `## Target` sections and deletes the key; a no-argument `init` drops them, prints the original values, and overwrites as usual |
-| Retired options `init -p` / `--prompt` (init no longer writes the brief) and `--amend` | Appearing: exit code 1 + retirement notice (the former points at `.opencode/auto/brief.md` and `plan -p`, the latter at the `amend` subcommand); the retired `continue` subcommand likewise: exit code 1 + retirement notice (pointing at `plan`) |
-| Unknown `--` options (including misspellings like `--next`) | Exit code 1 + near-name suggestions (breaking; previously silently ignored). `check` / `status` accept only a directory argument and reject any option; `reset` / `fix` accept only a directory argument and `-f` |
+| Retired options `init -p` / `--prompt` (init no longer writes the brief) and `--amend` | Appearing: exit code 1 + retirement notice (the former points at `.opencode/auto/brief.md` and `plan -p`, the latter at the `amend` subcommand); the retired `continue` subcommand likewise: exit code 1 + retirement notice (pointing at `plan`); the retired `check` subcommand likewise: exit code 1 + retirement notice (pointing at `fix --dryrun` — the principle scan and the reference check were removed) |
+| Unknown `--` options (including misspellings like `--next`) | Exit code 1 + near-name suggestions (breaking; previously silently ignored). `status` accepts only a directory argument and rejects any option; `reset` accepts only a directory argument and `-f`; `fix` accepts only a directory argument, `-f` and `--dryrun` |
 | Repeated `init` (no arguments) | **Every key falls back to its default** (breaking: previously "config unchanged"); templates and the marker block stay idempotent |
 | Parameterized init like `init --test-by-driver true` | Given keys are written with their values, **keys not given fall back to defaults** |
 | `amend --test-by-driver true` | Only the explicitly given keys are rewritten, the rest are kept |
@@ -253,7 +254,7 @@ validation, the `handoverTest` pairing check and the phase index prefix guardrai
 
 ### Config fix (fix)
 
-`opencode-auto fix [dir] [-f]` repairs the config layer by rule (auto-core plans/0052 D10/D11):
+`opencode-auto fix [dir] [-f] [--dryrun]` repairs the config layer by rule (auto-core plans/0052 D10/D11):
 `.opencode/auto/config.json` and the artifacts init writes from it. The baseline is the existing config on
 disk (read as raw records, without strict validation); it accepts no config key options and **never resets
 any key to its default** — unknown keys and keys no rule names are kept verbatim. The rules repair only keys
@@ -289,6 +290,12 @@ there are fixable items it goes through the clean-worktree gate, then asks once 
 off-TTY; `-f`/`--force` skips both gates), then writes per the list and prints a `fixed:` line per item. fix
 does not commit — the changes stay in the worktree for review.
 
+`fix --dryrun` is the read-only half and the replacement for the retired `check` as a scripted gate on config
+drift: it plans and prints the findings and writes nothing, exiting `0` when there are none and `1` when
+there are any (fixable and manual alike), so a CI job can gate on the exit code. It skips only the gates
+that guard writes — the clean-worktree check, the confirmation and the run-lock refusal (it runs beside a
+live run) — and keeps fix's other refusals, including the uninitialized and legacy-layout ones.
+
 | Case | Exit code |
 | --- | --- |
 | No config and no legacy mode (not initialized; run `init` first) | 1 |
@@ -297,8 +304,10 @@ does not commit — the changes stay in the worktree for review.
 | Manual items present (fixable items still applied) | 1 |
 | Dirty worktree (no `-f` given) | 1, no changes made |
 | Confirmation answered with anything but `y` | 0, no changes made |
+| `--dryrun`, no findings | 0, nothing written |
+| `--dryrun`, findings (fixable and/or manual) | 1, nothing written |
 
-Strict failures on the `run` / `status` / `check` and amend paths append a `fix: opencode-auto fix <dir>`
+Strict failures on the `run` / `status` and amend paths append a `fix: opencode-auto fix <dir>`
 line when fix's key rules can repair them; recovery hints like a missing contract or a stale AGENTS.md block
 likewise point at `fix` (previously they pointed at a no-argument `init`, which resets the other keys).
 
@@ -362,8 +371,9 @@ startup (JSON: pid `pid`, host `host`, command `command`, start time `started`) 
 ends (including a Ctrl+C force quit); `plan` holds the lock too (command recorded as `plan`, re-entering
 internally through `runAll`), and so does `close` (command recorded as `close`). While another process holds
 the lock, `run`, `plan` and `close` refuse with exit code `1` and name the holder; `init`, `amend`, `fix`,
-`reset` rewrite files a running driver reads and are likewise refused with `1` (`-f` does not step over the
-run lock); `check` and `status` never take the lock, and `status` prints a live lock on its first line
+`reset` rewrite files a running driver reads and are likewise refused with `1` (`fix --dryrun` reads and
+prints only, so it runs beside a live run; `-f` does not step over the
+run lock); `status` never takes the lock, and prints a live lock on its first line
 (`▶ run in progress (pid 1234 on build-3, since …)`, or `▶ plan in progress (…)`/`▶ close in progress (…)`
 when `plan`/`close` holds it). A same-host lock whose holder process no longer exists (e.g. after `kill -9`)
 counts as stale: the next `run` or `plan` removes it automatically and prints a one-line notice; a lock
@@ -1088,9 +1098,8 @@ Every execution-session entry clears the pending marker left by the previous ses
 history is kept), preventing stale requests from polluting a new session; test scripts bypass the opencode
 permission system (equivalent to the driver running tests locally itself; a convenience trade-off, not a
 security boundary). init also propagates the convention: the test-execution principle section inside the
-AGENTS.md opencode-auto marker block (appearing and disappearing with `testByDriver`), a matching clause in
-the agent contract, and the `check` subcommand scanning AGENTS.md and task documents for statements
-requiring sessions to run compile/test/build/lint themselves whenever `testByDriver` is on.
+AGENTS.md opencode-auto marker block (appearing and disappearing with `testByDriver`) and a matching clause
+in the agent contract.
 
 ### Test handover (--handover-test)
 
@@ -1611,9 +1620,8 @@ the audit trail; knowledge worth keeping
 goes into `docs/` documents that are committed with the work (phase handovers, the knowledge phase's
 `kb.md`, …). During
 `run` AGENTS.md is read-only, and the agent contract (`.opencode/agent/auto.md`) equally forbids sessions
-from changing it. `check`
-prints a note when the block is missing, inconsistent with the current config rendering, or a legacy
-marker block lingers (note, does not affect the exit code).
+from changing it. `fix` lists a missing or stale marker block (or a lingering legacy one) among its
+findings (`fix --dryrun` prints them without writing).
 
 ## Task unit format
 
@@ -1705,45 +1713,6 @@ plans/0053 D12):
   executes tasks; like the phased
   flow's planning step, it reuses the unclosed session.
 
-## Principle check (check)
-
-`opencode-auto check [dir]` heuristically scans the target directory's `AGENTS.md` and task documents
-`docs/T-*/todo.md`, reporting
-statements that violate the "test / commit execution rights belong to the driver" principles — i.e.
-sentences requiring sessions to run compile/
-test/build/lint commands directly, or to run git commits (hits print the
-file, line number and original text, exit code 1; clean exits 0). Principled/negative sentences ("do not
-run …"),
-statements assigning something to the driver, field lines and the opencode-auto marker block do not count
-as violations;
-the matching is heuristic and the report is for human confirmation. The test-class check runs only with
-`testByDriver: true`,
-the commit-class check always runs. `check` also prints notes (not affecting the exit code): a missing
-opencode-auto block, block content inconsistent with the
-current config rendering (stale), or leftover old/extra named marker blocks; all of these point at
-`fix` (`init` / `run` / `fix` all idempotently sync the marker block). When the config fails to load,
-`check` reports just
-one note, appending the `fix:` hint when it is of a class fix's key rules repair; `check` does not list
-fix's
-itemized findings — run `fix` for the full list (it changes nothing without confirmation).
-
-`check` also runs the **reference check** (the stable reference conventions, stable-refs; the experiment
-switch
-`OPENCODE_AUTO_REF_CHECK=on` enables it, default off, no scan): a full scan of path references in live
-documents
-(`docs/**/*.md`, excluding the old-layout state archive `docs/phases/` and the in-round phase archives
-`docs/R-NN/<letter>-*/`
-) — root-relative target-directory paths inside backtick spans and
-Markdown links (optionally with a `:line` anchor); dead references (path absent,
-line beyond the file's line count) are printed item by item with exit code 1. Paths inside code fences and
-references whose line carries a
-`deleted` / `archived` / `historical` marker are exempt; URLs, absolute paths and version-number shapes
-are not validated.
-`check` also notes when AGENTS.md lacks the reference-conventions block, or the target directory is not a
-git repository (pre-commit reference
-auto-correct unavailable; the non-git note only with the switch on). The pre-commit auto-repair of
-references (rename rewriting) is covered in the "Unified commit" section.
-
 ## Model registry overview (models)
 
 `opencode-auto models [dir]` read-only prints the **model registry**'s effective table; it starts no
@@ -1790,7 +1759,7 @@ problems `run`/`plan` would refuse at startup (bad JSON, unknown fields, bad win
 environment variable unset or file unreadable,
 a git-unignored project layer, …) print item by item with `⚠`, exit code `1` — when the registry loads,
 the full table prints first and the problems follow.
-`models` takes no run lock and accepts no option besides `--probe` (same group as `check`/`status`).
+`models` takes no run lock and accepts no option besides `--probe` (same group as `status`).
 `--probe` **starts agents** (lazily bringing up each profile's host via the agent pool) and sends one very
 short recovery-probe prompt (the same one the wait-and-probe loop uses) to every model referenced by a
 tier,

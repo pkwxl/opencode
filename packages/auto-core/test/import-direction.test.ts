@@ -110,7 +110,6 @@ const CLASSIFIED: Record<string, Domain> = {
   attempt: "driver",
   capability: "driver",
   chain: "driver",
-  check: "driver",
   // The failure-message classifier (plans/0055 §7.1): when to ask, the
   // redaction, the run's cache and call limit, the reply's parser and the
   // one-shot tool-less session; watch asks it beside the event stream.

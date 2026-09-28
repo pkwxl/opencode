@@ -6,8 +6,8 @@
 
 | Package | Role | Contents |
 |---|---|---|
-| `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/close/script/git/protect/config/config-fix/brief/server/mode/prompt/template/knowledge/interactive/log/shell/check) + built-in templates (`templates/`) + design documents (`docs/`) |
-| `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/amend/plan/close/run/fix/reset/check/status/models subcommands, build scripts, CLI parsing/e2e tests |
+| `packages/auto-core` (`@opencode-ai/auto-core`, no bin) | **Core** | Mechanisms (runner/loop/resume/numbering/phases/plan/close/script/git/protect/config/config-fix/brief/server/mode/prompt/template/knowledge/interactive/log/shell) + built-in templates (`templates/`) + design documents (`docs/`) |
+| `packages/auto` (`@opencode-ai/auto`, bin `opencode-auto`) | General CLI shell | `src/index.ts` with init/amend/plan/close/run/fix/reset/status/models subcommands, build scripts, CLI parsing/e2e tests |
 | `packages/<name>` (`@opencode-ai/<name>`, bin `<bin>`) | Simple CLI shell (per shell branch) | Shape and artifact naming are decided by each shell branch, using the existing simple shell branch as reference; the core does not record specific names |
 
 Decision rule: session pipeline, state-file protocol, prompt rendering, acceptance/commit mechanisms belong to the **core**; CLI shape (subcommands or not, usage text, argument parsing and config fixation policy, build artifact naming) belongs to the **shell**.
@@ -86,6 +86,10 @@ Shell differences are injected exclusively through the following extension point
 - **Adapters by registration** (§8.8, C3): `registerAgentAdapter(name, { host, capabilities, bin? })` (`src/shell.ts`, beside `registerTemplate`) lets a shell add an agent adapter **by registration, never by patching the core** — the registry's `adapter` field then accepts that name, and the pool prefers the shell profile's own factory for the chosen agent's adapter (a profile's `bin` still wins). The registration carries the adapter's static capability record with its factory, for the run-start capability intersection.
 - **The `models` command** (§9): the core supplies the data, the shell only prints — `describeModels(dir, now)` / `checkModels(dir)` / `formatModels(description)` from `auto-core/models-describe`, and `probeModels(registry, dir)` from `auto-core/agent-pool`. The command writes nothing and takes no run lock, so it runs beside a live run. Exit 0 with no registry (one line) or one a run start accepts; exit 1 with the problems run/plan would refuse (printed after the table when the registry loads). `--probe` is the only option and is opt-in: it starts agents through the pool (one short recovery-probe prompt per listed model) and costs tokens; a failed probe is a per-model finding, not a command error. `packages/auto` is the reference.
 
+**Changes shells must absorb when refreshing the core snapshot (driver consolidation, `plans/0061` R1, 2026-09-28):**
+
+- **`check` retired; `fix --dryrun`**: `auto-core/check` (`checkPrinciple`) is deleted — its principle scan was a regex heuristic over prose (content policing; the commit principle is enforced mechanically at close-out), and its reference check was removed with the reference checker. A shell still carrying a `check` command replaces it with a retirement notice that exits 1 ahead of every other check (flags, legacy layout, run lock), naming its own `fix --dryrun <dir>`; `packages/auto` is the reference (the `continue` retirement pattern). `fix` gains `--dryrun`: plan and print the findings (`planFix`/`formatFixPlan` unchanged), write nothing, exit 0 when there are none and 1 when there are any — a scripted gate on config drift keeps its exit code. It skips only the gates that guard writes (the clean-tree check, the confirmation and the run-lock refusal, so it runs beside a live run) and keeps fix's other refusals. `fix` also joins the legacy-layout refusal (`legacyLayoutProblem`, M3.7): the exemption that let `check` run on an old layout ended with the command, and `fix --dryrun` keeps fix's refusals — only `reset` stays available on an old tree.
+
 ## D. Branches and merge flow
 
 | Branch | Responsibility |
@@ -124,3 +128,5 @@ A coding agent reaches the driver through one interface, `AgentClient` / `AgentH
 5. **Degradation** — missing capabilities fall back through `src/capability.ts` at run start. A new capability flag, or a configuration with no fallback, needs a rule and a note there.
 6. **Registration** — extend `AgentChoice` (`switches.ts`, with its env parse and messages), `agentOf` (`config.ts`), `chooseAgent` (`agent-choice.ts`), the host module in `DOMAIN_ENTRIES` (`test/import-direction.test.ts`), and the shell's `--agent` validation and help text (`packages/auto`); a shell-side adapter without a core change registers through `registerAgentAdapter` (above), which the model registry's `adapter` field accepts by name.
 7. **Verification** — adapter unit tests on recorded output (as `test/agent-claude.test.ts` does), the fake-client suite staying green (`test/fixtures/agent.ts`), and one real round on a sample project compared against opencode for artifacts and flow log (plans/0042 is the template).
+
+<!-- auto: eof -->

@@ -2,7 +2,6 @@
 import { stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { renderProjectBrief, BRIEF_FILE } from "@opencode-ai/auto-core/brief"
-import { checkPrinciple } from "@opencode-ai/auto-core/check"
 import { checkCleanTree } from "@opencode-ai/auto-core/clean"
 import { confirm } from "@opencode-ai/auto-core/confirm"
 import {
@@ -174,13 +173,28 @@ if (command === "continue") {
   process.exit(1)
 }
 
+// `check` is retired: its principle scan was a regex heuristic over prose
+// (content policing), and its reference check was removed with the reference
+// checker. The useful half of the command — the configuration findings —
+// already lives in `fix`; `fix --dryrun` lists them read-only and keeps an
+// exit code a scripted gate can use. Like `continue`'s, the notice is the one
+// answer whatever follows the command: it fires before the flag refusals, the
+// unknown-option scan, the legacy-layout check and the run-lock refusal — a
+// retired command has no flags, directory or lock semantics left to honor.
+if (command === "check") {
+  console.error(
+    `check is retired: the principle scan and the reference check were removed; ${shellProfile().bin} fix --dryrun <dir> lists the configuration findings`,
+  )
+  process.exit(1)
+}
+
 // Unknown-option interception: every flag outside the whitelist is an error
 // with exit 1, so a typo is never silently ignored. Constitutional and
 // historical options have their own refusal messages on init/run/plan and are
 // waved through here for those to handle; close accepts only its four flags,
 // and everything else (constitutional options and -p/--file included) is
-// refused below in the close branch with close's own messages; check/status
-// take no options at all — any flag is refused.
+// refused below in the close branch with close's own messages; status takes
+// no options at all — any flag is refused.
 // models (auto-core plans/0055 §9) joins them: it only reads and prints.
 // --append is plan's alone (auto-core plans/0053 D23): appending tasks to the
 // current phase is a plan route, so every other command refuses the flag with
@@ -247,13 +261,14 @@ const KNOWN_FLAGS = new Set([...VALUE_FLAGS, ...BOOLEAN_FLAGS, ...Object.keys(RE
 // amend changes one by one (plans/0052 D25); run refuses every one of them.
 const CONFIG_FLAGS = ["mode", "agent", "context-limit", "subtask", "idle-time", "idle-max", "commit", "test-by-driver", "handover-test", "auto-number", "no-auto-number", "wrapup", "no-wrapup", "phases", "parallel", "scan-exempt"]
 // models takes exactly one option: --probe (§9's opt-in probe, which starts
-// agents and spends tokens); check and status stay flagless.
+// agents and spends tokens); status stays flagless.
 const MODELS_FLAGS = new Set(["probe"])
-const FLAGLESS = command === "check" || command === "status" || command === "models"
+const FLAGLESS = command === "status" || command === "models"
 // reset is de-initialization with nothing to configure: it accepts only
 // -f/--force (skipping the confirmation and the worktree cleanliness gate).
 // fix takes its baseline from the existing config and no config flags, so it
-// accepts the same (plans/0052 D11).
+// accepts the same plus --dryrun (plans/0052 D11; the read-only listing of
+// the findings, no write-side gates).
 const RESET_FLAGS = new Set(["force"])
 // close (auto-core plans/0053 D22) takes only its four flags: --reason (a
 // value flag) and the booleans --cascade, --commit-changes, --stash-changes.
@@ -263,8 +278,9 @@ const RESET_FLAGS = new Set(["force"])
 const CLOSE_FLAGS = new Set(["reason", "cascade", "commit-changes", "stash-changes"])
 for (const key of flags.keys()) {
   if (command === "reset" || command === "fix") {
-    if (RESET_FLAGS.has(key)) continue
-    console.error(`unknown option --${key}: ${command} only accepts a directory argument and -f/--force`)
+    // fix accepts --dryrun beside -f/--force (reset does not)
+    if (RESET_FLAGS.has(key) || (command === "fix" && key === "dryrun")) continue
+    console.error(`unknown option --${key}: ${command} only accepts a directory argument${command === "fix" ? ", -f/--force and --dryrun" : " and -f/--force"}`)
     process.exit(1)
   }
   if (command === "close") {
@@ -299,7 +315,7 @@ for (const key of flags.keys()) {
   }
   if (!FLAGLESS && KNOWN_FLAGS.has(key)) continue
   const similar = !FLAGLESS && key ? [...KNOWN_FLAGS].filter((name) => name.startsWith(key)).map((name) => `--${name}`) : []
-  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": check and status only accept a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
+  console.error(`unknown option --${key}${similar.length ? ` (did you mean ${similar.join(" / ")}?)` : ""}${FLAGLESS ? ": status only accepts a directory argument, no options" : "; run opencode-auto without a subcommand to see usage"}`)
   process.exit(1)
 }
 for (const [key, entry] of Object.entries(RETIRED_FLAGS)) {
@@ -352,13 +368,24 @@ if (command === "close") {
 }
 const directory = resolve(command === "close" ? positional[1] ?? "." : positional[0] ?? ".")
 
+// fix --dryrun: list the configuration findings read-only (the replacement
+// for the retired `check` as a scripted gate on config drift). It skips only
+// the gates that guard writes — the clean-tree check, the confirmation and
+// the run-lock refusal below — so a boolean flag here is read by both gates.
+// -f/--force alongside it is accepted and inert: dryrun has no gates left to
+// skip.
+const fixDryrun = command === "fix" && flags.has("dryrun") && flags.get("dryrun") !== "false"
+
 // Legacy layout (M3.7, auto-core plans/0047 R3): an old-layout project is a
-// usage error before init/amend/plan/close writes anything, status
+// usage error before init/amend/plan/close/fix writes anything, status
 // reads anything or run starts (runAll, planPrelude and closeUnit repeat the
-// check for other shells). reset, fix and check stay available so an old tree
-// can still be de-initialized, repaired or inspected (fix touches only the
-// config layer).
-if (command === "init" || command === "amend" || command === "plan" || command === "close" || command === "status" || command === "run") {
+// check for other shells). fix used to stay available so an old tree could
+// still be repaired, and `check` ran on one — but the driver refuses an old
+// layout everywhere else, so the repair had no consumer, and with `check`
+// retired its legacy-layout exemption ended: `fix --dryrun`, the gate that
+// replaced it, refuses the layout like every other live command. Only reset
+// stays available, so an old tree can still be de-initialized.
+if (command === "init" || command === "amend" || command === "plan" || command === "close" || command === "fix" || command === "status" || command === "run") {
   const legacy = await legacyLayoutProblem(directory)
   if (legacy) {
     console.error(legacy)
@@ -371,9 +398,11 @@ if (command === "init" || command === "amend" || command === "plan" || command =
 // setup), so they refuse while another process holds .auto/run.lock; -f does
 // not override it. run takes the lock inside runAll; plan and close take it
 // themselves — plan before its prelude (re-entered through runAll), close
-// around closeUnit — so neither joins this refusal list. (`continue` used to
-// refuse here too; it retired ahead of every check, its notice above.)
-if (command === "init" || command === "amend" || command === "fix" || command === "reset") {
+// around closeUnit — so neither joins this refusal list. fix --dryrun reads
+// and prints only, so it runs beside a live run (the one write-side gate it
+// skips). (`continue` and `check` used to refuse here too; both retired ahead
+// of every check, their notices above.)
+if (command === "init" || command === "amend" || command === "reset" || (command === "fix" && !fixDryrun)) {
   const holder = liveRunLock(directory)
   if (holder) {
     for (const line of lockLines(directory, holder)) console.error(line)
@@ -1393,9 +1422,6 @@ if (command === "init" || command === "amend") {
   process.exit(0)
 }
 
-// check: ① a heuristic scan of AGENTS.md and the open tasks' task documents
-// for statements violating the "commit execution rights live with the driver"
-// principle (and, when testByDriver is on, the "test/compile
 // reset subcommand (de-initialization / uninstall): the inverse of init —
 // remove exactly the config-layer artifacts init wrote and restore the
 // worktree to the uninitialized state, so leftover config stops interfering
@@ -1448,6 +1474,13 @@ if (command === "reset") {
 // takes no config flags and never resets a key. The interaction is reset's:
 // print the plan, then the worktree cleanliness gate and the confirmation
 // (-f skips both), then apply. It never commits: the diff is left for review.
+// --dryrun keeps the read-only half: plan and print the findings, write
+// nothing, exit 0 when there are none and 1 when there are any — a scripted
+// gate on config drift keeps its exit code. It skips only the write-side
+// gates (the clean-tree check, the confirmation and the run-lock refusal
+// above) and keeps fix's other refusals, including the uninitialized and
+// legacy-layout ones; the uninitialized refusal still applies because a
+// directory without a config layer has nothing to list.
 if (command === "fix") {
   const plan = await planFix(directory)
   if (plan.uninitialized) {
@@ -1462,6 +1495,17 @@ if (command === "fix") {
   const manual = plan.findings.filter((finding) => finding.class === "manual")
   console.log(`config-layer findings in ${directory}:`)
   console.log(formatFixPlan(plan))
+  if (fixDryrun) {
+    if (manual.length) {
+      console.error(`${manual.length} finding(s) need a person (listed as manual above): edit the file by hand, then re-run opencode-auto fix ${directory}`)
+    }
+    console.log(
+      fixable.length
+        ? `dryrun: nothing was changed; apply the ${fixable.length} fixable finding(s) with opencode-auto fix ${directory}`
+        : "dryrun: nothing was changed; the finding(s) above need a person",
+    )
+    process.exit(1)
+  }
   if (fixable.length) {
     if (!flags.has("force")) {
       const dirty = await checkCleanTree(directory, "fix")
@@ -1489,41 +1533,6 @@ if (command === "fix") {
   }
   console.log("✓ config layer repaired; review the change and commit it")
   process.exit(0)
-}
-
-// and other command execution rights live with the driver" principle); ② the
-// reference check (stable-refs P4) — a full scan of the live documents
-// (docs/**/*.md) for stale references (a path that does not exist, or a line
-// number beyond the file's line count). Any hit exits 1 for a person to fix.
-// Whether the test-side checks run is checkPrinciple's call from the config;
-// testOn only shapes the message wording.
-if (command === "check") {
-  const { findings, notes, refs, testOn } = await checkPrinciple(directory)
-  const active = [...(testOn ? ["test"] : []), "commit"].join("/")
-  const detail = testOn ? "" : "test disabled (driver-run tests off)"
-  console.log(`checking ${directory}: ${active} execution-rights principles${detail ? ` (${detail})` : ""} + doc references`)
-  for (const note of notes) console.log(`ℹ ${note}`)
-  if (!findings.length && !refs.length) {
-    console.log(`✓ no statements violating the ${active} principles; all doc reference checks passed`)
-    process.exit(0)
-  }
-  for (const finding of findings) {
-    console.log(`⚠ ${finding.file}${finding.task ? `(${finding.task})` : ""}:${finding.line}: ${finding.text}`)
-  }
-  for (const ref of refs) {
-    console.log(`⚠ stale reference ${ref.file}:${ref.line} → ${ref.path} (${ref.problem === "beyond-eof" ? "line beyond end of file" : "path not found"}): ${ref.text}`)
-  }
-  const summary = [
-    ...(findings.length
-      ? [
-          `${findings.length} statement(s) may violate the principles (heuristic check; review and fix manually` +
-            `${testOn ? "; write compile/test/build/lint commands as scripts in test/ for the driver to run" : ""})`,
-        ]
-      : []),
-    ...(refs.length ? [`${refs.length} stale reference(s) (update to current paths, or exempt with the inline markers deleted/archived/historical)`] : []),
-  ]
-  console.log(`found ${summary.join(" and ")}`)
-  process.exit(1)
 }
 
 // The phase progress line (shared by run's banner and status): the current
@@ -1594,21 +1603,20 @@ console.error(`usage:
   opencode-auto plan [dir] [-p|--prompt <text> | --file <path>] [--append] [--new-task "<one-line title>"] [--force-close <ref> --reason <text> [--cascade] [--commit-changes | --stash-changes]] [--server <url>] [--verbose [true|false]] [--interactive|-i] [--wait-answer [1-60]] [--permission [auto-allow|ask-allow|ask-deny|ask-fail]] [--new-session]
   opencode-auto close <ref> [dir] --reason <text> [--cascade] [--commit-changes | --stash-changes]
   opencode-auto amend [dir] [-m|--mode <name>] [--agent opencode|claude] [--subtask [off|auto|true|ondemand]] [--idle-time [1-120]] [--idle-max [1-1440]] [--commit [true]] [--context-limit [n]] [--phases <admtvk subsequence with m | type-id list>] [--test-by-driver [true|false]] [--handover-test [true|false]] [--auto-number|--no-auto-number] [--wrapup|--no-wrapup] [--parallel none|low|medium|high] [--scan-exempt none|<globs>]
-  opencode-auto fix [dir] [-f|--force]
+  opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]
   opencode-auto reset [dir] [-f|--force]
-  opencode-auto check [dir]
   opencode-auto status [dir]
   opencode-auto models [dir] [--probe]
 
 options: project-constitution options (-m/--mode, --agent, --context-limit, --subtask, --idle-time, --idle-max, --commit, --test-by-driver, --handover-test, --auto-number/--no-auto-number, --wrapup/--no-wrapup, --phases, --parallel, --scan-exempt) are frozen by init into .opencode/auto/config.json (versioned, shared with the repo, human-editable); passing them to run is a usage error
        init defaults to a stateless full overwrite: the output is determined solely by the parameters given this time; keys not provided fall back to defaults without merging the old on-disk config — the same init produces identical output in any environment, no pre-cleanup needed. It writes the config layer only (config.json, the brief stub, opencode.json, the agent contract, the AGENTS.md block and .gitignore; never the rounds — plan establishes them), so its -p (edit .opencode/auto/brief.md instead) and --amend (change individual keys with the amend command) are retired. When the directory is inside a git work tree, init first checks that git can commit there (a user.name/user.email identity must resolve) and refuses with exit 1 before any write otherwise; it also extends .gitignore with the driver workdir (tmp/, .auto/), local-only files (/.gitignore, /.env, /AGENTS.md, /opencode.json) and every nested git repository in the tree
        amend changes the config keys given and keeps the rest (at least one key; refuses without .opencode/auto/config.json); it rewrites config.json, the agent contract and the AGENTS.md block and never touches the rounds. A --phases change is judged by the prefix guard below; on an established round the index stays as it was and the change surfaces as a drift plan deals with
-       fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits
+       fix repairs the config layer by rule, never changing a key's meaning: drops or renames retired keys in config.json (moving source/destDir into .opencode/auto/brief.md), writes config.json from a legacy .auto/config.json, and rewrites the agent contract, the AGENTS.md block and the .gitignore entries when missing or out of step with the config (opencode.json and the brief stub only when missing); anything else is reported for a person to fix (exit 1). It prints the plan, then asks like reset; it never commits. fix --dryrun plans and prints the findings and writes nothing (exit 0 when there are none, 1 when there are any — a scripted gate on config drift), skipping only the write-side gates (the clean-tree check, the confirmation and the run-lock refusal)
        -f/--force skips the confirmation and the worktree cleanliness check (for CI and automation; shared by init, reset and fix)
          plan establishes the current round when it is not yet (and, once a finished round passes its round-close checks, the next one), plans the current phase and stops before any task runs, for review; where nothing needs an agent it prints what is next and exits 0. -p/--prompt <text> or --file <path> is the planning input: it is saved as the phase's plan-input.md and committed before the planning session reads it (refused on a round that is not established yet: establish it, commit the setup, then pass the input). --append appends the tasks planned from the input to the phase the route names now, never advancing to another phase (on the plan route the phase is planned normally; in m mode the input already implies the append on a non-empty index); it requires an input, refuses while a task is mid-pipeline, and a stale handover of the phase is removed and distilled again after the appended tasks. --new-task "<one-line title>" adds the one task you name with no session at all — the driver allocates the number, writes docs/T-NNN/todo.md and the index line and commits (targeting, guards and the stale-handover removal as --append's; the title is the whole task content, so review the document before run). It takes run's session options; config options, --dryrun, --wait-between and --max-sessions are refused. Exit codes as run's (2 also when the finished round fails its round-close checks)
          plan --force-close <ref> --reason <text> closes a unit (close's semantics: the Closed: field, the close commit, a phase's mechanical handover) and continues planning in the same process under one run lock — replace a task (plan <dir> --force-close T-005 --reason "…" --append -p "do X instead") or skip a phase into the next one (plan <dir> --force-close R-01.P02 --reason "…"); --reason (one line, required) is the confirmation, and --cascade / --commit-changes | --stash-changes are close's options. The close runs first: a refused close exits 1 with nothing done, a failed close commit exits 2, and after a successful close the exit code is plan's
          close <ref> closes a unit (task T-NNN, phase R-NN.P<nn> or round R-NN) without completing it — done for scheduling, never delivered: the reason goes into a Closed: field of the unit's done.md, a close commit (Auto-Stage: force-close), and for a phase a driver-written mechanical handover that records the skipped gates. The ref comes first (then the directory); the explicit ref and the required one-line --reason are the confirmation (no prompt), and the undo is "git revert" of the close commit, printed in the output and valid before anything else runs. --cascade closes explicit dependents too (tasks whose Depends: names a closed unit, repeating over their chains); --commit-changes / --stash-changes handle uncommitted changes (folded into the close commit / stashed away) — without one, anything beyond the driver's own state files refuses the close. Exit codes: 0 closed; 1 refused or usage error; 2 the close commit or close-out check failed
-        run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), and close holds it around its writes; init, amend, fix and reset refuse while another process holds it (-f does not override it), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
+         run lock: run and plan hold .auto/run.lock while they work (a plan --force-close holds it across the close and the planning alike), and close holds it around its writes; init, amend, fix and reset refuse while another process holds it (fix --dryrun reads and prints only, so it runs beside a live run; -f does not override the refusal), and status shows it on its first line. A lock whose process is gone is removed by the next run, plan or close
        --new-session when resuming from an interruption, do not reuse the interrupted session; start a new one (only skips session reuse; exact phase re-entry is unaffected; by default the surviving interrupted session is reused)
        -m/--mode prompt-level scenario mode (built-in migrate; add or override via .opencode/auto/modes/<name>.md in the target directory — new modes need no source changes)
        -p/--prompt is the planning input of plan (-p <text> | --file <path>); on every other command it is refused — init no longer writes the project brief: edit .opencode/auto/brief.md directly (init writes a stub there when the file is missing: ## Goal, ## Source, ## Target, ## Constraints; comments are hints, stripped before planning; every planning session reads it). State the migration source and target there — --source-dir/--source-path/--dest-dir are retired
@@ -1625,7 +1633,8 @@ options: project-constitution options (-m/--mode, --agent, --context-limit, --su
        --max-sessions <n> run option: the number of AI sessions running concurrently (counts sessions; unrelated to --agent). Reserved: only 1 (the default) is accepted until concurrent execution exists
        --implement-file / --implement-prompt are retired: plan tasks with opencode-auto plan <dir> -p <text> | --file <path> (after plan establishes the round and its setup is committed)
        models prints the model registry's effective table without starting an agent: the layers it was read from (the operator layer $OPENCODE_AUTO_MODELS, else $XDG_CONFIG_HOME/opencode-auto/models.json; the project layer .opencode/auto/models.json, local-only), each agent profile (adapter, bin, server, env variable names — never values), each model entry (its layer, steps, windows and key ring by reference name) with whether it is usable now and why not (outside its windows, filtered out by the agent filter, a known context window below the project cap), the tiers, routes and classifier list, and per phase type and role the tier, the route in force and the ordered candidates. It exits 0 without a registry (one line) and 1 with the problems run and plan would refuse at start (bad JSON, an unknown field, a broken reference, a project layer git would commit); it takes no run lock; --probe additionally sends the recovery probe prompt to each listed model (opt-in, it costs tokens), printing each model's answer or failure, and a failed probe is a finding, not a command error
-       continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} plan <dir> — it runs the round-close checks and opens the next round
+        continue is retired: once the round is complete, fill in ## Close of docs/R-NN/round.md, commit, and run ${shellProfile().bin} plan <dir> — it runs the round-close checks and opens the next round
+        check is retired: the principle scan and the reference check were removed; ${shellProfile().bin} fix --dryrun <dir> lists the configuration findings
 
-exit codes: 0 all complete; 1 usage/environment error (same when check finds principle-violating statements); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)
+exit codes: 0 all complete; 1 usage/environment error (the same code fix --dryrun answers with configuration findings); 2 blocked/incomplete awaiting human intervention (including a task report whose result line reads Result: FAIL); 130 force-terminated by two consecutive Ctrl+C`)
 process.exit(1)

@@ -705,7 +705,7 @@ describe("CLI parsing: run-side options and the config", () => {
     }
   })
 
-  test("unknown-option interception: a mistyped flag exits 1 with near-name hints; check/status refuse any option; intercepted before any write", async () => {
+  test("unknown-option interception: a mistyped flag exits 1 with near-name hints; status refuses any option; intercepted before any write", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       // init side: a mistyped flag is no longer silently ignored
@@ -723,11 +723,11 @@ describe("CLI parsing: run-side options and the config", () => {
       expect(eq.code).toBe(1)
       expect(eq.err).toContain("unknown option --nex")
       expect(await readdir(dir)).toEqual([])
-      // check/status take only a directory argument; any flag is refused
-      const checkFlag = await runCli(["check", dir, "--verbose"])
-      expect(checkFlag.code).toBe(1)
-      expect(checkFlag.err).toContain("unknown option --verbose")
-      expect(checkFlag.err).toContain("only accept a directory argument")
+      // status takes only a directory argument; any flag is refused
+      const statusFlag = await runCli(["status", dir, "--verbose"])
+      expect(statusFlag.code).toBe(1)
+      expect(statusFlag.err).toContain("unknown option --verbose")
+      expect(statusFlag.err).toContain("status only accepts a directory argument")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -771,20 +771,22 @@ describe("CLI parsing: run-side options and the config", () => {
     }
   })
 
-  test("legacy layout retired (M3.7): a root PLAN.md or a docs/R-NN without phase directories → init/status/run are usage errors with exit 1, nothing written; check runs as usual", async () => {
+  test("legacy layout retired (M3.7): a root PLAN.md or a docs/R-NN without phase directories → init/status/run/fix are usage errors with exit 1, nothing written", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       await Bun.write(join(dir, "PLAN.md"), "# plan\n")
       await Bun.write(join(dir, "docs/R-01/phases.md"), "# phases\n")
-      for (const command of ["init", "status", "run"]) {
-        const run = await runCli([command, dir])
-        expect(run.code, command).toBe(1)
+      // fix refuses alike — including --dryrun: the legacy-layout exemption
+      // that let the retired `check` run on an old tree ended with the
+      // command, and the read-only listing keeps fix's other refusals
+      for (const args of [["init", dir], ["status", dir], ["run", dir], ["fix", dir], ["fix", dir, "--dryrun"]]) {
+        const run = await runCli(args)
+        expect(run.code, args.join(" ")).toBe(1)
         expect(run.err).toContain("legacy layout: start a new project")
         expect(run.err).toContain("root PLAN.md, docs/R-01/ without phase directories")
       }
       expect((await readdir(dir)).sort()).toEqual(["PLAN.md", "docs"])
       expect(await readdir(join(dir, "docs"))).toEqual(["R-01"])
-      expect((await runCli(["check", dir])).err).not.toContain("legacy layout")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1802,62 +1804,60 @@ describe("CLI: continue retired (auto-core plans/0053 D33)", () => {
   })
 })
 
-// The check subcommand's reference check (stable-refs P4, D6's second layer):
-// beyond the principle check, a full scan of the live documents for stale
-// references — any hit exits 1; a clean project exits 0. No opencode/provider
-// needed, always runs. Governed by OPENCODE_AUTO_REF_CHECK
-// (refcheck-scope-design D3, default off, a no-op): the hook-point cases
-// inject on to run it (the env var is parsed inside the core, zero CLI shell
-// changes).
-const REFCHECK_ON = { OPENCODE_AUTO_REF_CHECK: "on" }
-describe("CLI: the check reference check (stable-refs P4)", () => {
-  test("stale references in live documents hit exit 1 with a message per finding; exempt lines are not reported", async () => {
+// `check` retired: its principle scan was a regex heuristic over prose and
+// its reference check was removed with the reference checker; the useful
+// half — the configuration findings — is `fix`'s (see `fix --dryrun` below).
+// Like `continue`'s, the notice is the one answer whatever follows the
+// command, ahead of the flag refusals, the legacy-layout check and the
+// run-lock refusal.
+describe("CLI: check retired", () => {
+  const NOTICE =
+    "check is retired: the principle scan and the reference check were removed; opencode-auto fix --dryrun <dir> lists the configuration findings\n"
+
+  test("check always gets the retirement message and exits 1: ahead of flag handling, the legacy-layout check and the lock check, zero writes to the directory", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
-      expect((await runCli(["init", dir])).code).toBe(0)
-      await Bun.write(join(dir, "docs/T-001/todo.md"), ["# T-001: task", "Implement the feature.", ""].join("\n"))
-      await Bun.write(
-        join(dir, "docs/T-001/report.md"),
-        ["A valid reference `docs/T-001/todo.md`.", "A stale reference `src/gone.ts`.", "Exempt as deleted: `docs/old.md`."].join("\n"),
-      )
-      const check = await runCli(["check", dir], REFCHECK_ON)
-      expect(check.code).toBe(1)
-      expect(check.out).toContain("+ doc references")
-      expect(check.out).toContain("⚠ stale reference docs/T-001/report.md:2 → src/gone.ts (path not found)")
-      expect(check.out).toContain("1 stale reference(s) (update to current paths, or exempt with the inline markers")
+      // The bare call and any flag combination get this one message only
+      const plain = await runCli(["check", dir])
+      expect(plain.code).toBe(1)
+      expect(plain.err).toBe(NOTICE)
+      const flagged = await runCli(["check", dir, "--verbose", "--source-dir", "legacy"])
+      expect(flagged.code).toBe(1)
+      expect(flagged.err).toBe(NOTICE)
+      // Ahead of the legacy-layout check: an old-layout tree still gets the
+      // notice, not the layout refusal (check's old exemption is moot — the
+      // command answers nothing else)
+      await Bun.write(join(dir, "PLAN.md"), "# plan\n")
+      const legacy = await runCli(["check", dir])
+      expect(legacy.code).toBe(1)
+      expect(legacy.err).toBe(NOTICE)
+      // Ahead of the lock check: with a live lock present it is still the
+      // retirement notice, not the lock refusal
+      await Bun.write(join(dir, ".auto/run.lock"), JSON.stringify({ pid: process.pid, host: hostname(), command: "plan", started: "2026-09-23T10:00:00.000Z" }))
+      const locked = await runCli(["check", dir])
+      expect(locked.code).toBe(1)
+      expect(locked.err).toBe(NOTICE)
+      // Zero writes throughout
+      expect((await readdir(dir)).sort()).toEqual([".auto", "PLAN.md"])
+      expect(await readdir(join(dir, ".auto"))).toEqual(["run.lock"])
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  test("all references valid exits 0; init output carries the reference-convention section", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
-    try {
-      const init = await runCli(["init", dir])
-      expect(init.out).toContain("appended: AGENTS.md opencode-auto block")
-      await Bun.write(join(dir, "docs/T-001/todo.md"), ["# T-001: task", "Implement the feature.", ""].join("\n"))
-      await Bun.write(join(dir, "src/mod.ts"), "l1\n")
-      await Bun.write(join(dir, "docs/T-001/report.md"), "References `src/mod.ts:1` and [the task](docs/T-001/todo.md).\n")
-      const check = await runCli(["check", dir], REFCHECK_ON)
-      expect(check.code).toBe(0)
-      expect(check.out).toContain("✓ no statements violating the commit principles; all doc reference checks passed")
-      expect(await Bun.file(join(dir, "AGENTS.md")).text()).toContain("Reference and storage conventions")
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("default off: the reference check is a no-op — stale references do not hit (exit 0), zero changes to the target directory", async () => {
+  test("an initialized project gets the retirement message too; the usage text names fix --dryrun", async () => {
     const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
     try {
       expect((await runCli(["init", dir])).code).toBe(0)
-      await Bun.write(join(dir, "docs/T-001/report.md"), "A stale reference `src/gone.ts`.\n")
-      const before = await Bun.file(join(dir, "docs/T-001/report.md")).text()
       const check = await runCli(["check", dir])
-      expect(check.code).toBe(0)
-      expect(check.out).not.toContain("A stale reference `src/gone.ts`")
-      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(before)
-      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
+      expect(check.code).toBe(1)
+      expect(check.err).toBe(NOTICE)
+      // The usage listing carries the retirement line and no check command
+      const usage = await runCli([])
+      expect(usage.code).toBe(1)
+      expect(usage.err).toContain("check is retired: the principle scan and the reference check were removed; opencode-auto fix --dryrun <dir> lists the configuration findings")
+      expect(usage.err).not.toContain("opencode-auto check [dir]")
+      expect(usage.err).toContain("opencode-auto fix [dir] [-f|--force] [--dryrun [true|false]]")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -1982,7 +1982,70 @@ describe("CLI: fix (plans/0052 D10/D11)", () => {
       expect(clean.out).toContain("✓ nothing to fix")
       const bad = await runCli(["fix", dir, "--phases", "am"])
       expect(bad.code).toBe(1)
-      expect(bad.err).toContain("fix only accepts a directory argument and -f/--force")
+      expect(bad.err).toContain("fix only accepts a directory argument, -f/--force and --dryrun")
+      // --dryrun is a fix option now (the read-only listing)
+      const dry = await runCli(["fix", dir, "--dryrun"])
+      expect(dry.code).toBe(0)
+      expect(dry.out).toContain("✓ nothing to fix")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // fix --dryrun: the read-only half of fix and the replacement for the
+  // retired `check` as a scripted gate on config drift — plan and print the
+  // findings, write nothing, exit 0 when there are none and 1 when there are
+  // any. It skips only the write-side gates (the clean-tree check, the
+  // confirmation and the run-lock refusal); the legacy-layout refusal is
+  // covered above, and an uninitialized directory keeps fix's own refusal.
+  test("fix --dryrun with fixable findings: prints the plan, writes nothing, skips the write-side gates", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await Bun.spawn(["git", "-C", dir, "init", "-q"]).exited)).toBe(0)
+      expect((await runCli(["init", dir])).code).toBe(0)
+      const configBefore = await Bun.file(join(dir, ".opencode/auto/config.json")).text()
+      await rm(join(dir, ".opencode/agent/auto.md"))
+      // a dirty tree: the plain fix would refuse here (the worktree gate)
+      await Bun.write(join(dir, "uncommitted.txt"), "dirty\n")
+      const dry = await runCli(["fix", dir, "--dryrun"])
+      expect(dry.code).toBe(1)
+      expect(dry.out).toContain("config-layer findings in")
+      expect(dry.out).toContain("  fix: .opencode/agent/auto.md: missing → write it from the template")
+      expect(dry.out).toContain(`dryrun: nothing was changed; apply the 1 fixable finding(s) with opencode-auto fix ${dir}`)
+      expect(dry.err).not.toContain("requires a clean worktree")
+      // nothing was written: the contract stays missing, the config and the
+      // dirty file are untouched, and the tree is what it was
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(configBefore)
+      expect(await Bun.file(join(dir, "uncommitted.txt")).text()).toBe("dirty\n")
+      // --dryrun=false is the plain fix (with -f applying it); the write then happens
+      const applied = await runCli(["fix", dir, "--dryrun=false", "-f"])
+      expect(applied.code).toBe(0)
+      expect(applied.out).toContain("fixed: .opencode/agent/auto.md: write it from the template")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("fix --dryrun with manual findings: reports them, writes nothing, exit 1", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-cli-"))
+    try {
+      expect((await runCli(["init", dir])).code).toBe(0)
+      // a purely manual finding: the config parses and no key rule repairs it,
+      // but it still fails to load (handoverTest without testByDriver)
+      const stored = JSON.stringify({ ...CONFIG_DEFAULTS, handoverTest: true }, null, 2) + "\n"
+      await Bun.write(join(dir, ".opencode/auto/config.json"), stored)
+      await rm(join(dir, ".opencode/agent/auto.md"))
+      const dry = await runCli(["fix", dir, "--dryrun"])
+      expect(dry.code).toBe(1)
+      expect(dry.out).toContain("config-layer findings in")
+      expect(dry.out).toContain("  manual: .opencode/auto/config.json: handoverTest requires testByDriver: true")
+      expect(dry.out).toContain("  skipped: the agent contract, AGENTS.md block, .gitignore, opencode.json and brief checks (.opencode/auto/config.json does not load)")
+      expect(dry.out).toContain("dryrun: nothing was changed; the finding(s) above need a person")
+      expect(dry.err).toContain("1 finding(s) need a person")
+      // nothing was written: the config is byte-identical, the contract stays missing
+      expect(await Bun.file(join(dir, ".opencode/auto/config.json")).text()).toBe(stored)
+      expect(await Bun.file(join(dir, ".opencode/agent/auto.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -2125,7 +2188,12 @@ describe("CLI: the run lock (auto-core plans/0053 D3)", () => {
       expect(status.code).toBe(0)
       expect(status.out.split("\n")[0]).toBe(`▶ plan in progress (pid ${process.pid} on ${hostname()}, since 2026-09-23T10:00:00.000Z)`)
       expect(status.out).toContain("⚙ project config")
-      expect((await runCli(["check", dir])).err).not.toContain("run lock")
+      // fix --dryrun reads and prints only, so it runs beside the live lock
+      // (the one write-side gate it skips); the plain fix stays refused above
+      const dry = await runCli(["fix", dir, "--dryrun"])
+      expect(dry.code).toBe(0)
+      expect(dry.out).toContain("✓ nothing to fix")
+      expect(dry.err).not.toContain("run lock")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
