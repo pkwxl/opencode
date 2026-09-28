@@ -48,15 +48,16 @@
 // AUTO-DECISION: createRouter() is parameterless instead of receiving the registry and the frozen switch snapshot (no state it builds consults either — the key rings read the registry at their activation, not at construction — and the boundary clears keep taking the failback scope as a call argument because the switch memo is per-parse process state that a test or the pre-freeze composition must be able to change independently of the holder, and capturing the memo at construction time would freeze a stale snapshot for every holder the preload builds before a test parses its switches).
 import type { AgentClient, AgentEvent, AgentTokens } from "./agent/types"
 import type { Boundary } from "./control-types"
-import { phaseToRole, type SessionChain } from "./chain"
-import { modelOfChain } from "./chain-transitions"
+import { phaseToRole, roleOf, type SessionChain, type WindowWait } from "./chain"
+import { modelOfChain, type ChainRoute } from "./chain-transitions"
 import { failbackApplies } from "./failback"
 import { buildRings, ringKeyLabel, type RingRotation } from "./keyring"
-import { log } from "./log"
+import { formatTokens, log } from "./log"
+import { formatWindowState } from "./model-window"
 import type { ModelEntry, ModelRegistry, ModelReference } from "./models"
 import type { PhaseKey } from "./phases/registry"
 import type { Phase } from "./resume"
-import { candidateKey, select, type DownMark, type SelectContext } from "./select"
+import { candidateKey, candidatesOf, select, type Candidate, type DownMark, type SelectContext, type SelectCall } from "./select"
 import type { FailbackScope, ModelRole, Switches } from "./switches"
 import type { Usage } from "./stats"
 
@@ -223,6 +224,74 @@ export type Router = {
     label: string,
     resumed: boolean,
   ): string | undefined
+  // The model failover of the session loop's escalation (§7 step 2), both
+  // halves behind one seam: under a registry (`facts` present) the model
+  // being left — the chain's selected entry — is marked down (this
+  // instance's marks) and a fresh selection picks the next usable
+  // candidate of the list, waiting through `site.waitWindow` and
+  // re-selecting when only the windows block (escalation step 3); without
+  // one the /failback or _FALLBACK ring walk with window clipping and the
+  // ladder's `tried` bookkeeping. Logs the ⇄ line itself (byte-identical
+  // text on both arms) and makes the phase-scoped sticky write (no-registry
+  // and scope=phase only); returns the decided failover — the model left
+  // (undefined = the primary), the candidate picked, the route value the
+  // caller writes through setRoute, and the cross-agent move's target
+  // agent (undefined = keep the chain's context) — or undefined = no
+  // candidate (the caller falls into the wait-and-probe loop). The fork
+  // walk and every chain write stay with the caller; the ladder is
+  // loop-local per-prompt state taken as the `site.ladder` argument and
+  // mutated in place, never held. The registry/no-registry branch is the
+  // fence's to own: callers pass `opts.routing` untested; the no-registry
+  // half is the compatibility layer of plans/0061 §4.11, deleted in F2.
+  failover(
+    facts: RouteFacts | undefined,
+    switches: Switches,
+    site: {
+      chain: SessionChain
+      // The run's current phase (opts.phase): its type entry feeds the
+      // selection call and the no-registry routing table.
+      phase: PhaseKey | undefined
+      cap: number
+      // The context windows the site fetched (contextLimitsOf); the
+      // failover's clipping and selection read them.
+      limits: ReadonlyMap<string, number>
+      ladder: FailoverLadder
+      // The ⇄ and skipping lines' unit label (the task id).
+      label: string
+      // The short phrase naming the trigger; it goes into the log and the
+      // failover note.
+      why: string
+      until?: number
+      classified?: boolean
+      // The window wait of the wait-and-reselect loop: the site's own
+      // sleeper (the booked sleep on the run's clock), handed the payload
+      // the fence builds.
+      waitWindow: (wait: WindowWait) => Promise<void>
+    },
+  ): Promise<FailoverDecision | undefined>
+  // The escalation's step-1 key-rotation plan (§7 step 1), the decision
+  // without its I/O: under a registry, the provider of the chain's selected
+  // entry when its ring is active, with the rotation that would land — or,
+  // for a ring with no key left that is not down, `rotation: undefined`,
+  // naming a provider whose current key still failed and must be marked
+  // down before the fall-through to the model failover. undefined = no key
+  // rotation applies (no registry, a chain model the registry does not
+  // know, or a provider without an active ring): step 1 is a no-op and the
+  // caller falls straight through to the model failover — the
+  // registry-presence test that used to gate the escalation's first arm
+  // lives here now. The spawn config, the host restart and the re-dispatch
+  // fork stay with the caller; the commit and the marks are the router
+  // methods the caller already calls. The registry/no-registry branch is
+  // the fence's to own (plans/0061 §2.1 R2 / §4.11).
+  keyRotation(facts: RouteFacts | undefined, chain: SessionChain): KeyRotationPlan | undefined
+  // The exhaustion line of the escalation's fall-through into the
+  // wait-and-probe loop, both arms behind one seam: under a registry the
+  // tier list's down marks as they stand at the call — after the
+  // escalation wrote its own (this instance's marks, the run's router);
+  // without one the fallback candidates the ladder has tried. Byte-
+  // identical text on both arms; the no-registry half is the compatibility
+  // layer of plans/0061 §4.11, deleted in F2.
+  exhaustionWhy(facts: RouteFacts | undefined, label: string, ladder: FailoverLadder): string
 }
 
 // Builds the run's router. See the module header for why this takes no
@@ -332,6 +401,41 @@ export function createRouter(): Router {
     if (keys === undefined || keys.length === 0) return undefined
     return keys[(positions.get(provider) ?? 0) % keys.length]!
   }
+  // The model down-mark write (the key methods' markKeyDown counterpart):
+  // a mark may carry `until`, the instant a reset time named, and the
+  // classifier flag that tells the ◈ line the class came from the
+  // classifier. Hoisted beside the ring closures because the failover
+  // fence writes a mark inside its decision; the object exposes it
+  // verbatim.
+  const markModelDown = (model: string, until?: number, classifier?: boolean): void => {
+    downModels.set(model, { ...(until !== undefined ? { until } : {}), ...(classifier === true ? { classifier: true as const } : {}) })
+  }
+  // Whether the run's rings are active for this provider (the escalation's
+  // step-1 gate, §7): a key failure on a ringed provider marks the key down
+  // even when the ring cannot rotate — every key is down, or it holds one key
+  // — so §6.2 rule 4 then keeps the provider's entries out of selection.
+  // Hoisted for the keyRotation fence; the object exposes it verbatim.
+  const hasActiveRing = (provider: string): boolean => rings !== undefined && active && rings.get(provider) !== undefined
+  // Would a rotation land on a key? The current key will be marked down
+  // (step 1 of §7), so the search starts after it and wraps, skipping every
+  // key that is down; undefined = no ring, inactive rings, or the ring is
+  // exhausted (every key down). Mutates nothing. Hoisted for the keyRotation
+  // fence; the object exposes it verbatim.
+  const ringRotation = (provider: string, now: number): RingRotation | undefined => {
+    const keys = rings?.get(provider)
+    if (!ringsActive() || keys === undefined || keys.length < 2) return undefined
+    const from = (positions.get(provider) ?? 0) % keys.length
+    for (let step = 1; step < keys.length; step++) {
+      const index = (from + step) % keys.length
+      if (!isKeyDown(provider, keys[index]!.ref, now))
+        return {
+          provider,
+          from: { ref: keys[from]!, index: from, total: keys.length },
+          to: { ref: keys[index]!, index, total: keys.length },
+        }
+    }
+    return undefined
+  }
 
   return {
     stickyModel: () => sticky,
@@ -385,9 +489,7 @@ export function createRouter(): Router {
     // through its context. The map is never replaced, only mutated, so a
     // held reference stays live.
     downMarks: () => downModels,
-    markModelDown: (model, until, classifier) => {
-      downModels.set(model, { ...(until !== undefined ? { until } : {}), ...(classifier === true ? { classifier: true as const } : {}) })
-    },
+    markModelDown,
     // A reset time that became known after the mark was written (the
     // classifier's answer arriving after the turn ended): the mark now
     // lasts until that instant instead of the scope boundary. Only an
@@ -454,31 +556,9 @@ export function createRouter(): Router {
       if (!ringsActive() || keys === undefined) return true
       return keys.some((key) => !isKeyDown(provider, key.ref, now))
     },
-    // Whether the run's rings are active for this provider (the escalation's
-    // step-1 gate, §7): a key failure on a ringed provider marks the key down
-    // even when the ring cannot rotate — every key is down, or it holds one key
-    // — so §6.2 rule 4 then keeps the provider's entries out of selection.
-    hasActiveRing: (provider) => rings !== undefined && active && rings.get(provider) !== undefined,
+    hasActiveRing,
     currentKey,
-    // Would a rotation land on a key? The current key will be marked down
-    // (step 1 of §7), so the search starts after it and wraps, skipping every
-    // key that is down; undefined = no ring, inactive rings, or the ring is
-    // exhausted (every key down). Mutates nothing.
-    ringRotation: (provider, now) => {
-      const keys = rings?.get(provider)
-      if (!ringsActive() || keys === undefined || keys.length < 2) return undefined
-      const from = (positions.get(provider) ?? 0) % keys.length
-      for (let step = 1; step < keys.length; step++) {
-        const index = (from + step) % keys.length
-        if (!isKeyDown(provider, keys[index]!.ref, now))
-          return {
-            provider,
-            from: { ref: keys[from]!, index: from, total: keys.length },
-            to: { ref: keys[index]!, index, total: keys.length },
-          }
-      }
-      return undefined
-    },
+    ringRotation,
     // Commits a decided rotation: the current key is marked down and the
     // position advances. The position stays where it landed afterwards — a
     // cleared mark never moves it back (§6.4). `until` is a reset time the
@@ -658,6 +738,124 @@ export function createRouter(): Router {
       log(`◈ ${label} using model ${target} (${from})`)
       return target
     },
+
+    // —— The session loop's failover neighbourhood ——
+    // The dual failover decision in one seam (see the type comment). The
+    // registry half marks the model being left down on this instance and
+    // selects over the facts (routeContext reads the facts' router — the
+    // run's router, this same instance); the wait-and-reselect loop is
+    // escalation step 3. The no-registry half is the fallback-ring walk the
+    // session loop's own branch held, moved verbatim — the compatibility
+    // layer of plans/0061 §4.11, deleted in F2.
+    failover: async (facts, switches, site) => {
+      const { chain, phase, cap, limits, ladder, label, why, until, classified, waitWindow } = site
+      let from: string | undefined
+      let to: string | undefined
+      let toModel: string | undefined
+      let pickAgent: string | undefined
+      let ringSize = 0
+      if (facts !== undefined) {
+        from = chain.modelEntry
+        if (from !== undefined) markModelDown(from, until, classified)
+        const ctx = routeContext(facts, switches, cap, limits)
+        const call = { role: roleOf(chain), entry: phase?.entry, now: facts.clock.now(), continuation: false as const }
+        let decision = select(ctx, call)
+        if (decision.kind === "wait") {
+          // Escalation step 3 (§7): the remaining candidates are blocked
+          // only by their windows — wait for the opening plus the jitter
+          // instead of handing a closed window to the probe loop, then
+          // select again.
+          await waitWindow(waitPayload(facts, ctx, call, decision))
+          decision = select(ctx, { ...call, now: facts.clock.now() })
+        }
+        if (decision.kind !== "pick") return undefined
+        to = candidateKey(decision.candidate)
+        // The model just marked down cannot be the pick; a same-name result
+        // would mean an override re-listed it — refuse rather than loop.
+        if (to === from) return undefined
+        toModel = decision.candidate.kind === "entry" ? decision.candidate.entry.model : decision.candidate.model
+        pickAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
+      } else {
+        const fallback = override?.fallback ?? switches.model.fallback
+        // Candidates with a known window < cap are skipped with the reason
+        // logged once (D.4: hitting the ceiling or the handover budget
+        // right after the failover would be worse than the original
+        // fault); an unknown window (absent from the map) is not filtered.
+        // AUTO-DECISION: the skipping line's token figures come from log.ts's formatTokens, not session-api's (the two are verbatim twins by construction; session-api type-imports opts, whose inline Router type edge would close a type-counted cycle the import-direction DAG check rejects, so the router cannot reach it)
+        for (const c of fallback) {
+          if (ladder.tried.includes(c)) continue
+          const limit = limits.get(c)
+          if (limit !== undefined && limit < cap) {
+            if (!ladder.clipped.includes(c)) {
+              ladder.clipped.push(c)
+              log(`⇄ ${label} skipping candidate ${c}: context window ${formatTokens(limit)} < chain requirement ${formatTokens(cap)}; switching would immediately hit the ceiling`)
+            }
+            continue
+          }
+          to = c
+          break
+        }
+        // Candidates exhausted (all tried, or all skipped by window
+        // clipping).
+        if (to === undefined) return undefined
+        // Record the model being left (for the log and the failover note):
+        // a candidate already failed over to on the chain wins, otherwise
+        // the routing primary model; without routing, from is undefined and
+        // the log renders "primary model". If from happens to be a real
+        // candidate string, mark it tried as well (so it is not picked
+        // again). The same priority chain as the dispatch target
+        // (modelOfChain: chain.model > sticky > /failback override > the
+        // routing table).
+        from = modelOfChain(chain, switches, phase, sticky, override)
+        if (from !== undefined && !ladder.tried.includes(from)) ladder.tried.push(from)
+        ladder.tried.push(to)
+        toModel = to
+        ringSize = fallback.length
+      }
+      // The route the failover picked, the value the caller writes
+      // wholesale: under a registry the selection state — the internal
+      // name and the base step — travels with the chain; the down marks
+      // replace the phase-scoped sticky holder (§6.4), so scope=phase keeps
+      // the move through the task boundaries without it. Without a registry
+      // only the model string is written.
+      const route: ChainRoute = facts !== undefined ? { model: toModel, entry: to, step: 0 } : { model: toModel }
+      if (facts === undefined && switches.modelFailbackScope === "phase") {
+        // failback scope phase: the failover stays sticky across tasks —
+        // the chain is destroyed per task, so the chosen candidate is
+        // carried into the phase's later tasks through the failback
+        // holder, and only the phase boundary (clearSticky) resets back to
+        // the preferred model. The sticky holder is this instance's own
+        // state.
+        sticky = to
+      }
+      // The ⇄ line and the cross-agent verdict share the one condition:
+      // the pick runs on another agent than the chain's session (a session
+      // never crosses agents).
+      const move = pickAgent !== undefined && chain.agent !== undefined && pickAgent !== chain.agent
+      log(
+        facts !== undefined
+          ? `⇄ ${label} ${why}; ${move ? `moving to agent ${pickAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
+          : `⇄ ${label} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${ladder.tried.length}/${ringSize})`,
+      )
+      return { from, to, route, moveAgent: move ? pickAgent : undefined }
+    },
+    // The step-1 plan (see the type comment): the ring state this reads is
+    // this instance's own — the same instance the escalation's commits and
+    // marks go through. The registry-presence test is the routing branch
+    // the fence owns.
+    keyRotation: (facts, chain) => {
+      if (facts === undefined) return undefined
+      const provider = facts.registry.models.get(chain.modelEntry ?? "")?.provider
+      if (provider === undefined || !hasActiveRing(provider)) return undefined
+      return { provider, rotation: ringRotation(provider, facts.clock.now()) }
+    },
+    // The exhaustion line (see the type comment): the registry arm reads
+    // this instance's marks as they stand at the call — after the
+    // escalation wrote its own.
+    exhaustionWhy: (facts, label, ladder) =>
+      facts !== undefined
+        ? `${label} and every candidate of the tier list is down (down: ${[...downModels.keys()].join(", ") || "none"})`
+        : `${label} and fallback candidates exhausted (tried: ${ladder.tried.join(", ") || "none"})`,
   }
 }
 
@@ -667,7 +865,10 @@ export function createRouter(): Router {
 // decides which half runs (plans/0061 §2.1 R2: one seam now, the
 // no-registry half deleted in F2 — §4.11's compatibility layer). The
 // fence's free functions are the stateless verdicts (no holder reads);
-// `target` above is the holder-reading decision as a method.
+// `target`, `dispatchModel` and `describe` above are the dispatch-side
+// holder-reading decisions as methods, and `failover`, `keyRotation` and
+// `exhaustionWhy` the session loop's failover neighbourhood as methods (the
+// instance supplies the holders and marks those decisions read and write).
 
 // The structural slice of the run's routing facts the fence reads. The
 // run's RoutingFacts (src/routing.ts) satisfies it field for field; the
@@ -691,12 +892,15 @@ export type RouteFacts = {
 }
 
 // The selection context the fence builds from the facts — the twin of
-// routing.ts's selectContext without its optional `limits` (no fence call
-// passes live context windows): the down marks, the /failback override and
-// the key rings are the live run state behind the facts' router, read
-// exactly as selectContext reads them.
-// AUTO-DECISION: the fence's selections carry no context windows (the live limits belong to the agent a resume check never sees); an unknown window never excluded a candidate on the no-registry path either, so the comparison keeps its shape
-function routeContext(facts: RouteFacts, switches: Switches, cap: number): SelectContext {
+// routing.ts's selectContext, optional `limits` included: a fence call
+// that holds live context windows passes them (the failover's clipping and
+// selection read them), the others select without (an unknown window never
+// excluded a candidate on the no-registry path either, so the comparison
+// keeps its shape). The down marks, the /failback override and the key
+// rings are the live run state behind the facts' router, read exactly as
+// selectContext reads them.
+// AUTO-DECISION: the fence's selections carry no context windows except where the site holds them (the live limits belong to the agent a resume check never sees); an unknown window never excluded a candidate on the no-registry path either, so the comparison keeps its shape
+function routeContext(facts: RouteFacts, switches: Switches, cap: number, limits?: ReadonlyMap<string, number>): SelectContext {
   return {
     registry: facts.registry,
     cap,
@@ -706,6 +910,25 @@ function routeContext(facts: RouteFacts, switches: Switches, cap: number): Selec
     override: facts.router.failbackOverride(),
     marks: facts.router.downMarks(),
     ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
+    ...(limits !== undefined ? { limits } : {}),
+  }
+}
+
+// The wait payload of a wait decision — the twin of the session loop's
+// windowWaitOf, which builds the same payload at its own selection site
+// (the recovery probe's loop): the model that opens first, its formatted
+// opening and the dispatch list's tier.
+function waitPayload(
+  facts: RouteFacts,
+  ctx: SelectContext,
+  call: SelectCall,
+  decision: { until: number; candidate: Candidate },
+): WindowWait {
+  return {
+    until: decision.until,
+    model: candidateKey(decision.candidate),
+    tier: candidatesOf(ctx, call).tier,
+    opens: formatWindowState({ open: false, opens: decision.until }, facts.registry.tz, call.now),
   }
 }
 
@@ -798,3 +1021,36 @@ export function deadSessionWhy(
 export function agentField(facts: RouteFacts | undefined, agent: string | undefined): { agent?: string } {
   return facts !== undefined && agent !== undefined ? { agent } : {}
 }
+
+// The failover fence's slice of the session loop's ladder bookkeeping: the
+// candidate strings this chain has already tried (ordered, for the
+// exhaustion line and the dedup on re-selection) and those skipped because
+// their context window falls short (for the same). A structural slice of
+// the loop's LadderState, taken as data exactly like the chain view and
+// the sticky/override holders elsewhere in the fence: the ladder is
+// loop-local, per-prompt state the fence mutates through the argument
+// (never holds), so naming the engine's type would couple the service to
+// the decision module its caller executes for no gain.
+export type FailoverLadder = { tried: string[]; clipped: string[] }
+
+// One decided model failover (the answer of `failover`): the model being
+// left (`from`, undefined = the primary — the log renders "primary model"),
+// the candidate picked (`to`: a registry entry's internal name, or the
+// ring's model string without one), the route value the caller writes
+// through setRoute (under a registry the selection state travels with the
+// chain: model id + internal entry + a reset step; without one the model
+// string alone), and the cross-agent move's target agent (undefined = keep
+// the chain's context, a fork of the failed session).
+export type FailoverDecision = {
+  from: string | undefined
+  to: string
+  route: ChainRoute
+  moveAgent: string | undefined
+}
+
+// The escalation's step-1 key-rotation plan (the answer of `keyRotation`):
+// the provider whose ring moves, and the rotation that would land — or
+// undefined for a ring with no key left that is not down, whose current
+// key still failed and must be marked down before the fall-through to the
+// model failover.
+export type KeyRotationPlan = { provider: string; rotation: RingRotation | undefined }

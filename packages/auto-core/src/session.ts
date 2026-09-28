@@ -280,12 +280,12 @@ export async function runSession(
   // hour-scaled, extra attempts do not help, waiting is all there is.
   const waits = switches.retryWaits
   let i = 1
-  // The effective failover candidate ring: when /failback with arguments has
-  // redefined the model order, its override ring applies, otherwise the
-  // OPENCODE_AUTO_MODEL_FALLBACK parse result from switches (the switches memo
-  // is constant; the override lives in the failback module's state). The
-  // failover trigger gate and switchModel's candidate walk share this one
-  // source.
+  // The effective failover candidate ring's length, as the ladder facts
+  // report it: when /failback with arguments has redefined the model order,
+  // its override ring applies, otherwise the OPENCODE_AUTO_MODEL_FALLBACK
+  // parse result from switches (the switches memo is constant; the override
+  // lives in the failback module's state). The failover's own candidate walk
+  // (behind the router's fence) reads the same one source.
   const fallbackRing = () => router.failbackOverride()?.fallback ?? switches.model.fallback
   // The common action of a candidate failover (shared by the two trigger
   // faces: the quota-failover branch below and the fallback after ladder
@@ -308,90 +308,35 @@ export async function runSession(
   // line names the move "quota (classifier)" (§6.5).
   const switchModel = async (why: string, until?: number, classified?: boolean): Promise<boolean> => {
     limits ??= await contextLimitsOf(client)
-    let from: string | undefined
-    let to: string | undefined
-    let toModel: string | undefined
-    // The agent profile the failover's pick runs on (plans/0055 §8.3): a
-    // move onto another agent cannot fork (F3) — it opens a new session
-    // there with the worktree-check note instead.
-    let pickAgent: string | undefined
-    let ringSize = 0
-    if (opts.routing) {
-      from = chain.modelEntry
-      if (from !== undefined) router.markModelDown(from, until, classified)
-      const facts = opts.routing
-      const ctx = selectContext(facts, switches, cap, limits)
-      const call = { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts), continuation: false as const }
-      let decision = select(ctx, call)
-      if (decision.kind === "wait") {
-        // Escalation step 3 (§7): the remaining candidates are blocked only
-        // by their windows — wait for the opening plus the jitter instead of
-        // handing a closed window to the probe loop, then select again.
-        await waitForWindow(windowWaitOf(ctx, call, decision))
-        decision = select(ctx, { ...call, now: nowOf(facts) })
-      }
-      if (decision.kind !== "pick") return false
-      to = candidateKey(decision.candidate)
-      // The model just marked down cannot be the pick; a same-name result
-      // would mean an override re-listed it — refuse rather than loop.
-      if (to === from) return false
-      toModel = decision.candidate.kind === "entry" ? decision.candidate.entry.model : decision.candidate.model
-      pickAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
-    } else {
-      const fallback = fallbackRing()
-      // Candidates with a known window < cap are skipped with the reason
-      // logged once (D.4: hitting the ceiling or the handover budget right
-      // after the failover would be worse than the original fault); an unknown
-      // window (absent from the map) is not filtered.
-      for (const c of fallback) {
-        if (ladder.tried.includes(c)) continue
-        const limit = limits.get(c)
-        if (limit !== undefined && limit < cap) {
-          if (!ladder.clipped.includes(c)) {
-            ladder.clipped.push(c)
-            log(`⇄ ${task.id} skipping candidate ${c}: context window ${formatTokens(limit)} < chain requirement ${formatTokens(cap)}; switching would immediately hit the ceiling`)
-          }
-          continue
-        }
-        to = c
-        break
-      }
-      // Candidates exhausted (all tried, or all skipped by window clipping).
-      if (to === undefined) return false
-      // Record the model being left (for the log and the failover note): a
-      // candidate already failed over to on the chain wins, otherwise the
-      // routing primary model; without routing, from is undefined and the log
-      // renders "primary model". If from happens to be a real candidate
-      // string, mark it tried as well (so it is not picked again). The same
-      // priority chain as attempt's target evaluation (modelOfChain:
-      // chain.model > sticky > /failback override > the routing table).
-      from = modelOfChain(chain, switches, opts.phase, router.stickyModel(), router.failbackOverride())
-      if (from !== undefined && !ladder.tried.includes(from)) ladder.tried.push(from)
-      ladder.tried.push(to)
-      toModel = to
-      ringSize = fallback.length
-    }
+    // The dual decisions of the failover — the candidate choice (a fresh
+    // selection under a registry, the fallback-ring walk without one), the
+    // route value, the phase-scoped sticky write, the ⇄ line and the
+    // cross-agent verdict — sit behind the router's routing fence: the
+    // routing facts pass in untested and the registry/no-registry branch
+    // lives in src/router.ts. The ladder is this loop's own per-prompt
+    // bookkeeping: the fence mutates it through the argument and never
+    // holds it.
+    const decision = await router.failover(opts.routing, switches, {
+      chain,
+      phase: opts.phase,
+      cap,
+      limits,
+      ladder,
+      label: task.id,
+      why,
+      until,
+      classified,
+      waitWindow: waitForWindow,
+    })
+    if (decision === undefined) return false
     // The route the failover picked, written wholesale (setRoute): under a
     // registry the selection state — the internal name and the base step —
-    // travels with the chain; the down marks replace the phase-scoped sticky
-    // holder (§6.4), so scope=phase keeps the move through the task
+    // travels with the chain; the down marks replace the phase-scoped
+    // sticky holder (§6.4), so scope=phase keeps the move through the task
     // boundaries without it. Without a registry only the model string is
-    // written (entry and step have never held a defined value on that path,
-    // so the wholesale clear is a no-op there).
-    setRoute(chain, opts.routing ? { model: toModel, entry: to, step: 0 } : { model: toModel })
-    if (!opts.routing && switches.modelFailbackScope === "phase") {
-      // failback scope phase: the failover stays sticky across tasks — the
-      // chain is destroyed per task, so the chosen candidate is carried into
-      // the phase's later tasks through the failback module's sticky holder,
-      // and only the phase boundary (clearSticky) resets back to the preferred
-      // model.
-      router.setSticky(to)
-    }
-    log(
-      opts.routing
-        ? `⇄ ${task.id} ${why}; ${pickAgent !== undefined && chain.agent !== undefined && pickAgent !== chain.agent ? `moving to agent ${pickAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
-        : `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${ladder.tried.length}/${ringSize})`,
-    )
+    // written (entry and step have never held a defined value on that
+    // path, so the wholesale clear is a no-op there).
+    setRoute(chain, decision.route)
     // This candidate gets its own full round of the retry ladder.
     ladder.i = 1
     // Cross-agent move (§7 step 2 / §8.3): the pick runs on another agent
@@ -402,10 +347,10 @@ export async function runSession(
     // dropped with it: its fork value is unreachable from the new agent, so
     // it stops being a fork source instead of failing noisily on the next
     // retry.
-    if (opts.routing && pickAgent !== undefined && chain.agent !== undefined && pickAgent !== chain.agent) {
+    if (decision.moveAgent !== undefined) {
       toAgent(
         chain,
-        retryNote(`Switched model to continue (${why}), moving to agent ${pickAgent}; the new session did not inherit the earlier session's context`),
+        retryNote(`Switched model to continue (${why}), moving to agent ${decision.moveAgent}; the new session did not inherit the earlier session's context`),
       )
       return true
     }
@@ -489,20 +434,20 @@ export async function runSession(
   // `until` as for switchModel: the failed key's mark lasts until the reset
   // time the classifier read.
   const rotateProviderKey = async (why: string, until?: number): Promise<boolean> => {
-    const facts = opts.routing
-    if (facts === undefined) return false
-    const entry = facts.registry.models.get(chain.modelEntry ?? "")
-    const provider = entry?.provider
-    if (provider === undefined || !router.hasActiveRing(provider)) return false
-    const now = nowOf(facts)
-    const rotation = router.ringRotation(provider, now)
-    if (rotation === undefined) {
+    // The step-1 decision fences in the router (the registry-presence test
+    // is the routing branch the fence owns): the plan names the provider
+    // and the rotation that would land, or an exhausted ring whose current
+    // key still failed. The I/O — the spawn config, the host restart, the
+    // re-dispatch fork — stays here.
+    const plan = router.keyRotation(opts.routing, chain)
+    if (plan === undefined) return false
+    if (plan.rotation === undefined) {
       // No key is left that is not down (an exhausted or single-key ring):
       // the current key failed all the same, so it is marked down before the
       // fall-through, and §6.2 rule 4 keeps every entry on this provider out
       // of the selection that follows.
       // AUTO-DECISION: the current key is marked down even when no rotation can land (the design's step 1 words the marking as part of a rotation, but an unmarked current key would leave the ring reading usable while its key just failed with quota, and the failover would be able to re-pick the same dead key the moment the model mark clears)
-      router.markCurrentKeyDown(provider, until)
+      router.markCurrentKeyDown(plan.provider, until)
       return false
     }
     // Rotation restarts the chain's host (§8.1: the pool applies restart to
@@ -510,13 +455,13 @@ export async function runSession(
     // once (one ring state, one spawn config).
     const host = opts.server
     if (host === undefined || host.setConfig === undefined) return false
-    const from = ringKeyLabel(rotation.from)
-    const to = ringKeyLabel(rotation.to)
-    router.commitRotation(rotation, until)
+    const from = ringKeyLabel(plan.rotation.from)
+    const to = ringKeyLabel(plan.rotation.to)
+    router.commitRotation(plan.rotation, until)
     host.setConfig(router.spawnKeyConfig())
-    const restarted = await host.restart(`${why}; rotating the provider ${provider} key ring to key ${to}`, chain.agent)
+    const restarted = await host.restart(`${why}; rotating the provider ${plan.provider} key ring to key ${to}`, chain.agent)
     log(
-      `⇄ ${task.id} ${why}; provider ${provider} key ${from} marked down, continuing the same model on key ${to}` +
+      `⇄ ${task.id} ${why}; provider ${plan.provider} key ${from} marked down, continuing the same model on key ${to}` +
         (restarted ? "" : " (the managed server could not be restarted; the new key applies at its next spawn)"),
     )
     // The re-dispatch rides a fork of the failed session — the same source
@@ -1066,12 +1011,16 @@ export async function runSession(
           // provider rotates to its next key first (rotateProviderKey), the
           // model failover (switchModel, step 2) follows only when no key
           // is left, and the wait-and-probe loop takes what neither can
-          // move. The down marks are read before the escalation moves
-          // anything (downTarget), so a classifier answer still on its way
-          // can extend them to the reset it names (lateReset).
+          // move — the order is the invariant. The registry-presence test
+          // that used to gate step 1 lives behind the fence now: without a
+          // registry the rotation plan is undefined and step 1 falls
+          // straight through to the model failover. The down marks are read
+          // before the escalation moves anything (downTarget), so a
+          // classifier answer still on its way can extend them to the reset
+          // it names (lateReset).
           const target = downTarget()
           const moved =
-            (opts.routing !== undefined && (await rotateProviderKey(step.label, step.until))) ||
+            (await rotateProviderKey(step.label, step.until)) ||
             (await switchModel(step.label, step.until, step.classified))
           lateReset(result.pendingReset, target)
           if (moved) continue
@@ -1079,14 +1028,10 @@ export async function runSession(
           // unusable): no longer a blocking exit — the wait-and-probe loop waits
           // for the quota to recover, probing with the currently effective model
           // in the meantime, and after recovery continues from a fork of the
-          // interrupted session. The message names the marks and candidates as
-          // they stand now, after the escalation wrote its own.
-          await awaitRecovery(
-            opts.routing !== undefined
-              ? `${step.label} and every candidate of the tier list is down (down: ${[...router.downMarks().keys()].join(", ") || "none"})`
-              : `${step.label} and fallback candidates exhausted (tried: ${ladder.tried.join(", ") || "none"})`,
-            step.cause,
-          )
+          // interrupted session. The message (the fence's rendering) names the
+          // marks and candidates as they stand now, after the escalation wrote
+          // its own.
+          await awaitRecovery(router.exhaustionWhy(opts.routing, step.label, ladder), step.cause)
           continue
         }
         // Ladder exhausted: the failover candidates are tried first (switching
