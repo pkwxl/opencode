@@ -25,7 +25,7 @@
 // existing entries only (the loader validates that), so a raw candidate can
 // only come from an override value.
 import { resolveModel } from "./chain"
-import type { DownMark } from "./failback"
+import type { DownMark } from "./router"
 import { candidateList } from "./model-route"
 import { nextOpening, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute } from "./models"
@@ -49,9 +49,10 @@ export type SelectContext = {
   defaultAgent: string
   // The OPENCODE_AUTO_MODEL policy of the run (switches.model).
   policy: ModelPolicy
-  // The `/failback` runtime model-order override (failbackOverride()).
+  // The `/failback` runtime model-order override (the router service's
+  // failbackOverride()).
   override?: { wildcard: string; fallback: string[] }
-  // The run's down marks by internal name (downMarks() of src/failback.ts).
+  // The run's down marks by internal name (the router service's downMarks()).
   marks?: ReadonlyMap<string, DownMark>
   // §6.2 rule 4: does this provider's key ring have a key that is not down,
   // at the dispatch's instant? src/keyring.ts supplies the run's answer

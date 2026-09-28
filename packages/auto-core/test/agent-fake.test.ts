@@ -25,10 +25,8 @@ import type { SessionChain, Watch } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
 import type { Opts } from "../src/opts"
-import { isModelDown, markModelDown, modelDownMark, resetFailback, clearDownMarks } from "../src/failback"
 import { cachedAnswer, resetClassifier } from "../src/classify"
 import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from "../src/keyring"
-import { resetSteps } from "../src/model-step"
 import { isoInZone, parseWindow } from "../src/model-window"
 import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
 import { resetQuotaWindows } from "../src/quota-windows"
@@ -48,6 +46,12 @@ import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fak
 import { clockAt, fixedClock, manualClock } from "./fixtures/clock"
 import { freshRepo, git, task } from "./fixtures/runner"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
+
+// Fresh failback/down-mark state mid-test (the moved state lives in the
+// run's router and has no reset hook): reinstall the holder with a fresh
+// router, keeping the clock the test steered — a plain createServices()
+// would fall back to wall time.
+const freshFailback = (): void => installServices(createServices({ clock: services().clock }))
 
 // Every fake made in this file (the closing roster check reads their calls).
 const agents: FakeAgent[] = []
@@ -580,12 +584,17 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    router: services().router,
     clock: services().clock,
     ...(over.random ? { random: over.random } : {}),
   })
 
   const FLEET = [entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" }), entry("s", { model: "prov/s" })]
-  const deep: Opts = { routing: facts(FLEET) }
+  // The fleet's opts, resolved per access: the router is per-test state
+  // (the preload installs a fresh instance for every test), so capturing
+  // the facts at describe scope would pin one stale router and the marks a
+  // test writes would never reach the dispatch.
+  const deep: Opts = { get routing() { return facts(FLEET) } }
   // The chain of a deep session: decompose routes deep by default.
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
   const quotaTurn = (ctx: { session: string; n: number }): AgentEvent[] | undefined =>
@@ -597,9 +606,6 @@ describe("registry routing (plans/0055 §6, §7)", () => {
         ]
       : undefined
 
-  beforeEach(() => {
-    resetFailback()
-  })
 
   test("every prompt names the tier's first model; the dispatch line format comes from the selection", async () => {
     const agent = make()
@@ -621,8 +627,8 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b"])
     expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
     expect(chain.modelEntry).toBe("b")
-    expect(isModelDown("a", Date.now())).toBe(true)
-    expect(isModelDown("b", Date.now())).toBe(false)
+    expect(services().router.isModelDown("a", Date.now())).toBe(true)
+    expect(services().router.isModelDown("b", Date.now())).toBe(false)
   })
 
   test("a new prompt returns to the primary once its mark clears at the scope boundary", async () => {
@@ -631,7 +637,7 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     await runSession(agent.client, task, "p", deep, chain, undefined, undefined, DEFAULTS)
     // The task boundary under the default task scope: the marks clear, the
     // next task's chain re-selects and the primary is back.
-    clearDownMarks("task", "task")
+    services().router.clearDownMarks("task", "task")
     const next = deepChain()
     await runSession(agent.client, task, "q", deep, next, undefined, undefined, DEFAULTS)
     expect(agent.prompts[2]!.model).toBe("prov/a")
@@ -642,7 +648,7 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     const agent = make({ turn: quotaTurn })
     const chain = deepChain()
     await runSession(agent.client, task, "p", deep, chain, undefined, undefined, DEFAULTS)
-    clearDownMarks("task", "task")
+    services().router.clearDownMarks("task", "task")
     // A takeover of the same session is a continuation of the same prompt
     // line: it stays on the failover candidate although the primary is
     // usable again.
@@ -801,8 +807,8 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     // a fails, b fails: both down → the probe clears a's mark, the probe
     // succeeds on it, and the re-dispatch continues there.
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b", "prov/a", "prov/a"])
-    expect(isModelDown("a", Date.now())).toBe(false)
-    expect(isModelDown("b", Date.now())).toBe(true)
+    expect(services().router.isModelDown("a", Date.now())).toBe(false)
+    expect(services().router.isModelDown("b", Date.now())).toBe(true)
   })
 
   // Escalation step 3 (§7): a quota failure whose remaining candidates are
@@ -865,6 +871,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    router: services().router,
     clock: services().clock,
   })
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
@@ -899,7 +906,6 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
   const optsWith = (host: AgentHost, routing: RoutingFacts): Opts => ({ routing, server: singleHost(host) })
 
   beforeEach(() => {
-    resetFailback()
     resetKeyring()
   })
   afterEach(() => {
@@ -924,7 +930,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
       expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
       expect(agent.prompts[1]!.text).toContain("next key of the ring")
       expect(chain.modelEntry).toBe("a")
-      expect(isModelDown("a", Date.now())).toBe(false)
+      expect(services().router.isModelDown("a", Date.now())).toBe(false)
       // The host restarted once on the next key, and the spawn config names
       // the reference only — never a value.
       expect(restarts).toHaveLength(1)
@@ -951,11 +957,11 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     expect(restarts).toHaveLength(1)
     expect(configs).toHaveLength(1)
     expect(chain.modelEntry).toBe("b")
-    expect(isModelDown("a", Date.now())).toBe(true)
+    expect(services().router.isModelDown("a", Date.now())).toBe(true)
     // Every key of the ring is down now, so §6.2 rule 4 keeps a out (the
     // spawn config still names the current key — a restart for any other
     // reason spawns on the last position).
-    expect(ringHasUsableKey("prov", Date.now())).toBe(false)
+    expect(ringHasUsableKey(services().router, "prov", Date.now())).toBe(false)
     expect(spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
   })
 
@@ -986,7 +992,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     // A scope boundary clears every mark: the ring stays on key B (the
     // config still names it — no restart churn) and the model is eligible
     // again, so the next dispatch selects a.
-    clearDownMarks("task", "task")
+    services().router.clearDownMarks("task", "task")
     expect(spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
     // That dispatch fails on key B: only now does the ring move — wrapping
     // onto key A, whose mark the boundary cleared.
@@ -1051,6 +1057,7 @@ describe("context steps (plans/0055 §4.5)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    router: services().router,
     clock: services().clock,
   })
   const BASE = "prov/k3-256k"
@@ -1061,10 +1068,6 @@ describe("context steps (plans/0055 §4.5)", () => {
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
   const steerInputs = (agent: FakeAgent) => agent.argsOf("promptAsync").map((args) => args[0] as { session: string; text: string; model?: string })
 
-  beforeEach(() => {
-    resetFailback()
-    resetSteps()
-  })
 
   test("the steer at the step-up point names the next id and the chain records the reached step", async () => {
     const lines: string[] = []
@@ -1313,6 +1316,7 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    router: services().router,
     clock: services().clock,
   })
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
@@ -1332,7 +1336,6 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
   }
 
   beforeEach(() => {
-    resetFailback()
     resetClassifier()
   })
   afterEach(() => {
@@ -1370,7 +1373,7 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
       expect(chain.modelEntry).toBe("b")
       // The down mark lasts until the answer's reset time and remembers where
       // the class came from; the ⇄ and ◈ lines say so.
-      expect(modelDownMark("a")).toEqual({ until: Math.floor(resetAt / 1000) * 1000, classifier: true })
+      expect(services().router.modelDownMark("a")).toEqual({ until: Math.floor(resetAt / 1000) * 1000, classifier: true })
       expect(out.lines.some((line) => line.includes("the classifier reads the failure as quota, resets"))).toBe(true)
       expect(out.lines.some((line) => line.includes("quota restricted (classifier)") && line.includes("a → b"))).toBe(true)
       expect(out.lines.some((line) => line.startsWith("◈ T-001 using model b") && line.includes("quota (classifier)"))).toBe(true)
@@ -1399,12 +1402,12 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     const chain = deepChain()
     const result = await runSession(agent.client, task, "p", { routing: facts() }, chain, undefined, undefined, DEFAULTS)
     expect(result.type).toBe("idle")
-    await until(() => isModelDown("free", Date.now()))
-    expect(isModelDown("free", Date.now())).toBe(true)
+    await until(() => services().router.isModelDown("free", Date.now()))
+    expect(services().router.isModelDown("free", Date.now())).toBe(true)
     // Neither the primary nor its fallback was touched: the unknown failure
     // took the retry ladder on the same model.
-    expect(isModelDown("a", Date.now())).toBe(false)
-    expect(isModelDown("b", Date.now())).toBe(false)
+    expect(services().router.isModelDown("a", Date.now())).toBe(false)
+    expect(services().router.isModelDown("b", Date.now())).toBe(false)
     expect(agent.prompts.filter((p) => p.bare === true)).toHaveLength(1)
     expect(agent.prompts.filter((p) => p.bare !== true).map((p) => p.model)).toEqual(["prov/a", "prov/a"])
     expect(chain.modelEntry).toBe("a")
@@ -1445,10 +1448,10 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
       expect(result.type).toBe("idle")
       expect(chain.modelEntry).toBe("b")
       // Marked by the patterns' quota verdict, with no reset time yet.
-      expect(modelDownMark("a")).toEqual({})
+      expect(services().router.modelDownMark("a")).toEqual({})
       release()
-      await until(() => modelDownMark("a")?.until !== undefined)
-      expect(modelDownMark("a")).toEqual({ until: Math.floor(resetAt / 1000) * 1000 })
+      await until(() => services().router.modelDownMark("a")?.until !== undefined)
+      expect(services().router.modelDownMark("a")).toEqual({ until: Math.floor(resetAt / 1000) * 1000 })
       // The class it named came too late to change anything.
       expect(out.lines.some((line) => line.includes("the classifier's answer arrived after the turn ended: a stays down until"))).toBe(true)
       expect(out.lines.some((line) => line.includes("(classifier)"))).toBe(false)
@@ -1496,7 +1499,7 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     const result = await runSession(agent.client, task, "p", { routing: facts() }, chain, undefined, undefined, DEFAULTS)
     expect(result.type).toBe("idle")
     expect(chain.modelEntry).toBe("b")
-    expect(modelDownMark("a")).toEqual({ until: resetAt })
+    expect(services().router.modelDownMark("a")).toEqual({ until: resetAt })
     expect(agent.prompts.some((p) => p.bare === true)).toBe(false)
   })
 
@@ -1602,6 +1605,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
       filterSource: undefined,
       defaultAgent: "opencode",
       runAgent: "opencode",
+      router: services().router,
       clock: services().clock,
       random: () => random,
     }
@@ -1631,7 +1635,6 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
 
   let dir: string
   beforeEach(async () => {
-    resetFailback()
     resetQuotaWindows()
     dir = await mkdtemp(join(tmpdir(), "auto-wait-"))
   })
@@ -1695,7 +1698,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     expect(clock.sleeps).toEqual([3_600_000 + 300_000])
     expect(waitLine(out.lines)).toContain(`; b is usable again at ${isoInZone(bReset, "UTC")}, sleeping until about ${new Date(bReset + 300_000).toISOString()}`)
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b", "prov/b", "prov/b"])
-    expect(modelDownMark("a")).toEqual({ until: aReset })
+    expect(services().router.modelDownMark("a")).toEqual({ until: aReset })
   })
 
   test("an end beyond the horizon, or a down candidate with no known end, polls at the recovery interval", async () => {
@@ -1711,9 +1714,9 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
       ],
     ]
     for (const marks of layouts) {
-      resetFailback()
+      freshFailback()
       const { clock, routing } = fleet()
-      for (const [name, until] of marks) markModelDown(name, until)
+      for (const [name, until] of marks) services().router.markModelDown(name, until)
       const agent = make()
       const out = capture()
       try {
@@ -1741,10 +1744,10 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
       { fields: { resetAt: probeReset }, second: probeReset - wake + 300_000, reason: `; the limit resets ${new Date(probeReset).toISOString()}, sleeping until about ` },
     ]
     for (const { fields, second, reason } of cases) {
-      resetFailback()
+      freshFailback()
       const { clock, routing } = fleet(0.5)
-      markModelDown("a", T0 + 3_600_000)
-      markModelDown("b", T0 + 2 * 3_600_000)
+      services().router.markModelDown("a", T0 + 3_600_000)
+      services().router.markModelDown("b", T0 + 2 * 3_600_000)
       const agent = make({ turn: (ctx) => (ctx.n === 1 ? [limitError(ctx.session, fields), ev.idle(ctx.session)] : undefined) })
       const out = capture()
       try {
@@ -1792,7 +1795,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     }
     expect(routedOut.lines.some((line) => line.includes("⇄ T-001 weekly usage window spent; keeping chain context, switching model a → b"))).toBe(true)
     expect(routed.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b"])
-    expect(modelDownMark("a")).toEqual({ until: aReset })
+    expect(services().router.modelDownMark("a")).toEqual({ until: aReset })
   })
 
   // Zhipu's wording (plans/0057 S4a, F24): the reset instant in Beijing time
@@ -1839,7 +1842,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
     }
     expect(out.lines.some((line) => line.includes("⇄ T-001 quota restricted; keeping chain context, switching model a → b"))).toBe(true)
     expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/b"])
-    expect(modelDownMark("a")).toEqual({ until: aReset })
+    expect(services().router.modelDownMark("a")).toEqual({ until: aReset })
   })
 
   test("a limit the event states in structured form outranks the reset in its wording (S4a)", async () => {
@@ -2115,6 +2118,7 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    router: services().router,
     clock: clockAt(NOW),
   })
   const planTask = { id: "PLAN", title: "phase planning", status: "in_progress" as const, attempts: 0, body: "" }
@@ -2278,7 +2282,7 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     if (started.pool === undefined) throw new Error(started.error)
     // No agent filter is in force (the ambient OPENCODE_AUTO_AGENT would
     // otherwise narrow the fleet).
-    const facts = { ...routingFacts(registry, undefined, services().clock, started.profileName), agentFilter: undefined, filterSource: undefined }
+    const facts = { ...routingFacts(registry, undefined, services().clock, services().router, started.profileName), agentFilter: undefined, filterSource: undefined }
     const plan = await seedUnits(dir, `## T-001: per-agent base [in_progress]\nBody.\n`)
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
     return { a, b, goneA, goneB, pool: started.pool, facts, dir, plan, task: plan.tasks[0]! }
@@ -2299,14 +2303,12 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       lines.push(args.map(String).join(" "))
     })
-    resetFailback()
     resetKeyring()
   })
 
   afterEach(() => {
     printed.mockRestore()
     resetShellAdapters()
-    resetFailback()
     resetKeyring()
   })
 
@@ -2358,7 +2360,7 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
       // A failover moved the chain to agent b (a1 marked down): the next
       // subtask resolves b's base on first use. The reload mirrors the
       // pipeline, which re-reads the task between subtasks.
-      markModelDown("a1")
+      services().router.markModelDown("a1")
       const fresh = (await reloadUnits(fleet.dir)).tasks[0]!
       const second = await ensureForkBase(fleet.pool, fleet.plan, fresh, opts, { pct: 100, used: 0, at: 0, agent: "b" }, DEFAULTS)
       expect(second).toMatchObject({ agent: "b" })
@@ -2379,7 +2381,7 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     try {
       const opts: Opts = { routing: fleet.facts, server: fleet.pool, dir: fleet.dir }
       const onA = await ensureForkBase(fleet.pool, fleet.plan, fleet.task, opts, { pct: 100, used: 0, at: 0, agent: "a" }, DEFAULTS)
-      markModelDown("a1")
+      services().router.markModelDown("a1")
       let fresh = (await reloadUnits(fleet.dir)).tasks[0]!
       const onB = await ensureForkBase(fleet.pool, fleet.plan, fresh, opts, { pct: 100, used: 0, at: 0, agent: "b" }, DEFAULTS)
       expect(onA!.id).not.toBe(onB!.id)
@@ -2442,7 +2444,7 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
     await git(dir, "commit", "-q", "-m", "init")
     const agent = make()
     try {
-      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, ...(subtask ? { subtask } : {}) })
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, router: services().router, ...(subtask ? { subtask } : {}) })
       return { outcome, prompts: agent.prompts.map((prompt) => prompt.text.replaceAll(dir, "<dir>")), creates: names(agent).filter((name) => name === "create").length }
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -2503,7 +2505,7 @@ describe("runner dispatch by subtask mode (plans/0059 D1)", () => {
     })
     try {
       mkdirSync(join(dir, "src"), { recursive: true })
-      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "true" })
+      const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "true", router: services().router })
       expect(outcome).toEqual({ type: "completed" })
       const prompts = agent.prompts.map((prompt) => prompt.text)
       // decompose, the digest base, then the two subtasks, each a fork of the base.
@@ -2574,7 +2576,7 @@ describe("auto's lead and its split (plans/0059 D2–D5)", () => {
     await git(dir, "commit", "-q", "-m", "init")
     const script = turn(dir)
     const agent = make({ ...options.agent, ...(script ? { turn: script } : {}), ...(options.capabilities ? { capabilities: options.capabilities } : {}) })
-    const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "auto", ...options.opts })
+    const outcome = await runTask(agent.client, plan, plan.tasks[0]!, { dir, commit: true, wrapup: false, subtask: "auto", router: services().router, ...options.opts })
     return { dir, agent, outcome, prompts: agent.prompts.map((prompt) => prompt.text) }
   }
   const write = (dir: string, rel: string, text: string) => {

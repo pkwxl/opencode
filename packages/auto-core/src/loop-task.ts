@@ -6,7 +6,6 @@
 // Split out of src/loop.ts (plans/0024-module-split-plan.md S15, pure move;
 // §I D14). Does not depend on loop.ts.
 import { maybeExit } from "./exit"
-import { clearDownMarks, consumeFailback } from "./failback"
 import { beginUnit, commitTree, unitBaseline, unitViolations, type UnitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import type { Interactive } from "./interactive"
@@ -21,6 +20,7 @@ import { recallProgress } from "./resume"
 import { runTask } from "./runner"
 import type { AgentPool } from "./agent-pool"
 import type { RoutingFacts } from "./routing"
+import type { Router } from "./router"
 import { statsTask } from "./stats"
 import { autoSwitches } from "./switches"
 import { stepPause } from "./step"
@@ -60,6 +60,13 @@ export type LoopCtx = {
   // session of the loop runs with; undefined = no registry, dispatch is
   // unchanged.
   routing?: RoutingFacts
+  // The run's router service (the routing decision state: the failback
+  // holders, the down marks), threaded beside the routing facts: the loop's
+  // boundary hooks (the failback and /failback consumption points) call it,
+  // and every opts literal the loop builds carries it on to the commit
+  // boundary's resume checks. The loop fills it from the installed services
+  // (an entry module); the pipeline below reads it only through ctx or opts.
+  router: Router
   // false = the run's agents cannot fork, so auto's lead runs without its
   // split clause (plans/0059 D7); set once at run start by the degradation.
   leadSplit?: false
@@ -138,6 +145,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
       scanExempt: opts.scanExempt,
       phase: phaseKey(phase),
       routing: ctx.routing,
+      router: ctx.router,
       ...(ctx.leadSplit === false ? { leadSplit: false } : {}),
     })
     if (outcome.type === "dirty") {
@@ -246,7 +254,7 @@ export async function runTaskLoop(ctx: LoopCtx, phase: PhaseUnit): Promise<numbe
     // sticky holder and apply the model-order override (if any). Registry
     // routing (plans/0055 §6.4): the chain's destruction is also where the
     // task-scope down marks clear — the marks are run state, not chain state.
-    clearDownMarks("task", autoSwitches().modelFailbackScope)
-    consumeFailback()
+    ctx.router.clearDownMarks("task", autoSwitches().modelFailbackScope)
+    ctx.router.consumeFailback()
   }
 }

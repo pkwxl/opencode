@@ -3,7 +3,6 @@
 // config content (references only — no key value ever appears), the
 // usable-key predicate of §6.2 rule 4, and the labels the logs show.
 import { afterEach, describe, expect, test } from "bun:test"
-import { clearDownMarks, isKeyDown, keyDownMark, markKeyDown, resetFailback } from "../src/failback"
 import {
   activateRings,
   buildRings,
@@ -22,6 +21,7 @@ import {
   type RingRotation,
 } from "../src/keyring"
 import type { ModelEntry, ModelReference, ModelRegistry } from "../src/models"
+import { services } from "../src/services"
 
 const envKey = (name: string): ModelReference => ({ kind: "env", name, ref: `{env:${name}}`, label: name })
 const fileKey = (path: string, written: string): ModelReference => ({ kind: "file", path, ref: `{file:${path}}`, label: written })
@@ -60,9 +60,13 @@ const registry = (models?: ModelEntry[]): ModelRegistry => {
 
 const NOW = Date.parse("2026-09-26T12:00:00Z")
 
+// The key marks live in the run's router; each test reads the fresh
+// instance the preload installed (the ring state itself resets through
+// resetKeyring until it moves into the router too).
+const router = (): ReturnType<typeof services>["router"] => services().router
+
 afterEach(() => {
   resetKeyring()
-  resetFailback()
 })
 
 describe("buildRings (pure, from the registry)", () => {
@@ -85,9 +89,9 @@ describe("activation and the spawn config (§4.3 injection)", () => {
 
   test("a rotated ring changes the apiKey reference; a {file:} key is the absolute path reference", () => {
     activateRings(registry(), false)
-    const rotation = ringRotation("zhipuai", NOW)!
-    commitRotation(rotation)
-    commitRotation(ringRotation("zhipuai", NOW)!)
+    const rotation = ringRotation(router(), "zhipuai", NOW)!
+    commitRotation(router(), rotation)
+    commitRotation(router(), ringRotation(router(), "zhipuai", NOW)!)
     expect(spawnKeyConfig()).toEqual({ provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}" } } } })
   })
 
@@ -111,8 +115,8 @@ describe("activation and the spawn config (§4.3 injection)", () => {
 
 describe("rotation (§6.4: the position never moves back)", () => {
   const rotate = (provider = "zhipuai"): RingRotation | undefined => {
-    const rotation = ringRotation(provider, NOW)
-    if (rotation) commitRotation(rotation)
+    const rotation = ringRotation(router(), provider, NOW)
+    if (rotation) commitRotation(router(), rotation)
     return rotation
   }
 
@@ -132,8 +136,8 @@ describe("rotation (§6.4: the position never moves back)", () => {
     rotate()
     expect(currentKey("zhipuai")?.ref).toBe(KEY_C.ref)
     // A scope boundary clears every mark (§6.4)…
-    clearDownMarks("task", "task")
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(true)
+    router().clearDownMarks("task", "task")
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(true)
     // …but the position stays on key 3: no restart churn.
     expect(currentKey("zhipuai")?.ref).toBe(KEY_C.ref)
     expect(spawnKeyConfig()).toEqual({ provider: { zhipuai: { options: { apiKey: "{file:/home/op/.secrets/zhipu-c}" } } } })
@@ -146,70 +150,69 @@ describe("rotation (§6.4: the position never moves back)", () => {
     activateRings(registry(), false)
     // Key B marked down out-of-band (a classifier's reset time, say): a
     // failure of key A skips straight to key C.
-    resetFailback()
     activateRings(registry(), false)
-    markKeyDown("zhipuai", KEY_B.ref)
-    expect(ringRotation("zhipuai", NOW)?.to).toMatchObject({ index: 2, total: 3 })
+    router().markKeyDown("zhipuai", KEY_B.ref)
+    expect(ringRotation(router(), "zhipuai", NOW)?.to).toMatchObject({ index: 2, total: 3 })
   })
 
   test("rotation mutates nothing until committed: deciding leaves the marks and the position alone", () => {
     activateRings(registry(), false)
-    const rotation = ringRotation("zhipuai", NOW)
+    const rotation = ringRotation(router(), "zhipuai", NOW)
     expect(rotation).toBeDefined()
-    expect(keyDownMark("zhipuai", KEY_A.ref)).toBeUndefined()
+    expect(router().keyDownMark("zhipuai", KEY_A.ref)).toBeUndefined()
     expect(currentKey("zhipuai")?.ref).toBe(KEY_A.ref)
-    commitRotation(rotation!)
-    expect(isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(true)
+    commitRotation(router(), rotation!)
+    expect(router().isKeyDown("zhipuai", KEY_A.ref, NOW)).toBe(true)
   })
 
   test("a single-key ring, an unknown provider, inactive rings and unactivated rings never rotate", () => {
     const single = registry([entry("solo", { model: "prov/m", provider: "prov", keys: [envKey("ONLY")] })])
     activateRings(single, false)
-    expect(ringRotation("prov", NOW)).toBeUndefined()
-    expect(ringRotation("other", NOW)).toBeUndefined()
+    expect(ringRotation(router(), "prov", NOW)).toBeUndefined()
+    expect(ringRotation(router(), "other", NOW)).toBeUndefined()
     activateRings(registry(), true)
-    expect(ringRotation("zhipuai", NOW)).toBeUndefined()
+    expect(ringRotation(router(), "zhipuai", NOW)).toBeUndefined()
     resetKeyring()
-    expect(ringRotation("zhipuai", NOW)).toBeUndefined()
+    expect(ringRotation(router(), "zhipuai", NOW)).toBeUndefined()
   })
 })
 
 describe("the usable-key predicate (§6.2 rule 4)", () => {
   test("a ring with a key that is not down is usable; an exhausted ring is not; cleared marks restore it", () => {
     activateRings(registry(), false)
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(true)
-    for (const key of [KEY_A, KEY_B, KEY_C]) markKeyDown("zhipuai", key.ref)
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(false)
-    clearDownMarks("task", "task")
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(true)
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(true)
+    for (const key of [KEY_A, KEY_B, KEY_C]) router().markKeyDown("zhipuai", key.ref)
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(false)
+    router().clearDownMarks("task", "task")
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(true)
   })
 
   test("providers without a ring, inactive rings and unactivated rings are always usable", () => {
     activateRings(registry(), false)
-    expect(ringHasUsableKey("other", NOW)).toBe(true)
+    expect(ringHasUsableKey(router(), "other", NOW)).toBe(true)
     activateRings(registry(), true)
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(true)
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(true)
     resetKeyring()
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(true)
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(true)
   })
 })
 
 describe("the recovery probe's ring half (§6.3)", () => {
   test("clearRingMarks clears the provider's key marks without moving the position; markCurrentKeyDown re-marks the key the probe ran on", () => {
     activateRings(registry(), false)
-    commitRotation(ringRotation("zhipuai", NOW)!)
+    commitRotation(router(), ringRotation(router(), "zhipuai", NOW)!)
     // The current key (B) and the tail (C) both fail: the ring is exhausted.
-    markKeyDown("zhipuai", KEY_B.ref)
-    markKeyDown("zhipuai", KEY_C.ref)
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(false)
-    clearRingMarks("zhipuai")
-    expect(ringHasUsableKey("zhipuai", NOW)).toBe(true)
+    router().markKeyDown("zhipuai", KEY_B.ref)
+    router().markKeyDown("zhipuai", KEY_C.ref)
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(false)
+    clearRingMarks(router(), "zhipuai")
+    expect(ringHasUsableKey(router(), "zhipuai", NOW)).toBe(true)
     expect(currentKey("zhipuai")?.ref).toBe(KEY_B.ref)
-    markCurrentKeyDown("zhipuai")
-    expect(isKeyDown("zhipuai", KEY_B.ref, NOW)).toBe(true)
+    markCurrentKeyDown(router(), "zhipuai")
+    expect(router().isKeyDown("zhipuai", KEY_B.ref, NOW)).toBe(true)
     // A provider without a ring and an unknown provider are no-ops.
-    expect(() => clearRingMarks("other")).not.toThrow()
-    expect(() => markCurrentKeyDown("other")).not.toThrow()
+    expect(() => clearRingMarks(router(), "other")).not.toThrow()
+    expect(() => markCurrentKeyDown(router(), "other")).not.toThrow()
   })
 })
 
@@ -226,7 +229,7 @@ describe("labels and the startup note (§6.5, §4.3 limits)", () => {
     expect(ringLabel(plain)).toBe("0")
     activateRings(registry(), false)
     expect(ringLabel(glm)).toBe("1/3 ZHIPU_KEY_A")
-    commitRotation(ringRotation("zhipuai", NOW)!)
+    commitRotation(router(), ringRotation(router(), "zhipuai", NOW)!)
     expect(ringLabel(glm)).toBe("2/3 ZHIPU_KEY_B")
     activateRings(registry(), true)
     expect(ringLabel(glm)).toBe("3")

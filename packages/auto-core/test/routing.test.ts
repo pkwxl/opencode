@@ -8,6 +8,7 @@ import { parseWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models"
 import { phaseType } from "../src/phases/registry"
 import { dispatchCoverageProblems, logRunRouting, routingFacts, type DispatchNeed, type RoutingFacts } from "../src/routing"
+import { services } from "../src/services"
 import { clockAt } from "./fixtures/clock"
 
 const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
@@ -34,6 +35,9 @@ const facts = (reg: ModelRegistry, over: Partial<RoutingFacts> = {}): RoutingFac
   filterSource: undefined,
   defaultAgent: "opencode",
   runAgent: "opencode",
+  // The run's router (the selection context's state source): the installed
+  // services' instance, so a test that marks through it is read here.
+  router: services().router,
   clock: clockAt(NOW),
   ...over,
 })
@@ -104,7 +108,7 @@ describe("the run-start routing block (§6.5)", () => {
     logRunRouting(facts(reg))
     expect(printed).toContain("◇ tier deep [operator layer]: glm (opencode, open, ring 1/3 ZHIPU_KEY_A) → k3 (opencode, open, ring 0)")
     // A rotation moves the display: the position never moves back on its own.
-    commitRotation(ringRotation("zhipuai", NOW)!)
+    commitRotation(services().router, ringRotation(services().router, "zhipuai", NOW)!)
     printed.length = 0
     logRunRouting(facts(reg))
     expect(printed).toContain("◇ tier deep [operator layer]: glm (opencode, open, ring 2/3 ZHIPU_KEY_B) → k3 (opencode, open, ring 0)")
@@ -183,14 +187,14 @@ describe("routingFacts (the filter and the default agent)", () => {
     const ambient = process.env.OPENCODE_AUTO_AGENT
     delete process.env.OPENCODE_AUTO_AGENT
     try {
-      const facts = routingFacts(reg, "claude", clockAt(0))
+      const facts = routingFacts(reg, "claude", clockAt(0), services().router)
       expect(facts.defaultAgent).toBe("claude")
       // A configured agent no longer filters: with the agent pool,
       // candidates on every profile are selectable and `claude` only names
       // the agent raw override values and unqualified records resolve to.
       expect(facts.agentFilter).toBeUndefined()
       expect(facts.filterSource).toBeUndefined()
-      expect(routingFacts(reg, undefined, clockAt(0)).defaultAgent).toBe("opencode")
+      expect(routingFacts(reg, undefined, clockAt(0), services().router).defaultAgent).toBe("opencode")
     } finally {
       if (ambient !== undefined) process.env.OPENCODE_AUTO_AGENT = ambient
     }
@@ -202,8 +206,8 @@ describe("routingFacts (the filter and the default agent)", () => {
   // adapter, which the implied opencode profile always is).
   test("runAgent is the started profile when passed, else the configured agent's name", () => {
     const reg = registry([], {})
-    expect(routingFacts(reg, undefined, clockAt(0), "claude-b").runAgent).toBe("claude-b")
-    expect(routingFacts(reg, "claude", clockAt(0)).runAgent).toBe("claude")
-    expect(routingFacts(reg, undefined, clockAt(0)).runAgent).toBe("opencode")
+    expect(routingFacts(reg, undefined, clockAt(0), services().router, "claude-b").runAgent).toBe("claude-b")
+    expect(routingFacts(reg, "claude", clockAt(0), services().router).runAgent).toBe("claude")
+    expect(routingFacts(reg, undefined, clockAt(0), services().router).runAgent).toBe("opencode")
   })
 })

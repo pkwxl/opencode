@@ -9,7 +9,6 @@ import { requireArtifact } from "./artifact"
 import { phaseCloseLines, phaseResolveLines, roundCompleteLines, roundResolveLines } from "./conclusion"
 import { acceptanceMark, ACCEPTED_MARK, HANDOVER_SECTIONS, validHandover } from "./document/roles"
 import { maybeExit } from "./exit"
-import { clearDownMarks, clearSticky, consumeFailback } from "./failback"
 import { commitPending, commitTree } from "./git"
 import { hibernatePause } from "./hibernate"
 import { extractKnowledge } from "./knowledge"
@@ -113,6 +112,7 @@ export async function handoverPhase(ctx: LoopCtx, phase: PhaseUnit): Promise<num
         interactive: repl,
         server: serverHandle,
         routing: ctx.routing,
+        router: ctx.router,
       },
       {
         kind: "handover distillation",
@@ -249,9 +249,9 @@ export async function handoverWithStep(ctx: LoopCtx, phase: PhaseUnit): Promise<
   // — the phase-scope cross-task sticky holder clears here; /failback requests
   // are consumed at the same point. Registry routing (plans/0055 §6.4): every
   // scope covers the phase boundary, so the down marks clear here.
-  clearSticky()
-  clearDownMarks("phase", autoSwitches().modelFailbackScope)
-  consumeFailback()
+  ctx.router.clearSticky()
+  ctx.router.clearDownMarks("phase", autoSwitches().modelFailbackScope)
+  ctx.router.consumeFailback()
   return 0
 }
 
@@ -436,6 +436,7 @@ async function phaseLoop(ctx: LoopCtx): Promise<number> {
           interactive: repl,
           server: serverHandle,
         routing: ctx.routing,
+        router: ctx.router,
           mode: opts.mode,
         }, route.phase)
         if (extracted.type === "ok") log(`✓ migration knowledge document produced: ${extracted.file}`)

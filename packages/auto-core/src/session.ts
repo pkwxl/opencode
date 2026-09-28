@@ -22,7 +22,6 @@ import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
 import { ExitRequested, exitRequested } from "./exit"
 import { unitBaseline } from "./git"
-import { clearModelDownMark, downMarks, extendKeyDownMark, extendModelDownMark, failbackOverride, markModelDown, setSticky } from "./failback"
 import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
 import {
   commitRotation,
@@ -249,6 +248,11 @@ export async function runSession(
   // same clock as data for the pure decision code (nowOf).
   const clock = services().clock
   const clockNow = (): number => clock.now()
+  // The run's router (the installed services' router): the failback holders,
+  // the down marks and the key marks are run-wide decision state this loop
+  // writes and reads; the routing facts carry the same router as data for
+  // the pure selection code (selectContext).
+  const router = services().router
   // Quota-failover candidate tracking (design D.3/D.4): shared across the
   // whole session chain — each model candidate gets its own full round of the
   // retry ladder (the ladder's counter resets to 1 when the candidate
@@ -291,7 +295,7 @@ export async function runSession(
   // is constant; the override lives in the failback module's state). The
   // failover trigger gate and switchModel's candidate walk share this one
   // source.
-  const fallbackRing = () => failbackOverride()?.fallback ?? switches.model.fallback
+  const fallbackRing = () => router.failbackOverride()?.fallback ?? switches.model.fallback
   // The common action of a candidate failover (shared by the two trigger
   // faces: the quota-failover branch below and the fallback after ladder
   // exhaustion): pick the next usable candidate, switch the chain's route,
@@ -323,7 +327,7 @@ export async function runSession(
     let ringSize = 0
     if (opts.routing) {
       from = chain.modelEntry
-      if (from !== undefined) markModelDown(from, until, classified)
+      if (from !== undefined) router.markModelDown(from, until, classified)
       const facts = opts.routing
       const ctx = selectContext(facts, switches, cap, limits)
       const call = { role: roleOf(chain), entry: opts.phase?.entry, now: nowOf(facts), continuation: false as const }
@@ -370,7 +374,7 @@ export async function runSession(
       // string, mark it tried as well (so it is not picked again). The same
       // priority chain as attempt's target evaluation (modelOfChain:
       // chain.model > sticky > /failback override > the routing table).
-      from = modelOfChain(chain, switches, opts.phase)
+      from = modelOfChain(chain, switches, opts.phase, router.stickyModel(), router.failbackOverride())
       if (from !== undefined && !ladder.tried.includes(from)) ladder.tried.push(from)
       ladder.tried.push(to)
       toModel = to
@@ -390,7 +394,7 @@ export async function runSession(
       // the phase's later tasks through the failback module's sticky holder,
       // and only the phase boundary (clearSticky) resets back to the preferred
       // model.
-      setSticky(to)
+      router.setSticky(to)
     }
     log(
       opts.routing
@@ -500,14 +504,14 @@ export async function runSession(
     const provider = entry?.provider
     if (provider === undefined || !hasActiveRing(provider)) return false
     const now = nowOf(facts)
-    const rotation = ringRotation(provider, now)
+    const rotation = ringRotation(router, provider, now)
     if (rotation === undefined) {
       // No key is left that is not down (an exhausted or single-key ring):
       // the current key failed all the same, so it is marked down before the
       // fall-through, and §6.2 rule 4 keeps every entry on this provider out
       // of the selection that follows.
       // AUTO-DECISION: the current key is marked down even when no rotation can land (the design's step 1 words the marking as part of a rotation, but an unmarked current key would leave the ring reading usable while its key just failed with quota, and the failover would be able to re-pick the same dead key the moment the model mark clears)
-      markCurrentKeyDown(provider, until)
+      markCurrentKeyDown(router, provider, until)
       return false
     }
     // Rotation restarts the chain's host (§8.1: the pool applies restart to
@@ -517,7 +521,7 @@ export async function runSession(
     if (host === undefined || host.setConfig === undefined) return false
     const from = ringKeyLabel(rotation.from)
     const to = ringKeyLabel(rotation.to)
-    commitRotation(rotation, until)
+    commitRotation(router, rotation, until)
     host.setConfig(spawnKeyConfig())
     const restarted = await host.restart(`${why}; rotating the provider ${provider} key ring to key ${to}`, chain.agent)
     log(
@@ -572,8 +576,8 @@ export async function runSession(
     void pending.then((until) => {
       if (until === undefined) return
       const marked: string[] = []
-      if (target.model !== undefined && extendModelDownMark(target.model, until)) marked.push(target.model)
-      if (target.provider !== undefined && target.key !== undefined && extendKeyDownMark(target.provider, target.key.ref, until))
+      if (target.model !== undefined && router.extendModelDownMark(target.model, until)) marked.push(target.model)
+      if (target.provider !== undefined && target.key !== undefined && router.extendKeyDownMark(target.provider, target.key.ref, until))
         marked.push(`provider ${target.provider} key ${target.key.label}`)
       if (marked.length && opts.routing)
         log(`⏲ ${task.id} the classifier's answer arrived after the turn ended: ${marked.join(" and ")} stay${marked.length > 1 ? "" : "s"} down until ${isoInZone(until, opts.routing.registry.tz)}`)
@@ -623,7 +627,7 @@ export async function runSession(
   // strict resume: the selected entry under a registry, else the switch-
   // routed model string of the no-registry priority chain (modelOfChain;
   // undefined = the agent's own default).
-  const chainModel = (): string | undefined => (opts.routing ? chain.modelEntry : modelOfChain(chain, switches, opts.phase))
+  const chainModel = (): string | undefined => (opts.routing ? chain.modelEntry : modelOfChain(chain, switches, opts.phase, router.stickyModel(), router.failbackOverride()))
   // The sleep of one wait-and-probe round (plans/0057 §6): until the known
   // instant plus hibernate's random delay of 0–600 s (drivers sharing an
   // account do not all probe the same second after a reset), else the
@@ -788,10 +792,10 @@ export async function runSession(
         }
         if (decision.kind === "probe") {
           probed = candidateKey(decision.candidate)
-          clearModelDownMark(probed)
+          router.clearModelDownMark(probed)
           if (decision.candidate.kind === "entry" && decision.candidate.entry.provider !== undefined) {
             probedProvider = decision.candidate.entry.provider
-            clearRingMarks(probedProvider)
+            clearRingMarks(router, probedProvider)
           }
         }
       }
@@ -805,8 +809,8 @@ export async function runSession(
         ping = await attempt(client, task, RECOVERY_PROBE_PROMPT, opts, probe, undefined, undefined, switches)
       } catch (error) {
         if (error instanceof AgentStartError) throw error
-        if (probed !== undefined) markModelDown(probed)
-        if (probedProvider !== undefined) markCurrentKeyDown(probedProvider)
+        if (probed !== undefined) router.markModelDown(probed)
+        if (probedProvider !== undefined) markCurrentKeyDown(router, probedProvider)
         log(`⏳ ${task.id} probe session itself errored (${formatClientError(error)}); service not recovered, continuing to wait`)
         // It says nothing of the limit: the account's learned windows (§8)
         // decide the next sleep, else the poll.
@@ -821,8 +825,8 @@ export async function runSession(
         cause = { ...ping, account: probeAccount }
         // A reset time the classifier read from the probe's failure sets
         // when the re-written marks clear (§7.1), as on the escalation.
-        if (probed !== undefined) markModelDown(probed, ping.resetAt, ping.classified)
-        if (probedProvider !== undefined) markCurrentKeyDown(probedProvider, ping.resetAt)
+        if (probed !== undefined) router.markModelDown(probed, ping.resetAt, ping.classified)
+        if (probedProvider !== undefined) markCurrentKeyDown(router, probedProvider, ping.resetAt)
         if (probed !== undefined) lateReset(ping.pendingReset, { model: probed })
         log(`⏳ ${task.id} probe session still failing (${firstLine(ping.question)}); continuing to wait`)
         continue
@@ -1088,7 +1092,7 @@ export async function runSession(
           // they stand now, after the escalation wrote its own.
           await awaitRecovery(
             opts.routing !== undefined
-              ? `${step.label} and every candidate of the tier list is down (down: ${[...downMarks().keys()].join(", ") || "none"})`
+              ? `${step.label} and every candidate of the tier list is down (down: ${[...router.downMarks().keys()].join(", ") || "none"})`
               : `${step.label} and fallback candidates exhausted (tried: ${ladder.tried.join(", ") || "none"})`,
             step.cause,
           )

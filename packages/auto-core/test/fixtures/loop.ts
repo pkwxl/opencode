@@ -24,6 +24,7 @@ import { singleHost } from "../../src/agent-pool"
 import { runPhaseLoop } from "../../src/loop-phase"
 import type { RunAllOpts } from "../../src/loop-preflight"
 import type { LoopCtx } from "../../src/loop-task"
+import { services } from "../../src/services"
 import { readPhases, type PhaseUnit } from "../../src/phases"
 import { renderTaskIndex } from "../../src/tasks"
 import { fakeAgent, type FakeAgent, type FakeAgentOptions, type TurnContext, type TurnScript } from "./agent"
@@ -283,6 +284,10 @@ export async function loopFixture(
         manual: phases === "m",
         ran: 0,
         input: planInput,
+        // The run's router (loop.ts fills the field from the installed
+        // services; the fixture's runs hold no routing decision state, and
+        // the boundary hooks read it only through ctx).
+        router: services().router,
         // plan --append rides the ctx (loop.ts seeds it from RunAllOpts).
         ...(append ? { append: true } : {}),
       }

@@ -110,7 +110,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Routing run state | The run-level facts (registry, agent filter, default agent), the wiring every registry-driven dispatch calls through, the run-start routing block and the dispatch-coverage refusal | `src/routing.ts` (0055) |
 | Key rings | Per-provider rings of references, ring positions and activation, the spawn config content, rotation by managed-server restart | `src/keyring.ts` (0055) |
 | Failure-message classifier | The registry's `classifier` entries read failure text the error patterns cannot settle and whose reset nothing stated: redaction, cache and call budget, reply parsing, the one-shot tool-free session; the reset horizon | `src/classify.ts` (0055, 0057) |
-| Context steps | The `wider` step ids of one entry: the step-up point, the enabled-step walk over live windows, the resume rule, startup validation, cache-claim verdicts (the live trigger is watch.ts) | `src/model-step.ts` (0055) |
+| Context steps | The `wider` step ids of one entry: the step-up point, the enabled-step walk over live windows, the resume rule, startup validation (pure; the cache-claim run state and the live trigger are the router service's and watch.ts's) | `src/model-step.ts` (0055) |
 | models command data | `checkModels` / `describeModels` / `formatModels`: the run start's registry problems and the effective table as data; the shell only prints | `src/models-describe.ts` (0055) |
 
 ### Task pipeline and sessions
@@ -176,7 +176,7 @@ Grouped by layer, top down. The session-driving chain is strictly layered (0024 
 | Graceful exit | `/exit` at the next safe boundary, the wait-and-probe loop's sleep included | `src/exit.ts` (0014, 0057 §6) |
 | Hibernate | `OPENCODE_AUTO_HIBERNATE` daily UTC window; the shared booked sleep and 0–600 s jitter the registry window waits and the scheduled wait reuse | `src/hibernate.ts` (0027, 0055 §6.3, 0057 §6) |
 | Interactive input | `--interactive` side-channel steer, `--wait-answer` input line | `src/interactive.ts` |
-| Model failback | `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE`, `/failback`; under a model registry also the down marks (per model and provider key) selection reads | `src/failback.ts` (0017, 0055) |
+| Model failback | `OPENCODE_AUTO_MODEL_FAILBACK_SCOPE` granularity and `/failback`: the pure boundary arithmetic in `src/failback.ts`, the state (sticky holder, pending order, run-time override, down marks per model and provider key) in the router service | `src/failback.ts`, `src/router.ts` (0017, 0055) |
 | Stuck-loop detection | Repeated-tool-call detection → steer hint | `src/stuck.ts`, `templates/prompts/stuck-hint.md` (0016) |
 | Proxy-answer ledger | `AUTO-RESOLVE`/`AUTO-DECISION` collection and reporting | `src/resolve.ts` (0020) |
 | Logging | Verbose/audit output, timestamps, log file | `src/log.ts` |

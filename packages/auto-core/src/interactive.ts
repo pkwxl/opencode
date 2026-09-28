@@ -12,8 +12,8 @@ import { createInterface } from "node:readline/promises"
 import type { AgentClient } from "./agent/types"
 import type { Interactive } from "./control-types"
 import { requestExit } from "./exit"
-import { requestFailback } from "./failback"
 import { log, setInput } from "./log"
+import { services } from "./services"
 
 // The interface itself lives in the control-types leaf (plans/0061 §2.2 R8:
 // defined here, its type edge to step closed a cycle with the exit/failback
@@ -114,7 +114,11 @@ export function startInteractive(
             : `⚠ invalid /failback argument: "${bad}" (under a model registry, arguments are internal model names or provider/model with a slash; usage: /failback [primary <name> candidate <name> ...])`,
         )
       } else {
-        requestFailback(order)
+        // The pending order routes through the run's router service (the
+        // installed services' router): the sideband is one of the entries
+        // the services allowlist names, and the state is run-wide — the
+        // safe boundaries consume it wherever the loop stands.
+        services().router.requestFailback(order)
         log(
           order.length
             ? `⇄ /failback received: model order will be redefined at the next safe boundary (phase/task/subtask handover point) — primary ${order[0]}, fallback candidates ${order.slice(1).join(", ") || "(none)"}, and the primary will be retried`

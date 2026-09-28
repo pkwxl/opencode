@@ -1,14 +1,16 @@
 // The run's service holder (the consolidation's services stage): one
 // constructed object for the run-wide decision state that today lives in
-// module singletons, starting with the `Clock` — the one time source the
+// module singletons. It carries the `Clock` — the one time source the
 // session-driving engine (watch, attempt, session) and the process-level
-// time keepers (the stats module) read. The remaining members join with the
-// changes that move their state in: `router` (the decision state of routing
-// and recovery — the down marks, the sticky/override holders, the key
-// rings, the classifier's state, the step claims, the logged windows),
-// `control` (the /exit request and its sleepers) and `git` (the commit-side
-// seam the kernel and engine call). Until then the holder carries the clock
-// alone; the placeholders are the documented absence, not dead fields.
+// time keepers (the stats module) read — and the `Router` — the decision
+// state of routing and recovery's first tranche: the failback holders
+// (sticky, the pending /failback order, the run-time model-order override),
+// the down marks, the logged usage windows and the model-step cache claims
+// (the key rings and the classifier's state join the router with their own
+// changes). The remaining members join with the changes that move their
+// state in: `control` (the /exit request and its sleepers) and `git` (the
+// commit-side seam the kernel and engine call) — the placeholders are the
+// documented absence, not dead fields.
 //
 // Construction happens at the run start (preflight), in a written order:
 // the registry loads and feeds the switches (setSwitchModelRegistry) ahead
@@ -28,6 +30,7 @@
 // quota-window cache, the lock, the log) stay modules by design; the holder
 // wires the ones that need the clock when an instance takes effect.
 import { sleepUnlessExit } from "./exit"
+import { createRouter, type Router } from "./router"
 import { useStatsClock } from "./stats"
 
 // The run's one time source. `sleep` is deliberately not interruptible by
@@ -43,9 +46,10 @@ export type Clock = {
 }
 
 // The services of one run. See the module header for the members that join
-// later (router, control, git) and why they are documented absence here.
+// later (control, git) and why they are documented absence here.
 export type RunServices = {
   readonly clock: Clock
+  readonly router: Router
 }
 
 // The system clock: the wall clock, Bun's non-interruptible sleep, the
@@ -67,9 +71,10 @@ function systemClock(): Clock {
 // Builds a services holder. Pure construction — installing it (or falling
 // back to it through `services()`) is what wires the process-level time
 // keepers to its clock. `over.clock` replaces the system clock (tests steer
-// time with a manual clock).
-export function createServices(over: { clock?: Clock } = {}): RunServices {
-  return { clock: over.clock ?? systemClock() }
+// time with a manual clock); `over.router` replaces the fresh router (tests
+// that want a named instance beside the holder they install).
+export function createServices(over: { clock?: Clock; router?: Router } = {}): RunServices {
+  return { clock: over.clock ?? systemClock(), router: over.router ?? createRouter() }
 }
 
 // The modules allowed to call `services()`. The list may only shrink: a

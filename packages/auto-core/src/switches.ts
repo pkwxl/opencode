@@ -248,7 +248,7 @@ export type Switches = {
   // Failback granularity (default task = zero change from the status quo): at which
   // boundary to reset back to the preferred model after failover, see FailbackScope and
   // src/failback.ts; the /failback command's runtime override does not pass through this
-  // layer (module state in src/failback.ts).
+  // layer (run state in the router service).
   modelFailbackScope: FailbackScope
   // Retry ladder for transient session errors (OPENCODE_AUTO_RETRY_WAITS, comma-separated
   // minutes): each element is "the wait before that retry", the element count is the

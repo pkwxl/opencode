@@ -12,12 +12,12 @@ import { join, relative } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
 import type { SessionChain } from "../src/chain"
-import { clearSticky, consumeFailback, requestFailback, resetFailback, stickyModel } from "../src/failback"
 import { recallHandover, saveHandover } from "../src/handover"
 import type { Interactive } from "../src/interactive"
 import { recallProgress, saveProgress } from "../src/resume"
 import { attempt } from "../src/attempt"
 import { runSession } from "../src/session"
+import { services } from "../src/services"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import type { TestRun } from "../src/testrun"
 import { task, fakeClient, modelThenIdle, retryClient, type Outcome } from "./fixtures/runner"
@@ -785,9 +785,6 @@ describe("quota failover (D.3/D.4): candidate switch keeps context / clamping sk
 // holder, cleared at phase boundaries. /failback with arguments, once consumed, redefines the model order wholesale
 // (primary wildcard + candidate ring) and, through the override layer, takes precedence over switches.model.
 describe("failback scope and the /failback override: failback timing / cross-task stickiness / model-order redefinition / in-use model announcement", () => {
-  afterEach(() => {
-    resetFailback()
-  })
   const SCOPED = (scope: "task" | "session" | "phase") =>
     parseSwitches({ [SWITCH_ENV.model]: "prov/a", [SWITCH_ENV.modelFallback]: "prov/b", [SWITCH_ENV.modelFailbackScope]: scope })
   // The first subscription emits a non-retryable quota error, then idle (isomorphic to the previous group's
@@ -830,13 +827,13 @@ describe("failback scope and the /failback override: failback timing / cross-tas
     const { client, calls } = fakeClient({ events: quotaThenIdle() })
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text", {}, chain, undefined, undefined, SCOPED("phase"))
-    expect(stickyModel()).toBe("prov/b")
+    expect(services().router.stickyModel()).toBe("prov/b")
     // New chain (next task): no chain.model on it; the sticky fallback still uses prov/b.
     const next: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text 2", {}, next, undefined, undefined, SCOPED("phase"))
     expect(calls.prompts[2]!.model).toEqual({ providerID: "prov", modelID: "b" })
     // Phase-boundary clear: the chain after that returns to primary prov/a.
-    clearSticky()
+    services().router.clearSticky()
     const third: SessionChain = { pct: 100, used: 0, at: 0 }
     await runSession(client, task, "prompt text 3", {}, third, undefined, undefined, SCOPED("phase"))
     expect(calls.prompts[3]!.model).toEqual({ providerID: "prov", modelID: "a" })
@@ -844,8 +841,8 @@ describe("failback scope and the /failback override: failback timing / cross-tas
 
   test("/failback override with arguments: primary prov/x + candidate ring prov/y; with no env fallback set, failover still happens through the override ring", async () => {
     const { client, calls } = fakeClient({ events: quotaThenIdle() })
-    requestFailback(["prov/x", "prov/y"])
-    expect(consumeFailback()).toBe(true)
+    services().router.requestFailback(["prov/x", "prov/y"])
+    expect(services().router.consumeFailback()).toBe(true)
     const chain: SessionChain = { pct: 100, used: 0, at: 0 }
     const result = await runSession(client, task, "prompt text", {}, chain, undefined, undefined, parseSwitches({}))
     expect(result.type).toBe("idle")

@@ -152,7 +152,8 @@ export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches
 // priority chain attempt uses to compute the target for a reused session
 // (modelOfChain over a minimal chain view of the record's role and phase —
 // the chain's failover candidates do not exist at resume, so the priority
-// chain starts at sticky > the /failback override > the routing table).
+// chain starts at sticky > the /failback override > the routing table, the
+// two holders read from the session options' router).
 // Returning undefined = no model routing currently configured (the record
 // has nothing to hold either then; the check treats it as a mismatch).
 // role is the session's explicit routing role (requireArtifact's spec.role,
@@ -182,7 +183,17 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
   // A resume has no live chain; the record's role and phase stand in for one
   // (modelOfChain derives the role the same way the dispatch did), and the
   // run's current phase reference feeds the routing table, as at dispatch.
-  return modelOfChain({ pct: 100, used: 0, at: 0, role, phase }, switches, opts.phase)
+  // The router is the run's routing decision state reached through the
+  // session options (the commit boundary sits below the services' entry
+  // modules): absent = the caller handed over a run object that never knew
+  // routing state (a minimal test literal), so the holders read as unset.
+  return modelOfChain(
+    { pct: 100, used: 0, at: 0, role, phase },
+    switches,
+    opts.phase,
+    opts.router?.stickyModel(),
+    opts.router?.failbackOverride(),
+  )
 }
 
 // —— Session-agent binding of persisted records (plans/0055 §8.2, §8.3) ——

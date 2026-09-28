@@ -115,8 +115,9 @@ const CLASSIFIED: Record<string, Domain> = {
   // consolidation proceeds, its mutations — the write ratchet of
   // test/chain-writes.test.ts empties every other writer. Ranked below
   // watch: every session-driving layer (and the commit boundary's resume
-  // checks) may call it, and it reaches only the chain type, the failback
-  // holders and the switches.
+  // checks) may call it, and it reaches only the chain type, the switches
+  // and the model routing table (the sticky/override holders arrive as
+  // call arguments, data not module state).
   "chain-transitions": "driver",
   // The failure-message classifier (plans/0055 §7.1): when to ask, the
   // redaction, the run's cache and call limit, the reply's parser and the
@@ -186,8 +187,9 @@ const CLASSIFIED: Record<string, Domain> = {
   "models-describe": "driver",
   // Context steps of a model registry entry (plans/0055 §4.5): the step-up
   // point, the step walk over the live windows and the startup validation
-  // lines, pure over the limits; the cache-claim check's run state. Watch
-  // (the live half), attempt and the loop build on it.
+  // lines, pure over the limits (the cache-claim check's run state lives in
+  // the router service). Watch (the live half), attempt and the loop build
+  // on it.
   "model-step": "driver",
   numbering: "driver",
   opts: "driver",
@@ -201,6 +203,14 @@ const CLASSIFIED: Record<string, Domain> = {
   // recovery wait's sleep only; below attempt and session.
   "quota-windows": "driver",
   reset: "driver",
+  // The router service (the consolidation's services stage, first tranche):
+  // the run-wide decision state of routing and recovery — the failback
+  // holders, the down marks, the logged usage windows, the model-step
+  // cache-claim checks — one instance per run inside the run's services
+  // holder. The entries read it through the installed services; everything
+  // below receives it as data (the routing facts, the session options, a
+  // leading parameter).
+  router: "driver",
   // The run's registry routing facts (plans/0055 §6): the agent filter, the
   // default agent and the selection-context injection around the pure
   // selection core, plus the run-start routing block and the tier-coverage
@@ -454,6 +464,31 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
       "models-describe",
     ],
     why: "the classifier answers watch's retry branch from below it (plans/0055 §7.1): it reads the registry, the down marks and the rings and runs one tool-less session on the client it is handed, so it must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the agent start, an agent host or the models command's data",
+  },
+  // AUTO-DECISION: router gets a one-way rule besides its classification row (every dispatch-side module reads the routing decision state — the entries through the installed services, the rest through the routing facts, the session options or a leading parameter — so an upward import would form a cycle; the later tranches that give it the key rings and the routing fence keep the same shape)
+  {
+    from: "router",
+    to: [
+      "loop",
+      "loop-phase",
+      "loop-plan",
+      "loop-task",
+      "loop-preflight",
+      "runner",
+      "artifact",
+      "session",
+      "attempt",
+      "watch",
+      "exec-session",
+      "execute",
+      "unit-commit",
+      "interactive",
+      "agent-choice",
+      "agent/opencode/server",
+      "agent/claude/host",
+      "models-describe",
+    ],
+    why: "the router service holds the run's routing decision state (the failback holders, the down marks, the logged windows, the step claims): the entries read it through the installed services and everything below receives it as data, so the module must not import the loop, the session-driving layer, the commit boundary, the interactive sideband, the agent start, an agent host or the models command's data — it only holds state and logs the /failback line",
   },
   // AUTO-DECISION: agent-pool gets a one-way rule besides its classification row (§12 places it below the session layer and above the agent domain; every session-driving module resolves clients and host control through it, so an upward import would form a cycle — and the pool starting a session-driving module's machinery would invert who serves whom)
   {

@@ -8,8 +8,10 @@
 // value is ever read, logged or written by the driver (C4).
 //
 // Ring state is run state, in memory only: the current position per provider
-// and the per-key down marks (src/failback.ts, cleared at the failback
-// boundaries like every mark). The position never moves back — a cleared key
+// and the per-key down marks (the router service's, cleared at the failback
+// boundaries like every mark; reached as a leading parameter — the module
+// sits below the session layer and must not reach the ambient services). The
+// position never moves back — a cleared key
 // mark does not rewind it, only a failure of the current key advances it
 // (§6.4), so there is no restart churn. Rotation is a server restart: the
 // next key is written into the spawn config and the managed server restarts,
@@ -24,8 +26,8 @@
 // so. Without a registry nothing here runs (C2). Sits below the session
 // layer and above the agent domain (§12): no loop, no session-driving, no
 // agent host imports.
-import { clearKeyDownMarks, isKeyDown, markKeyDown } from "./failback"
 import type { ModelEntry, ModelReference, ModelRegistry } from "./models"
+import type { Router } from "./router"
 
 // The registry's rings, by provider, in registry order. The loader
 // guarantees that every opencode entry on one provider declares the same
@@ -95,10 +97,10 @@ export function currentKey(provider: string): ModelReference | undefined {
 // True for every provider when the rings never activated or are inactive
 // (an external server cannot rotate, so the ring never excludes a
 // candidate), and for providers without a ring.
-export function ringHasUsableKey(provider: string, now: number): boolean {
+export function ringHasUsableKey(router: Router, provider: string, now: number): boolean {
   const keys = rings?.get(provider)
   if (!ringsActive() || keys === undefined) return true
-  return keys.some((key) => !isKeyDown(provider, key.ref, now))
+  return keys.some((key) => !router.isKeyDown(provider, key.ref, now))
 }
 
 // Whether the run's rings are active for this provider (the escalation's
@@ -113,13 +115,13 @@ export function hasActiveRing(provider: string): boolean {
 // (step 1 of §7), so the search starts after it and wraps, skipping every
 // key that is down; undefined = no ring, inactive rings, or the ring is
 // exhausted (every key down). Mutates nothing.
-export function ringRotation(provider: string, now: number): RingRotation | undefined {
+export function ringRotation(router: Router, provider: string, now: number): RingRotation | undefined {
   const keys = rings?.get(provider)
   if (!ringsActive() || keys === undefined || keys.length < 2) return undefined
   const from = (positions.get(provider) ?? 0) % keys.length
   for (let step = 1; step < keys.length; step++) {
     const index = (from + step) % keys.length
-    if (!isKeyDown(provider, keys[index]!.ref, now))
+    if (!router.isKeyDown(provider, keys[index]!.ref, now))
       return {
         provider,
         from: { ref: keys[from]!, index: from, total: keys.length },
@@ -134,8 +136,8 @@ export function ringRotation(provider: string, now: number): RingRotation | unde
 // cleared mark never moves it back (§6.4). `until` is a reset time the
 // failure-message classifier read (§7.1): the key's mark lasts until then
 // instead of the scope boundary.
-export function commitRotation(rotation: RingRotation, until?: number): void {
-  markKeyDown(rotation.provider, rotation.from.ref.ref, until)
+export function commitRotation(router: Router, rotation: RingRotation, until?: number): void {
+  router.markKeyDown(rotation.provider, rotation.from.ref.ref, until)
   positions.set(rotation.provider, rotation.to.index)
 }
 
@@ -180,22 +182,24 @@ export function ringInactiveNote(): string | undefined {
 // down marks, the ring and the cap, so an exhausted ring's key marks clear
 // for the probe — the position stays where it is — and the key the probe ran
 // on is marked down again when the probe fails (markCurrentKeyDown below).
-export function clearRingMarks(provider: string): void {
+export function clearRingMarks(router: Router, provider: string): void {
   if (rings?.has(provider) !== true) return
-  clearKeyDownMarks(provider)
+  router.clearKeyDownMarks(provider)
 }
 
 // Marks the ring's current key down without moving the position: what a
 // failed recovery probe does to the key it ran on, and what an exhausted
 // ring's escalation does before it falls through; `until` as for
 // commitRotation.
-export function markCurrentKeyDown(provider: string, until?: number): void {
+export function markCurrentKeyDown(router: Router, provider: string, until?: number): void {
   const key = currentKey(provider)
-  if (key !== undefined) markKeyDown(provider, key.ref, until)
+  if (key !== undefined) router.markKeyDown(provider, key.ref, until)
 }
 
-// Tests reset the module state (one Bun process runs many test files; the
-// precedent is resetFailback).
+// Tests reset the module state (one Bun process runs many test files). The
+// ring state itself is the module's own until it moves into the router
+// service with its unit; the key marks already live there and need no reset
+// here (the preload installs a fresh router per test).
 export function resetKeyring(): void {
   rings = undefined
   positions = new Map()

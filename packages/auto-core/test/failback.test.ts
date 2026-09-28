@@ -1,25 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test"
+// Failback and the router's failback/down-mark state: the pure granularity
+// helper of src/failback.ts, and the run-wide decision state the router
+// service holds (the sticky holder, the pending /failback order and the
+// run-time model-order override, the down marks). Every test reads the
+// fresh instance the preload installed for it — the moved state has no
+// reset hook, and none may reappear (test/services.test.ts).
+import { describe, expect, test } from "bun:test"
 import type { SessionChain } from "../src/chain"
 import { resetRoute } from "../src/chain-transitions"
-import {
-  clearDownMarks,
-  consumeFailback,
-  downMarks,
-  failbackApplies,
-  failbackOverride,
-  failbackRequested,
-  isKeyDown,
-  isModelDown,
-  keyDownMark,
-  markKeyDown,
-  markModelDown,
-  modelDownMark,
-  requestFailback,
-  resetFailback,
-  setSticky,
-  clearSticky,
-  stickyModel,
-} from "../src/failback"
+import { failbackApplies } from "../src/failback"
+import { services } from "../src/services"
 
 describe("failbackApplies (inclusive granularity, the same RANK idea as step)", () => {
   test("phase covers only the phase boundary; task covers task/phase; subtask covers all; session covers all", () => {
@@ -38,77 +27,78 @@ describe("failbackApplies (inclusive granularity, the same RANK idea as step)", 
   })
 })
 
-describe("failback (the module state for failover, failback and /failback)", () => {
-  afterEach(() => {
-    resetFailback()
-  })
-
+describe("failback (the router's state for failover, failback and /failback)", () => {
   test("sticky holder: setSticky/clearSticky read and write, default undefined", () => {
-    expect(stickyModel()).toBeUndefined()
-    setSticky("prov/a")
-    expect(stickyModel()).toBe("prov/a")
-    clearSticky()
-    expect(stickyModel()).toBeUndefined()
+    const router = services().router
+    expect(router.stickyModel()).toBeUndefined()
+    router.setSticky("prov/a")
+    expect(router.stickyModel()).toBe("prov/a")
+    router.clearSticky()
+    expect(router.stickyModel()).toBeUndefined()
   })
 
   test("when not requested, consumeFailback returns false and no override is set", () => {
-    expect(consumeFailback()).toBe(false)
-    expect(failbackOverride()).toBeUndefined()
+    const router = services().router
+    expect(router.consumeFailback()).toBe(false)
+    expect(router.failbackOverride()).toBeUndefined()
   })
 
   test("/failback without arguments: on consumption the failover state clears and the boundary resets the chain's route beside it", () => {
-    setSticky("prov/b")
-    requestFailback()
-    expect(failbackRequested()).toBe(true)
-    expect(consumeFailback()).toBe(true)
+    const router = services().router
+    router.setSticky("prov/b")
+    router.requestFailback()
+    expect(router.failbackRequested()).toBe(true)
+    expect(router.consumeFailback()).toBe(true)
     // The boundary that holds the chain (the subtask boundary) clears the
-    // route beside the consumption; this module no longer writes chain
-    // fields itself.
+    // route beside the consumption; the router never writes chain fields
+    // itself.
     const chain: SessionChain = { pct: 100, used: 0, at: 0, model: "prov/b", modelEntry: "prov/b", modelStep: 2 }
     resetRoute(chain)
     expect(chain.model).toBeUndefined()
     expect(chain.modelEntry).toBeUndefined()
     expect(chain.modelStep).toBe(0)
-    expect(stickyModel()).toBeUndefined()
-    expect(failbackOverride()).toBeUndefined()
-    expect(failbackRequested()).toBe(false)
+    expect(router.stickyModel()).toBeUndefined()
+    expect(router.failbackOverride()).toBeUndefined()
+    expect(router.failbackRequested()).toBe(false)
   })
 
   test("/failback with arguments: the first is the preferred override, the rest the failover candidate ring", () => {
-    requestFailback(["kimi/k3", "zai/glm-5.3-flash", "zai/glm-5.3"])
-    expect(consumeFailback()).toBe(true)
-    expect(failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: ["zai/glm-5.3-flash", "zai/glm-5.3"] })
+    const router = services().router
+    router.requestFailback(["kimi/k3", "zai/glm-5.3-flash", "zai/glm-5.3"])
+    expect(router.consumeFailback()).toBe(true)
+    expect(router.failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: ["zai/glm-5.3-flash", "zai/glm-5.3"] })
   })
 
   test("a single model given: preferred override only, empty candidate ring", () => {
-    requestFailback(["kimi/k3"])
-    expect(consumeFailback()).toBe(true)
-    expect(failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: [] })
+    const router = services().router
+    router.requestFailback(["kimi/k3"])
+    expect(router.consumeFailback()).toBe(true)
+    expect(router.failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: [] })
   })
 
   test("an empty argument list counts as no arguments (reset only)", () => {
-    requestFailback([])
-    expect(consumeFailback()).toBe(true)
-    expect(failbackOverride()).toBeUndefined()
+    const router = services().router
+    router.requestFailback([])
+    expect(router.consumeFailback()).toBe(true)
+    expect(router.failbackOverride()).toBeUndefined()
   })
 
   test("consecutive /failback: the later override replaces the earlier one", () => {
-    requestFailback(["prov/a", "prov/b"])
-    consumeFailback()
-    requestFailback(["prov/c"])
-    consumeFailback()
-    expect(failbackOverride()).toEqual({ wildcard: "prov/c", fallback: [] })
+    const router = services().router
+    router.requestFailback(["prov/a", "prov/b"])
+    router.consumeFailback()
+    router.requestFailback(["prov/c"])
+    router.consumeFailback()
+    expect(router.failbackOverride()).toEqual({ wildcard: "prov/c", fallback: [] })
   })
 
-  test("resetFailback resets all module state", () => {
-    setSticky("prov/a")
-    requestFailback(["prov/c"])
-    consumeFailback()
-    requestFailback()
-    resetFailback()
-    expect(stickyModel()).toBeUndefined()
-    expect(failbackRequested()).toBe(false)
-    expect(failbackOverride()).toBeUndefined()
+  test("each test's router starts fresh (the preload installs a new instance per test)", () => {
+    // The previous tests consumed /failback orders and wrote the sticky
+    // holder; this test's instance carries none of it.
+    const router = services().router
+    expect(router.stickyModel()).toBeUndefined()
+    expect(router.failbackRequested()).toBe(false)
+    expect(router.failbackOverride()).toBeUndefined()
   })
 })
 
@@ -119,32 +109,30 @@ describe("failback (the module state for failover, failback and /failback)", () 
 describe("down marks (§6.4)", () => {
   const NOW = Date.parse("2026-09-25T12:00:00Z")
 
-  afterEach(() => {
-    resetFailback()
-  })
-
   test("markModelDown / modelDownMark / isModelDown: down now, with or without an until", () => {
-    expect(isModelDown("k3", NOW)).toBe(false)
-    markModelDown("k3")
-    expect(modelDownMark("k3")).toEqual({})
-    expect(isModelDown("k3", NOW)).toBe(true)
-    markModelDown("glm", NOW + 3_600_000)
-    expect(modelDownMark("glm")).toEqual({ until: NOW + 3_600_000 })
-    expect(isModelDown("glm", NOW)).toBe(true)
+    const router = services().router
+    expect(router.isModelDown("k3", NOW)).toBe(false)
+    router.markModelDown("k3")
+    expect(router.modelDownMark("k3")).toEqual({})
+    expect(router.isModelDown("k3", NOW)).toBe(true)
+    router.markModelDown("glm", NOW + 3_600_000)
+    expect(router.modelDownMark("glm")).toEqual({ until: NOW + 3_600_000 })
+    expect(router.isModelDown("glm", NOW)).toBe(true)
     // At the instant itself the mark has cleared.
-    expect(isModelDown("glm", NOW + 3_600_000)).toBe(false)
-    expect(downMarks().get("k3")).toEqual({})
+    expect(router.isModelDown("glm", NOW + 3_600_000)).toBe(false)
+    expect(router.downMarks().get("k3")).toEqual({})
   })
 
   test("key marks are held per provider and key reference", () => {
-    markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}")
-    markKeyDown("moonshotai", "{env:MOONSHOT_KEY_B}", NOW + 1_000)
-    markKeyDown("zhipuai", "{env:ZHIPU_KEY_A}")
-    expect(keyDownMark("moonshotai", "{env:MOONSHOT_KEY_A}")).toEqual({})
-    expect(isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(true)
-    expect(isKeyDown("moonshotai", "{env:MOONSHOT_KEY_B}", NOW + 1_000)).toBe(false)
-    expect(isKeyDown("zhipuai", "{env:ZHIPU_KEY_A}", NOW)).toBe(true)
-    expect(keyDownMark("moonshotai", "{env:ZHIPU_KEY_A}")).toBeUndefined()
+    const router = services().router
+    router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}")
+    router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_B}", NOW + 1_000)
+    router.markKeyDown("zhipuai", "{env:ZHIPU_KEY_A}")
+    expect(router.keyDownMark("moonshotai", "{env:MOONSHOT_KEY_A}")).toEqual({})
+    expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(true)
+    expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_B}", NOW + 1_000)).toBe(false)
+    expect(router.isKeyDown("zhipuai", "{env:ZHIPU_KEY_A}", NOW)).toBe(true)
+    expect(router.keyDownMark("moonshotai", "{env:ZHIPU_KEY_A}")).toBeUndefined()
   })
 
   test("marks clear at the boundaries their scope covers; an until mark survives and expires by its instant", () => {
@@ -161,47 +149,42 @@ describe("down marks (§6.4)", () => {
       { boundary: "session", scope: "subtask", clears: false },
       { boundary: "session", scope: "session", clears: true },
     ]
+    const router = services().router
     for (const { boundary, scope, clears } of cases) {
-      markModelDown("k3")
-      markModelDown("opus", NOW + 3_600_000)
-      markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}")
-      clearDownMarks(boundary, scope)
-      expect({ boundary, scope, cleared: !isModelDown("k3", NOW) }).toEqual({ boundary, scope, cleared: clears })
+      router.markModelDown("k3")
+      router.markModelDown("opus", NOW + 3_600_000)
+      router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}")
+      router.clearDownMarks(boundary, scope)
+      expect({ boundary, scope, cleared: !router.isModelDown("k3", NOW) }).toEqual({ boundary, scope, cleared: clears })
       // An until mark survives every boundary clear and reads as cleared
       // once its instant passes.
-      expect(isModelDown("opus", NOW)).toBe(true)
-      expect(isModelDown("opus", NOW + 3_600_000)).toBe(false)
-      expect(isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(!clears)
+      expect(router.isModelDown("opus", NOW)).toBe(true)
+      expect(router.isModelDown("opus", NOW + 3_600_000)).toBe(false)
+      expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(!clears)
     }
   })
 
   test("consumeFailback clears every mark, an until included; a boundary without a request does not", () => {
-    markModelDown("k3")
-    markModelDown("opus", NOW + 3_600_000)
-    markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW + 3_600_000)
+    const router = services().router
+    router.markModelDown("k3")
+    router.markModelDown("opus", NOW + 3_600_000)
+    router.markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW + 3_600_000)
     // A consumed boundary with no /failback pending leaves the marks alone.
-    expect(consumeFailback()).toBe(false)
-    expect(isModelDown("k3", NOW)).toBe(true)
-    requestFailback()
-    expect(consumeFailback()).toBe(true)
-    expect(isModelDown("k3", NOW)).toBe(false)
-    expect(isModelDown("opus", NOW)).toBe(false)
-    expect(isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(false)
-  })
-
-  test("resetFailback clears the marks too", () => {
-    markModelDown("k3")
-    markKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}")
-    resetFailback()
-    expect(downMarks().size).toBe(0)
-    expect(keyDownMark("moonshotai", "{env:MOONSHOT_KEY_A}")).toBeUndefined()
+    expect(router.consumeFailback()).toBe(false)
+    expect(router.isModelDown("k3", NOW)).toBe(true)
+    router.requestFailback()
+    expect(router.consumeFailback()).toBe(true)
+    expect(router.isModelDown("k3", NOW)).toBe(false)
+    expect(router.isModelDown("opus", NOW)).toBe(false)
+    expect(router.isKeyDown("moonshotai", "{env:MOONSHOT_KEY_A}", NOW)).toBe(false)
   })
 
   test("the sticky holder and the marks are independent state", () => {
-    markModelDown("k3")
-    setSticky("prov/a")
-    clearSticky()
-    expect(stickyModel()).toBeUndefined()
-    expect(isModelDown("k3", NOW)).toBe(true)
+    const router = services().router
+    router.markModelDown("k3")
+    router.setSticky("prov/a")
+    router.clearSticky()
+    expect(router.stickyModel()).toBeUndefined()
+    expect(router.isModelDown("k3", NOW)).toBe(true)
   })
 })

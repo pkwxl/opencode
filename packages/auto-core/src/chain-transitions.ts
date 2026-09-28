@@ -19,7 +19,6 @@
 // those converted, every chain mutation in the driver lives here.
 
 import { resolveModel, roleOf, type FailedSession, type SessionChain, type Watch } from "./chain"
-import { failbackOverride, stickyModel } from "./failback"
 import { type UnitBaseline } from "./git"
 import type { PhaseKey } from "./phases/registry"
 import { type Phase } from "./resume"
@@ -59,13 +58,24 @@ export function forkSources(chain: SessionChain): ForkSource[] {
 // facts before reaching for this. `phase` is the run's current phase
 // reference (its type entry feeds the routing table) while the role comes
 // from the chain itself (an explicit role wins over the chain's phase, which
-// wins over bypass). A resume has no live chain: its caller passes a minimal
+// wins over bypass). `sticky` and `override` are the router service's
+// failback holders, passed in as data by the caller (the entries read them
+// from the installed services; the strict-resume checks read them from the
+// session options' router) — the pure transition reaches no run state behind
+// its arguments. A resume has no live chain: its caller passes a minimal
 // chain view built from the record's role and phase, so the priority chain
 // starts at the sticky holder — the record predates this run's chain and no
 // candidate of it can carry over. Undefined = no routing configured; the
 // dispatch then sends no model key and the agent's default applies.
-export function modelOfChain(chain: SessionChain, switches: Switches, phase: PhaseKey | undefined): string | undefined {
-  return chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, phase?.entry, roleOf(chain))
+// AUTO-DECISION: the override arrives under its structural type ({ wildcard, fallback } — what the router's failbackOverride() returns) instead of importing the Router type (the transition stays a pure function over data; naming the service type would couple the chain's vocabulary to the services for two fields it reads through one accessor's result)
+export function modelOfChain(
+  chain: SessionChain,
+  switches: Switches,
+  phase: PhaseKey | undefined,
+  sticky: string | undefined,
+  override: { wildcard: string; fallback: string[] } | undefined,
+): string | undefined {
+  return chain.model ?? sticky ?? override?.wildcard ?? resolveModel(switches.model, phase?.entry, roleOf(chain))
 }
 
 // ---------------------------------------------------------------------------

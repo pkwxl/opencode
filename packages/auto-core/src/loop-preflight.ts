@@ -168,8 +168,13 @@ export async function preflight(
   // state that still lives in module singletons — join after the freeze,
   // each with the change that moves its state in. This point ships the
   // clock, the one time source the session-driving engine and the stats
-  // module read; the early build is safe because the clock depends on
-  // nothing above it, and the coverage facts below already carry it.
+  // module read, and the router's first tranche (the failback holders, the
+  // down marks, the logged usage windows, the model-step cache claims), a
+  // constructed object whose state reads neither the registry nor the
+  // switches — the tranches that do (the key rings, the routing fence) take
+  // their inputs at their slots, which sit after the freeze; the early
+  // build is safe because both depend on nothing above them, and the
+  // coverage facts below already carry the clock and the router.
   const run = createServices()
   // prompt library: load the target directory's .opencode/auto/prompts/
   // overrides (protocol-sensitive templates get a key-content check, failure
@@ -202,7 +207,7 @@ export async function preflight(
     setSwitchModelRegistry(registry ? switchModelRegistryInfo(registry) : undefined)
     // A dispatch the run can send with a list the agent filter emptied is a
     // usage error, never a silent wait (plans/0055 §6.3, §10 item 7).
-    const facts = registry ? routingFacts(registry, opts.agent, run.clock) : undefined
+    const facts = registry ? routingFacts(registry, opts.agent, run.clock, run.router) : undefined
     const coverage = facts ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded)) : []
     // Preflight's bin check (plans/0055 §8.7): each profile a candidate list
     // references runs `<bin> --version` under its env, 10 s timeout. The

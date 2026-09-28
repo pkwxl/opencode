@@ -33,12 +33,12 @@
 // agent start imports (import-direction rule).
 import type { AgentClient, AgentErrorPatterns, AgentEvent, AgentRetryPolicy } from "./agent/types"
 import { classifySessionError, NEUTRAL_RETRY_POLICY, rateSignal, rateThresholdMet, retryPolicyOf, type ErrorClass, type ErrorInfo } from "./chain"
-import { isModelDown, markModelDown } from "./failback"
 import { ringHasUsableKey } from "./keyring"
 import { log, vlog } from "./log"
 import { isoInZone, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry } from "./models"
 import { renderClassifyError } from "./prompt"
+import type { Router } from "./router"
 import type { RoutingFacts } from "./routing"
 import { formatClientError } from "./session-api"
 import type { Usage } from "./stats"
@@ -233,6 +233,10 @@ export type Classifier = {
   clientOf?: (agent: string) => Promise<AgentClient>
   registry: ModelRegistry
   agentFilter: string | undefined
+  // The run's router (the routing decision state: the down marks the entry
+  // choice and the failure marking read, the key marks the ring predicate
+  // reads), carried by the routing facts the classifier is built from.
+  router: Router
   now: () => number
   label: string
   timeoutMs: number
@@ -254,6 +258,7 @@ export function classifierFor(
     ...(clients !== undefined ? { clientOf: clients } : {}),
     registry: routing.registry,
     agentFilter: routing.agentFilter,
+    router: routing.router,
     now: () => routing.clock.now(),
     label,
     timeoutMs: CLASSIFY_TIMEOUT_MS,
@@ -266,14 +271,14 @@ export function classifierFor(
 // not, the prompt being tiny. v1 runs classifiers on opencode profiles only
 // (the loader refuses others, and the adapter check repeats it here).
 // AUTO-DECISION: the ring predicate (§6.2 rule 4) applies to classifier entries beside the three rules §7.1 names (an exhausted ring cannot serve the call, and asking it would only spend the run's call budget on a certain failure)
-export function classifierEntry(registry: ModelRegistry, agentFilter: string | undefined, now: number): { name: string; entry: ModelEntry } | undefined {
+export function classifierEntry(router: Router, registry: ModelRegistry, agentFilter: string | undefined, now: number): { name: string; entry: ModelEntry } | undefined {
   for (const name of registry.classifier?.names ?? []) {
     const entry = registry.models.get(name)
     if (entry === undefined) continue
     const adapter = registry.agents.get(entry.agent)?.adapter
     if (adapter !== "opencode" || (agentFilter !== undefined && adapter !== agentFilter)) continue
-    if (!usableAt(entry, registry.tz, now) || isModelDown(name, now)) continue
-    if (entry.provider !== undefined && !ringHasUsableKey(entry.provider, now)) continue
+    if (!usableAt(entry, registry.tz, now) || router.isModelDown(name, now)) continue
+    if (entry.provider !== undefined && !ringHasUsableKey(router, entry.provider, now)) continue
     return { name, entry }
   }
   return undefined
@@ -332,7 +337,7 @@ export function askClassifier(classifier: Classifier, info: ErrorInfo): Promise<
     return undefined
   }
   const now = classifier.now()
-  const pick = classifierEntry(classifier.registry, classifier.agentFilter, now)
+  const pick = classifierEntry(classifier.router, classifier.registry, classifier.agentFilter, now)
   if (pick === undefined) {
     vlog(`  classifier: no classifier entry is usable now; the error patterns decide alone`)
     return undefined
@@ -375,7 +380,7 @@ async function runClassifier(
   if (outcome.kind === "failed") {
     const cls = classifySessionError(outcome.error, client.errorPatterns, retryPolicyOf(client.retryPolicy, pick.entry.retry))
     if (cls === "quota" || cls === "auth" || cls === "rate") {
-      markModelDown(pick.name)
+      classifier.router.markModelDown(pick.name)
       log(`⚠ ${prefix}the classifier ${pick.name} failed (${cls}); marked it down, and the error patterns decide this failure alone`)
     } else vlog(`  classifier: ${pick.name} failed (${cls}); the error patterns decide alone`)
     return undefined
@@ -511,8 +516,11 @@ async function oneShot(client: AgentClient, entry: ModelEntry, text: string, tim
   return { kind: "reply", text: [...texts.values()].join("\n"), usage }
 }
 
-// Tests reset the module state (one Bun process runs many test files; the
-// precedent is resetFailback).
+// Tests reset the module state (one Bun process runs many test files). The
+// answers, in-flight calls and budget are the module's own until they move
+// into the router service with their unit; the down marks already live
+// there and need no reset here (the preload installs a fresh router per
+// test).
 export function resetClassifier(): void {
   answers.clear()
   inflight.clear()

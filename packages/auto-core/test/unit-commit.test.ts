@@ -8,11 +8,11 @@ import { clockAt, fixedClock } from "./fixtures/clock"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { clearSticky, markModelDown, resetFailback } from "../src/failback"
 import { commitTree, unitBaseline } from "../src/git"
 import { recallHandover, saveHandover } from "../src/handover"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { afterSession, deadSessionWhy, recordedAgentOk, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
+import { services } from "../src/services"
 import { freshRepo, task } from "./fixtures/runner"
 
 describe("afterSession completion-condition gate (plans/0021-commit-boundary-design.md)", () => {
@@ -72,11 +72,6 @@ describe("rollbackUnitState (unit rollback orchestration)", () => {
 describe("resumeModelNow (strict-resume model check)", () => {
   const switches = parseSwitches({ [SWITCH_ENV.model]: "implement-scan=kimi/scan,*=kimi/k2" })
   const step = { kind: "step" as const, step: "phase-plan" as const, unit: "R-01.P01" }
-  // sticky / /failback overrides precede the routing table (src/failback.ts module state).
-  beforeEach(() => {
-    clearSticky()
-    resetFailback()
-  })
 
   test("an explicit role wins over the phase, as it does at dispatch (plans/0053 D12)", () => {
     expect(resumeModelNow({}, switches, step)).toBe("kimi/k2")
@@ -109,13 +104,14 @@ describe("resumeModelNow (strict-resume model check)", () => {
       filterSource: undefined,
       defaultAgent: "opencode",
       runAgent: "opencode",
+      router: services().router,
       clock: clockAt(0),
     }
     const opts: import("../src/opts").Opts = { routing }
     // A deep planning step picks the deep list's first entry.
     expect(resumeModelNow(opts, parseSwitches({}), step)).toBe("a")
     // The primary marked down: the record's "a" would mismatch the pick.
-    markModelDown("a")
+    services().router.markModelDown("a")
     expect(resumeModelNow(opts, parseSwitches({}), step)).toBe("b")
   })
 
@@ -150,6 +146,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
       filterSource: undefined,
       defaultAgent: "opencode",
       runAgent: "opencode",
+      router: services().router,
       clock,
     })
     const bare = parseSwitches({})
@@ -193,7 +190,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
       expect(resumeModelEligible(opts, bare, "a", step)).toBe(false)
       expect(deadSessionWhy(opts, bare, { model: "a", phase: step })).toContain("not usable now")
       // Marked down.
-      markModelDown("b")
+      services().router.markModelDown("b")
       expect(resumeModelEligible(opts, bare, "b", step)).toBe(false)
       // Gone from the registry (a stale record of a removed entry).
       expect(resumeModelEligible(opts, bare, "gone", step)).toBe(false)

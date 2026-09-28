@@ -3,9 +3,9 @@ import { PassThrough, Writable } from "node:stream"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
 import { exitRequested, resetExitRequest } from "../src/exit"
-import { consumeFailback, failbackOverride, failbackRequested, resetFailback } from "../src/failback"
 import { startInteractive, type Interactive } from "../src/interactive"
 import { log } from "../src/log"
+import { services } from "../src/services"
 
 // Drive the resident readline with injected streams; the stub client records
 // the messages promptAsync receives. chunks collects everything the output
@@ -46,7 +46,6 @@ describe("interactive", () => {
     repl?.close()
     repl = undefined
     resetExitRequest()
-    resetFailback()
   })
 
   test("/exit is not sent to the session; it sets the exit request", async () => {
@@ -77,16 +76,16 @@ describe("interactive", () => {
     const ctx = setup()
     repl = ctx.repl
     ctx.repl.attach("s1")
-    expect(failbackRequested()).toBe(false)
+    expect(services().router.failbackRequested()).toBe(false)
     ctx.input.write("/failback\n")
     await tick()
     expect(ctx.sent).toEqual([])
-    expect(failbackRequested()).toBe(true)
+    expect(services().router.failbackRequested()).toBe(true)
     // No-argument form: consuming it only resets the failover state and
     // produces no model-order override (the chain's route clears at the
     // boundary that holds it, not here).
-    expect(consumeFailback()).toBe(true)
-    expect(failbackOverride()).toBeUndefined()
+    expect(services().router.consumeFailback()).toBe(true)
+    expect(services().router.failbackOverride()).toBeUndefined()
   })
 
   test("/failback with arguments: a space-separated model order — the first is the preferred model, the rest the failover candidate ring", async () => {
@@ -94,9 +93,9 @@ describe("interactive", () => {
     repl = ctx.repl
     ctx.input.write("/failback kimi/k3 zai/glm-5.3-flash zai/glm-5.3\n")
     await tick()
-    expect(failbackRequested()).toBe(true)
-    expect(consumeFailback()).toBe(true)
-    expect(failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: ["zai/glm-5.3-flash", "zai/glm-5.3"] })
+    expect(services().router.failbackRequested()).toBe(true)
+    expect(services().router.consumeFailback()).toBe(true)
+    expect(services().router.failbackOverride()).toEqual({ wildcard: "kimi/k3", fallback: ["zai/glm-5.3-flash", "zai/glm-5.3"] })
   })
 
   test("/failback with a slash-less argument: the request is refused, the input line stays usable", async () => {
@@ -105,7 +104,7 @@ describe("interactive", () => {
     ctx.repl.attach("s1")
     ctx.input.write("/failback kimi/k3 bad\n")
     await tick()
-    expect(failbackRequested()).toBe(false)
+    expect(services().router.failbackRequested()).toBe(false)
     ctx.input.write("keep sending messages\n")
     await tick()
     expect(ctx.sent).toEqual([{ sessionID: "s1", text: "keep sending messages" }])
@@ -119,12 +118,12 @@ describe("interactive", () => {
     ctx.repl.attach("s1")
     ctx.input.write("/failback opus k3\n")
     await tick()
-    expect(failbackRequested()).toBe(true)
-    expect(consumeFailback()).toBe(true)
-    expect(failbackOverride()).toEqual({ wildcard: "opus", fallback: ["k3"] })
+    expect(services().router.failbackRequested()).toBe(true)
+    expect(services().router.consumeFailback()).toBe(true)
+    expect(services().router.failbackOverride()).toEqual({ wildcard: "opus", fallback: ["k3"] })
     ctx.input.write("/failback glm\n")
     await tick()
-    expect(failbackRequested()).toBe(false)
+    expect(services().router.failbackRequested()).toBe(false)
     expect(ctx.sent).toEqual([])
   })
 

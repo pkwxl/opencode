@@ -3,12 +3,16 @@
 // decisions under src/engine/) read time only through the installed
 // services' clock — no raw Date.now, Bun.sleep or setTimeout anywhere in
 // them — plus the holder's install/uninstall lifecycle, the stats clock
-// fold and the frozen switch snapshot's clamp invariant.
+// fold, the frozen switch snapshot's clamp invariant, and the router
+// ratchets: the state the router service moved in (the failback holders,
+// the down marks, the logged windows, the model-step cache claims) exists
+// only as methods on the constructed router — no free-function delegator
+// export anywhere else in src/, and no reset* hook for it anywhere.
 // The callers-within-SERVICE_ENTRIES assertion lands with the later services
 // units; the list is exported as the documented, shrink-only allowlist.
 import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
-import { readdirSync, readFileSync } from "node:fs"
+import { readdirSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createServices, installServices, SERVICE_ENTRIES, services, uninstallServices, type RunServices } from "../src/services"
@@ -102,6 +106,26 @@ describe("the services holder", () => {
     expect(Number.isFinite(now)).toBe(true)
   })
 
+  test("the fresh holder extends to the router: state one test writes never leaks to the next", () => {
+    // The pair's writer: mark through this test's instance…
+    const router = services().router
+    router.setSticky("prov/a")
+    router.requestFailback()
+    router.markModelDown("k3")
+    expect(router.stickyModel()).toBe("prov/a")
+    expect(router.failbackRequested()).toBe(true)
+    expect(router.isModelDown("k3", 0)).toBe(true)
+  })
+
+  test("…and the next test's router carries none of it", () => {
+    // …and the preload's install before this test gave a fresh instance:
+    // the moved state has no reset hook because none is needed.
+    const router = services().router
+    expect(router.stickyModel()).toBeUndefined()
+    expect(router.failbackRequested()).toBe(false)
+    expect(router.downMarks().size).toBe(0)
+  })
+
   test("the stats clock follows the installed holder (the fold)", async () => {
     // stats is a process-level module; its timeline is the run's one clock.
     // Book a task bucket on a manual clock and read the bucket's anchor and
@@ -123,6 +147,90 @@ describe("the services holder", () => {
       uninstallServices()
       await rm(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The router ratchets: the state that moved into the router service exists
+// only there
+// ---------------------------------------------------------------------------
+
+// Every free function that moved into the router (its method names). A
+// `export function <name>` anywhere outside router.ts would be a delegator
+// over the moved singleton — the conversion crutch the unit that moves
+// state may use while it converts callers, and must delete in the same
+// unit.
+const MOVED_TO_ROUTER = [
+  "stickyModel",
+  "setSticky",
+  "clearSticky",
+  "failbackOverride",
+  "requestFailback",
+  "failbackRequested",
+  "consumeFailback",
+  "downMarks",
+  "markModelDown",
+  "extendModelDownMark",
+  "clearModelDownMark",
+  "modelDownMark",
+  "isModelDown",
+  "markKeyDown",
+  "extendKeyDownMark",
+  "keyDownMark",
+  "isKeyDown",
+  "clearKeyDownMarks",
+  "clearDownMarks",
+  "noteWindows",
+  "awaitCacheClaim",
+  "observeCacheClaim",
+  "noteClaimContradiction",
+] as const
+
+// The modules whose state moved (fully or in part) into the router: a
+// `reset*` export in one of them (or in router.ts itself) would be a reset
+// hook for the moved state, which the per-test fresh holder replaces.
+const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch"]
+
+function srcFiles(): string[] {
+  const files = readdirSync(join(import.meta.dir, "..", "src"))
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => `src/${name}`)
+  for (const dir of readdirSync(join(import.meta.dir, "..", "src")).filter((name) => statSync(join(import.meta.dir, "..", "src", name)).isDirectory())) {
+    if (dir === "engine" || dir === "agent") continue // no state moved from there
+    for (const name of readdirSync(join(import.meta.dir, "..", "src", dir)).filter((name) => name.endsWith(".ts")))
+      files.push(`src/${dir}/${name}`)
+  }
+  return files
+}
+
+describe("the router ratchets (the moved state exists only as the service)", () => {
+  test("no free-function delegator export of a moved name outside router.ts", () => {
+    const problems: string[] = []
+    for (const file of srcFiles()) {
+      if (file === "src/router.ts") continue
+      const text = readFileSync(join(import.meta.dir, "..", file), "utf8")
+      for (const name of MOVED_TO_ROUTER) if (new RegExp(`export (async )?function ${name}\\b`).test(text)) problems.push(`${file}: ${name}`)
+    }
+    expect(problems.join("\n")).toBe("")
+  })
+
+  test("no reset* export for the moved state (a fresh holder per test replaces the hook)", () => {
+    const problems: string[] = []
+    for (const file of srcFiles()) {
+      const module = file.replace(/^src\//, "").replace(/\.ts$/, "")
+      if (!MOVED_STATE_MODULES.includes(module)) continue
+      const text = readFileSync(join(import.meta.dir, "..", file), "utf8")
+      for (const m of text.matchAll(/export (async )?function (reset\w*)/g)) problems.push(`${file}: ${m[2]}`)
+    }
+    expect(problems.join("\n")).toBe("")
+  })
+
+  test("failback.ts holds only the pure granularity helper", () => {
+    // The moved state's old home shrinks to failbackApplies; a new export
+    // there is a conscious edit to this pin, not a silent accretion.
+    const text = readFileSync(join(import.meta.dir, "..", "src", "failback.ts"), "utf8")
+    const exported = [...text.matchAll(/export (?:async )?function (\w*)/g)].map((m) => m[1])
+    expect(exported).toEqual(["failbackApplies"])
   })
 })
 

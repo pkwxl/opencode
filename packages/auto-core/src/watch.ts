@@ -24,7 +24,7 @@ import type { Opts } from "./opts"
 import { handoffFile, renderStepUp, renderStuckHint, renderTestWrapup, renderTestResult } from "./prompt"
 import { compactText, sameIssue, type ResolveEvent } from "./resolve"
 import { askHuman, describePart, formatClientError, formatTokens, isApproval, probeSession } from "./session-api"
-import { awaitCacheClaim, enabledSteps, noteClaimContradiction, observeCacheClaim, stepId, stepUpPoint, type SteerContext } from "./model-step"
+import { enabledSteps, stepId, stepUpPoint, type SteerContext } from "./model-step"
 import { services } from "./services"
 import { statsModelEvent, type Usage } from "./stats"
 import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
@@ -82,25 +82,6 @@ function withWording(e: AgentError, now: number): AgentError {
 
 const LIMIT_KEYS = ["resetAt", "scope", "retryAfterMs", "limitReason"] as const
 
-// The usage windows last logged per agent client (plans/0057 §5.2): a
-// `limit` event is logged only when its status or a window's reset changed,
-// so a run shows a line per window and status, not one per session. It is
-// never a verdict: dispatch and the escalation do not read it (§11 item 10).
-const windowsLogged = new WeakMap<AgentClient, string>()
-
-// Returns whether the event changed anything (and was logged).
-function noteWindows(client: AgentClient, event: Extract<AgentEvent, { type: "limit" }>): boolean {
-  const key = [event.status, ...event.windows.map((w) => `${w.scope}@${w.resetAt}`)].join(" ")
-  if (windowsLogged.get(client) === key) return false
-  windowsLogged.set(client, key)
-  const windows = event.windows.map(
-    (w) => `${w.scope} ${w.utilization !== undefined ? `${Math.round(w.utilization * 100)}% used, ` : ""}resets ${new Date(w.resetAt).toISOString()}`,
-  )
-  const head = event.status === "rejected" ? "⚠ a usage window is spent" : event.status === "warning" ? "⚠ usage windows near their limit" : "ℹ usage windows"
-  log(`${head} (session ${event.session})${windows.length ? `: ${windows.join("; ")}` : ""}`)
-  return true
-}
-
 export async function watch(
   client: AgentClient,
   sessionID: string,
@@ -156,6 +137,11 @@ export async function watch(
    // observes a steered timeline, and the engine never reads the wall clock
    // behind the services' back.
    const clock = services().clock
+   // The run's router (the installed services' router): the logged usage
+   // windows and the model-step cache-claim checks are run-wide decision
+   // state — the dedup map and the pending claims survive a watch that ends
+   // before the first step-finish, exactly as they did as module state.
+   const router = services().router
    // Session start timestamp, for computing duration.
    const startTime = clock.now()
   // Token increment accumulation (STATS_PLAN §2, T-003): each step-finish part
@@ -372,7 +358,7 @@ export async function watch(
     log(`⇡ ${steerContext.label} context ${formatTokens(usedNow)} reached the step-up point of ${steerContext.name} (${fromId}); continuing the same session on ${nextId}`)
     if (client.capabilities.steer) {
       const ok = await steerText(renderStepUp({ from: fromId, next: nextId }))
-      if (ok) awaitCacheClaim(steerContext.name, usedNow)
+      if (ok) router.awaitCacheClaim(steerContext.name, usedNow)
     } else {
       log(`⇡ ${steerContext.label} the agent takes no mid-turn steers; the next prompt into this session names ${nextId}`)
     }
@@ -604,7 +590,7 @@ export async function watch(
     // when they change, nothing else — not a turn event, so the twin-idle
     // guard is untouched.
     if (event.type === "limit") {
-      if (noteWindows(client, event)) onLimit?.(event)
+      if (router.noteWindows(client, event)) onLimit?.(event)
       continue
     }
     if (event.type === "part") {
@@ -639,10 +625,10 @@ export async function watch(
         // the whole prefix contradicts it). The contradiction line fires
         // once per entry.
         if (steerContext?.entry !== undefined) {
-          const verdict = observeCacheClaim(steerContext.name, part.tokens)
+          const verdict = router.observeCacheClaim(steerContext.name, part.tokens)
           if (verdict === "confirmed") {
             vlog(`✓ ${steerContext.name}: the wider step read ${formatTokens(part.tokens.cacheRead)} tokens from the shared prompt cache`)
-          } else if (verdict === "contradiction" && noteClaimContradiction(steerContext.name)) {
+          } else if (verdict === "contradiction" && router.noteClaimContradiction(steerContext.name)) {
             log(
               `⚠ ${steerContext.name}: the first step on the wider id wrote ${formatTokens(part.tokens.cacheWrite)} tokens of cache and read ${formatTokens(part.tokens.cacheRead)} — ` +
                 `the wider id does not share the base id's prompt cache as the entry's wider list claims; check the provider's model ids`,

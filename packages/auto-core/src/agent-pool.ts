@@ -156,7 +156,7 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
   // emptied lists separately.
   // The facts carry the run services' clock (one timeline for every dispatch
   // read); this module is one of the services' allowed entry points.
-  const fleet = dispatchAgentProfiles(registry, routingFacts(registry, opts.agent, services().clock).agentFilter)
+  const fleet = dispatchAgentProfiles(registry, routingFacts(registry, opts.agent, services().clock, services().router).agentFilter)
   const agents: FleetAgent[] = fleet.map(({ profile, names }) => ({
     caps: adapterCapabilities(profile.adapter),
     label: `${profile.adapter} (${names[0]})`,

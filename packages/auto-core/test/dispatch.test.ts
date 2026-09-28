@@ -6,12 +6,12 @@
 // case, over hand-built registries, fixed instants and injected facts: the
 // planner is pure, the chain is an input, and the executor (attempt) owns
 // every write.
-import { beforeEach, describe, expect, test } from "bun:test"
-import { resetFailback, markModelDown } from "../src/failback"
+import { describe, expect, test } from "bun:test"
 import { parseWindow, type ModelWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, RegistryAgentProfile, TierList } from "../src/models"
 import type { SessionChain } from "../src/chain"
 import { selectContext, type RoutingFacts } from "../src/routing"
+import { services } from "../src/services"
 import { clockAt } from "./fixtures/clock"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { worktreeNote } from "../src/session-api"
@@ -62,6 +62,9 @@ const factsOf = (reg: ModelRegistry, over: Partial<RoutingFacts> = {}): RoutingF
   filterSource: undefined,
   defaultAgent: "opencode",
   runAgent: "opencode",
+  // The run's router (the selection context's marks and override source):
+  // the installed services' instance, read per call so a test's marks land.
+  router: services().router,
   clock: clockAt(NOW),
   ...over,
 })
@@ -82,7 +85,6 @@ const plan = (chain: SessionChain, reg: ModelRegistry | undefined, over: Partial
 describe("the dispatch plan", () => {
   // The probe row writes the live down-mark map through the production seam;
   // every row plans over a clean failback state.
-  beforeEach(() => resetFailback())
 
   test("resumed: a recorded session with a note is taken over; every other prompt opens a fresh session", () => {
     const chain: SessionChain = { ...fresh(), id: "ses_9", note: "[DRIVER] continuation after interruption" }
@@ -173,8 +175,8 @@ describe("the dispatch plan", () => {
 
   test("blocked probe: every candidate down", () => {
     const reg = registry([entry("e1", { model: "prov/1" }), entry("e2", { model: "prov/2" })])
-    markModelDown("e1")
-    markModelDown("e2")
+    services().router.markModelDown("e1")
+    services().router.markModelDown("e2")
     const outcome = plan(fresh(), reg)
     expect(outcome.pick).toBeUndefined()
     expect(outcome.blocked).toEqual({

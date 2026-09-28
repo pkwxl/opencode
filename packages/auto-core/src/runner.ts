@@ -8,7 +8,7 @@ import { handoffStatus } from "./document/roles"
 import { subtaskStateSpec } from "./document/spec"
 import { checklistProblems, nextChecklistIndex, scanSubtaskStates } from "./document/state"
 import { maybeExit } from "./exit"
-import { clearDownMarks, consumeFailback, failbackApplies } from "./failback"
+import { failbackApplies } from "./failback"
 import { baselineIntact, removeIfUntracked, unitBaseline } from "./git"
 import { hibernatePause } from "./hibernate"
 import { log } from "./log"
@@ -586,13 +586,18 @@ export async function runTask(
         // same point (and may redefine the model order wholesale). Registry routing
         // (plans/0055 §6.4): the same boundary clears the down marks the scope
         // covers, and the chain's selected entry with the raw candidate.
+        // The failback holders and the marks live in the run's router, which
+        // rides the session options (the pipeline sits below the services'
+        // entry modules): the loop fills it from the installed services; a
+        // caller that hands runTask no router (a minimal test literal)
+        // keeps the chain-side boundary and skips the run-state half.
         if (failbackApplies(switches.modelFailbackScope, "subtask")) resetRoute(chain)
-        clearDownMarks("subtask", switches.modelFailbackScope)
+        opts.router?.clearDownMarks("subtask", switches.modelFailbackScope)
         // A consumed /failback order clears the route beside it (this
         // boundary holds the chain; the task/phase boundaries destroy it
         // with runTask before reaching here, so they pass no chain and clear
         // nothing).
-        if (consumeFailback()) resetRoute(chain)
+        if (opts.router?.consumeFailback()) resetRoute(chain)
       }
       // Wrap-up session: skipped entirely when config.wrapup=false
       // (--no-wrapup, default true). The report.md existence + shape-check

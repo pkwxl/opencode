@@ -10,13 +10,13 @@
 //
 // Without a registry nothing here runs: the dispatch resolvers keep their
 // env-switch path (resolveModel, src/chain.ts), byte for byte.
-import { downMarks, failbackOverride } from "./failback"
 import { ringHasUsableKey, ringInactiveNote, ringLabel } from "./keyring"
 import { log } from "./log"
 import { candidateList } from "./model-route"
 import { formatWindowState, windowState } from "./model-window"
 import { layerLabel, type ModelRegistry, type RegistryAgentProfile } from "./models"
 import type { PhaseTypeEntry } from "./phases/registry"
+import type { Router } from "./router"
 import { candidateKey, select, type Candidate, type SelectContext } from "./select"
 import type { Clock } from "./services"
 import { shellProfile } from "./shell"
@@ -48,6 +48,15 @@ export type RoutingFacts = {
   // profile, started lazily); this name is what an unqualified record and a
   // raw override value resolve to.
   runAgent: string
+  // The run's router service (the routing decision state: the /failback
+  // override, the down marks, the key marks the ring predicate reads):
+  // carried beside the clock as the handle the selection context injects —
+  // the pure selection code and this module must not reach the ambient
+  // services, so the composition (an entry module) fills the field from the
+  // installed holder, and tests pin their own instance the same way they pin
+  // the clock. The facts themselves stay fixed once built; the router is the
+  // run's live state behind the reference.
+  router: Router
   clock: Clock
   random?: () => number
 }
@@ -64,14 +73,16 @@ export type RoutingFacts = {
 // fallback (the configured agent's own name) is exact whenever the profile is
 // named like its adapter, which the implied `opencode` profile always is —
 // callers that never started an agent (the coverage check, tests) may rely on
-// it. clock is the run services' clock, passed by the caller (the module
-// must not reach the run's services itself); it rides the facts so the pure
-// dispatch decision reads the same timeline the engine runs on.
+// it. clock and router are the run services' clock and router, passed by the
+// caller (the module must not reach the run's services itself); they ride the
+// facts so the pure dispatch decision reads the same timeline and the same
+// routing state the engine runs on.
 // AUTO-DECISION: the filter names an adapter, never a profile (the filter values — the shell profile's agent and OPENCODE_AUTO_AGENT — name adapters by the agent-choice rule, and every profile of that adapter passes; a profile-name filter would silently empty every list when no profile bears the name, which §6.3 already reports better at its own layer)
 export function routingFacts(
   registry: ModelRegistry,
   configuredAgent: AgentChoice | undefined,
   clock: Clock,
+  router: Router,
   runAgent?: string,
 ): RoutingFacts {
   const profile = shellProfile().agent?.name
@@ -82,6 +93,7 @@ export function routingFacts(
     filterSource: profile ? "shell profile" : env ? "OPENCODE_AUTO_AGENT" : undefined,
     defaultAgent: configuredAgent ?? "opencode",
     runAgent: runAgent ?? configuredAgent ?? "opencode",
+    router,
     clock,
   }
 }
@@ -95,8 +107,8 @@ export function nowOf(facts: RoutingFacts): number {
 // The selection context of one dispatch: the run facts plus the volatile run
 // state (the policy of OPENCODE_AUTO_MODEL, the /failback override, the down
 // marks, the key rings' usable-key predicate) and the live context windows
-// when the caller has them. The marks map and the rings are the live module
-// state (never replaced), the override is read per call.
+// when the caller has them. The marks map and the rings are live run state
+// behind the facts' router (never replaced), the override is read per call.
 export function selectContext(
   facts: RoutingFacts,
   switches: Switches,
@@ -109,9 +121,9 @@ export function selectContext(
     agentFilter: facts.agentFilter,
     defaultAgent: facts.defaultAgent,
     policy: switches.model,
-    override: failbackOverride(),
-    marks: downMarks(),
-    ringUsable: ringHasUsableKey,
+    override: facts.router.failbackOverride(),
+    marks: facts.router.downMarks(),
+    ringUsable: (provider, now) => ringHasUsableKey(facts.router, provider, now),
     ...(limits !== undefined ? { limits } : {}),
   }
 }

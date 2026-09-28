@@ -31,7 +31,6 @@ import {
   toAgent,
   type ChainPrior,
 } from "./chain-transitions"
-import { clearDownMarks, failbackOverride, stickyModel } from "./failback"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
 import { formatCost, formatDurationCompact, formatUsageLine, log, vlog } from "./log"
@@ -93,6 +92,10 @@ export async function attempt(
   // The run's clock (the installed services' clock): every time read of this
   // dispatch goes through it.
   const clock = services().clock
+  // The run's router (the installed services' router): the session-scope
+  // failback clear and the no-registry priority chain's sticky/override
+  // holders are run-wide decision state this dispatch writes and reads.
+  const router = services().router
   const clockNow = (): number => clock.now()
   // The chain's own agent decides the takeover gate's capability (the chain's
   // session lives on it); a chain without a session — and without a pending
@@ -206,7 +209,7 @@ export async function attempt(
   // chain's selected entry, so the new session re-selects from the list.
   if (session !== undefined && plan.clearsFailback) {
     resetRoute(chain)
-    clearDownMarks("session", switches.modelFailbackScope)
+    router.clearDownMarks("session", switches.modelFailbackScope)
   }
   const sessionID = forked ?? session?.value.id ?? chain.id!
   // Session-agent binding (plans/0055 §8.2): the chain's session lives on
@@ -334,9 +337,9 @@ export async function attempt(
     // undefined target sends no model key: with both variables unset and no
     // override the whole chain stays undefined, byte-identical to the
     // unrouted call (not model: undefined).
-    const override = failbackOverride()
+    const override = router.failbackOverride()
     if (!opts.routing) {
-      target = modelOfChain(chain, switches, opts.phase)
+      target = modelOfChain(chain, switches, opts.phase, router.stickyModel(), override)
       promptModel = target
     }
     // The actually-used model reaches the terminal (frontend-visible): when
@@ -355,7 +358,7 @@ export async function attempt(
       const from =
         chain.model !== undefined
           ? "fallback candidate"
-          : stickyModel() !== undefined
+          : router.stickyModel() !== undefined
             ? "fallback candidate (sticky within phase)"
             : override !== undefined
               ? "/failback override"

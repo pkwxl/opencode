@@ -28,11 +28,10 @@ import {
   shouldAsk,
   type Classifier,
 } from "../src/classify"
-import { isModelDown, markModelDown, resetFailback } from "../src/failback"
 import { isoInZone, parseWindow } from "../src/model-window"
 import type { ModelEntry, TierList } from "../src/models"
 import type { RoutingFacts } from "../src/routing"
-import type { Clock } from "../src/services"
+import { createServices, installServices, services, type Clock } from "../src/services"
 import { clockAt } from "./fixtures/clock"
 import { ev, fakeAgent, type FakeAgentOptions, type TurnContext } from "./fixtures/agent"
 
@@ -62,6 +61,7 @@ const facts = (over: { classifier?: string[]; models?: ModelEntry[]; agentFilter
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    router: services().router,
     clock: over.clock ?? clockAt(NOW),
   }
 }
@@ -76,13 +76,13 @@ const setup = (options: FakeAgentOptions = {}, over: Parameters<typeof facts>[0]
   return { agent, classifier: classifierFor(agent.client, facts(over), "T-001")! }
 }
 
+// The down marks live in the run's router; the preload installs a fresh
+// instance before every test, which is why no failback reset appears here.
 beforeEach(() => {
   resetClassifier()
-  resetFailback()
 })
 afterEach(() => {
   resetClassifier()
-  resetFailback()
 })
 
 describe("when it is asked", () => {
@@ -308,29 +308,31 @@ describe("the session", () => {
     const quick: Classifier = { ...classifier, timeoutMs: 40 }
     expect(await askClassifier(quick, { message: "odd failure" })).toBeUndefined()
     expect(agent.argsOf("abort")).toEqual([["ses_1"]])
-    expect(isModelDown("free", NOW)).toBe(false)
+    expect(services().router.isModelDown("free", NOW)).toBe(false)
     expect(cachedAnswer({ message: "odd failure" })).toBeUndefined()
   })
 
   test("the first usable classifier entry: the agent filter, windows and down marks apply", () => {
     const registry = facts().registry
-    expect(classifierEntry(registry, "opencode", NOW)?.name).toBe("free")
-    markModelDown("free")
-    expect(classifierEntry(registry, "opencode", NOW)?.name).toBe("free2")
-    markModelDown("free2", NOW + 60_000)
-    expect(classifierEntry(registry, "opencode", NOW)).toBeUndefined()
-    expect(classifierEntry(registry, "opencode", NOW + 120_000)?.name).toBe("free2")
-    resetFailback()
-    expect(classifierEntry(registry, "claude", NOW)).toBeUndefined()
+    expect(classifierEntry(services().router, registry, "opencode", NOW)?.name).toBe("free")
+    services().router.markModelDown("free")
+    expect(classifierEntry(services().router, registry, "opencode", NOW)?.name).toBe("free2")
+    services().router.markModelDown("free2", NOW + 60_000)
+    expect(classifierEntry(services().router, registry, "opencode", NOW)).toBeUndefined()
+    expect(classifierEntry(services().router, registry, "opencode", NOW + 120_000)?.name).toBe("free2")
+    // Fresh marks for the filter row: the moved state has no reset hook, a
+    // fresh services instance is the replacement.
+    installServices(createServices())
+    expect(classifierEntry(services().router, registry, "claude", NOW)).toBeUndefined()
     const closed = parseWindow("00:00-01:00")
     if (!("window" in closed)) throw new Error(closed.error)
     const windowed = facts({ models: [entry("free", { model: "free/model-a", only: [closed.window] }), entry("free2", { model: "free/model-b" })] }).registry
-    expect(classifierEntry(windowed, "opencode", NOW)?.name).toBe("free2")
+    expect(classifierEntry(services().router, windowed, "opencode", NOW)?.name).toBe("free2")
   })
 
   test("no usable entry: nothing is asked and nothing counts", () => {
-    markModelDown("free")
-    markModelDown("free2")
+    services().router.markModelDown("free")
+    services().router.markModelDown("free2")
     const { agent, classifier } = setup()
     expect(askClassifier(classifier, { message: "odd failure" })).toBeUndefined()
     expect(classifierCalls()).toBe(0)
@@ -342,20 +344,21 @@ describe("the session", () => {
       turn: (ctx) => (isClassify(ctx) ? [ev.error(ctx.session, { name: "APIError", message: "insufficient_quota: free tier spent", isRetryable: false }), ev.idle(ctx.session)] : undefined),
     })
     expect(await askClassifier(classifier, { message: "odd failure" })).toBeUndefined()
-    expect(isModelDown("free", NOW)).toBe(true)
-    expect(isModelDown("free2", NOW)).toBe(false)
-    expect(isModelDown("a", NOW)).toBe(false)
-    // A failure the patterns leave transient or unknown marks nothing.
+    expect(services().router.isModelDown("free", NOW)).toBe(true)
+    expect(services().router.isModelDown("free2", NOW)).toBe(false)
+    expect(services().router.isModelDown("a", NOW)).toBe(false)
+    // A failure the patterns leave transient or unknown marks nothing
+    // (fresh marks: the moved state has no reset hook).
     resetClassifier()
-    resetFailback()
+    installServices(createServices())
     const flaky = setup({ turn: (ctx) => (isClassify(ctx) ? [ev.error(ctx.session, { name: "APIError", message: "upstream hiccup" }), ev.idle(ctx.session)] : undefined) })
     expect(await askClassifier(flaky.classifier, { message: "odd failure" })).toBeUndefined()
-    expect(isModelDown("free", NOW)).toBe(false)
+    expect(services().router.isModelDown("free", NOW)).toBe(false)
     // A dispatch that fails is a failure too.
     resetClassifier()
     const refused = setup({ fail: { prompt: { message: "401 unauthorized" } } })
     expect(await askClassifier(refused.classifier, { message: "odd failure" })).toBeUndefined()
-    expect(isModelDown("free", NOW)).toBe(true)
+    expect(services().router.isModelDown("free", NOW)).toBe(true)
     expect(agent.prompts).toHaveLength(1)
   })
 

@@ -9,6 +9,7 @@ import { RUN_LOCK_FILE } from "@opencode-ai/auto-core/lock"
 import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
+import { services } from "@opencode-ai/auto-core/services"
 import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-core/phases"
 import { renderText } from "@opencode-ai/auto-core/template"
 import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/server"
@@ -543,8 +544,10 @@ test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
         filterSource: undefined,
         defaultAgent: "opencode",
         runAgent: "opencode",
-        // The facts carry the run services' clock shape; this one-off call
-        // reads the wall clock, like the run would.
+        // The facts carry the run services' clock and router shapes; this
+        // one-off call reads the wall clock and the process-default router,
+        // like a run would.
+        router: services().router,
         clock: { now: () => Date.now(), sleep: (ms: number) => Bun.sleep(ms), sleepUnlessExit: async () => false, timer: () => () => {} },
       }
       const answer = await askClassifier(classifierFor(host.client, routing)!, {

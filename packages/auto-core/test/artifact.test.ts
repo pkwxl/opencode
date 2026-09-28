@@ -8,7 +8,6 @@ import { join } from "node:path"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
 import { opencodeAgent } from "../src/agent/opencode/client"
 import { requireArtifact } from "../src/artifact"
-import { clearSticky, resetFailback } from "../src/failback"
 import { changedFiles, unitBaseline } from "../src/git"
 import { readPlanInput, savePlanInput } from "../src/plan-input"
 import { openStep, recallProgress, saveProgress } from "../src/resume"
@@ -385,13 +384,6 @@ describe("requireArtifact strict resume (OPENCODE_AUTO_STRICT_RESUME + unit base
     [SWITCH_ENV.recoveryWait]: "0",
   })
 
-  beforeEach(() => {
-    // Strict resume's model evaluation chain includes the sticky / /failback
-    // overrides (src/failback.ts module state), shared with other cases in
-    // this process → reset before each case to avoid cross-talk.
-    clearSticky()
-    resetFailback()
-  })
 
   async function git(dir: string, ...args: string[]) {
     const proc = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })

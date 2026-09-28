@@ -11,6 +11,7 @@ import { activateRings, resetKeyring } from "../src/keyring"
 import type { ModelEntry, ModelRegistry } from "../src/models"
 import { accountAnswered, accountOf, learnedReset, learnFailure, learnObserved, resetQuotaWindows } from "../src/quota-windows"
 import type { RoutingFacts } from "../src/routing"
+import { services } from "../src/services"
 
 const NOW = Date.parse("2026-09-26T17:15:19Z")
 const HOUR = 3_600_000
@@ -59,7 +60,7 @@ describe("the account key", () => {
       routes: new Map(),
       unused: [],
     } as unknown as ModelRegistry
-    return { registry, agentFilter: undefined, filterSource: undefined, defaultAgent: "opencode", runAgent: "opencode", clock: clockAt(0) }
+    return { registry, agentFilter: undefined, filterSource: undefined, defaultAgent: "opencode", runAgent: "opencode", router: services().router, clock: clockAt(0) }
   }
 
   test("without a registry: the provider of the routed model, else of the model shown, else default", () => {

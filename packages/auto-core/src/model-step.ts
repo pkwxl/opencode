@@ -6,16 +6,19 @@
 // context size puts it on, and the startup validation that disables steps
 // whose window is unknown or not larger than the one below. The live half
 // (reading `contextUsed`, steering the same session onto the next id) is
-// watch.ts; nothing here starts an agent or reads a clock.
+// watch.ts; the run state of the cache-claim check (`wider` asserts the
+// step ids share the base id's prompt cache — the first step-finish on a
+// wider id judges it) is the router service's (src/router.ts), so a watch
+// instance that ends before the first step-finish does not lose the check.
+// Nothing here starts an agent or reads a clock.
 //
 // Everything takes the windows as a map (the agent's contextLimits() data),
 // never reading the agent behind the caller's back, and a run without a
 // registry never calls in: `wider` exists only on registry entries, so the
 // no-registry run stays byte-identical (plans/0055 C2).
 // AUTO-DECISION: the module is model-step.ts, in the model-window / model-route family, not steps.ts (src/step.ts is the graceful-exit boundary module of plans/0014; a steps/steps pair would read as one mechanism split in two)
-import type { AgentTokens } from "./agent/types"
-import { formatTokens } from "./session-api"
 import type { ModelEntry, ModelRegistry } from "./models"
+import { formatTokens } from "./session-api"
 
 // The reserve a step keeps between its step-up point and its window (§4.5):
 // max(48k, window/5) tokens. The point must come before the agent's own
@@ -137,53 +140,3 @@ export function stepValidationLines(registry: ModelRegistry, limits: ReadonlyMap
   return lines
 }
 
-// ---------------------------------------------------------------------------
-// The cache-claim check (§4.5): `wider` asserts the step ids share the base
-// id's prompt cache, which the driver cannot know. The first step-finish on
-// a wider id shows whether it holds — a large cacheRead confirms it, a
-// cacheWrite of the whole prefix contradicts it. The pending claim is run
-// state like the down marks (in memory, once per run), so a watch instance
-// that ends before the first step-finish does not lose the check.
-// ---------------------------------------------------------------------------
-
-// The verdict of one claim observation; undefined = no claim was pending, or
-// the tokens were inconclusive (a small cacheWrite with a small cacheRead
-// says nothing either way).
-export type CacheClaim = "confirmed" | "contradiction"
-
-const claimPending = new Map<string, number>()
-const contradictionLogged = new Set<string>()
-
-// Arm the check for `name` (the entry's internal name): the next step-finish
-// observed on the wider id is judged against `used`, the context size at the
-// moment the session stepped up.
-export function awaitCacheClaim(name: string, used: number): void {
-  claimPending.set(name, used)
-}
-
-// Judge one step-finish's tokens against the armed claim, consuming it.
-// AUTO-DECISION: "large" reads as half the prefix (cacheRead >= used/2 confirms; cacheWrite >= used/2 with cacheRead under a tenth contradicts) — the fractions only pick how sure the warning is, and a wrong either way is one log line, not a routing decision
-export function observeCacheClaim(name: string, tokens: Pick<AgentTokens, "cacheRead" | "cacheWrite">): CacheClaim | undefined {
-  const used = claimPending.get(name)
-  if (used === undefined) return undefined
-  claimPending.delete(name)
-  if (used <= 0) return undefined
-  if (tokens.cacheRead >= used / 2) return "confirmed"
-  if (tokens.cacheWrite >= used / 2 && tokens.cacheRead < used / 10) return "contradiction"
-  return undefined
-}
-
-// Whether the contradiction line for `name` was already logged (§4.5: once
-// per entry), and marks it logged when not.
-export function noteClaimContradiction(name: string): boolean {
-  if (contradictionLogged.has(name)) return false
-  contradictionLogged.add(name)
-  return true
-}
-
-// Test reset (bun test runs many files in one process; the precedent is
-// failback.ts resetFailback).
-export function resetSteps(): void {
-  claimPending.clear()
-  contradictionLogged.clear()
-}

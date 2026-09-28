@@ -144,7 +144,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // and raw override values resolve through it, while each dispatch's chain
     // names the profile its session truly lives on. The facts carry the run
     // services' clock (the one timeline every dispatch reads).
-    const routing = registry ? routingFacts(registry, opts.agent, run.clock, started.profileName) : undefined
+    const routing = registry ? routingFacts(registry, opts.agent, run.clock, run.router, started.profileName) : undefined
     if (routing) logRunRouting(routing)
     // The classifier's token booking (plans/0055 §7.1 "Stats"): under a
     // registry the failure-message classifier's one-shot sessions report their
@@ -191,6 +191,10 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       input: opts.planInput,
       append: opts.append,
       routing,
+      // The run's router (the installed holder's): the loop's boundary hooks
+      // and every opts literal the loop builds carry it — the pipeline below
+      // reads the routing decision state only through ctx or opts.
+      router: run.router,
       ...(started.leadSplit === false ? { leadSplit: false as const } : {}),
     }
     return await runPhaseLoop(ctx)

@@ -190,6 +190,15 @@ export type Opts = {
   // the env-switch path, exactly as before. Type-only import; opts stays a
   // pure type module.
   routing?: import("./routing").RoutingFacts
+  // The run's router service (the routing decision state: the failback
+  // holders, the down marks), carried beside `routing` for the readers below
+  // the services' entry modules — the strict-resume checks of the commit
+  // boundary and the failback boundary hooks of the task pipeline. The loop
+  // fills it from the installed services when it builds a session's options;
+  // undefined = a run object that never knew routing state (a minimal test
+  // literal), whose holders read as unset. Type-only import; opts stays a
+  // pure type module.
+  router?: import("./router").Router
   // false = the run's agents cannot fork a session (capability.ts
   // Degradation.leadSplit, fixed at run start over the whole fleet): auto's
   // lead runs without its split clause, since the streams of a split are
