@@ -15,7 +15,8 @@
 import { join, relative } from "node:path"
 import type { AgentClient, AgentError, AgentEvent } from "./agent/types"
 import { agentGaveUp, classifySessionError, retryPolicyOf, statedInWording, type ErrorClass, type ErrorInfo, type Watch } from "./chain"
-import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk, type ClassifierAnswer } from "./classify"
+import { acceptedReset, askClassifier, cachedAnswer, classifierFor, describeAnswer, mergeClass, shouldAsk } from "./classify"
+import type { ClassifierAnswer } from "./router"
 import { afterSession, autoAnswer, commitBlocked, strictResumeActive } from "./unit-commit"
 import { suffixedTitle } from "./git"
 import { handoffComplete, saveHandover } from "./handover"
@@ -270,7 +271,9 @@ export async function watch(
   // AUTO-DECISION: one classifier call per failing turn, and the turn's answer covers every undecided signal of that turn (the retries and the closing session error of one turn are one failing request whose wording drifts — the closing error even repeats the retry messages — so a call per distinct message would spend the run's 20-call budget on one failure)
   const consult = (surface: "retry" | "error", info: ErrorInfo, cls: ErrorClass): { cls: ErrorClass; classified: boolean } => {
     if (classifier === undefined || !shouldAsk(surface, info, cls, client.errorPatterns)) return { cls, classified: false }
-    const known = cachedAnswer(info) ?? answer
+    // The cache's owner is the classifier's router (the routing facts carry
+    // it), which is also where this watch's own ask writes.
+    const known = cachedAnswer(classifier.router, info) ?? answer
     if (known === undefined) {
       if (asked === undefined) ask(info)
       return { cls, classified: false }

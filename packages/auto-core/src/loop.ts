@@ -8,7 +8,6 @@ import { log } from "./log"
 import { currentRound, phaseLabel, phaseTailDrift, routePhase, type PhaseUnit } from "./phases"
 import { roundDirName } from "./docpaths"
 import { renderDryrun } from "./prompt"
-import { setClassifyUsageSink } from "./classify"
 import { logRunRouting, routingFacts } from "./routing"
 import { unprotect } from "./protect"
 import { runOnce } from "./runner"
@@ -149,10 +148,11 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // The classifier's token booking (plans/0055 §7.1 "Stats"): under a
     // registry the failure-message classifier's one-shot sessions report their
     // usage into the stats `classify` bucket — outside the unit's session
-    // totals. The sink is dropped again in the finally below, before the stats
+    // totals. The sink is the run router's (the classifier reads it through
+    // its router) and is dropped again in the finally below, before the stats
     // handle flushes; without a registry no classifier exists, so nothing is
     // registered and the run stays byte-identical (C2).
-    if (routing) setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
+    if (routing) run.router.setClassifyUsageSink((usage) => void statsClassifyUsage(directory, usage))
     if (opts.interactive) {
       repl = startInteractive((agent) => server!.client(agent), agentName, undefined, routing ? new Set(routing.registry.models.keys()) : undefined)
       log("💬 interactive mode: Enter sends your input as an extra message to the current session (discarded when no session is active); /exit pauses at the next safe boundary, re-run to resume")
@@ -219,7 +219,7 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     progress?.close()
     // Drop the classifier's usage sink before the stats handle flushes, so a
     // late answer cannot book into a re-loaded handle after the run's end.
-    setClassifyUsageSink(undefined)
+    run.router.setClassifyUsageSink(undefined)
     // Graceful stats close-out (STATS_PLAN §1): fold the open segment, then
     // persist the closed segment and unload the handle; the next loadStats
     // reads with no depreciation left. Write failures are silent inside and

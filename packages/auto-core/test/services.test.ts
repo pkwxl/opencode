@@ -6,7 +6,8 @@
 // fold, the frozen switch snapshot's clamp invariant, and the router
 // ratchets: the state the router service moved in (the failback holders,
 // the down marks, the logged windows, the model-step cache claims, the
-// key rings) exists only as methods on the constructed router — no
+// key rings, the classifier's answers, in-flight calls, budget and usage
+// sink) exists only as methods on the constructed router — no
 // free-function delegator export anywhere else in src/, and no reset*
 // hook for it anywhere.
 // The callers-within-SERVICE_ENTRIES assertion lands with the later services
@@ -148,6 +149,16 @@ describe("the services holder", () => {
     router.activateRings(ringRegistry(), false)
     expect(router.ringsActive()).toBe(true)
     expect(router.hasActiveRing("zhipuai")).toBe(true)
+    // …and the classifier's run state: an answer, a budget call, the
+    // limit line's flag and the usage sink.
+    router.noteClassifierAnswer("k", { class: "quota" })
+    router.noteClassifierCall()
+    router.noteClassifierLimit()
+    router.setClassifyUsageSink(() => {})
+    expect(router.classifierCalls()).toBe(1)
+    expect(router.classifierAnswerOf("k")).toEqual({ class: "quota" })
+    expect(router.classifierLimitNoted()).toBe(true)
+    expect(router.classifyUsageSink()).toBeDefined()
   })
 
   test("…and the next test's router carries none of it", () => {
@@ -162,6 +173,13 @@ describe("the services holder", () => {
     expect(router.ringsActive()).toBe(false)
     expect(router.hasActiveRing("zhipuai")).toBe(false)
     expect(router.spawnKeyConfig()).toBeUndefined()
+    // The classifier's run state is fresh too: no answers, no budget
+    // spent, the limit line not yet said, no sink.
+    expect(router.classifierAnswerOf("k")).toBeUndefined()
+    expect(router.classifierInflightOf("k")).toBeUndefined()
+    expect(router.classifierCalls()).toBe(0)
+    expect(router.classifierLimitNoted()).toBe(false)
+    expect(router.classifyUsageSink()).toBeUndefined()
   })
 
   test("the stats clock follows the installed holder (the fold)", async () => {
@@ -198,7 +216,11 @@ describe("the services holder", () => {
 // over the moved singleton — the conversion crutch the unit that moves
 // state may use while it converts callers, and must delete in the same
 // unit. The key-ring block is the ring tranche: the functions keyring.ts
-// exported before its state moved in.
+// exported before its state moved in. The classifier block is the
+// classifier-state tranche: `setClassifyUsageSink` keeps the module
+// export's name, the rest are the key-level accessors over the state
+// (the answer cache, the in-flight calls, the budget, the limit line's
+// once flag and the sink) that classify.ts held as module variables.
 const MOVED_TO_ROUTER = [
   "stickyModel",
   "setSticky",
@@ -235,12 +257,23 @@ const MOVED_TO_ROUTER = [
   "awaitCacheClaim",
   "observeCacheClaim",
   "noteClaimContradiction",
+  "classifierAnswerOf",
+  "noteClassifierAnswer",
+  "classifierInflightOf",
+  "noteClassifierInflight",
+  "dropClassifierInflight",
+  "classifierCalls",
+  "noteClassifierCall",
+  "classifierLimitNoted",
+  "noteClassifierLimit",
+  "setClassifyUsageSink",
+  "classifyUsageSink",
 ] as const
 
 // The modules whose state moved (fully or in part) into the router: a
 // `reset*` export in one of them (or in router.ts itself) would be a reset
 // hook for the moved state, which the per-test fresh holder replaces.
-const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch", "keyring"]
+const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch", "keyring", "classify"]
 
 function srcFiles(): string[] {
   const files = readdirSync(join(import.meta.dir, "..", "src"))

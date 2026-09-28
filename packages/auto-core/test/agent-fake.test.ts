@@ -25,7 +25,7 @@ import type { SessionChain, Watch } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
 import type { Opts } from "../src/opts"
-import { cachedAnswer, resetClassifier } from "../src/classify"
+import { cachedAnswer } from "../src/classify"
 import { isoInZone, parseWindow } from "../src/model-window"
 import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
 import { resetQuotaWindows } from "../src/quota-windows"
@@ -1327,12 +1327,9 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     for (let i = 0; i < 200 && !done(); i++) await Bun.sleep(5)
   }
 
-  beforeEach(() => {
-    resetClassifier()
-  })
-  afterEach(() => {
-    resetClassifier()
-  })
+  // The classifier's run state (answers, budget) lives in the run's router;
+  // the preload installs a fresh instance before every test, so no reset
+  // hook appears here.
 
   test("a quota answer during retries settles the turn before the agent's retries run out; bare reaches the prompt", async () => {
     const resetAt = Date.now() + 2 * 3_600_000
@@ -1525,7 +1522,10 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     const answered = Date.now() + 5 * 3_600_000
     const statedAt = Math.floor((Date.now() + 2 * 3_600_000) / 1000) * 1000
     const settle = async (stated: boolean): Promise<Watch> => {
-      resetClassifier()
+      // Fresh state between the two runs (the moved state has no reset
+      // hook; a fresh services instance replaces it, keeping the wall
+      // clock this suite runs on).
+      installServices(createServices())
       const agent = make({
         turn: (ctx) => (isClassify(ctx.text) ? answerTurn(`{"class": "unknown", "resetAt": "${isoInZone(answered, "UTC")}"}`)(ctx.session) : undefined),
       })
@@ -1534,7 +1534,7 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
       // own, stating the reset (or not).
       async function* turn() {
         yield { type: "retry", session: "s", attempt: 1, error: { message: UNKNOWN } } satisfies AgentEvent
-        await until(() => cachedAnswer({ message: UNKNOWN }) !== undefined)
+        await until(() => cachedAnswer(services().router, { message: UNKNOWN }) !== undefined)
         yield ev.error("s", { name: "APIError", message: "usage limit reached", isRetryable: false, ...(stated ? { resetAt: statedAt, scope: "5h" as const } : {}) })
         yield ev.idle("s")
       }

@@ -9,12 +9,12 @@ import { RUN_LOCK_FILE } from "@opencode-ai/auto-core/lock"
 import { renderProjectBrief } from "@opencode-ai/auto-core/brief"
 import { CONFIG_DEFAULTS } from "@opencode-ai/auto-core/config"
 import { runAll } from "@opencode-ai/auto-core/loop"
-import { services } from "@opencode-ai/auto-core/services"
+import { createServices, installServices, services } from "@opencode-ai/auto-core/services"
 import { completePhase, establishRound, readPhases } from "@opencode-ai/auto-core/phases"
 import { renderText } from "@opencode-ai/auto-core/template"
 import { opencodeHost, manage } from "@opencode-ai/auto-core/agent/opencode/server"
 import { stepUpPoint } from "@opencode-ai/auto-core/model-step"
-import { askClassifier, classifierFor, resetClassifier } from "@opencode-ai/auto-core/classify"
+import { askClassifier, classifierFor } from "@opencode-ai/auto-core/classify"
 import type { AgentClient, AgentEvent } from "@opencode-ai/auto-core/agent/types"
 import type { RoutingFacts } from "@opencode-ai/auto-core/routing"
 import { estimateTokens } from "@opencode-ai/auto-core/usage"
@@ -528,7 +528,9 @@ test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
       const stored = (await (await fetch(new URL(`/session/${bare.session}`, host.url))).json()) as { permission?: { permission: string; action: string; pattern: string }[] }
       expect(stored.permission).toEqual([{ permission: "*", action: "deny", pattern: "*" }])
       // One real classifier call: the reply parses into one of the classes.
-      resetClassifier()
+      // The classifier's state (the answer cache, the budget) is the run
+      // router's now; a fresh services instance is the reset.
+      installServices(createServices())
       const routing: RoutingFacts = {
         registry: {
           layers: [{ name: "operator", path: "/unused/models.json" }],
@@ -557,7 +559,7 @@ test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
       expect(answer).toBeDefined()
       expect(["quota", "rate", "auth", "transient", "unknown"]).toContain(answer!.class)
     } finally {
-      resetClassifier()
+      installServices(createServices())
       host.close()
       await rm(dir, { recursive: true, force: true })
     }

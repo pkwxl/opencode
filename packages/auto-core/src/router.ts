@@ -5,7 +5,9 @@
 // marks of the model registry (per model, and per provider key for the
 // rings), the key rings themselves (the built rings, the per-provider
 // position, whether rotation is active), the usage windows last logged per
-// agent client, and the model-step cache-claim checks. One instance per
+// agent client, the model-step cache-claim checks, and the failure-message
+// classifier's run state (its answer cache, its in-flight calls, its call
+// budget and its usage sink). One instance per
 // run: `createServices` builds it into the run's holder, the composition
 // root installs the holder for the run, and the test preload installs a
 // fresh one before every test (so the state never leaks across test files
@@ -46,6 +48,7 @@ import { buildRings, ringKeyLabel, type RingRotation } from "./keyring"
 import { log } from "./log"
 import type { ModelEntry, ModelRegistry, ModelReference } from "./models"
 import type { FailbackScope } from "./switches"
+import type { Usage } from "./stats"
 
 // The run-time model-order override a parameterized /failback leaves behind:
 // the first argument is the preferred wildcard, the rest the failover
@@ -62,6 +65,25 @@ export type DownMark = { until?: number; classifier?: true }
 // pending, or the tokens were inconclusive (a small cacheWrite with a small
 // cacheRead says nothing either way).
 export type CacheClaim = "confirmed" | "contradiction"
+
+// A parsed reply of the failure-message classifier: the class — the pattern
+// classes minus `overflow`, which the context steps and the handover own and
+// the classifier is never asked about — and the reset time the text named
+// (epoch ms), as the reply stated it; the classifier's acceptedReset decides
+// whether it may set a mark. The type lives here, beside the answer cache it
+// keys, because the router must not import the classifier module: classify
+// carries the Router type (the classifier holds it), so a router→classify
+// edge of any kind, type-only included, would close a cycle the
+// import-direction DAG check rejects. classify.ts derives its ClassifierClass
+// alias from this shape.
+export type ClassifierAnswer = { class: "quota" | "rate" | "auth" | "transient" | "unknown"; resetAt?: number }
+
+// Where the classifier's token usage goes. Never into the unit's session
+// totals: the classifier's session is not the watched session (the watch
+// bills only its own session's steps), and it opens no stats segment. A
+// per-model stats bucket for it registers through the router; until one
+// does, the usage is only measured.
+export type ClassifyUsageSink = (usage: Usage, entry: string) => void
 
 // The router service. Method names keep the names the module singletons
 // exported, so the move reads as a move.
@@ -120,6 +142,27 @@ export type Router = {
   awaitCacheClaim(name: string, used: number): void
   observeCacheClaim(name: string, tokens: Pick<AgentTokens, "cacheRead" | "cacheWrite">): CacheClaim | undefined
   noteClaimContradiction(name: string): boolean
+  // —— The failure-message classifier ——
+  // The classifier's run state, keyed by the cache key the classify module
+  // derives from a failure's redacted text: the answers known this run, the
+  // calls in flight, the calls made against the run's budget, whether the
+  // limit line was logged (once per run) and the run's usage sink. The
+  // policies over this state (when to ask, how the key is derived, what a
+  // reply means) stay in classify.ts and reach the state through
+  // Classifier.router. `setClassifyUsageSink` keeps the name the module
+  // exported, so the move reads as a move; the rest are the accessors the
+  // moved state needs.
+  classifierAnswerOf(key: string): ClassifierAnswer | undefined
+  noteClassifierAnswer(key: string, answer: ClassifierAnswer): void
+  classifierInflightOf(key: string): Promise<ClassifierAnswer | undefined> | undefined
+  noteClassifierInflight(key: string, call: Promise<ClassifierAnswer | undefined>): void
+  dropClassifierInflight(key: string): void
+  classifierCalls(): number
+  noteClassifierCall(): void
+  classifierLimitNoted(): boolean
+  noteClassifierLimit(): void
+  setClassifyUsageSink(sink: ClassifyUsageSink | undefined): void
+  classifyUsageSink(): ClassifyUsageSink | undefined
 }
 
 // Builds the run's router. See the module header for why this takes no
@@ -170,6 +213,19 @@ export function createRouter(): Router {
   // not lose the check; the contradiction line fires once per entry.
   const claimPending = new Map<string, number>()
   const contradictionLogged = new Set<string>()
+
+  // The failure-message classifier's run state (the state the classify
+  // module held as a singleton until this tranche): the answers by cache
+  // key, the calls in flight by cache key, the calls made and whether the
+  // limit line was logged, plus the run's usage sink. One run is one
+  // budget and one cache, exactly as one process was before the move; the
+  // classify module keeps every policy over this state and reaches it
+  // through the classifier's router.
+  const classifierAnswers = new Map<string, ClassifierAnswer>()
+  const classifierInflight = new Map<string, Promise<ClassifierAnswer | undefined>>()
+  let classifierCallsMade = 0
+  let classifierLimitLine = false
+  let classifyUsageSink: ClassifyUsageSink | undefined
 
   // Marks at a scope boundary: the boundary clears every mark the scope
   // covers — phase clears under every scope, task under task (default) and
@@ -462,5 +518,35 @@ export function createRouter(): Router {
       contradictionLogged.add(name)
       return true
     },
+
+    // —— The failure-message classifier ——
+    classifierAnswerOf: (key) => classifierAnswers.get(key),
+    noteClassifierAnswer: (key, answer) => {
+      classifierAnswers.set(key, answer)
+    },
+    classifierInflightOf: (key) => classifierInflight.get(key),
+    noteClassifierInflight: (key, call) => {
+      classifierInflight.set(key, call)
+    },
+    dropClassifierInflight: (key) => {
+      classifierInflight.delete(key)
+    },
+    classifierCalls: () => classifierCallsMade,
+    // The budget's increment sits before the call starts, exactly as the
+    // module state's ordering was, so the `call N/20` vlog (which reads the
+    // counter through classifierCalls) does not drift.
+    noteClassifierCall: () => {
+      classifierCallsMade += 1
+    },
+    classifierLimitNoted: () => classifierLimitLine,
+    noteClassifierLimit: () => {
+      classifierLimitLine = true
+    },
+    // The run's classifier usage sink: registered by the composition root
+    // under a registry, dropped before the stats handle flushes.
+    setClassifyUsageSink: (sink) => {
+      classifyUsageSink = sink
+    },
+    classifyUsageSink: () => classifyUsageSink,
   }
 }

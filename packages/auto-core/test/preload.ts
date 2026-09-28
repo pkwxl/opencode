@@ -16,7 +16,8 @@
 // the process): the run's clock, the process-level time keepers it wires
 // (the stats module) and the router's decision state (the failback holders,
 // the down marks, the logged usage windows, the model-step cache claims,
-// the key rings) never leak from one test into the next. A test that steers
+// the key rings, the classifier's answer cache and call budget) never leak
+// from one test into the next. A test that steers
 // time installs its own holder the same way; a test that needs fresh marks
 // mid-way reinstalls a holder keeping the current clock.
 import { mkdtempSync, rmSync } from "node:fs"

@@ -23,7 +23,10 @@
 // makes at most 20 calls, after which the patterns decide alone (the log says
 // so once). A 30 s timeout or any failure counts as no answer. The
 // classifier's own failures are classified by the patterns alone and mark
-// only the classifier entry down.
+// only the classifier entry down. The run state this keeps — the answer
+// cache, the calls in flight, the call budget and the usage sink — is the
+// router service's (one instance per run); this module holds the policies
+// and reaches the state through the classifier's router.
 //
 // Where the answers act lives with the callers: src/watch.ts asks beside the
 // event stream of a retrying turn and settles it when an answer raises the
@@ -37,7 +40,7 @@ import { log, vlog } from "./log"
 import { isoInZone, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry } from "./models"
 import { renderClassifyError } from "./prompt"
-import type { Router } from "./router"
+import type { ClassifierAnswer, ClassifyUsageSink, Router } from "./router"
 import type { RoutingFacts } from "./routing"
 import { formatClientError } from "./session-api"
 import type { Usage } from "./stats"
@@ -52,13 +55,11 @@ export const CLASSIFY_TITLE = "auto: classify error"
 
 // The classes a reply may name: the pattern classes minus `overflow`, which
 // the context steps and the handover own and the classifier is never asked
-// about.
-export type ClassifierClass = "quota" | "rate" | "auth" | "transient" | "unknown"
+// about. The union itself lives in the answer's shape (router.ts, beside the
+// answer cache it keys, so the router never imports this module); this alias
+// names it for the policies below.
+export type ClassifierClass = ClassifierAnswer["class"]
 const CLASSES: readonly string[] = ["quota", "rate", "auth", "transient", "unknown"]
-
-// A parsed reply: the class, and the reset time the text named (epoch ms), as
-// the reply stated it — acceptedReset decides whether it may set a mark.
-export type ClassifierAnswer = { class: ClassifierClass; resetAt?: number }
 
 // ---------------------------------------------------------------------------
 // When it is asked (§7.1)
@@ -283,35 +284,22 @@ export function classifierEntry(router: Router, registry: ModelRegistry, agentFi
   return undefined
 }
 
-// Where the classifier's token usage goes. Never into the unit's session
-// totals: the classifier's session is not the watched session (the watch
-// bills only its own session's steps), and it opens no stats segment. A
-// per-model stats bucket for it registers here; until one does, the usage is
-// only measured.
-export type ClassifyUsageSink = (usage: Usage, entry: string) => void
+// Where the classifier's token usage goes (the sink's rationale) is
+// documented with the type in router.ts, where the type and the state live.
 
-// Run state (per process; tests reset it): the answers by cache key, the
-// calls in flight by cache key, the calls made and whether the limit line
-// was logged.
-const answers = new Map<string, ClassifierAnswer>()
-const inflight = new Map<string, Promise<ClassifierAnswer | undefined>>()
-let calls = 0
-let limitNoted = false
-let usageSink: ClassifyUsageSink | undefined
+// Run state (per process until this moved): the answers by cache key, the
+// calls in flight by cache key, the calls made, whether the limit line was
+// logged and the usage sink. All of it is the router service's now — one
+// instance per run, a per-test fresh holder from the preload replacing the
+// reset hook the module once exported — and every function below reaches it
+// through the classifier's router as data.
 
-export function setClassifyUsageSink(sink: ClassifyUsageSink | undefined): void {
-  usageSink = sink
-}
-
-// The cached answer for an error, if one is known this run.
-export function cachedAnswer(info: ErrorInfo): ClassifierAnswer | undefined {
+// The cached answer for an error, if one is known this run. The cache's
+// owner is the classifier's router (the routing facts carry it), so it is
+// the caller's leading parameter.
+export function cachedAnswer(router: Router, info: ErrorInfo): ClassifierAnswer | undefined {
   const input = classifierInput(info)
-  return input === "" ? undefined : answers.get(classifierCacheKey(input))
-}
-
-// The calls this run has made (tests and the limit line read it).
-export function classifierCalls(): number {
-  return calls
+  return input === "" ? undefined : router.classifierAnswerOf(classifierCacheKey(input))
 }
 
 // Asks about an error: a known answer resolves at once, a call in flight for
@@ -324,32 +312,33 @@ export function askClassifier(classifier: Classifier, info: ErrorInfo): Promise<
   const input = classifierInput(info)
   if (input === "") return undefined
   const key = classifierCacheKey(input)
-  const known = answers.get(key)
+  const router = classifier.router
+  const known = router.classifierAnswerOf(key)
   if (known !== undefined) return Promise.resolve(known)
-  const pending = inflight.get(key)
+  const pending = router.classifierInflightOf(key)
   if (pending !== undefined) return pending
-  if (calls >= CLASSIFY_CALL_LIMIT) {
-    if (!limitNoted) {
-      limitNoted = true
+  if (router.classifierCalls() >= CLASSIFY_CALL_LIMIT) {
+    if (!router.classifierLimitNoted()) {
+      router.noteClassifierLimit()
       log(`ℹ the failure-message classifier reached its limit of ${CLASSIFY_CALL_LIMIT} calls for this run; from now on the error patterns decide alone`)
     }
     return undefined
   }
   const now = classifier.now()
-  const pick = classifierEntry(classifier.router, classifier.registry, classifier.agentFilter, now)
+  const pick = classifierEntry(router, classifier.registry, classifier.agentFilter, now)
   if (pick === undefined) {
     vlog(`  classifier: no classifier entry is usable now; the error patterns decide alone`)
     return undefined
   }
-  calls += 1
+  router.noteClassifierCall()
   const call = runClassifier(classifier, pick, input, now)
     .catch(() => undefined)
     .then((answer) => {
-      if (answer !== undefined) answers.set(key, answer)
+      if (answer !== undefined) router.noteClassifierAnswer(key, answer)
       return answer
     })
-    .finally(() => inflight.delete(key))
-  inflight.set(key, call)
+    .finally(() => router.dropClassifierInflight(key))
+  router.noteClassifierInflight(key, call)
   return call
 }
 
@@ -363,14 +352,14 @@ async function runClassifier(
   input: string,
   now: number,
 ): Promise<ClassifierAnswer | undefined> {
-  const { registry } = classifier
+  const { registry, router } = classifier
   const text = renderClassifyError({ now: isoInZone(now, registry.tz), tz: registry.tz, error: input })
-  vlog(`  classifier: asking ${pick.name} about a failure message (call ${calls}/${CLASSIFY_CALL_LIMIT})`)
+  vlog(`  classifier: asking ${pick.name} about a failure message (call ${router.classifierCalls()}/${CLASSIFY_CALL_LIMIT})`)
   // The entry's own host (§8.1): the pool starts it here if the entry is the
   // first dispatch on its agent; the watch's client is the fallback.
   const client = (await classifier.clientOf?.(pick.entry.agent)) ?? classifier.client
   const outcome = await oneShot(client, pick.entry, text, classifier.timeoutMs)
-  if (outcome.usage.steps > 0) usageSink?.(outcome.usage, pick.name)
+  if (outcome.usage.steps > 0) router.classifyUsageSink()?.(outcome.usage, pick.name)
   const prefix = classifier.label ? `${classifier.label} ` : ""
   if (outcome.kind === "timeout") {
     vlog(`  classifier: ${pick.name} gave no answer within ${Math.round(classifier.timeoutMs / 1000)} s; the error patterns decide alone`)
@@ -513,17 +502,4 @@ async function oneShot(client: AgentClient, entry: ModelEntry, text: string, tim
   if (failure !== undefined && (settled || !timedOut)) return { kind: "failed", error: failure, usage }
   if (!settled) return timedOut ? { kind: "timeout", usage } : { kind: "failed", error: failure ?? { message: "the classifier session ended without an answer" }, usage }
   return { kind: "reply", text: [...texts.values()].join("\n"), usage }
-}
-
-// Tests reset the module state (one Bun process runs many test files). The
-// answers, in-flight calls and budget are the module's own until they move
-// into the router service with their unit; the down marks already live
-// there and need no reset here (the preload installs a fresh router per
-// test).
-export function resetClassifier(): void {
-  answers.clear()
-  inflight.clear()
-  calls = 0
-  limitNoted = false
-  usageSink = undefined
 }

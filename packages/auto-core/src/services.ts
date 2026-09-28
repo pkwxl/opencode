@@ -5,8 +5,9 @@
 // time keepers (the stats module) read — and the `Router` — the decision
 // state of routing and recovery: the failback holders (sticky, the pending
 // /failback order, the run-time model-order override), the down marks, the
-// logged usage windows, the model-step cache claims and the key rings (the
-// classifier's state joins the router with its own change). The remaining
+// logged usage windows, the model-step cache claims, the key rings and the
+// failure-message classifier's run state (its answer cache, in-flight calls,
+// call budget and usage sink). The remaining
 // members join with the changes that move their state in: `control` (the
 // /exit request and its sleepers) and `git` (the commit-side seam the
 // kernel and engine call) — the placeholders are the documented absence,

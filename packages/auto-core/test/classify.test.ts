@@ -4,7 +4,7 @@
 // reset-time horizon, the timeout, the classifier entry's selection and its
 // own failures. The session-driving half (a retrying turn settled early, the
 // escalation's marks) is in test/agent-fake.test.ts.
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import type { AgentEvent } from "../src/agent/types"
 import type { ErrorInfo } from "../src/chain"
 import {
@@ -15,7 +15,6 @@ import {
   CLASSIFY_INPUT_CHARS,
   CLASSIFY_TITLE,
   classifierCacheKey,
-  classifierCalls,
   classifierEntry,
   classifierFor,
   classifierInput,
@@ -23,8 +22,6 @@ import {
   parseClassifierReply,
   RESET_HORIZON_MS,
   redact,
-  resetClassifier,
-  setClassifyUsageSink,
   shouldAsk,
   type Classifier,
 } from "../src/classify"
@@ -76,14 +73,10 @@ const setup = (options: FakeAgentOptions = {}, over: Parameters<typeof facts>[0]
   return { agent, classifier: classifierFor(agent.client, facts(over), "T-001")! }
 }
 
-// The down marks live in the run's router; the preload installs a fresh
-// instance before every test, which is why no failback reset appears here.
-beforeEach(() => {
-  resetClassifier()
-})
-afterEach(() => {
-  resetClassifier()
-})
+// The run state these tests touch — the down marks, the answer cache, the
+// call budget, the usage sink — lives in the run's router; the preload
+// installs a fresh instance before every test, which is why no reset hook
+// appears here.
 
 describe("when it is asked", () => {
   const info: ErrorInfo = { message: "something odd happened" }
@@ -181,9 +174,9 @@ describe("the cache", () => {
     const joined = askClassifier(classifier, { message: "Kontingent erschöpft (Anfrage 18)" })
     expect(joined).toBe(first!)
     expect(await first).toEqual({ class: "quota" })
-    expect(cachedAnswer({ message: "Kontingent erschöpft (Anfrage 99)" })).toEqual({ class: "quota" })
+    expect(cachedAnswer(classifier.router, { message: "Kontingent erschöpft (Anfrage 99)" })).toEqual({ class: "quota" })
     expect(await askClassifier(classifier, { message: "Kontingent erschöpft (Anfrage 20)" })).toEqual({ class: "quota" })
-    expect(classifierCalls()).toBe(1)
+    expect(classifier.router.classifierCalls()).toBe(1)
     expect(agent.argsOf("create")).toEqual([[{ title: CLASSIFY_TITLE }]])
   })
 })
@@ -199,12 +192,12 @@ describe("the call limit", () => {
       // Distinct wording (letters, not digits: digits are masked in the key).
       const word = (i: number) => `failure ${String.fromCharCode(97 + i)}${String.fromCharCode(97 + ((i * 7) % 26))}`
       for (let i = 0; i < CLASSIFY_CALL_LIMIT; i++) expect(await askClassifier(classifier, { message: word(i) })).toEqual({ class: "transient" })
-      expect(classifierCalls()).toBe(CLASSIFY_CALL_LIMIT)
+      expect(classifier.router.classifierCalls()).toBe(CLASSIFY_CALL_LIMIT)
       expect(askClassifier(classifier, { message: word(20) })).toBeUndefined()
       expect(askClassifier(classifier, { message: word(21) })).toBeUndefined()
       // A known answer is still served: the limit counts calls, not lookups.
       expect(await askClassifier(classifier, { message: word(3) })).toEqual({ class: "transient" })
-      expect(classifierCalls()).toBe(CLASSIFY_CALL_LIMIT)
+      expect(classifier.router.classifierCalls()).toBe(CLASSIFY_CALL_LIMIT)
       expect(lines.filter((line) => line.includes(`limit of ${CLASSIFY_CALL_LIMIT} calls`))).toHaveLength(1)
     } finally {
       printed.mockRestore()
@@ -233,9 +226,9 @@ describe("the reply", () => {
     // asks again.
     const { classifier } = setup({ turn: reply("I think this is a quota problem.") })
     expect(await askClassifier(classifier, { message: "odd failure" })).toBeUndefined()
-    expect(cachedAnswer({ message: "odd failure" })).toBeUndefined()
+    expect(cachedAnswer(classifier.router, { message: "odd failure" })).toBeUndefined()
     expect(await askClassifier(classifier, { message: "odd failure" })).toBeUndefined()
-    expect(classifierCalls()).toBe(2)
+    expect(classifier.router.classifierCalls()).toBe(2)
   })
 })
 
@@ -309,7 +302,7 @@ describe("the session", () => {
     expect(await askClassifier(quick, { message: "odd failure" })).toBeUndefined()
     expect(agent.argsOf("abort")).toEqual([["ses_1"]])
     expect(services().router.isModelDown("free", NOW)).toBe(false)
-    expect(cachedAnswer({ message: "odd failure" })).toBeUndefined()
+    expect(cachedAnswer(classifier.router, { message: "odd failure" })).toBeUndefined()
   })
 
   test("the first usable classifier entry: the agent filter, windows and down marks apply", () => {
@@ -335,7 +328,7 @@ describe("the session", () => {
     services().router.markModelDown("free2")
     const { agent, classifier } = setup()
     expect(askClassifier(classifier, { message: "odd failure" })).toBeUndefined()
-    expect(classifierCalls()).toBe(0)
+    expect(classifier.router.classifierCalls()).toBe(0)
     expect(agent.calls).toHaveLength(0)
   })
 
@@ -348,14 +341,15 @@ describe("the session", () => {
     expect(services().router.isModelDown("free2", NOW)).toBe(false)
     expect(services().router.isModelDown("a", NOW)).toBe(false)
     // A failure the patterns leave transient or unknown marks nothing
-    // (fresh marks: the moved state has no reset hook).
-    resetClassifier()
+    // (fresh state: the moved state has no reset hook, a fresh services
+    // instance is the replacement — it clears the marks and the classifier's
+    // answers alike).
     installServices(createServices())
     const flaky = setup({ turn: (ctx) => (isClassify(ctx) ? [ev.error(ctx.session, { name: "APIError", message: "upstream hiccup" }), ev.idle(ctx.session)] : undefined) })
     expect(await askClassifier(flaky.classifier, { message: "odd failure" })).toBeUndefined()
     expect(services().router.isModelDown("free", NOW)).toBe(false)
     // A dispatch that fails is a failure too.
-    resetClassifier()
+    installServices(createServices())
     const refused = setup({ fail: { prompt: { message: "401 unauthorized" } } })
     expect(await askClassifier(refused.classifier, { message: "odd failure" })).toBeUndefined()
     expect(services().router.isModelDown("free", NOW)).toBe(true)
@@ -364,7 +358,7 @@ describe("the session", () => {
 
   test("its token usage goes to the usage sink, never anywhere else", async () => {
     const seen: [number, string][] = []
-    setClassifyUsageSink((usage, name) => seen.push([usage.input, name]))
+    services().router.setClassifyUsageSink((usage, name) => seen.push([usage.input, name]))
     const { classifier } = setup({ turn: reply('{"class": "unknown", "resetAt": null}') })
     await askClassifier(classifier, { message: "odd failure" })
     expect(seen).toEqual([[300, "free"]])
