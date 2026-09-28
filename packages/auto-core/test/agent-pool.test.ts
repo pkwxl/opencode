@@ -16,6 +16,7 @@ import { loadModels, type ModelRegistry } from "../src/models"
 import type { Opts } from "../src/opts"
 import { resetKeyring } from "../src/keyring"
 import { routingFacts, type RoutingFacts } from "../src/routing"
+import { services } from "../src/services"
 import { runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters, setShellProfile, shellAdapter, shellProfile } from "../src/shell"
 import { autoSwitches, clampSwitches, parseSwitches } from "../src/switches"
@@ -74,7 +75,7 @@ async function fleet(optionsA: FakeAgentOptions = {}, optionsB: FakeAgentOptions
   const registry = (await loadModels(dir, { phaseTypes: PHASE_TYPES, env: { OPENCODE_AUTO_MODELS: file } }))!
   const started = await startPool(dir, { registry })
   if (started.pool === undefined) throw new Error(started.error)
-  const facts = routingFacts(registry, undefined, started.profileName)
+  const facts = routingFacts(registry, undefined, services().clock, started.profileName)
   return {
     a,
     b,
@@ -252,7 +253,7 @@ describe("cross-agent moves (§8.3, §7 step 2)", () => {
       // The run's start profile is the registry's opencode profile; the
       // shell's fake factory serves it.
       expect(started.profileName).toBe("oc")
-      const facts: RoutingFacts = { ...routingFacts(registry, undefined, started.profileName), agentFilter: undefined, filterSource: undefined }
+      const facts: RoutingFacts = { ...routingFacts(registry, undefined, services().clock, started.profileName), agentFilter: undefined, filterSource: undefined }
       const chain = deepChain()
       const result = await runSession(started.pool!, task, "p", { routing: facts, server: started.pool! }, chain, undefined, undefined, DEFAULTS)
       expect(result.type).toBe("idle")

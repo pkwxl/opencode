@@ -15,9 +15,11 @@ import { claudeStream } from "../src/agent/claude/stream"
 import type { AgentEvent } from "../src/agent/types"
 import { degrade } from "../src/capability"
 import { classifySessionError } from "../src/chain"
+import { createServices, installServices, uninstallServices } from "../src/services"
 import { runSession } from "../src/session"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { usageSource } from "../src/usage"
+import { manualClock } from "./fixtures/clock"
 import { task } from "./fixtures/runner"
 
 const SID = "11111111-2222-4333-8444-555555555555"
@@ -802,18 +804,26 @@ describe("claudeAgent: process manager", () => {
 
   // plans/0057 §6: the same event with its reset still ahead. The wait
   // sleeps to the stated reset (plus hibernate's jitter, zero here) where the
-  // field run polled every 30 minutes.
+  // field run polled every 30 minutes. The recovery sleep runs on the run
+  // services' clock, so a manual holder sleeps the second to the reset
+  // instantly instead of waiting on wall time.
   test("a spent window whose reset is ahead: the wait sleeps to the reset, not the poll", async () => {
-    const resetsAt = Math.ceil(Date.now() / 1000) + 1
+    const now = Date.now()
+    const resetsAt = Math.ceil(now / 1000) + 1
     const ahead = { ...rateLimit("rejected"), rate_limit_info: { status: "rejected", ...WINDOW, resetsAt } }
+    const mc = manualClock(now)
+    installServices(createServices({ clock: mc.clock }))
     const random = spyOn(Math, "random").mockReturnValue(0)
     try {
       const { procs, log } = await interruptedRun([ahead, syntheticLine, failedResult], parseSwitches({}))
       expect(procs).toHaveLength(3)
+      // The timeline advanced across the whole second to the reset.
+      expect(mc.at).toBeGreaterThanOrEqual(resetsAt * 1000)
       expect(log).toContain(`; the five-hour usage window resets ${new Date(resetsAt * 1000).toISOString()}, sleeping until about `)
       expect(log).not.toContain("waiting 30 minutes")
     } finally {
       random.mockRestore()
+      uninstallServices()
     }
   })
 

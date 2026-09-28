@@ -543,6 +543,9 @@ test.skipIf(!(E2E && CLASSIFIER_MODEL.includes("/")))(
         filterSource: undefined,
         defaultAgent: "opencode",
         runAgent: "opencode",
+        // The facts carry the run services' clock shape; this one-off call
+        // reads the wall clock, like the run would.
+        clock: { now: () => Date.now(), sleep: (ms: number) => Bun.sleep(ms), sleepUnlessExit: async () => false, timer: () => () => {} },
       }
       const answer = await askClassifier(classifierFor(host.client, routing)!, {
         message: "Your plan's monthly allowance has been used up. It renews at 03:00 tomorrow.",

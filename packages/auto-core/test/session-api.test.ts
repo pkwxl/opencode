@@ -16,7 +16,9 @@ import type { Interactive } from "../src/interactive"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
 import { ensureForkBase } from "../src/session"
 import { askHuman, forkSession, seedForkSession, sessionUsage } from "../src/session-api"
-import { flushStats, loadStats, setStatsClock, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
+import { createServices, installServices, uninstallServices } from "../src/services"
+import { flushStats, loadStats, statsSessionBegin, statsSessionEnd, statsTotals } from "../src/stats"
+import { fixedClock } from "./fixtures/clock"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { fakeClient } from "./fixtures/runner"
 
@@ -299,11 +301,11 @@ describe("askHuman wait deduction (stats wiring, T-005)", () => {
 
   beforeEach(() => {
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(() => {
-    setStatsClock()
+    uninstallServices()
   })
 
   // A fake resident input line: advances the injected clock before answering,

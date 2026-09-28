@@ -10,11 +10,24 @@
 // Children started with Bun.spawn without an explicit env keep the environment
 // of the process start, so git in the fixtures still reads its own config.
 // AUTO-DECISION: one preload instead of an env override in each fixture that reaches preflight (the in-process runAll and preflight callers are spread over several test files without a shared fixture, and a preload also covers the ones written later)
+//
+// The preload also installs a fresh run-services instance before every test
+// (the module-level beforeEach registered here applies to every test file in
+// the process): the run's clock and the process-level time keepers it wires
+// (the stats module) never leak from one test into the next. A test that
+// steers time installs its own holder the same way.
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { beforeEach } from "bun:test"
+import { createServices, installServices } from "../src/services"
 
 const xdg = mkdtempSync(join(tmpdir(), "auto-core-xdg-"))
 process.env.XDG_CONFIG_HOME = xdg
 delete process.env.OPENCODE_AUTO_MODELS
 process.on("exit", () => rmSync(xdg, { recursive: true, force: true }))
+
+installServices(createServices())
+beforeEach(() => {
+  installServices(createServices())
+})

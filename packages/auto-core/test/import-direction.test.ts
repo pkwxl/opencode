@@ -215,9 +215,15 @@ const CLASSIFIED: Record<string, Domain> = {
   script: "driver",
   // Selection (plans/0055 §6): the candidate list, the pick and the
   // nothing-usable decision of a dispatch under a registry; pure, with the
-  // clock and the run state injected. Sits below the session layer, above
-  // the agent domain (§12).
+  // clock and the run state injected. Sits below the session layer, above the
+  // agent domain (§12).
   select: "driver",
+  // The run's service holder (the consolidation's services stage): the
+  // installed ambient instance the composition root builds (the clock today;
+  // the router, control and git services join with the changes that move
+  // their state in). The ambient accessor is allowed only in the modules
+  // SERVICE_ENTRIES lists, an allowlist that may only shrink.
+  services: "driver",
   "session-api": "driver",
   session: "driver",
   shell: "driver",

@@ -20,7 +20,7 @@ import { attempt } from "../src/attempt"
 import { singleHost, startPool } from "../src/agent-pool"
 import { requireArtifact } from "../src/artifact"
 import { degrade } from "../src/capability"
-import { ExitRequested, requestExit, resetExitRequest } from "../src/exit"
+import { ExitRequested, exitRequested, requestExit, resetExitRequest } from "../src/exit"
 import type { SessionChain, Watch } from "../src/chain"
 import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
@@ -37,13 +37,15 @@ import { runTask } from "../src/runner"
 import { forkSession, probeSession, seedForkSession, sessionAlive, sessionUsage, sessionUsed } from "../src/session-api"
 import { ensureForkBase, runSession } from "../src/session"
 import { registerAgentAdapter, resetShellAdapters } from "../src/shell"
-import { flushStats, setStatsClock } from "../src/stats"
+import { createServices, installServices, services, uninstallServices, type Clock } from "../src/services"
+import { flushStats } from "../src/stats"
 import { clampSwitches, parseSwitches, SWITCH_ENV } from "../src/switches"
 import { handoffSteer } from "../src/testrun"
 import { sessionHandoverDue } from "../src/usage"
 import type { Plan, Task } from "../src/tasks"
 import { watch } from "../src/watch"
 import { AGENT_CALLS, type AgentCall, BARE_CAPABILITIES, ev, type FakeAgent, fakeAgent, fakeAgentHost, FULL_CAPABILITIES, type FakeAgentOptions, MODEL, WINDOW } from "./fixtures/agent"
+import { clockAt, fixedClock, manualClock } from "./fixtures/clock"
 import { freshRepo, git, task } from "./fixtures/runner"
 import { reloadUnits, seedUnits, unitsText } from "./fixtures/units"
 
@@ -555,15 +557,14 @@ describe("registry routing (plans/0055 §6, §7)", () => {
   const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
 
   // The routing facts of a one-agent fleet: deep [a, b], simple [s] unless a
-  // fixture overrides the models, the tiers, the clock or the window wait's
-  // random/sleep knobs.
+  // fixture overrides the models, the tiers or the window wait's random knob.
+  // The clock always comes from the installed services — a case that steers
+  // time installs its own holder, and the facts follow it.
   const facts = (
     models: ModelEntry[],
     over: {
       tiers?: Partial<Record<"deep" | "simple", TierList>>
-      clock?: () => number
       random?: () => number
-      sleep?: (ms: number) => Promise<void>
     } = {},
   ): RoutingFacts => ({
     registry: {
@@ -579,9 +580,8 @@ describe("registry routing (plans/0055 §6, §7)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
-    ...(over.clock ? { clock: over.clock } : {}),
+    clock: services().clock,
     ...(over.random ? { random: over.random } : {}),
-    ...(over.sleep ? { sleep: over.sleep } : {}),
   })
 
   const FLEET = [entry("a", { model: "prov/a" }), entry("b", { model: "prov/b" }), entry("s", { model: "prov/s" })]
@@ -654,19 +654,23 @@ describe("registry routing (plans/0055 §6, §7)", () => {
 
   test("a window closing mid-turn never aborts the turn; it finishes and the next dispatch selects again", async () => {
     let now = Date.parse("2026-09-25T12:00:30Z")
-    const clock = () => now
+    installServices(createServices({ clock: fixedClock(() => now) }))
     const only = parseWindow("00:00-12:01")
     if ("error" in only) throw new Error(only.error)
     const models = [entry("w", { model: "prov/w", only: [only.window] }), entry("b", { model: "prov/b" })]
-    const routing = facts(models, { clock, tiers: { deep: tierList("deep", ["w", "b"]), simple: tierList("simple", ["w", "b"]) } })
+    const routing = facts(models, { tiers: { deep: tierList("deep", ["w", "b"]), simple: tierList("simple", ["w", "b"]) } })
     // The turn itself moves the clock past the window's end: the running turn
     // is never aborted (§4.4) — windows gate dispatches only.
     const agent = make({ turn: (ctx) => ((now = Date.parse("2026-09-25T12:02:00Z")), undefined) })
     const chain = deepChain()
-    const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
-    expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
-    expect(agent.argsOf("abort")).toEqual([])
-    expect(agent.prompts[0]!.model).toBe("prov/w")
+    try {
+      const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
+      expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+      expect(agent.argsOf("abort")).toEqual([])
+      expect(agent.prompts[0]!.model).toBe("prov/w")
+    } finally {
+      uninstallServices()
+    }
   })
 
   // §6.3's window wait: a deep dispatch whose only candidate is outside its
@@ -674,25 +678,23 @@ describe("registry routing (plans/0055 §6, §7)", () => {
   // hibernate's jitter, logs the wait line, books a `window` wait, and then
   // dispatches on the re-selection.
   test("a deep dispatch with only closed-window candidates waits for the opening plus jitter, then dispatches", async () => {
-    let now = Date.parse("2026-09-25T12:00:00Z")
-    const clock = () => now
+    // One manual services clock steers the whole run: the selection reads
+    // it through the facts, the window wait sleeps on it, and the stats
+    // timeline follows the same holder.
+    const mc = manualClock(Date.parse("2026-09-25T12:00:00Z"))
+    installServices(createServices({ clock: mc.clock }))
     const only = parseWindow("18:00-24:00")
     if ("error" in only) throw new Error(only.error)
     const models = [entry("w", { model: "prov/w", only: [only.window] })]
     const dir = await mkdtemp(join(tmpdir(), "auto-window-"))
     const routing = facts(models, {
-      clock,
       random: () => 0.25,
-      sleep: async (ms) => {
-        now += ms
-      },
       tiers: { deep: tierList("deep", ["w"]), simple: tierList("simple", ["w"]) },
     })
     const lines: string[] = []
     const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       lines.push(args.map((arg) => String(arg)).join(" "))
     })
-    setStatsClock(clock)
     try {
       const agent = make()
       const chain = deepChain()
@@ -705,7 +707,7 @@ describe("registry routing (plans/0055 §6, §7)", () => {
       expect(agent.prompts[0]).toMatchObject({ model: "prov/w" })
       // The wait covered the distance to the opening (6 h) plus a quarter of
       // hibernate's jitter (0.25 × 600 s = 150 s).
-      expect(now).toBe(Date.parse("2026-09-25T18:02:30Z"))
+      expect(mc.at).toBe(Date.parse("2026-09-25T18:02:30Z"))
       // One wait line naming the model and its opening, one line after.
       expect(lines.filter((line) => line.includes("waits for a deep model"))).toEqual([
         `⏸ T-001 decompose waits for a deep model: w opens 18:00 UTC, resuming around ${new Date(Date.parse("2026-09-25T18:02:30Z")).toISOString()} (local ${new Date(Date.parse("2026-09-25T18:02:30Z")).toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
@@ -719,7 +721,7 @@ describe("registry routing (plans/0055 §6, §7)", () => {
       expect(doc.roundB.aiMs).toBeLessThan(1_800_000)
     } finally {
       printed.mockRestore()
-      setStatsClock()
+      uninstallServices()
       await rm(dir, { recursive: true, force: true })
     }
   })
@@ -728,29 +730,38 @@ describe("registry routing (plans/0055 §6, §7)", () => {
   // wakes past a short window simply waits for the next opening — the wait
   // never exits on its own (C5).
   test("a wake past the window (a suspend) waits again for the next opening instead of dispatching", async () => {
-    let now = Date.parse("2026-09-25T12:00:00Z")
-    const clock = () => now
+    // The run's clock is hand-built: its sleep overshoots the first wake by
+    // seven hours, like a machine that suspended; the second wakes exactly
+    // on time.
+    let wakes = 0
+    const mc = manualClock(Date.parse("2026-09-25T12:00:00Z"))
+    const suspended: Clock = {
+      now: () => mc.at,
+      sleep: async (ms) => {
+        mc.at += ms + (wakes++ === 0 ? 7 * 3_600_000 : 0)
+      },
+      sleepUnlessExit: mc.clock.sleepUnlessExit,
+      timer: mc.clock.timer,
+    }
+    installServices(createServices({ clock: suspended }))
     const only = parseWindow("18:00-20:00")
     if ("error" in only) throw new Error(only.error)
     const models = [entry("w", { model: "prov/w", only: [only.window] })]
-    let wakes = 0
     const routing = facts(models, {
-      clock,
       random: () => 0.25,
-      // The first wake overshoots the window by seven hours, like a machine
-      // that suspended; the second wakes exactly on time.
-      sleep: async (ms) => {
-        now += ms + (wakes++ === 0 ? 7 * 3_600_000 : 0)
-      },
       tiers: { deep: tierList("deep", ["w"]), simple: tierList("simple", ["w"]) },
     })
     const agent = make()
     const chain = deepChain()
-    const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
-    expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
-    expect(agent.prompts).toHaveLength(1)
-    expect(agent.prompts[0]).toMatchObject({ model: "prov/w" })
-    expect(now).toBe(Date.parse("2026-09-26T18:02:30Z"))
+    try {
+      const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
+      expect(result).toEqual({ type: "idle", lastText: expect.stringContaining("done:"), testHandover: false })
+      expect(agent.prompts).toHaveLength(1)
+      expect(agent.prompts[0]).toMatchObject({ model: "prov/w" })
+      expect(mc.at).toBe(Date.parse("2026-09-26T18:02:30Z"))
+    } finally {
+      uninstallServices()
+    }
   })
 
   test("a variant declared on the entry reaches the prompt body", async () => {
@@ -798,28 +809,29 @@ describe("registry routing (plans/0055 §6, §7)", () => {
   // blocked only by their windows waits for the opening instead of handing a
   // closed window to the probe loop; the failover lands on the opened model.
   test("a failover onto a window-blocked list waits for the opening, then switches to the opened model", async () => {
-    let now = Date.parse("2026-09-25T12:00:00Z")
+    const mc = manualClock(Date.parse("2026-09-25T12:00:00Z"))
+    installServices(createServices({ clock: mc.clock }))
     const only = parseWindow("18:00-24:00")
     if ("error" in only) throw new Error(only.error)
     const models = [entry("a", { model: "prov/a" }), entry("w", { model: "prov/w", only: [only.window] })]
     const routing = facts(models, {
-      clock: () => now,
       random: () => 0,
-      sleep: async (ms) => {
-        now += ms
-      },
       tiers: { deep: tierList("deep", ["a", "w"]), simple: tierList("simple", ["a", "w"]) },
     })
     const agent = make({ turn: quotaTurn })
     const chain = deepChain()
-    const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
-    expect(result.type).toBe("idle")
-    // a fails with quota; w is closed until 18:00 — the failover waits the
-    // six hours (zero jitter from the injected random) and forks onto w.
-    expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/w"])
-    expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
-    expect(chain.modelEntry).toBe("w")
-    expect(now).toBe(Date.parse("2026-09-25T18:00:00Z"))
+    try {
+      const result = await runSession(agent.client, task, "p", { routing }, chain, undefined, undefined, DEFAULTS)
+      expect(result.type).toBe("idle")
+      // a fails with quota; w is closed until 18:00 — the failover waits the
+      // six hours (zero jitter from the injected random) and forks onto w.
+      expect(agent.prompts.map((p) => p.model)).toEqual(["prov/a", "prov/w"])
+      expect(agent.argsOf("fork")).toEqual([["ses_1", undefined]])
+      expect(chain.modelEntry).toBe("w")
+      expect(mc.at).toBe(Date.parse("2026-09-25T18:00:00Z"))
+    } finally {
+      uninstallServices()
+    }
   })
 })
 
@@ -853,6 +865,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    clock: services().clock,
   })
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
 
@@ -1038,6 +1051,7 @@ describe("context steps (plans/0055 §4.5)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    clock: services().clock,
   })
   const BASE = "prov/k3-256k"
   const WIDE = "prov/k3"
@@ -1299,6 +1313,7 @@ describe("the failure-message classifier (plans/0055 §7.1)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
+    clock: services().clock,
   })
   const deepChain = (): SessionChain => ({ pct: 100, used: 0, at: 0, role: "decompose" })
   // Wording no pattern knows (another language, a plan-specific limit).
@@ -1549,10 +1564,30 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
   const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier, names, layer: "operator" })
   const T0 = Date.parse("2026-09-25T14:39:25Z")
-  // A one-agent fleet, deep [a, b], on a fake clock the injected sleep
-  // advances (and records).
+  // A one-agent fleet, deep [a, b], on the installed services' clock: every
+  // sleep (the window wait's and the recovery's) advances the fake timeline
+  // and is recorded. Installing here also steers the stats timeline, the
+  // same holder the run would use.
   const fleet = (random = 0.5) => {
     const clock = { now: T0, sleeps: [] as number[] }
+    const advance = async (ms: number): Promise<void> => {
+      clock.sleeps.push(ms)
+      clock.now += ms
+    }
+    installServices(
+      createServices({
+        clock: {
+          now: () => clock.now,
+          sleep: advance,
+          sleepUnlessExit: async (ms) => {
+            if (exitRequested()) return true
+            await advance(ms)
+            return false
+          },
+          timer: () => () => {},
+        },
+      }),
+    )
     const routing: RoutingFacts = {
       registry: {
         layers: [{ name: "operator", path: "/unused/models.json" }],
@@ -1567,12 +1602,8 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
       filterSource: undefined,
       defaultAgent: "opencode",
       runAgent: "opencode",
-      clock: () => clock.now,
+      clock: services().clock,
       random: () => random,
-      sleep: async (ms) => {
-        clock.sleeps.push(ms)
-        clock.now += ms
-      },
     }
     return { clock, routing }
   }
@@ -1606,6 +1637,7 @@ describe("the scheduled wait (plans/0057 §6, §7)", () => {
   })
   afterEach(async () => {
     resetExitRequest()
+    uninstallServices()
     await flushStats(dir)
     await rm(dir, { recursive: true, force: true })
   })
@@ -2083,7 +2115,7 @@ describe("session-agent binding (plans/0055 §8.2, §8.3)", () => {
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
-    clock: () => NOW,
+    clock: clockAt(NOW),
   })
   const planTask = { id: "PLAN", title: "phase planning", status: "in_progress" as const, attempts: 0, body: "" }
   const spec = (reset: () => void) => ({
@@ -2246,7 +2278,7 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     if (started.pool === undefined) throw new Error(started.error)
     // No agent filter is in force (the ambient OPENCODE_AUTO_AGENT would
     // otherwise narrow the fleet).
-    const facts = { ...routingFacts(registry, undefined, started.profileName), agentFilter: undefined, filterSource: undefined }
+    const facts = { ...routingFacts(registry, undefined, services().clock, started.profileName), agentFilter: undefined, filterSource: undefined }
     const plan = await seedUnits(dir, `## T-001: per-agent base [in_progress]\nBody.\n`)
     await Bun.write(join(dir, "docs", "T-001", "context.md"), "## Relevant files\n- a.ts\n")
     return { a, b, goneA, goneB, pool: started.pool, facts, dir, plan, task: plan.tasks[0]! }

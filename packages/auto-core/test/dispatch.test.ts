@@ -12,6 +12,7 @@ import { parseWindow, type ModelWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, RegistryAgentProfile, TierList } from "../src/models"
 import type { SessionChain } from "../src/chain"
 import { selectContext, type RoutingFacts } from "../src/routing"
+import { clockAt } from "./fixtures/clock"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
 import { worktreeNote } from "../src/session-api"
 import { planDispatch, type DispatchFacts } from "../src/engine/dispatch"
@@ -61,7 +62,7 @@ const factsOf = (reg: ModelRegistry, over: Partial<RoutingFacts> = {}): RoutingF
   filterSource: undefined,
   defaultAgent: "opencode",
   runAgent: "opencode",
-  clock: () => NOW,
+  clock: clockAt(NOW),
   ...over,
 })
 

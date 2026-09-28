@@ -4,7 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Interactive } from "../src/interactive"
 import { subtaskProgressLine, waitBetweenTasks } from "../src/loop-progress"
-import { flushStats, loadStats, setStatsClock, statsTask, statsTotals } from "../src/stats"
+import { createServices, installServices, uninstallServices } from "../src/services"
+import { flushStats, loadStats, statsTask, statsTotals } from "../src/stats"
+import { fixedClock } from "./fixtures/clock"
 
 // T-002: loop lifecycle wiring — the progress heartbeat (trackSubtasks →
 // subtaskProgressLine) switched to read the stats task bucket's accumulation;
@@ -18,12 +20,12 @@ describe("subtaskProgressLine progress heartbeat", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-loop-"))
     now = 1_000_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
     await Bun.write(join(dir, "docs/T-001/subtasks.md"), ["- [x] done subtask", "- [ ] pending subtask", ""].join("\n"))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await flushStats(dir).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   })
@@ -81,11 +83,11 @@ describe("waitBetweenTasks wait deduction (stats wiring)", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-loop-wait-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await flushStats(dir).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   })

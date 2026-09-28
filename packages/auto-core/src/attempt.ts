@@ -41,7 +41,8 @@ import { handoffFile } from "./prompt"
 import { accountOf, learnObserved } from "./quota-windows"
 import { recordResolves, type ResolveEvent } from "./resolve"
 import { forgetProgress, peekProgress, saveProgress } from "./resume"
-import { nowOf, selectContext } from "./routing"
+import { selectContext } from "./routing"
+import { services } from "./services"
 import { clientOf, contextLimitsOf, formatClientError, formatTokens, missingAgentHint, renameSession, zeroUsage } from "./session-api"
 import { statsSessionBegin, statsSessionEnd } from "./stats"
 import { createStuckTracker } from "./stuck"
@@ -89,6 +90,10 @@ export async function attempt(
   // session; archived history tmp/test.<n>.sh is kept).
   if (test) await rm(join(test.tmp, "test.sh"), { force: true })
   const cap = opts.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+  // The run's clock (the installed services' clock): every time read of this
+  // dispatch goes through it.
+  const clock = services().clock
+  const clockNow = (): number => clock.now()
   // The chain's own agent decides the takeover gate's capability (the chain's
   // session lives on it); a chain without a session — and without a pending
   // fork — has none yet and needs no host for it (the gate only reads
@@ -263,7 +268,7 @@ export async function attempt(
       await saveProgress(opts.dir, {
         task: task.id,
         session: sessionID,
-        at: Date.now(),
+        at: clockNow(),
         active: true,
         phase: chain.phase,
         // Strict resume (plans/0022-session-recovery-fidelity-design.md 3.1):
@@ -392,7 +397,7 @@ export async function attempt(
       opts.routing && steerKey !== undefined ? { name: steerKey, label: task.id, ...(steerEntry !== undefined ? { entry: steerEntry } : {}), ...(steerStep !== undefined ? { step: steerStep } : {}), ...(target !== undefined ? { model: target } : {}) } : undefined,
       // A changed usage-window observation is recorded for the account the
       // chain dispatches on (plans/0057 §8), read when the event arrives.
-      (event) => void learnObserved(opts.dir, accountOf(chain, opts.routing), event, opts.routing ? nowOf(opts.routing) : Date.now()),
+      (event) => void learnObserved(opts.dir, accountOf(chain, opts.routing), event, clockNow()),
     ).then((w) => {
       if (w.error) {
         watchFailed = true
@@ -483,7 +488,7 @@ export async function attempt(
     // The promotion itself (also clearing the previous failure's
     // failed-session record — its purpose ended with this dispatch
     // surviving): the ◉ lines below read the promoted counters.
-    promote(chain, sessionID, result, Date.now())
+    promote(chain, sessionID, result, clockNow())
     // ◉ The two session-ended lines (STATS_PLAN §4.1, T-004): printed
     // unconditionally — every session that goes through attempt (phase
     // planning / handover distillation and other bypasses included; reused
@@ -596,7 +601,7 @@ export async function attempt(
       if (result.testHandover) {
         afterTestHandover(chain)
         if (opts.dir && chain.phase) {
-          await saveProgress(opts.dir, { task: task.id, session: undefined, at: Date.now(), active: true, phase: chain.phase })
+          await saveProgress(opts.dir, { task: task.id, session: undefined, at: clockNow(), active: true, phase: chain.phase })
         }
       } else {
         await remember()

@@ -2,6 +2,7 @@
 // life across a restart (a fresh module copy reads the file back), the
 // horizon, what counts as spent, and what a turn that goes through clears.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { clockAt } from "./fixtures/clock"
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -58,7 +59,7 @@ describe("the account key", () => {
       routes: new Map(),
       unused: [],
     } as unknown as ModelRegistry
-    return { registry, agentFilter: undefined, filterSource: undefined, defaultAgent: "opencode", runAgent: "opencode" }
+    return { registry, agentFilter: undefined, filterSource: undefined, defaultAgent: "opencode", runAgent: "opencode", clock: clockAt(0) }
   }
 
   test("without a registry: the provider of the routed model, else of the model shown, else default", () => {

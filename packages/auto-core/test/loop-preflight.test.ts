@@ -12,13 +12,19 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "b
 import { chmod, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import type { AgentHost } from "../src/agent/types"
 import { ensurePointer } from "../src/agents-block"
 import { renderAgentContract } from "../src/config-fix"
 import { beginUnit, changedFiles } from "../src/git"
+import { runAll } from "../src/loop"
 import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, type RunAllOpts } from "../src/loop-preflight"
 import { MODELS_FILE } from "../src/models"
 import { unprotect } from "../src/protect"
+import { services } from "../src/services"
+import { autoSwitches } from "../src/switches"
+import { setShellProfile } from "../src/shell"
 import { flushStats } from "../src/stats"
+import { fakeAgent } from "./fixtures/agent"
 import { freshRepo, git } from "./fixtures/runner"
 
 const MIRROR = "# Current task (maintained by opencode-auto, do not edit manually)\n\n## T-003: task T-003 [blocked]\n\nbody\n"
@@ -374,5 +380,122 @@ describe("preflight: the model registry at run start (plans/0055 §4.1, §4.3)",
     expect(ring.lines).toEqual([
       "env OPENCODE_AUTO_MODEL_FALLBACK is not used under a model registry: the tier lists are the failover order (deep: glm; simple: glm)",
     ])
+  })
+})
+
+// The run-start composition order (the consolidation's services stage): the
+// holder is built in preflight, runAll installs it ahead of the agent fleet,
+// and the switch snapshot freezes after the fleet's degradation clamp — the
+// written order registry → setSwitchModelRegistry → parse → fleet → clamp →
+// freeze, asserted by its observable effects at those points.
+describe("the run-start composition order (the services stage)", () => {
+  // A fake opencode bin for the registry's profile check (the registry
+  // describe's fakeBin, local to this describe so the two never share state).
+  let fakeBin = ""
+  beforeAll(async () => {
+    const dir = await mkdtemp(join(tmpdir(), "auto-order-bin-"))
+    fakeBin = join(dir, "opencode-bin")
+    await Bun.write(fakeBin, "#!/bin/sh\nexit 0\n")
+    await chmod(fakeBin, 0o755)
+  })
+  afterAll(async () => {
+    if (fakeBin) await rm(dirname(fakeBin), { recursive: true, force: true })
+  })
+
+  // An initialized, committed project, as the registry describe's `project`.
+  async function project(ignored = false): Promise<string> {
+    const dir = await repo({})
+    await Bun.write(join(dir, ".gitignore"), `tmp/\n.auto/\n${ignored ? "/.opencode/auto/models.json\n" : ""}`)
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    return dir
+  }
+
+  // The registry fixture of the registry describe: glm on both tiers plus the
+  // faked opencode profile bin its check dispatches.
+  const registryJson = () => JSON.stringify({
+    models: { glm: { agent: "opencode", model: "zhipuai/glm-4.6" } },
+    tiers: { deep: ["glm"], simple: ["glm"] },
+    ...(fakeBin ? { agents: { opencode: { adapter: "opencode", bin: fakeBin } } } : {}),
+  })
+
+  test("preflight: the registry feeds the switches before the first parse; the holder is built; the freeze is the caller's", async () => {
+    const dir = await project(true)
+    await Bun.write(join(dir, MODELS_FILE), registryJson())
+    // An internal-name OPENCODE_AUTO_MODEL value only parses because the
+    // registry facts were declared before the first parse; a parse ahead of
+    // the declaration would have refused "glm" and exited 1.
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    process.env.OPENCODE_AUTO_MODEL = "glm"
+    const printed = spyOn(console, "log").mockImplementation(() => {})
+    let result: Awaited<ReturnType<typeof preflight>>
+    try {
+      result = await preflight(dir, {})
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+    } finally {
+      printed.mockRestore()
+      delete process.env.OPENCODE_AUTO_MODEL
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+    expect("exit" in result).toBe(false)
+    if ("exit" in result) return
+    expect(result.registry?.models.has("glm")).toBe(true)
+    // The composition root's holder carries a live clock; the switches are
+    // not frozen yet — the freeze is the caller's, after the fleet's clamp.
+    expect(result.services.clock.now()).toBeGreaterThan(0)
+    expect(Object.isFrozen(autoSwitches())).toBe(false)
+  })
+
+  test("runAll: the holder is installed before the fleet starts; the snapshot freezes after the fleet's clamp and the run uninstalls it", async () => {
+    const dir = await project()
+    // A fake agent behind the shell profile whose host factory records what
+    // is in effect when the fleet starts. Its missing steer capability
+    // forces the degradation clamp's patch non-empty (steer off), so a
+    // snapshot frozen ahead of the clamp would make the run crash here.
+    let atFleet: { installed: boolean; frozen: boolean } | undefined
+    const agent = fakeAgent({ capabilities: { steer: false } })
+    const host: AgentHost = { client: agent.client, syncContext: async () => {}, restart: async () => false, close: () => {} }
+    setShellProfile({
+      agent: {
+        name: "fake",
+        host: async () => {
+          atFleet = { installed: services() !== before, frozen: Object.isFrozen(autoSwitches()) }
+          return host
+        },
+      },
+    })
+    const before = services()
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const printed = spyOn(console, "log").mockImplementation(() => {})
+    let code: number | undefined
+    try {
+      code = await runAll(dir, { dryrun: true })
+    } finally {
+      printed.mockRestore()
+      setShellProfile({ agent: undefined })
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+    // The dryrun preflight session over the fake agent completes the run.
+    expect(code).toBe(0)
+    // At the fleet's start: the run's holder in effect (installed between
+    // preflight and the fleet), the snapshot not yet frozen.
+    expect(atFleet).toEqual({ installed: true, frozen: false })
+    // After the run: the snapshot is frozen and carries the clamp's value
+    // (steer forced off inside the fleet, then frozen in place), and the
+    // run's holder is gone — the preload's holder is back.
+    expect(Object.isFrozen(autoSwitches())).toBe(true)
+    expect(autoSwitches().steer).toBe(false)
+    expect(services()).toBe(before)
   })
 })

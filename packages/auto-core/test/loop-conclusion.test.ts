@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { createServices, installServices, uninstallServices } from "../src/services"
 import { taskDoc } from "../src/docpaths"
 import {
   phaseCloseLines,
@@ -15,7 +16,6 @@ import { recordDecisions, recordResolves, type ResolveItem } from "../src/resolv
 import {
   flushStats,
   loadStats,
-  setStatsClock,
   statsClassifyUsage,
   statsHistory,
   statsModelEvent,
@@ -28,6 +28,7 @@ import {
   statsWaitEnd,
   type Usage,
 } from "../src/stats"
+import { fixedClock } from "./fixtures/clock"
 import type { PhaseUnit } from "../src/phases"
 import { phaseTypeOfLetter, type PhaseLetter } from "../src/phases/registry"
 
@@ -55,11 +56,11 @@ describe("taskEndLines task-end three-state lines", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-conclusion-"))
     now = 1_000_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await flushStats(dir).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   })
@@ -115,12 +116,12 @@ describe("phaseCloseLines phase close-out lines", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-phase-"))
     now = 1_000_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
     await loadStats(dir)
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await flushStats(dir).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   })
@@ -175,11 +176,11 @@ describe("roundCompleteLines round-complete lines", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-round-"))
     now = 1_000_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await flushStats(dir).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   })
@@ -256,11 +257,11 @@ describe("roundCompleteLines per-model lines", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-round-models-"))
     now = 1_000_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await flushStats(dir).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   })

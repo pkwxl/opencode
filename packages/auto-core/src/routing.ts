@@ -18,15 +18,18 @@ import { formatWindowState, windowState } from "./model-window"
 import { layerLabel, type ModelRegistry, type RegistryAgentProfile } from "./models"
 import type { PhaseTypeEntry } from "./phases/registry"
 import { candidateKey, select, type Candidate, type SelectContext } from "./select"
+import type { Clock } from "./services"
 import { shellProfile } from "./shell"
 import { autoSwitches, SWITCH_ENV, type AgentChoice, type ModelRole, type Switches } from "./switches"
 
-// The run-level facts of registry routing. `clock` is the injected instant
-// source (tests steer it past window boundaries); absent = the machine clock.
-// `random` and `sleep` are the window wait's knobs (§6.3), injected the same
-// way: the random source of hibernate's 0–600 s jitter and the sleep itself;
-// absent = Math.random and Bun.sleep.
-// AUTO-DECISION: the wait's random and sleep ride RoutingFacts beside the clock instead of new runSession parameters (the facts are already the one injection point tests use to steer time, and the wait is the only consumer — new signatures on runSession would spread test knobs through every caller)
+// The run-level facts of registry routing. `clock` is the run's one clock,
+// carried as data: the pure dispatch decision (src/engine/dispatch.ts) and
+// every selection site read time through the facts and must not reach the
+// run's services, so the composition root (preflight, the loop, the agent
+// pool) fills the field from the installed services' clock — the facts and
+// the engine share one timeline. `random` is the window wait's jitter knob
+// (hibernate's 0–600 s delay); absent = Math.random.
+// AUTO-DECISION: the wait's random rides RoutingFacts beside the clock instead of new runSession parameters (the facts are already the one injection point tests use to steer selection, and the wait is the only consumer — new signatures on runSession would spread test knobs through every caller). The wait's clock and sleep folded into the run services' clock: the sleeps go through the services the engine reads, and the facts carry only the clock as data.
 export type RoutingFacts = {
   registry: ModelRegistry
   // §6.2 rule 1: the adapter name only models on matching profiles pass;
@@ -45,9 +48,8 @@ export type RoutingFacts = {
   // profile, started lazily); this name is what an unqualified record and a
   // raw override value resolve to.
   runAgent: string
-  clock?: () => number
+  clock: Clock
   random?: () => number
-  sleep?: (ms: number) => Promise<void>
 }
 
 // The routing facts of a run: the agent filter follows the same precedence
@@ -62,9 +64,16 @@ export type RoutingFacts = {
 // fallback (the configured agent's own name) is exact whenever the profile is
 // named like its adapter, which the implied `opencode` profile always is —
 // callers that never started an agent (the coverage check, tests) may rely on
-// it.
+// it. clock is the run services' clock, passed by the caller (the module
+// must not reach the run's services itself); it rides the facts so the pure
+// dispatch decision reads the same timeline the engine runs on.
 // AUTO-DECISION: the filter names an adapter, never a profile (the filter values — the shell profile's agent and OPENCODE_AUTO_AGENT — name adapters by the agent-choice rule, and every profile of that adapter passes; a profile-name filter would silently empty every list when no profile bears the name, which §6.3 already reports better at its own layer)
-export function routingFacts(registry: ModelRegistry, configuredAgent: AgentChoice | undefined, runAgent?: string): RoutingFacts {
+export function routingFacts(
+  registry: ModelRegistry,
+  configuredAgent: AgentChoice | undefined,
+  clock: Clock,
+  runAgent?: string,
+): RoutingFacts {
   const profile = shellProfile().agent?.name
   const env = autoSwitches().agent
   return {
@@ -73,13 +82,14 @@ export function routingFacts(registry: ModelRegistry, configuredAgent: AgentChoi
     filterSource: profile ? "shell profile" : env ? "OPENCODE_AUTO_AGENT" : undefined,
     defaultAgent: configuredAgent ?? "opencode",
     runAgent: runAgent ?? configuredAgent ?? "opencode",
+    clock,
   }
 }
 
-// The instant of a dispatch: the injected clock when the facts carry one,
-// else the machine clock.
+// The instant of a dispatch: the facts' clock (the run services' clock the
+// composition filled in).
 export function nowOf(facts: RoutingFacts): number {
-  return facts.clock?.() ?? Date.now()
+  return facts.clock.now()
 }
 
 // The selection context of one dispatch: the run facts plus the volatile run

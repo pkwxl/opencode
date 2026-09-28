@@ -14,8 +14,10 @@ import { unprotect } from "./protect"
 import { runOnce } from "./runner"
 import type { AgentPool } from "./agent-pool"
 import { startPool } from "./agent-pool"
+import { installServices, uninstallServices } from "./services"
 import { shellProfile } from "./shell"
 import { flushStats, statsClassifyUsage } from "./stats"
+import { freezeSwitches } from "./switches"
 
 // RunAllOpts is runAll's signature; the preflight segment owns it.
 import { preflight, type RunAllOpts } from "./loop-preflight"
@@ -47,7 +49,12 @@ export async function runAll(directory: string, opts: RunAllOpts): Promise<numbe
 async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
   const pre = await preflight(directory, opts)
   if ("exit" in pre) return pre.exit
-  const { agentName, watcher, progress, registry } = pre
+  const { agentName, watcher, progress, registry, services: run } = pre
+  // The run's services take effect here and die with the run (the finally
+  // below uninstalls them, restoring whatever was in effect before): the
+  // session-driving engine and the stats module read the run's clock through
+  // this holder from now on.
+  installServices(run)
   // Hibernate window startup check (OPENCODE_AUTO_HIBERNATE, D4): when starting
   // inside the window, sleep until window end + random delay before continuing,
   // so the first execution unit isn't wasted; dryrun permission preflight is
@@ -125,13 +132,19 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
       log(`⏸ ${started.error}`)
       return 1
     }
+    // The switch snapshot freezes here, after the fleet's degradation clamp
+    // and before the routing facts read the switches: from this point the
+    // run's switches are read-only (a later clamp throws — the run start is
+    // the one writer; a re-clamp declares its facts and re-parses instead).
+    freezeSwitches()
     // The run's routing facts (plans/0055 §6): fixed once the agent choice is
     // known, held by every dispatch through Opts.routing. The run-start block
     // (§6.5) prints the routing in force; without a registry nothing changes.
     // runAgent is the run's start profile (§8.2): unqualified session records
     // and raw override values resolve through it, while each dispatch's chain
-    // names the profile its session truly lives on.
-    const routing = registry ? routingFacts(registry, opts.agent, started.profileName) : undefined
+    // names the profile its session truly lives on. The facts carry the run
+    // services' clock (the one timeline every dispatch reads).
+    const routing = registry ? routingFacts(registry, opts.agent, run.clock, started.profileName) : undefined
     if (routing) logRunRouting(routing)
     // The classifier's token booking (plans/0055 §7.1 "Stats"): under a
     // registry the failure-message classifier's one-shot sessions report their
@@ -212,5 +225,9 @@ async function runLocked(directory: string, opts: RunAllOpts): Promise<number> {
     // closed here.
     if (!opts.managed) server?.close()
     await unprotect(directory)
+    // The run's services die with the run, after everything above that may
+    // still read the run's clock (the stats flush); a run nested in a
+    // holder-using caller — a test — restores the caller's holder.
+    uninstallServices()
   }
 }

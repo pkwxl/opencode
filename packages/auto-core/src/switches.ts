@@ -614,15 +614,17 @@ let memo: Switches | undefined
 // grammar. Commands that never load a registry never call this, and their
 // parse stays exactly as before.
 let modelRegistry: SwitchModelRegistry | undefined
-let memoRegistry: SwitchModelRegistry | undefined
 
-// Resets the memo when the facts change, so the next autoSwitches() re-parses
-// with them. In the run flow the memo is still empty at this point (preflight
-// calls this ahead of the first parse), so the reset is a guard, not a path.
+// Resets the memo so the next autoSwitches() re-parses with the declared
+// facts. Every declaration resets: each run start parses its own snapshot
+// (a process that runs twice — tests — must never carry one run's frozen
+// snapshot into the next run's degradation clamp), and the fresh registry
+// info each preflight builds makes the reset the rule, not the guard it
+// once was (a facts-change check would let an unchanged undefined keep a
+// previous run's memo alive).
 export function setSwitchModelRegistry(registry: SwitchModelRegistry | undefined): void {
   modelRegistry = registry
-  if (memo !== undefined && registry !== memoRegistry) memo = undefined
-  memoRegistry = registry
+  memo = undefined
 }
 
 // Runtime switch access (memoized once, consistent across the whole pipeline): the
@@ -644,7 +646,21 @@ export function autoSwitches(): Switches {
 // Capability degradation (MA.4, src/capability.ts): the run start forces off
 // the switches whose "on" side the agent cannot serve. Mutates the memoized
 // object in place, so every holder of autoSwitches() sees the values in force;
-// like the switches themselves, nothing is persisted.
+// like the switches themselves, nothing is persisted. The run start clamps
+// exactly once, at the agent fleet's start; the snapshot freezes right after
+// (freezeSwitches below), and a clamp on a frozen snapshot throws — a
+// programming error, never a silent no-op.
 export function clampSwitches(patch: Partial<Switches>): void {
   Object.assign(autoSwitches(), patch)
+}
+
+// Freezes the memoized snapshot after the run start's degradation clamp:
+// from here the run's switches are read-only (a shallow freeze — the clamp
+// patches top-level fields, the nested values are shared read-only data).
+// A later clamp attempt throws (strict-mode assignment to a frozen object);
+// a caller that genuinely needs different switches declares them —
+// setSwitchModelRegistry resets the memo, and the next autoSwitches() parse
+// builds a fresh, unfrozen snapshot.
+export function freezeSwitches(): void {
+  Object.freeze(autoSwitches())
 }

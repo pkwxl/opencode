@@ -8,6 +8,7 @@ import { parseWindow } from "../src/model-window"
 import type { ModelEntry, ModelRegistry, ModelRoute, RegistryAgentProfile, TierList } from "../src/models"
 import { phaseType } from "../src/phases/registry"
 import { dispatchCoverageProblems, logRunRouting, routingFacts, type DispatchNeed, type RoutingFacts } from "../src/routing"
+import { clockAt } from "./fixtures/clock"
 
 const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
 const agents = new Map<string, RegistryAgentProfile>([
@@ -33,7 +34,7 @@ const facts = (reg: ModelRegistry, over: Partial<RoutingFacts> = {}): RoutingFac
   filterSource: undefined,
   defaultAgent: "opencode",
   runAgent: "opencode",
-  clock: () => NOW,
+  clock: clockAt(NOW),
   ...over,
 })
 
@@ -182,14 +183,14 @@ describe("routingFacts (the filter and the default agent)", () => {
     const ambient = process.env.OPENCODE_AUTO_AGENT
     delete process.env.OPENCODE_AUTO_AGENT
     try {
-      const facts = routingFacts(reg, "claude")
+      const facts = routingFacts(reg, "claude", clockAt(0))
       expect(facts.defaultAgent).toBe("claude")
       // A configured agent no longer filters: with the agent pool,
       // candidates on every profile are selectable and `claude` only names
       // the agent raw override values and unqualified records resolve to.
       expect(facts.agentFilter).toBeUndefined()
       expect(facts.filterSource).toBeUndefined()
-      expect(routingFacts(reg, undefined).defaultAgent).toBe("opencode")
+      expect(routingFacts(reg, undefined, clockAt(0)).defaultAgent).toBe("opencode")
     } finally {
       if (ambient !== undefined) process.env.OPENCODE_AUTO_AGENT = ambient
     }
@@ -201,8 +202,8 @@ describe("routingFacts (the filter and the default agent)", () => {
   // adapter, which the implied opencode profile always is).
   test("runAgent is the started profile when passed, else the configured agent's name", () => {
     const reg = registry([], {})
-    expect(routingFacts(reg, undefined, "claude-b").runAgent).toBe("claude-b")
-    expect(routingFacts(reg, "claude").runAgent).toBe("claude")
-    expect(routingFacts(reg, undefined).runAgent).toBe("opencode")
+    expect(routingFacts(reg, undefined, clockAt(0), "claude-b").runAgent).toBe("claude-b")
+    expect(routingFacts(reg, "claude", clockAt(0)).runAgent).toBe("claude")
+    expect(routingFacts(reg, undefined, clockAt(0)).runAgent).toBe("opencode")
   })
 })

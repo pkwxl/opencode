@@ -32,6 +32,8 @@ import { isModelDown, markModelDown, resetFailback } from "../src/failback"
 import { isoInZone, parseWindow } from "../src/model-window"
 import type { ModelEntry, TierList } from "../src/models"
 import type { RoutingFacts } from "../src/routing"
+import type { Clock } from "../src/services"
+import { clockAt } from "./fixtures/clock"
 import { ev, fakeAgent, type FakeAgentOptions, type TurnContext } from "./fixtures/agent"
 
 const entry = (name: string, fields: Partial<ModelEntry> = {}): ModelEntry => ({ name, layer: "operator", agent: "opencode", ...fields })
@@ -40,7 +42,7 @@ const tierList = (tier: "deep" | "simple", names: string[]): TierList => ({ tier
 // A fleet with two classifier entries on the opencode profile and one model
 // on a claude profile; the clock is fixed unless a case moves it.
 const NOW = Date.parse("2026-09-26T07:00:00Z")
-const facts = (over: { classifier?: string[]; models?: ModelEntry[]; agentFilter?: string; clock?: () => number } = {}): RoutingFacts => {
+const facts = (over: { classifier?: string[]; models?: ModelEntry[]; agentFilter?: string; clock?: Clock } = {}): RoutingFacts => {
   const models = over.models ?? [entry("free", { model: "free/model-a", provider: "free" }), entry("free2", { model: "free/model-b", provider: "free" }), entry("a", { model: "prov/a", provider: "prov" })]
   return {
     registry: {
@@ -60,7 +62,7 @@ const facts = (over: { classifier?: string[]; models?: ModelEntry[]; agentFilter
     filterSource: undefined,
     defaultAgent: "opencode",
     runAgent: "opencode",
-    clock: over.clock ?? (() => NOW),
+    clock: over.clock ?? clockAt(NOW),
   }
 }
 

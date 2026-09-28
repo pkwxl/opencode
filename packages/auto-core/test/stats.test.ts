@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+
+import { createServices, installServices, uninstallServices } from "../src/services"
+import { fixedClock } from "./fixtures/clock"
 import {
   flushStats,
   loadStats,
   MAX_TICK,
-  setStatsClock,
   statsBoot,
   statsClassifyUsage,
   statsDigest,
@@ -45,11 +47,11 @@ describe("stats persistence and loading", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -295,11 +297,11 @@ describe("stats level switching and reads", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -455,11 +457,11 @@ describe("stats sessions and waits", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-stats-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -662,11 +664,11 @@ describe("stats per-model / per-tier / classify buckets", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-stats-models-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -893,11 +895,11 @@ describe("stats quota-window waits", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-stats-quota-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -969,11 +971,11 @@ describe("stats digest counters", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-stats-digest-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await rm(dir, { recursive: true, force: true })
   })
 

@@ -181,20 +181,25 @@ export const MAX_TICK = 30 * 60_000
 
 const FILE = join(".auto", "stats.json")
 
-// AUTO-DECISION: now injection uses a module-level replaceable clock
-// (setStatsClock test hook). The alternative was an optional now parameter on
-// each API such as loadStats/fold — but fold also happens inside the heartbeat
-// and the S03/S04 session/reading APIs, so the parameter would have to thread
-// through every public API, polluting signatures, and the wiring layers
-// (T-002/T-003) would have to pass it along too; a module-level clock is
-// injected in one place and takes effect module-wide, tests just reset it in
-// afterEach — the parameter variant was rejected.
+// AUTO-DECISION: time reads use a module-level replaceable clock. The
+// alternative was an optional now parameter on each API such as
+// loadStats/fold — but fold also happens inside the heartbeat and the
+// session/reading APIs, so the parameter would have to thread through every
+// public API, polluting signatures, and the wiring layers would have to pass
+// it along too; a module-level clock is injected in one place and takes
+// effect module-wide — the parameter variant was rejected. The injection
+// point is the run services' activation (useStatsClock, called by
+// src/services.ts): the stats clock folded into the run's one clock, so a
+// run's installed holder steers the stats timeline too, and the module-level
+// Date.now default covers only the processes that never install services
+// (the non-run commands).
 let clock: () => number = Date.now
 
-// Replace the stats module's clock (tests inject a deterministic now); calling
-// with no argument restores Date.now.
-export function setStatsClock(fn?: () => number) {
-  clock = fn ?? Date.now
+// Wire this module's clock to the run services' clock (src/services.ts owns
+// the call; tests never call it — they install a services holder with their
+// own clock).
+export function useStatsClock(now: () => number) {
+  clock = now
 }
 
 // ===== empty-value constructors =====

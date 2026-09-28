@@ -25,6 +25,7 @@ import { handoffFile, renderStepUp, renderStuckHint, renderTestWrapup, renderTes
 import { compactText, sameIssue, type ResolveEvent } from "./resolve"
 import { askHuman, describePart, formatClientError, formatTokens, isApproval, probeSession } from "./session-api"
 import { awaitCacheClaim, enabledSteps, noteClaimContradiction, observeCacheClaim, stepId, stepUpPoint, type SteerContext } from "./model-step"
+import { services } from "./services"
 import { statsModelEvent, type Usage } from "./stats"
 import { STUCK_MAX_HINTS, type StuckTracker } from "./stuck"
 import { autoSwitches, type Switches } from "./switches"
@@ -145,13 +146,18 @@ export async function watch(
    // The figure comes from the usage source of the adapter's tier (plans/0038):
    // `used` mirrors it at each measurement point (a completed assistant
    // message) and stays 0 while it is unknown, as before MA.3.
-   const tier = client.capabilities.usage
-   const source = usageSource(tier)
-   let pct = 100
-   let used = 0
-   let limit: number | undefined = undefined
-  // Session start timestamp, for computing duration.
-  const startTime = Date.now()
+    const tier = client.capabilities.usage
+    const source = usageSource(tier)
+    let pct = 100
+    let used = 0
+    let limit: number | undefined = undefined
+   // The run's clock (the installed services' clock): every time read and
+   // every timer of this watch goes through it — a run on a steered clock
+   // observes a steered timeline, and the engine never reads the wall clock
+   // behind the services' back.
+   const clock = services().clock
+   // Session start timestamp, for computing duration.
+   const startTime = clock.now()
   // Token increment accumulation (STATS_PLAN §2, T-003): each step-finish part
   // accumulates deduplicated by part.id (SSE re-sends of the same part's
   // update events are not double-counted); cross-session crosstalk is excluded
@@ -167,14 +173,14 @@ export async function watch(
   // durationMs + usage + resolves uniformly, including the early-settling
   // error/blocked exits — consumption and proxy answers really happened, they
   // are not lost. extra holds the fields that differ per exit.
-  const snapshot = (extra?: Partial<Watch>): Watch => ({
-    lastText,
-    pct,
-    used,
-    limit,
-    durationMs: Date.now() - startTime,
-    usage,
-    resolves,
+   const snapshot = (extra?: Partial<Watch>): Watch => ({
+     lastText,
+     pct,
+     used,
+     limit,
+     durationMs: clock.now() - startTime,
+     usage,
+     resolves,
     ...(steerSent ? { hinted: true } : {}),
     ...(wall !== undefined ? { wall } : {}),
     ...(reached !== undefined ? { steppedUp: reached } : {}),
@@ -225,23 +231,21 @@ export async function watch(
   // produces output again (the agent's retry got through), so a late answer
   // never aborts a turn that recovered. Without a classifier all of this
   // stays unset and the watch is byte-identical to before (C2).
-  const classifier = classifierFor(client, opts.routing, steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined)
-  let retrying = false
-  let consuming = true
-  let answer: ClassifierAnswer | undefined
-  let asked: Promise<ClassifierAnswer | undefined> | undefined
-  let raised: ErrorClass | undefined
-  // The run's clock (a registry's injected one, else the wall clock).
-  const clockNow = (): number => opts.routing?.clock?.() ?? Date.now()
-  // The reset fields a settled failure carries to the escalation: a reset the
-  // provider or the agent stated (plans/0057 §5.3, it outranks the
-  // classifier's), else the accepted reset time of the known answer, or the
-  // answer still on its way. The stated one rides without a registry too: the
-  // down marks and the wait-and-probe loop's scheduled sleep (plans/0057 §6)
-  // read it, and it carries its scope, which the escalation and the wait line
-  // read (§7).
-  const resetFields = (): Partial<Watch> => {
-    const stated = acceptedReset(errorInfo, clockNow())
+   const classifier = classifierFor(client, opts.routing, steerContext?.label, opts.server ? (agent) => opts.server!.client(agent) : undefined)
+   let retrying = false
+   let consuming = true
+   let answer: ClassifierAnswer | undefined
+   let asked: Promise<ClassifierAnswer | undefined> | undefined
+   let raised: ErrorClass | undefined
+   // The reset fields a settled failure carries to the escalation: a reset the
+   // provider or the agent stated (plans/0057 §5.3, it outranks the
+   // classifier's), else the accepted reset time of the known answer, or the
+   // answer still on its way. The stated one rides without a registry too: the
+   // down marks and the wait-and-probe loop's scheduled sleep (plans/0057 §6)
+   // read it, and it carries its scope, which the escalation and the wait line
+   // read (§7).
+   const resetFields = (): Partial<Watch> => {
+     const stated = acceptedReset(errorInfo, clock.now())
     if (stated !== undefined) return { resetAt: stated, ...(errorInfo?.scope !== undefined ? { scope: errorInfo.scope } : {}), resetSource: "stated" }
     if (classifier === undefined) return {}
     if (answer !== undefined) {
@@ -531,7 +535,7 @@ export async function watch(
   // finally), a late callback of an in-flight probe must not schedule another
   // timer.
   let probeActive = true
-  let probeTimer: ReturnType<typeof setTimeout> | undefined
+  let cancelProbe: (() => void) | undefined
   // Preempts the event wait when the probe judges half-open: in the half-open
   // case no more events ever arrive on the stream, and a for-await over the
   // original stream would block forever on next(), leaving the probe result
@@ -540,14 +544,14 @@ export async function watch(
   let trip!: () => void
   const tripped = new Promise<void>((resolve) => (trip = resolve))
   const scheduleProbe = () => {
-    probeTimer = setTimeout(() => {
-      probeTimer = undefined
+    cancelProbe = clock.timer(opts.idleMs ?? PROBE_INTERVAL_MS, () => {
+      cancelProbe = undefined
       void (async () => {
         const ok = await probeSession(client, sessionID)
         if (!probeActive || halfOpen) return
         if (ok) {
           probeFailures = 0
-        } else if (quietUntil !== undefined && Date.now() < quietUntil) {
+        } else if (quietUntil !== undefined && clock.now() < quietUntil) {
           // The agent announced this silence (§4.2): the verdict waits for
           // the end it named.
           log(`⚠ connectivity probe failed (session ${sessionID}) inside the agent's announced wait; not counted before ${new Date(quietUntil).toISOString()}`)
@@ -562,7 +566,7 @@ export async function watch(
         }
         scheduleProbe()
       })()
-    }, opts.idleMs ?? PROBE_INTERVAL_MS)
+    })
   }
   scheduleProbe()
   const raced = (async function* () {
@@ -576,7 +580,7 @@ export async function watch(
     } finally {
       probeActive = false
       consuming = false
-      if (probeTimer !== undefined) clearTimeout(probeTimer)
+      if (cancelProbe !== undefined) cancelProbe()
       // This generator can only be suspended at a yield, closed out by the
       // consumer (a return enters finally immediately), so cleanup has no
       // delay. At the half-open preemption exit the inner iterator holds a
@@ -838,7 +842,7 @@ export async function watch(
         if (human) log(`→ human answer: ${human}`)
         else if (opts.dryrun) log(`→ auto answer: ${fallback}`)
         else {
-          resolves.push({ at: Date.now(), question: text, session: sessionID })
+          resolves.push({ at: clock.now(), question: text, session: sessionID })
           log(`⚑ auto-answer (AUTO-RESOLVE) #${resolves.length}: ${compactText(text)}`)
           log(`  → answered; ${ask ? "the driver recorded it in full; this mode does not require the session to label it separately" : "asking the session to label the decision with AUTO-RESOLVE"}`)
           vlog(`  answer content: ${fallback}`)
@@ -954,7 +958,7 @@ export async function watch(
           // The agent's turn failed: it stopped retrying (plans/0057 §4.1).
           terminal: true,
         },
-        withWording(e, clockNow()),
+        withWording(e, clock.now()),
       )
       // Late step-up (§4.5, §7): an overflow below the top step means the
       // agent compacted before the step-up steer could land — record the
@@ -992,7 +996,7 @@ export async function watch(
           ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
           ...(event.next !== undefined ? { next: event.next } : {}),
         },
-        withWording(e, clockNow()),
+        withWording(e, clock.now()),
       )
       // Undecided by the patterns (plans/0055 §7.1): a cached answer raises
       // the class now; otherwise the classifier is asked beside the stream
@@ -1030,7 +1034,7 @@ export async function watch(
       // silence budget and says nothing more until it is over. The line names
       // its end; the liveness probe counts no failure before it.
       if (policy.honorsRetryAfter && event.next !== undefined && event.next > policy.silenceBudgetMs) {
-        const until = Date.now() + event.next
+        const until = clock.now() + event.next
         if (quietUntil === undefined || Math.abs(until - quietUntil) >= 1000) {
           log(
             `⏳ the agent waits ${formatDuration(event.next)} before retrying${event.attempt !== undefined ? ` (attempt ${event.attempt})` : ""} (session ${sessionID}); ` +

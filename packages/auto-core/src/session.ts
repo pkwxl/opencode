@@ -20,7 +20,7 @@ import { attempt } from "./attempt"
 import { nextStep, type LadderFacts, type LadderState, type WaitCause } from "./engine/ladder"
 import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
-import { ExitRequested, exitRequested, sleepUnlessExit } from "./exit"
+import { ExitRequested, exitRequested } from "./exit"
 import { unitBaseline } from "./git"
 import { clearModelDownMark, downMarks, extendKeyDownMark, extendModelDownMark, failbackOverride, markModelDown, setSticky } from "./failback"
 import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
@@ -39,6 +39,7 @@ import { formatWindowState, isoInZone } from "./model-window"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
 import { candidateKey, nowOf, selectContext, type Candidate } from "./routing"
 import { candidatesOf, recoveryAt, select, type SelectCall, type SelectContext } from "./select"
+import { services } from "./services"
 import { setForkBase, forkBaseFor, type Plan, type Task } from "./tasks"
 import { renderContextBase } from "./prompt"
 import { accountAnswered, accountOf, learnedReset, learnFailure } from "./quota-windows"
@@ -243,8 +244,11 @@ export async function runSession(
   // every fork, liveness check and rename below belongs to the agent the
   // session lives on. A plain client source resolves to itself.
   const chainClient = () => clientOf(client, chain.agent)
-  // The run's clock (a registry's injected one, else the wall clock).
-  const clockNow = (): number => (opts.routing ? nowOf(opts.routing) : Date.now())
+  // The run's clock (the installed services' clock): every time read and
+  // every sleep of this loop goes through it; the routing facts carry the
+  // same clock as data for the pure decision code (nowOf).
+  const clock = services().clock
+  const clockNow = (): number => clock.now()
   // Quota-failover candidate tracking (design D.3/D.4): shared across the
   // whole session chain — each model candidate gets its own full round of the
   // retry ladder (the ladder's counter resets to 1 when the candidate
@@ -598,7 +602,7 @@ export async function runSession(
       `⏸ ${task.id} ${roleOf(chain)} waits for a ${wait.tier} model: ${wait.model} ${wait.opens}` +
         `, resuming around ${wakeAt.toISOString()} (local ${wakeAt.toLocaleString()}, includes random delay); press Ctrl+C twice to force-quit`,
     )
-    await bookedSleep("window", Math.max(0, wait.until - now) + jitter, { dir: opts.dir, sleep: facts.sleep })
+    await bookedSleep("window", Math.max(0, wait.until - now) + jitter, { dir: opts.dir, sleep: (ms) => clock.sleep(ms) })
     log(`→ window wait over: continuing after ${wait.model} opened`)
   }
   // The wait facts of a wait decision, for the wait line: the model that
@@ -644,7 +648,7 @@ export async function runSession(
   // says when that reset was recorded.
   const planSleep = async (cause: WaitCause | undefined): Promise<{ ms: number; wake?: Date; reason?: string; model: string }> => {
     const facts = opts.routing
-    const now = facts ? nowOf(facts) : Date.now()
+    const now = facts ? nowOf(facts) : clockNow()
     let at: number | undefined
     let reason: string | undefined
     let model: string | undefined
@@ -689,7 +693,7 @@ export async function runSession(
       await saveProgress(opts.dir, {
         task: task.id,
         session: best.id,
-        at: Date.now(),
+        at: clockNow(),
         active: true,
         phase: chain.phase,
         ...(strictResumeActive(opts, switches) ? { baseline: chain.baseline ?? (await unitBaseline(opts.dir)), model: chainModel() } : {}),
@@ -750,17 +754,16 @@ export async function runSession(
       // or rate failure — is also booked per model as time lost to quota
       // windows (plans/0057 §11 item 7): the planned sleep, or the part slept
       // before /exit cut it short.
-      const clock = opts.routing?.clock ?? Date.now
-      const began = clock()
+      const began = clockNow()
       let paused: boolean
       await statsWaitBegin(opts.dir, "recovery")
       try {
-        paused = await sleepUnlessExit(sleep.ms, opts.routing?.sleep)
+        paused = await clock.sleepUnlessExit(sleep.ms)
       } finally {
         await statsWaitEnd(opts.dir)
       }
       if (sleep.wake !== undefined || cause?.errorClass === "quota" || cause?.errorClass === "rate")
-        await statsQuotaWait(opts.dir, sleep.model, paused ? Math.min(sleep.ms, Math.max(0, clock() - began)) : sleep.ms)
+        await statsQuotaWait(opts.dir, sleep.model, paused ? Math.min(sleep.ms, Math.max(0, clockNow() - began)) : sleep.ms)
       if (paused) await pauseForExit()
       let probed: string | undefined
       // The probe candidate's provider, when its ring kept the candidate
@@ -1114,16 +1117,16 @@ export async function runSession(
         // action (this dispatch writes it from the step's ordinal), a
         // network/service failure restarts the managed server before the
         // retry goes out, and the fork-seeding paths share the ordinal as the
-        // log ordinal. The sleep stays Bun.sleep — deliberately not
-        // interruptible by /exit here; the run services' clock owns it once
-        // it exists.
+        // log ordinal. The sleep goes through the run services' clock and is
+        // deliberately not interruptible by /exit — only the wait-and-probe
+        // loop's sleeps are /exit boundaries.
         ladder.i = step.nth + 1
         if (step.restartServer && opts.server) {
           await opts.server.restart("session error is a network/service failure; restarting the opencode server and retrying with a new session", chain.agent)
         }
         if (step.waitMinutes > 0) {
           log(`⏳ ${task.id} transient session error; waiting ${step.waitMinutes} minutes before retrying (${step.nth}/${waits.length}):\n${firstLine(result.question)}`)
-          await Bun.sleep(step.waitMinutes * 60_000)
+          await clock.sleep(step.waitMinutes * 60_000)
         }
         await seedRetry(step.nth, result.question)
         continue

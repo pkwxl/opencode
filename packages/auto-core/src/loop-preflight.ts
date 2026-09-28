@@ -35,6 +35,7 @@ import { resetInProgress } from "./tasks"
 import { protect } from "./protect"
 import type { AgentHost } from "./agent/types"
 import { routingFacts, dispatchCoverageProblems, type DispatchNeed } from "./routing"
+import { createServices, type RunServices } from "./services"
 import { shellProfile } from "./shell"
 import { autoSwitches, modelTypeProblems, phaseTypeRoleProblems, setSwitchModelRegistry, type AgentChoice } from "./switches"
 import { loadStats } from "./stats"
@@ -134,15 +135,20 @@ export type RunAllOpts = {
   append?: boolean
 }
 
-// the preflight section: produces the agentName and the two timer handles
-// runAll still uses afterwards (closed in its finally); error exits are
-// handed back as { exit }, timing and leftover side effects unchanged from
-// before the move (see the file header).
+// the preflight section: produces the agentName, the run's services and the
+// two timer handles runAll still uses afterwards (closed in its finally);
+// error exits are handed back as { exit }, timing and leftover side effects
+// unchanged from before the move (see the file header).
 // registry: the model registry loaded at run start (undefined = none).
+// services: the run's service holder (the composition root's output;
+// runAll installs it for the run).
 export async function preflight(
   directory: string,
   opts: RunAllOpts,
-): Promise<{ agentName: string; watcher?: { close(): void }; progress: { close(): void }; registry?: ModelRegistry } | { exit: number }> {
+): Promise<
+  | { agentName: string; watcher?: { close(): void }; progress: { close(): void }; registry?: ModelRegistry; services: RunServices }
+  | { exit: number }
+> {
   // Legacy layout (M3.7, plans/0047 R3): an old-layout project is a usage error
   // before anything is read or written — no compatibility read, no migration.
   const legacy = await legacyLayoutProblem(directory)
@@ -150,6 +156,21 @@ export async function preflight(
     log(legacy)
     return { exit: 1 }
   }
+  // —— The run's services (the composition root) ——
+  // The holder is built here and installed by runAll for the run (uninstalled
+  // in its finally). Its members construct in a written order across the run
+  // start: the registry loads and feeds the switches (setSwitchModelRegistry)
+  // ahead of their first parse (the validation block below); the agent fleet
+  // then starts and its degradation clamp lands on the parsed switches (the
+  // caller's startPool); the switch snapshot freezes right after the clamp
+  // (the caller's freezeSwitches, before the routing facts below read the
+  // switches); the router, control and git services — the run-wide decision
+  // state that still lives in module singletons — join after the freeze,
+  // each with the change that moves its state in. This point ships the
+  // clock, the one time source the session-driving engine and the stats
+  // module read; the early build is safe because the clock depends on
+  // nothing above it, and the coverage facts below already carry it.
+  const run = createServices()
   // prompt library: load the target directory's .opencode/auto/prompts/
   // overrides (protocol-sensitive templates get a key-content check, failure
   // exits as a usage error). Afterwards render* renders synchronously with no
@@ -181,7 +202,7 @@ export async function preflight(
     setSwitchModelRegistry(registry ? switchModelRegistryInfo(registry) : undefined)
     // A dispatch the run can send with a list the agent filter emptied is a
     // usage error, never a silent wait (plans/0055 §6.3, §10 item 7).
-    const facts = registry ? routingFacts(registry, opts.agent) : undefined
+    const facts = registry ? routingFacts(registry, opts.agent, run.clock) : undefined
     const coverage = facts ? dispatchCoverageProblems(registry!, facts.agentFilter, dispatchNeeds(opts, loaded)) : []
     // Preflight's bin check (plans/0055 §8.7): each profile a candidate list
     // references runs `<bin> --version` under its env, 10 s timeout. The
@@ -348,7 +369,7 @@ export async function preflight(
       return { exit: 2 }
     }
   }
-  return { agentName, watcher, progress, registry }
+  return { agentName, watcher, progress, registry, services: run }
 }
 
 // The dispatches this run can send (plans/0055 §6.3): every role its

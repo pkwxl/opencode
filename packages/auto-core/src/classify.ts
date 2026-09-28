@@ -254,7 +254,7 @@ export function classifierFor(
     ...(clients !== undefined ? { clientOf: clients } : {}),
     registry: routing.registry,
     agentFilter: routing.agentFilter,
-    now: () => routing.clock?.() ?? Date.now(),
+    now: () => routing.clock.now(),
     label,
     timeoutMs: CLASSIFY_TIMEOUT_MS,
   }

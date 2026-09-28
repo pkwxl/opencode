@@ -2,17 +2,18 @@ import { describe, expect, test, afterEach, beforeEach } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { createServices, installServices, uninstallServices } from "../src/services"
 import { PassThrough, Writable } from "node:stream"
 import type { Interactive } from "../src/interactive"
 import {
   flushStats,
   loadStats,
-  setStatsClock,
   statsSessionBegin,
   statsSessionEnd,
   statsTask,
   statsTotals,
 } from "../src/stats"
+import { fixedClock } from "./fixtures/clock"
 import { stepApplies, stepPause } from "../src/step"
 import type { StepMode } from "../src/switches"
 
@@ -101,11 +102,11 @@ describe("stepPause wait deduction (stats wiring)", () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "auto-step-stats-"))
     now = 100_000
-    setStatsClock(() => now)
+    installServices(createServices({ clock: fixedClock(() => now) }))
   })
 
   afterEach(async () => {
-    setStatsClock()
+    uninstallServices()
     await flushStats(dir).catch(() => {})
     await rm(dir, { recursive: true, force: true })
   })

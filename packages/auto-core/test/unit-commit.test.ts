@@ -4,6 +4,7 @@
 // move).
 
 import { beforeEach, describe, expect, test } from "bun:test"
+import { clockAt, fixedClock } from "./fixtures/clock"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -108,6 +109,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
       filterSource: undefined,
       defaultAgent: "opencode",
       runAgent: "opencode",
+      clock: clockAt(0),
     }
     const opts: import("../src/opts").Opts = { routing }
     // A deep planning step picks the deep list's first entry.
@@ -141,7 +143,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
     })
     const factsOf = (
       models: import("../src/models").ModelEntry[],
-      clock: () => number = () => NOW,
+      clock: import("../src/services").Clock = clockAt(NOW),
     ): import("../src/routing").RoutingFacts => ({
       registry: registryOf(models),
       agentFilter: "opencode",
@@ -174,7 +176,7 @@ describe("resumeModelNow (strict-resume model check)", () => {
       if ("error" in parsed) throw new Error(parsed.error)
       const models = [entry("x", { model: "prov/x", only: [parsed.window] }), entry("a", { model: "prov/a" })]
       let now = NOW
-      const opts: import("../src/opts").Opts = { routing: factsOf(models, () => now) }
+      const opts: import("../src/opts").Opts = { routing: factsOf(models, fixedClock(() => now)) }
       expect(resumeModelNow(opts, bare, step)).toBe("a")
       now = Date.parse("2026-09-25T19:00:00Z")
       expect(resumeModelNow(opts, bare, step)).toBe("x")

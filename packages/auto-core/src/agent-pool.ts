@@ -31,6 +31,7 @@ import type { ModelEntry, ModelRegistry } from "./models"
 import type { ClientSource, PermissionMode, ServerControl, SubtaskMode } from "./opts"
 import { dispatchAgentProfiles, routingFacts } from "./routing"
 import { shellAdapter } from "./shell"
+import { services } from "./services"
 import { autoSwitches, clampSwitches, SWITCH_ENV, type AgentChoice } from "./switches"
 
 // ---------------------------------------------------------------------------
@@ -153,7 +154,9 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
   // intersect; the run's start profile stands in so a degenerate registry
   // still degrades on its one agent — preflight's coverage check reports
   // emptied lists separately.
-  const fleet = dispatchAgentProfiles(registry, routingFacts(registry, opts.agent).agentFilter)
+  // The facts carry the run services' clock (one timeline for every dispatch
+  // read); this module is one of the services' allowed entry points.
+  const fleet = dispatchAgentProfiles(registry, routingFacts(registry, opts.agent, services().clock).agentFilter)
   const agents: FleetAgent[] = fleet.map(({ profile, names }) => ({
     caps: adapterCapabilities(profile.adapter),
     label: `${profile.adapter} (${names[0]})`,
