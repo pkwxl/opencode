@@ -31,7 +31,7 @@ import type { ModelEntry, ModelRegistry } from "./models"
 import type { ClientSource, PermissionMode, ServerControl, SubtaskMode } from "./opts"
 import { dispatchAgentProfiles, routingFacts } from "./routing"
 import { shellAdapter } from "./shell"
-import { autoSwitches, clampSwitches, type AgentChoice } from "./switches"
+import { autoSwitches, clampSwitches, SWITCH_ENV, type AgentChoice } from "./switches"
 
 // ---------------------------------------------------------------------------
 // Client resolution (every driver call that takes a client) — clientOf and
@@ -145,7 +145,7 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
   // server holding its own rings).
   const opencodeProfiles = [...registry.agents.values()].filter((profile) => profile.adapter === "opencode")
   const external =
-    Boolean(opts.server || process.env.OPENCODE_AUTO_SERVER) ||
+    Boolean(opts.server || process.env[SWITCH_ENV.server]) ||
     (opencodeProfiles.length > 0 && opencodeProfiles.every((profile) => profile.server !== undefined))
   activateRings(registry, external)
   // §8.5's fleet: every agent with a candidate in a list after the agent
@@ -221,7 +221,7 @@ function poolOf(
       // option to the adapter (which reads OPENCODE_AUTO_SERVER itself).
       const adapter = profile?.adapter ?? name
       let config: Record<string, unknown> | undefined
-      if (adapter === "opencode" && !opts.server && !process.env.OPENCODE_AUTO_SERVER && profile?.server === undefined)
+      if (adapter === "opencode" && !opts.server && !process.env[SWITCH_ENV.server] && profile?.server === undefined)
         config = spawnKeyConfig()
       const host = await (async () => {
         try {
@@ -231,7 +231,7 @@ function poolOf(
             log,
             ...(profile?.bin !== undefined ? { bin: profile.bin } : {}),
             ...(envs.has(name) ? { env: envs.get(name)! } : {}),
-            ...(profile?.server !== undefined ? { server: opts.server || process.env.OPENCODE_AUTO_SERVER || profile.server } : {}),
+            ...(profile?.server !== undefined ? { server: opts.server || process.env[SWITCH_ENV.server] || profile.server } : {}),
             ...(config !== undefined ? { config } : {}),
           })
         } catch (error) {

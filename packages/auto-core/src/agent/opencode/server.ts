@@ -25,6 +25,12 @@ import { opencodeAgent } from "./client"
 // spawning; the record is the same constant the started client reports).
 export { OPENCODE_CAPABILITIES } from "./client"
 
+// The external-server override's env name, restated from the driver's switch
+// registry (src/switches.ts SWITCH_ENV.server) the way src/agent/env.ts
+// restates the OPENCODE_AUTO_ prefix: an agent-domain file must not import
+// the driver domain, so the name lives here a second time.
+const SERVER_ENV = "OPENCODE_AUTO_SERVER"
+
 export type Server = {
   client: OpencodeClient
   url: string
@@ -132,7 +138,7 @@ export async function manage(
   } & SpawnInputs,
 ): Promise<OpencodeHost> {
   const { log } = options
-  const external = url ?? process.env.OPENCODE_AUTO_SERVER
+  const external = url ?? process.env[SERVER_ENV]
   const spawn = options.spawn ?? ((dir: string, inputs: SpawnInputs) => defaultSpawn(dir, inputs, log))
   const connect = options.connect ?? ((target: string, dir: string) => defaultConnect(target, dir, log))
   let config = options.config

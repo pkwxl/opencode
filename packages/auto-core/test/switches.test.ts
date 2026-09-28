@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import {
   autoSwitches,
   formatSwitches,
@@ -9,6 +9,18 @@ import {
   SWITCH_ENV,
   type SwitchModelRegistry,
 } from "../src/switches"
+
+// The startup line reads the external server URL from the environment, so an
+// ambient OPENCODE_AUTO_SERVER (a documented invocation shape, templates/
+// README.md) must not leak into every expectation below — masked for the file,
+// restored after (same pattern as test/agent-server.test.ts).
+const ambientServer = process.env[SWITCH_ENV.server]
+beforeAll(() => {
+  delete process.env[SWITCH_ENV.server]
+})
+afterAll(() => {
+  if (ambientServer !== undefined) process.env[SWITCH_ENV.server] = ambientServer
+})
 
 describe("parseSwitches (the experiment-switch environment layer)", () => {
   test("default combination: everything unset takes the defaults (fork on / digest / fine off / steer on / step off / refCheck off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate unset)", () => {
@@ -395,6 +407,28 @@ describe("OPENCODE_AUTO_MODELS (the model registry's operator layer path)", () =
     expect(nonDefaultSwitches(withPath)).toBeUndefined()
     expect(formatSwitches(withPath)).toBe(formatSwitches(parseSwitches({})))
     expect(formatSwitches(withPath)).not.toContain(SWITCH_ENV.models)
+  })
+})
+
+describe("OPENCODE_AUTO_SERVER (the external opencode server URL)", () => {
+  test("registered in SWITCH_ENV, but a URL: parseSwitches ignores it; the startup line names it when set", () => {
+    expect(SWITCH_ENV.server).toBe("OPENCODE_AUTO_SERVER")
+    const withUrl = parseSwitches({ [SWITCH_ENV.server]: "http://127.0.0.1:4096" })
+    expect(withUrl).toEqual(parseSwitches({}))
+    expect(nonDefaultSwitches(withUrl, { [SWITCH_ENV.server]: "http://127.0.0.1:4096" })).toBe(
+      "OPENCODE_AUTO_SERVER=http://127.0.0.1:4096",
+    )
+    // Unset and empty count as unset: the line stays byte-identical to a run
+    // that spawns its own server.
+    expect(nonDefaultSwitches(parseSwitches({}), {})).toBeUndefined()
+    expect(nonDefaultSwitches(parseSwitches({}), { [SWITCH_ENV.server]: "" })).toBeUndefined()
+    // Beside the parsed switches' own non-default items, appended last.
+    expect(nonDefaultSwitches(parseSwitches({ [SWITCH_ENV.step]: "task" }), { [SWITCH_ENV.server]: "http://127.0.0.1:4096" })).toBe(
+      "OPENCODE_AUTO_STEP=task, OPENCODE_AUTO_SERVER=http://127.0.0.1:4096",
+    )
+    // The full listing stays complete without it: a URL is not a parsed switch.
+    expect(formatSwitches(withUrl)).toBe(formatSwitches(parseSwitches({})))
+    expect(formatSwitches(withUrl)).not.toContain(SWITCH_ENV.server)
   })
 })
 

@@ -1,6 +1,6 @@
 // Agent domain — frozen interface (D8; root plans/AUTO_NEXT_REFACTOR_PLAN.md
 // MA.1, design plans/0037). The driver talks to a coding agent (opencode
-// today; claude headless next, D5) only through AgentClient: fourteen calls,
+// today; claude headless next, D5) only through AgentClient: thirteen calls,
 // a capability record, and one normalized event vocabulary. Adapters own
 // everything transport-shaped — the opencode server's SSE + synchronous POST
 // dual channel, request timeouts, the "provider/model" split, a CLI

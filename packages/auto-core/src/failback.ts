@@ -25,8 +25,8 @@
 // OPENCODE_AUTO_MODEL_FAILBACK_SCOPE boundaries and /failback; a mark with
 // until lives until that instant. A run without a registry writes no
 // marks, and the sticky semantics hold byte for byte.
+import type { Boundary } from "./control-types"
 import { log } from "./log"
-import type { Boundary } from "./step"
 import type { FailbackScope } from "./switches"
 
 // The fineness order of boundaries and granularities: the finer the value,

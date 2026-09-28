@@ -10,23 +10,16 @@
 // are still auto-answered, permissions still block.
 import { createInterface } from "node:readline/promises"
 import type { AgentClient } from "./agent/types"
+import type { Interactive } from "./control-types"
 import { requestExit } from "./exit"
 import { requestFailback } from "./failback"
 import { log, setInput } from "./log"
 
-export type Interactive = {
-  // Called by the runner whenever a session is created/reused; subsequent
-  // input goes to that session. agent is the agent profile the session lives
-  // on (plans/0055 §8.1): the sideband resolves the session's own host
-  // through the pool.
-  attach(sessionID: string, agent?: string): void
-  // Show the prompt and wait for one line of human input; minutes omitted =
-  // no timeout (waiting on the input line or stdin closing); with a value set,
-  // timeout or close falls back to undefined (the step-mode pause hard-waits
-  // through the omitted-value behavior).
-  question(promptText: string, minutes?: number): Promise<string | undefined>
-  close(): void
-}
+// The interface itself lives in the control-types leaf (plans/0061 §2.2 R8:
+// defined here, its type edge to step closed a cycle with the exit/failback
+// flags this module calls); re-exported because the sideband's consumers
+// (opts, loop, loop-task, loop-progress, session-api) import it from here.
+export type { Interactive }
 
 const PROMPT = "💬 "
 const ASK_PROMPT = "❓ "

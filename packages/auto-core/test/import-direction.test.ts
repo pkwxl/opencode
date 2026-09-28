@@ -2,7 +2,11 @@
 // Verbal conventions decay; this suite makes them assertions. It scans src/ at
 // runtime and checks, in order of increasing abstraction:
 //   1. classification   — every src module is consciously placed in a D8 domain
-//   2. acyclicity       — the runtime (value) import graph stays a DAG
+//   2. acyclicity       — the runtime (value) import graph stays a DAG, and
+//                         so does the full graph with type-only edges counted
+//                         (`import type`, an `import { type … }` whose every
+//                         specifier is type-marked, and `import("./x")` type
+//                         expressions)
 //   3. chain layering   — the session-driving chain stays strictly layered (0024 §D.2)
 //   4. one-way rules    — documented one-way invariants (0024 §D.2)
 //   5. runner fan-in    — runner stays the top of the task pipeline
@@ -15,8 +19,11 @@
 //                         inside src/ or embed assets via `with { type: "file" }`
 // Any violation lists the offending edges; a legitimate new dependency means a
 // conscious, reviewed edit to the tables below — never a silent one.
-// Type-only edges count for direction rules but not for cycle detection (TS
-// erases them, so they cannot form runtime cycles).
+// Type-only edges count for every direction rule. For cycles they are checked
+// twice: the runtime check ignores them (TS erases them, so they cannot loop
+// at run time), and a second check counts them — a cycle closed by type edges
+// couples the modules all the same, and the control-modules cycle such edges
+// closed is what the src/control-types.ts leaf removed.
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
@@ -117,6 +124,11 @@ const CLASSIFIED: Record<string, Domain> = {
   // Config fix: the rule table behind `fix` (plans/0052 D10).
   "config-fix": "driver",
   confirm: "driver",
+  // The control modules' shared vocabulary (the Boundary and Interactive
+  // types), a types-only leaf (LEAVES): step, interactive, exit and failback
+  // all depend on it instead of on each other, which is what broke the
+  // control-modules type cycle.
+  "control-types": "driver",
   "exec-session": "driver",
   execute: "driver",
   exit: "driver",
@@ -442,6 +454,7 @@ const FORBIDDEN: Array<{ from: string; to: string[]; why: string }> = [
 // any layer may depend on them without forming a cycle or reaching upward.
 const LEAVES: Record<string, string> = {
   "model-window": "the window grammar and wall-clock arithmetic of the model registry are pure (injected clock); the registry loader, the models command and selection all build on them",
+  "control-types": "the control modules' shared vocabulary (the Boundary and Interactive types) is types only; step, interactive, exit and failback all depend on it, so it must not depend on anything",
 }
 
 // runner is the top of the task pipeline; exactly these modules may import it.
@@ -490,12 +503,28 @@ for (const key of modules) {
   for (const m of text.matchAll(/from\s*["']([^"']+)["']/g)) {
     const start = Math.max(text.lastIndexOf("\nimport ", m.index), text.lastIndexOf("\nexport ", m.index))
     const head = start < 0 ? text.slice(0, m.index) : text.slice(start + 1, m.index)
-    const typeOnly = /^import\s+type\b/.test(head) || /^export\s+type\b/.test(head)
+    const typeOnly = /^import\s+type\b/.test(head) || /^export\s+type\b/.test(head) || allTypeSpecifiers(head)
     record(m[1]!, typeOnly)
   }
   // bare `import "spec"` (side-effect imports)
   for (const m of text.matchAll(/^import\s*["']([^"']+)["']/gm)) record(m[1]!, false)
+  // `import("./spec")` in type position (`type X = import("./x").Y`, a
+  // field's `x?: import("./x").T`): a type edge like `import type`. A dynamic
+  // value import (`await import("./x")`) is excluded by the lookbehind — it
+  // loads the module at run time and belongs to the value graph.
+  for (const m of text.matchAll(/(?<!await\s*)import\(\s*["']([^"']+)["']\s*\)/g)) record(m[1]!, true)
   edges.set(key, list)
+}
+
+// Whether a `from`-statement's braces hold only `type`-prefixed specifiers
+// (`import { type A } from …`, `import { type A as B } from …`): TypeScript
+// erases such a statement entirely, so it is a type edge, not a value import —
+// a mixed statement (`import { x, type A }`) keeps its value edge.
+function allTypeSpecifiers(head: string): boolean {
+  if (!/^(import|export)\s*\{/.test(head)) return false
+  const braces = /\{([^}]*)\}/.exec(head)
+  const specifiers = (braces?.[1] ?? "").split(",").map((part) => part.trim()).filter(Boolean)
+  return specifiers.length > 0 && specifiers.every((part) => /^type[\s"']/.test(part))
 }
 
 function domainOf(key: string): Domain | "unclassified" {
@@ -527,39 +556,55 @@ function checkClassification(): string[] {
   return problems
 }
 
-function checkAcyclicity(): string[] {
-  const valueAdj = new Map<string, string[]>()
-  for (const [from, list] of edges) valueAdj.set(from, list.filter((e) => !e.typeOnly).map((e) => e.to))
+// Depth-first cycle search over an adjacency map; returns one cycle as a
+// closed node list (a → b → a), or null when the graph is acyclic.
+function findCycle(adj: Map<string, string[]>): string[] | null {
   const NO_COLOR = 0
   const ACTIVE = 1
   const DONE = 2
   const color = new Map<string, number>()
   const stack: string[] = []
-  const cycle: string[] | null = (() => {
-    const visit = (node: string): string[] | null => {
-      color.set(node, ACTIVE)
-      stack.push(node)
-      for (const next of valueAdj.get(node) ?? []) {
-        const state = color.get(next) ?? NO_COLOR
-        if (state === ACTIVE) return [...stack.slice(stack.indexOf(next)), next]
-        if (state === NO_COLOR) {
-          const found = visit(next)
-          if (found) return found
-        }
-      }
-      stack.pop()
-      color.set(node, DONE)
-      return null
-    }
-    for (const key of modules) {
-      if ((color.get(key) ?? NO_COLOR) === NO_COLOR) {
-        const found = visit(key)
+  const visit = (node: string): string[] | null => {
+    color.set(node, ACTIVE)
+    stack.push(node)
+    for (const next of adj.get(node) ?? []) {
+      const state = color.get(next) ?? NO_COLOR
+      if (state === ACTIVE) return [...stack.slice(stack.indexOf(next)), next]
+      if (state === NO_COLOR) {
+        const found = visit(next)
         if (found) return found
       }
     }
+    stack.pop()
+    color.set(node, DONE)
     return null
-  })()
+  }
+  for (const key of modules) {
+    if ((color.get(key) ?? NO_COLOR) === NO_COLOR) {
+      const found = visit(key)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+function checkAcyclicity(): string[] {
+  const valueAdj = new Map<string, string[]>()
+  for (const [from, list] of edges) valueAdj.set(from, list.filter((e) => !e.typeOnly).map((e) => e.to))
+  const cycle = findCycle(valueAdj)
   if (cycle) return [`runtime import cycle: ${cycle.join(" → ")}`]
+  return []
+}
+
+// The same DAG requirement with type edges counted: TS erases them, so they
+// cannot loop at run time, but a cycle through them still couples the modules
+// (the control-modules cycle the src/control-types.ts leaf removed was closed
+// by exactly such edges), so none may remain.
+function checkTypeAcyclicity(): string[] {
+  const adj = new Map<string, string[]>()
+  for (const [from, list] of edges) adj.set(from, list.map((e) => e.to))
+  const cycle = findCycle(adj)
+  if (cycle) return [`import cycle (type edges counted): ${cycle.join(" → ")}`]
   return []
 }
 
@@ -669,6 +714,10 @@ describe("import direction (M0.7 / F11)", () => {
 
   test("runtime import graph is acyclic", () => {
     expect(checkAcyclicity().join("\n")).toBe("")
+  })
+
+  test("import graph is acyclic with type edges counted", () => {
+    expect(checkTypeAcyclicity().join("\n")).toBe("")
   })
 
   test("session-driving chain stays strictly layered (0024 §D.2)", () => {

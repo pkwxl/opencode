@@ -40,6 +40,14 @@ export const SWITCH_ENV = {
   // startup lines name the layers it loaded.
   // AUTO-DECISION: OPENCODE_AUTO_MODELS is registered here but kept out of Switches, nonDefaultSwitches and formatSwitches (every entry of those lines is a parsed switch with a default; a path has neither, and leaving it out keeps the full switch line byte-identical for runs without a registry)
   models: "OPENCODE_AUTO_MODELS",
+  // The external opencode server URL (--server's env form): a URL, not a
+  // parsed switch, kept out of Switches like models above. Unlike models it
+  // has no startup lines of its own, so the non-default startup line names it
+  // when set (parseSwitches never reads it; the reads live in
+  // src/agent-pool.ts and the opencode adapter, which restates the name the
+  // way src/agent/env.ts restates the prefix, being unable to import this
+  // registry).
+  server: "OPENCODE_AUTO_SERVER",
 } as const
 
 // Step mode (OPENCODE_AUTO_STEP) value domain: off never pauses; phase/task/subtask are
@@ -542,8 +550,11 @@ function formatWaits(waits: number[]): string {
 }
 
 // Non-default effective items (startup log): a comma list of `name=value` entries; the
-// default combination returns undefined (silent).
-export function nonDefaultSwitches(switches: Switches): string | undefined {
+// default combination returns undefined (silent). The external server URL is
+// not a parsed switch (see SWITCH_ENV.server), so it is read from `env`
+// (process.env in the run) and named only when set — unset or empty keeps the
+// line byte-identical with a run that does not reuse a server.
+export function nonDefaultSwitches(switches: Switches, env: Record<string, string | undefined> = process.env): string | undefined {
   const items = [
     switches.fork === SWITCH_DEFAULTS.fork ? undefined : `${SWITCH_ENV.fork}=${switches.fork ? "on" : "off"}`,
     switches.forkBase === SWITCH_DEFAULTS.forkBase ? undefined : `${SWITCH_ENV.forkBase}=${switches.forkBase}`,
@@ -571,6 +582,7 @@ export function nonDefaultSwitches(switches: Switches): string | undefined {
       : `${SWITCH_ENV.handoverConcurrent}=${switches.handoverConcurrent ? "on" : "off"}`,
     switches.hibernate === undefined ? undefined : `${SWITCH_ENV.hibernate}=${formatHibernate(switches.hibernate)}`,
     switches.agent === undefined ? undefined : `${SWITCH_ENV.agent}=${switches.agent}`,
+    env[SWITCH_ENV.server] ? `${SWITCH_ENV.server}=${env[SWITCH_ENV.server]}` : undefined,
   ].filter((item): item is string => item !== undefined)
   return items.length ? items.join(", ") : undefined
 }

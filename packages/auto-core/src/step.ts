@@ -7,7 +7,7 @@
 // handler; two consecutive Ctrl+C force-quit 130 (same as askHuman/
 // waitBetweenTasks).
 import { createInterface } from "node:readline/promises"
-import type { Interactive } from "./interactive"
+import type { Boundary, Interactive } from "./control-types"
 import { log } from "./log"
 import { statsWaitBegin, statsWaitEnd } from "./stats"
 import { autoSwitches, type StepMode } from "./switches"
@@ -15,11 +15,6 @@ import { autoSwitches, type StepMode } from "./switches"
 // Fineness order of boundaries and tiers (off always 0): the finer the value the
 // larger its rank; a boundary pauses when boundary rank ≤ tier rank.
 const RANK: Record<StepMode | Boundary, number> = { off: 0, phase: 1, task: 2, subtask: 3 }
-
-// Pipeline boundaries (kind): phase = the --phases phase handover completed; task =
-// the task's final-state commit completed; subtask = the checklist item's tick
-// committed.
-export type Boundary = "phase" | "task" | "subtask"
 
 // Whether a tier covers a boundary (pure function, for unit tests): inclusive —
 // subtask covers every boundary, task covers task and phase, phase covers only

@@ -12,7 +12,7 @@
 // operator most wants to stop cleanly. requestExit wakes it at once
 // (sleepUnlessExit); the loop records the session its recovery would have
 // continued before it throws.
-import type { Boundary } from "./step"
+import type { Boundary } from "./control-types"
 
 // One-shot flag per process (each CLI call is its own process, so it resets
 // naturally).

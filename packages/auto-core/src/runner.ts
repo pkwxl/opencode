@@ -587,7 +587,7 @@ export async function runTask(
         // spot to check after check-off + unified commit; sleep until wake
         // inside the window before continuing (plans/0027-hibernate-design.md).
         await hibernatePause(`${task.id} subtask ${index + 1} boundary`, { dir })
-        // failback retry (OPENCODE_AUTO_MODEL_FALLBACK_SCOPE): at
+        // failback retry (OPENCODE_AUTO_MODEL_FAILBACK_SCOPE): at
         // subtask/session granularity the subtask boundary clears the chain's
         // failover candidates and the next subtask fails back to the
         // preferred model (task granularity is naturally covered by the chain
