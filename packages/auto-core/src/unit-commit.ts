@@ -6,8 +6,8 @@
 // and plans/0022-session-recovery-fidelity-design.md.
 // Sits below the session-driving layer: must not import session/watch/runner.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S3, pure move).
-import { phaseToRole, resolveModel } from "./chain"
-import { failbackOverride, stickyModel } from "./failback"
+import { phaseToRole } from "./chain"
+import { modelOfChain } from "./chain-transitions"
 import { commitTree, rollbackUnit, unitViolations, type UnitBaseline } from "./git"
 import { forgetHandover } from "./handover"
 import { log, vlog } from "./log"
@@ -150,10 +150,11 @@ export function strictResumeActive(opts: Opts, switches: Switches = autoSwitches
 
 // The model-consistency evaluation at resume (design 3.1 ④): the same
 // priority chain attempt uses to compute the target for a reused session
-// (the chain's failover candidates do not exist at resume, so it takes
-// sticky > the /failback override > the routing table). Returning undefined
-// = no model routing currently configured (the record has nothing to hold
-// either then; the check treats it as a mismatch).
+// (modelOfChain over a minimal chain view of the record's role and phase —
+// the chain's failover candidates do not exist at resume, so the priority
+// chain starts at sticky > the /failback override > the routing table).
+// Returning undefined = no model routing currently configured (the record
+// has nothing to hold either then; the check treats it as a mismatch).
 // role is the session's explicit routing role (requireArtifact's spec.role,
 // such as m-mode planning's implement-scan, plans/0053 D12). The dispatch
 // routed by it, since an explicit role wins over the phase (roleOf), so the
@@ -178,7 +179,10 @@ export function resumeModelNow(opts: Opts, switches: Switches, phase: Phase | un
     })
     return decision.kind === "pick" ? candidateKey(decision.candidate) : undefined
   }
-  return stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, role ?? phaseToRole(phase) ?? "bypass")
+  // A resume has no live chain; the record's role and phase stand in for one
+  // (modelOfChain derives the role the same way the dispatch did), and the
+  // run's current phase reference feeds the routing table, as at dispatch.
+  return modelOfChain({ pct: 100, used: 0, at: 0, role, phase }, switches, opts.phase)
 }
 
 // —— Session-agent binding of persisted records (plans/0055 §8.2, §8.3) ——

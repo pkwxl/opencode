@@ -63,6 +63,7 @@ export const UNIT_LANE: readonly string[] = [
   "test/agent-events.test.ts",
   "test/append.test.ts",
   "test/chain.test.ts",
+  "test/chain-writes.test.ts",
   "test/classify.test.ts",
   "test/config.test.ts",
   "test/confirm.test.ts",

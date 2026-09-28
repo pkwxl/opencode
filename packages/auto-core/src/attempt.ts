@@ -12,7 +12,8 @@
 import { rm } from "node:fs/promises"
 import { join, relative } from "node:path"
 import type { AgentClient } from "./agent/types"
-import { resolveModel, roleOf, type SessionChain, type SessionResult } from "./chain"
+import { roleOf, type SessionChain, type SessionResult } from "./chain"
+import { modelOfChain } from "./chain-transitions"
 import { clearDownMarks, failbackOverride, isModelDown, modelDownMark, stickyModel } from "./failback"
 import { commitTitle, unitBaseline } from "./git"
 import { recallHandover, saveHandover, type Handover } from "./handover"
@@ -411,12 +412,13 @@ export async function attempt(
     // here, byte for byte as before — after the session-scope failback clear
     // above — : chain fallback candidate > phase-scoped sticky > /failback
     // runtime override > the routing table (role > phase type id > preset
-    // letter > wildcard, resolveModel). An undefined target sends no model
-    // key: with both variables unset and no override the whole chain stays
-    // undefined, byte-identical to the unrouted call (not model: undefined).
+    // letter > wildcard; the shared priority chain of modelOfChain). An
+    // undefined target sends no model key: with both variables unset and no
+    // override the whole chain stays undefined, byte-identical to the
+    // unrouted call (not model: undefined).
     const override = failbackOverride()
     if (!opts.routing) {
-      target = chain.model ?? stickyModel() ?? override?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
+      target = modelOfChain(chain, switches, opts.phase)
       promptModel = target
     }
     // The actually-used model reaches the terminal (frontend-visible): when

@@ -110,6 +110,14 @@ const CLASSIFIED: Record<string, Domain> = {
   attempt: "driver",
   capability: "driver",
   chain: "driver",
+  // The named SessionChain transitions (plans/0061 §4.8): the one home for
+  // the chain's pure computations (forkSources, modelOfChain) and, as the
+  // consolidation proceeds, its mutations — the write ratchet of
+  // test/chain-writes.test.ts empties every other writer. Ranked below
+  // watch: every session-driving layer (and the commit boundary's resume
+  // checks) may call it, and it reaches only the chain type, the failback
+  // holders and the switches.
+  "chain-transitions": "driver",
   // The failure-message classifier (plans/0055 §7.1): when to ask, the
   // redaction, the run's cache and call limit, the reply's parser and the
   // one-shot tool-less session; watch asks it beside the event stream.
@@ -253,13 +261,17 @@ const FROZEN_IMPORTS: Record<string, string[]> = {
 // Session-driving chain, bottom → top (0024 §D.2): imports between ranked
 // modules must go strictly downward in rank.
 const RANK: Record<string, number> = {
-  watch: 0,
-  attempt: 1,
-  session: 2,
-  artifact: 3,
-  "exec-session": 3,
-  execute: 4,
-  runner: 6,
+  // chain-transitions (plans/0061 §4.2) sits below every session-driving
+  // entry: watch and attempt, session and the commit boundary's resume
+  // checks all reach the chain's transitions, and it reaches none of them.
+  "chain-transitions": 0,
+  watch: 1,
+  attempt: 2,
+  session: 3,
+  artifact: 4,
+  "exec-session": 4,
+  execute: 5,
+  runner: 7,
 }
 
 // Documented one-way invariants (0024 §D.2 and the plan §2.5 layering). Kept

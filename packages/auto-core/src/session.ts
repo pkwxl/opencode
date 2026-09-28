@@ -13,13 +13,14 @@
 
 import { dirname, join } from "node:path"
 import type { AgentClient, LimitScope } from "./agent/types"
-import { resolveModel, roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
+import { roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
+import { forkSources, modelOfChain } from "./chain-transitions"
 import { attempt } from "./attempt"
 import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
 import { ExitRequested, exitRequested, sleepUnlessExit } from "./exit"
 import { unitBaseline } from "./git"
-import { clearModelDownMark, downMarks, extendKeyDownMark, extendModelDownMark, failbackOverride, markModelDown, setSticky, stickyModel } from "./failback"
+import { clearModelDownMark, downMarks, extendKeyDownMark, extendModelDownMark, failbackOverride, markModelDown, setSticky } from "./failback"
 import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
 import {
   commitRotation,
@@ -381,9 +382,9 @@ export async function runSession(
       // routing primary model; without routing, from is undefined and the log
       // renders "primary model". If from happens to be a real candidate
       // string, mark it tried as well (so it is not picked again). The same
-      // priority chain as attempt's target evaluation (chain.model > sticky >
-      // /failback override > the routing table).
-      from = chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain))
+      // priority chain as attempt's target evaluation (modelOfChain:
+      // chain.model > sticky > /failback override > the routing table).
+      from = modelOfChain(chain, switches, opts.phase)
       if (from !== undefined && !tried.includes(from)) tried.push(from)
       tried.push(to)
       toModel = to
@@ -452,9 +453,9 @@ export async function runSession(
     // this attempt's partial output is not in the copy, so the worktree-check
     // note is required (see retryNote).
     const failedID = chain.failed?.id ?? chain.id
-    const sources: { id: string; used: number; why: string }[] = []
-    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
-    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
+    // The shared "keep the most valuable session" criterion (forkSources):
+    // the failed session above the chain's original session, by accumulated
+    // context; a 0-token error stub never qualifies.
     // chain.failed is deliberately kept after the fork seeding (not cleared):
     // if the copy dies at 0 tokens (a run of consecutive quota failures),
     // attempt's guard will not replace it with the error stub, and the next
@@ -462,7 +463,7 @@ export async function runSession(
     // succeeds, attempt's close-out clears it. Dead records whose fork has gone
     // stale are cleaned up here in passing, so later rounds do not keep forking
     // a dead session.
-    sources.sort((a, b) => b.used - a.used)
+    const sources = forkSources(chain)
     for (const source of sources) {
       const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} failover`)
       if (forked === undefined) {
@@ -546,15 +547,13 @@ export async function runSession(
         (restarted ? "" : " (the managed server could not be restarted; the new key applies at its next spawn)"),
     )
     // The re-dispatch rides a fork of the failed session — the same source
-    // choice as the retry ladder and switchModel (the failed session itself
-    // above the chain's original session, by accumulated context; a 0-token
-    // error stub never qualifies), so the turn's context survives the
-    // restart (F8: sessions persist across a managed server restart).
+    // choice as the retry ladder and switchModel (forkSources: the failed
+    // session itself above the chain's original session, by accumulated
+    // context; a 0-token error stub never qualifies), so the turn's context
+    // survives the restart (F8: sessions persist across a managed server
+    // restart).
     const failedID = chain.failed?.id ?? chain.id
-    const sources: { id: string; used: number; why: string }[] = []
-    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
-    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
-    sources.sort((a, b) => b.used - a.used)
+    const sources = forkSources(chain)
     for (const source of sources) {
       const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} key rotation`)
       if (forked === undefined) {
@@ -646,21 +645,9 @@ export async function runSession(
   })
   // The model the chain's dispatches ran on, the way attempt records it for
   // strict resume: the selected entry under a registry, else the switch-
-  // routed model string (undefined = the agent's own default).
-  const chainModel = (): string | undefined =>
-    opts.routing
-      ? chain.modelEntry
-      : (chain.model ?? stickyModel() ?? failbackOverride()?.wildcard ?? resolveModel(switches.model, opts.phase?.entry, roleOf(chain)))
-  // The fork sources of the recovery, most valuable first (the "keep the
-  // most valuable session" criterion of the retry ring): the failed session
-  // itself when it holds content (a 0-usage pure error stub never qualifies)
-  // and the chain's original session, by accumulated context.
-  const recoverySources = (): { id: string; used: number; why: string }[] => {
-    const sources: { id: string; used: number; why: string }[] = []
-    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
-    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
-    return sources.sort((a, b) => b.used - a.used)
-  }
+  // routed model string of the no-registry priority chain (modelOfChain;
+  // undefined = the agent's own default).
+  const chainModel = (): string | undefined => (opts.routing ? chain.modelEntry : modelOfChain(chain, switches, opts.phase))
   // The sleep of one wait-and-probe round (plans/0057 §6): until the known
   // instant plus hibernate's random delay of 0–600 s (drivers sharing an
   // account do not all probe the same second after a reset), else the
@@ -722,7 +709,7 @@ export async function runSession(
   // a one-off session that writes no record, and a chain without a session
   // has nothing to keep; the line says so.
   const pauseForExit = async (): Promise<never> => {
-    const best = recoverySources()[0]
+    const best = forkSources(chain)[0]
     let kept: string
     if (best === undefined) kept = "no session holds this attempt's context, so the re-run starts it in a new session"
     else if (!opts.dir || !chain.phase) kept = `the ${best.why} ${best.id} is a one-off session with no progress record, so the re-run starts it anew`
@@ -866,7 +853,7 @@ export async function runSession(
         continue
       }
       await accountAnswered(opts.dir, probeAccount, clockNow())
-      const sources = recoverySources()
+      const sources = forkSources(chain)
       // "The session this prompt was dispatched to": promoted to chain.id by
       // attempt for the non-retryable classes, recorded in chain.failed for
       // the retryable ones — picking it means the context is complete,
@@ -1105,9 +1092,8 @@ export async function runSession(
     // not in the context, so the worktree-check note is required (see
     // retryNote).
     const failedID = chain.failed?.id ?? chain.id
-    const sources: { id: string; used: number; why: string }[] = []
-    if (chain.failed && chain.failed.used > 0) sources.push({ ...chain.failed, why: "failed session" })
-    if (chain.id !== undefined && chain.id !== chain.failed?.id) sources.push({ id: chain.id, used: chain.used, why: "original session" })
+    // The shared source list of forkSources — the "keep the most valuable
+    // session" criterion documented above, as one sorted list.
     // chain.failed is deliberately kept after the fork seeding (not cleared):
     // if the copy dies at 0 tokens (a run of consecutive quota failures,
     // 2026-09-17 virtio T-005), attempt's guard will not replace it with the
@@ -1116,7 +1102,7 @@ export async function runSession(
     // strict superset and replaces the record normally, cleared by attempt's
     // close-out on success. Dead records whose fork has gone stale are cleaned
     // up here in passing.
-    sources.sort((a, b) => b.used - a.used)
+    const sources = forkSources(chain)
     let seeded = false
     for (const source of sources) {
       const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} retry`)
