@@ -10,7 +10,6 @@
 //
 // Without a registry nothing here runs: the dispatch resolvers keep their
 // env-switch path (resolveModel, src/chain.ts), byte for byte.
-import { ringHasUsableKey, ringInactiveNote, ringLabel } from "./keyring"
 import { log } from "./log"
 import { candidateList } from "./model-route"
 import { formatWindowState, windowState } from "./model-window"
@@ -123,7 +122,7 @@ export function selectContext(
     policy: switches.model,
     override: facts.router.failbackOverride(),
     marks: facts.router.downMarks(),
-    ringUsable: (provider, now) => ringHasUsableKey(facts.router, provider, now),
+    ringUsable: (provider, now) => facts.router.ringHasUsableKey(provider, now),
     ...(limits !== undefined ? { limits } : {}),
   }
 }
@@ -233,7 +232,7 @@ export function dispatchAgentProfiles(
 // the ring shows the entry's declared key count — the references the
 // registry validates — because no live position exists yet; under an
 // external server the same shape is shown, plus the inactive note below
-// (keyring.ts owns both labels)
+// (the router's ring methods own both labels)
 export function logRunRouting(facts: RoutingFacts): void {
   const { registry } = facts
   const now = nowOf(facts)
@@ -250,11 +249,11 @@ export function logRunRouting(facts: RoutingFacts): void {
       if (entry === undefined) return name
       const state = formatWindowState(windowState(entry, registry.tz, now), registry.tz, now)
       const project = entry.layer === "project" ? " · project layer" : ""
-      return `${name} (${entry.agent}, ${state}, ring ${ringLabel(entry)}${project})`
+      return `${name} (${entry.agent}, ${state}, ring ${facts.router.ringLabel(entry)}${project})`
     })
     log(`${label} ${shown.join(" → ") || "(empty)"}`)
   }
-  const inactive = ringInactiveNote()
+  const inactive = facts.router.ringInactiveNote()
   if (inactive !== undefined) log(inactive)
   if (registry.routes.size) {
     const routes = [...registry.routes.values()].map((route) =>

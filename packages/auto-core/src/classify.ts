@@ -33,7 +33,6 @@
 // agent start imports (import-direction rule).
 import type { AgentClient, AgentErrorPatterns, AgentEvent, AgentRetryPolicy } from "./agent/types"
 import { classifySessionError, NEUTRAL_RETRY_POLICY, rateSignal, rateThresholdMet, retryPolicyOf, type ErrorClass, type ErrorInfo } from "./chain"
-import { ringHasUsableKey } from "./keyring"
 import { log, vlog } from "./log"
 import { isoInZone, usableAt } from "./model-window"
 import type { ModelEntry, ModelRegistry } from "./models"
@@ -278,7 +277,7 @@ export function classifierEntry(router: Router, registry: ModelRegistry, agentFi
     const adapter = registry.agents.get(entry.agent)?.adapter
     if (adapter !== "opencode" || (agentFilter !== undefined && adapter !== agentFilter)) continue
     if (!usableAt(entry, registry.tz, now) || router.isModelDown(name, now)) continue
-    if (entry.provider !== undefined && !ringHasUsableKey(router, entry.provider, now)) continue
+    if (entry.provider !== undefined && !router.ringHasUsableKey(entry.provider, now)) continue
     return { name, entry }
   }
   return undefined

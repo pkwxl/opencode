@@ -26,7 +26,6 @@ import type { Interactive } from "../src/interactive"
 import { loadModels, type ModelEntry, type ModelRegistry, type TierList } from "../src/models"
 import type { Opts } from "../src/opts"
 import { cachedAnswer, resetClassifier } from "../src/classify"
-import { activateRings, resetKeyring, ringHasUsableKey, spawnKeyConfig } from "../src/keyring"
 import { isoInZone, parseWindow } from "../src/model-window"
 import { logRunRouting, routingFacts, type RoutingFacts } from "../src/routing"
 import { resetQuotaWindows } from "../src/quota-windows"
@@ -905,13 +904,6 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
 
   const optsWith = (host: AgentHost, routing: RoutingFacts): Opts => ({ routing, server: singleHost(host) })
 
-  beforeEach(() => {
-    resetKeyring()
-  })
-  afterEach(() => {
-    resetKeyring()
-  })
-
   test("quota rotates to the next key: host restart, spawn config reference, same model from a fork", async () => {
     const lines: string[] = []
     const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
@@ -919,7 +911,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     })
     try {
       const routing = facts()
-      activateRings(routing.registry, false)
+      routing.router.activateRings(routing.registry, false)
       const agent = make({ turn: classTurn("usage limit reached, quota exceeded") })
       const { host, restarts, configs } = fakeHost()
       const chain = deepChain()
@@ -945,7 +937,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
 
   test("an exhausted ring falls through to model failover on the next candidate", async () => {
     const routing = facts()
-    activateRings(routing.registry, false)
+    routing.router.activateRings(routing.registry, false)
     const agent = make({ turn: classTurn("usage limit reached, quota exceeded", undefined, 2) })
     const { host, restarts, configs } = fakeHost()
     const chain = deepChain()
@@ -961,13 +953,13 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     // Every key of the ring is down now, so §6.2 rule 4 keeps a out (the
     // spawn config still names the current key — a restart for any other
     // reason spawns on the last position).
-    expect(ringHasUsableKey(services().router, "prov", Date.now())).toBe(false)
-    expect(spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
+    expect(services().router.ringHasUsableKey("prov", Date.now())).toBe(false)
+    expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
   })
 
   test("an auth failure counts as a key failure: the ring rotates too", async () => {
     const routing = facts()
-    activateRings(routing.registry, false)
+    routing.router.activateRings(routing.registry, false)
     // 401 with no isRetryable statement: the classifier reads auth (a revoked
     // key looks like one).
     const agent = make({ turn: classTurn("unauthorized", 401) })
@@ -983,7 +975,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
 
   test("a cleared key mark does not move the ring back; only a failure of the current key advances it (wrapping onto the cleared key)", async () => {
     const routing = facts()
-    activateRings(routing.registry, false)
+    routing.router.activateRings(routing.registry, false)
     // First dispatch: turn 1 fails with quota, the ring rotates A → B.
     const first = fakeHost()
     const firstAgent = make({ turn: classTurn("usage limit reached, quota exceeded") })
@@ -993,7 +985,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     // config still names it — no restart churn) and the model is eligible
     // again, so the next dispatch selects a.
     services().router.clearDownMarks("task", "task")
-    expect(spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
+    expect(services().router.spawnKeyConfig()).toEqual({ provider: { prov: { options: { apiKey: "{env:PROV_KEY_B}" } } } })
     // That dispatch fails on key B: only now does the ring move — wrapping
     // onto key A, whose mark the boundary cleared.
     const second = fakeHost()
@@ -1014,7 +1006,7 @@ describe("key rings (plans/0055 §4.3, §7 step 1)", () => {
     })
     try {
       const routing = facts()
-      activateRings(routing.registry, true)
+      routing.router.activateRings(routing.registry, true)
       logRunRouting(routing)
       expect(lines.some((line) => line.includes("key rings are inactive") && line.includes("external"))).toBe(true)
       expect(lines.some((line) => line.includes("ring 2"))).toBe(true)
@@ -2303,13 +2295,11 @@ describe("the per-agent fork base (plans/0055 §8.4)", () => {
     printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
       lines.push(args.map(String).join(" "))
     })
-    resetKeyring()
   })
 
   afterEach(() => {
     printed.mockRestore()
     resetShellAdapters()
-    resetKeyring()
   })
 
   test("the digest base is built on the first forking subtask's agent with the subtask route's model", async () => {

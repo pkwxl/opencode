@@ -1,14 +1,15 @@
-// The router service (the consolidation's services stage, first tranche):
-// the run-wide decision state of routing and recovery that used to live in
-// module singletons — the failback holders (the phase-scoped sticky model,
-// the pending /failback order and the run-time model-order override), the
-// down marks of the model registry (per model, and per provider key for the
-// rings), the usage windows last logged per agent client, and the model-step
-// cache-claim checks. One instance per run: `createServices` builds it into
-// the run's holder, the composition root installs the holder for the run,
-// and the test preload installs a fresh one before every test (so the state
-// never leaks across test files — the `reset*` hooks the module singletons
-// needed are gone with them).
+// The router service (the consolidation's services stage): the run-wide
+// decision state of routing and recovery that used to live in module
+// singletons — the failback holders (the phase-scoped sticky model, the
+// pending /failback order and the run-time model-order override), the down
+// marks of the model registry (per model, and per provider key for the
+// rings), the key rings themselves (the built rings, the per-provider
+// position, whether rotation is active), the usage windows last logged per
+// agent client, and the model-step cache-claim checks. One instance per
+// run: `createServices` builds it into the run's holder, the composition
+// root installs the holder for the run, and the test preload installs a
+// fresh one before every test (so the state never leaks across test files
+// — the `reset*` hooks the module singletons needed are gone with them).
 //
 // Who may reach it: the entry modules the services allowlist names call
 // `services().router` directly (watch, attempt, session, the /failback
@@ -18,26 +19,32 @@
 // registry-driven selection and resume check reads it through
 // `RoutingFacts.router`), the session options carry it beside their routing
 // (`Opts.router`, for the no-registry resume checks and the pipeline's
-// failback boundary hooks), and the policies helpers (keyring, classify)
-// take it as a leading parameter. The pure decisions keep reading state as
+// failback boundary hooks), and the policies helpers that stayed below it
+// (classify) take it as a leading parameter — the key-ring functions moved
+// in as methods, leaving keyring.ts the pure library (the ring build and
+// the key labels, no state). The pure decisions keep reading state as
 // data, exactly as they read the clock.
 //
 // Construction: in the run's written order the router joins the composition
 // after the switch snapshot freezes, reading the registry and the frozen
-// switches. This first tranche consults neither — the failback holders, the
-// marks, the logged windows and the step claims are registry-agnostic run
-// state (a run without a registry writes no marks and never logs a step
-// claim, byte-identical to before) — so `createRouter()` takes no inputs and
-// the holder may build it beside the clock, which depends on nothing above
-// it either. The tranches that do read the registry and the switches (the
-// key rings, the routing fence over the registry and no-registry halves)
-// arrive with their own changes and take their inputs at their slots, which
-// sit after the freeze in the written order.
-// AUTO-DECISION: createRouter() is parameterless instead of receiving the registry and the frozen switch snapshot (none of this tranche's state consults either — the boundary clears keep taking the failback scope as a call argument because the switch memo is per-parse process state that a test or the pre-freeze composition must be able to change independently of the holder, and capturing the memo at construction time would freeze a stale snapshot for every holder the preload builds before a test parses its switches).
+// switches. The failback holders, the marks, the logged windows and the
+// step claims are registry-agnostic run state (a run without a registry
+// writes no marks and never logs a step claim, byte-identical to before),
+// and the key rings read the registry only at their activation — where the
+// run's agent fleet starts (src/agent-pool.ts, after the holder exists,
+// through `activateRings`), not at construction — so `createRouter()` takes
+// no inputs and the holder may build it beside the clock, which depends on
+// nothing above it either. The remaining tranche that reads the registry
+// and the switches at construction (the routing fence over the registry and
+// no-registry halves) arrives with its own change and takes its inputs at
+// its slot, which sits after the freeze in the written order.
+// AUTO-DECISION: createRouter() is parameterless instead of receiving the registry and the frozen switch snapshot (no state it builds consults either — the key rings read the registry at their activation, not at construction — and the boundary clears keep taking the failback scope as a call argument because the switch memo is per-parse process state that a test or the pre-freeze composition must be able to change independently of the holder, and capturing the memo at construction time would freeze a stale snapshot for every holder the preload builds before a test parses its switches).
 import type { AgentClient, AgentEvent, AgentTokens } from "./agent/types"
 import type { Boundary } from "./control-types"
 import { failbackApplies } from "./failback"
+import { buildRings, ringKeyLabel, type RingRotation } from "./keyring"
 import { log } from "./log"
+import type { ModelEntry, ModelRegistry, ModelReference } from "./models"
 import type { FailbackScope } from "./switches"
 
 // The run-time model-order override a parameterized /failback leaves behind:
@@ -90,6 +97,23 @@ export type Router = {
   isKeyDown(provider: string, key: string, now: number): boolean
   clearKeyDownMarks(provider: string): void
   clearDownMarks(boundary: Boundary | "session", scope: FailbackScope): void
+  // —— Key rings ——
+  // Activation (where the run's agent fleet starts) builds the rings from
+  // the registry and records whether they rotate; every reader before it
+  // answers "no ring". The methods keep the names the keyring module
+  // exported, so the move reads as a move.
+  activateRings(registry: ModelRegistry, external: boolean): void
+  ringsActive(): boolean
+  currentKey(provider: string): ModelReference | undefined
+  hasActiveRing(provider: string): boolean
+  ringHasUsableKey(provider: string, now: number): boolean
+  ringRotation(provider: string, now: number): RingRotation | undefined
+  commitRotation(rotation: RingRotation, until?: number): void
+  spawnKeyConfig(): Record<string, unknown> | undefined
+  ringLabel(entry: ModelEntry): string
+  ringInactiveNote(): string | undefined
+  clearRingMarks(provider: string): void
+  markCurrentKeyDown(provider: string, until?: number): void
   // —— Logged usage windows ——
   noteWindows(client: AgentClient, event: Extract<AgentEvent, { type: "limit" }>): boolean
   // —— Model-step cache claims ——
@@ -118,6 +142,18 @@ export function createRouter(): Router {
   // past the instant treats it as cleared.
   const downModels = new Map<string, DownMark>()
   const downKeys = new Map<string, Map<string, DownMark>>()
+
+  // The key rings (the state the keyring module held as a singleton until
+  // this tranche): the built rings by provider, the current position per
+  // provider and whether rotation is active. `rings` is undefined before
+  // the run's agent starts, and every reader then answers "no ring":
+  // selection's rule 4 never excludes, nothing rotates, the startup block
+  // shows declared counts only. The position never moves back — a cleared
+  // key mark does not rewind it, only a failure of the current key advances
+  // it (§6.4), so there is no restart churn.
+  let rings: Map<string, ModelReference[]> | undefined
+  let positions = new Map<string, number>()
+  let active = false
 
   // The usage windows last logged per agent client: a `limit` event is
   // logged only when its status or a window's reset changed, so a run shows
@@ -149,6 +185,36 @@ export function createRouter(): Router {
   }
   const dropScopeCleared = (marks: Map<string, DownMark>): void => {
     for (const [key, mark] of marks) if (mark.until === undefined) marks.delete(key)
+  }
+
+  // The key-mark reads and writes the ring methods share, and the ring
+  // state's shared readers: methods of the returned object cannot name the
+  // object itself, so everything one method calls on another goes through
+  // these closures (the object exposes them verbatim).
+  const markKeyDown = (provider: string, key: string, until?: number): void => {
+    let marks = downKeys.get(provider)
+    if (marks === undefined) {
+      marks = new Map()
+      downKeys.set(provider, marks)
+    }
+    marks.set(key, until !== undefined ? { until } : {})
+  }
+  const isKeyDown = (provider: string, key: string, now: number): boolean => {
+    const mark = downKeys.get(provider)?.get(key)
+    return mark !== undefined && (mark.until === undefined || mark.until > now)
+  }
+  const clearKeyDownMarks = (provider: string): void => {
+    downKeys.get(provider)?.clear()
+  }
+  // Whether the run's rings rotate: false before activation and under an
+  // external server.
+  const ringsActive = (): boolean => rings !== undefined && active
+  // The ring's current key of a provider, by reference; undefined when the
+  // provider has no ring or the rings never activated.
+  const currentKey = (provider: string): ModelReference | undefined => {
+    const keys = rings?.get(provider)
+    if (keys === undefined || keys.length === 0) return undefined
+    return keys[(positions.get(provider) ?? 0) % keys.length]!
   }
 
   return {
@@ -230,15 +296,9 @@ export function createRouter(): Router {
     },
 
     // Key marks, per provider and key reference (the ring position itself
-    // never moves back; only whether a key is down lives here).
-    markKeyDown: (provider, key, until) => {
-      let marks = downKeys.get(provider)
-      if (marks === undefined) {
-        marks = new Map()
-        downKeys.set(provider, marks)
-      }
-      marks.set(key, until !== undefined ? { until } : {})
-    },
+    // never moves back; only whether a key is down lives here). The three
+    // the ring methods share are the closures above, exposed verbatim.
+    markKeyDown,
     // The key-mark counterpart of extendModelDownMark: an existing key mark
     // lasts until `until`.
     extendKeyDownMark: (provider, key, until) => {
@@ -249,17 +309,119 @@ export function createRouter(): Router {
       return true
     },
     keyDownMark: (provider, key) => downKeys.get(provider)?.get(key),
-    isKeyDown: (provider, key, now) => {
-      const mark = downKeys.get(provider)?.get(key)
-      return mark !== undefined && (mark.until === undefined || mark.until > now)
-    },
+    isKeyDown,
     // Clears one provider's key marks: the recovery probe's ring half (the
     // probe candidate ignores the down marks and the ring). The ring
-    // position itself lives in the keyring module and never moves here.
-    clearKeyDownMarks: (provider) => {
-      downKeys.get(provider)?.clear()
-    },
+    // position lives beside the marks now and never moves back either.
+    clearKeyDownMarks,
     clearDownMarks,
+
+    // —— Key rings ——
+    // Builds the run's rings from the registry and records whether they are
+    // active. `external` = the opencode server is not managed by this driver
+    // (--server, OPENCODE_AUTO_SERVER or the agent profile's `server`), so it
+    // cannot be restarted onto another key: the rings stay declared (for the
+    // startup block) but inactive. Called where the run's agent fleet starts
+    // (src/agent-pool.ts), the slot the composition order reserves.
+    activateRings: (registry, external) => {
+      rings = buildRings(registry)
+      positions = new Map()
+      active = !external
+    },
+    ringsActive,
+    // §6.2 rule 4: does this provider's key ring have a key that is not down?
+    // True for every provider when the rings never activated or are inactive
+    // (an external server cannot rotate, so the ring never excludes a
+    // candidate), and for providers without a ring.
+    ringHasUsableKey: (provider, now) => {
+      const keys = rings?.get(provider)
+      if (!ringsActive() || keys === undefined) return true
+      return keys.some((key) => !isKeyDown(provider, key.ref, now))
+    },
+    // Whether the run's rings are active for this provider (the escalation's
+    // step-1 gate, §7): a key failure on a ringed provider marks the key down
+    // even when the ring cannot rotate — every key is down, or it holds one key
+    // — so §6.2 rule 4 then keeps the provider's entries out of selection.
+    hasActiveRing: (provider) => rings !== undefined && active && rings.get(provider) !== undefined,
+    currentKey,
+    // Would a rotation land on a key? The current key will be marked down
+    // (step 1 of §7), so the search starts after it and wraps, skipping every
+    // key that is down; undefined = no ring, inactive rings, or the ring is
+    // exhausted (every key down). Mutates nothing.
+    ringRotation: (provider, now) => {
+      const keys = rings?.get(provider)
+      if (!ringsActive() || keys === undefined || keys.length < 2) return undefined
+      const from = (positions.get(provider) ?? 0) % keys.length
+      for (let step = 1; step < keys.length; step++) {
+        const index = (from + step) % keys.length
+        if (!isKeyDown(provider, keys[index]!.ref, now))
+          return {
+            provider,
+            from: { ref: keys[from]!, index: from, total: keys.length },
+            to: { ref: keys[index]!, index, total: keys.length },
+          }
+      }
+      return undefined
+    },
+    // Commits a decided rotation: the current key is marked down and the
+    // position advances. The position stays where it landed afterwards — a
+    // cleared mark never moves it back (§6.4). `until` is a reset time the
+    // failure-message classifier read (§7.1): the key's mark lasts until then
+    // instead of the scope boundary.
+    commitRotation: (rotation, until) => {
+      markKeyDown(rotation.provider, rotation.from.ref.ref, until)
+      positions.set(rotation.provider, rotation.to.index)
+    },
+    // The spawn config content for the managed server's next spawn (§4.3
+    // injection): every active ring's current key as the provider's apiKey
+    // reference. undefined = send no config at all (no active ring), so the
+    // spawn environment keeps OPENCODE_CONFIG_CONTENT = "{}" exactly as the SDK
+    // spawn sends it. Only references appear here; opencode substitutes them in
+    // its own process.
+    spawnKeyConfig: () => {
+      if (!ringsActive() || rings === undefined || rings.size === 0) return undefined
+      const provider: Record<string, unknown> = {}
+      for (const [id, keys] of rings) {
+        const key = currentKey(id)
+        if (key !== undefined) provider[id] = { options: { apiKey: key.ref } }
+      }
+      return { provider }
+    },
+    // The run-start block's ring label for a model entry (§6.5): the live
+    // position by reference name when the rings are active ("1/3 ZHIPU_KEY_A"),
+    // the declared key count otherwise ("3" — the fleet's shape, not a live
+    // position), and "0" for an entry without a ring, as the block always did.
+    ringLabel: (entry) => {
+      const live = ringsActive() ? rings?.get(entry.provider ?? "") : undefined
+      if (live === undefined) return String(entry.keys?.length ?? 0)
+      const key = currentKey(entry.provider!)!
+      return ringKeyLabel({ ref: key, index: live.indexOf(key), total: live.length })
+    },
+    // The startup note for inactive rings (§4.3 limits), or undefined when the
+    // rings are active, never activated, or the registry declares none.
+    ringInactiveNote: () => {
+      if (rings === undefined || active || rings.size === 0) return undefined
+      return (
+        "ℹ key rings are inactive: the opencode server is external (--server, OPENCODE_AUTO_SERVER or the agent " +
+        "profile's server) and cannot be restarted onto the next key; the tier lines above show declared ring sizes only"
+      )
+    },
+    // The recovery probe's ring half (§6.3): the probe candidate ignores the
+    // down marks, the ring and the cap, so an exhausted ring's key marks clear
+    // for the probe — the position stays where it is — and the key the probe ran
+    // on is marked down again when the probe fails (markCurrentKeyDown below).
+    clearRingMarks: (provider) => {
+      if (rings?.has(provider) !== true) return
+      clearKeyDownMarks(provider)
+    },
+    // Marks the ring's current key down without moving the position: what a
+    // failed recovery probe does to the key it ran on, and what an exhausted
+    // ring's escalation does before it falls through; `until` as for
+    // commitRotation.
+    markCurrentKeyDown: (provider, until) => {
+      const key = currentKey(provider)
+      if (key !== undefined) markKeyDown(provider, key.ref, until)
+    },
 
     // Returns whether the event changed anything (and was logged): a
     // `limit` event is logged only when its status or a window's reset

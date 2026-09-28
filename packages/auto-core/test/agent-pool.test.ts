@@ -13,7 +13,6 @@ import { checkAgentBins, probeModels, singleHost, startPool } from "../src/agent
 import type { SessionChain } from "../src/chain"
 import { loadModels, type ModelRegistry } from "../src/models"
 import type { Opts } from "../src/opts"
-import { resetKeyring } from "../src/keyring"
 import { routingFacts, type RoutingFacts } from "../src/routing"
 import { services } from "../src/services"
 import { runSession } from "../src/session"
@@ -112,13 +111,11 @@ beforeEach(() => {
   printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     lines.push(args.map((arg) => String(arg)).join(" "))
   })
-  resetKeyring()
 })
 
 afterEach(() => {
   printed.mockRestore()
   resetShellAdapters()
-  resetKeyring()
   clampSwitches({ ask: envAsk, agent: envAgent })
 })
 

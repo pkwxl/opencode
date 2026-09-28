@@ -3,14 +3,14 @@
 // module singletons. It carries the `Clock` — the one time source the
 // session-driving engine (watch, attempt, session) and the process-level
 // time keepers (the stats module) read — and the `Router` — the decision
-// state of routing and recovery's first tranche: the failback holders
-// (sticky, the pending /failback order, the run-time model-order override),
-// the down marks, the logged usage windows and the model-step cache claims
-// (the key rings and the classifier's state join the router with their own
-// changes). The remaining members join with the changes that move their
-// state in: `control` (the /exit request and its sleepers) and `git` (the
-// commit-side seam the kernel and engine call) — the placeholders are the
-// documented absence, not dead fields.
+// state of routing and recovery: the failback holders (sticky, the pending
+// /failback order, the run-time model-order override), the down marks, the
+// logged usage windows, the model-step cache claims and the key rings (the
+// classifier's state joins the router with its own change). The remaining
+// members join with the changes that move their state in: `control` (the
+// /exit request and its sleepers) and `git` (the commit-side seam the
+// kernel and engine call) — the placeholders are the documented absence,
+// not dead fields.
 //
 // Construction happens at the run start (preflight), in a written order:
 // the registry loads and feeds the switches (setSwitchModelRegistry) ahead

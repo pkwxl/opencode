@@ -39,7 +39,6 @@ import { join } from "node:path"
 import type { AgentEvent, LimitScope } from "./agent/types"
 import type { SessionChain } from "./chain"
 import { RESET_HORIZON_MS } from "./classify"
-import { currentKey, hasActiveRing } from "./keyring"
 import type { RoutingFacts } from "./routing"
 
 // Where an entry's reset came from (§8's list, as the driver can tell it):
@@ -75,7 +74,7 @@ export function accountOf(chain: Pick<SessionChain, "model" | "modelEntry" | "mo
   if (routing !== undefined) {
     const entry = routing.registry.models.get(chain.modelEntry ?? "")
     const provider = entry !== undefined ? entry.provider : providerOf(chain.modelEntry)
-    const key = provider !== undefined && hasActiveRing(provider) ? currentKey(provider) : undefined
+    const key = provider !== undefined && routing.router.hasActiveRing(provider) ? routing.router.currentKey(provider) : undefined
     return `${entry?.agent ?? routing.defaultAgent}${provider !== undefined ? `/${provider}` : ""}${key !== undefined ? `#${key.label}` : ""}`
   }
   return providerOf(chain.model ?? chain.modelShown) ?? "default"

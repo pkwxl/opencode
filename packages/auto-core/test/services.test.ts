@@ -5,9 +5,10 @@
 // them — plus the holder's install/uninstall lifecycle, the stats clock
 // fold, the frozen switch snapshot's clamp invariant, and the router
 // ratchets: the state the router service moved in (the failback holders,
-// the down marks, the logged windows, the model-step cache claims) exists
-// only as methods on the constructed router — no free-function delegator
-// export anywhere else in src/, and no reset* hook for it anywhere.
+// the down marks, the logged windows, the model-step cache claims, the
+// key rings) exists only as methods on the constructed router — no
+// free-function delegator export anywhere else in src/, and no reset*
+// hook for it anywhere.
 // The callers-within-SERVICE_ENTRIES assertion lands with the later services
 // units; the list is exported as the documented, shrink-only allowlist.
 import { describe, expect, test } from "bun:test"
@@ -16,9 +17,37 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createServices, installServices, SERVICE_ENTRIES, services, uninstallServices, type RunServices } from "../src/services"
+import type { ModelRegistry } from "../src/models"
 import { loadStats, statsTask, statsTotals } from "../src/stats"
 import { autoSwitches, clampSwitches, freezeSwitches, parseSwitches, setSwitchModelRegistry } from "../src/switches"
 import { manualClock } from "./fixtures/clock"
+
+// A one-ring registry for the router-freshness pair's ring rows: one
+// opencode entry on provider `zhipuai` with a two-key ring.
+const ringRegistry = (): ModelRegistry => ({
+  layers: [{ name: "operator", path: "/unused/models.json" }],
+  tz: "UTC",
+  agents: new Map([["opencode", { name: "opencode", layer: "operator", adapter: "opencode" }]]),
+  models: new Map([
+    [
+      "glm",
+      {
+        name: "glm",
+        layer: "operator",
+        agent: "opencode",
+        model: "zhipuai/glm-4.6",
+        provider: "zhipuai",
+        keys: [
+          { kind: "env", name: "ZHIPU_KEY_A", ref: "{env:ZHIPU_KEY_A}", label: "ZHIPU_KEY_A" },
+          { kind: "env", name: "ZHIPU_KEY_B", ref: "{env:ZHIPU_KEY_B}", label: "ZHIPU_KEY_B" },
+        ],
+      },
+    ],
+  ]),
+  tiers: {},
+  routes: new Map(),
+  unused: [],
+})
 
 // ---------------------------------------------------------------------------
 // The no-raw-clock ratchet
@@ -115,6 +144,10 @@ describe("the services holder", () => {
     expect(router.stickyModel()).toBe("prov/a")
     expect(router.failbackRequested()).toBe(true)
     expect(router.isModelDown("k3", 0)).toBe(true)
+    // …the key rings too: activate them over a one-ring registry.
+    router.activateRings(ringRegistry(), false)
+    expect(router.ringsActive()).toBe(true)
+    expect(router.hasActiveRing("zhipuai")).toBe(true)
   })
 
   test("…and the next test's router carries none of it", () => {
@@ -124,6 +157,11 @@ describe("the services holder", () => {
     expect(router.stickyModel()).toBeUndefined()
     expect(router.failbackRequested()).toBe(false)
     expect(router.downMarks().size).toBe(0)
+    // The rings never activated on this instance: every read answers
+    // "no ring", exactly as before the run's agent starts.
+    expect(router.ringsActive()).toBe(false)
+    expect(router.hasActiveRing("zhipuai")).toBe(false)
+    expect(router.spawnKeyConfig()).toBeUndefined()
   })
 
   test("the stats clock follows the installed holder (the fold)", async () => {
@@ -159,7 +197,8 @@ describe("the services holder", () => {
 // `export function <name>` anywhere outside router.ts would be a delegator
 // over the moved singleton — the conversion crutch the unit that moves
 // state may use while it converts callers, and must delete in the same
-// unit.
+// unit. The key-ring block is the ring tranche: the functions keyring.ts
+// exported before its state moved in.
 const MOVED_TO_ROUTER = [
   "stickyModel",
   "setSticky",
@@ -180,6 +219,18 @@ const MOVED_TO_ROUTER = [
   "isKeyDown",
   "clearKeyDownMarks",
   "clearDownMarks",
+  "activateRings",
+  "ringsActive",
+  "currentKey",
+  "hasActiveRing",
+  "ringHasUsableKey",
+  "ringRotation",
+  "commitRotation",
+  "spawnKeyConfig",
+  "ringLabel",
+  "ringInactiveNote",
+  "clearRingMarks",
+  "markCurrentKeyDown",
   "noteWindows",
   "awaitCacheClaim",
   "observeCacheClaim",
@@ -189,7 +240,7 @@ const MOVED_TO_ROUTER = [
 // The modules whose state moved (fully or in part) into the router: a
 // `reset*` export in one of them (or in router.ts itself) would be a reset
 // hook for the moved state, which the per-test fresh holder replaces.
-const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch"]
+const MOVED_STATE_MODULES = ["router", "failback", "model-step", "watch", "keyring"]
 
 function srcFiles(): string[] {
   const files = readdirSync(join(import.meta.dir, "..", "src"))
@@ -231,6 +282,33 @@ describe("the router ratchets (the moved state exists only as the service)", () 
     const text = readFileSync(join(import.meta.dir, "..", "src", "failback.ts"), "utf8")
     const exported = [...text.matchAll(/export (?:async )?function (\w*)/g)].map((m) => m[1])
     expect(exported).toEqual(["failbackApplies"])
+  })
+
+  test("keyring.ts holds only the pure ring library", () => {
+    // The ring state's old home shrinks to the ring build and the key
+    // label; a new export there is a conscious edit to this pin, not a
+    // silent accretion (the state itself is the router's now).
+    const text = readFileSync(join(import.meta.dir, "..", "src", "keyring.ts"), "utf8")
+    const exported = [...text.matchAll(/export (?:async )?function (\w*)/g)].map((m) => m[1])
+    expect(exported).toEqual(["buildRings", "ringKeyLabel"])
+  })
+
+  test("the ratchets bite: the patterns match crafted violations and the list tracks the router's real methods", () => {
+    // The source scans above pass on a clean tree, which says nothing about
+    // a pattern that stopped matching anything. So: the same patterns must
+    // catch the violations they were written for (a delegator export of a
+    // moved name, a reset* hook in a moved-state module)…
+    const delegator = `export function ${MOVED_TO_ROUTER[0]}(router: unknown): void {}`
+    expect(new RegExp(`export (async )?function ${MOVED_TO_ROUTER[0]}\\b`).test(delegator)).toBe(true)
+    expect([...`export function resetKeyring(): void {}`.matchAll(/export (async )?function (reset\w*)/g)].map((m) => m[2])).toEqual([
+      "resetKeyring",
+    ])
+    // …and MOVED_TO_ROUTER tracks the router's real surface: every name is a
+    // method of the constructed router, so the delegator scan covers methods
+    // that exist, and a renamed one fails here rather than scanning for a
+    // name nothing owns.
+    const router = services().router as unknown as Record<string, unknown>
+    for (const name of MOVED_TO_ROUTER) expect(typeof router[name]).toBe("function")
   })
 })
 

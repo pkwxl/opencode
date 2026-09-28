@@ -7,7 +7,6 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentEvent } from "../src/agent/types"
-import { activateRings, resetKeyring } from "../src/keyring"
 import type { ModelEntry, ModelRegistry } from "../src/models"
 import { accountAnswered, accountOf, learnedReset, learnFailure, learnObserved, resetQuotaWindows } from "../src/quota-windows"
 import type { RoutingFacts } from "../src/routing"
@@ -24,7 +23,6 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   resetQuotaWindows()
-  resetKeyring()
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -81,7 +79,7 @@ describe("the account key", () => {
     expect(accountOf({ modelEntry: "openrouter/some-model" }, routing)).toBe("opencode/openrouter")
     // Rings inactive: the provider alone.
     expect(accountOf({ modelEntry: "glm" }, routing)).toBe("opencode/zai-coding-plan")
-    activateRings(routing.registry, false)
+    services().router.activateRings(routing.registry, false)
     const account = accountOf({ modelEntry: "glm" }, routing)
     expect(account).toBe("opencode/zai-coding-plan#ZHIPU_KEY_A")
     // A name, never a value.

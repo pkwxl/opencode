@@ -168,13 +168,16 @@ export async function preflight(
   // state that still lives in module singletons — join after the freeze,
   // each with the change that moves its state in. This point ships the
   // clock, the one time source the session-driving engine and the stats
-  // module read, and the router's first tranche (the failback holders, the
-  // down marks, the logged usage windows, the model-step cache claims), a
-  // constructed object whose state reads neither the registry nor the
-  // switches — the tranches that do (the key rings, the routing fence) take
-  // their inputs at their slots, which sit after the freeze; the early
-  // build is safe because both depend on nothing above them, and the
-  // coverage facts below already carry the clock and the router.
+  // module read, and the router with the tranches that have moved in (the
+  // failback holders, the down marks, the logged usage windows, the
+  // model-step cache claims, the key rings) — a constructed object whose
+  // state reads neither the registry nor the switches at construction: the
+  // key rings take their registry input at their slot, the agent-pool fleet
+  // start (after the holder exists, through the router's activateRings),
+  // and the routing fence tranche takes its inputs at its slot after the
+  // freeze; the early build is safe because everything here depends on
+  // nothing above it, and the coverage facts below already carry the clock
+  // and the router.
   const run = createServices()
   // prompt library: load the target directory's .opencode/auto/prompts/
   // overrides (protocol-sensitive templates get a key-content check, failure

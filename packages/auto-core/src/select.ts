@@ -55,7 +55,7 @@ export type SelectContext = {
   // The run's down marks by internal name (the router service's downMarks()).
   marks?: ReadonlyMap<string, DownMark>
   // §6.2 rule 4: does this provider's key ring have a key that is not down,
-  // at the dispatch's instant? src/keyring.ts supplies the run's answer
+  // at the dispatch's instant? The router service supplies the run's answer
   // (true for every provider without an active ring); absent = every ring
   // has one.
   ringUsable?: (provider: string, now: number) => boolean

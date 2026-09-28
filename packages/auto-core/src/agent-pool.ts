@@ -24,7 +24,6 @@ import { claudeHost, CLAUDE_CAPABILITIES } from "./agent/claude/host"
 import { agentProfileFor, chooseAgent } from "./agent-choice"
 import { profileLine, resolveProfileEnv } from "./agent-env"
 import { degradeAgents, permissionPreset, type FleetAgent } from "./capability"
-import { activateRings, spawnKeyConfig } from "./keyring"
 import { log } from "./log"
 import { stepValidationLines } from "./model-step"
 import type { ModelEntry, ModelRegistry } from "./models"
@@ -148,7 +147,10 @@ export async function startPool(directory: string, opts: StartPoolOpts): Promise
   const external =
     Boolean(opts.server || process.env[SWITCH_ENV.server]) ||
     (opencodeProfiles.length > 0 && opencodeProfiles.every((profile) => profile.server !== undefined))
-  activateRings(registry, external)
+  // The rings live in the run's router (this module is one of the services'
+  // entry points, so it reaches the installed holder; the activation slot is
+  // right here, the fleet start).
+  services().router.activateRings(registry, external)
   // §8.5's fleet: every agent with a candidate in a list after the agent
   // filter. An empty fleet (no candidate in any list at all) has nothing to
   // intersect; the run's start profile stands in so a degenerate registry
@@ -221,11 +223,13 @@ function poolOf(
       // An opencode host spawns with the rings' current keys (§4.3) unless
       // its server is external; --server and OPENCODE_AUTO_SERVER override a
       // profile's server, and a profile without `server` leaves the base
-      // option to the adapter (which reads OPENCODE_AUTO_SERVER itself).
+      // option to the adapter (which reads OPENCODE_AUTO_SERVER itself). The
+      // config content is read from the run's router at spawn time (one ring
+      // state behind the installed holder).
       const adapter = profile?.adapter ?? name
       let config: Record<string, unknown> | undefined
       if (adapter === "opencode" && !opts.server && !process.env[SWITCH_ENV.server] && profile?.server === undefined)
-        config = spawnKeyConfig()
+        config = services().router.spawnKeyConfig()
       const host = await (async () => {
         try {
           return await factory(directory, {

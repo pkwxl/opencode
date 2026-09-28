@@ -23,16 +23,7 @@ import { taskDoc } from "./docpaths"
 import { ExitRequested, exitRequested } from "./exit"
 import { unitBaseline } from "./git"
 import { bookedSleep, HIBERNATE_JITTER_MS } from "./hibernate"
-import {
-  commitRotation,
-  currentKey,
-  hasActiveRing,
-  markCurrentKeyDown,
-  clearRingMarks,
-  ringKeyLabel,
-  ringRotation,
-  spawnKeyConfig,
-} from "./keyring"
+import { ringKeyLabel } from "./keyring"
 import { log } from "./log"
 import { formatWindowState, isoInZone } from "./model-window"
 import { DEFAULT_CONTEXT_LIMIT, type ClientSource, type Opts } from "./opts"
@@ -502,16 +493,16 @@ export async function runSession(
     if (facts === undefined) return false
     const entry = facts.registry.models.get(chain.modelEntry ?? "")
     const provider = entry?.provider
-    if (provider === undefined || !hasActiveRing(provider)) return false
+    if (provider === undefined || !router.hasActiveRing(provider)) return false
     const now = nowOf(facts)
-    const rotation = ringRotation(router, provider, now)
+    const rotation = router.ringRotation(provider, now)
     if (rotation === undefined) {
       // No key is left that is not down (an exhausted or single-key ring):
       // the current key failed all the same, so it is marked down before the
       // fall-through, and §6.2 rule 4 keeps every entry on this provider out
       // of the selection that follows.
       // AUTO-DECISION: the current key is marked down even when no rotation can land (the design's step 1 words the marking as part of a rotation, but an unmarked current key would leave the ring reading usable while its key just failed with quota, and the failover would be able to re-pick the same dead key the moment the model mark clears)
-      markCurrentKeyDown(router, provider, until)
+      router.markCurrentKeyDown(provider, until)
       return false
     }
     // Rotation restarts the chain's host (§8.1: the pool applies restart to
@@ -521,8 +512,8 @@ export async function runSession(
     if (host === undefined || host.setConfig === undefined) return false
     const from = ringKeyLabel(rotation.from)
     const to = ringKeyLabel(rotation.to)
-    commitRotation(router, rotation, until)
-    host.setConfig(spawnKeyConfig())
+    router.commitRotation(rotation, until)
+    host.setConfig(router.spawnKeyConfig())
     const restarted = await host.restart(`${why}; rotating the provider ${provider} key ring to key ${to}`, chain.agent)
     log(
       `⇄ ${task.id} ${why}; provider ${provider} key ${from} marked down, continuing the same model on key ${to}` +
@@ -564,7 +555,7 @@ export async function runSession(
   const downTarget = (): { model?: string; provider?: string; key?: { ref: string; label: string } } => {
     const model = chain.modelEntry
     const provider = opts.routing?.registry.models.get(model ?? "")?.provider
-    const key = provider !== undefined && hasActiveRing(provider) ? currentKey(provider) : undefined
+    const key = provider !== undefined && router.hasActiveRing(provider) ? router.currentKey(provider) : undefined
     return { model, provider, ...(key !== undefined ? { key: { ref: key.ref, label: key.label } } : {}) }
   }
   // A classifier answer that arrives after the turn ended (§7.1): it can only
@@ -795,7 +786,7 @@ export async function runSession(
           router.clearModelDownMark(probed)
           if (decision.candidate.kind === "entry" && decision.candidate.entry.provider !== undefined) {
             probedProvider = decision.candidate.entry.provider
-            clearRingMarks(router, probedProvider)
+            router.clearRingMarks(probedProvider)
           }
         }
       }
@@ -810,7 +801,7 @@ export async function runSession(
       } catch (error) {
         if (error instanceof AgentStartError) throw error
         if (probed !== undefined) router.markModelDown(probed)
-        if (probedProvider !== undefined) markCurrentKeyDown(router, probedProvider)
+        if (probedProvider !== undefined) router.markCurrentKeyDown(probedProvider)
         log(`⏳ ${task.id} probe session itself errored (${formatClientError(error)}); service not recovered, continuing to wait`)
         // It says nothing of the limit: the account's learned windows (§8)
         // decide the next sleep, else the poll.
@@ -826,7 +817,7 @@ export async function runSession(
         // A reset time the classifier read from the probe's failure sets
         // when the re-written marks clear (§7.1), as on the escalation.
         if (probed !== undefined) router.markModelDown(probed, ping.resetAt, ping.classified)
-        if (probedProvider !== undefined) markCurrentKeyDown(router, probedProvider, ping.resetAt)
+        if (probedProvider !== undefined) router.markCurrentKeyDown(probedProvider, ping.resetAt)
         if (probed !== undefined) lateReset(ping.pendingReset, { model: probed })
         log(`⏳ ${task.id} probe session still failing (${firstLine(ping.question)}); continuing to wait`)
         continue
