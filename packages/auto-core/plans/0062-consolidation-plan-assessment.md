@@ -1,6 +1,6 @@
 # 0062 — Assessment of the driver-consolidation program (0061): feasibility and engineering soundness
 
-Status: **assessment, 2026-09-28.** An independent review of [plans/0061](./0061-driver-consolidation-plan.md) (the ruled consolidation program) against the code at `1482d53f8`, written before any unit of the program starts. It records the verification evidence behind the verdict, the gaps found, and recommended amendments. Nothing here changes 0061's rulings; the amendments (§6) are offered to its §10 record for adoption or rejection. Companion documents: [0063](./0063-rust-reimplementation-analysis.md) (the Rust-reimplementation question, which builds on this verdict) and [0064](./0064-positioning-alignment.md) (positioning).
+Status: **assessment, 2026-09-28.** An independent review of [plans/0061](./0061-driver-consolidation-plan.md) (the ruled consolidation program) against the code at `1482d53f8`, written before any unit of the program starts. It records the verification evidence behind the verdict, the gaps found, and recommended amendments. Nothing here changes 0061's rulings; the amendments (§6) are offered to its §10 record for adoption or rejection. Companion documents: [0063](./0063-rust-reimplementation-analysis.md) (the Rust-reimplementation question, which builds on this verdict) and [0064](./0064-positioning-alignment.md) (positioning). All six §6 amendments were adopted into 0061 §10 on 2026-09-28.
 
 ## 0. The verdict in one paragraph
 

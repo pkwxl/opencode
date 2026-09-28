@@ -10,7 +10,7 @@ Status: **plan, ruled 2026-09-28; nothing implemented.** This document rules the
 - **`RunServices`**, a constructed holder for the decision state that today lives in module singletons. It has a written construction order.
 - **logical sub-domains** enforced by the direction test instead of physical moves.
 
-Before any of that come prunes and test seams. They retire refcheck and `check` (with the texts every session is told), two dead experiment paths, and the timer-bound tests. After them the full suite runs in about 22 s, so every unit is gated on the whole suite under a 30 s budget; a separate fast lane is a convenience, not a gate. Equivalence is proven mechanically, not argued: the prompt goldens, the agent-fake call recordings, a new **turn-trace oracle** recorded from today's `watch()` before its first cut, and `test/incident-regression.test.ts` kept untouched until the last unit.
+Before any of that come prunes and test seams. They retire refcheck and `check` (with the texts every session is told), two dead experiment paths, and the timer-bound tests. After them the full suite runs in about 22 s on the gate machine, so every unit is gated on the whole suite under a budget relative to a recorded baseline (§5.1); a separate fast lane is a convenience, not a gate. Equivalence is proven mechanically, not argued: the prompt goldens, the agent-fake call recordings, a new **turn-trace oracle** recorded from today's `watch()` before its first cut, and `test/incident-regression.test.ts` kept untouched until the last unit.
 
 ## 1. Facts this plan is built on
 
@@ -100,10 +100,10 @@ Each ruling states the call, the alternatives rejected, the reason, whether user
 - Parallel execution (0060 §5.4) comes last, behind its own design for per-unit worktrees. A unit's commit takes the whole tree, and concurrent units in one worktree would take each other's half-written files; that is a file-contract change, not a scheduling one.
 - Visible: a new gitignored state file (F1). Lands in F1.
 
-**R5 — Lane policy (0060 §6): every unit is gated on the full suite, held under a 30 s budget; the fast lane is a convenience.**
+**R5 — Lane policy (0060 §6): every unit is gated on the full suite, held under a machine-independent budget; the fast lane is a convenience.**
 - Ruling:
-  - The unit gate runs both typechecks and the **whole** auto-core suite (`bun run test:gate`). The gate fails when its wall time on the gate machine exceeds 30 s, so there is no second class of unit.
-  - The `unit` lane (pure and in-memory files, 5 s budget) exists for focused iteration and never gates.
+  - The unit gate runs both typechecks and the **whole** auto-core suite (`bun run test:gate`). The gate fails when its wall time exceeds **baseline × 1.25**, where the baseline is the suite's wall time recorded by A1 and re-measured in F3 (§5.2) — a relative budget, so the gate runs on whatever machine executes the units, and there is no second class of unit. The absolute 30 s figure stays the gate-machine reference, not the rule.
+  - The `unit` lane (pure and in-memory files, 5 s budget) exists for focused iteration, never gates a unit, and stays the dev-loop gate on every machine.
   - The shell's e2e joins the gate for units that touch a shell-visible surface, and at every stage exit.
 - Rejected:
   - "A < 30 s fast lane per unit": after A1 the whole suite already fits in 30 s on the gate machine, so a fast gate would only skip the repository-backed tests where the commit-boundary invariants live.
@@ -239,6 +239,9 @@ Each ruling states the call, the alternatives rejected, the reason, whether user
 ## 3. The equivalence contract
 
 ### 3.1 Byte-for-byte surfaces (every unit)
+
+Every surface below is held byte-for-byte **minus the §3.2 rows** — one exception list, uniformly, as the prompt goldens already read — so A7's new counters and F1's `.auto/run-events.jsonl` (both §3.2 rows) drift inside the contract, not against it.
+
 - The target file contract: `docs/T-NNN`, the indexes, `todo.md`→`done.md`, `.auto/units.json`, `progress.json`, `handover.json`, `windows.json`. Commit subjects, trailers and the commit sequence per scenario.
 - Rendered prompts (the goldens under `test/golden/`), exit codes, and the `AgentClient` call sequence per scenario (the native fake's `calls`).
 - The log lines tests assert. Under D, the whole log and vlog sequence of every turn-trace scenario (§3.3).
@@ -529,7 +532,7 @@ export type RunServices = {
 ### 5.1 The gate contract (R5)
 - **Unit gate:**
   - `bun typecheck` in `packages/auto-core` and `packages/auto`.
-  - `bun run test:gate` in `packages/auto-core`: the whole suite, failing above 30 s wall on the gate machine.
+  - `bun run test:gate` in `packages/auto-core`: the whole suite, failing above **baseline × 1.25** wall. The baseline is the suite's wall time recorded in the lane manifest — booked by A1, re-measured in F3 — so the budget is machine-independent (a changed gate host re-records its baseline); the absolute 30 s figure stays the gate-machine reference, not the rule. The `unit` lane (5 s) stays the dev-loop gate everywhere.
   - `bun test test/e2e.test.ts` in `packages/auto` when the unit touches a shell-visible export, the shell or a template.
   - The unit's own done-when checks (§6.3).
 - **Stage exit gate:**
@@ -542,7 +545,7 @@ export type RunServices = {
 - `test/lanes.ts` assigns each test file to `unit` or `repo`.
   - `repo`: the file creates a repository or spawns a process. In practice it imports `test/fixtures/runner.ts`'s repository helpers or calls `Bun.spawn`.
   - `unit`: everything else.
-- Budgets live in the manifest: `unit` 5 s; `gate` (both lanes) 30 s.
+- Budgets live in the manifest: `unit` 5 s (the dev-loop gate on every machine); `gate` (both lanes) baseline × 1.25, the baseline being the suite's wall time recorded by A1 and re-measured in F3 — machine-independent, with the absolute 30 s figure as the gate-machine reference only.
 - `test/lanes.test.ts` fails when a test file is missing from the manifest or listed twice, or when a listed file does not exist.
 - `script/test-lane.ts <unit|repo|gate>` runs `bun test` over the lane's files, prints the wall time and exits 1 over budget. The package scripts are `test:unit`, `test:repo` and `test:gate`; plain `bun test` still runs everything.
 - The shell's e2e is its own lane in `packages/auto`.
@@ -566,6 +569,7 @@ export type RunServices = {
 - A case moves when its unit extracts the mechanism it asserts, and the original is deleted in the same unit, so no case exists twice.
 - `watch.test.ts` and `session.test.ts` keep only cases about their entry behaviour (the spine's order, the ladder's composition).
 - `test/agent-fake.test.ts` is **not split.** It is the end-to-end layer, its roster depends on file order (F17), and new engine behaviour is tested in concern suites over a fake `TurnFx`, which is faster than a new agent-fake case (F16). The program adds agent-fake cases only where a unit changes end-to-end behaviour (A6's retirements delete some).
+- The per-policy call-coverage assertion of 0060 §6.2 no longer stands as written: it is **replaced by the concern suites over a fake `TurnFx`** — a concern's fx-call coverage is proven in its own suite over the fake, while agent-fake stays unsplit with the one file-level roster it has today (F17).
 - F3 audits for duplicates across `watch`, `session`, agent-fake and the concern suites, and deletes the duplicates.
 
 ## 6. Runbook
@@ -581,11 +585,13 @@ export type RunServices = {
    - Comments in code restate the reason; they do not point at this plan's unit ids.
 6. **Rollback:** each unit's commits can be reverted alone, in reverse order within its stage. No unit leaves a half-converted mechanism across units, and every compatibility layer of §4.11 closes inside its stated unit.
 
+The program is a feature freeze on the hold-listed files for its duration, and that calendar price is part of the approval.
+
 ### 6.2 Stages
 
 | stage | units | depends on | hold list | exit gate beyond §5.1 |
 |---|---|---|---|---|
-| A — prune and measure | A1–A7 | — | `refcheck`, `check`, `unit-commit`, `agents-block`, `switches`, `script`, `attempt` (A6), `watch` (A6), `exec-session` (A6) | zero SCCs; lanes in place; `gate` ≤ 30 s |
+| A — prune and measure | A1–A7 | — | `refcheck`, `check`, `unit-commit`, `agents-block`, `switches`, `script`, `attempt` (A6), `watch` (A6), `exec-session` (A6) | zero SCCs; lanes in place; `gate` within its §5.1 budget |
 | B — chain and ladder | B1–B5 | A | `chain`, `session`, `attempt`, `runner`, `execute`, `exec-session`, `session-api`, `artifact`, `unit-commit` | chain writes = 0 outside the transitions |
 | C — services | C1–C7 | B | `failback`, `keyring`, `classify`, `model-step`, `exit`, `routing`, `select`, `git`, `unit-commit`, `opts`, `loop-*`, `agent-pool`, `session`, `attempt` | services ratchets at target; no `reset*` for moved state |
 | D — turn engine | D0–D9 | C | `watch`, `attempt`, `testrun`, `usage`, `stuck`, `resolve`, `session-api`, `engine/*` | `remainder` gone; trace roster complete; traces unchanged |
@@ -608,7 +614,7 @@ Each unit lists its goal, its touch set, what is out of scope, its tests and its
 - Done-when:
   - No `unit`-lane test waits on a real timer longer than 50 ms.
   - The script and bin-check cases together take < 1.5 s.
-  - `test:gate` reports ≤ 25 s on the gate machine.
+  - `test:gate` reports ≤ 25 s on the gate machine, and the reported wall time is recorded as the `gate` baseline (§5.2).
 
 **A2 — Hygiene: the SCC, the direction test's holes, `SERVER`, stale texts.**
 - Goal:
@@ -751,12 +757,15 @@ Each unit lists its goal, its touch set, what is out of scope, its tests and its
   - `test/fixtures/turn-trace.ts` and `test/turn-trace.test.ts`, with traces under `test/golden/turn/` recorded from the unchanged `watch()`.
   - At least one scenario for each input kind, each row of §4.5, and each of today's return exits. This includes the test protocol at idle (run and feedback, a due handover with the freeze commit, a complete handoff, strict-resume invalid, a second retry blocking), a probe verdict while a human answer is pending, a classifier answer while retrying and after the stream ended, and the dual steer at one measurement point.
 - Touch: the new test files only.
-- Done-when: the oracle is green on the unchanged `watch()` and runs in < 2 s.
+- Done-when:
+  - The oracle is green on the unchanged `watch()` and runs in < 2 s.
+  - The race-dependent interleavings that exist today are enumerated — the known list: a held settle racing an already-queued external input, and a probe firing during an awaited fx call — and every oracle scenario that depends on one is either pinned by construction (its outcome made deterministic) or excluded from the oracle with the reason recorded. D0 confirms the list is complete.
 
 **D1 — The spine, the sources, the fx and `remainder`.**
 - Goal: §4.3–§4.4 in `src/engine/`. `watch()` builds `TurnContext` and runs the spine with the single `remainder` concern. The probe and the classifier answer become synthetic inputs. `test/turn-arbitration.test.ts` checks the table and the audit invariants (it includes a deliberately wrong concern that steers before `test` at idle and must throw).
+- Executed as two units: **D1a** installs the spine, the sources, the fx and the audit around the uncut loop body as the single handler — traces green, the queue discipline proven; **D1b** performs the cut into per-input handlers under `remainder` — traces green. Both halves carry D1's touch set and gate, and the unit id stays one.
 - Touch: the new `src/engine/contract.ts`, `spine.ts`, `fx.ts` and `sources.ts`, `src/watch.ts`, `test/import-direction.test.ts` (classification and rank) and the new `test/turn-arbitration.test.ts`.
-- Done-when: the traces are unchanged.
+- Done-when: the traces are unchanged (in D1a and again in D1b).
 
 **D2 — `guard`, `transcript`, `windows`, `stuck`.**
 - Touch: `src/engine/concerns/{guard,transcript,windows,stuck}.ts`, the spine table, `remainder`, the new concern suites, and the re-homed `watch.test.ts` cases.
@@ -836,7 +845,7 @@ Each unit lists its goal, its touch set, what is out of scope, its tests and its
 **F3 — The consolidation pass.**
 - Goal: the duplicate audit (§5.4), the final lane manifest and budget re-measurement, and the goldens and traces confirmed.
 - Touch: tests and `test/lanes.ts`.
-- Done-when: `gate` ≤ 30 s and `unit` ≤ 5 s on the gate machine.
+- Done-when: `gate` within its §5.1 budget, with the baseline re-measured and re-recorded here, and `unit` ≤ 5 s.
 
 **F4 — Close-out.**
 - Goal:
@@ -882,6 +891,15 @@ Each unit lists its goal, its touch set, what is out of scope, its tests and its
 
 ## 10. Implementation record
 
-None yet. Each unit appends one entry here: what landed, the tests, and any decision it had to take.
+**Adoption entry, 2026-09-28 (before A1).** The assessment of plans/0062 offered six amendments to this document (its §6); all six are adopted, none rejected. Each line carries the adopted text and the pointer to the section it changed:
+
+- **A-1** (before A1) — R5's gate budget is machine-independent: `test:gate` fails above baseline × 1.25, where the baseline is the suite's wall time recorded by A1 and re-measured in F3; the `unit` lane (5 s budget) stays the dev-loop gate everywhere; the absolute 30 s figure remains the gate-machine reference, not the rule. → §2.1 R5, §5.1, §5.2; conforming wording in §0, §6.2 (stage A exit), A1 and F3.
+- **A-2** (before D1) — D1 is executed as two units: D1a installs the spine, the sources, the fx and the audit around the uncut loop body as the single handler (traces green, queue discipline proven); D1b performs the cut into per-input handlers under `remainder` (traces green). → §6.3 D1.
+- **A-3** (before D0) — D0's done-when gains the enumerated list of race-dependent interleavings that exist today (a held settle racing a queued external input; a probe firing during an awaited fx call); each oracle scenario is either pinned by construction or excluded with the reason recorded. → §6.3 D0.
+- **A-4** (before A7) — §3.1 is stated uniformly as "byte-for-byte minus the §3.2 rows", as it already read for prompts, resolving the overlap with A7's counters and F1's state file. → §3.1.
+- **A-5** (before F3) — the per-policy call-coverage assertion of 0060 §6.2 is replaced by concern suites over a fake `TurnFx`; agent-fake stays unsplit. → §5.4.
+- **A-6** (program start) — the program is a feature freeze on the hold-listed files for its duration, and that calendar price is part of the approval. → §6.1.
+
+No unit has landed yet. Each unit appends one entry here: what landed, the tests, and any decision it had to take.
 
 <!-- auto: eof -->
