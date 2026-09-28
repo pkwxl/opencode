@@ -1,8 +1,8 @@
 // Unified commit after a session and execution-unit rollback: proxy-answer
-// marker collection, the commit gate and unit close-out check, the refcheck
-// hook-point gate, recovery fidelity (strict-resume activation check /
-// model-consistency evaluation), and the runner-side orchestration of the
-// rollback to the unit baseline. Design in plans/0021-commit-boundary-design.md
+// marker collection, the commit gate and unit close-out check, recovery
+// fidelity (strict-resume activation check / model-consistency evaluation),
+// and the runner-side orchestration of the rollback to the unit baseline.
+// Design in plans/0021-commit-boundary-design.md
 // and plans/0022-session-recovery-fidelity-design.md.
 // Sits below the session-driving layer: must not import session/watch/runner.
 // Split out of src/runner.ts (plans/0024-module-split-plan.md S3, pure move).
@@ -16,7 +16,6 @@ import { currentRound } from "./phases"
 import { candidateKey, nowOf, selectContext, type RoutingFacts } from "./routing"
 import { select } from "./select"
 import type { Task } from "./tasks"
-import { autoCorrectRefs } from "./refcheck"
 import { collectAgentResolves, resolvesOf, type ResolveItem } from "./resolve"
 import { saveProgress, type Phase, type Progress } from "./resume"
 import { autoSwitches, type ModelRole, type Switches } from "./switches"
@@ -34,8 +33,8 @@ import { autoSwitches, type ModelRole, type Switches } from "./switches"
 // on the session marking it); on, the question itself is a driver event and is
 // fully logged, so no marking is asked for, and the text never says AUTO-DECISION
 // so the session does not keep leaving marks out of habit.
-// Exported so tests drive both texts directly (same pattern as
-// gatedAutoCorrectRefs: a testable exit for internal wiring).
+// Exported so tests drive both texts directly (a testable exit for internal
+// wiring).
 export function autoAnswer(ask: boolean): string {
   const head =
     "This question was answered on the user's behalf: it was the user's call, but nobody is watching, so the driver closes it for them. " +
@@ -58,13 +57,9 @@ export function autoAnswer(ask: boolean): string {
 // src/git.ts): called once every session has ended and the driver finished
 // its state writes (ticks and the like), recursively committing all changes
 // — git history is the audit trail of AI changes, rollback granularity =
-// the session. Skipped under --commit false and dryrun.
-// Before the commit, auto-corrects references (stable-refs P4, D6 first
-// layer): rename pairs mechanically rewrite live-document references +
-// broken-reference ⚠ log (the rewrites land in this same unified commit, no
-// separate commit). Gated by OPENCODE_AUTO_REF_CHECK (refcheck-scope-design
-// D3, default off = no-op). Exported for unit tests (H4 guard: collection is
-// unaffected by the --commit false / dryrun early return).
+// the session. Skipped under --commit false and dryrun. Exported for unit
+// tests (H4 guard: the marker collection is unaffected by the --commit
+// false / dryrun early return).
 export async function afterSession(
   dir: string | undefined,
   opts: Opts,
@@ -83,7 +78,6 @@ export async function afterSession(
   // AUTO-DECISION only returns a count.
   await collectSessionMarks(dir, opts, task, info.stage)
   if (opts.commit === false || opts.dryrun) return { type: "ok" }
-  await gatedAutoCorrectRefs(dir, autoSwitches().refCheck)
   const result = await commitTree(dir, task, info)
   if (!result.ok) {
     return {
@@ -141,17 +135,6 @@ async function collectSessionMarks(
 // exit codes.
 export async function wrapupResolves(dir: string | undefined, taskID: string): Promise<ResolveItem[]> {
   return await resolvesOf(dir, "task", taskID).catch(() => [])
-}
-
-// The refcheck hook-point gate (refcheck-scope-design D3,
-// OPENCODE_AUTO_REF_CHECK defaults to off): off makes the pre-commit
-// auto-correct idle — zero reference-check behavior in the target directory;
-// the check subcommand's reference-scan section is gated the same way in
-// check.ts; the script/fix-refs.ts manual script bypasses the gate (a human
-// executing it explicitly is equivalent to enabling it explicitly). Exported
-// for unit tests (parseSwitches pure-function injection).
-export async function gatedAutoCorrectRefs(dir: string, on: boolean): Promise<void> {
-  if (on) await autoCorrectRefs(dir)
 }
 
 // —— Recovery fidelity (plans/0022-session-recovery-fidelity-design.md, OPENCODE_AUTO_STRICT_RESUME) ——

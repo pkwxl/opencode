@@ -229,7 +229,7 @@ describe("collectAgentResolves", () => {
       join(dir, "note.md"),
       ["# report", "", "- AUTO-RESOLVE: should we fold it in -> fold it in (same layer)", "- AUTO-DECISION: name the field matched (consistent with the schema)", ""].join("\n"),
     )
-    await writeFile(join(dir, "code.ts"), "// AUTO-DECISION: scan line by line with a regex (same order of cost as refcheck)\n")
+    await writeFile(join(dir, "code.ts"), "// AUTO-DECISION: scan line by line with a regex (same order of cost as a single pass)\n")
     const counts = await collectAgentResolves(dir, { task: "T-001", phase: "m", round: 1 })
     expect(counts).toEqual({ resolves: 1, decisions: 2 })
     const items = await readItems()
@@ -377,7 +377,7 @@ describe("AUTO-DECISION counting", () => {
       [
         "AUTO-RESOLVE: narrow the scope -> no (the plan already fixes it)",
         "AUTO-DECISION: name the new field matched (same word as the schema comment)",
-        "AUTO-DECISION: scan line by line with a regex (same order of cost as refcheck)",
+        "AUTO-DECISION: scan line by line with a regex (same order of cost as a single pass)",
       ].join("\n"),
     )
     expect(await collectAgentResolves(dir, { task: "T-007", phase: "m", round: 1 })).toEqual({

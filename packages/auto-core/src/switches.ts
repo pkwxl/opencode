@@ -20,7 +20,6 @@ export const SWITCH_ENV = {
   fine: "OPENCODE_AUTO_DECOMPOSE_FINE",
   steer: "OPENCODE_AUTO_STEER",
   step: "OPENCODE_AUTO_STEP",
-  refCheck: "OPENCODE_AUTO_REF_CHECK",
   reuseSession: "OPENCODE_AUTO_REUSE_SESSION",
   stuck: "OPENCODE_AUTO_STUCK",
   taskContext: "OPENCODE_AUTO_TASK_CONTEXT",
@@ -49,6 +48,27 @@ export const SWITCH_ENV = {
   // registry).
   server: "OPENCODE_AUTO_SERVER",
 } as const
+
+// The retired-switch registry: OPENCODE_AUTO_* variables whose mechanism was
+// removed. A set variable (the empty string counts as unset, like every
+// switch) prints one notice line at run start and changes nothing — a
+// notice, never a usage error: switches are per-run experiments read from
+// the environment, and a stale shell profile should not cost an unattended
+// run. Entries are never removed again; the notice is the contract.
+export const RETIRED_SWITCHES: Readonly<Record<string, string>> = {
+  // refcheck's master switch: the reference checker (the pre-commit
+  // reference auto-correct and the check subcommand's reference scan) was
+  // removed, so the variable no longer has anything to gate.
+  OPENCODE_AUTO_REF_CHECK: "the reference check was removed",
+}
+
+// The notice lines the retired switches produce for an environment (pure;
+// autoSwitches logs them at the run's first parse, beside the switch lines).
+export function retiredSwitchNotes(env: Record<string, string | undefined>): string[] {
+  return Object.entries(RETIRED_SWITCHES)
+    .filter(([name]) => env[name] !== undefined && env[name] !== "")
+    .map(([name, reason]) => `⚠ ${name} is retired (${reason}); the variable is ignored`)
+}
 
 // Step mode (OPENCODE_AUTO_STEP) value domain: off never pauses; phase/task/subtask are
 // inclusive granularities — the chosen value and every coarser boundary all pause
@@ -188,11 +208,6 @@ export type Switches = {
   // Step mode: phase/task/subtask hard-pause at the matching (and coarser) boundaries,
   // waiting for Enter to proceed.
   step: StepMode
-  // Refcheck master switch (refcheck-scope-design D3, default off): with off both hook
-  // points (pre-commit auto-correct, the check reference scan) idle entirely and the
-  // target directory gets zero reference-check behavior; the manual fix-refs script is
-  // unconstrained (a person running it explicitly equals explicitly enabling it).
-  refCheck: boolean
   // Session-chain reuse master switch (default off): off = every prompt within a task
   // opens a new session (the chain keeps only the previous session's usage for logging
   // and the handover decision), the threshold rules (REUSE_BELOW / half of cap /
@@ -298,7 +313,6 @@ const SWITCH_DEFAULTS: Switches = {
   fine: false,
   steer: true,
   step: "off",
-  refCheck: false,
   reuseSession: false,
   stuck: true,
   taskContext: "off",
@@ -527,7 +541,6 @@ export function parseSwitches(env: Record<string, string | undefined>, registry?
     fine: onOff(SWITCH_ENV.fine, env[SWITCH_ENV.fine], SWITCH_DEFAULTS.fine),
     steer: onOff(SWITCH_ENV.steer, env[SWITCH_ENV.steer], SWITCH_DEFAULTS.steer),
     step: step as StepMode,
-    refCheck: onOff(SWITCH_ENV.refCheck, env[SWITCH_ENV.refCheck], SWITCH_DEFAULTS.refCheck),
     reuseSession: onOff(SWITCH_ENV.reuseSession, env[SWITCH_ENV.reuseSession], SWITCH_DEFAULTS.reuseSession),
     stuck: onOff(SWITCH_ENV.stuck, env[SWITCH_ENV.stuck], SWITCH_DEFAULTS.stuck),
     taskContext: taskContext as TaskContextMode,
@@ -561,7 +574,6 @@ export function nonDefaultSwitches(switches: Switches, env: Record<string, strin
     switches.fine === SWITCH_DEFAULTS.fine ? undefined : `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     switches.steer === SWITCH_DEFAULTS.steer ? undefined : `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     switches.step === SWITCH_DEFAULTS.step ? undefined : `${SWITCH_ENV.step}=${switches.step}`,
-    switches.refCheck === SWITCH_DEFAULTS.refCheck ? undefined : `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
     switches.reuseSession === SWITCH_DEFAULTS.reuseSession ? undefined : `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     switches.stuck === SWITCH_DEFAULTS.stuck ? undefined : `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     switches.taskContext === SWITCH_DEFAULTS.taskContext ? undefined : `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
@@ -596,7 +608,6 @@ export function formatSwitches(switches: Switches): string {
     `${SWITCH_ENV.fine}=${switches.fine ? "on" : "off"}`,
     `${SWITCH_ENV.steer}=${switches.steer ? "on" : "off"}`,
     `${SWITCH_ENV.step}=${switches.step}`,
-    `${SWITCH_ENV.refCheck}=${switches.refCheck ? "on" : "off"}`,
     `${SWITCH_ENV.reuseSession}=${switches.reuseSession ? "on" : "off"}`,
     `${SWITCH_ENV.stuck}=${switches.stuck ? "on" : "off"}`,
     `${SWITCH_ENV.taskContext}=${switches.taskContext}`,
@@ -637,14 +648,16 @@ export function setSwitchModelRegistry(registry: SwitchModelRegistry | undefined
 // Runtime switch access (memoized once, consistent across the whole pipeline): the
 // first call parses process.env — an invalid value throws there, and the outermost
 // caller (the CLI) turns it into exit code 1; it also lists the non-default effective
-// items in the startup log (default combination silent, verbose shows the full set).
-// Afterwards it always returns the same object.
+// items in the startup log (default combination silent, verbose shows the full set)
+// and the notices of any set retired variables (never an error, see
+// RETIRED_SWITCHES). Afterwards it always returns the same object.
 export function autoSwitches(): Switches {
   if (memo) return memo
   memo = parseSwitches(process.env, modelRegistry)
   const changed = nonDefaultSwitches(memo)
   if (changed) log(`⚙ experimental switches (OPENCODE_AUTO_* env vars, this run only): ${changed}`)
   vlog(`⚙ experimental switches (full): ${formatSwitches(memo)}`)
+  for (const note of retiredSwitchNotes(process.env)) log(note)
   return memo
 }
 

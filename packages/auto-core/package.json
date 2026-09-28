@@ -13,8 +13,7 @@
     "test": "bun test",
     "test:unit": "bun ./script/test-lane.ts unit",
     "test:repo": "bun ./script/test-lane.ts repo",
-    "test:gate": "bun ./script/test-lane.ts gate",
-    "fix-refs": "bun ./script/fix-refs.ts"
+    "test:gate": "bun ./script/test-lane.ts gate"
   },
   "dependencies": { "@opencode-ai/sdk": "workspace:*" },
   "devDependencies": {

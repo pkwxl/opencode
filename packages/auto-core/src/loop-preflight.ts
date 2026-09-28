@@ -273,6 +273,10 @@ export async function preflight(
   // of the start gate, whose carryover commits the deletion as a driver write
   // (git.ts DRIVER_STATE). Any other CURRENT.md belongs to the project.
   if (!opts.dryrun && (await removeRetiredCurrent(directory))) log("removed: CURRENT.md (task mirror retired; an earlier release wrote it)")
+  // The retired reference checker's stale-reference list: a
+  // .auto/invalid-refs.md an earlier release left is removed the same way
+  // (see removeRetiredInvalidRefs below).
+  if (!opts.dryrun && (await removeRetiredInvalidRefs(directory))) log("removed: .auto/invalid-refs.md (refcheck retired; an earlier release wrote it)")
   // the start clean gate (plans/0021-commit-boundary-design.md P3): with
   // committing enabled the worktree must be clean — everything the execution
   // units after it (task/subtask/hidden task) depend on is fixed by the
@@ -425,6 +429,18 @@ export async function removeRetiredCurrent(dir: string): Promise<boolean> {
   const file = join(dir, "CURRENT.md")
   const text = await Bun.file(file).text().catch(() => undefined)
   if (text?.split("\n")[0] !== RETIRED_CURRENT_HEADER) return false
+  await rm(file, { force: true })
+  return true
+}
+
+// Removes the retired reference checker's stale-reference list
+// (.auto/invalid-refs.md) when an earlier release left one; returns whether
+// it did. Unlike CURRENT.md there is no header check — the file lives inside
+// the driver's own gitignored state directory, so any instance of it is
+// ours — and the deletion rides no commit (.auto/ never enters git).
+export async function removeRetiredInvalidRefs(dir: string): Promise<boolean> {
+  const file = join(dir, ".auto", "invalid-refs.md")
+  if (!(await Bun.file(file).exists())) return false
   await rm(file, { force: true })
   return true
 }

@@ -2,8 +2,6 @@ import { join } from "node:path"
 import { LEGACY_BLOCK, renderAgentsBlock } from "./agents-block"
 import { loadProjectConfig } from "./config"
 import { fixHint } from "./config-fix"
-import { activeDocs, gitAvailable, scanRefs, type RefFinding } from "./refcheck"
-import { autoSwitches, type Switches } from "./switches"
 
 // check command's checking logic: ① principle check — scans the target
 // directory's AGENTS.md and the task documents of unfinished tasks
@@ -19,17 +17,19 @@ import { autoSwitches, type Switches } from "./switches"
 // config.testByDriver is enabled (when disabled, the block comparison is also
 // rendered as disabled — block presence is unaffected); the commit principle
 // always holds.
-// ② reference check (stable-refs P4, D6 second layer): scans all live
-// documents (docs/**/*.md) for broken references (path does not exist / line
-// number exceeds the file's total lines); hits go through refs into the CLI
-// report (exit code 1); a target directory missing the opencode-auto block,
-// or non-git (auto-correct unavailable), gets a note. Controlled by
-// OPENCODE_AUTO_REF_CHECK (refcheck-scope-design D3, default off silently
-// no-ops: refs stays empty, no reference-related notes).
+// ② the reference scan over the live documents was removed together with the
+// reference checker (its existence-and-line-cap layer, the pre-commit
+// auto-correct and the stale list). The refs field stays in the result,
+// always empty, until the check command itself retires, so the shell's
+// report and its exit-code logic keep compiling unchanged.
 
 // One violating description: file, line number, original text (task
 // documents carry the task id).
 export type Finding = { file: string; task?: string; line: number; text: string }
+
+// The retired reference-scan layer's finding shape (kept only so the result
+// and the shell's report keep their field; always an empty list now).
+export type RefFinding = { file: string; line: number; text: string; path: string; problem: "missing" | "beyond-eof" }
 
 // The driver-maintained opencode-auto block in AGENTS.md (the single marker
 // block `opencode-auto:start`, plus possibly leftover legacy named blocks) is
@@ -60,10 +60,7 @@ const COMMIT_PATTERNS: RegExp[] = [
   /(?<!\b(?:a|an|the|this|that|each|every|one)\s)\bcommits?\s+(?:(?:all|every|any|the|your|these|those)\s+)?(?:(?:uncommitted|pending|outstanding)\s+)?(?:changes?|modifications?|code|work)\b/i,
 ]
 
-export async function checkPrinciple(
-  dir: string,
-  switches: Switches = autoSwitches(),
-): Promise<{ findings: Finding[]; notes: string[]; refs: RefFinding[]; testOn: boolean }> {
+export async function checkPrinciple(dir: string): Promise<{ findings: Finding[]; notes: string[]; refs: RefFinding[]; testOn: boolean }> {
   const findings: Finding[] = []
   const notes: string[] = []
   let testOn = false
@@ -109,18 +106,9 @@ export async function checkPrinciple(
       }
     }
   }
-  // Reference check (P4): scan and emit notes only when live documents exist
-  // (a directory without docs/ has no object for the reference mechanism yet).
-  // With OPENCODE_AUTO_REF_CHECK=off (default) the whole section no-ops —
-  // silent; verbose shows the full switch set.
-  let refs: RefFinding[] = []
-  if (switches.refCheck) {
-    const docs = await activeDocs(dir)
-    refs = docs.length ? await scanRefs(dir, docs) : []
-    if (docs.length && !(await gitAvailable(dir))) {
-      notes.push("non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates")
-    }
-  }
+  // The retired reference-scan layer's slot: always empty now (see the file
+  // header).
+  const refs: RefFinding[] = []
   return { findings, notes, refs, testOn }
 }
 

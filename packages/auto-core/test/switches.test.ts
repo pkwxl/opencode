@@ -1,10 +1,12 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
 import {
   autoSwitches,
   formatSwitches,
   modelTypeProblems,
   nonDefaultSwitches,
   parseSwitches,
+  RETIRED_SWITCHES,
+  retiredSwitchNotes,
   setSwitchModelRegistry,
   SWITCH_ENV,
   type SwitchModelRegistry,
@@ -23,14 +25,13 @@ afterAll(() => {
 })
 
 describe("parseSwitches (the experiment-switch environment layer)", () => {
-  test("default combination: everything unset takes the defaults (fork on / digest / fine off / steer on / step off / refCheck off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate unset)", () => {
+  test("default combination: everything unset takes the defaults (fork on / digest / fine off / steer on / step off / reuseSession off / stuck on / taskContext off / ask off / model off / strictResume off / handoverConcurrent off / hibernate unset)", () => {
     expect(parseSwitches({})).toEqual({
       fork: true,
       forkBase: "digest",
       fine: false,
       steer: true,
       step: "off",
-      refCheck: false,
       reuseSession: false,
       stuck: true,
       taskContext: "off",
@@ -46,7 +47,7 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
     })
   })
 
-  test("an empty string counts as unset (all nineteen variables tested together)", () => {
+  test("an empty string counts as unset (all eighteen variables tested together)", () => {
     expect(
       parseSwitches({
         [SWITCH_ENV.fork]: "",
@@ -54,7 +55,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.fine]: "",
         [SWITCH_ENV.steer]: "",
         [SWITCH_ENV.step]: "",
-        [SWITCH_ENV.refCheck]: "",
         [SWITCH_ENV.reuseSession]: "",
         [SWITCH_ENV.stuck]: "",
         [SWITCH_ENV.taskContext]: "",
@@ -75,7 +75,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       fine: false,
       steer: true,
       step: "off",
-      refCheck: false,
       reuseSession: false,
       stuck: true,
       taskContext: "off",
@@ -99,7 +98,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.fine]: "on",
         [SWITCH_ENV.steer]: "on",
         [SWITCH_ENV.step]: "subtask",
-        [SWITCH_ENV.refCheck]: "on",
         [SWITCH_ENV.reuseSession]: "on",
         [SWITCH_ENV.stuck]: "off",
         [SWITCH_ENV.taskContext]: "large",
@@ -118,7 +116,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
       fine: true,
       steer: true,
       step: "subtask",
-      refCheck: true,
       reuseSession: true,
       stuck: false,
       taskContext: "large",
@@ -142,7 +139,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
         [SWITCH_ENV.fine]: "off",
         [SWITCH_ENV.forkBase]: "digest",
         [SWITCH_ENV.step]: "off",
-        [SWITCH_ENV.refCheck]: "off",
         [SWITCH_ENV.reuseSession]: "off",
         [SWITCH_ENV.stuck]: "on",
         [SWITCH_ENV.taskContext]: "off",
@@ -241,8 +237,6 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
     expect(() => parseSwitches({ [SWITCH_ENV.steer]: "disable" })).toThrow(/OPENCODE_AUTO_STEER/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "step" })).toThrow(/OPENCODE_AUTO_STEP/)
     expect(() => parseSwitches({ [SWITCH_ENV.step]: "Step" })).toThrow(/off\|phase\|task\|subtask/)
-    expect(() => parseSwitches({ [SWITCH_ENV.refCheck]: "1" })).toThrow(/OPENCODE_AUTO_REF_CHECK/)
-    expect(() => parseSwitches({ [SWITCH_ENV.refCheck]: "1" })).toThrow(/default off/)
     expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/OPENCODE_AUTO_REUSE_SESSION/)
     expect(() => parseSwitches({ [SWITCH_ENV.reuseSession]: "1" })).toThrow(/default off/)
     expect(() => parseSwitches({ [SWITCH_ENV.stuck]: "1" })).toThrow(/OPENCODE_AUTO_STUCK/)
@@ -342,11 +336,11 @@ describe("parseSwitches (the experiment-switch environment layer)", () => {
 })
 
 describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
-  test("the default combination is silent: non-default items undefined; the full listing names all nineteen", () => {
+  test("the default combination is silent: non-default items undefined; the full listing names all eighteen", () => {
     const defaults = parseSwitches({})
     expect(nonDefaultSwitches(defaults)).toBeUndefined()
     expect(formatSwitches(defaults)).toBe(
-      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
+      "OPENCODE_AUTO_FORK=on, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=off, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
     )
   })
 
@@ -354,14 +348,12 @@ describe("nonDefaultSwitches / formatSwitches (the startup log)", () => {
     const changed = parseSwitches({ [SWITCH_ENV.fork]: "off", [SWITCH_ENV.fine]: "on" })
     expect(nonDefaultSwitches(changed)).toBe("OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_DECOMPOSE_FINE=on")
     expect(formatSwitches(changed)).toBe(
-      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REF_CHECK=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
+      "OPENCODE_AUTO_FORK=off, OPENCODE_AUTO_FORK_BASE=digest, OPENCODE_AUTO_DECOMPOSE_FINE=on, OPENCODE_AUTO_STEER=on, OPENCODE_AUTO_STEP=off, OPENCODE_AUTO_REUSE_SESSION=off, OPENCODE_AUTO_STUCK=on, OPENCODE_AUTO_TASK_CONTEXT=off, OPENCODE_AUTO_ASK=off, OPENCODE_AUTO_MODEL=, OPENCODE_AUTO_MODEL_FALLBACK=, OPENCODE_AUTO_MODEL_FAILBACK_SCOPE=task, OPENCODE_AUTO_RETRY_WAITS=0,1,2,4,8, OPENCODE_AUTO_RECOVERY_WAIT=30, OPENCODE_AUTO_STRICT_RESUME=off, OPENCODE_AUTO_HANDOVER_CONCURRENT=off, OPENCODE_AUTO_HIBERNATE=, OPENCODE_AUTO_AGENT=",
     )
     const all = parseSwitches({ [SWITCH_ENV.forkBase]: "session", [SWITCH_ENV.steer]: "off" })
     expect(nonDefaultSwitches(all)).toBe("OPENCODE_AUTO_FORK_BASE=session, OPENCODE_AUTO_STEER=off")
     const stepped = parseSwitches({ [SWITCH_ENV.step]: "task" })
     expect(nonDefaultSwitches(stepped)).toBe("OPENCODE_AUTO_STEP=task")
-    const refChecked = parseSwitches({ [SWITCH_ENV.refCheck]: "on" })
-    expect(nonDefaultSwitches(refChecked)).toBe("OPENCODE_AUTO_REF_CHECK=on")
     const reused = parseSwitches({ [SWITCH_ENV.reuseSession]: "on" })
     expect(nonDefaultSwitches(reused)).toBe("OPENCODE_AUTO_REUSE_SESSION=on")
     const unstuck = parseSwitches({ [SWITCH_ENV.stuck]: "off" })
@@ -486,6 +478,51 @@ describe("model values under a model registry (plans/0055 §9 R7)", () => {
       setSwitchModelRegistry(undefined)
     }
     expect(autoSwitches().model).toEqual({ byLetter: {}, byType: {}, byRole: {}, fallback: [] })
+  })
+})
+
+describe("the retired-switch registry (a removed mechanism's variable)", () => {
+  const NAME = "OPENCODE_AUTO_REF_CHECK"
+
+  test("the variable no longer parses: parseSwitches ignores it and the switch lines never list it", () => {
+    const withRetired = parseSwitches({ [NAME]: "on" })
+    expect(withRetired).toEqual(parseSwitches({}))
+    expect(nonDefaultSwitches(withRetired)).toBeUndefined()
+    expect(formatSwitches(withRetired)).toBe(formatSwitches(parseSwitches({})))
+    expect(formatSwitches(withRetired)).not.toContain(NAME)
+  })
+
+  test("a set variable produces exactly one notice line; unset and empty stay silent", () => {
+    expect(RETIRED_SWITCHES[NAME]).toBe("the reference check was removed")
+    const note = `⚠ ${NAME} is retired (the reference check was removed); the variable is ignored`
+    expect(retiredSwitchNotes({ [NAME]: "on" })).toEqual([note])
+    // even a value the live grammar would have refused: the notice replaces the error
+    expect(retiredSwitchNotes({ [NAME]: "1" })).toEqual([note])
+    expect(retiredSwitchNotes({})).toEqual([])
+    expect(retiredSwitchNotes({ [NAME]: "" })).toEqual([])
+  })
+
+  test("autoSwitches prints the notice at the parse, beside the switch lines", () => {
+    // Force a re-parse (the memo is process state) and scrub the ambient
+    // OPENCODE_AUTO_* layer so the ⚙ line cannot join the capture.
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    process.env[NAME] = "on"
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    const registry: SwitchModelRegistry = { names: new Set(["opus"]), tiers: "deep: opus" }
+    try {
+      setSwitchModelRegistry(registry)
+      autoSwitches()
+    } finally {
+      printed.mockRestore()
+      delete process.env[NAME]
+      setSwitchModelRegistry(undefined)
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+    }
+    expect(lines).toEqual([`⚠ ${NAME} is retired (the reference check was removed); the variable is ignored`])
   })
 })
 

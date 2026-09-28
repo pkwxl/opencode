@@ -5,12 +5,6 @@ import { join } from "node:path"
 import { renderAgentsBlock } from "../src/agents-block"
 import { checkPrinciple } from "../src/check"
 import { ensurePointer } from "../src/agents-block"
-import { parseSwitches, SWITCH_ENV } from "../src/switches"
-
-// The refcheck switch (refcheck-scope-design D3): the reference-check hook-point
-// tests run with the switch injected on (parseSwitches as a pure-function
-// injection, bypassing the environment-variable memo).
-const REFCHECK_ON = parseSwitches({ [SWITCH_ENV.refCheck]: "on" })
 
 describe("checkPrinciple", () => {
   test("testByDriver on: flags descriptions asking the session itself to run compile/test/build/lint; not checked when off", async () => {
@@ -206,91 +200,11 @@ describe("checkPrinciple", () => {
       // both disabled), to avoid tripping the extra stale-content note.
       const content = ["# AGENTS.md", "", renderAgentsBlock(), "", filler, ""].join("\n")
       await Bun.write(join(dir, "AGENTS.md"), content)
-      const { findings, notes } = await checkPrinciple(dir)
-      expect(findings).toEqual([])
-      expect(notes).toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("checkPrinciple reference check (stable-refs P4)", () => {
-  test("broken references in live documents go to refs; a non-git directory gets the auto-correct-unavailable note", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
-    try {
-      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: Task\n\nImplement the feature.\n")
-      await Bun.write(join(dir, "docs/T-001/report.md"), "Reference `src/gone.ts`.\nLine with a deleted marker exempts `docs/old.md`.\n")
-      const { findings, notes, refs } = await checkPrinciple(dir, REFCHECK_ON)
-      expect(findings).toEqual([])
-      expect(refs).toEqual([
-        { file: "docs/T-001/report.md", line: 1, text: "Reference `src/gone.ts`.", path: "src/gone.ts", problem: "missing" },
-      ])
-      expect(notes).toEqual([
-        "AGENTS.md does not exist, run opencode-auto fix " + dir + " to add the opencode-auto block",
-        "non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates",
-      ])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("a line number past the file's total counts as beyond-eof; without docs/ nothing is scanned and there is no non-git note", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
-    try {
-      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: Task\n\nImplement the feature.\n")
-      await Bun.write(join(dir, "src/mod.ts"), "l1\nl2\n")
-      await Bun.write(join(dir, "docs/live.md"), "See `src/mod.ts:99`.\n")
-      const first = await checkPrinciple(dir, REFCHECK_ON)
-      expect(first.refs).toEqual([{ file: "docs/live.md", line: 1, text: "See `src/mod.ts:99`.", path: "src/mod.ts", problem: "beyond-eof" }])
-      // docs present but not git → the auto-correct-unavailable note
-      expect(first.notes).toContain("non-git target directory: pre-commit reference auto-correct (rename rewrite) unavailable, reference check only validates")
-      // with docs/ removed: no refs, no non-git note
-      await rm(join(dir, "docs"), { recursive: true, force: true })
-      const second = await checkPrinciple(dir, REFCHECK_ON)
-      expect(second.refs).toEqual([])
-      expect(second.notes.every((note) => !note.includes("non-git"))).toBe(true)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("inside a git repository there is no non-git note; the opencode-auto block note disappears after init back-fills it", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
-    try {
-      await mkdir(join(dir, ".opencode/auto"), { recursive: true })
-      await Bun.write(join(dir, ".opencode/auto/config.json"), JSON.stringify({}))
-      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: Task\n\nImplement the feature.\n")
-      await Bun.write(join(dir, "AGENTS.md"), "# AGENTS.md\n")
-      await Bun.write(join(dir, "docs/ok.md"), "Reference `docs/T-001/todo.md`.\n")
-      const proc = Bun.spawn(["git", "-C", dir, "init", "-q"], { stdout: "ignore", stderr: "ignore" })
-      await proc.exited
-      const before = await checkPrinciple(dir, REFCHECK_ON)
-      expect(before.refs).toEqual([])
-      expect(before.notes).toEqual(["AGENTS.md is missing the opencode-auto block, run opencode-auto fix to add it"])
-      await ensurePointer(dir)
-      const after = await checkPrinciple(dir, REFCHECK_ON)
-      expect(after.refs).toEqual([])
-      expect(after.notes).toEqual([])
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("off by default (refcheck-scope D3): the reference check no-ops — refs always empty, no non-git note, zero changes in the target directory", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "auto-check-"))
-    try {
-      await Bun.write(join(dir, "docs/T-001/todo.md"), "# T-001: Task\n\nImplement the feature.\n")
-      await Bun.write(join(dir, "docs/live.md"), "Reference `docs/gone.md`.\n")
-      const before = await Bun.file(join(dir, "docs/live.md")).text()
-      // the default switches (autoSwitches reads process.env, unset in the test environment → refCheck=off)
       const { findings, notes, refs } = await checkPrinciple(dir)
       expect(findings).toEqual([])
+      expect(notes).toEqual([])
+      // the retired reference-scan layer's slot stays in the result, always empty
       expect(refs).toEqual([])
-      expect(notes.every((note) => !note.includes("non-git"))).toBe(true)
-      // zero reference-check behavior: documents untouched, no invalid-ref list produced
-      expect(await Bun.file(join(dir, "docs/live.md")).text()).toBe(before)
-      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

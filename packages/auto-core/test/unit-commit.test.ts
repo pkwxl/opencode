@@ -1,5 +1,5 @@
-// Unit tests for src/unit-commit.ts: the refcheck hook-point gate
-// (gatedAutoCorrectRefs) and the afterSession completion-condition gate.
+// Unit tests for src/unit-commit.ts: the afterSession completion-condition
+// gate, the strict-resume model checks and the unit rollback orchestration.
 // Split out of test/runner.test.ts (plans/0024-module-split-plan.md S18, pure
 // move).
 
@@ -11,48 +11,8 @@ import { clearSticky, markModelDown, resetFailback } from "../src/failback"
 import { commitTree, unitBaseline } from "../src/git"
 import { recallHandover, saveHandover } from "../src/handover"
 import { parseSwitches, SWITCH_ENV } from "../src/switches"
-import { afterSession, deadSessionWhy, gatedAutoCorrectRefs, recordedAgentOk, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
-import { git, freshRepo, task } from "./fixtures/runner"
-
-// ---- refcheck hook-point gate (refcheck-scope-design D3, OPENCODE_AUTO_REF_CHECK defaults off) ----
-
-describe("gatedAutoCorrectRefs (the OPENCODE_AUTO_REF_CHECK hook-point gate)", () => {
-  test("off (default): auto-correct is a no-op before committing, zero reference-check behavior in the target directory", async () => {
-    const dir = await freshRepo()
-    try {
-      await Bun.write(join(dir, "src/old.ts"), "code\n")
-      await Bun.write(join(dir, "docs/T-001/report.md"), "See `src/old.ts` and `docs/gone.md`.\n")
-      await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "init")
-      // The move happens before the commit (a rename pairing is available),
-      // but while off nothing may be rewritten
-      await Bun.spawn(["mv", join(dir, "src/old.ts"), join(dir, "src/new.ts")]).exited
-      const before = await Bun.file(join(dir, "docs/T-001/report.md")).text()
-      await gatedAutoCorrectRefs(dir, false)
-      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe(before)
-      // No stale-reference scan, no invalid list written
-      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("on: auto-correct rewrites by the rename pairing and writes the invalid list", async () => {
-    const dir = await freshRepo()
-    try {
-      await Bun.write(join(dir, "src/old.ts"), "code\n")
-      await Bun.write(join(dir, "docs/T-001/report.md"), "See `src/old.ts` and `docs/gone.md`.\n")
-      await git(dir, "add", "-A")
-      await git(dir, "commit", "-qm", "init")
-      await Bun.spawn(["mv", join(dir, "src/old.ts"), join(dir, "src/new.ts")]).exited
-      await gatedAutoCorrectRefs(dir, true)
-      expect(await Bun.file(join(dir, "docs/T-001/report.md")).text()).toBe("See `src/new.ts` and `docs/gone.md`.\n")
-      expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(true)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-})
+import { afterSession, deadSessionWhy, recordedAgentOk, resumeModelEligible, resumeModelNow, rollbackUnitState } from "../src/unit-commit"
+import { freshRepo, task } from "./fixtures/runner"
 
 describe("afterSession completion-condition gate (plans/0021-commit-boundary-design.md)", () => {
   test("a commit failure (pre-commit rejects) → failed with the problem text; gate off (--commit false) → ok", async () => {

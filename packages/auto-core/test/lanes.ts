@@ -43,7 +43,6 @@ export const REPO_LANE: readonly string[] = [
   "test/plan-input.test.ts",
   "test/plan-loop.test.ts",
   "test/plan.test.ts",
-  "test/refcheck.test.ts",
   "test/reset.test.ts",
   "test/resolve.test.ts",
   "test/round-gates.test.ts",

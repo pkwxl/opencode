@@ -1,7 +1,9 @@
 // Preflight's cleanup of the retired task mirror (plans/0054 D4): a CURRENT.md
 // an earlier release left is recognised by its fixed header and deleted, and
 // the deletion rides the start gate's carryover commit; any other CURRENT.md
-// belongs to the project.
+// belongs to the project. The retired reference checker's stale-reference
+// list (.auto/invalid-refs.md) is cleaned up the same way, except no commit
+// rides it (.auto/ is the driver's own gitignored state directory).
 // The run-start load of the model registry (plans/0055 §4.1, §4.3): a project
 // layer git does not ignore, a strict failure and a broken reference each exit
 // 1 naming the cause; with no registry preflight is unchanged. The operator
@@ -13,7 +15,7 @@ import { dirname, join } from "node:path"
 import { ensurePointer } from "../src/agents-block"
 import { renderAgentContract } from "../src/config-fix"
 import { beginUnit, changedFiles } from "../src/git"
-import { preflight, removeRetiredCurrent, type RunAllOpts } from "../src/loop-preflight"
+import { preflight, removeRetiredCurrent, removeRetiredInvalidRefs, type RunAllOpts } from "../src/loop-preflight"
 import { MODELS_FILE } from "../src/models"
 import { unprotect } from "../src/protect"
 import { flushStats } from "../src/stats"
@@ -65,6 +67,51 @@ describe("removeRetiredCurrent (plans/0054 D4)", () => {
   test("no CURRENT.md: nothing to do", async () => {
     const dir = await repo({})
     expect(await removeRetiredCurrent(dir)).toBe(false)
+  })
+})
+
+describe("removeRetiredInvalidRefs (the retired reference checker's stale list)", () => {
+  test("no leftover: nothing to do", async () => {
+    const dir = await repo({})
+    expect(await removeRetiredInvalidRefs(dir)).toBe(false)
+  })
+
+  test("a leftover .auto/invalid-refs.md is deleted at run start with one log line", async () => {
+    // An initialized, committed project (the agent contract, the AGENTS.md
+    // block and the run-time .gitignore entries in place) so a passing
+    // preflight logs nothing but the removal.
+    const dir = await repo({})
+    await Bun.write(join(dir, ".gitignore"), "tmp/\n.auto/\n")
+    await Bun.write(join(dir, ".opencode/agent/auto.md"), await renderAgentContract(false))
+    await ensurePointer(dir)
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-qm", "init")
+    await Bun.write(join(dir, ".auto/invalid-refs.md"), "# Stale references\n- docs/T-001/report.md → src/gone.ts(missing)\n")
+    // The ambient OPENCODE_AUTO_* layer is scrubbed for the call (its startup
+    // line would otherwise join the captured lines); restored after.
+    const ambient = Object.entries(process.env).filter(([key]) => key.startsWith("OPENCODE_AUTO_"))
+    for (const [key] of ambient) delete process.env[key]
+    const lines: string[] = []
+    const printed = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "))
+    })
+    try {
+      const result = await preflight(dir, {})
+      if (!("exit" in result)) {
+        result.progress.close()
+        result.watcher?.close()
+      }
+      expect("exit" in result).toBe(false)
+    } finally {
+      printed.mockRestore()
+      for (const [key, value] of ambient) if (value !== undefined) process.env[key] = value
+      await unprotect(dir)
+      await flushStats(dir)
+    }
+    expect(await Bun.file(join(dir, ".auto/invalid-refs.md")).exists()).toBe(false)
+    expect(lines).toEqual(["removed: .auto/invalid-refs.md (refcheck retired; an earlier release wrote it)"])
+    // .auto/ is gitignored: the deletion rides no commit and leaves the tree clean
+    expect(await changedFiles(dir)).toEqual([])
   })
 })
 
