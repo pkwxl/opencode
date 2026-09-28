@@ -14,7 +14,7 @@
 import { dirname, join } from "node:path"
 import type { AgentClient, LimitScope } from "./agent/types"
 import { roleOf, type ForkBaseInfo, type SessionChain, type SessionResult, type WindowWait } from "./chain"
-import { forkSources, modelOfChain } from "./chain-transitions"
+import { dropStaleFailed, forkSources, modelOfChain, moveOnFork, retryOnFork, setRoute, toAgent, toBlankSession } from "./chain-transitions"
 import { attempt } from "./attempt"
 import { RESET_HORIZON_MS } from "./classify"
 import { taskDoc } from "./docpaths"
@@ -308,10 +308,10 @@ export async function runSession(
   const fallbackRing = () => failbackOverride()?.fallback ?? switches.model.fallback
   // The common action of a candidate failover (shared by the two trigger
   // faces: the quota-failover branch below and the fallback after ladder
-  // exhaustion): pick the next usable candidate, switch chain.model, attach a
-  // one-off failover note, fork a copy that carries the context along, and
-  // reset the ladder counter to 1 (this candidate gets its own full ladder
-  // round).
+  // exhaustion): pick the next usable candidate, switch the chain's route,
+  // attach a one-off failover note, fork a copy that carries the context
+  // along, and reset the ladder counter to 1 (this candidate gets its own
+  // full ladder round).
   // Returns true on a successful switch (the caller continues); returns false
   // on candidate exhaustion (the caller falls into the wait-and-probe loop).
   // why is a short phrase naming the trigger; it goes into the log and the failover note.
@@ -333,7 +333,7 @@ export async function runSession(
     // The agent profile the failover's pick runs on (plans/0055 §8.3): a
     // move onto another agent cannot fork (F3) — it opens a new session
     // there with the worktree-check note instead.
-    let toAgent: string | undefined
+    let pickAgent: string | undefined
     let ringSize = 0
     if (opts.routing) {
       from = chain.modelEntry
@@ -355,7 +355,7 @@ export async function runSession(
       // would mean an override re-listed it — refuse rather than loop.
       if (to === from) return false
       toModel = decision.candidate.kind === "entry" ? decision.candidate.entry.model : decision.candidate.model
-      toAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
+      pickAgent = decision.candidate.kind === "entry" ? decision.candidate.entry.agent : facts.defaultAgent
     } else {
       const fallback = fallbackRing()
       // Candidates with a known window < cap are skipped with the reason
@@ -390,15 +390,15 @@ export async function runSession(
       toModel = to
       ringSize = fallback.length
     }
-    chain.model = toModel
-    if (opts.routing) {
-      // The registry's selection state: the internal name (and the base step)
-      // travel with the chain; the down marks replace the phase-scoped sticky
-      // holder (§6.4), so scope=phase keeps the move through the task
-      // boundaries without it.
-      chain.modelEntry = to
-      chain.modelStep = 0
-    } else if (switches.modelFailbackScope === "phase") {
+    // The route the failover picked, written wholesale (setRoute): under a
+    // registry the selection state — the internal name and the base step —
+    // travels with the chain; the down marks replace the phase-scoped sticky
+    // holder (§6.4), so scope=phase keeps the move through the task
+    // boundaries without it. Without a registry only the model string is
+    // written (entry and step have never held a defined value on that path,
+    // so the wholesale clear is a no-op there).
+    setRoute(chain, opts.routing ? { model: toModel, entry: to, step: 0 } : { model: toModel })
+    if (!opts.routing && switches.modelFailbackScope === "phase") {
       // failback scope phase: the failover stays sticky across tasks — the
       // chain is destroyed per task, so the chosen candidate is carried into
       // the phase's later tasks through the failback module's sticky holder,
@@ -408,7 +408,7 @@ export async function runSession(
     }
     log(
       opts.routing
-        ? `⇄ ${task.id} ${why}; ${toAgent !== undefined && chain.agent !== undefined && toAgent !== chain.agent ? `moving to agent ${toAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
+        ? `⇄ ${task.id} ${why}; ${pickAgent !== undefined && chain.agent !== undefined && pickAgent !== chain.agent ? `moving to agent ${pickAgent}, starting a new session there (a session never crosses agents), switching model` : "keeping chain context, switching model"} ${from ?? "primary model"} → ${to} (registry list; ${from ?? "the primary"} marked down)`
         : `⇄ ${task.id} ${why}; keeping chain context, switching model ${from ?? "primary model"} → ${to} (candidate ${tried.length}/${ringSize})`,
     )
     i = 1
@@ -416,16 +416,15 @@ export async function runSession(
     // than the chain's session, and a session never crosses agents — no
     // fork, no reuse. The chain drops its session and the next dispatch
     // opens a blank one on the target agent with the worktree-check note,
-    // today's "blank new session" path.
-    if (opts.routing && toAgent !== undefined && chain.agent !== undefined && toAgent !== chain.agent) {
-      chain.id = undefined
-      chain.pending = undefined
-      // The failed-session record lives on the old agent too (§8.3): its
-      // fork value is unreachable from the new one, so it stops being a
-      // fork source instead of failing noisily on the next retry.
-      chain.failed = undefined
-      chain.pct = 100
-      chain.note = retryNote(`Switched model to continue (${why}), moving to agent ${toAgent}; the new session did not inherit the earlier session's context`)
+    // today's "blank new session" path. The failed-session record is
+    // dropped with it: its fork value is unreachable from the new agent, so
+    // it stops being a fork source instead of failing noisily on the next
+    // retry.
+    if (opts.routing && pickAgent !== undefined && chain.agent !== undefined && pickAgent !== chain.agent) {
+      toAgent(
+        chain,
+        retryNote(`Switched model to continue (${why}), moving to agent ${pickAgent}; the new session did not inherit the earlier session's context`),
+      )
       return true
     }
     // Context travels along (design D.3/D.4): fork clones the messages one by
@@ -467,28 +466,22 @@ export async function runSession(
     for (const source of sources) {
       const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} failover`)
       if (forked === undefined) {
-        if (source.id === chain.failed?.id) chain.failed = undefined
+        dropStaleFailed(chain, source.id)
         continue
       }
-      // chain.id is cleared and the forked session is carried by pending
-      // instead: a non-empty note + a non-empty chain.id would hit attempt's
-      // "interruption recovery (resumed) reuses the original session" branch
-      // and ignore pending, so the id must be cleared here, letting the
-      // failover note ride the forked copy session (the copy already holds the
-      // real accumulated messages).
-      chain.id = undefined
-      chain.pending = forked
-      chain.pct = 100
-      chain.used = source.used
       // One-off failover note: carried to the AI with the next prompt via attempt's
       // note mechanism and cleared once used, telling the new model to keep the
       // earlier output formats and protocol (same idea as the stuck hint's weak-model
       // backstop); a fork of the original session (no context from this attempt)
       // gets the worktree-check form instead.
-      chain.note =
+      moveOnFork(
+        chain,
+        forked,
+        source,
         source.id === failedID
           ? `[DRIVER] Switched model to continue (${why}); keep the output formats and protocol used earlier in this session.`
-          : retryNote(`Switched model to continue (${why}), but this session did not inherit this attempt's context.`)
+          : retryNote(`Switched model to continue (${why}), but this session did not inherit this attempt's context.`),
+      )
       return true
     }
     if (sources.length) log(`↻ failover fork copies failed; the switch still takes effect, falling back to a blank new session (no context inherited)`)
@@ -496,9 +489,7 @@ export async function runSession(
     // Falling back to a blank new session leaves no context at all: "keep what was
     // used earlier" would mislead a session with nothing earlier, so the note
     // becomes the worktree-check form (the worktree may hold this attempt's output).
-    chain.note = retryNote(`Switched model to continue (${why}), but this session did not inherit the earlier session's context.`)
-    chain.id = undefined
-    chain.pct = 100
+    toBlankSession(chain, retryNote(`Switched model to continue (${why}), but this session did not inherit the earlier session's context.`))
     return true
   }
   // Escalation step 1 (plans/0055 §7): a quota/auth/rate failure whose model
@@ -557,25 +548,23 @@ export async function runSession(
     for (const source of sources) {
       const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} key rotation`)
       if (forked === undefined) {
-        if (source.id === chain.failed?.id) chain.failed = undefined
+        dropStaleFailed(chain, source.id)
         continue
       }
       log(`↻ ${task.id} ${why}; re-dispatching the same model from a forked copy of the ${source.why} ${source.id} (${formatTokens(source.used)} tokens)`)
-      chain.id = undefined
-      chain.pending = forked
-      chain.pct = 100
-      chain.used = source.used
-      chain.note =
+      moveOnFork(
+        chain,
+        forked,
+        source,
         source.id === failedID
           ? `[DRIVER] The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring; continue with what this task asks.`
-          : retryNote(`The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring, but this session did not inherit this attempt's context.`)
+          : retryNote(`The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring, but this session did not inherit this attempt's context.`),
+      )
       return true
     }
     if (sources.length) log(`↻ key rotation fork copies failed; the rotation still takes effect, re-dispatching in a blank new session (no context inherited)`)
     else log(`↻ no session context on the chain to inherit; the rotation still takes effect, re-dispatching in a blank new session`)
-    chain.note = retryNote(`The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring, but the earlier session's context could not be inherited.`)
-    chain.id = undefined
-    chain.pct = 100
+    toBlankSession(chain, retryNote(`The previous dispatch failed on this provider's key (${why}) and is being retried on the next key of the ring, but the earlier session's context could not be inherited.`))
     return true
   }
   // The down marks one failure's escalation may write (plans/0055 §7.1):
@@ -869,25 +858,22 @@ export async function runSession(
       for (const source of sources) {
         const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} recovery`)
         if (forked === undefined) {
-          if (source.id === chain.failed?.id) chain.failed = undefined
+          dropStaleFailed(chain, source.id)
           continue
         }
         log(`↻ ${task.id} service recovered; re-dispatching the task from a forked copy of the ${source.why} ${source.id} (${formatTokens(source.used)} tokens)`)
-        // Clear chain.id and carry the forked session by pending instead (same
-        // reasoning as switchModel: a non-empty note + chain.id would hit
-        // attempt's resumed-reuse branch and ignore pending).
-        chain.id = undefined
-        chain.pending = forked
-        chain.pct = 100
-        chain.used = source.used
         // One-off recovery note: the forked copy ends with the original error
         // message, so a repeated prompt needs a word of explanation or the AI treats
         // it as a repeated request; a fork of the original session (no context from
         // this attempt) gets the worktree-check form instead.
-        chain.note =
+        moveOnFork(
+          chain,
+          forked,
+          source,
           source.id === failedID
             ? "[DRIVER] The previous dispatch was interrupted by a service/quota failure; service has recovered, so continue with what this task asks."
-            : retryNote("The previous dispatch was interrupted by a service/quota failure; service has recovered, but this session did not inherit this attempt's context.")
+            : retryNote("The previous dispatch was interrupted by a service/quota failure; service has recovered, but this session did not inherit this attempt's context."),
+        )
         seeded = true
         break
       }
@@ -895,9 +881,7 @@ export async function runSession(
         if (sources.length) log(`↻ ${task.id} service recovered, but all forked copies of the interrupted session failed; falling back to a blank new session to re-dispatch the task`)
         // A blank new session knows nothing of this attempt's output; the re-send
         // must carry the worktree-check note.
-        chain.note = retryNote("The previous dispatch was interrupted by a service/quota failure; service has recovered, but the earlier session's context could not be inherited.")
-        chain.id = undefined
-        chain.pct = 100
+        toBlankSession(chain, retryNote("The previous dispatch was interrupted by a service/quota failure; service has recovered, but the earlier session's context could not be inherited."))
       }
       i = 1
       return
@@ -1107,23 +1091,25 @@ export async function runSession(
     for (const source of sources) {
       const forked = await forkSession(await chainClient(), source.id, chain.subject ?? `${task.id} retry`)
       if (forked === undefined) {
-        if (source.id === chain.failed?.id) chain.failed = undefined
+        dropStaleFailed(chain, source.id)
         continue
       }
       log(`↻ ${task.id} transient session error; retrying from a forked copy of the ${source.why} ${source.id} (${formatTokens(source.used)} tokens) (${nth}/${waits.length}):\n${result.question}`)
-      chain.pending = forked
-      chain.pct = 100
-      chain.used = source.used
       // One-off retry note: the copy ends with the error message, so a repeated
       // prompt needs a word of explanation or the AI treats the re-send as a repeated
-      // request (same motive as awaitRecovery's note). The original session stays in
-      // chain.id (the next retry forks from it again); with both note and pending set,
-      // attempt consumes pending first (the resumed check requires pending to be
-      // empty), so the original session is never reused by mistake.
-      chain.note =
+      // request (same motive as awaitRecovery's note). retryOnFork keeps the
+      // original session in chain.id (the next retry forks from it again); with
+      // both note and pending set, attempt consumes pending first (the resumed
+      // check requires pending to be empty), so the original session is never
+      // reused by mistake.
+      retryOnFork(
+        chain,
+        forked,
+        source,
         source.id === failedID
           ? "[DRIVER] The previous dispatch was interrupted by a transient session error and is being retried now; continue with what this task asks."
-          : retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context.")
+          : retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context."),
+      )
       seeded = true
       break
     }
@@ -1141,7 +1127,26 @@ export async function runSession(
       const base: ForkBaseInfo = { id: chain.forkBase, used: await sessionUsed(await chainClient(), chain.forkBase), ...(chain.forkLead ? { lead: true } : {}) }
       if (await seedForkSession(client, opts, chain, base, chain.subject ?? `${task.id} retry`)) {
         log(`↻ ${task.id} transient session error; no session on the chain to fork, re-seeded from the base for retry (${nth}/${waits.length}):\n${result.question}`)
-        chain.note = retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context.")
+        // The re-seeded retry completes through the same transition: the
+        // forked session is the one the seeding put on pending and the base
+        // is its source, so retryOnFork repeats the seeding's own
+        // pending/pct/used values (identical outcome) while attaching the
+        // worktree-check re-send note — the one write no transition owns
+        // alone.
+        // AUTO-DECISION: the base re-seed's one-off note goes through
+        // retryOnFork over the just-seeded fork rather than a note-only
+        // transition (the seeded session is this retry's fork and the base
+        // its source, and the repeated writes carry the seeding's own
+        // values, so the chain state is unchanged; a note-only transition
+        // would be vocabulary beyond the transitions table this conversion
+        // follows, and folding the note into the seeding helper would touch
+        // a file whose own chain writes are a later conversion's to make).
+        retryOnFork(
+          chain,
+          chain.pending!,
+          { id: base.id, used: base.used ?? 0, why: "fork base" },
+          retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit this attempt's context."),
+        )
         continue
       }
     }
@@ -1150,8 +1155,6 @@ export async function runSession(
     // reuses the errored session; a blank session knows nothing of this
     // attempt's output, so the re-send must carry the worktree-check note —
     // otherwise the new session redoes the half-finished work from scratch.
-    chain.id = undefined
-    chain.pct = 100
-    chain.note = retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit the earlier session's context.")
+    toBlankSession(chain, retryNote("The previous dispatch was interrupted by a transient session error and is being retried now, but this session did not inherit the earlier session's context."))
   }
 }

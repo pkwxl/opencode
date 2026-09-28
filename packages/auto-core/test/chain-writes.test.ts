@@ -36,7 +36,7 @@ const CHAIN_WRITE_BUDGET: Record<string, number> = {
   "execute.ts": 25,
   "runner.ts": 18,
   "session-api.ts": 16,
-  "session.ts": 44,
+  "session.ts": 0,
   "wrapup.ts": 1,
 }
 
